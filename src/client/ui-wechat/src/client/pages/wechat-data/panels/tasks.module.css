@@ -1,0 +1,43 @@
+/* Task extraction — NEON MATRIX 科技风（与每日总结共用令牌）。 */
+.input {
+  flex: 1;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus { border-color: var(--nm-cyan); }
+
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+
+.list { display: flex; flex-direction: column; gap: 8px; }
+.taskRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  padding: 10px 14px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.taskRow[data-status='done'] { opacity: 0.6; }
+.taskInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.taskTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); word-break: break-word; }
+.taskRow[data-status='done'] .taskTitle { text-decoration: line-through; }
+.taskMeta { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--nm-text-2); }
+.linkBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--nm-cyan);
+  font-size: 11px;
+  cursor: pointer;
+}
+.linkBtn:hover { text-decoration: underline; }
+.taskActions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

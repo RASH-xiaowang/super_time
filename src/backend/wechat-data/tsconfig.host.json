@@ -1,0 +1,126 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
+  },
+  "files": [
+    "src/dirs.ts",
+    "src/gateway.ts",
+    "src/index.ts",
+    "src/invariant.ts",
+    "src/keys/db-key-v4.ts",
+    "src/keys/dll-key-scan.ts",
+    "src/keys/image-key-memory-scan.ts",
+    "src/keys/image-key-resolver.ts",
+    "src/keys/index.ts",
+    "src/keys/isaac64.ts",
+    "src/keys/key-store.ts",
+    "src/keys/service.ts",
+    "src/keys/types.ts",
+    "src/keys/win32-memory.ts",
+    "src/query/annual-report.ts",
+    "src/query/annual.ts",
+    "src/query/article-cover.ts",
+    "src/query/ask.ts",
+    "src/query/asset-insights.ts",
+    "src/query/avatar.ts",
+    "src/query/backup.ts",
+    "src/query/calendar.ts",
+    "src/query/config.ts",
+    "src/query/contact360.ts",
+    "src/query/contacts.ts",
+    "src/query/daily-summary.ts",
+    "src/query/db-health.ts",
+    "src/query/decrypt-all.ts",
+    "src/query/decrypt-images.ts",
+    "src/query/drafts.ts",
+    "src/query/edit.ts",
+    "src/query/emoticons.ts",
+    "src/query/export.ts",
+    "src/query/favorites.ts",
+    "src/query/files.ts",
+    "src/query/graph.ts",
+    "src/query/group-info.ts",
+    "src/query/group-insights.ts",
+    "src/query/handoff.ts",
+    "src/query/image-key.ts",
+    "src/query/ledger.ts",
+    "src/query/media-assets.ts",
+    "src/query/media-file.ts",
+    "src/query/media-image.ts",
+    "src/query/media-video.ts",
+    "src/query/media-voice.ts",
+    "src/query/members.ts",
+    "src/query/messages.ts",
+    "src/query/meta.ts",
+    "src/query/moments-insights.ts",
+    "src/query/moments-monthly.ts",
+    "src/query/moments.ts",
+    "src/query/official-assets.ts",
+    "src/query/operation-log.ts",
+    "src/query/overview-extras.ts",
+    "src/query/overview-insights.ts",
+    "src/query/overview.ts",
+    "src/query/parse.ts",
+    "src/query/payments.ts",
+    "src/query/privacy-audit.ts",
+    "src/query/privacy.ts",
+    "src/query/records.ts",
+    "src/query/region-map.ts",
+    "src/query/region.ts",
+    "src/query/resource-classify.ts",
+    "src/query/search.ts",
+    "src/query/sessions.ts",
+    "src/query/settings.ts",
+    "src/query/sns-image.ts",
+    "src/query/sns-video.ts",
+    "src/query/status.ts",
+    "src/query/storage.ts",
+    "src/query/summary-tasks.ts",
+    "src/query/sync.ts",
+    "src/query/unified-search.ts",
+    "src/query/voice-transcribe.ts",
+    "src/query/voice.ts",
+    "src/query/wechat-tasks.ts",
+    "src/query/whisper.ts",
+    "src/query/zip.ts",
+    "src/types.ts"
+  ],
+  "references": [
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/cosmokit"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../typert/protocol"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../util/timeout"
+    },
+    {
+      "path": "../../attachment/attachment"
+    },
+    {
+      "path": "../../util/home-paths"
+    },
+    {
+      "path": "../../util/native-command"
+    }
+  ]
+}

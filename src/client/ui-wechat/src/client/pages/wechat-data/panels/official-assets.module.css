@@ -1,0 +1,40 @@
+/* Official account assets — NEON MATRIX 科技风。 */
+
+
+.table {
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  overflow: hidden;
+}
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 72px 112px;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  border-bottom: 1px solid var(--nm-border);
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 72px 112px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--nm-bg-hover); }
+.colName { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rowUser { font-size: 11px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+.colNum { text-align: right; color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+.colTime { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }

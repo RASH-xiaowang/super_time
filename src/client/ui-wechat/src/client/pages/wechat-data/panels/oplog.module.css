@@ -1,0 +1,112 @@
+/* 操作日志板块 —— 独立样式（跟随主题令牌） */
+.root {
+
+  box-sizing: border-box;
+  font-family: var(--nm-font-sans, inherit);
+}
+.hdIcon { color: var(--nm-cyan); font-size: 14px; }
+.hdBadge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--nm-text-2); font-weight: 500; }
+/* 统计标签：这里只保留**排版**（块级 + 1px 间距），文字样式走 kit 的 .textMeta。
+ * 原先是两条同名规则叠加（本行 11px + 下面 12px 覆盖），实际生效是「12px + text-2 +
+ * display:block + margin-top:1px」；第 35 轮的文字工具类收敛因此跳过了它（同名多定义
+ * 迁移会丢声明）。本轮把两条合并成一条纯排版规则，字号/颜色交给 .textMeta —— 计算样式不变。 */
+.statLabel { display: block; margin-top: 1px; }
+.range { display: flex; align-items: center; gap: 4px; }
+.dateInput { height: 28px; padding: 0 8px; border: 1px solid var(--nm-border); border-radius: 6px; background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; }
+/* 第 39 轮：本面板此前没有 :focus 规则，聚焦时边框不变色（只有全局 2px 青色轮廓）。
+ * 补上以与其余输入类规则一致 —— 焦点指示统一为「青色轮廓 + 青色边框」。 */
+.dateInput:focus { border-color: var(--nm-cyan); }
+.notice { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
+.noticeOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 8%, transparent); }
+.noticeErr { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }
+.st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  corner-shape: round;
+}
+.stOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 10%, transparent); }
+.stFail { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
+.stSkip { color: var(--nm-amber); background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
+
+.btnFx {
+  transition: transform 0.08s ease, filter 0.12s ease, background 0.12s ease,
+    border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.btnFixedSm {
+  min-width: 92px;
+  justify-content: center;
+}
+.spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  box-sizing: border-box;
+  corner-shape: round;
+}
+
+/* 新布局：状态卡 + 筛选卡 + 表格卡 */
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 0 0;
+}
+.statCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 88px;
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  min-width: 0;
+}
+.statValue {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+}
+.statHint {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  opacity: 0.75;
+}
+.statOk .statValue { color: var(--nm-success); }
+.statFail .statValue { color: var(--nm-danger); }
+.statSkip .statValue { color: var(--nm-amber); }
+.filterCard {
+  margin: 12px 0 0;
+}
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.filterRow2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.tableCard {
+  margin: 12px 0 14px;
+  overflow: hidden;
+}
+.tdTime { width: 150px; }
+.tdType { width: 72px; }
+.tdAction { width: 200px; }
+.tdTarget {
+  width: 70px;
+  min-width: 60px;
+  max-width: 90px;
+}
+.tdStatus { width: 76px; }
+@media (max-width: 900px) {
+  .statRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

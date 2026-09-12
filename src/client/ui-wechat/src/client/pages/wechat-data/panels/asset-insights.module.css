@@ -1,0 +1,19 @@
+/* Asset insights (favorites + emoticons) — NEON MATRIX 科技风。 */
+
+
+.typeList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.typeRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.typeLabel { color: var(--nm-text-1); }
+.typeCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+
+.yearList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.yearRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.yearLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
+.yearTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: 6px; overflow: hidden; }
+.yearFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 6px; }
+.yearCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+
+.emojiList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.emojiRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.emojiMd5 { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); word-break: break-all; }
+.emojiCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); flex-shrink: 0; }

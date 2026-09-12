@@ -1,0 +1,581 @@
+/* Shared styles for list/grid data panels (favorites/emoticons/files/
+   annual/hook/privacy/backup/revoked) — NEON MATRIX redesign.
+   Glass surfaces, neon cyan accent, glowing hovers, mono numerals. */
+
+.panel {
+
+  --dsh-scrollbar-thumb:       var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
+  height: 100%;
+  display: flex; flex-direction: column; gap: 12px; min-height: 0; box-sizing: border-box;
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+}
+
+/* ── 头部 ── */
+.hd { display: flex; align-items: baseline; gap: 8px; }
+.catBtn {
+  padding: 5px 13px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+  font-size: 12px;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.catBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.catBtn[data-active='true'] {
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  color: var(--nm-cyan);
+  font-weight: 600;
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.catBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── 列表/网格容器 ── */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 8px;
+}
+.grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+/*
+ * 文件资产的格位放宽到 200px。
+ * 第 48 轮实测：140px 格位里 `.fileName` 只有 124px 可用，而「图片 · 来自 群名 · 月-日」
+ * 这类标签要 171–207px —— 60 个卡片里 58 个被省略号裁掉。放宽后标签基本能整行显示，
+ * 更长的仍由 .fileCell 的 title 兜底（见 st-truncation-sweep.js）。
+ */
+.fileGrid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+
+/* ── 列表行 ── */
+.row { display: flex; gap: 10px; padding: 8px; border-radius: 10px; transition: background 0.15s; }
+.row:hover { background: var(--nm-bg-hover); }
+.rowIcon {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 16%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
+  color: var(--nm-cyan);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: 16px;
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+}
+.rowName { font-size: 13px; font-weight: 600; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rowTime { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+/* ── 表情/文件网格 ── */
+.emoCell {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  position: relative;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+  transition: all 0.15s;
+}
+.emoCell:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  border-color: var(--nm-border-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.emoPh { font-size: 30px; }
+.emoMd5 { font-size: 10.5px; color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
+/* 第 94 轮：点击复制提示的强调色（原来写在 Emoticons.tsx 的行内 style 里）。 */
+.emoMd5Cyan { color: var(--nm-cyan); }
+.emoName { font-size: 11px; font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+.fileCell {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+  transition: all 0.15s;
+}
+.fileCell:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  border-color: var(--nm-border-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+/* 备份预览弹层（第 87 轮）：原先这些样式是 Backup.tsx 里的行内样式，颜色写死为
+   `#8b949e` / `#e6edf3`（深色主题专用字面量）—— 浅色主题下实测对比度 2.72:1 与 **1.04:1**
+   （近白底上的近白字，等于看不见）。改成令牌后随主题自适应。 */
+/* 第 90 轮：`.bkPreviewCount`（12px/text-2）已改用共享工具类 kitCss.textMeta，本地定义删除。 */
+.bkPreviewNote { color: var(--nm-text-2); }
+.bkPreviewRow { display: flex; justify-content: space-between; gap: 12px; font-size: var(--nm-fs-sm); color: var(--nm-text-1); }
+.bkPreviewName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bkPreviewSize { color: var(--nm-text-2); white-space: nowrap; }
+
+/* 详情抽屉的键值列表（第 84 轮，文件详情用）。 */
+.kvList { display: flex; flex-direction: column; gap: 10px; }
+.kvRow { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; font-size: 12px; align-items: baseline; }
+.kvKey { color: var(--nm-text-2); }
+.kvVal { color: var(--nm-text-1); word-break: break-all; }
+.kvMono { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
+.fileIcon { font-size: 30px; }
+.fileThumb { width: 100%; height: 110px; object-fit: cover; border-radius: 10px; background: var(--nm-bg-hover); }
+
+/* ── 隐私体检（第 92 轮：11 处行内样式搬到这里） ───────────────── */
+.pvCatRow { flex-direction: column; align-items: stretch; border: 1px solid var(--nm-border); border-radius: 10px; margin-bottom: 8px; padding: 10px; }
+.pvCatHd { display: flex; align-items: center; gap: 8px; }
+.pvCatLabel { flex: 1; }
+.pvSamples { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.pvEmptyInline { padding: 8px; }
+.pvSampleRow { font-size: 12px; line-height: 1.5; }
+.pvSampleHd { display: flex; gap: 8px; align-items: center; }
+.pvSampleName { font-weight: 600; }
+.pvJump { margin-left: auto; }
+.pvSnippet { word-break: break-all; }
+.pvMore { align-self: center; }
+
+/* ── 撤回消息（第 92 轮：10 处行内样式搬到这里） ───────────────── */
+.rvNoticeText { color: var(--nm-text-2); }
+.rvFilters { display: flex; flex-wrap: wrap; gap: 8px; }
+.rvScroll { padding: 6px; }
+.rvRow { flex-direction: column; cursor: pointer; border: 1px solid var(--nm-border); margin-bottom: 6px; }
+.rvRowHd { display: flex; align-items: center; gap: 10px; }
+.rvTypeBadge { color: var(--nm-cyan); border: 1px solid var(--nm-cyan); }
+.rvTimePush { margin-left: auto; }
+.rvBodyPad { padding: 4px 4px 6px 38px; }
+.rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: 8px; background: var(--nm-bg-hover); }
+.rvFootNote { margin-top: 4px; }
+
+/* 新版图片灯箱预览 */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(3, 6, 12, 0.86);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.lightboxCard {
+  width: min(600px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+}
+.lightboxHd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.lightboxTitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lightboxName {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+  word-break: break-all;
+}
+.lightboxBadge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+  color: var(--nm-cyan);
+  font-size: 11px;
+  font-weight: 700;
+}
+.lightboxClose {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.lightboxClose:hover {
+  color: var(--nm-text-1);
+  border-color: var(--nm-cyan);
+}
+.lightboxBody {
+  flex: 1;
+  min-height: 40vh;
+  max-height: 62vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.38);
+  overflow: hidden;
+}
+.lightboxImg {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  transition: transform 0.05s linear;
+  user-select: none;
+}
+.lightboxStage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.lightboxDragging { cursor: grabbing; }
+.lightboxZoom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--nm-border);
+}
+.lightboxZoomBtn {
+  min-width: 34px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.lightboxZoomBtn:hover {
+  color: var(--nm-text-1);
+  border-color: var(--nm-cyan);
+}
+.lightboxZoomText {
+  min-width: 48px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+}
+.lightboxEmpty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.lightboxEmptyTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--nm-text-2);
+}
+.lightboxEmptyNote {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.75;
+  font-family: var(--nm-font-mono, monospace);
+}
+.lightboxFt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--nm-border);
+}
+.lightboxMd5 {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fileName { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.fileMeta { font-size: 10.5px; color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
+.empty { padding: var(--nm-empty-pad); text-align: center; color: var(--nm-text-2); font-size: var(--nm-empty-fs); grid-column: 1 / -1; }
+.dupRow { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
+.dupName { flex: 1; min-width: 0; font-size: 12px; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dupMeta { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; }
+.dupKeep {
+  font-size: 11px;
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+  border-radius: 6px;
+  padding: 3px 8px;
+  flex-shrink: 0;
+}
+
+/* ── 提示/状态 ── */
+.notice {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  border: 1px solid var(--nm-border);
+}
+.cite {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  background: var(--nm-bg-hover);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: default;
+  corner-shape: round;
+}
+
+/* ── 配置卡片 ── */
+.cardBody { padding: 8px 12px; }
+.formBody { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+
+/* ── 年度报告 ── */
+/* 第 89 轮：原为 `20px repeat(24, 1fr)` —— `1fr` 的最小值是 `auto`（= min-content），
+   配上 `aspect-ratio: 1` 的格子后这个网格**不肯收缩**，窄窗口下 24 列会越出卡片右边缘，
+   而卡片是 `overflow: hidden` ⇒ 右侧若干列直接看不见（实测 1180px 越界 19~85px）。
+   `minmax(0, 1fr)` 允许收缩到 0，格子随宽度等比变小，数据不再丢。 */
+.heatGrid { display: grid; grid-template-columns: 20px repeat(24, minmax(0, 1fr)); gap: 2px; }
+.heatCell { aspect-ratio: 1; border-radius: 2px; transition: opacity 0.15s; }
+.heatCell:hover { opacity: 0.7; }
+.monthlyBar { display: flex; align-items: flex-end; gap: 4px; height: 72px; padding-top: 6px; }
+.monthCol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.monthFill {
+  width: 100%;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--nm-cyan) 65%, transparent), color-mix(in srgb, var(--nm-purple) 40%, transparent));
+  border-radius: 4px 3px 0 0;
+  transition: height 0.3s;
+}
+.barRow { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.barLabel { width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
+.barTrack { flex: 1; height: 8px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); border-radius: 4px; overflow: hidden; }
+.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 4px; box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
+.reportGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.statChips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.statChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-hover);
+  font-size: 12px;
+  color: var(--nm-text-1);
+  corner-shape: round;
+}
+.statChip b { color: var(--nm-cyan); font-weight: 700; }
+.tagRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+
+/* ── FancyUI 焦点句 / 跑马灯 ── */
+.focus { padding: 6px 0; }
+.focusEyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-cyan);
+  margin-bottom: 4px;
+}
+.focusSentence {
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.5;
+  color: var(--nm-text-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.marquee { position: relative; overflow: hidden; }
+.marqueeTrack {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  animation: wcMarquee linear infinite;
+  will-change: transform;
+  padding: 6px 0;
+}
+@keyframes wcMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.marqueeTrack[data-reverse] { animation-direction: reverse; }
+.marquee:hover .marqueeTrack { animation-play-state: paused; }
+.marqueeMaskL {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 56px;
+  background: linear-gradient(to right, var(--nm-bg-card), transparent);
+  pointer-events: none;
+}
+.marqueeMaskR {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 56px;
+  background: linear-gradient(to left, var(--nm-bg-card), transparent);
+  pointer-events: none;
+}
+.marqueeCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  flex: none;
+}
+.marqueeCardIcon { font-size: 20px; flex: none; }
+.marqueeCardBody { display: flex; flex-direction: column; gap: 2px; }
+.marqueeCardTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); white-space: nowrap; }
+.marqueeCardMeta { font-size: 11px; color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
+.tagChip {
+  display: inline-flex;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  color: var(--nm-cyan);
+  font-size: 11px;
+  corner-shape: round;
+}
+.barValue {
+  width: 70px;
+  text-align: right;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--ds-font-family-code);
+}
+
+/* ── 收藏卡片 ── */
+.favCard {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  align-items: flex-start;
+  transition: background 0.15s;
+}
+.favCard:hover { background: var(--nm-bg-hover); }
+.favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.favCardTitle { font-size: 14px; font-weight: 700; color: var(--nm-text-1); word-break: break-word; }
+.favCardDesc { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.favCardThumb { width: 68px; height: 68px; border-radius: 10px; object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.favDetail { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.favPart { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); padding-bottom: 12px; }
+.favPart:last-child { border-bottom: none; padding-bottom: 0; }
+.favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 5px; }
+.favPartText { font-size: 13px; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.favPartImg { max-width: 100%; max-height: 420px; border-radius: 10px; display: block; background: var(--nm-bg-hover); }
+@keyframes dshSpin { to { transform: rotate(360deg); } }
+@keyframes dshToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.backupInput {
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  flex: 1;
+}
+.backupInput:focus { border-color: var(--nm-cyan); }
+
+/* 原图能力自检 */
+.hookIntro { font-size: 12px; color: var(--nm-text-2); line-height: 1.7; }
+.hookFlow { display: flex; align-items: stretch; gap: 8px; margin-top: 12px; }
+.hookFlowItem {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  min-width: 0;
+}
+.hookFlowIcon { font-size: 16px; }
+.hookFlowTitle { font-size: 12px; color: var(--nm-text-1); }
+.hookFlowSub { font-size: 10.5px; color: var(--nm-text-2); }
+.hookFlowArrow { align-self: center; color: var(--nm-cyan); font-size: 14px; }
+.hookGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.hookStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  min-width: 0;
+}
+.hookStat[data-tone='green'] { border-color: color-mix(in srgb, var(--nm-success) 25%, transparent); }
+.hookStat[data-tone='red'] { border-color: color-mix(in srgb, var(--nm-danger) 25%, transparent); }
+.hookStat[data-tone='amber'] { border-color: color-mix(in srgb, var(--nm-warning) 25%, transparent); }
+.hookStat[data-tone='purple'] { border-color: color-mix(in srgb, var(--nm-purple) 25%, transparent); }
+.hookStat[data-tone='blue'] { border-color: color-mix(in srgb, var(--nm-blue) 25%, transparent); }
+.hookStatValue {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--nm-text-1);
+  word-break: break-all;
+  line-height: 1.3;
+  font-family: var(--nm-font-mono, monospace);
+}
+/* 第 82 轮：15px/800 的字重按 WCAG 仍算「正文」（需 4.5:1），原色值深色主题下 purple 4.18 / blue 4.50，
+   统一改用 --nm-*-text（与主题正文色混合后 ≥5:1）。 */
+.hookStat[data-tone='green'] .hookStatValue { color: var(--nm-success-text); }
+.hookStat[data-tone='red'] .hookStatValue { color: var(--nm-danger-text); }
+.hookStat[data-tone='amber'] .hookStatValue { color: var(--nm-warning-text); }
+.hookStat[data-tone='purple'] .hookStatValue { color: var(--nm-purple-text); }
+.hookStat[data-tone='blue'] .hookStatValue { color: var(--nm-info-text); }
+.hookStatHint { font-size: 10.5px; color: var(--nm-text-2); opacity: 0.75; }
+.hookActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.hookEntryList { display: flex; flex-direction: column; gap: 6px; }
+.hookEntryItem { font-size: 12px; color: var(--nm-text-2); line-height: 1.7; }
+@media (max-width: 1100px) {
+  .hookGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hookFlow { flex-direction: column; }
+  .hookFlowArrow { transform: rotate(90deg); }
+}
+

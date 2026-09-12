@@ -1,0 +1,8 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "apiKey": "sk-5af13c152ba74ff99799e623d1658116",
+  "apiUrl": "https://api.deepseek.com/v1",
+  "apiPath": "/chat/completions",
+  "timeoutMs": 120000
+}

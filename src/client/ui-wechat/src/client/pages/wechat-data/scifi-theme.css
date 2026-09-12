@@ -1,0 +1,393 @@
+/* ============================================================
+ * NEON MATRIX — 微信+数据面板 科技风主题
+ *
+ * 深空黑底 + 霓虹青/紫双色系 + 毛玻璃拟态
+ *
+ * 本文件只保留两类内容：
+ *   1) 设计令牌（:root 变量）—— kit 与所有面板统一经令牌取色；
+ *   2) 极少量全局基础样式（重置 / 滚动条 / 选中色 / 一个脉冲动画）。
+ *
+ * 组件级样式一律走 ui/kit.module.css 与各面板的 *.module.css，
+ * 不再维护第二套全局组件类（原先的 .nm-btn-* / .nm-card / .nm-modal 等
+ * 39 个类在全部 TSX、TS 与 CSS Module 中零引用，已删除）。
+ * ============================================================ */
+
+/* ────────────────────────────────────────────
+ * 1. 设计令牌（Design Tokens）
+ * ──────────────────────────────────────────── */
+:root {
+  /* 基础色板 */
+  --nm-black:         var(--dsw-alias-bg-layer-0, var(--nm-bg-0));
+  --nm-bg-0:          var(--dsw-alias-bg-base, var(--nm-bg-0));
+  --nm-bg-1:          var(--dsw-alias-bg-layer-1, var(--nm-bg-1));
+  --nm-bg-2:          var(--dsw-alias-bg-layer-2, var(--nm-bg-card));
+  --nm-bg-glass:      var(--dsw-alias-bg-overlay, rgba(12, 20, 48, 0.55));
+  --nm-bg-hover:      var(--dsw-alias-interactive-bg-hover, rgba(0, 240, 255, 0.06));
+  --nm-bg-active:     var(--dsw-alias-interactive-bg-active, rgba(0, 240, 255, 0.10));
+  --nm-bg-input:      var(--dsw-alias-bg-layer-2, var(--nm-bg-input));
+  --nm-bg-card:       var(--dsw-alias-bg-layer-2, var(--nm-bg-card));
+
+  /* 霓虹色（浅色主题在 light-theme.css 中压暗，保证可读性与对比度） */
+  --nm-cyan:          #00f0ff;
+  --nm-cyan-50:       rgba(0, 240, 255, 0.50);
+  --nm-cyan-20:       rgba(0, 240, 255, 0.20);
+  --nm-cyan-10:       rgba(0, 240, 255, 0.10);
+  --nm-purple:        #a855f7;
+  --nm-purple-20:     rgba(168, 85, 247, 0.20);
+  --nm-blue:          #3b82f6;
+  --nm-blue-20:       rgba(59, 130, 246, 0.20);
+  --nm-pink:          #ec4899;
+  --nm-green:         #00ff88;
+  --nm-green-20:      rgba(0, 255, 136, 0.20);
+  --nm-red:           #ff3b5c;
+  --nm-amber:         #f59e0b;
+
+  /* 文字色阶 */
+  --nm-text-1:        var(--dsw-alias-label-primary, var(--nm-text-1));
+  --nm-text-2:        var(--dsw-alias-label-secondary, var(--nm-text-2));
+  --nm-text-3:        var(--dsw-alias-label-tertiary, #4a5575);
+  /* 品牌色填充上的文字色：深色下品牌色为霓虹亮色，配近黑字 */
+  --nm-on-accent: #050a18;
+
+  /* 边框 */
+  --nm-border:        var(--dsw-alias-border-l2, rgba(0, 240, 255, 0.10));
+  --nm-border-hover:  var(--dsw-alias-border-l3, rgba(0, 240, 255, 0.25));
+  --nm-border-active: var(--dsw-alias-border-l4, rgba(0, 240, 255, 0.40));
+
+  /* 阴影 / 发光 */
+  --nm-glow-sm:       0 0 8px rgba(0, 240, 255, 0.20);
+  --nm-glow-md:       0 0 20px rgba(0, 240, 255, 0.25);
+  --nm-glow-lg:       0 0 40px rgba(0, 240, 255, 0.15), 0 0 80px rgba(168, 85, 247, 0.08);
+  --nm-shadow-card:   0 4px 32px rgba(0, 0, 0, 0.50);
+  --nm-shadow-popup:  0 16px 48px rgba(0, 0, 0, 0.60);
+
+  /* 排版 */
+  --nm-font-sans:     'Inter', 'SF Pro Display', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --nm-font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* 圆角 */
+  --nm-r-xs:          4px;
+  --nm-r-sm:          6px;
+  --nm-r-md:          10px;
+  --nm-r-lg:          14px;
+  --nm-r-xl:          20px;
+  --nm-r-pill:        999px;
+
+  /* 过渡 */
+  --nm-ease:          cubic-bezier(0.4, 0, 0.2, 1);
+  --nm-t-fast:        0.15s var(--nm-ease);
+  --nm-t-normal:      0.25s var(--nm-ease);
+  --nm-t-slow:        0.45s var(--nm-ease);
+}
+
+/* ────────────────────────────────────────────
+ * 2. 全局基础样式重置
+ * ──────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--nm-font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-primary, var(--nm-text-1));
+  background: var(--dsw-alias-bg-layer-0, var(--nm-black));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* ────────────────────────────────────────────
+ * 3. 滚动条（全局，跟随主题令牌）
+ * ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 240, 255, 0.10));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 240, 255, 0.22));
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ────────────────────────────────────────────
+ * 4. 选中色
+ * ──────────────────────────────────────────── */
+::selection {
+  background: var(--nm-cyan-20);
+  color: var(--nm-text-1);
+}
+
+/* ────────────────────────────────────────────
+ * 5. 键盘可达性：全局焦点环
+ *
+ * 面板里有 267 个裸 <button>，此前几乎都没有 :focus-visible —— 键盘 Tab 时
+ * 看不到焦点落在哪里（审计列为 a11y 缺口之一）。与其逐个改 267 处调用点，
+ * 这里统一补上。
+ *
+ * 用 outline 而不是 box-shadow：按钮上已有大量发光/阴影样式，
+ * box-shadow 会被覆盖或覆盖别人；outline 与它们互不干扰。
+ *
+ * 第 39 轮补上**表单控件**：原先这里的注释写着「输入框大多已有自己的 :focus 样式」，
+ * 实测推翻了这一点 —— 13 条输入类 :focus 规则里有 **6 种不同的 box-shadow**
+ * （模糊辉光 5 种 + 实心环 3 种 + 双环 + --nm-glow-sm + 两种没有），边框色也分三种，
+ * 而真正让人看得见焦点的其实是 **浏览器默认的 `outline: auto`**（颜色随平台/主题变）。
+ * 于是统一为与按钮同源的一条应用可控轮廓，并删掉那些各自的光晕。
+ * 例外：顶部全局搜索框的可见框是外层容器（容器用 :focus-within 提供边框变色 +
+ * 3px 环 + 14px 辉光，已实测确认），其内部 input 保留 `outline: none`。
+ * ──────────────────────────────────────────── */
+button:focus-visible,
+[role='button']:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+
+/* ────────────────────────────────────────────
+ * 5. 全局动画（唯一被 CSS Module 引用的一个：
+ *    wechat-data.module.css 的 .statusDot 使用 nm-pulse-glow）
+ * ──────────────────────────────────────────── */
+@keyframes nm-pulse-glow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 0.8; transform: scale(1.05); }
+}
+
+/* ────────────────────────────────────────────
+ * 6. 数据面板设计系统扩展（Kit tokens）
+ *    面板统一使用的排版 / 间距 / 语义色 / 布局变量
+ * ──────────────────────────────────────────── */
+:root {
+  /* 字号阶梯 */
+  --nm-fs-xs: 11px;
+  --nm-fs-sm: 12px;
+  --nm-fs-md: 13px;
+  --nm-fs-lg: 15px;
+  --nm-fs-xl: 18px;
+  --nm-fs-2xl: 24px;
+  --nm-lh-tight: 1.3;
+  --nm-lh-body: 1.6;
+
+  /* 间距阶梯 */
+  --nm-s-1: 4px;
+  --nm-s-2: 8px;
+  --nm-s-3: 12px;
+  --nm-s-4: 16px;
+  --nm-s-5: 20px;
+  --nm-s-6: 24px;
+  --nm-s-8: 32px;
+
+  /* 语义色 */
+  --nm-success: #00ff88;
+  --nm-success-15: rgba(0, 255, 136, 0.15);
+  --nm-warning: #f59e0b;
+  --nm-warning-15: rgba(245, 158, 11, 0.15);
+  --nm-danger: #ff3b5c;
+  --nm-danger-15: rgba(255, 59, 92, 0.15);
+  --nm-info: #3b82f6;
+  --nm-info-15: rgba(59, 130, 246, 0.15);
+
+  /**
+   * 色调色**文字**版本（第 82 轮）。
+   *
+   * 为什么需要：小字号（11–15px）的色调色文字直接压在**同色浅底**上时对比度不够 ——
+   * 实测（`--nm-<tone>` 原值 vs 自己的 10%~20% 底色）：
+   *   深色主题 purple 3.58、blue 4.02、red 4.45；浅色主题 amber 4.42、blue 4.37、cyan 4.49。
+   * 做法不是换色相，而是把色调色按 70% 与**主题正文色**混合：
+   *   深色主题往 `#e2e8f0` 方向变亮、浅色主题往 `#0f172a` 方向变暗，
+   *   一条定义两套主题都成立（`--nm-text-1` 本身随主题切换，自定义属性在使用时才替换）。
+   *
+   * 实测混合后对比度（色调自己的底色上）：深色 5.08~10.14、浅色 6.51~9.36 —— 全部 ≥ 5.0，
+   * 既达标又保留 70% 的色相。用到的地方：kit `.badge`、`ledger .dirBadge`、
+   * `graph .segBtn[data-on]`、`list-panel .hookStatValue` 等「小字号 + 同色浅底」的场合。
+   * 大字号标题、图标、边框仍用原色调色（它们不需要 4.5:1）。
+   */
+  --nm-cyan-text: color-mix(in srgb, var(--nm-cyan) 70%, var(--nm-text-1));
+  --nm-success-text: color-mix(in srgb, var(--nm-success) 70%, var(--nm-text-1));
+  --nm-warning-text: color-mix(in srgb, var(--nm-warning) 70%, var(--nm-text-1));
+  --nm-danger-text: color-mix(in srgb, var(--nm-danger) 70%, var(--nm-text-1));
+  --nm-purple-text: color-mix(in srgb, var(--nm-purple) 70%, var(--nm-text-1));
+  --nm-info-text: color-mix(in srgb, var(--nm-info) 70%, var(--nm-text-1));
+
+  /* 布局 */
+  --nm-content-max: 1440px;
+  --nm-sidebar-w: 176px;
+  /* 侧栏折叠态宽度（只剩图标）。取 58px 是为了让 15px 图标在
+     「58 − 左右内边距 16 − 边框 1 = 41px」的窄轨里正好居中。 */
+  --nm-sidebar-w-collapsed: 58px;
+  --nm-topbar-h: 56px;
+
+  /**
+   * 面板滚动容器的内边距（标准契约）。
+   *
+   * 实测：30 个面板里 15 处（14 个 .panel + overview 的 .root）用的是
+   * `overflow-y: auto; padding: 16px 18px`。此前这个值在 15 个 CSS Module 里
+   * 各写一遍，属于"同一规范的多份副本"。收敛为令牌后改一处即全局生效。
+   *
+   * ⚠️ 第 80 轮修正：左右内边距**归零**，只留上下 16px。
+   *
+   * 原因是量出来的：shell 的内容区 `.content` 已经提供左右各 16px
+   * （`--nm-s-4`），面板再写 18px 就变成 34px —— 于是同一条导航槽里正文左边缘
+   * 一半页签在 229px、另一半在 247px（切页签整页横向跳 18px）；操作日志更糟，
+   * 根容器在 229 而 `.filterCard`/`.tableCard` 又各加 18px margin，
+   * **同一页内**页头与卡片都对不齐。18px 也不在 `--nm-s-*` 间距刻度上。
+   *
+   * 现在统一为：**左右内边距由 shell 单独提供，面板只负责上下**。
+   * 不变量与验证见 `scripts/st-verify-align.js`（`npm run check:align`）。
+   *
+   * 不走这个契约的面板仍确有理由：chats / contacts 是 master-detail（会话/通讯录栏
+   * 自己带内边距），graph / moments 是画布或分栏布局。
+   */
+  --nm-panel-pad: 16px 0;
+
+  /**
+   * 空状态（.empty）的统一内边距与字号。
+   *
+   * 实测（19 个模块，用逐字符括号配对可靠测量）：颜色**全部**是
+   * var(--nm-text-2)，没有语义分歧；差别只在 padding
+   * （18px×9 / 20px×3 / 24px×3 / 24px 16px / 40px / 12px 0 / 未声明）与
+   * font-size（12.5px×16 / 12px×2 / 13px×1）。取多数值作为规范。
+   *
+   * 注意 kit 的 <EmptyState> 是**块级**空状态（padding 32px 16px），
+   * 与这里的紧凑行内 .empty 不是同一个概念，故不合并。
+   */
+  --nm-empty-pad: 18px;
+  --nm-empty-fs: 12.5px;
+
+  /* 表格 */
+  --nm-table-header-bg: rgba(0, 240, 255, 0.04);
+  --nm-table-row-hover: rgba(0, 240, 255, 0.05);
+  --nm-table-row-stripe: rgba(255, 255, 255, 0.015);
+
+  /* 地图板块底色。ECharts 画在 canvas 上不能用 var()，由
+     utils/theme-color.ts 的 tokenColor() 在 JS 侧解析成具体颜色，
+     所以深浅主题必须各给一份。 */
+  --nm-map-land: rgba(8, 40, 60, 0.90);
+}
+
+/* ────────────────────────────────────────────
+ * 7. 响应式
+ * ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  :root {
+    --nm-r-lg: 10px;
+    --nm-r-xl: 14px;
+  }
+}
+
+/* ────────────────────────────────────────────
+ * dsw alias tokens（默认深色；浅色主题在 light-theme.css 覆盖）
+ * ──────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+
+  --dsw-font-family: var(--nm-font-sans, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+  --dsw-font-xs-13: 13px;
+  --dsw-font-markdown-base: 13px/1.7 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-base-strong: 13px/1.7 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-code: 12px/1.6 var(--nm-font-mono, monospace);
+  --dsw-font-markdown-code-block: 12px/1.6 var(--nm-font-mono, monospace);
+  --dsw-font-markdown-code-font-family: var(--nm-font-mono, monospace);
+  --dsw-font-markdown-h1: 20px/1.4 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-h2: 17px/1.5 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-h3: 15px/1.5 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-h4: 14px/1.5 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-table: 12px/1.6 var(--nm-font-sans, sans-serif);
+  --dsw-font-markdown-table-head: 12px/1.6 var(--nm-font-sans, sans-serif);
+
+  --dsw-alias-bg-base: #050a18;
+  --dsw-alias-bg-layer-0: #050a18;
+  --dsw-alias-bg-layer-1: #0b1220;
+  --dsw-alias-bg-layer-2: #0f172a;
+  --dsw-alias-bg-mask-1: rgba(0, 0, 0, 0.55);
+  --dsw-alias-bg-overlay: rgba(12, 20, 48, 0.72);
+  --dsw-alias-border-l1: rgba(0, 240, 255, 0.08);
+  --dsw-alias-border-l2: rgba(0, 240, 255, 0.12);
+  --dsw-alias-border-l3: rgba(0, 240, 255, 0.25);
+  --dsw-alias-border-l4: rgba(0, 240, 255, 0.40);
+  --dsw-alias-brand-primary: #00f0ff;
+  --dsw-alias-button-contrast-fill: #050a18;
+  --dsw-alias-button-ghost-active-border: rgba(0, 240, 255, 0.45);
+  --dsw-alias-button-ghost-active-fill: rgba(0, 240, 255, 0.12);
+  --dsw-alias-button-primary-fill: #00c2d4;
+  --dsw-alias-button-primary-hover: #38bdf8;
+  --dsw-alias-button-tool-bar-fill: rgba(0, 240, 255, 0.08);
+  --dsw-alias-button-tool-bar-hover: rgba(0, 240, 255, 0.14);
+  --dsw-alias-interactive-bg-active: rgba(0, 240, 255, 0.10);
+  --dsw-alias-interactive-bg-hover: rgba(0, 240, 255, 0.06);
+  --dsw-alias-interactive-bg-hover-danger: rgba(255, 59, 92, 0.12);
+  --dsw-alias-label-caption: #94a3b8;
+  --dsw-alias-label-dimmed: #64748b;
+  --dsw-alias-label-primary: #e2e8f0;
+  --dsw-alias-label-primary-foreground: #050a18;
+  --dsw-alias-label-primary-inverted: #e2e8f0;
+  --dsw-alias-label-secondary: #94a3b8;
+  --dsw-alias-label-tertiary: #64748b;
+  --dsw-alias-link: #38bdf8;
+  --dsw-alias-markdown-code-block: #0b1220;
+  --dsw-alias-markdown-code-block-banner: #132033;
+  --dsw-alias-markdown-inline-code: #16213a;
+  --dsw-alias-scrollbar-bg-l2: rgba(0, 240, 255, 0.15);
+  --dsw-alias-scrollbar-hover-l2: rgba(0, 240, 255, 0.25);
+  --dsw-alias-state-business-primary: #3b82f6;
+  --dsw-alias-state-error-primary: #ff3b5c;
+  --dsw-alias-state-success-primary: #00ff88;
+  --dsw-alias-state-success-tertiary: rgba(0, 255, 136, 0.15);
+  --dsw-alias-state-warn-label: #f59e0b;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-tertiary: rgba(245, 158, 11, 0.15);
+  --dsw-alias-tooltip-bg: #132033;
+  --dsw-hovercard-bg: rgba(15, 26, 54, 0.95);
+  --dsw-mask-blur: blur(6px);
+  --dsw-shadow-lv3: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --dsw-elevation-prominent: 0 16px 48px rgba(0, 0, 0, 0.60);
+  --dsw-specific-menu: rgba(15, 26, 54, 0.98);
+  --dsw-static-deepseek-450: #1e293b;
+  --dsw-static-neutral-bluish-00: #e2e8f0;
+}
+
+/* ── 骨架屏基元（第 94 轮）───────────────────────────────────────────────
+ * `.nm-skel` 这个类名在 `panels/hooks.tsx`（ListSkeleton）与 `ui/kit.tsx`（表格骨架）里
+ * 已经用了很久，但**全仓没有任何地方定义它** —— 于是骨架元素只有行内尺寸、没有底色与动画，
+ * 加载时那一块看起来就是**空白**（不是「微微发光的占位」）。
+ * 这里补上真正的实现：令牌底色 + 一条扫过去的微光，并尊重 prefers-reduced-motion。
+ * 查找手段：`check:ui` 现在会校验「TSX 里的全局 className 字面量必须在某个 CSS 里定义」。
+ */
+.nm-skel {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--nm-bg-hover);
+}
+.nm-skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nm-text-1) 9%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: nmSkelSweep 1.4s ease-in-out infinite;
+}
+@keyframes nmSkelSweep { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .nm-skel::after { animation: none; } }
+

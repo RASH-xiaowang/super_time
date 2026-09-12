@@ -1,0 +1,994 @@
+/* 设置面板 — NEON MATRIX 科技风重设计。
+   深空黑底 + 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple)；毛玻璃卡片与发光悬停。
+   保留 Settings 5 步向导语义：步骤条、固定高度反馈槽、按钮族、模型网格、账号列表。 */
+
+.root {
+
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 14px 0;
+  position: relative;
+  color: var(--nm-text-1);
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+}
+
+/* 状态速览条：5 个可点击状态卡片 */
+.statusStrip {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.statusCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--nm-text-1);
+  min-width: 0;
+  transition: all 0.15s;
+}
+.statusCard:hover {
+  border-color: var(--nm-border-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.statusIcon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--nm-cyan);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 12%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
+}
+.statusDone .statusIcon {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-success) 14%, transparent), color-mix(in srgb, var(--nm-cyan) 10%, transparent));
+  color: var(--nm-success);
+}
+.statusNote .statusIcon {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+}
+.statusBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.statusLabel {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.statusValue {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 右侧主内容滚动区 */
+.mainScroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 2px;
+  scroll-behavior: smooth;
+}
+
+/* toast — 右上角悬浮层(不遮挡标题/步骤条/操作区),不挤占文档流 */
+.notice {
+  position: absolute;
+  top: 58px;
+  right: 14px;
+  left: auto;
+  bottom: auto;
+  z-index: 8;
+  width: min(420px, calc(100% - 28px));
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 18px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35), 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  animation: noticeIn 0.18s ease-out;
+}
+@keyframes noticeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.noticeHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.noticeText {
+  flex: 1;
+  min-width: 0;
+}
+.noticeClose {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 16px;
+  padding: 0 2px;
+  transition: all 0.15s;
+}
+.noticeClose:hover {
+  opacity: 1;
+}
+.noticeDetails {
+  margin-top: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+  border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.noticeDetailItem {
+  font-size: 11px;
+  /* 同一角色（11px 辅助说明）的行高原先是 15/16/17px 三个值，第 69 轮统一到 16px（≈1.45） */
+  line-height: 16px;
+  word-break: break-all;
+}
+.noticeDetailMore {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.toastOk {
+  background: color-mix(in srgb, var(--nm-success) 10%, transparent);
+  color: var(--nm-success);
+  border: 1px solid color-mix(in srgb, var(--nm-success) 30%, transparent);
+}
+.toastErr {
+  background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
+  color: var(--nm-danger);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, transparent);
+}
+
+/* card — 毛玻璃卡片 */
+.card {
+  position: relative;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  overflow: hidden;
+  flex-shrink: 0;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
+  transition: all 0.2s;
+  /* 视口外卡片延迟渲染，降低内存/首屏开销 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+  contain: layout paint;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--nm-cyan), var(--nm-purple));
+  opacity: 0.55;
+}
+.card:hover {
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.cardHd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 12px 20px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.cardIconChip {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--nm-cyan);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 12%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+.cardTitle {
+  font-size: 13px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.cardBadge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-hover);
+}
+.cardBody {
+  padding: 6px 16px 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+.cardTitleBox {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* rows */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px 0;
+  min-width: 0;
+}
+.rowName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  min-width: 132px;
+}
+.rowMeta {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowMetaWarn {
+  color: var(--nm-amber);
+}
+.rowNote {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  /* 与 .noticeDetailItem / .whisperBannerDesc 同为 11px 辅助说明，行高统一 16px（第 69 轮） */
+  line-height: 16px;
+  width: 100%;
+}
+
+/* realtime decrypt progress — 固定高度占位槽,空闲/进度/结果永不跳变 */
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  padding: 0 4px;
+  min-width: 0;
+}
+.slotIdle {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slotDone {
+  font-size: 11px;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slotOk {
+  font-size: 11px;
+  color: var(--nm-success);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slotErr {
+  font-size: 11px;
+  color: var(--nm-danger);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.progressTrack {
+  flex: 1;
+  min-width: 90px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--nm-bg-hover);
+  overflow: hidden;
+  corner-shape: round;
+}
+.progressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  transition: width 0.3s ease;
+  corner-shape: round;
+}
+.progressText {
+  font-size: 11px;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.progressItem {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+  font-family: var(--nm-font-mono, monospace);
+}
+
+/* stats chips */
+.stats {
+  display: flex;
+  gap: 8px;
+  padding: 10px 4px 2px;
+  flex-wrap: wrap;
+}
+.statChip {
+  flex: 1;
+  min-width: 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+  transition: all 0.15s;
+}
+.statChip:hover {
+  border-color: var(--nm-border-hover);
+  background: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+}
+.statNum {
+  font-size: 16px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+/* FancyUI field sizing (className 落在 wrapper,实际输入框由 ui-primitives 主题绘制) */
+.input {
+  flex: 1;
+  min-width: 140px;
+}
+.inputNarrow {
+  width: 110px;
+  flex: none;
+}
+
+/* 按钮反馈:固定占宽(文案变化不挪位)、按压/聚焦反馈、悬停发光 */
+.btnFx {
+  transition: transform 0.08s ease, filter 0.12s ease, background 0.12s ease,
+    border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.btnFx:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
+}
+.btnFx:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.btnFx:hover:not(:disabled) {
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+}
+.btnFixed {
+  min-width: 116px;
+  justify-content: center;
+}
+.btnFixedSm {
+  min-width: 92px;
+  justify-content: center;
+}
+.spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  box-sizing: border-box;
+  corner-shape: round;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 推理设备分段选择 */
+.deviceSeg {
+  display: inline-flex;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--nm-bg-card);
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.deviceSegBtn {
+  background: none;
+  border: none;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.deviceSegBtn:hover:not(:disabled) {
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+}
+.deviceSegBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.deviceSegOn {
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  color: var(--nm-on-accent);
+  font-weight: 600;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+}
+
+/* 语音转写 —— 横幅说明 */
+.whisperBanner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 4px 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 6%, transparent));
+  border: 1px solid var(--nm-border);
+  transition: all 0.2s;
+}
+.whisperBanner:hover {
+  border-color: var(--nm-border-hover);
+}
+.whisperBannerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.whisperBannerTitle {
+  font-size: 13px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.whisperBannerDesc {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  line-height: 16px;
+}
+.whisperRefresh {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--nm-cyan);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 2px;
+  transition: all 0.15s;
+}
+.whisperRefresh:hover:not(:disabled) {
+  text-decoration: underline;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+}
+.whisperRefresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 模型网格 */
+.gridHd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 4px 2px;
+}
+.gridHdTitle {
+  font-size: 12px;
+  font-weight: 600;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.modelGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 4px 4px 2px;
+}
+.modelCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 74px;
+  padding: 9px 10px;
+  padding-right: 76px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+.modelCard:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.modelCard:active {
+  transform: translateY(1px) scale(0.985);
+}
+.modelSelected {
+  border-color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.modelDownloadingCard {
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+}
+.modelName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.modelTag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--nm-on-accent);
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  border-radius: 999px;
+  padding: 0 6px;
+  corner-shape: round;
+}
+.modelBadge {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  font-size: 11px;
+}
+.modelState {
+  color: var(--nm-text-2);
+  font-weight: 600;
+}
+.modelStateInstalled {
+  color: var(--nm-success);
+  font-weight: 600;
+}
+.modelStateDownloading {
+  color: var(--nm-cyan);
+  font-weight: 600;
+}
+.modelProgress {
+  position: absolute;
+  bottom: 9px;
+  right: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.modelProgressTrack {
+  flex: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--nm-bg-hover);
+  overflow: hidden;
+  corner-shape: round;
+}
+.modelProgressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  transition: width 0.3s ease;
+  corner-shape: round;
+}
+.modelProgressPct {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nm-cyan);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.modelDownload {
+  position: absolute;
+  bottom: 9px;
+  right: 10px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  color: var(--nm-on-accent);
+  border: none;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  /* 本轮该元素从 <span> 变成真 <button>（原来嵌在按钮里是无效 HTML）：
+     UA 会重置字体族，这里显式继承，外观与改造前一致。 */
+  font-family: inherit;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.modelDownload:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+}
+.modelDownloadDone {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  cursor: default;
+}
+
+/* 并发线程行(右对齐) */
+.whisperThreads {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 4px 2px;
+}
+.whisperThreadsLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+/* 底部操作区 */
+.whisperFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 4px 2px;
+}
+.whisperSkip {
+  background: none;
+  border: none;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 8px;
+  margin-right: auto;
+  transition: all 0.15s;
+}
+.whisperSkip:hover {
+  color: var(--nm-cyan);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+}
+
+/* account list — 固定高度占位区,账号列表出现/切换不改变卡片布局 */
+.accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 4px 0;
+  height: 252px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.accountsEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  opacity: 0.85;
+  text-align: center;
+  padding: 0 18px;
+  line-height: 18px;
+  border: 1px dashed var(--nm-border-hover);
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+.acct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  transition: all 0.15s;
+}
+.acct:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.acctCurrent {
+  border-color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+.acctMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.acctTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.acctName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+}
+.acctBadge {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--nm-on-accent);
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+  corner-shape: round;
+}
+.acctPath {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--nm-font-mono, monospace);
+}
+.acctAvatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border-hover);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 15%, transparent);
+  corner-shape: round;
+}
+.acctAvatarImg {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+  corner-shape: round;
+}
+
+/* advanced details */
+.advanced {
+  flex-shrink: 0;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all 0.2s;
+}
+.advanced:hover {
+  border-color: var(--nm-border-hover);
+}
+.advancedSummary {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-2);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+}
+.advancedSummary:hover {
+  color: var(--nm-cyan);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+}
+.advancedBody {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--nm-border);
+}
+
+/* footer save bar */
+.saveBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.saveMeta {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saveMsgIdle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.7;
+}
+.saveMsgOk {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nm-success);
+}
+.saveMsgErr {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nm-danger);
+}
+
+/* 状态行“详情”链接 */
+.slotDetail {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.slotDetailBtn {
+  border: none;
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0 2px;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+.slotDetailBtn:hover {
+  opacity: 1;
+}
+
+/* 图片解密详情弹窗 */
+.imgDetailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.imgDetailGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.imgDetailTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+}
+.imgDetailRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.imgDetailReason {
+  color: var(--nm-text-2);
+}
+.imgDetailCount {
+  flex-shrink: 0;
+  color: var(--nm-cyan);
+  font-weight: 700;
+}
+.imgDetailFile {
+  flex-shrink: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+}
+.imgDetailError {
+  color: var(--nm-danger);
+}
+.imgDetailMore {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.75;
+}
+.imgDetailEmpty {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  padding: 12px 0;
+  text-align: center;
+}
+
+

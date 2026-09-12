@@ -1,0 +1,58 @@
+/* Funds ledger — NEON MATRIX 科技风（与总览/记录面板共用令牌）。 */
+.input {
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus { border-color: var(--nm-cyan); }
+
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+
+.link {
+  background: none;
+  border: none;
+  color: var(--nm-cyan);
+  font-size: 12px;
+  cursor: pointer;
+  /* WCAG 2.2 SC 2.5.8：原 padding:0 使命中区只有 16px 高。该按钮无背景无边框，
+     因此加 padding/min-width 是**纯命中区扩展**，文字位置与观感不变。 */
+  padding: 4px 3px;
+  min-width: 24px;
+  text-align: left;
+}
+.link:hover { text-decoration: underline; }
+.dirBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-2);
+  corner-shape: round;
+}
+.dirBadge[data-kind='in'] { color: var(--nm-success-text); border: 1px solid color-mix(in srgb, var(--nm-success) 30%, transparent); }
+.dirBadge[data-kind='out'] { color: var(--nm-danger-text); border: 1px solid color-mix(in srgb, var(--nm-danger) 30%, transparent); }
+
+.rpStats { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.rpRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--nm-text-2); }
+.rpRow b { color: var(--nm-text-1); font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
+.warnList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid rgba(255, 200, 87, 0.25);
+  border-radius: 10px;
+  background: rgba(255, 200, 87, 0.06);
+  padding: 8px 12px;
+}
+.warnIcon { color: var(--nm-warning); }
+.warnBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.warnTitle { font-size: 12px; color: var(--nm-text-1); }
+.warnMeta { font-size: 11px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+

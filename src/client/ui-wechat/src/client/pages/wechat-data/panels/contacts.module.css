@@ -1,0 +1,203 @@
+/* Contacts panel — NEON MATRIX 科技风重设计。
+   深空黑底 + 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple) + 毛玻璃卡片 + 发光悬停。
+   保留全部被 TSX 引用的类名与既有语义（搜索、分类、字母索引、列表、资料卡）。 */
+
+.panel {
+  /* 设计令牌 */
+
+  height: 100%;
+  /* 第 81 轮：删除此处的 `color-scheme: dark`。主题的 color-scheme 由
+     `:root` / `:root.theme-light`（scifi-theme.css）统一切换，面板再写死一次会让
+     面板内的**原生控件与滚动条**在浅色主题下仍按深色渲染（审计第 3 节点名过这一行）。 */
+  /* 内部滚动容器继承双层配色（见 ui-theme styles/scrollbar.css 的绑定约定） */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  box-sizing: border-box;
+  position: relative;
+
+  /* 第 81 轮：这里原本是 `radial-gradient(...) , rgba(4, 10, 24, 0.50)` ——
+     第二个图层是**写死的深色字面量**，在浅色主题下把整块面板压成 #82858c
+     （合成亮度 0.232），是一整块灰绿色面板。改成与 kit `.panelShell` 相同的
+     令牌化辉光底（不再自带底色，面板底色由 shell 决定）。
+     判据见 `scripts/st-verify-theme-surface.js`（`npm run check:surface`）。 */
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+}
+
+.catBtn {
+  padding: 5px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-card);
+  font-size: 12px;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.catBtn:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.catBtn[data-active='true'] {
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan);
+  font-weight: 600;
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+}
+.catBtn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+.indexBar {
+  position: absolute; top: 88px; right: 6px; bottom: 6px; z-index: 5;
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding: 4px 2px; pointer-events: none;
+}
+
+.indexLetter {
+  pointer-events: auto; width: 18px; height: 16px; border: none; background: transparent;
+  color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: 4px;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  transition: all 0.15s;
+  /* WCAG 2.2 SC 2.5.8：A–Z 索引是紧凑的定高栏，把每格撑到 24px 会让整栏达 648px
+     而失去索引的意义（属该条目的 Essential 例外；面板另有搜索作为等价路径）。
+     这里以伪元素把**实际命中区**扩到约 24×24，视觉尺寸与栏高都不变。
+     注意：审计脚本按边界框计量，因此这一处仍会被报为 18×16（已知例外）。 */
+  position: relative;
+}
+.indexLetter::after { content: ''; position: absolute; inset: -4px -3px; }
+.indexLetter:hover { background: var(--nm-bg-hover); color: var(--nm-cyan); }
+
+.scroll {
+  flex: 1; min-height: 0; overflow-y: auto;
+  border: 1px solid var(--nm-border); border-radius: 14px; background: var(--nm-bg-card); padding: 8px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.group { margin-bottom: 6px; }
+
+.letterHd {
+  font-size: 11px; font-weight: 700; color: var(--nm-text-2); padding: 6px 8px 4px;
+  position: sticky; top: 0; background: var(--nm-bg-card);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.letterHd::before {
+  content: ''; display: inline-block; width: 3px; height: 10px;
+  margin-right: 6px; vertical-align: middle;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+}
+
+.contactItem {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.contactItem:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+
+.avatar {
+  /* 第 88 轮：兜底底色原为 hsl(190 50% 50%)，白字在其上只有 2.72:1（照片加载中的占位也是它）。
+     压到 32% 亮度后白字约 6.5:1；真正有名字的首字格子由 utils/format.ts: avatarColors() 给色。 */
+  border-radius: 10px; background: hsl(190 50% 32%);
+  color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border: 1px solid var(--nm-border);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+
+.contactInfo { display: flex; flex-direction: column; min-width: 0; }
+
+.contactName {
+  font-size: 13px; font-weight: 600; color: var(--nm-text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.contactMeta {
+  font-size: 11px; color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+
+.notice {
+  padding: 6px 12px; font-size: 12px; color: var(--nm-success);
+  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-success) 20%, transparent);
+  border-radius: 8px;
+}
+
+.profileHd { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+
+.profileNames { flex: 1; min-width: 0; }
+
+.profileName {
+  font-size: 15px; font-weight: 700;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.profileType { font-size: 11px; color: var(--nm-text-2); margin-top: 2px; }
+
+.profileRow {
+  display: flex; gap: 8px; padding: 6px 0; font-size: 12px;
+  border-bottom: 1px solid var(--nm-border);
+  font-variant-numeric: tabular-nums;
+}
+.profileRow span:first-child { color: var(--nm-text-2); flex-shrink: 0; width: 56px; }
+.profileRow code { word-break: break-all; font-family: var(--nm-font-mono, monospace); }
+
+.profileSection {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--nm-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.commonGroups { display: flex; flex-wrap: wrap; gap: 6px; }
+.groupChip {
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+  cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.groupChip:hover { border-color: var(--nm-cyan); color: var(--nm-cyan); }
+
+.profileActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+.linkBtn {
+  background: none; border: none; padding: 0; color: var(--nm-cyan); cursor: pointer;
+  font-size: 12px; font-weight: 600; text-align: left; word-break: break-all;
+  transition: all 0.15s;
+}
+.linkBtn:hover { text-decoration: underline; color: var(--nm-purple); text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
+
+.avatarImg {  display: block; object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--nm-border);
+}
+/* 第 94 轮：以下两个类的样式原来写在 Contacts.tsx 的行内 style 里。 */
+.avatarPlaceholder { width: 36px; height: 36px; }
+.avatarImgRound { border-radius: 8px; }

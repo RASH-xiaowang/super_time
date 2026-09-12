@@ -1,0 +1,65 @@
+/* Moments insights — NEON MATRIX 科技风（与总览共用令牌）。 */
+
+
+.list { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.rowName { color: var(--nm-text-1); }
+.rowCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+/* 提醒清单里的两个小标：未读醒目、已消失用次要色 */
+.rowCount[data-tone='warn'] { color: var(--nm-warning); }
+.badgeWarn,
+.badgeMuted {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--nm-font-sans, inherit);
+  font-size: 10.5px;
+}
+.badgeWarn { color: var(--nm-warning); background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
+.badgeMuted { color: var(--nm-text-2); background: var(--nm-bg-hover); }
+
+.monthly { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.monthRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.monthLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; }
+.monthTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: 6px; overflow: hidden; }
+.monthFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 6px; }
+.monthCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+
+.todayList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.todayRow { display: flex; gap: 10px; font-size: 12px; color: var(--nm-text-1); }
+/* 第 94 轮：口径说明那种 todayRow 额外带 2px 纵向留白（原来是行内 style）。
+   单独一个类，因为「那年今天」的 todayRow 并不需要这个留白。 */
+.todayRowPad { padding: 2px 0; }
+.todayTime { color: var(--nm-text-2); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
+.todayText { word-break: break-word; }
+
+/* ── 足迹地图（第 58 轮）────────────────────────────────────────────
+   自绘 SVG：大陆剪影用 var(--nm-cyan) 的低透明度填充，打卡气泡用青色实心点。
+   全部走主题令牌，浅色主题下不会变成「亮青色叠白底」那种刺眼效果。 */
+.footprintWrap { display: flex; flex-direction: column; padding: 10px 14px 12px; gap: 8px; }
+.footprintBar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.footprintSvg {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 1;
+  display: block;
+  border-radius: 8px;
+  background:
+    radial-gradient(120% 90% at 30% 20%, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 70%),
+    var(--nm-bg-0);
+  border: 1px solid var(--nm-border);
+}
+.footprintLand {
+  fill: color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+  stroke: color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.footprintDot {
+  fill: var(--nm-cyan);
+  stroke: color-mix(in srgb, var(--nm-bg-0) 75%, transparent);
+  stroke-width: 0.6;
+  cursor: help;
+}
+.footprintDot:hover { fill: var(--nm-purple); }
+.footprintFoot { display: flex; }

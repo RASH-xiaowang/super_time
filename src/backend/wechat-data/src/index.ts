@@ -1,0 +1,16 @@
+/**
+ * WeChat data backend plugin: registers the WechatDataGateway Remote service.
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import { WechatDataGateway } from './gateway.ts'
+
+export type * from './types.ts'
+export { WechatDataGateway } from './gateway.ts'
+
+/**
+ * Register the WeChat data gateway.
+ * @param ctx - Cordis context.
+ */
+export function apply(ctx: Context): void {
+  ctx.plugin(WechatDataGateway)
+}

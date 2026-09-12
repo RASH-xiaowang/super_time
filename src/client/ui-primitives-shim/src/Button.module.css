@@ -1,0 +1,150 @@
+/* Capsule geometry from the figma Button component (1:155 instances:
+ * h36, pad 14/7, gap 4, r18; the wide New Session form is r24 at h38 —
+ * owners with the wide form set their own radius/width). */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  border-radius: 18px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  padding: 0 14px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 键盘可达性：全套按钮此前都没有焦点样式，键盘用户看不到焦点位置。
+   用双层 box-shadow 在任意背景上都可见（外圈用主题强调色）。 */
+.button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1), 0 0 0 4px var(--nm-border-active);
+}
+
+.md {
+  height: 36px;
+}
+
+/* Compact height for dense rows; no dedicated figma node (Icon_container
+ * 28x28 is the icon-only form) — geometry is ours. */
+.sm {
+  height: 28px;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 10px;
+  border-radius: 14px;
+}
+
+/* 纯图标按钮：正方形、无内边距。面板里有大量裸图标按钮，统一到这里。 */
+.iconOnly {
+  padding: 0;
+}
+.iconOnly.md {
+  width: 36px;
+}
+.iconOnly.sm {
+  width: 28px;
+}
+
+.primary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.ghost:active:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* Dialog Cancel (figma 451:18655): bordered capsule on transparent fill. */
+.outline {
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  background: transparent;
+}
+
+.outline:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.toolbar {
+  background: var(--dsw-alias-button-tool-bar-fill);
+}
+
+.toolbar:hover:not(:disabled) {
+  background: var(--dsw-alias-button-tool-bar-hover);
+}
+
+/* 危险操作（删除/重置/清空）。用语义令牌，深浅主题各自压暗。 */
+.danger {
+  background: var(--nm-danger-15);
+  color: var(--nm-danger);
+}
+
+.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--nm-danger) 24%, transparent);
+}
+
+/* 面板胶囊按钮（panel pill）。
+ *
+ * 由来：面板里曾有 5 个模块各自定义**逐字节相同**的 `.btn` 及其 hover/disabled/active
+ * （第 29 轮收敛为 kit 的 `.btnPill` 类）。第 34 轮进一步统一到**组件**：
+ * 这里是同一套外观的唯一实现，面板改用 `<Button variant="pill">`。
+ *
+ * 与其它变体的区别：完全圆角（999px）+ 1px 描边 + 卡片底 + 12px 字号 + 7px 14px 内边距，
+ * 且**不指定高度**（由内容撑开，约 34px）—— 因此用 `.button.pill` 的双类选择器压过
+ * 尺寸类 `.md` 的 `height: 36px`。
+ */
+.button.pill {
+  height: auto;
+  padding: 7px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: normal;
+  corner-shape: round;
+  transition: all 0.15s;
+}
+
+.button.pill:hover:not(:disabled) {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}
+
+.button.pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button.pill[data-active='true'] {
+  border-color: var(--nm-cyan);
+  color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+}
+
+.danger:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1), 0 0 0 4px var(--nm-danger);
+}
+
+.icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}

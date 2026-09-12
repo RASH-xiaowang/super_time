@@ -1,0 +1,1 @@
+{"version":3,"file":"wechat-state.d.ts","sourceRoot":"","sources":["../../../src/client/wechat-state.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAUH,wBAAgB,aAAa,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,MAAM,IAAI,CAG9D;AACD,wBAAgB,OAAO,IAAI,OAAO,CAAiB;AACnD,wBAAgB,UAAU,IAAI,IAAI,CAAkB;AACpD,wBAAgB,WAAW,IAAI,IAAI,CAAmB;AACtD,wBAAgB,YAAY,IAAI,IAAI,CAAoB"}

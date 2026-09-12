@@ -1,0 +1,156 @@
+/* 群活跃监控面板 — NEON MATRIX 科技风重设计
+   深空黑底 · 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple) · 毛玻璃卡片 · 发光悬停 */
+
+/*
+ * ── 面板根 ────────────────────────────────────────────────────────
+ * 第 80 轮：这里原本有一个自己的 `.panel`（border + radius 14 + 背景 + padding 12px），
+ * 于是两个问题同时存在：
+ *   1. **双重边框 / 双重内边距** —— shell 的内容区已经内缩 16px，这里再画一层卡片，
+ *      卡片内的标题就落到了 242px，而其余面板标题在 229px（切页签横向跳 13px）；
+ *   2. 它还把全局字体令牌 `--nm-font-mono` 在面板内改写成另一套字体。
+ * 两处都被第 3 节的审计点过名。现在直接复用共享的 `kitCss.panelShell`
+ * （见 `ui/kit.module.css`），面板外形与其余 15 个面板完全一致，本模块不再定义面板根。
+ */
+
+/* ── 群组筛选 / 状态标签 ──────────────────────────────────────── */
+.chipRow { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 4px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-card);
+  font-size: 12px;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.chip:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.chip[data-on='true'] {
+  color: var(--nm-cyan);
+  border-color: var(--nm-cyan);
+  font-weight: 600;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+}
+.note { font-size: 12px; color: var(--nm-text-2); padding: 6px 2px; }
+
+/* ── 消息热力条 ───────────────────────────────────────────────── */
+.heatWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 4px 0;
+}
+.heatCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+.heatValue {
+  font-size: 9.5px;
+  color: var(--nm-text-2);
+  min-height: 11px;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.heatTrack {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: var(--nm-bg-hover);
+  border-radius: 4px;
+}
+.heatBar {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  min-height: 3px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  opacity: 0.55;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+  transition: all 0.15s;
+}
+.heatBar[data-today='true'] {
+  opacity: 1;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 45%, transparent), 0 0 4px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
+}
+.heatLabel {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 近期消息列表 ─────────────────────────────────────────────── */
+.msgList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msgList::-webkit-scrollbar { width: 6px; }
+.msgList::-webkit-scrollbar-track { background: transparent; }
+.msgList::-webkit-scrollbar-thumb {
+  background: var(--nm-border);
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.msgList::-webkit-scrollbar-thumb:hover { background: var(--nm-border-hover); }
+.msgRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--nm-border);
+  padding-bottom: 5px;
+  border-radius: 6px;
+  transition: all 0.15s;
+  width: 100%;
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.msgRow:disabled { cursor: default; }
+.msgRow:hover:not(:disabled) {
+  border-bottom-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.msgName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+}
+.msgTime {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.msgText {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+

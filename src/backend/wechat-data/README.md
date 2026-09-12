@@ -1,0 +1,114 @@
+# @deepseek-ai/dsh-wechat-data
+
+微信数据板块后端：读取自有数据根的**本地解密库**（node:sqlite），通过 Typert Remote 暴露给浏览器「微信+」面板。
+
+> 迁移自 `C:\Users\28361\Desktop\ST\st_control`（Tauri + Rust + Svelte）。
+> 完整核对表见 `docs/wechat-migration/migration-checklist.md`；迁移计划见 `docs/wechat-migration/MIGRATION-PLAN.md`。
+
+## 数据依赖（运行要求）
+
+本包**拥有自己的数据根**（`$DSH_HOME/wechat-data`，默认 `~/.dsh/wechat-data`，可用
+`DSH_WECHAT_DATA_DIR` 覆盖），不读取任何外部进程目录。首次运行可选通过
+`DSH_WECHAT_SOURCE_DIR` 设置一次性导入旧快照（未设置则跳过导入），
+之后只读写 DSH 自己的数据根：
+
+| 目录/文件 | 说明 | 数据根下位置 |
+|---|---|---|
+| decrypted | 解密库（session/message/contact/sns/favorite/emoticon…） | `<root>/decrypted` |
+| decoded_images | 已解码图片缓存 | `<root>/decoded_images` |
+| exports | 导出文件输出 | `<root>/exports` |
+| backups | 备份快照输出（目录快照 / 加密 `.wcb`） | `<root>/backups` |
+| message_edits.db | 消息编辑快照（插件写入） | `<root>/message_edits.db` |
+| daily_summary.db | 每日总结任务/记录（插件写入） | `<root>/daily_summary.db` |
+| wechat_search.db | 搜索索引（插件写入） | `<root>/wechat_search.db` |
+| wechat_tasks.db | 待办提取存储（插件写入） | `<root>/wechat_tasks.db` |
+| wechat_privacy.db | 隐私设置与 AI 审计 + 操作日志（插件写入） | `<root>/wechat_privacy.db` |
+| config.json | 微信配置（读写） | `<root>/config.json` |
+| keys.json | 自动获取的密钥存储（autoGetDbKey/autoGetImageKey 写入） | `<root>/keys.json` |
+| all_keys.json | 生成的密钥信息 | `<root>/all_keys.json` |
+
+自举只复制一次：目标根已存在 `decrypted` 时跳过；复制跳过 SQLite `-wal`/`-shm`
+运行时文件。本包**不自解密 SQLite**（SQLCipher 解密单独立项），但**可自动获取密钥**：`autoGetDbKey`
+从运行中的 Weixin.exe 进程内存扫描 V4 数据库密钥（配合 Weixin.dll 内部密钥解掩码），
+`autoGetImageKey` 从进程内存扫描经 V2 模板验证的图片密钥（均已迁移自 WeChatDataAnalysis，
+见 `src/keys/`）。「检测本机微信账号」扫描 `xwechat_files` 数据根：常见目录
+（`X:\Tencent`、`%USERPROFILE%\Documents`）、`%APPDATA%\Tencent\xwechat\config\*.ini`
+记录的自定义数据根、以及注册表 `HKCU\Software\Tencent\Weixin\InstallPath`（见
+`src/query/config.ts`）。
+
+环境变量：
+
+- `DSH_WECHAT_DATA_DIR` — 数据根（最高优先级；默认 `$DSH_HOME/wechat-data`）
+- `DSH_WECHAT_SOURCE_DIR` — 可选一次性导入源目录（默认不设置；未设置则跳过导入）
+- `DSH_WECHAT_DECRYPTED_DIR` / `DSH_WECHAT_DECODED_DIR` — 旧版显式固定路径（设置后绕过数据根，不再自举）
+- `DSH_WECHAT_BASE_DIR` — 原始微信目录（可选，`.dat` 回退用）
+
+## Remote 方法（gateway.ts）
+
+| 分组 | 方法 |
+|---|---|
+| 会话/消息 | getSessions / getMessages / getContacts / getContact360 |
+| 媒体 | getImageDataUrl / getSnsImageDataUrl / getSnsVideoCoverDataUrl / getVoiceInfo / getVideoInfo / getMediaAssets |
+| 分析 | getOverview / getRecords / getLedger / getRevoked / getEmoticons / getStorageStats / getAnnual / getPrivacyScan / getGraph / getGroupInsights |
+| 订阅 | getMoments / getMomentsInsights / getFavorites / getAssetInsights / getFiles / getOfficialAssets / getWechatConfig |
+| 搜索/日历 | getSearchIndexStatus / buildSearchIndex / searchMessages / searchUnified / getDailyCounts |
+| 写操作 | exportSessionMessages / askWechat（可选会话/日期范围）/ generateDailySummary / generatePeriodSummary / listBackups / createBackup / createEncryptedBackup / restoreBackup / deleteBackup / editChatMessage / resetEditedMessage / listEditedMessages |
+| 待办 | listTasks / addTask / setTaskStatus / deleteTask / extractTasks / getHandoffReminds / syncHandoffTasks |
+| 隐私控制 | getPrivacyState / setPrivacyState / getPrivacyAuditRows / clearPrivacyAudit |
+| 密钥 | autoGetDbKey（V4 内存扫描）/ autoGetImageKey（V2 验证内存扫描）/ getWechatKeysInfo |
+| 系统 | getDbStatus / getDbHealth / getImageDataUrl |
+
+## 前端
+
+浏览器端在 `packages/client/ui-pages/src/client/pages/wechat-data/`：
+
+- `api.ts` — Remote 客户端（`setWechatRemote` 注入，无 HTTP 依赖）
+- `WechatDataPanel.tsx` — 32 页签主容器
+- `panels/` — 各面板 + 图片查看器/日历/搜索
+- `utils/format.ts` — 迁移的格式化/图标工具
+
+## 构建
+
+```sh
+npx tsc -b packages/host/wechat-data/tsconfig.json   # 类型检查
+npx tsdown --env.DSH_BUILD_FACE host                 # 构建 lib + typert 生成
+pnpm --filter @deepseek-ai/dsh-client-ui-pages run bundle
+pnpm --filter @deepseek-ai/dsh-api-remotes run bundle
+```
+
+## 降级项
+
+- 语音 silk→wav：Node 无 ffmpeg/WASM 解码器 → 返回时长 + 降级提示
+- 视频/HEVC（wxgf）：需系统解码器 → 封面或占位
+- 高清原图（wxgf/HEVC）：未缓存源时以缩略图 `_t/_h` 兜底；监控为本地轮询仪表盘（8 秒刷新，无进程注入）
+- 备份：目录快照 / AES-256 加密 `.wcb`（本包实现加密与恢复）
+
+
+## Model Experience
+
+### AI 问答（askWechat）
+
+#### What the model sees
+
+`askWechat` assembles a single user message from the question plus retrieval-grounded WeChat context and a citation instruction, and streams the answer through `@deepseek-ai/dsh-llm` using the configured default model. The model sees only that assembled prompt; raw decrypted rows never enter the request.
+
+#### Token effect
+
+The assembled prompt and the streamed answer account for their own provider tokens through the normal dsh-llm meter; the retrieval context length is bounded by `buildAskContext`.
+
+#### KV Cache effect
+
+No KV cache is written or read by this package; the provider adapter owns any cache behavior.
+
+## Known Limitations and Deferred Work
+
+- **数据同步与解密**：本包通过 `sync.ts` 在本地监视原始分片并解密（SQLCipher 4，PBKDF2-HMAC-SHA512 + AES-256），注入自有数据根，不依赖 st_control 进程。
+- **语音/视频降级**：silk→wav 与 HEVC 需系统解码器，Node 侧返回时长/封面或占位。
+- **朋友圈媒体**：图片走 `cache/<月>/Sns/Img` 本地 V2 解密（密钥优先 config.json，回退 keys.json 自动获取结果）；视频展示本地 `Sns/Video` 封面（`msg/video` 缩略图兜底），视频本体暂不播放。
+- **监控与原图**：监控为本地轮询仪表盘；原图走本地缓存与解码，未缓存的高清源以缩略图兜底；无进程注入/无 Hook。
+- **备份**：目录快照与 AES-256 加密 `.wcb` 均为本包实现；`.wcb` 为自包含格式，非外部加密 ZIP。
+
+
+## 参考文档
+
+- [微信数据库字段字典](docs/wechat-db-fields.md)：18 个库 / 60+ 表的字段语义（会话/联系人/消息/转账红包/朋友圈/收藏/头像/硬链接等）。
