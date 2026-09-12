@@ -379,9 +379,11 @@ function OpenFileCard({ title, size }: { title: string; size: string }): React.J
       <span className={css.msgFileIcon} data-kind={style.kind}>{style.emoji}</span>
       <span className={css.msgFileBody}>
         <span className={css.msgFileTitle}>{title}</span>
-        <span className={css.msgFileMeta}>{[ext ? ext.toUpperCase() : '文件', sized, foot].filter(Boolean).join(' · ')}</span>
+        <span className={css.msgFileMeta}>{[ext ? ext.toUpperCase() : '文件', sized].filter(Boolean).join(' · ')}</span>
+        <span className={css.msgFileHint}>{foot}</span>
       </span>
       <span className={css.msgFileExt}>{ext ? ext.toUpperCase() : '文件'}</span>
+      <CardFoot label="微信电脑版" />
     </div>
   )
 }
@@ -697,6 +699,24 @@ function voiceWidth(sec: number): string {
   return `${68 + clamped * 3.4}px`
 }
 
+/** 微信语音波纹字形（三层声波，参考 WeChatDataAnalysis MessageContent.vue）。 */
+function IconVoiceWaves({ mirror }: { mirror?: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 32 32"
+      fill="currentColor"
+      aria-hidden="true"
+      style={mirror ? { transform: 'scaleX(-1)' } : undefined}
+    >
+      <path d="M10.24 11.616l-4.224 4.192 4.224 4.192c1.088-1.056 1.76-2.56 1.76-4.192s-0.672-3.136-1.76-4.192z" />
+      <path d="M15.199 6.721l-1.791 1.76c1.856 1.888 3.008 4.48 3.008 7.328s-1.152 5.44-3.008 7.328l1.791 1.76c2.336-2.304 3.809-5.536 3.809-9.088s-1.473-6.784-3.809-9.088z" opacity="0.85" />
+      <path d="M20.129 1.793l-1.762 1.76c3.104 3.168 5.025 7.488 5.025 12.256s-1.921 9.088-5.025 12.256l1.762 1.76c3.648-3.616 5.887-8.544 5.887-14.016s-2.239-10.4-5.887-14.016z" opacity="0.55" />
+    </svg>
+  )
+}
+
 /**
  * 语音消息：时长来自消息 XML（`<voicemsg voicelength>`，毫秒）。
  *
@@ -737,11 +757,16 @@ function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: string }): 
   const ms = typeof m.rich?.durationMs === 'number' ? m.rich.durationMs : 0
   const sec = ms > 0 ? Math.max(1, Math.round(ms / 1000)) : 0
   const width = sec > 0 ? voiceWidth(sec) : undefined
+  const isSelf = m.isSender === 1
   return (
     <div className={css.msgVoice}>
-      <div className={css.msgVoiceBubble} style={width ? { width } : undefined} title={audioOk === false ? '语音数据不在本地' : '语音'}>
-        <span className={css.msgVoiceIcon}><IconPlayOutline16 size={13} /></span>
-        <span className={css.msgVoiceWave} aria-hidden="true"><i /><i /><i /><i /><i /></span>
+      <div
+        className={css.msgVoiceBubble}
+        style={width ? { width } : undefined}
+        title={audioOk === false ? '语音数据不在本地' : '语音'}
+        data-self={isSelf || undefined}
+      >
+        <span className={css.msgVoiceIcon}><IconVoiceWaves mirror={!isSelf} /></span>
         {sec > 0 && <span className={css.msgVoiceDur}>{sec}″</span>}
       </div>
       {sec === 0 && audioOk === false && <span className={kitCss.textMeta}>语音数据不在本地</span>}
@@ -794,7 +819,7 @@ function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: string }): 
     <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
       <span className={css.msgVideoWrap}>
         <img src={cover} alt="视频封面" className={css.msgImage} loading="lazy" />
-        <span className={css.msgVideoPlay}><IconPlayOutline16 size={16} /></span>
+        <span className={css.msgVideoPlay}><IconPlayOutline16 size={18} /></span>
         {durText && <span className={css.msgVideoDur}>{durText}</span>}
       </span>
     </div>
