@@ -1,14 +1,24 @@
 ---
 feature: chat-message-module
-status: designed
+status: delivered
 updated: 2026-09-12
 branch: feat/chat-message-module
-commits: 622cbca..622cbca
+commits: 622cbca..586c1a6
 ---
 
 # 聊天消息模块完善（参考 WeChatDataAnalysis）
 
 ## Report
+
+**What was built** — 对照 `D:\WeChatDataAnalysis-main` 的 MessageContent/chat.css，完善【聊天】消息呈现：文本气泡左右尖角与 max-width；语音改为微信三层波纹 SVG + 时长线性加宽 + 尖角；图片 min 96×96 热区与 hover 反馈；文件卡改为「主体 + 底部『微信电脑版』条」；视频播放钮加大为 48px 半透明圆。后端 `classifyRender` 分类契约未改。
+
+**Verification** — `npm run build:ui` PASS（804 modules，exit 0）；重启 Electron 后 6 进程存活。未跑 CDP 真实 DOM 扫描（相关 scripts 已在清理中删除）。
+
+**Journey log**
+1. 参考项目为 Vue + 自有 API，不可直接移植组件；只对齐视觉契约。
+2. 本目录原先无 Git，compose 前先 `git init` + 分支 `feat/chat-message-module` 并提交基线。
+3. chats.module.css 底部曾有第二份 `.msgVoiceBubble` 覆盖新规则，已删除旧块。
+4. 主题保持 sci-fi 青色，不引入参考项目绿色气泡，避免与全局 token 冲突。
 
 ## [S1] Problem
 
@@ -54,6 +64,6 @@ commits: 622cbca..622cbca
 
 ## Tasks
 
-- [ ] T1: CSS 气泡尖角 + 语音波纹图标布局 + 图片 min 尺寸 — acceptance: chats.module.css 含 tail/wave/min 相关规则 (covers: S2)
-- [ ] T2: Chats.tsx 语音 SVG、文件卡底部条、视频播放钮 — acceptance: MessageVoice 使用微信波纹 SVG；OpenFileCard 有 CardFoot (covers: S2)
-- [ ] T3: 构建并重启应用 — acceptance: build:ui 成功且 electron 进程 ≥1 (covers: S2; depends: T1,T2)
+- [x] T1: CSS 气泡尖角 + 语音波纹图标布局 + 图片 min 尺寸 — acceptance: chats.module.css 含 tail/wave/min 相关规则 (covers: S2)
+- [x] T2: Chats.tsx 语音 SVG、文件卡底部条、视频播放钮 — acceptance: MessageVoice 使用微信波纹 SVG；OpenFileCard 有 CardFoot (covers: S2)
+- [x] T3: 构建并重启应用 — acceptance: build:ui 成功且 electron 进程 ≥1 (covers: S2; depends: T1,T2)
