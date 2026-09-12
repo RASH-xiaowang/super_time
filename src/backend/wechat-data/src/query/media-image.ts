@@ -425,6 +425,83 @@ export function decodeFileImageDataUrl(
   return { error: '未找到已解密图片（decoded_images/' + m + '.jpg 不存在）' }
 }
 
+/**
+ * Resolve a custom emoticon (sticker) md5 to a base64 data URL.
+ *
+ * 自定义表情文件不在会话消息目录下，而是散落在 `msg/attach/<hash>/<YYYY-MM>/Img/<md5>.dat`
+ * （同一条表情可能被多个会话各缓存一份）。策略：
+ *  1. 先读 `decoded_images/<md5>.<ext>`（批量解密/上次解码缓存）；
+ *  2. 再扫 `msg/attach` 找 `<md5>.dat` / `<md5>_t.dat`，优先缩略图（小、可渲染）；
+ *  3. 解码成功后写回 decoded 缓存，避免重复全量扫描。
+ * @param decryptedDir - decrypted data root（仅用于缓存路径约定）。
+ * @param decodedDir - decoded image cache root.
+ * @param wechatBaseDir - raw WeChat account root (contains msg/attach).
+ * @param md5 - emoticon md5 from message XML.
+ * @param aesKey - V2 AES key.
+ * @param xorKey - XOR key byte.
+ * @returns data URL or error.
+ */
+export function decodeEmoticonDataUrl(
+  decryptedDir: string,
+  decodedDir: string,
+  wechatBaseDir: string | undefined,
+  md5: string | undefined,
+  aesKey?: string | Uint8Array,
+  xorKey = 0xff,
+): { url?: string; format?: string; error?: string } {
+  const m = (md5 ?? '').trim().toLowerCase()
+  if (!/^[0-9a-f]{32}$/.test(m)) return { error: '缺少表情 MD5' }
+  for (const ext of RENDERABLE_EXTS) {
+    const p = join(decodedDir, m + '.' + ext)
+    if (existsSync(p)) {
+      try {
+        const bytes = readFileSync(p)
+        return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)), format: ext === 'jpeg' ? 'jpg' : ext }
+      } catch (e) {
+        return { error: '读取已解码表情失败: ' + (e as Error).message }
+      }
+    }
+  }
+  if (!wechatBaseDir) return { error: '表情未缓存且缺少原始微信目录' }
+  const attachRoot = join(wechatBaseDir, 'msg', 'attach')
+  if (!existsSync(attachRoot)) return { error: '表情未缓存且找不到 msg/attach' }
+  const dats: string[] = []
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 4 || dats.length > 8) return
+    let entries: Array<{ name: string; isDir: boolean }> = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory() }))
+    } catch { return }
+    for (const e of entries) {
+      if (dats.length > 8) return
+      const p = join(dir, e.name)
+      if (e.isDir) {
+        walk(p, depth + 1)
+      } else if ((e.name === m + '_t.dat' || e.name === m + '.dat') && e.name.endsWith('.dat')) {
+        dats.push(p)
+      }
+    }
+  }
+  walk(attachRoot, 0)
+  if (dats.length === 0) return { error: '未找到表情文件 (MD5=' + m + ')' }
+  const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
+  // Prefer thumbnails (_t) — smaller and usually already a still frame; original may be HEVC.
+  const ordered = [...dats].sort((a, b) => scoreDatPath(a) - scoreDatPath(b))
+  for (const f of ordered) {
+    try {
+      const bytes = readFileSync(f)
+      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey)
+      if ('error' in dec) continue
+      if (dec.format === 'hevc') continue
+      try {
+        writeFileSync(join(decodedDir, m + '.' + dec.format), Buffer.from(dec.bytes))
+      } catch { /* cache best-effort */ }
+      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format }
+    } catch { /* try next */ }
+  }
+  return { error: '表情文件无法解码为浏览器可渲染格式' }
+}
+
 /** Prefer originals over thumbnails: 0 = .dat, 1 = _h.dat, 2 = _t.dat. */
 function scoreDatPath(p: string): number {
   if (p.endsWith('_t.dat')) return 2

@@ -36,6 +36,7 @@ const CACHEABLE_METHODS = new Set([
   'getSnsVideoDataUrl',
   'getArticleCover',
   'getImageDataUrl',
+  'getEmoticonDataUrl',
   'getAvatar',
 ]);
 const RESULT_CACHE_MAX = 300;

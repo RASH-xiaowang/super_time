@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { clickableKey, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
-import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16, IconCopyOutline16,
@@ -947,6 +947,47 @@ function MessageImage({ m, selfName, onOpen }: {
 }
 
 
+/**
+ * 自定义表情真图：按 md5 走 Remote 解码（decoded 缓存优先，否则扫 msg/attach）。
+ * 失败时退回占位芯片，保证会话里永远有一行可读内容。
+ */
+function MessageEmoticon({ md5, label }: { md5: string; label?: string }): React.JSX.Element {
+  const [src, setSrc] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!md5 || !/^[0-9a-f]{32}$/i.test(md5)) {
+      setSrc(null)
+      setErr('缺少表情 MD5')
+      return () => { cancelled = true }
+    }
+    setSrc(null)
+    setErr(null)
+    apiGetEmoticonDataUrl({ md5: md5.toLowerCase() })
+      .then((r) => {
+        if (cancelled) return
+        if (r.url) setSrc(r.url)
+        else setErr(r.error ?? '表情不可用')
+      })
+      .catch((e: unknown) => { if (!cancelled) setErr((e as Error).message) })
+    return () => { cancelled = true }
+  }, [md5])
+  if (src) {
+    return (
+      <div className={css.msgSticker} title={label || '表情'}>
+        <img className={css.msgStickerImg} src={src} alt={label || '表情'} loading="lazy" decoding="async" />
+      </div>
+    )
+  }
+  return (
+    <div className={css.msgBubble}>
+      <span className={css.msgEmojiChip} title={err || (md5 ? `自定义表情 · MD5 ${md5}` : '自定义表情')}>
+        {err ? '😊 [表情]' : '😊 表情加载中…'}
+      </span>
+    </div>
+  )
+}
+
 /** 需要走 `RichCard` 的卡片型种类（其余种类有专用渲染器）。 */
 const CARD_KINDS = new Set<RenderKind>([
   'file', 'link', 'quote', 'miniapp', 'channels', 'live', 'music', 'product',
@@ -1068,8 +1109,8 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
     case 'product':
       return <LabeledCard icon="🛍️" label="商品" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="商品" />
     case 'sticker': {
-      // 自定义表情：有封面（CDN/缓存）时按大表情展示，不套「图标+标签」重壳；
-      // 无封面时才退回 LabeledCard，保证至少能看出是表情而不是空气泡。
+      // 自定义表情：按 md5 解码真图；有 CDN thumb 时优先 thumb（免扫盘）。
+      const md5 = rich.md5 || title || ''
       const safeThumb = cspSafeSrc(rich.thumb)
       if (safeThumb) {
         return (
@@ -1079,11 +1120,10 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
           </div>
         )
       }
+      if (md5) return <MessageEmoticon md5={md5} label={title || undefined} />
       return (
         <div className={css.msgBubble}>
-          <span className={css.msgEmojiChip} title={rich.md5 ? `自定义表情 · MD5 ${rich.md5}` : '自定义表情'}>
-            😊 [表情]
-          </span>
+          <span className={css.msgEmojiChip} title="自定义表情">😊 [表情]</span>
         </div>
       )
     }
@@ -1282,20 +1322,11 @@ function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
   if (kind === 'contactCard') return <MessageContact m={m} />
   if (kind === 'voip') return <MessageCall m={m} />
   if (kind === 'emoji') {
-    const md5 = rich?.title || ''
-    // 自定义表情的图片本体不在本链路里（表情面板只提供 md5 清单），
-    // 所以这里显示「😊 [表情]」占位并用 md5 做 tooltip 便于核对。
-    // 注意占位文字要**用普通字号**：.msgEmoji 的 26px 是给真实表情字形留的，
-    // 直接把「[表情]」套上去会比正文大一圈（实测）。
-    const placeholder = !text || text === '[表情]'
+    const md5 = rich?.md5 || rich?.title || ''
+    if (md5) return <MessageEmoticon md5={md5} label={text || undefined} />
     return (
       <div className={css.msgBubble}>
-        <span
-          className={placeholder ? css.msgEmojiChip : css.msgEmoji}
-          title={md5 ? `自定义表情 · MD5 ${md5}` : '自定义表情'}
-        >
-          {placeholder ? '😊 [表情]' : text}
-        </span>
+        <span className={css.msgEmojiChip} title="自定义表情">😊 [表情]</span>
       </div>
     )
   }
