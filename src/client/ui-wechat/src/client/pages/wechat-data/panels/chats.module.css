@@ -2234,6 +2234,17 @@
 .msgMusicFrom { font-size: 10.5px; color: var(--nm-text-2); }
 
 /* ── 引用卡缩略图（引用链接/视频号时） ─────────────────────────── */
+.msgQuoteType {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  white-space: nowrap;
+}
 .msgQuoteThumbWrap {
   flex-shrink: 0;
   align-self: center;
@@ -2245,3 +2256,30 @@
   border: 1px solid var(--nm-border);
 }
 .msgQuoteThumb { max-width: 74px; max-height: 46px; object-fit: cover; display: block; }
+.msgQuoteThumbOpen { cursor: zoom-in; }
+.msgQuoteThumbOpen:hover { border-color: var(--nm-border-hover); }
+
+/* ── 自定义表情大图（有封面时，不套卡片重壳） ──────────────────── */
+.msgSticker {
+  display: inline-block;
+  max-width: 160px;
+  max-height: 160px;
+  line-height: 0;
+  cursor: zoom-in;
+}
+.msgStickerImg {
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
+  display: block;
+  border-radius: 8px;
+}
+
+/* 图片组：微信式紧间距 3 列 */
+.msgImageGrid {
+  gap: 2px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.msgImageGridCell,
+.msgImageGridItem { border-radius: 2px; }
