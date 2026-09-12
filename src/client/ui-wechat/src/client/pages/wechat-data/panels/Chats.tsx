@@ -389,6 +389,29 @@ function OpenFileCard({ title, size }: { title: string; size: string }): React.J
 }
 
 /**
+ * 引用消息里被引用类型 → 中文短标签（后端已写入 `rich.referType`）。
+ *
+ * 微信 refermsg 的 type 与消息 local_type 同一编码族：媒体用本类型号，
+ * 应用消息多在 49 族。没有映射时返回空串，界面不硬造标签。
+ * @param t - refermsg <type>.
+ * @returns 中文标签或 ''。
+ */
+function quoteTypeLabel(t: number | undefined): string {
+  if (!t || typeof t !== 'number') return ''
+  if (t === 1) return '文本'
+  if (t === 3) return '图片'
+  if (t === 34) return '语音'
+  if (t === 43) return '视频'
+  if (t === 47) return '表情'
+  if (t === 48) return '位置'
+  if (t === 42 || t === 66) return '名片'
+  if (t === 49 || t === 5 || t === 68) return '链接'
+  if (t === 53) return '接龙'
+  if (t === 50) return '通话'
+  return ''
+}
+
+/**
  * 卡片底部的**类型条**（微信原生卡片底部那一行「微信转账 / 微信红包 / 聊天记录」）。
  *
  * 有了它，同一张卡片在不同位置（气泡内 / 合并转发弹窗内）都能被一眼认出来源；
@@ -1044,8 +1067,26 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
     }
     case 'product':
       return <LabeledCard icon="🛍️" label="商品" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="商品" />
-    case 'sticker':
-      return <LabeledCard icon="😀" label="表情" title={title} desc={desc} thumb={rich.thumb || ''} foot="表情" />
+    case 'sticker': {
+      // 自定义表情：有封面（CDN/缓存）时按大表情展示，不套「图标+标签」重壳；
+      // 无封面时才退回 LabeledCard，保证至少能看出是表情而不是空气泡。
+      const safeThumb = cspSafeSrc(rich.thumb)
+      if (safeThumb) {
+        return (
+          <div className={css.msgSticker} title={title || '表情'}>
+            <img className={css.msgStickerImg} src={safeThumb} alt={title || '表情'} loading="lazy"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          </div>
+        )
+      }
+      return (
+        <div className={css.msgBubble}>
+          <span className={css.msgEmojiChip} title={rich.md5 ? `自定义表情 · MD5 ${rich.md5}` : '自定义表情'}>
+            😊 [表情]
+          </span>
+        </div>
+      )
+    }
     case 'pat':
       return <div className={css.msgSystem} data-kind="pat">{title || '[拍一拍]'}</div>
     case 'unsupported':
@@ -1054,24 +1095,32 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
       )
     case 'quote': {
       // 引用：desc = 被引用的原文（媒体/卡片已折成 `[图片]`、`[转账] …`），referName = 被引用方昵称。
-      // 旧实现读错标签（`<refer>` 不存在）→ desc 恒空 → 卡片里只剩「我的回复」，看不出引用了什么。
+      // referType 来自后端 refermsg，用来露出类型语义（图片/语音/…），与微信预览条一致。
       const quoted = desc || ''
       const refName = rich.referName || ''
       const thumb = cspSafeSrc(rich.thumb)
+      const qType = quoteTypeLabel(rich.referType)
       return (
         <div className={css.msgQuoteCard}>
           <div className={css.msgQuoteBar} />
           <div className={css.msgQuoteInner}>
-            {(quoted || refName) && (
+            {(quoted || refName || qType) && (
               <div className={css.msgQuoteRef} title={refName ? `${refName}：${quoted}` : quoted}>
+                {qType && <span className={css.msgQuoteType}>{qType}</span>}
                 {refName && <span className={css.msgQuoteRefName}>{refName}</span>}
                 {quoted && <span className={css.msgQuoteRefText}>{quoted}</span>}
+                {!quoted && qType && <span className={css.msgQuoteRefText}>[{qType}]</span>}
               </div>
             )}
             <div className={css.msgQuoteBody}>{title}</div>
           </div>
           {thumb && (
-            <span className={css.msgQuoteThumbWrap} aria-hidden="true">
+            <span
+              className={`${css.msgQuoteThumbWrap} ${/^https?:\/\//i.test(thumb) ? css.msgQuoteThumbOpen : ''}`}
+              {...(/^https?:\/\//i.test(thumb)
+                ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' })
+                : {})}
+            >
               <img className={css.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
             </span>
           )}
