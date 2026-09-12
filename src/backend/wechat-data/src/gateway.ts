@@ -48,7 +48,7 @@ import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
 import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
-import { decodeFileImageDataUrl, decodeImageDataUrl } from './query/media-image.ts'
+import { decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl } from './query/media-image.ts'
 import { resolveSnsImageDataUrl } from './query/sns-image.ts'
 import { resolveArticleCoverDataUrl } from './query/article-cover.ts'
 import { resolveMessageFileDataUrl } from './query/media-file.ts'
@@ -1958,6 +1958,21 @@ ${contextBlock}
     const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
     const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
     return decodeFileImageDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
+  }
+
+  /**
+   * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.
+   * 优先读 decoded 缓存，否则扫 msg/attach 下的 `<md5>.dat` / `_t.dat` 并解密。
+   * @param options - emoticon md5 from message XML.
+   * @returns ImageDataUrlResult: base64 data URL or error.
+   */
+  @Remote('getEmoticonDataUrl')
+  getEmoticonDataUrl(options: { md5: string }): ImageDataUrlResult {
+    const base = rawWechatBase(this._dirs.decrypted) || undefined
+    const cfg = getConfig(this._dirs.decrypted)
+    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
+    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    return decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
   }
 
   /**

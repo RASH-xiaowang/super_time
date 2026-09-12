@@ -251,6 +251,7 @@ export interface WechatRemote {
   getPaymentStatus(options: { serverId: string }): Promise<RemoteResult<PaymentStatus>>
   getDailyCounts(options: { username: string; year: number; month: number }): Promise<RemoteResult<CalendarSnapshot>>
   getImageDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<ImageDataUrlResult>>
+  getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
@@ -974,6 +975,14 @@ export async function apiGetSnsImageDataUrl(options: { md5: string; timelineId?:
  */
 export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getFileImageDataUrl(options))
+}
+/**
+ * Resolve a custom emoticon (sticker) md5 to a data URL.
+ * @param options - emoticon md5 from message XML.
+ * @returns ImageDataUrlResult.
+ */
+export async function apiGetEmoticonDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
+  return cachedGet('emoticon:' + options.md5, async () => unwrap(await remote().getEmoticonDataUrl(options)))
 }
 /**
  * Resolve a moments video cover to a data URL (offline Sns/Video jpg).
