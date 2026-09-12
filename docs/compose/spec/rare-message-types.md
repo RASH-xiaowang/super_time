@@ -1,14 +1,23 @@
 ---
 feature: rare-message-types
-status: designed
+status: delivered
 updated: 2026-09-12
 branch: feat/chat-message-module
-commits: faf5353..faf5353
+commits: faf5353..7347c3c
 ---
 
 # 稀有消息类型深挖（引用 / 图片组 / 表情 / 合并转发）
 
 ## Report
+
+**What was built** — 在上一轮主路径样式之上，补齐稀有类型可读性：引用消息按 `rich.referType` 显示类型芯片（图片/语音/视频/链接等），无摘要时回退 `[类型]`；有 CDN 缩略图时可点击打开。自定义表情有 `rich.thumb` 时改为大表情展示（不再套 LabeledCard）；无图时保留「😊 [表情]」+ md5 tooltip。图片组网格收紧为 2px 间距、微信式方格。未改后端分类与 Remote。
+
+**Verification** — `npm run build:ui` PASS（804 modules）；Electron 重启后 6 进程存活。
+
+**Journey log**
+1. 表情真图需要 emoticon 文件解密 Remote，本轮明确 Out of Scope。
+2. 图片组点击定位本已正确（`onOpenAt(m)`），只调 CSS 节奏。
+3. 合并转发语音 `/20` 时长换算保留原实现，无证据前不改。
 
 ## [S1] Problem
 
@@ -47,7 +56,7 @@ commits: faf5353..faf5353
 
 ## Tasks
 
-- [ ] T1: quote 类型映射 + 预览布局 + 可点缩略图 — acceptance: referType≥3 的引用显示类型芯片；thumb 可点开灯箱 (covers: S2)
-- [ ] T2: 图片组 3 列网格 CSS + 灯箱定位 — acceptance: msgImageGrid 为 3 列；onOpenAt 传入对应消息 (covers: S2)
-- [ ] T3: sticker/thumb 大表情与 emoji 占位统一 — acceptance: 有 thumb 不套 LabeledCard 重壳；无 thumb 显示 [表情] (covers: S2)
-- [ ] T4: 构建并重启 — acceptance: build:ui PASS 且 electron 存活 (covers: S2; depends: T1,T2,T3)
+- [x] T1: quote 类型映射 + 预览布局 + 可点缩略图 — acceptance: referType≥3 的引用显示类型芯片；thumb 可点开灯箱 (covers: S2)
+- [x] T2: 图片组 3 列网格 CSS + 灯箱定位 — acceptance: msgImageGrid 为 3 列；onOpenAt 传入对应消息 (covers: S2)
+- [x] T3: sticker/thumb 大表情与 emoji 占位统一 — acceptance: 有 thumb 不套 LabeledCard 重壳；无 thumb 显示 [表情] (covers: S2)
+- [x] T4: 构建并重启 — acceptance: build:ui PASS 且 electron 存活 (covers: S2; depends: T1,T2,T3)
