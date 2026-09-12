@@ -1,0 +1,891 @@
+/* WeChat Q&A — NEON MATRIX 科技风（与年度报告/每日总结/存储面板共用令牌）。
+   ════════════════════════════════════════════════════════════════════════
+   布局规范（本轮整体重排）
+   ────────────────────────────────────────────────────────────────────────
+   askLayout（横向两栏，flex:1，不参与滚动；外壳用 kit .panelShell）
+   ├─ askPage      统一内容列 max-width 1080px 居中，flex column，gap 12
+   │  ├─ PanelHeader     面板头（固定）
+   │  ├─ contextBar      检索上下文条（固定）：范围胶囊 + 模型胶囊
+   │  ├─ scopePanel      时间范围展开面板（按需，固定）
+   │  ├─ panelBody       唯一滚动容器
+   │  │  └─ askMain / askStack   对话流或空态卡（贴底生长）
+   │  ├─ error / optStrip        本次输入的上下文（固定，紧贴输入框上方）
+   │  ├─ composer        提问面（固定）：输入行 + 次要动作行
+   │  └─ privacyNote     隐私说明（固定）
+   └─ modelPanel   模型配置侧栏（按需渲染，占自己的 flex 车道，永不覆盖）
+
+   设计尺度：字号 11/12/13/14/15；圆角 8/10/14/16/999；间距 4/6/8/10/12/16/24；
+             控件高 32（触屏 40）、发送键 44、输入框最小高 44。
+   断点：≤900 上下文条换行；≤760 空态示例单列；≤680 单列 + 触屏尺寸，隐藏快捷键提示。
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── 两栏布局（对话栏 + 模型配置栏）──────────────────────────
+   两栏都是常规流内元素：没有 position:fixed、没有 z-index、没有遮罩 ——
+   结构上就不存在「谁盖住谁」。旧实现用 fixed 覆盖式抽屉，实测 <1100px 时
+   把输入框右端与发送键整块盖住（elementFromPoint 命中的是抽屉体，发送键点不到），
+   且 top:76px 在任意宽度都压住顶部栏底部 31px（窄屏顶部栏更高，压 81px）。 */
+.askLayout {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── 统一内容列 ───────────────────────────────────────────────
+   头部、上下文条、对话正文、输入面全部落在这一个列里 —— 四者的左右边界
+   完全对齐（上一版 panelBody/dock 是 1080px 居中、面板头却是整个 1572px 通栏，
+   输入框比标题右移了 246px）。 */
+.askPage {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── ② 检索上下文条 ──────────────────────────────────────────
+   三个限定条件（会话 / 时间 / 模型）同形态：32px 胶囊、1px 描边、13px 线性图标、
+   12px 文字、统一箭头。语义分组：左侧「检索什么语料」，右侧「谁来回答」。
+   它们从输入框内部搬到这里，输入框因此只剩「输入 + 发送」两件正事。 */
+.contextBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+  /* 固定带必须 flex-shrink:0 —— `.askPage` 是定高纵向 flex，panelBody 之外的兄弟项
+     默认 `flex: 0 1 auto` 会被压缩。而这里显式写了 `min-height: 32px`，它**取代**了
+     flex 项「内容不可压缩」的自动最小尺寸（自动最小尺寸只在 min-height:auto 时生效），
+     于是窄屏（上下文条换行成两行、面板正文又很矮）时容器被压回 32px，
+     第二行胶囊直接溢出到对话区、与用户气泡叠在一起（375px 实测）。
+     显式 flex-shrink:0 后，压缩全部由 panelBody 承担（它本来就有 min-height:0）。 */
+  flex: 0 0 auto;
+}
+.ctxLabel {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  padding-right: 2px;
+  user-select: none;
+}
+.ctxSpacer { flex: 1 1 auto; min-width: 0; }
+/* 「已限定范围」提示：范围生效时给一个常驻可见的确认（否则用户改完范围无从判断是否生效）。 */
+.ctxHint {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--nm-cyan-text);
+  background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-cyan-20);
+  white-space: nowrap;
+  user-select: none;
+}
+.ctxChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 260px;
+  padding: 0 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.ctxChip:hover,
+.ctxChip[data-open] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: var(--nm-cyan-10);
+  color: var(--nm-text-1);
+}
+.ctxChip[data-set] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
+.ctxChip[data-unset] .ctxChipName { color: var(--nm-text-3); font-weight: 500; }
+.ctxIcon { flex-shrink: 0; opacity: 0.9; }
+/* 下拉箭头：三个胶囊统一用同一个 ▾ 字形（与 kit Select 自带的 Icon 一致），
+   不再一处 SVG、一处文字。 */
+.ctxCaret {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--nm-text-3);
+  transition: transform 0.15s;
+}
+.ctxChip[data-open] .ctxCaret { transform: rotate(180deg); }
+.ctxChipName { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); font-weight: 600; }
+/* 「清除」：作用域生效时才出现的轻量动作，不与胶囊争视觉。 */
+.ctxClear {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ctxClear:hover { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
+
+/* 会话范围（Radix Select 触发器）：外观与 .ctxChip 逐条一致。
+   胶囊外壳由 .scopeHost 承担（含边框/底色/hover），领标用与时间/模型 chip 同一套
+   13px 线性 SVG（真实 DOM 节点，不是遮罩）；Radix 的 <button> 被还原成
+   「胶囊内部的一段空白」——无边、无底、继承文字色，只保留点击与键盘语义。 */
+.scopeHost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+  color: var(--nm-text-2);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.scopeHost:hover,
+.scopeHost:focus-within {
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: var(--nm-cyan-10);
+  color: var(--nm-text-1);
+}
+/* 触发器自身的 outline 被清零，焦点指示改由胶囊外壳给出（键盘用户必须看得见焦点）。 */
+.scopeHost:focus-within { box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+.scopeHost[data-set] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
+.scopeHost button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.scopeHost button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scopeHost button > span:last-child { flex-shrink: 0; font-size: 10px; color: var(--nm-text-3); overflow: visible; }
+
+/* 时间范围展开面板（挂在上下文条下方，不挤输入框） */
+.scopePanel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: var(--nm-bg-card);
+  flex-shrink: 0;
+}
+.timePanelLabel { font-size: 12px; color: var(--nm-text-2); }
+.timeField { display: inline-flex; align-items: center; gap: 6px; }
+.dateLabel { font-size: 12px; color: var(--nm-text-2); }
+.dateSep { color: var(--nm-text-3); font-size: 12px; }
+.timeClear {
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.timeClear:hover { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
+
+/* 日期范围输入：与全站其它日期框同一配方（1px --nm-border / r10 / cyan 4% 底）。
+   这里**不写** `outline: none`：焦点环交给全局 `input:focus-visible`。 */
+.input {
+  width: 136px;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus { border-color: var(--nm-cyan); }
+
+/* ── ③ 对话区（唯一滚动容器）──────────────────────────────────
+   不要给 askMain 加 `flex:1; min-height:0`：可伸缩的 flex 项会收缩到容器高度，
+   超出部分不再计入 panelBody 的 scrollHeight，长对话会变得不可滚动。
+   保持自然高度（min-height:auto）才能正确溢出。
+   askStack 用 `margin-top:auto` 贴底：内容不足时整块推到输入框上方（聊天契约：
+   消息从底部向上生长），内容超出时 auto 归零、从顶部开始正常滚动。 */
+.askMain {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.askStack {
+  margin-top: auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── 空态：引导区（引导 + 示例在同一块里，示例就在输入框上方）──
+   刻意**不画卡片壳**：没有背景、没有描边、没有阴影 —— 引导内容直接落在面板底色上。
+   原先那层 `color-mix(--nm-text-1 3%)` 的半透明填充会透出面板背景的网格纹理，
+   看起来像一块发灰的脏底；去掉后与「对话本体无卡片框」的既有约定一致。 */
+.emptyIntro {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px 8px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.emptyIcon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--nm-cyan) 18%, transparent),
+    color-mix(in srgb, var(--nm-purple) 16%, transparent));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  color: var(--nm-cyan);
+  font-size: 18px;
+  box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+.emptyTitle { font-size: 15px; font-weight: 600; color: var(--nm-text-1); margin-top: 2px; }
+.emptySub { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; }
+.emptySub[data-warn] { color: var(--nm-warning-text); }
+/* 能力行：三条说明，窄屏可换行 */
+.emptyCaps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+  margin-top: 8px;
+}
+.emptyCap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--nm-text-2);
+  user-select: none;
+}
+.emptyCap svg { flex-shrink: 0; color: var(--nm-cyan); opacity: 0.85; }
+.emptyExHead {
+  align-self: flex-start;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  user-select: none;
+}
+.emptyExGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+.emptyExCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 84px;
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.12s;
+}
+.emptyExCard:hover {
+  border-color: color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  background: var(--nm-cyan-10);
+  transform: translateY(-1px);
+}
+.emptyExIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  color: var(--nm-cyan);
+  font-size: 12px;
+}
+.emptyExText { min-width: 0; }
+.emptyHint { margin-top: 4px; font-size: 12px; color: var(--nm-text-3); }
+
+/* ── 多轮对话 ── */
+.thread { display: flex; flex-direction: column; gap: 16px; }
+/* 面板头「清空对话」：常驻可见（不随对话滚动），ghost 样式 hover 转红 */
+.headerClear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.headerClear:hover { border-color: color-mix(in srgb, var(--nm-danger) 55%, transparent); color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }
+
+.chatUser { display: flex; justify-content: flex-end; }
+/* 用户气泡：宽度随内容（fit-content）+ 上限 620px —— 短问题不再拉成一条长条。 */
+.chatUserBubble {
+  max-width: min(78%, 620px);
+  padding: 9px 14px;
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
+  color: var(--nm-text-1);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chatAi { display: flex; flex-direction: column; gap: 8px; min-width: 0; align-items: flex-start; }
+/* 检索规划行：默认收起一行（意图），点击展开检索词 —— 保留检索管线的可见证据但不平铺噪音 */
+.planLine {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  max-width: 100%;
+  padding: 3px 8px 3px 5px;
+  margin: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.planLine:hover:enabled { background: color-mix(in srgb, var(--nm-text-1) 6%, transparent); }
+.planLine:disabled { cursor: default; }
+.planChevron { flex-shrink: 0; transition: transform 0.15s; }
+.planLine[data-open] .planChevron { transform: rotate(90deg); }
+.planIntent { color: var(--nm-text-2); }
+/* 规划器识别出的时间/人物线索：常驻显示（收起来等于没有——用户只会在答案不对时想起它） */
+.planChip {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan-text);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.planQueries { color: var(--nm-text-3); }
+.chatAnswer {
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 4px 14px 14px 14px;
+  background: color-mix(in srgb, var(--nm-purple) 4%, transparent);
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--nm-text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 流式生成中的正文：描边提亮一点，和后落定的回答区分开 */
+.chatAnswer[data-streaming] { border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent); }
+/* 流式光标：细竖条闪烁（生成中）。尊重 prefers-reduced-motion。 */
+.streamCaret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--nm-cyan);
+  animation: stream-blink 1s steps(2, start) infinite;
+}
+@keyframes stream-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .streamCaret { animation: none; } }
+/* 引用来源块：2 列网格 + 默认前 4 条折叠（20 条单列平铺会吞没整屏） */
+.citeBlock { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.citeHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.citeHeadTitle { font-size: 12px; color: var(--nm-text-2); }
+.citeMore {
+  border: 0;
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.citeMore:hover { background: var(--nm-cyan-10); }
+.citeGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.citeBtn {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.citeBtn:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+/* 被回答真正引用过的来源：描边与序号提亮，和未引用来源一眼可分
+   （否则「来源 20 条」里哪些被用到只能靠用户逐个对 [n]） */
+.citeBtn[data-cited] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.citeBtn[data-cited] .citeIdx { text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
+.citeIdx { color: var(--nm-cyan); font-weight: 700; flex-shrink: 0; }
+.citeName { font-weight: 600; flex-shrink: 0; }
+.citeTime { color: var(--nm-text-2); flex-shrink: 0; }
+.citeSnippet {
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chatPending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  padding: 4px 2px;
+}
+.chatDots {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nm-cyan);
+  flex-shrink: 0;
+  animation: chat-pulse 1s ease-in-out infinite;
+}
+@keyframes chat-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chatDots { animation: none; }
+}
+
+/* ── ④ 提问面 ────────────────────────────────────────────────
+   一个面只做一件事：输入 + 发送。填充底改为中性叠色（不再是整块青色填充），
+   焦点时整面亮起青色描边 —— 视觉重量低于对话本身，但焦点状态一眼可见。 */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 6px;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  flex-shrink: 0;
+}
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 14%, transparent),
+    0 0 22px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+/* 输入区：透明无边框（面本身即容器），随行数自动增高（JS 控高，上限 200px 后内部滚动）。
+   必须显式 `flex: 1 1 auto; min-width: 0`：否则 textarea 用固有宽度（约 20 列），
+   发送键会贴在它右边而不是整行右端。 */
+.composerInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+.composerInput::placeholder { color: color-mix(in srgb, var(--nm-text-1) 58%, transparent); }
+
+/* 发送按钮（主操作，44×44 触控目标）：空输入＝描边 + 淡底（主操作必须始终看得见）；
+   可发送＝青紫渐变 + 辉光；生成中＝半透明渐变底 + 旋转环。 */
+.send {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--nm-text-1) 20%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
+  color: color-mix(in srgb, var(--nm-text-1) 55%, transparent);
+  cursor: pointer;
+  transition: background 0.18s, box-shadow 0.18s, border-color 0.18s, transform 0.12s;
+}
+.send:enabled {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple));
+  color: var(--nm-on-accent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 38%, transparent);
+}
+.send:enabled:hover { transform: translateY(-1px); box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
+.send:enabled:active { transform: translateY(0); }
+.send:disabled { cursor: default; }
+.send[data-busy] {
+  border-color: transparent;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--nm-cyan) 55%, transparent),
+    color-mix(in srgb, var(--nm-purple) 50%, transparent));
+  color: var(--nm-on-accent);
+}
+.sendSpinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--nm-on-accent) 35%, transparent);
+  border-top-color: var(--nm-on-accent);
+  animation: send-spin 0.8s linear infinite;
+}
+@keyframes send-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sendSpinner { animation-duration: 2s; } }
+
+/* 次要动作行：优化提问（左）+ 快捷键提示（右，窄屏隐藏） */
+.composerFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+.optBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.optBtn:hover:enabled {
+  border-color: color-mix(in srgb, var(--nm-purple) 50%, transparent);
+  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+  color: var(--nm-text-1);
+}
+.optBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.actionHint { margin-left: auto; font-size: 12px; color: var(--nm-text-3); white-space: nowrap; }
+
+/* 隐私说明：输入面下方次级小字（常驻底部，与上方内容同一条左边线） */
+.privacyNote {
+  margin: 0 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-2);
+  text-align: left;
+  flex-shrink: 0;
+}
+.askError { flex-shrink: 0; }
+
+/* ── 提问优化（内联建议条：出现在输入面上方，可一键采用） ── */
+.optStrip {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-purple) 30%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.optTitle { font-size: 12px; font-weight: 600; color: var(--nm-purple-text); margin-bottom: 4px; }
+.optText { font-size: 13px; line-height: 1.6; color: var(--nm-text-1); word-break: break-word; }
+.optList { margin: 4px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--nm-text-2); }
+.optActions { display: flex; gap: 8px; margin-top: 10px; }
+.optApply {
+  padding: 6px 14px;
+  border: 1px solid var(--nm-cyan);
+  border-radius: 8px;
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.optApply:hover { background: color-mix(in srgb, var(--nm-cyan) 20%, transparent); }
+.optDismiss {
+  padding: 6px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.optDismiss:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
+.optError { font-size: 12px; color: var(--nm-danger); flex-shrink: 0; }
+
+/* ── 模型配置栏（面板内实体侧栏，默认不渲染）────────────────────
+   占据 askLayout 的第二个 flex 车道：桌面固定 400px，对话栏同时收窄，
+   两栏并排可见、都可交互、零遮挡。入场只做「淡入 + 向右 12px 归位」的纯视觉动画
+   （transform 不参与布局，且位移方向背离对话栏，全程不会压到任何内容）。 */
+.modelPanel {
+  flex: 0 0 400px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-1);
+  border: 1px solid var(--nm-border-hover);
+  border-radius: 16px;
+  box-shadow: var(--nm-shadow-card);
+  overflow: hidden;
+  animation: askPanelIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes askPanelIn {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modelPanel { animation-duration: 0.01s; }
+}
+.drawerHdRight { display: flex; align-items: center; gap: 8px; }
+/* 「返回对话」：只在整栏对换（≤900px、对话栏被让位）时出现 —— 并排模式下
+   对话栏一直可见，不需要这个入口。 */
+.panelBack {
+  display: none;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.panelBack:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); color: var(--nm-text-1); }
+
+/* ── 模型配置表单 ── */
+.modelGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.modelField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.modelInput {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.modelInput:focus { border-color: var(--nm-cyan); }
+/* API Key 输入 + 小眼睛（显示/隐藏明文）。
+   按钮绝对定位在输入框右侧 —— 不占流内空间，切换时输入框宽度不变。 */
+.keyWrap {
+  position: relative;
+  display: flex;
+}
+.modelInputKey { padding-right: 34px; }
+.keyEye {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--nm-text-3);
+  cursor: pointer;
+  transition: color var(--nm-t-fast), background var(--nm-t-fast);
+}
+.keyEye:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+.keyEye[data-on] { color: var(--nm-cyan); }
+/* 侧栏内表单一列排布（400px 宽下两列过挤） */
+.modelPanel .modelGrid { grid-template-columns: 1fr; }
+/* 操作区：获取（次要）| 保存（主要），等宽两列；消息整行独立 */
+.modelActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+.modelPrimary {
+  padding: 9px 10px;
+  border: 1px solid var(--nm-cyan);
+  border-radius: 10px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--nm-cyan) 24%, transparent),
+    color-mix(in srgb, var(--nm-purple) 20%, transparent));
+  color: var(--nm-cyan-text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+}
+.modelPrimary:hover:enabled {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--nm-cyan) 34%, transparent),
+    color-mix(in srgb, var(--nm-purple) 30%, transparent));
+  box-shadow: var(--nm-glow-sm);
+}
+.modelPrimary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.modelGhost {
+  padding: 9px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.modelGhost:hover:enabled { border-color: var(--nm-border-hover); color: var(--nm-text-1); background: var(--nm-bg-hover); }
+.modelGhost:disabled { opacity: 0.5; cursor: not-allowed; }
+.modelMsg {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.msgOk {
+  color: var(--nm-success-text);
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
+}
+.msgErr {
+  color: var(--nm-danger-text);
+  background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 24%, transparent);
+}
+
+/* ── 窄屏（≤900px）：两栏并排放不下 → 整栏对换 ──
+   配置栏占满面板宽度，对话栏暂时让位，顶部出现「返回对话」。
+   这是「换页」而不是「覆盖」：不存在被压在下面的内容，也没有遮罩与层级竞争。 */
+@media (max-width: 900px) {
+  .askLayout[data-model-open] .askPage { display: none; }
+  .modelPanel { flex: 1 1 auto; }
+  .panelBack { display: inline-flex; }
+}
+
+/* ── 滚动顺滑度（对话滚动容器 = kit .panelBody + 本类）──
+   overscroll-behavior: contain —— 滚到底/顶时不把滚动链抛给外层（面板在触控板上
+   不会因为继续滑动而整体位移）；scrollbar-gutter: stable —— 滚动条出现/消失不引起
+   内容横向跳动，输入面与面板头始终对齐。 */
+.askBody {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* ── 响应式 ─────────────────────────────────────────────────
+   ≤900：上下文条换行堆叠（去掉弹性间隔，让「已限定范围」提示随范围胶囊走）
+   ≤760：空态示例单列
+   ≤680：触屏尺寸（胶囊 40、优化按钮 36）、隐藏快捷键提示、引用单列、抽屉表单单列 */
+@media (max-width: 900px) {
+  .contextBar { row-gap: 6px; }
+  .ctxSpacer { display: none; }
+  .ctxHint { order: 1; }
+}
+@media (max-width: 760px) {
+  .emptyExGrid { grid-template-columns: 1fr; }
+  .emptyExCard { min-height: 0; flex-direction: row; align-items: center; }
+}
+@media (max-width: 680px) {
+  /* 「范围」二字在窄屏让位：三个胶囊自身已带语义（全部会话 / 全部时间 / 模型），
+     去掉领标后 480px 宽度即可单行排下，不再换行吃掉两行高度。 */
+  .ctxLabel { display: none; }
+  /* 触屏/窄屏：胶囊抬到 40px（WCAG 2.2 SC 2.5.8 要求 ≥24，这里给足手指余量） */
+  .ctxChip, .scopeHost { height: 40px; }
+  .ctxChip { padding: 0 14px; }
+  .scopeHost { max-width: 100%; }
+  .optBtn { height: 36px; }
+  .actionHint { display: none; }
+  .input { width: 100%; }
+  .citeGrid { grid-template-columns: 1fr; }
+  .modelActions { grid-template-columns: 1fr; }
+  .chatUserBubble { max-width: 88%; }
+}

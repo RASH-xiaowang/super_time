@@ -1,0 +1,12 @@
+/* Data health — NEON MATRIX 科技风（与总览共用令牌）。 */
+
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.storeList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+.storeRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--nm-text-1); }
+.storeName { color: var(--nm-text-1); }
+.storeSize { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+.lines { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.line { font-size: 12px; color: var(--nm-text-2); word-break: break-all; }

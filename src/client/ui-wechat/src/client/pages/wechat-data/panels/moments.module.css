@@ -1,0 +1,340 @@
+/* Moments (朋友圈) 面板 — NEON MATRIX 科技风重设计. */
+
+.panel {
+  /* 去掉 contain，避免隔离布局、干扰内部滚动容器测量 */
+  /* Elevated surface: the scroll containers inside inherit a rebinder for the
+     scrollbar pair (see ui-theme styles/scrollbar.css). */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  /* NEON MATRIX tokens */
+
+  height: 100%;
+  display: flex; flex-direction: column; gap: 12px; min-height: 0; box-sizing: border-box;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--nm-bg-input), var(--nm-bg-input));
+}
+/* 左右分栏：左侧动态列表占 2/3，右侧侧栏（筛选/月份/统计）占 1/3 */
+.layout { flex: 1; min-height: 0; display: flex; flex-direction: row; gap: 12px; align-items: stretch; }
+.main { flex: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column; order: 1; position: relative; }
+.sidebar { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; order: 2; }
+/* 回到顶部悬浮按钮（圆形，固定在视口右下角，始终可见） */
+.backTop {
+  /* 第 95 轮：原来 TSX 里还挂着一份行内样式，把 position/right/bottom/z-index 又写了一遍
+     （其中 bottom 是 28px，覆盖这里的 26px）。它无条件生效，所以把真正生效的值收进本类、
+     行内那份删掉 —— 生效值不变（28px），少三处重复声明。 */
+  position: fixed; right: 30px; bottom: 28px; z-index: 2147483000;
+  width: 46px; height: 46px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--nm-cyan-10); border: 1px solid var(--nm-cyan);
+  color: var(--nm-cyan); font-size: 20px; line-height: 1; cursor: pointer;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 25%, transparent); transition: all 0.15s;
+  corner-shape: round;
+}
+.backTop:hover { background: var(--nm-cyan); color: #05202a; box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 50%, transparent); }
+.count {
+  font-size: 12px; color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums; background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-border); border-radius: 999px; padding: 1px 8px;
+  corner-shape: round;
+}
+.syncStatus { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; }
+.search {
+  padding: 6px 26px 6px 30px; border: 1px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-input); font-size: 13px; color: var(--nm-text-1);
+  width: 220px; box-sizing: border-box; outline: none; transition: all 0.15s;
+}
+.search::placeholder { color: var(--nm-text-2); }
+.search:focus { border-color: var(--nm-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+.btn {
+  padding: 6px 14px; border: 1px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-card); font-size: 13px; cursor: pointer; color: var(--nm-text-1);
+  transition: all 0.15s;
+}
+.btn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.btn[data-on] { border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 20%, transparent); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+/* 筛选面板（分组布局） */
+.filterPanel {
+  border: 1px solid var(--nm-border); border-radius: 12px; background: var(--nm-bg-card);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.filterGroup { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.filterLabel { width: 40px; flex-shrink: 0; font-size: 12px; color: var(--nm-text-2); line-height: 26px; }
+/* 第 95 轮：范围筛选里的「至」字标签不需要固定 40px（原为行内 `width: auto`）。 */
+.filterToLabel { width: auto; }
+.filterChips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.authorChip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: 999px;
+  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.authorChip:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+.authorChip[data-on] { border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
+.chipName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
+.chipCount { font-size: 10.5px; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.segTrack {
+  display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--nm-border);
+  border-radius: 999px; background: var(--nm-bg-hover);
+  corner-shape: round;
+}
+.dateInput {
+  padding: 4px 8px; border: 1px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; outline: none;
+}
+.dateInput:focus { border-color: var(--nm-cyan); }
+.segChip {
+  padding: 4px 14px; border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--nm-text-1); font-size: 12px; cursor: pointer; transition: all 0.15s;
+  corner-shape: round;
+}
+.segChip:hover { background: var(--nm-bg-hover); }
+.segChip[data-on] {
+  border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+}
+.clearBtn {  align-self: flex-start; padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: 999px;
+  background: transparent; color: var(--nm-text-2); font-size: 12px; cursor: pointer; transition: all 0.15s;
+  corner-shape: round;
+}
+.clearBtn:hover { color: var(--nm-cyan); border-color: var(--nm-cyan); }
+
+/* 月度柱状图卡片 */
+.monthCard {
+  border: 1px solid var(--nm-border); border-radius: 12px; background: var(--nm-bg-card);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 12px;
+  transition: all 0.2s;
+}
+.monthCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.monthTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.monthHint { font-size: 11px; font-weight: 400; color: var(--nm-text-2); }
+
+/* 月份柱状图：多行换行、最多约 6 行（超出在该区域纵向滚动） */
+.monthBars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px 4px; max-height: 336px; overflow-y: auto; scrollbar-gutter: stable; }
+/* 整列即点击目标：min-width/min-height 保证 WCAG 2.2 SC 2.5.8 的 24×24 目标尺寸。
+   padding 用横向 2px 把外框撑到 24px，柱子仍是 100% 内容宽（20px），视觉宽度不变。 */
+.monthCol { flex: 0 0 auto; min-width: 24px; min-height: 24px; padding: 0 2px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; cursor: pointer; box-sizing: border-box; }
+.monthColActive .monthLabel { color: var(--nm-cyan); font-weight: 700; opacity: 1; }
+.monthValue { font-size: 9.5px; color: var(--nm-text-2); min-height: 10px; font-variant-numeric: tabular-nums; }
+.monthFill {
+  width: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  border-radius: 4px 4px 0 0; min-height: 2px; transition: all 0.15s; cursor: pointer;
+}
+.monthFill[data-peak] { background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
+.monthFill[data-on] { box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 70%, transparent); border: 1px solid var(--nm-cyan); }
+.monthFill:hover { box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+.monthLabel { font-size: 9.5px; color: var(--nm-text-2); white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
+.monthCol:hover .monthLabel { opacity: 1; }
+
+/* 洞察统计 */
+.insight {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px;
+  border: 1px solid var(--nm-border); border-radius: 12px; background: var(--nm-bg-card);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 12px;
+}
+.stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.statIcon { font-size: 14px; line-height: 1; opacity: 0.75; }
+.statNum {
+  font-size: 20px; font-weight: 800;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums;
+}
+/* 动态流 */
+.scroll {
+  /* 滚动容器：去掉 contain/will-change/强约束，避免影响布局测量与滚动；用
+     scrollbar-gutter:stable 预留滚动条宽度，避免滚动条出现/消失导致卡片宽度与高度跳动 */
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.dayGroup { display: flex; flex-direction: column; gap: 8px; }
+.dayLabel {
+  /* 粘性标签优化 */
+  contain: layout style paint; position: sticky; top: 0; z-index: 1;
+  font-size: 11px; font-weight: 700; color: var(--nm-cyan); letter-spacing: 0.4px;
+  padding: 3px 10px; border-radius: 999px; background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-border); align-self: flex-start;
+  corner-shape: round;
+}
+.card {
+  /* 卡片独立层；去掉 contain/content-visibility，避免占位高度与真实高度不一致导致滚动跳动；
+     同时去掉每卡 backdrop-filter（数百卡叠加绘制开销大，仅保留少量静态面板的模糊） */
+  display: flex; gap: 12px; padding: 14px 16px; border: 1px solid var(--nm-border);
+  border-radius: 14px; background: var(--nm-bg-card);
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.card:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.selfTag { font-size: 10.5px; color: var(--nm-cyan); border: 1px solid var(--nm-cyan); border-radius: 999px; padding: 0 6px; line-height: 16px; background: var(--nm-cyan-10);
+  corner-shape: round;
+}
+.videoDur { position: absolute; right: 4px; bottom: 4px; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: 4px; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple)); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+  corner-shape: round;
+}
+.avatarImg { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border);
+  corner-shape: round;
+}
+.avatarClick { flex-shrink: 0; cursor: pointer; }
+.avatarClick:hover img, .avatarClick:hover .avatar { border-color: var(--nm-cyan); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 30%, transparent); }
+.miniAvatar { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; display: inline-block; vertical-align: -3px; margin-right: 4px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border);
+  corner-shape: round;
+}
+.miniAvatarFallback { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 9.5px; color: #fff; background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple)); vertical-align: -3px; margin-right: 4px;
+  corner-shape: round;
+}
+.linkCard { display: flex; gap: 12px; align-items: center; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: 10px; padding: 10px 12px; max-width: 480px; transition: all 0.2s; }
+.linkCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.linkCover { width: 60px; height: 60px; border-radius: 6px; overflow: hidden; background: var(--nm-bg-card); border: 1px solid var(--nm-border); flex-shrink: 0; }
+.linkCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.linkBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.linkTitle { font-size: 14px; font-weight: 600; color: var(--nm-text-1); text-decoration: none; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; transition: all 0.15s; }
+.linkTitle:hover { color: var(--nm-cyan); }
+.body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.meta { display: flex; align-items: baseline; gap: 10px; cursor: pointer; }
+.meta:hover .author { text-decoration: underline; }
+.author { font-size: 13px; font-weight: 700; color: var(--nm-cyan); }
+.content { font-size: 13px; line-height: 1.65; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; }
+.images { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-width: 320px; }
+.imagesSingle { grid-template-columns: 1fr; max-width: 180px; }
+.imgWrap { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 8px; cursor: zoom-in; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); transition: all 0.2s; }
+.imgWrap:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+.img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.imgFallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--nm-bg-hover); color: var(--nm-text-2); font-size: 12px; }
+.imgFallbackContent { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; text-align: center; }
+.imgFallbackIcon { font-size: 24px; opacity: 0.6; }
+.imgFallbackText { font-size: 11px; color: var(--nm-text-2); font-weight: 500; }
+.imgFallbackHint { font-size: 10.5px; color: var(--nm-text-2); opacity: 0.7; }
+.videos { display: flex; gap: 8px; }
+.videoTile { width: 120px; height: 80px; border-radius: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; transition: all 0.15s; }
+.videoCover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.videoTile:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.videoBadge { color: var(--nm-cyan); font-size: 15px; text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent); }
+.tags { display: flex; gap: 8px; flex-wrap: wrap; }
+.social { display: flex; flex-direction: column; gap: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: 10px; padding: 10px 12px; }
+.comments { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--nm-text-1); }
+.commentsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.commentsHeadActs { display: flex; gap: 8px; align-items: center; }
+.commentsTitle { font-size: 11px; color: var(--nm-text-2); font-weight: 600; }
+.comment { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; line-height: 1.5; }
+.commentName { font-weight: 600; margin-right: 4px; color: var(--nm-cyan); }
+.commentReply { color: var(--nm-text-2); margin-right: 4px; }
+.commentImg { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; display: inline-block; vertical-align: middle; margin-left: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.commentImgFallback { color: var(--nm-text-2); font-size: 11px; margin-left: 4px; }
+.timeRow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-2); }
+.delIcon { font-size: 12px; color: var(--nm-danger); cursor: pointer; }
+.hint { font-size: 11px; color: var(--nm-text-2); margin: 4px 0 0; }
+.exportResult {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border: 1px solid var(--nm-border); border-radius: 10px;
+  background: var(--nm-cyan-10); color: var(--nm-text-1); font-size: 12px;
+}
+.exportResultPath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+.exportResult .btn { margin-left: auto; padding: 4px 12px; }
+.moreRow { display: flex; justify-content: center; gap: 8px; padding: 6px 0 12px; }
+.moreBtn {
+  padding: 7px 18px; border: 1px solid var(--nm-border); border-radius: 999px;
+  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.moreBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-cyan); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+.moreBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* 隐私模式 + 图片查看器 + 导出弹窗 */
+.blurCard { filter: blur(9px); transition: filter 0.2s; }
+.blurCard:hover { filter: none; }
+.overlay { position: fixed; inset: 0; z-index: 2147483000; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; }
+/* 灯箱需浮在详情浮层之上（两者都用 .overlay，DOM 顺序会让详情盖住灯箱） */
+.overlayTop { z-index: 2147483001; }
+.lightbox {
+  background: var(--nm-bg-card); border: 1px solid var(--nm-border-hover); border-radius: 14px;
+  padding: 14px; max-width: 86vw; max-height: 88vh; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 0 30px color-mix(in srgb, var(--nm-cyan) 12%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.lightboxHead { display: flex; align-items: center; justify-content: space-between; color: var(--nm-text-1); font-size: 13px; }
+.lightboxImg { max-width: 100%; max-height: 68vh; object-fit: contain; border-radius: 8px; background: #000; width: auto; align-self: center; }
+.lightboxNav { display: flex; gap: 8px; justify-content: center; }
+.exportForm { display: flex; flex-direction: column; gap: 10px; min-width: 360px; }
+.exportField { display: flex; align-items: center; gap: 10px; }
+.exportLabel { font-size: 12px; color: var(--nm-text-2); width: 40px; flex-shrink: 0; }
+.exportHint { font-size: 12px; color: var(--nm-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.exportChips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.exportChips .btn[data-on] { border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 20%, transparent); }
+.exportCheck { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-1); cursor: pointer; }
+.exportCheck input { accent-color: var(--nm-cyan); }
+
+/* 洞察统计补充说明 */
+.insightNote { font-size: 11px; color: var(--nm-text-2); margin: -4px 0 0; }
+
+/* 长文本 展开/收起、评论 展开全部 */
+.textToggle {
+  margin-left: 6px; padding: 0 2px; border: none; background: none; cursor: pointer;
+  color: var(--nm-cyan); font-size: 12px; line-height: inherit; vertical-align: baseline;
+}
+.textToggle:hover { text-decoration: underline; }
+.textToggle[data-on] { color: var(--nm-text-1); font-weight: 700; text-decoration: underline; }
+
+/* 点赞数量徽标 + 可展开名字 */
+.likesRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; font-size: 12px; color: var(--nm-text-1); }
+.likesCount { font-weight: 700; color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
+.likeNames { color: var(--nm-text-1); }
+.commentText { color: var(--nm-text-1); }
+.commentTime { color: var(--nm-text-2); font-size: 11px; white-space: nowrap; }
+
+/* 视频播放 */
+.videoTile { cursor: pointer; }
+.videoTilePlaying { width: 280px; height: 180px; cursor: default; }
+.videoPlayer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 6px; }
+.videoPlayBadge {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 16px; background: rgba(0, 0, 0, 0.32); text-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 80%, transparent);
+}
+
+/* 图片查看器增强（缩放/平移/保存/失败/缩略图） */
+.lightboxHeadActions { display: flex; gap: 6px; align-items: center; }
+
+/* 单条动态详情 */
+.detailCard {
+  background: var(--nm-bg-card); border: 1px solid var(--nm-border-hover); border-radius: 14px;
+  padding: 16px 18px; max-width: 560px; max-height: 82vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 0 30px color-mix(in srgb, var(--nm-cyan) 12%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.detailBody { display: flex; flex-direction: column; gap: 10px; }
+
+/* 搜索覆盖提示 */
+.searchBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--nm-border); border-radius: 10px; background: var(--nm-cyan-10); color: var(--nm-text-1); font-size: 12px; }
+.searchBanner .btn { margin-left: auto; padding: 5px 12px; }
+
+/* 可点击的作者/点赞/评论名 */
+.clickableName { cursor: pointer; }
+.clickableName:hover { text-decoration: underline; color: var(--nm-cyan); }
+
+/* 详情内视频更大 */
+.videoTileDetail { width: 100% !important; height: 280px; }
+.fullscreenBtn {
+  position: absolute; right: 8px; bottom: 8px; z-index: 2;
+  padding: 2px 8px; border: 1px solid var(--nm-border-hover); border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 14px; cursor: pointer;
+}
+.fullscreenBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 30%, transparent); }
+/* 第 95 轮：全屏里的「保存视频」按钮要往左让开一个按钮位（原为行内 `right: 46px`）。 */
+.fullscreenBtnSave { right: 46px; }
+/* 第 95 轮：导出按钮靠右（原为行内 `align-self: flex-end`）。 */
+.btnBottom { align-self: flex-end; }
+.lightboxImgWrap {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; max-width: 86vw; max-height: 68vh; min-width: 220px; min-height: 120px;
+  border-radius: 8px; background: #000; touch-action: none;
+}
+.lightboxImg { max-width: 100%; max-height: 68vh; object-fit: contain; border-radius: 8px; width: auto; align-self: center; user-select: none; will-change: transform; }
+.lightboxFail { color: var(--nm-text-2); font-size: 13px; }
+.lightboxThumbs { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.lightboxThumb { width: 52px; height: 52px; border-radius: 6px; object-fit: cover; cursor: pointer; border: 2px solid transparent; opacity: 0.7; transition: all 0.15s; }
+.lightboxThumb:hover { opacity: 1; }
+.lightboxThumbActive { border-color: var(--nm-cyan); opacity: 1; box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+
+

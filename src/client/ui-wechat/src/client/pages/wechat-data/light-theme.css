@@ -1,0 +1,134 @@
+/* ============================================================
+ * 浅色主题（Light Theme）
+ *
+ * 与 NEON MATRIX 深色主题共用同一套 CSS Modules，仅切换令牌；
+ * 顶层通过 <html class="theme-light"> 触发（theme.ts 管理）。
+ * ============================================================ */
+
+:root.theme-light {
+  color-scheme: light;
+
+  /* 基础色板 */
+  --nm-bg-0: #f6f8fb;
+  --nm-bg-1: #eef1f6;
+  --nm-bg-2: #ffffff;
+  --nm-bg-card: #ffffff;
+  --nm-bg-glass: rgba(255, 255, 255, 0.78);
+  --nm-bg-hover: rgba(15, 23, 42, 0.05);
+  --nm-bg-active: rgba(15, 23, 42, 0.08);
+  --nm-bg-input: #ffffff;
+  --nm-black: #f6f8fb;
+
+  /* 霓虹色（浅色下必须压暗：深色主题的 #00ff88 / #00f0ff 之类在白色背景上
+   * 对比度不足且刺眼。这里保留同一色相，只调整明度/饱和度，维持科技感身份。
+   * 原先这些令牌在浅色下完全没有覆盖，是浅色主题观感差的主要原因。） */
+  --nm-cyan: #0e7490;
+  --nm-cyan-50: rgba(8, 145, 178, 0.50);
+  --nm-cyan-20: rgba(8, 145, 178, 0.14);
+  --nm-cyan-10: rgba(8, 145, 178, 0.08);
+  --nm-purple: #7c3aed;
+  --nm-purple-20: rgba(124, 58, 237, 0.14);
+  --nm-blue: #2563eb;
+  --nm-blue-20: rgba(37, 99, 235, 0.14);
+  --nm-pink: #db2777;
+  --nm-green: #047857;
+  --nm-green-20: rgba(5, 150, 105, 0.14);
+  --nm-red: #b91c1c;
+  --nm-amber: #b45309;
+
+  /* 语义色（同样只在深色下定义过，浅色下沿用会偏亮） */
+  --nm-success: #047857;
+  --nm-success-15: rgba(5, 150, 105, 0.12);
+  --nm-warning: #b45309;
+  --nm-warning-15: rgba(217, 119, 6, 0.12);
+  --nm-danger: #b91c1c;
+  --nm-danger-15: rgba(220, 38, 38, 0.12);
+  --nm-info: #2563eb;
+  --nm-info-15: rgba(37, 99, 235, 0.12);
+
+  /* 文字 */
+  --nm-text-1: #0f172a;
+  --nm-text-2: #475569;
+  --nm-text-3: #5f6b7a;
+  /* 品牌渐变(cyan→purple)上的文字色：浅色下渐变偏暗，配白字 */
+  --nm-on-accent: #ffffff;
+
+  /* 边框 */
+  --nm-border: rgba(15, 23, 42, 0.12);
+  --nm-border-hover: rgba(56, 189, 248, 0.35);
+  --nm-border-active: rgba(56, 189, 248, 0.55);
+
+  /* 阴影 / 发光 */
+  --nm-glow-sm: 0 0 8px rgba(56, 189, 248, 0.16);
+  --nm-glow-md: 0 0 20px rgba(56, 189, 248, 0.18);
+  --nm-glow-lg: 0 0 40px rgba(56, 189, 248, 0.10), 0 0 80px rgba(168, 85, 247, 0.05);
+  --nm-shadow-card: 0 4px 24px rgba(15, 23, 42, 0.08);
+  --nm-shadow-popup: 0 16px 40px rgba(15, 23, 42, 0.14);
+
+  /* 表格 */
+  --nm-table-header-bg: rgba(15, 23, 42, 0.04);
+  --nm-table-row-hover: rgba(56, 189, 248, 0.06);
+  --nm-table-row-stripe: rgba(15, 23, 42, 0.02);
+
+  /* 地图板块底色（深色主题为深海军蓝，浅色主题改为浅石板灰） */
+  --nm-map-land: #cbd5e1;
+
+  /* dsw alias tokens */
+  --dsw-alias-bg-base: #f6f8fb;
+  --dsw-alias-bg-layer-0: #f6f8fb;
+  --dsw-alias-bg-layer-1: #eef1f6;
+  --dsw-alias-bg-layer-2: #ffffff;
+  --dsw-alias-bg-mask-1: rgba(15, 23, 42, 0.45);
+  --dsw-alias-bg-overlay: rgba(255, 255, 255, 0.80);
+  --dsw-alias-border-l1: rgba(15, 23, 42, 0.08);
+  --dsw-alias-border-l2: rgba(15, 23, 42, 0.12);
+  --dsw-alias-border-l3: rgba(15, 23, 42, 0.18);
+  --dsw-alias-border-l4: rgba(56, 189, 248, 0.50);
+  --dsw-alias-brand-primary: #0369a1;
+  --dsw-alias-button-contrast-fill: #ffffff;
+  --dsw-alias-button-ghost-active-border: rgba(2, 132, 199, 0.45);
+  --dsw-alias-button-ghost-active-fill: rgba(2, 132, 199, 0.08);
+  --dsw-alias-button-primary-fill: #0369a1;
+  --dsw-alias-button-primary-hover: #075985;
+  --dsw-alias-button-tool-bar-fill: rgba(2, 132, 199, 0.08);
+  --dsw-alias-button-tool-bar-hover: rgba(2, 132, 199, 0.14);
+  --dsw-alias-interactive-bg-active: rgba(15, 23, 42, 0.08);
+  --dsw-alias-interactive-bg-hover: rgba(15, 23, 42, 0.05);
+  --dsw-alias-interactive-bg-hover-danger: rgba(220, 38, 38, 0.10);
+  --dsw-alias-label-caption: #64748b;
+  --dsw-alias-label-dimmed: #94a3b8;
+  --dsw-alias-label-primary: #0f172a;
+  --dsw-alias-label-primary-foreground: #ffffff;
+  --dsw-alias-label-primary-inverted: #0f172a;
+  --dsw-alias-label-secondary: #475569;
+  --dsw-alias-label-tertiary: #94a3b8;
+  --dsw-alias-link: #0369a1;
+  --dsw-alias-markdown-code-block: #eef2f7;
+  --dsw-alias-markdown-code-block-banner: #e2e8f0;
+  --dsw-alias-markdown-inline-code: #eef2f7;
+  --dsw-alias-scrollbar-bg-l2: rgba(15, 23, 42, 0.18);
+  --dsw-alias-scrollbar-hover-l2: rgba(15, 23, 42, 0.30);
+  --dsw-alias-state-business-primary: #2563eb;
+  --dsw-alias-state-error-primary: #dc2626;
+  --dsw-alias-state-success-primary: #16a34a;
+  --dsw-alias-state-success-tertiary: rgba(22, 163, 74, 0.12);
+  --dsw-alias-state-warn-label: #b45309;
+  --dsw-alias-state-warn-primary: #d97706;
+  --dsw-alias-state-warn-tertiary: rgba(217, 119, 6, 0.12);
+  --dsw-alias-tooltip-bg: #ffffff;
+  --dsw-hovercard-bg: rgba(255, 255, 255, 0.96);
+  --dsw-mask-blur: blur(6px);
+  --dsw-shadow-lv3: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --dsw-elevation-prominent: 0 16px 40px rgba(15, 23, 42, 0.14);
+  --dsw-specific-menu: rgba(255, 255, 255, 0.98);
+  --dsw-static-deepseek-450: #f1f5f9;
+  --dsw-static-neutral-bluish-00: #0f172a;
+}
+
+/* 全局背景与文字跟随浅色令牌 */
+:root.theme-light body {
+  background: var(--nm-bg-0);
+  color: var(--nm-text-1);
+}
+
+

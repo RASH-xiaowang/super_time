@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Super Time Electron Demo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <p class="eyebrow">Electron Desktop Demo</p>
+      <h1>Super Time</h1>
+      <p class="subtitle">一个包含主进程、预加载脚本和渲染进程 IPC 通信的示例应用。</p>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h2>运行环境</h2>
+        <ul id="versions" class="list"></ul>
+      </div>
+
+      <div class="card">
+        <h2>微信+后端</h2>
+        <p id="wechat-info" class="muted">正在初始化…</p>
+        <div class="actions">
+          <select id="wechat-method" class="button" disabled></select>
+          <button id="wechat-call" class="button secondary" disabled>调用方法</button>
+        </div>
+        <pre id="wechat-result" class="output">调用任意 Remote 方法查看结果</pre>
+      </div>
+
+      <div class="card">
+        <h2>IPC 示例</h2>
+        <div class="actions">
+          <button id="open-file" class="button">打开文件对话框</button>
+          <button id="reveal" class="button secondary" disabled>在文件夹中显示</button>
+          <button id="ping" class="button secondary">测试双向通信</button>
+        </div>
+        <pre id="result" class="output">点击按钮查看结果</pre>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Electron + contextBridge + ipcMain / ipcRenderer</span>
+    </footer>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

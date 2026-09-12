@@ -1,0 +1,70 @@
+/* Period summary — NEON MATRIX 科技风（与每日总结共用令牌）。 */
+
+.formCard {
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fieldLabel { font-size: 12px; color: var(--nm-text-2); white-space: nowrap; }
+.input {
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus { border-color: var(--nm-cyan); }
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.loading { color: var(--nm-text-2); font-size: 12px; padding: 8px 2px; }
+
+.resultCard {
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+.cardTitle {
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+  border-bottom: 1px solid var(--nm-border);
+  margin: 0;
+  background: linear-gradient(90deg, var(--nm-bg-hover), transparent 60%);
+}
+.stats { display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 14px 0; }
+/* 第 90 轮：`.stat` 自身的 font-size/color 与 kitCss.textMeta 逐字相同 —— 文本部分改用工具类，
+   这里只留「加粗数字」这一条真正属于本面板的样式。 */
+.stat b { color: var(--nm-cyan); font-weight: 800; }
+/* `.types` 同理：文本口径交给工具类 */
+.types { padding: 8px 14px 0; font-size: 12px; color: var(--nm-text-2); }
+.topSessions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px 0; }
+.topChip {
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+  corner-shape: round;
+}
+.summary {
+  padding: 12px 16px 16px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--nm-text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -1,0 +1,593 @@
+/* ============================================================
+ * NEON MATRIX — 主容器 shell 样式
+ * 本地微信数据管理 的顶层布局、顶栏、侧边栏、内容区
+ * ============================================================ */
+
+/* ── 面板根 ── */
+.panel {
+
+  --dsh-scrollbar-thumb:       var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--dsw-alias-bg-layer-2, var(--nm-bg-0, var(--nm-bg-0)));
+  border: 1px solid var(--nm-border);
+  border-radius: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+}
+
+/* 网格背景叠加 */
+.panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--nm-cyan) 2.5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 2.5%, transparent) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 20%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 20%, transparent 80%);
+}
+
+/* ── 顶部栏 ── */
+.topbar {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  min-height: 64px;
+  border-bottom: 1px solid var(--nm-border);
+  background: var(--nm-bg-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  flex-shrink: 0;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.topbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.appLogo {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nm-cyan);
+  background:
+    radial-gradient(120% 120% at 25% 20%, color-mix(in srgb, var(--nm-cyan) 18%, transparent), transparent 60%),
+    linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  border-radius: 12px;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 12%, transparent), inset 0 0 12px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  /* 已配置微信账号时这里换成账号头像，需要按外框圆角裁掉头像溢出的像素 */
+  overflow: hidden;
+}
+/* 顶栏品牌位显示账号头像时使用：铺满整个外框（38×38，扣掉 1px 边框后内容区 36×36）。
+   圆角不在这里写 —— 交给父级 .appLogo 的 border-radius + overflow: hidden 统一裁切，
+   这样头像的圆角和霓虹外框完全对齐，不会在四角出现错位的毛边。 */
+.appLogoImg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--nm-bg-hover);
+}
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--nm-cyan);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  border-radius: 999px;
+  padding: 2px 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+}
+.topbarTitle {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--nm-text-1);
+}
+.topbarRight {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+.topbarQuick {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.topbarQuick:hover {
+  border-color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  color: var(--nm-cyan);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.quickIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.quickIcon svg { display: block; }
+
+/* ── 全局搜索 ── */
+.topbarSearch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.topbarSearch:focus-within {
+  border-color: var(--nm-cyan);
+  color: var(--nm-cyan);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent), 0 0 14px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.searchIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.searchIcon svg { display: block; }
+.searchInput {
+  width: 250px;
+  min-width: 120px;
+  flex: 1 1 auto;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12.5px;
+  font-family: var(--nm-font-sans, inherit);
+  outline: none;
+}
+.searchInput::placeholder { color: var(--nm-text-2); }
+/* 顶部全局搜索：可见的「输入框」其实是外层 .topbarSearch 容器（它有 :focus-within，
+ * 聚焦时边框变 --nm-cyan 并加 3px 环 + 14px 辉光，已实测确认）。内部 input 透明、
+ * 无边框，所以这里**刻意**关掉它的 outline —— 否则会在字段内部再画一圈。
+ * 这是第 39 轮「输入类聚焦语言统一」里唯一保留的例外。 */
+.searchInput:focus { outline: none; }
+.searchOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.searchDropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 380px;
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
+  border-radius: 14px;
+  background: rgba(8, 14, 32, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 30px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  padding: 6px;
+}
+.searchGroup {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--nm-cyan);
+  padding: 8px 10px 4px;
+  opacity: 0.7;
+}
+.searchRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.searchRow:hover { background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
+.searchName { font-size: 12.5px; font-weight: 600; }
+.searchEmpty {
+  padding: 18px;
+  text-align: center;
+  color: var(--nm-text-2);
+  font-size: 12px;
+}
+
+/* API 状态标签 */
+.apiTag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-family: var(--nm-font-mono, monospace);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  color: var(--nm-text-2);
+  border: 1px solid var(--nm-border);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nm-text-2);
+  flex-shrink: 0;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.apiTag[data-status='online'] {
+  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
+  color: var(--nm-success);
+  border-color: color-mix(in srgb, var(--nm-success) 22%, transparent);
+}
+.apiTag[data-status='online'] .statusDot {
+  background: var(--nm-success);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-success) 70%, transparent);
+  animation: nm-pulse-glow 2.2s ease-in-out infinite;
+}
+.apiTag[data-status='offline'] {
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger);
+  border-color: color-mix(in srgb, var(--nm-danger) 22%, transparent);
+}
+.apiTag[data-status='offline'] .statusDot {
+  background: var(--nm-danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-danger) 50%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .apiTag .statusDot { animation: none !important; }
+}
+
+/* ── 主体：侧边栏 + 内容 ── */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 侧边导航 ──
+   默认折叠成一条只显示图标的「导航轨」，点击顶部的 .navToggle 开关向右展开。
+   展开采用**推挤式**：导航参与 flex 排版，宽度从 58px 过渡到 176px，
+   内容区（.content）随之整体右移 118px。
+   → 代价：展开/收起的那 200ms 里内容会逐帧重排；面板里的世界地图 / ECharts /
+   长表格若挂了 ResizeObserver，会跟着重算尺寸。宽度过渡比覆盖式略贵，
+   但换来了「内容永不被遮住」。 */
+.sidebar {
+  position: relative;
+  flex-shrink: 0;             /* 宽度由自身的 width 决定，不参与收缩 */
+  width: var(--nm-sidebar-w-collapsed, 58px);
+  min-height: 0;
+  border-right: 1px solid var(--nm-border);
+  overflow: hidden;           /* 收窄时把标签裁掉，展开的过程就是「揭开」的过程 */
+  box-sizing: border-box;
+  background: var(--nm-bg-1);
+  display: flex;
+  flex-direction: column;
+  padding: var(--nm-s-4, 16px) var(--nm-s-2, 8px) 0;
+  transition: width var(--nm-t-normal), box-shadow var(--nm-t-normal);
+}
+/* 展开态由顶部 .navToggle 开关点击后写入的 data-open 决定。
+   不能用 :hover —— 点「折叠」时指针还在侧栏上，会立刻又被展开；
+   也不能用 :focus-within —— 焦点落在侧栏内的按钮上时同样收不起来。 */
+.sidebar[data-open] {
+  width: var(--nm-sidebar-w, 212px);
+}
+/* 折叠开关：常驻导航顶部，点击切换展开 / 折叠。
+   折叠态图标在窄轨里居中，展开态左对齐并露出文字 —— 与 .navItem 同一套节奏。 */
+.navToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s, gap var(--nm-t-normal);
+}
+.sidebar[data-open] .navToggle {
+  justify-content: flex-start;
+  gap: 9px;
+}
+.navToggle:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+  color: var(--nm-text-1);
+}
+.navToggle:hover .navIcon,
+.sidebar[data-open] .navToggle .navIcon { opacity: 0.9; }
+/* 导航轨定位容器：滚动条已隐藏（见下），可滚动方向改用「边缘渐隐 + 箭头」提示。
+   渐隐遮罩与箭头全部是 absolute 覆盖层 —— 不占布局，不会引起条目位移。 */
+.navWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 边缘渐隐：对应方向还有被滚出的内容时亮起，暗示「这边还有」。
+   渐变色取侧栏底色 var(--nm-bg-1)，与 .sidebar 背景无缝衔接。 */
+.navWrap::before,
+.navWrap::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--nm-t-normal);
+  z-index: 2;
+}
+.navWrap::before { top: 0; background: linear-gradient(to bottom, var(--nm-bg-1), transparent); }
+.navWrap::after { bottom: 0; background: linear-gradient(to top, var(--nm-bg-1), transparent); }
+.navWrap[data-more-top]::before,
+.navWrap[data-more-bottom]::after { opacity: 1; }
+/* 微型箭头：比渐隐更明确的「可以往这边滚」信号，带轻微上下浮动动画。 */
+.navHint {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 14px;
+  color: var(--nm-cyan);
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nm-cyan) 60%, transparent));
+  pointer-events: none;
+  z-index: 3;
+  animation: nav-hint-bob 1.6s ease-in-out infinite;
+}
+.navHint[data-dir='up'] { top: 1px; --bob: -2px; }
+.navHint[data-dir='down'] { bottom: 1px; --bob: 2px; }
+@keyframes nav-hint-bob {
+  0%, 100% { transform: translate(-50%, 0); }
+  50% { transform: translate(-50%, var(--bob, 2px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .navHint { animation: none; }
+}
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transition: gap var(--nm-t-normal);
+  /* 导航轨**两种状态都不显示滚动条**（滚轮 / 键盘 / 触摸板仍可正常滚动）。
+     折叠态：轨道只有 41px 内容宽，全局那条 6px 滚动条会把 15px 图标挤变形；
+     展开态：留着它会让整列标签的右缘参差、并与 .navItem 的左对齐节奏错位。
+     这里只归零滚动条本身的尺寸，不动 overflow —— 滚动能力完全保留。 */
+  scrollbar-width: none;
+}
+.nav::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+/* 折叠态组间距从 14px 收到 6px —— 组标签在折叠态不占位了，gap 若不跟着收，
+   4 个分组之间会空出比组内还大的缝，整列图标看起来松散。 */
+.sidebar:not([data-open]) .nav {
+  gap: 6px;
+}
+.sidebarFooter {
+  flex-shrink: 0;
+  margin-top: 10px;
+  padding: 8px 0 12px;
+  border-top: 1px solid var(--nm-border);
+}
+.sidebarFooter .navItem {
+  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+}
+.sidebarFooter .navItem[data-active='true'] {
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+.navGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.navGroupLabel {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--nm-text-2);
+  text-transform: uppercase;
+  padding: 4px 10px 6px;
+  /* 折叠态：透明度归零，**同时把高度与上下内边距一起收掉**（overflow 裁切）。
+     早先只设 opacity: 0 而保留占位，4 个分组之间因此各空出约 54px，
+     图标列被拆得七零八落 —— 用 max-height 收起则展开时能平滑长回来。 */
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height var(--nm-t-normal), padding-top var(--nm-t-normal),
+              padding-bottom var(--nm-t-normal), opacity var(--nm-t-fast);
+}
+.sidebar[data-open] .navGroupLabel {
+  max-height: 26px;   /* 实际高 = 9.5px 文字行 + 上下内边距 ≈ 22.5px */
+  padding-top: 4px;
+  padding-bottom: 6px;
+  opacity: 0.6;
+}
+.navItem {
+  display: flex;
+  align-items: center;
+  justify-content: center;    /* 折叠态：图标在窄轨里居中 */
+  gap: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s, gap var(--nm-t-normal);
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+}
+/* 展开态：回到左对齐 + 图标与文字间距 */
+.sidebar[data-open] .navItem {
+  justify-content: flex-start;
+  gap: 9px;
+}
+.navItem:hover {
+  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
+}
+.navItem[data-active='true'] {
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  color: var(--nm-cyan);
+  font-weight: 600;
+  box-shadow: inset 0 0 20px color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+}
+.navItem[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 15%;
+  bottom: 15%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--nm-cyan);
+  box-shadow: 0 0 8px var(--nm-cyan);
+}
+.navIcon {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.navItem:hover .navIcon { opacity: 0.9; }
+.navItem[data-active='true'] .navIcon { opacity: 1; }
+.navLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  /* 折叠态：宽度归零。只靠 overflow 裁切是不够的 —— 标签会被 flex 收缩到
+     几个像素，反而露出半截被切断的文字。这里用 max-width 让它彻底收起，
+     展开时再动画到自然宽度，形成「擦除式」揭开效果。 */
+  max-width: 0;
+  opacity: 0;
+  transition: max-width var(--nm-t-normal), opacity var(--nm-t-fast);
+}
+.sidebar[data-open] .navLabel {
+  max-width: 120px;           /* 大于最长标签（≈78px）即可；实际宽度由 flex 可用空间决定 */
+  opacity: 1;
+}
+/* 必须放在上面几条之后：媒体查询不提升优先级，位置在前会被同优先级的基样式覆盖 */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar .nav,
+  .sidebar .navToggle,
+  .sidebar .navItem,
+  .sidebar .navLabel,
+  .sidebar .navGroupLabel { transition: none; }
+}
+
+/* ── 内容区（面板内自管滚动；kit .panel 提供统一内边距与最大宽度） ── */
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--nm-s-4, 16px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 离线状态 ── */
+
+/* ── 占位符 ── */
+/* 第 94 轮：面板懒加载时的兜底文案（原来写在 WechatDataPanel.tsx 的行内 style 里）。 */
+.loadingFallback { padding: 40px; text-align: center; color: var(--nm-text-2); }
+.placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--nm-text-2);
+  font-size: 13px;
+}
+.placeholder p { margin: 0; }

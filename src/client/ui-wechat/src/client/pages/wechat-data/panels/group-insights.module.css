@@ -1,0 +1,12 @@
+/* Offline group insights — NEON MATRIX 科技风（与总览共用令牌）。 */
+
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.bars { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.barRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.barName { width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); flex-shrink: 0; }
+.barTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: 6px; overflow: hidden; }
+.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 6px; }
+.barCount { width: 48px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
+.announcement { padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; }

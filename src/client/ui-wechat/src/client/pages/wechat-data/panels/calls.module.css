@@ -1,0 +1,172 @@
+/* 通话记录 —— NEON MATRIX 科技风（沿用 --nm-* 令牌，与总览/账本/洞察面板同一套）。 */
+
+/* ── 通话对象排行 ─────────────────────────────────────────── */
+.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+.rankRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.rankRow:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.rankNo {
+  flex: 0 0 22px;
+  text-align: center;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+.rankNo[data-top='1'] { color: var(--nm-cyan); }
+.rankName {
+  flex: 0 0 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rankBarWrap {
+  flex: 1 1 auto;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--nm-bg-input);
+  overflow: hidden;
+  min-width: 40px;
+}
+.rankBar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+}
+.rankNums {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+.rankCalls { color: var(--nm-text-1); }
+/* 时长比次数低一档（11px vs 11.5px），形成「次数 → 时长 → 未接」的层级 */
+.rankDur { flex: 0 0 auto; font-size: 11px; }
+.rankMissed { color: var(--nm-warning); }
+
+/* ── 逐月通话 ─────────────────────────────────────────────── */
+.monthList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.monthRow { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.monthLabel { flex: 0 0 86px; color: var(--nm-text-2); }
+.monthBarWrap {
+  position: relative;
+  flex: 1 1 auto;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--nm-bg-input);
+  overflow: hidden;
+  min-width: 40px;
+}
+/* 总数条（含未接通）在下、接通条在上，两条共用同一比例尺 */
+.monthBar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+}
+.monthBarOk {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+}
+.monthNums {
+  flex: 0 0 auto;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+
+/* ── 时段分布 ─────────────────────────────────────────────── */
+.hourGrid { display: flex; align-items: flex-end; gap: 4px; height: 132px; padding: 12px 14px 4px; }
+.hourCell { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; height: 100%; gap: 4px; }
+.hourBarWrap { flex: 1 1 auto; width: 100%; display: flex; align-items: flex-end; }
+.hourBar {
+  display: block;
+  width: 100%;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, var(--nm-cyan), color-mix(in srgb, var(--nm-cyan) 25%, transparent));
+}
+.hourCell[data-empty='1'] .hourBar { background: var(--nm-bg-input); }
+.hourLabel {
+  flex: 0 0 12px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+}
+
+/* ── 未接通原因 ───────────────────────────────────────────── */
+.reasonList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+.reasonRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--nm-text-1); }
+/* 状态词可能很长（「已在其它设备拒绝」），截断以免把次数挤走 */
+.reasonName { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reasonCount {
+  flex: 0 0 auto;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-2);
+}
+
+/* ── 最近通话 ─────────────────────────────────────────────── */
+.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
+.recentRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--nm-text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.recentRow:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.recentDir {
+  flex: 0 0 34px;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}
+.recentDir[data-out='1'] { color: var(--nm-cyan); }
+.recentName {
+  flex: 0 0 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recentStatus {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-2);
+}
+.recentRow[data-state='missed'] .recentStatus { color: var(--nm-warning); }
+.recentTime {
+  flex: 0 0 auto;
+  font-family: var(--nm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--nm-text-2);
+}

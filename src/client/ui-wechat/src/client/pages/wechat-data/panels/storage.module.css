@@ -1,0 +1,134 @@
+/* Storage panel — NEON MATRIX 科技风重设计.
+   深空黑底 + 霓虹青 var(--nm-cyan) + 紫 var(--nm-purple) + 毛玻璃卡片 + 发光悬停。 */
+
+.panel {
+
+  height: 100%;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  display: flex; flex-direction: column; gap: 12px; min-height: 0; box-sizing: border-box;
+  overflow-y: auto; padding: var(--nm-panel-pad);
+  color: var(--nm-text-1);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%),
+    var(--nm-bg-1);
+}
+
+.btn {
+  padding: 5px 14px; border: 1px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1); cursor: pointer;
+  transition: all 0.15s;
+}
+.btn:hover {
+  border-color: var(--nm-border-hover); background: var(--nm-bg-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.linkBtn {
+  background: none; border: none; padding: 0; color: var(--nm-cyan);
+  cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.15s;
+}
+.linkBtn:hover { text-decoration: underline; color: var(--nm-purple); }
+
+/* 骨架屏 */
+.skeletonWrap { display: flex; flex-direction: column; gap: 12px; }
+@keyframes wcSkel {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skelBlock {
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--nm-bg-hover) 25%, color-mix(in srgb, var(--nm-cyan) 10%, transparent) 37%, var(--nm-bg-hover) 63%);
+  background-size: 200% 100%;
+  animation: wcSkel 1.4s ease-in-out infinite;
+  border: 1px solid var(--nm-border);
+}
+@media (prefers-reduced-motion: reduce) { .skelBlock { animation: none; } }
+.skelHero { display: grid; grid-template-columns: 220px 1fr; gap: 12px; }
+.skelHero .skelBlock { height: 96px; }
+.skelLine { height: 14px; margin-bottom: 10px; }
+.skelLine::after {
+  content: ''; display: block; width: 60%; height: 14px; border-radius: 8px;
+  background: linear-gradient(90deg, var(--nm-bg-hover) 25%, color-mix(in srgb, var(--nm-cyan) 10%, transparent) 37%, var(--nm-bg-hover) 63%);
+  background-size: 200% 100%;
+  animation: wcSkel 1.4s ease-in-out infinite;
+}
+
+/* hero 卡片 */
+.hero {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 18px; border: 1px solid var(--nm-border); border-radius: 14px;
+  background:
+    linear-gradient(135deg, var(--nm-cyan-10), color-mix(in srgb, var(--nm-purple) 8%, transparent)),
+    var(--nm-bg-card);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: all 0.2s;
+}
+.hero:hover {
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.heroMain { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+.heroValue {
+  font-size: 30px; font-weight: 800; color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.heroStats { flex: 1; min-width: 280px; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.heroStat {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+  background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: 10px;
+  transition: all 0.15s;
+}
+.heroStat:hover {
+  border-color: var(--nm-border-hover); background: var(--nm-bg-card);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.heroStatValue {
+  font-size: 16px; font-weight: 700; color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums;
+}
+/* 分析卡片网格 */
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1200px) { .grid { grid-template-columns: 1fr 1fr; } }
+.card {
+  border: 1px solid var(--nm-border); border-radius: 14px; padding: 14px;
+  background: var(--nm-bg-card); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: all 0.2s;
+}
+.card:hover {
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.cardTitle {
+  font-size: 13px; font-weight: 800; margin: 0 0 10px;
+  background: linear-gradient(90deg, var(--nm-text-1), var(--nm-cyan));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* 环形图 */
+.donutRow { display: flex; align-items: center; gap: 16px; }
+.donut {
+  width: 132px; height: 132px; border-radius: 50%; flex-shrink: 0;
+  position: relative; box-shadow: inset 0 0 0 1px var(--nm-border), 0 0 18px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  corner-shape: round;
+}
+.donut::after { content: ''; position: absolute; inset: 22px; border-radius: 50%; background: var(--nm-bg-card);
+  corner-shape: round;
+}
+.donutLegend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.legendRow { display: flex; align-items: center; gap: 8px; font-size: 12px; transition: all 0.15s; }
+.legendDot { width: 10px; height: 10px; border-radius: 4px; flex-shrink: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 40%, transparent); }
+.legendLabel { width: 64px; color: var(--nm-text-1); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.legendMeta { flex: 1; min-width: 0; color: var(--nm-text-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
+
+/* 条形 */
+.barRow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; transition: all 0.15s; }
+.barLabel { width: 110px; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.barTrack { flex: 1; height: 8px; border-radius: 4px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); overflow: hidden; }
+.barFill {
+  height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+}
+.barValue { width: 120px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-size: 11px; font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }

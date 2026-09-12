@@ -1,0 +1,38 @@
+{
+  "name": "fzstd",
+  "version": "0.1.1",
+  "description": "High performance Zstandard (de)compression",
+  "main": "./lib/index.js",
+  "module": "./esm/index.mjs",
+  "types": "./lib/index.d.ts",
+  "unpkg": "./umd/index.js",
+  "jsdelivr": "./umd/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./esm/index.mjs",
+      "require": "./lib/index.js"
+    }
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/101arrowz/fzstd.git"
+  },
+  "bugs": {
+    "email": "arjunbarrett@gmail.com",
+    "url": "https://github.com/101arrowz/fzstd/issues"
+  },
+  "author": "Arjun Barrett",
+  "license": "MIT",
+  "keywords": [
+    "compression",
+    "decompression",
+    "zstd",
+    "zstandard",
+    "browser",
+    "node.js",
+    "tiny",
+    "fast"
+  ]
+}

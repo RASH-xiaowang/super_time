@@ -1,0 +1,896 @@
+/* ============================================================
+ * UI Kit — 本地微信数据管理 面板重构共享样式
+ * 基于 scifi-theme.css 的 --nm-* 令牌；Radix 组件按 data-state 样式化
+ * ============================================================ */
+
+/* ── 面板骨架 ─────────────────────────────── */
+
+.panelHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--nm-s-4);
+  flex-wrap: wrap;
+}
+
+.panelTitleWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  min-width: 0;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: var(--nm-fs-xl);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  letter-spacing: 0.02em;
+}
+
+/* 层级说明（第 23 轮，实测依据）
+ * 下面这几类文字原先用 `--nm-text-3`（最暗的一级），但它们承载的是**内容**而不是
+ * 装饰性提示：面板说明、表头、表格单元格数据、统计卡说明。
+ * WCAG 对比度审计实测：深色主题下 `--nm-text-3`(#64748b) 在 #050a18 上约 4.2、
+ * 在卡片 #0f172a 上约 3.9，于是全 30 个页签共 50 处低于 4.5 —— 其中表格单元格数据
+ * (.cellMono) 一类就占 33 处。改用 `--nm-text-2` 后深色达到 ~7.5、浅色 ~6.0，
+ * 两套主题都满足 AA，且**不需要改动任何令牌值**（不产生全局视觉偏移）。
+ * 占位符与空状态描述（.searchInput::placeholder / .emptyDesc）保持 text-3：
+ * 它们是约定俗成的弱化文字，不属于内容主体。
+ */
+.panelDesc {
+  margin: 0;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  flex-wrap: wrap;
+}
+
+/* ── 工具栏 ───────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+  flex-wrap: wrap;
+}
+
+.toolbarLeft,
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* ── 搜索框 ───────────────────────────────── */
+.searchBox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 220px;
+  flex: 0 1 320px;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  color: var(--nm-text-2);
+  pointer-events: none;
+  display: inline-flex;
+}
+
+.searchInput {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 32px;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-1);
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  outline: none;
+  transition: border-color var(--nm-t-fast), box-shadow var(--nm-t-fast);
+}
+
+.searchInput::placeholder { color: var(--nm-text-3); }
+
+.searchInput:focus { border-color: var(--nm-cyan); }
+
+.searchClear {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--nm-text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--nm-r-pill);
+  cursor: pointer;
+  font-size: var(--nm-fs-sm);
+}
+
+.searchClear:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+
+/* ── 卡片 ─────────────────────────────────── */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  box-shadow: var(--nm-shadow-card);
+  overflow: hidden;
+}
+
+.cardHd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+  padding: var(--nm-s-3) var(--nm-s-4);
+  border-bottom: 1px solid var(--nm-border);
+  min-width: 0;
+}
+
+.cardTitle {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardExtra {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  flex-shrink: 0;
+}
+
+.cardBd { padding: var(--nm-s-4); min-width: 0; }
+
+.cardBdFlush { padding: 0; }
+
+.cardFt {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-3) var(--nm-s-4);
+  border-top: 1px solid var(--nm-border);
+}
+
+/* ── 统计卡片 ─────────────────────────────── */
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  gap: var(--nm-s-3);
+}
+
+.statCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-4);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  box-shadow: var(--nm-shadow-card);
+  transition: border-color var(--nm-t-fast), transform var(--nm-t-fast);
+}
+
+.statCard:hover {
+  border-color: var(--nm-border-hover);
+  transform: translateY(-1px);
+}
+
+.statIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-active);
+  color: var(--nm-cyan);
+  font-size: var(--nm-fs-lg);
+}
+
+.statValue {
+  font-size: var(--nm-fs-2xl);
+  font-weight: 700;
+  font-family: var(--nm-font-mono);
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-tight);
+}
+
+.statLabel {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+}
+
+.statHint {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-tight);
+}
+
+/* 语义色强调 */
+.statCard[data-tone='green'] .statIcon { background: var(--nm-success-15); color: var(--nm-success); }
+.statCard[data-tone='green'] .statValue { color: var(--nm-success); }
+.statCard[data-tone='purple'] .statIcon { background: var(--nm-purple-20); color: var(--nm-purple); }
+.statCard[data-tone='purple'] .statValue { color: var(--nm-purple); }
+.statCard[data-tone='red'] .statIcon { background: var(--nm-danger-15); color: var(--nm-danger); }
+.statCard[data-tone='red'] .statValue { color: var(--nm-danger); }
+.statCard[data-tone='amber'] .statIcon { background: var(--nm-warning-15); color: var(--nm-warning); }
+.statCard[data-tone='amber'] .statValue { color: var(--nm-warning); }
+.statCard[data-tone='blue'] .statIcon { background: var(--nm-info-15); color: var(--nm-info); }
+.statCard[data-tone='blue'] .statValue { color: var(--nm-info); }
+
+.statCardButton {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* 双列卡片栅格（详情并排区） */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--nm-s-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .cardGrid { grid-template-columns: 1fr; }
+}
+
+/* ── 数据表格 ─────────────────────────────── */
+.tableWrap {
+  width: 100%;
+  /* 第 89 轮：原为 overflow-x: hidden —— 配合下面 `.table { table-layout: fixed; width: 100% }`，
+     窄窗口下「弹性那一列」会被压到 32px（实测操作日志在 860px 时上下文列只剩 32px，
+     文字被单元格裁掉）。改成表格给一个可读的最小宽度、容器横向可滚：
+     宽窗口下 100% ≥ min-width，行为不变；窄窗口下所有列都可达。 */
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 62vh;
+}
+
+.table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: var(--nm-fs-md);
+  table-layout: fixed;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--nm-fs-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--nm-text-2);
+  background: var(--nm-table-header-bg);
+  border-bottom: 1px solid var(--nm-border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.thSortable { cursor: pointer; }
+.thSortable:hover { color: var(--nm-text-1); }
+
+/* 排序控件：真正的 <button>，让键盘也能排序（此前只有 <th onClick>，鼠标专属）。
+ * 重置按钮外观但不能改版式：padding/border/margin 归零，字体与对齐**继承** th，
+ * 这样 text-align:right 的数值列仍然右对齐，.thInner 的 inline-flex 也照旧。 */
+.thBtn {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  corner-shape: round;
+}
+.thBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.thInner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+}
+
+.thArrow { opacity: 0; font-size: var(--nm-fs-xs); }
+.thSortable[data-sorted] .thArrow { opacity: 1; }
+
+.table tbody td {
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border-bottom: 1px solid var(--nm-border);
+  color: var(--nm-text-2);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+
+.table tbody tr:nth-child(even) { background: var(--nm-table-row-stripe); }
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.rowClickable { cursor: pointer; }
+.rowClickable:hover { background: var(--nm-table-row-hover) !important; }
+/* 整行可点时聚焦环朝内画，避免被表格容器裁掉 */
+.rowClickable:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+.cellMono {
+  font-family: var(--nm-font-mono);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.cellPrimary { color: var(--nm-text-1); font-weight: 500; }
+
+/* ── Tabs（Radix） ────────────────────────── */
+.tabs { display: flex; flex-direction: column; gap: var(--nm-s-3); }
+
+.tabList {
+  display: inline-flex;
+  gap: var(--nm-s-1);
+  padding: 3px;
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tabTrigger {
+  padding: 5px 14px;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.tabTrigger:hover { color: var(--nm-text-1); }
+
+.tabTrigger[data-state='active'] {
+  color: var(--nm-cyan);
+  background: var(--nm-bg-active);
+  box-shadow: inset 0 0 0 1px var(--nm-border-active);
+}
+
+/* ── Segmented（Radix ToggleGroup） ───────── */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  /* 第 89 轮：窄窗口下分段控件（如通讯录的 4 个分类）会宽过工具栏，
+     把整个内容区顶出横向滚动条（实测 980px 越界 12px、860px 越界 132px）。
+     允许换行后所有选项仍在视口内、可点，不再需要横向滚动。 */
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.segItem {
+  padding: 4px 12px;
+  /* WCAG 2.2 SC 2.5.8：交互目标至少 24×24。实测分段控件原为 22px 高，
+     补 min-height 后达标（横向 padding 已足够）。 */
+  min-height: 24px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--nm-t-fast), background var(--nm-t-fast);
+}
+
+.segItem:hover { color: var(--nm-text-1); }
+
+.segItem[data-state='on'] {
+  color: var(--nm-cyan);
+  background: var(--nm-bg-active);
+}
+
+/* ── Drawer（Radix Dialog，右侧抽屉） ─────── */
+.drawerOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(4, 8, 20, 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.drawerOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-1);
+  border-left: 1px solid var(--nm-border);
+  box-shadow: var(--nm-shadow-popup);
+  outline: none;
+}
+
+.drawer[data-state='open'] { animation: kitSlideIn var(--nm-t-normal); }
+
+.drawerHd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+  padding: var(--nm-s-3) var(--nm-s-4);
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.drawerTitle { font-size: var(--nm-fs-lg); font-weight: 600; color: var(--nm-text-1); }
+
+.drawerClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--nm-text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+  font-size: var(--nm-fs-lg);
+}
+
+.drawerClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+
+.drawerBd {
+  flex: 1;
+  overflow: auto;
+  padding: var(--nm-s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+}
+
+.drawerFt {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-3) var(--nm-s-4);
+  border-top: 1px solid var(--nm-border);
+}
+
+/* ── Dialog（居中） ───────────────────────── */
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 8, 20, 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.dialogOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
+
+.dialog {
+  width: min(520px, 92vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nm-bg-1);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xl);
+  box-shadow: var(--nm-shadow-popup);
+  outline: none;
+}
+
+.dialog[data-state='open'] { animation: kitPopIn var(--nm-t-normal); }
+
+.dialogBd {
+  flex: 1;
+  overflow: auto;
+  padding: var(--nm-s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+}
+
+/* ── Tooltip ──────────────────────────────── */
+.tooltip {
+  max-width: 320px;
+  padding: 6px 10px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+  background: var(--nm-bg-2);
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-sm);
+  box-shadow: var(--nm-shadow-popup);
+  line-height: var(--nm-lh-tight);
+  z-index: 80;
+}
+
+/* ── Badge ────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: var(--nm-fs-xs);
+  border-radius: var(--nm-r-pill);
+  border: 1px solid transparent;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.badge[data-tone='default'] { color: var(--nm-text-2); background: var(--nm-bg-active); border-color: var(--nm-border); }
+/* 第 82 轮：色调色文字改用 --nm-*-text（与主题正文色混合到 ≥5:1），
+   原值直压同色浅底实测深色 purple 3.58 / red 4.45、浅色 amber 4.42。 */
+.badge[data-tone='cyan'] { color: var(--nm-cyan-text); background: var(--nm-cyan-10); border-color: var(--nm-cyan-20); }
+.badge[data-tone='green'] { color: var(--nm-success-text); background: var(--nm-success-15); border-color: color-mix(in srgb, var(--nm-success) 25%, transparent); }
+.badge[data-tone='red'] { color: var(--nm-danger-text); background: var(--nm-danger-15); border-color: color-mix(in srgb, var(--nm-danger) 25%, transparent); }
+.badge[data-tone='amber'] { color: var(--nm-warning-text); background: var(--nm-warning-15); border-color: color-mix(in srgb, var(--nm-warning) 25%, transparent); }
+.badge[data-tone='purple'] { color: var(--nm-purple-text); background: var(--nm-purple-20); border-color: color-mix(in srgb, var(--nm-purple) 30%, transparent); }
+.badge[data-tone='blue'] { color: var(--nm-info-text); background: var(--nm-info-15); border-color: color-mix(in srgb, var(--nm-blue) 30%, transparent); }
+
+/* ── Progress ─────────────────────────────── */
+.progress {
+  height: 6px;
+  background: var(--nm-bg-input);
+  border-radius: var(--nm-r-pill);
+  overflow: hidden;
+  border: 1px solid var(--nm-border);
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  border-radius: var(--nm-r-pill);
+  transition: width var(--nm-t-normal);
+}
+
+.progress[data-tone='green'] .progressFill { background: var(--nm-success); }
+.progress[data-tone='amber'] .progressFill { background: var(--nm-warning); }
+.progress[data-tone='red'] .progressFill { background: var(--nm-danger); }
+
+/* ── 面板胶囊按钮：已并入 `Button` 组件 ─────────────
+ * 5 个面板（group-insights / ledger / period-summary / privacy-trust / tasks）曾各自
+ * 定义**逐字节相同**的 `.btn` 及其 hover / :disabled / [data-active]（第 29 轮重复审计：
+ * 共 16 条规则、15 处用法）；第 29 轮收敛为本文件的 `.btnPill` 类，第 34 轮再收敛到
+ * `ui-primitives-shim` 的 `<Button variant="pill">` —— 也就是项目里原先**两套按钮外观**
+ * 的正式合并点：面板胶囊（r999、1px 描边、卡片底、7px 14px、12px）现在是组件的一个变体，
+ * 而不是又一处本地 CSS。规则本体见 `Button.module.css` 的 `.button.pill`，请勿在
+ * 面板里重新定义；新增面板按钮直接写 `<Button variant="pill">`。
+ */
+
+/* ── 面板外壳 ─────────────────────────────
+ * 11 个面板曾各自定义**逐字节相同**的 `.panel`（第 26 轮重复规则审计：
+ * 整个规则体一致 —— height/min-height/box-sizing/flex column/gap/overflow-y/
+ * padding: var(--nm-panel-pad)/顶部径向辉光）。第 28 轮收敛到此处，
+ * 使「面板外壳」只有一个定义，新增面板直接复用。
+ *
+ * 注意：另有若干面板的根节点是**变体**，各自保留 —— chats（双层渐变底）、
+ * contacts（color-scheme: dark + position: relative）、monitor（带边框圆角卡片）、
+ * list-panel / moments / records / settings / overview（布局差异）。
+ */
+.panelShell {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: var(--nm-panel-pad);
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+}
+
+/*
+ * 面板正文的滚动容器：**页头固定、正文滚动**。
+ *
+ * 为什么需要：`.panelShell` 自身带 `overflow-y:auto`，内容放得下的面板不会滚（页头自然不动），
+ * 但内容超长的面板会把**整页连页头一起**滚走 —— 实测 数据总览 / 通话记录 / 朋友圈洞察
+ * 滚动到底后页头 top 变成 -2599 / -1765 / -2470，标题与「刷新/导出」按钮全部消失；
+ * 而其余可滚动面板（我的收藏/文件资产/存储分析/操作日志/数据配置/朋友圈/社交图谱）
+ * 因为正文另有滚动容器而保持不动。同一个导航槽出现两套契约，这里统一成一套。
+ *
+ * gap 与 `.panelShell` 一致，所以换用后视觉间距不变。
+ */
+.panelBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* ── EmptyState ───────────────────────────── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-8) var(--nm-s-4);
+  text-align: center;
+}
+
+.emptyIcon { font-size: 30px; opacity: 0.6; }
+
+.emptyTitle { font-size: var(--nm-fs-lg); font-weight: 600; color: var(--nm-text-2); }
+
+.emptyDesc {
+  font-size: var(--nm-fs-sm);
+  /* 第 82 轮：原为 --nm-text-3，深色主题下 #64748b 压 #0f172a 实测只有 3.75:1（12px 正文需 4.5）。
+     空状态描述是「必须读到」的下一步指引，改用正文次级色（深色 7.0:1）。 */
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+  max-width: 420px;
+}
+
+/* 行内空状态（用于列表/表格内部的「暂无数据」「统计中…」一行提示）。
+ *
+ * 与上面的 `.empty` 是**两个概念**，不要互换：
+ *   · `.empty`       —— 整块的空状态（大内边距 + flex 竖排，供 EmptyState 组件用）；
+ *   · `.emptyInline` —— 面板内联的一行提示，17 个模块曾各自抄了一份完全相同的定义
+ *                      （第 26 轮重复规则审计：声明体逐字节一致）。
+ * 第 27 轮收敛到此，17 份重复定义删除。`list-panel.module.css` 的 `.empty` 仍是
+ * **网格变体**（额外 `grid-column: 1 / -1`），`world-map` 的是**居中遮罩**变体，
+ * 两者语义不同，保留各自定义。 */
+.emptyInline {
+  padding: var(--nm-empty-pad);
+  text-align: center;
+  color: var(--nm-text-2);
+  font-size: var(--nm-empty-fs);
+}
+
+/* ── Select（Radix） ──────────────────────── */
+.selectTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+  min-width: 120px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-1);
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  cursor: pointer;
+  outline: none;
+}
+
+.selectTrigger:hover { border-color: var(--nm-border-hover); }
+.selectTrigger:focus-visible { border-color: var(--nm-border-active); box-shadow: var(--nm-glow-sm); }
+
+.selectContent {
+  z-index: 90;
+  min-width: var(--radix-select-trigger-width);
+  padding: 4px;
+  background: var(--nm-bg-1);
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-md);
+  box-shadow: var(--nm-shadow-popup);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.selectItem {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  padding: 6px 10px;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-2);
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.selectItem[data-highlighted] {
+  color: var(--nm-cyan);
+  background: var(--nm-bg-active);
+  outline: none;
+}
+
+.selectCheck { color: var(--nm-cyan); width: 14px; display: inline-flex; }
+
+/* ── 虚拟列表 ─────────────────────────────── */
+.vlist {
+  position: relative;
+  width: 100%;
+  overflow: auto;
+}
+
+.vlistInner { position: relative; width: 100%; }
+
+/* ── 骨架屏的形状类（第 94 轮）────────────────────────────────────────
+   全局 `.nm-skel` 提供底色与微光（见 scifi-theme.css），这里只放各形状的尺寸。
+   原先这些尺寸写成行内样式，现在搬到这里；网格容器的列数仍是动态的（列表/网格两态），
+   那一项留在行内。 */
+.skelGrid { display: grid; gap: 10px; padding: 10px; width: 100%; box-sizing: border-box; }
+.skelRow { height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+.skelCard { height: 120px; }
+/* 骨架头像的圆角取 10px（真头像 `.avatar` 也是 10px）：原行内值是 9px，
+   不在圆角刻度（2/4/6/8/10/12/14/16）上，搬进 CSS 会被 audit:scale 拦下 —— 正好顺手对齐真头像。 */
+.skelAvatar { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; }
+.skelLine { width: 55%; height: 12px; flex-shrink: 1; }
+.skelMeta { width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
+.skelTdLine { display: inline-block; width: 60%; height: 12px; }
+/* 列表哨兵：2px 占位，靠 IntersectionObserver 触发下一页。 */
+.sentinel { height: 2px; flex-shrink: 0; }
+
+.vlistRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+/* ── 动画 ─────────────────────────────────── */
+@keyframes kitFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes kitSlideIn {
+  from { transform: translateX(24px); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes kitPopIn {
+  from { transform: translateY(8px) scale(0.98); opacity: 0.6; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* ────────────────────────────────────────────
+ * 键盘可达性（a11y）
+ *
+ * 此前全套 kit 只在 .selectTrigger 上有 :focus-visible，其余可交互元素
+ * （页签、分段控件、搜索清除、抽屉关闭）用键盘 Tab 时看不到焦点位置。
+ * 统一在这里补上，焦点环用主题强调色，深浅两套主题都清晰可见。
+ * ──────────────────────────────────────────── */
+.tabTrigger:focus-visible,
+.segItem:focus-visible,
+.searchClear:focus-visible,
+.drawerClose:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
+}
+
+/* ────────────────────────────────────────────
+ * 批次勾选框（批量选择模式）
+ *
+ * 此前 chats.module.css 有一份实现，而 Favorites.tsx 引用的是
+ * list-panel.module.css 里**并不存在**的 .batchCheck（className 变 undefined，
+ * 勾选框完全不可见）。这里作为共享样式收口，两处共用同一实现。
+ * 用法：<span className={kitCss.batchCheck} data-checked={checked || undefined}>✓</span>
+ * ──────────────────────────────────────────── */
+.batchCheck {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--nm-border);
+  border-radius: 6px;
+  background: var(--nm-bg-input);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nm-on-accent);
+  transition: all 0.15s ease;
+}
+.batchCheck[data-checked='true'] {
+  background: var(--nm-cyan);
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+}
+
+/* ────────────────────────────────────────────
+ * 错误提示（共享）
+ *
+ * 实测：14 处面板用 `<div className={css.empty}>⚠️ {error}</div>` 渲染错误 ——
+ * 与空状态同一套样式（灰字居中）、没有红色、也没有 role="alert"，
+ * 于是"出错"看起来像"没数据"，读屏软件也不会播报。
+ * 另有 8 个面板各自写了红色 .error 横幅（health/ledger/period-summary/
+ * group-insights/asset-insights/media-assets/official-assets/overview）。
+ * 这里收口为 kit 的共享样式，调用方需同时加 role="alert"。
+ * ──────────────────────────────────────────── */
+.error {
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger);
+  font-size: var(--nm-empty-fs);
+  padding: 10px 14px;
+}
+
+/* ── 文字工具类 ─────────────────────────────────────────
+ * 由第 35 轮的重复规则审计得出：**四组同语义的「次要文字」**被各面板各写一遍 ——
+ *   color: var(--nm-text-2); font-size: 12px                  11 条规则 / 20 个类
+ *   color: var(--nm-text-2); font-size: 11px                   8 条规则 / 13 个类
+ *   color: var(--nm-text-2); font-size: 11px                 5 条规则 /  7 个类
+ *   color: var(--nm-text-2); font-size: 11px; + 单行省略      5 条规则 /  8 个类
+ * 合计 29 条规则、48 个类、134 处用法。这里成为它们的唯一定义处。
+ *
+ * 两档字号：meta = 12px（正文旁的元信息），caption = 11px（说明/标签）。
+ * 原来还有一个 11.5px 的野值，已**归一到 caption 档** —— 同一语义三档字号不成尺度。
+ * 颜色统一走 --nm-text-2，深浅主题自动跟随（对比度已由 st-contrast-sweep.js 复测）。
+ */
+.textMeta {
+  color: var(--nm-text-2);
+  font-size: 12px;
+}
+
+.textCaption {
+  color: var(--nm-text-2);
+  font-size: 11px;
+}
+
+/* 说明文字 + 单行省略（长名/长描述场景，避免撑破行） */
+.textCaptionTrunc {
+  color: var(--nm-text-2);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 空状态 + 「可能还在后台同步」说明（第 62 轮，见 kit.tsx 的 EmptyMaybeSyncing）。
+   冷启动同步窗口里接口返回空快照，面板原本只显示「共 0 项」，读起来像数据丢了。 */
+.emptyMaybe { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 16px; text-align: center; }
+.emptyMaybeMain { font-size: 13px; color: var(--nm-text-1); font-weight: 600; }
+.emptyMaybeNote { font-size: 11px; line-height: 1.55; color: var(--nm-text-2); max-width: 42ch; }

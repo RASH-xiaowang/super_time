@@ -1,0 +1,19 @@
+/* Media assets — NEON MATRIX 科技风。 */
+
+.dupList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.dupRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.dupCount { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); flex-shrink: 0; }
+.footnote { font-size: 11px; color: var(--nm-text-2); margin: 0; padding: 0 2px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actionBtn {
+  padding: 6px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  corner-shape: round;
+}
+.actionBtn:hover { border-color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
