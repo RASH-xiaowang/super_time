@@ -2,14 +2,33 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getVersions: () => ipcRenderer.invoke('app:versions'),
+  /** 是否验收测试模式（mock 模型）：前端据此显示醒目横幅。 */
+  isTestMode: () => ipcRenderer.invoke('app:test-mode'),
   ping: () => ipcRenderer.invoke('app:ping'),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
   pickDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
+  /** 保存对话框：只取路径，写盘由后端做（大文件不经 IPC）。 */
+  saveFileDialog: (opts) => ipcRenderer.invoke('dialog:save-file', opts),
   showInFolder: (filePath) => ipcRenderer.invoke('shell:show-item', filePath),
+  /** 把指定的界面矩形导出成 PNG（「导出报告」用；坐标是渲染页视口的 CSS 像素）。 */
+  capturePanel: (rect) => ipcRenderer.invoke('window:capture-panel', rect),
   windowControls: {
     minimize: () => ipcRenderer.send('window:minimize'),
     toggleMaximize: () => ipcRenderer.send('window:maximize-toggle'),
+    toggleFullscreen: () => ipcRenderer.send('window:fullscreen-toggle'),
     close: () => ipcRenderer.send('window:close'),
+    isFullscreen: () => ipcRenderer.invoke('window:is-fullscreen'),
+    onFullscreenChange: (listener) => {
+      const handler = (_event, fullscreen) => {
+        try {
+          listener(fullscreen);
+        } catch {
+          /* ignore */
+        }
+      };
+      ipcRenderer.on('window:fullscreen-changed', handler);
+      return () => ipcRenderer.removeListener('window:fullscreen-changed', handler);
+    },
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
     onMaximizedChange: (listener) => {
       const handler = (_event, maximized) => {
@@ -42,5 +61,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('wechat:event', handler);
       return () => ipcRenderer.removeListener('wechat:event', handler);
     }
+  },
+  license: {
+    status: () => ipcRenderer.invoke('license:status'),
+    activationRequest: () => ipcRenderer.invoke('license:activation-request'),
+    exportRequest: () => ipcRenderer.invoke('license:export-request'),
+    importFile: () => ipcRenderer.invoke('license:import'),
+    importText: (text) => ipcRenderer.invoke('license:import-text', text),
+    remove: () => ipcRenderer.invoke('license:remove'),
+    fingerprint: () => ipcRenderer.invoke('license:fingerprint'),
   }
 });
