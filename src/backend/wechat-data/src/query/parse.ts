@@ -25,13 +25,24 @@
  *    `length(voice_data)`（那是压缩后的字节数，界面曾把它当秒用）。
  */
 
-import type { ChatlogRecord, MessageRich as RichMedia, SolitaireMember } from '../types.ts'
+import type { ChatlogRecord, MessageRich as RichMedia, MpArticle, SolitaireMember } from '../types.ts'
 
 /** Unwrap a CDATA-wrapped string, returning the raw content. */
 function stripCdata(value: string): string {
   const t = value.trim()
   const m = t.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/)
   return m ? (m[1] ?? '') : value
+}
+
+/**
+ * 取出同名标签的**全部**块（多图文的 `<item>` 用；`xmlTagText` 只取第一个）。
+ * @param xml - the enclosing XML.
+ * @param tag - tag name to collect.
+ * @returns the inner slices in document order.
+ */
+function xmlTagBlocks(xml: string, tag: string): string[] {
+  const re = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>', 'gi')
+  return [...xml.matchAll(re)].map((m) => m[1] ?? '')
 }
 
 /**
@@ -93,7 +104,10 @@ export function xmlTagText(xml: string, tag: string): string {
 
 /** Extract the value of an attribute from the first matching tag. */
 function xmlAttr(xml: string, tag: string, attr: string): string {
-  const m = xml.match(new RegExp(`<\\s*${tag}[^>]*\\b${attr}=\\s*["']([^"']*)["']`))
+  // `\s*=\s*`：微信各版本写法不一致，实测同一批表情消息里既有 `md5="…"` 也有
+  // `len = "8636"`（等号两边带空格）。原先要求等号紧跟属性名，于是这些消息的
+  // 属性全部取不到 —— 表情的 cdnurl 就是这样丢的（8/15 条取不到 → 只能显示占位芯片）。
+  const m = xml.match(new RegExp(`<\\s*${tag}[^>]*\\b${attr}\\s*=\\s*["']([^"']*)["']`))
   return m ? (m[1] ?? '') : ''
 }
 
@@ -369,11 +383,31 @@ const QUOTE_APP_LABEL: Record<number, string> = {
  * @param xml - the quoted content.
  * @returns a readable summary (`[转账]`、`[链接] 标题`、`[图片]`, …) or the original text.
  */
-function summarizeQuotedXml(xml: string): string {
-  let text = (xml ?? '').trim()
+function stripQuotedGroupPrefix(raw: string): string {
+  const text = (raw ?? '').trim()
   // 群消息里被引用的原文带「wxid_xxx:\n」前缀（与 parseMessageContent 的群前缀同形）
   const pos = text.indexOf(':\n')
-  if (pos > 0 && pos <= 64 && !text.slice(0, pos).includes(' ') && !text.slice(0, pos).includes('<')) text = text.slice(pos + 2).trim()
+  if (pos > 0 && pos <= 64 && !text.slice(0, pos).includes(' ') && !text.slice(0, pos).includes('<')) return text.slice(pos + 2).trim()
+  return text
+}
+
+/**
+ * 被引用内容若是 appmsg，取出它的子类型（转账 2000 / 红包 2001·2003 / 链接 5…）。
+ *
+ * 界面要靠它给引用行配**类型图标**（官方参考图里引用一条转账显示的是转账图标 +
+ * 「微信转账」，而不是通用链接图标）。refermsg 自己的 `<type>` 只有 49（appmsg 族），
+ * 分不出转账与链接，子类型只在内层 appmsg 里。
+ * @param xml - the quoted content.
+ * @returns the appmsg `<type>`, or 0 when not an appmsg.
+ */
+function quotedAppType(xml: string): number {
+  const text = stripQuotedGroupPrefix(xml)
+  if (!text.includes('<appmsg')) return 0
+  return Number((/<appmsg[\s\S]*?<type>(\d+)<\/type>/.exec(text) ?? [])[1] ?? 0) || 0
+}
+
+function summarizeQuotedXml(xml: string): string {
+  const text = stripQuotedGroupPrefix(xml)
   if (!text.startsWith('<')) return unescapeXmlEntities(text)
   if (text.includes('<appmsg')) {
     const appType = Number((/<appmsg[\s\S]*?<type>(\d+)<\/type>/.exec(text) ?? [])[1] ?? 0)
@@ -460,22 +494,34 @@ export function classifyCallStatus(status: string, connected: boolean): string {
   return 'unknown'
 }
 
-/** 通话/语音视频的原始类型（微信 `<room_type>`：0 视频，1 语音）。 */
+/** 通话/语音视频的原始类型（微信 `<room_type>`：0 语音，1 视频）。 */
 export type VoipKind = 'audio' | 'video' | ''
 
 /**
- * 解析 `<room_type>`。
+ * 解析 `<room_type>`：**0 = 语音，1 = 视频**。
  *
- * WeChatDataAnalysis 的实测映射：`room_type=0 → video`、`room_type=1 → audio`。
- * 本项目早期版本因「单聊样本里 0×39 / 1×96」而不敢下结论，这里采用上游结论，
- * 并把原始值一并带出，界面在无法判定时不显示类型图标（有疑问的样本可回溯）。
+ * 这里与上游 WeChatDataAnalysis 的结论（0=video、1=audio）相反，判据是本机数据的时长分布：
+ *
+ * | room_type | 条数 | 最长通话 | ≥30 分钟 | ≥10 分钟 |
+ * | --- | --- | --- | --- | --- |
+ * | 0 | 61 | **1 小时 40 分 10 秒** | 1 | 2 |
+ * | 1 | 103 | 12 分 40 秒 | 0 | 1 |
+ *
+ * 100 分钟的视频通话不现实、语音通话很常见；且 25 个有通话的会话里 **12 个两种值都出现**，
+ * 说明它是「每次通话」的属性（不是每会话固定），符合媒体类型标志的语义。
+ * 另有用户核对：`<msg>=已在其它设备接听` 的那条（room_type=0）在微信里是语音通话。
+ *
+ * 本文件早前版本已在注释里指出「本机数据判不了」，`query/calls.ts` 也据此**刻意不给通话记录打标签**。
+ * 现在有了时长分布这组证据，消息气泡才敢按它画图标与「语音通话 / 视频通话」文案。
+ * 若将来拿到官方定义，以本表为准复核这里。
+ *
  * @param roomType - raw `<room_type>` value as text.
  * @returns audio / video / '' when unknown.
  */
 export function parseVoipKind(roomType: string): VoipKind {
   const v = (roomType ?? '').trim()
-  if (v === '0') return 'video'
-  if (v === '1') return 'audio'
+  if (v === '0') return 'audio'
+  if (v === '1') return 'video'
   return ''
 }
 
@@ -608,6 +654,54 @@ function channelsRich(
 }
 
 /**
+ * 公众号推送（`<mmreader>`）→ 大图封面 + 次条列表。
+ *
+ * 实测结构（`biz_message_0.db` 里 gh_ 会话，2026-09）：
+ * ```xml
+ * <mmreader><category type="20" count="2"><name>公众号名</name>
+ *   <topnew><cover>头条封面</cover><width>0</width><height>0</height></topnew>
+ *   <item>…头条自身（title/url 与 appmsg 完全重复）…</item>
+ *   <item>…次条：title/title_v2/url/cover/summary…</item>
+ * </category></mmreader>
+ * ```
+ * 判据：`items[0]` 与 appmsg 自身的 title/url 相同（实测 #9/#10/#11 三条一致），
+ * 所以按「标题或链接与头条相同」跳过它，**次条从第 2 个 item 起**。
+ * 界面按官方形态渲染：单篇 = 大图 + 标题在下方；多篇 = 大图（头条）+ 每篇次条一行（标题 + 小方图）。
+ *
+ * `width`/`height` 实测恒为 0，别拿它算比例；封面统一按 16:9 裁。
+ * @param link - the link descriptor to enrich (mutated in place).
+ * @param app - the appmsg XML.
+ * @param firstTitle - the appmsg-level title (the top article's).
+ * @param firstUrl - the appmsg-level url (the top article's).
+ * @param fallbackCover - `thumburl`, used when `<topnew><cover>` is absent.
+ */
+function applyMpNews(link: RichMedia, app: string, firstTitle: string, firstUrl: string, fallbackCover: string): void {
+  if (!app.includes('<mmreader')) return
+  const reader = xmlTagText(app, 'mmreader') || app
+  const topnew = xmlTagText(reader, 'topnew')
+  const topCover = unescapeXmlEntities(topnew ? xmlTagText(topnew, 'cover') : '')
+  const cover = topCover || unescapeXmlEntities(fallbackCover)
+  const secondary: MpArticle[] = []
+  for (const it of xmlTagBlocks(reader, 'item')) {
+    const title = unescapeXmlEntities(xmlTagText(it, 'title_v2') || xmlTagText(it, 'title'))
+    const url = unescapeXmlEntities(xmlTagText(it, 'url'))
+    if (!title || title === firstTitle || (url && url === firstUrl)) continue
+    const art: MpArticle = { title, url }
+    const c = unescapeXmlEntities(xmlTagText(it, 'cover'))
+    if (c) art.cover = c
+    const summary = unescapeXmlEntities(xmlTagText(it, 'summary'))
+    if (summary) art.summary = summary
+    secondary.push(art)
+  }
+  link.mpNews = true
+  // 公众号推送一律走大图卡：`linkStyle` 的既有启发式（摘要带话题标签 / PC 信息流）
+  // 对推送无效，实测这些推送的 des 是空的，会被判成小链接卡。
+  link.linkStyle = 'cover'
+  if (cover) link.thumb = cover
+  if (secondary.length) link.mpArticles = secondary
+}
+
+/**
  * Parse the appmsg block (type 49) into its rich subtype.
  *
  * 覆盖本机**实测存在**的全部子类型（真实外层 type 普查：
@@ -655,6 +749,7 @@ function parseAppmsg(xml: string): RichMedia | null {
       const [linkType, linkStyle] = classifyLinkShare(url, sourceUsername, des, appType)
       const link: RichMedia = { type: 'link', title, desc: des, url, linkType, linkStyle, ...base }
       if (sourceUsername) link.sourceUsername = sourceUsername
+      applyMpNews(link, app, title, url, thumb)
       return link
     }
     case 4: {
@@ -720,6 +815,8 @@ function parseAppmsg(xml: string): RichMedia | null {
       if (thumb) rich.thumb = thumb
       if (referName) rich.referName = referName
       if (referType) rich.referType = referType
+      const referAppType = quotedAppType(quoted)
+      if (referAppType) rich.referAppType = referAppType
       if (referTime) rich.referTime = referTime
       if (referSvrId) rich.referSvrId = referSvrId
       const referUser = refer ? (xmlTagText(refer, 'fromusr') || xmlTagText(refer, 'chatusr')).trim() : ''
@@ -729,12 +826,26 @@ function parseAppmsg(xml: string): RichMedia | null {
     case 33: {
       // 小程序 / 应用卡（本机 1,690 条，标题是应用卡片文案，url 多为
       // `mp.weixin.qq.com/mp/waerrpage`）。来源与图标在 `<weappinfo>` 里。
+      // 页面封面（列表截图）在 cdnthumburl，比 weappiconurl（应用图标）更适合做卡片主图。
       const weapp = xmlTagText(app, 'weappinfo') || xmlTagText(app, 'wxaappinfo')
       const weappUser = weapp ? xmlTagText(weapp, 'username') : ''
       const weappNick = weapp ? (xmlTagText(weapp, 'nickname') || xmlTagText(weapp, 'appname')) : ''
-      const icon = (weapp ? xmlTagOrAttr(weapp, 'weappiconurl') : '') || xmlTagOrAttr(app, 'weappiconurl')
-      const mini: RichMedia = { type: 'miniapp', title: title || des, desc: des, url, ...base }
-      if (!mini.thumb && icon) mini.thumb = unescapeXmlEntities(icon)
+      const appIcon = (weapp ? xmlTagOrAttr(weapp, 'weappiconurl') : '') || xmlTagOrAttr(app, 'weappiconurl')
+      // 页面预览图优先（列表/详情截图），应用图标仅作顶栏小圆标。
+      const pageCover = (weapp
+        ? (xmlTagOrAttr(weapp, 'cdnthumburl') || xmlTagOrAttr(weapp, 'thumburl') || xmlTagOrAttr(weapp, 'coverurl'))
+        : '')
+        || xmlTagOrAttr(app, 'cdnthumburl') || xmlTagOrAttr(app, 'coverurl') || ''
+      // title/des 可能夹带 XML（实测过属性串当摘要）；小程序卡只展示可读文本。
+      const miniTitle = cleanRichText(title) || cleanRichText(des) || '[小程序]'
+      const miniDesc = cleanRichText(des)
+      const mini: RichMedia = { type: 'miniapp', title: miniTitle, url, ...base }
+      // desc：与标题相同或仍是 XML 噪声时留空，避免「标题下面再甩一屏标签」。
+      if (miniDesc && miniDesc !== miniTitle && !/[<>]/.test(miniDesc)) mini.desc = miniDesc
+      const cover = unescapeXmlEntities(pageCover || thumb || '')
+      if (cover) mini.thumb = cover
+      const icon = unescapeXmlEntities(appIcon || '')
+      if (icon) mini.avatar = icon
       const from = source || weappNick
       if (from) mini.source = from
       const fromUser = weappUser || sourceUsername
@@ -774,9 +885,15 @@ function parseAppmsg(xml: string): RichMedia | null {
     case 24:
       // 笔记 / 收藏：title 常为空，内容在 des（例如 "[视频]"）。
       return { type: 'note', title: title || des, desc: des && title ? des : '', ...base }
-    case 8:
+    case 8: {
       // 表情（以 appmsg 形式发送的自定义表情）：md5 在 <emojiinfo><md5>。
-      return { type: 'sticker', title: title || xmlTagText(app, 'md5'), md5: xmlTagText(app, 'md5') || xmlTagText(app, 'emoticonmd5') || '', ...base }
+      const sticker: RichMedia = { type: 'sticker', title: title || xmlTagText(app, 'md5'), md5: xmlTagText(app, 'md5') || xmlTagText(app, 'emoticonmd5') || '', ...base }
+      // 与 type-47 同理：图靠 CDN 取（本地缓存是加密的），字段可能在 <emojiinfo> 里。
+      const info = xmlTagText(app, 'emojiinfo')
+      const emojiUrl = unescapeXmlEntities((info ? xmlTagOrAttr(info, 'cdnurl') : '') || xmlTagOrAttr(app, 'cdnurl'))
+      if (emojiUrl) sticker.emojiUrl = emojiUrl
+      return sticker
+    }
     case 2:
       // 商品 / 购物卡片：title 是商品名，des 是来源（如「拼多多」）。
       return { type: 'product', title, desc: des, url, ...base }
@@ -1262,8 +1379,23 @@ export function parseMessageContent(
       if (md5) rich.md5 = md5
       return { text: '', rich }
     }
-    case 47:
-      return { text: '', rich: { type: 'emoji', title: xmlAttr(body, 'emoji', 'md5') || xmlTagText(body, 'emoji'), md5: xmlAttr(body, 'emoji', 'md5') } }
+    case 47: {
+      // 自定义表情（表情包/内置表情）。md5 决定是哪张图，cdnurl 决定去哪取。
+      //
+      // 本机 1880 条 type-47 普查（output/probe-sticker-coverage.mjs）：
+      //   md5 100%、cdnurl **99.3%**(1867)、encrypturl 98.8%、aeskey 99.2%、thumburl 24%。
+      // 微信自己的表情缓存（`business/emoticon/Persist|Thumb/<xx>/<md5>`、
+      // `cache/<月>/Emoticon/<xx>/<md5>`）是**加密**文件（整文件 16 字节对齐、
+      // 单字节 XOR / 配置里的 image_aes_key / 消息里的 aeskey 都解不开，见
+      // output/probe-sticker-crypt*.mjs），所以取图主要靠 cdnurl：
+      // 它是**未加密**的那一份（去掉 XML 的 `&amp;` 转义后实测 200 + 明文 GIF/PNG/JPEG，
+      // 且体积与消息里的 len 完全一致）。下载与缓存见 fetchEmoticonRemote。
+      const md5 = xmlAttr(body, 'emoji', 'md5')
+      const rich: RichMedia = { type: 'emoji', title: md5 || xmlTagText(body, 'emoji'), md5 }
+      const emojiUrl = unescapeXmlEntities(xmlAttr(body, 'emoji', 'cdnurl') || xmlAttr(body, 'emoji', 'thumburl'))
+      if (emojiUrl) rich.emojiUrl = emojiUrl
+      return { text: '', rich }
+    }
     case 48:
       return { text: '', rich: parseLocation(body) }
     case 49: {
@@ -1304,10 +1436,10 @@ export function parseMessageContent(
       // 魔数解压），实测本机 135 条 type-50 全部可解压。字段实测：
       //   <msg>       人类可读结局：通话时长 00:21 / 对方已取消 / 已拒绝 / 未应答 /
       //               已在其它设备接听 / 通话中断 01:08 …（唯一有信息量的字段）
-      //   <room_type> 0（×39）/ 1（×96）。上游 WeChatDataAnalysis 的实测映射是
-      //               0=视频、1=语音；这里沿用并把原值带出，未知时不显示类型图标。
-      //   <duration>  **恒为 0**（135/135），时长只能从 <msg> 文本里解析。
-      //   <msg_type>  100（×132）/ 101（×3）。
+      //   <room_type> 0（×61）/ 1（×103），**0=语音、1=视频** —— 判据见 parseVoipKind 的注释
+      //               （时长分布：100 分钟那条是 0；上游写的 0=视频与数据不符）。
+      //   <duration>  **恒为 0**（164/164），时长只能从 <msg> 文本里解析。
+      //   <msg_type>  100 / 101（101 只出现在 inviteid=0 的「已在其它设备接听」上）。
       const scope = /<VoIPBubbleMsg[\s\S]*?<\/VoIPBubbleMsg>/i.exec(body)?.[0] ?? body
       const status = xmlTagText(scope, 'msg').trim()
       const durationSec = parseCallDuration(status)

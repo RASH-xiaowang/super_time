@@ -9,12 +9,33 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
-  copyFileSync, cpSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync,
+  copyFileSync, cpSync, createWriteStream, existsSync, linkSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WhisperModelInfo } from '../types.ts'
+import { resolveWechatDataRoot } from '../dirs.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
+
+/**
+ * 把「落在 app.asar 里」的路径改写到 `app.asar.unpacked`。
+ *
+ * 打包后本 bundle 位于 `resources/app.asar/src/backend/wechat-data/lib/index.js`，
+ * 从 `import.meta.url` 上溯到的「项目根」是 **asar 归档内部**（只读，不是目录）。
+ * Electron 只会把**读**透明地重定向到 `app.asar.unpacked`，**写**不会 ——
+ * 于是下载/安装 whisper 模型与引擎时直接 `ENOTDIR`（安装版实测）。
+ * 开发态路径里没有 `app.asar`，函数原样返回，不影响本地运行。
+ * @param p - 绝对路径。
+ * @returns 打包态下指向 app.asar.unpacked 的等价路径。
+ */
+function unpackedAware(p: string): string {
+  const marker = 'app.asar'
+  const i = p.indexOf(marker)
+  if (i < 0) return p
+  // 归档根（结尾无分隔符）与归档内子路径两种形态都要覆盖
+  const rest = p.slice(i + marker.length).replace(/^[\\/]+/, '')
+  return join(p.slice(0, i), 'app.asar.unpacked', rest)
+}
 
 /** Whisper model catalog (id/name/size labels). */
 export const WHISPER_MODELS: ReadonlyArray<Pick<WhisperModelInfo, 'id' | 'name' | 'sizeLabel'>> = [
@@ -285,11 +306,98 @@ export function whisperModelsStatus(modelsDir: string): WhisperModelInfo[] {
   })
 }
 
-/** Default models dir under the project `wechat/` directory. */
-export function defaultWhisperModelsDir(_decryptedDir?: string): string {
-  // Runtime 打包在 lib/index.js：往上 4 级到项目根，再进 wechat/whisper。
+/** 随包分发的 whisper 资产目录（安装目录，只读）：引擎 `bin/` 与预置 `ggml-*.bin`。 */
+export function bundledWhisperAssetsDir(): string {
+  // Runtime 打包在 lib/index.js：往上 4 级到项目/包根，再进 wechat/whisper。
   const here = fileURLToPath(new URL('.', import.meta.url))
-  return resolve(here, '..', '..', '..', '..', 'wechat', 'whisper')
+  // 打包后这里落在 app.asar 内 → 必须改写到 app.asar.unpacked 才读得到（见 unpackedAware）
+  return unpackedAware(resolve(here, '..', '..', '..', '..', 'wechat', 'whisper'))
+}
+
+/** 已做过资产镜像的目录（同进程内只做一次）。 */
+const seededWhisperDirs = new Set<string>()
+
+/** 目标不存在或大小不同才搬；大小一致即视为已完成，可中断后续跑。 */
+function mirrorWhisperItem(src: string, dst: string): void {
+  let size = -1
+  try { size = statSync(src).size } catch { return }
+  try { if (statSync(dst).size === size) return } catch { /* 目标不存在，继续 */ }
+  try { linkSync(src, dst); return } catch { /* 跨卷等情况退回复制 */ }
+  try { copyFileSync(src, dst) } catch { /* 单个文件失败不影响其它 */ }
+}
+
+/**
+ * 把随包分发的引擎与模型镜像到可写目录。
+ *
+ * 为什么不直接用安装目录：安装目录是只读的（装到 Program Files 时更无写权限），
+ * 而「下载其它模型」「重装引擎」都要往模型目录里写。镜像一次之后安装目录只被读取。
+ * 同卷走硬链接（零拷贝），跨卷才真复制。
+ * @param modelsDir - 可写的模型目录。
+ */
+function seedBundledWhisper(modelsDir: string): void {
+  const bundled = bundledWhisperAssetsDir()
+  if (!bundled || bundled === modelsDir) return
+  let names: string[] = []
+  try { names = readdirSync(bundled) } catch { return }
+  const items = names.filter(n => n === 'bin' || n.toLowerCase().endsWith('.bin'))
+  if (items.length === 0) return
+  try { mkdirSync(modelsDir, { recursive: true }) } catch { return }
+  for (const name of items) {
+    const src = join(bundled, name)
+    const dst = join(modelsDir, name)
+    let isDir = false
+    try { isDir = statSync(src).isDirectory() } catch { continue }
+    if (!isDir) { mirrorWhisperItem(src, dst); continue }
+    try { mkdirSync(dst, { recursive: true }) } catch { continue }
+    let inner: string[] = []
+    try { inner = readdirSync(src) } catch { continue }
+    for (const child of inner) mirrorWhisperItem(join(src, child), join(dst, child))
+  }
+}
+
+/** 目录里至少有一个可用件（引擎或模型）时算可用。 */
+function whisperDirUsable(dir: string): boolean {
+  if (existsSync(join(dir, 'bin', 'whisper-cli.exe'))) return true
+  try { return readdirSync(dir).some(n => n.toLowerCase().endsWith('.bin')) } catch { return false }
+}
+
+/**
+ * 默认模型/引擎目录：**数据根下的可写目录**（`<数据根>/whisper`），首次使用时把随包
+ * 分发的引擎与模型镜像进来。
+ *
+ * 早先这里指向项目/安装目录的 `wechat/whisper`，于是「安装目录只读」形同虚设 ——
+ * 下载一个新模型就会往安装位置写文件（装到 Program Files 时直接失败）。
+ * 镜像失败（userData 不可写等）时退回随包资产目录，至少让预置的 tiny 模型仍可用。
+ * @param decryptedDir - 解密库目录（其父目录即数据根）。
+ */
+export function defaultWhisperModelsDir(decryptedDir?: string): string {
+  const bundled = bundledWhisperAssetsDir()
+  const root = decryptedDir ? dirname(decryptedDir) : resolveWechatDataRoot()
+  if (!root) return bundled
+  const dir = join(root, 'whisper')
+  if (!seededWhisperDirs.has(dir)) {
+    seededWhisperDirs.add(dir)
+    seedBundledWhisper(dir)
+  }
+  return whisperDirUsable(dir) ? dir : bundled
+}
+
+/**
+ * 从配置解析出**可写**的模型目录。
+ *
+ * 配置里若钉的是随包分发的只读资产目录（或任何仍落在 `app.asar` 里的路径），
+ * 一律当作「未配置」重新解析 —— 否则装上带此改动的新版本后，旧配置会继续把
+ * 模型往安装目录里写（装到 Program Files 时失败，且把本机路径留在安装目录）。
+ * @param configured - config.json 里的 whisper_models_dir。
+ * @param decryptedDir - 解密库目录（其父目录即数据根）。
+ */
+export function resolveWhisperModelsDir(configured: string | undefined, decryptedDir?: string): string {
+  const pinned = typeof configured === 'string' ? configured.trim() : ''
+  if (pinned) {
+    const bundled = bundledWhisperAssetsDir()
+    if (!pinned.includes('app.asar') && resolve(pinned) !== resolve(bundled)) return pinned
+  }
+  return defaultWhisperModelsDir(decryptedDir)
 }
 
 /**

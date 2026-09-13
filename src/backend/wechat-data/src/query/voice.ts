@@ -4,7 +4,7 @@
  * (pure-Rust SILK v3 → WAV, bundled under resources/win32/x64).
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -134,5 +134,52 @@ export function silkToWav(silk: Buffer, wavPath: string): { ok: boolean; error?:
     return { ok: false, error: (res.stderr || `解码器退出码 ${String(res.status)}`).trim().slice(0, 200) }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
+  }
+}
+
+/** 解码器输出固定为 16 kHz 单声道 16bit；WAV 头 44 字节。 */
+const WAV_BYTES_PER_SEC = 16000 * 2
+const WAV_HEADER_BYTES = 44
+
+/**
+ * 一条语音消息 → 可就地播放的 wav data URL。
+ *
+ * 复用**转写链路的缓存目录** `<decoded>/voices/<svr_id>.wav`（`voice-transcribe.ts` 也写这里），
+ * 两边共用同一份产物：命中缓存 0ms；未命中才调打包的 wx_silk 解码（本机实测 **13ms**，
+ * 16kHz 单声道下发 3.5 秒 ≈ 145KB / 51 秒 ≈ 2.1MB 的 base64，语音上限 60 秒，量级可接受）。
+ *
+ * 为什么用 data URL 而不是 `file://`：渲染进程 CSP 是 `media-src 'self' data: blob:`，
+ * **不含 `file:`**，站内 `<audio src="file://…">` 会被直接拦掉。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param decodedDir - decoded cache root (wav 落在其 voices/ 下).
+ * @param username - conversation username.
+ * @param localId - message local id.
+ * @returns url (base64 wav) + durationSec, or an error description.
+ */
+export function resolveVoiceDataUrl(
+  decryptedDir: string,
+  decodedDir: string,
+  username: string,
+  localId: number,
+): { url?: string; durationSec?: number; error?: string } {
+  const svrId = svrIdByChatLocal(decryptedDir, username, localId)
+  if (!svrId) return { error: '未找到语音消息' }
+  const wavPath = join(decodedDir, 'voices', svrId + '.wav')
+  if (!existsSync(wavPath)) {
+    const data = voiceDataBySvr(decryptedDir, svrId)
+    if (!data) return { error: '未找到语音数据' }
+    const decoded = silkToWav(data, wavPath)
+    if (!decoded.ok) return { error: decoded.error ?? 'silk 解码失败' }
+  }
+  try {
+    const bytes = readFileSync(wavPath)
+    if (bytes.length <= WAV_HEADER_BYTES) return { error: '语音数据为空' }
+    return {
+      url: 'data:audio/wav;base64,' + bytes.toString('base64'),
+      durationSec: Math.round((bytes.length - WAV_HEADER_BYTES) / WAV_BYTES_PER_SEC),
+    }
+  } catch (e) {
+    return { error: (e as Error).message }
   }
 }

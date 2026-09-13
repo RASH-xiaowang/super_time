@@ -148,15 +148,35 @@ export interface MessageRich {
   declared?: number
   /** 引用消息里**被引用方**的昵称（`<refermsg><displayname>`）。 */
   referName?: string
+  /** 公众号多图文推送的**次条**（第 2 篇起；头条在 title/url/thumb 上）。 */
+  mpArticles?: MpArticle[]
+  /** 是否公众号推送（原始 XML 含 `<mmreader>`）：界面据此用大图卡而非普通链接卡。 */
+  mpNews?: boolean
+  /** 自定义表情的 CDN 地址（`<emoji cdnurl>`）：本地表情缓存是加密的，取图靠它兜底。 */
+  emojiUrl?: string
   /** 被引用消息的 local_type（用于媒体占位，如 3=图片）。 */
   referType?: number
+  /** 被引用内容是 appmsg 时的**子类型**（2000=转账、2001/2003=红包、5=链接…）；非 appmsg 不写。 */
+  referAppType?: number
   /** 被引用消息的时间（秒）。 */
   referTime?: number
   /** 被引用消息的 server_id（可据此精确取回原消息）。 */
   referSvrId?: string
   /** 被引用消息的发送者 wxid（`<refermsg><fromusr>`）。 */
   referUsername?: string
-  [key: string]: string | number | boolean | ChatlogRecord[] | SolitaireMember[] | undefined
+  [key: string]: string | number | boolean | ChatlogRecord[] | SolitaireMember[] | MpArticle[] | undefined
+}
+
+/** 公众号多图文推送里的一篇（`<mmreader><category><item>`）。 */
+export interface MpArticle {
+  /** 文章标题（`<title_v2>` 优先，回退 `<title>`）。 */
+  title: string
+  /** 文章链接（`mp.weixin.qq.com/s?...&idx=N`，N 是这篇在推送里的序号）。 */
+  url: string
+  /** 封面（`<cover>`，形如 `https://mmbiz.qpic.cn/sz_mmbiz_jpg/…/640`）。 */
+  cover?: string
+  /** 摘要（`<summary>`）。 */
+  summary?: string
 }
 
 /** One row's canonical render kind — the UI switches on this and nothing else. */
@@ -704,6 +724,14 @@ export interface EmoticonItem {
   md5: string
   item_type?: number
   caption?: string
+  /**
+   * 取图的 CDN 地址（`kNonStoreEmoticonTable.cdn_url`，回退 `thumb_url`/`tp_url`）。
+   *
+   * 面板要显示表情真图：本地表情缓存（`business/emoticon/*`、`cache/<月>/Emoticon/*`）
+   * 是**加密**文件，项目里没有对应解码器（见 `media-image.ts` 的 `fetchEmoticonRemote`），
+   * 所以只能按这个地址下载一次再落进 decoded 缓存。
+   */
+  cdnUrl?: string
 }
 
 /** Emoticons snapshot: custom + static emoticons + store packages. */
@@ -958,11 +986,24 @@ export interface VoiceInfoResult {
   error?: string
 }
 
-/** Video message lookup result (cover thumbnail + degradation). */
+/** Video message lookup result (cover thumbnail + on-disk path + degradation). */
 export interface VideoInfoResult {
   available: boolean
   md5?: string
   coverUrl?: string
+  /**
+   * 视频实体在本机的绝对路径（`<微信数据根>/msg/video/<YYYY-MM>/<md5>.mp4`）。
+   * 只有本机播放/下载过才有；有它时界面可以把文件交给系统播放器打开。
+   */
+  videoPath?: string
+  error?: string
+}
+
+/** 语音消息的可播放音频（16kHz 单声道 wav 的 data URL）。 */
+export interface VoiceDataUrlResult {
+  url?: string
+  /** 由 wav 头算出的时长（秒），供界面显示与校验。 */
+  durationSec?: number
   error?: string
 }
 
@@ -1011,6 +1052,17 @@ export interface AskResult {
   plan?: AskPlan
   /** 回答正文里真正引用到的来源序号（1 基，对应 citations 的下标 +1）。 */
   citedIndexes?: number[]
+  /**
+   * 数据来源说明（条数/会话数/时间跨度 + 回答引用了哪几条），**由检索结果算出**，
+   * 不是模型写的 —— 用户可据此逐条对照原文。
+   */
+  basis?: string
+  /** 本轮没有检索到任何原文：未调用模型，直接说明无法回答。 */
+  insufficient?: boolean
+  /** 模型给出的内容无法对应到任何一条原文：已不予采用，改为明确告知无证据。 */
+  withheld?: boolean
+  /** 本轮检索的追踪 id：反馈时回传它，才能把「哪条引用有用」归因到检索特征。 */
+  retrievalId?: string
   /** 检索统计（命中候选数 / 保留数 / 范围），用于解释「为什么只有这些来源」。 */
   retrieval?: {
     candidates: number
@@ -1025,6 +1077,16 @@ export interface AskResult {
     chunks?: number
     /** 窗口展开实际取回的消息条数。 */
     windowMessages?: number
+    /** 多阶段流水线：分类出的查询意图。 */
+    intent?: string
+    /** 多阶段流水线：稠密通道是否真正生效（false 说明已降级为纯稀疏）。 */
+    denseActive?: boolean
+    /** 多阶段流水线：各召回通道命中数。 */
+    channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
+    /** 多阶段流水线：端到端检索耗时（毫秒）。 */
+    elapsedMs?: number
+    /** 多阶段流水线：召回 → 融合 → 重排 → 压缩 各阶段数量，用于解释「为什么只剩这些」。 */
+    funnel?: { recalled: number; fused: number; ranked: number }
   }
 }
 
@@ -1128,6 +1190,74 @@ export interface TaskMutationResult {
   id?: number
   added?: number
   error?: string
+}
+
+/** One knowledge note: manual entry or distilled from an AI answer. */
+export interface KnowledgeNote {
+  id: number
+  title: string
+  /** Markdown-ish body; `[[target]]` / `[[target|display]]` are wiki links. */
+  body: string
+  tags: string[]
+  /** 'manual' = user-authored; 'ask' = distilled from a WeChat Q&A answer. */
+  sourceKind: 'manual' | 'ask'
+  /** Chat the note was distilled from (drives note↔person edges in the fused view). */
+  sourceUsername?: string
+  /** Question that produced the note (details panel). */
+  sourceQuestion?: string
+  /** Unique `[[target]]` values found in the body, unresolved ones included. */
+  links: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+/** Knowledge note list snapshot. */
+export interface NotesSnapshot {
+  items: KnowledgeNote[]
+  total: number
+}
+
+/** Note mutation result (save/delete). */
+export interface NoteMutationResult {
+  ok: boolean
+  id?: number
+  error?: string
+}
+
+/**
+ * Knowledge graph: note nodes plus `[[target]]` edges. A target matching no
+ * note becomes a stub node (rendered dashed) so future notes can fill it in.
+ */
+export interface KnowledgeSnapshot {
+  notes: Array<{
+    id: number
+    title: string
+    excerpt: string
+    tags: string[]
+    sourceKind: 'manual' | 'ask'
+    sourceUsername?: string
+    sourceQuestion?: string
+    createdAt: number
+    updatedAt: number
+    /** Distinct outgoing wiki links (stubs included). */
+    outLinks: number
+    /** Incoming wiki links. */
+    backLinks: number
+  }>
+  /** Unresolved `[[target]]` values. */
+  stubs: Array<{ key: string; label: string; refCount: number; referencedBy: number[] }>
+  /** `note:<id>` → `note:<id>` (wiki) or `note:<id>` → `kb:<key>` (stub). */
+  edges: Array<{ source: string; target: string; weight: number; kind: 'wiki' | 'stub' }>
+  /** Source chat usernames → display names (fused-view labels). */
+  sessionNames: Record<string, string>
+  summary: {
+    noteCount: number
+    linkCount: number
+    stubCount: number
+    orphanCount: number
+    askCount: number
+    manualCount: number
+  }
 }
 
 /** One native WeChat reminder (handoff_remind_v0) row. */

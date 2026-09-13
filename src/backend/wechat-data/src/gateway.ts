@@ -5,9 +5,9 @@
  */
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts'
 import { querySessions } from './query/sessions.ts'
 import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
@@ -48,7 +48,7 @@ import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
 import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
-import { decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl } from './query/media-image.ts'
+import { decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote } from './query/media-image.ts'
 import { resolveSnsImageDataUrl } from './query/sns-image.ts'
 import { resolveArticleCoverDataUrl } from './query/article-cover.ts'
 import { resolveMessageFileDataUrl } from './query/media-file.ts'
@@ -62,11 +62,18 @@ import { fetchDbKey, fetchImageKey, normalizeAccountDir } from './keys/service.t
 import { scanV2Templates, trustedXorForVerifiedAesKey } from './keys/image-key-resolver.ts'
 import { decryptAllDbs } from './query/decrypt-all.ts'
 import { decryptAllImageDats } from './query/decrypt-images.ts'
-import { WHISPER_DOWNLOAD_FILES, defaultWhisperModelsDir, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
+import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
 import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './query/voice-transcribe.ts'
-import { svrIdByChatLocal } from './query/voice.ts'
+import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
 import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessages } from './query/export.ts'
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from './query/ask.ts'
+import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
+import { runRetrievalPipeline } from './query/retrieval/pipeline.ts'
+import { buildVectorIndex, vectorIndexStatus, vectorIndexSummary, type EmbedFn } from './query/retrieval/embedding.ts'
+import { adaptWeights, attributeFeatures, feedbackStats, listFeedback, loadAdaptedWeights, recordFeedback, saveAdaptedWeights } from './query/retrieval/feedback.ts'
+import { runSyntheticEval, syntheticIntentAccuracy } from './query/retrieval/eval-dataset.ts'
+import { formatEvalReport } from './query/retrieval/eval.ts'
+import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'
 import { createBackup as createBackupEntry, deleteBackup as deleteBackupEntry, listBackups as listBackupEntries, previewBackup as previewBackupEntry } from './query/backup.ts'
 import { collectDayMessages, collectPeriodMessages } from './query/daily-summary.ts'
 import { queryLedger } from './query/ledger.ts'
@@ -84,11 +91,14 @@ import { importHandoffTasks, listHandoffReminds } from './query/handoff.ts'
 import { deleteTask, insertTask, listTasks as listWechatTasks, setTaskStatus } from './query/wechat-tasks.ts'
 import { createEncryptedBackup, restoreEncryptedBackup } from './query/backup.ts'
 import { searchUnified } from './query/unified-search.ts'
-import { resolveSnsVideoCoverDataUrl, resolveSnsVideoDataUrl } from './query/sns-video.ts'
+import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrl, resolveSnsVideoDataUrl } from './query/sns-video.ts'
 import { queryAnnualReport } from './query/annual-report.ts'
+import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
 import { invalidateWechatMeta } from './query/meta.ts'
+import { contactMeta } from './query/meta.ts'
+import { buildKnowledgeGraph, deleteNote as deleteNoteRow, listNotes, saveNote as saveNoteRow } from './query/notes.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -111,6 +121,23 @@ interface ResolvedDirs {
  * @param decrypted - decrypted data root (locates config.json).
  * @returns the account root, or '' when config has no usable db_dir.
  */
+/**
+ * 回答的**数据来源说明**：条数 / 会话数 / 时间跨度。
+ *
+ * 由检索结果**算出来**，不是让模型写的 —— 模型写的「来源」可能被编造，
+ * 而这行数字直接来自本次引用到的原文，用户可逐条对照。
+ * @param citations - 本次检索到的原文（引用锚点）。
+ * @returns 一行来源说明；没有原文时返回空串。
+ */
+function askBasisLine(citations: ReadonlyArray<{ time?: string; username?: string }>): string {
+  if (citations.length === 0) return ''
+  const sessions = new Set(citations.map(c => c.username ?? '')).size
+  const days = citations.map(c => (c.time ?? '').slice(0, 10)).filter(Boolean).sort()
+  const span = days.length > 0 ? ` · ${days[0]} ~ ${days[days.length - 1]}` : ''
+  return `依据本机记录：${citations.length} 条原文 · ${sessions} 个会话${span}`
+}
+
+/** 微信原始数据根目录（`<账号根>`，用于定位 msg/cache 下的媒体）。 */
 function rawWechatBase(decrypted: string): string {
   const pinned = process.env.DSH_WECHAT_BASE_DIR
   if (pinned && pinned.trim().length > 0) return pinned.trim()
@@ -142,8 +169,30 @@ export class WechatDataGateway extends TypertRemoteService {
 
   private readonly _ctx: Context
   private readonly _dirs: ResolvedDirs
-  private readonly _selfUsername: string
+  /**
+   * 登录账号 wxid 的**带失效**缓存。
+   *
+   * 不能在构造函数里算一次就固定：`数据配置` 里切换微信账号只改 `db_dir`
+   * （解密目录不变），本进程不会重启。缓存住旧 wxid 会让 `isSender` 拿
+   * **上一个账号**的 wxid 去比对，于是新账号里每条消息的「我 / 对方」全部反转
+   * —— 属于最严重的归属错误。这里按 (解密目录, config.db_dir) 记忆：
+   * 账号一换键就变，自动重算。
+   */
+  private _selfUsername = ''
+  private _selfUsernameKey = ''
   private _schedBusy = false
+  /**
+   * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
+   * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
+   * 有界（≤20 轮），不落盘 —— 纯进程内、只在反馈那一刻需要。
+   */
+  private readonly _askTrace = new Map<string, {
+    features: Map<string, RerankWeights>
+    citations: string[]
+    question: string
+    answer: string
+    intent: IntentKind
+  }>()
   /** Live decrypt progress (polled by the settings panel). */
   private readonly decryptState: DecryptStatus = {
     op: null, active: false, done: 0, total: 0, failed: 0, skipped: 0, message: '',
@@ -153,11 +202,32 @@ export class WechatDataGateway extends TypertRemoteService {
   /** Active voice batch transcription (polled by the settings panel). */
   private whisperTranscribing: WhisperTranscribing = { active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
 
+  /**
+   * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
+   *
+   * 按 (解密目录, config.db_dir) 记忆：只要账号没换就直接命中缓存，
+   * 换了账号（`data 配置` 里选另一个账号的 db_storage）或换了数据目录则重算。
+   * 每次取用时只多读一次 `getConfig`（带文件签名缓存的 JSON 读），代价可忽略。
+   * @returns 登录账号 wxid；解析不到时为空串。
+   */
+  private selfUsername(): string {
+    let dbDir = ''
+    try {
+      const cfg = getConfig(this._dirs.decrypted)
+      dbDir = typeof cfg['db_dir'] === 'string' ? cfg['db_dir'] : ''
+    } catch { /* 配置不可读时退回按目录记忆 */ }
+    const key = this._dirs.decrypted + '\u0000' + dbDir
+    if (key !== this._selfUsernameKey) {
+      this._selfUsername = resolveSelfUsername(this._dirs.decrypted)
+      this._selfUsernameKey = key
+    }
+    return this._selfUsername
+  }
+
   constructor(ctx: Context) {
     super(ctx, 'wechatData')
     this._ctx = ctx
     this._dirs = resolveDirs()
-    this._selfUsername = resolveSelfUsername(this._dirs.decrypted)
     // Real-time sync: watch WeChat's raw message shards and re-decrypt the
     // snapshot so the chat panel sees new messages (st_control monitor style).
     const decrypted = this._dirs.decrypted
@@ -198,10 +268,10 @@ export class WechatDataGateway extends TypertRemoteService {
    * @param feature - 功能名，出现在提示文案里。
    * @returns 提示文案，或 null。
    */
-  private privacyBlocked(feature: string): string | null {
+  private privacyBlocked(feature: string, detail = '把数据发送给模型'): string | null {
     try {
       return readPrivacySettings(this._dirs.decrypted).blockOutbound
-        ? `隐私设置已开启「出站拦截」，已阻止「${feature}」把数据发送给模型`
+        ? `隐私设置已开启「出站拦截」，已阻止「${feature}」${detail}`
         : null
     } catch {
       return null
@@ -242,6 +312,24 @@ export class WechatDataGateway extends TypertRemoteService {
    * @param options - Filter options: keyword fuzzy search, limit max rows.
    * @returns SessionsSnapshot: sessions list (items + total).
    */
+  /**
+   * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
+   *
+   * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
+   * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
+   * @param model - 向量模型名（空则回退 chat model）。
+   * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
+   */
+  private makeEmbedFn(model: string): EmbedFn | undefined {
+    const llmAny = this._ctx.llm as unknown as { embed?: (texts: string[], opts?: { model?: string }) => Promise<number[][]> }
+    if (typeof llmAny?.embed !== 'function') return undefined
+    return async (texts: string[]): Promise<number[][]> => {
+      const gate = this.privacyGate('ask_embed', { sessions: 0, messages: texts.length }, texts)
+      if (!gate.ok) throw new Error(gate.error)
+      return llmAny.embed!(gate.texts, model ? { model } : undefined)
+    }
+  }
+
   @Remote('getSessions')
   getSessions(options?: { keyword?: string; limit?: number; offset?: number }): SessionsSnapshot {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
@@ -263,7 +351,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getOverviewInsights')
   getOverviewInsights(): OverviewInsights {
-    return queryOverviewInsights(this._dirs.decrypted, this._selfUsername)
+    return queryOverviewInsights(this._dirs.decrypted, this.selfUsername())
   }
 
   @Remote('getOverview')
@@ -365,7 +453,67 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getGraph')
   getGraph(): GraphSnapshot {
-    return queryGraph(this._dirs.decrypted, this._selfUsername)
+    return queryGraph(this._dirs.decrypted, this.selfUsername())
+  }
+
+  /**
+   * Knowledge notes list.
+   * @param options - Optional case-insensitive search query and row cap.
+   * @returns NotesSnapshot: notes (newest first) plus the unpaged total.
+   */
+  @Remote('getNotes')
+  getNotes(options?: { query?: string; limit?: number }): NotesSnapshot {
+    return listNotes(this._dirs.decrypted, options)
+  }
+
+  /**
+   * Create (no `id`) or update (`id` given) one knowledge note.
+   *
+   * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
+   * is the join point with the social graph: the panel draws an edge from the
+   * note to its source chat instead of leaving knowledge nodes floating.
+   * @param options - Note fields; title is required and unique (case-insensitive).
+   * @returns NoteMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
+   */
+  @Remote('saveNote')
+  saveNote(options: {
+    id?: number
+    title: string
+    body?: string
+    tags?: string[] | string
+    sourceKind?: 'manual' | 'ask'
+    sourceUsername?: string
+    sourceQuestion?: string
+  }): NoteMutationResult {
+    const r = saveNoteRow(this._dirs.decrypted, options)
+    this.op('edit', 'save_note', r.ok ? 'ok' : 'fail', options.title, r.error ?? `id=${r.id ?? ''}`)
+    return r
+  }
+
+  /**
+   * Delete one knowledge note.
+   * @param options - Note id.
+   * @returns NoteMutationResult.
+   */
+  @Remote('deleteNote')
+  deleteNote(options: { id: number }): NoteMutationResult {
+    const r = deleteNoteRow(this._dirs.decrypted, options.id)
+    this.op('delete', 'delete_note', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? '')
+    return r
+  }
+
+  /**
+   * Knowledge graph: note nodes, `[[…]]` edges and unresolved stubs.
+   *
+   * 与 `getGraph` 分开而不是合并：社交图谱的节点口径（联系人/群/我）和知识图谱
+   * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆；融合视图交给前端把
+   * 两份快照按 `sourceUsername` 拼起来（笔记 → 来源会话）。
+   * @returns KnowledgeSnapshot.
+   */
+  @Remote('getKnowledgeGraph')
+  getKnowledgeGraph(): KnowledgeSnapshot {
+    const names = contactMeta(this._dirs.decrypted).names
+    return buildKnowledgeGraph(this._dirs.decrypted, names)
   }
 
   /**
@@ -376,7 +524,7 @@ export class WechatDataGateway extends TypertRemoteService {
   @Remote('getMoments')
   getMoments(options?: { offset?: number; limit?: number; author?: string }): MomentsSnapshot {
     // Pass selfUsername so queryMoments can mark is_self (drives the "我" tag + 范围 filter).
-    return queryMoments(this._dirs.decrypted, options?.offset, options?.limit, options?.author, this._selfUsername)
+    return queryMoments(this._dirs.decrypted, options?.offset, options?.limit, options?.author, this.selfUsername())
   }
 
   /**
@@ -385,7 +533,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getSelfUsername')
   getSelfUsername(): { username: string } {
-    return { username: this._selfUsername }
+    return { username: this.selfUsername() }
   }
 
   /**
@@ -426,7 +574,7 @@ export class WechatDataGateway extends TypertRemoteService {
   getMessages(options: { talker: string; limit?: number; cursor?: number; cursorLocalId?: number }): MessagesSnapshot {
     return queryMessages(
       this._dirs.decrypted, options.talker, options.limit, options.cursor,
-      this._selfUsername, options.cursorLocalId,
+      this.selfUsername(), options.cursorLocalId,
     )
   }
 
@@ -437,7 +585,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getNewMessages')
   getNewMessages(options: { talker: string; after: number; limit?: number }): MessagesSnapshot {
-    return queryNewMessages(this._dirs.decrypted, options.talker, options.after, options.limit, this._selfUsername)
+    return queryNewMessages(this._dirs.decrypted, options.talker, options.after, options.limit, this.selfUsername())
   }
 
   /**
@@ -484,7 +632,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getGroupInfo')
   getGroupInfo(options: { username: string }): GroupInfoSnapshot {
-    return queryGroupInfo(this._dirs.decrypted, options.username, this._selfUsername)
+    return queryGroupInfo(this._dirs.decrypted, options.username, this.selfUsername())
   }
 
   /**
@@ -528,13 +676,28 @@ export class WechatDataGateway extends TypertRemoteService {
   }
 
   /**
-   * Look up one video message (cover thumbnail + degradation).
+   * Resolve one voice message to an inline-playable wav data URL.
+   * 语音实体是 silk，需要解码成 wav 才能播；产物落在转写链路同一份缓存里。
+   * @param options - username and localId of the voice message.
+   * @returns VoiceDataUrlResult: base64 wav data URL (+ duration) or error.
+   */
+  @Remote('getVoiceDataUrl')
+  getVoiceDataUrl(options: { username: string; localId: number }): VoiceDataUrlResult {
+    return resolveVoiceDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId)
+  }
+
+  /**
+   * Look up one video message: cover thumbnail + the on-disk video path.
+   * 封面与实体都在真实微信目录 `msg/video` 下，所以要带上数据根目录。
    * @param options - username and localId of the video message.
    * @returns VideoInfoResult: video cover/thumbnail info.
    */
   @Remote('getVideoInfo')
   getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
-    return resolveVideoInfo(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId)
+    return resolveVideoInfo(
+      this._dirs.decrypted, this._dirs.decoded, options.username, options.localId,
+      rawWechatBase(this._dirs.decrypted) || undefined,
+    )
   }
 
   /**
@@ -730,38 +893,163 @@ export class WechatDataGateway extends TypertRemoteService {
         this.op('task', 'ask_wechat', 'fail', 'build_index', (e as Error).message)
       }
     }
-    const { citations, chunks, terms, stats } = retrieveAskCitations(
-      this._dirs.decrypted,
-      options.question,
-      { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
-      scope,
-      24,
-    )
+    // ── 第 2 步：多阶段检索 ──
+    // 顺序：意图路由 → 查询改写 → 混合召回（稀疏 BM25 + 稠密向量 + 结构化）→
+    //       RRF 融合去重 → 交叉特征重排 → 上下文压缩。
+    // config.enabled=false 时退回旧的单通道检索（灰度/回滚开关）。
+    const retrConfig = loadRetrievalConfig(this._dirs.decrypted)
+    const scopeDescText = [
+      scope.username ? '会话限定' : '',
+      scope.from ? `起 ${scope.from}` : '',
+      scope.to ? `止 ${scope.to}` : '',
+    ].filter(Boolean).join(' ') || '全库'
+    let citations: ReturnType<typeof retrieveAskCitations>['citations']
+    let chunks: ReturnType<typeof retrieveAskCitations>['chunks']
+    let terms: string[]
+    let statsCompat: {
+      candidates: number; kept: number; scope: string; recency: boolean
+      timeHint: string; hintHits: number; chunks: number; windowMessages: number
+      intent?: string; denseActive?: boolean; elapsedMs?: number
+      channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
+      funnel?: { recalled: number; fused: number; ranked: number }
+    }
+    let rankedFeatures: Array<{ docKey: string; features: RerankWeights }> = []
+    let retrievalId = ''
+
+    /** 旧单通道检索：灰度对照 / 回滚 / 流水线异常时的降级路径。 */
+    const legacyRetrieve = (): void => {
+      const legacy = retrieveAskCitations(
+        this._dirs.decrypted,
+        options.question,
+        { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
+        scope,
+        24,
+      )
+      citations = legacy.citations
+      chunks = legacy.chunks
+      terms = legacy.terms
+      statsCompat = { ...legacy.stats }
+      rankedFeatures = []
+      retrievalId = ''
+    }
+
+    if (retrConfig.enabled) {
+      try {
+      // 稠密通道是**新增的出网点**：embedding 调用统一过隐私闸门（见 makeEmbedFn），
+      // 未配置 / 被「出站拦截」时抛错，流水线自动降级为纯稀疏，不影响问答可用性。
+      const embedFn = this.makeEmbedFn(retrConfig.embedding.model)
+      // 向量索引：首次（或增量）在提问时补齐；失败只记录，不阻断（退化为纯稀疏）。
+      if (embedFn && retrConfig.embedding.enabled) {
+        const vst = vectorIndexStatus(this._dirs.decrypted)
+        if (!vst.ready) {
+          try {
+            const built = await buildVectorIndex(this._dirs.decrypted, embedFn, {
+              model: retrConfig.embedding.model || 'default',
+              batchSize: retrConfig.embedding.batchSize,
+              maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
+              maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild,
+            })
+            this.op('task', 'ask_wechat', 'ok', 'build_vectors', `向量索引 ${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms`)
+          } catch (e) {
+            this.op('task', 'ask_wechat', 'fail', 'build_vectors', (e as Error).message)
+          }
+        }
+      }
+      const adapted = loadAdaptedWeights(this._dirs.decrypted)
+      const out = await runRetrievalPipeline({
+        decryptedDir: this._dirs.decrypted,
+        question: options.question,
+        subQueries: plan.subQueries,
+        entity: plan.person,
+        from: plan.from,
+        to: plan.to,
+        scope,
+        limit: 24,
+        config: retrConfig,
+        ...(embedFn ? { embedFn } : {}),
+        knownEntities: plan.person ? [plan.person] : [],
+        ...(adapted ? { weightsOverride: adapted } : {}),
+      })
+      citations = out.citations
+      chunks = out.chunks
+      terms = out.terms
+      rankedFeatures = out.rankedFeatures
+      retrievalId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+      statsCompat = {
+        candidates: out.stats.recalled,
+        kept: out.stats.kept,
+        scope: scopeDescText,
+        recency: out.stats.recency,
+        timeHint: out.stats.timeHint,
+        hintHits: out.stats.hintHits,
+        chunks: out.stats.compressed,
+        windowMessages: out.stats.windowMessages,
+        intent: out.stats.intent,
+        denseActive: out.stats.denseActive,
+        elapsedMs: out.stats.elapsedMs,
+        channels: out.stats.channels.map(c => ({ channel: c.channel, count: c.count, active: c.active, ...(c.note ? { note: c.note } : {}) })),
+        funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked },
+      }
+      this.op('task', 'ask_wechat', 'ok', 'route',
+        `意图 ${out.stats.intent} · 通道[${out.stats.channels.map(c => `${c.channel}:${c.count}${c.active ? '' : '(off)'}`).join(' ')}] · 召回 ${out.stats.recalled} → 融合 ${out.stats.fused} → 重排 ${out.stats.ranked} → 窗口 ${out.stats.compressed} · ${out.stats.elapsedMs}ms`)
+      } catch (e) {
+        // 流水线自身异常（非通道降级）→ 回退旧检索，绝不让问答整体不可用。
+        this.op('task', 'ask_wechat', 'fail', 'retrieval_pipeline', (e as Error).message)
+        legacyRetrieve()
+      }
+    } else {
+      legacyRetrieve()
+    }
+
+    // ── 硬约束一：没有任何原文就**不调模型** ──
+    // 提示词里写「没找到就说明没找到」只是软约束；模型完全有可能凭常识编一段。
+    // 这里直接短路：没有可引用的原文，就没有可核实的回答。
+    const basisLine = askBasisLine(citations)
+    if (citations.length === 0) {
+      this.op('task', 'ask_wechat', 'skip', '', '未检索到任何原文，未调用模型')
+      return {
+        answer: '本机记录里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词、收窄时间范围，或指定某个会话再问。',
+        citations: [],
+        plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
+        citedIndexes: [],
+        basis: '',
+        insufficient: true,
+        retrieval: {
+          candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
+          recency: statsCompat.recency, chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
+        },
+      }
+    }
+
     const contextBlock = formatAskContext(citations, {
       intent: plan.intent,
       terms,
-      scope: stats.scope,
-      recency: stats.recency,
-      timeHint: stats.timeHint,
-      hintHits: stats.hintHits,
+      scope: statsCompat.scope,
+      recency: statsCompat.recency,
+      timeHint: statsCompat.timeHint,
+      hintHits: statsCompat.hintHits,
     }, chunks)
 
     // ── 第 3 步：综合对话历史与检索结果生成回答 ──
     const historyBlock = trimmedHistory.length > 0
       ? '此前的对话（保持多轮连贯，但答案必须以本次检索结果为准）：\n' + trimmedHistory.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content).join('\n') + '\n\n'
       : ''
+    // 提示词的取舍：
+    //  · 「只用材料里的事实 / 找不到就直说」是**内容**底线（配合后端的两道硬约束：无原文不调模型、
+    //    无引用不予采用）；
+    //  · 「像微信聊天那样自然说话」是**语气**要求 —— 早先写的是「简洁分点」，模型会写成报告腔
+    //    （「综上所述」「根据数据分析」），而这是个聊天记录问答工具，用户想听的是「谁说了什么」。
     const synthPrompt = `${historyBlock}用户本次问题：${options.question}
 
 ${contextBlock}
 
 请按以下要求回答：
-1. **结论先行**：第一句直接回答问题（是谁 / 什么时间 / 发生了什么），不要复述检索过程。
-2. **逐条标注来源**：每一项事实性陈述后面立刻标注对应的 [n]；多个来源写 [1][3]。
-3. **只用材料里的事实**：检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期。
-4. **群聊标明发言人**：材料里形如「群名 · 某人」的，回答时写清是谁说的。
-5. **证据不足要说明**：只找到部分证据时，先说已确认的部分，再明确说明哪一点在本地记录里没找到；完全没找到时直接说明未检索到，并给出 1-2 条改问建议（换关键词、收窄时间或指定会话）。
-6. **时间写绝对日期**（如 2026-09-05），不要写「上周」这类相对表述。
-7. 语言用中文，简洁分点，不要罗列所有来源，只引用真正支持结论的。`
+1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。
+2. **像微信里跟人说话那样自然**：口语化中文，直接把事情讲清楚，不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），也不要复述检索过程。要罗列多条时可以分点，但每条都要像在转述聊天内容。
+3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
+4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
+5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
+6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。`
     const gateAnswer = this.privacyGate(
       'ask_wechat',
       { sessions: new Set(citations.map(c => c.username)).size, messages: citations.length },
@@ -772,22 +1060,82 @@ ${contextBlock}
       throw new Error(gateAnswer.error)
     }
     const answer = await runChat(
-      '你是本地微信数据助手，基于检索到的聊天记录与对话历史回答用户问题，语言用中文，引用来源用 [n] 标注。',
+      '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。',
       gateAnswer.texts[0] ?? synthPrompt,
       1600,
-      makeDeltaEmitter(options.streamId),
+      // 必须走 this.：makeDeltaEmitter 是实例方法。裸调用会抛
+      // 「ReferenceError: makeDeltaEmitter is not defined」—— 它出现在**综合生成那一刻**，
+      // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
+      this.makeDeltaEmitter(options.streamId),
     )
-    const citedIndexes = parseCitedIndexes(answer, citations.length)
+    let citedIndexes = parseCitedIndexes(answer, citations.length)
+    let finalAnswer = answer
+    // ── 硬约束二：回答必须能对应到原文，否则不采用 ──
+    // 没有任何 [n] 说明这段内容无法逐条核实（可能是模型凭常识补的）。先用更严格的指令
+    // 重试一次；仍然没有任何引用就**不予采用**，明确告知「没有可据以回答的证据」。
+    let withheld = false
+    if (citedIndexes.length === 0) {
+      const strictPrompt = `${synthPrompt}
+
+【重要】你上一次的回答**没有标注任何 [n] 来源**。请重写：
+ · 每一句事实性陈述后面都必须紧跟对应的 [n]；
+ · 语气保持自然口语化，像在微信里转述聊天内容；
+ · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
+      const second = await runChat(
+        '你是用户微信聊天记录里的问答助手。只用给定检索结果回答，自然口语化，每句事实标注 [n]；记录里没有就直说没找到，不要推测或编造。',
+        strictPrompt,
+        1600,
+      )
+      const secondCited = parseCitedIndexes(second, citations.length)
+      if (secondCited.length > 0) {
+        finalAnswer = second
+        citedIndexes = secondCited
+      } else {
+        withheld = true
+        finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
+      }
+    }
+    const answer_basis = citedIndexes.length > 0
+      ? `${basisLine}（回答引用了其中 ${citedIndexes.length} 条：[${citedIndexes.join('][')}]）`
+      : basisLine
+    // 记录本次检索的特征画像，供用户反馈时做「特征归因 → 权重微调」。
+    if (retrievalId && rankedFeatures.length > 0) {
+      this._askTrace.set(retrievalId, {
+        features: new Map(rankedFeatures.map(r => [r.docKey, r.features])),
+        citations: citations.map(c => c.username + ':' + c.local_id),
+        question: options.question,
+        answer: finalAnswer,
+        intent: (statsCompat.intent ?? 'open_qa') as IntentKind,
+      })
+      // 有界缓存：只保留最近 20 轮，避免长会话把内存撑大。
+      while (this._askTrace.size > 20) {
+        const oldest = this._askTrace.keys().next()
+        if (oldest.done) break
+        this._askTrace.delete(oldest.value)
+      }
+    }
     this.op(
-      'task', 'ask_wechat', 'ok', '',
-      `意图「${plan.intent}」· 关键词 ${terms.length} 个 · 候选 ${stats.candidates} 条 → 窗口 ${stats.chunks} 段（${stats.windowMessages} 条消息）· 回答引用 ${citedIndexes.length} 段${stats.timeHint ? ` · 时间线索 ${stats.timeHint}（命中 ${stats.hintHits}）` : ''}`,
+      'task', 'ask_wechat', withheld ? 'fail' : 'ok', '',
+      `意图「${statsCompat.intent ?? plan.intent}」· 关键词 ${terms.length} 个 · 召回 ${statsCompat.candidates} 条 → 窗口 ${statsCompat.chunks} 段（${statsCompat.windowMessages} 条消息）· 回答引用 ${citedIndexes.length} 段${withheld ? ' · 未引用任何来源，已不予采用' : ''}${statsCompat.timeHint ? ` · 时间线索 ${statsCompat.timeHint}（命中 ${statsCompat.hintHits}）` : ''}`,
     )
     return {
-      answer: answer || '（模型未返回有效回答。可点「优化提问」改写问题，或收窄会话/时间范围后重试。）',
+      answer: finalAnswer || '（模型未返回有效回答。可点「优化提问」改写问题，或收窄会话/时间范围后重试。）',
       citations,
       plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
       citedIndexes,
-      retrieval: { candidates: stats.candidates, kept: stats.kept, scope: stats.scope, recency: stats.recency, timeHint: stats.timeHint, hintHits: stats.hintHits, chunks: stats.chunks, windowMessages: stats.windowMessages },
+      basis: answer_basis,
+      withheld: withheld || undefined,
+      retrievalId: retrievalId || undefined,
+      retrieval: {
+        candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
+        recency: statsCompat.recency, timeHint: statsCompat.timeHint, hintHits: statsCompat.hintHits,
+        chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
+        ...(statsCompat.intent ? { intent: statsCompat.intent } : {}),
+        ...(statsCompat.denseActive !== undefined ? { denseActive: statsCompat.denseActive } : {}),
+        ...(statsCompat.channels ? { channels: statsCompat.channels } : {}),
+        ...(statsCompat.elapsedMs !== undefined ? { elapsedMs: statsCompat.elapsedMs } : {}),
+        ...(statsCompat.funnel ? { funnel: statsCompat.funnel } : {}),
+      },
     }
   }
 
@@ -898,6 +1246,183 @@ ${contextBlock}
     const r = deleteBackupEntry(this._dirs.decrypted, options.name)
     this.op('delete', 'delete_backup', r.ok ? 'ok' : 'fail', options.name, r.error ?? '')
     return r
+  }
+
+  /**
+   * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
+   * @returns 供「数据健康 / 检索设置」面板展示。
+   */
+  @Remote('getRetrievalStatus')
+  getRetrievalStatus(): {
+    enabled: boolean
+    config: unknown
+    vector: { rows: number; dim: number; model: string }
+    feedback: { total: number; up: number; down: number }
+    weights: RerankWeights
+    intentAccuracy: { correct: number; total: number; accuracy: number }
+  } {
+    const cfg = loadRetrievalConfig(this._dirs.decrypted)
+    const adapted = loadAdaptedWeights(this._dirs.decrypted)
+    return {
+      enabled: cfg.enabled,
+      config: cfg,
+      vector: vectorIndexSummary(this._dirs.decrypted),
+      feedback: feedbackStats(this._dirs.decrypted),
+      weights: adapted ?? cfg.rerank.weights,
+      intentAccuracy: syntheticIntentAccuracy(),
+    }
+  }
+
+  /**
+   * 保存检索参数（阈值/权重/容量）。前端面板改一个开关也走这里。
+   * @param options - 形如 `{ patch: {...} }`，或直接给字段子集。
+   * @returns 落盘后的完整配置。
+   */
+  @Remote('saveRetrievalConfig')
+  saveRetrievalConfig(options?: { patch?: unknown } | unknown): { ok: boolean; config: unknown } {
+    const patch = (options && typeof options === 'object' && 'patch' in (options as Record<string, unknown>))
+      ? (options as { patch?: unknown }).patch
+      : options
+    const saved = saveRetrievalConfigFile(this._dirs.decrypted, patch)
+    this.op('settings', 'save_retrieval_config', 'ok', '', JSON.stringify(patch ?? {}).slice(0, 200))
+    return { ok: true, config: saved }
+  }
+
+  /**
+   * 立即构建/增量更新稠密向量索引（设置面板的「重建向量索引」按钮）。
+   * @param options - force=true 时清空重建。
+   * @returns 构建结果。
+   */
+  @Remote('buildRagVectorIndex')
+  async buildRagVectorIndex(options?: { force?: boolean }): Promise<{ ok: boolean; status: string; rows: number; embedded: number; elapsed_ms: number; message?: string }> {
+    const cfg = loadRetrievalConfig(this._dirs.decrypted)
+    const embedFn = this.makeEmbedFn(cfg.embedding.model)
+    if (!embedFn) return { ok: false, status: 'no-embedder', rows: 0, embedded: 0, elapsed_ms: 0, message: '未配置 embedding（请在模型配置里填写向量模型或 API Key）' }
+    if (!getSearchIndexStatus(this._dirs.decrypted).ready) {
+      try { buildSearchIndex(this._dirs.decrypted, false) } catch { /* 交给下面状态判定 */ }
+    }
+    try {
+      const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
+        model: cfg.embedding.model || 'default',
+        batchSize: cfg.embedding.batchSize,
+        maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
+        maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
+        force: Boolean(options?.force),
+      })
+      this.op('task', 'build_vectors', 'ok', '', `${r.status} rows=${r.rows} embedded=${r.embedded} ${r.elapsed_ms}ms`)
+      return { ok: true, ...r }
+    } catch (e) {
+      this.op('task', 'build_vectors', 'fail', '', (e as Error).message)
+      return { ok: false, status: 'error', rows: 0, embedded: 0, elapsed_ms: 0, message: (e as Error).message }
+    }
+  }
+
+  /**
+   * 提交问答反馈（目标 5 的闭环入口）。
+   *
+   * 反馈 → 特征归因 → 权重微调 → 落盘。权重**由全部历史反馈重算**（幂等、可重放），
+   * 而不是在旧权重上累加 —— 累加会因为重复提交同一条反馈而漂移。
+   * @param options - retrievalId（AskResult 里回传）+ rating + 有用/无用引用序号。
+   * @returns 调参后的权重。
+   */
+  @Remote('submitAskFeedback')
+  submitAskFeedback(options: {
+    retrievalId?: string
+    rating: 'up' | 'down'
+    useful?: number[]
+    useless?: number[]
+    question?: string
+    answer?: string
+  }): { ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; message?: string } {
+    const cfg = loadRetrievalConfig(this._dirs.decrypted)
+    if (!cfg.feedback.enabled) return { ok: false, message: '反馈闭环已在检索配置里关闭' }
+    const trace = options.retrievalId ? this._askTrace.get(options.retrievalId) : undefined
+    const keyOf = (i: number): string | null => (trace && i >= 1 && i <= trace.citations.length) ? trace.citations[i - 1] : null
+    const pick = (idx: number[] | undefined): RerankWeights[] => {
+      if (!trace) return []
+      const out: RerankWeights[] = []
+      for (const i of idx ?? []) {
+        const k = keyOf(i)
+        const f = k ? trace.features.get(k) : undefined
+        if (f) out.push(f)
+      }
+      return out
+    }
+    const features = attributeFeatures(pick(options.useful), pick(options.useless))
+    const rec: FeedbackRecord = {
+      id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      question: options.question ?? trace?.question ?? '',
+      answer: options.answer ?? trace?.answer ?? '',
+      rating: options.rating === 'down' ? 'down' : 'up',
+      citedUseful: options.useful ?? [],
+      citedUseless: options.useless ?? [],
+      intent: trace?.intent ?? 'open_qa',
+      createdAt: Date.now(),
+      features,
+    }
+    recordFeedback(this._dirs.decrypted, rec, cfg.feedback.maxRecords)
+    const all = listFeedback(this._dirs.decrypted, cfg.feedback.maxRecords)
+    const adapted = adaptWeights(cfg.rerank.weights, all, cfg.feedback.learningRate)
+    saveAdaptedWeights(this._dirs.decrypted, adapted)
+    this.op('task', 'ask_feedback', 'ok', options.rating, `features=${features.join(',')} total=${all.length}`)
+    return { ok: true, adaptedWeights: adapted, features }
+  }
+
+  /**
+   * 列出最近的问答反馈 + 汇总统计。
+   * @param options - limit。
+   */
+  @Remote('listRetrievalFeedback')
+  listRetrievalFeedback(options?: { limit?: number }): {
+    items: FeedbackRecord[]
+    stats: { total: number; up: number; down: number }
+  } {
+    return {
+      items: listFeedback(this._dirs.decrypted, options?.limit ?? 50),
+      stats: feedbackStats(this._dirs.decrypted),
+    }
+  }
+
+  /**
+   * 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。
+   */
+  @Remote('resetRetrievalWeights')
+  resetRetrievalWeights(): { ok: boolean; weights: RerankWeights } {
+    const cfg = loadRetrievalConfig(this._dirs.decrypted)
+    saveAdaptedWeights(this._dirs.decrypted, cfg.rerank.weights)
+    this.op('settings', 'reset_retrieval_weights', 'ok')
+    return { ok: true, weights: cfg.rerank.weights }
+  }
+
+  /**
+   * 跑离线召回评估（合成评测集），并给出「混合 vs 纯稀疏」的消融对比。
+   *
+   * 不依赖真实数据，因此可以随时在设置面板点一下就看到当前算法的 P/R/MRR/NDCG，
+   * 也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
+   * @param options - k（截断位置，默认 10）。
+   * @returns 可读报告 + 结构化指标。
+   */
+  @Remote('evaluateRetrieval')
+  evaluateRetrieval(options?: { k?: number }): {
+    report: string
+    hybrid: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
+    sparseOnly: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
+    intentAccuracy: { correct: number; total: number; accuracy: number }
+  } {
+    const k = options?.k ?? 10
+    const hybrid = runSyntheticEval({ k })
+    const sparseOnly = runSyntheticEval({ k, denseEnabled: false, structuredEnabled: false })
+    const intentAccuracy = syntheticIntentAccuracy()
+    const brief = (r: typeof hybrid): { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number } => ({
+      precision: r.precision, recall: r.recall, mrr: r.mrr, ndcg: r.ndcg, map: r.map, cases: r.cases, hits: r.hits,
+    })
+    const report = [
+      formatEvalReport('合成评测集（混合：稀疏+稠密+结构化）', hybrid, k),
+      formatEvalReport('消融对照（仅稀疏）', sparseOnly, k),
+      `意图分类准确率：${intentAccuracy.correct}/${intentAccuracy.total} = ${(intentAccuracy.accuracy * 100).toFixed(1)}%`,
+    ].join('\n')
+    this.op('task', 'evaluate_retrieval', 'ok', '', `MRR ${hybrid.mrr.toFixed(3)} vs 稀疏 ${sparseOnly.mrr.toFixed(3)}`)
+    return { report, hybrid: brief(hybrid), sparseOnly: brief(sparseOnly), intentAccuracy }
   }
 
   /**
@@ -1420,9 +1945,7 @@ ${contextBlock}
   saveWechatConfig(options: { patch: WechatConfigPatch }): SimpleResult {
     const before = getConfig(this._dirs.decrypted)
     // Models/engine may live in the default dir even when none was persisted.
-    const oldDirRaw = typeof before['whisper_models_dir'] === 'string' && before['whisper_models_dir'].trim().length > 0
-      ? before['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const oldDirRaw = resolveWhisperModelsDir(before['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     const oldBin = typeof before['whisper_bin'] === 'string' ? before['whisper_bin'] : ''
     // Resolved before the switch: engines found by search (e.g. Release/ layout)
     // also need to move to the new dir, even when whisper_bin was never persisted.
@@ -1452,9 +1975,7 @@ ${contextBlock}
   @Remote('getWhisperStatus')
   getWhisperStatus(): WhisperStatus {
     const cfg = getConfig(this._dirs.decrypted)
-    const configured = typeof cfg['whisper_models_dir'] === 'string' && cfg['whisper_models_dir'].trim().length > 0
-      ? cfg['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const configured = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
     const engine = whisperEnginePath(configBin, configured)
     const result: WhisperStatus = {
@@ -1479,9 +2000,7 @@ ${contextBlock}
   async downloadWhisperModel(options: { model: string }): Promise<WhisperDownloadResult> {
     if (this.whisperDownload !== null) { this.op('settings', 'download_whisper_model', 'fail', options.model, '已有模型下载任务进行中'); return { ok: false, error: '已有模型下载任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = typeof cfg['whisper_models_dir'] === 'string' && cfg['whisper_models_dir'].trim().length > 0
-      ? cfg['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     this.whisperDownload = { model: options.model, file: '', received: 0, total: 0 }
     try {
       const result = await whisperDownloadModel(options.model, modelsDir, (received, total) => {
@@ -1751,9 +2270,7 @@ ${contextBlock}
   async installWhisperEngine(): Promise<WhisperDownloadResult> {
     if (this.whisperDownload !== null) { this.op('settings', 'install_whisper_engine', 'fail', '', '已有下载任务进行中'); return { ok: false, error: '已有下载任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = typeof cfg['whisper_models_dir'] === 'string' && cfg['whisper_models_dir'].trim().length > 0
-      ? cfg['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
     const existing = whisperEnginePath(configBin, modelsDir)
     if (existing) { this.op('settings', 'install_whisper_engine', 'skip', '', '引擎已存在'); return { ok: true, file: 'whisper-cli.exe', bytes: 0 } }
@@ -1787,9 +2304,7 @@ ${contextBlock}
   async transcribeVoiceBatch(options: { limit?: number }): Promise<VoiceTranscribeResult> {
     if (this.whisperTranscribing.active) { this.op('task', 'transcribe_voice_batch', 'fail', '', '已有转写任务进行中'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: '', error: '已有转写任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = typeof cfg['whisper_models_dir'] === 'string' && cfg['whisper_models_dir'].trim().length > 0
-      ? cfg['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
     const engine = whisperEnginePath(configBin, modelsDir)
     if (!engine) { this.op('task', 'transcribe_voice_batch', 'fail', '', '未检测到 whisper.cpp 引擎'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」，或设 DSH_WECHAT_WHISPER_BIN）' } }
@@ -1842,9 +2357,7 @@ ${contextBlock}
   transcribeVoiceMessage(options: { username: string; localId: number }): VoiceTranscribeOneResult {
     if (this.whisperTranscribing.active) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '已有转写任务进行中'); return { ok: false, error: '已有转写任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = typeof cfg['whisper_models_dir'] === 'string' && cfg['whisper_models_dir'].trim().length > 0
-      ? cfg['whisper_models_dir']
-      : defaultWhisperModelsDir(this._dirs.decrypted)
+    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
     const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
     const engine = whisperEnginePath(configBin, modelsDir)
     if (!engine) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '未检测到 whisper.cpp 引擎'); return { ok: false, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」）' } }
@@ -1891,10 +2404,25 @@ ${contextBlock}
   }
 
   /**
-   * Compute the annual report for one year (local only).
+  /**
+   * 年度回顾（看板）：15 张卡片所需的完整年度聚合。
+   * 「人物类」指标只算我发出的（real_sender_id 归属），「规模类」算全部消息。
    * @param options - year to compute the report for.
-   * @returns AnnualReport: computed annual report data.
+   * @returns AnnualReview: 完整看板数据。
    */
+  @Remote('getAnnualReview')
+  getAnnualReview(options: { year: number }): AnnualReview {
+    try {
+      const r = queryAnnualReview(this._dirs.decrypted, options.year, this.selfUsername())
+      this.op('task', 'annual_review', 'ok', String(options.year),
+        `发出 ${r.sent} · 全部 ${r.ranking.reduce((a, x) => a + x.total, 0)} · 活跃 ${r.activeDaysMine} 天`)
+      return r
+    } catch (e) {
+      this.op('task', 'annual_review', 'fail', String(options.year), (e as Error).message)
+      throw e
+    }
+  }
+
   @Remote('getAnnualReport')
   getAnnualReport(options: { year: number }): AnnualReport {
     try {
@@ -1962,17 +2490,24 @@ ${contextBlock}
 
   /**
    * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.
-   * 优先读 decoded 缓存，否则扫 msg/attach 下的 `<md5>.dat` / `_t.dat` 并解密。
-   * @param options - emoticon md5 from message XML.
+   * 先读 decoded 缓存 → 扫 msg/attach 与微信的表情缓存目录里解密；
+   * 本地解不开时（微信 4.x 的表情缓存是加密文件，项目里没有对应解码器）
+   * 用消息 XML 带来的 `cdnurl` 下载一次并落进 decoded 缓存。
+   * @param options - emoticon md5 (+ optional CDN url from the message).
    * @returns ImageDataUrlResult: base64 data URL or error.
    */
   @Remote('getEmoticonDataUrl')
-  getEmoticonDataUrl(options: { md5: string }): ImageDataUrlResult {
+  async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
     const base = rawWechatBase(this._dirs.decrypted) || undefined
     const cfg = getConfig(this._dirs.decrypted)
     const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
     const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
-    return decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
+    const local = decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
+    if (local.url) return local
+    if (!options.emojiUrl) return local
+    const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase())
+    // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
+    return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
   }
 
   /**
@@ -1991,8 +2526,13 @@ ${contextBlock}
    * @returns ImageDataUrlResult: data URL or error.
    */
   @Remote('getMessageFile')
-  getMessageFile(options: { fileName: string }): ImageDataUrlResult {
-    return resolveMessageFileDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.fileName)
+  getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
+    // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
+    // 用于在「同名文件」里挑出属于这条消息的那一份，见 resolveMessageFileDataUrl。
+    return resolveMessageFileDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.fileName, {
+      ...(options.size !== undefined ? { size: options.size } : {}),
+      ...(options.createTime !== undefined ? { createTime: options.createTime } : {}),
+    })
   }
   /**
    * Add a WeChat task.
@@ -2131,7 +2671,7 @@ ${contextBlock}
 
   @Remote('getCalls')
   getCalls(options?: { topPeers?: number; recentLimit?: number }): CallsSnapshot {
-    return queryCalls(this._dirs.decrypted, this._selfUsername, options?.topPeers, options?.recentLimit)
+    return queryCalls(this._dirs.decrypted, this.selfUsername(), options?.topPeers, options?.recentLimit)
   }
 
   @Remote('getGroupInsights')
@@ -2151,7 +2691,7 @@ ${contextBlock}
 
   @Remote('getLedger')
   getLedger(options?: { month?: string }): LedgerSnapshot {
-    return queryLedger(this._dirs.decrypted, options?.month, this._selfUsername)
+    return queryLedger(this._dirs.decrypted, options?.month, this.selfUsername())
   }
 
   @Remote('getMediaAssets')
@@ -2190,19 +2730,97 @@ ${contextBlock}
   }
 
   @Remote('getSnsVideoCoverDataUrl')
-  getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
-    return resolveSnsVideoCoverDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.md5, options.timelineId, options.mediaId)
+  /**
+   * Resolve one SNS (朋友圈) video cover.
+   *
+   * 先本机缓存（明文、离线）；没有缓存再按 XML 里的 `<thumb>` 从微信 CDN 取回，
+   * 取回要过隐私闸门，并按 `<enc key>` 解密加密头（封面同样是加密流）。
+   *
+   * @param options - XML 里的 md5/缓存键，加上 `<thumb>` 地址与 `<enc key>` 种子。
+   * @returns ImageDataUrlResult。
+   */
+  @Remote('getSnsVideoCoverDataUrl')
+  async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult> {
+    const base = rawWechatBase(this._dirs.decrypted) || undefined
+    const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
+    if (local.url) return local
+    const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
+    if (!remote || !/^https?:\/\//i.test(remote)) return local
+    const blocked = this.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
+    if (blocked) return { error: `${local.error}；${blocked}` }
+    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key })
+    if (fetched.url) return fetched
+    this.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
+    return { error: fetched.error }
   }
 
   /**
-   * Resolve one SNS (朋友圈) video body to an offline base64 data URL so it can
-   * be played inline. Returns an error when the cached container is missing.
-   * @param options - media md5 from the moments XML (+ optional cache keys).
-   * @returns ImageDataUrlResult: base64 data URL or error.
+   * Resolve one SNS (朋友圈) video body so it can be played inline.
+   *
+   * 两级来源：**先本机缓存**（明文，离线、最快），没有缓存再按朋友圈 XML 里的
+   * `<url>` 从微信 CDN 按需取回。取回要过隐私闸门（与 AI 调用同一套「出站拦截」），
+   * CDN 返回的是客户端加密流，按 `<enc key>` 解密后再**校验容器头与 md5**，
+   * 免得把一个放不出来的二进制塞给 <video>。
+   *
+   * @param options - media md5 from the moments XML（+ 本地缓存键、`<url>` 与 `<enc key>`）。
+   * @returns ImageDataUrlResult: base64 data URL or an error explaining which source failed.
    */
   @Remote('getSnsVideoDataUrl')
-  getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
-    return resolveSnsVideoDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.md5, options.timelineId, options.mediaId)
+  async getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
+    const base = rawWechatBase(this._dirs.decrypted) || undefined
+    const local = resolveSnsVideoDataUrl(base, options.md5, options.timelineId, options.mediaId)
+    if (local.url) return local
+    const remote = typeof options.url === 'string' ? options.url.trim() : ''
+    if (!remote || !/^https?:\/\//i.test(remote)) return local
+    const blocked = this.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
+    if (blocked) return { error: `${local.error}；${blocked}` }
+    const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key })
+    if (fetched.url) {
+      this.op('task', 'sns_video_fetch', 'ok', '', `从 CDN 取回并解密朋友圈视频（${options.md5?.slice(0, 8) ?? '?'}…）`)
+      return fetched
+    }
+    this.op('task', 'sns_video_fetch', 'fail', '', fetched.error ?? '')
+    return { error: fetched.error }
+  }
+
+  /**
+   * 把一条朋友圈视频（本机缓存优先，否则 CDN 取回+解密）写到用户选定路径。
+   *
+   * 为什么放在后端写：视频本体几十 MB，走渲染端 `<a download>` 既落不了盘
+   * （实测点了没反应），把 base64 经 IPC 传回主进程也白白多一次几十 MB 的拷贝。
+   * 这里直接取字节写文件 —— 路径由主进程的保存对话框给出。
+   *
+   * @param options - 缓存键 / 远端地址与种子 / 目标路径。
+   * @returns ok + 字节数，或错误说明。
+   */
+  @Remote('exportSnsVideo')
+  async exportSnsVideo(options: {
+    md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
+  }): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
+    const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
+    if (!dest) return { ok: false, error: '未指定保存路径' }
+    const loaded = await loadSnsVideoBytes({
+      base: rawWechatBase(this._dirs.decrypted) || undefined,
+      md5: options.md5,
+      timelineId: options.timelineId,
+      mediaId: options.mediaId,
+      url: options.url,
+      seed: options.key,
+      version: weixinVersion(),
+    })
+    if (loaded.error || !loaded.bytes) {
+      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')
+      return { ok: false, error: loaded.error ?? '取不到视频字节' }
+    }
+    try {
+      writeFileSync(dest, loaded.bytes)
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', msg)
+      return { ok: false, error: `写入失败：${msg}` }
+    }
+    this.op('task', 'export_sns_video', 'ok', options.md5?.slice(0, 8) ?? '', `${loaded.bytes.length} 字节 · ${loaded.source}`)
+    return { ok: true, bytes: loaded.bytes.length, source: loaded.source }
   }
 
   @Remote('listTasks')

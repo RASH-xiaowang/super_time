@@ -46,10 +46,9 @@
    - `SUPERTIME_LLM_TIMEOUT_MS`（默认 120000）
    未配置时行为与上游一致：`askWechat` 报“未配置默认模型”，
    `generateDailySummary` 输出降级统计文本。
-5. **路径配置中心**：所有路径配置统一记录在项目根目录
-   `wechat/config.json`（`src/backend/wechat-paths.js` 管理与映射），
-   启动时自动应用并回写实际解析路径，详见
-   [wechat/README.md](../wechat/README.md)。命令行：
+5. **路径配置中心**：所有路径配置统一记录在 `<userData>/wechat/config.json`
+   （`src/backend/wechat-paths.js` 管理与映射），启动时自动应用并回写实际解析路径，
+   详见 [wechat/README.md](../wechat/README.md)。命令行：
    `npm run config:wechat show|set|reset`。
 5. **Electron IPC**：`main.js` 在 `app.whenReady` 后创建后端，注册
    - `wechat:list-methods` → `{ ok, value }`

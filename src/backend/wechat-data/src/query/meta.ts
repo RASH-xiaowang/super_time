@@ -73,6 +73,21 @@ export interface ContactMeta {
 }
 
 /**
+ * `biz_info.type` 是否为**服务号**（否则该 `gh_` 账号是订阅号/公众号）。
+ *
+ * 这个判据必须**全局唯一**：聊天列表（`sessions.ts`）与通讯录（`contacts.ts`）
+ * 各自写一份就会出现「同一个账号在聊天里算服务号、在通讯录里算公众号」，
+ * 也就是同一个账号出现在两个类目下、或两边都看不到它。
+ * 实测本机 `biz_info.type` 只有 0（订阅号）与 1（服务号）；1/3/5 是微信
+ * 文档里服务号用过的取值，2/4 属订阅号，因此不能简化成 `type > 0`。
+ * @param t - `biz_info.type`（缺失时为 undefined）。
+ * @returns 是服务号时为 true。
+ */
+export function isServiceBizType(t: number | undefined): boolean {
+  return t === 1 || t === 3 || t === 5
+}
+
+/**
  * Read contact.db once and derive all contact metadata.
  * @param decryptedDir - decrypted data root.
  * @returns contact names (remark > nick > username), pinned set, biz types.
@@ -164,8 +179,11 @@ function loadShardMeta(dbFile: string): ShardMeta {
         try {
           const rows = db.prepare('SELECT rowid AS id, user_name AS u FROM ' + t).all() as Array<{ id: number; u: unknown }>
           for (const row of rows) {
+            // 空 user_name 必须写入：WeChat 4.x 用 Name2Id 空行代表「登录账号自己」
+            // （实测每个分片恰好 1 行，被约 6% 的消息引用）。跳过空行会让这些消息
+            // 解析不到 sender，isSelf 全部塌成 false —— 自己发的话全跑到对方气泡侧。
             const u = decode(row.u).trim()
-            if (u) name2id.set(row.id, u)
+            name2id.set(row.id, u)
           }
           if (name2id.size > 0) break
         } catch { /* try the other casing */ }

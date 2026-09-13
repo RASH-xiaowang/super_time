@@ -5,21 +5,22 @@
  * `message_content` is a zstd blob (magic 0x28B52FFD) holding a
  * `<voipmsg type="VoIPBubbleMsg">` XML. Everything the UI needs is in that XML:
  *
- * | field | measured (135/135 locally) | usable |
+ * | field | measured (164/164 locally) | usable |
  * | --- | --- | --- |
  * | `<msg>` | 通话时长 00:21 / 对方已取消 / 已拒绝 / 未应答 / 已在其它设备接听 … | ✅ only informative field |
  * | `<duration>` | **always 0** | ❌ the real length is inside `<msg>` |
- * | `<room_type>` | 0×39 / 1×96, all in 1:1 chats | ⚠️ 语音/视频 **unverified** → exposed raw, never labelled |
+ * | `<room_type>` | 0×61 / 1×103, all in 1:1 chats | ✅ 0=语音 / 1=视频（判据见 parse.ts `parseVoipKind`） |
  *
  * Direction comes from `real_sender_id` resolved through each shard's own
  * `Name2Id` (rowid → wxid): the logged-in account means 呼出, anyone else 呼入.
  * Locally that resolves 135/135 rows, and the resolved "other" value is always
  * the conversation's own talker.
  *
- * Voice/video classification is deliberately absent: `room_type` looks like a
- * media flag (every call is a 1:1 room, so it is not a room-kind flag), but the
- * two candidate mappings cannot be told apart from local data, so the UI shows
- * the raw value only in the tooltip-free data model and never asserts it.
+ * 本文件（通话记录面板）**仍然只暴露原始 `room_type`、不自己下结论**：面板的语义是
+ * 「按人/按月盘点通话」，语音还是视频不影响它的排序与汇总，少一个可能错的断言更安全。
+ * 消息气泡那条链路（parse.ts → `rich.voipType`）需要画图标与「语音通话 / 视频通话」文案，
+ * 所以它在拿到时长分布证据后按 **0=语音 / 1=视频** 判定 —— 判据与反例都写在
+ * `parse.ts` 的 `parseVoipKind` 注释里。
  */
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'

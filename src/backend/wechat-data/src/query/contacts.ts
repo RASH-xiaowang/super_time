@@ -5,7 +5,7 @@
  * counts, member's owning group, and category stats.
  */
 import { DatabaseSync } from 'node:sqlite'
-import { cachedBySig, fileSigOf } from './meta.ts'
+import { cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
 import { join } from 'node:path'
 import type { WechatContact } from '../types.ts'
 
@@ -172,10 +172,8 @@ function computeContacts(
       const localType = Number(r[sel('local_type', '0')] ?? 0)
       const deleteFlag = Number(r[sel('delete_flag', '0')] ?? 0)
       let category = categoryOf(localType, username, deleteFlag)
-      if (category === 'official') {
-        const bt = bizTypes.get(username)
-        if (bt === 1 || bt === 3 || bt === 5) category = 'service'
-      }
+      // 与聊天列表（sessions.ts）共用同一判据，避免同一账号在两个面板落到不同类目。
+      if (category === 'official' && isServiceBizType(bizTypes.get(username))) category = 'service'
       const displayName = remark || nickName || username
       const initial = initialOf(
         cellString(r[sel('remark_pin_yin_initial', '')]),

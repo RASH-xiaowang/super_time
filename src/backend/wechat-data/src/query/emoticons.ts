@@ -70,17 +70,23 @@ function computeEmoticons(decryptedDir: string, limit?: number, offset: number =
       const md5Col = col(cCols, ['md5', 'MD5', 'md5_'])
       const typeCol = col(cCols, ['type', 'Type', 'type_'])
       const captionCol = col(cCols, ['caption', 'Caption', 'caption_'])
+      // CDN 地址：面板要显示真图，而本地表情缓存是**加密**文件（见 media-image.ts 的
+      // fetchEmoticonRemote 注释），只能靠这几个 URL 取图。实测 30 行里 cdn_url 全覆盖。
+      const cdnCol = col(cCols, ['cdn_url', 'cdnurl', 'cdn_Url'])
+      const thumbCol = col(cCols, ['thumb_url', 'thumburl', 'tp_url'])
       if (md5Col) {
         const cap = Math.min(limit ?? 500, 2000)
         const sel = [
           `t.${md5Col} AS md5`,
           typeCol ? `t.${typeCol} AS item_type` : `0 AS item_type`,
           captionCol ? `t.${captionCol} AS caption` : `'' AS caption`,
+          cdnCol ? `t.${cdnCol} AS cdn_url` : `'' AS cdn_url`,
+          thumbCol ? `t.${thumbCol} AS thumb_url` : `'' AS thumb_url`,
         ].join(', ')
         const plain = `SELECT ${sel} FROM kNonStoreEmoticonTable t ORDER BY t.rowid LIMIT ? OFFSET ?`
         // 顺序表可用时按它排序；任何异常都退回确定性最弱的「内置行序」，不让面板整体失败。
         const hasOrder = tableColumns(db, 'kFavEmoticonOrderTable').has('md5')
-        let rows: Array<{ md5?: unknown; item_type?: unknown; caption?: unknown }>
+        let rows: Array<{ md5?: unknown; item_type?: unknown; caption?: unknown; cdn_url?: unknown; thumb_url?: unknown }>
         let orderedBy: 'wechat' | 'builtin' = 'builtin'
         if (hasOrder) {
           const ordered = `SELECT ${sel} FROM kNonStoreEmoticonTable t
@@ -99,6 +105,10 @@ function computeEmoticons(decryptedDir: string, limit?: number, offset: number =
           const item: EmoticonItem = { md5, item_type: Number(r.item_type ?? 0) }
           const caption = cellStr(r.caption ?? '').trim()
           if (caption) item.caption = caption
+          // 取图用的 CDN 地址（cdn_url 优先，回退 thumb_url/tp_url）；值里可能带 XML 实体
+          const cdnUrl = (cellStr(r.cdn_url ?? '').trim() || cellStr(r.thumb_url ?? '').trim())
+            .replace(/&amp;/g, '&').replace(/&#x26;/gi, '&')
+          if (cdnUrl) item.cdnUrl = cdnUrl
           custom.push(item)
         }
       }

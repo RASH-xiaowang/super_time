@@ -28,15 +28,15 @@ function dataRoot(): { root: string; decrypted: string } {
 describe('resolveImageKeyPair', () => {
   it('falls back to the key store when config.json has no image key', () => {
     const { root, decrypted } = dataRoot()
-    upsertAccountKeysInStore('default', { image_aes_key: '***REMOVED-SECRET***', image_xor_key: '60', image_key_verified: true }, root)
+    upsertAccountKeysInStore('default', { image_aes_key: '0123456789abcdef', image_xor_key: '60', image_key_verified: true }, root)
     const img = resolveImageKeyPair(decrypted)
-    expect(img.aesKey).toBe('***REMOVED-SECRET***')
+    expect(img.aesKey).toBe('0123456789abcdef')
     expect(img.xorKey).toBe(60)
   })
 
   it('prefers config.json over the key store', () => {
     const { root, decrypted } = dataRoot()
-    upsertAccountKeysInStore('default', { image_aes_key: '***REMOVED-SECRET***', image_xor_key: '60', image_key_verified: true }, root)
+    upsertAccountKeysInStore('default', { image_aes_key: '0123456789abcdef', image_xor_key: '60', image_key_verified: true }, root)
     saveConfig(decrypted, { image_aes_key: 'cccccccccccccccc', image_xor_key: 0xab })
     const img = resolveImageKeyPair(decrypted)
     expect(img.aesKey).toBe('cccccccccccccccc')
