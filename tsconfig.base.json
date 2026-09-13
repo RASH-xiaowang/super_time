@@ -1,0 +1,29 @@
+{
+  "//": "后端 TypeScript 基座。注意：原仓库从未提交过本文件，但 src/backend/wechat-data/tsconfig.json 与 tsconfig.host.json 都 extends 它，且 src/backend/deps/* 的构建产物（lib/tsconfig.tsbuildinfo）里留下了上游的编译选项。这里是按那些选项还原出来的，因此 strict 的若干放宽项（noImplicitAny/noImplicitThis/noUncheckedIndexedAccess = false）不是我的偏好，而是为了让既有代码能过——收紧它们属 RELEASE-PLAN 的 H11 收尾项。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "composite": true,
+    "strict": true,
+    "strictFunctionTypes": false,
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+    "noImplicitOverride": false,
+    "noUncheckedIndexedAccess": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": false
+  }
+}

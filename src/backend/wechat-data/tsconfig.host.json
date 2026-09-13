@@ -99,40 +99,5 @@
     "src/query/whisper.ts",
     "src/query/zip.ts",
     "src/types.ts"
-  ],
-  "references": [
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../../vendor/cosmokit"
-    },
-    {
-      "path": "../../../vendor/schemastery"
-    },
-    {
-      "path": "../../typert/protocol"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
-      "path": "../../llm/llm"
-    },
-    {
-      "path": "../../util/brand"
-    },
-    {
-      "path": "../../util/timeout"
-    },
-    {
-      "path": "../../attachment/attachment"
-    },
-    {
-      "path": "../../util/home-paths"
-    },
-    {
-      "path": "../../util/native-command"
-    }
   ]
 }

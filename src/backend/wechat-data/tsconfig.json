@@ -1,4 +1,5 @@
 {
+  "//": "references 原先指向上游 monorepo 的包（vendor/cordis、vendor/cosmokit、typert/protocol、llm/llm、attachment/attachment …），本仓库并没有这些目录——依赖是整目录 vendored 在 src/backend/deps/ 下的；而 deps 各自的 tsconfig 又 extends 了 src/tsconfig.base.json 与 src/backend/tsconfig.base.json 两个同样不存在的上游基座，链式解析必然失败。当前仓库没有 tsc 构建流程（运行时 bundle 由 esbuild 配合 tsconfigRaw 内联选项直接产出，见 scripts/build-wechat-bundle.js），所以先移除 references 断掉这条死链。等 H11 真正引入 typecheck 时，再连同 deps 的基座一起补回。",
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
@@ -6,37 +7,5 @@
   },
   "include": [
     "src"
-  ],
-  "references": [
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../../vendor/cosmokit"
-    },
-    {
-      "path": "../../typert/protocol"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
-      "path": "../../llm/llm"
-    },
-    {
-      "path": "../../util/brand"
-    },
-    {
-      "path": "../../util/timeout"
-    },
-    {
-      "path": "../../util/native-command"
-    },
-    {
-      "path": "../../attachment/attachment"
-    },
-    {
-      "path": "../../../packages/util/home-paths"
-    }
   ]
 }
