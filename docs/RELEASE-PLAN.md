@@ -34,13 +34,13 @@
 | 阶段 | 目标 | 条目数 | 未开始 | 进行中 | 待验收 | 已完成 |
 |---|---|---|---|---|---|---|
 | 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 1 | 0 | 1 |
-| 阶段 1 | 可验证性底座 | 3 | 2 | 1 | 0 | 0 |
+| 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
-| 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 5 | 0 | 0 | 0 |
+| 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 4 | 0 | 0 | 1 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 2 | 1 | 0 | 0 |
-| 阶段 5 | 中优先级：稳定性与性能 | 28 | 28 | 0 | 0 | 0 |
-| 阶段 6 | 低优先级：清理与打磨 | 23 | 22 | 0 | 0 | 1 |
-| **合计** | | **66** | **61** | **3** | **0** | **2** |
+| 阶段 5 | 中优先级：稳定性与性能 | 28 | 27 | 0 | 0 | 1 |
+| 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
+| **合计** | | **66** | **56** | **3** | **0** | **7** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -145,9 +145,9 @@ flowchart TD
 
 ---
 
-### `[~]` H3 · 测试套件完全无法运行
+### `[x]` H3 · 测试套件完全无法运行
 
-- **状态**：进行中（运行器已就位并跑通；11 个用例失败待 triage，见 N7）　**依赖**：H2　**预估**：1d
+- **状态**：已完成　**依赖**：H2　**预估**：1d
 - **证据**：
   - 36 个 spec 全部 `import { describe, expect, it } from 'vitest'`
   - `node_modules/vitest` 不存在；根 / `src/backend/wechat-data` / `src/client/ui-wechat` 三个 `package.json` 均无 vitest 依赖、无 `"test"` 脚本
@@ -172,9 +172,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H4 · 完全无 CI
+### `[x]` H4 · 完全无 CI
 
-- **状态**：未开始　**依赖**：H3　**预估**：1d
+- **状态**：已完成　**依赖**：H3　**预估**：1d
 - **证据**：无 `.github/workflows`、无 `.gitlab-ci.yml`/`Jenkinsfile`/`.circleci`。`build:backend` 也不在 `dev`/`prestart` 链路中（`package.json:8-12`）。
 - **风险**：改 `src/backend/**/*.ts` 后忘记 `npm run build:backend`，运行时静默使用旧 bundle（`scripts/build-wechat-bundle.js:6-10` 已明示此坑）；`lib/index.js` 已入库、已修改，无任何自动校验。
 - **动作**：
@@ -190,9 +190,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H5 · 验收脚本断言失败仍返回 exit 0
+### `[x]` H5 · 验收脚本断言失败仍返回 exit 0
 
-- **状态**：未开始　**依赖**：无　**预估**：0.5d
+- **状态**：已完成　**依赖**：无　**预估**：0.5d
 - **证据**：`scripts/ui-acceptance.mjs:985`（`main()` 的 catch 只 `console.error`）、`:989-993`（退出码仅当「配置还原失败」才置 1）。
 - **风险**：70 条 UI 断言全部失挂，自动化仍报成功——这是当前最危险的「假绿灯」。
 - **动作**：
@@ -278,9 +278,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H6 · License 闸门 fail-open
+### `[x]` H6 · License 闸门 fail-open
 
-- **状态**：未开始　**依赖**：无　**预估**：0.5d
+- **状态**：已完成　**依赖**：无　**预估**：0.5d
 - **证据**：`main.js:497-516`——授权检查包在 `try` 内，`catch` 只 `console.warn` 后**继续落到** `return wechatBackend.call(method, args)`（`:512-515`）。
 - **风险**：许可 JSON 损坏、`readLicenseFile` 读盘失败、指纹采集异常等任一情况，请求即**无证放行**。授权体系形同虚设。
 - **动作**：
@@ -526,7 +526,7 @@ flowchart TD
 | N1 | 既有 write store 与知识笔记是同一类隐患：假设数据根目录已存在，且失败被静默吞掉 | `wechat-tasks.ts:19-23` 的 `openStore` 无 `mkdirSync`，与笔记库同类；`listTasks:56-58` 的 `catch` 把打不开库直接退化成空列表 —— 「待办为空」与「库读不到」在界面上无法区分 | 各 store 的 `openStore` 显式建父目录；读失败与「确无数据」必须可区分（至少日志留痕）。验收：在全新 userData（无 `decrypted/`）下写入待办成功 | 未开始 |
 | N2 | 引导页「跳过」按钮要求 `licenseOk`，没有免许可证的跳过开关 → UI 自动化验证必须自签证书 | `ui-app/onboarding/OnboardingShell.tsx:952` `disabled={!licenseOk}`；本次为截图验证不得不签发临时许可证（一次性脚手架 `output/kb-verify-setup.js`，`output/` 已被 gitignore，非仓库资产；建议连同本项一并提升为 `scripts/` 下的常驻验证工具） | 加 `SUPERTIME_SKIP_ONBOARDING=1` 之类的显式调试开关（仅非打包态生效）。验收：设置该环境变量后可直接进入主界面，`ui-acceptance.mjs` 无需真实许可证 | 未开始 |
 | N6 | **换 userData 不能隔离数据源：应用会把真实微信库解密进新目录**（与 H1、H14 联动） | 实测：`SUPERTIME_USER_DATA_DIR=<空临时目录>` 启动后，该目录出现**完整的真实解密库** —— `message_1.db` 146MB、`sns.db` 13MB、`contact.db` 2143 个联系人，共约 282MB。成因链：`wechat-paths.js:108` 的「开发态一次性迁移」把仓库里**已提交**的 `wechat/config.json` 搬进新 STATE_DIR，该文件带 `db_dir`（真实原始库路径）+`db_enc_key`（H1）；`main.js:470-476` 随后把这份设置回灌后端（`saveWechatConfig`），于是 sync 用密钥把 `db_dir` 解密到新的 `decrypted_dir`。后果：① 任何「干净环境」测试其实都在真实数据上跑，测试隔离是假的；② 用户若更换/清空状态目录，应用会不经确认就把他 GB 级微信数据解密到新位置；③ 叠加 H1 后，任何拿到仓库 + 原始库路径的人都能完成解密 | 迁移不得携带 `db_dir`/密钥类字段（或迁移后强制清空路径与密钥，等待用户重新确认）；`decrypted_dir` 被指向空目录时不得自动全量解密，须显式确认。验收：全新 STATE_DIR 启动后不产生任何真实解密数据；日志能说明「数据源未配置」而非静默解密 | 未开始 |
-| N7 | 后端 **11 个用例失败**（162 中），需逐项 triage：区分「vendored 测试与源码本就漂移」与「真实缺陷」 | 失败集中在 `tests/{ask,contacts,ledger,messages,overview,resource-classify,sns-media}.spec.ts`。它们多对应本轮被改动过的后端源码（`parse.ts` +178 行、`sns-video.ts` +530 行），看似相关；但 **resource-classify 一项已用可逆 A/B 实验证伪「本地改动所致」**——把 `parse.ts` 回退到 `4b353fe` 版本后仍为 1 失败 / 16 通过，两份版本结果完全一致，说明该测试与 vendored 源码本就不同源。其余 6 个文件尚未逐个验证 | 每个失败用例给出结论：漂移 → 按现实现修正测试并注明依据；真缺陷 → 修源码。验收：`npm test` 退出码 0，失败项归零，且不得用 `.skip` 掩盖 | 未开始 |
+| N7 | 后端 11 个失败用例的 triage 与修复 | 11 项已全部清零，**其中 3 项是真缺陷**（2 个根因），不是测试过时——这一点与初次 triage 的结论相反：<br/>① `contacts.ts` 好友判据判反（把 1568 个非好友当联系人、417 个真好友当群成员）→ 已改源码；`contacts.spec` / `overview.spec` 夹具未动即转绿，证明它们一直在正确地报 bug。<br/>② `sns-video.ts` 朋友圈视频的 `msg/video/<月>/<md5>_thumb.jpg` 兜底成了死代码（只查根目录、不认月份子目录）→ 已改源码。<br/>其余 8 项确为夹具漂移：`ask.spec` 的 mock 不完整（3）、`messages.spec`/`ledger.spec` 的 appmsg 写成属性而非子元素（3）、`resource-classify.spec` 旧契约（1）、`sns-media.spec` 旧 cache-key 公式（1） | **教训**：初次 triage 用「回退源码后仍失败」判定漂移，但其中一次 A/B 是**空转实验**（被回退的 `parse.ts` 与 `resource-classify.ts` 毫无 import 关系），不能作为证据；而 `contacts.ts` 那项被建议「改夹具 1→3」，若照做会把 bug 固化。可疑结论必须回到领域语义（真实数据）复核 | 已完成 |
 
 ---
 
@@ -540,7 +540,7 @@ flowchart TD
 | L2 | 删除遗留死文件（无任何引用） | `.tmp-be.js`(770KB)、`.tmp-be-lib-index.pre-rag.bak.js`(777KB)、`.tmp-be-build.mjs`、`lib/index.js.orig`(874KB) | 未开始 |
 | L3 | 把孤儿脚本挂进 npm scripts | `scripts/license-gate-smoke.js`（依赖 H4） | 已完成 |
 | L4 | 测试脚本改为不写仓库（当前临时改写 `public-key.js`，中断即污染） | `license-smoke.js:52-54` | 未开始 |
-| L5 | 声明被脚本依赖但缺失的依赖 | `esbuild`（`rag:check`/`ui:smoke`）、`playwright`（`ui:accept`） | 未开始 |
+| L5 | 声明被脚本依赖但缺失的依赖 | `esbuild`（`rag:check`/`ui:smoke`/`build:backend`）：**已声明**（因阻塞 H4 而前置）。`playwright`（`ui:accept`）尚未：它是 300MB 级依赖且会拖慢每次 `npm ci`，而 `ui:accept` 是需要真实数据+人工介入的手动脚本 —— 建议与「H5 之后的验收脚本重整」一起处理，届时用 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 交由显式安装 | 进行中 |
 | L6 | 快照监听者清空后未删键（轻微 Map 泄漏） | `api.ts:63-68` | 未开始 |
 | L7 | `hasMore` 判定在 total 不可信或整页末页时错误 | `hooks.tsx:268` | 未开始 |
 | L8 | 布局动画期间每次 `finished` 重算小地图并写 localStorage | `EchartsGraphCanvas.tsx:743` | 未开始 |
@@ -682,4 +682,11 @@ flowchart TD
 | 2026-09-13 | 实施 | N7 | 新增 | 11 个失败用例待 triage；其中 resource-classify 已用可逆 A/B 实验证伪「本地改动所致」 |
 | 2026-09-13 | 实施 | 合计 | 65 → 66 | 阶段 5 +1（N7）；H2 完成、H1/H3/H11 转进行中 |
 | 2026-09-13 | 实施 | 教训 | — | `git commit -- <pathspec>` 会**按工作区内容提交并绕过索引**，导致首次 H1 出库提交实际未生效（反而多提交了一份含明文密钥的 config.json）。补救：改用「`git rm --cached` 暂存 → 不带路径 `git commit`」，并保留 `978f266` 作为记录、另起 `f4d4956` 真正生效 |
+| 2026-09-13 | 实施 | N7 | 未开始 → 已完成 | 11 项失败清零：**3 项真缺陷**（contacts 好友判据判反、sns-video 聊天缓存兜底失效）+ 8 项夹具漂移。`npm test` 36/36 文件、162/162 用例、exit 0 |
+| 2026-09-13 | 实施 | H3 | 进行中 → 已完成 | 运行器 + 全绿：162 用例通过、退出码 0 |
+| 2026-09-13 | 实施 | H4 | 未开始 → 已完成 | 新增 `.github/workflows/ci.yml`（windows-latest，12 步）；bundle 一致性门禁经正反两向验证；`dev`/`prestart` 补 `build:backend`（esbuild 仅 ~24ms，消除「忘记重建 bundle」这类静默故障）；声明 esbuild 为 devDependency（原 L5）；12 步本机全绿 |
+| 2026-09-13 | 实施 | H5 | 未开始 → 已完成 | 断言失败 / 执行异常 / 环境还原不完整三者任一即置退出码 1，并打印归因 |
+| 2026-09-13 | 实施 | H6 | 未开始 → 已完成 | 授权校验异常改为拒绝（`LICENSE_CHECK_FAILED`）；license 门禁与签发 smoke 无回归 |
+| 2026-09-13 | 实施 | L5 | 未开始 → 进行中 | esbuild 已声明（阻塞 H4，前置完成）；playwright 待与验收脚本重整一并处理 |
+| 2026-09-13 | 实施 | 合计 | 66 项：未开始 56 / 进行中 3 / 已完成 7 | 阶段 0 完成 1、阶段 1 全部完成（3）、阶段 3 完成 1（H6）、阶段 5 完成 1（N7）、阶段 6 完成 1（L3）+ 进行中 1（L5） |
 
