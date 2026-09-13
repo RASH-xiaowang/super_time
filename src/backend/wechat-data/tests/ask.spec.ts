@@ -11,6 +11,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../src/query/search.ts', () => ({
   searchIndexMessages: mocks.searchIndexMessages,
+  // ask.ts 还会用到下面这三个导出。旧版 mock 只给了 searchIndexMessages，
+  // 于是首次访问就抛 "No ... export is defined"，3 个用例在断言前就崩。
+  // countIndexMatches 返回 -1 = 「索引不可用」，让 ask.ts 跳过 BM25 分支、
+  // 走 like 兜底 —— 这正是这些用例想覆盖的格式化路径。
+  countIndexMatches: () => -1,
+  searchIndexBatch: () => ({ hits: [], ranked: false }),
+  loadMessageWindow: () => [],
 }))
 
 import { buildAskContext } from '../src/query/ask.ts'

@@ -73,7 +73,9 @@ describe('queryMessages / queryNewMessages', () => {
     const root = tempRoot()
     const talker = 'wxid_pay'
     const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
-    const XML = '<msg><appmsg type="2000"><wcpayinfo><feedesc>￥10.00</feedesc></wcpayinfo></appmsg></msg>'
+    // 真实微信把子类型写成 <appmsg> 的**子元素** <type>，不是属性 ——
+    // parse.ts 的 parseAppmsgType 只读子元素，属性写法解析出 0、会落到 default 分支。
+    const XML = '<msg><appmsg><type>2000</type><wcpayinfo><feedesc>￥10.00</feedesc></wcpayinfo></appmsg></msg>'
     makeDb(join(root, 'message', 'message_1.db'), (db) => {
       db.exec(`CREATE TABLE "${table}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER)`)
       // >2^53 的 server_id 按 INTEGER 存储：整型等值路径必须原样命中。
