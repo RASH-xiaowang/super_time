@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLlmConfig: () => ipcRenderer.invoke('wechat:llm-get'),
     saveLlmConfig: (config) => ipcRenderer.invoke('wechat:llm-save', config),
     listLlmModels: (options) => ipcRenderer.invoke('wechat:llm-models', options),
+    /** 后端进程状态快照：渲染端挂载后补一次，避免错过首启期间的状态事件。 */
+    backendState: () => ipcRenderer.invoke('wechat:backend-state'),
     onEvent: (listener) => {
       const handler = (_event, payload) => {
         try {

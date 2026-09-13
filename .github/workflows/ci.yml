@@ -13,14 +13,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # 说明：最后一条「后端崩溃自愈」要在真实 Electron 里 taskkill 后端 worker，
-  # 所以**不能**设 ELECTRON_SKIP_BINARY_DOWNLOAD。其余步骤只跑 vite 构建与
-  # Node 脚本，并不需要 electron 二进制；若该端到端步骤在 CI 上不稳定，
-  # 请把它拆成单独工作流，不要直接删——它是「后端进程死了能否自己回来」
-  # 的唯一自动化证据（超时/死亡收敛的确定性覆盖在 npm test 里）。
-  SUPERTIME_CI: '1'
-
 jobs:
   verify:
     runs-on: windows-latest

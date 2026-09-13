@@ -71,9 +71,21 @@ let mainWindow = null;
 let wechatBackend = null;
 /** 后端进程启动时返回的 { info, methods }。 */
 let wechatBoot = null;
-/** 监管状态：后端数据目录、已重启次数、是否正在主动停止。 */
+/** 监管状态：数据目录、当前句柄、已重启次数、待执行的重启定时器、是否主动停止。 */
 let backendUserDataPath = null;
+/**
+ * 最近一次拉起的句柄（无论 init 是否完成）。
+ *
+ * 与 `wechatBackend` 的区别很关键：`wechatBackend` 只在 init 成功后才有值，
+ * 而退出回调必须能判断「退出的到底是不是当前这个进程」——否则一个已被取代的
+ * 陈旧句柄迟到地报 exit，就会把健康的新句柄置空、还多排一次重启。
+ */
+let backendCurrentHandle = null;
 let backendRestartCount = 0;
+/** 待执行的重启定时器；非空表示已有一次重启在路上，避免同一故障排两次。 */
+let backendRestartTimer = null;
+/** 面向界面的后端状态快照（渲染端可能错过事件，需要能主动查）。 */
+let backendStatus = { state: 'starting', restarts: 0, lastError: null };
 /** 主动停止（应用退出 / 显式 dispose）后不再自动重启。 */
 let backendStopping = false;
 
@@ -127,19 +139,36 @@ function spawnBackendProcess(userDataPath, onExit) {
 const BACKEND_RESTART_MAX = 3;
 const RESTART_BACKOFF_MS = [500, 1500, 4500];
 
+/** 更新状态快照并广播，渲染端可同时靠事件与主动查询拿到它。 */
+function setBackendStatus(state, lastError = null) {
+  backendStatus = { state, restarts: backendRestartCount, lastError };
+  broadcastWechatEvent('wechat-backend-status', [backendStatus]);
+}
+
 /** 启动后端并完成 init，成功后写入 wechatBackend / wechatBoot。 */
 async function startWechatBackend(userDataPath) {
   const handle = spawnBackendProcess(userDataPath, (code) => {
-    if (backendStopping) return;
+    // 只认「当前句柄」的退出：陈旧句柄的迟到 exit 不能动健康的新句柄，也不能再排一次重启。
+    if (backendStopping || handle !== backendCurrentHandle) return;
     wechatBackend = null;
     wechatBoot = null;
-    broadcastWechatEvent('wechat-backend-down', [{ code }]);
+    setBackendStatus('down', `后端进程已退出 (code=${code})`);
     scheduleBackendRestart(`进程退出 (code=${code})`);
   });
-  const boot = await handle.init();
-  wechatBackend = handle;
-  wechatBoot = boot;
-  return handle;
+  backendCurrentHandle = handle;
+  try {
+    const boot = await handle.init();
+    wechatBackend = handle;
+    wechatBoot = boot;
+    return handle;
+  } catch (e) {
+    // init 失败或超时：**必须杀掉刚拉起的子进程**。否则会漏一个仍在跑解密/同步的进程，
+    // 而且下一次 start 直接覆盖句柄后它就彻底无人认领（既不退出也不再被监管）。
+    if (handle === backendCurrentHandle) {
+      try { handle.dispose(); } catch { /* 已退出 */ }
+    }
+    throw e;
+  }
 }
 
 /** 把「已保存的微信设置」回灌到后端（首次启动与每次重启后都要做）。 */
@@ -158,21 +187,30 @@ async function applySavedWechatSettings() {
  */
 function scheduleBackendRestart(reason) {
   if (backendStopping) return;
+  // 同一故障可能同时走两条路径（退出回调 + init 失败的 catch），若各排一个定时器，
+  // 就会在「后端已恢复」之后 4.5 秒再拉一个进程覆盖健康句柄，或在健康时误报
+  // 「后端不可用」；而且有效重试次数会少于声明的 3 次。用单定时器挡住。
+  if (backendRestartTimer) {
+    console.warn(`[wechat] 已有重启计划在路上，忽略重复触发（原因：${reason}）`);
+    return;
+  }
   if (backendRestartCount >= BACKEND_RESTART_MAX) {
     const msg = `微信+ 后端连续 ${BACKEND_RESTART_MAX} 次重启失败，相关功能不可用。`
       + `请重启应用；若持续失败请检查 wechat/config.json 与数据目录。最近原因：${reason}`;
     console.error('[wechat]', msg);
-    broadcastWechatEvent('wechat-backend-failed', [{ message: msg }]);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { dialog.showErrorBox('微信+ 后端不可用', msg); } catch { /* 对话框失败不致命 */ }
-    }
+    setBackendStatus('failed', msg);
+    // 刻意**不用** dialog.showErrorBox：它是阻塞式模态，无人点击时会卡住主进程，
+    // 连 app.quit() 都到不了（实测验证脚本因此挂死 5 分钟）。失败信息改由渲染端
+    // 的状态横幅承载 —— 它常驻显示、可自动消失、也不挡任何东西。
     return;
   }
   const attempt = backendRestartCount;
   backendRestartCount += 1;
+  setBackendStatus('restarting', reason);
   const delay = RESTART_BACKOFF_MS[attempt] ?? RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
   console.warn(`[wechat] 后端将在 ${delay}ms 后第 ${backendRestartCount}/${BACKEND_RESTART_MAX} 次重启（原因：${reason}）`);
-  const timer = setTimeout(() => {
+  backendRestartTimer = setTimeout(() => {
+    backendRestartTimer = null;
     if (backendStopping) return;
     void (async () => {
       try {
@@ -180,14 +218,16 @@ function scheduleBackendRestart(reason) {
         // 新进程是干净的，必须回灌已保存设置，否则密钥/路径全空。
         await applySavedWechatSettings();
         backendRestartCount = 0;
+        setBackendStatus('ready');
         console.log('[wechat] 后端已恢复，Remote 方法数:', wechatBoot?.methods?.length ?? 0);
-        broadcastWechatEvent('wechat-backend-up', [{ methods: wechatBoot?.methods?.length ?? 0 }]);
       } catch (e) {
-        scheduleBackendRestart(`重启后 init 失败：${e?.message ?? e}`);
+        const why = `重启后 init 失败：${e?.message ?? e}`;
+        setBackendStatus('down', why);
+        scheduleBackendRestart(why);
       }
     })();
   }, delay);
-  if (timer.unref) timer.unref();
+  if (backendRestartTimer.unref) backendRestartTimer.unref();
 }
 
 /** 微信+前端构建产物（npm run build:ui 生成）；缺失时回退到演示页。 */
@@ -514,37 +554,11 @@ app.whenReady().then(async () => {
   });
 
   // —— 微信+后端（迁移自 @deepseek-ai/dsh-wechat-data，独立进程运行）——
-  try {
-    // 先读取 wechat/config.json 里的路径配置并映射到 DSH_WECHAT_* 环境变量
-    // （必须在 fork 之前，子进程直接继承 process.env）。
-    applyConfig();
-    backendUserDataPath = app.getPath('userData');
-    await startWechatBackend(backendUserDataPath);
-    // 启动后将实际解析到的路径记录回 wechat/config.json。
-    try {
-      recordResolved(wechatBoot.info);
-    } catch (e) {
-      console.warn('[wechat] 记录路径配置失败:', e);
-    }
-    // 若 wechat/config.json 中已有保存过的微信设置（密钥等），启动时回写后端。
-    try {
-      await applySavedWechatSettings();
-    } catch (e) {
-      console.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
-    }
-    console.log('[wechat] 微信+后端已就绪，Remote 方法数:', wechatBoot.methods.length);
-    console.log('[wechat] 状态目录:', STATE_DIR);
-    console.log('[wechat] 路径配置:', configPath());
-  } catch (err) {
-    console.error('[wechat] 微信+后端初始化失败:', err);
-    // 初始化失败也交给监管器重试 —— 这是最该自愈的一类失败：
-    // 首次启动时数据可能正在解密、数据根尚未就绪，等一会儿再拉一次往往就成功。
-    // 原实现只 console.error 一句，界面永远停在「微信+后端未初始化」。
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { dialog.showErrorBox('微信+ 后端初始化失败', `正在自动重试。原因：${err?.message ?? err}`); } catch { /* 不致命 */ }
-    }
-    scheduleBackendRestart(`初始化失败：${err?.message ?? err}`);
-  }
+  // 注意：这段**刻意放在 createWindow() 之后**（见下方 createWindow() 调用处）。
+  // 原顺序是先 await 后端 init 再建窗，而 init 要 import 783KB bundle、解析数据根、
+  // 首次还可能触发 bootstrap，于是首帧被推迟；更要紧的是那段以 mainWindow 为条件的
+  // 失败提示在首启时恒为 null（窗口还没建）—— 等于「init 失败只打日志」。
+  // 移到建窗之后，提示才真的会弹给用户。
 
   ipcMain.handle('wechat:list-methods', () => {
     if (!wechatBoot) return { ok: false, error: { message: '微信+后端未初始化' } };
@@ -592,14 +606,25 @@ app.whenReady().then(async () => {
     // 显式 dispose 的语义是「拆掉后端」，因此先关掉监管器再拆 ——
     // 否则进程退出会触发自动重启，与调用方意图相反。
     backendStopping = true;
+    if (backendRestartTimer) { clearTimeout(backendRestartTimer); backendRestartTimer = null; }
     if (wechatBackend) {
       wechatBackend.dispose();
       wechatBackend = null;
       wechatBoot = null;
+      setBackendStatus('stopped', '已由调用方显式停止');
       return { ok: true };
     }
     return { ok: true };
   });
+
+  /**
+   * 后端状态快照。
+   *
+   * 之所以要有主动查询：渲染端订阅事件是在模块加载时注册的，而首启期间
+   * 后端可能先于订阅就报出 down/ready/failed —— 那些事件会丢失。
+   * 界面挂载后用这个接口补一次状态，才能保证「该提示的一定提示到」。
+   */
+  ipcMain.handle('wechat:backend-state', () => ({ ok: true, value: { ...backendStatus } }));
 
   // —— 微信问答模型配置（wechat/llm.json） ——
   ipcMain.handle('wechat:llm-get', () => {
@@ -696,6 +721,43 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+
+  // 先建窗、再起后端：窗口能立刻显示加载态，首帧不再等 init（原顺序会先 await 后端
+  // init，而 init 要 import 783KB 的 bundle、解析数据根，首次还可能触发 bootstrap，
+  // 首帧被整段推迟）。
+  // 放到这里还有个实际原因：状态横幅由渲染端承载，而渲染端要等窗口建好才能收到事件，
+  // 也要等它挂载后主动查 backendState 才能补救「首启就失败」时错过的事件。
+  try {
+    // 先读取 wechat/config.json 里的路径配置并映射到 DSH_WECHAT_* 环境变量
+    // （必须在 fork 之前，子进程直接继承 process.env）。
+    applyConfig();
+    backendUserDataPath = app.getPath('userData');
+    await startWechatBackend(backendUserDataPath);
+    // 启动后将实际解析到的路径记录回 wechat/config.json。
+    try {
+      recordResolved(wechatBoot.info);
+    } catch (e) {
+      console.warn('[wechat] 记录路径配置失败:', e);
+    }
+    // 若 wechat/config.json 中已有保存过的微信设置（密钥等），启动时回写后端。
+    try {
+      await applySavedWechatSettings();
+    } catch (e) {
+      console.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
+    }
+    backendRestartCount = 0;
+    setBackendStatus('ready');
+    console.log('[wechat] 微信+后端已就绪，Remote 方法数:', wechatBoot.methods.length);
+    console.log('[wechat] 状态目录:', STATE_DIR);
+    console.log('[wechat] 路径配置:', configPath());
+  } catch (err) {
+    console.error('[wechat] 微信+后端初始化失败:', err);
+    // 初始化失败也交给监管器重试 —— 这是最该自愈的一类失败：
+    // 首次启动时数据可能正在解密、数据根尚未就绪，等一会儿再拉一次往往就成功。
+    // 不用阻塞式对话框，失败信息走渲染端横幅（见 setBackendStatus 的说明）。
+    setBackendStatus('down', `初始化失败：${err?.message ?? err}`);
+    scheduleBackendRestart(`初始化失败：${err?.message ?? err}`);
+  }
 
   // 调试用：SUPERTIME_SCREENSHOT=path 时加载完成后截图并退出；
   // SUPERTIME_THEME=light|dark 可在截图前强制主题。
@@ -814,6 +876,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
   backendStopping = true;
+  if (backendRestartTimer) { clearTimeout(backendRestartTimer); backendRestartTimer = null; }
   if (wechatBackend) {
     try {
       wechatBackend.dispose();

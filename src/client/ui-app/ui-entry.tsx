@@ -93,6 +93,68 @@ void (async (): Promise<void> => {
     /* 横幅失败不影响使用 */
   }
 })()
+/**
+ * 后端进程状态横幅。
+ *
+ * 为什么需要它：后端 worker 是独立进程，可能被杀、崩掉或重启失败。
+ * 主进程会把状态作为 `wechat-backend-status` 事件广播出去，但**渲染端原先没有任何
+ * 消费者** —— 后端死掉时界面只会表现为「数据一直加载不出来」，用户无从判断是没数据
+ * 还是后端挂了。这里把状态显式说出来：
+ *   · down / restarting → 黄条（正在自愈，稍等）
+ *   · failed            → 红条（自愈失败，需要人工介入，附主进程给的排查指引）
+ *   · ready             → 移除横幅
+ *
+ * 挂载后还会主动查一次 `backendState()`：订阅是模块加载时注册的，而首启期间后端
+ * 可能先于订阅就报出状态 —— 那些事件会丢失，只靠事件会漏掉「首启就失败」的情况。
+ */
+void (async (): Promise<void> => {
+  const api = (window as any).electronAPI?.wechat
+  if (!api) return
+  const BANNER_ID = 'backend-status-banner'
+
+  const render = (state: string, lastError: string | null): void => {
+    const existing = document.getElementById(BANNER_ID)
+    if (state === 'ready' || state === 'starting' || state === 'stopped') {
+      existing?.remove()
+      return
+    }
+    const failed = state === 'failed'
+    const text = failed
+      ? `⚠ ${lastError ?? '微信+ 后端不可用'}`
+      : `⏳ 微信+ 后端正在重启${lastError ? `（${lastError}）` : ''}，稍后自动恢复`
+    if (existing) {
+      existing.textContent = text
+      existing.setAttribute('data-failed', failed ? '' : 'pending')
+      existing.setAttribute('style', bannerStyle(failed))
+      return
+    }
+    const bar = document.createElement('div')
+    bar.id = BANNER_ID
+    bar.textContent = text
+    bar.setAttribute('data-failed', failed ? '' : 'pending')
+    bar.setAttribute('style', bannerStyle(failed))
+    document.body.insertBefore(bar, document.getElementById('root'))
+  }
+
+  /** 与验收测试模式横幅同一套排版，只有配色随严重度变。 */
+  const bannerStyle = (failed: boolean): string =>
+    'flex:0 0 auto;padding:6px 12px;color:#fff;'
+    + `background:${failed ? '#b91c1c' : '#b45309'};`
+    + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+    + 'text-align:center;letter-spacing:.02em'
+
+  try {
+    const snap = await api.backendState?.()
+    if (snap?.ok && snap.value) render(snap.value.state, snap.value.lastError ?? null)
+  } catch {
+    /* 拿不到状态就不显示横幅，不影响使用 */
+  }
+  api.onEvent?.((ev: { name: string; args?: unknown[] }) => {
+    if (ev.name !== 'wechat-backend-status') return
+    const s = (ev.args?.[0] ?? {}) as { state?: string; lastError?: string | null }
+    render(s.state ?? 'down', s.lastError ?? null)
+  })
+})()
 function WechatApp(): React.JSX.Element {
   const [open, setOpen] = useState(getOpen())
   // 启动页：首次必须浏览完；再次启动可跳过
