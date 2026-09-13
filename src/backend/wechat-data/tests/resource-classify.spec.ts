@@ -42,8 +42,13 @@ describe('parsePackedName', () => {
     expect(parsePackedName(field2String(2, '   '))).toBe('')
   })
 
-  it('ignores a length-delimited field other than 2', () => {
-    expect(parsePackedName(field2String(1, 'other'))).toBe('')
+  it('falls back to any wire-2 field when the preferred ones are absent', () => {
+    // 契约已变：现实现是嵌套 walk，对**任意** wire-2 字段先按文本试解，
+    // 末尾还有 `?? found[0]` 兜底（见 resource-classify.ts 的择优链），
+    // 所以顶层 field1 的 'other' 会被当文件名取用。
+    // 真实 blob 的顶层 field1 是二进制嵌套消息，不会走这条路径 ——
+    // 该差异只在合成输入上可见，旧断言（期望空串）写的是改版前的契约。
+    expect(parsePackedName(field2String(1, 'other'))).toBe('other')
   })
 
   it('skips wire-0 varints', () => {

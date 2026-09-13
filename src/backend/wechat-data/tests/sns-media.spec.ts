@@ -73,12 +73,17 @@ describe('resolveSnsVideoCoverDataUrl', () => {
     scratch.push(base)
     const timelineId = 'v_timeline'
     const mediaId = 'v_media'
-    const hash = createHash('md5').update(timelineId + '_' + mediaId + '_2', 'utf8').digest('hex')
-    const dir = join(base, 'cache', '2026-08', 'Sns', 'Video', hash.slice(0, 2))
+    // 文件名与 timeline/media 标识无关：现实现只按**内容 md5** 建索引。
+    // 旧的 md5(timelineId_mediaId_2) 公式已废弃 —— 真实数据实测 11 种公式 × 4 种后缀
+    // 对 127 个磁盘基名零命中（见 sns-video.ts 头注释）。
+    // timelineId/mediaId 仍照旧传入，用于说明这两个参数现在已被忽略。
+    const indexFile = 'cafebabecafebabecafebabecafebabe'
+    const dir = join(base, 'cache', '2026-08', 'Sns', 'Video', indexFile.slice(0, 2))
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, hash.slice(2) + '.jpg'), JPEG_HEADER)
+    writeFileSync(join(dir, indexFile.slice(2) + '.jpg'), JPEG_HEADER)
 
-    const r = resolveSnsVideoCoverDataUrl(base, undefined, timelineId, mediaId)
+    const md5 = createHash('md5').update(JPEG_HEADER).digest('hex')
+    const r = resolveSnsVideoCoverDataUrl(base, md5, timelineId, mediaId)
     expect(r.url).toMatch(/^data:image\/jpeg;base64,/)
   })
 

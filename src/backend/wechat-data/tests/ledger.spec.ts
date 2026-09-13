@@ -29,8 +29,10 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
   try { create(db) } finally { db.close() }
 }
 
-const TRANSFER_XML = '<msg><appmsg type="2000"><wcpayinfo><paysubtype>3</paysubtype><feedesc>￥10.00</feedesc></wcpayinfo></appmsg></msg>'
-const REDPACKET_XML = '<msg><appmsg type="2001"><wcpayinfo><feedesc>￥8.88</feedesc></wcpayinfo></appmsg></msg>'
+// 子类型是 <appmsg> 的**子元素** <type>（真实格式），不是属性：
+// parse.ts 的 parseAppmsgType 只读子元素，属性写法会解析成 0 并落到 default 分支。
+const TRANSFER_XML = '<msg><appmsg><type>2000</type><wcpayinfo><paysubtype>3</paysubtype><feedesc>￥10.00</feedesc></wcpayinfo></appmsg></msg>'
+const REDPACKET_XML = '<msg><appmsg><type>2001</type><wcpayinfo><feedesc>￥8.88</feedesc></wcpayinfo></appmsg></msg>'
 
 describe('queryLedger', () => {
   it('aggregates transfer and red-packet amounts with direction and contact names', () => {
