@@ -33,14 +33,14 @@
 
 | 阶段 | 目标 | 条目数 | 未开始 | 进行中 | 待验收 | 已完成 |
 |---|---|---|---|---|---|---|
-| 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 2 | 0 | 0 | 0 |
-| 阶段 1 | 可验证性底座 | 3 | 3 | 0 | 0 | 0 |
+| 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 1 | 0 | 1 |
+| 阶段 1 | 可验证性底座 | 3 | 2 | 1 | 0 | 0 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 5 | 0 | 0 | 0 |
-| 阶段 4 | 安全加固与类型底座 | 3 | 3 | 0 | 0 | 0 |
-| 阶段 5 | 中优先级：稳定性与性能 | 27 | 27 | 0 | 0 | 0 |
+| 阶段 4 | 安全加固与类型底座 | 3 | 2 | 1 | 0 | 0 |
+| 阶段 5 | 中优先级：稳定性与性能 | 28 | 28 | 0 | 0 | 0 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 22 | 0 | 0 | 1 |
-| **合计** | | **65** | **64** | **0** | **0** | **1** |
+| **合计** | | **66** | **61** | **3** | **0** | **2** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -79,9 +79,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H1 · 真实密钥已被 git 跟踪
+### `[~]` H1 · 真实密钥已被 git 跟踪
 
-- **状态**：未开始　**依赖**：无　**预估**：0.5d
+- **状态**：进行中（仓库侧已完成；凭据轮换与历史重写待人工决策）　**依赖**：无　**预估**：0.5d
 - **证据**：
   - `git ls-files wechat/` 列出 `wechat/config.json` 与 `wechat/llm.json`
   - `git show HEAD:wechat/llm.json` → `apiKey` 为一条真实 DeepSeek Key（形如 `sk-<32 位十六进制>`，此处不复制明文，避免二次泄露）
@@ -103,9 +103,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H2 · 工作区与 HEAD 严重脱节
+### `[x]` H2 · 工作区与 HEAD 严重脱节
 
-- **状态**：未开始　**依赖**：无　**预估**：1d
+- **状态**：已完成　**依赖**：无　**预估**：1d
 - **证据**：`git status --porcelain` 共 781 项——673 删除、62 修改、46 未跟踪。未跟踪项包含 **`src/license/`、`src/backend/wechat-data/src/query/retrieval/`、`src/client/ui-app/onboarding/`、`src/backend/wechat-data/native/`、`tools/`、全部新脚本**。
 - **风险**：fresh clone 会缺少许可模块、RAG 检索层、新手引导、native WASM 解码器，并多出约 12.6MB 已废弃产物。即「仓库里的代码不是能跑的代码」。
 - **动作**：
@@ -120,7 +120,14 @@ flowchart TD
   - [ ] 启动后 License 闸门生效（未导入许可时业务调用被拒）
   - [ ] RAG 问答面板可用（验证 `retrieval/` 已入库）
   - [ ] 朋友圈视频可解密播放（验证 `native/` 已入库）
-  - [ ] `git ls-files | rg 'tsbuildinfo|\.orig$|\.tmp-'` 无命中
+  - [x] `git ls-files | rg 'tsbuildinfo|\.orig$|\.tmp-'` 无命中
+- **本轮结果（2026-09-13）**：
+  - [x] `git status --porcelain` 为空
+  - [x] 关键模块确认已入库：`src/license/service.js`、`query/retrieval/pipeline.ts`、`ui-app/onboarding/OnboardingShell.tsx`、`native/weflow-isaac64/wasm_video_decode.wasm`、`tools/license-studio/main.js`
+  - [x] 构建与运行：`build:ui`（822 modules）、`build:backend`（794.7kb）、应用可启动并进主界面
+  - [x] 密钥文件与 15 个 tsbuildinfo 均不在索引；`git show HEAD:wechat/llm.json` 报 "exists on disk, but not in 'HEAD'"
+  - [ ] **未做**：真正的 `git clone` → `npm ci` 全新环境复核（当前是原地验证；`npm ci` 需联网拉取 vite/electron 等 registry 包）
+  - 提交序列（6 个主题提交）：`978f266` 安全出库（**该次误用 `git commit -- <pathspec>`，实际未生效**）→ `cc544b1` 清理废弃产物 687 项 → `89cd02a` 后端 → `b9e5336` 主进程与许可 → `0cb70bb` 前端 → `52660d4` 构建脚本与文档 → `f4d4956` 真正出库（修正 978f266）
 
 ---
 
@@ -138,9 +145,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H3 · 测试套件完全无法运行
+### `[~]` H3 · 测试套件完全无法运行
 
-- **状态**：未开始　**依赖**：H2　**预估**：1d
+- **状态**：进行中（运行器已就位并跑通；11 个用例失败待 triage，见 N7）　**依赖**：H2　**预估**：1d
 - **证据**：
   - 36 个 spec 全部 `import { describe, expect, it } from 'vitest'`
   - `node_modules/vitest` 不存在；根 / `src/backend/wechat-data` / `src/client/ui-wechat` 三个 `package.json` 均无 vitest 依赖、无 `"test"` 脚本
@@ -156,6 +163,12 @@ flowchart TD
   - [ ] 收集到 36 个 spec 文件，测试用例数 ≥ 161
   - [ ] CI 与本地结果一致（无「只在本地过」的用例）
   - [ ] `npm test` 在无真实微信数据、无网络的机器上同样通过
+- **本轮结果（2026-09-13）**：
+  - [x] `npm test` 能跑：36/36 文件收集成功，162 个用例执行
+  - [x] 收集数 ≥ 161（实际 162）
+  - [ ] **`npm test` 退出码为 0 —— 未达成**：151 通过 / 11 失败（见 N7）
+  - 顺带前置了 H11 的 tsconfig 部分：补出根 `tsconfig.base.json`（原缺失、导致 vite/vitest 解析 `extends` 直接抛错），并断掉两处悬空 `references`
+  - 环境说明：vitest 需装 `^3`；vitest 5 要求 vite ≥6，本仓库为 vite 5，装最新版会 ERESOLVE
 
 ---
 
@@ -413,9 +426,9 @@ flowchart TD
 
 ---
 
-### `[ ]` H11 · 类型检查实际为零
+### `[~]` H11 · 类型检查实际为零
 
-- **状态**：未开始　**依赖**：H2　**预估**：3d
+- **状态**：进行中（tsconfig 断链已修，typecheck 脚本与 strict 收敛待做；因阻塞 H3 而前置）　**依赖**：H2　**预估**：3d
 - **证据**：
   - `typescript` **未安装**（`node_modules/typescript` 不存在，无 `tsc`）
   - `src/backend/wechat-data/tsconfig.json:2` 与 `tsconfig.host.json:2` extends `../../../tsconfig.base.json`——**该文件不存在**（根目录只有 `tsconfig.base.client.json`）
@@ -506,13 +519,14 @@ flowchart TD
 | M22 | 文档与代码不一致 | 方法数三方打架：`gateway.ts` 实际 129 ← RAG 文档 126 ← `backend/README.md` 114；`backend/README.md:52,92` 引用不存在的 `npm run smoke:wechat`/`config:wechat`；`wechat/whisper/README.md` 声称的 exe 已被删 | 修正全部引用；方法数改为自动生成（并入 H14）。验收：文档中的命令均可执行，方法数与代码一致 | 未开始 |
 | M24 | keys ↔ query 双向依赖 | `keys/service.ts:19`、`keys/db-key-v4.ts:18` → `query/config.ts`；而 `query/image-key.ts:8` → `keys/key-store.ts`，层次倒置 | 抽出共享的配置读取到独立层（如 `config/`），消除双向依赖。验收：依赖方向单向，单测可独立加载 | 未开始 |
 
-### 工作流 F · 知识图谱交付时暴露的问题（3 项）
+### 工作流 F · 知识图谱交付与计划实施中暴露的问题（4 项）
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
 | N1 | 既有 write store 与知识笔记是同一类隐患：假设数据根目录已存在，且失败被静默吞掉 | `wechat-tasks.ts:19-23` 的 `openStore` 无 `mkdirSync`，与笔记库同类；`listTasks:56-58` 的 `catch` 把打不开库直接退化成空列表 —— 「待办为空」与「库读不到」在界面上无法区分 | 各 store 的 `openStore` 显式建父目录；读失败与「确无数据」必须可区分（至少日志留痕）。验收：在全新 userData（无 `decrypted/`）下写入待办成功 | 未开始 |
 | N2 | 引导页「跳过」按钮要求 `licenseOk`，没有免许可证的跳过开关 → UI 自动化验证必须自签证书 | `ui-app/onboarding/OnboardingShell.tsx:952` `disabled={!licenseOk}`；本次为截图验证不得不签发临时许可证（一次性脚手架 `output/kb-verify-setup.js`，`output/` 已被 gitignore，非仓库资产；建议连同本项一并提升为 `scripts/` 下的常驻验证工具） | 加 `SUPERTIME_SKIP_ONBOARDING=1` 之类的显式调试开关（仅非打包态生效）。验收：设置该环境变量后可直接进入主界面，`ui-acceptance.mjs` 无需真实许可证 | 未开始 |
 | N6 | **换 userData 不能隔离数据源：应用会把真实微信库解密进新目录**（与 H1、H14 联动） | 实测：`SUPERTIME_USER_DATA_DIR=<空临时目录>` 启动后，该目录出现**完整的真实解密库** —— `message_1.db` 146MB、`sns.db` 13MB、`contact.db` 2143 个联系人，共约 282MB。成因链：`wechat-paths.js:108` 的「开发态一次性迁移」把仓库里**已提交**的 `wechat/config.json` 搬进新 STATE_DIR，该文件带 `db_dir`（真实原始库路径）+`db_enc_key`（H1）；`main.js:470-476` 随后把这份设置回灌后端（`saveWechatConfig`），于是 sync 用密钥把 `db_dir` 解密到新的 `decrypted_dir`。后果：① 任何「干净环境」测试其实都在真实数据上跑，测试隔离是假的；② 用户若更换/清空状态目录，应用会不经确认就把他 GB 级微信数据解密到新位置；③ 叠加 H1 后，任何拿到仓库 + 原始库路径的人都能完成解密 | 迁移不得携带 `db_dir`/密钥类字段（或迁移后强制清空路径与密钥，等待用户重新确认）；`decrypted_dir` 被指向空目录时不得自动全量解密，须显式确认。验收：全新 STATE_DIR 启动后不产生任何真实解密数据；日志能说明「数据源未配置」而非静默解密 | 未开始 |
+| N7 | 后端 **11 个用例失败**（162 中），需逐项 triage：区分「vendored 测试与源码本就漂移」与「真实缺陷」 | 失败集中在 `tests/{ask,contacts,ledger,messages,overview,resource-classify,sns-media}.spec.ts`。它们多对应本轮被改动过的后端源码（`parse.ts` +178 行、`sns-video.ts` +530 行），看似相关；但 **resource-classify 一项已用可逆 A/B 实验证伪「本地改动所致」**——把 `parse.ts` 回退到 `4b353fe` 版本后仍为 1 失败 / 16 通过，两份版本结果完全一致，说明该测试与 vendored 源码本就不同源。其余 6 个文件尚未逐个验证 | 每个失败用例给出结论：漂移 → 按现实现修正测试并注明依据；真缺陷 → 修源码。验收：`npm test` 退出码 0，失败项归零，且不得用 `.skip` 掩盖 | 未开始 |
 
 ---
 
@@ -661,5 +675,11 @@ flowchart TD
 | 2026-09-13 | 实施 | N1–N5 | 新增 | 交付过程暴露：既有 store 建目录/静默吞错同类隐患、无免许可证跳过开关（阻碍 UI 自动化）、构建体积统计恒 0KB、无数据时 stderr 噪声、旧称「社交图谱」未同步 |
 | 2026-09-13 | 实施 | N6 | 新增 | 用 `SUPERTIME_USER_DATA_DIR` 指向空目录启动后，该目录出现约 282MB 真实解密库：开发态配置迁移把仓库里已提交的 `wechat/config.json`（含 `db_dir` + `db_enc_key`）搬进新 STATE_DIR，后端随即用密钥把原始库解密到新的 `decrypted_dir`。换 userData 并不能隔离数据源，测试隔离与 H1 的严重度都要按此重估；临时目录已清理 |
 | 2026-09-13 | 实施 | 图谱拆分为两个入口 | 新增 | 用户反馈「知识社交图谱里面的界面应该是我的好友」→ 确认为截图误导（默认本就是好友网络），但按反馈把单面板四模式改为两个并列导航项：社交图谱（好友/群组）与知识图谱（知识网络/融合视图），`Graph.tsx` 引入 `variant` 按面板分流模式、统计、图例与 rail；两个入口均以开发态真实数据截图验证 |
-| 2026-09-13 | 实施 | 合计 | 64 → 65 | 阶段 5 +1（N6） |
+| 2026-09-13 | 实施 | H1 | 未开始 → 进行中 | 仓库侧完成：两个密钥文件出库 + .gitignore 覆盖 + 模板；额外补出 `image-key.spec.ts` 里 3 处硬编码的**同一个**真实 image key 并替换为假值。待人工：轮换凭据、重写历史 |
+| 2026-09-13 | 实施 | H2 | 未开始 → 已完成 | 790 项改动按主题分成 6 提交（清理 687 项废弃产物 / 后端 / 主进程与许可 / 前端 / 构建脚本与文档 / 密钥出库修正）；工作区干净，关键模块确认入库。未做真正的 fresh-clone 复核 |
+| 2026-09-13 | 实施 | H3 | 未开始 → 进行中 | 接入 vitest（^3，vitest 5 与 vite 5 冲突）：36/36 spec 可收集、162 用例执行、151 通过 / 11 失败。顺带前置 H11 的 tsconfig 修复（根 base 缺失 + references 悬空） |
+| 2026-09-13 | 实施 | H11 | 未开始 → 进行中 | 补出根 `tsconfig.base.json`（两个 tsconfig 都 extends 它却从未提交），断掉两处指向不存在 monorepo 路径的 `references`；typecheck 脚本与 strict 收敛未做 |
+| 2026-09-13 | 实施 | N7 | 新增 | 11 个失败用例待 triage；其中 resource-classify 已用可逆 A/B 实验证伪「本地改动所致」 |
+| 2026-09-13 | 实施 | 合计 | 65 → 66 | 阶段 5 +1（N7）；H2 完成、H1/H3/H11 转进行中 |
+| 2026-09-13 | 实施 | 教训 | — | `git commit -- <pathspec>` 会**按工作区内容提交并绕过索引**，导致首次 H1 出库提交实际未生效（反而多提交了一份含明文密钥的 config.json）。补救：改用「`git rm --cached` 暂存 → 不带路径 `git commit`」，并保留 `978f266` 作为记录、另起 `f4d4956` 真正生效 |
 
