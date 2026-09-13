@@ -19,12 +19,32 @@ const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 /** 已知分钟级任务的窗口（导出、全量解密、批量转写、建索引、备份恢复）。 */
 const DEFAULT_LONG_CALL_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * 需要更宽窗口的 Remote 方法。
+ *
+ * **这份名单必须始终是 gateway 里真实存在的 @Remote 方法名子集**，
+ * 由 src/backend/tests/backend-rpc.spec.ts 直接从 gateway.ts 抽 @Remote 名单来校验。
+ * 初版这里写了 `decryptImages` / `generateAnnualReport` 两个**不存在**的名字
+ * （真名是 `decryptAllImages` / `getAnnualReport`），于是那些方法拿不到宽窗口；
+ * 而写错方法名不会报任何错，只会静默退化 —— 那个测试就是为此加的。
+ */
 const LONG_CALL_METHODS = new Set([
-  'exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions', 'exportMoments',
-  'createBackup', 'createEncryptedBackup', 'restoreBackup',
-  'decryptAllDatabases', 'decryptImages', 'autoGetDbKey', 'autoGetImageKey',
-  'transcribeVoiceBatch', 'generateAnnualReport', 'generateDailySummary', 'generatePeriodSummary',
-  'buildSearchIndex', 'buildRagVectorIndex', 'evaluateRetrieval', 'syncHandoffTasks', 'extractTasks',
+  // 导出：大量写盘 + 压缩
+  'exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions', 'exportMoments', 'exportSnsVideo',
+  // 备份与恢复：整库拷贝
+  'createBackup', 'createEncryptedBackup', 'restoreBackup', 'previewBackup', 'deleteBackup',
+  // 解密：全量读 + 写
+  'decryptAllDatabases', 'decryptAllImages', 'autoGetDbKey', 'autoGetImageKey',
+  // 语音转写：whisper 本地推理
+  'transcribeVoiceBatch', 'transcribeVoiceMessage',
+  // 索引与离线评估
+  'buildSearchIndex', 'buildRagVectorIndex', 'evaluateRetrieval',
+  // LLM 长任务。仓库自身 LLM 超时默认 120 秒（wechat-host.js 的 timeoutMs），
+  // RPC 窗口必须明显宽于它，否则「模型还在流式输出」就先被判成调用超时。
+  'askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary',
+  // 年度报告/回顾：跨全年聚合，且可能触发 LLM
+  'getAnnual', 'getAnnualReport', 'getAnnualReview',
+  'syncHandoffTasks', 'extractTasks',
 ]);
 
 /**

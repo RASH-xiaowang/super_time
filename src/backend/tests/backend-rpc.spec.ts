@@ -1,14 +1,16 @@
 /**
- * 后端 RPC 通道的超时与死亡收敛。
+ * 后端 RPC 通道的超时与死亡收敛，以及长任务名单与 gateway 的一致性。
  *
  * 这些分支原先只能靠手工 taskkill 观察（逻辑住在 Electron 主进程里），
  * 抽到 src/backend/backend-rpc.js 后用假 child 就能确定性覆盖。
  * @vitest-environment node
  */
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { callTimeoutFor, createWorkerChannel } from '../backend-rpc.js'
+import { callTimeoutFor, createWorkerChannel, LONG_CALL_METHODS } from '../backend-rpc.js'
 
 /** 最小的 utilityProcess 替身：能收能发能被杀。 */
 class FakeChild extends EventEmitter {
@@ -43,6 +45,34 @@ function makeChannel(timeoutMs = 30, extra: Record<string, unknown> = {}) {
   })
   return { child, channel }
 }
+
+describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
+  // 直接从源码抽 @Remote 名单。写错方法名不会报任何错、只会让该方法静默退回 60s 窗口，
+  // 而 60s 对导出/解密/LLM 这类任务明显不够 —— 必须由测试挡住。
+  const gatewaySrc = readFileSync(
+    join(__dirname, '..', 'wechat-data', 'src', 'gateway.ts'),
+    'utf8',
+  )
+  const remoteNames = new Set(
+    [...gatewaySrc.matchAll(/@Remote\('([A-Za-z0-9_]+)'\)/g)].map((m) => m[1] as string),
+  )
+
+  it('gateway 里能抽到 @Remote 名单（防止正则失效后测试变成空转）', () => {
+    expect(remoteNames.size).toBeGreaterThan(100)
+  })
+
+  it('长任务名单里每个名字都是真实存在的 @Remote 方法', () => {
+    const bogus = [...LONG_CALL_METHODS].filter((m) => !remoteNames.has(m))
+    expect(bogus).toEqual([])
+  })
+
+  it('LLM 长任务拿到宽窗口，普通查询拿到默认窗口', () => {
+    // 仓库自身 LLM 超时默认 120s（wechat-host.js），RPC 窗口必须宽于它。
+    expect(callTimeoutFor('askWechat', { callTimeoutMs: 60_000, longTimeoutMs: 600_000 })).toBe(600_000)
+    expect(callTimeoutFor('runSummaryTask', { callTimeoutMs: 60_000, longTimeoutMs: 600_000 })).toBe(600_000)
+    expect(callTimeoutFor('getSessions', { callTimeoutMs: 60_000, longTimeoutMs: 600_000 })).toBe(60_000)
+  })
+})
 
 describe('createWorkerChannel · 正常路径', () => {
   it('回包后 resolve，并携带同一个 id', async () => {
