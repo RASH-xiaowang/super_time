@@ -11,8 +11,8 @@
     "configFile": "C:\\Users\\Administrator\\AppData\\Roaming\\super-time-electron\\wechat-data\\config.json",
     "decrypted": "C:\\Users\\Administrator\\AppData\\Roaming\\super-time-electron\\wechat-data\\decrypted",
     "decoded": "C:\\Users\\Administrator\\AppData\\Roaming\\super-time-electron\\wechat-data\\decoded_images",
-    "selfWxid": "wxid_umyqa86if3lm22",
-    "recordedAt": "2026-09-12T05:47:00.953Z"
+    "selfWxid": "",
+    "recordedAt": "2026-09-13T09:36:27.106Z"
   },
   "wechatSettings": {
     "db_dir": "D:\\Tencent\\Documents\\xwechat_files\\wxid_umyqa86if3lm22_f312\\db_storage",
@@ -30,7 +30,7 @@
     "whisper_models_dir": "D:\\super-time-wechat\\wechat\\whisper"
   },
   "wechatSettingsMeta": {
-    "savedAt": "2026-09-12T05:47:00.958Z",
+    "savedAt": "2026-09-13T09:36:27.109Z",
     "source": "数据配置·保存配置"
   }
 }
