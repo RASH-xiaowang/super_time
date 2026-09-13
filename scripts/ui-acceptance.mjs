@@ -67,6 +67,8 @@ void createRequire
 
 // ───────── 结果收集 ─────────
 const results = []
+/** 执行期异常：决定最终退出码（此前 catch 只打印，异常也会「通过」）。 */
+let runError = null
 let cur = null
 function begin(name, goal) { cur = { name, goal, checks: [], ok: true }; results.push(cur) }
 function ok(cond, label, detail) {
@@ -949,7 +951,11 @@ function report() {
   console.log(`mock 调用：chat=${mockCalls.chat}（规划器 ${mockCalls.planner}）· embed=${mockCalls.embed}`)
   console.log(`截图：${OUT}`)
   console.log('='.repeat(74))
-  console.log(stepsOk === results.length && fail === 0 ? '\n总判定：✅ 通过' : '\n总判定：❌ 不通过')
+  const ok = stepsOk === results.length && fail === 0
+  console.log(ok ? '\n总判定：✅ 通过' : '\n总判定：❌ 不通过')
+  // 返回判定结果，交给 main() 的 finally 决定退出码。
+  // 原实现只把结论打在屏幕上：断言全挂时退出码仍是 0，CI 会看到「通过」。
+  return { ok, stepsOk, total: results.length, pass, fail }
 }
 
 /**
@@ -982,13 +988,25 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 
 main()
-  .catch((e) => { console.error('测试执行异常:', e) })
+  .catch((e) => { console.error('测试执行异常:', e); runError = e })
   .finally(async () => {
     await shutdown()
-    try { report() } catch (e) { console.error('报告输出失败:', e) }
+    let verdict = null
+    try { verdict = report() } catch (e) { console.error('报告输出失败:', e) }
+    let code = 0
+    if (runError) code = 1
+    if (verdict && !verdict.ok) code = 1
     if (restoreErrors.length > 0) {
       console.error('\n⚠ 环境还原不完整，请手动处理以下路径（否则会影响真实检索）：')
       for (const p of restoreErrors) console.error('   - ' + p)
-      process.exitCode = 1
+      code = 1
     }
+    if (code !== 0) {
+      console.error(`\n退出码 ${code}：${[
+        runError ? '执行期异常' : null,
+        verdict && !verdict.ok ? `断言未全通过（${verdict.fail} 条失败 / ${verdict.pass} 条通过，步骤 ${verdict.stepsOk}/${verdict.total}）` : null,
+        restoreErrors.length > 0 ? '环境还原不完整' : null,
+      ].filter(Boolean).join('；')}`)
+    }
+    process.exitCode = code
   })

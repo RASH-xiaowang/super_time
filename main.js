@@ -510,7 +510,18 @@ app.whenReady().then(async () => {
         };
       }
     } catch (e) {
-      console.warn('[license] authorizeCall failed:', e.message);
+      // 授权检查**自身**失败时必须拒绝，而不是放行。
+      // 许可 JSON 损坏、readLicenseFile 读盘失败、指纹采集异常等都会落到这里；
+      // 原实现只 warn 一句就继续调用后端，等于「许可闸门一旦出异常就完全失效」。
+      console.error('[license] 授权校验异常，已拒绝本次调用:', e?.message ?? e);
+      return {
+        ok: false,
+        error: {
+          message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
+          code: 'LICENSE_CHECK_FAILED',
+          details: { method },
+        },
+      };
     }
     return wechatBackend.call(method, args);
   });
