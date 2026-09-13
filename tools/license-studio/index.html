@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Super Time License Studio</title>
+  <style>
+    :root {
+      --bg: #070c18;
+      --panel: #0d1528;
+      --line: rgba(0, 240, 255, 0.14);
+      --cyan: #00f0ff;
+      --purple: #a855f7;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --ok: #00ff88;
+      --err: #ff3b5c;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background:
+        radial-gradient(900px 400px at 10% -10%, rgba(0, 240, 255, 0.1), transparent 50%),
+        radial-gradient(700px 360px at 90% 0%, rgba(168, 85, 247, 0.1), transparent 50%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 20px 22px 32px;
+      user-select: none;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      background: linear-gradient(90deg, var(--cyan), var(--purple));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin-bottom: 4px;
+    }
+    .sub { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: rgba(13, 21, 40, 0.9);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .card h2 {
+      font-size: 13px;
+      font-weight: 650;
+      color: var(--cyan);
+      margin-bottom: 10px;
+      letter-spacing: 0.06em;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+    label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    input, select, textarea {
+      width: 100%;
+      background: #0a1224;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+      font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(0, 240, 255, 0.45);
+      box-shadow: 0 0 0 2px rgba(0, 240, 255, 0.12);
+    }
+    textarea { min-height: 72px; resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
+    .field { flex: 1; min-width: 140px; }
+    .field.wide { flex: 1 1 100%; }
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { border-color: rgba(0, 240, 255, 0.4); background: rgba(0, 240, 255, 0.06); }
+    button.primary {
+      border: none;
+      color: #050a18;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      box-shadow: 0 0 16px rgba(0, 240, 255, 0.3);
+    }
+    button.primary:hover { filter: brightness(1.08); }
+    .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 8px 0 12px; }
+    .checks label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text);
+      margin: 0;
+      cursor: pointer;
+      user-select: none;
+    }
+    .checks input { width: auto; }
+    .mono {
+      font-family: Consolas, 'Cascadia Code', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+      line-height: 1.5;
+    }
+    .mono.ok { color: var(--ok); }
+    .mono.err { color: var(--err); }
+    .status {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.25);
+      font-size: 12px;
+      min-height: 36px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .status.ok { border-color: rgba(0, 255, 136, 0.35); color: var(--ok); }
+    .status.err { border-color: rgba(255, 59, 92, 0.4); color: var(--err); }
+    .status.warn { border-color: rgba(245, 158, 11, 0.4); color: var(--warn); }
+    .span2 { grid-column: 1 / -1; }
+    .hint { font-size: 11px; color: var(--muted); line-height: 1.55; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Super Time License Studio</h1>
+  <p class="sub">厂商本地发证 · Ed25519 · 私钥不离开本机</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1 · 密钥</h2>
+      <div class="mono" id="keyInfo">读取中…</div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" id="btnGen">生成密钥对</button>
+        <button type="button" id="btnSyncPub">同步公钥到客户端</button>
+        <button type="button" id="btnRefreshKeys">刷新状态</button>
+      </div>
+      <p class="hint">私钥在 <span class="mono">vendor-keys/</span>。若主程序报 <span class="mono">signature_invalid</span>，先点「同步公钥到客户端」，再<strong>重启 Super Time</strong> 后重新导入许可证。</p>
+    </section>
+
+    <section class="card">
+      <h2>2 · 客户与设备</h2>
+      <div class="row">
+        <button type="button" id="btnImportReq">导入激活请求 JSON</button>
+      </div>
+      <div class="row">
+        <div class="field wide">
+          <label>设备指纹 fingerprint *</label>
+          <input id="fingerprint" placeholder="从客户激活请求粘贴，或手填 hex" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>主机名（备注）</label>
+          <input id="hostname" placeholder="可选" />
+        </div>
+        <div class="field">
+          <label>最低应用版本</label>
+          <input id="appVersionMin" value="1.0.0" />
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3 · 授权策略</h2>
+      <div class="row">
+        <div class="field">
+          <label>客户姓名 *</label>
+          <input id="name" placeholder="张三" />
+        </div>
+        <div class="field">
+          <label>公司</label>
+          <input id="company" placeholder="可选" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>邮箱</label>
+          <input id="email" type="email" placeholder="可选" />
+        </div>
+        <div class="field">
+          <label>版本 Edition</label>
+          <select id="edition">
+            <option value="pro">pro</option>
+            <option value="standard">standard</option>
+            <option value="trial-ext">trial-ext</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>期限（天，0=永久）</label>
+          <input id="days" type="number" min="0" value="365" />
+        </div>
+        <div class="field">
+          <label>席位 seats</label>
+          <input id="seats" type="number" min="1" value="1" />
+        </div>
+      </div>
+      <div class="field wide">
+        <label>开放功能 features</label>
+        <div class="checks" id="features"></div>
+      </div>
+      <div class="field wide">
+        <label>备注 notes</label>
+        <input id="notes" placeholder="可选" />
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="primary" id="btnIssue">签发并保存 license.json</button>
+      </div>
+      <div class="status" id="issueStatus">就绪</div>
+    </section>
+
+    <section class="card">
+      <h2>4 · 校验许可证</h2>
+      <div class="row">
+        <button type="button" id="btnVerify">选择 license.json 校验</button>
+      </div>
+      <div class="status" id="verifyStatus">尚未校验</div>
+      <p class="hint">使用当前 vendor-keys 公钥验签，并检查载荷结构。设备/有效期在客户端导入时再校验。</p>
+    </section>
+  </div>
+
+  <script type="module" src="./renderer.js"></script>
+</body>
+</html>

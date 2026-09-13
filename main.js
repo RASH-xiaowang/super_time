@@ -1,8 +1,50 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess } = require('electron');
+// 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
+// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
+// 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
+// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
+// SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
+if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
+
+const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { applyConfig, recordResolved, loadWechatSettings, loadLlmConfig, saveLlmConfig, configPath } = require('./src/backend/wechat-paths');
+const {
+  configure: configureWechatPaths,
+  applyConfig,
+  recordResolved,
+  loadWechatSettings,
+  loadLlmConfig,
+  saveLlmConfig,
+  configPath,
+} = require('./src/backend/wechat-paths');
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
+const licenseService = require('./src/license/service');
+const { getDeviceFingerprint } = require('./src/license/fingerprint');
+
+// ── userData 隔离（必须在任何 getPath / 单实例锁之前）────────────────────
+// 安装版原本和开发态共用 `<APPDATA>\super-time-electron`（package.json 没有顶层
+// productName，app.getName() 取的是 name）。后果：装完直接吃到开发态或**旧版本遗留**
+// 的数据 —— 实测那台电脑上一开机就拿着上一台机器的 db_dir 去解密，报
+// 「数据库目录不存在（D:\Tencent\...\wxid_xxx\db_storage）」。而 NSIS 升级/卸载
+// 都不会清理 userData，这份脏状态会一直黏着。
+// 这里给安装版一个独立目录，彻底隔离。SUPERTIME_USER_DATA_DIR 可显式指定（调试用）。
+const USER_DATA_OVERRIDE = (process.env.SUPERTIME_USER_DATA_DIR || '').trim();
+if (USER_DATA_OVERRIDE) {
+  app.setPath('userData', USER_DATA_OVERRIDE);
+} else if (app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'Super Time'));
+}
+
+/** 「微信+」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
+const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') });
+
+const APP_VERSION = (() => {
+  try {
+    return require('./package.json').version || '1.0.0';
+  } catch {
+    return '1.0.0';
+  }
+})();
 
 // ── 单实例锁：同一时间只允许一个应用实例 ────────────────────────────────
 // 拿到锁的实例：监听 second-instance，把已有窗口拉到前台（提示用户）。
@@ -106,13 +148,25 @@ function broadcastWechatEvent(name, args) {
 
 function createWindow() {
   const appIcon = path.join(__dirname, 'build', 'icon.ico');
+  // 初始尺寸按主屏工作区算，**不写死宽高**：写死 1664×1066 时，1366×768 或
+  // 1080p@125% 的机器上窗口比屏幕还大（审计 P0-2）。窗口本身始终可缩放，
+  // 下限取实测能容下「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
+  const MIN_W = 960;
+  const MIN_H = 640;
+  const work = screen.getPrimaryDisplay().workAreaSize;
+  const initialWidth = Math.max(MIN_W, Math.round(work.width * 0.92));
+  const initialHeight = Math.max(MIN_H, Math.round(work.height * 0.92));
   mainWindow = new BrowserWindow({
-    width: 1664,
-    height: 1066,
+    width: initialWidth,
+    height: initialHeight,
+    minWidth: MIN_W,
+    minHeight: MIN_H,
     useContentSize: true,
-    resizable: false,
-    maximizable: false,
-    fullscreenable: false,
+    resizable: true,
+    // 标题栏是自绘的（frame:false），最大化/全屏都由自绘按钮触发，所以这里要放开，
+    // 否则那两个按钮点了没反应。
+    maximizable: true,
+    fullscreenable: true,
     show: false,
     frame: false,
     backgroundColor: '#0f172a',
@@ -130,6 +184,9 @@ function createWindow() {
 
   mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-changed', true));
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
+  // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）
+  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', true));
+  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', false));
 
   // 调试：SUPERTIME_SKELETON=1 时加载 ?skeleton=1，Overview 强制展示骨架屏。
   const loadQuery = process.env.SUPERTIME_SKELETON === '1' ? { query: { skeleton: '1' } } : undefined;
@@ -208,6 +265,86 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('app:ping', () => `pong @ ${new Date().toISOString()}`);
 
+  /**
+   * 是否处于验收/自动化测试模式（`SUPERTIME_TEST_MODE=1`）。
+   *
+   * 验收脚本会用**本地 mock LLM** 替换模型，回答是固定文本而不是真实数据 ——
+   * 曾经两次被误认成「应用在编造答案」。前端据此在窗口顶部挂一条醒目横幅。
+   */
+  ipcMain.handle('app:test-mode', () => process.env.SUPERTIME_TEST_MODE === '1');
+
+  // —— License 授权（混合模式：本地验签为主）——
+  ipcMain.handle('license:status', () => {
+    try {
+      return licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
+    } catch (err) {
+      return { state: 'error', licensed: false, reason: err.message, code: 'ERROR' };
+    }
+  });
+
+  ipcMain.handle('license:activation-request', () => {
+    try {
+      return licenseService.getActivationRequest(app.getPath('userData'), APP_VERSION);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('license:export-request', async () => {
+    try {
+      const req = licenseService.getActivationRequest(app.getPath('userData'), APP_VERSION);
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: '导出激活请求',
+        defaultPath: `activation-request-${req.fingerprint.slice(0, 8)}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+      fs.writeFileSync(result.filePath, JSON.stringify(req, null, 2), 'utf8');
+      return { ok: true, path: result.filePath, request: req };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('license:import', async () => {
+    try {
+      const picked = await dialog.showOpenDialog(mainWindow, {
+        title: '导入许可证',
+        properties: ['openFile'],
+        filters: [{ name: 'License', extensions: ['json', 'lic'] }],
+      });
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
+      const content = fs.readFileSync(picked.filePaths[0], 'utf8');
+      return licenseService.importLicense(app.getPath('userData'), APP_VERSION, content);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('license:import-text', (_e, text) => {
+    try {
+      return licenseService.importLicense(app.getPath('userData'), APP_VERSION, String(text ?? ''));
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('license:remove', () => {
+    try {
+      return { ok: true, status: licenseService.removeLicense(app.getPath('userData'), APP_VERSION) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('license:fingerprint', () => {
+    try {
+      return getDeviceFingerprint();
+    } catch (err) {
+      return { fingerprint: '', parts: {}, error: err.message };
+    }
+  });
+
   ipcMain.handle('dialog:open-file', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择文件',
@@ -224,6 +361,27 @@ app.whenReady().then(async () => {
     });
     if (result.canceled) return { canceled: true, path: null };
     return { canceled: false, path: result.filePaths[0] ?? null };
+  });
+
+  /**
+   * 保存对话框：只负责选路径，真正的写盘由后端做（视频有几十 MB，不适合经 IPC 传字节）。
+   */
+  ipcMain.handle('dialog:save-file', async (_event, opts) => {
+    try {
+      // 调试/自动化用：设了 SUPERTIME_SAVE_PATH 就跳过原生对话框直接用它
+      // （原生对话框在无头自动化里点不到，否则「保存」按钮无法被测试覆盖）。
+      const forced = (process.env.SUPERTIME_SAVE_PATH || '').trim();
+      if (forced) return { canceled: false, path: forced };
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: typeof opts?.title === 'string' && opts.title ? opts.title : '保存文件',
+        defaultPath: typeof opts?.defaultName === 'string' && opts.defaultName ? opts.defaultName : 'export.bin',
+        filters: Array.isArray(opts?.filters) ? opts.filters : undefined,
+      });
+      if (result.canceled || !result.filePath) return { canceled: true, path: null };
+      return { canceled: false, path: result.filePath };
+    } catch (e) {
+      return { canceled: true, path: null, error: e?.message ?? String(e) };
+    }
   });
 
   ipcMain.handle('shell:show-item', (_event, filePath) => {
@@ -245,7 +403,54 @@ app.whenReady().then(async () => {
   ipcMain.on('window:close', () => {
     if (mainWindow) mainWindow.close();
   });
+  ipcMain.on('window:fullscreen-toggle', () => {
+    if (mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  });
+  ipcMain.handle('window:is-fullscreen', () => mainWindow?.isFullScreen() ?? false);
   ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
+
+  /**
+   * 把渲染进程指定的矩形区域截成 PNG 保存（「导出报告 → 界面截图」）。
+   *
+   * 为什么放在主进程：`webContents.capturePage(rect)` 只有主进程能用；渲染端的
+   * `getBoundingClientRect()` 给的正是 CSS 像素坐标，与 capturePage 的矩形同坐标系，
+   * 因此「所见即所存」——不需要另写一套报告模板。
+   * @param rect - { x, y, width, height }，相对渲染页视口。
+   * @returns { ok, canceled? , path?, message? }
+   */
+  ipcMain.handle('window:capture-panel', async (_event, rect) => {
+    try {
+      if (!mainWindow) return { ok: false, message: '窗口不存在' };
+      const x = Math.max(0, Math.round(Number(rect?.x) || 0));
+      const y = Math.max(0, Math.round(Number(rect?.y) || 0));
+      const width = Math.max(1, Math.round(Number(rect?.width) || 0));
+      const height = Math.max(1, Math.round(Number(rect?.height) || 0));
+      const image = await mainWindow.webContents.capturePage({ x, y, width, height });
+      const png = image.toPNG();
+      if (!png || png.length === 0) return { ok: false, message: '截图内容为空' };
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const suggested = typeof rect?.filename === 'string' && rect.filename.trim()
+        ? rect.filename.trim()
+        : `wechat-report-${stamp}.png`;
+      // 调试/自动化用：设了 SUPERTIME_CAPTURE_PATH 就跳过保存对话框直接落盘
+      // （原生对话框在无头自动化里点不到，否则导出无法被测试覆盖）。
+      const forced = process.env.SUPERTIME_CAPTURE_PATH;
+      if (forced) {
+        fs.writeFileSync(forced, png);
+        return { ok: true, path: forced, bytes: png.length, width: image.getSize().width, height: image.getSize().height };
+      }
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出报告截图',
+        defaultPath: suggested,
+        filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+      });
+      if (canceled || !filePath) return { ok: true, canceled: true };
+      fs.writeFileSync(filePath, png);
+      return { ok: true, path: filePath, bytes: png.length, width: image.getSize().width, height: image.getSize().height };
+    } catch (e) {
+      return { ok: false, message: e?.message || String(e) };
+    }
+  });
 
   // —— 微信+后端（迁移自 @deepseek-ai/dsh-wechat-data，独立进程运行）——
   try {
@@ -273,6 +478,7 @@ app.whenReady().then(async () => {
       console.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
     }
     console.log('[wechat] 微信+后端已就绪，Remote 方法数:', wechatBoot.methods.length);
+    console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
   } catch (err) {
     console.error('[wechat] 微信+后端初始化失败:', err);
@@ -290,6 +496,22 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('wechat:call', (_event, method, args) => {
     if (!wechatBackend) return { ok: false, error: { message: '微信+后端未初始化' } };
+    try {
+      const lic = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
+      const gate = licenseService.authorizeCall(lic, method);
+      if (!gate.ok) {
+        return {
+          ok: false,
+          error: {
+            message: gate.message,
+            code: gate.code,
+            details: { licenseState: lic.state, method, feature: licenseService.METHOD_FEATURE[method] || 'wechat-data' },
+          },
+        };
+      }
+    } catch (e) {
+      console.warn('[license] authorizeCall failed:', e.message);
+    }
     return wechatBackend.call(method, args);
   });
 
@@ -425,6 +647,25 @@ app.whenReady().then(async () => {
             return true;
           })()`);
           await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        // 调试用：SUPERTIME_CLICK='标签A|标签B' 依次点击匹配的按钮
+        // （精确匹配优先，其次前缀匹配），用于截图验证需要多步交互的界面
+        // ——SUPERTIME_TAB 只能点一次、且必须整串相等，开不出「先切页签、再展开面板」这类状态。
+        if (process.env.SUPERTIME_CLICK) {
+          const labels = process.env.SUPERTIME_CLICK.split('|').map((s) => s.trim()).filter(Boolean);
+          for (const label of labels) {
+            const clicked = await mainWindow.webContents.executeJavaScript(`(() => {
+              const want = ${JSON.stringify(label)};
+              const btns = Array.from(document.querySelectorAll('button'));
+              const hit = btns.find(b => (b.textContent || '').trim() === want)
+                || btns.find(b => (b.textContent || '').trim().startsWith(want));
+              if (!hit) return false;
+              hit.click();
+              return true;
+            })()`);
+            console.log('[click]', label, clicked ? 'ok' : '按钮未找到');
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
         }
         if (process.env.SUPERTIME_MAP_DEBUG === '1') {
           const mapInfo = await mainWindow.webContents.executeJavaScript(`(() => {
