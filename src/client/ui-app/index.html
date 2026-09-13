@@ -24,6 +24,15 @@
       <button id="tb-min" class="tb-btn" title="最小化" aria-label="最小化">
         <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2" /></svg>
       </button>
+      <!-- 全屏：两种图标都在 DOM 里，由 data-on 切换（进入全屏后换成「退出」图标） -->
+      <button id="tb-full" class="tb-btn" title="全屏" aria-label="切换全屏">
+        <svg class="tb-ico-enter" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+          <path d="M1.5 4.5V1.5h3M7.5 1.5h3v3M10.5 7.5v3h-3M4.5 10.5h-3v-3" />
+        </svg>
+        <svg class="tb-ico-exit" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+          <path d="M4.5 1.5v3h-3M7.5 1.5v3h3M10.5 10.5v-3h-3M1.5 10.5v-3h3" />
+        </svg>
+      </button>
       <button id="tb-close" class="tb-btn tb-close" title="关闭" aria-label="关闭">
         <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
       </button>

@@ -1,5 +1,15 @@
-/* Privacy & trust — NEON MATRIX 科技风（与隐私体检共用令牌）。 */
+/* Privacy & trust — NEON MATRIX 科技风（与隐私体检共用令牌）。
+   本页现在是「微信数据配置」弹窗里的一节（左导航「数据边界与出网」），
+   独立页签的形态已下线。 */
 .lead { padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--nm-text-1); margin: 0; }
+
+/* 嵌进弹窗时：不自建 height:100% 的滚动容器，滚动交给弹窗右区（.mainScroll）。 */
+.embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
 
 .chipGrid { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
 .localChip {

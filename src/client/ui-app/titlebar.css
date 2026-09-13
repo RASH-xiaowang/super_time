@@ -83,6 +83,11 @@ body {
   background: rgba(127, 127, 127, 0.16);
 }
 
+/* 全屏按钮：默认是「进入全屏」的四角外扩图标，进入后换成内收图标 */
+.tb-ico-exit { display: none; }
+.tb-btn[data-on] .tb-ico-enter { display: none; }
+.tb-btn[data-on] .tb-ico-exit { display: block; }
+
 .tb-btn.tb-close:hover {
   background: #e81123;
   color: #fff;

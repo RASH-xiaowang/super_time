@@ -1,18 +1,19 @@
 /**
- * 聊天面板 — React 版，忠实迁移 WeChatPanel 的 chats 页签核心：左侧会话
+ * 聊天面板 —— React 版，忠实迁移 WeChatPanel 的 chats 页签核心：左侧会话
  * 列表（搜索/统计/置顶/批量导出），右侧消息流（分页加载 + 多类型消息渲染）。
  * 数据通过 DSH 后端 Remote（sessions + messages）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
-import { clickableKey, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
-import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { SessionAsk } from './SessionAsk.tsx'
+import { clickableKey, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
-  IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16, IconCopyOutline16,
-  IconDataOutline16, IconDownloadOutline16, IconEditOutline16,
+  IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
+  IconDataOutline16, IconDownloadOutline16, IconEllipsisOutline16,
   IconFullscreenOutline16, IconLinkOutline14, IconListPenOutline16,
   IconPlayOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -23,7 +24,7 @@ import { buildMessageItems, renderKindOf } from '../utils/message-items.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './chats.module.css'
-import { avatarColors, fmtBytes, fmtDateTimeSec, fmtSessionTimeSec } from '../utils/format.ts'
+import { avatarColors, fmtBytes, fmtDateTimeSec, fmtMsgClockSec, fmtSessionTimeSec } from '../utils/format.ts'
 
 /** 16px calendar glyph (kept local; the primitives set has no calendar). */
 /**
@@ -46,8 +47,8 @@ function unreadTitle(n: number, since?: number): string {
 function IconCalendar(): React.JSX.Element {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="1.5" y="2.5" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M1.5 6h13M5 1v3M11 1v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="1.5" y="2.5" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M1.5 6h13M5 1v3M11 1v3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
     </svg>
   )
 }
@@ -65,9 +66,9 @@ function IconPin(): React.JSX.Element {
 function IconImage(): React.JSX.Element {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.25" />
       <circle cx="5.5" cy="6" r="1.4" fill="currentColor" />
-      <path d="m2.5 12.5 3.5-3.5 2.5 2.5 2.5-2.5 2.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="m2.5 12.5 3.5-3.5 2.5 2.5 2.5-2.5 2.5 2.5" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -76,7 +77,7 @@ function IconImage(): React.JSX.Element {
 function IconMinus(): React.JSX.Element {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M3 8h10" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
     </svg>
   )
 }
@@ -148,10 +149,55 @@ function TransferArrowGlyph(): React.JSX.Element {
   )
 }
 
-function fmtMsgTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+/** 右键菜单项要触发的动作。 */
+type MsgMenuAction = 'copyText' | 'copyJson' | 'openLink' | 'openViewer' | 'openFile' | 'openChatlog' | 'edit'
+
+/**
+ * 右键菜单里一项的规格。
+ *
+ * 做成「声明 + 动作名」而不是直接塞回调，是为了让条目计算保持纯函数：
+ * 打开菜单时要先知道条目数才能把菜单夹进视口，塞回调就没法在 setState 之前算。
+ */
+interface MsgMenuItem {
+  label: string
+  action: MsgMenuAction
+  /** 动作的入参（要复制的文本 / 链接 / 文件名）。 */
+  arg?: string
+}
+
+/**
+ * 一条消息的右键菜单项（微信同款位置与顺序）。
+ *
+ * 本项目是**只读的本地库查看器**：没有发送链路，所以微信菜单里的
+ * 「转发」「撤回」「删除」在这里没有对应动作；能做的按微信顺序排列：
+ * 复制文本 → 复制消息 JSON →（打开链接 / 查看大图 / 打开文件 / 查看聊天记录）→ 编辑消息副本。
+ * 「语音转文字」仍留在语音气泡下方 —— 微信也是把转写做成气泡下方的按钮，不是菜单项。
+ * @param m - the target message.
+ * @param kind - its render kind.
+ * @returns menu items in display order.
+ */
+function buildMsgMenu(m: WechatMessage, kind: RenderKind): MsgMenuItem[] {
+  const items: MsgMenuItem[] = []
+  const text = m.displayText || ''
+  if (text) items.push({ label: '复制文本', action: 'copyText', arg: text })
+  items.push({ label: '复制消息 JSON', action: 'copyJson' })
+  const url = m.rich && typeof m.rich.url === 'string' ? m.rich.url : ''
+  if (/^https?:\/\//i.test(url)) items.push({ label: '打开链接', action: 'openLink', arg: url })
+  if (kind === 'image') items.push({ label: '查看大图', action: 'openViewer' })
+  if (kind === 'file') items.push({ label: '打开文件', action: 'openFile', arg: m.rich?.title || text })
+  if (kind === 'chatlog' && m.rich) items.push({ label: '查看聊天记录', action: 'openChatlog' })
+  // 只对**纯文本**放开：后端的编辑是整列覆盖 `message_content`，而引用消息（local_type 49）
+  // 的该列是本机 100% BLOB 的 appmsg XML（probe-storage 普查：49 型 13213 行全 blob）。
+  // 覆盖成纯文本等于把引用卡片拍平成文本、被引用的原文从界面上消失。要做引用编辑，
+  // 得改成只改写 XML 里的 <title> 再写回同编码 —— 那是另一件事，先不做。
+  if (kind === 'text') items.push({ label: '编辑消息副本', action: 'edit' })
+  return items
+}
+
+/** 微信语音时长（秒）→ 气泡宽度：官方公式 80px + 秒数×4（1s→84px，60s 封顶 320px）。 */
+function voiceWidth(sec: number): string {
+  const clamped = Math.min(60, Math.max(1, sec))
+  return `${80 + clamped * 4}px`
 }
 
 /** Module-level avatar cache (username -> data URL / remote URL / null). */
@@ -159,9 +205,20 @@ const avatarCache = new Map<string, string | null>()
 /** 头像缓存上限：模块级缓存生命周期等于渲染进程，必须设上限（值为 base64 data URL）。 */
 const AVATAR_CACHE_MAX = 300
 
-/** Avatar: lazy-loads the real WeChat avatar via Remote, falls back to a letter tile. */
+/**
+ * Avatar: lazy-loads the real WeChat avatar via Remote, falls back to a letter tile.
+ *
+ * 缓存键**只用 `username`**。以前是 `username || name`，而 `name` 是昵称/备注：
+ * 群里两个同名成员（或同一个昵称出现在两个会话）会命中同一条缓存、显示同一个头像 ——
+ * 属于「用户标识张冠李戴」。调用方必须传真实 username；拿不到时传空串，
+ * 此时只渲染首字母占位、不写缓存（宁可没有头像，也不给错的头像）。
+ * @param props.name - 展示名（仅用于首字母与配色）。
+ * @param props.username - 真实 wxid；为空表示未知身份。
+ * @param props.size - 头像边长（px）。
+ * @returns the avatar element.
+ */
 function Avatar({ name, username, size }: { name: string; username: string; size?: number }): React.JSX.Element {
-  const key = username || name || ''
+  const key = username
   const cached = key ? avatarCache.get(key) : undefined
   const [, force] = useState(0)
   useEffect(() => {
@@ -182,13 +239,13 @@ function Avatar({ name, username, size }: { name: string; username: string; size
   const src = cached ?? null
   if (src) {
     return (
-      <div className={css.avatar} style={{ width: size ?? 36, height: size ?? 36, overflow: 'hidden' }}>
-        <img src={src} alt={letter} className={css.avatarImg} width={size ?? 36} height={size ?? 36} />
+      <div className={css.avatar} style={{ width: size ?? 34, height: size ?? 34, overflow: 'hidden' }}>
+        <img src={src} alt={letter} className={css.avatarImg} width={size ?? 34} height={size ?? 34} />
       </div>
     )
   }
   return (
-    <div className={css.avatar} style={{ width: size ?? 36, height: size ?? 36, background: av.background, color: av.color }}>
+    <div className={css.avatar} style={{ width: size ?? 34, height: size ?? 34, background: av.background, color: av.color }}>
       {letter}
     </div>
   )
@@ -275,8 +332,8 @@ function ImageViewer({ images, index, onClose, onIndexChange }: {
         <button type="button" className={css.viewerBtn} title="放大" aria-label="放大" onClick={() =>{  zoomBy(1.3) }}><IconPlusOutline16 size={15} /></button>
         <button type="button" className={css.viewerBtn} title="缩小" aria-label="缩小" onClick={() =>{  zoomBy(1 / 1.3) }}><IconMinus /></button>
         <button type="button" className={css.viewerBtn} title="1:1" aria-label="1:1" onClick={reset}><IconFullscreenOutline16 size={15} /></button>
-        <button type="button" className={css.viewerBtn} title="上一张" aria-label="上一张" onClick={() =>{  onIndexChange((index - 1 + images.length) % images.length) }}><IconChevronLeftOutline14 /></button>
-        <button type="button" className={css.viewerBtn} title="下一张" aria-label="下一张" onClick={() =>{  onIndexChange((index + 1) % images.length) }}><IconChevronRightOutline14 /></button>
+        <button type="button" className={css.viewerBtn} title="上一张" aria-label="上一张" onClick={() => { onIndexChange((index - 1 + images.length) % images.length) }}><IconChevronLeftOutline14 /></button>
+        <button type="button" className={css.viewerBtn} title="下一张" aria-label="下一张" onClick={() => { onIndexChange((index + 1) % images.length) }}><IconChevronRightOutline14 /></button>
         <button type="button" className={clsx(css.viewerBtn, css.viewerBtnClose)} title="关闭" aria-label="关闭" onClick={(e) => { e.stopPropagation(); onClose() }}><IconCloseOutline16 size={16} /></button>
       </div>
       <div className={css.viewerStage}>
@@ -326,7 +383,7 @@ function PayStatusLine({ serverId }: { serverId: string }): React.JSX.Element | 
   )
 }
 
-/** 不同扩展名 → 图标风格（kind + emoji），便于按类型区分样式。 */
+/** 不同扩展名的图标风格（kind + emoji），便于按类型区分样式。 */
 const FILE_STYLE: Record<string, { kind: string; emoji: string }> = {
   pdf: { kind: 'pdf', emoji: '📄' },
   doc: { kind: 'word', emoji: '📝' }, docx: { kind: 'word', emoji: '📝' },
@@ -344,31 +401,54 @@ function fileStyle(fileName: string): { kind: string; emoji: string } {
   const ext = (fileName.split('.').pop() || '').toLowerCase()
   return FILE_STYLE[ext] || { kind: 'file', emoji: '📁' }
 }
-/** 点击打开/下载收到的文件（从 msg/file 本地缓存读取）。 */
-function OpenFileCard({ title, size }: { title: string; size: string }): React.JSX.Element {
+/**
+ * 从 `msg/file` 本地缓存取回收到的文件并触发下载。
+ *
+ * 抽成模块级函数的唯一原因：文件卡的点击区与右键菜单的「打开文件」
+ * 都要走同一条链路，不能各写一份（两份实现迟早会在错误文案上分叉）。
+ * @param fileName - 消息里的文件名。
+ * @param opts - 归属线索：消息里的文件字节数与接收时间。`msg/file` 只按月份
+ *   分目录，同名文件可能属于别的会话，必须把这两条线索透传给后端。
+ * @returns 成功返回空串，失败返回可展示的错误文案。
+ */
+async function downloadMessageFile(fileName: string, opts: { size?: number; createTime?: number } = {}): Promise<string> {
+  try {
+    const r = await apiGetMessageFile({
+      fileName,
+      ...(opts.size !== undefined ? { size: opts.size } : {}),
+      ...(opts.createTime !== undefined ? { createTime: opts.createTime } : {}),
+    })
+    if (!r.url) return r.error ?? '文件不可用'
+    const a = document.createElement('a')
+    a.href = r.url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return ''
+  } catch (e) {
+    return (e as Error).message
+  }
+}
+
+/** 点击打开/下载收到的文件（走 msg/file 本地缓存读取）。 */
+function OpenFileCard({ title, size, createTime }: { title: string; size: string; createTime?: number }): React.JSX.Element {
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [message, setMessage] = useState('')
   const openFile = async (): Promise<void> => {
     setStatus('loading')
     setMessage('')
-    try {
-      const r = await apiGetMessageFile({ fileName: title })
-      if (!r.url) {
-        setStatus('error')
-        setMessage(r.error ?? '文件不可用')
-        return
-      }
-      const a = document.createElement('a')
-      a.href = r.url
-      a.download = title
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      setStatus('idle')
-    } catch (e) {
+    const bytes = Number(size)
+    const err = await downloadMessageFile(title, {
+      ...(Number.isFinite(bytes) && bytes > 0 ? { size: bytes } : {}),
+      ...(createTime !== undefined ? { createTime } : {}),
+    })
+    if (err) {
       setStatus('error')
-      setMessage((e as Error).message)
+      setMessage(err)
+      return
     }
+    setStatus('idle')
   }
   const ext = (title.split('.').pop() || '').toLowerCase()
   const style = fileStyle(title)
@@ -389,12 +469,12 @@ function OpenFileCard({ title, size }: { title: string; size: string }): React.J
 }
 
 /**
- * 引用消息里被引用类型 → 中文短标签（后端已写入 `rich.referType`）。
+ * 引用消息里被引用类型 → 中文短标签（后端已写好 `rich.referType`）。
  *
  * 微信 refermsg 的 type 与消息 local_type 同一编码族：媒体用本类型号，
  * 应用消息多在 49 族。没有映射时返回空串，界面不硬造标签。
  * @param t - refermsg <type>.
- * @returns 中文标签或 ''。
+ * @returns 中文标签（''）。
  */
 function quoteTypeLabel(t: number | undefined): string {
   if (!t || typeof t !== 'number') return ''
@@ -415,7 +495,7 @@ function quoteTypeLabel(t: number | undefined): string {
  * 卡片底部的**类型条**（微信原生卡片底部那一行「微信转账 / 微信红包 / 聊天记录」）。
  *
  * 有了它，同一张卡片在不同位置（气泡内 / 合并转发弹窗内）都能被一眼认出来源；
- * 也因此**不再**把类型名塞进标题行 —— 那会让标题被截断。
+ * 也因此**不再**把类型名塞进标题 —— 那会让标题被截断。
  * @param props.label - 类型名。
  * @returns the footer element.
  */
@@ -519,11 +599,95 @@ function liveStatusText(raw?: string): string {
 }
 
 /**
+ * 公众号多图文推送的一篇（后端 `rich.mpArticles`）。
+ *
+ * 客户端这份类型是**本地声明**：`node_modules` 里那份类型副本落后于后端，
+ * 它的 `MessageRich` 索引签名还没有 `MpArticle[]`，直接读会过不了 `tsc`。
+ * 所以这里只做「从 unknown 里安全取数组」这一件事，字段逐个校验。
+ */
+interface MpArticle {
+  title?: string
+  url?: string
+  cover?: string
+  summary?: string
+}
+
+/** 安全读后端写的次条数组（字段缺失/类型不对时返回空数组，界面退化成普通链接卡）。 */
+function mpArticlesOf(rich: MessageRich): MpArticle[] {
+  const raw: unknown = rich.mpArticles
+  if (!Array.isArray(raw)) return []
+  return raw.filter((a): a is MpArticle => !!a && typeof a === 'object')
+}
+
+/**
+ * 公众号推送卡（官方形态，用户参考图）：**大图封面**在卡片顶部，
+ * 单篇推送在封面下方给标题；多篇推送则把次条排成一行一篇（标题 + 右小方图），
+ * 头条只由那张大图代表（参考图里 2 篇的推送就是「大图 + 1 行次条」）。
+ *
+ * 判据来自 `biz_message_0.db` 的真实结构（见后端 `applyMpNews`）：
+ * `<mmreader><topnew><cover>` 是头条封面，`<item>` 列表第 2 篇起是次条。
+ * 卡片宽度按微信的 384px 封顶 —— 本项目普通气泡是 100%（见 `--wx-bubble-maxw`），
+ * 但 16:9 的封面在宽窗口下会被拉成一条横带，所以这里单独封顶。
+ * @param props.rich - the parsed link fields (`mpNews` / `mpArticles` / `thumb`).
+ * @param props.title - the top article's title.
+ * @param props.url - the top article's url.
+ * @returns the card element.
+ */
+function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: string; url: string }): React.JSX.Element {
+  const cover = cspSafeSrc(rich.thumb)
+  const [broken, setBroken] = useState(false)
+  const secondaries = mpArticlesOf(rich)
+  const openUrl = (u: string) => { if (/^https?:\/\//i.test(u)) openLink(u) }
+  const mainClickable = /^https?:\/\//i.test(url)
+  const showCover = !!cover && !broken
+  return (
+    <div className={css.msgMpCard} data-mp-count={secondaries.length + 1}>
+      {showCover && (
+        <span
+          className={`${css.msgMpCover} ${mainClickable ? css.msgMpClickable : ''}`}
+          title={mainClickable ? '点击打开文章' : undefined}
+          {...(mainClickable ? clickableKey(() => { openUrl(url) }, { role: 'link', label: '打开文章' }) : {})}
+        >
+          <img className={css.msgMpCoverImg} src={cover} alt="" loading="lazy" onError={() => { setBroken(true) }} />
+        </span>
+      )}
+      {secondaries.length === 0 ? (
+        <span
+          className={`${css.msgMpTitle} ${mainClickable ? css.msgMpClickable : ''}`}
+          title={mainClickable ? '点击打开文章' : undefined}
+          {...(mainClickable ? clickableKey(() => { openUrl(url) }, { role: 'link', label: '打开文章' }) : {})}
+        >
+          {title}
+        </span>
+      ) : (
+        secondaries.map((a, i) => {
+          const t = a.title || ''
+          const u = a.url || ''
+          const thumb = cspSafeSrc(a.cover)
+          const clickable = /^https?:\/\//i.test(u)
+          return (
+            <span
+              key={`${u || t}-${String(i)}`}
+              className={`${css.msgMpRow} ${clickable ? css.msgMpClickable : ''}`}
+              title={clickable ? '点击打开文章' : undefined}
+              {...(clickable ? clickableKey(() => { openUrl(u) }, { role: 'link', label: '打开次条文章' }) : {})}
+            >
+              <span className={css.msgMpRowTitle}>{t || '[无标题]'}</span>
+              {thumb && <img className={css.msgMpRowThumb} src={thumb} alt="" loading="lazy" />}
+            </span>
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+/**
  * 链接卡：`default`（左文右图）与 `cover`（公众号大图式）两种外形。
  *
  * 微信把公众号文章渲染成「封面大图 + 底部标题」，普通网页是「标题 + 摘要 + 域名」。
- * 后端的 `rich.linkStyle` 已经判好了（摘要以话题标签开头 / ≥2 个 #话题# /
- * PC 信息流链接 → cover），界面按它切换即可，不必每个面板自己猜。
+ * 后端用 `rich.linkStyle` 已经判好了（摘要以话题标签开头 / 含 `#话题#` /
+ * PC 信息流链接近 cover），界面按它切换即可，不必每个面板自己猜。
  * @param props - the parsed link fields.
  * @returns the card element.
  */
@@ -635,10 +799,8 @@ function MessageImageGroup({ items, username, onOpenAt }: {
 /**
  * 系统提示行（type 10000 / 10002）。
  *
- * 撤回单独成类（后端 `renderType === 'revoke'`）：它是**动作**不是通知，
- * 微信也用不同的灰底样式表示。其余系统消息按是否有图标区分
- * （入群/公告带 📢，普通通知不带）。
- * @param props.m - the system message.
+ * 撤回单独成类（后端 `renderType === 'revoke'`）：它是**动作**不是通知——
+ * 微信也用不同的灰底样式表示。其余系统消息按是否有图标区分：
  * @returns the centered system line.
  */
 function MessageSystem({ m }: { m: WechatMessage }): React.JSX.Element {
@@ -654,7 +816,7 @@ function MessageSystem({ m }: { m: WechatMessage }): React.JSX.Element {
 }
 
 /**
- * 位置卡片：标题 + 详细地址 + 经纬度（可复制/核对）。
+ * 位置卡片：标题 + 详细地址 + 经纬度（可复制核对）。
  *
  * 后端 `rich.lat/lng` 来自 `<location x y>`（x=纬度、y=经度，微信沿用 mapkit 命名）。
  * 没有可用的离线地图瓦片，所以**不画假地图** —— 只给一个坐标芯片，
@@ -716,18 +878,12 @@ function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
   )
 }
 
-/** 语音时长（秒）→ 气泡宽度：微信按秒数线性加宽（1s≈60px，60s 封顶≈300px）。 */
-function voiceWidth(sec: number): string {
-  const clamped = Math.min(60, Math.max(1, sec))
-  return `${68 + clamped * 3.4}px`
-}
-
 /** 微信语音波纹字形（三层声波，参考 WeChatDataAnalysis MessageContent.vue）。 */
-function IconVoiceWaves({ mirror }: { mirror?: boolean }): React.JSX.Element {
+function IconVoiceWaves({ mirror, size = 18 }: { mirror?: boolean; size?: number }): React.JSX.Element {
   return (
     <svg
-      width="22"
-      height="22"
+      width={size}
+      height={size}
       viewBox="0 0 32 32"
       fill="currentColor"
       aria-hidden="true"
@@ -739,6 +895,48 @@ function IconVoiceWaves({ mirror }: { mirror?: boolean }): React.JSX.Element {
     </svg>
   )
 }
+
+/**
+ * 引用行里「卡片类 appmsg」的类型图标（转账 2000）。
+ *
+ * 形状按官方参考图**逐像素描**：外径 13-14px 的描边圆（笔画约 1.5px）+ 圆内
+ * 居中一块约 8×5.5 的实心圆角矩形（把参考图放大到 1px 一个字符量出来的）。
+ * 图标语义（是「转账」专用还是卡片消息通用）本机无法验证，所以只挂到
+ * appmsg 2000，其余类型保持原样 —— 若日后证明是通用形，把条件放宽即可。
+ * @returns the glyph element.
+ */
+function IconQuoteCard(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <circle cx="7" cy="6.7" r="5.8" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="4.2" y="4.2" width="6.9" height="5.4" rx="2.6" fill="currentColor" />
+    </svg>
+  )
+}
+
+/**
+ * 引用行里的类型图标：官方在摘要前放一个类型小图标；没有合适图标时返回 null（只显示名字与摘要）。
+ * @param t - 被引用消息的 refermsg `<type>`。
+ * @param appType - 被引用内容是 appmsg 时的子类型（后端 `rich.referAppType`）；0 表示不是 appmsg。
+ * @returns the icon element or null.
+ */
+function quoteKindIcon(t: number | undefined, appType = 0): React.JSX.Element | null {
+  if (appType === 2000) return <IconQuoteCard />
+  switch (t) {
+    case 3: return <IconImage />
+    case 34: return <IconVoiceWaves size={13} />
+    case 43: return <IconPlayOutline16 size={13} />
+    case 42: case 66: return <IconUserOutline16 size={13} />
+    case 49: case 5: case 68: return <IconLinkOutline14 size={13} />
+    default: return null
+  }
+}
+
+/**
+ * 当前正在播放的语音（模块级）：消息流里同时只允许一条在放（微信行为）。
+ * 用模块级而不是 state，是因为「点新的一条要停掉上一条」需要跨组件实例访问。
+ */
+let currentVoiceAudio: HTMLAudioElement | null = null
 
 /**
  * 语音消息：时长来自消息 XML（`<voicemsg voicelength>`，毫秒）。
@@ -754,6 +952,9 @@ function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: string }): 
   const [transcribing, setTranscribing] = useState(false)
   const [tErr, setTErr] = useState<string | null>(null)
   const [audioOk, setAudioOk] = useState<boolean | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   useEffect(() => {
     let cancelled = false
     apiGetVoiceInfo({ username: selfName, localId: m.localId })
@@ -781,18 +982,57 @@ function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: string }): 
   const sec = ms > 0 ? Math.max(1, Math.round(ms / 1000)) : 0
   const width = sec > 0 ? voiceWidth(sec) : undefined
   const isSelf = m.isSender === 1
+  // 卸载（切会话/滚动出窗口）时停掉本条，避免声音在后台继续放
+  useEffect(() => () => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
+  }, [])
+  /**
+   * 点气泡就地播放/暂停。
+   * 音频是后端解码好的 16kHz wav（data URL）——CSP 的 `media-src` 允许 `data:`，
+   * 不允许 `file:`，所以只能走 data URL；同一条消息流里只允许一条在放（微信行为）。
+   */
+  const togglePlay = async (): Promise<void> => {
+    setLoadErr(null)
+    const cur = audioRef.current
+    if (cur && playing) { cur.pause(); setPlaying(false); return }
+    try {
+      let url = cur ? cur.src : ''
+      if (!url) {
+        const r = await apiGetVoiceDataUrl({ username: selfName, localId: m.localId })
+        if (!r.url) { setLoadErr(r.error ?? '语音不可播放'); return }
+        url = r.url
+      }
+      if (currentVoiceAudio && currentVoiceAudio !== cur) currentVoiceAudio.pause()
+      const a = cur ?? new Audio(url)
+      audioRef.current = a
+      currentVoiceAudio = a
+      a.onended = () => { setPlaying(false) }
+      a.onerror = () => { setPlaying(false); setLoadErr('播放失败') }
+      await a.play()
+      setPlaying(true)
+    } catch (e) {
+      setPlaying(false)
+      setLoadErr((e as Error).message)
+    }
+  }
   return (
     <div className={css.msgVoice}>
       <div
         className={css.msgVoiceBubble}
         style={width ? { width } : undefined}
-        title={audioOk === false ? '语音数据不在本地' : '语音'}
+        title={loadErr ?? (playing ? '点击暂停' : '点击播放')}
         data-self={isSelf || undefined}
+        data-playing={playing || undefined}
+        {...clickableKey(() => { void togglePlay() }, { role: 'button', label: playing ? '暂停语音' : '播放语音' })}
       >
-        <span className={css.msgVoiceIcon}><IconVoiceWaves mirror={!isSelf} /></span>
+        {/* 方向：微信只把**我方**图标镜像（参考实现 chat.css `.voice-icon-sent { transform: scaleX(-1) }`），
+            对方用基础方向 —— 基础图形是「锥体朝左 + 波纹朝右」，所以对方应是 `◀))) 5″`。
+            此前写成 mirror={!isSelf} 把两侧都镜像反了（用户报「对方语音图标方向错」）。 */}
+        <span className={css.msgVoiceIcon}><IconVoiceWaves mirror={isSelf} /></span>
         {sec > 0 && <span className={css.msgVoiceDur}>{sec}″</span>}
       </div>
       {sec === 0 && audioOk === false && <span className={kitCss.textMeta}>语音数据不在本地</span>}
+      {loadErr && <span className={css.msgVoiceErr} title={loadErr}>{loadErr.length > 28 ? loadErr.slice(0, 28) + '…' : loadErr}</span>}
       {!transcript && !transcribing && !tErr && (
         <button type="button" className={css.msgVoiceBtn} onClick={() => { void doTranscribe() }}>语音转文字</button>
       )}
@@ -805,15 +1045,25 @@ function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: string }): 
   )
 }
 
-/** 视频消息气泡：可解码时给封面 + 时长角标，否则给降级提示。 */
+/**
+ * 视频消息气泡：有封面就画封面 + 播放钮 + 时长角标；没有封面但有实体时给可点开的一行。
+ *
+ * 「打开」交给系统播放器（`apiOpenPath`）：渲染进程的 CSP 是 `media-src 'self' data: blob:`，
+ * 不含 `file:`，站内 `<video src="file://…">` 会被直接拦掉，所以链接文件才是真能用的路径。
+ */
 function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: string }): React.JSX.Element {
   const [cover, setCover] = useState<string | null>(null)
   const [vErr, setVErr] = useState<string | null>(null)
+  const [videoPath, setVideoPath] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     apiGetVideoInfo({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
+        // videoPath 是后端新增字段；types 包在 node_modules 里是旧副本（既有的 48 条类型错误同源），
+        // 这里按运行时读，不为了一个字段去动那份副本。
+        const path = (r as { videoPath?: string }).videoPath
+        if (path) setVideoPath(path)
         if (r.coverUrl) setCover(r.coverUrl)
         else setVErr(r.error === 'hevc-unsupported' ? 'wxgf/HEVC 封面（需系统解码）' : (r.error ?? '视频不可用'))
       })
@@ -822,6 +1072,21 @@ function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: string }): 
   }, [selfName, m.localId])
   const durSec = typeof m.rich?.durationSec === 'number' ? m.rich.durationSec : 0
   const durText = durSec > 0 ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}` : ''
+  const openVideo = (): void => {
+    if (!videoPath) return
+    void apiOpenPath(videoPath).catch(() => { /* 打不开就保持原样，用户可用右键菜单里的「显示所在位置」 */ })
+  }
+  // 没有封面但有实体：给一行可点的入口，而不是报「不在本地」
+  if (vErr && videoPath) {
+    return (
+      <div className={css.msgBubble}>
+        <span className={css.msgVoicelike} title={videoPath} {...clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' })}>
+          <IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}
+        </span>
+        <span className={kitCss.textMeta}>封面不在本地，点上方用系统播放器打开</span>
+      </div>
+    )
+  }
   if (vErr) {
     return (
       <div className={css.msgBubble}>
@@ -840,7 +1105,11 @@ function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: string }): 
   }
   return (
     <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
-      <span className={css.msgVideoWrap}>
+      <span
+        className={css.msgVideoWrap}
+        title={videoPath ? `${videoPath}\n（点击用系统播放器打开）` : '视频封面'}
+        {...(videoPath ? clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' }) : {})}
+      >
         <img src={cover} alt="视频封面" className={css.msgImage} loading="lazy" />
         <span className={css.msgVideoPlay}><IconPlayOutline16 size={18} /></span>
         {durText && <span className={css.msgVideoDur}>{durText}</span>}
@@ -867,20 +1136,20 @@ function fmtCallDuration(sec: number): string {
 function IconVideoCallOutline(): React.JSX.Element {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="1.5" y="4" width="9" height="8" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="1.5" y="4" width="9" height="8" rx="2" stroke="currentColor" strokeWidth="1.25" />
       <path d="M10.5 8.4 14.5 6v4.8L10.5 8.4Z" fill="currentColor" />
     </svg>
   )
 }
 
 /**
- * Call bubble (type 50) — 通话结局与时长都来自 voip XML 的 `<msg>` 文本。
+ * Call bubble (type 50) —— 通话结局与时长都来自 voip XML 的 `<msg>` 文本。
  *
  * 后端 `parseMessageContent(50, …)` 解出 `rich = { type:'call', status,
  * connected, callStatus, durationSec?, voipType? }`：`status` 是微信自己写的结局
- * （通话时长 00:21 / 对方已取消 / 已拒绝 / 未应答 / 已在其它设备接听 …），
+ * （通话时长 00:21 / 对方已取消 / 已拒绝 / 未应答 / 已在其它设备接听 …）。
  * `durationSec` 由它解析而来（XML 的 `<duration>` 实测恒为 0，不可用）。
- * `voipType` 来自 `<room_type>`（0=视频、1=语音），未知时只画话筒图标。
+ * `voipType` 来自 `<room_type>`（1=视频、2=语音），未知时只画话筒图标。
  * @param props.m - the call message.
  * @returns the call bubble element.
  */
@@ -899,7 +1168,11 @@ function MessageCall({ m }: { m: WechatMessage }): React.JSX.Element {
         {isVideo ? <IconVideoCallOutline /> : connected ? <IconCallOutline /> : <IconCallMissedOutline />}
       </span>
       <span className={css.msgCallBody}>
-        <span className={kitCss.textCaption}>{isVideo ? '视频通话' : '语音通话'}</span>
+        {/*
+          微信的通话气泡只有「图标 + 结局」两段：语音/视频由**图标**表达
+          （话筒 / 摄像机），气泡里**不写**「语音通话 / 视频通话」这行标签。
+          此前多画了一行，实测气泡比官方的宽 50px（215×38 vs 参考 165×36）。
+        */}
         <span className={css.msgCallStatus}>{label || (connected ? '通话' : '未接通')}</span>
         {durSec !== null && <span className={css.msgCallDur}>{fmtCallDuration(durSec)}</span>}
       </span>
@@ -948,10 +1221,11 @@ function MessageImage({ m, selfName, onOpen }: {
 
 
 /**
- * 自定义表情真图：按 md5 走 Remote 解码（decoded 缓存优先，否则扫 msg/attach）。
+ * 自定义表情真图：按 md5 走 Remote 解码（decoded 缓存优先，否则扫本地表情缓存），
+ * 本地解不开时后端会用消息带来的 `cdnurl` 下载一次并落缓存（见后端 fetchEmoticonRemote）。
  * 失败时退回占位芯片，保证会话里永远有一行可读内容。
  */
-function MessageEmoticon({ md5, label }: { md5: string; label?: string }): React.JSX.Element {
+function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?: string; emojiUrl?: string }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   useEffect(() => {
@@ -963,7 +1237,7 @@ function MessageEmoticon({ md5, label }: { md5: string; label?: string }): React
     }
     setSrc(null)
     setErr(null)
-    apiGetEmoticonDataUrl({ md5: md5.toLowerCase() })
+    apiGetEmoticonDataUrl({ md5: md5.toLowerCase(), ...(emojiUrl ? { emojiUrl } : {}) })
       .then((r) => {
         if (cancelled) return
         if (r.url) setSrc(r.url)
@@ -998,7 +1272,7 @@ const CARD_KINDS = new Set<RenderKind>([
 /**
  * 兜底解码 XML 实体（卡片标题/描述用）。
  *
- * 后端 `parseAppmsg` 已经解码，这里只防**渲染缓存里的旧数据**：
+ * 后端 `parseAppmsg` 已经解码，这里只是**渲染缓存里的旧数据**——
  * `readRenderCache` 存的是上一版写入的消息对象，它们的 `rich.title` 里还带着
  * `&#x20;`（公众号标题常把连续空格写成实体）。升级后不清洗会直接显示字面量。
  * @param s - raw text.
@@ -1021,12 +1295,14 @@ function decodeEntities(s: string): string {
  * @param props - the parsed rich descriptor + render context.
  * @returns the card element.
  */
-function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
+function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId, createTime }: {
   rich: MessageRich
   fallback: string
   self?: boolean
   onOpenChatlog?: (rich: MessageRich) => void
   serverId?: string
+  /** 本条消息的接收时间（秒）—— 文件卡按它缩小到月份目录。 */
+  createTime?: number
 }): React.JSX.Element {
   const title = decodeEntities(rich.title || fallback || '')
   const desc = decodeEntities(rich.desc || '')
@@ -1063,12 +1339,12 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
       )
     }
     case 'solitaire': {
-      // 群接龙：title 只是摘要（"#接龙\n明晚球\n\n1. 云端"），参与者名单在 rich.members。
+      // 群接龙：title 只是摘要（`#接龙\n明晚球\n\n1. 云端"），参与者名单在 rich.members。
       // 本机 316 条接龙里 268 条带名单 —— 旧实现把它们渲染成通用链接卡，名单全看不见。
       const members = Array.isArray(rich.members) ? rich.members : []
       const declared = typeof rich.declared === 'number' ? rich.declared : 0
       const lines = String(rich.title || '').replace(/^#?接龙\s*/, '').split('\n').map(l => l.trim()).filter(Boolean)
-      // 有名单时只留事由（第一行）；没名单时 title 里那串 "1. xxx" 就是全部信息，照原样显示
+      // 有名单时只留事由（第一行）；没名单时 title 里的 "1. xxx" 就是全部信息，照原样显示
       const subject = members.length > 0 ? (lines[0] ?? '') : lines.join(' · ')
       const shown = members.slice(0, 8)
       return (
@@ -1109,7 +1385,7 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
     case 'product':
       return <LabeledCard icon="🛍️" label="商品" title={title} desc={desc} source={rich.source || ''} thumb={rich.thumb || ''} url={url} foot="商品" />
     case 'sticker': {
-      // 自定义表情：按 md5 解码真图；有 CDN thumb 时优先 thumb（免扫盘）。
+      // 自定义表情：按 md5 解码真图；有 CDN thumb 时优先用 thumb（免扫盘）。
       const md5 = rich.md5 || title || ''
       const safeThumb = cspSafeSrc(rich.thumb)
       if (safeThumb) {
@@ -1120,7 +1396,7 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
           </div>
         )
       }
-      if (md5) return <MessageEmoticon md5={md5} label={title || undefined} />
+      if (md5) return <MessageEmoticon md5={md5} label={title || undefined} emojiUrl={typeof rich.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
       return (
         <div className={css.msgBubble}>
           <span className={css.msgEmojiChip} title="自定义表情">😊 [表情]</span>
@@ -1134,41 +1410,45 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
         <LabeledCard icon="⚠️" label="版本不支持" title={title || '当前微信版本不支持展示该内容，请升级至最新版本。'} foot="暂不支持" />
       )
     case 'quote': {
-      // 引用：desc = 被引用的原文（媒体/卡片已折成 `[图片]`、`[转账] …`），referName = 被引用方昵称。
-      // referType 来自后端 refermsg，用来露出类型语义（图片/语音/…），与微信预览条一致。
+      // 引用：desc = 被引用的原文（媒体/卡片已折成 `[图片]`/`[转账]`），referName = 被引用方昵称。
+      //
+      // 官方形态（用户参考图 + 几何核对）：**被引用内容不套在气泡里**，而是气泡下方
+      // 独立的一行灰字 `发送者: <类型图标> 摘要`，无底色、单行省略。
+      // 判据：参考图里那条引用行宽 138px，而同一条绿色气泡只有 40px ——
+      // 引用行比气泡还宽，它不可能是气泡的子元素。
       const quoted = desc || ''
       const refName = rich.referName || ''
       const thumb = cspSafeSrc(rich.thumb)
       const qType = quoteTypeLabel(rich.referType)
+      const appType = typeof rich.referAppType === 'number' ? rich.referAppType : 0
+      const kindIcon = quoteKindIcon(rich.referType, appType)
+      // 引用行已经画了类型图标，摘要就不再重复一遍类型词
+      // （官方参考图是「⊙微信转账」，不是「⊙ [转账] 微信转账」）。
+      const summary = appType === 2000 ? quoted.replace(/^\[转账\]\s*/, '') : quoted
+      const thumbOpen = /^https?:\/\//i.test(thumb)
       return (
-        <div className={css.msgQuoteCard}>
-          <div className={css.msgQuoteBar} />
-          <div className={css.msgQuoteInner}>
-            {(quoted || refName || qType) && (
-              <div className={css.msgQuoteRef} title={refName ? `${refName}：${quoted}` : quoted}>
-                {qType && <span className={css.msgQuoteType}>{qType}</span>}
-                {refName && <span className={css.msgQuoteRefName}>{refName}</span>}
-                {quoted && <span className={css.msgQuoteRefText}>{quoted}</span>}
-                {!quoted && qType && <span className={css.msgQuoteRefText}>[{qType}]</span>}
-              </div>
-            )}
-            <div className={css.msgQuoteBody}>{title}</div>
-          </div>
-          {thumb && (
-            <span
-              className={`${css.msgQuoteThumbWrap} ${/^https?:\/\//i.test(thumb) ? css.msgQuoteThumbOpen : ''}`}
-              {...(/^https?:\/\//i.test(thumb)
-                ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' })
-                : {})}
-            >
-              <img className={css.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-            </span>
+        <>
+          <div className={css.msgBubble}>{title}</div>
+          {(quoted || refName || qType) && (
+            <div className={css.msgQuoteStrip} title={refName ? `${refName}：${summary}` : summary}>
+              {refName && <span className={css.msgQuoteWho}>{refName}:</span>}
+              {kindIcon && <span className={css.msgQuoteKind} aria-hidden="true">{kindIcon}</span>}
+              <span className={css.msgQuoteWhat}>{summary || `[${qType}]`}</span>
+              {thumb && (
+                <span
+                  className={`${css.msgQuoteThumbWrap} ${thumbOpen ? css.msgQuoteThumbOpen : ''}`}
+                  {...(thumbOpen ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' }) : {})}
+                >
+                  <img className={css.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                </span>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )
     }
     case 'file':
-      return <OpenFileCard title={title} size={rich.fileSize ?? ''} />
+      return <OpenFileCard title={title} size={rich.fileSize ?? ''} {...(createTime !== undefined ? { createTime } : {})} />
     case 'chatlog': {
       const records = Array.isArray(rich.records) ? rich.records : []
       const preview = records.slice(0, 4).map(r => `${r.name || ''}${r.name ? '：' : ''}${r.text || ''}`.trim()).filter(Boolean)
@@ -1176,32 +1456,60 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
         <button type="button" className={css.msgChatlogCard}
           onClick={onOpenChatlog ? () => { onOpenChatlog(rich) } : undefined}
           title={onOpenChatlog ? '点击查看聊天记录' : undefined}>
-          <span className={css.msgChatlogIcon}><IconDataOutline16 size={15} /></span>
-          <span className={css.msgChatlogBody}>
-            <span className={css.msgChatlogTitle}>{title || '群聊的聊天记录'}</span>
-            {preview.length > 0 && (
-              <span className={css.msgChatlogPreview}>
-                {preview.map((line, i) => <span key={i} className={css.msgChatlogLine} title={line}>{line}</span>)}
-              </span>
-            )}
-            <span className={css.msgChatlogFoot}>{records.length > 0 ? `共 ${records.length} 条消息 · 点击查看` : '点击查看'}</span>
+          <span className={css.msgChatlogMain}>
+            <span className={css.msgChatlogIcon}><IconDataOutline16 size={15} /></span>
+            <span className={css.msgChatlogBody}>
+              <span className={css.msgChatlogTitle}>{title || '群聊的聊天记录'}</span>
+              {preview.length > 0 && (
+                <span className={css.msgChatlogPreview}>
+                  {preview.map((line, i) => <span key={i} className={css.msgChatlogLine} title={line}>{line}</span>)}
+                </span>
+              )}
+            </span>
           </span>
+          <CardFoot label={records.length > 0 ? `聊天记录 · 共 ${records.length} 条` : '聊天记录'} />
         </button>
       )
     }
     case 'miniapp': {
-      const safeThumb = cspSafeSrc(rich.thumb)
+      // 微信原生小程序卡：顶栏应用名 → 标题 → 页面封面大图 → 底栏「小程序」。
+      const cover = cspSafeSrc(rich.thumb)
+      const appIcon = cspSafeSrc(typeof rich.avatar === 'string' ? rich.avatar : '')
+      const appName = rich.source || ''
+      const bodyDesc = desc && !/[<>]/.test(desc) && desc !== title ? desc : ''
       return (
         <div className={css.msgMiniappCard}>
-          <div className={css.msgMiniappHead}>
-            {safeThumb
-              ? <img className={css.msgMiniappIcon} src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-              : <IconDataOutline16 size={12} />}
-            <span>小程序</span>
+          {(appName || appIcon) && (
+            <div className={css.msgMiniappApp}>
+              {appIcon
+                ? <img className={css.msgMiniappAppIcon} src={appIcon} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                : <span className={css.msgMiniappAppDot} aria-hidden="true" />}
+              <span className={css.msgMiniappName}>{appName || '小程序'}</span>
+            </div>
+          )}
+          <div className={css.msgMiniappTitle}>{title || '[小程序]'}</div>
+          {bodyDesc && <div className={css.msgMiniappDesc}>{bodyDesc}</div>}
+          <div className={css.msgMiniappCover} data-empty={!cover || undefined}>
+            {cover
+              ? (
+                <img
+                  className={css.msgMiniappCoverImg}
+                  src={cover}
+                  alt=""
+                  loading="lazy"
+                  onError={(e) => {
+                    const el = e.target as HTMLImageElement
+                    el.style.display = 'none'
+                    el.parentElement?.setAttribute('data-empty', '')
+                  }}
+                />
+              )
+              : (
+                <span className={css.msgMiniappCoverFallback} aria-hidden="true">
+                  <IconDataOutline16 size={22} />
+                </span>
+              )}
           </div>
-          <div className={css.msgMiniappTitle}>{title}</div>
-          {desc && <div className={css.msgMiniappDesc}>{desc}</div>}
-          {rich.source && <div className={css.msgMiniappSource}>{rich.source}</div>}
           <CardFoot label="小程序" />
         </div>
       )
@@ -1251,13 +1559,15 @@ function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId }: {
       )
     }
     case 'link': {
-      const cardUrl = url || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】》>]+$/, '') || ''
+      const cardUrl = url || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】…]+$/, '') || ''
+      // 公众号推送（后端识别出 `<mmreader>`）走大图卡 + 次条，其余链接仍是紧凑链接卡
+      if (rich.mpNews === true) return <MpNewsCard rich={rich} title={title} url={cardUrl} />
       return <LinkCard rich={rich} title={title || '链接'} desc={desc} url={cardUrl} />
     }
     default: {
       // appmsg 兜底：有 url 走链接卡，没 url 就只显示标题文本，绝不画带假链接的卡片。
       const cardUrl = url
-        || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】》>]+$/, '')
+        || (title.match(/https?:\/\/[^\s<>"']+/) ?? [])[0]?.replace(/[。，；、！？）)】…]+$/, '')
         || ''
       if (/^https?:\/\//i.test(cardUrl)) return <LinkCard rich={rich} title={title || '链接'} desc={desc} url={cardUrl} />
       return (
@@ -1323,7 +1633,7 @@ function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
   if (kind === 'voip') return <MessageCall m={m} />
   if (kind === 'emoji') {
     const md5 = rich?.md5 || rich?.title || ''
-    if (md5) return <MessageEmoticon md5={md5} label={text || undefined} />
+    if (md5) return <MessageEmoticon md5={md5} label={text || undefined} emojiUrl={typeof rich?.emojiUrl === 'string' ? rich.emojiUrl : undefined} />
     return (
       <div className={css.msgBubble}>
         <span className={css.msgEmojiChip} title="自定义表情">😊 [表情]</span>
@@ -1335,13 +1645,14 @@ function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
   if (rich && (CARD_KINDS.has(kind) || rich.type !== undefined)) {
     return (
       <RichCard rich={rich} fallback={text} self={m.isSender === 1}
+        createTime={m.createTime}
         {...(onOpenChatlog ? { onOpenChatlog } : {})}
         {...(m.serverId ? { serverId: m.serverId } : {})} />
     )
   }
   if (kind === 'link') {
     const urlMatch = text.match(/https?:\/\/[^\s<>"']+/)
-    const url = urlMatch ? urlMatch[0].replace(/[。，；、！？）)】》>]+$/, '') : ''
+    const url = urlMatch ? urlMatch[0].replace(/[。，；、！？）)】…]+$/, '') : ''
     return <LinkCard rich={{ type: 'link', title: text }} title={text || '链接'} desc="" url={url} />
   }
   return <div className={css.msgBubble}><span className={kitCss.textMeta}>{text || `[类型 ${m.type}]`}</span></div>
@@ -1374,6 +1685,27 @@ function isKefuSession(u: string): boolean {
   return s.includes('@weclaw') || s.includes('@kefu.openim') || s.includes('opencustomerservicemsg')
 }
 
+/**
+ * 会话是否属于某个分类视图。
+ *
+ * **列表过滤与「打开中的会话是否仍属当前类目」必须共用本判据** ——
+ * 否则列表已经换成「客服」类目、右侧却还留着某个公众号的聊天，
+ * 就是「别人的信息出现在这个界面」。三个公众号类目互斥且都排除客服。
+ * @param s - the session.
+ * @param view - current category view.
+ * @returns whether the session belongs to the view.
+ */
+function sessionInView(s: WechatSession, view: ChatView): boolean {
+  if (view === 'bizchats') {
+    return s.username.startsWith('gh_') && s.accountKind !== 'service' && !isKefuSession(s.username)
+  }
+  if (view === 'servicechats') {
+    return s.username.startsWith('gh_') && s.accountKind === 'service' && !isKefuSession(s.username)
+  }
+  if (view === 'kefu') return isKefuSession(s.username)
+  return true
+}
+
 const POLL_VISIBLE_MS = 1000
 const POLL_HIDDEN_MS = 5000
 
@@ -1385,7 +1717,6 @@ const POLL_HIDDEN_MS = 5000
  */
 export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialView?: ChatView; initialTarget?: ChatTarget | null }): React.JSX.Element {
   const [view, setView] = useState<ChatView>(() => initialView)
-  useEffect(() => { setView(initialView) }, [initialView])
 
   const [sessions, setSessions] = useState<readonly WechatSession[]>([])
   const [search, setSearch] = useState('')
@@ -1408,10 +1739,31 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [realtime, setRealtime] = useState<boolean>(() => {
     try { return localStorage.getItem('wc_realtime') !== '0' } catch { return true }
   })
+  /** 头部「更多」溢出菜单（导出/已编辑/清空草稿）。 */
+  const [moreOpen, setMoreOpen] = useState(false)
   /** Highest sort_seq already loaded; the incremental-poll watermark. */
   const watermarkRef = useRef(0)
   const inFlightRef = useRef(false)
+  /**
+   * 会话归属令牌 —— 用于挡住「上一个会话的在途取数」写进当前会话。
+   *
+   * `curSession` 与 `messages` 是两份独立 state，切会话时必然有一段
+   * 「curSession 已换、messages 还是上一个人」的窗口。首次/翻页/轮询/对账
+   * 都是异步的：如果回来时不校验归属就 setMessages，上一个人的消息就会
+   * 出现在当前会话里，并且会被写进**上一个会话的渲染缓存**（`chat-msgs:<talker>`），
+   * 于是重开那个会话也还是错的 —— 这是「别人的消息出现在这个聊天界面」的根因。
+   *
+   * 约定：任何异步取数在**提交 state 之前**必须调用 `sessionAlive(epoch, talker)`；
+   * 追加/替换型更新还要在 updater 内部再判一次（updater 可能在切会话之后才被 React 执行）。
+   */
+  const sessionEpochRef = useRef(0)
+  /** 当前 `messages` 所属的 talker；与 sessionEpochRef 同步更新。 */
+  const messagesTalkerRef = useRef<string | null>(null)
   const sessionsReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** ── 会话级 AI 面板（「新对话」）──
+   *  入口在聊天头部；面板作为第三栏并排。读取范围**恒为当前会话**，线程按会话隔离。 */
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
   /** Logged-in account wxid (from the messages snapshot) for own avatars. */
   const [selfWxid, setSelfWxid] = useState('')
@@ -1432,6 +1784,57 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     for (const m of list) if (m.sortSeq && m.sortSeq > w) w = m.sortSeq
     watermarkRef.current = w
   }
+
+  /**
+   * 开始一个会话：令牌自增（作废所有在途请求）并声明 `messages` 将归属该 talker。
+   * @param talker - 会话 username。
+   * @returns 本次令牌，供后续 `sessionAlive` 校验。
+   */
+  const beginSession = (talker: string): number => {
+    sessionEpochRef.current += 1
+    messagesTalkerRef.current = talker
+    // 上一个会话的在途轮询已被令牌作废，这里放开闸门让新会话立刻可以轮询。
+    inFlightRef.current = false
+    return sessionEpochRef.current
+  }
+
+  /**
+   * 在途结果是否仍属于本次会话。
+   * @param epoch - 发起请求时拿到的令牌。
+   * @param talker - 发起请求时的会话 username。
+   * @returns 令牌未变且 talker 未被切走时为 true。
+   */
+  const sessionAlive = (epoch: number, talker: string): boolean => (
+    sessionEpochRef.current === epoch && messagesTalkerRef.current === talker
+  )
+
+  /**
+   * 关闭当前会话并把归属令牌作废。
+   *
+   * 用于切换分类视图（公众号/服务号/客服）时：那三个类目互斥，
+   * 列表换类目后右侧绝不能留着上一类目的会话 —— 否则会在「客服」视图里
+   * 看到某个公众号的聊天，就是「别人的信息出现在这个界面」。
+   *
+   * 只清理本函数之前声明的 state；依赖于会话的浮层（聊天记录弹窗、右键菜单）
+   * 由调用方 changeView 一并收起。
+   */
+  const closeCurrentSession = useCallback((): void => {
+    sessionEpochRef.current += 1
+    messagesTalkerRef.current = null
+    inFlightRef.current = false
+    watermarkRef.current = 0
+    setCurSession(null)
+    setMessages([])
+    setHasMore(false)
+    setCursor(0)
+    setCursorLocalId(undefined)
+    setTypeStats([])
+    setMsgError(null)
+    setMsgLoading(false)
+    setSelfWxid('')
+    setPollStatus('')
+    setViewer(null)
+  }, [])
 
   const toggleSelect = (username: string): void => {
     setSelected((prev) => {
@@ -1598,6 +2001,19 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [edits, setEdits] = useState<readonly EditedMessageRecord[]>([])
   const [editedIds, setEditedIds] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState(false)
+  /** 「编辑消息副本」对话框：目标消息 / 编辑中的文本 / 失败原因 / 保存中 */
+  const [editTarget, setEditTarget] = useState<WechatMessage | null>(null)
+  const [editText, setEditText] = useState('')
+  const [editErr, setEditErr] = useState<string | null>(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // 打开即把光标放进编辑框并全选原文（Radix 默认聚焦标题栏的关闭按钮）。
+  useEffect(() => {
+    if (!editTarget) return undefined
+    const t = window.setTimeout(() => { editAreaRef.current?.focus(); editAreaRef.current?.select() }, 60)
+    return () => { window.clearTimeout(t) }
+  }, [editTarget])
 
   const loadEdits = useCallback(async (): Promise<void> => {
     try {
@@ -1614,13 +2030,18 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   const reloadCurrent = useCallback(async (): Promise<void> => {
     if (!curSession) return
+    // 记下发起时的归属：编辑后刷新期间用户可能已经切走，回来必须校验。
+    const talker = curSession.username
+    const epoch = sessionEpochRef.current
     try {
-      const cached = readRenderCache<WechatMessage[]>('chat-msgs:' + curSession.username)
+      const cached = readRenderCache<WechatMessage[]>('chat-msgs:' + talker)
+      if (!sessionAlive(epoch, talker)) return
       if (cached && cached.length > 0) {
         setMessages(cached)
         setHasMore(true)
       }
-      const env = await apiGetMessages({ talker: curSession.username, limit: 100 })
+      const env = await apiGetMessages({ talker, limit: 100 })
+      if (!sessionAlive(epoch, talker)) return
       setMessages(env.messages)
       setWatermarkFrom(env.messages)
       setSelfWxid(env.selfWxid ?? '')
@@ -1628,24 +2049,46 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       setCursor(env.cursor ?? 0)
       setCursorLocalId(env.cursorLocalId)
       setTypeStats(env.typeStats ?? [])
-      writeRenderCache('chat-msgs:' + curSession.username, env.messages)
+      writeRenderCache('chat-msgs:' + talker, env.messages)
     } catch { /* keep current view */ }
   }, [curSession])
 
-  const doEdit = useCallback(async (m: WechatMessage): Promise<void> => {
-    const next = window.prompt('编辑消息内容（写入本地解密副本）', m.displayText || m.strContent || '')
-    if (next === null || !curSession) return
-    setEditing(true)
+  /**
+   * 打开「编辑消息副本」对话框。
+   *
+   * 原实现用 `window.prompt(...)` 取新内容 —— **Electron 渲染进程不支持 prompt**
+   * （调用即抛 `prompt() is not supported.`），于是右键菜单点「编辑消息副本」除了在
+   * 控制台留一条报错外什么都不发生（用户反馈「为什么还不能编辑信息」）。
+   * 改成应用内对话框：可多行、能显示保存失败的原文、Esc/取消可退。
+   */
+  const doEdit = useCallback((m: WechatMessage): void => {
+    setEditTarget(m)
+    setEditText(m.displayText || m.strContent || '')
+    setEditErr(null)
+  }, [])
+
+  const closeEdit = useCallback((): void => {
+    setEditTarget(null)
+    setEditErr(null)
+  }, [])
+
+  const saveEdit = useCallback(async (): Promise<void> => {
+    const m = editTarget
+    if (!m || !curSession) return
+    setEditBusy(true)
+    setEditErr(null)
     try {
-      const r = await apiEditChatMessage({ username: curSession.username, localId: m.localId, content: next })
-      if (!r.ok) window.alert('编辑失败: ' + (r.error ?? ''))
-      else { await reloadCurrent(); await loadEdits() }
+      const r = await apiEditChatMessage({ username: curSession.username, localId: m.localId, content: editText })
+      if (!r.ok) { setEditErr(r.error ?? '未知错误'); return }
+      setEditTarget(null)
+      await reloadCurrent()
+      await loadEdits()
     } catch (e) {
-      window.alert('编辑失败: ' + (e as Error).message)
+      setEditErr((e as Error).message)
     } finally {
-      setEditing(false)
+      setEditBusy(false)
     }
-  }, [curSession, reloadCurrent, loadEdits])
+  }, [editTarget, editText, curSession, reloadCurrent, loadEdits])
 
   const sessionListRef = useRef<HTMLDivElement | null>(null)
   const sessionsPager = usePagedList<WechatSession>({
@@ -1736,6 +2179,15 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [groupInfoErr, setGroupInfoErr] = useState<string | null>(null)
   const [memberSearch, setMemberSearch] = useState('')
   const [memberExpanded, setMemberExpanded] = useState(false)
+  /**
+   * 群公告展开态。公告是自由文本（实测样本 5 行）。
+   * 原先 `.groupInfoValue` 用 -webkit-line-clamp:3 **静默**截断且没有展开入口 ——
+   * 用户不知道内容被吃掉了（审计 P1-5）。这里给可展开的行内开关。
+   */
+  const [annExpanded, setAnnExpanded] = useState(false)
+  const [annCanExpand, setAnnCanExpand] = useState(false)
+  const annRef = useRef<HTMLDivElement | null>(null)
+  const groupInfoTitleId = useId()
   const [profileMember, setProfileMember] = useState<GroupMember | null>(null)
   const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
   const [chatlogStack, setChatlogStack] = useState<Array<{ title: string; records: ChatlogRecord[] }>>([])
@@ -1894,7 +2346,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   const sessionSearch = searchMode === 'session' ? search : ''
   const sessionSearching = sessionSearch.trim() !== ''
-  // 普通会话列表：分页逐页加载；会话搜索时一次性拉取 500 条（用户主动操作），保证搜索结果完整。
+  // 普通会话列表：分页逐页加载；会话搜索时一次性拉满 500 条（用户主动操作），保证搜索结果完整。
   useEffect(() => {
     setError(null)
     if (sessionSearching) {
@@ -1924,7 +2376,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   // 搜索索引状态只在用户切到「消息搜索」时检查，进入页签不再触发。
   useEffect(() => { if (searchMode === 'message') void checkIndexStatus() }, [searchMode, checkIndexStatus])
-  // 已编辑消息列表仅在打开某个会话时按需加载，避免进入页签就拉全量已编辑记录；
+  // 已编辑消息列表仅在打开某个会话时按需加载，避免进入页签就拉全量已编辑记录。
   // 会话内「已编辑」徽标仍会在进入会话后正常出现。
   useEffect(() => { if (curSession) void loadEdits() }, [curSession, loadEdits])
 
@@ -1951,15 +2403,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [sessions, messages, curSession])
 
   const filtered = useMemo(() => {
-    // subscription views filter by session kind first
-    let base = sessions
-    if (view === 'bizchats') {
-      base = sessions.filter(s => s.username.startsWith('gh_') && s.accountKind !== 'service' && !isKefuSession(s.username))
-    } else if (view === 'servicechats') {
-      base = sessions.filter(s => s.username.startsWith('gh_') && s.accountKind === 'service' && !isKefuSession(s.username))
-    } else if (view === 'kefu') {
-      base = sessions.filter(s => isKefuSession(s.username))
-    }
+    // subscription views filter by session kind first（判据与 sessionInView 同源）
+    const base = view === 'chats' ? sessions : sessions.filter(s => sessionInView(s, view))
     const q = search.trim().toLowerCase()
     if (!q) return base
     return base.filter(s =>
@@ -1983,24 +2428,54 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     unread: sessions.reduce((a, s) => a + (s.unreadCount || 0), 0),
   }), [sessions])
 
+  /**
+   * AI 入口的可见性：单聊与群聊才有「这段聊天」的语义；
+   * 公众号/服务号/客服是单向广播，问答没有意义，不给入口。
+   */
+  const aiEligible = curSession !== null && (curSession.type === 'private' || curSession.type === 'group')
+
+  /**
+   * AI 面板的读取范围：**就是当前打开的会话**。
+   * 不给下拉选择——面板与右侧消息流是同一个会话，两者范围必须一致，
+   * 否则会出现「看着 A 的聊天、问的却是 B」这种无法自证的错位。
+   */
+  const aiTarget = curSession
+
   const { count: sessCount, sentinelRef: sessSentinel } = useProgressiveList(normalList.length, 120)
 
   // 消息流渐进渲染：窗口从底部截取（最新消息永远可见），向上滚动越过哨兵
   // 时逐步展开更早的消息，长会话不再一次性渲染上千条 DOM。
   const { count: msgWinCount, sentinelRef: msgWinSentinel, reveal: revealMsgWindow } = useProgressiveList(messages.length, 120)
 
+  /**
+   * 当前 `messages` 是否确实属于正在显示的会话。
+   *
+   * `curSession` 与 `messages` 是两份 state，中间必然有一段不一致的窗口。
+   * 与其只在各个异步回调里保证顺序，这里再加一道**结构性**断言：归属不符时
+   * 一律不渲染消息列表（显示骨架），从根上杜绝「把上一个人的消息画在这个
+   * 会话的标题下面」。`messagesTalkerRef` 与两份 state 在同一批次里更新，
+   * 因此渲染时读到的值一定是自洽的。
+   */
+  const messagesMatchSession = curSession !== null && messagesTalkerRef.current === curSession.username
+
   /** Incremental poll: fetch messages newer than the watermark and append. */
   const pollNew = useCallback(async (): Promise<void> => {
     if (!curSession || inFlightRef.current) return
+    const talker = curSession.username
+    const epoch = sessionEpochRef.current
     const after = watermarkRef.current
     if (!after) return
     inFlightRef.current = true
     try {
-      const env = await apiGetNewMessages({ talker: curSession.username, after, limit: 200 })
+      const env = await apiGetNewMessages({ talker, after, limit: 200 })
+      // 切走之后到达的响应必须丢弃：否则会把上一个会话的新消息追加进当前会话，
+      // 并且写进**上一个会话**的渲染缓存（缓存被污染后重开也还是错的）。
+      if (!sessionAlive(epoch, talker)) return
       const fresh = env.messages
       setPollStatus(`✓ ${new Date().toLocaleTimeString()} · ${fresh.length} 条新消息`)
       if (fresh.length === 0) return
       setMessages((prev) => {
+        if (!sessionAlive(epoch, talker)) return prev
         const key = (m: WechatMessage): string => `${m.localId}:${m.sortSeq ?? 0}`
         const seen = new Set(prev.map(m => key(m)))
         const add = fresh.filter(m => !seen.has(key(m)))
@@ -2009,11 +2484,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         // Keep the render cache current so a session reopen paints the same
         // newest messages before the authoritative fetch returns.
         const merged = [...prev, ...add]
-        writeRenderCache('chat-msgs:' + curSession.username, merged)
+        writeRenderCache('chat-msgs:' + talker, merged)
         return merged
       })
       // follow to the bottom only when the user is already near it
       requestAnimationFrame(() => {
+        if (!sessionAlive(epoch, talker)) return
         const el = msgEndRef.current
         if (!el) return
         const rect = el.getBoundingClientRect()
@@ -2021,7 +2497,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         if (rect.top < vh && rect.bottom >= 0) el.scrollIntoView({ block: 'end' })
       })
     } catch (e) {
-      setPollStatus('✗ ' + ((e as Error).message || '轮询失败').slice(0, 60))
+      if (sessionAlive(epoch, talker)) setPollStatus('✗ ' + ((e as Error).message || '轮询失败').slice(0, 60))
     } finally {
       inFlightRef.current = false
     }
@@ -2033,13 +2509,19 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const reconcileRef = useRef(false)
   const reconcileRecent = useCallback(async (): Promise<void> => {
     if (!curSession || reconcileRef.current) return
+    const talker = curSession.username
+    const epoch = sessionEpochRef.current
     reconcileRef.current = true
     try {
-      const env = await apiGetMessages({ talker: curSession.username, limit: 50 })
+      const env = await apiGetMessages({ talker, limit: 50 })
+      // 对账按 localId 匹配，而 local_id 只在会话内唯一 —— 切走后拿另一个会话的
+      // 行去替换当前会话的行，等于按编号把别人的消息安到这个会话上，必须丢弃。
+      if (!sessionAlive(epoch, talker)) return
       const byId = new Map<number, WechatMessage>()
       for (const m of env.messages) byId.set(m.localId, m)
       if (byId.size === 0) return
       setMessages((prev) => {
+        if (!sessionAlive(epoch, talker)) return prev
         const next = prev.map((m) => {
           const cur = byId.get(m.localId)
           if (cur && (cur.type !== m.type || (cur.sortSeq ?? 0) !== (m.sortSeq ?? 0))) return cur
@@ -2047,7 +2529,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         })
         const changed = next.some((m, i) => m !== prev[i])
         if (!changed) return prev
-        writeRenderCache('chat-msgs:' + curSession.username, next)
+        writeRenderCache('chat-msgs:' + talker, next)
         return next
       })
     } catch { /* 保持当前视图，等待下一次推送对账 */ } finally {
@@ -2080,7 +2562,38 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setMemberSearch('')
     setMemberExpanded(false)
     setProfileMember(null)
+    setMoreOpen(false)
+    setAnnExpanded(false)
+    setAnnCanExpand(false)
   }, [curSession?.username])
+
+  // 群公告是否被截断：只在折叠态量（展开后 clientHeight 变大，量了会把「展开」按钮吃掉）。
+  useEffect(() => {
+    if (!groupInfoOpen || !groupInfo || annExpanded) return
+    const el = annRef.current
+    if (!el) return
+    setAnnCanExpand(el.scrollHeight > el.clientHeight + 1)
+  }, [groupInfoOpen, groupInfo, annExpanded])
+
+  // 抽屉是**手写覆盖层**，要自己接 Esc 与焦点管理：
+  // 项目已有一套（kit 的 useEscapeToClose / useDialogFocus），其余四个手写弹窗都注册了，
+  // 只有这个抽屉漏了 —— 实测 Esc 关不掉、Tab 会跑到抽屉背后的会话列表里（审计 P1-7）。
+  useEscapeToClose(groupInfoOpen, () => { setGroupInfoOpen(false); setProfileMember(null) })
+  useDialogFocus(groupInfoOpen, '[data-st-dialog="chats-groupinfo"]')
+
+  // 「更多」菜单：Esc 关闭（与其他手写覆盖层共用同一套栈，只让最上层响应）
+  useEscapeToClose(moreOpen, () => { setMoreOpen(false) })
+  // 点菜单外部关闭。菜单没有遮罩，所以必须自己判 contains。
+  useEffect(() => {
+    if (!moreOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const el = document.querySelector('[data-st-menu="msg-header-more"]')
+      if (el && e.target instanceof Node && el.contains(e.target)) return
+      setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => { document.removeEventListener('mousedown', onDown) }
+  }, [moreOpen])
 
   // Host push: a WAL increment was decrypted into the snapshot — refresh the
   // open chat immediately, reconcile in-place edits (revoke/delete), and
@@ -2124,6 +2637,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }
 
   const openSession = useCallback(async (s: WechatSession): Promise<void> => {
+    const epoch = beginSession(s.username)
     setCurSession(s)
     watermarkRef.current = 0
     setCursor(0)
@@ -2132,11 +2646,15 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setMsgLoading(true)
     setMsgError(null)
     try {
-      // 先用上次渲染的消息缓存秒开,后台再同步最新 100 条
+      // 先用上次渲染的消息缓存秒开,后台再同步最近 100 条
       const cached = readRenderCache<WechatMessage[]>('chat-msgs:' + s.username)
+      if (!sessionAlive(epoch, s.username)) return
       setMessages(cached ?? [])
       if (cached && cached.length > 0) { setHasMore(true); setMsgLoading(false) }
       const env = await apiGetMessages({ talker: s.username, limit: 100 })
+      // 用户在加载期间又点了另一个会话：这份响应已经过期，丢弃，
+      // 否则上一个会话的消息会盖到当前会话上。
+      if (!sessionAlive(epoch, s.username)) return
       const list = env.messages
       setMessages(list)
       setWatermarkFrom(list)
@@ -2146,29 +2664,36 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       setCursorLocalId(env.cursorLocalId)
       setTypeStats(env.typeStats ?? [])
       writeRenderCache('chat-msgs:' + s.username, list)
-      setTimeout(() => { msgEndRef.current?.scrollIntoView({ block: 'end' }) }, 50)
+      setTimeout(() => {
+        if (!sessionAlive(epoch, s.username)) return
+        msgEndRef.current?.scrollIntoView({ block: 'end' })
+      }, 50)
     } catch (e) {
-      setMsgError((e as Error).message)
+      if (sessionAlive(epoch, s.username)) setMsgError((e as Error).message)
     } finally {
-      setMsgLoading(false)
+      if (sessionAlive(epoch, s.username)) setMsgLoading(false)
     }
   }, [])
 
   const loadMore = useCallback(async (): Promise<void> => {
     if (!curSession || !hasMore || msgLoading) return
+    const talker = curSession.username
+    const epoch = sessionEpochRef.current
     setMsgLoading(true)
     try {
-      const env = await apiGetMessages({ talker: curSession.username, limit: 100, cursor, cursorLocalId })
+      const env = await apiGetMessages({ talker, limit: 100, cursor, cursorLocalId })
+      // 翻页结果按会话拼接：切走之后到达的上一页属于上一个会话，必须丢弃。
+      if (!sessionAlive(epoch, talker)) return
       const list = env.messages
-      setMessages(prev => [...list, ...prev])
+      setMessages(prev => (sessionAlive(epoch, talker) ? [...list, ...prev] : prev))
       setWatermarkFrom(list)
       setHasMore(env.hasMore ?? false)
       setCursor(env.cursor ?? cursor)
       setCursorLocalId(env.cursorLocalId)
     } catch (e) {
-      setMsgError((e as Error).message)
+      if (sessionAlive(epoch, talker)) setMsgError((e as Error).message)
     } finally {
-      setMsgLoading(false)
+      if (sessionAlive(epoch, talker)) setMsgLoading(false)
     }
   }, [curSession, hasMore, msgLoading, cursor, cursorLocalId])
 
@@ -2182,6 +2707,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       lastTimestamp: 0, summary: '', unreadCount: 0, draft: '', pinned: false, hidden: false,
     }
     setCurSession(s)
+    const epoch = beginSession(username)
     setMessages([])
     watermarkRef.current = 0
     setCursor(0)
@@ -2205,10 +2731,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         if (env.cursor !== undefined) moreOpts.cursor = env.cursor
         if (env.cursorLocalId !== undefined) moreOpts.cursorLocalId = env.cursorLocalId
         env = await apiGetMessages(moreOpts)
+        // 定位可能翻 10 页，期间用户在左侧点了别的会话是很正常的事：
+        // 每次翻页后都要确认归属，否则会把目标会话的消息灌进当前会话。
+        if (!sessionAlive(epoch, username)) return
         list = [...env.messages, ...list]
         pages += 1
         hit = findHit()
       }
+      if (!sessionAlive(epoch, username)) return
       setMessages(list)
       setWatermarkFrom(list)
       setSelfWxid(env.selfWxid ?? '')
@@ -2219,6 +2749,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       // 渐进渲染窗口从底部截取：先展开到目标消息所在位置，保证定位元素已渲染。
       if (hit >= 0) revealMsgWindow(list.length - hit)
       setTimeout(() => {
+        if (!sessionAlive(epoch, username)) return
         if (hit >= 0) {
           const m = list[hit]
           if (m) {
@@ -2230,9 +2761,9 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         }
       }, 80)
     } catch (e) {
-      setMsgError((e as Error).message)
+      if (sessionAlive(epoch, username)) setMsgError((e as Error).message)
     } finally {
-      setMsgLoading(false)
+      if (sessionAlive(epoch, username)) setMsgLoading(false)
     }
   }, [sessions, revealMsgWindow])
 
@@ -2244,6 +2775,106 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [initialTarget, openSessionAndLocate])
 
   const onEditFn = doEdit
+
+  /** 消息右键菜单的光标定位状态（null = 未打开）。 */
+  const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>(null)
+
+  /**
+   * 切换分类视图（全部 / 公众号 / 服务号 / 客服）。
+   *
+   * 类目互斥：列表换类目后，右侧那个「打开中的会话」已经不属于当前界面，
+   * 必须一并关掉 —— 否则在「客服」视图里会看到之前打开的某个公众号聊天，
+   * 就是这个界面上出现了别的类目的信息。会话无关的浮层（聊天记录弹窗、
+   * 右键菜单）也一起收起，避免残留指向上一个会话的内容。
+   * @param next - the category to switch to.
+   */
+  const changeView = useCallback((next: ChatView): void => {
+    if (next === view) return
+    setView(next)
+    closeCurrentSession()
+    setChatlogStack([])
+    setMsgMenu(null)
+  }, [view, closeCurrentSession])
+
+  /*
+   * 外层 tab 与 `initialView` 的同步（公众号/服务号/客服在侧栏是独立导航项）。
+   *
+   * 用 ref 转一手，让 effect **不**依赖 `initialView`：如果把 `changeView` 放进依赖，
+   * 它在面板内切换分段时会随 `view` 换新身份，effect 便会把视图弹回 `initialView`，
+   * 用户就没法在面板内切到「服务号」。
+   */
+  const changeViewRef = useRef(changeView)
+  changeViewRef.current = changeView
+  useEffect(() => { changeViewRef.current(initialView) }, [initialView])
+
+  /** 打开「聊天记录」弹窗（合并转发卡片与右键菜单两条入口共用同一实现）。 */
+  const openChatlog = useCallback((rich: MessageRich): void => {
+    setChatlogStack([{ title: rich.title || '群聊的聊天记录', records: Array.isArray(rich.records) ? rich.records : [] }])
+  }, [])
+
+  const copyMsgText = useCallback((t: string): void => {
+    void navigator.clipboard.writeText(t).then(() => { window.alert('文本已复制') }).catch(() => { window.alert('复制失败') })
+  }, [])
+
+  /**
+   * 右键菜单「打开文件」：同样要把消息自带的体积/时间透传给后端，
+   * 否则同名文件会在别的会话里随便挑一份。
+   * @param fileName - 文件名。
+   * @param m - 该消息（取 fileSize 与 createTime 作为归属线索）。
+   */
+  const openFileFromMenu = useCallback((fileName: string, m: WechatMessage): void => {
+    const bytes = Number(m.rich?.fileSize)
+    const opts: { size?: number; createTime?: number } = {}
+    if (Number.isFinite(bytes) && bytes > 0) opts.size = bytes
+    if (m.createTime) opts.createTime = m.createTime
+    void downloadMessageFile(fileName, opts).then((err) => { if (err) window.alert('打开失败：' + err) })
+  }, [])
+
+  /**
+   * 在光标处打开消息菜单。
+   *
+   * 坐标夹进视口（留 8px 余量）。高度按条目数估算：估大了只是留白，估小了最后一条
+   * 会被挤出视口，所以按 34px/条 + 16px 走，菜单本体另有 max-height + overflow 兜底。
+   * @param ev - the contextmenu event.
+   * @param m - the target message.
+   * @param kind - its render kind.
+   */
+  const openMsgMenu = useCallback((ev: React.MouseEvent, m: WechatMessage, kind: RenderKind): void => {
+    ev.preventDefault()
+    const estH = buildMsgMenu(m, kind).length * 34 + 16
+    const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 184))
+    const y = Math.max(8, Math.min(ev.clientY, window.innerHeight - estH - 8))
+    setMsgMenu({ x, y, m, kind })
+  }, [])
+
+  /** 菜单项分发：把「声明式条目」落到具体的面板动作上。 */
+  const runMenuAction = useCallback((item: MsgMenuItem, m: WechatMessage): void => {
+    switch (item.action) {
+      case 'copyText': copyMsgText(item.arg ?? ''); break
+      case 'copyJson': copyMsgJson(m); break
+      case 'openLink': openLink(item.arg ?? ''); break
+      case 'openViewer': openViewer(m); break
+      case 'openFile': openFileFromMenu(item.arg ?? '', m); break
+      case 'openChatlog': if (m.rich) openChatlog(m.rich); break
+      case 'edit': void onEditFn(m); break
+      default: break
+    }
+  }, [copyMsgText, copyMsgJson, openViewer, openFileFromMenu, openChatlog, onEditFn])
+
+  /** 菜单打开期间：Esc、滚动、改窗口大小都关闭它（微信点空白处即关）。 */
+  useEffect(() => {
+    if (!msgMenu) return
+    const close = (): void => { setMsgMenu(null) }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close() }
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [msgMenu])
 
   const lastTypeIcon = (t: number | undefined): string => {
     switch (t) {
@@ -2309,12 +2940,26 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     </button>
   )
 
+  // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
+  // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
+  const memberQuery = memberSearch.trim().toLowerCase()
+  const memberTotal = groupInfo ? groupInfo.members.length : 0
+  const filteredMembers = ((): GroupMember[] => {
+    if (!groupInfo) return []
+    if (!memberQuery) return groupInfo.members
+    return groupInfo.members.filter((m) =>
+      m.name.toLowerCase().includes(memberQuery) || m.username.toLowerCase().includes(memberQuery))
+  })()
+  const memberLimit = memberExpanded ? 200 : 24
+  const shownMembers = filteredMembers.slice(0, memberLimit)
+
   return (
-    <div className={css.panel}>
+    <div className={css.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}
       <div className={css.sidebar}>
         <div className={css.search}>
           <SearchInput
+            className={css.searchField}
             value={search}
             onChange={(v) => {
               setSearch(v)
@@ -2353,14 +2998,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                   { value: 'kefu', label: '客服' },
                 ]}
                 value={view}
-                onChange={(v) => { setView(v as 'chats' | 'bizchats' | 'servicechats' | 'kefu') }}
+                onChange={(v) => { changeView(v as ChatView) }}
                 ariaLabel="会话分类"
               />
             </div>
             <div className={css.stats}>
               {batchMode ? (
                 <>
-                  <button type="button" className={css.batchBtn} onClick={() =>{  setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
+                  <button type="button" className={css.batchBtn} onClick={() => { setSelected(new Set(filtered.map(x => x.username))) }}>全选</button>
                   <button type="button" className={css.batchBtn} onClick={() =>{  setSelected(new Set()) }}>清空</button>
                   <span className={css.statUnread}>已选 {selected.size}</span>
                   <button type="button" className={css.batchBtn} onClick={() => { void exportBatch() }} disabled={batchExporting || selected.size === 0}>
@@ -2455,45 +3100,102 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                 {exportMsg && <div className={css.msgHeaderExport} title={exportMsg}>{exportMsg}</div>}
               </div>
               <div className={css.msgHeaderActions}>
+                {/* AI 问答入口：只对单聊/群聊出现（详见 aiEligible）。 */}
+                {aiEligible && (
+                  <button
+                    type="button"
+                    className={css.calBtn}
+                    data-active={aiOpen || undefined}
+                    aria-expanded={aiOpen}
+                    title="AI 问答：基于本会话聊天记录提问，回答附原文出处"
+                    onClick={() => { setAiOpen(v => !v) }}
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
+                    </svg>
+                    <span className={css.calBtnLabel}>AI 问答</span>
+                  </button>
+                )}
                 <button type="button" className={css.calBtn} title={realtime ? '实时推送已开启（微信新消息自动出现）' : '实时推送已关闭'} data-active={realtime || undefined} onClick={toggleRealtime}>
-                  <span className={css.realtimeDot} /> 实时
+                  <span className={css.realtimeDot} /> <span className={css.calBtnLabel}>实时</span>
                 </button>
-                <button type="button" className={css.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> 日历</button>
+                <button type="button" className={css.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={css.calBtnLabel}>日历</span></button>
                 {curSession.type === 'group' && (
-                  <button type="button" className={css.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} />群信息</button>
+                  <button type="button" className={css.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} /><span className={css.calBtnLabel}>群信息</span></button>
                 )}
-                <button type="button" className={css.calBtn} title="导出本会话消息（路径/条数/格式/类型）" onClick={() => { setExportOpen(true) }} disabled={exporting}><IconDownloadOutline16 size={14} />导出</button>
-                <button type="button" className={css.calBtn} title="本会话已编辑消息" onClick={() => { void openEdits() }} disabled={editing}><IconListPenOutline16 size={14} />已编辑{edits.length > 0 ? ' (' + String(edits.length) + ')' : ''}</button>
-                <button type="button" className={css.calBtn} title="清空所有会话草稿（本地解密副本）" onClick={() => { void clearAllDrafts() }}><IconTrashOutline16 size={14} />清空草稿</button>
-                {curSession.draft && (
-                  <button type="button" className={css.calBtn} title="清空本会话草稿（本地解密副本）" onClick={() => { void clearDraft() }}><IconTrashOutline16 size={14} />清空本会话草稿</button>
-                )}
-              </div>
-              {pollStatus && <span className={css.msgHeaderExport} title={pollStatus}>{pollStatus}</span>}
-              {typeStats.length > 0 && (
-                <div className={css.msgTypeChips}>
-                  {typeStats.slice(0, 5).map(t => (
-                    <span key={t.type} className={css.msgTypeChip} title={`${t.label}共 ${t.count} 条`}>{t.label} {t.count}</span>
-                  ))}
-                  {typeStats.length > 5 && (
-                    <span className={css.msgTypeChip}>其他 +{typeStats.slice(5).reduce((a, s) => a + s.count, 0)}</span>
+                {/*
+                  低频动作（导出/已编辑/清空草稿）收进溢出菜单：此前它们与上面三个按钮平铺，
+                  动作区内容宽 468px 且 flex-shrink:0，窗口一窄就被消息区裁掉 ——
+                  1152px 丢 1 个、1024px 丢 3 个、960px 连「群信息」都点不到（审计 P0-2）。
+                */}
+                <div className={css.msgHeaderMoreWrap} data-st-menu="msg-header-more">
+                  <button
+                    type="button"
+                    className={css.calBtn}
+                    title="更多操作"
+                    aria-haspopup="menu"
+                    aria-expanded={moreOpen || undefined}
+                    data-active={moreOpen || undefined}
+                    onClick={() => { setMoreOpen(v => !v) }}
+                  >
+                    <IconEllipsisOutline16 size={14} /><span className={css.calBtnLabel}>更多</span>
+                  </button>
+                  {moreOpen && (
+                    <div className={css.msgHeaderMoreMenu} role="menu" aria-label="更多操作">
+                      <button type="button" role="menuitem" className={css.msgHeaderMoreItem} disabled={exporting}
+                        onClick={() => { setMoreOpen(false); setExportOpen(true) }}>
+                        <IconDownloadOutline16 size={14} />导出消息
+                      </button>
+                      <button type="button" role="menuitem" className={css.msgHeaderMoreItem} disabled={editing}
+                        onClick={() => { setMoreOpen(false); void openEdits() }}>
+                        <IconListPenOutline16 size={14} />已编辑消息{edits.length > 0 ? ` (${String(edits.length)})` : ''}
+                      </button>
+                      <button type="button" role="menuitem" className={css.msgHeaderMoreItem}
+                        onClick={() => { setMoreOpen(false); void clearAllDrafts() }}>
+                        <IconTrashOutline16 size={14} />清空所有会话草稿
+                      </button>
+                      {curSession.draft && (
+                        <button type="button" role="menuitem" className={css.msgHeaderMoreItem}
+                          onClick={() => { setMoreOpen(false); void clearDraft() }}>
+                          <IconTrashOutline16 size={14} />清空本会话草稿
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
+              {pollStatus && <span className={css.msgHeaderExport} title={pollStatus}>{pollStatus}</span>}
             </div>
+            {/*
+              类型统计 chip 行此前在 .msgHeader 内，与标题行/动作行争宽 —— 实测头部因此在
+              1664px 就有 94.6px 高、到 960px 涨到 195px 且 chip 被挤成三行竖排（审计 P1-9）。
+              移出成独立条：头部回到单行，窄窗口下由容器查询整条收起。
+            */}
+            {typeStats.length > 0 && (
+              <div className={css.msgTypeChips}>
+                {typeStats.slice(0, 5).map(t => (
+                  <span key={t.type} className={css.msgTypeChip} title={`${t.label}共 ${t.count} 条`}>{t.label} {t.count}</span>
+                ))}
+                {typeStats.length > 5 && (
+                  <span className={css.msgTypeChip}>其他 +{typeStats.slice(5).reduce((a, s) => a + s.count, 0)}</span>
+                )}
+              </div>
+            )}
             <div className={css.msgBody}>
-              {hasMore && (
+              {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
+              {!messagesMatchSession && <ListSkeleton rows={8} />}
+              {messagesMatchSession && hasMore && (
                 <button type="button" className={css.loadMore} onClick={() => { void loadMore() }}>
                   {msgLoading ? '加载中…' : '加载更多'}
                 </button>
               )}
-              {msgError && <div className={css.msgErr}>{msgError}</div>}
-              {messages.length > msgWinCount && <ListSentinel refFn={msgWinSentinel} />}
-              {(() => {
+              {messagesMatchSession && msgError && <div className={css.msgErr}>{msgError}</div>}
+              {messagesMatchSession && messages.length > msgWinCount && <ListSentinel refFn={msgWinSentinel} />}
+              {messagesMatchSession && (() => {
                 // 渐进窗口：只渲染靠近底部的 msgWinCount 条，向上滚动越过哨兵
                 // 时逐步展开更早消息（窗口起点随 count 增长向历史方向移动）。
                 const start = Math.max(0, messages.length - msgWinCount)
-                // 「消息 → 渲染项」的组装（含图片组归并）已抽到 utils/message-items.ts：
+                // 「消息 → 渲染项」的组装（含图片组归并）已抽到 utils/message-items.ts，
                 // 纯函数才好用 scripts/check-message-items.js 逐条断言各分支。
                 const items = buildMessageItems(messages, start)
                 const kindOf = renderKindOf
@@ -2517,11 +3219,18 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                   }
                   const isSelf = head.isSender === 1
                   const isGroup = curSession.type === 'group'
-                  // group messages: use the member's own avatar; without a resolved
-                  // sender show a neutral letter tile instead of the group avatar.
-                  // Own messages: the logged-in account's avatar ('我' letter fallback).
+                  /*
+                   * 头像的身份键必须是真实 wxid，拿不到就留空（只渲染首字母占位）。
+                   *
+                   *  - 自己：用登录账号的 wxid。以前 fallback 到 `curSession.username`，
+                   *    那会把「我」键成**对方**的 username，于是自己和对方显示同一个头像；
+                   *    账号 wxid 未知时宁可不取头像，也不要取错。
+                   *  - 群成员：用消息里的 sender wxid；解析不出来时留空，
+                   *    绝不用昵称当键（群里同名成员会互相顶掉头像）。
+                   *  - 私聊对方：就是会话 username 本身。
+                   */
                   const avUsername = isSelf
-                    ? (selfWxid || curSession.username)
+                    ? selfWxid
                     : (isGroup ? (head.sender ?? '') : curSession.username)
                   const avName = isSelf ? '我' : (isGroup ? (head.senderName || head.sender || '') : curSession.displayName)
                   const isEdited = editedIds.has(head.localId)
@@ -2530,9 +3239,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                       key={item.kind === 'group' ? `grp-${item.gid}-${head.localId}` : head.localId}
                       id={`msg-${head.localId}`}
                       className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
+                      onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
                     >
-                      <Avatar name={avName} username={avUsername} size={30} />
+                      <Avatar name={avName} username={avUsername} size={34} />
                       <div className={css.msgCol}>
+                        {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
+                        <span className={css.msgTimeChip}>
+                          {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
+                        </span>
                         {isGroup && !isSelf && head.sender && <div className={css.msgSender}>{avName}</div>}
                         {item.kind === 'group' ? (
                           <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
@@ -2543,15 +3257,9 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                             m={item.m}
                             selfName={curSession.username}
                             onOpenImage={openViewer}
-                            onOpenChatlog={(rich) => { setChatlogStack([{ title: rich.title || '群聊的聊天记录', records: Array.isArray(rich.records) ? rich.records : [] }]) }}
+                            onOpenChatlog={openChatlog}
                           />
                         )}
-                        <div className={css.msgTime}>
-                          {fmtMsgTime(head.createTime)}
-                          {isEdited && <span className={css.msgEditedTag} title="该消息已编辑">已编辑</span>}
-                          <button type="button" className={css.msgEditBtn} title="编辑消息（写入本地解密副本）" aria-label="编辑消息" onClick={() => { void onEditFn(head) }}><IconEditOutline16 size={13} /></button>
-                          <button type="button" className={css.msgEditBtn} title="复制消息 JSON" aria-label="复制消息 JSON" onClick={() =>{  copyMsgJson(head) }}><IconCopyOutline16 size={13} /></button>
-                        </div>
                       </div>
                     </div>,
                   )
@@ -2566,9 +3274,15 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       </div>
 
       {groupInfoOpen && curSession?.type === 'group' && (
-        <div className={css.groupInfo}>
+        <div
+          className={css.groupInfo}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={groupInfoTitleId}
+          data-st-dialog="chats-groupinfo"
+        >
           <div className={css.groupInfoHeader}>
-            <span className={css.groupInfoTitle}>群聊信息</span>
+            <span className={css.groupInfoTitle} id={groupInfoTitleId}>群聊信息</span>
             <button type="button" className={css.groupInfoClose} title="关闭" aria-label="关闭" onClick={() => { setGroupInfoOpen(false); setProfileMember(null) }}><IconCloseOutline16 size={15} /></button>
           </div>
           <div className={css.groupInfoBody}>
@@ -2585,15 +3299,21 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                     onChange={(e) => { setMemberSearch(e.target.value) }}
                   />
                 </div>
-                <div className={css.memberGrid}>
-                  {groupInfo.members
-                    .filter((m) => {
-                      const q = memberSearch.trim().toLowerCase()
-                      if (!q) return true
-                      return m.name.toLowerCase().includes(q) || m.username.toLowerCase().includes(q)
-                    })
-                    .slice(0, memberExpanded ? 200 : 24)
-                    .map(m => (
+                {memberQuery && filteredMembers.length === 0 ? (
+                  /* 搜索无结果必须给空态：此前网格直接渲染成 0 高度，界面只剩一片空白（审计 P0-3） */
+                  <div className={css.memberEmpty}>
+                    <div className={css.memberEmptyIcon}><IconSearchOutline16 size={22} /></div>
+                    <div className={css.memberEmptyTitle}>未找到相关成员</div>
+                    <div className={css.memberEmptyDesc}>
+                      群里共 {memberTotal} 位成员，试试昵称或微信号的其它片段
+                    </div>
+                    <button type="button" className={css.memberEmptyClear} onClick={() => { setMemberSearch('') }}>
+                      清空搜索
+                    </button>
+                  </div>
+                ) : (
+                  <div className={css.memberGrid}>
+                    {shownMembers.map(m => (
                       <button
                         type="button"
                         key={m.username}
@@ -2602,32 +3322,53 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                         onMouseEnter={(e) => { showMemberProfile(m, e.currentTarget) }}
                         onMouseLeave={hideMemberProfile}
                       >
-                        <Avatar name={m.name} username={m.username} size={40} />
+                        {/* 与会话列表同一套懒挂载：展开到 200 人时不再一次性发起 200 个头像请求（审计 P2-4） */}
+                        <LazyMount placeholder={<span className={css.avatarStub} style={{ width: 40, height: 40 }} />} rootMargin="300px 0px">
+                          <Avatar name={m.name} username={m.username} size={40} />
+                        </LazyMount>
                         <span className={css.memberName}>{m.name}</span>
                       </button>
                     ))}
-                  {!memberSearch && (
-                    <div className={css.memberTile} title="暂不支持邀请">
-                      <div className={css.memberAdd}><span>＋</span></div>
-                      <span className={css.memberName}>添加</span>
+                    {!memberQuery && (
+                      <div className={css.memberTile} data-disabled="true" title="暂不支持邀请" aria-disabled="true">
+                        <div className={css.memberAdd}><span>＋</span></div>
+                        <span className={css.memberName}>添加</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* 有查询词时不再用「256 人」这个与过滤结果无关的数字（审计 P1-4） */}
+                {memberQuery ? (
+                  filteredMembers.length > memberLimit && (
+                    <button type="button" className={css.memberMore} onClick={() => { setMemberExpanded(v => !v) }}>
+                      {memberExpanded ? '收起' : `展开更多匹配（共 ${filteredMembers.length} 位）`}
+                    </button>
+                  )
+                ) : memberTotal > 24 && (
+                  <button type="button" className={css.memberMore} onClick={() => { setMemberExpanded(v => !v) }}>
+                    {memberExpanded ? '收起' : `查看更多（${memberTotal} 人）`}
+                  </button>
+                )}
+                {/* 微信的聊天信息是「标签左 / 值右」的列表行，不是「标签上 / 值下」的块（审计 P1-8 行结构） */}
+                <div className={css.groupInfoRows}>
+                  <div className={css.groupInfoRow}>
+                    <span className={css.groupInfoRowLabel}>群聊名称</span>
+                    <span className={css.groupInfoRowValue}>{groupInfo.name}</span>
+                  </div>
+                  {groupInfo.announcement && (
+                    <div className={css.groupInfoRowStack}>
+                      <span className={css.groupInfoRowLabel}>群公告</span>
+                      <div ref={annRef} className={css.groupInfoAnn} data-clamp={!annExpanded || undefined}>
+                        {groupInfo.announcement}
+                      </div>
+                      {annCanExpand && (
+                        <button type="button" className={css.groupInfoAnnToggle} onClick={() => { setAnnExpanded(v => !v) }}>
+                          {annExpanded ? '收起' : '展开'}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
-                {groupInfo.members.length > 24 && (
-                  <button type="button" className={css.memberMore} onClick={() => { setMemberExpanded(v => !v) }}>
-                    {memberExpanded ? '收起' : `查看更多（${groupInfo.members.length} 人）`}
-                  </button>
-                )}
-                <div className={css.groupInfoSection}>
-                  <div className={css.groupInfoLabel}>群聊名称</div>
-                  <div className={css.groupInfoValue}>{groupInfo.name}</div>
-                </div>
-                {groupInfo.announcement && (
-                  <div className={css.groupInfoSection}>
-                    <div className={css.groupInfoLabel}>群公告</div>
-                    <div className={css.groupInfoValue}>{groupInfo.announcement}</div>
-                  </div>
-                )}
               </>
             )}
           </div>
@@ -2741,7 +3482,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         </div>
       )}
 
-      {/* merged chat log viewer (聊天记录, 支持嵌套栈) */}
+      {/* merged chat log viewer (聊天记录, 支持嵌套) */}
       {chatlogOpen && (
         <div className={css.calOverlay} data-st-dialog="chats-chatlog" onClick={(e) => { if (e.target === e.currentTarget) setChatlogStack([]) }} role="dialog" aria-modal="true">
           <div className={css.chatlogDialog}>
@@ -2762,7 +3503,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                 const nested = rt === 'chatHistory'
                 const link = r.link || r.url || ''
                 const nestedCount = (r.nested ?? []).length
-                // head 来自聊天记录卡片 XML 的 <sourceheadurl>，是**未校验的原始地址**：
+                // head 来自聊天记录卡片 XML 的 <sourceheadurl>，是**未校验的原始地址**。
                 // 实测 360 条内层记录里 193 条是 http，直接当 src 会被 CSP 拦（并写下违规日志）。
                 // 过滤后为空则回退到首字母头像（下面的分支本来就是这么设计的）。
                 const head = cspSafeSrc(r.head)
@@ -2805,6 +3546,64 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                 )
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑消息副本：写入本地解密副本，原文在 message_edits.db 里留底，可用「恢复原文」回退 */}
+      <Dialog
+        open={editTarget !== null}
+        onClose={() => { if (!editBusy) closeEdit() }}
+        title="编辑消息副本"
+        footer={(
+          <div className={css.editFoot}>
+            <button type="button" className={css.exportBtn} disabled={editBusy} onClick={closeEdit}>取消</button>
+            <button
+              type="button"
+              className={css.exportBtnPrimary}
+              disabled={editBusy || editText.trim() === (editTarget?.displayText || editTarget?.strContent || '').trim()}
+              onClick={() => { void saveEdit() }}
+            >
+              {editBusy ? '保存中…' : '保存'}
+            </button>
+          </div>
+        )}
+      >
+        <p className={css.editHint}>
+          只改动本地解密副本（微信原始数据库不动）。保存后这条消息会标上「已编辑」，
+          随时可在「更多 → 已编辑消息」里恢复原文。
+        </p>
+        <textarea
+          ref={editAreaRef}
+          className={css.editArea}
+          value={editText}
+          onChange={(e) => { setEditText(e.target.value) }}
+          aria-label="消息内容"
+          spellCheck={false}
+        />
+        {editErr && <p className={css.editErr} role="alert">保存失败：{editErr}</p>}
+      </Dialog>
+
+      {/* 消息右键菜单（微信同款）：点空白处 / Esc / 滚动都会关掉 */}
+      {msgMenu && (
+        <div className={css.msgCtxOverlay} onMouseDown={() => { setMsgMenu(null) }}>
+          <div
+            className={css.msgCtxMenu}
+            style={{ left: msgMenu.x, top: msgMenu.y }}
+            role="menu"
+            onMouseDown={(e) => { e.stopPropagation() }}
+          >
+            {buildMsgMenu(msgMenu.m, msgMenu.kind).map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                className={css.msgCtxItem}
+                onClick={() => { const m = msgMenu.m; setMsgMenu(null); runMenuAction(item, m) }}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -2906,6 +3705,18 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
             </div>
           </div>
         </div>
+      )}
+
+      {/* 会话级 AI 面板（「新对话」）：.panel 的第三栏，与消息流并排。
+          仅单聊/群聊给入口；读取范围固定为当前会话，检索仍走同一条 RAG 流水线。 */}
+      {aiOpen && aiEligible && aiTarget && (
+        <SessionAsk
+          target={aiTarget}
+          onClose={() => { setAiOpen(false); setAiFull(false) }}
+          onOpenMessage={(u, id) => { void openSessionAndLocate(u, id > 0 ? id : undefined) }}
+          full={aiFull}
+          onToggleFull={() => { setAiFull(v => !v) }}
+        />
       )}
 
       {/* image lightbox */}

@@ -12,6 +12,13 @@
   background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
+/* 嵌进「微信数据配置」弹窗的整页视图（隐私体检）：不要 height:100%，
+   滚动交给弹窗右区，内层 .scroll 也随之改成不滚动、高度自适应。 */
+.panelEmbedded {
+  display: flex; flex-direction: column; gap: 12px; min-height: 0;
+}
+.panelEmbedded .scroll { flex: none; overflow: visible; }
+
 /* ── 头部 ── */
 .hd { display: flex; align-items: baseline; gap: 8px; }
 .catBtn {
@@ -102,6 +109,8 @@
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30), 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .emoPh { font-size: 30px; }
+/* 表情格里的真图：固定 72px 见方、只做 contain（动图自己会动，别加 transition） */
+.emoImg { width: 72px; height: 72px; object-fit: contain; display: block; }
 .emoMd5 { font-size: 10.5px; color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
 /* 第 94 轮：点击复制提示的强调色（原来写在 Emoticons.tsx 的行内 style 里）。 */
 .emoMd5Cyan { color: var(--nm-cyan); }

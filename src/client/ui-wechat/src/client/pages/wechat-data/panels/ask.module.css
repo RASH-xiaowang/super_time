@@ -451,6 +451,25 @@
 .citeBlock { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
 .citeHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .citeHeadTitle { font-size: 12px; color: var(--nm-text-2); }
+/* 数据来源说明（由后端按检索结果算出）：小字、不抢眼，但一定在回答正下方。 */
+.answerBasis {
+  font-size: 11.5px;
+  color: var(--nm-text-3);
+  line-height: 1.5;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+/* 接地提示：回答里的金额在所引原文里找不到，或一条来源都没引用。
+   用警示色但不做成错误块 —— 模型可能是在做推算，措辞也是「请核对」而非「错误」。 */
+.citeWarn {
+  border-left: 2px solid var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 10px;
+  border-radius: 0 6px 6px 0;
+}
 .citeMore {
   border: 0;
   background: transparent;
@@ -731,125 +750,16 @@
 }
 .panelBack:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); color: var(--nm-text-1); }
 
-/* ── 模型配置表单 ── */
-.modelGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.modelField {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.modelInput {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.modelInput:focus { border-color: var(--nm-cyan); }
-/* API Key 输入 + 小眼睛（显示/隐藏明文）。
-   按钮绝对定位在输入框右侧 —— 不占流内空间，切换时输入框宽度不变。 */
-.keyWrap {
-  position: relative;
-  display: flex;
-}
-.modelInputKey { padding-right: 34px; }
-.keyEye {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--nm-text-3);
-  cursor: pointer;
-  transition: color var(--nm-t-fast), background var(--nm-t-fast);
-}
-.keyEye:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
-.keyEye[data-on] { color: var(--nm-cyan); }
-/* 侧栏内表单一列排布（400px 宽下两列过挤） */
-.modelPanel .modelGrid { grid-template-columns: 1fr; }
-/* 操作区：获取（次要）| 保存（主要），等宽两列；消息整行独立 */
-.modelActions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 14px;
-}
-.modelPrimary {
-  padding: 9px 10px;
-  border: 1px solid var(--nm-cyan);
-  border-radius: 10px;
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 24%, transparent),
-    color-mix(in srgb, var(--nm-purple) 20%, transparent));
-  color: var(--nm-cyan-text);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
-}
-.modelPrimary:hover:enabled {
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--nm-cyan) 34%, transparent),
-    color-mix(in srgb, var(--nm-purple) 30%, transparent));
-  box-shadow: var(--nm-glow-sm);
-}
-.modelPrimary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
-.modelGhost {
-  padding: 9px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.modelGhost:hover:enabled { border-color: var(--nm-border-hover); color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.modelGhost:disabled { opacity: 0.5; cursor: not-allowed; }
-.modelMsg {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  word-break: break-word;
-}
-.msgOk {
-  color: var(--nm-success-text);
-  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
-}
-.msgErr {
-  color: var(--nm-danger-text);
-  background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 24%, transparent);
-}
+/* ── 模型配置表单已迁出 ──
+   原本这套 .modelGrid/.modelInput/.modelPanel 等样式属于「模型配置」侧栏；
+   该侧栏已整体迁到「数据配置」页面（见 ai-model.module.css），故此处删除。 */
 
 /* ── 窄屏（≤900px）：两栏并排放不下 → 整栏对换 ──
-   配置栏占满面板宽度，对话栏暂时让位，顶部出现「返回对话」。
-   这是「换页」而不是「覆盖」：不存在被压在下面的内容，也没有遮罩与层级竞争。 */
+   侧栏占满面板宽度，对话栏暂时让位（只留面板自己的关闭按钮切回）。
+   这是「换页」而不是「覆盖」：不存在被压在下面的内容，也没有遮罩与层级竞争。
+   注：模型配置侧栏已迁到「数据配置」页面，这里只剩检索设置栏。 */
 @media (max-width: 900px) {
-  .askLayout[data-model-open] .askPage { display: none; }
-  .modelPanel { flex: 1 1 auto; }
-  .panelBack { display: inline-flex; }
+  .askLayout[data-side-open] .askPage { display: none; }
 }
 
 /* ── 滚动顺滑度（对话滚动容器 = kit .panelBody + 本类）──
@@ -889,3 +799,24 @@
   .modelActions { grid-template-columns: 1fr; }
   .chatUserBubble { max-width: 88%; }
 }
+
+/* ── 沉淀为笔记：回答下方的次要动作 ──
+   刻意做得比赞/踩反馈行更低调：反馈是高频动作，沉淀是偶尔为之，
+   两者若同等醒目会让每轮回答底部堆两排按钮。 */
+.turnActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0 0;
+}
+.distillBtn {
+  padding: 3px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.distillBtn:hover { border-color: var(--nm-purple); color: var(--nm-purple); }

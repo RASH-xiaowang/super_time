@@ -17,7 +17,7 @@ import { createPortal } from 'react-dom'
 import { ListSentinel, ListSkeleton, useProgressiveList } from './hooks.tsx'
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { apiDecryptAllDatabases, apiExportMoments, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
+import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
@@ -172,6 +172,10 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [onlyMineComments, setOnlyMineComments] = useState(false)
   const [videoSrcs, setVideoSrcs] = useState<Record<string, string>>({})
   const [videoFailed, setVideoFailed] = useState<Set<string>>(new Set())
+  /** 每个取视频失败的原因（悬停提示用），来自后端：未缓存 / CDN 加密流 / 出站被拦等。 */
+  const [videoErr, setVideoErr] = useState<Map<string, string>>(new Map())
+  /** 已播放视频的真实宽高比（`onLoadedMetadata` 填），播放器按它定尺寸以消除黑边。 */
+  const [videoMeta, setVideoMeta] = useState<Record<string, { w: number; h: number }>>({})
   const videoFetching = useRef<Set<string>>(new Set())
   const [monthFilter, setMonthFilter] = useState<string | null>(null)
   const [mineFilter, setMineFilter] = useState<'all' | 'mine' | 'others'>('all')
@@ -327,8 +331,8 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   // 懒加载媒体：只有图片/视频封面的占位块接近视口时才解密（IntersectionObserver），
   // 避免一次性解密数百张离线图片造成卡顿；已取到的 data URL 通过 snsImgs 合入。
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const mediaKeySpec = useRef(new Map<string, { md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment' }>())
-  const mediaQueue = useRef<Array<{ key: string; md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment' }>>([])
+  const mediaKeySpec = useRef(new Map<string, { md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }>())
+  const mediaQueue = useRef<Array<{ key: string; md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }>>([])
   const mediaFetching = useRef(false)
   const mediaObserved = useRef<IntersectionObserver | null>(null)
 
@@ -340,9 +344,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         const batch = mediaQueue.current.splice(0, 8)
         const updates: Record<string, string> = {}
         await Promise.all(batch.map(async (it) => {
-          const opts: { md5: string; timelineId?: string; mediaId?: string } = { md5: it.md5 }
+          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string } = { md5: it.md5 }
           if (it.timelineId) opts.timelineId = it.timelineId
           if (it.mediaId) opts.mediaId = it.mediaId
+          if (it.seed) opts.key = it.seed
+          if (it.thumb) opts.thumb = it.thumb
           try {
             const cached = await snsMediaCacheGet(it.key)
             if (cached) { updates[it.key] = cached; return }
@@ -778,42 +784,80 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     }
   }
 
-  // Fetch the cached .mp4 body lazily on first play click (prefer offline, fall
-  // back to the CDN URL); mark failures once so a missing file isn't retried.
-  const loadVideo = useCallback((vk: string, v: { md5?: string; timelineId?: string; id?: string; url?: string }): void => {
+  // 视频本体：本地缓存优先（离线、最快）；没有缓存时后端会按朋友圈 XML 里的
+  // <url> 从微信 CDN 按需取回，并校验取回的字节真的是 MP4 —— 实测 CDN 返回的是
+  // 微信客户端加密流，所以不能把原始 URL 直接当 src（CSP 会拦，且那是密文）。
+  const loadVideo = useCallback((vk: string, v: { md5?: string; timelineId?: string; id?: string; url?: string; key?: string }): void => {
     if (!vk || videoSrcs[vk] || videoFetching.current.has(vk)) return
     videoFetching.current.add(vk)
     void (async () => {
-      const fallback = cspSafeSrc(v.url)
       try {
-        const r = await apiGetSnsVideoDataUrl({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id })
-        const src = r.url || fallback
-        if (src) setVideoSrcs(prev => capRecord({ ...prev, [vk]: src }, VIDEO_SRC_CACHE_MAX))
-        else setVideoFailed(prev => new Set(prev).add(vk))
-      } catch {
-        if (fallback) setVideoSrcs(prev => capRecord({ ...prev, [vk]: fallback }, VIDEO_SRC_CACHE_MAX))
-        else setVideoFailed(prev => new Set(prev).add(vk))
+        const r = await apiGetSnsVideoDataUrl({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id, url: v.url, key: v.key })
+        if (r.url) {
+          setVideoSrcs(prev => capRecord({ ...prev, [vk]: r.url as string }, VIDEO_SRC_CACHE_MAX))
+        } else {
+          setVideoFailed(prev => new Set(prev).add(vk))
+          if (r.error) setVideoErr(prev => { const n = new Map(prev); n.set(vk, r.error as string); return n })
+        }
+      } catch (e) {
+        setVideoFailed(prev => new Set(prev).add(vk))
+        setVideoErr(prev => { const n = new Map(prev); n.set(vk, (e as Error).message); return n })
       } finally {
         videoFetching.current.delete(vk)
       }
     })()
   }, [videoSrcs])
 
-  // Request fullscreen on the video inside a playing tile (best effort).
-  const fullscreenVideo = (el: Element | null): void => {
-    const v = el?.querySelector('video')
-    if (v && typeof v.requestFullscreen === 'function') void v.requestFullscreen().catch(() => { /* denied */ })
+  // 播放器按视频真实宽高比定尺寸：容器与画面同比例，`object-fit: contain` 就没有黑边
+  // （早先是固定 280×180 的横框，竖屏视频左右两条黑边）。
+  const fullscreenVideo = (tile: Element | null): void => {
+    const v = tile?.querySelector('video')
+    if (!v) return
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* 忽略 */ })
+    else if (typeof v.requestFullscreen === 'function') void v.requestFullscreen().catch(() => { /* 被拒则保持内联 */ })
   }
 
-  // Save a video data URL / CDN src to disk.
-  const downloadVideo = (src: string, name?: string): void => {
-    if (!src) return
-    const a = document.createElement('a')
-    a.href = src
-    a.download = (name ? 'moments-video-' + name.slice(0, 12) : 'moments-video') + '.mp4'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
+  /** 收起播放器，回到封面（清掉已解析的 src 与失败标记）。 */
+  const closeVideo = (vk: string): void => {
+    setVideoSrcs((prev) => { const n = { ...prev }; delete n[vk]; return n })
+    setVideoFailed((prev) => { const n = new Set(prev); n.delete(vk); return n })
+    setVideoErr((prev) => { const n = new Map(prev); n.delete(vk); return n })
+    setVideoMeta((prev) => { const n = { ...prev }; delete n[vk]; return n })
+  }
+
+  // Esc 退出全屏：Chromium 对「元素全屏」的默认 Esc 处理在本应用里不生效（实测按了没反应），
+  // 页面层自己接一次，避免用户点进全屏后出不来。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || !document.fullscreenElement) return
+      e.preventDefault()
+      void document.exitFullscreen().catch(() => { /* 忽略 */ })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('keydown', onKey) }
+  }, [])
+
+  // 保存视频：先在主进程弹保存对话框选路径，再由**后端**取字节写盘。
+  // 渲染端的 `<a download>` 在这个 Electron 里落不了盘（实测点了没反应）；
+  // 把几十 MB 的 base64 经 IPC 传回主进程也不合适，所以写盘放在后端做。
+  const saveVideo = (v: { md5?: string; timelineId?: string; id?: string; url?: string; key?: string }): void => {
+    void (async () => {
+      const picked = await apiSaveFileDialog({
+        defaultName: `朋友圈视频-${(v.md5 || 'export').slice(0, 8)}.mp4`,
+        title: '保存视频',
+        filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
+      })
+      if (picked.canceled || !picked.path) return
+      try {
+        const r = await apiExportSnsVideo({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id, url: v.url, key: v.key, dest: picked.path })
+        if (!r.ok) { setNotice('保存失败: ' + (r.error || '未知错误')); return }
+        setNotice(`已保存视频（${Math.round((r.bytes ?? 0) / 1048576)} MB）`)
+        setExportedPath(picked.path)
+        setTimeout(() => { setNotice(null) }, 6000)
+      } catch (e) {
+        setNotice('保存失败: ' + (e as Error).message)
+      }
+    })()
   }
 
   const toggleText = (tid: string): void => {
@@ -1106,22 +1150,38 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                             {m.videos.map((v, vi) => {
                               const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
                               const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
-                              if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video' })
+                              if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
                               const src = vk ? videoSrcs[vk] : undefined
                               const playing = !!src
+                              const meta = vk ? videoMeta[vk] : undefined
                               return (
                                 <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
                                   data-sns-key={vk || undefined}
                                   data-sns-md5={v.md5 || undefined}
                                   data-sns-tid={v.timelineId || undefined}
                                   data-sns-mid={v.id || undefined}
+                                  style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
                                   {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}
                                 >
                                   {playing ? (
                                     <>
-                                      <video className={css.videoPlayer} src={src} controls autoPlay poster={vCover || ''} />
-                                      <button type="button" className={css.fullscreenBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.closest('.videoTile')) }}>⛶</button>
-                                      <button type="button" className={`${css.fullscreenBtn} ${css.fullscreenBtnSave}`} title="保存视频" onClick={(e) => { e.stopPropagation(); downloadVideo(src, v.md5) }}>⭳</button>
+                                      <video
+                                        className={css.videoPlayer}
+                                        src={src}
+                                        controls
+                                        autoPlay
+                                        poster={vCover || ''}
+                                        onLoadedMetadata={(e) => {
+                                          const el = e.currentTarget
+                                          if (!vk || !el.videoWidth || !el.videoHeight) return
+                                          setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
+                                        }}
+                                      />
+                                      <div className={css.videoActions}>
+                                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
+                                        <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
+                                        <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
+                                      </div>
                                     </>
                                   ) : vCover ? (
                                     <>
@@ -1136,7 +1196,13 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                                     </>
                                   ) : (
                                     <>
-                                      <span className={css.videoBadge}>{videoFailed.has(vk) ? '×' : '▶'}</span>
+                                      {videoFailed.has(vk) ? (
+                                        <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>
+                                          本机未缓存<em>微信里播一次后可看</em>
+                                        </span>
+                                      ) : (
+                                        <span className={css.videoBadge}>▶</span>
+                                      )}
                                       {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
                                     </>
                                   )}
@@ -1445,10 +1511,31 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                     const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
                     const src = vk ? videoSrcs[vk] : undefined
                     const playing = !!src
+                    const meta = vk ? videoMeta[vk] : undefined
                     return (
-                      <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : '', playing ? css.videoTileDetail : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''} {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}>
+                      <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : '', playing ? css.videoTileDetail : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
+                        style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
+                        {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}>
                         {playing
-                          ? <><video className={css.videoPlayer} src={src} controls autoPlay poster={vCover || ''} /><button className={css.fullscreenBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.closest('.videoTile')) }}>⛶</button></>
+                          ? <>
+                            <video
+                              className={css.videoPlayer}
+                              src={src}
+                              controls
+                              autoPlay
+                              poster={vCover || ''}
+                              onLoadedMetadata={(e) => {
+                                const el = e.currentTarget
+                                if (!vk || !el.videoWidth || !el.videoHeight) return
+                                setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
+                              }}
+                            />
+                            <div className={css.videoActions}>
+                              <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
+                              <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
+                              <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
+                            </div>
+                          </>
                           : vCover
                             ? <><img className={css.videoCover} src={vCover} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => {
                               // 如果当前src是CDN URL（非data URL），隐藏图片
@@ -1458,7 +1545,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                             }} /><span className={css.videoPlayBadge}>▶</span>{v.duration > 0 && (
                               <span className={css.videoDur}>{Math.round(v.duration)}s</span>
                             )}</>
-                            : <><span className={css.videoBadge}>{videoFailed.has(vk) ? '×' : '▶'}</span>{v.duration > 0 && (
+                            : <>{videoFailed.has(vk)
+                              ? <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>本机未缓存<em>微信里播一次后可看</em></span>
+                              : <span className={css.videoBadge}>▶</span>}{v.duration > 0 && (
                               <span className={css.videoDur}>{Math.round(v.duration)}s</span>
                             )}</>}
                       </div>

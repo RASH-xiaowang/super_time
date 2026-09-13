@@ -503,7 +503,7 @@ function SkeletonOverview(): React.JSX.Element {
             <div className={css.riskRow}>
               <span className={css.riskItem}>撤回消息 <SkLine width="36px" height={10} /></span>
               <span className={css.riskItem}>转账/红包异常 <SkLine width="36px" height={10} /></span>
-              <span className={css.riskItem}>建议定期运行「隐私与信任」扫描</span>
+              <span className={css.riskItem}>建议定期运行「隐私体检」扫描</span>
             </div>
           </Card>
           <Card title="数据健康">
@@ -952,7 +952,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                 <div className={css.riskRow}>
                   <span className={css.riskItem}>撤回消息 <b>{data.revoked.toLocaleString()}</b> 条</span>
                   <span className={css.riskItem}>转账/红包异常 <b>{warnCount}</b> 条</span>
-                  <span className={css.riskItem}>建议定期运行「隐私与信任」扫描</span>
+                  <span className={css.riskItem}>建议定期运行「隐私体检」扫描</span>
                 </div>
               </OvSection>
               {ins && (

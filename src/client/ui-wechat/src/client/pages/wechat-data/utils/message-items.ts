@@ -7,12 +7,13 @@
  *  2. 图片组合并（连拍多图）过去完全没有自动化验证 —— 本机只有 8 条带
  *     `<groupinfo>` 的图片消息，靠 UI 截图「碰运气」不可靠。
  *     抽成纯函数后可以用合成数据把所有分支（同组/不同组/单张/缺失 renderType）
- *     逐条断言，见 `scripts/check-message-items.js`。
+ *     逐条断言。
  *
  * 这里也承载 `renderType` 的**向前兼容兜底**：渲染结果缓存
  * （`readRenderCache`）里可能存着上一版写入的消息对象，它们没有 `renderType`。
  */
 import type { MessageRenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { fmtDividerSec } from './format.ts'
 
 /** 一个渲染项：日期分隔 / 单条消息 / 图片组。 */
 export type MessageRenderItem =
@@ -20,11 +21,32 @@ export type MessageRenderItem =
   | { kind: 'msg'; m: WechatMessage }
   | { kind: 'group'; items: WechatMessage[]; gid: string }
 
-/** 一天的日期分隔标签（`MM-DD`）。 */
-export function dayLabelOf(m: WechatMessage): string {
+/** 相邻消息间隔超过这个秒数就在中间插日期分隔 —— 微信口径（5 分钟）。 */
+export const DIVIDER_GAP_SEC = 300
+
+/** 一天的自然日 key（`YYYY-M-D`），只用于判断「跨天」。 */
+function dayKey(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+/**
+ * `m` 之前是否要插日期分隔，需要的话返回分隔标签（微信 `formatTimeDivider` 口径）。
+ *
+ * 微信**不是**「每跨一天就插一条」，而是**相邻消息间隔 ≥ 5 分钟**才插；
+ * 间隔不足 5 分钟的跨天（例如 23:59 → 00:01）也要插，因为标签本身要变成「昨天 …」。
+ * @param prev - 前一条消息；列表首条传 undefined（首条总是插，给出一段历史的起点时间）。
+ * @param m - 当前消息。
+ * @returns 分隔标签；不需要分隔或时间缺失时返回 ''。
+ */
+export function dividerLabelBefore(prev: WechatMessage | undefined, m: WechatMessage): string {
   if (!m.createTime) return ''
-  const d = new Date(m.createTime * 1000)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (!prev || !prev.createTime) return fmtDividerSec(m.createTime)
+  const gap = m.createTime - prev.createTime
+  const dayChanged = dayKey(prev.createTime) !== dayKey(m.createTime)
+  if (gap < DIVIDER_GAP_SEC && !dayChanged) return ''
+  return fmtDividerSec(m.createTime)
 }
 
 /**
@@ -84,7 +106,8 @@ function groupCountOf(m: WechatMessage): number {
  * 把消息数组折成渲染项。
  *
  * 规则（每一条都有对应的单元断言）：
- *  - 跨天插入 `day` 分隔项（`MM-DD` 变化时）；
+ *  - 与**前一条真实消息**间隔 ≥5 分钟（或跨天）时，在其前插入 `day` 分隔项
+ *    （微信口径；窗口边界不影响结果，向上加载更多不会让分隔线跳位）；
  *  - **同一 `groupId` 的连续图片**合成一个 `group` 项（连拍多图）；
  *    只出现一次（组内只有 1 条）时不合并 —— 合并成 1 格网格反而看不出是连拍；
  *  - 中间夹了别的东西（文本/不同组）就断开，不会把两段连拍并成一组；
@@ -95,15 +118,11 @@ function groupCountOf(m: WechatMessage): number {
  */
 export function buildMessageItems(messages: readonly WechatMessage[], start = 0): MessageRenderItem[] {
   const items: MessageRenderItem[] = []
-  let prevDay = ''
   for (let i = Math.max(0, start); i < messages.length; i += 1) {
     const m = messages[i]
     if (!m) continue
-    const day = dayLabelOf(m)
-    if (day && day !== prevDay) {
-      prevDay = day
-      items.push({ kind: 'day', label: day, key: `day-${i}` })
-    }
+    const divider = dividerLabelBefore(i > 0 ? messages[i - 1] : undefined, m)
+    if (divider) items.push({ kind: 'day', label: divider, key: `day-${i}` })
     if (renderKindOf(m) === 'image') {
       const gid = m.rich?.groupId ?? ''
       if (gid && groupCountOf(m) > 0) {

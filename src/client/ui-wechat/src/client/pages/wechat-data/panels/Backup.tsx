@@ -13,9 +13,10 @@ import kitCss from '../ui/kit.module.css'
 
 /**
  * Render the backup-manager panel.
+ * @param props - `embedded`：作为「设置」弹窗里的一节渲染（整页交给弹窗右区滚动）。
  * @returns the backup element tree.
  */
-export function BackupPanel(): React.JSX.Element {
+export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   const [items, setItems] = useState<readonly BackupEntry[]>(() => readRenderCache<readonly BackupEntry[]>('backups') ?? [])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -116,7 +117,7 @@ export function BackupPanel(): React.JSX.Element {
   }
 
   return (
-    <div className={css.panel}>
+    <div className={embedded ? css.panelEmbedded : css.panel}>
       <PanelHeader
         title="备份管家"
         desc="本地快照（目录拷贝 / AES-256 加密 WCB）"

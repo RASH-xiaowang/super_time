@@ -55,9 +55,11 @@ const AVATAR_NOTE = '头像图片是唯一例外：本地未缓存时（实测�
 
 /**
  * Render the privacy & trust panel.
+ * @param props - `embedded`：作为「微信数据配置」弹窗里的一节渲染，不再自建 height:100%
+ *   的滚动容器与内边距（由弹窗右区负责滚动）。
  * @returns the privacy trust element tree.
  */
-export function PrivacyTrustPanel(): React.JSX.Element {
+export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   const [scan, setScan] = useState<PrivacySnapshot | null>(() => readRenderCache<PrivacySnapshot>('privacy-scan'))
   const [state, setState] = useState<PrivacyStateSnapshot | null>(() => readRenderCache<PrivacyStateSnapshot>('privacy-state'))
   const [rows, setRows] = useState<readonly PrivacyAuditRow[]>(() => readRenderCache<readonly PrivacyAuditRow[]>('privacy-audit-rows') ?? [])
@@ -129,8 +131,8 @@ export function PrivacyTrustPanel(): React.JSX.Element {
   }, [])
 
   return (
-    <div className={kitCss.panelShell}>
-      <PanelHeader title="隐私与信任" desc="数据边界 · AI 出网说明 · 敏感信息扫描结果" />
+    <div className={embedded ? css.embedded : kitCss.panelShell}>
+      <PanelHeader title="数据边界与出网" desc="数据边界 · AI 出网说明 · 敏感信息扫描结果" />
 
       <Card title="数据边界">
         <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用 AI 功能时，只有检索到的聊天片段会发送到所选 LLM 模型，可在模型设置中更换或调整。</p>

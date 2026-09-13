@@ -11,8 +11,6 @@ import {
   apiGenerateDailySummary,
   apiGetContacts,
   apiGetSessions,
-  apiListLlmModels,
-  apiListLlmProviders,
   apiListSummaryRecords,
   apiListSummaryTasks,
   apiRunSummaryTask,
@@ -84,10 +82,6 @@ export function DailySummaryPanel(): React.JSX.Element {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState<'tasks' | 'records' | 'generate'>('tasks')
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null)
-  const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([])
-  const [models, setModels] = useState<Array<{ id: string; name: string }>>([])
-  const [selProvider, setSelProvider] = useState('')
-  const [selModel, setSelModel] = useState('')
 
   // Toast + per-action busy feedback
   const [toasts, setToasts] = useState<readonly Toast[]>([])
@@ -140,27 +134,9 @@ export function DailySummaryPanel(): React.JSX.Element {
 
   useEffect(() => { void loadTasks() }, [loadTasks])
 
-  // 群聊列表与模型提供方只在使用到时才加载：手动生成视图 / 打开任务表单时。
+  // 群聊列表只在使用到时才加载：打开任务表单时。
+  // 模型选择已移除 —— 统一走「数据配置 → AI 大模型」里的全局默认模型。
   useEffect(() => { if (view === 'generate') void loadGroups() }, [view, loadGroups])
-
-  useEffect(() => {
-    if (view !== 'generate' || providers.length > 0) return
-    void apiListLlmProviders().then((env) => {
-      const ps = env.providers
-      setProviders(ps)
-      const first = ps[0]
-      if (first && !selProvider) setSelProvider(first.id)
-    }).catch(() => { /* no providers yet */ })
-  }, [view, providers.length])
-  useEffect(() => {
-    if (!selProvider) { setModels([]); return }
-    void apiListLlmModels({ provider: selProvider }).then((env) => {
-      const ms = env.models
-      setModels(ms)
-      const first = ms[0]
-      if (first && !selModel) setSelModel(first.id)
-    }).catch(() => { setModels([]) })
-  }, [selProvider])
 
   const loadMembers = useCallback(async (groupUsername: string): Promise<void> => {
     setMembers([])
@@ -178,10 +154,7 @@ export function DailySummaryPanel(): React.JSX.Element {
     setError(null)
     await withBusy('generate', async () => {
       try {
-        const opts: { date: string; provider?: string; model?: string } = { date }
-        if (selProvider) opts.provider = selProvider
-        if (selModel) opts.model = selModel
-        const res = await apiGenerateDailySummary(opts)
+        const res = await apiGenerateDailySummary({ date })
         setResult(res.summary)
         setMeta(`覆盖 ${res.sessions} 个会话 / ${res.messages} 条消息`)
         setDailyStats({ total: res.total, types: res.types, hourly: res.hourly, topSessions: res.topSessions, sessions: res.sessions })
@@ -432,10 +405,8 @@ export function DailySummaryPanel(): React.JSX.Element {
                 <div className={css.cardTitle}>手动生成</div>
                 <div className={css.cardBody}>
                   <div className={`${css.searchWrap} ${css.dsSearchWrap}`}>
-                    <label className={css.fieldLabel}>模型</label>
-                    <select className={css.search} value={selProvider} onChange={(e) => { setSelProvider(e.target.value); setSelModel('') }}><option value="">提供方…</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                    <select className={css.search} value={selModel} onChange={(e) => { setSelModel(e.target.value) }} disabled={!selProvider}><option value="">模型…</option>{models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select>
-                    <span className={kitCss.textCaption}>密钥与提供方在“设置 → 模型”配置。</span>
+                    {/* 模型选择已移除：全应用统一在「数据配置 → AI 大模型」设置 */}
+                    <span className={kitCss.textCaption}>使用「数据配置 → AI 大模型」中的默认模型</span>
                   </div>
                   <div className={css.searchWrap}>
                     <label className={css.fieldLabel}>日期</label>

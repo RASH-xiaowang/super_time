@@ -1,11 +1,16 @@
 /**
  * 社交图谱面板 — Obsidian 风格重设计
  * 顶部工具条 + 头像节点图谱画布 + 右侧折叠控制面板(统计/选中详情/圈子聚焦/筛选/外观/布局)。
+ *
+ * 另含**知识网络 / 融合视图**：笔记节点 + `[[链接]]` 边 + 未解析目标的 stub 虚线节点；
+ * 融合视图再把笔记的来源会话（AI 问答沉淀）叠进同一张图，把「知识」和「人」接起来。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { apiGetAvatar, apiGetGraph, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiDeleteNote, apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph, apiGetNotes, readRenderCache, writeRenderCache } from '../api.ts'
 import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { buildGraph, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GraphSettings } from './graph-model.ts'
+import type { KnowledgeSnapshot } from '../types.ts'
+import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GraphSettings } from './graph-model.ts'
+import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { EchartsGraphCanvas, type EchartsGraphCanvasHandle } from './EchartsGraphCanvas.tsx'
 import { readableOn } from '../utils/theme-color.ts'
 import { PanelHeader, Select } from '../ui/kit.tsx'
@@ -70,9 +75,22 @@ function GraphLoading(): React.JSX.Element {
  * @param props - optional cross-panel chat opener (查看聊天).
  * @returns the graph element tree.
  */
-export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => void }): React.JSX.Element {
+export function GraphPanel({ variant = 'social', onOpenChat }: {
+  /** 'social' = 我的人脉（好友/群组）；'knowledge' = 我的笔记（知识网络/融合视图）。 */
+  variant?: 'social' | 'knowledge'
+  onOpenChat?: (username: string) => void
+}): React.JSX.Element {
   const [data, setData] = useState<GraphSnapshot | null>(() => readRenderCache<GraphSnapshot>('graph'))
-  const [settings, setSettings] = useState<GraphSettings>({ ...DEFAULT_GRAPH_SETTINGS })
+  /** 知识图谱快照（笔记 / stub / wiki 边）。与社交图谱分开加载：它是叠加维度，
+   *  取不到时社交侧必须照常可用，所以单独 try/catch、不共用 error 状态。 */
+  const [knowledge, setKnowledge] = useState<KnowledgeSnapshot | null>(() => readRenderCache<KnowledgeSnapshot>('kb-graph'))
+  /** 笔记编辑器：open + 待编辑内容（id 为空表示新建）。 */
+  const [noteEditor, setNoteEditor] = useState<{ open: boolean; id?: number; title?: string; body?: string }>({ open: false })
+  const [settings, setSettings] = useState<GraphSettings>(() => ({
+    ...DEFAULT_GRAPH_SETTINGS,
+    // 知识图谱入口默认进「知识网络」；社交图谱入口默认进「好友网络」（DEFAULT 已是 people）。
+    ...(variant === 'knowledge' ? { mode: 'knowledge' as const } : {}),
+  }))
   /**
    * 主题直接跟随全局 theme.ts。
    *
@@ -110,7 +128,10 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
   /** 恢复默认参数(含清除固定/聚焦/选中)。 */
   const isDefaultSettings = JSON.stringify(settings) === JSON.stringify(DEFAULT_GRAPH_SETTINGS)
   const restoreDefaults = (): void => {
-    setSettings({ ...DEFAULT_GRAPH_SETTINGS })
+    setSettings({
+      ...DEFAULT_GRAPH_SETTINGS,
+      ...(variant === 'knowledge' ? { mode: 'knowledge' as const } : {}),
+    })
     setPinned(new Set())
     setFocusCommunity(null)
     setHoverCommunity(null)
@@ -137,33 +158,60 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  /** 知识图谱单独加载：失败只静默保持旧值（或空），不把社交图谱面板带进错误态。 */
+  const loadKnowledge = useCallback(async (): Promise<void> => {
+    try {
+      const kb = await apiGetKnowledgeGraph()
+      setKnowledge(kb)
+      writeRenderCache('kb-graph', kb)
+    } catch { /* 知识维度不可用不应影响社交图谱 */ }
+  }, [])
+
+  useEffect(() => { void load(); void loadKnowledge() }, [load, loadKnowledge])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
-  useWechatDataUpdated(() => { if (!data) void load() })
+  useWechatDataUpdated(() => {
+    if (!data) void load()
+    if (!knowledge) void loadKnowledge()
+  })
+
+  const isKnowledgeMode = variant === 'knowledge'
 
   // 性能:buildGraph 只随「结构参数」(模式/上限/阈值/仅好友)重建;
   // 外观参数(大小/粗细/标签等)由画布逐帧读取,拖动滑杆不再触发全量图重建
   const graph = useMemo<BuiltGraph>(
-    () => buildGraph(data, settings),
-    [data, settings.mode, settings.nodeLimit, settings.minCommon, settings.friendsOnly],
+    () => (isKnowledgeMode ? buildKnowledgeNetwork(knowledge, data, settings) : buildGraph(data, settings)),
+    [data, knowledge, isKnowledgeMode, settings.mode, settings.nodeLimit, settings.minCommon, settings.friendsOnly],
   )
-  // 深度过滤:有选中节点时以它为锚,否则自动锚定「我」——深度滑杆无需先选中即可生效
+  // 深度过滤:有选中节点时以它为锚,否则自动锚定「我」——深度滑杆无需先选中即可生效。
+  // 知识网络没有「我」节点,退到第一个节点作锚(否则 localGraph 会返回空图)。
+  const depthAnchor = useMemo(
+    () => selectedId ?? (graph.nodes.some(n => n.id === 'self') ? 'self' : graph.nodes[0]?.id ?? 'self'),
+    [selectedId, graph],
+  )
   const displayGraph = useMemo<BuiltGraph>(() => {
-    if (settings.depth > 0) return localGraph(graph, selectedId ?? 'self', settings.depth)
+    if (settings.depth > 0) return localGraph(graph, depthAnchor, settings.depth)
     return graph
-  }, [graph, selectedId, settings.depth])
+  }, [graph, depthAnchor, settings.depth])
   const selected = useMemo(() => graph.nodes.find(n => n.id === selectedId) ?? null, [graph, selectedId])
-  // 洞察:最亲近(亲密度=消息量)、圈子概览(按成员数降序)、选中详情(共同群/相连关系)
-  const topFriends = useMemo(() => [...graph.nodes].filter(n => n.kind !== 'self').sort((a, b) => (b.intimacy ?? 0) - (a.intimacy ?? 0) || b.weight - a.weight).slice(0, 5), [graph])
+  // 洞察:最亲近(亲密度=消息量)、圈子概览(按成员数降序)、选中详情(共同群/相连关系)。
+  // 知识模式下「重要性」换成连接度(出链+反链),否则会按消息量给笔记排序、毫无意义。
+  const topFriends = useMemo(() => [...graph.nodes]
+    .filter(n => n.kind !== 'self' && n.kind !== 'stub')
+    .sort((a, b) => (isKnowledgeMode
+      ? ((b.backLinks ?? 0) + (b.outLinks ?? 0)) - ((a.backLinks ?? 0) + (a.outLinks ?? 0)) || b.weight - a.weight
+      : (b.intimacy ?? 0) - (a.intimacy ?? 0) || b.weight - a.weight))
+    .slice(0, 5), [graph, isKnowledgeMode])
   const communities = useMemo(() => groupCommunities(graph), [graph])
   const selectedConnections = useMemo(() => (selectedId ? connectedEdgesOf(graph, selectedId) : []), [graph, selectedId])
   const selectedGroupNames = useMemo(() => (selected ? sharedGroupNames(selected, data?.group_names) : []), [selected, data])
 
-  // 选中详情头像(「我」用 self wxid 查)
+  // 选中详情头像(「我」用 self wxid 查)。知识节点没有头像，也不该拿
+  // 'note:1' / 'kb:xxx' 这种伪用户名去查 getAvatar。
   useEffect(() => {
+    if (selected && (selected.kind === 'note' || selected.kind === 'stub')) { setSelAvatar(''); return }
     const user = selectedId === 'self' ? (data?.self ?? '') : selectedId ?? ''
     if (!user || user === 'self') { setSelAvatar(''); return }
     let alive = true
@@ -171,7 +219,7 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
       .then((r) => { if (alive) setSelAvatar(r.data || r.url || '') })
       .catch(() => { if (alive) setSelAvatar('') })
     return () => { alive = false }
-  }, [selectedId, data])
+  }, [selectedId, data, selected])
 
   const togglePin = useCallback((id: string): void => {
     setPinned((prev) => {
@@ -191,6 +239,35 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
     setFocusCommunity(null)
     patch({ mode })
   }
+
+  // ── 知识笔记的增删改 ──────────────────────────────────────────────
+  // 图谱快照只带 excerpt（列表用），编辑需要完整正文，因此打开编辑器时按 id 回查一次 getNotes。
+  const openNoteEditor = useCallback(async (id: number): Promise<void> => {
+    try {
+      const list = await apiGetNotes()
+      const n = list.items.find(x => x.id === id)
+      setNoteEditor(n ? { open: true, id: n.id, title: n.title, body: n.body } : { open: true, id })
+    } catch {
+      setNoteEditor({ open: true, id })
+    }
+  }, [])
+
+  const removeNote = useCallback(async (id: number): Promise<void> => {
+    try {
+      const r = await apiDeleteNote(id)
+      if (!r.ok) { setError(r.error ?? '删除笔记失败'); return }
+      if (selectedId === 'note:' + id) setSelectedId(null)
+      await loadKnowledge()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }, [selectedId, loadKnowledge])
+
+  /** 侧栏只列「最相关」的几篇：按连接度降序，避免把几百篇笔记铺进窄栏。 */
+  const topNotes = useMemo(() => (knowledge?.notes ?? [])
+    .slice()
+    .sort((a, b) => (b.backLinks + b.outLinks) - (a.backLinks + a.outLinks) || b.updatedAt - a.updatedAt)
+    .slice(0, 6), [knowledge])
 
   // 搜索候选(名称/username 包含)
   const searchTerms = search.trim().toLowerCase()
@@ -253,7 +330,9 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
   return (
     <div className={css.panel}>
       <PanelHeader
-        title="社交关系图谱"
+        title={isKnowledgeMode
+          ? (settings.mode === 'fused' ? '知识图谱 · 融合视图' : '知识图谱 · 知识网络')
+          : (settings.mode === 'groups' ? '社交图谱 · 群组网络' : '社交图谱 · 好友网络')}
         desc={selected ? selected.label + ' · ' + String(selected.intimacy ?? selected.weight) + ' 条消息' : `${graph.nodes.length} 节点 · ${graph.edges.length} 连线 · ${graph.communityCount} 圈子`}
         actions={(
           <>
@@ -271,27 +350,33 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
               )}
             </div>
             <button type="button" className={css.chip} onClick={() => { void load() }}>{loading ? '刷新中…' : '⟳ 刷新'}</button>
-            <Select
-              value={posterStyle}
-              onChange={(v) => { setPosterStyle(v as 'light' | 'dark' | 'neon') }}
-              options={[
-                { value: 'dark', label: '深空' },
-                { value: 'light', label: '浅日' },
-                { value: 'neon', label: '霓虹' },
-              ]}
-              ariaLabel="导出风格"
-            />
-            <Select
-              value={posterRatio}
-              onChange={(v) => { setPosterRatio(v as '1:1' | '3:4' | '16:9') }}
-              options={[
-                { value: '1:1', label: '1:1 方图' },
-                { value: '3:4', label: '3:4 竖版' },
-                { value: '16:9', label: '16:9 横版' },
-              ]}
-              ariaLabel="导出比例"
-            />
-            <button type="button" className={css.chip} onClick={() => { void doExportPoster() }} disabled={exporting}>{exporting ? '⏳ 导出中…' : '📤 发朋友圈'}</button>
+            {/* 海报（朋友圈分享图）自带「最亲近的人 / 圈子概览」等社交侧版式，
+                知识网络下这些版块没有意义，因此隐藏海报入口；SVG/PNG 仍忠实导出当前图。 */}
+            {!isKnowledgeMode && (
+              <>
+                <Select
+                  value={posterStyle}
+                  onChange={(v) => { setPosterStyle(v as 'light' | 'dark' | 'neon') }}
+                  options={[
+                    { value: 'dark', label: '深空' },
+                    { value: 'light', label: '浅日' },
+                    { value: 'neon', label: '霓虹' },
+                  ]}
+                  ariaLabel="导出风格"
+                />
+                <Select
+                  value={posterRatio}
+                  onChange={(v) => { setPosterRatio(v as '1:1' | '3:4' | '16:9') }}
+                  options={[
+                    { value: '1:1', label: '1:1 方图' },
+                    { value: '3:4', label: '3:4 竖版' },
+                    { value: '16:9', label: '16:9 横版' },
+                  ]}
+                  ariaLabel="导出比例"
+                />
+                <button type="button" className={css.chip} onClick={() => { void doExportPoster() }} disabled={exporting}>{exporting ? '⏳ 导出中…' : '📤 发朋友圈'}</button>
+              </>
+            )}
             <button type="button" className={css.chip} onClick={() => { void doExportSvg() }}>SVG</button>
             <button type="button" className={css.chip} onClick={() => { void doExportPng() }}>PNG</button>
             <button type="button" className={css.chip} onClick={toggleTheme}>{dark ? '☀️ 浅色' : '🌙 深色'}</button>
@@ -306,16 +391,31 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
         <div className={css.statBox}><span className={css.statNum}>{graph.nodes.length}</span><span className={kitCss.textCaption}>节点</span></div>
         <div className={css.statBox}><span className={css.statNum}>{graph.edges.length}</span><span className={kitCss.textCaption}>连线</span></div>
         <div className={css.statBox}><span className={css.statNum}>{graph.communityCount}</span><span className={kitCss.textCaption}>圈子</span></div>
-        <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'person').length}</span><span className={kitCss.textCaption}>联系人</span></div>
-        <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'group').length}</span><span className={kitCss.textCaption}>群聊</span></div>
+        {isKnowledgeMode ? (
+          <>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.noteCount ?? graph.nodes.filter(n => n.kind === 'note').length}</span><span className={kitCss.textCaption}>笔记</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.stubCount ?? graph.nodes.filter(n => n.kind === 'stub').length}</span><span className={kitCss.textCaption}>待补笔记</span></div>
+          </>
+        ) : (
+          <>
+            <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'person').length}</span><span className={kitCss.textCaption}>联系人</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'group').length}</span><span className={kitCss.textCaption}>群聊</span></div>
+          </>
+        )}
       </div>
 
       <div className={css.body}>
         <div className={css.stage}>
-          {loading && !data && <GraphLoading />}
+          {loading && !data && !knowledge && <GraphLoading />}
           {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
-          {!loading && !error && data && graph.nodes.length === 0 && <div className={kitCss.emptyInline}>当前条件下没有可显示的节点,试试提高节点上限或关闭「仅好友」。</div>}
-          {data && graph.nodes.length > 0 && (
+          {!loading && !error && (data || knowledge) && graph.nodes.length === 0 && (
+            <div className={kitCss.emptyInline}>
+              {isKnowledgeMode
+                ? '还没有可显示的知识节点。点右侧「＋ 新建笔记」写下第一篇，或在「微信问答」的回答下点「沉淀为笔记」。'
+                : '当前条件下没有可显示的节点。试试提高节点上限，或关闭「仅好友」。'}
+            </div>
+          )}
+          {(data || knowledge) && graph.nodes.length > 0 && (
             <>
               <EchartsGraphCanvas
                 ref={canvasRef}
@@ -324,7 +424,7 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 settings={settings}
-                selfUsername={data.self ?? undefined}
+                selfUsername={data?.self ?? undefined}
                 pinnedIds={pinned}
                 focusCommunity={focusCommunity}
                 hoverCommunity={hoverCommunity}
@@ -334,10 +434,21 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
                 onFocusNode={focusNode}
               />
               <div className={css.legend}>
-                <span><i className={css.legendDot} />颜色 = 圈子(社区)</span>
-                <span><i className={css.legendLine} />灰线 = 共同群数</span>
-                <span><i className={css.legendLineBlue} />蓝线 = 与我亲密度</span>
-                <span><i className={css.legendBar} />半径 = 消息量</span>
+                {isKnowledgeMode ? (
+                  <>
+                    <span><i className={css.legendDot} />紫方块 = 笔记</span>
+                    <span><i className={css.legendLineBlue} />紫线 = [[链接]]</span>
+                    <span><i className={css.legendLine} />虚线圆 = 尚未创建的笔记</span>
+                    <span><i className={css.legendBar} />半径 = 连接度</span>
+                  </>
+                ) : (
+                  <>
+                    <span><i className={css.legendDot} />颜色 = 圈子(社区)</span>
+                    <span><i className={css.legendLine} />灰线 = 共同群数</span>
+                    <span><i className={css.legendLineBlue} />蓝线 = 与我亲密度</span>
+                    <span><i className={css.legendBar} />半径 = 消息量</span>
+                  </>
+                )}
               </div>
             </>
           )}
@@ -370,7 +481,14 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
                   )}
                   <div className={css.detailTitles}>
                     <span className={css.detailName}>{selected.label}</span>
-                    <span className={kitCss.textMeta}>{selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 {selected.intimacy ?? selected.weight}{selected.sharedCount !== undefined ? ` · 共同 ${selected.sharedCount}` : ''}</span>
+                    <span className={kitCss.textMeta}>
+                      {selected.kind === 'note'
+                        ? `笔记 · 出链 ${selected.outLinks ?? 0} / 被引用 ${selected.backLinks ?? 0}`
+                        : selected.kind === 'stub'
+                          ? `尚未创建的笔记 · 被引用 ${selected.backLinks ?? 0} 次`
+                          : `${selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 ${selected.intimacy ?? selected.weight}`}
+                      {selected.sharedCount !== undefined ? ` · 共同 ${selected.sharedCount}` : ''}
+                    </span>
                   </div>
                   <button type="button" className={css.detailClose} onClick={() => { setSelectedId(null) }} aria-label="关闭详情">×</button>
                 </div>
@@ -385,7 +503,14 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
                   {selected.id !== 'self' && (
                     <button type="button" className={css.miniBtn} data-on={pinned.has(selected.id) || undefined} onClick={() => { togglePin(selected.id) }}>{pinned.has(selected.id) ? '📌 已固定' : '📌 固定'}</button>
                   )}
-                  {onOpenChat && (
+                  {selected.kind === 'note' && (
+                    <button type="button" className={css.miniBtn} onClick={() => { void openNoteEditor(Number(selected.id.slice(5))) }}>✏️ 编辑笔记</button>
+                  )}
+                  {/* stub 的闭环：点它就地把「还缺的那篇笔记」写出来，而不是留一个悬空引用 */}
+                  {selected.kind === 'stub' && (
+                    <button type="button" className={css.miniBtn} onClick={() => { setNoteEditor({ open: true, title: selected.label }) }}>＋ 创建这篇笔记</button>
+                  )}
+                  {onOpenChat && selected.kind !== 'note' && selected.kind !== 'stub' && (
                     <button type="button" className={css.miniBtn} onClick={() => { onOpenChat(selected.id) }}>💬 查看聊天</button>
                   )}
                 </div>
@@ -412,7 +537,7 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
 
             {/* 最亲近 Top5 */}
             <div className={css.railSection}>
-              <div className={css.railTitle}>最亲近 · 消息量</div>
+              <div className={css.railTitle}>{isKnowledgeMode ? '最关联 · 连接度' : '最亲近 · 消息量'}</div>
               {topFriends.map((n, i) => (
                 <button key={n.id} type="button" className={css.rank} title={n.label} onClick={() => { setSelectedId(n.id); canvasRef.current?.centerOn(n.id) }}>
                   <span className={css.rankNum}>{i + 1}</span>
@@ -435,13 +560,13 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
                     type="button"
                     className={css.rank}
                     data-on={focusCommunity === c.id || undefined}
-                    title={`${[...c.members].map(m => m.label).join('、')}（共 ${c.members.length} 人）`}
+                    title={`${[...c.members].map(m => m.label).join('、')}（共 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}）`}
                     onClick={() => { setFocusCommunity(prev => prev === c.id ? null : c.id) }}
                     onMouseEnter={() => { setHoverCommunity(c.id) }}
                     onMouseLeave={() => { setHoverCommunity(null) }}
                   >
                     <span className={css.rankNum} style={{ background: communityColor(c.id), color: readableOn(communityColor(c.id)) }}>{c.members.length}</span>
-                    <span className={css.rankName}>{[...c.members].slice(0, 2).map(m => m.label).join('、')}{c.members.length > 2 ? ` 等 ${c.members.length} 人` : ''}</span>
+                    <span className={css.rankName}>{[...c.members].slice(0, 2).map(m => m.label).join('、')}{c.members.length > 2 ? ` 等 ${c.members.length} ${isKnowledgeMode ? '篇' : '人'}` : ''}</span>
                     {focusCommunity === c.id ? <span className={css.rankW}>聚焦中</span> : null}
                   </button>
                 ))}
@@ -451,16 +576,56 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
             {/* 数据筛选 */}
             <div className={css.railSection}>
               <div className={css.railTitle}>数据</div>
-              <div className={css.seg}>
-                <button type="button" className={css.segBtn} data-on={settings.mode === 'people' || undefined} onClick={() => { setMode('people') }}>好友网络</button>
-                <button type="button" className={css.segBtn} data-on={settings.mode === 'groups' || undefined} onClick={() => { setMode('groups') }}>群组网络</button>
-              </div>
+              {isKnowledgeMode ? (
+                <div className={css.seg}>
+                  <button type="button" className={css.segBtn} data-on={settings.mode === 'knowledge' || undefined} onClick={() => { setMode('knowledge') }}>知识网络</button>
+                  <button type="button" className={css.segBtn} data-on={settings.mode === 'fused' || undefined} onClick={() => { setMode('fused') }}>融合视图</button>
+                </div>
+              ) : (
+                <div className={css.seg}>
+                  <button type="button" className={css.segBtn} data-on={settings.mode === 'people' || undefined} onClick={() => { setMode('people') }}>好友网络</button>
+                  <button type="button" className={css.segBtn} data-on={settings.mode === 'groups' || undefined} onClick={() => { setMode('groups') }}>群组网络</button>
+                </div>
+              )}
               <Slider label="节点上限" value={settings.nodeLimit} min={20} max={10000} step={20} onChange={(v) => { patch({ nodeLimit: v }) }} fmt={v => v >= 10000 ? '全部' : String(v)} />
-              <Slider label={settings.mode === 'people' ? '共同群阈值 ≥' : '共同成员阈值 ≥'} value={settings.minCommon} min={1} max={10} step={1} onChange={(v) => { patch({ minCommon: v }) }} />
+              {(settings.mode === 'people' || settings.mode === 'groups') && (
+                <Slider label={settings.mode === 'people' ? '共同群阈值 ≥' : '共同成员阈值 ≥'} value={settings.minCommon} min={1} max={10} step={1} onChange={(v) => { patch({ minCommon: v }) }} />
+              )}
               {settings.mode === 'people' && (
                 <Toggle label="仅显示好友" checked={settings.friendsOnly} onChange={(v) => { patch({ friendsOnly: v }) }} />
               )}
             </div>
+
+            {/* 知识笔记（仅知识网络/融合视图显示） */}
+            {isKnowledgeMode && (
+              <div className={css.railSection}>
+                <div className={css.railTitle}>知识笔记</div>
+                <div className={css.rowBtns}>
+                  <button type="button" className={css.miniBtn} onClick={() => { setNoteEditor({ open: true }) }}>＋ 新建笔记</button>
+                </div>
+                <div className={kitCss.textMeta}>
+                  {knowledge
+                    ? `共 ${knowledge.summary.noteCount} 篇（问答沉淀 ${knowledge.summary.askCount}）· ${knowledge.summary.stubCount} 个待补 · ${knowledge.summary.orphanCount} 篇无关联`
+                    : '知识图谱暂不可用（社交图谱不受影响）'}
+                </div>
+                {topNotes.map(n => (
+                  <div key={n.id} className={css.noteRow}>
+                    <button
+                      type="button"
+                      className={css.noteTitle}
+                      title={n.excerpt || n.title}
+                      onClick={() => { setSelectedId('note:' + n.id); canvasRef.current?.centerOn('note:' + n.id) }}
+                    >
+                      {n.title}
+                      {n.sourceKind === 'ask' ? ' ·来自问答' : ''}
+                      <span className={css.noteMetric}>{n.backLinks} ← / → {n.outLinks}</span>
+                    </button>
+                    <button type="button" className={css.noteEdit} onClick={() => { void openNoteEditor(n.id) }} aria-label={`编辑 ${n.title}`}>✏️</button>
+                    <button type="button" className={css.noteDel} onClick={() => { void removeNote(n.id) }} aria-label={`删除 ${n.title}`}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* 外观 */}
             <div className={css.railSection}>
@@ -509,6 +674,16 @@ export function GraphPanel({ onOpenChat }: { onOpenChat?: (username: string) => 
           </aside>
         )}
       </div>
+
+      {/* 笔记编辑器（新建 / 编辑）。保存/删除后统一重载知识图谱，让画布立刻反映变化。 */}
+      <KnowledgeNoteEditor
+        open={noteEditor.open}
+        {...(noteEditor.id !== undefined ? { noteId: noteEditor.id } : {})}
+        initialTitle={noteEditor.title ?? ''}
+        initialBody={noteEditor.body ?? ''}
+        onClose={() => { setNoteEditor({ open: false }) }}
+        onSaved={() => { void loadKnowledge(); setNoteEditor({ open: false }) }}
+      />
     </div>
   )
 }

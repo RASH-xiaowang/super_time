@@ -218,24 +218,45 @@ function nodeItem(
   pos?: GridPos,
 ): Record<string, unknown> {
   const comm = g.community
+  // 知识节点（笔记 / 未解析目标）与「人」是两种物种：形状 + 配色同时区分，
+  // 而不是只靠大小 —— 默认 nodeScale 下大小差异很容易被压平。
+  const isNote = g.kind === 'note'
+  const isStub = g.stub === true || g.kind === 'stub'
   const radius = Math.max(8, g.radius * settings.nodeScale)
   const symbolSize = Math.min(sizeCap, Math.max(16, radius * 2))
-  const borderColor = comm >= 0 ? communityColor(comm) : (dark ? 'rgba(140,150,170,0.6)' : 'rgba(90,100,115,0.5)')
+  const borderColor = isStub
+    ? (dark ? 'rgba(150,160,180,0.9)' : 'rgba(110,120,135,0.9)')
+    : isNote
+      ? (dark ? '#a99bff' : '#6d5bd0')
+      : comm >= 0 ? communityColor(comm) : (dark ? 'rgba(140,150,170,0.6)' : 'rgba(90,100,115,0.5)')
   const labelColor = dark ? 'rgba(200,255,255,0.95)' : 'rgba(30,40,52,0.95)'
+  const fill = isStub
+    ? (dark ? 'rgba(120,130,150,0.16)' : 'rgba(140,150,165,0.14)')
+    : isNote
+      ? (dark ? '#6d5bd0' : '#8b7ff0')
+      : comm >= 0 ? communityColor(comm) : (dark ? '#2a3a4a' : '#e2e6ec')
   return {
     id: g.id,
     name: g.label,
     value: g.weight,
+    // 供 tooltip 区分物种（echarts 允许数据项带自定义字段）
+    kind: g.kind,
+    stub: isStub,
+    backLinks: g.backLinks ?? 0,
+    outLinks: g.outLinks ?? 0,
     fixed,
     ...(pos ? { x: pos.x, y: pos.y } : {}),
-    symbol: avatar ? `image://${avatar}` : 'circle',
+    // 头像只属于「人」：知识节点固定用几何符号，不被 avatar 顶掉形状。
+    symbol: avatar ? `image://${avatar}` : (isNote ? 'roundRect' : 'circle'),
     symbolSize,
     category: comm >= 0 ? comm : undefined,
     itemStyle: {
-      color: comm >= 0 ? communityColor(comm) : (dark ? '#2a3a4a' : '#e2e6ec'),
+      color: fill,
       borderColor,
-      borderWidth: 0,
-      ...(opacity < 1 ? { opacity } : {}),
+      borderWidth: isNote || isStub ? 1.5 : 0,
+      ...(isStub ? { borderType: 'dashed' } : {}),
+      // stub 半透明：它代表「还没写的那篇笔记」，视觉上要退到背景里。
+      ...(isStub ? { opacity: opacity * 0.6 } : opacity < 1 ? { opacity } : {}),
       ...(settings.blurNodes > 0 ? {
         shadowBlur: settings.blurNodes * 1.5,
         shadowColor: dark ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.3)',
@@ -246,6 +267,7 @@ function nodeItem(
       formatter: g.label,
       color: labelColor,
       fontSize: 11,
+      ...(isStub ? { fontStyle: 'italic' } : {}),
     },
   }
 }
@@ -284,7 +306,14 @@ function buildOption(
   const important = new Set([...graph.nodes].sort((a, b) => b.weight - a.weight).slice(0, 12).map(n => n.id))
   if (graph.nodes.some(n => n.id === 'self')) important.add('self')
   // 性能:仅前 60 个高权重节点用头像,其余渲染为彩色圆点;拖拽/缩放每帧图片绘制量大减。
-  const avatarNodes = new Set([...graph.nodes].sort((a, b) => b.weight - a.weight).slice(0, 60).map(n => n.id))
+  // 知识节点排除在外:笔记/未解析目标没有头像,占额度等于白占名额。
+  const avatarNodes = new Set(
+    [...graph.nodes]
+      .filter(n => n.kind !== 'note' && n.kind !== 'stub' && n.stub !== true)
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 60)
+      .map(n => n.id),
+  )
   avatarNodes.add('self')
   const nodes = graph.nodes.map(g => nodeItem(
     g,
@@ -301,19 +330,37 @@ function buildOption(
   // 性能:仅对权重最高的前 N 条连线做力导向与渲染。连线从 graph.edges 按权重降序,
   // 保留「我与对方」亲密度连线(在前),再补充最强的共同群边;大图拖拽/缩放更流畅,也减少视觉噪点。
   const maxLinks = Math.max(180, Math.min(graph.edges.length, Math.round(graph.nodes.length * 0.9)))
-  const links = graph.edges.slice(0, maxLinks).map(e => ({
-    source: e.source,
-    target: e.target,
-    value: e.weight,
-    lineStyle: {
-      width: Math.max(0.3, settings.edgeWidth * (e.kind === 'intimacy' ? 1.25 : 0.8)),
-      opacity: edgeOpacityOf(e),
-      color: e.kind === 'intimacy'
-        ? (dark ? 'rgba(86,170,240,0.66)' : 'rgba(44,130,210,0.66)')
-        : (dark ? 'rgba(148,163,184,0.42)' : 'rgba(120,130,145,0.5)'),
-      curveness: settings.showArrows ? 0.2 : 0.08,
-    },
-  }))
+  // 指向 stub 的链接画虚线：表达「这条 [[链接]] 指向的笔记还不存在」，
+  // 与实线的「已建成关系」形成对比，缺口一眼可见。
+  const stubIds = new Set(graph.nodes.filter(n => n.stub === true || n.kind === 'stub').map(n => n.id))
+  const links = graph.edges.slice(0, maxLinks).map(e => {
+    const isWiki = e.kind === 'wiki'
+    const isSource = e.kind === 'source'
+    const width = isWiki
+      ? Math.max(0.4, settings.edgeWidth * 0.9)
+      : isSource
+        ? Math.max(0.4, settings.edgeWidth * 0.7)
+        : Math.max(0.3, settings.edgeWidth * (e.kind === 'intimacy' ? 1.25 : 0.8))
+    const color = isWiki
+      ? (dark ? 'rgba(169,155,255,0.62)' : 'rgba(109,91,208,0.6)')
+      : isSource
+        ? (dark ? 'rgba(120,200,180,0.5)' : 'rgba(60,150,130,0.5)')
+        : e.kind === 'intimacy'
+          ? (dark ? 'rgba(86,170,240,0.66)' : 'rgba(44,130,210,0.66)')
+          : (dark ? 'rgba(148,163,184,0.42)' : 'rgba(120,130,145,0.5)')
+    return {
+      source: e.source,
+      target: e.target,
+      value: e.weight,
+      lineStyle: {
+        width,
+        opacity: edgeOpacityOf(e),
+        color,
+        curveness: settings.showArrows ? 0.2 : 0.08,
+        ...(isWiki && stubIds.has(e.target) ? { type: 'dashed' as const } : {}),
+      },
+    }
+  })
 
   // 力度滑杆 → echarts force 的近似映射(echarts 无 nodeGap/communitySeparation/attraction 独立项):
   // 节点间距/圈子分离度 → 放大全局斥力;相连节点的吸引力 → 反向缩放连线长度(越强拉得越近)。
@@ -331,9 +378,12 @@ function buildOption(
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
-      formatter: (p: { dataType: string; data: { name?: string; value?: number; source?: string; target?: string } }) => {
-        if (p.dataType === 'node') return `${p.data.name ?? ''}<br/>${p.data.value ?? 0} 条消息`
-        return `${p.data.source ?? ''} ↔ ${p.data.target ?? ''} · ${p.data.value ?? 0}`
+      formatter: (p: { dataType: string; data: { name?: string; value?: number; source?: string; target?: string; kind?: string; stub?: boolean; backLinks?: number; outLinks?: number } }) => {
+        const d = p.data
+        if (p.dataType !== 'node') return `${d.source ?? ''} ↔ ${d.target ?? ''} · ${d.value ?? 0}`
+        if (d.kind === 'note') return `${d.name ?? ''}<br/>笔记 · 出链 ${d.outLinks ?? 0} / 被引用 ${d.backLinks ?? 0}`
+        if (d.stub === true || d.kind === 'stub') return `${d.name ?? ''}<br/>尚未创建的笔记（被引用 ${d.backLinks ?? 0} 次）`
+        return `${d.name ?? ''}<br/>${d.value ?? 0} 条消息`
       },
       backgroundColor: tokenColor('--dsw-alias-tooltip-bg'),
       borderColor: tokenColor('--nm-cyan', 0.4),
@@ -602,7 +652,11 @@ export const EchartsGraphCanvas = forwardRef<EchartsGraphCanvasHandle, EchartsGr
       let op = 1
       if (hoverId != null) op = n.id === hoverId || hoverNbrs?.has(n.id) ? 1 : 0.15
       else op = dimOpacity(n.community, view.focusCommunity, view.hoverCommunity)
-      if (op !== 1) rec.itemStyle = { opacity: op }
+      // stub 的半透明是本体的固有外观，不是「被淡出」，必须在这里同样乘上：
+      // setOption 是合并语义，这里写 op=1 会把 nodeItem 给的 0.6 直接盖掉，
+      // 表现为「hover 过一次之后，stub 就不再是半透明了」。
+      const eff = op * (n.stub === true || n.kind === 'stub' ? 0.6 : 1)
+      if (eff !== 1) rec.itemStyle = { opacity: eff }
       return rec
     })
     const maxLinks = Math.max(180, Math.min(p.graph.edges.length, Math.round(p.graph.nodes.length * 0.9)))
@@ -787,7 +841,15 @@ export const EchartsGraphCanvas = forwardRef<EchartsGraphCanvasHandle, EchartsGr
     }
     // 仅加载权重最高的 60 个节点头像(与画布头像渲染预算一致),其余纯色圆点;
     // 大幅减少头像 RPC/内存占用,大图更快。
-    const topAvatarIds = new Set([...graph.nodes].sort((a, b) => b.weight - a.weight).slice(0, 60).map(n => n.id))
+    const topAvatarIds = new Set(
+      [...graph.nodes]
+        // 知识节点没有头像：不排除的话它们会凭 weight 挤进前 60，
+        // 然后对 'note:1' / 'kb:xxx' 这种伪用户名发起 getAvatar RPC（必然失败）。
+        .filter(n => n.kind !== 'note' && n.kind !== 'stub' && n.stub !== true)
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 60)
+        .map(n => n.id),
+    )
     topAvatarIds.add('self')
     const missing = graph.nodes.filter(n => topAvatarIds.has(n.id)).map(avatarIdOf).filter(id => id && !avatarCache.has(id))
     if (missing.length === 0) {

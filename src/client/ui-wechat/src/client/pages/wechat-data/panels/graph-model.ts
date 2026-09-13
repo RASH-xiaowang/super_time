@@ -2,12 +2,17 @@
  * 社交图谱数据模型(移植自 st_control wechat/graph/graphModel.ts 设计)
  * GraphSnapshot → 节点/边。特性:饱和度指数半径、加权标签传播社区检测、
  * 亲密度拉力(dist/strength 随消息量指数衰减)、以「我」为枢纽。
+ *
+ * 另含**知识图谱 / 融合视图**（buildKnowledgeNetwork）：笔记节点 + `[[链接]]`
+ * 边 + 未解析目标的 stub 节点，融合模式再叠加笔记的来源会话。
  */
+import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import type { KnowledgeSnapshot } from '../types.ts'
 
 export interface GNode {
   id: string
   label: string
-  kind: 'person' | 'group' | 'self'
+  kind: 'person' | 'group' | 'self' | 'note' | 'stub'
   /** 公众号(gh_ 前缀)标记:详情/悬停显示「公众号」,「仅显示好友」时排除 */
   isOfficial?: boolean
   /** 消息量(亲密度代理);好友至少 100、非好友 80,叠加消息量 */
@@ -23,8 +28,19 @@ export interface GNode {
   sharedCount?: number
   /** 共同群 code 列表(详情展示共同群名) */
   groupCodes?: string[]
-  /** 知识库 stub:无对应文档的 [[目标]] 节点(虚线/未解析) */
+  /**
+   * 知识库 stub:被 `[[目标]]` 引用、但没有对应笔记的节点。
+   * 画布据此画虚线描边 + 半透明,提示「这里还缺一篇笔记」而不是当成错误。
+   */
   stub?: boolean
+  /** note 节点:被引用次数(反链),详情展示 */
+  backLinks?: number
+  /** note 节点:出链数 */
+  outLinks?: number
+  /** note 节点:来源会话 username(融合视图连到人/群) */
+  sourceUsername?: string
+  /** note 节点:正文摘要(悬停详情) */
+  excerpt?: string
   x: number
   y: number
   vx: number
@@ -40,8 +56,9 @@ export interface GEdge {
   dist: number
   /** 可选边强度(「我」的枢纽边随亲密度变化;普通边默认 1/min(度)) */
   strength?: number
-  /** intimacy=我↔好友(消息量);common=好友↔好友(共同群数)。 */
-  kind: 'intimacy' | 'common'
+  /** intimacy=我↔好友(消息量);common=好友↔好友(共同群数);
+   *  wiki=笔记↔笔记([[链接]]);source=笔记↔来源会话(AI 问答沉淀)。 */
+  kind: 'intimacy' | 'common' | 'wiki' | 'source'
   /** 双向连接:好友/群关系是互惠的,渲染时两端都显示箭头/参与邻居计算。 */
   bidirectional?: boolean
 }
@@ -54,7 +71,7 @@ export interface BuiltGraph {
 }
 
 export interface GraphSettings {
-  mode: 'people' | 'groups'
+  mode: 'people' | 'groups' | 'knowledge' | 'fused'
   nodeLimit: number
   minCommon: number
   friendsOnly: boolean
@@ -462,3 +479,127 @@ export function sharedGroupNames(
 
 /* rankNodes / communityOf 曾服务于已删除的 canvas 版图渲染器 graph-canvas.tsx(零引用),
    存活的 EchartsGraphCanvas 直接使用节点自带字段,故一并移除。 */
+
+/* ── 知识图谱 / 融合视图 ───────────────────────────────────────────────
+ *
+ * 与社交图谱分开构建、由面板按 mode 二选一：社交侧节点口径是「联系人/群/我」，
+ * 知识侧是「笔记/未解析目标」。两者 id 空间不同（note:<id> / kb:<key> vs username / self），
+ * 因此可以安全地放进同一张图；融合视图靠笔记的 sourceUsername 把两边接起来。
+ */
+
+/** 知识节点半径:链接越多越大(复用好友侧的饱和度手感)。
+ *  区间刻意比好友侧大：nodeScale 默认 0.4，若基数太小会被画布的 8px 下限压平，
+ *  链接数不同的笔记就长得一样大、看不出结构。 */
+function radiusByLinks(links: number): number {
+  return radiusBySqrt(links, 6, 16, 46)
+}
+
+/**
+ * 构建知识网络（mode='knowledge'）或融合视图（mode='fused'）。
+ * @param knowledge - 知识图谱快照（笔记 + stub + wiki 边）。
+ * @param social - 社交图谱快照（融合视图取来源会话节点）。
+ * @param s - 图谱设置；`mode` 决定是否叠加来源会话。
+ * @returns BuiltGraph —— 与社交侧同构，画布无需区分数据来源。
+ */
+export function buildKnowledgeNetwork(
+  knowledge: KnowledgeSnapshot | null,
+  social: GraphSnapshot | null,
+  s: GraphSettings,
+): BuiltGraph {
+  if (!knowledge) return { nodes: [], edges: [], communityCount: 0 }
+  const fused = s.mode === 'fused'
+
+  const noteNodes: GNode[] = knowledge.notes.map(n => {
+    const links = n.outLinks + n.backLinks
+    return {
+      id: 'note:' + n.id,
+      label: n.title,
+      kind: 'note' as const,
+      // weight 沿用好友侧的语义(消息量→亲密度)，这里换成「连接度」。
+      weight: 100 + Math.min(links * 20, 900),
+      radius: radiusByLinks(links),
+      community: -1,
+      backLinks: n.backLinks,
+      outLinks: n.outLinks,
+      ...(n.sourceUsername ? { sourceUsername: n.sourceUsername } : {}),
+      ...(n.excerpt ? { excerpt: n.excerpt } : {}),
+      x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+    }
+  })
+
+  // stub 不参与 nodeLimit 截断：它是「缺口提示」，数量本就很少，截掉就失去意义。
+  const stubNodes: GNode[] = knowledge.stubs.map(st => ({
+    id: 'kb:' + st.key,
+    label: st.label,
+    kind: 'stub' as const,
+    stub: true,
+    weight: 40 + Math.min(st.refCount * 20, 200),
+    radius: 12,
+    community: -1,
+    backLinks: st.refCount,
+    excerpt: `被 ${st.refCount} 处引用，尚无同名笔记`,
+    x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+  }))
+
+  const edges: GEdge[] = knowledge.edges.map(e => ({
+    source: e.source,
+    target: e.target,
+    weight: e.weight,
+    // [[链接]] 是有向语义关系，距离给固定基准，长度缩放交给仿真侧统一处理。
+    dist: 150 / Math.sqrt(Math.max(e.weight, 1)),
+    kind: 'wiki' as const,
+  }))
+
+  // 融合：把笔记的来源会话（人/群）拉进来，并以 source 边连到笔记。
+  const personNodes: GNode[] = []
+  if (fused && social) {
+    const wanted = new Set<string>()
+    for (const n of knowledge.notes) if (n.sourceUsername) wanted.add(n.sourceUsername)
+    const socialById = new Map(social.nodes.map(n => [n.id, n]))
+    for (const username of wanted) {
+      const src = socialById.get(username)
+      if (!src) continue
+      const isGroup = src.kind === 'group'
+      personNodes.push({
+        id: src.id,
+        label: knowledge.sessionNames[username] || src.label || username,
+        kind: isGroup ? 'group' : 'person',
+        weight: isGroup
+          ? Math.max(1, src.shared_count ?? 1)
+          : personWeight(src.is_friend === true, src.msg_count ?? 0),
+        radius: isGroup
+          ? radiusBySqrt(src.shared_count ?? 0, 8, 9, 18)
+          : radiusByIntimacy(personWeight(src.is_friend === true, src.msg_count ?? 0)),
+        community: -1,
+        ...(src.is_friend !== undefined ? { isFriend: src.is_friend } : {}),
+        ...(src.kind === 'official' ? { isOfficial: true } : {}),
+        x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+      })
+    }
+    personNodes.sort((a, b) => b.weight - a.weight)
+    if (personNodes.length > s.nodeLimit) personNodes.length = s.nodeLimit
+    const kept = new Set(personNodes.map(n => n.id))
+    for (const n of knowledge.notes) {
+      if (!n.sourceUsername || !kept.has(n.sourceUsername)) continue
+      edges.push({
+        source: 'note:' + n.id,
+        target: n.sourceUsername,
+        weight: 1,
+        dist: 220,
+        kind: 'source' as const,
+        bidirectional: true,
+      })
+    }
+  }
+
+  const limit = Math.max(1, s.nodeLimit)
+  const keptNotes = noteNodes.length > limit ? noteNodes.slice(0, limit) : noteNodes
+  const allNodes = [...keptNotes, ...stubNodes, ...personNodes]
+  const ids = new Set(allNodes.map(n => n.id))
+  const keptEdges = edges.filter(e => ids.has(e.source) && ids.has(e.target))
+
+  // 社区检测只喂「笔记 + 融合进来的人」：stub 是缺口而非圈子成员，
+  // 把「尚未存在的笔记」分进某个圈子会产生误导，因此让它保持中性灰。
+  const communityCount = detectCommunities([...keptNotes, ...personNodes], keptEdges)
+  return { nodes: allNodes, edges: keptEdges, communityCount }
+}
