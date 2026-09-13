@@ -107,8 +107,6 @@ const MUST_NOT_HAVE = [
   '--wx-radius-tip',
   // 旧的气泡描边令牌
   '--wx-bubble-other-border',
-  // 旧的正文字号
-  'font-size:14.5px',
   // 旧的 border 三角尖角写法
   'border-width:5px 6px 5px 0',
   'border-width:5px 0 5px 6px',
@@ -116,12 +114,31 @@ const MUST_NOT_HAVE = [
   'max-width:min(520px,68%)',
 ]
 
+/**
+ * 聊天面板样式源文件：旧气泡正文字号只在这里断言，**不做全产物匹配**。
+ *
+ * 原本它在 MUST_NOT_HAVE 里按 `font-size:14.5px` 全产物匹配，结果是误报：
+ * 产物是整站合并后的单份 CSS，而引导页 `.heroLead` 合法地用了同一个值
+ * （src/client/ui-app/onboarding/onboarding.module.css），于是「旧实现已清除」
+ * 永远判不过。禁令的本意是「微信气泡正文字号不得回退到 14.5px」，
+ * 所以按来源文件收窄就能保住原意、又不牵连别的页面。
+ */
+const CHAT_CSS_PATH = path.join(
+  __dirname, '..', 'src', 'client', 'ui-wechat', 'src', 'client',
+  'pages', 'wechat-data', 'panels', 'chats.module.css',
+)
+const LEGACY_CHAT_BODY_FONT = 'font-size: 14.5px'
+
 function main() {
   const { css, file } = readBuiltCss()
   console.log(`检查产物：${path.relative(path.join(__dirname, '..'), file)}（${(css.length / 1024).toFixed(0)} KB）`)
 
   const missing = MUST_HAVE.filter((s) => !css.includes(s))
   const leftover = MUST_NOT_HAVE.filter((s) => css.includes(s))
+
+  // 聊天面板源样式：旧气泡正文字号不得回退（见 LEGACY_CHAT_BODY_FONT 的说明）
+  const chatCss = fs.existsSync(CHAT_CSS_PATH) ? fs.readFileSync(CHAT_CSS_PATH, 'utf8') : ''
+  const chatLegacy = chatCss.includes(LEGACY_CHAT_BODY_FONT)
 
   if (missing.length > 0) {
     console.error(`\n✗ 缺少 ${missing.length} 项预期值：`)
@@ -131,9 +148,13 @@ function main() {
     console.error(`\n✗ 残留 ${leftover.length} 项旧实现：`)
     for (const s of leftover) console.error(`    ${s}`)
   }
+  if (chatLegacy) {
+    console.error(`\n✗ 聊天面板样式回退到旧气泡正文字号：${LEGACY_CHAT_BODY_FONT}`)
+    console.error(`    ${path.relative(path.join(__dirname, '..'), CHAT_CSS_PATH)}`)
+  }
 
-  if (missing.length === 0 && leftover.length === 0) {
-    console.log(`\n✓ 微信消息视觉令牌校验通过（${MUST_HAVE.length} 项到位，${MUST_NOT_HAVE.length} 项旧实现已清除）`)
+  if (missing.length === 0 && leftover.length === 0 && !chatLegacy) {
+    console.log(`\n✓ 微信消息视觉令牌校验通过（${MUST_HAVE.length} 项到位，${MUST_NOT_HAVE.length} 项旧实现已清除，聊天面板无旧字号回退）`)
     return
   }
   process.exit(1)
