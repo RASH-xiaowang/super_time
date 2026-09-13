@@ -38,14 +38,25 @@ function isBuiltinAccount(username: string): boolean {
 /**
  * Source category_of: 按 local_type + username 划分互斥类别。
  *
- * 类别与实测的 contact.local_type 分布对应（本机真实数据普查）：
- *   3 → 1459 行，1249 个 wxid_*  = **真实好友**
- *   1 → 417 行，系统号 + gh_*    = 系统 / 公众号
- *   2 → 51 行                     = 群聊
- *   5 / 6 → 34 / 28 行 @openim    = 企业微信
- *   0 → 21 行
- * 原实现写的是 `localType === 1` 判好友，导致 1459 个真实好友全部落入
- * 兜底的 'member'（群成员），而 417 个系统/公众号行被当成好友 —— 通讯录整体判反。
+ * 好友判据是 **local_type === 1**（曾一度被改成 3，已按实测数据改回，理由见下）。
+ *
+ * 2026-09-13 用本机真实数据（2143 条 contact）定标，两次结论相反，最终以「互动证据」裁定：
+ *
+ *   local_type=1 → 417 条：其中 249 个 wxid_*、129 个 gh_*、36 个自定义号；
+ *                  **有备注名 266 条**；206 个单聊会话对端里**占 170 个**。
+ *   local_type=3 → 1568 条：其中 1355 个 wxid_*、209 个自定义号；
+ *                  **有备注名 0 条**；206 个单聊对端里**占 0 个**。
+ *
+ * 改成 3 的那次调查依据是「3 里有 1249 个 wxid_*，所以是好友」——这个推理不成立：
+ * **群成员也是 wxid_\***，一个在群里但从未加好友的人同样是 wxid_*。
+ * 而 1568 条 lt=3 里没有任何一条有备注名、也没有任何一条出现在单聊会话里，
+ * 这不像「好友」，更像「在群里见过、但从没加过的人」。反过来 lt=1 既被备注、又在聊天，
+ * 才是好友。且上游随包带来的 tests/contacts.spec.ts 与 tests/overview.spec.ts 夹具
+ * 也用 local_type=1 表示好友 —— 与本次裁定一致（此前把它们判成「测试过时」是错的，
+ * 它们一直在正确地报这个 bug）。
+ *
+ * 注：username 类分支（gh_/内置号/kefu/openim）在好友判断**之前**，所以 lt=1 里那
+ * 129 个 gh_* 与内置系统号会被前面的分支先行归为 official/system，不会落进 friend。
  */
 function categoryOf(localType: number, username: string, deleteFlag: number): string {
   if (deleteFlag !== 0 || localType === 4) return 'deleted'
@@ -54,7 +65,7 @@ function categoryOf(localType: number, username: string, deleteFlag: number): st
   if (isBuiltinAccount(username)) return 'system'
   if (username.endsWith('@kefu.openim')) return 'service'
   if (username.endsWith('@openim')) return 'enterprise'
-  if (localType === 3) return 'friend'
+  if (localType === 1) return 'friend'
   return 'member'
 }
 
