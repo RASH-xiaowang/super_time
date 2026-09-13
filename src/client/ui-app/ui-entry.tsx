@@ -112,16 +112,17 @@ void (async (): Promise<void> => {
   if (!api) return
   const BANNER_ID = 'backend-status-banner'
 
-  const render = (state: string, lastError: string | null): void => {
+  const render = (state: string, lastError: string | null, restarts?: number): void => {
     const existing = document.getElementById(BANNER_ID)
     if (state === 'ready' || state === 'starting' || state === 'stopped') {
       existing?.remove()
       return
     }
     const failed = state === 'failed'
+    const attempt = restarts && restarts > 0 ? `（第 ${restarts} 次尝试）` : ''
     const text = failed
       ? `⚠ ${lastError ?? '微信+ 后端不可用'}`
-      : `⏳ 微信+ 后端正在重启${lastError ? `（${lastError}）` : ''}，稍后自动恢复`
+      : `⏳ 微信+ 后端正在重启${attempt}${lastError ? `：${lastError}` : ''}，稍后自动恢复`
     if (existing) {
       existing.textContent = text
       existing.setAttribute('data-failed', failed ? '' : 'pending')
@@ -145,14 +146,14 @@ void (async (): Promise<void> => {
 
   try {
     const snap = await api.backendState?.()
-    if (snap?.ok && snap.value) render(snap.value.state, snap.value.lastError ?? null)
+    if (snap?.ok && snap.value) render(snap.value.state, snap.value.lastError ?? null, snap.value.restarts)
   } catch {
     /* 拿不到状态就不显示横幅，不影响使用 */
   }
   api.onEvent?.((ev: { name: string; args?: unknown[] }) => {
-    if (ev.name !== 'wechat-backend-status') return
-    const s = (ev.args?.[0] ?? {}) as { state?: string; lastError?: string | null }
-    render(s.state ?? 'down', s.lastError ?? null)
+    if (ev.name !== 'wechat-backend/status') return
+    const s = (ev.args?.[0] ?? {}) as { state?: string; lastError?: string | null; restarts?: number }
+    render(s.state ?? 'down', s.lastError ?? null, s.restarts)
   })
 })()
 function WechatApp(): React.JSX.Element {

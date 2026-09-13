@@ -35,6 +35,12 @@ const LONG_CALL_METHODS = new Set([
   'createBackup', 'createEncryptedBackup', 'restoreBackup', 'previewBackup', 'deleteBackup',
   // 解密：全量读 + 写
   'decryptAllDatabases', 'decryptAllImages', 'autoGetDbKey', 'autoGetImageKey',
+  // 媒体取数：命中不了缓存时会退化成对整个 cache/<月>/Sns 乃至 msg/attach 做
+  // 全量「读文件 + 解密 + 哈希」，实测单次 12–21 秒（getSnsImageDataUrl 那句注释
+  // 就是它）。60 秒只有约 3 倍余量，冷启动/大库上不够稳；这类方法本身有负缓存，
+  // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
+  'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
+  'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl',
   // 语音转写：whisper 本地推理
   'transcribeVoiceBatch', 'transcribeVoiceMessage',
   // 索引与离线评估
