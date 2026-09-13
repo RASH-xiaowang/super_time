@@ -17,6 +17,7 @@
     "check:whisper-paths": "node scripts/whisper-paths-check.js",
     "check:sns-video": "node scripts/sns-video-check.js",
     "check:knowledge-graph": "node scripts/knowledge-graph-smoke.js",
+    "check:backend-restart": "node scripts/backend-restart-smoke.js",
     "license-gate:smoke": "node scripts/license-gate-smoke.js",
     "rag:smoke": "node scripts/rag-smoke.js",
     "ui:smoke": "node scripts/ui-ask-smoke.js",
