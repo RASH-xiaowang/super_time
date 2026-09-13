@@ -302,28 +302,44 @@ function sibling(path: string, exts: readonly string[]): string | null {
 }
 
 /**
- * 聊天视频缓存的直接命中：`msg/video/<md5>.mp4`。
- * 朋友圈里的视频若同时存在聊天缓存（被转发过），这里能免去全树哈希。
- * （旧实现也走过这条路，但它的目录遍历只收集图片扩展名，永远匹配不到 mp4 —— 等于没生效。）
+ * 在 `<base>/msg/video` 下按候选文件名查找：先查根目录，再逐个月份子目录。
+ *
+ * 为什么必须下钻月份目录：微信把聊天视频按 `<YYYY-MM>/` 分目录存放
+ * （同 `media-video.ts` 的 findVideoArtifacts），只查 `msg/video` 根下会**全部落空**。
+ * 这处是本轮重写 sns-video.ts 时丢掉的能力：旧实现（提交 4b353fe）在 msg/video 下
+ * 递归 depth≤5 并按 basename 前缀匹配，因此 `msg/video/2025-11/<md5>_thumb.jpg`
+ * 能被找到；改成只查根目录后，朋友圈视频的聊天缓存兜底路径就成了死代码
+ * （由 tests/sns-media.spec.ts 的 thumb 兜底用例发现）。
  */
-function chatCachePath(wechatBaseDir: string, md5: string, exts: readonly string[]): string | null {
-  const dir = join(wechatBaseDir, 'msg', 'video')
-  if (!existsSync(dir)) return null
-  for (const ext of exts) {
-    const p = join(dir, md5 + ext)
-    if (existsSync(p)) return p
+function findInChatVideoCache(wechatBaseDir: string, names: readonly string[]): string | null {
+  const root = join(wechatBaseDir, 'msg', 'video')
+  if (!existsSync(root)) return null
+  const dirs = [root]
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.push(join(root, entry.name))
+    }
+  } catch { /* 枚举失败就只查根目录，不因此放弃 */ }
+  for (const dir of dirs) {
+    for (const name of names) {
+      const p = join(dir, name)
+      if (existsSync(p)) return p
+    }
   }
   return null
 }
 
-/** 聊天缓存的封面：`msg/video/<md5>_thumb.jpg`。 */
+/**
+ * 聊天视频缓存的直接命中：`msg/video/<月>/<md5>.jpg|.jpeg|.png`。
+ * 朋友圈里的视频若同时存在聊天缓存（被转发过），这里能免去全树哈希。
+ */
+function chatCachePath(wechatBaseDir: string, md5: string, exts: readonly string[]): string | null {
+  return findInChatVideoCache(wechatBaseDir, exts.map(ext => md5 + ext))
+}
+
+/** 聊天缓存的封面：`msg/video/<月>/<md5>_thumb.jpg`。 */
 function chatCacheThumb(wechatBaseDir: string, md5: string): string | null {
-  const dir = join(wechatBaseDir, 'msg', 'video')
-  for (const ext of IMAGE_EXT) {
-    const p = join(dir, md5 + '_thumb' + ext)
-    if (existsSync(p)) return p
-  }
-  return null
+  return findInChatVideoCache(wechatBaseDir, IMAGE_EXT.map(ext => md5 + '_thumb' + ext))
 }
 
 function isVideoFile(path: string): boolean {
@@ -370,7 +386,12 @@ export function resolveSnsVideoCoverDataUrl(
   if (cached) return { url: cached }
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法离线解码' }
 
-  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT)
+  // 三级兜底：内容 md5 索引 → 聊天缓存里的同名图片/视频 → 聊天缓存的 `_thumb` 封面。
+  // 最后一级不能省：只转发过、没在朋友圈播放过的视频，朋友圈缓存里没有它，
+  // 但聊天缓存会留下 <md5>_thumb.jpg，这时直接拿它当封面。
+  const found = findByContentMd5(wechatBaseDir, want)
+    ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT)
+    ?? chatCacheThumb(wechatBaseDir, want)
   if (!found) return { error: '本机缓存里没有这条视频（在微信里播放一次后即可离线观看）' }
   const imagePath = isVideoFile(found)
     ? (sibling(found, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want))

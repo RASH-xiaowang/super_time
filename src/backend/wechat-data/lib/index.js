@@ -1,7 +1,7 @@
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __knownSymbol = (name, symbol) => (symbol = Symbol[name]) ? symbol : Symbol.for("Symbol." + name);
+var __knownSymbol = (name, symbol) => (symbol = Symbol[name]) ? symbol : /* @__PURE__ */ Symbol.for("Symbol." + name);
 var __typeError = (msg) => {
   throw TypeError(msg);
 };
@@ -1316,6 +1316,8 @@ function msgTypeLabel(localType) {
       return "\u4F4D\u7F6E";
     case 49:
       return "\u5E94\u7528\u6D88\u606F";
+    // 通话：Xml 里的 <room_type> 到底是语音还是视频**未经验证**（本机 135 条全在
+    // 单聊会话，0×39 / 1×96），所以标签不再断言「语音」。
     case 50:
       return "\u901A\u8BDD";
     case 66:
@@ -2486,7 +2488,7 @@ function categoryOf(localType, username, deleteFlag) {
   if (isBuiltinAccount(username)) return "system";
   if (username.endsWith("@kefu.openim")) return "service";
   if (username.endsWith("@openim")) return "enterprise";
-  if (localType === 3) return "friend";
+  if (localType === 1) return "friend";
   return "member";
 }
 function categoryLabel(category) {
@@ -10775,22 +10777,29 @@ function sibling(path, exts) {
   }
   return null;
 }
-function chatCachePath(wechatBaseDir, md5, exts) {
-  const dir = join44(wechatBaseDir, "msg", "video");
-  if (!existsSync36(dir)) return null;
-  for (const ext of exts) {
-    const p = join44(dir, md5 + ext);
-    if (existsSync36(p)) return p;
+function findInChatVideoCache(wechatBaseDir, names) {
+  const root = join44(wechatBaseDir, "msg", "video");
+  if (!existsSync36(root)) return null;
+  const dirs = [root];
+  try {
+    for (const entry of readdirSync23(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.push(join44(root, entry.name));
+    }
+  } catch {
+  }
+  for (const dir of dirs) {
+    for (const name of names) {
+      const p = join44(dir, name);
+      if (existsSync36(p)) return p;
+    }
   }
   return null;
 }
+function chatCachePath(wechatBaseDir, md5, exts) {
+  return findInChatVideoCache(wechatBaseDir, exts.map((ext) => md5 + ext));
+}
 function chatCacheThumb(wechatBaseDir, md5) {
-  const dir = join44(wechatBaseDir, "msg", "video");
-  for (const ext of IMAGE_EXT) {
-    const p = join44(dir, md5 + "_thumb" + ext);
-    if (existsSync36(p)) return p;
-  }
-  return null;
+  return findInChatVideoCache(wechatBaseDir, IMAGE_EXT.map((ext) => md5 + "_thumb" + ext));
 }
 function isVideoFile(path) {
   const low = path.toLowerCase();
@@ -10821,7 +10830,7 @@ function resolveSnsVideoCoverDataUrl(wechatBaseDir, md5, _timelineId, _mediaId) 
   const cached = coverCache2.get(want);
   if (cached) return { url: cached };
   if (!wechatBaseDir) return { error: "\u672A\u914D\u7F6E\u5FAE\u4FE1\u539F\u59CB\u76EE\u5F55\uFF0C\u65E0\u6CD5\u79BB\u7EBF\u89E3\u7801" };
-  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT);
+  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want);
   if (!found) return { error: "\u672C\u673A\u7F13\u5B58\u91CC\u6CA1\u6709\u8FD9\u6761\u89C6\u9891\uFF08\u5728\u5FAE\u4FE1\u91CC\u64AD\u653E\u4E00\u6B21\u540E\u5373\u53EF\u79BB\u7EBF\u89C2\u770B\uFF09" };
   const imagePath = isVideoFile(found) ? sibling(found, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want) : found;
   if (!imagePath) return { error: "\u627E\u5230\u89C6\u9891\u4F46\u7F3A\u5C11\u540C\u540D\u5C01\u9762" };
@@ -13141,6 +13150,7 @@ async function runRetrievalPipeline(input) {
   }
   if (termWeights.size === 0) for (const t of plan.terms) termWeights.set(t, 1);
   const recalled = channels.reduce((a, c) => a + c.hits.length, 0);
+  void sparse;
   const fused = dedupeFused(fuseResults(channels, config.fusion.k, config.fusion.keep), config.compress.dedupThreshold);
   const softFromMs = plan.from ? (/* @__PURE__ */ new Date(plan.from + "T00:00:00")).getTime() : NaN;
   const softToMs = plan.to ? (/* @__PURE__ */ new Date(plan.to + "T23:59:59")).getTime() : NaN;
@@ -17414,6 +17424,8 @@ var WechatDataGateway = class extends (_a = TypertRemoteService, _getSessions_de
   constructor(ctx) {
     super(ctx, "wechatData");
     __runInitializers(_init, 5, this);
+    this._ctx = void 0;
+    this._dirs = void 0;
     /**
      * 登录账号 wxid 的**带失效**缓存。
      *
