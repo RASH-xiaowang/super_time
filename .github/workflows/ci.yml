@@ -1,0 +1,75 @@
+name: CI
+
+# 上线门禁的最小闭环：类型除外（H11 未完成），这里覆盖测试、构建一致性与各条 smoke。
+# 之所以跑 windows-latest：依赖里有 win32 原生二进制（koffi-win32-x64、wx_silk.exe、
+# whisper bin），Linux/ubuntu runner 上装不起来，也无法验证真正的运行路径。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CI 里没有任何一步会启动 Electron（只有 vite 构建与 Node 脚本），
+  # 跳过 electron 的二进制下载可省掉 ~100MB 与数十秒。
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装依赖
+        run: npm ci
+
+      # ── 构建一致性：运行时只加载 lib/index.js 这一份产物，
+      #    改了 src/**/*.ts 忘记重建就会静默跑旧代码（wechat-host.js 直接 import 它）。
+      #    门禁 = 重建后产物必须与提交的逐字节一致。
+      - name: 后端 bundle 与源码一致
+        run: |
+          node scripts/build-wechat-bundle.js
+          git diff --exit-code -- src/backend/wechat-data/lib/index.js
+        shell: pwsh
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 前端构建
+        run: npm run build:ui
+
+      - name: 前端 shim 与源码一致
+        run: npm run check:shim
+
+      - name: 主题令牌校验（需先 build:ui）
+        run: npm run check:wx-tokens
+
+      - name: 检索层回归
+        run: npm run rag:check
+
+      - name: 问答界面 SSR 冒烟
+        run: npm run ui:smoke
+
+      - name: 知识图谱后端冒烟
+        run: npm run check:knowledge-graph
+
+      - name: 朋友圈视频密钥流校验
+        run: npm run check:sns-video
+
+      - name: whisper 路径不变量
+        run: npm run check:whisper-paths
+
+      - name: 许可签发链路
+        run: npm run license-smoke
+
+      - name: 许可门禁（无证/过期/伪造一律拒绝）
+        run: npm run license-gate:smoke
