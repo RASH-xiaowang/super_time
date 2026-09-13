@@ -502,6 +502,48 @@ export function decodeEmoticonDataUrl(
   return { error: '表情文件无法解码为浏览器可渲染格式' }
 }
 
+/**
+ * 远端取一张自定义表情并落进 decoded 缓存（本地缓存解不开时的兜底）。
+ *
+ * 为什么需要：微信把表情图放在 `business/emoticon/*` 与 `cache/<月>/Emoticon/*`，
+ * 那些文件是**加密**的（16 字节对齐；单字节 XOR、配置里的 image_aes_key、
+ * 消息里的 aeskey 都试过解不开，见 `output/probe-sticker-crypt*.mjs`）。
+ * 而消息 XML 里的 `cdnurl` 提供的是**未加密**的那一份：实测
+ * （`output/probe-sticker-cdn2.mjs`）去掉 `&amp;` 转义后 6/6 返回 200 与明文
+ * GIF/PNG/JPEG，体积与消息里的 `len` 逐字节一致。
+ *
+ * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
+ * 网络只花一次。失败一律返回 error，界面退回占位芯片。
+ * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
+ * @param decodedDir - decoded cache dir.
+ * @param md5 - sticker md5 (used as the cache file name).
+ * @returns a data URL + format, or an error message.
+ */
+export async function fetchEmoticonRemote(
+  url: string,
+  decodedDir: string,
+  md5: string,
+): Promise<{ url?: string; format?: string; error?: string }> {
+  if (!/^https?:\/\//i.test(url)) return { error: '表情链接不是 http(s)' }
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return { error: '表情下载失败 HTTP ' + String(res.status) }
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    const fmt = detectImageFormat(bytes.subarray(0, 16))
+    if (fmt === 'bin') return { error: '表情下载回来不是图片' }
+    try {
+      mkdirSync(decodedDir, { recursive: true })
+      writeFileSync(join(decodedDir, md5 + '.' + fmt), Buffer.from(bytes))
+    } catch { /* cache best-effort */ }
+    return { url: toDataUrl(fmt, bytes), format: fmt }
+  } catch (e) {
+    return { error: '表情下载失败: ' + (e as Error).message }
+  }
+}
+
 /** Prefer originals over thumbnails: 0 = .dat, 1 = _h.dat, 2 = _t.dat. */
 function scoreDatPath(p: string): number {
   if (p.endsWith('_t.dat')) return 2

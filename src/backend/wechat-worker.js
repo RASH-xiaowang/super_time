@@ -23,6 +23,10 @@
  * 本进程 → 主进程：{ id, value } / { id, error } / { type: 'event', name, args }
  */
 
+// 本进程的 stdout 继承自主进程（同一根管道）：父进程/终端先退出时日志会 EPIPE，
+// 未处理就会让整个后端进程直接退出（表现为「微信+后端进程已退出」）。
+require('./console-safe').install();
+
 const { createWechatBackend } = require('./wechat-host');
 
 let backend = null;

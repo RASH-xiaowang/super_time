@@ -88,6 +88,8 @@ function llmConfigFromEnv(overrides = {}) {
     apiKey: overrides.apiKey || file.apiKey || process.env.SUPERTIME_LLM_API_KEY || '',
     baseUrl: overrides.baseUrl || file.apiUrl || process.env.SUPERTIME_LLM_API_URL || 'https://api.openai.com/v1',
     apiPath: overrides.apiPath || file.apiPath || process.env.SUPERTIME_LLM_API_PATH || '/chat/completions',
+    embeddingModel: overrides.embeddingModel || file.embeddingModel || process.env.SUPERTIME_LLM_EMBED_MODEL || '',
+    embedPath: overrides.embedPath || file.embedPath || process.env.SUPERTIME_LLM_EMBED_PATH || '/embeddings',
     timeoutMs: Number(overrides.timeoutMs || file.timeoutMs || process.env.SUPERTIME_LLM_TIMEOUT_MS || 120_000),
   };
 }
@@ -227,6 +229,50 @@ function createLlmBridge(configOverrides = {}) {
     yield { type: 'finish', reason: 'stop' };
   }
 
+  /**
+   * 向量化（RAG 稠密检索通道）：OpenAI 兼容的 POST {baseUrl}{embedPath}。
+   *
+   * 与 chat 调用共用 llm.json 的 baseUrl/apiKey；模型取 embeddingModel，
+   * 留空则回退到 chat model（部分厂商同一模型名即可向量化）。
+   * 出网点由上层（gateway 的隐私闸门）决定是否允许 —— 本函数只负责发请求。
+   * @param {string[]} texts - 待向量化文本。
+   * @param {{model?: string}} [opts] - 覆盖模型。
+   * @returns {Promise<number[][]>} 每条文本对应的向量。
+   */
+  async function embed(texts, opts = {}) {
+    const cfg = llmConfigFromEnv(configOverrides);
+    const model = opts.model || cfg.embeddingModel || cfg.model;
+    if (!model || (!cfg.apiKey && !cfg.baseUrl)) {
+      throw new Error('未配置 embedding（请在「微信问答 → 模型配置」填写向量模型或 API Key）');
+    }
+    const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? ''));
+    if (list.length === 0) return [];
+    const url = cfg.baseUrl.replace(/\/+$/, '') + (cfg.embedPath.startsWith('/') ? cfg.embedPath : '/' + cfg.embedPath);
+    const headers = { 'content-type': 'application/json', accept: 'application/json' };
+    if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, input: list }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`embedding HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+      const payload = await res.json();
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      // 按 index 排序保证与输入顺序一致（部分厂商不保证返回顺序）。
+      const sorted = data.slice().sort((a, b) => Number(a?.index ?? 0) - Number(b?.index ?? 0));
+      return sorted.map((d) => (Array.isArray(d?.embedding) ? d.embedding : []));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     get configured() {
       const cfg = llmConfigFromEnv(configOverrides);
@@ -236,6 +282,7 @@ function createLlmBridge(configOverrides = {}) {
       return llmConfigFromEnv(configOverrides);
     },
     stream,
+    embed,
     async generate(opts) {
       return { content: await fetchCompletion(opts) };
     },
@@ -370,6 +417,10 @@ function applySqlitePageCacheLimit() {
  */
 async function createWechatBackend(options = {}) {
   const userHome = options.userDataPath || process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+  // 状态目录（config.json / llm.json）必须和主进程解析到同一个：
+  // 都以 userData 为根。不显式配置的话本进程会落到默认 ~/.dsh，
+  // 于是主进程写一份、后端读另一份，改了配置像没生效。
+  wechatPaths.configure({ userDataPath: userHome });
   // 数据根默认布局：<DSH_HOME>/wechat-data（即应用 userData/wechat-data）。
   if (!process.env.DSH_HOME) process.env.DSH_HOME = userHome;
 

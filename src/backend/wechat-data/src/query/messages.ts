@@ -6,9 +6,10 @@
  *
  * Sender identity mirrors st_control: `real_sender_id` is an internal rowid
  * resolved through each shard's Name2Id table (rowid -> wxid); when that is
- * empty the content `wxid_xxx:\n` prefix is used. `is_sender` is computed
- * (the raw column does not exist in wechat 4.x) by comparing the sender with
- * the logged-in account wxid.
+ * empty the content `wxid_xxx:\n` prefix is used. `is_self` is computed
+ * (the raw `is_sender` column does not exist in wechat 4.x) by comparing the
+ * sender with the logged-in account wxid; Name2Id rows whose user_name is
+ * empty are WeChat's own marker for the logged-in account.
  *
  * Pagination is keyset-based on `sort_seq` (the millisecond-level stable
  * order key), matching st_control: newer messages have a larger sort_seq, and
@@ -244,6 +245,8 @@ interface RawMsgRow {
   isSender: number
   createTime: number
   senderUsername: string
+  /** Name2Id 存在该 rowid 且 user_name 为空 —— WeChat 4.x 的「登录账号」标记。 */
+  name2IdEmptySelf?: boolean
   content: Buffer
   realSenderId?: number
   serverId?: string
@@ -385,13 +388,18 @@ function queryShardRowsWith(
   return rows.map((r) => {
     const realSenderId = Number(r[sel('real_sender_id', '0')] ?? 0)
     const rawSource = r[sel('source', 'NULL')]
+    // has + get：区分「Name2Id 没有该 rowid」与「有该 rowid 但 user_name 为空」。
+    // 空 user_name 是 WeChat 4.x 对登录账号自己的标记，不能和 miss 混为一谈。
+    const hasName = shard.name2id.has(realSenderId)
+    const nameVal = hasName ? (shard.name2id.get(realSenderId) ?? '') : undefined
     return {
       localId: Number(r[sel('local_id', '0')] ?? 0),
       sortSeq: Number(r[sel('sort_seq', 'local_id')] ?? 0),
       localType: Number(r[sel('local_type', '0')] ?? 0),
       isSender: Number(r[sel('is_sender', '0')] ?? 0),
       createTime: Number(r[sel('create_time', '0')] ?? 0),
-      senderUsername: shard.name2id.get(realSenderId) ?? '',
+      senderUsername: nameVal ?? '',
+      ...(nameVal === '' && hasName && realSenderId > 0 ? { name2IdEmptySelf: true } : {}),
       content: cellBytes(r[sel('message_content', 'NULL')]),
       realSenderId,
       ...(rawSource !== null && rawSource !== undefined ? { source: cellBytes(rawSource) } : {}),
@@ -422,13 +430,30 @@ function toWechatMessages(
     // message_resource.db 的 SenderName2Id —— 那是另一套 id 空间（实测同 id
     // 100% 指向不同的人），会给出错误的人名。
     const prefixSender = senderFromContent(content, talker)
-    const sender = r.senderUsername || prefixSender || ''
-    // is_self: exact wxid match when the account is known; otherwise the
-    // private-chat heuristic (sender is not the other party => mine).
-    const self = selfUsername && selfUsername.length > 0 ? selfUsername : ''
-    const isSelf = self.length > 0
-      ? sender === self
-      : !isGroup && sender.length > 0 && sender !== talker
+    const name2IdSender = r.senderUsername || ''
+    // 内容前缀（真实 wxid）优先于 Name2Id；Name2Id 空行是「自己」的占位。
+    const sender = prefixSender || name2IdSender
+    const self = selfUsername && selfUsername.length > 0 ? selfUsername.trim() : ''
+    // isSelf 判定（WeChat 4.x Msg_ 表没有 is_sender 列，只能推导）：
+    // 1. 已解析 sender 且已知 self → 精确比对；
+    // 2. 内容前缀未给出 sender，且 Name2Id 为空行 → 登录账号自己
+    //    （实测约 6% 消息走这条路径；原先漏判会把「我发的」全画到对方侧）；
+    // 3. 私聊且 sender === talker → 对方；
+    // 4. 私聊且 self 未知、sender 是别的 wxid → 按启发式视为自己；
+    // 5. 其余（群聊未知 sender 等）→ 对方/未知，避免把别人的气泡画成自己。
+    let isSelf = false
+    if (sender.length > 0 && self.length > 0) {
+      isSelf = sender === self
+      // 私聊对端 talker 不可能是「自己」：selfUsername 被错配成对方 wxid 时
+      // 若不拦，对方的消息会画到右侧（串成「我发的」）。
+      if (!isGroup && sender === talker) isSelf = false
+    } else if (!prefixSender && r.name2IdEmptySelf === true) {
+      isSelf = true
+    } else if (!isGroup && sender.length > 0 && sender === talker) {
+      isSelf = false
+    } else if (!isGroup && sender.length > 0 && sender !== talker && self.length === 0) {
+      isSelf = true
+    }
     const msg: WechatMessage = {
       localId: r.localId,
       ...(r.serverId ? { serverId: r.serverId } : {}),
@@ -464,10 +489,14 @@ function toWechatMessages(
     }
     // group chats: per-message member identity (incl. own messages, so the
     // UI can show the right avatar side/letter when it wants to).
-    if (isGroup && sender) {
-      msg.sender = sender
-      const name = contactNames.get(sender)
-      if (name) msg.senderName = name
+    // 自己发的（Name2Id 空行）sender 为空时，用 selfWxid 补上，避免界面落到「成员」。
+    if (isGroup) {
+      const member = sender || (isSelf && self.length > 0 ? self : '')
+      if (member) {
+        msg.sender = member
+        const name = contactNames.get(member)
+        if (name) msg.senderName = name
+      }
     }
     return msg
   })

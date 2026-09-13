@@ -40,6 +40,29 @@ function cellStr(v: unknown): string {
   return ''
 }
 
+/**
+ * 把单元格值编码进编辑记录的 JSON 快照。
+ *
+ * 为什么不能直接用 `cellStr()`：它对 **BLOB 返回空串**，而本机文本消息的
+ * `message_content` 绝大多数是 BLOB（实测 a妈 会话 153 行里 145 行是 blob）。
+ * 用空串做快照的话，「恢复原文」会把消息写成空串、原始内容**永久丢失**。
+ * 所以 BLOB 走 base64 + 标记，TEXT 仍存原字符串（旧记录也读得回来）。
+ * @param v - the raw cell value.
+ * @returns a JSON-safe snapshot value.
+ */
+function encodeOriginalCell(v: unknown): string | { b64: string } {
+  if (v instanceof Uint8Array) return { b64: Buffer.from(v).toString('base64') }
+  return cellStr(v)
+}
+
+/** 解码 {@link encodeOriginalCell} 的快照值：base64 还原成 Buffer（按 BLOB 写回），其余按字符串。 */
+function decodeOriginalCell(v: unknown): string | Buffer {
+  if (v && typeof v === 'object' && typeof (v as { b64?: unknown }).b64 === 'string') {
+    return Buffer.from((v as { b64: string }).b64, 'base64')
+  }
+  return String(v ?? '')
+}
+
 /** One edited-message record. */
 export interface EditedMessageRecord {
   sessionId: string
@@ -84,17 +107,40 @@ export function listEditedMessages(decryptedDir: string, sessionId?: string): { 
   }
 }
 
-/** Locate the shard containing a talker Msg table. */
-function findShard(decryptedDir: string, table: string): DatabaseSync | null {
+/**
+ * 找到承载这条消息的分片连接。
+ *
+ * 同一个会话的 `Msg_` 表**可能同时存在于多个分片**（本机实测「a妈」的表：
+ * message_0.db 里只有 1 行、message_1.db 里有 153 行）。旧实现取「第一个建了该表的
+ * 分片」，拿到只有 1 行的那片后 `WHERE local_id = ?` 查不到目标行 —— 于是编辑必然失败。
+ * 现在按 localId 逐片找：哪片真有这一行就用哪片；都没命中时退回「第一个有该表的分片」，
+ * 让调用方自己去报「消息不存在」。
+ * @param decryptedDir - decrypted data root.
+ * @param table - `Msg_<md5(username)>` table name.
+ * @param localId - message local id to look for (optional: pick any shard with the table).
+ * @returns an open shard connection, or null when the table is nowhere.
+ */
+function findShard(decryptedDir: string, table: string, localId?: number): DatabaseSync | null {
+  let fallback: DatabaseSync | null = null
   for (const f of messageShardFiles(decryptedDir)) {
     try {
       const db = new DatabaseSync(f)
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-      if (has) return db
-      db.close()
+      if (!has) { db.close(); continue }
+      if (localId === undefined) {
+        if (fallback) fallback.close()
+        return db
+      }
+      const hit = db.prepare('SELECT 1 FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) !== undefined
+      if (hit) {
+        if (fallback) fallback.close()
+        return db
+      }
+      if (fallback) db.close()
+      else fallback = db
     } catch { /* try next */ }
   }
-  return null
+  return fallback
 }
 
 /**
@@ -112,21 +158,24 @@ export function editChatMessage(
   newContent: string,
 ): { ok: boolean; error?: string; localId?: number } {
   const table = msgTableName(username)
-  const db = findShard(decryptedDir, table)
+  const db = findShard(decryptedDir, table, localId)
   if (!db) return { ok: false, error: '未找到消息分库' }
   try {
     const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
     const contentCol = cols.includes('message_content') ? 'message_content' : cols.includes('Content') ? 'Content' : null
     const strCol = cols.includes('str_content') ? 'str_content' : null
-    if (!contentCol) { db.close(); return { ok: false, error: '消息表缺少内容列' } }
+    // 注意：这两个早退分支**不能**自己 db.close() —— 下面 finally 还会关一次，
+    // 而 node:sqlite 对已关闭的连接再 close() 会抛 `database is not open`，
+    // 直接把真实原因顶掉（用户看到的就是这句，见报告「编辑消息副本」一节）。
+    if (!contentCol) return { ok: false, error: '消息表缺少内容列' }
     const row = db.prepare('SELECT "' + contentCol + '" AS c FROM "' + table + '" WHERE local_id = ? LIMIT 1').get(localId) as { c?: unknown } | undefined
-    if (!row) { db.close(); return { ok: false, error: '消息不存在' } }
+    if (!row) return { ok: false, error: '消息不存在' }
     // record original snapshot (first edit)
     const store = openEditStore(decryptedDir)
     const ts = Date.now()
     const existing = store.prepare('SELECT 1 FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId)
     if (!existing) {
-      const originalJson = JSON.stringify({ [contentCol]: cellStr(row.c ?? '') })
+      const originalJson = JSON.stringify({ [contentCol]: encodeOriginalCell(row.c ?? '') })
       store.prepare("INSERT INTO message_edits(account, session_id, db, table_name, local_id, first_edited_at, last_edited_at, edit_count, original_msg_json, edited_cols_json) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, '[\"" + contentCol + "\"]')").run(username, username, 'message', table, localId, ts, ts, originalJson)
     } else {
       store.prepare('UPDATE message_edits SET last_edited_at = ?, edit_count = edit_count + 1 WHERE session_id = ? AND local_id = ?').run(ts, username, localId)
@@ -161,13 +210,13 @@ export function resetEditedMessage(decryptedDir: string, username: string, local
     try { original = JSON.parse(rec.original_msg_json ?? '{}') as Record<string, unknown> } catch { /* keep empty */ }
     store.close()
     const table = rec.table_name ?? msgTableName(username)
-    const db = findShard(decryptedDir, table)
+    const db = findShard(decryptedDir, table, localId)
     if (!db) return { ok: false, error: '未找到消息分库' }
     try {
       const cols = (db.prepare('PRAGMA table_info("' + table + '")').all() as Array<{ name: string }>).map(r => r.name)
       for (const [col, val] of Object.entries(original)) {
         if (!cols.includes(col)) continue
-        db.prepare('UPDATE "' + table + '" SET "' + col + '" = ? WHERE local_id = ?').run(String(val), localId)
+        db.prepare('UPDATE "' + table + '" SET "' + col + '" = ? WHERE local_id = ?').run(decodeOriginalCell(val), localId)
       }
       // remove the edit record
       const store2 = new DatabaseSync(p)

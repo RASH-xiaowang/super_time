@@ -5,7 +5,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import type { WechatSession } from '../types.ts'
-import { contactMeta, cachedBySig, fileSigOf } from './meta.ts'
+import { contactMeta, cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
 import { msgCreateTimeByServerId } from './messages.ts'
 
 /** Read SessionTable column names (wechat 4.x may add/remove columns). */
@@ -134,9 +134,10 @@ function computeSessions(
         lastMsgSenderName: bytesToString(r[key('last_sender_display_name', "''")]).trim(),
       }
       if (username.startsWith('gh_')) {
-        const bt = bizTypes.get(username) ?? 0
-        s.bizType = bt
-        s.accountKind = bt > 0 ? 'service' : 'official'
+        const bt = bizTypes.get(username)
+        s.bizType = bt ?? 0
+        // 与通讯录（contacts.ts）共用同一判据，避免同一账号在两个面板落到不同类目。
+        s.accountKind = isServiceBizType(bt) ? 'service' : 'official'
       } else if (isKefuLike(username)) {
         s.accountKind = 'kefu'
       }
