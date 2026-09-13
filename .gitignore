@@ -5,3 +5,20 @@ ui-dist/
 .worktrees/
 .workbuddy/
 output/
+
+# License 签发材料
+vendor-keys/
+/out/
+/license.json
+activation-request*.json
+
+# 本机运行态配置：含真实 API Key / 微信库路径 / 解密密钥，绝不入库
+# （模板见 wechat/*.example.json）
+wechat/config.json
+wechat/llm.json
+
+# 构建与调试残留
+.tmp-*
+*.orig
+*.tsbuildinfo
+

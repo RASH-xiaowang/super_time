@@ -1,0 +1,9 @@
+{
+  "_comment": "模板：复制为 wechat/llm.json 后填入自己的模型与 API Key。该文件已被 .gitignore 忽略，不要提交。",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "apiKey": "",
+  "apiUrl": "https://api.deepseek.com/v1",
+  "apiPath": "/chat/completions",
+  "timeoutMs": 120000
+}
