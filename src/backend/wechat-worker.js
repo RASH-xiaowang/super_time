@@ -75,3 +75,22 @@ async function handle(msg) {
 process.parentPort?.on('message', (event) => {
   void handle(event?.data);
 });
+
+// ── 全局兜底 ─────────────────────────────────────────────────────────
+// handle() 之外的同步异常原先会直接杀进程且不给父进程任何解释（本进程此前
+// 没有任何 process 级 handler）。策略是「记下来 → 告诉父进程 → 主动退出」，
+// 而不是吞掉继续服务：抛到这里的异常已经跳过了正常的请求/响应配平，
+// 进程内部状态未必可信，带伤继续跑可能返回错数据。
+// 主动退出会让主进程的重启监管器拉一个干净进程 —— 用户看到的是「短暂卡顿后恢复」，
+// 而不是功能整体失效。
+function reportFatal(kind, err) {
+  const detail = err instanceof Error ? (err.stack || err.message) : String(err);
+  const message = `${kind}: ${detail}`;
+  console.error('[wechat-worker]', message);
+  post({ type: 'event', name: 'wechat-worker-fatal', args: [{ kind, message }] });
+  // 留一点时间把事件与日志发出去，再退出交给父进程重建。
+  setTimeout(() => process.exit(1), 50);
+}
+
+process.on('uncaughtException', (err) => reportFatal('uncaughtException', err));
+process.on('unhandledRejection', (reason) => reportFatal('unhandledRejection', reason));
