@@ -189,6 +189,9 @@ import type {
   WhisperDownloadResult,
   WhisperStatus,
 } from '@deepseek-ai/dsh-wechat-data/types'
+// 知识笔记/知识图谱类型刻意从本地 types.ts 取（node_modules 那份宿主副本已陈旧，
+// 原因见该文件顶部注释）。
+import type { KnowledgeSnapshot, NoteMutationResult, NotesSnapshot } from './types.ts'
 
 /** Remote face injected by ui-pages apply (ctx.remote.wechatData). */
 export interface WechatRemote {
@@ -226,6 +229,19 @@ export interface WechatRemote {
   getOperationLog(options?: OperationLogQuery): Promise<RemoteResult<OperationLogSnapshot>>
   clearOperationLog(): Promise<RemoteResult<OperationLogClearResult>>
   getGraph(): Promise<RemoteResult<GraphSnapshot>>
+  // ── 知识笔记 / 知识图谱 ──
+  getNotes(options?: { query?: string; limit?: number }): Promise<RemoteResult<NotesSnapshot>>
+  saveNote(options: {
+    id?: number
+    title: string
+    body?: string
+    tags?: string[] | string
+    sourceKind?: 'manual' | 'ask'
+    sourceUsername?: string
+    sourceQuestion?: string
+  }): Promise<RemoteResult<NoteMutationResult>>
+  deleteNote(options: { id: number }): Promise<RemoteResult<NoteMutationResult>>
+  getKnowledgeGraph(): Promise<RemoteResult<KnowledgeSnapshot>>
   getSearchIndexStatus(): Promise<RemoteResult<SearchIndexStatus>>
   buildSearchIndex(options?: { force?: boolean }): Promise<RemoteResult<SearchBuildResult>>
   searchMessages(options: { query: string; limit?: number; username?: string }): Promise<RemoteResult<SearchSnapshot>>
@@ -236,6 +252,8 @@ export interface WechatRemote {
     from?: string
     to?: string
     history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    /** 流式标识：带上它后端会推送 wechat-ask/delta 增量事件。 */
+    streamId?: string
   }): Promise<RemoteResult<AskResult>>
   optimizeAskQuestion(options: {
     question: string
@@ -244,6 +262,21 @@ export interface WechatRemote {
     to?: string
     history?: Array<{ role: 'user' | 'assistant'; content: string }>
   }): Promise<RemoteResult<AskOptimizeResult>>
+  // ── RAG 检索层（意图路由 / 混合召回 / 评估 / 反馈闭环 / 调参）──
+  getRetrievalStatus(): Promise<RemoteResult<RetrievalStatus>>
+  saveRetrievalConfig(options?: { patch?: unknown }): Promise<RemoteResult<{ ok: boolean; config: RetrievalConfigShape }>>
+  buildRagVectorIndex(options?: { force?: boolean }): Promise<RemoteResult<VectorBuildResult>>
+  submitAskFeedback(options: {
+    retrievalId?: string
+    rating: 'up' | 'down'
+    useful?: number[]
+    useless?: number[]
+    question?: string
+    answer?: string
+  }): Promise<RemoteResult<{ ok: boolean; adaptedWeights?: Record<string, number>; features?: string[]; message?: string }>>
+  listRetrievalFeedback(options?: { limit?: number }): Promise<RemoteResult<{ items: RetrievalFeedbackItem[]; stats: { total: number; up: number; down: number } }>>
+  resetRetrievalWeights(): Promise<RemoteResult<{ ok: boolean; weights: Record<string, number> }>>
+  evaluateRetrieval(options?: { k?: number }): Promise<RemoteResult<RetrievalEvalResult>>
   getGroupInfo(options: { username: string }): Promise<RemoteResult<GroupInfoSnapshot>>
   getGroupInsights(options: { username: string }): Promise<RemoteResult<GroupInsightsSnapshot>>
   searchMembers(options: { q: string; limit?: number; roomUsername?: string }): Promise<RemoteResult<MemberSearchSnapshot>>
@@ -256,10 +289,12 @@ export interface WechatRemote {
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getArticleCover(options: { contentUrl: string }): Promise<RemoteResult<ImageDataUrlResult>>
-  getMessageFile(options: { fileName: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  getMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<RemoteResult<ImageDataUrlResult>>
   getDbStatus(): Promise<RemoteResult<DbStatusSnapshot>>
   getDbHealth(): Promise<RemoteResult<DbHealthSnapshot>>
   getVoiceInfo(options: { username: string; localId: number }): Promise<RemoteResult<VoiceInfoResult>>
+  /** 语音消息的可播放 wav（data URL）—— 就该地播放用，见后端 resolveVoiceDataUrl。 */
+  getVoiceDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<VoicePlaybackResult>>
   getVideoInfo(options: { username: string; localId: number }): Promise<RemoteResult<VideoInfoResult>>
   exportSessionMessages(options: {
     username: string
@@ -356,6 +391,7 @@ export interface WechatRemote {
   setCdnImageLocalDecrypt(options: { localDecrypt: boolean }): Promise<RemoteResult<SimpleResult>>
   deleteFavoriteItems(options: { ids: number[] }): Promise<RemoteResult<DeleteFavoriteResult>>
   getAnnualReport(options: { year: number }): Promise<RemoteResult<AnnualReport>>
+  getAnnualReview(options: { year: number }): Promise<RemoteResult<AnnualReviewShape>>
 }
 
 /** Remote envelope (mirror of dsh-typert-protocol RemoteResult). */
@@ -363,6 +399,21 @@ export interface RemoteResult<T> {
   ok: boolean
   value?: T
   error?: { code: string; message: string }
+}
+
+/**
+ * 语音播放的响应（后端 `VoiceDataUrlResult`）。
+ *
+ * 为什么在客户端本地声明而不从 `@deepseek-ai/dsh-wechat-data/types` 导入：
+ * `node_modules` 里那份是 file: 依赖的**旧副本**（09/09，比 src 旧），没有这个成员 ——
+ * 既有的 48 条类型错误全部同源。为一个字段去改 node_modules 不划算，
+ * 这里显式声明并在注释里标出真源；等哪天重跑 `npm install` 同步副本后可以删掉它。
+ */
+export interface VoicePlaybackResult {
+  url?: string
+  /** 由 wav 头算出的时长（秒）。 */
+  durationSec?: number
+  error?: string
 }
 
 let _remote: (() => WechatRemote) | null = null
@@ -425,6 +476,34 @@ export function setDirectoryPicker(pick: () => Promise<string | null>): void {
 export async function pickDirectory(): Promise<string | null> {
   if (_pickDirectory === null) return null
   return _pickDirectory()
+}
+
+/** 面板截图导出的结果。 */
+export interface CaptureResult {
+  ok: boolean
+  /** 用户在保存对话框里取消了。 */
+  canceled?: boolean
+  /** 落盘路径（成功时）。 */
+  path?: string
+  bytes?: number
+  width?: number
+  height?: number
+  message?: string
+}
+
+/**
+ * 把界面上的一个矩形区域导出成 PNG（主进程 capturePage + 保存对话框）。
+ * 坐标用 `element.getBoundingClientRect()` 直接传即可（同为视口 CSS 像素）。
+ * @param rect - { x, y, width, height, filename? }。
+ * @returns 导出结果（取消时 canceled=true）。
+ */
+export async function apiCapturePanel(rect: {
+  x: number; y: number; width: number; height: number; filename?: string
+}): Promise<CaptureResult> {
+  const api = (window as unknown as { electronAPI?: { capturePanel?: (r: unknown) => Promise<CaptureResult> } }).electronAPI
+  if (!api?.capturePanel) return { ok: false, message: '当前环境不支持截图导出' }
+  const r = await api.capturePanel(rect)
+  return r ?? { ok: false, message: '截图导出无返回' }
 }
 
 function unwrap<T>(r: RemoteResult<T>): T {
@@ -860,6 +939,68 @@ export async function apiClearOperationLog(): Promise<OperationLogClearResult> {
  * @returns GraphSnapshot.
  */
 export async function apiGetGraph(): Promise<GraphSnapshot> { return cachedGet('graph:x', async () => unwrap(await remote().getGraph())) }
+
+/**
+ * Knowledge graph (note nodes + `[[wiki]]` edges + unresolved stubs).
+ * Fused with the social snapshot client-side via each note's `sourceUsername`.
+ * @returns KnowledgeSnapshot.
+ */
+export async function apiGetKnowledgeGraph(): Promise<KnowledgeSnapshot> {
+  return cachedGet('kb:graph', async () => unwrap(await remote().getKnowledgeGraph()))
+}
+
+/**
+ * List knowledge notes.
+ *
+ * 刻意**不走缓存**：笔记是本地 sqlite 的直读，代价可忽略，而搜索框每敲一个字都
+ * 需要最新结果 —— 挂上 30s 快照缓存只会让用户看到过期列表。
+ * @param options - Optional search query and row cap.
+ * @returns NotesSnapshot.
+ */
+export async function apiGetNotes(options?: { query?: string; limit?: number }): Promise<NotesSnapshot> {
+  return unwrap(await remote().getNotes(options))
+}
+
+/**
+ * Create or update one note. Invalidates the knowledge caches so the graph
+ * panel reflects the change without waiting out the snapshot TTL.
+ * @param input - Note fields; omit `id` to create.
+ * @returns NoteMutationResult.
+ */
+export async function apiSaveNote(input: {
+  id?: number
+  title: string
+  body?: string
+  tags?: string[] | string
+  sourceKind?: 'manual' | 'ask'
+  sourceUsername?: string
+  sourceQuestion?: string
+}): Promise<NoteMutationResult> {
+  const result = unwrap(await remote().saveNote(input))
+  invalidateKnowledgeCaches()
+  return result
+}
+
+/** Delete one note (links pointing at it become stubs). */
+export async function apiDeleteNote(id: number): Promise<NoteMutationResult> {
+  const result = unwrap(await remote().deleteNote({ id }))
+  invalidateKnowledgeCaches()
+  return result
+}
+
+/**
+ * Drop every cache layer that can hold knowledge data.
+ *
+ * 笔记的写入**不会**触发 'dsh-wechat-data-updated'（那不是解密数据变更），所以这里
+ * 必须自己失效：内存快照层（cachedGet 用的 _snapshotCache）与 localStorage 渲染层
+ * （readRenderCache 的 'kb-' 前缀）是两套互不相通的缓存，只清一层会出现
+ * 「图谱刷新了但列表还是旧的」这类半刷新状态。
+ */
+function invalidateKnowledgeCaches(): void {
+  invalidateSnapshotCache()
+  invalidateWechatCache('kb-')
+}
+
 /**
  * Fetch search index build status.
  * @returns SearchIndexStatus.
@@ -981,7 +1122,7 @@ export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<
  * @param options - emoticon md5 from message XML.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetEmoticonDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
+export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
   return cachedGet('emoticon:' + options.md5, async () => unwrap(await remote().getEmoticonDataUrl(options)))
 }
 /**
@@ -993,6 +1134,10 @@ export async function apiGetSnsVideoCoverDataUrl(options: {
   md5?: string
   timelineId?: string
   mediaId?: string
+  /** XML 里的 `<thumb>`：本机没缓存时按需从 CDN 取回（后端会解密）。 */
+  thumb?: string
+  /** XML 里的 `<enc key>`：CDN 加密流的解密种子。 */
+  key?: string
 }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getSnsVideoCoverDataUrl(options))
 }
@@ -1001,8 +1146,28 @@ export async function apiGetSnsVideoCoverDataUrl(options: {
  * @param options - media md5 / timeline id / media id.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<ImageDataUrlResult> {
+export async function apiGetSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getSnsVideoDataUrl(options))
+}
+
+/**
+ * 把一条朋友圈视频写到用户选定路径（本机缓存优先，否则 CDN 取回+解密，都在后端完成）。
+ * @param options - 缓存键 / 远端地址与 `<enc key>` / 目标路径。
+ * @returns ok + 字节数，或错误说明。
+ */
+export async function apiExportSnsVideo(options: {
+  md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
+}): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
+  return unwrap(await remote().exportSnsVideo(options))
+}
+
+/** 弹出保存对话框并返回选定路径（写盘由后端做）。 */
+export async function apiSaveFileDialog(opts: {
+  defaultName?: string; title?: string; filters?: Array<{ name: string; extensions: string[] }>
+}): Promise<{ canceled: boolean; path: string | null }> {
+  const api = (window as unknown as { electronAPI?: { saveFileDialog?: (o: unknown) => Promise<{ canceled: boolean; path: string | null }> } }).electronAPI
+  if (!api?.saveFileDialog) return { canceled: true, path: null }
+  return api.saveFileDialog(opts)
 }
 /**
  * Resolve a 公众号 article cover (og:image) to a data URL.
@@ -1014,10 +1179,14 @@ export async function apiGetArticleCover(options: { contentUrl: string }): Promi
 }
 /**
  * Resolve a received message file (msg/file) to a data URL.
- * @param options - original file name.
+ *
+ * `size` / `createTime` 来自消息本体（appmsg `<totallen>` 与 create_time）：
+ * `msg/file` 只按月份分目录、同名文件可能属于别的会话，带上这两条线索
+ * 才能在候选里挑出属于这条消息的那一份。
+ * @param options - original file name plus attribution hints from the message.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetMessageFile(options: { fileName: string }): Promise<ImageDataUrlResult> {
+export async function apiGetMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getMessageFile(options))
 }
 
@@ -1045,6 +1214,14 @@ export async function apiGetDbHealth(): Promise<DbHealthSnapshot> {
  */
 export async function apiGetVoiceInfo(options: { username: string; localId: number }): Promise<VoiceInfoResult> {
   return unwrap(await remote().getVoiceInfo(options))
+}
+/**
+ * Fetch a voice message as an inline-playable wav data URL.
+ * @param options - Query options: username and message localId.
+ * @returns VoicePlaybackResult.
+ */
+export async function apiGetVoiceDataUrl(options: { username: string; localId: number }): Promise<VoicePlaybackResult> {
+  return unwrap(await remote().getVoiceDataUrl(options))
 }
 /**
  * Fetch video message info.
@@ -1396,12 +1573,16 @@ export interface WechatLlmConfig {
   apiUrl: string
   apiPath: string
   timeoutMs: number
+  /** RAG 稠密检索用的向量模型；留空则回退到 chat model。 */
+  embeddingModel?: string
+  /** 向量化接口路径（默认 /embeddings）。 */
+  embedPath?: string
 }
 
 /** 读取微信问答模型配置。 */
 export async function apiGetLlmConfig(): Promise<WechatLlmConfig> {
   const api = (window as any)?.electronAPI?.wechat
-  if (!api?.getLlmConfig) return { provider: 'openai-compat', model: '', apiKey: '', apiUrl: 'https://api.openai.com/v1', apiPath: '/chat/completions', timeoutMs: 120000 }
+  if (!api?.getLlmConfig) return { provider: 'openai-compat', model: '', apiKey: '', apiUrl: 'https://api.openai.com/v1', apiPath: '/chat/completions', embedPath: '/embeddings', timeoutMs: 120000 }
   const res = await api.getLlmConfig()
   if (!res?.ok) throw new Error(res?.error?.message || '读取模型配置失败')
   return res.value
@@ -1440,6 +1621,109 @@ export async function apiFetchLlmModels(options: { apiUrl: string; apiKey: strin
     note: typeof res.value?.note === 'string' ? res.value.note : undefined,
   }
 }
+// ─────────────────────────────────────────────────────────────
+// RAG 检索层：状态 / 调参 / 向量索引 / 评估 / 反馈闭环
+// ─────────────────────────────────────────────────────────────
+
+/** 检索配置（与后端 RetrievalConfig 对齐；只声明前端面板用到的字段）。 */
+export interface RetrievalConfigShape {
+  enabled: boolean
+  embedding: { enabled: boolean; model: string; batchSize: number; maxDocsPerBuild: number; maxCharsPerDoc: number }
+  channels: {
+    sparse: { enabled: boolean; topK: number }
+    dense: { enabled: boolean; topK: number; minSimilarity: number; candidatePool: number }
+    structured: { enabled: boolean; topK: number }
+  }
+  fusion: { k: number; keep: number }
+  rerank: { weights: Record<string, number>; minScore: number }
+  compress: { maxChars: number; maxChunks: number; linesPerChunk: number; dedupThreshold: number }
+  intent: { llmAssist: boolean }
+  feedback: { enabled: boolean; learningRate: number; maxRecords: number }
+}
+
+/** 检索层综合状态。 */
+export interface RetrievalStatus {
+  enabled: boolean
+  config: RetrievalConfigShape
+  vector: { rows: number; dim: number; model: string }
+  feedback: { total: number; up: number; down: number }
+  weights: Record<string, number>
+  intentAccuracy: { correct: number; total: number; accuracy: number }
+}
+
+/** 向量索引构建结果。 */
+export interface VectorBuildResult {
+  ok: boolean
+  status: string
+  rows: number
+  embedded: number
+  elapsed_ms: number
+  message?: string
+}
+
+/** 一条历史反馈。 */
+export interface RetrievalFeedbackItem {
+  id: string
+  question: string
+  answer: string
+  rating: 'up' | 'down'
+  citedUseful: number[]
+  citedUseless: number[]
+  intent: string
+  features: string[]
+  createdAt: number
+}
+
+/** 评估报告（合成评测集 + 混合/稀疏消融）。 */
+export interface RetrievalEvalResult {
+  report: string
+  hybrid: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
+  sparseOnly: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
+  intentAccuracy: { correct: number; total: number; accuracy: number }
+}
+
+/** 读取检索层状态（配置 + 向量库 + 反馈 + 权重 + 意图自评）。 */
+export async function apiGetRetrievalStatus(): Promise<RetrievalStatus> {
+  return unwrap(await remote().getRetrievalStatus())
+}
+
+/** 保存检索配置（只传要改的字段）。 */
+export async function apiSaveRetrievalConfig(patch: unknown): Promise<void> {
+  unwrap(await remote().saveRetrievalConfig({ patch }))
+}
+
+/** 立即构建/重建稠密向量索引。 */
+export async function apiBuildRagVectorIndex(force = false): Promise<VectorBuildResult> {
+  return unwrap(await remote().buildRagVectorIndex({ force }))
+}
+
+/** 提交问答反馈（赞/踩 + 有用/无用引用），后端据此微调检索权重。 */
+export async function apiSubmitAskFeedback(options: {
+  retrievalId?: string
+  rating: 'up' | 'down'
+  useful?: number[]
+  useless?: number[]
+  question?: string
+  answer?: string
+}): Promise<{ ok: boolean; adaptedWeights?: Record<string, number>; features?: string[]; message?: string }> {
+  return unwrap(await remote().submitAskFeedback(options))
+}
+
+/** 历史反馈列表。 */
+export async function apiListRetrievalFeedback(limit = 50): Promise<{ items: RetrievalFeedbackItem[]; stats: { total: number; up: number; down: number } }> {
+  return unwrap(await remote().listRetrievalFeedback({ limit }))
+}
+
+/** 丢弃反馈带来的权重偏移，回默认值。 */
+export async function apiResetRetrievalWeights(): Promise<{ ok: boolean; weights: Record<string, number> }> {
+  return unwrap(await remote().resetRetrievalWeights())
+}
+
+/** 跑离线召回评估（合成评测集），返回混合 vs 纯稀疏的对比。 */
+export async function apiEvaluateRetrieval(k = 10): Promise<RetrievalEvalResult> {
+  return unwrap(await remote().evaluateRetrieval({ k }))
+}
+
 export async function apiSaveWechatConfig(options: { patch: WechatConfigPatch }): Promise<SimpleResult> {
   return unwrap(await remote().saveWechatConfig(options))
 }
@@ -1602,6 +1886,99 @@ export async function apiDeleteFavoriteItems(options: { ids: number[] }): Promis
  */
 export async function apiGetAnnualReport(options: { year: number }): Promise<AnnualReport> {
   return unwrap(await remote().getAnnualReport(options))
+}
+
+// ─────────────────────────────────────────────────────────────
+// 年度回顾（看板）：15 张卡片所需的完整年度聚合
+// 形状与后端 query/annual-review.ts 的 AnnualReview 对齐。
+// 前端在此独立声明（不依赖 lib/types 里那份上游生成的 .d.ts，它没有这个名字）。
+// ─────────────────────────────────────────────────────────────
+
+/** 榜单条目。 */
+export interface AnnualRankRow { username: string; name: string; total: number; mine: number; theirs: number }
+/** 最疯的一天。 */
+export interface AnnualBusiestDay {
+  date: string; n: number; ratio: number; share: number
+  topName: string; topCount: number; firstAt: string; firstText: string; lastAt: string; lastText: string; spanMin: number
+}
+/** 年度搭子。 */
+export interface AnnualBuddy {
+  username: string; name: string; total: number; mine: number; theirs: number
+  streakDays: number; commonHour: number; replyBacks: number; fastestSec: number; slowestSec: number
+}
+/** 十二个月的主演。 */
+export interface AnnualMonthlyStar { month: number; username: string; name: string; count: number }
+/** 深夜卡。 */
+export interface AnnualNight {
+  share: number; mine: number; theirs: number; topName: string; topCount: number; sampleAt: string; sampleText: string
+}
+/** 作息切片。 */
+export interface AnnualRhythm {
+  heat: number[]; brightestDow: number; brightestHour: number; brightestCount: number
+  quietestHour: number; quietestCount: number; nightShare: number; workWeekendRatio: number
+}
+/** 你说的话。 */
+export interface AnnualWords {
+  mineChars: number; receivedChars: number; keystrokes: number
+  voiceSentCount: number; voiceSentSec: number; voiceRecvCount: number; voiceRecvSec: number
+  callSec: number; callCount: number; callConnected: number; callMissed: number
+  videoSent: number; voiceMsgSent: number; longestVoiceSec: number; longestVoiceFrom: string
+}
+/** 年度口头禅。 */
+export interface AnnualCatchphrase {
+  phrase: string; count: number; top: Array<{ phrase: string; count: number }>; shortTotal: number; catchTotal: number
+}
+/** 回复速度。 */
+export interface AnnualReply {
+  medianSec: number; p90Sec: number
+  avgPartnerName: string; avgPartnerSec: number
+  fastestName: string; fastestSec: number; slowestName: string; slowestSec: number
+}
+/** 谁先开口。 */
+export interface AnnualOpener {
+  mine: number; theirs: number; share: number
+  mostInitiatedByMe: Array<{ name: string; count: number }>
+  mostInitiatedByThem: Array<{ name: string; count: number }>
+}
+/** 表情宇宙。 */
+export interface AnnualEmoji {
+  threw: number; kept: number; perDay: number; days: number
+  peakDow: number; peakHour: number; peakCount: number
+  top: Array<{ emoji: string; count: number }>
+}
+/** 「还有这些人」。 */
+export interface AnnualHighlight { label: string; name: string; value: string }
+
+/** 年度回顾完整结果。 */
+export interface AnnualReviewShape {
+  year: number
+  sent: number; sentTo: number; sentDailyAvg: number; activeDaysMine: number
+  longestStreak: number; newFriends: number; mediaSent: number
+  longestSpanFrom: string; longestSpanTo: string
+  calendar: Array<{ d: string; n: number }>; activeDaysAll: number; maxDayAll: number
+  busiest: AnnualBusiestDay | null
+  buddy: AnnualBuddy | null
+  monthlyStar: AnnualMonthlyStar[]
+  starName: string; starMonths: number; hottestMonth: number; hottestMonthCount: number
+  night: AnnualNight
+  rhythm: AnnualRhythm
+  words: AnnualWords
+  catchphrase: AnnualCatchphrase
+  reply: AnnualReply
+  opener: AnnualOpener
+  ranking: AnnualRankRow[]
+  emoji: AnnualEmoji
+  highlights: AnnualHighlight[]
+  firstAt: string; firstText: string; lastAt: string; lastText: string
+}
+
+/**
+ * 取某年的完整年度回顾（首次扫描较慢：要逐条读该年消息以计算序列类指标）。
+ * @param year - 自然年。
+ * @returns 年度回顾看板数据。
+ */
+export async function apiGetAnnualReview(year: number): Promise<AnnualReviewShape> {
+  return unwrap(await remote().getAnnualReview({ year }))
 }
 
 // ── Remote gateway readiness status ──

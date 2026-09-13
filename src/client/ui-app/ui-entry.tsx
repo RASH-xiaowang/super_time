@@ -5,12 +5,17 @@
  * Electron 渲染进程；Remote 通过 preload 暴露的 window.electronAPI.wechat
  * 转发到主进程后端（wechat:call）。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './titlebar.css'
 import { setDirectoryPicker, setWechatRemote } from '../ui-wechat/src/client/pages/wechat-data/api.ts'
 import { WechatDataPanel } from '../ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx'
 import { getOpen, openWechat, subscribeOpen } from '../ui-wechat/src/client/wechat-state.ts'
+import { OnboardingShell } from './onboarding/OnboardingShell.tsx'
+import { loadOnboardingState, resetOnboarding } from './onboarding/store.ts'
+import { LicenseGate } from './license/LicenseGate.tsx'
+import { isLicenseUsable } from './license/LicenseAuthPanel.tsx'
+import type { LicenseStatus } from './license/LicenseGate.tsx'
 
 /** 前端 Remote：一个 Proxy，把 api.ts 中的每个方法调用转成 Electron IPC。 */
 const remoteProxy = new Proxy({} as Record<string, (...args: unknown[]) => unknown>, {
@@ -40,22 +45,106 @@ setDirectoryPicker(async () => {
   }
 })
 
-/** 自绘标题栏：拖拽区域 + 最小化/关闭（固定窗口尺寸）。 */
+/** 自绘标题栏：拖拽区域 + 最小化/全屏/关闭。 */
 function initTitlebar(): void {
   const api = (window as any).electronAPI?.windowControls
   if (!api) return
   const byId = (id: string) => document.getElementById(id)
   byId('tb-min')?.addEventListener('click', () => api.minimize())
   byId('tb-close')?.addEventListener('click', () => api.close())
+
+  // 全屏按钮：图标与提示随状态切换（两种图标都在 DOM 里，用 data-on 切）
+  const fullBtn = byId('tb-full')
+  const syncFull = (on: boolean): void => {
+    if (!fullBtn) return
+    if (on) fullBtn.setAttribute('data-on', '')
+    else fullBtn.removeAttribute('data-on')
+    fullBtn.setAttribute('title', on ? '退出全屏' : '全屏')
+  }
+  fullBtn?.addEventListener('click', () => api.toggleFullscreen())
+  Promise.resolve(api.isFullscreen?.()).then(syncFull).catch(() => { /* 拿不到就当未全屏 */ })
+  api.onFullscreenChange?.(syncFull)
 }
 initTitlebar()
 
+/**
+ * 验收测试模式的醒目横幅。
+ *
+ * 验收脚本用本地 mock LLM 替换真模型，回答是固定文本（内容与真实数据无关）。
+ * 这曾两次被误认成「应用在编造答案」，所以在窗口顶部挂一条红条，一眼可辨。
+ */
+void (async (): Promise<void> => {
+  try {
+    const api = (window as any).electronAPI
+    const isTest = await api?.isTestMode?.()
+    if (!isTest) return
+    if (document.getElementById('test-mode-banner')) return
+    const bar = document.createElement('div')
+    bar.id = 'test-mode-banner'
+    bar.textContent = '⚠ 验收测试模式：本窗口的回答来自本地 mock 模型，不是真实数据'
+    bar.setAttribute(
+      'style',
+      'flex:0 0 auto;padding:6px 12px;background:#b91c1c;color:#fff;'
+        + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+        + 'text-align:center;letter-spacing:.02em',
+    )
+    document.body.insertBefore(bar, document.getElementById('root'))
+  } catch {
+    /* 横幅失败不影响使用 */
+  }
+})()
 function WechatApp(): React.JSX.Element {
   const [open, setOpen] = useState(getOpen())
+  // 启动页：首次必须浏览完；再次启动可跳过
+  const [onboardingDone, setOnboardingDone] = useState(() => loadOnboardingState().completed)
+  /** 每次启动检测 License；无效/过期时即使 onboarding 已完成也回到启动页授权 */
+  const [lic, setLic] = useState<LicenseStatus | null>(null)
+  const [licReady, setLicReady] = useState(false)
+
+  useEffect(() => {
+    const api = (window as any).electronAPI?.license
+    if (!api?.status) {
+      setLicReady(true)
+      return
+    }
+    void api.status()
+      .then((s: LicenseStatus) => { setLic(s); setLicReady(true) })
+      .catch(() => { setLicReady(true) })
+  }, [])
+
   useEffect(() => subscribeOpen(() => setOpen(getOpen())), [])
   useEffect(() => {
-    if (!getOpen()) openWechat()
+    if (onboardingDone && licReady && isLicenseUsable(lic) && !getOpen()) openWechat()
+  }, [onboardingDone, licReady, lic])
+  const handleOnboardingComplete = useCallback(() => {
+    setOnboardingDone(true)
+    openWechat()
   }, [])
+  // 主界面「数据配置 → 高级设置 → 重新查看启动页」
+  useEffect(() => {
+    const onShow = (): void => {
+      resetOnboarding()
+      setOnboardingDone(false)
+    }
+    window.addEventListener('super-time:show-onboarding', onShow)
+    return () => window.removeEventListener('super-time:show-onboarding', onShow)
+  }, [])
+
+  if (!licReady) {
+    return (
+      <div style={{
+        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#050a18', color: '#00f0ff', fontFamily: 'sans-serif', fontSize: 13,
+      }}>
+        正在校验授权…
+      </div>
+    )
+  }
+
+  // 未完成启动引导，或授权不可用 → 启动页（4 个介绍页之后才是 License 验证，它同时也是进入系统的闸门）
+  if (!onboardingDone || !isLicenseUsable(lic)) {
+    return <OnboardingShell onComplete={handleOnboardingComplete} />
+  }
   if (!open) {
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', justifyContent: 'center', background: '#050a18', color: '#e2e8f0', fontFamily: 'sans-serif' }}>
@@ -68,7 +157,11 @@ function WechatApp(): React.JSX.Element {
       </div>
     )
   }
-  return <WechatDataPanel />
+  return (
+    <LicenseGate>
+      <WechatDataPanel />
+    </LicenseGate>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(<WechatApp />)

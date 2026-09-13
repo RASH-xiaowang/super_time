@@ -78,6 +78,19 @@
   --nm-t-fast:        0.15s var(--nm-ease);
   --nm-t-normal:      0.25s var(--nm-ease);
   --nm-t-slow:        0.45s var(--nm-ease);
+
+  /*
+   * 交互动效的标准属性集 —— 替代 `transition: all`。
+   *
+   * 面板里此前有 24 处 `transition: all 0.15s ease`。`all` 会把**布局属性**
+   * 一并加进动画（宽高/内边距/字体），主题切换时每个元素都在重算并触发重排；
+   * 而且它让「改一个属性」这件事失去约束 —— 谁也不知道哪次改动会被动画放大。
+   * 这里只列交互动效真正需要的六项（颜色/边框/阴影/透明度/位移），
+   * 放在 :root 上是因为部分规则作用于 createPortal 出去的浮层，取不到 .panel 上的值。
+   */
+  --nm-t-ui:          background-color 0.15s var(--nm-ease), border-color 0.15s var(--nm-ease),
+                      color 0.15s var(--nm-ease), box-shadow 0.15s var(--nm-ease),
+                      opacity 0.15s var(--nm-ease), transform 0.15s var(--nm-ease);
 }
 
 /* ────────────────────────────────────────────
@@ -133,6 +146,26 @@ body {
 ::selection {
   background: var(--nm-cyan-20);
   color: var(--nm-text-1);
+}
+
+/* ────────────────────────────────────────────
+ * 4b. 表单控件字体继承
+ *
+ * 浏览器 UA 样式表给 button/input/select/textarea 设了 `font: 400 13.3333px Arial`，
+ * 而 `font-family` 虽然是继承属性，UA 的显式声明会**覆盖继承**。于是面板里
+ * div 用 Inter、同一行的 button/input 用 Arial —— 实测确认（会话列表整列、
+ * 抽屉的关闭/查看更多按钮、群成员搜索框、头部工具按钮全是 Arial）。
+ *
+ * 只补 font-family / font-size，**不用 `font: inherit` 简写**：简写会连
+ * line-height / font-weight 一起继承，`.memberMore`（padding 6px 0，无固定高）
+ * 这类靠 line-height 撑高的元素会凭空长高，属于顺手制造的回归。
+ * ──────────────────────────────────────────── */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
 }
 
 /* ────────────────────────────────────────────

@@ -12,10 +12,15 @@ import kitCss from '../ui/kit.module.css'
 
 /**
  * Render the privacy-scan panel.
- * @param props - optional callback to jump into a conversation.
+ * @param props - `onOpenChat` 跳到某条命中所属的会话；
+ *   `embedded`：作为「微信数据配置」弹窗里的一节渲染，整页交给弹窗右区滚动
+ *   （本页内层的 .scroll 不再自建滚动区）。
  * @returns the privacy element tree.
  */
-export function PrivacyPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void }): React.JSX.Element {
+export function PrivacyPanel({ onOpenChat, embedded = false }: {
+  onOpenChat?: (username: string, localId?: number) => void
+  embedded?: boolean
+}): React.JSX.Element {
   const [data, setData] = useState<PrivacySnapshot | null>(() => readRenderCache<PrivacySnapshot>('privacy-scan'))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,7 +81,7 @@ export function PrivacyPanel({ onOpenChat }: { onOpenChat?: (username: string, l
   const totalHits = data?.total_hits ?? 0
 
   return (
-    <div className={css.panel}>
+    <div className={embedded ? css.panelEmbedded : css.panel}>
       <PanelHeader
         title="隐私体检"
         desc={data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : '扫描手机号 / 身份证 / 银行卡 / 邮箱 / 密码 / 地址等敏感信息'}

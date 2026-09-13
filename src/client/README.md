@@ -9,16 +9,15 @@
 | 类别 | 来源 | 本目录 |
 |---|---|---|
 | 前端源码（TSX/CSS Modules/地图数据等，88 个文件） | `packages/client/ui-wechat/src/**` | `src/client/ui-wechat/src/**` |
-| 前端构建产物与类型 | `packages/client/ui-wechat/lib/**` | `src/client/ui-wechat/lib/**` |
-| UI 原语（Button/Input/Pill/StateDot/图标等） | `packages/client/ui-primitives` | `src/client/ui-primitives/` |
+| UI 原语（Button/Input/Pill/StateDot/图标等，仅保留实际用到的子集） | `packages/client/ui-primitives` | `src/client/ui-primitives-shim/` |
 | 构建入口（Electron 挂载壳） | 新增 | `src/client/ui-app/ui-entry.tsx` |
 | 构建模板 | 新增 | `src/client/ui-app/index.html` |
 | Vite 构建配置 | 新增 | `vite.config.js` |
 | 构建产物（提交，供 Electron 运行） | 由 `npm run build:ui` 生成 | `src/client/ui-dist/` |
 
-## 功能界面（17 个侧栏入口 / 34 个路由页签，114 个 Remote 方法）
+## 功能界面（12 个侧栏入口 / 34 个路由页签，114 个 Remote 方法）
 
-侧栏只列 17 项（含固定在底部的「数据配置」）；被合并的视图仍可路由（深链、跨面板跳转都有效），
+侧栏只列 12 项（含固定在底部的「设置」）；被合并的视图仍可路由（深链、跨面板跳转都有效），
 只是改为在宿主面板顶部用分段切换进入（见 `panels/MergedSections.tsx`）：
 
 | 侧栏项 | 合并的视图 |
@@ -30,12 +29,17 @@
 | 收藏与表情 | 我的收藏 / 表情包 / 收藏·表情统计 |
 | 文件与存储 | 文件资产 / 媒体资产 / 存储分析 / 公众号文章 |
 | 资金往来 | 月度汇总 / 转账红包明细 |
-| 隐私与信任 | 数据边界与出网 / 隐私体检 |
-| 数据健康 | 数据库健康 / 原图链路自检 / 操作日志 |
+
+2026-09 的重构：把「配置」「授权」「维护与自检」这三类从侧栏收进「设置」弹窗
+（`panels/Settings.tsx`，左导航 14 节分四组：配置向导 / 智能与隐私 / 授权与维护 / 高级）。
+迁进去的有 AI 大模型、数据边界与出网、隐私体检、软件授权、备份恢复、数据库健康、
+原图链路自检、操作日志。`#privacytrust` / `#privacy` / `#health` / `#hook` / `#oplog` /
+`#backup` 深链与各面板里的跳转仍可用：`WechatDataPanel.tsx` 的 `DIALOG_SECTION_OF` 会把
+它们改道成「开弹窗并落到对应节」，弹窗内的跳转则由 `Settings.tsx` 的 `innerNavigate`
+就地切节（弹窗装不下的「文件资产 / 存储分析」才交回宿主关弹窗再切）。
 
 侧栏项：数据总览、微信问答、总结、聊天会话、群聊分析、通话记录、通讯录、朋友圈、
-收藏与表情、文件与存储、资金往来、朋友圈洞察、待办日程、隐私与信任、备份恢复、
-数据配置、数据健康。
+收藏与表情、文件与存储、资金往来、朋友圈洞察、待办日程、设置。
 
 **状态管理与路由**：沿用上游 `wechat-state.ts`（打开/关闭状态）、
 `WechatDataPanel.tsx` 的页签状态 + `location.hash` 深度链接、`api.ts` 的

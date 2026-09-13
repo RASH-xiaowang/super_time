@@ -591,3 +591,36 @@
   font-size: 13px;
 }
 .placeholder p { margin: 0; }
+
+/* ── 「数据配置」弹窗 ── */
+/* kit 的 .dialog 是 520px 的确认框尺寸，装不下完整设置页。类名写两遍提高优先级：
+   同优先级的单类选择器谁在 CSS 里靠后谁赢，而跨模块文件的顺序不可控。 */
+.settingsDialog.settingsDialog {
+  width: min(1080px, 96vw);
+  /* 左导航有 14 节（2026-09 迁入隐私/备份/自检后）：940px 高时导航条会溢出 88px，
+     最后一节「高级设置」得滚动才看得见 —— 放高到 1060px 让默认窗口一次排下。 */
+  height: min(90vh, 1060px);
+  max-height: 90vh;
+  padding: 0;
+  overflow: hidden;
+}
+.settingsDialogTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.settingsDialogDesc {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--nm-text-2);
+}
+/* 让面板拿到确定高度：唯一的滚动容器应当是面板内部的 .mainScroll。
+   不这么做的话 .dialogBd 自己也会滚，出现「双滚动条」，而且面板顶部的
+   五步状态速览会跟着一起被滚走。 */
+.settingsDialogBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

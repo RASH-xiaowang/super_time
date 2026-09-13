@@ -12,10 +12,14 @@ import { fmtBytes } from '../utils/format.ts'
 
 /**
  * Render the data health panel.
- * @param props - optional tab navigation callback for quick jumps.
+ * @param props - optional tab navigation callback for quick jumps;
+ *   `embedded`：作为「设置」弹窗里的一节渲染（不自建 height:100% 与内边距）。
  * @returns the health element tree.
  */
-export function HealthPanel({ onNavigate }: { onNavigate?: (tab: string) => void } = {}): React.JSX.Element {
+export function HealthPanel({ onNavigate, embedded = false }: {
+  onNavigate?: (tab: string) => void
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const [snap, setSnap] = useState<DbHealthSnapshot | null>(() => readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')?.snap ?? null)
   const [status, setStatus] = useState<DbStatusSnapshot | null>(() => readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')?.status ?? null)
   const [loading, setLoading] = useState(false)
@@ -62,7 +66,7 @@ export function HealthPanel({ onNavigate }: { onNavigate?: (tab: string) => void
   }, [load])
 
   return (
-    <div className={kitCss.panelShell}>
+    <div className={embedded ? kitCss.panelEmbed : kitCss.panelShell}>
       <PanelHeader
         title="数据健康中心"
         desc={`解密库/索引/插件存储/解码缓存占用 · 本地检查${snap ? ` · 快照 ${new Date(snap.updatedAt * 1000).toLocaleString('zh-CN')}` : ''}`}
@@ -94,7 +98,7 @@ export function HealthPanel({ onNavigate }: { onNavigate?: (tab: string) => void
             <Card title="快捷入口">
               <div className={css.actions}>
                 <Button variant="outline" size="sm" onClick={() => { onNavigate('settings') }}>前往系统设置</Button>
-                <Button variant="outline" size="sm" onClick={() => { onNavigate('privacytrust') }}>隐私与信任</Button>
+                <Button variant="outline" size="sm" onClick={() => { onNavigate('privacytrust') }}>数据边界与出网</Button>
                 <Button variant="outline" size="sm" onClick={() => { onNavigate('files') }}>文件资产</Button>
               </div>
             </Card>

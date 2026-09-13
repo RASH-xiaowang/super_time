@@ -455,3 +455,115 @@
   .statBar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/* ── 知识笔记：侧栏列表 + 编辑器弹层 ───────────────────────────────
+   配色刻意避开社区色盘：知识节点用紫系（--nm-purple），与「人/群」的社区色
+   在视觉上分属两套，避免看图谱时把笔记误认成某个圈子。 */
+.noteRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--nm-border);
+  padding: 2px 0;
+}
+.noteTitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.noteTitle:hover { color: var(--nm-purple); }
+.noteMetric {
+  flex: none;
+  color: var(--nm-text-2);
+  font-size: 10px;
+  font-family: var(--nm-font-mono, monospace);
+}
+.noteEdit,
+.noteDel {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.noteEdit:hover { color: var(--nm-purple); background: rgba(155, 109, 255, 0.14); }
+.noteDel:hover { color: #ef6f6c; background: rgba(239, 111, 108, 0.14); }
+
+.noteBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 8, 18, 0.55);
+}
+.noteCard {
+  width: min(620px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card, var(--nm-bg-glass));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  box-sizing: border-box;
+}
+.noteCardTitle {
+  color: var(--nm-text-1);
+  font-size: 13px;
+  font-weight: 700;
+}
+.noteInput,
+.noteTextarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: rgba(128, 138, 156, 0.08);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.noteTextarea {
+  font-family: var(--nm-font-mono, monospace);
+  line-height: 1.55;
+  resize: vertical;
+}
+.noteInput:focus,
+.noteTextarea:focus { border-color: var(--nm-purple); }
+.noteHint {
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.noteError { color: #ef6f6c; font-size: 12px; }
+.noteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+

@@ -212,6 +212,13 @@
 .videoCover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 .videoTile:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .videoBadge { color: var(--nm-cyan); font-size: 15px; text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent); }
+/* 视频不在本机缓存里（朋友圈视频要在微信里播放过才会落盘）：
+   给一句能照做的说明，而不是一个看不出含义的 ×。 */
+.videoMissing {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; font-size: 11px; color: var(--nm-text-2); text-align: center; padding: 0 6px; line-height: 1.25;
+}
+.videoMissing em { font-style: normal; font-size: 9.5px; color: var(--nm-text-3); }
 .tags { display: flex; gap: 8px; flex-wrap: wrap; }
 .social { display: flex; flex-direction: column; gap: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: 10px; padding: 10px 12px; }
 .comments { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--nm-text-1); }
@@ -286,8 +293,31 @@
 
 /* 视频播放 */
 .videoTile { cursor: pointer; }
-.videoTilePlaying { width: 280px; height: 180px; cursor: default; }
-.videoPlayer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; border-radius: 6px; }
+/* 播放态：**按视频真实宽高比定尺寸**（--video-ar 由 onLoadedMetadata 写入），
+   容器与画面同比例，`object-fit: contain` 自然就没有黑边。
+   早先是固定 280×180 的横框，竖屏视频左右各一条黑边。 */
+.videoTilePlaying {
+  width: auto;
+  height: 260px;
+  max-width: 100%;
+  aspect-ratio: var(--video-ar, 16 / 9);
+  cursor: default;
+  background: transparent;
+}
+.videoPlayer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 6px; }
+/* 播放器操作按钮：右下角一排，悬停/聚焦时才明显，避免压住画面 */
+.videoActions {
+  position: absolute; right: 6px; bottom: 6px; display: flex; gap: 6px; z-index: 2;
+  opacity: 0.85; transition: opacity 0.15s;
+}
+.videoTilePlaying:hover .videoActions { opacity: 1; }
+.videoActBtn {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.videoActBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 45%, rgba(0, 0, 0, 0.5)); }
 .videoPlayBadge {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 16px; background: rgba(0, 0, 0, 0.32); text-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 80%, transparent);
@@ -314,15 +344,8 @@
 .clickableName:hover { text-decoration: underline; color: var(--nm-cyan); }
 
 /* 详情内视频更大 */
-.videoTileDetail { width: 100% !important; height: 280px; }
-.fullscreenBtn {
-  position: absolute; right: 8px; bottom: 8px; z-index: 2;
-  padding: 2px 8px; border: 1px solid var(--nm-border-hover); border-radius: 6px;
-  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 14px; cursor: pointer;
-}
-.fullscreenBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 30%, transparent); }
-/* 第 95 轮：全屏里的「保存视频」按钮要往左让开一个按钮位（原为行内 `right: 46px`）。 */
-.fullscreenBtnSave { right: 46px; }
+/* 详情视图里的播放器：比列表里更大，但同样按视频宽高比（不出现黑边）。 */
+.videoTileDetail { width: auto !important; height: 340px; max-width: 100%; aspect-ratio: var(--video-ar, 16 / 9); }
 /* 第 95 轮：导出按钮靠右（原为行内 `align-self: flex-end`）。 */
 .btnBottom { align-self: flex-end; }
 .lightboxImgWrap {

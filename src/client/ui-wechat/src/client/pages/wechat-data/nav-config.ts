@@ -9,7 +9,7 @@
  * filters (e.g. 聊天会话 → 公众号/服务号/客服).
  */
 export type WechatTab =
-  | 'overview' | 'ask' | 'chats' | 'graph' | 'monitor' | 'contacts' | 'moments'
+  | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'monitor' | 'contacts' | 'moments'
   | 'favorites' | 'emoticons' | 'files' | 'records' | 'ledger' | 'storage' | 'bizchats'
   | 'servicechats' | 'kefu' | 'annual' | 'period' | 'dailysummary' | 'hook' | 'privacy'
   | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls'
@@ -58,7 +58,12 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     items: [
       { tab: 'contacts', label: '通讯录', icon: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
       { tab: 'moments', label: '朋友圈', icon: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>' },
-      { tab: 'graph', label: '社交图谱', icon: '<circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="10.5" y2="15.5"/><line x1="15.5" y1="7.5" x2="13.5" y2="15.5"/><line x1="6" y1="9" x2="6" y2="13"/><line x1="18" y1="9" x2="18" y2="13"/>', hidden: true },
+      // 社交图谱与知识图谱是两个并列入口，不共用一个面板的模式切换：
+      // 前者是「我的人脉」（好友/群组），后者是「我的笔记」（知识网络/融合视图）。
+      // 两者的数据源、指标口径（消息量 vs 连接度）与默认筛选都不同，合成一个面板
+      // 会让默认视图变得含糊 —— 打开图谱的人多数是想看好友。
+      { tab: 'graph', label: '社交图谱', icon: '<circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="10.5" y2="15.5"/><line x1="15.5" y1="7.5" x2="13.5" y2="15.5"/><line x1="6" y1="9" x2="6" y2="13"/><line x1="18" y1="9" x2="18" y2="13"/>' },
+      { tab: 'knowledge', label: '知识图谱', icon: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><circle cx="9" cy="8" r="1.2"/><circle cx="14" cy="6.5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><line x1="9.8" y1="8.6" x2="11.3" y2="11.2"/><line x1="13.2" y1="7.5" x2="12.5" y2="10.9"/>' },
     ],
   },
   {
@@ -91,20 +96,22 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '隐私与安全',
+    label: '备份与安全',
     items: [
-      { tab: 'privacytrust', label: '隐私与信任', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/>' },
-      // 隐私体检与「隐私与信任」都在讲同一件事（敏感信息扫描 + 数据边界），合并为第二分段
+      // 「数据边界与出网 / 隐私体检 / 备份恢复」2026-09 迁进「设置」弹窗（左导航的四节之一）。
+      // 保留 tab id（深链 #privacytrust / #backup 与其它面板的跳转仍走它），但不占侧栏条目：
+      // 命中这些 tab 时由 WechatDataPanel 的 DIALOG_SECTION_OF 改道去开弹窗并落到对应节。
+      { tab: 'privacytrust', label: '数据边界与出网', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/>', hidden: true },
       { tab: 'privacy', label: '隐私体检', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>', hidden: true },
-      { tab: 'backup', label: '备份恢复', icon: '<path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/>' },
+      { tab: 'backup', label: '备份恢复', icon: '<path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/>', hidden: true },
     ],
   },
   {
     label: '维护与设置',
     items: [
-      { tab: 'settings', label: '数据配置', icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>' },
-      { tab: 'health', label: '数据健康', icon: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>' },
-      // 原图链路自检与数据健康都是「本机解码/数据库自检」，同一批诊断 API（apiGetDbHealth / apiGetStorageStats）
+      // 同上：settings 固定在侧栏底部（这是它的图标来源），health/hook/oplog 是「设置」弹窗里的三节。
+      { tab: 'settings', label: '设置', icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>' },
+      { tab: 'health', label: '数据库健康', icon: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', hidden: true },
       { tab: 'hook', label: '原图链路自检', icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h3M12 17H8M16 13h1M17 17h1"/>', hidden: true },
       { tab: 'oplog', label: '操作日志', icon: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', hidden: true },
     ],

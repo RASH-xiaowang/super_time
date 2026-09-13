@@ -5,7 +5,7 @@
  * 自动获取密钥（V4 内存扫描 + Weixin.dll 内部键 + V2 图片验证）已支持；
  * SQLCipher 全库解密仍为说明态（本地解密能力独立立项）；语音转写已本地化（whisper.cpp）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
@@ -14,6 +14,13 @@ import {
 import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiGetWechatPathConfig, apiOpenPath, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
+import { AiModelConfig } from './AiModelConfig.tsx'
+import { PrivacyPanel } from './Privacy.tsx'
+import { PrivacyTrustPanel } from './PrivacyTrust.tsx'
+import { BackupPanel } from './Backup.tsx'
+import { HealthPanel } from './Health.tsx'
+import { HookPanel } from './Hook.tsx'
+import { OperationLogPanel } from './OperationLogPanel.tsx'
 import css from './settings.module.css'
 import kitCss from '../ui/kit.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
@@ -127,6 +134,37 @@ const STEP_ICONS: Record<string, React.JSX.Element> = {
       <rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
     </svg>
   ),
+  // 从外层侧栏迁进来的两节（不属于 5 步配置向导，只用于左导航图标）。
+  boundary: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M12 8v4M12 16h.01" />
+    </svg>
+  ),
+  privacy: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
+  backup: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-9-9" /><polyline points="21 3 21 9 15 9" />
+    </svg>
+  ),
+  health: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  hook: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h3M12 17H8M16 13h1M17 17h1" />
+    </svg>
+  ),
+  oplog: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
 }
 
 type StepState = 'done' | 'todo' | 'note'
@@ -197,11 +235,232 @@ function StatusSlot({ placeholder, active, pct, text, item, doneText, doneKind, 
   )
 }
 
+/** 许可证状态（主进程 license:status 返回）。 */
+type LicenseStatus = {
+  state: string
+  licensed: boolean
+  reason?: string
+  code?: string
+  payload?: {
+    licenseId?: string
+    edition?: string
+    issuedTo?: { name?: string; company?: string; email?: string }
+    expiresAt?: string | null
+    features?: string[]
+    seats?: number
+  } | null
+  device?: { fingerprintShort?: string; hostname?: string }
+  daysToExpiry?: number | null
+  licensePath?: string
+}
+
+const LICENSE_STATE_LABEL: Record<string, string> = {
+  licensed: '已授权',
+  unlicensed: '未授权',
+  expired: '已过期',
+  device_mismatch: '设备不匹配',
+  invalid: '许可证无效',
+  error: '状态异常',
+}
+
+/**
+ * 软件授权区块：状态 / 导出激活请求 / 导入许可证 / 解除绑定。
+ */
+function LicenseSection(): React.JSX.Element {
+  const [st, setSt] = useState<LicenseStatus | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+
+  const refresh = useCallback(async () => {
+    const api = (window as any).electronAPI?.license
+    if (!api?.status) {
+      setSt({ state: 'error', licensed: false, reason: 'license_api_missing' })
+      return
+    }
+    try {
+      const s = await api.status()
+      setSt(s)
+    } catch (err) {
+      setSt({ state: 'error', licensed: false, reason: (err as Error).message })
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const onExportRequest = async (): Promise<void> => {
+    const api = (window as any).electronAPI?.license
+    if (!api?.exportRequest) return
+    setBusy('export')
+    setMsg(null)
+    try {
+      const r = await api.exportRequest()
+      if (r?.ok) setMsg({ kind: 'ok', text: `已导出激活请求：${r.path}` })
+      else if (r?.canceled) setMsg(null)
+      else setMsg({ kind: 'err', text: r?.error || '导出失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const onImport = async (): Promise<void> => {
+    const api = (window as any).electronAPI?.license
+    if (!api?.importFile) return
+    setBusy('import')
+    setMsg(null)
+    try {
+      const r = await api.importFile()
+      if (r?.ok) {
+        setMsg({ kind: 'ok', text: '许可证导入成功' })
+        setSt(r.status)
+      } else if (r?.canceled) setMsg(null)
+      else setMsg({ kind: 'err', text: r?.error || '导入失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const onRemove = async (): Promise<void> => {
+    if (!window.confirm('确定解除本机许可证绑定？需要重新导入才能继续正式授权。')) return
+    const api = (window as any).electronAPI?.license
+    if (!api?.remove) return
+    setBusy('remove')
+    setMsg(null)
+    try {
+      const r = await api.remove()
+      if (r?.ok) {
+        setMsg({ kind: 'ok', text: '已解除许可证' })
+        setSt(r.status)
+      } else setMsg({ kind: 'err', text: r?.error || '操作失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const stateLabel = st ? (LICENSE_STATE_LABEL[st.state] ?? st.state) : '…'
+  const customer = st?.payload?.issuedTo?.name || st?.payload?.issuedTo?.company || '—'
+  const expires = st?.payload?.expiresAt
+    ? new Date(st.payload.expiresAt).toLocaleDateString('zh-CN')
+    : st?.state === 'licensed' ? '永久' : '—'
+
+  return (
+    <section className={css.card} aria-label="软件授权">
+      <div className={css.cardHd}>
+        <span className={css.cardIconChip} aria-hidden="true">🔑</span>
+        <div className={css.cardTitleBox}>
+          <span className={css.cardTitle}>软件授权 License</span>
+        </div>
+        <span className={css.cardBadge}>
+          <StateDot state={st?.licensed ? 'done' : 'error'} />
+          {stateLabel}
+        </span>
+      </div>
+      <div className={css.cardBody}>
+        <div className={css.row}>
+          <span className={css.rowName}>授权状态</span>
+          <span className={css.rowMeta}>
+            {st?.licensed ? '正式授权有效' : stateLabel}
+          </span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowName}>客户 / 版本 / 席位</span>
+          <span className={css.rowMeta}>
+            {customer} · {st?.payload?.edition ?? '—'} · {st?.payload?.seats ?? '—'}
+          </span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowName}>到期</span>
+          <span className={css.rowMeta}>
+            {expires}
+            {typeof st?.daysToExpiry === 'number' && st.daysToExpiry <= 30 && st.daysToExpiry >= 0
+              ? `（剩 ${st.daysToExpiry} 天）`
+              : ''}
+          </span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowName}>设备指纹</span>
+          <span className={css.rowMeta}>
+            {st?.device?.fingerprintShort ? `${st.device.fingerprintShort}…` : '—'}
+            {st?.device?.hostname ? ` · ${st.device.hostname}` : ''}
+          </span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowName}>开放功能</span>
+          <span className={css.rowMeta}>
+            {st?.licensed ? (st.payload?.features ?? []).join(', ') || '—' : '—'}
+          </span>
+        </div>
+        {st?.reason && !st.licensed ? (
+          <div className={css.row}>
+            <span className={css.rowNote}>原因：{st.reason}（{st.code}）</span>
+          </div>
+        ) : null}
+
+        <div className={css.row} style={{ gap: 8, flexWrap: 'wrap', paddingTop: 12 }}>
+          <Button variant="outline" disabled={busy !== null} onClick={() => { void onExportRequest() }}>
+            {busy === 'export' ? '导出中…' : '导出激活请求'}
+          </Button>
+          <Button variant="primary" disabled={busy !== null} onClick={() => { void onImport() }}>
+            {busy === 'import' ? '导入中…' : '导入许可证'}
+          </Button>
+          {st?.licensed ? (
+            <Button variant="ghost" disabled={busy !== null} onClick={() => { void onRemove() }}>
+              {busy === 'remove' ? '处理中…' : '解除绑定'}
+            </Button>
+          ) : null}
+          <Button variant="ghost" disabled={busy !== null} onClick={() => { void refresh() }}>
+            刷新状态
+          </Button>
+        </div>
+
+        {msg ? (
+          <div className={css.row}>
+            <span className={css.rowNote} style={{ color: msg.kind === 'ok' ? 'var(--nm-green)' : 'var(--nm-danger)' }}>
+              {msg.text}
+            </span>
+          </div>
+        ) : null}
+
+        <div className={css.row}>
+          <span className={css.rowNote}>
+            流程：导出本机激活请求 → 发给厂商 → 厂商签发 license.json → 本机导入。换机需换发；停用由厂商拒发新证。
+          </span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+export interface SettingsPanelProps {
+  /** 嵌在弹窗里时：标题栏与关闭按钮由弹窗提供，面板自身不再重复画 PanelHeader。 */
+  inDialog?: boolean
+  /**
+   * 打开时直接落在哪一节。
+   *
+   * 「数据边界与出网 / 隐私体检」已从外层侧栏迁进本弹窗，但深链（#privacytrust / #privacy）
+   * 与跨页跳转（数据总览的风险提示、数据健康的「隐私与信任」按钮）仍要落到正确的一节。
+   * 弹窗关闭会卸载内容，所以每次重开这个初值都会生效。
+   */
+  initialSection?: string
+  /** 跨面板跳转：迁移进来的「隐私体检」要把命中样本跳回它所在的会话。 */
+  onOpenChat?: (username: string, localId?: number) => void
+  /**
+   * 弹窗里装不下的跳转（如「文件资产」「存储分析」）交回宿主：由它关掉弹窗再切主内容区。
+   * 装得下的那些（设置 / 数据边界与出网 / 数据健康 …）在弹窗内部切节，不出去。
+   */
+  onNavigateOut?: (tab: string) => void
+}
+
 /**
  * Render the wechat-settings panel.
  * @returns the settings element tree.
  */
-export function SettingsPanel(): React.JSX.Element {
+export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const cachedCfg = readRenderCache<WechatConfigFull>(SETTINGS_CONFIG_CACHE_KEY)
   const [cfg, setCfg] = useState<WechatConfigFull | null>(cachedCfg)
   const [cfgLoading, setCfgLoading] = useState(false)
@@ -251,7 +510,11 @@ export function SettingsPanel(): React.JSX.Element {
     total: number
   } | null>(null)
   const [whisperTranscribing, setWhisperTranscribing] = useState<{ active: boolean; done: number; total: number; failed: number; skipped: number; current: string }>({ active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' })
-  const stepRefs = useRef(new Map<string, HTMLElement>())
+  /** 左侧导航当前选中项（右侧只渲染这一节）。 */
+  const [activeKey, setActiveKey] = useState<string>(() => initialSection ?? 'detect')
+  /** 右侧内容区：切节后回到顶部，否则从上一节的滚动位置接着看会莫名其妙。 */
+  const paneRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => { paneRef.current?.scrollTo({ top: 0 }) }, [activeKey])
   const notify = (kind: 'ok' | 'err', text: string, details?: readonly string[]): void => {
     setMessage({ kind, text, ...(details && details.length > 0 ? { details } : {}) })
     setTimeout(() =>{ setMessage(null) }, details && details.length > 0 ? 12000 : 5000)
@@ -711,57 +974,106 @@ export function SettingsPanel(): React.JSX.Element {
     voice: whisperStatus?.engine ? 'done' : 'note',
   }
 
-  const scrollToStep = (key: (typeof STEPS)[number]['key']): void => {
-    stepRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
   const stepLabel = (state: StepState): string => state === 'done' ? '已完成' : state === 'note' ? '说明' : '待配置'
 
+  // ── 左右结构：左侧导航项 + 右侧只渲染当前一节 ──
+  // 原来 5 张速览卡横排在顶部、5 个分节在下面一路堆叠，一屏看不全、还要靠滚动找；
+  // 改成竖排导航项（状态与摘要就在项上），右侧一次只显示一节。
+  const stepValueOf = (key: (typeof STEPS)[number]['key']): string => key === 'detect'
+    ? `${accounts.length} 个账号`
+    : key === 'dbkey'
+      ? (keyOk ? `${keysInfo.keyCount} 个密钥` : '未配置')
+      : key === 'imgkey'
+        ? (imgAes.trim() ? '已就绪' : '未配置')
+        : key === 'img'
+          ? (cdnEnabled ? '已启用' : '未启用')
+          : (whisperStatus?.engine ? '引擎就绪' : '待配置')
+
+  type NavKey = (typeof STEPS)[number]['key']
+    | 'ai' | 'boundary' | 'privacy' | 'license' | 'backup' | 'health' | 'hook' | 'oplog' | 'advanced'
+  /**
+   * 左导航条目（14 节，分四组）。
+   *
+   * 「智能与隐私」「授权与维护」两组共 8 节都是 2026-09 从外层侧栏迁进来的（AI 大模型、
+   * 数据边界与出网、隐私体检、软件授权、备份恢复、数据库健康、原图链路自检、操作日志）：
+   * 它们要么是配置，要么是维护与自检，本来就不该和「看数据」的页签挤在一个侧栏里。
+   * 侧栏因此从 17 项收到 12 项（含底部固定的「设置」）。
+   */
+  const navItems: Array<{ key: NavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }> = [
+    ...STEPS.map((s) => ({
+      key: s.key as NavKey,
+      group: '配置向导',
+      label: s.label,
+      icon: STEP_ICONS[s.key],
+      value: stepValueOf(s.key),
+      dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as 'done' | 'warning' | 'ongoing',
+    })),
+    { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
+    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
+    { key: 'privacy', group: '智能与隐私', label: '隐私体检', icon: STEP_ICONS.privacy, value: '敏感信息扫描' },
+    { key: 'license', group: '授权与维护', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
+    { key: 'backup', group: '授权与维护', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
+    { key: 'health', group: '授权与维护', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
+    { key: 'hook', group: '授权与维护', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
+    { key: 'oplog', group: '授权与维护', label: '操作日志', icon: STEP_ICONS.oplog, value: '仅操作元数据' },
+    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: 'HTTP API · 输出目录' },
+  ]
+
+  /**
+   * 弹窗内各面板的跳转：能落在本弹窗某节的就切节（不关弹窗），
+   * 其余的（文件资产 / 存储分析）交回宿主，由它关弹窗再切主内容区。
+   */
+  const SECTION_OF_TAB: Readonly<Record<string, string>> = {
+    settings: 'detect', privacytrust: 'boundary', privacy: 'privacy',
+    backup: 'backup', health: 'health', hook: 'hook', oplog: 'oplog',
+  }
+  const innerNavigate = useCallback((tab: string): void => {
+    const key = SECTION_OF_TAB[tab]
+    if (key) { setActiveKey(key); return }
+    onNavigateOut?.(tab)
+  }, [onNavigateOut])
+
   return (
-    <div className={css.root}>
-      <PanelHeader
-        title={(
-          <>
-            <IconSettingsOutline14 size={16} />
-            微信数据配置
-          </>
-        )}
-        desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
-      />
+    <div className={css.root} data-in-dialog={inDialog || undefined}>
+      {!inDialog && (
+        <PanelHeader
+          title={(
+            <>
+              <IconSettingsOutline14 size={16} />
+              微信数据配置
+            </>
+          )}
+          desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
+        />
+      )}
+      {/* 左导航 + 右内容：原来 5 张速览卡横排在顶部、下面 5 节一路堆叠，一屏看不全还要滚动找。 */}
+      <div className={css.layout}>
+        <nav className={css.navRail} aria-label="设置导航">
+          {navItems.map((it, i) => {
+            const prev = i > 0 ? navItems[i - 1] : undefined
+            return (
+              <Fragment key={it.key}>
+                {prev?.group !== it.group && <div className={css.navGroupLabel}>{it.group}</div>}
+                <button
+                  type="button"
+                  className={clsx(css.navItem, activeKey === it.key && css.navItemActive)}
+                  onClick={() => { setActiveKey(it.key) }}
+                  aria-current={activeKey === it.key ? 'true' : undefined}
+                  title={it.label}
+                >
+                  <span className={css.navIcon}>{it.icon}</span>
+                  <span className={css.navBody}>
+                    <span className={css.navLabel}>{it.label}</span>
+                    <span className={css.navValue}>{it.value}</span>
+                  </span>
+                  {it.dot ? <StateDot state={it.dot} /> : null}
+                </button>
+              </Fragment>
+            )
+          })}
+        </nav>
 
-      {/* 状态速览 */}
-      <div className={css.statusStrip}>
-        {STEPS.map((s) => {
-          const state = stepStates[s.key]
-          const value = s.key === 'detect'
-            ? `${accounts.length} 个账号`
-            : s.key === 'dbkey'
-              ? (keyOk ? `${keysInfo.keyCount} 个密钥` : '未配置')
-              : s.key === 'imgkey'
-                ? (imgAes.trim() ? '已就绪' : '未配置')
-                : s.key === 'img'
-                  ? (cdnEnabled ? '已启用' : '未启用')
-                  : (whisperStatus?.engine ? '引擎就绪' : '待配置')
-          return (
-            <button
-              key={s.key}
-              type="button"
-              className={clsx(css.statusCard, state === 'done' && css.statusDone, state === 'note' && css.statusNote)}
-              onClick={() => { scrollToStep(s.key) }}
-              title={`查看「${s.label}」`}
-            >
-              <span className={css.statusIcon}>{STEP_ICONS[s.key]}</span>
-              <span className={css.statusBody}>
-                <span className={css.statusLabel}>{s.label}</span>
-                <span className={css.statusValue}>{value}</span>
-              </span>
-              <StateDot state={state === 'done' ? 'done' : state === 'note' ? 'warning' : 'ongoing'} />
-            </button>
-          )
-        })}
-      </div>
-
-        <div className={css.mainScroll}>
+        <div className={css.mainScroll} ref={paneRef}>
 
       {message && (
         <div className={clsx(css.notice, message.kind === 'ok' ? css.toastOk : css.toastErr)}>
@@ -781,7 +1093,7 @@ export function SettingsPanel(): React.JSX.Element {
         {/* ── 1. 检测账号 ── */}
         <section
           className={css.card}
-          ref={(el) => { if (el) stepRefs.current.set('detect', el) }}
+          hidden={activeKey !== 'detect'}
         >
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconGlobeOutline14 size={14} /></span>
@@ -857,7 +1169,7 @@ export function SettingsPanel(): React.JSX.Element {
         {/* ── 2. 数据库密钥 ── */}
         <section
           className={css.card}
-          ref={(el) => { if (el) stepRefs.current.set('dbkey', el) }}
+          hidden={activeKey !== 'dbkey'}
         >
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconPersonalizationOutline16 size={14} /></span>
@@ -914,7 +1226,7 @@ export function SettingsPanel(): React.JSX.Element {
         {/* ── 3. 图片密钥 ── */}
         <section
           className={css.card}
-          ref={(el) => { if (el) stepRefs.current.set('imgkey', el) }}
+          hidden={activeKey !== 'imgkey'}
         >
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSparkle16 size={14} /></span>
@@ -955,7 +1267,7 @@ export function SettingsPanel(): React.JSX.Element {
         {/* ── 4. 图片解码 ── */}
         <section
           className={css.card}
-          ref={(el) => { if (el) stepRefs.current.set('img', el) }}
+          hidden={activeKey !== 'img'}
         >
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconGlobeOutline14 size={14} /></span>
@@ -1012,7 +1324,7 @@ export function SettingsPanel(): React.JSX.Element {
         {/* ── 5. 语音转写 ── */}
         <section
           className={css.card}
-          ref={(el) => { if (el) stepRefs.current.set('voice', el) }}
+          hidden={activeKey !== 'voice'}
         >
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSparkle16 size={14} /></span>
@@ -1159,10 +1471,52 @@ export function SettingsPanel(): React.JSX.Element {
           </div>
         </section>
 
+        {/* ── AI 大模型（全应用唯一的模型配置入口） ── */}
+        <div hidden={activeKey !== 'ai'}><AiModelConfig /></div>
+
+        {/* ── 数据边界与出网（原外层侧栏的独立页，整页迁入本弹窗） ── */}
+        <div className={css.embedPane} hidden={activeKey !== 'boundary'}>
+          <PrivacyTrustPanel embedded />
+        </div>
+
+        {/* ── 隐私体检（同上；命中样本可跳回对应会话） ── */}
+        <div className={css.embedPane} hidden={activeKey !== 'privacy'}>
+          <PrivacyPanel embedded onOpenChat={onOpenChat} />
+        </div>
+
+        {/* ── 软件授权 License ── */}
+        <div hidden={activeKey !== 'license'}><LicenseSection /></div>
+
+        {/* ── 备份恢复（原外层侧栏项，整页迁入） ── */}
+        <div className={css.embedPane} hidden={activeKey !== 'backup'}>
+          <BackupPanel embedded />
+        </div>
+
+        {/* ── 数据库健康 / 原图链路自检 / 操作日志（原外层「数据健康」的三个分段） ── */}
+        <div className={css.embedPane} hidden={activeKey !== 'health'}>
+          <HealthPanel embedded onNavigate={innerNavigate} />
+        </div>
+        <div className={css.embedPane} hidden={activeKey !== 'hook'}>
+          <HookPanel embedded onNavigate={innerNavigate} />
+        </div>
+        <div className={css.embedPane} hidden={activeKey !== 'oplog'}>
+          <OperationLogPanel />
+        </div>
+
         {/* ── 高级设置（HTTP API 遗留能力 + 输出路径） ── */}
-        <details className={css.advanced}>
-          <summary className={css.advancedSummary}>高级设置 · HTTP API 服务 & 输出目录</summary>
-          <div className={css.advancedBody}>
+        <section className={css.card} hidden={activeKey !== 'advanced'}>
+          <header className={css.cardHd}>
+            <span className={css.cardIconChip}><IconSettingsOutline14 size={14} /></span>
+            <div className={css.cardTitleBox}>
+              <span className={css.cardTitle}>高级设置</span>
+              <span className={kitCss.textCaptionTrunc}>HTTP API 遗留能力 · 输出目录与启动引导</span>
+            </div>
+            <span className={css.cardBadge}>
+              <StateDot state={apiEnabled ? 'done' : 'warning'} />
+              {apiEnabled ? `HTTP ${apiPort}` : 'HTTP 未启用'}
+            </span>
+          </header>
+          <div className={css.cardBody}>
             <div className={css.row}>
               <span className={css.rowName}>启用</span>
               <input type="checkbox" checked={apiEnabled} onChange={(e) => { setApiEnabled(e.target.checked) }} />
@@ -1192,10 +1546,22 @@ export function SettingsPanel(): React.JSX.Element {
             <div className={css.row}>
               <span className={css.rowNote}>本面板已通过 Remote 直读，无外部 HTTP 依赖。</span>
             </div>
+            <div className={css.row}>
+              <span className={css.rowName}>启动引导</span>
+              <button
+                type="button"
+                className={css.whisperSkip}
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('super-time:show-onboarding'))
+                }}
+              >
+                重新查看启动页
+              </button>
+              <span className={css.rowMeta}>清除本地进度并回到首启流程</span>
+            </div>
           </div>
-        </details>
-
-        {/* ── 操作日志（元数据监控/导出，绝不保存会话内容） ── */}
+        </section>
+      </div>
 
       </div>
 

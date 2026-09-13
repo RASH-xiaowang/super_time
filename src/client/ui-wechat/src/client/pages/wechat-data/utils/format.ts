@@ -56,6 +56,50 @@ export function fmtDateTimeSec(ts: number | null | undefined, placeholder = '—
 }
 
 /**
+ * **秒级**时间戳 → 消息悬停时显示的完整时间：`YYYY-MM-DD HH:mm:ss`。
+ *
+ * 微信只在悬停某条消息时才显示时间，且精确到秒（列表里的常显时间只到分）。
+ * @param ts - unix 秒。
+ * @param placeholder - 空值或非法值时返回的占位符。
+ */
+export function fmtMsgClockSec(ts: number | null | undefined, placeholder = ''): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n * 1000)
+  if (Number.isNaN(d.getTime())) return placeholder
+  const hms = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hms}`
+}
+
+/** 星期的中文简写，索引 = `Date.getDay()`（0 = 周日）。 */
+const WEEKDAY_CN = ['日', '一', '二', '三', '四', '五', '六']
+
+/**
+ * **秒级**时间戳 → 聊天流里的日期分隔标签（微信 `formatTimeDivider` 同款口径）。
+ *
+ * 今天 `HH:mm`；昨天 `昨天 HH:mm`；一周内 `星期X HH:mm`；
+ * 今年 `M月D日 HH:mm`；更早 `YYYY年M月D日 HH:mm`。
+ * @param ts - unix 秒。
+ * @param now - 参照「今天」的时刻（默认取当前时间，便于测试注入）。
+ * @returns 分隔标签；空值或非法时间返回空串（调用方据此跳过该分隔）。
+ */
+export function fmtDividerSec(ts: number | null | undefined, now: Date = new Date()): string {
+  const n = Number(ts ?? 0)
+  if (!n) return ''
+  const d = new Date(n * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`
+  const dayStart = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  // 负值（消息时间在未来 / 时钟偏差）按「今天」处理，不显示成「星期X -1」之类。
+  const daysAgo = Math.round((dayStart(now) - dayStart(d)) / 86400000)
+  if (daysAgo <= 0) return hm
+  if (daysAgo === 1) return `昨天 ${hm}`
+  if (daysAgo < 7) return `星期${WEEKDAY_CN[d.getDay()] ?? ''} ${hm}`
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
+}
+
+/**
  * **秒级**时间戳 → 会话列表用短标签：今天 `HH:mm`，昨天 `昨天`，更早 `M/D`。
  * @param ts - unix 秒。
  */

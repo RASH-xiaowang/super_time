@@ -9,6 +9,12 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   root: 'src/client/ui-app',
   base: './',
+  esbuild: {
+    // ui-app 目录没有自己的 tsconfig，若不显式指定，部分 .tsx 会退回
+    // classic（React.createElement），在未 `import React` 时运行时崩溃。
+    jsx: 'automatic',
+    jsxImportSource: 'react',
+  },
   build: {
     outDir: '../ui-dist',
     emptyOutDir: true,

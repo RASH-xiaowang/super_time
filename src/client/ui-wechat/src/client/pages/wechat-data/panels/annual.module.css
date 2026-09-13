@@ -1,0 +1,183 @@
+/* 年度回顾看板 —— 目标：**一屏装下，不出滚动条**。
+   实测可用区 1572×787（窗口 1664×1066）。做法：12 列固定网格 + fr 行高，
+   总高恒等于容器高，卡片 min-height:0 + overflow:hidden 兜底。
+   窄窗/矮窗（<1200×780）自动退回「瀑布流 + 滚动」，避免强行压缩到不可读。 */
+
+.wrap {
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  /* 5 行内容 + 1 行页脚：按各行内容需求分配比例 */
+  grid-template-rows: 1.11fr 0.94fr 1.09fr 1.09fr 0.77fr auto;
+  gap: 6px;
+}
+.wrap[data-loading] { opacity: 0.72; }
+
+/* 工具栏（年份 + 导出） */
+.tools { display: flex; align-items: center; gap: 8px; }
+.toolSelect, .toolBtn {
+  height: 30px; padding: 0 10px;
+  font-size: 12px; color: var(--nm-text-2);
+  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: 8px;
+  cursor: pointer; transition: var(--nm-t-ui);
+}
+.toolSelect:hover, .toolBtn:hover:enabled { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
+.toolBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.scrollBody { overflow: hidden; }
+.hint { margin-bottom: 6px; font-size: 12px; color: var(--nm-text-3); }
+.empty { padding: 40px 0; text-align: center; font-size: 13px; color: var(--nm-text-3); }
+
+/* ── 卡片（网格单元）── */
+.card {
+  min-height: 0; min-width: 0;
+  overflow: hidden;            /* 内容略多时裁掉，而不是把网格撑破、逼出滚动条 */
+  display: flex; flex-direction: column;
+  padding: 6px 8px 7px;
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+}
+.cardHead {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px; flex: 0 0 auto;
+}
+.cardTitle { font-size: 11.5px; font-weight: 600; color: var(--nm-text-2); white-space: nowrap; }
+.cardExtra { font-size: 10.5px; color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cardBody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+
+/* ── ① 全年发出 ── */
+.heroNum { font-size: 22px; font-weight: 700; line-height: 1.05; color: var(--nm-text-1); font-variant-numeric: tabular-nums; }
+.heroNum small { font-size: 12px; font-weight: 500; color: var(--nm-text-3); margin-left: 3px; }
+.heroSub { margin-top: 1px; font-size: 10.5px; color: var(--nm-text-3); }
+.heroGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 5px; }
+.heroCell {
+  display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  padding: 3px 6px; border-radius: 6px;
+  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border);
+}
+.heroCellK { font-size: 9.5px; color: var(--nm-text-3); white-space: nowrap; }
+.heroCellV { font-size: 11.5px; font-weight: 600; color: var(--nm-text-1); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── ② 日历热力 ── */
+.calWrap { display: flex; flex-direction: column; gap: 3px; min-height: 0; flex: 1 1 auto; }
+.calMonths { display: grid; gap: 2px; padding-left: 14px; }
+/* 月份标签落在「该月第一周」那一列（仅约 13px 宽），必须允许溢出到相邻空列 */
+.calMonths span { font-size: 9.5px; color: var(--nm-text-3); white-space: nowrap; overflow: visible; }
+.calBody { display: flex; gap: 3px; flex: 1 1 auto; min-height: 0; }
+.calDows { display: grid; grid-template-rows: repeat(7, 1fr); gap: 2px; flex: 0 0 auto; }
+.calDows span { font-size: 8.5px; color: var(--nm-text-3); line-height: 1; }
+.calGrid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 2px; flex: 1 1 auto; min-width: 0; }
+.calCell { width: 100%; aspect-ratio: 1; border-radius: 2px; background: color-mix(in srgb, var(--nm-text-1) 5%, transparent); }
+.calCell[data-empty] { background: transparent; }
+.calCell[data-lv="1"] { background: color-mix(in srgb, var(--nm-cyan) 22%, transparent); }
+.calCell[data-lv="2"] { background: color-mix(in srgb, var(--nm-cyan) 40%, transparent); }
+.calCell[data-lv="3"] { background: color-mix(in srgb, var(--nm-cyan) 62%, transparent); }
+.calCell[data-lv="4"] { background: color-mix(in srgb, var(--nm-cyan) 88%, transparent); }
+.calFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
+.calLegend { display: inline-flex; align-items: center; gap: 3px; font-size: 9.5px; color: var(--nm-text-3); white-space: nowrap; }
+.calLegend .calCell { width: 9px; aspect-ratio: 1; flex: 0 0 auto; }
+
+/* ── ③ 最疯的一天 ── */
+.bigDay { display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap; }
+.bigDayNum { font-size: 20px; font-weight: 700; color: var(--nm-text-1); font-variant-numeric: tabular-nums; line-height: 1.05; }
+.bigDayUnit { font-size: 10.5px; color: var(--nm-text-3); }
+.bar { margin: 4px 0; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--nm-text-1) 8%, transparent); overflow: hidden; flex: 0 0 auto; }
+.barFill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); }
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--nm-text-2); min-width: 0; }
+.kv + .kv { margin-top: 2px; }
+.kv > span, .kv > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; flex: 0 0 auto; }
+.quote {
+  margin-top: 4px; padding: 4px 7px;
+  font-size: 10px; line-height: 1.4; color: var(--nm-text-2);
+  background: var(--nm-bg-0); border-radius: 7px;
+  border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  word-break: break-word; flex: 0 0 auto;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ── 头像 ── */
+.av { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; overflow: hidden; font-weight: 600; }
+.av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rowMain { min-width: 0; flex: 1 1 auto; }
+.name { font-size: 12.5px; font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { font-size: 10.5px; color: var(--nm-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── ⑤ 十二月主演（6 列宽 → 12 个格子一行）── */
+.starGrid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 4px; }
+.starCell { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.starCell .sub { font-size: 9px; max-width: 100%; }
+.starM { font-size: 9px; color: var(--nm-text-3); }
+.starHot .name, .starHot .starM { color: var(--nm-cyan); }
+
+/* ── ⑥ 深夜 ── */
+.nightTop { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex: 0 0 auto; }
+
+/* ── ⑦ 作息切片 ── */
+.rhythmRow { display: grid; grid-template-columns: 13px 1fr; gap: 3px; align-items: center; }
+.rhythmRow + .rhythmRow { margin-top: 1px; }
+.rhythmDow { font-size: 8.5px; color: var(--nm-text-3); }
+.rhythmGrid { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
+.rhythmCell { height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--nm-text-1) 5%, transparent); }
+.rhythmCell[data-lv="1"] { background: color-mix(in srgb, var(--nm-purple) 25%, transparent); }
+.rhythmCell[data-lv="2"] { background: color-mix(in srgb, var(--nm-purple) 45%, transparent); }
+.rhythmCell[data-lv="3"] { background: color-mix(in srgb, var(--nm-purple) 68%, transparent); }
+.rhythmCell[data-lv="4"] { background: color-mix(in srgb, var(--nm-purple) 92%, transparent); }
+.rhythmHours { display: grid; grid-template-columns: 13px 1fr; gap: 3px; margin-top: 2px; }
+.rhythmHourTicks { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 8.5px; color: var(--nm-text-3); }
+
+/* ── ⑨ 口头禅 ── */
+.phraseHero { font-size: 17px; font-weight: 700; color: var(--nm-text-1); line-height: 1.2; }
+.phraseList { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; overflow: hidden; }
+.chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 1px 6px; font-size: 10.5px; color: var(--nm-text-2);
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent); border-radius: 999px;
+}
+.chip b { color: var(--nm-text-1); font-weight: 600; }
+
+/* ── ⑫ 排行（一屏只放前 5，避免撑破行高）── */
+.rankRow { display: flex; align-items: center; gap: 6px; padding: 1px 0; min-width: 0; }
+.rankRow + .rankRow { border-top: 0.5px solid var(--nm-border); }
+.rankNo { width: 12px; font-size: 10.5px; color: var(--nm-text-3); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.rankVal { font-size: 12.5px; font-weight: 600; color: var(--nm-text-1); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+
+/* ── ⑬ 表情 ── */
+.emojiTop { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; overflow: hidden; }
+.emojiCell { display: inline-flex; align-items: baseline; gap: 2px; font-size: 11.5px; color: var(--nm-text-2); }
+
+/* ── ⑭ 还有这些人（单行 7 格，压扁成横向小卡）── */
+.moreRow { display: flex; gap: 7px; min-width: 0; overflow: hidden; }
+.moreCell {
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 7px;
+  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: 9px;
+}
+.moreInfo { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.moreLabel { font-size: 9.5px; color: var(--nm-text-3); white-space: nowrap; }
+.moreVal { font-size: 10.5px; color: var(--nm-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.moreCell .name { font-size: 11.5px; }
+
+/* ── ⑮ 页脚 ── */
+.footer {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 10px; color: var(--nm-text-3); flex-wrap: wrap;
+}
+.footerMid { color: var(--nm-text-2); }
+
+/* ── 退化：窄窗或矮窗装不下 12 列/5 行 → 回到瀑布流 + 滚动 ──
+   强压到不可读不如允许滚动；用户的 1664×1066 走上面的无滚动版。 */
+@media (max-width: 1200px), (max-height: 779px) {
+  .wrap {
+    height: auto;
+    display: block;
+    columns: 380px;
+    column-gap: 10px;
+  }
+  .card { break-inside: avoid; margin: 0 0 10px; }
+  .scrollBody { overflow-y: auto; }
+  .footer { display: flex; }
+}

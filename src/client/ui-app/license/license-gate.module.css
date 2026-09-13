@@ -1,0 +1,229 @@
+.lock {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  background:
+    radial-gradient(800px 400px at 20% 0%, rgba(0, 240, 255, 0.08), transparent 55%),
+    radial-gradient(700px 360px at 80% 100%, rgba(168, 85, 247, 0.08), transparent 50%),
+    var(--nm-black, var(--nm-bg-0, #050a18));
+  color: var(--nm-text-1, #e2e8f0);
+  font-family: var(--nm-font-sans, 'Segoe UI', sans-serif);
+  overflow: auto;
+}
+
+.card {
+  width: 100%;
+  max-width: 440px;
+  padding: 28px 28px 22px;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 240, 255, 0.16);
+  background: rgba(13, 21, 40, 0.72);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.brand {
+  font-family: var(--nm-font-mono, Consolas, monospace);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--nm-cyan, #00f0ff);
+  margin-bottom: 14px;
+}
+
+.title {
+  margin: 0 0 10px;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.25;
+  background: linear-gradient(90deg, #e2e8f0, var(--nm-cyan, #00f0ff));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lead {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--nm-text-2, #94a3b8);
+}
+
+.meta {
+  margin: 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dotted rgba(0, 240, 255, 0.12);
+}
+
+.meta dt {
+  color: var(--nm-text-3, #64748b);
+  font-family: Consolas, monospace;
+}
+
+.meta dd {
+  margin: 0;
+  color: var(--nm-text-1, #e2e8f0);
+  text-align: right;
+  word-break: break-all;
+}
+
+.mono {
+  font-family: Consolas, monospace;
+  color: var(--nm-cyan, #00f0ff) !important;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.primary,
+.ghost {
+  appearance: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.primary {
+  border: none;
+  color: #050a18;
+  background: linear-gradient(135deg, var(--nm-cyan, #00f0ff), var(--nm-purple, #a855f7));
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.3);
+  min-width: 120px;
+}
+
+.primary:disabled,
+.ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ghost {
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  background: transparent;
+  color: var(--nm-text-2, #94a3b8);
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--nm-text-1, #e2e8f0);
+  border-color: rgba(0, 240, 255, 0.4);
+  background: rgba(0, 240, 255, 0.06);
+}
+
+.msg {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--nm-cyan, #00f0ff);
+  word-break: break-all;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--nm-text-3, #64748b);
+}
+
+:global(.theme-light) .card {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(8, 145, 178, 0.2);
+}
+
+:global(.theme-light) .lock {
+  background: linear-gradient(180deg, #f7f9fc, #e8eef6);
+}
+
+:global(.theme-light) .title {
+  background: linear-gradient(90deg, #0f172a, #0e7490);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+:global(.theme-light) .brand,
+:global(.theme-light) .mono {
+  color: #0e7490 !important;
+}
+
+.embed {
+  width: 100%;
+  max-width: 560px;
+  padding: 8px 0 4px;
+}
+
+.embedTitle {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 800;
+  background: linear-gradient(90deg, var(--nm-text-1, #e2e8f0), var(--nm-cyan, #00f0ff));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.pasteBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.pasteLabel {
+  font-size: 12px;
+  color: var(--nm-text-3, #64748b);
+}
+
+.paste {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 240, 255, 0.18);
+  background: rgba(5, 10, 24, 0.55);
+  color: var(--nm-text-1, #e2e8f0);
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  padding: 10px;
+  outline: none;
+}
+
+.paste:focus {
+  border-color: rgba(0, 240, 255, 0.45);
+}
+
+:global(.theme-light) .paste {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(8, 145, 178, 0.25);
+  color: #0f172a;
+}
+
+.msgOk {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--nm-green, #00ff88);
+  word-break: break-all;
+}
+
+.msgErr {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--nm-danger, #ff3b5c);
+  word-break: break-all;
+}

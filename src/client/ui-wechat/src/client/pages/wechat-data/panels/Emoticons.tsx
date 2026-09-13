@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
-import { apiGetEmoticons } from '../api.ts'
+import { apiGetEmoticonDataUrl, apiGetEmoticons } from '../api.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
@@ -17,6 +17,53 @@ function typeLabel(t: number | undefined): string {
   if (t === 2) return 'GIF'
   if (t === 3) return '动图'
   return ''
+}
+
+/**
+ * 表情真图：按 md5（+ 库里带的 CDN 地址）取图。
+ *
+ * 以前格子里放的是 `😀` 占位符 —— 面板只当「MD5 浏览器」用，从不取图，所以用户看到的是
+ * 一片空格子。取图链路：本地解码 → 本地表情缓存（微信 4.x 是**加密**文件，项目里没有
+ * 解码器）→ 用 `cdn_url` 下载一次并落进 decoded 缓存（见后端 `fetchEmoticonRemote`），
+ * 于是每张图只花一次网络。失败时退回 emoji 占位，并把原因放在 title 里。
+ * @param props.md5 - the emoticon md5.
+ * @param props.cdnUrl - CDN url from `kNonStoreEmoticonTable.cdn_url`.
+ * @param props.caption - optional caption (alt text).
+ * @returns the image, or an emoji placeholder while loading/failed.
+ */
+function EmoThumb({ md5, cdnUrl, caption }: { md5: string; cdnUrl?: string; caption?: string }): React.JSX.Element {
+  const [src, setSrc] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setSrc(null)
+    setErr(null)
+    apiGetEmoticonDataUrl({ md5: md5.toLowerCase(), ...(cdnUrl ? { emojiUrl: cdnUrl } : {}) })
+      .then((r) => {
+        if (cancelled) return
+        if (r.url) setSrc(r.url)
+        else setErr(r.error ?? '表情不可用')
+      })
+      .catch((e: unknown) => { if (!cancelled) setErr((e as Error).message) })
+    return () => { cancelled = true }
+  }, [md5, cdnUrl])
+  if (src) {
+    return <img className={css.emoImg} src={src} alt={caption || '表情'} loading="lazy" decoding="async" />
+  }
+  return <span className={css.emoPh} title={err ?? '表情加载中…'}>{err ? '🙁' : '😀'}</span>
+}
+
+/**
+ * 取后端新加的 `cdnUrl`（表情真图的下载地址）。
+ *
+ * 客户端这份类型来自 `node_modules` 里的**旧副本**（还没有该字段），直接读会过不了 `tsc`，
+ * 所以在这里按可选字段取一次。等重跑 `npm install` 同步类型副本后，这个函数可以删掉。
+ * @param e - the emoticon item.
+ * @returns `{ cdnUrl }` when present, else `{}`.
+ */
+function cdnUrlOf(e: EmoticonItem): { cdnUrl?: string } {
+  const v = (e as EmoticonItem & { cdnUrl?: unknown }).cdnUrl
+  return typeof v === 'string' && v ? { cdnUrl: v } : {}
 }
 
 /**
@@ -103,7 +150,11 @@ export function EmoticonsPanel(): React.JSX.Element {
     <div className={css.panel}>
       <PanelHeader
         title="表情"
-        desc={`自定义 ${custom.length} · 表情包 ${packages.length} · 共 ${total}${orderedBy === 'wechat' ? ' · 顺序与微信一致' : ''}`}
+        // 首次进这个面板要等后端同步窗口（实测冷启动约 20-30 秒），期间计数是 0/0/0、
+        // 网格只有骨架 —— 直接显示「共 0」会被当成「没有表情」，这里如实说明在加载。
+        desc={loading && custom.length === 0
+          ? '正在加载…（后端启动同步期间首次查询约需 20-30 秒）'
+          : `自定义 ${custom.length} · 表情包 ${packages.length} · 共 ${total}${orderedBy === 'wechat' ? ' · 顺序与微信一致' : ''}`}
       />
       <Toolbar
         left={(
@@ -129,9 +180,10 @@ export function EmoticonsPanel(): React.JSX.Element {
         {!loading && !error && tab !== 'packages' && shownCustom.length === 0 && <EmptyMaybeSyncing text={`暂无${tab === 'custom' ? '自定义' : ''}表情`} />}
         {!loading && !error && tab !== 'packages' && shownCustom.slice(0, emoCount).map((e: EmoticonItem) => (
           <div key={e.md5} className={css.emoCell} title={`${e.md5}${e.caption ? ` · ${e.caption}` : ''}${typeLabel(e.item_type) ? ` · ${typeLabel(e.item_type)}` : ''}`} {...clickableKey(() => { copyMd5(e.md5) })}>
+            {/* 真图放最上面：格子第一眼要看到表情本身，而不是文字 */}
+            <EmoThumb md5={e.md5} caption={e.caption} {...cdnUrlOf(e)} />
             <span className={css.emoName}>{e.caption || '自定义表情'}</span>
             <span className={css.emoMd5}>MD5 · {e.md5.slice(0, 8)}</span>
-            <span className={css.emoPh}>😀</span>
             <span className={`${css.emoMd5} ${css.emoMd5Cyan}`}>点击复制 MD5</span>
           </div>
         ))}

@@ -18,64 +18,69 @@
   background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
-/* 状态速览条：5 个可点击状态卡片 */
-.statusStrip {
-  flex-shrink: 0;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+/* ── 左右结构：左导航（固定宽） + 右内容（可滚动） ──
+   原来 5 张速览卡横排在顶部、下面 5 节一路堆叠：一屏装不下，想改「图片密钥」得先滚下去，
+   还容易忘了下面还有几节。改成竖排导航项后，右侧一次只显示当前一节。 */
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
 }
-.statusCard {
+.navRail {
+  flex: 0 0 196px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+.navItem {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nm-text-2);
   cursor: pointer;
   text-align: left;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.navItem:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+
+/* 分组标题：14 节平铺太密，按「配置向导 / 智能与隐私 / 授权与维护 / 高级」分段。
+   样式对齐外层侧栏的 .navGroupLabel（小字 + 大字距），但这里常显、不折叠。 */
+.navGroupLabel {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--nm-text-2);
+  padding: 6px 10px 1px;
+}
+.navGroupLabel:first-child { padding-top: 1px; }
+.navItemActive {
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
   color: var(--nm-text-1);
-  min-width: 0;
-  transition: all 0.15s;
 }
-.statusCard:hover {
-  border-color: var(--nm-border-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-.statusIcon {
+.navIcon {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: 9px;
   color: var(--nm-cyan);
   background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 12%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
 }
-.statusDone .statusIcon {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-success) 14%, transparent), color-mix(in srgb, var(--nm-cyan) 10%, transparent));
-  color: var(--nm-success);
-}
-.statusNote .statusIcon {
-  background: var(--nm-bg-hover);
-  color: var(--nm-text-2);
-}
-.statusBody {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.statusLabel {
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.statusValue {
+.navBody { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.navLabel { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.navValue {
   font-size: 10.5px;
   color: var(--nm-text-2);
   white-space: nowrap;
@@ -96,10 +101,28 @@
   scroll-behavior: smooth;
 }
 
-/* toast — 右上角悬浮层(不遮挡标题/步骤条/操作区),不挤占文档流 */
+/* 右区的直接子项同样禁止压缩：`.mainScroll` 是定高 flex 列，默认 flex-shrink:1 会把
+   子项缩进容器（缩完不再溢出 → 不出现滚动条），节里的内容就被静默裁掉。
+   理由与 kit.module.css 的 `.panelShell > *` 相同。 */
+.mainScroll > * { flex-shrink: 0; }
+
+/* 右侧内容区：未选中的分节必须真的不显示 —— `[hidden]` 的 UA 样式优先级低于
+   `.card` 这类类选择器（它们设了 display），所以这里显式压一头。 */
+.mainScroll [hidden] { display: none !important; }
+
+/* 整页视图（数据边界与出网 / 隐私体检）：这两页原来是外层侧栏的独立页签，迁进弹窗后
+   保留自己的页头与卡片，这里只负责它们与相邻节一致的纵向间距。 */
+.embedPane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+/* toast — 右上角悬浮层(不遮挡标题/操作区),不挤占文档流 */
 .notice {
   position: absolute;
-  top: 58px;
+  top: 16px;
   right: 14px;
   left: auto;
   bottom: auto;
@@ -841,40 +864,6 @@
   corner-shape: round;
 }
 
-/* advanced details */
-.advanced {
-  flex-shrink: 0;
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
-  background: var(--nm-bg-card);
-  overflow: hidden;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  transition: all 0.2s;
-}
-.advanced:hover {
-  border-color: var(--nm-border-hover);
-}
-.advancedSummary {
-  padding: 10px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--nm-text-2);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.15s;
-}
-.advancedSummary:hover {
-  color: var(--nm-cyan);
-  text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 40%, transparent);
-}
-.advancedBody {
-  padding: 0 10px 10px;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--nm-border);
-}
-
 /* footer save bar */
 .saveBar {
   display: flex;
@@ -989,6 +978,11 @@
   color: var(--nm-text-2);
   padding: 12px 0;
   text-align: center;
+}
+
+/* 弹窗形态：外层弹窗已经给了内边距，这里只留一点纵向呼吸。 */
+.root[data-in-dialog] {
+  padding: 2px 0 6px;
 }
 
 

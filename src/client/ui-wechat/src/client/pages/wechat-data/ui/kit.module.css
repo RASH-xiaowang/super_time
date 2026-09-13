@@ -508,19 +508,29 @@
 }
 
 /* ── Dialog（居中） ───────────────────────── */
+/* 遮罩：Radix 把 Overlay 与 Content 渲染成**兄弟节点**（都挂在 body 下），
+   所以遮罩上的 `display:grid; place-items:center` 其实**居中不了**对话框 —— 定位必须写在
+   .dialog 自己身上（见下）。遮罩只负责铺满 + 变暗 + 轻模糊。 */
 .dialogOverlay {
   position: fixed;
   inset: 0;
   z-index: 70;
-  display: grid;
-  place-items: center;
   background: rgba(4, 8, 20, 0.6);
   backdrop-filter: blur(2px);
 }
 
 .dialogOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
 
+/* 居中定位与层级都在这里：
+   1) 不给 .dialog 定位于是把落进 body 的常规流 —— 实测会掉到窗口左下角（body 是 flex）；
+   2) z-index 必须高于 .dialogOverlay（70），否则对话框会被画在遮罩**下面**，
+      隔着 60% 暗色 + 2px 模糊看自己，就是用户报的「编辑框跑到左下角且模糊」。 */
 .dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 71;
   width: min(520px, 92vw);
   max-height: 84vh;
   display: flex;
@@ -633,6 +643,34 @@
   overflow-y: auto;
   padding: var(--nm-panel-pad);
   background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
+}
+
+/*
+ * 面板正文里的卡片不允许被压缩。
+ *
+ * `.panelShell` 是 height:100% + overflow-y:auto 的 flex 列：内容比容器高时，子项默认的
+ * flex-shrink:1 会先把它们**缩进容器**（缩完就不再溢出，于是永远不出现滚动条），
+ * 而 Card 自带 overflow:hidden —— 卡里的内容就这样被静默裁掉，界面上看不出异常。
+ * 实测 1288px 高的窗口：「资金往来」的异常提醒卡 464/860（丢掉 396px，半张卡直接没了）、
+ * 「隐私与信任」四张卡分别丢掉 67/72/92/148px；把窗口拉高到 2100px 压缩即消失。
+ * settings.module.css 的 .card 早就写了 flex-shrink:0，这里补齐其余面板共用的 Card。
+ *
+ * 只钉「卡片类内容块」，不写成 `.panelShell > *` —— 有的面板直接子项是**布局容器**
+ * （微信问答的 .askLayout 靠自己的 flex 分配高度），钉死会把整页撑出容器、
+ * 破坏「页头固定 + 正文内滚」的契约；那种写法还会依赖两份 CSS 的打包顺序才成立。
+ */
+.panelShell > :is(.card, .cardGrid, .statGrid, .panelHeader) { flex-shrink: 0; }
+
+/*
+ * 面板的「嵌入形态」：作为「设置」弹窗里的一节渲染时替换 .panelShell。
+ * 差别只有两点 —— 不自建 height:100%（那是整页用的，塞进弹窗右区会变成定高内滚动），
+ * 不自建内边距（弹窗右区已经给了）。滚动统一交给右区。
+ */
+.panelEmbed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
 }
 
 /*
@@ -792,9 +830,11 @@
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* 只被 .dialog 用到。首尾都带上 translate(-50%,-50%)：动画期间 transform 会覆盖基值，
+   如果只写 translateY/scale，弹窗在动画那 0.2s 里会先落到「视口中心为左上角」的位置再跳回。 */
 @keyframes kitPopIn {
-  from { transform: translateY(8px) scale(0.98); opacity: 0.6; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
+  from { transform: translate(-50%, -50%) translateY(8px) scale(0.98); opacity: 0.6; }
+  to { transform: translate(-50%, -50%) translateY(0) scale(1); opacity: 1; }
 }
 
 /* ────────────────────────────────────────────

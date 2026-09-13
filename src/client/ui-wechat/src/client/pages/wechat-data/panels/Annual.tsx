@@ -1,541 +1,565 @@
 /**
- * 年度总结面板 — 忠实迁移 AnnualSummary：年份选择 + 年度报告（Hero/人物标签/
- * 周活跃热力图/月度/消息类型/高频短语/表情宇宙/人际榜/首末句）。仅本地计算。
+ * 年度总结 · 年度回顾看板。
+ *
+ * 数据全部来自本机解密库（`getAnnualReview`），口径见后端 `query/annual-review.ts`：
+ *   · 人物类指标（发出/排行/搭子/口头禅/回复速度/谁先开口）只算**我发出的**；
+ *   · 规模类指标（日历热力/最疯的一天/作息切片）算**全部消息**。
+ * 两类口径在看板上分别标注，避免「日均 28 条却有一天 2,218 条」这种无法解释的数字。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { apiExportAnnualReport, apiGetAnnual, apiGetAnnualReport, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
-import type { AnnualReport } from '@deepseek-ai/dsh-wechat-data/types'
-import { ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
-import { Card, PanelHeader, Segmented, Toolbar } from '../ui/kit.tsx'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, writeRenderCache } from '../api.ts'
+import type { AnnualReviewShape } from '../api.ts'
+import { ListSkeleton } from './hooks.tsx'
+import { PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
-import css from './list-panel.module.css'
-import { fmtPct } from '../utils/format.ts'
+import css from './annual.module.css'
+import { avatarColors } from '../utils/format.ts'
 
-const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
+/** 千分位。 */
+const fmt = (n: number): string => (Number.isFinite(n) ? n.toLocaleString('zh-CN') : '0')
+/** 秒 → 可读时长。 */
+function dur(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '—'
+  if (sec < 60) return `${Math.round(sec)}秒`
+  if (sec < 3600) return `${Math.round(sec / 60)}分钟`
+  if (sec < 86400) return `${(sec / 3600).toFixed(1)}小时`
+  return `${Math.round(sec / 86400)}天`
+}
+/** 周一为首的行标签。 */
+const DOW = ['一', '二', '三', '四', '五', '六', '日']
+/** 数字 → 热力等级（0 不显示底色）。 */
+function lv(n: number, t: [number, number, number, number]): string {
+  if (n <= 0) return ''
+  if (n <= t[0]) return '1'
+  if (n <= t[1]) return '2'
+  if (n <= t[2]) return '3'
+  return '4'
+}
+/**
+ * 按当年峰值自适应分档。
+ * 固定阈值不行：总量 20 万条/年时，每一格都远超任何合理常数，热力图会变成一整块同色
+ * （实测：日历 376 格里 300+ 是同一档），完全看不出疏密。改为按峰值取比例分档，
+ * 不同体量的用户都能看到梯度。
+ */
+function adaptiveTiers(max: number): [number, number, number, number] {
+  const m = Math.max(1, max)
+  return [Math.max(1, Math.round(m * 0.1)), Math.round(m * 0.3), Math.round(m * 0.55), Math.round(m * 0.8)]
+}
 
-/** 数字缩写。 */
-function fmtNum(n: number): string { if (n >= 10000) return (n / 10000).toFixed(1) + 'w'; if (n >= 1000) return (n / 1000).toFixed(1) + 'k'; return String(n) }
+/** 圆形头像（拿不到真头像时用首字 + 稳定色）。 */
+function Avatar({ username, name, size = 32, src }: { username: string; name: string; size?: number; src?: string }): React.JSX.Element {
+  const c = avatarColors(username || name || '?')
+  return (
+    <span className={css.av} style={{ width: size, height: size, background: c.background, color: c.color, fontSize: Math.round(size * 0.42) }}>
+      {src ? <img src={src} alt="" /> : (name || username || '?').slice(0, 1)}
+    </span>
+  )
+}
 
-/** FancyUI-style Marquee: a horizontally auto-scrolling row, pause on hover, edge fade. */
-function Marquee({ reverse, duration, children }: {
-  reverse?: boolean
-  duration?: number
-  children: React.ReactNode[]
+/** 卡片外壳。`span` 是 12 列网格里的占列数（退化布局下忽略）。 */
+function Card({ title, extra, span = 3, children }: {
+  title: string; extra?: React.ReactNode; span?: number; children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className={css.marquee}>
-      <div className={css.marqueeTrack} data-reverse={reverse || undefined} style={{ animationDuration: `${duration ?? 20}s` }}>
-        {children}{children}
+    <section className={css.card} style={{ gridColumn: `span ${span}` }}>
+      <div className={css.cardHead}>
+        <span className={css.cardTitle}>{title}</span>
+        {extra !== undefined && <span className={css.cardExtra}>{extra}</span>}
       </div>
-      <div className={css.marqueeMaskL} aria-hidden="true" />
-      <div className={css.marqueeMaskR} aria-hidden="true" />
-    </div>
+      <div className={css.cardBody}>{children}</div>
+    </section>
   )
 }
 
-/** Marquee card tile (ReviewCard-style content: icon / title / meta). */
-function MarqueeCard({ icon, title, meta }: { icon?: string; title: string; meta: string }): React.JSX.Element {
+/** ① 全年发出。 */
+function HeroCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
   return (
-    <div className={css.marqueeCard}>
-      {icon && <span className={css.marqueeCardIcon}>{icon}</span>}
-      <div className={css.marqueeCardBody}>
-        <div className={css.marqueeCardTitle}>{title}</div>
-        <div className={css.marqueeCardMeta}>{meta}</div>
+    <Card title="全年发出" extra={`发给 ${fmt(r.sentTo)} 个会话`}>
+      <div className={css.heroNum}>{fmt(r.sent)}<small>条</small></div>
+      <div className={css.heroSub}>平均每天 {r.sentDailyAvg} 条 · 一年就这样过去了。</div>
+      <div className={css.heroGrid}>
+        <div className={css.heroCell}><span className={css.heroCellK}>活跃</span><span className={css.heroCellV}>{r.activeDaysMine} 天</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>最长连续</span><span className={css.heroCellV}>{r.longestStreak} 天</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>新朋友</span><span className={css.heroCellV}>{r.newFriends} 位</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>图片视频</span><span className={css.heroCellV}>{fmt(r.mediaSent)} 条</span></div>
+        <div className={`${css.heroCell}`} style={{ gridColumn: 'span 2' }}>
+          <span className={css.heroCellK}>最长的一段</span>
+          <span className={css.heroCellV}>{r.longestSpanFrom ? `${r.longestSpanFrom.slice(5)} – ${r.longestSpanTo.slice(5)}` : '—'}</span>
+        </div>
       </div>
-    </div>
+    </Card>
   )
 }
 
-/** Split an array into rows of n for marquee layout. */
-function splitRows<T>(arr: T[], n: number): T[][] {
-  const rows: T[][] = []
-  for (let i = 0; i < arr.length; i += n) rows.push(arr.slice(i, i + n))
-  return rows
-}
+/** ② 日历热力（全部消息口径）。 */
+function CalendarCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const cols = useMemo(() => {
+    const first = new Date(r.year, 0, 1)
+    const off = (first.getDay() + 6) % 7
+    const total = r.calendar.length
+    const n = Math.ceil((total + off) / 7)
+    const cells: Array<{ col: number; row: number; n: number; d: string } | null> = []
+    for (let c = 0; c < n; c += 1) {
+      for (let w = 0; w < 7; w += 1) {
+        const idx = c * 7 + w - off
+        cells.push(idx >= 0 && idx < total ? { col: c, row: w, n: r.calendar[idx].n, d: r.calendar[idx].d } : null)
+      }
+    }
+    // 每个月的起始列（放月份标签）
+    const monthCols: number[] = []
+    for (let m = 0; m < 12; m += 1) {
+      const t = new Date(r.year, m, 1)
+      const idx = Math.round((t.getTime() - first.getTime()) / 86400000)
+      monthCols.push(Math.floor((idx + off) / 7))
+    }
+    return { cells, n, monthCols }
+  }, [r])
+  const tiers = useMemo(() => adaptiveTiers(r.maxDayAll), [r.maxDayAll])
 
-/** FancyUI-style Focus: a prominent typographic sentence (eyebrow + statement). */
-function Focus({ sentence, eyebrow }: { sentence: string; eyebrow?: string }): React.JSX.Element {
   return (
-    <div className={css.focus}>
-      {eyebrow !== undefined && <div className={css.focusEyebrow}>{eyebrow}</div>}
-      <div className={css.focusSentence}>{sentence}</div>
-    </div>
+    <Card
+      span={6}
+      title={`${r.year} 年的 ${r.calendar.length} 天`}
+      extra={`全年活跃 ${r.activeDaysAll} 天 · 最高一天 ${fmt(r.maxDayAll)} 条`}
+    >
+      <div className={css.calWrap}>
+        <div className={css.calMonths} style={{ gridTemplateColumns: `repeat(${cols.n}, minmax(0, 1fr))` }}>
+          {cols.monthCols.map((c, m) => (
+            <span key={m} style={{ gridColumn: c + 1 }}>{m + 1}月</span>
+          ))}
+        </div>
+        <div className={css.calBody}>
+          <div className={css.calDows}>{DOW.map(d => <span key={d}>{d}</span>)}</div>
+          <div className={css.calGrid} style={{ gridTemplateColumns: `repeat(${cols.n}, minmax(0, 1fr))` }}>
+            {cols.cells.map((c, i) => (
+              c
+                ? <span key={i} className={css.calCell} data-lv={lv(c.n, tiers) || undefined} title={`${c.d} · ${c.n} 条`} />
+                : <span key={i} className={css.calCell} data-empty="1" />
+            ))}
+          </div>
+        </div>
+        <div className={css.calFoot}>
+          <span className={css.calLegend}>
+            少
+            <span className={css.calCell} />
+            <span className={css.calCell} data-lv="1" />
+            <span className={css.calCell} data-lv="2" />
+            <span className={css.calCell} data-lv="3" />
+            <span className={css.calCell} data-lv="4" />
+            多
+          </span>
+          <span className={css.calLegend}>每格一天的<b>&nbsp;全部消息&nbsp;</b>条数</span>
+        </div>
+      </div>
+    </Card>
   )
 }
 
-/** 渲染年度总结长图（Canvas 海报），返回 canvas。 */
-function drawAnnualPoster(r: AnnualReport): HTMLCanvasElement {
-  const W = 1200
-  const H = 1900
-  const c = document.createElement('canvas')
-  c.width = W
-  c.height = H
-  const ctx = c.getContext('2d')
-  if (!ctx) return c
-  const accent = '#22d3ee'
-  const fg = '#e6ebf2'
-  const muted = '#8ea3b8'
-  const bg = ctx.createLinearGradient(0, 0, 0, H)
-  bg.addColorStop(0, '#0b0e13')
-  bg.addColorStop(1, '#101a26')
-  ctx.fillStyle = bg
-  ctx.fillRect(0, 0, W, H)
-  ctx.textAlign = 'left'
-  let y = 90
-
-  const title = String(r.year) + ' 微信年度总结'
-  ctx.font = '800 56px sans-serif'
-  ctx.fillStyle = accent
-  ctx.fillText(title, 70, y)
-  y += 26
-  ctx.font = '400 18px sans-serif'
-  ctx.fillStyle = muted
-  ctx.fillText('总消息 ' + fmtNum(r.total) + ' 条 · 活跃 ' + String(r.active_days) + ' 天 · 文字 ' + fmtNum(r.text_chars) + ' 字 · 日均 ' + String(r.daily_avg) + ' 条', 70, y)
-  y += 40
-  if (r.persona_tags.length > 0) {
-    ctx.font = '600 20px sans-serif'
-    ctx.fillStyle = fg
-    ctx.fillText('人物标签', 70, y)
-    y += 34
-    ctx.font = '500 17px sans-serif'
-    let px = 70
-    for (const t of r.persona_tags) {
-      const w = ctx.measureText('#' + t).width + 26
-      ctx.fillStyle = 'rgba(34,211,238,0.12)'
-      roundRect(ctx, px, y - 24, w, 30, 15)
-      ctx.fill()
-      ctx.fillStyle = accent
-      ctx.fillText('#' + t, px + 13, y - 4)
-      px += w + 10
-    }
-    y += 40
-  }
-
-  const section = (t: string): void => {
-    ctx.font = '800 30px sans-serif'
-    ctx.fillStyle = fg
-    ctx.fillText(t, 70, y)
-    y += 26
-    ctx.fillStyle = accent
-    ctx.fillRect(70, y, 70, 4)
-    y += 34
-  }
-
-  section('类型占比')
-  const shares: Array<[string, number]> = [
-    ['文字', r.text_share], ['深夜', r.night_share], ['清晨', r.morning_share], ['周末', r.weekend_share], ['群聊', r.group_share],
-  ]
-  const maxShare = Math.max(0.01, ...shares.map(s2 => s2[1]))
-  for (const [label, v] of shares) {
-    ctx.font = '500 20px sans-serif'
-    ctx.fillStyle = fg
-    ctx.fillText(label, 70, y)
-    const bx = 190
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    ctx.fillRect(bx, y - 16, 620, 14)
-    ctx.fillStyle = accent
-    ctx.fillRect(bx, y - 16, Math.max(6, (v / maxShare) * 620), 14)
-    ctx.fillStyle = muted
-    ctx.textAlign = 'right'
-    ctx.fillText(String(Math.round(v * 100)) + '%', W - 70, y)
-    ctx.textAlign = 'left'
-    y += 44
-  }
-  y += 8
-
-  section('周活跃热力图（星期 × 小时）')
-  const heatMax = Math.max(1, ...r.heat)
-  const cell = 38
-  const hx = 70
-  const hy = y
-  for (let i = 0; i < r.heat.length; i++) {
-    const v = r.heat[i] ?? 0
-    const col = i % 24
-    const row = Math.floor(i / 24)
-    ctx.fillStyle = 'rgba(34,211,238,' + String(v > 0 ? Math.max(0.08, v / heatMax) : 0.03) + ')'
-    ctx.fillRect(hx + col * cell, hy + row * cell, cell - 3, cell - 3)
-  }
-  ctx.font = '500 14px sans-serif'
-  ctx.fillStyle = muted
-  for (let d = 0; d < 7; d++) {
-    ctx.fillText(WEEKDAYS[d] ?? '', hx - 34, hy + d * cell + cell - 8)
-  }
-  y += 7 * cell + 34
-
-  section('月度活跃')
-  const monthlyMax = Math.max(1, ...r.monthly)
-  const barH = 200
-  for (let i = 0; i < 12; i++) {
-    const v = r.monthly[i] ?? 0
-    const bw = 72
-    const bx = 70 + i * 92
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.fillRect(bx, y + barH, bw, -barH)
-    const h = Math.max(6, (v / monthlyMax) * barH)
-    ctx.fillStyle = 'rgba(34,211,238,0.7)'
-    ctx.fillRect(bx, y + barH - h, bw, h)
-    ctx.font = '500 15px sans-serif'
-    ctx.fillStyle = muted
-    ctx.textAlign = 'center'
-    ctx.fillText(String(i + 1), bx + bw / 2, y + barH + 26)
-    ctx.textAlign = 'left'
-  }
-  y += barH + 56
-
-  if (r.top_phrases.length > 0) {
-    section('高频短语')
-    ctx.font = '500 18px sans-serif'
-    let px = 70
-    let py = y
-    for (const ph of r.top_phrases.slice(0, 12)) {
-      const label = ph.phrase + '(' + String(ph.count) + ')'
-      const w = ctx.measureText(label).width + 22
-      if (px + w > W - 70) { px = 70; py += 38 }
-      ctx.fillStyle = 'rgba(255,255,255,0.07)'
-      roundRect(ctx, px, py - 22, w, 30, 15)
-      ctx.fill()
-      ctx.fillStyle = fg
-      ctx.fillText(label, px + 11, py - 2)
-      px += w + 8
-    }
-    y = py + 40
-  }
-
-  if (r.top_emoji.length > 0) {
-    section('表情宇宙')
-    ctx.font = '500 22px sans-serif'
-    ctx.fillStyle = fg
-    ctx.fillText(r.top_emoji.slice(0, 8).map(e => e.emoji + '×' + String(e.count)).join('  '), 70, y)
-    y += 36
-  }
-
-  const rank = (t: string, items: Array<{ username: string; name?: string; count: number }>): void => {
-    section(t)
-    const max = Math.max(1, items[0]?.count ?? 1)
-    for (const it of items.slice(0, 8)) {
-      ctx.font = '500 19px sans-serif'
-      ctx.fillStyle = fg
-      ctx.fillText(it.name || it.username, 70, y)
-      ctx.fillStyle = 'rgba(255,255,255,0.08)'
-      ctx.fillRect(330, y - 14, 480, 12)
-      ctx.fillStyle = accent
-      ctx.fillRect(330, y - 14, Math.max(6, (it.count / max) * 480), 12)
-      ctx.fillStyle = muted
-      ctx.textAlign = 'right'
-      ctx.fillText(String(it.count) + ' 条', W - 70, y)
-      ctx.textAlign = 'left'
-      y += 38
-    }
-    y += 10
-  }
-  if (r.top_contacts.length > 0) rank('聊得最多的人', r.top_contacts)
-  if (r.top_groups.length > 0) rank('最活跃的群聊', r.top_groups)
-
-  section('年度首尾句')
-  ctx.font = '400 20px sans-serif'
-  ctx.fillStyle = muted
-  ctx.fillText('首句', 70, y)
-  y += 30
-  ctx.fillStyle = fg
-  ctx.fillText(trunc(r.first_message ?? '', 44), 70, y)
-  y += 38
-  ctx.fillStyle = muted
-  ctx.fillText('末句', 70, y)
-  y += 30
-  ctx.fillStyle = fg
-  ctx.fillText(trunc(r.last_message ?? '', 44), 70, y)
-
-  ctx.font = '500 16px sans-serif'
-  ctx.fillStyle = muted
-  ctx.textAlign = 'center'
-  ctx.fillText('由 deepseek-harness · 本地解密生成', W / 2, H - 40)
-  ctx.textAlign = 'left'
-  return c
+/** ③ 最疯的一天（全部消息口径）。 */
+function BusiestCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const b = r.busiest
+  if (!b) return <Card title="最疯的一天"><div className={css.sub}>这一年还没有消息</div></Card>
+  return (
+    <Card title="最疯的一天" extra={b.date}>
+      <div className={css.bigDay}>
+        <span className={css.bigDayNum}>{fmt(b.n)}</span>
+        <span className={css.bigDayUnit}>条 · 日均的 {b.ratio} 倍 · 占全年全部消息 {(b.share * 100).toFixed(1)}%</span>
+      </div>
+      <div className={css.bar}><div className={css.barFill} style={{ width: `${Math.min(100, b.share * 100 * 2)}%` }} /></div>
+      <div className={css.kv}><span>{b.topName || '—'}</span><b>{fmt(b.topCount)} 条</b></div>
+      <div className={css.kv}><span>首句 → 末句</span><b>{dur(b.spanMin * 60)}</b></div>
+      <div className={css.kv}><span>{b.firstAt} · {b.lastAt}</span></div>
+      {/* 只留一句原文（两行截断）：卡片高度是固定的，两段引文会被裁掉 */}
+      {b.firstText && <div className={css.quote}>{b.firstText.slice(0, 60)}</div>}
+    </Card>
+  )
 }
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-  const rr = Math.min(r, w / 2, h / 2)
-  ctx.beginPath()
-  ctx.moveTo(x + rr, y)
-  ctx.arcTo(x + w, y, x + w, y + rr, rr)
-  ctx.arcTo(x + w, y + h, x + w - rr, y + h, rr)
-  ctx.arcTo(x, y + h, x + rr, y + h, rr)
-  ctx.arcTo(x, y + h - rr, x, y + h, rr)
-  ctx.closePath()
+/** ④ 年度搭子。 */
+function BuddyCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element | null {
+  const b = r.buddy
+  if (!b) return null
+  const total = Math.max(1, b.mine + b.theirs)
+  return (
+    <Card title="年度搭子" extra="今年话最多的一对">
+      <div className={css.row}>
+        <Avatar username={b.username} name={b.name} size={32} src={av.get(b.username) ?? undefined} />
+        <div className={css.rowMain}>
+          <div className={css.name}>{b.name}</div>
+          <div className={css.sub}>{fmt(b.total)} 条 · 你发 {b.mine} / TA 发 {b.theirs}</div>
+        </div>
+      </div>
+      <div className={css.bar}><div className={css.barFill} style={{ width: `${(b.mine / total) * 100}%` }} /></div>
+      <div className={css.kv}><span>连续 / 常在</span><b>{b.streakDays} 天 · {String(b.commonHour).padStart(2, '0')}:00</b></div>
+      <div className={css.kv}><span>接话</span><b>{fmt(b.replyBacks)} 次</b></div>
+      <div className={css.kv}><span>最快 {dur(b.fastestSec)} 回 · 最慢等了 {dur(b.slowestSec)}</span></div>
+    </Card>
+  )
 }
 
-function trunc(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + '…' : s
+/** ⑤ 十二个月的主演。 */
+function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element {
+  const byMonth = new Map(r.monthlyStar.map(x => [x.month, x]))
+  const hot = r.hottestMonth
+  return (
+    <Card
+      span={6}
+      title="十二个月的主演"
+      extra={r.starName ? `年度主演 ${r.starName} · ${r.starMonths} 个月` : ''}
+    >
+      <div className={css.starGrid}>
+        {Array.from({ length: 12 }, (_, i) => {
+          const m = i + 1
+          const s = byMonth.get(m)
+          return (
+            <div key={m} className={`${css.starCell} ${m === hot ? css.starHot : ''}`}>
+              <span className={css.starM}>{m}月</span>
+              {s
+                ? <Avatar username={s.username} name={s.name} size={30} src={av.get(s.username) ?? undefined} />
+                : <span className={css.av} style={{ width: 30, height: 30, background: 'transparent', color: 'var(--nm-text-3)', fontSize: 14 }}>—</span>}
+              <span className={css.sub} title={s?.name}>{s ? s.name : '—'}</span>
+            </div>
+          )
+        })}
+      </div>
+      <div className={css.calFoot}>
+        <span className={css.calLegend}>最热 {hot} 月 · {fmt(r.hottestMonthCount)} 条</span>
+      </div>
+    </Card>
+  )
+}
+
+/** ⑥ 深夜。 */
+function NightCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element {
+  const n = r.night
+  return (
+    <Card title="深夜" span={3} extra={`陪你完成 ${(n.share * 100).toFixed(1)}% 的深夜`}>
+      <div className={css.nightTop}>
+        <Avatar username={n.topName} name={n.topName} size={34} />
+        <div className={css.rowMain}>
+          <div className={css.name}>{n.topName || '—'}</div>
+          <div className={css.sub}>0-6 点共 {fmt(n.topCount)} 条</div>
+        </div>
+      </div>
+      <div className={css.kv}><span>你发出</span><b>{fmt(n.mine)} 条</b></div>
+      <div className={css.kv}><span>对方发出</span><b>{fmt(n.theirs)} 条</b></div>
+      {n.sampleAt && <div className={css.quote}>{n.sampleAt} 你说：{n.sampleText.slice(0, 40) || '（非文字）'}</div>}
+    </Card>
+  )
+}
+
+/** ⑦ 作息切片（全部消息口径）。 */
+function RhythmCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const heat = r.rhythm.heat
+  const tiers = useMemo(() => adaptiveTiers(heat.reduce((m, x) => Math.max(m, x), 0)), [heat])
+  return (
+    <Card
+      span={6}
+      title="作息切片"
+      extra={`一周 168 格 · 共 ${fmt(r.rhythm.heat.reduce((a, n) => a + n, 0))} 条`}
+    >
+      <div>
+        {DOW.map((d, w) => (
+          <div key={d} className={css.rhythmRow}>
+            <span className={css.rhythmDow}>{d}</span>
+            <div className={css.rhythmGrid}>
+              {Array.from({ length: 24 }, (_, h) => {
+                const cnt = heat[w * 24 + h] ?? 0
+                return <span key={h} className={css.rhythmCell} data-lv={lv(cnt, tiers) || undefined} title={`周${d} ${String(h).padStart(2, '0')}:00 · ${cnt} 条`} />
+              })}
+            </div>
+          </div>
+        ))}
+        <div className={css.rhythmHours}>
+          <span />
+          <div className={css.rhythmHourTicks}>
+            {Array.from({ length: 24 }, (_, h) => <span key={h}>{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>)}
+          </div>
+        </div>
+      </div>
+      <div className={css.calFoot}>
+        <span className={css.calLegend}>最常亮 周{DOW[r.rhythm.brightestDow]} {String(r.rhythm.brightestHour).padStart(2, '0')}:00</span>
+        <span className={css.calLegend}>最安静 {String(r.rhythm.quietestHour).padStart(2, '0')}:00 · 仅 {r.rhythm.quietestCount} 条</span>
+        <span className={css.calLegend}>深夜指数 {(r.rhythm.nightShare * 100).toFixed(1)}% · 工作日:周末 {r.rhythm.workWeekendRatio}:1</span>
+      </div>
+    </Card>
+  )
+}
+
+/** ⑧ 你说的话。 */
+function WordsCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const w = r.words
+  return (
+    <Card title="你说的话" span={3} extra={`收到 ${fmt(w.receivedChars)} 字`}>
+      <div className={css.bigDay}>
+        <span className={css.bigDayNum}>{fmt(w.mineChars)}</span>
+        <span className={css.bigDayUnit}>字</span>
+      </div>
+      {/* 最长语音原先是跨 3 列的第 7 格 —— 改成副标题，省下一行高度 */}
+      <div className={css.heroSub}>最长一条语音 {w.longestVoiceSec > 0 ? `${w.longestVoiceSec} 秒 · 来自 ${w.longestVoiceFrom}` : '—'}</div>
+      <div className={css.heroGrid} style={{ marginTop: 6 }}>
+        <div className={css.heroCell}><span className={css.heroCellK}>敲字</span><span className={css.heroCellV}>{fmt(w.keystrokes)} 次</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>语音发出</span><span className={css.heroCellV}>{w.voiceSentCount} 条 · {dur(w.voiceSentSec)}</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>语音收到</span><span className={css.heroCellV}>{w.voiceRecvCount} 条 · {dur(w.voiceRecvSec)}</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>通话</span><span className={css.heroCellV}>{dur(w.callSec)} · {w.callCount} 通</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>接通 / 未接</span><span className={css.heroCellV}>{w.callConnected} · {w.callMissed}</span></div>
+        <div className={css.heroCell}><span className={css.heroCellK}>视频 / 语音</span><span className={css.heroCellV}>{w.videoSent} / {w.voiceMsgSent}</span></div>
+      </div>
+    </Card>
+  )
+}
+
+/** ⑨ 年度口头禅。 */
+function CatchphraseCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const c = r.catchphrase
+  return (
+    <Card title="年度口头禅" span={3} extra={`${fmt(c.shortTotal)} 句短表达 · ${fmt(c.catchTotal)} 句成了口头禅`}>
+      {c.phrase
+        ? <div className={css.phraseHero}>“{c.phrase}”<span className={css.sub} style={{ marginLeft: 8 }}>说了 {c.count} 次</span></div>
+        : <div className={css.sub}>还没有足够短的重复表达</div>}
+      <div className={css.phraseList}>
+        {c.top.slice(1).map(p => (
+          <span key={p.phrase} className={css.chip}>{p.phrase} <b>{p.count}</b></span>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+/** ⑩ 回复速度。 */
+function ReplyCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const p = r.reply
+  return (
+    <Card title="回复速度" span={4} extra="按「对方说 → 我回」的间隔统计">
+      <div className={css.kv}><span>一半的消息，你在</span><b>{dur(p.medianSec)}内回了</b></div>
+      <div className={css.kv}><span>九成在</span><b>{dur(p.p90Sec)}</b></div>
+      {p.avgPartnerName && <div className={css.kv}><span>和 {p.avgPartnerName} 平均</span><b>{dur(p.avgPartnerSec)}</b></div>}
+      <div className={css.kv}><span>最快回给 {p.fastestName || '—'}</span><b>{dur(p.fastestSec)}</b></div>
+      <div className={css.kv}><span>最慢让 {p.slowestName || '—'} 等了</span><b>{dur(p.slowestSec)}</b></div>
+    </Card>
+  )
+}
+
+/** ⑪ 谁先开口。 */
+function OpenerCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const o = r.opener
+  return (
+    <Card title="谁先开口" span={4} extra={`全年 ${fmt(o.mine + o.theirs)} 次对话`}>
+      <div className={css.bigDay}>
+        <span className={css.bigDayNum}>{(o.share * 100).toFixed(1)}%</span>
+        <span className={css.bigDayUnit}>的对话由你先开口</span>
+      </div>
+      <div className={css.bar}><div className={css.barFill} style={{ width: `${o.share * 100}%` }} /></div>
+      <div className={css.kv}><span>你先</span><b>{fmt(o.mine)} 次</b></div>
+      <div className={css.kv}><span>TA 先</span><b>{fmt(o.theirs)} 次</b></div>
+      <div className={css.kv}><span>你最主动找</span><b>{o.mostInitiatedByMe.map(x => `${x.name} ${x.count}`).join(' / ') || '—'}</b></div>
+      <div className={css.kv}><span>最主动来找你</span><b>{o.mostInitiatedByThem.map(x => `${x.name} ${x.count}`).join(' / ') || '—'}</b></div>
+    </Card>
+  )
+}
+
+/** ⑫ 年度聊天排行。 */
+function RankingCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element {
+  return (
+    <Card title="年度聊天排行" span={4} extra="你发 | TA 发">
+      {r.ranking.length === 0 && <div className={css.sub}>暂无单聊记录</div>}
+      {/* 一屏只放前 5：卡片行高固定，10 行会撑破并被裁掉 */}
+      {r.ranking.slice(0, 5).map((row, i) => (
+        <div key={row.username} className={css.rankRow}>
+          <span className={css.rankNo}>{i + 1}</span>
+          <Avatar username={row.username} name={row.name} size={24} src={av.get(row.username) ?? undefined} />
+          <div className={css.rowMain}><div className={css.name}>{row.name}</div></div>
+          <span className={css.rankVal} title={`你发 ${row.mine} / TA 发 ${row.theirs}`}>{fmt(row.total)}</span>
+        </div>
+      ))}
+    </Card>
+  )
+}
+
+/** ⑬ 表情宇宙。 */
+function EmojiCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
+  const e = r.emoji
+  return (
+    <Card title="表情宇宙" span={4} extra={e.threw > 0 ? `出没 ${e.days} 天` : ''}>
+      <div className={css.kv}><span>甩出</span><b>{fmt(e.threw)} 张</b></div>
+      <div className={css.kv}><span>攒下</span><b>{fmt(e.kept)} 种</b></div>
+      <div className={css.kv}><span>均匀</span><b>{e.perDay} 张 / 天</b></div>
+      {e.peakCount > 0 && <div className={css.kv}><span>最密集</span><b>周{DOW[e.peakDow]} {String(e.peakHour).padStart(2, '0')}:00</b></div>}
+      <div className={css.emojiTop}>
+        {e.top.map(x => <span key={x.emoji} className={css.emojiCell}><span style={{ fontSize: 16 }}>{x.emoji}</span>×{x.count}</span>)}
+      </div>
+    </Card>
+  )
+}
+
+/** ⑭ 还有这些人。 */
+function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | null> }): React.JSX.Element | null {
+  if (r.highlights.length === 0) return null
+  return (
+    <Card title="还有这些人" span={8}>
+      {/* 单行 7 格、横向小卡（头像 + 说明列）：一屏内放得下，不用横向滚动 */}
+      <div className={css.moreRow}>
+        {r.highlights.map((h, i) => (
+          <div key={`${h.label}-${i}`} className={css.moreCell}>
+            <Avatar username={h.username} name={h.name} size={26} src={av.get(h.username) ?? undefined} />
+            <div className={css.moreInfo}>
+              <span className={css.moreLabel}>{h.label}</span>
+              <span className={css.name} title={h.name}>{h.name}</span>
+              <span className={css.moreVal}>{h.value}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
 }
 
 /**
- * Render the annual-summary panel.
- * @returns the annual element tree.
+ * Render the annual review dashboard.
+ * @returns the annual panel element tree.
  */
 export function AnnualPanel(): React.JSX.Element {
   const [years, setYears] = useState<readonly number[]>([])
-  const [year, setYear] = useState(0)
-  const [report, setReport] = useState<AnnualReport | null>(null)
+  const [year, setYear] = useState<number | null>(null)
+  const [data, setData] = useState<AnnualReviewShape | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [expDir, setExpDir] = useState('')
-  const [pickingDir, setPickingDir] = useState(false)
+  const [av, setAv] = useState<Map<string, string | null>>(new Map())
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
+  /** 面板根节点：导出时量它的矩形做截图（含标题栏/工具栏/页脚，不含左侧导航与顶部栏）。 */
+  const shellRef = useRef<HTMLDivElement | null>(null)
 
-  const loadYears = useCallback(async (selectFirst: boolean): Promise<void> => {
+  const loadYears = useCallback(async (): Promise<void> => {
     try {
       const env = await apiGetAnnual()
       const ys = env.years.filter(n => Number.isFinite(n) && n > 2000)
       setYears(ys)
-      // 数据更新触发的重载**不能**重置用户已选的年份，否则正在看的报告会跳走。
-      if (selectFirst && ys.length > 0) setYear(ys[0] as number)
+      setYear(prev => prev ?? (ys.length > 0 ? ys[ys.length - 1] : new Date().getFullYear()))
     } catch (e) {
       setError((e as Error).message)
+      setYear(prev => prev ?? new Date().getFullYear())
     }
   }, [])
 
-  useEffect(() => { void loadYears(true) }, [loadYears])
+  useEffect(() => { void loadYears() }, [loadYears])
 
-  // 数据落地后重载年份列表（冷启动同步窗口内首次请求可能返回空快照）。
-  // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
-  // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
-  useWechatDataUpdated(() => { if (years.length === 0) void loadYears(false) })
-
-  const loadReport = useCallback(async (y: number): Promise<void> => {
-    if (!y) return
+  const load = useCallback(async (y: number): Promise<void> => {
+    setLoading(true)
     setError(null)
-    const cached = readRenderCache<AnnualReport>(`annual:${y}`)
-    if (cached) {
-      setReport(cached)
-      setLoading(false)
-    } else {
-      setLoading(true)
-    }
+    // 先出缓存秒开（首次扫描要逐条读一年消息，较慢）
+    const cached = readRenderCache<AnnualReviewShape>('annual-review:' + y)
+    if (cached) setData(cached)
     try {
-      const r = await apiGetAnnualReport({ year: y })
-      setReport(r)
-      writeRenderCache(`annual:${y}`, r)
+      const r = await apiGetAnnualReview(y)
+      setData(r)
+      writeRenderCache('annual-review:' + y, r)
     } catch (e) {
-      setError((e as Error).message)
+      if (!cached) setError((e as Error).message)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  // 年度报告按需计算：选中/点击某个年份时才生成，不再进入页签就自动跑全量年度统计。
-  //
-  // 第 64 轮补了一条「有缓存就直接显示」的近路：`getAnnualReport` 实测**约 2.4 秒**
-  // （2026 年、139k 条消息、按 create_time 走索引，已经是年粒度查询），
-  // 所以进面板自动跑是不合适的；但**本地已经有缓存**时（`annual:<年份>` 写在 localStorage）
-  // 再让用户点一下纯属白等 —— 现在挂载后若命中缓存就直接渲染。
-  // 没有缓存的首次访问保持手动，并把实测代价写进提示（见下面的 hint）。
-  const pickYear = useCallback((y: number): void => {
-    setYear(y)
-    void loadReport(y)
-  }, [loadReport])
+  useEffect(() => { if (year !== null) void load(year) }, [year, load])
+
+  // 头像批量拉取（一次 Remote，避免每张卡片各拉一遍）
   useEffect(() => {
-    // 只在「年份已选、还没有报告」时补一次；loadReport 内部会先读缓存，
-    // 命中则同步 setReport（无网络/后端开销），未命中会走接口 —— 这里用 cached 判断避免后者。
-    if (!year || report) return
-    const cached = readRenderCache<AnnualReport>('annual:' + String(year))
-    if (cached) void loadReport(year)
-  }, [year, report, loadReport])
+    if (!data) return
+    const users = [...new Set([
+      ...data.ranking.map(x => x.username),
+      ...data.monthlyStar.map(x => x.username),
+      ...(data.buddy ? [data.buddy.username] : []),
+      ...(data.starUsername ? [data.starUsername] : []),
+      ...data.highlights.map(x => x.username),
+    ].filter(Boolean))].slice(0, 60)
+    if (users.length === 0) return
+    void apiGetAvatarsLocal({ usernames: users })
+      .then((map) => { setAv(new Map(Object.entries(map).filter(([, v]) => typeof v === 'string'))) })
+      .catch(() => { /* 拿不到头像就退回首字占位 */ })
+  }, [data])
 
-  const doExport = async (format: string): Promise<void> => {
-    if (!year) return
+  const doExport = useCallback(async (): Promise<void> => {
+    if (year === null || exporting) return
+    const el = shellRef.current
+    if (!el) { setExportMsg('导出失败：找不到面板'); return }
+    setExporting(true)
+    setExportMsg('')
     try {
-      const opts: { year: number; format: string; dir?: string } = { year, format }
-      if (expDir) opts.dir = expDir
-      const r = await apiExportAnnualReport(opts)
-      setNotice('已导出 ' + String(r.count) + ' 条 → ' + r.path)
-      setTimeout(() => { setNotice(null) }, 5000)
+      // 所见即所存：直接量面板矩形的 CSS 像素坐标交给主进程 capturePage，
+      // 不另写报告模板 —— 导出的 PNG 与界面逐像素一致。
+      const r = el.getBoundingClientRect()
+      const res = await apiCapturePanel({
+        x: r.left,
+        y: r.top,
+        width: r.width,
+        height: r.height,
+        filename: `微信年度报告-${year}.png`,
+      })
+      if (!res.ok) setExportMsg('导出失败：' + (res.message || '未知错误'))
+      else if (res.canceled) setExportMsg('已取消导出')
+      else setExportMsg(`已导出 PNG（${res.width}×${res.height}）→ ${res.path}`)
     } catch (e) {
-      setNotice('导出失败: ' + (e as Error).message)
-    }
-  }
-
-  const chooseExportDir = async (): Promise<void> => {
-    if (pickingDir) return
-    setPickingDir(true)
-    try {
-      const dir = await pickDirectory()
-      if (dir) setExpDir(dir)
+      setExportMsg('导出失败：' + (e as Error).message)
     } finally {
-      setPickingDir(false)
+      setExporting(false)
     }
-  }
-
-  const doExportPng = (): void => {
-    if (!report) return
-    try {
-      const canvas = drawAnnualPoster(report)
-      const url = canvas.toDataURL('image/png')
-      const a = document.createElement('a')
-      a.href = url
-      a.download = '微信年度总结_' + String(report.year) + '.png'
-      a.click()
-      setTimeout(() => { URL.revokeObjectURL(url) }, 2000)
-      setNotice('已生成年度总结长图，请查看下载')
-      setTimeout(() => { setNotice(null) }, 5000)
-    } catch (e) {
-      setNotice('长图生成失败: ' + (e as Error).message)
-    }
-  }
-
-  const heatMax = Math.max(1, ...(report?.heat ?? []))
-  const monthlyMax = Math.max(1, ...(report?.monthly ?? []))
-  const topContactShare = report?.top_contacts[0]?.share ?? 0
-  const topGroupShare = report?.top_groups[0]?.share ?? 0
+  }, [year, exporting])
 
   return (
-    <div className={css.panel}>
-      <PanelHeader title="年度总结" desc="从解密数据中生成的微信年度报告 · 仅本地计算" />
-      <Toolbar
-        left={years.length > 0 ? (
-          <Segmented
-            options={years.map(y => ({ value: String(y), label: String(y) }))}
-            value={String(year || '')}
-            onChange={(v) => { pickYear(Number(v)) }}
-            ariaLabel="年度选择"
-          />
-        ) : undefined}
-        right={(
-          <>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport('md') }}>导出 MD</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport('html') }}>导出 HTML</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport('json') }}>导出 JSON</button>
-            <button type="button" className={css.catBtn} onClick={doExportPng}>导出长图 PNG</button>
-            <button type="button" className={css.catBtn} onClick={() => { void chooseExportDir() }} disabled={pickingDir}>选择目录{expDir ? ' ✓' : ''}</button>
-            {expDir && <span className={kitCss.textMeta} title={expDir}>{expDir}</span>}
-          </>
+    <div className={kitCss.panelShell} ref={shellRef}>
+      <PanelHeader
+        title="年度报告"
+        desc="本机聊天记录的年度回顾 · 人物类指标只统计「我发出的」"
+        actions={(
+          <div className={css.tools}>
+            {years.length > 0 && (
+              <select
+                className={css.toolSelect}
+                value={year ?? ''}
+                onChange={(e) => { setYear(Number(e.target.value)) }}
+                aria-label="选择年份"
+              >
+                {years.map(y => <option key={y} value={y}>{y} 年</option>)}
+              </select>
+            )}
+            <button type="button" className={css.toolBtn} onClick={() => { void doExport() }} disabled={exporting || year === null} title="把年度回顾导出为 HTML 文件">
+              {exporting ? '导出中…' : '导出报告'}
+            </button>
+          </div>
         )}
       />
-      {notice && <div className={kitCss.textMeta}>{notice}</div>}
-      {loading && !report && <ListSkeleton rows={10} />}
-      {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
-      {!loading && !error && !report && years.length === 0 && <div className={css.empty}>还没有可统计的消息数据</div>}
-      {!loading && !error && !report && years.length > 0 && (
-        /*
-         * 这里必须是**可点的按钮**，不能只是一句「点击上方年份生成」的提示。
-         *
-         * 第 64 轮实测的洞：挂载时 `loadYears(true)` 已经把年份选成第一个（本机只有 2026），
-         * 于是上方 Segmented 上「2026」**已经处于选中态**；单选 ToggleGroup 再点同一个值
-         * 不会触发 onChange ⇒ `pickYear` 永远不跑 ⇒ 面板永远停在提示上（实测连点 20 秒无反应、无报错）。
-         * 现在把提示本身做成生成入口，选没选中都能生成。
-         */
-        <div className={css.empty}>
-          <button type="button" className={css.catBtn} onClick={() => { pickYear(year) }}>
-            生成 {year} 年度报告
-          </button>
-          <div className={kitCss.textMeta}>
-            本机统计约 2–3 秒；生成过会缓存，再次打开直接显示。
-          </div>
-        </div>
-      )}
-      {!loading && !error && report && (
-        <div className={css.scroll}>
-          <div className={css.reportGrid}>
-            {/* hero — full width */}
-            <Card title={`${report.year} 年，你说了 ${fmtNum(report.total)} 条消息`}>
-              <div className={css.cardBody}>
-                <div className={kitCss.textMeta}>在 {report.active_days} 天里累计写下 {fmtNum(report.text_chars)} 字，日均 {report.daily_avg} 条</div>
-                <div className={css.statChips}>
-                  <span className={css.statChip}>活跃 <b>{report.active_days} 天</b></span>
-                  <span className={css.statChip}>文字 <b>{fmtPct(report.text_share)}</b></span>
-                  <span className={css.statChip}>深夜 <b>{fmtPct(report.night_share)}</b></span>
-                  <span className={css.statChip}>清晨 <b>{fmtPct(report.morning_share)}</b></span>
-                  <span className={css.statChip}>周末 <b>{fmtPct(report.weekend_share)}</b></span>
-                  <span className={css.statChip}>群聊 <b>{fmtPct(report.group_share)}</b></span>
-                </div>
-                <div className={css.tagRow}>
-                  <span className={kitCss.textMeta}>人物标签：</span>
-                  {report.persona_tags.map(t => (
-                    <span key={t} className={css.tagChip}>#{t}</span>
-                  ))}
-                </div>
-              </div>
-            </Card>
-
-            {/* weekday x hour heatmap — full width */}
-            <Card title="周活跃热力图（星期 × 小时）">
-              <div className={css.heatGrid}>
-                {WEEKDAYS.map(w => (<div key={w} className={kitCss.textMeta}>{w}</div>))}
-                {report.heat.map((v, i) => (
-                  <div key={i} className={css.heatCell} title={`${WEEKDAYS[Math.floor(i / 24)]} ${i % 24}:00 · ${v} 条`} style={{ background: `rgba(34, 211, 238, ${v > 0 ? Math.max(0.08, v / heatMax) : 0.03})` }} />
-                ))}
-              </div>
-            </Card>
-
-            {/* monthly — full width */}
-            <Card title="月度活跃">
-              <div className={css.monthlyBar}>
-                {report.monthly.map((m, i) => (
-                  <div key={i} className={css.monthCol} title={`${i + 1}月 · ${m} 条`}>
-                    <div className={css.monthFill} style={{ height: `${Math.max(2, (m / monthlyMax) * 60)}px` }} />
-                    <span className={kitCss.textMeta}>{i + 1}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            {/* paired: message types + phrases */}
-            <div className={kitCss.cardGrid}>
-              <Card title="消息类型">
-                {splitRows(Object.entries(report.kind_counts).map(([k, v]) => ({ k, v })), 3).map((row, ri) => (
-                  <Marquee key={ri} reverse={ri % 2 === 1} duration={18}>
-                    {row.map(item => <MarqueeCard key={item.k} title={item.k} meta={`${String(item.v)} 条`} />)}
-                  </Marquee>
-                ))}
-              </Card>
-              <Card title="高频短语">
-                {splitRows(report.top_phrases.slice(0, 12), 6).map((row, ri) => (
-                  <Marquee key={ri} reverse={ri % 2 === 1} duration={22}>
-                    {row.map(p => <MarqueeCard key={p.phrase} title={p.phrase} meta={`×${p.count}`} />)}
-                  </Marquee>
-                ))}
-              </Card>
-            </div>
-
-            {/* paired: emoji universe + first/last */}
-            <div className={kitCss.cardGrid}>
-              <Card title="表情宇宙">
-                {splitRows(report.top_emoji.slice(0, 8), 4).map((row, ri) => (
-                  <Marquee key={ri} reverse={ri % 2 === 1} duration={16}>
-                    {row.map(e => <MarqueeCard key={e.emoji} icon={e.emoji} title={e.emoji} meta={`×${e.count}`} />)}
-                  </Marquee>
-                ))}
-              </Card>
-              <Card title={`${report.year} 的第一句与最后一句`}>
-                <Focus eyebrow="首句" sentence={report.first_message ?? '—'} />
-                <Focus eyebrow="末句" sentence={report.last_message ?? '—'} />
-              </Card>
-            </div>
-
-            {/* paired: top contacts + top groups */}
-            <div className={kitCss.cardGrid}>
-              <Card title={`聊得最多的人（占全年 ${fmtPct(topContactShare)}）`}>
-                {report.top_contacts.map((c, i) => (
-                  <div key={c.username} className={css.barRow}>
-                    <span className={css.barLabel} title={c.name}>{i + 1}. {c.name}</span>
-                    <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.count / (report.top_contacts[0]?.count ?? 1)) * 100}%` }} /></div>
-                    <span className={css.barValue}>{c.count} 条</span>
-                  </div>
-                ))}
-              </Card>
-              <Card title={`最活跃的群聊（占全年 ${fmtPct(topGroupShare)}）`}>
-                {report.top_groups.map((c, i) => (
-                  <div key={c.username} className={css.barRow}>
-                    <span className={css.barLabel} title={c.name}>{i + 1}. {c.name}</span>
-                    <div className={css.barTrack}><div className={css.barFill} style={{ width: `${(c.count / (report.top_groups[0]?.count ?? 1)) * 100}%` }} /></div>
-                    <span className={css.barValue}>{c.count} 条</span>
-                  </div>
-                ))}
-              </Card>
+      <div className={`${kitCss.panelBody} ${css.scrollBody}`}>
+        {exportMsg && <div className={css.hint}>{exportMsg}</div>}
+        {error && <div className={kitCss.error} role="alert">{error}</div>}
+        {!data && loading && <ListSkeleton rows={6} />}
+        {!data && !loading && !error && <div className={css.empty}>这一年还没有可统计的消息。</div>}
+        {data && (
+          /* 固定 12 列网格：5 行内容 + 1 行页脚，总高恒等于容器高 → 一屏无滚动。
+             窄窗/矮窗由 CSS 媒体查询退回「瀑布流 + 滚动」。 */
+          <div className={css.wrap} data-loading={loading || undefined}>
+            <HeroCard r={data} />
+            <CalendarCard r={data} />
+            <BusiestCard r={data} />
+            <BuddyCard r={data} av={av} />
+            <MonthlyStarCard r={data} av={av} />
+            <NightCard r={data} av={av} />
+            <RhythmCard r={data} />
+            <WordsCard r={data} />
+            <CatchphraseCard r={data} />
+            <ReplyCard r={data} />
+            <OpenerCard r={data} />
+            <RankingCard r={data} av={av} />
+            <EmojiCard r={data} />
+            <HighlightsCard r={data} av={av} />
+            <div className={css.footer}>
+              <span>第一条 · {data.firstAt || '—'}</span>
+              <span className={css.footerMid}>好好再说。没有哪种聊法是错的。</span>
+              <span>最后一条 · {data.lastAt || '—'}</span>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
-

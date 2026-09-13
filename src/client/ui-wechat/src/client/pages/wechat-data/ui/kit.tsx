@@ -120,16 +120,25 @@ export function Toolbar({ left, right }: {
   )
 }
 
-/** 带清除按钮的搜索输入（受控值，由面板自行防抖/触发查询）。 */
-export function SearchInput({ value, onChange, placeholder = '搜索…', ariaLabel, onEnter }: {
+/**
+ * 带清除按钮的搜索输入（受控值，由面板自行防抖/触发查询）。
+ *
+ * `className` 用于让调用方接管宽度策略：kit 默认是工具栏里那种
+ * `flex: 0 1 320px; min-width: 220px`（在宽工具栏里正合适），
+ * 但塞进 302px 的会话左栏时，220px 的下限会把同行按钮顶出列外
+ * （实测「批量」按钮整颗落在 x 382..428，越出左栏 46px）。
+ * 传 `flex: 1; min-width: 0` 就让它随行宽收缩。
+ */
+export function SearchInput({ value, onChange, placeholder = '搜索…', ariaLabel, onEnter, className }: {
   value: string
   onChange: (value: string) => void
   placeholder?: string
   ariaLabel?: string
   onEnter?: () => void
+  className?: string
 }): React.JSX.Element {
   return (
-    <div className={css.searchBox}>
+    <div className={clsx(css.searchBox, className)}>
       <span className={css.searchIcon}>🔍</span>
       <input
         className={css.searchInput}

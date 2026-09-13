@@ -13,10 +13,14 @@ import kitCss from '../ui/kit.module.css'
 
 /**
  * Render the original-image capability self-check panel.
- * @param props - optional tab navigation callback for quick jumps.
+ * @param props - optional tab navigation callback for quick jumps;
+ *   `embedded`：作为「设置」弹窗里的一节渲染（整页交给弹窗右区滚动）。
  * @returns the panel element tree.
  */
-export function HookPanel({ onNavigate }: { onNavigate?: (tab: string) => void } = {}): React.JSX.Element {
+export function HookPanel({ onNavigate, embedded = false }: {
+  onNavigate?: (tab: string) => void
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const [cfg, setCfg] = useState<ConfigSnapshot | null>(() => readRenderCache<ConfigSnapshot>('hook-config'))
   const [health, setHealth] = useState<DbHealthSnapshot | null>(null)
   const [storage, setStorage] = useState<StorageSnapshot | null>(null)
@@ -45,7 +49,7 @@ export function HookPanel({ onNavigate }: { onNavigate?: (tab: string) => void }
   const hasKeys = Boolean(cfg && (cfg.key_format || cfg.db_dir))
 
   return (
-    <div className={css.panel}>
+    <div className={embedded ? css.panelEmbedded : css.panel}>
       <PanelHeader title="原图能力自检" desc="本地解码 · 无注入 / 无桥接" />
       <div className={css.scroll}>
         <Card title="图片如何本地解码？">
