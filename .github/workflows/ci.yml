@@ -72,5 +72,7 @@ jobs:
       # 端到端：杀掉后端 worker 进程 → 自动重建 → 功能恢复。
       # 需要真实 GUI 会话（会启动 Electron）；调用超时等竞态分支由
       # npm test 里的 src/backend/tests/backend-rpc.spec.ts 确定性覆盖。
+      # 若这一步在 CI 上不稳定，请把它拆成单独的工作流，**不要直接删** ——
+      # 它是「后端进程死了能否自己回来」的唯一自动化证据。
       - name: 后端崩溃自愈
         run: npm run check:backend-restart
