@@ -8,6 +8,9 @@
  * 整体清空只保留给「图片密钥变更」那条路径。
  * @vitest-environment node
  */
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { resultCacheHandles } from '../wechat-host.js'
@@ -87,5 +90,24 @@ describe('结果缓存的定向失效（M8）', () => {
     const k = h.key('getSnsVideoDataUrl', [{ md5: 'big' }])
     h.write(k, { ok: true, value: { data: 'x'.repeat(512 * 1024 + 1) } })
     expect(h.read(k)).toBe(null)
+  })
+})
+
+describe('接线：数据更新事件必须走定向失效（M8）', () => {
+  /**
+   * 为什么需要源码级守卫：上面的用例都是**直接调** `clearStale()` 的，把
+   * `wechat-host.js` 事件分支里那句调用删掉（或退回整体 `clearResultCache()`）它们照样全绿 ——
+   * 而「事件一来就把缓存清空」正是这次要修的那个风暴本身。仓库里 `llm-retry.spec.ts`
+   * 的「不得有裸 fetch」是同款守卫。
+   */
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'wechat-host.js'), 'utf8')
+
+  it('wechat-data/updated 的分支调用 clearStaleResultCache()', () => {
+    const line = src.split(/\r?\n/)
+      .map((l) => l.replace(/\/\/.*$/, '').trim())
+      .find((l) => l.includes("'wechat-data/updated'") && l.includes('if ('))
+    expect(line, 'wechat-host.js 里找不到 wechat-data/updated 的处理分支').toBeTruthy()
+    expect(line).toContain('clearStaleResultCache()')
+    expect(line).not.toContain('clearResultCache()')
   })
 })

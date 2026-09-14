@@ -2,9 +2,10 @@
  * Shared metadata cache: mtime-based invalidation for contact/shard maps.
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cachedBySig, contactMeta, shardCatalog, invalidateWechatMeta, bumpDataGeneration, dataGenerationSig } from '../src/query/meta.ts'
@@ -192,5 +193,43 @@ describe('数据世代签名（M8：给「依赖整棵树」的条目显式失�
     expect(getDbStatus(root)).toBe(first) // 未 bump：同一对象（命中）
     bumpDataGeneration()
     expect(getDbStatus(root)).not.toBe(first) // bump 后重算
+  })
+})
+
+describe('接线：同步事件必须推进数据世代，且不得改回整体清空（M8）', () => {
+  /**
+   * 为什么需要这条源码级守卫：上面的用例都是**直接调** `bumpDataGeneration()` 的，
+   * 删掉 `gateway.ts` 里那句调用它们照样全绿 —— 而「事件没推进世代」正是这次改造最怕的
+   * 无声退化（整树统计类条目会退回只剩 TTL，且没人看得出来）。
+   * 仓库里 `llm-retry.spec.ts` 的「不得有裸 fetch」是同款守卫。
+   */
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'gateway.ts'), 'utf8')
+
+  /**
+   * 截出同步回调那一段（从 `startRealtimeSync(` 到紧随其后的 `ctx.effect(() => stopSync`），
+   * 并**剥掉注释**：不剥的话，注释里提到 `bumpDataGeneration()` 会让「推进了世代」这条
+   * 在删掉调用之后仍然通过（反之注释里提到旧写法也会让另一条误报）。
+   */
+  function syncCallbackSource(): string {
+    const start = src.indexOf('startRealtimeSync(')
+    expect(start, 'gateway.ts 里找不到 startRealtimeSync(').toBeGreaterThan(-1)
+    const end = src.indexOf('ctx.effect(() => stopSync', start)
+    expect(end, 'gateway.ts 里找不到 stopSync 的 effect 注册（同步回调的结束标志）').toBeGreaterThan(start)
+    return src.slice(start, end)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
+  }
+
+  it('同步回调里推进了数据世代', () => {
+    expect(syncCallbackSource()).toContain('bumpDataGeneration()')
+  })
+
+  it('同步回调里没有改回整体清空（那会让没变的分片也被重载）', () => {
+    expect(syncCallbackSource()).not.toContain('invalidateWechatMeta()')
+  })
+
+  it('全量解密那条路径仍然整体清空（整棵树都被换掉）', () => {
+    // 保证 invalidateWechatMeta 不是死代码：它由 decryptAllDatabases 使用。
+    expect(src).toContain('invalidateWechatMeta()')
   })
 })
