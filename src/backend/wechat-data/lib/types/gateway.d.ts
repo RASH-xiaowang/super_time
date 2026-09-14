@@ -1107,6 +1107,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
     getOperationLog(options?: OperationLogQuery): OperationLogSnapshot;
     getPrivacyAuditRows(): PrivacyAuditRow[];
     getPrivacyState(): PrivacyStateSnapshot;
+    /**
+     * Resolve one SNS (朋友圈) video cover.
+     *
+     * 先本机缓存（明文、离线）；没有缓存再按 XML 里的 `<thumb>` 从微信 CDN 取回，
+     * 取回要过隐私闸门，并按 `<enc key>` 解密加密头（封面同样是加密流）。
+     *
+     * @param options - XML 里的 md5/缓存键，加上 `<thumb>` 地址与 `<enc key>` 种子。
+     * @returns ImageDataUrlResult。
+     */
     getSnsVideoCoverDataUrl(options: {
         md5?: string;
         timelineId?: string;

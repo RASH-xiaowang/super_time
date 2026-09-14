@@ -36,11 +36,11 @@
 | 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 1 | 0 | 1 |
 | 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
-| 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 1 | 0 | 0 | 4 |
-| 阶段 4 | 安全加固与类型底座 | 3 | 2 | 1 | 0 | 0 |
+| 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
+| 阶段 4 | 安全加固与类型底座 | 3 | 2 | 0 | 0 | 1 |
 | 阶段 5 | 中优先级：稳定性与性能 | 33 | 30 | 1 | 0 | 2 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **71** | **56** | **4** | **0** | **11** |
+| **合计** | | **71** | **55** | **3** | **0** | **13** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -274,7 +274,7 @@ flowchart TD
 | H7 | 后端调用加超时 + worker 崩溃重启 | H3 | 2d | 已完成 |
 | H8 | 导出改为流式，消除内存峰值与同步阻塞 | H7 | 3d | 已完成 |
 | H9 | 搜索与建索引改为游标分批 | H7 | 2d | 已完成（1 项验收未达标 → N9） |
-| H12 | 后端 bundle 与源码一致性治理 | H4 | 1d | 未开始 |
+| H12 | 后端 bundle 与源码一致性治理 | H4 | 1d | 已完成 |
 
 ---
 
@@ -516,23 +516,34 @@ flowchart TD
 
 ---
 
-### `[ ]` H12 · 后端 bundle 与源码一致性治理
+### `[x]` H12 · 后端 bundle 与源码一致性治理
 
-- **状态**：未开始　**依赖**：H4　**预估**：1d
+- **状态**：已完成　**依赖**：H4　**预估**：1d
 - **证据**：
   - 运行时只 import `src/backend/wechat-data/lib/index.js`（`src/backend/wechat-host.js:430`），该产物已提交且被修改
-  - `lib/types/**` 83 个 `.d.ts` 已 stale：`tsconfig.host.json:27-38` 列了 retrieval，但 `lib/types/query/retrieval/` **不存在**；`lib/tsconfig.tsbuildinfo` mtime 停留在 2026-09-09
-  - `node_modules/@deepseek-ai/dsh-wechat-data` 是陈旧副本（非符号链接），被前端用于取类型，已造成 48 条类型错误（`api.ts:388-401` 自述）
-- **动作**：
-  1. 决策：bundle 继续入库（便于打包）但**必须**有 CI 一致性门禁（H4 已纳入）；或改为构建期生成、不入库
-  2. `lib/types/**` 重新生成或移出仓库；若保留，纳入一致性校验
-  3. 停止提交 `lib/index.js.orig`、`*.tsbuildinfo`
-  4. 修正 `node_modules` 陈旧副本问题——扩展 `scripts/sync-ui-shim.js` 的同步范围，或改用 `npm link`
+  - `lib/types/**` 已 stale：`tsconfig.host.json` 的显式 `files` 列表列了 retrieval，但 `lib/types/query/retrieval/` **不存在**
+  - `node_modules/@deepseek-ai/dsh-wechat-data` 是陈旧副本（`file:` 装的是真实拷贝，非符号链接），被前端用于取类型
+- **动作与结果**：
+  1. **bundle 继续入库**，一致性由 CI 门禁保证（H4 已纳入 `lib/index.js`）
+  2. **`lib/types` 重新生成**：新增 `tsconfig.types.json`（声明-only；源码用 `import './x.ts'`，
+     `allowImportingTsExtensions` 禁止 JS emit，所以只能是声明产物）；`lib/types` 由 81 个
+     `.d.ts` 补到 **97** 个（补齐 `retrieval/`、`annual-review`、`calls`、`notes`、`sns-keystream` 等），
+     CI 新增「`build:types` 后 `git diff --exit-code -- lib/types`」
+  3. **删掉 243 个不可能再生成的死产物**（81 个 `.js` + 162 个 `.map`）：它们来自上游构建，
+     本仓库的编译选项产不出来；同步清掉后端 `package.json` 里指向它们的 `exports["./types"].default`
+     与 `files` 条目，避免留悬空指针
+  4. **前端不再从 node_modules 取类型**：`src/client/ui-wechat/tsconfig.json` 加 `paths`
+     指到仓库里的 `lib/types/types.d.ts`（`file:` 拷贝只在 `npm install` 时刷新，
+     已因此把陈旧类型带进过前端）
+  5. 删除陈旧的 `tsconfig.host.json`（显式 `files` 列表已不完整、被 include 版 `tsconfig.json`
+     完全覆盖，且会让 `composite` 报 TS6307）
 - **验收标准**：
-  - [ ] CI 中「重建 bundle 后 git diff 为空」
-  - [ ] `lib/types/**` 与 `src/**/*.ts` 一致，或已从仓库移除
-  - [ ] 前端不再出现因陈旧副本导致的类型错误
-  - [ ] `npm run build:backend` 在干净 clone 上可复现（esbuild 已声明为依赖）
+  - [x] CI 中「重建 bundle 后 git diff 为空」——`lib/index.js`（H4）+ `lib/types`（本轮）两步都有
+  - [x] `lib/types/**` 与 `src/**/*.ts` 一致 —— 连跑两次 `build:types`，`git diff` 为空（逐字节稳定）
+  - [x] 前端不再出现因陈旧副本导致的类型错误 —— `paths` 绕开副本，前端错误数 36 → 0
+  - [x] `npm run build:backend` 在干净 clone 上可复现（esbuild 已在 H4 声明为依赖）
+- **遗留**：`lib/index.js.orig`、`*.tsbuildinfo` 早已被 gitignore 且未跟踪（本项第 3 条原目标已达成）；
+  `node_modules` 里那份 `file:` 拷贝仍只随 `npm install` 刷新，但类型检查已不再依赖它
 
 ---
 
@@ -543,7 +554,7 @@ flowchart TD
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
 | H10 | Electron 安全基线加固 | H3 | 2d | 未开始 |
-| H11 | 修复类型检查为零的现状 | H2 | 3d | 进行中（tsconfig 断链已修；typecheck 脚本尚未落地） |
+| H11 | 修复类型检查为零的现状 | H2 | 3d | 已完成（strict 逐项收紧留下一轮） |
 | H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 未开始 |
 
 ---
@@ -584,28 +595,59 @@ flowchart TD
 
 ---
 
-### `[~]` H11 · 类型检查实际为零
+### `[x]` H11 · 类型检查实际为零
 
-- **状态**：进行中（tsconfig 断链已修，typecheck 脚本与 strict 收敛待做；因阻塞 H3 而前置）　**依赖**：H2　**预估**：3d
-- **证据**：
+- **状态**：已完成（前后端均 0 错误；`strict` 的逐项收紧见「遗留」）　**依赖**：H2　**预估**：3d
+- **证据**（当时）：
   - `typescript` **未安装**（`node_modules/typescript` 不存在，无 `tsc`）
-  - `src/backend/wechat-data/tsconfig.json:2` 与 `tsconfig.host.json:2` extends `../../../tsconfig.base.json`——**该文件不存在**（根目录只有 `tsconfig.base.client.json`）
-  - 上述 tsconfig 的 `references` 指向 `../../../vendor/cordis`、`../../../typert/protocol`、`../../../packages/util/home-paths` 等**均不存在的路径**（实际依赖在 `src/backend/deps/`）
+  - 两个 tsconfig 都 `extends ../../../tsconfig.base.json`，而该文件不存在（H3 前置期已补出）
+  - `references` 指向 `../../../vendor/cordis` 等**不存在的路径**（H3 前置期已断掉）
   - `scripts/build-wechat-bundle.js` 用 esbuild——**只剥类型不校验**
-- **风险**：131 个 `.ts`（约 1.5MB，含 `gateway.ts` 2800 行、`types.ts` 54KB）从未被类型检查。前端同理由 esbuild 构建，`api.ts:194-379` 的手写接口已滞后（`getFileImageDataUrl`、`exportSnsVideo` 未声明）而无人发现。
-- **动作**：
-  1. 新建 `tsconfig.base.json`（后端基座，注意后端是 Node/ESM 语义，**不要**复用 `tsconfig.base.client.json` 的 `bundler`/`noEmit` 设置）
-  2. 修正两个 tsconfig 的 `references`，指向实际存在的 `src/backend/deps/*`
-  3. 装 `typescript`，加 `"typecheck"` 脚本，先跑一遍拿到完整错误清单
-  4. **分两步收敛**：先降低严格度让存量通过（`skipLibCheck: true` 等），再逐目录开启 `strict`——不要一次性开 strict 导致上千错误无人处理
-  5. 修复前端手写 `WechatRemote` 接口与后端实际 `@Remote` 的漂移；最好改为从后端类型生成
-  6. `typecheck` 纳入 CI
+- **风险**：131 个 `.ts`（约 1.5MB，含 `gateway.ts` 2800 行）从未被类型检查；前端同理，
+  `api.ts` 的手写接口已滞后而无人发现。
+- **实际做了什么**：
+  1. 装 `typescript@^5.7`（`tsconfig.base.json` 用了 `rewriteRelativeImportExtensions`，
+     必须 5.7+）与 `@types/node`；加 `typecheck:server` / `typecheck:client` / `typecheck` / `build:types`
+  2. 后端用 `tsconfig.json`（`include: ["src"]`）而不是那份显式 `files` 列表的
+     `tsconfig.host.json` —— 后者列表已不完整，`composite` 下直接报 TS6307（该文件已删，见 H12）
+  3. **后端 63 → 0**：50 条 TS2454 集中在 `gateway.ts` 的 `citations`/`chunks`/`terms`/`statsCompat`
+     （在闭包 `legacyRetrieve` 里赋值，TS 的确定性赋值分析看不穿）。这里用**真实默认值**初始化
+     而不是 `!` 断言 —— 万一哪条路径漏赋值，宁可退化成「没有原文 → 不调模型」的硬约束
+  4. **前端 36 → 0**：类型改从仓库取（H12 的 `paths`）后，陈旧类型类错误全部消失；
+     剩下的是手写镜像滞后与真契约缺陷
+  5. CI 新增 `npm run typecheck` 步骤（能阻断合并）
+- **顺带修出的 3 个用户可见真 bug**（都是类型漂移掩盖的，之前无人发现）：
+  - **反馈学习完全失效**：`feedback.ts` 的 `features` 存的是字符串键名，读取端却用
+    `safeJson`（对每项 `Number()` 再滤非有限值）→ 永远读回 `[]`，`adaptWeights` 的循环
+    一次都不执行。新增 `safeJsonKeys` + 回归用例（可逆 A/B：旧实现下 features 为 `[]`、
+    权重纹丝不动）
+  - **「最近活跃」显示 Invalid Date**：`overview-insights.ts:325` 发的是已本地化的字符串，
+    `Overview.tsx` 却当数字 `* 1000` → NaN
+  - **`RetrievalPanel` 传了不存在的 `Tone='warning'`**（回退成默认样式）、
+    `SkLine` 的 `height` 传了字符串 `"28px"`
+  - 另有几处真契约漂移：`RenderKind` 与 `MessageRenderKind` **都**漏了 `'unsupported'`
+    （`RICH_TO_RENDER` 会产出它、渲染端已有分支）、`MomentEntry` 缺 `city/country/lat/lng`、
+    `BatchDecryptResult` 缺 `skippedDetails`、`export.ts:628` 的 async 函数返回类型漏 `Promise`、
+    `AskOptimizeResult` 没被 import、`QueryPlan` 从错误模块导入、`process.resourcesPath`
+    是 Electron 专有字段、`wechat-ask/delta` 事件没在 `Events` 里声明（已补模块增强）
 - **验收标准**：
-  - [ ] `npm run typecheck` 在前后端均退出码 0
-  - [ ] `tsconfig` 无悬空 `extends` 与 `references`（无文件指向不存在路径）
-  - [ ] `npm run typecheck` 纳入 CI 且能阻断合并
-  - [ ] 前端手写接口与 `gateway.ts` 的 `@Remote` 集合双向无缺失
-  - [ ] 记录 strict 收敛的分批计划与当前进度
+  - [x] `npm run typecheck` 在前后端均退出码 0（实测 exit 0）
+  - [x] `tsconfig` 无悬空 `extends` 与 `references`
+  - [x] `npm run typecheck` 纳入 CI 且能阻断合并
+  - [x] 前端手写接口与 `gateway.ts` 的 `@Remote` 集合无缺失 —— 已修 `WechatRemote` 的
+    `getFileImageDataUrl`、`exportSnsVideo`，以及 `AnnualHighlight.username`、
+    `AnnualReviewShape.starUsername`。**注意这只是「本次暴露出的漂移已清零」**，
+    没有做成「从 `@Remote` 自动生成」，同类漂移仍可能再次发生（见 M16）
+  - 并新增回归用例 `tests/remote-contract.spec.ts`，把「132 个 `@Remote` ↔ 132 个 `WechatRemote` 成员、双向无差集」钉住
+    （可逆 A/B：从客户端接口删掉一个方法 → 红「expected ['exportSnsVideo'] to deeply equal []」）
+  - 这条用例还顺手抓到一个真瑕疵：`gateway.ts` 的 `getSnsVideoCoverDataUrl` 上**挂了两次 `@Remote(...)`**
+    （一次在 JSDoc 之前、一次在之后，复制粘贴残留），已删掉多余那个
+  - [x] 记录 strict 收敛的分批计划（见下）
+- **遗留（strict 收敛未做完，属计划内第二步）**：`tsconfig.base.json` 目前仍放宽
+  `noImplicitAny` / `noImplicitThis` / `noUncheckedIndexedAccess` / `strictFunctionTypes`
+  （当年为让存量通过而放宽）。逐项收紧的建议顺序与验收方式：
+  `strictNullChecks`（已开）→ `noImplicitAny` → `noUncheckedIndexedAccess` → `strictFunctionTypes`，
+  每项单独一个改动、附「错误数前后」对比。**这是 H11 的原定第二步，尚未开始**
 
 ---
 
@@ -781,7 +823,7 @@ flowchart TD
 - [ ] `npm test` 全绿，收集 36 个 spec（H3）
 - [ ] CI 全绿且能阻断合并，含 bundle 一致性门禁（H4）
 - [ ] `ui-acceptance.mjs` 失败时退出码非 0（H5）
-- [ ] `npm run typecheck` 全绿（H11）
+- [x] `npm run typecheck` 全绿（H11）
 
 **版本与可复现**
 - [ ] `git status` 干净，无未提交改动（H2）
@@ -870,3 +912,7 @@ flowchart TD
 | 2026-09-13 | 实施 | N8、N9、N10 | 新增 | H9 第二轮评审暴露的同族问题：向量索引读整表物化（N8）、搜索不可中断即 H9 未达标项（N9）、向量索引构建持事务跨网络调用且无并发保护（N10） |
 | 2026-09-13 | 实施 | 合计 | 66 → 69：未开始 54 / 进行中 4 / 已完成 11 | 阶段 3 完成 4（H6/H7/H8/H9）；阶段 5 条目 28 → 31（+N8/N9/N10） |
 
+| 2026-09-13 | 实施 | H11 | 进行中 → 已完成 | 装 typescript@^5.7 + @types/node，加 typecheck:server/client/typecheck/build:types 脚本并纳入 CI；后端 63 → 0（50 条 TS2454 用真实默认值初始化而非 `!` 断言）、前端 36 → 0。顺带修出 3 个用户可见真 bug（反馈学习因 features 读回空数组而完全失效、Overview「最近活跃」显示 Invalid Date、RetrievalPanel 传了不存在的 Tone）与若干真契约漂移（RenderKind/MessageRenderKind 都漏 'unsupported' 等）。strict 逐项收紧尚留下一轮 |
+| 2026-09-13 | 实施 | H12 | 未开始 → 已完成 | 新增 tsconfig.types.json（声明-only）并删除陈旧的 tsconfig.host.json；lib/types 由 81 补到 97 个 .d.ts；删掉 243 个不可能再生成的死产物（81 .js + 162 .map，源码头用 `.ts` 扩展名 → allowImportingTsExtensions 禁止 JS emit），同步清掉 exports.default 与 files 里的悬空指针；前端类型改从仓库取（tsconfig paths）。CI 新增 typecheck 与 build:types 一致性两步 |
+| 2026-09-13 | 实施 | 教训（H11/H12） | — | ① 类型检查一开就抓到 3 个「用户可见但没人发现」的真 bug —— 这类漂移靠读代码是看不出来的；② 类型源的选取要盯住「哪份是权威」：前端一直从 node_modules 的 file: 拷贝取类型，而那份只在 npm install 时刷新，等于给陈旧类型开了后门；③ 不可再生成的构建产物不该入库（243 个 .js/.map 谁也不敢删、也没人能重建）；④ 测试夹具要留意「兄弟文件」型路径（反馈库、搜索索引库都是 `<解密目录>/../x.db`），共用父目录会让多个用例串库（本次踩到过） |
+| 2026-09-13 | 实施 | 合计 | 71 项：未开始 55 / 进行中 3 / 已完成 13 | 阶段 3 全部完成（5）；阶段 4 完成 1（H11）、未开始 2（H10/H15） |
