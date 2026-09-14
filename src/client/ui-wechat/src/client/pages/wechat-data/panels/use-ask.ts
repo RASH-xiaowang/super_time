@@ -149,8 +149,9 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     } catch (e) {
       setError((e as Error).message)
     } finally {
-      // 只有「当前轮」才能释放闸门并清状态：过期轮次迟到的 finally 不许截断新轮
-      // （`gate.finish` 会返回 false）。先作废流式标识再清缓冲，迟到的增量不会再写进 state。
+      // 只有「当前轮」才能释放闸门并清状态。**防御性不变量**：当前接线下这个 false 分支不可达
+      // （复审穷举 5 轮共 1920 种交错，0 次出现），保留是因为它是 `finish` 返回 boolean 的意义所在、
+      // 且将来若有第二个 finish 调用点就会真的用上。先作废流式标识再清缓冲，迟到增量不会再写进 state。
       if (gate.finish(streamId)) {
         streamIdRef.current = ''
         setStreamText('')
