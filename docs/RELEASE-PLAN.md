@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 37 | 22 | 1 | 0 | 14 |
+| 阶段 5 | 中优先级：稳定性与性能 | 38 | 22 | 1 | 0 | 15 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **75** | **45** | **3** | **0** | **27** |
+| **合计** | | **76** | **45** | **3** | **0** | **28** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -736,7 +736,7 @@ flowchart TD
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| M13 | 流式问答并发缺陷 | `use-ask.ts:106-149`：`asking` 在闭包中可能过期，快速连点可并发进入；`finally` 无条件 `setAsking(false)`，先返回者把仍在生成的轮次标记结束 | 用 ref 或状态机保证单飞；验收：快速连点两次提问只产生一轮；后进行中先返回不截断仍在生成的轮次 | 未开始 |
+| M13 | 流式问答并发缺陷 | `use-ask.ts:106-149`：`asking` 在闭包中可能过期，快速连点可并发进入；`finally` 无条件 `setAsking(false)`，先返回者把仍在生成的轮次标记结束  **已完成**：闸门从「闭包里的 `asking`」换成**独立模块里的 ref 单飞闸**（`panels/ask-gate.ts`），并认领轮次 id。 · `tryStart()` 已在跑则返回 null ⇒ 连点第二次直接被忽略（只产生一轮）；状态在 ref 里，同步判定（读-判-写之间无 `await`），不受 React 渲染时机影响 —— 原实现依赖 `asking` 的**闭包值**，而状态更新是异步的，第二次点击可能落在「已 setAsking(true)、还没重渲染」的窗口里。复审另确认本应用 `ui-entry.tsx` 用 `createRoot` 且**未包 StrictMode**，事件处理器不会被双调用，所以不存在「两个闸门实例」。 · `finish(id)` 只有**当前轮**才释放闸门并清流式缓冲 ⇒ 过期轮次迟到的 `finally` 不许截断仍在生成的新轮。复审穷举 5 轮共 1920 种交错，这个 false 分支**不可达**（0 次），已按建议把注释改为「防御性不变量」。 · 轮次 id 同时用作后端流式标识（原来另生成一个）。复审逐字实测过滤式：`streamIdRef` 为空串时三种 delta（无 id / `id:''` / 别的 id）**全被丢弃**，不存在「空 id 全量接纳」。**顺带修掉一个旧毛病**：原实现里过期轮的 `finally` 会把 `streamIdRef` 置空，导致仍在生成那轮的增量全丢（流式冻结、只出最终答案）。  **测试基建**：此前 vitest 只收后端 spec（配置注释也写着「前端组件级测试仍缺失」），这处改动连一个用例都进不来。给纯逻辑前端模块开了 include（`src/client/ui-wechat/src/client/**/*.spec.ts`，不 import react、不碰 DOM）。  **验收**：`ask-gate.spec.ts` 6 项（连点只开一轮 / 本轮结束后才能开下一轮 / 过期轮次 finish 不释放闸门也不被认作当前轮 / 同轮 finish 两次幂等 / 默认 id 不重复 / 初始无在跑轮次）+ **`use-ask.wiring.spec.ts` 3 项接线守卫**。守卫是复审要求的：它实测把 `use-ask.ts` 整体退回改动前，**全量 365 用例仍 0 红** ⇒ 没有守卫就无回归信号。变异双向验证：head 源绿；「早退改回闭包 `asking`」「finally 改回无条件收尾」两种回退各被对应用例抓住。全量：179 文件 / 368 用例（359 通过 / 9 跳过 / 0 失败）、typecheck 0、`build:ui` + `check:shim` + `ui:smoke` 通过。  **未验证（如实标注）**：仓库没有 hook/DOM 测试环境（jsdom、react-test-renderer、@testing-library 都不在依赖里），所以「真实快速连点」的端到端表现**未人工验证**；`use-ask.ts` 与闸门的接线由类型 + 守卫 + 代码审查保证。另记录两点不在本轮验收口径内的问题：闸门是**按 hook 实例**隔离的（「微信问答」页签与群聊 `SessionAsk` 面板同时挂载时可各跑一轮，各自的 turns/streamText 独立、流式按 id 不会串台）；闸门没有「取消/超时」出口（`apiAskWechat` 悬挂则该实例一直拒绝新提问 —— 旧实现同样如此，非回归）。 | 已完成 |
 | M14 | 长列表虚拟化已装未接线 | `@tanstack/react-virtual` 在依赖中，`kit.tsx:392-470` 实现了 `<VirtualList>`，但全仓无引用；实际靠 `useProgressiveList` 增量挂载 | 二选一：接线 `VirtualList` 到 Chats/Moments/Contacts 等大列表，或移除该依赖。验收：1 万条消息滚动流畅且 DOM 节点数有上界 | 未开始 |
 | M15 | 设置面板定时器泄漏 | `Settings.tsx:642,699,731,895` 的 `setInterval` 轮询仅在 finally/stop 清理，组件中途卸载不清理，持续打 IPC | 全部轮询移入 `useEffect` 并返回清理函数。验收：下载/转写中途切走面板，IPC 调用停止（抓取实际 IPC 日志验证） | 未开始 |
 | M16 | IPC 死 channel 与类型契约滞后 | 死 channel：`window:maximize-toggle`(`main.js:398`)、`window:is-maximized`(`:410`)、`wechat:dispose`(`:518`)、`license:activation-request`(`:285`)、`license:fingerprint`(`:340`)；类型滞后：`api.ts:194-379` 手写 `WechatRemote` 未含 `getFileImageDataUrl`、`exportSnsVideo` | 清理死 channel（或接入实际 UI 需求）；类型契约与 `@Remote` 集合对齐（与 H11 合并处理） | 未开始 |
@@ -753,7 +753,7 @@ flowchart TD
 | M22 | 文档与代码不一致 | 方法数三方打架：`gateway.ts` 实际 129 ← RAG 文档 126 ← `backend/README.md` 114；`backend/README.md:52,92` 引用不存在的 `npm run smoke:wechat`/`config:wechat`；`wechat/whisper/README.md` 声称的 exe 已被删 | 修正全部引用；方法数改为自动生成（并入 H14）。验收：文档中的命令均可执行，方法数与代码一致 | 未开始 |
 | M24 | keys ↔ query 双向依赖 | `keys/service.ts:19`、`keys/db-key-v4.ts:18` → `query/config.ts`；而 `query/image-key.ts:8` → `keys/key-store.ts`，层次倒置 | 抽出共享的配置读取到独立层（如 `config/`），消除双向依赖。验收：依赖方向单向，单测可独立加载 | 未开始 |
 
-### 工作流 F · 知识图谱交付与计划实施中暴露的问题（12 项）
+### 工作流 F · 知识图谱交付与计划实施中暴露的问题（13 项）
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
@@ -770,6 +770,7 @@ flowchart TD
 | N14 | `vectorIndexStatus` 每次查询重开连接并做 `COUNT(*)`（M9 复审发现） | `retrieval/embedding.ts:88-102`（`new DatabaseSync` + `SELECT COUNT(*) AS c FROM vectors` + 2 次 meta 读），一次提问至少命中两次（`embedding.ts` 的 `searchDense` 内 + `pipeline.ts:140`，另有 `gateway.ts:956`）。 实测（合成 13.5 万行、vec 每行 3KB）：`COUNT(*)` **1.25ms**、走 `idx_vectors_doc` 覆盖索引 1.07ms；同一条 SQL 族里 `SELECT fts_rowid, hash_lo, hash_hi, username`（粗筛表加载）**250ms**，但它已按文件指纹缓存（`HASH_CACHE`），只在进程内首次/索引重建后付一次。 ⏳ 未开始 —— 与 M9 同一条路径但性质不同（per-query 的 O(N) SQL 与连接开销，不是排序）。修法：按 `statSig` 缓存 `vectorIndexStatus`（状态只在索引重建时变），或把 `rows` 写进 meta 表与 `built_at` 一起读，省掉 `COUNT(*)` 与一次连接。验收：一次提问的 `vectorIndexStatus` 调用从「2 次连接 + 2 次 COUNT」降到 ≤1 次连接且无 COUNT，并记录前后耗时。 | 未开始 |
 | N15 | 每日摘要任务是 N 次串行 LLM 调用（M10 复审发现，同形态但影响小得多） | `gateway.ts:1818-1823`：`for (const t of tasks) await this.runSummaryTask(...)` —— 与 M10 之前的 `buildVectorIndex` 同形态（N 次串行远程调用），但受「同一分钟到期」约束，通常只有 1–2 项。`eval.ts:evaluate` 是全同步、非热点；ask 链路每问只 1 次 embed。 ⏳ 未开始 —— 复用的修复模式已经有了：M10 的「有界并发 + 失败不半写」可以照搬（`embedding.concurrency` 那套夹取也适用）。验收：同一分钟到期的多个摘要任务并发执行且互不串数据，并记录前后耗时。 | 未开始 |
 | N16 | 图片路径的真正杠杆：`lower(md5)=?` 全表扫描（M11 复审发现，附实测线性度） | `media-image.ts:642` 的 `SELECT ... FROM image_hardlink_info_v4 WHERE lower(md5) = ? ORDER BY modify_time DESC LIMIT 8` —— `EXPLAIN QUERY PLAN` = `SCAN ... USING INDEX image_hardlink_info_v4_MODIFY_TIME`（走的是 modify_time 索引再过滤，等价全扫）。**实测线性度**：本机真实表 3309 行 **0.30ms/次**；合成 20 万行 **17.27ms/次**（30 张图 ≈518ms）；60× 行数 → 57× 耗时。这就是 M11 验收里「图片列表加载耗时」的真杠杆。 ⏳ 未开始 —— 两条路：① **批量查询**（`WHERE lower(md5) IN (...)`，30 次扫描并成 1 次）需要一个批量 RPC，属接口变更；② 用表上已有的索引列 `md5_hash`（`SEARCH ... USING INDEX image_hardlink_info_v4_MD5_HASH`）**但推不出映射** —— 我试了前/后 4 字节 BE/LE、Java `String.hashCode` 共 6 种推导，对真实样本 **0/8 命中**，推不出就不能用（会静默漏结果）；要做得先把 WeChat 这个哈希的算法考证出来。附带处理：`meta.ts` 的全局 `entries` Map 无上限，应按需引入 `boundedSet` 式限界（`msg-by-sid:` 的 key 空间由用户点击驱动）。 | 未开始 |
+| N17 | 反馈按钮用 state 当闸门（与 M13 同类，且 host 侧没有兜底）（M13 复审发现） | `Ask.tsx:262-287` 的 `submit`：`if (busy) return` 用 `useState` 的 `busy` 当闸门 —— 与 M13 修掉的是同一个「异步状态当同步闸门」的窗口；窗口内双击会发两条 `apiSubmitAskFeedback`、`patch()`/`setMarking(false)`/`setNote` 各写两次、权重适配跑两遍。而 host 侧 `gateway.ts` 的 `@Remote('submitAskFeedback')` **没有单飞、也没有去重**（复审 grep 实测）⇒ 与 M13 不同，重复副作用会真的落到后端。 ⏳ 未开始 —— 修法可直接复用 `panels/ask-gate.ts` 的 `createAskGate()`（M13 已落地并有 6 项单测）。验收：窗口内连续点击只发一次请求、只写一遍状态；并给该接线补一条源码级守卫（沿用 `use-ask.wiring.spec.ts` 的写法，注意 `[^}]` 那个坑）。**同族但后果较轻**（复审一并列出，可一起看）：`Chats.tsx:1922-1963` 导出、`Moments.tsx:713-730` 同步、`Settings.tsx:957/982` 解密 —— 这几个 host 侧已有单飞，双击的后果是**重复劳动**或「第二次收到 host 的『已有任务进行中』而被前端当失败弹假报错」，不会重复副作用。 | 未开始 |
 
 ---
 
@@ -1003,3 +1004,7 @@ flowchart TD
 | 2026-09-14 | 评审 | M12 | 独立复审（bash 可用；无 critical + 2 major + 3 minor） | ① **确认行为等价**：用「旧版 / 新版 / 把分歧点还原成旧式的对照版」三条实现跑同一夹具（结构化 + 阈值 fuzz + 400 组随机 ranked = 1593 个窗口），输出**逐字节相等**；`gramsOf3` 的 `&& s` 分歧不可达（`body` 先过非空判断）也不可观测（旧 `jaccard` 的 `if (!a||!b) return 0` 早返回让那行本来就是死代码），62.7 万对逐对比对 0 差异。② **major：compress 有接线、零守卫** —— 改回旧写法全套用例仍绿（仓库既定惯例是补源码级守卫）。③ **major：原验收口径（候选数 2000）未触及**，实测 N=1920 最坏 3772ms，而 `fusion.keep` 可手改且无校验。④ minor：源码注释里硬编码了机器相关的耗时；把「按会话分组」与「3-gram 缓存」两件事归成一个 2×（实测主项是后者）。⑤ 确认**撤回 fusion 的按会话索引是对的**：它另试 gram 倒排索引，最坏仅 1.9× 而现实形状反而变慢（0.52 → 1.55ms）。⑥ 顺带指出 `fusion-dedupe.spec.ts` 从未入库（确实如此，我建完删掉了没提交）。 |
 | 2026-09-14 | 实施 | M12 | 按复审整改 | ① 给 `fusion.keep` 加硬上限 400（load/save 两条路径）+ 用例（9999/1920→400、0/-5→1、abc→120、200.7→200）+ 变异验证（去掉上限即红）。② compress 补**源码级守卫** —— 注意我第一版守卫写成 `toContain('jaccardGrams(')`，那只匹配得上函数定义本身、变异照样通过（自查发现），改成断言**调用点**后才杀死变异。③ 删掉源码注释里硬编码的耗时、把两件事分开归因。全量 175 文件 / 359 用例（350 通过 / 9 跳过 / 0 失败）。 |
 | 2026-09-14 | 实施 | 教训（M12） | — | ① **源码级守卫要断言「调用点」而不是「名字出现过」**：`toContain('f(')` 连函数定义都能匹配，等于没守（我第一版就是这样，变异照样绿）。② **改验收口径要显式承认**：原始验收盯着 N=2000（实测最坏 3.8s），我按实测把范围收窄到默认配置下的热路径 —— 这没问题，但必须在文档里说清「原口径未达成 + 为什么」，并补上防爆措施（这里就是 `keep` 的硬上限）。③ 判「n-gram 缓存类重写是否等价」时，关键是对比 helper 的**唯一消费者**跑差分（旧 `jaccard` 的早返回让一处分歧不可观测），而不是只对比 helper 本身。④ 改完要能接受「撤回」——复审自己试的更优方案也测不出收益（倒排索引让现实形状变慢），这类结论值得留档。 |
+| 2026-09-14 | 评审 | M13 | 独立复审（bash 可用；无 critical + 1 major + 若干 minor） | ① **确认修复达成且窗口真的关上**：`tryStart` 是同步读-判-写、应用未开 StrictMode（全仓 grep 只命中 react-dom bundle 字符串）、事件处理器不被双调用 ⇒ 不会出现两个闸门实例。② **major：接线零守卫** —— 把 `use-ask.ts` 整体退回改动前（`git diff --no-index` 校验逐字节相同），全量 365 用例**零变红**；它给出候选守卫并双向验收（head 4 绿 / 退回 4 红）。③ 指出 `finally` 的 false 分支**不可达**（穷举 5 轮 1920 种交错 0 次）⇒ 属死代码但建议保留，注释措辞该改（已改）。④ 逐字实测 id 合并**无副作用**（空串时三种 delta 全丢弃），并确认顺带修掉了「过期轮 finally 置空 streamIdRef 导致新轮增量全丢」的旧毛病。⑤ **顺带发现同类缺陷**：`Ask.tsx` 反馈按钮用 state 当闸门，且 host 的 `submitAskFeedback` **没有单飞**（重复副作用会真落到后端）⇒ 登记 N17；另列出导出/同步/解密几处「后果较轻」的同族。⑥ 给了一条写守卫的坑：`[\s\S]*?` 会跨内层花括号对**正确**代码误报红，要用 `[^}]`。 |
+| 2026-09-14 | 实施 | M13 | 未开始 → 已完成 | 闸门改为 ref 持有的独立模块 `panels/ask-gate.ts`（同步判定 + 轮次 id 认领）；vitest include 扩到前端纯逻辑模块；新增 `ask-gate.spec.ts` 6 项 + 按复审要求补 `use-ask.wiring.spec.ts` 3 项接线守卫（双向变异验证：两种回退各被抓住）。登记 **N17**。 |
+| 2026-09-14 | 实施 | 教训（M13） | — | ① **用异步状态当同步闸门是陷阱**：`useState` 在闭包里读到的是上一次渲染的值，两次快速调用双双通过；要单飞就把闸门放进 `useRef` 或独立模块。② **先返回者不许清别人的状态**：`finally` 无条件收尾在并发/重入下必然出错，正确做法是认领 id。③ **改一处没人能测的代码，先把测试基建补上**（vitest include 不含前端时，连 spec 都进不来）；④ **修完还要问「退回旧写法会不会有人发现」** —— 复审实测 0 红，这才促成了守卫；写守卫时 `[\s\S]*?` 会跨内层花括号误报，要用 `[^}]`。 |
+| 2026-09-14 | 实施 | 合计 | 76 项：未开始 45 / 进行中 3 / 已完成 28 | 阶段 5 完成 15（…/M8/M9/M10/M11/M12/M13）；阶段 5 条目 37 → 38（+N17） |
