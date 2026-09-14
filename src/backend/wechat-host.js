@@ -502,7 +502,8 @@ async function createWechatBackend(options = {}) {
   };
 
   const methodMap = new Map();
-  for (const marker of protocol.remoteMethods(gateway)) {    const name = marker.exportName || marker.method;
+  for (const marker of protocol.remoteMethods(gateway)) {
+    const name = marker.exportName || marker.method;
     methodMap.set(name, marker.method);
   }
 

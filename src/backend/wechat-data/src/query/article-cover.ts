@@ -9,6 +9,18 @@ import { boundedSet } from './meta.ts'
 
 const coverCache = new Map<string, string>()
 
+/**
+ * 瞬时失败的**短暂**负缓存：key → 到期时间戳。
+ *
+ * 为什么不是「失败就永久负缓存」（改前的行为）也不是「失败完全不缓存」：
+ *   · 永久负缓存会把一次网络抖动变成「这个链接永久坏掉」（`boundedSet` 只在容量满时淘汰），
+ *     上层的「数据更新后重试」也因此永远失效；
+ *   · 完全不缓存则让**永久 404 的链接**按面板渲染节奏反复抓（每次 20s 超时）。
+ * 折中：只挡 60 秒，过期就允许重试。
+ */
+const coverFailUntil = new Map<string, number>()
+const FAIL_TTL_MS = 60_000
+
 const FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Referer': 'https://mp.weixin.qq.com/',
@@ -65,6 +77,8 @@ export async function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?: 
     const cached = coverCache.get(key) ?? ''
     return cached ? { url: cached } : { error: '文章封面暂不可用' }
   }
+  // 刚刚失败过（60s 内）就不再抓：见 coverFailUntil 的说明
+  if ((coverFailUntil.get(key) ?? 0) > Date.now()) return { error: '文章或封面获取失败' }
   const file = coverFile(cacheDir, key)
   if (file && existsSync(file)) {
     try {
@@ -102,10 +116,8 @@ export async function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?: 
     boundedSet(coverCache, key, data)
     return { url: data }
   } catch {
-    // **不缓存这次失败**：网络超时、对端 5xx、被墙都是瞬时的，缓存下来会让这个链接
-    // 「永久坏掉」—— `boundedSet` 只在容量满（300）时淘汰，实测同一 URL 连续三次只发一次
-    // 请求。上层的「数据更新时丢掉失败条目」策略（`wechat-host.js` 的
-    // `clearStaleResultCache`）也因此才有意义：丢掉之后必须真的能重新抓。
+    // 瞬时失败（网络超时/对端 5xx）：只挡 60s，**不**写进 coverCache（那等于永久坏掉）。
+    boundedSet(coverFailUntil, key, Date.now() + FAIL_TTL_MS)
     return { error: '文章或封面获取失败' }
   }
 }

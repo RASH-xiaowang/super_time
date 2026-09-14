@@ -8,12 +8,13 @@
  * 整体清空只保留给「图片密钥变更」那条路径。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { resultCacheHandles } from '../wechat-host.js'
+import { createWechatBackend, resultCacheHandles } from '../wechat-host.js'
 
 /** 每次用例前清空，避免用例间互相影响。 */
 function freshCache() {
@@ -21,6 +22,12 @@ function freshCache() {
   h.clearAll()
   return h
 }
+
+const scratch: string[] = []
+afterEach(() => {
+  for (const d of scratch) rmSync(d, { recursive: true, force: true })
+  scratch.length = 0
+})
 
 describe('结果缓存的定向失效（M8）', () => {
   it('键里带上方法名与参数（失效判定要靠前缀解析方法名）', () => {
@@ -133,4 +140,55 @@ describe('接线：数据更新事件必须走定向失效（M8）', () => {
     const code = src.split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
     expect(code).toContain('resultCacheKey(method, callArgs, decodeInputSig())')
   })
+})
+
+describe('真值级接线：解码输入指纹真的来自那两份文件（复审要求）', () => {
+  /**
+   * 为什么还要这条：上面那条源码守卫只保证**调用点写法**，把 `decodeInputSig` 内部改成
+   * 「恒返回 ''」或读错目录它照样通过（复审实测该变异存活）。所以补一条端到端：
+   * 用真实后端 + 打桩的 gateway 方法计数，改 `secrets.json` / `config.json` 必须让同参调用
+   * 重新执行，不改则必须命中缓存。
+   */
+  it('改 secrets.json / config.json 会让同参调用重新执行；无变更则命中', async () => {
+    const ud = mkdtempSync(join(tmpdir(), 'wx-rc-e2e-'))
+    scratch.push(ud)
+    const dataRoot = join(ud, 'wechat-data')
+    mkdirSync(dataRoot, { recursive: true })
+    const cfgFile = join(dataRoot, 'config.json')
+    const secFile = join(dataRoot, 'secrets.json')
+    writeFileSync(cfgFile, '{}', 'utf8')
+    writeFileSync(secFile, '{}', 'utf8')
+
+    const prevHome = process.env.DSH_HOME
+    const backend = await createWechatBackend({ userDataPath: ud })
+    try {
+      let calls = 0
+      backend.gateway.getImageDataUrl = async () => {
+        calls += 1
+        return { url: 'data:image/png;base64,AAA' }
+      }
+      const args = [{ username: 'wxid_a', localId: 1 }]
+
+      await backend.call('getImageDataUrl', args)
+      expect(calls).toBe(1)
+      await backend.call('getImageDataUrl', args)
+      expect(calls, '无变更必须命中缓存').toBe(1)
+
+      // 手工改密钥（不走任何 RPC）—— 内容长度不同，保证 mtime+size 指纹必变
+      writeFileSync(secFile, '{"image_aes_key":"***REMOVED-SECRET***"}', 'utf8')
+      await backend.call('getImageDataUrl', args)
+      expect(calls, '改了 secrets.json 必须重新解码').toBe(2)
+
+      writeFileSync(cfgFile, '{"db_dir":"D:\\\\wx\\\\db_storage"}', 'utf8')
+      await backend.call('getImageDataUrl', args)
+      expect(calls, '改了 config.json 必须重新解码').toBe(3)
+
+      await backend.call('getImageDataUrl', args)
+      expect(calls, '没有变更就该继续命中').toBe(3)
+    } finally {
+      backend.dispose()
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+    }
+  }, 60_000)
 })
