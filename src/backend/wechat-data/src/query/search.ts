@@ -280,25 +280,34 @@ const YIELD_EVERY_ROWS = 2000
 /**
  * 让出节奏（字符上界）：限制「每行很长」的场景。
  *
- * bigram 切分与 FTS 写入的成本 ∝ 文本长度，所以**只**按行数设阈值时，单块耗时随平均
- * 行长线性增长（实测 3KB/行 ≈ 190ms、8KB/行 ≈ 450ms，约 18KB/行才破 1s）。加上字符
- * 上界后，单块耗时被两条上界同时夹住：长行先撞字符上界（约 100 万字符 ≈ 几十毫秒），
- * 短行先撞行数上界。这是「真实数据量级下的时间上界」，不是对任意输入的硬保证。
+ * bigram 切分与 FTS 写入的成本 ∝ 文本长度，所以只按行数设阈值时单块耗时随平均行长线性
+ * 增长。取值按**实测**成本定：中文每字符约 0.33µs（bigram 下每个汉字都是独立 token，同
+ * 字符数比拉丁文本贵 4–10 倍），131072 字符 ≈ 中文 30–70ms、拉丁 6–10ms。
+ * 早期版本取 1<<20（约 105 万字符），实测中文单块已达 237–533ms、属「秒级临界」，故收紧。
  */
-const YIELD_EVERY_CHARS = 1 << 20
+const YIELD_EVERY_CHARS = 1 << 17
 
 /**
- * 构建单飞闸（按已解密数据根键控）。
+ * 单次批量写入（flush）的字符上界。
+ *
+ * flush 的代价随批量内容长度线性增长，而它必然落在某个「让出块」里：500 行 × 64KB/行时
+ * 单次 flush 实测 3.5s、1MB/行时 60.2s。只给循环设上界、不给批量设上界，单块耗时就没有
+ * 上界。65536 字符 ≈ 中文 20ms 量级。
+ */
+const FLUSH_EVERY_CHARS = 1 << 16
+
+/**
+ * 构建单飞闸（按**索引文件路径**键控）。
  *
  * 转 async 带来的副作用：写事务现在会**跨 macrotask** 保持开启，于是同一进程里
  * 第二次并发调用会直接撞 `database is locked`（改前同步执行不可能交错）。
  * 而 gateway 的问答路径与状态查询都会按需触发自动建索引，很容易撞上。
- * 这里让并发调用复用同一个 in-flight 构建；配合 runBuildSearchIndex 里的
- * busy_timeout 覆盖跨进程/其它连接的情形。
+ * 这里让并发调用复用同一个 in-flight 构建。
  *
- * 为什么按 `decryptedDir` 分槽而不是一个全局槽：`_dirs.decrypted` 会随账号切换/重新解密
- * 而变。全局单槽时，新目录的调用会拿到旧目录那次构建的结果（行数、built_at 都是别人的），
- * 并且**永远不会为自己建索引**。
+ * 键取 `searchIndexPath()` 而不是调用方传入的 `decryptedDir` 字符串：被争用的是**那个 DB
+ * 文件**，而 `…\decrypted` 与 `…/decrypted`、带不带结尾分隔符都会解析到同一个文件。按调用
+ * 方字符串键控时这些写法会各占一个槽、并发写同一个文件 —— 实测互相撞锁且事件循环停摆
+ * 7.5s（`busy_timeout` 只会把「立刻失败」变成「同步忙等后仍失败」）。
  *
  * force 语义：非 force 调用可以加入任何在飞构建；force 调用若撞上在飞的非 force 构建，
  * 不能把对方的「索引已存在」当答复，而要排队在其之后再真正重建一次。
@@ -322,16 +331,17 @@ export interface BuildResult {
  * @returns 构建结果（status/rows/built_at/elapsed_ms 或 message）。
  */
 export function buildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult> {
-  const slot = inflightIndexBuilds.get(decryptedDir)
+  const key = searchIndexPath(decryptedDir)
+  const slot = inflightIndexBuilds.get(key)
   if (slot && (slot.force || !force)) return slot.promise
   // 走到这里：没有在飞构建，或本次要求 force 而在飞的是非 force 构建（后者要排队重建）。
   const base: Promise<unknown> = slot ? slot.promise.catch(() => undefined) : Promise.resolve()
   const promise = base.then(() => runBuildSearchIndex(decryptedDir, force))
   const entry = { promise, force: Boolean(force) }
-  inflightIndexBuilds.set(decryptedDir, entry)
+  inflightIndexBuilds.set(key, entry)
   // 用双参 then 而非 finally：派生的 promise 恒为 fulfilled，不会产生未处理的拒绝。
   const release = (): void => {
-    if (inflightIndexBuilds.get(decryptedDir) === entry) inflightIndexBuilds.delete(decryptedDir)
+    if (inflightIndexBuilds.get(key) === entry) inflightIndexBuilds.delete(key)
   }
   promise.then(release, release)
   return promise
@@ -343,10 +353,16 @@ async function runBuildSearchIndex(
 ): Promise<BuildResult> {
   const p = searchIndexPath(decryptedDir)
   const db = new DatabaseSync(p)
-  // 跨连接/跨进程争用时的等待窗口：写事务现在跨 macrotask，别的连接（例如
-  // 另一个进程的索引读、或上次崩溃残留的锁）撞上来时先等一会儿，而不是立刻抛
-  // 「database is locked」。进程内的并发已由上面的单飞闸挡住。
-  try { db.exec('PRAGMA busy_timeout = 5000') } catch { /* 个别连接不接受，忽略 */ }
+  // WAL：让**读者**在重建窗口内不被写事务挡住（delete/journal 模式下读者整段被拒）。
+  // 不设 busy_timeout：它是同步忙等，在这个单线程 worker 里等价于「整线程睡 N 秒后仍然
+  // 失败」（实测 busy_timeout=5000 时停摆 7.5s 才报 database is locked）。进程内争用一律
+  // 交给上面的单飞闸消除；跨进程时快速失败也比冻结整个 worker 好。
+  // WAL：让**读者**在重建窗口内不被写事务挡住。delete/journal 模式下写事务一旦溢出页缓存
+  // 就持 EXCLUSIVE 到 COMMIT，整段窗口读者被拒（实测溢出点约 1.75MB）。
+  // 不设 busy_timeout：它是同步忙等，在这个单线程 worker 里等价于「整线程睡 N 秒后仍然
+  // 失败」（实测 busy_timeout=5000 时停摆 7.5s 才报 database is locked）。进程内争用一律
+  // 交给上面的单飞闸消除；跨进程时快速失败也比冻结整个 worker 好。
+  try { db.exec('PRAGMA journal_mode = WAL') } catch { /* 网络盘等不支持 WAL：退回 delete，仅损失读侧并发 */ }
   const init = (): void => {
     db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     // tokens 列存 bigram 切分后的文本、who 列存「会话名 + 群内发送者」，两列都进 BM25 索引；
@@ -355,26 +371,33 @@ async function runBuildSearchIndex(
     db.exec('CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)')
   }
   try {
+    // 事务外的 init() 只为「查 existing / schema_version」而建表：首次构建时落地空表，
+    // 已有索引时是 no-op。
     init()
     const existing = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
     const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value?: string } | undefined
     if (!force && existing > 0 && ver?.value === INDEX_SCHEMA_VERSION) {
       return { status: 'exists', rows: existing, message: '索引已存在，使用 force=true 可重建' }
     }
-    db.exec('DROP TABLE IF EXISTS message_fts')
-    db.exec('DROP TABLE IF EXISTS message_meta')
-    init()
-    db.exec("DELETE FROM meta WHERE key='built_at'")
     const started = Date.now()
     const names = loadDisplayNames(decryptedDir)
     const usernames = loadSessionUsernames(decryptedDir)
     const shards = messageShardFiles(decryptedDir)
     db.exec('BEGIN')
+    // DDL 与 DELETE 必须在事务内：放在事务外时它们各自 autocommit，读者会在整个重建窗口
+    // 里看到「表被删/被清空」的半成品状态 —— getSearchIndexStatus 报 ready:false、
+    // searchIndexBatch 静默返回空、searchIndexMessages 退化成 LIKE 全表扫描；而且重建中途
+    // 失败会把已有索引留成空表。挪进事务后配合 WAL，读者整段窗口都读到旧索引。
+    db.exec('DROP TABLE IF EXISTS message_fts')
+    db.exec('DROP TABLE IF EXISTS message_meta')
+    init()
+    db.exec("DELETE FROM meta WHERE key='built_at'")
     let total = 0
     // 距上次让出的事件循环用量（行数与字符数，任一超限即让出）。
     let rowsSinceYield = 0
     let charsSinceYield = 0
     let batch: Array<[string, string, string, string, number, number, number]> = []
+    let batchChars = 0
     const flush = (): void => {
       if (batch.length === 0) return
       const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)')
@@ -384,6 +407,7 @@ async function runBuildSearchIndex(
         insFts.run(Number(r.lastInsertRowid), tokens, who)
       }
       batch = []
+      batchChars = 0
     }
     for (const username of usernames) {
       const table = msgTableName(username)
@@ -402,20 +426,26 @@ async function runBuildSearchIndex(
           // 用 iterate() 而不是 all()：全量物化会让峰值与「单会话消息数」同阶
           // （百万级库上就是数百 MB）。边读边写 FTS，读完即释放。
           for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
+            // 计量必须在任何 continue **之前**：被跳过的行同样付了 zstd 解压与解码成本。
+            // 图片/系统消息这类「无可读文本」的行在真实账号里占比很高且会连续成片，
+            // 实测 30 万条这种行若不计次，单块能连续跑 1.1s 且一次都不让出。
+            rowsSinceYield += 1
             const localId = Number(r['local_id'] ?? 0)
             const createTime = Number(r['create_time'] ?? 0)
             const sortSeq = Number(r['sort_seq'] ?? localId)
             const raw = decodeCell(r['message_content']) || decodeCell(r['compress_content'])
+            charsSinceYield += raw.length
             const { sender, body } = splitGroupPrefix(raw, username)
             const text = readableMessageText(body)
-            if (!text) continue
-            const who = sender
-              ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
-              : sessionWho
-            batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
-            rowsSinceYield += 1
-            charsSinceYield += text.length
-            if (batch.length >= 500) flush()
+            if (text) {
+              const who = sender
+                ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
+                : sessionWho
+              batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
+              batchChars += text.length
+            }
+            // 批量写入也纳入预算：行长很大时单次 flush 自己就能跑几十秒（见 FLUSH_EVERY_CHARS）。
+            if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush()
             // 周期性让出事件循环：同步 sqlite + bigram 切分是纯 CPU，不让出就会
             // 让整个 worker（承载全部 130+ 个查询方法）停摆数秒。
             if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
@@ -452,7 +482,7 @@ async function runBuildSearchIndex(
  *
  * node:sqlite 全是同步 API，所以「跑很久」= 「把承载全部查询的 worker 钉住」。
  * 只能靠 await 把控制权交回：`setImmediate` 让 I/O 与其它请求的微/宏任务插进来。
- * 索引构建按行数周期性调用它 —— 否则百万行会一次性阻塞数秒。
+ * 索引构建按「行数 ∨ 字符数」周期性调用它 —— 否则百万行会一次性阻塞数秒。
  */
 function yieldToLoop(): Promise<void> {
   return new Promise((resolve) => { setImmediate(resolve) })
