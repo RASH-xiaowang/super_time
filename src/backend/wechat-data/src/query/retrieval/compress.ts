@@ -75,8 +75,9 @@ export function compressContext(
   const chosen: Array<{ username: string; start: number; end: number }> = []
   // 已在其他窗口出现过的行文本（全局去冗余）。
   // **按会话分组 + 3-gram 只算一次**（M12）：原先是一个扁平数组 + `some(...)` 线性扫，
-  // 每次都重建两侧的 3-gram 并与**所有**会话的已见行比较 —— 实测 20.2ms/次提问
-  // （10 个窗口 × 6 行 × 60 条已见），按行缓存 3-gram 后降到 9.8ms，且跨会话比较全部消失。
+  // 两件事各自都有代价 —— (a) 每次都重建**两侧**的 3-gram；(b) 要与**所有**会话的已见行比较。
+  // 实测主项是 (a)：同一负载下 1.8ms → 0.9ms/窗口（≈2×）；(b) 的跨会话比较随之消失，
+  // 但它是次要项。具体数字随机器变化，别把绝对值当结论（此处不写死）。
   const seenByUser = new Map<string, Array<{ text: string; grams: Set<string> }>>()
 
   for (const r of ranked) {

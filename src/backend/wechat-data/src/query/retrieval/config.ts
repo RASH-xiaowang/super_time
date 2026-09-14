@@ -148,13 +148,31 @@ function deepMerge<T>(base: T, patch: unknown): T {
  * @param decryptedDir - 解密数据根。
  * @returns 完整配置。
  */
+/**
+ * `fusion.keep` 的硬上限（M12 复审建议）。
+ *
+ * 为什么需要：`dedupeFused` 是两两比较 O(N²)，而 `keep` 是**可手改**的配置项
+ * （`rag-config.json`），`deepMerge` 不做数值校验 —— 实测最坏情形（候选全在同一会话、
+ * 时间都在窗口内）N=120 是 14ms，N=960 就 0.9s，N=1920 达 3.8s（一次提问直接卡住）。
+ * 夹到 400 ⇒ 最坏约 0.16s。想要更宽的召回请改 `channels.*.topK`，别靠放大这里。
+ */
+const FUSION_KEEP_MAX = 400
+
+/** 把越界/非法的 `fusion.keep` 归一到 [1, FUSION_KEEP_MAX]。 */
+function clampFusionKeep(cfg: RetrievalConfig): RetrievalConfig {
+  const raw = Number(cfg.fusion?.keep)
+  const keep = Math.min(Math.max(Number.isFinite(raw) ? Math.floor(raw) : 120, 1), FUSION_KEEP_MAX)
+  if (keep === cfg.fusion.keep) return cfg
+  return { ...cfg, fusion: { ...cfg.fusion, keep } }
+}
+
 export function loadRetrievalConfig(decryptedDir: string): RetrievalConfig {
   const base = defaultRetrievalConfig()
   const p = retrievalConfigPath(decryptedDir)
   if (!existsSync(p)) return base
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8'))
-    return deepMerge(base, raw)
+    return clampFusionKeep(deepMerge(base, raw))
   } catch {
     return base
   }
@@ -176,7 +194,7 @@ export function loadRetrievalConfig(decryptedDir: string): RetrievalConfig {
  */
 export function saveRetrievalConfig(decryptedDir: string, patch: unknown): RetrievalConfig {
   const base = loadRetrievalConfig(decryptedDir)
-  const merged = deepMerge(base, patch)
+  const merged = clampFusionKeep(deepMerge(base, patch))
   const p = retrievalConfigPath(decryptedDir)
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, JSON.stringify(merged, null, 2) + '\n', 'utf8')

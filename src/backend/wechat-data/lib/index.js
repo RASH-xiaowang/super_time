@@ -12748,20 +12748,27 @@ function deepMerge(base, patch) {
   }
   return out;
 }
+var FUSION_KEEP_MAX = 400;
+function clampFusionKeep(cfg) {
+  const raw = Number(cfg.fusion?.keep);
+  const keep = Math.min(Math.max(Number.isFinite(raw) ? Math.floor(raw) : 120, 1), FUSION_KEEP_MAX);
+  if (keep === cfg.fusion.keep) return cfg;
+  return { ...cfg, fusion: { ...cfg.fusion, keep } };
+}
 function loadRetrievalConfig(decryptedDir) {
   const base = defaultRetrievalConfig();
   const p = retrievalConfigPath(decryptedDir);
   if (!existsSync38(p)) return base;
   try {
     const raw = JSON.parse(readFileSync19(p, "utf8"));
-    return deepMerge(base, raw);
+    return clampFusionKeep(deepMerge(base, raw));
   } catch {
     return base;
   }
 }
 function saveRetrievalConfig(decryptedDir, patch) {
   const base = loadRetrievalConfig(decryptedDir);
-  const merged = deepMerge(base, patch);
+  const merged = clampFusionKeep(deepMerge(base, patch));
   const p = retrievalConfigPath(decryptedDir);
   mkdirSync11(dirname13(p), { recursive: true });
   writeFileSync8(p, JSON.stringify(merged, null, 2) + "\n", "utf8");

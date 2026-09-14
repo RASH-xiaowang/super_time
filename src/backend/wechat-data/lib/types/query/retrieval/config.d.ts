@@ -81,11 +81,6 @@ export declare function defaultRetrievalConfig(): RetrievalConfig;
 export declare function retrievalRoot(decryptedDir: string): string;
 /** 配置文件路径。 */
 export declare function retrievalConfigPath(decryptedDir: string): string;
-/**
- * 读取检索配置（文件缺失/损坏时回退默认值）。
- * @param decryptedDir - 解密数据根。
- * @returns 完整配置。
- */
 export declare function loadRetrievalConfig(decryptedDir: string): RetrievalConfig;
 /**
  * 写入检索配置（以**当前文件内容**为基准合并后落盘）。

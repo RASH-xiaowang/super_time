@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { classifyIntent, refineIntentWithLlm } from '../src/query/retrieval/intent.ts'
 import { buildQueryPlan, normalizeQuestion, resolveRelativeDate, synonymExpand, toHalfWidth } from '../src/query/retrieval/rewrite.ts'
@@ -17,7 +19,7 @@ import { dedupeFused, fuseResults } from '../src/query/retrieval/fusion.ts'
 import { rerankDocs } from '../src/query/retrieval/rank.ts'
 import { averagePrecision, mrr, ndcgAtK, precisionAtK, recallAtK } from '../src/query/retrieval/eval.ts'
 import { __internals, buildVectorIndex, searchDense } from '../src/query/retrieval/embedding.ts'
-import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
+import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig, loadRetrievalConfig, retrievalConfigPath } from '../src/query/retrieval/config.ts'
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
 
@@ -373,6 +375,30 @@ describe('config 意图策略', () => {
   })
 })
 
+describe('M12 复审：fusion.keep 有硬上限', () => {
+  /** 写一份手改的 rag-config.json 并读回。 */
+  function loadWithKeep(keep: unknown): number {
+    const root = mkdtempSync(join(tmpdir(), 'wx-keep-'))
+    scratch.push(root)
+    const dec = join(root, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+    const cfgPath = retrievalConfigPath(dec)
+    mkdirSync(dirname(cfgPath), { recursive: true })
+    writeFileSync(cfgPath, JSON.stringify({ fusion: { keep } }), 'utf8')
+    return loadRetrievalConfig(dec).fusion.keep
+  }
+
+  it('越界/非法值都被夹到 [1,400]（防 O(N²) 爆炸）', () => {
+    // 实测最坏情形（候选全在同一会话、时间都在窗口内）：N=120 是 14ms、960 是 0.9s、1920 是 3.8s
+    expect(loadWithKeep(9999)).toBe(400)
+    expect(loadWithKeep(1920)).toBe(400)
+    expect(loadWithKeep(0)).toBe(1)
+    expect(loadWithKeep(-5)).toBe(1)
+    expect(loadWithKeep('abc')).toBe(120) // 非数字 → 回落到默认
+    expect(loadWithKeep(200.7)).toBe(200) // 合法值原样（截断成整数）
+  })
+})
+
 describe('合成评测集（回归护栏）', () => {
   it('混合检索不劣于纯稀疏消融', () => {
     const hybrid = runSyntheticEval({ k: 10 })
@@ -416,6 +442,32 @@ describe('接线：稠密粗筛必须走计数选择（M9）', () => {
 
   it('下游按余弦排序的 out.sort 仍在（守卫不要误伤它）', () => {
     expect(code).toContain('out.sort(')
+  })
+})
+
+describe('接线：compress 的句子级去重必须用缓存的 3-gram（M12）', () => {
+  /**
+   * 为什么需要源码级守卫：全仓没有任何用例调用 `compressContext`（它只在 pipeline 里被调用），
+   * 所以把它改回「每次重建两侧 3-gram」的旧写法**不会让任何用例变红**（复审实测：改回去全绿）。
+   * 仓库对同类风险已有既定做法（本文件下半部分那条 selectByHamming 守卫、tests/meta.spec.ts、
+   * tests/result-cache.spec.ts）。
+   */
+  const src = readFileSync(join(HERE, '..', 'src', 'query', 'retrieval', 'compress.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
+
+  it('去重走 jaccardGrams(缓存的集合) 而不是每次 jaccard(a, b)', () => {
+    // 断言的是**调用点**而不是「函数名在本文件里出现过」—— 后者连函数定义本身都能匹配，
+    // 把调用点改回旧写法照样通过（复审那条变异我第一次就是这么放过它的）。
+    expect(code).toContain('jaccardGrams(s.grams, bodyGrams)')
+    expect(code).not.toContain('jaccard(s.text, body)')
+  })
+
+  it('每行的 3-gram 在写入 seen 的同时就被算好（与 text 同源）', () => {
+    expect(code).toContain('bucket.push({ text: body, grams: bodyGrams })')
+  })
+
+  it('每行的 3-gram 只在建时算一次（gramsOf3 被调用）', () => {
+    expect(code).toContain('gramsOf3(')
   })
 })
 
