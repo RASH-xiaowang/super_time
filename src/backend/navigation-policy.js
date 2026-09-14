@@ -43,6 +43,11 @@ function parseUrl(raw) {
  * @returns {boolean} 是否在根目录内。
  */
 function isInsidePath(root, target) {
+  // 空 root 是 fail-open：`path.relative('', x)` 得到相对 x 的路径、不以 '..' 开头，
+  // 于是任何文件都会被判成「在应用目录内」。评审实测 root='' 时 decideNavigation 会返回
+  // allow，root=undefined 还会抛 TypeError。这里显式判掉，保住「默认拒绝」的不变量。
+  if (typeof root !== 'string' || root.trim() === '') return false;
+  if (typeof target !== 'string' || target.trim() === '') return false;
   const rel = path.relative(path.resolve(root), path.resolve(target));
   if (rel === '') return true;
   return !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -50,12 +55,17 @@ function isInsidePath(root, target) {
 
 /**
  * 该 URL 是否可以交给系统浏览器打开。
+ *
+ * 只放行 http(s)，并且**拒绝带凭据的 URL**：`https://wechat.com:pass@evil.com/`
+ * 会在系统浏览器里把 `wechat.com` 显示成主机名（真实主机是 evil.com），是已知的
+ * 展示欺骗手法；这种 URL 交给系统打开没有正当用途。
  * @param {unknown} raw - 候选 URL。
- * @returns {boolean} 仅 http(s) 为 true。
+ * @returns {boolean} 仅「http(s) 且不含用户名/密码」为 true。
  */
 function isSafeExternalUrl(raw) {
   const url = parseUrl(raw);
-  return url !== null && EXTERNAL_PROTOCOLS.has(url.protocol);
+  if (url === null || !EXTERNAL_PROTOCOLS.has(url.protocol)) return false;
+  return url.username === '' && url.password === '';
 }
 
 /**

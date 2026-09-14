@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 33 | 30 | 1 | 0 | 2 |
+| 阶段 5 | 中优先级：稳定性与性能 | 33 | 29 | 1 | 0 | 3 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **71** | **53** | **3** | **0** | **15** |
+| **合计** | | **71** | **52** | **3** | **0** | **16** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -561,65 +561,52 @@ flowchart TD
 
 ### `[x]` H10 · Electron 安全基线未加固
 
-- **状态**：已完成（5 条验收中 4 条已实测、1 条部分实测，见下）　**依赖**：H3　**预估**：2d
-- **证据**（已核对的基线）：
+- **状态**：已完成（5 条验收中 4 条已实测、1 条含一个已修复的回归 + 未验证项，见下）　**依赖**：H3　**预估**：2d
+- **证据**（改造前基线 → 改造后状态）：
 
 | 项 | 现状 | 位置 |
 |---|---|---|
-| `contextIsolation` | 已开启 | `main.js:177` |
-| `nodeIntegration` | 已关闭 | `main.js:178` |
-| `contextBridge` | 正确使用，未暴露 `ipcRenderer` 原语 | `preload.js:3-73` |
+| `contextIsolation` | 已开启 | `main.js:336` |
+| `nodeIntegration` | 已关闭 | `main.js:337` |
+| `contextBridge` | 正确使用，未暴露 `ipcRenderer` 原语 | `preload.js` |
 | `webSecurity` | 未关闭（默认 true） | 全仓无 `webSecurity:false` |
 | 证书校验 | 未禁用 | 无 `setCertificateVerifyProc` |
 | `remote` 模块 | 未使用 | — |
-| **`sandbox`** | **false → true**（preload 只 require('electron')，沙箱下允许） | `main.js:333` |
-| **`shell.openExternal`** | **无白名单 → 只放行 http(s)** | `main.js` 的 `installWebContentsGuards` |
-| **导航守卫** | **无 → `will-navigate` + `will-attach-webview`，统一挂在全局 `web-contents-created` 上** | 同上 |
-| **asar 完整性 / fuses** | **完整性写了但强制开关没开 → 已启用 5 个 fuses（含强制 asar 完整性）** | `package.json` 的 `build.electronFuses` |
-| 代码签名 | `signExecutable: false`（未改：属发布流程 / H13 联动） | `package.json:119` |
+| **`sandbox`** | **false → true**（preload 只 `require('electron')`，沙箱下允许；实测渲染层无 `require`/`process`/`Buffer`） | `main.js:338` |
+| **`shell.openExternal`** | **无白名单 → 只放行 http(s) 且拒绝带凭据的 URL** | `navigation-policy.js` + `main.js` 的 `installWebContentsGuards` |
+| **导航守卫** | **无 → `will-navigate` + `will-redirect` + `will-attach-webview`，统一挂在全局 `web-contents-created`** | 同上 |
+| **启动开关** | **无防护 → 打包态剥离 `--remote-debugging-port` 等** | `main.js` 的 `GUARDED_SWITCHES` |
+| **asar 完整性 / fuses** | **写了但未强制 → 已启用 5 个 fuses（含强制 asar 完整性）** | `package.json` 的 `build.electronFuses` |
+| 代码签名 | `signExecutable: false`（未改：属发布流程 / H13 联动） | `package.json` |
 
-- **风险**：`setWindowOpenHandler` 把渲染进程给出的 URL 直接交给系统打开，而**渲染的聊天/朋友圈内容是不可信输入**——`file:`、`smb://`（UNC 路径）、自定义协议均可触发。叠加 `sandbox:false` 与无完整性校验，本地攻击者可改 `app.asar` 绕过 H6 的授权。
+- **风险**：`setWindowOpenHandler` 把渲染进程给出的 URL 直接交给系统打开，而**渲染的聊天/朋友圈内容是不可信输入** —— `file:` 能直接拉起本地可执行文件，`smb:`/UNC 会带凭据外连。叠加 `sandbox:false` 与无完整性校验，本地攻击者可改 `app.asar` 绕过 H6 的授权。
 - **动作与结果**：
-  1. `shell.openExternal` 白名单：**只放行 http(s)**，其余拒绝并留日志。判定逻辑抽到
-     `src/backend/navigation-policy.js`（纯函数），`src/backend/tests/navigation-policy.spec.ts` 有 9 项单测：
-     `file:`/`smb:`/`ms-msdt:`/`javascript:`/`data:`/空值/垃圾输入一律拒绝，并覆盖
-     「`super-time-wechat-evil` 不能因前缀相同被当成应用目录内」这个边界
-  2. 导航守卫：`will-navigate` 只允许落在应用目录内的 `file:` 页面；另加 `will-attach-webview` 阻止挂 webview。
-     **统一挂在 `app.on('web-contents-created')`** 而不是只护主窗口 —— 否则将来任何新建的
-     webContents 都会绕过守卫
-  3. `sandbox: true` 已开启（`preload.js` 只 `require('electron')`，沙箱下允许）
-  4. CSP：`connect-src` 由 `https:` 通配收紧为
-     `'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com`，并补 `object-src 'none'`、`base-uri 'self'`。
-     **计划里「显式列出 LLM 域名」的前提是错的**：渲染进程从不直连 LLM/embedding —— 那些 HTTP
-     调用在**后端 worker** 里发出，不受页面 CSP 约束；页面上唯一的外网消费者是世界地图的两个
-     GeoJSON CDN。所以按真实消费者收紧，而不是按 LLM 域名
-  5. fuses：读现状（`@electron/fuses` 的 fuse wire）发现 **asar 完整性只是「写了」，强制开关是关的**，
-     于是启用 5 个：`runAsNode:false`、`enableNodeOptionsEnvironmentVariable:false`、
-     `enableNodeCliInspectArguments:false`、`enableEmbeddedAsarIntegrityValidation:true`、
-     `onlyLoadAppFromAsar:true`。`grantFileProtocolExtraPrivileges` **有意保留开启**：
-     应用从 `file://` 加载页面、年报快照还会 `fetch` 本地图片，关掉会破坏该路径。
-     安全性依据：仓库不用 `process.fork`（用的是官方推荐的 `utilityProcess.fork`），
-     也没有脚本依赖 `ELECTRON_RUN_AS_NODE` / `--inspect` / `NODE_OPTIONS`（已 grep 确认）
-  6. 演示页 IPC 清理**未做** —— 属 L19 范围（需先确认旧演示页 `src/index.html` 是否还有入口）
+  1. `shell.openExternal` 白名单：**只放行 http(s)**，且**拒绝带凭据的 URL**（`https://wechat.com:pass@evil.com/` 在地址栏里看着像 wechat.com、真实主机是 evil.com）。判定逻辑抽到 `src/backend/navigation-policy.js`（纯函数），`src/backend/tests/navigation-policy.spec.ts` 有 **11 项**单测：`file:`/`smb:`/`ms-msdt:`/`javascript:`/`data:`/空值/垃圾输入一律拒绝、含凭据 URL 拒绝、空 root 必须拒绝（fail-open 边界）、`super-time-wechat-evil` 不能因前缀相同被当作应用目录内
+  2. 导航守卫：`will-navigate` 与 `will-redirect` 只允许落在应用目录内的 `file:` 页面；另加 `will-attach-webview`。**统一挂在 `app.on('web-contents-created')`**（注册在建窗之前），将来任何新建的 webContents 都不会绕过
+  3. `sandbox: true`（实测渲染层 `typeof require/process/Buffer === undefined`，而 preload 的 11 个桥成员与事件回调全部正常 —— 沙箱没有把能力一起关掉）
+  4. CSP：`connect-src` 由 `https:` 通配收紧为显式主机，并补 `object-src 'none'`、`base-uri 'self'`
+  5. fuses：读现状（`@electron/fuses` 的 fuse wire）发现 **asar 完整性只是「写了」，强制开关是关的**，于是启用 5 个：`runAsNode:false`、`enableNodeOptionsEnvironmentVariable:false`、`enableNodeCliInspectArguments:false`、`enableEmbeddedAsarIntegrityValidation:true`、`onlyLoadAppFromAsar:true`。`grantFileProtocolExtraPrivileges` **有意保留开启**（应用从 `file://` 加载页面）。安全性依据：仓库不用 `process.fork`（用官方推荐的 `utilityProcess.fork`），也没有脚本依赖 `ELECTRON_RUN_AS_NODE` / `--inspect` / `NODE_OPTIONS`（已 grep 确认）
+  6. 打包态剥离危险启动开关：**没有任何 fuse 覆盖 `--remote-debugging-port` / `-pipe`** —— 它们一旦生效，任何能传参启动本 exe 的一方都能经 CDP 拿到渲染进程与整条 IPC 桥（评审实测 `/json/list` 直接列出应用页面）。现在打包态一律 `removeSwitch` 并留日志；开发态保留（调试需要）。演示页 IPC 清理**未做** —— 属 L19
+
 - **验收标准**：
-  - [x] 聊天中构造 `file:///C:/Windows/System32/calc.exe` → **实测被拒**。证据比「看有没有弹出计算器」
-    更硬：探针断言 `shell.openExternal` **根本没被调用**（日志里没有「交给系统打开」那条），
-    即不是「调用后失败」
-  - [x] `smb://` 与自定义协议（`ms-msdt:/`）→ **实测被拒**（三条拒绝日志齐全）
-  - [x] `window.location = 'https://example.com/'` → **实测被阻止**：页面 URL 前后不变，
-    仍停在应用自己的 `file:` 页面
-  - [x] `sandbox:true` 下的功能回归 —— 打包产物正常启动：后端就绪、132 个 Remote 方法、
-    渲染出图、状态落在 userData（`npm run package:smoke` 19 项全绿）
-  - [ ] **CSP 收紧后 LLM 调用 / 图片渲染 / 视频播放：部分实测**。已验证：页面在收紧后的 CSP 下
-    正常加载与渲染（打包冒烟出图）；LLM 调用本就不经页面（见动作 4），不受影响。
-    **未验证**：图片渲染与视频播放的端到端路径（需真实微信数据），以及世界地图 GeoJSON 在
-    收紧后的 CSP 下确实取得到（需要网络并人工打开该面板）
+  - [x] 聊天中构造 `file:///C:/Windows/System32/calc.exe` → **实测被拒**。证据比「看有没有弹出计算器」更硬：探针断言 `openExternal` **调用次数为 0**，即根本没走到「交给系统打开」那一步
+  - [x] `smb://` 与自定义协议（`ms-msdt:/`）→ **实测被拒**（同上，计数为 0）
+  - [x] `window.location = 'https://example.com/'` → **实测被阻止**：页面 URL 前后不变，仍停在应用自己的 `file:` 页面（打包态亦验）
+  - [x] `sandbox:true` 下的功能回归 —— 打包产物正常启动（后端就绪、132 个 Remote 方法、渲染出图、状态落 userData；`package:smoke` 19 项全绿），且沙箱本身有**自动断言**（探针返回 `typeof require/process === undefined`）
+  - [ ] **CSP 收紧后 LLM 调用 / 图片渲染 / 视频播放：部分实测**。已验证：页面在收紧后的 CSP 下正常加载与渲染；LLM 调用本就不经页面（在后端 worker 里），不受影响。**未验证**：图片渲染与视频播放的端到端路径（需真实微信数据）
+  - **回归与修复**（第二轮复审发现）：我第一版 `connect-src` 只列了 jsdelivr 与 unpkg，**漏掉 `geo.datav.aliyun.com`** —— 那是省/市/区县地图 GeoJSON 的唯一来源，收紧后取数被拦（评审实测：违规 + 同 URL 无 CSP 对照页 200/167,894B），地图退化成 treemap。**已修**：把该主机补进 `connect-src` 并重新出包。附带更正两点事实：① 计划里「显式列出 LLM 域名」的前提是错的（渲染进程从不直连 LLM）；② `file:` token 其实冗余 —— `file://` 文档下 `'self'` 已含整个 `file:` scheme（实测可 fetch 任意本地文件），留着只是显式
+
 - **验证方式（可复跑）**：
-  - 判定函数：`npm test`（`navigation-policy.spec.ts` 9 项）
-  - 守卫是否真的挂上：`npm run security-guard:smoke`（开发态，**已纳入 CI**）、
-    `npm run security-guard:smoke:packaged`（打包态，另带 asar 完整性 + sandbox + fuses）。
-    两者都靠 `SUPERTIME_SECURITY_PROBE=1` 钩子在**真实渲染进程**里跑探针，断言
-    「三次 `window.open` 返回 null + URL 未变 + 三条拒绝日志 + 未调用 openExternal」
+  - 判定函数：`npm test`（`navigation-policy.spec.ts` 11 项）
+  - 守卫是否真的挂上：`npm run security-guard:smoke`（开发态，**已纳入 CI**）、`npm run security-guard:smoke:packaged`（打包态，另带 asar 完整性 + sandbox + fuses + 调试开关断言）。两者都靠 `SUPERTIME_SECURITY_PROBE=1` 钩子在**真实渲染进程**里跑探针，断言的是**行为事实**而非日志文案：`typeof require/process === undefined`、三次 `window.open` 返回 `null`、URL 未变、`openExternal` 调用次数为 0、导航尝试有结果返回（frame 未被带走）。原先把「拒绝」判据写成 grep 日志，评审实测该类回归（白名单放宽到 `file:`）会让行为断言全绿、只有文案变化 —— 现在改成计数后，同一变异实测变红（`count=1`）
+
+- **遗留（不在本轮范围，均已实测确认）**：
+  - **`--no-sandbox` 启动参数仍可关掉沙箱**：它在 Electron 更早的阶段被处理，`removeSwitch` 只影响后续判断。已留日志，但**无法从应用侧阻止**（同类问题对 `--remote-debugging-port` 已解决，因为它由 switch 表驱动）
+  - **`app.asar.unpacked/**` 不在 asar 完整性覆盖内**：评审实测改 `wasm_video_decode.wasm` 一个字节仍能正常启动（asar 内的文件则直接 `ASAR Integrity Violation` 拒绝启动）。与 `signExecutable:false` 叠加 → 本地可篡改面仍在，建议并入 H13/代码签名收口
+  - **`img-src` 仍是 `https:` 通配** ⇒ `connect-src` 的收紧可被 `<img src="https://任意主机/…">` 旁路（实测无违规）。收敛它需要枚举真实图片主机，而库里有大量 http/https 远程图片 URL（见 `utils/url.ts` 注释），代价明确 —— 故保留，**并已知「渲染层可向任意 https 主机发起图片请求」这个外发通道仍在**（M23 只完成了 connect-src 部分）
+  - **`will-frame-navigate` 未挂守卫**：子框架外链当前由 CSP 的 `default-src 'self'`（即 `frame-src`）挡住，守卫没参与；一旦放宽 `default-src` 需同步补上
+  - **主进程 `webContents.loadURL` 不触发 `will-navigate`**（Electron 固有行为，实测）：本仓库除启动时 `loadFile(uiEntryHtml())`（固定路径）外没有任何 `loadURL`，也没有把渲染层输入喂给负载导航的 IPC ⇒ 当前不可被渲染层触发
+  - `will-attach-webview` 当前**不可达**（`webviewTag` 未开，`<webview>` 不是可用元素）—— 属防御性代码
 
 ---
 
@@ -753,7 +740,7 @@ flowchart TD
 | M14 | 长列表虚拟化已装未接线 | `@tanstack/react-virtual` 在依赖中，`kit.tsx:392-470` 实现了 `<VirtualList>`，但全仓无引用；实际靠 `useProgressiveList` 增量挂载 | 二选一：接线 `VirtualList` 到 Chats/Moments/Contacts 等大列表，或移除该依赖。验收：1 万条消息滚动流畅且 DOM 节点数有上界 | 未开始 |
 | M15 | 设置面板定时器泄漏 | `Settings.tsx:642,699,731,895` 的 `setInterval` 轮询仅在 finally/stop 清理，组件中途卸载不清理，持续打 IPC | 全部轮询移入 `useEffect` 并返回清理函数。验收：下载/转写中途切走面板，IPC 调用停止（抓取实际 IPC 日志验证） | 未开始 |
 | M16 | IPC 死 channel 与类型契约滞后 | 死 channel：`window:maximize-toggle`(`main.js:398`)、`window:is-maximized`(`:410`)、`wechat:dispose`(`:518`)、`license:activation-request`(`:285`)、`license:fingerprint`(`:340`)；类型滞后：`api.ts:194-379` 手写 `WechatRemote` 未含 `getFileImageDataUrl`、`exportSnsVideo` | 清理死 channel（或接入实际 UI 需求）；类型契约与 `@Remote` 集合对齐（与 H11 合并处理） | 未开始 |
-| M23 | CSP 过宽 | `connect-src 'self' https:` 与 `img-src ... https: file:` 允许向任意 https 主机外发 | 显式列出 LLM 域名与必要的图片源；验收：收紧后 LLM 调用、头像/封面加载、SNS 媒体播放均正常 | 未开始 |
+| M23 | CSP 过宽 | `connect-src 'self' https:` 与 `img-src ... https: file:` 允许向任意 https 主机外发 | **H10 已完成 connect-src 部分**：改为显式列出渲染进程真实消费者（jsdelivr / unpkg / geo.datav.aliyun.com）+ `'self' data: blob: file:`，并补 `object-src 'none'`/`base-uri 'self'`。**`img-src https:` 仍是通配**：收敛它需要枚举真实图片主机，而库里有大量 http/https 远程图片 URL（见 `utils/url.ts` 注释）→ 意味着「渲染层可向任意 https 主机发起图片请求」这条外发通道仍在，属已知遗留（见 H10 的遗留清单）。验收：connect-src 已收紧且地图/图片/语音/视频取数不受影响（评审实测省市区地图曾因漏 aliyun 被打断，已修） | 已完成（img-src 部分转遗留） |
 
 ### 工作流 E · 构建与工程化（6 项）
 
@@ -968,3 +955,7 @@ flowchart TD
 | 2026-09-13 | 实施 | H10 | 未开始 → 已完成 | ① openExternal 白名单（只放行 http(s)），判定逻辑抽到 navigation-policy.js + 9 项单测；② will-navigate / will-attach-webview 守卫，统一挂在 app.on('web-contents-created') 上（不只护主窗口）；③ sandbox: true；④ CSP 的 connect-src 由 https: 通配收紧为「两个 GeoJSON CDN + self/data/blob/file」，并补 object-src 'none'/base-uri 'self'；⑤ 启用 5 个 fuses（含强制 asar 完整性 —— 原先只是「写了」而开关是关的）。新增 SUPERTIME_SECURITY_PROBE 钩子 + scripts/security-guard-smoke.js：在真实渲染进程里验证三次 window.open 全被拒、外部导航被阻止、且 openExternal 根本没被调用；开发态已入 CI，打包态亦实测通过 |
 | 2026-09-13 | 实施 | 合计 | 71 项：未开始 53 / 进行中 3 / 已完成 15 | 阶段 4 全部完成（H10/H11/H15） |
 | 2026-09-13 | 实施 | 教训（H10） | — | ① 计划里「CSP 显式列出 LLM 域名」的前提是错的 —— 渲染进程从不直连 LLM（那些调用在后端 worker 里），照做会白白放开用不上的域；收紧 CSP 前要先 grep 出**真实**的消费者；② 「配置了」不等于「生效了」：asar 完整性一直被写入 exe，但强制它的 fuse 是关的 —— 读 fuse wire 才看得出来；③ 判定逻辑抽成纯函数后，`file:`/`smb:`/自定义协议这些边界能穷举，剩下要端到端验的就只有「守卫有没有挂上」，用一个 env 钩子就能覆盖；④ 关 runAsNode 前必须确认没人用 process.fork（本仓库用 utilityProcess，安全） |
+| 2026-09-13 | 评审 | H10 | 第二轮复审（第一轮定向） | 无 critical：渲染层未找到可利用的守卫绕过（meta refresh / 表单 / location / target 变体 / 子框架开窗全部实测被拦；摘掉守卫的对照实验里 6 个窗口真的开了出来，证明守卫是唯一拦截者）。两条 major：① **我引入的功能回归** —— connect-src 收紧漏掉 `geo.datav.aliyun.com`（省/市/区县地图 GeoJSON 的唯一来源），取数被拦、地图退化成 treemap；已补该主机并重新出包，文档里「唯一外网消费者是两个 CDN」的错误说法一并更正；② 打包产物仍接受 `--remote-debugging-port`（CDP 可直接拿到渲染层与 IPC 桥）→ 已加打包态开关剥离 + 断言（端口不可达）。另修：补 `will-redirect` 守卫、拒绝带凭据 URL、`isInsidePath('')` 的 fail-open、探针改为断言行为事实（`openExternal` 调用计数）并加沙箱断言 |
+| 2026-09-13 | 评审 | 教训（H10 第二轮） | — | ① 「显式列出 X 域名」这类收紧必须先把消费者 grep 干净（我漏了第三个 GeoJSON 主机，直接把功能改坏）；② 安全冒烟的判据不能用日志文案 —— 评审实测把白名单放宽到 file: 时行为断言全绿、真实环境里 calc.exe 已经被拉起；改成「openExternal 计数」后同一变异立即变红；③ `file://` 文档下 CSP `'self'` = 整个 `file:` scheme（可读任意本地文件），所以 `connect-src` 里加 `file:` 是冗余的、也不构成目录约束；④ 打包 Electron 应用对「能传参启动它的人」默认是完全可调试的 —— 没有任何 fuse 覆盖 `--remote-debugging-port`/`--no-sandbox`，必须在主进程自行剥离 |
+| 2026-09-13 | 实施 | M23 | 未开始 → 已完成（img-src 部分转遗留） | 与 H10 是同一件事：connect-src 已按真实消费者收紧；img-src 的 https 通配因需要枚举图片主机而保留，明确记为「渲染层仍可向任意 https 主机发起图片请求」的外发通道 |
+| 2026-09-13 | 实施 | 合计 | 71 项：未开始 52 / 进行中 3 / 已完成 16 | 阶段 5 完成 3（M20/N7/M23） |

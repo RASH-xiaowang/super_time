@@ -9,6 +9,32 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = r
 const path = require('node:path');
 const fs = require('node:fs');
 const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
+
+/**
+ * fuses 覆盖不到的启动开关。
+ *
+ * Electron 只给 `--inspect*` 配了 fuse；`--remote-debugging-port` / `-pipe` **没有任何
+ * fuse 覆盖** —— 而它们一旦生效，任何能**传参启动本 exe** 的一方即可通过 CDP 拿到渲染
+ * 进程与整条 IPC 桥（实测打包产物上 `/json/list` 直接列出应用页面，`Runtime.evaluate`
+ * 能读到 `electronAPI`）。打包态一律剥掉；开发态保留（调试需要）。
+ * 已知残留：`--no-sandbox` 由 Electron 在更早阶段处理，这里剥掉只影响后续判断
+ * （见 docs/RELEASE-PLAN.md 的 H10 遗留清单）。
+ */
+const GUARDED_SWITCHES = [
+  'remote-debugging-port', 'remote-debugging-pipe', 'remote-allow-origins',
+  'no-sandbox', 'disable-gpu-sandbox', 'inspect', 'inspect-brk',
+];
+if (app.isPackaged) {
+  for (const sw of GUARDED_SWITCHES) {
+    if (app.commandLine.hasSwitch(sw)) {
+      app.commandLine.removeSwitch(sw);
+      console.warn('[security] 已忽略启动参数 --' + sw);
+    }
+  }
+}
+
+/** 交给系统浏览器打开的次数（仅供安全探针断言；正常流程里是「用户点了外链」的计数）。 */
+let openExternalAttempts = 0;
 const {
   configure: configureWechatPaths,
   applyConfig,
@@ -422,6 +448,7 @@ function createWindow() {
 function installWebContentsGuards(contents) {
   contents.setWindowOpenHandler(({ url }) => {
     if (decideWindowOpen(url) === 'external') {
+      openExternalAttempts += 1;
       // 系统没有对应处理程序时 openExternal 会 reject —— 不接住就是未处理拒绝。
       shell.openExternal(url).catch((e) => {
         console.warn('[security] 交给系统打开失败：' + String(e && e.message ? e.message : e));
@@ -435,6 +462,14 @@ function installWebContentsGuards(contents) {
     if (decideNavigation(url, __dirname) === 'allow') return;
     event.preventDefault();
     console.warn('[security] 已阻止页面导航：' + String(url));
+  });
+  // will-redirect 是**独立事件**：主框架的 HTTP 重定向只走它（实测 will-navigate 拦下
+  // 第一步后它就不会触发，所以当前只是「单点依赖」—— 一旦 decideNavigation 放宽，
+  // 重定向立刻成为绕过路径）。判定函数是现成的，这里补上零成本。
+  contents.on('will-redirect', (event, url) => {
+    if (decideNavigation(url, __dirname) === 'allow') return;
+    event.preventDefault();
+    console.warn('[security] 已阻止重定向：' + String(url));
   });
   contents.on('will-attach-webview', (event) => {
     event.preventDefault();
@@ -836,28 +871,43 @@ app.whenReady().then(async () => {
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         const urlBefore = mainWindow.webContents.getURL();
-        let opened = null;
-        try {
-          opened = await mainWindow.webContents.executeJavaScript(`(async () => {
-            const out = [];
-            for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
-              try { out.push(window.open(u) === null ? 'null' : 'window'); }
-              catch (e) { out.push('throw'); }
-            }
-            try { window.location.href = 'https://example.com/'; } catch (e) { /* 被守卫拦下即可 */ }
-            await new Promise((r) => setTimeout(r, 400));
-            return out;
-          })()`);
-        } catch (e) {
-          console.error('[security-probe] 探针执行失败', e);
+        const probe = {
+          sandbox: null, opened: [], navAttempt: null,
+          openExternalAttempts: 0, urlBefore, urlAfter: null, navigated: null,
+        };
+        // 每个动作**单独** evaluate 并带超时：守卫一旦失效，导航会把 frame 带走，
+        // 而 `executeJavaScript` 在 frame 销毁后不再 settle —— 不设超时的话探针会
+        // 永远打不出结果，失效只能表现为「无输出 + 冒烟等到 kill 超时」（评审实测）。
+        const evaluate = async (js, ms = 4000) => {
+          let timer;
+          try {
+            return await Promise.race([
+              mainWindow.webContents.executeJavaScript(js),
+              new Promise((resolve) => { timer = setTimeout(() => resolve('__timeout__'), ms); }),
+            ]);
+          } catch (e) {
+            return '__error__:' + (e && e.message ? e.message : String(e));
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        };
+
+        // ① 沙箱是否真的生效（行为事实，不靠日志）
+        probe.sandbox = await evaluate(
+          '({ require: typeof require, process: typeof process, buffer: typeof Buffer,'
+          + ' electronAPIKeys: Object.keys(window.electronAPI || {}).length })',
+        );
+        // ② 三类被禁协议的新窗口（逐条判定，避免一条挂住拖垮全部）
+        for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
+          const opened = await evaluate(`window.open(${JSON.stringify(u)}) === null ? 'null' : 'window'`);
+          probe.opened.push({ url: u, result: opened });
         }
-        const urlAfter = mainWindow.webContents.getURL();
-        console.log('[security-probe] ' + JSON.stringify({
-          opened,
-          urlBefore,
-          urlAfter,
-          navigated: urlAfter !== urlBefore,
-        }));
+        // ③ 外部导航
+        probe.navAttempt = await evaluate("(() => { window.location.href = 'https://example.com/'; return 'attempted' })()");
+        probe.openExternalAttempts = openExternalAttempts;
+        probe.urlAfter = mainWindow.webContents.getURL();
+        probe.navigated = probe.urlAfter !== probe.urlBefore;
+        console.log('[security-probe] ' + JSON.stringify(probe));
         app.quit();
       }, 3000);
     });
