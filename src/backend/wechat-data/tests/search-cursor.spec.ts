@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildSearchIndex, searchIndexMessages } from '../src/query/search.ts'
+import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from '../src/query/search.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -55,6 +55,74 @@ function makeFixture(totalMessages: number, hitsTarget: number, padBytes = 0): s
   }
   mdb.close()
   return decrypted
+}
+
+/**
+ * 直接指定每行正文的夹具（用于「无可读文本的行」「超长行」这类形态）。
+ * 关键词 `needle` 落在前 5 行，其余为给定正文。
+ */
+function makeRawFixture(bodies: string[]): string {
+  const root = mkdtempSync(join(tmpdir(), 'search-cursor-'))
+  scratch.push(root)
+  const decrypted = join(root, 'decrypted')
+  mkdirSync(join(decrypted, 'session'), { recursive: true })
+  mkdirSync(join(decrypted, 'message'), { recursive: true })
+
+  const sdb = new DatabaseSync(join(decrypted, 'session', 'session.db'))
+  sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
+  sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, 1700000000, 1700000000, 0, 1, \'\')').run(USER, USER)
+  sdb.close()
+
+  const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
+  mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
+  const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
+  bodies.forEach((body, i) => {
+    const id = i + 1
+    ins.run(id, id, 1, id % 2, 1700000000 + id, 1, body, `srv${id}`, '')
+  })
+  mdb.close()
+  return decrypted
+}
+
+/** 高熵中文串：重复字符会让 bigram 只有极少数 distinct token，FTS 插入成本被严重低估。 */
+function variedCjk(len: number, seed: number): string {
+  const pool = '的一是了我不人在他有这个上们来到时大地为子中你说生国年着就那和要她出也得里后自以会家可下而过天去能对小多然于心学么之都好看起发当没成只如事把还用第样道想作种开美总从无情己面最女但现前些所同日手又行意动方期它头经长儿回位分爱老因很给名法间斯知世什两次使身者被高已亲其进此话常与活正感'
+  let out = ''
+  let s = seed % 2147483647
+  for (let i = 0; i < len; i += 1) {
+    s = (s * 1103515245 + 12345) % 2147483648
+    out += pool[s % pool.length]
+  }
+  return out
+}
+
+/** 跑一次构建，返回「窗口内其它宏任务被调度的时刻」与「两次 tick 之间的最大空档(ms)」。 */
+/**
+ * 跑一次构建，测「循环内单次同步块」的最大时长。
+ *
+ * 只取**两次 tick 之间**的空档：收尾的末次 flush + COMMIT 是单个不可分割的原子操作，
+ * 不受循环内让出预算约束，混进来会淹没要测的信号（实测收尾 350ms 级、循环内 30ms 级）。
+ */
+async function buildWithTickProbe(decrypted: string): Promise<{ ticks: number; maxGapMs: number; tailMs: number }> {
+  const gaps: number[] = []
+  let stop = false
+  let last = Date.now()
+  let maxGap = 0
+  const tick = (): void => {
+    if (stop) return
+    const now = Date.now()
+    const gap = now - last
+    if (gap > maxGap) maxGap = gap
+    gaps.push(gap)
+    last = now
+    setImmediate(tick)
+  }
+  setImmediate(tick)
+  await buildSearchIndex(decrypted, true)
+  const end = Date.now()
+  stop = true
+  return { ticks: gaps.length, maxGapMs: maxGap, tailMs: end - last }
 }
 
 describe('全文兜底搜索：iterate 与 all 的命中集合一致', () => {
@@ -194,6 +262,69 @@ describe('索引构建会让出事件循环', () => {
     expect(first.status).toBe('ok')
     const second = await buildSearchIndex(decrypted, false)
     expect(second.status).toBe('exists')
+  })
+})
+
+describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
+  it('无可读文本的行也计入让出预算（图片/系统消息成片时不至于一次不让出）', async () => {
+    // 这些行 readableMessageText() 会返回空串、被 continue 跳过；但它们同样付了
+    // zstd 解压+解码成本。计量放在 continue 之前才不会被成片的无文本行绕过。
+    const bodies = Array.from({ length: 8000 }, () =>
+      `<msg><appmsg><img aeskey="${'a'.repeat(1000)}"/></appmsg></msg>`)
+    const decrypted = makeRawFixture(bodies)
+    const { ticks } = await buildWithTickProbe(decrypted)
+    expect(ticks).toBeGreaterThan(0)
+  })
+
+  it('长行下批量写入受字符上界约束，单块不破秒', async () => {
+    // 700 行 × 约 2.1 万汉字/行（≈63KB/行）。若批量写入不受字符上界约束，攒到 500 行的
+    // 那次 flush 会一次性插入 1000 万+ 汉字，实测单块 550ms（叠上收尾后整块 902ms）；
+    // 有了字符上界，同一夹具下循环内单块实测 32ms。
+    // 正文必须高熵：`'震'.repeat(n)` 这类重复串只有极少数 distinct bigram，
+    // FTS 插入成本会低到看不出差别（会得到假绿，实测过）。
+    const bodies = Array.from({ length: 700 }, (_, i) => variedCjk(21000, i + 1))
+    const decrypted = makeRawFixture(bodies)
+    const { maxGapMs } = await buildWithTickProbe(decrypted)
+    // 验收标准的原文是「建索引不再产生秒级事件循环阻塞」，这里按更严的 300ms 卡循环内单块
+    expect(maxGapMs).toBeLessThan(300)
+  })
+})
+
+describe('重建窗口内读侧不被降级', () => {
+  it('force 重建期间，状态与检索仍读到旧索引（而不是 ready:false / 退化成 LIKE）', async () => {
+    // 夹具必须大到让写事务溢出页缓存（默认 2MB）：delete/journal 模式下写事务一旦溢出就
+    // 持 EXCLUSIVE 到 COMMIT，读者整段被拒 —— 实测溢出点约 1.75MB。夹具太小时（例如
+    // 8000 行 × 90 字节 ≈ 720KB）根本不溢出，这条用例会变成「WAL 有没有都绿」的假绿。
+    const bodies = Array.from({ length: 6000 }, (_, i) =>
+      (i < 5 ? `needle 第 ${i + 1} 条 ` : `普通消息 ${i + 1} `) + variedCjk(500, i + 1))
+    const decrypted = makeRawFixture(bodies)
+
+    // 先建好旧索引
+    const first = await buildSearchIndex(decrypted, true)
+    expect(first.status).toBe('ok')
+    expect(first.rows).toBe(6000)
+
+    // 再 force 重建，并在**整个窗口内反复探测**（只探一次会落在写事务溢出页缓存之前，
+    // 那时 delete 模式也读得到旧快照，测不出区别）。
+    const rebuilding = buildSearchIndex(decrypted, true)
+    const seen: Array<{ ready: boolean; rows: number; indexed: boolean }> = []
+    let done = false
+    const probe = (): void => {
+      if (done) return
+      const st = getSearchIndexStatus(decrypted)
+      const hit = searchIndexMessages(decrypted, 'needle', 10)
+      seen.push({ ready: st.ready, rows: st.rows, indexed: hit.indexed })
+      setImmediate(probe)
+    }
+    setImmediate(probe)
+    await rebuilding
+    done = true
+
+    expect(seen.length).toBeGreaterThan(3)
+    // 重建窗口内每一次探测都必须仍读到旧索引：表未被删空、版本仍匹配、
+    // 检索仍走 BM25 通道（而不是静默退化成无排序的全表扫描）
+    const degraded = seen.filter(o => !o.ready || o.rows !== 6000 || !o.indexed)
+    expect(degraded).toEqual([])
   })
 })
 

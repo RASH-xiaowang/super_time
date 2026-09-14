@@ -6219,17 +6219,19 @@ function getSearchIndexStatus(decryptedDir) {
   }
 }
 var YIELD_EVERY_ROWS = 2e3;
-var YIELD_EVERY_CHARS = 1 << 20;
+var YIELD_EVERY_CHARS = 1 << 17;
+var FLUSH_EVERY_CHARS = 1 << 16;
 var inflightIndexBuilds = /* @__PURE__ */ new Map();
 function buildSearchIndex(decryptedDir, force) {
-  const slot = inflightIndexBuilds.get(decryptedDir);
+  const key = searchIndexPath(decryptedDir);
+  const slot = inflightIndexBuilds.get(key);
   if (slot && (slot.force || !force)) return slot.promise;
   const base = slot ? slot.promise.catch(() => void 0) : Promise.resolve();
   const promise = base.then(() => runBuildSearchIndex(decryptedDir, force));
   const entry = { promise, force: Boolean(force) };
-  inflightIndexBuilds.set(decryptedDir, entry);
+  inflightIndexBuilds.set(key, entry);
   const release = () => {
-    if (inflightIndexBuilds.get(decryptedDir) === entry) inflightIndexBuilds.delete(decryptedDir);
+    if (inflightIndexBuilds.get(key) === entry) inflightIndexBuilds.delete(key);
   };
   promise.then(release, release);
   return promise;
@@ -6238,7 +6240,7 @@ async function runBuildSearchIndex(decryptedDir, force) {
   const p = searchIndexPath(decryptedDir);
   const db = new DatabaseSync20(p);
   try {
-    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("PRAGMA journal_mode = WAL");
   } catch {
   }
   const init = () => {
@@ -6253,19 +6255,20 @@ async function runBuildSearchIndex(decryptedDir, force) {
     if (!force && existing > 0 && ver?.value === INDEX_SCHEMA_VERSION) {
       return { status: "exists", rows: existing, message: "\u7D22\u5F15\u5DF2\u5B58\u5728\uFF0C\u4F7F\u7528 force=true \u53EF\u91CD\u5EFA" };
     }
-    db.exec("DROP TABLE IF EXISTS message_fts");
-    db.exec("DROP TABLE IF EXISTS message_meta");
-    init();
-    db.exec("DELETE FROM meta WHERE key='built_at'");
     const started = Date.now();
     const names = loadDisplayNames2(decryptedDir);
     const usernames = loadSessionUsernames2(decryptedDir);
     const shards = messageShardFiles(decryptedDir);
     db.exec("BEGIN");
+    db.exec("DROP TABLE IF EXISTS message_fts");
+    db.exec("DROP TABLE IF EXISTS message_meta");
+    init();
+    db.exec("DELETE FROM meta WHERE key='built_at'");
     let total = 0;
     let rowsSinceYield = 0;
     let charsSinceYield = 0;
     let batch = [];
+    let batchChars = 0;
     const flush = () => {
       if (batch.length === 0) return;
       const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
@@ -6275,6 +6278,7 @@ async function runBuildSearchIndex(decryptedDir, force) {
         insFts.run(Number(r.lastInsertRowid), tokens, who);
       }
       batch = [];
+      batchChars = 0;
     };
     for (const username of usernames) {
       const table = msgTableName3(username);
@@ -6294,18 +6298,20 @@ async function runBuildSearchIndex(decryptedDir, force) {
         try {
           const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
           for (const r of sdb.prepare(sql).iterate()) {
+            rowsSinceYield += 1;
             const localId = Number(r["local_id"] ?? 0);
             const createTime = Number(r["create_time"] ?? 0);
             const sortSeq = Number(r["sort_seq"] ?? localId);
             const raw = decodeCell2(r["message_content"]) || decodeCell2(r["compress_content"]);
+            charsSinceYield += raw.length;
             const { sender, body } = splitGroupPrefix(raw, username);
             const text = readableMessageText(body);
-            if (!text) continue;
-            const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
-            batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
-            rowsSinceYield += 1;
-            charsSinceYield += text.length;
-            if (batch.length >= 500) flush();
+            if (text) {
+              const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
+              batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
+              batchChars += text.length;
+            }
+            if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush();
             if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
               rowsSinceYield = 0;
               charsSinceYield = 0;
