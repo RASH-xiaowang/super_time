@@ -959,6 +959,7 @@ export class WechatDataGateway extends TypertRemoteService {
             const built = await buildVectorIndex(this._dirs.decrypted, embedFn, {
               model: retrConfig.embedding.model || 'default',
               batchSize: retrConfig.embedding.batchSize,
+              concurrency: retrConfig.embedding.concurrency,
               maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
               maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild,
             })
@@ -1318,6 +1319,7 @@ ${contextBlock}
       const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
         model: cfg.embedding.model || 'default',
         batchSize: cfg.embedding.batchSize,
+        concurrency: cfg.embedding.concurrency,
         maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
         maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
         force: Boolean(options?.force),

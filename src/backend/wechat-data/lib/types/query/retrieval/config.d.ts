@@ -11,6 +11,14 @@ export interface RetrievalConfig {
         model: string;
         /** 单次 embedding 请求最多多少条文本（厂商通常有 batch 上限）。 */
         batchSize: number;
+        /**
+         * 同时在飞的 embedding 请求数上限（M10）。
+         *
+         * 原先是一批一批串行 await：`maxDocsPerBuild: 40000` / `batchSize: 16` ⇒ 单次建库 2500 次
+         * 往返，全程被网络延迟支配。厂商普遍有速率限制，所以这个值**故意保守**，且运行时会被
+         * 夹到 [1, 16]。调高只对「延迟高但允许更高并发」的自建服务有意义。
+         */
+        concurrency: number;
         /** 一次索引构建最多处理多少条消息（防止首次提问卡太久）。 */
         maxDocsPerBuild: number;
         /** 向量库命中缓存条数。 */
