@@ -4256,7 +4256,7 @@ function loadFileNamesBySize(wechatBaseDir) {
     } catch {
     }
     return map;
-  }, 3e4);
+  }, 1e4);
 }
 function queryStorageStats(decryptedDir, wechatBaseDir) {
   const path = join14(decryptedDir, "message", "message_resource.db");
@@ -7707,7 +7707,6 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir) {
     boundedSet(coverCache, key, data);
     return { url: data };
   } catch {
-    boundedSet(coverCache, key, "");
     return { error: "\u6587\u7AE0\u6216\u5C01\u9762\u83B7\u53D6\u5931\u8D25" };
   }
 }

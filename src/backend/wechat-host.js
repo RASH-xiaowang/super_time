@@ -13,6 +13,7 @@
 
 const path = require('node:path');
 const os = require('node:os');
+const { statSync } = require('node:fs');
 const wechatPaths = require('./wechat-paths');
 const { fetchWithRetry } = require('./llm-retry');
 
@@ -82,10 +83,19 @@ function clearStaleResultCache() {
   }
 }
 
-function resultCacheKey(method, callArgs) {
+/**
+ * 结果缓存的键。
+ *
+ * `decodeSig` 是「影响解码结果的外部输入」的指纹（后端 `config.json` 的 `db_dir` 等 +
+ * `secrets.json` 里的图片 AES/XOR 密钥）。**必须进键**：这几个方法的返回值是「按当前密钥
+ * 解码出来的字节」，那两个文件一改（界面上保存**或者用户手工编辑**）旧结果就不再正确；
+ * 而手工编辑不走任何 RPC，没有别的途径能通知到缓存（复审实测：手改 `secrets.json` 换
+ * `image_aes_key` 后，同一 `localId` 会永久返回旧字节）。
+ */
+function resultCacheKey(method, callArgs, decodeSig = '') {
   if (!CACHEABLE_METHODS.has(method)) return null;
   try {
-    return method + '\u0000' + JSON.stringify(callArgs);
+    return method + '\u0000' + decodeSig + '\u0000' + JSON.stringify(callArgs);
   } catch {
     return null;
   }
@@ -469,9 +479,30 @@ async function createWechatBackend(options = {}) {
   const context = createMiniContext(options);
   const gateway = new mod.WechatDataGateway(context);
 
+  /**
+   * 「影响解码结果的外部输入」的指纹：数据根下的 `config.json`（`db_dir` 等）与
+   * `secrets.json`（图片 AES/XOR 密钥）。用于结果缓存的键（见 resultCacheKey 的说明）。
+   * 数据根取 `dirname(decrypted)`，与 `query/config.ts` 的路径口径一致（两种数据根模式都成立）。
+   */
+  const decodeInputSig = () => {
+    try {
+      const root = path.dirname(gateway._dirs.decrypted);
+      const sig = (name) => {
+        try {
+          const st = statSync(path.join(root, name));
+          return `${st.mtimeMs}:${st.size}`;
+        } catch {
+          return '-';
+        }
+      };
+      return sig('config.json') + '|' + sig('secrets.json');
+    } catch {
+      return '';
+    }
+  };
+
   const methodMap = new Map();
-  for (const marker of protocol.remoteMethods(gateway)) {
-    const name = marker.exportName || marker.method;
+  for (const marker of protocol.remoteMethods(gateway)) {    const name = marker.exportName || marker.method;
     methodMap.set(name, marker.method);
   }
 
@@ -500,7 +531,7 @@ async function createWechatBackend(options = {}) {
       }
       const fn = gateway[implName];
       const callArgs = Array.isArray(args) ? args : [args];
-      const cacheKey = resultCacheKey(method, callArgs);
+      const cacheKey = resultCacheKey(method, callArgs, decodeInputSig());
       if (cacheKey) {
         const cached = readResultCache(cacheKey);
         if (cached !== null) return cached;
@@ -576,7 +607,6 @@ function resultCacheHandles() {
     size: () => resultCache.size,
   };
 }
-
 module.exports = {
   createWechatBackend,
   createLlmBridge,
