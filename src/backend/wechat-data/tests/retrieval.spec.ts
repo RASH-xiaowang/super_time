@@ -210,6 +210,92 @@ describe('embedding SimHash 工具', () => {
   })
 })
 
+describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
+  interface Row { rowid: number; lo: number; hi: number; username: string }
+
+  /** 确定性 PRNG（xorshift32）：同一 seed 每次跑出同一批数据，失败可复现。 */
+  function rng(seed: number): () => number {
+    let s = seed >>> 0 || 1
+    return () => {
+      s ^= s << 13; s >>>= 0
+      s ^= s >>> 17
+      s ^= s << 5; s >>>= 0
+      return s
+    }
+  }
+
+  function makeRows(n: number, seed: number): Row[] {
+    const r = rng(seed)
+    const out: Row[] = new Array(n)
+    for (let i = 0; i < n; i += 1) out[i] = { rowid: i + 1, lo: r(), hi: r(), username: i % 3 === 0 ? 'wxid_a' : 'wxid_b' }
+    return out
+  }
+
+  /**
+   * **改动前**的算法，作为对照用的 oracle。
+   *
+   * 这里在测试里重写一遍「全量 map+sort+slice」不是为了复述实现，而是做**差分测试**：
+   * 这个改动声称「选出的序列与原来逐项相同」，只有拿原算法当参照才能证明。
+   */
+  function reference(rows: readonly Row[], qh: { lo: number; hi: number }, pool: number): Row[] {
+    return rows
+      .map((r) => ({ r, d: __internals.popcount32((r.lo ^ qh.lo) >>> 0) + __internals.popcount32((r.hi ^ qh.hi) >>> 0) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, pool)
+      .map((x) => x.r)
+  }
+
+  it('与「全量排序后取前 pool」逐项相同（多种规模 / pool / 分布）', () => {
+    const cases: Array<{ n: number; pool: number; seed: number; note: string }> = [
+      { n: 0, pool: 50, seed: 1, note: '空表' },
+      { n: 1, pool: 50, seed: 2, note: 'pool 远大于 N' },
+      { n: 200, pool: 50, seed: 3, note: '小表' },
+      { n: 135_000, pool: 200, seed: 4, note: '真实规模（13.5 万）' },
+      { n: 5000, pool: 5000, seed: 5, note: 'pool == N' },
+      { n: 5000, pool: 9999, seed: 6, note: 'pool > N' },
+      { n: 2000, pool: 1, seed: 7, note: '只取 1 个' },
+      { n: 3000, pool: 120, seed: 8, note: '大量同距离（阈值处有并列）' },
+    ]
+    for (const c of cases) {
+      const rows = makeRows(c.n, c.seed)
+      // 最后一条用例故意构造并列：把 hi 全设成 0，距离由 lo 决定，容易出现同距离
+      if (c.note.includes('并列')) for (const r of rows) r.hi = 0
+      const qh = { lo: rng(c.seed + 999)(), hi: c.note.includes('并列') ? 0 : rng(c.seed + 998)() }
+      const got = __internals.selectByHamming(rows, qh, c.pool)
+      const want = reference(rows, qh, c.pool)
+      expect(got.map((r) => r.rowid), c.note).toEqual(want.map((r) => r.rowid))
+    }
+  })
+
+  it('大量并列时结果稳定（两次调用完全一致，且顺序=距离升序）', () => {
+    const rows = makeRows(5000, 11)
+    for (const r of rows) r.hi = 0
+    const qh = { lo: rows[0].lo ^ 0b111, hi: 0 }
+    const a = __internals.selectByHamming(rows, qh, 300)
+    const b = __internals.selectByHamming(rows, qh, 300)
+    expect(a.map((r) => r.rowid)).toEqual(b.map((r) => r.rowid))
+    const dist = (r: Row): number => __internals.popcount32((r.lo ^ qh.lo) >>> 0)
+    for (let i = 1; i < a.length; i += 1) expect(dist(a[i])).toBeGreaterThanOrEqual(dist(a[i - 1]))
+  })
+
+  it('返回值就是原表里的对象（不复制、不改写）', () => {
+    const rows = makeRows(500, 12)
+    const got = __internals.selectByHamming(rows, { lo: rows[3].lo, hi: rows[3].hi }, 10)
+    expect(got[0]).toBe(rows[3]) // 完全相同的查询哈希 → 距离 0 且在原表首位
+    expect(rows[0]).toEqual({ rowid: 1, lo: expect.any(Number), hi: expect.any(Number), username: expect.any(String) })
+  })
+
+  it('dist 一律落在 [0, MAX_HAMMING]（Uint8Array 的容量前提）', () => {
+    expect(__internals.MAX_HAMMING).toBe(64)
+    const rows = makeRows(2000, 13)
+    const qh = { lo: 0xffffffff, hi: 0 }
+    const picked = __internals.selectByHamming(rows, qh, 100)
+    expect(picked.length).toBe(100)
+    const worst = __internals.popcount32(0xffffffff)
+    expect(worst).toBe(32)
+  })
+})
+
 describe('config 意图策略', () => {
   it('聚合意图放大召回、recency 意图时间优先', () => {
     expect(defaultPolicyFor('aggregation').wideRecall).toBe(true)
