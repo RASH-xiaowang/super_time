@@ -186,8 +186,64 @@ function loadLlmConfig() {
     for (const k of Object.keys(base)) {
       if (raw[k] !== undefined) base[k] = raw[k];
     }
-  } catch { /* 首次运行或文件损坏：用默认值 */ }
+  } catch (e) {
+    // 首次运行（ENOENT）或文件损坏：用默认值，但损坏要留下可读痕迹
+    if (e && e.code !== 'ENOENT') {
+      console.warn(`[config] ${path.basename(llmConfigPath())} 读取/解析失败，本次使用默认值：${e.message}（原文件保留，下次保存前会先备份）`);
+    }
+  }
   return base;
+}
+
+/**
+ * 原子写：先写同目录临时文件，再 rename 覆盖目标。
+ *
+ * 为什么不直接 writeFileSync：写一半被杀进程 / 磁盘满，目标文件会变成**截断的 JSON**。
+ * 而 config.json 里既有数据根路径、也有微信设置镜像（历史上还放过解密密钥），
+ * 读到截断内容会静默回落默认值 —— 用户看到的现象是「配置莫名其妙丢了」，
+ * 而且**下一次保存就把残缺内容覆盖掉**，原始字节再也找不回来。
+ * rename 在同一卷上是原子的：要么是旧文件，要么是完整的新文件。
+ * @param {string} target - 目标文件绝对路径。
+ * @param {string} text - 要写入的文本。
+ */
+function writeFileAtomic(target, text) {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  try {
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不掩盖原错误 */ }
+    throw e;
+  }
+}
+
+/**
+ * 覆盖前先保住「解析不了的原文件」。
+ *
+ * 存在的意义：文件损坏时 `loadConfig` 只能回落到默认值，随后任何一次保存都会把
+ * 默认值+补丁写回去 —— 残缺文件被无声覆盖。这里先把它改名留存（`.corrupt-<时间戳>`）
+ * 并告警，用户/支持人员才有东西可查。
+ * @param {string} target - 目标文件绝对路径。
+ */
+function preserveIfUnparseable(target) {
+  let text;
+  try {
+    text = fs.readFileSync(target, 'utf8');
+  } catch {
+    return; // 不存在（首次运行）或读不到：无需处理
+  }
+  try {
+    JSON.parse(text);
+    return; // 能解析：正常覆盖
+  } catch {
+    const backup = `${target}.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(target, backup);
+      console.warn(`[config] ${path.basename(target)} 内容不是合法 JSON，已备份为 ${path.basename(backup)} 后重写`);
+    } catch (e) {
+      console.warn(`[config] ${path.basename(target)} 损坏且无法备份：${e && e.message ? e.message : e}`);
+    }
+  }
 }
 
 /** 保存 LLM 配置（自动创建状态目录）。 */
@@ -195,7 +251,8 @@ function saveLlmConfig(cfg) {
   const merged = { ...defaultLlmConfig(), ...(cfg || {}) };
   const target = llmConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, JSON.stringify(merged, null, 2) + '\n', 'utf8');
+  preserveIfUnparseable(target);
+  writeFileAtomic(target, JSON.stringify(merged, null, 2) + '\n');
   return merged;
 }
 
@@ -223,8 +280,12 @@ function loadConfig() {
     for (const key of Object.keys(base)) {
       if (raw[key] !== undefined) base[key] = raw[key];
     }
-  } catch {
-    // 首次运行或文件损坏：使用默认值，下次启动会自动写入 resolved。
+  } catch (e) {
+    // 首次运行（文件不存在）或文件损坏。**不改动文件**：损坏内容由下一次保存时的
+    // preserveIfUnparseable 先备份再覆盖；这里只提示，避免静默当成「没有配置」。
+    if (e && e.code !== 'ENOENT') {
+      console.warn(`[config] ${path.basename(configPath())} 读取/解析失败，本次使用默认值：${e.message}（原文件保留，下次保存前会先备份）`);
+    }
   }
   return base;
 }
@@ -233,7 +294,8 @@ function loadConfig() {
 function saveConfig(config) {
   const target = configPath();
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  preserveIfUnparseable(target);
+  writeFileAtomic(target, JSON.stringify(config, null, 2) + '\n');
   return config;
 }
 
@@ -319,4 +381,7 @@ module.exports = {
   saveLlmConfig,
   FIELD_TO_ENV,
   DERIVED_SETTING_KEYS,
+  // 导出给单测：这两个是纯路径函数，不依赖 stateDir 初始化
+  writeFileAtomic,
+  preserveIfUnparseable,
 };

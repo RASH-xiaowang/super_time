@@ -4,11 +4,11 @@
  * @vitest-environment node
  */
 import { createCipheriv, randomBytes } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { decryptWalPatch, walFramesPatchable } from '../src/query/sync.ts'
+import { atomicReplace, decryptWalPatch, walFramesPatchable } from '../src/query/sync.ts'
 
 const PAGE_SZ = 4096
 const RESERVE_SZ = 80
@@ -160,5 +160,36 @@ describe('walFramesPatchable', () => {
     writeFileSync(p, walHeader(1, 2))
     expect(await walFramesPatchable(p)).toBe(false)
     expect(await walFramesPatchable(join(dir, 'nope'))).toBe(false)
+  })
+})
+
+describe('M4：快照替换期间目标必须始终存在', () => {
+  it('替换过程不出现「目标不存在」的窗口', async () => {
+    // 回归：旧实现是 `unlink(target)` + `rename(temp, target)`，两次系统调用之间
+    // 目标文件不存在；并发只读查询正好落在那个窗口就是 ENOENT（用户看到「数据读不到」）。
+    // Windows 实测：rename 覆盖一个已存在但未被打开的文件是允许的，所以不需要先删。
+    const root = mkdtempSync(join(tmpdir(), 'atomic-replace-'))
+    scratch.push(root)
+    const target = join(root, 'message_0.db')
+    const temp = join(root, 'temp.db')
+    writeFileSync(target, 'OLD')
+    writeFileSync(temp, 'NEW')
+
+    let missing = 0
+    let stop = false
+    const watcher = (async () => {
+      while (!stop) {
+        if (!existsSync(target)) missing += 1
+        await new Promise<void>((resolve) => { setImmediate(resolve) })
+      }
+    })()
+
+    await atomicReplace(temp, target)
+    stop = true
+    await watcher
+
+    expect(missing).toBe(0)
+    expect(readFileSync(target, 'utf8')).toBe('NEW')
+    expect(existsSync(temp)).toBe(false)
   })
 })

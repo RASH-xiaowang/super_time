@@ -59,48 +59,72 @@ const MBI_SIZE = 48
 
 let apiPromise: Promise<Win32MemoryApi> | undefined
 
+/**
+ * 取（或建立）koffi/kernel32 的绑定。
+ *
+ * 失败时**清掉缓存再抛**：一次失败（koffi 原生二进制还在解包、被临时占用、首次加载
+ * 撞上杀软扫描）如果被永久缓存，之后每次密钥扫描都会复现同一条错误、且永远没有重试
+ * 机会。成功时保留缓存（避免每次扫描都重新 dlopen）。
+ * 错误信息本地化 + 给排查方向，因为它是直传界面的。
+ * @returns 绑定好的 Win32 内存 API。
+ */
 async function win32Api(): Promise<Win32MemoryApi> {
   if (apiPromise !== undefined) return apiPromise
-  apiPromise = (async () => {
-    const koffi = (await import('koffi')).default as unknown as KoffiModule
-    const kernel32 = koffi.load('kernel32.dll')
-    const openProcess = kernel32.func('__stdcall', 'OpenProcess', 'void *', ['uint32', 'int32', 'uint32'])
-    const virtualQueryEx = kernel32.func('__stdcall', 'VirtualQueryEx', 'size_t', ['void *', 'void *', 'void *', 'size_t'])
-    const readProcessMemory = kernel32.func('__stdcall', 'ReadProcessMemory', 'int32', ['void *', 'void *', 'void *', 'size_t', 'size_t *'])
-    const closeHandle = kernel32.func('__stdcall', 'CloseHandle', 'int32', ['void *'])
-
-    return {
-      openProcess(pid) {
-        return openProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, pid)
-      },
-      queryRegion(handle, address) {
-        const info = Buffer.alloc(MBI_SIZE)
-        const result = virtualQueryEx(handle, address, info, MBI_SIZE)
-        if (Number(result) === 0) return null
-        // x64 layout: BaseAddress ptr, AllocationBase ptr, AllocationProtect u32,
-        // RegionSize size_t, State u32, Protect u32, Type u32.
-        return {
-          baseAddress: Number(info.readBigUInt64LE(0)),
-          size: Number(info.readBigUInt64LE(24)),
-          state: info.readUInt32LE(32),
-          protect: info.readUInt32LE(36),
-        }
-      },
-      readMemory(handle, address, size) {
-        if (size <= 0) return Buffer.alloc(0)
-        const buffer = Buffer.alloc(size)
-        const bytesRead = Buffer.alloc(8)
-        const success = readProcessMemory(handle, address, buffer, size, bytesRead)
-        if (Number(success) === 0) return Buffer.alloc(0)
-        const read = Number(bytesRead.readBigUInt64LE(0))
-        return read > 0 ? buffer.subarray(0, Math.min(read, size)) : Buffer.alloc(0)
-      },
-      closeHandle(handle) {
-        try { closeHandle(handle) } catch { /* best effort */ }
-      },
+  const created = (async () => {
+    try {
+      return await buildApi()
+    } catch (e) {
+      throw new Error(
+        '内存扫描组件 koffi 初始化失败：' + ((e as Error).message || String(e))
+        + '。常见原因：安装包缺少 win32 原生二进制、杀毒软件拦截了 DLL 解包、或系统不是 x64。'
+        + '可先用「手动填写密钥」流程继续。',
+      )
     }
   })()
-  return apiPromise
+  apiPromise = created
+  created.catch(() => { if (apiPromise === created) apiPromise = undefined })
+  return created
+}
+
+/** 真正建立绑定（失败由 win32Api 统一包成可操作的中文错误）。 */
+async function buildApi(): Promise<Win32MemoryApi> {
+  const koffi = (await import('koffi')).default as unknown as KoffiModule
+  const kernel32 = koffi.load('kernel32.dll')
+  const openProcess = kernel32.func('__stdcall', 'OpenProcess', 'void *', ['uint32', 'int32', 'uint32'])
+  const virtualQueryEx = kernel32.func('__stdcall', 'VirtualQueryEx', 'size_t', ['void *', 'void *', 'void *', 'size_t'])
+  const readProcessMemory = kernel32.func('__stdcall', 'ReadProcessMemory', 'int32', ['void *', 'void *', 'void *', 'size_t', 'size_t *'])
+  const closeHandle = kernel32.func('__stdcall', 'CloseHandle', 'int32', ['void *'])
+
+  return {
+    openProcess(pid) {
+      return openProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, pid)
+    },
+    queryRegion(handle, address) {
+      const info = Buffer.alloc(MBI_SIZE)
+      const result = virtualQueryEx(handle, address, info, MBI_SIZE)
+      if (Number(result) === 0) return null
+      // x64 layout: BaseAddress ptr, AllocationBase ptr, AllocationProtect u32,
+      // RegionSize size_t, State u32, Protect u32, Type u32.
+      return {
+        baseAddress: Number(info.readBigUInt64LE(0)),
+        size: Number(info.readBigUInt64LE(24)),
+        state: info.readUInt32LE(32),
+        protect: info.readUInt32LE(36),
+      }
+    },
+    readMemory(handle, address, size) {
+      if (size <= 0) return Buffer.alloc(0)
+      const buffer = Buffer.alloc(size)
+      const bytesRead = Buffer.alloc(8)
+      const success = readProcessMemory(handle, address, buffer, size, bytesRead)
+      if (Number(success) === 0) return Buffer.alloc(0)
+      const read = Number(bytesRead.readBigUInt64LE(0))
+      return read > 0 ? buffer.subarray(0, Math.min(read, size)) : Buffer.alloc(0)
+    },
+    closeHandle(handle) {
+      try { closeHandle(handle) } catch { /* best effort */ }
+    },
+  }
 }
 
 /**
