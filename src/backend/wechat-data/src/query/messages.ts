@@ -659,12 +659,16 @@ export function queryMessages(
  * Scans every message shard / Msg table; only type-49 appmsg cards are
  * resolved.
  *
- * **带签名缓存**（M11）：本机实测「命中」中位 1.8ms，而**未命中**要 80ms —— 它是两轮扫描
- * （先按整型走 `server_id` 覆盖索引，再对未命中的整轮 `CAST(server_id AS TEXT)` 全表扫，
- * 本机 4 个分片共 304 张 `Msg_` 表 ⇒ 最坏 2432 次查询）。调用方是「用户点开一条合并聊天记录」
- * 这种**用户触发**动作（客户端只在点击时调一次，不是循环），所以负结果缓存能直接消掉
- * 「点了没找到 → 同步完再点」这条重复路径的 80ms。
- * 失效按分片目录签名（任一分片被替换就变），所以同步落地后不会返回旧结论；TTL 兜住指纹漂移。
+ * **带签名缓存**（M11）：本机实测「命中」中位 1.8–3.8ms，而**未命中**要 77–80ms —— 它是两轮
+ * 扫描（先按整型走 `server_id` 覆盖索引，再对未命中的整轮 `CAST(server_id AS TEXT)` 全表扫，
+ * 本机 4 个分片共 304 张 `Msg_` 表 ⇒ 最坏 2432 次查询）。
+ *
+ * 收益范围要说准（复审纠正过我的说法）：`cachedBySig` 的 maxAge **从写入计时、不是从访问计时**，
+ * 所以真正省掉的是「**5 秒内**的重复」——双击、重渲染、失败重试这一类；而「用户点了没找到 →
+ * 等同步完成再点」的间隔通常 > 5s（实时同步 tick ≈10s），**那一次仍要重新扫**。
+ * 失效按分片目录签名（任一分片被原子替换就变），所以同步落地后不会返回旧结论
+ * —— 这条只对「同步走 rename 替换」成立：签名是 mtime+size 指纹，理论上保住时间戳的写入者
+ * 可以击穿它（与仓库其它 `cachedBySig` 条目同款限制，非本处新引入）。
  * @param decryptedDir - decrypted data root.
  * @param serverId - server_id as string (may exceed 2^53).
  * @returns found flag plus the parsed message (when found).
