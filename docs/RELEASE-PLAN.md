@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 1 | 0 | 0 | 4 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 2 | 1 | 0 | 0 |
-| 阶段 5 | 中优先级：稳定性与性能 | 31 | 28 | 1 | 0 | 2 |
+| 阶段 5 | 中优先级：稳定性与性能 | 33 | 30 | 1 | 0 | 2 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **69** | **54** | **4** | **0** | **11** |
+| **合计** | | **71** | **56** | **4** | **0** | **11** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -74,8 +74,8 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 未开始 |
-| H2 | 收敛工作区与 HEAD 的脱节 | 无 | 1d | 未开始 |
+| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 进行中（仓库侧完成，待人工轮换 + 重写历史） |
+| H2 | 收敛工作区与 HEAD 的脱节 | 无 | 1d | 已完成 |
 
 ---
 
@@ -139,9 +139,9 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H3 | 让 36 个测试文件真正可运行 | H2 | 1d | 未开始 |
-| H4 | 建立 CI 门禁（含 bundle 一致性校验） | H3 | 1d | 未开始 |
-| H5 | 修复验收脚本退出码静默通过 | 无 | 0.5d | 未开始 |
+| H3 | 让 36 个测试文件真正可运行 | H2 | 1d | 已完成 |
+| H4 | 建立 CI 门禁（含 bundle 一致性校验） | H3 | 1d | 已完成 |
+| H5 | 修复验收脚本退出码静默通过 | 无 | 0.5d | 已完成 |
 
 ---
 
@@ -383,7 +383,7 @@ flowchart TD
 
 ### `[x]` H9 · 搜索与建索引全表物化
 
-- **状态**：已完成（经两轮独立评审；**1 项验收未达标并转记为 N9**）　**依赖**：H7　**预估**：2d
+- **状态**：已完成（经三轮独立评审；**1 项验收未达标并转记为 N9**）　**依赖**：H7　**预估**：2d
 - **证据**：
   - `src/backend/wechat-data/src/query/search.ts:628-651`：`SELECT ... WHERE local_type=1` 后 `.all()` 把整张 Msg_ 表读入内存再 `includes` 过滤；`budget=800_000` 只限制处理量，**物化发生在过滤之前**
   - `search.ts:332-333`：`buildSearchIndex` 对每张 Msg_ 表同样 `.all()` 全量读入
@@ -418,27 +418,75 @@ flowchart TD
     已有索引留成空表。处置：DDL/DELETE 挪进事务 + 索引库开 `PRAGMA journal_mode = WAL`。
     实测依据：delete 模式下写事务一旦溢出页缓存（约 1.75MB）就持 EXCLUSIVE 到 COMMIT，
     读者整段被拒；WAL 下读者 0 次被拒。**旁路文件 + rename 原子替换这条路走不通**：
-    Windows 上读者持有文件时 `rename` 直接 `EPERM`（实测）。
+    Windows 上读者持有文件时 `rename` 直接失败（实测 `EPERM`/`EBUSY`，取决于句柄类型与时机）。
     转成回归测试：6000 行夹具，重建窗口内反复探测，要求每次都仍读到旧索引
   - **major · 单飞闸键控与 `busy_timeout`**：闸原按调用方传入的 `decryptedDir` 字符串键控，
     而争用的是索引文件；同一文件的不同写法（`\` vs `/`、带不带结尾分隔符）会各占一槽、
-    并发写同一文件 —— 实测互相撞锁且事件循环停摆 **7.5s**。同时实测 `busy_timeout=5000`
-    在单线程 worker 里是**净负收益**：它把「0ms 快速报错」变成「整线程同步忙等 7.6s 后仍报错」。
-    处置：键改为 `searchIndexPath(decryptedDir)`，**移除 `busy_timeout`**（进程内争用交给闸，
-    跨进程时快速失败优于冻结 worker）
+    并发写同一文件 —— 实测互相撞锁且事件循环停摆 **7.5s**。处置：键改为
+    `searchIndexPath(decryptedDir)`，并移除 `busy_timeout`（进程内争用交给闸）
   - **minor 已修**：新常量插在 JSDoc 与函数之间导致 `@param/@returns` 挂错位置；测试里一句
     「覆盖迭代中途 await」不准确（`searchIndexMessages` 是同步函数，不走让出路径）
+- **第三轮评审发现（无 critical，4 条 major，均已处置/登记）**：
+  - **major · 循环内错误被吞 → 静默产出「部分索引 + 报成功」**：per-shard 的 `catch {}`
+    把**一切**错误（含索引写入失败）都当成「跳过这个分片」，于是会 COMMIT 出一个缺行的索引
+    并返回 `status:'ok'`。实测在 8000 行夹具第 5000 行注入错误：构建返回
+    `ok / rows 4999 / ready:true`，读侧从此**永不重建**（比第二轮修掉的「留成空表」更难发现）。
+    处置：把可跳过的 catch **收窄到只包读取**（open / prepare / `iterator.next()`），索引写入
+    （`flush`）留在外面 —— 写失败向上抛并 ROLLBACK，旧索引完整保留。读取侧跳过仍是有意容错，
+    但不再静默：计入结果 `message` 并打 stderr。新增用例：塞一个非 SQLite 的假分片 →
+    构建仍 ok、好分片照常入库、`message` 含「已跳过」
+  - **major · WAL 使主库可能落后整整一代**：有并发读者（哪怕只持一个旧读标记）时，
+    重建成功后新数据全在 `-wal` 里、主库仍是旧内容；而 `dirs.ts` 的 bootstrap 正是
+    「拷 `wechat_search.db`、跳过 `-wal/-shm`」→ 拷出来的索引**静默回退一代**。
+    处置：COMMIT 后尽力 `PRAGMA wal_checkpoint(TRUNCATE)`（有读者时拿不到锁会跳过）；
+    残余情形（拷贝发生在有并发读者期间）登记为 **N11**。另实测：无读者时 close 即清理干净；
+    崩溃残留（`-wal` 51MB + `-shm`）不影响只读可用性，下一次读写开合即清掉
+  - **major · 收尾不受让出预算约束**：末次 flush + COMMIT + `COUNT(*)` + meta 写 + close
+    是连续同步段。实测 500B/行：收尾 20k→65ms、100k→299ms、200k→504ms、**400k→1006ms**
+    （分解：COMMIT 占 438ms@200k，主导项是刷盘）。处置：统计与 meta 写挪进事务（COMMIT 即
+    「新索引 + 版本 + 时间」原子落地，也消掉「索引已换但 schema_version 没写成功」的中间态）；
+    开 `PRAGMA synchronous = NORMAL`（索引是可重建的派生数据，不值得为每次 COMMIT 付 fsync）。
+    **处置后实测**：100k 299→**222ms**、200k 504→**442ms**。仍未根治，已入「遗留限制」
+  - **major · 数据根不可写时索引连只读都打不开**：WAL 模式持久化在库头里，而只读连接读 WAL 库
+    需要 `-shm`/目录的写权限；实测不可写目录下 WAL 库报 `unable to open database file`，
+    而同实验的 delete 库正常。此时 `indexReady()` 静默 false → 全链路退化成 LIKE 扫描。
+    属**本轮引入的条件性回退**（应用本身就需要可写数据根），登记为遗留限制
+  - **文档错误归因已更正**：第二轮把「事件循环停摆 7.5s」归因于 `busy_timeout` **是错的**。
+    实测那是旧布局「DDL 在事务外各自 autocommit」的产物：DDL 进事务后写锁冲突走「延迟事务的
+    读写升级」路径，压根不调用 busy 处理器（三形态探针 `BEGIN;写` 3341ms / autocommit 写
+    3328ms / `BEGIN;读;写` 1ms）。移除 `busy_timeout` 因此只是收尾，不是主因
+  - **minor 已修**：`search.ts` 重复的 WAL 注释块；测试注释引用的旧常量 `1<<20`；
+    重建窗口用例「探测次数」与「是否降级」两个断言互相遮蔽（已改为先断言未降级）
+  - **测试覆盖缺口已补**：① 字符预算**取值**原先没有任何断言（放宽到 1<<20 仍全绿）——
+    夹具改卡在「只有字符上界能点亮」的区间（60 行 × 8KB ≈ 48 万字符），放宽回 1<<20 即 0 次让出；
+    ② WAL 开关原先只能间接覆盖 —— 新增独立断言（构建后索引库 `journal_mode` 必须是 `wal`）；
+    ③ `FLUSH_EVERY_CHARS` 仍只有「不能太松」的弱约束（可放宽 32 倍仍绿），列为已知盲点
 - **评审确认无需改造**：`search.ts` 剩余的 `.all()` 都是 O(会话/联系人) 级元数据表；
   `iterate()` 与 `all()` 逐行等价，`break`/`throw`/未读完直接 `close()` 均安全；
-  `lib/index.js` 与 `src/**` 字节级一致；`@Remote`/typert schema/`api.ts`/长任务名单均无需改动
+  `lib/index.js` 与 `src/**` 字节级一致（评审用 esbuild 内存重放逐字节比对）；
+  `@Remote`/typert schema/`api.ts`/长任务名单均无需改动；WAL 的核心收益可复现
+  （delete 模式脏页到 1.73MB 后读者整段被拒，WAL 下 74–155 次探测 0 次被拒）
 - **评审新增覆盖缺口（已登记）**：
   - `retrieval/embedding.ts:241-244` 对整张 `message_meta` 做 `.all()`（实测 20 万行 1876ms、
-    RSS +271.7MB）→ **N8**
-  - `buildVectorIndex`（`embedding.ts:257-280`）持写事务跨 `await`（跨网络 embed 调用）且无闸、
-    无 busy_timeout，实测同进程并发两次必有一次 `database is locked` → **N10**
+    RSS +271.7MB）→ **N8**。注意 H9 那句「剩余 `.all()` 都是小表」只对 `search.ts` 成立，
+    同族还散落在 `group-insights.ts` / `asset-insights.ts` / `privacy.ts` / `*-insights.ts` /
+    `embedding.ts` / `notes.ts` / `*-tasks.ts` 等处（清单见 N8）
+  - `buildVectorIndex`（`embedding.ts:257-280`）持写事务跨 `await`（跨网络 embed 调用）且无闸，
+    实测同进程并发两次必有一次 `database is locked` → **N10**
+  - `members.ts:92` 是同一个索引库的**第二个写者**（写 `contact_fts`），不在单飞闸内：
+    实测 40k 行构建在飞时 155/155 次成员搜索静默退化为 LIKE（读取可用性无损）→ **N12**
+  - `dirs.ts` bootstrap 只拷主库、跳过 `-wal/-shm`，与 WAL 叠加会拷出旧一代索引 → **N11**
   - 兜底搜索仍是同步整循环，「可中断」需 AbortSignal 贯通到查询层 → **N9**
-- **遗留限制（未验证项，不计入完成）**：100 万条量级的实测峰值未做（20 万条实测 + 外推）；
-  WAL 在网络盘/同步盘上会静默退回 delete 模式，届时重建窗口会重新降级
+- **遗留限制（实测过、本轮不修，均已登记或注明）**：
+  - **收尾仍是无界区间**：400k 行实测 1006ms（`synchronous=NORMAL` 后 200k 行为 442ms），
+    外推 100 万行约 2.2–2.5s。要根治得改成分段提交，会牺牲本轮拿到的「旧索引在读侧保持可用」
+    —— 属取舍，不在本轮范围
+  - **单条超大行的处理仍不可中断**：一条 200 万汉字的消息约 311ms、800 万约 1287ms
+  - **重建大索引时磁盘短时约 2×**（主库 + `-wal`，实测 20k 行 1.91×）
+  - **数据根不可写 → WAL 库不可读**（见上）
+  - **网络盘/同步盘不支持 WAL 时静默退回 delete**（用 `try/catch` 吞掉，代码里拿不到
+    「已退回」的可观测性），届时重建窗口会退回改造前的降级行为
+  - 100 万条量级的**内存**实测峰值未做（20 万条实测 + 外推）
 
 ---
 
@@ -469,7 +517,7 @@ flowchart TD
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
 | H10 | Electron 安全基线加固 | H3 | 2d | 未开始 |
-| H11 | 修复类型检查为零的现状 | H2 | 3d | 未开始 |
+| H11 | 修复类型检查为零的现状 | H2 | 3d | 进行中（tsconfig 断链已修；typecheck 脚本尚未落地） |
 | H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 未开始 |
 
 ---
@@ -560,7 +608,7 @@ flowchart TD
 |---|---|---|---|---|
 | M1 | 密钥明文落盘且三处镜像 | `key-store.ts:51-56,81` 写 `keys.json`；`config.ts:119` 写 `db_enc_key`；`wechat-paths.js:277-291` 把密钥一并镜像进 config.json（`DERIVED_SETTING_KEYS:96-103` 只剔除路径类字段） | 密钥至少受 OS 凭据库（DPAPI/Keychain）保护或文件 ACL 收紧；config.json 不再含密钥；文档说明存储位置与保护方式 | 未开始 |
 | M2 | 配置写入非原子，损坏静默吞掉 | `config.ts:119`、`wechat-paths.js:198,236` 直接 `writeFileSync`；读取侧 `config.ts:60-63`、`wechat-paths.js:189` 把损坏当默认值 | 全部配置写入改 temp+rename；解析失败时保留原文件并给出可读告警，不再静默重置（避免密钥/路径静默丢失） | 未开始 |
-| M3 | 导出/备份留半成品文件 | `export.ts:345,347,401,522,634,706,746` 直接写盘；`backup.ts:188` 子目录 `catch{}` 后仍报成功；`:220-246` 失败不清理 `.wcb` | 全部输出 temp+rename；部分失败必须上报（不再报成功）；失败时清理中间产物。与 H8 同期实施 | 未开始 |
+| M3 | 导出/备份留半成品文件 | `export.ts:345,347,401,522,634,706,746` 直接写盘；`backup.ts:188` 子目录 `catch{}` 后仍报成功；`:220-246` 失败不清理 `.wcb` | 全部输出 temp+rename；部分失败必须上报（不再报成功）；失败时清理中间产物。与 H8 同期实施。**H8 已完成 zip 流式写盘与原子落地（`zip.ts` 的 `ZipFileWriter` + temp+rename）；xlsx 仍未流式、无取消/进度事件** | 进行中 |
 | M4 | 快照替换存在不可读窗口 | `sync.ts:213-229` 先 `unlink` 再 `rename`，期间并发只读查询 `ENOENT`，读侧无重试 | 改为覆盖式 rename（不经 unlink）；或读侧对 `ENOENT` 加有界重试。验收：同步进行中反复查询不出现 ENOENT 报错 | 未开始 |
 
 ### 工作流 B · 可诊断性与降级（3 项）
@@ -603,7 +651,7 @@ flowchart TD
 | M22 | 文档与代码不一致 | 方法数三方打架：`gateway.ts` 实际 129 ← RAG 文档 126 ← `backend/README.md` 114；`backend/README.md:52,92` 引用不存在的 `npm run smoke:wechat`/`config:wechat`；`wechat/whisper/README.md` 声称的 exe 已被删 | 修正全部引用；方法数改为自动生成（并入 H14）。验收：文档中的命令均可执行，方法数与代码一致 | 未开始 |
 | M24 | keys ↔ query 双向依赖 | `keys/service.ts:19`、`keys/db-key-v4.ts:18` → `query/config.ts`；而 `query/image-key.ts:8` → `keys/key-store.ts`，层次倒置 | 抽出共享的配置读取到独立层（如 `config/`），消除双向依赖。验收：依赖方向单向，单测可独立加载 | 未开始 |
 
-### 工作流 F · 知识图谱交付与计划实施中暴露的问题（7 项）
+### 工作流 F · 知识图谱交付与计划实施中暴露的问题（9 项）
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
@@ -611,9 +659,11 @@ flowchart TD
 | N2 | 引导页「跳过」按钮要求 `licenseOk`，没有免许可证的跳过开关 → UI 自动化验证必须自签证书 | `ui-app/onboarding/OnboardingShell.tsx:952` `disabled={!licenseOk}`；本次为截图验证不得不签发临时许可证（一次性脚手架 `output/kb-verify-setup.js`，`output/` 已被 gitignore，非仓库资产；建议连同本项一并提升为 `scripts/` 下的常驻验证工具） | 加 `SUPERTIME_SKIP_ONBOARDING=1` 之类的显式调试开关（仅非打包态生效）。验收：设置该环境变量后可直接进入主界面，`ui-acceptance.mjs` 无需真实许可证 | 未开始 |
 | N6 | **换 userData 不能隔离数据源：应用会把真实微信库解密进新目录**（与 H1、H14 联动） | 实测：`SUPERTIME_USER_DATA_DIR=<空临时目录>` 启动后，该目录出现**完整的真实解密库** —— `message_1.db` 146MB、`sns.db` 13MB、`contact.db` 2143 个联系人，共约 282MB。成因链：`wechat-paths.js:108` 的「开发态一次性迁移」把仓库里**已提交**的 `wechat/config.json` 搬进新 STATE_DIR，该文件带 `db_dir`（真实原始库路径）+`db_enc_key`（H1）；`main.js:470-476` 随后把这份设置回灌后端（`saveWechatConfig`），于是 sync 用密钥把 `db_dir` 解密到新的 `decrypted_dir`。后果：① 任何「干净环境」测试其实都在真实数据上跑，测试隔离是假的；② 用户若更换/清空状态目录，应用会不经确认就把他 GB 级微信数据解密到新位置；③ 叠加 H1 后，任何拿到仓库 + 原始库路径的人都能完成解密 | 迁移不得携带 `db_dir`/密钥类字段（或迁移后强制清空路径与密钥，等待用户重新确认）；`decrypted_dir` 被指向空目录时不得自动全量解密，须显式确认。验收：全新 STATE_DIR 启动后不产生任何真实解密数据；日志能说明「数据源未配置」而非静默解密 | 未开始 |
 | N7 | 后端 11 个失败用例的 triage 与修复 | 11 项已全部清零，**其中 3 项是真缺陷**（2 个根因），不是测试过时——这一点与初次 triage 的结论相反：<br/>① `contacts.ts` 好友判据判反（把 1568 个非好友当联系人、417 个真好友当群成员）→ 已改源码；`contacts.spec` / `overview.spec` 夹具未动即转绿，证明它们一直在正确地报 bug。<br/>② `sns-video.ts` 朋友圈视频的 `msg/video/<月>/<md5>_thumb.jpg` 兜底成了死代码（只查根目录、不认月份子目录）→ 已改源码。<br/>其余 8 项确为夹具漂移：`ask.spec` 的 mock 不完整（3）、`messages.spec`/`ledger.spec` 的 appmsg 写成属性而非子元素（3）、`resource-classify.spec` 旧契约（1）、`sns-media.spec` 旧 cache-key 公式（1） | **教训**：初次 triage 用「回退源码后仍失败」判定漂移，但其中一次 A/B 是**空转实验**（被回退的 `parse.ts` 与 `resource-classify.ts` 毫无 import 关系），不能作为证据；而 `contacts.ts` 那项被建议「改夹具 1→3」，若照做会把 bug 固化。可疑结论必须回到领域语义（真实数据）复核 | 已完成 |
-| N8 | 向量索引构建读整张 `message_meta` 物化（H9 同族反模式） | `query/retrieval/embedding.ts:241-244`：`SELECT … FROM message_meta ORDER BY m.rowid` 后 `.all()`，与 H9 修掉的搜索路径是同一反模式。实测（20 万行索引、单条 478 字符）：**1876ms、RSS 峰值 +271.7MB** | 改 `iterate()` 边读边判（`pending` 只取前 `maxDocsPerBuild` 条，天然适合游标）。验收：同数据集下命中集合不变，且 RSS 峰值降到与「单批 embedding 数」同阶 | 未开始 |
+| N8 | 向量索引构建读整张 `message_meta` 物化（H9 同族反模式） | `query/retrieval/embedding.ts:241-244`：`SELECT … FROM message_meta ORDER BY m.rowid` 后 `.all()`，与 H9 修掉的搜索路径是同一反模式。实测（20 万行索引、单条 478 字符）：**1876ms、RSS 峰值 +271.7MB**。**同族位置（H9 的「剩余 `.all()` 都是小表」只对 `search.ts` 成立）**：`group-insights.ts:119`（整张 `Msg_*`）、`asset-insights.ts:97`、`privacy.ts:152`、`moments-insights.ts:108`、`overview-insights.ts:248`、`overview.ts:159`（`SnsTimeLine`）、`embedding.ts:236,306`（`vectors`）、`notes.ts:274`、`summary-tasks.ts:91`、`wechat-tasks.ts:52` | 改 `iterate()` 边读边判（`pending` 只取前 `maxDocsPerBuild` 条，天然适合游标）；同族位置按「行数是否随消息量增长」逐个评估，确属会话/联系人量级的在代码里注明。验收：同数据集下命中集合不变，且 RSS 峰值降到与「单批 embedding 数」同阶 | 未开始 |
 | N9 | 搜索不可中断（H9 验收标准 4 未达标） | `query/search.ts` 的兜底搜索是同步整循环（`budget=800_000`），实测 20 万行 × 500B 无命中时单次 **621ms**、期间 10ms 定时器 0 次触发，外推约 2.5s。用户切换面板无法打断，且该循环在每次索引重建窗口内会被反复触发 | 需要 AbortSignal 从渲染层贯通到查询层（`searchIndexMessages` 目前是同步 `@Remote`，改 async 会改动客户端契约与 `/api.ts`）。验收：取消后 100ms 内停止扫描，且不再持有 shard 读连接 | 未开始 |
 | N10 | 向量索引构建持写事务跨网络调用且无并发保护（H9 同族，风险更高） | `query/retrieval/embedding.ts:257-280`：写事务跨 `await`（跨网络的 embedding 调用）保持开启，且既无单飞闸也无 busy_timeout。实测同进程并发两次：**1555ms 内一个成功 `ok/4000`、另一个 `database is locked`**。它被 Remote 按钮（`gateway.ts:1296`）与问答自动路径（`gateway.ts:946`）触发 | 不要把事务开着等网络：改为「先算好向量再一次性事务写入」，并给构建加单飞闸（参照 H9）。验收：并发两次调用均成功，且写事务的持有时长远小于网络往返 | 未开始 |
+| N11 | `dirs.ts` bootstrap「只拷主库、跳过 `-wal/-shm`」与 WAL 叠加会拷出旧一代索引 | `dirs.ts:44`（`BOOTSTRAP_ITEMS` 含 `wechat_search.db`）+ `:47`（`SKIP_SUFFIXES` 含 `-wal/-shm`）+ `:106,111`（copyTree 跳过运行时产物）。实测：3000 行索引建成后让另一连接持旧读标记，再 force 重建 6000 行 —— 主库仍是 3000 行、新数据全在 `-wal`（48.9MB）；此时只拷 `wechat_search.db` 读回 **rows=3000/旧 built_at**（静默回退一代），全量拷才对 | 二选一：拷贝 SQLite 库前后对源库做 `PRAGMA wal_checkpoint(TRUNCATE)`（让主库自包含）；或 `copyTree` 对 `.db` 连 `-wal`/`-shm` 一起拷（注意 `-shm` 不可跨机复用，SQLite 建议用 backup API）。H9 已尽力在构建 COMMIT 后 checkpoint，但**有并发读者时拿不到锁**，覆盖不到「源端应用正在跑」的情形。验收：数据根里存在活的 `-wal` 时，bootstrap 结果与源库一致 | 未开始 |
+| N12 | `members.ts` 是搜索索引库的第二个写者，不在单飞闸内 | `members.ts:92` 以**读写**方式打开 `wechat_search.db` 并写 `contact_fts`（`:55-79` 的 `BEGIN/INSERT/COMMIT`）。实测 40k 行 force 构建在飞时，**155/155 次** `searchMembers` 因写被拒而静默退化为 `source:'like'`（`members.ts:122` 吞掉错误），构建结束后立刻恢复 `source:'fts'`。读取可用性无损，但 H9 注释里「进程内争用一律交给单飞闸消除」的说法对它不成立 | 把搜索索引库的写入统一到一个闸（从 `search.ts` 导出 `withIndexWrite()`），或让 `members.ts` 在构建期间直接走 LIKE 并显式标注（而不是吞错）。验收：构建在飞时成员搜索不再出现「尝试写→被拒→静默降级」的路径 | 未开始 |
 
 ---
 
@@ -782,7 +832,11 @@ flowchart TD
 | 2026-09-13 | 实施 | 合计 | 66 项：未开始 54 / 进行中 3 / 已完成 9 | 阶段 0 完成 1（H2）、进行中 1（H1 待轮换）；阶段 1 全部完成（3）；阶段 3 完成 2（H6/H7）；阶段 4 进行中 1（H11）；阶段 5 完成 2（N7/M20）；阶段 6 完成 1（L3）、进行中 1（L5） |
 | 2026-09-13 | 实施 | H8、H9 | 进行中 → 已完成 | H8 经两轮评审修毕。H9 首轮实现后被评审指出「转 async 引入写事务跨 macrotask 持锁」，补单飞闸 + busy_timeout；第二轮的 3 条 major（让出预算两处被绕过、重建窗口读侧静默降级、闸键控与 busy_timeout 反效应）也已修毕 |
 | 2026-09-13 | 评审 | H9 | 第二轮 · 3 major → 已修 | ① 让出预算：计数器写在 `continue` 之后，且 `flush()` 只有「500 行」阈值——实测 30 万无文本行单块 1097ms 零让出、1MB/行单次 flush 60.2s；已把计量前移并给批量写入加字符上界。② 重建窗口：DDL 在事务外 autocommit，读者整段看到半成品（ready:false / LIKE 降级）；已挪进事务 + 开 WAL（实测 delete 模式溢出页缓存后读者全段被拒，WAL 下 0 次被拒；旁路文件 rename 在 Windows 上 EPERM，不可行）。③ 闸按调用方字符串键控——同一文件不同写法并发会让 worker 停摆 7.5s；已改按 `searchIndexPath` 键控并**移除 busy_timeout**（单线程里它是同步忙等，实测 7.6s 后才报错，净负收益） |
-| 2026-09-13 | 评审 | 教训 | — | ① 单线程同步 SQLite 封装里 `busy_timeout` 对**进程内**争用是净负收益：持锁方无法在这一线程继续，于是「快速报错」变成「整线程忙等 N 秒后仍报错」。② 让出计数器必须计在 `continue` 之前，且批量写入也要纳入预算——只给循环设上界给不出单块上界。③ 写事务跨 `await` 时，事务**之外**的 DDL/DELETE 会把半成品状态暴露给读者；DDL 要么进事务，要么旁路文件原子替换（Windows 上后者对已打开的文件会 EPERM）。④ 单飞闸的键应当是被争用的**资源**（DB 文件路径），不是调用方传入的字符串。⑤ 计时类断言的夹具必须高熵：`'震'.repeat(n)` 只有极少数 distinct bigram，会让 FTS 成本低到看不出差别（本次因此先得到一次假绿） |
+| 2026-09-13 | 评审 | 教训 | — | ① ~~单线程同步 SQLite 封装里 `busy_timeout` 对进程内争用是净负收益~~ **（该归因已被第三轮评审证伪，见下条）**。② 让出计数器必须计在 `continue` 之前，且批量写入也要纳入预算——只给循环设上界给不出单块上界。③ 写事务跨 `await` 时，事务**之外**的 DDL/DELETE 会把半成品状态暴露给读者；DDL 要么进事务，要么旁路文件原子替换（Windows 上后者对已打开的文件会失败）。④ 单飞闸的键应当是被争用的**资源**（DB 文件路径），不是调用方传入的字符串。⑤ 计时类断言的夹具必须高熵：`'震'.repeat(n)` 只有极少数 distinct bigram，会让 FTS 成本低到看不出差别（本次因此先得到一次假绿） |
+| 2026-09-13 | 评审 | H9 | 第三轮 · 4 major → 已修/已登记 | ① 循环内错误被 per-shard `catch{}` 吞掉 → 静默产出「部分索引 + 报 ok」（实测注入错误后 ok/rows 4999/ready:true，读侧永不重建）；已把可跳过的 catch 收窄到只包读取，写失败改为向上抛并 ROLLBACK → 新增「不可读分片记入结果」用例。② WAL 使主库可能落后一代、而 `dirs.ts` bootstrap 只拷主库 → 已在 COMMIT 后尽力 `wal_checkpoint(TRUNCATE)`，残余登记 N11。③ 收尾（末次 flush+COMMIT+COUNT+meta+close）不受让出预算约束（400k 行 1006ms）→ 统计与 meta 写挪进事务 + `synchronous=NORMAL`（100k 299→222ms、200k 504→442ms），仍未根治，已入遗留限制。④ 数据根不可写时 WAL 库连只读都打不开（delete 库正常）→ 已入遗留限制。另更正第二轮的 `busy_timeout` 归因（见下条教训） |
+| 2026-09-13 | 评审 | 教训（更正） | — | **撤回「`busy_timeout` 对进程内争用是净负收益」这条结论**：第三轮用三形态原始探针实测，7.5s 停摆的真正来源是**旧布局「DDL 在事务外各自 autocommit」**（`BEGIN;写` 3341ms / autocommit 写 3328ms / `BEGIN;读;写` **1ms**）——DDL 进事务后写锁冲突走「延迟事务的读写升级」路径，压根不调用 busy 处理器（加回 `busy_timeout=5000` 也是 15ms 快速失败）。移除它只是收尾。**教训**：判断同步 SQLite 的争用行为必须先做形态探针，别把布局的产物归因到参数上。其余新增教训：① 让出预算是「循环内」预算，收尾（COMMIT/COUNT/close）与单条超大行是两段无界区间，量测方法若有意排除收尾就等于把该验收变成不可回归项；② `try{}catch{}` 的粒度决定修复的真实覆盖面——把 DDL 挪进事务只保护「会向上抛」的失败，行循环内的 catch 会把失败变成「部分成功 + 报 ok」，比留成空表更难发现；③ WAL 化后必须同时审计所有「跳过 `-wal`」的拷贝/打包/枚举路径；④ 「有回归用例」与「常量取值被钉住」是两件事（本轮实测 `FLUSH_EVERY_CHARS` 可放宽 32 倍仍全绿）；⑤ 计时断言的余量要按最薄的那条评估，且两个命题别互相遮蔽 |
+| 2026-09-13 | 实施 | N11、N12 | 新增 | H9 第三轮评审暴露：`dirs.ts` bootstrap 只拷主库（N11）、`members.ts` 是索引库的第二写者且不在闸内（N12）；N8 补全同族 `.all()` 清单 |
+| 2026-09-13 | 实施 | 合计 | 69 → 71：未开始 56 / 进行中 4 / 已完成 11 | 阶段 5 条目 31 → 33（+N11/N12）；M3 按条目级实际状态改为「进行中」（H8 只做掉 zip 部分） |
 | 2026-09-13 | 实施 | N8、N9、N10 | 新增 | H9 第二轮评审暴露的同族问题：向量索引读整表物化（N8）、搜索不可中断即 H9 未达标项（N9）、向量索引构建持事务跨网络调用且无并发保护（N10） |
 | 2026-09-13 | 实施 | 合计 | 66 → 69：未开始 54 / 进行中 4 / 已完成 11 | 阶段 3 完成 4（H6/H7/H8/H9）；阶段 5 条目 28 → 31（+N8/N9/N10） |
 
