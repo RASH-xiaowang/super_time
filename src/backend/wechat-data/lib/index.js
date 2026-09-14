@@ -6040,7 +6040,7 @@ function getDailyCounts(decryptedDir, username, year, month) {
 import { createHash as createHash8 } from "node:crypto";
 import { DatabaseSync as DatabaseSync20 } from "node:sqlite";
 import { existsSync as existsSync16 } from "node:fs";
-import { dirname as dirname4, join as join22 } from "node:path";
+import { dirname as dirname4, join as join22, basename } from "node:path";
 import { decompress as decompress4 } from "fzstd";
 var ZSTD_MAGIC4 = Buffer.from([40, 181, 47, 253]);
 var INDEX_SCHEMA_VERSION = "3";
@@ -6243,6 +6243,10 @@ async function runBuildSearchIndex(decryptedDir, force) {
     db.exec("PRAGMA journal_mode = WAL");
   } catch {
   }
+  try {
+    db.exec("PRAGMA synchronous = NORMAL");
+  } catch {
+  }
   const init = () => {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61')");
@@ -6269,6 +6273,14 @@ async function runBuildSearchIndex(decryptedDir, force) {
     let charsSinceYield = 0;
     let batch = [];
     let batchChars = 0;
+    let skippedCount = 0;
+    const skipped = [];
+    const recordSkip = (shard, e) => {
+      skippedCount += 1;
+      const detail = basename(shard) + ": " + e.message;
+      if (skipped.length < 5) skipped.push(detail);
+      console.warn("[search] \u8DF3\u8FC7\u4E0D\u53EF\u8BFB\u5206\u7247 " + detail);
+    };
     const flush = () => {
       if (batch.length === 0) return;
       const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
@@ -6287,17 +6299,35 @@ async function runBuildSearchIndex(decryptedDir, force) {
         let sdb = null;
         try {
           sdb = new DatabaseSync20(shard, { readOnly: true });
-        } catch {
+        } catch (e) {
+          recordSkip(shard, e);
           continue;
         }
-        const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
-        if (!has) {
+        let rows;
+        try {
+          const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
+          if (!has) {
+            sdb.close();
+            continue;
+          }
+          const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
+          rows = sdb.prepare(sql).iterate()[Symbol.iterator]();
+        } catch (e) {
+          recordSkip(shard, e);
           sdb.close();
           continue;
         }
         try {
-          const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
-          for (const r of sdb.prepare(sql).iterate()) {
+          for (; ; ) {
+            let step;
+            try {
+              step = rows.next();
+            } catch (e) {
+              recordSkip(shard, e);
+              break;
+            }
+            if (step.done) break;
+            const r = step.value;
             rowsSinceYield += 1;
             const localId = Number(r["local_id"] ?? 0);
             const createTime = Number(r["create_time"] ?? 0);
@@ -6318,7 +6348,6 @@ async function runBuildSearchIndex(decryptedDir, force) {
               await yieldToLoop();
             }
           }
-        } catch {
         } finally {
           sdb.close();
         }
@@ -6326,12 +6355,18 @@ async function runBuildSearchIndex(decryptedDir, force) {
       if (batch.length >= 500) flush();
     }
     flush();
-    db.exec("COMMIT");
     total = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
     const builtAt = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt);
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION);
-    return { status: "ok", rows: total, built_at: builtAt, elapsed_ms: Date.now() - started };
+    db.exec("COMMIT");
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+    }
+    const result = { status: "ok", rows: total, built_at: builtAt, elapsed_ms: Date.now() - started };
+    if (skippedCount > 0) result.message = `\u5DF2\u8DF3\u8FC7 ${skippedCount} \u4E2A\u4E0D\u53EF\u8BFB\u5206\u7247\uFF1A${skipped.join("; ")}`;
+    return result;
   } catch (e) {
     try {
       db.exec("ROLLBACK");
@@ -8468,7 +8503,7 @@ function resolveAvatarsLocal(decryptedDir, usernames) {
 // src/backend/wechat-data/src/keys/service.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync30, readdirSync as readdirSync20 } from "node:fs";
-import { basename, dirname as dirname6, join as join37 } from "node:path";
+import { basename as basename2, dirname as dirname6, join as join37 } from "node:path";
 
 // src/backend/wechat-data/src/keys/dll-key-scan.ts
 import { readFileSync as readFileSync11, statSync as statSync11 } from "node:fs";
@@ -9339,7 +9374,7 @@ async function fetchImageKey(opts = {}) {
   const kvDir = kvcommCacheDir();
   if (existsSync30(kvDir)) {
     const localWxids = detectWechatAccounts().map((a) => a.wxid);
-    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename(accountDir), localNativeWxids: localWxids });
+    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename2(accountDir), localNativeWxids: localWxids });
     if (resolution !== null) {
       const result2 = {
         ok: true,
@@ -10093,7 +10128,7 @@ import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash18 } from "node:crypto";
 import { existsSync as existsSync35, mkdirSync as mkdirSync9, readFileSync as readFileSync16, readlinkSync, rmSync as rmSync3, symlinkSync, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename as basename2, dirname as dirname10, join as join42 } from "node:path";
+import { basename as basename3, dirname as dirname10, join as join42 } from "node:path";
 
 // src/backend/wechat-data/src/query/voice.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
@@ -10278,7 +10313,7 @@ function ensureAsciiLink(realDir, aliasBase) {
 }
 function asciiPathForWhisper(filePath, aliasBase) {
   if (isAscii(filePath)) return filePath;
-  return join42(ensureAsciiLink(dirname10(filePath), aliasBase), basename2(filePath));
+  return join42(ensureAsciiLink(dirname10(filePath), aliasBase), basename3(filePath));
 }
 function whisperOne(bin, modelPath, wavPath, outBase) {
   const done = spawnSync3(bin, ["-m", modelPath, "-f", wavPath, "-l", "auto", "-np", "--no-timestamps", "-otxt", "-of", outBase], {
