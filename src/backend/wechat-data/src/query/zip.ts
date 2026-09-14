@@ -13,7 +13,7 @@
  *
  * `ZipFileWriter` 与 `zipFiles` 对同一组条目产出**逐字节相同**的输出
  * （同样的本地头、同样的 STORE/DEFLATE 选择、同样的中央目录与 EOCD 顺序），
- * 由 tests/export.spec.ts 断言，避免「换成流式后归档格式悄悄变了」。
+ * 由 tests/export-zip.spec.ts 断言，避免「换成流式后归档格式悄悄变了」。
  */
 import { createWriteStream, promises as fsp } from 'node:fs'
 import type { WriteStream } from 'node:fs'
@@ -121,6 +121,9 @@ export class ZipFileWriter {
   private readonly centrals: Buffer[] = []
   private readonly names = new Set<string>()
   private closed = false
+  private aborted = false
+  /** 写流报出的错误（见 write() 里「drain 掩盖 error」的说明）。 */
+  private streamError: Error | null = null
 
   private constructor(filePath: string, out: WriteStream) {
     this.filePath = filePath
@@ -130,18 +133,56 @@ export class ZipFileWriter {
   /** 打开目标文件准备写入（覆盖已有文件）。 */
   static async create(filePath: string): Promise<ZipFileWriter> {
     const out = createWriteStream(filePath)
-    // 必须挂 error handler：写流在 abort/destroy 或磁盘出错时会 emit 'error'，
-    // 无人监听就会升级成未捕获异常（实测表现为 ERR_STREAM_DESTROYED 飘进测试）。
-    out.on('error', () => { /* 由调用方的 try/catch 或 abort 收敛 */ })
+    const w = new ZipFileWriter(filePath, out)
+    // 必须挂 error handler：写流在 destroy 或磁盘出错时会 emit 'error'，
+    // 无人监听会升级成未捕获异常。但**光挂 handler 不够** —— 见 streamError 的说明。
+    out.on('error', (e: Error) => {
+      if (!w.streamError) w.streamError = e
+    })
     // 等 open 完成，让「打不开文件」这类错误在这里就暴露，而不是第一条写入时。
     await once(out, 'open')
-    return new ZipFileWriter(filePath, out)
+    return w
   }
 
-  /** 底层写入：更新偏移量并等待背压。 */
+  /**
+   * 底层写入：更新偏移量并等待背压。
+   *
+   * 这里有个坑（评审实测出来的）：写流出错时（例如 ENOSPC）Node 会先 emit `drain`
+   * 再 emit `error`。若只写 `if (!write()) await once('drain')`，那次 drain 会把
+   * 挂起的等待**当成成功**放行，而流其实已经毁了 —— 之后每次 write() 都返回 false
+   * 且再也不会有 drain，于是**永久挂起**：用户看不到报错、RPC 一直等到超时、
+   * 临时文件也不会被清理。所以要同时等 drain 与 close/error，并在事后复查标志位。
+   */
   private async write(buf: Buffer): Promise<void> {
+    // 先查状态再等：destroy() 触发的 'close'/'error' 很可能**在我们挂 once 监听之前**
+    // 就已经发出（abort 与随后的写入相隔一个 await），此时 once 永远等不到新事件 → 挂起。
+    if (this.streamError) throw this.streamError
+    if (this.aborted || this.out.destroyed || this.out.writableEnded) {
+      throw new Error('写入流已关闭，归档未完成')
+    }
     this.offset += buf.length
-    if (!this.out.write(buf)) await once(this.out, 'drain')
+    let needDrain: boolean
+    try {
+      needDrain = !this.out.write(buf)
+    } catch (e) {
+      this.streamError = e as Error
+      throw this.streamError
+    }
+    if (this.streamError) throw this.streamError
+    if (needDrain) {
+      await Promise.race([
+        once(this.out, 'drain'),
+        // 'close' 一定会到（destroy 之后），用它兜住「drain 之后流已死」的情形。
+        once(this.out, 'close').then(() => {
+          throw this.streamError ?? new Error('写入流已关闭，归档未完成')
+        }),
+        // 'error' 时 once 本身就会 reject。
+        once(this.out, 'error').then(() => {
+          throw this.streamError ?? new Error('写入流出错')
+        }),
+      ])
+    }
+    if (this.streamError) throw this.streamError
   }
 
   /**
@@ -180,10 +221,14 @@ export class ZipFileWriter {
    */
   async close(): Promise<void> {
     if (this.closed) return
+    // 已经 abort 过就不能再 close：流已 destroy，写入会挂起（评审实测 >3s 无响应）。
+    if (this.aborted) throw new Error('归档已中止，不能再 close')
     this.closed = true
     const centralStart = this.offset
     const central = Buffer.concat(this.centrals)
-    if (centralStart + central.length > 0xffffffff) {
+    if (centralStart + central.length >= 0xffffffff) {
+      // 用 >= 而不是 >：偏移恰好等于 0xFFFFFFFF 时，该值在 ZIP 里是 ZIP64 的哨兵值，
+      // 会被读取方当成「需要 ZIP64 中央目录」而解析失败。
       await this.abort()
       throw new Error('归档超过 4GiB，当前实现不支持 ZIP64；请分批导出')
     }
@@ -197,8 +242,16 @@ export class ZipFileWriter {
     await once(this.out, 'close')
   }
 
-  /** 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。 */
+  /**
+   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。
+   *
+   * 幂等；对已 close 的归档是**空操作** —— 否则出错后的 catch 会把一个已经成功
+   * 落盘的归档删掉（评审实测复现过：close 之后再 abort，文件被 DELETED）。
+   */
   async abort(): Promise<void> {
+    if (this.closed) return
+    if (this.aborted) return
+    this.aborted = true
     try {
       this.out.destroy()
     } catch {

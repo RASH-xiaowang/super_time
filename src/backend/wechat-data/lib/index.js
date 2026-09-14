@@ -10461,21 +10461,59 @@ var ZipFileWriter = class _ZipFileWriter {
     this.centrals = [];
     this.names = /* @__PURE__ */ new Set();
     this.closed = false;
+    this.aborted = false;
+    /** 写流报出的错误（见 write() 里「drain 掩盖 error」的说明）。 */
+    this.streamError = null;
     this.filePath = filePath;
     this.out = out;
   }
   /** 打开目标文件准备写入（覆盖已有文件）。 */
   static async create(filePath) {
     const out = createWriteStream2(filePath);
-    out.on("error", () => {
+    const w = new _ZipFileWriter(filePath, out);
+    out.on("error", (e) => {
+      if (!w.streamError) w.streamError = e;
     });
     await once(out, "open");
-    return new _ZipFileWriter(filePath, out);
+    return w;
   }
-  /** 底层写入：更新偏移量并等待背压。 */
+  /**
+   * 底层写入：更新偏移量并等待背压。
+   *
+   * 这里有个坑（评审实测出来的）：写流出错时（例如 ENOSPC）Node 会先 emit `drain`
+   * 再 emit `error`。若只写 `if (!write()) await once('drain')`，那次 drain 会把
+   * 挂起的等待**当成成功**放行，而流其实已经毁了 —— 之后每次 write() 都返回 false
+   * 且再也不会有 drain，于是**永久挂起**：用户看不到报错、RPC 一直等到超时、
+   * 临时文件也不会被清理。所以要同时等 drain 与 close/error，并在事后复查标志位。
+   */
   async write(buf) {
+    if (this.streamError) throw this.streamError;
+    if (this.aborted || this.out.destroyed || this.out.writableEnded) {
+      throw new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
+    }
     this.offset += buf.length;
-    if (!this.out.write(buf)) await once(this.out, "drain");
+    let needDrain;
+    try {
+      needDrain = !this.out.write(buf);
+    } catch (e) {
+      this.streamError = e;
+      throw this.streamError;
+    }
+    if (this.streamError) throw this.streamError;
+    if (needDrain) {
+      await Promise.race([
+        once(this.out, "drain"),
+        // 'close' 一定会到（destroy 之后），用它兜住「drain 之后流已死」的情形。
+        once(this.out, "close").then(() => {
+          throw this.streamError ?? new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
+        }),
+        // 'error' 时 once 本身就会 reject。
+        once(this.out, "error").then(() => {
+          throw this.streamError ?? new Error("\u5199\u5165\u6D41\u51FA\u9519");
+        })
+      ]);
+    }
+    if (this.streamError) throw this.streamError;
   }
   /**
    * 追加一个条目。
@@ -10536,10 +10574,11 @@ var ZipFileWriter = class _ZipFileWriter {
    */
   async close() {
     if (this.closed) return;
+    if (this.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
     this.closed = true;
     const centralStart = this.offset;
     const central = Buffer.concat(this.centrals);
-    if (centralStart + central.length > 4294967295) {
+    if (centralStart + central.length >= 4294967295) {
       await this.abort();
       throw new Error("\u5F52\u6863\u8D85\u8FC7 4GiB\uFF0C\u5F53\u524D\u5B9E\u73B0\u4E0D\u652F\u6301 ZIP64\uFF1B\u8BF7\u5206\u6279\u5BFC\u51FA");
     }
@@ -10558,8 +10597,16 @@ var ZipFileWriter = class _ZipFileWriter {
     this.out.end();
     await once(this.out, "close");
   }
-  /** 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。 */
+  /**
+   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。
+   *
+   * 幂等；对已 close 的归档是**空操作** —— 否则出错后的 catch 会把一个已经成功
+   * 落盘的归档删掉（评审实测复现过：close 之后再 abort，文件被 DELETED）。
+   */
   async abort() {
+    if (this.closed) return;
+    if (this.aborted) return;
+    this.aborted = true;
     try {
       this.out.destroy();
     } catch {
@@ -11244,8 +11291,14 @@ function typeLabel(t) {
 }
 
 // src/backend/wechat-data/src/query/export.ts
+var MAX_MOMENT_MEDIA = 5e3;
+var partialSeq = 0;
+function partialPath(filePath) {
+  partialSeq += 1;
+  return filePath + ".partial-" + String(process.pid) + "-" + String(partialSeq);
+}
 function writeFileAtomicSync(filePath, data) {
-  const tmp = filePath + ".partial-" + String(process.pid);
+  const tmp = partialPath(filePath);
   try {
     writeFileSync7(tmp, data);
     renameSync4(tmp, filePath);
@@ -11258,7 +11311,7 @@ function writeFileAtomicSync(filePath, data) {
   }
 }
 async function writeZipAtomic(filePath, produce) {
-  const tmp = filePath + ".partial-" + String(process.pid);
+  const tmp = partialPath(filePath);
   let zip = null;
   try {
     zip = await ZipFileWriter.create(tmp);
@@ -11720,9 +11773,9 @@ async function exportMoments(decryptedDir, opts) {
       await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
       let idx = 0;
       for (const m of filtered) {
-        if (mediaCount >= 4999) break;
+        if (mediaCount >= MAX_MOMENT_MEDIA) break;
         for (const im of m.images) {
-          if (mediaCount >= 4999) break;
+          if (mediaCount >= MAX_MOMENT_MEDIA) break;
           const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
           if (r.url) {
             const buf = dataUrlToBuffer(r.url);
@@ -11732,9 +11785,9 @@ async function exportMoments(decryptedDir, opts) {
             }
           }
         }
-        if (mediaCount >= 4999) break;
+        if (mediaCount >= MAX_MOMENT_MEDIA) break;
         for (const v of m.videos) {
-          if (mediaCount >= 4999) break;
+          if (mediaCount >= MAX_MOMENT_MEDIA) break;
           const r = resolveSnsVideoDataUrl(mediaCtx2.base, v.md5, v.timelineId, v.id);
           if (r.url) {
             const buf = dataUrlToBuffer(r.url);

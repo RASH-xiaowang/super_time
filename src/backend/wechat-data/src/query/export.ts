@@ -18,6 +18,27 @@ import { resolveSnsVideoDataUrl } from './sns-video.ts'
 
 /** Decode a base64 data URL to bytes (returns null when not a base64 data URL). */
 /**
+ * moments 打包的媒体条目上限。
+ *
+ * 与改造前保持一致：旧代码是「push 之后判断 `entries.length > 5000` 才 break」，
+ * 而 entries 里第一个是 moments.json，所以媒体最多 5000 条。
+ * 初版流式改造写成 `>= 4999`，饱和时会少导一条（评审复刻两循环实测出来的 off-by-one）。
+ */
+const MAX_MOMENT_MEDIA = 5000
+
+/**
+ * 原子落地用的临时文件名。
+ *
+ * 带进程内自增序号，不只是 pid：改成 async 之后同一进程里两个同名导出可以并发交错，
+ * 只用 pid 的话两次导出会抢同一个临时文件、互相写坏。
+ */
+let partialSeq = 0
+function partialPath(filePath: string): string {
+  partialSeq += 1
+  return filePath + '.partial-' + String(process.pid) + '-' + String(partialSeq)
+}
+
+/**
  * 原子写：先写同目录下的临时文件，再 rename 覆盖目标。
  *
  * 直接 writeFileSync 到目标路径时，中途失败（磁盘满、进程被杀、超时被掐）会留下一个
@@ -25,12 +46,16 @@ import { resolveSnsVideoDataUrl } from './sns-video.ts'
  * 同目录 rename 在 Windows 上同样是原子的（同一卷内不发生拷贝）。
  */
 function writeFileAtomicSync(filePath: string, data: string | Uint8Array): void {
-  const tmp = filePath + '.partial-' + String(process.pid)
+  const tmp = partialPath(filePath)
   try {
     writeFileSync(tmp, data)
     renameSync(tmp, filePath)
   } catch (e) {
-    try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* 清理失败不掩盖原错误 */
+    }
     throw e
   }
 }
@@ -49,7 +74,7 @@ async function writeZipAtomic(
   filePath: string,
   produce: (zip: ZipFileWriter) => Promise<void>,
 ): Promise<void> {
-  const tmp = filePath + '.partial-' + String(process.pid)
+  const tmp = partialPath(filePath)
   let zip: ZipFileWriter | null = null
   try {
     // create 也放在 try 里：打开失败同样可能已经留下一个 0 字节的临时文件。
@@ -60,7 +85,11 @@ async function writeZipAtomic(
   } catch (e) {
     // 失败必须删掉半成品：一个截断的 .zip 看起来是有效归档，打开才发现坏。
     if (zip) await zip.abort()
-    try { rmSync(tmp, { force: true }) } catch { /* 已删除 */ }
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* 已删除 */
+    }
     throw e
   }
 }
@@ -666,18 +695,18 @@ export async function exportMoments(
       await zip.addFile('moments.json', JSON.stringify(filtered, null, 2))
       let idx = 0
       for (const m of filtered) {
-        if (mediaCount >= 4999) break
+        if (mediaCount >= MAX_MOMENT_MEDIA) break
         for (const im of m.images) {
-          if (mediaCount >= 4999) break
+          if (mediaCount >= MAX_MOMENT_MEDIA) break
           const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
           if (r.url) {
             const buf = dataUrlToBuffer(r.url)
             if (buf) { await zip.addFile('media/images/img_' + String(idx++) + '.jpg', buf); mediaCount += 1 }
           }
         }
-        if (mediaCount >= 4999) break
+        if (mediaCount >= MAX_MOMENT_MEDIA) break
         for (const v of m.videos) {
-          if (mediaCount >= 4999) break
+          if (mediaCount >= MAX_MOMENT_MEDIA) break
           const r = resolveSnsVideoDataUrl(mediaCtx.base, v.md5, v.timelineId, v.id)
           if (r.url) {
             const buf = dataUrlToBuffer(r.url)
