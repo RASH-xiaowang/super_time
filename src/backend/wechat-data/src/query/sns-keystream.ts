@@ -47,9 +47,12 @@ function processResourcesPath(): string {
 
 function resolveAssetDir(): string {
   const candidates = [
+    // 打包态主路径：native/** 已在 asarUnpack 里，资源落在 app.asar.unpacked 下。
+    // 排在第一位是**有意的** —— 从 asar 里读要经 Electron 的 fs 补丁、每次冷启动都
+    // 解压 3.8MB；unpacked 目录是真实文件，读起来才是设计意图。
+    join(processResourcesPath(), 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'native', 'weflow-isaac64'),
     join(HERE, '..', 'native', 'weflow-isaac64'), // 构建产物：lib/ → wechat-data/native
     join(HERE, '..', '..', 'native', 'weflow-isaac64'), // 源码布局：src/query/ → wechat-data/native
-    join(processResourcesPath(), 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'native', 'weflow-isaac64'),
   ]
   for (const c of candidates) {
     try {

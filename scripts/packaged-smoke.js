@@ -25,8 +25,18 @@ const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const exe = path.join(root, 'dist', 'win-unpacked', 'Super Time.exe');
-/** 期望的 Remote 方法数（新增方法时要同步这里）。 */
-const EXPECTED_METHODS = 128;
+const resourcesDir = path.join(root, 'dist', 'win-unpacked', 'resources');
+/**
+ * 期望的 Remote 方法数：**从源码数**，而不是写死一个数字。
+ *
+ * 原先硬编码 128，而 `gateway.ts` 实际早已 132 —— 这类常量一旦漂移，冒烟就变成
+ * 「常年红」或「常年被忽略」，比不检查更糟。现在新增 `@Remote` 不用改这里；
+ * 打包产物报出的方法数与源码不符，只可能是 bundle 没重建（正是要抓的）。
+ */
+const gatewaySource = fs.readFileSync(
+  path.join(root, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8');
+const EXPECTED_METHODS = new Set(
+  [...gatewaySource.matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map((mm) => mm[1])).size;
 
 if (!fs.existsSync(exe)) {
   console.error('❌ 找不到打包产物：' + exe + '\n   请先运行 npm run dist（或 npm run pack）');
@@ -52,16 +62,29 @@ check(!fs.existsSync(path.join(unpackedWechat, 'config.json')),
 check(!fs.existsSync(path.join(unpackedWechat, 'llm.json')),
   '安装包不含 wechat/llm.json（LLM API Key）');
 try {
-  const { listPackage } = require('@electron/asar');
-  const entries = listPackage(path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar'))
-    .map((f) => f.replace(/\\/g, '/'));
+  const { listPackage, getRawHeader } = require('@electron/asar');
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  const entries = listPackage(asarPath).map((f) => f.replace(/\\/g, '/'));
   check(!entries.includes('/wechat/config.json'), 'asar 内也不含 wechat/config.json');
   check(!entries.includes('/wechat/llm.json'), 'asar 内也不含 wechat/llm.json');
-  // 朋友圈 CDN 解密要用的 WxIsaac64 WASM（3.8MB）必须在包里，否则「未缓存视频」全播不了
-  check(entries.includes('/src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.wasm'),
-    'asar 内含 WxIsaac64 WASM（朋友圈 CDN 解密用）');
-  check(entries.includes('/src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.js'),
-    'asar 内含 WxIsaac64 胶水 JS');
+  // 朋友圈 CDN 解密要用的 WxIsaac64 WASM（3.8MB）。H15 之后它进 asarUnpack：
+  // ① 必须在 app.asar.unpacked 下作为**真实文件**存在（否则解析路径的第 3 个候选永不匹配）；
+  // ② asar 头部必须把它标成 unpacked 且**没有 offset** —— 解包条目在 asar 里仍会被
+  //    `listPackage` 列出来，所以「不在列表里」是错的判据，要看头部标记，
+  //    否则既测不出真正解包、又可能把「解包 + 归档双份 3.8MB」放过去。
+  const wasmRel = 'src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.wasm';
+  const jsRel = 'src/backend/wechat-data/native/weflow-isaac64/wasm_video_decode.js';
+  const unpackedRoot = path.join(resourcesDir, 'app.asar.unpacked');
+  check(fs.existsSync(path.join(unpackedRoot, wasmRel)),
+    'app.asar.unpacked 下有 WxIsaac64 WASM（朋友圈 CDN 解密用）');
+  check(fs.existsSync(path.join(unpackedRoot, jsRel)), 'app.asar.unpacked 下有 WxIsaac64 胶水 JS');
+  const rawHeader = getRawHeader(asarPath).header;
+  const asarRoot = typeof rawHeader === 'string' ? JSON.parse(rawHeader) : rawHeader;
+  const entryOf = (rel) => rel.split('/').reduce((n, seg) => n?.files?.[seg], asarRoot);
+  const wasmEntry = entryOf(wasmRel);
+  check(Boolean(wasmEntry && wasmEntry.unpacked === true), 'asar 头部把该 WASM 标为 unpacked');
+  check(Boolean(wasmEntry) && wasmEntry.offset === undefined,
+    'asar 归档体里没有重复存一份 WASM（只解包一份）');
 } catch {
   console.log('  ·  跳过 asar 列表校验（@electron/asar 不可用）');
 }
@@ -91,8 +114,8 @@ if (/已有实例在运行/.test(out)) {
   process.exit(2);
 }
 check(Boolean(m), '后端就绪并打印方法数', m ? `方法数=${m[1]}` : '未找到日志');
-if (m) check(Number(m[1]) === EXPECTED_METHODS, `Remote 方法数 == ${EXPECTED_METHODS}`,
-  `实际 ${m[1]}（新增 Remote 后请更新脚本里的 EXPECTED_METHODS）`);
+if (m) check(Number(m[1]) === EXPECTED_METHODS, `Remote 方法数 == ${EXPECTED_METHODS}（取自 gateway.ts 源码）`,
+  `实际 ${m[1]}（不一致说明 bundle 没重建）`);
 check(!/ENOTDIR/.test(out), '无 ENOTDIR（app.asar 内写文件）');
 check(!/Cannot find module|ERR_MODULE_NOT_FOUND/.test(out), '无模块解析失败（external 依赖已随包）');
 check(/\[screenshot\] saved/.test(out), '渲染窗口加载成功（已产出截图）');

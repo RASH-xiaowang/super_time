@@ -37,10 +37,10 @@
 | 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
-| 阶段 4 | 安全加固与类型底座 | 3 | 2 | 0 | 0 | 1 |
+| 阶段 4 | 安全加固与类型底座 | 3 | 1 | 0 | 0 | 2 |
 | 阶段 5 | 中优先级：稳定性与性能 | 33 | 30 | 1 | 0 | 2 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **71** | **55** | **3** | **0** | **13** |
+| **合计** | | **71** | **54** | **3** | **0** | **14** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -555,7 +555,7 @@ flowchart TD
 |---|---|---|---|---|
 | H10 | Electron 安全基线加固 | H3 | 2d | 未开始 |
 | H11 | 修复类型检查为零的现状 | H2 | 3d | 已完成（strict 逐项收紧留下一轮） |
-| H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 未开始 |
+| H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 已完成 |
 
 ---
 
@@ -651,18 +651,37 @@ flowchart TD
 
 ---
 
-### `[ ]` H15 · asarUnpack 遗漏 native 资产
+### `[x]` H15 · asarUnpack 遗漏 native 资产
 
-- **状态**：未开始　**依赖**：H2　**预估**：0.5d
+- **状态**：已完成（第 3 条验收未验证，见下）　**依赖**：H2　**预估**：0.5d
 - **证据**：`package.json:103-108` 的 `asarUnpack` 只含 `koffi`、`@koromix`、`wechat/README.md`、`wechat/whisper/**`；而 `src/backend/wechat-data/src/query/sns-keystream.ts:43` 明确去 `app.asar.unpacked/src/backend/wechat-data/native/weflow-isaac64` 查找资产（3.8MB WASM）。该候选路径**永不匹配**，目前仅靠 `:42` 的 `HERE/../../native` 从 asar 内部读取 + `:75,:91` 传入 `wasmBinary` 才可用。
 - **风险**：朋友圈视频解密属「偶然可用、非设计可用」；每次冷启动从 asar 读 3.8MB。且该资产（`native/`）当前**尚未入库**（H2 一并处理）。
 - **动作**：
   1. `asarUnpack` 补入 `src/backend/wechat-data/native/**`
-  2. 复核 `sns-keystream.ts` 的候选路径顺序，让 unpacked 路径成为主路径
+  2. `sns-keystream.ts` 的候选顺序改为 **unpacked 优先**：原来它排在第 3 位（永不命中），
+     现在第 1 位 —— 从 asar 里读要走 Electron 的 fs 补丁、每次冷启动解压 3.8MB，
+     unpacked 目录是真实文件，读它才是设计意图；后两个候选保留给开发态
+  3. `scripts/packaged-smoke.js` 的断言随之修正：原来断言 WASM **在 asar 归档列表里** ——
+     加了 asarUnpack 后这条会失真，而「不在列表里」也不是正确判据（解包条目在 asar 头部
+     仍会被 `listPackage` 列出来，实测如此；内容才是不重复存的）。改为断言
+     「`app.asar.unpacked` 下存在该文件」+「asar 头部标 `unpacked: true` 且**没有 `offset`**」，
+     后者同时挡掉「解包 + 归档双份 3.8MB」
+  4. 顺带修掉一个陈旧常量：冒烟脚本硬编码 `EXPECTED_METHODS = 128`，而 `gateway.ts` 实际
+     已 132（冒烟会一直红或被人忽略）。改为**从 `gateway.ts` 源码数 `@Remote`**，
+     此后新增方法不必再同步这个数字；数不出来或与打包产物不符才报错
 - **验收标准**：
-  - [ ] 打包版 `app.asar.unpacked` 下存在 `native/weflow-isaac64/wasm_video_decode.wasm`
-  - [ ] `npm run package:smoke` 通过（含 SNS 视频解密路径）
-  - [ ] 打包版朋友圈视频可正常解密播放
+  - [x] 打包版 `app.asar.unpacked` 下存在 `native/weflow-isaac64/wasm_video_decode.wasm`
+    —— 实测存在，**3,785,516 字节**；胶水 JS 174,692 字节亦在
+  - [x] `npm run package:smoke` 通过 —— 19 项断言全绿（含 4 条解包断言、方法数 132）
+  - [ ] **打包版朋友圈视频可正常解密播放：未验证** —— 需要真实微信数据 + 一条未缓存的朋友圈
+    视频才能端到端验证，本机不具备条件。**已取得的替代证据**：① 冒烟断言了 resolver 第 1 个
+    候选路径（`<resources>/app.asar.unpacked/src/backend/wechat-data/native/weflow-isaac64`）
+    下是可读的真实文件；② `npm run check:sns-video` 的 18 项断言覆盖了解密逻辑本身
+    （明文直达 / `<enc key>` 解密 / 种子错误拒绝 / md5 校验 / CDN 不可达），但跑的是开发态。
+    残留风险：真实打包环境下 WASM 实例化失败（本机未复现）
+- **观察（属 M19，未修）**：`files` 里的 `src/**/*` 会把整棵内联依赖源码树打进 asar
+  （本次实测 asar 条目 **2852** 个），与 node_modules 重复；排除规则属 M19 范围。
+  另：`npm run pack` 会往 `dist/` 写约 300MB 产物（该目录已 gitignore）
 
 ---
 
@@ -916,3 +935,5 @@ flowchart TD
 | 2026-09-13 | 实施 | H12 | 未开始 → 已完成 | 新增 tsconfig.types.json（声明-only）并删除陈旧的 tsconfig.host.json；lib/types 由 81 补到 97 个 .d.ts；删掉 243 个不可能再生成的死产物（81 .js + 162 .map，源码头用 `.ts` 扩展名 → allowImportingTsExtensions 禁止 JS emit），同步清掉 exports.default 与 files 里的悬空指针；前端类型改从仓库取（tsconfig paths）。CI 新增 typecheck 与 build:types 一致性两步 |
 | 2026-09-13 | 实施 | 教训（H11/H12） | — | ① 类型检查一开就抓到 3 个「用户可见但没人发现」的真 bug —— 这类漂移靠读代码是看不出来的；② 类型源的选取要盯住「哪份是权威」：前端一直从 node_modules 的 file: 拷贝取类型，而那份只在 npm install 时刷新，等于给陈旧类型开了后门；③ 不可再生成的构建产物不该入库（243 个 .js/.map 谁也不敢删、也没人能重建）；④ 测试夹具要留意「兄弟文件」型路径（反馈库、搜索索引库都是 `<解密目录>/../x.db`），共用父目录会让多个用例串库（本次踩到过） |
 | 2026-09-13 | 实施 | 合计 | 71 项：未开始 55 / 进行中 3 / 已完成 13 | 阶段 3 全部完成（5）；阶段 4 完成 1（H11）、未开始 2（H10/H15） |
+| 2026-09-13 | 实施 | H15 | 未开始 → 已完成 | asarUnpack 补 `src/backend/wechat-data/native/**`；sns-keystream 的候选顺序改为 unpacked 优先（原第 3 个候选永不命中，现在第 1）；packaged-smoke 断言改为「unpacked 目录下有真实文件 + asar 头部标 unpacked 且无 offset」（`listPackage` 仍会列出解包条目，所以「不在列表里」是错判据）。实测：pack 后 wasm 3,785,516 字节就位，19 项断言全绿。顺带把冒烟里硬编码的 EXPECTED_METHODS=128（实际已 132）改为从 gateway.ts 源码数 @Remote。第 3 条验收（打包版视频解密播放）未验证：需真实微信数据，已记录替代证据 |
+| 2026-09-13 | 实施 | 合计 | 71 项：未开始 54 / 进行中 3 / 已完成 14 | 阶段 4 完成 2（H11/H15）、未开始 1（H10） |
