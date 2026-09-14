@@ -214,12 +214,12 @@ function docFromRow(r: Record<string, unknown>): RetrievedDoc {
 export async function buildVectorIndex(
   decryptedDir: string,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; onProgress?: (done: number, total: number) => void; force?: boolean },
-): Promise<{ status: string; rows: number; embedded: number; elapsed_ms: number; message?: string }> {
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+): Promise<{ status: string; rows: number; embedded: number; embed_calls: number; elapsed_ms: number; message?: string }> {
   const started = Date.now()
   const src = searchIndexPath(decryptedDir)
   if (!existsSync(src)) {
-    return { status: 'no-source', rows: 0, embedded: 0, elapsed_ms: 0, message: '稀疏索引不存在，请先建索引' }
+    return { status: 'no-source', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0, message: '稀疏索引不存在，请先建索引' }
   }
   const db = openVectorDb(decryptedDir, false)
   try {
@@ -248,35 +248,96 @@ export async function buildVectorIndex(
     if (pending.length === 0) {
       writeMeta(db, 'schema_version', VECTOR_SCHEMA_VERSION)
       writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
-      return { status: 'up-to-date', rows: done.size, embedded: 0, elapsed_ms: Date.now() - started }
+      return { status: 'up-to-date', rows: done.size, embedded: 0, embed_calls: 0, elapsed_ms: Date.now() - started }
     }
 
     const ins = db.prepare('INSERT OR REPLACE INTO vectors(fts_rowid, doc_key, username, local_id, create_time, dim, vec, hash_lo, hash_hi) VALUES(?,?,?,?,?,?,?,?,?)')
     let embedded = 0
+    let embedCalls = 0
     let dim = 0
-    db.exec('BEGIN')
-    try {
-      for (let i = 0; i < pending.length; i += opts.batchSize) {
-        const slice = pending.slice(i, i + opts.batchSize)
-        const texts = slice.map(r => String(r['text'] ?? '').slice(0, opts.maxCharsPerDoc))
-        const vecs = await embed(texts)
-        for (let j = 0; j < slice.length; j += 1) {
+    let doneCount = 0
+
+    // ① **按「截断后的文本」分组**：同一文本只 embed 一次，向量扇出到该组的所有行。
+    //    真实数据实测 56.5% 的 text 是重复的（15.2 万行 → 6.6 万个不同文本），所以这一步
+    //    直接省掉一半以上的请求。分组表只存 pending 行引用（不复制行），内存与 pending 同阶；
+    //    每处理完一组就 delete，向量不留驻。
+    //    键用**截断后**的文本：那才是真正送进模型的输入，两个只在 200 字符之后不同的文本
+    //    本来就得到同一个向量。
+    const groups = new Map<string, Array<Record<string, unknown>>>()
+    for (const r of pending) {
+      const text = String(r['text'] ?? '').slice(0, opts.maxCharsPerDoc)
+      const g = groups.get(text)
+      if (g) g.push(r)
+      else groups.set(text, [r])
+    }
+    const texts = [...groups.keys()]
+
+    // 并发上限：来自配置，可能是 0/负数/小数/NaN（`rag-config.json` 可手改且不做数值校验），
+    // 运行时夹到 [1, 16] —— 厂商普遍有速率限制，放开上限没有好处。
+    const rawC = Number(opts.concurrency ?? 1)
+    const concurrency = Math.min(Math.max(Number.isFinite(rawC) ? Math.floor(rawC) : 1, 1), 16)
+
+    const batchSize = Math.max(1, Math.floor(opts.batchSize) || 1)
+    let next = 0
+    let failure: unknown = null
+    // ② 有界并发：worker 原子地认领下一批**唯一文本**；任一批失败就置 failure，
+    //    其余 worker 立刻停手（在飞的请求回来后也**不再写库**，避免写进已回滚/已关闭的连接）。
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (failure) return
+        const start = next
+        next += batchSize
+        if (start >= texts.length) return
+        const batch = texts.slice(start, start + batchSize)
+        let vecs: number[][]
+        try {
+          vecs = await embed(batch)
+        } catch (e) {
+          failure = failure ?? e
+          return
+        }
+        embedCalls += 1
+        if (failure) return
+        for (let j = 0; j < batch.length; j += 1) {
+          const groupRows = groups.get(batch[j])
+          if (!groupRows) continue
+          groups.delete(batch[j]) // 用完即释放（向量不长期留驻）
           const raw = vecs[j]
           if (!raw || raw.length === 0) continue
           const v = l2normalize(raw)
           dim = v.length
           const h = simhash(v, getPlanes(dim))
-          const r = slice[j]
-          const username = String(r['username'] ?? '')
-          const localId = Number(r['local_id'] ?? 0)
-          ins.run(
-            Number(r['rid']), docKeyOf(username, localId), username, localId,
-            Number(r['create_time'] ?? 0), dim, vecToBlob(v), h.lo, h.hi,
-          )
-          embedded += 1
+          const blob = vecToBlob(v)
+          // 扇出：一个热门文本可能对应几千甚至上万行（真实数据里「收到」这类复读短消息
+          // 就是这样），一口气写下去会形成一次长同步突发。每 512 行让出一次。
+          // 实测（MEASURE_M10，单组 1.8 万行）：最长阻塞 29.6ms → 14.7ms；
+          // 常规规模（单组 1200 行）两者差异在噪声内 —— 也就是说它是**最坏情况的兜底**，
+          // 不是修好了一个常规可见的卡顿（常规阻塞的主因是事务 COMMIT 的 fsync）。
+          for (const r of groupRows) {
+            const username = String(r['username'] ?? '')
+            const localId = Number(r['local_id'] ?? 0)
+            ins.run(
+              Number(r['rid']), docKeyOf(username, localId), username, localId,
+              Number(r['create_time'] ?? 0), dim, blob, h.lo, h.hi,
+            )
+            embedded += 1
+            doneCount += 1
+            if (doneCount % 512 === 0) {
+              await new Promise<void>((resolve) => { setImmediate(resolve) })
+            }
+          }
         }
-        opts.onProgress?.(Math.min(i + opts.batchSize, pending.length), pending.length)
+        opts.onProgress?.(Math.min(doneCount, pending.length), pending.length)
+        // 让出事件循环：一批的 CPU（simhash 64×dim ≈ 0.037ms/篇）本身很小，但并发下几批会
+        // 连在一起，这里显式让一次，保证建库期间后端仍能响应其它查询。
+        await new Promise<void>((resolve) => { setImmediate(resolve) })
       }
+    }
+
+    db.exec('BEGIN')
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()))
+      if (failure) throw failure
       db.exec('COMMIT')
     } catch (e) {
       try { db.exec('ROLLBACK') } catch { /* no tx */ }
@@ -287,7 +348,7 @@ export async function buildVectorIndex(
     writeMeta(db, 'model', opts.model)
     if (dim > 0) writeMeta(db, 'dim', String(dim))
     writeMeta(db, 'built_at', new Date().toISOString().slice(0, 19).replace('T', ' '))
-    return { status: 'ok', rows: total, embedded, elapsed_ms: Date.now() - started }
+    return { status: 'ok', rows: total, embedded, embed_calls: embedCalls, elapsed_ms: Date.now() - started }
   } finally {
     db.close()
   }

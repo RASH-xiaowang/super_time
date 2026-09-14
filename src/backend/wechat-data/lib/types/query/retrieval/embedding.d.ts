@@ -52,12 +52,14 @@ export declare function buildVectorIndex(decryptedDir: string, embed: EmbedFn, o
     batchSize: number;
     maxCharsPerDoc: number;
     maxDocsPerBuild: number;
+    concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     force?: boolean;
 }): Promise<{
     status: string;
     rows: number;
     embedded: number;
+    embed_calls: number;
     elapsed_ms: number;
     message?: string;
 }>;

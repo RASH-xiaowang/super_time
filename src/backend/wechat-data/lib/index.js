@@ -12705,6 +12705,7 @@ function defaultRetrievalConfig() {
       enabled: true,
       model: "",
       batchSize: 16,
+      concurrency: 4,
       maxDocsPerBuild: 4e4,
       cacheSize: 2e3,
       maxCharsPerDoc: 200
@@ -13390,7 +13391,7 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
   const started = Date.now();
   const src = searchIndexPath(decryptedDir);
   if (!existsSync39(src)) {
-    return { status: "no-source", rows: 0, embedded: 0, elapsed_ms: 0, message: "\u7A00\u758F\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5148\u5EFA\u7D22\u5F15" };
+    return { status: "no-source", rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0, message: "\u7A00\u758F\u7D22\u5F15\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5148\u5EFA\u7D22\u5F15" };
   }
   const db = openVectorDb(decryptedDir, false);
   try {
@@ -13415,41 +13416,85 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
     if (pending.length === 0) {
       writeMeta(db, "schema_version", VECTOR_SCHEMA_VERSION);
       writeMeta(db, "built_at", (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " "));
-      return { status: "up-to-date", rows: done.size, embedded: 0, elapsed_ms: Date.now() - started };
+      return { status: "up-to-date", rows: done.size, embedded: 0, embed_calls: 0, elapsed_ms: Date.now() - started };
     }
     const ins = db.prepare("INSERT OR REPLACE INTO vectors(fts_rowid, doc_key, username, local_id, create_time, dim, vec, hash_lo, hash_hi) VALUES(?,?,?,?,?,?,?,?,?)");
     let embedded = 0;
+    let embedCalls = 0;
     let dim = 0;
-    db.exec("BEGIN");
-    try {
-      for (let i = 0; i < pending.length; i += opts.batchSize) {
-        const slice = pending.slice(i, i + opts.batchSize);
-        const texts = slice.map((r) => String(r["text"] ?? "").slice(0, opts.maxCharsPerDoc));
-        const vecs = await embed(texts);
-        for (let j = 0; j < slice.length; j += 1) {
+    let doneCount = 0;
+    const groups = /* @__PURE__ */ new Map();
+    for (const r of pending) {
+      const text = String(r["text"] ?? "").slice(0, opts.maxCharsPerDoc);
+      const g = groups.get(text);
+      if (g) g.push(r);
+      else groups.set(text, [r]);
+    }
+    const texts = [...groups.keys()];
+    const rawC = Number(opts.concurrency ?? 1);
+    const concurrency = Math.min(Math.max(Number.isFinite(rawC) ? Math.floor(rawC) : 1, 1), 16);
+    const batchSize = Math.max(1, Math.floor(opts.batchSize) || 1);
+    let next = 0;
+    let failure = null;
+    const worker = async () => {
+      for (; ; ) {
+        if (failure) return;
+        const start = next;
+        next += batchSize;
+        if (start >= texts.length) return;
+        const batch = texts.slice(start, start + batchSize);
+        let vecs;
+        try {
+          vecs = await embed(batch);
+        } catch (e) {
+          failure = failure ?? e;
+          return;
+        }
+        embedCalls += 1;
+        if (failure) return;
+        for (let j = 0; j < batch.length; j += 1) {
+          const groupRows = groups.get(batch[j]);
+          if (!groupRows) continue;
+          groups.delete(batch[j]);
           const raw = vecs[j];
           if (!raw || raw.length === 0) continue;
           const v = l2normalize(raw);
           dim = v.length;
           const h = simhash(v, getPlanes(dim));
-          const r = slice[j];
-          const username = String(r["username"] ?? "");
-          const localId = Number(r["local_id"] ?? 0);
-          ins.run(
-            Number(r["rid"]),
-            docKeyOf(username, localId),
-            username,
-            localId,
-            Number(r["create_time"] ?? 0),
-            dim,
-            vecToBlob(v),
-            h.lo,
-            h.hi
-          );
-          embedded += 1;
+          const blob = vecToBlob(v);
+          for (const r of groupRows) {
+            const username = String(r["username"] ?? "");
+            const localId = Number(r["local_id"] ?? 0);
+            ins.run(
+              Number(r["rid"]),
+              docKeyOf(username, localId),
+              username,
+              localId,
+              Number(r["create_time"] ?? 0),
+              dim,
+              blob,
+              h.lo,
+              h.hi
+            );
+            embedded += 1;
+            doneCount += 1;
+            if (doneCount % 512 === 0) {
+              await new Promise((resolve3) => {
+                setImmediate(resolve3);
+              });
+            }
+          }
         }
-        opts.onProgress?.(Math.min(i + opts.batchSize, pending.length), pending.length);
+        opts.onProgress?.(Math.min(doneCount, pending.length), pending.length);
+        await new Promise((resolve3) => {
+          setImmediate(resolve3);
+        });
       }
+    };
+    db.exec("BEGIN");
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      if (failure) throw failure;
       db.exec("COMMIT");
     } catch (e) {
       try {
@@ -13463,7 +13508,7 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
     writeMeta(db, "model", opts.model);
     if (dim > 0) writeMeta(db, "dim", String(dim));
     writeMeta(db, "built_at", (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " "));
-    return { status: "ok", rows: total, embedded, elapsed_ms: Date.now() - started };
+    return { status: "ok", rows: total, embedded, embed_calls: embedCalls, elapsed_ms: Date.now() - started };
   } finally {
     db.close();
   }
@@ -18459,6 +18504,7 @@ var WechatDataGateway = class extends (_a = TypertRemoteService, _getSessions_de
               const built = await buildVectorIndex(this._dirs.decrypted, embedFn, {
                 model: retrConfig.embedding.model || "default",
                 batchSize: retrConfig.embedding.batchSize,
+                concurrency: retrConfig.embedding.concurrency,
                 maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
                 maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild
               });
@@ -18744,6 +18790,7 @@ ${contextBlock}
       const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
         model: cfg.embedding.model || "default",
         batchSize: cfg.embedding.batchSize,
+        concurrency: cfg.embedding.concurrency,
         maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
         maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
         force: Boolean(options?.force)
