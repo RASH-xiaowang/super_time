@@ -78,6 +78,7 @@ async function win32Api(): Promise<Win32MemoryApi> {
         '内存扫描组件 koffi 初始化失败：' + ((e as Error).message || String(e))
         + '。常见原因：安装包缺少 win32 原生二进制、杀毒软件拦截了 DLL 解包、或系统不是 x64。'
         + '可先用「手动填写密钥」流程继续。',
+        { cause: e },
       )
     }
   })()

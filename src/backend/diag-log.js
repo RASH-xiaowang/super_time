@@ -23,6 +23,39 @@ const DEFAULT_MAX_FILES = 3;
 const MAX_LINE_CHARS = 4000;
 
 /**
+ * 需要脱敏的字段名（JSON 键或 `key=value` 形式）。
+ * 这些名字在配置文件/错误上下文里出现即视为敏感。
+ */
+const SENSITIVE_KEY_RE = /(["']?(?:api[_-]?key|db[_-]?enc[_-]?key|image[_-]?aes[_-]?key|image[_-]?xor[_-]?key|api[_-]?token|token|secret|password|passwd|authorization|cookie|credential)["']?\s*[:=]\s*)(["']?)([^\s"',}]{2,})/gi;
+/** `sk-…` 形态的 API Key（OpenAI 兼容厂商通用前缀）。 */
+const SK_TOKEN_RE = /\bsk-[A-Za-z0-9_-]{4,}/g;
+/** `Bearer <token>`。 */
+const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/-]{6,}=*/gi;
+/** 16 进制长串（≥16 位，覆盖 32/64 位密钥）。 */
+const HEX_RE = /\b[0-9a-fA-F]{16,}\b/g;
+
+/**
+ * 给一行文本脱敏。**单一收口点**：所有落盘内容都先过这里。
+ *
+ * 为什么必须有：`JSON.parse` 的报错会带出错位置附近的**源码片段**
+ * （`Unexpected token 'x', ..."apiKey":sk-live-AB"... is not valid JSON`），
+ * 于是「损坏的 llm.json/config.json」的告警会把密钥前若干位带进日志；
+ * 而导出诊断日志是把日志原样交给支持人员的 —— 等于新开了一条外发通道。
+ * 另外任何将来 dump 对象的日志点也会被这里兜住。
+ * @param {string} text - 原始文本。
+ * @returns {string} 脱敏后的文本。
+ */
+function redact(text) {
+  return String(text)
+    // 顺序有意：`Bearer <token>` 与 `sk-…` 必须先处理。否则键值规则会把
+    // `authorization: Bearer` 里的 "Bearer" 当成值吃掉，把真 token 留在后面。
+    .replace(BEARER_RE, 'Bearer ***')
+    .replace(SK_TOKEN_RE, 'sk-***')
+    .replace(SENSITIVE_KEY_RE, (_m, prefix, quote) => `${prefix}${quote}***`)
+    .replace(HEX_RE, '***');
+}
+
+/**
  * 建一个日志器。
  * @param {{ dir: string, file?: string, maxBytes?: number, maxFiles?: number, now?: () => Date }} opts
  *   dir 必须给；其余可选（maxBytes/maxFiles 便于测试用极小值）。
@@ -55,6 +88,13 @@ function createDiagLog(opts = {}) {
   /** app.log → app.1.log → …，并丢掉最旧的一份。 */
   const rotate = () => {
     try {
+      if (maxFiles === 1) {
+        // 只保留一份时没有「更旧的份」可搬 —— 直接截断当前文件，
+        // 否则这个分支一次都不执行、文件会无上界增长（评审实测 maxBytes=500 写到 27KB）。
+        fs.writeFileSync(fileAt(0), '', 'utf8');
+        size = 0;
+        return;
+      }
       for (let i = maxFiles - 1; i >= 1; i -= 1) {
         const from = fileAt(i - 1);
         const to = fileAt(i);
@@ -75,11 +115,11 @@ function createDiagLog(opts = {}) {
    * @param {unknown[]} args - console 风格的参数。
    * @returns {string} 单行文本。
    */
-  const format = (args) => args.map((a) => {
+  const format = (args) => redact(args.map((a) => {
     if (a instanceof Error) return a.stack || `${a.name}: ${a.message}`;
     if (typeof a === 'string') return a;
     try { return JSON.stringify(a); } catch { return String(a); }
-  }).join(' ').slice(0, MAX_LINE_CHARS);
+  }).join(' ')).slice(0, MAX_LINE_CHARS);
 
   /**
    * 追加一行。
@@ -158,4 +198,5 @@ module.exports = {
   buildDiagnosticReport,
   createDiagLog,
   installConsoleCapture,
+  redact,
 };

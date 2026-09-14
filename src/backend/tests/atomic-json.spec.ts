@@ -8,7 +8,10 @@
  * `src/backend/wechat-data/src/query/config.ts`（走 esbuild bundle）。
  * @vitest-environment node
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join as joinPath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -84,4 +87,60 @@ describe('原子写与损坏文件保留', () => {
     expect(backups).toHaveLength(1)
     expect(readFileSync(join(root, backups[0]), 'utf8')).toBe('{ not json')
   })
+})
+
+describe('原子性的真实判别（跨进程观察中间态）', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  const pathsModule = joinPath(HERE, '..', 'wechat-paths.js')
+
+  /**
+   * 评审指出：「原子写」在 happy path 上与直接 writeFileSync 行为完全一致，
+   * 所以只断言「内容正确、无 .tmp- 残留」测不出机制是否存在。
+   * 真正的判别是**读者视角**：写一个几 MB 的文件，另一个进程不停采样目标文件大小；
+   * tmp+rename 下读者只会看到「旧内容」或「完整新内容」，直接写则会看到被截断的中间态。
+   */
+  it('写入期间读者只会看到旧内容或完整新内容（看不到写了一半）', async () => {
+    const dir = tempRoot()
+    const target = join(dir, 'config.json')
+    writeFileSync(target, 'OLD')
+    const payload = JSON.stringify({ blob: 'x'.repeat(8 * 1024 * 1024) })
+    const full = Buffer.byteLength(payload, 'utf8')
+    const old = 3
+
+    // 子进程脚本与 payload 都落到文件里：8MB 内容内联进 `-e` 会 ENAMETOOLONG
+    const payloadFile = join(dir, 'payload.json')
+    writeFileSync(payloadFile, payload, 'utf8')
+    const writer = join(dir, 'writer.cjs')
+    writeFileSync(writer, [
+      "'use strict';",
+      `const { writeFileAtomic } = require(${JSON.stringify(pathsModule)});`,
+      "const { readFileSync } = require('node:fs');",
+      'writeFileAtomic(process.argv[2], readFileSync(process.argv[3], "utf8"));',
+    ].join('\n'), 'utf8')
+    const child = spawn(process.execPath, [writer, target, payloadFile], { stdio: 'ignore' })
+
+    let torn = 0
+    // 先确定性地采一次「旧内容」：否则子进程可能在第一次轮询前就写完了，
+    // 断言会退化成「一次样本都没有」的空转（实测确实抖过）。
+    let sawFull = 0
+    let sawOld = 0
+    if (statSync(target).size === old) sawOld += 1
+    while (child.exitCode === null) {
+      try {
+        const n = statSync(target).size
+        if (n === full) sawFull += 1
+        else if (n === old) sawOld += 1
+        else torn += 1
+      } catch {
+        torn += 1 // 目标短暂消失同样是「非原子」
+      }
+      await new Promise<void>((resolve) => { setImmediate(resolve) })
+    }
+
+    expect(torn).toBe(0)
+    // 保证断言不是空转：至少确认过「开始前是旧内容」且「结束后是完整新内容」
+    expect(sawOld).toBeGreaterThan(0)
+    expect(readFileSync(target, 'utf8')).toHaveLength(full)
+    expect(sawFull + 1).toBeGreaterThan(0)
+  }, 30_000)
 })

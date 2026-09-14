@@ -4425,6 +4425,22 @@ function writeFileAtomic(target, text) {
     throw e;
   }
 }
+var MAX_CORRUPT_BACKUPS = 3;
+var corruptSeq = 0;
+function pruneCorruptBackups(target) {
+  try {
+    const dir = dirname2(target);
+    const prefix = basename(target) + ".corrupt-";
+    const all = readdirSync6(dir).filter((f) => f.startsWith(prefix)).map((f) => ({ f, t: statSync5(join17(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+    for (const { f } of all.slice(MAX_CORRUPT_BACKUPS)) {
+      try {
+        rmSync(join17(dir, f), { force: true });
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 function preserveIfUnparseable(target) {
   let text;
   try {
@@ -4436,10 +4452,12 @@ function preserveIfUnparseable(target) {
     JSON.parse(text);
     return;
   } catch {
-    const backup = `${target}.corrupt-${Date.now()}`;
+    corruptSeq += 1;
+    const backup = `${target}.corrupt-${Date.now()}-${process.pid}-${corruptSeq}`;
     try {
       renameSync(target, backup);
       console.warn(`[config] ${basename(target)} \u5185\u5BB9\u4E0D\u662F\u5408\u6CD5 JSON\uFF0C\u5DF2\u5907\u4EFD\u4E3A ${basename(backup)} \u540E\u91CD\u5199`);
+      pruneCorruptBackups(target);
     } catch (e) {
       console.warn(`[config] ${basename(target)} \u635F\u574F\u4E14\u65E0\u6CD5\u5907\u4EFD\uFF1A${e.message}`);
     }
@@ -5189,7 +5207,7 @@ async function syncContactDb(rawDbDir, decryptedDir, lastState, rawKeyHex, keyFo
         if (walPages > 0) return [`contact.db:wal(w${walPages})`];
         return [];
       } finally {
-        for (const f of [stagingWal, temp]) {
+        for (const f of [stagingDb, stagingWal, temp]) {
           try {
             await unlink(f);
           } catch {
@@ -8649,7 +8667,8 @@ async function win32Api() {
       return await buildApi();
     } catch (e) {
       throw new Error(
-        "\u5185\u5B58\u626B\u63CF\u7EC4\u4EF6 koffi \u521D\u59CB\u5316\u5931\u8D25\uFF1A" + (e.message || String(e)) + "\u3002\u5E38\u89C1\u539F\u56E0\uFF1A\u5B89\u88C5\u5305\u7F3A\u5C11 win32 \u539F\u751F\u4E8C\u8FDB\u5236\u3001\u6740\u6BD2\u8F6F\u4EF6\u62E6\u622A\u4E86 DLL \u89E3\u5305\u3001\u6216\u7CFB\u7EDF\u4E0D\u662F x64\u3002\u53EF\u5148\u7528\u300C\u624B\u52A8\u586B\u5199\u5BC6\u94A5\u300D\u6D41\u7A0B\u7EE7\u7EED\u3002"
+        "\u5185\u5B58\u626B\u63CF\u7EC4\u4EF6 koffi \u521D\u59CB\u5316\u5931\u8D25\uFF1A" + (e.message || String(e)) + "\u3002\u5E38\u89C1\u539F\u56E0\uFF1A\u5B89\u88C5\u5305\u7F3A\u5C11 win32 \u539F\u751F\u4E8C\u8FDB\u5236\u3001\u6740\u6BD2\u8F6F\u4EF6\u62E6\u622A\u4E86 DLL \u89E3\u5305\u3001\u6216\u7CFB\u7EDF\u4E0D\u662F x64\u3002\u53EF\u5148\u7528\u300C\u624B\u52A8\u586B\u5199\u5BC6\u94A5\u300D\u6D41\u7A0B\u7EE7\u7EED\u3002",
+        { cause: e }
       );
     }
   })();

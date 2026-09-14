@@ -606,7 +606,9 @@ export async function syncContactDb(
         if (walPages > 0) return [`contact.db:wal(w${walPages})`]
         return []
       } finally {
-        for (const f of [stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
+        // stagingDb 也要清：正常路径它被 atomicReplace 消费掉了，但 atomicReplace
+        // 抛错时（目标被读者占用超过重试窗口）它会以一份**完整快照副本**留在盘上。
+        for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
       }
     }
     await copyFile(rawDb, stagingDb)

@@ -48,6 +48,7 @@ const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-cat
 const licenseService = require('./src/license/service');
 const { getDeviceFingerprint } = require('./src/license/fingerprint');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
+const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
 
 // ── userData 隔离（必须在任何 getPath / 单实例锁之前）────────────────────
 // 安装版原本和开发态共用 `<APPDATA>\super-time-electron`（package.json 没有顶层
@@ -71,10 +72,8 @@ const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') }
 // 崩溃之后什么都没留下。这里在 STATE_DIR/logs 下落一份带轮转的日志，
 // 并把 console 也接进去（**在这之后**装：console-safe 那层管道坏了会直接 return，
 // 顺序反了日志会跟着一起没）。
-const diagLog = require('./src/backend/diag-log').createDiagLog({
-  dir: path.join(STATE_DIR, 'logs'),
-});
-require('./src/backend/diag-log').installConsoleCapture(diagLog);
+const diagLog = createDiagLog({ dir: path.join(STATE_DIR, 'logs') });
+installConsoleCapture(diagLog);
 process.on('uncaughtException', (e) => {
   // 崩溃必须留痕：这是「用户说打不开，我们却什么都没有」的唯一补救。
   try { diagLog.write('fatal', ['uncaughtException', e]); } catch { /* 日志自己绝不抛 */ }
@@ -162,11 +161,31 @@ const LONG_CALL_TIMEOUT_MS = Number(process.env.SUPERTIME_LONG_CALL_TIMEOUT_MS) 
  * @param onExit - 进程退出回调，交给监管器决定是否重建（init 期间也会触发）。
  */
 function spawnBackendProcess(userDataPath, onExit) {
+  // stdio: 'pipe'（原来是 'inherit'）。原因：后端是**独立进程**，它那些
+  // `[wechat-sync]` / `[config]` / 重试日志都写在自己的 stdout/stderr 上；
+  // 'inherit' 时这些字节进的是主进程的那条管道，而 GUI 态那条管道是断的、
+  // console-safe 会静默 —— 于是「打不开」这类最可能来自后端的报障，我们手上什么都没留下。
+  // 这里把两条流转进文件日志，同时转写一份到本进程的标准流（保持开发态可见性）。
+  // RPC 不受影响：它与后端之间走 process.parentPort，与 stdio 无关。
   const child = utilityProcess.fork(
     path.join(__dirname, 'src', 'backend', 'wechat-worker.js'),
     [],
-    { serviceName: 'super-time-wechat-backend', stdio: 'inherit' }
+    { serviceName: 'super-time-wechat-backend', stdio: 'pipe' }
   );
+  for (const [stream, level, target] of [
+    [child.stdout, 'backend', process.stdout],
+    [child.stderr, 'backend!', process.stderr],
+  ]) {
+    if (!stream || typeof stream.on !== 'function') continue;
+    stream.on('data', (chunk) => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        if (line.trim() === '') continue;
+        diagLog.write(level, [line]);
+        // 直接写进程流而不是 console：console 已经被接管，会重复落进文件一遍。
+        try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
+      }
+    });
+  }
   return createWorkerChannel(child, {
     userDataPath,
     onEvent: (name, args) => broadcastWechatEvent(name, args),
@@ -524,7 +543,7 @@ app.whenReady().then(async () => {
         if (result.canceled || !result.filePath) return { ok: false, canceled: true };
         dest = result.filePath;
       }
-      const report = require('./src/backend/diag-log').buildDiagnosticReport(diagLog, {
+      const report = buildDiagnosticReport(diagLog, {
         app: APP_VERSION,
         electron: process.versions.electron,
         chrome: process.versions.chrome,

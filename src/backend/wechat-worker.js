@@ -29,6 +29,11 @@ require('./console-safe').install();
 
 const { createWechatBackend } = require('./wechat-host');
 
+// 后端进程启动留痕（主进程会把这一行转进 <STATE_DIR>/logs/app.log）。
+// 为什么值得常驻一条：后端是独立进程 —— 它静默没起来、或起来又立刻死了，
+// 界面上只表现成「功能不可用」；有一条带 pid 的启动行才好判断。
+console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=' + process.versions.node);
+
 let backend = null;
 
 /** 向父进程回传；父进程已退出时静默忽略。 */

@@ -1200,6 +1200,7 @@ export async function apiRevealDiagLog(): Promise<{ ok: boolean; path?: string; 
   return api.diag.revealLog()
 }
 
+/** 弹出保存对话框并返回选定路径（写盘由后端做）。 */
 export async function apiSaveFileDialog(opts: {
   defaultName?: string; title?: string; filters?: Array<{ name: string; extensions: string[] }>
 }): Promise<{ canceled: boolean; path: string | null }> {
