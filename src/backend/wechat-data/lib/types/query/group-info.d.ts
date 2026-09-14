@@ -22,4 +22,3 @@ export declare function parseChatRoomExtBuffer(raw: Buffer): ChatRoomSnapshotMem
  * @returns snapshot with the group (null when the chatroom is unknown).
  */
 export declare function queryGroupInfo(decryptedDir: string, username: string, selfUsername?: string): GroupInfoSnapshot;
-//# sourceMappingURL=group-info.d.ts.map

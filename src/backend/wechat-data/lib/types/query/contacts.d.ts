@@ -13,4 +13,3 @@ export declare function queryContacts(decryptedDir: string, options?: ContactsPa
     total: number;
     stats: Record<string, number>;
 };
-//# sourceMappingURL=contacts.d.ts.map

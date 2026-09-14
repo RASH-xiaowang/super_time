@@ -29,4 +29,3 @@ export declare class Isaac64 {
      */
     generateKeystream(size: number, wordFormat?: 'raw_le' | 'raw_be' | 'be_swap32' | 'le_swap32'): Buffer;
 }
-//# sourceMappingURL=isaac64.d.ts.map

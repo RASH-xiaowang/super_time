@@ -7,4 +7,3 @@ export declare function resolveImageKeyPair(decrypted: string): {
     aesKey: string;
     xorKey: number;
 };
-//# sourceMappingURL=image-key.d.ts.map

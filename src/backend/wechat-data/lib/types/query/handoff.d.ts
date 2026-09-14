@@ -11,4 +11,3 @@ export declare function listHandoffReminds(decryptedDir: string): HandoffReminds
  * @returns mutation result with added count.
  */
 export declare function importHandoffTasks(decryptedDir: string): TaskMutationResult;
-//# sourceMappingURL=handoff.d.ts.map

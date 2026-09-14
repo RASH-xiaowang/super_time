@@ -50,11 +50,11 @@ export declare function exportMoments(decryptedDir: string, opts?: {
     to?: number;
     dir?: string;
     filename?: string;
-}): {
+}): Promise<{
     path: string;
     filename: string;
     count: number;
-};
+}>;
 /**
  * Export ALL sessions as a single txt ZIP archive (账号归档).
  * @param decryptedDir - decrypted data root.
@@ -64,9 +64,8 @@ export declare function exportMoments(decryptedDir: string, opts?: {
 export declare function exportAllSessions(decryptedDir: string, opts?: {
     dir?: string;
     filename?: string;
-}): {
+}): Promise<{
     path: string;
     filename: string;
     count: number;
-};
-//# sourceMappingURL=export.d.ts.map
+}>;

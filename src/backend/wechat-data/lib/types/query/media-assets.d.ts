@@ -5,4 +5,3 @@ import type { MediaAssetsSnapshot } from '../types.ts';
  * @returns the media assets snapshot.
  */
 export declare function queryMediaAssets(decryptedDir: string): MediaAssetsSnapshot;
-//# sourceMappingURL=media-assets.d.ts.map

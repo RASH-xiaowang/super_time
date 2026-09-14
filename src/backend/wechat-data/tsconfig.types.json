@@ -1,0 +1,12 @@
+{
+  "//": "生成 lib/types/**/*.d.ts 的配置（CI 用它做一致性门禁）。只能产声明、不能产 JS：源码用 `import './x.ts'` 形式，tsconfig.base.json 的 allowImportingTsExtensions 要求 noEmit 或 emitDeclarationOnly。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "outDir": "lib/types"
+  }
+}

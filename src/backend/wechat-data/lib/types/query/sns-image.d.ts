@@ -2,4 +2,3 @@ export declare function resolveSnsImageDataUrl(wechatBaseDir: string | undefined
     url?: string;
     error?: string;
 };
-//# sourceMappingURL=sns-image.d.ts.map

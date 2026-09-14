@@ -6,4 +6,3 @@
 export declare function queryAnnual(decryptedDir: string): {
     years: number[];
 };
-//# sourceMappingURL=annual.d.ts.map

@@ -25,4 +25,24 @@ export declare function silkToWav(silk: Buffer, wavPath: string): {
     ok: boolean;
     error?: string;
 };
-//# sourceMappingURL=voice.d.ts.map
+/**
+ * 一条语音消息 → 可就地播放的 wav data URL。
+ *
+ * 复用**转写链路的缓存目录** `<decoded>/voices/<svr_id>.wav`（`voice-transcribe.ts` 也写这里），
+ * 两边共用同一份产物：命中缓存 0ms；未命中才调打包的 wx_silk 解码（本机实测 **13ms**，
+ * 16kHz 单声道下发 3.5 秒 ≈ 145KB / 51 秒 ≈ 2.1MB 的 base64，语音上限 60 秒，量级可接受）。
+ *
+ * 为什么用 data URL 而不是 `file://`：渲染进程 CSP 是 `media-src 'self' data: blob:`，
+ * **不含 `file:`**，站内 `<audio src="file://…">` 会被直接拦掉。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param decodedDir - decoded cache root (wav 落在其 voices/ 下).
+ * @param username - conversation username.
+ * @param localId - message local id.
+ * @returns url (base64 wav) + durationSec, or an error description.
+ */
+export declare function resolveVoiceDataUrl(decryptedDir: string, decodedDir: string, username: string, localId: number): {
+    url?: string;
+    durationSec?: number;
+    error?: string;
+};

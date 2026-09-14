@@ -186,6 +186,9 @@ export type MessageRenderKind =
   | 'product' | 'card' | 'note' | 'sticker' | 'announcement' | 'solitaire'
   | 'chatlog' | 'transfer' | 'redpacket' | 'voip' | 'pat'
   | 'system' | 'revoke' | 'empty' | 'unknown'
+  // 与 parse.ts 的 RenderKind 是同一套取值，两处必须同步。
+  // 'unsupported' 缺了很久：后端 RICH_TO_RENDER 会产出它，渲染端也已有对应分支。
+  | 'unsupported'
 
 /** One 群消息 @ 提及对象（用户名 + 可展示的昵称）。 */
 export interface MessageAtUser {
@@ -2016,5 +2019,13 @@ declare module '@deepseek-ai/cordis' {
      * @param shards - message shard file names that were updated.
      */
     'wechat-data/updated'(shards: string[]): void
+    /**
+     * 微信问答的流式回答增量：payload 是 `{ id, text }`，`id` 为本次流式请求的标识
+     * （由客户端在调用 askWechat 时生成），渲染端按 id 把增量拼起来。
+     * 由 `gateway.ts` 的流式回调发出、`src/client/ui-app/ui-entry.tsx` 消费。
+     * @mode emit
+     * @param payload - 流式标识与本次新增的文本片段。
+     */
+    'wechat-ask/delta'(payload: { id: string; text: string }): void
   }
 }

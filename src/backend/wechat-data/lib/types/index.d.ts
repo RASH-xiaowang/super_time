@@ -9,4 +9,3 @@ export { WechatDataGateway } from './gateway.ts';
  * @param ctx - Cordis context.
  */
 export declare function apply(ctx: Context): void;
-//# sourceMappingURL=index.d.ts.map

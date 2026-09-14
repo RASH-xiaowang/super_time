@@ -6,4 +6,3 @@ import type { GroupInsightsSnapshot } from '../types.ts';
  * @returns the insights snapshot.
  */
 export declare function queryGroupInsights(decryptedDir: string, username: string): GroupInsightsSnapshot;
-//# sourceMappingURL=group-insights.d.ts.map

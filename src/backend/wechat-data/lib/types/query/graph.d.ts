@@ -6,4 +6,3 @@ import type { GraphSnapshot } from '../types.ts';
  * @returns nodes + summary (edges derived client-side from group_codes).
  */
 export declare function queryGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot;
-//# sourceMappingURL=graph.d.ts.map

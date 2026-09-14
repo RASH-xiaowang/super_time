@@ -5,4 +5,3 @@
  * @returns the annual report.
  */
 export declare function queryAnnualReport(decryptedDir: string, year: number): Record<string, unknown>;
-//# sourceMappingURL=annual-report.d.ts.map

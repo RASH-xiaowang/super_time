@@ -1,1 +1,0 @@
-{"version":3,"file":"media-video.d.ts","sourceRoot":"","sources":["../../../src/query/media-video.ts"],"names":[],"mappings":"AAyBA;;;;;;;;GAQG;AACH,wBAAgB,gBAAgB,CAC9B,YAAY,EAAE,MAAM,EACpB,UAAU,EAAE,MAAM,EAClB,QAAQ,EAAE,MAAM,EAChB,OAAO,EAAE,MAAM,GACd;IAAE,SAAS,EAAE,OAAO,CAAC;IAAC,GAAG,CAAC,EAAE,MAAM,CAAC;IAAC,QAAQ,CAAC,EAAE,MAAM,CAAC;IAAC,KAAK,CAAC,EAAE,MAAM,CAAA;CAAE,CAoCzE"}

@@ -7,4 +7,3 @@ import type { UnifiedSearchSnapshot } from '../types.ts';
  * @returns the unified snapshot.
  */
 export declare function searchUnified(decryptedDir: string, query: string, limit?: number): UnifiedSearchSnapshot;
-//# sourceMappingURL=unified-search.d.ts.map

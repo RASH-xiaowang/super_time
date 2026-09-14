@@ -10,4 +10,3 @@ export declare function searchMembers(decryptedDir: string, q: string, opts?: {
     limit?: number;
     roomUsername?: string;
 }): MemberSearchSnapshot;
-//# sourceMappingURL=members.d.ts.map

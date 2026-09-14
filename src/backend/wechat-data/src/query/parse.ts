@@ -193,6 +193,9 @@ export type RenderKind =
   | 'product' | 'card' | 'note' | 'sticker' | 'announcement' | 'solitaire'
   | 'chatlog' | 'transfer' | 'redpacket' | 'voip' | 'pat'
   | 'system' | 'revoke' | 'empty' | 'unknown'
+  // 读不出类型/渲染不了的 appmsg：RICH_TO_RENDER 里 `unsupported` 就映射到它，
+  // 渲染端也已有对应分支。原先漏了这个成员，于是映射表本身过不了类型检查。
+  | 'unsupported'
 
 /** rich.type → renderType（卡片型子类型一一对应）。 */
 const RICH_TO_RENDER: Record<string, RenderKind> = {
@@ -254,7 +257,7 @@ export const RENDER_LABEL: Record<RenderKind, string> = {
   product: '商品', card: '卡片', note: '笔记', sticker: '表情', announcement: '群公告',
   solitaire: '接龙', chatlog: '聊天记录', transfer: '转账', redpacket: '红包',
   voip: '通话', pat: '拍一拍', system: '系统消息', revoke: '撤回消息',
-  empty: '无内容消息', unknown: '未知消息',
+  empty: '无内容消息', unknown: '未知消息', unsupported: '暂不支持的消息',
 }
 
 /**

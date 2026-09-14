@@ -14,6 +14,18 @@ export interface ContactMeta {
     bizTypes: Map<string, number>;
 }
 /**
+ * `biz_info.type` 是否为**服务号**（否则该 `gh_` 账号是订阅号/公众号）。
+ *
+ * 这个判据必须**全局唯一**：聊天列表（`sessions.ts`）与通讯录（`contacts.ts`）
+ * 各自写一份就会出现「同一个账号在聊天里算服务号、在通讯录里算公众号」，
+ * 也就是同一个账号出现在两个类目下、或两边都看不到它。
+ * 实测本机 `biz_info.type` 只有 0（订阅号）与 1（服务号）；1/3/5 是微信
+ * 文档里服务号用过的取值，2/4 属订阅号，因此不能简化成 `type > 0`。
+ * @param t - `biz_info.type`（缺失时为 undefined）。
+ * @returns 是服务号时为 true。
+ */
+export declare function isServiceBizType(t: number | undefined): boolean;
+/**
  * Read contact.db once and derive all contact metadata.
  * @param decryptedDir - decrypted data root.
  * @returns contact names (remark > nick > username), pinned set, biz types.
@@ -49,4 +61,3 @@ export declare function cachedBySig<T>(key: string, sig: string, loader: () => T
 export declare function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap?: number): void;
 /** Drop every cached snapshot (called after a rewrite event when needed). */
 export declare function invalidateWechatMeta(): void;
-//# sourceMappingURL=meta.d.ts.map

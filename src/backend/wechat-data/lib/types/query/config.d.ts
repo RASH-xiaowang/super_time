@@ -123,4 +123,3 @@ export declare function resolveSelfUsername(decryptedDir: string): string;
  * @returns the raw db_storage path, or '' when it cannot be resolved.
  */
 export declare function resolveRawDbDir(decryptedDir: string, env?: Record<string, string | undefined>): string;
-//# sourceMappingURL=config.d.ts.map

@@ -7,4 +7,3 @@ import type { LedgerSnapshot } from '../types.ts';
  * @returns the ledger snapshot.
  */
 export declare function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): LedgerSnapshot;
-//# sourceMappingURL=ledger.d.ts.map

@@ -8,6 +8,11 @@ export interface BatchDecryptResult {
         file: string;
         error: string;
     }>;
+    /** 跳过项的原因（已存在缓存 / HEVC 暂不支持 / 格式不支持…），供界面说明「为什么少了几张」。 */
+    skippedDetails?: Array<{
+        file: string;
+        reason: string;
+    }>;
 }
 /**
  * Decrypt every md5-prefixed .dat under `<rawRoot>/msg/attach` into the
@@ -21,4 +26,3 @@ export interface BatchDecryptResult {
  * @returns total/ok/failed/skipped counts + per-file errors.
  */
 export declare function decryptAllImageDats(rawRoot: string, decodedDir: string, aesKey: string | undefined, xorKey: number, concurrency?: number, onProgress?: (processed: number, total: number, failed: number, message: string) => void): Promise<BatchDecryptResult>;
-//# sourceMappingURL=decrypt-images.d.ts.map

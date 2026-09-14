@@ -106,4 +106,3 @@ export declare function listSummaryRecords(decryptedDir: string, taskId?: number
     items: SummaryRecord[];
     total: number;
 };
-//# sourceMappingURL=summary-tasks.d.ts.map

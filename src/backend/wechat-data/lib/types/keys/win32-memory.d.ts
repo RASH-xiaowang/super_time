@@ -63,4 +63,3 @@ export declare function enumerateScannableRegions(pid: number): Promise<{
  */
 export declare function readProcessMemory(pid: number, address: number, size: number): Promise<Buffer>;
 export { PROCESS_VM_READ, PROCESS_QUERY_INFORMATION, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, };
-//# sourceMappingURL=win32-memory.d.ts.map

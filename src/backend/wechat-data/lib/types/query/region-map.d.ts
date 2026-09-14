@@ -5,4 +5,3 @@ import type { RegionMapSnapshot } from '../types.ts';
  * @returns the region map snapshot (world → countries → provinces → cities).
  */
 export declare function queryRegionMap(decryptedDir: string): RegionMapSnapshot;
-//# sourceMappingURL=region-map.d.ts.map

@@ -393,7 +393,8 @@ var RENDER_LABEL = {
   system: "\u7CFB\u7EDF\u6D88\u606F",
   revoke: "\u64A4\u56DE\u6D88\u606F",
   empty: "\u65E0\u5185\u5BB9\u6D88\u606F",
-  unknown: "\u672A\u77E5\u6D88\u606F"
+  unknown: "\u672A\u77E5\u6D88\u606F",
+  unsupported: "\u6682\u4E0D\u652F\u6301\u7684\u6D88\u606F"
 };
 function classifyRender(msgType, rich, sysKind) {
   if (msgType === 1e4) return sysKind === "revoke" ? "revoke" : "system";
@@ -10731,13 +10732,17 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 import vm from "node:vm";
 var SNS_HEAD_ENCRYPTED_BYTES = 131072;
 var HERE = dirname11(fileURLToPath4(import.meta.url));
+function processResourcesPath() {
+  const p = process.resourcesPath;
+  return typeof p === "string" ? p : "";
+}
 function resolveAssetDir() {
   const candidates = [
     join43(HERE, "..", "native", "weflow-isaac64"),
     // 构建产物：lib/ → wechat-data/native
     join43(HERE, "..", "..", "native", "weflow-isaac64"),
     // 源码布局：src/query/ → wechat-data/native
-    join43(process.resourcesPath ?? "", "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64")
+    join43(processResourcesPath(), "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64")
   ];
   for (const c of candidates) {
     try {
@@ -13567,7 +13572,7 @@ function listFeedback(decryptedDir, limit = 100) {
       citedUseful: safeJson(r["cited_useful"]),
       citedUseless: safeJson(r["cited_useless"]),
       intent: String(r["intent"]),
-      features: safeJson(r["features"]),
+      features: safeJsonKeys(r["features"]),
       createdAt: Number(r["created_at"] ?? 0)
     }));
   } finally {
@@ -13578,6 +13583,14 @@ function safeJson(v) {
   try {
     const p = JSON.parse(String(v ?? "[]"));
     return Array.isArray(p) ? p.map(Number).filter((n) => Number.isFinite(n)) : [];
+  } catch {
+    return [];
+  }
+}
+function safeJsonKeys(v) {
+  try {
+    const p = JSON.parse(String(v ?? "[]"));
+    return Array.isArray(p) ? p.map(String).filter((s) => s.length > 0) : [];
   } catch {
     return [];
   }
@@ -18170,10 +18183,19 @@ var WechatDataGateway = class extends (_a = TypertRemoteService, _getSessions_de
       scope.from ? `\u8D77 ${scope.from}` : "",
       scope.to ? `\u6B62 ${scope.to}` : ""
     ].filter(Boolean).join(" ") || "\u5168\u5E93";
-    let citations;
-    let chunks;
-    let terms;
-    let statsCompat;
+    let citations = [];
+    let chunks = [];
+    let terms = [];
+    let statsCompat = {
+      candidates: 0,
+      kept: 0,
+      scope: scopeDescText,
+      recency: false,
+      timeHint: "",
+      hintHits: 0,
+      chunks: 0,
+      windowMessages: 0
+    };
     let rankedFeatures = [];
     let retrievalId = "";
     const legacyRetrieve = () => {

@@ -23,4 +23,3 @@ export declare function clearAllSessionDrafts(decryptedDir: string): {
     count: number;
     error?: string;
 };
-//# sourceMappingURL=drafts.d.ts.map

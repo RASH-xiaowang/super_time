@@ -51,4 +51,3 @@ export declare function deleteFavoriteItems(decryptedDir: string, ids: number[])
     error?: string;
 };
 export {};
-//# sourceMappingURL=favorites.d.ts.map

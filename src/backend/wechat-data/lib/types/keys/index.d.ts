@@ -12,4 +12,3 @@ export { cleanWxid, deriveImageKeys, verifyAesKey, detectImageFormat, inferXorKe
 export { loadAccountKeysStore, getAccountKeysFromStore, upsertAccountKeysInStore, removeAccountKeysFromStore, keyStorePath, } from './key-store.ts';
 export { findWechatPid, scanDllInternalKey, fetchDbKey, fetchImageKey, getKeysInfoSummary, } from './service.ts';
 export type { DbKeyResult, ImageKeyResult, KeyStore, StoredAccountKeys } from './types.ts';
-//# sourceMappingURL=index.d.ts.map

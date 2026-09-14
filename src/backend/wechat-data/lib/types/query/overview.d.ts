@@ -32,4 +32,3 @@ export interface OverviewResult {
  */
 export declare function queryOverview(decryptedDir: string): OverviewResult;
 export {};
-//# sourceMappingURL=overview.d.ts.map

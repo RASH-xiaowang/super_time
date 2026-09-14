@@ -15,4 +15,3 @@ export interface DllKeyCandidate {
  * @returns candidates sorted by virtual address.
  */
 export declare function extractXorKeysFromDll(dllPath: string): DllKeyCandidate[];
-//# sourceMappingURL=dll-key-scan.d.ts.map

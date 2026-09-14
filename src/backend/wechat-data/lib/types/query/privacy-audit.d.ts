@@ -22,4 +22,3 @@ export declare function listPrivacyAudit(decryptedDir: string, limit?: number): 
 export declare function clearPrivacyAudit(decryptedDir: string): PrivacyAuditClearResult;
 /** Redact common sensitive fields (phone/id/bank/email/password) from prompt text. */
 export declare function redactSensitiveText(text: string): string;
-//# sourceMappingURL=privacy-audit.d.ts.map

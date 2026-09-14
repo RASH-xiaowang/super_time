@@ -284,6 +284,8 @@ export interface WechatRemote {
   getPaymentStatus(options: { serverId: string }): Promise<RemoteResult<PaymentStatus>>
   getDailyCounts(options: { username: string; year: number; month: number }): Promise<RemoteResult<CalendarSnapshot>>
   getImageDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<ImageDataUrlResult>>
+  /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
+  getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
@@ -344,6 +346,10 @@ export interface WechatRemote {
     dir?: string
     filename?: string
   }): Promise<RemoteResult<ExportResult>>
+  /** 导出朋友圈视频到指定路径（后端负责解密与写盘）。 */
+  exportSnsVideo(options: {
+    md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
+  }): Promise<RemoteResult<{ ok: boolean; bytes?: number; source?: string; error?: string }>>
   clearSessionDraft(options: { username: string }): Promise<RemoteResult<DraftClearResult>>
   clearAllSessionDrafts(): Promise<RemoteResult<DraftsClearResult>>
   listSummaryTasks(): Promise<RemoteResult<SummaryTaskSnapshot>>
@@ -1946,8 +1952,8 @@ export interface AnnualEmoji {
   peakDow: number; peakHour: number; peakCount: number
   top: Array<{ emoji: string; count: number }>
 }
-/** 「还有这些人」。 */
-export interface AnnualHighlight { label: string; name: string; value: string }
+/** 「还有这些人」。`username` 用于点头像/跳会话（后端 annual-review.ts 一直在发，这里漏了）。 */
+export interface AnnualHighlight { label: string; name: string; username: string; value: string }
 
 /** 年度回顾完整结果。 */
 export interface AnnualReviewShape {
@@ -1959,7 +1965,7 @@ export interface AnnualReviewShape {
   busiest: AnnualBusiestDay | null
   buddy: AnnualBuddy | null
   monthlyStar: AnnualMonthlyStar[]
-  starName: string; starMonths: number; hottestMonth: number; hottestMonthCount: number
+  starName: string; starUsername: string; starMonths: number; hottestMonth: number; hottestMonthCount: number
   night: AnnualNight
   rhythm: AnnualRhythm
   words: AnnualWords

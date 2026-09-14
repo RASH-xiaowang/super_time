@@ -67,7 +67,7 @@ export function listFeedback(decryptedDir: string, limit = 100): FeedbackRecord[
       citedUseful: safeJson(r['cited_useful']),
       citedUseless: safeJson(r['cited_useless']),
       intent: String(r['intent']) as FeedbackRecord['intent'],
-      features: safeJson(r['features']) as FeedbackRecord['features'],
+      features: safeJsonKeys(r['features']) as FeedbackRecord['features'],
       createdAt: Number(r['created_at'] ?? 0),
     }))
   } finally {
@@ -79,6 +79,22 @@ function safeJson(v: unknown): number[] {
   try {
     const p = JSON.parse(String(v ?? '[]'))
     return Array.isArray(p) ? p.map(Number).filter(n => Number.isFinite(n)) : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 读回**字符串数组**（`features` 存的是 `RerankWeights` 的键名，不是数字）。
+ *
+ * 之前这里误用了 `safeJson`：它对每个元素做 `Number()` 再滤掉非有限值，于是
+ * `["hasMedia","recency"]` → `[]` —— 读回来的 features 永远是空数组，`adaptWeights`
+ * 里的循环一次都不执行，**反馈学习（点赞/点踩调权重）实际完全失效**。
+ */
+function safeJsonKeys(v: unknown): string[] {
+  try {
+    const p = JSON.parse(String(v ?? '[]'))
+    return Array.isArray(p) ? p.map(String).filter(s => s.length > 0) : []
   } catch {
     return []
   }

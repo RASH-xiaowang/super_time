@@ -58,4 +58,3 @@ export interface StoredAccountKeys {
 }
 /** Key-store file: account id → record. */
 export type KeyStore = Record<string, StoredAccountKeys>;
-//# sourceMappingURL=types.d.ts.map

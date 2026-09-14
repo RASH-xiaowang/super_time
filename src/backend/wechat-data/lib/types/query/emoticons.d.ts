@@ -6,4 +6,3 @@ import type { EmoticonsSnapshot } from '../types.ts';
  * @returns the emoticons snapshot.
  */
 export declare function queryEmoticons(decryptedDir: string, limit?: number, offset?: number): EmoticonsSnapshot;
-//# sourceMappingURL=emoticons.d.ts.map

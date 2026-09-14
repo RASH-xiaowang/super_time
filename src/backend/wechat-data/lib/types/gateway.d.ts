@@ -5,21 +5,48 @@
  */
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { Context } from '@deepseek-ai/cordis';
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
+import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
+import { type AnnualReview } from './query/annual-review.ts';
 /** Remote-only service exposing WeChat data queries. */
 export declare class WechatDataGateway extends TypertRemoteService {
     /** Services this gateway depends on at runtime (LLM + default model). */
     static inject: string[];
     private readonly _ctx;
     private readonly _dirs;
-    private readonly _selfUsername;
+    /**
+     * 登录账号 wxid 的**带失效**缓存。
+     *
+     * 不能在构造函数里算一次就固定：`数据配置` 里切换微信账号只改 `db_dir`
+     * （解密目录不变），本进程不会重启。缓存住旧 wxid 会让 `isSender` 拿
+     * **上一个账号**的 wxid 去比对，于是新账号里每条消息的「我 / 对方」全部反转
+     * —— 属于最严重的归属错误。这里按 (解密目录, config.db_dir) 记忆：
+     * 账号一换键就变，自动重算。
+     */
+    private _selfUsername;
+    private _selfUsernameKey;
     private _schedBusy;
+    /**
+     * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
+     * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
+     * 有界（≤20 轮），不落盘 —— 纯进程内、只在反馈那一刻需要。
+     */
+    private readonly _askTrace;
     /** Live decrypt progress (polled by the settings panel). */
     private readonly decryptState;
     /** Active whisper model download (polled by the settings panel). */
     private whisperDownload;
     /** Active voice batch transcription (polled by the settings panel). */
     private whisperTranscribing;
+    /**
+     * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
+     *
+     * 按 (解密目录, config.db_dir) 记忆：只要账号没换就直接命中缓存，
+     * 换了账号（`data 配置` 里选另一个账号的 db_storage）或换了数据目录则重算。
+     * 每次取用时只多读一次 `getConfig`（带文件签名缓存的 JSON 读），代价可忽略。
+     * @returns 登录账号 wxid；解析不到时为空串。
+     */
+    private selfUsername;
     constructor(ctx: Context);
     /**
      * Append one operation-log row. Metadata only — never message bodies or
@@ -28,10 +55,45 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     private op;
     /**
+     * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
+     *
+     * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
+     * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
+     * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
+     * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
+     * @param feature - 功能名，出现在提示文案里。
+     * @returns 提示文案，或 null。
+     */
+    private privacyBlocked;
+    /**
+     * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
+     *
+     * 背景：`readPrivacySettings` / `recordPrivacyAudit` 这两个能力原本**谁都没调用** ——
+     * 「出站拦截」「敏感字段脱敏」两个开关只写进 sqlite 就没人读，`privacy_audit` 表
+     * 实测 0 行（运行期 bundle 里连 INSERT 都没有）。把闸门收敛成一个私有方法，四处
+     * 出站调用（问答／每日总结／群总结任务／周期总结）统一走它，避免「以后加了新 AI
+     * 功能又忘了过隐私」这类漏网。
+     *
+     * @param feature - 审计里的功能名（ask_wechat / daily_summary / summary_task / period_summary）。
+     * @param stats - 本次出站涉及的数据量（会话数、消息数），写进审计。
+     * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
+     * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
+     */
+    private privacyGate;
+    /**
      * Session list (search/filter/limit).
      * @param options - Filter options: keyword fuzzy search, limit max rows.
      * @returns SessionsSnapshot: sessions list (items + total).
      */
+    /**
+     * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
+     *
+     * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
+     * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
+     * @param model - 向量模型名（空则回退 chat model）。
+     * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
+     */
+    private makeEmbedFn;
     getSessions(options?: {
         keyword?: string;
         limit?: number;
@@ -75,6 +137,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * Contact / group-member search.
      * @param options - search term, optional limit and room scope.
      * @returns MemberSearchSnapshot: matching members (items + total + source).
+     * 保留理由：界面暂无入口（全局搜索走 searchUnified），保留给宿主/后续的群成员选择器。
+     *   第 96 轮补上了群内路径漏掉的 `quan_pin`/`alias`（此前「按备注全拼在群里搜人」永远搜不到），
+     *   由 `scripts/check-members-search.js` 对着真实库把关。
      */
     searchMembers(options: {
         q: string;
@@ -125,6 +190,50 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     getGraph(): GraphSnapshot;
     /**
+     * Knowledge notes list.
+     * @param options - Optional case-insensitive search query and row cap.
+     * @returns NotesSnapshot: notes (newest first) plus the unpaged total.
+     */
+    getNotes(options?: {
+        query?: string;
+        limit?: number;
+    }): NotesSnapshot;
+    /**
+     * Create (no `id`) or update (`id` given) one knowledge note.
+     *
+     * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
+     * is the join point with the social graph: the panel draws an edge from the
+     * note to its source chat instead of leaving knowledge nodes floating.
+     * @param options - Note fields; title is required and unique (case-insensitive).
+     * @returns NoteMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
+     */
+    saveNote(options: {
+        id?: number;
+        title: string;
+        body?: string;
+        tags?: string[] | string;
+        sourceKind?: 'manual' | 'ask';
+        sourceUsername?: string;
+        sourceQuestion?: string;
+    }): NoteMutationResult;
+    /**
+     * Delete one knowledge note.
+     * @param options - Note id.
+     * @returns NoteMutationResult.
+     */
+    deleteNote(options: {
+        id: number;
+    }): NoteMutationResult;
+    /**
+     * Knowledge graph: note nodes, `[[…]]` edges and unresolved stubs.
+     *
+     * 与 `getGraph` 分开而不是合并：社交图谱的节点口径（联系人/群/我）和知识图谱
+     * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆；融合视图交给前端把
+     * 两份快照按 `sourceUsername` 拼起来（笔记 → 来源会话）。
+     * @returns KnowledgeSnapshot.
+     */
+    getKnowledgeGraph(): KnowledgeSnapshot;
+    /**
      * Moments page.
      * @param options - Pagination (offset/limit) and optional author filter.
      * @returns MomentsSnapshot: moments items (items + total).
@@ -160,12 +269,13 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): FavoritesSnapshot;
     /**
      * Resource files.
-     * @param options - Optional limit/offset for incremental loading.
+     * @param options - Optional limit/offset and category filter for incremental loading.
      * @returns FilesSnapshot: resource file items.
      */
     getFiles(options?: {
         limit?: number;
         offset?: number;
+        category?: string;
     }): FilesSnapshot;
     /**
      * Messages of one talker.
@@ -176,6 +286,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
         talker: string;
         limit?: number;
         cursor?: number;
+        cursorLocalId?: number;
     }): MessagesSnapshot;
     /**
      * Incremental messages newer than a sort_seq watermark (real-time polling).
@@ -199,7 +310,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     buildSearchIndex(options?: {
         force?: boolean;
-    }): SearchBuildResult;
+    }): Promise<SearchBuildResult>;
     /**
      * Full-text search over text messages (index first, scan fallback).
      * @param options - query string, optional result limit and optional talker scope.
@@ -255,7 +366,18 @@ export declare class WechatDataGateway extends TypertRemoteService {
         localId: number;
     }): VoiceInfoResult;
     /**
-     * Look up one video message (cover thumbnail + degradation).
+     * Resolve one voice message to an inline-playable wav data URL.
+     * 语音实体是 silk，需要解码成 wav 才能播；产物落在转写链路同一份缓存里。
+     * @param options - username and localId of the voice message.
+     * @returns VoiceDataUrlResult: base64 wav data URL (+ duration) or error.
+     */
+    getVoiceDataUrl(options: {
+        username: string;
+        localId: number;
+    }): VoiceDataUrlResult;
+    /**
+     * Look up one video message: cover thumbnail + the on-disk video path.
+     * 封面与实体都在真实微信目录 `msg/video` 下，所以要带上数据根目录。
      * @param options - username and localId of the video message.
      * @returns VideoInfoResult: video cover/thumbnail info.
      */
@@ -281,6 +403,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
         zip?: boolean;
     }): ExportResult;
     /**
+     * 构造「回答增量」事件推送器。
+     *
+     * 为什么节流：每个增量都要跨 IPC → 渲染进程 → React setState，模型一秒能吐几十个
+     * delta，不节流会把开销压到生成本身上。80ms 约等于 12fps，视觉上已足够连续。
+     * @param streamId - 客户端生成的流式标识；为空表示不推送（非流式调用方）。
+     * @returns 增量回调（text 为**已生成的全文**）。
+     */
+    private makeDeltaEmitter;
+    /**
      * AI Q&A over WeChat data: retrieve context + DSH LLM answer with citations.
      * @param options - question to ask over the WeChat data.
      * @returns AskResult: LLM answer with citations.
@@ -294,10 +425,14 @@ export declare class WechatDataGateway extends TypertRemoteService {
             role: 'user' | 'assistant';
             content: string;
         }>;
+        /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
+        streamId?: string;
     }): Promise<AskResult>;
     /**
-     * 提问优化：改写问题并给出改进建议。
-     * @returns AskOptimizeResult: optimized + suggestions.
+     * 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。
+     * 供「微信问答」面板的「优化提问」按钮调用；出站前同样过隐私闸门。
+     * @param options - question（必填）+ 可选 scope/history 作上下文。
+     * @returns AskOptimizeResult: optimized + suggestions。
      */
     optimizeAskQuestion(options: {
         question: string;
@@ -335,6 +470,134 @@ export declare class WechatDataGateway extends TypertRemoteService {
     deleteBackup(options: {
         name: string;
     }): BackupMutationResult;
+    /**
+     * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
+     * @returns 供「数据健康 / 检索设置」面板展示。
+     */
+    getRetrievalStatus(): {
+        enabled: boolean;
+        config: unknown;
+        vector: {
+            rows: number;
+            dim: number;
+            model: string;
+        };
+        feedback: {
+            total: number;
+            up: number;
+            down: number;
+        };
+        weights: RerankWeights;
+        intentAccuracy: {
+            correct: number;
+            total: number;
+            accuracy: number;
+        };
+    };
+    /**
+     * 保存检索参数（阈值/权重/容量）。前端面板改一个开关也走这里。
+     * @param options - 形如 `{ patch: {...} }`，或直接给字段子集。
+     * @returns 落盘后的完整配置。
+     */
+    saveRetrievalConfig(options?: {
+        patch?: unknown;
+    } | unknown): {
+        ok: boolean;
+        config: unknown;
+    };
+    /**
+     * 立即构建/增量更新稠密向量索引（设置面板的「重建向量索引」按钮）。
+     * @param options - force=true 时清空重建。
+     * @returns 构建结果。
+     */
+    buildRagVectorIndex(options?: {
+        force?: boolean;
+    }): Promise<{
+        ok: boolean;
+        status: string;
+        rows: number;
+        embedded: number;
+        elapsed_ms: number;
+        message?: string;
+    }>;
+    /**
+     * 提交问答反馈（目标 5 的闭环入口）。
+     *
+     * 反馈 → 特征归因 → 权重微调 → 落盘。权重**由全部历史反馈重算**（幂等、可重放），
+     * 而不是在旧权重上累加 —— 累加会因为重复提交同一条反馈而漂移。
+     * @param options - retrievalId（AskResult 里回传）+ rating + 有用/无用引用序号。
+     * @returns 调参后的权重。
+     */
+    submitAskFeedback(options: {
+        retrievalId?: string;
+        rating: 'up' | 'down';
+        useful?: number[];
+        useless?: number[];
+        question?: string;
+        answer?: string;
+    }): {
+        ok: boolean;
+        adaptedWeights?: RerankWeights;
+        features?: string[];
+        message?: string;
+    };
+    /**
+     * 列出最近的问答反馈 + 汇总统计。
+     * @param options - limit。
+     */
+    listRetrievalFeedback(options?: {
+        limit?: number;
+    }): {
+        items: FeedbackRecord[];
+        stats: {
+            total: number;
+            up: number;
+            down: number;
+        };
+    };
+    /**
+     * 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。
+     */
+    resetRetrievalWeights(): {
+        ok: boolean;
+        weights: RerankWeights;
+    };
+    /**
+     * 跑离线召回评估（合成评测集），并给出「混合 vs 纯稀疏」的消融对比。
+     *
+     * 不依赖真实数据，因此可以随时在设置面板点一下就看到当前算法的 P/R/MRR/NDCG，
+     * 也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
+     * @param options - k（截断位置，默认 10）。
+     * @returns 可读报告 + 结构化指标。
+     */
+    evaluateRetrieval(options?: {
+        k?: number;
+    }): {
+        report: string;
+        hybrid: {
+            precision: number;
+            recall: number;
+            mrr: number;
+            ndcg: number;
+            map: number;
+            cases: number;
+            hits: number;
+        };
+        sparseOnly: {
+            precision: number;
+            recall: number;
+            mrr: number;
+            ndcg: number;
+            map: number;
+            cases: number;
+            hits: number;
+        };
+        intentAccuracy: {
+            correct: number;
+            total: number;
+            accuracy: number;
+        };
+    };
     /**
      * Generate a daily chat summary for one date via DSH LLM.
      * @param options - date (YYYY-MM-DD) to summarize.
@@ -415,7 +678,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
     exportAllSessions(options?: {
         dir?: string;
         filename?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     /**
      * Export moments (朋友圈) with author + keyword + time filters.
      * @param options - format/username/authorName/q/from/to/dir/filename.
@@ -435,7 +698,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
         to?: number;
         dir?: string;
         filename?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     exportCsv(options: {
         kind: string;
         recordsKind?: string;
@@ -620,6 +883,10 @@ export declare class WechatDataGateway extends TypertRemoteService {
         ok: boolean;
         path: string;
     }>;
+    /**
+     * 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后
+     *   再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 config.json」的接口给宿主调用。
+     */
     openConfig(signal: AbortSignal): Promise<{
         ok: boolean;
         path: string;
@@ -705,10 +972,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
         ids: number[];
     }): DeleteFavoriteResult;
     /**
-     * Compute the annual report for one year (local only).
+    /**
+     * 年度回顾（看板）：15 张卡片所需的完整年度聚合。
+     * 「人物类」指标只算我发出的（real_sender_id 归属），「规模类」算全部消息。
      * @param options - year to compute the report for.
-     * @returns AnnualReport: computed annual report data.
+     * @returns AnnualReview: 完整看板数据。
      */
+    getAnnualReview(options: {
+        year: number;
+    }): AnnualReview;
     getAnnualReport(options: {
         year: number;
     }): AnnualReport;
@@ -738,6 +1010,27 @@ export declare class WechatDataGateway extends TypertRemoteService {
         mediaId?: string;
     }): ImageDataUrlResult;
     /**
+     * Resolve a file-library image (hardlink md5) to an offline base64 data URL.
+     * 优先读已解密缓存，否则通过 hardlink.db 定位 .dat 原图解密。
+     * @param options - file md5.
+     * @returns ImageDataUrlResult: base64 data URL or error.
+     */
+    getFileImageDataUrl(options: {
+        md5: string;
+    }): ImageDataUrlResult;
+    /**
+     * Resolve a custom emoticon (sticker) md5 to an offline base64 data URL.
+     * 先读 decoded 缓存 → 扫 msg/attach 与微信的表情缓存目录里解密；
+     * 本地解不开时（微信 4.x 的表情缓存是加密文件，项目里没有对应解码器）
+     * 用消息 XML 带来的 `cdnurl` 下载一次并落进 decoded 缓存。
+     * @param options - emoticon md5 (+ optional CDN url from the message).
+     * @returns ImageDataUrlResult: base64 data URL or error.
+     */
+    getEmoticonDataUrl(options: {
+        md5: string;
+        emojiUrl?: string;
+    }): Promise<ImageDataUrlResult>;
+    /**
      * Resolve a 公众号 article cover (og:image) to a base64 data URL.
      * @param options - mp.weixin.qq.com article URL.
      * @returns ImageDataUrlResult: base64 data URL or error.
@@ -752,6 +1045,8 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     getMessageFile(options: {
         fileName: string;
+        size?: number;
+        createTime?: number;
     }): ImageDataUrlResult;
     /**
      * Add a WeChat task.
@@ -784,9 +1079,18 @@ export declare class WechatDataGateway extends TypertRemoteService {
         username: string;
     }): Contact360Snapshot;
     getDbHealth(): DbHealthSnapshot;
+    getCalls(options?: {
+        topPeers?: number;
+        recentLimit?: number;
+    }): CallsSnapshot;
     getGroupInsights(options: {
         username: string;
     }): GroupInsightsSnapshot;
+    /**
+     * 保留理由：读 `general.db` 的 `handoff_remind_v0`（微信自带待办提醒）。本机实测**这张表不存在**
+     *   （22 个库里没有任何 `handoff%` 表）⇒ 界面若直接接上去只会永远显示空列表，因此只保留接口；
+     *   「待办日程」面板用的是导入路径 `syncHandoffTasks`（把源数据落进插件自己的任务库）。
+     */
     getHandoffReminds(): HandoffRemindsSnapshot;
     getLedger(options?: {
         month?: string;
@@ -807,18 +1111,50 @@ export declare class WechatDataGateway extends TypertRemoteService {
         md5?: string;
         timelineId?: string;
         mediaId?: string;
-    }): ImageDataUrlResult;
+        thumb?: string;
+        key?: string;
+    }): Promise<ImageDataUrlResult>;
     /**
-     * Resolve one SNS (朋友圈) video body to an offline base64 data URL so it can
-     * be played inline. Returns an error when the cached container is missing.
-     * @param options - media md5 from the moments XML (+ optional cache keys).
-     * @returns ImageDataUrlResult: base64 data URL or error.
+     * Resolve one SNS (朋友圈) video body so it can be played inline.
+     *
+     * 两级来源：**先本机缓存**（明文，离线、最快），没有缓存再按朋友圈 XML 里的
+     * `<url>` 从微信 CDN 按需取回。取回要过隐私闸门（与 AI 调用同一套「出站拦截」），
+     * CDN 返回的是客户端加密流，按 `<enc key>` 解密后再**校验容器头与 md5**，
+     * 免得把一个放不出来的二进制塞给 <video>。
+     *
+     * @param options - media md5 from the moments XML（+ 本地缓存键、`<url>` 与 `<enc key>`）。
+     * @returns ImageDataUrlResult: base64 data URL or an error explaining which source failed.
      */
     getSnsVideoDataUrl(options: {
         md5?: string;
         timelineId?: string;
         mediaId?: string;
-    }): ImageDataUrlResult;
+        url?: string;
+        key?: string;
+    }): Promise<ImageDataUrlResult>;
+    /**
+     * 把一条朋友圈视频（本机缓存优先，否则 CDN 取回+解密）写到用户选定路径。
+     *
+     * 为什么放在后端写：视频本体几十 MB，走渲染端 `<a download>` 既落不了盘
+     * （实测点了没反应），把 base64 经 IPC 传回主进程也白白多一次几十 MB 的拷贝。
+     * 这里直接取字节写文件 —— 路径由主进程的保存对话框给出。
+     *
+     * @param options - 缓存键 / 远端地址与种子 / 目标路径。
+     * @returns ok + 字节数，或错误说明。
+     */
+    exportSnsVideo(options: {
+        md5?: string;
+        timelineId?: string;
+        mediaId?: string;
+        url?: string;
+        key?: string;
+        dest: string;
+    }): Promise<{
+        ok: boolean;
+        bytes?: number;
+        source?: string;
+        error?: string;
+    }>;
     listTasks(): TasksSnapshot;
     restoreBackup(options: {
         name: string;
@@ -839,4 +1175,3 @@ export declare class WechatDataGateway extends TypertRemoteService {
     syncHandoffTasks(): TaskMutationResult;
 }
 export default WechatDataGateway;
-//# sourceMappingURL=gateway.d.ts.map

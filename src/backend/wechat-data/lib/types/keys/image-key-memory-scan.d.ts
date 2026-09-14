@@ -47,4 +47,3 @@ export declare function scanProcessForImageKey(pid: number, templateScan: Templa
  */
 export declare function scanImageKeyOnce(pid: number, templateScan: TemplateScanResult): Promise<ProcessMemoryKeyMatch | null>;
 export { readProcessMemory };
-//# sourceMappingURL=image-key-memory-scan.d.ts.map

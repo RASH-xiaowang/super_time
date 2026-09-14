@@ -5,4 +5,3 @@ import type { OfficialAssetsSnapshot } from '../types.ts';
  * @returns the official-assets snapshot.
  */
 export declare function queryOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot;
-//# sourceMappingURL=official-assets.d.ts.map

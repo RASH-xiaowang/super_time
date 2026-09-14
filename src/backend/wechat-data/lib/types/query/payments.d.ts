@@ -29,4 +29,3 @@ export interface PaymentStatus {
  * @returns authoritative status (found=false when absent).
  */
 export declare function queryPaymentStatus(decryptedDir: string, serverId: string): PaymentStatus;
-//# sourceMappingURL=payments.d.ts.map

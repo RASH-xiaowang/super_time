@@ -362,7 +362,8 @@ export function WechatDataPanel(): React.JSX.Element {
   useEffect(() => {
     const el = navRef.current
     if (!el) return
-    const raf = (): void => requestAnimationFrame(updateNavMore)
+    // 用块体：requestAnimationFrame 返回 handle，箭头函数直接返回它就不符合 `(): void`。
+    const raf = (): void => { requestAnimationFrame(updateNavMore) }
     raf()
     const t = setTimeout(updateNavMore, 500) // 字体晚到兜底
     const ro = new ResizeObserver(raf)

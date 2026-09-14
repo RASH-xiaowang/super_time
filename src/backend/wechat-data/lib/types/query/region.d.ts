@@ -20,4 +20,3 @@ export declare function parseContactExtra(raw: Buffer): ContactExtra;
 export declare function regionLabel(category: 'country' | 'province' | 'city', value: string): string;
 /** Build a compact region string (中国 → 省+市; abroad → 国家 省 市). */
 export declare function buildRegion(country: string, province: string, city: string): string;
-//# sourceMappingURL=region.d.ts.map

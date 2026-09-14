@@ -6,4 +6,3 @@ import type { MomentsInsightsSnapshot } from '../types.ts';
  * @returns the insights snapshot.
  */
 export declare function queryMomentsInsights(decryptedDir: string, author?: string): MomentsInsightsSnapshot;
-//# sourceMappingURL=moments-insights.d.ts.map
