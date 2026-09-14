@@ -7,13 +7,16 @@
  * 这份用例锁住补进去的那几处签名（本次补了 8 处，这里挑热路径上的会话列表做代表）。
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { invalidateWechatMeta } from '../src/query/meta.ts'
 import { querySessions } from '../src/query/sessions.ts'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 const scratch: string[] = []
 afterEach(() => {
@@ -58,5 +61,16 @@ describe('会话列表的签名覆盖（M8）', () => {
     bumpMtime(shard)
 
     expect(querySessions(root)).not.toBe(first)
+  })
+})
+
+describe('TTL 不得放宽（M8 复审 minor）', () => {
+  it('storage-file-names 保持 10s 上限', () => {
+    // 它的签名是「root + 各月份子目录的 mtime/size」，**看不到**同名文件原地改 size
+    // （NTFS 下目录的 mtime/size 不随内容变化）—— 所以 TTL 就是这段陈旧期的唯一上界，
+    // 而 10s 正是改造前那层「事件后整体清空」给的实效上界。放宽 = 让陈旧期变长。
+    // 这条按仓库既有做法用字面量守卫（行为级需要伪造时间 + 造 msg/file 夹具，收益不成比例）。
+    const src = readFileSync(join(HERE, '..', 'src', 'query', 'storage.ts'), 'utf8')
+    expect(src).toContain('}, 10_000)')
   })
 })

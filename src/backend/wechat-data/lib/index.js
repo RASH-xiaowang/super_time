@@ -7633,6 +7633,8 @@ import { createHash as createHash11 } from "node:crypto";
 import { existsSync as existsSync20, mkdirSync as mkdirSync3, readFileSync as readFileSync7, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join27 } from "node:path";
 var coverCache = /* @__PURE__ */ new Map();
+var coverFailUntil = /* @__PURE__ */ new Map();
+var FAIL_TTL_MS = 6e4;
 var FETCH_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
   "Referer": "https://mp.weixin.qq.com/"
@@ -7672,6 +7674,7 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir) {
     const cached = coverCache.get(key) ?? "";
     return cached ? { url: cached } : { error: "\u6587\u7AE0\u5C01\u9762\u6682\u4E0D\u53EF\u7528" };
   }
+  if ((coverFailUntil.get(key) ?? 0) > Date.now()) return { error: "\u6587\u7AE0\u6216\u5C01\u9762\u83B7\u53D6\u5931\u8D25" };
   const file = coverFile(cacheDir, key);
   if (file && existsSync20(file)) {
     try {
@@ -7707,6 +7710,7 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir) {
     boundedSet(coverCache, key, data);
     return { url: data };
   } catch {
+    boundedSet(coverFailUntil, key, Date.now() + FAIL_TTL_MS);
     return { error: "\u6587\u7AE0\u6216\u5C01\u9762\u83B7\u53D6\u5931\u8D25" };
   }
 }
