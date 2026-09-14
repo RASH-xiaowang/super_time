@@ -3,9 +3,9 @@
  * handlers/session/export.rs. Writes files under <decrypted>.parent()/exports
  * and returns the path + count. Chronological order (oldest first).
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { zipFiles } from './zip.ts'
+import { ZipFileWriter, zipFiles } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryMessages } from './messages.ts'
 import { queryContacts } from './contacts.ts'
@@ -17,8 +17,55 @@ import { resolveSnsImageDataUrl } from './sns-image.ts'
 import { resolveSnsVideoDataUrl } from './sns-video.ts'
 
 /** Decode a base64 data URL to bytes (returns null when not a base64 data URL). */
-function dataUrlToBuffer(url: string): Buffer | null {
-  const m = url.match(/^data:[^;,]+;base64,(.*)$/)
+/**
+ * 原子写：先写同目录下的临时文件，再 rename 覆盖目标。
+ *
+ * 直接 writeFileSync 到目标路径时，中途失败（磁盘满、进程被杀、超时被掐）会留下一个
+ * **看起来正常、实际截断**的导出文件 —— 比没有产出更糟，因为用户会以为导出成功了。
+ * 同目录 rename 在 Windows 上同样是原子的（同一卷内不发生拷贝）。
+ */
+function writeFileAtomicSync(filePath: string, data: string | Uint8Array): void {
+  const tmp = filePath + '.partial-' + String(process.pid)
+  try {
+    writeFileSync(tmp, data)
+    renameSync(tmp, filePath)
+  } catch (e) {
+    try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+    throw e
+  }
+}
+
+/**
+ * 流式产出一个 ZIP 并原子落地。
+ *
+ * 与单文件版同理，但内容由 `produce` 现场逐条写入 —— 峰值内存只与**单个条目**相关，
+ * 而不是所有条目之和（整账号归档最多 1000 个会话，原先会把全部文本堆在内存里）。
+ * 每条写入都会 await 背压，因此也把事件循环让给同进程里的其它查询。
+ *
+ * @param filePath - 最终目标路径。
+ * @param produce - 往写入器里添加条目的回调。
+ */
+async function writeZipAtomic(
+  filePath: string,
+  produce: (zip: ZipFileWriter) => Promise<void>,
+): Promise<void> {
+  const tmp = filePath + '.partial-' + String(process.pid)
+  let zip: ZipFileWriter | null = null
+  try {
+    // create 也放在 try 里：打开失败同样可能已经留下一个 0 字节的临时文件。
+    zip = await ZipFileWriter.create(tmp)
+    await produce(zip)
+    await zip.close()
+    renameSync(tmp, filePath)
+  } catch (e) {
+    // 失败必须删掉半成品：一个截断的 .zip 看起来是有效归档，打开才发现坏。
+    if (zip) await zip.abort()
+    try { rmSync(tmp, { force: true }) } catch { /* 已删除 */ }
+    throw e
+  }
+}
+
+function dataUrlToBuffer(url: string): Buffer | null {  const m = url.match(/^data:[^;,]+;base64,(.*)$/)
   if (!m || !m[1]) return null
   try { return Buffer.from(m[1], 'base64') } catch { return null }
 }
@@ -205,10 +252,13 @@ function formatXlsx(msgs: WechatMessage[], username: string): Uint8Array {
     const r = rowOf(m, username)
     rows.push([r.time, r.sender, r.typeLabel, r.text, String(m.localId)])
   }
-  let cells = ''
+  // 用数组拼接而不是 `cells +=`：后者在 10 万行时会产生大量中间字符串，
+  // 而这里只需要一次 join 的一次性分配。
+  const parts: string[] = []
   for (const row of rows) {
-    cells += '<row>' + row.map(c => '<c t="inlineStr"><is><t>' + xmlEsc(c) + '</t></is></c>').join('') + '</row>'
+    parts.push('<row>' + row.map(c => '<c t="inlineStr"><is><t>' + xmlEsc(c) + '</t></is></c>').join('') + '</row>')
   }
+  const cells = parts.join('')
   const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + cells + '</sheetData></worksheet>'
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -342,9 +392,9 @@ export function exportSessionMessages(
       { name: innerName, data: content },
       { name: 'record_media.json', data: JSON.stringify({ username, exportedAt: now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2) },
     ])
-    writeFileSync(filepath, payload)
+    writeFileAtomicSync(filepath, payload)
   } else {
-    writeFileSync(filepath, content)
+    writeFileAtomicSync(filepath, content)
   }
   return { path: filepath, filename: filenameOut, count: msgs.length }
 }
@@ -398,7 +448,7 @@ export function exportCsv(decryptedDir: string, kind: string, recordsKind?: stri
   const lines = rows.map(r => r.map(c => csvCell(c)).join(','))
   const filename = kind + '_' + now + '.csv'
   const filepath = join(exportDir, filename)
-  writeFileSync(filepath, lines.join('\n'), 'utf8')
+  writeFileAtomicSync(filepath, lines.join('\n'))
   return { path: filepath, filename, count: Math.max(0, rows.length - 1) }
 }
 
@@ -519,7 +569,7 @@ export function exportAnnualReport(
     content = md.join('\n')
   }
   const path = join(base, safeName)
-  writeFileSync(path, content, 'utf8')
+  writeFileAtomicSync(path, content)
   return { path, filename: safeName, count: total }
 }
 /**
@@ -529,7 +579,7 @@ export function exportAnnualReport(
  * @param opts - format/username/from/to/dir/filename.
  * @returns written file path + filename + count.
  */
-export function exportMoments(
+export async function exportMoments(
   decryptedDir: string,
   opts?: {
     format?: string
@@ -604,34 +654,38 @@ export function exportMoments(
   // ZIP：JSON 数据 + 离线媒体（图片/视频），做成可归档的媒体包。
   if (opts?.zip) {
     const mediaCtx = exportMediaCtx(decryptedDir)
-    const entries: Array<{ name: string; data: string | Uint8Array }> = []
-    entries.push({ name: 'moments.json', data: JSON.stringify(filtered, null, 2) })
-    let idx = 0
-    for (const m of filtered) {
-      for (const im of m.images) {
-        const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
-        if (r.url) {
-          const buf = dataUrlToBuffer(r.url)
-          if (buf) entries.push({ name: 'media/images/img_' + String(idx++) + '.jpg', data: buf })
-        }
-        if (entries.length > 5000) break
-      }
-      if (entries.length > 5000) break
-      for (const v of m.videos) {
-        const r = resolveSnsVideoDataUrl(mediaCtx.base, v.md5, v.timelineId, v.id)
-        if (r.url) {
-          const buf = dataUrlToBuffer(r.url)
-          if (buf) entries.push({ name: 'media/videos/vid_' + String(idx++) + '.mp4', data: buf })
-        }
-        if (entries.length > 5000) break
-      }
-      if (entries.length > 5000) break
-    }
     const rawName = (opts.filename ?? '').trim()
     const zipBase = rawName ? rawName.replace(/\.zip$/i, '') : ''
     const zipName = zipBase ? zipBase + '.zip' : 'wechat_moments_' + String(Date.now()) + '.zip'
     const zipPath = join(base, zipName)
-    writeFileSync(zipPath, zipFiles(entries))
+    // 媒体逐条写入：原先最多把 5000 个图片/视频 buffer 攒在 entries 里再一次性压缩，
+    // 单条视频几十 MB 时峰值很容易上到 GB 级。上限语义（含 moments.json 在内 ≤5000 条）
+    // 保持不变，只是改成边产出边写。
+    let mediaCount = 0
+    await writeZipAtomic(zipPath, async (zip) => {
+      await zip.addFile('moments.json', JSON.stringify(filtered, null, 2))
+      let idx = 0
+      for (const m of filtered) {
+        if (mediaCount >= 4999) break
+        for (const im of m.images) {
+          if (mediaCount >= 4999) break
+          const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url)
+            if (buf) { await zip.addFile('media/images/img_' + String(idx++) + '.jpg', buf); mediaCount += 1 }
+          }
+        }
+        if (mediaCount >= 4999) break
+        for (const v of m.videos) {
+          if (mediaCount >= 4999) break
+          const r = resolveSnsVideoDataUrl(mediaCtx.base, v.md5, v.timelineId, v.id)
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url)
+            if (buf) { await zip.addFile('media/videos/vid_' + String(idx++) + '.mp4', buf); mediaCount += 1 }
+          }
+        }
+      }
+    })
     return { path: zipPath, filename: zipName, count: filtered.length }
   }
   const ext = format
@@ -703,7 +757,7 @@ export function exportMoments(
     content = lines.join(NL)
   }
   const path = join(base, name)
-  writeFileSync(path, content, 'utf8')
+  writeFileAtomicSync(path, content)
   return { path, filename: name, count: filtered.length }
 }
 /**
@@ -712,37 +766,40 @@ export function exportMoments(
  * @param opts - optional dir/filename.
  * @returns written zip path + filename + total messages.
  */
-export function exportAllSessions(
+export async function exportAllSessions(
   decryptedDir: string,
   opts?: { dir?: string; filename?: string },
-): { path: string; filename: string; count: number } {
+): Promise<{ path: string; filename: string; count: number }> {
   const env = querySessions(decryptedDir)
   const sessions = env.sessions.slice(0, 1000)
-  const entries: Array<{ name: string; data: string | Uint8Array }> = []
-  const seen = new Set<string>()
-  let total = 0
-  for (const s of sessions) {
-    const msgs = collectMessages(decryptedDir, s.username, 0)
-    const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 40)
-    const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, '_')
-    let name = safeName + '_' + uid + '.txt'
-    let n = 2
-    while (seen.has(name)) {
-      name = safeName + '_' + uid + '_' + String(n) + '.txt'
-      n += 1
-    }
-    seen.add(name)
-    if (msgs.length === 0) {
-      entries.push({ name, data: '（无消息）\n' })
-      continue
-    }
-    entries.push({ name, data: formatTxt(msgs, s.username) })
-    total += msgs.length
-  }
   const base = (opts?.dir && opts.dir.trim()) ? opts.dir.trim() : join(dirname(decryptedDir), 'exports')
   mkdirSync(base, { recursive: true })
   const filename = (opts?.filename && opts.filename.trim()) ? (opts.filename.trim().endsWith('.zip') ? opts.filename.trim() : opts.filename.trim() + '.zip') : 'wechat_all_sessions_' + String(Date.now()) + '.zip'
   const path = join(base, filename)
-  writeFileSync(path, zipFiles(entries))
+  const seen = new Set<string>()
+  let total = 0
+  // 逐会话产出并写盘：峰值内存与「单个会话」相关，而不是 1000 个会话之和。
+  // 原先每个会话的文本都先 push 进 entries、最后一次性 concat + 压缩，
+  // 最坏情形常驻数 GB 且全程同步。
+  await writeZipAtomic(path, async (zip) => {
+    for (const s of sessions) {
+      const msgs = collectMessages(decryptedDir, s.username, 0)
+      const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 40)
+      const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, '_')
+      let name = safeName + '_' + uid + '.txt'
+      let n = 2
+      while (seen.has(name)) {
+        name = safeName + '_' + uid + '_' + String(n) + '.txt'
+        n += 1
+      }
+      seen.add(name)
+      if (msgs.length === 0) {
+        await zip.addFile(name, '（无消息）\n')
+        continue
+      }
+      await zip.addFile(name, formatTxt(msgs, s.username))
+      total += msgs.length
+    }
+  })
   return { path, filename, count: total }
 }
