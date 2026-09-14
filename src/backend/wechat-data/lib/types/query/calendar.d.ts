@@ -11,4 +11,3 @@ export declare function getDailyCounts(decryptedDir: string, username: string, y
     year: number;
     month: number;
 };
-//# sourceMappingURL=calendar.d.ts.map

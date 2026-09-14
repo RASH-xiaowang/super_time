@@ -63,6 +63,11 @@ export interface MomentEntry {
     sourceNickName?: string;
     /** 公众号 username (<publicUserName>, gh_xxx). */
     publicUserName?: string;
+    /** 地理信息（朋友圈 XML 的 location 属主；属性与常见顺序相反，已在解析处修正）。 */
+    city?: string;
+    country?: string;
+    lat?: number;
+    lng?: number;
     is_self: boolean;
     likes: MomentLike[];
     comments: MomentComment[];
@@ -76,6 +81,21 @@ export declare function parseSnsXml(xml: string): {
     images: MomentMedia[];
     videos: MomentVideo[];
     location: string;
+    /** 位置的城市名（`<location city="南宁市">`），本机 490 条有值。 */
+    city: string;
+    /** 国家名（`<location country="中国">`）。 */
+    country: string;
+    /**
+     * 真实纬度/经度（已**修正**）。
+     *
+     * ⚠️ 微信在朋友圈 XML 里把这两个属性**写反了**：`<location latitude="108.249237"
+     * longitude="22.8694096">` 对应的是南宁（真实为 22.87°N / 108.25°E）。
+     * 本机 490 条里 **485 条 latitude > 90**（真实纬度不可能超过 90），
+     * 而 longitude 侧的值都落在合理范围 —— 所以这里按「纬度=longitude 属性、经度=latitude 属性」输出，
+     * 下游拿到的一定是能直接画在地图上的值。
+     */
+    lat: number;
+    lng: number;
     linkTitle: string;
     linkUrl: string;
     contentType: number;
@@ -114,4 +134,3 @@ export declare function queryMomentsAuthors(decryptedDir: string): Array<{
     name: string;
     count: number;
 }>;
-//# sourceMappingURL=moments.d.ts.map

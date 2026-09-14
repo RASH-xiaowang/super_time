@@ -1,6 +1,6 @@
 name: CI
 
-# 上线门禁的最小闭环：类型除外（H11 未完成），这里覆盖测试、构建一致性与各条 smoke。
+# 上线门禁的最小闭环：类型检查、测试、构建一致性与各条 smoke。
 # 之所以跑 windows-latest：依赖里有 win32 原生二进制（koffi-win32-x64、wx_silk.exe、
 # whisper bin），Linux/ubuntu runner 上装不起来，也无法验证真正的运行路径。
 on:
@@ -27,6 +27,11 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # ── 类型检查（H11）：前端类型只从仓库里的 lib/types 取（tsconfig 的 paths），
+      #    所以这一步同时兜住「后端类型漂移」与「前端镜像滞后」两类问题。
+      - name: 类型检查
+        run: npm run typecheck
+
       # ── 构建一致性：运行时只加载 lib/index.js 这一份产物，
       #    改了 src/**/*.ts 忘记重建就会静默跑旧代码（wechat-host.js 直接 import 它）。
       #    门禁 = 重建后产物必须与提交的逐字节一致。
@@ -34,6 +39,14 @@ jobs:
         run: |
           node scripts/build-wechat-bundle.js
           git diff --exit-code -- src/backend/wechat-data/lib/index.js
+        shell: pwsh
+
+      # ── 声明产物一致性（H12）：lib/types/**/*.d.ts 是前端取类型的唯一来源，
+      #    同样会出现「改了 src 忘记重生成」的静默漂移。
+      - name: 后端类型声明与源码一致
+        run: |
+          npm run build:types
+          git diff --exit-code -- src/backend/wechat-data/lib/types
         shell: pwsh
 
       - name: 单元测试

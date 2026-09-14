@@ -625,7 +625,7 @@ export async function exportMoments(
     dir?: string
     filename?: string
   },
-): { path: string; filename: string; count: number } {
+): Promise<{ path: string; filename: string; count: number }> {
   const format = opts?.format === 'html' ? 'html' : opts?.format === 'json' ? 'json' : opts?.format === 'csv' ? 'csv' : 'txt'
   const NL = String.fromCharCode(10)
   const items: MomentItem[] = []

@@ -114,4 +114,3 @@ export declare function cleanStaleStagingFiles(root: string): Promise<void>;
  */
 export declare function startRealtimeSync(rawDbDir: () => string, decryptedDir: () => string, onSync?: (shards: string[]) => void): () => void;
 export {};
-//# sourceMappingURL=sync.d.ts.map

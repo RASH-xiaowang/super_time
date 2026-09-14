@@ -33,4 +33,3 @@ export declare function queryStorageStats(decryptedDir: string, wechatBaseDir?: 
     senders: StorageRank[];
     large_files: LargeFile[];
 };
-//# sourceMappingURL=storage.d.ts.map

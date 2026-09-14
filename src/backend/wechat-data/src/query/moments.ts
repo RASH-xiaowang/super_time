@@ -87,6 +87,11 @@ export interface MomentEntry {
   sourceNickName?: string
   /** 公众号 username (<publicUserName>, gh_xxx). */
   publicUserName?: string
+  /** 地理信息（朋友圈 XML 的 location 属主；属性与常见顺序相反，已在解析处修正）。 */
+  city?: string
+  country?: string
+  lat?: number
+  lng?: number
   is_self: boolean
   likes: MomentLike[]
   comments: MomentComment[]

@@ -13,4 +13,3 @@ export declare function resolveVoiceInfo(decryptedDir: string, username: string,
     decodable: boolean;
     error?: string;
 };
-//# sourceMappingURL=media-voice.d.ts.map

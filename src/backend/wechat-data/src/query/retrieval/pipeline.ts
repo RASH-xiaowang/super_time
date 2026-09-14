@@ -10,10 +10,10 @@ import { searchIndexBatch, searchIndexPath } from '../search.ts'
 import { existsSync } from 'node:fs'
 import type { SearchHit } from '../../types.ts'
 import type {
-  ChannelHit, ChannelResult, IntentKind, RetrievalPolicy, RetrievalStats, RetrievedDoc, RankedDoc,
+  ChannelHit, ChannelResult, IntentKind, QueryPlan, RetrievalPolicy, RetrievalStats, RetrievedDoc, RankedDoc,
 } from './types.ts'
 import { classifyIntent, refineIntentWithLlm } from './intent.ts'
-import { buildQueryPlan, type QueryPlan } from './rewrite.ts'
+import { buildQueryPlan } from './rewrite.ts'
 import { fuseResults, dedupeFused, channelSummary } from './fusion.ts'
 import { rerankDocs } from './rank.ts'
 import { compressContext } from './compress.ts'

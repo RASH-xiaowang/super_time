@@ -6,4 +6,3 @@ import type { DbHealthSnapshot } from '../types.ts';
  * @returns the health snapshot.
  */
 export declare function queryDbHealth(decryptedDir: string): DbHealthSnapshot;
-//# sourceMappingURL=db-health.d.ts.map

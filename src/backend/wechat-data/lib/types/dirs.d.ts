@@ -45,4 +45,3 @@ export declare function bootstrapWechatData(env?: Record<string, string | undefi
     copied: string[];
     skipped: boolean;
 };
-//# sourceMappingURL=dirs.d.ts.map

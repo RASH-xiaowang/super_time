@@ -5,4 +5,3 @@ import type { AssetInsightsSnapshot } from '../types.ts';
  * @returns the asset insights snapshot.
  */
 export declare function queryAssetInsights(decryptedDir: string): AssetInsightsSnapshot;
-//# sourceMappingURL=asset-insights.d.ts.map

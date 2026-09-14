@@ -123,4 +123,3 @@ export declare function resolveLocalImageKey(opts: {
     templateLimit?: number;
     maxFallbackDirs?: number;
 }): ImageKeyResolution | null;
-//# sourceMappingURL=image-key-resolver.d.ts.map

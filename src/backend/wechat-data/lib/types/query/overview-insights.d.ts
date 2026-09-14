@@ -55,5 +55,10 @@ export interface OverviewInsights {
     };
     extras: OverviewExtras;
 }
-export declare function queryOverviewInsights(decryptedDir: string): OverviewInsights;
-//# sourceMappingURL=overview-insights.d.ts.map
+/**
+ * Compute overview insights.
+ * @param decryptedDir - decrypted data root.
+ * @param selfUsername - logged-in account wxid, used to split 发出/收到.
+ * @returns the insights snapshot.
+ */
+export declare function queryOverviewInsights(decryptedDir: string, selfUsername?: string): OverviewInsights;

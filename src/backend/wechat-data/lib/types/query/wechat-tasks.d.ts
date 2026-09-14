@@ -13,4 +13,3 @@ export declare function insertTask(decryptedDir: string, task: {
 export declare function setTaskStatus(decryptedDir: string, id: number, status: 'open' | 'done'): TaskMutationResult;
 /** Delete a task. */
 export declare function deleteTask(decryptedDir: string, id: number): TaskMutationResult;
-//# sourceMappingURL=wechat-tasks.d.ts.map

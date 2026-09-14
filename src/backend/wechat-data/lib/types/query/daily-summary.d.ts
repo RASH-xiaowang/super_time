@@ -52,4 +52,3 @@ export declare function collectPeriodLinesWithSources(decryptedDir: string, from
     sources: SourceLine[];
 };
 export {};
-//# sourceMappingURL=daily-summary.d.ts.map

@@ -194,7 +194,9 @@ export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, l
     <td key={key}>{username ? <button type="button" className={css.link} onClick={() => { open(username, localId) }} title={String(username)}>{shortUser(label || username)}</button> : <span className={css.muted}>—</span>}</td>
   )
   const mono = (v: string | number | boolean | null | undefined, key = 'm'): React.JSX.Element => <td key={key} className={css.mono}>{v == null ? '—' : String(v)}</td>
-  const timeTd = (ts: unknown, key = 't'): React.JSX.Element => <td key={key} className={css.muted}>{fmtDateTimeSec(ts)}</td>
+  // 行数据来自未类型化的 DB 行，秒级时间戳可能是 number 也可能是字符串 → 统一数值化。
+  // `Number(x) || null` 让 NaN/0/undefined 都走占位符，不会渲染出 Invalid Date。
+  const timeTd = (ts: unknown, key = 't'): React.JSX.Element => <td key={key} className={css.muted}>{fmtDateTimeSec(Number(ts) || null)}</td>
   const badge = (label: string, tone: string, key = 'b', hint?: string): React.JSX.Element => {
     const cls = css[toneClass(tone)] ?? css.badgeMuted
     return <td key={key}><span className={`${css.badge} ${cls}`} title={hint}>{label}</span></td>

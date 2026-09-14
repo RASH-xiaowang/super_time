@@ -16,4 +16,3 @@ export declare function decryptAllDbs(rawDbDir: string, decryptedDir: string, on
     }>;
     error?: string;
 }>;
-//# sourceMappingURL=decrypt-all.d.ts.map

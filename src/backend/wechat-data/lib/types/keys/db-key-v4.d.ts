@@ -29,4 +29,3 @@ export declare function scanProcessKeyCandidates(pid: number): Promise<Buffer[]>
  */
 export declare function recoverDbKeyV4(pid: number, dbFilePath: string, internalDbKey?: Buffer | null): Promise<DbKeyResult>;
 export { isPotentialKey, findKeyAddresses, KEY_SIZE };
-//# sourceMappingURL=db-key-v4.d.ts.map

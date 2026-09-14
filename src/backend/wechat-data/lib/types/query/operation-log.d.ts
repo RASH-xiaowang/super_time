@@ -17,4 +17,3 @@ export declare function listOperations(decryptedDir: string, query?: OperationLo
  * @returns OperationLogClearResult: ok + removed row count.
  */
 export declare function clearOperationLog(decryptedDir: string): OperationLogClearResult;
-//# sourceMappingURL=operation-log.d.ts.map

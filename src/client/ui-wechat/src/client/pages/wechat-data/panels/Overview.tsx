@@ -406,7 +406,7 @@ function SkeletonOverview(): React.JSX.Element {
         </Card>
         <Card title="撤回消息痕迹" extra={<span className={css.panelGo}>详情 →</span>}>
           <div className={css.revoke}>
-            <SkLine width="120px" height="28px" />
+            <SkLine width="120px" height={28} />
             <span className={kitCss.textMeta}>条被撤回消息的元数据痕迹（发送者/时间/类型可查）</span>
           </div>
         </Card>
@@ -962,7 +962,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                     <div className={css.healthItem}><span className={css.healthValue}>{fmtBytes(ins.health.dbBytes)}</span><span className={kitCss.textCaption}>解密数据体积</span></div>
                     <div className={css.healthItem}><span className={css.healthValue}>{ins.health.ok ? '正常' : '异常'}</span><span className={kitCss.textCaption}>数据可读性</span></div>
                     <div className={css.healthItem}>
-                      <span className={css.healthValue}>{ins.time.lastActive ? new Date(ins.time.lastActive * 1000).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                      {/* lastActive 后端已经 `toLocaleString('zh-CN')` 成字符串了（overview-insights.ts:325）。
+                          早先这里当数字再乘 1000，结果是 NaN → 界面显示 Invalid Date。 */}
+                      <span className={css.healthValue}>{ins.time.lastActive || '—'}</span>
                       <span className={kitCss.textCaption}>最近活跃</span>
                     </div>
                     {extras && (

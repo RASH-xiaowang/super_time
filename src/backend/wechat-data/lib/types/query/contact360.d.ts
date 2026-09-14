@@ -6,4 +6,3 @@ import type { Contact360Snapshot } from '../types.ts';
  * @returns the profile snapshot.
  */
 export declare function queryContact360(decryptedDir: string, username: string): Contact360Snapshot;
-//# sourceMappingURL=contact360.d.ts.map

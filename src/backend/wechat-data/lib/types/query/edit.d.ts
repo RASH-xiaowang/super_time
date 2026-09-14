@@ -42,4 +42,3 @@ export declare function resetEditedMessage(decryptedDir: string, username: strin
     ok: boolean;
     error?: string;
 };
-//# sourceMappingURL=edit.d.ts.map

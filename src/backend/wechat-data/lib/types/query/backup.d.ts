@@ -46,4 +46,3 @@ export declare function deleteBackup(decryptedDir: string, name: string): {
     ok: boolean;
     error?: string;
 };
-//# sourceMappingURL=backup.d.ts.map

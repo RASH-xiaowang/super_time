@@ -8,4 +8,3 @@ export declare function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?
     url?: string;
     error?: string;
 }>;
-//# sourceMappingURL=article-cover.d.ts.map

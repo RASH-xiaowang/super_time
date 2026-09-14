@@ -7,4 +7,3 @@ export declare function getDbStatus(decryptedDir: string): {
     lines: string[];
     path: string;
 };
-//# sourceMappingURL=status.d.ts.map

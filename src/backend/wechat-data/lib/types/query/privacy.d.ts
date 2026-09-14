@@ -32,4 +32,3 @@ export declare function queryPrivacyScan(decryptedDir: string, rowBudget?: numbe
     top_groups: PrivacyRank[];
 };
 export {};
-//# sourceMappingURL=privacy.d.ts.map

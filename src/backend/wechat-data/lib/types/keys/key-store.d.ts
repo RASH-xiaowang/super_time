@@ -35,4 +35,3 @@ export declare function upsertAccountKeysInStore(account: string, patch: Partial
  * @returns true when a record was removed.
  */
 export declare function removeAccountKeysFromStore(account: string, dataRoot?: string): boolean;
-//# sourceMappingURL=key-store.d.ts.map

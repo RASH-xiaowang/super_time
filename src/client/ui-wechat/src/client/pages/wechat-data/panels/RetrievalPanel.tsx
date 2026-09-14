@@ -183,7 +183,8 @@ export function RetrievalPanel({ open, onClose, containerRef }: {
       <div className={kitCss.drawerHd}>
         <span className={kitCss.drawerTitle}>检索设置（RAG）</span>
         <div className={css.hdRight}>
-          <Badge tone={status?.enabled ? 'green' : 'warning'}>{status?.enabled ? '流水线启用' : '已回退旧检索'}</Badge>
+          {/* Tone 里没有 'warning'，最接近的告警色是 'amber'（原先传的是不存在的取值） */}
+          <Badge tone={status?.enabled ? 'green' : 'amber'}>{status?.enabled ? '流水线启用' : '已回退旧检索'}</Badge>
           <button type="button" className={kitCss.drawerClose} onClick={onClose} aria-label="关闭检索设置">×</button>
         </div>
       </div>

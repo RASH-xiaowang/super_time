@@ -8,4 +8,3 @@ import type { MomentsMonthlyRow } from '../types.ts';
  * @returns monthly rows sorted ascending by month.
  */
 export declare function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlyRow[];
-//# sourceMappingURL=moments-monthly.d.ts.map

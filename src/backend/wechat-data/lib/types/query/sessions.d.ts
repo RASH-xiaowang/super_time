@@ -10,4 +10,3 @@ export declare function querySessions(decryptedDir: string, keyword?: string, li
     sessions: WechatSession[];
     total: number;
 };
-//# sourceMappingURL=sessions.d.ts.map

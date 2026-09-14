@@ -36,11 +36,20 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * `import.meta.url` 在**构建产物**里指向 `src/backend/wechat-data/lib/index.js`（源码布局是
  * `src/query/`），两者上溯的级数不同 —— 所以按候选逐个探测，而不是写死一个相对路径。
  */
+/**
+ * `process.resourcesPath` 只有 Electron 主进程有（@types/node 里没有这个字段）。
+ * 后端 bundle 也会在纯 Node 下被跑（测试/冒烟），所以取不到时返回空串。
+ */
+function processResourcesPath(): string {
+  const p = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  return typeof p === 'string' ? p : ''
+}
+
 function resolveAssetDir(): string {
   const candidates = [
     join(HERE, '..', 'native', 'weflow-isaac64'), // 构建产物：lib/ → wechat-data/native
     join(HERE, '..', '..', 'native', 'weflow-isaac64'), // 源码布局：src/query/ → wechat-data/native
-    join(process.resourcesPath ?? '', 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'native', 'weflow-isaac64'),
+    join(processResourcesPath(), 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'native', 'weflow-isaac64'),
   ]
   for (const c of candidates) {
     try {

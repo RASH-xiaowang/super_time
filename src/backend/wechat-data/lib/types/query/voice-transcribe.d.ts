@@ -50,4 +50,3 @@ export declare function transcribeOneVoice(decryptedDir: string, decodedDir: str
  * @returns VoiceBatchResult with ok/done/failed/skipped counts.
  */
 export declare function transcribeVoiceBatch(decryptedDir: string, decodedDir: string, modelsDir: string, modelId: string, engineBin: string, limit: number, onProgress: (done: number, total: number, failed: number, current: string) => void): Promise<VoiceBatchResult>;
-//# sourceMappingURL=voice-transcribe.d.ts.map

@@ -43,6 +43,8 @@ export interface BatchDecryptResult {
   failed: number
   skipped: number
   errors: Array<{ file: string; error: string }>
+  /** 跳过项的原因（已存在缓存 / HEVC 暂不支持 / 格式不支持…），供界面说明「为什么少了几张」。 */
+  skippedDetails?: Array<{ file: string; reason: string }>
 }
 
 /**

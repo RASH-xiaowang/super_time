@@ -32,4 +32,3 @@ export declare function queryRevoked(decryptedDir: string, limit?: number, offse
     }>;
     total: number;
 };
-//# sourceMappingURL=records.d.ts.map
