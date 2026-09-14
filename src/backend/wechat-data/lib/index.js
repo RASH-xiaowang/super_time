@@ -13189,16 +13189,14 @@ function formatClock2(ts2) {
 function norm(s) {
   return String(s || "").replace(/\s+/g, "");
 }
-function jaccard(a, b) {
-  if (!a || !b) return 0;
-  const grams = (s) => {
-    const out = /* @__PURE__ */ new Set();
-    for (let i = 0; i + 3 <= s.length; i += 1) out.add(s.slice(i, i + 3));
-    if (out.size === 0) out.add(s);
-    return out;
-  };
-  const ga = grams(a);
-  const gb = grams(b);
+function gramsOf3(s) {
+  const out = /* @__PURE__ */ new Set();
+  for (let i = 0; i + 3 <= s.length; i += 1) out.add(s.slice(i, i + 3));
+  if (out.size === 0 && s) out.add(s);
+  return out;
+}
+function jaccardGrams(ga, gb) {
+  if (ga.size === 0 || gb.size === 0) return 0;
   let inter = 0;
   for (const t of ga) if (gb.has(t)) inter += 1;
   return inter / (ga.size + gb.size - inter);
@@ -13208,7 +13206,7 @@ function compressContext(decryptedDir, ranked, opts) {
   let windowMessages = 0;
   let usedChars = 0;
   const chosen = [];
-  const seenLines = [];
+  const seenByUser = /* @__PURE__ */ new Map();
   for (const r of ranked) {
     if (chunks.length >= opts.maxChunks) break;
     if (usedChars >= opts.maxChars) break;
@@ -13224,10 +13222,14 @@ function compressContext(decryptedDir, ranked, opts) {
       if (lines.length >= opts.linesPerChunk) break;
       const body = norm(l.text);
       if (!body) continue;
+      const bodyGrams = gramsOf3(body);
       const isAnchor = l.localId === d.local_id;
-      if (!isAnchor && seenLines.some((s) => s.username === d.username && (s.text === body || jaccard(s.text, body) >= opts.dedupThreshold))) continue;
+      const seen = seenByUser.get(d.username);
+      if (!isAnchor && seen && seen.some((s) => s.text === body || jaccardGrams(s.grams, bodyGrams) >= opts.dedupThreshold)) continue;
       lines.push({ time: l.time, sender: l.sender, text: l.text });
-      seenLines.push({ username: d.username, text: body });
+      const bucket = seen ?? [];
+      bucket.push({ text: body, grams: bodyGrams });
+      if (!seen) seenByUser.set(d.username, bucket);
       if (isAnchor) anchorPresent = true;
     }
     if (!anchorPresent) {
