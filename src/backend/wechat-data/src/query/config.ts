@@ -106,6 +106,29 @@ export function writeFileAtomic(target: string, text: string): void {
  * 否则损坏文件会被默认值+补丁无声覆盖，事后无从追查。
  * @param target - 目标文件绝对路径。
  */
+/** 损坏备份的保留份数：超过就删最旧（备份含完整密钥，不能让磁盘随损坏次数线性增长）。 */
+const MAX_CORRUPT_BACKUPS = 3
+/** 备份文件名用的单调计数（同一毫秒内多次备份不能撞名）。 */
+let corruptSeq = 0
+
+/**
+ * 只保留最近 `MAX_CORRUPT_BACKUPS` 份损坏备份。
+ * @param target - 原文件绝对路径。
+ */
+function pruneCorruptBackups(target: string): void {
+  try {
+    const dir = dirname(target)
+    const prefix = basename(target) + '.corrupt-'
+    const all = readdirSync(dir)
+      .filter((f) => f.startsWith(prefix))
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t)
+    for (const { f } of all.slice(MAX_CORRUPT_BACKUPS)) {
+      try { rmSync(join(dir, f), { force: true }) } catch { /* 删不掉就留着 */ }
+    }
+  } catch { /* 列目录失败不影响主流程 */ }
+}
+
 export function preserveIfUnparseable(target: string): void {
   let text: string
   try {
@@ -117,10 +140,13 @@ export function preserveIfUnparseable(target: string): void {
     JSON.parse(text)
     return
   } catch {
-    const backup = `${target}.corrupt-${Date.now()}`
+    // 后缀带 pid + 单调计数：只用 Date.now() 时同一毫秒内的多次备份会静默互相覆盖
+    corruptSeq += 1
+    const backup = `${target}.corrupt-${Date.now()}-${process.pid}-${corruptSeq}`
     try {
       renameSync(target, backup)
       console.warn(`[config] ${basename(target)} 内容不是合法 JSON，已备份为 ${basename(backup)} 后重写`)
+      pruneCorruptBackups(target)
     } catch (e) {
       console.warn(`[config] ${basename(target)} 损坏且无法备份：${(e as Error).message}`)
     }

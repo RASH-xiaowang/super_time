@@ -187,10 +187,8 @@ function loadLlmConfig() {
       if (raw[k] !== undefined) base[k] = raw[k];
     }
   } catch (e) {
-    // 首次运行（ENOENT）或文件损坏：用默认值，但损坏要留下可读痕迹
-    if (e && e.code !== 'ENOENT') {
-      console.warn(`[config] ${path.basename(llmConfigPath())} 读取/解析失败，本次使用默认值：${e.message}（原文件保留，下次保存前会先备份）`);
-    }
+    // 首次运行（ENOENT）或文件损坏：用默认值，但损坏要留下可读痕迹（同指纹只报一次）
+    warnCorruptOnce(llmConfigPath(), e);
   }
   return base;
 }
@@ -225,6 +223,48 @@ function writeFileAtomic(target, text) {
  * 并告警，用户/支持人员才有东西可查。
  * @param {string} target - 目标文件绝对路径。
  */
+/** 已告警过的「损坏配置」指纹（路径+大小+修改时间），避免每次读配置都刷同一条。 */
+const warnedCorrupt = new Set();
+
+/**
+ * 告警一次（同指纹只报一次）。
+ * @param {string} file - 配置文件路径。
+ * @param {Error} err - 解析/读取错误。
+ */
+function warnCorruptOnce(file, err) {
+  if (err && err.code === 'ENOENT') return; // 首次运行，不告警
+  let sig = file;
+  try {
+    const st = fs.statSync(file);
+    sig = `${file}:${st.size}:${st.mtimeMs}`;
+  } catch { /* 拿不到 stat 就用路径本身 */ }
+  if (warnedCorrupt.has(sig)) return;
+  warnedCorrupt.add(sig);
+  console.warn(`[config] ${path.basename(file)} 读取/解析失败，本次使用默认值：${err && err.message ? err.message : err}（原文件保留，下次保存前会先备份）`);
+}
+/** 损坏备份的保留份数：超过就删最旧（备份里含完整密钥，不能让磁盘随损坏次数线性增长）。 */
+const MAX_CORRUPT_BACKUPS = 3;
+/** 备份文件名用的单调计数（同一毫秒内多次备份不能撞名）。 */
+let corruptSeq = 0;
+
+/**
+ * 只保留最近 `MAX_CORRUPT_BACKUPS` 份损坏备份。
+ * @param {string} target - 原文件绝对路径。
+ */
+function pruneCorruptBackups(target) {
+  try {
+    const dir = path.dirname(target);
+    const prefix = path.basename(target) + '.corrupt-';
+    const all = fs.readdirSync(dir)
+      .filter((f) => f.startsWith(prefix))
+      .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const { f } of all.slice(MAX_CORRUPT_BACKUPS)) {
+      try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* 删不掉就留着 */ }
+    }
+  } catch { /* 列目录失败不影响主流程 */ }
+}
+
 function preserveIfUnparseable(target) {
   let text;
   try {
@@ -236,10 +276,14 @@ function preserveIfUnparseable(target) {
     JSON.parse(text);
     return; // 能解析：正常覆盖
   } catch {
-    const backup = `${target}.corrupt-${Date.now()}`;
+    // 后缀带 pid + 单调计数：只用 Date.now() 时同一毫秒内的多次备份会**静默互相覆盖**
+    // （评审实测：3 次损坏只留下 1 份，最早的损坏内容丢了）。
+    corruptSeq += 1;
+    const backup = `${target}.corrupt-${Date.now()}-${process.pid}-${corruptSeq}`;
     try {
       fs.renameSync(target, backup);
       console.warn(`[config] ${path.basename(target)} 内容不是合法 JSON，已备份为 ${path.basename(backup)} 后重写`);
+      pruneCorruptBackups(target);
     } catch (e) {
       console.warn(`[config] ${path.basename(target)} 损坏且无法备份：${e && e.message ? e.message : e}`);
     }
@@ -282,10 +326,8 @@ function loadConfig() {
     }
   } catch (e) {
     // 首次运行（文件不存在）或文件损坏。**不改动文件**：损坏内容由下一次保存时的
-    // preserveIfUnparseable 先备份再覆盖；这里只提示，避免静默当成「没有配置」。
-    if (e && e.code !== 'ENOENT') {
-      console.warn(`[config] ${path.basename(configPath())} 读取/解析失败，本次使用默认值：${e.message}（原文件保留，下次保存前会先备份）`);
-    }
+    // preserveIfUnparseable 先备份再覆盖；这里只提示一次，避免静默当成「没有配置」。
+    warnCorruptOnce(configPath(), e);
   }
   return base;
 }

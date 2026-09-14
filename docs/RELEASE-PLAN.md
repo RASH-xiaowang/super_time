@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 33 | 24 | 1 | 0 | 8 |
+| 阶段 5 | 中优先级：稳定性与性能 | 34 | 25 | 1 | 0 | 8 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **71** | **47** | **3** | **0** | **21** |
+| **合计** | | **72** | **48** | **3** | **0** | **21** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -709,17 +709,17 @@ flowchart TD
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
 | M1 | 密钥明文落盘且三处镜像 | `key-store.ts:51-56,81` 写 `keys.json`；`config.ts:119` 写 `db_enc_key`；`wechat-paths.js:277-291` 把密钥一并镜像进 config.json（`DERIVED_SETTING_KEYS:96-103` 只剔除路径类字段） | 密钥至少受 OS 凭据库（DPAPI/Keychain）保护或文件 ACL 收紧；config.json 不再含密钥；文档说明存储位置与保护方式 | 未开始 |
-| M2 | 配置写入非原子，损坏静默吞掉 | 同上 | **已完成**：宿主层（`wechat-paths.js` 的 `writeFileAtomic`/`preserveIfUnparseable`）与后端（`query/config.ts` 的同名实现）都改为 temp+rename；解析失败时**不改动文件**、给出可读告警（同签名只告警一次），并在下一次覆盖前把残缺文件改名成 `config.json.corrupt-<时间戳>` 留痕（原来会被「默认值+补丁」无声覆盖）。验收：`src/backend/tests/atomic-json.spec.ts` 9 项（两份实现逐条对照 + `saveConfig` 集成） | 已完成 |
+| M2 | 配置写入非原子，损坏静默吞掉 | 同上 | **已完成**：宿主层（`wechat-paths.js` 的 `writeFileAtomic`/`preserveIfUnparseable`）与后端（`query/config.ts` 的同名实现）都改为 temp+rename；解析失败时**不改动文件**、给出可读告警（同签名只告警一次），并在下一次覆盖前把残缺文件改名成 `config.json.corrupt-<时间戳>` 留痕（原来会被「默认值+补丁」无声覆盖）。验收：`src/backend/tests/atomic-json.spec.ts` **10 项** —— 除两份实现逐条对照与 `saveConfig` 集成外，还有一条**真正的原子性判别**：子进程写 8MB 的同时父进程不停采样目标文件大小，断言读者只会看到「旧内容」或「完整新内容」（A/B 实测：把实现退回直接 `writeFileSync` → 采样到 1 次「写了一半」→ 用例变红）。评审后另修：`.corrupt-*` 备份加了保留上限（3 份，原先随损坏次数线性增长且含完整密钥）与「pid + 单调计数」后缀（原先同一毫秒内的多次备份会静默互相覆盖、丢掉最早的损坏内容） | 已完成 |
 | M3 | 导出/备份留半成品文件 | `export.ts:345,347,401,522,634,706,746` 直接写盘；`backup.ts:188` 子目录 `catch{}` 后仍报成功；`:220-246` 失败不清理 `.wcb` | 全部输出 temp+rename；部分失败必须上报（不再报成功）；失败时清理中间产物。与 H8 同期实施。**H8 已完成 zip 流式写盘与原子落地（`zip.ts` 的 `ZipFileWriter` + temp+rename）；xlsx 仍未流式、无取消/进度事件** | 进行中 |
-| M4 | 快照替换存在不可读窗口 | 同上 | **已完成**：去掉 `unlink`，只保留 rename + 重试。Windows 实测（`%TEMP%` 探针）：rename 覆盖**已存在但未被打开**的文件是允许的（旧实现白删一次，凭空制造 ENOENT 窗口）；而目标被 SQLite 句柄打开时 unlink（EBUSY）与 rename（EPERM）**都会失败**，真正让同步成功的是重试等待 —— 所以 unlink 只有害处。验收：`sync-wal.spec.ts` 新增「替换期间目标始终存在」用例（可逆 A/B：加回 unlink → 目标缺失 2 次、用例红） | 已完成 |
+| M4 | 快照替换存在不可读窗口 | 同上 | **已完成**：去掉 `unlink`，只保留 rename + 重试。Windows 实测（`%TEMP%` 探针）：rename 覆盖**已存在但未被打开**的文件是允许的（旧实现白删一次，凭空制造 ENOENT 窗口）；而目标被 SQLite 句柄打开时 unlink（EBUSY）与 rename（EPERM）**都会失败**，真正让同步成功的是重试等待 —— 所以 unlink 只有害处。验收：`sync-wal.spec.ts` 新增「替换期间目标始终存在」用例（可逆 A/B：加回 unlink → 目标缺失 2 次、用例红；评审连跑 10 次红、新实现连跑 10 次绿，无假绿/假红）。**评审补充的反向面**：目标被**普通 fs 只读句柄**（不只是 SQLite 句柄）打开时 rename 也会 EPERM，而这种情况旧实现的 unlink 是能成功的 —— 即去掉 unlink 在「普通只读句柄并发读者」下要靠 8×120ms 重试兜底，超时则本轮同步失败（无数据风险）。另修：WAL 分支的 `finally` 补上 `stagingDb` 清理（`atomicReplace` 抛错时它会以完整快照副本留在盘上） | 已完成 |
 
 ### 工作流 B · 可诊断性与降级（3 项）
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
 | M5 | koffi 失败被永久缓存 | 同上 | **已完成**：初始化失败时清掉缓存的 promise（成功才保留，避免每次扫描重复 dlopen）；错误信息本地化并给排查方向（缺原生二进制/杀软拦截/非 x64 + 建议先用「手动填写密钥」）。验收：`tests/win32-memory-retry.spec.ts` 3 项（mock koffi 让头两次 load 失败，断言每次都**真的重新尝试**、第三次成功、成功后走缓存；可逆 A/B：去掉清缓存 → 3 项全红） | 已完成 |
-| M6 | 无日志落盘 | 同上 | **已完成**：新增 `src/backend/diag-log.js`（大小轮转：app.log → .1.log → .2.log，单份 2MB/共 3 份，**绝不抛**）；主进程在 `STATE_DIR/logs` 起日志并接管 console（**在 console-safe 之后**装 —— 那层在管道断掉时会直接 return，顺序反了日志会一起没）；`uncaughtException` / `unhandledRejection` 一律落盘；设置 → 高级 增加「诊断日志」行（导出… / 打开所在目录），导出会把各轮转份按旧→新拼上环境信息交给保存对话框。验收：`tests/diag-log.spec.ts` 7 项 + 打包冒烟断言 `<userData>/wechat/logs/app.log` 已落盘且行带时间戳/级别（实测 508 字节） | 已完成 |
-| M7 | LLM/embedding 无重试 | 同上 | **已完成（「UI 可见重试状态」一项未做，见下）**：新增 `src/backend/llm-retry.js`（可注入 fetch，便于确定性单测）：只重试网络异常/408/429/5xx，`Retry-After` 优先但夹在 5s 内，退避 500/1500/4500ms + ≤20% 抖动，`signal` 中止后**不再发新请求**；接到 `wechat-host.js` 的三个调用点（chat 非流式、chat 流式**握手**、embedding），并加接线守卫用例（该文件里不得再出现裸 `fetch(`）。验收：`tests/llm-retry.spec.ts` 12 项（5xx 重试至成功、401 不重试、429 按 Retry-After 等待、网络异常重试耗尽后抛最后一个错、中止即停、退避上限）。**「UI 可见重试状态」有意未做**：成功的重试应当无感（界面不该闪），失败才报错；要显示「正在重试」需新增事件贯通渲染端，属独立小改动 | 已完成 |
+| M6 | 无日志落盘 | 同上 | **已完成**：新增 `src/backend/diag-log.js`（大小轮转：app.log → .1.log → .2.log，单份 2MB/共 3 份，**绝不抛**）；主进程在 `STATE_DIR/logs` 起日志并接管 console（**在 console-safe 之后**装 —— 那层在管道断掉时会直接 return，顺序反了日志会一起没）；`uncaughtException` / `unhandledRejection` 一律落盘；设置 → 高级 增加「诊断日志」行（导出… / 打开所在目录），导出会把各轮转份按旧→新拼上环境信息交给保存对话框。验收：`tests/diag-log.spec.ts` **11 项** + 打包冒烟断言日志落盘、行带时间戳/级别、且**后端进程的日志也在文件里**（哨兵：`[backend] [wechat-worker] 后端进程已启动 pid=…`，实测 910 字节）。**评审后的三项修复**（原文只覆盖了主进程，且轮转/脱敏无覆盖）：① **后端进程日志原本完全不落盘** —— 它是独立 `utilityProcess`，RPC 走 `parentPort` 与 stdio 无关，原先 `stdio: 'inherit'` 时那些 `[wechat-sync]`/`[config]`/重试日志进的是主进程那条（GUI 态已断的）管道、于是静默消失；现改为 `stdio: 'pipe'` 并在主进程转进文件日志（同时转写一份到本进程标准流保持开发态可见）。后端加了一行启动留痕（带 pid）作为常驻哨兵。② **脱敏**：`JSON.parse` 的报错会带出错位置附近的**源码片段**（`Unexpected token 'x', ..."apiKey":sk-live-AB"...`），于是「损坏的 llm.json/config.json」告警会把密钥前若干位落盘、并随导出文件外发。现在所有落盘内容都过一个 `redact()` 收口（键值/`sk-`/`Bearer`/长 16 进制），并有 3 项用例锁住（含评审那条真实报错形态）。③ **轮转有了真判别**：原先「文件数 ≤3、总量 <1000」的阈值断言把 `rotate()` 整个禁用仍全绿；现在断言中间态（`.1/.2` 各自装哪一行、丢的是最旧那份），并修掉 `maxFiles=1` 时轮转完全不生效的无上界分支 | 已完成 |
+| M7 | LLM/embedding 无重试 | 同上 | **已完成（「UI 可见重试状态」一项未做，见下）**：新增 `src/backend/llm-retry.js`（可注入 fetch，便于确定性单测）：只重试网络异常/408/429/5xx，`Retry-After` 优先但夹在 5s 内，退避 500/1500/4500ms + ≤20% 抖动，`signal` 中止后**不再发新请求**；接到 `wechat-host.js` 的三个调用点（chat 非流式、chat 流式**握手**、embedding），并加接线守卫用例（该文件里不得再出现裸 `fetch(`）。验收：`tests/llm-retry.spec.ts` 12 项（5xx 重试至成功、401 不重试、429 按 Retry-After 等待、网络异常重试耗尽后抛最后一个错、中止即停、退避上限）。**范围**：只覆盖 **LLM/embedding**（验收标准如此）。评审逐个列出全部出网点：`article-cover.ts`（公众号封面）、`media-image.ts`（图片）、`sns-video.ts`（朋友圈视频）、`whisper.ts`（引擎/模型下载，有镜像轮换但无重试/续传）**仍是单次尝试** → 已登记为 **N13**；`llm-model-catalog` 与 `wechat:llm-models` 经核实**不发网络请求**，不需要重试。**「UI 可见重试状态」有意未做**：成功的重试应当无感（界面不该闪），失败才报错；要显示「正在重试」需新增事件贯通渲染端，属独立小改动 | 已完成 |
 
 ### 工作流 C · 后端性能（6 项）
 
@@ -765,6 +765,7 @@ flowchart TD
 | N9 | 搜索不可中断（H9 验收标准 4 未达标） | `query/search.ts` 的兜底搜索是同步整循环（`budget=800_000`），实测 20 万行 × 500B 无命中时单次 **621ms**、期间 10ms 定时器 0 次触发，外推约 2.5s。用户切换面板无法打断，且该循环在每次索引重建窗口内会被反复触发 | 需要 AbortSignal 从渲染层贯通到查询层（`searchIndexMessages` 目前是同步 `@Remote`，改 async 会改动客户端契约与 `/api.ts`）。验收：取消后 100ms 内停止扫描，且不再持有 shard 读连接 | 未开始 |
 | N10 | 向量索引构建持写事务跨网络调用且无并发保护（H9 同族，风险更高） | `query/retrieval/embedding.ts:257-280`：写事务跨 `await`（跨网络的 embedding 调用）保持开启，且既无单飞闸也无 busy_timeout。实测同进程并发两次：**1555ms 内一个成功 `ok/4000`、另一个 `database is locked`**。它被 Remote 按钮（`gateway.ts:1296`）与问答自动路径（`gateway.ts:946`）触发 | 不要把事务开着等网络：改为「先算好向量再一次性事务写入」，并给构建加单飞闸（参照 H9）。验收：并发两次调用均成功，且写事务的持有时长远小于网络往返 | 未开始 |
 | N11 | `dirs.ts` bootstrap「只拷主库、跳过 `-wal/-shm`」与 WAL 叠加会拷出旧一代索引 | `dirs.ts:44`（`BOOTSTRAP_ITEMS` 含 `wechat_search.db`）+ `:47`（`SKIP_SUFFIXES` 含 `-wal/-shm`）+ `:106,111`（copyTree 跳过运行时产物）。实测：3000 行索引建成后让另一连接持旧读标记，再 force 重建 6000 行 —— 主库仍是 3000 行、新数据全在 `-wal`（48.9MB）；此时只拷 `wechat_search.db` 读回 **rows=3000/旧 built_at**（静默回退一代），全量拷才对 | 二选一：拷贝 SQLite 库前后对源库做 `PRAGMA wal_checkpoint(TRUNCATE)`（让主库自包含）；或 `copyTree` 对 `.db` 连 `-wal`/`-shm` 一起拷（注意 `-shm` 不可跨机复用，SQLite 建议用 backup API）。H9 已尽力在构建 COMMIT 后 checkpoint，但**有并发读者时拿不到锁**，覆盖不到「源端应用正在跑」的情形（第四轮实测：读者游标未读完时 `wal_checkpoint(TRUNCATE)` 返回 `{busy:1, checkpointed:0}` 且不抛错，窗口未消除）。验收：数据根里存在活的 `-wal` 时，bootstrap 结果与源库一致 | 未开始 |
+| N13 | LLM 之外的 4 个出网点没有重试：公众号封面 / 图片 / 朋友圈视频 / whisper 下载 | `query/article-cover.ts:27,34`、`query/media-image.ts:529`、`query/sns-video.ts:271`、`query/whisper.ts:431,554` —— 全是单次尝试（whisper 有镜像轮换循环，但没有重试与断点续传）。M7 的重试只覆盖 LLM/embedding（验收范围如此）；这些点的一次网络抖动就是「图/视频/模型下载失败」，用户只能重试整个动作 | 把 `llm-retry.js` 的 `fetchWithRetry` 复用到这几个出点（它们都已有超时信号，接口兼容），whisper 下载另加断点续传。验收：断网重连后同一动作自动恢复；并给 `llm-retry.spec.ts` 的接线守卫加上「覆盖哪些文件」的显式清单 | 未开始 |
 | N12 | `members.ts` 是搜索索引库的第二个写者，不在单飞闸内 | `members.ts:92` 以**读写**方式打开 `wechat_search.db` 并写 `contact_fts`（`:55-79` 的 `BEGIN/INSERT/COMMIT`）。实测 40k 行 force 构建在飞时，**155/155 次** `searchMembers` 因写被拒而静默退化为 `source:'like'`（`members.ts:122` 吞掉错误），构建结束后立刻恢复 `source:'fts'`。读取可用性无损，但 H9 注释里「进程内争用一律交给单飞闸消除」的说法对它不成立 | 把搜索索引库的写入统一到一个闸（从 `search.ts` 导出 `withIndexWrite()`），或让 `members.ts` 在构建期间直接走 LIKE 并显式标注（而不是吞错）。验收：构建在飞时成员搜索不再出现「尝试写→被拒→静默降级」的路径 | 未开始 |
 
 ---
@@ -964,3 +965,6 @@ flowchart TD
 | 2026-09-13 | 实施 | M6、M7 | 未开始 → 已完成 | ① M6 文件日志：新增 diag-log.js（大小轮转、绝不抛）+ 主进程接管 console（装在 console-safe 之后）+ 崩溃/未处理拒绝落盘 + 设置里「导出诊断日志/打开所在目录」；打包冒烟新增「日志已落盘且行带时间戳级别」断言（实测 508 字节）。② M7 有界重试：新增 llm-retry.js（只重试网络异常/408/429/5xx，Retry-After 优先夹 5s，退避 500/1500/4500ms + 抖动，中止后不再发新请求），接到 chat 非流式/流式握手/embedding 三处，并加「不得再有裸 fetch」的接线守卫。「UI 可见重试状态」有意未做（成功重试应当无感） |
 | 2026-09-13 | 实施 | 教训（M6/M7） | — | ① 日志接管**必须在 console-safe 之后**：那层包装在管道断掉时直接 return，顺序反了日志会跟着一起消失 —— 而「管道断掉」正好是 GUI 态常态；② 重试实现里「中止检查」必须放在**发请求之前**：只在等待前检查时，sleep 期间被中止的下一轮仍会真打一次（单测实测调用次数 2 而非 1）；③ 把「拼装诊断报告」抽成函数才发现顺序（旧→新）值得单独锁住 —— 这类顺序错误在弹对话框那一步看不出来 |
 | 2026-09-13 | 实施 | 合计 | 71 项：未开始 47 / 进行中 3 / 已完成 21 | 阶段 5 完成 8（M20/N7/M23/M2/M4/M5/M6/M7） |
+| 2026-09-13 | 评审 | M2/M4/M5/M6/M7 | 批次复审（无 critical，4 major） | ① **M6 的后端进程日志完全不落盘**（独立 utilityProcess，RPC 走 parentPort、stdio 原为 inherit → GUI 态静默消失）→ 改 `stdio:'pipe'` 并在主进程转进文件日志 + 后端启动留痕作哨兵（打包冒烟实测 910 字节，含 `[backend] [wechat-worker] 后端进程已启动 pid=…`）。② **脱敏缺口**：`JSON.parse` 报错会带原文片段（实测泄漏 `image_aes_key` 前 10 位、`apiKey` 的 `sk-live-AB`），并随导出文件外发 → 所有落盘内容过 `redact()`。③ **M2 的「原子写」零覆盖**（退回 writeFileSync 仍全绿）→ 加跨进程「读者看不到写了一半」的判别用例（A/B 下变红）。④ **轮转零覆盖** + `maxFiles=1` 无上界 → 断言中间态 + 修退化分支。另修 8 项 minor：备份保留上限与撞名、宿主层告警去重、stagingDb 清理、koffi 错误带 `cause`、M5 用例顺序依赖、api.ts 注释悬挂、main.js 重复 require |
+| 2026-09-13 | 实施 | N13 | 新增 | 评审列出全部出网点：LLM/embedding 之外还有 4 处（封面/图片/视频/whisper 下载）仍是单次尝试，M7 未覆盖（验收范围如此） |
+| 2026-09-13 | 实施 | 合计 | 71 → 72：未开始 48 / 进行中 3 / 已完成 21 | 阶段 5 条目 33 → 34（+N13） |

@@ -25,20 +25,20 @@ vi.mock('koffi', () => ({
 const { readProcessMemory } = await import('../src/keys/win32-memory.ts')
 
 describe('koffi 初始化失败的处理', () => {
-  it('失败信息本地化且给出可操作指引', async () => {
+  // 三个阶段共用同一个模块级状态（apiPromise 与 load 计数），**必须放在同一个用例里**：
+  // 拆成三条时单独跑第 3 条会红（评审实测），调试时会被误读成真失败。
+  it('失败信息本地化；失败不永久缓存（会重试）；成功之后才走缓存', async () => {
+    // ① 头两次 load 都失败 → 错误是本地化且可操作的，且**两次调用都真的重试了**
     await expect(readProcessMemory(1, 0, 16)).rejects.toThrow(/内存扫描组件 koffi 初始化失败/)
     await expect(readProcessMemory(1, 0, 16)).rejects.toThrow(/手动填写密钥/)
-    // 两次调用 → 两次真实尝试（若沿用旧实现，第二次会直接复用缓存的拒绝、不再 load）
     expect(state.loadCalls).toBe(2)
-  })
 
-  it('失败不再是永久的：第三次调用会成功', async () => {
+    // ② 第三次调用成功（失败没有被永久缓存 —— 旧实现会一直复现第一条拒绝、loadCalls 停在 1）
     const buf = await readProcessMemory(1, 0, 16)
     expect(buf).toEqual(Buffer.alloc(0)) // 桩的 openProcess 返回 0 → 空缓冲
     expect(state.loadCalls).toBe(3)
-  })
 
-  it('成功之后走缓存（不再重复 dlopen）', async () => {
+    // ③ 成功之后走缓存，不再重复 dlopen
     await readProcessMemory(1, 0, 16)
     await readProcessMemory(1, 0, 16)
     expect(state.loadCalls).toBe(3)

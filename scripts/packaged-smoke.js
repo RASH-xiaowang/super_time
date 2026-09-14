@@ -140,9 +140,14 @@ let logSize = 0;
 try { logSize = fs.statSync(logFile).size } catch { logSize = 0 }
 check(logSize > 0, '诊断日志已落盘（<userData>/wechat/logs/app.log）', `${logSize} 字节`);
 if (logSize > 0) {
-  const head = fs.readFileSync(logFile, 'utf8').slice(0, 400);
-  check(/\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[(log|info|warn|error|fatal)\]/.test(head),
-    '日志行带时间戳与级别', head.split(/\r?\n/)[0] ?? '');
+  const logText = fs.readFileSync(logFile, 'utf8');
+  check(/\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[(log|info|warn|error|fatal)\]/.test(logText),
+    '日志行带时间戳与级别', logText.split(/\r?\n/)[0] ?? '');
+  // 后端是**独立进程**（utilityProcess），它那些 [wechat-sync]/[config] 日志原先只写在自己的
+  // stdout/stderr 上，GUI 态管道断掉后等于消失。这条哨兵证明「后端日志被转进了文件」。
+  const backendLines = logText.split(/\r?\n/).filter((l) => l.includes('] [backend'));
+  check(backendLines.length > 0, '后端进程的日志已转进文件（哨兵：级别 backend）',
+    backendLines[0] ? backendLines[0].slice(0, 90) : '未找到');
 }
 
 // 清理本次一次性 userData（里面可能有刚写入的配置）。

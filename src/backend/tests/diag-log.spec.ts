@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { buildDiagnosticReport, createDiagLog, installConsoleCapture } from '../diag-log.js'
+import { buildDiagnosticReport, createDiagLog, installConsoleCapture, redact } from '../diag-log.js'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -48,19 +48,31 @@ describe('文件日志', () => {
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(4000 + 40)
   })
 
-  it('超过单文件上限时轮转，且总份数有上界', () => {
+  it('轮转真的发生：.1/.2 就位且各自装着对应年代的那行', () => {
+    // 评审指出：原断言只查「文件数 ≤3、总量 <1000」，把 rotate() 整个禁用仍然全绿。
+    // 要锁住机制必须断言**中间态**：哪一份里是哪一行。
     const dir = tempDir()
-    // 上限设得极小：每行必然触发一次轮转
-    const log = createDiagLog({ dir, maxBytes: 80, maxFiles: 3, now: fixedNow })
-    for (let i = 1; i <= 10; i += 1) log.write('info', ['line-' + i])
+    const log = createDiagLog({ dir, maxBytes: 60, maxFiles: 3, now: fixedNow })
+    for (let i = 1; i <= 3; i += 1) log.write('info', ['line-' + i])
 
-    const files = readdirSync(dir).filter((f) => f.endsWith('.log'))
-    expect(files.length).toBeLessThanOrEqual(3)
-    // 最新的那份里是最后写入的内容
-    expect(readFileSync(log.path, 'utf8')).toContain('line-10')
-    // 总量有上界（3 × 80 字节 + 行首开销的量级）
-    const total = files.reduce((n, f) => n + statSync(join(dir, f)).size, 0)
-    expect(total).toBeLessThan(1000)
+    expect(existsSync(join(dir, 'app.1.log'))).toBe(true)
+    expect(existsSync(join(dir, 'app.2.log'))).toBe(true)
+    expect(readFileSync(join(dir, 'app.2.log'), 'utf8')).toContain('line-1')
+    expect(readFileSync(join(dir, 'app.1.log'), 'utf8')).toContain('line-2')
+    expect(readFileSync(log.path, 'utf8')).toContain('line-3')
+    // 写第 4 行后，最旧的 line-1 应当被挤掉（丢最旧）
+    log.write('info', ['line-4'])
+    expect(readFileSync(join(dir, 'app.2.log'), 'utf8')).toContain('line-2')
+    expect(readFileSync(join(dir, 'app.2.log'), 'utf8')).not.toContain('line-1')
+  })
+
+  it('maxFiles=1 时文件仍有上界（截断，而不是无界增长）', () => {
+    // 评审实测：maxFiles=1 时原来的 rotate() 一次都不执行，maxBytes=500 写到 27KB。
+    const dir = tempDir()
+    const log = createDiagLog({ dir, maxBytes: 200, maxFiles: 1, now: fixedNow })
+    for (let i = 0; i < 50; i += 1) log.write('info', ['x'.repeat(60)])
+    expect(statSync(log.path).size).toBeLessThanOrEqual(400)
+    expect(readdirSync(dir).filter((f) => f.endsWith('.log'))).toHaveLength(1)
   })
 
   it('目录不可写时只禁用自己，不抛异常（写日志不能拖垮业务）', () => {
@@ -115,5 +127,38 @@ describe('诊断报告拼装', () => {
     const report = buildDiagnosticReport(log, { app: 'x' })
     expect(report).toContain('只有当前这一份')
     expect(report).toContain('===== 环境 =====')
+  })
+})
+
+describe('脱敏：日志里不得出现密钥', () => {
+  it('JSON.parse 报错自带的源码片段会被脱敏（评审实测的泄漏路径）', () => {
+    // V8 在「非法 token」类错误里会带出错位置附近的原文
+    let msg = ''
+    try { JSON.parse('{"apiKey":sk-live-ABCDEF123456}') } catch (e) { msg = (e as Error).message }
+    expect(msg).toContain('sk-live') // 先确认这个场景真的会带片段，否则后面的断言是空转
+
+    const log = createDiagLog({ dir: tempDir(), now: fixedNow })
+    log.write('warn', ['llm.json 解析失败', msg])
+    const text = readFileSync(log.path, 'utf8')
+    expect(text).not.toContain('sk-live-ABCDEF')
+    expect(text).toContain('***')
+  })
+
+  it('对象里的密钥字段与长 16 进制串都会被脱敏', () => {
+    const log = createDiagLog({ dir: tempDir(), now: fixedNow })
+    log.write('info', [{ db_enc_key: 'a'.repeat(64), image_aes_key: 'e57c869f15dd8764', nested: { token: 'abc123456' } }])
+    const text = readFileSync(log.path, 'utf8')
+    expect(text).not.toContain('a'.repeat(64))
+    expect(text).not.toContain('e57c869f15dd8764')
+    expect(text).not.toContain('abc123456')
+    expect(text).toContain('***')
+  })
+
+  it('redact 直接可用的形态：Bearer / sk- / key=value', () => {
+    expect(redact('Authorization: Bearer abcdef123456')).not.toContain('abcdef123456')
+    expect(redact('key=sk-abcdefghijkl')).not.toContain('sk-abcdefghijkl')
+    expect(redact('api_key: "deadbeefdeadbeefdeadbeef"')).not.toContain('deadbeefdeadbeefdeadbeef')
+    // 无关内容不该被误伤
+    expect(redact('普通日志：后端已就绪 132 个方法')).toContain('后端已就绪')
   })
 })
