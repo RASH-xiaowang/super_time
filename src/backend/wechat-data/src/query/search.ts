@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, basename } from 'node:path'
 import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
@@ -353,16 +353,19 @@ async function runBuildSearchIndex(
 ): Promise<BuildResult> {
   const p = searchIndexPath(decryptedDir)
   const db = new DatabaseSync(p)
-  // WAL：让**读者**在重建窗口内不被写事务挡住（delete/journal 模式下读者整段被拒）。
-  // 不设 busy_timeout：它是同步忙等，在这个单线程 worker 里等价于「整线程睡 N 秒后仍然
-  // 失败」（实测 busy_timeout=5000 时停摆 7.5s 才报 database is locked）。进程内争用一律
-  // 交给上面的单飞闸消除；跨进程时快速失败也比冻结整个 worker 好。
   // WAL：让**读者**在重建窗口内不被写事务挡住。delete/journal 模式下写事务一旦溢出页缓存
-  // 就持 EXCLUSIVE 到 COMMIT，整段窗口读者被拒（实测溢出点约 1.75MB）。
-  // 不设 busy_timeout：它是同步忙等，在这个单线程 worker 里等价于「整线程睡 N 秒后仍然
-  // 失败」（实测 busy_timeout=5000 时停摆 7.5s 才报 database is locked）。进程内争用一律
-  // 交给上面的单飞闸消除；跨进程时快速失败也比冻结整个 worker 好。
+  // 就持 EXCLUSIVE 到 COMMIT，整段窗口读者被拒（实测溢出点约 1.75MB）；WAL 下 74–155 次
+  // 探测 0 次被拒。
+  // synchronous = NORMAL：索引是可重建的派生数据，不值得为每次 COMMIT 付一次 fsync ——
+  // 收尾的 COMMIT 正是 20 万行 438ms 的主导项。WAL + NORMAL 断电最坏丢最近几次提交，
+  // 但不会损坏库。
+  // 不设 busy_timeout：进程内争用交给上面的单飞闸；跨进程时快速失败（实测 16ms）比冻结
+  // 整个 worker 好。注意早前把「事件循环停摆 7.5s」归因于 busy_timeout **是错的**：
+  // 实测那是旧布局「DDL 在事务外各自 autocommit」的产物。DDL 进事务后写锁冲突走
+  // 「延迟事务的读写升级」路径，压根不会调用 busy 处理器（三形态探针：BEGIN;写 3341ms /
+  // autocommit 写 3328ms / BEGIN;读;写 1ms）。
   try { db.exec('PRAGMA journal_mode = WAL') } catch { /* 网络盘等不支持 WAL：退回 delete，仅损失读侧并发 */ }
+  try { db.exec('PRAGMA synchronous = NORMAL') } catch { /* 个别构建不支持该 PRAGMA，忽略 */ }
   const init = (): void => {
     db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     // tokens 列存 bigram 切分后的文本、who 列存「会话名 + 群内发送者」，两列都进 BM25 索引；
@@ -398,6 +401,16 @@ async function runBuildSearchIndex(
     let charsSinceYield = 0
     let batch: Array<[string, string, string, string, number, number, number]> = []
     let batchChars = 0
+    // 被跳过的分片（读取侧错误）。这不是「忽略」：既写进结果 message，也打 stderr，
+    // 否则一个缺行的索引对外与完整索引无法区分（读侧见 ready:true → 永不重建）。
+    let skippedCount = 0
+    const skipped: string[] = []
+    const recordSkip = (shard: string, e: unknown): void => {
+      skippedCount += 1
+      const detail = basename(shard) + ': ' + (e as Error).message
+      if (skipped.length < 5) skipped.push(detail)
+      console.warn('[search] 跳过不可读分片 ' + detail)
+    }
     const flush = (): void => {
       if (batch.length === 0) return
       const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)')
@@ -416,16 +429,32 @@ async function runBuildSearchIndex(
       const sessionWho = bigramTokens(names.get(username) ?? username)
       for (const shard of shards) {
         let sdb: DatabaseSync | null = null
-        try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
-        const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-        if (!has) { sdb.close(); continue }
+        try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch (e) { recordSkip(shard, e); continue }
+        let rows: Iterator<Record<string, unknown>>
         try {
+          const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+          if (!has) { sdb.close(); continue }
           // 不再只取 local_type=1：转账/链接/文件/引用等 appmsg 与系统提示
           // 都带可读文本，且往往正是用户问题的答案。文本统一走 readableMessageText 抽取。
           const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"'
           // 用 iterate() 而不是 all()：全量物化会让峰值与「单会话消息数」同阶
           // （百万级库上就是数百 MB）。边读边写 FTS，读完即释放。
-          for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
+          rows = (sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>)[Symbol.iterator]()
+        } catch (e) {
+          // 建语句 / prepare 失败：跳过该分片（记录，不静默）
+          recordSkip(shard, e)
+          sdb.close()
+          continue
+        }
+        try {
+          // 只有**读取**被包进可跳过的 catch：分片损坏时跳过它是有意的容错。
+          // 索引写入（flush）必须留在外面 —— 写失败要向上抛并 ROLLBACK，否则会 COMMIT 出
+          // 一个缺行的索引却仍报 status:'ok'（读侧见 ready:true，于是永不重建）。
+          for (;;) {
+            let step: IteratorResult<Record<string, unknown>>
+            try { step = rows.next() } catch (e) { recordSkip(shard, e); break }
+            if (step.done) break
+            const r = step.value
             // 计量必须在任何 continue **之前**：被跳过的行同样付了 zstd 解压与解码成本。
             // 图片/系统消息这类「无可读文本」的行在真实账号里占比很高且会连续成片，
             // 实测 30 万条这种行若不计次，单块能连续跑 1.1s 且一次都不让出。
@@ -454,8 +483,6 @@ async function runBuildSearchIndex(
               await yieldToLoop()
             }
           }
-        } catch {
-          // skip unreadable shard
         } finally {
           sdb.close()
         }
@@ -463,12 +490,21 @@ async function runBuildSearchIndex(
       if (batch.length >= 500) flush()
     }
     flush()
-    db.exec('COMMIT')
+    // 统计与 meta 写放在 COMMIT **之前**：这样「新索引 + built_at + schema_version」是同一次
+    // 原子提交。留在 COMMIT 之后时，meta 写失败会留下「索引已换新但 schema_version 缺失」
+    // → ready:false → 自动重建反复重跑。
     total = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
     const builtAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt)
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION)
-    return { status: 'ok', rows: total, built_at: builtAt, elapsed_ms: Date.now() - started }
+    db.exec('COMMIT')
+    // WAL 里可能还压着整代新数据（有并发读者时 close 不会 checkpoint）。主动截断一次让主库
+    // 尽快自包含 —— 否则「只拷 wechat_search.db、不拷 -wal」的拷贝路径会静默拿到上一代索引
+    // （dirs.ts 的 bootstrap 正是拷主库、跳过 -wal/-shm）。
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } catch { /* 有并发读者时 checkpoint 失败，忽略 */ }
+    const result: BuildResult = { status: 'ok', rows: total, built_at: builtAt, elapsed_ms: Date.now() - started }
+    if (skippedCount > 0) result.message = `已跳过 ${skippedCount} 个不可读分片：${skipped.join('; ')}`
+    return result
   } catch (e) {
     try { db.exec('ROLLBACK') } catch { /* no active tx */ }
     throw new Error('构建搜索索引失败: ' + (e as Error).message)

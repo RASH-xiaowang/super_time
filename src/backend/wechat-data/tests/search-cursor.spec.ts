@@ -7,13 +7,13 @@
  *      全部查询的 worker 停摆数秒）。
  * @vitest-environment node
  */
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from '../src/query/search.ts'
+import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages, searchIndexPath } from '../src/query/search.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -179,9 +179,10 @@ describe('索引构建会让出事件循环', () => {
   })
 
   it('长行也会触发让出：行数远不够时由字符上界兜住', async () => {
-    // 400 行 × 约 8KB/行 ≈ 320 万字符 > YIELD_EVERY_CHARS(1<<20)，
-    // 但只有 400 行 ≪ YIELD_EVERY_ROWS(2000) —— 只有字符上界能点亮这条。
-    const decrypted = makeFixture(400, 10, 8000)
+    // 夹具刻意卡在「只有字符上界能点亮」的区间：总量约 48 万字符 > YIELD_EVERY_CHARS(1<<17)，
+    // 但既不到 YIELD_EVERY_ROWS(2000) 行，也**小于**旧值 1<<20 —— 所以把常量放宽回 1<<20
+    // （或彻底去掉字符上界）都会让这条从「有让出」变成「0 次让出」。
+    const decrypted = makeFixture(60, 10, 8000)
 
     const start = Date.now()
     const ticksInWindow: number[] = []
@@ -198,9 +199,28 @@ describe('索引构建会让出事件循环', () => {
     stop = true
 
     expect(r.status).toBe('ok')
-    expect(r.rows).toBe(400)
+    expect(r.rows).toBe(60)
     const during = ticksInWindow.filter(t => t >= start && t <= end)
     expect(during.length).toBeGreaterThan(0)
+  })
+
+  it('索引库处于 WAL 模式（重建窗口内读者不被写事务挡住的前提）', async () => {
+    const decrypted = makeFixture(200, 3)
+    await buildSearchIndex(decrypted, true)
+    const db = new DatabaseSync(searchIndexPath(decrypted), { readOnly: true })
+    const mode = String(Object.values(db.prepare('PRAGMA journal_mode').get() as Record<string, unknown>)[0])
+    db.close()
+    expect(mode).toBe('wal')
+  })
+
+  it('不可读分片被跳过但记入结果（不再静默产出无法区分的残缺索引）', async () => {
+    const decrypted = makeFixture(200, 3)
+    // 在分片目录里塞一个不是 SQLite 的文件：shardCatalog 会把它当分片列出来。
+    writeFileSync(join(decrypted, 'message', 'message_1.db'), 'this is not a sqlite database')
+    const r = await buildSearchIndex(decrypted, true)
+    expect(r.status).toBe('ok')
+    expect(r.rows).toBe(200) // 好分片照常入库
+    expect(r.message).toContain('已跳过')
   })
 
   it('构建完成后索引可用，且能查到关键词', async () => {
@@ -320,11 +340,11 @@ describe('重建窗口内读侧不被降级', () => {
     await rebuilding
     done = true
 
-    expect(seen.length).toBeGreaterThan(3)
-    // 重建窗口内每一次探测都必须仍读到旧索引：表未被删空、版本仍匹配、
-    // 检索仍走 BM25 通道（而不是静默退化成无排序的全表扫描）
+    // 先断言「没有降级」再断言「探测次数够」：两个命题互不遮蔽。
+    // （反过来的话，探测次数不足会先失败，而 degraded 的结论根本没被求值。）
     const degraded = seen.filter(o => !o.ready || o.rows !== 6000 || !o.indexed)
     expect(degraded).toEqual([])
+    expect(seen.length).toBeGreaterThan(3)
   })
 })
 
