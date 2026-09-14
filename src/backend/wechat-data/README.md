@@ -23,9 +23,33 @@
 | wechat_search.db | 搜索索引（插件写入） | `<root>/wechat_search.db` |
 | wechat_tasks.db | 待办提取存储（插件写入） | `<root>/wechat_tasks.db` |
 | wechat_privacy.db | 隐私设置与 AI 审计 + 操作日志（插件写入） | `<root>/wechat_privacy.db` |
-| config.json | 微信配置（读写） | `<root>/config.json` |
+| config.json | 微信配置（读写）—— **不含密钥**（见下） | `<root>/config.json` |
 | keys.json | 自动获取的密钥存储（autoGetDbKey/autoGetImageKey 写入） | `<root>/keys.json` |
 | all_keys.json | 生成的密钥信息 | `<root>/all_keys.json` |
+
+## 密钥存储与保护（M1）
+
+**密钥放在哪**
+
+| 内容 | 位置 | 谁写 |
+|---|---|---|
+| 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<STATE_DIR>/secrets.json` | 后端 `query/config.ts`（`SECRET_FIELDS`） |
+| 自动获取的按账号密钥 | `<数据根>/keys.json` | `keys/key-store.ts` |
+| LLM API Key | `<STATE_DIR>/llm.json` | 宿主层 `wechat-paths.js` |
+
+`STATE_DIR` = `<userData>/wechat`；数据根默认 `<userData>/wechat-data`。
+
+**为什么不在 config.json 里**：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝
+或交给支持人员」的文件，密钥写进去等于凭空多一份副本（这正是 H1/N6 那条泄漏路径的载体）。
+因此 `saveConfig` 会把密钥类字段**改写到 `secrets.json`**，并从 `config.json` 删除；
+`getConfig` 再从 `secrets.json` 读回来，所以调用方无感。旧数据（密钥还在 config.json 里）
+会在下一次保存时被自动搬走。
+
+**权限保护**：启动时 `src/backend/secure-fs.js` 把 `STATE_DIR` 与数据根收紧到**当前用户**
+（Windows 用 `icacls /inheritance:r /grant:r <当前用户 SID>:(OI)(CI)F`，POSIX 用 0700/0600）。
+目录级的 `(OI)(CI)` 继承让之后新建的文件自动继承同一权限，所以不必每写一个文件都调一次。
+授权按**进程令牌里的 SID** 取（`whoami /user`）—— 实测 `process.env.USERNAME` 在部分环境里
+是错的身份，照它授权会把目录锁成谁也进不去。加固失败只记日志，不会让应用起不来。
 
 自举只复制一次：目标根已存在 `decrypted` 时跳过；复制跳过 SQLite `-wal`/`-shm`
 运行时文件。本包**不自解密 SQLite**（SQLCipher 解密单独立项），但**可自动获取密钥**：`autoGetDbKey`

@@ -373,9 +373,19 @@ function recordResolved(info) {
 }
 
 /**
- * 把「数据配置」保存的微信设置（db_dir/密钥/图片密钥/开关等）镜像到 config.json，
- * 供用户查看/手工编辑。**派生字段一律不镜像**（见 DERIVED_SETTING_KEYS）：
- * 它们随安装位置与数据根变化，镜像过去只会把别的机器/别的安装位置的路径推回来。
+ * 凭据类设置项：**不镜像**进 config.json。
+ *
+ * 理由：config.json 是「用户可手工编辑、出问题会被整目录拷贝或交给支持人员」的文件
+ * （H1/N6 那条泄漏路径的载体），密钥镜像一份进去等于凭空多一份副本。
+ * 密钥的真源是后端写的 `<STATE_DIR>/secrets.json`（见 query/config.ts 的 SECRET_FIELDS）。
+ */
+const SECRET_SETTING_KEYS = new Set(['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']);
+
+/**
+ * 把「数据配置」保存的微信设置（db_dir/开关等）镜像到 config.json，供用户查看/手工编辑。
+ * **派生字段一律不镜像**（见 DERIVED_SETTING_KEYS）：它们随安装位置与数据根变化，
+ * 镜像过去只会把别的机器/别的安装位置的路径推回来。
+ * **凭据字段也不镜像**（见 SECRET_SETTING_KEYS）：它们有单独的、受权限保护的文件。
  * @param settings - saveWechatConfig 的 patch（不写入元数据字段）。
  */
 function recordWechatSettings(settings) {
@@ -384,6 +394,7 @@ function recordWechatSettings(settings) {
   for (const [k, v] of Object.entries(settings || {})) {
     if (k === 'wechatSettings' || k === 'wechatSettingsMeta') continue;
     if (DERIVED_SETTING_KEYS.has(k)) continue;
+    if (SECRET_SETTING_KEYS.has(k)) continue;
     clean[k] = v;
   }
   config.wechatSettings = clean;

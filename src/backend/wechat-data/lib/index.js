@@ -4359,7 +4359,7 @@ function queryWechatConfig(decryptedDir) {
 // src/backend/wechat-data/src/query/config.ts
 import { execFileSync } from "node:child_process";
 import { createDecipheriv, createHmac, pbkdf2Sync } from "node:crypto";
-import { closeSync, existsSync as existsSync11, mkdirSync, openSync, readFileSync as readFileSync3, readdirSync as readdirSync6, readSync, renameSync, rmSync, statSync as statSync5, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync as existsSync11, mkdirSync, openSync, readFileSync as readFileSync3, readdirSync as readdirSync6, readSync, renameSync, rmSync, statSync as statSync5, writeFileSync } from "node:fs";
 import { basename, dirname as dirname2, join as join17, relative } from "node:path";
 var PAGE_SZ = 4096;
 var SALT_SZ = 16;
@@ -4411,6 +4411,31 @@ function readRawConfig(p) {
 }
 function defaultConfig() {
   return { db_dir: "", keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: "Weixin.exe", image_aes_key: "", image_xor_key: 136, key_format: "wx_key_v4.1", db_enc_key: "", api_enabled: true, api_port: 5032, api_token: "", cdn_enabled: true, cdn_local_decrypt: true };
+}
+var SECRET_FIELDS = ["db_enc_key", "image_aes_key", "image_xor_key", "api_token"];
+function secretsPath(decryptedDir) {
+  return join17(decryptedDir, "..", "secrets.json");
+}
+function readSecrets(decryptedDir) {
+  const p = secretsPath(decryptedDir);
+  if (!existsSync11(p)) return {};
+  try {
+    const raw = JSON.parse(readFileSync3(p, "utf8"));
+    return typeof raw === "object" && raw !== null ? raw : {};
+  } catch {
+    return {};
+  }
+}
+function writeSecrets(decryptedDir, secrets) {
+  const p = secretsPath(decryptedDir);
+  mkdirSync(dirname2(p), { recursive: true });
+  writeFileAtomic(p, JSON.stringify(secrets, null, 2));
+  if (process.platform !== "win32") {
+    try {
+      chmodSync(p, 384);
+    } catch {
+    }
+  }
 }
 function writeFileAtomic(target, text) {
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
@@ -4468,6 +4493,12 @@ function getConfig(decryptedDir) {
   const cfg = defaultConfig();
   const raw = readRawConfig(p);
   if (raw) Object.assign(cfg, raw);
+  const secrets = readSecrets(decryptedDir);
+  for (const field of SECRET_FIELDS) {
+    const fromSecrets = secrets[field];
+    if (fromSecrets !== void 0 && fromSecrets !== "") cfg[field] = fromSecrets;
+    else if (raw && raw[field] !== void 0) cfg[field] = raw[field];
+  }
   const wechatRoot = join17(decryptedDir, "..");
   const resolved = {
     decrypted_dir: decryptedDir,
@@ -4491,6 +4522,15 @@ function saveConfig(decryptedDir, patch) {
     }
     delete current["resolved"];
     const imgBefore = getConfig(decryptedDir);
+    const secretPatch = {};
+    for (const field of SECRET_FIELDS) {
+      const v = current[field];
+      if (v !== void 0) secretPatch[field] = v;
+      delete current[field];
+    }
+    if (Object.keys(secretPatch).length > 0) {
+      writeSecrets(decryptedDir, { ...readSecrets(decryptedDir), ...secretPatch });
+    }
     mkdirSync(dirname2(p), { recursive: true });
     preserveIfUnparseable(p);
     writeFileAtomic(p, JSON.stringify(current, null, 2));
