@@ -207,12 +207,21 @@ function loadLlmConfig() {
 function writeFileAtomic(target, text) {
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, text, 'utf8');
-  try {
-    fs.renameSync(tmp, target);
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不掩盖原错误 */ }
-    throw e;
+  // rename 覆盖目标时，Windows 上**任何**持有目标的句柄都会让它 EPERM —— 不只是 SQLite：
+  // 实测连密集 statSync 的瞬态句柄、杀软扫描、备份工具都算（M4 的结论）。
+  // 一次瞬态占用不该让「保存配置」失败，所以做有界重试（最多 5 次 × 20ms）。
+  let lastErr = null;
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      fs.renameSync(tmp, target);
+      return;
+    } catch (e) {
+      lastErr = e;
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); } catch { /* 不支持就不等 */ }
+    }
   }
+  try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不掩盖原错误 */ }
+  throw lastErr;
 }
 
 /**
@@ -382,15 +391,28 @@ function recordResolved(info) {
 const SECRET_SETTING_KEYS = new Set(['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']);
 
 /**
- * 把「数据配置」保存的微信设置（db_dir/开关等）镜像到 config.json，供用户查看/手工编辑。
+ * 把「数据配置」保存的微信设置 (db_dir/开关等) 镜像到 config.json，供用户查看/手工编辑。
  * **派生字段一律不镜像**（见 DERIVED_SETTING_KEYS）：它们随安装位置与数据根变化，
  * 镜像过去只会把别的机器/别的安装位置的路径推回来。
  * **凭据字段也不镜像**（见 SECRET_SETTING_KEYS）：它们有单独的、受权限保护的文件。
+ *
+ * **是合并不是整体替换**：这个函数不只被界面保存调用，也会被主进程的内部保存调用
+ * （启动期把旧密钥交给后端、空 patch 保存等），而那些 patch 往往是**部分字段**。
+ * 整体替换会让一次内部保存把镜像里的普通设置全部抹掉（实测踩过两次：空 patch 保存 +
+ * 只在镜像里的密钥搬迁），而镜像本来就是「最近一次设置的样子」，合并才是正确语义。
+ * 界面的保存会带上全部字段，所以对它而言合并与替换等价。
  * @param settings - saveWechatConfig 的 patch（不写入元数据字段）。
  */
 function recordWechatSettings(settings) {
   const config = loadConfig();
   const clean = {};
+  // 先继承既有镜像，但**顺手丢掉派生/凭据字段** —— 否则合并会让 M1 之前残留在
+  // `config.json.wechatSettings` 里的密钥副本永远留在文件里（既走不了 pre-patch 的 RPC，
+  // 也永远等不到一次「整体替换」来清掉）。
+  for (const [k, v] of Object.entries(config.wechatSettings || {})) {
+    if (DERIVED_SETTING_KEYS.has(k) || SECRET_SETTING_KEYS.has(k)) continue;
+    clean[k] = v;
+  }
   for (const [k, v] of Object.entries(settings || {})) {
     if (k === 'wechatSettings' || k === 'wechatSettingsMeta') continue;
     if (DERIVED_SETTING_KEYS.has(k)) continue;
@@ -412,9 +434,39 @@ function loadWechatSettings() {
   const clean = {};
   for (const [k, v] of Object.entries(settings)) {
     if (DERIVED_SETTING_KEYS.has(k)) continue;
+    if (SECRET_SETTING_KEYS.has(k)) continue; // 密钥不在 config.json 里，镜像残留也不回放
     clean[k] = v;
   }
   return clean;
+}
+
+/**
+ * 取出宿主镜像里的密钥字段（**只读，不删除**）。
+ *
+ * 为什么需要：`saveWechatConfig` 返回前 `wechat-host.js` 会调 `recordWechatSettings(patch)`
+ * 把整份镜像**重写**成「已过滤密钥」的干净版 —— 那些**只存在于镜像里**的密钥（后端
+ * config.json 里没有对应值 → `saveConfig` 的 `carried` 也捞不到）会在那一步被无声丢掉。
+ * 所以调用方（`main.js` 的 `applySavedWechatSettings`）必须把它们**并进同一次回灌 patch**：
+ * 后端会把它们写进 `secrets.json`，而回写镜像时会顺手把副本过滤掉 —— 迁移与去副本一步完成，
+ * 也就不需要再单独「清理镜像」了（原先那个 `pruneMirroredSecrets` 因此删掉：正常顺序下它
+ * 永远是空转，留着只会让人以为它在干活）。
+ *
+ * 这里不做「值是否等于默认值」的判断：后端 `saveConfig` 的 `secretIsMeaningful` 才是唯一
+ * 口径（宿主层再抄一份默认值只会漂移）。空串这里就滤掉，省一次无意义的 RPC 字段。
+ * @returns {Record<string, unknown>} 非空的密钥字段。
+ */
+function mirroredSecretValues() {
+  const config = loadConfig();
+  const settings = config.wechatSettings;
+  const out = {};
+  if (!settings || typeof settings !== 'object') return out;
+  for (const key of SECRET_SETTING_KEYS) {
+    const v = settings[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    out[key] = v;
+  }
+  return out;
 }
 
 module.exports = {
@@ -430,6 +482,7 @@ module.exports = {
   recordResolved,
   recordWechatSettings,
   loadWechatSettings,
+  mirroredSecretValues,
   loadLlmConfig,
   saveLlmConfig,
   FIELD_TO_ENV,

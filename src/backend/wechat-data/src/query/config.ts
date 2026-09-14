@@ -81,6 +81,139 @@ function defaultConfig(): Record<string, unknown> {
 }
 
 /**
+ * 密钥类字段：**不写进 config.json**。
+ *
+ * 为什么：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝/交给支持人员」的文件
+ * （H1/N6 那条泄漏路径的载体）。密钥单独放 `secrets.json`，并收紧到当前用户可访问。
+ */
+const SECRET_FIELDS = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token'] as const
+
+/** 密钥文件路径：与后端 config.json 同级（数据根，不是宿主的状态目录）。 */
+function secretsPath(decryptedDir: string): string {
+  return join(decryptedDir, '..', 'secrets.json')
+}
+
+/** 读取结果：区分「没有这个文件」与「文件存在但读不出来」——后者绝不能当成空密钥用。 */
+interface SecretsRead {
+  values: Record<string, unknown>
+  /** true = 文件存在但解析失败（损坏）。调用方据此决定「有没有真值可写」。 */
+  corrupt: boolean
+}
+
+/**
+ * 某个密钥字段的值是否「有信息量」（够格覆盖/搬运）。
+ *
+ * 判定：
+ *   · `undefined` / `null` → 否；
+ *   · 字符串字段（`db_enc_key`/`image_aes_key`/`api_token`，内置默认 `''`）→ 必须非空；
+ *   · 其它（`image_xor_key`，内置默认 `136`）→ 必须**不等于内置默认值**。
+ *
+ * 为什么需要它（两条实测出来的路径）：
+ *  ① **界面未加载完就点保存**：`Settings.tsx` 的保存按钮在配置还没读回来时也能点，而它
+ *     无条件把 4 个密钥字段都放进 patch（未加载时是 `''` 与 `136`）。把「显式空串」当成
+ *     「用户要清空」就会把 `secrets.json` 里的真密钥整体抹成空值，且原文件是合法 JSON、
+ *     连 `.corrupt-*` 备份都不会留 —— **静默且不可逆**。
+ *  ② **默认值被当成真值固化**：`image_xor_key: 136` 一旦进 secrets，config.json 里对它
+ *     的手工修改就被 `getConfig` 的「secrets 优先」永久压住。
+ * 代价：不再支持「把某个密钥改回默认/清空」这个动作 —— 那本来也不是一个有意义的操作
+ * （清空等于没有密钥，改回 136 等于用默认值），而它带来的静默丢失风险要大得多。
+ * @param field - 密钥字段名。
+ * @param value - 待判定的值。
+ * @returns 是否值得写进 secrets.json / 用于覆盖读回值。
+ */
+function secretIsMeaningful(field: string, value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  const dflt = defaultConfig()[field]
+  if (typeof dflt === 'string') return typeof value === 'string' ? value.trim() !== '' : String(value).trim() !== ''
+  return String(value) !== String(dflt)
+}
+
+/** 已经就「secrets.json 损坏」告警过的指纹（按 mtime+size 去重，避免每次读配置刷屏）。 */
+const warnedSecretsCorrupt = new Set<string>()
+
+/**
+ * 读取密钥文件（缺失或损坏时返回空对象）。
+ *
+ * **不能**在读失败时静默返回空对象而不管写入侧：`saveConfig` 会把「合并后的密钥」写回去，
+ * 而 `defaultConfig()` 让那 4 个字段恒 `!== undefined` —— 于是「一次外部损坏 + 一次任意保存」
+ * 就会把真密钥覆盖成空串，且原文件是合法 JSON 时连 `.corrupt-*` 备份都没有（不可逆）。
+ * 真正的守卫在 `saveConfig` 的边界 ④（只在手上有真值时才写）+ `writeSecrets` 的
+ * `preserveIfUnparseable`；这里负责「损坏要留下可读痕迹」，按 mtime+size 去重只告警一次。
+ * 返回类型里带 `corrupt` 是**契约的一部分**：调用方不得把「读不出来」当成「没有密钥」。
+ */
+function readSecrets(decryptedDir: string): SecretsRead {
+  const p = secretsPath(decryptedDir)
+  if (!existsSync(p)) return { values: {}, corrupt: false }
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as unknown
+    return { values: typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}, corrupt: false }
+  } catch (e) {
+    let sig = p
+    try {
+      const st = statSync(p)
+      sig = `${p}:${st.size}:${st.mtimeMs}`
+    } catch { /* 拿不到 stat 就用路径 */ }
+    if (!warnedSecretsCorrupt.has(sig)) {
+      warnedSecretsCorrupt.add(sig)
+      console.warn(`[config] ${p} 不是合法 JSON，本次不采用其中的密钥：${(e as Error).message}`
+        + '（原文件保留，下次保存前会先备份）')
+    }
+    return { values: {}, corrupt: true }
+  }
+}
+
+/**
+ * 写入密钥文件（原子 + 权限收紧）。
+ *
+ * 覆盖前先 `preserveIfUnparseable`：把损坏的原文改名成 `.corrupt-<ts>` 留痕 —— 与
+ * `config.json` 同款保护。密钥从 config.json 搬到这儿，这条保护必须跟着搬，
+ * 否则数据韧性是**净下沉**。
+ * Windows 上靠数据根目录的 `(OI)(CI)` 继承（见 `src/backend/secure-fs.js`）；
+ * POSIX 上新文件默认 0644，这里显式设 0600。
+ */
+function writeSecrets(decryptedDir: string, secrets: Record<string, unknown>): void {
+  const p = secretsPath(decryptedDir)
+  mkdirSync(dirname(p), { recursive: true })
+  preserveIfUnparseable(p)
+  writeFileAtomic(p, JSON.stringify(secrets, null, 2))
+  if (process.platform !== 'win32') {
+    try { chmodSync(p, 0o600) } catch { /* 权限收紧失败不影响写入本身 */ }
+  }
+}
+
+/**
+ * 从 config.json **原始内容**里取密钥字段（只取非空的、且不等于内置默认值的）。
+ *
+ * 用途：旧数据里密钥还在 config.json 中，而 `saveConfig` 会把它们从 config.json 删掉 ——
+ * 删之前必须先把真值搬进 secrets.json，否则一次保存就把密钥弄丢了。
+ *
+ * **只搬「有意义」的值**：`image_xor_key` 的内置默认值是 `136`，而老版本会把默认值一并
+ * 写进 config.json —— 把它当成真值搬到 secrets.json 之后，`getConfig` 的「secrets 优先」
+ * 规则就会让 config.json 里对它的**手工修改永久失效**（复审实测：secrets 里钉住 136 后，
+ * 手工把 config.json 改成 60 读回来还是 136）。默认值不带任何信息，不搬它就等于行为不变。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 非空的、非默认的密钥字段。
+ */
+function readConfigSecretFields(decryptedDir: string): Record<string, unknown> {
+  const raw = readRawConfig(configPath(decryptedDir))
+  const out: Record<string, unknown> = {}
+  if (!raw) return out
+  for (const field of SECRET_FIELDS) {
+    if (secretIsMeaningful(field, raw[field])) out[field] = raw[field]
+  }
+  return out
+}
+
+/** 同步小睡（写路径是同步的，只能这样让出一点时间给占用者释放句柄）。 */
+function sleepMsSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  } catch {
+    /* 环境不支持 Atomics.wait 就不等：退化成「不重试」 */
+  }
+}
+
+/**
  * 原子写：先写同目录临时文件，再 rename 覆盖。
  *
  * 直接 writeFileSync 到目标路径时，写一半被杀进程/磁盘满会留下**截断的 JSON**；
@@ -90,54 +223,24 @@ function defaultConfig(): Record<string, unknown> {
  * @param target - 目标文件绝对路径。
  * @param text - 要写入的文本。
  */
-/**
- * 密钥类字段：**不写进 config.json**。
- *
- * 为什么：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝/交给支持人员」的文件
- * （H1/N6 那条泄漏路径的载体）。密钥单独放 `secrets.json`，并收紧到当前用户可访问。
- */
-const SECRET_FIELDS = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token'] as const
-
-/** 密钥文件路径：与 config.json 同级（数据根的父目录，即 STATE_DIR）。 */
-function secretsPath(decryptedDir: string): string {
-  return join(decryptedDir, '..', 'secrets.json')
-}
-
-/** 读取密钥文件（缺失或损坏时返回空对象）。 */
-function readSecrets(decryptedDir: string): Record<string, unknown> {
-  const p = secretsPath(decryptedDir)
-  if (!existsSync(p)) return {}
-  try {
-    const raw = JSON.parse(readFileSync(p, 'utf8')) as unknown
-    return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
-  } catch {
-    return {}
-  }
-}
-
-/**
- * 写入密钥文件（原子 + 权限收紧）。
- * Windows 上靠状态目录的 `(OI)(CI)` 继承（见 `src/backend/secure-fs.js`）；
- * POSIX 上新文件默认 0644，这里显式设 0600。
- */
-function writeSecrets(decryptedDir: string, secrets: Record<string, unknown>): void {
-  const p = secretsPath(decryptedDir)
-  mkdirSync(dirname(p), { recursive: true })
-  writeFileAtomic(p, JSON.stringify(secrets, null, 2))
-  if (process.platform !== 'win32') {
-    try { chmodSync(p, 0o600) } catch { /* 权限收紧失败不影响写入本身 */ }
-  }
-}
-
 export function writeFileAtomic(target: string, text: string): void {
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, text, 'utf8')
-  try {
-    renameSync(tmp, target)
-  } catch (e) {
-    try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
-    throw e
+  // rename 覆盖目标时，Windows 上**任何**持有目标的句柄都会让它 EPERM —— 不只是 SQLite：
+  // 实测连密集 `statSync` 的瞬态句柄、杀软扫描、备份工具都算（这条正是 M4 的结论）。
+  // 一次瞬态占用不该让「保存配置」失败，所以做有界重试（最多 5 次 × 20ms）。
+  let lastErr: unknown = null
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      renameSync(tmp, target)
+      return
+    } catch (e) {
+      lastErr = e
+      sleepMsSync(20)
+    }
   }
+  try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+  throw lastErr
 }
 
 /**
@@ -204,10 +307,12 @@ export function getConfig(decryptedDir: string): Record<string, unknown> {
   if (raw) Object.assign(cfg, raw)
   // 密钥来源：secrets.json 优先（迁移后它才是唯一真源）；config.json 里若还有
   // 旧值就沿用它 —— 下一次 saveConfig 会把它搬进 secrets.json 并从这里删掉。
-  const secrets = readSecrets(decryptedDir)
+  const { values: secrets } = readSecrets(decryptedDir)
   for (const field of SECRET_FIELDS) {
     const fromSecrets = secrets[field]
-    if (fromSecrets !== undefined && fromSecrets !== '') cfg[field] = fromSecrets
+    // 同 secretIsMeaningful：secrets 里若是空串/默认值（老版本可能写进去过），
+    // 不该压住 config.json 里的真值 —— 这也是「钉住 136」的自愈路径。
+    if (secretIsMeaningful(field, fromSecrets)) cfg[field] = fromSecrets
     else if (raw && raw[field] !== undefined) cfg[field] = raw[field]
   }
   // resolved fixed output paths (relative to the data root, portable)
@@ -245,16 +350,43 @@ export function saveConfig(decryptedDir: string, patch: Record<string, unknown>)
     delete current['resolved']
     const imgBefore = getConfig(decryptedDir)
     // 密钥搬出 config.json：写进 secrets.json（原子 + 权限收紧），并从 config.json 删掉。
-    // 这一步同时兼容旧数据 —— 老 config.json 里的密钥会被顺带搬走。
-    const secretPatch: Record<string, unknown> = {}
+    //
+    // 四条边界（都是复审实测踩出来的，缺一条都会静默毁数据）：
+    //  ① **只搬「有意义」的值**（见 `secretIsMeaningful`）：既不能把 `getConfig()` 合出来的
+    //     默认值（`''`、`image_xor_key: 136`）固化进 secrets.json，也不能把**界面未加载完**
+    //     时提交的空串当成「用户要清空」—— 后者会把 secrets.json 里的真密钥整体抹掉，
+    //     而原文件是合法 JSON、连 `.corrupt-*` 备份都不会留（静默且不可逆）。
+    //  ② **旧数据要先搬再删**：config.json 里还有的真值必须在 delete 之前抄进 secrets.json。
+    //  ③ **secrets.json 损坏时，只在「手上确实有真值」时才写**：真值有两个来源 —— 调用方
+    //     显式给的有意义 patch，或 config.json 里还没迁移的值。两者都没有时回写只会把损坏
+    //     文件冲成空壳，所以不写（原文留着，配合 `preserveIfUnparseable` 还有救回机会）。
+    //     **注意别写成「损坏就一律不写」**：`carried` 正是从 config.json 读出来的、损坏时的
+    //     救命稻草 —— 拒写会让 delete 把密钥从 config.json 抹掉却没落进 secrets.json。
+    //  ④ **config.json 里不再保留任何密钥字段**（无条件 delete）。曾经试过「只删确实被
+    //     secrets 接管的那些、把没意义的值留在原地便于手工编辑」，结果是个陷阱：
+    //     `current` 来自 `getConfig()`，它会把默认值 `image_xor_key: 136` 填进来并**落盘** ——
+    //     于是启动期「config.json 里还有旧密钥吗」的判据每次都误判为真，多跑一次空 patch 保存；
+    //     而每次 `saveWechatConfig` 都会让宿主把整份镜像重写一遍（替换语义），白白抹掉
+    //     镜像里的普通设置。现在密钥的唯一落点是 secrets.json，config.json 的密钥字段恒不存在 ——
+    //     该判据也就只对**真的**旧数据为真。手工要调这几个字段就编辑 secrets.json，或走界面。
+    const secretsOnDisk = readSecrets(decryptedDir)
+    const nextSecrets: Record<string, unknown> = { ...secretsOnDisk.values }
+    const carried = readConfigSecretFields(decryptedDir) // 旧数据（还没迁移的、有意义的）
+    for (const [k, v] of Object.entries(carried)) {
+      if (!secretIsMeaningful(k, nextSecrets[k])) nextSecrets[k] = v
+    }
+    let explicitSecretPatch = false
     for (const field of SECRET_FIELDS) {
-      const v = current[field]
-      if (v !== undefined) secretPatch[field] = v
+      const fromPatch = Object.prototype.hasOwnProperty.call(patch, field) ? patch[field] : undefined
+      if (secretIsMeaningful(field, fromPatch)) {
+        nextSecrets[field] = fromPatch
+        explicitSecretPatch = true
+      }
+      // config.json 里恒不留密钥字段（③）
       delete current[field]
     }
-    if (Object.keys(secretPatch).length > 0) {
-      writeSecrets(decryptedDir, { ...readSecrets(decryptedDir), ...secretPatch })
-    }
+    const haveFreshValues = explicitSecretPatch || Object.keys(carried).length > 0
+    if (haveFreshValues) writeSecrets(decryptedDir, nextSecrets)
     // 数据根目录可能尚未创建（首次保存配置），先确保父目录存在。
     mkdirSync(dirname(p), { recursive: true })
     // 覆盖前先备份「解析不了的原文件」，避免残缺内容被默认值无声覆盖。

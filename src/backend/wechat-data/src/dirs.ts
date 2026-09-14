@@ -41,7 +41,7 @@ export const SOURCE_DIR_ENV = 'DSH_WECHAT_SOURCE_DIR'
 export const DEFAULT_SOURCE_DIR = ''
 
 /** Subdirectories/files copied from the source during bootstrap. */
-const BOOTSTRAP_ITEMS = ['decrypted', 'decoded_images', 'message_edits.db', 'daily_summary.db', 'wechat_search.db', 'wechat_tasks.db', 'config.json', 'all_keys.json'] as const
+const BOOTSTRAP_ITEMS = ['decrypted', 'decoded_images', 'message_edits.db', 'daily_summary.db', 'wechat_search.db', 'wechat_tasks.db', 'config.json', 'secrets.json', 'keys.json', 'all_keys.json'] as const
 
 /** Suffixes that must never be copied (SQLite runtime artifacts). */
 const SKIP_SUFFIXES = ['-wal', '-shm'] as const

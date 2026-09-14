@@ -33,23 +33,51 @@
 
 | 内容 | 位置 | 谁写 |
 |---|---|---|
-| 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<STATE_DIR>/secrets.json` | 后端 `query/config.ts`（`SECRET_FIELDS`） |
+| 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<数据根>/secrets.json`（与后端 config.json 同级） | 后端 `query/config.ts`（`SECRET_FIELDS`） |
 | 自动获取的按账号密钥 | `<数据根>/keys.json` | `keys/key-store.ts` |
 | LLM API Key | `<STATE_DIR>/llm.json` | 宿主层 `wechat-paths.js` |
 
-`STATE_DIR` = `<userData>/wechat`；数据根默认 `<userData>/wechat-data`。
+`STATE_DIR` = `<userData>/wechat`（宿主配置与日志）；数据根默认 `<userData>/wechat-data`（后端配置 `config.json`、`secrets.json`、`keys.json` 都在这里）。
 
 **为什么不在 config.json 里**：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝
 或交给支持人员」的文件，密钥写进去等于凭空多一份副本（这正是 H1/N6 那条泄漏路径的载体）。
 因此 `saveConfig` 会把密钥类字段**改写到 `secrets.json`**，并从 `config.json` 删除；
-`getConfig` 再从 `secrets.json` 读回来，所以调用方无感。旧数据（密钥还在 config.json 里）
-会在下一次保存时被自动搬走。
+`getConfig` 再从 `secrets.json` 读回来，所以调用方无感。
+
+关于这几个字段的三条行为约定（都是踩过坑才定下来的）：
+
+- **`config.json` 里恒不保留**这四个字段：`getConfig()` 会把默认值补进合并结果，若让它落盘，
+  「config.json 里还有旧密钥吗」这类判据就会永远为真（实测导致每次启动都多跑一次空保存）。
+- **空串与「等于内置默认值」都不算真值**：默认的 `image_xor_key` 是 `136`、其余三个是 `''`。
+  界面上「配置还没读回来就点保存」提交的就是这一组值 —— 若当成「用户要清空」，会把
+  `secrets.json` 里的真密钥整体抹掉，而原文件是合法 JSON、连 `.corrupt-*` 备份都不会留。
+  代价是**不再支持把某个密钥「清空 / 改回默认」**（那等价于没有密钥 / 用默认值）。
+- **旧数据会自愈**：密钥还在 `config.json` 里的老安装会在下一次保存时被搬进 `secrets.json`；
+  反过来，`secrets.json` 里若残留默认值（老版本写过），`getConfig` 会忽略它并回退到
+  `config.json`。要手工调整请编辑 `secrets.json`，或走界面。
+
+界面侧另有一条：渲染进程的 `localStorage` 渲染缓存**不落密钥**（那个目录不在权限收紧范围内，
+放进去等于第四份明文副本）；老版本留下的带密钥缓存会在面板挂载时被重写成干净版。
 
 **权限保护**：启动时 `src/backend/secure-fs.js` 把 `STATE_DIR` 与数据根收紧到**当前用户**
 （Windows 用 `icacls /inheritance:r /grant:r <当前用户 SID>:(OI)(CI)F`，POSIX 用 0700/0600）。
 目录级的 `(OI)(CI)` 继承让之后新建的文件自动继承同一权限，所以不必每写一个文件都调一次。
+收紧的是**后端解析出的真实数据根**（不是写死的默认路径），所以自定义数据根同样受保护。
 授权按**进程令牌里的 SID** 取（`whoami /user`）—— 实测 `process.env.USERNAME` 在部分环境里
 是错的身份，照它授权会把目录锁成谁也进不去。加固失败只记日志，不会让应用起不来。
+
+**三条必须知道的告诫**
+
+1. **加固失败 = 完全无保护**：拿不到权限时应用照常运行，密钥仍是明文；日志里会有一行
+   「密钥目录权限收紧未完全成功」。
+2. **自定义数据根 / 网络盘 / 移动盘**：数据根可由配置指向任意位置。启动时会按**实际解析出的**
+   根收紧（不是写死默认路径），但在 FAT32/exFAT 移动盘、或没有写 DACL 权限的网络共享上会
+   静默失效。要跨机用移动盘，请自行给该盘加密。
+3. **多账户 / 共享 userData**：权限收紧到**当前用户**。若把 `SUPERTIME_USER_DATA_DIR` 指到共享目录、
+   或用另一个账户运行，另一个账户会读不到（或反过来把当前账户关在门外）—— 不要共享该目录。
+
+另：对目录收紧会**连既有的子/孙文件一起**被继承规则覆盖（Windows 会把可继承 ACE 传播下去），
+所以老文件并不是「还裸着」。
 
 自举只复制一次：目标根已存在 `decrypted` 时跳过；复制跳过 SQLite `-wal`/`-shm`
 运行时文件。本包**不自解密 SQLite**（SQLCipher 解密单独立项），但**可自动获取密钥**：`autoGetDbKey`

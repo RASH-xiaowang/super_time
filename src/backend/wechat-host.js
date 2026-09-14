@@ -487,7 +487,9 @@ async function createWechatBackend(options = {}) {
         if (cost > 1000) {
           console.warn(`[wechat] 慢调用 ${method} 耗时 ${cost}ms`);
         }
-        // 数据配置保存成功后，把设置镜像到 wechat/config.json（密钥等一并记录）。
+        // 数据配置保存成功后，把「非密钥」设置镜像到 wechat/config.json 供用户查看与手工编辑。
+        // 密钥类字段由 wechat-paths.js 的 SECRET_SETTING_KEYS 过滤掉 —— 它们有单独的、
+        // 受权限保护的 secrets.json（见 query/config.ts 的 SECRET_FIELDS）。
         if (method === 'saveWechatConfig' && value && value.ok !== false) {
           const patch = callArgs[0]?.patch ?? callArgs[0];
           if (patch && typeof patch === 'object') {
