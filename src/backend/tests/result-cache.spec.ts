@@ -32,6 +32,24 @@ describe('结果缓存的定向失效（M8）', () => {
     expect(h.key('queryMessages', [{ a: 1 }])).toBe(null)
   })
 
+  it('解码输入指纹进键：密钥/数据根一变，同样的入参也命中不了旧条目', () => {
+    // 这几个方法返回的是「按当前图片密钥解码出来的字节」，而密钥在 secrets.json、
+    // db_dir 在 config.json —— 用户**手工编辑**这两个文件不会走任何 RPC，所以只能靠
+    // 「把它们的指纹放进键」来自失效（复审实测过反例：手改后同一 localId 永久返回旧字节）。
+    const h = freshCache()
+    const args = [{ username: 'wxid_a', localId: 7 }]
+    const before = h.key('getImageDataUrl', args, 'm1:s1|m2:s2')
+    const after = h.key('getImageDataUrl', args, 'm1:s1|m9:s9')
+    expect(before).not.toBe(after)
+    // 指纹相同则键相同（否则缓存永远命中不了）
+    expect(h.key('getImageDataUrl', args, 'm1:s1|m2:s2')).toBe(before)
+
+    // 端到端：指纹变化后旧条目读不到
+    h.write(before, { ok: true, value: { data: 'OLD' } })
+    expect(h.read(before)).toEqual({ ok: true, value: { data: 'OLD' } })
+    expect(h.read(after)).toBe(null)
+  })
+
   it('失败结果在数据更新时被丢掉（图片可能刚下载到本地）', () => {
     const h = freshCache()
     const miss = h.key('getImageDataUrl', [{ username: 'wxid_a', localId: 7 }])
@@ -109,5 +127,10 @@ describe('接线：数据更新事件必须走定向失效（M8）', () => {
     expect(line, 'wechat-host.js 里找不到 wechat-data/updated 的处理分支').toBeTruthy()
     expect(line).toContain('clearStaleResultCache()')
     expect(line).not.toContain('clearResultCache()')
+  })
+
+  it('取缓存键时带上了「解码输入指纹」（缺了它就无法对手工改密钥自失效）', () => {
+    const code = src.split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
+    expect(code).toContain('resultCacheKey(method, callArgs, decodeInputSig())')
   })
 })

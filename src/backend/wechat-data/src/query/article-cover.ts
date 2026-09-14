@@ -102,7 +102,10 @@ export async function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?: 
     boundedSet(coverCache, key, data)
     return { url: data }
   } catch {
-    boundedSet(coverCache, key, '')
+    // **不缓存这次失败**：网络超时、对端 5xx、被墙都是瞬时的，缓存下来会让这个链接
+    // 「永久坏掉」—— `boundedSet` 只在容量满（300）时淘汰，实测同一 URL 连续三次只发一次
+    // 请求。上层的「数据更新时丢掉失败条目」策略（`wechat-host.js` 的
+    // `clearStaleResultCache`）也因此才有意义：丢掉之后必须真的能重新抓。
     return { error: '文章或封面获取失败' }
   }
 }

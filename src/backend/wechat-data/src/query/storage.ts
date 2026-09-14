@@ -100,9 +100,13 @@ function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, str
   if (!wechatBaseDir) return new Map<number, string>()
   const root = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(root)) return new Map<number, string>()
-  // 全树 stat 较重：按进程内缓存（30s 上限）。签名必须覆盖**各月份子目录**而不只是 root：
+  // 全树 stat 较重：按进程内缓存。签名必须覆盖**各月份子目录**而不只是 root：
   // 新文件是落到 `msg/file/<月>/` 里的，root 自身的 mtime 并不随子目录内容变化 ——
   // 原先只签 root，实际靠「事件后整表清空」兜住（M8 去掉那层兜底后补齐）。
+  //
+  // TTL 保持 10s（不是这里的默认 30s）：目录签名看不到「同名文件原地改 size」这类
+  // 子目录内部变更（NTFS 下目录的 mtime/size 不会因此变化），而改动前那次「事件后清空」
+  // 给的实效上界就是 ~10s（同步活跃期事件间隔）。别把上界放宽。
   return cachedBySig('storage-file-names:' + root, fileNamesSig(root), () => {
     const map = new Map<number, string>()
     try {
@@ -120,7 +124,7 @@ function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, str
       }
     } catch { /* ignore */ }
     return map
-  }, 30_000)
+  }, 10_000)
 }
 
 /**
