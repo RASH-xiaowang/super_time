@@ -5,8 +5,12 @@
  * 放进 CI 只会变成随机红灯；但它们正是 H8 的核心指标（验收标准要求「记录实测峰值」），
  * 所以保留为可手动执行的测量，结果记在 docs/RELEASE-PLAN.md。
  *
+ * 命名与门控：文件名必须是 *.spec.ts —— vitest 只收集这个后缀，改成别的名字根本执行不了
+ * （试过，`No test files found`）。因此靠 `describe.skipIf(MEASURE_EXPORT_MEMORY !== '1')`
+ * 默认跳过；不带参数跑 `npm test` 不会执行它（否则要跑 12 分钟）。
+ *
  * 运行：
- *   node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/export-memory.measure.ts
+ *   MEASURE_EXPORT_MEMORY=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/export-memory.measure.spec.ts
  *
  * 只测三件事：
  *   ① zip 层：攒内存 vs 逐条目写盘的 RSS 峰值差；

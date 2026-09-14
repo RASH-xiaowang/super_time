@@ -140,6 +140,27 @@ describe('ZipFileWriter 的失败路径', () => {
     await expect(w.close()).rejects.toThrow('已中止')
   })
 
+  it('背压等待不累积监听器（原实现每次背压多留 2 个，1000 会话会到千级）', async () => {
+    const dir = tempDir('zip-listeners-')
+    const p = join(dir, 'big.zip')
+    const w = await ZipFileWriter.create(p)
+    const before = w.listenerCount
+    for (let i = 0; i < 40; i += 1) {
+      // 必须是**高熵**且大于写流默认 highWaterMark（16KB）的数据才会触发背压；
+      // 用可压缩文本会因为压缩后 <16KB 而根本不进背压分支（假绿）。
+      const big = Buffer.allocUnsafe(256 * 1024)
+      let x = (i + 1) * 2654435761 >>> 0
+      for (let j = 0; j < big.length; j += 1) {
+        x = (Math.imul(x, 1103515245) + 12345) >>> 0
+        big[j] = (x >>> 16) & 0xff
+      }
+      await w.addFile('b' + String(i) + '.bin', big)
+    }
+    const after = w.listenerCount
+    await w.close()
+    expect(after).toBeLessThanOrEqual(before + 1)
+  })
+
   it('close 之后文件大小与内存路径的产出长度一致', async () => {
     const entries = sampleEntries()
     const dir = tempDir('zip-close-')

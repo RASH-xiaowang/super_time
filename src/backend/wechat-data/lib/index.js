@@ -10500,20 +10500,41 @@ var ZipFileWriter = class _ZipFileWriter {
       throw this.streamError;
     }
     if (this.streamError) throw this.streamError;
-    if (needDrain) {
-      await Promise.race([
-        once(this.out, "drain"),
-        // 'close' 一定会到（destroy 之后），用它兜住「drain 之后流已死」的情形。
-        once(this.out, "close").then(() => {
-          throw this.streamError ?? new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
-        }),
-        // 'error' 时 once 本身就会 reject。
-        once(this.out, "error").then(() => {
-          throw this.streamError ?? new Error("\u5199\u5165\u6D41\u51FA\u9519");
-        })
-      ]);
-    }
+    if (needDrain) await this.waitDrainOrDeath();
     if (this.streamError) throw this.streamError;
+  }
+  /**
+   * 等背压解除，或被 close/error 打断。
+   *
+   * 手写监听而不是 `Promise.race([once(...)])`：once() 不暴露它的监听器，
+   * race 里没赢的那两个会永远挂着 —— 每次背压写入就多留 2 个监听器，
+   * 长生命周期流上会累积到触发 `MaxListenersExceededWarning`
+   * （评审实测 24 会话×3000 条就到 close 25 / error 50，1000 会话会到千级）。
+   */
+  async waitDrainOrDeath() {
+    await new Promise((resolve3, reject) => {
+      const cleanup = () => {
+        this.out.off("drain", onDrain);
+        this.out.off("close", onClose);
+        this.out.off("error", onError);
+      };
+      const onDrain = () => {
+        cleanup();
+        resolve3();
+      };
+      const onClose = () => {
+        cleanup();
+        reject(this.streamError ?? new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210"));
+      };
+      const onError = (e) => {
+        cleanup();
+        reject(this.streamError ?? e);
+      };
+      this.out.once("drain", onDrain);
+      this.out.once("close", onClose);
+      this.out.once("error", onError);
+      if (this.streamError || this.aborted || this.out.destroyed) onClose();
+    });
   }
   /**
    * 追加一个条目。
@@ -10572,16 +10593,20 @@ var ZipFileWriter = class _ZipFileWriter {
    *
    * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
    */
+  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
+  get listenerCount() {
+    return this.out.listenerCount("drain") + this.out.listenerCount("close") + this.out.listenerCount("error");
+  }
   async close() {
     if (this.closed) return;
     if (this.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
-    this.closed = true;
     const centralStart = this.offset;
     const central = Buffer.concat(this.centrals);
     if (centralStart + central.length >= 4294967295) {
       await this.abort();
       throw new Error("\u5F52\u6863\u8D85\u8FC7 4GiB\uFF0C\u5F53\u524D\u5B9E\u73B0\u4E0D\u652F\u6301 ZIP64\uFF1B\u8BF7\u5206\u6279\u5BFC\u51FA");
     }
+    this.closed = true;
     const eocd = Buffer.concat([
       u32(101010256),
       u16(0),

@@ -169,20 +169,44 @@ export class ZipFileWriter {
       throw this.streamError
     }
     if (this.streamError) throw this.streamError
-    if (needDrain) {
-      await Promise.race([
-        once(this.out, 'drain'),
-        // 'close' 一定会到（destroy 之后），用它兜住「drain 之后流已死」的情形。
-        once(this.out, 'close').then(() => {
-          throw this.streamError ?? new Error('写入流已关闭，归档未完成')
-        }),
-        // 'error' 时 once 本身就会 reject。
-        once(this.out, 'error').then(() => {
-          throw this.streamError ?? new Error('写入流出错')
-        }),
-      ])
-    }
+    if (needDrain) await this.waitDrainOrDeath()
     if (this.streamError) throw this.streamError
+  }
+
+  /**
+   * 等背压解除，或被 close/error 打断。
+   *
+   * 手写监听而不是 `Promise.race([once(...)])`：once() 不暴露它的监听器，
+   * race 里没赢的那两个会永远挂着 —— 每次背压写入就多留 2 个监听器，
+   * 长生命周期流上会累积到触发 `MaxListenersExceededWarning`
+   * （评审实测 24 会话×3000 条就到 close 25 / error 50，1000 会话会到千级）。
+   */
+  private async waitDrainOrDeath(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        this.out.off('drain', onDrain)
+        this.out.off('close', onClose)
+        this.out.off('error', onError)
+      }
+      const onDrain = (): void => {
+        cleanup()
+        resolve()
+      }
+      const onClose = (): void => {
+        cleanup()
+        reject(this.streamError ?? new Error('写入流已关闭，归档未完成'))
+      }
+      const onError = (e: Error): void => {
+        cleanup()
+        reject(this.streamError ?? e)
+      }
+      this.out.once('drain', onDrain)
+      this.out.once('close', onClose)
+      this.out.once('error', onError)
+      // 挂监听之后**再查一次状态**：destroy/close 的事件可能在我们挂之前就已发出，
+      // 此时三个 once 都会等一个永不再来的事件（这坑第一版补丁踩过，靠回归测试才发现）。
+      if (this.streamError || this.aborted || this.out.destroyed) onClose()
+    })
   }
 
   /**
@@ -219,11 +243,18 @@ export class ZipFileWriter {
    *
    * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
    */
+  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
+  get listenerCount(): number {
+    return this.out.listenerCount('drain') + this.out.listenerCount('close') + this.out.listenerCount('error')
+  }
+
   async close(): Promise<void> {
     if (this.closed) return
     // 已经 abort 过就不能再 close：流已 destroy，写入会挂起（评审实测 >3s 无响应）。
+    // 注意顺序：ZIP64 判定必须在置 closed 之前 —— abort() 对 closed 的实例是空操作，
+    // 先置 closed 会让这条失败路径既不 destroy 也不删文件（评审实测：文件残留、
+    // destroyed=false 句柄泄漏，且再调 close() 还会静默返回成功）。
     if (this.aborted) throw new Error('归档已中止，不能再 close')
-    this.closed = true
     const centralStart = this.offset
     const central = Buffer.concat(this.centrals)
     if (centralStart + central.length >= 0xffffffff) {
@@ -232,6 +263,7 @@ export class ZipFileWriter {
       await this.abort()
       throw new Error('归档超过 4GiB，当前实现不支持 ZIP64；请分批导出')
     }
+    this.closed = true
     const eocd = Buffer.concat([
       u32(0x06054b50), u16(0), u16(0), u16(this.centrals.length), u16(this.centrals.length),
       u32(central.length), u32(centralStart), u16(0),
