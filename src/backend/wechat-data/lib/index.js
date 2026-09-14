@@ -13472,7 +13472,8 @@ var HASH_CACHE = /* @__PURE__ */ new Map();
 var MAX_HAMMING = 64;
 function selectByHamming(rows, qh, pool) {
   const n = rows.length;
-  const take = Math.min(pool, n);
+  const want = Number.isNaN(pool) ? 0 : Math.floor(pool);
+  const take = Math.min(Math.max(want, 0), n);
   if (take <= 0) return [];
   const dist = new Uint8Array(n);
   const hist = new Uint32Array(MAX_HAMMING + 1);
