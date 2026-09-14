@@ -116,6 +116,7 @@
     "asarUnpack": [
       "node_modules/koffi/**",
       "node_modules/@koromix/**",
+      "src/backend/wechat-data/native/**",
       "wechat/README.md",
       "wechat/whisper/**"
     ],
