@@ -2736,7 +2736,6 @@ ${contextBlock}
     return getPrivacyStateSnapshot(this._dirs.decrypted)
   }
 
-  @Remote('getSnsVideoCoverDataUrl')
   /**
    * Resolve one SNS (朋友圈) video cover.
    *
