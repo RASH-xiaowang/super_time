@@ -73,7 +73,9 @@ describe('全文兜底搜索：iterate 与 all 的命中集合一致', () => {
   })
 
   it('跨过让出阈值后（>2000 行）结果依然完整', () => {
-    // 这条同时覆盖「迭代过程中 await 让出、迭代器状态保持正确」。
+    // 顺带确认：迭代中途 await 让出后，迭代器状态仍然正确（不丢行、不重复）。
+    // 注意 searchIndexMessages 本身是同步函数，这里**不走**让出路径；
+    // 让出发生在 buildSearchIndex 里，另有用例覆盖。
     const decrypted = makeFixture(2500, 4)
     const r = searchIndexMessages(decrypted, TERM, 100)
     expect(r.hits.map(h => h.local_id)).toEqual([1, 2, 3, 4])
@@ -82,8 +84,10 @@ describe('全文兜底搜索：iterate 与 all 的命中集合一致', () => {
 
 describe('索引构建会让出事件循环', () => {
   it('构建期间有其它宏任务被执行（不让出则一次都跑不到）', async () => {
-    // 3000 行 > YIELD_EVERY_ROWS(2000)，至少触发一次 yield。
-    const decrypted = makeFixture(3000, 10)
+    // 4200 行 > 2×YIELD_EVERY_ROWS(2000)，保证至少触发两次 yield。
+    // 断言 ≥2 而不是 ≥1：把阈值调大到不触发（或只在收尾让出一次）就会只剩 0~1 次，
+    // 这样判别式才真的依赖「周期性地让出」。
+    const decrypted = makeFixture(4200, 10)
 
     const start = Date.now()
     const ticksInWindow: number[] = []
@@ -100,8 +104,33 @@ describe('索引构建会让出事件循环', () => {
     stop = true
 
     expect(r.status).toBe('ok')
-    expect(r.rows).toBe(3000)
+    expect(r.rows).toBe(4200)
     // 若构建全程同步不让出，JS 线程不会空出来，这段时间内不可能有 tick 落在窗口里。
+    const during = ticksInWindow.filter(t => t >= start && t <= end)
+    expect(during.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('长行也会触发让出：行数远不够时由字符上界兜住', async () => {
+    // 400 行 × 约 8KB/行 ≈ 320 万字符 > YIELD_EVERY_CHARS(1<<20)，
+    // 但只有 400 行 ≪ YIELD_EVERY_ROWS(2000) —— 只有字符上界能点亮这条。
+    const decrypted = makeFixture(400, 10, 8000)
+
+    const start = Date.now()
+    const ticksInWindow: number[] = []
+    let stop = false
+    const tick = (): void => {
+      if (stop) return
+      ticksInWindow.push(Date.now())
+      setImmediate(tick)
+    }
+    setImmediate(tick)
+
+    const r = await buildSearchIndex(decrypted, true)
+    const end = Date.now()
+    stop = true
+
+    expect(r.status).toBe('ok')
+    expect(r.rows).toBe(400)
     const during = ticksInWindow.filter(t => t >= start && t <= end)
     expect(during.length).toBeGreaterThan(0)
   })
@@ -115,6 +144,48 @@ describe('索引构建会让出事件循环', () => {
     const found = searchIndexMessages(decrypted, TERM, 10)
     expect(found.indexed).toBe(true)
     expect(found.hits.length).toBeGreaterThan(0)
+  })
+
+  it('并发构建不会互相撞锁：两个调用都成功且复用同一次构建', async () => {
+    // 转 async 之后写事务会跨 macrotask 保持开启，同一进程里第二个并发调用
+    // 原本会直接撞 `database is locked`（改前同步执行不可能交错）。
+    // 单飞闸让并发调用复用同一个 in-flight 构建。
+    const decrypted = makeFixture(3000, 10)
+    const [a, b] = await Promise.all([
+      buildSearchIndex(decrypted, true),
+      buildSearchIndex(decrypted, true),
+    ])
+    expect(a.status).toBe('ok')
+    expect(b.status).toBe('ok')
+    expect(a.rows).toBe(3000)
+    // 同一个 in-flight 构建 → 两次拿到的是同一个结果对象
+    expect(b).toBe(a)
+  })
+
+  it('不同数据根的并发构建互不串结果', async () => {
+    // 单飞闸按 decryptedDir 分槽。若用一个全局槽，后者会拿到前者那次构建的结果
+    // （行数是别人的），且永远不会为自己建索引。
+    const a = makeFixture(300, 3)
+    const b = makeFixture(700, 5)
+    const [ra, rb] = await Promise.all([
+      buildSearchIndex(a, true),
+      buildSearchIndex(b, true),
+    ])
+    expect(ra.rows).toBe(300)
+    expect(rb.rows).toBe(700)
+  })
+
+  it('force 调用不会把在飞的非 force 构建的「索引已存在」当答复', async () => {
+    const decrypted = makeFixture(200, 3)
+    await buildSearchIndex(decrypted, true)
+    // 索引已存在且版本一致 → 非 force 调用走 'exists' 快路径，此时它仍在飞（.then 尚未执行）。
+    const light = buildSearchIndex(decrypted, false)
+    const forced = buildSearchIndex(decrypted, true)
+    expect((await light).status).toBe('exists')
+    const r = await forced
+    // 显式要求重建就必须真的重建，而不是转发对方的 'exists'
+    expect(r.status).toBe('ok')
+    expect(r.rows).toBe(200)
   })
 
   it('已存在且版本一致时不再重建', async () => {

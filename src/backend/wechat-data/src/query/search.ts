@@ -270,25 +270,83 @@ export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; r
 }
 
 /**
- * Build (or rebuild) the FTS5 search index over text messages.
- * @param decryptedDir - decrypted data root.
- * @param force - drop and rebuild even when an index exists.
- * @returns build result with status and row count.
- */
-/**
- * 索引构建期间每处理多少行让出一次事件循环。
+ * 让出节奏（行数上界）：限制「行数多、每行却很短」的场景。
  *
- * 2000 行大约对应几十毫秒的纯 CPU（bigram 切分 + FTS 写入），
- * 既能把单次阻塞压到远低于「秒级」，又不会因为过于频繁的 await 明显拖慢构建。
+ * 2000 行的固定开销（逐行解码/判空 + 批量写入）大约几十毫秒，既能把单次阻塞压到远低于
+ * 「秒级」，又不会因为过于频繁的 await 明显拖慢构建。
  */
 const YIELD_EVERY_ROWS = 2000
 
-export async function buildSearchIndex(
+/**
+ * 让出节奏（字符上界）：限制「每行很长」的场景。
+ *
+ * bigram 切分与 FTS 写入的成本 ∝ 文本长度，所以**只**按行数设阈值时，单块耗时随平均
+ * 行长线性增长（实测 3KB/行 ≈ 190ms、8KB/行 ≈ 450ms，约 18KB/行才破 1s）。加上字符
+ * 上界后，单块耗时被两条上界同时夹住：长行先撞字符上界（约 100 万字符 ≈ 几十毫秒），
+ * 短行先撞行数上界。这是「真实数据量级下的时间上界」，不是对任意输入的硬保证。
+ */
+const YIELD_EVERY_CHARS = 1 << 20
+
+/**
+ * 构建单飞闸（按已解密数据根键控）。
+ *
+ * 转 async 带来的副作用：写事务现在会**跨 macrotask** 保持开启，于是同一进程里
+ * 第二次并发调用会直接撞 `database is locked`（改前同步执行不可能交错）。
+ * 而 gateway 的问答路径与状态查询都会按需触发自动建索引，很容易撞上。
+ * 这里让并发调用复用同一个 in-flight 构建；配合 runBuildSearchIndex 里的
+ * busy_timeout 覆盖跨进程/其它连接的情形。
+ *
+ * 为什么按 `decryptedDir` 分槽而不是一个全局槽：`_dirs.decrypted` 会随账号切换/重新解密
+ * 而变。全局单槽时，新目录的调用会拿到旧目录那次构建的结果（行数、built_at 都是别人的），
+ * 并且**永远不会为自己建索引**。
+ *
+ * force 语义：非 force 调用可以加入任何在飞构建；force 调用若撞上在飞的非 force 构建，
+ * 不能把对方的「索引已存在」当答复，而要排队在其之后再真正重建一次。
+ */
+const inflightIndexBuilds = new Map<string, { promise: Promise<BuildResult>; force: boolean }>()
+
+/** 构建结果。 */
+export interface BuildResult {
+  status: string
+  rows?: number
+  built_at?: string
+  elapsed_ms?: number
+  message?: string
+}
+
+/**
+ * 构建全文检索索引（FTS5）。
+ *
+ * @param decryptedDir - 已解密数据根。
+ * @param force - 为 true 时即使已有同版本索引也重建。
+ * @returns 构建结果（status/rows/built_at/elapsed_ms 或 message）。
+ */
+export function buildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult> {
+  const slot = inflightIndexBuilds.get(decryptedDir)
+  if (slot && (slot.force || !force)) return slot.promise
+  // 走到这里：没有在飞构建，或本次要求 force 而在飞的是非 force 构建（后者要排队重建）。
+  const base: Promise<unknown> = slot ? slot.promise.catch(() => undefined) : Promise.resolve()
+  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force))
+  const entry = { promise, force: Boolean(force) }
+  inflightIndexBuilds.set(decryptedDir, entry)
+  // 用双参 then 而非 finally：派生的 promise 恒为 fulfilled，不会产生未处理的拒绝。
+  const release = (): void => {
+    if (inflightIndexBuilds.get(decryptedDir) === entry) inflightIndexBuilds.delete(decryptedDir)
+  }
+  promise.then(release, release)
+  return promise
+}
+
+async function runBuildSearchIndex(
   decryptedDir: string,
   force?: boolean,
-): Promise<{ status: string; rows?: number; built_at?: string; elapsed_ms?: number; message?: string }> {
+): Promise<BuildResult> {
   const p = searchIndexPath(decryptedDir)
   const db = new DatabaseSync(p)
+  // 跨连接/跨进程争用时的等待窗口：写事务现在跨 macrotask，别的连接（例如
+  // 另一个进程的索引读、或上次崩溃残留的锁）撞上来时先等一会儿，而不是立刻抛
+  // 「database is locked」。进程内的并发已由上面的单飞闸挡住。
+  try { db.exec('PRAGMA busy_timeout = 5000') } catch { /* 个别连接不接受，忽略 */ }
   const init = (): void => {
     db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     // tokens 列存 bigram 切分后的文本、who 列存「会话名 + 群内发送者」，两列都进 BM25 索引；
@@ -313,8 +371,9 @@ export async function buildSearchIndex(
     const shards = messageShardFiles(decryptedDir)
     db.exec('BEGIN')
     let total = 0
-    // 已处理行数：用于周期性让出事件循环（见 YIELD_EVERY_ROWS）。
-    let processed = 0
+    // 距上次让出的事件循环用量（行数与字符数，任一超限即让出）。
+    let rowsSinceYield = 0
+    let charsSinceYield = 0
     let batch: Array<[string, string, string, string, number, number, number]> = []
     const flush = (): void => {
       if (batch.length === 0) return
@@ -354,11 +413,16 @@ export async function buildSearchIndex(
               ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
               : sessionWho
             batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
-            processed += 1
+            rowsSinceYield += 1
+            charsSinceYield += text.length
             if (batch.length >= 500) flush()
             // 周期性让出事件循环：同步 sqlite + bigram 切分是纯 CPU，不让出就会
             // 让整个 worker（承载全部 130+ 个查询方法）停摆数秒。
-            if (processed % YIELD_EVERY_ROWS === 0) await yieldToLoop()
+            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              rowsSinceYield = 0
+              charsSinceYield = 0
+              await yieldToLoop()
+            }
           }
         } catch {
           // skip unreadable shard
