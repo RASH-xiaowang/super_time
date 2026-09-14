@@ -5,7 +5,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createDecipheriv, createHmac, pbkdf2Sync } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative } from 'node:path'
 
 const PAGE_SZ = 4096
@@ -90,6 +90,45 @@ function defaultConfig(): Record<string, unknown> {
  * @param target - 目标文件绝对路径。
  * @param text - 要写入的文本。
  */
+/**
+ * 密钥类字段：**不写进 config.json**。
+ *
+ * 为什么：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝/交给支持人员」的文件
+ * （H1/N6 那条泄漏路径的载体）。密钥单独放 `secrets.json`，并收紧到当前用户可访问。
+ */
+const SECRET_FIELDS = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token'] as const
+
+/** 密钥文件路径：与 config.json 同级（数据根的父目录，即 STATE_DIR）。 */
+function secretsPath(decryptedDir: string): string {
+  return join(decryptedDir, '..', 'secrets.json')
+}
+
+/** 读取密钥文件（缺失或损坏时返回空对象）。 */
+function readSecrets(decryptedDir: string): Record<string, unknown> {
+  const p = secretsPath(decryptedDir)
+  if (!existsSync(p)) return {}
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as unknown
+    return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * 写入密钥文件（原子 + 权限收紧）。
+ * Windows 上靠状态目录的 `(OI)(CI)` 继承（见 `src/backend/secure-fs.js`）；
+ * POSIX 上新文件默认 0644，这里显式设 0600。
+ */
+function writeSecrets(decryptedDir: string, secrets: Record<string, unknown>): void {
+  const p = secretsPath(decryptedDir)
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileAtomic(p, JSON.stringify(secrets, null, 2))
+  if (process.platform !== 'win32') {
+    try { chmodSync(p, 0o600) } catch { /* 权限收紧失败不影响写入本身 */ }
+  }
+}
+
 export function writeFileAtomic(target: string, text: string): void {
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, text, 'utf8')
@@ -163,6 +202,14 @@ export function getConfig(decryptedDir: string): Record<string, unknown> {
   const cfg = defaultConfig()
   const raw = readRawConfig(p)
   if (raw) Object.assign(cfg, raw)
+  // 密钥来源：secrets.json 优先（迁移后它才是唯一真源）；config.json 里若还有
+  // 旧值就沿用它 —— 下一次 saveConfig 会把它搬进 secrets.json 并从这里删掉。
+  const secrets = readSecrets(decryptedDir)
+  for (const field of SECRET_FIELDS) {
+    const fromSecrets = secrets[field]
+    if (fromSecrets !== undefined && fromSecrets !== '') cfg[field] = fromSecrets
+    else if (raw && raw[field] !== undefined) cfg[field] = raw[field]
+  }
   // resolved fixed output paths (relative to the data root, portable)
   const wechatRoot = join(decryptedDir, '..')
   const resolved = {
@@ -197,6 +244,17 @@ export function saveConfig(decryptedDir: string, patch: Record<string, unknown>)
     // decrypted/decoded/keys are resolved by the backend, never written back
     delete current['resolved']
     const imgBefore = getConfig(decryptedDir)
+    // 密钥搬出 config.json：写进 secrets.json（原子 + 权限收紧），并从 config.json 删掉。
+    // 这一步同时兼容旧数据 —— 老 config.json 里的密钥会被顺带搬走。
+    const secretPatch: Record<string, unknown> = {}
+    for (const field of SECRET_FIELDS) {
+      const v = current[field]
+      if (v !== undefined) secretPatch[field] = v
+      delete current[field]
+    }
+    if (Object.keys(secretPatch).length > 0) {
+      writeSecrets(decryptedDir, { ...readSecrets(decryptedDir), ...secretPatch })
+    }
     // 数据根目录可能尚未创建（首次保存配置），先确保父目录存在。
     mkdirSync(dirname(p), { recursive: true })
     // 覆盖前先备份「解析不了的原文件」，避免残缺内容被默认值无声覆盖。

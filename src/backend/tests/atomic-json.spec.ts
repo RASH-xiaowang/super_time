@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { preserveIfUnparseable as hostPreserve, writeFileAtomic as hostWrite } from '../wechat-paths.js'
-import { preserveIfUnparseable as tsPreserve, saveConfig, writeFileAtomic as tsWrite } from '../wechat-data/src/query/config.ts'
+import { getConfig, preserveIfUnparseable as tsPreserve, saveConfig, writeFileAtomic as tsWrite } from '../wechat-data/src/query/config.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -143,4 +143,59 @@ describe('原子性的真实判别（跨进程观察中间态）', () => {
     expect(readFileSync(target, 'utf8')).toHaveLength(full)
     expect(sawFull + 1).toBeGreaterThan(0)
   }, 30_000)
+})
+
+describe('M1：密钥不再写在 config.json 里', () => {
+  const SECRET = { db_enc_key: 'a'.repeat(64), image_aes_key: 'e57c869f15dd8764' }
+
+  it('saveConfig 把密钥写进 secrets.json，config.json 里没有', () => {
+    const root = tempRoot()
+    const decrypted = join(root, 'decrypted')
+    saveConfig(decrypted, { db_dir: 'D:\\\\wx', ...SECRET })
+
+    const configText = readFileSync(join(root, 'config.json'), 'utf8')
+    expect(configText).not.toContain(SECRET.db_enc_key)
+    expect(configText).not.toContain(SECRET.image_aes_key)
+    expect(JSON.parse(configText)['db_dir']).toBe('D:\\\\wx') // 普通字段照常写
+
+    const secrets = JSON.parse(readFileSync(join(root, 'secrets.json'), 'utf8'))
+    expect(secrets['db_enc_key']).toBe(SECRET.db_enc_key)
+    expect(secrets['image_aes_key']).toBe(SECRET.image_aes_key)
+  })
+
+  it('getConfig 仍能读到密钥（readSecrets 覆盖），调用方无感', () => {
+    const root = tempRoot()
+    const decrypted = join(root, 'decrypted')
+    saveConfig(decrypted, SECRET)
+    const cfg = getConfig(decrypted)
+    expect(cfg['db_enc_key']).toBe(SECRET.db_enc_key)
+    expect(cfg['image_aes_key']).toBe(SECRET.image_aes_key)
+  })
+
+  it('迁移旧数据：config.json 里已有的密钥会被搬走并在下一次保存后清除', () => {
+    const root = tempRoot()
+    const decrypted = join(root, 'decrypted')
+    // 旧形态：密钥就在 config.json 里
+    writeFileSync(join(root, 'config.json'), JSON.stringify({ db_dir: 'D:\\\\wx', ...SECRET }), 'utf8')
+
+    // 迁移前仍读得到（兼容）
+    expect(getConfig(decrypted)['db_enc_key']).toBe(SECRET.db_enc_key)
+
+    // 保存任意一次普通字段 → 密钥被搬到 secrets.json、config.json 里被清掉
+    saveConfig(decrypted, { api_port: 5033 })
+    const configText = readFileSync(join(root, 'config.json'), 'utf8')
+    expect(configText).not.toContain(SECRET.db_enc_key)
+    expect(JSON.parse(configText)['api_port']).toBe(5033)
+    expect(JSON.parse(readFileSync(join(root, 'secrets.json'), 'utf8'))['db_enc_key']).toBe(SECRET.db_enc_key)
+    // 迁移后读回来还是同一个值
+    expect(getConfig(decrypted)['db_enc_key']).toBe(SECRET.db_enc_key)
+  })
+
+  it('api_token 同样走 secrets.json（它也是凭据）', () => {
+    const root = tempRoot()
+    const decrypted = join(root, 'decrypted')
+    saveConfig(decrypted, { api_token: 'tok-abcdef123456' })
+    expect(readFileSync(join(root, 'config.json'), 'utf8')).not.toContain('tok-abcdef123456')
+    expect(JSON.parse(readFileSync(join(root, 'secrets.json'), 'utf8'))['api_token']).toBe('tok-abcdef123456')
+  })
 })

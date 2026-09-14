@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 34 | 25 | 1 | 0 | 8 |
+| 阶段 5 | 中优先级：稳定性与性能 | 34 | 24 | 1 | 0 | 9 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **72** | **48** | **3** | **0** | **21** |
+| **合计** | | **72** | **47** | **3** | **0** | **22** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -708,7 +708,7 @@ flowchart TD
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| M1 | 密钥明文落盘且三处镜像 | `key-store.ts:51-56,81` 写 `keys.json`；`config.ts:119` 写 `db_enc_key`；`wechat-paths.js:277-291` 把密钥一并镜像进 config.json（`DERIVED_SETTING_KEYS:96-103` 只剔除路径类字段） | 密钥至少受 OS 凭据库（DPAPI/Keychain）保护或文件 ACL 收紧；config.json 不再含密钥；文档说明存储位置与保护方式 | 未开始 |
+| M1 | 密钥明文落盘且三处镜像 | `key-store.ts:51-56,81` 写 `keys.json`；`config.ts:119` 写 `db_enc_key`；`wechat-paths.js:277-291` 把密钥一并镜像进 config.json（`DERIVED_SETTING_KEYS:96-103` 只剔除路径类字段） **已完成（ACL 方案，经用户确认）**：① **权限收紧** —— 新增 `src/backend/secure-fs.js`，启动时把 `STATE_DIR` 与数据根收紧到**当前用户**（Windows `icacls /inheritance:r /grant:r <SID>:(OI)(CI)F`，POSIX 0700/0600）；目录级继承让之后新建的文件自动跟随，所以不必每写一个文件都调一次。授权用**进程令牌里的 SID**（`whoami /user`）而不是 `process.env.USERNAME` —— 实测本机该变量是 `SYSTEM` 而进程是 `Administrator`，照环境变量授权会把目录锁成谁也进不去（含自己）。② **密钥搬出 config.json** —— 后端 `query/config.ts` 新增 `SECRET_FIELDS`（`db_enc_key`/`image_aes_key`/`image_xor_key`/`api_token`）：`saveConfig` 把它们写进 `<STATE_DIR>/secrets.json`（原子 + 0600）并从 config.json 删除，`getConfig` 从 secrets.json 读回，调用方无感；**旧数据在下次保存时自动搬走**。宿主层 `recordWechatSettings` 也新增 `SECRET_SETTING_KEYS`，不再把密钥镜像进 `config.json.wechatSettings`。③ **文档** —— `src/backend/wechat-data/README.md` 新增「密钥存储与保护」小节（三处位置、谁写的、为什么不在 config.json、权限怎么收）。验收：`tests/secure-fs.spec.ts` 8 项（含**「收紧后没把自己锁在外面」**——这条正是从真实故障里长出来的，以及「目录 (OI)(CI) 继承对之后新建文件生效」）+ `atomic-json.spec.ts` 里 4 项密钥路由用例（写进 secrets、config 里没有、旧数据迁移、api_token 同样走 secrets）+ 运行态实测（打包产物启动后状态目录 ACL 只剩当前用户、新写的 config.json 继承同样权限且不含密钥） | 已完成 |
 | M2 | 配置写入非原子，损坏静默吞掉 | 同上 | **已完成**：宿主层（`wechat-paths.js` 的 `writeFileAtomic`/`preserveIfUnparseable`）与后端（`query/config.ts` 的同名实现）都改为 temp+rename；解析失败时**不改动文件**、给出可读告警（同签名只告警一次），并在下一次覆盖前把残缺文件改名成 `config.json.corrupt-<时间戳>` 留痕（原来会被「默认值+补丁」无声覆盖）。验收：`src/backend/tests/atomic-json.spec.ts` **10 项** —— 除两份实现逐条对照与 `saveConfig` 集成外，还有一条**真正的原子性判别**：子进程写 8MB 的同时父进程不停采样目标文件大小，断言读者只会看到「旧内容」或「完整新内容」（A/B 实测：把实现退回直接 `writeFileSync` → 采样到 1 次「写了一半」→ 用例变红）。评审后另修：`.corrupt-*` 备份加了保留上限（3 份，原先随损坏次数线性增长且含完整密钥）与「pid + 单调计数」后缀（原先同一毫秒内的多次备份会静默互相覆盖、丢掉最早的损坏内容） | 已完成 |
 | M3 | 导出/备份留半成品文件 | `export.ts:345,347,401,522,634,706,746` 直接写盘；`backup.ts:188` 子目录 `catch{}` 后仍报成功；`:220-246` 失败不清理 `.wcb` | 全部输出 temp+rename；部分失败必须上报（不再报成功）；失败时清理中间产物。与 H8 同期实施。**H8 已完成 zip 流式写盘与原子落地（`zip.ts` 的 `ZipFileWriter` + temp+rename）；xlsx 仍未流式、无取消/进度事件** | 进行中 |
 | M4 | 快照替换存在不可读窗口 | 同上 | **已完成**：去掉 `unlink`，只保留 rename + 重试。Windows 实测（`%TEMP%` 探针）：rename 覆盖**已存在但未被打开**的文件是允许的（旧实现白删一次，凭空制造 ENOENT 窗口）；而目标被 SQLite 句柄打开时 unlink（EBUSY）与 rename（EPERM）**都会失败**，真正让同步成功的是重试等待 —— 所以 unlink 只有害处。验收：`sync-wal.spec.ts` 新增「替换期间目标始终存在」用例（可逆 A/B：加回 unlink → 目标缺失 2 次、用例红；评审连跑 10 次红、新实现连跑 10 次绿，无假绿/假红）。**评审补充的反向面**：目标被**普通 fs 只读句柄**（不只是 SQLite 句柄）打开时 rename 也会 EPERM，而这种情况旧实现的 unlink 是能成功的 —— 即去掉 unlink 在「普通只读句柄并发读者」下要靠 8×120ms 重试兜底，超时则本轮同步失败（无数据风险）。另修：WAL 分支的 `finally` 补上 `stagingDb` 清理（`atomicReplace` 抛错时它会以完整快照副本留在盘上） | 已完成 |
@@ -968,3 +968,5 @@ flowchart TD
 | 2026-09-13 | 评审 | M2/M4/M5/M6/M7 | 批次复审（无 critical，4 major） | ① **M6 的后端进程日志完全不落盘**（独立 utilityProcess，RPC 走 parentPort、stdio 原为 inherit → GUI 态静默消失）→ 改 `stdio:'pipe'` 并在主进程转进文件日志 + 后端启动留痕作哨兵（打包冒烟实测 910 字节，含 `[backend] [wechat-worker] 后端进程已启动 pid=…`）。② **脱敏缺口**：`JSON.parse` 报错会带原文片段（实测泄漏 `image_aes_key` 前 10 位、`apiKey` 的 `sk-live-AB`），并随导出文件外发 → 所有落盘内容过 `redact()`。③ **M2 的「原子写」零覆盖**（退回 writeFileSync 仍全绿）→ 加跨进程「读者看不到写了一半」的判别用例（A/B 下变红）。④ **轮转零覆盖** + `maxFiles=1` 无上界 → 断言中间态 + 修退化分支。另修 8 项 minor：备份保留上限与撞名、宿主层告警去重、stagingDb 清理、koffi 错误带 `cause`、M5 用例顺序依赖、api.ts 注释悬挂、main.js 重复 require |
 | 2026-09-13 | 实施 | N13 | 新增 | 评审列出全部出网点：LLM/embedding 之外还有 4 处（封面/图片/视频/whisper 下载）仍是单次尝试，M7 未覆盖（验收范围如此） |
 | 2026-09-13 | 实施 | 合计 | 71 → 72：未开始 48 / 进行中 3 / 已完成 21 | 阶段 5 条目 33 → 34（+N13） |
+| 2026-09-13 | 实施 | M1 | 未开始 → 已完成 | 经用户确认走「ACL 收紧 + 密钥搬出 config.json」：新增 `secure-fs.js`（启动时把状态目录/数据根收紧到当前用户，SID 取自进程令牌而不是 `USERNAME`）＋后端 `SECRET_FIELDS` 把密钥改写到 `secrets.json`（原子 + 0600）并从 config.json 删除（旧数据下次保存自动搬走）＋宿主层不再镜像密钥＋README 补「密钥存储与保护」。**过程中踩到一个真故障**：先按 `process.env.USERNAME` 授权，而本机该变量是 `SYSTEM`、进程是 `Administrator`，结果目录被锁成连自己都 EPERM（残留目录只能 takeown 后清）—— 已改为按 SID，并补一条「收紧后没把自己锁在外面」的用例 |
+| 2026-09-13 | 实施 | 合计 | 72 项：未开始 47 / 进行中 3 / 已完成 22 | 阶段 5 完成 9 |

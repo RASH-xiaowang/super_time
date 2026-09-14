@@ -49,6 +49,7 @@ const licenseService = require('./src/license/service');
 const { getDeviceFingerprint } = require('./src/license/fingerprint');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
 const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
+const { restrictWechatState } = require('./src/backend/secure-fs');
 
 // ── userData 隔离（必须在任何 getPath / 单实例锁之前）────────────────────
 // 安装版原本和开发态共用 `<APPDATA>\super-time-electron`（package.json 没有顶层
@@ -66,6 +67,19 @@ if (USER_DATA_OVERRIDE) {
 
 /** 「微信+」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
 const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') });
+
+// ── 密钥文件权限收紧（M1）────────────────────────────────────────────────
+// config.json / secrets.json / keys.json 里有微信库密钥与 API Key 的明文，默认权限下
+// 同机其它账户也能读。这里把状态目录与数据根收紧到当前用户，并**靠目录的 (OI)(CI)
+// 继承**让之后新建的文件自动继承同一权限（于是不必每写一个文件都调一次 icacls）。
+// 尽力而为：拿不到权限只记一行日志，不能让应用起不来。
+{
+  const r = restrictWechatState({
+    stateDir: STATE_DIR,
+    dataRoot: path.join(app.getPath('userData'), 'wechat-data'),
+  });
+  if (!r.ok) console.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
+}
 
 // ── 文件日志（M6）────────────────────────────────────────────────────────
 // GUI 态下 stdout 是无人接管的管道，console-safe 发现管道坏了就彻底静默 ——
