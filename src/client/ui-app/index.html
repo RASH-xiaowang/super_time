@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- connect-src 不再用 `https:` 通配：渲染进程实际只需要两处外网
-       （世界地图的 GeoJSON：jsdelivr / unpkg）。LLM 与 embedding 的 HTTP 调用
-       都发生在后端 worker（Node 侧），不受页面 CSP 约束，所以不需要在这里放行。
-       data:/blob:/file: 是年报快照里把 <img> 读成 data URL 的兜底路径。 -->
+  <!-- connect-src 不再用 `https:` 通配，改为显式列出渲染进程真实会取的外网主机：
+       world 地图 GeoJSON（jsdelivr / unpkg）+ 省/市/区县 GeoJSON（geo.datav.aliyun.com）。
+       漏掉 aliyun 会把省/市/区县地图的取数打断（评审实测的回归）。
+       LLM 与 embedding 的 HTTP 调用都发生在后端 worker（Node 侧），不受页面 CSP 约束。
+       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余
+       （file:// 文档下 'self' 已含整个 file: scheme），留着的代价是显式，不影响。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: https: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com" />
+    content="default-src 'self'; img-src 'self' data: blob: https: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com https://geo.datav.aliyun.com" />
   <title>微信+</title>
 </head>
 <body>

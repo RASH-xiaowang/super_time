@@ -36,6 +36,15 @@ describe('shell.openExternal 白名单：只放行 http(s)', () => {
     expect(decideWindowOpen('data:text/html,<script>1</script>')).toBe('deny')
   })
 
+  it('带凭据的 URL 被拒（浏览器里会显示成欺骗性的主机名）', () => {
+    // `https://wechat.com:pass@evil.com/` 在地址栏里看起来像 wechat.com，真实主机是
+    // evil.com —— 交给系统打开没有正当用途。
+    expect(decideWindowOpen('https://user:pass@evil.com/x')).toBe('deny')
+    expect(decideWindowOpen('https://wechat.com:pass@evil.com/')).toBe('deny')
+    expect(decideWindowOpen('http://user@evil.com/')).toBe('deny')
+    expect(decideWindowOpen('https://example.com/path?q=1')).toBe('external')
+  })
+
   it('空值/垃圾输入一律拒绝，且不抛异常', () => {
     for (const bad of ['', '   ', '#', 'not a url', undefined, null, 42, {}, 'https://']) {
       expect(decideWindowOpen(bad)).toBe('deny')
@@ -61,6 +70,17 @@ describe('导航守卫：只允许应用自己的页面', () => {
     expect(decideNavigation('file:///C:/Windows/System32/calc.exe', APP_ROOT)).toBe('deny')
     expect(decideNavigation('file:///D:/super-time-wechat-evil/index.html', APP_ROOT)).toBe('deny')
     expect(decideNavigation('file:///D:/super-time-wechat/../../secrets.txt', APP_ROOT)).toBe('deny')
+  })
+
+  it('空 root 必须默认拒绝（fail-open 边界）', () => {
+    // 评审实测：`path.relative('', x)` 得到相对路径、不以 '..' 开头，会把任意文件判成
+    // 「在应用目录内」；root=undefined 更会抛 TypeError。这里把不变量钉住。
+    expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', '')).toBe('deny')
+    expect(decideNavigation('file:///C:/Windows/win.ini', '')).toBe('deny')
+    // @ts-expect-error —— 故意传非法类型，要求不抛且拒绝
+    expect(decideNavigation('file:///C:/Windows/win.ini', undefined)).toBe('deny')
+    expect(isInsidePath('', 'C:\\anything')).toBe(false)
+    expect(isInsidePath('   ', 'C:\\anything')).toBe(false)
   })
 
   it('非 file: 协议与非法输入一律阻止', () => {

@@ -31,6 +31,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
@@ -91,35 +92,93 @@ done.then(() => {
     } catch { /* 解析失败按缺失处理 */ }
   }
 
-  check(Boolean(probe), '探针产出了结果行', probeLine ? probeLine.trim().slice(0, 120) : '未找到');
+  check(Boolean(probe), '探针产出了结果行', probeLine ? probeLine.trim().slice(0, 140) : '未找到');
   if (probe) {
-    check(Array.isArray(probe.opened) && probe.opened.length === 3,
-      '三次 window.open 都被调用到', JSON.stringify(probe.opened));
-    check(Array.isArray(probe.opened) && probe.opened.every((v) => v === 'null'),
-      'window.open 三次全部被拒（返回 null，没有开出窗口）');
-    check(probe.navigated === false,
-      '页面未被导航到外站', `urlAfter=${probe.urlAfter}`);
+    // ① 沙箱是否真的生效（行为事实：渲染层拿不到 Node 原语）
+    check(probe.sandbox && probe.sandbox.require === 'undefined',
+      'sandbox 生效：渲染层 typeof require === undefined', JSON.stringify(probe.sandbox));
+    check(probe.sandbox && probe.sandbox.process === 'undefined',
+      'sandbox 生效：渲染层 typeof process === undefined');
+    check(probe.sandbox && probe.sandbox.electronAPIKeys > 0,
+      'preload 的 contextBridge 仍然可用（沙箱没把桥一起关掉）');
+
+    // ② 三类被禁协议：逐条断言（返回 null = 被 deny，而不是开出了窗口）
+    const opened = Array.isArray(probe.opened) ? probe.opened : [];
+    check(opened.length === 3, '三次 window.open 都被调用到', JSON.stringify(opened.map(o => o.url)));
+    check(opened.length === 3 && opened.every((o) => o.result === 'null'),
+      'window.open 三次全部被拒（返回 null，没有开出窗口）', JSON.stringify(opened.map(o => o.result)));
+
+    // ③ 外部导航被阻止
+    check(probe.navigated === false, '页面未被导航到外站', `urlAfter=${probe.urlAfter}`);
     check(probe.urlAfter === probe.urlBefore && typeof probe.urlBefore === 'string'
       && probe.urlBefore.startsWith('file:'),
       '页面仍停在应用自己的 file: 页面');
-  }
 
-  check(out.includes('[security] 已拒绝打开外部链接：file:///C:/Windows/System32/calc.exe'),
-    '日志记录：拒绝 file:// 链接');
-  check(out.includes('[security] 已拒绝打开外部链接：smb://attacker/share'),
-    '日志记录：拒绝 smb:// 链接');
-  check(out.includes('[security] 已阻止页面导航：https://example.com/'),
-    '日志记录：阻止外部导航');
-  check(!out.includes('[security] 交给系统打开失败'),
-    '未调用 shell.openExternal（是「拒绝」而不是「调用后失败」）');
+    // ④ 关键行为事实：根本没调用 openExternal。
+    //    这条取代了原先「grep 日志文案」的判据 —— 评审实测：把白名单放宽到 file:/smb: 时，
+    //    window.open 仍返回 null、URL 也没变（因为 deny 分支还在），只有日志文案变了；
+    //    真实环境那一次运行已经把 calc.exe 交给系统了。计数是行为，不是文案。
+    check(probe.openExternalAttempts === 0,
+      '未把任何 URL 交给系统浏览器（openExternal 调用次数为 0）', `count=${probe.openExternalAttempts}`);
+
+    // ⑤ 探针动作执行完整性：导航那一步若因守卫失效把页面带走，会以 __timeout__ 暴露
+    check(probe.navAttempt !== '__timeout__',
+      '导航尝试有结果返回（不是「frame 被带走导致探针挂住」）', String(probe.navAttempt));
+  }
 
   try { fs.rmSync(userData, { recursive: true, force: true }); } catch { /* ignore */ }
 
-  if (failed === 0) {
-    console.log('\n✅ 安全守卫冒烟通过');
-    process.exit(0);
-  }
-  console.error(`\n❌ 安全守卫冒烟失败（${failed} 项）`);
-  console.error('--- 应用输出 ---\n' + out);
-  process.exit(1);
+  // ⑥ 打包态额外一项：危险的调试开关必须被忽略。
+  //    fuses 只覆盖 `--inspect*`，`--remote-debugging-port` 没有任何 fuse —— 它一旦生效，
+  //    任何能传参启动本 exe 的一方都能经 CDP 拿到渲染进程与整条 IPC 桥（评审实测
+  //    `/json/list` 直接列出应用页面）。这里实测「带了也连不上」。
+  const finish = async () => {
+    if (packaged) {
+      const port = 39321 + Math.floor(Math.random() * 200);
+      const probe2 = spawn(exe, [`--remote-debugging-port=${port}`], {
+        cwd,
+        env: { ...process.env, SUPERTIME_SECURITY_PROBE: '1', SUPERTIME_USER_DATA_DIR: userData + '-cdp' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out2 = '';
+      probe2.stdout.on('data', (d) => { out2 += String(d); });
+      probe2.stderr.on('data', (d) => { out2 += String(d); });
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 6000);
+        probe2.on('exit', () => { clearTimeout(t); resolve(); });
+      });
+      const reachable = await cdpReachable(port);
+      check(reachable === false,
+        '打包态忽略 --remote-debugging-port（CDP 端口不可达）', `port=${port} reachable=${reachable}`);
+      check(out2.includes('[security] 已忽略启动参数 --remote-debugging-port'),
+        '日志记录：忽略 --remote-debugging-port');
+      try { probe2.kill(); } catch { /* 已退出 */ }
+      try { fs.rmSync(userData + '-cdp', { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+
+    if (failed === 0) {
+      console.log('\n✅ 安全守卫冒烟通过');
+      process.exit(0);
+    }
+    console.error(`\n❌ 安全守卫冒烟失败（${failed} 项）`);
+    console.error('--- 应用输出 ---\n' + out);
+    process.exit(1);
+  };
+  void finish();
 });
+
+/**
+ * CDP 端口是否可达（可达 = 调试开关生效 = 不安全）。
+ * @param {number} port - 端口。
+ * @returns {Promise<boolean>} 是否返回了 200。
+ */
+function cdpReachable(port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/json/version', timeout: 2500 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
