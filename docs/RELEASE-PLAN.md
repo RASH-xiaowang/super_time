@@ -368,6 +368,14 @@ flowchart TD
   - **评审发现并已修**：① critical —— 写流错误被吞且只等 `drain`，磁盘满时后续写入
     **永久挂起**（Node 出错时先 emit drain 再 emit error）；② moments 媒体上限 off-by-one
     （`>=4999` vs 旧语义 5000）；③ 补上内存与阻塞时长的实测证据
+  - **复审（第二轮）**：critical 经注入式实测确认已修好（reject 而非挂起、无 `.partial-` 残留），
+    但指出**我的补丁自身引入 2 个 major**，均已修：④ 背压等待的 `once` 监听器不注销会累积
+    （1000 会话到千级，触发 `MaxListenersExceededWarning`）→ 改为手写监听 + 统一 cleanup；
+    ⑤ `close()` 先置 `closed` 再判 ZIP64，使内部 `abort()` 成空操作（文件残留、句柄泄漏、
+    再调 close 还静默成功）→ 调整判定顺序。两处均补了回归测试
+  - **教训**：`events.once()` 进 `Promise.race` 后，没赢的监听器不会注销——在按次进入等待的
+    长生命周期流上会累积；写「失败即中断」的流式代码时，**先查状态再挂监听**是必须的
+    （destroy 的 close/error 可能已先发出，此时 once 永远等不到）
   - **仍未做**（计划动作 2/3/5 的一部分）：单条目仍是同步 deflate（`deflateRawSync`）、
     xlsx 未流式、无取消/进度事件
 
