@@ -72,5 +72,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importText: (text) => ipcRenderer.invoke('license:import-text', text),
     remove: () => ipcRenderer.invoke('license:remove'),
     fingerprint: () => ipcRenderer.invoke('license:fingerprint'),
+  },
+  /** 诊断日志（M6）：用户报障时把落盘日志导出来。 */
+  diag: {
+    logInfo: () => ipcRenderer.invoke('diag:log-info'),
+    exportLog: () => ipcRenderer.invoke('diag:export-log'),
+    revealLog: () => ipcRenderer.invoke('diag:reveal-log'),
   }
 });

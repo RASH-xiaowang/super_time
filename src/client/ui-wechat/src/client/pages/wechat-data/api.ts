@@ -1168,6 +1168,38 @@ export async function apiExportSnsVideo(options: {
 }
 
 /** 弹出保存对话框并返回选定路径（写盘由后端做）。 */
+/**
+ * 诊断日志信息（M6）：日志目录与各份轮转文件大小。
+ * @returns 目录、当前文件与各份大小。
+ */
+export async function apiDiagLogInfo(): Promise<{
+  ok: boolean; dir?: string; current?: string; files?: Array<{ name: string; size: number }>; error?: string
+}> {
+  const api = (window as unknown as { electronAPI?: { diag?: { logInfo?: () => Promise<{ ok: boolean; dir?: string; current?: string; files?: Array<{ name: string; size: number }>; error?: string }> } } }).electronAPI
+  if (!api?.diag?.logInfo) return { ok: false, error: '当前环境不支持诊断日志' }
+  return api.diag.logInfo()
+}
+
+/**
+ * 导出诊断日志（主进程弹出保存对话框，并把所有轮转文件 + 环境信息拼成一个文件）。
+ * @returns ok/path/bytes，或 canceled，或 error。
+ */
+export async function apiExportDiagLog(): Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }> {
+  const api = (window as unknown as { electronAPI?: { diag?: { exportLog?: () => Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }> } } }).electronAPI
+  if (!api?.diag?.exportLog) return { ok: false, error: '当前环境不支持导出诊断日志' }
+  return api.diag.exportLog()
+}
+
+/**
+ * 在文件管理器中定位日志文件。
+ * @returns ok，或错误说明。
+ */
+export async function apiRevealDiagLog(): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const api = (window as unknown as { electronAPI?: { diag?: { revealLog?: () => Promise<{ ok: boolean; path?: string; error?: string }> } } }).electronAPI
+  if (!api?.diag?.revealLog) return { ok: false, error: '当前环境不支持定位日志文件' }
+  return api.diag.revealLog()
+}
+
 export async function apiSaveFileDialog(opts: {
   defaultName?: string; title?: string; filters?: Array<{ name: string; extensions: string[] }>
 }): Promise<{ canceled: boolean; path: string | null }> {

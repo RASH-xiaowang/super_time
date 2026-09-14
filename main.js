@@ -66,6 +66,23 @@ if (USER_DATA_OVERRIDE) {
 /** 「微信+」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
 const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') });
 
+// ── 文件日志（M6）────────────────────────────────────────────────────────
+// GUI 态下 stdout 是无人接管的管道，console-safe 发现管道坏了就彻底静默 ——
+// 崩溃之后什么都没留下。这里在 STATE_DIR/logs 下落一份带轮转的日志，
+// 并把 console 也接进去（**在这之后**装：console-safe 那层管道坏了会直接 return，
+// 顺序反了日志会跟着一起没）。
+const diagLog = require('./src/backend/diag-log').createDiagLog({
+  dir: path.join(STATE_DIR, 'logs'),
+});
+require('./src/backend/diag-log').installConsoleCapture(diagLog);
+process.on('uncaughtException', (e) => {
+  // 崩溃必须留痕：这是「用户说打不开，我们却什么都没有」的唯一补救。
+  try { diagLog.write('fatal', ['uncaughtException', e]); } catch { /* 日志自己绝不抛 */ }
+});
+process.on('unhandledRejection', (reason) => {
+  try { diagLog.write('error', ['unhandledRejection', reason]); } catch { /* 同上 */ }
+});
+
 const APP_VERSION = (() => {
   try {
     return require('./package.json').version || '1.0.0';
@@ -480,6 +497,57 @@ function installWebContentsGuards(contents) {
 app.whenReady().then(async () => {
   // 未获单实例锁的重复实例不做任何初始化（app.quit 已在上面调用）。
   if (!singleInstanceLock) return;
+  // 诊断日志（M6）：界面上的「导出诊断日志」走这三个。
+  // 正常情况下日志落在 STATE_DIR/logs，用户报障时把它交出来即可。
+  ipcMain.handle('diag:log-info', () => {
+    const files = diagLog.files()
+      .map((p) => {
+        try { return { path: p, name: path.basename(p), size: fs.statSync(p).size } } catch { return null; }
+      })
+      .filter(Boolean);
+    return { ok: true, dir: path.dirname(diagLog.path), current: diagLog.path, files };
+  });
+  ipcMain.handle('diag:export-log', async () => {
+    try {
+      // 旧 → 新拼接：用户只需要交出一个文件
+      const parts = diagLog.files().slice().reverse()
+        .filter((p) => { try { return fs.statSync(p).size > 0; } catch { return false; } });
+      if (parts.length === 0) return { ok: false, error: '当前没有日志内容可导出' };
+      let dest = (process.env.SUPERTIME_SAVE_PATH || '').trim();
+      if (!dest) {
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const result = await dialog.showSaveDialog(mainWindow, {
+          title: '导出诊断日志',
+          defaultPath: `supertime-diagnostic-${stamp}.log`,
+          filters: [{ name: '日志', extensions: ['log', 'txt'] }],
+        });
+        if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+        dest = result.filePath;
+      }
+      const report = require('./src/backend/diag-log').buildDiagnosticReport(diagLog, {
+        app: APP_VERSION,
+        electron: process.versions.electron,
+        chrome: process.versions.chrome,
+        node: process.versions.node,
+        platform: process.platform,
+        arch: process.arch,
+        packaged: app.isPackaged,
+      });
+      fs.writeFileSync(dest, report, 'utf8');
+      diagLog.write('info', ['诊断日志已导出到', dest]);
+      return { ok: true, path: dest, bytes: fs.statSync(dest).size };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('diag:reveal-log', () => {
+    try {
+      shell.showItemInFolder(diagLog.path);
+      return { ok: true, path: diagLog.path };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
   // 守卫必须在建窗**之前**注册，否则主窗口的 webContents 已经建好、错过事件。
   app.on('web-contents-created', (_event, contents) => installWebContentsGuards(contents));
   ipcMain.handle('app:versions', () => ({
