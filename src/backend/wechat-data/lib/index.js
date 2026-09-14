@@ -13433,7 +13433,8 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
     const texts = [...groups.keys()];
     const rawC = Number(opts.concurrency ?? 1);
     const concurrency = Math.min(Math.max(Number.isFinite(rawC) ? Math.floor(rawC) : 1, 1), 16);
-    const batchSize = Math.max(1, Math.floor(opts.batchSize) || 1);
+    const rawB = Number(opts.batchSize);
+    const batchSize = Math.min(Math.max(Number.isFinite(rawB) ? Math.floor(rawB) : 1, 1), 256);
     let next = 0;
     let failure = null;
     const worker = async () => {
@@ -13444,13 +13445,13 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
         if (start >= texts.length) return;
         const batch = texts.slice(start, start + batchSize);
         let vecs;
+        embedCalls += 1;
         try {
           vecs = await embed(batch);
         } catch (e) {
           failure = failure ?? e;
           return;
         }
-        embedCalls += 1;
         if (failure) return;
         for (let j = 0; j < batch.length; j += 1) {
           const groupRows = groups.get(batch[j]);
@@ -13479,16 +13480,12 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
             embedded += 1;
             doneCount += 1;
             if (doneCount % 512 === 0) {
-              await new Promise((resolve3) => {
-                setImmediate(resolve3);
-              });
+              await yieldToLoop();
             }
           }
         }
         opts.onProgress?.(Math.min(doneCount, pending.length), pending.length);
-        await new Promise((resolve3) => {
-          setImmediate(resolve3);
-        });
+        await yieldToLoop();
       }
     };
     db.exec("BEGIN");

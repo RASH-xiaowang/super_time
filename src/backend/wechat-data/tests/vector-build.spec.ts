@@ -127,10 +127,11 @@ describe('M10 向量建库：同文本只请求一次、向量扇出到所有行
   })
 
   it('扇出共享的 blob **视图**不会让同组多行在库里别名（改一行的向量不影响其它行）', () => {
-    // 这条专门盯我引入的一处风险：`vecToBlob` 返回的是 `Float32Array` 的**视图**（不拷贝），
-    // 而扇出时我把它算一次、绑给同组所有行 —— 若 sqlite 延迟读取该视图，同组各行就会共享
-    // 同一块内存。上面那条「同组字节相同」在别名下**也会通过**，所以不够：必须是
-    // 「改一行，看别的行是否跟着变」。
+    // 这条是**运行时契约守卫**，不是变异杀手：`vecToBlob` 返回的是 `Float32Array` 的**视图**
+    // （不拷贝），扇出时我把它算一次、绑给同组所有行 —— 我怀疑 sqlite 可能延迟读取该视图。
+    // 复审实测：复制发生在 sqlite 的 C 层，JS 层造不出能让这条失败的变异（共享小池、
+    // 跨组复用内存都放行），所以它**只有在 node:sqlite 改成惰性绑定时才会失败**。
+    // 留着是因为它把「绑定即拷贝」这条依赖写成了可执行断言；别指望它能杀变异。
     const texts = ['同一条复读文本', '独立的另一条', '同一条复读文本']
     const { dec } = makeFixture(texts)
     const stub = trackingEmbed()
@@ -179,13 +180,47 @@ describe('M10 向量建库：并发边界', () => {
 
   it('非法/越界并发数被夹到 [1,16]（0 不能变成「什么都不做」）', async () => {
     const texts = Array.from({ length: 8 }, (_, i) => 'x' + String(i))
-    for (const c of [0, -5, Number.NaN, 999]) {
+    for (const c of [0, -5, Number.NaN]) {
       const { dec } = makeFixture(texts)
       const stub = trackingEmbed()
       const r = await buildVectorIndex(dec, stub.embed, { ...OPTS, concurrency: c as number })
       expect(r.embedded, 'concurrency=' + String(c)).toBe(8)
-      // 越界值只能被**夹小**，不能变成「无 worker 静默不干活」
       expect(stub.maxInFlight(), 'concurrency=' + String(c)).toBeLessThanOrEqual(16)
+    }
+  })
+
+  it('并发上限真的被夹到 16（夹具必须能顶到上限，否则上界断言是空转的）', async () => {
+    // 这条是复审抓出来的：原来那条用 8 条文本 / batchSize=4 ⇒ 最多只有 2 个批次在飞，
+    // `maxInFlight() <= 16` 恒真 —— 把 `Math.min(..., 16)` 删掉也照样绿。
+    // 上界断言只有在「可并发工作单元数 > 上限」时才有杀伤力：40 条唯一文本 / batchSize=1
+    // ⇒ 40 个批次，concurrency=999 夹到 16 才真正决定在飞数。
+    const texts = Array.from({ length: 40 }, (_, i) => 'unique-' + String(i))
+    const { dec } = makeFixture(texts)
+    const stub = trackingEmbed({ delayMs: 20 })
+    const r = await buildVectorIndex(dec, stub.embed, { ...OPTS, batchSize: 1, concurrency: 999 })
+    expect(r.embed_calls).toBe(40)
+    expect(stub.maxInFlight()).toBe(16)
+  })
+
+  it('batchSize 同样被夹住（手改成 100000 不能发出一个巨型请求）', async () => {
+    // 夹具必须**大于上限**，否则上界断言同样是空转的（复审对 concurrency 那条的批评在这里同样适用）：
+    // 300 条唯一文本 / 上限 256 ⇒ 夹住时是 2 批（256 + 44），不夹时是 1 批。
+    const texts = Array.from({ length: 300 }, (_, i) => 'b' + String(i))
+    const { dec } = makeFixture(texts)
+    const stub = trackingEmbed()
+    const r = await buildVectorIndex(dec, stub.embed, { ...OPTS, batchSize: 100_000, concurrency: 1 })
+    expect(r.embed_calls).toBe(2)
+    expect(stub.calls[0].length).toBe(256)
+    expect(stub.calls[1].length).toBe(44)
+    expect(r.embedded).toBe(300)
+
+    for (const bad of [0, -1, Number.NaN]) {
+      const small = Array.from({ length: 10 }, (_, i) => 'c' + String(i))
+      const { dec: dec2 } = makeFixture(small)
+      const stub2 = trackingEmbed()
+      const r2 = await buildVectorIndex(dec2, stub2.embed, { ...OPTS, batchSize: bad as number, concurrency: 1 })
+      expect(r2.embedded, 'batchSize=' + String(bad)).toBe(10) // 夹到 1，仍然每行都做
+      expect(stub2.calls.every((c) => c.length === 1)).toBe(true)
     }
   })
 })

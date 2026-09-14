@@ -23,7 +23,7 @@ import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RetrievedDoc } from './types.ts'
 import { retrievalRoot } from './config.ts'
-import { searchIndexPath } from '../search.ts'
+import { searchIndexPath, yieldToLoop } from '../search.ts'
 
 /** 向量库 schema 版本；结构或哈希算法变化时自动重建。 */
 const VECTOR_SCHEMA_VERSION = '1'
@@ -277,7 +277,10 @@ export async function buildVectorIndex(
     const rawC = Number(opts.concurrency ?? 1)
     const concurrency = Math.min(Math.max(Number.isFinite(rawC) ? Math.floor(rawC) : 1, 1), 16)
 
-    const batchSize = Math.max(1, Math.floor(opts.batchSize) || 1)
+    // batchSize 同样来自配置，也一起夹（手改 `"batchSize": 100000` 会发一个巨型请求）：
+    // 下限 1、上限 256（厂商常见的单请求条数上限量级）。
+    const rawB = Number(opts.batchSize)
+    const batchSize = Math.min(Math.max(Number.isFinite(rawB) ? Math.floor(rawB) : 1, 1), 256)
     let next = 0
     let failure: unknown = null
     // ② 有界并发：worker 原子地认领下一批**唯一文本**；任一批失败就置 failure，
@@ -290,13 +293,15 @@ export async function buildVectorIndex(
         if (start >= texts.length) return
         const batch = texts.slice(start, start + batchSize)
         let vecs: number[][]
+        // 计数在**发起之前**：`embed_calls` 的语义是「发出了多少次请求」，
+        // 放在 await 之后会让失败那次漏报（错误路径的口径就错了）。
+        embedCalls += 1
         try {
           vecs = await embed(batch)
         } catch (e) {
           failure = failure ?? e
           return
         }
-        embedCalls += 1
         if (failure) return
         for (let j = 0; j < batch.length; j += 1) {
           const groupRows = groups.get(batch[j])
@@ -323,14 +328,14 @@ export async function buildVectorIndex(
             embedded += 1
             doneCount += 1
             if (doneCount % 512 === 0) {
-              await new Promise<void>((resolve) => { setImmediate(resolve) })
+              await yieldToLoop()
             }
           }
         }
         opts.onProgress?.(Math.min(doneCount, pending.length), pending.length)
-        // 让出事件循环：一批的 CPU（simhash 64×dim ≈ 0.037ms/篇）本身很小，但并发下几批会
+        // 让出事件循环（复用 search.ts 的 yieldToLoop）：一批的 CPU（simhash 64×dim ≈ 0.037ms/篇）本身很小，但并发下几批会
         // 连在一起，这里显式让一次，保证建库期间后端仍能响应其它查询。
-        await new Promise<void>((resolve) => { setImmediate(resolve) })
+        await yieldToLoop()
       }
     }
 
