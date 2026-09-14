@@ -29,6 +29,7 @@
     "ui:smoke": "node scripts/ui-ask-smoke.js",
     "ui:accept": "node scripts/ui-acceptance.mjs",
     "package:smoke": "node scripts/packaged-smoke.js",
+    "m1-secrets:smoke": "node scripts/m1-secrets-migration-smoke.js",
     "epipe:smoke": "node scripts/epipe-smoke.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",

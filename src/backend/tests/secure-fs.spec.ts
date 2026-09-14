@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { currentUser, restrictDir, restrictFile, restrictWechatState } from '../secure-fs.js'
+import { SENSITIVE_FILES, restrictDir, restrictFile, restrictWechatState } from '../secure-fs.js'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -32,6 +32,69 @@ function aclOf(target: string): string {
   return execFileSync('icacls', [target], { encoding: 'utf8', windowsHide: true })
 }
 
+/**
+ * 逐条 ACE（去掉 icacls 的「Successfully processed」汇总行）。
+ *
+ * 注意**不要**用「icacls 输出包含当前用户名」当断言：icacls 会回显路径，而路径本身
+ * 就含 `\Users\<user>\` —— 断言恒真（复审用 SYSTEM-only 的 ACL 实测过）。
+ */
+function aceLines(target: string): string[] {
+  return aclOf(target)
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    // 只留 ACE 行（形如 `主体:(权限)`）；顺便滤掉 icacls 的汇总行 —— 它是**本地化**的
+    // （本机是「已成功处理 N 个文件…」），按英文文案过滤会漏掉。
+    .filter((l) => l.includes(':('))
+    // 首行是「路径 + 第一个 ACE」：必须把路径剥掉，否则「ACE 含当前用户」会被路径里的
+    // `\Users\Administrator\` 命中而恒真（这就是复审指出的空转断言）。
+    .map((l) => (l.startsWith(target) ? l.slice(target.length).trim() : l))
+}
+
+/** 当前用户名（`domain\user` 形态，与 icacls 回显一致）。 */
+function currentUserName(): string {
+  return execFileSync('whoami', [], { encoding: 'utf8', windowsHide: true }).trim()
+}
+
+/** 当前进程令牌里的 SID（与 secure-fs.js 的授权口径一致）。 */
+function currentSid(): string {
+  const out = execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true })
+  return (out.match(/"(S-1-[\d-]+)"/) || [])[1] ?? ''
+}
+
+/** 某条 ACE 是不是「当前用户」的（用 SID 或 domain\user 或裸用户名判定）。 */
+function isCurrentUserAce(line: string): boolean {
+  const low = line.toLowerCase()
+  const me = currentUserName().toLowerCase() // whoami 形态：domain\user
+  const bare = me.includes('\\') ? me.slice(me.indexOf('\\') + 1) : me
+  const sid = currentSid()
+  // 三种命中方式都要留：icacls 按名字回显时是 `DOMAIN\user`，解析不出域名时可能只给裸名，
+  // 而授权本来是按 SID 做的 —— 不能只认一种形态（复审指出旧断言「含用户名」恒真且脆弱）。
+  return low.includes(me) || low.includes(`\\${bare}:`) || low.startsWith(`${bare}:`) || (sid !== '' && low.includes(sid.toLowerCase()))
+}
+
+/**
+ * 收紧后的不变量：**可见主体只有当前用户**。
+ *
+ * `allowInherited` 区分两种对象：**被直接收紧的目录/文件**不该再有 `(I)` 条目
+ * （`/inheritance:r` 生效）；而**它下面新建的子文件**恰恰应该带 `(I)` —— 那正是
+ * 靠目录继承生效的证据，不是问题。
+ *
+ * 断言写成「逐条 ACE 枚举」而不是「输出里含某些关键词」：后者在本机是**空转**的
+ * ——`%TEMP%` 的继承 ACL 里本来就没有 `Everyone`/`BUILTIN\Users`，所以去掉
+ * `/inheritance:r` 也照样通过（复审用变异 m9 实测）。这里改成：除了当前用户的 ACE，
+ * **不允许出现任何其它 ACE**（SYSTEM / Administrators / CodexSandboxUsers 等都算）。
+ */
+function expectOnlyCurrentUser(target: string, allowInherited: boolean): void {
+  const lines = aceLines(target)
+  expect(lines.length, '该对象应当有 ACE：' + JSON.stringify(lines)).toBeGreaterThan(0)
+  const mine = lines.filter(isCurrentUserAce)
+  expect(mine.length, 'ACE 里应有当前用户：' + JSON.stringify(lines)).toBeGreaterThan(0)
+  expect(lines.filter((l) => !isCurrentUserAce(l)), '不该有当前用户之外的任何主体：' + JSON.stringify(lines)).toEqual([])
+  if (!allowInherited) {
+    expect(lines.some((l) => /\(I\)/.test(l)), '被直接收紧的对象不该有继承条目：' + JSON.stringify(lines)).toBe(false)
+  }
+}
+
 describe('ACL 收紧', () => {
   const isWin = process.platform === 'win32'
 
@@ -40,12 +103,9 @@ describe('ACL 收紧', () => {
     const dir = join(tempDir(), 'wechat')
     const r = restrictDir(dir)
     expect(r.ok).toBe(true)
-    const acl = aclOf(dir)
-    expect(acl).toContain(currentUser())
-    // 关键：继承来的 Everyone / BUILTIN\Users 必须已经不在
-    expect(acl).not.toMatch(/Everyone/i)
-    expect(acl).not.toMatch(/BUILTIN\\Users/i)
-    expect(acl).toMatch(/\(OI\)\(CI\)/)
+    // 只剩当前用户 + **没有 (I) 条目**（后者正是 /inheritance:r 是否生效的判别）
+    expectOnlyCurrentUser(dir, false)
+    expect(aceLines(dir).join('\n')).toMatch(/\(OI\)\(CI\)/)
   })
 
   it('目录的 (OI)(CI) 继承会作用到之后新建的文件', () => {
@@ -54,10 +114,8 @@ describe('ACL 收紧', () => {
     restrictDir(dir)
     const inside = join(dir, 'secrets.json')
     writeFileSync(inside, '{"db_enc_key":"x"}', 'utf8')
-    const acl = aclOf(inside)
-    expect(acl).toContain(currentUser())
-    expect(acl).not.toMatch(/Everyone/i)
-    expect(acl).not.toMatch(/BUILTIN\\Users/i)
+    // 新文件靠目录继承拿到权限 —— 所以这条**应当**带 (I) 条目（与上一条相反）
+    expectOnlyCurrentUser(inside, true)
   })
 
   it('文件收紧同样只留当前用户', () => {
@@ -65,9 +123,7 @@ describe('ACL 收紧', () => {
     const f = join(tempDir(), 'config.json')
     writeFileSync(f, '{}', 'utf8')
     expect(restrictFile(f).ok).toBe(true)
-    const acl = aclOf(f)
-    expect(acl).toContain(currentUser())
-    expect(acl).not.toMatch(/Everyone/i)
+    expectOnlyCurrentUser(f, false)
   })
 
   it('POSIX 上设成 0700 / 0600', () => {
@@ -99,7 +155,6 @@ describe('ACL 收紧', () => {
   it('restrictWechatState 覆盖状态目录与数据根下的密钥文件，且不存在的不报错', () => {
     const stateDir = join(tempDir(), 'wechat')
     const dataRoot = join(tempDir(), 'wechat-data')
-    writeFileSync(join(tempDir(), 'placeholder'), '')
     const r = restrictWechatState({ stateDir, dataRoot })
     expect(r.ok).toBe(true)
     expect(r.failures).toEqual([])
@@ -122,8 +177,17 @@ describe('ACL 收紧', () => {
     const f = join(dir, 'keys.json')
     writeFileSync(f, '{}', 'utf8')
     restrictWechatState({ stateDir: dir })
-    const acl = readFileSync(f, 'utf8') // 读得回来（当前用户可读）
-    expect(acl).toBe('{}')
-    expect(aclOf(f)).not.toMatch(/Everyone/i)
+    const text = readFileSync(f, 'utf8') // 收紧后当前用户仍读得回来
+    expect(text).toBe('{}')
+    expectOnlyCurrentUser(f, false)
+  })
+
+  it('SENSITIVE_FILES 覆盖全部含密钥的文件名（清单漏一个 = 那个文件不受保护）', () => {
+    // 为什么直接断言清单：Windows 上对目录收紧会把可继承 ACE 传播到既有子文件，
+    // 所以「子文件被收紧了」这个行为断言即使清单里漏了 secrets.json 也照样通过
+    // （复审用变异 m11 实测）。
+    for (const name of ['config.json', 'secrets.json', 'keys.json', 'llm.json', 'all_keys.json']) {
+      expect(SENSITIVE_FILES, '清单缺少 ' + name).toContain(name)
+    }
   })
 })

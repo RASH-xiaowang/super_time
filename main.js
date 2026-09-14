@@ -40,6 +40,7 @@ const {
   applyConfig,
   recordResolved,
   loadWechatSettings,
+  mirroredSecretValues,
   loadLlmConfig,
   saveLlmConfig,
   configPath,
@@ -68,18 +69,6 @@ if (USER_DATA_OVERRIDE) {
 /** 「微信+」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
 const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') });
 
-// ── 密钥文件权限收紧（M1）────────────────────────────────────────────────
-// config.json / secrets.json / keys.json 里有微信库密钥与 API Key 的明文，默认权限下
-// 同机其它账户也能读。这里把状态目录与数据根收紧到当前用户，并**靠目录的 (OI)(CI)
-// 继承**让之后新建的文件自动继承同一权限（于是不必每写一个文件都调一次 icacls）。
-// 尽力而为：拿不到权限只记一行日志，不能让应用起不来。
-{
-  const r = restrictWechatState({
-    stateDir: STATE_DIR,
-    dataRoot: path.join(app.getPath('userData'), 'wechat-data'),
-  });
-  if (!r.ok) console.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
-}
 
 // ── 文件日志（M6）────────────────────────────────────────────────────────
 // GUI 态下 stdout 是无人接管的管道，console-safe 发现管道坏了就彻底静默 ——
@@ -95,6 +84,23 @@ process.on('uncaughtException', (e) => {
 process.on('unhandledRejection', (reason) => {
   try { diagLog.write('error', ['unhandledRejection', reason]); } catch { /* 同上 */ }
 });
+// ── 密钥文件权限收紧（M1）────────────────────────────────────────────────
+// config.json / secrets.json / keys.json 里有微信库密钥与 API Key 的明文，默认权限下
+// 同机其它账户也能读。这里先把**状态目录**收紧到当前用户；真实数据根要等后端解析出来
+// （见 migrateSecretsAndTightenAcl），因为数据根可由配置指到任意位置。
+// 靠目录的 (OI)(CI) 继承让之后新建的文件自动跟随，不必每写一个文件都调一次 icacls。
+// 放在日志安装**之后**：拿不到权限时那行告警要能落进文件日志（GUI 态 stdout 是断的）。
+{
+  // 默认数据根**只在已存在时**顺带收紧：`restrictDir` 内部会 mkdirSync，无条件传进去会在
+  // 还没用过微信数据的新装机器上凭空造一个空的 `<userData>/wechat-data`（复审实测：数据根
+  // 被配置指到别处时那个空目录依然出现，纯误导）。真实的数据根由收尾步骤按解析结果收紧。
+  const defaultDataRoot = path.join(app.getPath('userData'), 'wechat-data');
+  const r = restrictWechatState({
+    stateDir: STATE_DIR,
+    ...(fs.existsSync(defaultDataRoot) ? { dataRoot: defaultDataRoot } : {}),
+  });
+  if (!r.ok) console.warn('[security] 密钥目录权限预收紧未完全成功：' + r.failures.join('; '));
+}
 
 const APP_VERSION = (() => {
   try {
@@ -288,13 +294,58 @@ async function startWechatBackend(userDataPath) {
   }
 }
 
-/** 把「已保存的微信设置」回灌到后端（首次启动与每次重启后都要做）。 */
+/**
+ * 把「已保存的微信设置」回灌到后端（首次启动与每次重启后都要做）。
+ *
+ * **镜像里的密钥要并进同一次 patch**：这次保存返回前，`wechat-host.js` 会调
+ * `recordWechatSettings(patch)` 把整份 `config.json.wechatSettings` **重写成**「已过滤密钥」的
+ * 干净版（是替换不是合并）。只在镜像里出现过的密钥（后端 config.json 里没有对应值 →
+ * `saveConfig` 的 `carried` 也捞不到）若不在这次 patch 里，就会被无声丢掉；并进来之后，
+ * 后端把它们写进 `secrets.json`、回写镜像时又顺手把副本过滤掉 —— 迁移与「去掉多余副本」
+ * 一步完成（所以不需要再单独写一个「清理镜像」的步骤）。
+ */
 async function applySavedWechatSettings() {
-  const savedSettings = loadWechatSettings();
+  const savedSettings = { ...loadWechatSettings(), ...mirroredSecretValues() };
   if (Object.keys(savedSettings).length === 0) return;
   const r = await wechatBackend.call('saveWechatConfig', [{ patch: savedSettings }]);
   if (!r.ok || r.value?.ok === false) {
     console.warn('[wechat] 应用 wechat/config.json 设置失败:', r.error || r.value?.error);
+  }
+}
+
+/**
+ * M1 启动期收尾：① 按后端解析出的**真实**数据根收紧权限；② 把还留在后端 `config.json` 里的
+ * 旧密钥搬进 `secrets.json`。
+ *
+ * 为什么放在后端就绪之后：数据根可以由配置指向任意位置（`dataRoot` / legacy
+ * `DSH_WECHAT_DECRYPTED_DIR`），启动早期拿不到真实值 —— 早先按 `<userData>/wechat-data`
+ * 硬编码收紧，用户改了数据根就等于没有保护。
+ *
+ * 不用再「清理宿主镜像」：`applySavedWechatSettings` 那次保存返回时，`wechat-host.js` 已经
+ * 把镜像重写成过滤掉密钥的干净版了（详见该函数的说明）。
+ */
+async function migrateSecretsAndTightenAcl() {
+  const dataRoot = String(wechatBoot?.info?.root ?? '').trim();
+  const backendConfigFile = dataRoot ? path.join(dataRoot, 'config.json') : '';
+  const r = restrictWechatState({ stateDir: STATE_DIR, ...(dataRoot ? { dataRoot } : {}) });
+  if (!r.ok) console.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
+
+  // 启动期迁移：旧 config.json 里还有非空密钥就让后端走一次**空 patch 保存**
+  // （saveConfig 会把它们搬进 secrets.json 并从 config.json 删掉；空 patch 不动其它字段）。
+  try {
+    if (!backendConfigFile || !fs.existsSync(backendConfigFile)) return;
+    const raw = JSON.parse(fs.readFileSync(backendConfigFile, 'utf8'));
+    const legacy = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']
+      .some((k) => (typeof raw?.[k] === 'string' ? raw[k] !== '' : raw?.[k] !== undefined));
+    if (!legacy) return;
+    const res = await wechatBackend.call('saveWechatConfig', [{ patch: {} }]);
+    if (res.ok && res.value?.ok !== false) {
+      console.log('[security] 已把旧 config.json 里的密钥迁移到 secrets.json');
+    } else {
+      console.warn('[security] 密钥迁移失败（下次保存会再试）:', res.error || res.value?.error);
+    }
+  } catch (e) {
+    console.warn('[security] 密钥迁移失败（下次保存会再试）:', e);
   }
 }
 
@@ -351,6 +402,14 @@ function scheduleBackendRestart(reason) {
         await applySavedWechatSettings();
       } catch (e) {
         console.warn('[wechat] 重启后回灌设置失败（后端仍可用，不影响本次恢复）:', e?.message ?? e);
+      }
+      // 重启成功后也要跑一次 M1 收尾：`scheduleBackendRestart` 的路径不经过首启那段代码，
+      // 如果首启的 init 失败、这次重启才成功，自定义数据根会一直不被收紧、旧密钥也不会迁移
+      // （默认根有启动早期的预收紧兜住，自定义根没有）。与首启一致：失败只 warn。
+      try {
+        await migrateSecretsAndTightenAcl();
+      } catch (e) {
+        console.warn('[security] 重启后的密钥加固收尾失败:', e?.message ?? e);
       }
       backendRestartCount = 0;
       setBackendStatus('ready');
@@ -1031,11 +1090,18 @@ app.whenReady().then(async () => {
     } catch (e) {
       console.warn('[wechat] 记录路径配置失败:', e);
     }
-    // 若 wechat/config.json 中已有保存过的微信设置（密钥等），启动时回写后端。
+    // 若 wechat/config.json 中已有保存过的微信设置，启动时回写后端
+    // （密钥类字段会被一并交给后端写进 secrets.json，而不是回放成镜像副本）。
     try {
       await applySavedWechatSettings();
     } catch (e) {
       console.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
+    }
+    // M1 启动期收尾：按**真实**数据根收紧权限 + 把旧 config.json 里的密钥迁走。
+    try {
+      await migrateSecretsAndTightenAcl();
+    } catch (e) {
+      console.warn('[security] 密钥加固收尾失败:', e);
     }
     backendRestartCount = 0;
     setBackendStatus('ready');

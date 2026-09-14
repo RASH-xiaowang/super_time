@@ -1,4 +1,16 @@
 /**
+ * 原子写：先写同目录临时文件，再 rename 覆盖。
+ *
+ * 直接 writeFileSync 到目标路径时，写一半被杀进程/磁盘满会留下**截断的 JSON**；
+ * 而 config.json 里有数据根路径与密钥字段，读到截断内容会静默回落默认值
+ * （用户看到的是「配置莫名丢了」），且下一次保存就把残缺内容覆盖掉。
+ * 宿主层 `src/backend/wechat-paths.js` 有一份等价实现（那边是 CJS，无法共享）。
+ * @param target - 目标文件绝对路径。
+ * @param text - 要写入的文本。
+ */
+export declare function writeFileAtomic(target: string, text: string): void;
+export declare function preserveIfUnparseable(target: string): void;
+/**
  * Read the full WeChat config (merged with defaults).
  * @param decryptedDir - decrypted data root (used to locate config.json).
  * @returns the merged config (defaults + file values + resolved paths).

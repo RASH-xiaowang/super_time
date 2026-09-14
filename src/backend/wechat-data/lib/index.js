@@ -4416,19 +4416,37 @@ var SECRET_FIELDS = ["db_enc_key", "image_aes_key", "image_xor_key", "api_token"
 function secretsPath(decryptedDir) {
   return join17(decryptedDir, "..", "secrets.json");
 }
+function secretIsMeaningful(field, value) {
+  if (value === void 0 || value === null) return false;
+  const dflt = defaultConfig()[field];
+  if (typeof dflt === "string") return typeof value === "string" ? value.trim() !== "" : String(value).trim() !== "";
+  return String(value) !== String(dflt);
+}
+var warnedSecretsCorrupt = /* @__PURE__ */ new Set();
 function readSecrets(decryptedDir) {
   const p = secretsPath(decryptedDir);
-  if (!existsSync11(p)) return {};
+  if (!existsSync11(p)) return { values: {}, corrupt: false };
   try {
     const raw = JSON.parse(readFileSync3(p, "utf8"));
-    return typeof raw === "object" && raw !== null ? raw : {};
-  } catch {
-    return {};
+    return { values: typeof raw === "object" && raw !== null ? raw : {}, corrupt: false };
+  } catch (e) {
+    let sig = p;
+    try {
+      const st = statSync5(p);
+      sig = `${p}:${st.size}:${st.mtimeMs}`;
+    } catch {
+    }
+    if (!warnedSecretsCorrupt.has(sig)) {
+      warnedSecretsCorrupt.add(sig);
+      console.warn(`[config] ${p} \u4E0D\u662F\u5408\u6CD5 JSON\uFF0C\u672C\u6B21\u4E0D\u91C7\u7528\u5176\u4E2D\u7684\u5BC6\u94A5\uFF1A${e.message}\uFF08\u539F\u6587\u4EF6\u4FDD\u7559\uFF0C\u4E0B\u6B21\u4FDD\u5B58\u524D\u4F1A\u5148\u5907\u4EFD\uFF09`);
+    }
+    return { values: {}, corrupt: true };
   }
 }
 function writeSecrets(decryptedDir, secrets) {
   const p = secretsPath(decryptedDir);
   mkdirSync(dirname2(p), { recursive: true });
+  preserveIfUnparseable(p);
   writeFileAtomic(p, JSON.stringify(secrets, null, 2));
   if (process.platform !== "win32") {
     try {
@@ -4437,18 +4455,39 @@ function writeSecrets(decryptedDir, secrets) {
     }
   }
 }
+function readConfigSecretFields(decryptedDir) {
+  const raw = readRawConfig(configPath2(decryptedDir));
+  const out = {};
+  if (!raw) return out;
+  for (const field of SECRET_FIELDS) {
+    if (secretIsMeaningful(field, raw[field])) out[field] = raw[field];
+  }
+  return out;
+}
+function sleepMsSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+  }
+}
 function writeFileAtomic(target, text) {
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, text, "utf8");
-  try {
-    renameSync(tmp, target);
-  } catch (e) {
+  let lastErr = null;
+  for (let i = 0; i < 5; i += 1) {
     try {
-      rmSync(tmp, { force: true });
-    } catch {
+      renameSync(tmp, target);
+      return;
+    } catch (e) {
+      lastErr = e;
+      sleepMsSync(20);
     }
-    throw e;
   }
+  try {
+    rmSync(tmp, { force: true });
+  } catch {
+  }
+  throw lastErr;
 }
 var MAX_CORRUPT_BACKUPS = 3;
 var corruptSeq = 0;
@@ -4493,10 +4532,10 @@ function getConfig(decryptedDir) {
   const cfg = defaultConfig();
   const raw = readRawConfig(p);
   if (raw) Object.assign(cfg, raw);
-  const secrets = readSecrets(decryptedDir);
+  const { values: secrets } = readSecrets(decryptedDir);
   for (const field of SECRET_FIELDS) {
     const fromSecrets = secrets[field];
-    if (fromSecrets !== void 0 && fromSecrets !== "") cfg[field] = fromSecrets;
+    if (secretIsMeaningful(field, fromSecrets)) cfg[field] = fromSecrets;
     else if (raw && raw[field] !== void 0) cfg[field] = raw[field];
   }
   const wechatRoot = join17(decryptedDir, "..");
@@ -4522,15 +4561,23 @@ function saveConfig(decryptedDir, patch) {
     }
     delete current["resolved"];
     const imgBefore = getConfig(decryptedDir);
-    const secretPatch = {};
+    const secretsOnDisk = readSecrets(decryptedDir);
+    const nextSecrets = { ...secretsOnDisk.values };
+    const carried = readConfigSecretFields(decryptedDir);
+    for (const [k, v] of Object.entries(carried)) {
+      if (!secretIsMeaningful(k, nextSecrets[k])) nextSecrets[k] = v;
+    }
+    let explicitSecretPatch = false;
     for (const field of SECRET_FIELDS) {
-      const v = current[field];
-      if (v !== void 0) secretPatch[field] = v;
+      const fromPatch = Object.prototype.hasOwnProperty.call(patch, field) ? patch[field] : void 0;
+      if (secretIsMeaningful(field, fromPatch)) {
+        nextSecrets[field] = fromPatch;
+        explicitSecretPatch = true;
+      }
       delete current[field];
     }
-    if (Object.keys(secretPatch).length > 0) {
-      writeSecrets(decryptedDir, { ...readSecrets(decryptedDir), ...secretPatch });
-    }
+    const haveFreshValues = explicitSecretPatch || Object.keys(carried).length > 0;
+    if (haveFreshValues) writeSecrets(decryptedDir, nextSecrets);
     mkdirSync(dirname2(p), { recursive: true });
     preserveIfUnparseable(p);
     writeFileAtomic(p, JSON.stringify(current, null, 2));
@@ -9290,7 +9337,7 @@ var DECRYPTED_DIR_ENV = "DSH_WECHAT_DECRYPTED_DIR";
 var DECODED_DIR_ENV = "DSH_WECHAT_DECODED_DIR";
 var DATA_DIR_ENV = "DSH_WECHAT_DATA_DIR";
 var SOURCE_DIR_ENV = "DSH_WECHAT_SOURCE_DIR";
-var BOOTSTRAP_ITEMS = ["decrypted", "decoded_images", "message_edits.db", "daily_summary.db", "wechat_search.db", "wechat_tasks.db", "config.json", "all_keys.json"];
+var BOOTSTRAP_ITEMS = ["decrypted", "decoded_images", "message_edits.db", "daily_summary.db", "wechat_search.db", "wechat_tasks.db", "config.json", "secrets.json", "keys.json", "all_keys.json"];
 var SKIP_SUFFIXES = ["-wal", "-shm"];
 function isRuntimeArtifact(name) {
   return SKIP_SUFFIXES.some((suffix) => name.endsWith(suffix));

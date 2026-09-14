@@ -19,6 +19,19 @@ interface ShardSig {
     wal: number;
 }
 /**
+ * Atomically replace target with a fully-decrypted temp file (async retries).
+ *
+ * **不要**先 `unlink(target)`（旧实现如此）：那会在「删掉」与「改名」之间留出一个
+ * 「目标不存在」的窗口，并发只读查询正好落在里面就是 ENOENT。
+ * Windows 实测：rename 覆盖一个**已存在但未被打开**的文件是允许的
+ * （MOVEFILE_REPLACE_EXISTING），所以正常路径下不需要删除；而目标被 SQLite 句柄
+ * 打开时两种做法都会失败（rename → EPERM，unlink → EBUSY），真正让同步成功的是
+ * 这里的重试等待。导出仅为让回归用例直接验证「替换期间目标始终存在」。
+ * @param temp - 已解密好的临时文件。
+ * @param target - 目标快照文件。
+ */
+export declare function atomicReplace(temp: string, target: string): Promise<void>;
+/**
  * 64-hex raw key for a shard (all_keys.json per-file first, then config).
  * @param decryptedDir - decrypted data root (all_keys.json sits beside it).
  * @param relKey - per-file key entry (e.g. 'message/message_0.db').

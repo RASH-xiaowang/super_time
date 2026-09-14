@@ -25,8 +25,27 @@ import css from './settings.module.css'
 import kitCss from '../ui/kit.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
 
-/** localStorage 渲染缓存键：上次成功加载的完整微信配置，用于首帧即时渲染。 */
+/** localStorage 渲染缓存键：上次成功加载的**非密钥**微信配置，用于首帧即时渲染。 */
 const SETTINGS_CONFIG_CACHE_KEY = 'settings-config'
+
+/**
+ * 密钥字段：**一律不写进渲染缓存**。
+ *
+ * 为什么：渲染缓存落在 `<userData>/Local Storage`（Chromium 管理的 leveldb），而 M1 的权限
+ * 收紧只覆盖 `<userData>/wechat` 与数据根 —— 缓存里放一份密钥等于凭空多一份**不受保护**的
+ * 明文副本（复审实测本机 dev profile 的 leveldb 里确实躺着真 `db_enc_key`）。密钥的真源只有
+ * `<数据根>/secrets.json`，界面上要显示时通过 RPC 现取。
+ */
+const SETTINGS_SECRET_FIELDS = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token'] as const
+type SettingsSecretKey = (typeof SETTINGS_SECRET_FIELDS)[number]
+/** 可缓存的配置形状：明确地把密钥字段排除在外（类型上也不给漏的机会）。 */
+type CachedSettingsConfig = Omit<WechatConfigFull, SettingsSecretKey>
+
+/** 去掉密钥字段后的可缓存副本。 */
+function cacheableConfig(c: WechatConfigFull): CachedSettingsConfig {
+  const { db_enc_key: _db, image_aes_key: _aes, image_xor_key: _xor, api_token: _tok, ...rest } = c
+  return rest
+}
 
 /** 模型目录探测器尚未就绪时的本地目录兜底(安装状态以 getWhisperStatus 为准)。 */
 const WHISPER_MODEL_FALLBACK: ReadonlyArray<{ id: string; name: string; sizeLabel: string; installed: boolean }> = [
@@ -461,8 +480,8 @@ export interface SettingsPanelProps {
  * @returns the settings element tree.
  */
 export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
-  const cachedCfg = readRenderCache<WechatConfigFull>(SETTINGS_CONFIG_CACHE_KEY)
-  const [cfg, setCfg] = useState<WechatConfigFull | null>(cachedCfg)
+  const cachedCfg = readRenderCache<CachedSettingsConfig>(SETTINGS_CONFIG_CACHE_KEY)
+  const [cfg, setCfg] = useState<CachedSettingsConfig | WechatConfigFull | null>(cachedCfg)
   const [cfgLoading, setCfgLoading] = useState(false)
   const [keysInfo, setKeysInfo] = useState<{ keyFormat?: string; keyCount: number; loaded: boolean }>({ keyCount: 0, loaded: false })
   const [accounts, setAccounts] = useState<readonly WechatAccount[]>([])
@@ -470,11 +489,13 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   const [detecting, setDetecting] = useState(false)
   const [detectMsg, setDetectMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [dbDir, setDbDir] = useState(cachedCfg?.db_dir ?? '')
-  const [dbKey, setDbKey] = useState(cachedCfg?.db_enc_key ?? '')
-  const [imgAes, setImgAes] = useState(cachedCfg?.image_aes_key ?? '')
-  const [imgXor, setImgXor] = useState(cachedCfg ? String(cachedCfg.image_xor_key) : '136')
+  // 密钥字段不从渲染缓存预填（缓存里不该有它们，见 SETTINGS_SECRET_FIELDS）：
+  // 未加载完时保持空值，而后端会把「空串/默认值」当成「没给」而不是「要清空」。
+  const [dbKey, setDbKey] = useState('')
+  const [imgAes, setImgAes] = useState('')
+  const [imgXor, setImgXor] = useState('136')
   const [apiEnabled, setApiEnabled] = useState(cachedCfg?.api_enabled ?? true)
-  const [apiToken, setApiToken] = useState(cachedCfg?.api_token ?? '')
+  const [apiToken, setApiToken] = useState('')
   const [apiPort, setApiPort] = useState(cachedCfg?.api_port ?? 5032)
   const [cdnEnabled, setCdnEnabled] = useState(cachedCfg?.cdn_enabled ?? true)
   const [cdnLocal, setCdnLocal] = useState(cachedCfg?.cdn_local_decrypt ?? true)
@@ -546,7 +567,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     try {
       const c = await apiGetWechatConfigFull()
       setCfg(c)
-      writeRenderCache(SETTINGS_CONFIG_CACHE_KEY, c)
+      writeRenderCache(SETTINGS_CONFIG_CACHE_KEY, cacheableConfig(c))
       setDbDir(c.db_dir)
       setDbKey(c.db_enc_key)
       setImgAes(c.image_aes_key)
@@ -570,6 +591,15 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  // 老版本写下的渲染缓存里带着密钥：读到就立刻用去掉密钥的版本覆盖（自愈）。
+  // 必须独立于 load()：加载失败时那条路径不会回写，残留的明文副本就会一直留在磁盘上。
+  useEffect(() => {
+    const raw = readRenderCache<Record<string, unknown>>(SETTINGS_CONFIG_CACHE_KEY)
+    if (raw && SETTINGS_SECRET_FIELDS.some((k) => k in raw)) {
+      writeRenderCache(SETTINGS_CONFIG_CACHE_KEY, cacheableConfig(raw as unknown as WechatConfigFull))
+    }
+  }, [])
 
   // 获取「路径配置中心」wechat/config.json 的绝对路径，用于点击打开。
   useEffect(() => {
@@ -1613,7 +1643,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         <span className={saveMsg ? (saveMsg.kind === 'ok' ? css.saveMsgOk : css.saveMsgErr) : css.saveMsgIdle}>
           {saveMsg ? saveMsg.text : '修改后点击「保存配置」生效'}
         </span>
-        <Button variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={saving ? <span className={css.spin} /> : undefined} onClick={() => { void save() }} disabled={saving}>
+        <Button variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={saving ? <span className={css.spin} /> : undefined} onClick={() => { void save() }} disabled={saving || !cfg}>
           {saving ? '保存中…' : '保存配置'}
         </Button>
       </div>
