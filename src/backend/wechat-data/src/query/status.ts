@@ -4,7 +4,7 @@
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySig } from './meta.ts'
+import { cachedBySig, dataGenerationSig } from './meta.ts'
 
 const LABEL_MAP: Array<[string, string]> = [
   ['session', '会话(session)'],
@@ -42,7 +42,11 @@ function hasDbFile(dir: string, depth = 0): boolean {
  */
 export function getDbStatus(decryptedDir: string): { lines: string[]; path: string } {
   const key = 'db-status:' + decryptedDir
-  return cachedBySig(key, 'fs-status-v1', () => computeDbStatus(decryptedDir))
+  // 这份快照统计的是**整棵** decrypted 树，没法用某一个文件的签名表达，所以用数据世代
+  // 签名（实时同步落地后 +1）。**不要**换成「整树签名」—— 那要每次查询都 stat 成千上万个
+  // 文件，比缓存本身还贵；也不要沿用原先的常量签名 + 靠「事件后整表清空」兜底（M8 去掉了
+  // 那层兜底，常量签名会让它只能等 5s TTL）。
+  return cachedBySig(key, dataGenerationSig(), () => computeDbStatus(decryptedDir))
 }
 
 function computeDbStatus(decryptedDir: string): { lines: string[]; path: string } {

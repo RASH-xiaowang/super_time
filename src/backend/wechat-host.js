@@ -36,7 +36,7 @@ function logRetry(what) {
  *
  * 两条边界：
  *   - 单条结果超过 512KB（例如整段视频的 base64）不入缓存，不把大对象钉在内存里；
- *   - 后端一报告 wechat-data/updated 就整体失效，密钥/数据变更后不会返回旧结果。
+ *   - 数据更新时**定向**失效，不是整体清空（见 clearStaleResultCache 的说明）。
  */
 const CACHEABLE_METHODS = new Set([
   'getSnsImageDataUrl',
@@ -47,13 +47,39 @@ const CACHEABLE_METHODS = new Set([
   'getEmoticonDataUrl',
   'getAvatar',
 ]);
+/** 内容本身会变的方法：数据一更新就得丢弃（头像可换、远程封面可换）。 */
+const VOLATILE_CACHE_METHODS = new Set(['getAvatar', 'getArticleCover']);
 const RESULT_CACHE_MAX = 300;
 const RESULT_CACHE_MAX_CHARS = 512 * 1024;
 const resultCache = new Map();
 
-/** 数据变更后整体失效（由 gateway 的 wechat-data/updated 事件触发）。 */
+/** 整体失效：只用于「解码结果整体作废」的场合（图片密钥变更）。 */
 function clearResultCache() {
   resultCache.clear();
+}
+
+/**
+ * 数据更新后的**定向**失效（替代原先的整体 `clear()`）。
+ *
+ * 原先每来一次 `wechat-data/updated` 就清空：这几个方法里最贵的（朋友圈图片/视频帧）
+ * 单次要「读文件 + AES 解密 + MD5」全量扫描，该文件自己的注释实测 **12–21 秒**；
+ * 而同步活跃期约 10s 就有一次事件 —— 整体清空等于让缓存永远命中不了，
+ * 面板每次重挂载都要重扫一遍。
+ *
+ * 只丢两类：
+ *   · **失败结果**：图片可能在该消息到达之后才下载到本地，之前的「没找到」必须重试
+ *     （这也是当初缓存失败结果时明确写下的例外）；
+ *   · **内容会变的方法**（VOLATILE_CACHE_METHODS）。
+ * 其余成功结果是内容寻址的（`getImageDataUrl` 按 username+localId、`getSns*DataUrl`
+ * 按 md5/id），新消息不会改变既有条目的字节。图片**密钥**变更另走
+ * `call()` 里 `saveWechatConfig` 那条路径整体清空 —— 解码结果随密钥而变。
+ */
+function clearStaleResultCache() {
+  for (const [key, result] of [...resultCache]) {
+    const sep = key.indexOf('\u0000');
+    const method = sep < 0 ? key : key.slice(0, sep);
+    if (VOLATILE_CACHE_METHODS.has(method) || (result && result.ok === false)) resultCache.delete(key);
+  }
 }
 
 function resultCacheKey(method, callArgs) {
@@ -351,8 +377,8 @@ function createMiniContext(options = {}) {
       return disposer;
     },
     emit(name, ...args) {
-      // 新数据解密完成意味着所有离线图片/封面的解析结果都可能过期。
-      if (name === 'wechat-data/updated') clearResultCache();
+      // 数据更新：定向失效（失败结果 + 内容会变的方法），不再整体清空（M8）。
+      if (name === 'wechat-data/updated') clearStaleResultCache();
       try {
         options.onEvent?.(name, args);
       } catch {
@@ -499,6 +525,11 @@ async function createWechatBackend(options = {}) {
               console.warn('[wechat] 记录设置到 wechat/config.json 失败:', e);
             }
           }
+          // 保存配置可能改了图片 AES/XOR 密钥，而这里的缓存存的是**已解码**的结果
+          // （解码结果随密钥而变）。判据不在这里区分「密钥是否真变了」—— 那要知道后端的
+          // 默认值口径（`image_xor_key` 的 136），抄一份只会漂移；保存配置是用户手动、
+          // 低频的操作，整体清空换来的代价只是这一次重新解码。
+          clearResultCache();
         }
         const result = { ok: true, value };
         if (cacheKey) writeResultCache(cacheKey, result);
@@ -528,9 +559,29 @@ async function createWechatBackend(options = {}) {
   };
 }
 
+/**
+ * 结果缓存的把手（导出给单测）。
+ *
+ * 为什么导出：这几条策略（键构造、读写、定向失效）值得单独锁住，而通过真实图片数据去
+ * 间接观察既慢又不稳；这里只交出**函数**，内部 `resultCache` 本身不外泄。
+ * @returns 结果缓存的键构造 / 读写 / 失效入口。
+ */
+function resultCacheHandles() {
+  return {
+    key: resultCacheKey,
+    read: readResultCache,
+    write: writeResultCache,
+    clearStale: clearStaleResultCache,
+    clearAll: clearResultCache,
+    size: () => resultCache.size,
+  };
+}
+
 module.exports = {
   createWechatBackend,
   createLlmBridge,
   createMiniContext,
   applySqlitePageCacheLimit,
+  /** 单测入口（见 resultCacheHandles 的说明）。 */
+  resultCacheHandles,
 };

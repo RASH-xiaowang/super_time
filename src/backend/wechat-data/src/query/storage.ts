@@ -76,13 +76,34 @@ function resolveFileTitle(dec: string, username: string, svr: string): string {
     return ''
   }
 }
+/**
+ * `msg/file` 树的签名：根目录 + **每个月份子目录**的 mtime/size。
+ *
+ * 只签根目录是不够的（子目录里新增文件不会改根目录 mtime），而逐个文件 stat 又太贵 ——
+ * 子目录自己的 mtime 会在其内容变化时更新，粒度刚好。
+ * @param root - `msg/file` 目录。
+ * @returns 签名串（读不到时为空串）。
+ */
+function fileNamesSig(root: string): string {
+  const parts: string[] = [fileSigOf(root)]
+  try {
+    for (const e of readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      parts.push(`${e.name}:${fileSigOf(join(root, e.name))}`)
+    }
+  } catch { /* 读不到就只用根目录签名 */ }
+  return parts.join('|')
+}
+
 /** 扫描 msg/file 各月份子目录，建立 size -> 原文件名 映射（还原大文件真实文件名）。 */
 function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, string> {
   if (!wechatBaseDir) return new Map<number, string>()
   const root = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(root)) return new Map<number, string>()
-  // 全树 stat 较重：按目录指纹进程内缓存（30s 上限），实时同步事件会整体失效。
-  return cachedBySig('storage-file-names:' + root, fileSigOf(root), () => {
+  // 全树 stat 较重：按进程内缓存（30s 上限）。签名必须覆盖**各月份子目录**而不只是 root：
+  // 新文件是落到 `msg/file/<月>/` 里的，root 自身的 mtime 并不随子目录内容变化 ——
+  // 原先只签 root，实际靠「事件后整表清空」兜住（M8 去掉那层兜底后补齐）。
+  return cachedBySig('storage-file-names:' + root, fileNamesSig(root), () => {
     const map = new Map<number, string>()
     try {
       for (const e of readdirSync(root, { withFileTypes: true })) {

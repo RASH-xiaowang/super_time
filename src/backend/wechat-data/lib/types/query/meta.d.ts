@@ -59,5 +59,11 @@ export declare function fileSigOf(path: string): string;
 export declare function cachedBySig<T>(key: string, sig: string, loader: () => T, maxAgeMs?: number): T;
 /** Insert with a simple FIFO capacity bound (evicts the oldest key). */
 export declare function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap?: number): void;
-/** Drop every cached snapshot (called after a rewrite event when needed). */
+/**
+ * Drop every cached snapshot (called after a rewrite event when needed).
+ */
 export declare function invalidateWechatMeta(): void;
+/** 推进数据世代。实时同步落地新数据后调用（全树被替换的场合仍用 invalidateWechatMeta）。 */
+export declare function bumpDataGeneration(): void;
+/** 数据世代签名：给「依赖整棵树」的缓存条目当 sig 用。 */
+export declare function dataGenerationSig(): string;

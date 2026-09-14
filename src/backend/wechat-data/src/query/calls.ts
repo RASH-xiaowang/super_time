@@ -25,7 +25,8 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { decompress } from 'fzstd'
-import { contactMeta, shardCatalog, shardCatalogSig, cachedBySig } from './meta.ts'
+import { join } from 'node:path'
+import { contactMeta, shardCatalog, shardCatalogSig, cachedBySig, fileSigOf } from './meta.ts'
 import type { CallRecord, CallPeer, CallMonthRow, CallsSnapshot } from '../types.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -252,7 +253,9 @@ function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: num
  */
 export function queryCalls(decryptedDir: string, selfUsername?: string, topPeers = 20, recentLimit = 50): CallsSnapshot {
   const self = selfUsername ?? ''
-  const sig = shardCatalogSig(decryptedDir, ['message']) + '|' + self
+  // 通话快照里的对端昵称来自 contact.db，所以它也必须进签名：原先只签分片 + self，
+  // 靠「事件后整表清空」兜住（M8 去掉那层兜底后必须补上真正读了的东西）。
+  const sig = shardCatalogSig(decryptedDir, ['message']) + '|' + self + '|' + fileSigOf(join(decryptedDir, 'contact', 'contact.db'))
   const names = contactMeta(decryptedDir).names
   return cachedBySig('calls:' + decryptedDir, sig, () => {
     const raw = scanCalls(decryptedDir, self)

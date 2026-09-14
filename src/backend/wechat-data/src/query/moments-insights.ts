@@ -164,9 +164,12 @@ function computeGeo(db: DatabaseSync): MomentsGeo {
  */
 export function queryMomentsInsights(decryptedDir: string, author?: string): MomentsInsightsSnapshot {
   const dbPath = snsDb(decryptedDir)
-  // Cache keyed on the sns.db signature; recomputed when the realtime sync
-  // rewrites it, otherwise served from the 5s bounded cache.
-  const sig = dbPath === null ? '' : fileSigOf(dbPath)
+  // 签名覆盖 sns.db 与 contact.db：互动人昵称来自后者。原先只签 sns.db，靠「事件后整表
+  // 清空」兜住 —— M8 去掉那层兜底后必须补上真正读了的东西。
+  const sig = [
+    dbPath === null ? '' : fileSigOf(dbPath),
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+  ].join('|')
   return cachedBySig('moments-insights:' + decryptedDir + ':' + (author ?? ''), sig, () => computeMomentsInsights(decryptedDir, author))
 }
 

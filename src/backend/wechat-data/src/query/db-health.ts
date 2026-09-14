@@ -7,7 +7,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { DbHealthSnapshot, DbHealthStore } from '../types.ts'
 import { getSearchIndexStatus } from './search.ts'
-import { cachedBySig } from './meta.ts'
+import { cachedBySig, dataGenerationSig } from './meta.ts'
 
 /** Recursively count .db/-wal/-shm sizes under a directory (depth 4). */
 function walkSqlite(dir: string, depth: number): { dbCount: number; dbBytes: number; walCount: number; shmCount: number } {
@@ -67,7 +67,9 @@ function dirStats(dir: string): { count: number; bytes: number } {
  */
 export function queryDbHealth(decryptedDir: string): DbHealthSnapshot {
   const key = 'db-health:' + decryptedDir
-  return cachedBySig(key, 'fs-snapshot-v1', () => computeDbHealth(decryptedDir))
+  // 健康快照扫描**整棵** decrypted 树（外加 root store / decoded_images / 搜索索引），
+  // 用数据世代签名失效。见 status.ts 里关于「为什么不用整树签名」的说明。
+  return cachedBySig(key, dataGenerationSig(), () => computeDbHealth(decryptedDir))
 }
 
 function computeDbHealth(decryptedDir: string): DbHealthSnapshot {
