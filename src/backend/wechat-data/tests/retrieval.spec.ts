@@ -5,16 +5,29 @@
  * 全部为**纯逻辑**，不碰数据库与网络，因此可以在任何环境稳定跑。
  * @vitest-environment node
  */
-import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
+import { afterEach, describe, expect, it } from 'vitest'
 import { classifyIntent, refineIntentWithLlm } from '../src/query/retrieval/intent.ts'
 import { buildQueryPlan, normalizeQuestion, resolveRelativeDate, synonymExpand, toHalfWidth } from '../src/query/retrieval/rewrite.ts'
 import { dedupeFused, fuseResults } from '../src/query/retrieval/fusion.ts'
 import { rerankDocs } from '../src/query/retrieval/rank.ts'
 import { averagePrecision, mrr, ndcgAtK, precisionAtK, recallAtK } from '../src/query/retrieval/eval.ts'
-import { __internals } from '../src/query/retrieval/embedding.ts'
+import { __internals, buildVectorIndex, searchDense } from '../src/query/retrieval/embedding.ts'
 import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+const scratch: string[] = []
+afterEach(() => {
+  for (const d of scratch) rmSync(d, { recursive: true, force: true })
+  scratch.length = 0
+})
 
 /** 构造一条统一文档。 */
 function doc(username: string, localId: number, text: string, createTime = 0): RetrievedDoc {
@@ -255,6 +268,12 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
       { n: 5000, pool: 9999, seed: 6, note: 'pool > N' },
       { n: 2000, pool: 1, seed: 7, note: '只取 1 个' },
       { n: 3000, pool: 120, seed: 8, note: '大量同距离（阈值处有并列）' },
+      { n: 40, pool: 40, seed: 9, note: 'pool == N' },
+      { n: 40, pool: 39, seed: 10, note: 'pool == N-1' },
+      { n: 500, pool: 0, seed: 11, note: 'pool=0' },
+      { n: 500, pool: 2000.7, seed: 12, note: '非整数 pool（配置可手改）' },
+      { n: 500, pool: Number.NaN, seed: 13, note: 'NaN pool' },
+      { n: 500, pool: Number.POSITIVE_INFINITY, seed: 14, note: 'Infinity pool' },
     ]
     for (const c of cases) {
       const rows = makeRows(c.n, c.seed)
@@ -262,8 +281,52 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
       if (c.note.includes('并列')) for (const r of rows) r.hi = 0
       const qh = { lo: rng(c.seed + 999)(), hi: c.note.includes('并列') ? 0 : rng(c.seed + 998)() }
       const got = __internals.selectByHamming(rows, qh, c.pool)
+      // oracle 直接用旧实现的 `slice(0, pool)`：它对非整数会截断、对 NaN 得空数组 ——
+      // 这两种容错正是新实现必须保持一致的地方（`new Array(非整数)` 会抛 RangeError）。
       const want = reference(rows, qh, c.pool)
       expect(got.map((r) => r.rowid), c.note).toEqual(want.map((r) => r.rowid))
+    }
+  })
+
+  it('负数 pool 是有意与旧行为分叉（旧 slice(0,-k) 的语义显然是笔误）', () => {
+    // 记在这里是为了防止「差分测试全绿」被误解成「行为逐位一致」：
+    // 这是唯一已知的分叉点，且生产不可达（pool = Math.max(candidatePool, topK)，都非负）。
+    const rows = makeRows(10, 15)
+    const qh = { lo: rows[0].lo, hi: rows[0].hi }
+    expect(reference(rows, qh, -3).length).toBe(7) // 旧行为：slice(0, -3) 去掉尾部 3 条
+    expect(__internals.selectByHamming(rows, qh, -3)).toEqual([]) // 新行为：按 0 处理
+  })
+
+  it('距离全相同时按原表顺序取前 pool', () => {
+    const rows = makeRows(64, 14)
+    for (const r of rows) { r.lo = 0; r.hi = 0 }
+    const qh = { lo: 0, hi: 0 } // 与每一行的距离都是 0
+    const got = __internals.selectByHamming(rows, qh, 10)
+    expect(got.map((r) => r.rowid)).toEqual(rows.slice(0, 10).map((r) => r.rowid))
+  })
+
+  it('恰好距离 64 的行不会被丢（直方图必须留 MAX_HAMMING 这一格）', () => {
+    // 两段 32 位 popcount 之和**可以**正好等于 64（查询向量取反 ⇒ simhash 逐位取反）。
+    // 直方图若只开 MAX_HAMMING 格，`hist[64]` 的写入会被静默丢弃 ⇒ 该组的条数记 0 ⇒
+    // `limit` 落到更小的距离 ⇒ 这些行既不在 order 里、又让 out 出现空槽。
+    const near: Row = { rowid: 1, lo: 0, hi: 0, username: 'wxid_a' }
+    const far: Row = { rowid: 2, lo: 0xffffffff, hi: 0xffffffff, username: 'wxid_a' }
+    const qh = { lo: 0, hi: 0 }
+    expect(__internals.popcount32(0xffffffff)).toBe(32)
+    const got = __internals.selectByHamming([far, near], qh, 2)
+    expect(got.map((r) => r.rowid)).toEqual([1, 2]) // 近的在前，64 的仍然在
+    expect(got.length).toBe(2)
+  })
+
+  it('popcount32 与朴素实现一致（差分测试的 oracle 依赖它）', () => {    // 差分测试两侧都用 popcount32，所以「popcount 本身对不对」是独立命题，必须单独验。
+    const naive = (x: number): number => (x >>> 0).toString(2).split('').filter((c) => c === '1').length
+    expect(__internals.popcount32(0)).toBe(0)
+    expect(__internals.popcount32(0xffffffff)).toBe(32)
+    for (let b = 0; b < 32; b += 1) expect(__internals.popcount32(1 << b)).toBe(1)
+    const r = rng(4242)
+    for (let i = 0; i < 10_000; i += 1) {
+      const x = r()
+      expect(__internals.popcount32(x)).toBe(naive(x))
     }
   })
 
@@ -330,4 +393,101 @@ describe('合成评测集（回归护栏）', () => {
     const acc = syntheticIntentAccuracy()
     expect(acc.accuracy).toBe(1)
   })
+})
+
+describe('接线：稠密粗筛必须走计数选择（M9）', () => {
+  /**
+   * 为什么需要源码级守卫：把调用点退回旧的 `map+sort+slice` **不会**让任何用例变红 ——
+   * 那两种实现按定义行为等价（差分测试正是为了证明这一点）。于是「优化被静默回退」只能靠
+   * 这条守卫兜住。仓库里 `tests/meta.spec.ts` / `tests/result-cache.spec.ts` 有同款做法。
+   */
+  const src = readFileSync(join(HERE, '..', 'src', 'query', 'retrieval', 'embedding.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
+
+  it('粗筛那一段调用 selectByHamming，且没有退回全量排序', () => {
+    const start = code.indexOf('const all = loadHashRows(')
+    const end = code.indexOf('const filtered =', start)
+    expect(start, '找不到 loadHashRows 调用点').toBeGreaterThan(-1)
+    expect(end, '找不到 filtered 那行（粗筛段的结束标志）').toBeGreaterThan(start)
+    const region = code.slice(start, end)
+    expect(region).toContain('selectByHamming(all,')
+    expect(region, '粗筛段里又出现了排序：优化被回退了').not.toContain('.sort(')
+  })
+
+  it('下游按余弦排序的 out.sort 仍在（守卫不要误伤它）', () => {
+    expect(code).toContain('out.sort(')
+  })
+})
+
+describe('真值级：稠密检索端到端（M9）', () => {
+  /** 桩 embedding：文本 → 确定性向量（每维由文本的哈希位决定）。 */
+  function vecOf(text: string): number[] {
+    let h = 2166136261
+    for (let i = 0; i < text.length; i += 1) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0 }
+    const out: number[] = []
+    for (let d = 0; d < 8; d += 1) out.push(((h >>> (d * 4)) & 0xf) - 7.5)
+    return out.length > 0 && out.every((x) => x === 0) ? [1, 0, 0, 0, 0, 0, 0, 0] : out
+  }
+  const norm = (v: number[]): number[] => {
+    const n = Math.hypot(...v) || 1
+    return v.map((x) => x / n)
+  }
+  const dot = (a: number[], b: number[]): number => a.reduce((s, x, i) => s + x * (b[i] ?? 0), 0)
+
+  it('候选池 >= N 时，返回顺序与「纯余弦排序」一致（整条链路：建库→粗筛→余弦）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-m9-e2e-'))
+    scratch.push(root)
+    const dec = join(root, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+
+    // 稀疏索引（buildVectorIndex 的输入）：message_meta
+    const texts = Array.from({ length: 30 }, (_, i) => '文档' + String(i) + '：' + 'x'.repeat(i % 5))
+    const sdb = new DatabaseSync(join(root, 'wechat_search.db'))
+    sdb.exec('CREATE TABLE message_meta (rowid INTEGER PRIMARY KEY, text TEXT, username TEXT, local_id INTEGER, create_time INTEGER)')
+    const ins = sdb.prepare('INSERT INTO message_meta VALUES (?,?,?,?,?)')
+    texts.forEach((t, i) => ins.run(i + 1, t, 'wxid_a', i + 1, 1700000000 + i))
+    sdb.close()
+
+    const embed = async (ts: string[]): Promise<number[][]> => ts.map(vecOf)
+    const built = await buildVectorIndex(dec, embed, { model: 'stub', batchSize: 8, maxCharsPerDoc: 200, maxDocsPerBuild: 1000 })
+    expect(built.status).toBe('ok')
+    expect(built.rows).toBe(texts.length)
+
+    const qtext = '文档3：xxx'
+    // candidatePool 大于表大小 ⇒ 粗筛退化为整表（选择器必须把 30 行一条不少地交出去；
+    // 若它漏行/返回空槽，下面的顺序就会与真值不一致）
+    const res = await searchDense(dec, qtext, embed, { topK: 5, minSimilarity: -1, candidatePool: 1000 })
+    expect(res.docs.length).toBe(5)
+
+    // 真值由**余弦的定义**独立算出（不是复述生产逻辑）
+    const qv = norm(vecOf(qtext))
+    const truth = texts
+      .map((t, i) => ({ localId: i + 1, score: dot(norm(vecOf(t)), qv) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+    expect(res.docs.map((d) => d.local_id)).toEqual(truth.map((x) => x.localId))
+    for (let i = 1; i < res.scores.length; i += 1) expect(res.scores[i]).toBeLessThanOrEqual(res.scores[i - 1])
+  }, 60_000)
+
+  it('候选池很小时也不越界、不返回空槽，且结果都来自真实文档', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wx-m9-e2e2-'))
+    scratch.push(root)
+    const dec = join(root, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+    const texts = Array.from({ length: 20 }, (_, i) => 'note' + String(i))
+    const sdb = new DatabaseSync(join(root, 'wechat_search.db'))
+    sdb.exec('CREATE TABLE message_meta (rowid INTEGER PRIMARY KEY, text TEXT, username TEXT, local_id INTEGER, create_time INTEGER)')
+    const ins = sdb.prepare('INSERT INTO message_meta VALUES (?,?,?,?,?)')
+    texts.forEach((t, i) => ins.run(i + 1, t, 'wxid_a', i + 1, 1700000000 + i))
+    sdb.close()
+
+    const embed = async (ts: string[]): Promise<number[][]> => ts.map(vecOf)
+    await buildVectorIndex(dec, embed, { model: 'stub', batchSize: 8, maxCharsPerDoc: 200, maxDocsPerBuild: 1000 })
+    const res = await searchDense(dec, 'note7', embed, { topK: 3, minSimilarity: -1, candidatePool: 2 })
+    expect(res.docs.length).toBeLessThanOrEqual(3)
+    for (const d of res.docs) {
+      expect(d).toBeTruthy() // 没有 undefined 空槽
+      expect(texts).toContain(d.text)
+    }
+  }, 60_000)
 })

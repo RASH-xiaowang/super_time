@@ -321,7 +321,14 @@ const MAX_HAMMING = 64
  */
 function selectByHamming(rows: readonly HashRow[], qh: { lo: number; hi: number }, pool: number): HashRow[] {
   const n = rows.length
-  const take = Math.min(pool, n)
+  // pool 来自配置（`rag-config.json` 可手改，`deepMerge` 不做数值校验）：非有限值/小数/负数
+  // 都要归一到安全整数。旧实现靠 `slice` 天然容忍（`slice(0, 2000.5)` 截断成 2000、
+  // `slice(0, NaN)` 得空数组），而 `new Array(take)` 遇非整数会直接抛 RangeError。
+  // `Infinity` 要保留「取整表」的含义（`Math.floor(Infinity)` 仍是 Infinity，再被 min 夹到 n）——
+  // 别把它和 NaN 一起归零，那会与旧行为分叉。**唯一有意的分歧**：负数的 pool 旧实现是
+  // `slice(0, -k)`（返回「全部去掉后 k 条」，显然是笔误产物），新实现按 0 处理（返回空）。
+  const want = Number.isNaN(pool) ? 0 : Math.floor(pool)
+  const take = Math.min(Math.max(want, 0), n)
   if (take <= 0) return []
   const dist = new Uint8Array(n)
   const hist = new Uint32Array(MAX_HAMMING + 1)
