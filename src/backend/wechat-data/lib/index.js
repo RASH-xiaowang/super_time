@@ -4359,8 +4359,8 @@ function queryWechatConfig(decryptedDir) {
 // src/backend/wechat-data/src/query/config.ts
 import { execFileSync } from "node:child_process";
 import { createDecipheriv, createHmac, pbkdf2Sync } from "node:crypto";
-import { closeSync, existsSync as existsSync11, mkdirSync, openSync, readFileSync as readFileSync3, readdirSync as readdirSync6, readSync, rmSync, statSync as statSync5, writeFileSync } from "node:fs";
-import { dirname as dirname2, join as join17, relative } from "node:path";
+import { closeSync, existsSync as existsSync11, mkdirSync, openSync, readFileSync as readFileSync3, readdirSync as readdirSync6, readSync, renameSync, rmSync, statSync as statSync5, writeFileSync } from "node:fs";
+import { basename, dirname as dirname2, join as join17, relative } from "node:path";
 var PAGE_SZ = 4096;
 var SALT_SZ = 16;
 var IV_SZ = 16;
@@ -4390,6 +4390,7 @@ function configSig(p) {
     return "";
   }
 }
+var warnedCorrupt = /* @__PURE__ */ new Set();
 function readRawConfig(p) {
   const sig = configSig(p);
   const hit = configCache.get(p);
@@ -4398,7 +4399,11 @@ function readRawConfig(p) {
   if (sig) {
     try {
       raw = JSON.parse(readFileSync3(p, "utf8"));
-    } catch {
+    } catch (e) {
+      if (!warnedCorrupt.has(sig)) {
+        warnedCorrupt.add(sig);
+        console.warn(`[config] ${p} \u8BFB\u53D6/\u89E3\u6790\u5931\u8D25\uFF0C\u672C\u6B21\u4F7F\u7528\u9ED8\u8BA4\u503C\uFF1A${e.message}\uFF08\u539F\u6587\u4EF6\u4FDD\u7559\uFF0C\u4E0B\u6B21\u4FDD\u5B58\u524D\u4F1A\u5148\u5907\u4EFD\uFF09`);
+      }
     }
   }
   configCache.set(p, { sig, raw });
@@ -4406,6 +4411,39 @@ function readRawConfig(p) {
 }
 function defaultConfig() {
   return { db_dir: "", keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: "Weixin.exe", image_aes_key: "", image_xor_key: 136, key_format: "wx_key_v4.1", db_enc_key: "", api_enabled: true, api_port: 5032, api_token: "", cdn_enabled: true, cdn_local_decrypt: true };
+}
+function writeFileAtomic(target, text) {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, text, "utf8");
+  try {
+    renameSync(tmp, target);
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function preserveIfUnparseable(target) {
+  let text;
+  try {
+    text = readFileSync3(target, "utf8");
+  } catch {
+    return;
+  }
+  try {
+    JSON.parse(text);
+    return;
+  } catch {
+    const backup = `${target}.corrupt-${Date.now()}`;
+    try {
+      renameSync(target, backup);
+      console.warn(`[config] ${basename(target)} \u5185\u5BB9\u4E0D\u662F\u5408\u6CD5 JSON\uFF0C\u5DF2\u5907\u4EFD\u4E3A ${basename(backup)} \u540E\u91CD\u5199`);
+    } catch (e) {
+      console.warn(`[config] ${basename(target)} \u635F\u574F\u4E14\u65E0\u6CD5\u5907\u4EFD\uFF1A${e.message}`);
+    }
+  }
 }
 function getConfig(decryptedDir) {
   const p = configPath2(decryptedDir);
@@ -4436,7 +4474,8 @@ function saveConfig(decryptedDir, patch) {
     delete current["resolved"];
     const imgBefore = getConfig(decryptedDir);
     mkdirSync(dirname2(p), { recursive: true });
-    writeFileSync(p, JSON.stringify(current, null, 2), "utf8");
+    preserveIfUnparseable(p);
+    writeFileAtomic(p, JSON.stringify(current, null, 2));
     configCache.delete(p);
     const keyStr = (v) => typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
     const aesChanged = keyStr(current["image_aes_key"]) !== keyStr(imgBefore["image_aes_key"]);
@@ -4865,10 +4904,6 @@ async function atomicReplace(temp, target) {
   let lastErr = null;
   for (let i = 0; i < 8; i += 1) {
     try {
-      try {
-        await unlink(target);
-      } catch {
-      }
       await rename(temp, target);
       return;
     } catch (e) {
@@ -6041,7 +6076,7 @@ function getDailyCounts(decryptedDir, username, year, month) {
 import { createHash as createHash8 } from "node:crypto";
 import { DatabaseSync as DatabaseSync20 } from "node:sqlite";
 import { existsSync as existsSync16 } from "node:fs";
-import { dirname as dirname4, join as join22, basename } from "node:path";
+import { dirname as dirname4, join as join22, basename as basename2 } from "node:path";
 import { decompress as decompress4 } from "fzstd";
 var ZSTD_MAGIC4 = Buffer.from([40, 181, 47, 253]);
 var INDEX_SCHEMA_VERSION = "3";
@@ -6281,7 +6316,7 @@ async function runBuildSearchIndex(decryptedDir, force) {
     const skipped = [];
     const recordSkip = (shard, e) => {
       skippedCount += 1;
-      const detail = basename(shard) + ": " + e.message;
+      const detail = basename2(shard) + ": " + e.message;
       if (skipped.length < 5) skipped.push(detail);
       console.warn("[search] \u8DF3\u8FC7\u4E0D\u53EF\u8BFB\u5206\u7247 " + detail);
     };
@@ -8507,7 +8542,7 @@ function resolveAvatarsLocal(decryptedDir, usernames) {
 // src/backend/wechat-data/src/keys/service.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync30, readdirSync as readdirSync20 } from "node:fs";
-import { basename as basename2, dirname as dirname6, join as join37 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join37 } from "node:path";
 
 // src/backend/wechat-data/src/keys/dll-key-scan.ts
 import { readFileSync as readFileSync11, statSync as statSync11 } from "node:fs";
@@ -8609,46 +8644,59 @@ var MBI_SIZE = 48;
 var apiPromise;
 async function win32Api() {
   if (apiPromise !== void 0) return apiPromise;
-  apiPromise = (async () => {
-    const koffi = (await import("koffi")).default;
-    const kernel32 = koffi.load("kernel32.dll");
-    const openProcess = kernel32.func("__stdcall", "OpenProcess", "void *", ["uint32", "int32", "uint32"]);
-    const virtualQueryEx = kernel32.func("__stdcall", "VirtualQueryEx", "size_t", ["void *", "void *", "void *", "size_t"]);
-    const readProcessMemory2 = kernel32.func("__stdcall", "ReadProcessMemory", "int32", ["void *", "void *", "void *", "size_t", "size_t *"]);
-    const closeHandle = kernel32.func("__stdcall", "CloseHandle", "int32", ["void *"]);
-    return {
-      openProcess(pid) {
-        return openProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, pid);
-      },
-      queryRegion(handle, address) {
-        const info = Buffer.alloc(MBI_SIZE);
-        const result = virtualQueryEx(handle, address, info, MBI_SIZE);
-        if (Number(result) === 0) return null;
-        return {
-          baseAddress: Number(info.readBigUInt64LE(0)),
-          size: Number(info.readBigUInt64LE(24)),
-          state: info.readUInt32LE(32),
-          protect: info.readUInt32LE(36)
-        };
-      },
-      readMemory(handle, address, size) {
-        if (size <= 0) return Buffer.alloc(0);
-        const buffer = Buffer.alloc(size);
-        const bytesRead = Buffer.alloc(8);
-        const success = readProcessMemory2(handle, address, buffer, size, bytesRead);
-        if (Number(success) === 0) return Buffer.alloc(0);
-        const read = Number(bytesRead.readBigUInt64LE(0));
-        return read > 0 ? buffer.subarray(0, Math.min(read, size)) : Buffer.alloc(0);
-      },
-      closeHandle(handle) {
-        try {
-          closeHandle(handle);
-        } catch {
-        }
-      }
-    };
+  const created = (async () => {
+    try {
+      return await buildApi();
+    } catch (e) {
+      throw new Error(
+        "\u5185\u5B58\u626B\u63CF\u7EC4\u4EF6 koffi \u521D\u59CB\u5316\u5931\u8D25\uFF1A" + (e.message || String(e)) + "\u3002\u5E38\u89C1\u539F\u56E0\uFF1A\u5B89\u88C5\u5305\u7F3A\u5C11 win32 \u539F\u751F\u4E8C\u8FDB\u5236\u3001\u6740\u6BD2\u8F6F\u4EF6\u62E6\u622A\u4E86 DLL \u89E3\u5305\u3001\u6216\u7CFB\u7EDF\u4E0D\u662F x64\u3002\u53EF\u5148\u7528\u300C\u624B\u52A8\u586B\u5199\u5BC6\u94A5\u300D\u6D41\u7A0B\u7EE7\u7EED\u3002"
+      );
+    }
   })();
-  return apiPromise;
+  apiPromise = created;
+  created.catch(() => {
+    if (apiPromise === created) apiPromise = void 0;
+  });
+  return created;
+}
+async function buildApi() {
+  const koffi = (await import("koffi")).default;
+  const kernel32 = koffi.load("kernel32.dll");
+  const openProcess = kernel32.func("__stdcall", "OpenProcess", "void *", ["uint32", "int32", "uint32"]);
+  const virtualQueryEx = kernel32.func("__stdcall", "VirtualQueryEx", "size_t", ["void *", "void *", "void *", "size_t"]);
+  const readProcessMemory2 = kernel32.func("__stdcall", "ReadProcessMemory", "int32", ["void *", "void *", "void *", "size_t", "size_t *"]);
+  const closeHandle = kernel32.func("__stdcall", "CloseHandle", "int32", ["void *"]);
+  return {
+    openProcess(pid) {
+      return openProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, 0, pid);
+    },
+    queryRegion(handle, address) {
+      const info = Buffer.alloc(MBI_SIZE);
+      const result = virtualQueryEx(handle, address, info, MBI_SIZE);
+      if (Number(result) === 0) return null;
+      return {
+        baseAddress: Number(info.readBigUInt64LE(0)),
+        size: Number(info.readBigUInt64LE(24)),
+        state: info.readUInt32LE(32),
+        protect: info.readUInt32LE(36)
+      };
+    },
+    readMemory(handle, address, size) {
+      if (size <= 0) return Buffer.alloc(0);
+      const buffer = Buffer.alloc(size);
+      const bytesRead = Buffer.alloc(8);
+      const success = readProcessMemory2(handle, address, buffer, size, bytesRead);
+      if (Number(success) === 0) return Buffer.alloc(0);
+      const read = Number(bytesRead.readBigUInt64LE(0));
+      return read > 0 ? buffer.subarray(0, Math.min(read, size)) : Buffer.alloc(0);
+    },
+    closeHandle(handle) {
+      try {
+        closeHandle(handle);
+      } catch {
+      }
+    }
+  };
 }
 function isScannableRegion(region) {
   if (region.state !== MEM_COMMIT || region.size <= 0 || region.size > 50 * 1024 * 1024) return false;
@@ -9172,7 +9220,7 @@ async function scanImageKeyOnce(pid, templateScan) {
 }
 
 // src/backend/wechat-data/src/keys/key-store.ts
-import { existsSync as existsSync29, mkdirSync as mkdirSync5, readFileSync as readFileSync14, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync29, mkdirSync as mkdirSync5, readFileSync as readFileSync14, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5, join as join36 } from "node:path";
 
 // src/backend/wechat-data/src/dirs.ts
@@ -9261,7 +9309,7 @@ function atomicWriteJson(file, payload) {
   mkdirSync5(dirname5(file), { recursive: true });
   const tmp = file + ".tmp";
   writeFileSync4(tmp, JSON.stringify(payload, null, 2), "utf8");
-  renameSync(tmp, file);
+  renameSync2(tmp, file);
 }
 function upsertAccountKeysInStore(account, patch, dataRoot = resolveWechatDataRoot()) {
   const name = account.trim();
@@ -9378,7 +9426,7 @@ async function fetchImageKey(opts = {}) {
   const kvDir = kvcommCacheDir();
   if (existsSync30(kvDir)) {
     const localWxids = detectWechatAccounts().map((a) => a.wxid);
-    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename2(accountDir), localNativeWxids: localWxids });
+    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename3(accountDir), localNativeWxids: localWxids });
     if (resolution !== null) {
       const result2 = {
         ok: true,
@@ -9431,7 +9479,7 @@ import {
   mkdirSync as mkdirSync6,
   openSync as openSync3,
   readSync as readSync3,
-  renameSync as renameSync2,
+  renameSync as renameSync3,
   unlinkSync
 } from "node:fs";
 import { dirname as dirname7, join as join38, relative as relative2 } from "node:path";
@@ -9510,7 +9558,7 @@ async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
         unlinkSync(target);
       } catch {
       }
-      renameSync2(staged, target);
+      renameSync3(staged, target);
       okCount += 1;
     } catch (e) {
       try {
@@ -9630,7 +9678,7 @@ import {
   linkSync,
   mkdirSync as mkdirSync7,
   readdirSync as readdirSync22,
-  renameSync as renameSync3,
+  renameSync as renameSync4,
   rmSync as rmSync2,
   statSync as statSync14,
   unlinkSync as unlinkSync2
@@ -9686,7 +9734,7 @@ function moveItem(src, dest) {
     }
     mkdirSync7(dirname8(dest), { recursive: true });
     try {
-      renameSync3(src, dest);
+      renameSync4(src, dest);
       return 1;
     } catch {
       cpSync2(src, dest, { recursive: true });
@@ -9987,7 +10035,7 @@ async function installWhisperEngine(modelsDir, onProgress) {
         const dest = join40(binDir, name);
         if (existsSync33(dest)) continue;
         try {
-          renameSync3(src, dest);
+          renameSync4(src, dest);
         } catch {
         }
         if (!existsSync33(dest)) {
@@ -10113,7 +10161,7 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
           }
         }
       }
-      renameSync3(tmp, finalPath);
+      renameSync4(tmp, finalPath);
       reachableBase = base;
       return { ok: true, file, bytes };
     } catch (e) {
@@ -10132,7 +10180,7 @@ import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash18 } from "node:crypto";
 import { existsSync as existsSync35, mkdirSync as mkdirSync9, readFileSync as readFileSync16, readlinkSync, rmSync as rmSync3, symlinkSync, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename as basename3, dirname as dirname10, join as join42 } from "node:path";
+import { basename as basename4, dirname as dirname10, join as join42 } from "node:path";
 
 // src/backend/wechat-data/src/query/voice.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
@@ -10317,7 +10365,7 @@ function ensureAsciiLink(realDir, aliasBase) {
 }
 function asciiPathForWhisper(filePath, aliasBase) {
   if (isAscii(filePath)) return filePath;
-  return join42(ensureAsciiLink(dirname10(filePath), aliasBase), basename3(filePath));
+  return join42(ensureAsciiLink(dirname10(filePath), aliasBase), basename4(filePath));
 }
 function whisperOne(bin, modelPath, wavPath, outBase) {
   const done = spawnSync3(bin, ["-m", modelPath, "-f", wavPath, "-l", "auto", "-np", "--no-timestamps", "-otxt", "-of", outBase], {
@@ -10420,7 +10468,7 @@ function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engi
 }
 
 // src/backend/wechat-data/src/query/export.ts
-import { mkdirSync as mkdirSync10, renameSync as renameSync4, rmSync as rmSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync10, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname12, join as join46 } from "node:path";
 
 // src/backend/wechat-data/src/query/zip.ts
@@ -11410,7 +11458,7 @@ function writeFileAtomicSync(filePath, data) {
   const tmp = partialPath(filePath);
   try {
     writeFileSync7(tmp, data);
-    renameSync4(tmp, filePath);
+    renameSync5(tmp, filePath);
   } catch (e) {
     try {
       rmSync4(tmp, { force: true });
@@ -11426,7 +11474,7 @@ async function writeZipAtomic(filePath, produce) {
     zip = await ZipFileWriter.create(tmp);
     await produce(zip);
     await zip.close();
-    renameSync4(tmp, filePath);
+    renameSync5(tmp, filePath);
   } catch (e) {
     if (zip) await zip.abort();
     try {

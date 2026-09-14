@@ -5,8 +5,8 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createDecipheriv, createHmac, pbkdf2Sync } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, relative } from 'node:path'
 
 const PAGE_SZ = 4096
 const SALT_SZ = 16
@@ -51,6 +51,9 @@ function configSig(p: string): string {
   }
 }
 
+/** 已经告警过的「损坏配置」签名（按 sig 去重，避免每次读配置都刷屏）。 */
+const warnedCorrupt = new Set<string>()
+
 function readRawConfig(p: string): Record<string, unknown> | null {
   const sig = configSig(p)
   const hit = configCache.get(p)
@@ -59,7 +62,14 @@ function readRawConfig(p: string): Record<string, unknown> | null {
   if (sig) {
     try {
       raw = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
-    } catch { /* keep defaults */ }
+    } catch (e) {
+      // 解析失败：**不改动文件**，只告警一次（同 sig 不重复刷）。损坏内容会在下一次
+      // saveConfig 覆盖前由 preserveIfUnparseable 备份留痕。
+      if (!warnedCorrupt.has(sig)) {
+        warnedCorrupt.add(sig)
+        console.warn(`[config] ${p} 读取/解析失败，本次使用默认值：${(e as Error).message}（原文件保留，下次保存前会先备份）`)
+      }
+    }
   }
   configCache.set(p, { sig, raw })
   return raw
@@ -68,6 +78,53 @@ function readRawConfig(p: string): Record<string, unknown> | null {
 /** Defaults for a missing config. */
 function defaultConfig(): Record<string, unknown> {
   return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: true, api_port: 5032, api_token: '', cdn_enabled: true, cdn_local_decrypt: true }
+}
+
+/**
+ * 原子写：先写同目录临时文件，再 rename 覆盖。
+ *
+ * 直接 writeFileSync 到目标路径时，写一半被杀进程/磁盘满会留下**截断的 JSON**；
+ * 而 config.json 里有数据根路径与密钥字段，读到截断内容会静默回落默认值
+ * （用户看到的是「配置莫名丢了」），且下一次保存就把残缺内容覆盖掉。
+ * 宿主层 `src/backend/wechat-paths.js` 有一份等价实现（那边是 CJS，无法共享）。
+ * @param target - 目标文件绝对路径。
+ * @param text - 要写入的文本。
+ */
+export function writeFileAtomic(target: string, text: string): void {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
+  writeFileSync(tmp, text, 'utf8')
+  try {
+    renameSync(tmp, target)
+  } catch (e) {
+    try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+    throw e
+  }
+}
+
+/**
+ * 覆盖前先保住「解析不了的原文件」（改名成 `.corrupt-<时间戳>`）并告警。
+ * 否则损坏文件会被默认值+补丁无声覆盖，事后无从追查。
+ * @param target - 目标文件绝对路径。
+ */
+export function preserveIfUnparseable(target: string): void {
+  let text: string
+  try {
+    text = readFileSync(target, 'utf8')
+  } catch {
+    return // 不存在（首次运行）或读不到
+  }
+  try {
+    JSON.parse(text)
+    return
+  } catch {
+    const backup = `${target}.corrupt-${Date.now()}`
+    try {
+      renameSync(target, backup)
+      console.warn(`[config] ${basename(target)} 内容不是合法 JSON，已备份为 ${basename(backup)} 后重写`)
+    } catch (e) {
+      console.warn(`[config] ${basename(target)} 损坏且无法备份：${(e as Error).message}`)
+    }
+  }
 }
 
 /**
@@ -116,7 +173,9 @@ export function saveConfig(decryptedDir: string, patch: Record<string, unknown>)
     const imgBefore = getConfig(decryptedDir)
     // 数据根目录可能尚未创建（首次保存配置），先确保父目录存在。
     mkdirSync(dirname(p), { recursive: true })
-    writeFileSync(p, JSON.stringify(current, null, 2), 'utf8')
+    // 覆盖前先备份「解析不了的原文件」，避免残缺内容被默认值无声覆盖。
+    preserveIfUnparseable(p)
+    writeFileAtomic(p, JSON.stringify(current, null, 2))
     configCache.delete(p)
     // Image key change => previously decoded .dat images are stale (garbled),
     // so drop the decoded_images cache for a clean re-decode on demand.
