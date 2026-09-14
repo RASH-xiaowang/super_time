@@ -13469,6 +13469,44 @@ async function buildVectorIndex(decryptedDir, embed, opts) {
   }
 }
 var HASH_CACHE = /* @__PURE__ */ new Map();
+var MAX_HAMMING = 64;
+function selectByHamming(rows, qh, pool) {
+  const n = rows.length;
+  const take = Math.min(pool, n);
+  if (take <= 0) return [];
+  const dist = new Uint8Array(n);
+  const hist = new Uint32Array(MAX_HAMMING + 1);
+  for (let i = 0; i < n; i += 1) {
+    const r = rows[i];
+    const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0);
+    dist[i] = d;
+    hist[d] += 1;
+  }
+  let limit = MAX_HAMMING;
+  let cum = 0;
+  for (let d = 0; d <= MAX_HAMMING; d += 1) {
+    cum += hist[d];
+    if (cum >= take) {
+      limit = d;
+      break;
+    }
+  }
+  const cursor = new Uint32Array(limit + 2);
+  let acc = 0;
+  for (let d = 0; d <= limit; d += 1) {
+    cursor[d] = acc;
+    acc += hist[d];
+  }
+  const order = new Uint32Array(acc);
+  const next = cursor.slice();
+  for (let i = 0; i < n; i += 1) {
+    const d = dist[i];
+    if (d <= limit) order[next[d]++] = i;
+  }
+  const out = new Array(take);
+  for (let k = 0; k < take; k += 1) out[k] = rows[order[k]];
+  return out;
+}
 function loadHashRows(decryptedDir) {
   const p = vectorDbPath(decryptedDir);
   const sig = String(statSig(p));
@@ -13509,7 +13547,7 @@ async function searchDense(decryptedDir, queryText, embed, opts) {
   const qh = simhash(qv, getPlanes(dim));
   const all = loadHashRows(decryptedDir);
   if (all.length === 0) return { docs: [], scores: [], note: "\u5411\u91CF\u5E93\u4E3A\u7A7A" };
-  const scored = all.map((r) => ({ r, d: popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0) })).sort((a, b) => a.d - b.d).slice(0, Math.max(opts.candidatePool, opts.topK)).map((x) => x.r);
+  const scored = selectByHamming(all, qh, Math.max(opts.candidatePool, opts.topK));
   const filtered = opts.username ? scored.filter((r) => r.username === opts.username) : scored;
   if (filtered.length === 0) return { docs: [], scores: [], note: "\u7C97\u7B5B\u540E\u65E0\u5019\u9009" };
   const db = openVectorDb(decryptedDir, true);
