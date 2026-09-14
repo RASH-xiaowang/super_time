@@ -275,10 +275,18 @@ export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; r
  * @param force - drop and rebuild even when an index exists.
  * @returns build result with status and row count.
  */
-export function buildSearchIndex(
+/**
+ * 索引构建期间每处理多少行让出一次事件循环。
+ *
+ * 2000 行大约对应几十毫秒的纯 CPU（bigram 切分 + FTS 写入），
+ * 既能把单次阻塞压到远低于「秒级」，又不会因为过于频繁的 await 明显拖慢构建。
+ */
+const YIELD_EVERY_ROWS = 2000
+
+export async function buildSearchIndex(
   decryptedDir: string,
   force?: boolean,
-): { status: string; rows?: number; built_at?: string; elapsed_ms?: number; message?: string } {
+): Promise<{ status: string; rows?: number; built_at?: string; elapsed_ms?: number; message?: string }> {
   const p = searchIndexPath(decryptedDir)
   const db = new DatabaseSync(p)
   const init = (): void => {
@@ -305,6 +313,8 @@ export function buildSearchIndex(
     const shards = messageShardFiles(decryptedDir)
     db.exec('BEGIN')
     let total = 0
+    // 已处理行数：用于周期性让出事件循环（见 YIELD_EVERY_ROWS）。
+    let processed = 0
     let batch: Array<[string, string, string, string, number, number, number]> = []
     const flush = (): void => {
       if (batch.length === 0) return
@@ -330,8 +340,9 @@ export function buildSearchIndex(
           // 不再只取 local_type=1：转账/链接/文件/引用等 appmsg 与系统提示
           // 都带可读文本，且往往正是用户问题的答案。文本统一走 readableMessageText 抽取。
           const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"'
-          const rows = sdb.prepare(sql).all() as Array<Record<string, unknown>>
-          for (const r of rows) {
+          // 用 iterate() 而不是 all()：全量物化会让峰值与「单会话消息数」同阶
+          // （百万级库上就是数百 MB）。边读边写 FTS，读完即释放。
+          for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
             const localId = Number(r['local_id'] ?? 0)
             const createTime = Number(r['create_time'] ?? 0)
             const sortSeq = Number(r['sort_seq'] ?? localId)
@@ -343,7 +354,11 @@ export function buildSearchIndex(
               ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
               : sessionWho
             batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
+            processed += 1
             if (batch.length >= 500) flush()
+            // 周期性让出事件循环：同步 sqlite + bigram 切分是纯 CPU，不让出就会
+            // 让整个 worker（承载全部 130+ 个查询方法）停摆数秒。
+            if (processed % YIELD_EVERY_ROWS === 0) await yieldToLoop()
           }
         } catch {
           // skip unreadable shard
@@ -366,6 +381,17 @@ export function buildSearchIndex(
   } finally {
     db.close()
   }
+}
+
+/**
+ * 让出事件循环。
+ *
+ * node:sqlite 全是同步 API，所以「跑很久」= 「把承载全部查询的 worker 钉住」。
+ * 只能靠 await 把控制权交回：`setImmediate` 让 I/O 与其它请求的微/宏任务插进来。
+ * 索引构建按行数周期性调用它 —— 否则百万行会一次性阻塞数秒。
+ */
+function yieldToLoop(): Promise<void> {
+  return new Promise((resolve) => { setImmediate(resolve) })
 }
 
 /** Split the group-message sender prefix (`wxid_xxx:\n`) into sender id + body. */
@@ -626,8 +652,9 @@ export function searchIndexMessages(
       if (!has) { sdb.close(); continue }
       try {
         const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1'
-        const rows = sdb.prepare(sql).all() as Array<Record<string, unknown>>
-        for (const r of rows) {
+        // 用 iterate() 而不是 all()：all() 会把整张 Msg_ 表先物化成一个数组，
+        // 单会话几十万条时峰值直接与消息数同阶；而下面本来就是逐条判断后即丢。
+        for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
           budget -= 1
           if (hits.length >= cap || budget <= 0) break
           const localId = Number(r['local_id'] ?? 0)
