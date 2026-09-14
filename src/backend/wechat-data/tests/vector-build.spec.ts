@@ -125,6 +125,38 @@ describe('M10 向量建库：同文本只请求一次、向量扇出到所有行
     expect(r.embedded).toBe(5)
     expect(new Set(stub.calls.flat()).size).toBe(5)
   })
+
+  it('扇出共享的 blob **视图**不会让同组多行在库里别名（改一行的向量不影响其它行）', () => {
+    // 这条专门盯我引入的一处风险：`vecToBlob` 返回的是 `Float32Array` 的**视图**（不拷贝），
+    // 而扇出时我把它算一次、绑给同组所有行 —— 若 sqlite 延迟读取该视图，同组各行就会共享
+    // 同一块内存。上面那条「同组字节相同」在别名下**也会通过**，所以不够：必须是
+    // 「改一行，看别的行是否跟着变」。
+    const texts = ['同一条复读文本', '独立的另一条', '同一条复读文本']
+    const { dec } = makeFixture(texts)
+    const stub = trackingEmbed()
+    return buildVectorIndex(dec, stub.embed, { ...OPTS, concurrency: 1 }).then(() => {
+      const p = join(dec, '..', 'wechat_rag_vectors.db')
+      const db = new DatabaseSync(p)
+      try {
+        const before = db.prepare('SELECT fts_rowid, vec FROM vectors ORDER BY fts_rowid').all() as Array<{ fts_rowid: number; vec: Uint8Array }>
+        expect(before.length).toBe(3)
+        const row1 = before[0]
+        const row3 = before[2]
+        // 同组（1 与 3）字节相同；不同组不同
+        expect(Buffer.from(row3.vec).equals(Buffer.from(row1.vec))).toBe(true)
+        expect(Buffer.from(before[1].vec).equals(Buffer.from(row1.vec))).toBe(false)
+
+        // 改第 3 行的向量 → 第 1 行必须原封不动
+        const mutated = new Uint8Array(row3.vec)
+        mutated[0] = (mutated[0] + 1) & 0xff
+        db.prepare('UPDATE vectors SET vec = ? WHERE fts_rowid = 3').run(mutated)
+        const after1 = db.prepare('SELECT vec FROM vectors WHERE fts_rowid = 1').get() as { vec: Uint8Array }
+        expect(Buffer.from(after1.vec).equals(Buffer.from(row1.vec))).toBe(true)
+      } finally {
+        db.close()
+      }
+    })
+  })
 })
 
 describe('M10 向量建库：并发边界', () => {
