@@ -134,6 +134,17 @@ check(!fs.existsSync(path.join(userData, 'license-trial.json')),
   '无试用期：不生成 license-trial.json');
 check(out.includes(stateDir), '启动日志里的状态目录指向本次临时 userData');
 
+// M6：日志必须真的落盘（GUI 态 stdout 是无人接管的管道，console-safe 一静默就什么都没有）
+const logFile = path.join(stateDir, 'logs', 'app.log');
+let logSize = 0;
+try { logSize = fs.statSync(logFile).size } catch { logSize = 0 }
+check(logSize > 0, '诊断日志已落盘（<userData>/wechat/logs/app.log）', `${logSize} 字节`);
+if (logSize > 0) {
+  const head = fs.readFileSync(logFile, 'utf8').slice(0, 400);
+  check(/\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[(log|info|warn|error|fatal)\]/.test(head),
+    '日志行带时间戳与级别', head.split(/\r?\n/)[0] ?? '');
+}
+
 // 清理本次一次性 userData（里面可能有刚写入的配置）。
 try { fs.rmSync(userData, { recursive: true, force: true }); } catch { /* ignore */ }
 

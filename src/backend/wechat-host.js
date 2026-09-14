@@ -14,6 +14,14 @@
 const path = require('node:path');
 const os = require('node:os');
 const wechatPaths = require('./wechat-paths');
+const { fetchWithRetry } = require('./llm-retry');
+
+/** 每次重试打一条日志：重试过程不上界面（成功的重试应当无感），但诊断日志里要留痕。 */
+function logRetry(what) {
+  return (info) => {
+    console.warn(`[llm] ${what} 请求失败（${info.reason}），${info.delayMs}ms 后重试（第 ${info.attempt} 次尝试）`);
+  };
+}
 
 /**
  * 「纯读且昂贵」方法的结果缓存（正缓存 + 负缓存）。
@@ -150,7 +158,9 @@ function createLlmBridge(configOverrides = {}) {
   async function fetchCompletion(opts) {
     const req = buildRequest(opts, false);
     try {
-      const res = await fetch(req.url, req.init);
+      // 有界重试：网络抖动 / 429 / 5xx 自动重来，401/400 这类立刻失败。
+      // 整体超时仍由 req.init.signal 控制（重试在 signal 中止时立即停止）。
+      const res = await fetchWithRetry(fetch, req.url, req.init, { onRetry: logRetry('chat') });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
@@ -166,7 +176,8 @@ function createLlmBridge(configOverrides = {}) {
     const req = buildRequest(opts, true);
     let res;
     try {
-      res = await fetch(req.url, req.init);
+      // 只对**握手**做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
+      res = await fetchWithRetry(fetch, req.url, req.init, { onRetry: logRetry('chat(stream)') });
     } catch (e) {
       req.clear();
       throw e;
@@ -253,12 +264,12 @@ function createLlmBridge(configOverrides = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
     try {
-      const res = await fetch(url, {
+      const res = await fetchWithRetry(fetch, url, {
         method: 'POST',
         headers,
         body: JSON.stringify({ model, input: list }),
         signal: controller.signal,
-      });
+      }, { onRetry: logRetry('embedding') });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         throw new Error(`embedding HTTP ${res.status}: ${body.slice(0, 300)}`);

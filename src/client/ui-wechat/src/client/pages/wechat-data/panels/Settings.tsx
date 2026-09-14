@@ -11,7 +11,7 @@ import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primit
 import {
   IconGlobeOutline14, IconPersonalizationOutline16, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiGetWechatPathConfig, apiOpenPath, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
@@ -519,6 +519,27 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     setMessage({ kind, text, ...(details && details.length > 0 ? { details } : {}) })
     setTimeout(() =>{ setMessage(null) }, details && details.length > 0 ? 12000 : 5000)
   }
+
+  /** 诊断日志（M6）：GUI 态 stdout 会被丢弃，用户报障时靠这份落盘日志。 */
+  const [diagInfo, setDiagInfo] = useState<{ dir: string; bytes: number } | null>(null)
+  const refreshDiag = useCallback(async (): Promise<void> => {
+    const r = await apiDiagLogInfo()
+    if (r.ok && r.dir) {
+      setDiagInfo({ dir: r.dir, bytes: (r.files ?? []).reduce((n, f) => n + (f.size || 0), 0) })
+    }
+  }, [])
+  useEffect(() => { void refreshDiag() }, [refreshDiag])
+  const exportDiagLog = useCallback(async (): Promise<void> => {
+    const r = await apiExportDiagLog()
+    if (r.canceled) return
+    if (!r.ok) { notify('err', '导出诊断日志失败：' + (r.error ?? '未知原因')); return }
+    await refreshDiag()
+    notify('ok', `诊断日志已导出（${Math.max(1, Math.round((r.bytes ?? 0) / 1024))} KB）`)
+  }, [notify, refreshDiag])
+  const revealDiagLog = useCallback(async (): Promise<void> => {
+    const r = await apiRevealDiagLog()
+    if (!r.ok) notify('err', '打开日志目录失败：' + (r.error ?? '未知原因'))
+  }, [notify])
 
   const load = useCallback(async (): Promise<void> => {
     setCfgLoading(true)
@@ -1545,6 +1566,19 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
             </div>
             <div className={css.row}>
               <span className={css.rowNote}>本面板已通过 Remote 直读，无外部 HTTP 依赖。</span>
+            </div>
+            {/* 诊断日志（M6）：GUI 态 stdout 会被管道丢弃，crash/报障时只有这份落盘日志 */}
+            <div className={css.row}>
+              <span className={css.rowName}>诊断日志</span>
+              <button type="button" className={css.whisperSkip} onClick={() => { void exportDiagLog() }}>
+                导出…
+              </button>
+              <button type="button" className={css.whisperSkip} onClick={() => { void revealDiagLog() }}>
+                打开所在目录
+              </button>
+              <span className={css.rowMeta} title={diagInfo?.dir ?? ''}>
+                {diagInfo ? `${diagInfo.dir} · ${Math.round(diagInfo.bytes / 1024)} KB` : '读取中…'}
+              </span>
             </div>
             <div className={css.row}>
               <span className={css.rowName}>启动引导</span>
