@@ -21,4 +21,6 @@ wechat/llm.json
 .tmp-*
 *.orig
 *.tsbuildinfo
+# 导出/写盘的原子落地临时文件（正常会被 rename 或删除，异常中断时才会残留）
+*.partial-*
 

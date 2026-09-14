@@ -1643,9 +1643,9 @@ ${contextBlock}
    * @returns ExportResult: written zip path + total messages.
    */
   @Remote('exportAllSessions')
-  exportAllSessions(options?: { dir?: string; filename?: string }): ExportResult {
+  async exportAllSessions(options?: { dir?: string; filename?: string }): Promise<ExportResult> {
     try {
-      const r = exportAllSessions(this._dirs.decrypted, options)
+      const r = await exportAllSessions(this._dirs.decrypted, options)
       this.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
       return r
     } catch (e) {
@@ -1660,7 +1660,7 @@ ${contextBlock}
    * @returns ExportResult: written file path + count.
    */
   @Remote('exportMoments')
-  exportMoments(options?: {
+  async exportMoments(options?: {
     format?: string
     username?: string
     authorName?: string
@@ -1674,9 +1674,9 @@ ${contextBlock}
     to?: number
     dir?: string
     filename?: string
-  }): ExportResult {
+  }): Promise<ExportResult> {
     try {
-      const r = exportMoments(this._dirs.decrypted, options)
+      const r = await exportMoments(this._dirs.decrypted, options)
       this.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
       return r
     } catch (e) {

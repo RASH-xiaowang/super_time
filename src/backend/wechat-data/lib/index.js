@@ -10343,10 +10343,12 @@ function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engi
 }
 
 // src/backend/wechat-data/src/query/export.ts
-import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync10, renameSync as renameSync4, rmSync as rmSync4, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname12, join as join46 } from "node:path";
 
 // src/backend/wechat-data/src/query/zip.ts
+import { createWriteStream as createWriteStream2, promises as fsp } from "node:fs";
+import { once } from "node:events";
 import { deflateRawSync } from "node:zlib";
 var CRC_TABLE = (() => {
   const table = new Array(256);
@@ -10357,13 +10359,22 @@ var CRC_TABLE = (() => {
   }
   return table;
 })();
-function crc32(buf) {
-  let c = 4294967295;
+function crc32Start() {
+  return 4294967295;
+}
+function crc32Update(c, buf) {
+  let acc = c;
   for (let i = 0; i < buf.length; i += 1) {
     const byte = buf[i] ?? 0;
-    c = (CRC_TABLE[(c ^ byte) & 255] ?? 0) ^ c >>> 8;
+    acc = (CRC_TABLE[(acc ^ byte) & 255] ?? 0) ^ acc >>> 8;
   }
+  return acc;
+}
+function crc32Finish(c) {
   return (c ^ 4294967295) >>> 0;
+}
+function crc32(buf) {
+  return crc32Finish(crc32Update(crc32Start(), buf));
 }
 function u16(v) {
   const b = Buffer.alloc(2);
@@ -10375,6 +10386,10 @@ function u32(v) {
   b.writeUInt32LE(v >>> 0);
   return b;
 }
+function packEntry(raw) {
+  const deflated = deflateRawSync(raw);
+  return deflated.length >= raw.length ? { data: raw, method: 0 } : { data: deflated, method: 8 };
+}
 function zipFiles(entries2) {
   const locals = [];
   const centrals = [];
@@ -10385,9 +10400,7 @@ function zipFiles(entries2) {
     if (names.has(name)) continue;
     names.add(name);
     const raw = typeof entry.data === "string" ? Buffer.from(entry.data, "utf8") : Buffer.from(entry.data);
-    const deflated = deflateRawSync(raw);
-    const data = deflated.length >= raw.length ? raw : deflated;
-    const method = deflated.length >= raw.length ? 0 : 8;
+    const { data, method } = packEntry(raw);
     const crc = crc32(raw);
     const nameBuf = Buffer.from(name, "utf8");
     const local = Buffer.concat([
@@ -10442,6 +10455,121 @@ function zipFiles(entries2) {
   ]);
   return Buffer.concat([...locals, central, eocd]);
 }
+var ZipFileWriter = class _ZipFileWriter {
+  constructor(filePath, out) {
+    this.offset = 0;
+    this.centrals = [];
+    this.names = /* @__PURE__ */ new Set();
+    this.closed = false;
+    this.filePath = filePath;
+    this.out = out;
+  }
+  /** 打开目标文件准备写入（覆盖已有文件）。 */
+  static async create(filePath) {
+    const out = createWriteStream2(filePath);
+    out.on("error", () => {
+    });
+    await once(out, "open");
+    return new _ZipFileWriter(filePath, out);
+  }
+  /** 底层写入：更新偏移量并等待背压。 */
+  async write(buf) {
+    this.offset += buf.length;
+    if (!this.out.write(buf)) await once(this.out, "drain");
+  }
+  /**
+   * 追加一个条目。
+   * @param name - 归档内路径（反斜杠会转成正斜杠）。
+   * @param data - 字符串（UTF-8）或字节。
+   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
+   */
+  async addFile(name, data) {
+    const safeName = name.replace(/\\/g, "/");
+    if (this.names.has(safeName)) return false;
+    this.names.add(safeName);
+    const raw = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
+    const { data: packed, method } = packEntry(raw);
+    const crc = crc32(raw);
+    const nameBuf = Buffer.from(safeName, "utf8");
+    const entryOffset = this.offset;
+    await this.write(Buffer.concat([
+      u32(67324752),
+      u16(20),
+      u16(0),
+      u16(method),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(packed.length),
+      u32(packed.length),
+      u16(nameBuf.length),
+      u16(0),
+      nameBuf
+    ]));
+    await this.write(packed);
+    this.centrals.push(Buffer.concat([
+      u32(33639248),
+      u16(20),
+      u16(20),
+      u16(0),
+      u16(method),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(packed.length),
+      u32(packed.length),
+      u16(nameBuf.length),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(0),
+      u32(entryOffset),
+      nameBuf
+    ]));
+    return true;
+  }
+  /**
+   * 写中央目录与 EOCD 并关闭文件。
+   *
+   * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
+   */
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    const centralStart = this.offset;
+    const central = Buffer.concat(this.centrals);
+    if (centralStart + central.length > 4294967295) {
+      await this.abort();
+      throw new Error("\u5F52\u6863\u8D85\u8FC7 4GiB\uFF0C\u5F53\u524D\u5B9E\u73B0\u4E0D\u652F\u6301 ZIP64\uFF1B\u8BF7\u5206\u6279\u5BFC\u51FA");
+    }
+    const eocd = Buffer.concat([
+      u32(101010256),
+      u16(0),
+      u16(0),
+      u16(this.centrals.length),
+      u16(this.centrals.length),
+      u32(central.length),
+      u32(centralStart),
+      u16(0)
+    ]);
+    await this.write(central);
+    await this.write(eocd);
+    this.out.end();
+    await once(this.out, "close");
+  }
+  /** 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。 */
+  async abort() {
+    try {
+      this.out.destroy();
+    } catch {
+    }
+    try {
+      await fsp.rm(this.filePath, { force: true });
+    } catch {
+    }
+  }
+};
 
 // src/backend/wechat-data/src/query/sns-video.ts
 import { createHash as createHash19 } from "node:crypto";
@@ -11116,6 +11244,36 @@ function typeLabel(t) {
 }
 
 // src/backend/wechat-data/src/query/export.ts
+function writeFileAtomicSync(filePath, data) {
+  const tmp = filePath + ".partial-" + String(process.pid);
+  try {
+    writeFileSync7(tmp, data);
+    renameSync4(tmp, filePath);
+  } catch (e) {
+    try {
+      rmSync4(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+async function writeZipAtomic(filePath, produce) {
+  const tmp = filePath + ".partial-" + String(process.pid);
+  let zip = null;
+  try {
+    zip = await ZipFileWriter.create(tmp);
+    await produce(zip);
+    await zip.close();
+    renameSync4(tmp, filePath);
+  } catch (e) {
+    if (zip) await zip.abort();
+    try {
+      rmSync4(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
 function dataUrlToBuffer(url) {
   const m = url.match(/^data:[^;,]+;base64,(.*)$/);
   if (!m || !m[1]) return null;
@@ -11268,10 +11426,11 @@ function formatXlsx(msgs, username) {
     const r = rowOf(m, username);
     rows.push([r.time, r.sender, r.typeLabel, r.text, String(m.localId)]);
   }
-  let cells = "";
+  const parts = [];
   for (const row of rows) {
-    cells += "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
+    parts.push("<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>");
   }
+  const cells = parts.join("");
   const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + cells + "</sheetData></worksheet>";
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
   const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
@@ -11360,9 +11519,9 @@ function exportSessionMessages(decryptedDir, username, format, count, dir, types
       { name: innerName, data: content },
       { name: "record_media.json", data: JSON.stringify({ username, exportedAt: now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2) }
     ]);
-    writeFileSync7(filepath, payload);
+    writeFileAtomicSync(filepath, payload);
   } else {
-    writeFileSync7(filepath, content);
+    writeFileAtomicSync(filepath, content);
   }
   return { path: filepath, filename: filenameOut, count: msgs.length };
 }
@@ -11409,7 +11568,7 @@ function exportCsv(decryptedDir, kind, recordsKind) {
   const lines = rows.map((r) => r.map((c) => csvCell(c)).join(","));
   const filename = kind + "_" + now + ".csv";
   const filepath = join46(exportDir, filename);
-  writeFileSync7(filepath, lines.join("\n"), "utf8");
+  writeFileAtomicSync(filepath, lines.join("\n"));
   return { path: filepath, filename, count: Math.max(0, rows.length - 1) };
 }
 function strOf(v) {
@@ -11504,10 +11663,10 @@ function exportAnnualReport(decryptedDir, year, format, dir, filename) {
     content = md.join("\n");
   }
   const path = join46(base, safeName);
-  writeFileSync7(path, content, "utf8");
+  writeFileAtomicSync(path, content);
   return { path, filename: safeName, count: total };
 }
-function exportMoments(decryptedDir, opts) {
+async function exportMoments(decryptedDir, opts) {
   const format = opts?.format === "html" ? "html" : opts?.format === "json" ? "json" : opts?.format === "csv" ? "csv" : "txt";
   const NL = String.fromCharCode(10);
   const items = [];
@@ -11552,34 +11711,41 @@ function exportMoments(decryptedDir, opts) {
   mkdirSync10(base, { recursive: true });
   if (opts?.zip) {
     const mediaCtx2 = exportMediaCtx(decryptedDir);
-    const entries2 = [];
-    entries2.push({ name: "moments.json", data: JSON.stringify(filtered, null, 2) });
-    let idx = 0;
-    for (const m of filtered) {
-      for (const im of m.images) {
-        const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
-        if (r.url) {
-          const buf = dataUrlToBuffer(r.url);
-          if (buf) entries2.push({ name: "media/images/img_" + String(idx++) + ".jpg", data: buf });
-        }
-        if (entries2.length > 5e3) break;
-      }
-      if (entries2.length > 5e3) break;
-      for (const v of m.videos) {
-        const r = resolveSnsVideoDataUrl(mediaCtx2.base, v.md5, v.timelineId, v.id);
-        if (r.url) {
-          const buf = dataUrlToBuffer(r.url);
-          if (buf) entries2.push({ name: "media/videos/vid_" + String(idx++) + ".mp4", data: buf });
-        }
-        if (entries2.length > 5e3) break;
-      }
-      if (entries2.length > 5e3) break;
-    }
     const rawName = (opts.filename ?? "").trim();
     const zipBase = rawName ? rawName.replace(/\.zip$/i, "") : "";
     const zipName = zipBase ? zipBase + ".zip" : "wechat_moments_" + String(Date.now()) + ".zip";
     const zipPath = join46(base, zipName);
-    writeFileSync7(zipPath, zipFiles(entries2));
+    let mediaCount = 0;
+    await writeZipAtomic(zipPath, async (zip) => {
+      await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
+      let idx = 0;
+      for (const m of filtered) {
+        if (mediaCount >= 4999) break;
+        for (const im of m.images) {
+          if (mediaCount >= 4999) break;
+          const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url);
+            if (buf) {
+              await zip.addFile("media/images/img_" + String(idx++) + ".jpg", buf);
+              mediaCount += 1;
+            }
+          }
+        }
+        if (mediaCount >= 4999) break;
+        for (const v of m.videos) {
+          if (mediaCount >= 4999) break;
+          const r = resolveSnsVideoDataUrl(mediaCtx2.base, v.md5, v.timelineId, v.id);
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url);
+            if (buf) {
+              await zip.addFile("media/videos/vid_" + String(idx++) + ".mp4", buf);
+              mediaCount += 1;
+            }
+          }
+        }
+      }
+    });
     return { path: zipPath, filename: zipName, count: filtered.length };
   }
   const ext = format;
@@ -11648,38 +11814,38 @@ function exportMoments(decryptedDir, opts) {
     content = lines.join(NL);
   }
   const path = join46(base, name);
-  writeFileSync7(path, content, "utf8");
+  writeFileAtomicSync(path, content);
   return { path, filename: name, count: filtered.length };
 }
-function exportAllSessions(decryptedDir, opts) {
+async function exportAllSessions(decryptedDir, opts) {
   const env = querySessions(decryptedDir);
   const sessions = env.sessions.slice(0, 1e3);
-  const entries2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  let total = 0;
-  for (const s of sessions) {
-    const msgs = collectMessages(decryptedDir, s.username, 0);
-    const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
-    const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
-    let name = safeName + "_" + uid + ".txt";
-    let n = 2;
-    while (seen.has(name)) {
-      name = safeName + "_" + uid + "_" + String(n) + ".txt";
-      n += 1;
-    }
-    seen.add(name);
-    if (msgs.length === 0) {
-      entries2.push({ name, data: "\uFF08\u65E0\u6D88\u606F\uFF09\n" });
-      continue;
-    }
-    entries2.push({ name, data: formatTxt(msgs, s.username) });
-    total += msgs.length;
-  }
   const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join46(dirname12(decryptedDir), "exports");
   mkdirSync10(base, { recursive: true });
   const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
   const path = join46(base, filename);
-  writeFileSync7(path, zipFiles(entries2));
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  await writeZipAtomic(path, async (zip) => {
+    for (const s of sessions) {
+      const msgs = collectMessages(decryptedDir, s.username, 0);
+      const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
+      const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
+      let name = safeName + "_" + uid + ".txt";
+      let n = 2;
+      while (seen.has(name)) {
+        name = safeName + "_" + uid + "_" + String(n) + ".txt";
+        n += 1;
+      }
+      seen.add(name);
+      if (msgs.length === 0) {
+        await zip.addFile(name, "\uFF08\u65E0\u6D88\u606F\uFF09\n");
+        continue;
+      }
+      await zip.addFile(name, formatTxt(msgs, s.username));
+      total += msgs.length;
+    }
+  });
   return { path, filename, count: total };
 }
 
@@ -13677,7 +13843,7 @@ function syntheticIntentAccuracy() {
 }
 
 // src/backend/wechat-data/src/query/backup.ts
-import { closeSync as closeSync4, cpSync as cpSync3, createReadStream, createWriteStream as createWriteStream2, existsSync as existsSync41, mkdirSync as mkdirSync13, openSync as openSync4, readSync as readSync4, readdirSync as readdirSync25, rmSync as rmSync4, statSync as statSync17, writeFileSync as writeFileSync10 } from "node:fs";
+import { closeSync as closeSync4, cpSync as cpSync3, createReadStream, createWriteStream as createWriteStream3, existsSync as existsSync41, mkdirSync as mkdirSync13, openSync as openSync4, readSync as readSync4, readdirSync as readdirSync25, rmSync as rmSync5, statSync as statSync17, writeFileSync as writeFileSync10 } from "node:fs";
 import { dirname as dirname14, join as join50, relative as relative3 } from "node:path";
 import { createCipheriv, createDecipheriv as createDecipheriv5, createHmac as createHmac2, randomBytes, scryptSync } from "node:crypto";
 var MAGIC = Buffer.from("DSHWCB1\n", "utf8");
@@ -13847,7 +14013,7 @@ function createBackup(decryptedDir) {
   const dir = backupDir(decryptedDir);
   mkdirSync13(dir, { recursive: true });
   const target = join50(dir, name);
-  if (existsSync41(target)) rmSync4(target, { recursive: true, force: true });
+  if (existsSync41(target)) rmSync5(target, { recursive: true, force: true });
   mkdirSync13(target, { recursive: true });
   if (existsSync41(decryptedDir)) {
     for (const sub of readdirSync25(decryptedDir, { withFileTypes: true })) {
@@ -13881,7 +14047,7 @@ async function createEncryptedBackup(decryptedDir, password) {
   };
   const headerBuf = Buffer.from(JSON.stringify(header), "utf8");
   const mac = createHmac2("sha256", key).update(headerBuf).digest();
-  const out = createWriteStream2(target);
+  const out = createWriteStream3(target);
   out.write(MAGIC);
   out.write(salt);
   const lenBuf = Buffer.alloc(4);
@@ -13915,7 +14081,7 @@ function restoreEncryptedBackup(decryptedDir, name, password) {
   const src = join50(dir, name);
   if (!name.endsWith(".wcb") || !existsSync41(src)) return { ok: false, error: "\u52A0\u5BC6\u5907\u4EFD\u4E0D\u5B58\u5728" };
   const target = join50(dir, name.replace(/\.wcb$/, "") + ".restored");
-  if (existsSync41(target)) rmSync4(target, { recursive: true, force: true });
+  if (existsSync41(target)) rmSync5(target, { recursive: true, force: true });
   let fd = null;
   try {
     fd = openSync4(src, "r");
@@ -13967,7 +14133,7 @@ function deleteBackup(decryptedDir, name) {
   const target = join50(dir, name);
   if (!target.startsWith(dir) || !existsSync41(target)) return { ok: false, error: "\u5907\u4EFD\u4E0D\u5B58\u5728" };
   try {
-    rmSync4(target, { recursive: true, force: true });
+    rmSync5(target, { recursive: true, force: true });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -18406,9 +18572,9 @@ ${contextBlock}
       throw e;
     }
   }
-  exportAllSessions(options) {
+  async exportAllSessions(options) {
     try {
-      const r = exportAllSessions(this._dirs.decrypted, options);
+      const r = await exportAllSessions(this._dirs.decrypted, options);
       this.op("export", "export_all_sessions", "ok", "", `\u5171 ${r.count} \u6761`);
       return r;
     } catch (e) {
@@ -18416,9 +18582,9 @@ ${contextBlock}
       throw e;
     }
   }
-  exportMoments(options) {
+  async exportMoments(options) {
     try {
-      const r = exportMoments(this._dirs.decrypted, options);
+      const r = await exportMoments(this._dirs.decrypted, options);
       this.op("export", "export_moments", "ok", options?.username ?? "", `\u5171 ${r.count} \u6761`);
       return r;
     } catch (e) {
