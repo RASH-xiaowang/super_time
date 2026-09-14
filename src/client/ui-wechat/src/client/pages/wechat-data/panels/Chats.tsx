@@ -2217,7 +2217,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     try {
       const r = await apiBuildSearchIndex({ force: false })
       setMsgIndexed(true)
-      if (!silent) setMsgSearchError(`搜索索引已就绪（${r.rows ?? 0} 条）`)
+      // r.message 只在「跳过不可读分片」时出现：索引残缺必须让用户看见
+      if (!silent) {
+        setMsgSearchError(r.message
+          ? `搜索索引已就绪（${r.rows ?? 0} 条，但${r.message}）`
+          : `搜索索引已就绪（${r.rows ?? 0} 条）`)
+      }
     } catch (e) {
       if (!silent) setMsgSearchError('索引构建失败: ' + (e as Error).message)
     } finally {

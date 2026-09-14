@@ -7,7 +7,7 @@
  *      全部查询的 worker 停摆数秒）。
  * @vitest-environment node
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -83,6 +83,19 @@ function makeRawFixture(bodies: string[]): string {
   })
   mdb.close()
   return decrypted
+}
+
+/** 往既有夹具里追加消息（用于让「重建结果」与「旧索引」不同）。 */
+function appendMessages(decrypted: string, from: number, to: number): void {
+  const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
+  const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
+  mdb.exec('BEGIN')
+  for (let i = from; i <= to; i += 1) {
+    ins.run(i, i, 1, i % 2, 1700000000 + i, 1, `普通消息 ${i}`, `srv${i}`, '')
+  }
+  mdb.exec('COMMIT')
+  mdb.close()
 }
 
 /** 高熵中文串：重复字符会让 bigram 只有极少数 distinct token，FTS 插入成本被严重低估。 */
@@ -201,7 +214,9 @@ describe('索引构建会让出事件循环', () => {
     expect(r.status).toBe('ok')
     expect(r.rows).toBe(60)
     const during = ticksInWindow.filter(t => t >= start && t <= end)
-    expect(during.length).toBeGreaterThan(0)
+    // 约 48 万字符 / 131072 ≈ 3 次让出；要求 ≥2 就把常量钉在 ≤24 万字符
+    // （放宽到 1<<18 只剩 1 次、到 1<<19 起为 0 次，都会被这条抓住）。
+    expect(during.length).toBeGreaterThanOrEqual(2)
   })
 
   it('索引库处于 WAL 模式（重建窗口内读者不被写事务挡住的前提）', async () => {
@@ -220,7 +235,57 @@ describe('索引构建会让出事件循环', () => {
     const r = await buildSearchIndex(decrypted, true)
     expect(r.status).toBe('ok')
     expect(r.rows).toBe(200) // 好分片照常入库
-    expect(r.message).toContain('已跳过')
+    expect(r.message ?? '').toContain('已跳过')
+  })
+
+  it('索引写入失败必须整体回滚，旧索引原样保留（写错必须致命）', async () => {
+    // 钉住第三轮的两件事：① 写侧失败不可被吞；② total/built_at/schema_version 与
+    // 重建结果在同一次 COMMIT 里落地 —— 所以失败后旧索引（连 built_at）必须一个字节不变。
+    // 关键设计：重建前先给夹具**加消息**，让「新索引行数」与「旧索引行数」不同，
+    // 否则「COMMIT 提前」的旧实现也能蒙混过关（行数相同、built_at 也恰好没变）。
+    const decrypted = makeFixture(300, 3)
+    const first = await buildSearchIndex(decrypted, true)
+    expect(first.status).toBe('ok')
+    const before = getSearchIndexStatus(decrypted)
+    appendMessages(decrypted, 301, 400)
+
+    // meta 不会被重建（只有 message_meta / message_fts 会被 DROP），所以触发器能活到收尾
+    const db = new DatabaseSync(searchIndexPath(decrypted))
+    db.exec("CREATE TRIGGER fail_meta BEFORE INSERT ON meta BEGIN SELECT RAISE(ABORT, 'injected meta write failure'); END")
+    db.close()
+
+    await expect(buildSearchIndex(decrypted, true)).rejects.toThrow(/构建搜索索引失败/)
+
+    const after = getSearchIndexStatus(decrypted)
+    expect(after.ready).toBe(true)
+    // 旧索引没被换成「400 行的新索引」，也没被清空
+    expect(after.rows).toBe(before.rows)
+    expect(after.rows).toBe(300)
+    expect(after.built_at).toBe(before.built_at)
+    expect(searchIndexMessages(decrypted, TERM, 10).indexed).toBe(true)
+  })
+
+  it('分片读到一半损坏：只跳过该分片，其余照常入库（读取侧可跳过）', async () => {
+    // 覆盖 #NEXT 分支（迭代中途报 malformed），与「非 SQLite 文件」走的 #PREP 不同。
+    const decrypted = makeFixture(3000, 3, 900)
+    const shard = join(decrypted, 'message', 'message_0.db')
+    const buf = readFileSync(shard)
+    buf.fill(0, 4096 * 40, 4096 * 41) // 清零第 40 页：文件仍是合法 sqlite，读到那页才报损坏
+    writeFileSync(shard, buf)
+
+    const r = await buildSearchIndex(decrypted, true)
+    expect(r.status).toBe('ok')
+    expect(r.message ?? '').toContain('已跳过')
+    expect(r.rows).toBeLessThan(3000) // 损坏分片只入库了一部分（或 0），但没有整体失败
+  })
+
+  it('分片清单为空时不把现有索引清空（message 目录读不到 ≠ 用户删光了消息）', async () => {
+    const decrypted = makeFixture(200, 3)
+    await buildSearchIndex(decrypted, true)
+    rmSync(join(decrypted, 'message'), { recursive: true, force: true })
+    await expect(buildSearchIndex(decrypted, true)).rejects.toThrow(/分片清单为空/)
+    // 旧索引仍在（构建被中止，没有 DROP）
+    expect(getSearchIndexStatus(decrypted).rows).toBe(200)
   })
 
   it('构建完成后索引可用，且能查到关键词', async () => {

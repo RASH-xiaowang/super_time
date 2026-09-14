@@ -55,7 +55,9 @@ export function HealthPanel({ onNavigate, embedded = false }: {
     setBuilding(true)
     try {
       const r = await apiBuildSearchIndex({ force: true })
-      setNotice(`重建完成：${r.rows} 行索引`)
+      // r.message 只在「跳过不可读分片」这类场景出现：有它在就说明索引是残缺的，
+      // 不能只报「已完成」，否则用户看到 199 行也说不出哪里不对。
+      setNotice(r.message ? `重建完成：${r.rows} 行索引（${r.message}）` : `重建完成：${r.rows} 行索引`)
       window.setTimeout(() => { setNotice(null) }, 3000)
       await load()
     } catch (e) {

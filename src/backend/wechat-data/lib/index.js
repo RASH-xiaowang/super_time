@@ -6263,6 +6263,9 @@ async function runBuildSearchIndex(decryptedDir, force) {
     const names = loadDisplayNames2(decryptedDir);
     const usernames = loadSessionUsernames2(decryptedDir);
     const shards = messageShardFiles(decryptedDir);
+    if (shards.length === 0 && existing > 0) {
+      throw new Error(`\u6D88\u606F\u5206\u7247\u6E05\u5355\u4E3A\u7A7A\uFF08message \u76EE\u5F55\u4E0D\u53EF\u8BFB\uFF1F\uFF09\uFF0C\u5DF2\u4E2D\u6B62\u91CD\u5EFA\u4EE5\u514D\u6E05\u7A7A\u73B0\u6709 ${existing} \u884C\u7D22\u5F15`);
+    }
     db.exec("BEGIN");
     db.exec("DROP TABLE IF EXISTS message_fts");
     db.exec("DROP TABLE IF EXISTS message_meta");

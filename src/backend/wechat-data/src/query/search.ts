@@ -386,6 +386,13 @@ async function runBuildSearchIndex(
     const names = loadDisplayNames(decryptedDir)
     const usernames = loadSessionUsernames(decryptedDir)
     const shards = messageShardFiles(decryptedDir)
+    // 分片清单为空、但已经存在一份索引 —— 这几乎只可能是 message 目录读不到（临时不可读、
+    // 盘掉线、路径变了），而不是「用户真的删光了消息」。此时照常 DROP 会把一份完好的索引
+    // 换成空索引，且对外报 status:'ok'（实测：rows 200 → 0、无 message、ready=false）。
+    // 宁可直接失败，让调用方看到原因。
+    if (shards.length === 0 && existing > 0) {
+      throw new Error(`消息分片清单为空（message 目录不可读？），已中止重建以免清空现有 ${existing} 行索引`)
+    }
     db.exec('BEGIN')
     // DDL 与 DELETE 必须在事务内：放在事务外时它们各自 autocommit，读者会在整个重建窗口
     // 里看到「表被删/被清空」的半成品状态 —— getSearchIndexStatus 报 ready:false、
@@ -491,8 +498,8 @@ async function runBuildSearchIndex(
     }
     flush()
     // 统计与 meta 写放在 COMMIT **之前**：这样「新索引 + built_at + schema_version」是同一次
-    // 原子提交。留在 COMMIT 之后时，meta 写失败会留下「索引已换新但 schema_version 缺失」
-    // → ready:false → 自动重建反复重跑。
+    // 原子提交。留在 COMMIT 之后时，meta 写失败会留下「索引已换新但 meta 没写成功」的中间态
+    // （实测：旧索引被换成新索引、built_at 丢失）。
     total = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
     const builtAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt)
