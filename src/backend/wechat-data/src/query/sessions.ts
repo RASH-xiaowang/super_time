@@ -5,7 +5,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import type { WechatSession } from '../types.ts'
-import { contactMeta, cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
+import { contactMeta, cachedBySig, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'
 import { msgCreateTimeByServerId } from './messages.ts'
 
 /** Read SessionTable column names (wechat 4.x may add/remove columns). */
@@ -64,6 +64,10 @@ export function querySessions(
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    // 会话行的「最近活跃 / 未读」要回查消息分片（msgCreateTimeByServerId），所以分片变了
+    // 这份快照也可能变。原先只签 session/contact，靠「事件后整表清空」兜住 —— M8 去掉那层
+    // 兜底后必须补上真正读了的东西（shardCatalogSig 内部走按文件粒度的缓存，代价很小）。
+    shardCatalogSig(decryptedDir, ['message']),
   ].join('|')
   return cachedBySig(key, sig, () => computeSessions(decryptedDir, keyword, limit, offset))
 }

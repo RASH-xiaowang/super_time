@@ -200,6 +200,22 @@ function loadShardMeta(dbFile: string): ShardMeta {
 }
 
 /**
+ * 单个分片的元数据，**按文件粒度**缓存。
+ *
+ * 为什么要在目录级缓存之下再垫一层：`shardCatalogDirs` 的条目是「整份目录一条」，
+ * 签名由**所有**分片的签名拼成 —— 于是任何一个分片变了都会让整条失效、把**全部分片**
+ * 重新 `loadShardMeta`（每个都要开库、读 Name2Id、列 `Msg_%` 表、再逐表 PRAGMA）。
+ * 实时同步活跃期约 10s 就有一次变更，没变的分片因此被反复重读。
+ * 垫了这一层后，只有真正变了的那个分片会重新加载，其余直接复用同一个对象
+ * （调用方拿到的 `ShardMeta` 因此是稳定的，见 `shardCatalogDirs` 的用例）。
+ * @param dbFile - 分片数据库绝对路径。
+ * @returns 该分片的元数据（按该文件的 mtime+size 失效）。
+ */
+function shardMetaOf(dbFile: string): ShardMeta {
+  return get<ShardMeta>('shard-meta:' + dbFile, fileSig(dbFile), () => loadShardMeta(dbFile))
+}
+
+/**
  * Cached message shard catalog across one or more sub-directories (message,
  * bizchat, ...). Returns the Msg_% tables each file holds.
  * @param decryptedDir - decrypted data root.
@@ -228,7 +244,9 @@ export function shardCatalogDirs(decryptedDir: string, dirs: ReadonlyArray<strin
       entries.push({ file: full })
     }
   }
-  return get<ShardMeta[]>(key, sigParts.join('|'), () => entries.map(e => loadShardMeta(e.file)))
+  // 外层只负责「文件清单与顺序」：真正逐分片的内容由 shardMetaOf 各自缓存，
+  // 所以一个分片变了只会重载那一个（M8）。
+  return get<ShardMeta[]>(key, sigParts.join('|'), () => entries.map(e => shardMetaOf(e.file)))
 }
 
 /** Convenience: message-directory-only catalog (the chat hot path). */
@@ -272,7 +290,32 @@ export function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap = 300): v
   map.set(key, value)
 }
 
-/** Drop every cached snapshot (called after a rewrite event when needed). */
+/**
+ * Drop every cached snapshot (called after a rewrite event when needed).
+ */
 export function invalidateWechatMeta(): void {
   entries.clear()
+}
+
+/**
+ * 数据世代：每发生一次「解密快照被改写」就 +1（实时同步落地新数据）。
+ *
+ * 为什么需要它：有些条目依赖的是「**整棵树**都可能变了」，没法用某一个文件的签名表达
+ * （例如 `status` / `db-health` 的整树文件统计、`overview-extras` 的整树 `walkDb`）。
+ * 给它们一个廉价的显式失效信号，比两种替代方案都好：
+ *   · 靠「整体清空 entries」刷新 —— 会把**签名完整**的条目一起丢掉，于是没变的分片也被
+ *     重新加载（这正是 M8 的失效风暴）；
+ *   · 给它们算「整树签名」—— 每次查询都要 stat 成千上万个文件，比这些缓存本身还贵。
+ * 计数单调递增，所以不存在「数据变了但签名没变」的窗口。
+ */
+let dataGeneration = 0
+
+/** 推进数据世代。实时同步落地新数据后调用（全树被替换的场合仍用 invalidateWechatMeta）。 */
+export function bumpDataGeneration(): void {
+  dataGeneration += 1
+}
+
+/** 数据世代签名：给「依赖整棵树」的缓存条目当 sig 用。 */
+export function dataGenerationSig(): string {
+  return 'datagen:' + dataGeneration
 }

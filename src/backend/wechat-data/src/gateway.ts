@@ -96,7 +96,7 @@ import { queryAnnualReport } from './query/annual-report.ts'
 import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
-import { invalidateWechatMeta } from './query/meta.ts'
+import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
 import { contactMeta } from './query/meta.ts'
 import { buildKnowledgeGraph, deleteNote as deleteNoteRow, listNotes, saveNote as saveNoteRow } from './query/notes.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
@@ -237,9 +237,15 @@ export class WechatDataGateway extends TypertRemoteService {
     }
     const stopSync = startRealtimeSync(rawDbDir, () => decrypted, (synced) => {
       console.log('[wechat-sync] updated:', synced.join(', '))
-      // 新数据落地：先丢弃进程内指纹缓存（≤5s 的 TTL 兜底之外，让下一次
-      // 查询立即读到新快照），再向客户端广播更新事件。
-      invalidateWechatMeta()
+      // 这里**不再**整体清空进程内缓存（M8）：那会让每个约 10s 一次的同步事件把
+      // 「没变的分片」也一起丢掉，下次查询又得为全部分片重开库读元数据。
+      // 现在分两类失效：
+      //   · 签名完整的条目（按所读文件 mtime+size）自己就会失效 —— 同步两种模式最终都走
+      //     `atomicReplace` 原子替换目标文件，mtime 必然变化；
+      //   · 依赖「整棵树都可能变了」的条目用 `bumpDataGeneration()` 显式失效
+      //     （它们没法用单个文件的签名表达，见 meta.ts 的说明）。
+      // 整棵树被替换的场合（全量解密）仍用 `invalidateWechatMeta()`。
+      bumpDataGeneration()
       try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
     })
     ctx.effect(() => stopSync, 'wechat-data: realtime sync')

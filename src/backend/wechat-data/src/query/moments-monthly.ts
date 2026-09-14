@@ -36,9 +36,12 @@ function snsDb(decryptedDir: string): string | null {
  */
 export function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlyRow[] {
   const dbPath = snsDb(decryptedDir)
-  // Cache keyed on the sns.db signature; recomputed when the realtime sync
-  // rewrites it, otherwise served from the bounded process cache.
-  const sig = dbPath === null ? '' : fileSigOf(dbPath)
+  // 签名覆盖 sns.db 与 contact.db（`authorName` 那条路径会用 contactMeta 解析昵称）。
+  // 原先只签 sns.db，靠「事件后整表清空」兜住 —— M8 去掉那层兜底后补齐。
+  const sig = [
+    dbPath === null ? '' : fileSigOf(dbPath),
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+  ].join('|')
   return cachedBySig('moments-monthly:' + decryptedDir + ':' + (author ?? '') + ':' + (authorName ?? ''), sig, () => computeMomentsMonthly(decryptedDir, author, authorName))
 }
 

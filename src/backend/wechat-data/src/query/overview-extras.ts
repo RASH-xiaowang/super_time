@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig } from './meta.ts'
+import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig, dataGenerationSig } from './meta.ts'
 import type { OverviewExtras } from '../types.ts'
 
 
@@ -43,6 +43,11 @@ export function queryOverviewExtras(decryptedDir: string): OverviewExtras {
   const sig = [
     shardCatalogSig(dec, ['message', 'bizchat']),
     fileSigOf(join(dec, 'message', 'message_resource.db')),
+    // loader 真正读了却没进签名的三处（原先靠「事件后整表清空」兜住，M8 去掉那层兜底后补齐）：
+    // contact.db、session.db，以及整树 `walkDb` —— 后者没法用文件签名表达，用数据世代签名。
+    fileSigOf(join(dec, 'contact', 'contact.db')),
+    fileSigOf(join(dec, 'session', 'session.db')),
+    dataGenerationSig(),
   ].join('|')
   return cachedBySig('overview-extras:' + dec, sig, () => computeOverviewExtras(dec), 30_000)
 }
