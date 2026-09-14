@@ -6219,9 +6219,28 @@ function getSearchIndexStatus(decryptedDir) {
   }
 }
 var YIELD_EVERY_ROWS = 2e3;
-async function buildSearchIndex(decryptedDir, force) {
+var YIELD_EVERY_CHARS = 1 << 20;
+var inflightIndexBuilds = /* @__PURE__ */ new Map();
+function buildSearchIndex(decryptedDir, force) {
+  const slot = inflightIndexBuilds.get(decryptedDir);
+  if (slot && (slot.force || !force)) return slot.promise;
+  const base = slot ? slot.promise.catch(() => void 0) : Promise.resolve();
+  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force));
+  const entry = { promise, force: Boolean(force) };
+  inflightIndexBuilds.set(decryptedDir, entry);
+  const release = () => {
+    if (inflightIndexBuilds.get(decryptedDir) === entry) inflightIndexBuilds.delete(decryptedDir);
+  };
+  promise.then(release, release);
+  return promise;
+}
+async function runBuildSearchIndex(decryptedDir, force) {
   const p = searchIndexPath(decryptedDir);
   const db = new DatabaseSync20(p);
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+  } catch {
+  }
   const init = () => {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61')");
@@ -6244,7 +6263,8 @@ async function buildSearchIndex(decryptedDir, force) {
     const shards = messageShardFiles(decryptedDir);
     db.exec("BEGIN");
     let total = 0;
-    let processed = 0;
+    let rowsSinceYield = 0;
+    let charsSinceYield = 0;
     let batch = [];
     const flush = () => {
       if (batch.length === 0) return;
@@ -6283,9 +6303,14 @@ async function buildSearchIndex(decryptedDir, force) {
             if (!text) continue;
             const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
             batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
-            processed += 1;
+            rowsSinceYield += 1;
+            charsSinceYield += text.length;
             if (batch.length >= 500) flush();
-            if (processed % YIELD_EVERY_ROWS === 0) await yieldToLoop();
+            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              rowsSinceYield = 0;
+              charsSinceYield = 0;
+              await yieldToLoop();
+            }
           }
         } catch {
         } finally {
