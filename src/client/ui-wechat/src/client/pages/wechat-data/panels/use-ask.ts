@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiAskWechat } from '../api.ts'
+import { createAskGate, type AskGate } from './ask-gate.ts'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
 
 /** 一轮对话（用户提问或助手回答）。 */
@@ -76,6 +77,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
   const [error, setError] = useState<string | null>(null)
   /** 当前这一轮的流式标识：只有 id 匹配的增量才采纳（避免上一轮的迟到事件串进新一轮）。 */
   const streamIdRef = useRef('')
+  /** 单飞闸（同步、不受渲染时机影响）—— 见 ask 里的说明。 */
+  const gateRef = useRef<AskGate | null>(null)
 
   // 最新线程快照：ask() 里要据它拼多轮历史，直接读 state 会拿到过期闭包。
   const threadsRef = useRef(threads)
@@ -105,13 +108,18 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
 
   const ask = useCallback(async (question: string): Promise<void> => {
     const q = question.trim()
-    if (!q || asking) return
+    if (!q) return
+    // 单飞闸放在 ref 里（M13）：原来用闭包里的 `asking` 当闸门，而 React 的状态更新是
+    // 异步的 —— 快速连点第二次时组件可能还没重渲染，`asking` 仍是 false，两次调用双双通过；
+    // 而先返回的那轮会在 finally 里无条件 setAsking(false)，把仍在生成的那轮标记成已结束。
+    const gate = gateRef.current ?? (gateRef.current = createAskGate())
+    // 每轮一个流式标识：后端只推这个 id 的增量，上一轮的迟到事件不会被采纳。
+    const streamId = gate.tryStart()
+    if (!streamId) return
     const k = key
     setAsking(true)
     setError(null)
     setStreamText('')
-    // 每轮一个流式标识：后端只推这个 id 的增量，上一轮的迟到事件不会被采纳。
-    const streamId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     streamIdRef.current = streamId
     const prevTurns = threadsRef.current[k] ?? []
     const history = prevTurns.map(t => ({ role: t.role, content: t.text }))
@@ -141,12 +149,15 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     } catch (e) {
       setError((e as Error).message)
     } finally {
-      // 先作废流式标识再清缓冲：迟到的增量不会再写进 state
-      streamIdRef.current = ''
-      setStreamText('')
-      setAsking(false)
+      // 只有「当前轮」才能释放闸门并清状态：过期轮次迟到的 finally 不许截断新轮
+      // （`gate.finish` 会返回 false）。先作废流式标识再清缓冲，迟到的增量不会再写进 state。
+      if (gate.finish(streamId)) {
+        streamIdRef.current = ''
+        setStreamText('')
+        setAsking(false)
+      }
     }
-  }, [asking, key, setTurnList])
+  }, [key, setTurnList])
 
   const reset = useCallback((): void => { setTurnList(key, () => []) }, [key, setTurnList])
 
