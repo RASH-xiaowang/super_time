@@ -1700,6 +1700,10 @@ function queryMessages(decryptedDir, talker, limit, cursor, selfUsername, cursor
   }
 }
 function queryMessageByServerId(decryptedDir, serverId) {
+  const sig = shardCatalogSig(decryptedDir, ["message"]);
+  return cachedBySig("msg-by-sid:" + decryptedDir + ":" + serverId, sig, () => queryMessageByServerIdUncached(decryptedDir, serverId));
+}
+function queryMessageByServerIdUncached(decryptedDir, serverId) {
   const sid = serverId;
   let numeric = null;
   if (/^\d+$/.test(sid)) {

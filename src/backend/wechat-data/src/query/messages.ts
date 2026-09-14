@@ -25,7 +25,7 @@ import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
 import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
-import { contactMeta, shardCatalog } from './meta.ts'
+import { cachedBySig, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -658,11 +658,33 @@ export function queryMessages(
  * Resolve one message by its server_id (merged chat-log nested pointers).
  * Scans every message shard / Msg table; only type-49 appmsg cards are
  * resolved.
+ *
+ * **带签名缓存**（M11）：本机实测「命中」中位 1.8ms，而**未命中**要 80ms —— 它是两轮扫描
+ * （先按整型走 `server_id` 覆盖索引，再对未命中的整轮 `CAST(server_id AS TEXT)` 全表扫，
+ * 本机 4 个分片共 304 张 `Msg_` 表 ⇒ 最坏 2432 次查询）。调用方是「用户点开一条合并聊天记录」
+ * 这种**用户触发**动作（客户端只在点击时调一次，不是循环），所以负结果缓存能直接消掉
+ * 「点了没找到 → 同步完再点」这条重复路径的 80ms。
+ * 失效按分片目录签名（任一分片被替换就变），所以同步落地后不会返回旧结论；TTL 兜住指纹漂移。
  * @param decryptedDir - decrypted data root.
  * @param serverId - server_id as string (may exceed 2^53).
  * @returns found flag plus the parsed message (when found).
  */
 export function queryMessageByServerId(
+  decryptedDir: string,
+  serverId: string,
+): { found: boolean; message?: WechatMessage } {
+  const sig = shardCatalogSig(decryptedDir, ['message'])
+  return cachedBySig('msg-by-sid:' + decryptedDir + ':' + serverId, sig, () =>
+    queryMessageByServerIdUncached(decryptedDir, serverId))
+}
+
+/**
+ * 真正干活的实现（无缓存）。与 {@link queryMessageByServerId} 分开，便于用例直接测扫描语义。
+ * @param decryptedDir - decrypted data root.
+ * @param serverId - server_id as string.
+ * @returns found flag plus the parsed message (when found).
+ */
+function queryMessageByServerIdUncached(
   decryptedDir: string,
   serverId: string,
 ): { found: boolean; message?: WechatMessage } {

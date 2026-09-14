@@ -3,7 +3,7 @@
  * @vitest-environment node
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -90,5 +90,56 @@ describe('queryMessages / queryNewMessages', () => {
     expect(text.found).toBe(true)
     expect(text.message?.localId).toBe(2)
     expect(queryMessageByServerId(root, '99999').found).toBe(false)
+  })
+})
+
+describe('M11：按 server_id 查询带签名缓存', () => {
+  it('同一 id 重复查询命中缓存（返回同一个对象），分片一变就失效', () => {
+    // 为什么值得缓存：本机实测「命中」1.8ms，而**未命中** 80ms（两轮扫描 × 304 张 Msg 表）。
+    // 调用方是用户点开合并聊天记录这种**用户触发**动作，负结果缓存直接消掉
+    // 「点了没找到 → 同步完再点」的重复代价。
+    const root = tempRoot()
+    const talker = 'wxid_cache'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    const XML = '<msg><appmsg><type>2000</type><wcpayinfo><feedesc>￥1.00</feedesc></wcpayinfo></appmsg></msg>'
+    const shard = join(root, 'message', 'message_3.db')
+    makeDb(shard, (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?)`).run(1, 1, 49, 1700000001, 1, XML, 'cache-1')
+    })
+
+    const a = queryMessageByServerId(root, 'cache-1')
+    expect(a.found).toBe(true)
+    const b = queryMessageByServerId(root, 'cache-1')
+    expect(b).toBe(a) // 命中缓存：同一个对象（`cachedBySig` 的行为）
+
+    // 负结果同样被缓存
+    const miss1 = queryMessageByServerId(root, 'nope-1')
+    expect(miss1.found).toBe(false)
+    expect(queryMessageByServerId(root, 'nope-1')).toBe(miss1)
+
+    // 分片被替换（同步的原子替换只改 mtime/size）⇒ 签名变化 ⇒ 缓存失效
+    const t = new Date(Date.now() + 5000)
+    utimesSync(shard, t, t)
+    expect(queryMessageByServerId(root, 'cache-1')).not.toBe(a)
+    expect(queryMessageByServerId(root, 'nope-1')).not.toBe(miss1)
+  })
+
+  it('缓存不会跨数据根串味（key 里带 decryptedDir）', () => {
+    const r1 = tempRoot()
+    const r2 = tempRoot()
+    const talker = 'wxid_two'
+    const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
+    const XML = '<msg><appmsg><type>2000</type><wcpayinfo><feedesc>￥2.00</feedesc></wcpayinfo></appmsg></msg>'
+    makeDb(join(r1, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+      db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?)`).run(1, 1, 49, 1700000001, 1, XML, 'dup-1')
+    })
+    // r2 里没有这条消息
+    makeDb(join(r2, 'message', 'message_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
+    })
+    expect(queryMessageByServerId(r1, 'dup-1').found).toBe(true)
+    expect(queryMessageByServerId(r2, 'dup-1').found).toBe(false)
   })
 })
