@@ -109,6 +109,37 @@ describe('ZipFileWriter 的失败路径', () => {
     expect(existsSync(p)).toBe(false)
   })
 
+  it('close 之后的 abort 是空操作：不能把一个已成功的归档删掉', async () => {
+    // 评审实测过：原先 close() 后再 abort() 会把成品 DELETED ——
+    // 而出错后的 catch 恰好最容易走到这条路径。
+    const dir = tempDir('zip-close-abort-')
+    const p = join(dir, 'done.zip')
+    const w = await ZipFileWriter.create(p)
+    await w.addFile('a.txt', 'ok')
+    await w.close()
+    expect(existsSync(p)).toBe(true)
+    await w.abort()
+    expect(existsSync(p)).toBe(true)
+  })
+
+  it('abort 之后再写入必须 reject，而不是永久挂起', async () => {
+    // 这是 critical 的核心：写流被 destroy 后 write() 返回 false 且再不会 emit drain，
+    // 若只等 drain 就会永久 HANG（用户看不到报错、RPC 等到超时、临时文件也不清理）。
+    const dir = tempDir('zip-abort-write-')
+    const p = join(dir, 'x.zip')
+    const w = await ZipFileWriter.create(p)
+    await w.abort()
+    await expect(w.addFile('a.txt', 'after-abort')).rejects.toBeTruthy()
+  })
+
+  it('abort 之后再 close 会明确报错（而不是挂起）', async () => {
+    const dir = tempDir('zip-abort-close-')
+    const p = join(dir, 'y.zip')
+    const w = await ZipFileWriter.create(p)
+    await w.abort()
+    await expect(w.close()).rejects.toThrow('已中止')
+  })
+
   it('close 之后文件大小与内存路径的产出长度一致', async () => {
     const entries = sampleEntries()
     const dir = tempDir('zip-close-')
