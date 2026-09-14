@@ -84,14 +84,17 @@ describe.skipIf(process.env.MEASURE_M10 !== '1')('M10 建库实测', () => {
     }
     const elapsed = Date.now() - t0
 
-    // 实际唯一文本数（按截断后的文本算）——用来核对去重是否到位
-    const distinct = uniqueCount + 5
+    // 实际唯一文本数：热门文本 1 个 + 唯一池里的（受 DOCS-hot 截断）+ 尾部的 i%5
+    // （复审指出原来的 `uniqueCount + 5` 在 DOCS < hot + uniqueCount 时会算错）
+    const uniqueRows = Math.max(0, Math.min(uniqueCount, DOCS - hot))
+    const tailRows = Math.max(0, DOCS - hot - uniqueRows)
+    const distinct = (hot > 0 ? 1 : 0) + uniqueRows + Math.min(5, tailRows)
     const oldCalls = Math.ceil(DOCS / BATCH)
     const newCalls = r.embed_calls
     const oldWall = oldCalls * LATENCY
     const expectedNew = Math.ceil(Math.min(distinct, DOCS) / BATCH / CONC) * LATENCY
 
-    console.log(`\nM10 建库实测：${DOCS} 行（约 ${distinct} 个不同文本，重复率 ${(DUPLICATE_RATE * 100).toFixed(1)}%），单次延迟 ${LATENCY}ms，batchSize=${BATCH}，concurrency=${CONC}`)
+    console.log(`\nM10 建库实测：${DOCS} 行（实际 ${distinct} 个不同文本，重复率 ${(((DOCS - distinct) / DOCS) * 100).toFixed(1)}%），单次延迟 ${LATENCY}ms，batchSize=${BATCH}，concurrency=${CONC}`)
     console.log(`  embed 请求数：旧 ${oldCalls} 次（串行）  →  新 ${newCalls} 次（去重后只对唯一文本请求）`)
     console.log(`  墙钟：旧 ≈ ${(oldWall / 1000).toFixed(2)}s（建模：请求数 × 延迟）  →  新 ${(elapsed / 1000).toFixed(2)}s（实测）`)
     console.log(`  → 约 ${(oldWall / Math.max(elapsed, 1)).toFixed(1)}×（理论上限约 ${(Math.max(oldCalls, 1) / Math.max(newCalls, 1) * CONC).toFixed(1)}×：去重 + 并发共同作用）`)

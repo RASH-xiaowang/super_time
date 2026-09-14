@@ -526,8 +526,11 @@ async function runBuildSearchIndex(
  * node:sqlite 全是同步 API，所以「跑很久」= 「把承载全部查询的 worker 钉住」。
  * 只能靠 await 把控制权交回：`setImmediate` 让 I/O 与其它请求的微/宏任务插进来。
  * 索引构建按「行数 ∨ 字符数」周期性调用它 —— 否则百万行会一次性阻塞数秒。
+ *
+ * 导出给其它「周期性让出」的构建路径复用（如 `retrieval/embedding.ts` 的向量建库），
+ * 免得各自内联一份、各自踩坑。
  */
-function yieldToLoop(): Promise<void> {
+export function yieldToLoop(): Promise<void> {
   return new Promise((resolve) => { setImmediate(resolve) })
 }
 
