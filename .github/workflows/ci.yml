@@ -58,6 +58,11 @@ jobs:
       - name: 前端 shim 与源码一致
         run: npm run check:shim
 
+      # 安全守卫的端到端探针（H10）：在真实渲染进程里尝试 file:/smb:/自定义协议开窗
+      # 与外部导航，断言全部被拒。打包态另外由 npm run security-guard:smoke:packaged 覆盖。
+      - name: 安全守卫（开窗/导航被拒）
+        run: npm run security-guard:smoke
+
       - name: 主题令牌校验（需先 build:ui）
         run: npm run check:wx-tokens
 

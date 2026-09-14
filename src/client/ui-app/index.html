@@ -3,8 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- connect-src 不再用 `https:` 通配：渲染进程实际只需要两处外网
+       （世界地图的 GeoJSON：jsdelivr / unpkg）。LLM 与 embedding 的 HTTP 调用
+       都发生在后端 worker（Node 侧），不受页面 CSP 约束，所以不需要在这里放行。
+       data:/blob:/file: 是年报快照里把 <img> 读成 data URL 的兜底路径。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: https: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:" />
+    content="default-src 'self'; img-src 'self' data: blob: https: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com" />
   <title>微信+</title>
 </head>
 <body>

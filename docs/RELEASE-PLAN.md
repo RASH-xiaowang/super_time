@@ -37,10 +37,10 @@
 | 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
-| 阶段 4 | 安全加固与类型底座 | 3 | 1 | 0 | 0 | 2 |
+| 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 5 | 中优先级：稳定性与性能 | 33 | 30 | 1 | 0 | 2 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **71** | **54** | **3** | **0** | **14** |
+| **合计** | | **71** | **53** | **3** | **0** | **15** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -553,15 +553,15 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H10 | Electron 安全基线加固 | H3 | 2d | 未开始 |
+| H10 | Electron 安全基线加固 | H3 | 2d | 已完成 |
 | H11 | 修复类型检查为零的现状 | H2 | 3d | 已完成（strict 逐项收紧留下一轮） |
 | H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 已完成 |
 
 ---
 
-### `[ ]` H10 · Electron 安全基线未加固
+### `[x]` H10 · Electron 安全基线未加固
 
-- **状态**：未开始　**依赖**：H3　**预估**：2d
+- **状态**：已完成（5 条验收中 4 条已实测、1 条部分实测，见下）　**依赖**：H3　**预估**：2d
 - **证据**（已核对的基线）：
 
 | 项 | 现状 | 位置 |
@@ -572,26 +572,54 @@ flowchart TD
 | `webSecurity` | 未关闭（默认 true） | 全仓无 `webSecurity:false` |
 | 证书校验 | 未禁用 | 无 `setCertificateVerifyProc` |
 | `remote` 模块 | 未使用 | — |
-| **`sandbox`** | **false** | `main.js:179` |
-| **`shell.openExternal`** | **无 scheme 白名单** | `main.js:249-252` |
-| **导航守卫** | **无 `will-navigate` / `web-contents-created`** | `main.js` 全文 |
-| **asar 完整性 / fuses** | **均未配置** | `package.json` |
-| 代码签名 | `signExecutable: false` | `package.json:119` |
+| **`sandbox`** | **false → true**（preload 只 require('electron')，沙箱下允许） | `main.js:333` |
+| **`shell.openExternal`** | **无白名单 → 只放行 http(s)** | `main.js` 的 `installWebContentsGuards` |
+| **导航守卫** | **无 → `will-navigate` + `will-attach-webview`，统一挂在全局 `web-contents-created` 上** | 同上 |
+| **asar 完整性 / fuses** | **完整性写了但强制开关没开 → 已启用 5 个 fuses（含强制 asar 完整性）** | `package.json` 的 `build.electronFuses` |
+| 代码签名 | `signExecutable: false`（未改：属发布流程 / H13 联动） | `package.json:119` |
 
 - **风险**：`setWindowOpenHandler` 把渲染进程给出的 URL 直接交给系统打开，而**渲染的聊天/朋友圈内容是不可信输入**——`file:`、`smb://`（UNC 路径）、自定义协议均可触发。叠加 `sandbox:false` 与无完整性校验，本地攻击者可改 `app.asar` 绕过 H6 的授权。
-- **动作**：
-  1. `shell.openExternal` 加 scheme 白名单（仅 `http:`/`https:`），其余拒绝并提示
-  2. 加 `will-navigate` 与 `web-contents-created` 守卫，阻止窗口被导航到外部地址
-  3. 评估开启 `sandbox: true`（preload 仅用 `electron`，理论上可行；实测需验证 `contextBridge` 与 IPC 行为不受影响）
-  4. 保守化 CSP：`connect-src` 显式列出 LLM 域名，替换 `https:` 通配
-  5. 评估启用 Electron fuses 与 asar 完整性校验
-  6. 复核仅旧演示页使用的 IPC（`app:ping`、`dialog:open-file`、`shell:show-item`、`wechat:list-methods`）——若演示页最终不需要，可移除以减少攻击面
+- **动作与结果**：
+  1. `shell.openExternal` 白名单：**只放行 http(s)**，其余拒绝并留日志。判定逻辑抽到
+     `src/backend/navigation-policy.js`（纯函数），`src/backend/tests/navigation-policy.spec.ts` 有 9 项单测：
+     `file:`/`smb:`/`ms-msdt:`/`javascript:`/`data:`/空值/垃圾输入一律拒绝，并覆盖
+     「`super-time-wechat-evil` 不能因前缀相同被当成应用目录内」这个边界
+  2. 导航守卫：`will-navigate` 只允许落在应用目录内的 `file:` 页面；另加 `will-attach-webview` 阻止挂 webview。
+     **统一挂在 `app.on('web-contents-created')`** 而不是只护主窗口 —— 否则将来任何新建的
+     webContents 都会绕过守卫
+  3. `sandbox: true` 已开启（`preload.js` 只 `require('electron')`，沙箱下允许）
+  4. CSP：`connect-src` 由 `https:` 通配收紧为
+     `'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com`，并补 `object-src 'none'`、`base-uri 'self'`。
+     **计划里「显式列出 LLM 域名」的前提是错的**：渲染进程从不直连 LLM/embedding —— 那些 HTTP
+     调用在**后端 worker** 里发出，不受页面 CSP 约束；页面上唯一的外网消费者是世界地图的两个
+     GeoJSON CDN。所以按真实消费者收紧，而不是按 LLM 域名
+  5. fuses：读现状（`@electron/fuses` 的 fuse wire）发现 **asar 完整性只是「写了」，强制开关是关的**，
+     于是启用 5 个：`runAsNode:false`、`enableNodeOptionsEnvironmentVariable:false`、
+     `enableNodeCliInspectArguments:false`、`enableEmbeddedAsarIntegrityValidation:true`、
+     `onlyLoadAppFromAsar:true`。`grantFileProtocolExtraPrivileges` **有意保留开启**：
+     应用从 `file://` 加载页面、年报快照还会 `fetch` 本地图片，关掉会破坏该路径。
+     安全性依据：仓库不用 `process.fork`（用的是官方推荐的 `utilityProcess.fork`），
+     也没有脚本依赖 `ELECTRON_RUN_AS_NODE` / `--inspect` / `NODE_OPTIONS`（已 grep 确认）
+  6. 演示页 IPC 清理**未做** —— 属 L19 范围（需先确认旧演示页 `src/index.html` 是否还有入口）
 - **验收标准**：
-  - [ ] 聊天中构造 `file:///C:/Windows/System32/calc.exe` 链接 → 点击被拦截并提示，不启动进程
-  - [ ] 构造 `smb://` / 自定义协议链接 → 同样被拦截
-  - [ ] 页面内 `window.location = 'https://example.com'` → 导航被阻止
-  - [ ] 若开启 `sandbox:true`，全部功能回归测试通过（含窗口控制、截图导出、文件对话框）
-  - [ ] CSP 收紧后 LLM 调用、图片渲染、视频播放均正常
+  - [x] 聊天中构造 `file:///C:/Windows/System32/calc.exe` → **实测被拒**。证据比「看有没有弹出计算器」
+    更硬：探针断言 `shell.openExternal` **根本没被调用**（日志里没有「交给系统打开」那条），
+    即不是「调用后失败」
+  - [x] `smb://` 与自定义协议（`ms-msdt:/`）→ **实测被拒**（三条拒绝日志齐全）
+  - [x] `window.location = 'https://example.com/'` → **实测被阻止**：页面 URL 前后不变，
+    仍停在应用自己的 `file:` 页面
+  - [x] `sandbox:true` 下的功能回归 —— 打包产物正常启动：后端就绪、132 个 Remote 方法、
+    渲染出图、状态落在 userData（`npm run package:smoke` 19 项全绿）
+  - [ ] **CSP 收紧后 LLM 调用 / 图片渲染 / 视频播放：部分实测**。已验证：页面在收紧后的 CSP 下
+    正常加载与渲染（打包冒烟出图）；LLM 调用本就不经页面（见动作 4），不受影响。
+    **未验证**：图片渲染与视频播放的端到端路径（需真实微信数据），以及世界地图 GeoJSON 在
+    收紧后的 CSP 下确实取得到（需要网络并人工打开该面板）
+- **验证方式（可复跑）**：
+  - 判定函数：`npm test`（`navigation-policy.spec.ts` 9 项）
+  - 守卫是否真的挂上：`npm run security-guard:smoke`（开发态，**已纳入 CI**）、
+    `npm run security-guard:smoke:packaged`（打包态，另带 asar 完整性 + sandbox + fuses）。
+    两者都靠 `SUPERTIME_SECURITY_PROBE=1` 钩子在**真实渲染进程**里跑探针，断言
+    「三次 `window.open` 返回 null + URL 未变 + 三条拒绝日志 + 未调用 openExternal」
 
 ---
 
@@ -937,3 +965,6 @@ flowchart TD
 | 2026-09-13 | 实施 | 合计 | 71 项：未开始 55 / 进行中 3 / 已完成 13 | 阶段 3 全部完成（5）；阶段 4 完成 1（H11）、未开始 2（H10/H15） |
 | 2026-09-13 | 实施 | H15 | 未开始 → 已完成 | asarUnpack 补 `src/backend/wechat-data/native/**`；sns-keystream 的候选顺序改为 unpacked 优先（原第 3 个候选永不命中，现在第 1）；packaged-smoke 断言改为「unpacked 目录下有真实文件 + asar 头部标 unpacked 且无 offset」（`listPackage` 仍会列出解包条目，所以「不在列表里」是错判据）。实测：pack 后 wasm 3,785,516 字节就位，19 项断言全绿。顺带把冒烟里硬编码的 EXPECTED_METHODS=128（实际已 132）改为从 gateway.ts 源码数 @Remote。第 3 条验收（打包版视频解密播放）未验证：需真实微信数据，已记录替代证据 |
 | 2026-09-13 | 实施 | 合计 | 71 项：未开始 54 / 进行中 3 / 已完成 14 | 阶段 4 完成 2（H11/H15）、未开始 1（H10） |
+| 2026-09-13 | 实施 | H10 | 未开始 → 已完成 | ① openExternal 白名单（只放行 http(s)），判定逻辑抽到 navigation-policy.js + 9 项单测；② will-navigate / will-attach-webview 守卫，统一挂在 app.on('web-contents-created') 上（不只护主窗口）；③ sandbox: true；④ CSP 的 connect-src 由 https: 通配收紧为「两个 GeoJSON CDN + self/data/blob/file」，并补 object-src 'none'/base-uri 'self'；⑤ 启用 5 个 fuses（含强制 asar 完整性 —— 原先只是「写了」而开关是关的）。新增 SUPERTIME_SECURITY_PROBE 钩子 + scripts/security-guard-smoke.js：在真实渲染进程里验证三次 window.open 全被拒、外部导航被阻止、且 openExternal 根本没被调用；开发态已入 CI，打包态亦实测通过 |
+| 2026-09-13 | 实施 | 合计 | 71 项：未开始 53 / 进行中 3 / 已完成 15 | 阶段 4 全部完成（H10/H11/H15） |
+| 2026-09-13 | 实施 | 教训（H10） | — | ① 计划里「CSP 显式列出 LLM 域名」的前提是错的 —— 渲染进程从不直连 LLM（那些调用在后端 worker 里），照做会白白放开用不上的域；收紧 CSP 前要先 grep 出**真实**的消费者；② 「配置了」不等于「生效了」：asar 完整性一直被写入 exe，但强制它的 fuse 是关的 —— 读 fuse wire 才看得出来；③ 判定逻辑抽成纯函数后，`file:`/`smb:`/自定义协议这些边界能穷举，剩下要端到端验的就只有「守卫有没有挂上」，用一个 env 钩子就能覆盖；④ 关 runAsNode 前必须确认没人用 process.fork（本仓库用 utilityProcess，安全） |

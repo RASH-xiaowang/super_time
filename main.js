@@ -8,6 +8,7 @@ if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/conso
 const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
 const {
   configure: configureWechatPaths,
   applyConfig,
@@ -330,7 +331,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // sandbox: true —— 渲染进程只经 preload 暴露的 contextBridge 说话，
+      // 而 preload.js 只 require('electron')（沙箱下允许），因此可以直接开。
+      // 开着的意义：渲染进程即使是 XSS 也在 OS 级沙箱里，拿不到 Node 原语。
+      // 回归由 scripts/packaged-smoke.js 兜（它会真的启动打包产物断言后端就绪+出图）。
+      sandbox: true,
       spellcheck: false,
       backgroundThrottling: true
     }
@@ -399,16 +404,49 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+}
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+/**
+ * 给每个 webContents 装导航 / 开窗守卫。
+ *
+ * 渲染的是**聊天与朋友圈内容**，即不可信输入 —— 所以这里默认拒绝：
+ *   · 新窗口一律不开（`action:'deny'`），只有 http(s) 才交给系统浏览器
+ *     （`file:` 能直接拉起本地可执行文件，`smb:`/UNC 会带着凭据外连）；
+ *   · 页面导航只允许应用自己的 `file:` 页面（本应用是单页，正常不会导航）；
+ *   · 不允许挂 `<webview>`（本应用不用它）。
+ * 用 `app.on('web-contents-created')` 统一安装，而不是只在主窗口上挂一遍 ——
+ * 否则将来任何新建的 webContents（预览窗、开发者工具）都绕过了守卫。
+ * 判定逻辑在 `src/backend/navigation-policy.js`，有单测覆盖（含默认拒绝）。
+ * @param {Electron.WebContents} contents - 新建的 webContents。
+ */
+function installWebContentsGuards(contents) {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (decideWindowOpen(url) === 'external') {
+      // 系统没有对应处理程序时 openExternal 会 reject —— 不接住就是未处理拒绝。
+      shell.openExternal(url).catch((e) => {
+        console.warn('[security] 交给系统打开失败：' + String(e && e.message ? e.message : e));
+      });
+    } else {
+      console.warn('[security] 已拒绝打开外部链接：' + String(url));
+    }
     return { action: 'deny' };
+  });
+  contents.on('will-navigate', (event, url) => {
+    if (decideNavigation(url, __dirname) === 'allow') return;
+    event.preventDefault();
+    console.warn('[security] 已阻止页面导航：' + String(url));
+  });
+  contents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+    console.warn('[security] 已阻止挂载 webview');
   });
 }
 
 app.whenReady().then(async () => {
   // 未获单实例锁的重复实例不做任何初始化（app.quit 已在上面调用）。
   if (!singleInstanceLock) return;
+  // 守卫必须在建窗**之前**注册，否则主窗口的 webContents 已经建好、错过事件。
+  app.on('web-contents-created', (_event, contents) => installWebContentsGuards(contents));
   ipcMain.handle('app:versions', () => ({
     electron: process.versions.electron,
     chrome: process.versions.chrome,
@@ -786,6 +824,45 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // 安全守卫的端到端探针（仅 SUPERTIME_SECURITY_PROBE=1）：
+  // 在**真实渲染进程**里尝试三类被禁行为 —— 新窗口打开 file:/smb:/自定义协议、以及
+  // 把页面导航到外站 —— 把结果打成一行可被脚本断言的话后退出。
+  // 为什么不只靠单测：单测证明的是判定函数；只有真的在渲染进程里跑一遍，
+  // 才能证明守卫**挂上了**（web-contents-created 的注册时机、sandbox 下的实际行为）。
+  // 必须在这里注册（不能挪到下面 await 之后）：did-finish-load 会在后端 init 的
+  // await 期间就触发，那时再注册就永远等不到了。
+  // 断言脚本：scripts/security-guard-smoke.js
+  if (process.env.SUPERTIME_SECURITY_PROBE === '1') {
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(async () => {
+        const urlBefore = mainWindow.webContents.getURL();
+        let opened = null;
+        try {
+          opened = await mainWindow.webContents.executeJavaScript(`(async () => {
+            const out = [];
+            for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
+              try { out.push(window.open(u) === null ? 'null' : 'window'); }
+              catch (e) { out.push('throw'); }
+            }
+            try { window.location.href = 'https://example.com/'; } catch (e) { /* 被守卫拦下即可 */ }
+            await new Promise((r) => setTimeout(r, 400));
+            return out;
+          })()`);
+        } catch (e) {
+          console.error('[security-probe] 探针执行失败', e);
+        }
+        const urlAfter = mainWindow.webContents.getURL();
+        console.log('[security-probe] ' + JSON.stringify({
+          opened,
+          urlBefore,
+          urlAfter,
+          navigated: urlAfter !== urlBefore,
+        }));
+        app.quit();
+      }, 3000);
+    });
+  }
+
   // 先建窗、再起后端：窗口能立刻显示加载态，首帧不再等 init（原顺序会先 await 后端
   // init，而 init 要 import 783KB 的 bundle、解析数据根，首次还可能触发 bootstrap，
   // 首帧被整段推迟）。
@@ -931,6 +1008,9 @@ app.whenReady().then(async () => {
       app.quit();
     }, 9000);
   }
+
+  // 安全守卫的端到端探针已挪到 createWindow() 之后（见那处注释）：
+  // did-finish-load 会在后端 init 的 await 期间触发，注册晚了就永远等不到。
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
