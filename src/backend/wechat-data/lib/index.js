@@ -6218,7 +6218,8 @@ function getSearchIndexStatus(decryptedDir) {
     return { exists: true, rows: 0, built_at: null, ready: false };
   }
 }
-function buildSearchIndex(decryptedDir, force) {
+var YIELD_EVERY_ROWS = 2e3;
+async function buildSearchIndex(decryptedDir, force) {
   const p = searchIndexPath(decryptedDir);
   const db = new DatabaseSync20(p);
   const init = () => {
@@ -6243,6 +6244,7 @@ function buildSearchIndex(decryptedDir, force) {
     const shards = messageShardFiles(decryptedDir);
     db.exec("BEGIN");
     let total = 0;
+    let processed = 0;
     let batch = [];
     const flush = () => {
       if (batch.length === 0) return;
@@ -6271,8 +6273,7 @@ function buildSearchIndex(decryptedDir, force) {
         }
         try {
           const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
-          const rows = sdb.prepare(sql).all();
-          for (const r of rows) {
+          for (const r of sdb.prepare(sql).iterate()) {
             const localId = Number(r["local_id"] ?? 0);
             const createTime = Number(r["create_time"] ?? 0);
             const sortSeq = Number(r["sort_seq"] ?? localId);
@@ -6282,7 +6283,9 @@ function buildSearchIndex(decryptedDir, force) {
             if (!text) continue;
             const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
             batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
+            processed += 1;
             if (batch.length >= 500) flush();
+            if (processed % YIELD_EVERY_ROWS === 0) await yieldToLoop();
           }
         } catch {
         } finally {
@@ -6307,6 +6310,11 @@ function buildSearchIndex(decryptedDir, force) {
   } finally {
     db.close();
   }
+}
+function yieldToLoop() {
+  return new Promise((resolve3) => {
+    setImmediate(resolve3);
+  });
 }
 function splitGroupPrefix(text, username) {
   if (!username.endsWith("@chatroom")) return { sender: "", body: text };
@@ -6492,8 +6500,7 @@ function searchIndexMessages(decryptedDir, query, limit, username) {
       }
       try {
         const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1';
-        const rows = sdb.prepare(sql).all();
-        for (const r of rows) {
+        for (const r of sdb.prepare(sql).iterate()) {
           budget -= 1;
           if (hits.length >= cap || budget <= 0) break;
           const localId = Number(r["local_id"] ?? 0);
@@ -17907,9 +17914,9 @@ var WechatDataGateway = class extends (_a = TypertRemoteService, _getSessions_de
   getSearchIndexStatus() {
     return getSearchIndexStatus(this._dirs.decrypted);
   }
-  buildSearchIndex(options) {
+  async buildSearchIndex(options) {
     try {
-      const r = buildSearchIndex(this._dirs.decrypted, options?.force);
+      const r = await buildSearchIndex(this._dirs.decrypted, options?.force);
       this.op("sync", "build_search_index", r.status === "ok" ? "ok" : "skip", "", r.message ?? `rows=${r.rows ?? 0}`);
       return r;
     } catch (e) {
@@ -18082,7 +18089,7 @@ var WechatDataGateway = class extends (_a = TypertRemoteService, _getSessions_de
     const indexStatus = getSearchIndexStatus(this._dirs.decrypted);
     if (!indexStatus.ready) {
       try {
-        const built = buildSearchIndex(this._dirs.decrypted, false);
+        const built = await buildSearchIndex(this._dirs.decrypted, false);
         this.op("task", "ask_wechat", "ok", "build_index", `\u68C0\u7D22\u7D22\u5F15 ${built.status} \xB7 ${built.rows ?? 0} \u6761 \xB7 ${built.elapsed_ms ?? 0}ms`);
       } catch (e) {
         this.op("task", "ask_wechat", "fail", "build_index", e.message);
@@ -18402,7 +18409,7 @@ ${contextBlock}
     if (!embedFn) return { ok: false, status: "no-embedder", rows: 0, embedded: 0, elapsed_ms: 0, message: "\u672A\u914D\u7F6E embedding\uFF08\u8BF7\u5728\u6A21\u578B\u914D\u7F6E\u91CC\u586B\u5199\u5411\u91CF\u6A21\u578B\u6216 API Key\uFF09" };
     if (!getSearchIndexStatus(this._dirs.decrypted).ready) {
       try {
-        buildSearchIndex(this._dirs.decrypted, false);
+        await buildSearchIndex(this._dirs.decrypted, false);
       } catch {
       }
     }

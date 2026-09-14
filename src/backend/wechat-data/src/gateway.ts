@@ -603,9 +603,9 @@ export class WechatDataGateway extends TypertRemoteService {
    * @returns SearchBuildResult: build outcome with row counts.
    */
   @Remote('buildSearchIndex')
-  buildSearchIndex(options?: { force?: boolean }): SearchBuildResult {
+  async buildSearchIndex(options?: { force?: boolean }): Promise<SearchBuildResult> {
     try {
-      const r = buildSearchIndex(this._dirs.decrypted, options?.force)
+      const r = await buildSearchIndex(this._dirs.decrypted, options?.force)
       this.op('sync', 'build_search_index', r.status === 'ok' ? 'ok' : 'skip', '', r.message ?? `rows=${r.rows ?? 0}`)
       return r
     } catch (e) {
@@ -886,7 +886,7 @@ export class WechatDataGateway extends TypertRemoteService {
     const indexStatus = getSearchIndexStatus(this._dirs.decrypted)
     if (!indexStatus.ready) {
       try {
-        const built = buildSearchIndex(this._dirs.decrypted, false)
+        const built = await buildSearchIndex(this._dirs.decrypted, false)
         this.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引 ${built.status} · ${built.rows ?? 0} 条 · ${built.elapsed_ms ?? 0}ms`)
       } catch (e) {
         // 建索引失败不阻断提问：退回 LIKE 召回（准确率低但可用）
@@ -1299,7 +1299,7 @@ ${contextBlock}
     const embedFn = this.makeEmbedFn(cfg.embedding.model)
     if (!embedFn) return { ok: false, status: 'no-embedder', rows: 0, embedded: 0, elapsed_ms: 0, message: '未配置 embedding（请在模型配置里填写向量模型或 API Key）' }
     if (!getSearchIndexStatus(this._dirs.decrypted).ready) {
-      try { buildSearchIndex(this._dirs.decrypted, false) } catch { /* 交给下面状态判定 */ }
+      try { await buildSearchIndex(this._dirs.decrypted, false) } catch { /* 交给下面状态判定 */ }
     }
     try {
       const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
