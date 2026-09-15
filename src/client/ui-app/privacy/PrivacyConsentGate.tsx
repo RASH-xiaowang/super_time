@@ -26,6 +26,9 @@
 import React, { useState } from 'react'
 
 import { PRIVACY_VERSION } from './consent.ts'
+// 同意屏同样要能看到「有新版本可装」：更新是主进程的事，与走到哪一屏无关。
+// 这一屏没有设置弹窗，故不传 onOpenLicense。
+import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 // 与启动引导同一套观感：令牌在本屏被独占渲染时也必须存在（主面板此刻还没挂载）。
 import '../../ui-wechat/src/client/pages/wechat-data/scifi-theme.css'
 import '../../ui-wechat/src/client/pages/wechat-data/light-theme.css'
@@ -141,6 +144,8 @@ export function PrivacyConsentGate({
 
   return (
     <div className={css.shell}>
+      {/* 主动提醒（右下角悬浮）：同意屏上也能看到「有新版本可装」 */}
+      <NoticeBanner />
       <div className={css.doc}>
         <header className={css.head}>
           <span className={css.kicker}>首次启动 · 需要你确认</span>
