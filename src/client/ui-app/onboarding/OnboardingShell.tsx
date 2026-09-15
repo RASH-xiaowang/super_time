@@ -24,9 +24,12 @@ import { ParticleField } from './particles.tsx'
 import { Reveal, pickAnim } from './Reveal.tsx'
 import { LicenseAuthPanel, isLicenseUsable } from '../license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from '../license/LicenseGate.tsx'
+// 启动页（含最后一站「授权验证」）也要能看到「有新版本可装 / 许可证即将到期」——
+// 更新与到期是主进程的事，与「有没有进主界面」无关。这一屏没有设置弹窗，故不传 onOpenLicense。
+import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import css from './onboarding.module.css'
 
-const APP_VERSION = '1.0.0'
+const APP_VERSION = '1.0.2'
 
 /** 首页价值主张（贴合本地解密 + AI 分析定位）。 */
 const VALUE_PROPS = [
@@ -815,6 +818,10 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
       data-stage={pageIndex}
       style={{ ['--stage-p' as string]: String(pageIndex / Math.max(1, pageOrder.length - 1)) }}
     >
+      {/* 主动提醒（右下角悬浮）：启动页上也要能看到「有新版本可装 / 许可证即将到期」。
+          位置由卡片自己 fixed 决定，放在 DOM 哪儿都不影响呈现。 */}
+      <NoticeBanner />
+
       {/* 多张背景图：随滚轮切页交叉淡入 */}
       <div className={css.bgStack} aria-hidden="true">
         {STAGE_BGS.map((src, i) => (

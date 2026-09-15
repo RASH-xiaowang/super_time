@@ -238,6 +238,16 @@ function WechatApp(): React.JSX.Element {
   const handleOnboardingComplete = useCallback(() => {
     setOnboardingDone(true)
     openWechat()
+    // 引导页的最后一站就是「授权验证」，用户可能刚在那里导入证书 —— 而本组件的 lic
+    // **只在挂载时取过一次**（见上面的 effect），不重取的话 isLicenseUsable(lic) 仍是
+    // 挂载时的旧值（未授权），下面两处放行判断都过不去。表现就是「导入成功、点『进入系统』
+    // 没反应」，得重开应用才进得去。
+    // 这里先乐观放行（onboardingDone / openWechat 立即置位），再补一次状态；万一这次取不到，
+    // 第二层的 LicenseGate 自己还会再查一次，不会因此把未授权的界面放进系统。
+    const api = (window as any).electronAPI?.license
+    void Promise.resolve(api?.status?.())
+      .then((s: LicenseStatus | undefined) => { if (s) setLic(s) })
+      .catch(() => { /* 拿不到就交给 LicenseGate 那一层兜底 */ })
   }, [])
   const handleConsentAccepted = useCallback(() => {
     acceptConsent()

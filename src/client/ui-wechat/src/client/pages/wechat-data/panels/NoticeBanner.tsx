@@ -129,7 +129,19 @@ export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }):
     return () => { alive = false }
   }, [])
 
-  const notices = useMemo(() => buildNotices({ update, license }, dismissed), [update, license, dismissed])
+  /**
+   * 待显示的提醒。
+   *
+   * 宿主没给「打开设置」的入口时（启动引导 / 授权解锁 / 隐私同意这几屏没有设置弹窗），
+   * 把「去软件授权」摘掉：留着它就是一个点了没反应的按钮。导出激活请求仍然可用。
+   */
+  const notices = useMemo(() => {
+    const list = buildNotices({ update, license }, dismissed)
+    if (onOpenLicense) return list
+    return list.map((n) => (n.actions.includes('open-license')
+      ? { ...n, actions: n.actions.filter((a) => a !== 'open-license') }
+      : n))
+  }, [update, license, dismissed, onOpenLicense])
 
   /**
    * 动作回执也做成同一摞里的一张卡片，而不是另起一块浮层 —— 那样会跑出 `.stack` 的定位与层级，

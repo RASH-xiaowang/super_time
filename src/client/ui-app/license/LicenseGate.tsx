@@ -5,6 +5,9 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import css from './license-gate.module.css'
+// 授权解锁页也要能看到「有新版本可装」：更新是主进程的事，与有没有进主界面无关。
+// 这一屏没有设置弹窗，所以不传 onOpenLicense（「去软件授权」会自动摘掉）。
+import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 
 export type LicenseStatus = {
   state: string
@@ -119,6 +122,7 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
 
   return (
     <div className={css.lock}>
+      <NoticeBanner />
       <div className={css.card}>
         <div className={css.brand}>SUPER TIME · 微信+</div>
         <h1 className={css.title}>{title}</h1>

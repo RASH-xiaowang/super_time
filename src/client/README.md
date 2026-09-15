@@ -89,8 +89,12 @@ localStorage 并以它为准），`light-theme.css` 通过 `:root.theme-light` �
 - **例外：右下角的主动提醒卡片不走 `api.ts`。** `panels/NoticeBanner.tsx` 直接读 preload 的
   `electronAPI.update`（事件 + 快照）与 `electronAPI.license.status()` —— 这两份都是**主进程
   状态**（更新服务的 phase、许可证的 daysToExpiry），不属于 back-end Remote 的数据；设置弹窗里的
-  「软件更新 / 软件授权」两张卡读的是同一来源。判定口径抽在 `panels/notice.ts`（纯函数 + 单测），
-  渲染层拆成纯展示的 `NoticeList`（SSR 冒烟直接喂夹具断言）与接线的 `NoticeBanner`。
+  「软件更新 / 软件授权」两张卡读的是同一来源。它挂在**每一屏**上（主界面 `WechatDataPanel`、
+  启动引导 `OnboardingShell`、授权解锁 `LicenseGate`、隐私同意 `PrivacyConsentGate`）——
+  更新与到期与「走到哪一屏」无关，停在启动页的用户同样需要知道有新版本。判定口径抽在
+  `panels/notice.ts`（纯函数 + 单测），渲染层拆成纯展示的 `NoticeList`（SSR 冒烟直接喂夹具断言）
+  与接线的 `NoticeBanner`（宿主不给 `onOpenLicense` 时会摘掉「去软件授权」那个动作，
+  免得留下点了没反应的按钮）。
 
 ## 构建与运行
 
