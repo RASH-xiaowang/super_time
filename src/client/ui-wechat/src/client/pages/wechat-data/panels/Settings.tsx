@@ -9,12 +9,13 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createPollRegistry, type PollRegistry } from './poll-registry.ts'
+import { useTransientNotice } from './hooks.tsx'
 import {
-  IconGlobeOutline14, IconPersonalizationOutline16, IconSettingsOutline14, IconSparkle16,
+  IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
+import { clickableKey, Dialog, PanelHeader, ProgressBar } from '../ui/kit.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
 import { PrivacyPanel } from './Privacy.tsx'
 import { PrivacyTrustPanel } from './PrivacyTrust.tsx'
@@ -456,6 +457,212 @@ function LicenseSection(): React.JSX.Element {
   )
 }
 
+/** 主进程 `update:state` / `update:event` 的形状（事实来源见 src/backend/update.js）。 */
+type UpdatePhase =
+  | 'idle' | 'unsupported' | 'checking' | 'available'
+  | 'downloading' | 'downloaded' | 'up-to-date' | 'error'
+
+type UpdateState = {
+  phase: UpdatePhase
+  currentVersion: string | null
+  version: string | null
+  releaseName: string | null
+  releaseNotes: string | null
+  releaseDate: string | null
+  progress: { percent: number; transferred: number | null; total: number | null; bytesPerSecond: number | null } | null
+  error: string | null
+  reason: 'dev' | 'disabled' | 'unavailable' | 'unknown' | null
+  checkedAt: string | null
+  manual: boolean
+}
+
+const UPDATE_PHASE_META: Record<UpdatePhase, { label: string; dot: 'done' | 'warning' | 'ongoing' | 'error' }> = {
+  idle: { label: '尚未检查', dot: 'ongoing' },
+  unsupported: { label: '当前不支持', dot: 'warning' },
+  checking: { label: '正在检查…', dot: 'ongoing' },
+  available: { label: '发现新版本', dot: 'warning' },
+  downloading: { label: '正在下载…', dot: 'ongoing' },
+  downloaded: { label: '已下载，待安装', dot: 'done' },
+  'up-to-date': { label: '已是最新版本', dot: 'done' },
+  error: { label: '检查失败', dot: 'error' },
+}
+
+/** 不支持自动更新的原因文案；键与 update.js 的 unsupportedReason() 一一对应。 */
+const UPDATE_UNSUPPORTED_LABEL: Record<string, string> = {
+  dev: '开发态不检查更新 —— 自动更新只在安装版生效。',
+  disabled: '本次运行已禁用自动检查（环境变量 SUPERTIME_DISABLE_UPDATE_CHECK=1）。',
+  unavailable: '更新组件未加载（安装包可能不完整），建议重新安装应用。',
+  unknown: '当前环境不支持自动更新。',
+}
+
+/**
+ * 软件更新区块：当前版本 / 检查更新 / 下载进度 / 重启并安装。
+ *
+ * 主进程是唯一的事实来源，这里只做投影。两处顺序有讲究：
+ *   · 事件订阅必须**先于**取快照挂上 —— 反过来的话，两者之间发生的那次状态变化
+ *     会被永久丢掉（界面从此停在旧状态，直到下一次变化）；
+ *   · 快照到达时若已经收到过推送，就不能往回覆盖，因为快照可能是更早的。
+ * 自动检查由主进程排在启动 30s 后，这里的按钮是手动那一路（`manual: true`）。
+ */
+function UpdateSection(): React.JSX.Element {
+  const [st, setSt] = useState<UpdateState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  /** 是否已经收到过推送；收到过之后快照不再覆盖。 */
+  const pushedRef = useRef(false)
+
+  useEffect(() => {
+    const api = (window as any).electronAPI?.update
+    if (!api?.state) return
+    const off = api.onEvent?.((next: UpdateState) => {
+      pushedRef.current = true
+      setSt(next)
+    })
+    void (async () => {
+      try {
+        const r = await api.state()
+        if (r?.ok && !pushedRef.current) setSt(r.value as UpdateState)
+      } catch {
+        /* 拿不到快照就等下一次推送；界面停在「尚未检查」，不编造状态 */
+      }
+    })()
+    return () => { off?.() }
+  }, [])
+
+  const onCheck = async (): Promise<void> => {
+    const api = (window as any).electronAPI?.update
+    if (!api?.check) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await api.check({ manual: true })
+      if (r?.ok) setSt(r.value as UpdateState)
+      else setMsg({ kind: 'err', text: r?.error?.message || '检查更新失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onInstall = async (): Promise<void> => {
+    const api = (window as any).electronAPI?.update
+    if (!api?.install) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await api.install()
+      // 成功的话应用马上就要退出并重装，这里不必再改状态（改了也来不及看见）。
+      if (!r?.ok) setMsg({ kind: 'err', text: r?.error?.message || r?.error || '安装失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const phase = st?.phase ?? 'idle'
+  const meta = UPDATE_PHASE_META[phase]
+  const progress = st?.progress ?? null
+  const unsupported = phase === 'unsupported'
+  const inFlight = phase === 'checking' || phase === 'downloading'
+  const targetVersion = st?.version
+    ? `v${st.version}`
+    : phase === 'up-to-date' ? '已是最新' : '—'
+
+  return (
+    <section className={css.card} aria-label="软件更新">
+      <div className={css.cardHd}>
+        <span className={css.cardIconChip} aria-hidden="true">⬆️</span>
+        <div className={css.cardTitleBox}>
+          <span className={css.cardTitle}>软件更新 Updates</span>
+        </div>
+        <span className={css.cardBadge}>
+          <StateDot state={meta.dot} />
+          {meta.label}
+        </span>
+      </div>
+      <div className={css.cardBody}>
+        <div className={css.row}>
+          <span className={css.rowName}>当前版本</span>
+          <span className={css.rowMeta}>v{st?.currentVersion ?? '—'}</span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowName}>最新版本</span>
+          <span className={css.rowMeta}>{targetVersion}</span>
+        </div>
+
+        {progress && (phase === 'downloading' || phase === 'available') ? (
+          <div className={css.row} style={{ display: 'block' }}>
+            <ProgressBar value={progress.percent} />
+            <span className={css.rowNote}>
+              {progress.percent.toFixed(1)}%
+              {progress.transferred != null && progress.total != null
+                ? ` · ${fmtBytes(progress.transferred)} / ${fmtBytes(progress.total)}`
+                : ''}
+              {progress.bytesPerSecond != null ? ` · ${fmtBytes(progress.bytesPerSecond)}/s` : ''}
+            </span>
+          </div>
+        ) : null}
+
+        {st?.releaseNotes ? (
+          <div className={css.row} style={{ display: 'block' }}>
+            <span className={css.rowName}>更新说明</span>
+            <div className={css.rowNote} style={{ whiteSpace: 'pre-wrap', maxHeight: 180, overflow: 'auto' }}>
+              {st.releaseNotes}
+            </div>
+          </div>
+        ) : null}
+
+        {phase === 'error' && st?.error ? (
+          <div className={css.row}>
+            <span className={css.rowNote} style={{ color: 'var(--nm-danger)' }}>{st.error}</span>
+          </div>
+        ) : null}
+
+        {unsupported ? (
+          <div className={css.row}>
+            <span className={css.rowNote}>
+              {UPDATE_UNSUPPORTED_LABEL[st?.reason ?? 'unknown'] ?? UPDATE_UNSUPPORTED_LABEL.unknown}
+            </span>
+          </div>
+        ) : null}
+
+        <div className={css.row} style={{ gap: 8, flexWrap: 'wrap', paddingTop: 12 }}>
+          <Button
+            variant="primary"
+            disabled={busy || unsupported || inFlight}
+            onClick={() => { void onCheck() }}
+          >
+            {phase === 'checking' ? '检查中…' : '检查更新'}
+          </Button>
+          {phase === 'downloaded' ? (
+            <Button variant="primary" disabled={busy} onClick={() => { void onInstall() }}>
+              重启并安装
+            </Button>
+          ) : null}
+        </div>
+
+        {msg ? (
+          <div className={css.row}>
+            <span className={css.rowNote} style={{ color: msg.kind === 'ok' ? 'var(--nm-green)' : 'var(--nm-danger)' }}>
+              {msg.text}
+            </span>
+          </div>
+        ) : null}
+
+        <div className={css.row}>
+          <span className={css.rowNote}>
+            安装版会在启动后自动检查，发现新版本即在后台下载，退出应用时自动完成安装；
+            下载完成后也可以点「重启并安装」立即生效。
+            {st?.checkedAt ? ` 上次检查：${new Date(st.checkedAt).toLocaleString('zh-CN')}` : ''}
+          </span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export interface SettingsPanelProps {
   /** 嵌在弹窗里时：标题栏与关闭按钮由弹窗提供，面板自身不再重复画 PanelHeader。 */
   inDialog?: boolean
@@ -503,7 +710,10 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   const [imgXor, setImgXor] = useState('136')
   const [cdnEnabled, setCdnEnabled] = useState(cachedCfg?.cdn_enabled ?? true)
   const [cdnLocal, setCdnLocal] = useState(cachedCfg?.cdn_local_decrypt ?? true)
-  const [message, setMessage] = useState<Notice | null>(null)
+  // 富提示（kind/details + 关闭按钮）也迁到公共控制器（L20 的最后一处手写版）。
+  // 改前是 `setMessage(x); setTimeout(() => setMessage(null), N)` —— 句柄丢了，
+  // 「连出两条提示时第一条的定时器把第二条提前清掉」与「卸载后仍写 state」两个已知缺陷都在。
+  const { notice: message, flash, clear } = useTransientNotice<Notice>(5000)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [pathConfigPath, setPathConfigPath] = useState('')
@@ -540,9 +750,16 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   /** 右侧内容区：切节后回到顶部，否则从上一节的滚动位置接着看会莫名其妙。 */
   const paneRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => { paneRef.current?.scrollTo({ top: 0 }) }, [activeKey])
+  /**
+   * 富提示写入（本面板唯一的 notify 入口）。
+   *
+   * 时长按改前原样保留两档：带 details（失败明细清单）12s、其余 5s。
+   * 为什么用 `flash(value, ms)` 而不是给 hook 加一个新形态：控制器已经有「写入 + 各自计时 +
+   * 重启用新时长」的语义，富提示只是 value 变成了对象（`useTransientNotice<T>` 本来就是泛型）。
+   */
   const notify = (kind: 'ok' | 'err', text: string, details?: readonly string[]): void => {
-    setMessage({ kind, text, ...(details && details.length > 0 ? { details } : {}) })
-    setTimeout(() =>{ setMessage(null) }, details && details.length > 0 ? 12000 : 5000)
+    const rich = Boolean(details && details.length > 0)
+    flash({ kind, text, ...(rich ? { details } : {}) }, rich ? 12000 : 5000)
   }
 
   /** 诊断日志（M6）：GUI 态 stdout 会被丢弃，用户报障时靠这份落盘日志。 */
@@ -1034,7 +1251,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
   type NavKey = (typeof STEPS)[number]['key']
-    | 'ai' | 'boundary' | 'privacy' | 'license' | 'backup' | 'health' | 'hook' | 'oplog' | 'advanced'
+    | 'ai' | 'boundary' | 'privacy' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'oplog' | 'advanced'
   /**
    * 左导航条目（14 节，分四组）。
    *
@@ -1056,6 +1273,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
     { key: 'privacy', group: '智能与隐私', label: '隐私体检', icon: STEP_ICONS.privacy, value: '敏感信息扫描' },
     { key: 'license', group: '授权与维护', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
+    { key: 'update', group: '授权与维护', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
     { key: 'backup', group: '授权与维护', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
     { key: 'health', group: '授权与维护', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
     { key: 'hook', group: '授权与维护', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
@@ -1123,7 +1341,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         <div className={clsx(css.notice, message.kind === 'ok' ? css.toastOk : css.toastErr)}>
           <div className={css.noticeHead}>
             <span className={css.noticeText}>{message.text}</span>
-            <button type="button" className={css.noticeClose} onClick={() => { setMessage(null) }} aria-label="关闭提示">✕</button>
+            <button type="button" className={css.noticeClose} onClick={() => { clear() }} aria-label="关闭提示">✕</button>
           </div>
           {message.details && message.details.length > 0 && (
             <div className={css.noticeDetails}>
@@ -1530,6 +1748,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
 
         {/* ── 软件授权 License ── */}
         <div hidden={activeKey !== 'license'}><LicenseSection /></div>
+
+        {/* ── 软件更新 ── */}
+        <div hidden={activeKey !== 'update'}><UpdateSection /></div>
 
         {/* ── 备份恢复（原外层侧栏项，整页迁入） ── */}
         <div className={css.embedPane} hidden={activeKey !== 'backup'}>

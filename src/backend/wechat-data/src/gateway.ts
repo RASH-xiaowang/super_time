@@ -2833,7 +2833,9 @@ ${contextBlock}
       const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : null
       for (let i = 0; i < items.length; i += 1) {
         const md5 = md5ByItem[i] ?? ''
-        const src = md5 ? paths.get(md5) : undefined
+        // 批量结果是按小写键存的（`resolveImageFilePathsByMd5` 会归一化），这里也归一化，
+        // 免得「消息里存的是大写 md5」那一条悄悄退回逐张查询。
+        const src = md5 ? paths.get(md5.toLowerCase()) : undefined
         if (!src) continue
         const it = items[i]!
         const outDir = join(decodedDir, it.username)

@@ -14,12 +14,12 @@
  * （只有 SSR 静态冒烟 `ui:smoke`，观测不到定时器）。`timers.spec.ts` 用假时钟覆盖了
  * 计时语义，但覆盖的是原语、不是「这个面板接上了它」。
  *
- * 已迁移的 10 个面板 / 13 处（括号内是改前那句 setTimeout 的时长，原样保留）：
+ * 已迁移的 11 个面板 / 14 处（括号内是改前那句 setTimeout 的时长，原样保留）：
  *   Contacts(4000) Emoticons(3000) Favorites(4000) Health(3000) Ledger(3000)
  *   Moments(6000 ×3) Overview(6000, 2500) PeriodSummary(3000) Records(4000) Tasks(3000)
- * 有意**未迁移**（形态不同，不是漏掉）：`DailySummary.tsx` 是 toast 队列（多条并存、各自计时）、
- * `Settings.tsx` 的 `notify` 是带 kind/details/关闭按钮的富提示（5s / 12s 两档），且该文件
- * 不在本次写集内。
+ *   Settings（富提示：kind/details/关闭按钮，5s/12s 两档 —— 收口批用 `useTransientNotice<Notice>` 承接）
+ * 有意**未迁移**（形态不同，不是漏掉）：`DailySummary.tsx` 是 toast 队列（多条并存、各自计时）。
+ * 该文件的守卫见 `read-error-and-notice.wiring.spec.ts`。
  *
  * 写这类守卫的坑（复审踩过两次）：不要用 `[\s\S]*?` 去跨行匹配花括号，它会跨过内层的 `}`，
  * 对**正确**的代码也误报红；用 `[^}]` 把匹配限制在同一层。本文件匹配的是同一行，不受此影响。

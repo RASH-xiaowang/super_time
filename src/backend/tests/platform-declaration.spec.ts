@@ -164,16 +164,43 @@ describe('M18：平台声明与可构建目标一致', () => {
       .toEqual([])
   })
 
-  it('所有 CI workflow 都只在 Windows 上跑', () => {
+  it('所有会构建/测试的 CI workflow 都只在 Windows 上跑', () => {
     // 扫整个目录而不是只读 ci.yml：新加一个 ubuntu runner 的 workflow 同样是
     // 「在别的平台上构建」的声明，旧版只读 ci.yml 会把它漏过去。
     expect(workflowFiles.length).toBeGreaterThan(0)
+
+    /**
+     * 「会用项目工具链」的判据。
+     *
+     * 这条规则的本意是「构建/测试必须跑在 win32 原生依赖装得起来的地方」
+     * （koffi-win32-x64、wx_silk.exe、whisper bin 都只有 win32 一份），
+     * 而不是「任何 workflow 都必须用 windows runner」。
+     *
+     * 反例（真实存在）：Pages 部署只是把 `website/` 这个静态目录原样上传 ——
+     * 没有 setup-node、不装依赖、不构建，碰不到任何一个原生二进制。
+     * 让它跑 windows runner 纯属浪费（ubuntu runner 更快、额度更宽），
+     * 而把规则写成「所有 workflow 一律 windows」只会把这类无关任务也钉死。
+     *
+     * `setup-node` 是关键信号：装了 Node 就意味着接下来要动这个项目。
+     * 三个信号（setup-node / npm 命令 / electron-builder）覆盖了当前全部构建路径。
+     */
+    const usesToolchain = (text: string): boolean =>
+      /actions\/setup-node@|\bnpm\s+(ci|install|run|test)\b|\bnpx\s+\S|electron-builder/.test(text)
+
     for (const file of workflowFiles) {
       const text = readFileSync(join(workflowDir, file), 'utf8')
       const runners = [...text.matchAll(/^\s*runs-on:\s*(.+)$/gm)].map((m) => m[1].trim().replace(/^['"]|['"]$/g, ''))
       expect(runners.length, `${file} 里没有 runs-on`).toBeGreaterThan(0)
-      for (const runner of runners) expect(runner, `${file} 的 runner 不是 windows`).toMatch(/^windows/i)
+      if (!usesToolchain(text)) continue
+      for (const runner of runners) {
+        expect(runner, `${file} 会构建/测试，但 runner 不是 windows`).toMatch(/^windows/i)
+      }
     }
+
+    // 防空转：必须**至少有一个** workflow 真的被这条规则管住。否则某个改动把
+    // 判据写坏（比如正则再也匹配不上）时，上面的循环会全部 continue，用例静默变绿。
+    const enforced = workflowFiles.filter((f) => usesToolchain(readFileSync(join(workflowDir, f), 'utf8')))
+    expect(enforced.length, '没有任何 workflow 命中「会用项目工具链」—— 判据已失效，请复核本用例').toBeGreaterThan(0)
   })
 
   it('manifest 与后端 README 都写明支持平台', () => {

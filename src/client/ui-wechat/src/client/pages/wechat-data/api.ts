@@ -125,6 +125,43 @@ export { snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from './medi
 // 知识笔记/知识图谱类型刻意从本地 types.ts 取（node_modules 那份宿主副本已陈旧，
 // 原因见该文件顶部注释）。
 import type { KnowledgeSnapshot, NoteMutationResult, NotesSnapshot } from './types.ts'
+import { createImageLoadQueue } from './image-batch.ts'
+
+/**
+ * 「读取失败」与「确无数据」的可区分标志（N1）。
+ *
+ * 后端三个只读 store（待办 / 摘要任务与记录 / 笔记与知识图谱）在 catch 里仍然返回空列表
+ * （面板不该整块崩掉），但**同时**带上 `readError`：没有它，「库打不开」与「一条都没有」
+ * 在界面上长得一模一样，用户会按「暂无数据」去排查，方向全错。
+ *
+ * 类型就地声明而不是等宿主包重建：`@deepseek-ai/dsh-wechat-data/types` 由 `build:types`
+ * 生成，本轮不跑构建；运行期后端已经把该字段放进 JSON（见 `query/wechat-tasks.ts` 的
+ * `TasksSnapshotRead`）。字段是可选的，所以旧宿主（不带 readError）也照样能跑。
+ */
+export interface TasksSnapshotRead extends TasksSnapshot { readError?: string }
+export interface SummaryTaskSnapshotRead extends SummaryTaskSnapshot { readError?: string }
+export interface SummaryRecordSnapshotRead extends SummaryRecordSnapshot { readError?: string }
+export interface NotesSnapshotRead extends NotesSnapshot { readError?: string }
+export interface KnowledgeSnapshotRead extends KnowledgeSnapshot { readError?: string }
+
+/** 批量取图的一条结果（`url` / `error` 与单张入口同义）。 */
+export interface ImageDataUrlBatchItem {
+  username: string
+  localId: number
+  url?: string
+  format?: string
+  error?: string
+}
+
+/** 导出/备份任务的最新进度（M3）。 */
+export interface ExportProgressSnapshot {
+  found: boolean
+  phase: string
+  done: number
+  total: number
+  finished: boolean
+  error?: string
+}
 
 /** Remote face injected by ui-pages apply (ctx.remote.wechatData). */
 export interface WechatRemote {
@@ -163,7 +200,7 @@ export interface WechatRemote {
   clearOperationLog(): Promise<RemoteResult<OperationLogClearResult>>
   getGraph(): Promise<RemoteResult<GraphSnapshot>>
   // ── 知识笔记 / 知识图谱 ──
-  getNotes(options?: { query?: string; limit?: number }): Promise<RemoteResult<NotesSnapshot>>
+  getNotes(options?: { query?: string; limit?: number }): Promise<RemoteResult<NotesSnapshotRead>>
   saveNote(options: {
     id?: number
     title: string
@@ -174,7 +211,7 @@ export interface WechatRemote {
     sourceQuestion?: string
   }): Promise<RemoteResult<NoteMutationResult>>
   deleteNote(options: { id: number }): Promise<RemoteResult<NoteMutationResult>>
-  getKnowledgeGraph(): Promise<RemoteResult<KnowledgeSnapshot>>
+  getKnowledgeGraph(): Promise<RemoteResult<KnowledgeSnapshotRead>>
   getSearchIndexStatus(): Promise<RemoteResult<SearchIndexStatus>>
   buildSearchIndex(options?: { force?: boolean }): Promise<RemoteResult<SearchBuildResult>>
   searchMessages(options: { query: string; limit?: number; username?: string }): Promise<RemoteResult<SearchSnapshot>>
@@ -217,6 +254,12 @@ export interface WechatRemote {
   getPaymentStatus(options: { serverId: string }): Promise<RemoteResult<PaymentStatus>>
   getDailyCounts(options: { username: string; year: number; month: number }): Promise<RemoteResult<CalendarSnapshot>>
   getImageDataUrl(options: { username: string; localId: number }): Promise<RemoteResult<ImageDataUrlResult>>
+  /** 一次 RPC 解码一批消息图片（N16：批量入口，路径表只查一次）。 */
+  getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): Promise<RemoteResult<{ items: ImageDataUrlBatchItem[] }>>
+  /** 取消一个在跑的导出/备份任务（M3）。 */
+  cancelExportJob(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
+  /** 读一个导出/备份任务的最新进度（M3；事件中继之外的兜底路径）。 */
+  getExportProgress(options: { jobId: string }): Promise<RemoteResult<ExportProgressSnapshot>>
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
   getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
@@ -242,11 +285,13 @@ export interface WechatRemote {
     to?: number
     filename?: string
     zip?: boolean
+    /** 带上它可订阅 `wechat-export/progress` 进度并通过 cancelExportJob 取消（M3）。 */
+    jobId?: string
   }): Promise<RemoteResult<ExportResult>>
   listBackups(): Promise<RemoteResult<BackupSnapshot>>
   previewBackup(options: { name: string }): Promise<RemoteResult<BackupPreviewSnapshot>>
   createBackup(): Promise<RemoteResult<BackupMutationResult>>
-  createEncryptedBackup(options: { password: string }): Promise<RemoteResult<BackupMutationResult>>
+  createEncryptedBackup(options: { password: string; jobId?: string }): Promise<RemoteResult<BackupMutationResult>>
   restoreBackup(options: { name: string; password: string }): Promise<RemoteResult<BackupRestoreResult>>
   deleteBackup(options: { name: string }): Promise<RemoteResult<BackupMutationResult>>
   generateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<RemoteResult<DailySummaryResult>>
@@ -263,7 +308,7 @@ export interface WechatRemote {
   resetEditedMessage(options: { username: string; localId: number }): Promise<RemoteResult<EditMutationResult>>
   exportCsv(options: { kind: string; recordsKind?: string }): Promise<RemoteResult<ExportResult>>
   exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): Promise<RemoteResult<ExportResult>>
-  exportAllSessions(options?: { dir?: string; filename?: string }): Promise<RemoteResult<ExportResult>>
+  exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<RemoteResult<ExportResult>>
   exportMoments(options?: {
     format?: string
     username?: string
@@ -278,6 +323,7 @@ export interface WechatRemote {
     to?: number
     dir?: string
     filename?: string
+    jobId?: string
   }): Promise<RemoteResult<ExportResult>>
   /** 导出朋友圈视频到指定路径（后端负责解密与写盘）。 */
   exportSnsVideo(options: {
@@ -285,14 +331,14 @@ export interface WechatRemote {
   }): Promise<RemoteResult<{ ok: boolean; bytes?: number; source?: string; error?: string }>>
   clearSessionDraft(options: { username: string }): Promise<RemoteResult<DraftClearResult>>
   clearAllSessionDrafts(): Promise<RemoteResult<DraftsClearResult>>
-  listSummaryTasks(): Promise<RemoteResult<SummaryTaskSnapshot>>
+  listSummaryTasks(): Promise<RemoteResult<SummaryTaskSnapshotRead>>
   saveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): Promise<RemoteResult<SummaryTaskMutationResult>>
   deleteSummaryTask(options: { id: number }): Promise<RemoteResult<SummaryTaskMutationResult>>
   toggleSummaryTask(options: { id: number; enabled: boolean }): Promise<RemoteResult<SummaryTaskMutationResult>>
   runSummaryTask(options: { id: number }): Promise<RemoteResult<SummaryTaskRunResult>>
-  listSummaryRecords(options?: { taskId?: number }): Promise<RemoteResult<SummaryRecordSnapshot>>
+  listSummaryRecords(options?: { taskId?: number }): Promise<RemoteResult<SummaryRecordSnapshotRead>>
   deleteSummaryRecord(options: { id: number }): Promise<RemoteResult<SummaryTaskMutationResult>>
-  listTasks(): Promise<RemoteResult<TasksSnapshot>>
+  listTasks(): Promise<RemoteResult<TasksSnapshotRead>>
   getHandoffReminds(): Promise<RemoteResult<HandoffRemindsSnapshot>>
   syncHandoffTasks(): Promise<RemoteResult<TaskMutationResult>>
   addTask(options: { title: string; dueAt?: number }): Promise<RemoteResult<TaskMutationResult>>
@@ -692,7 +738,7 @@ export async function apiGetGraph(): Promise<GraphSnapshot> { return cachedGet('
  * Fused with the social snapshot client-side via each note's `sourceUsername`.
  * @returns KnowledgeSnapshot.
  */
-export async function apiGetKnowledgeGraph(): Promise<KnowledgeSnapshot> {
+export async function apiGetKnowledgeGraph(): Promise<KnowledgeSnapshotRead> {
   return cachedGet('kb:graph', async () => unwrap(await remote().getKnowledgeGraph()))
 }
 
@@ -702,9 +748,9 @@ export async function apiGetKnowledgeGraph(): Promise<KnowledgeSnapshot> {
  * 刻意**不走缓存**：笔记是本地 sqlite 的直读，代价可忽略，而搜索框每敲一个字都
  * 需要最新结果 —— 挂上 30s 快照缓存只会让用户看到过期列表。
  * @param options - Optional search query and row cap.
- * @returns NotesSnapshot.
+ * @returns NotesSnapshot（读不到库时带 `readError`，与「确无笔记」可区分）。
  */
-export async function apiGetNotes(options?: { query?: string; limit?: number }): Promise<NotesSnapshot> {
+export async function apiGetNotes(options?: { query?: string; limit?: number }): Promise<NotesSnapshotRead> {
   return unwrap(await remote().getNotes(options))
 }
 
@@ -970,8 +1016,81 @@ export async function apiGetMessageFile(options: { fileName: string; size?: numb
   return unwrap(await remote().getMessageFile(options))
 }
 
-export async function apiGetImageDataUrl(options: { username: string; localId: number }): Promise<ImageDataUrlResult> {
-  return unwrap(await remote().getImageDataUrl(options))
+/** 一批取图里的分块上限（与后端 `IMAGE_BATCH_MAX` 对齐：超出的分多次发）。 */
+const IMAGE_BATCH_CHUNK = 200
+
+/** 把一个批量条目收敛成单张入口的形状（字段有则带、无则不带）。 */
+function toImageResult(item: ImageDataUrlBatchItem | undefined): ImageDataUrlResult {
+  if (!item) return { error: '批量取图未返回该条目' }
+  return {
+    ...(item.url ? { url: item.url } : {}),
+    ...(item.format ? { format: item.format } : {}),
+    ...(item.error ? { error: item.error } : {}),
+  }
+}
+
+/**
+ * 取图合并队列（N16）：合并语义在 `./image-batch.ts`，这里只把 `flush` 接到批量 RPC 上。
+ *
+ * 为什么合并发生在 api 层而不是各面板：列表型取图的面板（聊天的 `MessageThumb`、图片组
+ * 网格）是「一屏挂 N 个组件、每个组件各自取图」，逐处改要动好几处调用点；它们全部经过
+ * {@link apiGetImageDataUrl}，在这里攒批能让它们**一行都不用改**吃到批量入口。
+ */
+const imageLoadQueue = createImageLoadQueue<{ username: string; localId: number }, ImageDataUrlResult>({
+  chunkSize: IMAGE_BATCH_CHUNK,
+  onMissing: () => ({ error: '批量取图未返回该条目' }),
+  flush: async (keys) => {
+    const r = unwrap(await remote().getImageDataUrlsBatch({ items: keys.map(k => ({ username: k.username, localId: k.localId })) }))
+    const got = Array.isArray(r?.items) ? r.items : []
+    return got.map(toImageResult)
+  },
+})
+
+/**
+ * Decode one message image to a data URL.
+ *
+ * 语义与改前一致（一个请求拿一个 data URL），但**不再是单张 RPC**：同一次渲染提交内的
+ * 多个请求会在一个微任务窗口里合并成一次 `getImageDataUrlsBatch`（见 {@link imageLoadQueue}）。
+ * 单个请求（大图查看器那类）只多一个微任务延迟。
+ * @param options - username and localId of the message image.
+ * @returns ImageDataUrlResult.
+ */
+export function apiGetImageDataUrl(options: { username: string; localId: number }): Promise<ImageDataUrlResult> {
+  return imageLoadQueue.enqueue({ username: options.username, localId: options.localId })
+}
+
+/**
+ * 一次 RPC 解码一批消息图片（N16 的显式入口）。
+ *
+ * 面板需要「明确按批取图」时用它（例如已知要展示的一屏图片列表）；逐项取图的调用点走
+ * {@link apiGetImageDataUrl} 即可 —— 那条路径同样会被合并成批量调用。
+ * @param items - 一批 (username, localId)。
+ * @returns 与传入顺序一一对应的条目。
+ */
+export async function apiGetImageDataUrlsBatch(items: Array<{ username: string; localId: number }>): Promise<ImageDataUrlBatchItem[]> {
+  const r = unwrap(await remote().getImageDataUrlsBatch({ items }))
+  return Array.isArray(r?.items) ? r.items : []
+}
+
+/**
+ * 取消一个在跑的导出/备份任务（M3）。
+ * @param jobId - 调用导出时传下去的那个标识。
+ * @returns ok=false 时 error 是可读原因（无此任务 / 已结束）。
+ */
+export async function apiCancelExportJob(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  return unwrap(await remote().cancelExportJob({ jobId }))
+}
+
+/**
+ * 读一个导出/备份任务的最新进度（M3）。
+ *
+ * 进度事件 `wechat-export/progress` 要经过宿主 → 渲染层的白名单中继才能到达 `window`；
+ * 轮询这条 RPC 不依赖中继，是「进度拿得到」的兜底路径（例如面板在任务中途才打开）。
+ * @param jobId - 调用导出时传下去的那个标识。
+ * @returns 最近一次进度；`found:false` 表示该标识已不存在（进程重启过）。
+ */
+export async function apiGetExportProgress(jobId: string): Promise<ExportProgressSnapshot> {
+  return unwrap(await remote().getExportProgress({ jobId }))
 }
 /**
  * Fetch decrypted database status.
@@ -1016,7 +1135,7 @@ export async function apiGetVideoInfo(options: { username: string; localId: numb
  * @param options - Query options: username, format, optional count.
  * @returns ExportResult.
  */
-export async function apiExportSessionMessages(options: { username: string; format: string; count?: number }): Promise<ExportResult> {
+export async function apiExportSessionMessages(options: { username: string; format: string; count?: number; jobId?: string }): Promise<ExportResult> {
   return unwrap(await remote().exportSessionMessages(options))
 }
 /**
@@ -1046,7 +1165,7 @@ export async function apiCreateBackup(): Promise<BackupMutationResult> {
  * @param options - encryption password.
  * @returns BackupMutationResult.
  */
-export async function apiCreateEncryptedBackup(options: { password: string }): Promise<BackupMutationResult> {
+export async function apiCreateEncryptedBackup(options: { password: string; jobId?: string }): Promise<BackupMutationResult> {
   return unwrap(await remote().createEncryptedBackup(options))
 }
 /**
@@ -1144,7 +1263,7 @@ export async function apiExportAnnualReport(options: {
   return unwrap(await remote().exportAnnualReport(options))
 }
 
-export async function apiExportAllSessions(options?: { dir?: string; filename?: string }): Promise<ExportResult> {
+export async function apiExportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
   return unwrap(await remote().exportAllSessions(options))
 }
 
@@ -1162,6 +1281,7 @@ export async function apiExportMoments(options?: {
   to?: number
   dir?: string
   filename?: string
+  jobId?: string
 }): Promise<ExportResult> {
   return unwrap(await remote().exportMoments(options))
 }
@@ -1190,9 +1310,9 @@ export async function apiClearAllSessionDrafts(): Promise<DraftsClearResult> {
 }
 /**
  * List summary tasks.
- * @returns SummaryTaskSnapshot.
+ * @returns SummaryTaskSnapshot（读不到库时带 `readError`）。
  */
-export async function apiListSummaryTasks(): Promise<SummaryTaskSnapshot> {
+export async function apiListSummaryTasks(): Promise<SummaryTaskSnapshotRead> {
   return unwrap(await remote().listSummaryTasks())
 }
 /**
@@ -1230,9 +1350,9 @@ export async function apiRunSummaryTask(options: { id: number }): Promise<Summar
 /**
  * List summary records (optionally filtered by task).
  * @param options - Query options: optional taskId filter.
- * @returns SummaryRecordSnapshot.
+ * @returns SummaryRecordSnapshot（读不到库时带 `readError`）。
  */
-export async function apiListSummaryRecords(options?: { taskId?: number }): Promise<SummaryRecordSnapshot> {
+export async function apiListSummaryRecords(options?: { taskId?: number }): Promise<SummaryRecordSnapshotRead> {
   return unwrap(await remote().listSummaryRecords(options))
 }
 /**
@@ -1245,9 +1365,9 @@ export async function apiDeleteSummaryRecord(options: { id: number }): Promise<S
 }
 /**
  * List extracted WeChat tasks.
- * @returns TasksSnapshot.
+ * @returns TasksSnapshot（读不到库时带 `readError`，见 N1）。
  */
-export async function apiListTasks(): Promise<TasksSnapshot> {
+export async function apiListTasks(): Promise<TasksSnapshotRead> {
   return unwrap(await remote().listTasks())
 }
 /**

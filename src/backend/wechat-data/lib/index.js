@@ -185,7 +185,7 @@ var require_llm_retry = __commonJS({
 
 // src/backend/wechat-data/src/gateway.ts
 import { TypertRemoteService, Remote } from "@deepseek-ai/dsh-typert-protocol";
-import { existsSync as existsSync60, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync60, mkdirSync as mkdirSync18, readFileSync as readFileSync24, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join75 } from "node:path";
 
 // src/backend/wechat-data/src/query/sessions.ts
@@ -10983,9 +10983,14 @@ import { mkdirSync as mkdirSync11, renameSync as renameSync5, rmSync as rmSync6,
 import { dirname as dirname14, join as join51 } from "node:path";
 
 // src/backend/wechat-data/src/query/zip.ts
-import { createWriteStream as createWriteStream2, promises as fsp } from "node:fs";
+import { createReadStream, createWriteStream as createWriteStream2, promises as fsp } from "node:fs";
 import { once } from "node:events";
-import { deflateRawSync } from "node:zlib";
+import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
+import { createDeflateRaw, deflateRawSync } from "node:zlib";
+var METHOD_STORE = 0;
+var METHOD_DEFLATE = 8;
 var CRC_TABLE = (() => {
   const table = new Array(256);
   for (let n = 0; n < 256; n += 1) {
@@ -11012,6 +11017,27 @@ function crc32Finish(c) {
 function crc32(buf) {
   return crc32Finish(crc32Update(crc32Start(), buf));
 }
+var COPY_CHUNK_SIZE = 64 * 1024;
+var CancelledError = class extends Error {
+  constructor(message = "\u64CD\u4F5C\u5DF2\u53D6\u6D88") {
+    super(message);
+    this.name = "AbortError";
+  }
+};
+function throwIfCancelled(signal) {
+  if (signal?.aborted) throw new CancelledError();
+}
+function reportProgress(ctrl, phase, done, total) {
+  try {
+    ctrl?.onProgress?.({ phase, done, total });
+  } catch {
+  }
+}
+var partialSeq = 0;
+function partialPath(filePath) {
+  partialSeq += 1;
+  return filePath + ".partial-" + String(process.pid) + "-" + String(partialSeq);
+}
 function u16(v) {
   const b = Buffer.alloc(2);
   b.writeUInt16LE(v);
@@ -11024,7 +11050,7 @@ function u32(v) {
 }
 function packEntry(raw) {
   const deflated = deflateRawSync(raw);
-  return deflated.length >= raw.length ? { data: raw, method: 0 } : { data: deflated, method: 8 };
+  return deflated.length >= raw.length ? { data: raw, method: METHOD_STORE } : { data: deflated, method: METHOD_DEFLATE };
 }
 function zipFiles(entries2) {
   const locals = [];
@@ -11091,13 +11117,11 @@ function zipFiles(entries2) {
   ]);
   return Buffer.concat([...locals, central, eocd]);
 }
-var ZipFileWriter = class _ZipFileWriter {
+var StreamWriter = class _StreamWriter {
   constructor(filePath, out) {
-    this.offset = 0;
-    this.centrals = [];
-    this.names = /* @__PURE__ */ new Set();
-    this.closed = false;
-    this.aborted = false;
+    this.offsetValue = 0;
+    this.closedFlag = false;
+    this.abortedFlag = false;
     /** 写流报出的错误（见 write() 里「drain 掩盖 error」的说明）。 */
     this.streamError = null;
     this.filePath = filePath;
@@ -11106,12 +11130,32 @@ var ZipFileWriter = class _ZipFileWriter {
   /** 打开目标文件准备写入（覆盖已有文件）。 */
   static async create(filePath) {
     const out = createWriteStream2(filePath);
-    const w = new _ZipFileWriter(filePath, out);
+    const w = new _StreamWriter(filePath, out);
     out.on("error", (e) => {
       if (!w.streamError) w.streamError = e;
     });
     await once(out, "open");
     return w;
+  }
+  /** 已写入的字节数。 */
+  get offset() {
+    return this.offsetValue;
+  }
+  /** 是否已正常收尾（end 之后 abort 是空操作）。 */
+  get closed() {
+    return this.closedFlag;
+  }
+  /** 是否已中止。 */
+  get aborted() {
+    return this.abortedFlag;
+  }
+  /** 写流报出的错误（尚未抛出时调用方用它提前失败，而不是等一次写入再失败）。 */
+  get failed() {
+    return this.streamError;
+  }
+  /** 写流上的监听器总数（诊断用：背压等待不应累积监听器）。 */
+  get listenerCount() {
+    return this.out.listenerCount("drain") + this.out.listenerCount("close") + this.out.listenerCount("error");
   }
   /**
    * 底层写入：更新偏移量并等待背压。
@@ -11124,10 +11168,10 @@ var ZipFileWriter = class _ZipFileWriter {
    */
   async write(buf) {
     if (this.streamError) throw this.streamError;
-    if (this.aborted || this.out.destroyed || this.out.writableEnded) {
+    if (this.abortedFlag || this.out.destroyed || this.out.writableEnded) {
       throw new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
     }
-    this.offset += buf.length;
+    this.offsetValue += buf.length;
     let needDrain;
     try {
       needDrain = !this.out.write(buf);
@@ -11169,8 +11213,65 @@ var ZipFileWriter = class _ZipFileWriter {
       this.out.once("drain", onDrain);
       this.out.once("close", onClose);
       this.out.once("error", onError);
-      if (this.streamError || this.aborted || this.out.destroyed) onClose();
+      if (this.streamError || this.abortedFlag || this.out.destroyed) onClose();
     });
+  }
+  /**
+   * 收尾并关闭文件。
+   *
+   * 用 `finished()` 而不是 `once('close')`：后者对流**已经关闭**的情况会永远等下去。
+   */
+  async end() {
+    if (this.closedFlag) return;
+    if (this.abortedFlag) throw new Error("\u5199\u5165\u6D41\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u6536\u5C3E");
+    this.closedFlag = true;
+    this.out.end();
+    await finished(this.out, { readable: false });
+  }
+  /**
+   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的文件）。
+   *
+   * 幂等；对已收尾的写入是**空操作** —— 否则出错后的 catch 会把一个已经成功
+   * 落盘的文件删掉（评审实测复现过：close 之后再 abort，成品被 DELETED）。
+   */
+  async abort() {
+    if (this.closedFlag || this.abortedFlag) return;
+    this.abortedFlag = true;
+    try {
+      this.out.destroy();
+    } catch {
+    }
+    try {
+      await fsp.rm(this.filePath, { force: true });
+    } catch {
+    }
+  }
+};
+var ZipFileWriter = class _ZipFileWriter {
+  constructor(filePath, sink) {
+    this.centrals = [];
+    this.names = /* @__PURE__ */ new Set();
+    this.entryTemps = /* @__PURE__ */ new Set();
+    this.entrySeq = 0;
+    this.closed = false;
+    this.filePath = filePath;
+    this.sink = sink;
+  }
+  /** 打开目标文件准备写入（覆盖已有文件）。 */
+  static async create(filePath) {
+    const sink = await StreamWriter.create(filePath);
+    return new _ZipFileWriter(filePath, sink);
+  }
+  /** 当前写入偏移（中央目录里要记每个条目的起始位置）。 */
+  get offset() {
+    return this.sink.offset;
+  }
+  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
+  get listenerCount() {
+    return this.sink.listenerCount;
+  }
+  write(buf) {
+    return this.sink.write(buf);
   }
   /**
    * 追加一个条目。
@@ -11225,17 +11326,108 @@ var ZipFileWriter = class _ZipFileWriter {
     return true;
   }
   /**
+   * 追加一个「内容现场产出」的条目：分块做流式 deflate。
+   *
+   * 为什么需要它：`addFile` 要求整条内容的字节都在内存里（`deflateRawSync` 也要整块输入），
+   * 所以 10 万行的 xlsx（sheet XML ≈ 10MB 以上、还要再叠上所有行数组）峰值仍与行数线性。
+   * 这里把产出方给的分块**先流式压到临时文件**，拿到真实的 CRC/长度后再补本地头、
+   * 分块拷进归档 —— 峰值只与「一块」相关，与条目总大小无关。
+   *
+   * 为什么不直接用 data descriptor 边压边写：那会改动归档格式（本地头里长度写 0 +
+   * 置 bit 3），而 `zipFiles`/`addFile` 产出的格式不能被悄悄换掉。多一次磁盘往返
+   * 只发生在流式条目上，换的是「格式不变」。
+   *
+   * @param name - 归档内路径（反斜杠会转成正斜杠）。
+   * @param source - 分块源（字符串按 UTF-8，或字节）；可为同步/异步迭代器。
+   * @param ctrl - 可选的进度/取消（每块都会检查取消）。
+   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
+   */
+  async addStream(name, source, ctrl) {
+    const safeName = name.replace(/\\/g, "/");
+    if (this.names.has(safeName)) return false;
+    this.names.add(safeName);
+    if (this.closed) throw new Error("\u5F52\u6863\u5DF2\u6536\u5C3E\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
+    if (this.sink.failed) throw this.sink.failed;
+    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
+    this.entrySeq += 1;
+    const tmp = this.filePath + ".entry-" + String(this.entrySeq);
+    this.entryTemps.add(tmp);
+    let crc = crc32Start();
+    let rawSize = 0;
+    try {
+      async function* raw() {
+        for await (const chunk of source) {
+          throwIfCancelled(ctrl?.signal);
+          const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
+          crc = crc32Update(crc, buf);
+          rawSize += buf.length;
+          reportProgress(ctrl, "compress", rawSize, 0);
+          yield buf;
+        }
+      }
+      await pipeline(Readable.from(raw(), { objectMode: false }), createDeflateRaw(), createWriteStream2(tmp));
+      const csize = (await fsp.stat(tmp)).size;
+      const crcFinal = crc32Finish(crc);
+      const nameBuf = Buffer.from(safeName, "utf8");
+      const entryOffset = this.offset;
+      await this.write(Buffer.concat([
+        u32(67324752),
+        u16(20),
+        u16(0),
+        u16(METHOD_DEFLATE),
+        u16(0),
+        u16(0),
+        u32(crcFinal),
+        u32(csize),
+        u32(rawSize),
+        u16(nameBuf.length),
+        u16(0),
+        nameBuf
+      ]));
+      let copied = 0;
+      for await (const chunk of createReadStream(tmp, { highWaterMark: COPY_CHUNK_SIZE })) {
+        throwIfCancelled(ctrl?.signal);
+        await this.write(chunk);
+        copied += chunk.length;
+        reportProgress(ctrl, "write", copied, csize);
+      }
+      this.centrals.push(Buffer.concat([
+        u32(33639248),
+        u16(20),
+        u16(20),
+        u16(0),
+        u16(METHOD_DEFLATE),
+        u16(0),
+        u16(0),
+        u32(crcFinal),
+        u32(csize),
+        u32(rawSize),
+        u16(nameBuf.length),
+        u16(0),
+        u16(0),
+        u16(0),
+        u16(0),
+        u32(0),
+        u32(entryOffset),
+        nameBuf
+      ]));
+      return true;
+    } finally {
+      this.entryTemps.delete(tmp);
+      try {
+        await fsp.rm(tmp, { force: true });
+      } catch {
+      }
+    }
+  }
+  /**
    * 写中央目录与 EOCD 并关闭文件。
    *
    * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
    */
-  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
-  get listenerCount() {
-    return this.out.listenerCount("drain") + this.out.listenerCount("close") + this.out.listenerCount("error");
-  }
   async close() {
     if (this.closed) return;
-    if (this.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
+    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
     const centralStart = this.offset;
     const central = Buffer.concat(this.centrals);
     if (centralStart + central.length >= 4294967295) {
@@ -11255,8 +11447,7 @@ var ZipFileWriter = class _ZipFileWriter {
     ]);
     await this.write(central);
     await this.write(eocd);
-    this.out.end();
-    await once(this.out, "close");
+    await this.sink.end();
   }
   /**
    * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。
@@ -11266,16 +11457,14 @@ var ZipFileWriter = class _ZipFileWriter {
    */
   async abort() {
     if (this.closed) return;
-    if (this.aborted) return;
-    this.aborted = true;
-    try {
-      this.out.destroy();
-    } catch {
+    await this.sink.abort();
+    for (const tmp of this.entryTemps) {
+      try {
+        await fsp.rm(tmp, { force: true });
+      } catch {
+      }
     }
-    try {
-      await fsp.rm(this.filePath, { force: true });
-    } catch {
-    }
+    this.entryTemps.clear();
   }
 };
 
@@ -11964,11 +12153,6 @@ function typeLabel(t) {
 
 // src/backend/wechat-data/src/query/export.ts
 var MAX_MOMENT_MEDIA = 5e3;
-var partialSeq = 0;
-function partialPath(filePath) {
-  partialSeq += 1;
-  return filePath + ".partial-" + String(process.pid) + "-" + String(partialSeq);
-}
 function writeFileAtomicSync(filePath, data) {
   const tmp = partialPath(filePath);
   try {
@@ -12026,16 +12210,18 @@ function fmtFull2(ts2) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function collectMessages(decryptedDir, username, count) {
+function collectMessages(decryptedDir, username, count, ctrl) {
   const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
   const pages = [];
   let cursor;
   let cursorLocalId;
   let guard = 0;
   while (pages.length < target && guard < 600) {
+    throwIfCancelled(ctrl?.signal);
     const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
     if (env.messages.length === 0) break;
     pages.push(...env.messages);
+    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
     if (!env.hasMore) break;
     cursor = env.cursor;
     cursorLocalId = env.cursorLocalId;
@@ -12145,29 +12331,86 @@ function formatJson(msgs, username) {
 function xmlEsc(v) {
   return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-function formatXlsx(msgs, username) {
-  const rows = [["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"]];
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    rows.push([r.time, r.sender, r.typeLabel, r.text, String(m.localId)]);
-  }
-  const parts = [];
-  for (const row of rows) {
-    parts.push("<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>");
-  }
-  const cells = parts.join("");
-  const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + cells + "</sheetData></worksheet>";
+var XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
+var XLSX_SHEET_TAIL = "</sheetData></worksheet>";
+var XLSX_CHUNK_ROWS = 200;
+function xlsxStaticParts() {
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
   const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
   const rootRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
   const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>';
-  return zipFiles([
+  return [
     { name: "[Content_Types].xml", data: contentTypes },
     { name: "_rels/.rels", data: rootRel },
     { name: "xl/workbook.xml", data: workbook },
-    { name: "xl/_rels/workbook.xml.rels", data: wbRel },
-    { name: "xl/worksheets/sheet1.xml", data: sheet }
+    { name: "xl/_rels/workbook.xml.rels", data: wbRel }
+  ];
+}
+function xlsxRowXml(row) {
+  return "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
+}
+function makeXlsxChunker(ctrl, total) {
+  let buf = "";
+  let done = 0;
+  return {
+    push: (row) => {
+      throwIfCancelled(ctrl?.signal);
+      buf += xlsxRowXml(row);
+      done += 1;
+      if (done % XLSX_CHUNK_ROWS !== 0) return null;
+      const out = buf;
+      buf = "";
+      reportProgress(ctrl, "format", done, total);
+      return out;
+    },
+    finish: () => {
+      const out = [];
+      if (buf) out.push(buf);
+      reportProgress(ctrl, "format", done, total);
+      out.push(XLSX_SHEET_TAIL);
+      return out;
+    }
+  };
+}
+function* xlsxSheetChunks(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  yield* chunker.finish();
+}
+async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for await (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  for (const chunk of chunker.finish()) yield chunk;
+}
+function* messageRows(msgs, username) {
+  yield ["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"];
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)];
+  }
+}
+function xlsxSheetXml(rows, ctrl) {
+  return Array.from(xlsxSheetChunks(rows, ctrl)).join("");
+}
+function formatXlsx(msgs, username, ctrl) {
+  return zipFiles([
+    ...xlsxStaticParts(),
+    { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
   ]);
+}
+async function writeXlsxStream(filePath, rows, ctrl) {
+  await writeZipAtomic(filePath, async (zip) => {
+    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
+    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
+  });
 }
 function collectChatlogMedia(msgs) {
   const out = [];
@@ -12211,8 +12454,8 @@ function filterMessages(msgs, types, richTypes) {
 function sanitizeBasename(name) {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").trim().slice(0, 100);
 }
-function exportSessionMessages(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip) {
-  const all = collectMessages(decryptedDir, username, count ?? 0);
+function planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl) {
+  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl);
   const msgs = filterMessages(all, types, richTypes).filter((m) => {
     if (from && from > 0 && m.createTime < from) return false;
     if (to && to > 0 && m.createTime > to) return false;
@@ -12221,14 +12464,6 @@ function exportSessionMessages(decryptedDir, username, format, count, dir, types
   const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
   const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
   const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
-  let content = "";
-  if (format === "csv") content = formatCsv(msgs, username);
-  else if (isXlsx) content = formatXlsx(msgs, username);
-  else if (format === "html") content = formatHtml(msgs, username, now);
-  else if (format === "md") content = formatMarkdown(msgs, username);
-  else if (format === "sql") content = formatSql(msgs, username);
-  else if (format === "json") content = formatJson(msgs, username);
-  else content = formatTxt(msgs, username);
   const exportDir = dir && dir.trim() ? dir.trim() : join51(dirname14(decryptedDir), "exports");
   mkdirSync11(exportDir, { recursive: true });
   const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
@@ -12238,17 +12473,53 @@ function exportSessionMessages(decryptedDir, username, format, count, dir, types
   const outExt = zip ? "zip" : ext;
   const innerName = base.toLowerCase().endsWith("." + ext) ? base : base + "." + ext;
   const filenameOut = base.toLowerCase().endsWith("." + outExt) ? base : base + "." + outExt;
-  const filepath = join51(exportDir, filenameOut);
-  if (zip) {
-    const payload = zipFiles([
-      { name: innerName, data: content },
-      { name: "record_media.json", data: JSON.stringify({ username, exportedAt: now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2) }
-    ]);
-    writeFileAtomicSync(filepath, payload);
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join51(exportDir, filenameOut), now };
+}
+function formatTextBody(format, msgs, username, now) {
+  if (format === "csv") return formatCsv(msgs, username);
+  if (format === "html") return formatHtml(msgs, username, now);
+  if (format === "md") return formatMarkdown(msgs, username);
+  if (format === "sql") return formatSql(msgs, username);
+  if (format === "json") return formatJson(msgs, username);
+  return formatTxt(msgs, username);
+}
+async function exportSessionMessagesStreamed(decryptedDir, options) {
+  const ctrl = { onProgress: options.onProgress, signal: options.signal };
+  const plan = planSessionExport(
+    decryptedDir,
+    options.username,
+    options.format,
+    options.count,
+    options.dir,
+    options.types,
+    options.richTypes,
+    options.from,
+    options.to,
+    options.filename,
+    options.zip,
+    ctrl
+  );
+  const { msgs } = plan;
+  if (plan.isXlsx && !options.zip) {
+    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl);
+  } else if (plan.isXlsx) {
+    const content = formatXlsx(msgs, options.username, ctrl);
+    await writeZipAtomic(plan.outPath, async (zip) => {
+      await zip.addFile(plan.innerName, content);
+      await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
+    });
   } else {
-    writeFileAtomicSync(filepath, content);
+    const content = formatTextBody(plan.format, msgs, options.username, plan.now);
+    if (options.zip) {
+      await writeZipAtomic(plan.outPath, async (zip) => {
+        await zip.addFile(plan.innerName, content);
+        await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
+      });
+    } else {
+      writeFileAtomicSync(plan.outPath, content);
+    }
   }
-  return { path: filepath, filename: filenameOut, count: msgs.length };
+  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length };
 }
 function exportCsv(decryptedDir, kind, recordsKind) {
   const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
@@ -12392,14 +12663,17 @@ function exportAnnualReport(decryptedDir, year, format, dir, filename) {
   return { path, filename: safeName, count: total };
 }
 async function exportMoments(decryptedDir, opts) {
+  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
   const format = opts?.format === "html" ? "html" : opts?.format === "json" ? "json" : opts?.format === "csv" ? "csv" : "txt";
   const NL = String.fromCharCode(10);
   const items = [];
   let offset = 0;
   for (; ; ) {
+    throwIfCancelled(ctrl.signal);
     const env = queryMoments(decryptedDir, offset, 500, opts?.username);
     items.push(...env.moments);
     offset += env.moments.length;
+    reportProgress(ctrl, "collect", items.length, 0);
     if (env.moments.length < 500) break;
     if (items.length > 1e4) break;
   }
@@ -12446,6 +12720,7 @@ async function exportMoments(decryptedDir, opts) {
       let idx = 0;
       for (const m of filtered) {
         if (mediaCount >= MAX_MOMENT_MEDIA) break;
+        throwIfCancelled(ctrl.signal);
         for (const im of m.images) {
           if (mediaCount >= MAX_MOMENT_MEDIA) break;
           const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
@@ -12469,6 +12744,7 @@ async function exportMoments(decryptedDir, opts) {
             }
           }
         }
+        reportProgress(ctrl, "media", mediaCount, MAX_MOMENT_MEDIA);
       }
     });
     return { path: zipPath, filename: zipName, count: filtered.length };
@@ -12481,6 +12757,7 @@ async function exportMoments(decryptedDir, opts) {
   } else if (ext === "csv") {
     const lines = ["\u65F6\u95F4,\u4F5C\u8005,\u5185\u5BB9,\u56FE\u7247\u6570,\u89C6\u9891\u6570,\u4F4D\u7F6E,\u94FE\u63A5\u6807\u9898,\u94FE\u63A5URL"];
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
       lines.push(csvCell(m.time) + "," + csvCell(m.author) + "," + csvCell(m.text) + "," + String(m.images.length) + "," + String(m.videos.length) + "," + csvCell(m.location) + "," + csvCell(m.link_title) + "," + csvCell(m.link_url ?? ""));
     }
     content = lines.join(NL);
@@ -12489,6 +12766,7 @@ async function exportMoments(decryptedDir, opts) {
     parts.push('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u670B\u53CB\u5708\u5BFC\u51FA</title>');
     parts.push('<style>body{background:#f2f2f2;font-family:sans-serif;margin:0;padding:24px 12px;color:#222}.wrap{max-width:680px;margin:0 auto}.hd{text-align:center;margin-bottom:18px}.card{background:#fff;border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}.meta{color:#888;font-size:12px;margin-bottom:6px}.content{font-size:14px;line-height:1.6;white-space:pre-wrap}.tag{color:#576b95;font-size:12px;margin-top:6px}.divider{text-align:center;color:#bbb;font-size:12px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block}.grid.single{grid-template-columns:1fr;max-width:240px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u670B\u53CB\u5708</h1><p>\u5171 ' + String(filtered.length) + " \u6761\u52A8\u6001</p></div>");
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
       parts.push('<div class="card"><div class="meta">' + htmlEscape(m.author) + " \xB7 " + htmlEscape(m.time) + "</div>");
       if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + "</div>");
       if (m.images.length > 0) {
@@ -12526,6 +12804,7 @@ async function exportMoments(decryptedDir, opts) {
   } else {
     const lines = [];
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
       lines.push(m.time + " " + m.author);
       if (m.text) lines.push(m.text);
       const tags = [];
@@ -12543,6 +12822,7 @@ async function exportMoments(decryptedDir, opts) {
   return { path, filename: name, count: filtered.length };
 }
 async function exportAllSessions(decryptedDir, opts) {
+  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
   const env = querySessions(decryptedDir);
   const sessions = env.sessions.slice(0, 1e3);
   const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join51(dirname14(decryptedDir), "exports");
@@ -12552,8 +12832,11 @@ async function exportAllSessions(decryptedDir, opts) {
   const seen = /* @__PURE__ */ new Set();
   let total = 0;
   await writeZipAtomic(path, async (zip) => {
-    for (const s of sessions) {
-      const msgs = collectMessages(decryptedDir, s.username, 0);
+    for (let i = 0; i < sessions.length; i += 1) {
+      const s = sessions[i];
+      throwIfCancelled(ctrl.signal);
+      reportProgress(ctrl, "sessions", i, sessions.length);
+      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl);
       const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
       const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
       let name = safeName + "_" + uid + ".txt";
@@ -12565,10 +12848,11 @@ async function exportAllSessions(decryptedDir, opts) {
       seen.add(name);
       if (msgs.length === 0) {
         await zip.addFile(name, "\uFF08\u65E0\u6D88\u606F\uFF09\n");
-        continue;
+      } else {
+        await zip.addFile(name, formatTxt(msgs, s.username));
+        total += msgs.length;
       }
-      await zip.addFile(name, formatTxt(msgs, s.username));
-      total += msgs.length;
+      reportProgress(ctrl, "sessions", i + 1, sessions.length);
     }
   });
   return { path, filename, count: total };
@@ -14735,7 +15019,7 @@ function syntheticIntentAccuracy() {
 }
 
 // src/backend/wechat-data/src/query/backup.ts
-import { closeSync as closeSync5, cpSync as cpSync3, createReadStream, createWriteStream as createWriteStream3, existsSync as existsSync45, mkdirSync as mkdirSync14, openSync as openSync5, readSync as readSync5, readdirSync as readdirSync27, rmSync as rmSync7, statSync as statSync19, writeFileSync as writeFileSync11 } from "node:fs";
+import { closeSync as closeSync5, cpSync as cpSync3, createReadStream as createReadStream2, existsSync as existsSync45, mkdirSync as mkdirSync14, openSync as openSync5, readSync as readSync5, readdirSync as readdirSync27, renameSync as renameSync6, rmSync as rmSync7, statSync as statSync19, writeFileSync as writeFileSync11 } from "node:fs";
 import { dirname as dirname16, join as join55, relative as relative3 } from "node:path";
 import { createCipheriv, createDecipheriv as createDecipheriv5, createHmac as createHmac2, randomBytes, scryptSync } from "node:crypto";
 var MAGIC = Buffer.from("DSHWCB1\n", "utf8");
@@ -14905,27 +15189,44 @@ function createBackup(decryptedDir) {
   const dir = backupDir(decryptedDir);
   mkdirSync14(dir, { recursive: true });
   const target = join55(dir, name);
-  if (existsSync45(target)) rmSync7(target, { recursive: true, force: true });
-  mkdirSync14(target, { recursive: true });
-  if (existsSync45(decryptedDir)) {
-    for (const sub of readdirSync27(decryptedDir, { withFileTypes: true })) {
-      if (!sub.isDirectory()) continue;
-      if (sub.name.startsWith(".")) continue;
-      try {
-        cpSync3(join55(decryptedDir, sub.name), join55(target, sub.name), { recursive: true });
-      } catch {
+  const tmp = partialPath(target);
+  mkdirSync14(tmp, { recursive: true });
+  const failed = [];
+  try {
+    if (existsSync45(decryptedDir)) {
+      for (const sub of readdirSync27(decryptedDir, { withFileTypes: true })) {
+        if (!sub.isDirectory()) continue;
+        if (sub.name.startsWith(".")) continue;
+        try {
+          cpSync3(join55(decryptedDir, sub.name), join55(tmp, sub.name), { recursive: true });
+        } catch (e) {
+          failed.push(sub.name + "\uFF08" + e.message + "\uFF09");
+        }
       }
     }
+    if (failed.length > 0) {
+      throw new Error("\u5907\u4EFD\u4E0D\u5B8C\u6574\uFF1A" + String(failed.length) + " \u4E2A\u5B50\u76EE\u5F55\u590D\u5236\u5931\u8D25 \u2014\u2014 " + failed.join("\uFF1B"));
+    }
+    if (existsSync45(target)) rmSync7(target, { recursive: true, force: true });
+    renameSync6(tmp, target);
+  } catch (e) {
+    try {
+      rmSync7(tmp, { recursive: true, force: true });
+    } catch {
+    }
+    throw e;
   }
   const st = statSync19(target);
   return { name, path: target, size: dirSize(target), modified: Math.floor(st.mtimeMs / 1e3), kind: "dir" };
 }
-async function createEncryptedBackup(decryptedDir, password) {
+async function createEncryptedBackup(decryptedDir, password, ctrl) {
+  throwIfCancelled(ctrl?.signal);
   const ts2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").slice(0, 14);
   const name = "wechat_backup_" + ts2 + ".wcb";
   const dir = backupDir(decryptedDir);
   mkdirSync14(dir, { recursive: true });
   const target = join55(dir, name);
+  const tmp = partialPath(target);
   const salt = randomBytes(SALT_LEN);
   const key = scryptSync(password, salt, 32);
   const files = collectFiles(decryptedDir);
@@ -14939,32 +15240,46 @@ async function createEncryptedBackup(decryptedDir, password) {
   };
   const headerBuf = Buffer.from(JSON.stringify(header), "utf8");
   const mac = createHmac2("sha256", key).update(headerBuf).digest();
-  const out = createWriteStream3(target);
-  out.write(MAGIC);
-  out.write(salt);
-  const lenBuf = Buffer.alloc(4);
-  lenBuf.writeUInt32BE(headerBuf.length);
-  out.write(lenBuf);
-  out.write(headerBuf);
-  out.write(mac);
-  for (let i = 0; i < files.length; i += 1) {
-    const f = header.files[i];
-    const src = files[i];
-    if (!f || !src) continue;
-    const iv = Buffer.from(f.iv, "base64");
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    for await (const chunk of createReadStream(src.abs)) {
-      out.write(cipher.update(chunk));
+  const sink = await StreamWriter.create(tmp);
+  let written = 0;
+  try {
+    const put = async (buf) => {
+      await sink.write(buf);
+      written += buf.length;
+      reportProgress(ctrl, "write", written, 0);
+    };
+    await put(MAGIC);
+    await put(salt);
+    const lenBuf = Buffer.alloc(4);
+    lenBuf.writeUInt32BE(headerBuf.length);
+    await put(lenBuf);
+    await put(headerBuf);
+    await put(mac);
+    for (let i = 0; i < files.length; i += 1) {
+      throwIfCancelled(ctrl?.signal);
+      const f = header.files[i];
+      const src = files[i];
+      if (!f || !src) continue;
+      const iv = Buffer.from(f.iv, "base64");
+      const cipher = createCipheriv("aes-256-gcm", key, iv);
+      for await (const chunk of createReadStream2(src.abs)) {
+        throwIfCancelled(ctrl?.signal);
+        await put(cipher.update(chunk));
+      }
+      await put(cipher.final());
+      await put(cipher.getAuthTag());
+      reportProgress(ctrl, "files", i + 1, files.length);
     }
-    out.write(cipher.final());
-    out.write(cipher.getAuthTag());
+    await sink.end();
+    renameSync6(tmp, target);
+  } catch (e) {
+    await sink.abort();
+    try {
+      rmSync7(tmp, { force: true });
+    } catch {
+    }
+    throw e;
   }
-  await new Promise((resolve3, reject) => {
-    out.end(() => {
-      resolve3();
-    });
-    out.on("error", reject);
-  });
   const st = statSync19(target);
   return { name, path: target, size: st.size, modified: Math.floor(st.mtimeMs / 1e3), kind: "enc" };
 }
@@ -16787,14 +17102,25 @@ import { join as join69 } from "node:path";
 
 // src/backend/wechat-data/src/query/wechat-tasks.ts
 import { DatabaseSync as DatabaseSync43 } from "node:sqlite";
+import { mkdirSync as mkdirSync15 } from "node:fs";
 import { dirname as dirname20, join as join68 } from "node:path";
 function dbPath3(decryptedDir) {
   return join68(dirname20(decryptedDir), "wechat_tasks.db");
 }
 function openStore3(decryptedDir) {
-  const db = new DatabaseSync43(dbPath3(decryptedDir));
+  const file = dbPath3(decryptedDir);
+  try {
+    mkdirSync15(dirname20(file), { recursive: true });
+  } catch (e) {
+    console.warn("[wechat-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText(e));
+  }
+  const db = new DatabaseSync43(file);
   db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', due_at INTEGER, source_username TEXT NOT NULL DEFAULT '', source_local_id INTEGER, message_time INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   return db;
+}
+function errorText(e) {
+  const msg = e?.message;
+  return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
 function cellStr11(v) {
   if (typeof v === "string") return v;
@@ -16824,8 +17150,10 @@ function listTasks(decryptedDir) {
     db.close();
     const items = rows.map(rowToTask);
     return { items, total: items.length };
-  } catch {
-    return { items: [], total: 0 };
+  } catch (e) {
+    const readError = errorText(e);
+    console.warn("[wechat-tasks] \u5F85\u529E\u5E93\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u5F85\u529E\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath3(decryptedDir) + ": " + readError);
+    return { items: [], total: 0, readError };
   }
 }
 function insertTask(decryptedDir, task) {
@@ -18028,14 +18356,18 @@ function clearAllSessionDrafts(decryptedDir) {
 
 // src/backend/wechat-data/src/query/notes.ts
 import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
-import { mkdirSync as mkdirSync15 } from "node:fs";
+import { mkdirSync as mkdirSync16 } from "node:fs";
 import { dirname as dirname22, join as join73 } from "node:path";
 function dbPath4(decryptedDir) {
   return join73(dirname22(decryptedDir), "wechat_notes.db");
 }
 function openStore4(decryptedDir) {
   const file = dbPath4(decryptedDir);
-  mkdirSync15(dirname22(file), { recursive: true });
+  try {
+    mkdirSync16(dirname22(file), { recursive: true });
+  } catch (e) {
+    console.warn("[notes] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText2(e));
+  }
   const db = new DatabaseSync49(file);
   db.exec("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', source_kind TEXT NOT NULL DEFAULT 'manual', source_username TEXT NOT NULL DEFAULT '', source_question TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   return db;
@@ -18045,6 +18377,10 @@ function cellStr15(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
+}
+function errorText2(e) {
+  const msg = e?.message;
+  return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
 function normalizeTitle(s) {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
@@ -18138,8 +18474,10 @@ function listNotes(decryptedDir, options) {
     const totalRow = db.prepare("SELECT COUNT(*) AS n FROM notes").get();
     db.close();
     return { items, total: Number(totalRow?.n ?? items.length) };
-  } catch {
-    return { items: [], total: 0 };
+  } catch (e) {
+    const readError = errorText2(e);
+    console.warn("[notes] \u7B14\u8BB0\u5E93\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u7B14\u8BB0\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath4(decryptedDir) + ": " + readError);
+    return { items: [], total: 0, readError };
   }
 }
 function saveNote(decryptedDir, input) {
@@ -18208,8 +18546,10 @@ function buildKnowledgeGraph(decryptedDir, names) {
     const db = openStore4(decryptedDir);
     rows = db.prepare("SELECT * FROM notes ORDER BY updated_at DESC, id DESC").all();
     db.close();
-  } catch {
-    return empty;
+  } catch (e) {
+    const readError = errorText2(e);
+    console.warn("[notes] \u77E5\u8BC6\u56FE\u8C31\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u7B14\u8BB0\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath4(decryptedDir) + ": " + readError);
+    return { ...empty, readError };
   }
   const all = rows.map(rowToNote);
   const idByKey = /* @__PURE__ */ new Map();
@@ -18289,12 +18629,23 @@ function buildKnowledgeGraph(decryptedDir, names) {
 
 // src/backend/wechat-data/src/query/summary-tasks.ts
 import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
+import { mkdirSync as mkdirSync17 } from "node:fs";
 import { dirname as dirname23, join as join74 } from "node:path";
 function dbPath5(decryptedDir) {
   return join74(dirname23(decryptedDir), "daily_summary.db");
 }
+function errorText3(e) {
+  const msg = e?.message;
+  return typeof msg === "string" && msg !== "" ? msg : String(e);
+}
 function openStore5(decryptedDir) {
-  const db = new DatabaseSync50(dbPath5(decryptedDir));
+  const file = dbPath5(decryptedDir);
+  try {
+    mkdirSync17(dirname23(file), { recursive: true });
+  } catch (e) {
+    console.warn("[summary-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText3(e));
+  }
+  const db = new DatabaseSync50(file);
   db.exec("CREATE TABLE IF NOT EXISTS summary_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', custom_prompt TEXT NOT NULL DEFAULT '', schedule_time TEXT NOT NULL DEFAULT '08:00', enabled INTEGER NOT NULL DEFAULT 1, last_run_at INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   db.exec("CREATE TABLE IF NOT EXISTS summary_records (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', summary_date TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', summary TEXT NOT NULL DEFAULT '', char_count INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'done', error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)");
   return db;
@@ -18335,8 +18686,10 @@ function listSummaryTasks(decryptedDir) {
     db.close();
     const items = rows.map(rowToTask2);
     return { items, total: items.length };
-  } catch {
-    return { items: [], total: 0 };
+  } catch (e) {
+    const readError = errorText3(e);
+    console.warn("[summary-tasks] \u6458\u8981\u4EFB\u52A1\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u4EFB\u52A1\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath5(decryptedDir) + ": " + readError);
+    return { items: [], total: 0, readError };
   }
 }
 function saveSummaryTask(decryptedDir, task) {
@@ -18430,8 +18783,10 @@ function listSummaryRecords(decryptedDir, taskId) {
       createdAt: Number(r["created_at"] ?? 0)
     }));
     return { items, total: items.length };
-  } catch {
-    return { items: [], total: 0 };
+  } catch (e) {
+    const readError = errorText3(e);
+    console.warn("[summary-tasks] \u6458\u8981\u8BB0\u5F55\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u8BB0\u5F55\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath5(decryptedDir) + ": " + readError);
+    return { items: [], total: 0, readError };
   }
 }
 
@@ -18478,14 +18833,23 @@ function resolveDirs() {
   bootstrapWechatData();
   return { decrypted: resolveDecryptedDir(), decoded: resolveDecodedDir() };
 }
+var STREAM_JOB_CAP = 20;
+var EXPORT_PROGRESS_EVENT = "wechat-export/progress";
+var ASK_FEEDBACK_DEDUPE_MS = 1e4;
+var ASK_FEEDBACK_CAP = 200;
+var IMAGE_BATCH_MAX = 200;
+var CACHED_IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif"];
+function normalizeJobId(jobId) {
+  return typeof jobId === "string" ? jobId.trim().slice(0, 64) : "";
+}
 function cellStr17(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
 }
-var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _searchUnified_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getHandoffReminds_dec, _getGroupInsights_dec, _getCalls_dec, _getDbHealth_dec, _getContact360_dec, _getAssetInsights_dec, _generatePeriodSummary_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getArticleCover_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrl_dec, _getDbStatus_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _openPath_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _listSummaryRecords_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _exportCsv_dec, _exportMoments_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _resetEditedMessage_dec, _editChatMessage_dec, _listEditedMessages_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _resetRetrievalWeights_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _optimizeAskQuestion_dec, _askWechat_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _searchMessages_dec, _buildSearchIndex_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFiles_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _getKnowledgeGraph_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getGraph_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getAnnual_dec, _getStorageStats_dec, _getEmoticons_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
-var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteService, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getEmoticons_dec = [Remote("getEmoticons")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getWechatConfig_dec = [Remote("getWechatConfig")], _getPrivacyScan_dec = [Remote("getPrivacyScan")], _getGraph_dec = [Remote("getGraph")], _getNotes_dec = [Remote("getNotes")], _saveNote_dec = [Remote("saveNote")], _deleteNote_dec = [Remote("deleteNote")], _getKnowledgeGraph_dec = [Remote("getKnowledgeGraph")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getFiles_dec = [Remote("getFiles")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _buildSearchIndex_dec = [Remote("buildSearchIndex")], _searchMessages_dec = [Remote("searchMessages")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _getVoiceInfo_dec = [Remote("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote("getVoiceDataUrl")], _getVideoInfo_dec = [Remote("getVideoInfo")], _exportSessionMessages_dec = [Remote("exportSessionMessages")], _askWechat_dec = [Remote("askWechat")], _optimizeAskQuestion_dec = [Remote("optimizeAskQuestion")], _listBackups_dec = [Remote("listBackups")], _previewBackup_dec = [Remote("previewBackup")], _createBackup_dec = [Remote("createBackup")], _deleteBackup_dec = [Remote("deleteBackup")], _getRetrievalStatus_dec = [Remote("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote("listRetrievalFeedback")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _evaluateRetrieval_dec = [Remote("evaluateRetrieval")], _generateDailySummary_dec = [Remote("generateDailySummary")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _resetEditedMessage_dec = [Remote("resetEditedMessage")], _listLlmProviders_dec = [Remote("listLlmProviders")], _listLlmModels_dec = [Remote("listLlmModels")], _exportAnnualReport_dec = [Remote("exportAnnualReport")], _exportAllSessions_dec = [Remote("exportAllSessions")], _exportMoments_dec = [Remote("exportMoments")], _exportCsv_dec = [Remote("exportCsv")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryTasks_dec = [Remote("listSummaryTasks")], _saveSummaryTask_dec = [Remote("saveSummaryTask")], _deleteSummaryTask_dec = [Remote("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote("toggleSummaryTask")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _deleteSummaryRecord_dec = [Remote("deleteSummaryRecord")], _runSummaryTask_dec = [Remote("runSummaryTask")], _getAvatar_dec = [Remote("getAvatar")], _getAvatarsLocal_dec = [Remote("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote("getWechatConfigFull")], _saveWechatConfig_dec = [Remote("saveWechatConfig")], _getWhisperStatus_dec = [Remote("getWhisperStatus")], _downloadWhisperModel_dec = [Remote("downloadWhisperModel")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _generateKeysFile_dec = [Remote("generateKeysFile")], _getWechatKeysInfo_dec = [Remote("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote("autoGetDbKey")], _autoGetImageKey_dec = [Remote("autoGetImageKey")], _openPath_dec = [Remote("openPath")], _openConfig_dec = [Remote("openConfig")], _verifyImageKey_dec = [Remote("verifyImageKey")], _decryptAllDatabases_dec = [Remote("decryptAllDatabases")], _decryptAllImages_dec = [Remote("decryptAllImages")], _getDecryptStatus_dec = [Remote("getDecryptStatus")], _installWhisperEngine_dec = [Remote("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote("transcribeVoiceBatch")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getDbStatus_dec = [Remote("getDbStatus")], _getImageDataUrl_dec = [Remote("getImageDataUrl")], _getSnsImageDataUrl_dec = [Remote("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote("getEmoticonDataUrl")], _getArticleCover_dec = [Remote("getArticleCover")], _getMessageFile_dec = [Remote("getMessageFile")], _addTask_dec = [Remote("addTask")], _clearOperationLog_dec = [Remote("clearOperationLog")], _clearPrivacyAudit_dec = [Remote("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote("createEncryptedBackup")], _deleteTask_dec = [Remote("deleteTask")], _extractTasks_dec = [Remote("extractTasks")], _generatePeriodSummary_dec = [Remote("generatePeriodSummary")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getDbHealth_dec = [Remote("getDbHealth")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getHandoffReminds_dec = [Remote("getHandoffReminds")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _getOperationLog_dec = [Remote("getOperationLog")], _getPrivacyAuditRows_dec = [Remote("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote("exportSnsVideo")], _listTasks_dec = [Remote("listTasks")], _restoreBackup_dec = [Remote("restoreBackup")], _searchUnified_dec = [Remote("searchUnified")], _setPrivacyState_dec = [Remote("setPrivacyState")], _setTaskStatus_dec = [Remote("setTaskStatus")], _syncHandoffTasks_dec = [Remote("syncHandoffTasks")], _a) {
+var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _searchUnified_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getHandoffReminds_dec, _getGroupInsights_dec, _getCalls_dec, _getDbHealth_dec, _getContact360_dec, _getAssetInsights_dec, _generatePeriodSummary_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getArticleCover_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _openPath_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _listSummaryRecords_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _resetEditedMessage_dec, _editChatMessage_dec, _listEditedMessages_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _resetRetrievalWeights_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _optimizeAskQuestion_dec, _askWechat_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _searchMessages_dec, _buildSearchIndex_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFiles_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _getKnowledgeGraph_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getGraph_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getAnnual_dec, _getStorageStats_dec, _getEmoticons_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
+var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteService, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getEmoticons_dec = [Remote("getEmoticons")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getWechatConfig_dec = [Remote("getWechatConfig")], _getPrivacyScan_dec = [Remote("getPrivacyScan")], _getGraph_dec = [Remote("getGraph")], _getNotes_dec = [Remote("getNotes")], _saveNote_dec = [Remote("saveNote")], _deleteNote_dec = [Remote("deleteNote")], _getKnowledgeGraph_dec = [Remote("getKnowledgeGraph")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getFiles_dec = [Remote("getFiles")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _buildSearchIndex_dec = [Remote("buildSearchIndex")], _searchMessages_dec = [Remote("searchMessages")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _getVoiceInfo_dec = [Remote("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote("getVoiceDataUrl")], _getVideoInfo_dec = [Remote("getVideoInfo")], _exportSessionMessages_dec = [Remote("exportSessionMessages")], _askWechat_dec = [Remote("askWechat")], _optimizeAskQuestion_dec = [Remote("optimizeAskQuestion")], _listBackups_dec = [Remote("listBackups")], _previewBackup_dec = [Remote("previewBackup")], _createBackup_dec = [Remote("createBackup")], _deleteBackup_dec = [Remote("deleteBackup")], _getRetrievalStatus_dec = [Remote("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote("listRetrievalFeedback")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _evaluateRetrieval_dec = [Remote("evaluateRetrieval")], _generateDailySummary_dec = [Remote("generateDailySummary")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _resetEditedMessage_dec = [Remote("resetEditedMessage")], _listLlmProviders_dec = [Remote("listLlmProviders")], _listLlmModels_dec = [Remote("listLlmModels")], _exportAnnualReport_dec = [Remote("exportAnnualReport")], _exportAllSessions_dec = [Remote("exportAllSessions")], _cancelExportJob_dec = [Remote("cancelExportJob")], _getExportProgress_dec = [Remote("getExportProgress")], _exportMoments_dec = [Remote("exportMoments")], _exportCsv_dec = [Remote("exportCsv")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryTasks_dec = [Remote("listSummaryTasks")], _saveSummaryTask_dec = [Remote("saveSummaryTask")], _deleteSummaryTask_dec = [Remote("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote("toggleSummaryTask")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _deleteSummaryRecord_dec = [Remote("deleteSummaryRecord")], _runSummaryTask_dec = [Remote("runSummaryTask")], _getAvatar_dec = [Remote("getAvatar")], _getAvatarsLocal_dec = [Remote("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote("getWechatConfigFull")], _saveWechatConfig_dec = [Remote("saveWechatConfig")], _getWhisperStatus_dec = [Remote("getWhisperStatus")], _downloadWhisperModel_dec = [Remote("downloadWhisperModel")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _generateKeysFile_dec = [Remote("generateKeysFile")], _getWechatKeysInfo_dec = [Remote("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote("autoGetDbKey")], _autoGetImageKey_dec = [Remote("autoGetImageKey")], _openPath_dec = [Remote("openPath")], _openConfig_dec = [Remote("openConfig")], _verifyImageKey_dec = [Remote("verifyImageKey")], _decryptAllDatabases_dec = [Remote("decryptAllDatabases")], _decryptAllImages_dec = [Remote("decryptAllImages")], _getDecryptStatus_dec = [Remote("getDecryptStatus")], _installWhisperEngine_dec = [Remote("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote("transcribeVoiceBatch")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getDbStatus_dec = [Remote("getDbStatus")], _getImageDataUrl_dec = [Remote("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote("getEmoticonDataUrl")], _getArticleCover_dec = [Remote("getArticleCover")], _getMessageFile_dec = [Remote("getMessageFile")], _addTask_dec = [Remote("addTask")], _clearOperationLog_dec = [Remote("clearOperationLog")], _clearPrivacyAudit_dec = [Remote("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote("createEncryptedBackup")], _deleteTask_dec = [Remote("deleteTask")], _extractTasks_dec = [Remote("extractTasks")], _generatePeriodSummary_dec = [Remote("generatePeriodSummary")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getDbHealth_dec = [Remote("getDbHealth")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getHandoffReminds_dec = [Remote("getHandoffReminds")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _getOperationLog_dec = [Remote("getOperationLog")], _getPrivacyAuditRows_dec = [Remote("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote("exportSnsVideo")], _listTasks_dec = [Remote("listTasks")], _restoreBackup_dec = [Remote("restoreBackup")], _searchUnified_dec = [Remote("searchUnified")], _setPrivacyState_dec = [Remote("setPrivacyState")], _setTaskStatus_dec = [Remote("setTaskStatus")], _syncHandoffTasks_dec = [Remote("syncHandoffTasks")], _a) {
   constructor(ctx) {
     super(ctx, "wechatData");
     __runInitializers(_init, 5, this);
@@ -18523,6 +18887,17 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     this.whisperDownload = null;
     /** Active voice batch transcription (polled by the settings panel). */
     this.whisperTranscribing = { active: false, done: 0, total: 0, failed: 0, skipped: 0, current: "" };
+    /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
+    this._streamJobs = /* @__PURE__ */ new Map();
+    /**
+     * 反馈去重窗口（N27）：键 → 到期时间。
+     *
+     * 为什么不是 `inflightXxx: Set` 那种「在飞合并」的闸：`submitAskFeedback` 是**同步** RPC，
+     * 函数体在事件循环里一口气跑完，两个「并发」调用不会交错 ⇒ 在飞表恒为空，那是个假闸。
+     * 真正的重复是「同一轮被提交两次」且两次都真跑完（多一条反馈记录 + 按重复特征重算权重 +
+     * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
+     */
+    this._askFeedbackSeen = /* @__PURE__ */ new Map();
     this._ctx = ctx;
     this._dirs = resolveDirs();
     const decrypted = this._dirs.decrypted;
@@ -18567,6 +18942,51 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
       this._selfUsernameKey = key;
     }
     return this._selfUsername;
+  }
+  /**
+   * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
+   *
+   * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
+   * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
+   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
+   *   旧调用方的行为完全不变）。
+   * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
+   */
+  streamControl(jobId) {
+    const id = normalizeJobId(jobId);
+    if (!id) return {};
+    if (!this._streamJobs.has(id) && this._streamJobs.size >= STREAM_JOB_CAP) {
+      const first = this._streamJobs.keys().next();
+      if (!first.done && first.value !== void 0) this._streamJobs.delete(first.value);
+    }
+    const job = this._streamJobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false };
+    job.ctrl = new AbortController();
+    job.progress = null;
+    job.finished = false;
+    delete job.error;
+    this._streamJobs.set(id, job);
+    const ctx = this._ctx;
+    return {
+      signal: job.ctrl.signal,
+      onProgress: (p) => {
+        job.progress = { phase: p.phase, done: p.done, total: p.total };
+        try {
+          ctx.emit(EXPORT_PROGRESS_EVENT, { jobId: id, phase: p.phase, done: p.done, total: p.total });
+        } catch {
+        }
+      }
+    };
+  }
+  /**
+   * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
+   * @param jobId - 任务标识。
+   * @param error - 失败/取消原因；成功时省略。
+   */
+  finishStreamJob(jobId, error) {
+    const job = this._streamJobs.get(jobId);
+    if (!job) return;
+    job.finished = true;
+    if (error) job.error = error;
   }
   /**
    * Append one operation-log row. Metadata only — never message bodies or
@@ -18787,21 +19207,9 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
       rawWechatBase(this._dirs.decrypted) || void 0
     );
   }
-  exportSessionMessages(options) {
+  async exportSessionMessages(options) {
     try {
-      const r = exportSessionMessages(
-        this._dirs.decrypted,
-        options.username,
-        options.format,
-        options.count,
-        options.dir,
-        options.types,
-        options.richTypes,
-        options.from,
-        options.to,
-        options.filename,
-        options.zip
-      );
+      const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options });
       this.op("export", "export_session_messages", "ok", options.username, `\u5171 ${r.count} \u6761`);
       return r;
     } catch (e) {
@@ -19275,6 +19683,21 @@ ${contextBlock}
   submitAskFeedback(options) {
     const cfg = loadRetrievalConfig(this._dirs.decrypted);
     if (!cfg.feedback.enabled) return { ok: false, message: "\u53CD\u9988\u95ED\u73AF\u5DF2\u5728\u68C0\u7D22\u914D\u7F6E\u91CC\u5173\u95ED" };
+    const dedupeKey = [
+      options.retrievalId ?? "",
+      options.question ?? "",
+      String(options.answer ?? "").slice(0, 120),
+      options.rating,
+      (options.useful ?? []).join(","),
+      (options.useless ?? []).join(",")
+    ].join("\0");
+    const now = Date.now();
+    const until = this._askFeedbackSeen.get(dedupeKey);
+    if (until !== void 0 && until > now) {
+      this.op("task", "ask_feedback", "ok", options.rating, "\u91CD\u590D\u63D0\u4EA4\uFF08\u540C\u4E00\u8F6E\uFF0C\u5DF2\u5FFD\u7565\uFF09");
+      return { ok: false, message: "\u8BE5\u53CD\u9988\u5DF2\u5728\u5904\u7406\uFF08\u540C\u4E00\u8F6E\u91CD\u590D\u63D0\u4EA4\u5DF2\u5FFD\u7565\uFF0C\u672A\u91CD\u590D\u8BB0\u5F55\uFF09" };
+    }
+    boundedSet(this._askFeedbackSeen, dedupeKey, now + ASK_FEEDBACK_DEDUPE_MS, ASK_FEEDBACK_CAP);
     const trace = options.retrievalId ? this._askTrace.get(options.retrievalId) : void 0;
     const keyOf2 = (i) => trace && i >= 1 && i <= trace.citations.length ? trace.citations[i - 1] : null;
     const pick = (idx) => {
@@ -19502,21 +19925,68 @@ ${contextBlock}
     }
   }
   async exportAllSessions(options) {
+    const jobId = normalizeJobId(options?.jobId);
     try {
-      const r = await exportAllSessions(this._dirs.decrypted, options);
+      const r = await exportAllSessions(this._dirs.decrypted, {
+        ...options?.dir !== void 0 ? { dir: options.dir } : {},
+        ...options?.filename !== void 0 ? { filename: options.filename } : {},
+        ...this.streamControl(jobId)
+      });
+      this.finishStreamJob(jobId);
       this.op("export", "export_all_sessions", "ok", "", `\u5171 ${r.count} \u6761`);
       return r;
     } catch (e) {
+      this.finishStreamJob(jobId, e.message);
       this.op("export", "export_all_sessions", "fail", "", e.message);
       throw e;
     }
   }
+  cancelExportJob(options) {
+    const id = normalizeJobId(options?.jobId);
+    const job = id ? this._streamJobs.get(id) : void 0;
+    if (!job) return { ok: false, error: "\u6CA1\u6709\u8BE5\u5BFC\u51FA\u4EFB\u52A1\uFF08jobId \u4E0D\u5B58\u5728\uFF0C\u6216\u8FDB\u7A0B\u5DF2\u91CD\u542F\uFF09" };
+    if (job.finished) return { ok: false, error: "\u8BE5\u5BFC\u51FA\u4EFB\u52A1\u5DF2\u7ED3\u675F" };
+    job.ctrl.abort();
+    this.op("export", "cancel_export_job", "ok", id);
+    return { ok: true };
+  }
+  getExportProgress(options) {
+    const id = normalizeJobId(options?.jobId);
+    const job = id ? this._streamJobs.get(id) : void 0;
+    if (!job) return { found: false, phase: "", done: 0, total: 0, finished: true };
+    return {
+      found: true,
+      phase: job.progress?.phase ?? "",
+      done: job.progress?.done ?? 0,
+      total: job.progress?.total ?? 0,
+      finished: job.finished,
+      ...job.error ? { error: job.error } : {}
+    };
+  }
   async exportMoments(options) {
+    const jobId = normalizeJobId(options?.jobId);
     try {
-      const r = await exportMoments(this._dirs.decrypted, options);
+      const r = await exportMoments(this._dirs.decrypted, {
+        ...options?.format !== void 0 ? { format: options.format } : {},
+        ...options?.username !== void 0 ? { username: options.username } : {},
+        ...options?.authorName !== void 0 ? { authorName: options.authorName } : {},
+        ...options?.q !== void 0 ? { q: options.q } : {},
+        ...options?.images !== void 0 ? { images: options.images } : {},
+        ...options?.media !== void 0 ? { media: options.media } : {},
+        ...options?.month !== void 0 ? { month: options.month } : {},
+        ...options?.mine !== void 0 ? { mine: options.mine } : {},
+        ...options?.zip !== void 0 ? { zip: options.zip } : {},
+        ...options?.from !== void 0 ? { from: options.from } : {},
+        ...options?.to !== void 0 ? { to: options.to } : {},
+        ...options?.dir !== void 0 ? { dir: options.dir } : {},
+        ...options?.filename !== void 0 ? { filename: options.filename } : {},
+        ...this.streamControl(jobId)
+      });
+      this.finishStreamJob(jobId);
       this.op("export", "export_moments", "ok", options?.username ?? "", `\u5171 ${r.count} \u6761`);
       return r;
     } catch (e) {
+      this.finishStreamJob(jobId, e.message);
       this.op("export", "export_moments", "fail", options?.username ?? "", e.message);
       throw e;
     }
@@ -20089,6 +20559,71 @@ ${contextBlock}
     const xorKey = Number(cfg["image_xor_key"] ?? 255);
     return decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId, base, aesKey, xorKey);
   }
+  getImageDataUrlsBatch(options) {
+    const decrypted = this._dirs.decrypted;
+    const decoded = this._dirs.decoded;
+    const base = rawWechatBase(decrypted) || void 0;
+    const cfg = getConfig(decrypted);
+    const aesKey = typeof cfg["image_aes_key"] === "string" && cfg["image_aes_key"].length > 0 ? cfg["image_aes_key"] : void 0;
+    const xorKey = Number(cfg["image_xor_key"] ?? 255);
+    const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX);
+    if (base) this.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey);
+    return {
+      items: items.map((it) => ({
+        username: it.username,
+        localId: it.localId,
+        ...decodeImageDataUrl(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey)
+      }))
+    };
+  }
+  /**
+   * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
+   *
+   * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
+   * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
+   * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
+   * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
+   *
+   * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
+   * 命中已有缓存的文件不重写。
+   * @param decryptedDir - 解密库目录（hardlink.db 所在）。
+   * @param decodedDir - 解码缓存根。
+   * @param baseDir - 微信原始目录（候选路径的根）。
+   * @param items - 待预热的 (username, localId) 列表。
+   * @param aesKey - V2 AES key。
+   * @param xorKey - XOR key 字节。
+   */
+  warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) {
+    try {
+      const md5ByItem = [];
+      for (const it of items) {
+        const hint = resolveImageResourceHint(decryptedDir, it.username, it.localId);
+        md5ByItem.push(hint.md5 ?? "");
+      }
+      const wanted = md5ByItem.filter((m) => m.length === 32);
+      if (wanted.length === 0) return;
+      const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted);
+      if (paths.size === 0) return;
+      const aesBytes = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : null;
+      for (let i = 0; i < items.length; i += 1) {
+        const md5 = md5ByItem[i] ?? "";
+        const src = md5 ? paths.get(md5.toLowerCase()) : void 0;
+        if (!src) continue;
+        const it = items[i];
+        const outDir = join75(decodedDir, it.username);
+        const cached = CACHED_IMAGE_EXTS.some((ext) => existsSync60(join75(decodedDir, md5 + "." + ext)) || existsSync60(join75(outDir, md5 + "." + ext)));
+        if (cached) continue;
+        try {
+          const dec = decodeDatBytes(new Uint8Array(readFileSync24(src)), aesBytes, xorKey);
+          if ("error" in dec || dec.format === "hevc") continue;
+          mkdirSync18(outDir, { recursive: true });
+          writeFileSync12(join75(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
   getSnsImageDataUrl(options) {
     const base = rawWechatBase(this._dirs.decrypted) || void 0;
     const cfg = getConfig(this._dirs.decrypted);
@@ -20139,11 +20674,14 @@ ${contextBlock}
     return r;
   }
   async createEncryptedBackup(options) {
+    const jobId = normalizeJobId(options?.jobId);
     try {
-      const entry = await createEncryptedBackup(this._dirs.decrypted, options.password);
+      const entry = await createEncryptedBackup(this._dirs.decrypted, options.password, this.streamControl(jobId));
+      this.finishStreamJob(jobId);
       this.op("backup", "create_encrypted_backup", "ok", entry.name);
       return { ok: true, name: entry.name };
     } catch (e) {
+      this.finishStreamJob(jobId, e.message);
       this.op("backup", "create_encrypted_backup", "fail", "", e.message);
       return { ok: false, error: e.message };
     }
@@ -20428,6 +20966,8 @@ __decorateElement(_init, 1, "listLlmProviders", _listLlmProviders_dec, _WechatDa
 __decorateElement(_init, 1, "listLlmModels", _listLlmModels_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "exportAnnualReport", _exportAnnualReport_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "exportAllSessions", _exportAllSessions_dec, _WechatDataGateway);
+__decorateElement(_init, 1, "cancelExportJob", _cancelExportJob_dec, _WechatDataGateway);
+__decorateElement(_init, 1, "getExportProgress", _getExportProgress_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "exportMoments", _exportMoments_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "exportCsv", _exportCsv_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "clearSessionDraft", _clearSessionDraft_dec, _WechatDataGateway);
@@ -20468,6 +21008,7 @@ __decorateElement(_init, 1, "getAnnualReview", _getAnnualReview_dec, _WechatData
 __decorateElement(_init, 1, "getAnnualReport", _getAnnualReport_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getDbStatus", _getDbStatus_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getImageDataUrl", _getImageDataUrl_dec, _WechatDataGateway);
+__decorateElement(_init, 1, "getImageDataUrlsBatch", _getImageDataUrlsBatch_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getSnsImageDataUrl", _getSnsImageDataUrl_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getFileImageDataUrl", _getFileImageDataUrl_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getEmoticonDataUrl", _getEmoticonDataUrl_dec, _WechatDataGateway);

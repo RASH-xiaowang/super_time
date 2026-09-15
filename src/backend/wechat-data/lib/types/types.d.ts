@@ -2007,5 +2007,21 @@ declare module '@deepseek-ai/cordis' {
             id: string;
             text: string;
         }): void;
+        /**
+         * 导出/加密备份的进度（M3）：payload 是 `{ jobId, phase, done, total }`。
+         *
+         * `jobId` 由渲染层在调用 `exportAllSessions` / `exportMoments` / `createEncryptedBackup`
+         * 时自己生成并回传 —— 函数与 AbortSignal 都过不了 IPC，所以进度与取消都靠这个标识
+         * （取消走 `cancelExportJob({ jobId })`，兜底读进度走 `getExportProgress({ jobId })`）。
+         * `total = 0` 表示总量未知（流式压缩阶段算不出来），渲染端据此显示不定量进度。
+         * @mode emit
+         * @param payload - 任务标识与本次进度。
+         */
+        'wechat-export/progress'(payload: {
+            jobId: string;
+            phase: string;
+            done: number;
+            total: number;
+        }): void;
     }
 }

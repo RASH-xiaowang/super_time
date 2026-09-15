@@ -8,6 +8,14 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import { type AnnualReview } from './query/annual-review.ts';
+/** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
+interface ImageBatchItem {
+    username: string;
+    localId: number;
+    url?: string;
+    format?: string;
+    error?: string;
+}
 /** Remote-only service exposing WeChat data queries. */
 export declare class WechatDataGateway extends TypertRemoteService {
     /** Services this gateway depends on at runtime (LLM + default model). */
@@ -38,6 +46,17 @@ export declare class WechatDataGateway extends TypertRemoteService {
     private whisperDownload;
     /** Active voice batch transcription (polled by the settings panel). */
     private whisperTranscribing;
+    /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
+    private readonly _streamJobs;
+    /**
+     * 反馈去重窗口（N27）：键 → 到期时间。
+     *
+     * 为什么不是 `inflightXxx: Set` 那种「在飞合并」的闸：`submitAskFeedback` 是**同步** RPC，
+     * 函数体在事件循环里一口气跑完，两个「并发」调用不会交错 ⇒ 在飞表恒为空，那是个假闸。
+     * 真正的重复是「同一轮被提交两次」且两次都真跑完（多一条反馈记录 + 按重复特征重算权重 +
+     * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
+     */
+    private readonly _askFeedbackSeen;
     /**
      * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
      *
@@ -47,6 +66,22 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @returns 登录账号 wxid；解析不到时为空串。
      */
     private selfUsername;
+    /**
+     * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
+     *
+     * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
+     * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
+     * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
+     *   旧调用方的行为完全不变）。
+     * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
+     */
+    private streamControl;
+    /**
+     * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
+     * @param jobId - 任务标识。
+     * @param error - 失败/取消原因；成功时省略。
+     */
+    private finishStreamJob;
     constructor(ctx: Context);
     /**
      * Append one operation-log row. Metadata only — never message bodies or
@@ -396,6 +431,10 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): VideoInfoResult;
     /**
      * Export a conversation messages to txt/csv/excel/html.
+     *
+     * M3：本入口改为 `async` 并走**流式**实现 —— 同步版必须「先把整份 xlsx 拼进内存」，
+     * 行数一大峰值就与行数成正比；`exportSessionMessagesStreamed` 把 sheet 逐块写进 zip 条目
+     * （峰值与行数无关）。契约没变：仍是 `Promise<ExportResult>`，客户端镜像无需改。
      * @param options - username, export format and optional message count.
      * @returns ExportResult: exported file path/count info.
      */
@@ -410,7 +449,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
         to?: number;
         filename?: string;
         zip?: boolean;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     /**
      * 构造「回答增量」事件推送器。
      *
@@ -534,8 +573,12 @@ export declare class WechatDataGateway extends TypertRemoteService {
      *
      * 反馈 → 特征归因 → 权重微调 → 落盘。权重**由全部历史反馈重算**（幂等、可重放），
      * 而不是在旧权重上累加 —— 累加会因为重复提交同一条反馈而漂移。
+     *
+     * N27：同一轮反馈在 10 秒窗口内的重复提交会被挡掉并返回可读的「已在处理」，
+     * 不再产生第二条反馈记录 / 第二次权重适配（前端闸门只管同一个面板的连点，
+     * 两个面板同时提交、旧版客户端重试、直接 RPC 调用都落到这里）。
      * @param options - retrievalId（AskResult 里回传）+ rating + 有用/无用引用序号。
-     * @returns 调参后的权重。
+     * @returns 调参后的权重；重复提交时 `ok:false` + `message`。
      */
     submitAskFeedback(options: {
         retrievalId?: string;
@@ -681,16 +724,50 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): ExportResult;
     /**
      * Export ALL sessions as a single txt ZIP archive (账号归档).
-     * @param options - optional dir/filename.
+     * @param options - optional dir/filename（+ 可选的 jobId：订阅 `wechat-export/progress` 进度并允许取消）.
      * @returns ExportResult: written zip path + total messages.
      */
     exportAllSessions(options?: {
         dir?: string;
         filename?: string;
+        jobId?: string;
     }): Promise<ExportResult>;
     /**
+     * Cancel one running export/backup job (M3).
+     *
+     * 渲染层点「取消」时调用：这里只唤醒 AbortController，真正的收尾（不留半成品）由
+     * query 层在各耗时循环的检查点完成（`throwIfCancelled` + temp+rename）。
+     * @param options - jobId the renderer passed to the export call.
+     * @returns ok when a running job was aborted; error otherwise.
+     */
+    cancelExportJob(options: {
+        jobId: string;
+    }): {
+        ok: boolean;
+        error?: string;
+    };
+    /**
+     * Poll one export/backup job's latest progress (M3).
+     *
+     * 为什么除了事件推送还要有这个轮询入口：进度事件要经过「宿主事件 → 渲染层」的中继，
+     * 而中继只对白名单事件名生效（见 `ui-app/ui-entry.tsx`）。轮询不依赖中继，是
+     * 「进度确实推得出去」的那条兜底路径。
+     * @param options - jobId the renderer passed to the export call.
+     * @returns 最近一次进度；`found:false` 表示 jobId 未知（如进程重启过）。
+     */
+    getExportProgress(options: {
+        jobId: string;
+    }): {
+        found: boolean;
+        phase: string;
+        done: number;
+        total: number;
+        finished: boolean;
+        error?: string;
+    };
+    /**
      * Export moments (朋友圈) with author + keyword + time filters.
-     * @param options - format/username/authorName/q/from/to/dir/filename.
+     * @param options - format/username/authorName/q/from/to/dir/filename (+ 可选的 jobId 订阅进度/取消).
      * @returns ExportResult: written file path + count.
      */
     exportMoments(options?: {
@@ -707,6 +784,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
         to?: number;
         dir?: string;
         filename?: string;
+        jobId?: string;
     }): Promise<ExportResult>;
     exportCsv(options: {
         kind: string;
@@ -1016,6 +1094,46 @@ export declare class WechatDataGateway extends TypertRemoteService {
         localId: number;
     }): ImageDataUrlResult;
     /**
+     * Decode a whole batch of message images to base64 data URLs (N16).
+     *
+     * 为什么需要批量入口：`getImageDataUrl` 是**一图一次 RPC**，而每张图内部的路径解析
+     * （`WHERE lower(md5) = ?`）在 `image_hardlink_info_v4` 上是全表扫 —— 实测 20 万行
+     * 17.27ms/次，30 张图各查一次 ≈518ms。这里先用一次 `IN (...)` 把整批 md5 的 .dat 路径
+     * 查出来并预热解码缓存，之后逐张走原有单张入口时命中缓存，不再各扫一次路径表。
+     *
+     * 诚实边界：① 单张的 md5 仍要各查一次消息分片（`resolveImageResourceHint`，`WHERE
+     * local_id = ?`，不是那个全表扫）；② 拿不到原始微信目录（`wechatBaseDir` 未知）时批量
+     * 路径查不出东西，行为与逐张调用完全一致。
+     * @param options - `items`: 一批 (username, localId)；超过 {@link IMAGE_BATCH_MAX} 的截断。
+     * @returns 与传入顺序一一对应的条目（`url` 或 `error`，语义同单张入口）。
+     */
+    getImageDataUrlsBatch(options: {
+        items: Array<{
+            username: string;
+            localId: number;
+        }>;
+    }): {
+        items: ImageBatchItem[];
+    };
+    /**
+     * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
+     *
+     * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
+     * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
+     * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
+     * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
+     *
+     * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
+     * 命中已有缓存的文件不重写。
+     * @param decryptedDir - 解密库目录（hardlink.db 所在）。
+     * @param decodedDir - 解码缓存根。
+     * @param baseDir - 微信原始目录（候选路径的根）。
+     * @param items - 待预热的 (username, localId) 列表。
+     * @param aesKey - V2 AES key。
+     * @param xorKey - XOR key 字节。
+     */
+    private warmDecodedImages;
+    /**
      * Resolve one SNS (朋友圈) media md5 to an offline base64 data URL
      * from the WeChat cache/<month>/Sns/Img V2-encrypted blobs.
      * @param options - media md5 from the moments XML.
@@ -1078,6 +1196,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
     clearPrivacyAudit(): PrivacyAuditClearResult;
     createEncryptedBackup(options: {
         password: string;
+        jobId?: string;
     }): Promise<BackupMutationResult>;
     deleteTask(options: {
         id: number;

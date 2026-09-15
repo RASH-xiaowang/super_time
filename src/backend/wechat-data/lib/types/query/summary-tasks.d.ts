@@ -28,14 +28,21 @@ export interface SummaryRecord {
     createdAt: number;
 }
 /**
+ * Read result: 既有调用方按 items/total 用不受影响，额外带一个**只在读失败时出现**的
+ * `readError`（「库读不到」与「确实没有任务」必须可区分，见 N1）。
+ */
+export interface SummaryTaskSnapshotRead {
+    items: SummaryTask[];
+    total: number;
+    /** 读不到库时非空（此时 items 恒为 []）；确无任务时为 undefined。 */
+    readError?: string;
+}
+/**
  * List summary tasks.
  * @param decryptedDir - decrypted data root.
  * @returns summary task items plus total count.
  */
-export declare function listSummaryTasks(decryptedDir: string): {
-    items: SummaryTask[];
-    total: number;
-};
+export declare function listSummaryTasks(decryptedDir: string): SummaryTaskSnapshotRead;
 /**
  * Save a task (insert when id=0, else update).
  * @param decryptedDir - decrypted data root.
@@ -105,4 +112,5 @@ export declare function deleteSummaryRecord(decryptedDir: string, id: number): {
 export declare function listSummaryRecords(decryptedDir: string, taskId?: number): {
     items: SummaryRecord[];
     total: number;
+    readError?: string;
 };
