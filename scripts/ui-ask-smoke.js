@@ -22,8 +22,18 @@ const { spawnSync } = require('node:child_process');
 const esbuild = require('esbuild');
 
 const root = path.resolve(__dirname, '..');
-const entry = path.join(root, 'scripts', 'ui-ask-smoke.tsx');
-const out = path.join(root, '.tmp-ui-ask-smoke.mjs');
+/**
+ * 入口可用第一个参数覆盖（默认「微信问答」那份）。
+ *
+ * 这样同一个 harness 能跑多份 SSR 冒烟：esbuild 的 external/loader 配置对它们完全一样，
+ * 再抄一份 runner 只会让两处配置各自漂移（例如将来给 CSS Modules 换 loader 时漏改一处）。
+ * 例：`node scripts/ui-ask-smoke.js scripts/privacy-consent-ssr.tsx`
+ */
+const entryArg = process.argv.slice(2).find((a) => !a.startsWith('-'));
+const entry = entryArg
+  ? path.resolve(root, entryArg)
+  : path.join(root, 'scripts', 'ui-ask-smoke.tsx');
+const out = path.join(root, '.tmp-' + path.basename(entry).replace(/\.tsx?$/, '') + '.mjs');
 
 (async () => {
   await esbuild.build({

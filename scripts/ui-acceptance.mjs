@@ -3,7 +3,10 @@
  *
  * 方案：
  *   · Playwright 的 Electron 驱动（_electron.launch）驱动**真实应用**：真实数据目录、
- *     真实许可、真实 ui-dist 与后端 bundle —— 不是 mock 出来的渲染层。
+ *     真实 ui-dist 与后端 bundle —— 不是 mock 出来的渲染层。
+ *     首启三道闸门（启动引导 / 授权 / 隐私同意）用 N2 的显式开关越过：
+ *     `SUPERTIME_SKIP_ONBOARDING=1` 由**主进程**判定（仅非打包态生效）⇒ 本脚本既不需要
+ *     厂商签发的真许可证，也不需要伪造「已同意隐私声明」的 localStorage 记录。
  *   · LLM 用**本地 mock**（127.0.0.1）替换：既让「问答 → 漏斗行 → 反馈」全链路可跑，
  *     又不把用户聊天数据发给任何外部厂商。mock 按 system prompt 区分规划器/综合回答，
  *     并提供 /embeddings（确定性向量）以真实跑通稠密通道。
@@ -18,6 +21,8 @@
  *
  * 运行前置：需要 playwright（只驱动 Electron，用应用自带 Chromium，无需下载浏览器）
  *   npm i --no-save playwright          # PowerShell: $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ *   npm run build:ui                    # 本脚本跑的是 src/client/ui-dist 里的产物：
+ *                                       # 改了 src/client/ui-app/** 不重建，测的就是旧界面
  *   node scripts/ui-acceptance.mjs
  *
  * 明确不在范围内：生成答案的**语义质量**（依赖真实模型）；稠密检索的**语义精度**
@@ -250,12 +255,23 @@ async function main() {
     executablePath: join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe'),
     args: [ROOT], cwd: ROOT,
     // 面板截图导出会弹原生保存对话框（自动化里点不到）→ 指定路径直接落盘
-    env: { ...process.env, SUPERTIME_CAPTURE_PATH: join(OUT, 'exported-report.png'), SUPERTIME_TEST_MODE: '1' },
+    env: {
+      ...process.env,
+      SUPERTIME_CAPTURE_PATH: join(OUT, 'exported-report.png'),
+      SUPERTIME_TEST_MODE: '1',
+      // N2：越过首启三道闸门（引导 / 授权 / 隐私同意）。判定在主进程，且**仅非打包态**生效；
+      // 进来后窗口顶部会出现 #debug-gates-banner（步骤 1 会断言它），一眼可辨这不是正常首启。
+      SUPERTIME_SKIP_ONBOARDING: '1',
+    },
   })
   win = await app.firstWindow()
   win.setDefaultTimeout(25000)
   win.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 300)) })
   win.on('pageerror', (e) => consoleErrors.push('pageerror: ' + String(e.message).slice(0, 300)))
+
+  // 首启闸门已由上面的 SUPERTIME_SKIP_ONBOARDING=1 越过（N2）—— 这里**不再**往
+  // localStorage 里伪造「已同意隐私声明」的记录：那种做法等于绕过同意闸门本身，
+  // 而本仓现在有显式的、仅非打包态生效的调试开关可用（见 RELEASE-PLAN N2）。
 
   const info = await win.evaluate(() => window.electronAPI.wechat.info())
   const decrypted = info?.value?.decrypted || ''
@@ -294,6 +310,10 @@ async function main() {
   await step('1. 应用启动与问答面板可达', '目标①入口可用', async () => {
     ok(await win.locator('#test-mode-banner').count() > 0,
       '测试模式横幅可见（本窗口回答来自本地 mock，非真实数据）')
+    // N2：这条同时是「豁免真的生效了」的证据 —— 没拿到豁免的话，页面会停在启动引导
+    // 或隐私同意屏上，后面所有断言都会失败，而不只是这一条。
+    ok(await win.locator('#debug-gates-banner').count() > 0,
+      '闸门豁免横幅可见（已跳过启动引导 / 授权 / 隐私同意，且主进程判定为非打包态）')
     await win.getByRole('button', { name: '微信问答' }).first().click()
     await win.locator('text=本机检索 · AI 综合回答').first().waitFor({ timeout: 40000 })
     const body = await win.locator('body').innerText()

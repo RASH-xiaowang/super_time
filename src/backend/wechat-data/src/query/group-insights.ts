@@ -116,8 +116,10 @@ export function queryGroupInsights(decryptedDir: string, username: string): Grou
         if (!has) continue
         const cols = tableColumns(db, table)
         if (!cols.has('message_content') || !cols.has('create_time')) continue
-        const rows = db.prepare(`SELECT create_time, message_content FROM "${table}"`).all() as Array<Record<string, unknown>>
-        for (const r of rows) {
+        // 游标读（N8）：整张 Msg_* 随消息量增长，而这里只是逐条累加统计量 ——
+        // `.all()` 会先把整表物化成数组，读完即丢的中间数组纯属浪费内存。
+        const sql = `SELECT create_time, message_content FROM "${table}"`
+        for (const r of db.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
           total += 1
           const t = Number(r['create_time'] ?? 0)
           if (t > 0) {

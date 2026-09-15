@@ -9,6 +9,7 @@ import { Button, Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 import { fmtBytes } from '../utils/format.ts'
+import { useTransientNotice } from './hooks.tsx'
 
 /**
  * Render the data health panel.
@@ -25,7 +26,8 @@ export function HealthPanel({ onNavigate, embedded = false }: {
   const [loading, setLoading] = useState(false)
   const [building, setBuilding] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -57,8 +59,7 @@ export function HealthPanel({ onNavigate, embedded = false }: {
       const r = await apiBuildSearchIndex({ force: true })
       // r.message 只在「跳过不可读分片」这类场景出现：有它在就说明索引是残缺的，
       // 不能只报「已完成」，否则用户看到 199 行也说不出哪里不对。
-      setNotice(r.message ? `重建完成：${r.rows} 行索引（${r.message}）` : `重建完成：${r.rows} 行索引`)
-      window.setTimeout(() => { setNotice(null) }, 3000)
+      flash(r.message ? `重建完成：${r.rows} 行索引（${r.message}）` : `重建完成：${r.rows} 行索引`)
       await load()
     } catch (e) {
       setError((e as Error).message)

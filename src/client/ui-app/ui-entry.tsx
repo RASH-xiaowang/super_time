@@ -13,6 +13,10 @@ import { WechatDataPanel } from '../ui-wechat/src/client/pages/wechat-data/Wecha
 import { getOpen, openWechat, subscribeOpen } from '../ui-wechat/src/client/wechat-state.ts'
 import { OnboardingShell } from './onboarding/OnboardingShell.tsx'
 import { loadOnboardingState, resetOnboarding } from './onboarding/store.ts'
+import { shouldSkipGates } from './debug-gates.ts'
+import type { DebugGatesFact } from './debug-gates.ts'
+import { PrivacyConsentGate } from './privacy/PrivacyConsentGate.tsx'
+import { acceptConsent, loadConsentRecord, needsConsent, resetConsent } from './privacy/consent.ts'
 import { LicenseGate } from './license/LicenseGate.tsx'
 import { isLicenseUsable } from './license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from './license/LicenseGate.tsx'
@@ -160,9 +164,39 @@ function WechatApp(): React.JSX.Element {
   const [open, setOpen] = useState(getOpen())
   // 启动页：首次必须浏览完；再次启动可跳过
   const [onboardingDone, setOnboardingDone] = useState(() => loadOnboardingState().completed)
+  /**
+   * 隐私同意（H14）：未同意前不得进入主界面。
+   *
+   * 判定走纯模块（`privacy/consent.ts`）：记录缺失、形状不对、或版本低于当前声明
+   * （`PRIVACY_VERSION`）都要求重新同意 —— 失败方向必须是「再问一次」，不是「默认放行」。
+   */
+  const [consented, setConsented] = useState(() => !needsConsent(loadConsentRecord()))
+  /**
+   * 首启闸门豁免（N2）：主进程给的事实，`null` 表示还没拿到（此时不放行任何一屏）。
+   *
+   * 为什么要单独拉一次而不是看 `SUPERTIME_TEST_MODE`：豁免必须在**非打包态**才生效，
+   * 而环变量不是信任边界 —— 判定由主进程做（`app.isPackaged`），这里只做第二道校验
+   * （`shouldSkipGates` 要求 `packaged === false`）。
+   */
+  const [gates, setGates] = useState<DebugGatesFact | null>(null)
   /** 每次启动检测 License；无效/过期时即使 onboarding 已完成也回到启动页授权 */
   const [lic, setLic] = useState<LicenseStatus | null>(null)
   const [licReady, setLicReady] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    const api = (window as any).electronAPI
+    const pending = api?.debugGates?.()
+    if (!pending || typeof pending.then !== 'function') {
+      setGates({ packaged: true }) // 拿不到事实 ⇒ 不放行（guard 期望 packaged===false）
+      return () => { alive = false }
+    }
+    void pending
+      .then((g: unknown) => { if (alive) setGates((g ?? { packaged: true }) as DebugGatesFact) })
+      .catch(() => { if (alive) setGates({ packaged: true }) })
+    return () => { alive = false }
+  }, [])
+  const skipGates = shouldSkipGates(gates)
 
   useEffect(() => {
     const api = (window as any).electronAPI?.license
@@ -177,23 +211,59 @@ function WechatApp(): React.JSX.Element {
 
   useEffect(() => subscribeOpen(() => setOpen(getOpen())), [])
   useEffect(() => {
-    if (onboardingDone && licReady && isLicenseUsable(lic) && !getOpen()) openWechat()
-  }, [onboardingDone, licReady, lic])
+    if (gates === null || !licReady) return
+    // 未拿到豁免时，三个条件（引导 / 同意 / 授权）都必须成立；skipGates 时直接放行 ——
+    // 豁免的全部意义就是「没有许可证也能进主界面」，所以它必须能让 isLicenseUsable 那一项短路。
+    if ((skipGates || (onboardingDone && consented && isLicenseUsable(lic))) && !getOpen()) openWechat()
+  }, [gates, skipGates, onboardingDone, consented, licReady, lic])
+  /**
+   * 豁免生效时的醒目横幅（N2）：自动化与人工都能一眼看出「这一屏是跳过闸门进来的」，
+   * 不会被误读成「首启流程没问题」。打包态不可能出现它（主进程的 skipGates 恒 false）。
+   */
+  useEffect(() => {
+    if (!skipGates) return
+    const BANNER_ID = 'debug-gates-banner'
+    if (document.getElementById(BANNER_ID)) return
+    const bar = document.createElement('div')
+    bar.id = BANNER_ID
+    bar.textContent = '🛠 调试模式：已跳过启动引导 / 授权 / 隐私同意（SUPERTIME_SKIP_ONBOARDING=1，仅非打包态生效）'
+    bar.setAttribute(
+      'style',
+      'flex:0 0 auto;padding:6px 12px;background:#7c3aed;color:#fff;'
+        + 'font:600 12px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+        + 'text-align:center;letter-spacing:.02em',
+    )
+    document.body.insertBefore(bar, document.getElementById('root'))
+  }, [skipGates])
   const handleOnboardingComplete = useCallback(() => {
     setOnboardingDone(true)
     openWechat()
+  }, [])
+  const handleConsentAccepted = useCallback(() => {
+    acceptConsent()
+    setConsented(true)
+    openWechat()
+  }, [])
+  const handleConsentRejected = useCallback(() => {
+    // 不同意就不放行：关掉窗口（自绘标题栏的关闭路径由 preload 的 windowControls 提供）。
+    const api = (window as any).electronAPI?.windowControls
+    if (api?.close) api.close()
   }, [])
   // 主界面「数据配置 → 高级设置 → 重新查看启动页」
   useEffect(() => {
     const onShow = (): void => {
       resetOnboarding()
+      // 连隐私同意一起重置：这条入口同时是「重新审阅并再次同意声明」的路径
+      resetConsent()
       setOnboardingDone(false)
+      setConsented(false)
     }
     window.addEventListener('super-time:show-onboarding', onShow)
     return () => window.removeEventListener('super-time:show-onboarding', onShow)
   }, [])
 
-  if (!licReady) {
+  // 闸门事实还没到 → 不渲染任何一屏（否则会先闪一下启动页/同意屏再跳走）
+  if (!licReady || gates === null) {
     return (
       <div style={{
         height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -205,8 +275,13 @@ function WechatApp(): React.JSX.Element {
   }
 
   // 未完成启动引导，或授权不可用 → 启动页（4 个介绍页之后才是 License 验证，它同时也是进入系统的闸门）
-  if (!onboardingDone || !isLicenseUsable(lic)) {
+  // `!skipGates` 是 N2 的豁免口子：只有主进程判定「非打包态 + 显式开关」时才绕过
+  if (!skipGates && (!onboardingDone || !isLicenseUsable(lic))) {
     return <OnboardingShell onComplete={handleOnboardingComplete} />
+  }
+  // 引导与授权都过了，但没同意隐私声明 → 独立一屏（H14），不同意则不放行
+  if (!skipGates && !consented) {
+    return <PrivacyConsentGate onAccepted={handleConsentAccepted} onExit={handleConsentRejected} />
   }
   if (!open) {
     return (
@@ -219,6 +294,12 @@ function WechatApp(): React.JSX.Element {
         </button>
       </div>
     )
+  }
+  // 授权闸门的**第二层**在 LicenseGate 自己身上（它独立查一次状态，未授权就渲染解锁页）。
+  // 豁免必须连它一起绕过，否则「跳过」会停在解锁页上、看起来像没生效。绕过只发生在
+  // skipGates（主进程判定、仅非打包态）时；正常路径仍由 LicenseGate 把关。
+  if (skipGates) {
+    return <WechatDataPanel />
   }
   return (
     <LicenseGate>

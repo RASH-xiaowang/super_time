@@ -156,10 +156,12 @@ function computeOverview(dec: string): OverviewResult {
         const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
         const uname = cols.has('user_name') ? 'user_name' : 'userName'
         const cname = cols.has('content') ? 'content' : 'Content'
-        const rows = db.prepare(`SELECT ${uname} AS u, ${cname} AS c FROM SnsTimeLine`).all() as Array<{ u: string; c?: unknown }>
         const names = contactMeta(dec).names
         const authorMap = new Map<string, { name: string; posts: number }>()
-        for (const r of rows) {
+        // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，`.all()` 会把整表先物化成数组，
+        // 而这里只是逐条累加一个 Map —— 读完即释放。
+        const sql = `SELECT ${uname} AS u, ${cname} AS c FROM SnsTimeLine`
+        for (const r of db.prepare(sql).iterate() as Iterable<{ u: string; c?: unknown }>) {
           const u = cellStr(r.u)
           if (!u) continue
           const cur = authorMap.get(u)

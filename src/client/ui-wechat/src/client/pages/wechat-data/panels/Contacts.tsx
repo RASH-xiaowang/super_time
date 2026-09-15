@@ -5,7 +5,7 @@
  * 发消息、复制用户名、CSV 导出。数据经 DSH 后端 Remote（contact.db 完整语义）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList } from './hooks.tsx'
+import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { cacheBounded } from '../utils/misc.ts'
@@ -76,7 +76,8 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const [profile, setProfile] = useState<ContactRow | null>(null)
   const [profile360, setProfile360] = useState<Contact360Snapshot | null>(null)
   const [profile360Loading, setProfile360Loading] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice(4000)
   const [exporting, setExporting] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const jumpToLetter = useCallback((letter: string): void => {
@@ -140,8 +141,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   }, [profile])
 
   const notify = (text: string): void => {
-    setNotice(text)
-    setTimeout(() =>{  setNotice(null) }, 4000)
+    flash(text)
   }
 
   const grouped = useMemo(() => {

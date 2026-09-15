@@ -4,7 +4,7 @@
  * 保证不显示原始 XML / undefined。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
@@ -192,7 +192,8 @@ export function FavoritesPanel(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice(4000)
   const [exporting, setExporting] = useState(false)
   const [detail, setDetail] = useState<FavorItem | null>(null)
   const [favImgs, setFavImgs] = useState<Record<string, string>>({})
@@ -212,8 +213,7 @@ export function FavoritesPanel(): React.JSX.Element {
   const { count: favCount, sentinelRef: favSentinel } = useProgressiveList(filtered.length, 120)
 
   const notify = (text: string): void => {
-    setNotice(text)
-    setTimeout(() => { setNotice(null) }, 4000)
+    flash(text)
   }
 
   const pager = usePagedList<FavorItem>({

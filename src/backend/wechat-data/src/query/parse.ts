@@ -35,13 +35,37 @@ function stripCdata(value: string): string {
 }
 
 /**
+ * 动态正则的编译缓存（L11）。
+ *
+ * 为什么需要：`xmlTagBlocks` / `xmlAttr` / `xmlTagOrAttr` / `stripSystemNoise` 原先在
+ * **每条消息**（甚至每个属性）上 `new RegExp(...)` —— 同一个 (标签, 属性) 组合每次都要
+ * 重新构造并编译一遍，而模式里除标签名外没有任何变化。这里按「构造式」缓存编译结果。
+ *
+ * 键全部来自调用点的字面量，所以缓存规模由**代码**决定、不随数据增长；仍设上限兜底，
+ * 避免将来有人把数据当标签名传进来时变成无界 Map。
+ */
+const RE_CACHE_MAX = 128
+const RE_CACHE = new Map<string, RegExp>()
+function cachedRe(key: string, build: () => RegExp): RegExp {
+  const hit = RE_CACHE.get(key)
+  if (hit) return hit
+  const re = build()
+  if (RE_CACHE.size >= RE_CACHE_MAX) RE_CACHE.clear()
+  RE_CACHE.set(key, re)
+  return re
+}
+
+/**
  * 取出同名标签的**全部**块（多图文的 `<item>` 用；`xmlTagText` 只取第一个）。
  * @param xml - the enclosing XML.
  * @param tag - tag name to collect.
  * @returns the inner slices in document order.
  */
 function xmlTagBlocks(xml: string, tag: string): string[] {
-  const re = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>', 'gi')
+  const re = cachedRe('blocks:' + tag, () => new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>', 'gi'))
+  // 缓存的实例是共享且带 `g` 的：`matchAll` 会复制实例，但复制出的那份沿用原实例的
+  // lastIndex，所以取用前归零，避免别处（将来）先用 exec 把它挪走。
+  re.lastIndex = 0
   return [...xml.matchAll(re)].map((m) => m[1] ?? '')
 }
 
@@ -107,7 +131,7 @@ function xmlAttr(xml: string, tag: string, attr: string): string {
   // `\s*=\s*`：微信各版本写法不一致，实测同一批表情消息里既有 `md5="…"` 也有
   // `len = "8636"`（等号两边带空格）。原先要求等号紧跟属性名，于是这些消息的
   // 属性全部取不到 —— 表情的 cdnurl 就是这样丢的（8/15 条取不到 → 只能显示占位芯片）。
-  const m = xml.match(new RegExp(`<\\s*${tag}[^>]*\\b${attr}\\s*=\\s*["']([^"']*)["']`))
+  const m = xml.match(cachedRe('attr:' + tag + '\u0000' + attr, () => new RegExp(`<\\s*${tag}[^>]*\\b${attr}\\s*=\\s*["']([^"']*)["']`)))
   return m ? (m[1] ?? '') : ''
 }
 
@@ -123,7 +147,7 @@ function xmlAttr(xml: string, tag: string, attr: string): string {
 function xmlTagOrAttr(xml: string, name: string): string {
   const t = xmlTagText(xml, name)
   if (t) return t
-  const m = xml.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))
+  const m = xml.match(cachedRe('attrAny:' + name, () => new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i')))
   return m ? (m[1] ?? '') : ''
 }
 
@@ -1129,11 +1153,16 @@ const SYS_NOISE_TAGS = [
   'session', 'svrid', 'seq', 'createtime', 'timestamp', 'revoker', 'replacemsg',
 ]
 
+/** 去重后的噪声标签（原列表里 `revoketime` 写了两遍，等于白跑一趟）。 */
+const SYS_NOISE_TAGS_UNIQUE = [...new Set(SYS_NOISE_TAGS)]
+
 /** 剥掉系统消息里的 id/时间噪声节点，只留可读文本。 */
 function stripSystemNoise(xml: string): string {
   let out = xml || ''
-  for (const tag of SYS_NOISE_TAGS) {
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, 'gi'), ' ')
+  for (const tag of SYS_NOISE_TAGS_UNIQUE) {
+    // 正则走 cachedRe 预编译：这条路径对每条系统消息都要过一遍全部标签，
+    // 原先 14 次 `new RegExp` 都是同一个模式（见 cachedRe 的说明）。
+    out = out.replace(cachedRe('noise:' + tag, () => new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, 'gi')), ' ')
   }
   return extractXmlTextNodes(out) || stripXmlTags(out)
 }

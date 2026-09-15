@@ -258,7 +258,11 @@ export function WorldMapPanel(): React.JSX.Element {
   }, [hoverCity])
 
   // 懒加载左右两侧联系人栏的头像（只请求尚未加载的账号）。
-  const railKey = leftFriends.concat(rightFriends).map(f => f.username).sort().join('|')
+  // railKey 原先在渲染里现算：好友上千时每次渲染都要 concat+map+**全量排序**+join，
+  // 而它只取决于当前子树的好友集合（`levelFriends` 已经是 useMemo 的产物），
+  // 换算成 memo 后只有子树变化时才重算（L9）。等价性：left/right 是同一个数组的
+  // 前半/后半，concat 出来与 levelFriends 同序同样的元素。
+  const railKey = useMemo(() => levelFriends.map(f => f.username).sort().join('|'), [levelFriends])
   useEffect(() => {
     const usernames = railKey ? railKey.split('|') : []
     if (usernames.length === 0) return
@@ -276,10 +280,21 @@ export function WorldMapPanel(): React.JSX.Element {
   }, [railKey])
 
   // Geo source: world countries, or China's provinces.
-  const geoRegions = onWorldMap ? (map?.world.children ?? []) : (chinaMode ? children : [])
+  //
+  // 下面三项都是「同一份子树」的派生量，原先在渲染里每次重算（L9）：geoRipple 还要先
+  // 拷贝整个数组再全量排序（按国家/省份聚合后是上千项），而它们只随子树变化。
+  // geoRegions 定住引用之后，紧接着的 geoMarkers 也才能真的命中它自己的 memo ——
+  // 空子树时 `?? []` 每次都造新数组，那个 memo 本来等于空转。
+  const geoRegions = useMemo(
+    () => (onWorldMap ? (map?.world.children ?? []) : (chinaMode ? children : [])),
+    [onWorldMap, map, chinaMode, children],
+  )
   const geoCenter = onWorldMap ? countryCenter : provinceCenter
-  const geoMax = geoRegions.reduce((a, c) => Math.max(a, c.count), 0) || 1
-  const geoRipple = new Set(geoRegions.slice().sort((a, b) => b.count - a.count).slice(0, 3).map(c => c.key))
+  const geoMax = useMemo(() => geoRegions.reduce((a, c) => Math.max(a, c.count), 0) || 1, [geoRegions])
+  const geoRipple = useMemo(
+    () => new Set(geoRegions.slice().sort((a, b) => b.count - a.count).slice(0, 3).map(c => c.key)),
+    [geoRegions],
+  )
   const geoMarkers = useMemo(() => geoRegions.map(c => ({ node: c, center: geoCenter(c.name) })), [geoRegions, geoCenter])
   const located = geoMarkers.filter(m => m.center !== null)
 

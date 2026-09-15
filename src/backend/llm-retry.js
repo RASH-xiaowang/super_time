@@ -16,6 +16,11 @@
  *      `Retry-After: 3600` 会把界面吊住一小时；
  *   ③ 调用方传进来的 `signal` 一旦中止就**立刻停**（那是整体超时/用户取消），
  *      不做无谓重试。
+ *
+ * N13 起它还接管「单次尝试的超时」（`opts.timeoutMs`）：LLM 之外的四条出网点
+ * （封面/表情/朋友圈视频/whisper 下载）各自原本只超时一次、失败就整件事失败。
+ * 超时必须**由重试层逐次武装**，不能由调用方塞一个 `AbortSignal.timeout()` —— 见
+ * {@link makeAttemptTimeout}。
  */
 
 /** 可重试的 HTTP 状态：408 超时、429 限流、5xx 服务端问题。 */
@@ -27,6 +32,9 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 500;
 /** 单次等待上限：避免 Retry-After 把界面吊住。 */
 const MAX_DELAY_MS = 5000;
+
+/** 单次尝试超时耗尽时抛出的错误名（调用方据此区分「对端一直超时」与「用户取消」）。 */
+const TIMEOUT_ERROR_NAME = 'TimeoutError';
 
 /**
  * 该状态码是否值得重试。
@@ -54,6 +62,42 @@ function parseRetryAfterMs(headerValue, now = Date.now()) {
 }
 
 /**
+ * 超时错误：`name` 刻意**不是** `AbortError` —— 调用方要能把「对端一直超时」与
+ * 「用户取消 / 整体超时」分开报错（前者可以说「请重试」，后者不该说）。
+ * @param {number} timeoutMs - 触发的超时值。
+ * @returns {Error} 名称为 {@link TIMEOUT_ERROR_NAME} 的错误。
+ */
+function timeoutError(timeoutMs) {
+  const shown = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+  const err = new Error(`请求超时（${shown}）`);
+  err.name = TIMEOUT_ERROR_NAME;
+  err.timeoutMs = timeoutMs;
+  return err;
+}
+
+/**
+ * 武装**本次尝试**的超时信号。
+ *
+ * 为什么不能由调用方传一个 `AbortSignal.timeout(...)`：那个信号是整段重试共用的，
+ * 第一次超时就把它永久置为 aborted，而重试层每次发请求前都会检查中止（边界③），
+ * 于是「对端一直超时」这个最需要重试的场景反而不重试了。放进重试层就能逐次重新计时。
+ * @param {number} timeoutMs - 单次尝试的超时。
+ * @param {boolean} headersOnly - 是否只对「收到响应头之前」计时。流式下载必须用它：
+ *   多 GB 的模型不能被连接超时在传到一半时掐断（旧实现在拿到响应头后 clearTimeout）。
+ * @returns {{ signal: AbortSignal, disarm: () => void, fired: () => boolean }} 本次尝试的超时控制器。
+ */
+function makeAttemptTimeout(timeoutMs, headersOnly) {
+  if (headersOnly) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { ctrl.abort() }, timeoutMs);
+    return { signal: ctrl.signal, disarm: () => clearTimeout(timer), fired: () => ctrl.signal.aborted };
+  }
+  // AbortSignal.timeout 的计时器是 unref 的：不会拖住进程退出。
+  const signal = AbortSignal.timeout(timeoutMs);
+  return { signal, disarm: () => {}, fired: () => signal.aborted };
+}
+
+/**
  * 第 `attempt` 次失败后要等多久（attempt 从 1 开始）。
  * @param {number} attempt - 已失败的尝试序号。
  * @param {() => number} random - 随机源（注入以便测试确定化）。
@@ -71,7 +115,9 @@ function backoffDelayMs(attempt, random = Math.random) {
  * @param {(url: string, init: object) => Promise<any>} doFetch - 实际发请求的函数（注入）。
  * @param {string} url - 请求地址。
  * @param {object} init - fetch 的第二个参数（含 signal）。
- * @param {{ maxAttempts?: number, onRetry?: (info: { attempt: number, delayMs: number, reason: string }) => void, sleep?: (ms: number) => Promise<void>, random?: () => number }} [opts]
+ * @param {{ maxAttempts?: number, onRetry?: (info: { attempt: number, delayMs: number, reason: string }) => void, sleep?: (ms: number) => Promise<void>, random?: () => number, timeoutMs?: number, timeoutScope?: 'request' | 'headers' }} [opts]
+ *   `timeoutMs` 是**单次尝试**的超时（每次都重新计时，见 {@link makeAttemptTimeout}）；
+ *   `timeoutScope: 'headers'` 表示只对拿到响应头之前计时（流式下载用）。
  * @returns {Promise<any>} 最后一个响应。
  */
 async function fetchWithRetry(doFetch, url, init, opts = {}) {
@@ -80,6 +126,8 @@ async function fetchWithRetry(doFetch, url, init, opts = {}) {
   const random = opts.random || Math.random;
   const onRetry = opts.onRetry;
   const signal = init && init.signal;
+  const timeoutMs = Math.max(0, Number(opts.timeoutMs) || 0);
+  const headersOnly = opts.timeoutScope === 'headers';
 
   let lastError = null;
   let lastResponse = null;
@@ -96,8 +144,14 @@ async function fetchWithRetry(doFetch, url, init, opts = {}) {
       throw aborted;
     }
     const isLast = attempt === maxAttempts;
+    const armed = timeoutMs > 0 ? makeAttemptTimeout(timeoutMs, headersOnly) : null;
+    const attemptInit = armed
+      ? { ...init, signal: signal ? AbortSignal.any([signal, armed.signal]) : armed.signal }
+      : init;
     try {
-      const res = await doFetch(url, init);
+      const res = await doFetch(url, attemptInit);
+      // 响应头已到：headers 档的计时到此为止（body 还要流很久）。
+      if (armed) armed.disarm();
       lastResponse = res;
       if (res && res.ok) return res;
       const status = res ? res.status : 0;
@@ -109,13 +163,18 @@ async function fetchWithRetry(doFetch, url, init, opts = {}) {
       if (onRetry) onRetry({ attempt, delayMs, reason: 'HTTP ' + status });
       await sleep(delayMs);
     } catch (e) {
+      // 是不是**本次尝试自己的**超时？是的话它只是「这个连接不好」，值得重试；
+      // 而 AbortError 本身（调用方取消 / 整体超时）仍然立刻抛。
+      const ownTimeout = Boolean(armed && armed.fired() && !(signal && signal.aborted));
+      if (armed) armed.disarm();
       // 中止（整体超时/用户取消）→ 立刻停，重试没有意义
       if (signal && signal.aborted) throw e;
-      if (e && (e.name === 'AbortError' || e.code === 'ABORT_ERR')) throw e;
-      lastError = e;
+      if (!ownTimeout && e && (e.name === 'AbortError' || e.code === 'ABORT_ERR')) throw e;
+      const failure = ownTimeout ? timeoutError(timeoutMs) : e;
+      lastError = failure;
       if (isLast) break;
       const delayMs = backoffDelayMs(attempt, random);
-      if (onRetry) onRetry({ attempt, delayMs, reason: (e && e.message) || String(e) });
+      if (onRetry) onRetry({ attempt, delayMs, reason: (failure && failure.message) || String(failure) });
       await sleep(delayMs);
     }
   }
@@ -127,6 +186,7 @@ module.exports = {
   DEFAULT_MAX_ATTEMPTS,
   MAX_DELAY_MS,
   RETRYABLE_STATUS,
+  TIMEOUT_ERROR_NAME,
   backoffDelayMs,
   fetchWithRetry,
   isRetryableStatus,

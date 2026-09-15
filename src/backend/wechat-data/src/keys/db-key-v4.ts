@@ -8,14 +8,14 @@
  * 3. Filter candidates by entropy/printability.
  * 4. Verify each candidate against the first page of a real encrypted DB
  *    using the SQLCipher PBKDF2-HMAC-SHA512 + AES check (reuses
- *    `verifyDbKey` from query/config.ts).
+ *    `verifyDbKey` from ./db-key-verify.ts).
  *
  * The internal DB key (from Weixin.dll scanning) is XOR-unmasked onto the raw
  * candidate before verification, exactly like the Python original.
  */
 import { readFileSync } from 'node:fs'
 import { readProcessMemory, enumerateScannableRegions } from './win32-memory.ts'
-import { verifyDbKey } from '../query/config.ts'
+import { verifyDbKey } from './db-key-verify.ts'
 import type { DbKeyResult } from './types.ts'
 
 /** 32-byte key length. */

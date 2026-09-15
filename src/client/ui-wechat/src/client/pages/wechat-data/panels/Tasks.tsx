@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiAddTask, apiDeleteTask, apiExtractTasks, apiListTasks, apiSetTaskStatus, apiSyncHandoffTasks, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatTask } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Badge, Card, EmptyState, PanelHeader, Toolbar } from '../ui/kit.tsx'
+import { useTransientNotice } from './hooks.tsx'
 import css from './tasks.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -28,7 +29,8 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   const [extracting, setExtracting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -47,8 +49,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   useEffect(() => { void load() }, [load])
 
   const notify = (text: string): void => {
-    setNotice(text)
-    window.setTimeout(() => { setNotice(null) }, 3000)
+    flash(text)
   }
 
   const extract = useCallback(async (): Promise<void> => {

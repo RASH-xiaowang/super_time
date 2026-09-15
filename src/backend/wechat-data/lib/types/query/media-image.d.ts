@@ -112,18 +112,43 @@ export declare function decodeEmoticonDataUrl(decryptedDir: string, decodedDir: 
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
+ * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
  * @returns a data URL + format, or an error message.
  */
-export declare function fetchEmoticonRemote(url: string, decodedDir: string, md5: string): Promise<{
+export declare function fetchEmoticonRemote(url: string, decodedDir: string, md5: string, opts?: {
+    cdnEnabled?: boolean;
+}): Promise<{
     url?: string;
     format?: string;
     error?: string;
 }>;
 /**
+ * **一次**查询解析多张图的 .dat 路径（N16）。
+ *
+ * 为什么要有批量入口：`WHERE lower(md5) = ?` 在 `image_hardlink_info_v4` 上没有可用索引
+ * （`EXPLAIN QUERY PLAN` = `SCAN ... USING INDEX image_hardlink_info_v4_MODIFY_TIME`，
+ * 即走 modify_time 索引再逐行过滤，等价全表扫）。实测本机 3309 行 0.30ms/次、
+ * 合成 20 万行 17.27ms/次 —— 30 张图各查一次 ≈518ms。`IN (...)` 只扫一次。
+ *
+ * 分批：一批最多 {@link HARDLINK_MD5_CHUNK} 个 md5（远小于 SQLite 的参数上限，
+ * 只为了让语句长度与计划大小可控，与 `ledger.ts` 的分块同款）。
+ *
+ * **接线状态**：网关目前只有「一张图一次 RPC」（`getImageDataUrl`），要吃到这个批量入口
+ * 需要一次批量 RPC（接口变更，不在本轮范围）—— 见 `docs/RELEASE-PLAN.md` 的 N16。
+ * @param decryptedDir - 解密库目录。
+ * @param wechatBaseDir - 微信原始目录（候选路径的根）。
+ * @param md5s - 图片 md5 列表（非 32 位十六进制的项会被忽略，重复项只查一次）。
+ * @returns md5（小写）→ 命中的 .dat 路径；没命中的 md5 不会出现在结果里。
+ */
+export declare function resolveImageFilePathsByMd5(decryptedDir: string, wechatBaseDir: string, md5s: readonly string[]): Map<string, string>;
+/**
  * Resolve an image's on-disk .dat path via the decrypted hardlink.db:
  * image_hardlink_info_v4 is queried by md5 (and by MessageResourceDetail
  * data_index rowid when given), then dir1/dir2 are mapped through dir2id to
  * the real msg/attach directory names. Returns the first existing path.
+ *
+ * 单张图走的就是批量入口（见 {@link resolveImageFilePathsByMd5}）—— 语义与改前一致：
+ * 先按 md5 的行、再按 data_index 的行，取第一个真实存在的路径。
  * @param decryptedDir - decrypted data root.
  * @param wechatBaseDir - raw WeChat install dir (current account root).
  * @param md5 - 32-char image md5 (optional when dataIndex is given).

@@ -41,10 +41,10 @@
 | 包配置 | `package.json`、`README.md`、`tsconfig*.json` | `src/backend/wechat-data/**` |
 | 运行时依赖 | `cordis`、`cosmokit`、`dsh-typert-protocol`、`dsh-native-command`、`dsh-home-paths`、`dsh-invariants`、`dsh-llm`、`dsh-brand`、`dsh-timeout`、`dsh-util-crypto`、`dsh-util-values`、`schemastery`、`@standard-schema/spec`、`fzstd`、`koffi`、`@koromix/koffi-win32-x64`、`zod` | `src/backend/deps/**` |
 
-后端对外提供 **114 个 Remote 方法**（`getSessions` / `getMessages` / `getContacts` /
-`getMoments` / `getOverview` / `getGraph` / 备份 / 导出 / 隐私审计 / 密钥扫描 / 语音转写 /
-每日总结 / 待办 / 操作日志等），方法清单见 `packages/host/wechat-data/README.md`
-或运行时调用 `wechat:list-methods`。
+后端对外提供的方法清单**以自动生成的 [`docs/API.md`](../../docs/API.md) 为准**：它由
+`npm run docs:api` 从 `src/backend/wechat-data/src/gateway.ts` 的 `@Remote` 装饰器生成，
+`npm run docs:api:check`（CI 一步）守着「文档与源码一致」；运行时可用 `wechat:list-methods`
+取当前实际注册的方法。文档里**不再写死方法数量** —— 历史上这里写过的数字已多次漂移。
 
 ## 与上游的适配点
 
@@ -73,9 +73,10 @@
    `generateDailySummary` 输出降级统计文本。
 5. **路径配置中心**：所有路径配置统一记录在 `<userData>/wechat/config.json`
    （`src/backend/wechat-paths.js` 管理与映射），启动时自动应用并回写实际解析路径，
-   详见 [wechat/README.md](../wechat/README.md)。命令行：
-   `npm run config:wechat show|set|reset`。
-5. **Electron IPC**：`main.js` 在 `app.whenReady` 后创建后端，注册
+   详见 [wechat/README.md](../../wechat/README.md)。写入入口是界面里的**「数据配置」**面板
+   （以及「语音转写」那一节的模型目录 / 引擎路径）；**没有**对应的 npm 脚本 ——
+   最早版本文档里写的 `config:wechat`（`show|set|reset`）在当前 `package.json` 里不存在。
+6. **Electron IPC**：`main.js` 在 `app.whenReady` 后创建后端，注册
    - `wechat:list-methods` → `{ ok, value }`
    - `wechat:info` → 数据根 / 解密目录 / 当前账号 / 方法数
    - `wechat:call` → `(method, args[])` 调用任意 Remote 方法，返回
@@ -113,8 +114,25 @@ npm start
 纯 Node 冒烟测试（不启动 Electron 窗口）：
 
 ```bash
-npm run smoke:wechat
+npm run rag:smoke      # 直接构造后端并调用 Remote 方法（检索层为主）
+npm test               # 后端包 + 宿主层 + 前端纯逻辑的全部单测（vitest）
 ```
+
+## 许可证与签发私钥（L12）
+
+- **签发私钥 `vendor-keys/license-private.pem` 只应存在于「签发机」**：物理隔离到一台专门的
+  机器上，那台机器上有一份仓库检出、`vendor-keys/` 只在那里生成与保存。它已被 `.gitignore`
+  忽略、也不在 `package.json` 的 `files` 白名单与 `asarUnpack` 里（实测 asar 条目里
+  `vendor-keys` 命中数为 0），所以它既不会入库也不会随包分发。
+- **开发机不需要它**。依赖它的只有签发侧工具：`npm run license-keygen`（生成密钥对）、
+  `npm run license-issue`（用私钥签许可证）、`npm run license-studio`（签发 GUI）——
+  它们都从工作树的 `vendor-keys/` 读私钥，因此只能在签发机上跑。
+  **没有任何 CI 步骤与冒烟脚本依赖它**（`check:backend-restart` 曾读它，已改为不需要许可证；
+  `src/backend/tests/ci-script-isolation.spec.ts` 守着这条不变量）。
+- 仓库里只带**公钥**（`src/license/public-key.js`，随包分发，用于本地验签），
+  它必须与签发机上的私钥同源；换密钥时要同步更新这个文件并重新打包。
+- 想验证签发链路时用 `npm run license-smoke`：它**在内存里注入一对一次性测试密钥**
+  （不写仓库、不碰 `public-key.js`），详见 `scripts/license-smoke.js` 头部说明。
 
 ## 备注
 

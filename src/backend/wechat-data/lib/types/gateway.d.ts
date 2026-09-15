@@ -94,6 +94,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
      */
     private makeEmbedFn;
+    /**
+     * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
+     *
+     * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
+     * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
+     * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
+     * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
+     */
+    private cdnSwitches;
     getSessions(options?: {
         keyword?: string;
         limit?: number;
@@ -769,6 +778,14 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @param options - id of the task to run.
      * @returns SummaryTaskRunResult: ok + summary + message count, or error.
      */
+    /**
+     * 同一分钟到期的摘要任务并发上限（N15）。
+     *
+     * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
+     * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
+     * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
+     */
+    private static readonly DUE_SUMMARY_CONCURRENCY;
     /** Run any enabled daily-summary task whose schedule time matches the current minute. */
     private maybeRunDueTasks;
     runSummaryTask(options: {

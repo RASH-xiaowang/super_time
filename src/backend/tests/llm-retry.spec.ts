@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { MAX_DELAY_MS, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../llm-retry.js'
+import { MAX_DELAY_MS, TIMEOUT_ERROR_NAME, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../llm-retry.js'
 
 /** 造一个「按脚本返回」的假 fetch；脚本项可以是 Response 形状或要抛的异常。 */
 function scriptedFetch(script) {
@@ -24,6 +24,21 @@ function scriptedFetch(script) {
     return step
   }
   return { fn, calls }
+}
+
+/** 等到信号中止（模拟「连接超时被 AbortSignal 掐断」的真实形状）。 */
+function waitForAbort(signal) {
+  return new Promise((resolve) => {
+    if (!signal || signal.aborted) { resolve(undefined); return }
+    signal.addEventListener('abort', () => { resolve(undefined) })
+  })
+}
+
+/** 抛出一个与 fetch 超时同形的 AbortError。 */
+function abortError() {
+  const err = new Error('The operation was aborted')
+  err.name = 'AbortError'
+  return err
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -163,13 +178,107 @@ describe('fetchWithRetry 行为', () => {
   })
 })
 
-describe('接线：wechat-host 的 LLM/embedding 调用都走重试', () => {
-  it('wechat-host.js 里不存在绕过重试的裸 fetch(...)', () => {
-    // 这条防的是「新增一个出网点忘了包重试」——类型和单测都看不出这种遗漏。
-    const src = readFileSync(join(HERE, '..', 'wechat-host.js'), 'utf8')
-    const bare = src.split(/\r?\n/)
-      .map((line, i) => ({ line: line.trim(), no: i + 1 }))
-      .filter((l) => /(^|[^.\w])fetch\(/.test(l.line) && !l.line.includes('fetchWithRetry'))
-    expect(bare).toEqual([])
+describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
+  const quiet = { maxAttempts: 3, sleep: async () => {}, random: () => 0 }
+
+  it('第一次超时后仍会真发第二次请求（不是拿一个已中止的信号去打第二轮）', async () => {
+    const signals = []
+    let calls = 0
+    const fn = async (_url, init) => {
+      calls += 1
+      signals.push(init.signal)
+      if (calls === 1) {
+        await waitForAbort(init.signal) // 等重试层自己武装的信号到期
+        throw abortError()
+      }
+      return okResponse('答案')
+    }
+    const res = await fetchWithRetry(fn, 'u', {}, { ...quiet, timeoutMs: 30 })
+    expect(calls).toBe(2)
+    expect(res.ok).toBe(true)
+    // 关键断言：第二次的信号是**新的**。若沿用调用方给的 AbortSignal.timeout(30)，
+    // 这里会是 true —— 而重试层看到 aborted 就再也不发请求了（N13 的核心动机）。
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
   })
+
+  it('每次尝试都超时 → 抛 TimeoutError（不是 AbortError：调用方要区分「对端一直超时」与「用户取消」）', async () => {
+    let calls = 0
+    const fn = async (_url, init) => {
+      calls += 1
+      await waitForAbort(init.signal)
+      throw abortError()
+    }
+    let thrown = null
+    try {
+      await fetchWithRetry(fn, 'u', {}, { ...quiet, maxAttempts: 2, timeoutMs: 20 })
+    } catch (e) {
+      thrown = e
+    }
+    expect(calls).toBe(2)
+    expect(thrown?.name).toBe(TIMEOUT_ERROR_NAME)
+    expect(thrown?.timeoutMs).toBe(20)
+    expect(thrown?.message).toContain('20ms')
+  })
+
+  it("timeoutScope: 'headers' 在拿到响应头后解除计时（多 GB 的 body 不会被连接超时掐断）", async () => {
+    let captured
+    const fn = async (_url, init) => { captured = init.signal; return okResponse() }
+    await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20, timeoutScope: 'headers' })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(captured?.aborted).toBe(false)
+  })
+
+  it('默认档（整个请求）相反：同一时长下信号会中止，body 读取因此有上界', async () => {
+    let captured
+    const fn = async (_url, init) => { captured = init.signal; return okResponse() }
+    await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20 })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(captured?.aborted).toBe(true)
+  })
+
+  it('调用方的取消信号仍然「一次都不发」（新增的超时档不影响 M7 的边界③）', async () => {
+    const ctrl = new AbortController()
+    const { fn, calls } = scriptedFetch([okResponse()])
+    ctrl.abort()
+    await expect(fetchWithRetry(fn, 'u', { signal: ctrl.signal }, { ...quiet, timeoutMs: 20 })).rejects.toThrow(/中止/)
+    expect(calls.count).toBe(0)
+  })
+})
+
+describe('接线：出网请求都走 fetchWithRetry', () => {
+  /**
+   * 覆盖清单（**显式**，新增出网点必须加进来）。
+   *
+   * 为什么从「只扫 wechat-host.js」扩成清单：M7 之后复审又找出四处 LLM 之外的出网点
+   * （N13：封面 / 表情 / 朋友圈视频 / whisper 下载），只扫一个文件的话，
+   * 「加了个新出网点忘了包重试」照样全绿 —— 而类型和单测都看不出这种遗漏。
+   */
+  const RETRY_WIRED_FILES = [
+    '../wechat-host.js', // LLM chat / embedding（M7）
+    '../wechat-data/src/query/article-cover.ts', // 公众号封面 ×2（N13）
+    '../wechat-data/src/query/media-image.ts', // 远端表情取图（N13）
+    '../wechat-data/src/query/sns-video.ts', // 朋友圈视频 + 封面（N13）
+    '../wechat-data/src/query/whisper.ts', // 引擎 / 模型下载（N13）
+  ]
+
+  it('清单覆盖了 LLM 之外的四个出网点（清单被删空时这条会红）', () => {
+    const external = RETRY_WIRED_FILES.filter(f => f.startsWith('../wechat-data/'))
+    expect(external.map(f => f.split('/').pop())).toEqual([
+      'article-cover.ts',
+      'media-image.ts',
+      'sns-video.ts',
+      'whisper.ts',
+    ])
+  })
+
+  for (const rel of RETRY_WIRED_FILES) {
+    it(`${rel} 里不存在绕过重试的裸 fetch(`, () => {
+      const src = readFileSync(join(HERE, rel), 'utf8')
+      const bare = src.split(/\r?\n/)
+        .map((line, i) => ({ line: line.trim(), no: i + 1 }))
+        .filter((l) => /(^|[^.\w])fetch\(/.test(l.line) && !l.line.includes('fetchWithRetry'))
+      expect(bare, `${rel} 第 ${bare.map(b => b.no).join(',')} 行有裸 fetch(`).toEqual([])
+    })
+  }
 })

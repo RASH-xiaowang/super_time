@@ -2,11 +2,15 @@
  * Member / contact search (成员搜索). Uses the local contact_fts index in
  * wechat_search.db when available (built lazily on first use) and falls back to
  * a LIKE scan over contact.db; room-scoped searches join chatroom_member.
+ *
+ * 这里是 `wechat_search.db` 的**第二个写者**（第一个是 `search.ts` 的 `buildSearchIndex`），
+ * 所以它的写必须走 `search.ts` 导出的那把索引库写闸（`withIndexWrite`）——
+ * 否则构建在飞时写事务会被拒、然后被吞掉、静默退化成 LIKE。
  */
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { searchIndexPath } from './search.ts'
+import { searchIndexPath, withIndexWrite } from './search.ts'
 import type { MemberSearchHit, MemberSearchSnapshot } from '../types.ts'
 
 const CONTACT_FTS_META = 'contact_rows'
@@ -51,19 +55,44 @@ function hitsFromRows(rows: Array<Record<string, unknown>>, roomName?: string): 
   return out
 }
 
-/** Build (once) the local contact_fts index from contact.db. */
-function ensureContactFts(db: DatabaseSync, decryptedDir: string): void {
-  db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-  db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias UNINDEXED, quanpin UNINDEXED, local_type UNINDEXED, tokenize='unicode61')")
+/**
+ * contact_fts 的可用状态。
+ * - `ready`：已有索引可读（本次调用**没有**写索引库）。
+ * - `busy`：索引库写闸拿不到（建索引在飞），本次**没有**尝试写。
+ * - `unavailable`：没有可用的 contact.db 或构建失败（已打日志，不静默）。
+ */
+type ContactFtsState = 'ready' | 'busy' | 'unavailable'
+
+/**
+ * contact_fts 是否已建好 —— **只读**判断（不建表、不写 meta）。
+ * @param db - 索引库连接。
+ * @returns 索引存在且行数记录 > 0 时为 true。
+ */
+function contactFtsReady(db: DatabaseSync): boolean {
+  if (!tableExists(db, 'meta') || !tableExists(db, 'contact_fts')) return false
   const row = db.prepare('SELECT value FROM meta WHERE key=?').get(CONTACT_FTS_META) as { value?: unknown } | undefined
-  if (row && Number(row.value ?? 0) > 0) return
+  return row !== undefined && Number(row.value ?? 0) > 0
+}
+
+/** 在闸内建 contact_fts（DDL + 插入 + COMMIT）。@returns ready / unavailable。 */
+function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'unavailable' {
   const contactPath = join(decryptedDir, 'contact', 'contact.db')
-  if (!existsSync(contactPath)) return
+  if (!existsSync(contactPath)) return 'unavailable'
   let cdb: DatabaseSync | null = null
+  let rows: Array<Record<string, unknown>>
   try {
     cdb = new DatabaseSync(contactPath, { readOnly: true })
-    if (!tableExists(cdb, 'contact')) return
-    const rows = cdb.prepare('SELECT username, remark, nick_name, alias, quan_pin FROM contact').all() as Array<Record<string, unknown>>
+    if (!tableExists(cdb, 'contact')) return 'unavailable'
+    rows = cdb.prepare('SELECT username, remark, nick_name, alias, quan_pin FROM contact').all() as Array<Record<string, unknown>>
+  } catch (e) {
+    console.warn('[members] contact.db 读不到，本次成员搜索回退 LIKE：' + (e as Error).message)
+    return 'unavailable'
+  } finally {
+    try { cdb?.close() } catch { /* already closed */ }
+  }
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias UNINDEXED, quanpin UNINDEXED, local_type UNINDEXED, tokenize='unicode61')")
     db.exec('BEGIN')
     try {
       const ins = db.prepare('INSERT INTO contact_fts(name, username, remark, alias, quanpin, local_type) VALUES(?, ?, ?, ?, ?, 0)')
@@ -73,25 +102,61 @@ function ensureContactFts(db: DatabaseSync, decryptedDir: string): void {
         ins.run(cellText(r['remark']).trim() || cellText(r['nick_name']).trim() || username, username, cellText(r['remark']).trim(), cellText(r['alias']).trim(), cellText(r['quan_pin']).trim())
       }
       db.exec('COMMIT')
-      db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(CONTACT_FTS_META, String(rows.length))
-    } catch {
+    } catch (e) {
       try { db.exec('ROLLBACK') } catch { /* no active tx */ }
+      throw e
     }
-  } catch {
-    // contact db unavailable
-  } finally {
-    try { cdb?.close() } catch { /* already closed */ }
+    db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(CONTACT_FTS_META, String(rows.length))
+    return 'ready'
+  } catch (e) {
+    // 写失败（例如跨进程写锁）不再静默：留痕 + 由调用方回退 LIKE。
+    console.warn('[members] contact_fts 构建失败，本次成员搜索回退 LIKE：' + (e as Error).message)
+    return 'unavailable'
   }
 }
 
-/** Global search: prefer contact_fts, otherwise LIKE over contact.db. */
+/**
+ * 确保 contact_fts 可用。
+ *
+ * 为什么先只读判断：`contact_fts` 已经建好时，改前那两句 `CREATE ... IF NOT EXISTS` 其实是纯读
+ * （实测：另一连接持写锁时它们不报错）；**只有真要建表时**才需要写锁，那时构建在飞就会被拒
+ * （`database is locked`）—— 条目里 155/155 次退化正是「索引还没建出来的那个窗口」。所以：
+ * 已经建好就只读照用（构建期间成员搜索也不必降级），要建/重建才进写闸。
+ *
+ * 真要写时也不能去撞锁：`searchMembers` 是同步契约，排不了队。拿不到闸就返回 `busy`，
+ * 由调用方显式降级并留痕（见 searchGlobalMembers）。
+ * @param db - 以读写方式打开的索引库连接。
+ * @param decryptedDir - 已解密数据根（用于定位 contact.db）。
+ * @returns contact_fts 的可用状态。
+ */
+function ensureContactFts(db: DatabaseSync, decryptedDir: string): ContactFtsState {
+  if (contactFtsReady(db)) return 'ready'
+  const gated = withIndexWrite(decryptedDir, () => buildContactFts(db, decryptedDir))
+  if (!gated.ok) return 'busy'
+  return gated.value
+}
+
+/**
+ * Global search: prefer contact_fts, otherwise LIKE over contact.db.
+ * @param decryptedDir - decrypted data root.
+ * @param term - search term.
+ * @param cap - max hits.
+ * @returns matching members + total + source.
+ */
 function searchGlobalMembers(decryptedDir: string, term: string, cap: number): MemberSearchSnapshot {
   const p = searchIndexPath(decryptedDir)
   if (existsSync(p)) {
+    let db: DatabaseSync | null = null
     try {
-      const db = new DatabaseSync(p)
-      try {
-        ensureContactFts(db, decryptedDir)
+      db = new DatabaseSync(p)
+      const state = ensureContactFts(db, decryptedDir)
+      if (state === 'busy') {
+        // 构建在飞：闸拿不到（同步契约排不了队）。这里**显式**降级并把原因写进日志 ——
+        // 改前是「先尝试建表 → 被拒 → 外层 catch 静默退回 LIKE」，在这个窗口里每次调用都重现一遍。
+        console.warn('[members] 搜索索引构建在飞，本次成员搜索显式走 LIKE（未尝试写 contact_fts）')
+        return searchGlobalLike(decryptedDir, term, cap)
+      }
+      if (state === 'ready') {
         const escaped = '"' + term.replace(/"/g, '""') + '"'
         const rows = db.prepare('SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?').all(escaped, cap * 4) as Array<Record<string, unknown>>
         if (rows.length > 0) {
@@ -100,26 +165,31 @@ function searchGlobalMembers(decryptedDir: string, term: string, cap: number): M
           let cdb: DatabaseSync | null = null
           try { cdb = new DatabaseSync(cdbPath, { readOnly: true }) } catch { cdb = null }
           const headStmt = cdb && tableExists(cdb, 'contact') ? cdb.prepare('SELECT small_head_url, big_head_url FROM contact WHERE username=?') : null
-          for (const r of rows) {
-            const username = cellText(r['username']).trim()
-            if (!username) continue
-            const hit: MemberSearchHit = { username, name: cellText(r['name']).trim() || username }
-            if (headStmt) {
-              try {
-                const hr = headStmt.get(username) as { small_head_url?: unknown; big_head_url?: unknown } | undefined
-                const head = cellText(hr?.small_head_url ?? '').trim() || cellText(hr?.big_head_url ?? '').trim()
-                if (head) hit.head = head
-              } catch { /* skip */ }
+          try {
+            for (const r of rows) {
+              const username = cellText(r['username']).trim()
+              if (!username) continue
+              const hit: MemberSearchHit = { username, name: cellText(r['name']).trim() || username }
+              if (headStmt) {
+                try {
+                  const hr = headStmt.get(username) as { small_head_url?: unknown; big_head_url?: unknown } | undefined
+                  const head = cellText(hr?.small_head_url ?? '').trim() || cellText(hr?.big_head_url ?? '').trim()
+                  if (head) hit.head = head
+                } catch { /* skip */ }
+              }
+              items.push(hit)
             }
-            items.push(hit)
+          } finally {
+            try { cdb?.close() } catch { /* already closed */ }
           }
-          try { cdb?.close() } catch { /* already closed */ }
           return { items: items.slice(0, cap), total: items.length, source: 'fts' }
         }
-      } finally {
-        db.close()
       }
-    } catch { /* fts unavailable, try LIKE */ }
+    } catch (e) {
+      console.warn('[members] contact_fts 查询失败，本次成员搜索回退 LIKE：' + (e as Error).message)
+    } finally {
+      try { db?.close() } catch { /* already closed */ }
+    }
   }
   return searchGlobalLike(decryptedDir, term, cap)
 }

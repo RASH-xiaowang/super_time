@@ -482,7 +482,8 @@ async function createWechatBackend(options = {}) {
   /**
    * 「影响解码结果的外部输入」的指纹：数据根下的 `config.json`（`db_dir` 等）与
    * `secrets.json`（图片 AES/XOR 密钥）。用于结果缓存的键（见 resultCacheKey 的说明）。
-   * 数据根取 `dirname(decrypted)`，与 `query/config.ts` 的路径口径一致（两种数据根模式都成立）。
+   * 数据根取 `dirname(decrypted)`，与后端 `config/resolve.ts` 的路径口径一致（两种数据根模式都成立）。
+   * （M24 之后路径/配置解析都住在后端的 `config/` 层，`query/config.ts` 只是转发门面。）
    */
   const decodeInputSig = () => {
     try {
@@ -547,7 +548,8 @@ async function createWechatBackend(options = {}) {
         }
         // 数据配置保存成功后，把「非密钥」设置镜像到 wechat/config.json 供用户查看与手工编辑。
         // 密钥类字段由 wechat-paths.js 的 SECRET_SETTING_KEYS 过滤掉 —— 它们有单独的、
-        // 受权限保护的 secrets.json（见 query/config.ts 的 SECRET_FIELDS）。
+        // 受权限保护的 secrets.json（见后端 `config/wechat-config.ts` 的 SECRET_FIELDS；
+        // M24 之后它不再住在 `query/config.ts`）。
         if (method === 'saveWechatConfig' && value && value.ok !== false) {
           const patch = callArgs[0]?.patch ?? callArgs[0];
           if (patch && typeof patch === 'object') {

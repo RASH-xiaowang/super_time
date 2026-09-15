@@ -21,9 +21,19 @@
  *
  * ## 开发态迁移
  *
- * 开发态（非 asar）首次启动会把项目 `wechat/config.json`、`wechat/llm.json` 复制到
- * STATE_DIR，让老配置继续生效；此后**只读写 STATE_DIR**，项目里那两个文件不再被使用。
- * 打包态**不做任何迁移** —— 那正是跨机泄漏的入口。
+ * 开发态（非 asar）首次启动会把项目 `wechat/` 下的老配置搬进 STATE_DIR；
+ * 此后**只读写 STATE_DIR**，项目里那两个文件不再被使用。打包态**不做任何迁移**
+ * —— 那正是跨机泄漏的入口。
+ *
+ * 迁移**不是原样复制**（N6）：`config.json` 只搬「非路径、非凭据」的设置镜像，
+ * 数据源（`wechatSettings.db_dir`）与密钥一律不搬。原样复制会把真实原始库路径与
+ * `db_enc_key` 一起带进新状态目录，后端随即用它们把真实微信库**全量解密**到新的
+ * `decrypted_dir` —— 实测把 `SUPERTIME_USER_DATA_DIR` 指向空临时目录启动后，
+ * 该目录凭空出现约 282MB 真实解密数据。后果有三层：① 任何「干净环境」测试其实
+ * 都跑在真实数据上，隔离是假的；② 用户更换/清空状态目录时，应用会在**没有征得同意**
+ * 的情况下把他 GB 级微信数据解密到新位置；③ 叠加 H1（配置曾入库）后，拿到仓库的人
+ * 就能完成解密。迁移剔除的字段会打进日志，不做静默处理。
+ * `llm.json` 仍照旧迁移：那是用户自己的模型配置，与数据源无关。
  *
  * ## 字段
  *
@@ -102,41 +112,120 @@ const DERIVED_SETTING_KEYS = new Set([
   'whisper_bin',
 ]);
 
-let migrated = false;
+/**
+ * 凭据类设置项：**不镜像**进 config.json。
+ *
+ * 理由：config.json 是「用户可手工编辑、出问题会被整目录拷贝或交给支持人员」的文件
+ * （H1/N6 那条泄漏路径的载体），密钥镜像一份进去等于凭空多一份副本。
+ * 密钥的真源是后端写的 `<STATE_DIR>/secrets.json`（见 `config/wechat-config.ts` 的
+ * `SECRET_FIELDS` —— M24 之后配置实现从 `query/config.ts` 下沉到了 `config/` 层，
+ * `query/config.ts` 现在只是转发门面）。
+ */
+const SECRET_SETTING_KEYS = new Set(['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']);
+
+
+/** 已迁移过的 `<stateDir>\0<legacyDir>` 组合，避免重复迁移（且允许不同状态目录各迁一次）。 */
+const migratedCombos = new Set();
+
+/**
+ * 迁移时必须剔除的镜像设置字段（N6）。
+ *
+ * 两类：① **数据源**（`db_dir` 指向真实微信库，带着它就会在新状态目录里静默全量解密）；
+ * ② **凭据**（`SECRET_SETTING_KEYS`）与**随安装位置变化的派生路径**
+ * （`DERIVED_SETTING_KEYS`）。其余普通设置（开关、端口、whisper 参数）是用户偏好，
+ * 与机器无关，照旧迁移。
+ */
+const MIGRATED_DROP_SETTING_KEYS = new Set(['db_dir', ...SECRET_SETTING_KEYS, ...DERIVED_SETTING_KEYS]);
+
+/**
+ * 生成**可安全迁移**的 `config.json` 内容。
+ *
+ * 顶层路径字段（`dataRoot` / `decryptedDir` / `decodedImagesDir` / `sourceDir` / `baseDir` /
+ * `selfWxid` / `silkBinary` / `resolved`）**一律不迁移**：它们要么指向真实数据源、要么是
+ * 上一台机器/上一次安装位置解析出来的绝对路径。剔除后应用会在新状态下重新解析，
+ * 并在需要用户确认数据源时报「数据源未配置」，而不是拿旧路径直接开工。
+ * @param raw - 仓库 `wechat/config.json` 的解析结果（可能是任意形状）。
+ * @returns `{ config, dropped }`：待写入的内容，以及被剔除的字段名（用于日志）。
+ */
+function sanitizeMigratedConfig(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const mirrored = src.wechatSettings && typeof src.wechatSettings === 'object' ? src.wechatSettings : {};
+  const dropped = [];
+  const settings = {};
+  for (const [k, v] of Object.entries(mirrored)) {
+    if (MIGRATED_DROP_SETTING_KEYS.has(k)) {
+      dropped.push(`wechatSettings.${k}`);
+      continue;
+    }
+    settings[k] = v;
+  }
+  for (const k of Object.keys(src)) {
+    if (k === 'wechatSettings') continue;
+    // 其余顶层字段全部不带走（含 resolved 与各类路径，见函数说明）
+    dropped.push(k);
+  }
+  return { config: { ...defaults(), wechatSettings: settings }, dropped };
+}
 
 /**
  * 开发态一次性迁移：把项目 `wechat/` 下的老配置搬进 STATE_DIR。
  * 打包态直接返回 —— 安装目录里的任何配置都不许被继承（跨机泄漏的根源）。
+ *
+ * `config.json` 走 `sanitizeMigratedConfig`（数据源与凭据不搬，N6）；`llm.json` 原样搬。
+ * 任一步失败都只影响该文件，且不会中断启动。
+ * @param legacyDir - 老配置所在目录；默认随包资产目录（参数供单测注入临时布局）。
  */
-function migrateLegacyState() {
-  if (migrated) return;
-  migrated = true;
+function migrateLegacyState(legacyDir = ASSETS_DIR) {
+  const combo = `${stateDir}\u0000${legacyDir}`;
+  if (migratedCombos.has(combo)) return;
+  migratedCombos.add(combo);
   if (PACKAGED) return;
-  for (const name of ['config.json', 'llm.json']) {
-    try {
-      const target = path.join(stateDir, name);
-      if (fs.existsSync(target)) continue;
-      const legacy = path.join(ASSETS_DIR, name);
-      if (!fs.existsSync(legacy)) continue;
+
+  // ① 运行期配置：只搬非路径、非凭据的设置镜像（N6）
+  try {
+    const target = path.join(stateDir, 'config.json');
+    const legacy = path.join(legacyDir, 'config.json');
+    if (!fs.existsSync(target) && fs.existsSync(legacy)) {
+      const { config, dropped } = sanitizeMigratedConfig(JSON.parse(fs.readFileSync(legacy, 'utf8')));
+      fs.mkdirSync(stateDir, { recursive: true });
+      writeFileAtomic(target, JSON.stringify(config, null, 2) + '\n');
+      const detail = dropped.length > 0 ? `；已剔除 ${dropped.join('、')}` : '';
+      console.log(`[config] 开发态迁移：已把 ${legacy} 的非路径设置搬进 ${target}${detail}` +
+        '。数据源与密钥不迁移 —— 请在新状态目录的「数据配置」里重新确认数据源，否则不会有任何解密数据。');
+    }
+  } catch (e) {
+    console.warn(`[config] 开发态迁移 config.json 失败（继续用默认配置启动）：${e && e.message ? e.message : e}`);
+  }
+
+  // ② 问答模型配置：与数据源无关，原样搬
+  try {
+    const target = path.join(stateDir, 'llm.json');
+    const legacy = path.join(legacyDir, 'llm.json');
+    if (!fs.existsSync(target) && fs.existsSync(legacy)) {
       fs.mkdirSync(stateDir, { recursive: true });
       fs.copyFileSync(legacy, target);
-    } catch {
-      /* 迁移失败就当没有老配置，不影响启动 */
     }
+  } catch {
+    /* 迁移失败就当没有老配置，不影响启动 */
   }
 }
 
 /**
  * 设定运行期状态目录（主进程与后端进程都要调用，且必须传同一个 userData）。
  * @param options.userDataPath - Electron `app.getPath('userData')`。
+ * @param options.legacyAssetsDir - 老配置所在目录，默认随包资产目录（参数供单测注入）。
  * @returns 状态目录绝对路径。
  */
 function configure(options = {}) {
   const dir = typeof options.userDataPath === 'string' ? options.userDataPath.trim() : '';
   if (dir) stateDir = path.join(dir, 'wechat');
-  migrateLegacyState();
+  const legacyDir = typeof options.legacyAssetsDir === 'string' && options.legacyAssetsDir.trim()
+    ? options.legacyAssetsDir.trim()
+    : ASSETS_DIR;
+  migrateLegacyState(legacyDir);
   return stateDir;
 }
+
 
 /** 运行期状态目录。 */
 function stateDirPath() {
@@ -382,15 +471,6 @@ function recordResolved(info) {
 }
 
 /**
- * 凭据类设置项：**不镜像**进 config.json。
- *
- * 理由：config.json 是「用户可手工编辑、出问题会被整目录拷贝或交给支持人员」的文件
- * （H1/N6 那条泄漏路径的载体），密钥镜像一份进去等于凭空多一份副本。
- * 密钥的真源是后端写的 `<STATE_DIR>/secrets.json`（见 query/config.ts 的 SECRET_FIELDS）。
- */
-const SECRET_SETTING_KEYS = new Set(['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']);
-
-/**
  * 把「数据配置」保存的微信设置 (db_dir/开关等) 镜像到 config.json，供用户查看/手工编辑。
  * **派生字段一律不镜像**（见 DERIVED_SETTING_KEYS）：它们随安装位置与数据根变化，
  * 镜像过去只会把别的机器/别的安装位置的路径推回来。
@@ -487,7 +567,11 @@ module.exports = {
   saveLlmConfig,
   FIELD_TO_ENV,
   DERIVED_SETTING_KEYS,
+  SECRET_SETTING_KEYS,
   // 导出给单测：这两个是纯路径函数，不依赖 stateDir 初始化
   writeFileAtomic,
   preserveIfUnparseable,
+  // 导出给单测（N6）：迁移的剔除规则必须能被独立验证
+  sanitizeMigratedConfig,
+  migrateLegacyState,
 };

@@ -56,6 +56,8 @@ function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, st
   const empty: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
   try {
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTopItem_1'").get() === undefined) return empty
+    // 提醒清单：量级是「你被提醒过的动态条数」（本机 490 条），与消息量无关，
+    // 且下面要先判空再遍历，所以保留一次性取回（N8 清单里属「有界」一类）。
     const rows = db.prepare(
       `SELECT CAST(tid AS TEXT) AS t, username AS u, create_time AS c, last_read_time AS r, is_read AS d FROM SnsTopItem_1`,
     ).all() as Array<{ t: unknown; u: unknown; c: unknown; r: unknown; d: unknown }>
@@ -63,7 +65,10 @@ function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, st
     // 提醒过的 tid 是否还在时间线上（不在 = 帖子已不可见）
     const alive = new Set<string>()
     try {
-      for (const r of db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t FROM SnsTimeLine`).all() as Array<{ t: unknown }>) alive.add(cellString(r.t))
+      // 这一条**随朋友圈条数增长**：游标直接灌进 Set，不先物化成数组（N8）
+      for (const r of db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t FROM SnsTimeLine`).iterate() as Iterable<{ t: unknown }>) {
+        alive.add(cellString(r.t))
+      }
     } catch { /* 时间线不可读时全部按「未知」处理，下面按 vanished=0 计 */ }
     const byUser = new Map<string, { count: number; unread: number; vanished: number; lastRead: number }>()
     let unread = 0
@@ -105,14 +110,15 @@ function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, st
 function computeGeo(db: DatabaseSync): MomentsGeo {
   const empty: MomentsGeo = { points: 0, cities: [], countries: [], places: [], pointList: [] }
   try {
-    const rows = db.prepare('SELECT user_name AS u, content AS c FROM SnsTimeLine').all() as Array<{ u: unknown; c: unknown }>
     const cityCount = new Map<string, number>()
     const countryCount = new Map<string, number>()
     const placeCount = new Map<string, { count: number; city: string; lat: number; lng: number }>()
     let points = 0
     // 逐条保留定位点：地图要画的是「每一次打卡」，不是聚合后的城市（同城多点会重叠成 1 个）
     const pointList: MomentsGeoPoint[] = []
-    for (const r of rows) {
+    // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，而这里只是逐条解析后累加，
+    // 不需要先把整表物化成数组。
+    for (const r of db.prepare('SELECT user_name AS u, content AS c FROM SnsTimeLine').iterate() as Iterable<{ u: unknown; c: unknown }>) {
       const xml = cellString(r.c)
       const li = xml.indexOf('<location')
       if (li < 0) continue

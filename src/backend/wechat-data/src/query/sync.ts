@@ -760,6 +760,7 @@ export function startRealtimeSync(
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
   let unavailableWarned = false
+  let unconfiguredNoted = false
   let failureLogged = false
   let cleaned = false
   const tick = async (): Promise<void> => {
@@ -772,15 +773,26 @@ export function startRealtimeSync(
       }
       const raw = rawDbDir()
       const dec = decryptedDir()
-      if (!raw || !dec || !existsSync(raw)) {
-        // Fail loud: a missing raw dir makes every tick a silent no-op, which
-        // is indistinguishable from a healthy loop. Warn once per outage and
-        // log the recovery when the dir becomes available again.
+      if (!raw || !dec) {
+        // "No data source configured" is a *normal* state (fresh install, before any import),
+        // not a fault. Warning on stderr here means every launch looks broken: it pollutes
+        // smoke output, and PowerShell promotes stderr lines to NativeCommandError. Keep it
+        // visible (diagnosability: the loop really is idle) but informational and off stderr.
+        if (!unconfiguredNoted) {
+          unconfiguredNoted = true
+          console.log('[wechat-sync] realtime sync idle: no data source configured',
+            '— set db_dir in config.json, _db_dir in all_keys.json, or DSH_WECHAT_BASE_DIR')
+        }
+        return
+      }
+      if (!existsSync(raw)) {
+        // A *configured* source we cannot read is the real anomaly: a missing raw dir makes
+        // every tick a silent no-op, which is indistinguishable from a healthy loop.
+        // Warn once per outage and log the recovery when the dir becomes available again.
         if (!unavailableWarned) {
           unavailableWarned = true
           console.warn('[wechat-sync] realtime sync paused: raw db dir unavailable',
-            `(raw=${JSON.stringify(raw || '')}, decrypted=${JSON.stringify(dec || '')})`,
-            '— set db_dir in config.json, _db_dir in all_keys.json, or DSH_WECHAT_BASE_DIR')
+            `(raw=${JSON.stringify(raw)}, decrypted=${JSON.stringify(dec)})`)
         }
         return
       }

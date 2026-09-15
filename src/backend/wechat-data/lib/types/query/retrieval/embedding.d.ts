@@ -21,7 +21,14 @@ export interface DenseSearchOptions {
 }
 /** 向量库文件路径。 */
 export declare function vectorDbPath(decryptedDir: string): string;
-/** 向量库状态（不存在/损坏/版本不符时 ready=false）。 */
+/**
+ * 向量库状态（不存在/损坏/版本不符时 ready=false）。
+ *
+ * 返回的是**副本**：调用方（gateway / pipeline / searchDense）都只读，但缓存共享同一个对象时
+ * 迟早会有人就地改写它，而复制一个 6 字段字面量的代价远低于这类 bug。
+ * @param decryptedDir - 解密数据根。
+ * @returns 状态快照。
+ */
 export declare function vectorIndexStatus(decryptedDir: string): VectorIndexStatus;
 /** 生成 SIMHASH_BITS 个随机超平面（每个长度 = dim）。 */
 declare function getPlanes(dim: number): Int8Array[];
@@ -36,12 +43,24 @@ declare function popcount32(x: number): number;
 declare function l2normalize(v: number[]): Float32Array;
 /** docKey = `username:local_id`（与稀疏通道一致的去重键）。 */
 declare function docKeyOf(username: string, localId: number): string;
+/** 构建结果。 */
+export interface VectorBuildResult {
+    status: string;
+    rows: number;
+    embedded: number;
+    embed_calls: number;
+    elapsed_ms: number;
+    message?: string;
+}
 /**
  * 构建/增量更新向量索引。
  *
  * 增量策略：以 message_meta.rowid 为游标，只给尚未入库的行算向量。
  * 这样日常「新消息进来」只多算增量，不重算全库（全量 13.5 万条 ≈ 上万次 embedding，
  * 一次性做完会很久；增量后单次通常只有几十条）。
+ *
+ * 并发调用会被单飞闸合并到同一轮构建（见 `inflightVectorBuilds` 的说明）：
+ * 两个调用方都能拿到成功结果，不会各写一遍、也不会互相撞锁。
  * @param decryptedDir - 解密数据根。
  * @param embed - embedding 函数（上层注入，已含隐私判断）。
  * @param opts - 模型名 / 批量 / 单次上限等。
@@ -55,14 +74,7 @@ export declare function buildVectorIndex(decryptedDir: string, embed: EmbedFn, o
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     force?: boolean;
-}): Promise<{
-    status: string;
-    rows: number;
-    embedded: number;
-    embed_calls: number;
-    elapsed_ms: number;
-    message?: string;
-}>;
+}): Promise<VectorBuildResult>;
 interface HashRow {
     rowid: number;
     lo: number;

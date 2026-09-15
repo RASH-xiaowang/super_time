@@ -7,6 +7,26 @@
  * entry naturally; callers never see data older than the file that produced
  * it. A short max-age bounds fingerprint drift on the same file.
  */
+/**
+ * 按 key 前缀的**按需限界**（N16）。
+ *
+ * 为什么不给整张表设一个全局上限：`contact-meta:` / `sender-names:` / `shard-meta:` /
+ * `shard-catalog:` 这些条目的**条数由数据目录决定**（几十条），却是最贵的（每条要开库 +
+ * 读 Name2Id + 逐表 PRAGMA）。给它们设上限，就等于「用户狂点聊天时把最贵的条目挤掉」——
+ * 省下几百字节换一次全量重载，方向反了。
+ *
+ * 真正会涨的是 `msg-by-sid:`：key 里带 serverId，条数由「用户点过哪些消息」驱动、
+ * 没有天然上限（M11 复审实测负条目 ~740B，命中条目还可能含整份 rich）。
+ * 所以只钉这一族，其余照旧。
+ *
+ * 淘汰语义与 `boundedSet` 一致（FIFO —— Map 的插入序就是写入序；命中只刷新 TTL、
+ * 不改变插入序，因此**不是**严格 LRU）：目的是「内存有上界」，不是「命中率最优」。
+ * 新增一族只需要在这里加一行。
+ */
+export declare const METADATA_KEY_FAMILY_LIMITS: ReadonlyArray<{
+    prefix: string;
+    cap: number;
+}>;
 /** Contact meta: display names, pinned usernames, official-account types. */
 export interface ContactMeta {
     names: Map<string, string>;

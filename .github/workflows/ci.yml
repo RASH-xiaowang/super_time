@@ -49,6 +49,11 @@ jobs:
           git diff --exit-code -- src/backend/wechat-data/lib/types
         shell: pwsh
 
+      # ── 接口参考一致性（H14）：docs/API.md 由 gateway.ts 的 @Remote 自动生成，
+      #    改了方法面却忘记重生成的话，外部读者看到的方法清单就是错的（历史上曾三方打架）。
+      - name: 接口参考与源码一致
+        run: npm run docs:api:check
+
       - name: 单元测试
         run: npm test
 
@@ -71,6 +76,10 @@ jobs:
 
       - name: 问答界面 SSR 冒烟
         run: npm run ui:smoke
+
+      # 隐私同意闸门（H14）：未勾选时按钮必须是禁用态 —— SSR 渲染事实，不是读代码。
+      - name: 隐私同意闸门 SSR 冒烟
+        run: npm run privacy-gate:smoke
 
       - name: 知识图谱后端冒烟
         run: npm run check:knowledge-graph

@@ -5,6 +5,9 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
+import { fetchWithRetry } from '../../../llm-retry.js'
+import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { boundedSet } from './meta.ts'
 
 const coverCache = new Map<string, string>()
@@ -34,16 +37,22 @@ function sniffImageFormat(data: Uint8Array): string {
   return 'jpeg'
 }
 
-/** Fetch text with a timeout; throws on failure. */
+/**
+ * Fetch text with a timeout; throws on failure.
+ *
+ * N13：走 `fetchWithRetry`（网络抖动 / 408 / 429 / 5xx 有界重试）。超时**交给重试层**
+ * 逐次计时 —— 自己传一个 `AbortSignal.timeout()` 会让整段重试共用一个已中止的信号，
+ * 于是第一次超时后重试层直接停（那正是最需要重试的场合）。
+ */
 async function fetchText(url: string, timeoutMs: number): Promise<string> {
-  const res = await fetch(url, { headers: FETCH_HEADERS, signal: AbortSignal.timeout(timeoutMs) })
+  const res = await fetchWithRetry(fetch, url, { headers: FETCH_HEADERS }, { timeoutMs })
   if (!res.ok) throw new Error('HTTP ' + String(res.status))
   return res.text()
 }
 
 /** Fetch image bytes with a timeout; throws on failure. */
 async function fetchBytes(url: string, timeoutMs: number): Promise<Uint8Array> {
-  const res = await fetch(url, { headers: FETCH_HEADERS, signal: AbortSignal.timeout(timeoutMs) })
+  const res = await fetchWithRetry(fetch, url, { headers: FETCH_HEADERS }, { timeoutMs })
   if (!res.ok) throw new Error('HTTP ' + String(res.status))
   return new Uint8Array(await res.arrayBuffer())
 }
@@ -68,9 +77,14 @@ function coverFile(cacheDir: string | undefined, key: string): string | null {
  * Resolve a 公众号 article cover to a base64 data URL（本地缓存优先，再走网络并落盘）。
  * @param contentUrl - mp.weixin.qq.com article URL from the moments XML.
  * @param cacheDir - persistent cache directory (decoded_images), optional.
+ * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。缓存仍可用。
  * @returns ImageDataUrlResult-like result.
  */
-export async function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?: string): Promise<{ url?: string; error?: string }> {
+export async function resolveArticleCoverDataUrl(
+  contentUrl: string,
+  cacheDir?: string,
+  opts: { cdnEnabled?: boolean } = {},
+): Promise<{ url?: string; error?: string }> {
   const key = (contentUrl || '').trim()
   if (!key) return { error: '缺少文章链接' }
   if (coverCache.has(key)) {
@@ -93,6 +107,9 @@ export async function resolveArticleCoverDataUrl(contentUrl: string, cacheDir?: 
       // 本地文件损坏时走网络重新下载
     }
   }
+  // 开关关闭时**不发请求**，但本地缓存（内存 + 落盘）照旧可用 —— 承诺是「不自动从 CDN 取」，
+  // 不是「把已经拿到的图也用不了」。位置在两次缓存查找之后、fetchText 之前。
+  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   try {
     const html = await fetchText(key, 20000)
     const raw = articleCoverUrl(html)

@@ -4,6 +4,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVersions: () => ipcRenderer.invoke('app:versions'),
   /** 是否验收测试模式（mock 模型）：前端据此显示醒目横幅。 */
   isTestMode: () => ipcRenderer.invoke('app:test-mode'),
+  /**
+   * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`，两个值都由主进程算好。
+   *
+   * 只读、不接受任何参数 —— 判定权不在渲染进程（打包态下 `skipGates` 恒为 false，
+   * 见 src/backend/debug-gates.js）。渲染层另有第二道判定：`ui-app/debug-gates.ts`。
+   */
+  debugGates: () => ipcRenderer.invoke('app:debug-gates'),
   ping: () => ipcRenderer.invoke('app:ping'),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
   pickDirectory: () => ipcRenderer.invoke('dialog:open-directory'),

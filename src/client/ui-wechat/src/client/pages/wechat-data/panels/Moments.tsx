@@ -14,7 +14,7 @@
  */
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ListSentinel, ListSkeleton, useProgressiveList } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
@@ -210,7 +210,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [lastSync, setLastSync] = useState(0)
   const [pickingDir, setPickingDir] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
+  // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
+  const { notice, flash, hold, clear } = useTransientNotice(6000)
   const [exportedPath, setExportedPath] = useState<string | null>(null)
   const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
   const snsFetched = useRef(new Set<string>())
@@ -691,9 +693,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     if (!src) return
     const clip = (navigator as { clipboard?: Clipboard }).clipboard
     if (clip && typeof clip.writeText === 'function') {
-      void clip.writeText(src).then(() => { setNotice('已复制图片链接') }).catch(() => { /* clipboard denied */ })
+      void clip.writeText(src).then(() => { hold('已复制图片链接') }).catch(() => { /* clipboard denied */ })
     } else {
-      setNotice('当前环境不支持复制')
+      hold('当前环境不支持复制')
     }
   }
 
@@ -704,9 +706,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     if (!text) return
     const clip = (navigator as { clipboard?: Clipboard }).clipboard
     if (clip && typeof clip.writeText === 'function') {
-      void clip.writeText(text).then(() => { setNotice('已复制') }).catch(() => { /* clipboard denied */ })
+      void clip.writeText(text).then(() => { hold('已复制') }).catch(() => { /* clipboard denied */ })
     } else {
-      setNotice('当前环境不支持复制')
+      hold('当前环境不支持复制')
     }
   }
 
@@ -714,16 +716,15 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const doSync = async (): Promise<void> => {
     if (syncing) return
     setSyncing(true)
-    setNotice(null)
+    clear()
     try {
       await apiDecryptAllDatabases()
       setLastSync(Date.now())
       window.dispatchEvent(new Event('dsh-wechat-data-updated'))
       void load()
-      setNotice('已重新同步解密数据')
-      setTimeout(() => { setNotice(null) }, 6000)
+      flash('已重新同步解密数据')
     } catch (e) {
-      setNotice('同步失败: ' + (e as Error).message)
+      hold('同步失败: ' + (e as Error).message)
     } finally {
       setSyncing(false)
     }
@@ -742,7 +743,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   const doExport = async (): Promise<void> => {
     setExporting(true)
-    setNotice(null)
+    clear()
     try {
       const opts: {
         format: string
@@ -773,12 +774,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       if (expTo) opts.to = Math.floor(new Date(expTo + 'T23:59:59').getTime() / 1000)
       if (expDir) opts.dir = expDir
       const r = await apiExportMoments(opts)
-      setNotice('已导出 ' + String(r.count) + ' 条动态 → ' + r.path)
+      flash('已导出 ' + String(r.count) + ' 条动态 → ' + r.path)
       setExportedPath(r.path)
       setExportOpen(false)
-      setTimeout(() => { setNotice(null) }, 6000)
     } catch (e) {
-      setNotice('导出失败: ' + (e as Error).message)
+      hold('导出失败: ' + (e as Error).message)
     } finally {
       setExporting(false)
     }
@@ -850,12 +850,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       if (picked.canceled || !picked.path) return
       try {
         const r = await apiExportSnsVideo({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id, url: v.url, key: v.key, dest: picked.path })
-        if (!r.ok) { setNotice('保存失败: ' + (r.error || '未知错误')); return }
-        setNotice(`已保存视频（${Math.round((r.bytes ?? 0) / 1048576)} MB）`)
+        if (!r.ok) { hold('保存失败: ' + (r.error || '未知错误')); return }
+        flash(`已保存视频（${Math.round((r.bytes ?? 0) / 1048576)} MB）`)
         setExportedPath(picked.path)
-        setTimeout(() => { setNotice(null) }, 6000)
       } catch (e) {
-        setNotice('保存失败: ' + (e as Error).message)
+        hold('保存失败: ' + (e as Error).message)
       }
     })()
   }
@@ -1368,7 +1367,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       {exportedPath && (
         <div className={css.exportResult}>
           <span className={css.exportResultPath} title={exportedPath}>📄 {exportedPath}</span>
-          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).catch(() => { setNotice('无法打开文件') }) }}>打开导出文件</button>
+          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).catch(() => { hold('无法打开文件') }) }}>打开导出文件</button>
         </div>
       )}
 

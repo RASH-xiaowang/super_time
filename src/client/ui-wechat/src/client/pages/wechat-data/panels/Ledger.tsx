@@ -3,7 +3,7 @@
  * 异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ListSentinel, useProgressiveList } from './hooks.tsx'
+import { ListSentinel, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Card, CellPrimary, DataTable, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
@@ -31,7 +31,8 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
   const [data, setData] = useState<LedgerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice()
 
   const load = useCallback(async (m: string): Promise<void> => {
     setLoading(true)
@@ -64,9 +65,8 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
     a.download = `微信资金账本_${data.month || '全部'}.csv`
     a.click()
     URL.revokeObjectURL(a.href)
-    setNotice('已导出 CSV')
-    window.setTimeout(() => { setNotice(null) }, 3000)
-  }, [data])
+    flash('已导出 CSV')
+  }, [data, flash])
 
   const net = data ? data.summary.totalAmountIn - data.summary.totalAmountOut : 0
   const { count: contactCount, sentinelRef } = useProgressiveList(data?.byContact.length ?? 0, 80)

@@ -4,7 +4,7 @@
  * （getEmoticons），无 HTTP 依赖。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetEmoticonDataUrl, apiGetEmoticons } from '../api.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
@@ -81,7 +81,8 @@ export function EmoticonsPanel(): React.JSX.Element {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `setTimeout(…, 3000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice()
 
   const pager = usePagedList<EmoticonItem>({
     pageSize: 200,
@@ -128,8 +129,7 @@ export function EmoticonsPanel(): React.JSX.Element {
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() })
 
   const notify = (text: string): void => {
-    setNotice(text)
-    setTimeout(() =>{  setNotice(null) }, 3000)
+    flash(text)
   }
 
   const filtered = useMemo(() => {

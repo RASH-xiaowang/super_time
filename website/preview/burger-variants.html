@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>汉堡按钮 · 三方案对比 | Super Time</title>
+<style>
+:root{
+  --bg:#04050a;--bg2:#070a13;--panel:rgba(14,19,33,.72);
+  --line:rgba(122,160,255,.14);--line2:rgba(122,160,255,.26);
+  --txt:#e9edff;--txt2:#9aa6c9;--txt3:#63708f;
+  --cy:#22d3ee;--vi:#8b5cf6;--mg:#f472b6;
+  --grad:linear-gradient(100deg,#22d3ee,#8b5cf6 52%,#f472b6);
+  --grad2:linear-gradient(90deg,#22d3ee,#8b5cf6);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  --ease:cubic-bezier(.22,.72,.22,1);
+}
+*{box-sizing:border-box}
+body{margin:0;background:
+  radial-gradient(1100px 600px at 12% -8%,rgba(34,211,238,.14),transparent 62%),
+  radial-gradient(900px 520px at 88% 2%,rgba(139,92,246,.16),transparent 60%),
+  var(--bg);
+  color:var(--txt);font-family:var(--sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(16px,4vw,28px) 80px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+h1{font-size:clamp(24px,3.6vw,36px);margin:0 0 10px;letter-spacing:-.02em;font-weight:730}
+h2{font-size:19px;margin:0;font-weight:660}
+.sub{color:var(--txt2);font-size:14.6px;margin:0}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;color:#8fd8ee;margin:40px 0 14px;display:flex;align-items:center;gap:10px}
+.eyebrow::before{content:"";width:22px;height:1px;background:var(--grad)}
+header{padding:56px 0 8px}
+
+/* ---------- 根因说明 ---------- */
+.why{border:1px solid var(--line2);border-radius:16px;padding:22px;background:linear-gradient(180deg,rgba(15,20,35,.86),rgba(8,11,20,.9));margin-top:22px}
+.why code{font-family:var(--mono);font-size:12.4px;color:#a5f3fc;background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.2);border-radius:6px;padding:1px 6px}
+.why ul{margin:12px 0 0;padding-left:20px;color:var(--txt2);font-size:14px}
+.why li{margin:7px 0}
+.why b{color:var(--txt)}
+
+/* ---------- 方案卡 ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:20px}
+.card{border:1px solid var(--line2);border-radius:18px;padding:22px;background:linear-gradient(180deg,rgba(15,20,35,.84),rgba(8,11,20,.92));position:relative;overflow:hidden}
+.card.rec{border-color:rgba(34,211,238,.5);box-shadow:0 0 60px -34px rgba(34,211,238,1)}
+.tag{position:absolute;right:16px;top:16px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--txt3)}
+.tag.g{color:#7ff0c3;border-color:rgba(10,201,122,.4)}
+.tag.r{color:#ff9db8;border-color:rgba(244,114,182,.4)}
+.card h2{margin-bottom:6px}
+.card .desc{color:var(--txt2);font-size:13.8px;margin:0 0 18px;min-height:44px}
+
+/* ---------- 手机实景 ---------- */
+.phone{width:100%;max-width:300px;margin:0 auto;border:1px solid var(--line2);border-radius:16px;overflow:hidden;background:#06080f}
+.pnav{display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(5,7,14,.9);border-bottom:1px solid var(--line)}
+.pbrand{display:flex;align-items:center;gap:8px;min-width:0}
+.pmark{width:28px;height:28px;border-radius:9px;flex:none;background:linear-gradient(150deg,#0b1020,#131a33);border:1px solid var(--line2);display:grid;place-items:center}
+.pmark svg{width:16px;height:16px}
+.pname{font-size:12.5px;font-weight:700;white-space:nowrap}
+.pname em{font-style:normal;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pbody{padding:12px;display:grid;gap:9px}
+.skel{height:9px;border-radius:5px;background:linear-gradient(90deg,rgba(122,160,255,.16),rgba(122,160,255,.05))}
+.skel.s{width:62%}
+
+/* ---------- 三态行 / 放大 ---------- */
+.states{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.st{border:1px solid var(--line);border-radius:12px;padding:10px;background:rgba(255,255,255,.017);display:grid;gap:8px;justify-items:center}
+.st>span.lbl{font-size:10.5px;color:var(--txt3);font-family:var(--mono);letter-spacing:.06em}
+.zoom3{transform:scale(2.6);transform-origin:center}
+.zoomcell{height:150px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:12px;background:
+  linear-gradient(rgba(122,160,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(122,160,255,.05) 1px,transparent 1px);
+  background-size:22px 22px,22px 22px}
+
+/* ---------- 参数表 ---------- */
+.tbl{width:100%;border-collapse:collapse;margin-top:16px;font-size:12.4px}
+.tbl th,.tbl td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+.tbl th{color:var(--txt3);font-weight:500;font-family:var(--mono);font-size:11px;letter-spacing:.06em}
+.tbl td{color:var(--txt2)}
+.tbl td.v{color:#a5f3fc;font-family:var(--mono)}
+
+/* ==========================================================================
+   汉堡按钮本体 —— 三个方案共享同一套「修好的几何」，只换视觉
+   几何：杠 20×2px，间距 5px，胶囊圆角，flex 列 + gap（不再依赖行拉伸）
+   ========================================================================== */
+.btn-burger{
+  --bar-w:20px; --bar-h:2px; --bar-gap:5px; --bar-r:999px;
+  width:42px;height:42px;flex:none;border-radius:12px;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;
+  gap:var(--bar-gap);
+  border:1px solid var(--line2);background:rgba(12,17,31,.72);
+  transition:border-color .35s var(--ease),box-shadow .35s var(--ease),background .35s var(--ease);
+  cursor:pointer;padding:0;
+}
+.btn-burger span{
+  display:block;width:var(--bar-w);height:var(--bar-h);border-radius:var(--bar-r);
+  background:var(--txt);
+  transition:transform .35s var(--ease),opacity .25s var(--ease),background .35s var(--ease),width .35s var(--ease);
+}
+/* 展开态：位移量 = 杠厚 + 杠距，与布局同源，改一处即可 */
+.btn-burger.on span:nth-child(1){transform:translateY(calc(var(--bar-h) + var(--bar-gap))) rotate(45deg)}
+.btn-burger.on span:nth-child(2){opacity:0;transform:scaleX(.4)}
+.btn-burger.on span:nth-child(3){transform:translateY(calc(-1 * (var(--bar-h) + var(--bar-gap)))) rotate(-45deg)}
+
+/* ---- 静态悬停态（对比页需要同屏演示，不能靠鼠标真悬停） ---- */
+.v-a.hoverish{border-color:rgba(34,211,238,.6);box-shadow:0 0 26px -12px rgba(34,211,238,.9)}
+.v-a.hoverish span{background:#bff3ff}
+.v-b.hoverish{border-color:rgba(139,92,246,.7);box-shadow:0 0 32px -12px rgba(139,92,246,1)}
+.v-b.hoverish span{background-position:100% 50%}
+.v-c.hoverish{background:rgba(12,17,31,.72);border-color:var(--line2)}
+.v-c.hoverish span{background-position:100% 50%}
+
+/* ---- 方案 A · 经典修正 ---- */
+.v-a:hover{border-color:rgba(34,211,238,.6);box-shadow:0 0 26px -12px rgba(34,211,238,.9)}
+.v-a:hover span{background:#bff3ff}
+
+/* ---- 方案 B · 霓虹渐变 ---- */
+.v-b{background:rgba(9,13,24,.82);border-color:rgba(34,211,238,.34)}
+.v-b span{background:var(--grad2);background-size:200% 100%;background-position:0% 50%}
+.v-b:hover{border-color:rgba(139,92,246,.7);box-shadow:0 0 32px -12px rgba(139,92,246,1)}
+.v-b:hover span{background-position:100% 50%}
+
+/* ---- 方案 C · 无底极简 ---- */
+.v-c{background:transparent;border-color:transparent}
+.v-c span{width:22px;background:var(--grad2);background-size:200% 100%}
+.v-c:hover{background:rgba(12,17,31,.72);border-color:var(--line2)}
+.v-c:hover span{background-position:100% 50%}
+
+/* ---- 当前（有缺陷）复刻：display:grid + 无 grid-template-rows ---- */
+.btn-burger.broken{
+  display:grid;place-items:center;gap:0;
+  width:42px;height:42px;border-radius:11px;
+  border:1px solid var(--line2);background:rgba(12,17,31,.72);
+}
+.btn-burger.broken span{width:17px;height:1.6px;border-radius:2px;background:#fff}
+.btn-burger.broken span+span{margin-top:4.5px}
+.btn-burger.broken.on span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+.btn-burger.broken.on span:nth-child(2){opacity:0}
+.btn-burger.broken.on span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+
+.picked{border:1px solid rgba(34,211,238,.5);border-radius:14px;padding:16px 18px;margin:0 0 8px;
+  background:linear-gradient(100deg,rgba(34,211,238,.12),rgba(139,92,246,.1));
+  display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}
+.picked b{font-size:15px;color:#c9f6ff}
+.picked span{font-size:13px;color:var(--txt2)}
+.picked code{font-family:var(--mono);font-size:12.2px;color:#a5f3fc}
+.note{color:var(--txt3);font-size:12.6px;margin-top:14px;line-height:1.75}
+.foot{margin-top:44px;border-top:1px solid var(--line);padding-top:20px;color:var(--txt3);font-size:12.6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="picked">
+  <b>已选定：方案 B · 霓虹渐变</b>
+  <span>已落地到 <code>website/index.html</code>（2026-09-15）。本页保留为决策记录，三方案仍可对比查看。</span>
+</div>
+
+<header>
+  <div class="eyebrow">BURGER BUTTON · 方案对比</div>
+  <h1>汉堡按钮：三个方案，你挑一个</h1>
+  <p class="sub">三个方案共用同一套<b>修好的几何</b>（杠 20×2px、间距 5px、胶囊圆角、flex 列 + gap），
+  差别只在配色、粗细与是否有底盒。左侧会原样复刻当前那个坏掉的状态作对照。</p>
+
+  <div class="why">
+    <b>当前为什么是坏的（根因已定位）</b>
+    <ul>
+      <li><code>.burger</code> 用了 <code>display:grid</code> 且没写 <code>grid-template-rows</code>，
+        三行 auto 行被 <code>align-content:normal</code>（等价 <code>stretch</code>）拉伸填满 42px 高度
+        → 每行恰好 <b>42 ÷ 3 = 14px</b>，实测截图正是 14px。</li>
+      <li>我写的 <code>margin-top:4.5px</code> 被行拉伸完全吞掉，<b>想做的紧凑三横根本没生效</b>。</li>
+      <li>连带展开态也是坏的：<code>.on</code> 的位移写的是 <code>translateY(6px)</code>（按 6px 杠距算的），
+        实际杠距 14px，<b>点开后三条杠合不拢，组不成 X</b>。</li>
+      <li>杠长 17px 只占 42px 盒宽的 <b>40%</b>，两侧空太多，重心发虚。</li>
+    </ul>
+    <p class="note">新方案把位移量写成 <code>calc(var(--bar-h) + var(--bar-gap))</code>，
+      与布局同源 —— 以后改杠厚或杠距，展开态会自动跟着对，不会再各写一套而错位。</p>
+  </div>
+</header>
+
+<div class="eyebrow">对照 · 当前状态</div>
+<div class="grid">
+  <div class="card" style="border-color:rgba(244,114,182,.35)">
+    <span class="tag r">现状</span>
+    <h2>当前汉堡按钮</h2>
+    <p class="desc">杠距被 grid 行拉伸撑到 14px，三条杠飘散；展开时位移不足，X 合不拢。</p>
+    <div class="phone">
+      <div class="pnav">
+        <span class="pbrand"><span class="pmark"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="#22d3ee" stroke-width="1.7"/><path d="M12 7.4V12l3.3 2.1" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="pname">Super<em>Time</em></span></span>
+        <button class="btn-burger broken" aria-label="当前状态"><span></span><span></span><span></span></button>
+      </div>
+      <div class="pbody"><div class="skel"></div><div class="skel s"></div><div class="skel"></div></div>
+    </div>
+    <div class="states">
+      <div class="st"><span class="lbl">默认</span><button class="btn-burger broken"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">悬停</span><button class="btn-burger broken"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">展开</span><button class="btn-burger broken on"><span></span><span></span><span></span></button></div>
+    </div>
+    <table class="tbl">
+      <tr><th>项</th><th>实测 / 计算</th></tr>
+      <tr><td>杠距（行高）</td><td class="v">42 ÷ 3 = 14px ✗</td></tr>
+      <tr><td>杠长 / 盒宽</td><td class="v">17 / 42 = 40%</td></tr>
+      <tr><td>杠厚 / 杠距</td><td class="v">1.6 / 14 = 0.11（过低）</td></tr>
+      <tr><td>展开位移</td><td class="v">6px ✗（需 14px）</td></tr>
+    </table>
+  </div>
+
+  <div class="card" style="grid-column:span 1">
+    <span class="tag">对照参考</span>
+    <h2>常规汉堡按钮的合理区间</h2>
+    <p class="desc">下面是业界常见取值，供你判断三个方案各自落在哪里。</p>
+    <table class="tbl">
+      <tr><th>项</th><th>常见区间</th><th>说明</th></tr>
+      <tr><td>杠长 / 盒宽</td><td class="v">45%–55%</td><td>小于 40% 会显得空</td></tr>
+      <tr><td>杠厚</td><td class="v">2–2.5px</td><td>42px 盒内</td></tr>
+      <tr><td>杠距</td><td class="v">4–6px</td><td>约 2–3 倍杠厚</td></tr>
+      <tr><td>圆角</td><td class="v">10–12px</td><td>42px 盒，约 25%</td></tr>
+      <tr><td>三杠总高 / 盒高</td><td class="v">35%–45%</td><td>本方案 16/42 = 38% ✓</td></tr>
+    </table>
+    <p class="note">三方案均取：杠长 20px（47.6%）、厚 2px、距 5px、圆角 12px、三杠总高 16px（38%）—— 全部落在合理区间内。</p>
+  </div>
+</div>
+
+<div class="eyebrow">方案 A / B / C</div>
+<div class="grid">
+
+  <!-- ============ A ============ -->
+  <div class="card rec">
+    <span class="tag g">推荐</span>
+    <h2>方案 A · 经典修正</h2>
+    <p class="desc">保留深色底盒与近白色杠，只把几何修正到位。认知成本最低，用户一眼就知道是菜单。</p>
+    <div class="phone">
+      <div class="pnav">
+        <span class="pbrand"><span class="pmark"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="#22d3ee" stroke-width="1.7"/><path d="M12 7.4V12l3.3 2.1" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="pname">Super<em>Time</em></span></span>
+        <button class="btn-burger v-a" aria-label="方案A"><span></span><span></span><span></span></button>
+      </div>
+      <div class="pbody"><div class="skel"></div><div class="skel s"></div><div class="skel"></div></div>
+    </div>
+    <div class="zoomcell">
+      <div class="zoom3" style="display:flex;gap:26px;align-items:center">
+        <button class="btn-burger v-a" style="width:64px;height:64px;--bar-w:30px;--bar-h:3px;--bar-gap:7.5px;border-radius:18px"><span></span><span></span><span></span></button>
+        <button class="btn-burger v-a on" style="width:64px;height:64px;--bar-w:30px;--bar-h:3px;--bar-gap:7.5px;border-radius:18px"><span></span><span></span><span></span></button>
+      </div>
+    </div>
+    <div class="states">
+      <div class="st"><span class="lbl">默认</span><button class="btn-burger v-a"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">悬停</span><button class="btn-burger v-a hoverish"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">展开</span><button class="btn-burger v-a on"><span></span><span></span><span></span></button></div>
+    </div>
+    <table class="tbl">
+      <tr><th>项</th><th>取值</th></tr>
+      <tr><td>杠</td><td class="v">20 × 2px · 圆角 1px</td></tr>
+      <tr><td>杠距</td><td class="v">5px</td></tr>
+      <tr><td>三杠总高</td><td class="v">16px（盒高 38%）</td></tr>
+      <tr><td>配色</td><td class="v">#e9edff，悬停 → #bff3ff</td></tr>
+      <tr><td>底盒</td><td class="v">r12 · 深蓝 + 青边光</td></tr>
+      <tr><td>气质</td><td class="v">稳、通用</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ B ============ -->
+  <div class="card">
+    <span class="tag">品牌感</span>
+    <h2>方案 B · 霓虹渐变</h2>
+    <p class="desc">几何同 A，三条杠换成青→紫品牌渐变，悬停时渐变位移并带紫色光晕。和官网视觉体系一致。</p>
+    <div class="phone">
+      <div class="pnav">
+        <span class="pbrand"><span class="pmark"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="#22d3ee" stroke-width="1.7"/><path d="M12 7.4V12l3.3 2.1" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="pname">Super<em>Time</em></span></span>
+        <button class="btn-burger v-b" aria-label="方案B"><span></span><span></span><span></span></button>
+      </div>
+      <div class="pbody"><div class="skel"></div><div class="skel s"></div><div class="skel"></div></div>
+    </div>
+    <div class="zoomcell">
+      <div class="zoom3" style="display:flex;gap:26px;align-items:center">
+        <button class="btn-burger v-b" style="width:64px;height:64px;--bar-w:30px;--bar-h:3px;--bar-gap:7.5px;border-radius:18px"><span></span><span></span><span></span></button>
+        <button class="btn-burger v-b on" style="width:64px;height:64px;--bar-w:30px;--bar-h:3px;--bar-gap:7.5px;border-radius:18px"><span></span><span></span><span></span></button>
+      </div>
+    </div>
+    <div class="states">
+      <div class="st"><span class="lbl">默认</span><button class="btn-burger v-b"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">悬停</span><button class="btn-burger v-b hoverish"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">展开</span><button class="btn-burger v-b on"><span></span><span></span><span></span></button></div>
+    </div>
+    <table class="tbl">
+      <tr><th>项</th><th>取值</th></tr>
+      <tr><td>杠</td><td class="v">20 × 2px · 全圆角胶囊</td></tr>
+      <tr><td>杠距</td><td class="v">5px</td></tr>
+      <tr><td>三杠总高</td><td class="v">16px（盒高 38%）</td></tr>
+      <tr><td>配色</td><td class="v">#22d3ee → #8b5cf6 渐变</td></tr>
+      <tr><td>底盒</td><td class="v">r12 · 青边 + 悬停紫光晕</td></tr>
+      <tr><td>气质</td><td class="v">科技、与官网同源</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ C ============ -->
+  <div class="card">
+    <span class="tag">轻量</span>
+    <h2>方案 C · 无底极简</h2>
+    <p class="desc">去掉常驻深色底盒，三杠略加宽到 22px 直接躺在导航上；悬停才浮出底盒。更透气，但触控反馈依赖悬停态。</p>
+    <div class="phone">
+      <div class="pnav">
+        <span class="pbrand"><span class="pmark"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="#22d3ee" stroke-width="1.7"/><path d="M12 7.4V12l3.3 2.1" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="pname">Super<em>Time</em></span></span>
+        <button class="btn-burger v-c" aria-label="方案C"><span></span><span></span><span></span></button>
+      </div>
+      <div class="pbody"><div class="skel"></div><div class="skel s"></div><div class="skel"></div></div>
+    </div>
+    <div class="zoomcell">
+      <div class="zoom3" style="display:flex;gap:26px;align-items:center">
+        <button class="btn-burger v-c" style="width:64px;height:64px;--bar-w:33px;--bar-h:3px;--bar-gap:7.5px"><span></span><span></span><span></span></button>
+        <button class="btn-burger v-c on" style="width:64px;height:64px;--bar-w:33px;--bar-h:3px;--bar-gap:7.5px"><span></span><span></span><span></span></button>
+      </div>
+    </div>
+    <div class="states">
+      <div class="st"><span class="lbl">默认</span><button class="btn-burger v-c"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">悬停</span><button class="btn-burger v-c hoverish"><span></span><span></span><span></span></button></div>
+      <div class="st"><span class="lbl">展开</span><button class="btn-burger v-c on"><span></span><span></span><span></span></button></div>
+    </div>
+    <table class="tbl">
+      <tr><th>项</th><th>取值</th></tr>
+      <tr><td>杠</td><td class="v">22 × 2px · 全圆角胶囊</td></tr>
+      <tr><td>杠距</td><td class="v">5px</td></tr>
+      <tr><td>三杠总高</td><td class="v">16px（盒高 38%）</td></tr>
+      <tr><td>配色</td><td class="v">#22d3ee → #8b5cf6 渐变</td></tr>
+      <tr><td>底盒</td><td class="v">默认无 · 悬停才显 r12 底盒</td></tr>
+      <tr><td>气质</td><td class="v">轻、透气（代价：默认态锚点弱）</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="eyebrow">尺寸阶梯（看缩小后是否还认得出）</div>
+<div class="card">
+  <div style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end;justify-content:center">
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-a" style="width:16px;height:16px;--bar-w:8px;--bar-h:1.2px;--bar-gap:2px;border-radius:5px;border-width:0"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">16</span></div>
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-a" style="width:20px;height:20px;--bar-w:10px;--bar-h:1.4px;--bar-gap:2.4px;border-radius:6px;border-width:0"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">20</span></div>
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-a" style="width:26px;height:26px;--bar-w:12px;--bar-h:1.6px;--bar-gap:3px;border-radius:8px"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">26</span></div>
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-a" style="width:32px;height:32px;--bar-w:15px;--bar-h:1.8px;--bar-gap:4px;border-radius:10px"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">32</span></div>
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-a"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">42 实际</span></div>
+    <div style="text-align:center"><div style="display:grid;place-items:center;height:64px"><button class="btn-burger v-b" style="width:56px;height:56px;--bar-w:26px;--bar-h:2.6px;--bar-gap:6.5px;border-radius:16px"><span></span><span></span><span></span></button></div><span class="mono" style="font-size:10.5px;color:var(--txt3)">56</span></div>
+  </div>
+  <p class="note">汉堡按钮在导航里恒为 42px（≤360px 小屏可降到 38px），不是应用图标，所以小尺寸不是主要约束 —— 这一排只是确认三方案在缩放时都不糊。</p>
+</div>
+
+<div class="foot">
+  选定后我会把该方案的 CSS 落到 <span class="mono">website/index.html</span>，并把展开态位移与布局同源（<span class="mono">calc(var(--bar-h) + var(--bar-gap))</span>），
+  同时补一条回归断言防止再次错位。
+</div>
+</div>
+</body>
+</html>

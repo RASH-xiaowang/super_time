@@ -94,8 +94,9 @@ function topEmoticonUsage(decryptedDir: string, cap: number): Array<{ md5: strin
         const cols = tableColumns(db, table)
         if (!cols.has('local_type') || !cols.has('message_content')) continue
         try {
-          const rows = db.prepare(`SELECT local_type, message_content FROM "${table}" WHERE (local_type & 4294967295) = 47`).all() as Array<Record<string, unknown>>
-          for (const r of rows) {
+          // 游标读（N8）：整张 Msg_* 随消息量增长，这里只是挑出 `local_type=47` 的行后计数
+          const sql = `SELECT local_type, message_content FROM "${table}" WHERE (local_type & 4294967295) = 47`
+          for (const r of db.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
             const m = re.exec(decodeCell(r['message_content']))
             const md5 = m ? (m[1] ?? '') : ''
             if (md5) counts.set(md5, (counts.get(md5) ?? 0) + 1)

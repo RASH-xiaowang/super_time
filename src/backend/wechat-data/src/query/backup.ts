@@ -4,9 +4,11 @@
  * create writes an AES-256-GCM `.wcb` bundle (scrypt key, HMAC-authenticated
  * header, per-file IVs) that restoreBackup decrypts back to a directory.
  */
-import { closeSync, cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from 'node:crypto'
+import { StreamWriter, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
+import type { StreamControl } from './zip.ts'
 import type { BackupEntry, BackupPreviewSnapshot, BackupRestoreResult } from '../types.ts'
 
 const MAGIC = Buffer.from('DSHWCB1\n', 'utf8')
@@ -170,6 +172,10 @@ export function listBackups(decryptedDir: string): { items: BackupEntry[]; total
 
 /**
  * Create a timestamped directory backup of the decrypted DBs.
+ *
+ * 先在同级目录复制到临时名、全部成功后再改名 —— 直接往最终名字里复制时，某个子目录
+ * 复制失败会留下一个**看起来成功、实际缺库**的备份（旧实现甚至 `catch {}` 吞掉失败后
+ * 照常返回成功条目，用户以为备份好了）；这里把「部分失败」显式报出去并清掉半成品。
  * @param decryptedDir - decrypted data root.
  * @returns the created backup entry.
  */
@@ -179,14 +185,34 @@ export function createBackup(decryptedDir: string): BackupEntry {
   const dir = backupDir(decryptedDir)
   mkdirSync(dir, { recursive: true })
   const target = join(dir, name)
-  if (existsSync(target)) rmSync(target, { recursive: true, force: true })
-  mkdirSync(target, { recursive: true })
-  if (existsSync(decryptedDir)) {
-    for (const sub of readdirSync(decryptedDir, { withFileTypes: true })) {
-      if (!sub.isDirectory()) continue
-      if (sub.name.startsWith('.')) continue
-      try { cpSync(join(decryptedDir, sub.name), join(target, sub.name), { recursive: true }) } catch { /* skip */ }
+  const tmp = partialPath(target)
+  mkdirSync(tmp, { recursive: true })
+  const failed: string[] = []
+  try {
+    if (existsSync(decryptedDir)) {
+      for (const sub of readdirSync(decryptedDir, { withFileTypes: true })) {
+        if (!sub.isDirectory()) continue
+        if (sub.name.startsWith('.')) continue
+        try {
+          cpSync(join(decryptedDir, sub.name), join(tmp, sub.name), { recursive: true })
+        } catch (e) {
+          failed.push(sub.name + '（' + (e as Error).message + '）')
+        }
+      }
     }
+    if (failed.length > 0) {
+      throw new Error('备份不完整：' + String(failed.length) + ' 个子目录复制失败 —— ' + failed.join('；'))
+    }
+    // 同名（同一秒内重复点）时先挪开旧的：Windows 上 rename 到已存在的目录会失败。
+    if (existsSync(target)) rmSync(target, { recursive: true, force: true })
+    renameSync(tmp, target)
+  } catch (e) {
+    try {
+      rmSync(tmp, { recursive: true, force: true })
+    } catch {
+      /* 清理失败不掩盖原错误 */
+    }
+    throw e
   }
   const st = statSync(target)
   return { name, path: target, size: dirSize(target), modified: Math.floor(st.mtimeMs / 1000), kind: 'dir' }
@@ -194,16 +220,24 @@ export function createBackup(decryptedDir: string): BackupEntry {
 
 /**
  * Create an encrypted `.wcb` backup bundle.
+ *
+ * 写盘走 temp + rename：旧实现直接往最终名字里流式写，中途失败（磁盘满、取消、进程被掐）
+ * 会留下一个长度不对却带着合法 MAGIC 的 `.wcb` —— 用户以为备份好了，恢复时才发现截断。
+ * 另外旧实现用 `out.write()` 但不看返回值（大备份未落盘的数据在内存里堆积），
+ * 且错误监听是在写完之后才挂上（循环里出错会变成未捕获异常）。
  * @param decryptedDir - decrypted data root.
  * @param password - encryption password.
+ * @param ctrl - 可选的进度/取消（逐个文件上报；取消后不留半成品）。
  * @returns the created backup entry.
  */
-export async function createEncryptedBackup(decryptedDir: string, password: string): Promise<BackupEntry> {
+export async function createEncryptedBackup(decryptedDir: string, password: string, ctrl?: StreamControl): Promise<BackupEntry> {
+  throwIfCancelled(ctrl?.signal)
   const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 14)
   const name = 'wechat_backup_' + ts + '.wcb'
   const dir = backupDir(decryptedDir)
   mkdirSync(dir, { recursive: true })
   const target = join(dir, name)
+  const tmp = partialPath(target)
   const salt = randomBytes(SALT_LEN)
   const key = scryptSync(password, salt, 32)
   const files = collectFiles(decryptedDir)
@@ -217,30 +251,50 @@ export async function createEncryptedBackup(decryptedDir: string, password: stri
   }
   const headerBuf = Buffer.from(JSON.stringify(header), 'utf8')
   const mac = createHmac('sha256', key).update(headerBuf).digest()
-  const out = createWriteStream(target)
-  out.write(MAGIC)
-  out.write(salt)
-  const lenBuf = Buffer.alloc(4)
-  lenBuf.writeUInt32BE(headerBuf.length)
-  out.write(lenBuf)
-  out.write(headerBuf)
-  out.write(mac)
-  for (let i = 0; i < files.length; i += 1) {
-    const f = header.files[i]
-    const src = files[i]
-    if (!f || !src) continue
-    const iv = Buffer.from(f.iv, 'base64')
-    const cipher = createCipheriv('aes-256-gcm', key, iv)
-    for await (const chunk of createReadStream(src.abs) as AsyncIterable<Buffer>) {
-      out.write(cipher.update(chunk))
+  const sink = await StreamWriter.create(tmp)
+  let written = 0
+  try {
+    const put = async (buf: Buffer): Promise<void> => {
+      await sink.write(buf)
+      written += buf.length
+      reportProgress(ctrl, 'write', written, 0)
     }
-    out.write(cipher.final())
-    out.write(cipher.getAuthTag())
+    await put(MAGIC)
+    await put(salt)
+    const lenBuf = Buffer.alloc(4)
+    lenBuf.writeUInt32BE(headerBuf.length)
+    await put(lenBuf)
+    await put(headerBuf)
+    await put(mac)
+    for (let i = 0; i < files.length; i += 1) {
+      throwIfCancelled(ctrl?.signal)
+      const f = header.files[i]
+      const src = files[i]
+      if (!f || !src) continue
+      const iv = Buffer.from(f.iv, 'base64')
+      const cipher = createCipheriv('aes-256-gcm', key, iv)
+      for await (const chunk of createReadStream(src.abs) as AsyncIterable<Buffer>) {
+        throwIfCancelled(ctrl?.signal)
+        await put(cipher.update(chunk))
+      }
+      await put(cipher.final())
+      await put(cipher.getAuthTag())
+      reportProgress(ctrl, 'files', i + 1, files.length)
+    }
+    await sink.end()
+    renameSync(tmp, target)
+  } catch (e) {
+    // abort 会关流并删掉临时文件；失败路径必须走它，否则半成品以最终名字存在。
+    await sink.abort()
+    // end() 之后再出错时 abort() 是空操作（它不能删一个已经正常收尾的文件），
+    // 但这里的 tmp 是临时文件，必须清掉。
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* 清理失败不掩盖原错误 */
+    }
+    throw e
   }
-  await new Promise<void>((resolve, reject) => {
-    out.end(() => { resolve() })
-    out.on('error', reject)
-  })
   const st = statSync(target)
   return { name, path: target, size: st.size, modified: Math.floor(st.mtimeMs / 1000), kind: 'enc' }
 }

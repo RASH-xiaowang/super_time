@@ -6,6 +6,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { apiGeneratePeriodSummary } from '../api.ts'
 import type { PeriodSummaryResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, PanelHeader } from '../ui/kit.tsx'
+import { useTransientNotice } from './hooks.tsx'
 import css from './period-summary.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -63,7 +64,8 @@ export function PeriodSummaryPanel(): React.JSX.Element {
   const [result, setResult] = useState<PeriodSummaryResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
+  const { notice, flash, hold } = useTransientNotice()
 
   const applyRange = useCallback((key: string): void => {
     const r = RANGES.find(x => x.key === key)?.range()
@@ -88,10 +90,9 @@ export function PeriodSummaryPanel(): React.JSX.Element {
     if (!result) return
     try {
       await navigator.clipboard.writeText(result.summary)
-      setNotice('已复制总结')
-      window.setTimeout(() => { setNotice(null) }, 3000)
+      flash('已复制总结')
     } catch {
-      setNotice('复制失败')
+      hold('复制失败')
     }
   }, [result])
 

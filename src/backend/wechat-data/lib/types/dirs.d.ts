@@ -37,6 +37,9 @@ export declare function resolveSourceDir(env?: Record<string, string | undefined
  * write stores from the source into the DSH-owned data root. Idempotent —
  * a root that already contains `decrypted` is left untouched. Explicit
  * legacy overrides bypass the root, so nothing is copied in that mode.
+ *
+ * SQLite 主库的 `-wal` 会随主库一起拷（见 copyFileWithWal）；`walCarried` 就是给调用方
+ * 留痕迹用的 —— 「这次拷的是不是最新一代」不能只靠猜。
  * @param env - environment mapping.
  * @returns what was copied (or skipped), for observability.
  */
@@ -44,4 +47,5 @@ export declare function bootstrapWechatData(env?: Record<string, string | undefi
     root: string;
     copied: string[];
     skipped: boolean;
+    walCarried: string[];
 };

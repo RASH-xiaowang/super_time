@@ -22,6 +22,46 @@ interface Entry {
 
 const entries = new Map<string, Entry>()
 
+/**
+ * 按 key 前缀的**按需限界**（N16）。
+ *
+ * 为什么不给整张表设一个全局上限：`contact-meta:` / `sender-names:` / `shard-meta:` /
+ * `shard-catalog:` 这些条目的**条数由数据目录决定**（几十条），却是最贵的（每条要开库 +
+ * 读 Name2Id + 逐表 PRAGMA）。给它们设上限，就等于「用户狂点聊天时把最贵的条目挤掉」——
+ * 省下几百字节换一次全量重载，方向反了。
+ *
+ * 真正会涨的是 `msg-by-sid:`：key 里带 serverId，条数由「用户点过哪些消息」驱动、
+ * 没有天然上限（M11 复审实测负条目 ~740B，命中条目还可能含整份 rich）。
+ * 所以只钉这一族，其余照旧。
+ *
+ * 淘汰语义与 `boundedSet` 一致（FIFO —— Map 的插入序就是写入序；命中只刷新 TTL、
+ * 不改变插入序，因此**不是**严格 LRU）：目的是「内存有上界」，不是「命中率最优」。
+ * 新增一族只需要在这里加一行。
+ */
+export const METADATA_KEY_FAMILY_LIMITS: ReadonlyArray<{ prefix: string; cap: number }> = [
+  { prefix: 'msg-by-sid:', cap: 200 },
+]
+
+/**
+ * 超出该族上限时按 FIFO 淘汰最老的 key。
+ * @param key - 刚刚写入的 key。
+ */
+function enforceKeyFamilyLimit(key: string): void {
+  for (const { prefix, cap } of METADATA_KEY_FAMILY_LIMITS) {
+    if (!key.startsWith(prefix)) continue
+    let count = 0
+    for (const k of entries.keys()) if (k.startsWith(prefix)) count += 1
+    if (count <= cap) return
+    for (const k of entries.keys()) {
+      if (!k.startsWith(prefix)) continue
+      entries.delete(k)
+      count -= 1
+      if (count <= cap) return
+    }
+    return
+  }
+}
+
 function decode(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (typeof v === 'string') return v
@@ -53,6 +93,7 @@ function get<T>(key: string, sig: string, loader: () => T, maxAgeMs = MAX_AGE_MS
   if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) return hit.value as T
   const value = loader()
   entries.set(key, { at: Date.now(), sig, value })
+  enforceKeyFamilyLimit(key)
   return value
 }
 
