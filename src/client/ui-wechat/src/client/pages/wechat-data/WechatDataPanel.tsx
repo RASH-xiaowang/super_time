@@ -10,6 +10,7 @@ import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 
 // 面板统一静态导入；客户端插件加载器按单文件 factory 加载，不能分包。
 import { OverviewPanel } from './panels/Overview.tsx'
+import { NoticeBanner } from './panels/NoticeBanner.tsx'
 import { AskPanel } from './panels/Ask.tsx'
 import { ChatsPanel } from './panels/Chats.tsx'
 import { ContactsPanel } from './panels/Contacts.tsx'
@@ -646,6 +647,10 @@ export function WechatDataPanel(): React.JSX.Element {
           </span>
         </div>
       </div>
+
+      {/* 主动提醒条：新版本已下载可装 / 许可证临期。此前这两件事只在「设置」弹窗里能看到，
+          用户不主动点进去就感知不到 —— 新版本静默装好，许可证则到期当天才由解锁页硬拦。 */}
+      <NoticeBanner onOpenLicense={() => { openSettings('license') }} />
 
       <div className={css.body}>
         <aside className={css.sidebar} data-open={navOpen || undefined}>

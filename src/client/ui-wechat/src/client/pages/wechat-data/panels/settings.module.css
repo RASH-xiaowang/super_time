@@ -106,9 +106,9 @@
    理由与 kit.module.css 的 `.panelShell > *` 相同。 */
 .mainScroll > * { flex-shrink: 0; }
 
-/* 右侧内容区：未选中的分节必须真的不显示 —— `[hidden]` 的 UA 样式优先级低于
-   `.card` 这类类选择器（它们设了 display），所以这里显式压一头。 */
-.mainScroll [hidden] { display: none !important; }
+/* 15 节全部堆叠在 `.mainScroll` 里连续滚动（左导航是目录）。原先这里有一条
+   `.mainScroll [hidden] { display: none !important }` —— 那是在「一次只显示一节」时
+   压过 `.card` 的 display 用的，现在没有节需要隐藏了，规则随之删除。 */
 
 /* 整页视图（数据边界与出网 / 隐私体检）：这两页原来是外层侧栏的独立页签，迁进弹窗后
    保留自己的页头与卡片，这里只负责它们与相邻节一致的纵向间距。 */

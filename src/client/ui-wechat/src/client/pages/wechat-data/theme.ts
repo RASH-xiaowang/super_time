@@ -1,8 +1,9 @@
 /**
  * 微信+主题管理：深色 / 浅色。
  *
- * - 默认跟随系统 prefers-color-scheme（首次启动时决定）。
- * - 用户手动切换后写入 localStorage（super-time-wechat-theme）。
+ * - 默认深色：NEON MATRIX 本身就是深色设计，不再跟随系统 prefers-color-scheme
+ *   （系统处于浅色时会让「默认」变成浅色，与默认深色的预期相反）。
+ * - 用户手动切换后写入 localStorage（super-time-wechat-theme），此后以它为准。
  * - 通过 <html class="theme-light"> 切换 light-theme.css 覆盖层。
  */
 
@@ -12,13 +13,6 @@ import { clearTokenColorCache } from './utils/theme-color.ts'
 
 const STORAGE_KEY = 'super-time-wechat-theme'
 const _listeners = new Set<() => void>()
-
-function systemMode(): ThemeMode {
-  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-  }
-  return 'dark'
-}
 
 function storedMode(): ThemeMode | null {
   try {
@@ -37,20 +31,8 @@ function apply(mode: ThemeMode): void {
   clearTokenColorCache()
 }
 
-let _mode: ThemeMode = storedMode() ?? systemMode()
+let _mode: ThemeMode = storedMode() ?? 'dark'
 apply(_mode)
-
-if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-  // 未手动选择时跟随系统主题切换
-  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
-    if (storedMode() !== null) return
-    const next: ThemeMode = e.matches ? 'light' : 'dark'
-    if (next === _mode) return
-    _mode = next
-    apply(next)
-    for (const fn of _listeners) { try { fn() } catch { /* ignore */ } }
-  })
-}
 
 /** 当前主题模式。 */
 export function getThemeMode(): ThemeMode {

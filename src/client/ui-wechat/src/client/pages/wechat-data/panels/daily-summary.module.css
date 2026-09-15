@@ -112,6 +112,8 @@
 /* 双栏布局 */
 .dsLayout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; flex: 1; min-height: 0; }
 @media (max-width: 1100px) { .dsLayout { grid-template-columns: 1fr; } }
+/* 「手动生成」只有主栏（无右侧预览栏），双栏网格会空占 380px 把内容挤窄 */
+.dsLayoutSingle { grid-template-columns: minmax(0, 1fr); }
 .dsMain { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
 .dsSide { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
 
@@ -142,7 +144,7 @@
 .previewBody { padding: 14px 16px; }
 .summaryText {
   font-size: 13px; line-height: 1.85; color: var(--nm-text-1);
-  white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; padding-right: 6px;
+  white-space: pre-wrap; word-break: break-word;
 }
 .previewActions { display: flex; gap: 8px; padding: 0 14px 12px; }
 

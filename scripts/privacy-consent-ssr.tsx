@@ -58,6 +58,34 @@ check('出网清单里点明了「没有开关」的那些出网点', () => {
   ok(html.includes('腾讯图片 CDN') || html.includes('头像'), '没有说明头像出网')
 })
 
+check('出网点开关口径与文档一致（远程取图有开关、头像与地图无开关）', () => {
+  // 这一条守的是一个**犯过的错**：本屏曾把「远程图片/视频/公众号封面」也标成「无开关」，
+  // 而 docs/PRIVACY.md 的 D 条与设置里的「自动获取原图（CDN）」都表明它**有**开关
+  // （只拦后端主动取回；渲染层直连不在管辖内）。口径写错的代价是用户以为关不掉。
+  //
+  // 注意不能用「按 data-switch 切块、再看块里含哪个标签」来配：下面的诚实说明里也点了
+  // 那两个标签名，会被算进最后一块。改成按**渲染顺序**对齐（顺序不一致就直接判错位）。
+  const kinds = html.split('data-switch="').slice(1).map((c) => c.slice(0, c.indexOf('"')))
+  const ORDER = ['AI 问答与总结', 'AI embedding', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载']
+  const at = ORDER.map((l) => html.indexOf(`>${l}<`))
+  ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => at[i] < 0).join('、')}`)
+  ok(at.every((v, i) => i === 0 || v > at[i - 1]), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
+  ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
+  const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
+  ok(kindOf['头像图片'] === 'none', `头像应为无开关，实际 ${kindOf['头像图片']}`)
+  ok(kindOf['地图底图'] === 'none', `地图底图应为无开关，实际 ${kindOf['地图底图']}`)
+  ok(kindOf['远程图片 / 视频 / 公众号封面'] === 'toggle', `远程取图应标为可关闭，实际 ${kindOf['远程图片 / 视频 / 公众号封面']}`)
+  ok(kindOf['AI 问答与总结'] === 'toggle', `AI 问答与总结应标为可关闭，实际 ${kindOf['AI 问答与总结']}`)
+  ok(kinds.filter((k) => k === 'none').length === 2, '无开关的应当且仅当是两条（头像、地图底图）')
+})
+
+check('重点被单独框出：一句话结论 + 关不掉的两条 + 完全离线的诚实说明', () => {
+  ok(html.includes('一句话结论'), '缺少顶部结论块')
+  ok(html.includes('2 条没有内置开关'), '结论里没有预告「关不掉的」出网点')
+  ok(html.includes('诚实说明'), '缺少「别把关开关读成完全离线」的说明')
+  ok(html.includes('系统防火墙') || html.includes('断网'), '没有给出完全离线的办法')
+})
+
 check('未勾选时「同意并继续」是禁用态（显式同意不是走过场）', () => {
   // react-dom/server 会把 disabled 渲染成 disabled=""，这是初始（未勾选）状态的渲染事实
   ok(/<button[^>]*disabled[^>]*>[^<]*同意并继续/.test(html), `未渲染为禁用态：${html.match(/<button[^>]*>同意并继续/)?.[0] ?? '找不到按钮'}`)
