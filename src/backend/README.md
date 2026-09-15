@@ -8,9 +8,25 @@
 **仅 Windows（x64）**。产品读的是 Windows 微信的数据：`Weixin.exe` 内存扫描取密钥、
 `xwechat_files` 数据根、`HKCU\Software\Tencent\Weixin` 注册表、`%APPDATA%/Tencent/xwechat/config/*.ini`。
 
-构建侧同样只有 Windows 一种形态：原生依赖 `koffi` 只内联了 `@koromix/koffi-win32-x64`
-（见 `package.json` 的 `file:` 依赖与 `asarUnpack`），`electron-builder` 的构建目标也只保留
-`win`/`nsis`（mac/linux 目标已移除 —— 声明了也构建不出可用的包，那两种包里会缺原生二进制）。
+### 为什么是 Windows-only
+
+**根因是数据源，不是打包配置。** 产品读的是 Windows 微信的数据：`Weixin.exe` 内存扫描取密钥、
+`xwechat_files` 数据根、`HKCU\Software\Tencent\Weixin` 注册表、`%APPDATA%/Tencent/xwechat/config/*.ini`。
+这些在 mac/linux 上都不存在，所以即使打得出包也没有可读的数据。
+
+构建侧是**结果**，而且两个平台的形态并不一样（实测，本机 Windows 10.0.19045）：
+
+| 目标 | 实测行为 |
+|---|---|
+| `--mac` | **直接失败**：`⨯ Build for macOS is supported only on macOS`（exit 1）。不是「打出个缺二进制的包」，是根本打不出。 |
+| `--linux --dir` | **成功出包**（exit 0），但包里唯一的 koffi 原生模块是 `@koromix/koffi-win32-x64/win32_x64/koffi.node` —— 一个 **Windows** 二进制；`@koromix/koffi-linux-x64` 不在包里。即「出得来、跑不了」。 |
+
+`koffi` 的各平台原型包都是 `os`/`cpu` 门控的 optional dependency（`package-lock.json` 里 15 个都在），
+而本仓库只把 `@koromix/koffi-win32-x64` 作为 `file:` 依赖内联（见 `package.json` 的
+`dependencies`/`optionalDependencies`/`asarUnpack`）。所以即便将来要支持别的平台，也不是「加一行配置」，
+而是要补对应原型包 + 在对应平台上构建与验证。
+
+结论：`electron-builder` 的构建目标只保留 `win`/`nsis`（mac/linux 目标已移除）。
 
 ## 迁移范围（无遗漏核对）
 
