@@ -85,8 +85,52 @@ try {
   check(Boolean(wasmEntry && wasmEntry.unpacked === true), 'asar 头部把该 WASM 标为 unpacked');
   check(Boolean(wasmEntry) && wasmEntry.offset === undefined,
     'asar 归档体里没有重复存一份 WASM（只解包一份）');
-} catch {
-  console.log('  ·  跳过 asar 列表校验（@electron/asar 不可用）');
+
+  // ── M19：打包冗余已排除；但「排除掉的确实是冗余」与「运行时必需品还在」必须同时被断言 ──
+  // 起因：`files` 里的 `src/**/*` 把三类东西打进了 asar ——
+  //   · `src/backend/deps/**`（8.07MB/984 条）：与 node_modules 里 npm 装的那份重复。
+  //     后端 bundle 对裸模块是 external 的（`await import("koffi")` 等），运行时经
+  //     node_modules 解析，从不读这棵树；实测 bundle 里也没有任何 `backend/deps` 路径。
+  //   · `src/**/*.ts`（4.49MB/537 条）：运行时没有任何 ts 加载器。
+  //   · `src/client/ui-app/**`（12.29MB/164 条）：其中 `public/` 的 onboarding(11.25MB)
+  //     与 wxemoji(0.92MB) 与 `ui-dist/` 里那份逐字节重复，而渲染进程只加载 ui-dist。
+  // 只断言「体积变小」是不够的：误删必需文件同样会让它变小。所以下面两组一起看。
+  for (const [prefix, label] of [
+    ['/src/backend/deps/', '内联依赖源码树（与 node_modules 重复）'],
+    ['/src/client/ui-app/', '前端源码与 public 副本（ui-dist 里已有）'],
+  ]) {
+    const hit = entries.filter((f) => f.startsWith(prefix));
+    check(hit.length === 0, `asar 不含 ${prefix.slice(1)}**（${label}）`, `${hit.length} 条目`);
+  }
+  const tsHit = entries.filter((f) => /^\/src\/.*\.ts$/.test(f));
+  check(tsHit.length === 0, 'asar 不含 TypeScript 源（src/**/*.ts）', `${tsHit.length} 条目`);
+
+  // 必需物仍在。任何一条缺失都会让打包版起不来或功能残废，而「体积下降」不会告诉你。
+  for (const rel of [
+    '/src/backend/wechat-data/lib/index.js',        // 后端运行时 bundle
+    '/src/backend/wechat-data/package.json',        // lib/index.js 是 ESM，靠它解析（缺了会 CJS 解析失败）
+    '/src/backend/wechat-worker.js',                // 后端子进程入口
+    '/src/client/ui-dist/index.html',               // 渲染进程入口
+    '/src/backend/wechat-data/resources/win32/x64/wx_silk.exe', // 语音 silk 解码器
+  ]) {
+    check(entries.includes(rel), `asar 仍含运行时必需 ${rel.slice(1)}`);
+  }
+  // koffi：它在 deps 树里另有一份拷贝，那个被排除了 —— 必须由 node_modules 那份顶上。
+  // 这里**不能**用「entries 里有没有 /node_modules/koffi/**」来判断：`node_modules/koffi/**`
+  // 与 `@koromix/**` 都在 `asarUnpack` 里 ⇒ 它们全是**解包条目**，而解包条目照样会被
+  // listPackage 列出来 ⇒ 那条断言恒真、什么都没测（第一版就是这么写的，复审把它抓出来了）。
+  // 真正要断言的是**磁盘上存在真实文件**：`await import("koffi")` 的 ESM 入口与原生 .node
+  // 都只能从真实文件加载，asar 内的读补丁对这两者都不生效。
+  check(fs.existsSync(path.join(unpackedRoot, 'node_modules', 'koffi', 'index.js')),
+    'koffi JS 加载器在 app.asar.unpacked（await import("koffi") 的 ESM 入口）');
+  check(fs.existsSync(path.join(unpackedRoot, 'node_modules', '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')),
+    'koffi 原生模块在 app.asar.unpacked（排除 deps 树后的回归守卫）');
+} catch (e) {
+  // 以前这里只打印一句「跳过 asar 列表校验」—— 于是 `@electron/asar` 一旦不可用、或
+  // `listPackage` 抛错，上面十几条打包内容断言会**静默消失**而冒烟仍报 ✅（假绿通道）。
+  // 打包内容是这个脚本的主要职责之一：缺了它就该红。
+  check(false, 'asar 内容校验可执行（@electron/asar 可用且能解析 app.asar）',
+    String((e && e.message) || e).slice(0, 120));
 }
 // 清掉早先运行留下的残留，让本次测的是「全新安装后应用会不会往安装目录写」。
 // 这一条不能省：文件本来就在的话，启动后的断言等于没测。

@@ -436,6 +436,16 @@ function broadcastWechatEvent(name, args) {
 }
 
 function createWindow() {
+  /**
+   * 窗口图标。**打包态这个路径不存在**（`build/` 是 electron-builder 的 buildResources，
+   * 不在 `files` 白名单里），于是 `icon` 为 undefined，Windows 会退回用 exe 内嵌的图标 ——
+   * 而那个图标就是同一份 `build/icon.ico`（`win.icon` 会在打包时烘进 exe；实测取出两者
+   * 的 32×32 帧是同一张图）。即 dev 与打包态的窗口/任务栏图标一致，**不存在「打包版没图标」**。
+   *
+   * 所以别把 `build/` 加进 `files`：那会白带一份 83KB，并把图标改成走
+   * `nativeImage.createFromPath` 读 asar 内的 .ico（打包态未验证的路径），收益为零。
+   * 相关取证见 docs/RELEASE-PLAN.md 的 M19。
+   */
   const appIcon = path.join(__dirname, 'build', 'icon.ico');
   // 初始尺寸按主屏工作区算，**不写死宽高**：写死 1664×1066 时，1366×768 或
   // 1080p@125% 的机器上窗口比屏幕还大（审计 P0-2）。窗口本身始终可缩放，
