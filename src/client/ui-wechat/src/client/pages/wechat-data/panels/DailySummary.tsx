@@ -1,7 +1,7 @@
 /**
  * 每日总结面板 — React 版，忠实迁移 DailySummary + DailySummaryForm：
  * 按日期生成总结 + 定时任务 CRUD（群聊选择/关注成员/分析格式/自定义提示词/
- * 定时时间/启停/复制为新任务）+ 历史记录查看/复制/删除。走 Remote，无 HTTP。
+ * 定时时间/启停/复制为新任务）+ 总结阅览查看/复制/删除。走 Remote，无 HTTP。
  * 每个按钮都提供结果反馈：全局 toast（成功/失败/提示）+ 逐动作 loading 态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -294,7 +294,7 @@ export function DailySummaryPanel(): React.JSX.Element {
     <div className={css.panel}>
       <PanelHeader
         title="每日总结"
-        desc="定时总结任务 + 历史记录（DSH LLM）"
+        desc="定时总结任务 + 总结阅览（DSH LLM）"
         actions={(
           <>
             <Badge tone="cyan">{tasks.length} 任务</Badge>
@@ -314,8 +314,8 @@ export function DailySummaryPanel(): React.JSX.Element {
         </div>
       )}
       <div className={css.tabBar}>
-        <button type="button" className={css.tabBtn} data-active={view === 'tasks' || undefined} onClick={() => { setView('tasks') }}>定时任务</button>
-        <button type="button" className={css.tabBtn} data-active={view === 'records' || undefined} onClick={() => { setView('records') }}>历史记录</button>
+        <button type="button" className={css.tabBtn} data-active={view === 'tasks' || undefined} onClick={() => { setView('tasks') }}>总结任务栏</button>
+        <button type="button" className={css.tabBtn} data-active={view === 'records' || undefined} onClick={() => { setView('records') }}>总结阅览</button>
         <button type="button" className={css.tabBtn} data-active={view === 'generate' || undefined} onClick={() => { setView('generate') }}>手动生成</button>
       </div>
       <div className={css.scroll}>
@@ -354,7 +354,7 @@ export function DailySummaryPanel(): React.JSX.Element {
           <div className={css.dsLayout}>
             <div className={css.dsMain}>
               <div className={css.sideCard}>
-                <div className={css.cardTitle}>历史记录 <span className={css.cardCount}>共 {records.length} 条 · 平均 {avgLen} 字</span></div>
+                <div className={css.cardTitle}>总结阅览 <span className={css.cardCount}>共 {records.length} 条 · 平均 {avgLen} 字</span></div>
                 <div className={css.sideList}>
                   {records.length === 0 && <div className={kitCss.emptyInline}>还没有历史总结。定时任务运行或手动生成后会自动存入这里。</div>}
                   {records.map(r => (
@@ -381,7 +381,7 @@ export function DailySummaryPanel(): React.JSX.Element {
               {result ? (
                 <div className={css.previewCard} ref={previewRef}>
                   <div className={css.previewHd}>
-                    <span className={css.previewTitle}>总结预览</span>
+                    <span className={css.previewTitle}>总结内容</span>
                     {meta && <span className={css.previewMetaChip} title={meta}>{meta}</span>}
                   </div>
                   <div className={css.previewBody}><div className={css.summaryText}>{result}</div></div>
@@ -389,7 +389,7 @@ export function DailySummaryPanel(): React.JSX.Element {
                 </div>
               ) : (
                 <div className={css.sideCard}>
-                  <div className={css.cardTitle}>总结预览</div>
+                  <div className={css.cardTitle}>总结内容</div>
                   <div className={css.sideList}>
                     <div className={kitCss.emptyInline}>在左侧选择一条记录即可预览内容</div>
                   </div>
@@ -399,7 +399,7 @@ export function DailySummaryPanel(): React.JSX.Element {
           </div>
         )}
         {view === 'generate' && (
-          <div className={css.dsLayout}>
+          <div className={`${css.dsLayout} ${css.dsLayoutSingle}`}>
             <div className={css.dsMain}>
               <div className={css.panelCard}>
                 <div className={css.cardTitle}>手动生成</div>
@@ -464,7 +464,7 @@ export function DailySummaryPanel(): React.JSX.Element {
               {!isGenerating && result && (
                 <div className={css.previewCard} ref={previewRef}>
                   <div className={css.previewHd}>
-                    <span className={css.previewTitle}>总结预览</span>
+                    <span className={css.previewTitle}>总结内容</span>
                     {meta && <span className={css.previewMetaChip} title={meta}>{meta}</span>}
                   </div>
                   <div className={css.previewBody}><div className={css.summaryText}>{result}</div></div>

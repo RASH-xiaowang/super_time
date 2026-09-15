@@ -517,14 +517,17 @@ function createWindow() {
    * 相关取证见 docs/RELEASE-PLAN.md 的 M19。
    */
   const appIcon = path.join(__dirname, 'build', 'icon.ico');
-  // 初始尺寸按主屏工作区算，**不写死宽高**：写死 1664×1066 时，1366×768 或
-  // 1080p@125% 的机器上窗口比屏幕还大（审计 P0-2）。窗口本身始终可缩放，
-  // 下限取实测能容下「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
+  // 启动尺寸取固定基准 1440×900，再按主屏工作区收敛：写死一个较大的尺寸时
+  // （历史上是 1664×1066），1366×768 或 1080p@125% 的机器上窗口会比屏幕还大
+  // （审计 P0-2）。窗口本身始终可缩放，下限取实测能容下
+  // 「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
   const MIN_W = 960;
   const MIN_H = 640;
+  const BASE_W = 1440;
+  const BASE_H = 900;
   const work = screen.getPrimaryDisplay().workAreaSize;
-  const initialWidth = Math.max(MIN_W, Math.round(work.width * 0.92));
-  const initialHeight = Math.max(MIN_H, Math.round(work.height * 0.92));
+  const initialWidth = Math.max(MIN_W, Math.min(BASE_W, work.width));
+  const initialHeight = Math.max(MIN_H, Math.min(BASE_H, work.height));
   mainWindow = new BrowserWindow({
     width: initialWidth,
     height: initialHeight,

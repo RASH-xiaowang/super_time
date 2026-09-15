@@ -605,7 +605,7 @@ async function main() {
   })
 
   // ── 11 ──
-  await step('11. 「设置」弹窗（左导航 + 右内容）与全应用唯一的 AI 模型入口', '配置/隐私/维护都收进弹窗：左导航分节、右侧一次只显示一节；模型配置不再散落在问答面板', async () => {
+  await step('11. 「设置」弹窗（左导航 + 右内容）与全应用唯一的 AI 模型入口', '配置/隐私/维护都收进弹窗：右区 15 节连续滚动、左导航充当目录；模型配置不再散落在问答面板', async () => {
     const wait = (ms) => win.waitForTimeout(ms)
     // 侧栏底部固定的那个按钮现在叫「设置」（原来叫「数据配置」）。名字短了必须精确匹配，
     // 否则「高级设置」「前往系统设置」这类含同名字串的按钮会先被选中。
@@ -620,10 +620,11 @@ async function main() {
     ok((await win.locator('main nav[aria-label="设置导航"]').count()) === 0,
       '左导航属于弹窗而不是主内容区（主内容区留在原来那一页）')
 
-    // —— 左右结构：左导航（固定宽）+ 右内容（一次只显示一节）——
-    // 这一页共 14 节（配置向导 5 步 + 智能与隐私 3 + 授权与维护 5 + 高级 1）。
-    // 早期只有 5 张速览卡横排在顶部、5 节一路堆叠：一屏装不下，想改「图片密钥」
-    // 得先滚下去找，还容易忘了下面还有几节。
+    // —— 左右结构：左导航（固定宽，充当目录）+ 右内容（15 节堆叠，连续滚动）——
+    // 这一页共 15 节（配置向导 5 步 + 智能与隐私 3 + 授权与维护 6 + 高级 1）。
+    // 早期是「右侧一次只显示一节」：滚到该节底部就停住，想继续看下一节得回左栏再点一次。
+    // 现在 15 节全部堆在同一个滚动区里，滚到一节末尾自然接下一节；左导航变成目录 ——
+    // 点击滚到该节，高亮按滚动位置反推（见 Settings.tsx 的 onPaneScroll）。
     const rail = dlg.locator('nav[aria-label="设置导航"]')
     await rail.waitFor({ timeout: 20000 })
     const layout = await win.evaluate(() => {
@@ -632,11 +633,12 @@ async function main() {
       const pane = nav.nextElementSibling
       const nr = nav.getBoundingClientRect()
       const pr = pane.getBoundingClientRect()
-      // 右侧「真正显示」的节要按算出来的 display 判定：早期只写 hidden 属性，
-      // 被 .card 自己的 display 压过，等于所有节堆在一起显示。
-      const shown = Array.from(pane.children)
+      // 各节带 data-settings-section 锚点（滚动侦测与断言都靠它定位）。这里数「真的显示出来」
+      // 的节，判定按算出来的 display：只写 hidden 属性会被 .card 的 display 压过。
+      const secs = Array.from(pane.querySelectorAll('[data-settings-section]'))
+      const shown = secs
         .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
-        .map(c => (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 20))
+        .map(c => c.dataset.settingsSection)
       return {
         items: Array.from(nav.querySelectorAll('button')).map(b => (b.textContent || '').replace(/\s+/g, ' ').trim()),
         groups: Array.from(nav.querySelectorAll('[class*="navGroupLabel"]')).map(e => (e.textContent || '').trim()),
@@ -644,13 +646,16 @@ async function main() {
         navW: Math.round(nr.width), navRight: Math.round(nr.right), navTop: Math.round(nr.top),
         paneW: Math.round(pr.width), paneLeft: Math.round(pr.left), paneTop: Math.round(pr.top),
         shown,
+        // 节被 flex 压扁的迹象：自身 clientHeight 小于 scrollHeight（内容被静默截掉）
+        squashed: secs.filter(c => c.scrollHeight > c.clientHeight + 2).map(c => c.dataset.settingsSection),
+        scrollH: pane.scrollHeight, clientH: pane.clientHeight,
         disclosures: d.querySelectorAll('details, summary').length,
       }
     })
-    ok(layout.items.length === 14, '左导航 14 项',
+    ok(layout.items.length === 15, '左导航 15 项',
       layout.items.join(' / '))
     ok(layout.groups.join('|') === '配置向导|智能与隐私|授权与维护|高级',
-      '14 项分四组显示（配置向导 / 智能与隐私 / 授权与维护 / 高级）', layout.groups.join('|'))
+      '15 项分四组显示（配置向导 / 智能与隐私 / 授权与维护 / 高级）', layout.groups.join('|'))
     ok(layout.dir === 'column', '导航项竖向排列', layout.dir)
     ok(layout.paneLeft >= layout.navRight, '右内容区在左导航右侧（并排、不重叠）',
       `导航右缘 ${layout.navRight} ≤ 内容左缘 ${layout.paneLeft}`)
@@ -658,50 +663,61 @@ async function main() {
       `导航 ${layout.navTop} / 内容 ${layout.paneTop}`)
     ok(layout.paneW > layout.navW * 3, '右内容区宽度远大于导航（右区才是主区）',
       `导航 ${layout.navW}px / 内容 ${layout.paneW}px`)
-    ok(layout.shown.length === 1 && layout.shown[0].includes('检测账号'),
-      '默认只有「检测账号」一节可见（其余节真的 display:none，不是堆在一起）', layout.shown.join(' | '))
+    ok(layout.shown.length === 15 && layout.shown[0] === 'detect',
+      '15 节全部堆在右区（不再是只显示一节、其余 display:none）', layout.shown.join(' | '))
+    ok(layout.scrollH > layout.clientH, '整份内容高于右区 → 右区可连续滚动',
+      `${layout.scrollH} > ${layout.clientH}`)
+    ok(layout.squashed.length === 0, '没有节被压扁（节自身高度小于内容高度）', layout.squashed.join(' | '))
     ok(layout.disclosures === 0, '节内不再有可折叠的 details/summary（高级设置已是普通卡片）',
       String(layout.disclosures))
 
-    // 切节：右区只显示选中的那一节，且回到顶部（否则接着上一节的滚动位置看会莫名其妙）。
-    // 默认窗口下右区高 795px，连语音转写这种长节也装得下 —— 先把窗口压矮，长节才会真的溢出。
-    const paneScroll = () => win.evaluate(() => {
-      const pane = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]').nextElementSibling
-      const shown = Array.from(pane.children)
-        .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
-        .map(c => (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 20))
-      return { scrollTop: pane.scrollTop, scrollH: pane.scrollHeight, clientH: pane.clientHeight, shown }
-    })
-    const origBounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds())
-    let scrolled = { scrollTop: 0, scrollH: 0, clientH: 0, shown: [] }
-    let afterSwitch = scrolled
-    try {
-      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1000, 700) })
-      await win.waitForTimeout(600)
-      await rail.getByRole('button', { name: '语音转文字' }).first().click()
-      await win.waitForTimeout(500)
-      await win.evaluate(() => {
-        const pane = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]').nextElementSibling
-        pane.scrollTop = pane.scrollHeight
-      })
-      await win.waitForTimeout(700) // scroll-behavior:smooth 是动画，等它走完再取值
-      scrolled = await paneScroll()
-      await rail.getByRole('button', { name: '检测账号' }).first().click()
-      await win.waitForTimeout(700)
-      afterSwitch = await paneScroll()
-    } finally {
-      // 恢复原窗口尺寸：后续步骤（年度看板）对窗口宽高敏感
-      await app.evaluate(({ BrowserWindow }, b) => { BrowserWindow.getAllWindows()[0].setBounds(b) }, origBounds)
-      await win.waitForTimeout(600)
-    }
-    ok(scrolled.scrollH > scrolled.clientH, '矮窗下长节（语音转文字）内容高于右区，确实需要滚动',
-      `${scrolled.scrollH} > ${scrolled.clientH}`)
-    ok(scrolled.scrollTop > 0, '右内容区可滚动', String(scrolled.scrollTop))
-    ok(afterSwitch.scrollTop <= 2, '切节后右内容回到顶部', String(afterSwitch.scrollTop))
-    ok(afterSwitch.shown.length === 1 && afterSwitch.shown[0].includes('检测账号'),
-      '切节后只有新选中那一节可见', afterSwitch.shown.join(' | '))
+    // 导航点击 = 滚到该节（节顶对齐右区上沿，左导航高亮跟着切）；滚到底高亮落到最后一节。
+    // 早先这里必须先压矮窗口才能验滚动（单节装得下就没有滚动条），现在 15 节堆在一起、
+    // 八千多像素的内容远高于 665px 的右区，窗口尺寸不再需要干预。
+    const sectionState = (key) => win.evaluate((k) => {
+      const d = document.querySelector('[role="dialog"]')
+      const nav = d.querySelector('nav[aria-label="设置导航"]')
+      const box = nav.nextElementSibling
+      const el = box.querySelector(`[data-settings-section="${k}"]`)
+      const cur = nav.querySelector('button[aria-current="true"]')
+      const br = box.getBoundingClientRect()
+      const rr = el.getBoundingClientRect()
+      return {
+        rel: Math.round(rr.top - br.top),
+        // 末尾几节顶不到右区上沿（下方内容不够高，滚动被夹住），所以另看是否落在可视区
+        inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
+        current: (cur?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 12),
+        scrollTop: Math.round(box.scrollTop), scrollH: box.scrollHeight, clientH: box.clientHeight,
+        maxScroll: box.scrollHeight - box.clientHeight,
+      }
+    }, key)
 
-    // AI 大模型现在是左导航的一项：先切过去，卡片才可见
+    await rail.getByRole('button', { name: '语音转文字' }).first().click()
+    await win.waitForTimeout(900)
+    const jumped = await sectionState('voice')
+    ok(Math.abs(jumped.rel) <= 20, '点导航把该节滚到右区上沿', `rel ${jumped.rel}`)
+    ok(jumped.current.includes('语音'), '左导航高亮跟着切到被点的那节', jumped.current)
+    ok(jumped.scrollH > jumped.clientH, '整份内容高于右区，确实需要滚动', `${jumped.scrollH} > ${jumped.clientH}`)
+    ok(jumped.scrollTop > 0, '右内容区可滚动', String(jumped.scrollTop))
+
+    // 手动滚到底。显式写 instant：CSS 的 scroll-behavior:smooth 会把程序化赋值也变成动画，
+    // 八千多像素等它走完要好几秒（真实滚轮不受影响，这是模拟方式的坑）。
+    await win.evaluate(() => {
+      const box = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]').nextElementSibling
+      box.scrollTo({ top: box.scrollHeight, behavior: 'instant' })
+    })
+    await win.waitForTimeout(700)
+    const bottom = await sectionState('advanced')
+    ok(bottom.scrollTop >= bottom.maxScroll - 2, '确实滚到了底部', `${bottom.scrollTop}/${bottom.maxScroll}`)
+    ok(bottom.current.includes('高级'), '滚到底高亮落到最后一节', bottom.current)
+
+    await rail.getByRole('button', { name: '检测账号' }).first().click()
+    await win.waitForTimeout(900)
+    const backTop = await sectionState('detect')
+    ok(backTop.scrollTop <= 2, '点第一节回到顶部', String(backTop.scrollTop))
+    ok(backTop.current.includes('检测账号'), '高亮回到第一节', backTop.current)
+
+    // AI 大模型是左导航的一项：点它滚过去（15 节都在 DOM 里，不再是「切过去才可见」）
     await rail.getByRole('button', { name: 'AI 大模型' }).first().click()
     await win.waitForTimeout(500)
 
@@ -722,10 +738,13 @@ async function main() {
 
     // —— 从外层侧栏迁进来的两节：数据边界与出网 / 隐私体检 ——
     // 外面那个「隐私与信任」页签已下线，这里是它们唯一的入口。
-    const clipInPane = () => win.evaluate(() => {
+    // 溢出检查要**限定到某一节**：15 节现在同处一个滚动容器，扫整棵子树会把别的节里
+    // 本来就该内部滚动的区域也算成「被裁掉」，报出与本节无关的失败。
+    const clipIn = (key) => win.evaluate((k) => {
       const pane = document.querySelector('[role="dialog"] nav').nextElementSibling
+      const scope = pane.querySelector(`[data-settings-section="${k}"]`)
       const clipped = []
-      for (const el of pane.querySelectorAll('*')) {
+      for (const el of scope.querySelectorAll('*')) {
         const cs = getComputedStyle(el)
         if (cs.overflowY !== 'hidden' && cs.overflow !== 'hidden') continue
         if (el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2) {
@@ -733,68 +752,72 @@ async function main() {
         }
       }
       return { clipped, scrollH: pane.scrollHeight, clientH: pane.clientHeight }
-    })
+    }, key)
 
     await rail.getByRole('button', { name: '数据边界与出网' }).first().click()
     await win.waitForTimeout(1200)
     const boundary = await win.evaluate(() => {
-      const pane = document.querySelector('[role="dialog"] nav').nextElementSibling
-      const shown = Array.from(pane.children)
-        .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
-      const text = (pane.textContent || '').replace(/\s+/g, ' ')
-      const toggle = Array.from(pane.querySelectorAll('button'))
+      const nav = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]')
+      const pane = nav.nextElementSibling
+      const scope = pane.querySelector('[data-settings-section="boundary"]')
+      const cur = nav.querySelector('button[aria-current="true"]')
+      const br = pane.getBoundingClientRect()
+      const rr = scope.getBoundingClientRect()
+      const text = (scope.textContent || '').replace(/\s+/g, ' ')
+      const toggle = Array.from(scope.querySelectorAll('button'))
         .find(b => (b.textContent || '').includes('一律不调用模型'))
       return {
-        shown: shown.length,
+        inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
+        current: (cur?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 12),
         hasLead: text.includes('检索统计、导出、图谱、备份等均为纯本地操作'),
         hasAvatarNote: text.includes('头像图片是唯一例外'),
         hasAudit: text.includes('AI 出站审计'),
         toggleH: toggle ? toggle.clientHeight : 0,
       }
     })
-    ok(boundary.shown === 1, '右区只显示「数据边界与出网」一节', String(boundary.shown))
+    ok(boundary.inView && boundary.current.includes('数据边界'), '点导航把「数据边界与出网」滚进可视区',
+      boundary.current)
     ok(boundary.hasLead && boundary.hasAvatarNote, '两段边界说明都在（第二段原来被裁掉）')
     ok(boundary.toggleH > 0, '「禁止 AI 出网」开关在（原来被裁掉）', String(boundary.toggleH))
     ok(boundary.hasAudit, '含「AI 出站审计」')
-    const bClip = await clipInPane()
+    const bClip = await clipIn('boundary')
     ok(bClip.clipped.length === 0, '该节内没有「内容溢出但 overflow:hidden」的元素', bClip.clipped.slice(0, 4).join(' '))
-    ok(bClip.scrollH > bClip.clientH, '该节比右区高 → 右区滚动，而不是把卡片压扁', `${bClip.scrollH}/${bClip.clientH}`)
     await shot(win, '11-boundary')
 
     await rail.getByRole('button', { name: '隐私体检' }).first().click()
     await win.waitForTimeout(1800)
     const priv = await win.evaluate(() => {
-      const pane = document.querySelector('[role="dialog"] nav').nextElementSibling
-      const shown = Array.from(pane.children)
-        .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
-      const text = (pane.textContent || '').replace(/\s+/g, ' ')
+      const nav = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]')
+      const pane = nav.nextElementSibling
+      const scope = pane.querySelector('[data-settings-section="privacy"]')
+      const cur = nav.querySelector('button[aria-current="true"]')
+      const br = pane.getBoundingClientRect()
+      const rr = scope.getBoundingClientRect()
+      const text = (scope.textContent || '').replace(/\s+/g, ' ')
       const cats = ['手机号', '身份证号', '银行卡号', '邮箱', '密码口令', '地址信息']
       return {
-        shown: shown.length,
+        inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
+        current: (cur?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 12),
         missing: cats.filter(c => !text.includes(c)),
-        scan: Array.from(pane.querySelectorAll('button')).some(b => /重新扫描|开始扫描/.test(b.textContent || '')),
+        scan: Array.from(scope.querySelectorAll('button')).some(b => /重新扫描|开始扫描/.test(b.textContent || '')),
       }
     })
-    ok(priv.shown === 1, '右区只显示「隐私体检」一节', String(priv.shown))
+    ok(priv.inView && priv.current.includes('隐私体检'), '点导航把「隐私体检」滚进可视区', priv.current)
     ok(priv.scan, '扫描入口还在（PanelHeader 的动作没丢）')
     ok(priv.missing.length === 0, '六个敏感信息类别都在（原来最后一类被裁）', priv.missing.join(','))
-    const pClip = await clipInPane()
+    const pClip = await clipIn('privacy')
     ok(pClip.clipped.length === 0, '该节内没有「内容溢出但 overflow:hidden」的元素', pClip.clipped.slice(0, 4).join(' '))
     await shot(win, '11-privacy-health')
 
     // —— 第二批迁入：备份恢复 / 数据库健康 / 原图链路自检 / 操作日志 ——
+    const KEY_OF = { 备份恢复: 'backup', 数据库健康: 'health', 原图链路自检: 'hook', 操作日志: 'oplog' }
     for (const label of ['备份恢复', '数据库健康', '原图链路自检', '操作日志']) {
       await rail.getByRole('button', { name: label }).first().click()
       await win.waitForTimeout(1800)
-      const r = await win.evaluate(() => {
-        const pane = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]').nextElementSibling
-        const shown = Array.from(pane.children)
-          .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
-          .map(c => (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 18))
-        return { n: shown.length, first: shown[0] || '' }
-      })
-      ok(r.n === 1, `「${label}」是右区唯一显示的一节`, r.first)
-      const clip = await clipInPane()
+      const st = await sectionState(KEY_OF[label])
+      ok(st.inView && st.current.includes(label),
+        `点导航把「${label}」滚进可视区且高亮同步`, `${st.current} rel=${st.rel}`)
+      const clip = await clipIn(KEY_OF[label])
       ok(clip.clipped.length === 0, `「${label}」节内没有溢出被裁的元素`, clip.clipped.slice(0, 3).join(' '))
     }
     await shot(win, '11-maintenance')
@@ -829,19 +852,19 @@ async function main() {
       if (!d) return { open: false }
       const nav = d.querySelector('nav[aria-label="设置导航"]')
       const pane = nav.nextElementSibling
-      const shown = Array.from(pane.children)
-        .filter(c => getComputedStyle(c).display !== 'none' && getComputedStyle(c).position !== 'absolute')
+      const scope = pane.querySelector('[data-settings-section="boundary"]')
       const active = nav.querySelector('button[aria-current="true"]')
+      const br = pane.getBoundingClientRect()
+      const rr = scope.getBoundingClientRect()
       return {
         open: true,
-        n: shown.length,
-        shownText: (shown[0]?.textContent || '').replace(/\s+/g, ' ').slice(0, 14),
+        inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
         active: (active?.textContent || '').replace(/\s+/g, ' ').slice(0, 10),
       }
     })
     ok(inside.open, '弹窗仍在（弹窗内的跳转没有把弹窗关掉）')
-    ok(inside.n === 1 && inside.shownText.includes('数据边界与出网'),
-      '「数据边界与出网」就地切到本弹窗的对应节', `${inside.active} → ${inside.shownText}`)
+    ok(inside.inView && inside.active.includes('数据边界'),
+      '「数据边界与出网」就地滚到本弹窗的对应节并同步高亮', inside.active)
     // 「数据库健康 → 快捷入口 → 文件资产」：弹窗装不下 → 关窗并切主内容区
     await rail2.getByRole('button', { name: '数据库健康' }).first().click()
     await win.waitForTimeout(1600)

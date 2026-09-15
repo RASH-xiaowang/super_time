@@ -47,10 +47,12 @@
 | 设置 | 数据边界与出网 / 隐私体检 / 备份恢复 / 数据库健康 / 原图链路自检 / 操作日志 |
 
 2026-09 的重构：把「配置」「授权」「维护与自检」这三类从侧栏收进「设置」弹窗
-（`panels/Settings.tsx`，左导航分节）。`#privacytrust` / `#privacy` / `#health` / `#hook` /
-`#oplog` / `#backup` 深链与各面板里的跳转仍可用：`WechatDataPanel.tsx` 的 `DIALOG_SECTION_OF`
-会把它们改道成「开弹窗并落到对应节」，弹窗内的跳转则由 `Settings.tsx` 的 `innerNavigate`
-就地切节（弹窗装不下的「文件资产 / 存储分析」才交回宿主关弹窗再切）。
+（`panels/Settings.tsx`：15 节堆叠在右区**连续滚动**，滚到一节末尾自然接下一节；左导航充当
+**目录** —— 点击滚到该节、高亮按滚动位置反推）。`#privacytrust` / `#privacy` / `#health` /
+`#hook` / `#oplog` / `#backup` 深链与各面板里的跳转仍可用：`WechatDataPanel.tsx` 的
+`DIALOG_SECTION_OF` 会把它们改道成「开弹窗并落到对应节」（挂载即滚到那一节），弹窗内的跳转
+则由 `Settings.tsx` 的 `innerNavigate` 就地滚过去（弹窗装不下的「文件资产 / 存储分析」才交回
+宿主关弹窗再切）。
 
 **状态管理与路由**：沿用上游 `wechat-state.ts`（打开/关闭状态）、
 `WechatDataPanel.tsx` 的页签状态 + `location.hash` 深度链接、`api.ts` 的
@@ -63,8 +65,8 @@ snapshot 缓存（localStorage + 30s TTL + 实时更新失效）、`panels/hooks
 全部 `.module.css` 与 `*.css` 原样保留，由 Vite 编译。
 
 **主题**：深色（默认/NEON MATRIX）与浅色双主题。
-`theme.ts` 管理模式（默认跟随系统 `prefers-color-scheme`，手动切换后写入
-localStorage），`light-theme.css` 通过 `:root.theme-light` 覆盖全部
+`theme.ts` 管理模式（默认深色，不跟随系统 `prefers-color-scheme`；手动切换后写入
+localStorage 并以它为准），`light-theme.css` 通过 `:root.theme-light` 覆盖全部
 `--dsw-alias-*` / `--nm-*` 令牌；顶栏「☀️ 浅色 / 🌙 深色」按钮随时切换。
 
 ## 与主进程/后端的连接
@@ -74,6 +76,11 @@ localStorage），`light-theme.css` 通过 `:root.theme-light` 覆盖全部
 - 后端实时更新事件 `wechat-data/updated` 经 `wechat:event` 广播后，
   `ui-entry.tsx` 转成上游监听的 `dsh-wechat-data-updated` DOM 事件。
 - 目录选择器接主进程 `dialog:open-directory`（`window.electronAPI.pickDirectory()`）。
+- **例外：主动提醒条不走 `api.ts`。** `panels/NoticeBanner.tsx` 直接读 preload 的
+  `electronAPI.update`（事件 + 快照）与 `electronAPI.license.status()` —— 这两份都是**主进程
+  状态**（更新服务的 phase、许可证的 daysToExpiry），不属于 back-end Remote 的数据；设置弹窗里的
+  「软件更新 / 软件授权」两张卡读的是同一来源。判定口径抽在 `panels/notice.ts`（纯函数 + 单测），
+  渲染层拆成纯展示的 `NoticeList`（SSR 冒烟直接喂夹具断言）与接线的 `NoticeBanner`。
 
 ## 构建与运行
 

@@ -1,0 +1,382 @@
+/* ============================================================
+ * 隐私与数据边界（H14 首启同意屏）
+ *
+ * 设计取向：把它当成一份「数据流合约」来排版，而不是一屏宣传语。
+ *   · 编号分节（01–04）+ 左栏标签/右栏说明，长句拆成可扫的行；
+ *   · 全页只用三类颜色：中性石板（底色/正文）、青（信息与可控制项）、
+ *     琥珀（**关不掉的出网点** —— 全页唯一的警示色，只给这一处用）；
+ *   · 「圈起来」的落点：顶部一句话结论、每节的关键句、以及 2 条无开关的出网点。
+ *
+ * 颜色全部走 --nm-* 令牌，因此深浅两套主题都自动成立（浅色端在
+ * light-theme.css 里把 cyan/amber 压暗，无需在本文件里再写覆盖）。
+ * ============================================================ */
+
+.shell {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 40px 24px 56px;
+  color: var(--nm-text-1, #e2e8f0);
+  font-family: var(--nm-font-sans, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  background:
+    radial-gradient(1100px 520px at 50% -12%, color-mix(in srgb, var(--nm-cyan) 7%, transparent), transparent 62%),
+    var(--nm-black, #050a18);
+}
+
+.doc {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ── 左右两栏，小节按序流下 ───────────────────────────────
+ * 左栏（一句话结论 / 01 / 02）讲「我们怎么处理」，右栏（03 / 04）讲「哪里会出网、你能改什么」。
+ * 两栏各自满高、互不拉伸（align-items: start），页面总高由较高的右栏决定 —— 所以结论块
+ * 放在左栏正好吃掉左栏的空档，不额外占高度。 */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+/* 窗口不够宽时退回单列，读起来才不至于两栏都挤 */
+@media (max-width: 980px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── 页头 ───────────────────────────────────────────────── */
+.head { display: flex; flex-direction: column; gap: 8px; }
+.kicker {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--nm-cyan, #00f0ff);
+}
+.title {
+  margin: 0;
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--nm-text-1, #e2e8f0);
+}
+.sub {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--nm-text-2, #94a3b8);
+}
+.code {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 12px;
+  color: var(--nm-cyan, #00f0ff);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+/* ── 一句话结论：顶部被「圈起来」的头条 ─────────────────── */
+.verdict {
+  position: relative;
+  padding: 16px 20px 16px 22px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  background: linear-gradient(
+    135deg,
+    var(--nm-cyan-10, rgba(0, 240, 255, 0.1)),
+    color-mix(in srgb, var(--nm-purple) 7%, transparent)
+  );
+}
+.verdict::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--nm-cyan, #00f0ff);
+}
+.verdictTag {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--nm-cyan, #00f0ff);
+}
+.verdictList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.verdictList li {
+  position: relative;
+  padding-left: 15px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--nm-text-1, #e2e8f0);
+}
+.verdictList li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--nm-cyan, #00f0ff);
+}
+.verdictList b { color: var(--nm-cyan, #00f0ff); font-weight: 700; }
+
+/* ── 编号分节 ───────────────────────────────────────────── */
+.sec {
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  background: var(--nm-bg-card, #0f172a);
+  /* 出网点的行布局按**卡片自身宽度**适配（见文末 @container），
+     所以两栏布局下窄栏自动折行，窗口拉宽退回单列后又自动恢复三栏。 */
+  container-type: inline-size;
+}
+/* 去掉编号后这里只剩标题，不再需要 flex 对齐 */
+.secHd { margin-bottom: 10px; }
+.secTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--nm-text-1, #e2e8f0);
+}
+.p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--nm-text-2, #94a3b8);
+}
+.p + .p { margin-top: 7px; }
+
+/* 关键句：本节的「圈起来」落点 */
+.keyBox {
+  margin: 11px 0 0;
+  padding: 11px 14px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.75;
+  color: var(--nm-text-1, #e2e8f0);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+
+/* 保证条款：逐条独立成格，便于数清「做了/没做」 */
+.pills { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.pill {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 999px;
+  color: var(--nm-text-1, #e2e8f0);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+
+/* ── 出网点逐条：标签 / 说明 / 标记 三栏 ─────────────────── */
+.stat {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 11.5px;
+  /* 用 text-2 而不是 text-3：kit.module.css 的对比度审计实测 text-3(#64748b) 压在深色底上
+     只有 ~4.2:1，低于小字号正文所需的 4.5:1；text-2 深色 ~7.5、浅色 ~6.0。 */
+  color: var(--nm-text-2, #94a3b8);
+}
+.statChip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
+}
+.statChipWarn {
+  color: var(--nm-amber, #f59e0b);
+  border-color: color-mix(in srgb, var(--nm-amber) 40%, transparent);
+  background: color-mix(in srgb, var(--nm-amber) 12%, transparent);
+}
+
+.rows { display: flex; flex-direction: column; gap: 8px; margin-top: 11px; }
+.row {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
+}
+.rowLabel {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.55;
+  color: var(--nm-text-1, #e2e8f0);
+}
+.rowText {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--nm-text-2, #94a3b8);
+}
+.rowHost {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* 同 .stat：小字号不用 text-3（实测对比度不足 4.5:1） */
+  color: var(--nm-text-2, #94a3b8);
+  word-break: break-word;
+}
+.rowNote {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-amber, #f59e0b);
+}
+
+.chip {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+  color: var(--nm-text-2, #94a3b8);
+}
+.chipToggle {
+  color: var(--nm-cyan, #00f0ff);
+  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+.chipManual { color: var(--nm-text-2, #94a3b8); }
+
+/* 无内置开关的行 —— 全页唯一的琥珀色实心框，即「圈起来」的重点 */
+.rowNone {
+  position: relative;
+  border-color: color-mix(in srgb, var(--nm-amber) 50%, transparent);
+  background: color-mix(in srgb, var(--nm-amber) 9%, transparent);
+}
+.rowNone::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--nm-amber, #f59e0b);
+}
+.rowNone .rowLabel { color: var(--nm-amber, #f59e0b); }
+.chipNone {
+  color: var(--nm-amber, #f59e0b);
+  border-color: color-mix(in srgb, var(--nm-amber) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-amber) 15%, transparent);
+}
+
+/* 诚实说明：别让人以为关掉开关就等于完全离线 */
+.caveat {
+  margin: 12px 0 0;
+  padding: 11px 14px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--nm-text-2, #94a3b8);
+  border: 1px dashed color-mix(in srgb, var(--nm-amber) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-amber) 6%, transparent);
+}
+.caveat b { color: var(--nm-amber, #f59e0b); font-weight: 700; }
+
+/* ── 同意与动作 ─────────────────────────────────────────── */
+.consent {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
+  background: var(--nm-bg-card, #0f172a);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.consent[data-on] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+.consentBox {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+  accent-color: var(--nm-cyan, #00f0ff);
+}
+.consentText {
+  font-size: 13px;
+  line-height: 1.78;
+  color: var(--nm-text-1, #e2e8f0);
+}
+
+.actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
+.btn {
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btnGhost {
+  border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
+  background: transparent;
+  color: var(--nm-text-2, #94a3b8);
+}
+.btnGhost:hover {
+  color: var(--nm-text-1, #e2e8f0);
+  background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
+}
+.btnPrimary {
+  font-weight: 700;
+  color: var(--nm-cyan, #00f0ff);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 50%, transparent);
+  background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
+}
+.btnPrimary:hover:not(:disabled) {
+  background: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+}
+.btnPrimary:disabled {
+  cursor: not-allowed;
+  color: var(--nm-text-3, #64748b);
+  border-color: var(--nm-border, rgba(0, 240, 255, 0.1));
+  background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
+}
+
+/* 窄卡片：出网点折成上下两块 —— 「标签 + 标记」一行，说明与主机名另起。
+ * 用容器查询而不是视口查询：两栏布局下卡片只有 ~580px，而视口有 1400px，
+ * 按视口判断会让窄栏里的行误判成「够宽」而被挤扁。 */
+@container (max-width: 660px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; }
+  .rowLabel { grid-column: 1; }
+  .rowText { grid-column: 1 / -1; }
+  .chip { grid-row: 1; grid-column: 2; }
+}

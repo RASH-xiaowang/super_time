@@ -17,6 +17,8 @@ import { auditAnswerGrounding, groundingWarning } from '../src/client/ui-wechat/
 import { RetrievalPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/RetrievalPanel.tsx'
 import { SessionAsk } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SessionAsk.tsx'
 import { AiModelConfig } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx'
+import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
+import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
 
 let passed = 0
 let failed = 0
@@ -206,6 +208,50 @@ check('接地正常时 CiteList 不渲染警示', () => {
   const t = turn({ text: '最近一笔是 3500.00 元 [1]。', citedIndexes: [1] })
   const html = renderToStaticMarkup(h(CiteList, { items: t.citations!, cited: t.citedIndexes, answer: t.text }))
   ok(!html.includes('在它引用的原文里没有出现'), `不该有警示：${html.slice(0, 300)}`)
+})
+
+console.log('NoticeList（顶栏下方的主动提醒条）')
+/** 提醒条是纯展示层（不碰 IPC），这里喂判定结果直接断言渲染事实。 */
+const noticeHtml = (facts: Parameters<typeof buildNotices>[0]) =>
+  renderToStaticMarkup(h(NoticeList, { notices: buildNotices(facts), onAction: () => {}, onDismiss: () => {} }))
+
+check('没有该提醒的事时一个字都不渲染', () => {
+  // 静默是最重要的默认：提醒条一旦「常驻」，用户就会开始无视它
+  const html = noticeHtml({
+    update: { phase: 'up-to-date' },
+    license: { licensed: true, state: 'licensed', daysToExpiry: null },
+  })
+  ok(html === '', `应渲染为空：${html.slice(0, 160)}`)
+})
+
+check('新版本已下载：说清楚并给出「重启并安装」', () => {
+  const html = noticeHtml({ update: { phase: 'downloaded', version: '1.4.0' } })
+  ok(html.includes('v1.4.0 已下载'), `缺少版本提示：${html.slice(0, 200)}`)
+  ok(html.includes('重启并安装'), '缺少安装动作')
+  ok(html.includes('data-tone="warn"'), '未按 warn 强度渲染')
+  ok(html.includes('data-notice="update:downloaded:1.4.0"'), '缺少稳定锚点（会话内关闭靠它去重）')
+})
+
+check('许可证只剩 3 天：强提醒 + 导出/去设置两条动作', () => {
+  const html = noticeHtml({ license: { licensed: true, state: 'licensed', daysToExpiry: 3 } })
+  ok(html.includes('只剩 3 天'), `缺少剩余天数：${html.slice(0, 200)}`)
+  ok(html.includes('导出激活请求') && html.includes('去软件授权'), '动作不全')
+  ok(html.includes('data-tone="danger"'), '未按 danger 强度渲染')
+})
+
+check('还剩 20 天：只浅提醒，不上强提醒色', () => {
+  const html = noticeHtml({ license: { licensed: true, state: 'licensed', daysToExpiry: 20 } })
+  ok(html.includes('20 天后到期'), `缺少提醒：${html.slice(0, 200)}`)
+  ok(html.includes('data-tone="warn"') && !html.includes('data-tone="danger"'), '20 天不该用 danger')
+})
+
+check('两条同时冒出来：更新在前，各有独立关闭按钮', () => {
+  const html = noticeHtml({
+    update: { phase: 'downloaded', version: '1.4.0' },
+    license: { licensed: true, state: 'licensed', daysToExpiry: 20 },
+  })
+  ok(html.indexOf('v1.4.0') < html.indexOf('20 天'), '更新的动作更即时，应排在授权之前')
+  ok((html.match(/aria-label="关闭提醒/g) ?? []).length === 2, '每条都要能单独关掉')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)

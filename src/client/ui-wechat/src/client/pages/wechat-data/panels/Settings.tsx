@@ -5,7 +5,7 @@
  * 自动获取密钥（V4 内存扫描 + Weixin.dll 内部键 + V2 图片验证）已支持；
  * SQLCipher 全库解密仍为说明态（本地解密能力独立立项）；语音转写已本地化（whisper.cpp）。
  */
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createPollRegistry, type PollRegistry } from './poll-registry.ts'
@@ -745,11 +745,90 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     total: number
   } | null>(null)
   const [whisperTranscribing, setWhisperTranscribing] = useState<{ active: boolean; done: number; total: number; failed: number; skipped: number; current: string }>({ active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' })
-  /** 左侧导航当前选中项（右侧只渲染这一节）。 */
+  /**
+   * 左侧导航当前选中项。
+   *
+   * 语义已从「右侧只渲染这一节」改成**目录高亮**：15 节全部堆叠在同一个滚动区里连续滚动
+   * （滚到一节末尾自然接下一节），这里只表示「现在看的是哪一节」，由滚动位置反推。
+   */
   const [activeKey, setActiveKey] = useState<string>(() => initialSection ?? 'detect')
-  /** 右侧内容区：切节后回到顶部，否则从上一节的滚动位置接着看会莫名其妙。 */
+  /** 右侧内容区：所有节共用的滚动容器。 */
   const paneRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => { paneRef.current?.scrollTo({ top: 0 }) }, [activeKey])
+  /** 程序化滚动期间（≤800ms）让滚动侦测让位，否则平滑滚动路过的一串中间节会把高亮带跑。 */
+  const spyLockUntil = useRef(0)
+  const spyRaf = useRef(0)
+
+  /** 滚到某一节（左导航点击 / 弹窗内跳转 / 弹窗以某节打开时的落点）。 */
+  const scrollToSection = useCallback((key: string, smooth: boolean): void => {
+    const box = paneRef.current
+    const el = box ? box.querySelector<HTMLElement>(`[data-settings-section="${key}"]`) : null
+    if (!box || !el) return
+    const top = Math.max(0, box.scrollTop + (el.getBoundingClientRect().top - box.getBoundingClientRect().top) - 12)
+    // 顶部留 12px：贴死在容器上沿时，卡片自身边框看起来像被截断
+    //
+    // 近距离用平滑滚动（有方向感）；跨好几节的远距离直接跳 —— 整份文档高八千多像素，
+    // 从第一节到「操作日志」的平滑动画实测 1.5 秒还没走完，点导航却要等着滚动是很拖沓的。
+    const animate = smooth && Math.abs(top - box.scrollTop) <= box.clientHeight * 2
+    // 落位期间锁住滚动侦测：一是平滑滚动路过的中间节会把高亮带跑，二是末尾几节顶不到
+    // 容器上沿（下方内容不够高，滚动被夹住），不锁的话「点谁高亮谁」会被截断规则改掉。
+    spyLockUntil.current = Date.now() + (animate ? 900 : 400)
+    box.scrollTo({ top, behavior: animate ? 'smooth' : 'instant' })
+  }, [])
+
+  /** 左导航点击：切高亮 + 滚到那一节。 */
+  const goToSection = useCallback((key: string): void => {
+    setActiveKey(key)
+    scrollToSection(key, true)
+  }, [scrollToSection])
+
+  /**
+   * 内容区滚动 → 把左导航高亮切到「当前所在节」。
+   * 程序化滚动进行中直接让位（见 `spyLockUntil`），其余按滚动位置反推。
+   */
+  const onPaneScroll = useCallback((): void => {
+    if (spyRaf.current !== 0) return
+    spyRaf.current = window.requestAnimationFrame(() => {
+      spyRaf.current = 0
+      if (Date.now() < spyLockUntil.current) return
+      const box = paneRef.current
+      if (!box) return
+      const secs = Array.from(box.querySelectorAll<HTMLElement>('[data-settings-section]'))
+      if (secs.length === 0) return
+      // 触底时直接选最后一节：「某节顶端对齐容器顶端」对末尾几节做不到（下方内容不够高）
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2) {
+        const last = secs[secs.length - 1].dataset.settingsSection
+        if (last) setActiveKey((prev) => (prev === last ? prev : last))
+        return
+      }
+      const boxTop = box.getBoundingClientRect().top
+      // 判定线取容器上沿下方 24px：跨过它的最后一节就是当前节。用固定小偏移而不是
+      // 「视口 1/4」这类大偏移，短节（如高级设置）才不会被整节跳过。
+      let cur = secs[0].dataset.settingsSection ?? ''
+      for (const el of secs) {
+        if (el.getBoundingClientRect().top - boxTop <= 24) cur = el.dataset.settingsSection ?? cur
+      }
+      // 同值直接返回：本组件一渲染就是 15 节全部重渲，别让滚动白白触发整屏重渲
+      setActiveKey((prev) => (prev === cur ? prev : cur))
+    })
+  }, [])
+
+  useEffect(() => () => { if (spyRaf.current !== 0) window.cancelAnimationFrame(spyRaf.current) }, [])
+
+  // 弹窗以某一节打开时（如从「数据边界与出网」入口进来），把那一节直接落到位。
+  // 用 layout effect 落在首帧之前，避免打开时先闪一下第一屏再滚过去。
+  //
+  // 各节内容是异步加载的：落在首帧那一刻，上方几节往往还没长到最终高度，落点会被顶偏，
+  // 所以内容继续沉降的这段时间里补正两次。用户一旦自己滚过，就再也不动他 —— 补正把他
+  // 拽回原处比落点偏几像素糟糕得多。
+  const userScrolled = useRef(false)
+  useLayoutEffect(() => {
+    if (!initialSection) return
+    const land = (): void => { if (!userScrolled.current) scrollToSection(initialSection, false) }
+    land()
+    const t1 = window.setTimeout(land, 400)
+    const t2 = window.setTimeout(land, 1100)
+    return () => { window.clearTimeout(t1); window.clearTimeout(t2) }
+  }, [])
   /**
    * 富提示写入（本面板唯一的 notify 入口）。
    *
@@ -1253,11 +1332,11 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   type NavKey = (typeof STEPS)[number]['key']
     | 'ai' | 'boundary' | 'privacy' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'oplog' | 'advanced'
   /**
-   * 左导航条目（14 节，分四组）。
+   * 左导航条目（15 节，分四组）。
    *
-   * 「智能与隐私」「授权与维护」两组共 8 节都是 2026-09 从外层侧栏迁进来的（AI 大模型、
-   * 数据边界与出网、隐私体检、软件授权、备份恢复、数据库健康、原图链路自检、操作日志）：
-   * 它们要么是配置，要么是维护与自检，本来就不该和「看数据」的页签挤在一个侧栏里。
+   * 「智能与隐私」「授权与维护」两组共 9 节都是 2026-09 从外层侧栏迁进来的（AI 大模型、
+   * 数据边界与出网、隐私体检、软件授权、软件更新、备份恢复、数据库健康、原图链路自检、
+   * 操作日志）：它们要么是配置，要么是维护与自检，本来就不该和「看数据」的页签挤在一个侧栏里。
    * 侧栏因此从 17 项收到 12 项（含底部固定的「设置」）。
    */
   const navItems: Array<{ key: NavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }> = [
@@ -1291,9 +1370,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   }
   const innerNavigate = useCallback((tab: string): void => {
     const key = SECTION_OF_TAB[tab]
-    if (key) { setActiveKey(key); return }
+    if (key) { goToSection(key); return }
     onNavigateOut?.(tab)
-  }, [onNavigateOut])
+  }, [onNavigateOut, goToSection])
 
   return (
     <div className={css.root} data-in-dialog={inDialog || undefined}>
@@ -1308,7 +1387,10 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
           desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
         />
       )}
-      {/* 左导航 + 右内容：原来 5 张速览卡横排在顶部、下面 5 节一路堆叠，一屏看不全还要滚动找。 */}
+      {/* 左导航 + 右内容：15 节全部堆叠在右侧同一个滚动区里连续滚动（滚到一节末尾自然接
+          下一节），左导航是**目录** —— 点击滚到该节，高亮跟着滚动位置走。
+          这替换掉了早期「右侧一次只显示一节、切节回到顶部」的做法：那时滚到一节底部就停住，
+          想继续看下一节只能回左栏再点一次。 */}
       <div className={css.layout}>
         <nav className={css.navRail} aria-label="设置导航">
           {navItems.map((it, i) => {
@@ -1319,7 +1401,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
                 <button
                   type="button"
                   className={clsx(css.navItem, activeKey === it.key && css.navItemActive)}
-                  onClick={() => { setActiveKey(it.key) }}
+                  onClick={() => { goToSection(it.key) }}
                   aria-current={activeKey === it.key ? 'true' : undefined}
                   title={it.label}
                 >
@@ -1335,7 +1417,12 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
           })}
         </nav>
 
-        <div className={css.mainScroll} ref={paneRef}>
+        <div
+          className={css.mainScroll}
+          ref={paneRef}
+          onScroll={onPaneScroll}
+          onWheel={() => { userScrolled.current = true }}
+        >
 
       {message && (
         <div className={clsx(css.notice, message.kind === 'ok' ? css.toastOk : css.toastErr)}>
@@ -1353,10 +1440,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
       )}
 
         {/* ── 1. 检测账号 ── */}
-        <section
-          className={css.card}
-          hidden={activeKey !== 'detect'}
-        >
+        <section className={css.card} data-settings-section="detect">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconGlobeOutline14 size={14} /></span>
             <div className={css.cardTitleBox}>
@@ -1429,10 +1513,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         </section>
 
         {/* ── 2. 数据库密钥 ── */}
-        <section
-          className={css.card}
-          hidden={activeKey !== 'dbkey'}
-        >
+        <section className={css.card} data-settings-section="dbkey">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconPersonalizationOutline16 size={14} /></span>
             <div className={css.cardTitleBox}>
@@ -1486,10 +1567,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         </section>
 
         {/* ── 3. 图片密钥 ── */}
-        <section
-          className={css.card}
-          hidden={activeKey !== 'imgkey'}
-        >
+        <section className={css.card} data-settings-section="imgkey">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSparkle16 size={14} /></span>
             <div className={css.cardTitleBox}>
@@ -1527,10 +1605,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         </section>
 
         {/* ── 4. 图片解码 ── */}
-        <section
-          className={css.card}
-          hidden={activeKey !== 'img'}
-        >
+        <section className={css.card} data-settings-section="img">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconGlobeOutline14 size={14} /></span>
             <div className={css.cardTitleBox}>
@@ -1584,10 +1659,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         </section>
 
         {/* ── 5. 语音转写 ── */}
-        <section
-          className={css.card}
-          hidden={activeKey !== 'voice'}
-        >
+        <section className={css.card} data-settings-section="voice">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSparkle16 size={14} /></span>
             <div className={css.cardTitleBox}>
@@ -1734,42 +1806,42 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
         </section>
 
         {/* ── AI 大模型（全应用唯一的模型配置入口） ── */}
-        <div hidden={activeKey !== 'ai'}><AiModelConfig /></div>
+        <div data-settings-section="ai"><AiModelConfig /></div>
 
         {/* ── 数据边界与出网（原外层侧栏的独立页，整页迁入本弹窗） ── */}
-        <div className={css.embedPane} hidden={activeKey !== 'boundary'}>
+        <div className={css.embedPane} data-settings-section="boundary">
           <PrivacyTrustPanel embedded />
         </div>
 
         {/* ── 隐私体检（同上；命中样本可跳回对应会话） ── */}
-        <div className={css.embedPane} hidden={activeKey !== 'privacy'}>
+        <div className={css.embedPane} data-settings-section="privacy">
           <PrivacyPanel embedded onOpenChat={onOpenChat} />
         </div>
 
         {/* ── 软件授权 License ── */}
-        <div hidden={activeKey !== 'license'}><LicenseSection /></div>
+        <div data-settings-section="license"><LicenseSection /></div>
 
         {/* ── 软件更新 ── */}
-        <div hidden={activeKey !== 'update'}><UpdateSection /></div>
+        <div data-settings-section="update"><UpdateSection /></div>
 
         {/* ── 备份恢复（原外层侧栏项，整页迁入） ── */}
-        <div className={css.embedPane} hidden={activeKey !== 'backup'}>
+        <div className={css.embedPane} data-settings-section="backup">
           <BackupPanel embedded />
         </div>
 
         {/* ── 数据库健康 / 原图链路自检 / 操作日志（原外层「数据健康」的三个分段） ── */}
-        <div className={css.embedPane} hidden={activeKey !== 'health'}>
+        <div className={css.embedPane} data-settings-section="health">
           <HealthPanel embedded onNavigate={innerNavigate} />
         </div>
-        <div className={css.embedPane} hidden={activeKey !== 'hook'}>
+        <div className={css.embedPane} data-settings-section="hook">
           <HookPanel embedded onNavigate={innerNavigate} />
         </div>
-        <div className={css.embedPane} hidden={activeKey !== 'oplog'}>
+        <div className={css.embedPane} data-settings-section="oplog">
           <OperationLogPanel />
         </div>
 
         {/* ── 高级设置（输出路径 · 诊断日志 · 启动引导） ── */}
-        <section className={css.card} hidden={activeKey !== 'advanced'}>
+        <section className={css.card} data-settings-section="advanced">
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSettingsOutline14 size={14} /></span>
             <div className={css.cardTitleBox}>

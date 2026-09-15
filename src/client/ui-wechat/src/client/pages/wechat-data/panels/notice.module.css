@@ -1,0 +1,127 @@
+/* 主动提醒条 —— 挂在顶栏下方，通栏。
+ *
+ * 与「设置」里的卡片不同：这里只在**需要动作**时出现，所以目标是一眼看清「出什么事了、
+ * 要你做什么」—— 左侧色条定强度，标题一句话说完，动作按钮就在同一行右侧。
+ * 强度靠色条 + 描边区分，不把整条铺满彩色：整条高饱和太吵，会让下面的数据区失焦。
+ * 颜色全走令牌，深浅两套主题自动成立。 */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  background: var(--nm-cyan-10);
+}
+.row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--nm-cyan);
+}
+.row[data-tone='warn'] {
+  border-color: color-mix(in srgb, var(--nm-amber) 38%, transparent);
+  background: color-mix(in srgb, var(--nm-amber) 9%, transparent);
+}
+.row[data-tone='warn']::before { background: var(--nm-amber); }
+.row[data-tone='danger'] {
+  border-color: color-mix(in srgb, var(--nm-danger) 42%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 9%, transparent);
+}
+.row[data-tone='danger']::before { background: var(--nm-danger); }
+
+.dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nm-cyan);
+}
+.row[data-tone='warn'] .dot { background: var(--nm-amber); }
+.row[data-tone='danger'] .dot { background: var(--nm-danger); }
+
+.text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--nm-text-1);
+}
+.detail {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--nm-text-2);
+}
+
+.actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.btn,
+.btnPrimary {
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--nm-border-hover);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.btn:hover,
+.btnPrimary:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-active);
+}
+.btnPrimary {
+  font-weight: 650;
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: var(--nm-cyan-10);
+}
+.btn:disabled,
+.btnPrimary:disabled { opacity: 0.5; cursor: default; }
+
+.close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+}
+.close:hover {
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border);
+}
+
+/* 动作回执（导出路径等）：单独一行，不塞进提醒条里以免被误当成提醒本身 */
+.note {
+  padding: 6px 14px 0;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  word-break: break-all;
+}
