@@ -1,77 +1,121 @@
-/* 主动提醒条 —— 挂在顶栏下方，通栏。
+/* 主动提醒卡片 —— 右下角悬浮。
  *
- * 与「设置」里的卡片不同：这里只在**需要动作**时出现，所以目标是一眼看清「出什么事了、
- * 要你做什么」—— 左侧色条定强度，标题一句话说完，动作按钮就在同一行右侧。
- * 强度靠色条 + 描边区分，不把整条铺满彩色：整条高饱和太吵，会让下面的数据区失焦。
+ * 为什么固定在视口右下角：这张卡是**跨页面**的（新版本可装、许可证临期与当前在看哪一页无关）。
+ * 挂在顶栏下方会随内容区一起被推走，还白占一条横向空间。
+ *
+ * `bottom` 给到 76px 而不是 20px：右下角已经有一条瞬时 toast 轨道（`daily-summary` 的
+ * `.toasts` —— `bottom: 20px`、单条约 44px 高），抬上去之后两者不会叠着看。
+ * `z-index: 1200` 与面板内 toast 同层，符合应用里浮层的约定（dialogOverlay 70 → toast 1200）。
+ *
+ * 这张卡挂在 WechatDataPanel 内部而不是 portal：`.panel` 及其祖先都没有 transform / filter /
+ * backdrop-filter，`position: fixed` 仍然相对视口。**若哪天有祖先加了这三者之一**，这里会退化成
+ * 「被困在祖先盒子里」—— 那时改用 `createPortal(…, document.body)`。
+ *
+ * 容器 `pointer-events: none` + 卡片自身 `auto`：卡片之间的空隙不该挡住下面的界面。
  * 颜色全走令牌，深浅两套主题自动成立。 */
 
 .stack {
+  position: fixed;
+  right: 20px;
+  bottom: 76px;
+  z-index: 1200;
+  width: 360px;
+  max-width: calc(100vw - 40px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 14px 0;
+  gap: 10px;
+  pointer-events: none;
 }
 
-.row {
+.card {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px 9px 14px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  background: var(--nm-cyan-10);
+  pointer-events: auto;
+  padding: 12px 12px 12px 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  background: var(--nm-bg-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 16px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
-.row::before {
+/* 强度靠左色条 + 描边区分，不把整卡铺满彩色：悬浮卡片本来就压在内容上，
+   再铺满高饱和底色会更抢眼、还会挡住下面的字 */
+.card::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
+  top: 10px;
+  bottom: 10px;
   width: 3px;
   border-radius: 3px;
   background: var(--nm-cyan);
 }
-.row[data-tone='warn'] {
-  border-color: color-mix(in srgb, var(--nm-amber) 38%, transparent);
-  background: color-mix(in srgb, var(--nm-amber) 9%, transparent);
-}
-.row[data-tone='warn']::before { background: var(--nm-amber); }
-.row[data-tone='danger'] {
-  border-color: color-mix(in srgb, var(--nm-danger) 42%, transparent);
-  background: color-mix(in srgb, var(--nm-danger) 9%, transparent);
-}
-.row[data-tone='danger']::before { background: var(--nm-danger); }
+.card[data-tone='warn'] { border-color: color-mix(in srgb, var(--nm-amber) 40%, transparent); }
+.card[data-tone='warn']::before { background: var(--nm-amber); }
+.card[data-tone='danger'] { border-color: color-mix(in srgb, var(--nm-danger) 45%, transparent); }
+.card[data-tone='danger']::before { background: var(--nm-danger); }
 
+.cardHd {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
 .dot {
   flex: 0 0 auto;
+  margin-top: 6px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--nm-cyan);
 }
-.row[data-tone='warn'] .dot { background: var(--nm-amber); }
-.row[data-tone='danger'] .dot { background: var(--nm-danger); }
+.card[data-tone='warn'] .dot { background: var(--nm-amber); }
+.card[data-tone='danger'] .dot { background: var(--nm-danger); }
 
-.text {
+.title {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.title {
   font-size: 13px;
   font-weight: 650;
+  line-height: 1.5;
   color: var(--nm-text-1);
 }
-.detail {
-  font-size: 12px;
-  line-height: 1.5;
+
+.close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: -1px -1px 0 0;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--nm-text-2);
+  font-size: 11px;
+}
+.close:hover {
+  color: var(--nm-text-1);
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border);
 }
 
-.actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.detail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--nm-text-2);
+  /* 导出回执里是 Windows 路径，长串必须能断行，否则把卡片撑破 */
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
 .btn,
 .btnPrimary {
   padding: 5px 12px;
@@ -97,31 +141,3 @@
 }
 .btn:disabled,
 .btnPrimary:disabled { opacity: 0.5; cursor: default; }
-
-.close {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-}
-.close:hover {
-  color: var(--nm-text-1);
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border);
-}
-
-/* 动作回执（导出路径等）：单独一行，不塞进提醒条里以免被误当成提醒本身 */
-.note {
-  padding: 6px 14px 0;
-  font-size: 12px;
-  color: var(--nm-text-2);
-  word-break: break-all;
-}

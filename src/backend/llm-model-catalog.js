@@ -20,6 +20,15 @@ const CATALOG = [
     models: ['deepseek-flash', 'deepseek-v4-pro'],
   },
   {
+    hosts: ['token-plan-cn.xiaomimimo.com'],
+    vendor: 'MiMo（小米 Token Plan）',
+    // 模型 id 取自本机 MiMoCode 配置里这个端点的实际配置项（mimo-v2.5）。
+    // 该端点另有 X-Flash / X-Pro 之类的预览型号，但它们的**API id** 没在配置里出现过，
+    // 猜一个写进来会让用户拿去调用时报 400，所以只列已确认的；填了 Key 后点
+    // 「获取官方模型」会以厂商实时返回为准，那时全量型号自然都有。
+    models: ['mimo-v2.5'],
+  },
+  {
     hosts: ['dashscope.aliyuncs.com'],
     vendor: '通义千问（阿里百炼）',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen-long'],

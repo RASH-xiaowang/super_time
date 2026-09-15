@@ -174,13 +174,18 @@
 }
 
 /* ── 统计卡片 ─────────────────────────────── */
+/* 原为 `repeat(auto-fill, minmax(172px, 1fr))`：项数不是列数整数倍时，末行右侧会空出整块
+   （实测数据健康卡 6 项 / 4 列 → 4+2，右边空两格）。改成 flex + `flex: 1 1 172px`：
+   每项至少 172px，本行剩余空间均分给该行的项，**末行也会铺满**，任何宽度下都不留空档。 */
 .statGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--nm-s-3);
 }
 
 .statCard {
+  flex: 1 1 172px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--nm-s-2);

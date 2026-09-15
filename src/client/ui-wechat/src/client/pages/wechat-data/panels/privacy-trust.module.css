@@ -60,7 +60,9 @@
 .toggle[data-active='true'] { border-color: color-mix(in srgb, var(--nm-success) 40%, transparent); color: var(--nm-success); }
 
 .audit { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 12px; }
-.auditRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+/* 原为 `justify-content: space-between`：整宽卡片里「功能」与「次数 · 字符数」被推到两端，
+   中间留下 600px 空档。改成固定名字列 + 数据列，既紧凑又让各行数字对齐。 */
+.auditRow { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
 .auditName { color: var(--nm-text-1); }
 .auditCount { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
 .auditActions { display: flex; gap: 8px; padding: 0 14px 12px; }

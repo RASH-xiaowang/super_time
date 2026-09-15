@@ -96,24 +96,29 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '备份与安全',
+    label: '隐私与安全',
     items: [
-      // 「数据边界与出网 / 隐私体检 / 备份恢复」2026-09 迁进「设置」弹窗（左导航的四节之一）。
-      // 保留 tab id（深链 #privacytrust / #backup 与其它面板的跳转仍走它），但不占侧栏条目：
-      // 命中这些 tab 时由 WechatDataPanel 的 DIALOG_SECTION_OF 改道去开弹窗并落到对应节。
+      // 「数据边界与出网 / 备份恢复」2026-09 迁进「设置」弹窗（它们是配置与维护动作，
+      // 见 Settings.tsx 的分组）。保留 tab id（深链 #privacytrust / #backup 与其它面板的
+      // 跳转仍走它），但不占侧栏条目：命中这些 tab 时由 WechatDataPanel 的 DIALOG_SECTION_OF
+      // 改道去开弹窗并落到对应节。
       { tab: 'privacytrust', label: '数据边界与出网', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/>', hidden: true },
-      { tab: 'privacy', label: '隐私体检', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>', hidden: true },
+      // 隐私体检 2026-09 一度也进过弹窗，现按「只读数据视图回主界面」迁回来：
+      // 它是分类扫描结果 + 风险联系人/群 TOP10，命中样本还要能跳回会话 —— 那属于看数据。
+      { tab: 'privacy', label: '隐私体检', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' },
       { tab: 'backup', label: '备份恢复', icon: '<path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/>', hidden: true },
     ],
   },
   {
     label: '维护与设置',
     items: [
-      // 同上：settings 固定在侧栏底部（这是它的图标来源），health/hook/oplog 是「设置」弹窗里的三节。
+      // settings 固定在侧栏底部（这是它的图标来源）；health/hook 是「设置」弹窗里的两节（自检与维护动作）。
+      // 操作日志 2026-09 一度也进过弹窗，现按「只读数据视图回主界面」迁回来：它是审计长表，
+      // 弹窗右区只有 660px 宽、浏览与翻查都别扭。
       { tab: 'settings', label: '设置', icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>' },
+      { tab: 'oplog', label: '操作日志', icon: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>' },
       { tab: 'health', label: '数据库健康', icon: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', hidden: true },
       { tab: 'hook', label: '原图链路自检', icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h3M12 17H8M16 13h1M17 17h1"/>', hidden: true },
-      { tab: 'oplog', label: '操作日志', icon: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', hidden: true },
     ],
   },
 ]

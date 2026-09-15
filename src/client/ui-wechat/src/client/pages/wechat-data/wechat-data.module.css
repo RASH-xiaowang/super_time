@@ -624,3 +624,21 @@
   display: flex;
   flex-direction: column;
 }
+
+/* 弹窗里的通用卡片（隐私体检 / 备份恢复 / 数据库健康 / 原图链路自检这些嵌入式面板用的是 kit 的
+   Card）在弹窗里都是**整宽**卡片。kit 的卡头是 `justify-content: space-between`，在这个宽度下
+   `extra`（说明文字）会飘到 560px 之外，看起来就是一段空白。这里把**弹窗内**的卡头改成左对齐
+   紧凑排布；主界面那些窄卡片保持原来的右对齐，不受影响。 */
+.settingsDialogBody :global([class*='_cardHd_']) {
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 弹窗内不再用两列卡片网格。kit 的 `.cardGrid` 是 `repeat(2, 1fr)`，两张卡并排时高度由内容决定
+   （`align-items: start`），短的那张下面就会空出一大块 —— 实测「插件存储文件」+「DB 状态摘要」
+   就是左边 5 行、右边 16 行，左下角空掉半屏。弹窗里改成单列堆叠，两张卡各占整宽。
+   主界面（数据总览 / 朋友圈洞察 / 存储分析 …）那 13 处两列布局不受影响：那里卡片窄、两列是刻意的。 */
+.settingsDialogBody :global([class*='_cardGrid_']) {
+  grid-template-columns: minmax(0, 1fr);
+}

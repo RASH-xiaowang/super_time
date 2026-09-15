@@ -11,6 +11,9 @@ import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 // 面板统一静态导入；客户端插件加载器按单文件 factory 加载，不能分包。
 import { OverviewPanel } from './panels/Overview.tsx'
 import { NoticeBanner } from './panels/NoticeBanner.tsx'
+import { SetupGuide } from './panels/SetupGuide.tsx'
+import { PrivacyPanel } from './panels/Privacy.tsx'
+import { OperationLogPanel } from './panels/OperationLogPanel.tsx'
 import { AskPanel } from './panels/Ask.tsx'
 import { ChatsPanel } from './panels/Chats.tsx'
 import { ContactsPanel } from './panels/Contacts.tsx'
@@ -280,10 +283,12 @@ function renderTab(
     )
     case 'momentsinsights': return <MomentsInsightsPanel />
     case 'calls': return <CallsPanel onOpenChat={onOpenChat} />
-    // 「数据边界与出网 / 隐私体检」已迁进「微信数据配置」弹窗（见 DIALOG_SECTION_OF），
-    // 这里不再有对应的主内容区页面。
-    // 「数据边界与出网 / 隐私体检 / 备份恢复 / 数据健康（含原图链路自检、操作日志）」
-    // 已迁进「设置」弹窗（见 DIALOG_SECTION_OF），这里不再有对应的主内容区页面。
+    // 只读数据视图留在主内容区：隐私体检（扫描结果与风险 TOP10，命中样本可跳回会话）
+    // 与操作日志（审计长表）。配置与维护动作仍收在「设置」弹窗里（见 DIALOG_SECTION_OF）。
+    case 'privacy': return <PrivacyPanel onOpenChat={onOpenChat} />
+    case 'oplog': return <OperationLogPanel />
+    // 「数据边界与出网 / 备份恢复 / 数据健康（数据库健康、原图链路自检）」在「设置」弹窗里
+    // （见 DIALOG_SECTION_OF），这里没有对应的主内容区页面。
     case 'annual':
     case 'dailysummary':
     case 'period': return (
@@ -310,20 +315,21 @@ function renderTab(
 /**
  * 不再占主内容区的页签 → 打开「设置」弹窗时落到哪一节。
  *
- * 「数据边界与出网 / 隐私体检 / 备份恢复 / 数据健康（数据库健康、原图链路自检、操作日志）」
- * 原先是侧栏里的独立页，2026-09 起陆续迁进「微信数据配置」弹窗（现已改名「设置」）：
- * 它们要么是配置，要么是维护与自检，和「看数据」的页签不该挤在一个侧栏里。
+ * 「数据边界与出网 / 备份恢复 / 数据健康（数据库健康、原图链路自检）」原先是侧栏里的独立页，
+ * 2026-09 起迁进「微信数据配置」弹窗（现已改名「设置」）：它们要么是配置，要么是维护与自检动作。
  * 但深链（#privacytrust / #health …）与跨页跳转（数据总览的风险提示、各面板的
  * 「前往设置 / 文件资产」按钮）仍走这几个 tab id，所以这里做一次改道。
+ *
+ * **不在这张表里的页签就是留在主界面的**：`privacy`（隐私体检）与 `oplog`（操作日志）
+ * 2026-09 一度也进过弹窗，现按「只读数据视图回主界面、配置与维护动作留设置」迁回 ——
+ * 前者是扫描结果 + 风险 TOP10（命中样本还要跳回会话），后者是审计长表。
  */
 const DIALOG_SECTION_OF: Readonly<Record<string, string>> = {
   settings: 'detect',
   privacytrust: 'boundary',
-  privacy: 'privacy',
   backup: 'backup',
   health: 'health',
   hook: 'hook',
-  oplog: 'oplog',
 }
 
 /**
@@ -331,7 +337,8 @@ const DIALOG_SECTION_OF: Readonly<Record<string, string>> = {
  * @returns the data panel element tree.
  */
 export function WechatDataPanel(): React.JSX.Element {
-  /** #settings / #privacytrust / #privacy 深链不再是主内容区的页签，而是直接打开弹窗并落到对应节。 */
+  /** #settings / #privacytrust / #health 深链不再是主内容区的页签，而是直接打开弹窗并落到对应节。
+ *  #privacy / #oplog 反过来：它们留在主内容区（只读数据视图），不再开弹窗。 */
   const initialHash = typeof location !== 'undefined' ? location.hash.replace('#', '') : ''
   const [active, setActiveState] = useState<WechatTab>(() => {
     return (initialHash in TAB_LABELS && !(initialHash in DIALOG_SECTION_OF) ? initialHash : 'overview') as WechatTab
@@ -418,15 +425,6 @@ export function WechatDataPanel(): React.JSX.Element {
     setChatTarget(target)
     setActive('chats')
   }, [])
-
-  /**
-   * 弹窗内部发起的跳会话（「隐私体检」的命中样本 → 对应会话）。
-   * 弹窗盖着主内容区，所以先关掉它再切到聊天页并定位。
-   */
-  const openFromDialog = useCallback((username: string, localId?: number): void => {
-    setSettingsOpen(false)
-    openChat(username, localId)
-  }, [openChat])
 
   /**
    * 弹窗里装不下的跳转（如「文件资产 / 存储分析」）：关掉弹窗，再走正常导航切主内容区。
@@ -648,9 +646,15 @@ export function WechatDataPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 主动提醒条：新版本已下载可装 / 许可证临期。此前这两件事只在「设置」弹窗里能看到，
-          用户不主动点进去就感知不到 —— 新版本静默装好，许可证则到期当天才由解锁页硬拦。 */}
+      {/* 主动提醒卡片（右下角悬浮）：新版本已下载可装 / 许可证临期。此前这两件事只在
+          「设置」弹窗里能看到，用户不主动点进去就感知不到 —— 新版本静默装好，许可证则到期
+          当天才由解锁页硬拦。悬浮而非顶栏横条：这两件事与当前在看哪一页无关，且不占版面。 */}
       <NoticeBanner onOpenLicense={() => { openSettings('license') }} />
+
+      {/* 首次进入系统的配置向导卡（左下角悬浮）：把「还差哪几步、点一下去哪配」摆到眼前。
+          它只是指路 —— 配置动作仍在设置里那几节完成（点某一步即打开设置并落到该节）。
+          设置弹窗打开时传 open=false，免得压在弹窗上。 */}
+      <SetupGuide open={!settingsOpen} onOpenStep={(k) => { openSettings(k) }} />
 
       <div className={css.body}>
         <aside className={css.sidebar} data-open={navOpen || undefined}>
@@ -746,7 +750,7 @@ export function WechatDataPanel(): React.JSX.Element {
         title={(
           <span className={css.settingsDialogTitle}>
             设置
-            <span className={css.settingsDialogDesc}>配置向导 · AI 与隐私 · 授权 · 备份与自检</span>
+            <span className={css.settingsDialogDesc}>配置向导 · 智能与隐私 · 授权与更新 · 维护与自检</span>
           </span>
         )}
       >
@@ -754,7 +758,6 @@ export function WechatDataPanel(): React.JSX.Element {
           <SettingsPanel
             inDialog
             initialSection={settingsSection}
-            onOpenChat={openFromDialog}
             onNavigateOut={navigateFromDialog}
           />
         </div>

@@ -19,6 +19,8 @@ import { SessionAsk } from '../src/client/ui-wechat/src/client/pages/wechat-data
 import { AiModelConfig } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx'
 import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
+import { SetupGuideCard } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SetupGuide.tsx'
+import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 
 let passed = 0
 let failed = 0
@@ -210,8 +212,8 @@ check('接地正常时 CiteList 不渲染警示', () => {
   ok(!html.includes('在它引用的原文里没有出现'), `不该有警示：${html.slice(0, 300)}`)
 })
 
-console.log('NoticeList（顶栏下方的主动提醒条）')
-/** 提醒条是纯展示层（不碰 IPC），这里喂判定结果直接断言渲染事实。 */
+console.log('NoticeList（右下角悬浮的主动提醒卡片）')
+/** 提醒卡片是纯展示层（不碰 IPC），这里喂判定结果直接断言渲染事实。 */
 const noticeHtml = (facts: Parameters<typeof buildNotices>[0]) =>
   renderToStaticMarkup(h(NoticeList, { notices: buildNotices(facts), onAction: () => {}, onDismiss: () => {} }))
 
@@ -252,6 +254,33 @@ check('两条同时冒出来：更新在前，各有独立关闭按钮', () => {
   })
   ok(html.indexOf('v1.4.0') < html.indexOf('20 天'), '更新的动作更即时，应排在授权之前')
   ok((html.match(/aria-label="关闭提醒/g) ?? []).length === 2, '每条都要能单独关掉')
+})
+
+console.log('SetupGuideCard（首次进入系统的配置向导卡）')
+/** 向导卡同样是纯展示层，喂事实夹具直接断言。 */
+const guideHtml = (facts: Partial<SetupFacts>) =>
+  renderToStaticMarkup(h(SetupGuideCard, { facts: { ...emptyFacts(), ...facts }, onOpenStep: () => {}, onLater: () => {} }))
+
+check('全未配置：四项都在、四项都有「去配置」、进度 0/4', () => {
+  const html = guideHtml({})
+  ok(html.includes('首次配置向导'), '缺少标题')
+  ok(html.includes('已完成 0/4'), `进度不对：${html.slice(0, 120)}`)
+  for (const t of ['检测账号', '数据库密钥', '图片密钥', '图片解码']) ok(html.includes(t), `缺少步骤：${t}`)
+  ok((html.match(/去配置/g) ?? []).length === 5, '四个必做 + 一个可选，都该有「去配置」')
+})
+
+check('配好两项：进度 2/4，已完成的项不再给「去配置」', () => {
+  const html = guideHtml({ accounts: 2, keysLoaded: true, keyCount: 22 })
+  ok(html.includes('已完成 2/4'), `进度不对：${html.slice(0, 120)}`)
+  ok((html.match(/data-done="true"/g) ?? []).length === 2, '应有两项标为已完成')
+  ok((html.match(/去配置/g) ?? []).length === 3, '剩下两项必做 + 可选一项')
+})
+
+check('语音转写是可选：没就绪不影响「完成」的计数口径', () => {
+  const html = guideHtml({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', cdnEnabled: true, voiceReady: false })
+  ok(html.includes('已完成 4/4'), '四项必做齐了就该是 4/4（语音不计入）')
+  ok(html.includes('语音转文字（可选）'), '可选行仍在，标为可选')
+  ok(!html.includes('data-step="voice" data-done'), '语音没就绪时不该显示为已完成')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)
