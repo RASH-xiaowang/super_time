@@ -86,6 +86,13 @@ try {
   check(Boolean(wasmEntry) && wasmEntry.offset === undefined,
     'asar 归档体里没有重复存一份 WASM（只解包一份）');
 
+  // N19：wx_silk.exe 是要被 spawnSync 执行的 —— asar 内的 exe 跑不起来（ENOENT），
+  // 所以它必须在 app.asar.unpacked 下是真实文件，且 silkDecoderBin() 会把路径改写到那边
+  // （见 src/backend/wechat-data/src/asar-path.ts）。缺这条时打包版的语音 silk 解码与
+  // 批量转写都是坏的，而开发态看不出任何异常。
+  check(fs.existsSync(path.join(unpackedRoot, 'src', 'backend', 'wechat-data', 'resources', 'win32', 'x64', 'wx_silk.exe')),
+    'app.asar.unpacked 下有 wx_silk.exe（语音解码器；asar 内的 exe 无法 spawn）');
+
   // ── M19：打包冗余已排除；但「排除掉的确实是冗余」与「运行时必需品还在」必须同时被断言 ──
   // 起因：`files` 里的 `src/**/*` 把三类东西打进了 asar ——
   //   · `src/backend/deps/**`（8.07MB/984 条）：与 node_modules 里 npm 装的那份重复。

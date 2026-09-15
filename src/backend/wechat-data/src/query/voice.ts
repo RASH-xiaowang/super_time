@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
+import { onDiskPath } from '../asar-path.ts'
 
 /** One VoiceInfo row with its chat username. */
 export interface VoiceSource {
@@ -90,7 +91,15 @@ export function svrIdByChatLocal(decryptedDir: string, username: string, localId
   }
 }
 
-/** Resolve the wx_silk decoder binary: env pin, bundled resources, '' when none. */
+/**
+ * Resolve the wx_silk decoder binary: env pin, bundled resources, '' when none.
+ *
+ * The bundled candidate must go through `onDiskPath` (N19): in a packaged
+ * build the walk from `import.meta.url` lands inside app.asar, where
+ * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
+ * Returning `''` instead of an unrunnable path keeps the caller's error
+ * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
+ */
 export function silkDecoderBin(): string {
   const pinned = process.env.DSH_WECHAT_SILK_BIN
   if (pinned && pinned.trim().length > 0) return pinned.trim()
@@ -100,7 +109,8 @@ export function silkDecoderBin(): string {
     let dir = fileURLToPath(new URL('.', import.meta.url))
     for (let i = 0; i < 5; i += 1) {
       const candidate = join(dir, 'resources', 'win32', 'x64', 'wx_silk.exe')
-      if (existsSync(candidate)) return candidate
+      const bin = onDiskPath(candidate)
+      if (bin) return bin
       const parent = existingParent(dir)
       if (parent === dir) break
       dir = parent
