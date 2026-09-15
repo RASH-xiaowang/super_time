@@ -53,6 +53,15 @@ function writeModelsCache(apiUrl: string, apiKey: string, models: string[]): voi
  *  API Key 与超时保留用户当前值，绝不被模板覆盖。 */
 const LLM_TEMPLATES = [
   { key: 'deepseek', label: 'DeepSeek', provider: 'deepseek', model: 'deepseek-flash', apiUrl: 'https://api.deepseek.com/v1' },
+  {
+    key: 'mimo',
+    label: 'MiMo（小米 Token Plan）',
+    provider: 'mimo',
+    // 与 src/backend/llm-model-catalog.js 的同名条目保持一致：模型 id 只列已确认的
+    // （mimo-v2.5）；其余预览型号的 API id 未确认，填 Key 后点「获取官方模型」按实时列表取。
+    model: 'mimo-v2.5',
+    apiUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+  },
   { key: 'dashscope', label: '通义千问（阿里百炼）', provider: 'dashscope', model: 'qwen-plus', apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { key: 'moonshot', label: 'Moonshot Kimi', provider: 'moonshot', model: 'moonshot-v1-8k', apiUrl: 'https://api.moonshot.cn/v1' },
   { key: 'siliconflow', label: '硅基流动 SiliconFlow', provider: 'siliconflow', model: 'Qwen/Qwen2.5-7B-Instruct', apiUrl: 'https://api.siliconflow.cn/v1' },
@@ -60,6 +69,9 @@ const LLM_TEMPLATES = [
   { key: 'qianfan', label: '百度千帆（文心）', provider: 'qianfan', model: 'ernie-4.0-turbo-8k', apiUrl: 'https://qianfan.baidubce.com/v2' },
   { key: 'openai', label: 'OpenAI 官方', provider: 'openai-compat', model: 'gpt-4o-mini', apiUrl: 'https://api.openai.com/v1' },
 ] as const
+
+/** 下拉里代表「当前配置不属于任何内置模板」的那一项。只用于把选中态显示出来，不参与保存。 */
+const CUSTOM_TEMPLATE_KEY = '__current__'
 
 /**
  * Render the AI model configuration card.
@@ -91,6 +103,23 @@ export function AiModelConfig(): React.JSX.Element {
       .then((cfg) => { setLlmConfig(cfg); setLlmSavedModel(cfg.model || '') })
       .catch((e) => { setLlmMsg({ kind: 'err', text: (e as Error).message }) })
   }, [])
+
+  /**
+   * 「配置模板」下拉的选中态要反映**已保存的配置**，而不是只反映「这次点过哪个模板」。
+   *
+   * 原先 `llmTemplate` 初值恒为 ''、只在点击时被赋值，于是配置明明是
+   * deepseek-flash @ api.deepseek.com（与内置 deepseek 模板三项全同），下拉仍停在
+   * 「选择厂商模板…」—— 看起来像从没配过，与卡片徽标的「已配置」自相矛盾。
+   * 现在按 供应商 + 模型 + 地址 三项回填；三项都不匹配任何模板时补一项「当前配置（自定义）」，
+   * 让这个下拉永远能回答「现在用的是哪一套」。
+   */
+  useEffect(() => {
+    if (!llmConfig) return
+    const hit = LLM_TEMPLATES.find(t => (
+      t.provider === llmConfig.provider && t.model === llmConfig.model && t.apiUrl === llmConfig.apiUrl
+    ))
+    setLlmTemplate(hit ? hit.key : ((llmConfig.provider || llmConfig.apiUrl) ? CUSTOM_TEMPLATE_KEY : ''))
+  }, [llmConfig])
 
   /** base_url 或 API Key 变化时回到该组合下缓存的模型列表（指纹不符即为空 → 回退手输）；
    *  同时清掉旧提示——换地址/换凭据等于换上下文，上一个成功/错误提示都不再适用。 */
@@ -202,7 +231,14 @@ export function AiModelConfig(): React.JSX.Element {
                 <Select
                   value={llmTemplate}
                   onChange={applyLlmTemplate}
-                  options={LLM_TEMPLATES.map(t => ({ value: t.key, label: t.label }))}
+                  options={[
+                    // 当前配置不是任何内置模板时，也要在下拉里说清楚用的是什么 —— 否则显示成空，
+                    // 看起来像没配过（与「已配置」徽标矛盾）。
+                    ...(llmTemplate === CUSTOM_TEMPLATE_KEY
+                      ? [{ value: CUSTOM_TEMPLATE_KEY, label: '当前配置（自定义）' }]
+                      : []),
+                    ...LLM_TEMPLATES.map(t => ({ value: t.key, label: t.label })),
+                  ]}
                   placeholder="选择厂商模板…"
                   ariaLabel="厂商配置模板"
                 />

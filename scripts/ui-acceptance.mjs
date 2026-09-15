@@ -605,7 +605,7 @@ async function main() {
   })
 
   // ── 11 ──
-  await step('11. 「设置」弹窗（左导航 + 右内容）与全应用唯一的 AI 模型入口', '配置/隐私/维护都收进弹窗：右区 15 节连续滚动、左导航充当目录；模型配置不再散落在问答面板', async () => {
+  await step('11. 「设置」弹窗（左导航 + 右内容）与全应用唯一的 AI 模型入口', '配置/授权/维护动作收进弹窗：右区 13 节连续滚动、左导航充当目录；只读数据视图（隐私体检 / 操作日志）留在主界面；模型配置不再散落在问答面板', async () => {
     const wait = (ms) => win.waitForTimeout(ms)
     // 侧栏底部固定的那个按钮现在叫「设置」（原来叫「数据配置」）。名字短了必须精确匹配，
     // 否则「高级设置」「前往系统设置」这类含同名字串的按钮会先被选中。
@@ -620,10 +620,10 @@ async function main() {
     ok((await win.locator('main nav[aria-label="设置导航"]').count()) === 0,
       '左导航属于弹窗而不是主内容区（主内容区留在原来那一页）')
 
-    // —— 左右结构：左导航（固定宽，充当目录）+ 右内容（15 节堆叠，连续滚动）——
-    // 这一页共 15 节（配置向导 5 步 + 智能与隐私 3 + 授权与维护 6 + 高级 1）。
+    // —— 左右结构：左导航（固定宽，充当目录）+ 右内容（13 节堆叠，连续滚动）——
+    // 这一页共 13 节（配置向导 5 步 + 智能与隐私 2 + 授权与更新 2 + 维护与自检 3 + 高级 1）。
     // 早期是「右侧一次只显示一节」：滚到该节底部就停住，想继续看下一节得回左栏再点一次。
-    // 现在 15 节全部堆在同一个滚动区里，滚到一节末尾自然接下一节；左导航变成目录 ——
+    // 现在 13 节全部堆在同一个滚动区里，滚到一节末尾自然接下一节；左导航变成目录 ——
     // 点击滚到该节，高亮按滚动位置反推（见 Settings.tsx 的 onPaneScroll）。
     const rail = dlg.locator('nav[aria-label="设置导航"]')
     await rail.waitFor({ timeout: 20000 })
@@ -652,10 +652,10 @@ async function main() {
         disclosures: d.querySelectorAll('details, summary').length,
       }
     })
-    ok(layout.items.length === 15, '左导航 15 项',
+    ok(layout.items.length === 13, '左导航 13 项',
       layout.items.join(' / '))
-    ok(layout.groups.join('|') === '配置向导|智能与隐私|授权与维护|高级',
-      '15 项分四组显示（配置向导 / 智能与隐私 / 授权与维护 / 高级）', layout.groups.join('|'))
+    ok(layout.groups.join('|') === '配置向导|智能与隐私|授权与更新|维护与自检|高级',
+      '13 项分五组显示（配置向导 / 智能与隐私 / 授权与更新 / 维护与自检 / 高级）', layout.groups.join('|'))
     ok(layout.dir === 'column', '导航项竖向排列', layout.dir)
     ok(layout.paneLeft >= layout.navRight, '右内容区在左导航右侧（并排、不重叠）',
       `导航右缘 ${layout.navRight} ≤ 内容左缘 ${layout.paneLeft}`)
@@ -663,8 +663,8 @@ async function main() {
       `导航 ${layout.navTop} / 内容 ${layout.paneTop}`)
     ok(layout.paneW > layout.navW * 3, '右内容区宽度远大于导航（右区才是主区）',
       `导航 ${layout.navW}px / 内容 ${layout.paneW}px`)
-    ok(layout.shown.length === 15 && layout.shown[0] === 'detect',
-      '15 节全部堆在右区（不再是只显示一节、其余 display:none）', layout.shown.join(' | '))
+    ok(layout.shown.length === 13 && layout.shown[0] === 'detect',
+      '13 节全部堆在右区（不再是只显示一节、其余 display:none）', layout.shown.join(' | '))
     ok(layout.scrollH > layout.clientH, '整份内容高于右区 → 右区可连续滚动',
       `${layout.scrollH} > ${layout.clientH}`)
     ok(layout.squashed.length === 0, '没有节被压扁（节自身高度小于内容高度）', layout.squashed.join(' | '))
@@ -672,7 +672,7 @@ async function main() {
       String(layout.disclosures))
 
     // 导航点击 = 滚到该节（节顶对齐右区上沿，左导航高亮跟着切）；滚到底高亮落到最后一节。
-    // 早先这里必须先压矮窗口才能验滚动（单节装得下就没有滚动条），现在 15 节堆在一起、
+    // 早先这里必须先压矮窗口才能验滚动（单节装得下就没有滚动条），现在 13 节堆在一起、
     // 八千多像素的内容远高于 665px 的右区，窗口尺寸不再需要干预。
     const sectionState = (key) => win.evaluate((k) => {
       const d = document.querySelector('[role="dialog"]')
@@ -717,7 +717,7 @@ async function main() {
     ok(backTop.scrollTop <= 2, '点第一节回到顶部', String(backTop.scrollTop))
     ok(backTop.current.includes('检测账号'), '高亮回到第一节', backTop.current)
 
-    // AI 大模型是左导航的一项：点它滚过去（15 节都在 DOM 里，不再是「切过去才可见」）
+    // AI 大模型是左导航的一项：点它滚过去（13 节都在 DOM 里，不再是「切过去才可见」）
     await rail.getByRole('button', { name: 'AI 大模型' }).first().click()
     await win.waitForTimeout(500)
 
@@ -736,9 +736,9 @@ async function main() {
     ok(t.includes('mock-chat'), '显示当前已配置模型', t.slice(0, 160).replace(/\n/g, ' '))
     await shot(win, '11-ai-model-card')
 
-    // —— 从外层侧栏迁进来的两节：数据边界与出网 / 隐私体检 ——
+    // —— 从外层侧栏迁进来、且留在弹窗里的那一节：数据边界与出网 ——
     // 外面那个「隐私与信任」页签已下线，这里是它们唯一的入口。
-    // 溢出检查要**限定到某一节**：15 节现在同处一个滚动容器，扫整棵子树会把别的节里
+    // 溢出检查要**限定到某一节**：13 节现在同处一个滚动容器，扫整棵子树会把别的节里
     // 本来就该内部滚动的区域也算成「被裁掉」，报出与本节无关的失败。
     const clipIn = (key) => win.evaluate((k) => {
       const pane = document.querySelector('[role="dialog"] nav').nextElementSibling
@@ -784,34 +784,17 @@ async function main() {
     ok(bClip.clipped.length === 0, '该节内没有「内容溢出但 overflow:hidden」的元素', bClip.clipped.slice(0, 4).join(' '))
     await shot(win, '11-boundary')
 
-    await rail.getByRole('button', { name: '隐私体检' }).first().click()
-    await win.waitForTimeout(1800)
-    const priv = await win.evaluate(() => {
-      const nav = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]')
-      const pane = nav.nextElementSibling
-      const scope = pane.querySelector('[data-settings-section="privacy"]')
-      const cur = nav.querySelector('button[aria-current="true"]')
-      const br = pane.getBoundingClientRect()
-      const rr = scope.getBoundingClientRect()
-      const text = (scope.textContent || '').replace(/\s+/g, ' ')
-      const cats = ['手机号', '身份证号', '银行卡号', '邮箱', '密码口令', '地址信息']
-      return {
-        inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
-        current: (cur?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 12),
-        missing: cats.filter(c => !text.includes(c)),
-        scan: Array.from(scope.querySelectorAll('button')).some(b => /重新扫描|开始扫描/.test(b.textContent || '')),
-      }
-    })
-    ok(priv.inView && priv.current.includes('隐私体检'), '点导航把「隐私体检」滚进可视区', priv.current)
-    ok(priv.scan, '扫描入口还在（PanelHeader 的动作没丢）')
-    ok(priv.missing.length === 0, '六个敏感信息类别都在（原来最后一类被裁）', priv.missing.join(','))
-    const pClip = await clipIn('privacy')
-    ok(pClip.clipped.length === 0, '该节内没有「内容溢出但 overflow:hidden」的元素', pClip.clipped.slice(0, 4).join(' '))
-    await shot(win, '11-privacy-health')
+    // 隐私体检与操作日志 2026-09 从弹窗迁回主界面（只读数据视图）。这里先确认它们**不在**弹窗里，
+    // 迁回主界面的行为在本步末尾单独验（要等弹窗关掉之后）。
+    const railLabels = await win.evaluate(() => Array.from(
+      document.querySelectorAll('[role="dialog"] nav[aria-label="设置导航"] button'),
+    ).map(b => (b.textContent || '').replace(/\s+/g, ' ')))
+    ok(!railLabels.some(t => t.includes('隐私体检')), '弹窗左导航不再有「隐私体检」（已迁回主界面）', railLabels.join(' | ').slice(0, 90))
+    ok(!railLabels.some(t => t.includes('操作日志')), '弹窗左导航不再有「操作日志」（已迁回主界面）')
 
-    // —— 第二批迁入：备份恢复 / 数据库健康 / 原图链路自检 / 操作日志 ——
-    const KEY_OF = { 备份恢复: 'backup', 数据库健康: 'health', 原图链路自检: 'hook', 操作日志: 'oplog' }
-    for (const label of ['备份恢复', '数据库健康', '原图链路自检', '操作日志']) {
+    // —— 第二批留在弹窗：备份恢复 / 数据库健康 / 原图链路自检（配置与维护动作） ——
+    const KEY_OF = { 备份恢复: 'backup', 数据库健康: 'health', 原图链路自检: 'hook' }
+    for (const label of ['备份恢复', '数据库健康', '原图链路自检']) {
       await rail.getByRole('button', { name: label }).first().click()
       await win.waitForTimeout(1800)
       const st = await sectionState(KEY_OF[label])
@@ -828,6 +811,50 @@ async function main() {
     ok((await win.locator('[role="dialog"]').count()) === 0, 'Esc 关闭弹窗')
     const back = await win.locator('main').innerText()
     ok(back.length > 0 && !back.includes('检测账号'), '关闭后主内容区回到原来那一页')
+
+    // —— 迁回主界面的两节：从侧栏进，且**不再**弹弹窗（判据：只读数据视图不该待在设置里） ——
+    await win.getByRole('button', { name: '隐私体检' }).first().click()
+    await win.waitForTimeout(2200)
+    const privMain = await win.evaluate(() => {
+      const main = document.querySelector('main')
+      const text = (main?.textContent || '').replace(/\s+/g, ' ')
+      const cats = ['手机号', '身份证号', '银行卡号', '邮箱', '密码口令', '地址信息']
+      return {
+        dialogOpen: !!document.querySelector('[role="dialog"]'),
+        missing: cats.filter(c => !text.includes(c)),
+        scan: Array.from(main?.querySelectorAll('button') ?? []).some(b => /重新扫描|开始扫描/.test(b.textContent || '')),
+        hasTop: text.includes('风险联系人') && text.includes('风险群聊'),
+      }
+    })
+    ok(!privMain.dialogOpen, '「隐私体检」在主内容区打开（不再弹设置弹窗）')
+    ok(privMain.scan, '扫描入口还在（PanelHeader 的动作没丢）')
+    ok(privMain.missing.length === 0, '六个敏感信息类别都在', privMain.missing.join(','))
+    ok(privMain.hasTop, '风险联系人 / 风险群聊两栏还在')
+    const privClip = await win.evaluate(() => {
+      const main = document.querySelector('main')
+      const clipped = []
+      for (const el of main.querySelectorAll('*')) {
+        const cs = getComputedStyle(el)
+        if (cs.overflowY !== 'hidden' && cs.overflow !== 'hidden') continue
+        if (el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2) clipped.push(String(el.className).split(' ')[0])
+      }
+      return clipped
+    })
+    ok(privClip.length === 0, '主内容区里也没有被裁的元素', privClip.slice(0, 4).join(' '))
+    await shot(win, '11-privacy-main')
+
+    await win.getByRole('button', { name: '操作日志' }).first().click()
+    await win.waitForTimeout(2200)
+    const oplogMain = await win.evaluate(() => ({
+      dialogOpen: !!document.querySelector('[role="dialog"]'),
+      hasTable: (document.querySelector('main')?.textContent || '').includes('操作日志'),
+      mainW: Math.round((document.querySelector('main')?.getBoundingClientRect().width ?? 0)),
+    }))
+    ok(!oplogMain.dialogOpen, '「操作日志」在主内容区打开（不再弹设置弹窗）')
+    ok(oplogMain.hasTable, '主内容区是操作日志面板', String(oplogMain.hasTable))
+    ok(oplogMain.mainW > 700, '审计表拿到了主内容区的整宽（弹窗右区只有 ~660px）', `${oplogMain.mainW}px`)
+    await shot(win, '11-oplog-main')
+
     // 其他界面不再有模型入口
     await win.getByRole('button', { name: '微信问答' }).first().click()
     await win.locator('text=本机检索 · AI 综合回答').first().waitFor({ timeout: 30000 })

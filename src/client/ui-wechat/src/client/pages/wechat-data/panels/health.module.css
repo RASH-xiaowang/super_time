@@ -5,8 +5,10 @@
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .storeList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
-.storeRow { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--nm-text-1); }
-.storeName { color: var(--nm-text-1); }
-.storeSize { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
+/* 原为 `justify-content: space-between`：整宽卡片里文件名与体积被推到两端，中间空 200px。
+   改成「紧跟」排布：文件名吃自然宽度（过长折行），体积紧随其后。 */
+.storeRow { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--nm-text-1); }
+.storeName { color: var(--nm-text-1); min-width: 0; overflow-wrap: anywhere; }
+.storeSize { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); flex: 0 0 auto; }
 .lines { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .line { font-size: 12px; color: var(--nm-text-2); word-break: break-all; }
