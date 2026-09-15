@@ -69,5 +69,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     logInfo: () => ipcRenderer.invoke('diag:log-info'),
     exportLog: () => ipcRenderer.invoke('diag:export-log'),
     revealLog: () => ipcRenderer.invoke('diag:reveal-log'),
+  },
+  /**
+   * 自动更新（electron-updater + GitHub Releases）。
+   *
+   * `state()` 是挂载时补一次的快照（渲染层可能错过早先的事件）；`onEvent` 之后
+   * 每次状态变化都会推一遍（进度已按 1% 节流）。`check({ manual: true })` 是用户
+   * 主动触发 —— 自动检查由主进程排在启动后，不经过这里。
+   * 「能不能更新 / 更新源在哪」都由主进程决定，渲染层只决定「要不要点这个按钮」。
+   */
+  update: {
+    state: () => ipcRenderer.invoke('update:state'),
+    check: (opts) => ipcRenderer.invoke('update:check', opts),
+    install: () => ipcRenderer.invoke('update:install'),
+    onEvent: (listener) => {
+      const handler = (_event, payload) => {
+        try {
+          listener(payload);
+        } catch {
+          /* 渲染进程回调异常不传播到主进程 */
+        }
+      };
+      ipcRenderer.on('update:event', handler);
+      return () => ipcRenderer.removeListener('update:event', handler);
+    },
   }
 });

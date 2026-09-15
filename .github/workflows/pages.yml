@@ -1,0 +1,50 @@
+name: Pages
+
+# 把 website/ 发布成 GitHub Pages，作为安装包的下载落地页。
+#
+# 只监听 website/ 的改动：这个工作流与代码无关，改后端代码时不该重跑一遍部署。
+# 注意：`paths` 过滤一旦写错（比如漏了 workflow 自己）就会出现「改了工作流但不生效」
+# 的死角，所以这里把工作流文件本身也列进去。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Pages 部署需要的三件套：读仓库用 contents，写 Pages 站点用 pages，
+# 跨域信任（OIDC）用 id-token。
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只跑一个部署；新的一次直接取代旧的（官网不需要排队）。
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # enablement: true —— 仓库若还没开 Pages，这里直接用 token 把源设成
+      # 「GitHub Actions」。不开的话第一次部署会卡在 404 上，而报错信息不会告诉
+      # 你「该去 Settings → Pages 点一下」。
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # 上传的是 website/ 的**内容**（index.html 落在站点根），不是 website 这一层目录。
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

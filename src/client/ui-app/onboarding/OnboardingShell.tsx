@@ -443,9 +443,9 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
           {[
             { k: 'MODULES', v: '17', h: '侧栏入口 · 30+ 视图' },
             // 这个数字是用户可见的契约声明，必须与 gateway.ts 的 @Remote 数量一致。
-            // 它曾长期停在 114（实际早已 132）而无人发现 —— 现在由
+            // 它曾长期停在 114 而无人发现 —— 现在由
             // src/backend/tests/api-docs.spec.ts 守着，改了方法面就会在这里转红。
-            { k: 'REMOTE API', v: '132', h: '查询 / 导出 / 审计 / 总结' },
+            { k: 'REMOTE API', v: '135', h: '查询 / 导出 / 审计 / 总结' },
             { k: 'RUNTIME', v: 'LOCAL', h: 'utilityProcess 独立后端' },
           ].map((s, i) => (
             <Reveal key={s.k} anim="slide-r" delayMs={140 + i * 90}>

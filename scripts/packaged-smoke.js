@@ -217,6 +217,10 @@ const r = spawnSync(exe, [], {
     ...process.env,
     SUPERTIME_SCREENSHOT: shot,
     SUPERTIME_USER_DATA_DIR: userData,
+    // 这是**真实安装版**，默认会在启动 30s 后去 GitHub Releases 拉 latest.yml。
+    // 本次断言与更新无关，却会因为 CI 出网失败/变慢而变成一条随机红的用例 ——
+    // 显式关掉，让这条冒烟的失败只可能来自它真正要验的东西。
+    SUPERTIME_DISABLE_UPDATE_CHECK: '1',
   },
 });
 const out = `${r.stdout || ''}\n${r.stderr || ''}`;

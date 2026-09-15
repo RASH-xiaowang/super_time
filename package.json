@@ -63,6 +63,7 @@
     "@deepseek-ai/dsh-util-values": "file:src/backend/deps/dsh-util-values",
     "@deepseek-ai/schemastery": "file:src/backend/deps/schemastery",
     "@standard-schema/spec": "file:src/backend/deps/@standard-schema/spec",
+    "electron-updater": "^6.8.9",
     "fzstd": "file:src/backend/deps/fzstd",
     "koffi": "file:src/backend/deps/koffi",
     "unzipper": "^0.12.5",
@@ -104,6 +105,14 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "RASH-xiaowang",
+        "repo": "super_time",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -116,6 +125,7 @@
       "node_modules/@deepseek-ai/**/*",
       "node_modules/@koromix/**/*",
       "node_modules/@standard-schema/**/*",
+      "node_modules/electron-updater/**/*",
       "node_modules/fzstd/**/*",
       "node_modules/koffi/**/*",
       "node_modules/unzipper/**/*",

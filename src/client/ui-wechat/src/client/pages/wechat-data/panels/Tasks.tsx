@@ -24,6 +24,14 @@ function fmtDue(ts?: number): string {
  */
 export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
   const [tasks, setTasks] = useState<readonly WechatTask[]>(() => readRenderCache<readonly WechatTask[]>('tasks') ?? [])
+  /**
+   * 「待办库读不到」的原因（N1）。
+   *
+   * 后端在读失败时仍返回空列表（面板不该整块崩掉），但同时带上 `readError`：
+   * 没有它，「库被占用/损坏」与「确实一条待办都没有」在界面上完全一样 ——
+   * 用户会照「暂无待办」去排查，方向全错（那正是 N1 要修的那件事）。
+   */
+  const [readError, setReadError] = useState<string | null>(null)
   const [manualTitle, setManualTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [extracting, setExtracting] = useState(false)
@@ -37,7 +45,10 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
     try {
       const r = await apiListTasks()
       setTasks(r.items)
-      writeRenderCache('tasks', r.items)
+      setReadError(r.readError ?? null)
+      // 读失败时**不写**渲染缓存：把「读不到」的那份空列表写进去，下次打开会先渲染
+      // 「暂无待办」，而缓存本身看不出来源 —— 正好复现 N1 要消除的那个假象。
+      if (!r.readError) writeRenderCache('tasks', r.items)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
@@ -148,9 +159,15 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
+      {/* 「读取失败」必须与「空列表」分开说（N1）：这不是「暂无待办」。 */}
+      {readError && (
+        <div className={kitCss.error} role="alert">
+          待办库读取失败（不是「暂无待办」）：{readError}
+        </div>
+      )}
       {loading && <div className={kitCss.emptyInline}>加载中…</div>}
 
-      {!loading && tasks.length === 0 && !error && <EmptyState icon="✅" title="暂无待办" desc="点击右上角「提取最近 7 天待办」自动生成" />}
+      {!loading && tasks.length === 0 && !error && !readError && <EmptyState icon="✅" title="暂无待办" desc="点击右上角「提取最近 7 天待办」自动生成" />}
 
       <Card flush>
         <div className={css.list}>

@@ -51,6 +51,7 @@ const { createWorkerChannel } = require('./src/backend/backend-rpc');
 const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
 const { resolveDebugGates } = require('./src/backend/debug-gates');
+const { createUpdateService } = require('./src/backend/update');
 
 /**
  * 首启闸门豁免状态（N2）。
@@ -145,6 +146,12 @@ if (!singleInstanceLock) {
 }
 
 let mainWindow = null;
+/**
+ * 自动更新服务（electron-updater）；在 `whenReady` 里建好，之前为 null。
+ *
+ * 三个 `update:*` 处理器都注册在它建好**之后**，所以这里不需要额外的空值兜底。
+ */
+let updateService = null;
 /** 当前后端句柄；进程已死或尚未 init 完成时为 null。 */
 let wechatBackend = null;
 /** 后端进程启动时返回的 { info, methods }。 */
@@ -449,6 +456,53 @@ function broadcastWechatEvent(name, args) {
       /* 窗口可能已销毁，忽略 */
     }
   }
+}
+
+/**
+ * 更新状态广播（`update:event`）。
+ *
+ * 与 `wechat:event` 同一套做法：主进程是唯一的事实来源，渲染层只是投影。
+ * 进度类事件在 update.js 里已按 1% 阶梯节流，这里不再二次过滤。
+ */
+function broadcastUpdateState(state) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send('update:event', state);
+    } catch {
+      /* 窗口可能已销毁，忽略 */
+    }
+  }
+}
+
+/**
+ * 建更新服务（**懒加载** electron-updater）。
+ *
+ * 为什么包 try/catch：更新只是附属能力。它加载失败（asar 里少了依赖、原生模块不兼容）
+ * 绝不能让应用起不来 —— 那会把「升级坏了」放大成「应用打不开」。失败时退化成
+ * `autoUpdater: null`，服务把自己报成 `unsupported / unavailable`，界面照常可用。
+ *
+ * 为什么在 whenReady 里才建：electron-updater 读 `app.getVersion()` 与
+ * `resources/app-update.yml`，都要求 app 已就绪。
+ */
+function createUpdateServiceSafe() {
+  let autoUpdater = null;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (err) {
+    console.error('[update] electron-updater 加载失败，本次运行不支持自动更新:', err);
+  }
+  return createUpdateService({
+    autoUpdater,
+    isPackaged: app.isPackaged,
+    currentVersion: APP_VERSION,
+    onState: broadcastUpdateState,
+    // 走 console.* 而不是直接写 diagLog：上面 installConsoleCapture 已把 console
+    // 接进文件日志，这里再写一次会在同一行上出现两份。
+    log: (level, args) => {
+      const sink = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+      sink('[update]', ...args);
+    },
+  });
 }
 
 function createWindow() {
@@ -1028,6 +1082,36 @@ app.whenReady().then(async () => {
     }
   });
 
+  // ── 自动更新（electron-updater + GitHub Releases）──────────────────────
+  // 三个通道 + 一条广播：
+  //   update:state   —— 渲染层挂载时补一次状态（可能已经错过早先的事件，同 wechat:backend-state）
+  //   update:check   —— 用户手动触发；自动检查由 scheduleAutoCheck 排在启动 30s 后
+  //   update:install —— 重启并安装已下载的更新
+  //   update:event   —— 主进程 → 渲染层的状态推送（含下载进度）
+  // 更新源与安装包同源（build.publish → 打包时写进 resources/app-update.yml），
+  // 状态机与各事件的收敛规则见 src/backend/update.js。
+  updateService = createUpdateServiceSafe();
+  // 一行正向留痕。没有它的话，日志里只有「加载失败」这一种证据 —— 用户报障说
+  // 「升不了级」时，我们无法区分「服务就绪但检查失败」与「整个模块没装进包」。
+  // package:smoke / 诊断日志导出都会带上这一行。
+  console.log('[update] 更新服务已就绪 supported=%s current=%s',
+    updateService.isSupported(), APP_VERSION);
+  ipcMain.handle('update:state', () => ({ ok: true, value: updateService.getState() }));
+  ipcMain.handle('update:check', async (_event, opts) => {
+    try {
+      // 只收 `manual` 这一个布尔：渲染层决定不了「要不要真的出网」—— 那只由主进程的
+      // 打包态判定与环境变量决定（见 update.js 的 isSupported）。
+      const next = await updateService.check({ manual: !!(opts && opts.manual === true) });
+      return { ok: true, value: next };
+    } catch (err) {
+      return { ok: false, error: { message: err?.message || String(err) } };
+    }
+  });
+  ipcMain.handle('update:install', () => {
+    const r = updateService.install();
+    return r.ok ? { ok: true } : { ok: false, error: { message: r.error } };
+  });
+
   createWindow();
 
   // 安全守卫的端到端探针（仅 SUPERTIME_SECURITY_PROBE=1）：
@@ -1127,6 +1211,11 @@ app.whenReady().then(async () => {
     setBackendStatus('down', `初始化失败：${err?.message ?? err}`);
     scheduleBackendRestart(`初始化失败：${err?.message ?? err}`);
   }
+
+  // 自动更新（延迟 30s，见 update.js）：刻意放在后端 try/catch **之外** —— 更新能不能
+  // 检查跟后端起没起来无关，后端初始化失败时更该让用户有机会升到修好的版本。
+  // 排在建窗与后端之后是为了不与启动期抢带宽/事件循环。
+  updateService.scheduleAutoCheck();
 
   // 调试用：SUPERTIME_SCREENSHOT=path 时加载完成后截图并退出；
   // SUPERTIME_THEME=light|dark 可在截图前强制主题。
@@ -1252,6 +1341,19 @@ app.on('before-quit', () => {
   if (wechatBackend) {
     try {
       wechatBackend.dispose();
+    } catch {
+      /* 退出时尽力释放 */
+    }
+  }
+  // 更新服务收尾。两条路都会经过这里：
+  //   · 用户点「重启并安装」→ quitAndInstall 内部调 app.quit() → 本回调；
+  //   · 自动更新已下载 → autoInstallOnAppQuit 在退出时拉起安装包。
+  // 顺序上必须先 dispose 后端再让安装器动手：后端 worker 还持有 decrypted/*.sqlite
+  // 的文件句柄，安装器要替换的正是被占用的那些文件。这里摘掉监听器不会影响安装
+  // （安装由 electron-updater 另起的分离进程完成），只是别让它再往已销毁的窗口推状态。
+  if (updateService) {
+    try {
+      updateService.dispose();
     } catch {
       /* 退出时尽力释放 */
     }
