@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 2 | 0 | 0 | 0 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 39 | 20 | 1 | 0 | 18 |
+| 阶段 5 | 中优先级：稳定性与性能 | 39 | 19 | 1 | 0 | 19 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 21 | 1 | 0 | 1 |
-| **合计** | | **77** | **43** | **3** | **0** | **31** |
+| **合计** | | **77** | **42** | **3** | **0** | **32** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 
@@ -746,7 +746,7 @@ flowchart TD
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| M17 | shim 同步机制脆弱 | `sync-ui-shim.js` 把源码写进 `node_modules`（npm 对 `file:` 装的是真实拷贝）；直接 `vite build` 会静默用旧副本；`cssSelectors`/`tsExports`(:66-93) 是正则启发式，漏 `@media`/`export default` | 改用 `npm link`/symlink 或 workspace，消除双份源码；验收：修改 shim 后无需手工同步即生效，构建不会静默用旧副本 | 未开始 |
+| M17 | shim 同步机制脆弱 | `sync-ui-shim.js` 把源码写进 `node_modules`（npm 对 `file:` 装的是真实拷贝）；直接 `vite build` 会静默用旧副本；`cssSelectors`/`tsExports` 是正则启发式，漏 `@media`/`export default`  **已完成（用比条目主张更小的代价达到同一条验收标准）**：条目主张改 `npm link`/symlink 或 workspace —— 那会动 npm 的安装与打包布局（electron-builder 的 `files`/`asarUnpack` 都建立在这套布局上）。实际做法是把**解析路径直接指到源码**： · `vite.config.js`：`resolve.alias` 把 `@deepseek-ai/dsh-client-ui-primitives`（及其 `/src/*` 子路径）映射到 `src/client/ui-primitives-shim/src` —— 构建产物必然来自源码； · `src/client/ui-wechat/tsconfig.json`：加同款 `paths`（与 H12 给后端类型那条并列）。那条的注释说的正是同一个陷阱：「`file:` 拷贝只在 `npm install` 时刷新，很容易落后于源码（已经因此把 48 条类型错误带进过前端）」—— M17 是它在构建侧的翻版。  **验收实验（决定性，可复现）**：给 shim 源码的 `Button.module.css` 追加一个标记类 → **不跑** `scripts/sync-ui-shim.js`、直接 `node node_modules/vite/bin/vite.js build` → 标记出现在产物 CSS（`index-B5BMokyK.css`）里；**全程 node_modules 里那份拷贝没有该标记**（证明它确实是旧的、而构建没用它）；复原源码后重建，标记从产物消失。⇒ 条目的两条验收（「修改 shim 后无需手工同步即生效」「构建不会静默用旧副本」）都成立。  `sync-ui-shim.js` 与 `check:shim` **保留但不再是构建前提**：它现在只保证磁盘上那份拷贝的一致（给任何直接解析 node_modules 的消费者用），其正则启发式的不完备（漏 `export default`、at-rule 头不参与比较等）因此**不再能影响构建结果**。  **验收**：typecheck 0（说明 tsc 也走了源码，不再可能读到陈旧类型）；`build:ui` + `check:shim` + `check:wx-tokens` + `ui:smoke` 21 项通过；全量 182 文件 / 376 用例（367 通过 / 9 跳过 / 0 失败）。  **未做/未验证**：没有真的删掉 `node_modules` 里那份拷贝（`npm ci` 仍会按 lockfile 造它），所以「双份源码」在磁盘上仍然存在 —— 只是**构建与类型检查都不再读它**。要彻底消灭它需要 workspace/symlink，属打包布局级改动，本会话没有余量做完整回归（pack + package:smoke 的布局断言依赖现有的 node_modules 结构）。 | 已完成 |
 | M18 | 跨平台声明与实际不符 | `package.json:127-138` 声明 mac(dmg)/linux(AppImage)，但原生依赖只内联 `@koromix/koffi-win32-x64`（`:56-57`） | 二选一：补齐各平台 koffi 二进制并跑通构建；或移除 mac/linux target 并在文档声明仅支持 Windows。验收：声明与可构建目标一致 | 未开始 |
 | M19 | 打包冗余与窗口图标缺失 | `files` 的 `src/**/*` 把整棵内联依赖源码树打入 asar（`src/backend/deps/**` 984 条目/9.4MB，与 node_modules 重复，含 tests 与 .ts）；`build/` 不在 `files` 白名单 → 打包版窗口无图标（`main.js:150`） | `files` 排除 `!src/backend/deps/**` 与 `!src/**/*.ts`；把 `build/icon.ico` 纳入白名单。验收：asar 体积下降，打包版窗口图标正常 | 未开始 |
 | M21 | 大文件可维护性 | `Chats.tsx` 175KB、`api.ts` 82KB、`Moments.tsx` 90KB、`Settings.tsx` 79KB、`chats.module.css` 94KB、`gateway.ts` 2800 行、`parse.ts` 74KB | 按建议边界拆分（`api.ts` → cache/media-cache/remote/按域；`Chats.tsx` → ChatList/MessageStream/MessageCard/GroupInfoDrawer/useSessionMessages；`Settings.tsx` 每节独立组件）。验收：单文件不超过约定行数上限，且行为无回归 | 未开始 |
@@ -1019,3 +1019,5 @@ flowchart TD
 | 2026-09-14 | 实施 | 教训（M16） | — | **「死 channel」要先查 preload**：IPC 的调用点往往不在 `src/**`，而在仓库根的 `preload.js`（contextBridge 暴露的包装函数）。我第一版探针只扫了 `src/` + `scripts/` + `tools/`，没扫仓库根，于是把 5 个「已暴露但没被渲染层调用」的 channel 误判成「没有任何引用」 —— 差一步就去删了能用的 API。判断 IPC 死活要**三层一起看**：main 的 handler、preload 的包装、渲染层的调用。 |
 | 2026-09-14 | 实施 | M16 | 进行中 → 已完成（按用户决定：删掉 5 个暴露） | 同时删 main.js 的 handler 与 preload.js 的包装（maximize-toggle / is-maximized + maximized-changed 事件对 / wechat:dispose / license:activation-request / license:fingerprint），保留最小化关闭全屏；清掉因此变成死引用的 `getDeviceFingerprint` require 与 README 里的 `wechat:dispose` 描述。**专门重打了包并跑打包态启动验证**（这次改的正是 main/preload 的 IPC 面）：后端就绪 132 方法、无 ENOTDIR、截图与日志正常。全量 182 文件 / 376 用例。 |
 | 2026-09-14 | 实施 | 教训（M16） | — | **「死 channel」要先查 preload**：IPC 的调用点往往不在 `src/**`，而在仓库根的 `preload.js`（contextBridge 包装）。我第一版探针只扫 `src/` + `scripts/` + `tools/`、漏了仓库根，于是把 5 个「已暴露但没被渲染层调用」的 channel 误判成「零引用」——差一步就去删了能用的 API。判断 IPC 死活要**三层一起看**：main 的 handler、preload 的包装、渲染层的调用；而且改 IPC 面**必须重打包跑打包态启动**（`ui:smoke` 是 SSR，观测不到 preload）。 |
+| 2026-09-15 | 实施 | M17 | 未开始 → 已完成（用更小的代价达到同一条验收） | vite `resolve.alias` + tsconfig `paths` 把 shim 直接解析到源码目录，构建与类型检查都不再读 node_modules 里那份 `file:` 拷贝。**验收实验**：只改源码、不跑同步、直接 vite build → 标记出现在产物 CSS，而拷贝全程是旧的；复原后标记消失。「不再静默用旧副本」因此在结构上成立。`sync-ui-shim.js`/`check:shim` 保留为磁盘一致性检查，不再是构建前提。 |
+| 2026-09-15 | 实施 | 教训（M17） | — | ① 条目主张的修法（workspace/symlink）**代价更大**：它会动 npm 安装与 electron-builder 的打包布局，而验收标准要的只是「构建不静默用旧副本」—— `resolve.alias` + tsconfig `paths` 就能达到，且零打包风险。选修法要对着**验收标准**选，不是对着「更彻底」选。② 同一个陷阱在这个仓库出现过两次（H12 的前端类型、M17 的构建），说明「`file:` 依赖 = 只在 install 时刷新的拷贝」是这套布局的系统性坑；两处现在都改成直读源码。③ 验收要做**对照实验**：只证明「产物里有改动」不够，还要同时确认「那份拷贝里没有」——否则分不清是读了源码还是同步脚本正好也把它刷过去了。 |
