@@ -10334,13 +10334,13 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
 // src/backend/wechat-data/src/query/voice-transcribe.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash18 } from "node:crypto";
-import { existsSync as existsSync36, mkdirSync as mkdirSync9, readFileSync as readFileSync16, readlinkSync, rmSync as rmSync3, symlinkSync, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync36, mkdirSync as mkdirSync9, readFileSync as readFileSync16, readlinkSync, rmSync as rmSync4, symlinkSync, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename as basename4, dirname as dirname10, join as join44 } from "node:path";
 
 // src/backend/wechat-data/src/query/voice.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync35, mkdirSync as mkdirSync8, readFileSync as readFileSync15, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync35, mkdirSync as mkdirSync8, readFileSync as readFileSync15, rmSync as rmSync3, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname9, join as join43 } from "node:path";
 import { DatabaseSync as DatabaseSync28 } from "node:sqlite";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -10409,11 +10409,11 @@ function svrIdByChatLocal(decryptedDir, username, localId) {
     return "";
   }
 }
-function silkDecoderBin() {
+function silkDecoderBin(startDir) {
   const pinned = process.env.DSH_WECHAT_SILK_BIN;
   if (pinned && pinned.trim().length > 0) return pinned.trim();
   try {
-    let dir = fileURLToPath3(new URL(".", import.meta.url));
+    let dir = startDir ?? fileURLToPath3(new URL(".", import.meta.url));
     for (let i = 0; i < 5; i += 1) {
       const candidate = join43(dir, "resources", "win32", "x64", "wx_silk.exe");
       const bin = onDiskPath(candidate);
@@ -10438,11 +10438,22 @@ function silkToWav(silk, wavPath) {
   try {
     mkdirSync8(tempDir, { recursive: true });
     writeFileSync5(silkPath, silk);
-    const res = spawnSync2(bin, ["16000", silkPath, wavPath], { encoding: "utf8", windowsHide: true });
+    const res = spawnSync2(bin, ["16000", silkPath, wavPath], {
+      encoding: "utf8",
+      windowsHide: true,
+      // 解码一条语音是毫秒级；给个上界，免得个别坏输入把后端的调用窗口（10 分钟）用光。
+      timeout: 12e4
+    });
     if (res.status === 0 && existsSync35(wavPath)) return { ok: true };
-    return { ok: false, error: (res.stderr || `\u89E3\u7801\u5668\u9000\u51FA\u7801 ${String(res.status)}`).trim().slice(0, 200) };
+    const reason = res.error?.message || res.stderr || `\u89E3\u7801\u5668\u9000\u51FA\u7801 ${String(res.status)}`;
+    return { ok: false, error: reason.trim().slice(0, 200) };
   } catch (e) {
     return { ok: false, error: e.message };
+  } finally {
+    try {
+      rmSync3(silkPath, { force: true });
+    } catch {
+    }
   }
 }
 var WAV_BYTES_PER_SEC = 16e3 * 2;
@@ -10508,7 +10519,7 @@ function ensureAsciiLink(realDir, aliasBase) {
     if (existsSync36(link)) {
       const target = readlinkSync(link).replace(/[\\/]+$/, "").toLowerCase();
       if (target !== realDir.replace(/[\\/]+$/, "").toLowerCase()) {
-        rmSync3(link, { recursive: true, force: true });
+        rmSync4(link, { recursive: true, force: true });
         symlinkSync(realDir, link, "junction");
       }
     } else {
@@ -10625,7 +10636,7 @@ function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engi
 }
 
 // src/backend/wechat-data/src/query/export.ts
-import { mkdirSync as mkdirSync10, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync10, renameSync as renameSync5, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname12, join as join48 } from "node:path";
 
 // src/backend/wechat-data/src/query/zip.ts
@@ -11618,7 +11629,7 @@ function writeFileAtomicSync(filePath, data) {
     renameSync5(tmp, filePath);
   } catch (e) {
     try {
-      rmSync4(tmp, { force: true });
+      rmSync5(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -11635,7 +11646,7 @@ async function writeZipAtomic(filePath, produce) {
   } catch (e) {
     if (zip) await zip.abort();
     try {
-      rmSync4(tmp, { force: true });
+      rmSync5(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -14308,7 +14319,7 @@ function syntheticIntentAccuracy() {
 }
 
 // src/backend/wechat-data/src/query/backup.ts
-import { closeSync as closeSync4, cpSync as cpSync3, createReadStream, createWriteStream as createWriteStream3, existsSync as existsSync42, mkdirSync as mkdirSync13, openSync as openSync4, readSync as readSync4, readdirSync as readdirSync25, rmSync as rmSync5, statSync as statSync17, writeFileSync as writeFileSync10 } from "node:fs";
+import { closeSync as closeSync4, cpSync as cpSync3, createReadStream, createWriteStream as createWriteStream3, existsSync as existsSync42, mkdirSync as mkdirSync13, openSync as openSync4, readSync as readSync4, readdirSync as readdirSync25, rmSync as rmSync6, statSync as statSync17, writeFileSync as writeFileSync10 } from "node:fs";
 import { dirname as dirname14, join as join52, relative as relative3 } from "node:path";
 import { createCipheriv, createDecipheriv as createDecipheriv5, createHmac as createHmac2, randomBytes, scryptSync } from "node:crypto";
 var MAGIC = Buffer.from("DSHWCB1\n", "utf8");
@@ -14478,7 +14489,7 @@ function createBackup(decryptedDir) {
   const dir = backupDir(decryptedDir);
   mkdirSync13(dir, { recursive: true });
   const target = join52(dir, name);
-  if (existsSync42(target)) rmSync5(target, { recursive: true, force: true });
+  if (existsSync42(target)) rmSync6(target, { recursive: true, force: true });
   mkdirSync13(target, { recursive: true });
   if (existsSync42(decryptedDir)) {
     for (const sub of readdirSync25(decryptedDir, { withFileTypes: true })) {
@@ -14546,7 +14557,7 @@ function restoreEncryptedBackup(decryptedDir, name, password) {
   const src = join52(dir, name);
   if (!name.endsWith(".wcb") || !existsSync42(src)) return { ok: false, error: "\u52A0\u5BC6\u5907\u4EFD\u4E0D\u5B58\u5728" };
   const target = join52(dir, name.replace(/\.wcb$/, "") + ".restored");
-  if (existsSync42(target)) rmSync5(target, { recursive: true, force: true });
+  if (existsSync42(target)) rmSync6(target, { recursive: true, force: true });
   let fd = null;
   try {
     fd = openSync4(src, "r");
@@ -14598,7 +14609,7 @@ function deleteBackup(decryptedDir, name) {
   const target = join52(dir, name);
   if (!target.startsWith(dir) || !existsSync42(target)) return { ok: false, error: "\u5907\u4EFD\u4E0D\u5B58\u5728" };
   try {
-    rmSync5(target, { recursive: true, force: true });
+    rmSync6(target, { recursive: true, force: true });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };

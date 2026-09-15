@@ -21,8 +21,18 @@ export declare function svrIdByChatLocal(decryptedDir: string, username: string,
  * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
  * Returning `''` instead of an unrunnable path keeps the caller's error
  * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
+ *
+ * `startDir` exists so the packaged layout can be exercised as a **behaviour**
+ * rather than as a source-string assertion: a spec builds
+ * `<tmp>/app.asar/src/backend/wechat-data/lib` plus the unpacked sibling and
+ * calls this function with it. (The first version of the guard asserted the
+ * source contained `onDiskPath(candidate)`; leaving that string in a comment
+ * and calling `existsSync` underneath kept it green while the bug returned.)
+ * @param startDir - Directory to start the upward walk from; defaults to the
+ *   directory of the emitted module.
+ * @returns A runnable on-disk exe path, or `''` when there is none.
  */
-export declare function silkDecoderBin(): string;
+export declare function silkDecoderBin(startDir?: string): string;
 /**
  * Decode silk bytes to a WAV file via wx_silk (16 kHz mono, whisper-ready).
  * @param silk - raw voice_data bytes (leading 0x02 tolerated).

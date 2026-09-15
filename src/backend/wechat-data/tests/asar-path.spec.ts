@@ -16,12 +16,12 @@
  *
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { onDiskPath, unpackedAware } from '../src/asar-path.ts'
+import { silkDecoderBin } from '../src/query/voice.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -95,12 +95,63 @@ describe('onDiskPath：只交出真实存在的磁盘文件', () => {
   })
 })
 
-describe('接线守卫：silkDecoderBin 必须过 onDiskPath', () => {
-  it('解析结果走 onDiskPath，且不再用裸 existsSync 判定', () => {
-    const here = dirname(fileURLToPath(import.meta.url))
-    // 断言的是**调用点**：老写法 `existsSync(candidate)` 在源码里必须不再出现
-    const source = readFileSync(join(here, '..', 'src', 'query', 'voice.ts'), 'utf8')
-    expect(source).toContain('onDiskPath(candidate)')
-    expect(source).not.toContain('existsSync(candidate)')
+describe('silkDecoderBin：按真实布局走一遍（行为级，不是源码字符串）', () => {
+  // 上一版这条守卫断言的是「源码里含 onDiskPath(candidate)」——复审指出它可绕过：
+  // 把那行字符串留在**注释**里、底下仍用裸 existsSync，守卫照样绿而 bug 回来了。
+  // 现在改为把 startDir 注进去，真的按两种布局各走一遍。
+  const PIN = 'DSH_WECHAT_SILK_BIN'
+  let saved: string | undefined
+  beforeEach(() => {
+    saved = process.env[PIN]
+    delete process.env[PIN]
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[PIN]
+    else process.env[PIN] = saved
+  })
+
+  /** 打包态布局：bundle 落在 `<root>/app.asar/src/backend/wechat-data/lib/`。 */
+  function packaged(root: string, unpacked: boolean): { start: string; inArchive: string; outside: string } {
+    const start = join(root, 'app.asar', 'src', 'backend', 'wechat-data', 'lib')
+    mkdirSync(start, { recursive: true })
+    const inArchive = touch(root, 'app.asar', 'src', 'backend', 'wechat-data', 'resources', 'win32', 'x64', 'wx_silk.exe')
+    const outside = join(root, 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'resources', 'win32', 'x64', 'wx_silk.exe')
+    if (unpacked) touch(root, 'app.asar.unpacked', 'src', 'backend', 'wechat-data', 'resources', 'win32', 'x64', 'wx_silk.exe')
+    return { start, inArchive, outside }
+  }
+
+  it('打包态 + asarUnpack 覆盖：返回 app.asar.unpacked 下那份', () => {
+    const root = newRoot()
+    const { start, inArchive, outside } = packaged(root, true)
+    // 场景必须是「危险」的那一种：归档里那份确实存在，裸 existsSync 会说「找到了」
+    expect(existsSync(inArchive)).toBe(true)
+    expect(silkDecoderBin(start)).toBe(outside)
+  })
+
+  it('打包态 + asarUnpack 漏了：返回空串，而不是归档内那个 spawn 不了的路径', () => {
+    const root = newRoot()
+    const { start, inArchive } = packaged(root, false)
+    expect(existsSync(inArchive)).toBe(true)
+    expect(silkDecoderBin(start)).toBe('')
+  })
+
+  it('开发态：返回真实磁盘路径，且不含 app.asar', () => {
+    const root = newRoot()
+    mkdirSync(join(root, 'src', 'backend', 'wechat-data', 'lib'), { recursive: true })
+    const dev = touch(root, 'src', 'backend', 'wechat-data', 'resources', 'win32', 'x64', 'wx_silk.exe')
+    const got = silkDecoderBin(join(root, 'src', 'backend', 'wechat-data', 'lib'))
+    expect(got).toBe(dev)
+    expect(got.includes('app.asar')).toBe(false)
+  })
+
+  it('布局里没有解码器：空串，而不是一个不存在的路径', () => {
+    const root = newRoot()
+    mkdirSync(join(root, 'src', 'backend', 'wechat-data', 'lib'), { recursive: true })
+    expect(silkDecoderBin(join(root, 'src', 'backend', 'wechat-data', 'lib'))).toBe('')
+  })
+
+  it('env 钉住的路径优先返回（现场排查用）', () => {
+    process.env[PIN] = 'D:\\pinned\\wx_silk.exe'
+    expect(silkDecoderBin()).toBe('D:\\pinned\\wx_silk.exe')
   })
 })
