@@ -8,6 +8,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Button, Input, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { createPollRegistry, type PollRegistry } from './poll-registry.ts'
 import {
   IconGlobeOutline14, IconPersonalizationOutline16, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -482,6 +483,12 @@ export interface SettingsPanelProps {
 export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const cachedCfg = readRenderCache<CachedSettingsConfig>(SETTINGS_CONFIG_CACHE_KEY)
   const [cfg, setCfg] = useState<CachedSettingsConfig | WechatConfigFull | null>(cachedCfg)
+  // M15：面板内所有轮询都登记在这里，**卸载时统一清掉**。
+  // 原实现把 interval 建在 async 处置函数里、只在 finally 清 —— 下载/转写要跑几分钟，
+  // 用户中途切走面板时它会一直每 400~500ms 打 IPC，并在已卸载的组件上 setState。
+  const pollsRef = useRef<PollRegistry | null>(null)
+  const polls = (): PollRegistry => pollsRef.current ?? (pollsRef.current = createPollRegistry())
+  useEffect(() => () => { pollsRef.current?.stopAll() }, [])
   const [cfgLoading, setCfgLoading] = useState(false)
   const [keysInfo, setKeysInfo] = useState<{ keyFormat?: string; keyCount: number; loaded: boolean }>({ keyCount: 0, loaded: false })
   const [accounts, setAccounts] = useState<readonly WechatAccount[]>([])
@@ -690,7 +697,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
     setWhisperDirMsg(null)
     setWhisperDownloading({ model: m.id, file: '', received: 0, total: 0 })
-    const timer = setInterval(() => {
+    const stopPoll = polls().start(() => {
       void apiGetWhisperStatus()
         .then((s) => {
           if (s.downloading) {
@@ -715,7 +722,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     } catch (e) {
       setWhisperDirMsg({ kind: 'err', text: '✗ 模型下载失败：' + (e as Error).message })
     } finally {
-      clearInterval(timer)
+      stopPoll()
       setWhisperDownloading(null)
     }
   }
@@ -746,8 +753,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     }
   }
 
-  const pollTranscribe = (): (() => void) => {
-    const timer = setInterval(() => {
+  const pollTranscribe = (): (() => void) => polls().start(() => {
       void apiGetWhisperStatus()
         .then((s) => {
           if (s.transcribing.active || s.transcribing.done > 0) {
@@ -762,9 +768,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
           }
         })
         .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 500)
-    return () => { clearInterval(timer) }
-  }
+  }, 500)
 
   const nativeTranscribe = (): void => {
     setVoiceOpMsg({ kind: 'ok', text: '✓ 微信原生转写文本会在浏览聊天消息时自动复用数据库文字，无需额外批量任务' })
@@ -779,7 +783,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     if (whisperStatus?.engine) return
     setWhisperDirMsg(null)
     setWhisperDownloading({ model: 'engine', file: '', received: 0, total: 0 })
-    const timer = setInterval(() => {
+    const stopPoll = polls().start(() => {
       void apiGetWhisperStatus()
         .then((s) => {
           if (s.downloading) {
@@ -804,7 +808,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     } catch (e) {
       setWhisperDirMsg({ kind: 'err', text: '✗ 引擎下载失败：' + (e as Error).message })
     } finally {
-      clearInterval(timer)
+      stopPoll()
       setWhisperDownloading(null)
     }
   }
@@ -942,16 +946,13 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     failed: number
     skipped: number
     message: string
-  }) => void): (() => void) => {
-    const timer = setInterval(() => {
-      void apiGetDecryptStatus()
-        .then((s) => {
-          if (s.active || s.done > 0) apply(s)
-        })
-        .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 400)
-    return () => { clearInterval(timer) }
-  }
+  }) => void): (() => void) => polls().start(() => {
+    void apiGetDecryptStatus()
+      .then((s) => {
+        if (s.active || s.done > 0) apply(s)
+      })
+      .catch(() => { /* 忽略单次轮询失败 */ })
+  }, 400)
 
   const decryptAll = async (): Promise<void> => {
     setDecrypting(true)
