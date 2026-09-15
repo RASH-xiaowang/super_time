@@ -22,6 +22,9 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const {
+  MAX_ASAR_BYTES, asarSizeViolations, srcEntryViolations, collectDiskEntries,
+} = require('./package-content-rules.js');
 
 const root = path.resolve(__dirname, '..');
 const exe = path.join(root, 'dist', 'win-unpacked', 'Super Time.exe');
@@ -38,10 +41,13 @@ const gatewaySource = fs.readFileSync(
 const EXPECTED_METHODS = new Set(
   [...gatewaySource.matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map((mm) => mm[1])).size;
 
-if (!fs.existsSync(exe)) {
-  console.error('❌ 找不到打包产物：' + exe + '\n   请先运行 npm run dist（或 npm run pack）');
-  process.exit(2);
-}
+/**
+ * `--content-only`：只跑「包内容」断言（工作树白名单 + asar 体积/白名单 + 现有包内容断言），
+ * 不启动打包产物。为什么值得一开关：这些断言是脚本的主要职责之一，而启动一次打包应用要
+ * 一分钟级；只想确认「包内容有没有被污染」时不该被 Electron 挡在门外（也不需要先打包）。
+ * 默认行为不变 —— CI 与 `npm run package:smoke` 仍跑完整流程。
+ */
+const contentOnly = process.argv.includes('--content-only');
 
 const shot = path.join(os.tmpdir(), `supertime-packaged-${Date.now()}.png`);
 /** 一次性 userData：既不污染真实目录，也正好模拟「全新安装」。 */
@@ -54,13 +60,44 @@ const check = (cond, label, detail = '') => {
   if (!cond) failed += 1;
 };
 
-// ── 启动之前 ──
+/** 收尾：打印结论并给出退出码（完整流程与 `--content-only` 共用，避免两处口径不一致）。 */
+function finish(out = '') {
+  console.log(`\n${failed ? '❌ 打包冒烟失败 ' + failed + ' 项' : '✅ 打包冒烟通过'}`);
+  if (failed) {
+    if (out) console.log('\n--- 启动日志尾部 ---\n' + out.split('\n').slice(-25).join('\n'));
+    return 1;
+  }
+  return 0;
+}
+
+// ── 启动之前（包内容断言）──
+// 这一段**不需要启动应用**：只想查包内容时用 `--content-only`（见文件头说明），
+// 它就在这里收尾退出；下面的「启动产物 + 启动后断言」只在完整流程里跑。
 // 包内容：本机运行时状态不得入包。config.json 存的是本机 db_dir 与微信解密密钥，
 // llm.json 存的是 API Key —— 随包发出去既泄漏又会让对方拿到无效路径。
 check(!fs.existsSync(path.join(unpackedWechat, 'config.json')),
   '安装包不含 wechat/config.json（本机 db_dir 与微信解密密钥）');
 check(!fs.existsSync(path.join(unpackedWechat, 'llm.json')),
   '安装包不含 wechat/llm.json（LLM API Key）');
+
+// ── N22（打包之前那一半）：`files` 的 `src/**/*` 是通配，src/ 下任何多余目录/备份都会进 asar ──
+// 这里对**工作树**跑与下面 asar 那一半同一份规则（scripts/package-content-rules.js）。
+// 为什么要两条腿：asar 断言只有重新打包后才反映现状，而「多出个 .bak」通常发生在两次打包
+// 之间 —— 那时旧 asar 是干净的，只有工作树能立刻告诉你「不该在的东西出现了」。
+// 实测触发面：把 src/client/ui-dist 改名成 ui-dist.bak 会被照常打进包（+12MB），
+// 而 M19 的三条黑名单排除断言全部照绿（黑名单只验证「已知冗余不在」）。
+{
+  const diskEntries = collectDiskEntries(path.join(root, 'src'), 'src');
+  check(diskEntries.length > 0, 'src/ 工作树清单非空（防空转：读不到就等于不检查）', `${diskEntries.length} 条目`);
+  const diskViolations = srcEntryViolations(diskEntries);
+  for (const v of diskViolations.slice(0, 5)) {
+    check(false, `src/ 下不该出现：${v.entry}`, `[${v.rule}] ${v.hint}`);
+  }
+  if (diskViolations.length > 5) check(false, `src/ 白名单违规还有 ${diskViolations.length - 5} 条未逐条列出`);
+  if (diskViolations.length === 0) {
+    check(true, 'src/ 下全部条目都在白名单内（N22：通配打包的兜底）', `${diskEntries.length} 条目`);
+  }
+}
 try {
   const { listPackage, getRawHeader } = require('@electron/asar');
   const asarPath = path.join(resourcesDir, 'app.asar');
@@ -132,6 +169,23 @@ try {
     'koffi JS 加载器在 app.asar.unpacked（await import("koffi") 的 ESM 入口）');
   check(fs.existsSync(path.join(unpackedRoot, 'node_modules', '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')),
     'koffi 原生模块在 app.asar.unpacked（排除 deps 树后的回归守卫）');
+
+  // ── N22（打包之后那一半）：体积上界 + `src/**` 白名单 ──
+  // 上面 M19 那三条是黑名单：只验证「已知的冗余不在」，验证不了「不该在的不在」。
+  // 做 N21 的 A/B 时把 ui-dist 改名成 ui-dist.bak 被照常打进包（+12MB），三条断言全部照绿。
+  const asarBytes = fs.statSync(asarPath).size;
+  const sizeViolations = asarSizeViolations(asarBytes);
+  check(sizeViolations.length === 0, 'asar 总体积在预算内（N22）',
+    `${(asarBytes / 1024 / 1024).toFixed(2)} MB / 上界 ${(MAX_ASAR_BYTES / 1024 / 1024).toFixed(0)} MB`
+    + (sizeViolations.map((v) => ` ${v.detail}`).join('')));
+  const packViolations = srcEntryViolations(entries);
+  for (const v of packViolations.slice(0, 5)) {
+    check(false, `asar 内 src/ 下出现白名单之外的条目：${v.entry}`, `[${v.rule}] ${v.hint}`);
+  }
+  if (packViolations.length > 5) check(false, `asar 内容白名单违规还有 ${packViolations.length - 5} 条未逐条列出`);
+  if (packViolations.length === 0) {
+    check(true, 'asar 内 src/ 下只有白名单子树（N22）', `src/ 条目 ${entries.filter((f) => f.startsWith('/src/')).length} 个`);
+  }
 } catch (e) {
   // 以前这里只打印一句「跳过 asar 列表校验」—— 于是 `@electron/asar` 一旦不可用、或
   // `listPackage` 抛错，上面十几条打包内容断言会**静默消失**而冒烟仍报 ✅（假绿通道）。
@@ -143,6 +197,15 @@ try {
 // 这一条不能省：文件本来就在的话，启动后的断言等于没测。
 for (const stale of ['config.json', 'llm.json']) {
   try { fs.rmSync(path.join(unpackedWechat, stale), { force: true }); } catch { /* ignore */ }
+}
+if (contentOnly) {
+  console.log('\n（--content-only：只跑了包内容断言，未启动应用；asar 不存在时那几条会被记为失败）');
+  process.exit(finish());
+}
+
+if (!fs.existsSync(exe)) {
+  console.error('❌ 找不到打包产物：' + exe + '\n   请先运行 npm run dist（或 npm run pack）');
+  process.exit(2);
 }
 
 // ── 启动打包产物（截图后自动退出）──
@@ -185,6 +248,17 @@ check(!fs.existsSync(path.join(userData, 'license-trial.json')),
   '无试用期：不生成 license-trial.json');
 check(out.includes(stateDir), '启动日志里的状态目录指向本次临时 userData');
 
+// N20：主进程必须声明 AppUserModelID，且与 NSIS 快捷方式里的 appId 同源。
+// 断言的是「打包产物里这一行真的执行到了、值也取对了」；任务栏分组行为本身需要真机装包人工验证。
+const expectedAppId = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).build.appId;
+const appIdLine = out.match(/\[app-id\] AppUserModelID=(\S+)/);
+check(Boolean(appIdLine), '主进程已声明 AppUserModelID（N20）',
+  appIdLine ? appIdLine[1] : '未找到 [app-id] 日志行');
+if (appIdLine) {
+  check(appIdLine[1] === expectedAppId,
+    `AppUserModelID == package.json 的 build.appId（${expectedAppId}）`, `实际 ${appIdLine[1]}`);
+}
+
 // M6：日志必须真的落盘（GUI 态 stdout 是无人接管的管道，console-safe 一静默就什么都没有）
 const logFile = path.join(stateDir, 'logs', 'app.log');
 let logSize = 0;
@@ -204,8 +278,4 @@ if (logSize > 0) {
 // 清理本次一次性 userData（里面可能有刚写入的配置）。
 try { fs.rmSync(userData, { recursive: true, force: true }); } catch { /* ignore */ }
 
-console.log(`\n${failed ? '❌ 打包冒烟失败 ' + failed + ' 项' : '✅ 打包冒烟通过'}`);
-if (failed) {
-  console.log('\n--- 启动日志尾部 ---\n' + out.split('\n').slice(-25).join('\n'));
-  process.exit(1);
-}
+process.exit(finish(out));

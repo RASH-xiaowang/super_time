@@ -50,6 +50,16 @@ const licenseService = require('./src/license/service');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
 const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
+const { resolveDebugGates } = require('./src/backend/debug-gates');
+
+/**
+ * 首启闸门豁免状态（N2）。
+ *
+ * 每次调用**现取** `app.isPackaged`：它是本项唯一的信任边界（环变量伪造不了打包态），
+ * 取值动作留在主进程，回给渲染层的只有算好的结论（`{ packaged, skipGates }`）。
+ * 豁免范围与「打包态不得豁免」的依据见 `src/backend/debug-gates.js`。
+ */
+const debugGates = () => resolveDebugGates({ isPackaged: app.isPackaged, env: process.env });
 
 // ── userData 隔离（必须在任何 getPath / 单实例锁之前）────────────────────
 // 安装版原本和开发态共用 `<APPDATA>\super-time-electron`（package.json 没有顶层
@@ -108,6 +118,12 @@ const APP_VERSION = (() => {
     return '1.0.0';
   }
 })();
+
+// 应用身份（N20）：必须与 NSIS 快捷方式里写的 appId 一致，否则任务栏固定/分组会认成两个应用。
+// 放在建窗之前（与文档建议的同序），见 src/backend/app-id.js 的说明。
+const { APP_ID: appId } = require('./src/backend/app-id.js');
+app.setAppUserModelId(appId);
+console.log('[app-id] AppUserModelID=' + appId);
 
 // ── 单实例锁：同一时间只允许一个应用实例 ────────────────────────────────
 // 拿到锁的实例：监听 second-instance，把已有窗口拉到前台（提示用户）。
@@ -667,6 +683,22 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle('app:test-mode', () => process.env.SUPERTIME_TEST_MODE === '1');
 
+  /**
+   * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`。
+   *
+   * 把 `app.isPackaged` **作为事实**回给渲染层 —— 渲染层据此决定要不要跳过
+   * 「启动引导 / 授权 / 隐私同意」三道闸门，而打包态的 `skipGates` 恒为 false：
+   * 环变量伪造不了 `app.isPackaged`，所以「打包版 + 设环变量」进不去主界面。
+   * 未知的 `ipcMain` 调用者只会拿到这两个布尔值，拿不到判定权。
+   */
+  ipcMain.handle('app:debug-gates', () => {
+    const gates = debugGates();
+    if (gates.skipGates) {
+      console.warn('[debug-gates] SUPERTIME_SKIP_ONBOARDING=1：跳过启动引导 / 授权 / 隐私同意（仅非打包态生效）');
+    }
+    return { packaged: gates.packaged, skipGates: gates.skipGates };
+  });
+
   // —— License 授权（混合模式：本地验签为主）——
   ipcMain.handle('license:status', () => {
     try {
@@ -853,6 +885,14 @@ app.whenReady().then(async () => {
           details: { method, state: backendStatus.state },
         },
       };
+    }
+    // N2：调试闸门豁免。放开的是「授权」这道闸门 —— 验收脚本要用真实后端跑 UI 全链路，
+    // 而它拿不到厂商签发的许可证。条件来自主进程的 `debugGates()`（打包态恒不成立）、
+    // **不**接受渲染层传来的任何参数，且必须放在下面的 `authorizeCall` 之前。
+    // 放在 `try` 之外是刻意的：`wechatBackend.call` 同步抛错时不该被误报成「许可校验失败」。
+    if (debugGates().skipGates) {
+      console.warn('[debug-gates] 已跳过许可证校验（method=%s）', method);
+      return wechatBackend.call(method, args);
     }
     try {
       const lic = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);

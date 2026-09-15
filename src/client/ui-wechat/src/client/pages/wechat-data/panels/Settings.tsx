@@ -1,7 +1,7 @@
 /**
  * 微信设置面板 — 按 ST_Wechat_V2「本地检测 → 数据库解密 → 图片密钥 →
  * 图片解密 → 表情/语音」流程重新设计为步骤导航。数据源 / 解密密钥 /
- * 图片密钥 / 图片解码 / 语音转写 五步卡片 + 高级设置（HTTP API 遗留能力）。
+ * 图片密钥 / 图片解码 / 语音转写 五步卡片 + 高级设置（输出目录 · 诊断日志 · 启动引导）。
  * 自动获取密钥（V4 内存扫描 + Weixin.dll 内部键 + V2 图片验证）已支持；
  * SQLCipher 全库解密仍为说明态（本地解密能力独立立项）；语音转写已本地化（whisper.cpp）。
  */
@@ -501,9 +501,6 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   const [dbKey, setDbKey] = useState('')
   const [imgAes, setImgAes] = useState('')
   const [imgXor, setImgXor] = useState('136')
-  const [apiEnabled, setApiEnabled] = useState(cachedCfg?.api_enabled ?? true)
-  const [apiToken, setApiToken] = useState('')
-  const [apiPort, setApiPort] = useState(cachedCfg?.api_port ?? 5032)
   const [cdnEnabled, setCdnEnabled] = useState(cachedCfg?.cdn_enabled ?? true)
   const [cdnLocal, setCdnLocal] = useState(cachedCfg?.cdn_local_decrypt ?? true)
   const [message, setMessage] = useState<Notice | null>(null)
@@ -579,9 +576,6 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
       setDbKey(c.db_enc_key)
       setImgAes(c.image_aes_key)
       setImgXor(String(c.image_xor_key))
-      setApiEnabled(c.api_enabled)
-      setApiToken(c.api_token)
-      setApiPort(c.api_port)
       setCdnEnabled(c.cdn_enabled)
       setCdnLocal(c.cdn_local_decrypt)
       setWhisperDevice(c.whisper_device)
@@ -816,16 +810,14 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
-      const port = Number.isFinite(apiPort) && apiPort >= 1024 && apiPort <= 65535 ? apiPort : 5032
       const r = await apiSaveWechatConfig({
         patch: {
           db_dir: dbDir,
           db_enc_key: dbKey,
           image_aes_key: imgAes,
           image_xor_key: Number(imgXor) || 136,
-          api_enabled: apiEnabled,
-          api_token: apiToken,
-          api_port: port,
+          // cdn_enabled / cdn_local_decrypt 是**真实生效**的开关（N24）：
+          // 前者拦下发往 CDN 的取图/取视频请求，后者决定远端字节是否本地解密（见 query/cdn-policy.ts）
           cdn_enabled: cdnEnabled,
           cdn_local_decrypt: cdnLocal,
           whisper_device: whisperDevice,
@@ -1068,7 +1060,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
     { key: 'health', group: '授权与维护', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
     { key: 'hook', group: '授权与维护', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
     { key: 'oplog', group: '授权与维护', label: '操作日志', icon: STEP_ICONS.oplog, value: '仅操作元数据' },
-    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: 'HTTP API · 输出目录' },
+    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
   ]
 
   /**
@@ -1555,34 +1547,20 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
           <OperationLogPanel />
         </div>
 
-        {/* ── 高级设置（HTTP API 遗留能力 + 输出路径） ── */}
+        {/* ── 高级设置（输出路径 · 诊断日志 · 启动引导） ── */}
         <section className={css.card} hidden={activeKey !== 'advanced'}>
           <header className={css.cardHd}>
             <span className={css.cardIconChip}><IconSettingsOutline14 size={14} /></span>
             <div className={css.cardTitleBox}>
               <span className={css.cardTitle}>高级设置</span>
-              <span className={kitCss.textCaptionTrunc}>HTTP API 遗留能力 · 输出目录与启动引导</span>
+              <span className={kitCss.textCaptionTrunc}>输出目录 · 诊断日志 · 启动引导</span>
             </div>
             <span className={css.cardBadge}>
-              <StateDot state={apiEnabled ? 'done' : 'warning'} />
-              {apiEnabled ? `HTTP ${apiPort}` : 'HTTP 未启用'}
+              <StateDot state={cfg?.resolved?.decrypted_dir ? 'done' : 'warning'} />
+              {cfg?.resolved?.decrypted_dir ? '路径已解析' : '路径未知'}
             </span>
           </header>
           <div className={css.cardBody}>
-            <div className={css.row}>
-              <span className={css.rowName}>启用</span>
-              <input type="checkbox" checked={apiEnabled} onChange={(e) => { setApiEnabled(e.target.checked) }} />
-              <Pill active={apiEnabled}>{apiEnabled ? '已启用' : '未启用'}</Pill>
-            </div>
-            <div className={css.row}>
-              <span className={css.rowName}>访问令牌</span>
-              <Input className={css.input} value={apiToken} onChange={(e) => { setApiToken(e.target.value) }} placeholder="留空 = 免鉴权" />
-            </div>
-            <div className={css.row}>
-              <span className={css.rowName}>监听端口</span>
-              <Input className={css.inputNarrow} value={String(apiPort)} onChange={(e) => { setApiPort(Number(e.target.value) || 5032) }} />
-              <span className={css.rowMeta}>http://127.0.0.1:{apiPort}</span>
-            </div>
             <div className={css.row}>
               <span className={css.rowName}>解密输出</span>
               <span className={css.rowMeta}>{cfg?.resolved?.decrypted_dir ?? '—'}</span>
@@ -1596,7 +1574,10 @@ export function SettingsPanel({ inDialog = false, initialSection, onOpenChat, on
               <span className={css.rowMeta}>{cfg?.resolved?.keys_file ?? '—'}</span>
             </div>
             <div className={css.row}>
-              <span className={css.rowNote}>本面板已通过 Remote 直读，无外部 HTTP 依赖。</span>
+              {/* N24：原先这里还有「启用 / 访问令牌 / 监听端口」三个 HTTP API 开关，
+                  而全仓没有任何服务端读它们 —— 界面能存、行为为零。已撤下，
+                  避免用户以为「关掉端口就等于关掉了外部访问」。 */}
+              <span className={css.rowNote}>本应用不提供本地 HTTP 服务：所有能力都经 Remote 直连进程内后端，无需端口与令牌。</span>
             </div>
             {/* 诊断日志（M6）：GUI 态 stdout 会被管道丢弃，crash/报障时只有这份落盘日志 */}
             <div className={css.row}>

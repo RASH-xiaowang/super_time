@@ -5,7 +5,8 @@
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { ZipFileWriter, zipFiles } from './zip.ts'
+import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
+import type { StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryMessages } from './messages.ts'
 import { queryContacts } from './contacts.ts'
@@ -25,18 +26,6 @@ import { resolveSnsVideoDataUrl } from './sns-video.ts'
  * 初版流式改造写成 `>= 4999`，饱和时会少导一条（评审复刻两循环实测出来的 off-by-one）。
  */
 const MAX_MOMENT_MEDIA = 5000
-
-/**
- * 原子落地用的临时文件名。
- *
- * 带进程内自增序号，不只是 pid：改成 async 之后同一进程里两个同名导出可以并发交错，
- * 只用 pid 的话两次导出会抢同一个临时文件、互相写坏。
- */
-let partialSeq = 0
-function partialPath(filePath: string): string {
-  partialSeq += 1
-  return filePath + '.partial-' + String(process.pid) + '-' + String(partialSeq)
-}
 
 /**
  * 原子写：先写同目录下的临时文件，再 rename 覆盖目标。
@@ -129,18 +118,23 @@ function fmtFull(ts: number): string {
  * @param decryptedDir - decrypted data root.
  * @param username - conversation username.
  * @param count - 0 = all (max 50000), else up to count.
+ * @param ctrl - 可选的进度/取消（每页检查一次取消）。
  */
-function collectMessages(decryptedDir: string, username: string, count: number): WechatMessage[] {
+function collectMessages(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): WechatMessage[] {
   const target = count === 0 ? 50000 : Math.max(1, Math.min(count, 50000))
   const pages: WechatMessage[] = []
   let cursor: number | undefined
   let cursorLocalId: number | undefined
   let guard = 0
   while (pages.length < target && guard < 600) {
+    // 分页收集是最长的同步循环之一（最多 500 轮），取消要在这里能生效。
+    throwIfCancelled(ctrl?.signal)
     // 传复合游标，避免 sort_seq 重复处分页丢消息（导出必须一条不漏）。
     const env = queryMessages(decryptedDir, username, 100, cursor, undefined, cursorLocalId)
     if (env.messages.length === 0) break
     pages.push(...env.messages)
+    // count=0（导全部）时总量未知，报 0 让调用方显示不定量进度，而不是永远停在 0%（目标上限是 5 万）。
+    reportProgress(ctrl, 'collect', pages.length, count === 0 ? 0 : target)
     if (!env.hasMore) break
     cursor = env.cursor
     cursorLocalId = env.cursorLocalId
@@ -274,22 +268,22 @@ function xmlEsc(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Minimal real .xlsx (OOXML single sheet, no deps). */
-function formatXlsx(msgs: WechatMessage[], username: string): Uint8Array {
-  const rows = [['时间', '发送者', '类型', '内容', 'localId']]
-  for (const m of msgs) {
-    const r = rowOf(m, username)
-    rows.push([r.time, r.sender, r.typeLabel, r.text, String(m.localId)])
-  }
-  // 用数组拼接而不是 `cells +=`：后者在 10 万行时会产生大量中间字符串，
-  // 而这里只需要一次 join 的一次性分配。
-  const parts: string[] = []
-  for (const row of rows) {
-    parts.push('<row>' + row.map(c => '<c t="inlineStr"><is><t>' + xmlEsc(c) + '</t></is></c>').join('') + '</row>')
-  }
-  const cells = parts.join('')
-  const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + cells + '</sheetData></worksheet>'
+/** sheet 的头部（`<sheetData>` 之前）—— 内存/流式两条路径必须拼出完全相同的字符串。 */
+const XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+/** sheet 的尾部（`</sheetData>` 之后）。 */
+const XLSX_SHEET_TAIL = '</sheetData></worksheet>'
+
+/**
+ * 一块里放多少行。
+ *
+ * 块越大压缩率越好、内存上界越大：200 行 ≈ 24KB，10 万行的峰值也就几十 KB 级别，
+ * 相对于「整份 sheet（10MB+）」差三个数量级。
+ */
+const XLSX_CHUNK_ROWS = 200
+
+/** xlsx 除 sheet1.xml 之外的固定部件（顺序与流式路径一致，避免两条路产物不同）。 */
+function xlsxStaticParts(): Array<{ name: string; data: string }> {
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="聊天记录" sheetId="1" r:id="rId1"/></sheets></workbook>'
   const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -303,13 +297,138 @@ function formatXlsx(msgs: WechatMessage[], username: string): Uint8Array {
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
     '</Types>'
-  return zipFiles([
+  return [
     { name: '[Content_Types].xml', data: contentTypes },
     { name: '_rels/.rels', data: rootRel },
     { name: 'xl/workbook.xml', data: workbook },
     { name: 'xl/_rels/workbook.xml.rels', data: wbRel },
-    { name: 'xl/worksheets/sheet1.xml', data: sheet },
+  ]
+}
+
+/** 一行 `<row>` 的 XML（表格内容为空时也保持与改造前一致的结构）。 */
+function xlsxRowXml(row: string[]): string {
+  return '<row>' + row.map(c => '<c t="inlineStr"><is><t>' + xmlEsc(c) + '</t></is></c>').join('') + '</row>'
+}
+
+/**
+ * 分块规则：按 `XLSX_CHUNK_ROWS` 行攒一块。
+ *
+ * 抽出来是为了让「内存版」和「流式版」用同一套规则 —— 否则两条路的产物一旦漂移，
+ * 同一份数据经过两个入口导出的 xlsx 就不同了。
+ */
+function makeXlsxChunker(ctrl: StreamControl | undefined, total: number): {
+  push: (row: string[]) => string | null
+  finish: () => string[]
+} {
+  let buf = ''
+  let done = 0
+  return {
+    push: (row) => {
+      throwIfCancelled(ctrl?.signal)
+      buf += xlsxRowXml(row)
+      done += 1
+      if (done % XLSX_CHUNK_ROWS !== 0) return null
+      const out = buf
+      buf = ''
+      reportProgress(ctrl, 'format', done, total)
+      return out
+    },
+    finish: () => {
+      const out: string[] = []
+      if (buf) out.push(buf)
+      reportProgress(ctrl, 'format', done, total)
+      out.push(XLSX_SHEET_TAIL)
+      return out
+    },
+  }
+}
+
+/**
+ * sheetData 的分块源（同步行源）：内存版走这条，逐块 join 出与改造前相同的字符串。
+ * @param rows - 行源（含表头）。
+ * @param ctrl - 进度/取消。
+ * @param total - 已知总行数（未知传 0，只影响进度展示）。
+ */
+function* xlsxSheetChunks(
+  rows: Iterable<string[]>,
+  ctrl?: StreamControl,
+  total = 0,
+): Generator<string> {
+  yield XLSX_SHEET_HEAD
+  const chunker = makeXlsxChunker(ctrl, total)
+  for (const row of rows) {
+    const chunk = chunker.push(row)
+    if (chunk !== null) yield chunk
+  }
+  yield* chunker.finish()
+}
+
+/**
+ * sheetData 的分块源（同步/异步行源都可）：流式版走这条。
+ *
+ * 这是「xlsx 不再随行数涨内存」的关键——改造前是先把所有行变成 `rows` 数组、
+ * 再由 `parts.join('')` 拼出整份 sheet，峰值与行数线性（10 万行时同时存在
+ * 整份 XML 与所有行数组）。
+ */
+async function* xlsxSheetChunksAsync(
+  rows: Iterable<string[]> | AsyncIterable<string[]>,
+  ctrl?: StreamControl,
+  total = 0,
+): AsyncGenerator<string> {
+  yield XLSX_SHEET_HEAD
+  const chunker = makeXlsxChunker(ctrl, total)
+  for await (const row of rows) {
+    const chunk = chunker.push(row)
+    if (chunk !== null) yield chunk
+  }
+  for (const chunk of chunker.finish()) yield chunk
+}
+
+/** 消息 → xlsx 行（含表头）。 */
+function* messageRows(msgs: WechatMessage[], username: string): Generator<string[]> {
+  yield ['时间', '发送者', '类型', '内容', 'localId']
+  for (const m of msgs) {
+    const r = rowOf(m, username)
+    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)]
+  }
+}
+
+/** 内存版 sheet XML（与流式路径同一套分块规则，保证解出来的字节一致）。 */
+function xlsxSheetXml(rows: Iterable<string[]>, ctrl?: StreamControl): string {
+  return Array.from(xlsxSheetChunks(rows, ctrl)).join('')
+}
+
+/**
+ * Minimal real .xlsx (OOXML single sheet, no deps) —— 内存版，保持既有调用点行为不变。
+ *
+ * 行数不可控（整账号/大会话）时走 `writeXlsxStream`：那才是峰值与行数无关的路径。
+ */
+function formatXlsx(msgs: WechatMessage[], username: string, ctrl?: StreamControl): Uint8Array {
+  return zipFiles([
+    ...xlsxStaticParts(),
+    { name: 'xl/worksheets/sheet1.xml', data: xlsxSheetXml(messageRows(msgs, username), ctrl) },
   ])
+}
+
+/**
+ * 把「一行一条记录」的流写成 .xlsx 文件（流式，峰值与行数无关）。
+ *
+ * 供大数据量导出使用：sheet XML 逐块产出 → `ZipFileWriter.addStream` 流式 deflate
+ * → temp + rename 原子落地。取消/失败都不留半成品。
+ *
+ * @param filePath - 目标路径。
+ * @param rows - 行源（含表头；同步或异步迭代器）。
+ * @param ctrl - 可选的进度/取消。
+ */
+export async function writeXlsxStream(
+  filePath: string,
+  rows: Iterable<string[]> | AsyncIterable<string[]>,
+  ctrl?: StreamControl,
+): Promise<void> {
+  await writeZipAtomic(filePath, async (zip) => {
+    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data)
+    await zip.addStream('xl/worksheets/sheet1.xml', xlsxSheetChunksAsync(rows, ctrl), ctrl)
+  })
 }
 
 /** Collect merged chat-log media metadata for the ZIP manifest. */
@@ -364,11 +483,85 @@ function filterMessages(msgs: WechatMessage[], types?: number[], richTypes?: str
  * @param dir - optional output directory (default <decrypted>.parent()/exports).
  * @param types - optional message type numbers filter (empty = keep all).
  * @param richTypes - optional rich sub-type filter (appmsg link/transfer/...).
+ * @param from - optional start timestamp (inclusive).
+ * @param to - optional end timestamp (inclusive).
+ * @param filename - optional output file basename.
+ * @param zip - 把结果再包一层 zip（附 record_media.json）。
+ * @param ctrl - 可选的进度/取消（收集阶段逐页检查取消；取消后不写任何文件）。
  * @returns the written file path, filename and message count.
  */
 /** Sanitize a user-supplied file basename (no separators / invalid chars). */
 function sanitizeBasename(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').trim().slice(0, 100)
+}
+
+/** 单会话导出的「计划」：收集 + 过滤 + 算出所有输出名（同步/流式两条入口共用）。 */
+interface SessionExportPlan {
+  msgs: WechatMessage[]
+  format: string
+  isXlsx: boolean
+  /** 内容本体用的扩展名（zip 时是内层文件的后缀）。 */
+  ext: string
+  innerName: string
+  filenameOut: string
+  outPath: string
+  now: string
+}
+
+/**
+ * 算出一次单会话导出要做什么（收集消息、过滤、命名）。
+ *
+ * 抽出来是为了让同步入口（`exportSessionMessages`，现有 RPC 的同步返回不能动）
+ * 与流式入口（`exportSessionMessagesStreamed`）**不会各自漂移出不同的文件名/条数**。
+ */
+function planSessionExport(
+  decryptedDir: string,
+  username: string,
+  format: string,
+  count: number | undefined,
+  dir: string | undefined,
+  types: number[] | undefined,
+  richTypes: string[] | undefined,
+  from: number | undefined,
+  to: number | undefined,
+  filename: string | undefined,
+  zip: boolean | undefined,
+  ctrl?: StreamControl,
+): SessionExportPlan {
+  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl)
+  const msgs = filterMessages(all, types, richTypes).filter((m) => {
+    if (from && from > 0 && m.createTime < from) return false
+    if (to && to > 0 && m.createTime > to) return false
+    return true
+  })
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/[-:]/g, '')
+  const isXlsx = format === 'excel' || format === 'xls' || format === 'xlsx'
+  const ext = isXlsx ? 'xlsx'
+    : format === 'html' ? 'html'
+      : format === 'csv' ? 'csv'
+        : format === 'md' ? 'md'
+          : format === 'sql' ? 'sql'
+            : format === 'json' ? 'json' : 'txt'
+  const exportDir = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
+  mkdirSync(exportDir, { recursive: true })
+  const sanitized = username.replace(/@chatroom$/, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_').slice(0, 24)
+  const autoBase = sanitized + '_' + now + '_' + ((count ?? 0) === 0 ? 'all' : String(count))
+  const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : ''
+  const base = userBase || autoBase
+  const outExt = zip ? 'zip' : ext
+  const innerName = (base.toLowerCase().endsWith('.' + ext) ? base : base + '.' + ext)
+  const filenameOut = (base.toLowerCase().endsWith('.' + outExt) ? base : base + '.' + outExt)
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join(exportDir, filenameOut), now }
+}
+
+/** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
+function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string): string {
+  if (format === 'csv') return formatCsv(msgs, username)
+  if (format === 'html') return formatHtml(msgs, username, now)
+  if (format === 'md') return formatMarkdown(msgs, username)
+  if (format === 'sql') return formatSql(msgs, username)
+  if (format === 'json') return formatJson(msgs, username)
+  return formatTxt(msgs, username)
 }
 
 export function exportSessionMessages(
@@ -383,49 +576,83 @@ export function exportSessionMessages(
   to?: number,
   filename?: string,
   zip?: boolean,
+  ctrl?: StreamControl,
 ): { path: string; filename: string; count: number } {
-  const all = collectMessages(decryptedDir, username, count ?? 0)
-  const msgs = filterMessages(all, types, richTypes).filter((m) => {
-    if (from && from > 0 && m.createTime < from) return false
-    if (to && to > 0 && m.createTime > to) return false
-    return true
-  })
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/[-:]/g, '')
-  const isXlsx = format === 'excel' || format === 'xls' || format === 'xlsx'
-  const ext = isXlsx ? 'xlsx'
-    : format === 'html' ? 'html'
-      : format === 'csv' ? 'csv'
-        : format === 'md' ? 'md'
-          : format === 'sql' ? 'sql'
-            : format === 'json' ? 'json' : 'txt'
-  let content: string | Uint8Array = ''
-  if (format === 'csv') content = formatCsv(msgs, username)
-  else if (isXlsx) content = formatXlsx(msgs, username)
-  else if (format === 'html') content = formatHtml(msgs, username, now)
-  else if (format === 'md') content = formatMarkdown(msgs, username)
-  else if (format === 'sql') content = formatSql(msgs, username)
-  else if (format === 'json') content = formatJson(msgs, username)
-  else content = formatTxt(msgs, username)
-  const exportDir = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
-  mkdirSync(exportDir, { recursive: true })
-  const sanitized = username.replace(/@chatroom$/, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_').slice(0, 24)
-  const autoBase = sanitized + '_' + now + '_' + ((count ?? 0) === 0 ? 'all' : String(count))
-  const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : ''
-  const base = userBase || autoBase
-  const outExt = zip ? 'zip' : ext
-  const innerName = (base.toLowerCase().endsWith('.' + ext) ? base : base + '.' + ext)
-  const filenameOut = (base.toLowerCase().endsWith('.' + outExt) ? base : base + '.' + outExt)
-  const filepath = join(exportDir, filenameOut)
+  const plan = planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl)
+  const { msgs } = plan
+  // xlsx 走内存版（本入口必须同步返回）；行数可能很大时用 exportSessionMessagesStreamed，
+  // 它把 sheet 逐块写进 zip 条目、峰值与行数无关。
+  const content: string | Uint8Array = plan.isXlsx
+    ? formatXlsx(msgs, username, ctrl)
+    : formatTextBody(plan.format, msgs, username, plan.now)
   if (zip) {
     const payload = zipFiles([
-      { name: innerName, data: content },
-      { name: 'record_media.json', data: JSON.stringify({ username, exportedAt: now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2) },
+      { name: plan.innerName, data: content },
+      { name: 'record_media.json', data: JSON.stringify({ username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2) },
     ])
-    writeFileAtomicSync(filepath, payload)
+    writeFileAtomicSync(plan.outPath, payload)
   } else {
-    writeFileAtomicSync(filepath, content)
+    writeFileAtomicSync(plan.outPath, content)
   }
-  return { path: filepath, filename: filenameOut, count: msgs.length }
+  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length }
+}
+
+/**
+ * `exportSessionMessages` 的流式版：同一份输入产出**同样内容**的文件，但
+ * ① xlsx 的 sheet 逐块流式压缩（峰值与行数无关）；② 带进度/取消。
+ *
+ * 为什么不直接改同步版：`gateway.exportSessionMessages` 是同步返回的现有 RPC 契约
+ * （`gateway.ts:747` 直接 `return r`），改成 async 会连带改网关；所以这里另开一个
+ * 异步入口，由网关侧（下一步）显式切换。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param options - 与同步入口同样的字段 + `onProgress`/`signal`。
+ * @returns 目标路径、文件名与条数。
+ */
+export async function exportSessionMessagesStreamed(
+  decryptedDir: string,
+  options: {
+    username: string
+    format: string
+    count?: number
+    dir?: string
+    types?: number[]
+    richTypes?: string[]
+    from?: number
+    to?: number
+    filename?: string
+    zip?: boolean
+  } & StreamControl,
+): Promise<{ path: string; filename: string; count: number }> {
+  const ctrl: StreamControl = { onProgress: options.onProgress, signal: options.signal }
+  const plan = planSessionExport(
+    decryptedDir, options.username, options.format, options.count, options.dir,
+    options.types, options.richTypes, options.from, options.to, options.filename, options.zip, ctrl,
+  )
+  const { msgs } = plan
+  if (plan.isXlsx && !options.zip) {
+    // 大行数的正路：sheet 逐块产出 → 流式 deflate → temp+rename。
+    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl)
+  } else if (plan.isXlsx) {
+    // zip 包裹时内层必须是完整的 xlsx 字节：仍走内存版（多一层流式需要再落一次临时文件，
+    // 而单会话上限 5 万条、内层 xlsx 本身是压缩数据，收益不抵复杂度）。
+    const content = formatXlsx(msgs, options.username, ctrl)
+    await writeZipAtomic(plan.outPath, async (zip) => {
+      await zip.addFile(plan.innerName, content)
+      await zip.addFile('record_media.json', JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2))
+    })
+  } else {
+    const content = formatTextBody(plan.format, msgs, options.username, plan.now)
+    if (options.zip) {
+      await writeZipAtomic(plan.outPath, async (zip) => {
+        await zip.addFile(plan.innerName, content)
+        await zip.addFile('record_media.json', JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2))
+      })
+    } else {
+      writeFileAtomicSync(plan.outPath, content)
+    }
+  }
+  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length }
 }
 /**
  * Export a data category to CSV under the exports dir.
@@ -605,7 +832,7 @@ export function exportAnnualReport(
  * Export moments (朋友圈) as txt / html / json / csv with optional
  * author + time-range filters.
  * @param decryptedDir - decrypted data root.
- * @param opts - format/username/from/to/dir/filename.
+ * @param opts - format/username/from/to/dir/filename + 可选的 onProgress/signal。
  * @returns written file path + filename + count.
  */
 export async function exportMoments(
@@ -624,16 +851,19 @@ export async function exportMoments(
     to?: number
     dir?: string
     filename?: string
-  },
+  } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number }> {
+  const ctrl: StreamControl = { onProgress: opts?.onProgress, signal: opts?.signal }
   const format = opts?.format === 'html' ? 'html' : opts?.format === 'json' ? 'json' : opts?.format === 'csv' ? 'csv' : 'txt'
   const NL = String.fromCharCode(10)
   const items: MomentItem[] = []
   let offset = 0
   for (;;) {
+    throwIfCancelled(ctrl.signal)
     const env = queryMoments(decryptedDir, offset, 500, opts?.username)
     items.push(...env.moments)
     offset += env.moments.length
+    reportProgress(ctrl, 'collect', items.length, 0)
     if (env.moments.length < 500) break
     if (items.length > 10000) break
   }
@@ -696,6 +926,8 @@ export async function exportMoments(
       let idx = 0
       for (const m of filtered) {
         if (mediaCount >= MAX_MOMENT_MEDIA) break
+        // 媒体解析（解密/读盘）是这里最慢的环节，逐条响应取消并汇报已打包条数。
+        throwIfCancelled(ctrl.signal)
         for (const im of m.images) {
           if (mediaCount >= MAX_MOMENT_MEDIA) break
           const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
@@ -713,6 +945,7 @@ export async function exportMoments(
             if (buf) { await zip.addFile('media/videos/vid_' + String(idx++) + '.mp4', buf); mediaCount += 1 }
           }
         }
+        reportProgress(ctrl, 'media', mediaCount, MAX_MOMENT_MEDIA)
       }
     })
     return { path: zipPath, filename: zipName, count: filtered.length }
@@ -727,6 +960,7 @@ export async function exportMoments(
   } else if (ext === 'csv') {
     const lines = ['时间,作者,内容,图片数,视频数,位置,链接标题,链接URL']
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal)
       lines.push(csvCell(m.time) + ',' + csvCell(m.author) + ',' + csvCell(m.text) + ',' + String(m.images.length) + ',' + String(m.videos.length) + ',' + csvCell(m.location) + ',' + csvCell(m.link_title) + ',' + csvCell(m.link_url ?? ''))
     }
     content = lines.join(NL)
@@ -735,6 +969,7 @@ export async function exportMoments(
     parts.push('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>微信朋友圈导出</title>')
     parts.push('<style>body{background:#f2f2f2;font-family:sans-serif;margin:0;padding:24px 12px;color:#222}.wrap{max-width:680px;margin:0 auto}.hd{text-align:center;margin-bottom:18px}.card{background:#fff;border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}.meta{color:#888;font-size:12px;margin-bottom:6px}.content{font-size:14px;line-height:1.6;white-space:pre-wrap}.tag{color:#576b95;font-size:12px;margin-top:6px}.divider{text-align:center;color:#bbb;font-size:12px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block}.grid.single{grid-template-columns:1fr;max-width:240px}</style></head><body><div class="wrap"><div class="hd"><h1>微信朋友圈</h1><p>共 ' + String(filtered.length) + ' 条动态</p></div>')
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal)
       parts.push('<div class="card"><div class="meta">' + htmlEscape(m.author) + ' · ' + htmlEscape(m.time) + '</div>')
       if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + '</div>')
       if (m.images.length > 0) {
@@ -773,6 +1008,7 @@ export async function exportMoments(
   } else {
     const lines: string[] = []
     for (const m of filtered) {
+      throwIfCancelled(ctrl.signal)
       lines.push(m.time + ' ' + m.author)
       if (m.text) lines.push(m.text)
       const tags: string[] = []
@@ -792,13 +1028,14 @@ export async function exportMoments(
 /**
  * Export ALL sessions as a single txt ZIP archive (账号归档).
  * @param decryptedDir - decrypted data root.
- * @param opts - optional dir/filename.
+ * @param opts - optional dir/filename + 可选的 onProgress/signal（逐会话上报、可取消）。
  * @returns written zip path + filename + total messages.
  */
 export async function exportAllSessions(
   decryptedDir: string,
-  opts?: { dir?: string; filename?: string },
+  opts?: { dir?: string; filename?: string } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number }> {
+  const ctrl: StreamControl = { onProgress: opts?.onProgress, signal: opts?.signal }
   const env = querySessions(decryptedDir)
   const sessions = env.sessions.slice(0, 1000)
   const base = (opts?.dir && opts.dir.trim()) ? opts.dir.trim() : join(dirname(decryptedDir), 'exports')
@@ -811,8 +1048,12 @@ export async function exportAllSessions(
   // 原先每个会话的文本都先 push 进 entries、最后一次性 concat + 压缩，
   // 最坏情形常驻数 GB 且全程同步。
   await writeZipAtomic(path, async (zip) => {
-    for (const s of sessions) {
-      const msgs = collectMessages(decryptedDir, s.username, 0)
+    for (let i = 0; i < sessions.length; i += 1) {
+      const s = sessions[i]!
+      // 会话边界是这块最自然的取消/进度点：每个会话最多 5 万条，卡在中途用户会等很久。
+      throwIfCancelled(ctrl.signal)
+      reportProgress(ctrl, 'sessions', i, sessions.length)
+      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl)
       const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 40)
       const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, '_')
       let name = safeName + '_' + uid + '.txt'
@@ -824,10 +1065,11 @@ export async function exportAllSessions(
       seen.add(name)
       if (msgs.length === 0) {
         await zip.addFile(name, '（无消息）\n')
-        continue
+      } else {
+        await zip.addFile(name, formatTxt(msgs, s.username))
+        total += msgs.length
       }
-      await zip.addFile(name, formatTxt(msgs, s.username))
-      total += msgs.length
+      reportProgress(ctrl, 'sessions', i + 1, sessions.length)
     }
   })
   return { path, filename, count: total }

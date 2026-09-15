@@ -117,6 +117,7 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
       const db = new DatabaseSync(sp, { readOnly: true })
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
       if (has) {
+        // 会话量级（N8 评估：随会话数增长，不随消息数），保留一次性取回
         const rows = db.prepare('SELECT username FROM SessionTable').all() as Array<Record<string, unknown>>
         for (const r of rows) {
           const u = cellStr(r['username'])
@@ -209,6 +210,7 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
       if (cols.has('username')) {
         const lt = cols.has('local_type') ? 'local_type' : '0'
         const df = cols.has('delete_flag') ? 'delete_flag' : '0'
+        // 联系人量级（N8 评估）：随后面要建的 per-contact 统计一起用，取回后要遍历两遍
         const rows = db.prepare(`SELECT username, ${lt} AS lt, ${df} AS df FROM contact WHERE (${df} = 0 OR ${df} IS NULL)`).all() as Array<{ username: unknown; lt?: number; df?: number }>
         for (const r of rows) {
           const u = cellStr(r['username'])
@@ -245,8 +247,8 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
       const db = new DatabaseSync(sp2, { readOnly: true })
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
       if (has) {
-        const rows = db.prepare('SELECT content AS c FROM SnsTimeLine').all() as Array<{ c?: unknown }>
-        for (const r of rows) {
+        // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
+        for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
           const xml = cellStr(r.c)
           moments.total += 1
           moments.images += xml.split('<media>').length - 1 + xml.split('<media ').length - 1

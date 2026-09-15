@@ -22,6 +22,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGetSessions, apiOptimizeAskQuestion, apiSubmitAskFeedback } from '../api.ts'
+import { createAskGate, type AskGate } from './ask-gate.ts'
 import type { AskOptimizeResult, AskResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, PanelHeader, Select } from '../ui/kit.tsx'
 import { RetrievalPanel } from './RetrievalPanel.tsx'
@@ -258,9 +259,23 @@ export function AnswerFeedback({ turn, patch }: {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const cites = turn.citations ?? []
+  /**
+   * 反馈提交的单飞闸（N17）。闸门放 ref（同步、不受渲染时机影响），并在调用点惰性创建。
+   *
+   * 为什么不能用 `busy`（`useState`）当闸门：React 的状态更新是**异步**的，双击的第二下
+   * 落在「`setBusy(true)` 已调用、组件还没重渲染」的窗口里 —— 那时闭包捕获的 `busy` 仍是
+   * `false`，两次调用双双放行。这与流式问答（M13，`use-ask.ts`）是同一个「异步状态当同步
+   * 闸门」的坑，但**后果更重**：M13 那侧的 host 有兜底，而 host 的 `submitAskFeedback`
+   * 既没有单飞也没有去重（复审 grep 实测），重复提交会真的落到后端 ——
+   * 两条反馈请求、`patch()`/`setMarking(false)`/`setNote` 各写两遍、权重适配跑两遍。
+   * 这里认领轮次 id：只有当前轮才收尾，迟到的旧轮不会把新一轮的 `busy` 置回 false。
+   */
+  const gateRef = useRef<AskGate | null>(null)
 
   const submit = useCallback(async (rating: 'up' | 'down', marks?: Record<number, 'useful' | 'useless'>): Promise<void> => {
-    if (busy) return
+    const gate = gateRef.current ?? (gateRef.current = createAskGate())
+    const ticket = gate.tryStart()
+    if (!ticket) return
     setBusy(true)
     setNote('')
     try {
@@ -282,9 +297,11 @@ export function AnswerFeedback({ turn, patch }: {
     } catch (e) {
       setNote('提交失败：' + (e as Error).message)
     } finally {
-      setBusy(false)
+      // 只有当前轮才释放闸门并复位 busy：窗口内的第二次点击根本没开轮（tryStart 返回 null），
+      // 不会走到这里，也就不会有第二条请求。
+      if (gate.finish(ticket)) setBusy(false)
     }
-  }, [busy, turn.retrievalId, turn.citedIndexes, turn.text, patch])
+  }, [turn.retrievalId, turn.citedIndexes, turn.text, patch])
 
   if (cites.length === 0 && !turn.retrievalId) return null
 

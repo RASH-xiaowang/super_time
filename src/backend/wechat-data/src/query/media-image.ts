@@ -11,6 +11,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
+import { fetchWithRetry } from '../../../llm-retry.js'
+import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { shardCatalogDirs } from './meta.ts'
 
 const V2_MAGIC = [0x07, 0x08, 0x56, 0x32]
@@ -517,19 +520,22 @@ export function decodeEmoticonDataUrl(
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
+ * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
  * @returns a data URL + format, or an error message.
  */
 export async function fetchEmoticonRemote(
   url: string,
   decodedDir: string,
   md5: string,
+  opts: { cdnEnabled?: boolean } = {},
 ): Promise<{ url?: string; format?: string; error?: string }> {
+  // 用户关掉开关时连请求都不发（不是「发了再失败」）：这既是开关的承诺，也让「有没有出网」可判定
+  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   if (!/^https?:\/\//i.test(url)) return { error: '表情链接不是 http(s)' }
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      signal: AbortSignal.timeout(10_000),
-    })
+    // N13：远端取图走有界重试（一次网络抖动 = 一个失败的表情很可惜）；
+    // 超时交给重试层逐次计时（自己传 AbortSignal.timeout 会让重试在第一次超时后直接停）。
+    const res = await fetchWithRetry(fetch, url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, { timeoutMs: 10_000 })
     if (!res.ok) return { error: '表情下载失败 HTTP ' + String(res.status) }
     const bytes = new Uint8Array(await res.arrayBuffer())
     const fmt = detectImageFormat(bytes.subarray(0, 16))
@@ -613,10 +619,110 @@ function imageCandidatePaths(baseDir: string, file: string, n1: string, n2: stri
 }
 
 /**
+ * `image_hardlink_info_v4` 的一行（file_name 是 TEXT/BLOB，dir1/dir2 是 dir2id 行号）。
+ *
+ * 用 type 而不是 interface：`db.prepare(...).all()` 返回的是 `Record<string, SQLOutputValue>[]`，
+ * 只有**匿名对象类型**能靠隐式索引签名与它比较（interface 不会，断言会报 TS2352）。
+ */
+type ImageHardlinkRow = {
+  file_name: unknown
+  dir1: number
+  dir2: number
+}
+
+/** 单个 md5 的候选行上限（与旧实现的 `LIMIT 8` 一致；同一条消息的多个副本按时间倒序取最近的几个）。 */
+const HARDLINK_ROWS_PER_MD5 = 8
+
+/** 一批 `IN (...)` 里的 md5 个数上限（分块查询，避免语句过长/计划过大）。 */
+const HARDLINK_MD5_CHUNK = 400
+
+/**
+ * 把候选行按 dir2id 映射成磁盘路径，返回第一个**真实存在**的。
+ * @param wechatBaseDir - 微信原始目录。
+ * @param rows - 候选行（顺序即优先级）。
+ * @param dirs - dir2id 映射。
+ * @returns 绝对路径，或 null。
+ */
+function firstExistingDatPath(wechatBaseDir: string, rows: readonly ImageHardlinkRow[], dirs: Map<number, string>): string | null {
+  for (const r of rows) {
+    const file = cellText(r.file_name).trim()
+    if (!file || !file.endsWith('.dat')) continue
+    const n1 = dirs.get(r.dir1) ?? ''
+    const n2 = dirs.get(r.dir2) ?? ''
+    for (const p of imageCandidatePaths(wechatBaseDir, file, n1, n2)) {
+      if (existsSync(p)) return p
+    }
+  }
+  return null
+}
+
+/**
+ * **一次**查询解析多张图的 .dat 路径（N16）。
+ *
+ * 为什么要有批量入口：`WHERE lower(md5) = ?` 在 `image_hardlink_info_v4` 上没有可用索引
+ * （`EXPLAIN QUERY PLAN` = `SCAN ... USING INDEX image_hardlink_info_v4_MODIFY_TIME`，
+ * 即走 modify_time 索引再逐行过滤，等价全表扫）。实测本机 3309 行 0.30ms/次、
+ * 合成 20 万行 17.27ms/次 —— 30 张图各查一次 ≈518ms。`IN (...)` 只扫一次。
+ *
+ * 分批：一批最多 {@link HARDLINK_MD5_CHUNK} 个 md5（远小于 SQLite 的参数上限，
+ * 只为了让语句长度与计划大小可控，与 `ledger.ts` 的分块同款）。
+ *
+ * **接线状态**：网关目前只有「一张图一次 RPC」（`getImageDataUrl`），要吃到这个批量入口
+ * 需要一次批量 RPC（接口变更，不在本轮范围）—— 见 `docs/RELEASE-PLAN.md` 的 N16。
+ * @param decryptedDir - 解密库目录。
+ * @param wechatBaseDir - 微信原始目录（候选路径的根）。
+ * @param md5s - 图片 md5 列表（非 32 位十六进制的项会被忽略，重复项只查一次）。
+ * @returns md5（小写）→ 命中的 .dat 路径；没命中的 md5 不会出现在结果里。
+ */
+export function resolveImageFilePathsByMd5(
+  decryptedDir: string,
+  wechatBaseDir: string,
+  md5s: readonly string[],
+): Map<string, string> {
+  const out = new Map<string, string>()
+  const wanted = [...new Set(md5s.map(m => (m ?? '').trim().toLowerCase()).filter(m => m.length === 32))]
+  if (wanted.length === 0) return out
+  const dbPath = join(decryptedDir, 'hardlink', 'hardlink.db')
+  if (!existsSync(dbPath)) return out
+  let db: DatabaseSync | null = null
+  try { db = new DatabaseSync(dbPath, { readOnly: true }) } catch { return out }
+  try {
+    const dirs = readDir2id(db)
+    for (let i = 0; i < wanted.length; i += HARDLINK_MD5_CHUNK) {
+      const chunk = wanted.slice(i, i + HARDLINK_MD5_CHUNK)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = db.prepare(
+        `SELECT lower(md5) AS m, file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE lower(md5) IN (${placeholders}) ORDER BY modify_time DESC`,
+      ).all(...chunk) as Array<ImageHardlinkRow & { m: unknown }>
+      const byMd5 = new Map<string, ImageHardlinkRow[]>()
+      for (const r of rows) {
+        const key = cellText(r.m).trim().toLowerCase()
+        const list = byMd5.get(key)
+        if (list) {
+          if (list.length < HARDLINK_ROWS_PER_MD5) list.push(r)
+        } else {
+          byMd5.set(key, [r])
+        }
+      }
+      for (const md5 of chunk) {
+        const found = firstExistingDatPath(wechatBaseDir, byMd5.get(md5) ?? [], dirs)
+        if (found) out.set(md5, found)
+      }
+    }
+  } catch { /* db unreadable */ } finally {
+    try { db.close() } catch { /* already closed */ }
+  }
+  return out
+}
+
+/**
  * Resolve an image's on-disk .dat path via the decrypted hardlink.db:
  * image_hardlink_info_v4 is queried by md5 (and by MessageResourceDetail
  * data_index rowid when given), then dir1/dir2 are mapped through dir2id to
  * the real msg/attach directory names. Returns the first existing path.
+ *
+ * 单张图走的就是批量入口（见 {@link resolveImageFilePathsByMd5}）—— 语义与改前一致：
+ * 先按 md5 的行、再按 data_index 的行，取第一个真实存在的路径。
  * @param decryptedDir - decrypted data root.
  * @param wechatBaseDir - raw WeChat install dir (current account root).
  * @param md5 - 32-char image md5 (optional when dataIndex is given).
@@ -629,34 +735,22 @@ export function resolveImageFilePath(
   md5?: string,
   dataIndex?: string,
 ): string | null {
+  const md5l = (md5 ?? '').trim().toLowerCase()
+  const di = (dataIndex ?? '').trim()
+  const byMd5 = md5l.length === 32 ? resolveImageFilePathsByMd5(decryptedDir, wechatBaseDir, [md5l]).get(md5l) : undefined
+  if (byMd5) return byMd5
+  if (!di || !/^\d+$/.test(di)) return null
   const dbPath = join(decryptedDir, 'hardlink', 'hardlink.db')
   if (!existsSync(dbPath)) return null
   let db: DatabaseSync | null = null
   try { db = new DatabaseSync(dbPath, { readOnly: true }) } catch { return null }
   try {
     const dirs = readDir2id(db)
-    const rows: Array<{ file_name: unknown; dir1: number; dir2: number }> = []
-    const md5l = (md5 ?? '').trim().toLowerCase()
-    const di = (dataIndex ?? '').trim()
-    if (md5l.length === 32) {
-      const byMd5 = db.prepare('SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE lower(md5) = ? ORDER BY modify_time DESC LIMIT 8').all(md5l) as Array<{ file_name: unknown; dir1: number; dir2: number }>
-      rows.push(...byMd5)
-    }
-    if (di && /^\d+$/.test(di)) {
-      const byRow = db.prepare('SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE _rowid_ = ? LIMIT 1').all(Number(di)) as Array<{ file_name: unknown; dir1: number; dir2: number }>
-      rows.push(...byRow)
-    }
-    for (const r of rows) {
-      const file = cellText(r.file_name).trim()
-      if (!file || !file.endsWith('.dat')) continue
-      const n1 = dirs.get(r.dir1) ?? ''
-      const n2 = dirs.get(r.dir2) ?? ''
-      for (const p of imageCandidatePaths(wechatBaseDir, file, n1, n2)) {
-        if (existsSync(p)) return p
-      }
-    }
-  } catch { /* db unreadable */ } finally {
+    const byRow = db.prepare('SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE _rowid_ = ? LIMIT 1').all(Number(di)) as ImageHardlinkRow[]
+    return firstExistingDatPath(wechatBaseDir, byRow, dirs)
+  } catch {
+    return null
+  } finally {
     try { db.close() } catch { /* already closed */ }
   }
-  return null
 }

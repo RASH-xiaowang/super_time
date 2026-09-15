@@ -37,7 +37,10 @@ branch: feat/chat-message-module
   逐元素 `getComputedStyle` + `getBoundingClientRect`、CDP `CSS.forcePseudoState` 强制
   `:hover`/`:active`/`:focus-visible`、`Emulation.setDeviceMetricsOverride` 跑 6 档窗口尺寸、
   深/浅两主题各一轮；共 **25 张截图** + `report.json`（`output/` 已被 .gitignore 忽略）。
-- 脚本：`output/audit3.mjs`（抽屉）、`output/audit4.mjs`（整面板）。
+- 脚本：`tools/visual-audit/audit3.mjs`（抽屉）、`tools/visual-audit/audit4.mjs`（整面板）。
+  这两个脚本原先住在 gitignore 的 `output/` 下，**本页的审计结论当时无法复现**（L17）；现已收回仓库
+  （产物仍写进 gitignore 的 `output/`）。前置条件（真实微信数据 + playwright + 先关闭运行中的实例 +
+  开发态）与用法见 `tools/visual-audit/README.md`。注意：收回时只做了路径与隐私清理，未重跑过。
 
 **基准来源与诚实声明**：
 
@@ -411,7 +414,7 @@ emoji 类型图标若要"像微信"应换成 SVG（微信的消息类型图标�
 **批次 4（结构决策）**
 11. 单聊「聊天信息」入口是否做（P2-6）需要产品决定；P3 三条随批次 2/3 顺手带掉。
 
-**每批次完成后建议复跑本审计脚本**（`output/audit3.mjs` / `audit4.mjs`）做前后对比——
+**每批次完成后建议复跑本审计脚本**（`tools/visual-audit/audit3.mjs` / `audit4.mjs`）做前后对比——
 两个脚本都会输出 `report.json`，逐项断言可以直接 diff 出"哪一档窗口、哪个元素、哪个属性"变了。
 另外建议把 P0-2 的六档窗口尺寸断言加进 `scripts/`（仓库已有 `check-wx-tokens.js` 这套构建期断言的先例），
 让"窄窗口按钮不被裁"变成可回归的约束而不是一次性检查。
@@ -550,9 +553,10 @@ emoji 类型图标若要"像微信"应换成 SVG（微信的消息类型图标�
 
 运行时加载的是 **`src/backend/wechat-data/lib/index.js`**（`src/backend/wechat-host.js:379`
 的 `import('./wechat-data/lib/index.js')` 是相对导入），那是一份 **770KB 的 esbuild bundle**。
-所以**只改 `src/**` 不生效，必须重建这一份**；重建配方在仓库根 `.tmp-be-build.mjs`
-（esbuild、ESM、`experimentalDecorators: false` —— decorator 语义决定 `@Remote()` 能否注册上）。
-本次重建脚本落在 `output/build-backend.mjs`，重建前的产物备份在 `output/backup/lib-index.js.bak`。
+所以**只改 `src/**` 不生效，必须重建这一份**；重建命令现在是 `npm run build:backend`
+（`scripts/build-wechat-bundle.js`：esbuild、ESM、`experimentalDecorators: false` —— decorator 语义
+决定 `@Remote()` 能否注册上）。当年那次重建的临时脚本与产物备份在 `output/`（已被 gitignore，未入库；
+根目录那份 `.tmp-be-build.mjs` 已作为死文件删除——它的配方就是现在的 `scripts/build-wechat-bundle.js`）。
 另外 `node_modules/@deepseek-ai/dsh-wechat-data` 只是**类型副本**（日期 09/09，比 src 旧），
 既有的 48 条类型错误全部来自这份旧副本的成员缺失 —— 运行时与此无关，但也别指望改 src 的类型能被客户端看见。
 
@@ -1004,7 +1008,7 @@ transform: translate(-50%, -50%); z-index: 71`（遮罩是 70）。附带把 `ki
 - `output/visual-audit/03-groupinfo-dark.png`、`11-groupinfo-light.png`、`10-search-empty.png`、
   `04-tile-hover.png`、`05-tile-focus.png`、`07-input-focus.png`、`08-responsive-*.png`
 - `output/visual-audit-panel/p01-full-dark.png`、`p06-full-light.png`、`p05-960x640.png`（裁切最严重的一档）
-- `output/audit3.mjs`、`output/audit4.mjs` — 可复跑驱动脚本
+- `tools/visual-audit/audit3.mjs`、`tools/visual-audit/audit4.mjs` — 可复跑驱动脚本（已入库，见 `tools/visual-audit/README.md`）
 - `output/verify-batch1..3.mjs`、`verify-voice.mjs`、`verify-video.mjs`、`verify-call.mjs`、
   `verify-voice-play.mjs`、`verify-quote.mjs`、`verify-more-menu.mjs`、`verify-edit.mjs`、
   `verify-sidebar.mjs`、`verify-mp.mjs`、`verify-sticker.mjs` — 十三套可复跑断言（合计 163 条）

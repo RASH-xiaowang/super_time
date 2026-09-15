@@ -3334,6 +3334,16 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                         <span className={css.memberName}>{m.name}</span>
                       </button>
                     ))}
+                    {/*
+                      故意的死控件（L13）：微信「聊天信息」页的成员网格末尾就是这个「＋ 添加」方块，
+                      而本应用只**读**本机聊天库，没有可用的邀请/入群通道（往群里加人要么走微信协议、
+                      要么直接改对方数据库，两者都不该做）。保留它的理由是布局保真 —— 去掉会让
+                      成员网格与官方形态不一致（视觉审计 P1-8 行结构）。
+                      因此它刻意不可交互：不是 <button>（键盘/焦点不进来）、不挂 onClick、
+                      aria-disabled + title 说明原因，并且不给任何 hover 反馈让外观也不像可点
+                      （见 chats.module.css 的 `.memberTile[data-disabled='true']` 规则）。
+                      若将来真要做邀请，这里应换成打开确认对话框的按钮，而不是给它挂 onClick。
+                    */}
                     {!memberQuery && (
                       <div className={css.memberTile} data-disabled="true" title="暂不支持邀请" aria-disabled="true">
                         <div className={css.memberAdd}><span>＋</span></div>

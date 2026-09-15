@@ -18,13 +18,20 @@
  * 后端随即把真实微信库解密到这个临时目录（实测约 282MB）——既慢又是在动真实数据。
  * 空配置下 db_dir 缺失，realtime sync 会自行暂停，不产生任何解密。
  *
+ * **不签许可证**（N23）：本脚本断言的六项全是**进程生命周期**（后端就绪 / worker 数量 /
+ * 被杀后自动重建 / 新 PID / 无重复拉起），没有一项需要调用业务方法 —— 而许可证只影响
+ * 业务调用的放行。原先为了「业务调用要过许可闸门」在这里现签一张许可证，代价是**依赖
+ * `vendor-keys/license-private.pem`**：那份私钥被 gitignore，干净检出与 CI 上都不存在，
+ * 于是这一步在 CI 上必然 ENOENT 失败（本机全绿只是因为本机工作树里有它）。
+ * 去掉之后这条端到端验证在任何机器上都能跑，且不削弱覆盖。
+ * 许可相关的链路由 `license-smoke` / `license-gate:smoke` 两条专门覆盖（它们自己生成密钥对）。
+ *
  * 用法：node scripts/backend-restart-smoke.js
  */
 
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
-const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
@@ -36,34 +43,6 @@ function check(label, ok, extra = '') {
   console.log(`  ${ok ? '✅' : '❌'} ${label}${extra ? ' — ' + extra : ''}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** 为本机指纹签一张临时许可证，写进指定 userData（业务调用要过许可闸门）。 */
-function seedLicense(userDataDir) {
-  const { signPayload } = require(path.join(root, 'src', 'license', 'crypto'));
-  const { PRODUCT_ID, KNOWN_FEATURES } = require(path.join(root, 'src', 'license', 'schema'));
-  const { getDeviceFingerprint } = require(path.join(root, 'src', 'license', 'fingerprint'));
-  const pem = fs.readFileSync(path.join(root, 'vendor-keys', 'license-private.pem'), 'utf8');
-  const now = new Date();
-  const payload = {
-    product: PRODUCT_ID,
-    licenseId: crypto.randomUUID(),
-    edition: 'pro',
-    issuedTo: { name: 'H7 smoke', company: '', email: '' },
-    device: { fingerprint: getDeviceFingerprint().fingerprint },
-    issuedAt: now.toISOString(),
-    notBefore: now.toISOString(),
-    expiresAt: new Date(now.getTime() + 3600_000).toISOString(),
-    features: [...KNOWN_FEATURES],
-    seats: 1,
-    appVersionMin: '1.0.0',
-    notes: 'backend-restart-smoke',
-  };
-  fs.writeFileSync(
-    path.join(userDataDir, 'license.json'),
-    JSON.stringify({ payload, signature: signPayload(payload, pem), importedAt: now.toISOString() }, null, 2),
-    'utf8',
-  );
-}
 
 /** 预设空配置，阻止开发态配置迁移（否则会把真实库解密进来，见文件头注释）。 */
 function seedEmptyStateConfig(userDataDir) {
@@ -145,7 +124,8 @@ async function main() {
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'st-h7-'));
   seedEmptyStateConfig(userData);
-  seedLicense(userData);
+  // 注意：**不写 license.json**。本脚本不调用任何业务方法，未授权状态不影响后端生命周期；
+  // 而写它需要 gitignore 的签发私钥，会让整个步骤在干净检出/CI 上失败（N23）。
 
   // ── ① 崩溃重启 ─────────────────────────────────────────────────
   console.log('\n杀掉后端 worker 进程，验证自动重建');

@@ -5,7 +5,7 @@
  */
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts'
 import { querySessions } from './query/sessions.ts'
@@ -48,7 +48,8 @@ import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
 import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
-import { decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote } from './query/media-image.ts'
+import { decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
+import type { StreamControl } from './query/zip.ts'
 import { resolveSnsImageDataUrl } from './query/sns-image.ts'
 import { resolveArticleCoverDataUrl } from './query/article-cover.ts'
 import { resolveMessageFileDataUrl } from './query/media-file.ts'
@@ -65,7 +66,7 @@ import { decryptAllImageDats } from './query/decrypt-images.ts'
 import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
 import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './query/voice-transcribe.ts'
 import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
-import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessages } from './query/export.ts'
+import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessagesStreamed } from './query/export.ts'
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from './query/ask.ts'
 import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
 import { runRetrievalPipeline } from './query/retrieval/pipeline.ts'
@@ -96,7 +97,7 @@ import { queryAnnualReport } from './query/annual-report.ts'
 import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
-import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
+import { bumpDataGeneration, boundedSet, invalidateWechatMeta } from './query/meta.ts'
 import { contactMeta } from './query/meta.ts'
 import { buildKnowledgeGraph, deleteNote as deleteNoteRow, listNotes, saveNote as saveNoteRow } from './query/notes.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
@@ -154,6 +155,68 @@ function resolveDirs(): ResolvedDirs {
   return { decrypted: resolveDecryptedDir(), decoded: resolveDecodedDir() }
 }
 
+/**
+ * 一个长任务（导出/加密备份）的控制槽（M3）。
+ *
+ * 为什么不能把 `onProgress` / `AbortSignal` 直接当 RPC 参数传：**两者都过不了 IPC** ——
+ * 回调是函数、signal 是宿主对象，序列化时会被丢掉（或被拒）。所以渲染层只带一个自己生成的
+ * `jobId`：进度由网关通过 `wechat-export/progress` 事件推出去（与 `wechat-data/updated`、
+ * `wechat-ask/delta` 同一种做法），取消走 `cancelExportJob({ jobId })` 唤醒这里的令牌。
+ */
+interface StreamJob {
+  /** 本轮取消令牌；每次开跑都换新的（否则「取消过一次的 jobId 再也跑不动」）。 */
+  ctrl: AbortController
+  /** 最近一次进度；终态也留着，供迟到的轮询读到。 */
+  progress: { phase: string; done: number; total: number } | null
+  finished: boolean
+  error?: string
+}
+
+/** 控制槽上限：槽位只服务「正在跑 + 刚跑完」的任务，超出先丢最老的。 */
+const STREAM_JOB_CAP = 20
+
+/** 导出/备份进度事件名（渲染层按 jobId 过滤）。 */
+const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
+
+/**
+ * N27：同一轮问答反馈的重复提交窗口。
+ *
+ * 10 秒的依据：真正的重复来自「同一轮被提交两次」——两个面板同时提交、旧版客户端重试、
+ * 直接 RPC 调用，间隔都在一次点击的量级；而用户**改变主意重新评分**（up→down、或改了
+ * 标注集合）会落到另一个键（键含 rating 与引用序号），不受这个窗口影响。
+ */
+const ASK_FEEDBACK_DEDUPE_MS = 10_000
+
+/** 反馈去重表的键上限（进程内，只记窗口内的键）。 */
+const ASK_FEEDBACK_CAP = 200
+
+/** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
+const IMAGE_BATCH_MAX = 200
+
+/**
+ * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
+ * 只用来判「这张图已经有解码产物了吗」——有就别再解一遍。
+ */
+const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
+
+/** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
+interface ImageBatchItem {
+  username: string
+  localId: number
+  url?: string
+  format?: string
+  error?: string
+}
+
+/**
+ * 规整渲染层传来的 jobId：只当**不透明标识**用（不落盘、不回显），所以限长截断即可。
+ * @param jobId - 原始值（可能缺省/非字符串）。
+ * @returns 可用的标识；不可用时为空串（＝调用方没打算订阅进度）。
+ */
+function normalizeJobId(jobId?: unknown): string {
+  return typeof jobId === 'string' ? jobId.trim().slice(0, 64) : ''
+}
+
 /** Coerce a config cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
   if (typeof v === 'string') return v
@@ -201,6 +264,17 @@ export class WechatDataGateway extends TypertRemoteService {
   private whisperDownload: WhisperDownloadProgress | null = null
   /** Active voice batch transcription (polled by the settings panel). */
   private whisperTranscribing: WhisperTranscribing = { active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
+  /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
+  private readonly _streamJobs = new Map<string, StreamJob>()
+  /**
+   * 反馈去重窗口（N27）：键 → 到期时间。
+   *
+   * 为什么不是 `inflightXxx: Set` 那种「在飞合并」的闸：`submitAskFeedback` 是**同步** RPC，
+   * 函数体在事件循环里一口气跑完，两个「并发」调用不会交错 ⇒ 在飞表恒为空，那是个假闸。
+   * 真正的重复是「同一轮被提交两次」且两次都真跑完（多一条反馈记录 + 按重复特征重算权重 +
+   * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
+   */
+  private readonly _askFeedbackSeen = new Map<string, number>()
 
   /**
    * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
@@ -222,6 +296,51 @@ export class WechatDataGateway extends TypertRemoteService {
       this._selfUsernameKey = key
     }
     return this._selfUsername
+  }
+
+  /**
+   * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
+   *
+   * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
+   * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
+   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
+   *   旧调用方的行为完全不变）。
+   * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
+   */
+  private streamControl(jobId?: string): StreamControl {
+    const id = normalizeJobId(jobId)
+    if (!id) return {}
+    if (!this._streamJobs.has(id) && this._streamJobs.size >= STREAM_JOB_CAP) {
+      const first = this._streamJobs.keys().next()
+      if (!first.done && first.value !== undefined) this._streamJobs.delete(first.value)
+    }
+    const job: StreamJob = this._streamJobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false }
+    job.ctrl = new AbortController()
+    job.progress = null
+    job.finished = false
+    delete job.error
+    this._streamJobs.set(id, job)
+    const ctx = this._ctx
+    return {
+      signal: job.ctrl.signal,
+      onProgress: (p) => {
+        job.progress = { phase: p.phase, done: p.done, total: p.total }
+        // 事件尽力而为：进度推不出去不该让导出失败（与 wechat-ask/delta 同策略）。
+        try { ctx.emit(EXPORT_PROGRESS_EVENT, { jobId: id, phase: p.phase, done: p.done, total: p.total }) } catch { /* ignore */ }
+      },
+    }
+  }
+
+  /**
+   * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
+   * @param jobId - 任务标识。
+   * @param error - 失败/取消原因；成功时省略。
+   */
+  private finishStreamJob(jobId: string, error?: string): void {
+    const job = this._streamJobs.get(jobId)
+    if (!job) return
+    job.finished = true
+    if (error) job.error = error
   }
 
   constructor(ctx: Context) {
@@ -333,6 +452,27 @@ export class WechatDataGateway extends TypertRemoteService {
       const gate = this.privacyGate('ask_embed', { sessions: 0, messages: texts.length }, texts)
       if (!gate.ok) throw new Error(gate.error)
       return llmAny.embed!(gate.texts, model ? { model } : undefined)
+    }
+  }
+
+  /**
+   * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
+   *
+   * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
+   * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
+   * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
+   * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
+   */
+  private cdnSwitches(): { cdnEnabled: boolean; localDecrypt: boolean } {
+    try {
+      const cfg = getConfig(this._dirs.decrypted)
+      return {
+        cdnEnabled: cfg['cdn_enabled'] !== false,
+        localDecrypt: cfg['cdn_local_decrypt'] !== false,
+      }
+    } catch {
+      // 读不到配置时**不拦**：这两个键的默认值本就是开启，读失败不该变成「静默断功能」
+      return { cdnEnabled: true, localDecrypt: true }
     }
   }
 
@@ -708,11 +848,15 @@ export class WechatDataGateway extends TypertRemoteService {
 
   /**
    * Export a conversation messages to txt/csv/excel/html.
+   *
+   * M3：本入口改为 `async` 并走**流式**实现 —— 同步版必须「先把整份 xlsx 拼进内存」，
+   * 行数一大峰值就与行数成正比；`exportSessionMessagesStreamed` 把 sheet 逐块写进 zip 条目
+   * （峰值与行数无关）。契约没变：仍是 `Promise<ExportResult>`，客户端镜像无需改。
    * @param options - username, export format and optional message count.
    * @returns ExportResult: exported file path/count info.
    */
   @Remote('exportSessionMessages')
-  exportSessionMessages(options: {
+  async exportSessionMessages(options: {
     username: string
     format: string
     count?: number
@@ -723,13 +867,9 @@ export class WechatDataGateway extends TypertRemoteService {
     to?: number
     filename?: string
     zip?: boolean
-  }): ExportResult {
+  }): Promise<ExportResult> {
     try {
-      const r = exportSessionMessages(
-        this._dirs.decrypted, options.username, options.format,
-        options.count, options.dir, options.types, options.richTypes,
-        options.from, options.to, options.filename, options.zip,
-      )
+      const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options })
       this.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
       return r
     } catch (e) {
@@ -1337,8 +1477,12 @@ ${contextBlock}
    *
    * 反馈 → 特征归因 → 权重微调 → 落盘。权重**由全部历史反馈重算**（幂等、可重放），
    * 而不是在旧权重上累加 —— 累加会因为重复提交同一条反馈而漂移。
+   *
+   * N27：同一轮反馈在 10 秒窗口内的重复提交会被挡掉并返回可读的「已在处理」，
+   * 不再产生第二条反馈记录 / 第二次权重适配（前端闸门只管同一个面板的连点，
+   * 两个面板同时提交、旧版客户端重试、直接 RPC 调用都落到这里）。
    * @param options - retrievalId（AskResult 里回传）+ rating + 有用/无用引用序号。
-   * @returns 调参后的权重。
+   * @returns 调参后的权重；重复提交时 `ok:false` + `message`。
    */
   @Remote('submitAskFeedback')
   submitAskFeedback(options: {
@@ -1351,6 +1495,27 @@ ${contextBlock}
   }): { ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; message?: string } {
     const cfg = loadRetrievalConfig(this._dirs.decrypted)
     if (!cfg.feedback.enabled) return { ok: false, message: '反馈闭环已在检索配置里关闭' }
+    // N27：同一轮反馈的重复提交在这里挡掉。放在副作用之前 —— 挡晚了（比如在 recordFeedback
+    // 之后）就等于「只去重审计、副作用照样跑两遍」。
+    //
+    // 键含 rating 与引用序号：用户改主意（up→down、或改标注集合）是**另一次**反馈，必须放行；
+    // 键里的 answer 片段用于「客户端没给 retrievalId 也没给 question」时区分不同轮次
+    // （否则两轮不同的问答会共用 `''` 这个键，被窗口误挡）。
+    const dedupeKey = [
+      options.retrievalId ?? '',
+      options.question ?? '',
+      String(options.answer ?? '').slice(0, 120),
+      options.rating,
+      (options.useful ?? []).join(','),
+      (options.useless ?? []).join(','),
+    ].join('\u0000')
+    const now = Date.now()
+    const until = this._askFeedbackSeen.get(dedupeKey)
+    if (until !== undefined && until > now) {
+      this.op('task', 'ask_feedback', 'ok', options.rating, '重复提交（同一轮，已忽略）')
+      return { ok: false, message: '该反馈已在处理（同一轮重复提交已忽略，未重复记录）' }
+    }
+    boundedSet(this._askFeedbackSeen, dedupeKey, now + ASK_FEEDBACK_DEDUPE_MS, ASK_FEEDBACK_CAP)
     const trace = options.retrievalId ? this._askTrace.get(options.retrievalId) : undefined
     const keyOf = (i: number): string | null => (trace && i >= 1 && i <= trace.citations.length) ? trace.citations[i - 1] : null
     const pick = (idx: number[] | undefined): RerankWeights[] => {
@@ -1654,24 +1819,84 @@ ${contextBlock}
 
   /**
    * Export ALL sessions as a single txt ZIP archive (账号归档).
-   * @param options - optional dir/filename.
+   * @param options - optional dir/filename（+ 可选的 jobId：订阅 `wechat-export/progress` 进度并允许取消）.
    * @returns ExportResult: written zip path + total messages.
    */
   @Remote('exportAllSessions')
-  async exportAllSessions(options?: { dir?: string; filename?: string }): Promise<ExportResult> {
+  async exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
+    const jobId = normalizeJobId(options?.jobId)
     try {
-      const r = await exportAllSessions(this._dirs.decrypted, options)
+      // M3：进度/取消三件套（jobId → 本地 onProgress + AbortController）在本层接上，
+      // 参数原样透传给 query 层（`& StreamControl`）—— 取消后写盘走 temp+rename，
+      // 所以「取消」不会留下半成品文件。
+      const r = await exportAllSessions(this._dirs.decrypted, {
+        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
+        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
+        ...this.streamControl(jobId),
+      })
+      this.finishStreamJob(jobId)
       this.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
       return r
     } catch (e) {
+      this.finishStreamJob(jobId, (e as Error).message)
       this.op('export', 'export_all_sessions', 'fail', '', (e as Error).message)
       throw e
     }
   }
 
   /**
+   * Cancel one running export/backup job (M3).
+   *
+   * 渲染层点「取消」时调用：这里只唤醒 AbortController，真正的收尾（不留半成品）由
+   * query 层在各耗时循环的检查点完成（`throwIfCancelled` + temp+rename）。
+   * @param options - jobId the renderer passed to the export call.
+   * @returns ok when a running job was aborted; error otherwise.
+   */
+  @Remote('cancelExportJob')
+  cancelExportJob(options: { jobId: string }): { ok: boolean; error?: string } {
+    const id = normalizeJobId(options?.jobId)
+    const job = id ? this._streamJobs.get(id) : undefined
+    if (!job) return { ok: false, error: '没有该导出任务（jobId 不存在，或进程已重启）' }
+    if (job.finished) return { ok: false, error: '该导出任务已结束' }
+    job.ctrl.abort()
+    this.op('export', 'cancel_export_job', 'ok', id)
+    return { ok: true }
+  }
+
+  /**
+   * Poll one export/backup job's latest progress (M3).
+   *
+   * 为什么除了事件推送还要有这个轮询入口：进度事件要经过「宿主事件 → 渲染层」的中继，
+   * 而中继只对白名单事件名生效（见 `ui-app/ui-entry.tsx`）。轮询不依赖中继，是
+   * 「进度确实推得出去」的那条兜底路径。
+   * @param options - jobId the renderer passed to the export call.
+   * @returns 最近一次进度；`found:false` 表示 jobId 未知（如进程重启过）。
+   */
+  @Remote('getExportProgress')
+  getExportProgress(options: { jobId: string }): {
+    found: boolean
+    phase: string
+    done: number
+    total: number
+    finished: boolean
+    error?: string
+  } {
+    const id = normalizeJobId(options?.jobId)
+    const job = id ? this._streamJobs.get(id) : undefined
+    if (!job) return { found: false, phase: '', done: 0, total: 0, finished: true }
+    return {
+      found: true,
+      phase: job.progress?.phase ?? '',
+      done: job.progress?.done ?? 0,
+      total: job.progress?.total ?? 0,
+      finished: job.finished,
+      ...(job.error ? { error: job.error } : {}),
+    }
+  }
+
+  /**
    * Export moments (朋友圈) with author + keyword + time filters.
-   * @param options - format/username/authorName/q/from/to/dir/filename.
+   * @param options - format/username/authorName/q/from/to/dir/filename (+ 可选的 jobId 订阅进度/取消).
    * @returns ExportResult: written file path + count.
    */
   @Remote('exportMoments')
@@ -1689,12 +1914,32 @@ ${contextBlock}
     to?: number
     dir?: string
     filename?: string
+    jobId?: string
   }): Promise<ExportResult> {
+    const jobId = normalizeJobId(options?.jobId)
     try {
-      const r = await exportMoments(this._dirs.decrypted, options)
+      // 与 exportAllSessions 同一套接线：进度事件 + 取消令牌都由 streamControl 提供。
+      const r = await exportMoments(this._dirs.decrypted, {
+        ...(options?.format !== undefined ? { format: options.format } : {}),
+        ...(options?.username !== undefined ? { username: options.username } : {}),
+        ...(options?.authorName !== undefined ? { authorName: options.authorName } : {}),
+        ...(options?.q !== undefined ? { q: options.q } : {}),
+        ...(options?.images !== undefined ? { images: options.images } : {}),
+        ...(options?.media !== undefined ? { media: options.media } : {}),
+        ...(options?.month !== undefined ? { month: options.month } : {}),
+        ...(options?.mine !== undefined ? { mine: options.mine } : {}),
+        ...(options?.zip !== undefined ? { zip: options.zip } : {}),
+        ...(options?.from !== undefined ? { from: options.from } : {}),
+        ...(options?.to !== undefined ? { to: options.to } : {}),
+        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
+        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
+        ...this.streamControl(jobId),
+      })
+      this.finishStreamJob(jobId)
       this.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
       return r
     } catch (e) {
+      this.finishStreamJob(jobId, (e as Error).message)
       this.op('export', 'export_moments', 'fail', options?.username ?? '', (e as Error).message)
       throw e
     }
@@ -1807,6 +2052,15 @@ ${contextBlock}
    * @param options - id of the task to run.
    * @returns SummaryTaskRunResult: ok + summary + message count, or error.
    */
+  /**
+   * 同一分钟到期的摘要任务并发上限（N15）。
+   *
+   * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
+   * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
+   * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
+   */
+  private static readonly DUE_SUMMARY_CONCURRENCY = 2
+
   /** Run any enabled daily-summary task whose schedule time matches the current minute. */
   private async maybeRunDueTasks(): Promise<void> {
     if (this._schedBusy) return
@@ -1815,13 +2069,47 @@ ${contextBlock}
       const now = new Date()
       const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
       const tasks = listTasks(this._dirs.decrypted).items
+      const due: number[] = []
       for (const t of tasks) {
         if (!t.enabled) continue
         const sched = (t.scheduleTime || '08:00').slice(0, 5)
-        if (sched === hhmm && now.getTime() - Number(t.lastRunAt) > 60_000) {
-          await this.runSummaryTask({ id: t.id })
+        // 「一分钟内没跑过」：`Number(t.lastRunAt)` 对从未跑过的任务是 NaN，`NaN > 60000` 恒 false
+        // ⇒ 新任务永远等不到第一次调度（last_run_at 只在跑过一次之后才被写）。缺值按 0 处理。
+        const lastRun = Number(t.lastRunAt ?? 0)
+        if (sched === hhmm && now.getTime() - lastRun > 60_000) due.push(t.id)
+      }
+      /**
+       * 有界并发 + 失败不连坐（N15，worker 池形态照搬 M10）。
+       *
+       * 改前是 `for (const t of tasks) await this.runSummaryTask(...)`：N 次**串行**的完整流式
+       * 往返，而且前一个任务失败会中断后面所有任务 —— 那正是「失败半写」在摘要任务上的形态：
+       * 同一分钟到期的一批只落地一部分，且没有任何地方会补跑剩下的。
+       * 现在 worker 原子认领下一个到期任务；单个任务抛错只记下原因，不影响其它任务跑完，
+       * 全部结束后再把首个错误抛给外层 catch（保留原来的 summary_scheduler_error 日志）。
+       *
+       * 并发本身不会引入写冲突：这批唯一的共享资源是 `daily_summary.db`，而 node:sqlite 是同步 API、
+       * `saveSummaryRecord` / `updateSummaryTaskRunState` 都是**单语句 autocommit** —— 从加锁到提交
+       * 不让出事件循环，两次调用在 JS 层不可能交错（实测 500 次交叉单语句写 0 次 SQLITE_BUSY；
+       * 只有把事务开着跨 await 才会撞锁，那是 N10 的病）。
+       */
+      let next = 0
+      let failure: unknown = null
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const i = next
+          next += 1
+          if (i >= due.length) return
+          try {
+            await this.runSummaryTask({ id: due[i] })
+          } catch (e) {
+            failure = failure ?? e
+          }
         }
       }
+      await Promise.all(
+        Array.from({ length: Math.min(WechatDataGateway.DUE_SUMMARY_CONCURRENCY, due.length) }, () => worker()),
+      )
+      if (failure) throw failure
     } catch (e) {
       this.op('error', 'summary_scheduler_error', 'fail', '', (e as Error).message)
     } finally { this._schedBusy = false }
@@ -2474,6 +2762,94 @@ ${contextBlock}
   }
 
   /**
+   * Decode a whole batch of message images to base64 data URLs (N16).
+   *
+   * 为什么需要批量入口：`getImageDataUrl` 是**一图一次 RPC**，而每张图内部的路径解析
+   * （`WHERE lower(md5) = ?`）在 `image_hardlink_info_v4` 上是全表扫 —— 实测 20 万行
+   * 17.27ms/次，30 张图各查一次 ≈518ms。这里先用一次 `IN (...)` 把整批 md5 的 .dat 路径
+   * 查出来并预热解码缓存，之后逐张走原有单张入口时命中缓存，不再各扫一次路径表。
+   *
+   * 诚实边界：① 单张的 md5 仍要各查一次消息分片（`resolveImageResourceHint`，`WHERE
+   * local_id = ?`，不是那个全表扫）；② 拿不到原始微信目录（`wechatBaseDir` 未知）时批量
+   * 路径查不出东西，行为与逐张调用完全一致。
+   * @param options - `items`: 一批 (username, localId)；超过 {@link IMAGE_BATCH_MAX} 的截断。
+   * @returns 与传入顺序一一对应的条目（`url` 或 `error`，语义同单张入口）。
+   */
+  @Remote('getImageDataUrlsBatch')
+  getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): { items: ImageBatchItem[] } {
+    const decrypted = this._dirs.decrypted
+    const decoded = this._dirs.decoded
+    const base = rawWechatBase(decrypted) || undefined
+    const cfg = getConfig(decrypted)
+    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
+    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX)
+    if (base) this.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
+    return {
+      items: items.map((it) => ({
+        username: it.username,
+        localId: it.localId,
+        ...decodeImageDataUrl(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey),
+      })),
+    }
+  }
+
+  /**
+   * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
+   *
+   * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
+   * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
+   * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
+   * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
+   *
+   * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
+   * 命中已有缓存的文件不重写。
+   * @param decryptedDir - 解密库目录（hardlink.db 所在）。
+   * @param decodedDir - 解码缓存根。
+   * @param baseDir - 微信原始目录（候选路径的根）。
+   * @param items - 待预热的 (username, localId) 列表。
+   * @param aesKey - V2 AES key。
+   * @param xorKey - XOR key 字节。
+   */
+  private warmDecodedImages(
+    decryptedDir: string,
+    decodedDir: string,
+    baseDir: string,
+    items: ReadonlyArray<{ username: string; localId: number }>,
+    aesKey: string | undefined,
+    xorKey: number,
+  ): void {
+    try {
+      const md5ByItem: string[] = []
+      for (const it of items) {
+        const hint = resolveImageResourceHint(decryptedDir, it.username, it.localId)
+        md5ByItem.push(hint.md5 ?? '')
+      }
+      const wanted = md5ByItem.filter(m => m.length === 32)
+      if (wanted.length === 0) return
+      // 唯一一次「按 md5 找 .dat」的查询（N16 的收益点：N 张图从 N 次全表扫降到 1 次 IN）。
+      const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted)
+      if (paths.size === 0) return
+      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : null
+      for (let i = 0; i < items.length; i += 1) {
+        const md5 = md5ByItem[i] ?? ''
+        const src = md5 ? paths.get(md5) : undefined
+        if (!src) continue
+        const it = items[i]!
+        const outDir = join(decodedDir, it.username)
+        const cached = CACHED_IMAGE_EXTS.some(ext => existsSync(join(decodedDir, md5 + '.' + ext)) || existsSync(join(outDir, md5 + '.' + ext)))
+        if (cached) continue
+        try {
+          const dec = decodeDatBytes(new Uint8Array(readFileSync(src)), aesBytes, xorKey)
+          if ('error' in dec || dec.format === 'hevc') continue
+          mkdirSync(outDir, { recursive: true })
+          writeFileSync(join(outDir, md5 + '.' + dec.format), Buffer.from(dec.bytes))
+        } catch { /* 单张解码失败：回退到单张入口的原路径 */ }
+      }
+    } catch { /* 预热是优化，失败不影响正确性 */ }
+  }
+
+  /**
    * Resolve one SNS (朋友圈) media md5 to an offline base64 data URL
    * from the WeChat cache/<month>/Sns/Img V2-encrypted blobs.
    * @param options - media md5 from the moments XML.
@@ -2520,7 +2896,7 @@ ${contextBlock}
     const local = decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
     if (local.url) return local
     if (!options.emojiUrl) return local
-    const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase())
+    const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase(), this.cdnSwitches())
     // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
     return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
   }
@@ -2532,7 +2908,7 @@ ${contextBlock}
    */
   @Remote('getArticleCover')
   async getArticleCover(options: { contentUrl: string }): Promise<ImageDataUrlResult> {
-    return resolveArticleCoverDataUrl(options.contentUrl, this._dirs.decoded)
+    return resolveArticleCoverDataUrl(options.contentUrl, this._dirs.decoded, this.cdnSwitches())
   }
 
   /**
@@ -2576,13 +2952,19 @@ ${contextBlock}
   }
 
   @Remote('createEncryptedBackup')
-  async createEncryptedBackup(options: { password: string }): Promise<BackupMutationResult> {
+  async createEncryptedBackup(options: { password: string; jobId?: string }): Promise<BackupMutationResult> {
+    const jobId = normalizeJobId(options?.jobId)
     try {
-      const entry = await createEncryptedBackup(this._dirs.decrypted, options.password)
+      // M3：加密备份同样支持进度/取消（同一套 jobId → 本地 onProgress + AbortController）。
+      const entry = await createEncryptedBackup(this._dirs.decrypted, options.password, this.streamControl(jobId))
+      this.finishStreamJob(jobId)
       this.op('backup', 'create_encrypted_backup', 'ok', entry.name)
       return { ok: true, name: entry.name }
     } catch (e) {
+      this.finishStreamJob(jobId, (e as Error).message)
       this.op('backup', 'create_encrypted_backup', 'fail', '', (e as Error).message)
+      // 注意：这里**不能**把失败吞掉 —— `createBackup` 现在对「部分子目录复制失败」直接抛错
+      // （不再是「静默报成功」），所以本 catch 是那条错误的唯一出口，转成可读的 { ok:false }。
       return { ok: false, error: (e as Error).message }
     }
   }
@@ -2762,7 +3144,7 @@ ${contextBlock}
     if (!remote || !/^https?:\/\//i.test(remote)) return local
     const blocked = this.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
     if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key })
+    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
     if (fetched.url) return fetched
     this.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
     return { error: fetched.error }
@@ -2788,7 +3170,7 @@ ${contextBlock}
     if (!remote || !/^https?:\/\//i.test(remote)) return local
     const blocked = this.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
     if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key })
+    const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
     if (fetched.url) {
       this.op('task', 'sns_video_fetch', 'ok', '', `从 CDN 取回并解密朋友圈视频（${options.md5?.slice(0, 8) ?? '?'}…）`)
       return fetched
@@ -2821,6 +3203,7 @@ ${contextBlock}
       url: options.url,
       seed: options.key,
       version: weixinVersion(),
+      ...this.cdnSwitches(),
     })
     if (loaded.error || !loaded.bytes) {
       this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')

@@ -1,5 +1,19 @@
 # 项目冗余清理记录
 
+> ## ⚠️ 本文已过期（2026-09-15 核对，见 `docs/RELEASE-PLAN.md` 的 L16）
+>
+> 这是 2026-09-12 那次清理的**历史记录**，不要把它当现状。核对出的具体出入：
+>
+> | 本文的说法 | 现状 |
+> |---|---|
+> | 「保留的运行时结构」含 `renderer.js` / `styles.css`（演示页回退） | 这两个文件**已不存在**，演示页只剩 `src/index.html`（主进程 `uiEntryHtml()` 的兜底仍指它） |
+> | 第 8 节：「移除 package.json 死脚本 83 条」 | 计数口径已变：本轮 `scripts/` 下有 26 个文件，`check:*` / `*:smoke` / `license-*` 等**又新增了一批**（且都进了 CI），不是「只保留 start/dev/build:ui/check:shim/pack/dist」那五个 |
+> | 打包布局（隐含 asar 含全部 `src/**`） | M19 之后 `src/backend/deps/**`、`src/**/*.ts`、`src/client/ui-app/**` 已被排除（asar 45.93MB → 23.4MB）；H15/N19 又把 `native/**`、`resources/**` 加进 `asarUnpack` |
+> | 未提及 | `.gitignore` 后来补了 `.tmp-*`、`*.orig`、`*.tsbuildinfo`、`*.partial-*`、`wechat/*.json`（H1/H2/M1/M2/M3） |
+>
+> 需要「当前保留什么、删了什么」的权威口径，请看：`package.json` 的 `build.files`/`asarUnpack`、
+> `docs/RELEASE-PLAN.md`（逐条状态与证据）、`src/backend/README.md`（后端目录职责）。
+
 日期：2026-09-12
 
 ## 保留的运行时结构（未改动）

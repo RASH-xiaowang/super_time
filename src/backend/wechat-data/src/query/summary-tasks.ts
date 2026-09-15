@@ -4,6 +4,7 @@
  * The LLM generation itself lives in the gateway (needs ctx.llm).
  */
 import { DatabaseSync } from 'node:sqlite'
+import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** Daily-summary DB path: sibling of the decrypted dir. */
@@ -11,9 +12,29 @@ function dbPath(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'daily_summary.db')
 }
 
-/** Open (create) the summary store with schema. */
+/** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
+function errorText(e: unknown): string {
+  const msg = (e as { message?: unknown } | null | undefined)?.message
+  return typeof msg === 'string' && msg !== '' ? msg : String(e)
+}
+
+/**
+ * Open (create) the summary store with schema.
+ *
+ * 显式建父目录（N1）：与待办库同族 —— 库建在解密数据根的**父目录**，那个目录只有在
+ * 解密过至少一个库之后才存在，否则 SQLite 报 `unable to open database file`。
+ * 建目录失败刻意吞掉（留日志），失败语义交给下面的 `DatabaseSync`，与改动前一致。
+ * @param decryptedDir - decrypted data root.
+ * @returns an opened store with schema ensured.
+ */
 function openStore(decryptedDir: string): DatabaseSync {
-  const db = new DatabaseSync(dbPath(decryptedDir))
+  const file = dbPath(decryptedDir)
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+  } catch (e) {
+    console.warn('[summary-tasks] 数据根目录创建失败，继续尝试打开库：' + errorText(e))
+  }
+  const db = new DatabaseSync(file)
   db.exec("CREATE TABLE IF NOT EXISTS summary_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', custom_prompt TEXT NOT NULL DEFAULT '', schedule_time TEXT NOT NULL DEFAULT '08:00', enabled INTEGER NOT NULL DEFAULT 1, last_run_at INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
   db.exec("CREATE TABLE IF NOT EXISTS summary_records (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', summary_date TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', summary TEXT NOT NULL DEFAULT '', char_count INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'done', error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)")
   return db
@@ -81,19 +102,32 @@ function rowToTask(r: Record<string, unknown>): SummaryTask {
 }
 
 /**
+ * Read result: 既有调用方按 items/total 用不受影响，额外带一个**只在读失败时出现**的
+ * `readError`（「库读不到」与「确实没有任务」必须可区分，见 N1）。
+ */
+export interface SummaryTaskSnapshotRead {
+  items: SummaryTask[]
+  total: number
+  /** 读不到库时非空（此时 items 恒为 []）；确无任务时为 undefined。 */
+  readError?: string
+}
+
+/**
  * List summary tasks.
  * @param decryptedDir - decrypted data root.
  * @returns summary task items plus total count.
  */
-export function listSummaryTasks(decryptedDir: string): { items: SummaryTask[]; total: number } {
+export function listSummaryTasks(decryptedDir: string): SummaryTaskSnapshotRead {
   try {
     const db = openStore(decryptedDir)
     const rows = db.prepare('SELECT * FROM summary_tasks ORDER BY id DESC').all() as Array<Record<string, unknown>>
     db.close()
     const items = rows.map(rowToTask)
     return { items, total: items.length }
-  } catch {
-    return { items: [], total: 0 }
+  } catch (e) {
+    const readError = errorText(e)
+    console.warn('[summary-tasks] 摘要任务读取失败（与「确无任务」不同）：' + dbPath(decryptedDir) + ': ' + readError)
+    return { items: [], total: 0, readError }
   }
 }
 
@@ -216,7 +250,7 @@ export function deleteSummaryRecord(decryptedDir: string, id: number): { ok: boo
  * @param taskId - optional task id to filter by.
  * @returns summary record items plus total count.
  */
-export function listSummaryRecords(decryptedDir: string, taskId?: number): { items: SummaryRecord[]; total: number } {
+export function listSummaryRecords(decryptedDir: string, taskId?: number): { items: SummaryRecord[]; total: number; readError?: string } {
   try {
     const db = openStore(decryptedDir)
     let rows: Array<Record<string, unknown>>
@@ -238,7 +272,9 @@ export function listSummaryRecords(decryptedDir: string, taskId?: number): { ite
       createdAt: Number(r['created_at'] ?? 0),
     }))
     return { items, total: items.length }
-  } catch {
-    return { items: [], total: 0 }
+  } catch (e) {
+    const readError = errorText(e)
+    console.warn('[summary-tasks] 摘要记录读取失败（与「确无记录」不同）：' + dbPath(decryptedDir) + ': ' + readError)
+    return { items: [], total: 0, readError }
   }
 }

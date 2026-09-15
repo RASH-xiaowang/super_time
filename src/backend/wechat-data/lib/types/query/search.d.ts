@@ -83,6 +83,29 @@ export interface BuildResult {
  */
 export declare function buildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult>;
 /**
+ * 索引库写闸（同步、不排队）。
+ *
+ * 索引库有**两个写者**：`buildSearchIndex` 与 `query/members.ts` 的 `contact_fts` 构建。
+ * 构建在飞时写事务跨 macrotask 持有写锁，第二个写者只会拿到 `database is locked`；
+ * 而 `searchMembers` 是**同步**契约（`@Remote`，改 async 会动客户端契约与 `/api.ts`），
+ * 没法 await 排队等闸。
+ *
+ * 所以这里的语义不是「等锁」，而是「拿不到就**明确**告诉调用方」，由调用方显式降级 ——
+ * 而不是先去撞写锁、被拒后再把错误吞掉（实测 40k 行构建在飞时，155/155 次成员搜索走的
+ * 就是那条「尝试写→被拒→静默退化为 LIKE」的路）。
+ *
+ * 键与构建闸一致（`searchIndexPath()`）：被争用的是同一个 DB 文件。
+ * @param decryptedDir - 已解密数据根。
+ * @param fn - 临界区。必须是同步的：闸不排队，临界区里出现 await 就等于没上锁。
+ * @returns 拿到闸时 `{ok:true, value: fn()}`；有构建在飞时 `{ok:false}`。
+ */
+export declare function withIndexWrite<T>(decryptedDir: string, fn: () => T): {
+    ok: true;
+    value: T;
+} | {
+    ok: false;
+};
+/**
  * 让出事件循环。
  *
  * node:sqlite 全是同步 API，所以「跑很久」= 「把承载全部查询的 worker 钉住」。

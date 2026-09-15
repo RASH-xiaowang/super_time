@@ -27,7 +27,16 @@ function openStore(decryptedDir: string): DatabaseSync {
   // 那时数据根目录还不存在，SQLite 会直接报 unable to open database file。
   // `wechat_tasks.db` 等既有 store 同样建在数据根下，但它们只被「已解密」后的
   // 链路调用，靠 try/catch 退化成空列表就掩盖了这个前提，这里必须显式建目录。
-  mkdirSync(dirname(file), { recursive: true })
+  //
+  // N1：建目录失败**不许成为报告的病因**（吞掉并留痕）。改前这里是裸的 mkdirSync，
+  // 于是「数据根的父路径是个文件」这种情形下，`listNotes` 的 catch 收到的是 EEXIST，
+  // 用户按「目录已存在」去排查 —— 而真正的问题是库打不开。失败语义交给下面的
+  // DatabaseSync（与改动前一样会失败），只是错误文本回到了它本该是的那一句。
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+  } catch (e) {
+    console.warn('[notes] 数据根目录创建失败，继续尝试打开库：' + errorText(e))
+  }
   const db = new DatabaseSync(file)
   db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT \'\', tags TEXT NOT NULL DEFAULT \'\', source_kind TEXT NOT NULL DEFAULT \'manual\', source_username TEXT NOT NULL DEFAULT \'\', source_question TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)')
   return db
@@ -38,6 +47,12 @@ function cellStr(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
   return ''
+}
+
+/** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
+function errorText(e: unknown): string {
+  const msg = (e as { message?: unknown } | null | undefined)?.message
+  return typeof msg === 'string' && msg !== '' ? msg : String(e)
 }
 
 /**
@@ -154,12 +169,21 @@ function findIdByTitleKey(db: DatabaseSync, key: string): number | undefined {
 }
 
 /**
+ * Read result: 既有调用方按 items/total 用不受影响，额外带一个**只在读失败时出现**的
+ * `readError` —— 「笔记库读不到」与「确实一条笔记都没有」必须可区分（N1）。
+ */
+export interface NotesSnapshotRead extends NotesSnapshot {
+  /** 读不到库时非空（此时 items 恒为 []）；确无笔记时为 undefined。 */
+  readError?: string
+}
+
+/**
  * List notes, most recently updated first.
  * @param decryptedDir - decrypted data root (locates the note store).
  * @param options - `query` filters title/body/tags; `limit` caps rows.
  * @returns the note list plus the unpaged total.
  */
-export function listNotes(decryptedDir: string, options?: { query?: string; limit?: number }): NotesSnapshot {
+export function listNotes(decryptedDir: string, options?: { query?: string; limit?: number }): NotesSnapshotRead {
   try {
     const db = openStore(decryptedDir)
     const limit = Math.min(Math.max(Math.trunc(options?.limit ?? 500), 1), 2000)
@@ -175,9 +199,12 @@ export function listNotes(decryptedDir: string, options?: { query?: string; limi
     const totalRow = db.prepare('SELECT COUNT(*) AS n FROM notes').get() as { n?: number } | undefined
     db.close()
     return { items, total: Number(totalRow?.n ?? items.length) }
-  } catch {
-    // 库不可读时返回空列表而不是抛错：面板应显示空态，不该整块崩掉。
-    return { items: [], total: 0 }
+  } catch (e) {
+    // 库不可读时仍返回空列表而不是抛错（面板不该整块崩掉），但要留痕 + 带上 readError：
+    // 改前这里的空列表与「确实没有笔记」在界面上完全一样。
+    const readError = errorText(e)
+    console.warn('[notes] 笔记库读取失败（与「确无笔记」不同）：' + dbPath(decryptedDir) + ': ' + readError)
+    return { items: [], total: 0, readError }
   }
 }
 
@@ -254,14 +281,20 @@ export function deleteNote(decryptedDir: string, id: number): NoteMutationResult
   }
 }
 
+/** KnowledgeSnapshot + 只在读失败时出现的 `readError`（同 `NotesSnapshotRead`）。 */
+export interface KnowledgeSnapshotRead extends KnowledgeSnapshot {
+  /** 读不到库时非空（此时整张图都是空的）；确无笔记时为 undefined。 */
+  readError?: string
+}
+
 /**
  * Build the knowledge graph snapshot: note nodes, `[[…]]` edges and stubs.
  * @param decryptedDir - decrypted data root (locates the note store).
  * @param names - chat username → display name, for source-chat labels.
- * @returns notes + stubs + edges + summary; empty graph when the store is unreadable.
+ * @returns notes + stubs + edges + summary; an empty graph plus `readError` when the store is unreadable.
  */
-export function buildKnowledgeGraph(decryptedDir: string, names: Map<string, string>): KnowledgeSnapshot {
-  const empty: KnowledgeSnapshot = {
+export function buildKnowledgeGraph(decryptedDir: string, names: Map<string, string>): KnowledgeSnapshotRead {
+  const empty: KnowledgeSnapshotRead = {
     notes: [],
     stubs: [],
     edges: [],
@@ -273,8 +306,11 @@ export function buildKnowledgeGraph(decryptedDir: string, names: Map<string, str
     const db = openStore(decryptedDir)
     rows = db.prepare('SELECT * FROM notes ORDER BY updated_at DESC, id DESC').all() as Array<Record<string, unknown>>
     db.close()
-  } catch {
-    return empty
+  } catch (e) {
+    // 「知识库为空」与「笔记库读不到」必须可区分：后者整张图都是空的，用户会以为是数据丢了。
+    const readError = errorText(e)
+    console.warn('[notes] 知识图谱读取失败（与「确无笔记」不同）：' + dbPath(decryptedDir) + ': ' + readError)
+    return { ...empty, readError }
   }
   const all = rows.map(rowToNote)
   const idByKey = new Map<string, number>()

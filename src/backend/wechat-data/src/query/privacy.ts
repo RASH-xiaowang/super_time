@@ -57,6 +57,7 @@ function loadSessionUsernames(decryptedDir: string): string[] {
     const cols = new Set((db.prepare('PRAGMA table_info(SessionTable)').all() as Array<{ name: string }>).map(r => r.name))
     const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
     if (!userCol) { db.close(); return out }
+    // 会话量级（N8 评估）：随会话数增长，不随消息数
     const rows = db.prepare(`SELECT ${userCol} AS u FROM SessionTable`).all() as Array<{ u?: unknown }>
     for (const r of rows) {
       const u = cellStr(r.u ?? '')
@@ -76,6 +77,7 @@ function loadDisplayNames(decryptedDir: string): Map<string, string> {
     if (!cols.has('username')) { db.close(); return map }
     const remark = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : 'NULL'
     const nick = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'nickName'
+    // 联系人量级（N8 评估）：随联系人数增长（本机 2143 行），不随消息数
     const rows = db.prepare(`SELECT username, COALESCE(NULLIF(${remark}, ''), ${nick}) AS n FROM contact`).all() as Array<Record<string, unknown>>
     for (const r of rows) {
       const u = cellStr(r['username'] ?? '')
@@ -149,8 +151,11 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
             const cols = new Set((db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map(r => r.name))
             if (!cols.has('local_id') || !cols.has('create_time') || !cols.has('message_content')) continue
             const typeCol = cols.has('local_type') ? 'local_type' : 'type'
-            const rows = db.prepare(`SELECT local_id, create_time, message_content FROM ${tableName} WHERE ${typeCol}=1`).all() as Array<{ local_id?: number; create_time?: number; message_content?: unknown }>
-            for (const r of rows) {
+            // 游标读（N8）：这里有 `rowBudget` 上限，但改前 `.all()` 是**先把整张表物化**
+            // 再在循环里 break —— 预算只限制了「处理多少」，没限制「读多少」。
+            // 换成游标后，预算才真正成为读取上界。
+            const sql = `SELECT local_id, create_time, message_content FROM ${tableName} WHERE ${typeCol}=1`
+            for (const r of db.prepare(sql).iterate() as Iterable<{ local_id?: number; create_time?: number; message_content?: unknown }>) {
               scanned += 1
               if (scanned >= rowBudget) break
               const text = decodeCell(r.message_content)

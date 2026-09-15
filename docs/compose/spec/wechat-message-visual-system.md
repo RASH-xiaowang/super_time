@@ -23,12 +23,18 @@ branch: main
 **Verification** — 构建期四道 + **运行时视觉验证一道**，全部可复现：
 
 1. `npm run build:ui` PASS（804 modules，exit 0）。
-2. **类型检查**：仓库没有 wired-up 的 `tsconfig.json`（`check:*` 脚本在清理时已被移除），故用
-   `npx -y -p typescript@5.9.2 tsc` 配一份只 include 客户端源码的临时配置跑了一遍，并做了
+2. **类型检查**：**当时**仓库没有 wired-up 的 `tsconfig.json`（`check:*` 脚本也还没在 `package.json` 里），
+   所以当年是用 `npx -y -p typescript@5.9.2 tsc` 配一份只 include 客户端源码的临时配置跑的，并做了
    **改动前后基线对比**：改动前 67 条错误 / 去重后 46 条，改动后同样 67 条 / 46 条 ——
-   **新引入 0 条、修掉 0 条**。这 46 条全是既有问题：`node_modules` 里的
+   **新引入 0 条、修掉 0 条**。那 46 条全是既有问题：`node_modules` 里的
    `@deepseek-ai/dsh-wechat-data` 是旧副本，缺 `MessageRenderKind` / `renderType` / `sysKind` /
    `atUsers` / `cursorLocalId` 等成员，而真源 `src/backend/wechat-data/src/types.ts` 里有。
+   ⚠️ **这两件事今天都已改变**（2026-09-15 核对）：仓库现在有 `npm run typecheck`
+   （= `typecheck:server` + `typecheck:client`，H11 接入 CI，前后端均 0 错误），
+   `check:shim` / `check:wx-tokens` 等 `check:*` 脚本也都在 `package.json` 里。
+   前端类型已改为**从仓库的 `lib/types` 取**（H12 的 tsconfig `paths`），所以当年那 46 条
+   「旧副本缺成员」的错误已不复存在 —— 本文档第 2 条的结论只对当年那次基线成立，
+   **今天的口径应以 `npm run typecheck` 为准**（当前 exit 0）。
 3. **`npm run check:wx-tokens`**（本轮新增的脚本）：对构建产物断言 47 项新令牌 / 几何 / 色值确实
    穿过了 Vite 的 CSS Modules 管线（选择器被哈希、声明被压缩），且 9 项旧实现（自造渐变、
    `--wx-radius-tip`、border 三角尖角、14.5px 正文…）已从产物中清除。PASS。

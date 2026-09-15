@@ -3,7 +3,7 @@
  * + 卡片化表格（粘性表头/斑马 hover/状态徽章）+ 分页加载 + CSV 导出 + 跳转定位。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
+import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
 import { Badge, Card, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import css from './records.module.css'
@@ -92,13 +92,13 @@ export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, l
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(0)
   const [exporting, setExporting] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
+  const { notice, flash } = useTransientNotice(4000)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const PAGE = 50
   const notify = (text: string): void => {
-    setNotice(text)
-    setTimeout(() => { setNotice(null) }, 4000)
+    flash(text)
   }
 
   const load = useCallback(async (reset: boolean): Promise<void> => {

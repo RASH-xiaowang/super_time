@@ -12,7 +12,14 @@ commits: 622cbca..586c1a6
 
 **What was built** — 对照 `D:\WeChatDataAnalysis-main` 的 MessageContent/chat.css，完善【聊天】消息呈现：文本气泡左右尖角与 max-width；语音改为微信三层波纹 SVG + 时长线性加宽 + 尖角；图片 min 96×96 热区与 hover 反馈；文件卡改为「主体 + 底部『微信电脑版』条」；视频播放钮加大为 48px 半透明圆。后端 `classifyRender` 分类契约未改。
 
-**Verification** — `npm run build:ui` PASS（804 modules，exit 0）；重启 Electron 后 6 进程存活。未跑 CDP 真实 DOM 扫描（相关 scripts 已在清理中删除）。
+**Verification** — `npm run build:ui` PASS（804 modules，exit 0）；重启 Electron 后 6 进程存活。
+**未跑** CDP 真实 DOM 扫描：当时用的那几个临时脚本在清理时被删（`working/` 已清理），
+所以本页的视觉结论**没有可复跑的 DOM 证据**。可用的替代工具（今天）：
+
+- `tools/visual-audit/audit3.mjs` / `audit4.mjs` —— 起真实 Electron + CDP 采集计算样式/交互态/窄窗溢出（L17 收回仓库，前置见该目录 README）；
+- `scripts/ui-acceptance.mjs` —— Playwright 驱动真实应用跑功能断言（需真实数据 + 许可证）。
+
+若将来要用它们回补本页证据，请注意那是**新增验证**，不要把结论写成「当时已验」。
 
 **Journey log**
 1. 参考项目为 Vue + 自有 API，不可直接移植组件；只对齐视觉契约。
@@ -60,7 +67,7 @@ commits: 622cbca..586c1a6
 - 不改后端 `parse.ts` / `messages.ts` / `lib/index.js` bundle。
 - 不移植参考项目的 Vue 组件、Python 解密链路、实时同步。
 - 不做语音播放音频链路（本项目以转写为主）。
-- 不新增截图/CDP 自动化脚本（`working/` 已清理）。
+- 不新增截图/CDP 自动化脚本（`working/` 已清理）。需要时复用既有工具：`tools/visual-audit/audit3.mjs`、`tools/visual-audit/audit4.mjs`（CDP 视觉审计）与 `scripts/ui-acceptance.mjs`（Playwright 功能验收）。
 
 ## Tasks
 

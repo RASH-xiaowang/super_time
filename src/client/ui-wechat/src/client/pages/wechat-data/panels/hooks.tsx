@@ -5,6 +5,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
+import { computeHasMore } from './paged-list.ts'
+import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
 
 export function useProgressiveList(
   len: number,
@@ -137,6 +139,49 @@ export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wecha
 }
 
 /**
+ * 提示语「显示 N 秒后自动消失」的公共实现（L20）。
+ *
+ * 为什么要有它：这段模式在各面板里被手写抄了十余处，每份都是
+ *   `setNotice('…'); window.setTimeout(() => { setNotice(null) }, 3000)`
+ * 手写版有两个真实缺陷（`timers.spec.ts` 用假时钟把两条都覆盖了）：
+ *   ① 定时器句柄丢了 —— 组件卸载后回调仍会写 state；更常见的是**连出两条提示时，
+ *      第一条的定时器把第二条提前清掉**（第二条只停留了「剩余时间」）；
+ *   ② 时长散成十余份魔数（同仓实测 2500 / 3000 / 4000 / 6000 共存），改口径要改十处。
+ * 计时语义在 `timers.ts` 的 `createNoticeController`（不 import react，可被单测），
+ * 这里只是把它接到 `useState` / 卸载清理上的薄壳。
+ *
+ * **迁移状态（L20 已完成）**：`Contacts / Emoticons / Favorites / Health / Ledger /
+ *   Moments / Overview / PeriodSummary / Records / Tasks` 共 10 个面板、13 处已迁到本 hook
+ *   （时长按各处原值：3000 / 4000 / 6000，Overview 的图片导出仍是 `flash(x, 2500)`）；
+ *   接线由 `transient-notice.wiring.spec.ts` 逐文件钉住（源码级，因为仓库没有组件测试环境）。
+ *   仍在原位、**形态不同、未迁移**的两处（都不是「一句提示 N 秒后消失」）：
+ *   `DailySummary.tsx` 是 toast 队列（多条并存、各自计时）；`Settings.tsx` 的 `notify` 是带
+ *   `kind`/`details`/关闭按钮的富提示（按有无 details 分 5000 / 12000 两档），且该文件不在
+ *   本次写集内。
+ * 迁移方式：`const [notice, setNotice] = useState<string | null>(null)` →
+ * `const { notice, flash, hold, clear } = useTransientNotice(<默认时长>)`，删掉那行 setTimeout，
+ * `setNotice(x)` 换成 `flash(x)`（本处时长不一致时显式 `flash(x, ms)`）；
+ * **改前不带定时器的常驻提示（失败/错误类）用 `hold(x)`**，`setNotice(null)` 用 `clear()`。
+ * @param durationMs - 默认存活时长；只在挂载时取一次，逐次微调请用 `flash(value, ms)`。
+ * @returns `notice` 当前提示；`flash` 写入并自动消失；`hold` 写入且常驻；`clear` 立即清空。
+ */
+export function useTransientNotice<T = string>(durationMs: number = DEFAULT_NOTICE_MS): {
+  notice: T | null
+  flash: (value: T, ms?: number) => void
+  hold: (value: T) => void
+  clear: () => void
+} {
+  const [notice, setNotice] = useState<T | null>(null)
+  const ref = useRef<NoticeController<T> | null>(null)
+  // 惰性建一次：控制器持有定时器句柄，重建会丢掉待执行的那次（也就丢了自动消失）。
+  const controller = ref.current ?? (ref.current = createNoticeController<T>({ apply: setNotice, durationMs }))
+  useEffect(() => () => { ref.current?.dispose() }, [])
+  // flash/hold/clear 直接用控制器上的方法：它们不依赖 this，引用恒定 —— 传进子组件或
+  // 放进依赖数组都不会引起重复渲染。
+  return { notice, flash: controller.flash, hold: controller.hold, clear: controller.clear }
+}
+
+/**
  * 懒挂载容器：子元素进入可视区附近时才渲染。用于地图、重型图表或统计区块，
  * 避免打开页签时把不可见的重资源一次性加载/渲染。
  */
@@ -265,7 +310,10 @@ export function usePagedList<T>(options: {
     loading,
     loadingMore,
     error,
-    hasMore: items.length < total && lastCount === pageSize,
+    // 判定逻辑抽到 paged-list.ts：纯逻辑才能测（本仓库没有 hook/DOM 测试环境），
+    // 而且旧判据（`items.length < total && lastCount === pageSize`）会在 total 不可信
+    // 或整页末页时静默截断数据 —— 详见该模块头部注释（L7）。
+    hasMore: computeHasMore({ loaded: items.length, total, lastPageCount: lastCount, pageSize }),
     loadMore,
     reset,
   }

@@ -12,7 +12,7 @@ import {
   apiGetStorageStats,
   apiGetAvatar,
 } from '../api.ts'
-import { LazyMount, useWechatDataUpdated } from './hooks.tsx'
+import { LazyMount, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 
 // 地图面板与 GeoJSON/ECharts 较重：进入可视区附近时才按需加载对应代码块。
 const WorldMapPanel = lazy(() => import('./WorldMap.tsx').then(m => ({ default: m.WorldMapPanel })))
@@ -585,7 +585,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  // 提示语自动消失（L20）：原手写的 `setTimeout(…, 6000 / 2500)` 已由 hook 统一管理。
+  // 失败类提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
+  const { notice, flash, hold } = useTransientNotice(6000)
   const [lastUpdated, setLastUpdated] = useState<number | null>(() => readCache(CACHE_TIME) as number | null)
   const [done, setDone] = useState(false)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -616,7 +618,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       }
     } catch (e) {
       if (data === null) setError((e as Error).message)
-      else setNotice('后台刷新失败，当前显示缓存数据：' + (e as Error).message)
+      else hold('后台刷新失败，当前显示缓存数据：' + (e as Error).message)
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -650,10 +652,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
     setExporting(true)
     try {
       const r = await apiExportAllSessions()
-      setNotice('已归档 ' + String(r.count) + ' 条消息 → ' + r.path)
-      setTimeout(() => { setNotice(null) }, 6000)
+      flash('已归档 ' + String(r.count) + ' 条消息 → ' + r.path)
     } catch (e) {
-      setNotice('归档失败: ' + (e as Error).message)
+      hold('归档失败: ' + (e as Error).message)
     } finally {
       setExporting(false)
     }
@@ -682,13 +683,12 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         try {
           await exportElementImage(root, format, `微信数据总览-${stamp}.${format}`)
         } catch (e) {
-          setNotice('图片导出失败: ' + (e as Error).message)
+          hold('图片导出失败: ' + (e as Error).message)
           return
         }
       }
     }
-    setNotice('已导出报告')
-    setTimeout(() => { setNotice(null) }, 2500)
+    flash('已导出报告', 2500)
   }
 
   const ls = ledger?.summary

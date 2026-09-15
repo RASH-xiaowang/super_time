@@ -9,95 +9,6 @@
  */
 
 
-/**
- * In-memory snapshot cache with a short TTL. The WeChat panels unmount when
- * the user switches tabs; a shared cache makes returning to a tab show the
- * last snapshot instantly, then refresh in the background (stale-while-revalidate).
- * Invalidated wholesale when the host reports new decrypted data
- * (see the 'dsh-wechat-data-updated' DOM event).
- */
-const SNAPSHOT_TTL_MS = 30_000
-const _snapshotCache = new Map<string, { value: unknown; ts: number }>()
-const _snapshotListeners = new Map<string, Set<() => void>>()
-
-/** Read a fresh-enough cached snapshot, or undefined when absent/stale. */
-function snapshotHit(key: string): unknown {
-  const hit = _snapshotCache.get(key)
-  if (hit === undefined) return undefined
-  if (Date.now() - hit.ts < SNAPSHOT_TTL_MS) return hit.value
-  // 过期即释放：否则整份快照会被这个模块级 Map 一直持有到渲染进程结束。
-  _snapshotCache.delete(key)
-  return undefined
-}
-
-/**
- * 快照缓存条目上限。面板卸载后快照仍留在模块级 Map 中，而键包含
- * talker / limit / 筛选条件等易变参数，因此必须设上限，
- * 否则长时间浏览（每敲一次搜索、每翻一页）都会留下一条永不回收的条目。
- */
-const SNAPSHOT_CACHE_MAX = 60
-
-/** 写入快照缓存；超出上限时按插入顺序淘汰最旧的键。 */
-function snapshotSet(key: string, value: unknown): void {
-  _snapshotCache.delete(key)
-  while (_snapshotCache.size >= SNAPSHOT_CACHE_MAX) {
-    const oldest = _snapshotCache.keys().next()
-    if (oldest.done) break
-    _snapshotCache.delete(oldest.value)
-  }
-  _snapshotCache.set(key, { value, ts: Date.now() })
-}
-
-/** Fetch-through cache: returns the cached value immediately when fresh, else fetches and caches. */
-function cachedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-  const hit = snapshotHit(key)
-  if (hit !== undefined) return Promise.resolve(hit as T)
-  return fetcher().then((value) => {
-    snapshotSet(key, value)
-    for (const fn of _snapshotListeners.get(key) ?? []) { try { fn() } catch { /* ignore */ } }
-    return value
-  })
-}
-
-/** Subscribe to cache writes for one key (drives re-render after a background refresh). */
-export function subscribeSnapshot(key: string, fn: () => void): () => void {
-  const set = _snapshotListeners.get(key) ?? new Set<() => void>()
-  set.add(fn)
-  _snapshotListeners.set(key, set)
-  return () => { set.delete(fn) }
-}
-
-/** Invalidate the whole snapshot cache (realtime update / manual refresh). */
-export function invalidateSnapshotCache(): void {
-  _snapshotCache.clear()
-  for (const set of _snapshotListeners.values()) for (const fn of set) { try { fn() } catch { /* ignore */ } }
-}
-
-if (typeof window !== 'undefined') {
-  // The ui-wechat plugin relays the host realtime sync signal as this DOM event;
-  // new decrypted data means every cached snapshot is stale, so drop them all.
-  window.addEventListener('dsh-wechat-data-updated', () => { invalidateSnapshotCache() })
-}
-
-const RENDER_CACHE_PREFIX = 'wxdata-render-cache:'
-
-/** Read the last successfully rendered snapshot for a panel (sync, instant paint). */
-export function readRenderCache<T>(key: string, ..._rest: T[]): T | null {
-  if (typeof localStorage === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(RENDER_CACHE_PREFIX + key)
-    return raw ? JSON.parse(raw) as T : null
-  } catch { /* 无缓存或损坏:走正常加载 */ }
-  return null
-}
-
-/** Save a snapshot after a successful render (quota-safe: drops silently when full). */
-export function writeRenderCache(key: string, data: unknown): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    localStorage.setItem(RENDER_CACHE_PREFIX + key, JSON.stringify(data))
-  } catch { /* 容量超限:放弃缓存,不影响主流程 */ }
-}
 
 import type {
   AccountsSnapshot,
@@ -189,6 +100,28 @@ import type {
   WhisperDownloadResult,
   WhisperStatus,
 } from '@deepseek-ai/dsh-wechat-data/types'
+
+// M21：缓存层已拆到 ./cache.ts 与 ./media-cache.ts（纯搬移）。这里继续转发，
+// 使 40 多个面板的 `from './api.ts'` 一行都不用改。
+// 注意：`export … from` **不会**把名字带进本模块作用域，而下面这些函数在 api.ts 内部
+// 也会被调用（各种失效/写缓存路径），所以既要 import（供内部用）又要 export from（供外部用）。
+import {
+  cachedFetch,
+  cachedGet,
+  invalidateSnapshotCache,
+  invalidateWechatCache,
+  readRenderCache,
+  subscribeSnapshot,
+  writeRenderCache,
+} from './cache.ts'
+export {
+  invalidateSnapshotCache,
+  invalidateWechatCache,
+  readRenderCache,
+  subscribeSnapshot,
+  writeRenderCache,
+} from './cache.ts'
+export { snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from './media-cache.ts'
 // 知识笔记/知识图谱类型刻意从本地 types.ts 取（node_modules 那份宿主副本已陈旧，
 // 原因见该文件顶部注释）。
 import type { KnowledgeSnapshot, NoteMutationResult, NotesSnapshot } from './types.ts'
@@ -517,198 +450,6 @@ function unwrap<T>(r: RemoteResult<T>): T {
   return r.value as T
 }
 
-// ── 本地缓存层：先渲染缓存，后台刷新后再写回，加速资源预加载 ──
-const CACHE_PREFIX = 'dsh-wechat-cache-v1:'
-const CACHE_TTL_DEFAULT = 60_000
-
-interface CacheEnvelope { at: number; v: unknown }
-
-function cacheGet(key: string, ttlMs = CACHE_TTL_DEFAULT): unknown {
-  try {
-    const s = localStorage.getItem(CACHE_PREFIX + key)
-    if (!s) return null
-    const env = JSON.parse(s) as CacheEnvelope
-    if (typeof env.at !== 'number' || !('v' in env)) return null
-    if (Date.now() - env.at > ttlMs) {
-      localStorage.removeItem(CACHE_PREFIX + key)
-      return null
-    }
-    return env.v
-  } catch {
-    return null
-  }
-}
-
-function cacheSet(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ at: Date.now(), v: value } satisfies CacheEnvelope))
-  } catch {
-    /* localStorage 满时忽略（媒体大图不入缓存） */
-  }
-}
-
-/** Remove cache entries whose key starts with the given prefix (both layers). */
-export function invalidateWechatCache(prefix: string): void {
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
-      const k = localStorage.key(i)
-      if (!k) continue
-      if (k.startsWith(CACHE_PREFIX + prefix)) localStorage.removeItem(k)
-      if (k.startsWith(RENDER_CACHE_PREFIX + prefix)) localStorage.removeItem(k)
-    }
-  } catch { /* quota/security errors are best-effort */ }
-}
-
-// ── 解密媒体持久化缓存（IndexedDB）：已解密的朋友圈图片/视频封面跨会话复用，
-//    避免下次进入朋友圈再次并发解密。localStorage 容量不足以存 base64 大图。 ──
-const MEDIA_DB_NAME = 'dsh-wechat-media'
-const MEDIA_STORE = 'sns-images'
-const MEDIA_MAX_ENTRIES = 4000
-let mediaDb: Promise<IDBDatabase> | null = null
-
-function openMediaDb(): Promise<IDBDatabase> {
-  if (mediaDb) return mediaDb
-  mediaDb = new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') { reject(new Error('indexedDB unavailable')); return }
-    const req = indexedDB.open(MEDIA_DB_NAME, 1)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
-        db.createObjectStore(MEDIA_STORE).createIndex('by_at', 'at')
-      }
-    }
-    req.onsuccess = () => { resolve(req.result); void trimMediaCache(req.result) }
-    req.onerror = () => { mediaDb = null; reject(req.error ?? new Error('open media db failed')) }
-  })
-  return mediaDb
-}
-
-/** 删除超出容量上限的最旧条目（按写入时间 at 升序）。 */
-async function trimMediaCache(db: IDBDatabase): Promise<void> {
-  try {
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(MEDIA_STORE, 'readonly')
-      const store = tx.objectStore(MEDIA_STORE)
-      const keysReq = store.getAllKeys()
-      const valsReq = store.getAll()
-      let keys: IDBValidKey[] = []
-      let vals: Array<{ url: string; at: number }> = []
-      keysReq.onsuccess = () => { keys = keysReq.result }
-      valsReq.onsuccess = () => { vals = valsReq.result as Array<{ url: string; at: number }> }
-      tx.oncomplete = () => {
-        if (keys.length <= MEDIA_MAX_ENTRIES) { resolve(); return }
-        const rows = keys.map((key, i) => ({ key, at: vals[i]?.at ?? 0 })).sort((a, b) => a.at - b.at)
-        const drop = rows.slice(0, keys.length - MEDIA_MAX_ENTRIES)
-        if (drop.length === 0) { resolve(); return }
-        const dtx = db.transaction(MEDIA_STORE, 'readwrite')
-        for (const d of drop) dtx.objectStore(MEDIA_STORE).delete(d.key)
-        dtx.oncomplete = () => { resolve() }
-        dtx.onerror = () => { resolve() }
-      }
-      tx.onerror = () => { resolve() }
-    })
-  } catch { /* best-effort */ }
-}
-
-/** Read one cached decrypted media data URL by key, or null. */
-export async function snsMediaCacheGet(key: string): Promise<string | null> {
-  try {
-    const db = await openMediaDb()
-    return await new Promise<string | null>((resolve) => {
-      const req = db.transaction(MEDIA_STORE, 'readonly').objectStore(MEDIA_STORE).get(key)
-      req.onsuccess = () => {
-        const r = req.result as { url?: string } | undefined
-        resolve(typeof r?.url === 'string' ? r.url : null)
-      }
-      req.onerror = () => { resolve(null) }
-    })
-  } catch { return null }
-}
-
-/** Batch-read cached media data URLs for the given keys. */
-export async function snsMediaCacheGetMany(keys: readonly string[]): Promise<Record<string, string>> {
-  const out: Record<string, string> = {}
-  if (keys.length === 0) return out
-  try {
-    const db = await openMediaDb()
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(MEDIA_STORE, 'readonly')
-      const store = tx.objectStore(MEDIA_STORE)
-      for (const k of keys) {
-        const req = store.get(k)
-        req.onsuccess = () => {
-          const r = req.result as { url?: string } | undefined
-          if (typeof r?.url === 'string') out[k] = r.url
-        }
-      }
-      tx.oncomplete = () => { resolve() }
-      tx.onerror = () => { resolve() }
-    })
-  } catch { /* best-effort */ }
-  return out
-}
-
-/** Persist one decrypted media data URL. */
-export async function snsMediaCacheSet(key: string, url: string): Promise<void> {
-  try {
-    const db = await openMediaDb()
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(MEDIA_STORE, 'readwrite')
-      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now() }, key)
-      tx.oncomplete = () => { resolve() }
-      tx.onerror = () => { resolve() }
-    })
-  } catch { /* best-effort */ }
-}
-
-/** 读快照：命中缓存时先返回缓存作早显，随后前台等待新鲜值并写回；
- *  后台刷新失败降级返回缓存。无缓存时直接请求并写回。 */
-/** 记录一次 panel 数据取数的耗时（超过阈值才打印，便于观察“及时响应”与回归）。 */
-async function timedFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-  const t0 = performance.now()
-  try {
-    return await fetcher()
-  } finally {
-    const ms = performance.now() - t0
-    if (ms > 250) console.info(`[wxdata] ${key} ${ms.toFixed(0)}ms`)
-  }
-}
-
-async function cachedFetch<T>(key: string, fetcher: () => Promise<T>, ttlMs = CACHE_TTL_DEFAULT): Promise<T> {
-  const hit = cacheGet(key, ttlMs) as T | null
-  if (hit !== null && !isEmptySnapshot(hit)) {
-    try {
-      const fresh = await timedFetch(key, fetcher)
-      cacheSet(key, fresh)
-      return fresh
-    } catch {
-      return hit
-    }
-  }
-  const fresh = await timedFetch(key, fetcher)
-  cacheSet(key, fresh)
-  return fresh
-}
-
-/**
- * 空结果不参与缓存：一个临时的空快照（例如数据根尚未就绪时写入的）会
- * 永久盖住真实数据——命中后界面渲染空列表，后台刷新只改写 localStorage
- * 而不重绘界面。列表型快照（moments/items/favorites/…）无任何条目且
- * 总数为 0 时视为空；统计类快照（无数组字段）不受影响。
- */
-function isEmptySnapshot(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) return false
-  const entries = Object.values(value as Record<string, unknown>)
-  let sawList = false
-  for (const entry of entries) {
-    if (Array.isArray(entry)) {
-      sawList = true
-      if (entry.length > 0) return false
-    }
-  }
-  if (!sawList) return false
-  return !entries.some(entry => typeof entry === 'number' && entry > 0)
-}
 // ── sessions / contacts / messages (Remote) ──
 /**
  * Fetch the session list (optional keyword filter + limit).

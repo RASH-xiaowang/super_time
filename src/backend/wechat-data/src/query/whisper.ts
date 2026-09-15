@@ -13,6 +13,8 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
+import { fetchWithRetry } from '../../../llm-retry.js'
 import type { WhisperModelInfo } from '../types.ts'
 import { resolveWechatDataRoot } from '../dirs.ts'
 import { unpackedAware } from '../asar-path.ts'
@@ -53,6 +55,101 @@ let reachableBase: string | null = null
 
 /** Header-arrival timeout before a base is declared unreachable. */
 const DOWNLOAD_CONNECT_TIMEOUT_MS = 20_000
+
+/** 引擎包（约 20MB 的 zip）的连接超时。 */
+const ENGINE_CONNECT_TIMEOUT_MS = 30_000
+
+/**
+ * 每个镜像最多试几次（含首次）。
+ *
+ * 为什么**不**用默认的 3 次：这一层的外层已经是「镜像轮换」（3 个 base），
+ * 一次「连接超时」要 20–30s；3×3 个 base 会让「完全没网」的报错等上 3 分钟。
+ * 2 次足够覆盖「同一个镜像偶发 5xx/429」（重试的主要收益），镜像轮换继续兜剩下的。
+ */
+const DOWNLOAD_MAX_ATTEMPTS = 2
+
+/**
+ * 把一个 URL 流式写进 `dest`，**支持断点续传**：以 `dest` 现有长度为起点发 `Range`。
+ *
+ * 为什么要续传：模型有 1.5–3.1 GB，一次连接中断就让整份重下；而重试层只管到「响应头」，
+ * 中途断流它看不见（这正是 M7 的 N13 遗留项里那半句「另加断点续传」）。
+ * 三处刻意取舍：
+ *   · 只有服务端明确回 **206** 才追加写；回 200 说明 Range 没生效，必须从头写
+ *     （否则文件前段是旧内容，拼出来的包是坏的）；
+ *   · 续传起点取自 `statSync(dest).size` 而**不是**我们数过的字节数 —— 写缓冲可能被丢掉，
+ *     按磁盘实际长度续传永远是对的（大不了重下一小段）；
+ *   · 完成后校验长度：流提前 end（不算错误）时旧实现会把**截断的文件** rename 成正式模型。
+ * @param url - 下载地址。
+ * @param dest - 目标文件（同一个路径会被复用/续传）。
+ * @param timeoutMs - 单次尝试的**连接**超时（拿到响应头即解除）。
+ * @param onProgress - 进度回调（received 含续传已有的部分；total 未知时为 0）。
+ * @returns 最终字节数（含续传部分）。
+ */
+async function streamUrlToFile(
+  url: string,
+  dest: string,
+  timeoutMs: number,
+  onProgress: (received: number, total: number) => void,
+): Promise<number> {
+  let have = 0
+  try { have = statSync(dest).size } catch { have = 0 }
+  const res = await fetchWithRetry(
+    fetch,
+    url,
+    { redirect: 'follow', headers: have > 0 ? { range: `bytes=${have}-` } : undefined },
+    { timeoutMs, timeoutScope: 'headers', maxAttempts: DOWNLOAD_MAX_ATTEMPTS },
+  )
+  if (!res.ok || res.body === null) {
+    if (res.status === 416 && have > 0) {
+      // 局部文件不可能是对端的前缀（例如上游换了更小的一份）→ 丢掉它，下一次尝试从头来
+      try { unlinkSync(dest) } catch { /* best effort */ }
+      throw new Error('HTTP 416：已丢弃与远端不符的局部文件，请重新下载')
+    }
+    throw new Error(`HTTP ${res.status}`)
+  }
+  const append = have > 0 && res.status === 206
+  if (append) {
+    // 服务端必须从我们要求的位置开始给（`Content-Range: bytes <start>-…`）。
+    // 起始偏移不对就是「拼错位置」——长度校验抓不到，只能在这里拦下。
+    const start = /^bytes\s+(\d+)-/i.exec(String(res.headers.get('content-range') ?? ''))
+    if (start && Number(start[1]) !== have) {
+      try { unlinkSync(dest) } catch { /* best effort */ }
+      throw new Error(`续传起点不符（对端从 ${start[1]} 开始，本机有 ${have} 字节），已丢弃局部文件`)
+    }
+  }
+  const rest = Number(res.headers.get('content-length') ?? 0)
+  const total = rest > 0 ? (append ? have + rest : rest) : 0
+  let received = append ? have : 0
+  const stream = createWriteStream(dest, { flags: append ? 'a' : 'w' })
+  let settled = false
+  try {
+    const reader = res.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      stream.write(value)
+      received += value.byteLength
+      onProgress(received, total)
+    }
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => { resolve() })
+      stream.on('error', reject)
+    })
+    settled = true
+  } finally {
+    if (!settled) {
+      try { stream.destroy() } catch { /* best effort */ }
+      // 等句柄真正关掉：下一次尝试的 statSync 才是可信的续传起点
+      await new Promise<void>((resolve) => {
+        stream.once('close', () => { resolve() })
+        setTimeout(resolve, 500).unref()
+      })
+    }
+  }
+  const size = (() => { try { return statSync(dest).size } catch { return -1 } })()
+  if (total > 0 && size !== total) throw new Error(`下载不完整（${size}/${total} 字节），可重试续传`)
+  return received
+}
 
 /**
  * Move one file/dir to a target (same-volume rename first, copy+remove
@@ -406,11 +503,14 @@ export async function installWhisperEngine(
   let lastError = '引擎下载失败'
   for (const url of urls) {
     const zipPath = join(modelsDir, 'whisper-bin-x64.zip')
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => { ctrl.abort() }, 30_000)
     try {
-      const res = await fetch(url, { redirect: 'follow', signal: ctrl.signal })
-      clearTimeout(timer) // headers arrived: streaming may take longer than the connect budget
+      // N13：有界重试；`timeoutScope: 'headers'` = 只在拿到响应头之前计时，
+      // 流式读取不会在下载途中被连接超时掐断（每次尝试重新计时）。
+      const res = await fetchWithRetry(fetch, url, { redirect: 'follow' }, {
+        timeoutMs: ENGINE_CONNECT_TIMEOUT_MS,
+        timeoutScope: 'headers',
+        maxAttempts: DOWNLOAD_MAX_ATTEMPTS,
+      })
       if (!res.ok || res.body === null) throw new Error(`HTTP ${res.status}`)
       const total = Number(res.headers.get('content-length') ?? 0)
       const reader = res.body.getReader()
@@ -448,9 +548,9 @@ export async function installWhisperEngine(
       return existsSync(target) ? { ok: true, path: target } : { ok: false, error: 'whisper-cli.exe 安装失败（拷贝/移动未完成）' }
     } catch (e) {
       lastError = `${url} ${(e as Error).message}`
+      // 引擎包**不做续传**：这个 URL 是 `releases/latest`，上游一发新版内容就换了，
+      // 残留的半个 zip 不能保证还是新包的前缀（拼出来解不开，比整份重下更糟）。
       try { unlinkSync(zipPath) } catch { /* best effort */ }
-    } finally {
-      clearTimeout(timer)
     }
   }
   return { ok: false, error: lastError + '（可设置 DSH_WECHAT_WHISPER_ENGINE_URL 指向可达镜像，或 DSH_WECHAT_WHISPER_BIN 指向已安装的 whisper-cli.exe）' }
@@ -523,49 +623,18 @@ export async function whisperDownloadModel(
   for (const base of whisperDownloadBases()) {
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`
     const tmp = join(modelsDir, file + '.part')
-    let bytes = 0
-    let total = 0
     try {
-      // Connect/header timeout only: streaming a multi-GB model must not be
-      // killed by the same timer once headers arrive.
-      const ctrl = new AbortController()
-      const timer = setTimeout(() => { ctrl.abort() }, DOWNLOAD_CONNECT_TIMEOUT_MS)
-      let res: Response
-      try {
-        res = await fetch(url, { redirect: 'follow', signal: ctrl.signal })
-      } finally {
-        clearTimeout(timer)
-      }
-      if (!res.ok || res.body === null) throw new Error(`HTTP ${res.status}`)
-      total = Number(res.headers.get('content-length') ?? 0)
-      const reader = res.body.getReader()
-      const stream = createWriteStream(tmp)
-      let settled = false
-      try {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          stream.write(value)
-          bytes += value.byteLength
-          onProgress(bytes, total)
-        }
-        await new Promise<void>((resolve, reject) => {
-          stream.end(() => { resolve() })
-          stream.on('error', reject)
-        })
-        settled = true
-      } finally {
-        if (!settled) {
-          try { stream.destroy() } catch { /* best effort */ }
-          try { unlinkSync(tmp) } catch { /* best effort */ }
-        }
-      }
+      const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress)
       renameSync(tmp, finalPath)
       reachableBase = base
       return { ok: true, file, bytes }
     } catch (e) {
       lastError = `${base} ${(e as Error).message}`
-      try { unlinkSync(tmp) } catch { /* best effort */ }
+      // 刻意**不删** .part（旧实现在这里 unlink）：留着它，下一个镜像 / 用户下一次点击
+      // 才能从断点接着下（1.5–3.1 GB 重下代价太大）。安全性由 206/200 判别、416 丢弃、
+      // 完成后长度校验三条兜住 —— 半成品永远不会被当成正式模型（只有跑完整份才 rename）。
+      // 模型文件名与 release 资产一一对应（`resolve/main/ggml-*.bin` 不会就地改写），
+      // 所以残留字节仍是同一对象的合法前缀。
     }
   }
   return { ok: false, error: lastError }

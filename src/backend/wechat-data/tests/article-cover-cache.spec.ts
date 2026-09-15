@@ -7,6 +7,11 @@
  *
  * 现在的折中是**短暂**负缓存（60s）：既不会把抖动变成永久坏掉，也不至于让永久 404 的链接
  * 按面板渲染节奏反复抓（每次 20s 超时）。这条用例把两个方向都锁住。
+ *
+ * N13 之后计数变了：抓取走 `fetchWithRetry`，一次「net down」会重试到 3 次才放弃
+ * （这正是「一次抖动不再等于永久坏掉」的那半）。所以下面断言的是**每轮 3 次**，
+ * 而且只假 `Date`（负缓存要控时）——退避的 `setTimeout` 必须是真时钟，
+ * 否则重试的等待永远不会到期（用例会挂住）。
  * @vitest-environment node
  */
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -34,23 +39,23 @@ describe('文章封面：瞬时失败用短暂负缓存（M8/复审 M3）', () =
       calls += 1
       return Promise.reject(new Error('net down'))
     })
-    vi.useFakeTimers()
+    vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-09-14T00:00:00Z'))
 
     const first = await resolveArticleCoverDataUrl(url, cacheDir)
     expect(first.error).toBeTruthy()
-    expect(calls).toBe(1)
+    expect(calls, 'N13：一次抓取失败会重试到 3 次才放弃').toBe(3)
 
     // 60s 内：直接用负缓存，不再抓（挡掉「永久 404 反复抓」）
     vi.setSystemTime(new Date('2026-09-14T00:00:30Z'))
     const second = await resolveArticleCoverDataUrl(url, cacheDir)
     expect(second.error).toBeTruthy()
-    expect(calls, '负缓存期内不该再抓').toBe(1)
+    expect(calls, '负缓存期内不该再抓').toBe(3)
 
     // 过期后：必须真的重试（否则一次抖动 = 永久坏掉）
     vi.setSystemTime(new Date('2026-09-14T00:01:01Z'))
     const third = await resolveArticleCoverDataUrl(url, cacheDir)
     expect(third.error).toBeTruthy()
-    expect(calls, '负缓存过期后必须重新抓').toBe(2)
+    expect(calls, '负缓存过期后必须重新抓').toBe(6)
   })
 })

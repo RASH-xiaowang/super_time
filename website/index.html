@@ -1,0 +1,1660 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Super Time · 让聊天记录成为你自己的数据资产</title>
+<meta name="description" content="Super Time 是面向微信 4.x 本地数据的桌面端洞察与 AI 问答工具：全程离线、数据不出本机。混合检索 RAG、本地语音转写、对齐官方视觉的聊天回放。">
+<meta name="theme-color" content="#04050a">
+<style>
+/* ==========================================================================
+   Super Time · 官网
+   深色底 + 霓虹渐变 + 动态光效 + 滚动叙事
+   ========================================================================== */
+
+:root{
+  --bg:#04050a;
+  --bg-2:#070a13;
+  --bg-3:#0b1020;
+  --panel:rgba(14,19,33,.72);
+  --panel-2:rgba(10,14,25,.86);
+  --line:rgba(122,160,255,.14);
+  --line-2:rgba(122,160,255,.26);
+  --txt:#e9edff;
+  --txt-2:#9aa6c9;
+  --txt-3:#63708f;
+  --cy:#22d3ee;
+  --vi:#8b5cf6;
+  --mg:#f472b6;
+  --gr:#0ac97a;
+  --grad:linear-gradient(100deg,#22d3ee 0%,#8b5cf6 48%,#f472b6 100%);
+  --grad-soft:linear-gradient(100deg,rgba(34,211,238,.16),rgba(139,92,246,.16) 50%,rgba(244,114,182,.16));
+  --grad2:linear-gradient(90deg,#22d3ee,#8b5cf6);   /* 汉堡按钮三杠用的短渐变 */
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --r:18px;
+  --maxw:1200px;
+  --ease:cubic-bezier(.22,.72,.22,1);
+  /* 吸顶导航实测高度：按钮 42 + 内边距 14×2 + 底边框 1 + 进度条 2 */
+  --navh:73px;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px;overflow-x:hidden;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--txt);
+  font-family:var(--sans);font-size:16px;line-height:1.75;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(1200px 620px at 12% -8%,rgba(34,211,238,.16),transparent 62%),
+    radial-gradient(1000px 560px at 88% 4%,rgba(139,92,246,.18),transparent 60%),
+    radial-gradient(900px 700px at 50% 108%,rgba(244,114,182,.10),transparent 62%),
+    var(--bg);
+}
+/* 细网格 + 噪点 */
+body::after{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;
+  background-image:
+    linear-gradient(rgba(122,160,255,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(122,160,255,.045) 1px,transparent 1px);
+  background-size:64px 64px,64px 64px;
+  mask-image:radial-gradient(circle at 50% 22%,#000 0%,transparent 78%);
+  -webkit-mask-image:radial-gradient(circle at 50% 22%,#000 0%,transparent 78%);
+}
+img,svg{display:block;max-width:100%}
+img{height:auto}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+a,button{ -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+h1,h2,h3,h4,h5,p,li{overflow-wrap:break-word}
+::selection{background:rgba(139,92,246,.42);color:#fff}
+
+.wrap{width:100%;max-width:var(--maxw);margin:0 auto;padding-left:clamp(16px,4.6vw,24px);padding-right:clamp(16px,4.6vw,24px);position:relative;z-index:2}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.grad-txt{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---------- 通用元件 ---------- */
+.chip{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:6px 14px;border-radius:999px;font-size:12.5px;letter-spacing:.06em;
+  border:1px solid var(--line-2);background:rgba(12,17,31,.66);color:var(--txt-2);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--cy);box-shadow:0 0 10px var(--cy);animation:pulse 2.2s var(--ease) infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.42;transform:scale(.72)}}
+
+.btn{
+  position:relative;display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  padding:13px 26px;border-radius:12px;font-size:14.5px;font-weight:600;letter-spacing:.02em;
+  transition:transform .35s var(--ease),box-shadow .35s var(--ease),border-color .35s var(--ease),background .35s var(--ease);
+  white-space:nowrap;overflow:hidden;
+}
+.btn svg{width:16px;height:16px;flex:none}
+.btn-primary{
+  color:#05060c;background:linear-gradient(100deg,#7ef0ff,#a78bfa 52%,#f9a8d4);
+  box-shadow:0 10px 34px -12px rgba(139,92,246,.85),0 0 0 1px rgba(255,255,255,.12) inset;
+}
+.btn-primary::after{
+  content:"";position:absolute;top:0;left:-120%;width:60%;height:100%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);
+  transform:skewX(-18deg);transition:left .7s var(--ease);
+}
+.btn-primary:hover{transform:translateY(-3px);box-shadow:0 18px 46px -12px rgba(139,92,246,1),0 0 0 1px rgba(255,255,255,.24) inset}
+.btn-primary:hover::after{left:130%}
+.btn-ghost{border:1px solid var(--line-2);color:var(--txt);background:rgba(12,17,31,.6);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.btn-ghost:hover{transform:translateY(-3px);border-color:rgba(34,211,238,.6);box-shadow:0 14px 40px -18px rgba(34,211,238,.9)}
+
+.card{
+  position:relative;border-radius:var(--r);padding:26px;
+  background:linear-gradient(180deg,rgba(16,21,37,.86),rgba(8,11,20,.9));
+  isolation:isolate;transition:transform .5s var(--ease),box-shadow .5s var(--ease);
+}
+.card::before{
+  content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
+  background:linear-gradient(140deg,rgba(34,211,238,.5),rgba(139,92,246,.34) 42%,rgba(244,114,182,.22) 70%,rgba(122,160,255,.06));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  opacity:.65;transition:opacity .5s var(--ease);
+}
+.card::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;
+  background:radial-gradient(320px circle at var(--mx,50%) var(--my,0%),rgba(34,211,238,.16),transparent 62%);
+  transition:opacity .45s var(--ease);
+}
+.card:hover{transform:translateY(-6px);box-shadow:0 34px 70px -40px rgba(0,0,0,.95),0 0 60px -30px rgba(139,92,246,.6)}
+.card:hover::before{opacity:1}
+.card:hover::after{opacity:1}
+
+.ico{
+  width:46px;height:46px;border-radius:13px;display:grid;place-items:center;flex:none;
+  background:linear-gradient(150deg,rgba(34,211,238,.18),rgba(139,92,246,.2));
+  border:1px solid var(--line-2);box-shadow:0 0 24px -10px rgba(34,211,238,.8) inset;
+}
+.ico svg{width:22px;height:22px;stroke:#a9e9ff;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------- 滚动揭示 ---------- */
+.rv{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0ms)}
+.rv.in{opacity:1;transform:none}
+
+/* ---------- 导航 ---------- */
+.nav{
+  position:fixed;top:0;left:0;right:0;z-index:60;
+  transition:background .45s var(--ease),border-color .45s var(--ease),backdrop-filter .45s;
+  border-bottom:1px solid transparent;
+}
+.nav.solid{background:rgba(5,7,14,.78);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);border-bottom-color:var(--line)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:14px clamp(16px,4.6vw,24px);display:flex;align-items:center;gap:clamp(10px,1.7vw,22px)}
+.brand{display:flex;align-items:center;gap:12px;flex:none}
+.brand-mark{
+  width:38px;height:38px;border-radius:11px;position:relative;display:grid;place-items:center;
+  background:linear-gradient(150deg,#0b1020,#131a33);border:1px solid var(--line-2);
+  box-shadow:0 0 26px -10px rgba(34,211,238,.9);
+}
+.brand-mark svg{width:22px;height:22px}
+.brand-txt{display:flex;flex-direction:column;line-height:1.16}
+.brand-txt b{font-size:17px;font-weight:700;letter-spacing:.01em}
+.brand-txt b em{font-style:normal;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand-txt i{font-style:normal;font-size:10.5px;color:var(--txt-3);letter-spacing:.22em}
+.nav-links{display:flex;align-items:center;gap:4px;margin-left:auto}
+.nav-links a{
+  position:relative;padding:9px 14px;border-radius:9px;font-size:14px;color:var(--txt-2);
+  transition:color .3s var(--ease),background .3s var(--ease);
+}
+.nav-links a::after{
+  content:"";position:absolute;left:14px;right:14px;bottom:4px;height:1.5px;border-radius:2px;
+  background:var(--grad);transform:scaleX(0);transform-origin:left;transition:transform .4s var(--ease);
+}
+.nav-links a:hover{color:var(--txt);background:rgba(122,160,255,.07)}
+.nav-links a:hover::after,.nav-links a.active::after{transform:scaleX(1)}
+.nav-links a.active{color:#fff}
+.nav-act{display:flex;align-items:center;gap:10px}
+.nav-act .btn{padding:10px 18px;font-size:13.5px}
+/* 汉堡按钮：几何参数集中成变量，展开态与布局同源，避免各写一套而错位 */
+.burger{
+  --bar-w:20px;--bar-h:2px;--bar-gap:5px;
+  display:none;width:42px;height:42px;border-radius:12px;padding:0;flex:none;
+  border:1px solid rgba(34,211,238,.34);background:rgba(9,13,24,.82);
+  flex-direction:column;justify-content:center;align-items:center;gap:var(--bar-gap);
+  transition:border-color .35s var(--ease),box-shadow .35s var(--ease)}
+.burger:hover{border-color:rgba(139,92,246,.7);box-shadow:0 0 32px -12px rgba(139,92,246,1)}
+.burger:hover span{background-position:100% 50%}
+.burger span{display:block;flex:none;width:var(--bar-w);height:var(--bar-h);border-radius:999px;
+  background:var(--grad2);background-size:200% 100%;background-position:0% 50%;
+  transition:transform .35s var(--ease),opacity .25s var(--ease),background-position .5s var(--ease)}
+.burger.on span:nth-child(1){transform:translateY(calc(var(--bar-h) + var(--bar-gap))) rotate(45deg)}
+.burger.on span:nth-child(2){opacity:0;transform:scaleX(.4)}
+.burger.on span:nth-child(3){transform:translateY(calc(-1 * (var(--bar-h) + var(--bar-gap)))) rotate(-45deg)}
+.nav-prog{height:2px;background:var(--grad);width:0;box-shadow:0 0 14px rgba(139,92,246,.9)}
+
+.drawer{
+  position:fixed;top:var(--navh);left:0;right:0;z-index:59;
+  padding:16px clamp(16px,4.6vw,24px) calc(26px + env(safe-area-inset-bottom));
+  max-height:calc(100vh - var(--navh));max-height:calc(100dvh - var(--navh));overflow-y:auto;overscroll-behavior:contain;
+  background:rgba(5,7,14,.96);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border-bottom:1px solid var(--line);
+  display:grid;gap:6px;transform:translateY(-14%);opacity:0;pointer-events:none;
+  transition:transform .45s var(--ease),opacity .45s var(--ease);
+}
+.drawer.on{transform:none;opacity:1;pointer-events:auto}
+.drawer a{padding:13px 14px;border-radius:11px;font-size:15px;color:var(--txt-2);border:1px solid transparent}
+.drawer a:hover{color:#fff;background:rgba(122,160,255,.08);border-color:var(--line)}
+.drawer .btn{margin-top:8px}
+
+/* ---------- HERO ---------- */
+.hero{position:relative;padding:clamp(100px,11.5vw,150px) 0 clamp(54px,7vw,90px);overflow:hidden}
+#stars{position:absolute;inset:0;z-index:1;opacity:.75}
+.aurora{position:absolute;z-index:0;border-radius:50%;filter:blur(90px);pointer-events:none}
+.aurora.a{width:620px;height:620px;left:-14%;top:-18%;background:radial-gradient(circle,rgba(34,211,238,.34),transparent 66%);animation:float1 18s ease-in-out infinite}
+.aurora.b{width:660px;height:660px;right:-16%;top:-6%;background:radial-gradient(circle,rgba(139,92,246,.36),transparent 66%);animation:float2 22s ease-in-out infinite}
+.aurora.c{width:520px;height:520px;left:38%;top:34%;background:radial-gradient(circle,rgba(244,114,182,.20),transparent 66%);animation:float1 26s ease-in-out infinite reverse}
+@keyframes float1{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(56px,42px,0)}}
+@keyframes float2{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(-64px,50px,0)}}
+.scan{position:absolute;left:0;right:0;height:180px;z-index:1;pointer-events:none;opacity:.5;
+  background:linear-gradient(180deg,transparent,rgba(34,211,238,.09),transparent);
+  animation:scanmove 9s linear infinite}
+@keyframes scanmove{0%{top:-180px}100%{top:100%}}
+
+.hero-grid{position:relative;z-index:2;display:grid;grid-template-columns:1.06fr .94fr;gap:56px;align-items:center}
+.hero h1{
+  margin:18px 0 0;font-size:clamp(30px,4.2vw,56px);line-height:1.14;letter-spacing:-.02em;font-weight:750;
+}
+.hero h1 .line{display:block}
+.hero .lead{margin:20px 0 0;font-size:clamp(14px,3.6vw,17.5px);color:var(--txt-2);max-width:560px}
+.hero .lead b{color:var(--txt);font-weight:600}
+.typed{color:#bff3ff;font-family:var(--mono);font-size:.94em}
+.typed::after{content:"";display:inline-block;width:8px;height:1.02em;vertical-align:-2px;margin-left:3px;background:var(--cy);animation:blink 1s steps(2) infinite;box-shadow:0 0 12px var(--cy)}
+@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0}}
+.hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px}
+.hero-facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:30px}
+.hero-facts .chip{font-size:12px}
+.hero-facts .chip b{color:#c9f6ff;font-weight:600}
+
+/* Hero 控制台预览 */
+.mock-wrap{position:relative;z-index:2;perspective:1600px}
+.mock-ring{
+  position:absolute;inset:-12% -6%;z-index:-1;border-radius:50%;
+  background:conic-gradient(from 0deg,rgba(34,211,238,.0),rgba(34,211,238,.42),rgba(139,92,246,.42),rgba(244,114,182,.34),rgba(34,211,238,0));
+  filter:blur(46px);animation:spin 16s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mock{
+  border-radius:16px;overflow:hidden;border:1px solid var(--line-2);
+  background:linear-gradient(180deg,rgba(11,15,28,.97),rgba(6,8,16,.98));
+  box-shadow:0 60px 120px -50px rgba(0,0,0,1),0 0 90px -50px rgba(139,92,246,.9);
+  transform:rotateY(-9deg) rotateX(3deg);transition:transform .8s var(--ease);
+}
+.mock-wrap:hover .mock{transform:rotateY(-2deg) rotateX(0deg) translateY(-6px)}
+.mock-bar{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.022)}
+.mock-bar i{width:9px;height:9px;border-radius:50%;display:block}
+.mock-bar i:nth-child(1){background:#ff5f57}.mock-bar i:nth-child(2){background:#febc2e}.mock-bar i:nth-child(3){background:#28c840}
+.mock-bar .t{margin-left:8px;font-size:11.5px;color:var(--txt-3);font-family:var(--mono);letter-spacing:.04em}
+.mock-bar .live{margin-left:auto;font-size:10.5px;color:#7ff0c3;font-family:var(--mono);display:flex;align-items:center;gap:6px}
+.mock-bar .live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--gr);box-shadow:0 0 9px var(--gr);animation:pulse 1.8s infinite}
+.mock-body{display:grid;grid-template-columns:54px 1fr}
+.mock-rail{border-right:1px solid var(--line);padding:12px 0;display:grid;gap:8px;justify-items:center;background:rgba(255,255,255,.014)}
+.mock-rail span{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;border:1px solid transparent;transition:.3s var(--ease)}
+.mock-rail span.on{background:linear-gradient(150deg,rgba(34,211,238,.2),rgba(139,92,246,.24));border-color:var(--line-2);box-shadow:0 0 20px -8px rgba(34,211,238,.9)}
+.mock-rail svg{width:15px;height:15px;stroke:#8fb4d8;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mock-rail span.on svg{stroke:#bff0ff}
+.mock-main{padding:14px;display:grid;gap:12px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.kpi{border:1px solid var(--line);border-radius:11px;padding:9px 11px;background:rgba(255,255,255,.02)}
+.kpi em{display:block;font-style:normal;font-size:10px;color:var(--txt-3);letter-spacing:.1em}
+.kpi b{display:block;font-family:var(--mono);font-size:16px;font-weight:600;margin-top:3px}
+.kpi b.c1{color:#7ef0ff}.kpi b.c2{color:#c4b5fd}.kpi b.c3{color:#fbb6ce}
+.panel-sm{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(255,255,255,.016)}
+.panel-sm h4{margin:0 0 10px;font-size:11px;color:var(--txt-3);letter-spacing:.14em;font-weight:600;display:flex;align-items:center;gap:7px}
+.panel-sm h4::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--vi);box-shadow:0 0 8px var(--vi)}
+.bars{display:flex;align-items:flex-end;gap:5px;height:70px}
+.bars span{flex:1;border-radius:3px 3px 1px 1px;background:linear-gradient(180deg,rgba(34,211,238,.95),rgba(139,92,246,.35));transform-origin:bottom;animation:bar 3.4s var(--ease) infinite;opacity:.9}
+@keyframes bar{0%,100%{transform:scaleY(.42)}50%{transform:scaleY(1)}}
+.bars span:nth-child(2n){animation-delay:.28s}
+.bars span:nth-child(3n){animation-delay:.56s}
+.bars span:nth-child(5n){animation-delay:.84s}
+.askline{font-size:12.5px;color:var(--txt-2);border-left:2px solid rgba(34,211,238,.6);padding-left:10px;margin-bottom:9px}
+.askres{font-size:12.5px;color:var(--txt);background:rgba(34,211,238,.055);border:1px solid rgba(34,211,238,.2);border-radius:9px;padding:9px 11px;line-height:1.62}
+.funnel{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.funnel span{font-family:var(--mono);font-size:9.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.28);border-radius:999px;padding:2px 8px;background:rgba(34,211,238,.06)}
+.src{display:flex;gap:6px;margin-top:9px}
+.src i{height:5px;border-radius:3px;background:linear-gradient(90deg,rgba(139,92,246,.7),rgba(34,211,238,.5));flex:1}
+
+.float-badge{
+  position:absolute;z-index:3;display:flex;align-items:center;gap:8px;
+  padding:9px 13px;border-radius:12px;font-size:11.5px;
+  background:rgba(9,13,24,.9);border:1px solid var(--line-2);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:0 18px 40px -22px rgba(0,0,0,1);animation:hover 6s ease-in-out infinite;
+}
+.float-badge.f1{right:-4%;top:16%;animation-delay:.2s}
+.float-badge.f2{left:-7%;bottom:14%;animation-delay:1.4s}
+.float-badge svg{width:14px;height:14px;stroke:#7ef0ff;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+@keyframes hover{0%,100%{transform:translateY(0)}50%{transform:translateY(-11px)}}
+
+/* ---------- 章节通用 ---------- */
+section{position:relative;z-index:2;padding:clamp(54px,7.4vw,104px) 0}
+.sec-head{max-width:720px;margin-bottom:clamp(30px,4.4vw,52px)}
+.sec-eyebrow{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:12px;color:#8fd8ee;letter-spacing:.2em}
+.sec-eyebrow::before{content:"";width:26px;height:1px;background:var(--grad)}
+.sec-head h2{margin:16px 0 0;font-size:clamp(22px,5.2vw,42px);line-height:1.22;letter-spacing:-.015em;font-weight:720}
+.sec-head p{margin:16px 0 0;color:var(--txt-2);font-size:15.5px;max-width:620px}
+.sec-head.center{max-width:760px;margin-left:auto;margin-right:auto;text-align:center}
+.sec-head.center .sec-eyebrow{justify-content:center}
+
+/* ---------- 指标带 ---------- */
+.band{padding:44px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(10,14,25,.6),rgba(6,8,15,.2))}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.stat{padding:8px 6px;text-align:center;position:relative}
+.stat+.stat::before{content:"";position:absolute;left:0;top:14%;bottom:14%;width:1px;background:linear-gradient(180deg,transparent,var(--line-2),transparent)}
+.stat b{display:block;font-family:var(--mono);font-size:clamp(23px,5.6vw,40px);font-weight:600;letter-spacing:-.02em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{display:block;margin-top:7px;font-size:12.5px;color:var(--txt-2)}
+.stat em{display:block;margin-top:5px;font-size:10.5px;color:var(--txt-3);font-family:var(--mono);letter-spacing:.06em;font-style:normal}
+
+/* ---------- 亮点 ---------- */
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.hl h3{margin:20px 0 10px;font-size:19px;font-weight:650;letter-spacing:-.01em}
+.hl p{margin:0;color:var(--txt-2);font-size:14.3px}
+.hl .tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}
+.hl .tags i{font-style:normal;font-family:var(--mono);font-size:10.5px;color:#96dcf3;border:1px solid rgba(34,211,238,.24);border-radius:7px;padding:3px 8px;background:rgba(34,211,238,.05)}
+.hl .num{position:absolute;right:22px;top:18px;font-family:var(--mono);font-size:38px;font-weight:700;color:rgba(122,160,255,.09);letter-spacing:-.04em}
+
+/* ---------- 功能分页 ---------- */
+.tabs{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:34px;border-bottom:1px solid var(--line);padding-bottom:2px}
+.tab{
+  position:relative;padding:12px 20px;border-radius:11px 11px 0 0;font-size:14.5px;color:var(--txt-2);
+  border:1px solid transparent;border-bottom:0;transition:.35s var(--ease);display:flex;align-items:center;gap:9px;
+}
+.tab svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+.tab:hover{color:var(--txt);background:rgba(122,160,255,.05)}
+.tab.on{color:#fff;background:linear-gradient(180deg,rgba(34,211,238,.11),rgba(139,92,246,.06));border-color:var(--line-2)}
+.tab.on::after{content:"";position:absolute;left:12%;right:12%;bottom:-1.5px;height:2px;border-radius:2px;background:var(--grad);box-shadow:0 0 14px rgba(139,92,246,.9)}
+.pane{display:none;animation:fadeUp .6s var(--ease)}
+.pane.on{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.pane-grid{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center}
+.pane h3{margin:0 0 14px;font-size:24px;font-weight:680;letter-spacing:-.015em}
+.pane .desc{color:var(--txt-2);font-size:15px;margin:0 0 22px}
+.flist{display:grid;gap:13px;margin:0;padding:0;list-style:none}
+.flist li{display:flex;gap:12px;align-items:flex-start;font-size:14.4px;color:var(--txt-2)}
+.flist li svg{width:17px;height:17px;flex:none;margin-top:5px;stroke:#5eead4;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.flist li b{color:var(--txt);font-weight:600}
+
+.visual{border-radius:16px;border:1px solid var(--line-2);padding:18px;background:linear-gradient(180deg,rgba(13,18,32,.9),rgba(7,10,19,.94));box-shadow:0 40px 80px -50px #000}
+.visual .vhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.visual .vhead b{font-size:12px;letter-spacing:.12em;color:var(--txt-3);font-family:var(--mono);font-weight:600}
+.visual .vhead span{font-size:10.5px;font-family:var(--mono);color:#7ff0c3}
+.vrow{display:grid;gap:9px}
+.vcell{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:rgba(255,255,255,.017);transition:.35s var(--ease)}
+.vcell:hover{border-color:var(--line-2);background:rgba(122,160,255,.06);transform:translateX(3px)}
+.vcell .av{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#04222b;background:linear-gradient(140deg,#7ef0ff,#a78bfa)}
+.vcell .tx{min-width:0;flex:1}
+.vcell .tx b{display:block;font-size:12.8px;font-weight:600;color:var(--txt)}
+.vcell .tx span{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vcell .mt{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);flex:none}
+.flowmap{display:grid;gap:8px}
+.flowmap .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.node{font-size:11.5px;padding:7px 11px;border-radius:9px;border:1px solid var(--line-2);background:rgba(12,17,31,.8);color:#cfe9ff;white-space:nowrap}
+.node.hot{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.1);color:#c9f6ff;box-shadow:0 0 22px -10px rgba(34,211,238,.95)}
+.node.v{border-color:rgba(139,92,246,.45);background:rgba(139,92,246,.1);color:#ddd0ff}
+.arw{color:var(--txt-3);font-size:12px}
+.meter{margin-top:4px}
+.meter .lbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt-2);margin-bottom:6px}
+.meter .lbl b{font-family:var(--mono);color:#a5f3fc}
+.meter .track{height:6px;border-radius:4px;background:rgba(122,160,255,.12);overflow:hidden}
+.meter .fill{height:100%;border-radius:4px;background:var(--grad);width:0;transition:width 1.4s var(--ease)}
+.tagline{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+.tagline i{font-style:normal;font-size:10.5px;font-family:var(--mono);color:#b9a7ff;border:1px solid rgba(139,92,246,.3);background:rgba(139,92,246,.08);border-radius:7px;padding:3px 8px}
+
+/* ---------- 解决方案 ---------- */
+.sol{position:relative;overflow:hidden}
+.sol .top{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.sol .plan{font-family:var(--mono);font-size:10.5px;color:#9fe8ff;border:1px solid rgba(34,211,238,.3);border-radius:999px;padding:3px 10px;background:rgba(34,211,238,.07)}
+.sol h3{margin:18px 0 10px;font-size:20px;font-weight:660}
+.sol p{margin:0;color:var(--txt-2);font-size:14.2px}
+.sol ul{margin:18px 0 0;padding:0;list-style:none;display:grid;gap:9px}
+.sol ul li{font-size:13.6px;color:var(--txt-2);padding-left:18px;position:relative}
+.sol ul li::before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:2px;background:var(--grad);box-shadow:0 0 10px rgba(139,92,246,.9)}
+.sol .glow{position:absolute;inset:auto -30% -60% -30%;height:190px;background:radial-gradient(ellipse at 50% 0%,rgba(139,92,246,.22),transparent 70%);pointer-events:none}
+
+/* ---------- 架构 ---------- */
+.arch{display:grid;grid-template-columns:1.02fr .98fr;gap:44px;align-items:start}
+.layer{display:grid;gap:10px}
+.lrow{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;align-items:center;border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:linear-gradient(100deg,rgba(13,18,32,.86),rgba(8,11,20,.7));transition:.4s var(--ease)}
+.lrow:hover{border-color:var(--line-2);transform:translateX(4px)}
+.lrow .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;color:#8fd8ee}
+.lrow .v{display:flex;flex-wrap:wrap;gap:7px}
+.lrow .v i{font-style:normal;font-size:11.8px;color:var(--txt-2);border:1px solid var(--line);border-radius:8px;padding:3px 9px;background:rgba(255,255,255,.02)}
+.tech{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tech div{border:1px solid var(--line);border-radius:12px;padding:13px;background:rgba(255,255,255,.017)}
+.tech b{display:block;font-size:12.8px;font-weight:600;margin-bottom:4px}
+.tech span{font-size:12px;color:var(--txt-3);font-family:var(--mono)}
+
+/* ---------- 关于 ---------- */
+.about{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.tl{position:relative;padding-left:26px;display:grid;gap:22px;margin-top:30px}
+.tl::before{content:"";position:absolute;left:6px;top:6px;bottom:6px;width:1.5px;background:linear-gradient(180deg,var(--cy),var(--vi),transparent)}
+.tl .it{position:relative}
+.tl .it::before{content:"";position:absolute;left:-26px;top:7px;width:13px;height:13px;border-radius:50%;background:#0a0f1c;border:1.5px solid var(--cy);box-shadow:0 0 14px rgba(34,211,238,.85)}
+.tl .it b{font-family:var(--mono);font-size:11.5px;color:#8fd8ee;letter-spacing:.08em}
+.tl .it p{margin:5px 0 0;font-size:14px;color:var(--txt-2)}
+.vals{display:grid;gap:12px;margin-top:26px}
+.val{display:flex;gap:14px;align-items:flex-start;border:1px solid var(--line);border-radius:13px;padding:15px;background:rgba(255,255,255,.017);transition:.4s var(--ease)}
+.val:hover{border-color:var(--line-2);background:rgba(122,160,255,.05)}
+.val b{display:block;font-size:14.4px;font-weight:640;margin-bottom:3px}
+.val p{margin:0;font-size:13.4px;color:var(--txt-2)}
+
+/* ---------- FAQ ---------- */
+.faq{max-width:860px;margin:0 auto;display:grid;gap:12px}
+.q{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,rgba(13,18,32,.8),rgba(8,11,20,.7));overflow:hidden;transition:.4s var(--ease)}
+.q:hover{border-color:var(--line-2)}
+.q.on{border-color:rgba(139,92,246,.42);box-shadow:0 0 46px -30px rgba(139,92,246,1)}
+.q button{width:100%;display:flex;align-items:center;gap:14px;padding:17px 20px;text-align:left;font-size:15px;font-weight:580}
+.q button .mk{margin-left:auto;width:22px;height:22px;flex:none;position:relative;transition:transform .45s var(--ease)}
+.q button .mk::before,.q button .mk::after{content:"";position:absolute;left:50%;top:50%;background:#9fe8ff;border-radius:2px;transform:translate(-50%,-50%)}
+.q button .mk::before{width:12px;height:1.6px}
+.q button .mk::after{width:1.6px;height:12px;transition:transform .45s var(--ease),opacity .3s}
+.q.on button .mk::after{transform:translate(-50%,-50%) rotate(90deg);opacity:0}
+.q.on button .mk{transform:rotate(180deg)}
+.q .ans{max-height:0;overflow:hidden;transition:max-height .55s var(--ease)}
+.q .ans p{margin:0;padding:0 20px 19px;color:var(--txt-2);font-size:14.2px}
+
+/* ---------- 联系 ---------- */
+.contact{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start}
+.form{display:grid;gap:14px;border:1px solid var(--line-2);border-radius:18px;padding:clamp(18px,4.6vw,26px);background:linear-gradient(180deg,rgba(14,19,33,.9),rgba(7,10,19,.94));position:relative;overflow:hidden}
+.form::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
+  background:linear-gradient(140deg,rgba(34,211,238,.5),rgba(139,92,246,.32),transparent 70%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.8}
+.field{display:grid;gap:7px}
+.field label{font-size:12.5px;color:var(--txt-2);letter-spacing:.03em}
+.field input,.field textarea,.field select{
+  width:100%;padding:12px 14px;border-radius:11px;font-family:inherit;font-size:14.2px;color:var(--txt);
+  background:rgba(4,6,12,.7);border:1px solid var(--line-2);outline:none;transition:.3s var(--ease);resize:vertical;
+}
+.field input::placeholder,.field textarea::placeholder{color:#4d5975}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 3px rgba(34,211,238,.14),0 0 28px -14px rgba(34,211,238,1)}
+.form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.consent{display:flex;gap:10px;align-items:flex-start;font-size:12.2px;color:var(--txt-3)}
+.consent input{width:15px;height:15px;margin-top:3px;flex:none;accent-color:#8b5cf6}
+.cinfo{display:grid;gap:12px}
+.cbox{display:flex;gap:15px;align-items:flex-start;border:1px solid var(--line);border-radius:14px;padding:17px;background:rgba(255,255,255,.017);transition:.4s var(--ease)}
+.cbox:hover{border-color:var(--line-2);transform:translateY(-3px)}
+.cbox b{display:block;font-size:14.2px;margin-bottom:3px}
+.cbox p{margin:0;font-size:13.4px;color:var(--txt-2);font-family:var(--mono)}
+.note{margin-top:6px;border:1px dashed rgba(122,160,255,.3);border-radius:13px;padding:15px;font-size:12.8px;color:var(--txt-3);line-height:1.7}
+
+/* ---------- CTA 尾带 ---------- */
+.cta-band{position:relative;overflow:hidden;border-radius:22px;border:1px solid var(--line-2);text-align:center;
+  background:linear-gradient(120deg,rgba(34,211,238,.1),rgba(139,92,246,.14) 52%,rgba(244,114,182,.1));
+  padding:clamp(30px,6vw,56px) clamp(18px,4vw,40px);}
+.cta-band h2{margin:0;font-size:clamp(24px,3vw,36px);font-weight:730;letter-spacing:-.02em}
+.cta-band p{margin:16px auto 0;max-width:560px;color:var(--txt-2);font-size:15px}
+.cta-band .hero-cta{justify-content:center;margin-top:30px}
+.cta-band .glow{position:absolute;inset:-50% -10% auto -10%;height:320px;background:radial-gradient(ellipse at 50% 0%,rgba(34,211,238,.3),transparent 68%);animation:float1 14s ease-in-out infinite;pointer-events:none}
+
+/* ---------- Footer ---------- */
+footer{position:relative;z-index:2;border-top:1px solid var(--line);margin-top:40px;padding:56px 0 34px;background:linear-gradient(180deg,transparent,rgba(6,8,15,.8))}
+.fgrid{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:32px}
+.fgrid h5{margin:0 0 14px;font-size:12px;letter-spacing:.16em;color:var(--txt-3);font-family:var(--mono);font-weight:600}
+.fgrid a{display:block;font-size:13.6px;color:var(--txt-2);padding:4px 0;transition:.3s var(--ease)}
+.fgrid a:hover{color:#a5f3fc;transform:translateX(3px)}
+.fbrand p{margin:14px 0 0;font-size:13.2px;color:var(--txt-3);max-width:320px;line-height:1.75}
+.fbot{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center;font-size:12.3px;color:var(--txt-3)}
+.disc{margin-top:18px;font-size:11.8px;color:#4c5674;line-height:1.8;max-width:920px}
+
+/* ---------- 回到顶部 / Toast ---------- */
+.top{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(18px,calc(env(safe-area-inset-bottom) + 12px));z-index:70;width:44px;height:44px;border-radius:13px;display:grid;place-items:center;
+  border:1px solid var(--line-2);background:rgba(9,13,24,.9);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  opacity:0;transform:translateY(14px);pointer-events:none;transition:.45s var(--ease)}
+.top.on{opacity:1;transform:none;pointer-events:auto}
+.top:hover{border-color:rgba(34,211,238,.7);box-shadow:0 0 28px -12px rgba(34,211,238,1)}
+.top svg{width:17px;height:17px;stroke:#a5f3fc;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.toast{
+  position:fixed;left:50%;bottom:max(20px,calc(env(safe-area-inset-bottom) + 14px));transform:translate(-50%,26px);z-index:80;max-width:calc(100vw - 32px);
+  padding:13px 22px;border-radius:13px;font-size:13.6px;display:flex;align-items:center;gap:10px;
+  background:rgba(9,13,24,.96);border:1px solid rgba(34,211,238,.5);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  box-shadow:0 24px 60px -28px #000,0 0 40px -20px rgba(34,211,238,.9);
+  opacity:0;pointer-events:none;transition:.45s var(--ease);
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast svg{width:16px;height:16px;stroke:#5eead4;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------- 光标光斑 ---------- */
+#glow{position:fixed;width:520px;height:520px;left:0;top:0;z-index:1;pointer-events:none;border-radius:50%;
+  background:radial-gradient(circle,rgba(34,211,238,.09),transparent 62%);transform:translate(-50%,-50%);
+  transition:opacity .5s;opacity:0}
+
+/* ==========================================================================
+   响应式 · 6 档断点
+   超宽 ≥1600 / 桌面 1201–1599 / 小桌面 1101–1200 / 平板横屏 981–1100 /
+   平板竖屏 821–980 / 大屏手机 641–820 / 手机 481–640 / 小屏手机 ≤480 / 超小屏 ≤360
+   外加：手机横屏、触摸设备（hover:none）、减弱动效
+   ========================================================================== */
+
+/* ---- 超宽屏：放宽容器，减少两侧空洞 ---- */
+@media (min-width:1600px){
+  :root{--maxw:1320px}
+}
+
+/* ---- ≤1200：功能卡与页脚降为两列 ---- */
+@media (max-width:1200px){
+  .grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fgrid{grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px}
+  .hl h3{font-size:18px}
+}
+
+/* ---- ≤1100：双栏结构降单栏；导航先收掉次要按钮（7 链接 + 2 按钮在 1024 以下必溢出） ---- */
+@media (max-width:1100px){
+  .nav-links a{padding:9px 10px;font-size:13.5px}
+  .nav-act .btn-ghost{display:none}
+  .nav-act .btn{padding:10px 15px;font-size:13px}
+  .nav-links a::after{left:10px;right:10px}
+  .pane-grid,.arch,.about,.contact{grid-template-columns:minmax(0,1fr);gap:34px}
+  .hero-grid{gap:34px}
+  .hero h1{font-size:clamp(34px,4.6vw,48px)}
+  .float-badge.f1{right:0;top:12%}
+  .float-badge.f2{left:0;bottom:10%}
+  .sec-head{max-width:640px}
+}
+
+/* ---- ≤1024：导航折叠为汉堡（此前 900 才折，900–1080 区间一直溢出） ---- */
+@media (max-width:1024px){
+  .nav-links{display:none}
+  .nav-act .btn{display:none}
+  .burger{display:flex}
+  .arch{gap:30px}
+}
+
+/* ---- ≤980：Hero 改单列，控制台预览居中限宽 ---- */
+@media (max-width:980px){
+  .hero-grid{grid-template-columns:minmax(0,1fr)}
+  .hero h1{font-size:clamp(28px,6.4vw,48px)}
+  .hero .lead{max-width:none}
+  .hide-sm{display:none}
+  .mock{transform:none}
+  .float-badge{display:none}
+  .mock-wrap{max-width:600px;margin:0 auto;width:100%}
+  .pane-grid{gap:30px}
+}
+
+/* ---- ≤820：平板竖屏 —— 功能卡/技术栈单列，分页横向滚动 ---- */
+@media (max-width:820px){
+  .grid-3{grid-template-columns:minmax(0,1fr)}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+  .stat:nth-child(3)::before{display:none}
+  .fgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
+  .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:8px;scroll-snap-type:x proximity;
+        -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;flex:none;scroll-snap-align:start}
+  .tabs::after{content:"";position:sticky;right:0;width:26px;flex:none;
+        background:linear-gradient(90deg,transparent,rgba(4,5,10,.9));margin-left:-26px;pointer-events:none}
+  body::after{background-size:48px 48px}
+  .aurora{filter:blur(66px)}
+  .card{padding:22px}
+  .visual{padding:16px}
+  section{padding-top:clamp(48px,8.4vw,72px);padding-bottom:clamp(48px,8.4vw,72px)}
+}
+
+/* ---- ≤640：大屏手机 ---- */
+@media (max-width:640px){
+  .tech{grid-template-columns:minmax(0,1fr)}
+  .form .row2{grid-template-columns:minmax(0,1fr)}
+  .fgrid{grid-template-columns:minmax(0,1fr);gap:22px}
+  .fgrid h5{margin-bottom:6px}
+  .hero-cta{gap:12px}
+  .hero-cta .btn{width:100%}
+  .hero-facts{gap:8px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpi:last-child{grid-column:1 / -1}
+  .bars{height:56px}
+  .mock-body{grid-template-columns:44px minmax(0,1fr)}
+  .mock-main{padding:11px}
+  .tl{padding-left:22px}
+  .tl .it::before{left:-22px}
+  .vals .val{padding:13px}
+  .q button{padding:15px 17px;font-size:14.5px}
+  .q .ans p{padding:0 17px 17px;font-size:13.8px}
+  .fbot{font-size:11.8px}
+}
+
+/* ---- ≤480：手机 ---- */
+@media (max-width:480px){
+  .hero{padding-top:94px}
+  .hero h1{font-size:clamp(24px,7.4vw,34px)}
+  .hero .chip{font-size:11.5px;padding:5px 12px}
+  .hero-facts .chip{font-size:11px}
+  .sec-head h2{font-size:clamp(21px,5.6vw,26px)}
+  .sec-head p{font-size:14.5px}
+  .stat b{font-size:clamp(22px,7vw,28px)}
+  .stat span{font-size:11.8px}
+  .stat em{font-size:9.5px;letter-spacing:.03em}
+  .stats{gap:14px}
+  .card{padding:20px 17px}
+  .hl h3{font-size:17.5px;margin-top:16px}
+  .hl p{font-size:13.8px}
+  .hl .num{font-size:30px;right:16px;top:13px}
+  .visual{padding:14px}
+  .lrow{grid-template-columns:minmax(0,1fr);gap:9px;padding:12px 13px}
+  .node{font-size:11px;padding:6px 9px}
+  .mock-bar .t{max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mock-bar .live{font-size:9.5px}
+  .mock-rail span{width:28px;height:28px}
+  .mock-main{gap:9px}
+  .kpi b{font-size:14.5px}
+  .kpi em{font-size:9.5px}
+  .form{border-radius:15px}
+  .cinfo .cbox{padding:14px}
+  .cbox p{font-size:12.5px}
+  .note{font-size:12.2px;padding:13px}
+  .cta-band h2{font-size:21px}
+  .cta-band p{font-size:14px}
+  .top{width:40px;height:40px}
+  .toast{font-size:12.6px;padding:11px 16px}
+  footer{padding-top:42px}
+  .disc{font-size:11.2px}
+}
+
+/* ---- ≤360：超小屏（iPhone SE 1 代 / 老旧安卓） ---- */
+@media (max-width:360px){
+  .hero h1{font-size:23px}
+  .sec-head h2{font-size:20px}
+  .stats{grid-template-columns:minmax(0,1fr)}
+  .stat+.stat::before{display:none}
+  .stat{padding:10px 4px}
+  .kpis{grid-template-columns:minmax(0,1fr)}
+  .kpi:last-child{grid-column:auto}
+  .brand-txt i{display:none}
+  .nav-in{gap:10px}
+  .hl .num{display:none}
+  .mock-rail{display:none}
+  .mock-body{grid-template-columns:minmax(0,1fr)}
+  .hero-cta .btn{padding:12px 16px;font-size:13.5px}
+}
+
+/* ---- 手机横屏：压掉竖向留白，让首屏仍有内容 ---- */
+@media (orientation:landscape) and (max-height:560px){
+  .hero{padding-top:86px;padding-bottom:42px}
+  section{padding-top:46px;padding-bottom:46px}
+  .stats{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .stat+.stat::before{display:block}
+  .sec-head{margin-bottom:26px}
+}
+
+/* ---- 触摸设备：取消粘滞悬停位移，并卸掉高价合成层 ---- */
+@media (hover:none){
+  .card:hover,.cbox:hover,.lrow:hover,.vcell:hover,.btn:hover,.fgrid a:hover{transform:none}
+  .card:hover{box-shadow:none}
+  .card:hover::after{opacity:0}
+  .mock-wrap:hover .mock{transform:none}
+  .form,.btn-ghost,.chip,.float-badge{-webkit-backdrop-filter:none;backdrop-filter:none}
+  .burger:hover{border-color:rgba(34,211,238,.34);box-shadow:none}
+  .burger:hover span{background-position:0% 50%}
+  #glow{display:none}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  html{scroll-behavior:auto;scroll-padding-top:84px}
+  .rv{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+<div id="glow"></div>
+
+<!-- ============ 导航 ============ -->
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a class="brand" href="#home" aria-label="Super Time 首页">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#22d3ee"/><stop offset=".55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#f472b6"/>
+            </linearGradient>
+          </defs>
+          <circle cx="12" cy="12" r="8.4" stroke="url(#lg1)" stroke-width="1.7"/>
+          <path d="M12 7.4V12l3.3 2.1" stroke="url(#lg1)" stroke-width="1.7" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="1.5" fill="#22d3ee"/>
+        </svg>
+      </span>
+      <span class="brand-txt"><b>Super<em>Time</em></b><i>WECHAT DATA</i></span>
+    </a>
+    <nav class="nav-links" id="navLinks">
+      <a href="#home" class="active">首页</a>
+      <a href="#highlights">产品亮点</a>
+      <a href="#features">核心功能</a>
+      <a href="#solutions">解决方案</a>
+      <a href="#tech">技术架构</a>
+      <a href="#about">关于我们</a>
+      <a href="#contact">联系我们</a>
+    </nav>
+    <div class="nav-act">
+      <a class="btn btn-ghost" href="#contact">预约演示</a>
+      <a class="btn btn-primary" href="#contact">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+        获取桌面版
+      </a>
+      <button class="burger" id="burger" aria-label="打开菜单" aria-expanded="false"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+  <div class="nav-prog" id="navProg"></div>
+</header>
+
+<div class="drawer" id="drawer">
+  <a href="#home">首页</a>
+  <a href="#highlights">产品亮点</a>
+  <a href="#features">核心功能</a>
+  <a href="#solutions">解决方案</a>
+  <a href="#tech">技术架构</a>
+  <a href="#about">关于我们</a>
+  <a href="#contact">联系我们</a>
+  <a class="btn btn-primary" href="#contact">获取桌面版</a>
+</div>
+
+<!-- ============ HERO ============ -->
+<section class="hero" id="home">
+  <div class="aurora a"></div><div class="aurora b"></div><div class="aurora c"></div>
+  <canvas id="stars" aria-hidden="true"></canvas>
+  <div class="scan" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <span class="chip rv"><span class="dot"></span>本地优先 · 全程离线 · 数据不出本机</span>
+        <h1 class="rv" style="--d:80ms">
+          <span class="line">把聊天记录</span>
+          <span class="line grad-txt">变成你自己的数据资产</span>
+        </h1>
+        <p class="lead rv" style="--d:160ms">
+          Super Time 是面向 <b>微信 4.x 本地数据</b>的 Windows 桌面工作台：
+          直接读取本机数据目录，用混合检索 RAG 让 13 万条消息<br class="hide-sm">
+          变成 <span class="typed" id="typed">可检索、可追溯、可引用</span> 的答案。
+        </p>
+        <div class="hero-cta rv" style="--d:240ms">
+          <a class="btn btn-primary" href="#contact">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+            获取桌面版
+          </a>
+          <a class="btn btn-ghost" href="#features">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg>
+            看看能做什么
+          </a>
+        </div>
+        <div class="hero-facts rv" style="--d:320ms">
+          <span class="chip"><b>0</b> 字节默认上传</span>
+          <span class="chip"><b>126</b> 个数据接口</span>
+          <span class="chip">Windows x64 · 单机运行</span>
+          <span class="chip">无需填写微信账号密码</span>
+        </div>
+      </div>
+
+      <!-- 控制台预览 -->
+      <div class="mock-wrap rv" style="--d:200ms">
+        <div class="mock-ring" aria-hidden="true"></div>
+        <div class="mock" role="img" aria-label="Super Time 控制台界面预览">
+          <div class="mock-bar">
+            <i></i><i></i><i></i>
+            <span class="t">super-time — 微信数据工作台</span>
+            <span class="live">LOCAL ONLY</span>
+          </div>
+          <div class="mock-body">
+            <div class="mock-rail">
+              <span class="on"><svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 8h6V4h-6z"/></svg></span>
+              <span><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg></span>
+              <span><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></span>
+              <span><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7.5 10 10m4 0 3-2.5M7 16.5 10 14m4 0 3 2.5"/></svg></span>
+              <span><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M18 11a6 6 0 0 1-12 0M12 17v4"/></svg></span>
+            </div>
+            <div class="mock-main">
+              <div class="kpis">
+                <div class="kpi"><em>消息总量</em><b class="c1" data-count="135482">0</b></div>
+                <div class="kpi"><em>会话数</em><b class="c2" data-count="1436">0</b></div>
+                <div class="kpi"><em>时间跨度</em><b class="c3">2018–2026</b></div>
+              </div>
+              <div class="panel-sm">
+                <h4>月度消息分布</h4>
+                <div class="bars" id="bars"></div>
+              </div>
+              <div class="panel-sm">
+                <h4>AI 问答 · 会话内提问</h4>
+                <div class="askline">「我一共转了多少笔账？」</div>
+                <div class="askres">按转账通知统计共 <b>17 笔</b>，合计 42,600.00 元，最近一笔在 9 月 3 日。</div>
+                <div class="funnel"><span>意图 aggregation</span><span>稀疏 400</span><span>稠密 200</span><span>融合 120</span><span>窗口 6.2k</span><span>320ms</span></div>
+                <div class="src"><i></i><i></i><i></i><i></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="float-badge f1">
+          <svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg>
+          出站拦截已开启
+        </div>
+        <div class="float-badge f2">
+          <svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/><circle cx="12" cy="12" r="9"/></svg>
+          本地向量索引就绪
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 指标带 ============ -->
+<div class="band">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat rv"><b data-count="126">0</b><span>后端数据接口</span><em>REMOTE METHODS</em></div>
+      <div class="stat rv" style="--d:90ms"><b data-count="162">0</b><span>自动化测试用例</span><em>36 SUITES</em></div>
+      <div class="stat rv" style="--d:180ms"><b data-count="100" data-suffix="%">0</b><span>检索召回率 R@10</span><em>合成评测集</em></div>
+      <div class="stat rv" style="--d:270ms"><b data-count="135" data-suffix="k+">0</b><span>单机可检索消息量</span><em>LOCAL INDEX</em></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 产品亮点 ============ -->
+<section id="highlights">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">PRODUCT HIGHLIGHTS</div>
+      <h2>数据的价值应该留在<span class="grad-txt">数据产生的地方</span></h2>
+      <p>不做云端上传，不碰账号凭据。Super Time 把解析、索引、检索、生成四件事全部放在本机完成，只有在你自己打开模型通道时才出网。</p>
+    </div>
+
+    <div class="grid-3">
+      <div class="card hl js-tilt rv">
+        <div class="num">01</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>数据不出本机</h3>
+        <p>读取本地数据目录、本地解密、本地建索引。出站拦截开启后所有外部请求被拒，问答自动降级为纯本地稀疏检索，链路继续可用。</p>
+        <div class="tags"><i>outbound-gate</i><i>脱敏审计</i><i>只读访问</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:110ms">
+        <div class="num">02</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M11 8v6M8 11h6"/></svg></div>
+        <h3>一句话读懂聊天史</h3>
+        <p>意图路由 + 稀疏 / 向量 / 结构化三通道召回 + RRF 融合 + 交叉特征重排。每条回答都带引用来源与检索漏斗，可回溯、可验证。</p>
+        <div class="tags"><i>intent-router</i><i>RRF fusion</i><i>可追溯引用</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:220ms">
+        <div class="num">03</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg></div>
+        <h3>对齐官方视觉的回放</h3>
+        <p>文本、图片、语音、视频、引用、合并转发、表情包、公众号推送逐类型还原；本地语音转写让语音消息直接变成可搜索的文字。</p>
+        <div class="tags"><i>whisper.cpp</i><i>12+ 消息类型</i><i>就地播放</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv">
+        <div class="num">04</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div>
+        <h3>时间维度洞察</h3>
+        <p>日历热力图、年度报告、群聊活跃洞察、足迹地图。让「我们这两年聊了什么」从模糊感受变成可读的图形。</p>
+        <div class="tags"><i>年度报告</i><i>热力图</i><i>地理足迹</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:110ms">
+        <div class="num">05</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7.5 10 10m4 0 3-2.5M7 16.5 10 14m4 0 3 2.5"/></svg></div>
+        <h3>洞察沉淀为知识</h3>
+        <p>知识图谱串联人、群、话题与时间；转账台账、群聊洞察、每日 / 周期总结自动成文，可继续二次编辑。</p>
+        <div class="tags"><i>knowledge graph</i><i>台账</i><i>周期总结</i></div>
+      </div>
+
+      <div class="card hl js-tilt rv" style="--d:220ms">
+        <div class="num">06</div>
+        <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 4v5"/></svg></div>
+        <h3>可控的授权与备份</h3>
+        <p>本地许可闸门统一管控功能可见性；配置备份、操作日志、健康自检全部内置，把「谁在什么时候动了什么」记录下来。</p>
+        <div class="tags"><i>license gate</i><i>审计日志</i><i>一键备份</i></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 核心功能 ============ -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">CORE CAPABILITIES</div>
+      <h2>四大模块，覆盖<span class="grad-txt">从读取到洞察</span>的完整链路</h2>
+      <p>每个模块都建立在同一份本地索引之上 —— 不是四个彼此割裂的小工具，而是一条贯通的数据管线。</p>
+    </div>
+
+    <div class="tabs rv" role="tablist" aria-label="核心功能">
+      <button class="tab on" role="tab" aria-selected="true" data-pane="p1">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.6"/><rect x="14" y="3" width="7" height="5" rx="1.6"/><rect x="14" y="12" width="7" height="9" rx="1.6"/><rect x="3" y="16" width="7" height="5" rx="1.6"/></svg>
+        数据看板
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p2">
+        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg>
+        AI 问答与检索
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p3">
+        <svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/><path d="m9 12 2 2 4-4"/></svg>
+        隐私与合规
+      </button>
+      <button class="tab" role="tab" aria-selected="false" data-pane="p4">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
+        媒体资产
+      </button>
+    </div>
+
+    <!-- P1 -->
+    <div class="pane on" id="p1" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>把聊天记录翻成一页一页的图表</h3>
+          <p class="desc">会话、消息、联系人、群聊、通话、撤回、文件、收藏被拆成独立视图，同一套筛选与搜索贯穿其中。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>总览与健康</b>：消息总量、活跃时段、存储占用、数据完整性自检</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>会话与记录</b>：按类型 / 时间 / 关键词筛选，视觉语言对齐官方客户端</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>群聊洞察</b>：发言人分布、活跃度曲线、话题集中度</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>时间与地理</b>：日历热力图、年度报告、城市 / 世界足迹地图</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>SESSIONS / OVERVIEW</b><span>● LIVE</span></div>
+          <div class="vrow">
+            <div class="vcell"><span class="av">产</span><span class="tx"><b>产品攻坚群</b><span>散会，明天同步下版本节奏</span></span><span class="mt">21:04</span></div>
+            <div class="vcell"><span class="av">李</span><span class="tx"><b>李工</b><span>[语音] 23″ · 已转写</span></span><span class="mt">20:41</span></div>
+            <div class="vcell"><span class="av">财</span><span class="tx"><b>财务通知</b><span>微信转账 收到转账 3,500.00 元</span></span><span class="mt">18:12</span></div>
+            <div class="vcell"><span class="av">王</span><span class="tx"><b>王总</b><span>合同差额 2000 的客户是谁来着？</span></span><span class="mt">昨天</span></div>
+          </div>
+          <div class="tagline"><i>1436 会话</i><i>135,482 条消息</i><i>2018–2026</i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- P2 -->
+    <div class="pane" id="p2" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>不是「搜关键词」，是「问一句话」</h3>
+          <p class="desc">同一条问题，先判意图再决定策略；三路召回各自擅长不同的问法，融合后按 6 个特征重排，最后压缩成上下文交给模型。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>意图路由</b>：最近一次 / 问某人 / 时间区间 / 聚合 / 对比 / 开放问答，各走各的参数</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>三通道召回</b>：BM25 词法精确、向量语义泛化、结构化实体与时间窗</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>会话内直问</b>：在群聊 / 单聊里边看边问，范围恒等于当前会话，不必来回切换</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>反馈闭环</b>：赞 / 踩与逐条引用标注回流成权重调整，越用越贴合你的语料</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>RETRIEVAL PIPELINE</b><span>● DENSE ACTIVE</span></div>
+          <div class="flowmap">
+            <div class="row"><span class="node hot">意图路由</span><span class="arw">→</span><span class="node">查询改写</span><span class="arw">→</span><span class="node v">稀疏 BM25</span><span class="node v">稠密向量</span><span class="node v">结构化</span></div>
+            <div class="row"><span class="arw">↓ RRF 融合与去重</span></div>
+            <div class="row"><span class="node hot">交叉特征重排</span><span class="arw">→</span><span class="node">上下文压缩</span><span class="arw">→</span><span class="node hot">生成与引用</span></div>
+          </div>
+          <div class="meter" style="margin-top:16px">
+            <div class="lbl"><span>Recall@10</span><b>100%</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>MRR</span><b>1.000</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>NDCG@10</span><b>0.967</b></div>
+            <div class="track"><div class="fill" data-w="96"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>意图分类准确率</span><b>7 / 7</b></div>
+            <div class="track"><div class="fill" data-w="100"></div></div>
+          </div>
+          <div class="tagline"><i>合成评测集</i><i>可一键复现</i><i>混合 vs 纯稀疏可消融</i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- P3 -->
+    <div class="pane" id="p3" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>先划清边界，再谈能力</h3>
+          <p class="desc">所有出网点都经过统一闸门：拦截即拒绝、脱敏即改写并记账。任何一步失败都不阻断主流程，而是逐级降级。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>出站拦截</b>：一键切断全部外部请求，问答自动退回纯本地检索</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>敏感字段脱敏</b>：发送前改写手机号、证件号、卡号等，并写入隐私审计</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>凭据只在本机</b>：模型与密钥存入本地配置，不随应用分发、不进版本库</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>许可与审计</b>：本地许可闸门控制功能可见性，操作日志留存关键动作</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>PRIVACY TRUST</b><span>● GATE ON</span></div>
+          <div class="vrow">
+            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#5eead4,#22d3ee)">✓</span><span class="tx"><b>出站拦截</b><span>阻断外部请求 · 0 次放行</span></span></div>
+            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#5eead4,#22d3ee)">✓</span><span class="tx"><b>敏感字段脱敏</b><span>12 类规则 · 命中即改写</span></span></div>
+            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">i</span><span class="tx"><b>向量索引</b><span>全部在本机构建与查询</span></span></div>
+            <div class="vcell"><span class="av" style="background:linear-gradient(140deg,#a78bfa,#f472b6)">i</span><span class="tx"><b>审计日志</b><span>关键动作可回溯</span></span></div>
+          </div>
+          <div class="tagline"><i>local-first</i><i>fail-soft</i><i>audit-trail</i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- P4 -->
+    <div class="pane" id="p4" role="tabpanel">
+      <div class="pane-grid">
+        <div>
+          <h3>图片、语音、视频、朋友圈，一个都不少</h3>
+          <p class="desc">本地解码让沉睡在缓存目录里的媒体重新变得可看、可听、可搜索；转写后的语音与视频直接进入同一条检索链路。</p>
+          <ul class="flist">
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>朋友圈时间线</b>：图片与视频就地解密播放，按人 / 按月回看</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>语音转文字</b>：内置 whisper.cpp，离线转写，随消息一起被检索</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>表情与收藏</b>：表情包、收藏夹、文件按类型归档</span></li>
+            <li><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span><b>导出与备份</b>：导出结构化数据，配置与索引可整体备份迁移</span></li>
+          </ul>
+        </div>
+        <div class="visual">
+          <div class="vhead"><b>MEDIA ASSETS</b><span>● 4 TYPES</span></div>
+          <div class="vrow" style="grid-template-columns:1fr 1fr 1fr">
+            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
+              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#7ef0ff;fill:none;stroke-width:1.7"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m4 18 5-5 4 3.5 3-2.5 4 4"/></svg>
+              <span style="font-size:11.5px;color:#9aa6c9">图片</span>
+            </div>
+            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
+              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#c4b5fd;fill:none;stroke-width:1.7"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M18 11a6 6 0 0 1-12 0M12 17v4"/></svg>
+              <span style="font-size:11.5px;color:#9aa6c9">语音</span>
+            </div>
+            <div class="vcell" style="display:grid;justify-items:center;gap:6px;padding:14px 8px">
+              <svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:#f9a8d4;fill:none;stroke-width:1.7"><rect x="2.5" y="5" width="14" height="14" rx="2.5"/><path d="m17 10 4.5-3v10L17 14z"/></svg>
+              <span style="font-size:11.5px;color:#9aa6c9">视频</span>
+            </div>
+          </div>
+          <div class="meter" style="margin-top:16px">
+            <div class="lbl"><span>本地转写引擎</span><b>whisper.cpp</b></div>
+            <div class="track"><div class="fill" data-w="88"></div></div>
+          </div>
+          <div class="meter">
+            <div class="lbl"><span>朋友圈视频解密</span><b>WASM 本地</b></div>
+            <div class="track"><div class="fill" data-w="80"></div></div>
+          </div>
+          <div class="tagline"><i>offline decode</i><i>可检索媒体</i><i>一键导出</i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 解决方案 ============ -->
+<section id="solutions">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">SOLUTIONS</div>
+      <h2>谁在用 Super Time</h2>
+      <p>共同点是：数据属于自己，又确实需要被重新读一遍。所有场景都要求你使用对数据拥有合法访问权的账号。</p>
+    </div>
+
+    <div class="grid-3">
+      <div class="card sol js-tilt rv">
+        <div class="top">
+          <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></div>
+          <span class="plan">PERSONAL</span>
+        </div>
+        <h3>个人数据资产化</h3>
+        <p>几年的聊天记录不该只躺在硬盘角落里。把它变成能检索、能回看、能带走的个人档案。</p>
+        <ul>
+          <li>年度 / 月度回顾自动成文</li>
+          <li>重要约定与账单快速定位</li>
+          <li>导出结构化数据长期留存</li>
+        </ul>
+        <div class="glow"></div>
+      </div>
+
+      <div class="card sol js-tilt rv" style="--d:110ms">
+        <div class="top">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9.5 21v-6h5v6"/></svg></div>
+          <span class="plan">TEAM</span>
+        </div>
+        <h3>团队内部数据治理</h3>
+        <p>用自有账号授权的工作沟通记录做内部复盘与合规自查，全程离线，敏感内容不出办公网络。</p>
+        <ul>
+          <li>出站拦截 + 脱敏可强制开启</li>
+          <li>关键操作留痕，满足内部审计</li>
+          <li>许可闸门控制功能可见范围</li>
+        </ul>
+        <div class="glow"></div>
+      </div>
+
+      <div class="card sol js-tilt rv" style="--d:220ms">
+        <div class="top">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5z"/><path d="M8 7h6M8 11h6"/></svg></div>
+          <span class="plan">CREATOR</span>
+        </div>
+        <h3>创作者与研究者的资料库</h3>
+        <p>把社群对话、访谈、素材群沉淀成可被提问的知识底稿，写作时直接问，不必再爬聊天记录。</p>
+        <ul>
+          <li>知识图谱串联人 / 群 / 话题</li>
+          <li>会话内直接提问与追问问答</li>
+          <li>总结可直接进入二次编辑</li>
+        </ul>
+        <div class="glow"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 技术架构 ============ -->
+<section id="tech">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">ARCHITECTURE</div>
+      <h2>桌面端的分层架构</h2>
+      <p>主进程负责数据与安全边界，渲染进程只拿到经过许可闸门允许的结果；两者通过受控的预加载桥通信。</p>
+    </div>
+
+    <div class="arch">
+      <div class="layer">
+        <div class="lrow rv"><span class="k">UI LAYER</span><span class="v"><i>React 18</i><i>TypeScript</i><i>Vite</i><i>ECharts</i><i>深浅双主题</i></span></div>
+        <div class="lrow rv" style="--d:90ms"><span class="k">QUERY</span><span class="v"><i>会话 / 记录</i><i>朋友圈</i><i>媒体资产</i><i>台账</i><i>地图足迹</i><i>年度报告</i></span></div>
+        <div class="lrow rv" style="--d:180ms"><span class="k">RETRIEVAL</span><span class="v"><i>意图路由</i><i>查询改写</i><i>BM25</i><i>向量余弦</i><i>结构化过滤</i><i>RRF 融合</i><i>交叉重排</i><i>上下文压缩</i></span></div>
+        <div class="lrow rv" style="--d:270ms"><span class="k">DATA</span><span class="v"><i>SQLite FTS5</i><i>本地向量库</i><i>whisper.cpp</i><i>WASM 解密</i><i>koffi 原生桥</i></span></div>
+        <div class="lrow rv" style="--d:360ms"><span class="k">TRUST</span><span class="v"><i>出站闸门</i><i>脱敏与审计</i><i>许可闸门</i><i>操作日志</i><i>备份还原</i></span></div>
+      </div>
+
+      <div class="tech">
+        <div class="rv"><b>Electron 44</b><span>主进程 / preload 沙箱</span></div>
+        <div class="rv" style="--d:80ms"><b>React 18 + Vite 5</b><span>前端构建与热更新</span></div>
+        <div class="rv" style="--d:160ms"><b>SQLite FTS5</b><span>本地全文索引</span></div>
+        <div class="rv" style="--d:240ms"><b>whisper.cpp</b><span>离线语音转写</span></div>
+        <div class="rv" style="--d:320ms"><b>WASM + koffi</b><span>媒体解密 / 原生调用</span></div>
+        <div class="rv" style="--d:400ms"><b>Vitest</b><span>36 套件 · 162 用例</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 关于我们 ============ -->
+<section id="about">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">ABOUT US</div>
+      <h2>我们只做一件事：把数据主权还回去</h2>
+      <p>Super Time 是一支做本地优先桌面工具的小团队。我们相信，最私密的数据应该由产生它的人自己保管、自己读取、自己决定去留。</p>
+    </div>
+
+    <div class="about">
+      <div class="rv">
+        <h3 style="margin:0;font-size:21px;font-weight:670">为什么做这件事</h3>
+        <div class="tl">
+          <div class="it"><b>起点</b><p>十年聊天记录只能靠手指一直往上滑 —— 明明数据在自己电脑里，却读不出来。</p></div>
+          <div class="it"><b>取舍</b><p>市面上大多数方案要你把数据交出去。我们反过来：解析、索引、检索全放本机，宁可牺牲一点效果。</p></div>
+          <div class="it"><b>打磨</b><p>把 RAG 做成可评估、可调参、可降级的工程系统：有评测集，有消融对照，有回归护栏。</p></div>
+          <div class="it"><b>当下</b><p>持续补齐数据覆盖度、检索质量与视觉还原度，让「看得懂」和「信得过」同时成立。</p></div>
+        </div>
+      </div>
+
+      <div class="rv" style="--d:120ms">
+        <div class="vals">
+          <div class="val">
+            <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M12 3 4 7v6c0 4 3.4 6.6 8 8 4.6-1.4 8-4 8-8V7z"/></svg></div>
+            <div><b>隐私不是功能，是前提</b><p>任何新增的出网点都必须先过闸门、先有审计、先能关闭。</p></div>
+          </div>
+          <div class="val">
+            <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+            <div><b>可验证，才可信</b><p>评测指标、检索漏斗、引用来源全部摊开给用户看，不靠形容词。</p></div>
+          </div>
+          <div class="val">
+            <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div>
+            <div><b>细节即体验</b><p>一条引用行、一个头像圆角、一次降级提示，都按可用标准做，而不是差不多就行。</p></div>
+          </div>
+          <div class="val">
+            <div class="ico" style="width:38px;height:38px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg></div>
+            <div><b>说人话</b><p>不夸大能力，不隐藏边界；做不到的地方，直接写在文档里。</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section id="faq" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head center rv">
+      <div class="sec-eyebrow">FAQ</div>
+      <h2>你可能想问</h2>
+    </div>
+    <div class="faq">
+      <div class="q rv">
+        <button type="button">我的聊天数据会被上传到云端吗？</button>
+        <div class="ans"><p>默认不会。解析、索引、检索都在本机完成。仅当你主动配置并开启模型通道用于生成时，才会把检索到的少量上下文发给该模型服务；开启「出站拦截」后该请求会被直接拒绝，问答自动降级为纯本地检索，功能仍然可用。</p></div>
+      </div>
+      <div class="q rv" style="--d:80ms">
+        <button type="button">需要提供微信账号或密码吗？</button>
+        <div class="ans"><p>不需要。Super Time 不登录你的微信，只读取本机数据目录并做本地解密。请仅在你拥有合法访问权的设备与账号上使用。</p></div>
+      </div>
+      <div class="q rv" style="--d:160ms">
+        <button type="button">AI 问答可以用哪家的模型？</button>
+        <div class="ans"><p>任何 OpenAI 兼容接口都可以，也可以指向本地部署的模型。模型、密钥与接口地址只保存在你本机的配置文件里，不随应用分发，也不进入版本库。</p></div>
+      </div>
+      <div class="q rv" style="--d:240ms">
+        <button type="button">支持什么系统？数据规模上有限制吗？</button>
+        <div class="ans"><p>当前为 Windows x64 桌面客户端。索引采用增量构建，实测在 13 万条量级消息上检索延迟以百毫秒计；更大的语料可调大候选池并采用分批增量构建。</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 联系我们 ============ -->
+<section id="contact">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-eyebrow">CONTACT</div>
+      <h2>聊聊你手上的数据</h2>
+      <p>想试用桌面版、想了解隐私与合规边界、或者想反馈一个问题，都可以直接找我们。</p>
+    </div>
+
+    <div class="contact">
+      <form class="form rv" id="form" novalidate>
+        <div class="row2">
+          <div class="field"><label for="f-name">称呼</label><input id="f-name" name="name" placeholder="怎么称呼你" required></div>
+          <div class="field"><label for="f-mail">邮箱</label><input id="f-mail" name="email" type="email" placeholder="you@example.com" required></div>
+        </div>
+        <div class="field">
+          <label for="f-type">想聊的主题</label>
+          <select id="f-type" name="topic">
+            <option>申请试用桌面版</option>
+            <option>部署与授权咨询</option>
+            <option>隐私与合规边界</option>
+            <option>功能建议 / 问题反馈</option>
+            <option>其他</option>
+          </select>
+        </div>
+        <div class="field"><label for="f-msg">具体内容</label><textarea id="f-msg" name="msg" rows="5" placeholder="简单说说你的场景，比如数据规模、想解决的问题…"></textarea></div>
+        <label class="consent"><input type="checkbox" id="f-ok" required><span>我确认提交内容不包含他人的敏感个人信息，并同意我们仅将该信息用于本次沟通。</span></label>
+        <button class="btn btn-primary" type="submit" style="width:100%">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2.5-7.5z"/></svg>
+          发送信息
+        </button>
+      </form>
+
+      <div class="cinfo rv" style="--d:120ms">
+        <div class="cbox">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7 8.5 6 8.5-6"/></svg></div>
+          <div><b>商务与合作</b><p>contact@supertime.app</p></div>
+        </div>
+        <div class="cbox">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z"/></svg></div>
+          <div><b>技术支持</b><p>support@supertime.app</p></div>
+        </div>
+        <div class="cbox">
+          <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/></svg></div>
+          <div><b>办公地点</b><p>深圳 · 南山</p></div>
+        </div>
+        <div class="note">
+          提交即表示你理解：Super Time 是一款本地数据处理工具，仅用于处理你本人拥有合法访问权的数据。我们不提供任何账号代取、远程读取或规避授权的能力。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA ============ -->
+<section style="padding-top:0">
+  <div class="wrap">
+    <div class="cta-band rv">
+      <div class="glow"></div>
+      <h2>让你的聊天记录，<span class="grad-txt">重新开口说话</span></h2>
+      <p>下载桌面版，首次启动即完成本地索引。不注册账号，不上传数据。</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#contact">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+          获取 Windows 桌面版
+        </a>
+        <a class="btn btn-ghost" href="#faq">先看常见问题</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Footer ============ -->
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div class="fbrand">
+        <a class="brand" href="#home">
+          <span class="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8.4" stroke="url(#lg1)" stroke-width="1.7"/>
+              <path d="M12 7.4V12l3.3 2.1" stroke="url(#lg1)" stroke-width="1.7" stroke-linecap="round"/>
+              <circle cx="12" cy="12" r="1.5" fill="#22d3ee"/>
+            </svg>
+          </span>
+          <span class="brand-txt"><b>Super<em>Time</em></b><i>WECHAT DATA</i></span>
+        </a>
+        <p>面向微信 4.x 本地数据的桌面端洞察与 AI 问答工作台。本地优先，数据不出本机。</p>
+      </div>
+      <div>
+        <h5>产品</h5>
+        <a href="#highlights">产品亮点</a>
+        <a href="#features">核心功能</a>
+        <a href="#tech">技术架构</a>
+        <a href="#faq">常见问题</a>
+      </div>
+      <div>
+        <h5>方案</h5>
+        <a href="#solutions">个人数据资产化</a>
+        <a href="#solutions">团队数据治理</a>
+        <a href="#solutions">创作者资料库</a>
+      </div>
+      <div>
+        <h5>联系</h5>
+        <a href="#about">关于我们</a>
+        <a href="mailto:contact@supertime.app">contact@supertime.app</a>
+        <a href="#contact">预约演示</a>
+      </div>
+    </div>
+    <p class="disc">
+      免责声明：Super Time 为本地数据管理工具，仅可用于处理使用者本人拥有合法访问权的数据。请在使用前确认你已获得相应授权，并遵守所在地法律法规与相关服务条款。本页面所展示的评测数据来自项目内置的合成评测集，仅用于说明检索链路能力，不代表真实语料下的效果。
+    </p>
+    <div class="fbot">
+      <span>© 2026 Super Time. All rights reserved.</span>
+      <span class="mono">Windows x64 · Electron Desktop</span>
+    </div>
+  </div>
+</footer>
+
+<button class="top" id="toTop" aria-label="回到顶部">
+  <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+</button>
+
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
+  <span id="toastTxt">已收到，我们会尽快回复。</span>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- 导航：滚动态 / 进度条 / 高亮 ---------- */
+  var nav = document.getElementById("nav");
+  var prog = document.getElementById("navProg");
+  var links = [].slice.call(document.querySelectorAll("#navLinks a"));
+  var secs = links.map(function(a){ return document.querySelector(a.getAttribute("href")); }).filter(Boolean);
+
+  function onScroll(){
+    var y = window.scrollY || document.documentElement.scrollTop;
+    nav.classList.toggle("solid", y > 24);
+    var h = document.documentElement.scrollHeight - window.innerHeight;
+    prog.style.width = (h > 0 ? Math.min(100, y / h * 100) : 0) + "%";
+    document.getElementById("toTop").classList.toggle("on", y > 700);
+
+    var active = 0;
+    for (var i = 0; i < secs.length; i++){
+      if (secs[i].offsetTop - 140 <= y) active = i;
+    }
+    links.forEach(function(a, i){ a.classList.toggle("active", i === active); });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  /* ---------- 移动端抽屉 ---------- */
+  var burger = document.getElementById("burger");
+  var drawer = document.getElementById("drawer");
+  function closeDrawer(){
+    burger.classList.remove("on"); drawer.classList.remove("on");
+    burger.setAttribute("aria-expanded", "false");
+  }
+  burger.addEventListener("click", function(){
+    var open = drawer.classList.toggle("on");
+    burger.classList.toggle("on", open);
+    burger.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  drawer.addEventListener("click", function(e){ if (e.target.tagName === "A") closeDrawer(); });
+  window.addEventListener("keydown", function(e){ if (e.key === "Escape") closeDrawer(); });
+
+  /* ---------- 滚动揭示 ---------- */
+  var rvs = [].slice.call(document.querySelectorAll(".rv"));
+  if (!("IntersectionObserver" in window) || reduce){
+    rvs.forEach(function(el){ el.classList.add("in"); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target); }
+      });
+    }, { rootMargin: "0px 0px -8% 0px", threshold: .12 });
+    rvs.forEach(function(el){ io.observe(el); });
+  }
+
+  /* ---------- 数字滚动 ---------- */
+  var counters = [].slice.call(document.querySelectorAll("[data-count]"));
+  function runCount(el){
+    var target = parseFloat(el.getAttribute("data-count"));
+    var suffix = el.getAttribute("data-suffix") || "";
+    if (reduce){ el.textContent = target + suffix; return; }
+    var dur = 1500, t0 = null;
+    function step(ts){
+      if (t0 === null) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      var e = 1 - Math.pow(1 - p, 3);
+      var v = target * e;
+      el.textContent = (target >= 1000 ? Math.round(v).toLocaleString("en-US") : Math.round(v)) + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  if (!("IntersectionObserver" in window)){
+    counters.forEach(runCount);
+  } else {
+    var io2 = new IntersectionObserver(function(es){
+      es.forEach(function(en){ if (en.isIntersecting){ runCount(en.target); io2.unobserve(en.target); } });
+    }, { threshold: .5 });
+    counters.forEach(function(el){ io2.observe(el); });
+  }
+
+  /* ---------- 迷你柱状图 ---------- */
+  var bars = document.getElementById("bars");
+  if (bars){
+    var hs = [38,52,44,66,58,74,62,86,70,92,78,64];
+    hs.forEach(function(h, i){
+      var s = document.createElement("span");
+      s.style.height = h + "%";
+      s.style.animationDelay = (i * 0.13) + "s";
+      bars.appendChild(s);
+    });
+  }
+
+  /* ---------- Hero 打字机 ---------- */
+  var typed = document.getElementById("typed");
+  if (typed && !reduce){
+    var words = ["可检索、可追溯、可引用", "可评估、可调参、可降级", "本地索引 · 百毫秒响应", "离线转写 · 全文可搜"];
+    var wi = 0, ci = 0, del = false;
+    var full = words[0];
+    typed.textContent = "";
+    (function tick(){
+      full = words[wi];
+      typed.textContent = full.slice(0, ci);
+      if (!del && ci < full.length){ ci++; setTimeout(tick, 78); }
+      else if (!del && ci === full.length){ del = true; setTimeout(tick, 1900); }
+      else if (del && ci > 0){ ci--; setTimeout(tick, 34); }
+      else { del = false; wi = (wi + 1) % words.length; setTimeout(tick, 260); }
+    })();
+  } else if (typed){
+    typed.textContent = "可检索、可追溯、可引用";
+  }
+
+  /* ---------- 分页 ---------- */
+  var tabs = [].slice.call(document.querySelectorAll(".tab"));
+  var panes = [].slice.call(document.querySelectorAll(".pane"));
+  function fill(el){
+    var w = el.getAttribute("data-w");
+    el.style.width = w + "%";
+  }
+  tabs.forEach(function(t){
+    t.addEventListener("click", function(){
+      tabs.forEach(function(x){ x.classList.remove("on"); x.setAttribute("aria-selected", "false"); });
+      panes.forEach(function(p){ p.classList.remove("on"); });
+      t.classList.add("on"); t.setAttribute("aria-selected", "true");
+      var pane = document.getElementById(t.getAttribute("data-pane"));
+      if (pane){
+        pane.classList.add("on");
+        [].slice.call(pane.querySelectorAll(".fill")).forEach(function(f, i){
+          f.style.width = "0%";
+          setTimeout(function(){ fill(f); }, 90 + i * 110);
+        });
+      }
+    });
+  });
+  // 首屏可见时填充第一个 pane 的进度条
+  var p1 = document.getElementById("p1");
+  if (p1 && !("IntersectionObserver" in window)){
+    [].slice.call(p1.querySelectorAll(".fill")).forEach(function(f){ fill(f); });
+  } else if (p1){
+    var io3 = new IntersectionObserver(function(es){
+      es.forEach(function(en){
+        if (en.isIntersecting){
+          [].slice.call(p1.querySelectorAll(".fill")).forEach(function(f, i){
+            setTimeout(function(){ fill(f); }, 180 + i * 130);
+          });
+          io3.disconnect();
+        }
+      });
+    }, { threshold: .3 });
+    io3.observe(p1);
+  }
+
+  /* ---------- FAQ 手风琴 ---------- */
+  var qs = [].slice.call(document.querySelectorAll(".q"));
+  qs.forEach(function(q){
+    var btn = q.querySelector("button");
+    var ans = q.querySelector(".ans");
+    btn.addEventListener("click", function(){
+      var isOn = q.classList.contains("on");
+      qs.forEach(function(o){
+        o.classList.remove("on");
+        var a = o.querySelector(".ans");
+        if (a) a.style.maxHeight = "0px";
+      });
+      if (!isOn){ q.classList.add("on"); ans.style.maxHeight = ans.scrollHeight + "px"; }
+    });
+  });
+
+  /* ---------- 卡片光标跟随（仅在精确指针设备上启用） ---------- */
+  var canHover = !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+  if (!reduce && canHover){
+    [].slice.call(document.querySelectorAll(".card")).forEach(function(c){
+      c.addEventListener("pointermove", function(e){
+        var r = c.getBoundingClientRect();
+        c.style.setProperty("--mx", ((e.clientX - r.left) / r.width * 100) + "%");
+        c.style.setProperty("--my", ((e.clientY - r.top) / r.height * 100) + "%");
+      });
+    });
+
+    /* 全局光斑 */
+    var glow = document.getElementById("glow");
+    var gx = window.innerWidth / 2, gy = window.innerHeight / 2, tx = gx, ty = gy;
+    window.addEventListener("pointermove", function(e){
+      tx = e.clientX; ty = e.clientY; glow.style.opacity = 1;
+    }, { passive: true });
+    var gAlive = true;
+    function loop(){
+      if (!gAlive) return;
+      gx += (tx - gx) * 0.08; gy += (ty - gy) * 0.08;
+      glow.style.transform = "translate(" + gx + "px," + gy + "px) translate(-50%,-50%)";
+      requestAnimationFrame(loop);
+    }
+    loop();
+    document.addEventListener("visibilitychange", function(){
+      gAlive = !document.hidden;
+      if (gAlive) loop();
+    });
+  }
+
+  /* ---------- 星空 / 粒子 ---------- */
+  var cv = document.getElementById("stars");
+  var ctx = null;
+  if (cv && !reduce){
+    try { ctx = cv.getContext("2d"); } catch (err) { ctx = null; }
+    if (ctx && typeof ctx.setTransform !== "function") ctx = null;
+    if (!ctx) cv.style.display = "none";
+  }
+  if (ctx){
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var W = 0, H = 0, parts = [];
+    var mouse = { x: -999, y: -999 };
+    var paused = false, raf = 0, narrow = false;
+
+    function resize(){
+      var r = cv.parentElement.getBoundingClientRect();
+      W = r.width; H = r.height;
+      cv.width = W * dpr; cv.height = H * dpr;
+      cv.style.width = W + "px"; cv.style.height = H + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      build();
+    }
+    function build(){
+      narrow = W < 560;
+      var n = narrow
+        ? Math.max(18, Math.min(30, Math.round(W * H / 13000)))
+        : Math.max(28, Math.min(84, Math.round(W * H / 16000)));
+      parts = [];
+      for (var i = 0; i < n; i++){
+        parts.push({
+          x: Math.random() * W, y: Math.random() * H,
+          vx: (Math.random() - .5) * .22, vy: (Math.random() - .5) * .22,
+          r: Math.random() * 1.5 + .5
+        });
+      }
+    }
+    cv.parentElement.addEventListener("pointermove", function(e){
+      var r = cv.parentElement.getBoundingClientRect();
+      mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top;
+    });
+    cv.parentElement.addEventListener("pointerleave", function(){ mouse.x = mouse.y = -999; });
+
+    function draw(){
+      if (paused){ raf = 0; return; }
+      ctx.clearRect(0, 0, W, H);
+      for (var i = 0; i < parts.length; i++){
+        var p = parts[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0 || p.x > W) p.vx *= -1;
+        if (p.y < 0 || p.y > H) p.vy *= -1;
+
+        var d = Math.hypot(p.x - mouse.x, p.y - mouse.y);
+        var near = d < (narrow ? 120 : 170);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, near ? p.r * 1.5 : p.r, 0, 6.2832);
+        ctx.fillStyle = near ? "rgba(126,240,255,.85)" : "rgba(150,180,255,.32)";
+        ctx.fill();
+
+        var linkR2 = narrow ? 12000 : 17000;
+        var maxD2 = narrow ? 120 : 170;
+        for (var j = i + 1; j < parts.length; j++){
+          var q = parts[j];
+          var dx = p.x - q.x, dy = p.y - q.y;
+          var dd = dx * dx + dy * dy;
+          if (dd < linkR2){
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = "rgba(120,150,255," + (0.13 * (1 - dd / linkR2)) + ")";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+        if (near){
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y); ctx.lineTo(mouse.x, mouse.y);
+          ctx.strokeStyle = "rgba(34,211,238," + (0.26 * Math.max(0, 1 - d / maxD2)) + ")";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    }
+    function resume(){ if (!paused && !raf) raf = requestAnimationFrame(draw); }
+    document.addEventListener("visibilitychange", function(){
+      paused = document.hidden;
+      if (!paused) resume();
+    });
+    if ("IntersectionObserver" in window){
+      new IntersectionObserver(function(es){
+        paused = !es[0].isIntersecting;
+        if (!paused) resume();
+      }, { threshold: 0 }).observe(cv.parentElement);
+    }
+    resize();
+    var rt; window.addEventListener("resize", function(){ clearTimeout(rt); rt = setTimeout(resize, 180); });
+    draw();
+  }
+
+  /* ---------- 回到顶部 ---------- */
+  document.getElementById("toTop").addEventListener("click", function(){
+    window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+  });
+
+  /* ---------- 表单 ---------- */
+  var form = document.getElementById("form");
+  var toast = document.getElementById("toast");
+  var toastTxt = document.getElementById("toastTxt");
+  var tt;
+  function showToast(msg){
+    toastTxt.textContent = msg;
+    toast.classList.add("on");
+    clearTimeout(tt);
+    tt = setTimeout(function(){ toast.classList.remove("on"); }, 3200);
+  }
+  if (form){
+    form.addEventListener("submit", function(e){
+      e.preventDefault();
+      var name = form.querySelector("#f-name");
+      var mail = form.querySelector("#f-mail");
+      var ok = form.querySelector("#f-ok");
+      if (!name.value.trim()){ name.focus(); showToast("请填写称呼"); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail.value.trim())){ mail.focus(); showToast("请填写有效的邮箱地址"); return; }
+      if (!ok.checked){ showToast("请先确认内容合规声明"); return; }
+      showToast("已收到，我们会尽快回复到你邮箱。");
+      form.reset();
+    });
+  }
+})();
+</script>
+</body>
+</html>

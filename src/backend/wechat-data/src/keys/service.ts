@@ -15,8 +15,8 @@ import { scanImageKeyOnce } from './image-key-memory-scan.ts'
 import { resolveLocalImageKey, scanV2Templates, trustedXorForVerifiedAesKey } from './image-key-resolver.ts'
 import { getAccountKeysFromStore, upsertAccountKeysInStore } from './key-store.ts'
 import type { DbKeyResult, ImageKeyResult } from './types.ts'
+import { detectWechatAccounts } from '../config/detect.ts'
 import { resolveDecryptedDir } from '../dirs.ts'
-import { detectWechatAccounts } from '../query/config.ts'
 
 /** WeChat main executable names. */
 const WECHAT_EXECUTABLE_NAMES = ['weixin.exe', 'wechat.exe']

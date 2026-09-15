@@ -9,6 +9,7 @@
  * 本模块只负责持久 CRUD。
  */
 import { DatabaseSync } from 'node:sqlite'
+import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { TasksSnapshot, TaskMutationResult, WechatTask } from '../types.ts'
 
@@ -16,10 +17,35 @@ function dbPath(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'wechat_tasks.db')
 }
 
+/**
+ * 打开（不存在则创建）待办库。
+ *
+ * 显式建父目录（N1）：库建在**解密数据根的父目录**，而那个目录在「还没解密过任何库」
+ * 时并不存在 —— SQLite 只会回一句 `unable to open database file`，用户第一次记待办就
+ * 写不进去。`notes.ts` 早就在做同一件事，这里补上。
+ *
+ * 建目录失败**刻意吞掉**（只留一行日志）：随后的 `DatabaseSync` 会报出原始错误，
+ * 失败语义与改动前完全一致；这里若改成抛出，反而会把「父目录已存在但建目录受限」
+ * 这类本来能用的路径变成新的失败点。
+ * @param decryptedDir - decrypted data root.
+ * @returns an opened store with schema ensured.
+ */
 function openStore(decryptedDir: string): DatabaseSync {
-  const db = new DatabaseSync(dbPath(decryptedDir))
+  const file = dbPath(decryptedDir)
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+  } catch (e) {
+    console.warn('[wechat-tasks] 数据根目录创建失败，继续尝试打开库：' + errorText(e))
+  }
+  const db = new DatabaseSync(file)
   db.exec('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'open\', due_at INTEGER, source_username TEXT NOT NULL DEFAULT \'\', source_local_id INTEGER, message_time INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)')
   return db
+}
+
+/** 错误文本（Error.message 优先，非 Error 一律 String()）。 */
+function errorText(e: unknown): string {
+  const msg = (e as { message?: unknown } | null | undefined)?.message
+  return typeof msg === 'string' && msg !== '' ? msg : String(e)
 }
 
 function cellStr(v: unknown): string {
@@ -45,16 +71,30 @@ function rowToTask(r: Record<string, unknown>): WechatTask {
   return task
 }
 
+/**
+ * Read result: still a `TasksSnapshot` (既有调用方按 items/total 用不受影响），
+ * 额外带一个**只在读失败时出现**的 `readError`。
+ *
+ * 改前 `catch { return { items: [], total: 0 } }` ——「库打不开」与「确无待办」在界面上
+ * 长得一模一样，用户按「暂无待办」去排查会查错方向（N19 的 `res.error` 是同一课）。
+ */
+export interface TasksSnapshotRead extends TasksSnapshot {
+  /** 读不到库时非空（此时 items 恒为 []）；确无待办时为 undefined。 */
+  readError?: string
+}
+
 /** List tasks (newest first). */
-export function listTasks(decryptedDir: string): TasksSnapshot {
+export function listTasks(decryptedDir: string): TasksSnapshotRead {
   try {
     const db = openStore(decryptedDir)
     const rows = db.prepare('SELECT * FROM tasks ORDER BY id DESC').all() as Array<Record<string, unknown>>
     db.close()
     const items = rows.map(rowToTask)
     return { items, total: items.length }
-  } catch {
-    return { items: [], total: 0 }
+  } catch (e) {
+    const readError = errorText(e)
+    console.warn('[wechat-tasks] 待办库读取失败（与「确无待办」不同）：' + dbPath(decryptedDir) + ': ' + readError)
+    return { items: [], total: 0, readError }
   }
 }
 

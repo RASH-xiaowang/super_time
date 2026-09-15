@@ -20,9 +20,20 @@ import { apiGetAvatar } from '../api.ts'
 import { tokenColor } from '../utils/theme-color.ts'
 import { communityColor, DEFAULT_GRAPH_SETTINGS, groupCommunities, neighboursOf, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import { buildPoster, posterToDataUrl, type PosterCommunity, type PosterInput, type PosterRelation, type PosterStatItem, type PosterRatio, type PosterStyle } from './graph-poster.ts'
+import { createRestartableTimer } from './timers.ts'
 import css from './graph.module.css'
 
 echarts.use([GraphChart, TooltipComponent, CanvasRenderer, SVGRenderer])
+
+/**
+ * `finished` 事件的静默期（L8）。
+ *
+ * `finished` 在力导向布局动画期间**每帧**触发，而它的处理是「重算小地图 + 持久化全部节点坐标」，
+ * 于是动画期间每一帧都要逐节点读坐标（O(n) 次 echarts 查询）并 `JSON.stringify` 整张表写
+ * localStorage。300ms 静默期把逐帧写合并成「停下后一次」：动画期间几乎不做事，
+ * 布局落定后仍会落一次最终态（含卸载前的兜底，见 chart 初始化处的 cleanup）。
+ */
+const SETTLE_MS = 300
 
 export interface EchartsGraphCanvasHandle {
   fitView: () => void
@@ -794,8 +805,19 @@ export const EchartsGraphCanvas = forwardRef<EchartsGraphCanvasHandle, EchartsGr
     ro.observe(el)
     roRef.current = ro
     applyFull()
-    chart.on('finished', () => { drawMinimap(); capturePositions() })
+    // 布局落定后的收尾（读坐标 → 重算小地图 + 持久化）走静默期合并，别再逐帧做（L8）：
+    // 见 SETTLE_MS 的说明。
+    const settle = createRestartableTimer({ delayMs: SETTLE_MS, run: () => { drawMinimap(); capturePositions() } })
+    chart.on('finished', () => { settle.restart() })
     return () => {
+      // 合并把「逐帧写」改成了「延时写」，所以卸载时要兜住这一笔：最后一帧 finished 之后
+      // 用户立刻切走的话，那次布局的坐标还没落盘 —— 这正是「下次进入原地恢复」依赖的数据。
+      if (settle.pending()) {
+        settle.cancel()
+        drawMinimap()
+        capturePositions()
+      }
+      settle.dispose()
       roRef.current?.disconnect()
       roRef.current = null
       chartRef.current?.dispose()

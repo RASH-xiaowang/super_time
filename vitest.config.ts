@@ -20,6 +20,9 @@ export default defineConfig({
       // 前端**纯逻辑**模块（不 import react / 不碰 DOM，如 chunks/ask-gate 这类状态机）：
       // 组件级测试仍只有 SSR 冒烟，但这些逻辑值得有真正的回归用例。
       'src/client/ui-wechat/src/client/**/*.spec.ts',
+      // ui-app 侧的纯逻辑（隐私同意状态、启动引导状态）：同样不 import react、不碰 DOM。
+      // 组件本身仍只有 SSR 冒烟，但「未同意就不放行」这类判定必须有回归。
+      'src/client/ui-app/**/*.spec.ts',
     ],
     environment: 'node',
     // spec 里会建库、写文件、跑 PBKDF2，比默认 5s 宽松些。

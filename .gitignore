@@ -1,6 +1,8 @@
 node_modules/
 dist/
 ui-dist/
+# `*.log` 也覆盖**根目录的点号日志**（`.onboard-err.log` 之类；gitignore 的 `*` 会匹配点号开头）
+# —— 别把它收窄成 `/logs/`：那会让调试残留重新入库，而它们正是最容易被误提交的那类文件。
 *.log
 .worktrees/
 .workbuddy/

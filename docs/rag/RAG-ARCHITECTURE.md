@@ -294,7 +294,11 @@ LLM 规划器失败                    →  退化为用原问题 bigram 检索
 
 ## 13. 集成一览
 
-**新增 Remote 方法**（bundle 方法数 119 → 126）：
+**新增 Remote 方法**（本轮 7 个；本节当时记的方法数早已不是当前值。
+⚠️ 2026-09-15 核对：那之后又加了知识图谱等一批，**当前总数是 132** ——
+权威值以 `src/backend/wechat-data/src/gateway.ts` 的 `@Remote` 为准，
+自动生成的方法清单见 `docs/API.md`（一致性由 `npm run docs:api:check` 与
+`src/backend/tests/api-docs.spec.ts` 守住）。下表的「7 个」指本次新增，不是总数）。
 
 | 方法 | 用途 |
 |---|---|
