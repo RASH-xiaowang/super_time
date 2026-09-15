@@ -14,7 +14,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   capturePanel: (rect) => ipcRenderer.invoke('window:capture-panel', rect),
   windowControls: {
     minimize: () => ipcRenderer.send('window:minimize'),
-    toggleMaximize: () => ipcRenderer.send('window:maximize-toggle'),
     toggleFullscreen: () => ipcRenderer.send('window:fullscreen-toggle'),
     close: () => ipcRenderer.send('window:close'),
     isFullscreen: () => ipcRenderer.invoke('window:is-fullscreen'),
@@ -29,24 +28,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('window:fullscreen-changed', handler);
       return () => ipcRenderer.removeListener('window:fullscreen-changed', handler);
     },
-    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
-    onMaximizedChange: (listener) => {
-      const handler = (_event, maximized) => {
-        try {
-          listener(maximized);
-        } catch {
-          /* ignore */
-        }
-      };
-      ipcRenderer.on('window:maximized-changed', handler);
-      return () => ipcRenderer.removeListener('window:maximized-changed', handler);
-    }
   },
   wechat: {
     listMethods: () => ipcRenderer.invoke('wechat:list-methods'),
     info: () => ipcRenderer.invoke('wechat:info'),
     call: (method, args) => ipcRenderer.invoke('wechat:call', method, args),
-    dispose: () => ipcRenderer.invoke('wechat:dispose'),
     getLlmConfig: () => ipcRenderer.invoke('wechat:llm-get'),
     saveLlmConfig: (config) => ipcRenderer.invoke('wechat:llm-save', config),
     listLlmModels: (options) => ipcRenderer.invoke('wechat:llm-models', options),
@@ -66,12 +52,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   license: {
     status: () => ipcRenderer.invoke('license:status'),
-    activationRequest: () => ipcRenderer.invoke('license:activation-request'),
     exportRequest: () => ipcRenderer.invoke('license:export-request'),
     importFile: () => ipcRenderer.invoke('license:import'),
     importText: (text) => ipcRenderer.invoke('license:import-text', text),
     remove: () => ipcRenderer.invoke('license:remove'),
-    fingerprint: () => ipcRenderer.invoke('license:fingerprint'),
   },
   /** 诊断日志（M6）：用户报障时把落盘日志导出来。 */
   diag: {
