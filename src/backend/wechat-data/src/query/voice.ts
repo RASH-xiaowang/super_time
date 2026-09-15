@@ -4,7 +4,7 @@
  * (pure-Rust SILK v3 → WAV, bundled under resources/win32/x64).
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -99,14 +99,24 @@ export function svrIdByChatLocal(decryptedDir: string, username: string, localId
  * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
  * Returning `''` instead of an unrunnable path keeps the caller's error
  * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
+ *
+ * `startDir` exists so the packaged layout can be exercised as a **behaviour**
+ * rather than as a source-string assertion: a spec builds
+ * `<tmp>/app.asar/src/backend/wechat-data/lib` plus the unpacked sibling and
+ * calls this function with it. (The first version of the guard asserted the
+ * source contained `onDiskPath(candidate)`; leaving that string in a comment
+ * and calling `existsSync` underneath kept it green while the bug returned.)
+ * @param startDir - Directory to start the upward walk from; defaults to the
+ *   directory of the emitted module.
+ * @returns A runnable on-disk exe path, or `''` when there is none.
  */
-export function silkDecoderBin(): string {
+export function silkDecoderBin(startDir?: string): string {
   const pinned = process.env.DSH_WECHAT_SILK_BIN
   if (pinned && pinned.trim().length > 0) return pinned.trim()
   try {
     // Walk up from the emitted module (lib or lib/types/query) to the package
     // root and look for resources/win32/x64/wx_silk.exe.
-    let dir = fileURLToPath(new URL('.', import.meta.url))
+    let dir = startDir ?? fileURLToPath(new URL('.', import.meta.url))
     for (let i = 0; i < 5; i += 1) {
       const candidate = join(dir, 'resources', 'win32', 'x64', 'wx_silk.exe')
       const bin = onDiskPath(candidate)
@@ -139,11 +149,22 @@ export function silkToWav(silk: Buffer, wavPath: string): { ok: boolean; error?:
   try {
     mkdirSync(tempDir, { recursive: true })
     writeFileSync(silkPath, silk)
-    const res = spawnSync(bin, ['16000', silkPath, wavPath], { encoding: 'utf8', windowsHide: true })
+    const res = spawnSync(bin, ['16000', silkPath, wavPath], {
+      encoding: 'utf8',
+      windowsHide: true,
+      // 解码一条语音是毫秒级；给个上界，免得个别坏输入把后端的调用窗口（10 分钟）用光。
+      timeout: 120_000,
+    })
     if (res.status === 0 && existsSync(wavPath)) return { ok: true }
-    return { ok: false, error: (res.stderr || `解码器退出码 ${String(res.status)}`).trim().slice(0, 200) }
+    // `res.error` 单独看：exe 起不来（ENOENT/EACCES）与「解码器明确报错」是两回事，
+    // 只报「退出码 null」会让「缺二进制」和「音频损坏」看起来一模一样（复审实测）。
+    const reason = res.error?.message || res.stderr || `解码器退出码 ${String(res.status)}`
+    return { ok: false, error: reason.trim().slice(0, 200) }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
+  } finally {
+    // 临时 silk 必须清掉：原先从不删除，本机 cached voices 目录实测已积了十余个残留。
+    try { rmSync(silkPath, { force: true }) } catch { /* 清理尽力而为 */ }
   }
 }
 
