@@ -1,7 +1,7 @@
 {
   "name": "super-time-electron",
   "version": "1.0.0",
-  "description": "Electron desktop demo app with 微信+ backend/frontend migrated from @deepseek-ai/dsh-wechat-data",
+  "description": "Electron desktop demo app with 微信+ backend/frontend migrated from @deepseek-ai/dsh-wechat-data（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -146,18 +146,6 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.utilities"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Utility"
     }
   }
 }

@@ -3,6 +3,15 @@
 本目录是从 `D:\deepseek-harness\packages\host\wechat-data`（`@deepseek-ai/dsh-wechat-data`）
 完整迁移并适配到 Super Time Electron 主进程的「微信+」后端。
 
+## 支持平台
+
+**仅 Windows（x64）**。产品读的是 Windows 微信的数据：`Weixin.exe` 内存扫描取密钥、
+`xwechat_files` 数据根、`HKCU\Software\Tencent\Weixin` 注册表、`%APPDATA%/Tencent/xwechat/config/*.ini`。
+
+构建侧同样只有 Windows 一种形态：原生依赖 `koffi` 只内联了 `@koromix/koffi-win32-x64`
+（见 `package.json` 的 `file:` 依赖与 `asarUnpack`），`electron-builder` 的构建目标也只保留
+`win`/`nsis`（mac/linux 目标已移除 —— 声明了也构建不出可用的包，那两种包里会缺原生二进制）。
+
 ## 迁移范围（无遗漏核对）
 
 | 类别 | 来源 | 本目录 |
