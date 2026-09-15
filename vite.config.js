@@ -1,4 +1,9 @@
 import { defineConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+/** shim 源码目录（M17）：构建直接读这里，绕开 node_modules 里那份 npm 拷贝。 */
+const SHIM_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'src/client/ui-primitives-shim/src')
 
 /**
  * Super Time —— 微信+前端构建配置
@@ -23,6 +28,15 @@ export default defineConfig({
     chunkSizeWarningLimit: 6000,
   },
   resolve: {
+    // M17：shim 包直接解析到**源码目录**，不走 node_modules 里那份 `file:` 拷贝。
+    // 为什么：npm 对 `file:` 依赖装的是真实拷贝，改源码后必须手工同步才生效（历史上因此
+    // 丢过 Button 的焦点环等改动，且构建日志毫无提示）。alias 之后「改源码 → 构建」直接生效，
+    // 「构建静默用旧副本」在结构上不可能发生。
+    // 保留 scripts/sync-ui-shim.js 作为「磁盘上那份拷贝」的一致性检查（不再是构建的前提）。
+    alias: [
+      { find: /^@deepseek-ai\/dsh-client-ui-primitives$/, replacement: path.join(SHIM_SRC, 'index.ts') },
+      { find: /^@deepseek-ai\/dsh-client-ui-primitives\/src\/(.*)$/, replacement: path.join(SHIM_SRC, '$1') },
+    ],
     // 与上游一致的扩展名优先级（源码 import 显式带 .ts/.tsx，保持兼容）
     extensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],
     // React 必须只有一份实例。
