@@ -47,7 +47,6 @@ const {
 } = require('./src/backend/wechat-paths');
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
 const licenseService = require('./src/license/service');
-const { getDeviceFingerprint } = require('./src/license/fingerprint');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
 const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
@@ -476,8 +475,6 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-changed', true));
-  mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
   // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）
   mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', true));
   mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', false));
@@ -669,13 +666,6 @@ app.whenReady().then(async () => {
     }
   });
 
-  ipcMain.handle('license:activation-request', () => {
-    try {
-      return licenseService.getActivationRequest(app.getPath('userData'), APP_VERSION);
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
 
   ipcMain.handle('license:export-request', async () => {
     try {
@@ -724,13 +714,6 @@ app.whenReady().then(async () => {
     }
   });
 
-  ipcMain.handle('license:fingerprint', () => {
-    try {
-      return getDeviceFingerprint();
-    } catch (err) {
-      return { fingerprint: '', parts: {}, error: err.message };
-    }
-  });
 
   ipcMain.handle('dialog:open-file', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -782,11 +765,6 @@ app.whenReady().then(async () => {
   ipcMain.on('window:minimize', () => {
     if (mainWindow) mainWindow.minimize();
   });
-  ipcMain.on('window:maximize-toggle', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMaximized()) mainWindow.unmaximize();
-    else mainWindow.maximize();
-  });
   ipcMain.on('window:close', () => {
     if (mainWindow) mainWindow.close();
   });
@@ -794,7 +772,6 @@ app.whenReady().then(async () => {
     if (mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
   ipcMain.handle('window:is-fullscreen', () => mainWindow?.isFullScreen() ?? false);
-  ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
 
   /**
    * 把渲染进程指定的矩形区域截成 PNG 保存（「导出报告 → 界面截图」）。
@@ -897,22 +874,6 @@ app.whenReady().then(async () => {
     return wechatBackend.call(method, args);
   });
 
-  ipcMain.handle('wechat:dispose', () => {
-    // 显式 dispose 的语义是「拆掉后端」，因此先关掉监管器再拆 ——
-    // 否则进程退出会触发自动重启，与调用方意图相反。
-    backendStopping = true;
-    if (backendRestartTimer) { clearTimeout(backendRestartTimer); backendRestartTimer = null; }
-    // 状态无条件更新：即使此刻没有句柄（正处于 restarting/down），也要让界面知道
-    // 不会再自动恢复了 —— 否则横幅会一直挂着「稍后自动恢复」而实际永不重试。
-    setBackendStatus('stopped', '已由调用方显式停止');
-    if (wechatBackend) {
-      wechatBackend.dispose();
-      wechatBackend = null;
-      wechatBoot = null;
-      return { ok: true };
-    }
-    return { ok: true };
-  });
 
   /**
    * 后端状态快照。

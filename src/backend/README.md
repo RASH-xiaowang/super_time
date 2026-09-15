@@ -55,7 +55,6 @@
    - `wechat:info` → 数据根 / 解密目录 / 当前账号 / 方法数
    - `wechat:call` → `(method, args[])` 调用任意 Remote 方法，返回
      `{ ok, value }` 或 `{ ok:false, error:{message,code,details} }`
-   - `wechat:dispose` → 释放实时同步与调度器
    - 事件：`wechat-data/updated` 等经 `wechat:event` 广播到渲染进程。
    `preload.js` 以 `window.electronAPI.wechat` 暴露上述接口。
 
