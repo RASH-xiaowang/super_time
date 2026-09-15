@@ -787,15 +787,6 @@
 
 .selectCheck { color: var(--nm-cyan); width: 14px; display: inline-flex; }
 
-/* ── 虚拟列表 ─────────────────────────────── */
-.vlist {
-  position: relative;
-  width: 100%;
-  overflow: auto;
-}
-
-.vlistInner { position: relative; width: 100%; }
-
 /* ── 骨架屏的形状类（第 94 轮）────────────────────────────────────────
    全局 `.nm-skel` 提供底色与微光（见 scifi-theme.css），这里只放各形状的尺寸。
    原先这些尺寸写成行内样式，现在搬到这里；网格容器的列数仍是动态的（列表/网格两态），

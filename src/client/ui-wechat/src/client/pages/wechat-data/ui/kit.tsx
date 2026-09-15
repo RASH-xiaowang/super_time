@@ -2,8 +2,8 @@
  * 本地微信数据管理 · UI Kit
  *
  * 面板重构的共享组件层：设计令牌来自 scifi-theme.css 的 --nm-* 变量，交互
- * 原语基于 Radix（Dialog/Tabs/ToggleGroup/Tooltip/Select），表格内核基于
- * TanStack Table，长列表虚拟化基于 @tanstack/react-virtual。所有组件均只
+ * 原语基于 Radix（Dialog/Tabs/ToggleGroup/Tooltip/Select），表格内核基于 TanStack Table。
+ * （长列表虚拟化已移除：见 RELEASE-PLAN 的 M14 —— 现方案是 usePagedList 增量挂载。）
  * 负责外观与交互，不包含任何业务数据逻辑；现有面板的懒加载/实时行为不变。
  */
 import * as React from 'react'
@@ -21,7 +21,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import css from './kit.module.css'
 
 /**
@@ -384,59 +383,6 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
           ))}
         </tbody>
       </table>
-    </div>
-  )
-}
-
-/**
- * 虚拟滚动列表（@tanstack/react-virtual）：仅渲染可视区行。
- * @param items - 全量数据。
- * @param getKey - 稳定行 key。
- * @param rowHeight - 固定行高（像素）。
- * @param renderRow - 行渲染函数。
- * @param onEndReached - 滚动接近末尾时回调（用于加载更多）。
- * @param className - 滚动容器附加类（需给定高度）。
- * @returns 虚拟列表元素。
- */
-export function VirtualList<T>({ items, getKey, rowHeight, renderRow, onEndReached, overscan = 8, className }: {
-  items: readonly T[]
-  getKey: (item: T, index: number) => string
-  rowHeight: number
-  renderRow: (item: T, index: number) => React.ReactNode
-  onEndReached?: () => void
-  overscan?: number
-  className?: string
-}): React.JSX.Element {
-  const parentRef = useRef<HTMLDivElement | null>(null)
-  const endReachedRef = useRef(onEndReached)
-  endReachedRef.current = onEndReached
-  const virtualizer = useVirtualizer({
-    count: items.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => rowHeight,
-    overscan,
-  })
-  const lastIndex = virtualizer.getVirtualItems().at(-1)?.index ?? -1
-  useEffect(() => {
-    if (lastIndex >= 0 && lastIndex >= items.length - 5) endReachedRef.current?.()
-  }, [lastIndex, items.length])
-  return (
-    <div ref={parentRef} className={clsx(css.vlist, className)}>
-      <div className={css.vlistInner} style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((vi) => {
-          const item = items[vi.index]
-          if (item === undefined) return null
-          return (
-            <div
-              key={getKey(item, vi.index)}
-              className={css.vlistRow}
-              style={{ transform: `translateY(${vi.start}px)`, height: rowHeight }}
-            >
-              {renderRow(item, vi.index)}
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }
