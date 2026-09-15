@@ -34,12 +34,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # enablement: true —— 仓库若还没开 Pages，这里直接用 token 把源设成
-      # 「GitHub Actions」。不开的话第一次部署会卡在 404 上，而报错信息不会告诉
-      # 你「该去 Settings → Pages 点一下」。
+      # ── 前置检查：Pages 没开就给出可执行的下一步 ──
+      # 为什么**不**用 `configure-pages` 的 `enablement: true` 自动开启：那一版实测失败
+      # （run 34941730544）—— 报 `HttpError: Resource not accessible by integration`。
+      # 因为 workflow 的 GITHUB_TOKEN 没有权限调「创建 Pages 站点」那个 API（它要求仓库
+      # 管理员身份），所以「自动开启」这条路本身不成立，留给用户的只有一句没人看得懂的
+      # API 报错。这里换成一个显式可读的检查：没启用就带着操作指引失败。
+      - name: 检查 Pages 是否已启用
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages")
+          if [ "$code" != "200" ]; then
+            echo "::error::Pages 尚未启用（GET /repos/${{ github.repository }}/pages 返回 $code）。请在仓库 Settings → Pages → Build and deployment → Source 选择 “GitHub Actions” 并保存，然后重新运行本工作流。这是一次性设置。"
+            exit 1
+          fi
+          echo "Pages 已启用，继续部署。"
+
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       # 上传的是 website/ 的**内容**（index.html 落在站点根），不是 website 这一层目录。
       - uses: actions/upload-pages-artifact@v3
