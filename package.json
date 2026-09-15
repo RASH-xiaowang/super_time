@@ -122,6 +122,7 @@
       "node_modules/koffi/**",
       "node_modules/@koromix/**",
       "src/backend/wechat-data/native/**",
+      "src/backend/wechat-data/resources/**",
       "wechat/README.md",
       "wechat/whisper/**"
     ],

@@ -15,27 +15,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WhisperModelInfo } from '../types.ts'
 import { resolveWechatDataRoot } from '../dirs.ts'
+import { unpackedAware } from '../asar-path.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
-
-/**
- * 把「落在 app.asar 里」的路径改写到 `app.asar.unpacked`。
- *
- * 打包后本 bundle 位于 `resources/app.asar/src/backend/wechat-data/lib/index.js`，
- * 从 `import.meta.url` 上溯到的「项目根」是 **asar 归档内部**（只读，不是目录）。
- * Electron 只会把**读**透明地重定向到 `app.asar.unpacked`，**写**不会 ——
- * 于是下载/安装 whisper 模型与引擎时直接 `ENOTDIR`（安装版实测）。
- * 开发态路径里没有 `app.asar`，函数原样返回，不影响本地运行。
- * @param p - 绝对路径。
- * @returns 打包态下指向 app.asar.unpacked 的等价路径。
- */
-function unpackedAware(p: string): string {
-  const marker = 'app.asar'
-  const i = p.indexOf(marker)
-  if (i < 0) return p
-  // 归档根（结尾无分隔符）与归档内子路径两种形态都要覆盖
-  const rest = p.slice(i + marker.length).replace(/^[\\/]+/, '')
-  return join(p.slice(0, i), 'app.asar.unpacked', rest)
-}
 
 /** Whisper model catalog (id/name/size labels). */
 export const WHISPER_MODELS: ReadonlyArray<Pick<WhisperModelInfo, 'id' | 'name' | 'sizeLabel'>> = [

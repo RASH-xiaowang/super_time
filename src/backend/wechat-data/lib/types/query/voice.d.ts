@@ -13,7 +13,15 @@ export declare function recentVoiceMessages(decryptedDir: string, limit: number)
 export declare function voiceDataBySvr(decryptedDir: string, svrId: string): Buffer | null;
 /** VoiceInfo svr_id for (username, local_id) — direct Name2Id mapping. */
 export declare function svrIdByChatLocal(decryptedDir: string, username: string, localId: number): string;
-/** Resolve the wx_silk decoder binary: env pin, bundled resources, '' when none. */
+/**
+ * Resolve the wx_silk decoder binary: env pin, bundled resources, '' when none.
+ *
+ * The bundled candidate must go through `onDiskPath` (N19): in a packaged
+ * build the walk from `import.meta.url` lands inside app.asar, where
+ * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
+ * Returning `''` instead of an unrunnable path keeps the caller's error
+ * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
+ */
 export declare function silkDecoderBin(): string;
 /**
  * Decode silk bytes to a WAV file via wx_silk (16 kHz mono, whisper-ready).
