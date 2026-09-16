@@ -254,6 +254,10 @@ export function OperationLogPanel(): React.JSX.Element {
       </div>
 
       <Card className={css.filterCard}>
+        {/* 整条筛选栏排成一行：日期区间 / 分类 / 状态 / 搜索 / 动作按钮。
+            搜索框（kit 的 .searchBox）原本 flex-basis 320px 且 min-width 220px，不参与收缩，
+            于是它后面的按钮一定被挤到第二行 —— 这里给它挂 .searchFlex 改成「吃掉剩余空间」。
+            窗口窄到装不下时仍会按 flex-wrap 折行（不硬挤坏控件）。 */}
         <div className={css.filterRow}>
           <div className={css.range}>
             <input className={css.dateInput} type="date" value={opFrom} onChange={(e) => { setOpFrom(e.target.value) }} aria-label="起始日期" />
@@ -272,9 +276,7 @@ export function OperationLogPanel(): React.JSX.Element {
             onChange={(v) => { setOpStatus(v as '' | OperationStatus) }}
             ariaLabel="结果筛选"
           />
-        </div>
-        <div className={css.filterRow2}>
-          <SearchInput value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
+          <SearchInput className={css.searchFlex} value={opSearch} onChange={(v) => { setOpSearch(v) }} placeholder="搜索操作/对象/上下文" ariaLabel="搜索操作日志" />
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={opLoading ? <span className={css.spin} /> : undefined} onClick={refresh} disabled={opLoading}>{opLoading ? '加载中…' : '刷新'}</Button>
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpTxt} disabled={rows.length === 0}>导出 TXT</Button>
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpCsv} disabled={rows.length === 0}>导出 CSV</Button>

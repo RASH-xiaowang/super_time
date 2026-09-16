@@ -29,7 +29,7 @@ import type { LicenseStatus } from '../license/LicenseGate.tsx'
 import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import css from './onboarding.module.css'
 
-const APP_VERSION = '1.0.2'
+const APP_VERSION = '1.0.3'
 
 /** 首页价值主张（贴合本地解密 + AI 分析定位）。 */
 const VALUE_PROPS = [

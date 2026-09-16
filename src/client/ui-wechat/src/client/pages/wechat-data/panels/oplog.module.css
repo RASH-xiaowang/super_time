@@ -31,7 +31,9 @@
     border-color 0.12s ease, box-shadow 0.12s ease;
 }
 .btnFixedSm {
-  min-width: 92px;
+  /* 四个动作按钮（刷新 / 导出 TXT / 导出 CSV / 清空）收窄一点：
+     整条筛选栏排一行时，这几像素就是「折行 / 不折行」的差别。 */
+  min-width: 78px;
   justify-content: center;
 }
 .spin {
@@ -87,12 +89,11 @@
   gap: 8px;
   align-items: center;
 }
-.filterRow2 {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 8px;
+/* 搜索框吃掉剩余空间。必须两条类选择器压过 kit 的 `.searchBox`（`flex: 0 1 320px` +
+   `min-width: 220px`）—— 单类同名时谁生效取决于样式表顺序，不可靠。 */
+.filterRow .searchFlex {
+  flex: 1 1 180px;
+  min-width: 132px;
 }
 .tableCard {
   margin: 12px 0 14px;

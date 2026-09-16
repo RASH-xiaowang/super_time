@@ -1,6 +1,6 @@
 {
   "name": "super-time-electron",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Electron desktop demo app with 微信+ backend/frontend migrated from @deepseek-ai/dsh-wechat-data（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
@@ -92,6 +92,8 @@
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "playwright": "^1.63.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

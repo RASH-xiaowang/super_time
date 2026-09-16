@@ -25,11 +25,29 @@
   -webkit-backdrop-filter: blur(12px);
 }
 
+/* 标题栏就是拖拽把手：抓取光标 + 不可选中文字；可聚焦，方向键也能微调（见 use-draggable.ts） */
 .hd {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  cursor: grab;
+  user-select: none;
+  border-radius: 8px;
 }
+.hd:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.card[data-dragging='true'] { user-select: none; }
+.card[data-dragging='true'] .hd { cursor: grabbing; }
+/* 六点握把：只作为「这里可以拖」的视觉提示 */
+.grip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--nm-text-2);
+  opacity: 0.65;
+}
+.hd:hover .grip { opacity: 1; color: var(--nm-cyan); }
 .title {
   flex: 1;
   min-width: 0;

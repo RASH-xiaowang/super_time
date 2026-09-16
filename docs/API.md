@@ -57,7 +57,7 @@
 | 39 | `getArticleCover` | Resolve a 公众号 article cover (og:image) to a base64 data URL. |
 | 40 | `getAssetInsights` | — |
 | 41 | `getAvatar` | Resolve a user avatar (head_image.db data or contact URL). |
-| 42 | `getAvatarsLocal` | 批量读取本地头像(head_image.db 单次打开,全部返回 data URL;绝不回退网络)。 |
+| 42 | `getAvatarsLocal` | 批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。 |
 | 43 | `getCalls` | — |
 | 44 | `getContact360` | — |
 | 45 | `getContacts` | Contact book. |
@@ -576,10 +576,10 @@ Resolve a user avatar (head_image.db data or contact URL).
 getAvatarsLocal(options: { usernames: string[] }): Record<string, string>
 ```
 
-批量读取本地头像(head_image.db 单次打开,全部返回 data URL;绝不回退网络)。
+批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。
 
 - @param options - usernames 列表。
-- @returns username → data URL 映射(未命中的不在其中)。
+- @returns username → data URL(本地)或 https URL(远端兜底)映射;未命中的不在其中。
 
 ### `getCalls`
 

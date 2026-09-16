@@ -186,11 +186,23 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
   const recency = RECENCY_RE.test(normalized)
 
   // 词项：规划器关键词优先，问题 bigram 补齐；同义扩展最后追加（权重最低，见 ask.ts）。
+  //
+  // **规划器关键词原样保留一份**（而不是只拆 bigram）：检索侧 `ftsPhrase` 会把多字词编成
+  // 「连续 bigram 短语」，命中「收到转账」这种整词才算数 —— 精度高得多；而只拆 bigram
+  // 再 OR 起来，会同时引入跨词噪音（「收到转账」→ 收到/到转/转账，其中「到转」是纯噪音）。
+  // 两者都进词表：短语负责把**真正那句话**排前面，bigram 负责兜住换词/断行的召回。
+  // 只收 3-8 字、不含空格的关键词（2 字词拆出来就是它自己，无需重复）。
+  const plannedPhrases: string[] = []
+  for (const q of input.subQueries ?? []) {
+    const t = normalizeQuestion(q)
+    if (t.length >= 3 && t.length <= 8 && !t.includes(' ')) plannedPhrases.push(t)
+    if (plannedPhrases.length >= 4) break
+  }
   const planned = (input.subQueries ?? []).flatMap(q => extractAskTerms(q))
   const fallback = extractAskTerms(normalized)
   const baseTerms: string[] = []
   const seen = new Set<string>()
-  for (const t of [...planned, ...fallback]) {
+  for (const t of [...plannedPhrases, ...planned, ...fallback]) {
     if (recency && /^(最近|最新|最后|一次|上次|上一|近一|刚刚)$/.test(t)) continue
     if (seen.has(t)) continue
     seen.add(t); baseTerms.push(t)

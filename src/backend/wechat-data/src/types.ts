@@ -1064,6 +1064,21 @@ export interface AskResult {
   insufficient?: boolean
   /** 模型给出的内容无法对应到任何一条原文：已不予采用，改为明确告知无证据。 */
   withheld?: boolean
+  /**
+   * 接地核对结果（生成之后用**回答自己引用的原文**做的确定性复核）：
+   *   · checked —— 校验过的「必须逐字来自原文」的值个数（金额/日期/长数字串）；
+   *   · unsupported —— 原文里找不到出处的值（界面据此提示「可能是编造或推算」）；
+   *   · cited —— 回答真正引用到的来源条数；
+   *   · repaired —— 是否因核对未通过而触发过一次重写。
+   * 注意：金额不硬拦截（合计是模型可以算出来的），因此 unsupported 非空**不代表**
+   * 回答被弃用 —— 只有「一条 [n] 都没有」才会走 withheld。
+   */
+  grounding?: {
+    checked: number
+    unsupported: string[]
+    cited: number
+    repaired: boolean
+  }
   /** 本轮检索的追踪 id：反馈时回传它，才能把「哪条引用有用」归因到检索特征。 */
   retrievalId?: string
   /** 检索统计（命中候选数 / 保留数 / 范围），用于解释「为什么只有这些来源」。 */

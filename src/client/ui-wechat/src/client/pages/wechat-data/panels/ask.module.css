@@ -541,7 +541,8 @@
 
 /* ── ④ 提问面 ────────────────────────────────────────────────
    一个面只做一件事：输入 + 发送。填充底改为中性叠色（不再是整块青色填充），
-   焦点时整面亮起青色描边 —— 视觉重量低于对话本身，但焦点状态一眼可见。 */
+   焦点状态只用背景微亮表达，**不再**把整面换成青色描边 —— 青描边叠上全局
+   textarea 的 focus ring 会让输入框看起来套了两层高亮框。 */
 .composer {
   display: flex;
   flex-direction: column;
@@ -550,14 +551,12 @@
   border: 1px solid var(--nm-border);
   border-radius: 14px;
   background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
-  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.2s ease;
   flex-shrink: 0;
 }
+/* 聚焦只提亮背景，不动 border 也不加辉光：焦点的可见性交给光标，容器边框始终保持 --nm-border。 */
 .composer:focus-within {
-  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 14%, transparent),
-    0 0 22px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .inputRow {
   display: flex;
@@ -579,8 +578,15 @@
   font-size: 14px;
   line-height: 1.6;
   resize: none;
+  /* 全局 scifi-theme.css 有一条 `textarea:focus-visible { outline: 2px solid var(--nm-cyan) }`
+     （特异性 0-1-1），而这里光写 `.composerInput:focus-visible` 也是 0-1-1 —— 胜负取决于
+     两条规则谁后加载，不可靠。带上元素选择器提到 0-1-2 才稳。
+     为什么要抑制：本输入框的焦点已由 .composer 的背景变化表达，再叠一圈 2px 实心亮青框
+     就是用户截图里那道「高亮边框」；而且它和 .composer 自己的 border 变色叠在一起，
+     看起来像外面还套了一层。 */
   outline: none;
 }
+textarea.composerInput:focus-visible { outline: none; }
 .composerInput::placeholder { color: color-mix(in srgb, var(--nm-text-1) 58%, transparent); }
 
 /* 发送按钮（主操作，44×44 触控目标）：空输入＝描边 + 淡底（主操作必须始终看得见）；

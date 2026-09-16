@@ -56,9 +56,10 @@ export interface AskChunk {
     name: string;
     /** 窗口里最匹配的那条消息 —— 引用卡片与「点击跳转原文」都以它为锚点。 */
     anchor: AskCitation;
-    /** 窗口内的连续消息（按时间升序）。 */
+    /** 窗口内的连续消息（按时间升序）；day 为该行自己的日期，窗口跨天时用它。 */
     lines: Array<{
         time: string;
+        day?: string;
         sender: string;
         text: string;
     }>;

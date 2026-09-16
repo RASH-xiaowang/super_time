@@ -87,8 +87,8 @@ export interface AskChunk {
   name: string
   /** 窗口里最匹配的那条消息 —— 引用卡片与「点击跳转原文」都以它为锚点。 */
   anchor: AskCitation
-  /** 窗口内的连续消息（按时间升序）。 */
-  lines: Array<{ time: string; sender: string; text: string }>
+  /** 窗口内的连续消息（按时间升序）；day 为该行自己的日期，窗口跨天时用它。 */
+  lines: Array<{ time: string; day?: string; sender: string; text: string }>
   score: number
   /** 锚点是否落在时间线索范围内；排序时优先（与消息级排序保持同一套语义）。 */
   pref: number
@@ -162,16 +162,17 @@ function buildChunks(
     let lines = (win.length > 0
       ? win.map(w => ({
         time: formatClock(w.create_time),
+        day: formatDay(w.create_time),
         sender: w.sender ? w.sender : '',
         text: w.text,
       }))
-      : [{ time: formatClock(anchor.create_time), sender: anchor.sender ?? '', text: anchor.snippet }]
+      : [{ time: formatClock(anchor.create_time), day: formatDay(anchor.create_time), sender: anchor.sender ?? '', text: anchor.snippet }]
     ).slice(0, CHUNK_LINES)
     // 锚点（真正命中的那条）必须出现在窗口里：聚类跨度可能大于窗口跨度、
     // 窗口也可能被条数上限截掉锚点 —— 一旦如此，模型看到的是「一段不包含
     // 命中消息的对话」，窗口级打分也会跟着失真（实测会把最近的转账排到后面）。
     if (win.length > 0 && !win.some(w => w.local_id === anchor.local_id)) {
-      const anchorLine = { time: formatClock(anchor.create_time), sender: anchor.sender ?? '', text: anchor.snippet }
+      const anchorLine = { time: formatClock(anchor.create_time), day: formatDay(anchor.create_time), sender: anchor.sender ?? '', text: anchor.snippet }
       const at = lines.findIndex(l => l.time > anchorLine.time)
       if (at < 0) lines.push(anchorLine)
       else lines.splice(at, 0, anchorLine)
@@ -210,7 +211,15 @@ function buildChunks(
   return { chunks: chunks.slice(0, CHUNK_LIMIT), windowMessages }
 }
 
-/** 秒级时间戳 → HH:MM（窗口行内只显示时钟，日期在窗口头上给）。 */
+/** 秒级时间戳 → YYYY-MM-DD（逐行带上，窗口跨天时模型才不会拿窗口头的日期猜）。 */
+function formatDay(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** 秒级时间戳 → HH:MM（窗口行内只显示时钟，日期在同一行/窗口头上给）。 */
 function formatClock(ts: number): string {
   if (!ts) return ''
   const d = new Date(ts * 1000)
@@ -613,7 +622,12 @@ export function formatAskContext(
     chunks.forEach((ch, i) => {
       const who = ch.anchor.sender ? `${ch.name} · ${ch.anchor.sender}` : ch.name
       const day = (ch.anchor.time || '').slice(0, 10)
-      const body = ch.lines.map(l => `    ${l.time}${l.sender ? ' ' + l.sender : ''}：${l.text}`).join('\n')
+      // 行内只给时钟；**跨天**的行带上自己的日期 —— 否则模型只能拿窗口头那天去猜，
+      // 而提示词又要求「写绝对日期」，猜错就把日期编进了回答里（本轮修）。
+      const body = ch.lines.map((l) => {
+        const stamp = l.day && l.day !== day ? `${l.day.slice(5)} ${l.time}` : l.time
+        return `    ${stamp}${l.sender ? ' ' + l.sender : ''}：${l.text}`
+      }).join('\n')
       blocks.push(`[${i + 1}] ${who}（${day}，命中时间 ${(ch.anchor.time || '').slice(11)}）\n${body}`)
     })
   } else {

@@ -254,6 +254,28 @@ function loadDisplayNames(decryptedDir: string): Map<string, string> {
  * @param decryptedDir - decrypted data root.
  * @returns whether the index exists plus row count and built_at timestamp.
  */
+/**
+ * 已知实体名（联系人备注/昵称；无联系人信息时用会话标题兜底）。
+ *
+ * 用途：问答检索的「点名识别」。规划器（LLM）偶尔会漏掉问题里明确点到的人，
+ * 有这份名单就能在**本地、确定性**地把名字从问题里认出来，进而走实体通道
+ * （`who:` 精确命中与某人/某群的往来），而不是只靠 bigram 词法匹配。
+ * 读一次联系人与会话表，代价不低，因此调用方应缓存（见 gateway 的 `_knownEntities`）。
+ * @param decryptedDir - 解密数据根。
+ * @param limit - 最多返回多少个名字（超大通讯录不至于拖慢每次提问）。
+ * @returns 去重后的名字列表（2-24 字；过短无法区分、过长多半是群公告式标题）。
+ */
+export function knownEntityNames(decryptedDir: string, limit = 500): string[] {
+  const out = new Set<string>()
+  for (const n of loadDisplayNames(decryptedDir).values()) {
+    const v = String(n || '').trim()
+    if (v.length < 2 || v.length > 24) continue
+    out.add(v)
+    if (out.size >= limit) break
+  }
+  return [...out]
+}
+
 export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; rows: number; built_at: string | null; ready: boolean } {
   const p = searchIndexPath(decryptedDir)
   if (!existsSync(p)) return { exists: false, rows: 0, built_at: null, ready: false }

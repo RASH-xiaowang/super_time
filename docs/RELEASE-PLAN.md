@@ -844,7 +844,7 @@ flowchart TD
 | L5 | 声明被脚本依赖但缺失的依赖 | `esbuild`（`rag:check`/`ui:smoke`/`build:backend`）：**已声明**（因阻塞 H4 而前置）。`playwright`（`ui:accept`）尚未：它是 300MB 级依赖且会拖慢每次 `npm ci`，而 `ui:accept` 是需要真实数据+人工介入的手动脚本 —— 建议与「H5 之后的验收脚本重整」一起处理，届时用 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 交由显式安装 **已完成（2026-09-15）**：`playwright` 1.63.0 已声明为 devDependency（lockfile 同步，integrity 取自 registry）。**立项前提不成立（实测）**：该版本**没有 install/postinstall 脚本**，所以 `npm ci` 不会去拉浏览器、解包约 18MB，而不是原先担心的 300MB 级；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 只在手动 `npm i` 时才有必要。**未验证**：未真跑 `npm ci`。 | 已完成 |
 | L6 | 快照监听者清空后未删键（轻微 Map 泄漏） | `api.ts:63-68` **已完成（2026-09-15）**：`api.ts` 退订时若 `set.size === 0` 且仍是当前那个 Set 则删键（守卫 `api-snapshot-listeners.spec.ts`；空集键残留本身无可观测行为，故为源码级守卫 + A/B 转红）。 | 已完成 |
 | L7 | `hasMore` 判定在 total 不可信或整页末页时错误 | `hooks.tsx:268` **已完成（2026-09-15）**：新 `panels/paged-list.ts` 抽出纯逻辑 `computeHasMore`（注释写明旧判据为何会静默截断），`hooks.tsx` 接线；守卫在 `paged-list.spec.ts`，A/B 转红。 | 已完成 |
-| L8 | 布局动画期间每次 `finished` 重算小地图并写 localStorage | `EchartsGraphCanvas.tsx:743` **已完成（2026-09-15）**：新 `panels/timers.ts`（`createRestartableTimer` / `createNoticeController`，可注入时钟）+ `EchartsGraphCanvas.tsx` 的 `finished` 改为 300ms 静默期合并，卸载时先补一次再 dispose；守卫 `echarts-settle.wiring.spec.ts`。**未验证**：真机上小地图不再逐帧重算，需浏览器确认。 | 已完成 |
+| L8 | 布局动画期间每次 `finished` 重算小地图并写 localStorage | `EchartsGraphCanvas.tsx:743` **已完成（2026-09-15）**：新 `panels/timers.ts`（`createRestartableTimer` / `createNoticeController`，可注入时钟）+ `EchartsGraphCanvas.tsx` 的 `finished` 改为 300ms 静默期合并，卸载时先补一次再 dispose；守卫 `echarts-settle.wiring.spec.ts`。**未验证**：真机上小地图不再逐帧重算，需浏览器确认。**后续（画布重写，2026-09-15 晚）**：ECharts 画布整体被手写 Canvas2D 画布取代，`EchartsGraphCanvas.tsx` 与 `echarts-settle.wiring.spec.ts` 已删除；同一条约束（坐标落盘必须合并到静默期、绝不逐帧写）搬到 `GraphCanvas.tsx`，守卫改为 `graph-canvas.wiring.spec.ts`，并已由真机探针验证。 | 已完成 |
 | L9 | 渲染中重复计算未 memo | `WorldMap.tsx:261,282` **已完成（2026-09-15）**：`WorldMap.tsx` 的 `railKey` / `geoRegions`（定引用后 `geoMarkers` 的 memo 才真正命中）/ `geoMax` / `geoRipple` 全部 memo。**未验证**：memo 是否命中需真机。 | 已完成 |
 | L10 | 每块重建余串 O(k·n)，改 `substring` 偏移 | `moments.ts:158` **已完成（2026-09-15）**：`moments.ts` 改成单次 `indexOf('<media', pos)` 前缀搜索 + 绝对偏移（不再每块重建余串）。**条目诊断被实测推翻**：V8 的 `slice` 是 **O(1) 视图**（2 万次 ≈0ms），真正的平方项是**每块一次落空的 `indexOf('<media ')`**（2 万块 17.8s）。按实测改完：2.9MB / 2 万块 **12.97s → 2.88ms**，输出逐字节相同；A/B 转红。 | 已完成 |
 | L11 | 正则预编译，避免每次动态构造 | `parse.ts:44,1133` **已完成（2026-09-15）**：`parse.ts` 新增 `cachedRe` 预编译（四处热路径），并去掉噪声标签表里重复的 `revoketime`（原本白跑一次）。A/B 转红。 | 已完成 |
@@ -878,7 +878,7 @@ flowchart TD
 | 后端 | `gateway.ts` 新增 4 个 `@Remote`：`getNotes` / `saveNote` / `deleteNote` / `getKnowledgeGraph`（运行时方法数 128 → 132） |
 | 前端 | `api.ts` 接入 4 个方法 + 两层缓存失效（内存快照层与 localStorage 渲染层） |
 | 前端 | `graph-model.ts`：`GNode.kind` 加 `note`/`stub`、`GEdge.kind` 加 `wiki`/`source`、`GraphSettings.mode` 加 `knowledge`/`fused`；新增 `buildKnowledgeNetwork` |
-| 前端 | `EchartsGraphCanvas.tsx`：笔记用紫色圆角矩形、stub 用虚线半透明圆、`wiki`/`source` 边独立线型、tooltip 按物种分派；修正 stub 透明度被 dim 覆盖、头像额度被笔记占用两个副作用 |
+| 前端 | `EchartsGraphCanvas.tsx`：笔记用紫色圆角矩形、stub 用虚线半透明圆、`wiki`/`source` 边独立线型、tooltip 按物种分派；修正 stub 透明度被 dim 覆盖、头像额度被笔记占用两个副作用（该文件已在随后的画布重写中删除，同样的视觉规格由 `graph-canvas.ts` 承接） |
 | 前端 | `Graph.tsx`：新增 `variant`（`social` / `knowledge`）——模式分段、默认模式、统计条、图例、详情文案、rail 区块、海报控件全部按 variant 分流；知识侧含笔记管理区（新建/编辑/删除/跳转） |
 | 前端 | 新增 `KnowledgeNoteEditor.tsx`：`[[链接]]` 实时提示、同名标题冲突提示 |
 | 前端 | `Ask.tsx`：每轮回答新增「📝 沉淀为笔记」（带 `sourceKind='ask'` + 来源会话 → 融合视图连到人的边） |

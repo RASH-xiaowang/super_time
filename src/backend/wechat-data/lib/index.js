@@ -6565,6 +6565,16 @@ function loadDisplayNames2(decryptedDir) {
   }
   return names;
 }
+function knownEntityNames(decryptedDir, limit = 500) {
+  const out = /* @__PURE__ */ new Set();
+  for (const n of loadDisplayNames2(decryptedDir).values()) {
+    const v = String(n || "").trim();
+    if (v.length < 2 || v.length > 24) continue;
+    out.add(v);
+    if (out.size >= limit) break;
+  }
+  return [...out];
+}
 function getSearchIndexStatus(decryptedDir) {
   const p = searchIndexPath(decryptedDir);
   if (!existsSync19(p)) return { exists: false, rows: 0, built_at: null, ready: false };
@@ -8937,29 +8947,66 @@ function resolveAvatar(decryptedDir, username, wechatBaseDir, nickname) {
   }
   return { kind: "none" };
 }
-function resolveAvatarsLocal(decryptedDir, usernames) {
-  const out = {};
-  if (usernames.length === 0) return out;
-  const dbPath6 = join37(decryptedDir, "head_image", "head_image.db");
+function contactAvatarUrlMap(decryptedDir, usernames) {
+  const out = /* @__PURE__ */ new Map();
+  const dbPath6 = join37(decryptedDir, "contact", "contact.db");
   if (!existsSync30(dbPath6)) return out;
   try {
     const db = new DatabaseSync27(dbPath6, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return out;
-    }
-    const stmt = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1");
-    for (const username of usernames) {
-      const row = stmt.get(username);
-      if (!row) continue;
-      const buf = row.b instanceof Uint8Array ? row.b : null;
-      if (!buf || buf.length < 16) continue;
-      const fmt = sniffImageFormat2(buf);
-      out[username] = "data:image/" + fmt + ";base64," + Buffer.from(buf).toString("base64");
+    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
+    if (has) {
+      const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
+      if (cols.includes("username")) {
+        const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
+        const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
+        const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`);
+        for (const username of usernames) {
+          const row = stmt.get(username);
+          const url = row?.u ? cellStr8(row.u) : "";
+          if (url) out.set(username, url);
+        }
+      }
     }
     db.close();
   } catch {
+  }
+  return out;
+}
+function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
+  const out = {};
+  if (usernames.length === 0) return out;
+  const dbPath6 = join37(decryptedDir, "head_image", "head_image.db");
+  if (existsSync30(dbPath6)) {
+    try {
+      const db = new DatabaseSync27(dbPath6, { readOnly: true });
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
+      if (has) {
+        const stmt = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1");
+        for (const username of usernames) {
+          const row = stmt.get(username);
+          if (!row) continue;
+          const buf = row.b instanceof Uint8Array ? row.b : null;
+          if (!buf || buf.length < 16) continue;
+          const fmt = sniffImageFormat2(buf);
+          out[username] = "data:image/" + fmt + ";base64," + Buffer.from(buf).toString("base64");
+        }
+      }
+      db.close();
+    } catch {
+    }
+  }
+  const rest = usernames.filter((u) => !(u in out));
+  if (rest.length === 0) return out;
+  for (const [username, url] of contactAvatarUrlMap(decryptedDir, rest)) {
+    const temp = avatarFromTempHeadFile(opts.wechatBaseDir, url);
+    if (temp) {
+      out[username] = temp;
+      continue;
+    }
+    if (opts.allowRemote) {
+      const remote = remoteAvatarUrl(url);
+      if (remote) out[username] = remote;
+    }
   }
   return out;
 }
@@ -12898,11 +12945,12 @@ function buildChunks(decryptedDir, ranked, termWeight, person, recency) {
     windowMessages += win.length;
     let lines = (win.length > 0 ? win.map((w) => ({
       time: formatClock(w.create_time),
+      day: formatDay(w.create_time),
       sender: w.sender ? w.sender : "",
       text: w.text
-    })) : [{ time: formatClock(anchor.create_time), sender: anchor.sender ?? "", text: anchor.snippet }]).slice(0, CHUNK_LINES);
+    })) : [{ time: formatClock(anchor.create_time), day: formatDay(anchor.create_time), sender: anchor.sender ?? "", text: anchor.snippet }]).slice(0, CHUNK_LINES);
     if (win.length > 0 && !win.some((w) => w.local_id === anchor.local_id)) {
-      const anchorLine = { time: formatClock(anchor.create_time), sender: anchor.sender ?? "", text: anchor.snippet };
+      const anchorLine = { time: formatClock(anchor.create_time), day: formatDay(anchor.create_time), sender: anchor.sender ?? "", text: anchor.snippet };
       const at = lines.findIndex((l) => l.time > anchorLine.time);
       if (at < 0) lines.push(anchorLine);
       else lines.splice(at, 0, anchorLine);
@@ -12932,6 +12980,12 @@ function buildChunks(decryptedDir, ranked, termWeight, person, recency) {
   }
   chunks.sort(recency ? (a, b) => b.pref - a.pref || b.createTime - a.createTime : (a, b) => b.pref - a.pref || b.score - a.score || b.createTime - a.createTime);
   return { chunks: chunks.slice(0, CHUNK_LIMIT), windowMessages };
+}
+function formatDay(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 function formatClock(ts2) {
   if (!ts2) return "";
@@ -13278,7 +13332,10 @@ function formatAskContext(citations, meta, chunks) {
     chunks.forEach((ch, i) => {
       const who = ch.anchor.sender ? `${ch.name} \xB7 ${ch.anchor.sender}` : ch.name;
       const day = (ch.anchor.time || "").slice(0, 10);
-      const body = ch.lines.map((l) => `    ${l.time}${l.sender ? " " + l.sender : ""}\uFF1A${l.text}`).join("\n");
+      const body = ch.lines.map((l) => {
+        const stamp = l.day && l.day !== day ? `${l.day.slice(5)} ${l.time}` : l.time;
+        return `    ${stamp}${l.sender ? " " + l.sender : ""}\uFF1A${l.text}`;
+      }).join("\n");
       blocks.push(`[${i + 1}] ${who}\uFF08${day}\uFF0C\u547D\u4E2D\u65F6\u95F4 ${(ch.anchor.time || "").slice(11)}\uFF09
 ${body}`);
     });
@@ -13342,6 +13399,163 @@ function parseAskOptimize(text) {
     }
   }
   return out;
+}
+
+// src/backend/wechat-data/src/query/grounding.ts
+var MAX_REPORTED = 6;
+var MAX_SUM_POOL = 40;
+var MAX_SUM_CENTS = 1e7;
+var MAX_SUM_TERMS = 3;
+var VALUE_RE = /(\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*[日号]?)|([¥￥]?\s*\d[\d,]*(?:\.\d+)?\s*(?:万元|万块|万|元|块钱|块|圆))|(\+?\d[\d\-\s]{5,}\d)/g;
+var NUMBER_RE = /\d+(?:[.,]\d+)?/g;
+var CLOCK_RE = /\d{1,2}:\d{2}/g;
+var SENTENCE_RE = /[^\n。！？!?；;]+/g;
+function normDate(raw) {
+  const m = raw.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/);
+  if (!m) return "";
+  const p = (n) => String(Number(n)).padStart(2, "0");
+  return `${m[1]}-${p(m[2])}-${p(m[3])}`;
+}
+function amountToCents(raw) {
+  const m = raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(万元|万块|万|元|块钱|块|圆)/);
+  if (!m) return NaN;
+  const n = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return NaN;
+  const unit = m[2];
+  const scale = unit === "\u4E07\u5143" || unit === "\u4E07\u5757" || unit === "\u4E07" ? 1e4 : 1;
+  return Math.round(n * scale * 100);
+}
+function numberToCents(raw) {
+  const n = Number(raw.replace(/,/g, ""));
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+function digitsOnly(raw) {
+  return raw.replace(/\D+/g, "");
+}
+function scanValues(text) {
+  const out = [];
+  for (const m of String(text || "").matchAll(VALUE_RE)) {
+    if (m[1]) out.push({ kind: "date", raw: m[1] });
+    else if (m[2]) out.push({ kind: "amount", raw: m[2] });
+    else if (m[3]) out.push({ kind: "digits", raw: m[3] });
+  }
+  return out;
+}
+function buildValuePools(evidenceTexts) {
+  const text = evidenceTexts.join("\n");
+  const dates = /* @__PURE__ */ new Set();
+  const digits = [];
+  const amounts = [];
+  const timeRanges = [];
+  for (const m of text.matchAll(VALUE_RE)) {
+    const at = m.index ?? 0;
+    if (m[1]) {
+      const d = normDate(m[1]);
+      if (d) dates.add(d);
+      timeRanges.push([at, at + m[1].length]);
+    } else if (m[2]) {
+      const c = amountToCents(m[2]);
+      if (Number.isFinite(c) && c > 0) amounts.push(c);
+    } else if (m[3]) {
+      const s = digitsOnly(m[3]);
+      if (s.length >= 7) digits.push(s);
+    }
+  }
+  for (const m of text.matchAll(CLOCK_RE)) {
+    const at = m.index ?? 0;
+    timeRanges.push([at, at + m[0].length]);
+  }
+  const cents = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(NUMBER_RE)) {
+    const at = m.index ?? 0;
+    if (timeRanges.some(([a, b]) => at >= a && at < b)) continue;
+    const c = numberToCents(m[0]);
+    if (Number.isFinite(c) && c > 0) cents.add(c);
+  }
+  return { dates, digits, cents, sums: buildSums(amounts) };
+}
+function buildSums(cents) {
+  const out = /* @__PURE__ */ new Set();
+  const pool = [];
+  const used = /* @__PURE__ */ new Map();
+  for (const c of cents) {
+    const n = used.get(c) ?? 0;
+    if (n >= MAX_SUM_TERMS) continue;
+    used.set(c, n + 1);
+    pool.push(c);
+    if (pool.length >= MAX_SUM_POOL) break;
+  }
+  for (const c of pool) if (c <= MAX_SUM_CENTS) out.add(c);
+  for (let i = 0; i < pool.length; i += 1) {
+    for (let j = i + 1; j < pool.length; j += 1) {
+      const s2 = pool[i] + pool[j];
+      if (s2 <= MAX_SUM_CENTS) out.add(s2);
+      for (let k = j + 1; k < pool.length; k += 1) {
+        const s3 = s2 + pool[k];
+        if (s3 <= MAX_SUM_CENTS) out.add(s3);
+      }
+    }
+  }
+  return out;
+}
+function digitsSupported(value, pool) {
+  for (const p of pool) {
+    if (p === value || p.includes(value) || value.includes(p)) return true;
+  }
+  return false;
+}
+function auditGrounding(answer, evidenceTexts, citationCount) {
+  const text = String(answer || "");
+  const pools = buildValuePools(evidenceTexts);
+  const seen = /* @__PURE__ */ new Set();
+  const unsupported = [];
+  let checked = 0;
+  for (const v of scanValues(text)) {
+    let key = "";
+    let supported = false;
+    if (v.kind === "date") {
+      const d = normDate(v.raw);
+      if (!d) continue;
+      key = "date:" + d;
+      supported = pools.dates.has(d);
+    } else if (v.kind === "amount") {
+      const c = amountToCents(v.raw);
+      if (!Number.isFinite(c)) continue;
+      key = "amount:" + c;
+      supported = pools.cents.has(c) || pools.sums.has(c);
+    } else {
+      const s = digitsOnly(v.raw);
+      if (s.length < 7) continue;
+      key = "digits:" + s;
+      supported = digitsSupported(s, pools.digits);
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    checked += 1;
+    if (!supported && unsupported.length < MAX_REPORTED) {
+      unsupported.push({ kind: v.kind, value: v.raw.replace(/\s+/g, "").trim() });
+    }
+  }
+  let uncited = 0;
+  for (const sentence of text.match(SENTENCE_RE) ?? []) {
+    if (scanValues(sentence).length === 0) continue;
+    if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1;
+  }
+  return {
+    checked,
+    unsupported,
+    uncited,
+    cited: parseCitedIndexes(text, citationCount),
+    ok: unsupported.length === 0
+  };
+}
+function groundingRepairHint(audit) {
+  if (audit.unsupported.length === 0) return "";
+  const list = audit.unsupported.map((v) => `\u300C${v.value}\u300D`).join("\u3001");
+  return `\u3010\u6838\u5BF9\u672A\u901A\u8FC7\u3011\u4F60\u5199\u7684 ${list} \u5728\u4F60\u5F15\u7528\u7684\u539F\u6587\u91CC\u627E\u4E0D\u5230\u51FA\u5904\u3002\u8BF7\u6539\u5199\uFF1A
+ \xB7 \u5982\u679C\u5B83\u4EEC\u662F**\u5408\u8BA1**\uFF0C\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\u5F97\u51FA\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF1B
+ \xB7 \u5982\u679C\u4E0D\u662F\u5408\u8BA1\uFF0C\u5C31\u5220\u6389\uFF0C\u6216\u6539\u6210\u539F\u6587\u91CC**\u539F\u6837\u51FA\u73B0**\u7684\u503C\uFF1B
+ \xB7 \u65E5\u671F\u53EA\u80FD\u5199\u539F\u6587\u91CC\u51FA\u73B0\u8FC7\u7684\u65E5\u671F\uFF0C\u4E0D\u8981\u81EA\u5DF1\u6362\u7B97\u6216\u63A8\u6D4B\u3002`;
 }
 
 // src/backend/wechat-data/src/query/retrieval/config.ts
@@ -13661,11 +13875,17 @@ function buildQueryPlan(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
   const normalized = normalizeQuestion(input.question);
   const recency = RECENCY_RE2.test(normalized);
+  const plannedPhrases = [];
+  for (const q of input.subQueries ?? []) {
+    const t = normalizeQuestion(q);
+    if (t.length >= 3 && t.length <= 8 && !t.includes(" ")) plannedPhrases.push(t);
+    if (plannedPhrases.length >= 4) break;
+  }
   const planned = (input.subQueries ?? []).flatMap((q) => extractAskTerms(q));
   const fallback = extractAskTerms(normalized);
   const baseTerms = [];
   const seen = /* @__PURE__ */ new Set();
-  for (const t of [...planned, ...fallback]) {
+  for (const t of [...plannedPhrases, ...planned, ...fallback]) {
     if (recency && /^(最近|最新|最后|一次|上次|上一|近一|刚刚)$/.test(t)) continue;
     if (seen.has(t)) continue;
     seen.add(t);
@@ -13842,6 +14062,12 @@ function rerankDocs(input) {
 // src/backend/wechat-data/src/query/retrieval/compress.ts
 var WINDOW_SPAN_MS2 = 15 * 60 * 1e3;
 var WINDOW_MAX_MSGS2 = 14;
+function formatDay2(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 function formatClock2(ts2) {
   if (!ts2) return "";
   const d = new Date(ts2 * 1e3);
@@ -13877,7 +14103,7 @@ function compressContext(decryptedDir, ranked, opts) {
     const centerMs = d.create_time * 1e3;
     const win = loadMessageWindow(decryptedDir, d.username, centerMs, WINDOW_SPAN_MS2, WINDOW_MAX_MSGS2);
     windowMessages += win.length;
-    const rawLines = win.length > 0 ? win.map((w) => ({ time: formatClock2(w.create_time), sender: w.sender ? w.sender : "", text: w.text, ts: w.create_time, localId: w.local_id })) : [{ time: formatClock2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }];
+    const rawLines = win.length > 0 ? win.map((w) => ({ time: formatClock2(w.create_time), day: formatDay2(w.create_time), sender: w.sender ? w.sender : "", text: w.text, ts: w.create_time, localId: w.local_id })) : [{ time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }];
     const lines = [];
     let anchorPresent = false;
     for (const l of rawLines) {
@@ -13888,14 +14114,14 @@ function compressContext(decryptedDir, ranked, opts) {
       const isAnchor = l.localId === d.local_id;
       const seen = seenByUser.get(d.username);
       if (!isAnchor && seen && seen.some((s) => s.text === body || jaccardGrams(s.grams, bodyGrams) >= opts.dedupThreshold)) continue;
-      lines.push({ time: l.time, sender: l.sender, text: l.text });
+      lines.push({ time: l.time, day: l.day, sender: l.sender, text: l.text });
       const bucket = seen ?? [];
       bucket.push({ text: body, grams: bodyGrams });
       if (!seen) seenByUser.set(d.username, bucket);
       if (isAnchor) anchorPresent = true;
     }
     if (!anchorPresent) {
-      const al = { time: formatClock2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text };
+      const al = { time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text };
       const at = lines.findIndex((l) => l.time > al.time);
       if (at < 0) lines.push(al);
       else lines.splice(at, 0, al);
@@ -14390,12 +14616,15 @@ function sparseChannel(decryptedDir, terms, topK, username) {
   const hits = res.hits.map((h, i) => ({ doc: docFromHit(h), score: h.score ?? 0, rank: i + 1 }));
   return { channel: "sparse", hits, active: true };
 }
-function structuredChannel(decryptedDir, plan, topK, scopeFrom, scopeTo) {
+function structuredChannel(decryptedDir, plan, topK, scopeFrom, scopeTo, scopeUsername) {
   const hasEntity = Boolean(plan.entity);
   const hasTime = Boolean(plan.from || plan.to);
   if (!hasEntity && !hasTime) return { channel: "structured", hits: [], active: false, note: "\u65E0\u5B9E\u4F53/\u65F6\u95F4\u7EBF\u7D22" };
   const terms = hasEntity ? [] : plan.terms.slice(0, 4);
-  const res = searchIndexBatch(decryptedDir, terms, topK, hasEntity ? { person: plan.entity } : void 0);
+  const res = searchIndexBatch(decryptedDir, terms, topK, {
+    ...scopeUsername ? { username: scopeUsername } : {},
+    ...hasEntity ? { person: plan.entity } : {}
+  });
   if (!res.ranked) return { channel: "structured", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
   const hardFrom = scopeFrom ? (/* @__PURE__ */ new Date(scopeFrom + "T00:00:00")).getTime() : NaN;
   const hardTo = scopeTo ? (/* @__PURE__ */ new Date(scopeTo + "T23:59:59")).getTime() : NaN;
@@ -14472,7 +14701,7 @@ async function runRetrievalPipeline(input) {
     channels.push(await denseChannel(input.decryptedDir, plan, config, policy, input.embedFn, scopeUsername));
   }
   if (config.channels.structured.enabled && policy.channels.includes("structured")) {
-    channels.push(structuredChannel(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? "", input.scope?.to ?? ""));
+    channels.push(structuredChannel(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? "", input.scope?.to ?? "", scopeUsername));
   }
   const termWeights = /* @__PURE__ */ new Map();
   const sparse = channels.find((c) => c.channel === "sparse");
@@ -14913,22 +15142,49 @@ function cosine(a, b) {
   if (na <= 0 || nb <= 0) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
+function phraseTokens(term) {
+  return bigramTokens(term).split(" ").filter(Boolean);
+}
+function termFreq(term, docText, toks) {
+  if (phraseTokens(term).length <= 1) {
+    let n2 = 0;
+    for (const t of toks) if (t === term) n2 += 1;
+    return n2;
+  }
+  const body = docText.replace(/\s+/g, "");
+  const needle = term.replace(/\s+/g, "");
+  if (!needle) return 0;
+  let n = 0;
+  let at = 0;
+  for (; ; ) {
+    const i = body.indexOf(needle, at);
+    if (i < 0) break;
+    n += 1;
+    at = i + 1;
+  }
+  return n;
+}
 function sparseChannel2(terms, corpus, topK) {
   const docs = corpus.map((d) => ({ d, toks: extractAskTerms(d.text) }));
   const N = docs.length;
   const avgdl = docs.reduce((a, x) => a + x.toks.length, 0) / Math.max(1, N);
-  const df = /* @__PURE__ */ new Map();
-  for (const { toks } of docs) {
-    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
-  }
   const k1 = 1.2;
   const b = 0.75;
+  const tfCache = /* @__PURE__ */ new Map();
+  for (const t of terms) {
+    const m = /* @__PURE__ */ new Map();
+    for (let i = 0; i < docs.length; i += 1) {
+      const f = termFreq(t, docs[i].d.text, docs[i].toks);
+      if (f > 0) m.set(docs[i].d.docKey, f);
+    }
+    tfCache.set(t, m);
+  }
+  const df = /* @__PURE__ */ new Map();
+  for (const t of terms) df.set(t, tfCache.get(t)?.size ?? 0);
   const scored = docs.map(({ d, toks }) => {
     let s = 0;
-    const tf = /* @__PURE__ */ new Map();
-    for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
     for (const t of terms) {
-      const f = tf.get(t) ?? 0;
+      const f = tfCache.get(t)?.get(d.docKey) ?? 0;
       if (f === 0) continue;
       const n = df.get(t) ?? 0;
       const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5));
@@ -18898,6 +19154,13 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
      * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
      */
     this._askFeedbackSeen = /* @__PURE__ */ new Map();
+    /**
+     * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
+     *
+     * 为什么缓存：这份名单要读联系人表 + 会话表（两次 SQLite 打开），而每次提问都要用；
+     * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
+     */
+    this._knownEntities = /* @__PURE__ */ new Map();
     this._ctx = ctx;
     this._dirs = resolveDirs();
     const decrypted = this._dirs.decrypted;
@@ -19006,6 +19269,21 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
    * @param feature - 功能名，出现在提示文案里。
    * @returns 提示文案，或 null。
    */
+  /**
+   * 「出站拦截」当前是否开启。
+   *
+   * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
+   * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
+   * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
+   * @returns 是否禁止出站。
+   */
+  outboundBlocked() {
+    try {
+      return readPrivacySettings(this._dirs.decrypted).blockOutbound;
+    } catch {
+      return false;
+    }
+  }
   privacyBlocked(feature, detail = "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B") {
     try {
       return readPrivacySettings(this._dirs.decrypted).blockOutbound ? `\u9690\u79C1\u8BBE\u7F6E\u5DF2\u5F00\u542F\u300C\u51FA\u7AD9\u62E6\u622A\u300D\uFF0C\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}` : null;
@@ -19041,6 +19319,28 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
    * @param options - Filter options: keyword fuzzy search, limit max rows.
    * @returns SessionsSnapshot: sessions list (items + total).
    */
+  /**
+   * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
+   *
+   * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
+   * 漏掉（或整段规划失败），此时检索就退化成纯 bigram 词法匹配，「问某人的事」很容易
+   * 捞回一堆同名同姓/无关会话。把真实名单交给检索层（`classifyIntent` / `buildQueryPlan`
+   * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
+   * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
+   */
+  askKnownEntities() {
+    const key = this._dirs.decrypted;
+    const hit = this._knownEntities.get(key);
+    if (hit) return hit;
+    let names = [];
+    try {
+      names = knownEntityNames(key);
+    } catch {
+      names = [];
+    }
+    this._knownEntities.set(key, names);
+    return names;
+  }
   /**
    * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
    *
@@ -19393,6 +19693,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
           }
         }
         const adapted = loadAdaptedWeights(this._dirs.decrypted);
+        const known = this.askKnownEntities();
         const out = await runRetrievalPipeline({
           decryptedDir: this._dirs.decrypted,
           question: options.question,
@@ -19404,7 +19705,8 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
           limit: 24,
           config: retrConfig,
           ...embedFn ? { embedFn } : {},
-          knownEntities: plan.person ? [plan.person] : [],
+          // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
+          knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
           ...adapted ? { weightsOverride: adapted } : {}
         });
         citations = out.citations;
@@ -19475,7 +19777,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
 ${contextBlock}
 
 \u8BF7\u6309\u4EE5\u4E0B\u8981\u6C42\u56DE\u7B54\uFF1A
-1. **\u53EA\u7528\u6750\u6599\u91CC\u7684\u4E8B\u5B9E**\uFF1A\u4E0A\u9762\u68C0\u7D22\u7ED3\u679C\u91CC\u6CA1\u6709\u7684\u4FE1\u606F\u4E00\u5F8B\u4E0D\u8981\u8865\u5145\uFF0C\u5C24\u5176\u4E0D\u8981\u51ED\u5E38\u8BC6\u63A8\u6D4B\u4EBA\u540D\u3001\u91D1\u989D\u3001\u65E5\u671F\u3001\u65F6\u95F4\u3002\u5B81\u53EF\u5C11\u8BF4\uFF0C\u4E5F\u4E0D\u8981\u7F16\u3002
+1. **\u53EA\u7528\u6750\u6599\u91CC\u7684\u4E8B\u5B9E**\uFF1A\u4E0A\u9762\u68C0\u7D22\u7ED3\u679C\u91CC\u6CA1\u6709\u7684\u4FE1\u606F\u4E00\u5F8B\u4E0D\u8981\u8865\u5145\uFF0C\u5C24\u5176\u4E0D\u8981\u51ED\u5E38\u8BC6\u63A8\u6D4B\u4EBA\u540D\u3001\u91D1\u989D\u3001\u65E5\u671F\u3001\u65F6\u95F4\u3002\u5B81\u53EF\u5C11\u8BF4\uFF0C\u4E5F\u4E0D\u8981\u7F16\u3002\u91D1\u989D\u3001\u65E5\u671F\u3001\u7535\u8BDD/\u5361\u53F7\u8FD9\u7C7B\u503C**\u53EA\u80FD\u539F\u6837\u7167\u6284**\u6750\u6599\u91CC\u7684\u5199\u6CD5 \u2014\u2014 \u8981\u8BF4\u5408\u8BA1\u5C31\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF0C\u4E0D\u8981\u81EA\u884C\u6362\u7B97\u5355\u4F4D\u6216\u63A8\u7B97\u65E5\u671F\u3002
 2. **\u50CF\u5FAE\u4FE1\u91CC\u8DDF\u4EBA\u8BF4\u8BDD\u90A3\u6837\u81EA\u7136**\uFF1A\u53E3\u8BED\u5316\u4E2D\u6587\uFF0C\u76F4\u63A5\u628A\u4E8B\u60C5\u8BB2\u6E05\u695A\uFF0C\u4E0D\u8981\u5199\u6210\u62A5\u544A\u6216\u5206\u6790\uFF08\u4E0D\u8981\u300C\u7EFC\u4E0A\u6240\u8FF0\u300D\u300C\u6839\u636E\u6570\u636E\u5206\u6790\u300D\u300C\u7ECF\u68B3\u7406\u300D\u8FD9\u7C7B\u8154\u8C03\uFF09\uFF0C\u4E5F\u4E0D\u8981\u590D\u8FF0\u68C0\u7D22\u8FC7\u7A0B\u3002\u8981\u7F57\u5217\u591A\u6761\u65F6\u53EF\u4EE5\u5206\u70B9\uFF0C\u4F46\u6BCF\u6761\u90FD\u8981\u50CF\u5728\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\u3002
 3. **\u6BCF\u6761\u4E8B\u5B9E\u540E\u9762\u6807 [n]**\uFF1A\u4F8B\u5982\u300C\u5C0F\u4F55\u8BF4\u6536\u5230\u8F6C\u8D26 13.00 \u5143 [1]\u300D\uFF0C\u591A\u4E2A\u6765\u6E90\u5199 [1][3]\u3002\u6750\u6599\u91CC\u5F62\u5982\u300C\u7FA4\u540D \xB7 \u67D0\u4EBA\u300D\u7684\uFF0C\u8981\u8BF4\u6E05\u662F\u8C01\u8BF4\u7684\u3002
 4. **\u65F6\u95F4\u5199\u7EDD\u5BF9\u65E5\u671F**\uFF08\u5982 2026-09-05\uFF09\uFF0C\u4E0D\u8981\u5199\u300C\u4E0A\u5468\u300D\u300C\u524D\u51E0\u5929\u300D\u8FD9\u7C7B\u76F8\u5BF9\u8868\u8FF0\u3002
@@ -19499,14 +19801,30 @@ ${contextBlock}
       // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
       this.makeDeltaEmitter(options.streamId)
     );
+    const evidenceFor = (cited) => {
+      const idx = cited.length > 0 ? cited : citations.map((_, i) => i + 1);
+      return idx.map((n) => {
+        const ch = chunks[n - 1];
+        if (ch) {
+          const head = `${ch.name} ${ch.anchor.sender ?? ""} ${ch.anchor.time}`;
+          return head + "\n" + ch.lines.map((l) => `${l.day ?? ""} ${l.time} ${l.sender} ${l.text}`).join("\n");
+        }
+        const c = citations[n - 1];
+        return c ? `${c.name} ${c.sender ?? ""} ${c.time} ${c.snippet}` : "";
+      });
+    };
+    const groundingAuditFor = (text, cited) => auditGrounding(text, evidenceFor(cited), citations.length);
     let citedIndexes = parseCitedIndexes(answer, citations.length);
     let finalAnswer = answer;
     let withheld = false;
-    if (citedIndexes.length === 0) {
+    let grounding = groundingAuditFor(answer, citedIndexes);
+    let repaired = false;
+    if (citedIndexes.length === 0 || grounding.unsupported.length > 0 || grounding.uncited > 0) {
+      const repairHint = groundingRepairHint(grounding);
       const strictPrompt = `${synthPrompt}
 
-\u3010\u91CD\u8981\u3011\u4F60\u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA1\u6709\u6807\u6CE8\u4EFB\u4F55 [n] \u6765\u6E90**\u3002\u8BF7\u91CD\u5199\uFF1A
- \xB7 \u6BCF\u4E00\u53E5\u4E8B\u5B9E\u6027\u9648\u8FF0\u540E\u9762\u90FD\u5FC5\u987B\u7D27\u8DDF\u5BF9\u5E94\u7684 [n]\uFF1B
+\u3010\u91CD\u8981\u3011\u8BF7\u91CD\u5199\u4E0A\u4E00\u6B21\u7684\u56DE\u7B54\uFF0C\u9010\u6761\u4FEE\u6389\u4E0B\u9762\u7684\u95EE\u9898\u3002
+${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA1\u6709\u6807\u6CE8\u4EFB\u4F55 [n] \u6765\u6E90**\u3002\n" : ""}${repairHint ? repairHint + "\n" : ""} \xB7 \u6BCF\u4E00\u53E5\u4E8B\u5B9E\u6027\u9648\u8FF0\u540E\u9762\u90FD\u5FC5\u987B\u7D27\u8DDF\u5BF9\u5E94\u7684 [n]\uFF0C\u4E14\u53EA\u6807\u771F\u6B63\u652F\u6301\u8FD9\u53E5\u8BDD\u7684\u90A3\u51E0\u6761\uFF1B
  \xB7 \u8BED\u6C14\u4FDD\u6301\u81EA\u7136\u53E3\u8BED\u5316\uFF0C\u50CF\u5728\u5FAE\u4FE1\u91CC\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\uFF1B
  \xB7 \u5982\u679C\u68C0\u7D22\u7ED3\u679C\u4E0D\u8DB3\u4EE5\u56DE\u7B54\uFF0C\u53EA\u8F93\u51FA\u4E00\u53E5\u8BDD\uFF1A\u300C\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\u300D\u3002`;
       const second = await runChat(
@@ -19515,13 +19833,18 @@ ${contextBlock}
         1600
       );
       const secondCited = parseCitedIndexes(second, citations.length);
-      if (secondCited.length > 0) {
+      const secondAudit = groundingAuditFor(second, secondCited);
+      const better = secondCited.length > 0 && (secondAudit.unsupported.length < grounding.unsupported.length || secondAudit.unsupported.length === grounding.unsupported.length && secondCited.length > citedIndexes.length);
+      if (better) {
         finalAnswer = second;
         citedIndexes = secondCited;
-      } else {
-        withheld = true;
-        finalAnswer = "\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\uFF08\u6A21\u578B\u7ED9\u51FA\u7684\u5185\u5BB9\u65E0\u6CD5\u5BF9\u5E94\u5230\u4EFB\u4F55\u4E00\u6761\u539F\u6587\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528\uFF09\u3002\u53EF\u4EE5\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\u6216\u6307\u5B9A\u4F1A\u8BDD\u540E\u91CD\u8BD5\u3002";
+        grounding = secondAudit;
+        repaired = true;
       }
+    }
+    if (citedIndexes.length === 0) {
+      withheld = true;
+      finalAnswer = "\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\uFF08\u6A21\u578B\u7ED9\u51FA\u7684\u5185\u5BB9\u65E0\u6CD5\u5BF9\u5E94\u5230\u4EFB\u4F55\u4E00\u6761\u539F\u6587\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528\uFF09\u3002\u53EF\u4EE5\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\u6216\u6307\u5B9A\u4F1A\u8BDD\u540E\u91CD\u8BD5\u3002";
     }
     const answer_basis = citedIndexes.length > 0 ? `${basisLine}\uFF08\u56DE\u7B54\u5F15\u7528\u4E86\u5176\u4E2D ${citedIndexes.length} \u6761\uFF1A[${citedIndexes.join("][")}]\uFF09` : basisLine;
     if (retrievalId && rankedFeatures.length > 0) {
@@ -19543,7 +19866,7 @@ ${contextBlock}
       "ask_wechat",
       withheld ? "fail" : "ok",
       "",
-      `\u610F\u56FE\u300C${statsCompat.intent ?? plan.intent}\u300D\xB7 \u5173\u952E\u8BCD ${terms.length} \u4E2A \xB7 \u53EC\u56DE ${statsCompat.candidates} \u6761 \u2192 \u7A97\u53E3 ${statsCompat.chunks} \u6BB5\uFF08${statsCompat.windowMessages} \u6761\u6D88\u606F\uFF09\xB7 \u56DE\u7B54\u5F15\u7528 ${citedIndexes.length} \u6BB5${withheld ? " \xB7 \u672A\u5F15\u7528\u4EFB\u4F55\u6765\u6E90\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528" : ""}${statsCompat.timeHint ? ` \xB7 \u65F6\u95F4\u7EBF\u7D22 ${statsCompat.timeHint}\uFF08\u547D\u4E2D ${statsCompat.hintHits}\uFF09` : ""}`
+      `\u610F\u56FE\u300C${statsCompat.intent ?? plan.intent}\u300D\xB7 \u5173\u952E\u8BCD ${terms.length} \u4E2A \xB7 \u53EC\u56DE ${statsCompat.candidates} \u6761 \u2192 \u7A97\u53E3 ${statsCompat.chunks} \u6BB5\uFF08${statsCompat.windowMessages} \u6761\u6D88\u606F\uFF09\xB7 \u56DE\u7B54\u5F15\u7528 ${citedIndexes.length} \u6BB5${withheld ? " \xB7 \u672A\u5F15\u7528\u4EFB\u4F55\u6765\u6E90\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528" : ""}${grounding.checked > 0 ? ` \xB7 \u63A5\u5730\u6838\u5BF9 ${grounding.checked} \u9879\uFF08\u65E0\u51FA\u5904\u7684 ${grounding.unsupported.length} \u9879\uFF09` : ""}${repaired ? " \xB7 \u5DF2\u6309\u6838\u5BF9\u7ED3\u679C\u91CD\u5199" : ""}${statsCompat.timeHint ? ` \xB7 \u65F6\u95F4\u7EBF\u7D22 ${statsCompat.timeHint}\uFF08\u547D\u4E2D ${statsCompat.hintHits}\uFF09` : ""}`
     );
     return {
       answer: finalAnswer || "\uFF08\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548\u56DE\u7B54\u3002\u53EF\u70B9\u300C\u4F18\u5316\u63D0\u95EE\u300D\u6539\u5199\u95EE\u9898\uFF0C\u6216\u6536\u7A84\u4F1A\u8BDD/\u65F6\u95F4\u8303\u56F4\u540E\u91CD\u8BD5\u3002\uFF09",
@@ -19552,6 +19875,14 @@ ${contextBlock}
       citedIndexes,
       basis: answer_basis,
       withheld: withheld || void 0,
+      // 接地核对结果：界面上「回答里某某在原文里没有出现」的提示与操作日志共用它，
+      // 也让「这轮到底核对了什么」可被追问。
+      grounding: {
+        checked: grounding.checked,
+        unsupported: grounding.unsupported.map((v) => v.value),
+        cited: citedIndexes.length,
+        repaired
+      },
       retrievalId: retrievalId || void 0,
       retrieval: {
         candidates: statsCompat.candidates,
@@ -20147,7 +20478,10 @@ ${contextBlock}
     return resolveAvatar(this._dirs.decrypted, options.username, rawWechatBase(this._dirs.decrypted) || void 0, options.nickname);
   }
   getAvatarsLocal(options) {
-    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames);
+    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames, {
+      wechatBaseDir: rawWechatBase(this._dirs.decrypted) || void 0,
+      allowRemote: !this.outboundBlocked()
+    });
   }
   getWechatConfigFull() {
     const cfg = getConfig(this._dirs.decrypted);

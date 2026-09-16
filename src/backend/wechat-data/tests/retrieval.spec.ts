@@ -108,6 +108,26 @@ describe('rewrite 查询改写', () => {
     expect(plan.variants.length).toBeGreaterThan(1)
   })
 
+  it('规划器短语原样进词表（供 FTS 连续短语匹配，而不是只剩 bigram）', () => {
+    const plan = buildQueryPlan({
+      question: '最近谁给我转账了',
+      subQueries: ['收到转账', '转账'],
+      now: new Date('2026-09-10T12:00:00'),
+    })
+    // 「收到转账」必须作为**整词**在表里（检索侧会编成 "收到 到转 转账" 连续短语）
+    expect(plan.terms).toContain('收到转账')
+    expect(plan.terms).toContain('转账')
+    // 短语排在拆分出的 bigram 之前：预算有限时优先用精度更高的项
+    expect(plan.terms.indexOf('收到转账')).toBeLessThan(plan.terms.indexOf('到转'))
+  })
+
+  it('过长的规划器短语不整词保留（避免整句变成一个短语，反而零命中）', () => {
+    const long = '帮我看看上周三和李四聊的那个合同差额的事情'
+    const plan = buildQueryPlan({ question: '合同差额', subQueries: [long] })
+    expect(plan.terms).not.toContain(long)
+    expect(plan.terms.length).toBeGreaterThan(0)
+  })
+
   it('用户显式时间范围是硬过滤，规划器日期是软偏好', () => {
     const hard = buildQueryPlan({ question: '聊聊', scopeFrom: '2026-09-01', scopeTo: '2026-09-02' })
     expect(hard.timeHard).toBe(true)

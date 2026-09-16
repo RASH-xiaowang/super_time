@@ -13,7 +13,7 @@
  * 收尾状态只写一次 localStorage：`done`（配完了）/`dismissed`（用户点了稍后）—— 之后不再弹，
  * 也不在配完后因为后来清空配置又冒出来。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { apiDetectWechatAccounts, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus } from '../api.ts'
 import {
@@ -24,6 +24,7 @@ import {
   stepDone,
   type SetupFacts,
 } from './setup-guide.ts'
+import { useDraggableFloat } from './use-draggable.ts'
 import css from './setup-guide.module.css'
 
 /** 收尾状态：写过就不再自动弹。 */
@@ -64,9 +65,26 @@ export function SetupGuideCard({
 }): React.JSX.Element {
   const { done, total } = setupProgress(facts)
   const voiceOk = facts.voiceReady
+  // 卡片可拖动（标题栏是把手），位置记在 localStorage 里；挡着内容时用户能把它挪开，
+  // 而不是只能关掉整张卡 —— 关掉就等于把「该配什么」的提示一起关了。
+  const cardRef = useRef<HTMLElement | null>(null)
+  const drag = useDraggableFloat('setup-guide', cardRef)
   return (
-    <section className={css.card} aria-label="首次配置向导">
-      <div className={css.hd}>
+    <section
+      className={css.card}
+      aria-label="首次配置向导"
+      ref={cardRef}
+      style={drag.cardStyle}
+      data-dragging={drag.dragging || undefined}
+    >
+      <div className={css.hd} {...drag.handleProps}>
+        <span className={css.grip} aria-hidden="true">
+          <svg viewBox="0 0 10 16" width="10" height="16" fill="currentColor">
+            <circle cx="2.5" cy="3" r="1.2" /><circle cx="7.5" cy="3" r="1.2" />
+            <circle cx="2.5" cy="8" r="1.2" /><circle cx="7.5" cy="8" r="1.2" />
+            <circle cx="2.5" cy="13" r="1.2" /><circle cx="7.5" cy="13" r="1.2" />
+          </svg>
+        </span>
         <span className={css.title}>首次配置向导</span>
         <span className={css.count}>已完成 {done}/{total}</span>
       </div>
@@ -106,6 +124,10 @@ export function SetupGuideCard({
 
       <div className={css.ft}>
         <span className={css.ftHint}>也可以随时在「设置 → 配置向导」里继续</span>
+        {/* 挪过之后才给「复位」：位置记在本地，挪歪了能一键回到默认角 */}
+        {drag.moved && (
+          <button type="button" className={css.later} onClick={drag.reset}>复位</button>
+        )}
         <button type="button" className={css.later} onClick={onLater}>稍后再说</button>
       </div>
     </section>
@@ -129,7 +151,18 @@ export function SetupGuide({
   /** 取过一次数才敢判定「已完成」，否则首帧的空事实会把已配好的机器误判成未配置。 */
   const [ready, setReady] = useState(false)
 
+  /**
+   * 取数：**每次从设置弹窗回来都重取**。
+   *
+   * 原先依赖数组是 `[]`（只在挂载时取一次），于是出现一个很自然的错觉：
+   * 用户去设置里把数据库密钥 / 图片密钥配上、回到主界面，卡上那两项还是「待配置」——
+   * 因为它读的是挂载那一刻的旧事实，要重开应用才会变。
+   *
+   * 现在以宿主的 `open` 为触发：弹窗盖着时（open=false）不取，弹窗一关（open→true）就重取。
+   * 这正好覆盖「去配置 → 回来」的路径，也不用轮询。
+   */
   useEffect(() => {
+    if (!open) return
     let alive = true
     void (async () => {
       try {
@@ -157,7 +190,7 @@ export function SetupGuide({
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [open])
 
   const progress = useMemo(() => setupProgress(facts), [facts])
 

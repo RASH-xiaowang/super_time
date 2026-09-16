@@ -84,3 +84,56 @@ describe('L14 知识库 stub 节点', () => {
     expect(buildKnowledgeNetwork(snapshot(), null, SETTINGS).nodes.length).toBeGreaterThan(0)
   })
 })
+
+/* ── 融合视图（mode='fused'）────────────────────────────────────────────
+ *
+ * 右侧面板「数据」分段里的**知识网络 / 融合视图**这一对开关，在真机上没法用界面验证：
+ * 只有「来自 AI 问答」的笔记（`sourceKind='ask'` + `sourceUsername`）才会把来源会话拉进来，
+ * 而面板里手写的笔记两样都没有 ⇒ 切到融合视图节点数一个都不变（真机实测 5/4/0/4/1 前后一致）。
+ * 那属于**数据不满足**而不是功能失效，所以这条参数改在这里锁逻辑：给定带来源会话的笔记，
+ * 融合视图必须真的把「人/群」拉进同一张图并用 source 边连上。
+ */
+export function fusedSnapshot(): KnowledgeSnapshot {
+  const note = (id: number, title: string, extra: Partial<KnowledgeSnapshot['notes'][number]> = {}) => ({
+    id, title, excerpt: '', tags: [], sourceKind: 'manual' as const,
+    createdAt: id, updatedAt: id, outLinks: 0, backLinks: 0, ...extra,
+  })
+  return {
+    notes: [note(1, '来自问答的笔记', { sourceKind: 'ask', sourceUsername: 'wxid_a' }), note(2, '手写笔记')],
+    stubs: [],
+    edges: [],
+    sessionNames: { wxid_a: '甲' },
+    summary: { noteCount: 2, linkCount: 0, stubCount: 0, orphanCount: 0, askCount: 1, manualCount: 1 },
+  }
+}
+
+describe('融合视图（mode=fused）—— 真机上无法用界面覆盖的那条参数', () => {
+  const social = {
+    nodes: [
+      { id: 'wxid_a', label: '甲', kind: 'person', is_friend: true, msg_count: 30 },
+      { id: 'wxid_b', label: '乙', kind: 'person', is_friend: true, msg_count: 10 },
+    ],
+    edges: [],
+  }
+
+  it('融合视图把笔记的来源会话拉进图里，并用 source 边连到笔记', () => {
+    const fused = buildKnowledgeNetwork(fusedSnapshot(), social, { ...SETTINGS, mode: 'fused' })
+    const ids = fused.nodes.map(n => n.id)
+    expect(ids).toContain('wxid_a')
+    // 没有来源的会话不该被顺手拉进来（否则融合视图会把整个通讯录都带进来）
+    expect(ids).not.toContain('wxid_b')
+    const sourceEdges = fused.edges.filter(e => e.kind === 'source')
+    expect(sourceEdges).toHaveLength(1)
+    expect(sourceEdges[0]).toMatchObject({ source: 'note:1', target: 'wxid_a' })
+    // 会话名优先用知识快照里的 sessionNames
+    expect(fused.nodes.find(n => n.id === 'wxid_a')?.label).toBe('甲')
+  })
+
+  it('知识网络（不融合）不放任何会话节点 —— 两个模式必须有差别', () => {
+    const plain = buildKnowledgeNetwork(fusedSnapshot(), social, { ...SETTINGS, mode: 'knowledge' })
+    expect(plain.nodes.map(n => n.id)).not.toContain('wxid_a')
+    expect(plain.edges.filter(e => e.kind === 'source')).toHaveLength(0)
+    // 防空转：两份结果确实来自同一份输入
+    expect(plain.nodes.some(n => n.id === 'note:1')).toBe(true)
+  })
+})

@@ -58,6 +58,13 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     private readonly _askFeedbackSeen;
     /**
+     * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
+     *
+     * 为什么缓存：这份名单要读联系人表 + 会话表（两次 SQLite 打开），而每次提问都要用；
+     * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
+     */
+    private readonly _knownEntities;
+    /**
      * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
      *
      * 按 (解密目录, config.db_dir) 记忆：只要账号没换就直接命中缓存，
@@ -99,6 +106,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @param feature - 功能名，出现在提示文案里。
      * @returns 提示文案，或 null。
      */
+    /**
+     * 「出站拦截」当前是否开启。
+     *
+     * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
+     * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
+     * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
+     * @returns 是否禁止出站。
+     */
+    private outboundBlocked;
     private privacyBlocked;
     /**
      * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
@@ -120,6 +136,16 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @param options - Filter options: keyword fuzzy search, limit max rows.
      * @returns SessionsSnapshot: sessions list (items + total).
      */
+    /**
+     * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
+     *
+     * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
+     * 漏掉（或整段规划失败），此时检索就退化成纯 bigram 词法匹配，「问某人的事」很容易
+     * 捞回一堆同名同姓/无关会话。把真实名单交给检索层（`classifyIntent` / `buildQueryPlan`
+     * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
+     * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
+     */
+    private askKnownEntities;
     /**
      * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
      *
@@ -879,9 +905,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
         nickname?: string;
     }): AvatarResult;
     /**
-     * 批量读取本地头像(head_image.db 单次打开,全部返回 data URL;绝不回退网络)。
+     * 批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。
      * @param options - usernames 列表。
-     * @returns username → data URL 映射(未命中的不在其中)。
+     * @returns username → data URL(本地)或 https URL(远端兜底)映射;未命中的不在其中。
      */
     getAvatarsLocal(options: {
         usernames: string[];

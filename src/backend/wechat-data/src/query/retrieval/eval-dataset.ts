@@ -17,6 +17,7 @@
  * 真实运行时换成 provider 的 embedding（维度与语义更强，但接口形状一致）。
  */
 import { extractAskTerms } from '../ask.ts'
+import { bigramTokens } from '../search.ts'
 import type { ChannelName, ChannelResult, IntentKind, RetrievedDoc } from './types.ts'
 import { classifyIntent } from './intent.ts'
 import { buildQueryPlan } from './rewrite.ts'
@@ -177,23 +178,62 @@ function cosine(a: Map<string, number>, b: Map<string, number>): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb))
 }
 
+/** 词项 → FTS5 侧的 bigram token 数（1 = 单词项；>1 = 连续短语）。与 `search.ts#ftsPhrase` 同源语义。 */
+function phraseTokens(term: string): string[] {
+  return bigramTokens(term).split(' ').filter(Boolean)
+}
+
+/**
+ * 词项在文档里的词频 —— **必须与真实 FTS 的短语语义一致**。
+ *
+ * 真实检索里 `ftsPhrase` 把多字中文词编成「连续 bigram 短语」（`"收到 到转 转账"`），
+ * 命中要求这些 bigram **连续**出现，等价于整词连续出现；单 token 词项才是普通匹配。
+ * 合成评测若只按 bigram 逐个比对，就会把「短语项永远命中不了」误判成算法缺陷
+ * （反之也会高估单词项的作用）。这里按整词出现次数计 tf。
+ */
+function termFreq(term: string, docText: string, toks: string[]): number {
+  if (phraseTokens(term).length <= 1) {
+    let n = 0
+    for (const t of toks) if (t === term) n += 1
+    return n
+  }
+  const body = docText.replace(/\s+/g, '')
+  const needle = term.replace(/\s+/g, '')
+  if (!needle) return 0
+  let n = 0
+  let at = 0
+  for (;;) {
+    const i = body.indexOf(needle, at)
+    if (i < 0) break
+    n += 1
+    at = i + 1
+  }
+  return n
+}
+
 /** 稀疏通道：BM25（k1=1.2, b=0.75）。 */
 function sparseChannel(terms: string[], corpus: RetrievedDoc[], topK: number): ChannelResult {
   const docs = corpus.map(d => ({ d, toks: extractAskTerms(d.text) }))
   const N = docs.length
   const avgdl = docs.reduce((a, x) => a + x.toks.length, 0) / Math.max(1, N)
-  const df = new Map<string, number>()
-  for (const { toks } of docs) {
-    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1)
-  }
   const k1 = 1.2
   const b = 0.75
+  // 词项的 df：多字词项按「整词出现」判定，与真实 FTS 的短语匹配对齐。
+  const tfCache = new Map<string, Map<string, number>>()
+  for (const t of terms) {
+    const m = new Map<string, number>()
+    for (let i = 0; i < docs.length; i += 1) {
+      const f = termFreq(t, docs[i].d.text, docs[i].toks)
+      if (f > 0) m.set(docs[i].d.docKey, f)
+    }
+    tfCache.set(t, m)
+  }
+  const df = new Map<string, number>()
+  for (const t of terms) df.set(t, tfCache.get(t)?.size ?? 0)
   const scored = docs.map(({ d, toks }) => {
     let s = 0
-    const tf = new Map<string, number>()
-    for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1)
     for (const t of terms) {
-      const f = tf.get(t) ?? 0
+      const f = tfCache.get(t)?.get(d.docKey) ?? 0
       if (f === 0) continue
       const n = df.get(t) ?? 0
       const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5))

@@ -139,8 +139,15 @@ export interface CompressedChunk {
         local_id: number;
         sender?: string;
     };
+    /**
+     * 窗口内的连续消息（按时间升序）。
+     * `day` 是该行自己的 YYYY-MM-DD —— 窗口可能跨天（±15 分钟窗口正好压在午夜上），
+     * 而窗口头只给锚点那天的日期；不逐行带上日期，模型只能拿锚点日期**猜**，
+     * 于是「时间写绝对日期」这条要求反而变成日期编造的主要来源（本轮加入）。
+     */
     lines: Array<{
         time: string;
+        day?: string;
         sender: string;
         text: string;
     }>;

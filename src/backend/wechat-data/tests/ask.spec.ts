@@ -20,7 +20,7 @@ vi.mock('../src/query/search.ts', () => ({
   loadMessageWindow: () => [],
 }))
 
-import { buildAskContext } from '../src/query/ask.ts'
+import { buildAskContext, formatAskContext, type AskChunk } from '../src/query/ask.ts'
 
 /** One minimal SearchHit. */
 function hit(localId: number, createTime: number, name = '张三'): Record<string, unknown> {
@@ -65,5 +65,31 @@ describe('buildAskContext', () => {
     const empty = buildAskContext('/tmp/decrypted', '无结果问题')
     expect(empty.context).toContain('未检索到相关消息')
     expect(empty.citations).toEqual([])
+  })
+})
+
+describe('formatAskContext：逐行日期（跨天窗口）', () => {
+  /** 窗口压在午夜上：锚点在 09-02，前一条还在 09-01。 */
+  const citation = { name: '李四', time: '2026-09-02 00:05', snippet: '今天的消息', username: 'wxid_lisi', local_id: 2 }
+  const chunks: AskChunk[] = [{
+    username: 'wxid_lisi', name: '李四', anchor: citation,
+    lines: [
+      { time: '23:58', day: '2026-09-01', sender: '', text: '前一天的消息' },
+      { time: '00:05', day: '2026-09-02', sender: '', text: '今天的消息' },
+    ],
+    score: 1, pref: 0, createTime: 0,
+  }]
+
+  it('跨天的行带上自己的月-日，锚点当天不重复', () => {
+    const out = formatAskContext([citation], { terms: ['消息'] }, chunks)
+    expect(out).toContain('09-01 23:58')
+    expect(out).toContain('    00:05')
+    // 锚点当天的日期只在窗口头出现一次，行内不重复
+    expect(out).not.toContain('09-02 00:05     ')
+  })
+
+  it('窗口头仍然给出锚点的完整日期与命中时间', () => {
+    const out = formatAskContext([citation], {}, chunks)
+    expect(out).toContain('（2026-09-02，命中时间 00:05）')
   })
 })

@@ -46,7 +46,7 @@ import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
 import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
-import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages } from './query/search.ts'
+import { buildSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
 import { decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
@@ -68,6 +68,7 @@ import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './qu
 import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
 import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessagesStreamed } from './query/export.ts'
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from './query/ask.ts'
+import { auditGrounding, groundingRepairHint } from './query/grounding.ts'
 import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
 import { runRetrievalPipeline } from './query/retrieval/pipeline.ts'
 import { buildVectorIndex, vectorIndexStatus, vectorIndexSummary, type EmbedFn } from './query/retrieval/embedding.ts'
@@ -275,6 +276,13 @@ export class WechatDataGateway extends TypertRemoteService {
    * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
    */
   private readonly _askFeedbackSeen = new Map<string, number>()
+  /**
+   * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
+   *
+   * 为什么缓存：这份名单要读联系人表 + 会话表（两次 SQLite 打开），而每次提问都要用；
+   * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
+   */
+  private readonly _knownEntities = new Map<string, string[]>()
 
   /**
    * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
@@ -393,6 +401,22 @@ export class WechatDataGateway extends TypertRemoteService {
    * @param feature - 功能名，出现在提示文案里。
    * @returns 提示文案，或 null。
    */
+  /**
+   * 「出站拦截」当前是否开启。
+   *
+   * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
+   * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
+   * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
+   * @returns 是否禁止出站。
+   */
+  private outboundBlocked(): boolean {
+    try {
+      return readPrivacySettings(this._dirs.decrypted).blockOutbound
+    } catch {
+      return false
+    }
+  }
+
   private privacyBlocked(feature: string, detail = '把数据发送给模型'): string | null {
     try {
       return readPrivacySettings(this._dirs.decrypted).blockOutbound
@@ -437,6 +461,29 @@ export class WechatDataGateway extends TypertRemoteService {
    * @param options - Filter options: keyword fuzzy search, limit max rows.
    * @returns SessionsSnapshot: sessions list (items + total).
    */
+  /**
+   * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
+   *
+   * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
+   * 漏掉（或整段规划失败），此时检索就退化成纯 bigram 词法匹配，「问某人的事」很容易
+   * 捞回一堆同名同姓/无关会话。把真实名单交给检索层（`classifyIntent` / `buildQueryPlan`
+   * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
+   * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
+   */
+  private askKnownEntities(): string[] {
+    const key = this._dirs.decrypted
+    const hit = this._knownEntities.get(key)
+    if (hit) return hit
+    let names: string[] = []
+    try {
+      names = knownEntityNames(key)
+    } catch {
+      names = []
+    }
+    this._knownEntities.set(key, names)
+    return names
+  }
+
   /**
    * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
    *
@@ -1110,6 +1157,8 @@ export class WechatDataGateway extends TypertRemoteService {
         }
       }
       const adapted = loadAdaptedWeights(this._dirs.decrypted)
+      // 已知实体名：让「点名识别」走本地确定性名单，而不是只靠规划器这一跳。
+      const known = this.askKnownEntities()
       const out = await runRetrievalPipeline({
         decryptedDir: this._dirs.decrypted,
         question: options.question,
@@ -1121,7 +1170,8 @@ export class WechatDataGateway extends TypertRemoteService {
         limit: 24,
         config: retrConfig,
         ...(embedFn ? { embedFn } : {}),
-        knownEntities: plan.person ? [plan.person] : [],
+        // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
+        knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
         ...(adapted ? { weightsOverride: adapted } : {}),
       })
       citations = out.citations
@@ -1198,7 +1248,7 @@ export class WechatDataGateway extends TypertRemoteService {
 ${contextBlock}
 
 请按以下要求回答：
-1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。
+1. **只用材料里的事实**：上面检索结果里没有的信息一律不要补充，尤其不要凭常识推测人名、金额、日期、时间。宁可少说，也不要编。金额、日期、电话/卡号这类值**只能原样照抄**材料里的写法 —— 要说合计就写明由哪几条相加（如「3500+3500=7000」），不要自行换算单位或推算日期。
 2. **像微信里跟人说话那样自然**：口语化中文，直接把事情讲清楚，不要写成报告或分析（不要「综上所述」「根据数据分析」「经梳理」这类腔调），也不要复述检索过程。要罗列多条时可以分点，但每条都要像在转述聊天内容。
 3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
 4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
@@ -1222,17 +1272,44 @@ ${contextBlock}
       // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
       this.makeDeltaEmitter(options.streamId),
     )
+    /** 回答「自己引用的」那些来源的正文：优先窗口全文，退化用引用卡片里的片段。
+     *  接地审计必须拿**同一条证据**去核对 —— 用窗口全文而不是列表里的 120 字摘要，
+     *  是为了避免「值明明在窗口里、只是没进摘要」被误判成编造。 */
+    const evidenceFor = (cited: number[]): string[] => {
+      const idx = cited.length > 0 ? cited : citations.map((_, i) => i + 1)
+      return idx.map((n) => {
+        const ch = chunks[n - 1]
+        if (ch) {
+          const head = `${ch.name} ${ch.anchor.sender ?? ''} ${ch.anchor.time}`
+          return head + '\n' + ch.lines.map(l => `${l.day ?? ''} ${l.time} ${l.sender} ${l.text}`).join('\n')
+        }
+        const c = citations[n - 1]
+        return c ? `${c.name} ${c.sender ?? ''} ${c.time} ${c.snippet}` : ''
+      })
+    }
+    const groundingAuditFor = (text: string, cited: number[]): ReturnType<typeof auditGrounding> =>
+      auditGrounding(text, evidenceFor(cited), citations.length)
+
+    // ── 硬约束二：回答必须能对应到原文，否则不采用 ──
+    // 三道检查，任一不通过都带着**具体问题**回炉重写一次：
+    //   ① 一个 [n] 都没有 → 整段内容无法逐条核实（可能是模型凭常识补的）；
+    //   ② 接地审计发现「引用原文里没有的金额/日期/长数字」→ 典型编造；
+    //   ③ 带这些高风险值的句子没标 [n]（软问题，只触发重写）。
+    // 重写后仍然没有任何引用才**不予采用**。金额类不做硬拦截 —— 合计是模型可以正当
+    // 算出来的，拦住它会把「一共转了多少」直接变成无法回答（与前端
+    // panels/utils/grounding.ts 的同一取舍：那里只提示、不拦截）。重写通过时用重写稿，
+    // 没有变得更差才替换 —— 免得「越改越糟」把已经能核实的内容丢掉。
     let citedIndexes = parseCitedIndexes(answer, citations.length)
     let finalAnswer = answer
-    // ── 硬约束二：回答必须能对应到原文，否则不采用 ──
-    // 没有任何 [n] 说明这段内容无法逐条核实（可能是模型凭常识补的）。先用更严格的指令
-    // 重试一次；仍然没有任何引用就**不予采用**，明确告知「没有可据以回答的证据」。
     let withheld = false
-    if (citedIndexes.length === 0) {
+    let grounding = groundingAuditFor(answer, citedIndexes)
+    let repaired = false
+    if (citedIndexes.length === 0 || grounding.unsupported.length > 0 || grounding.uncited > 0) {
+      const repairHint = groundingRepairHint(grounding)
       const strictPrompt = `${synthPrompt}
 
-【重要】你上一次的回答**没有标注任何 [n] 来源**。请重写：
- · 每一句事实性陈述后面都必须紧跟对应的 [n]；
+【重要】请重写上一次的回答，逐条修掉下面的问题。
+${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] 来源**。\n' : ''}${repairHint ? repairHint + '\n' : ''} · 每一句事实性陈述后面都必须紧跟对应的 [n]，且只标真正支持这句话的那几条；
  · 语气保持自然口语化，像在微信里转述聊天内容；
  · 如果检索结果不足以回答，只输出一句话：「本机记录中没有找到可据以回答的证据」。`
       const second = await runChat(
@@ -1241,13 +1318,21 @@ ${contextBlock}
         1600,
       )
       const secondCited = parseCitedIndexes(second, citations.length)
-      if (secondCited.length > 0) {
+      const secondAudit = groundingAuditFor(second, secondCited)
+      const better = secondCited.length > 0 && (
+        secondAudit.unsupported.length < grounding.unsupported.length
+        || (secondAudit.unsupported.length === grounding.unsupported.length && secondCited.length > citedIndexes.length)
+      )
+      if (better) {
         finalAnswer = second
         citedIndexes = secondCited
-      } else {
-        withheld = true
-        finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
+        grounding = secondAudit
+        repaired = true
       }
+    }
+    if (citedIndexes.length === 0) {
+      withheld = true
+      finalAnswer = '本机记录中没有找到可据以回答的证据（模型给出的内容无法对应到任何一条原文，已不予采用）。可以换关键词、收窄时间范围或指定会话后重试。'
     }
     const answer_basis = citedIndexes.length > 0
       ? `${basisLine}（回答引用了其中 ${citedIndexes.length} 条：[${citedIndexes.join('][')}]）`
@@ -1270,7 +1355,7 @@ ${contextBlock}
     }
     this.op(
       'task', 'ask_wechat', withheld ? 'fail' : 'ok', '',
-      `意图「${statsCompat.intent ?? plan.intent}」· 关键词 ${terms.length} 个 · 召回 ${statsCompat.candidates} 条 → 窗口 ${statsCompat.chunks} 段（${statsCompat.windowMessages} 条消息）· 回答引用 ${citedIndexes.length} 段${withheld ? ' · 未引用任何来源，已不予采用' : ''}${statsCompat.timeHint ? ` · 时间线索 ${statsCompat.timeHint}（命中 ${statsCompat.hintHits}）` : ''}`,
+      `意图「${statsCompat.intent ?? plan.intent}」· 关键词 ${terms.length} 个 · 召回 ${statsCompat.candidates} 条 → 窗口 ${statsCompat.chunks} 段（${statsCompat.windowMessages} 条消息）· 回答引用 ${citedIndexes.length} 段${withheld ? ' · 未引用任何来源，已不予采用' : ''}${grounding.checked > 0 ? ` · 接地核对 ${grounding.checked} 项（无出处的 ${grounding.unsupported.length} 项）` : ''}${repaired ? ' · 已按核对结果重写' : ''}${statsCompat.timeHint ? ` · 时间线索 ${statsCompat.timeHint}（命中 ${statsCompat.hintHits}）` : ''}`,
     )
     return {
       answer: finalAnswer || '（模型未返回有效回答。可点「优化提问」改写问题，或收窄会话/时间范围后重试。）',
@@ -1279,6 +1364,14 @@ ${contextBlock}
       citedIndexes,
       basis: answer_basis,
       withheld: withheld || undefined,
+      // 接地核对结果：界面上「回答里某某在原文里没有出现」的提示与操作日志共用它，
+      // 也让「这轮到底核对了什么」可被追问。
+      grounding: {
+        checked: grounding.checked,
+        unsupported: grounding.unsupported.map(v => v.value),
+        cited: citedIndexes.length,
+        repaired,
+      },
       retrievalId: retrievalId || undefined,
       retrieval: {
         candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
@@ -2201,13 +2294,16 @@ ${contextBlock}
   }
 
   /**
-   * 批量读取本地头像(head_image.db 单次打开,全部返回 data URL;绝不回退网络)。
+   * 批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。
    * @param options - usernames 列表。
-   * @returns username → data URL 映射(未命中的不在其中)。
+   * @returns username → data URL(本地)或 https URL(远端兜底)映射;未命中的不在其中。
    */
   @Remote('getAvatarsLocal')
   getAvatarsLocal(options: { usernames: string[] }): Record<string, string> {
-    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames)
+    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames, {
+      wechatBaseDir: rawWechatBase(this._dirs.decrypted) || undefined,
+      allowRemote: !this.outboundBlocked(),
+    })
   }
 
   /**
