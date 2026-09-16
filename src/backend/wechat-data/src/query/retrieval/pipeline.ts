@@ -100,13 +100,21 @@ function structuredChannel(
   topK: number,
   scopeFrom: string,
   scopeTo: string,
+  scopeUsername?: string,
 ): ChannelResult {
   const hasEntity = Boolean(plan.entity)
   const hasTime = Boolean(plan.from || plan.to)
   if (!hasEntity && !hasTime) return { channel: 'structured', hits: [], active: false, note: '无实体/时间线索' }
   // 实体 → 命中「与某人的会话」；无实体但有时间 → 用少量内容词在该时间窗内召回。
   const terms = hasEntity ? [] : plan.terms.slice(0, 4)
-  const res = searchIndexBatch(decryptedDir, terms, topK, hasEntity ? { person: plan.entity } : undefined)
+  // **会话范围必须一起下发**：`who:` 是跨会话的全库过滤，不带 username 时
+  // 「在当前会话里问问某人」会把这个人在**别的会话**里的消息也召回进来 ——
+  // 会话级问答（会话内 AI 面板 / 用户选定的会话筛选）看到的就是别的聊天记录，
+  // 属于「证据不在问题范围内」的严重错答（本轮修）。
+  const res = searchIndexBatch(decryptedDir, terms, topK, {
+    ...(scopeUsername ? { username: scopeUsername } : {}),
+    ...(hasEntity ? { person: plan.entity } : {}),
+  })
   if (!res.ranked) return { channel: 'structured', hits: [], active: false, note: '稀疏索引未就绪' }
   // 时间过滤：硬范围（用户显式）严格过滤；否则用软范围。
   const hardFrom = scopeFrom ? new Date(scopeFrom + 'T00:00:00').getTime() : NaN
@@ -202,7 +210,7 @@ export async function runRetrievalPipeline(input: PipelineInput): Promise<Pipeli
     channels.push(await denseChannel(input.decryptedDir, plan, config, policy, input.embedFn, scopeUsername))
   }
   if (config.channels.structured.enabled && policy.channels.includes('structured')) {
-    channels.push(structuredChannel(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? '', input.scope?.to ?? ''))
+    channels.push(structuredChannel(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? '', input.scope?.to ?? '', scopeUsername))
   }
 
   // 词项权重（IDF 近似）：命中越少越稀有。用稀疏通道的样本估计。

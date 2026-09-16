@@ -169,29 +169,91 @@ export function resolveAvatar(
   return { kind: 'none' }
 }
 
-/**
- * 批量读取全部本地头像:单次打开 head_image.db,返回 username → data URL。
- * 本地优先(头像绝不走网络);未命中者不出现在结果中。
- */
-export function resolveAvatarsLocal(decryptedDir: string, usernames: string[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  if (usernames.length === 0) return out
-  const dbPath = join(decryptedDir, 'head_image', 'head_image.db')
+/** 一次打开 contact.db,取一批 username 的头像 URL(small 优先,回落 big)。 */
+function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  const dbPath = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(dbPath)) return out
   try {
     const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
-    if (!has) { db.close(); return out }
-    const stmt = db.prepare('SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1')
-    for (const username of usernames) {
-      const row = stmt.get(username) as { b?: unknown } | undefined
-      if (!row) continue
-      const buf = row.b instanceof Uint8Array ? row.b : null
-      if (!buf || buf.length < 16) continue
-      const fmt = sniffImageFormat(buf)
-      out[username] = 'data:image/' + fmt + ';base64,' + Buffer.from(buf).toString('base64')
+    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+    if (has) {
+      const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
+      if (cols.includes('username')) {
+        const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
+        const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
+        const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`)
+        for (const username of usernames) {
+          const row = stmt.get(username) as { u?: unknown } | undefined
+          const url = row?.u ? cellStr(row.u) : ''
+          if (url) out.set(username, url)
+        }
+      }
     }
     db.close()
   } catch { /* best effort */ }
+  return out
+}
+
+/**
+ * 批量读取头像:head_image.db 优先,未命中再用 contact 表的头像 URL 兜底。
+ *
+ * 三级取值来源(优先级从高到低):
+ *   ① `head_image.db` 的 image_buffer → data URL(纯本地,不联网)
+ *   ② `temp/head_image` 缓存文件(文件名 = md5(头像 URL))→ data URL(同上)
+ *   ③ contact 表的 **https** URL(仅 `allowRemote` 时返回)
+ *
+ * 为什么必须有后两级:图谱面板一次要 250 个头像,而 `head_image.db` 只覆盖本机收过的
+ * 那些 —— 真机实测「好友图」上 240 个节点只命中 131 个,另外 109 个只能画成
+ * 「社区色 + 首字」,看起来就是「有些节点没有头像」。contact 表里 96% 的人有头像 URL,
+ * 其中 80% 是 https(http 会被 CSP 的 `img-src https:` 拦掉,所以不返回)。
+ *
+ * 第 ③ 级的取舍:远端 URL 由渲染端用 `crossOrigin='anonymous'` 加载 —— wx.qlogo.cn
+ * 带 CORS 头,画进 canvas **不会**把它标记为 tainted;拿不到 CORS 头时浏览器直接
+ * `onerror`,渲染端退回「社区色 + 首字」,不会出现坏图。若直接不带 crossOrigin 加载,
+ * canvas 会被污染,PNG 导出在 `toDataURL()` 处抛 SecurityError。
+ *
+ * @param decryptedDir - 解密数据根目录。
+ * @param usernames - 需要头像的用户名。
+ * @param opts - `wechatBaseDir`(找 temp 缓存)与 `allowRemote`(是否放行远端 URL;
+ *   调用方在用户开了「出站拦截」时传 false)。
+ * @returns username → data URL 或 https URL;未命中的不出现在结果中。
+ */
+export function resolveAvatarsLocal(
+  decryptedDir: string,
+  usernames: string[],
+  opts: { wechatBaseDir?: string | undefined; allowRemote?: boolean } = {},
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (usernames.length === 0) return out
+  const dbPath = join(decryptedDir, 'head_image', 'head_image.db')
+  if (existsSync(dbPath)) {
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true })
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
+      if (has) {
+        const stmt = db.prepare('SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1')
+        for (const username of usernames) {
+          const row = stmt.get(username) as { b?: unknown } | undefined
+          if (!row) continue
+          const buf = row.b instanceof Uint8Array ? row.b : null
+          if (!buf || buf.length < 16) continue
+          const fmt = sniffImageFormat(buf)
+          out[username] = 'data:image/' + fmt + ';base64,' + Buffer.from(buf).toString('base64')
+        }
+      }
+      db.close()
+    } catch { /* best effort */ }
+  }
+  const rest = usernames.filter(u => !(u in out))
+  if (rest.length === 0) return out
+  for (const [username, url] of contactAvatarUrlMap(decryptedDir, rest)) {
+    const temp = avatarFromTempHeadFile(opts.wechatBaseDir, url)
+    if (temp) { out[username] = temp; continue }
+    if (opts.allowRemote) {
+      const remote = remoteAvatarUrl(url)
+      if (remote) out[username] = remote
+    }
+  }
   return out
 }

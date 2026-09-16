@@ -11,7 +11,7 @@ import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
 import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GraphSettings } from './graph-model.ts'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
-import { EchartsGraphCanvas, type EchartsGraphCanvasHandle } from './EchartsGraphCanvas.tsx'
+import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas.tsx'
 import { readableOn } from '../utils/theme-color.ts'
 import { PanelHeader, Select } from '../ui/kit.tsx'
 import { getThemeMode, subscribeThemeMode, toggleThemeMode } from '../theme.ts'
@@ -120,7 +120,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const [posterStyle, setPosterStyle] = useState<'light' | 'dark' | 'neon'>('dark')
   const [posterRatio, setPosterRatio] = useState<'1:1' | '3:4' | '16:9'>('1:1')
   const [exporting, setExporting] = useState(false)
-  const canvasRef = useRef<EchartsGraphCanvasHandle | null>(null)
+  const canvasRef = useRef<GraphCanvasHandle | null>(null)
 
   const patch = (p: Partial<GraphSettings>): void => { setSettings(prev => ({ ...prev, ...p })) }
   /** 切换全局主题（不再是图谱私有轴）。 */
@@ -417,7 +417,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
           )}
           {(data || knowledge) && graph.nodes.length > 0 && (
             <>
-              <EchartsGraphCanvas
+              <GraphCanvas
                 ref={canvasRef}
                 graph={displayGraph}
                 dark={dark}

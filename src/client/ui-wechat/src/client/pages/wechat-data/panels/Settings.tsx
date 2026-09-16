@@ -1132,13 +1132,21 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
       const r = await apiAutoGetDbKey(opts)
       if (r.ok && r.key) {
         setDbKey(r.key)
-        setDbOpMsg({ kind: 'ok', text: '✓ 已自动获取数据库密钥（' + (r.source ?? 'key_v4_memory') + '），请保存配置' })
+        // 拿到就立刻落盘。这一步的产物**就是密钥本身**，再要求用户点一次「保存配置」没有意义 ——
+        // 忘了点就会以为配好了、其实没存。只写这一个字段（不是整张表单），
+        // 免得把用户还没打算提交的其他改动一起写进去。
+        const saved = await apiSaveWechatConfig({ patch: { db_enc_key: r.key } })
+          .then((x) => x.ok)
+          .catch(() => false)
+        const saveTag = saved ? '已自动保存' : '自动保存失败，请点「保存配置」'
         const keysFile = (cfg?.resolved?.keys_file) ?? ''
         if (keysFile && dbDir) {
           const g = await apiGenerateKeysFile({ dbDir, keysFile, encKeyHex: r.key, keyFormat: 'wx_key_v4.1' })
-          setDbOpMsg({ kind: 'ok', text: `✓ 已获取数据库密钥 · 已生成密钥映射 ${g.verified}/${g.total} 个数据库` })
+          setDbOpMsg({ kind: saved ? 'ok' : 'err', text: `✓ 已获取数据库密钥（${saveTag}） · 已生成密钥映射 ${g.verified}/${g.total} 个数据库` })
           const k = await apiGetWechatKeysInfo()
           setKeysInfo(k)
+        } else {
+          setDbOpMsg({ kind: saved ? 'ok' : 'err', text: `✓ 已自动获取数据库密钥（${r.source ?? 'key_v4_memory'}） · ${saveTag}` })
         }
       } else {
         setDbOpMsg({ kind: 'err', text: '✗ ' + (r.error ?? '自动获取失败') })
@@ -1164,7 +1172,13 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
       if (r.ok && r.aesKey !== undefined && r.xorKey !== undefined) {
         setImgAes(r.aesKey)
         setImgXor(String(r.xorKey))
-        setImgOpMsg({ kind: 'ok', text: '✓ 已自动获取图片密钥（V2 验证）' })
+        // 同数据库密钥：拿到就落盘，且只写这两个字段
+        const saved = await apiSaveWechatConfig({ patch: { image_aes_key: r.aesKey, image_xor_key: r.xorKey } })
+          .then((x) => x.ok)
+          .catch(() => false)
+        setImgOpMsg(saved
+          ? { kind: 'ok', text: '✓ 已自动获取图片密钥（V2 验证） · 已自动保存' }
+          : { kind: 'err', text: '✓ 已获取图片密钥，但自动保存失败，请点「保存配置」' })
       } else {
         setImgOpMsg({ kind: 'err', text: '✗ ' + (r.error ?? '自动获取图片密钥失败') })
       }

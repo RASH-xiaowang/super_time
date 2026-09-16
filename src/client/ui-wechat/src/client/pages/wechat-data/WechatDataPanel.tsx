@@ -694,7 +694,10 @@ export function WechatDataPanel(): React.JSX.Element {
                     onClick={() => { setChatTarget(null); setMomentAuthor(null); setActive(it.tab) }}
                     title={it.label}
                   >
-                    <svg className={css.navIcon} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {/* 图标是填充字形（nav-config 的 fragment 自带 fill/stroke 覆盖）。
+                        17px 是对齐微信官方侧栏的光学重量：58px 轨宽下 15px 偏小，
+                        与展开态 12.5px 标签并排时比例失衡。 */}
+                    <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       {/* icons arrive as path fragments; wrap in a <g> */}
                       <g dangerouslySetInnerHTML={{ __html: it.icon }} />
                     </svg>
@@ -727,7 +730,7 @@ export function WechatDataPanel(): React.JSX.Element {
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
             >
-              <svg className={css.navIcon} viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <g dangerouslySetInnerHTML={{ __html: NAV_GROUPS.flatMap(g => g.items).find(it => it.tab === 'settings')?.icon ?? '' }} />
               </svg>
               <span className={css.navLabel}>设置</span>

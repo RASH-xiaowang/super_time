@@ -19,6 +19,14 @@ const CHUNK_GAP_S = 900
 const WINDOW_SPAN_MS = 15 * 60 * 1000
 const WINDOW_MAX_MSGS = 14
 
+/** 秒级时间戳 → YYYY-MM-DD（逐行带上，窗口跨天时模型才不会拿锚点日期猜）。 */
+function formatDay(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 /** 秒级时间戳 → HH:MM。 */
 function formatClock(ts: number): string {
   if (!ts) return ''
@@ -92,10 +100,10 @@ export function compressContext(
     windowMessages += win.length
 
     const rawLines = win.length > 0
-      ? win.map(w => ({ time: formatClock(w.create_time), sender: w.sender ? w.sender : '', text: w.text, ts: w.create_time, localId: w.local_id }))
-      : [{ time: formatClock(d.create_time), sender: d.sender ?? '', text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }]
+      ? win.map(w => ({ time: formatClock(w.create_time), day: formatDay(w.create_time), sender: w.sender ? w.sender : '', text: w.text, ts: w.create_time, localId: w.local_id }))
+      : [{ time: formatClock(d.create_time), day: formatDay(d.create_time), sender: d.sender ?? '', text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }]
 
-    const lines: Array<{ time: string; sender: string; text: string }> = []
+    const lines: Array<{ time: string; day?: string; sender: string; text: string }> = []
     let anchorPresent = false
     for (const l of rawLines) {
       if (lines.length >= opts.linesPerChunk) break
@@ -107,7 +115,7 @@ export function compressContext(
       const isAnchor = l.localId === d.local_id
       const seen = seenByUser.get(d.username)
       if (!isAnchor && seen && seen.some((s) => s.text === body || jaccardGrams(s.grams, bodyGrams) >= opts.dedupThreshold)) continue
-      lines.push({ time: l.time, sender: l.sender, text: l.text })
+      lines.push({ time: l.time, day: l.day, sender: l.sender, text: l.text })
       const bucket = seen ?? []
       bucket.push({ text: body, grams: bodyGrams })
       if (!seen) seenByUser.set(d.username, bucket)
@@ -116,7 +124,7 @@ export function compressContext(
     // 锚点（真正命中的那条）必须在窗口里：否则模型看到的是一段不含命中消息的对话，
     // 窗口级语义失真（旧实现踩过：最近的转账被排到后面）。
     if (!anchorPresent) {
-      const al = { time: formatClock(d.create_time), sender: d.sender ?? '', text: d.snippet || d.text }
+      const al = { time: formatClock(d.create_time), day: formatDay(d.create_time), sender: d.sender ?? '', text: d.snippet || d.text }
       const at = lines.findIndex(l => l.time > al.time)
       if (at < 0) lines.push(al)
       else lines.splice(at, 0, al)
