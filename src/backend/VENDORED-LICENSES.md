@@ -1,7 +1,7 @@
 # Vendored dependencies & licenses
 
 `src/backend/deps/` 下的依赖均迁移自
-`D:\deepseek-harness`（DeepSeek Harness 仓库），用于让「微信+」后端在
+`D:\deepseek-harness`（DeepSeek Harness 仓库），用于让「Super Time」后端在
 Super Time 中脱离 pnpm workspace 直接运行：
 
 | 包 | 版本 | 来源目录 | 许可证 |

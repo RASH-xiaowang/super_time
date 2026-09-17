@@ -5,7 +5,7 @@
  */
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { Context } from '@deepseek-ai/cordis';
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import { type AnnualReview } from './query/annual-review.ts';
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
@@ -171,12 +171,16 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): SessionsSnapshot;
     /**
      * Contact book.
-     * @param options - Optional page size + offset for incremental loading.
+     * @param options - Optional page size + offset for incremental loading, plus a
+     *   category filter (friend/group/official/service/enterprise/member/system/deleted).
+     *   The filter is applied **before** pagination so a category tab shows its own
+     *   complete list and an accurate `total`.
      * @returns ContactsSnapshot: contacts list (items + total) + per-category stats.
      */
     getContacts(options?: {
         limit?: number;
         offset?: number;
+        category?: string;
     }): ContactsSnapshot;
     /**
      * One-screen data overview.
@@ -475,7 +479,18 @@ export declare class WechatDataGateway extends TypertRemoteService {
         to?: number;
         filename?: string;
         zip?: boolean;
+        /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
+        sessionName?: string;
     }): Promise<ExportResult>;
+    /**
+     * 记一条导出历史（best-effort）。
+     *
+     * 为什么放在网关而不是各导出函数内部：`recordExport` 需要「解密数据根」来定位历史库，
+     * 而各 `export*.ts` 函数都拿到了 `decryptedDir` —— 但重跑参数只有网关这一层完整掌握
+     * （客户端传什么原样存下来），所以在网关这层记录最不容易漏字段。
+     * @param input - 本次导出的事实。
+     */
+    private recordExport;
     /**
      * 构造「回答增量」事件推送器。
      *
@@ -812,10 +827,44 @@ export declare class WechatDataGateway extends TypertRemoteService {
         filename?: string;
         jobId?: string;
     }): Promise<ExportResult>;
+    /**
+     * Export a CSV table.
+     * @param options - `kind` (contacts/favorites/records/moments/privacy); `recordsKind`
+     *   when kind=records; `dest` = the full target path the user picked in the save dialog
+     *   (falls back to `<dataRoot>/exports/` when omitted); `category` narrows kind=contacts
+     *   to one category so the file matches what the panel is showing.
+     * @returns ExportResult (path + filename + row count).
+     */
     exportCsv(options: {
         kind: string;
         recordsKind?: string;
+        dest?: string;
+        category?: string;
     }): ExportResult;
+    /**
+     * 读取导出历史（供「导出记录」弹窗）。
+     * @param options - 搜索 / 种类筛选 / 状态筛选 / 时间范围 / 排序 / 分页。
+     * @returns 一页条目 + 命中总数 + 各聚合计数。
+     */
+    getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot;
+    /**
+     * 删除若干条导出历史记录。
+     *
+     * `deleteFiles` **默认为 false**：删记录与删文件是两件事，风险差一个量级，
+     * 必须由界面显式选择（见 `query/export-history.ts` 的说明）。
+     * @param options - ids + 是否连带删除磁盘文件。
+     * @returns 删除计数与文件删除失败清单。
+     */
+    deleteExportHistory(options: {
+        ids: number[];
+        deleteFiles?: boolean;
+    }): ExportHistoryDeleteResult;
+    /**
+     * 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。
+     * @param options - 清理策略；三项都缺省时**什么都不删**（安全闸）。
+     * @returns 删除计数与文件删除失败清单。
+     */
+    pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult;
     /**
      * Clear one session draft (decrypted copy only).
      * @param options - username of the session to clear.

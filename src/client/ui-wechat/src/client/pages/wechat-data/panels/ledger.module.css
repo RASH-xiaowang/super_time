@@ -1,16 +1,4 @@
 /* Funds ledger — NEON MATRIX 科技风（与总览/记录面板共用令牌）。 */
-.input {
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 7px 10px;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.input:focus { border-color: var(--nm-cyan); }
-
 .notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 
 .link {
@@ -56,3 +44,32 @@
 .warnTitle { font-size: 12px; color: var(--nm-text-1); }
 .warnMeta { font-size: 11px; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
 
+/* ── 首次统计的加载条 ────────────────────────────────────────────────
+   只写一句"正在统计资金账本…"时，用户没法判断是卡住了还是在跑
+   （后端是同步 SQLite，本页查询要排在总览的全量统计后面）。
+   这里给出：走秒 + 为什么可能偏慢 + 与真实布局同形的骨架。 */
+.loadingBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  font-size: 12px;
+  color: var(--nm-text-1);
+}
+.loadingSpin {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--nm-cyan) 25%, transparent);
+  border-top-color: var(--nm-cyan);
+  animation: ledger-spin 0.9s linear infinite;
+}
+@keyframes ledger-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loadingSpin { animation: none; } }
+.loadingText { font-weight: 600; font-variant-numeric: tabular-nums; }
+.loadingHint { flex: 1 1 260px; min-width: 0; font-size: 11.5px; color: var(--nm-text-2); }

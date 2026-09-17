@@ -8,7 +8,8 @@ import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
-import { clickableKey, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
@@ -1716,6 +1717,8 @@ const POLL_HIDDEN_MS = 5000
  * @returns the chats element tree.
  */
 export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialView?: ChatView; initialTarget?: ChatTarget | null }): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm）。 */
+  const confirm = useConfirm()
   const [view, setView] = useState<ChatView>(() => initialView)
 
   const [sessions, setSessions] = useState<readonly WechatSession[]>([])
@@ -2112,7 +2115,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   /** Clear the current session's draft (only the local decrypted copy). */
   const clearDraft = useCallback(async (): Promise<void> => {
     if (!curSession || !curSession.draft) return
-    if (!window.confirm('清空「' + (curSession.displayName || curSession.username) + '」的草稿？')) return
+    const ok = await confirm({
+      title: `清空「${curSession.displayName || curSession.username}」的草稿？`,
+      message: '清空的是本地解密副本里的草稿，不影响微信本身。',
+      tone: 'danger',
+    })
+    if (!ok) return
     try {
       const r = await apiClearSessionDraft({ username: curSession.username })
       if (r.ok) reloadSessionsList()
@@ -2120,7 +2128,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [curSession, reloadSessionsList])
 
   const clearAllDrafts = useCallback(async (): Promise<void> => {
-    if (!window.confirm('清空所有会话草稿（仅本地解密副本）？')) return
+    const ok = await confirm({
+      title: '清空所有会话草稿？',
+      message: '清空的是本地解密副本里的草稿，不影响微信本身。',
+      tone: 'danger',
+    })
+    if (!ok) return
     try {
       const r = await apiClearAllSessionDrafts()
       window.alert(`已清空 ${r.count} 条草稿`)
@@ -2148,7 +2161,13 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
     if (!curSession) return
-    if (!window.confirm('恢复该消息为原始内容？')) return
+    const ok = await confirm({
+      title: '恢复该消息为原始内容？',
+      message: '本次编辑会被撤销。',
+      tone: 'danger',
+      confirmText: '恢复原文',
+    })
+    if (!ok) return
     setEditing(true)
     try {
       const r = await apiResetEditedMessage({ username: rec.sessionId, localId: rec.localId })
@@ -3452,11 +3471,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                   <button type="button" className={css.exportLinkBtn} onClick={() => { setExpFrom(''); setExpTo('') }}>全部时间</button>
                 </div>
                 <div className={css.exportRangeRow}>
-                  <input type="date" className={css.exportDate} value={expFrom}
-                    onChange={(e) => { setExpFrom(e.target.value) }} />
-                  <span className={kitCss.textMeta}>至</span>
-                  <input type="date" className={css.exportDate} value={expTo}
-                    onChange={(e) => { setExpTo(e.target.value) }} />
+                  <DateRangeField
+                    from={expFrom}
+                    to={expTo}
+                    onFrom={setExpFrom}
+                    onTo={setExpTo}
+                    presets={['today', 'week', 'month', 'last-7', 'last-30']}
+                    ariaLabel="导出时间范围"
+                  />
                 </div>
               </div>
               <div className={css.exportSection}>

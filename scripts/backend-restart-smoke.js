@@ -131,7 +131,7 @@ async function main() {
   console.log('\n杀掉后端 worker 进程，验证自动重建');
   const app = launchElectron({ SUPERTIME_USER_DATA_DIR: userData });
   try {
-    const ok = await waitForOutput(app, '微信+后端已就绪', 90_000);
+    const ok = await waitForOutput(app, 'Super Time 后端已就绪', 90_000);
     check('后端已就绪', ok, ok ? '' : app.out.slice(-400));
     if (ok) {
       const before = workerPids();

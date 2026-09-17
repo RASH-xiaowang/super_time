@@ -121,7 +121,9 @@
 }
 
 /* ── 输入区 ──
-   与「微信问答」主面板同一套观感：容器自带淡底，聚焦时才轻微提亮（而不是套一道硬青色描边）；
+   与「微信问答」主面板同一套观感：容器自带淡底，聚焦时只轻微提亮底色，
+   **不再**把边框换成青色或加一圈辉光 —— 那道青框叠在 .composer 自己的 border 上，
+   看起来像外面还套了一层高亮框。
    发送键空输入时必须是**中性描边**，能发时才变成青紫渐变 —— 早先它无论可否发送都是亮青色
    实心圆，只有 disabled 时降透明度，于是空输入时也像一盏亮着的按钮。 */
 .composer {
@@ -130,13 +132,10 @@
   border: 1px solid var(--nm-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.2s ease;
 }
 .composer:focus-within {
-  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 14%, transparent),
-    0 0 22px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .input {
   display: block; width: 100%; padding: 10px 12px 4px;
@@ -145,6 +144,11 @@
   border: none; outline: none; resize: none;
   max-height: 160px; overflow-y: auto;
 }
+/* 全局 scifi-theme.css 有一条 `textarea:focus-visible { outline: 2px solid var(--nm-cyan) }`
+   （特异性 0-1-1），这里光写 `.input { outline: none }` 是 0-1-0 —— 必被盖掉，界面上仍是一圈
+   2px 实心亮青框。带上元素选择器提到 0-1-2 才稳（与微信问答的 composerInput 同一口径）。
+   焦点可见性由容器的背景微亮与光标表达，不再叠 outline。 */
+textarea.input:focus-visible { outline: none; }
 .input::placeholder { color: var(--nm-text-3); }
 .composerFoot {
   display: flex; align-items: center; gap: 8px;

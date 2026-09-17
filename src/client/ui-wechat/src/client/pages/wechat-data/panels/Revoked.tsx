@@ -16,7 +16,7 @@ import kitCss from '../ui/kit.module.css'
  * Render the revoked-messages panel.
  * @returns the revoked element tree.
  */
-export function RevokedPanel(): React.JSX.Element {
+export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: string) => void } = {}): React.JSX.Element {
   const [items, setItems] = useState<readonly RevokedItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -127,9 +127,22 @@ export function RevokedPanel(): React.JSX.Element {
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
       {!error && loading && items.length === 0 && <ListSkeleton rows={8} />}
       {!error && !loading && items.length === 0 && (
-        <div className={css.empty}>
-          <p>暂无撤回消息记录</p>
-          <p className={kitCss.textMeta}>微信客户端未保留防撤回缓存，或解密库尚未同步最新数据</p>
+        <div className={css.rvLand}>
+          <div className={css.rvLandTitle}>暂无撤回消息记录</div>
+          <div className={css.rvLandDesc}>
+            微信 4.x 起客户端才会在本机保留「删除缓存」，本页只读取这份缓存。
+            为空通常是三种情况之一：
+          </div>
+          <ul className={css.rvLandList}>
+            <li><b>本机确实没人撤回过</b> —— 那就没什么可看的</li>
+            <li><b>微信客户端没保留缓存</b> —— 4.x 之前的版本不写这份数据</li>
+            <li><b>解密库还没同步到最新</b> —— 去「设置 → 数据配置」重新解密后再回来刷新</li>
+          </ul>
+          <div className={css.rvLandActions}>
+            <button type="button" className={css.catBtn} data-active="true" onClick={refresh} disabled={loading}>刷新重读</button>
+            <button type="button" className={css.catBtn} onClick={() => { onOpenSettings?.('detect') }}>去数据配置</button>
+          </div>
+          <div className={kitCss.textMeta}>有数据时这里会按发送者/类型/时间列出每条撤回记录，可展开看原文，并给出「撤回最多」排行。</div>
         </div>
       )}
       {!error && items.length > 0 && (

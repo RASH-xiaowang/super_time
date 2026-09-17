@@ -8,7 +8,8 @@ import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useLazySentinel, usePagedList, ListSentinel } from './hooks.tsx'
 import { apiClearOperationLog, apiGetOperationLog } from '../api.ts'
 import type { OperationCategory, OperationLogEntry, OperationLogQuery, OperationStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Card, DataTable, PanelHeader, SearchInput, Segmented, Select, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, Toolbar } from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import css from './oplog.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -55,6 +56,8 @@ function statusClass(status: OperationStatus): string {
 
 /** 操作日志板块。 */
 export function OperationLogPanel(): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm）。 */
+  const confirm = useConfirm()
   const [opRows, setOpRows] = useState<readonly OperationLogEntry[]>([])
   const [opTotal, setOpTotal] = useState(0)
   const [opLoading, setOpLoading] = useState(false)
@@ -150,7 +153,13 @@ export function OperationLogPanel(): React.JSX.Element {
     opDownload(`操作日志_${opStamp()}.csv`, 'text/csv;charset=utf-8', '\ufeff' + header + lines.join('\n'))
   }
   const clearOpLog = async (): Promise<void> => {
-    if (!window.confirm('确定清空全部操作日志？该操作不可恢复。')) return
+    const ok = await confirm({
+      title: '清空全部操作日志？',
+      message: '审计记录会被全部删除，该操作不可恢复。',
+      tone: 'danger',
+      confirmText: '清空',
+    })
+    if (!ok) return
     setOpLoading(true)
     try {
       const r = await apiClearOperationLog()
@@ -259,11 +268,15 @@ export function OperationLogPanel(): React.JSX.Element {
             于是它后面的按钮一定被挤到第二行 —— 这里给它挂 .searchFlex 改成「吃掉剩余空间」。
             窗口窄到装不下时仍会按 flex-wrap 折行（不硬挤坏控件）。 */}
         <div className={css.filterRow}>
-          <div className={css.range}>
-            <input className={css.dateInput} type="date" value={opFrom} onChange={(e) => { setOpFrom(e.target.value) }} aria-label="起始日期" />
-            <span className={kitCss.textMeta}>至</span>
-            <input className={css.dateInput} type="date" value={opTo} onChange={(e) => { setOpTo(e.target.value) }} aria-label="结束日期" />
-          </div>
+          <DateRangeField
+            from={opFrom}
+            to={opTo}
+            onFrom={setOpFrom}
+            onTo={setOpTo}
+            onClear={() => { setOpFrom(''); setOpTo('') }}
+            presets={['today', 'week', 'month', 'last-7', 'last-30']}
+            ariaLabel="操作日志时间筛选"
+          />
           <Select
             value={opCat}
             onChange={(v) => { setOpCat(v) }}

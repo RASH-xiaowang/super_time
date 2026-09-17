@@ -30,12 +30,6 @@
 }
 .btn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
-.input {
-  padding: 7px 10px; border: 1px solid var(--nm-border); border-radius: 8px;
-  background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1);
-  transition: all 0.15s;
-}
-.input:focus { border-color: var(--nm-cyan); }
 /* 第 91 轮删除：自绘的类型/排序「药丸页签」（`.tabs`/`.tabBtn`/`.tabBtn:hover`/
    `.tabBtn[data-active]`/`.tabCount`）—— 已改用 kit `Segmented`，这些规则零引用。 */
 

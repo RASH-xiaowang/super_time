@@ -7,7 +7,7 @@ import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts'
 import { querySessions } from './query/sessions.ts'
 import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
@@ -67,6 +67,7 @@ import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, 
 import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './query/voice-transcribe.ts'
 import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
 import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessagesStreamed } from './query/export.ts'
+import { deleteExportHistory, listExportHistory, pruneExportHistory, recordExport } from './query/export-history.ts'
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from './query/ask.ts'
 import { auditGrounding, groundingRepairHint } from './query/grounding.ts'
 import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
@@ -178,6 +179,15 @@ const STREAM_JOB_CAP = 20
 
 /** 导出/备份进度事件名（渲染层按 jobId 过滤）。 */
 const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
+
+/** CSV 导出种类的中文说明（只用于导出历史的可读 label，不参与导出本身）。 */
+const CSV_KIND_LABEL: Record<string, string> = {
+  contacts: '通讯录',
+  favorites: '收藏',
+  records: '记录',
+  moments: '朋友圈',
+  privacy: '隐私扫描',
+}
 
 /**
  * N27：同一轮问答反馈的重复提交窗口。
@@ -530,11 +540,14 @@ export class WechatDataGateway extends TypertRemoteService {
 
   /**
    * Contact book.
-   * @param options - Optional page size + offset for incremental loading.
+   * @param options - Optional page size + offset for incremental loading, plus a
+   *   category filter (friend/group/official/service/enterprise/member/system/deleted).
+   *   The filter is applied **before** pagination so a category tab shows its own
+   *   complete list and an accurate `total`.
    * @returns ContactsSnapshot: contacts list (items + total) + per-category stats.
    */
   @Remote('getContacts')
-  getContacts(options?: { limit?: number; offset?: number }): ContactsSnapshot {
+  getContacts(options?: { limit?: number; offset?: number; category?: string }): ContactsSnapshot {
     return queryContacts(this._dirs.decrypted, options)
   }
 
@@ -914,15 +927,60 @@ export class WechatDataGateway extends TypertRemoteService {
     to?: number
     filename?: string
     zip?: boolean
+    /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
+    sessionName?: string
   }): Promise<ExportResult> {
     try {
       const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options })
       this.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
+      this.recordExport({
+        kind: 'session',
+        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
+        format: options.zip ? 'zip' : options.format,
+        path: r.path,
+        rows: r.count,
+        status: 'ok',
+        // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
+        params: options,
+      })
       return r
     } catch (e) {
       this.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
+      // 失败也记一条：用户要能看到「这次没成功」，而不是以为没发生过。
+      this.recordExport({
+        kind: 'session',
+        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
+        format: options.zip ? 'zip' : options.format,
+        path: '',
+        status: 'fail',
+        error: (e as Error).message,
+        params: options,
+      })
       throw e
     }
+  }
+
+  /**
+   * 记一条导出历史（best-effort）。
+   *
+   * 为什么放在网关而不是各导出函数内部：`recordExport` 需要「解密数据根」来定位历史库，
+   * 而各 `export*.ts` 函数都拿到了 `decryptedDir` —— 但重跑参数只有网关这一层完整掌握
+   * （客户端传什么原样存下来），所以在网关这层记录最不容易漏字段。
+   * @param input - 本次导出的事实。
+   */
+  private recordExport(input: {
+    kind: string
+    label?: string
+    format?: string
+    path: string
+    rows?: number
+    status: ExportStatus
+    error?: string
+    params?: unknown
+  }): void {
+    try {
+      recordExport(this._dirs.decrypted, input)
+    } catch { /* 历史记录失败绝不影响导出本身 */ }
   }
 
   /**
@@ -1903,9 +1961,27 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     try {
       const r = exportAnnualReport(this._dirs.decrypted, options.year, options.format, options.dir, options.filename)
       this.op('export', 'export_annual_report', 'ok', String(options.year), `共 ${r.count} 条`)
+      this.recordExport({
+        kind: 'annual',
+        label: `年度报告 · ${options.year} 年`,
+        format: options.format,
+        path: r.path,
+        rows: r.count,
+        status: 'ok',
+        params: options,
+      })
       return r
     } catch (e) {
       this.op('export', 'export_annual_report', 'fail', String(options.year), (e as Error).message)
+      this.recordExport({
+        kind: 'annual',
+        label: `年度报告 · ${options.year} 年`,
+        format: options.format,
+        path: '',
+        status: 'fail',
+        error: (e as Error).message,
+        params: options,
+      })
       throw e
     }
   }
@@ -1929,10 +2005,30 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
       })
       this.finishStreamJob(jobId)
       this.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
+      this.recordExport({
+        kind: 'all_sessions',
+        label: '全部会话归档',
+        format: 'zip',
+        path: r.path,
+        rows: r.count,
+        status: 'ok',
+        params: options ?? {},
+      })
       return r
     } catch (e) {
       this.finishStreamJob(jobId, (e as Error).message)
       this.op('export', 'export_all_sessions', 'fail', '', (e as Error).message)
+      // 取消也是一种正常结局，与「失败」分开记：用户主动取消不该在历史里显示成红叉。
+      const canceled = /cancel|取消|abort/i.test((e as Error).message)
+      this.recordExport({
+        kind: 'all_sessions',
+        label: '全部会话归档',
+        format: 'zip',
+        path: '',
+        status: canceled ? 'canceled' : 'fail',
+        error: canceled ? '' : (e as Error).message,
+        params: options ?? {},
+      })
       throw e
     }
   }
@@ -2030,24 +2126,110 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
       })
       this.finishStreamJob(jobId)
       this.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
+      this.recordExport({
+        kind: 'moments',
+        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
+        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
+        path: r.path,
+        rows: r.count,
+        status: 'ok',
+        params: options ?? {},
+      })
       return r
     } catch (e) {
       this.finishStreamJob(jobId, (e as Error).message)
       this.op('export', 'export_moments', 'fail', options?.username ?? '', (e as Error).message)
+      const canceled = /cancel|取消|abort/i.test((e as Error).message)
+      this.recordExport({
+        kind: 'moments',
+        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
+        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
+        path: '',
+        status: canceled ? 'canceled' : 'fail',
+        error: canceled ? '' : (e as Error).message,
+        params: options ?? {},
+      })
       throw e
     }
   }
 
+  /**
+   * Export a CSV table.
+   * @param options - `kind` (contacts/favorites/records/moments/privacy); `recordsKind`
+   *   when kind=records; `dest` = the full target path the user picked in the save dialog
+   *   (falls back to `<dataRoot>/exports/` when omitted); `category` narrows kind=contacts
+   *   to one category so the file matches what the panel is showing.
+   * @returns ExportResult (path + filename + row count).
+   */
   @Remote('exportCsv')
-  exportCsv(options: { kind: string; recordsKind?: string }): ExportResult {
+  exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
+    const label = CSV_KIND_LABEL[options.kind] ?? options.kind
     try {
-      const r = exportCsv(this._dirs.decrypted, options.kind, options.recordsKind)
+      const r = exportCsv(this._dirs.decrypted, options.kind, options.recordsKind, options.dest, options.category)
       this.op('export', 'export_csv', 'ok', options.kind, `共 ${r.count} 行`)
+      this.recordExport({
+        kind: options.kind,
+        label: options.category && options.category !== 'all' ? `${label} · ${options.category}` : label,
+        format: 'csv',
+        path: r.path,
+        rows: r.count,
+        status: 'ok',
+        params: options,
+      })
       return r
     } catch (e) {
       this.op('export', 'export_csv', 'fail', options.kind, (e as Error).message)
+      this.recordExport({
+        kind: options.kind,
+        label,
+        format: 'csv',
+        path: '',
+        status: 'fail',
+        error: (e as Error).message,
+        params: options,
+      })
       throw e
     }
+  }
+
+  /**
+   * 读取导出历史（供「导出记录」弹窗）。
+   * @param options - 搜索 / 种类筛选 / 状态筛选 / 时间范围 / 排序 / 分页。
+   * @returns 一页条目 + 命中总数 + 各聚合计数。
+   */
+  @Remote('getExportHistory')
+  getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot {
+    return listExportHistory(this._dirs.decrypted, options ?? {})
+  }
+
+  /**
+   * 删除若干条导出历史记录。
+   *
+   * `deleteFiles` **默认为 false**：删记录与删文件是两件事，风险差一个量级，
+   * 必须由界面显式选择（见 `query/export-history.ts` 的说明）。
+   * @param options - ids + 是否连带删除磁盘文件。
+   * @returns 删除计数与文件删除失败清单。
+   */
+  @Remote('deleteExportHistory')
+  deleteExportHistory(options: { ids: number[]; deleteFiles?: boolean }): ExportHistoryDeleteResult {
+    const ids = Array.isArray(options?.ids) ? options.ids : []
+    const r = deleteExportHistory(this._dirs.decrypted, ids, options?.deleteFiles === true)
+    this.op('delete', 'delete_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
+      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
+    return r
+  }
+
+  /**
+   * 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。
+   * @param options - 清理策略；三项都缺省时**什么都不删**（安全闸）。
+   * @returns 删除计数与文件删除失败清单。
+   */
+  @Remote('pruneExportHistory')
+  pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult {
+    const r = pruneExportHistory(this._dirs.decrypted, options ?? {})
+    this.op('delete', 'prune_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
+      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
+    return r
   }
 
   /**

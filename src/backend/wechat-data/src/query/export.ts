@@ -4,7 +4,7 @@
  * and returns the path + count. Chronological order (oldest first).
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
 import type { StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
@@ -150,6 +150,33 @@ function csvCell(v: string): string {
   return '"' + v.replace(/"/g, '""') + '"'
 }
 
+/**
+ * UTF-8 BOM。**所有 CSV 都必须带上它**。
+ *
+ * 不带的后果（用户实测报障）：文件内容确实是 UTF-8，但 **Excel 在中文 Windows 上
+ * 不会自动识别无 BOM 的 UTF-8**，会按系统 ANSI（GBK）去解码，于是中文整片乱码
+ * （「用户名」变成「鐢ㄦ埛鍚」这类）。BOM 是 Office 认 UTF-8 的唯一可靠信号，
+ * 也是官方推荐做法；记事本/VS Code/`Import-Csv` 都能正确跳过它。
+ */
+const UTF8_BOM = '\uFEFF'
+
+/**
+ * 由「表头 + 数据行」构造 CSV 正文（带 UTF-8 BOM）。
+ *
+ * 所有 CSV 出口都走这里，避免再出现「某个出口忘了加 BOM」——此前 `formatCsv`
+ * 与 `exportCsv` 各写一份、两份都没 BOM，就是这个问题的来源。
+ *
+ * @param header - 表头各列。
+ * @param rows - 数据行（每行长度应与表头一致）。
+ * @returns 可直接写盘的完整 CSV 文本（含 BOM）。
+ */
+function buildCsv(header: readonly string[], rows: ReadonlyArray<readonly string[]>): string {
+  const lines = [header.map(csvCell).join(',')]
+  for (const r of rows) lines.push(r.map(c => csvCell(c ?? '')).join(','))
+  // CRLF：Excel 与 RFC 4180 的规范行结束符（LF 也能读，但 CRLF 兼容性最好）。
+  return UTF8_BOM + lines.join('\r\n') + '\r\n'
+}
+
 /** HTML-escape a string. */
 function htmlEscape(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -180,12 +207,11 @@ function formatTxt(msgs: WechatMessage[], username: string): string {
 
 /** csv export body. */
 function formatCsv(msgs: WechatMessage[], username: string): string {
-  const lines = ['时间,发送者,类型,内容']
-  for (const m of msgs) {
+  const rows = msgs.map((m) => {
     const r = rowOf(m, username)
-    lines.push(csvCell(r.time) + ',' + csvCell(r.sender) + ',' + csvCell(r.typeLabel) + ',' + csvCell(r.text))
-  }
-  return lines.join('\n')
+    return [r.time, r.sender, r.typeLabel, r.text]
+  })
+  return buildCsv(['时间', '发送者', '类型', '内容'], rows)
 }
 
 /** html chat-log export body (date dividers + bubbles). */
@@ -657,41 +683,67 @@ export async function exportSessionMessagesStreamed(
 /**
  * Export a data category to CSV under the exports dir.
  * @param decryptedDir - decrypted data root.
- * @param kind - contacts | favorites | records | moments.
+ * @param kind - contacts | favorites | records | moments | privacy.
  * @param recordsKind - record category when kind=records.
+ * @param dest - 用户在保存对话框里选定的**完整目标路径**。给定时直接写到那里；
+ *   未给（例如自动化/旧调用方）则回退到 `<数据根>/exports/<kind>_<时间>.csv`。
+ * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export function exportCsv(decryptedDir: string, kind: string, recordsKind?: string): { path: string; filename: string; count: number } {
+export function exportCsv(
+  decryptedDir: string,
+  kind: string,
+  recordsKind?: string,
+  dest?: string,
+  category?: string,
+): { path: string; filename: string; count: number } {
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/[-:]/g, '')
-  const exportDir = join(dirname(decryptedDir), 'exports')
-  mkdirSync(exportDir, { recursive: true })
+  const stamp = now.slice(0, 8) + '_' + now.slice(9)
+  let header: string[] = []
   let rows: string[][] = []
   if (kind === 'contacts') {
-    rows = [['用户名', '昵称', '备注', '类型']]
-    const env = queryContacts(decryptedDir)
+    // 列设计：以「能和微信界面对上」为准。
+    //  显示名  = 备注 > 昵称 > 用户名（界面卡片上显示的就是它）
+    //  备注/昵称 分开保留，便于在表格里按备注筛选
+    //  首字母/全拼 保留，便于排序与做搜索表
+    //  群成员数/群主/所在群 只有对应类目才有值，留空即可
+    header = ['显示名', '备注', '昵称', '微信号', '别名', '类型', '首字母', '全拼', '群成员数', '群主', '所在群']
+    const env = queryContacts(decryptedDir, category ? { category } : undefined)
     for (const c of env.contacts) {
-      rows.push([c.username, c.nickName, c.remark, c.category ?? ''])
+      rows.push([
+        c.displayName ?? '',
+        c.remark ?? '',
+        c.nickName ?? '',
+        c.username ?? '',
+        c.alias ?? '',
+        c.localTypeLabel ?? c.category ?? '',
+        c.initial ?? '',
+        c.quanPin ?? '',
+        c.memberCount != null ? String(c.memberCount) : '',
+        c.owner ?? '',
+        c.groupName ?? '',
+      ])
     }
   } else if (kind === 'favorites') {
-    rows = [['localId', '类型', '更新时间', '内容', '来源']]
+    header = ['localId', '类型', '更新时间', '内容', '来源']
     const env = queryFavorites(decryptedDir, 5000)
     for (const f of env.favorites) {
       rows.push([String(f.localId), String(f.type), String(f.updateTime), f.content, f.fromUsr])
     }
   } else if (kind === 'records') {
-    rows = [['字段']]
+    header = ['字段']
     const env = queryRecords(decryptedDir, recordsKind ?? 'revokes', 5000)
     for (const it of env.items) {
       rows.push(Object.values(it).map(v => String(v)))
     }
   } else if (kind === 'moments') {
-    rows = [['tid', '用户名', '作者', '时间', '内容', '媒体']]
+    header = ['tid', '用户名', '作者', '时间', '内容', '媒体']
     const env = queryMoments(decryptedDir, 0, 5000)
     for (const m of env.moments) {
       rows.push([m.tid, m.username, m.author, m.time, m.text, m.media_desc])
     }
   } else if (kind === 'privacy') {
-    rows = [['类别', '会话', '联系人', '时间', '片段']]
+    header = ['类别', '会话', '联系人', '时间', '片段']
     const env = queryPrivacyScan(decryptedDir)
     for (const c of env.categories) {
       for (const s of c.samples) {
@@ -701,11 +753,13 @@ export function exportCsv(decryptedDir: string, kind: string, recordsKind?: stri
   } else {
     throw new Error('未知导出类型: ' + kind)
   }
-  const lines = rows.map(r => r.map(c => csvCell(c)).join(','))
-  const filename = kind + '_' + now + '.csv'
-  const filepath = join(exportDir, filename)
-  writeFileAtomicSync(filepath, lines.join('\n'))
-  return { path: filepath, filename, count: Math.max(0, rows.length - 1) }
+  // 目标路径：用户选定优先；否则回退到数据根下的 exports/（保持旧行为可用）。
+  const chosen = typeof dest === 'string' && dest.trim() !== '' ? dest.trim() : ''
+  const filepath = chosen || join(join(dirname(decryptedDir), 'exports'), kind + '_' + stamp + '.csv')
+  mkdirSync(dirname(filepath), { recursive: true })
+  // buildCsv 会带 UTF-8 BOM（Excel 认 UTF-8 的唯一可靠信号，见其说明）。
+  writeFileAtomicSync(filepath, buildCsv(header, rows))
+  return { path: filepath, filename: basename(filepath), count: rows.length }
 }
 
 /** 安全字符串化。 */

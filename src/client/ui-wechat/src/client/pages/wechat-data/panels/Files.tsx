@@ -275,9 +275,14 @@ export function FilesPanel(): React.JSX.Element {
 
   return (
     <div className={css.panel}>
+      {/* 首屏加载期间**不能**把计数写成 0：实测（真实 4305 个文件）进入本页后前 3–6 秒
+          头部会显示「共 0 项 · 图片 0 / 视频 0 / 文件 0」，用户会以为自己的文件不见了。
+          加载中就明确说"正在统计"，计数等到了再显示；分类标签同理不写 (0)。 */}
       <PanelHeader
         title="文件管理"
-        desc={`共 ${total} 项 · 图片 ${countOf('image')} / 视频 ${countOf('video')} / 文件 ${countOf('file')}`}
+        desc={loading && total === 0
+          ? '正在统计本机文件索引…'
+          : `共 ${total} 项 · 图片 ${countOf('image')} / 视频 ${countOf('video')} / 文件 ${countOf('file')}`}
         actions={(
           <>
             <button type="button" className={css.catBtn} onClick={refresh}>刷新</button>
@@ -297,7 +302,7 @@ export function FilesPanel(): React.JSX.Element {
               { value: 'image', label: `图片 (${countOf('image')})` },
               { value: 'video', label: `视频 (${countOf('video')})` },
               { value: 'file', label: `文件 (${countOf('file')})` },
-            ]}
+            ].map((o) => (loading && countAll === 0 ? { ...o, label: o.label.replace(/\s*\(\d+\)$/, '') } : o))}
             value={cat}
             onChange={(v) => { setCat(v) }}
             ariaLabel="文件分类"
@@ -305,9 +310,18 @@ export function FilesPanel(): React.JSX.Element {
         )}
       />
       <div className={`${css.grid} ${css.fileGrid}`} ref={gridRef}>
-        {loading && <ListSkeleton rows={10} grid />}
+        {/* 骨架的列宽与真实 .fileGrid 一致（200px）：120px 的默认值会排成 10 列，
+            数据到了之后突然变成 6 列，像是"布局跳了一下"。 */}
+        {loading && <ListSkeleton rows={10} grid minCol={200} />}
         {error && <div className={kitCss.error} role="alert">⚠️ 文件数据接口尚未就绪（{error}）</div>}
-        {!loading && !error && visible.length === 0 && <EmptyMaybeSyncing text="暂无文件" />}
+        {/* 0 项要能自证：说明索引来自哪、以及"没配好数据源"这种情况该去哪配。
+            否则用户看到"暂无文件"没法判断是"真没有"还是"没配对"。 */}
+        {!loading && !error && visible.length === 0 && (
+          <EmptyMaybeSyncing
+            text="暂无文件"
+            note="文件索引来自本机解密库的 hardlink 记录（图片 / 视频 / 文件三类）。若刚换过数据源，请先在「设置 → 数据配置」完成解密与保存配置，再回到本页刷新。"
+          />
+        )}
         {!loading && !error && visible.slice(0, fileCount).map((f, i) => {
           const fk = fileKey(f)
           const imgSrc = f.category === 'image' ? fileImgs[fk] || '' : ''

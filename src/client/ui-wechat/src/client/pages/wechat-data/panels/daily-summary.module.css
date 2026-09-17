@@ -44,6 +44,10 @@
 }
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+/* 「总结任务栏」里那张卡是 .scroll 的直接子元素：让它吃掉剩余高度，
+   空状态就会在卡片内居中，而不是把一整片空白堆在卡片下面
+   （实测原来卡片下方留 268px）。 */
+.scroll > .sideCard { flex: 1 1 auto; }
 
 /* 通用卡片 */
 .sideCard {
@@ -276,4 +280,50 @@
 .dsRadioHidden { display: none; }
 .dsPrompt { resize: vertical; font-family: inherit; line-height: 1.6; }
 .dsScheduleRow { display: flex; gap: 10px; align-items: center; }
-.dsTimeInput { width: 120px; }
+
+/* ── 全新用户的落地卡（0 任务 0 记录）────────────────────────────────
+   此前这里是"一张空卡 + 一句'还没有定时任务'"，下方 470px 全是空白，
+   而用户最需要知道的一件事 —— **总结要靠模型生成，没配模型点了必然失败** —— 一个字都没有。
+   两张卡并排填满整行：左"三步开始"，右"总结长什么样"。 */
+.dsStart {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.dsStartCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  min-width: 0;
+}
+.dsStartTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
+.dsSteps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.dsStep { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dsStepNo {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+}
+.dsStepBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dsStepName { font-size: 12.5px; font-weight: 600; color: var(--nm-text-1); }
+.dsStepMeta { font-size: 11px; line-height: 1.5; color: var(--nm-text-2); }
+.dsStartList { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+.dsStartList li { font-size: 11.5px; line-height: 1.55; color: var(--nm-text-2); }
+.dsStartList b { color: var(--nm-text-1); font-weight: 600; }
+
+/* 阅览页的空态：给一个"去生成"的出口，而不是一句"还没有历史总结"就结束 */
+.dsEmptyRecords { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 0 14px; }

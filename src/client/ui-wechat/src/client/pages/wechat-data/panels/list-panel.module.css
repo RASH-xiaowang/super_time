@@ -346,6 +346,84 @@
 .fileName { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .fileMeta { font-size: 10.5px; color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
 .empty { padding: var(--nm-empty-pad); text-align: center; color: var(--nm-text-2); font-size: var(--nm-empty-fs); grid-column: 1 / -1; }
+
+/* ── 隐私体检：落地态 / 扫描中（U1）────────────────────────────────────
+   原来这里是一行居中文字，实测留下 668px 连续空白（占内容区 87%）。
+   现在按"范围 → 产出 → 体检项 → 隐私边界"四段铺满，扫描中复用同一结构。 */
+.pvLand {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 不写固定高度：内容撑到多少就是多少，多余空间由 .pvItems 的弹性吸收 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pvLandGrid {
+  display: grid;
+  /* 380px 下限：1316px 内容宽下正好 3 列（4 列需要 1520px），三张卡并排铺满一行 */
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 10px;
+}
+.pvLandCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-card);
+  min-width: 0;
+}
+.pvLandTitle { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--nm-text-1); }
+.pvLandScope {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--nm-cyan);
+  font-family: var(--nm-font-mono, monospace);
+}
+.pvLandList { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.pvLandList li { font-size: 11.5px; line-height: 1.5; color: var(--nm-text-2); }
+
+/* 六个体检项：3 列 × 2 行（380px 下限），行高按内容，多余空间由 .pvItems 的
+   align-content: space-evenly 均分到行间 —— 不会在一行芯片下方堆出一整块空白 */
+.pvItems {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-auto-rows: minmax(58px, auto);
+  gap: 8px;
+  flex: 1 1 auto;
+  align-content: space-evenly;
+}
+.pvItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  min-width: 0;
+}
+.pvItemIcon { font-size: 20px; flex-shrink: 0; line-height: 1; }
+.pvItemText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pvItemLabel { font-size: 12.5px; font-weight: 600; color: var(--nm-text-1); }
+.pvItemDesc { font-size: 11px; color: var(--nm-text-2); }
+
+.pvGuard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--nm-text-2);
+  flex-shrink: 0;
+}
+.pvGuardIcon { font-size: 14px; flex-shrink: 0; }
 .dupRow { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
 .dupName { flex: 1; min-width: 0; font-size: 12px; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dupMeta { font-size: 11px; color: var(--nm-text-2); flex-shrink: 0; }
@@ -587,4 +665,24 @@
   .hookFlow { flex-direction: column; }
   .hookFlowArrow { transform: rotate(90deg); }
 }
+
+/* ── 撤回消息：空态落地（R7）────────────────────────────────────────
+   原先是两行字（"暂无撤回消息记录" + 一句原因），下方留 574px 空白。
+   撤回记录为空有三种完全不同的原因，用户需要能分辨 + 有下一步动作。 */
+.rvLand {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  max-width: 760px;
+}
+.rvLandTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
+.rvLandDesc { font-size: 12px; line-height: 1.6; color: var(--nm-text-2); }
+.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.rvLandList li { font-size: 11.5px; line-height: 1.6; color: var(--nm-text-2); }
+.rvLandList b { color: var(--nm-text-1); font-weight: 600; }
+.rvLandActions { display: flex; gap: 8px; flex-wrap: wrap; }
 

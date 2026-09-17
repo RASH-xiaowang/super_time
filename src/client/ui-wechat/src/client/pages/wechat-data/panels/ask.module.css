@@ -197,38 +197,6 @@
   background: var(--nm-bg-card);
   flex-shrink: 0;
 }
-.timePanelLabel { font-size: 12px; color: var(--nm-text-2); }
-.timeField { display: inline-flex; align-items: center; gap: 6px; }
-.dateLabel { font-size: 12px; color: var(--nm-text-2); }
-.dateSep { color: var(--nm-text-3); font-size: 12px; }
-.timeClear {
-  margin-left: auto;
-  padding: 5px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--nm-text-3);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.timeClear:hover { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
-
-/* 日期范围输入：与全站其它日期框同一配方（1px --nm-border / r10 / cyan 4% 底）。
-   这里**不写** `outline: none`：焦点环交给全局 `input:focus-visible`。 */
-.input {
-  width: 136px;
-  height: 32px;
-  box-sizing: border-box;
-  padding: 0 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.input:focus { border-color: var(--nm-cyan); }
 
 /* ── ③ 对话区（唯一滚动容器）──────────────────────────────────
    不要给 askMain 加 `flex:1; min-height:0`：可伸缩的 flex 项会收缩到容器高度，

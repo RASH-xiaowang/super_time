@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Super Time —— 「微信+」后端宿主适配层
+ * Super Time —— 后端宿主适配层
  *
  * 将 @deepseek-ai/dsh-wechat-data 的 Typert Remote 后端（单一 ESM bundle，
  * 见 ./wechat-data/index.js）接入 Super Time 的 Electron 主进程：
@@ -454,7 +454,7 @@ function applySqlitePageCacheLimit() {
 }
 
 /**
- * 创建「微信+」后端实例。
+ * 创建「Super Time」后端实例。
  * @param {object} options
  * @param {string} [options.userDataPath] - Electron app.getPath('userData')，
  *   非 Electron 环境默认 ~/.dsh（与上游一致）。
@@ -529,7 +529,7 @@ async function createWechatBackend(options = {}) {
     async call(method, args = []) {
       const implName = methodMap.get(method);
       if (!implName) {
-        return { ok: false, error: { message: `未知的微信+后台方法: ${method}` } };
+        return { ok: false, error: { message: `未知的 Super Time 后台方法: ${method}` } };
       }
       const fn = gateway[implName];
       const callArgs = Array.isArray(args) ? args : [args];

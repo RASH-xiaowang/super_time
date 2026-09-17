@@ -16,6 +16,7 @@ import {
 import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
 import { PrivacyTrustPanel } from './PrivacyTrust.tsx'
 import { BackupPanel } from './Backup.tsx'
@@ -276,6 +277,8 @@ const LICENSE_STATE_LABEL: Record<string, string> = {
  * 软件授权区块：状态 / 导出激活请求 / 导入许可证 / 解除绑定。
  */
 function LicenseSection(): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm）。 */
+  const confirm = useConfirm()
   const [st, setSt] = useState<LicenseStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -333,7 +336,13 @@ function LicenseSection(): React.JSX.Element {
   }
 
   const onRemove = async (): Promise<void> => {
-    if (!window.confirm('确定解除本机许可证绑定？需要重新导入才能继续正式授权。')) return
+    const ok = await confirm({
+      title: '解除本机许可证绑定？',
+      message: '解除后需要重新导入许可证才能继续正式授权。',
+      tone: 'danger',
+      confirmText: '解除绑定',
+    })
+    if (!ok) return
     const api = (window as any).electronAPI?.license
     if (!api?.remove) return
     setBusy('remove')

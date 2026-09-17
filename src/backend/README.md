@@ -1,7 +1,7 @@
-# 微信+后端（Super Time）
+# Super Time 后端
 
 本目录是从 `D:\deepseek-harness\packages\host\wechat-data`（`@deepseek-ai/dsh-wechat-data`）
-完整迁移并适配到 Super Time Electron 主进程的「微信+」后端。
+完整迁移并适配到 Super Time Electron 主进程的后端。
 
 ## 支持平台
 

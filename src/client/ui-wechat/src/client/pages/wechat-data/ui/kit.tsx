@@ -7,7 +7,7 @@
  * 负责外观与交互，不包含任何业务数据逻辑；现有面板的懒加载/实时行为不变。
  */
 import * as React from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
@@ -21,6 +21,8 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import { RANGE_PRESETS, normalizeRange, resolveRangePreset, type RangePresetKey } from '../utils/date-range.ts'
+import { DEFAULT_FOLD_IDLE_MS, FOLD_ANIM_MS, createFoldController, type FoldController, type FoldEvent } from './fold-idle.ts'
 import css from './kit.module.css'
 
 /**
@@ -689,11 +691,335 @@ export function EmptyMaybeSyncing({ text, note }: { text: React.ReactNode; note?
   )
 }
 
+/**
+ * 日期输入（原生 `input[type=date]`，套用与 `Select` 同一套皮肤）。
+ *
+ * 为什么继续用原生而不是自绘日历：`color-scheme: dark` 已让 Chromium 的日历弹层
+ * 跟随深色主题，键盘输入/无障碍/本地化都不用自己重做一遍；需要修的只是「各面板
+ * 各写一套边框高度」与「日历图标在深色底上看不见」这两件事（后者在 scifi-theme.css
+ * 全局解决，任何未迁到本组件的 date 输入也一并受益）。
+ * @param props - 值、变更回调与可访问性标签。
+ * @returns 日期输入元素。
+ */
+export function DateField({ value, onChange, ariaLabel, id, min, max, className, placeholderHint }: {
+  value: string
+  onChange: (value: string) => void
+  ariaLabel?: string
+  id?: string
+  /** 最小可选日期（`YYYY-MM-DD`），传给原生 `min`。 */
+  min?: string
+  /** 最大可选日期（`YYYY-MM-DD`），传给原生 `max`。 */
+  max?: string
+  className?: string
+  /** 空值时的补充说明（原生 date 无法自定义占位文案，只能另起一个 title）。 */
+  placeholderHint?: string
+}): React.JSX.Element {
+  return (
+    <input
+      type="date"
+      id={id}
+      className={clsx(css.dateField, className)}
+      value={value}
+      onChange={(e) => { onChange(e.target.value) }}
+      aria-label={ariaLabel}
+      title={value ? undefined : placeholderHint}
+      data-empty={value ? undefined : 'true'}
+      {...(min ? { min } : {})}
+      {...(max ? { max } : {})}
+    />
+  )
+}
+
+/**
+ * 月份输入（原生 `input[type=month]`），与 `DateField` 同一套皮肤。
+ *
+ * 账本按月汇总用它。原生 month 在空值时会渲染成「----年--月」，视觉上像坏掉了 ——
+ * 这里补上 `data-empty` 让它退成次要色，并给一个 title 说明这是「不限月份」。
+ * @param props - 值、变更回调与可访问性标签。
+ * @returns 月份输入元素。
+ */
+export function MonthField({ value, onChange, ariaLabel, id, className }: {
+  value: string
+  onChange: (value: string) => void
+  ariaLabel?: string
+  id?: string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <input
+      type="month"
+      id={id}
+      className={clsx(css.dateField, className)}
+      value={value}
+      onChange={(e) => { onChange(e.target.value) }}
+      aria-label={ariaLabel}
+      title={value ? undefined : '不限月份'}
+      data-empty={value ? undefined : 'true'}
+    />
+  )
+}
+
+/**
+ * 时刻输入（原生 `input[type=time]`），与 `DateField` 同一套皮肤。
+ * @param props - 值、变更回调与可访问性标签。
+ * @returns 时刻输入元素。
+ */
+export function TimeField({ value, onChange, ariaLabel, id, className }: {
+  value: string
+  onChange: (value: string) => void
+  ariaLabel?: string
+  id?: string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <input
+      type="time"
+      id={id}
+      className={clsx(css.dateField, className)}
+      value={value}
+      onChange={(e) => { onChange(e.target.value) }}
+      aria-label={ariaLabel}
+      data-empty={value ? undefined : 'true'}
+    />
+  )
+}
+
+/**
+ * 日期区间（起止两个日期 + 可选的预设 chip + 可选的清除按钮）。
+ *
+ * 全应用此前有 8 处各写各的区间（周期总结另带一份预设实现），这里收敛成一个组件：
+ * 预设来自 `utils/date-range.ts` 的纯函数，面板只负责接自己的 state。
+ *
+ * 起止**不**加 `min`/`max` 互相限制：那样用户想把「从」改到「到」之后会被原生控件
+ * 直接灰掉，只能先清空另一端。这里改成两边都能自由选，起止颠倒时**在组件内自动对调**
+ * —— 语义上「这段时间之内」本来就没有颠倒，静默对调比让筛选结果变空更符合预期。
+ * @param props - 起止值、变更回调、预设键列表与清除回调。
+ * @returns 区间控件元素。
+ */
+export function DateRangeField({ from, to, onFrom, onTo, onClear, presets, ariaLabel = '日期区间', idFrom, idTo, className }: {
+  from: string
+  to: string
+  onFrom: (value: string) => void
+  onTo: (value: string) => void
+  /** 传了才显示「清除」按钮（值全空时不渲染）。 */
+  onClear?: () => void
+  /** 要展示的预设 chip；省略则不显示预设行。 */
+  presets?: readonly RangePresetKey[]
+  ariaLabel?: string
+  idFrom?: string
+  idTo?: string
+  className?: string
+}): React.JSX.Element {
+  /** 起止都填了且颠倒时对调，再一次性写回两端。 */
+  const commit = (nextFrom: string, nextTo: string): void => {
+    const n = normalizeRange(nextFrom, nextTo)
+    if (n.from !== nextFrom) onFrom(n.from)
+    if (n.to !== nextTo) onTo(n.to)
+  }
+  const applyPreset = (key: RangePresetKey): void => {
+    const r = resolveRangePreset(key)
+    onFrom(r.from)
+    onTo(r.to)
+  }
+  return (
+    <div className={clsx(css.dateRange, className)} role="group" aria-label={ariaLabel}>
+      {presets && presets.length > 0 && (
+        <div className={css.dateRangePresets}>
+          {presets.map((key) => {
+            const preset = RANGE_PRESETS.find(p => p.key === key)
+            if (!preset) return null
+            const r = preset.resolve(new Date())
+            const active = from === r.from && to === r.to
+            return (
+              <button
+                key={key}
+                type="button"
+                className={css.datePresetChip}
+                data-active={active || undefined}
+                onClick={() => { applyPreset(key) }}
+              >
+                {preset.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      <div className={css.dateRangeRow}>
+        <DateField
+          value={from}
+          onChange={(v) => { commit(v, to) }}
+          aria-label={`${ariaLabel}起始日期`}
+          id={idFrom}
+          placeholderHint="起始日期"
+        />
+        <span className={css.dateRangeSep} aria-hidden="true">至</span>
+        <DateField
+          value={to}
+          onChange={(v) => { commit(from, v) }}
+          aria-label={`${ariaLabel}结束日期`}
+          id={idTo}
+          placeholderHint="结束日期"
+        />
+        {onClear && (from || to) && (
+          <button type="button" className={css.dateRangeClear} onClick={onClear} aria-label="清除日期区间">✕</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** `FoldableBar` 的命令式句柄：给外部「必须展开」的场景用（例如全局搜索的 Ctrl+K）。 */
+export interface FoldableBarHandle {
+  /** 立刻展开（并取消待折叠的计时）。 */
+  expand: () => void
+  /** 立刻收起。 */
+  collapse: () => void
+  /** 当前是否展开。 */
+  isOpen: () => boolean
+}
+
+/**
+ * 「向上折叠」条：默认收起只留一条居中把手，点开展示内容；指针离开区域
+ * 且 `idleMs`（默认 10 秒）内无任何活动时自动收起。
+ *
+ * 三个非显然的实现点：
+ * ① **高度动画用 `grid-template-rows: 0fr ↔ 1fr`** 而不是 `max-height`：后者必须写死一个
+ *    「够大的」上限，过渡在内容比上限矮时前半段是空跑的（观感上「先快后慢」）；
+ *    `0fr/1fr` 由浏览器按真实内容高度插值，多高都是一次到位。
+ * ② **收起时给内容加 `inert`**（React 18 不支持该 prop，用 ref 直接设属性）：否则折叠后
+ *    里面的输入框仍能被 Tab 聚焦，键盘用户会「掉进」一块看不见的区域。
+ * ③ **展开后要解除裁剪**：容器为了做高度动画必须 `overflow: hidden`，而顶栏里的搜索下拉
+ *    是 `position: absolute` 溢出到容器外的 —— 展开态若继续裁剪，下拉会被切掉。
+ *    所以裁剪状态由 JS 在过渡结束后关掉（`prefers-reduced-motion` 下时长为 0，立即关）。
+ * @param props - 内容、空闲时长、可访问性标签与变化回调。
+ * @param ref - 命令式句柄（供外部展开，例如全局搜索的 Ctrl+K）。
+ * @returns 折叠条元素。
+ */
+export const FoldableBar = forwardRef(function FoldableBar({ children, idleMs, label = '可折叠区域', className, onOpenChange }: {
+  children: React.ReactNode
+  /** 指针离开后多久自动收起（毫秒）。 */
+  idleMs?: number
+  /** 区域的可访问性名称（读屏用）。 */
+  label?: string
+  className?: string
+  /** 展开态变化时回调。 */
+  onOpenChange?: (open: boolean) => void
+}, ref: React.ForwardedRef<FoldableBarHandle>): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  /** 是否仍在裁剪内容（展开过渡期间为 true，结束后关掉以放行绝对定位的下拉）。 */
+  const [clipped, setClipped] = useState(true)
+  const ctrlRef = useRef<FoldController | null>(null)
+  const innerRef = useRef<HTMLDivElement | null>(null)
+  const clipTimerRef = useRef<number | null>(null)
+  const reducedRef = useRef(false)
+  const bodyId = useId()
+  // onOpenChange 走 ref：调用方每次渲染都是新函数，不该成为重建控制器的依赖
+  const onOpenChangeRef = useRef(onOpenChange)
+  onOpenChangeRef.current = onOpenChange
+
+  // 控制器只建一次：状态机与计时器都在里面，React 侧只做「变化时 setState」
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    reducedRef.current = mq.matches
+    const onMq = (): void => { reducedRef.current = mq.matches }
+    mq.addEventListener('change', onMq)
+    const ctrl = createFoldController({
+      idleMs: idleMs ?? DEFAULT_FOLD_IDLE_MS,
+      onChange: (next) => {
+        setOpen(next)
+        onOpenChangeRef.current?.(next)
+        // inert 在这里**同步**摘掉，不放进 useEffect：调用方（如全局搜索的 Ctrl+K）几乎总是
+        // 「expand() 之后立刻 focus()」，而 React 的 setState 要到本轮事件结束才提交 ——
+        // 若 inert 留到 effect 里才摘，那次 focus 会落在仍被标记 inert 的元素上**静默失败**，
+        // 表现为「快捷键把顶栏展开了，但光标没进搜索框」。
+        if (next) innerRef.current?.removeAttribute('inert')
+        else innerRef.current?.setAttribute('inert', '')
+        // 收起：立刻恢复裁剪；展开：先裁着，过渡结束后再放开（放行绝对定位的搜索下拉）
+        if (clipTimerRef.current !== null) { window.clearTimeout(clipTimerRef.current); clipTimerRef.current = null }
+        if (!next) {
+          setClipped(true)
+        } else {
+          const dur = reducedRef.current ? 0 : FOLD_ANIM_MS
+          clipTimerRef.current = window.setTimeout(() => {
+            clipTimerRef.current = null
+            setClipped(false)
+          }, dur)
+        }
+      },
+    })
+    ctrlRef.current = ctrl
+    return () => {
+      if (clipTimerRef.current !== null) { window.clearTimeout(clipTimerRef.current); clipTimerRef.current = null }
+      ctrl.dispose()
+      ctrlRef.current = null
+    }
+    // idleMs 变化不重建：它只在「开始计时」那一刻被读取，重建会让进行中的计时被丢掉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 挂载时补上 inert（初始即折叠）。之后的摘除/恢复由 onChange 同步做，见上。
+  // React 18 没有 inert prop，只能直接设属性。
+  useEffect(() => {
+    innerRef.current?.setAttribute('inert', '')
+  }, [])
+
+  useImperativeHandle(ref, () => ({
+    expand: () => { ctrlRef.current?.dispatch({ type: 'open' }) },
+    collapse: () => { ctrlRef.current?.dispatch({ type: 'collapse' }) },
+    isOpen: () => ctrlRef.current?.isOpen() ?? false,
+  }), [])
+
+  const dispatch = (ev: FoldEvent): void => { ctrlRef.current?.dispatch(ev) }
+
+  return (
+    <div
+      className={clsx(css.foldable, className)}
+      data-open={open || undefined}
+      onPointerEnter={() => { dispatch({ type: 'pointer-enter' }) }}
+      onPointerLeave={() => { dispatch({ type: 'pointer-leave' }) }}
+      onPointerDown={() => { dispatch({ type: 'interact' }) }}
+      onKeyDown={() => { dispatch({ type: 'interact' }) }}
+      onFocusCapture={() => { dispatch({ type: 'interact' }) }}
+    >
+      <div className={css.foldableBody} data-clipped={clipped || undefined}>
+        <div className={css.foldableInner} ref={innerRef} id={bodyId}>
+          {children}
+        </div>
+      </div>
+      <div className={css.foldableHandle}>
+        <button
+          type="button"
+          className={css.foldableToggle}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => { dispatch({ type: open ? 'collapse' : 'open' }) }}
+        >
+          <svg
+            className={css.foldableChevron}
+            viewBox="0 0 24 24"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            data-open={open || undefined}
+          >
+            {open ? <path d="m6 15 6-6 6 6" /> : <path d="m6 9 6 6 6-6" />}
+          </svg>
+          <span>{open ? '收起' : `展开${label}`}</span>
+        </button>
+      </div>
+    </div>
+  )
+})
+
 /** 单调单元格样式（md5/路径等）。 */
 export function Mono({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <span className={css.cellMono}>{children}</span>
 }
-
 /** 主文本单元格样式。 */
 export function CellPrimary({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <span className={css.cellPrimary}>{children}</span>

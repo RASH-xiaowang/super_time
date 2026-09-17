@@ -29,7 +29,7 @@ import type { LicenseStatus } from '../license/LicenseGate.tsx'
 import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import css from './onboarding.module.css'
 
-const APP_VERSION = '1.0.3'
+const APP_VERSION = '1.0.4'
 
 /** 首页价值主张（贴合本地解密 + AI 分析定位）。 */
 const VALUE_PROPS = [
@@ -420,7 +420,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
           </Reveal>
           <Reveal anim="fade" delayMs={120}>
             <p className={css.heroLead}>
-              Super Time · 微信+ 在本机解密并分析你的消息库：会话、社交、资产、资金与隐私一体覆盖，
+              Super Time 在本机解密并分析你的消息库：会话、社交、资产、资金与隐私一体覆盖，
               并提供 AI 问答与周期总结。数据默认不出机。
             </p>
           </Reveal>
@@ -448,7 +448,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
             // 这个数字是用户可见的契约声明，必须与 gateway.ts 的 @Remote 数量一致。
             // 它曾长期停在 114 而无人发现 —— 现在由
             // src/backend/tests/api-docs.spec.ts 守着，改了方法面就会在这里转红。
-            { k: 'REMOTE API', v: '135', h: '查询 / 导出 / 审计 / 总结' },
+            { k: 'REMOTE API', v: '138', h: '查询 / 导出 / 审计 / 总结' },
             { k: 'RUNTIME', v: 'LOCAL', h: 'utilityProcess 独立后端' },
           ].map((s, i) => (
             <Reveal key={s.k} anim="slide-r" delayMs={140 + i * 90}>
@@ -574,7 +574,7 @@ function AboutPage({ versions }: {
           <section className={css.aboutBlock}>
             <h3 className={css.aboutTitle}>项目简介</h3>
             <p className={css.aboutText}>
-              Super Time · 微信+ 是面向个人用户的本地微信数据分析桌面应用。
+              Super Time 是面向个人用户的本地微信数据分析桌面应用。
               Electron 桌面壳 + React/Vite 前端（NEON MATRIX）+ 独立 utilityProcess 后端，
               提供会话检索、社交图谱、资产盘点、隐私审计与 AI 总结。核心分析默认离线。
             </p>
@@ -857,7 +857,7 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
         <div className={css.brand}>
           <span className={css.brandIcon}><BrandMark size={20} /></span>
           <div className={css.brandText}>
-            <span className={css.brandName}>Super Time · 微信+</span>
+            <span className={css.brandName}>Super Time</span>
             <span className={css.brandSub}>Onboarding · System Boot</span>
           </div>
         </div>

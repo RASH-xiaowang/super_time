@@ -1,5 +1,5 @@
 /**
- * Super Time —— 微信+前端入口
+ * Super Time —— 前端入口
  *
  * 将迁移自 @deepseek-ai/dsh-client-ui-wechat 的 WechatDataPanel 直接挂载到
  * Electron 渲染进程；Remote 通过 preload 暴露的 window.electronAPI.wechat
@@ -125,8 +125,8 @@ void (async (): Promise<void> => {
     const failed = state === 'failed'
     const attempt = restarts && restarts > 0 ? `（第 ${restarts} 次尝试）` : ''
     const text = failed
-      ? `⚠ ${lastError ?? '微信+ 后端不可用'}`
-      : `⏳ 微信+ 后端正在重启${attempt}${lastError ? `：${lastError}` : ''}，稍后自动恢复`
+      ? `⚠ ${lastError ?? 'Super Time 后端不可用'}`
+      : `⏳ Super Time 后端正在重启${attempt}${lastError ? `：${lastError}` : ''}，稍后自动恢复`
     if (existing) {
       existing.textContent = text
       existing.setAttribute('data-failed', failed ? '' : 'pending')
@@ -297,10 +297,10 @@ function WechatApp(): React.JSX.Element {
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', justifyContent: 'center', background: '#050a18', color: '#e2e8f0', fontFamily: 'sans-serif' }}>
         <div style={{ fontSize: 40 }}>💬</div>
-        <div>微信+已关闭</div>
+        <div>Super Time 已关闭</div>
         <button type="button" onClick={openWechat}
           style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid rgba(0,240,255,.35)', background: 'rgba(0,240,255,.08)', color: '#00f0ff', cursor: 'pointer' }}>
-          打开微信+
+          打开 Super Time
         </button>
       </div>
     )

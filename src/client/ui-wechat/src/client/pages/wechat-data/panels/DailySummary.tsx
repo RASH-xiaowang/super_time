@@ -10,6 +10,7 @@ import {
   apiDeleteSummaryTask,
   apiGenerateDailySummary,
   apiGetContacts,
+  apiGetLlmConfig,
   apiGetSessions,
   apiListSummaryRecords,
   apiListSummaryTasks,
@@ -20,7 +21,8 @@ import {
   writeRenderCache,
 } from '../api.ts'
 import type { SummaryRecord, SummaryTask } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, PanelHeader, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
+import { Badge, DateField, PanelHeader, TimeField, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import css from './daily-summary.module.css'
 import { fmtLocaleMs } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -62,7 +64,9 @@ interface DailyStats {
  * Render the daily-summary panel.
  * @returns the daily-summary element tree.
  */
-export function DailySummaryPanel(): React.JSX.Element {
+export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (section?: string) => void } = {}): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm）。 */
+  const confirm = useConfirm()
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [result, setResult] = useState<string | null>(null)
   const [meta, setMeta] = useState('')
@@ -82,6 +86,13 @@ export function DailySummaryPanel(): React.JSX.Element {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState<'tasks' | 'records' | 'generate'>('tasks')
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null)
+  /**
+   * 模型是否已配置：总结要靠模型生成，没配模型时"手动生成/定时任务"点了必然失败。
+   * 空态里提前把这一步暴露出来（带一个直接去「设置 → AI 大模型」的入口），
+   * 而不是等用户点了生成再报错。
+   */
+  const [llm, setLlm] = useState<{ provider: string; model: string } | null>(null)
+  const modelReady = !!llm && llm.model.trim() !== ''
 
   // Toast + per-action busy feedback
   const [toasts, setToasts] = useState<readonly Toast[]>([])
@@ -133,6 +144,20 @@ export function DailySummaryPanel(): React.JSX.Element {
   }, [])
 
   useEffect(() => { void loadTasks() }, [loadTasks])
+
+  // 读一次模型配置（读的是本机 llm.json，很轻）：空态要用它告诉用户"还差哪一步"。
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const c = await apiGetLlmConfig()
+        if (!cancelled) setLlm({ provider: c.provider, model: c.model })
+      } catch {
+        if (!cancelled) setLlm(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   // 群聊列表只在使用到时才加载：打开任务表单时。
   // 模型选择已移除 —— 统一走「数据配置 → AI 大模型」里的全局默认模型。
@@ -259,7 +284,12 @@ export function DailySummaryPanel(): React.JSX.Element {
   }
 
   const deleteTask = async (id: number): Promise<void> => {
-    if (!window.confirm('删除该总结任务？此操作不可撤销。')) return
+    const ok = await confirm({
+      title: '删除该总结任务？',
+      message: '删除后不会再自动生成总结，该操作不可撤销。',
+      tone: 'danger',
+    })
+    if (!ok) return
     await withBusy(`del:${id}`, async () => {
       try {
         await apiDeleteSummaryTask({ id })
@@ -270,7 +300,12 @@ export function DailySummaryPanel(): React.JSX.Element {
   }
 
   const deleteRecord = async (id: number): Promise<void> => {
-    if (!window.confirm('删除该总结记录？此操作不可撤销。')) return
+    const ok = await confirm({
+      title: '删除该总结记录？',
+      message: '该操作不可撤销。',
+      tone: 'danger',
+    })
+    if (!ok) return
     await withBusy(`delrec:${id}`, async () => {
       try {
         await apiDeleteSummaryRecord({ id })
@@ -319,6 +354,55 @@ export function DailySummaryPanel(): React.JSX.Element {
         <button type="button" className={css.tabBtn} data-active={view === 'generate' || undefined} onClick={() => { setView('generate') }}>手动生成</button>
       </div>
       <div className={css.scroll}>
+        {/* 全新用户（0 任务 0 记录）时，先把"怎么拿到第一份总结"讲清楚：
+            总结要靠模型生成，没配模型时点生成必然失败 —— 这一步必须提前暴露。
+            此前这里只有一张卡 + 一句"还没有定时任务"，下方 470px 全是空白。 */}
+        {view === 'tasks' && tasks.length === 0 && records.length === 0 && (
+          <div className={css.dsStart}>
+            <div className={css.dsStartCard}>
+              <div className={css.dsStartTitle}>三步拿到第一份总结</div>
+              <ol className={css.dsSteps}>
+                <li className={css.dsStep}>
+                  <span className={css.dsStepNo}>1</span>
+                  <div className={css.dsStepBody}>
+                    <div className={css.dsStepName}>配置模型</div>
+                    {modelReady
+                      ? <div className={css.dsStepMeta}>已配置：{llm?.provider} · {llm?.model}</div>
+                      : <div className={css.dsStepMeta}>尚未配置 —— 总结由模型生成，没配模型无法产出</div>}
+                  </div>
+                  <button type="button" className={css.catBtn} data-active={modelReady ? undefined : true} onClick={() => { onOpenSettings?.('ai') }}>
+                    {modelReady ? '查看' : '去配置'}
+                  </button>
+                </li>
+                <li className={css.dsStep}>
+                  <span className={css.dsStepNo}>2</span>
+                  <div className={css.dsStepBody}>
+                    <div className={css.dsStepName}>手动生成一天</div>
+                    <div className={css.dsStepMeta}>选日期 → 生成，结果自动存进「总结阅览」</div>
+                  </div>
+                  <button type="button" className={css.catBtn} onClick={() => { setView('generate') }}>去生成</button>
+                </li>
+                <li className={css.dsStep}>
+                  <span className={css.dsStepNo}>3</span>
+                  <div className={css.dsStepBody}>
+                    <div className={css.dsStepName}>需要每天自动跑？</div>
+                    <div className={css.dsStepMeta}>建一个定时任务：选群聊/成员、格式与时间，到点自动生成</div>
+                  </div>
+                  <button type="button" className={css.catBtn} onClick={openNew}>＋ 新建</button>
+                </li>
+              </ol>
+            </div>
+            <div className={css.dsStartCard}>
+              <div className={css.dsStartTitle}>总结长什么样</div>
+              <ul className={css.dsStartList}>
+                <li><b>只读本机消息</b>：先把当天消息汇总成素材，再交给模型；素材不出本机（出网边界见「数据边界与出网」）。</li>
+                <li><b>五种格式</b>：简洁 / 详细 / 要点 / 叙事 / 自定义提示词。</li>
+                <li><b>结果留档</b>：每条总结进「总结阅览」（共 {records.length} 条），可复制、可删除。</li>
+                <li><b>可回溯</b>：生成时会记录用了哪些会话与条数（阅览里显示）。</li>
+              </ul>
+            </div>
+          </div>
+        )}
         {view === 'tasks' && (
           <div className={css.sideCard}>
             <div className={css.cardTitle}>定时总结任务 <span className={css.cardCount}>共 {tasks.length} 个</span></div>
@@ -356,7 +440,12 @@ export function DailySummaryPanel(): React.JSX.Element {
               <div className={css.sideCard}>
                 <div className={css.cardTitle}>总结阅览 <span className={css.cardCount}>共 {records.length} 条 · 平均 {avgLen} 字</span></div>
                 <div className={css.sideList}>
-                  {records.length === 0 && <div className={kitCss.emptyInline}>还没有历史总结。定时任务运行或手动生成后会自动存入这里。</div>}
+                  {records.length === 0 && (
+                    <div className={css.dsEmptyRecords}>
+                      <div className={kitCss.emptyInline}>还没有历史总结。定时任务运行或手动生成后会自动存入这里。</div>
+                      <button type="button" className={css.catBtn} data-active="true" onClick={() => { setView('generate') }}>去手动生成一份</button>
+                    </div>
+                  )}
                   {records.map(r => (
                     <div key={r.id} className={css.taskRow}>
                       <div className={css.taskInfo}>
@@ -410,7 +499,7 @@ export function DailySummaryPanel(): React.JSX.Element {
                   </div>
                   <div className={css.searchWrap}>
                     <label className={css.fieldLabel}>日期</label>
-                    <input type="date" value={date} onChange={(e) => { setDate(e.target.value) }} className={css.search} />
+                    <DateField value={date} onChange={setDate} ariaLabel="总结日期" />
                     <button type="button" className={css.catBtn} data-active="true" onClick={() => { void generate() }} disabled={isGenerating}>{renderBusy('generate', '生成总结', '生成中…')}</button>
                   </div>
                 </div>
@@ -543,7 +632,7 @@ export function DailySummaryPanel(): React.JSX.Element {
 
               <div className={`${css.formHd} ${css.dsFormHd}`}><span className={kitCss.textMeta}>定时设置</span></div>
               <div className={css.dsScheduleRow}>
-                <input type="time" value={form.scheduleTime} onChange={(e) => { setForm(f => ({ ...f, scheduleTime: e.target.value })) }} className={`${css.search} ${css.dsTimeInput}`} />
+                <TimeField value={form.scheduleTime} onChange={(v) => { setForm(f => ({ ...f, scheduleTime: v })) }} ariaLabel="每日总结时刻" />
                 <label className={`${kitCss.textCaption} ${css.dsInlineLabel}`}>
                   <input type="checkbox" checked={form.enabled} onChange={(e) => { setForm(f => ({ ...f, enabled: e.target.checked })) }} />
                   {form.enabled ? '已启用' : '已暂停'}

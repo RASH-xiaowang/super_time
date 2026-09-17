@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
@@ -184,6 +185,8 @@ function parseFavItem(f: FavorItem): {
  * @returns the favorites element tree.
  */
 export function FavoritesPanel(): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm）。 */
+  const confirm = useConfirm()
   const [items, setItems] = useState<readonly FavorItem[]>([])
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
@@ -323,7 +326,12 @@ export function FavoritesPanel(): React.JSX.Element {
   const doDelete = async (): Promise<void> => {
     const ids = [...selected]
     if (ids.length === 0) return
-    if (!window.confirm(`删除所选 ${ids.length} 项收藏（本地副本）？`)) return
+    const ok = await confirm({
+      title: `删除所选 ${ids.length} 项收藏？`,
+      message: '删除的是本地解密副本，不影响微信里的原始收藏。',
+      tone: 'danger',
+    })
+    if (!ok) return
     try {
       const r = await apiDeleteFavoriteItems({ ids })
       notify(`已删除 ${r.deleted} 项收藏`)

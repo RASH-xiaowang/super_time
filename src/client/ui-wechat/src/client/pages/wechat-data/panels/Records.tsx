@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
-import { Badge, Card, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, DateRangeField, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -280,11 +280,15 @@ export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, l
           <>
             <SearchInput value={keyword} onChange={(v) => { setKeyword(v) }} onEnter={() => { void load(true) }} placeholder="搜索会话 / 用户 / ID…" ariaLabel="搜索记录" />
             {TIME_KINDS[kind] && (
-              <>
-                <input type="date" className={css.input} value={fromDate} onChange={(e) => { setFromDate(e.target.value) }} title="开始日期" />
-                <span className={kitCss.textMeta}>至</span>
-                <input type="date" className={css.input} value={toDate} onChange={(e) => { setToDate(e.target.value) }} title="结束日期" />
-              </>
+              <DateRangeField
+                from={fromDate}
+                to={toDate}
+                onFrom={setFromDate}
+                onTo={setToDate}
+                onClear={() => { setFromDate(''); setToDate('') }}
+                presets={['today', 'week', 'month', 'last-7', 'last-30']}
+                ariaLabel="记录时间筛选"
+              />
             )}
           </>
         )}

@@ -97,7 +97,7 @@ function restrictFile(file) {
 const SENSITIVE_FILES = ['config.json', 'secrets.json', 'keys.json', 'llm.json', 'all_keys.json'];
 
 /**
- * 收紧「微信+」全部敏感位置：状态目录、数据根，以及两者下的已知密钥文件。
+ * 收紧「Super Time」全部敏感位置：状态目录、数据根，以及两者下的已知密钥文件。
  * @param {{ stateDir?: string, dataRoot?: string }} paths - 要处理的位置。
  * @returns {{ ok: boolean, failures: string[] }} 汇总（失败不抛）。
  */

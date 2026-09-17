@@ -1,5 +1,5 @@
 /**
- * 微信+ browser plugin: wires the wechatData Remote gateway into the
+ * Super Time browser plugin: wires the wechatData Remote gateway into the
  * panel access layer, relays the host realtime sync signal as a DOM event,
  * and adds a sidebar footer action. Opening it registers the WeChat data
  * dashboard as the center content-area occupant (the `conversation` slot),
@@ -34,12 +34,12 @@ function WechatTrigger({ wide }: PropsRuntime<'sidebar.footer.action'> & PropsLo
     <button
       type="button"
       onClick={toggleWechat}
-      title={open ? '关闭微信+' : '打开微信+'}
+      title={open ? '关闭 Super Time' : '打开 Super Time'}
       data-on={open || undefined}
       style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 1 auto', minWidth: 0, padding: '6px 10px', background: open ? 'rgba(0,240,255,0.08)' : 'none', border: 'none', color: 'inherit', cursor: 'pointer', font: 'inherit' }}
     >
       <span aria-hidden className={shellCss.triggerIcon}>{'\uD83D\uDCAC'}</span>
-      {wide ? <span className={shellCss.triggerLabel}>{open ? '关闭微信+' : '微信+'}</span> : null}
+      {wide ? <span className={shellCss.triggerLabel}>{open ? '关闭 Super Time' : 'Super Time'}</span> : null}
     </button>
   )
 }

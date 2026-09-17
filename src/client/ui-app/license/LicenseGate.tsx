@@ -124,7 +124,7 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
     <div className={css.lock}>
       <NoticeBanner />
       <div className={css.card}>
-        <div className={css.brand}>SUPER TIME · 微信+</div>
+        <div className={css.brand}>SUPER TIME</div>
         <h1 className={css.title}>{title}</h1>
         <p className={css.lead}>
           本机数据分析功能需要有效许可证。请导入厂商签发的 license.json，

@@ -178,7 +178,9 @@
 @media (max-width: 900px) {
   /* 第 97 轮删除：`.quickGrid` 的窄屏覆盖 —— 该区块已被 `.ovHero*` 取代（快捷入口网格没了）。 */
   .cols { grid-template-columns: 1fr; }
-  .authors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* `.authors` 的窄屏覆盖已移除：它原先把列数钉成 2 列，而现在是
+     `repeat(auto-fill, minmax(190px, 1fr))` —— 窄屏下 auto-fill 自己就会降列，
+     钉死 2 列反而会在 300px 宽时把每格压到 150px，名字被截断。 */
 }
 
 /* ── 太空舱 / capsule ── */
@@ -336,10 +338,11 @@
   color: var(--nm-cyan);
 }
 
-/* 朋友圈活跃作者头像 */
+/* 朋友圈活跃作者头像（26px：紧凑化后与行高、两列网格匹配；
+   fallback 必须同尺寸，否则懒加载前后行高会跳） */
 .authorAvatar {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
@@ -348,14 +351,14 @@
   corner-shape: round;
 }
 .authorAvatarFallback {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
@@ -612,8 +615,11 @@
   min-width: 0;
   flex: 1;
 }
+/* 交互画像 / 关系浓度：**不设固定最小高度**。
+   这里原来写的是 min-height: 420px —— 内容只有约 250px 时，那 170px 直接变成卡片底部的空白。
+   同行两张卡由 .ovGrid 的默认 stretch 拉平，高度需要多少由内容决定。 */
 .ovTall {
-  min-height: 420px;
+  min-height: 0;
 }
 .ovTall .metricGrid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -689,40 +695,336 @@
   word-break: break-all;
   line-height: 1.3;
 }
-/* 轨道趋势 / 消息热度：统一高度、紧凑网格 */
+/* 轨道趋势 / 消息热度：不再强制同一最小高度。
+   两卡片同在 5+7 一行，`.ovGrid` 的默认 stretch 已经让它们等高，再各写 320px 只会在
+   内容不足时凭空留白。 */
 .ovTrend,
 .ovHeat {
-  min-height: 320px;
+  min-height: 0;
 }
 /* 图表需要随时可绘制/导出，禁用 content-visibility 延迟 */
 .ovHeat {
   content-visibility: visible;
   contain: none;
 }
-.ovTrend .trendGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
 .ovTrend .trendCell {
-  min-height: 110px;
+  min-height: 96px;
   justify-content: space-between;
-  padding: 12px;
+  padding: 10px;
 }
 .ovTrend .metricValue {
   font-size: 20px;
 }
-.ovHeat .calendarHeatmap {
-  flex: 1;
-  height: 260px;
-  min-height: 230px;
-  max-height: none;
-}
+/* 热力图的容器高度只在文件末尾的「重设计」段里定一次（172px）。
+   这里曾写过 260px/230px、后面又写过 auto —— 三层互相覆盖，最终哪条生效全靠行序，
+   而 `.ovTrend` / `.ovHeat` 两个类当时还没接上 JSX，等于白写。 */
 
 @media (max-width: 1100px) {
   .ovHeroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   /* 4 列模式下重画分隔线：每行第 1 格无左线，第 2 行整体加上边线 */
   .ovHeroStat:nth-child(4n+1) { border-left: none; }
   .ovHeroStat:nth-child(n+5) { border-top: 1px solid var(--nm-border); }
-  .ovSpan7, .ovSpan6, .ovSpan5 { grid-column: span 12; }
+  .ovSpan12, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   紧凑化（本模块末尾的统一覆盖层）
+   ──────────────────────────────────────────────────────────────────────
+   上面是既有规则，这一段**只做压缩**：统一收紧内边距、间距、字号与固定高度，
+   内容一项不减。集中成一段而不是散改各处，是为了让「哪里为了紧凑而让步」可被
+   一次性审阅与回退。
+
+   两处不只是「收紧」，而是修掉真实的空白来源：
+     · `.ovTall { min-height: 420px }` —— 「交互画像」的内容只有约 250px，
+       那段固定高度在卡片底部留下一大块空白；改为由内容决定。
+     · `.authors` 单列 + 卡片横跨整行 —— 只用掉约 1/3 宽度、10 行高度全浪费在
+       右侧空白上；改成两列后 10 条只占 5 行。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 面板外层与网格：12px → 10px */
+.root { gap: 12px; }
+.ovGrid {
+  gap: 10px;
+  /* **不要** align-items: start —— 那会让短卡片自身不拉伸，同行最高的卡片有多高，
+     短卡片下面就空多少（实测就是「留白太多」的主因）。默认的 stretch 让同行卡片等高，
+     空白改为落在卡片**内部**，再由各卡片自己的弹性内容（如 .ovTall .hourBars 的
+     flex:1）吸收。 */
+}
+.ovSpan5 { gap: 10px; }
+
+/* 卡片：头部/正文内边距与图标收小 */
+.ovCard { border-radius: 12px; }
+.ovCardHd { gap: 8px; padding: 9px 12px; }
+.ovCardBd { padding: 10px 12px; gap: 8px; }
+.ovTitle { font-size: 12.5px; }
+.ovIcon { width: 24px; height: 24px; border-radius: 7px; }
+
+/* 固定高度里的空白：交给内容决定（原 420px + 下面的 hourBars 220px 合计把这一格
+   撑到约 700px，而内容只有约 250px —— 那一格下面全是空的） */
+.ovTall { min-height: 0; }
+.ovTall .hourBars { min-height: 96px; }
+
+/* 资产指标条：8 格指标收紧（一屏纵览里这一条占的是首屏黄金位置） */
+.ovHeroIcon { width: 26px; height: 26px; border-radius: 9px; font-size: 14px; }
+.ovHeroValue { font-size: 17px; }
+.ovHeroLabel { font-size: 10px; }
+.ovHeroMix { padding: 6px 12px; gap: 8px; }
+
+/* 朋友圈活跃作者：单列 → 两列（10 条从 10 行压到 5 行） */
+/* 朋友圈活跃作者：占满整行宽度（卡片 span 12），所以列数要跟着宽度走。
+   固定两列时右侧会空掉一大片；auto-fill 让它在宽屏排到 4–5 列，10 条只占 2–3 行。 */
+.authors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px 10px;
+}
+.author { padding: 6px 9px; font-size: 11.5px; }
+/* 头像尺寸已在上面 .authorAvatar / .authorAvatarFallback 的原始规则里改为 26px
+   （在这里再覆盖一份实测不生效：CSS Modules 会把同类名的声明合并，反而看不出哪份在赢） */
+
+/* 各类列表的间距 */
+.catList { gap: 6px; }
+/* 分类行收紧凑：标题写「Top N」就要把 N 条都列出来（此前写 Top 7 只渲染 4 条 —— 标题与内容不符）。
+   收紧后 7 条正好填满与「存储清理建议」等高的那一格。 */
+.cat { gap: 3px; }
+.catRow { font-size: 11.5px; }
+.bar { height: 6px; margin-top: 2px; }
+/* 指标网格：118px 时宽卡片会把 4 格摊得很稀；提到 150px 让每格更饱满、行数更少 */
+.metricGrid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
+/* 关系浓度 Top 8：让行均分卡片高度，而不是把 8 行堆在顶部、下面留一片白 */
+.topList { gap: 5px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
+.assetGrid { gap: 6px; }
+.healthGrid { gap: 8px; }
+.hourBars { min-height: 78px; margin-top: 4px; }
+
+/* 趋势网格的列数只在本文件末尾的「重设计」段里定一次（auto-fit 72px），
+   这里不再另写一份 —— 曾同时存在 repeat(3) 与 auto-fit 150px 两份互相打架的规则，
+   而它们依赖的 `.ovTrend` 类从未出现在 JSX 上，两份都是死的。 */
+
+/* 交互画像的小时柱：拉伸填满卡片剩余高度（原来被 `min-height: 220px` 顶出空洞） */
+.ovTall .hourBars {
+  flex: 1 1 auto;
+  min-height: 96px;
+}
+
+/* ── 轨道趋势 + 消息热度：5 格指标 + 90 天热力图 ─────────────────────
+   热力图（calHeatmap）不受宽度驱动，自身固定约 220px 高；所以给「轨道趋势」4 栅格
+   （5 个指标用 auto-fit 正好一行排满），把余下的 8 栅格留给热力图，
+   这样热力图在宽处不空、趋势卡也不被摊薄。 */
+.ovSpan4 { grid-column: span 4; }
+.ovSpan8 { grid-column: span 8; }
+
+/* 轨道趋势：span 4 时内宽约 370px，5 项要排成一行需要下限 ≈72px。
+   用 auto-fit + 72px：能一行放下就一行（宽度均分不留空），窄屏再自动降列。 */
+.ovTrend .trendGrid {
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+}
+/* 趋势格按 5 项一行所需的最小高度收紧 */
+.ovSpan4 .trendCell {
+  min-height: 78px;
+  padding: 7px;
+}
+.ovSpan4 .trendCell > span:first-child,
+.ovSpan4 .metricValue { font-size: 16px; }
+/* 热力图高度见文件末尾「重设计」段（此处原有一条 flex/auto 覆盖，已并入那一段） */
+
+/* ══════════════════════════════════════════════════════════════════════
+   世界板块 · 好友地区：地图 + 省份/城市榜单（重设计）
+   ──────────────────────────────────────────────────────────────────────
+   这一块此前是"总览里最大的一处空白"，两个原因都实测过：
+
+   ① **跨模块覆盖写错了选择器**。地图与头像栏的类名来自另外两个 CSS Module，
+      会被哈希成 `_stage_xxxx` / `_avatarRailLeft_xxxx`。用 `:global(.stage)` 只会
+      在产物里发出**裸类名** `.stage`，永远匹配不到带哈希的元素 —— 于是
+      「限高 340px」和「隐藏两侧头像栏」两条规则写了等于没写：
+      实测画布仍是 520px，两条头像栏各 240px×520px 照旧显示。
+      改用属性子串选择器 `[class*='stage']` 才能真正命中（这也是本文件里
+      唯一能跨模块覆盖的写法）。
+
+   ② **地图本身信息量配不上它的面积**。228 位有地区好友里绝大多数在同一个国家，
+      世界地图上除了一小块高亮，其余全是空白海洋。所以右侧补两栏真实榜单
+      （省份 Top 10 / 城市 Top 12，数据与地图同源），把面积换成信息。
+   ══════════════════════════════════════════════════════════════════════ */
+.worldBoard {
+  display: grid;
+  /* 地图 : 省份榜 : 城市榜 ≈ 1.26 : 1 : 1。这个比例不是随手写的：
+     实测这张世界地图在 593×270 的容器里只画到约 360×225（ECharts 按自身投影比例 fit 后居中），
+     两侧各留约 115px 空白 —— 把地图格收窄到 ≈500×310，地图正好铺满，空白移交给榜单。 */
+  grid-template-columns: minmax(0, 1.26fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+.worldMapBox {
+  position: relative;
+  min-width: 0;
+  /* 高度固定：地图容器撑起整行高度，两栏榜单跟着等高 */
+  height: 310px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+}
+/* 地图自身的 520px 画布让位给卡片高度。
+   高度是一条链：LazyMount 包裹层 → .wrap → .stage → .mapFrame → .china3d → <canvas>，
+   中间任何一环是 auto，百分比就退化成 auto、520px 又会顶出来（实测就是这么被裁掉 1/3 的）。
+   前三者与 .china3d 都是另一个 CSS Module 的哈希类名，只能用属性子串选择器命中；
+   canvas 没有类名，用元素选择器。GeoEchartsMap 自带 ResizeObserver，改高度会自己 resize。 */
+.worldMapBox > * { height: 100%; }
+.worldMapBox [class*='wrap'],
+.worldMapBox [class*='stage'],
+.worldMapBox [class*='mapFrame'],
+.worldMapBox [class*='china3d'] {
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+}
+.worldMapBox [class*='china3d'] {
+  border: none;
+  border-radius: 0;
+}
+.worldMapBox canvas {
+  width: 100%;
+  height: 100%;
+}
+/* 地图自带的工具栏标题与卡片标题重复（都是「好友地区分布」），收成一行说明 */
+.worldMapBox [class*='toolbar'] {
+  padding: 4px 8px 0;
+}
+.worldMapBox [class*='toolbar'] [class*='title'] {
+  display: none;
+}
+/* 交互提示：原样是一条 `position:absolute; top:10px` 的胶囊，但在被压缩后的盒子里
+   它的高度会涨到 254px（几乎铺满整张地图），渲染成一大块深色方块。
+   这里把尺寸钉回"一行胶囊"。 */
+.worldMapBox [class*='mapHint'] {
+  top: 6px;
+  bottom: auto;
+  width: auto;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+/* 两侧头像栏：各 240px 宽、内容是一列读不清的名字，与"地区分布"无关 —— 去掉 */
+.worldMapBox [class*='avatarRail'] {
+  display: none;
+}
+
+/* 榜单（省份 / 城市）：等高两栏、行内条形对比 */
+.regionRank {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  height: 310px;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+}
+.regionRankHd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.regionRankTitle { font-weight: 700; color: var(--nm-text-1); }
+.regionRankHint { color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.regionRows {
+  display: flex;
+  flex-direction: column;
+  /* 行数固定（省份 10 / 城市 12），用 space-between 把卡片高度均分给各行，
+     条数少时也不会在底部堆出一片空白 */
+  justify-content: space-between;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.regionRow {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-rows: auto 3px;
+  align-items: center;
+  gap: 0 6px;
+  font-size: 11px;
+  line-height: 1.15;
+}
+.regionRankNo { color: var(--nm-cyan); font-weight: 800; font-family: var(--nm-font-mono, monospace); font-size: 10px; }
+.regionName { color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.regionCount { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
+.regionBar {
+  grid-column: 2 / 4;
+  height: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+  overflow: hidden;
+}
+.regionBarFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
+}
+.regionEmpty { color: var(--nm-text-2); font-size: 11.5px; padding: 6px 2px; }
+
+/* ── 让"指标格网格"吃掉同行卡片之间的高度差 ────────────────────────────
+   同行两张卡片默认等高（grid stretch）。较矮的那张若内容固定，差额就变成
+   卡片底部的一片空白（实测「存储清理建议」「资金快照」各约 70px）。
+   这里让只有指标网格的卡身把网格拉满、内部按行均分，差额落进每格高度里，
+   视觉上仍是"填满的"。 */
+.ovCardBd > .metricGrid:only-child,
+.ovCardBd > .metricGrid:first-child:last-child {
+  flex: 1 1 auto;
+  align-content: space-evenly;
+  margin-bottom: 0;
+}
+/* 指标格/健康格自身也要居中：格子被拉伸到 110px 时，数字+标签若贴顶，
+   下方就留出约 70px 的空白（实测「数据健康」六格就是这样）。
+   居中之后空白变成上下对称的留白，不再像"没填满"。 */
+.metric,
+.healthItem,
+.assetItem {
+  justify-content: center;
+}
+.assetItem { align-content: center; }
+/* 资产/健康网格同理 */
+.ovCardBd > .healthGrid:only-child {
+  flex: 1 1 auto;
+  align-content: space-evenly;
+}
+/* 「撤回痕迹 · 风险提示」的卡身是三段（大数字块 / 指标格 / 建议行），
+   让它按卡高均分，同行卡片更高时不会在底部留一块空白（实测那一块是 80px）。 */
+.ovCardBd:has(> .revoke) {
+  justify-content: space-between;
+}
+/* 轨道趋势：5 格指标拉满卡片高度（同行是热力图，高度由它决定）。
+   格子拉高后内容居中，而不是用 space-between 把数字与标签顶到两端 —— 那样中间会空一块。 */
+.ovTrend .trendGrid {
+  flex: 1 1 auto;
+  align-content: stretch;
+  grid-auto-rows: 1fr;
+}
+.ovTrend .trendCell {
+  min-height: 0;
+  /* space-evenly：格子被同行的热力图拉高时，数字/标签/增减三行均匀铺开 ——
+     比居中更像"填满"，比 space-between 又不会在中间空出一整块。 */
+  justify-content: space-evenly;
+  gap: 2px;
+  padding: 8px 6px;
+}
+/* 热力图给一个确定高度：它决定这一行的高度，不能让 ECharts 容器塌成 auto */
+.ovHeat .calendarHeatmap {
+  flex: 0 0 auto;
+  height: 150px;
+  min-height: 150px;
+  max-height: 150px;
+}
+
+/* 窄屏：作者两列在很窄时仍可读，不需要额外改动；网格已由上面的媒体查询统一成单列 */

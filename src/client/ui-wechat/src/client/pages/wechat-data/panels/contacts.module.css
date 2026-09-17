@@ -55,13 +55,15 @@
 .catBtn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
 .indexBar {
-  position: absolute; top: 88px; right: 6px; bottom: 6px; z-index: 5;
-  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  /* 多列网格后行高更矮、列表更靠上，索引栏起点随之上移（原先 top:88px 是单列时代的
+     估算值，会在网格下悬在列表中部）。top 与 .scroll 的上边界对齐。 */
+  position: absolute; top: 56px; right: 4px; bottom: 6px; z-index: 5;
+  display: flex; flex-direction: column; justify-content: center; gap: 1px;
   padding: 4px 2px; pointer-events: none;
 }
 
 .indexLetter {
-  pointer-events: auto; width: 18px; height: 16px; border: none; background: transparent;
+  pointer-events: auto; width: 18px; height: 15px; border: none; background: transparent;
   color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: 4px;
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
@@ -69,28 +71,33 @@
   /* WCAG 2.2 SC 2.5.8：A–Z 索引是紧凑的定高栏，把每格撑到 24px 会让整栏达 648px
      而失去索引的意义（属该条目的 Essential 例外；面板另有搜索作为等价路径）。
      这里以伪元素把**实际命中区**扩到约 24×24，视觉尺寸与栏高都不变。
-     注意：审计脚本按边界框计量，因此这一处仍会被报为 18×16（已知例外）。 */
+     注意：审计脚本按边界框计量，因此这一处仍会被报为 18×15（已知例外）。 */
   position: relative;
 }
-.indexLetter::after { content: ''; position: absolute; inset: -4px -3px; }
+.indexLetter::after { content: ''; position: absolute; inset: -5px -3px; }
 .indexLetter:hover { background: var(--nm-bg-hover); color: var(--nm-cyan); }
 
 .scroll {
   flex: 1; min-height: 0; overflow-y: auto;
-  border: 1px solid var(--nm-border); border-radius: 14px; background: var(--nm-bg-card); padding: 8px;
+  /* 令牌按**生效值**选：scifi-theme.css 在 387-388 行二次定义过 r-lg/r-xl，
+     所以 --nm-r-lg=10px、--nm-r-xl=14px（后者胜出）。这里要的是原来的 14px。 */
+  border: 1px solid var(--nm-border); border-radius: var(--nm-r-xl); background: var(--nm-bg-card); padding: 8px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
 
-.group { margin-bottom: 6px; }
+.group { margin-bottom: 2px; }
 
 .letterHd {
   font-size: 11px; font-weight: 700; color: var(--nm-text-2); padding: 6px 8px 4px;
-  position: sticky; top: 0; background: var(--nm-bg-card);
+  position: sticky; top: 0; z-index: 2; background: var(--nm-bg-card);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
+  /* 分组头下压一条极淡的分隔，多列网格里靠它划开相邻字母，不然会连成一片。 */
+  border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 60%, transparent);
+  margin-bottom: 4px;
 }
 .letterHd::before {
   content: ''; display: inline-block; width: 3px; height: 10px;
@@ -99,10 +106,38 @@
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
 }
 
+/* ── 联系人网格 ───────────────────────────────────────────────
+   用 `grid` 而不是 `flex: 1 1 <min>`：flex 下每一项的最终宽度是「基准 + 按内容/剩余
+   空间分到的那一份」，于是同一行里**卡片长短不一**（长备注名更宽、短名更窄），末行
+   还会被拉伸成巨块。网格的列宽由容器一次算定、与被放入的内容无关，所以整屏所有卡片
+   长宽完全一致。
+
+   列数与最小列宽：
+     · `repeat(auto-fill, minmax(240px, 1fr))` —— 列数随可用宽度自适应（宽屏 4–6 列），
+       每列等宽。
+     · 240px 的下限是实测算出来的：34px 头像 + 9px 间距 + 8px×2 内边距 = 59px，
+       留给文字的 181px 足够放下「备注名」与截断后的微信号。
+     · 为什么不用 `auto-fit`：它会**合并空列**，导致「只有 1–2 个联系人的字母」
+       被拉成一整行宽 —— 正是要避免的长短不一。`auto-fill` 保留空列，卡片宽度恒定。
+     · 末行不足一列时右侧必然留白，这是「所有卡片等宽」的必然代价（与
+       `kit.module.css` 的 `.statGrid` 当初为「末行铺满」改用 flex 的取向相反；
+       此处按明确要求优先保证卡片尺寸一致）。 */
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 4px 8px;
+}
+
 .contactItem {
-  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px;
+  /* 固定行高：内容（一行名 + 一行 meta）与头像都不影响卡片高度，
+     因此整屏卡片的长宽是同一个值，不会出现「有的高有的矮」。 */
+  height: 46px;
+  min-width: 0;
+  display: flex; align-items: center; gap: 9px; padding: 0 8px;
+  border-radius: var(--nm-r-sm);
   cursor: pointer;
   border: 1px solid transparent;
+  background: color-mix(in srgb, var(--nm-bg-hover) 45%, transparent);
   transition: all 0.15s;
 }
 .contactItem:hover {
@@ -114,23 +149,28 @@
 .avatar {
   /* 第 88 轮：兜底底色原为 hsl(190 50% 50%)，白字在其上只有 2.72:1（照片加载中的占位也是它）。
      压到 32% 亮度后白字约 6.5:1；真正有名字的首字格子由 utils/format.ts: avatarColors() 给色。 */
-  border-radius: 10px; background: hsl(190 50% 32%);
+  border-radius: var(--nm-r-md); background: hsl(190 50% 32%);
   color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   border: 1px solid var(--nm-border);
   box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
 
-.contactInfo { display: flex; flex-direction: column; min-width: 0; }
+.contactInfo { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 
 .contactName {
-  font-size: 13px; font-weight: 600; color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm); font-weight: 600; color: var(--nm-text-1);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* 固定行高：卡片高度被钉在 46px，两行文字必须自带行高，否则默认 `normal`
+     （约 1.4 倍）会让 12px + 10.5px 两行合计约 49px，在固定高度里被裁掉。 */
+  line-height: 17px;
 }
 
 .contactMeta {
-  font-size: 11px; color: var(--nm-text-2);
+  font-size: 10.5px; color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 14px;
 }
 
 
@@ -195,9 +235,11 @@
 .linkBtn:hover { text-decoration: underline; color: var(--nm-purple); text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
 
 .avatarImg {  display: block; object-fit: cover;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   border: 1px solid var(--nm-border);
 }
 /* 第 94 轮：以下两个类的样式原来写在 Contacts.tsx 的行内 style 里。 */
-.avatarPlaceholder { width: 36px; height: 36px; }
-.avatarImgRound { border-radius: 8px; }
+/* 与 ContactRowItem 传给 ContactAvatar 的 size 保持一致（多列网格下由 36 收到 34，
+   行高随之下降，一屏能多放一行）。 */
+.avatarPlaceholder { width: 34px; height: 34px; }
+.avatarImgRound { border-radius: var(--nm-r-sm); }

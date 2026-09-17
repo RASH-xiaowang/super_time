@@ -7,6 +7,7 @@ import { ListSkeleton } from './hooks.tsx'
 import { apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup, readRenderCache, writeRenderCache } from '../api.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { Dialog, PanelHeader } from '../ui/kit.tsx'
+import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -17,6 +18,8 @@ import kitCss from '../ui/kit.module.css'
  * @returns the backup element tree.
  */
 export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
+  /** 应用内确认框（替代原生 window.confirm —— 系统白框不跟主题）。 */
+  const confirm = useConfirm()
   const [items, setItems] = useState<readonly BackupEntry[]>(() => readRenderCache<readonly BackupEntry[]>('backups') ?? [])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -70,7 +73,13 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   }
 
   const remove = async (name: string): Promise<void> => {
-    if (!window.confirm(`删除备份「${name}」？`)) return
+    const ok = await confirm({
+      title: `删除备份「${name}」？`,
+      message: '备份文件会从磁盘删除，该操作不可恢复。',
+      tone: 'danger',
+      confirmText: '删除备份',
+    })
+    if (!ok) return
     setBusy(true)
     try {
       const r = await apiDeleteBackup({ name })
@@ -102,7 +111,13 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   const restore = async (name: string): Promise<void> => {
     if (!password.trim()) { setError('请输入备份密码'); return }
     // 恢复前确认：恢复会覆盖当前解密数据；建议先创建一份当前备份。
-    if (!window.confirm(`确认用「${name}」恢复吗？该操作会覆盖当前解密数据（建议先创建一份当前备份留底）。`)) return
+    const ok = await confirm({
+      title: `用「${name}」恢复？`,
+      message: '该操作会覆盖当前解密数据。建议先创建一份当前备份留底。',
+      tone: 'danger',
+      confirmText: '覆盖并恢复',
+    })
+    if (!ok) return
     setBusy(true)
     setError(null)
     try {

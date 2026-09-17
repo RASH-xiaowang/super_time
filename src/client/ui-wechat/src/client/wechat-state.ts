@@ -1,5 +1,5 @@
 /**
- * Module-level open state for the 微信+ dashboard, shared by the sidebar
+ * Module-level open state for the Super Time dashboard, shared by the sidebar
  * footer trigger (open/toggle) and the panel content seat (open/close). The
  * panel itself also imports {@link closeWechat} to render its own close action.
  */

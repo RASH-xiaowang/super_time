@@ -11,11 +11,6 @@
  * display:block + margin-top:1px」；第 35 轮的文字工具类收敛因此跳过了它（同名多定义
  * 迁移会丢声明）。本轮把两条合并成一条纯排版规则，字号/颜色交给 .textMeta —— 计算样式不变。 */
 .statLabel { display: block; margin-top: 1px; }
-.range { display: flex; align-items: center; gap: 4px; }
-.dateInput { height: 28px; padding: 0 8px; border: 1px solid var(--nm-border); border-radius: 6px; background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; }
-/* 第 39 轮：本面板此前没有 :focus 规则，聚焦时边框不变色（只有全局 2px 青色轮廓）。
- * 补上以与其余输入类规则一致 —— 焦点指示统一为「青色轮廓 + 青色边框」。 */
-.dateInput:focus { border-color: var(--nm-cyan); }
 .notice { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
 .noticeOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 8%, transparent); }
 .noticeErr { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }

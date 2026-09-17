@@ -46,11 +46,14 @@ export declare function exportSessionMessagesStreamed(decryptedDir: string, opti
 /**
  * Export a data category to CSV under the exports dir.
  * @param decryptedDir - decrypted data root.
- * @param kind - contacts | favorites | records | moments.
+ * @param kind - contacts | favorites | records | moments | privacy.
  * @param recordsKind - record category when kind=records.
+ * @param dest - 用户在保存对话框里选定的**完整目标路径**。给定时直接写到那里；
+ *   未给（例如自动化/旧调用方）则回退到 `<数据根>/exports/<kind>_<时间>.csv`。
+ * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string): {
+export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string, dest?: string, category?: string): {
     path: string;
     filename: string;
     count: number;

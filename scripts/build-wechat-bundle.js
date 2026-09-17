@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * 重建「微信+」后端 bundle（src/backend/wechat-data/lib/index.js）。
+ * 重建「Super Time」后端 bundle（src/backend/wechat-data/lib/index.js）。
  *
  * 为什么需要这个脚本：运行时（wechat-host.js）只 import lib/index.js 这一份产物，
  * 改了 src/**\/*.ts 不会生效 —— 上游用 tsdown 产 bundle，本地没有该工具链，

@@ -19,7 +19,7 @@ import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { clickableKey, DateRangeField, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import css from './moments.module.css'
@@ -889,6 +889,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             )}
           </>
         )}
+        /* 页头口径（U12）：标题 + 一句"这页是什么/数据从哪来" + 操作三件套，
+           与其它面板保持一致（此前这里是唯一一个没有 desc 的面板）。 */
+        desc={`本机朋友圈动态 · 图片/视频/链接/评论互动，共 ${total} 条；统计范围只含已解密的部分`}
         actions={(
           <>
             <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" />
@@ -959,12 +962,15 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             </div>
             <div className={css.filterGroup}>
               <span className={css.filterLabel}>时间</span>
-              <div className={css.filterChips}>
-                <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value) }} className={css.dateInput} />
-                <span className={`${css.filterLabel} ${css.filterToLabel}`}>至</span>
-                <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value) }} className={css.dateInput} />
-                {(dateFrom || dateTo) && <button type="button" className={css.segChip} onClick={() => { setDateFrom(''); setDateTo('') }} title="清除时间">✕</button>}
-              </div>
+              <DateRangeField
+                from={dateFrom}
+                to={dateTo}
+                onFrom={setDateFrom}
+                onTo={setDateTo}
+                onClear={() => { setDateFrom(''); setDateTo('') }}
+                presets={['today', 'week', 'month', 'last-7', 'last-30']}
+                ariaLabel="朋友圈时间筛选"
+              />
             </div>
             {monthFilter && (
               <div className={css.filterGroup}>
@@ -1214,18 +1220,23 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                           <div className={css.linkCard}>
                             {cover ? (
                               <div className={css.linkCover}>
-                                <img
-                                  key={coverSrc.startsWith('data:') ? 'd' : 'c'}
-                                  src={coverSrc}
-                                  alt=""
-                                  referrerPolicy="no-referrer"
-                                  onError={(e) => {
-                                    // 如果当前src是CDN URL（非data URL），隐藏图片
-                                    if (!coverSrc.startsWith('data:')) {
-                                      e.currentTarget.style.display = 'none'
-                                    }
-                                  }}
-                                />
+                                {failedImgs.has('cover:' + m.tid)
+                                  ? <span className={css.linkCoverFallback} title="封面来自公众号 CDN，原链接已失效">🔗</span>
+                                  : <img
+                                    key={coverSrc.startsWith('data:') ? 'd' : 'c'}
+                                    src={coverSrc}
+                                    alt=""
+                                    referrerPolicy="no-referrer"
+                                    onError={() => {
+                                      // 原来是直接把 <img> 设成 display:none —— 但 .linkCover 是固定 60×60 的框，
+                                      // 隐藏图片只会留下一个**没有意义的空格子**（实测共享文章封面里
+                                      // 有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块）。
+                                      // 改成标记失败并渲染占位图标，与评论图/朋友圈图的失败口径一致。
+                                      if (!coverSrc.startsWith('data:')) {
+                                        setFailedImgs(prev => new Set(prev).add('cover:' + m.tid))
+                                      }
+                                    }}
+                                  />}
                               </div>
                             ) : null}
                             <div className={css.linkBody}>
@@ -1487,17 +1498,19 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                     const key = imgKey(im)
                     const dataSrc = key ? snsImgs[key] : undefined
                     const haveSrc = !!(dataSrc || cspSafeSrc(im.thumb, im.url))
+                    // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
+                    // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：标记失败 + 占位。
+                    const dfk = 'detail:' + detail.m.tid + ':' + String(ii)
                     return (
                       <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: detail.m.author }) })}>
-                        {haveSrc
-                          ? <img src={dataSrc || cspSafeSrc(im.thumb, im.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.img} onError={(e) => {
-                            // 如果当前src是CDN URL（非data URL），隐藏图片
+                        {haveSrc && !failedImgs.has(dfk)
+                          ? <img src={dataSrc || cspSafeSrc(im.thumb, im.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.img} onError={() => {
                             const currentSrc = dataSrc || cspSafeSrc(im.thumb, im.url)
                             if (!currentSrc.startsWith('data:')) {
-                              e.currentTarget.style.display = 'none'
+                              setFailedImgs(prev => new Set(prev).add(dfk))
                             }
                           }} />
-                          : <div className={css.imgFallback}>加载中</div>}
+                          : <div className={css.imgFallback}>{haveSrc ? '图片加载失败' : '加载中'}</div>}
                       </div>
                     )
                   })}
@@ -1642,9 +1655,15 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
               <div className={css.exportField}>
                 <span className={css.exportLabel}>时间</span>
                 <div className={css.exportChips}>
-                  <input type="date" value={expFrom} onChange={(e) => { setExpFrom(e.target.value) }} className={css.search} />
-                  <span>至</span>
-                  <input type="date" value={expTo} onChange={(e) => { setExpTo(e.target.value) }} className={css.search} />
+                  <DateRangeField
+                    from={expFrom}
+                    to={expTo}
+                    onFrom={setExpFrom}
+                    onTo={setExpTo}
+                    onClear={() => { setExpFrom(''); setExpTo('') }}
+                    presets={['today', 'week', 'month', 'last-7', 'last-30']}
+                    ariaLabel="朋友圈导出时间"
+                  />
                 </div>
               </div>
               <div className={css.exportField}>

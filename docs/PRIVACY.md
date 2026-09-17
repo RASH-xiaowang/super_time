@@ -1,7 +1,7 @@
 # Super Time 隐私声明
 
 > 生效版本：**v1**（与 `src/client/ui-app/privacy/consent.ts` 的 `PRIVACY_VERSION` 一致）
-> 适用范围：Windows x64 桌面版 Super Time（微信+）
+> 适用范围：Windows x64 桌面版 Super Time
 > 最近一次修订：2026-09-15（把「自动获取原图（CDN）」「原图解密方式」两个开关落实为真实生效；
 > 纯开关层面的行为收敛不改变数据用途，故 **未**提升 `PRIVACY_VERSION`）
 
