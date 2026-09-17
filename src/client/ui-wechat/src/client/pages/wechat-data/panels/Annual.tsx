@@ -429,6 +429,34 @@ export function AnnualPanel(): React.JSX.Element {
   const [exportMsg, setExportMsg] = useState('')
   /** 面板根节点：导出时量它的矩形做截图（含标题栏/工具栏/页脚，不含左侧导航与顶部栏）。 */
   const shellRef = useRef<HTMLDivElement | null>(null)
+  /** 海报区（放 12 列网格的容器）：用它判断"一屏海报"到底装不装得下。 */
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * 是否退化成「瀑布流 + 滚动」。
+   *
+   * 为什么需要这个状态位：CSS 里的回退条件是 `@media (max-width:1200px), (max-height:779px)`，
+   * 而 media query 看的是**视口**高度（本机 900px），真正被压缩的是**面板**高度
+   * （1440×900 下只剩约 700px）—— 于是海报模式照常启用，9 张卡片各自
+   * `overflow:hidden` 把 20–30% 文字切掉（实测「全年发出」128px 装 160px 的内容）。
+   * 这里改成按**卡片是否真的被切**来判定：宁可多一次布局，也不要把内容藏起来。
+   */
+  const [compact, setCompact] = useState(false)
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || !data) return
+    const check = (): void => {
+      const wrap = el.querySelector('[class*=wrap]')
+      if (!wrap) return
+      const clipped = [...wrap.querySelectorAll('[class*=card]')]
+        .some((c) => c.scrollHeight > c.clientHeight + 8)
+      // 进入条件：有卡片被切；退出条件：容器已经高到按设计能一屏装下（留 hysteresis 防抖）
+      setCompact((prev) => (clipped ? true : (prev && el.clientHeight < 900)))
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [data])
 
   const loadYears = useCallback(async (): Promise<void> => {
     try {
@@ -529,15 +557,14 @@ export function AnnualPanel(): React.JSX.Element {
           </div>
         )}
       />
-      <div className={`${kitCss.panelBody} ${css.scrollBody}`}>
+      <div ref={bodyRef} className={`${kitCss.panelBody} ${css.scrollBody}`}>
         {exportMsg && <div className={css.hint}>{exportMsg}</div>}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {!data && loading && <ListSkeleton rows={6} />}
         {!data && !loading && !error && <div className={css.empty}>这一年还没有可统计的消息。</div>}
         {data && (
-          /* 固定 12 列网格：5 行内容 + 1 行页脚，总高恒等于容器高 → 一屏无滚动。
-             窄窗/矮窗由 CSS 媒体查询退回「瀑布流 + 滚动」。 */
-          <div className={css.wrap} data-loading={loading || undefined}>
+          /* 固定 12 列网格：5 行内容 + 1 行页脚，总高恒等于容器高 → 一屏无滚动。             窄窗/矮窗由 CSS 媒体查询退回「瀑布流 + 滚动」。 */
+          <div className={css.wrap} data-loading={loading || undefined} data-compact={compact || undefined}>
             <HeroCard r={data} />
             <CalendarCard r={data} />
             <BusiestCard r={data} />

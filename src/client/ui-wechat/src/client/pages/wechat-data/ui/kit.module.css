@@ -792,6 +792,77 @@
 
 .selectCheck { color: var(--nm-cyan); width: 14px; display: inline-flex; }
 
+/* ── 日期输入 / 日期区间 ────────────────────────────────────────────
+   皮肤与 .selectTrigger 同源（同高、同底、同边框、同焦点态），这样筛选栏里
+   「下拉 + 日期」并排时高度与圆角完全一致。此前 8 个面板各写一套（28/32/34px
+   三种高度混用），同一条工具栏里控件高低不齐。
+   日历图标（::-webkit-calendar-picker-indicator）的可见性在 scifi-theme.css
+   统一处理，这里不重复。 */
+.dateField {
+  height: 32px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-1);
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  outline: none;
+  /* 日期数字用等宽数位，切换日期时宽度不跳动 */
+  font-variant-numeric: tabular-nums;
+}
+.dateField:hover { border-color: var(--nm-border-hover); }
+.dateField:focus-visible { border-color: var(--nm-border-active); box-shadow: var(--nm-glow-sm); }
+/* 空值时原生渲染的「年 / 月 / 日」占位由 color-scheme 决定色，这里只压淡未填写的观感：
+   靠 :placeholder-shown 无效（date 没有 placeholder），改用「值为空」时的 data 属性在
+   组件侧打标。 */
+.dateField[data-empty='true'] { color: var(--nm-text-3); }
+
+.dateRange { display: inline-flex; flex-direction: column; gap: 6px; }
+.dateRangeRow { display: inline-flex; align-items: center; gap: 6px; }
+.dateRangeSep { color: var(--nm-text-3); font-size: var(--nm-fs-sm); flex-shrink: 0; }
+
+.dateRangePresets { display: flex; flex-wrap: wrap; gap: 6px; }
+.datePresetChip {
+  height: 24px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  background: transparent;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--nm-t-ui, color .15s, border-color .15s, background .15s);
+}
+.datePresetChip:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
+.datePresetChip:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+.datePresetChip[data-active] {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+
+.dateRangeClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--nm-text-3);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.dateRangeClear:hover { color: var(--nm-danger, #f87171); background: color-mix(in srgb, var(--nm-danger, #f87171) 12%, transparent); }
+.dateRangeClear:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+
 /* ── 骨架屏的形状类（第 94 轮）────────────────────────────────────────
    全局 `.nm-skel` 提供底色与微光（见 scifi-theme.css），这里只放各形状的尺寸。
    原先这些尺寸写成行内样式，现在搬到这里；网格容器的列数仍是动态的（列表/网格两态），
@@ -930,3 +1001,70 @@
 .emptyMaybe { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 16px; text-align: center; }
 .emptyMaybeMain { font-size: 13px; color: var(--nm-text-1); font-weight: 600; }
 .emptyMaybeNote { font-size: 11px; line-height: 1.55; color: var(--nm-text-2); max-width: 42ch; }
+
+/* ── 向上折叠条（FoldableBar）──────────────────────────────────────
+   默认收起只留一条居中把手；点开展示内容；指针离开且 10 秒无活动自动收起。
+   高度动画走 `grid-template-rows: 0fr ↔ 1fr`：由浏览器按真实内容高度插值，
+   比 `max-height` 写死上限的做法过渡更匀（后者在内容矮时前半段是空跑的）。 */
+.foldable { display: flex; flex-direction: column; flex-shrink: 0; }
+
+.foldableBody {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.foldable[data-open] .foldableBody { grid-template-rows: 1fr; }
+/* 展开过渡结束后由 JS 摘掉 data-clipped：顶栏里的搜索下拉是绝对定位、要溢出容器，
+   展开态若继续 overflow:hidden 会被切掉。 */
+.foldableBody[data-clipped] .foldableInner { overflow: hidden; }
+.foldableInner { min-height: 0; }
+
+/* 把手条：整条居中，按钮是视觉主体 */
+.foldableHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--nm-border);
+  background: var(--nm-bg-glass, transparent);
+}
+.foldableToggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  background: transparent;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.foldableToggle:hover {
+  color: var(--nm-text-1);
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}
+.foldableToggle:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 2px; }
+/* 视觉上 22px 的胶囊，命中区扩到 44px：触屏够得着，桌面端又不显笨重 */
+.foldableToggle::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+}
+.foldableChevron { transition: transform 0.2s ease; }
+.foldableChevron[data-open] { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .foldableBody { transition: none; }
+  .foldableChevron { transition: none; }
+}

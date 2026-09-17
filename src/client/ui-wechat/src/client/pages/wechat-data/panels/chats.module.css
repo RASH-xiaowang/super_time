@@ -2050,19 +2050,6 @@
   box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
 }
 .exportRangeRow { display: flex; align-items: center; gap: 8px; }
-.exportDate {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  outline: none;
-  font-family: var(--nm-font-mono, monospace);
-}
-.exportDate:focus { border-color: var(--nm-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
 .exportDirBox {
   display: flex;
   align-items: center;

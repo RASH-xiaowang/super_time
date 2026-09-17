@@ -82,11 +82,6 @@
   border-radius: 999px; background: var(--nm-bg-hover);
   corner-shape: round;
 }
-.dateInput {
-  padding: 4px 8px; border: 1px solid var(--nm-border); border-radius: 8px;
-  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; outline: none;
-}
-.dateInput:focus { border-color: var(--nm-cyan); }
 .segChip {
   padding: 4px 14px; border: 1px solid transparent; border-radius: 999px;
   background: transparent; color: var(--nm-text-1); font-size: 12px; cursor: pointer; transition: all 0.15s;
@@ -189,6 +184,8 @@
 .linkCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .linkCover { width: 60px; height: 60px; border-radius: 6px; overflow: hidden; background: var(--nm-bg-card); border: 1px solid var(--nm-border); flex-shrink: 0; }
 .linkCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 封面加载失败时的占位：.linkCover 是固定 60×60 的框，没有占位就留一个空格子 */
+.linkCoverFallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: 20px; opacity: 0.55; }
 .linkBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .linkTitle { font-size: 14px; font-weight: 600; color: var(--nm-text-1); text-decoration: none; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; transition: all 0.15s; }
 .linkTitle:hover { color: var(--nm-cyan); }

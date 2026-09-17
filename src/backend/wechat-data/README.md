@@ -1,6 +1,6 @@
 # @deepseek-ai/dsh-wechat-data
 
-微信数据板块后端：读取自有数据根的**本地解密库**（node:sqlite），通过 Typert Remote 暴露给浏览器「微信+」面板。
+微信数据板块后端：读取自有数据根的**本地解密库**（node:sqlite），通过 Typert Remote 暴露给浏览器「Super Time」面板。
 
 > 迁移自 `C:\Users\28361\Desktop\ST\st_control`（Tauri + Rust + Svelte）。
 > 完整核对表见 `docs/wechat-migration/migration-checklist.md`；迁移计划见 `docs/wechat-migration/MIGRATION-PLAN.md`。

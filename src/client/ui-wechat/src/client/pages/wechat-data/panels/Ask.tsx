@@ -21,10 +21,10 @@
  *     （旧实现 <1100px 时用覆盖式，实测把发送键整块盖住、点击被抽屉体截获）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiGetSessions, apiOptimizeAskQuestion, apiSubmitAskFeedback } from '../api.ts'
+import { apiGetLlmConfig, apiGetSessions, apiOptimizeAskQuestion, apiSubmitAskFeedback } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
 import type { AskOptimizeResult, AskResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, PanelHeader, Select } from '../ui/kit.tsx'
+import { Badge, DateRangeField, PanelHeader, Select } from '../ui/kit.tsx'
 import { RetrievalPanel } from './RetrievalPanel.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { useAskSession, type AskTurn } from './use-ask.ts'
@@ -379,6 +379,11 @@ export function AnswerFeedback({ turn, patch }: {
  */
 export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
   const [sessions, setSessions] = useState<readonly WechatSession[]>([])
+  /**
+   * 当前模型（provider · model）：底部隐私说明要写清"片段会发给谁"。
+   * 只说"所选模型"等于没说 —— 用户判断这句话会不会出网、发给哪一支，就靠这一行。
+   */
+  const [model, setModel] = useState<{ provider: string; model: string } | null>(null)
   /** 会话列表是否已拉取过：用于区分「还没查」与「确实没有可检索会话」。 */
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [scopeUsername, setScopeUsername] = useState('')
@@ -395,6 +400,17 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
   })
   /** 检索设置侧栏：模型配置已迁到「数据配置」页面，这里只剩检索参数。 */
   const [retrOpen, setRetrOpen] = useState(false)
+  // 读一次模型配置（读本机 llm.json，很轻）：只用于底部那行"发给谁"。
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const c = await apiGetLlmConfig()
+        if (!cancelled) setModel({ provider: c.provider, model: c.model })
+      } catch { /* 读不到就不显示具体模型 */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
   /** 侧栏与触发 chip 的引用（用于「点击外部收起」判定）。 */
   const retrRef = useRef<HTMLDivElement | null>(null)
   const retrChipRef = useRef<HTMLButtonElement | null>(null)
@@ -613,19 +629,17 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
       </div>
       {timeOpen && (
         <div className={css.scopePanel}>
-          <span className={css.timePanelLabel}>时间范围</span>
-          <label className={css.timeField} htmlFor="ask-from">
-            <span className={css.dateLabel}>从</span>
-            <input id="ask-from" className={css.input} type="date" value={from} onChange={(e) => { setFrom(e.target.value) }} />
-          </label>
-          <span className={css.dateSep} aria-hidden="true">→</span>
-          <label className={css.timeField} htmlFor="ask-to">
-            <span className={css.dateLabel}>到</span>
-            <input id="ask-to" className={css.input} type="date" value={to} onChange={(e) => { setTo(e.target.value) }} />
-          </label>
-          {(from || to) && (
-            <button type="button" className={css.timeClear} onClick={() => { setFrom(''); setTo('') }}>清除</button>
-          )}
+          <DateRangeField
+            from={from}
+            to={to}
+            onFrom={setFrom}
+            onTo={setTo}
+            onClear={() => { setFrom(''); setTo('') }}
+            presets={['today', 'week', 'month', 'last-7', 'last-30']}
+            ariaLabel="检索时间范围"
+            idFrom="ask-from"
+            idTo="ask-to"
+          />
         </div>
       )}
 
@@ -813,8 +827,14 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
         </div>
       </div>
 
-      {/* ⑤ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动） */}
-      <div className={css.privacyNote}>🔒 检索在本机完成；AI 生成会把检索片段发送到所选模型（可在「设置 → 数据边界与出网」中关闭出网）</div>
+      {/* ⑤ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动）。
+          「所选模型」要说清是哪一支：用户判断"这句话会不会发出去、发给谁"就靠这一行。 */}
+      <div className={css.privacyNote}>
+        🔒 检索在本机完成；AI 生成会把检索片段发送到
+        {model ? <>「<b>{model.provider} · {model.model}</b>」</> : '当前配置的模型'}
+        {model && model.model.trim() === '' ? '（尚未配置，需先在「设置 → AI 大模型」里填写）' : ''}
+        （可在「设置 → 数据边界与出网」中关闭出网）
+      </div>
       </div>
 
       {/* 模型配置已迁到「数据配置」页面（AiModelConfig）：全应用只在那一处设置模型，

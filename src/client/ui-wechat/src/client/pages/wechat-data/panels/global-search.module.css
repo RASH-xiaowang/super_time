@@ -1,0 +1,114 @@
+/* 导航栏里的全局搜索框 + Portal 出去的结果面板。
+   结果面板挂在 document.body 上（`.sidebar` 有 overflow: hidden，绝对定位会被裁掉），
+   位置由组件实测算好后以 inline style 给出。 */
+
+.box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.box:focus-within {
+  border-color: var(--nm-cyan);
+  color: var(--nm-cyan);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+
+.icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.icon svg { display: block; }
+
+.input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  font-family: var(--nm-font-sans, inherit);
+  outline: none;
+}
+.input::placeholder { color: var(--nm-text-3); }
+
+.clear {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.clear:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+
+/* ── 结果面板（Portal 到 body） ──
+   注意：这里**故意没有全屏透明遮罩**。早先用过 `position: fixed; inset: 0` 的遮罩，
+   真实浏览器里它会把整个界面的第一次点击吃掉（面板开着时点导航栏的收起按钮只会关面板，
+   导航不动，要点第二次）。现在「点外部关闭」由组件在 document 上监听 mousedown 完成。 */
+.dropdown {
+  position: fixed;
+  z-index: 61;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
+  border-radius: 12px;
+  background: rgba(8, 14, 32, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 30px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+}
+
+/* 下面这几个类由调用方（WechatDataPanel）用在 children 里，所以也放在本模块，
+   经 `globalSearchCss` 导出给调用方复用（避免两处样式漂移）。 */
+.group {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover { background: var(--nm-bg-hover); }
+
+.rowName {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty {
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--nm-text-3);
+}

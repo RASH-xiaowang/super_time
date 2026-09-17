@@ -1,0 +1,290 @@
+/* 导出记录弹窗（ExportHistoryDialog）。
+   全部走 scifi-theme 的设计令牌，不写字面量颜色 —— 浅色主题下才会跟着切换。 */
+
+.dialogWide {
+  /* **固定尺寸**：不随记录条数伸缩（1 条与 200 条弹窗一样大）。
+     行数少时下方留白，换来的是窗口不跳、表格区域高度稳定、列宽布局不抖动。 */
+  width: min(1200px, 95vw);
+  max-width: 1200px;
+  height: min(760px, 86vh);
+  /* 覆盖 kit 的 max-height: 84vh —— 上面已给出确定高度 */
+  max-height: none;
+}
+
+/* 弹窗正文：三段式（筛选行 / 表格 / 提示）里的弹性段。
+   · `min-height: 0` 是关键：没有它，flex 子项的默认 min-height:auto 会撑到内容高度，
+     溢出交给 `.dialogBd` 自己滚 —— 表格「内部滚动」就永远不生效、表头也不再吸附。
+   · `overflow: hidden` 覆盖 kit 的 `overflow: auto`：正文自己绝不滚动，
+     滚动**只**发生在表格区（否则会出现两条滚动条）。 */
+.dialogWide > :global(.dialogBd) {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  overflow: hidden;
+}
+
+/* 标题栏与底栏都不参与收缩：它们默认 `flex-shrink: 1`，而正文有 `min-height: 0`
+   （唯一允许压缩的段落正是正文）。显式钉住可以保证「固定尺寸」下被压的永远只是
+   表格区 —— 否则窄高度下标题/底栏会被挤扁，按钮变成半截。 */
+.dialogWide > :global(.drawerHd),
+.dialogWide > :global(.drawerFt) {
+  flex-shrink: 0;
+}
+
+/* ── 标题区 ─────────────────────────────────────────── */
+/* 标题行改成两行：标题 + 汇总/状态徽标一行，说明文字一行。
+   原先所有内容挤在一行 inline-flex 里，徽标把标题顶得参差不齐。 */
+.titleBox { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+.titleMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.titleMeta {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 筛选行 ─────────────────────────────────────────── */
+/* 不用 kit 的 Toolbar：那个组件里套了一个 `.toolbarPanel` 盒子，在这张表上方会显得
+   像一块漂浮的卡片。这里直接排成一行，与表格连成一体。 */
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.searchFlex { flex: 1 1 240px; min-width: 180px; }
+
+/* ── 表格（唯一的内部滚动区） ───────────────────────── */
+/* 记录多时**在表格区域内滚动**，弹窗尺寸不变、表头始终吸附在顶部。
+   `.tableWrap` 由 DataTable 提供（`max-height:62vh` + `overflow:auto`），这里只
+   把高度改成「吃满剩余空间」，让它成为正文里唯一滚动的那一段。
+   续页哨兵在 `.tableWrap` **之后**，所以内层滚动到底时它进入视口 —— 需要时再加载
+   下一页，而不是在打开时就一直追加。 */
+.tableHost {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tableHost :global(.tableWrap) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* 列宽：kit 把每列的 `className` 交给 <th>，而类名会被 CSS Modules 哈希，
+   所以用**属性子串**选择器按类名片段定位（`[class*=...]` 匹配哈希后的结果）。
+   固定这些列之后，「说明」列成为唯一弹性列，长文本由省略号处理。 */
+.tableHost :global(th[class*='tdPick']) { width: 40px; }
+.tableHost :global(th[class*='tdTime']) { width: 150px; }
+.tableHost :global(th[class*='tdKind']) { width: 92px; }
+.tableHost :global(th[class*='tdSize']) { width: 96px; }
+.tableHost :global(th[class*='tdRows']) { width: 84px; }
+.tableHost :global(th[class*='tdStatus']) { width: 92px; }
+.tableHost :global(th[class*='tdOps']) { width: 306px; }
+
+/* ── 复选框：自绘 ─────────────────────────────────── */
+/* 原生 checkbox 在深色弹窗里是一个刺眼的系统白框，且各平台渲染不一致；
+   这里 `appearance:none` 完全自绘，并把三种状态都明确区分开：
+   未选（描边）→ 悬停（青色描边 + 淡青底）→ 选中（青色实底 + 白色对勾）。 */
+.pick {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 1.5px solid var(--nm-text-3);
+  border-radius: var(--nm-r-xs, 4px);
+  background: var(--nm-bg-card);
+  cursor: pointer;
+  display: inline-block;
+  vertical-align: middle;
+  transition:
+    background-color var(--nm-t-fast, 0.15s),
+    border-color var(--nm-t-fast, 0.15s),
+    box-shadow var(--nm-t-fast, 0.15s);
+}
+.pick:hover { border-color: var(--nm-cyan); }
+.pick:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+.pick:checked {
+  background: var(--nm-cyan);
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+}
+/* 对勾用两条边旋转 45° 画（不引入图标依赖，任意缩放下都清晰）。
+   深色字色固定为 #041018：青色底上的对比度远高于用主题文字色。 */
+.pick:checked::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1px;
+  width: 4px;
+  height: 8.5px;
+  border: solid #041018;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* 整格可勾：把命中区从 16×16 扩到整格（也满足 WCAG 2.5.8 的目标尺寸） */
+.pickCell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  cursor: pointer;
+  border-radius: var(--nm-r-xs, 4px);
+}
+.pickCell:hover { background: var(--nm-bg-hover); }
+.pickCell:has(.pick:checked) { background: color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
+
+/* ── 单元格排版 ─────────────────────────────────────── */
+.tdPick { text-align: center; }
+
+.tdTime {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+/* 类型做成一个 chip：一眼能扫出这一屏里有哪些种类的导出 */
+.kindChip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--nm-r-pill, 999px);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-cyan-text);
+  background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-cyan-20);
+  white-space: nowrap;
+}
+
+.tdNum {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--nm-font-mono, monospace);
+  color: var(--nm-text-1);
+}
+
+.tdStatus { white-space: nowrap; }
+
+/* 文件名：等宽字体 + 省略号，长路径不撑破列 */
+.fileCell {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+}
+.fileGone {
+  color: var(--nm-text-3);
+  text-decoration: line-through;
+}
+
+/* ── 状态徽标 ───────────────────────────────────────── */
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 9px;
+  border-radius: var(--nm-r-pill, 999px);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.st::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.stOk {
+  color: var(--nm-success-text);
+  background: var(--nm-success-15);
+  border-color: color-mix(in srgb, var(--nm-success) 25%, transparent);
+}
+.stFail {
+  color: var(--nm-danger-text);
+  background: var(--nm-danger-15, color-mix(in srgb, var(--nm-danger) 15%, transparent));
+  border-color: color-mix(in srgb, var(--nm-danger) 25%, transparent);
+}
+.stSkip {
+  color: var(--nm-text-2);
+  background: var(--nm-bg-active);
+  border-color: var(--nm-border);
+}
+
+/* ── 行内操作 ───────────────────────────────────────── */
+/* 原先是一排带边框的按钮挤在一起，「复制路径」被截断。改成无边框 ghost 按钮：
+   常态安静、悬停才浮出底色，5 个动作排得下且不抢表格的视线。 */
+.tdOps { white-space: nowrap; overflow: visible; }
+.ops { display: inline-flex; gap: 2px; align-items: center; }
+
+.opBtn {
+  border: none;
+  background: transparent;
+  color: var(--nm-text-2);
+  border-radius: var(--nm-r-xs, 4px);
+  padding: 3px 7px;
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+  transition: var(--nm-t-fast, 0.15s);
+  white-space: nowrap;
+}
+.opBtn:hover:not(:disabled) { color: var(--nm-cyan); background: var(--nm-cyan-10); }
+.opBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+.opBtn:disabled { opacity: 0.32; cursor: not-allowed; }
+.opDanger:hover:not(:disabled) {
+  color: var(--nm-danger-text);
+  background: color-mix(in srgb, var(--nm-danger) 14%, transparent);
+}
+
+/* ── 底栏 ───────────────────────────────────────────── */
+.footerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3);
+  flex-wrap: wrap;
+  width: 100%;
+}
+/* 左「删除」右「清理」各自成组，中间留白分开 —— 两组都是破坏性操作，
+   按风险从低到高排：删记录 → 删并删文件 →（右侧）清理策略。 */
+.footerGroup { display: flex; gap: var(--nm-s-2); align-items: center; flex-wrap: wrap; }
+.footerHint {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 提示条 ─────────────────────────────────────────── */
+/* flex-shrink: 0 —— 固定高度的正文里，弹性段只应留给表格；提示条被压扁会看不清。 */
+.notice {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-success-text);
+  background: var(--nm-success-15);
+  border: 1px solid color-mix(in srgb, var(--nm-success) 25%, transparent);
+  border-radius: var(--nm-r-sm, 6px);
+}

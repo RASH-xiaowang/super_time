@@ -124,7 +124,7 @@ function createWorkerChannel(child, options = {}) {
   child.on('exit', (code) => {
     if (exited) return;
     exited = true;
-    const reason = `微信+后端进程已退出 (code=${code})`;
+    const reason = `Super Time 后端进程已退出 (code=${code})`;
     failAll(reason);
     try {
       onExit?.(code, reason);

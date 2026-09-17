@@ -1,5 +1,5 @@
 /* ============================================================
- * NEON MATRIX — 微信+数据面板 科技风主题
+ * NEON MATRIX — Super Time 数据面板 科技风主题
  *
  * 深空黑底 + 霓虹青/紫双色系 + 毛玻璃拟态
  *
@@ -195,6 +195,67 @@ textarea:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--nm-cyan);
   outline-offset: 2px;
+}
+
+/* ────────────────────────────────────────────
+ * 5b. 原生日期/月份/时间控件的日历图标
+ *
+ * 症状：原生 `::-webkit-calendar-picker-indicator` 是**深灰近黑**的，
+ * 在深色底上几乎融掉 —— 真机实测它 computed `filter: none`，用户看不出这里能点开日历。
+ *
+ * 为什么不用 `filter: invert(1)`：真机 A/B 实测（注入 `!important` 规则后 computed
+ * 仍是 `filter: none`、截图无任何变化）—— 本 Electron 的 Chromium **不把 filter
+ * 应用到这个伪元素上**。而 `background` 是生效的（同一次 A/B 里纯色块能画出来），
+ * 所以改成「关掉原生字形 + 铺一张自绘 SVG 日历线稿」。图标颜色随主题换：
+ * 深色用亮描边、浅色用深描边，两套 SVG 只差 stroke 色。
+ *
+ * 为什么写在全局而不是某个组件里：全应用有 10 处 `type="date"` / `month` / `time`，
+ * 分属 8 个面板；写在这里一处生效，任何未迁到 kit 组件的输入也一并受益。
+ * ──────────────────────────────────────────── */
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator,
+input[type='datetime-local']::-webkit-calendar-picker-indicator {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'14'%20height%3D'14'%20viewBox%3D'0%200%2016%2016'%20fill%3D'none'%20stroke%3D'%23c8d6ee'%20stroke-width%3D'1.4'%20stroke-linecap%3D'round'%3E%3Crect%20x%3D'2.5'%20y%3D'3.5'%20width%3D'11'%20height%3D'10'%20rx%3D'1.8'%2F%3E%3Cpath%20d%3D'M2.5%206.5h11M5.5%202v3M10.5%202v3'%2F%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px 14px;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+input[type='date']:hover::-webkit-calendar-picker-indicator,
+input[type='month']:hover::-webkit-calendar-picker-indicator,
+input[type='time']:hover::-webkit-calendar-picker-indicator,
+input[type='datetime-local']:hover::-webkit-calendar-picker-indicator,
+input[type='date']:focus-visible::-webkit-calendar-picker-indicator,
+input[type='month']:focus-visible::-webkit-calendar-picker-indicator,
+input[type='time']:focus-visible::-webkit-calendar-picker-indicator,
+input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
+  opacity: 0.9;
+}
+/* 浅色主题换深色描边（亮描边在白底上看不见） */
+:root.theme-light input[type='date']::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='month']::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='time']::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='datetime-local']::-webkit-calendar-picker-indicator {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'14'%20height%3D'14'%20viewBox%3D'0%200%2016%2016'%20fill%3D'none'%20stroke%3D'%23334155'%20stroke-width%3D'1.4'%20stroke-linecap%3D'round'%3E%3Crect%20x%3D'2.5'%20y%3D'3.5'%20width%3D'11'%20height%3D'10'%20rx%3D'1.8'%2F%3E%3Cpath%20d%3D'M2.5%206.5h11M5.5%202v3M10.5%202v3'%2F%3E%3C%2Fsvg%3E");
+  opacity: 0.5;
+}
+:root.theme-light input[type='date']:hover::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='month']:hover::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='time']:hover::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='datetime-local']:hover::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='date']:focus-visible::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='month']:focus-visible::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='time']:focus-visible::-webkit-calendar-picker-indicator,
+:root.theme-light input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
+  opacity: 0.85;
 }
 
 /* ────────────────────────────────────────────

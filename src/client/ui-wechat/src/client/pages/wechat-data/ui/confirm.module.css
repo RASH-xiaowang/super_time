@@ -1,0 +1,175 @@
+/* 应用内确认框（替代 window.confirm）。
+   全部走 scifi-theme 令牌：深色/浅色主题下都自动跟随，不出现系统白框。 */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  /* 必须高于 kit 的 .dialog（z-index 71）：确认框可能从任意弹窗里弹出
+     （例如「导出记录」弹窗里点清理），层级低了会被压在下面点不到。 */
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--nm-s-4);
+  background: rgba(4, 8, 20, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: confirmFade var(--nm-t-normal, 0.25s) ease-out;
+  /* ── 必须显式恢复 pointer-events（实测报障：按钮点不动） ──────────────
+     当确认框从**模态 Radix Dialog**（本应用里的弹窗都是）里弹出时，Radix 的
+     DismissableLayer 会给 `document.body` 设 `pointer-events: none`，然后只把它
+     自己的内容节点设成 `auto`。而本组件渲染在 ConfirmProvider 里、**不在**那个
+     内容节点内，于是整块遮罩继承了 `none` —— 表现就是「弹窗画得好好的，但取消/
+     确认都点不动」。视觉上完全看不出问题，所以很容易被漏掉。
+     这里显式声明 auto 即可：pointer-events 是可继承属性，子元素会跟着恢复。 */
+  pointer-events: auto;
+}
+
+@keyframes confirmFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.box {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  padding: var(--nm-s-4);
+  background: var(--nm-bg-1);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xl, 14px);
+  box-shadow: var(--nm-shadow-popup);
+  animation: confirmPop var(--nm-t-normal, 0.25s) cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes confirmPop {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 危险动作：整框描边转红，一眼知道不是在确认一件小事 */
+.box[data-tone='danger'] {
+  border-color: color-mix(in srgb, var(--nm-danger) 38%, var(--nm-border));
+}
+
+/* ── 标题 ───────────────────────────────────────────── */
+.hd {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nm-s-3);
+}
+
+/* 图标做成圆形底片：danger 用红、普通用青，与状态徽标同一套视觉语言 */
+.icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-cyan-20);
+}
+.box[data-tone='danger'] .icon {
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--nm-danger) 32%, transparent);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+  font-size: var(--nm-fs-lg, 15px);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-body, 1.6);
+  word-break: break-word;
+}
+
+/* ── 正文 ───────────────────────────────────────────── */
+.bd {
+  font-size: var(--nm-fs-sm, 12px);
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body, 1.6);
+  /* 与圆圈图标左对齐：30px 图标 + 12px 间距 */
+  padding-left: 42px;
+  word-break: break-word;
+  /* 长消息（例如一长串文件名）不撑破弹窗 */
+  max-height: 40vh;
+  overflow-y: auto;
+  white-space: pre-line;
+}
+
+/* ── 逐字确认 ───────────────────────────────────────── */
+.challenge {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 42px;
+  padding: var(--nm-s-3);
+  border-radius: var(--nm-r-sm, 6px);
+  background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 22%, transparent);
+}
+
+.challengeLabel {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  line-height: 1.5;
+}
+
+.challengeWord {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-sm, 12px);
+  font-weight: 700;
+  color: var(--nm-danger-text, var(--nm-danger));
+  background: var(--nm-bg-active);
+  padding: 1px 6px;
+  border-radius: var(--nm-r-xs, 4px);
+  user-select: all;
+}
+
+/* 逐字确认输入框：原生 input + 主题令牌（primitives 的 Input 原子会把 className
+   落在外层 span 上，这里需要直接控制 input 本身的宽度与聚焦样式）。 */
+.challengeInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-sm, 12px);
+  color: var(--nm-text-1);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border-hover);
+  border-radius: var(--nm-r-sm, 6px);
+  outline: none;
+  transition: var(--nm-t-fast, 0.15s);
+}
+.challengeInput::placeholder { color: var(--nm-text-3); }
+.challengeInput:focus {
+  border-color: var(--nm-cyan);
+  box-shadow: 0 0 0 3px var(--nm-cyan-10);
+}
+.challengeInput[aria-invalid='true'] {
+  border-color: var(--nm-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-danger) 12%, transparent);
+}
+
+/* ── 底栏 ───────────────────────────────────────────── */
+.ft {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-1, 4px);
+}
+
+/* 减少动效偏好：去掉入场动画（内容与层级不变） */
+@media (prefers-reduced-motion: reduce) {
+  .overlay, .box { animation: none; }
+}

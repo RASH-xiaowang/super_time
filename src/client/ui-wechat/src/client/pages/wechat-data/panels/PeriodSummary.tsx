@@ -2,74 +2,41 @@
  * 周期总结面板 — 按日期区间（本周/本月/自定义）汇总聊天要点，复用每日
  * 总结的数据收集与 DSH LLM 生成链路，支持复制结果。
  */
-import { useCallback, useMemo, useState } from 'react'
-import { apiGeneratePeriodSummary } from '../api.ts'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { apiGeneratePeriodSummary, apiGetLlmConfig } from '../api.ts'
 import type { PeriodSummaryResult } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, PanelHeader } from '../ui/kit.tsx'
+import { Button, DateRangeField, PanelHeader } from '../ui/kit.tsx'
+import { describeRange, todayISO } from '../utils/date-range.ts'
 import { useTransientNotice } from './hooks.tsx'
 import css from './period-summary.module.css'
 import kitCss from '../ui/kit.module.css'
 
-function localToday(): string {
-  const d = new Date()
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
-function addDays(date: Date, n: number): Date {
-  const d = new Date(date)
-  d.setDate(d.getDate() + n)
-  return d
-}
-
-function fmt(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
-/** Ready-made ranges. */
-const RANGES: ReadonlyArray<{ key: string; label: string; range: () => { from: string; to: string } }> = [
-  {
-    key: 'week', label: '本周',
-    range: () => {
-      const now = new Date()
-      const monday = addDays(now, -((now.getDay() + 6) % 7))
-      return { from: fmt(monday), to: fmt(addDays(monday, 6)) }
-    },
-  },
-  {
-    key: 'month', label: '本月',
-    range: () => {
-      const now = new Date()
-      return { from: fmt(new Date(now.getFullYear(), now.getMonth(), 1)), to: fmt(new Date(now.getFullYear(), now.getMonth() + 1, 0)) }
-    },
-  },
-  {
-    key: 'last-month', label: '上月',
-    range: () => {
-      const now = new Date()
-      return { from: fmt(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: fmt(new Date(now.getFullYear(), now.getMonth(), 0)) }
-    },
-  },
-]
-
 /**
  * Render the period summary panel.
+ * @param props.onOpenSettings - 打开「设置」弹窗的指定节（未配模型时给"去配置"的出口）。
  * @returns the period summary element tree.
  */
-export function PeriodSummaryPanel(): React.JSX.Element {
-  const today = localToday()
-  const [from, setFrom] = useState(today)
-  const [to, setTo] = useState(today)
+export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (section?: string) => void } = {}): React.JSX.Element {
+  const [from, setFrom] = useState(todayISO)
+  const [to, setTo] = useState(todayISO)
   const [result, setResult] = useState<PeriodSummaryResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** 模型是否已配置：周期总结与每日总结同一条链路，没配模型点生成必然失败。 */
+  const [llm, setLlm] = useState<{ provider: string; model: string } | null>(null)
+  const modelReady = !!llm && llm.model.trim() !== ''
   // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash, hold } = useTransientNotice()
 
-  const applyRange = useCallback((key: string): void => {
-    const r = RANGES.find(x => x.key === key)?.range()
-    if (r) { setFrom(r.from); setTo(r.to) }
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const c = await apiGetLlmConfig()
+        if (!cancelled) setLlm({ provider: c.provider, model: c.model })
+      } catch { /* 读不到就不显示具体模型 */ }
+    })()
+    return () => { cancelled = true }
   }, [])
 
   const generate = useCallback(async (): Promise<void> => {
@@ -96,7 +63,7 @@ export function PeriodSummaryPanel(): React.JSX.Element {
     }
   }, [result])
 
-  const rangeText = useMemo(() => (from && to ? `${from} ~ ${to}` : '未选择日期'), [from, to])
+  const rangeText = useMemo(() => describeRange(from, to, '未选择日期'), [from, to])
   const typesText = useMemo(() => {
     if (!result) return ''
     return Object.entries(result.types).map(([k, v]) => `${k} ${v}`).join(' · ')
@@ -107,16 +74,18 @@ export function PeriodSummaryPanel(): React.JSX.Element {
       <PanelHeader title="周期总结" desc="按日期区间汇总聊天要点 · 复用每日总结链路（DSH LLM）" />
 
       <div className={css.formCard}>
+        <DateRangeField
+          from={from}
+          to={to}
+          onFrom={setFrom}
+          onTo={setTo}
+          onClear={() => { setFrom(''); setTo('') }}
+          presets={['today', 'week', 'month', 'last-month', 'last-7', 'last-30']}
+          ariaLabel="周期总结区间"
+          idFrom="period-from"
+          idTo="period-to"
+        />
         <div className={css.row}>
-          <label className={css.fieldLabel} htmlFor="period-from">从</label>
-          <input id="period-from" className={css.input} type="date" value={from} onChange={(e) => { setFrom(e.target.value) }} />
-          <label className={css.fieldLabel} htmlFor="period-to">到</label>
-          <input id="period-to" className={css.input} type="date" value={to} onChange={(e) => { setTo(e.target.value) }} />
-        </div>
-        <div className={css.row}>
-          {RANGES.map(r => (
-            <Button variant="pill" key={r.key} onClick={() => { applyRange(r.key) }}>{r.label}</Button>
-          ))}
           <Button variant="pill" data-active="true" onClick={() => { void generate() }} disabled={loading}>
             {loading ? '生成中…' : '生成总结'}
           </Button>
@@ -128,6 +97,33 @@ export function PeriodSummaryPanel(): React.JSX.Element {
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
       {loading && <div className={css.loading}>正在收集区间消息并生成总结…</div>}
+
+      {/* 还没生成过时的落地：此前表单下方**什么都没有**，实测留 515px 空白。
+          这里说清"会得到什么 / 三步怎么做 / 模型配好了没"，与「每日总结」同一套口径。 */}
+      {!result && !loading && (
+        <div className={css.psLand}>
+          <div className={css.psCard}>
+            <div className={css.psTitle}>还没有这一段的总结</div>
+            <div className={css.psSteps}>
+              <span className={css.psStep}><b>1</b> 选区间：上面 6 个快捷预设（今天 / 本周 / 本月 / 上月 / 近 7 天 / 近 30 天）或手选起止</span>
+              <span className={css.psStep}><b>2</b> 点「生成总结」：先在本机收集区间消息，再交给模型写要点</span>
+              <span className={css.psStep}><b>3</b> 点「复制结果」把整段总结拿走；生成结果不会落库，刷新后需重新生成</span>
+            </div>
+          </div>
+          <div className={css.psCard}>
+            <div className={css.psTitle}>会得到什么</div>
+            <ul className={css.psList}>
+              <li><b>区间统计</b>：消息数 / 活跃会话 / 文本行 / 类型分布 / Top 会话</li>
+              <li><b>要点总结</b>：由模型按区间内容写成一段可复制的文字</li>
+              <li><b>模型</b>：{modelReady ? `已配置 —— ${llm?.provider} · ${llm?.model}` : '尚未配置，需先配好模型才能生成'}</li>
+              <li><b>耗时</b>：取决于区间大小（要先把区间内的消息读出来），区间越大越慢</li>
+            </ul>
+            {!modelReady && (
+              <Button variant="pill" data-active="true" onClick={() => { onOpenSettings?.('ai') }}>去配置模型</Button>
+            )}
+          </div>
+        </div>
+      )}
 
       {result && !loading && (
         <div className={css.resultCard}>

@@ -2,11 +2,11 @@
  * 资金账本面板 — 转账/红包按月汇总：收入/支出/净额、联系人排行、红包手气、
  * 异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { ListSentinel, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, CellPrimary, DataTable, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, CellPrimary, DataTable, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
@@ -15,6 +15,25 @@ const DIR_LABEL: Record<'in' | 'out' | 'unknown', string> = {
   in: '收到',
   out: '发出',
   unknown: '未知',
+}
+
+/**
+ * 总览已经把「全部月份」的账本快照算过一次并缓存在 localStorage 里
+ * （`dsh-wechat-overview-ledger-v1`，字段与本页完全同构）。
+ * 用户从总览点进来时直接拿它先渲染 —— 不必再等一次全量统计。
+ * 读缓存一律容错：结构不对/损坏就当没有。
+ */
+function readOverviewLedger(): LedgerSnapshot | null {
+  try {
+    const raw = localStorage.getItem('dsh-wechat-overview-ledger-v1')
+    if (!raw) return null
+    const v = JSON.parse(raw) as Partial<LedgerSnapshot> | null
+    if (!v || typeof v !== 'object') return null
+    if (!v.summary || !Array.isArray(v.byContact) || !v.redpacket || !Array.isArray(v.warnings)) return null
+    return v as LedgerSnapshot
+  } catch {
+    return null
+  }
 }
 
 function fmtMoney(n: number): string {
@@ -31,6 +50,12 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
   const [data, setData] = useState<LedgerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 统计耗时（秒）：给"正在统计"一个可见的进度感。
+  // 后端单次 getLedger 实测 400–550ms，但它是**同步 SQLite**，会排在其它重查询后面 ——
+  // 刚打开总览时（getOverviewInsights 要扫 21 万条消息）本页可能要等十几秒，
+  // 只写一句"正在统计资金账本…"用户无从判断是卡了还是在跑。
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice()
 
@@ -38,7 +63,8 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
     setLoading(true)
     setError(null)
     const key = 'ledger:' + (m || 'all')
-    const cached = readRenderCache<LedgerSnapshot>(key)
+    // 本页自己的渲染缓存 → 总览算过的同构快照（只在"全部"口径下同构）
+    const cached = readRenderCache<LedgerSnapshot>(key) ?? (m === '' ? readOverviewLedger() : null)
     if (cached) setData(cached)
     try {
       const r = await apiGetLedger(m ? { month: m } : undefined)
@@ -52,6 +78,19 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
   }, [])
 
   useEffect(() => { void load(month) }, [month, load])
+
+  // 统计计时：加载开始走秒，结束清零
+  useEffect(() => {
+    if (loading) {
+      const t0 = Date.now()
+      setElapsed(0)
+      timerRef.current = setInterval(() => { setElapsed(Math.round((Date.now() - t0) / 1000)) }, 1000)
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null } }
+  }, [loading])
 
   const exportCsv = useCallback((): void => {
     if (!data) return
@@ -110,12 +149,10 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
         desc="转账/红包按月汇总 · 金额来自本机消息解析 · 仅本地计算"
         actions={(
           <>
-            <input
-              type="month"
-              className={css.input}
+            <MonthField
               value={month}
-              onChange={(e) => { setMonth(e.target.value) }}
-              aria-label="账本月份"
+              onChange={setMonth}
+              ariaLabel="账本月份"
             />
             <Button variant="pill" onClick={() => { setMonth('') }} data-active={month === '' || undefined}>全部</Button>
             <Button variant="pill" onClick={exportCsv} disabled={!data}>导出 CSV</Button>
@@ -125,7 +162,21 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !data && <div className={kitCss.emptyInline}>正在统计资金账本…</div>}
+      {/* 首次统计：给出阶段、已用时间和"为什么可能偏慢"，并用与真实布局同形的骨架占位
+          （6 张指标卡 + 两张卡片的行）。此前这里只有一行字，实测在 802px 的内容区里留 608px 空白。 */}
+      {loading && !data && (
+        <div className={kitCss.panelShell}>
+          <div className={css.loadingBar}>
+            <span className={css.loadingSpin} aria-hidden="true" />
+            <span className={css.loadingText}>正在统计资金账本…已用 {elapsed}s</span>
+            <span className={css.loadingHint}>
+              首次统计要解析本机全部消息里的转账/红包记录；若刚打开总览，后台可能仍在统计，请稍候。
+            </span>
+          </div>
+          <ListSkeleton rows={6} grid minCol={180} />
+          <ListSkeleton rows={4} />
+        </div>
+      )}
 
       {data && (
         <>

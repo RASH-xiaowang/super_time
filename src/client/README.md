@@ -1,8 +1,8 @@
-# 微信+前端（Super Time）
+# Super Time 前端
 
 本目录是从 `D:\deepseek-harness\packages\client\ui-wechat`
 （`@deepseek-ai/dsh-client-ui-wechat`）完整迁移并适配到 Super Time Electron
-渲染进程的「微信+」前端。
+渲染进程的「Super Time」前端。
 
 ## 迁移范围
 
@@ -15,7 +15,7 @@
 | Vite 构建配置 | 新增 | `vite.config.js` |
 | 构建产物（提交，供 Electron 运行） | 由 `npm run build:ui` 生成 | `src/client/ui-dist/` |
 
-## 功能界面（16 个侧栏入口 / 35 个可路由页签，135 个 Remote 方法）
+## 功能界面（16 个侧栏入口 / 35 个可路由页签，138 个 Remote 方法）
 
 > 本节数字与结构于 2026-09-15 按 `panels/nav-config.ts` 实测重写：此前写「12 个侧栏入口 / 34 个页签」，
 > 方法数也早已过期（图谱拆成两个入口后侧栏变 16 项）—— 三项全错，且没有任何东西会发现。

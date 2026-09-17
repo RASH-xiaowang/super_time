@@ -40,6 +40,12 @@ const entries = new Map<string, Entry>()
  */
 export const METADATA_KEY_FAMILY_LIMITS: ReadonlyArray<{ prefix: string; cap: number }> = [
   { prefix: 'msg-by-sid:', cap: 200 },
+  // `contacts:` 的键空间 = (页偏移 × 分类) 且**没有任何上界**：每个键存整页联系人对象
+  // （至多 pageSize 条）。分类过滤下沉到后端后（修复「页签有数据却空白」），键从
+  // 「约 total/pageSize」变成「再乘 9 个类目」——更需要一个上界。96 ≈ 9 个类目各约 11 页，
+  // 足以让「来回切类目 / 上下滚动」都命中，同时给内存一个明确上界。
+  // 条目是纯数据，淘汰后重算即安全。
+  { prefix: 'contacts:', cap: 96 },
 ]
 
 /**

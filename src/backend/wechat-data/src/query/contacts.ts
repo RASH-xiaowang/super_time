@@ -84,11 +84,46 @@ function categoryLabel(category: string): string {
   }
 }
 
-/** Source initial_of: remark initial > nick initial > display first char. */
-function initialOf(remarkInitial: string, nickInitial: string, display: string): string {
-  const raw = remarkInitial || nickInitial || display
+/**
+ * Source initial_of: remark initial > nick initial > **全拼首字母** > display first char.
+ *
+ * ── 为什么需要「全拼首字母」这一步（2026-09 补） ──────────────────────
+ * 只信 `remark_pin_yin_initial` / `pin_yin_initial` 这两列时，**群成员一律落进 `#`**：
+ * 微信只为「加过好友」的联系人写这两列；群成员（在群里见过、但从没加过好友的人，
+ * 实测 `local_type=3` 有 1500+ 条）这两列是空的，于是 `raw` 退到中文 `displayName`，
+ * `/[A-Z]/` 不匹配 → 全部返回 `#`。表现就是「群成员」整屏没有字母分组、「全部」也
+ * 以 `#` 为主（实测形状：friend 得 `[["B",2]]`，member 得 `[["#",4]]`）。
+ *
+ * 而**全拼列对群成员是有值的**（`remark_quan_pin` 是备注全拼、`quan_pin` 是昵称全拼，
+ * 第 85 轮起已在读）——所以从全拼取首字母就能把这些人正确归位。顺序与 `displayName`
+ * 的口径一致（备注优先于昵称），否则同一张卡片会「显示 B 开头的备注、却归到 Q 组」。
+ *
+ * @param remarkInitial - contact.remark_pin_yin_initial（可能为空）。
+ * @param nickInitial - contact.pin_yin_initial（可能为空）。
+ * @param remarkQuanPin - contact.remark_quan_pin（备注全拼，可能为空）。
+ * @param quanPin - contact.quan_pin（昵称全拼，可能为空）。
+ * @param display - 显示名（备注 > 昵称 > 用户名）。
+ * @returns A–Z 首字母，无法判定时为 `#`。
+ */
+function initialOf(
+  remarkInitial: string,
+  nickInitial: string,
+  remarkQuanPin: string,
+  quanPin: string,
+  display: string,
+): string {
+  // ① 微信写好首字母的列（好友通常有）
+  const raw = remarkInitial || nickInitial
   const ch = raw.slice(0, 1).toUpperCase()
   if (/[A-Z]/.test(ch)) return ch
+  // ② 从全拼补推（群成员走这条；备注全拼优先，与 displayName 口径一致）
+  const pin = (remarkQuanPin || quanPin).trim()
+  const pch = pin.slice(0, 1).toUpperCase()
+  if (/[A-Z]/.test(pch)) return pch
+  // ③ 显示名本身以拉丁字母开头（如 "ai 回复机器人"）
+  const dch = display.trim().slice(0, 1).toUpperCase()
+  if (/[A-Z]/.test(dch)) return dch
+  // ④ 中文且没有任何拼音列可依 —— 只能进 `#`（排在最后）
   return '#'
 }
 
@@ -97,7 +132,21 @@ function initialOf(remarkInitial: string, nickInitial: string, display: string):
  * @param decryptedDir - decrypted data root.
  * @returns the contacts snapshot (contacts + per-category stats).
  */
-export interface ContactsPageOptions { limit?: number; offset?: number }
+export interface ContactsPageOptions {
+  limit?: number
+  offset?: number
+  /**
+   * 只返回该分类的联系人（friend/group/official/service/enterprise/member/system/deleted）。
+   *
+   * **必须在分页之前过滤**：界面的分类页签（"联系人(282)"）如果靠渲染层在已分页的
+   * 结果上再 filter，那么当全局排序（字母 + 全拼）的前 N 条里恰好没有该类目时，
+   * 页签看起来就是空的 —— 明明有 282 个联系人却显示"暂无联系人"。把过滤下沉到这里，
+   * `total` 与分页切片都按同一口径计算，页签才能显示完整。
+   *
+   * 未传（或传 `all`）时行为与之前完全一致。
+   */
+  category?: string
+}
 
 export function queryContacts(
   decryptedDir: string,
@@ -108,17 +157,31 @@ export function queryContacts(
   // recomputes immediately instead of re-scanning on every panel refresh.
   const limit = options?.limit
   const offset = options?.offset ?? 0
+  const category = normalizeCategory(options?.category)
   return cachedBySig(
-    'contacts:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset),
+    'contacts:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + category,
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
-    () => computeContacts(decryptedDir, limit, offset),
+    () => computeContacts(decryptedDir, limit, offset, category),
   )
+}
+
+/**
+ * 归一化分类参数：`undefined` / 空串 / `all` 都表示"不过滤"。
+ * @param category - 调用方传入的分类。
+ * @returns 可直接比较的分类键，或空串表示不过滤。
+ */
+function normalizeCategory(category?: string): string {
+  if (typeof category !== 'string') return ''
+  const c = category.trim()
+  if (c === '' || c === 'all') return ''
+  return c
 }
 
 function computeContacts(
   decryptedDir: string,
   limit?: number,
   offset: number = 0,
+  category: string = '',
 ): { contacts: WechatContact[]; total: number; stats: Record<string, number> } {
   const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
   try {
@@ -186,9 +249,15 @@ function computeContacts(
       // 与聊天列表（sessions.ts）共用同一判据，避免同一账号在两个面板落到不同类目。
       if (category === 'official' && isServiceBizType(bizTypes.get(username))) category = 'service'
       const displayName = remark || nickName || username
+      // 全拼列在下面构造 contact 时还要用，这里先解一次复用（cellString 会做 UTF-8 解码，
+      // 重复调用等于对同一格解码两次）。
+      const quanPin = cellString(r[sel('quan_pin', '')])
+      const remarkQuanPin = cellString(r[sel('remark_quan_pin', '')])
       const initial = initialOf(
         cellString(r[sel('remark_pin_yin_initial', '')]),
         cellString(r[sel('pin_yin_initial', '')]),
+        remarkQuanPin,
+        quanPin,
         displayName,
       )
       stats[category] = (stats[category] ?? 0) + 1
@@ -202,8 +271,8 @@ function computeContacts(
         category,
         localTypeLabel: categoryLabel(category),
         initial,
-        quanPin: cellString(r[sel('quan_pin', '')]),
-        remarkQuanPin: cellString(r[sel('remark_quan_pin', '')]),
+        quanPin,
+        remarkQuanPin,
         description: cellString(r[sel('description', '')]),
         inChatRoom: Number(r[sel('is_in_chat_room', '0')] ?? 0) === 1,
         localType,
@@ -226,10 +295,32 @@ function computeContacts(
       contacts.push(contact)
     }
     // source order: initial + quan_pin + display name
-    contacts.sort((a, b) => (a.initial ?? '').localeCompare(b.initial ?? '') || (a.quanPin ?? '').localeCompare(b.quanPin ?? '') || a.displayName.localeCompare(b.displayName))
-    const total = contacts.length
+    // '#'（无拼音可依的兜底桶）必须排**最后**。原实现写成
+    // `a[0] === '#' ? 1 : b[0] === '#' ? -1 : localeCompare(...)`，但这个三元是空转的：
+    // `'#'.localeCompare('A') === -1`（locale 排序把标点排在字母之前），
+    // 于是 '#' 组实际排在最前 —— 一进「全部」先看到的是一屏没有字母分类的人。
+    //
+    // 这里改用显式分级：字母组 rank 0、'#' 组 rank 1，rank 大的排后面。
+    // （注意方向：`return ra - rb` —— 给 '#' 更大的 rank 才会把它推到最后。）
+    const initialRank = (s: string): number => (s === '#' ? 1 : 0)
+    const byInitial = (a: string, b: string): number => {
+      const ra = initialRank(a)
+      const rb = initialRank(b)
+      if (ra !== rb) return ra - rb
+      if (ra === 1) return 0 // 两个都是 '#'：无需再比首字母
+      return a < b ? -1 : a > b ? 1 : 0
+    }
+    contacts.sort((a, b) => byInitial(a.initial ?? '#', b.initial ?? '#') || (a.quanPin ?? '').localeCompare(b.quanPin ?? '') || a.displayName.localeCompare(b.displayName))
+    // 分类过滤必须在 `total` 与切片**之前**（口径一致：total 就是当前视图的总条数）。
+    // `stats` 始终是全量口径 —— 页签上的数字不该随当前选中的类目变化。
+    const visible = category ? contacts.filter(c => c.category === category) : contacts
+    const total = visible.length
+    // 给界面一个稳定的「全部」总数：即使当前按类目过滤，页签上的「全部(N)」也应显示全量。
+    // （此前界面拿 total 当「全部」的计数，过滤下沉后 total 变成当前类目数，会把
+    //  「全部(2150)」显示成「全部(282)」——所以这里显式补一个 all。）
+    stats.all = contacts.length
     // Bound the page payload: the UI lazy-loads pages instead of one full list.
-    const page = limit !== undefined ? contacts.slice(offset, offset + limit) : contacts
+    const page = limit !== undefined ? visible.slice(offset, offset + limit) : visible
     return { contacts: page, total, stats }
   } finally {
     db.close()

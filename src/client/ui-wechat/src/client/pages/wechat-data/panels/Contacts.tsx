@@ -6,13 +6,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
-import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts } from '../api.ts'
+import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts, apiSaveFileDialog } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { cacheBounded } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Drawer, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -79,6 +80,8 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice(4000)
   const [exporting, setExporting] = useState(false)
+  /** 导出记录弹窗开关（入口在工具栏的「导出记录」按钮）。 */
+  const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const jumpToLetter = useCallback((letter: string): void => {
     scrollRef.current?.querySelector(`[data-letter="${letter}"]`)?.scrollIntoView({ block: 'start' })
@@ -87,7 +90,10 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const pager = usePagedList<ContactRow>({
     pageSize: 200,
     fetchPage: async (offset, limit) => {
-      const env = await apiGetContacts({ limit, offset })
+      // 分类过滤必须交给后端（在分页之前过滤）。此前是在渲染层对**已分页**的
+      // 结果再 filter：全局排序（字母 + 全拼）的前 200 条里若恰好没有该类目，
+      // 页签看着就是空的 —— "联系人 (282)" 却显示"暂无联系人"。
+      const env = await apiGetContacts({ limit, offset, category: cat })
       setStats(env.stats ?? {})
       return { items: env.contacts, total: env.total }
     },
@@ -95,12 +101,17 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
   const searching = search.trim() !== ''
   // 普通浏览：分页逐页加载；搜索时一次性拉全量（用户主动操作），保证跨页搜索结果完整。
+  // 搜索与浏览都带上当前分类 —— 后端在分页之前过滤，`total` 才是该视图的真实条数。
+  //
+  // `searching` 与 `cat` 合成一个 effect：两者都是「筛选条件」，变化时都应当**回到第一页
+  // 并回到顶部**（内容真的变了，回到顶部是预期行为）。先前拆成两个 effect 会导致
+  // 挂载时连续 reset 两次，而且第二个 effect 无谓地多触发一轮取数。
   useEffect(() => {
     if (searching) {
       let cancelled = false
       setLoading(true)
       setError(null)
-      void apiGetContacts()
+      void apiGetContacts({ category: cat })
         .then((env) => {
           if (cancelled) return
           setContacts(env.contacts)
@@ -113,7 +124,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
     }
     pager.reset()
     return undefined
-  }, [searching, pager.reset])
+  }, [searching, cat, pager.reset])
 
   useEffect(() => {
     if (searching) return
@@ -126,7 +137,10 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
 
   // 数据落地后安静刷新（有渲染缓存时不闪整页），使新联系/群名及时可见。
-  useWechatDataUpdated(() => { if (!searching) pager.reset() })
+  // 用 `pager.refresh()`（非破坏性，会按**已加载条数**重取）而不是 `reset()`：
+  // `reset()` 会同步清空列表 → 容器高度塌陷 → 浏览器把 scrollTop 钳到 0，
+  // 于是实时同步每约 10 秒就把正在往下翻的用户**弹回顶部**。
+  useWechatDataUpdated(() => { if (!searching) pager.refresh() })
 
   // 打开资料卡时异步拉取跨域社交画像（消息/朋友圈/资金/共同群）。
   useEffect(() => {
@@ -146,8 +160,9 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
   const grouped = useMemo(() => {
     const q = search.trim().toLowerCase()
+    // 分类已由后端在分页之前过滤（`cat` 只作为请求参数），这里不再重复按 category 过滤 ——
+    // 在这里过滤等于对**已分页**的结果再筛，正是"页签有数据却空白"的根因。
     const filtered = contacts.filter((c) => {
-      if (cat !== 'all' && (c.category ?? '') !== cat) return false
       if (!q) return true
       // 第 85 轮：加上备注拼音（remarkQuanPin）—— 界面上显示的是备注名，
       // 而此前只索引昵称拼音，实测 280 个有备注的联系人里 270 人搜不到自己显示出来的名字。
@@ -161,12 +176,25 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       map.set(k, arr)
     }
     return Array.from(map.entries()).sort((a, b) => (a[0] === '#' ? 1 : b[0] === '#' ? -1 : a[0].localeCompare(b[0])))
-  }, [contacts, search, cat])
+  }, [contacts, search])
 
   const doExport = async (): Promise<void> => {
+    // 先让用户选路径：此前是后端把文件写死在 `<数据根>/exports/` 下、界面只回报一个
+    // 用户既没选过也很难找到的路径。默认文件名带上当前分类与日期，便于区分多次导出。
+    const catLabel = CATS.find(c => c.key === cat)?.label ?? '全部'
+    const d = new Date()
+    const p = (n: number): string => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+    const picked = await apiSaveFileDialog({
+      defaultName: `通讯录-${catLabel}-${stamp}.csv`,
+      title: '导出通讯录',
+      filters: [{ name: 'CSV 表格', extensions: ['csv'] }],
+    })
+    if (picked.canceled || !picked.path) return // 用户取消：静默返回，不报「失败」
     setExporting(true)
     try {
-      const r = await apiExportCsv({ kind: 'contacts' })
+      // 带上 category：导出的内容与当前页签看到的范围一致。
+      const r = await apiExportCsv({ kind: 'contacts', dest: picked.path, category: cat })
       notify(`已导出 ${r.count} 个联系人 → ${r.path}`)
     } catch (e) {
       notify('导出失败: ' + (e as Error).message)
@@ -201,7 +229,9 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
           <>
             <Segmented
               options={CATS.map((c) => {
-                const n = c.key === 'all' ? total : (stats[c.key] ?? 0)
+                // 页签计数一律取全量口径的 stats（含 all）—— `total` 现在是**当前类目**的条数，
+                // 拿它当「全部」的计数会把「全部(2150)」显示成「全部(282)」。
+                const n = c.key === 'all' ? (stats.all ?? total) : (stats[c.key] ?? 0)
                 return { value: c.key, label: `${c.label}${n > 0 ? ` (${n})` : ''}` }
               })}
               value={cat}
@@ -209,13 +239,23 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
               ariaLabel="联系人分类"
             />
             <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出 CSV'}</button>
+            {/* 导出记录：入口与「导出」放在一起。
+                原先挂在「设置 → 高级设置」里 —— 那是低频维护分组，而导出是通讯录这一屏
+                的动作；用户在这里点完导出，查看结果/重新导出应当就在同一处。 */}
+            <button
+              type="button"
+              className={css.catBtn}
+              data-open-export-history=""
+              onClick={() => { setHistoryOpen(true) }}
+              title="查看历史导出：打开文件、复制路径、按原参数重新导出、清理"
+            >导出记录</button>
           </>
         )}
       />
       {notice && <div className={css.notice}>{notice}</div>}
       <div className={css.indexBar} aria-hidden="false">
         {grouped.map(([letter]) => (
-          <button key={letter} type="button" className={css.indexLetter} onClick={() => { jumpToLetter(letter) }} aria-label={'跳到字母 ' + letter}>{letter}</button>
+          <button key={letter} type="button" className={css.indexLetter} onClick={() => { jumpToLetter(letter) }} aria-label={'跳到字母 ' + (letter === '#' ? '其他' : letter)}>{letter === '#' ? '其' : letter}</button>
         ))}
       </div>
       <div className={css.scroll} ref={scrollRef}>
@@ -224,8 +264,14 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         {!loading && !error && grouped.length === 0 && <div className={kitCss.emptyInline}>暂无联系人</div>}
         {!loading && !error && grouped.map(([letter, list]) => (
           <div key={letter} className={css.group} data-letter={letter}>
-            <div className={css.letterHd}>{letter}（{list.length}）</div>
-            {list.map(c => (<ContactRowItem key={c.username} c={c} onOpen={() =>{  setProfile(c) }} />))}
+            {/* `#` 是「没有任何拼音可依」的兜底桶（微信只为加过好友的联系人写拼音首字母，
+                群成员常常两列全空）。标成「其他」而不是让用户以为分组坏了。 */}
+            <div className={css.letterHd}>{letter === '#' ? '其他' : letter}（{list.length}）</div>
+            {/* 多列网格：分组头独占一行，组内联系人按 `flex: 1 1 240px` 自动排 3–5 列。
+                原先单列全宽时，每行只有「36px 头像 + 名字 + 类型」，右侧整片空白。 */}
+            <div className={css.list}>
+              {list.map(c => (<ContactRowItem key={c.username} c={c} onOpen={() =>{  setProfile(c) }} />))}
+            </div>
           </div>
         ))}
         {!loading && !error && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
@@ -298,20 +344,31 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
           </>
         )}
       </Drawer>
+
+      {/* 导出记录弹窗。入口在工具栏「导出记录」按钮 —— 与「导出 CSV」同处，
+          用户导完就地能查结果/重新导出/清理，不必再跳设置。
+          默认预筛「通讯录」，与本屏上下文一致（可在下拉里改回「全部」）。 */}
+      <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />
     </div>
   )
 }
 
 /** 联系人行（含懒加载头像）。 */
 function ContactRowItem({ c, onOpen }: { c: ContactRow; onOpen: () => void }): React.JSX.Element {
+  // 次要行补上有信息量的字段（此前只有类型，多列网格下右半格是空的）：
+  //   群聊 → 类型 + 成员数（"群聊 · 486 人"）
+  //   其余 → 类型 + 微信号（长了会按 CSS 省略号截断）
+  const meta = c.memberCount != null && c.memberCount > 0
+    ? `${typeLabel(c)} · ${c.memberCount} 人`
+    : (c.username ? `${typeLabel(c)} · ${c.username}` : typeLabel(c))
   return (
     <div key={c.username} className={css.contactItem} {...clickableKey(onOpen)}>
       <LazyMount placeholder={<div className={`${css.avatar} ${css.avatarPlaceholder}`}>…</div>} rootMargin="400px 0px">
-        <ContactAvatar c={c} size={36} />
+        <ContactAvatar c={c} size={34} />
       </LazyMount>
       <div className={css.contactInfo}>
-        <span className={css.contactName}>{displayName(c)}</span>
-        <span className={css.contactMeta}>{typeLabel(c)}{c.groupName ? ` · ${c.groupName}` : ''}</span>
+        <span className={css.contactName} title={displayName(c)}>{displayName(c)}</span>
+        <span className={css.contactMeta} title={meta}>{meta}</span>
       </div>
     </div>
   )

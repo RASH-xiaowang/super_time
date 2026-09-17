@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
 import { computeHasMore } from './paged-list.ts'
+import { collectPageRange } from './load-page-range.ts'
 import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
 
 export function useProgressiveList(
@@ -96,9 +97,9 @@ export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px',
  * 骨架屏:数据未到时先渲染框架占位(微光动画),不让整页被"加载中…"卡住。
  * 行模式用于列表,网格模式用于卡片格子。
  */
-export function ListSkeleton({ rows = 8, grid = false }: { rows?: number; grid?: boolean }): React.JSX.Element {
+export function ListSkeleton({ rows = 8, grid = false, minCol = 120 }: { rows?: number; grid?: boolean; minCol?: number }): React.JSX.Element {
   return (
-    <div className={kitCss.skelGrid} style={{ gridTemplateColumns: grid ? 'repeat(auto-fill, minmax(120px, 1fr))' : '1fr' }} aria-hidden="true">
+    <div className={kitCss.skelGrid} style={{ gridTemplateColumns: grid ? `repeat(auto-fill, minmax(${minCol}px, 1fr))` : '1fr' }} aria-hidden="true">
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className={`nm-skel ${grid ? kitCss.skelCard : kitCss.skelRow}`}>
           {!grid && (
@@ -225,6 +226,13 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
  * `reset` 在筛选/关键词变化时重新从第一页加载。`fetchPage` 使用 ref 持有，
  * 调用方每次渲染传新函数也不会触发重复加载。
  */
+/**
+ * `refresh()` 单轮最多发多少个请求（每个上限 `pageSize`）。
+ * 16 × 200 = 3200 条，足够覆盖真实账号的通讯录量级（实测全量约 2150）；
+ * 设上界是为了让「后台刷新」绝不退化成无界拉取。
+ */
+const MAX_REFRESH_PAGES = 16
+
 export function usePagedList<T>(options: {
   pageSize: number
   fetchPage: (offset: number, limit: number) => Promise<{ items: readonly T[]; total: number }>
@@ -237,6 +245,7 @@ export function usePagedList<T>(options: {
   hasMore: boolean
   loadMore: () => void
   reset: () => void
+  refresh: () => void
 } {
   const { pageSize } = options
   const fetchPageRef = useRef(options.fetchPage)
@@ -251,13 +260,16 @@ export function usePagedList<T>(options: {
   const seqRef = useRef(0)
   const busyRef = useRef(false)
 
-  const load = useCallback(async (append: boolean, force = false): Promise<void> => {
+  const load = useCallback(async (append: boolean, force = false, keepItems = false): Promise<void> => {
     if (busyRef.current && !force) return
     busyRef.current = true
     const seq = ++seqRef.current
     const offset = append ? offsetRef.current : 0
     if (append) setLoadingMore(true)
-    else {
+    else if (keepItems) {
+      // 非破坏性刷新：**不动 items**，列表与滚动位置都保持原样，等新数据到达再替换。
+      setError(null)
+    } else {
       setItems([])
       setTotal(0)
       setLastCount(0)
@@ -291,17 +303,73 @@ export function usePagedList<T>(options: {
     void load(false, true)
   }, [load])
 
-  // 数据落地后自动补齐「空列表」。
+  /**
+   * **非破坏性**地重新取数：保留当前已加载的列表（不置空、不显示骨架屏），
+   * 数据到达后再原位替换。
+   *
+   * 为什么必须与 `reset` 分开（本方法存在的唯一理由）：
+   * `reset()` 会**同步** `setItems([])`，列表瞬间被换成骨架屏 —— 内容高度从「已加载
+   * 的 N 条」塌到 12 行时，浏览器会把 `scrollTop` 钳到 0。于是任何走 `reset` 的
+   * 后台刷新都会把用户**弹回列表顶部**。实测触发路径：实时同步每约 10 秒派发一次
+   * `dsh-wechat-data-updated`，本钩子订阅它并 `reset()`，用户往下翻之后会不断被顶回顶部。
+   *
+   * 取数范围要**覆盖已加载条数**：只重取第一页会让列表从 N 条缩回一页，高度骤降
+   * 同样会把滚动位置钳掉。所以按「已加载条数」重取，并保持 `offsetRef` 停在末尾，
+   * 后续 `loadMore()` 接着往下翻。单次请求仍以 `pageSize` 为上限（不放大 IPC 负载），
+   * 因此最多发 `MAX_REFRESH_PAGES` 个请求；超过就退回「重建第一页」，不做无界刷新。
+   *
+   * `refresh()` 只用于「筛选条件没变、只是要拿最新数据」的场景；筛选条件真的变了
+   * 仍用 `reset()` —— 那种情况本来就应该回到顶部。
+   */
+  const refresh = useCallback((): void => {
+    const want = offsetRef.current
+    if (want <= 0) { void load(false, true, true); return }
+    const seq = ++seqRef.current
+    busyRef.current = true
+    void (async () => {
+      try {
+        const r = await collectPageRange<T>({
+          want,
+          pageSize,
+          maxPages: MAX_REFRESH_PAGES,
+          fetchPage: (offset, limit) => fetchPageRef.current(offset, limit),
+          // 返回 false = 这一轮已作废（期间发生了切换分类/搜索），丢弃已收集内容。
+          onPage: (info) => {
+            if (seq !== seqRef.current) return false
+            setTotal(info.total)
+            return true
+          },
+        })
+        if (seq !== seqRef.current) return
+        setItems(r.items)
+        setLastCount(r.items.length)
+        offsetRef.current = r.items.length
+        setError(null)
+      } catch (e) {
+        if (seq === seqRef.current) setError((e as Error).message)
+      } finally {
+        if (seq === seqRef.current) {
+          setLoading(false)
+          setLoadingMore(false)
+          busyRef.current = false
+        }
+      }
+    })()
+  }, [load, pageSize])
+
+  // 数据落地后安静刷新，使新数据及时可见。
   //
   // 实测（冷启动 + 连续切换页签）：后端启动同步要跑 2–3 分钟，期间请求可能返回
   // 空快照，面板就停在「共 0 项 / 暂无数据」；约 45–60 秒后才自行恢复 —— 但那份
-  // 恢复是偶然的：7 个用本钩子的面板里只有 Files 订阅了更新事件，其余并没有
-  // 任何刷新通路。这里把它变成确定行为。
+  // 恢复是偶然的：用本钩子的面板里只有 Files 订阅了更新事件，其余并没有任何刷新
+  // 通路。这里把它变成确定行为。
   //
-  // 只在**当前列表为空**时重载：同步期间该事件约每 10 秒一次，若无条件 reset()
-  // 会让已加载的列表每隔 10 秒清空重取，产生可见闪烁。
+  // 用 `refresh()`（非破坏性）而不是 `reset()`：同步活跃期该事件约每 10 秒一次，
+  // 而 `reset()` 会**同步清空 items** ⇒ 列表被骨架屏替换 ⇒ 容器高度塌陷 ⇒
+  // 浏览器把 scrollTop 钳到 0 —— 用户往下翻之后会被反复**弹回顶部**。
+  // `refresh()` 保留当前列表并按已加载条数重取，滚动位置不受影响。
   useWechatDataUpdated(() => {
-    if (items.length === 0) reset()
+    refresh()
   })
 
   return {
@@ -316,5 +384,6 @@ export function usePagedList<T>(options: {
     hasMore: computeHasMore({ loaded: items.length, total, lastPageCount: lastCount, pageSize }),
     loadMore,
     reset,
+    refresh,
   }
 }

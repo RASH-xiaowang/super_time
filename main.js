@@ -76,7 +76,7 @@ if (USER_DATA_OVERRIDE) {
   app.setPath('userData', path.join(app.getPath('appData'), 'Super Time'));
 }
 
-/** 「微信+」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
+/** 「Super Time」的运行期状态目录（config.json / llm.json）跟着 userData 走。 */
 const STATE_DIR = configureWechatPaths({ userDataPath: app.getPath('userData') });
 
 
@@ -189,7 +189,7 @@ const LONG_CALL_TIMEOUT_MS = Number(process.env.SUPERTIME_LONG_CALL_TIMEOUT_MS) 
   : undefined;
 
 /**
- * 拉起一个「微信+」后端进程，并建立带超时的 RPC 通道。
+ * 拉起一个「Super Time」后端进程，并建立带超时的 RPC 通道。
  *
  * 所有 Remote 方法都是同步 node:sqlite，个别方法单次就要 12–21 秒
  * （getSnsImageDataUrl 会全量解密扫描 Sns/Img 与 msg/attach）。跑在主进程里会
@@ -239,7 +239,7 @@ function spawnBackendProcess(userDataPath, onExit) {
 
 // ── 后端监管：有界退避重启 ───────────────────────────────────────────
 // 原实现的后果（本会话实测复现）：后端进程一旦退出，之后所有调用都固定 reject
-// 「微信+后端进程已退出」，功能整体失效、只能重启应用 —— 而进程退出本身可能只是
+// 「Super Time 后端进程已退出」，功能整体失效、只能重启应用 —— 而进程退出本身可能只是
 // 一次偶发（例如同步查询撞上数据变更）。这里补上有界重启。
 const BACKEND_RESTART_MAX = 3;
 const RESTART_BACKOFF_MS = [500, 1500, 4500];
@@ -385,7 +385,7 @@ function scheduleBackendRestart(reason) {
     return;
   }
   if (backendRestartCount >= BACKEND_RESTART_MAX) {
-    const msg = `微信+ 后端连续 ${BACKEND_RESTART_MAX} 次重启失败，相关功能不可用。`
+    const msg = `Super Time 后端连续 ${BACKEND_RESTART_MAX} 次重启失败，相关功能不可用。`
       + `请重启应用；若持续失败请检查 wechat/config.json 与数据目录。最近原因：${reason}`;
     console.error('[wechat]', msg);
     setBackendStatus('failed', msg);
@@ -441,7 +441,7 @@ function scheduleBackendRestart(reason) {
   if (backendRestartTimer.unref) backendRestartTimer.unref();
 }
 
-/** 微信+前端构建产物（npm run build:ui 生成）；缺失时回退到演示页。 */
+/** Super Time 前端构建产物（npm run build:ui 生成）；缺失时回退到演示页。 */
 function uiEntryHtml() {
   const built = path.join(__dirname, 'src', 'client', 'ui-dist', 'index.html');
   if (fs.existsSync(built)) return built;
@@ -542,7 +542,7 @@ function createWindow() {
     show: false,
     frame: false,
     backgroundColor: '#0f172a',
-    title: 'Super Time · 微信+',
+    title: 'Super Time',
     icon: fs.existsSync(appIcon) ? appIcon : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -915,16 +915,16 @@ app.whenReady().then(async () => {
     }
   });
 
-  // —— 微信+后端相关的 IPC ——
+  // —— Super Time 后端相关的 IPC ——
   // 处理器全部在这里注册（都在 createWindow() 之前），后端进程本身在
   // createWindow() 之后才启动，理由见那一处注释。
   ipcMain.handle('wechat:list-methods', () => {
-    if (!wechatBoot) return { ok: false, error: { message: '微信+后端未初始化' } };
+    if (!wechatBoot) return { ok: false, error: { message: 'Super Time 后端未初始化' } };
     return { ok: true, value: wechatBoot.methods };
   });
 
   ipcMain.handle('wechat:info', () => {
-    if (!wechatBoot) return { ok: false, error: { message: '微信+后端未初始化' } };
+    if (!wechatBoot) return { ok: false, error: { message: 'Super Time 后端未初始化' } };
     return { ok: true, value: wechatBoot.info };
   });
 
@@ -936,8 +936,8 @@ app.whenReady().then(async () => {
         ok: false,
         error: {
           message: backendStatus.lastError
-            ? `微信+ 后端暂不可用：${backendStatus.lastError}`
-            : '微信+ 后端仍在启动中，请稍候重试',
+            ? `Super Time 后端暂不可用：${backendStatus.lastError}`
+            : 'Super Time 后端仍在启动中，请稍候重试',
           code: 'BACKEND_NOT_READY',
           details: { method, state: backendStatus.state },
         },
@@ -1203,11 +1203,11 @@ app.whenReady().then(async () => {
     }
     backendRestartCount = 0;
     setBackendStatus('ready');
-    console.log('[wechat] 微信+后端已就绪，Remote 方法数:', wechatBoot.methods.length);
+    console.log('[wechat] Super Time 后端已就绪，Remote 方法数:', wechatBoot.methods.length);
     console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
   } catch (err) {
-    console.error('[wechat] 微信+后端初始化失败:', err);
+    console.error('[wechat] Super Time 后端初始化失败:', err);
     // 初始化失败也交给监管器重试 —— 这是最该自愈的一类失败：
     // 首次启动时数据可能正在解密、数据根尚未就绪，等一会儿再拉一次往往就成功。
     // 不用阻塞式对话框，失败信息走渲染端横幅（见 setBackendStatus 的说明）。

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-primitives",
   "version": "0.1.3-alpha.1",
-  "description": "轻量 UI 原语 shim：仅包含微信+实际使用的 Button/Input/Pill/StateDot + 图标，去掉 shiki/katex/markdown 等重量级依赖以降低内存与构建体积",
+  "description": "轻量 UI 原语 shim：仅包含 Super Time 实际使用的 Button/Input/Pill/StateDot + 图标，去掉 shiki/katex/markdown 等重量级依赖以降低内存与构建体积",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

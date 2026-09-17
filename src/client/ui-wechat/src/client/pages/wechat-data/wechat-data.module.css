@@ -1,6 +1,7 @@
 /* ============================================================
  * NEON MATRIX — 主容器 shell 样式
- * 本地微信数据管理 的顶层布局、顶栏、侧边栏、内容区
+ * 本地微信数据管理 的顶层布局、左侧导航栏、内容区
+ * （顶栏已于 2026-09 取消：品牌 / 搜索 / 主题 / 数据状态全部迁入导航栏）
  * ============================================================ */
 
 /* ── 面板根 ── */
@@ -37,33 +38,29 @@
   -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 20%, transparent 80%);
 }
 
-/* ── 顶部栏 ── */
-.topbar {
-  position: relative;
-  z-index: 10;
+/* ── 导航栏头部的品牌与搜索（2026-09 由顶栏迁入） ───────────────────
+   迁入后顶栏整条去掉，四件事（品牌 / 搜索 / 主题 / 状态）都落在常驻的导航栏里：
+     · 品牌与搜索在顶部；
+     · 主题与数据状态在底部固定区（与「设置」同属全局动作，见 .navFooterRow）。
+
+   口径提醒：基样式 = **收起态**（58px 轨），`.sidebar[data-open]` 覆盖 = **展开态**（176px）。
+   顺序不能反过来 —— `data-open` 表示导航「已展开」（见 .sidebar 的宽度规则）。
+   收起态横排放不下，所以文字类（品牌名 / 状态文案）与搜索框整体收掉：
+   露半截被切断的文字比干脆不显示更糟。搜索仍可用 Ctrl+K（会先把导航展开再聚焦）。 */
+
+.navBrand {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  min-height: 64px;
-  border-bottom: 1px solid var(--nm-border);
-  background: var(--nm-bg-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  flex-shrink: 0;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.topbarLeft {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  justify-content: center;   /* 收起态：30px 徽标在 42px 窄轨里居中 */
+  gap: 0;
+  padding: 2px 0 8px;
   min-width: 0;
-}
-.appLogo {
   flex-shrink: 0;
-  width: 38px;
-  height: 38px;
+}
+.navBrandLogo {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -72,14 +69,87 @@
     radial-gradient(120% 120% at 25% 20%, color-mix(in srgb, var(--nm-cyan) 18%, transparent), transparent 60%),
     linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 12px;
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 12%, transparent), inset 0 0 12px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
-  /* 已配置微信账号时这里换成账号头像，需要按外框圆角裁掉头像溢出的像素 */
+  border-radius: 10px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  /* 已配置微信账号时这里换成账号头像，按外框圆角裁掉溢出像素 */
   overflow: hidden;
 }
-/* 顶栏品牌位显示账号头像时使用：铺满整个外框（38×38，扣掉 1px 边框后内容区 36×36）。
-   圆角不在这里写 —— 交给父级 .appLogo 的 border-radius + overflow: hidden 统一裁切，
-   这样头像的圆角和霓虹外框完全对齐，不会在四角出现错位的毛边。 */
+.navBrandText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  /* 与 .navLabel 同一套「擦除式」收起：不做过渡会让收起瞬间跳一下 */
+  max-width: 0;
+  opacity: 0;
+  transition: max-width var(--nm-t-normal), opacity var(--nm-t-fast);
+}
+.navBrandName {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.navBrandSub {
+  font-size: 10px;
+  color: var(--nm-text-3);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+/* 展开态：与 .navItem 同一套左对齐节奏（图标在左、文字在右） */
+.sidebar[data-open] .navBrand {
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 2px 6px 8px;
+}
+.sidebar[data-open] .navBrandText {
+  max-width: 120px;   /* 大于最长一行（「微信数据工作台」≈70px）即可 */
+  opacity: 1;
+}
+
+/* 收起态整块收起（42px 窄轨里放不下输入框）；展开态 = 160px 可用宽，
+   扣掉 8+8 内边距、14px 图标、6px 间距后输入区还剩 124px，够用。 */
+.navSearch { display: none; }
+.sidebar[data-open] .navSearch {
+  display: block;
+  flex-shrink: 0;
+  padding: 0 0 8px;
+  min-width: 0;
+}
+
+/* ── 导航栏底部：主题切换 + 数据状态（2026-09 由顶栏迁入） ──
+   与「设置」同属全局动作，所以贴在底部固定区（不随导航滚动）。
+   .sidebar 自身 padding-bottom 为 0，这里必须自己补 10px，否则状态标签会贴到窗口下沿。 */
+.navFooterRow {
+  display: flex;
+  /* 收起态（内容宽 42px）横排放不下 30px 图标 + 状态点，纵向堆叠 */
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--nm-border);
+  min-width: 0;
+  flex-shrink: 0;
+}
+/* 展开态：160px 可用宽放得下「30px 图标 + 状态胶囊」（≈120px），改回一行 ——
+   纵向堆叠会白吃掉约 30px 高度，正是需要避免的空档。 */
+.sidebar[data-open] .navFooterRow {
+  flex-direction: row;
+  gap: 8px;
+  padding: 8px 6px 10px;
+}
+/* 收起态只留状态点（文字放不下），完整文案靠 title 提示。
+   宽度对齐成与主题按钮相同的 30px：两者在窄轨里上下叠放，等宽才是一条竖线。 */
+.apiTagText { display: none; }
+.sidebar[data-open] .apiTagText { display: inline; }
+.navFooterRow .apiTag { padding: 5px; width: 30px; justify-content: center; }
+.sidebar[data-open] .navFooterRow .apiTag { padding: 5px 12px; width: auto; }
+
+/* 品牌位显示当前微信账号头像时使用：铺满外框（现为导航栏的 .navBrandLogo，30×30）。
+   圆角不在这里写 —— 由父级 .navBrandLogo 的 border-radius + overflow: hidden 统一裁切，
+   这样头像圆角与霓虹外框完全对齐，四角不会出现错位毛边。
+   组件里 img 还写着 width/height=38：那是给 CSS 未加载时兜底的固有尺寸，被这里的 100% 覆盖。 */
 .appLogoImg {
   display: block;
   width: 100%;
@@ -87,18 +157,7 @@
   object-fit: cover;
   background: var(--nm-bg-hover);
 }
-.titleBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.titleRow {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
+/* 通用小徽标（其它面板在用，非顶栏专属） */
 .badge {
   flex-shrink: 0;
   font-size: 10px;
@@ -111,45 +170,33 @@
   text-transform: uppercase;
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
 }
-.topbarTitle {
-  font-size: 15px;
-  font-weight: 700;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--nm-text-1);
-}
-.topbarRight {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-}
-.topbarQuick {
+/* 主题切换：图标按钮（2026-09 随品牌/搜索一起迁入导航栏底部固定区）。
+   圆形成 30×30 图标按钮：文字与图标表达同一件事，去掉文字后在 176px 宽的导航栏里
+   才能和「数据状态」并排且不换行；收起态（.navFooterRow 转纵向）也一样放得下。 */
+.themeToggle {
   flex-shrink: 0;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 14px;
+  justify-content: center;
+  padding: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: 50%;
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   color: var(--nm-text-1);
-  font-size: 12px;
-  font-weight: 600;
   cursor: pointer;
-  white-space: nowrap;
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, color 0.15s;
 }
-.topbarQuick:hover {
+.themeToggle:hover {
   border-color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
   color: var(--nm-cyan);
   box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
 }
+.themeToggle:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 2px; }
+.themeToggle svg { display: block; }
+/* 骨架屏的图标槽（Overview 的 SkeletonOverview 在用）—— 不是顶栏遗留，勿删 */
 .quickIcon {
   display: inline-flex;
   align-items: center;
@@ -157,103 +204,6 @@
 }
 .quickIcon svg { display: block; }
 
-/* ── 全局搜索 ── */
-.topbarSearch {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 6px 14px;
-  border: 1px solid var(--nm-border);
-  border-radius: 999px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-2);
-  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-}
-.topbarSearch:focus-within {
-  border-color: var(--nm-cyan);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent), 0 0 14px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
-}
-.searchIcon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.searchIcon svg { display: block; }
-.searchInput {
-  width: 250px;
-  min-width: 120px;
-  flex: 1 1 auto;
-  max-width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 12.5px;
-  font-family: var(--nm-font-sans, inherit);
-  outline: none;
-}
-.searchInput::placeholder { color: var(--nm-text-2); }
-/* 顶部全局搜索：可见的「输入框」其实是外层 .topbarSearch 容器（它有 :focus-within，
- * 聚焦时边框变 --nm-cyan 并加 3px 环 + 14px 辉光，已实测确认）。内部 input 透明、
- * 无边框，所以这里**刻意**关掉它的 outline —— 否则会在字段内部再画一圈。
- * 这是第 39 轮「输入类聚焦语言统一」里唯一保留的例外。 */
-.searchInput:focus { outline: none; }
-.searchOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-}
-.searchDropdown {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 50;
-  width: 380px;
-  max-height: 400px;
-  overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
-  border-radius: 14px;
-  background: rgba(8, 14, 32, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 30px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
-  padding: 6px;
-}
-.searchGroup {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--nm-cyan);
-  padding: 8px 10px 4px;
-  opacity: 0.7;
-}
-.searchRow {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  text-align: left;
-  padding: 9px 12px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--nm-text-1);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.searchRow:hover { background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
-.searchName { font-size: 12.5px; font-weight: 600; }
-.searchEmpty {
-  padding: 18px;
-  text-align: center;
-  color: var(--nm-text-2);
-  font-size: 12px;
-}
 
 /* API 状态标签 */
 .apiTag {
@@ -337,7 +287,7 @@
    不能用 :hover —— 点「折叠」时指针还在侧栏上，会立刻又被展开；
    也不能用 :focus-within —— 焦点落在侧栏内的按钮上时同样收不起来。 */
 .sidebar[data-open] {
-  width: var(--nm-sidebar-w, 212px);
+  width: var(--nm-sidebar-w, 176px);
 }
 /* 折叠开关：常驻导航顶部，点击切换展开 / 折叠。
    折叠态图标在窄轨里居中，展开态左对齐并露出文字 —— 与 .navItem 同一套节奏。 */
@@ -450,7 +400,7 @@
 .sidebarFooter {
   flex-shrink: 0;
   margin-top: 10px;
-  padding: 8px 0 12px;
+  padding: 8px 0 8px;
   border-top: 1px solid var(--nm-border);
 }
 .sidebarFooter .navItem {

@@ -1017,6 +1017,104 @@ export interface ExportResult {
   count: number
 }
 
+/**
+ * 一次导出在**历史记录**里的形态。
+ *
+ * 与 `operation_log` 的区别：操作日志是「审计」口径（谁在何时做了什么，只留元数据），
+ * 而这里是「可操作」口径 —— 用户要能据此**定位文件、重新导出、删除文件**，所以必须
+ * 记住 `path`（绝对路径）、`params`（重跑导出所需的全部参数）与 `sizeBytes`。
+ */
+export interface ExportHistoryEntry {
+  id: number
+  ts: number
+  /** 导出种类：contacts / favorites / records / moments / privacy / session / annual / all_sessions / backup。 */
+  kind: string
+  /** 人类可读的说明（如「联系人 · 好友」「会话 · 某某」）。 */
+  label: string
+  /** 落盘格式：csv / txt / html / xlsx / md / json / zip / wcb / dir。 */
+  format: string
+  /** 绝对路径。 */
+  path: string
+  /** 文件名（便于列表显示与搜索，避免每次都从 path 切）。 */
+  filename: string
+  /** 文件字节数；目录型导出（备份目录）为 null。 */
+  sizeBytes: number | null
+  /** 导出的行数/条数。 */
+  rows: number
+  status: ExportStatus
+  /** 失败原因或补充说明。 */
+  error: string
+  /** 重新导出所需的原始入参（JSON 文本；不存任何消息正文）。 */
+  params: string
+  /**
+   * 记录生成时的磁盘核对结果：文件是否仍存在。
+   * 落库时是快照，展示前会由 `reconcileExportHistory` 刷新 —— 用户可能在资源管理器里
+   * 把它移走或删掉，历史列表必须如实反映，而不是一直显示「存在」。
+   */
+  existsNow: boolean
+}
+
+/** 导出结果状态。 */
+export type ExportStatus = 'ok' | 'fail' | 'canceled'
+
+/** 读取导出历史的筛选/排序/分页条件。 */
+export interface ExportHistoryQuery {
+  /** 文本搜索：匹配文件名、说明、路径与种类。 */
+  q?: string
+  /** 只保留这些种类（空/缺省表示全部）。 */
+  kinds?: string[]
+  status?: ExportStatus
+  /** 起始时间（毫秒，含）。 */
+  from?: number
+  /** 结束时间（毫秒，含）。 */
+  to?: number
+  /** 排序字段。 */
+  sort?: 'ts' | 'size' | 'rows' | 'name'
+  /** 排序方向。 */
+  order?: 'asc' | 'desc'
+  limit?: number
+  offset?: number
+}
+
+/** 导出历史一页：条目 + 命中总数 + 各聚合数（用于页签上的计数）。 */
+export interface ExportHistorySnapshot {
+  items: ExportHistoryEntry[]
+  total: number
+  /** 各状态的条数（ok/fail/canceled），用于「仅看失败」这类筛选的计数。 */
+  statusCounts: Record<string, number>
+  /** 各导出种类的条数，用于种类页签计数。 */
+  kindCounts: Record<string, number>
+  /** 命中条目的文件总字节数（文件已被外部删除的不计）。 */
+  totalBytes: number
+  /** 命中条目里文件已不在磁盘上的条数（供「清理失效记录」提示）。 */
+  missingCount: number
+}
+
+/** 删除导出历史的结果。 */
+export interface ExportHistoryDeleteResult {
+  /** 实际删除的记录数。 */
+  removed: number
+  /** 连带删除的文件数。 */
+  filesDeleted: number
+  /** 删除文件失败的文件名（记录仍会被删除，这里如实回报）。 */
+  fileErrors: string[]
+}
+
+/**
+ * 清理导出历史的策略（两个条件都满足才删；都为 0/缺省则不删任何东西 ——
+ * 避免「传空对象把历史清光」这种误调用）。
+ */
+export interface ExportHistoryPruneOptions {
+  /** 只清理早于「现在 - olderThanDays 天」的记录。 */
+  olderThanDays?: number
+  /** 只保留最近 keepLatest 条，其余作为清理候选。 */
+  keepLatest?: number
+  /** 是否连带删除磁盘上的文件。 */
+  deleteFiles?: boolean
+  /** 只清理文件已不存在的失效记录（忽略上面两个条件）。 */
+  onlyMissing?: boolean
+}
+
 /** One citation (source message) for an Ask answer. */
 export interface AskCitation {
   name: string

@@ -169,7 +169,22 @@
 .footerMid { color: var(--nm-text-2); }
 
 /* ── 退化：窄窗或矮窗装不下 12 列/5 行 → 回到瀑布流 + 滚动 ──
-   强压到不可读不如允许滚动；用户的 1664×1066 走上面的无滚动版。 */
+   强压到不可读不如允许滚动；用户的 1664×1066 走上面的无滚动版。
+
+   注意这条 media query 看的是**视口**高度，而被压缩的是**面板**高度：
+   1440×900 的窗口里视口是 900（不触发），面板却只有约 700px —— 海报照常启用，
+   9 张卡片各把 20–30% 文字切掉。所以组件里另外用 ResizeObserver 检测
+   "有没有卡片真被切"，命中就挂上 `data-compact`，走下面这套同一份规则。 */
+.wrap[data-compact] {
+  height: auto;
+  display: block;
+  columns: 380px;
+  column-gap: 10px;
+}
+.wrap[data-compact] .card { break-inside: avoid; margin: 0 0 10px; overflow: visible; }
+.scrollBody:has(.wrap[data-compact]) { overflow-y: auto; }
+.wrap[data-compact] .footer { display: flex; }
+
 @media (max-width: 1200px), (max-height: 779px) {
   .wrap {
     height: auto;

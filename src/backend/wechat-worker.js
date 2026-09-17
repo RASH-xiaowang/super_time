@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 「微信+」后端独立进程（Electron utilityProcess）。
+ * 「Super Time」后端独立进程（Electron utilityProcess）。
  *
  * ## 为什么要把后端挪出主进程
  *
@@ -24,7 +24,7 @@
  */
 
 // 本进程的 stdout 继承自主进程（同一根管道）：父进程/终端先退出时日志会 EPIPE，
-// 未处理就会让整个后端进程直接退出（表现为「微信+后端进程已退出」）。
+// 未处理就会让整个后端进程直接退出（表现为「Super Time 后端进程已退出」）。
 require('./console-safe').install();
 
 const { createWechatBackend } = require('./wechat-host');
@@ -59,7 +59,7 @@ async function handle(msg) {
         return;
       }
       case 'call': {
-        if (!backend) throw new Error('微信+后端未初始化');
+        if (!backend) throw new Error('Super Time 后端未初始化');
         post({ id, value: await backend.call(payload?.method, payload?.args) });
         return;
       }

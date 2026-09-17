@@ -6,7 +6,7 @@ import path from 'node:path'
 const SHIM_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'src/client/ui-primitives-shim/src')
 
 /**
- * Super Time —— 微信+前端构建配置
+ * Super Time —— 前端构建配置
  *
  * root 指向 src/client/ui-app（React 入口），构建产物输出到
  * src/client/ui-dist，Electron 主进程加载该目录的 index.html。

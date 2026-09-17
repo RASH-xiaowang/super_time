@@ -46,6 +46,9 @@ import './light-theme.css'
 import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
 import { getThemeMode, subscribeThemeMode, toggleThemeMode } from './theme.ts'
 import { Dialog, Tooltip } from './ui/kit.tsx'
+import { ConfirmProvider } from './ui/confirm.tsx'
+import { GlobalSearch } from './panels/global-search.tsx'
+import gs from './panels/global-search.module.css'
 import type {
   SearchHit,
   UnifiedSearchContact,
@@ -199,6 +202,7 @@ function renderTab(
   onOpenMoments: (username: string) => void,
   momentAuthor: string | null,
   clearMomentAuthor: () => void,
+  onOpenSettings: (section?: string) => void,
 ): React.JSX.Element {
   const chatViews: Partial<Record<string, ChatView>> = {
     chats: 'chats', bizchats: 'bizchats', servicechats: 'servicechats', kefu: 'kefu',
@@ -216,7 +220,7 @@ function renderTab(
         initial={tab === 'revoked' ? 'revoked' : 'chats'}
         sections={[
           { key: 'chats', label: '聊天消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} /> },
-          { key: 'revoked', label: '撤回消息', render: () => <RevokedPanel /> },
+          { key: 'revoked', label: '撤回消息', render: () => <RevokedPanel onOpenSettings={onOpenSettings} /> },
         ]}
       />
     )
@@ -296,8 +300,8 @@ function renderTab(
         ariaLabel="总结与报告视图"
         initial={tab}
         sections={[
-          { key: 'dailysummary', label: '每日总结与任务', render: () => <DailySummaryPanel /> },
-          { key: 'period', label: '周期总结', render: () => <PeriodSummaryPanel /> },
+          { key: 'dailysummary', label: '每日总结与任务', render: () => <DailySummaryPanel onOpenSettings={onOpenSettings} /> },
+          { key: 'period', label: '周期总结', render: () => <PeriodSummaryPanel onOpenSettings={onOpenSettings} /> },
           { key: 'annual', label: '年度报告', render: () => <AnnualPanel /> },
         ]}
       />
@@ -479,12 +483,16 @@ export function WechatDataPanel(): React.JSX.Element {
     return () => { window.clearTimeout(t) }
   }, [searchQuery])
 
-  // Ctrl/Cmd+K focuses the global search; Esc closes the dropdown.
+  // Ctrl/Cmd+K 聚焦全局搜索；Esc 关闭结果面板。
+  // 搜索框现在在导航栏里，而收起态（58px 轨）整块是 display: none —— 直接 focus() 会静默失败，
+  // 所以先展开导航，等这一帧渲染出输入框后再聚焦（rAF 比 setTimeout(0) 更贴合绘制时机）。
+  // 原先那套「先展开顶栏折叠条再聚焦」的 inert 绕行方案已随顶栏一起删除。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        searchInputRef.current?.focus()
+        setNavOpen(true)
+        window.requestAnimationFrame(() => { searchInputRef.current?.focus() })
         setSearchOpen(true)
       } else if (e.key === 'Escape') {
         setSearchOpen(false)
@@ -494,10 +502,16 @@ export function WechatDataPanel(): React.JSX.Element {
     return () => { window.removeEventListener('keydown', onKey) }
   }, [])
 
+  // 导航栏收起时搜索框被隐藏（display: none）。此时结果面板若还开着，就会拿一组
+  // 全零的矩形去定位，直接飘到屏幕左上角 —— 收起导航时一并关掉面板。
+  useEffect(() => {
+    if (!navOpen) setSearchOpen(false)
+  }, [navOpen])
+
   // 只渲染活动标签；用 useMemo 避免搜索/数据库状态等无关状态变化时重建面板元素。
   const activePanel = useMemo(
-    () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }),
-    [active, navigate, openChat, chatTarget, openMoments, momentAuthor],
+    () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings),
+    [active, navigate, openChat, chatTarget, openMoments, momentAuthor, openSettings],
   )
 
   const noSearchResults = !searchLoading
@@ -510,141 +524,15 @@ export function WechatDataPanel(): React.JSX.Element {
     && searchResults.records.length === 0
 
   return (
+    /* ConfirmProvider 包在最外层：全应用共用一个应用内确认框实例。
+       不用原生 window.confirm（系统白框、不跟主题、阻塞渲染进程）。 */
+    <ConfirmProvider>
     <div className={css.panel}>
-      <div className={css.topbar}>
-        <div className={css.topbarLeft}>
-          <div className={css.appLogo}>
-            <BrandAvatar online={apiStatus === 'online'} />
-          </div>
-          <div className={css.titleBlock}>
-            <div className={css.titleRow}>
-              <h2 className={css.topbarTitle}>本地微信数据管理</h2>
-              <span className={css.badge}>微信+</span>
-            </div>
-            <span className={kitCss.textCaptionTrunc}>本机解密库 · 统计分析 · 可选 AI 问答</span>
-          </div>
-        </div>
-        <div className={css.topbarRight}>
-          <div className={css.topbarSearch}>
-            <span className={css.searchIcon}><IconSearch /></span>
-            <input
-              ref={searchInputRef}
-              className={css.searchInput}
-              placeholder="全局搜索：会话 / 消息 / 联系人 / 朋友圈 / 收藏 / 文件 / 记录（Ctrl+K）"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true) }}
-              onFocus={() => { setSearchOpen(true) }}
-              aria-label="全局搜索微信数据"
-            />
-            {searchOpen && searchQuery.trim() !== '' && (
-              <>
-                <div className={css.searchOverlay} onClick={() => { setSearchOpen(false) }} />
-                <div className={css.searchDropdown}>
-                  {searchLoading && <div className={css.searchEmpty}>搜索中…</div>}
-                  {noSearchResults && (
-                    <div className={css.searchEmpty}>未找到相关结果</div>
-                  )}
-                  {searchResults.sessions.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>会话</div>
-                      {searchResults.sessions.map(sec => (
-                        <button key={sec.username} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); openChat(sec.username) }}>
-                          <span className={css.searchName}>{sec.displayName || sec.username}</span>
-                          <span className={kitCss.textCaptionTrunc}>{sec.summary}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.hits.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>消息</div>
-                      {searchResults.hits.map((h, i) => (
-                        <button key={`${h.username}:${h.local_id}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); openChat(h.username, h.local_id) }}>
-                          <span className={css.searchName}>{h.name}</span>
-                          <span className={kitCss.textCaptionTrunc}>{h.snippet}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.contacts.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>联系人</div>
-                      {searchResults.contacts.map((c, i) => (
-                        <button key={`c:${c.username}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); if (c.category === 'contact' || c.category === 'group') openChat(c.username); else setActive('contacts') }}>
-                          <span className={css.searchName}>{c.name}</span>
-                          <span className={kitCss.textCaptionTrunc}>{c.category === 'group' ? '群聊' : c.category === 'official' ? '公众号' : '联系人'}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.moments.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>朋友圈</div>
-                      {searchResults.moments.map((m, i) => (
-                        <button key={`m:${m.username}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); openMoments(m.username) }}>
-                          <span className={css.searchName}>{m.name}</span>
-                          <span className={kitCss.textCaptionTrunc}>{m.snippet}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.favorites.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>收藏</div>
-                      {searchResults.favorites.map((f, i) => (
-                        <button key={`f:${f.id}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); setActive('favorites') }}>
-                          <span className={css.searchName}>收藏 #{f.id}</span>
-                          <span className={kitCss.textCaptionTrunc}>{f.snippet}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.files.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>文件</div>
-                      {searchResults.files.map((f, i) => (
-                        <button key={`file:${f.fileName}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); setActive('files') }}>
-                          <span className={css.searchName}>{f.fileName}</span>
-                          <span className={kitCss.textCaptionTrunc}>{f.size > 0 ? `${(f.size / 1024).toFixed(1)} KB` : f.md5}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {searchResults.records.length > 0 && (
-                    <>
-                      <div className={css.searchGroup}>记录</div>
-                      {searchResults.records.map((r, i) => (
-                        <button key={`r:${r.kind}:${r.session}:${i}`} type="button" className={css.searchRow} onClick={() => { setSearchOpen(false); setActive('records') }}>
-                          <span className={css.searchName}>{r.name}</span>
-                          <span className={kitCss.textCaptionTrunc}>{r.kind === 'transfers' ? '转账' : '红包'}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-          <Tooltip content={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}>
-            <button
-              type="button"
-              data-theme-toggle
-              className={css.topbarQuick}
-              onClick={toggleThemeMode}
-              title={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}
-            >
-              <span className={css.quickIcon}>
-                {themeMode === 'light' ? <IconMoon /> : <IconSun />}
-              </span>
-              <span>{themeMode === 'light' ? '深色' : '浅色'}</span>
-            </button>
-          </Tooltip>
-          <span className={css.apiTag} data-status={apiStatus}>
-            <StatusDot />
-            {apiStatus === 'online' ? '本地数据就绪' : apiStatus === 'offline' ? '本地数据不可用' : '检测中...'}
-          </span>
-        </div>
-      </div>
+      {/* 顶栏已整体迁入左侧导航栏（2026-09）：品牌 / 全局搜索 / 主题 / 数据状态
+          原先各占顶栏一段，那条 54px 的横条只服务这四件事，却永久占掉首屏高度；
+          迁进常驻的导航栏后不再需要 `FoldableBar` 的展开/自动收起（以及它带来的
+          inert 与裁剪两处坑）。搜索的结果面板改用 Portal 定位 ——
+          因为 `.sidebar` 带 `overflow: hidden`，绝对定位的下拉会被裁掉。 */}
 
       {/* 主动提醒卡片（右下角悬浮）：新版本已下载可装 / 许可证临期。此前这两件事只在
           「设置」弹窗里能看到，用户不主动点进去就感知不到 —— 新版本静默装好，许可证则到期
@@ -658,7 +546,110 @@ export function WechatDataPanel(): React.JSX.Element {
 
       <div className={css.body}>
         <aside className={css.sidebar} data-open={navOpen || undefined}>
-          {/* 折叠开关：点击切换展开 / 折叠（不再依赖鼠标悬停） */}
+          {/* 品牌：头像 + 产品名（原顶栏左侧）。头像沿用原顶栏的品牌位实现
+              （BrandAvatar 已配置微信账号时显示账号头像，否则显示品牌标记）。 */}
+          <div className={css.navBrand} title="Super Time">
+            <span className={css.navBrandLogo}>
+              <BrandAvatar online={apiStatus === 'online'} />
+            </span>
+            <span className={css.navBrandText}>
+              <span className={css.navBrandName}>Super Time</span>
+              <span className={css.navBrandSub}>微信数据工作台</span>
+            </span>
+          </div>
+
+          {/* 全局搜索（原顶栏中部）：结果面板由 GlobalSearch Portal 到 body */}
+          <div className={css.navSearch}>
+            <GlobalSearch
+              value={searchQuery}
+              onChange={setSearchQuery}
+              open={searchOpen}
+              onOpenChange={setSearchOpen}
+              inputRef={searchInputRef}
+            >
+              {searchLoading && <div className={gs.empty}>搜索中…</div>}
+              {noSearchResults && <div className={gs.empty}>未找到相关结果</div>}
+              {searchResults.sessions.length > 0 && (
+                <>
+                  <div className={gs.group}>会话</div>
+                  {searchResults.sessions.map(sec => (
+                    <button key={sec.username} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openChat(sec.username) }}>
+                      <span className={gs.rowName}>{sec.displayName || sec.username}</span>
+                      <span className={kitCss.textCaptionTrunc}>{sec.summary}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.hits.length > 0 && (
+                <>
+                  <div className={gs.group}>消息</div>
+                  {searchResults.hits.map((h, i) => (
+                    <button key={`${h.username}:${h.local_id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openChat(h.username, h.local_id) }}>
+                      <span className={gs.rowName}>{h.name}</span>
+                      <span className={kitCss.textCaptionTrunc}>{h.snippet}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.contacts.length > 0 && (
+                <>
+                  <div className={gs.group}>联系人</div>
+                  {searchResults.contacts.map((c, i) => (
+                    <button key={`c:${c.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); if (c.category === 'contact' || c.category === 'group') openChat(c.username); else setActive('contacts') }}>
+                      <span className={gs.rowName}>{c.name}</span>
+                      <span className={kitCss.textCaptionTrunc}>{c.category === 'group' ? '群聊' : c.category === 'official' ? '公众号' : '联系人'}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.moments.length > 0 && (
+                <>
+                  <div className={gs.group}>朋友圈</div>
+                  {searchResults.moments.map((m, i) => (
+                    <button key={`m:${m.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); openMoments(m.username) }}>
+                      <span className={gs.rowName}>{m.name}</span>
+                      <span className={kitCss.textCaptionTrunc}>{m.snippet}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.favorites.length > 0 && (
+                <>
+                  <div className={gs.group}>收藏</div>
+                  {searchResults.favorites.map((f, i) => (
+                    <button key={`f:${f.id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('favorites') }}>
+                      <span className={gs.rowName}>收藏 #{f.id}</span>
+                      <span className={kitCss.textCaptionTrunc}>{f.snippet}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.files.length > 0 && (
+                <>
+                  <div className={gs.group}>文件</div>
+                  {searchResults.files.map((f, i) => (
+                    <button key={`file:${f.fileName}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('files') }}>
+                      <span className={gs.rowName}>{f.fileName}</span>
+                      <span className={kitCss.textCaptionTrunc}>{f.size > 0 ? `${(f.size / 1024).toFixed(1)} KB` : f.md5}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {searchResults.records.length > 0 && (
+                <>
+                  <div className={gs.group}>记录</div>
+                  {searchResults.records.map((r, i) => (
+                    <button key={`r:${r.kind}:${r.session}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('records') }}>
+                      <span className={gs.rowName}>{r.name}</span>
+                      <span className={kitCss.textCaptionTrunc}>{r.kind === 'transfers' ? '转账' : '红包'}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+            </GlobalSearch>
+          </div>
+
+          {/* 折叠开关：点击切换展开 / 折叠（悬停不再触发，避免误展开） */}
           <button
             type="button"
             className={css.navToggle}
@@ -736,6 +727,25 @@ export function WechatDataPanel(): React.JSX.Element {
               <span className={css.navLabel}>设置</span>
             </button>
           </div>
+          {/* 主题切换与数据状态（原顶栏右侧）：与「设置」同属全局动作，放底部固定区 */}
+          <div className={css.navFooterRow}>
+            <Tooltip content={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}>
+              <button
+                type="button"
+                data-theme-toggle
+                className={css.themeToggle}
+                onClick={toggleThemeMode}
+                title={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}
+                aria-label={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}
+              >
+                {themeMode === 'light' ? <IconMoon /> : <IconSun />}
+              </button>
+            </Tooltip>
+            <span className={css.apiTag} data-status={apiStatus} title="本地解密数据的可读状态">
+              <StatusDot />
+              <span className={css.apiTagText}>{apiStatus === 'online' ? '数据就绪' : apiStatus === 'offline' ? '数据不可用' : '检测中…'}</span>
+            </span>
+          </div>
         </aside>
         <main className={css.content}>
           <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>
@@ -767,6 +777,7 @@ export function WechatDataPanel(): React.JSX.Element {
       </Dialog>
 
     </div>
+    </ConfirmProvider>
   )
 }
 

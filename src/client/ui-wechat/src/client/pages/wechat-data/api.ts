@@ -23,6 +23,10 @@ import type {
   BackupMutationResult,
   BackupRestoreResult,
   BackupPreviewSnapshot,
+  ExportHistoryDeleteResult,
+  ExportHistoryPruneOptions,
+  ExportHistoryQuery,
+  ExportHistorySnapshot,
   BackupSnapshot,
   CalendarSnapshot,
   ChatHistoryResolveResult,
@@ -285,6 +289,8 @@ export interface WechatRemote {
     to?: number
     filename?: string
     zip?: boolean
+    /** 会话显示名，仅用于导出历史的可读说明。 */
+    sessionName?: string
     /** 带上它可订阅 `wechat-export/progress` 进度并通过 cancelExportJob 取消（M3）。 */
     jobId?: string
   }): Promise<RemoteResult<ExportResult>>
@@ -306,7 +312,10 @@ export interface WechatRemote {
   listEditedMessages(options?: { sessionId?: string }): Promise<RemoteResult<EditedListSnapshot>>
   editChatMessage(options: { username: string; localId: number; content: string }): Promise<RemoteResult<EditMutationResult>>
   resetEditedMessage(options: { username: string; localId: number }): Promise<RemoteResult<EditMutationResult>>
-  exportCsv(options: { kind: string; recordsKind?: string }): Promise<RemoteResult<ExportResult>>
+  exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<RemoteResult<ExportResult>>
+  getExportHistory(options?: ExportHistoryQuery): Promise<RemoteResult<ExportHistorySnapshot>>
+  deleteExportHistory(options: { ids: number[]; deleteFiles?: boolean }): Promise<RemoteResult<ExportHistoryDeleteResult>>
+  pruneExportHistory(options?: ExportHistoryPruneOptions): Promise<RemoteResult<ExportHistoryDeleteResult>>
   exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): Promise<RemoteResult<ExportResult>>
   exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<RemoteResult<ExportResult>>
   exportMoments(options?: {
@@ -506,11 +515,17 @@ export async function apiGetSessions(options?: { keyword?: string; limit?: numbe
   return cachedFetch('sessions:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getSessions(options)), 30_000)
 }
 /**
- * Fetch the contact list (optional page size + offset).
- * @param options - Query options: limit page size, offset page start.
+ * Fetch the contact list (optional page size + offset + category filter).
+ *
+ * `category` is forwarded to the backend, which filters **before** paginating —
+ * so each category tab gets its own complete list and a matching `total`.
+ * Filtering client-side after pagination would show an empty tab whenever the
+ * globally-sorted first page happens to contain none of that category.
+ *
+ * @param options - Query options: limit page size, offset page start, category filter.
  * @returns ContactsSnapshot.
  */
-export async function apiGetContacts(options?: { limit?: number; offset?: number }): Promise<ContactsSnapshot> {
+export async function apiGetContacts(options?: { limit?: number; offset?: number; category?: string }): Promise<ContactsSnapshot> {
   return cachedGet('contacts:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getContacts(options)))
 }
 /**
@@ -1131,11 +1146,28 @@ export async function apiGetVideoInfo(options: { username: string; localId: numb
   return unwrap(await remote().getVideoInfo(options))
 }
 /**
- * Export a session’s messages in the given format.
- * @param options - Query options: username, format, optional count.
+ * Export one session's messages.
+ *
+ * 整个 options 原样透传（不再只挑 4 个字段）：会话导出支持
+ * `dir`/`filename`/`types`/`from`/`to`/`zip` 等条件，**少传任何一个都会导出不同结果**；
+ * 导出历史里的「重新导出」正是靠这些参数重放的。
+ * @param options - 会话导出参数（透传给后端）。
  * @returns ExportResult.
  */
-export async function apiExportSessionMessages(options: { username: string; format: string; count?: number; jobId?: string }): Promise<ExportResult> {
+export async function apiExportSessionMessages(options: {
+  username: string
+  format: string
+  count?: number
+  dir?: string
+  types?: number[]
+  richTypes?: string[]
+  from?: number
+  to?: number
+  filename?: string
+  zip?: boolean
+  sessionName?: string
+  jobId?: string
+}): Promise<ExportResult> {
   return unwrap(await remote().exportSessionMessages(options))
 }
 /**
@@ -1286,8 +1318,30 @@ export async function apiExportMoments(options?: {
   return unwrap(await remote().exportMoments(options))
 }
 
-export async function apiExportCsv(options: { kind: string; recordsKind?: string }): Promise<ExportResult> {
+export async function apiExportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<ExportResult> {
   return unwrap(await remote().exportCsv(options))
+}
+
+/**
+ * 读取导出历史（导出记录弹窗）。
+ *
+ * **不走 `cachedGet`**：历史里带 `existsNow`（文件是否还在磁盘上），缓存住的旧结果会在
+ * 用户于资源管理器里删掉文件后仍然显示「存在」—— 这类「按当前事实」的数据不应缓存。
+ * @param options - 搜索/筛选/排序/分页条件。
+ * @returns 导出历史一页 + 聚合计数。
+ */
+export async function apiGetExportHistory(options?: ExportHistoryQuery): Promise<ExportHistorySnapshot> {
+  return unwrap(await remote().getExportHistory(options))
+}
+
+/** 删除导出历史记录（`deleteFiles` 默认 false —— 删记录不等于删文件）。 */
+export async function apiDeleteExportHistory(options: { ids: number[]; deleteFiles?: boolean }): Promise<ExportHistoryDeleteResult> {
+  return unwrap(await remote().deleteExportHistory(options))
+}
+
+/** 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 */
+export async function apiPruneExportHistory(options?: ExportHistoryPruneOptions): Promise<ExportHistoryDeleteResult> {
+  return unwrap(await remote().pruneExportHistory(options))
 }
 /**
  * Clear a session’s draft.
