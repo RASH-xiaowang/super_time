@@ -1,5 +1,12 @@
 import type { PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot } from '../types.ts';
-/** Read the current privacy settings. Defaults: redaction off, outbound allowed. */
+/**
+ * Read the current privacy settings. Defaults: redaction off, outbound allowed.
+ *
+ * 读失败**不在这里兜底**：这是个权限判断，把「读不到」翻译成「默认放行」等于
+ * 用户开了「出站拦截」而库损坏时静默出网。调用方各自的失败方向见
+ * `gateway.ts` 的 `privacyBlocked` / `outboundBlocked` / `privacyGate`（一律拦下）。
+ * 全新库（无行）仍走默认值，不抛。
+ */
 export declare function readPrivacySettings(decryptedDir: string): {
     redactSensitive: boolean;
     blockOutbound: boolean;

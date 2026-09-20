@@ -23,19 +23,22 @@ function getSetting(db: DatabaseSync, key: string, dft: boolean): boolean {
   return row ? row.value === '1' : dft
 }
 
-/** Read the current privacy settings. Defaults: redaction off, outbound allowed. */
+/**
+ * Read the current privacy settings. Defaults: redaction off, outbound allowed.
+ *
+ * 读失败**不在这里兜底**：这是个权限判断，把「读不到」翻译成「默认放行」等于
+ * 用户开了「出站拦截」而库损坏时静默出网。调用方各自的失败方向见
+ * `gateway.ts` 的 `privacyBlocked` / `outboundBlocked` / `privacyGate`（一律拦下）。
+ * 全新库（无行）仍走默认值，不抛。
+ */
 export function readPrivacySettings(decryptedDir: string): { redactSensitive: boolean; blockOutbound: boolean } {
-  try {
-    const db = openStore(decryptedDir)
-    const out = {
-      redactSensitive: getSetting(db, 'redactSensitive', false),
-      blockOutbound: getSetting(db, 'blockOutbound', false),
-    }
-    db.close()
-    return out
-  } catch {
-    return { redactSensitive: false, blockOutbound: false }
+  const db = openStore(decryptedDir)
+  const out = {
+    redactSensitive: getSetting(db, 'redactSensitive', false),
+    blockOutbound: getSetting(db, 'blockOutbound', false),
   }
+  db.close()
+  return out
 }
 
 /** Persist privacy settings (partial update). */

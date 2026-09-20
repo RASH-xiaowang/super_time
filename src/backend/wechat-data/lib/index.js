@@ -21069,17 +21069,13 @@ function getSetting(db, key, dft) {
   return row ? row.value === "1" : dft;
 }
 function readPrivacySettings(decryptedDir) {
-  try {
-    const db = openStore5(decryptedDir);
-    const out = {
-      redactSensitive: getSetting(db, "redactSensitive", false),
-      blockOutbound: getSetting(db, "blockOutbound", false)
-    };
-    db.close();
-    return out;
-  } catch {
-    return { redactSensitive: false, blockOutbound: false };
-  }
+  const db = openStore5(decryptedDir);
+  const out = {
+    redactSensitive: getSetting(db, "redactSensitive", false),
+    blockOutbound: getSetting(db, "blockOutbound", false)
+  };
+  db.close();
+  return out;
 }
 function writePrivacySettings(decryptedDir, patch) {
   const db = openStore5(decryptedDir);
@@ -23418,6 +23414,9 @@ function compactDailyDigest(lines) {
   }
   return parts.join("\n");
 }
+function privacyStoreUnreadable(feature, detail) {
+  return `\u8BFB\u5230\u9690\u79C1\u8BBE\u7F6E\u5931\u8D25\uFF08wechat_privacy.db \u4E0D\u53EF\u8BFB\uFF09\uFF0C\u5DF2\u6309\u300C\u51FA\u7AD9\u62E6\u622A\u300D\u5904\u7406\uFF1A\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}`;
+}
 function askBasisLine(citations) {
   if (citations.length === 0) return "";
   const msgs = citations.filter((c) => c.source !== "kb");
@@ -23664,15 +23663,17 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     try {
       return readPrivacySettings(this._dirs.decrypted).blockOutbound;
     } catch {
-      return false;
+      return true;
     }
   }
   privacyBlocked(feature, detail = "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B") {
+    let blocked;
     try {
-      return readPrivacySettings(this._dirs.decrypted).blockOutbound ? `\u9690\u79C1\u8BBE\u7F6E\u5DF2\u5F00\u542F\u300C\u51FA\u7AD9\u62E6\u622A\u300D\uFF0C\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}` : null;
+      blocked = readPrivacySettings(this._dirs.decrypted).blockOutbound;
     } catch {
-      return null;
+      return privacyStoreUnreadable(feature, detail);
     }
+    return blocked ? `\u9690\u79C1\u8BBE\u7F6E\u5DF2\u5F00\u542F\u300C\u51FA\u7AD9\u62E6\u622A\u300D\uFF0C\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}` : null;
   }
   /**
    * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
@@ -23691,7 +23692,12 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
   privacyGate(feature, stats, texts) {
     const blocked = this.privacyBlocked(feature);
     if (blocked !== null) return { ok: false, error: blocked };
-    const settings = readPrivacySettings(this._dirs.decrypted);
+    let settings;
+    try {
+      settings = readPrivacySettings(this._dirs.decrypted);
+    } catch {
+      return { ok: false, error: privacyStoreUnreadable(feature, "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B") };
+    }
     const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts;
     const chars = out.reduce((a, t) => a + t.length, 0);
     recordPrivacyAudit(this._dirs.decrypted, feature, chars, stats.sessions, stats.messages);

@@ -130,6 +130,17 @@ import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 
 import { bootstrapWechatData, resolveDecodedDir, resolveDecryptedDir } from './dirs.ts'
 
+/**
+ * 隐私库读不到时的统一文案。
+ *
+ * 「读不到」必须与「没开拦截」区分开：前者拦下并说明原因，后者放行。
+ * 2026-09-20 之前两处 catch 都把异常翻译成「放行」，于是一个显式开了
+ * 「出站拦截」的用户，在 `wechat_privacy.db` 损坏/被锁的那一刻就开始静默出网。
+ */
+function privacyStoreUnreadable(feature: string, detail: string): string {
+  return `读到隐私设置失败（wechat_privacy.db 不可读），已按「出站拦截」处理：已阻止「${feature}」${detail}`
+}
+
 /** Resolved data layout (per gateway instance, so tests can stub env). */
 interface ResolvedDirs {
   /** Decrypted SQLite libraries the queries read. */
@@ -511,18 +522,21 @@ export class WechatDataGateway extends TypertRemoteService {
     try {
       return readPrivacySettings(this._dirs.decrypted).blockOutbound
     } catch {
-      return false
+      // 读不到就按「禁止出站」处理。这是权限判断，失败方向只能是**拦下**：
+      // 用户开了「出站拦截」而库损坏/被锁的那一刻，静默放行是最糟的结果。
+      // 与 `privacyBlocked` 的文案分支同一取向（那边会告诉用户为什么被拦）。
+      return true
     }
   }
 
   private privacyBlocked(feature: string, detail = '把数据发送给模型'): string | null {
+    let blocked: boolean
     try {
-      return readPrivacySettings(this._dirs.decrypted).blockOutbound
-        ? `隐私设置已开启「出站拦截」，已阻止「${feature}」${detail}`
-        : null
+      blocked = readPrivacySettings(this._dirs.decrypted).blockOutbound
     } catch {
-      return null
+      return privacyStoreUnreadable(feature, detail)
     }
+    return blocked ? `隐私设置已开启「出站拦截」，已阻止「${feature}」${detail}` : null
   }
 
   /**
@@ -546,7 +560,14 @@ export class WechatDataGateway extends TypertRemoteService {
   ): { ok: true; texts: string[] } | { ok: false; error: string } {
     const blocked = this.privacyBlocked(feature)
     if (blocked !== null) return { ok: false, error: blocked }
-    const settings = readPrivacySettings(this._dirs.decrypted)
+    let settings: { redactSensitive: boolean; blockOutbound: boolean }
+    try {
+      settings = readPrivacySettings(this._dirs.decrypted)
+    } catch {
+      // 竞态兜底：`privacyBlocked` 那次读成功了、这一次失败（库刚被锁上或删掉）。
+      // 方向同上 —— 判断不了就拦下，不能带着「默认不脱敏」把原文发出去。
+      return { ok: false, error: privacyStoreUnreadable(feature, '把数据发送给模型') }
+    }
     const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts
     const chars = out.reduce((a, t) => a + t.length, 0)
     // 审计是 best-effort：recordPrivacyAudit 内部已是 try/catch，失败不影响功能本身

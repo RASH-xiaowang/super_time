@@ -174,6 +174,23 @@ describe('summarizeKbFile：出网闸门', () => {
     const snap = gw.getPrivacyState()
     expect(snap.audit.byFeature.some(x => x.feature === 'kb_file_summary')).toBe(true)
   })
+
+  // 与第一条配成一对：那条是「用户开了拦截」，这条是「**读不到**用户开没开」。
+  // 旧行为是 catch → 当作没开，于是一个显式开了出站拦截的用户，在 wechat_privacy.db
+  // 损坏/被锁的那一刻就开始静默出网 —— 权限判断的失败方向反了。
+  it('隐私库读不到时按「拦截出站」处理（fail-closed），一次请求都不发', async () => {
+    const id = addFile('unreadable.md', '# 标题\n正文')
+    // 把库路径换成同名**目录**：openStore 必失败，且不依赖文件锁、权限这类环境差异。
+    const privacyDb = join(root, 'wechat_privacy.db')
+    rmSync(privacyDb, { recursive: true, force: true })
+    mkdirSync(privacyDb)
+    const r = await gw.summarizeKbFile({ kbId, id })
+    expect(r.ok).toBe(false)
+    // 文案要能区分「用户开的拦截」与「读不到」——否则排查时看不出是设置生效还是库坏了。
+    expect(r.error ?? '').toContain('出站拦截')
+    expect(r.error ?? '').toContain('不可读')
+    expect(llm.calls).toEqual([])
+  })
 })
 
 describe('summarizeKbFile：发出去的内容与落库', () => {
