@@ -39,7 +39,13 @@ export default defineConfig({
      */
     testTimeout: 180000,
     hookTimeout: 180000,
-    // 这些用例都在临时目录里各建各的夹具，彼此无共享状态，可并行。
+    // 这些用例都在临时目录里各建各的夹具，彼此无共享状态，本机可并行。
     fileParallelism: true,
+    // CI 上把并行度压到 2（2026-09-20）：runner 核少且与别的任务共享，几个重文件同时跑时
+    // 会有 worker 长时间抢不到 CPU，vitest 的内部 RPC（`onTaskUpdate`）因此超时 ——
+    // 症状是「用例全部通过、退出码却是 1」加 3 条 `[vitest-worker]: Timeout calling`，
+    // 在本地（核多）复现不出来。不彻底串行，是因为夹具改成单事务插入后整批已快约 4 倍
+    // （本机 35s → 8.5s），限到 2 就够把 CPU 还给正在跑的那一个。
+    maxWorkers: process.env.CI ? 2 : undefined,
   },
 })

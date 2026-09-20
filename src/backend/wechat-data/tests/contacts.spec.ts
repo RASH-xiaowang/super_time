@@ -85,7 +85,9 @@ describe('queryContacts 分类过滤发生在分页之前', () => {
       big_head_url TEXT, small_head_url TEXT, description TEXT, is_in_chat_room INTEGER
     )`)
     const ins = db.prepare('INSERT INTO contact (id, username, local_type, remark, remark_pin_yin_initial, quan_pin) VALUES (?, ?, ?, ?, ?, ?)')
-    // 300 个非好友（local_type=0 → member），首字母 A/P，排在最前
+    // 300 行包一条事务：逐行提交是每行一次 fsync，在 CI runner 上会拉出十几秒的同步段
+    // （实测本机 1ms/行），长到足以让 vitest 的内部 RPC 超时。
+    db.exec('BEGIN')
     for (let i = 0; i < 300; i++) {
       ins.run(1000 + i, 'member_' + i, 0, 'm' + i, i % 2 === 0 ? 'A' : 'P', 'm' + String(i).padStart(4, '0'))
     }
@@ -93,6 +95,7 @@ describe('queryContacts 分类过滤发生在分页之前', () => {
     for (let i = 0; i < 3; i++) {
       ins.run(2000 + i, 'friend_' + i, 1, 'f' + i, 'Q', 'f' + String(i).padStart(4, '0'))
     }
+    db.exec('COMMIT')
     db.close()
     return root
   }

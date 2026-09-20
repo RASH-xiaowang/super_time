@@ -232,6 +232,10 @@ function makeDecryptedRoot(sessions: number, msgsPerSession: number): string {
   sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
   const insS = sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, ?, ?, 0, 1, \'\')')
   const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  // 两个连接各自包一条事务：嵌套循环逐行提交在 CI runner 上会拉出几十秒的同步段，
+  // 长到足以让 vitest 的内部 RPC（onTaskUpdate）超时（用例本身全过、退出码却是 1）。
+  sdb.exec('BEGIN')
+  mdb.exec('BEGIN')
   let ts = 1700000000
   for (let s = 0; s < sessions; s += 1) {
     const u = 'wxid_s' + String(s)
@@ -244,6 +248,8 @@ function makeDecryptedRoot(sessions: number, msgsPerSession: number): string {
       ins.run(i, i, 1, i % 2, 1700000000 + i, 1, '第 ' + String(i) + ' 条消息 <含符号>&"\'', 'srv' + String(i))
     }
   }
+  sdb.exec('COMMIT')
+  mdb.exec('COMMIT')
   sdb.close()
   mdb.close()
   return decrypted

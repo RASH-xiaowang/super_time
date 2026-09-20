@@ -50,7 +50,10 @@ function makeFixture(texts: string[]): { dec: string; root: string } {
   const db = openTrackedDb(join(root, 'wechat_search.db'))
   db.exec('CREATE TABLE message_meta (rowid INTEGER PRIMARY KEY, text TEXT, username TEXT, local_id INTEGER, create_time INTEGER)')
   const ins = db.prepare('INSERT INTO message_meta VALUES (?,?,?,?,?)')
+  // 一条事务插完（同 search-cursor：逐行提交在 CI 上是十几秒级的同步阻塞）
+  db.exec('BEGIN')
   texts.forEach((t, i) => ins.run(i + 1, t, 'wxid_a', i + 1, 1700000000 + i))
+  db.exec('COMMIT')
   db.close()
   return { dec, root }
 }
