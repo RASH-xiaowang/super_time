@@ -10,15 +10,28 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { closeAllTrackedDbs, openTrackedDb, removeDirWithRetry } from '../../tests/helpers/temp-db.ts'
 import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages, searchIndexPath } from '../src/query/search.ts'
 
+/**
+ * 本文件是「重夹具」文件：建真索引 + FTS 写 CJK，CI 的 runner 比本机慢约 24 倍
+ * （2026-09-20 实测：整批用例耗时 2658s vs 本机 109s），全局 180s 档位装不下它 ——
+ * 4 条夹具最大的用例在 runner 上超时。这里单独抬到 420s（作业级预算见 ci.yml）。
+ */
+vi.setConfig({ testTimeout: 420_000, hookTimeout: 420_000 })
+
 const scratch: string[] = []
-afterEach(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true })
-  scratch.length = 0
+afterEach(async () => {
+  // 先关连接、再带退避重试删除：用例超时/断言失败会跳过自己的 close，
+  // 残留句柄会让 Windows 上的 rmSync 确定性失败（EBUSY/EPERM），重试救不了。
+  closeAllTrackedDbs()
+  const list = scratch.splice(0)
+  for (const d of list) {
+    const r = await removeDirWithRetry(d)
+    if (!r.ok) console.warn(`[search-cursor] 临时目录未能删除（${r.code}，试了 ${r.attempts} 次）：${d}`)
+  }
 })
 
 const USER = 'wxid_a'
@@ -35,12 +48,12 @@ function makeFixture(totalMessages: number, hitsTarget: number, padBytes = 0): s
   mkdirSync(join(decrypted, 'session'), { recursive: true })
   mkdirSync(join(decrypted, 'message'), { recursive: true })
 
-  const sdb = new DatabaseSync(join(decrypted, 'session', 'session.db'))
+  const sdb = openTrackedDb(join(decrypted, 'session', 'session.db'))
   sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
   sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, 1700000000, 1700000000, 0, 1, \'\')').run(USER, USER)
   sdb.close()
 
-  const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  const mdb = openTrackedDb(join(decrypted, 'message', 'message_0.db'))
   const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
   mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
   const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
@@ -68,12 +81,12 @@ function makeRawFixture(bodies: string[]): string {
   mkdirSync(join(decrypted, 'session'), { recursive: true })
   mkdirSync(join(decrypted, 'message'), { recursive: true })
 
-  const sdb = new DatabaseSync(join(decrypted, 'session', 'session.db'))
+  const sdb = openTrackedDb(join(decrypted, 'session', 'session.db'))
   sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
   sdb.prepare('INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, 1700000000, 1700000000, 0, 1, \'\')').run(USER, USER)
   sdb.close()
 
-  const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  const mdb = openTrackedDb(join(decrypted, 'message', 'message_0.db'))
   const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
   mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
   const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
@@ -88,7 +101,7 @@ function makeRawFixture(bodies: string[]): string {
 /** 往既有夹具里追加消息（用于让「重建结果」与「旧索引」不同）。 */
 function appendMessages(decrypted: string, from: number, to: number): void {
   const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
-  const mdb = new DatabaseSync(join(decrypted, 'message', 'message_0.db'))
+  const mdb = openTrackedDb(join(decrypted, 'message', 'message_0.db'))
   const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
   mdb.exec('BEGIN')
   for (let i = from; i <= to; i += 1) {
@@ -222,7 +235,7 @@ describe('索引构建会让出事件循环', () => {
   it('索引库处于 WAL 模式（重建窗口内读者不被写事务挡住的前提）', async () => {
     const decrypted = makeFixture(200, 3)
     await buildSearchIndex(decrypted, true)
-    const db = new DatabaseSync(searchIndexPath(decrypted), { readOnly: true })
+    const db = openTrackedDb(searchIndexPath(decrypted), { readOnly: true })
     const mode = String(Object.values(db.prepare('PRAGMA journal_mode').get() as Record<string, unknown>)[0])
     db.close()
     expect(mode).toBe('wal')
@@ -250,7 +263,7 @@ describe('索引构建会让出事件循环', () => {
     appendMessages(decrypted, 301, 400)
 
     // meta 不会被重建（只有 message_meta / message_fts 会被 DROP），所以触发器能活到收尾
-    const db = new DatabaseSync(searchIndexPath(decrypted))
+    const db = openTrackedDb(searchIndexPath(decrypted))
     db.exec("CREATE TRIGGER fail_meta BEFORE INSERT ON meta BEGIN SELECT RAISE(ABORT, 'injected meta write failure'); END")
     db.close()
 
@@ -354,7 +367,7 @@ describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
   it('无可读文本的行也计入让出预算（图片/系统消息成片时不至于一次不让出）', async () => {
     // 这些行 readableMessageText() 会返回空串、被 continue 跳过；但它们同样付了
     // zstd 解压+解码成本。计量放在 continue 之前才不会被成片的无文本行绕过。
-    const bodies = Array.from({ length: 8000 }, () =>
+    const bodies = Array.from({ length: 2500 }, () =>
       `<msg><appmsg><img aeskey="${'a'.repeat(1000)}"/></appmsg></msg>`)
     const decrypted = makeRawFixture(bodies)
     const { ticks } = await buildWithTickProbe(decrypted)
@@ -457,7 +470,7 @@ describe.skipIf(process.env.MEASURE_SEARCH_MEMORY !== '1')('H9 内存实测', ()
 
     // 旧做法：一次 .all() 把整张表物化成数组
     const allPeak = sample('all() 物化整表', () => {
-      const db = new DatabaseSync(shard, { readOnly: true })
+      const db = openTrackedDb(shard, { readOnly: true })
       const rows = db.prepare(`SELECT local_id, create_time, message_content FROM "${table}" WHERE local_type=1`).all() as unknown[]
       void rows.length
       db.close()

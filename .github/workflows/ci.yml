@@ -16,7 +16,11 @@ concurrency:
 jobs:
   verify:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 2026-09-20 由 30 提到 45：runner（共享 2 核 + 实时扫描）比本机慢约 24 倍
+    # （整批用例耗时 2658s vs 本机 109s），单元测试一步实测已占 26 分钟；而 4 条重夹具
+    # 用例此前是「快速超时」（4×180s）才刚好挤进 30 分钟 —— 它们现在会真的跑完，
+    # 30 分钟会把作业整条杀掉（那是比「用例失败」更差的信号）。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
