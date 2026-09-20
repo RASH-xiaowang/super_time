@@ -1206,6 +1206,22 @@ export interface AskPlan {
     terms?: string[];
 }
 /** Ask result: LLM answer + source citations (+ the retrieval plan used). */
+/**
+ * 「推荐回复」的结果：按当前会话上下文（+ 用户选中的知识库）生成的候选回复。
+ */
+export interface ReplySuggestResult {
+    ok: boolean;
+    /** 候选回复（最多 3 条，按建议顺序）。`ok=false` 时缺省 —— 客户端按空数组处理。 */
+    replies?: string[];
+    /** 失败原因（`ok=false` 时）—— 被隐私闸门拦下与「模型不可用」是两句不同的话。 */
+    error?: string;
+    /** 这次依据了多少条会话消息（供界面如实说明依据，而不是笼统说「已参考」）。 */
+    messageCount?: number;
+    /** 这次依据了多少段知识库片段。 */
+    kbSnippetCount?: number;
+    /** 降级说明：选了库但没命中时如实说明「这次只用了会话上下文」。 */
+    degraded?: string;
+}
 export interface AskResult {
     answer: string;
     citations: AskCitation[];

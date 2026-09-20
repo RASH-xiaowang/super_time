@@ -4,7 +4,7 @@
 > `@Remote('name')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。
 > CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。
 
-当前共 **158** 个 Remote 方法。
+当前共 **159** 个 Remote 方法。
 
 渲染进程通过这些方法与后端通信（`gateway.ts` 是唯一分发点）：
 渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →
@@ -167,13 +167,14 @@
 | 149 | `setTaskStatus` | — |
 | 150 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
 | 151 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
-| 152 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
-| 153 | `syncHandoffTasks` | — |
-| 154 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
-| 155 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
-| 156 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
-| 157 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
-| 158 | `verifyImageKey` | — |
+| 152 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
+| 153 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
+| 154 | `syncHandoffTasks` | — |
+| 155 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
+| 156 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
+| 157 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
+| 158 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
+| 159 | `verifyImageKey` | — |
 
 ## 明细
 
@@ -1709,6 +1710,17 @@ async suggestKbLinks(options: { kbId: number; text?: string; topK?: number; excl
 
 - @param options - `kbId`、正在编辑的 `text`、可选 `topK` 与自身标题 `excludeTitle`。
 - @returns 候选（按相似度降序）+ 参与排序的池大小 + 说明。
+
+### `suggestReplies`
+
+```ts
+async suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<ReplySuggestResult>
+```
+
+「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。  与问答的区别是**不检索全库**：上下文只取这个会话最近若干条，知识库片段也只在用户 显式选了库时才取。会话级功能不该把别处的聊天悄悄端上来 —— 这正是「单聊里冒出别人 消息」那类报障的教训。  出站顺序与当日总结一致：**拦截优先于「模型不可用」**，否则用户开了「禁止 AI 出网」 却只看到一句「模型不可用」，会以为是配置问题而不是隐私设置生效。
+
+- @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
+- @returns 候选回复；被拦下或模型不可用时 `ok=false` 且 `error` 说明原因。
 
 ### `summarizeKbFile`
 

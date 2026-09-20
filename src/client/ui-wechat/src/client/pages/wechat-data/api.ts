@@ -23,6 +23,7 @@ import type {
   AskHistorySnapshot,
   AskOptimizeResult,
   AskResult,
+  ReplySuggestResult,
   AvatarResult,
   BackupMutationResult,
   BackupRestoreResult,
@@ -287,6 +288,7 @@ export interface WechatRemote {
   buildSearchIndex(options?: { force?: boolean }): Promise<RemoteResult<SearchBuildResult>>
   searchMessages(options: { query: string; limit?: number; username?: string }): Promise<RemoteResult<SearchSnapshot>>
   searchUnified(options: { query: string; limit?: number }): Promise<RemoteResult<UnifiedSearchSnapshot>>
+  suggestReplies(options: { username: string; kbId?: number; count?: number }): Promise<RemoteResult<ReplySuggestResult>>
   askWechat(options: {
     question: string
     username?: string
@@ -1274,6 +1276,15 @@ export async function apiSearchUnified(options: { query: string; limit?: number 
  * @param options - Question plus optional talker/date scope and conversation history.
  * @returns AskResult: answer, source citations, and the retrieval plan.
  */
+/**
+ * 「推荐回复」：按当前会话的上下文（可带当前选中的知识库）生成候选回复。
+ * @param options - 会话 username；kbId/count 可缺省。
+ * @returns ReplySuggestResult；ok=false 时读 error（被隐私闸门拦下与模型不可用是两句不同的话）。
+ */
+export async function apiSuggestReplies(options: { username: string; kbId?: number; count?: number }): Promise<ReplySuggestResult> {
+  return unwrap(await remote().suggestReplies(options))
+}
+
 export async function apiAskWechat(options: {
   question: string
   username?: string

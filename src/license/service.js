@@ -189,6 +189,9 @@ const METHOD_FEATURE = {
   // 放进 ai-summary 会让「只买摘要档」的授权建得出索引、却用不了检索，
   // 而关掉 ai-ask 也停不掉这三处的出网。
   buildKbVectorIndex: 'ai-ask',
+  // 会话内「推荐回复」：把该会话最近若干条对话（+ 选中知识库片段）交给模型换候选回复，
+  // 与 askWechat 同档（它就是「问答」的一种形态）。
+  suggestReplies: 'ai-ask',
   buildRagVectorIndex: 'ai-ask',
   searchKb: 'ai-ask',
   // 周期总结任务：与 generateDailySummary / generatePeriodSummary 同档。
