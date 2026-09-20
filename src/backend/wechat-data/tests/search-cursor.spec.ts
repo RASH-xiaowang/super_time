@@ -60,12 +60,19 @@ function makeFixture(totalMessages: number, hitsTarget: number, padBytes = 0): s
   // 关键词只落在前 hitsTarget 条；其余是普通文本（不命中）。
   // padBytes 用来把单条消息撑到接近真实聊天长度 —— 否则全是 20 字节的短行，
   // 「物化 vs 游标」的内存差会被噪声淹没（实测过：10 万短行只差 0.1MB）。
+  // 一条事务里插完：**不要**逐行独立提交 —— 那样每行一次 fsync，本机实测 1ms/行，
+  // 6000 行的夹具要 6 秒，而在 CI runner（共享 2 核 + 实时扫描）上放大到近百秒，
+  // 成为 worker 里一整段无法应答 RPC 的同步阻塞 —— vitest 会因此报
+  // `[vitest-worker]: Timeout calling "onTaskUpdate"`（用例本身全过，却把退出码弄成 1，
+  // 2026-09-20 实测 3 条）。`appendMessages` 早就是这么写的，这里跟上。
+  mdb.exec('BEGIN')
   const pad = padBytes > 0 ? 'x'.repeat(padBytes) : ''
   for (let i = 1; i <= totalMessages; i += 1) {
     const isHit = i <= hitsTarget
     const body = isHit ? `${TERM} 第 ${i} 条` : `普通消息 ${i}`
     ins.run(i, i, 1, i % 2, 1700000000 + i, 1, body + pad, `srv${i}`, '')
   }
+  mdb.exec('COMMIT')
   mdb.close()
   return decrypted
 }
@@ -90,10 +97,13 @@ function makeRawFixture(bodies: string[]): string {
   const t = 'Msg_' + createHash('md5').update(USER, 'utf8').digest('hex')
   mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
   const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
+  // 同 `makeFixture`：一条事务插完（逐行提交在 CI 上是几十秒级的同步阻塞，会拖出 RPC 超时）。
+  mdb.exec('BEGIN')
   bodies.forEach((body, i) => {
     const id = i + 1
     ins.run(id, id, 1, id % 2, 1700000000 + id, 1, body, `srv${id}`, '')
   })
+  mdb.exec('COMMIT')
   mdb.close()
   return decrypted
 }
