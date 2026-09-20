@@ -7,6 +7,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
+import { messagesMatchTalker } from './msg-scope.ts'
 import { SessionAsk } from './SessionAsk.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
@@ -2040,7 +2041,10 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     const talker = curSession.username
     const epoch = sessionEpochRef.current
     try {
-      const cached = readRenderCache<WechatMessage[]>('chat-msgs:' + talker)
+      // 键带 v2：早期版本在「切会话」竞态下把上一个会话写进过 v1 缓存（别人的消息留在本会话里），
+      // 升版让那些脏数据彻底读不到；读到之后还要再校验一次归属（见 msg-scope.ts）。
+      const raw = readRenderCache<WechatMessage[]>('chat-msgs:v2:' + talker)
+      const cached = raw && messagesMatchTalker(raw, talker, selfWxid) ? raw : null
       if (!sessionAlive(epoch, talker)) return
       if (cached && cached.length > 0) {
         setMessages(cached)
@@ -2055,7 +2059,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       setCursor(env.cursor ?? 0)
       setCursorLocalId(env.cursorLocalId)
       setTypeStats(env.typeStats ?? [])
-      writeRenderCache('chat-msgs:' + talker, env.messages)
+      writeRenderCache('chat-msgs:v2:' + talker, env.messages)
     } catch { /* keep current view */ }
   }, [curSession])
 
@@ -2511,7 +2515,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         // Keep the render cache current so a session reopen paints the same
         // newest messages before the authoritative fetch returns.
         const merged = [...prev, ...add]
-        writeRenderCache('chat-msgs:' + talker, merged)
+        writeRenderCache('chat-msgs:v2:' + talker, merged)
         return merged
       })
       // follow to the bottom only when the user is already near it
@@ -2556,7 +2560,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         })
         const changed = next.some((m, i) => m !== prev[i])
         if (!changed) return prev
-        writeRenderCache('chat-msgs:' + talker, next)
+        writeRenderCache('chat-msgs:v2:' + talker, next)
         return next
       })
     } catch { /* 保持当前视图，等待下一次推送对账 */ } finally {
@@ -2666,7 +2670,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setMsgError(null)
     try {
       // 先用上次渲染的消息缓存秒开,后台再同步最近 100 条
-      const cached = readRenderCache<WechatMessage[]>('chat-msgs:' + s.username)
+      const raw = readRenderCache<WechatMessage[]>('chat-msgs:v2:' + s.username)
+      const cached = raw && messagesMatchTalker(raw, s.username, selfWxid) ? raw : null
       if (!sessionAlive(epoch, s.username)) return
       setMessages(cached ?? [])
       if (cached && cached.length > 0) { setHasMore(true); setMsgLoading(false) }
@@ -2682,7 +2687,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       setCursor(env.cursor ?? 0)
       setCursorLocalId(env.cursorLocalId)
       setTypeStats(env.typeStats ?? [])
-      writeRenderCache('chat-msgs:' + s.username, list)
+      writeRenderCache('chat-msgs:v2:' + s.username, list)
       setTimeout(() => {
         if (!sessionAlive(epoch, s.username)) return
         msgEndRef.current?.scrollIntoView({ block: 'end' })

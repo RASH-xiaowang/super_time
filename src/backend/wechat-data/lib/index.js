@@ -14153,7 +14153,8 @@ function retrieveAskCitations(decryptedDir, question, hints, scope, limit) {
     ranked.length = 0;
     ranked.push(...strong, ...weak);
   }
-  const { chunks, windowMessages } = buildChunks(decryptedDir, ranked.slice(0, cap), termWeight, person, recency);
+  const { chunks: allChunks, windowMessages } = buildChunks(decryptedDir, ranked.slice(0, cap), termWeight, person, recency);
+  const chunks = scope?.username ? allChunks.filter((c) => c.anchor.source === "kb" || (c.anchor.username ?? "") === scope.username) : allChunks;
   const citations = chunks.map((c) => c.anchor);
   const keptRanked = ranked.slice(0, cap);
   const usedTerms = active.filter((x) => termWeight.has(x.t)).map((x) => x.t);
