@@ -31,6 +31,14 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # ── Electron 二进制要单独取 ──
+      # `node_modules/electron` 这个包在本仓库里没有 postinstall（包的 `scripts` 字段是空的），
+      # 所以 `npm ci` 只装 JS 包、不落 `dist/electron.exe`。而「安全守卫」「后端崩溃自愈」
+      # 两步要启动真窗口 —— 2026-09-20 在 CI 上实测：`❌ 找不到可执行文件 …electron.exe`。
+      # 已有二进制时这一步是快速空操作。
+      - name: 准备 Electron 二进制（冒烟要真窗口）
+        run: node node_modules/electron/install.js
+
       # ── 类型检查（H11）：前端类型只从仓库里的 lib/types 取（tsconfig 的 paths），
       #    所以这一步同时兜住「后端类型漂移」与「前端镜像滞后」两类问题。
       - name: 类型检查
