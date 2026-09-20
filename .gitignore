@@ -26,3 +26,7 @@ wechat/llm.json
 # 导出/写盘的原子落地临时文件（正常会被 rename 或删除，异常中断时才会残留）
 *.partial-*
 
+# 本机调试残留整目录：CDP 探针脚本与截图（含真实联系人文案）、验收输出、临时 txt。
+# 只忽略 `working/shots/` 时，同级的 *.png / *.mjs 仍是未忽略的 `?? working/`，
+# 一次 `git add -A` 就会把明文截图扫进仓库。仓库内无任何代码以此为输入。
+working/
