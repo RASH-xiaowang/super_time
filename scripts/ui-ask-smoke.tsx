@@ -161,6 +161,21 @@ check('问答页不再引用检索面板、不再有「检索」入口', () => {
   ok(!ask.includes('data-side-open'), 'Ask.tsx 不该再有侧栏开合标记 data-side-open')
 })
 
+check('头部不再有「实时」开关（实时推送默认开启，2026-09-20 移除）', () => {
+  // 先剥注释再断言：这段代码的注释里正解释着「原先那个开关写 localStorage.wc_realtime」，
+  // 不剥的话守卫会被自己的说明文字打死（与本仓 privacy-statement.spec.ts 同一写法）。
+  const chats = src('panels/Chats.tsx')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  for (const dead of ['toggleRealtime', 'wc_realtime', 'realtimeDot']) {
+    ok(!chats.includes(dead), `Chats.tsx 不该再出现 ${dead}（「实时」开关被挂回来了？）`)
+  }
+  // 开关没了，轮询条件里就不该再有任何变量挡着它 —— 出现 realtime 变量即为回退。
+  ok(!/\brealtime\b/i.test(chats), 'Chats.tsx 里不该再有 realtime 变量（实时推送应无条件开启）')
+  // 防空转：剥注释后若把整份源码也剥没了，上面几条会恒真。
+  ok(chats.length > 5000, `剥注释后剩下的源码只有 ${chats.length} 字符，stripComments 可能把代码也剥掉了`)
+})
+
 check('界面不再调用任何检索配置类接口（只保留回答反馈）', () => {
   // 反馈用过就删属于正常 UX，必须留；这些是"调参/运维"面，界面一律不碰。
   const forbidden = [
