@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiSuggestReplies } from '../api.ts'
+import { Select } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
 import css from './session-ask.module.css'
 
@@ -34,7 +35,15 @@ export interface ReplySuggestProps {
  */
 export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   const { target, onClose } = props
-  const { kbId, kbs } = useKbScope()
+  const { kbId: scopeKbId, kbs } = useKbScope()
+  /**
+   * 知识库选择：默认**跟随应用当前选中的库**，用户在本面板里改过之后就以本地选择为准。
+   *
+   * 为什么要有这个下拉：推荐回复的依据是「这段对话 + 某个库」，而库的切换器在知识库面板那边 ——
+   * 在聊天页里没法换库，用户就只能吃默认那个。`0` = 不用知识库（只按对话给候选）。
+   */
+  const [kbOverride, setKbOverride] = useState<number | null>(null)
+  const kbId = kbOverride ?? scopeKbId
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [replies, setReplies] = useState<string[]>([])
@@ -42,6 +51,10 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   const [copied, setCopied] = useState<number | null>(null)
 
   const kbName = kbs.find(k => k.id === kbId)?.name ?? ''
+  const kbOptions = [
+    { value: '0', label: '不用知识库' },
+    ...kbs.map(k => ({ value: String(k.id), label: k.name })),
+  ]
 
   /** 请求世代：切会话/换库/「换一批」都会作废在途请求（过期响应不许写进当前面板）。 */
   const seqRef = useRef(0)
@@ -107,6 +120,17 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
           {target.displayName || target.username}{basis ? ` · ${String(basis.messages)} 条对话` : ''}
           {basis && basis.kb > 0 ? ` · 知识库「${kbName}」${String(basis.kb)} 段` : ''}
         </span>
+      </div>
+
+      {/* 知识库选择（本面板内生效，不动应用全局作用域） */}
+      <div className={css.scopeRow}>
+        <span className={css.scopeLabel}>知识库</span>
+        <Select
+          value={String(kbId)}
+          onChange={(v) => { setKbOverride(Number(v)) }}
+          options={kbOptions}
+          ariaLabel="选择知识库（本面板内生效）"
+        />
       </div>
 
       <div className={css.body}>

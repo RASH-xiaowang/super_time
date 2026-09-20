@@ -49,6 +49,14 @@ describe('推荐回复的接线', () => {
     expect(/\bqueryMessages\([^)]*talker/.test(body), 'queryMessages 的第一个业务参数必须是 talker').toBe(true)
   })
 
+  it('面板里有知识库下拉：默认跟随全局、可改、且有「不用知识库」', () => {
+    // 为什么钉这条：库的切换器在知识库面板那边，聊天页里够不着 —— 面板自己不提供下拉，
+    // 用户就只能吃默认那个库（2026-09-20 用户实测反馈「没有选择知识库的下拉框」）。
+    expect(panel.includes('<Select'), '推荐回复面板必须有知识库下拉').toBe(true)
+    expect(panel.includes('不用知识库'), '下拉要能明确「不用知识库」，而不是只能从库里挑').toBe(true)
+    expect(/kbOverride \?\? scopeKbId/.test(panel), '未显式选择时应跟随应用当前选中的库').toBe(true)
+  })
+
   it('面板说明「只读、不代发」——本应用没有发送路径', () => {
     expect(panel.includes('不会替你发消息'), '面板应写明只读、需手动粘贴（避免用户以为它能直接发）').toBe(true)
   })
