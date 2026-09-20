@@ -650,7 +650,22 @@ export function retrieveAskCitations(
   // ── RAG 第三步：把「单条消息」升级成「对话窗口」并按窗口内容重排 ──
   // 召回仍按消息做（精确），但送给模型的单元是消息所在的连续对话 —— 这是
   // 「谁答应过我下周交报告」这类问题能被答对的关键（问与答分散在相邻两条里）。
-  const { chunks, windowMessages } = buildChunks(decryptedDir, ranked.slice(0, cap), termWeight, person, recency)
+  const { chunks: allChunks, windowMessages } = buildChunks(decryptedDir, ranked.slice(0, cap), termWeight, person, recency)
+
+  /**
+   * 会话内提问（`scope.username` 存在）时，引用**只允许来自该会话**。
+   *
+   * 检索侧本来就下发了范围（`pipeline` 的五个通道都吃 `scopeUsername`），这里是第二道：
+   * 一旦哪条通道漏判（或以后新增通道忘了传范围），引用卡片就会把**别人的聊天**画进这个
+   * 会话里 —— 那正是「单聊里出现多个用户的聊天记录」这类报障的形态。
+   * 知识库引用（`source === 'kb'`）不受影响：文件本来就不按会话组织。
+   *
+   * 过滤在 **chunks 层**而不是 citations 层：两者按索引一一对应（见 `buildChunks` 之后
+   * 的用法），只筛 citations 会让引用与对话窗口错位。
+   */
+  const chunks = scope?.username
+    ? allChunks.filter((c) => c.anchor.source === 'kb' || (c.anchor.username ?? '') === scope.username)
+    : allChunks
 
   const citations: AskCitation[] = chunks.map(c => c.anchor)
   const keptRanked = ranked.slice(0, cap)
