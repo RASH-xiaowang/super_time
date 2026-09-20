@@ -398,15 +398,6 @@
 }
 .calBtn:active { background: var(--nm-bg-active); }
 .calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.realtimeDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  display: inline-block;
-  box-shadow: 0 0 6px currentColor;
-  corner-shape: round;
-}
 .msgBody {
   position: relative;
   z-index: 1;

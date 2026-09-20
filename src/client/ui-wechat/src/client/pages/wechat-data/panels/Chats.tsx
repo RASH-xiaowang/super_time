@@ -1738,10 +1738,13 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
    * 两个值必须成对传回后端。
    */
   const [cursorLocalId, setCursorLocalId] = useState<number | undefined>(undefined)
-  /** Real-time polling toggle (persisted). */
-  const [realtime, setRealtime] = useState<boolean>(() => {
-    try { return localStorage.getItem('wc_realtime') !== '0' } catch { return true }
-  })
+  /**
+   * 实时推送**默认开启，且不再提供开关**（2026-09-20 移除头部的「实时」按钮）。
+   *
+   * 原先那个按钮把开关写进 `localStorage.wc_realtime`，但它的默认值就是开的，
+   * 而「关掉实时推送」这个动作的收益极小（新消息不再自动出现，用户多半会以为是坏了）
+   * 却要常驻一个按钮占头部动作区 —— 那个区域本来就是宽度紧张的（见下方「更多」菜单的注释）。
+   */
   /** 头部「更多」溢出菜单（导出/已编辑/清空草稿）。 */
   const [moreOpen, setMoreOpen] = useState(false)
   /** Highest sort_seq already loaded; the incremental-poll watermark. */
@@ -2562,7 +2565,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [curSession])
 
   useEffect(() => {
-    if (!curSession || !realtime) return
+    if (!curSession) return
     let timer: ReturnType<typeof setInterval> | null = null
     const start = (): void => {
       if (timer !== null) clearInterval(timer)
@@ -2576,7 +2579,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       document.removeEventListener('visibilitychange', onVis)
       if (timer !== null) clearInterval(timer)
     }
-  }, [curSession, realtime, pollNew])
+  }, [curSession, pollNew])
 
   // Close the group-info drawer and drop the in-chat search scope on session switch.
   useEffect(() => {
@@ -2635,14 +2638,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   useEffect(() => () => {
     if (sessionsReloadTimerRef.current !== null) clearTimeout(sessionsReloadTimerRef.current)
   }, [])
-
-  const toggleRealtime = (): void => {
-    setRealtime((v) => {
-      const nv = !v
-      try { localStorage.setItem('wc_realtime', nv ? '1' : '0') } catch { /* ignore */ }
-      return nv
-    })
-  }
 
   const openGroupInfo = (): void => {
     if (!curSession) return
@@ -3140,9 +3135,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                     <span className={css.calBtnLabel}>AI 问答</span>
                   </button>
                 )}
-                <button type="button" className={css.calBtn} title={realtime ? '实时推送已开启（微信新消息自动出现）' : '实时推送已关闭'} data-active={realtime || undefined} onClick={toggleRealtime}>
-                  <span className={css.realtimeDot} /> <span className={css.calBtnLabel}>实时</span>
-                </button>
                 <button type="button" className={css.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={css.calBtnLabel}>日历</span></button>
                 {curSession.type === 'group' && (
                   <button type="button" className={css.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} /><span className={css.calBtnLabel}>群信息</span></button>
