@@ -11,6 +11,7 @@ import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vector
 import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts';
 import { type KbEntitySummary } from './query/kb/extract.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
+import type { ReplySuggestResult } from './types.ts';
 import { type AnnualReview } from './query/annual-review.ts';
 import type { KnowledgeSnapshotRead } from './query/notes.ts';
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
@@ -1403,6 +1404,23 @@ export declare class WechatDataGateway extends TypertRemoteService {
     runSummaryTask(options: {
         id: number;
     }): Promise<SummaryTaskRunResult>;
+    /**
+     * 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。
+     *
+     * 与问答的区别是**不检索全库**：上下文只取这个会话最近若干条，知识库片段也只在用户
+     * 显式选了库时才取。会话级功能不该把别处的聊天悄悄端上来 —— 这正是「单聊里冒出别人
+     * 消息」那类报障的教训。
+     *
+     * 出站顺序与当日总结一致：**拦截优先于「模型不可用」**，否则用户开了「禁止 AI 出网」
+     * 却只看到一句「模型不可用」，会以为是配置问题而不是隐私设置生效。
+     * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
+     * @returns 候选回复；被拦下或模型不可用时 `ok=false` 且 `error` 说明原因。
+     */
+    suggestReplies(options: {
+        username?: string;
+        kbId?: number;
+        count?: number;
+    }): Promise<ReplySuggestResult>;
     /**
      * Resolve a user avatar (head_image.db data or contact URL).
      * @param options - username to resolve the avatar for.

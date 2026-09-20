@@ -92,12 +92,12 @@
 
 | 项 | 说明 |
 |---|---|
-| 触发 | 微信问答、每日总结、周期总结、群总结任务，问答的「查询改写/优化」，以及知识库文件详情里的「**生成摘要**」 |
+| 触发 | 微信问答、每日总结、周期总结、群总结任务，问答的「查询改写/优化」，单聊里的「**推荐回复**」，以及知识库文件详情里的「**生成摘要**」 |
 | 发出内容 | 检索到的聊天片段 / 当日消息 / 待总结文本（**不是**整个数据库）；「生成摘要」时是**你指定的那一份文件的开头正文**，上限 8,000 字、按文档原有顺序取前若干块 —— 文件更长时后面部分不会发出去，摘要也只覆盖前面那段 |
 | 目的地 | 你配置的 `llm.json` 里的 `apiUrl`（默认 `https://api.openai.com/v1`） |
 | 开关 | ✅ 应用内「数据边界与出网 → 禁止 AI 出网」整体拦截；「敏感字段打码」发送前脱敏；<br/>✅ 文件级：关掉「参与语义检索（会出网）」的文件**直接拒绝生成摘要**，不改标志位也不发送 |
 | 审计 | ✅ 每次放行都记入本机审计表（功能、次数、字符数），可导出 CSV |
-| 代码 | `gateway.ts` 的 `privacyGate(...)`（`ask_wechat` / `daily_summary` / `period_summary` / `summary_task` / `ask_optimize` / `kb_file_summary`） |
+| 代码 | `gateway.ts` 的 `privacyGate(...)`（`ask_wechat` / `daily_summary` / `period_summary` / `summary_task` / `ask_optimize` / `kb_file_summary` / `suggest_reply`） |
 
 ### B. AI 调用：embedding（发的是**内容**）
 

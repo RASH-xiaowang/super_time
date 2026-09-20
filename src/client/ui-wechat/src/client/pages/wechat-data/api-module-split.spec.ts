@@ -97,12 +97,13 @@ describe('M21 切片：api.ts 的缓存层拆分', () => {
     // → 2300（2026-09-18 T2：知识库**文件域** 5 个包装 + 4 个类型再导出 + 缓存失效，
     // 净 +126 行，实测 2216 行）
     // → 2400（2026-09-19 KB-MODEL-CONFIG P0：向量索引的两个包装 + 接口两行声明，实测 2326 行）。
+    // → 2450（2026-09-20「推荐回复」：1 个包装 + 1 行接口声明，实测 2409 行）。
     // 为什么这次仍然抬而不是搬：搬走的正解是把 `WechatRemote` 接口摘到独立模块，
     // 而它引用了 **16 个声明在 api.ts 本地的类型**（`RemoteResult`、`VectorBuildResult`、
     // `RetrievalStatus`、`*SnapshotRead` 等），摘出去就得连它们一起搬，或者反向 import api.ts
     // —— 后者正是本文件第 3 条要防的循环。那是 M21 的独立一片，不该塞进一次功能改动里做。
     // 2400 仍然咬得住原目标：cache.ts 209 行、media-cache.ts 113 行，
     // 任一份被内联回来都会把 api.ts 推到 2439 / 2535 行，两份都回来是 2648 行。
-    expect(lines, `api.ts 现在 ${lines} 行：超过 2400 说明缓存层被搬回来了（cache.ts 209 / media-cache.ts 113）`).toBeLessThan(2400)
+    expect(lines, `api.ts 现在 ${lines} 行：超过 2450 说明缓存层被搬回来了（cache.ts 209 / media-cache.ts 113）`).toBeLessThan(2450)
   })
 })

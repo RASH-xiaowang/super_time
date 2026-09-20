@@ -9,6 +9,7 @@ import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { SessionAsk } from './SessionAsk.tsx'
+import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
@@ -1768,6 +1769,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const messagesTalkerRef = useRef<string | null>(null)
   /** ── 会话级 AI 面板（「新对话」）──
    *  入口在聊天头部；面板作为第三栏并排。读取范围**恒为当前会话**，线程按会话隔离。 */
+  /** 推荐回复面板（单聊）。与 AI 问答面板互斥：两者都是消息流右侧的第三栏。 */
+  const [suggestOpen, setSuggestOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
@@ -3130,12 +3133,28 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                     data-active={aiOpen || undefined}
                     aria-expanded={aiOpen}
                     title="AI 问答：基于本会话聊天记录提问，回答附原文出处"
-                    onClick={() => { setAiOpen(v => !v) }}
+                    onClick={() => { setAiOpen(v => !v); setSuggestOpen(false) }}
                   >
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
                     </svg>
                     <span className={css.calBtnLabel}>AI 问答</span>
+                  </button>
+                )}
+                {/* 推荐回复：只给单聊（群聊里「回一句」的语义不成立）。 */}
+                {curSession.type === 'private' && (
+                  <button
+                    type="button"
+                    className={css.calBtn}
+                    data-active={suggestOpen || undefined}
+                    aria-expanded={suggestOpen}
+                    title="推荐回复：按这段对话（可结合当前知识库）生成 3 条候选回复"
+                    onClick={() => { setSuggestOpen(v => !v); setAiOpen(false) }}
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 17H7a4 4 0 0 1 0-8h10a4 4 0 0 1 0 8h-2" /><path d="m12 12 3 3-3 3" />
+                    </svg>
+                    <span className={css.calBtnLabel}>推荐回复</span>
                   </button>
                 )}
                 <button type="button" className={css.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={css.calBtnLabel}>日历</span></button>
@@ -3741,6 +3760,11 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
       {/* 会话级 AI 面板（「新对话」）：.panel 的第三栏，与消息流并排。
           仅单聊/群聊给入口；读取范围固定为当前会话，检索仍走同一条 RAG 流水线。 */}
+      {/* 推荐回复：同样是 .panel 的第三栏；读取范围=当前会话 + 当前选中的知识库。 */}
+      {suggestOpen && curSession !== null && curSession.type === 'private' && (
+        <ReplySuggest target={curSession} onClose={() => { setSuggestOpen(false) }} />
+      )}
+
       {aiOpen && aiEligible && aiTarget && (
         <SessionAsk
           target={aiTarget}

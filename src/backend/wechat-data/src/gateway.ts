@@ -14,6 +14,7 @@ import { queryPaymentStatus } from './query/payments.ts'
 import { queryContacts } from './query/contacts.ts'
 import { queryRegionMap } from './query/region-map.ts'
 import { queryMessageByServerId, queryMessages, queryNewMessages } from './query/messages.ts'
+import { buildReplyPrompt, collectReplyContext, collectReplyKbSnippets, parseReplyCandidates } from './query/reply-suggest.ts'
 import { queryMoments, queryMomentsAuthors } from './query/moments.ts'
 import { deleteFavoriteItems, queryFavorites } from './query/favorites.ts'
 import { queryFiles } from './query/files.ts'
@@ -95,6 +96,7 @@ import { formatEvalReport } from './query/retrieval/eval.ts'
 import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'
 import { createBackup as createBackupEntry, deleteBackup as deleteBackupEntry, listBackups as listBackupEntries, previewBackup as previewBackupEntry } from './query/backup.ts'
 import { collectDayMessages, collectPeriodMessages } from './query/daily-summary.ts'
+import type { ReplySuggestResult } from './types.ts'
 import { queryLedger } from './query/ledger.ts'
 import { queryContact360 } from './query/contact360.ts'
 import { queryDbHealth } from './query/db-health.ts'
@@ -3594,6 +3596,68 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     const done = status === 'done'
     this.op('task', 'run_summary_task', done ? 'ok' : 'fail', task.groupUsername, errMsg || `共 ${count} 条消息`)
     return done ? { ok: true, summary, messageCount: count } : { ok: false, error: errMsg || '生成失败' }
+  }
+
+  /**
+   * 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。
+   *
+   * 与问答的区别是**不检索全库**：上下文只取这个会话最近若干条，知识库片段也只在用户
+   * 显式选了库时才取。会话级功能不该把别处的聊天悄悄端上来 —— 这正是「单聊里冒出别人
+   * 消息」那类报障的教训。
+   *
+   * 出站顺序与当日总结一致：**拦截优先于「模型不可用」**，否则用户开了「禁止 AI 出网」
+   * 却只看到一句「模型不可用」，会以为是配置问题而不是隐私设置生效。
+   * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
+   * @returns 候选回复；被拦下或模型不可用时 `ok=false` 且 `error` 说明原因。
+   */
+  @Remote('suggestReplies')
+  async suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<ReplySuggestResult> {
+    const talker = String(options.username ?? '').trim()
+    if (talker === '') return { ok: false, error: '缺少会话' }
+    const want = Math.max(1, Math.min(Math.trunc(options.count ?? 3), 5))
+    const { lines, latestPeer, count } = collectReplyContext(this._dirs.decrypted, talker, this.selfUsername())
+    if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
+    const kbId = Math.trunc(Number(options.kbId ?? 0))
+    const snippets = kbId > 0
+      ? collectReplyKbSnippets(this._dirs.decrypted, kbId, latestPeer || lines[lines.length - 1] || '', 3)
+      : []
+    const blocked = this.privacyBlocked('suggest_reply')
+    if (blocked !== null) return { ok: false, error: blocked }
+    const llm = this._ctx.llm
+    const defaultModel = (this._ctx as unknown as {
+      agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
+    }).agentDefaultModel
+    const sel = defaultModel?.currentSelection()
+    if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
+    const prompt = buildReplyPrompt(lines, snippets, want)
+    const gate = this.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
+    if (!gate.ok) return { ok: false, error: gate.error }
+    const userMsg = createUserMessage({
+      content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+      source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+    })
+    const assembler = new BlockAssembler()
+    const opts: GenerateOptions = {
+      provider: sel.provider, model: sel.model, messages: [userMsg],
+      system: '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。',
+    }
+    try {
+      for await (const chunk of llm.stream(opts)) assembler.push(chunk)
+    } catch (e) {
+      this.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
+      return { ok: false, error: (e as Error).message }
+    }
+    const raw = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+    const replies = parseReplyCandidates(raw, want)
+    if (replies.length === 0) {
+      this.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
+      return { ok: false, error: '模型没给出可用的候选回复' }
+    }
+    this.op('task', 'suggest_replies', 'ok', talker, `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`)
+    const base: ReplySuggestResult = { ok: true, replies, messageCount: count, kbSnippetCount: snippets.length }
+    return snippets.length === 0 && kbId > 0
+      ? { ...base, degraded: '知识库里没有相关内容，这次只用了会话上下文' }
+      : base
   }
 
   /**
