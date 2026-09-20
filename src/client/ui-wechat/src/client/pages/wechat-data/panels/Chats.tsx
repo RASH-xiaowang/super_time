@@ -1766,7 +1766,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const sessionEpochRef = useRef(0)
   /** 当前 `messages` 所属的 talker；与 sessionEpochRef 同步更新。 */
   const messagesTalkerRef = useRef<string | null>(null)
-  const sessionsReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** ── 会话级 AI 面板（「新对话」）──
    *  入口在聊天头部；面板作为第三栏并排。读取范围**恒为当前会话**，线程按会话隔离。 */
   const [aiOpen, setAiOpen] = useState(false)
@@ -2109,15 +2108,16 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     },
   })
 
+  /**
+   * 刷新会话列表（动作后 / 由调用方显式触发）。
+   *
+   * 用 `refresh()` 而不是 `reset()`：`reset()` 会同步清空列表 → 闪骨架屏 → 内容高度
+   * 塌陷把 `scrollTop` 钳到 0（见 `load-page-range.ts` 头部的实测记录）。
+   * 筛选/分类真的变了才该回顶部，那条路径单独用 `reset()`。
+   */
   const reloadSessionsList = useCallback((): void => {
-    sessionsPager.reset()
-  }, [sessionsPager.reset])
-
-  /** Coalesce host-push session refreshes; user actions still refresh inline. */
-  const queueReloadSessions = useCallback((): void => {
-    if (sessionsReloadTimerRef.current !== null) clearTimeout(sessionsReloadTimerRef.current)
-    sessionsReloadTimerRef.current = setTimeout(() => { reloadSessionsList() }, 500)
-  }, [reloadSessionsList])
+    sessionsPager.refresh()
+  }, [sessionsPager.refresh])
 
   /** Clear the current session's draft (only the local decrypted copy). */
   const clearDraft = useCallback(async (): Promise<void> => {
@@ -2633,15 +2633,13 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     const onUpdated = (): void => {
       void pollNew()
       void reconcileRecent()
-      queueReloadSessions()
+      // 会话列表**不在这里刷**：`usePagedList` 内部已订阅同一事件并做非破坏性 refresh，
+      // 这里再刷一次只会重复取数；而原先这里走的是 `reset()`，每约 10 秒把列表清空重画，
+      // 表现就是「有新消息时会话列表跳动一次」。
     }
     window.addEventListener('dsh-wechat-data-updated', onUpdated)
     return () => { window.removeEventListener('dsh-wechat-data-updated', onUpdated) }
-  }, [pollNew, reconcileRecent, queueReloadSessions])
-
-  useEffect(() => () => {
-    if (sessionsReloadTimerRef.current !== null) clearTimeout(sessionsReloadTimerRef.current)
-  }, [])
+  }, [pollNew, reconcileRecent])
 
   const openGroupInfo = (): void => {
     if (!curSession) return
