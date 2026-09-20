@@ -184,6 +184,15 @@ const METHOD_FEATURE = {
   // 只买了数据浏览没买 AI 授权的人反而能调它出网（`authorizeCall` 的默认分支）。
   extractKbEntities: 'ai-summary',
   suggestKbLinks: 'ai-summary',
+  // 建索引与语义检索：三者都把正文/查询交给向量模型，且都是「不可读的中间态」——
+  // 索引本身不给用户看，产出只服务于检索。故归 ai-ask 而不是 ai-summary：
+  // 放进 ai-summary 会让「只买摘要档」的授权建得出索引、却用不了检索，
+  // 而关掉 ai-ask 也停不掉这三处的出网。
+  buildKbVectorIndex: 'ai-ask',
+  buildRagVectorIndex: 'ai-ask',
+  searchKb: 'ai-ask',
+  // 周期总结任务：与 generateDailySummary / generatePeriodSummary 同档。
+  runSummaryTask: 'ai-summary',
   exportSessionMessages: 'export',
   exportCsv: 'export',
   exportAnnualReport: 'export',
