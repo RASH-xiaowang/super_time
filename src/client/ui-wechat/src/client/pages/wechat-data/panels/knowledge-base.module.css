@@ -1,0 +1,289 @@
+/*
+ * 知识库（书架视图）—— NEON MATRIX 科技风，与其余面板共用 --nm-* 令牌与
+ * --nm-dense-* 紧凑档，因此不需要任何新色值。
+ *
+ * 布局是**主从两栏**（左列表 / 右详情）。两栏的换行判据用**容器查询**而不是
+ * 窗口媒体查询：侧栏折叠 / 展开会改变本面板的可用宽度，而**窗口尺寸不变** ——
+ * 媒体查询在这种情况下不会触发，两栏会被压成两条细缝（左栏 240px 的下限尤其致命）。
+ * 容器查询看的是面板自身的内联尺寸，两种折叠状态都能正确退化。
+ */
+
+/* 吸顶骨架：kit 的 .panelShell 自己就是滚动容器（overflow-y:auto），这里把它关掉，
+   改成「页头 + 工具栏固定、下面的主从两栏自己滚」。
+   ⚠ 用 `.shell.shell` 双类名提权，不是随手写重：kit 的 .panelShell 与本类都是单类选择器，
+   同特异度下**谁在打包顺序后面谁赢**（仓库里已有多处踩过）。双类名把特异度抬到 0-2-0，
+   与注入顺序解耦。 */
+.shell.shell {
+  overflow: hidden;
+}
+
+.head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g3);
+}
+
+/* 承接容器查询的包裹层：容器查询只能作用于**容器的后代**，
+   所以不能把 container-type 加在 .body 上再查 .body 自己。
+   它同时是本面板的滚动区（页头与提示条在它外面，不跟着滚走）。 */
+.bodyWrap {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  container-type: inline-size;
+  container-name: kb;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: var(--nm-dense-g5);
+  /* 两栏**至少铺满滚动区**，内容由它自己往下顶（顶出去了就整块滚）。
+     原来是 `align-items: start` —— 卡片按内容收缩，读一份 142 字的配置时屏幕下半截
+     是一整片死空白（真机实测约 36%）。
+     没有改成「两栏各自内部滚动」：那个模型下 .report / .results 这类兄弟块会把
+     主从区挤到零高，长回执直接看不见也滚不到；铺满 + 整块滚没有这个失败模式。 */
+  align-items: stretch;
+  min-height: 100%;
+  min-width: 0;
+}
+
+.listPane { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
+.detailPane { min-width: 0; }
+
+/* 列表为空（库空 / 过滤无结果）时只保留**一个**空态：左栏跨满两格、右栏整块隐藏。
+   否则同一件「没有条目」会被左右两栏各说一遍（实测截图：左「知识库还是空的」+
+   右「左侧还没有条目」）；更要紧的是右栏那句「在右上角的搜索框里换个关键词」
+   在**库为空**时是错的方向 —— 一条笔记都没有，没有东西可搜。
+   判据是 visible.length 而不是 notes.length：搜索/标签过滤到空结果时同样要收成一栏。 */
+/* ⚠️ 用 className 组合而不是 data-* 属性：kit 的 Card 只接受
+   title/extra/footer/children/flush/className，不透传额外 props 到 DOM，
+   写 data-empty 会被静默丢掉（且 typecheck 不报），只有运行期才看得出来。 */
+.listPaneWide {
+  grid-column: 1 / -1;
+}
+
+.detailPaneHidden {
+  display: none;
+}
+
+/* ── 工具栏：搜索 + 标签筛选条 ───────────────────────────────── */
+/* 搜索框尺寸不在这里改：SearchInput 自带 `.searchBox { min-width: 220px;
+   flex: 0 1 320px }`，而两个 module 都是单类选择器 —— 谁在后面谁生效，
+   顺序由打包时的 CSS 注入次序决定，不由 class 属性里的先后决定。
+   写在这里大概率是**死代码**（仓库里其余面板也都直接用默认值），故不重复声明。 */
+
+.tagBar {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 标签多时**横向滚动**而不是换行：换行会把工具栏顶成两三行，
+     下面的列表整体下移，点标签时列表会跟着跳。 */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.tagChip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* WCAG 2.2 SC 2.5.8 要求最小 24×24 的点击目标 */
+  min-height: 24px;
+  padding: 2px 9px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-2);
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.tagChip:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
+.tagChip[data-on] { color: var(--nm-cyan-text); border-color: var(--nm-cyan-20); background: var(--nm-cyan-10); }
+.tagChip:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.tagCount { font-size: var(--nm-dense-fs-xs); opacity: 0.75; }
+
+.meta { flex: 0 0 auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; }
+
+.notice {
+  font-size: 12px;
+  color: var(--nm-cyan);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+}
+
+/* ── 左：条目列表 ─────────────────────────────────────────────── */
+.list { display: flex; flex-direction: column; }
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--nm-dense-g1) var(--nm-dense-g3);
+  align-items: start;
+  width: 100%;
+  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x);
+  border: 0;
+  border-bottom: 1px solid var(--nm-border);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--nm-bg-hover); }
+.row[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-cyan); }
+.row:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+.rowMain { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g1); }
+.rowTitle {
+  font-size: var(--nm-dense-fs);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  line-height: var(--nm-dense-lh);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rowExcerpt {
+  font-size: var(--nm-dense-fs-sm);
+  line-height: var(--nm-dense-lh);
+  color: var(--nm-text-2);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rowSide { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: var(--nm-dense-g1); }
+.rowTime { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
+.rowTags { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g1); }
+
+/* ── 右：详情 ─────────────────────────────────────────────────── */
+.detail { display: flex; flex-direction: column; gap: var(--nm-dense-g4); min-width: 0; }
+
+.detailHead { display: flex; align-items: flex-start; gap: var(--nm-dense-g4); }
+.detailTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--nm-fs-lg);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--nm-text-1);
+  word-break: break-word;
+}
+.detailActions { flex: 0 0 auto; display: flex; gap: var(--nm-dense-g2); }
+
+.detailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-dense-g2) var(--nm-dense-g4);
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-2);
+}
+.detailTags { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g2); }
+
+.divider { height: 1px; background: var(--nm-border); }
+
+.sectionLabel {
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+/* 正文：保留换行（用户是手写的笔记），长串（URL/哈希）必须能断 */
+.text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--nm-dense-fs);
+  line-height: 1.72;
+  color: var(--nm-text-1);
+}
+.textEmpty { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
+
+/* 正文里的 [[链接]]：命中已有条目 = 实线胶囊；未命中 = 虚线（待补）。 */
+.wiki {
+  display: inline;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan-text);
+  font: inherit;
+  cursor: pointer;
+}
+.wiki:hover { background: var(--nm-cyan-20); text-decoration: underline; }
+.wiki:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.wikiStub {
+  display: inline;
+  padding: 0 4px;
+  border: 1px dashed color-mix(in srgb, var(--nm-warning) 45%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--nm-warning);
+  font: inherit;
+  cursor: pointer;
+}
+.wikiStub:hover { background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
+.wikiStub:focus-visible { outline: 2px solid var(--nm-warning); outline-offset: 1px; }
+
+/* 「待补」链接：虚线胶囊 + 警示色，与正文里的待补链接同一语义
+   （正文内是行内虚线，这里在链接清单里要跟实线胶囊并排，所以尺寸对齐 .tagChip）。 */
+.tagChip[data-stub='1'] {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--nm-warning) 45%, transparent);
+  background: transparent;
+  color: var(--nm-warning);
+}
+.tagChip[data-stub='1']:hover {
+  background: color-mix(in srgb, var(--nm-warning) 12%, transparent);
+  border-color: var(--nm-warning);
+  color: var(--nm-warning);
+}
+
+.linkList { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g2); }
+
+/* 来源（问答沉淀）那一行里的跳转按钮 */
+.linkBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--nm-cyan);
+  font-size: var(--nm-dense-fs-sm);
+  cursor: pointer;
+}
+.linkBtn:hover { text-decoration: underline; }
+
+/* ── 窄容器：两栏改纵向堆叠 ───────────────────────────────────
+   阈值 720px ≈ 左栏 240 + gap 10 + 详情 470：再窄下去详情里的正文
+   会掉到 40 字/行以下，标签与操作按钮也开始折行。 */
+@container kb (max-width: 720px) {
+  .body { grid-template-columns: minmax(0, 1fr); }
+  /* 堆叠成两行之后，宽屏那套「铺满滚动区」会把视口对半分给列表与详情 ——
+     这里要的是各行按内容长、整块往下滚，所以把行对齐退回 start、高度退回 auto。 */
+  .body { align-content: start; min-height: auto; }
+  /* 堆叠后列表在上、详情在下，长列表会把详情顶到屏幕外（用户点一条却看不到内容），
+     所以要给列表一个高度上限。
+     滚动容器必须落在 **.list 自己** 身上，不能给 .listPane：.listPane 用的是 kit 的
+     Card（`.card { overflow: hidden }`），在它上面写 max-height 只会把列表**裁掉** ——
+     下半截连滚动条都没有，滚都滚不到。max-height 与 overflow 必须是同一个元素。 */
+  .list { max-height: 38vh; overflow-y: auto; overscroll-behavior-y: contain; }
+}

@@ -73,6 +73,9 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
     <div className={kitCss.panelShell}>
       <PanelHeader title="周期总结" desc="按日期区间汇总聊天要点 · 复用每日总结链路（DSH LLM）" />
 
+      {/* 表单整块就是一行：区间（含预设）· 生成 · 复制 · 当前区间。
+          改前是纵向四行（预设 / 起止 / 按钮 / 当前区间）—— 一屏最上面那块白占约 110px，
+          而它们本来就都是短元素，一行放得下（放不下时 wrap，不必靠纵向堆叠兜底）。 */}
       <div className={css.formCard}>
         <DateRangeField
           from={from}
@@ -84,14 +87,13 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
           ariaLabel="周期总结区间"
           idFrom="period-from"
           idTo="period-to"
+          className={css.periodRange}
         />
-        <div className={css.row}>
-          <Button variant="pill" data-active="true" onClick={() => { void generate() }} disabled={loading}>
-            {loading ? '生成中…' : '生成总结'}
-          </Button>
-          <Button variant="pill" onClick={() => { void copyResult() }} disabled={!result}>复制结果</Button>
-        </div>
-        <div className={kitCss.textMeta}>当前区间：{rangeText}</div>
+        <Button variant="pill" data-active="true" onClick={() => { void generate() }} disabled={loading}>
+          {loading ? '生成中…' : '生成总结'}
+        </Button>
+        <Button variant="pill" onClick={() => { void copyResult() }} disabled={!result}>复制结果</Button>
+        <span className={css.rangeHint} title={rangeText}>当前区间：{rangeText}</span>
       </div>
 
       {notice && <div className={css.notice}>{notice}</div>}
@@ -128,19 +130,17 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
       {result && !loading && (
         <div className={css.resultCard}>
           <div className={css.cardTitle}>总结</div>
-          <div className={css.stats}>
+          {/* 统计 / 类型分布 / Top 会话**并成一行**（改前是三块各占一行）。
+              它们都是「几个字 + 数字」的短标签，一行放得下；窄屏才 wrap。 */}
+          <div className={css.metaRow}>
             <span className={`${kitCss.textMeta} ${css.stat}`}><b>{result.total.toLocaleString()}</b> 消息</span>
             <span className={`${kitCss.textMeta} ${css.stat}`}><b>{result.sessions}</b> 活跃会话</span>
             <span className={`${kitCss.textMeta} ${css.stat}`}><b>{result.messages}</b> 文本行</span>
+            {typesText && <span className={css.typesText} title={typesText}>{typesText}</span>}
+            {result.topSessions.slice(0, 5).map(s => (
+              <span key={s.username} className={css.topChip}>{s.username} · {s.count}</span>
+            ))}
           </div>
-          {typesText && <div className={css.types}>{typesText}</div>}
-          {result.topSessions.length > 0 && (
-            <div className={css.topSessions}>
-              {result.topSessions.slice(0, 5).map(s => (
-                <span key={s.username} className={css.topChip}>{s.username} · {s.count}</span>
-              ))}
-            </div>
-          )}
           <div className={css.summary}>{result.summary}</div>
         </div>
       )}

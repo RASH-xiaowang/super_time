@@ -16,6 +16,10 @@
 import Graph from 'graphology'
 import forceAtlas2, { type ForceAtlas2Settings } from 'graphology-layout-forceatlas2'
 import { DEFAULT_GRAPH_SETTINGS, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import { nodeRadius } from './graph-canvas.ts'
+// 作用域名（'social' / 'kb:<id>'）与 LRU 上限只有 `../kb-scope-keys.ts` 一处定义，
+// 这里**不手写** 'kb:' 前缀 —— 拼错不会抛错，只会静默用另一个键，也就是静默串库。
+import { DEFAULT_KB_ID, POSITION_SCOPES_MAX, SOCIAL_SCOPE, kbScope } from '../kb-scope-keys.ts'
 
 /** 画布坐标。与旧 ECharts 画布共用同一份 localStorage 形状（{id: {x, y}}）。 */
 export interface GridPos { x: number; y: number }
@@ -135,41 +139,134 @@ export function graphDataKey(graph: BuiltGraph, settings: GraphSettings): string
 }
 
 /**
- * 坐标持久化的 localStorage 键与数据形状 —— 与旧 ECharts 画布**完全一致**（dsh-graph-layout-v1，
- * Record<nodeId, {x,y}>）。换实现但沿用同一个键，用户已经调好的布局才不会丢。
+ * 坐标持久化的 localStorage 键与数据形状。
+ *
+ * v2（当前）：`Record<scope, Record<nodeId, {x,y}>>`，外加一个 `__lru` 字段记录最近写入顺序
+ * —— **一个作用域一份布局**。作用域是 `'social'` 或 `'kb:<id>'`（拼法只在
+ * `../kb-scope-keys.ts`，这里不手写）。
+ *
+ * 为什么必须分作用域：节点 id（`note:7` / `kb:项目组`）**不带库前缀**（刻意的，见设计稿 §4.4），
+ * 于是两库之间 id 是撞的 —— 共用一张扁平表时，甲库调好的形状会被当成乙库的初值，
+ * 切一次库互相污染一次，而画面上只表现为「形状有点像上一个库」。
  */
-const POSITION_KEY = 'dsh-graph-layout-v1'
+const POSITION_KEY = 'dsh-graph-layout-v2'
 
-/** 读上次落盘的布局；任何异常（隐私模式 / 值被写坏）都当成「没有历史布局」。 */
-export function loadSavedPositions(): Map<string, GridPos> {
-  const out = new Map<string, GridPos>()
-  try {
-    const raw = localStorage.getItem(POSITION_KEY)
-    if (!raw) return out
-    const parsed = JSON.parse(raw) as Record<string, GridPos>
-    for (const [id, pos] of Object.entries(parsed)) {
-      // 只认得下有限数：坏掉的坐标会把整张图带进 NaN，宁可丢掉这一条
-      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) out.set(id, { x: pos.x, y: pos.y })
-    }
-  } catch {
-    /* localStorage 不可用：布局只是增强，没有它照样能画 */
+/**
+ * v1 键（旧形状：扁平 `Record<nodeId, {x,y}>`，社交图谱与知识图谱共用一张表）。
+ *
+ * **只读**，且只在 v2 里没有该作用域时读（见 `loadSavedPositions`）。保留它的理由：
+ * 那是用户上一次调好的形状，删掉等于让老用户的所有布局重来一遍；而回退是只读的，
+ * 不占额外空间。不把它摊进每个作用域的理由见 `loadSavedPositions`。
+ */
+const POSITION_KEY_V1 = 'dsh-graph-layout-v1'
+
+/** v2 文件里记录 LRU 顺序的保留字段（作用域名不可能取这个名字：要么 'social'，要么 'kb:<id>'）。 */
+const LRU_FIELD = '__lru'
+
+/** 作用域 → 坐标表。 */
+type ScopeTables = Record<string, Record<string, GridPos>>
+
+/**
+ * 一张坐标表：丢掉认不出的条目。
+ * 只认得下有限数 —— 坏掉的坐标会把整张图带进 NaN，宁可少一条。
+ */
+function sanitizeTable(raw: unknown): Record<string, GridPos> {
+  const out: Record<string, GridPos> = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    const pos = value as Partial<GridPos> | null
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) out[id] = { x: pos.x as number, y: pos.y as number }
   }
   return out
 }
 
+/** 读一张扁平表（v1 的形状）。任何异常都当成「没有历史布局」。 */
+function readFlat(key: string): Record<string, GridPos> {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? sanitizeTable(JSON.parse(raw)) : {}
+  } catch {
+    /* localStorage 不可用 / 值被写坏：布局只是增强，没有它照样能画 */
+    return {}
+  }
+}
+
+/** 读 v2 文件：坐标表 + LRU 顺序（`__lru` 里没列到的键按「最久未写」处理）。 */
+function readV2(): { tables: ScopeTables; order: string[] } {
+  const tables: ScopeTables = {}
+  let order: string[] = []
+  try {
+    const raw = localStorage.getItem(POSITION_KEY)
+    if (!raw) return { tables, order }
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { tables, order }
+    const lru = parsed[LRU_FIELD]
+    if (Array.isArray(lru)) order = lru.filter((s): s is string => typeof s === 'string')
+    for (const [scope, value] of Object.entries(parsed)) {
+      if (scope === LRU_FIELD) continue
+      // 空表也算「有」：`{scope: {}}` 是「这个作用域没有布局」的合法表达。
+      // 按「非空才算存在」处理的话，空表会在下次读取时**回退到 v1** —— 等于把别人的形状认回来。
+      tables[scope] = sanitizeTable(value)
+    }
+  } catch {
+    /* 读不到就当成「没有历史布局」 */
+  }
+  return { tables, order }
+}
+
 /**
- * 落盘布局。
+ * 读某个作用域上次落盘的布局。
+ *
+ * 顺序：v2 里命中该作用域 → 就是它；否则**只读回退**到 v1 的扁平表，且**仅限**
+ * `'social'` 与默认库 —— v1 时代只存在过这两个作用域（知识库那时只有一个，社交图谱只有一张），
+ * 别的库去读 v1 等于把别人的形状认成自己的。回退**不写入** v2：
+ * 下一次落盘（`savePositions`）会自然把它升级成 v2 里的一条。
+ *
+ * 为什么不把 v1 一次性摊进每个作用域：v1 里混着社交与知识**两套**坐标（靠节点 id 不重叠
+ * 才没打架），按库复制就是 6000 条 × N 个库，直接撞 localStorage 配额；而回退读只在首次生效，
+ * 代价为零。
+ * @param scope - 作用域名（`'social'` 或 `'kb:<id>'`）。
+ * @returns 该作用域的坐标（没有就是空表）。
+ */
+export function loadSavedPositions(scope: string): Map<string, GridPos> {
+  const { tables } = readV2()
+  const hit = tables[scope]
+  const fallback = scope === SOCIAL_SCOPE || scope === kbScope(DEFAULT_KB_ID)
+  const table = hit ?? (fallback ? readFlat(POSITION_KEY_V1) : {})
+  const out = new Map<string, GridPos>()
+  for (const [id, pos] of Object.entries(table)) out.set(id, { x: pos.x, y: pos.y })
+  return out
+}
+
+/**
+ * 落盘某个作用域的布局：`v2[scope] = pos`，并把该作用域移到 LRU 首位。
+ *
+ * 上限 `POSITION_SCOPES_MAX`：总占用是「单图上限 × 作用域数」，而渲染进程的 localStorage 里
+ * 还住着消息缓存 —— 真机实测过它会被占满、`setItem` 抛 `QuotaExceededError`。
+ * 超出按「最久未写」淘汰：代价只是那个库下次进入重新布局（笔记在主库，不在 localStorage）。
+ * 顺序写进文件里（`__lru`）而不是靠对象键序：本文件的读-改-写要跨会话保持「谁最新」，
+ * 而键序是隐式的、且会被「先写哪个字段」这种无关改动带偏。
  *
  * 失败（配额满 / 隐私模式）不抛：这只影响「下次进入是否原地恢复」。
- * 但**不能连日志都不留**：真机实测过渲染进程的 localStorage 被消息缓存占满后
- * `setItem` 会抛 `QuotaExceededError`，静默吞掉的表现是「布局怎么调都恢复不了」——
+ * 但**不能连日志都不留**：静默吞掉的表现是「布局怎么调都恢复不了」——
  * 用户和排查者都拿不到任何线索（调用方 `GraphCanvas` 那边看起来一切正常）。
  * 因此这里保留降级语义，但把失败打出来，并且**只打第一次**避免刷屏。
+ * @param scope - 作用域名。
+ * @param pos - 该作用域的坐标（画布已取整、已按条数封顶）。
  */
 let quotaWarned = false
-export function savePositions(pos: Map<string, GridPos>): void {
+export function savePositions(scope: string, pos: ReadonlyMap<string, GridPos>): void {
+  const { tables, order } = readV2()
+  tables[scope] = sanitizeTable(Object.fromEntries(pos))
+  // 本次写的排首位；文件里记过顺序的按记录先后；旧文件没记过 LRU 的接在后面（当最久未写）。
+  const known = order.filter(s => s !== scope && s in tables)
+  const rest = Object.keys(tables).filter(s => s !== scope && !known.includes(s))
+  const kept = [scope, ...known, ...rest].slice(0, Math.max(1, POSITION_SCOPES_MAX))
+  // 重建整个文件：被淘汰的作用域在这里真正消失（读-改-写，而不是往旧 JSON 上打补丁）
+  const next: Record<string, unknown> = { [LRU_FIELD]: kept }
+  for (const s of kept) next[s] = tables[s]
   try {
-    localStorage.setItem(POSITION_KEY, JSON.stringify(Object.fromEntries(pos)))
+    localStorage.setItem(POSITION_KEY, JSON.stringify(next))
   } catch (error) {
     if (!quotaWarned) {
       quotaWarned = true
@@ -226,6 +323,90 @@ function initialPositions(nodes: readonly GNode[], saved?: Map<string, GridPos>)
 function layoutWeight(weight: number): number {
   const w = Number.isFinite(weight) && weight > 0 ? weight : 1
   return Math.min(4, 1 + Math.log2(1 + w) / 3)
+}
+
+/** 单独展示区的列数上限（超过就换行，免得排成一条看不到头的长队）。 */
+const ISOLATED_MAX_COLS = 12
+/** 相邻槽位在「相切」之上再留的空隙（px）。 */
+const ISOLATED_GUTTER = 6
+/** 单独展示区与主簇之间的空档（按槽距的倍数）——够看出「这是另一区」，又不至于把画面撑开。 */
+const ISOLATED_STRIP_GAP = 1.6
+
+/**
+ * 「一条边都没有」的节点 → 排在主簇下方的**单独展示区**（确定性网格，不参与力导向）。
+ *
+ * 为什么要单独安置，而不是让它们留在力导向里：
+ *   力导向对无边节点的作用是**纯斥力 + 向心力**，两者的平衡点由缩放比与节点数决定 ——
+ *   它们会被甩到离主簇很远的地方，彼此之间又没有任何约束，于是散成一片稀疏的点。
+ *   代价是双重的：① 画面出现「一大片空白」；② `fitCamera` 按包围盒取景，**几个散点就能把
+ *   整个取景框撑大**，主簇被缩成中间一小团（这才是「不紧凑」的主要来源）。
+ *
+ * 放进网格区之后：
+ *   - 主簇只由**有结构的节点**决定形状，包围盒不再被无意义的散点撑大；
+ *   - 无边节点仍然全部可见、可点、可选中（它们只是没有线，不是不该出现）；
+ *   - 位置只由「节点半径 + nodeGap + 主簇包围盒」决定，**与六个力度滑杆无关** ——
+ *     调力度不会让它们重新到处乱跑（「除外/单独展示的节点不受紧凑布局影响」）；
+ *   - 槽距按最大半径算，所以彼此**不可能重叠**。
+ *
+ * 为什么用「网格区」而不是「环绕主簇的环」：环的半径得取主簇最远点，真实数据里最远点常常
+ * 是 p50 的两倍多（好友网络 832 vs 357），环会被推到很远、自己造出一圈新的空白；
+ * 网格区贴着主簇下沿铺开，包围盒只增加「槽距 × 行数」。
+ * @param isolated - 无边节点（按图的节点顺序，决定网格里的先后）。
+ * @param radiusOf - 取渲染半径（与画布同一口径）。
+ * @param placed - 已经定好位的主簇坐标（用它算包围盒；空表表示主簇为空）。
+ * @param nodeGap - 节点间距滑杆（间距是「疏密」参数，跟着它放大是正确的；力度滑杆不影响这里）。
+ * @returns 这些节点的坐标。
+ */
+export function isolatedStripPositions(
+  isolated: readonly GNode[],
+  radiusOf: (node: GNode) => number,
+  placed: ReadonlyMap<string, GridPos>,
+  nodeGap: number,
+): Map<string, GridPos> {
+  const out = new Map<string, GridPos>()
+  if (isolated.length === 0) return out
+  let maxR = 1
+  for (const n of isolated) maxR = Math.max(maxR, radiusOf(n))
+  const pitch = maxR * 2 * Math.max(1, nodeGap) + ISOLATED_GUTTER
+
+  let minX = 0
+  let maxY = 0
+  let hasBounds = false
+  let cx = 0
+  for (const p of placed.values()) {
+    if (!hasBounds) {
+      minX = p.x
+      maxY = p.y
+      cx = p.x
+      hasBounds = true
+    } else {
+      if (p.x < minX) minX = p.x
+      if (p.y > maxY) maxY = p.y
+      cx += p.x
+    }
+  }
+  if (hasBounds) cx /= Math.max(1, placed.size)
+  const cols = Math.max(1, Math.min(ISOLATED_MAX_COLS, Math.ceil(Math.sqrt(isolated.length))))
+  const startY = (hasBounds ? maxY : 0) + pitch * ISOLATED_STRIP_GAP
+  // 横向以主簇中心对齐：整块看起来是「主图的附属条」，而不是贴到左边去的一块
+  const startX = (hasBounds ? cx : 0) - ((cols - 1) * pitch) / 2
+  isolated.forEach((node, i) => {
+    const col = i % cols
+    const row = Math.floor(i / cols)
+    out.set(node.id, { x: startX + col * pitch, y: startY + row * pitch })
+  })
+  return out
+}
+
+/** 每个节点的度数（只数一次，供「有结构 / 无结构」分组复用）。 */
+function degreeOf(graph: BuiltGraph): Map<string, number> {
+  const deg = new Map<string, number>()
+  for (const n of graph.nodes) deg.set(n.id, 0)
+  for (const e of graph.edges) {
+    if (deg.has(e.source)) deg.set(e.source, (deg.get(e.source) ?? 0) + 1)
+    if (deg.has(e.target)) deg.set(e.target, (deg.get(e.target) ?? 0) + 1)
+  }
+  return deg
 }
 
 /** 布局任务：只带坐标与边表（结构化克隆友好，不向 Worker 传整张图与节点详情）。 */
@@ -396,33 +577,47 @@ async function computeLayout(
   key: string,
 ): Promise<LayoutOutcome> {
   const startedAt = nowMs()
-  const nodes = input.graph.nodes
-  const init = initialPositions(nodes, input.saved)
-  if (nodes.length === 0) {
+  const all = input.graph.nodes
+  if (all.length === 0) {
     // 空图没有可收敛的东西；仍然登记缓存，免得空态里反复走进来
     return { result: { positions: new Map(), engine: 'main', elapsedMs: nowMs() - startedAt }, converged: true }
   }
+  // 无边节点不参与力导向（原因见 isolatedStripPositions）：它们没有弹簧可收敛，
+  // 留在仿真里只会被斥力甩远，白占包围盒。
+  const deg = degreeOf(input.graph)
+  const linked = all.filter(n => (deg.get(n.id) ?? 0) > 0)
+  const isolated = all.filter(n => (deg.get(n.id) ?? 0) === 0)
+  const init = initialPositions(linked, input.saved)
   const task: LayoutTask = {
     key,
-    nodes: nodes.map((n) => {
+    nodes: linked.map((n) => {
       const pos = init.get(n.id)
       return { id: n.id, x: pos?.x ?? 0, y: pos?.y ?? 0 }
     }),
     edges: input.graph.edges.map(e => ({ source: e.source, target: e.target, weight: layoutWeight(e.weight) })),
-    iterations: layoutIterations(nodes.length),
-    params: fa2Settings(input.settings, nodes.length),
+    iterations: layoutIterations(linked.length),
+    params: fa2Settings(input.settings, linked.length),
   }
-  if (nodes.length >= WORKER_NODE_THRESHOLD) {
+  const radiusOf = (n: GNode): number => nodeRadius(n, input.settings, all.length)
+  /** 主簇坐标 + 单独展示区，合成完整坐标表。 */
+  const withIsolated = (core: ReadonlyMap<string, GridPos>): Map<string, GridPos> => {
+    const out = new Map<string, GridPos>(core)
+    if (isolated.length === 0) return out
+    for (const [id, p] of isolatedStripPositions(isolated, radiusOf, core, input.settings.nodeGap)) out.set(id, p)
+    return out
+  }
+  if (linked.length >= WORKER_NODE_THRESHOLD) {
     try {
       const points = await runInWorker(task)
       return {
-        result: { positions: toPositions(points), engine: 'worker', elapsedMs: nowMs() - startedAt },
+        result: { positions: withIsolated(toPositions(points)), engine: 'worker', elapsedMs: nowMs() - startedAt },
         converged: true,
       }
     } catch (error) {
       if (error === ABORTED) {
+        // 取消也要带上单独展示区：否则这些节点没有坐标，画布既画不出也点不中
         return {
-          result: { positions: init, engine: 'main', elapsedMs: nowMs() - startedAt },
+          result: { positions: withIsolated(init), engine: 'main', elapsedMs: nowMs() - startedAt },
           converged: false,
         }
       }
@@ -430,7 +625,7 @@ async function computeLayout(
     }
   }
   return {
-    result: { positions: toPositions(assignLayout(task)), engine: 'main', elapsedMs: nowMs() - startedAt },
+    result: { positions: withIsolated(linked.length > 0 ? toPositions(assignLayout(task)) : new Map()), engine: 'main', elapsedMs: nowMs() - startedAt },
     converged: true,
   }
 }

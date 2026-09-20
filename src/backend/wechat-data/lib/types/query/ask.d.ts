@@ -1,19 +1,20 @@
+import type { AskCitation } from '../types.ts';
 /** Optional retrieval scope: one talker and/or an inclusive date range (YYYY-MM-DD). */
 export interface AskScope {
     username?: string;
     from?: string;
     to?: string;
 }
-/** One citation (source message) for an Ask answer. */
-export interface AskCitation {
-    name: string;
-    time: string;
-    snippet: string;
-    username: string;
-    local_id: number;
-    /** 群聊里这条消息的发送者显示名（单聊为空）。 */
-    sender?: string;
-}
+/**
+ * 一条引用（原文锚点）。
+ *
+ * **权威定义在 `types.ts`，这里只做转发**（本轮改）。此前本文件自己声明了一份
+ * 逐字相同的 `AskCitation`，两份定义靠人工保持同步 —— 加字段时漏掉其中一份
+ * 不会报错：`formatAskContext` 拿到的是本文件这份，于是新字段（如 `source`）
+ * 在渲染处永远是 `undefined`，表现为「知识库引用被当成聊天消息渲染」。
+ * `export type` 是纯类型转发，运行时零开销、不引入模块环。
+ */
+export type { AskCitation };
 /** 规划器给出的结构化检索线索。 */
 export interface AskHints {
     /** 关键词组（规划器已去停用词）。 */
@@ -70,6 +71,28 @@ export interface AskChunk {
      *  否则「最近一次转账」这类问题会在聚类后丢掉时间序（实测踩到过）。 */
     createTime: number;
 }
+/**
+ * 剥掉问题（或规划器关键词）里的时间表达。
+ * @param text - 归一化后的问题。
+ * @returns 只剩内容部分的文本。
+ */
+export declare function stripTimeExpr(text: string): string;
+/**
+ * 剥掉时间表达与泛问骨架后，还剩多少真正的「内容」。
+ * @param text - 归一化后的问题。
+ * @returns 剩余内容（空串 = 这个问题只是「某段时间里发生了什么」，没有可匹配的目标）。
+ */
+export declare function contentResidue(text: string): string;
+/**
+ * 词项是否**纯粹是时间表达**（剥离后不剩任何内容字符）。
+ *
+ * 最后一道兜底：万一规划器把「今天」直接当关键词塞进 subQueries，也要在这里挡掉 ——
+ * 它只会召回「正文里写着今天」的错日期消息。
+ * 与 `stripTimeExpr` / `contentResidue` 放在同一处，避免循环导入。
+ * @param term - 检索词。
+ * @returns true = 该词只承载时间语义，不应参与内容匹配。
+ */
+export declare function isTimeOnlyTerm(term: string): boolean;
 /** 问题是否在问「最近/最后一次」。 */
 export declare function hasRecencyIntent(question: string): boolean;
 /**
@@ -101,6 +124,9 @@ export declare function retrieveAskCitations(decryptedDir: string, question: str
  * 每个 [n] 是一个**对话窗口**而不是单条消息：窗口头给出会话、日期与命中时间点，
  * 下面按时间顺序列出这段对话（群聊带发言人）。模型因此能看到「谁问的、谁答的」，
  * 而不是一条孤立的「我没答应」。
+ *
+ * 知识库来源（`source === 'kb'`）走 `formatKbBlock` 的另一套渲染：
+ * 它没有会话/时间/发言人，套用消息格式只会产出模型无法理解的行。
  * @param citations - 已排序的引用（与 chunks 一一对应）。
  * @param meta - 意图 / 关键词 / 范围 / 时间线索，写进上下文头，便于模型判断证据是否充分。
  * @param chunks - 与 citations 对应的对话窗口；缺省时退化为逐条消息。

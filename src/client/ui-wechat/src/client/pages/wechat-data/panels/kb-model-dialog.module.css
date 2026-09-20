@@ -1,0 +1,143 @@
+/* 「本库模型」弹层的排版。
+   令牌一律走 theme 的 --nm-*（未定义的变量会让整条声明在计算值阶段失效，
+   这个 bug 类由 theme-tokens.spec.ts 守）。 */
+
+.lead {
+  margin: 0 0 14px;
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.7;
+  color: var(--nm-text-2);
+}
+
+.lead strong {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.loading {
+  padding: 12px 0;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-3);
+}
+
+/* 一行一个角色：左边输入，下面一行说「实际用的是哪个、从哪来」。 */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid var(--nm-border);
+}
+
+.rowHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+}
+
+.rowLabel {
+  font-size: var(--nm-dense-fs);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.rowHint {
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.rowBody {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+}
+
+.input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs-sm);
+}
+
+.input:focus { border-color: var(--nm-cyan); }
+.input::placeholder { color: var(--nm-text-3); }
+
+/* 「实际使用」这一行是这块的重点：引用串与生效值必须同时看得见。
+   本库指定时染成青色，继承全局时保持灰 —— 一眼能分开「跟着走」和「自己定」。 */
+.effective {
+  font-size: var(--nm-dense-fs-xs);
+  font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  color: var(--nm-text-3);
+  white-space: nowrap;
+}
+
+.effective[data-src='inline'] { color: var(--nm-cyan-text); }
+
+/* 索引状态块 */
+.indexBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  margin-top: 14px;
+  padding: var(--nm-dense-g3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+}
+
+.indexHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+.indexState {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--nm-warning-text);
+}
+
+.indexState[data-ready] { color: var(--nm-success-text); }
+
+.warn {
+  margin: 0;
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.7;
+  color: var(--nm-warning-text);
+}
+
+.warn strong { font-weight: 700; }
+
+.indexActions {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+}
+
+.muted {
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.notice {
+  margin-top: 12px;
+  padding: var(--nm-dense-g2) var(--nm-dense-g3);
+  border-radius: 8px;
+  background: var(--nm-success-15);
+  color: var(--nm-success-text);
+  font-size: var(--nm-dense-fs-sm);
+}

@@ -8,7 +8,7 @@ import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useLazySentinel, usePagedList, ListSentinel } from './hooks.tsx'
 import { apiClearOperationLog, apiGetOperationLog } from '../api.ts'
 import type { OperationCategory, OperationLogEntry, OperationLogQuery, OperationStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import css from './oplog.module.css'
@@ -69,14 +69,21 @@ export function OperationLogPanel(): React.JSX.Element {
   const [opSearch, setOpSearch] = useState('')
   const opScrollRef = useRef<HTMLDivElement | null>(null)
 
+  // 关键词现在由**服务端**过滤（后端原本只有时间 / 分类 / 状态三个条件）。
+  // 这是必须的：日志只能按「最新 N 条」取一页，本端过滤等于**只搜最新那一页**
+  // —— 实测 2144 条里只能搜到最新 500 条（覆盖率 23%），而按时间往回翻
+  // 恰恰是审计场景最常见的动作。
+  const opKw = useDebouncedValue(opSearch, 250).trim()
+
   const buildQuery = useCallback((offset: number, limit: number): OperationLogQuery => {
     const q: OperationLogQuery = { limit, offset }
     if (opFrom !== '') q.from = new Date(`${opFrom}T00:00:00`).getTime()
     if (opTo !== '') q.to = new Date(`${opTo}T23:59:59`).getTime()
     if (opCat !== '') q.categories = [opCat]
     if (opStatus !== '') q.status = opStatus
+    if (opKw !== '') q.q = opKw
     return q
-  }, [opFrom, opTo, opCat, opStatus])
+  }, [opFrom, opTo, opCat, opStatus, opKw])
 
   const pager = usePagedList<OperationLogEntry>({
     pageSize: 100,
@@ -86,48 +93,24 @@ export function OperationLogPanel(): React.JSX.Element {
     },
   })
 
-  const searching = opSearch.trim() !== ''
   useEffect(() => {
     setOpMsg(null)
-    if (searching) {
-      let cancelled = false
-      setOpLoading(true)
-      void apiGetOperationLog(buildQuery(0, 500))
-        .then((snap) => {
-          if (cancelled) return
-          setOpRows(snap.items)
-          setOpTotal(snap.total)
-        })
-        .catch((e: unknown) => { if (!cancelled) setOpMsg({ kind: 'err', text: '✗ 读取操作日志失败：' + (e as Error).message }) })
-        .finally(() => { if (!cancelled) setOpLoading(false) })
-      return () => { cancelled = true }
-    }
     pager.reset()
-    return undefined
-  }, [searching, buildQuery, pager.reset])
+  }, [buildQuery, pager.reset])
 
   useEffect(() => {
-    if (searching) return
     setOpRows(pager.items)
     setOpTotal(pager.total)
     setOpLoading(pager.loading)
     if (pager.error) setOpMsg({ kind: 'err', text: '✗ 读取操作日志失败：' + pager.error })
-  }, [searching, pager.items, pager.total, pager.loading, pager.error])
+  }, [pager.items, pager.total, pager.loading, pager.error])
 
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => opScrollRef.current)
 
   const refresh = useCallback((): void => {
     setOpMsg(null)
-    if (searching) {
-      setOpLoading(true)
-      void apiGetOperationLog(buildQuery(0, 500))
-        .then((snap) => { setOpRows(snap.items); setOpTotal(snap.total) })
-        .catch((e: unknown) => { setOpMsg({ kind: 'err', text: '✗ 读取操作日志失败：' + (e as Error).message }) })
-        .finally(() => { setOpLoading(false) })
-    } else {
-      pager.reset()
-    }
-  }, [searching, buildQuery, pager.reset])
+    pager.reset()
+  }, [pager.reset])
 
   const summary = useMemo(() => {
     let ok = 0; let fail = 0; let skip = 0
@@ -135,12 +118,9 @@ export function OperationLogPanel(): React.JSX.Element {
     return { ok, fail, skip }
   }, [opRows])
 
-  // client-side keyword filter on the loaded page (action / target / detail)
-  const rows = useMemo(() => {
-    const kw = opSearch.trim().toLowerCase()
-    if (!kw) return opRows
-    return opRows.filter(r => [r.action, r.target, r.detail].some(v => v.toLowerCase().includes(kw)))
-  }, [opRows, opSearch])
+  // 关键字已在服务端过滤（见 buildQuery 的 q）；这里刻意不再过滤一遍 ——
+  // 本端过滤只会作用在「已加载的那一页」上，是此前覆盖率只有 23% 的根因。
+  const rows = opRows
 
   const exportOpTxt = (): void => {
     const header = '微信数据面板 · 操作日志\n时间\t类型\t操作\t对象\t结果\t上下文\n'
@@ -307,7 +287,7 @@ export function OperationLogPanel(): React.JSX.Element {
           loading={opLoading && rows.length === 0}
           emptyTitle={opLoading ? '加载中…' : '暂无操作日志，点击「刷新」后分页显示'}
         />
-        {!searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
+        {pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </Card>
     </section>
   )

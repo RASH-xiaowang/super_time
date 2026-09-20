@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>知识图谱重设计方案 · 借鉴社交图谱设计理念</title>
+<style>
+  :root {
+    --bg: #070b16;
+    --bg-2: #0b1122;
+    --panel: #0e1526;
+    --panel-2: #121a2e;
+    --line: #1e2942;
+    --text: #e8eefc;
+    --text-2: #a8b6d4;
+    --text-3: #6f7f9e;
+    --cyan: #22d3ee;
+    --violet: #a78bfa;
+    --gold: #f6a23c;
+    --green: #36c08f;
+    --red: #ef6f6c;
+    --blue: #4f8cff;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 700px at 12% -8%, rgba(34,211,238,.13), transparent 62%),
+      radial-gradient(1000px 620px at 88% 4%, rgba(167,139,250,.13), transparent 60%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    font-size: 15px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 44px 22px 96px; }
+  header.hero { margin-bottom: 34px; }
+  .kicker {
+    display: inline-block; font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--cyan); border: 1px solid rgba(34,211,238,.35);
+    background: rgba(34,211,238,.07); padding: 3px 11px; border-radius: 999px; margin-bottom: 16px;
+  }
+  h1 {
+    font-size: clamp(25px, 4vw, 40px); line-height: 1.24; margin: 0 0 12px; font-weight: 800;
+    letter-spacing: -.01em;
+    background: linear-gradient(96deg, #ffffff 8%, var(--cyan) 52%, var(--violet) 96%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { color: var(--text-2); font-size: 15.5px; margin: 0; max-width: 78ch; }
+  .meta { color: var(--text-3); font-size: 12.5px; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+  nav.toc {
+    background: linear-gradient(180deg, rgba(18,26,46,.92), rgba(14,21,38,.92));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; margin: 26px 0 40px;
+  }
+  nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 30px; }
+  nav.toc li { margin: 3px 0; break-inside: avoid; }
+  nav.toc a { color: var(--text-2); text-decoration: none; font-size: 13.5px; }
+  nav.toc a:hover { color: var(--cyan); }
+
+  section { margin: 0 0 46px; scroll-margin-top: 18px; }
+  h2 {
+    font-size: 20px; margin: 0 0 6px; font-weight: 750; letter-spacing: -.005em;
+    display: flex; align-items: center; gap: 11px;
+  }
+  h2 .n {
+    font-size: 12px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(34,211,238,.4); background: rgba(34,211,238,.08);
+    width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto;
+  }
+  h3 { font-size: 15.5px; margin: 26px 0 8px; color: #fff; font-weight: 700; }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--text); font-weight: 700; }
+  .sub { color: var(--text-3); font-size: 13px; margin: 0 0 16px; }
+  p { margin: 9px 0; color: var(--text-2); }
+  p strong, li strong { color: #fff; font-weight: 650; }
+  ul, ol { padding-left: 22px; margin: 9px 0; }
+  li { margin: 5px 0; color: var(--text-2); }
+  ul.tight li { margin: 3px 0; }
+  code {
+    font-family: "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+    font-size: 12.5px; background: rgba(79,140,255,.13); color: #9dc0ff;
+    padding: 1.5px 6px; border-radius: 5px; white-space: nowrap;
+  }
+  a { color: var(--cyan); }
+
+  .card {
+    background: linear-gradient(180deg, rgba(18,26,46,.85), rgba(13,20,36,.85));
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin: 16px 0;
+  }
+  .card.accent { border-color: rgba(34,211,238,.3); box-shadow: 0 0 0 1px rgba(34,211,238,.06), 0 18px 46px -30px rgba(34,211,238,.5); }
+  .card.warn { border-color: rgba(246,162,60,.35); background: linear-gradient(180deg, rgba(46,33,14,.5), rgba(20,16,10,.5)); }
+  .card h4 { margin-top: 0; }
+  .card > :last-child { margin-bottom: 0; }
+
+  .tbl-wrap { overflow-x: auto; margin: 15px 0; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.2px; }
+  th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: rgba(34,211,238,.06); color: #fff; font-weight: 650; font-size: 12.5px; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(79,140,255,.05); }
+  td code { white-space: normal; }
+
+  .pill { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
+  .pill.obs { color: #7fe3c4; background: rgba(54,192,143,.13); border: 1px solid rgba(54,192,143,.34); }
+  .pill.inf { color: #ffd08a; background: rgba(246,162,60,.13); border: 1px solid rgba(246,162,60,.34); }
+  .pill.new { color: #9dc0ff; background: rgba(79,140,255,.14); border: 1px solid rgba(79,140,255,.36); }
+  .pill.reuse { color: var(--text-3); background: rgba(120,134,160,.12); border: 1px solid var(--line); }
+  .pill.del { color: #ffb0ae; background: rgba(239,111,108,.13); border: 1px solid rgba(239,111,108,.34); }
+
+  .grid { display: grid; gap: 14px; }
+  @media (min-width: 760px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .numcard { background: rgba(14,21,38,.7); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .numcard .t { font-size: 12.5px; color: var(--text-3); margin-bottom: 5px; }
+  .numcard .v { font-size: 14px; color: #fff; font-weight: 650; }
+  .numcard .d { font-size: 12.5px; color: var(--text-2); margin-top: 5px; }
+
+  .swatch { display: inline-block; width: 26px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 7px; }
+  .swatch.dashed { background: none; border-top: 3px dashed currentColor; height: 0; }
+  figure { margin: 20px 0; }
+  figcaption { font-size: 12.5px; color: var(--text-3); text-align: center; margin-top: 9px; }
+  svg { display: block; width: 100%; height: auto; }
+
+  .flow {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 12.3px; line-height: 1.72;
+    background: rgba(6,10,20,.72); border: 1px solid var(--line); border-radius: 12px;
+    padding: 15px 17px; overflow-x: auto; color: #b9c9e8; white-space: pre; margin: 15px 0;
+  }
+  .flow b { color: var(--cyan); font-weight: 600; }
+  .flow i { color: var(--gold); font-style: normal; }
+  .flow u { color: var(--violet); text-decoration: none; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 56px; padding-top: 18px; color: var(--text-3); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <span class="kicker">Design Proposal · v1</span>
+  <h1>知识图谱重设计：借鉴「社交图谱」的设计理念</h1>
+  <p class="lede">
+    把知识图谱从「引用的可视化」重构为「写作用的组织工具」：沿用社交图谱已经验证过的
+    六条设计机制 —— 连接强度决定位置与线宽、观测层与推断层分额度、社区检测出主题簇、
+    重要性决定半径、孤岛单独安置、额度建模与绘制共用一个真源 ——
+    把知识图谱的关系层从 <strong>1 层扩到 3 层</strong>，节点种类保持 2 类不变
+    <em>（本节写下时的口径；2026-09-19 文档实体层加入 <code>file:</code> 与 <code>doc:</code> 之后是 4 类，见「节点」一节顶部的取代说明）</em>。
+  </p>
+  <div class="meta">
+    范围：<code>GraphPanel variant="knowledge"</code> / <code>buildKnowledgeNetwork</code> / <code>GraphCanvas</code> 知识分支 ·
+    数据源：<code>wechat_notes.db</code> 的 <code>notes</code> 表 · 2026-09-18
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#s0">现状盘点：原有知识图谱是什么</a></li>
+    <li><a href="#s1">借鉴社交图谱的哪些核心特征</a></li>
+    <li><a href="#s2">目标用途</a></li>
+    <li><a href="#s3">节点与关系的定义范围</a></li>
+    <li><a href="#s4">层级与关联规则</a></li>
+    <li><a href="#s5">可视化与交互方式</a></li>
+    <li><a href="#s6">重设计后的整体结构</a></li>
+    <li><a href="#s7">关键设计要点</a></li>
+    <li><a href="#s8">与原有知识图谱的主要差异</a></li>
+    <li><a href="#s9">落地切口（分四步）</a></li>
+  </ol>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s0">
+  <h2><span class="n">0</span>现状盘点：原有知识图谱是什么</h2>
+  <p class="sub">先钉住事实，再说改什么 —— 下面每条都能在代码里指到出处。</p>
+
+  <div class="grid two">
+    <div class="numcard">
+      <div class="t">节点</div>
+      <div class="v">4 类</div>
+      <div class="d"><code>note:&lt;id&gt;</code>（笔记）与 <code>kb:&lt;归一化标题&gt;</code>（被 <code>[[…]]</code> 引用但还没写的「待补目标」）；2026-09-19 起另有 <code>file:&lt;id&gt;</code>（登记文件）与 <code>doc:&lt;章节&gt;</code>（跨文件归并的章节）</div>
+    </div>
+    <div class="numcard">
+      <div class="t">边</div>
+      <div class="v">1 类</div>
+      <div class="d">只有 <code>kind:'wiki'</code> —— 正文里的 <code>[[链接]]</code>。指向 stub 的那半边画虚线。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">权重</div>
+      <div class="v">只影响边长</div>
+      <div class="d">同一目标在正文出现几次 = 边权，但只喂给 <code>dist = 150/√w</code></div>
+    </div>
+    <div class="numcard">
+      <div class="t">社区检测</div>
+      <div class="v">常常是 0</div>
+      <div class="d">只喂 wiki 边，且成员数 &lt; 3 一律判 <code>-1</code> 中性灰 → 侧栏「圈子概览」基本是空的</div>
+    </div>
+  </div>
+
+  <h3>它已经有的（不用重建）</h3>
+  <ul class="tight">
+    <li><strong>与社交图谱同构的画布</strong>：<code>GraphCanvas</code> 按 <code>variant</code> 二选一，力导向（FA2 + Worker）、悬停高亮、点选详情、拖拽、滚轮缩放、适应视图、深度过滤、固定节点、搜索定位、圈子聚焦、SVG/PNG 导出 —— 全部已经共用。</li>
+    <li><strong>同构的数据契约</strong>：<code>buildKnowledgeNetwork</code> 产出的就是 <code>BuiltGraph</code>，画布无需区分数据来源。</li>
+    <li><strong>缺口显性化</strong>：stub 节点（虚线描边 + 半透明）已经能把「被引用却没写」暴露出来，点它就地成文。</li>
+  </ul>
+
+  <h3>它缺的（这才是要重设计的理由）</h3>
+  <div class="card warn">
+    <h4>七个真实缺口</h4>
+    <ol class="tight">
+      <li><strong>只有一种关系。</strong> 标签（<code>notes.tags</code>）是一等字段，却完全没进图。所以它画的是「引用网络」，不是「知识网络」——两篇同标签、明显同主题的笔记彼此毫无关系。</li>
+      <li><strong>没有强度。</strong> 边权只改边长，不改线宽、不进社区检测权重，也没有「枢纽」概念。看不出哪条关系更重要。</li>
+      <li><strong>没有层次。</strong> 所有节点同一平面。半径按连接度算，但没有结构性角色（主干 / 叶子 / 孤岛），读不出知识结构是树状还是网状。</li>
+      <li><strong>社区检测在稀疏图上失效。</strong> 笔记库普遍存在大量零连接笔记（<code>summary.orphanCount</code>），加上 <code>&lt;3 → -1</code> 的阈值，圈子数常年为 0 —— 用户看到的是「圈子的功能坏了」。</li>
+      <li><strong>孤岛被「排除」而不是被「接纳」。</strong> 它们被排到主簇下方的网格带里（复用 <code>isolatedStripPositions</code>），虽然可见可点，但没有任何回到网络的路径。</li>
+      <li><strong>缺口没有量化排序。</strong> <code>refCount</code> 就在数据里，但界面没有给出「最该先补哪 5 篇」。</li>
+      <li><strong>没有可执行的整理动作。</strong> 由图到行动只有三条缝：点开编辑、点 stub 建笔记、删除。没有「补一条链接」这件事。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s1">
+  <h2><span class="n">1</span>借鉴社交图谱的哪些核心特征</h2>
+  <p class="sub">不是抄观感，是抄这六条已经付出过代价的机制。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:20%">社交图谱的特征</th><th style="width:38%">它在社交侧的原始形态</th><th>知识图谱的对应物</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>① 枢纽引力</strong><br><span class="pill obs">原样迁移</span></td>
+          <td>「我」是全图唯一锚点：<code>intimacyPull</code> 让消息量越高离中心越近（<code>dist = 340 − t×260</code>，<code>strength = 0.02 + t×0.16</code>）。</td>
+          <td>锚点换成<strong>「当前焦点笔记」</strong>（选中的那篇，默认取最近编辑的一篇）。<code>[[链接]]</code> 距离设为 <code>150/√w</code>，与锚点越相关的笔记被拉得越近 —— 图自动围绕「我正在写的东西」展开。</td>
+        </tr>
+        <tr>
+          <td><strong>② 连接强度 → 距离 + 线宽</strong><br><span class="pill obs">原样迁移</span></td>
+          <td>消息量 → 亲密度 → 边长 / 线宽 / 弹簧松紧；布局前先做 <code>layoutWeight()</code> 的 log 压缩（把 1~数千压到 1~4），否则枢纽边会把所有人吸成一条线。</td>
+          <td>强度来自两处：<code>[[链接]]</code> 的<strong>共现次数</strong>与两篇笔记的<strong>共同标签数</strong>。共用同一套 log 压缩与 <code>dist</code> 公式 —— 这是「强度」在图上有三层表达（距离、线宽、拉紧程度）的完整形态。</td>
+        </tr>
+        <tr>
+          <td><strong>③ 观测层 / 推断层分额度</strong><br><span class="pill obs">核心迁移</span></td>
+          <td>「真实观测到的关系」（亲密度 / 共同群）有多少画多少；「推断出来的关系」（同备注编号 / 首字相同）必须先用 <code>edgeHeadroom()</code> 问「还剩几条」再生长，且固定画虚线。血泪证据：混在一起夹额度时，推断层会把 <strong>245 条真实观测边挤掉</strong>。</td>
+          <td><strong>这是最值得抄的一条。</strong> 知识侧：观测层 = <code>[[链接]]</code> + 共同标签；推断层 = 标题同前缀。<strong>推断层永远不挤观测层</strong>，且推断边必须是虚线 + 带一个「接受」动作。</td>
+        </tr>
+        <tr>
+          <td><strong>④ 社区结构 → 主题簇</strong><br><span class="pill obs">原样迁移</span></td>
+          <td>加权 Louvain（<code>detectCommunities</code>），圈子决定颜色；<code>communitySeparation</code> 让圈与圈之间留白；侧栏「圈子概览」按成员数列出，支持点击聚焦、悬停预览。</td>
+          <td>同一个函数，换个输入：<strong>跑在 <code>wiki + 共标签</code> 上</strong>（原实现只喂稀疏的 wiki，所以出不来圈子）。圈的语义更可读 —— 它就是「主题簇」，概览里显示簇内高频标签而非人名。</td>
+        </tr>
+        <tr>
+          <td><strong>⑤ 重要性 → 半径</strong><br><span class="pill obs">原样迁移</span></td>
+          <td><code>radiusByIntimacy</code>：指数饱和曲线（<code>1 − e^(−w/200)</code>），区间 5–34，保证「消息量差异肉眼可辨」。</td>
+          <td>同一条饱和手感的 <code>radiusBySqrt</code>，输入换成<strong>加权连接度</strong>（反链权重高于出链 —— 被引用比引用别人更「中心」）。区间保持 16–46：这一档是实测定过的，太小会被画布的 8px 下限压平，链接数不同的笔记会长得一样大。</td>
+        </tr>
+        <tr>
+          <td><strong>⑥ 孤岛单独安置</strong><br><span class="pill obs">迁移 + 强化</span></td>
+          <td><code>isolatedStripPositions</code>：度 0 的节点不参与力导向，按确定性网格排在主簇下方，位置只由半径 + <code>nodeGap</code> 决定 —— 调力度滑杆不会让它们乱跑，包围盒也不会被散点撑大。</td>
+          <td>升级为<strong>「收件箱区」</strong>：孤岛不是废料，是待整理队列。网格区旁给「建议关联 Top 3」（从推断候选里取分数最高三条），一键接回网络。</td>
+        </tr>
+        <tr>
+          <td><strong>⑦ 额度单一真源</strong><br><span class="pill obs">工程纪律</span></td>
+          <td>额度只在 <code>graph-budget.ts</code>，建模层与绘制层<strong>都必须 import</strong>；任一侧自写整数就退化成「模型里有边、图上没画」——这个缺陷被真机审计量化过两次。</td>
+          <td>新增的共标签层是 O(标签大小²) 增长（一个热门标签挂 100 篇 → 4950 对候选），<strong>必须走同一套 <code>edgeBudget</code> / <code>edgeHeadroom</code></strong>。这是抄纪律，不是抄观感。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>为什么「共同标签」不建标签节点</h3>
+  <p>
+    一个自然的想法是把标签也画成节点（笔记 ↔ 标签二分图）。这里明确<strong>不采用</strong>，理由三条：
+  </p>
+  <ul class="tight">
+    <li><strong>会破坏半径语义。</strong> 标签节点的度远大于任何笔记（一个标签挂几十篇），力导向会把同标签笔记拉成一个<strong>以标签为中心的星形</strong>——「半径 = 笔记重要性」立刻失效，笔记全变叶子。</li>
+    <li><strong>与社交图谱不同构。</strong> 社交图谱里人—群之间<strong>也没有画边</strong>：共同群是<strong>人与人</strong>之间的边。照这个口径，共同标签就该是<strong>笔记与笔记</strong>之间的边。同构才能复用额度、社区检测、圈子概览这一整套。</li>
+    <li><strong>入口本来就存在。</strong> 「点标签看全部同标签笔记」是<strong>笔记库（KnowledgeBase）</strong>列表视图的职责，图谱不必再给一次。两种视图分工：「图谱看结构，列表看清单」。</li>
+  </ul>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s2">
+  <h2><span class="n">2</span>目标用途</h2>
+  <p class="sub">从「我写了什么」变成「我的知识长什么样、下一步该写什么」。</p>
+
+  <div class="grid two">
+    <div class="numcard">
+      <div class="t">用途 1 · 找缺口</div>
+      <div class="v">最该补的 5 篇</div>
+      <div class="d">按 stub 的 <code>refCount</code> 降序 —— 被引用最多、却还不存在的概念排最前，一键成文。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">用途 2 · 找孤立</div>
+      <div class="v">收件箱 + 建议关联</div>
+      <div class="d">零连接笔记不再只是「被排到下面」，而是带「建议关联 Top 3」的待办队列。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">用途 3 · 找主干</div>
+      <div class="v">枢纽 / 叶子一眼可辨</div>
+      <div class="d">枢纽加外环（这是「目录页」），叶子细描边。<strong>能看出结构是树状还是网状</strong>。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">用途 4 · 找路径</div>
+      <div class="v">两篇之间隔着什么</div>
+      <div class="d">选 A + 点 B → 高亮最短路径。回答「这两个概念是怎么连上的」。</div>
+    </div>
+  </div>
+
+  <div class="card accent">
+    <h4>一句话定位</h4>
+    <p style="margin-bottom:0">
+      原有知识图谱是<strong>「引用的可视化」</strong>——好看，但看完不知道该做什么。<br>
+      重设计后是<strong>「知识组织的驾驶舱」</strong>——每一处视觉差异都对应一个可执行动作：
+      虚线 → 可以接受成链接；收缩的网格区 → 可以接回网络；枢纽外环 → 可以当目录继续扩写。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s3">
+  <h2><span class="n">3</span>节点与关系的定义范围</h2>
+  <p class="sub">硬约束（产品红线，不可协商）：<strong>节点只能来自知识库</strong>。</p>
+
+  <div class="card warn">
+    <h4>红线：图与社交数据彻底解耦</h4>
+    <p style="margin-bottom:0">
+      <code>buildKnowledgeNetwork</code> 连参数都<strong>不再接收社交快照</strong>——从签名上杜绝混入。
+      曾经的 <code>mode='fused'</code>（把笔记的来源会话叠进图里）已整体删除，<strong>本方案不复活它</strong>。
+      人 / 群是通讯录数据，不属于知识库内容。<code>sourceUsername</code> 只用于「跳回来源聊天」按钮，
+      <strong>不作为图的节点</strong>。
+    </p>
+  </div>
+
+  <h3>节点：本节写下时是 2 类，<strong>2026-09-19 起是 4 类</strong>（见下方取代说明）</h3>
+  <div class="callout">
+    <strong>取代说明（2026-09-19 · 文档实体层）：</strong>本节原本论证「节点保持 2 类不变」，
+    但它守的是<strong>不引入标签节点、不引入通讯录节点</strong>这两条，而文档实体层两类都不属于它们。
+    <code>file:&lt;id&gt;</code>（一份登记文件）与 <code>doc:&lt;章节&gt;</code>（归一化后跨文件合并的章节）
+    都是<strong>知识库之内</strong>的内容，因此不违反 §「硬约束（产品红线）」那句「节点只能来自知识库」。
+    代价本节已经说中：新增节点类型会波及画布取色、额度、社区检测与详情面板 —— 这次全部逐处补齐，
+    并新增一条反向守卫（社交侧 kind 与前缀一律断言不存在），使「防通讯录数据回流」这道闸
+    比原来的「只准 note:/kb:」更严而不是更松。实现见 <code>query/kb/entities.ts</code>
+    与 <code>panels/graph-model.ts:buildKnowledgeNetwork</code>。
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th>类型</th><th>id</th><th>来源</th><th>半径</th><th>视觉</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>笔记 <code>note</code></td>
+          <td><code>note:&lt;id&gt;</code></td>
+          <td><code>notes</code> 表的一行</td>
+          <td><code>radiusBySqrt(连接度, 6, 16, 46)</code></td>
+          <td>实心紫圆盘（与「人/群」同形状，靠颜色区分）</td>
+        </tr>
+        <tr>
+          <td>待补目标 <code>stub</code></td>
+          <td><code>kb:&lt;归一化标题&gt;</code></td>
+          <td>正文 <code>[[…]]</code> 解析后<strong>未命中任何标题</strong>的结果（仍属知识库内容）</td>
+          <td>固定 12</td>
+          <td>虚线描边 + 半透明，<strong>不参与 <code>nodeLimit</code> 截断</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <strong>为什么不新增节点类型：</strong>标签不建节点（见 §1，会破坏半径语义与同构性）；
+    「来源会话」被红线禁止；「标签」与「时间」都作为<strong>属性 / 派生边</strong>参与，而不是新节点。
+    节点种类不变这一条，直接保证了画布、布局、额度、社区检测、详情面板<strong>零重写</strong>。
+    <em>（这段论证在它自己的边界内仍然成立，标签节点与来源会话节点至今没有加。
+    2026-09-19 的文档实体层是第三种东西——知识库内的资料与它们的章节——它确实付掉了上面那笔
+    「零重写」的红利：取色、形状、额度分档、社区检测排除、详情文案、导出海报六处都各自补了分支。）</em>
+  </p>
+
+  <h3>关系：从 1 层扩到 3 层</h3>
+  <figure>
+    <svg viewBox="0 0 1000 340" role="img" aria-label="知识图谱三层边的优先级与额度示意">
+      <defs>
+        <linearGradient id="gObs" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#36c08f" stop-opacity=".32"/>
+          <stop offset="100%" stop-color="#36c08f" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+
+      <!-- 层 1 -->
+      <g>
+        <rect x="20" y="26" width="96" height="30" rx="8" fill="rgba(54,192,143,.14)" stroke="rgba(54,192,143,.45)"/>
+        <text x="68" y="46" text-anchor="middle" fill="#7fe3c4" font-size="13" font-weight="700">第 1 层</text>
+        <text x="140" y="39" fill="#e8eefc" font-size="15" font-weight="700">wiki — [[链接]]</text>
+        <text x="140" y="60" fill="#a8b6d4" font-size="12.5">用户亲手写的引用 · 有向 · 权重 = 同一目标出现次数</text>
+        <line x1="470" y1="47" x2="700" y2="47" stroke="#36c08f" stroke-width="2.6"/>
+        <polygon points="700,47 690,42.5 690,51.5" fill="#36c08f"/>
+        <text x="716" y="43" fill="#7fe3c4" font-size="12.5" font-weight="700">实线 + 箭头</text>
+        <text x="716" y="60" fill="#6f7f9e" font-size="12">画满（只受总额度约束）</text>
+      </g>
+
+      <!-- 层 2 -->
+      <g>
+        <rect x="20" y="112" width="96" height="30" rx="8" fill="rgba(54,192,143,.14)" stroke="rgba(54,192,143,.45)"/>
+        <text x="68" y="132" text-anchor="middle" fill="#7fe3c4" font-size="13" font-weight="700">第 2 层</text>
+        <text x="140" y="125" fill="#e8eefc" font-size="15" font-weight="700">tag — 共同标签</text>
+        <text x="140" y="146" fill="#a8b6d4" font-size="12.5">用户亲手打的标签 · 无向 · 权重 = 共同标签数</text>
+        <line x1="470" y1="133" x2="700" y2="133" stroke="#5f9e86" stroke-width="1.5"/>
+        <text x="716" y="129" fill="#8fc7b3" font-size="12.5" font-weight="700">细实线</text>
+        <text x="716" y="146" fill="#6f7f9e" font-size="12">O(标签大小²) → 同样夹额度</text>
+      </g>
+
+      <!-- 分隔 -->
+      <line x1="20" y1="182" x2="980" y2="182" stroke="#1e2942" stroke-dasharray="6 7"/>
+      <text x="20" y="205" fill="#6f7f9e" font-size="12" letter-spacing=".1em">以下为推断层 · 只能长在余量里 · 永远画虚线</text>
+
+      <!-- 层 3 -->
+      <g>
+        <rect x="20" y="222" width="96" height="30" rx="8" fill="rgba(246,162,60,.14)" stroke="rgba(246,162,60,.45)"/>
+        <text x="68" y="242" text-anchor="middle" fill="#ffd08a" font-size="13" font-weight="700">第 3 层</text>
+        <text x="140" y="235" fill="#e8eefc" font-size="15" font-weight="700">prefix — 标题同前缀</text>
+        <text x="140" y="256" fill="#a8b6d4" font-size="12.5">「会议纪要 2026-09-18 / -17」同属一批 · 无向</text>
+        <line x1="470" y1="243" x2="700" y2="243" stroke="#f6a23c" stroke-width="1.8" stroke-dasharray="7 6"/>
+        <text x="716" y="239" fill="#ffd08a" font-size="12.5" font-weight="700">金色虚线</text>
+        <text x="716" y="256" fill="#6f7f9e" font-size="12">锚点生成树 + 余量回填</text>
+      </g>
+
+      <!-- 额度条 -->
+      <g>
+        <rect x="20" y="292" width="960" height="26" rx="7" fill="rgba(79,140,255,.06)" stroke="#1e2942"/>
+        <rect x="20" y="292" width="620" height="26" rx="7" fill="url(#gObs)" stroke="rgba(54,192,143,.4)"/>
+        <rect x="640" y="292" width="220" height="26" rx="7" fill="rgba(246,162,60,.12)" stroke="rgba(246,162,60,.4)"/>
+        <rect x="860" y="292" width="120" height="26" rx="7" fill="rgba(120,134,160,.08)" stroke="#2a3452"/>
+        <text x="330" y="310" text-anchor="middle" fill="#7fe3c4" font-size="12" font-weight="700">观测层：min(OBSERVED_EDGE_CAP, edgeDensityCap(n))</text>
+        <text x="750" y="310" text-anchor="middle" fill="#ffd08a" font-size="12" font-weight="700">推断层：edgeHeadroom()</text>
+        <text x="920" y="310" text-anchor="middle" fill="#6f7f9e" font-size="11.5">剩余</text>
+      </g>
+    </svg>
+    <figcaption>三条边层共用同一个「模型边总数 ≤ edgeDensityCap(n)」不变量：观测层先占额度，推断层只能问余量。</figcaption>
+  </figure>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th>层</th><th>kind</th><th>语义</th><th>方向</th><th>强度来源</th><th>额度口径</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="pill obs">观测</span></td>
+          <td><code>wiki</code> <span class="pill reuse">已有</span></td>
+          <td>正文 <code>[[链接]]</code></td>
+          <td>有向（箭头可切）</td>
+          <td>同一目标出现次数</td>
+          <td>有多少画多少，夹 <code>min(OBSERVED_EDGE_CAP, edgeDensityCap(n))</code></td>
+        </tr>
+        <tr>
+          <td><span class="pill obs">观测</span></td>
+          <td><code>tag</code> <span class="pill new">新增</span></td>
+          <td>共同标签 ≥ 1 个</td>
+          <td>无向</td>
+          <td>共同标签数（可加权：稀有标签更重）</td>
+          <td>与 wiki <strong>共用观测额度</strong>；候选是 O(k²)，必须先夹 cap</td>
+        </tr>
+        <tr>
+          <td><span class="pill inf">推断</span></td>
+          <td><code>prefix</code> <span class="pill new">新增</span></td>
+          <td>标题同前缀（去掉尾部编号/日期后相同）</td>
+          <td>无向</td>
+          <td>固定 1（推断层不参与强度排序）</td>
+          <td>只用 <code>edgeHeadroom()</code>：锚点生成树保底 + 余量回填</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h4>刻意<strong>不做</strong>的第 4 层：「正文共现专名」</h4>
+    <p style="margin-bottom:0">
+      最诱人的一条推断是「两篇笔记正文里都频繁出现同一个专名，但没有 <code>[[链接]]</code>」。
+      不做，因为<strong>中文专名识别没有可靠且零依赖的实现</strong>——项目里没有分词器，任何近似方案都会
+      在真机上产生大量假边，而假边恰好会吃掉真实观测边的额度（社交侧已经量化过这个后果）。
+      推断层只用<strong>确定性、零依赖</strong>的标题前缀规则，与社交侧的 <code>remarkClass</code>
+      （备注前缀 + 编号，如「宜州一中404」）是同一个手法。这条纪律 = 「可复现、可断言」。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s4">
+  <h2><span class="n">4</span>层级与关联规则</h2>
+  <p class="sub">「层级」有两个含义，必须分开：一个是<strong>角色</strong>（不改变拓扑），一个是<strong>边的优先级</strong>（决定拓扑）。</p>
+
+  <h3>4.1 结构性层级：四个派生角色</h3>
+  <p>由度数算出，是<strong>纯函数</strong>（建议落在新文件 <code>graph-role.ts</code>），不引入新数据、不改变边表。</p>
+
+  <figure>
+    <svg viewBox="0 0 1000 250" role="img" aria-label="知识图谱四种节点角色的视觉编码">
+      <!-- hub -->
+      <g>
+        <circle cx="110" cy="96" r="34" fill="none" stroke="#22d3ee" stroke-width="1.6" stroke-opacity=".55"/>
+        <rect x="88" y="74" width="44" height="44" rx="9" fill="#4f8cff"/>
+        <text x="110" y="103" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">核</text>
+        <text x="110" y="156" text-anchor="middle" fill="#e8eefc" font-size="14" font-weight="700">枢纽 Hub</text>
+        <text x="110" y="176" text-anchor="middle" fill="#6f7f9e" font-size="12">反链 ≥ 3 或 度 ≥ 6</text>
+        <text x="110" y="194" text-anchor="middle" fill="#6f7f9e" font-size="12">加外环 = 「这是目录页」</text>
+      </g>
+      <!-- normal -->
+      <g>
+        <rect x="278" y="74" width="44" height="44" rx="9" fill="#36c08f"/>
+        <text x="300" y="103" text-anchor="middle" fill="#0b1122" font-size="15" font-weight="700">常</text>
+        <text x="300" y="156" text-anchor="middle" fill="#e8eefc" font-size="14" font-weight="700">普通</text>
+        <text x="300" y="176" text-anchor="middle" fill="#6f7f9e" font-size="12">1 ≤ 度 ≤ 5</text>
+        <text x="300" y="194" text-anchor="middle" fill="#6f7f9e" font-size="12">圆圈，半径 = 连接度</text>
+      </g>
+      <!-- leaf -->
+      <g>
+        <rect x="468" y="76" width="40" height="40" rx="8" fill="none" stroke="#a78bfa" stroke-width="2"/>
+        <text x="488" y="103" text-anchor="middle" fill="#a78bfa" font-size="14" font-weight="700">叶</text>
+        <text x="488" y="156" text-anchor="middle" fill="#e8eefc" font-size="14" font-weight="700">叶子</text>
+        <text x="488" y="176" text-anchor="middle" fill="#6f7f9e" font-size="12">出链 ≥ 1 且反链 = 0 且 度 = 1</text>
+        <text x="488" y="194" text-anchor="middle" fill="#6f7f9e" font-size="12">细描边 = 「只指别人」</text>
+      </g>
+      <!-- orphan -->
+      <g>
+        <rect x="658" y="76" width="40" height="40" rx="8" fill="rgba(120,134,160,.18)" stroke="#4a5570" stroke-width="1.6"/>
+        <text x="678" y="103" text-anchor="middle" fill="#a8b6d4" font-size="14" font-weight="700">孤</text>
+        <text x="678" y="156" text-anchor="middle" fill="#e8eefc" font-size="14" font-weight="700">孤岛 Inbox</text>
+        <text x="678" y="176" text-anchor="middle" fill="#6f7f9e" font-size="12">度 = 0</text>
+        <text x="678" y="194" text-anchor="middle" fill="#6f7f9e" font-size="12">移入收件箱区 + 建议关联</text>
+      </g>
+      <!-- stub -->
+      <g>
+        <circle cx="868" cy="96" r="20" fill="rgba(167,139,250,.1)" stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="4 4"/>
+        <text x="868" y="156" text-anchor="middle" fill="#e8eefc" font-size="14" font-weight="700">待补 stub</text>
+        <text x="868" y="176" text-anchor="middle" fill="#6f7f9e" font-size="12">被引用但尚无同名笔记</text>
+        <text x="868" y="194" text-anchor="middle" fill="#6f7f9e" font-size="12">虚线圆 + 半透明</text>
+      </g>
+      <!-- divider -->
+      <line x1="200" y1="40" x2="200" y2="210" stroke="#1e2942"/>
+      <line x1="392" y1="40" x2="392" y2="210" stroke="#1e2942"/>
+      <line x1="580" y1="40" x2="580" y2="210" stroke="#1e2942"/>
+      <line x1="772" y1="40" x2="772" y2="210" stroke="#1e2942"/>
+      <text x="20" y="226" fill="#6f7f9e" font-size="12">前四类都是派生角色（由度数算出、可断言）；stub 是数据里真实存在的一类节点。</text>
+    </svg>
+    <figcaption>角色是「读图的语法」：不用点开任何笔记，就能看出哪几篇是主干、哪几篇挂在外面。</figcaption>
+  </figure>
+
+  <h3>4.2 关联规则：优先级 → 去重 → 额度</h3>
+  <ol>
+    <li><strong>优先级由插入顺序决定</strong>：<code>wiki</code> &gt; <code>tag</code> &gt; <code>prefix</code>。高优先级已经占掉的点对，低优先级不再生成。这是社交侧「共同群 &gt; 同备注编号 &gt; 首字」同一套语义。</li>
+    <li><strong>去重唯一写入口</strong>：所有推断边都走 <code>addInferred(a, b, kind)</code>，共用同一个 <code>paired: Set</code>。点对无向化（<code>a &lt; b</code> 字典序作 key）。<strong>同一对笔记只能有一条边</strong>——社交侧血泪：重复边会让详情面板 React key 相撞、度数统计虚高。</li>
+    <li><strong>额度不新写整数</strong>：直接 import <code>graph-budget.ts</code>。观测层夹 <code>min(OBSERVED_EDGE_CAP, edgeDensityCap(n))</code>；推断层只问 <code>edgeHeadroom(n, used)</code>，其中 <code>used</code> 必须是<strong>已产出</strong>的边数（不是原始候选数）。</li>
+    <li><strong>不变量</strong>：模型边总数 ≤ <code>edgeDensityCap(n)</code> ⇒ 模型里的边一条都不会被绘制层裁掉。这条是「模型有边、图上没画」这类缺陷的根治方案。</li>
+  </ol>
+
+  <h3>4.3 社区检测的输入与阈值（两处必须改）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>项</th><th>原实现</th><th>重设计后</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>喂哪些边</td>
+          <td>只有 <code>wiki</code></td>
+          <td><code>wiki + tag</code>（观测层）</td>
+          <td>稀疏的 wiki 上 Louvain 出不来圈子 —— 这是「圈子数常为 0」的主因</td>
+        </tr>
+        <tr>
+          <td><code>prefix</code> 边</td>
+          <td>—</td>
+          <td><strong>不喂</strong></td>
+          <td>与社交侧「首字层刻意不参与社区检测」同一理由：启发式规则不该改圈子归属，蓝虚线跨圈子穿过反而正好说明「这是推断」</td>
+        </tr>
+        <tr>
+          <td>stub</td>
+          <td>不参与（<code>-1</code> 中性灰）</td>
+          <td>不参与（保持）</td>
+          <td>「尚未存在的笔记」被分进圈子会产生误导</td>
+        </tr>
+        <tr>
+          <td>小组阈值</td>
+          <td>成员数 <code>&lt; 3</code> → <code>-1</code></td>
+          <td><strong>成员数 <code>&lt; 2</code> → <code>-1</code></strong></td>
+          <td>笔记库量级是「几十到几百」，<strong>2 篇同主题是完全正常的簇</strong>；社交侧用 3 是因为通讯录有几百人、2 人组多半是噪声</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.4 截断顺序 = 价值顺序（修正一处现状）</h3>
+  <p>
+    现状是 <code>noteNodes.slice(0, limit)</code>，而 <code>noteNodes</code> 的顺序来自后端的
+    <code>ORDER BY updated_at DESC</code> —— 实际效果是「<strong>最近更新优先</strong>」。
+    这与「半径 = 连接度」表达的价值观不一致。改为：<strong>按连接度降序截断</strong>
+    （主干优先保留），并且<strong>孤岛优先被移出主图、进收件箱区</strong>——它们本来就不该占主图的额度。
+    stub 继续<strong>不参与</strong>截断（数量少，截掉就失去「缺口提示」的意义）。
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s5">
+  <h2><span class="n">5</span>可视化与交互方式</h2>
+
+  <h3>5.1 视觉编码（与社交图谱对照）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>视觉通道</th><th>社交图谱</th><th>知识图谱（重设计后）</th></tr></thead>
+      <tbody>
+        <tr><td>节点形状</td><td>圆（头像为主）</td><td><strong>统一为圆</strong>：<span class="swatch" style="background:#8b7ff0"></span>紫圆 = 笔记 · 虚线灰圆 = 待补 · 圆盘 + 外环 = 枢纽</td></tr>
+        <tr><td>节点颜色</td><td>圈子色（10 色盘）</td><td>同一色盘，语义换成<strong>主题簇</strong></td></tr>
+        <tr><td>节点半径</td><td>消息量（指数饱和 5–34）</td><td>加权连接度（<code>sqrt</code> 饱和 16–46）</td></tr>
+        <tr><td>描边语义</td><td>选中 / 固定</td><td>圆环 = 枢纽 · 细描边 = 叶子 · 虚描边 = 待补</td></tr>
+        <tr><td>边 · 观测</td><td>灰实线（共同群数）</td><td><span class="swatch" style="background:#36c08f"></span>实线 + 箭头 = <code>[[链接]]</code> · <span class="swatch" style="background:#5f9e86"></span>细实线 = 共同标签</td></tr>
+        <tr><td>边 · 推断</td><td>金虚线（同备注编号）· 蓝虚线（首字相同）</td><td><span class="swatch dashed" style="color:#f6a23c"></span>金虚线 = 标题同前缀</td></tr>
+        <tr><td>边宽</td><td>权重</td><td>权重（共现次数 / 共同标签数），布局前做 log 压缩</td></tr>
+        <tr><td>边的距离</td><td><code>dist = base/√w</code></td><td>同公式，基准 150（wiki）/ 200（tag · prefix）</td></tr>
+        <tr><td>时间</td><td>无</td><td><code>updatedAt</code> 近 7 天加柔光晕（<span class="pill new">外观层，不改拓扑</span>，默认开可关）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.2 交互</h3>
+  <h4>已复用（<code>GraphCanvas</code> 里就有，零开发）</h4>
+  <p>
+    滚轮缩放 · 空白拖拽平移 · 拖节点调布局 · 点选高亮邻居并淡出其余 · 悬停 tooltip ·
+    搜索定位 · 适应视图 · 深度过滤 1–8 跳 · 圈子聚焦 / 悬停预览 · 固定节点 · 锁定布局 ·
+    播放动画 · 导出 SVG / PNG · 重置参数。
+  </p>
+
+  <h4>新增（知识图专属）</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>交互</th><th>做什么</th><th>为什么它重要</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>补链建议面板</strong></td>
+          <td>列出当前图里的 <code>prefix</code> 推断边 Top N，每条一个按钮：「接受 → 往 A 正文追加 <code>[[B]]</code>」</td>
+          <td>把推断层从<strong>装饰</strong>变成<strong>可执行动作</strong>。不接受这一条，用户只会觉得「图变花了」</td>
+        </tr>
+        <tr>
+          <td><strong>待补清单</strong></td>
+          <td>按 <code>refCount</code> 降序列出 Top 5 stub + 计数，一键创建</td>
+          <td>回答「最该先补哪 5 篇」——原本 <code>refCount</code> 在数据里但没人用</td>
+        </tr>
+        <tr>
+          <td><strong>收件箱区可操作</strong></td>
+          <td>孤岛节点旁给「建议关联 Top 3」，一键接受即写回链接</td>
+          <td>零连接笔记不再只是被摆在外面，而是<strong>有回到网络的路</strong></td>
+        </tr>
+        <tr>
+          <td><strong>角色筛选</strong></td>
+          <td>图例兼开关：枢纽 / 普通 / 叶子 / 孤岛 / 待补，点击切换显示</td>
+          <td>「只看枢纽」= 看目录；「只看孤岛」= 看整理队列</td>
+        </tr>
+        <tr>
+          <td><strong>两点路径</strong></td>
+          <td>选中 A，Shift 点 B → 高亮最短路径上的节点与边</td>
+          <td>回答「这两个概念是怎么连上的」。实现基础已有（<code>localGraph</code> 的邻域展开）</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s6">
+  <h2><span class="n">6</span>重设计后的整体结构</h2>
+  <p class="sub">关键判断：<strong>新增的是「模型层的两个派生边层 + 一个角色层」，不是新的画布、布局或额度体系。</strong></p>
+
+  <div class="flow">notes 表 (wechat_notes.db)
+  │
+  └─► 后端 <b>buildKnowledgeGraph()</b>            <i>已有，字段足够（tags / 出链 / 反链 / 时间 / sourceKind）</i>
+        │  KnowledgeSnapshot { notes, stubs, edges(wiki), summary }
+        ▼
+      前端 <b>buildKnowledgeNetwork(knowledge, settings)</b>   <u>签名不接受社交快照（红线）</u>
+        │
+        ├─ 观测层① wiki 边        <i>已有</i>
+        ├─ 观测层② tag 共现边     <i>新增 · 同样夹观测额度</i>
+        ├─ 推断层  prefix 边      <i>新增 · 锚点生成树 + edgeHeadroom 回填</i>
+        ├─ 角色层  graph-role.ts  <i>新增 · hub / normal / leaf / orphan（纯函数）</i>
+        └─ 社区层  detectCommunities(noteNodes, wiki + tag)   <i>已有函数，阈值 &lt;3 → &lt;2</i>
+        ▼
+      <b>graph-budget.ts</b>   <i>与社交图谱共用的唯一额度真源</i>
+        ▼
+      <b>graph-layout.ts</b>   <i>FA2 + Worker + isolatedStripPositions（收件箱区）</i>
+        ▼
+      <b>graph-canvas.ts</b>   <i>多 kind 线型 / 枢纽外环 / 时间光晕</i>
+        ▼
+      <b>GraphPanel variant="knowledge"</b>   <i>补链建议 / 待补清单 / 角色筛选 / 两点路径</i></div>
+
+  <div class="grid two">
+    <div class="numcard">
+      <div class="t">重写</div>
+      <div class="v">1 个函数</div>
+      <div class="d"><code>buildKnowledgeNetwork</code> 内部的边层构建（从「一层直出」改成「按优先级分层 + 额度」）</div>
+    </div>
+    <div class="numcard">
+      <div class="t">新增</div>
+      <div class="v">1 个文件</div>
+      <div class="d"><code>graph-role.ts</code> —— 四个派生角色的纯函数判定</div>
+    </div>
+    <div class="numcard">
+      <div class="t">复用</div>
+      <div class="v">画布 / 布局 / 额度 / 社区检测</div>
+      <div class="d">全部零重写。这是「同构」带来的直接收益</div>
+    </div>
+    <div class="numcard">
+      <div class="t">不改</div>
+      <div class="v">后端与数据契约</div>
+      <div class="d"><code>KnowledgeSnapshot</code> 字段已经够用（tags、时间、出链/反链、sourceKind 都在）</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s7">
+  <h2><span class="n">7</span>关键设计要点</h2>
+  <ol>
+    <li><strong>同构优先，不平行造第二套。</strong>节点种类写下时是 2 类（2026-09-19 文档实体层后为 4 类，
+      且新两类仍在知识库之内）；边的语义层从 1 层扩到 3 层；画布 / 布局 / 额度 / 社区检测全部复用。
+      任何「知识图谱专用的第三套逻辑」都是信号：应该先问它能不能表达成社交侧已有机制的换参。</li>
+    <li><strong>观测层与推断层必须分额度。</strong>共标签是观测（用户亲手打的），标题前缀是推断。推断层<strong>永远</strong>只在余量里生长，且固定画虚线。社交侧的量化证据：混夹会让 245 条真实边消失。</li>
+    <li><strong>额度只有一个真源。</strong> 复用 <code>graph-budget.ts</code>，知识侧<strong>不新写任何整数</strong>。共标签候选是 O(k²)，必须先问 <code>edgeHeadroom()</code>。</li>
+    <li><strong>去重只有一个写入口。</strong> <code>addInferred(a, b, kind)</code> + 共享 <code>paired: Set</code>，优先级由插入顺序决定。</li>
+    <li><strong>社区检测只吃观测层</strong>（wiki + tag）；<code>prefix</code> 与 stub 不参与；小组阈值 <code>&lt;3 → &lt;2</code>。</li>
+    <li><strong>孤岛不是废料。</strong> 度 0 的笔记移入收件箱区（复用 <code>isolatedStripPositions</code>：不参与力导向、不受力度滑杆影响、不撑大包围盒），并配「建议关联 Top 3」。</li>
+    <li><strong>每一处视觉差异都要对应一个可执行动作。</strong> 虚线 → 可接受成链接；收件箱 → 可接回网络；枢纽环 → 可当目录扩写。只画不给动作的推断层是负资产。</li>
+    <li><strong>全部派生规则必须是纯函数 + 显式 tie-break。</strong> 前缀 key、角色判定、候选排序都用 <code>localeCompare</code> 等确定性比较；初值坐标继续用 id 哈希（<code>initialPosition</code>），绝不引入 <code>Math.random</code>——否则「同一张图每次打开都长不一样」，也没法写成回归用例。</li>
+    <li><strong>截断顺序 = 价值顺序。</strong> 按连接度降序保留主干；孤岛优先移出主图。stub 不参与截断。</li>
+    <li><strong>不碰产品红线。</strong> 节点只来自知识库；<code>buildKnowledgeNetwork</code> 签名继续不接受社交快照；「融合视图」不复活。</li>
+  </ol>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s8">
+  <h2><span class="n">8</span>与原有知识图谱的主要差异</h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th style="width:16%">维度</th><th style="width:37%">原有知识图谱</th><th>重设计后</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>关系类型</td>
+          <td>1 种（<code>[[链接]]</code>）</td>
+          <td>3 层：<code>wiki</code> 实线+箭头 / <code>tag</code> 细实线 / <code>prefix</code> 金虚线，按观测/推断分额度</td>
+        </tr>
+        <tr>
+          <td>标签</td>
+          <td>完全不进图（<code>tags</code> 字段被浪费）</td>
+          <td>作为<strong>派生边</strong>（共同标签数 = 强度）——刻意<strong>不</strong>建标签节点，保住半径语义与同构性</td>
+        </tr>
+        <tr>
+          <td>强度</td>
+          <td>权重只影响边长</td>
+          <td>影响边长 + 线宽 + 布局的 log 压缩，并且是<strong>社区检测的权重</strong></td>
+        </tr>
+        <tr>
+          <td>圈子 / 社区</td>
+          <td>只喂稀疏 wiki + 阈值 <code>&lt;3</code> → <code>communityCount</code> 常为 0，侧栏「圈子概览」基本是空的</td>
+          <td>吃 <code>wiki + tag</code> 双来源，规模足够；阈值下调到 <code>&lt;2</code>；圈的语义明确为<strong>主题簇</strong></td>
+        </tr>
+        <tr>
+          <td>层次</td>
+          <td>无 —— 所有节点同一平面</td>
+          <td>4 个派生角色（枢纽 / 普通 / 叶子 / 孤岛）+ 角色筛选；枢纽加外环</td>
+        </tr>
+        <tr>
+          <td>孤岛处置</td>
+          <td>排到主簇下方网格带（可见但被「排除」）</td>
+          <td>升级为<strong>收件箱区 + 建议关联 Top 3</strong>，可一键接回网络</td>
+        </tr>
+        <tr>
+          <td>推断层</td>
+          <td>无</td>
+          <td>标题同前缀（锚点生成树 + 余量回填，金虚线），并配「接受并写回」按钮</td>
+        </tr>
+        <tr>
+          <td>可执行性</td>
+          <td>只能看 · 点开编辑 · 点 stub 建笔记</td>
+          <td>新增「补链建议」一键写回 <code>[[链接]]</code> · 「收件箱」建议关联 · 两点最短路径</td>
+        </tr>
+        <tr>
+          <td>时间维度</td>
+          <td>无</td>
+          <td>近 7 天更新的笔记加柔光晕（外观层，不改拓扑，默认开可关）</td>
+        </tr>
+        <tr>
+          <td>额度纪律</td>
+          <td>无（wiki 边天然稀疏，从未触发）</td>
+          <td>新增层同样夹 <code>edgeBudget</code> / <code>edgeHeadroom</code>，与社交侧<strong>同源</strong></td>
+        </tr>
+        <tr>
+          <td>截断口径</td>
+          <td><code>noteNodes.slice(0, limit)</code>，实际按 <code>updated_at</code> 顺序</td>
+          <td>按<strong>连接度降序</strong>（主干优先），孤岛优先移出主图</td>
+        </tr>
+        <tr>
+          <td>代码结构</td>
+          <td><code>buildKnowledgeNetwork</code> 一个函数直出节点与边</td>
+          <td>边层在 <code>graph-model.ts</code> 内按层构建（唯一写入口 <code>addInferred</code>）+ 新增 <code>graph-role.ts</code> 角色层；<strong>画布 / 布局 / 额度全部零改动</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s9">
+  <h2><span class="n">9</span>落地切口（分四步，每步独立可验收）</h2>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th style="width:9%">步骤</th><th style="width:24%">做什么</th><th>验收口径</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="pill new">P0</span></td>
+          <td><strong>先把骨架换成「分层 + 额度 + 唯一写入口」</strong><br>此时只有 wiki 一层，<strong>行为不变</strong>，但推断层的地基就位</td>
+          <td>现有知识相关 spec 全绿；断言「模型边数 ≤ <code>edgeDensityCap(n)</code>」；<code>typecheck</code> ×2 + <code>build:ui</code>（含 vite build）</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">P1</span></td>
+          <td><strong>共标签层</strong><br>加 <code>kind:'tag'</code>，观测额度内生成；社区阈值 <code>&lt;3 → &lt;2</code>；图例与侧栏文案</td>
+          <td>真机（几十~几百篇笔记）<code>communityCount &gt; 0</code>，且 <code>wiki</code> 边<strong>一条不少</strong>（与 P0 逐一比对）</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">P2</span></td>
+          <td><strong>角色层 + 收件箱区</strong><br><code>graph-role.ts</code> + 枢纽外环 + 孤岛网格区的「建议关联」</td>
+          <td>角色判定有纯函数 spec（含边界：度 0 / 度 1 反链 0 / 反链 3）；真机截图核对枢纽与叶子可辨</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">P3</span></td>
+          <td><strong>推断层 + 可执行闭环</strong><br><code>prefix</code> 边 + 补链建议面板（写回 <code>saveNote</code>）+ 两点最短路径</td>
+          <td>接受一条建议后，金虚线变实线、<code>outLinks</code> 增加、刷新后仍成立；余量不足时推断层<strong>不挤</strong>观测层</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card accent">
+    <h4>每步都必须跑的验收</h4>
+    <ul class="tight" style="margin-bottom:0">
+      <li><code>typecheck</code>（客户端 + 后端两条） · <code>ui:smoke</code> · <code>check:wx-tokens</code> · <code>docs:api:check</code></li>
+      <li><strong><code>build:ui</code>（含 <code>vite build</code>）—— 不能只看冒烟。</strong> CSS Modules 的语法错只在 postcss 阶段暴露，而 SSR 冒烟是 jsdom、对 CSS 完全无感。</li>
+      <li>图谱改动必须跑真实数据验收（<code>working/*.audit.spec.ts</code>）：夹具测不出的规模问题只有真数据能暴露。⚠ 注意 <code>buildGraph</code> 返回值<strong>已截断</strong>，判断「某一层是否被切光」必须用同一份节点数据复算原始规模。</li>
+      <li>真机截图核对：图谱要判<code>.stage</code> 里的 <code>canvas</code> <strong>且</strong> <code>.rail</code> 同时存在（不能用「有没有 canvas」判定，ECharts 面板也有 canvas）。</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  知识图谱重设计方案 · 基于 <code>graph-model.ts</code> / <code>graph-budget.ts</code> / <code>graph-layout.ts</code> /
+  <code>graph-canvas.ts</code> / <code>Graph.tsx</code> / <code>notes.ts</code> 的实际实现与真机审计结论整理 ·
+  硬约束：节点只来自知识库，图与社交数据彻底解耦。
+</footer>
+
+</div>
+</body>
+</html>

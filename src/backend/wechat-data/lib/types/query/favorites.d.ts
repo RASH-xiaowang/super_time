@@ -35,7 +35,12 @@ interface FavorItem {
  * @param limit - max rows.
  * @returns the favorites snapshot.
  */
-export declare function queryFavorites(decryptedDir: string, limit?: number, offset?: number): {
+export declare function queryFavorites(decryptedDir: string, limit?: number, offset?: number, 
+/**
+ * 关键词：匹配 `content`（收藏条目 XML，标题与描述就在里面）/ `fromusr` / `realchatname`。
+ * 放在服务端是因为收藏分页只有 120 条一页，客户端过滤永远只搜得到已加载的那一页。
+ */
+q?: string): {
     favorites: FavorItem[];
     total: number;
 };

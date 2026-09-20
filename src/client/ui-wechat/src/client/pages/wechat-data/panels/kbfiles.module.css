@@ -1,0 +1,544 @@
+/*
+ * 知识库「文件」视图 —— NEON MATRIX 科技风，与其余面板共用 --nm-* 令牌与
+ * --nm-dense-* 紧凑档，因此不需要任何新色值。
+ *
+ * 布局与「笔记库」（knowledge-base.module.css）同构：主从两栏（左文件列表 / 右文件详情）。
+ * 两栏的换行判据用**容器查询**而不是窗口媒体查询：侧栏折叠 / 展开会改变本面板的
+ * 可用宽度，而窗口尺寸不变 —— 媒体查询在这种情况下不会触发，两栏会被压成两条细缝
+ * （左栏 240px 的下限尤其致命）。容器查询看的是面板自身的内联尺寸，两种折叠状态都能正确退化。
+ *
+ * 容器名用 `kbfiles` 而不是复用的 `kb`：本面板与笔记库面板可能**同时挂载**
+ * （合并外壳里两个分段各自保留自己的滚动容器），同名容器会让容器查询匹配到
+ * 最近的那个祖先而串台。
+ */
+
+/* 吸顶骨架：kit 的 .panelShell 自己就是滚动容器（overflow-y:auto），这里把它关掉，
+   改成「页头 + 工具栏固定、下面的内容自己滚」。与笔记库同一套写法。
+   ⚠ `.shell.shell` 双类名提权：kit 的 .panelShell 与本类都是单类选择器，同特异度下
+   谁在打包顺序后面谁赢 —— 双类名把特异度抬到 0-2-0，与注入顺序解耦。 */
+.shell.shell {
+  overflow: hidden;
+}
+
+.head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g3);
+}
+
+/* 承接容器查询的包裹层：容器查询只能作用于容器的后代，
+   所以不能把 container-type 加在 .body 上再查 .body 自己。
+   它同时是本面板唯一的滚动区（页头与三条错误提示在它外面，不跟着滚走）。 */
+.bodyWrap {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  container-type: inline-size;
+  container-name: kbfiles;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: var(--nm-dense-g5);
+  /* 与笔记库同一处修复：`start` 让卡片按内容收缩，视口下半截留成一片死空白。
+     改成至少铺满滚动区，内容更长时由 .bodyWrap 整块滚。 */
+  align-items: stretch;
+  min-height: 100%;
+  min-width: 0;
+}
+
+.listPane { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
+.detailPane { min-width: 0; }
+
+/* 列表为空（还没传文件 / 过滤无结果 / 读不到库）时只保留**一个**空态：
+   左栏跨满两格、右栏整块隐藏。否则同一件「没有文件」会被左右两栏各说一遍。
+   ⚠️ 用 className 组合而不是 data-* 属性：kit 的 Card 只接受
+   title/extra/footer/children/flush/className，不透传额外 props 到 DOM。 */
+.listPaneWide { grid-column: 1 / -1; }
+.detailPaneHidden { display: none; }
+
+/* ── 工具栏：搜索 + 状态筛选条 ─────────────────────────────── */
+.stateBar {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 状态多时**横向滚动**而不是换行：换行会把工具栏顶成两三行，
+     下面的列表整体下移，点筛选时列表会跟着跳。 */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* WCAG 2.2 SC 2.5.8 要求最小 24×24 的点击目标 */
+  min-height: 24px;
+  padding: 2px 9px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
+  color: var(--nm-text-2);
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.chip:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
+.chip[data-on] { color: var(--nm-cyan-text); border-color: var(--nm-cyan-20); background: var(--nm-cyan-10); }
+.chip:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.chipCount { font-size: var(--nm-dense-fs-xs); opacity: 0.75; }
+
+.meta { flex: 0 0 auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; }
+
+/* 向量索引状态徽标。三种色调走 data-tone，而不是三套类名 ——
+   状态是数据，样式表里不该为它准备并行的三份。 */
+.indexChip {
+  margin-left: var(--nm-dense-g3);
+  padding: 1px 7px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+  white-space: nowrap;
+}
+
+.indexChip[data-tone='ok'] {
+  color: var(--nm-success-text);
+  border-color: color-mix(in srgb, var(--nm-success) 30%, transparent);
+  background: color-mix(in srgb, var(--nm-success) 7%, transparent);
+}
+
+.indexChip[data-tone='warn'] {
+  color: var(--nm-warning-text);
+  border-color: color-mix(in srgb, var(--nm-warning) 35%, transparent);
+  background: color-mix(in srgb, var(--nm-warning) 8%, transparent);
+}
+
+.notice {
+  font-size: 12px;
+  color: var(--nm-cyan);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+}
+
+/* 一次「添加文件」的逐项回执块。部分成功是常态，所以失败项要逐条列出来，
+   而不是压成一句「添加失败」——那样用户会把没问题的文件也重选一遍。 */
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: var(--nm-bg-hover);
+}
+.reportHead { display: flex; align-items: center; gap: var(--nm-dense-g3); flex-wrap: wrap; }
+.reportTitle { font-size: var(--nm-dense-fs-sm); font-weight: 600; color: var(--nm-text-1); }
+.reportList { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--nm-dense-g1); }
+.reportItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--nm-dense-g2) var(--nm-dense-g4);
+  align-items: baseline;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-2);
+}
+.reportName {
+  min-width: 0;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reportReason { flex: 0 0 auto; color: var(--nm-warning-text); }
+
+/* ── 左：文件列表 ─────────────────────────────────────────── */
+.list { display: flex; flex-direction: column; }
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--nm-dense-g1) var(--nm-dense-g3);
+  align-items: start;
+  width: 100%;
+  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x);
+  border: 0;
+  border-bottom: 1px solid var(--nm-border);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--nm-bg-hover); }
+.row[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-cyan); }
+.row:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+.rowMain { min-width: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g1); }
+.rowTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  font-size: var(--nm-dense-fs);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  line-height: var(--nm-dense-lh);
+}
+.rowName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rowSub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nm-dense-g1) var(--nm-dense-g3);
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+}
+.rowSide { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: var(--nm-dense-g1); }
+
+/* 不参与向量化的标记：这类文件**完全不出网**，是一个必须一眼看见的属性。 */
+.offlineMark { font-size: var(--nm-dense-fs-xs); color: var(--nm-warning-text); white-space: nowrap; }
+
+/* ── 右：文件详情 ─────────────────────────────────────────── */
+.detail { display: flex; flex-direction: column; gap: var(--nm-dense-g4); min-width: 0; }
+
+.detailHead { display: flex; align-items: flex-start; gap: var(--nm-dense-g4); }
+.detailTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--nm-fs-lg);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--nm-text-1);
+  word-break: break-word;
+}
+.detailActions { flex: 0 0 auto; display: flex; gap: var(--nm-dense-g2); }
+
+.detailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-dense-g2) var(--nm-dense-g4);
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-2);
+}
+
+.divider { height: 1px; background: var(--nm-border); }
+
+.sectionLabel {
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+/* 属性表：左键右值，窄容器下自动换成上下两行（见 @container 段）。 */
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--nm-dense-g2) var(--nm-dense-g4); margin: 0; }
+.kvKey { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); white-space: nowrap; }
+.kvVal {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-1);
+  word-break: break-all;
+}
+.mono { font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: var(--nm-dense-fs-xs); }
+
+/* 解析结论 / 降级说明。unsupported 与 failed 用**不同颜色**：
+   前者是本机还没有解析器（等升级），后者是真的解析出错（要换文件）——
+   合成一档等于把两件排查方向相反的事说成一件。 */
+.hintOk { font-size: var(--nm-dense-fs-sm); color: var(--nm-success-text); }
+.hintWarn { font-size: var(--nm-dense-fs-sm); color: var(--nm-warning-text); }
+.hintBad { font-size: var(--nm-dense-fs-sm); color: var(--nm-danger-text); }
+.hintNote { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
+
+/* 出网开关：一行说明 + 一个原生 checkbox（role=switch）。 */
+.switchRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nm-dense-g3);
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+}
+.switchText { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.switchTitle { font-size: var(--nm-dense-fs-sm); font-weight: 600; color: var(--nm-text-1); }
+.switchDesc { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); line-height: 1.6; }
+.switchBox {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--nm-cyan);
+  cursor: pointer;
+}
+.switchBox:disabled { cursor: not-allowed; opacity: 0.5; }
+.switchBox:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 2px; }
+
+/* ── 正文检索结果（设计稿 §8.4）───────────────────────────────
+   一个搜索框同时承担「文件名过滤」与「正文检索」，所以结果区**不占独立视图**：
+   它夹在工具栏与主从两栏之间，标题行说明实际走了什么、每条给出处与摘要高亮。
+   flex-shrink: 0 与 .bodyWrap 同理 —— 面板是 flex 列 + overflow-y:auto，
+   子项默认可收缩，长结果会被压扁而不是滚出来。 */
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+}
+.resultsHead { display: flex; align-items: baseline; gap: var(--nm-dense-g3); flex-wrap: wrap; }
+.resultsTitle { font-size: var(--nm-dense-fs-sm); font-weight: 600; color: var(--nm-text-1); }
+.resultsHint { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); }
+.resultsEmpty { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); line-height: 1.6; }
+
+/* 命中列表自己滚：20 条命中每条三行会把主从两栏顶到屏幕外。
+   滚动容器落在 .hitList 自己身上（同 .list 的那条纪律）。 */
+.hitList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  max-height: 42vh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: var(--nm-bg-hover);
+}
+.hitHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-dense-g2);
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hitHead:hover .hitFile { color: var(--nm-cyan-text); }
+.hitHead:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+.hitFile {
+  min-width: 0;
+  font-size: var(--nm-dense-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+.hitDot { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); white-space: nowrap; }
+.hitCrumb {
+  min-width: 0;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hitSnippet {
+  margin: 0;
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.6;
+  color: var(--nm-text-2);
+  word-break: break-word;
+}
+.hitMark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--nm-cyan-20);
+  color: var(--nm-text-1);
+}
+.hitMeta { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g1) var(--nm-dense-g3); font-size: var(--nm-dense-fs-xs); color: var(--nm-text-3); }
+
+/* ── 窄容器：两栏改纵向堆叠 ─────────────────────────────────
+   阈值 720px ≈ 左栏 240 + gap 10 + 详情 470：再窄下去详情里的属性表
+   会掉到 40 字/行以下，操作按钮也开始折行。 */
+@container kbfiles (max-width: 720px) {
+  .body { grid-template-columns: minmax(0, 1fr); }
+  /* 堆叠成两行后，宽屏那套「铺满滚动区」会把视口对半分给列表与详情；
+     这里要各行按内容长、整块往下滚。 */
+  .body { align-content: start; min-height: auto; }
+  /* 堆叠后列表在上、详情在下，长列表会把详情顶到屏幕外（用户点一条却看不到内容），
+     所以要给列表一个高度上限。
+     滚动容器必须落在 **.list 自己** 身上，不能给 .listPane：.listPane 用的是 kit 的
+     Card（.card 是 overflow: hidden），在它上面写 max-height 只会把列表裁掉 ——
+     下半截连滚动条都没有，滚都滚不到。max-height 与 overflow 必须是同一个元素。 */
+  .list { max-height: 38vh; overflow-y: auto; overscroll-behavior-y: contain; }
+  /* 窄容器里结果区与列表叠在同一条竖轴上，两边都给 38vh 会把详情彻底顶出去。 */
+  .hitList { max-height: 30vh; }
+  /* 属性表改单列：窄容器里「指纹 / 原始路径」这类长值会把左列挤到只剩一个字宽。 */
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 2px var(--nm-dense-g2); }
+  .kvVal { margin-bottom: var(--nm-dense-g2); }
+}
+
+/* ── 就地展开的正文阅读器 ─────────────────────────────────────
+   全部走已定义的 --nm-* 令牌（theme-tokens.spec.ts 会拦未定义的）。 */
+.reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  padding: var(--nm-dense-g3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+}
+
+.readerHd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-dense-g3);
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+.readerMeta {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.readerNote {
+  margin: 0;
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.55;
+  color: var(--nm-text-2);
+}
+
+.readerEmpty {
+  padding: var(--nm-dense-g4) var(--nm-dense-g2);
+  text-align: center;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-3);
+}
+
+/* 正文随内容自然长高，由 .bodyWrap 整块滚。
+   这里**不再套一层 max-height + overflow**：外层已经是滚动容器，里面再来一层
+   就是「滚动条里套滚动条」，滚轮落在哪一层全看指针位置，比单层难用得多。
+   长度由「继续加载」按钮控制（一次 60 块），不靠裁切。 */
+.readerBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g3);
+}
+
+.chunk {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: var(--nm-dense-g2);
+  border-bottom: 1px solid var(--nm-border);
+}
+.chunk:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.chunkMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nm-dense-g2);
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+}
+
+/* 正文保留换行与缩进：log / json / yaml / csv 的**可读性全在换行上**，
+   折成一段就等于把内容毁掉一半。长串（URL、指纹）必须能断，否则会横向撑破。 */
+.chunkText {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.7;
+  color: var(--nm-text-1);
+}
+
+/* 默认展开时首帧的等待态：正文还没回来，先给一句话而不是留一块空白，
+   否则看起来像「这个文件没有内容」。 */
+.readerLoading {
+  padding: var(--nm-dense-g4) var(--nm-dense-g2);
+  text-align: center;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-3);
+}
+
+/* ── 摘要（模型生成）────────────────────────────────────────── */
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  padding: var(--nm-dense-g3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-purple) 5%, transparent);
+}
+
+.summaryHd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nm-text-3);
+}
+
+/* 「基于前 N 字（全文 M 字）」是这块里最重要的一句话，别让它看起来像脚注。 */
+.summaryMeta {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--nm-text-2);
+}
+
+.summaryText {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--nm-dense-fs);
+  line-height: 1.7;
+  color: var(--nm-text-1);
+}
+
+.summaryEmpty {
+  margin: 0;
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-2);
+}

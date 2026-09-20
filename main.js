@@ -43,6 +43,10 @@ const {
   mirroredSecretValues,
   loadLlmConfig,
   saveLlmConfig,
+  loadLlmStore,
+  activateLlmProfile,
+  upsertLlmProfile,
+  deleteLlmProfile,
   configPath,
 } = require('./src/backend/wechat-paths');
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
@@ -814,13 +818,36 @@ app.whenReady().then(async () => {
   });
 
 
-  ipcMain.handle('dialog:open-file', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择文件',
-      properties: ['openFile', 'multiSelections']
-    });
-    if (result.canceled) return { canceled: true, files: [] };
-    return { canceled: false, files: result.filePaths };
+  /**
+   * 文件选择：只负责选路径，读盘与登记由后端做（选中的可能是几十 MB 的文件，
+   * 不适合经 IPC 传字节；也与 `dialog:save-file` 同一个口径）。
+   *
+   * `opts.filters` **由调用方传**，主进程不写死白名单：写死一份就会与后端
+   * `query/kb/types.ts` 的 `ACCEPTED_EXTS` 漂移成两份，症状是「对话框里看不到」
+   * 或者更糟 ——「选得进来但登记被拒」（用户在两个地方各被拒一次，说不清哪边错了）。
+   */
+  ipcMain.handle('dialog:open-file', async (_event, opts) => {
+    try {
+      // 调试/自动化用：设了 SUPERTIME_OPEN_PATHS 就跳过原生对话框直接用它
+      // （原生对话框在无头自动化里点不到，否则「添加文件」链路无法被测试覆盖）。
+      // 多个路径用 `path.delimiter` 分隔 —— 与 SUPERTIME_SAVE_PATH 同款约定，
+      // 不用 `,` 是因为 Windows 路径里逗号是合法字符（`我的资料,2019.pdf`）。
+      const forced = (process.env.SUPERTIME_OPEN_PATHS || '').trim();
+      if (forced) {
+        const files = forced.split(path.delimiter).map(s => s.trim()).filter(Boolean);
+        // 全空串视为「取消」而不是「选了一批空路径」——否则调用方会去登记一堆非法项
+        return files.length ? { canceled: false, files } : { canceled: true, files: [] };
+      }
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: typeof opts?.title === 'string' && opts.title ? opts.title : '选择文件',
+        properties: ['openFile', 'multiSelections'],
+        filters: Array.isArray(opts?.filters) && opts.filters.length ? opts.filters : undefined,
+      });
+      if (result.canceled) return { canceled: true, files: [] };
+      return { canceled: false, files: result.filePaths };
+    } catch (e) {
+      return { canceled: true, files: [], error: e?.message ?? String(e) };
+    }
   });
 
   ipcMain.handle('dialog:open-directory', async () => {
@@ -1004,6 +1031,28 @@ app.whenReady().then(async () => {
       return { ok: true, value: saveLlmConfig(cfg || {}) };
     } catch (e) {
       return { ok: false, error: { message: e.message } };
+    }
+  });
+  /**
+   * 已保存的模型配置集（profiles）。
+   *
+   * 为什么与 `wechat:llm-save` 分成两条通道：切换是**一次轻动作**（改 activeProfileId +
+   * 把该套字段摊平到顶层，一个原子写），而 llm-save 走的是「提交整个表单」。
+   * 混在一起会逼着界面为了「换个模型」先构造一份完整表单 —— 那正是「切换要点两次、
+   * 还容易把别家 Key 一起提交」的老毛病。
+   *
+   * op：list / activate / save / delete（未识别的 op 明确报错，不静默当 list）。
+   */
+  ipcMain.handle('wechat:llm-profiles', (_event, opts = {}) => {
+    try {
+      const op = String((opts && opts.op) || 'list');
+      if (op === 'list') return { ok: true, value: loadLlmStore() };
+      if (op === 'activate') return { ok: true, value: activateLlmProfile(String((opts && opts.id) || '')) };
+      if (op === 'save') return { ok: true, value: upsertLlmProfile(opts || {}) };
+      if (op === 'delete') return { ok: true, value: deleteLlmProfile(String((opts && opts.id) || '')) };
+      return { ok: false, error: { message: `未知的模型配置操作：${op}` } };
+    } catch (e) {
+      return { ok: false, error: { message: e && e.message ? e.message : String(e) } };
     }
   });
   // —— 通过 base_url 拉取官方模型列表（OpenAI 兼容 GET {base_url}/models）。

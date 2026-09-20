@@ -38,7 +38,16 @@ interface FileItem {
  * @param category - optional category filter: 'image' | 'file' | 'video' (其它值/空 = 全部).
  * @returns the files snapshot: page rows, the filtered total and per-category counts.
  */
-export declare function queryFiles(decryptedDir: string, limit?: number, offset?: number, category?: string): {
+export declare function queryFiles(decryptedDir: string, limit?: number, offset?: number, category?: string, 
+/**
+ * 关键词：匹配 `file_name` **或 `md5`**。
+ *
+ * 为什么在服务端做：此前界面「搜索时一次性拉 500 条再本地过滤」，而文件总量实测 4305
+ * —— 覆盖率 11.6%，且界面完全不提示，用户会以为「这个文件不存在」。
+ * 另外客户端那个 filter 写成 `(fileName || md5)`，`||` 短路让 md5 **永远不参与比较**，
+ * 所以「按 MD5 搜」在这个版本里根本没实现过。
+ */
+q?: string): {
     files: FileItem[];
     total: number;
     counts: Record<string, number>;

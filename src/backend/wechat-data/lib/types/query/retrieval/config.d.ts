@@ -41,6 +41,17 @@ export interface RetrievalConfig {
             enabled: boolean;
             topK: number;
         };
+        /**
+         * 知识库文件块通道。
+         *
+         * 与其余通道的差别：它是**条件通道** —— 只有调用方传了 `kbId`（当前知识库）时才真正
+         * 参与召回，否则返回 `active:false` 并附 note。因此这里可以安全地默认开启：
+         * 没有导入文件的用户不受任何影响，也不会多一次检索。
+         */
+        kb: {
+            enabled: boolean;
+            topK: number;
+        };
     };
     fusion: {
         /** RRF 平滑常数 k；k 越大越弱化头部名次差异（经验值 60）。 */

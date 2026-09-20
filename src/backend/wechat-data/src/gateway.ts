@@ -7,7 +7,7 @@ import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
 import { querySessions } from './query/sessions.ts'
 import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
@@ -46,10 +46,11 @@ import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
 import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
-import { buildSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages } from './query/search.ts'
+import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
 import { decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
+import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbFileRegisterResult, KbSearchResult, KbSummaryResult } from './types.ts'
 import { resolveSnsImageDataUrl } from './query/sns-image.ts'
 import { resolveArticleCoverDataUrl } from './query/article-cover.ts'
 import { resolveMessageFileDataUrl } from './query/media-file.ts'
@@ -68,11 +69,26 @@ import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './qu
 import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
 import { exportAllSessions, exportAnnualReport, exportCsv, exportMoments, exportSessionMessagesStreamed } from './query/export.ts'
 import { deleteExportHistory, listExportHistory, pruneExportHistory, recordExport } from './query/export-history.ts'
+import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from './query/ask-history.ts'
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from './query/ask.ts'
 import { auditGrounding, groundingRepairHint } from './query/grounding.ts'
 import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
 import { runRetrievalPipeline } from './query/retrieval/pipeline.ts'
+import { citationDocKey, fuseKbHits } from './query/retrieval/kb-channel.ts'
 import { buildVectorIndex, vectorIndexStatus, vectorIndexSummary, type EmbedFn } from './query/retrieval/embedding.ts'
+import { buildKbVectorIndex, kbVectorIndexStatus, searchKbDense } from './query/kb-vectors.ts'
+import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vectors.ts'
+import {
+  kbModelOverrideCounts,
+  kbModelsOnKbDelete,
+  readKbModelSettings,
+  resolveModelRef,
+  touchKbEntitiesAt,
+  writeKbModelSettings,
+} from './query/kb/model-config.ts'
+import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts'
+import { extractFileEntities, kbEntitySummary, mergeDocEntities, readDocEntities, type KbEntitySummary } from './query/kb/extract.ts'
+import { rankLinkCandidates, SUGGEST_POOL_MAX } from './query/kb/suggest.ts'
 import { adaptWeights, attributeFeatures, feedbackStats, listFeedback, loadAdaptedWeights, recordFeedback, saveAdaptedWeights } from './query/retrieval/feedback.ts'
 import { runSyntheticEval, syntheticIntentAccuracy } from './query/retrieval/eval-dataset.ts'
 import { formatEvalReport } from './query/retrieval/eval.ts'
@@ -101,7 +117,13 @@ import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEdite
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
 import { bumpDataGeneration, boundedSet, invalidateWechatMeta } from './query/meta.ts'
 import { contactMeta } from './query/meta.ts'
-import { buildKnowledgeGraph, deleteNote as deleteNoteRow, listNotes, saveNote as saveNoteRow } from './query/notes.ts'
+import { buildKnowledgeGraph, createKb as createKbRow, deleteKb as deleteKbRow, deleteNote as deleteNoteRow, listKbs, listNotes, renameKb as renameKbRow, saveNote as saveNoteRow } from './query/notes.ts'
+import type { KnowledgeSnapshotRead } from './query/notes.ts'
+// 知识库「文件」域：与笔记**分开一个库文件**（`wechat_kb_files.db`），所以是另一组导入。
+import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, recoverInterrupted, registerKbFile, setKbFileRagFlag, setKbFileSummary } from './query/kb-files.ts'
+import { readDocGraph } from './query/kb/entities.ts'
+import { drainKbQueue } from './query/kb-queue.ts'
+import { searchKb as searchKbRows } from './query/kb-search.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -129,15 +151,34 @@ interface ResolvedDirs {
  *
  * 由检索结果**算出来**，不是让模型写的 —— 模型写的「来源」可能被编造，
  * 而这行数字直接来自本次引用到的原文，用户可逐条对照。
+ *
+ * ⚠ 会话数**只数消息**：知识库引用的 `username` 是 `kb:<kbId>:<fileId>`（它按文件分组
+ * 是为了同源去重，不是会话），把它算进「N 个会话」这行就开始说谎 ——
+ * 用户会照着这行去数，然后发现自己只有 2 个会话却写着 3 个。
+ * 文件另按**文件**去重单列（同一份文件命中三块是 1 个文件），与「条数」是两个口径。
  * @param citations - 本次检索到的原文（引用锚点）。
  * @returns 一行来源说明；没有原文时返回空串。
  */
-function askBasisLine(citations: ReadonlyArray<{ time?: string; username?: string }>): string {
+function askBasisLine(citations: ReadonlyArray<{
+  time?: string
+  username?: string
+  source?: 'msg' | 'kb'
+  kb?: { fileId?: number; fileName?: string }
+  snippet?: string
+}>): string {
   if (citations.length === 0) return ''
-  const sessions = new Set(citations.map(c => c.username ?? '')).size
-  const days = citations.map(c => (c.time ?? '').slice(0, 10)).filter(Boolean).sort()
+  const msgs = citations.filter(c => c.source !== 'kb')
+  const kbItems = citations.filter(c => c.source === 'kb')
+  const sessions = new Set(msgs.map(c => c.username ?? '')).size
+  const days = msgs.map(c => (c.time ?? '').slice(0, 10)).filter(Boolean).sort()
   const span = days.length > 0 ? ` · ${days[0]} ~ ${days[days.length - 1]}` : ''
-  return `依据本机记录：${citations.length} 条原文 · ${sessions} 个会话${span}`
+  const parts = [`${citations.length} 条原文`]
+  if (msgs.length > 0) parts.push(`${sessions} 个会话`)
+  if (kbItems.length > 0) {
+    const files = new Set(kbItems.map(c => (c.kb?.fileId !== undefined ? 'f' + c.kb.fileId : (c.kb?.fileName ?? c.snippet ?? ''))))
+    parts.push(`${files.size} 个知识库文件`)
+  }
+  return `依据本机记录：${parts.join(' · ')}${span}`
 }
 
 /** 微信原始数据根目录（`<账号根>`，用于定位 msg/cache 下的媒体）。 */
@@ -203,6 +244,16 @@ const ASK_FEEDBACK_CAP = 200
 
 /** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
 const IMAGE_BATCH_MAX = 200
+/**
+ * 文件摘要一次喂给模型的字符上限。
+ *
+ * 为什么是 8000：一份文件最多两万块、约一千万字（`kb/chunk.ts` 的
+ * `CHUNK_MAX_CHARS × MAX_CHUNKS_PER_FILE`），全量根本进不了 prompt。8000 字与
+ * 问答侧的上下文预算（`compress.maxChars` 6000）同一量级，够概括一份中等文档，
+ * 又不至于让一次摘要吃掉整条上下文。截断是**必须被说出来**的 ——
+ * 覆盖了多少字要落库并回给界面（见 `summarizeKbFile`）。
+ */
+const SUMMARY_INPUT_CHARS = 8000
 
 /**
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
@@ -286,6 +337,14 @@ export class WechatDataGateway extends TypertRemoteService {
    * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
    */
   private readonly _askFeedbackSeen = new Map<string, number>()
+  /**
+   * 按库向量索引的**在飞构建**进度（kbId → 进度），给面板的「语义索引」按钮轮询。
+   *
+   * 为什么是进程内而不是落库：这是「此刻有没有在跑、跑到哪」的瞬时态，落库就要处理
+   * 进程崩溃留下的假进行中（比不显示更糟）。真正的持久事实（多少块、哪个模型、何时建的）
+   * 在向量库自己的 meta 与行里，见 `kbVectorIndexStatus`。
+   */
+  private readonly _kbIndexJobs = new Map<number, { done: number; total: number; startedAt: number; error: string }>()
   /**
    * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
    *
@@ -390,6 +449,35 @@ export class WechatDataGateway extends TypertRemoteService {
     // time (HH:MM) matches the current minute and has not run in the last minute.
     const schedTimer = setInterval(() => { void this.maybeRunDueTasks() }, 30_000)
     ctx.effect(() => () => { clearInterval(schedTimer) }, 'wechat-data: summary scheduler')
+    // 知识库文件库的崩溃恢复：把上一个进程留下的 parsing / chunking / embedding 打回 queued。
+    // **只在启动时做这一次** —— `recoverInterrupted` 自己按数据根记住「本进程已做过」，
+    // 重复调用直接跳过。把这件事放进「读列表」的路径是这类功能最常见的走捷径写法，
+    // 它的 bug 是：用户正在上传一个大文件（parse_state = parsing）时，任何一次列表刷新
+    // 都会把它判成「崩溃残留」并打断一次正常的解析（计划 R7，由用例钉住）。
+    const recovered = recoverInterrupted(this._dirs.decrypted)
+    if (recovered.reset > 0) console.log('[kb-files] 崩溃恢复：' + recovered.reset + ' 个文件已重新排队')
+    if (recovered.readError !== undefined) console.warn('[kb-files] 崩溃恢复失败：' + recovered.readError)
+    /**
+     * 紧接着把解析队列排干净：上个进程留下的 `queued` 行、以及刚被 `recoverInterrupted`
+     * 打回 `queued` 的那些，在这里才被真正解掉。
+     *
+     * **顺序不能反**（先恢复、后清扫）：反了的话，被重置的那一行要等下一次启动才会被解，
+     * 而用户看到的是「明明解过一半、重开之后还是等待解析」。`recoverInterrupted` 自己
+     * 保证「本进程只做一次」，所以这里可以直接跟着调。
+     *
+     * 用 `void` 而不是 `await`：这是启动路径，等它等于把「窗口出现」绑在
+     * 「把用户上次没解完的文件全解完」上 —— 几十份 PDF 能让窗口几十秒不出现。
+     * 解不完不会丢：每轮都把进度写进 `parse_state`（用户看得见），真被中断了，
+     * 下一次启动的崩溃恢复会把它们捡回来。
+     */
+    void drainKbQueue(this._dirs.decrypted).then((r) => {
+      if (r.processed > 0) {
+        console.log('[kb-queue] 启动清扫：处理 ' + r.processed + ' 个文件（就绪 ' + r.ready
+          + ' / 无正文 ' + r.unsupported + ' / 失败 ' + r.failed + '）')
+      }
+    }).catch((e: unknown) => {
+      console.warn('[kb-queue] 启动清扫异常：' + (e instanceof Error ? e.message : String(e)))
+    })
   }
 
   /**
@@ -495,20 +583,154 @@ export class WechatDataGateway extends TypertRemoteService {
   }
 
   /**
-   * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
+   * 构造「过隐私闸门」的 embedding 函数。
    *
    * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
    * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
+   *
+   * ⚠ `feature` 为什么是**参数**而不是写死 `ask_embed`：审计表按功能名分列，而这几处
+   * embedding 的**数据范围完全不同** —— 消息侧（`ask_embed`）只发检索到的聊天片段，
+   * 知识库侧（`kb_embed`）发的是用户选进知识库的**文件正文**，链接建议（`kb_link_suggest`）
+   * 发的是**用户正在写的笔记正文**加本库候选标题。写死同一个名字，
+   * 「我到底把哪一类东西发出去了」在审计里就分不开 —— 而用户完全可能只对其中一类给过同意。
    * @param model - 向量模型名（空则回退 chat model）。
+   * @param feature - 审计里的功能名（`ask_embed` 聊天片段 / `kb_embed` 知识库文件正文 /
+   *   `kb_link_suggest` 笔记正文与候选标题）。
    * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
    */
-  private makeEmbedFn(model: string): EmbedFn | undefined {
+  private makeEmbedFn(model: string, feature: 'ask_embed' | 'kb_embed' | 'kb_link_suggest' = 'ask_embed'): EmbedFn | undefined {
     const llmAny = this._ctx.llm as unknown as { embed?: (texts: string[], opts?: { model?: string }) => Promise<number[][]> }
     if (typeof llmAny?.embed !== 'function') return undefined
     return async (texts: string[]): Promise<number[][]> => {
-      const gate = this.privacyGate('ask_embed', { sessions: 0, messages: texts.length }, texts)
+      const gate = this.privacyGate(feature, { sessions: 0, messages: texts.length }, texts)
       if (!gate.ok) throw new Error(gate.error)
       return llmAny.embed!(gate.texts, model ? { model } : undefined)
+    }
+  }
+
+  /**
+   * 「这次 embedding 实际用的模型名」—— 由 LLM 桥回答，与它自己发请求时用的是**同一个解析**。
+   *
+   * 为什么不在这里自己拼一遍优先级：那等于第二次实现宿主侧的 `override || embeddingModel || model`
+   * 规则，而两处规则一旦漂移，向量库里记的模型名就成了一个没人用得上的字符串 ——
+   * 「换没换嵌入模型」的判定恰恰读的就是它（`§7 F1`：此前这边记 `'default'`、那边发 llm.json 的值，
+   * 于是换模型永远不触发重建，旧向量被当成新模型的用）。所以记账名**必须**由发送方给出。
+   * 桥未提供该方法时（测试桩）退回 override 本身。
+   * @param override - 显式指定的模型名（可空）。
+   * @returns 生效模型名；未配置时为空串。
+   */
+  private embedModelName(override = ''): string {
+    const llmAny = this._ctx.llm as unknown as { embeddingModelName?: (o?: string) => string }
+    if (typeof llmAny?.embeddingModelName !== 'function') return override
+    return String(llmAny.embeddingModelName(override) ?? '')
+  }
+
+  /**
+   * 某个角色的**全局**生效模型名（还没叠库级覆盖）。
+   *
+   * 三个角色都从宿主桥取值：桥是唯一知道「实际会发出去什么」的地方，
+   * 网关自己再拼一遍优先级就会重新制造 §7 F1 那种两条链各算一次的局面。
+   * @param role - 语言 / 嵌入 / 重排序。
+   * @returns 模型名；空串 = 这个角色没配。
+   */
+  private globalModelName(role: KbModelRole): string {
+    if (role === 'embed') return this.embedModelName(loadRetrievalConfig(this._dirs.decrypted).embedding.model)
+    const llmAny = this._ctx.llm as unknown as { rerankModelName?: () => string; config?: { model?: string; rerankModel?: string } }
+    if (role === 'rerank') {
+      if (typeof llmAny?.rerankModelName === 'function') return String(llmAny.rerankModelName() ?? '')
+      return String(llmAny?.config?.rerankModel ?? '')
+    }
+    const sel = (this._ctx as unknown as {
+      agentDefaultModel?: { currentSelection(): { model?: string } }
+    }).agentDefaultModel?.currentSelection?.()
+    return String(sel?.model ?? llmAny?.config?.model ?? '')
+  }
+
+  /**
+   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）。
+   *
+   * 每次调用都重读设置：`llm.json` 那条链就是「改完下一次生效、不必重启」的语义，
+   * 这里缓存住就会让库级覆盖比全局配置更难改。一次 SQLite 主键查是微秒级，不心疼。
+   * @param kbId - 知识库 id（非法时等价于「没有库级覆盖」）。
+   * @param role - 哪个角色。
+   * @returns 解析结果（含来源，界面与审计都要用它说话）。
+   */
+  private kbModel(kbId: number, role: KbModelRole): ResolvedModel {
+    const s = readKbModelSettings(this._dirs.decrypted, kbId)
+    const ref = role === 'chat' ? s.chatRef : role === 'embed' ? s.embedRef : s.rerankRef
+    return resolveModelRef(ref, this.globalModelName(role))
+  }
+
+  /**
+   * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）。
+   *
+   * 与 `summarizeKbFile` 同一套纪律：`privacyGate` 过闸 + `BlockAssembler` 收流 +
+   * 失败抛出。为什么不复用摘要那条路径：那些地方各自要拼自己的 prompt 与 system，
+   * 抽出来只共享「过闸 → 发 → 收文本」这三步，比造一个带一堆选项的大泛型函数诚实。
+   * @param kbId - 当前库（取语言模型的库级覆盖）。
+   * @param feature - 审计里登记的功能名。
+   * @returns 调用函数；桥不支持流式时 undefined（调用方据此报「模型通道不可用」）。
+   */
+  private makeChatAsker(kbId: number, feature: string): ((prompt: string) => Promise<string>) | undefined {
+    const ctx = this._ctx
+    const llmAny = ctx.llm as unknown as { stream?: (o: unknown) => AsyncIterable<unknown> }
+    if (typeof llmAny?.stream !== 'function') return undefined
+    const model = this.kbModel(kbId, 'chat').model
+    const sel = (ctx as unknown as {
+      agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
+    }).agentDefaultModel?.currentSelection()
+    const provider = String(sel?.provider ?? '')
+    return async (prompt: string): Promise<string> => {
+      const blocked = this.privacyBlocked(feature)
+      if (blocked !== null) throw new Error(blocked)
+      const gate = this.privacyGate(feature, { sessions: 0, messages: 0 }, [prompt])
+      if (!gate.ok) throw new Error(gate.error)
+      const assembler = new BlockAssembler()
+      const opts: GenerateOptions = {
+        provider,
+        model,
+        messages: [createUserMessage({
+          content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+          source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+        })],
+        system: '你是一名严格的信息抽取器。只输出要求的行格式，不解释、不寒暄、不补全文档里没有的名字。',
+        maxTokens: 500,
+      }
+      for await (const c of ctx.llm.stream(opts)) assembler.push(c)
+      return assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+    }
+  }
+
+  /**
+   * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）。
+   *
+   * 三条纪律，少一条都是实质性的漏洞：
+   *   ① `privacyBlocked` 判在**任何出网之前**（早于「没配模型」那类早退 —— 顺序错了
+   *      用户看到的会是「AI 不可用」，把「拦截生效了」这件事盖掉）；
+   *   ② `privacyGate` 必须一次过 `[query, ...documents]`。rerank 的入参天然是一批文档，
+   *      只 gate 查询词等于把 N 条正文**裸发出去**，而审计表还会记成「已脱敏」；
+   *   ③ 失败一律抛出而不是吞掉：调用方（pipeline）负责退回本地加权，并在 `rerankInfo`
+   *      里说清这次为什么没精排。
+   * 功能名叫 `ask_rerank` 而不是 `kb_rerank`：这一阶段跑在整个问答检索管道上，
+   * 候选既可能来自聊天记录也可能来自知识库文件 —— 按知识库命名会让审计里那一列
+   * 看起来只与文件有关，而它实际覆盖的是全部候选。
+   * @param kbId - 当前库（用于取库级覆盖；0 = 没有库上下文）。
+   * @returns 精排函数；没配模型或桥不支持时返回 undefined（管道据此跳过这一段）。
+   */
+  private makeRerankFn(kbId: number): ((query: string, documents: string[]) => Promise<number[]>) | undefined {
+    const llmAny = this._ctx.llm as unknown as {
+      rerank?: (q: string, docs: string[], o?: { model?: string }) => Promise<number[]>
+    }
+    if (typeof llmAny?.rerank !== 'function') return undefined
+    const model = this.kbModel(kbId, 'rerank').model
+    if (model === '') return undefined
+    return async (query: string, documents: string[]): Promise<number[]> => {
+      const blocked = this.privacyBlocked('ask_rerank')
+      if (blocked !== null) throw new Error(blocked)
+      const gate = this.privacyGate('ask_rerank', { sessions: 0, messages: documents.length }, [query, ...documents])
+      if (!gate.ok) throw new Error(gate.error)
+      const [q, ...rest] = gate.texts
+      return llmAny.rerank!(q ?? query, rest, { model })
     }
   }
 
@@ -603,8 +825,8 @@ export class WechatDataGateway extends TypertRemoteService {
    * @returns RevokedSnapshot: revoked message items.
    */
   @Remote('getRevoked')
-  getRevoked(options?: { limit?: number; offset?: number }): RevokedSnapshot {
-    return queryRevoked(this._dirs.decrypted, options?.limit, options?.offset)
+  getRevoked(options?: { limit?: number; offset?: number; q?: string }): RevokedSnapshot {
+    return queryRevoked(this._dirs.decrypted, options?.limit, options?.offset, options?.q)
   }
 
   /**
@@ -663,13 +885,17 @@ export class WechatDataGateway extends TypertRemoteService {
   }
 
   /**
-   * Knowledge notes list.
+   * Knowledge notes list of **one** knowledge base.
+   *
+   * 命中集与 `total` 都只统计本库：改前 `total` 是全表 `COUNT(*)`，多库之后
+   * 会显示成「12 / 37」这种跨库数字。
+   * @param kbId - the knowledge base to read; required, there is no "all kbs" mode.
    * @param options - Optional case-insensitive search query and row cap.
-   * @returns NotesSnapshot: notes (newest first) plus the unpaged total.
+   * @returns NotesSnapshot: notes (newest first) plus the same-kb unpaged total.
    */
   @Remote('getNotes')
-  getNotes(options?: { query?: string; limit?: number }): NotesSnapshot {
-    return listNotes(this._dirs.decrypted, options)
+  getNotes(kbId: number, options?: { query?: string; limit?: number }): NotesSnapshot {
+    return listNotes(this._dirs.decrypted, kbId, options)
   }
 
   /**
@@ -678,11 +904,13 @@ export class WechatDataGateway extends TypertRemoteService {
    * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
    * is the join point with the social graph: the panel draws an edge from the
    * note to its source chat instead of leaving knowledge nodes floating.
-   * @param options - Note fields; title is required and unique (case-insensitive).
+   * @param kbId - owning knowledge base for a new note / expected owner for an update.
+   *   Title uniqueness is checked **within** that kb, not across the whole store.
+   * @param options - Note fields; title is required and unique in that kb (case-insensitive).
    * @returns NoteMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
    */
   @Remote('saveNote')
-  saveNote(options: {
+  saveNote(kbId: number, options: {
     id?: number
     title: string
     body?: string
@@ -691,35 +919,713 @@ export class WechatDataGateway extends TypertRemoteService {
     sourceUsername?: string
     sourceQuestion?: string
   }): NoteMutationResult {
-    const r = saveNoteRow(this._dirs.decrypted, options)
-    this.op('edit', 'save_note', r.ok ? 'ok' : 'fail', options.title, r.error ?? `id=${r.id ?? ''}`)
+    const r = saveNoteRow(this._dirs.decrypted, kbId, options)
+    // 只用于留痕，因此必须容错：kbId 变成独立参数后，漏传 options 会让 `options.title`
+    // 直接抛 TypeError，把 `saveNoteRow` 那句「知识库标识无效」的守卫信息顶掉。
+    this.op('edit', 'save_note', r.ok ? 'ok' : 'fail', options?.title ?? '', r.error ?? `id=${r.id ?? ''}`)
     return r
   }
 
   /**
    * Delete one knowledge note.
+   *
+   * `kbId` 不是「附加信息」而是**守卫**：笔记 id 全局自增，拿着甲库的 id 调乙库
+   * 会删掉甲库那一篇（数据直接没了）。归属不符时返回「笔记不存在」。
+   * @param kbId - expected owner; a row belonging to another kb is **not** deleted.
    * @param options - Note id.
    * @returns NoteMutationResult.
    */
   @Remote('deleteNote')
-  deleteNote(options: { id: number }): NoteMutationResult {
-    const r = deleteNoteRow(this._dirs.decrypted, options.id)
-    this.op('delete', 'delete_note', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? '')
+  deleteNote(kbId: number, options: { id: number }): NoteMutationResult {
+    const r = deleteNoteRow(this._dirs.decrypted, kbId, options?.id)
+    this.op('delete', 'delete_note', r.ok ? 'ok' : 'fail', `id=${options?.id ?? ''}`, r.error ?? '')
     return r
   }
 
   /**
-   * Knowledge graph: note nodes, `[[…]]` edges and unresolved stubs.
+   * Knowledge graph: note nodes, `[[…]]` edges, unresolved stubs, **plus the
+   * document entity layer** (registered files and their normalized sections).
    *
    * 与 `getGraph` 分开而不是合并：社交图谱的节点口径（联系人/群/我）和知识图谱
-   * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆；融合视图交给前端把
-   * 两份快照按 `sourceUsername` 拼起来（笔记 → 来源会话）。
-   * @returns KnowledgeSnapshot.
+   * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆。
+   * 两份快照**不在前端拼**：知识图谱的节点必须只来自知识库，人/群是通讯录数据，
+   * 因此曾经的「融合视图」已删除（见前端 panels/graph-model.ts 的文件头约束）。
+   *
+   * **一库一图**：`kbId` 必填且没有默认值可给 —— 改前这张图是全库合并的，
+   * 多库之后会把两个库里同名的笔记并成一个节点，`[[链接]]` 也会指错库。
+   *
+   * 文档实体在这里合流，而不是在 `notes.ts` 里：笔记库与文件库是**两个 db 文件**，
+   * `notes.ts` 那一层物理上看不见文件（它自己的注释就写着 `fileCount` 恒为 0）。
+   * 与 `getKbs` 的 fileCount 合流是同一个理由、同一个位置。
+   * 文件库读不到时图谱照常返回笔记部分，但把原因并进 `readError` ——
+   * 「这个库没登记过文件」与「文件库打不开」必须是两句话（N1）。
+   * @param kbId - the knowledge base to build from.
+   * @returns KnowledgeSnapshot（含运行期可能带上的 `readError`，见 `KnowledgeSnapshotRead`）。
    */
   @Remote('getKnowledgeGraph')
-  getKnowledgeGraph(): KnowledgeSnapshot {
+  getKnowledgeGraph(kbId: number): KnowledgeSnapshotRead {
     const names = contactMeta(this._dirs.decrypted).names
-    return buildKnowledgeGraph(this._dirs.decrypted, names)
+    const snap = buildKnowledgeGraph(this._dirs.decrypted, kbId, names)
+    const doc = readDocGraph(this._dirs.decrypted, kbId, snap.notes.map(n => ({ id: n.id, title: n.title })))
+    if (doc.readError !== undefined) {
+      return { ...snap, readError: snap.readError ?? `文件库读取失败（图上没有文件节点，但不是「这个库没有文件」）：${doc.readError}` }
+    }
+    /**
+     * 推断层合流：把「模型说这份文件里有哪些实体」变成 `ent:<key>` 节点 + `suggest` 边。
+     * 与上面观测层的区别只在**可信度**，所以命名空间与边 kind 都另起一套，
+     * 让画布能用虚线把它们分开画（同一 label 在多个文件被抽出 ⇒ 合成一个节点）。
+     */
+    const ent = mergeDocEntities(readDocEntities(this._dirs.decrypted, kbId).items)
+    return {
+      ...snap,
+      docFiles: doc.files,
+      docSections: doc.sections,
+      docEntities: ent.nodes,
+      edges: [...snap.edges, ...doc.containEdges, ...doc.mentionEdges, ...ent.edges],
+      summary: { ...snap.summary, fileCount: doc.files.length, sectionCount: doc.sections.length, entityCount: ent.nodes.length },
+    }
+  }
+
+  /**
+   * 让模型读一遍本库的文件，抽出实体（推断层）。
+   *
+   * 三条纪律：
+   *   ① `privacyBlocked('kb_extract')` 判在任何模型调用之前；
+   *   ② 只处理 `include_in_rag = 1` 的文件 —— 关掉出网开关的文件连一次抽取都不该被发出去
+   *      （条件在 SQL 里，见 `extract.ts` 的 `readDigestForExtract`）；
+   *   ③ 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
+   * @param options - `kbId`；`fileIds` 限定范围（默认整库）；`limit` 单次最多几个文件。
+   * @returns 逐文件结果 + 汇总（失败的逐个带原因，不因一个失败就整批失败）。
+   */
+  @Remote('extractKbEntities')
+  async extractKbEntities(options: { kbId: number; fileIds?: number[]; limit?: number }): Promise<{
+    ok: boolean
+    error?: string
+    files: number
+    saved: number
+    failed: Array<{ id: number; error: string }>
+    model: string
+  }> {
+    const dir = this._dirs.decrypted
+    const kbId = Number(options?.kbId)
+    if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', files: 0, saved: 0, failed: [], model: '' }
+    const blocked = this.privacyBlocked('kb_extract', '把文件正文发送给模型抽取实体')
+    if (blocked !== null) {
+      this.op('task', 'kb_extract', 'skip', `kb=${kbId}`, blocked)
+      return { ok: false, error: blocked, files: 0, saved: 0, failed: [], model: '' }
+    }
+    const model = this.kbModel(kbId, 'chat').model
+    if (model === '') {
+      const msg = '未配置默认模型（agentDefaultModel），无法抽取实体'
+      this.op('task', 'kb_extract', 'fail', `kb=${kbId}`, msg)
+      return { ok: false, error: msg, files: 0, saved: 0, failed: [], model: '' }
+    }
+    const ask = this.makeChatAsker(kbId, 'kb_extract')
+    if (ask === undefined) return { ok: false, error: '模型通道不可用', files: 0, saved: 0, failed: [], model }
+    const all = listKbFiles(dir, kbId, { limit: 5000 }).items.filter(f => f.includeInRag)
+    const wanted = Array.isArray(options?.fileIds) && options.fileIds.length > 0
+      ? all.filter(f => (options.fileIds as number[]).includes(f.id))
+      : all
+    const cap = Math.max(1, Math.min(Number(options?.limit) || 20, 50))
+    const batch = wanted.slice(0, cap)
+    const failed: Array<{ id: number; error: string }> = []
+    let saved = 0
+    for (const f of batch) {
+      const r = await extractFileEntities(dir, kbId, f.id, ask, model)
+      if (r.ok) saved += r.saved ?? 0
+      else failed.push({ id: f.id, error: r.error ?? '未知原因' })
+    }
+    touchKbEntitiesAt(dir, kbId, Date.now())
+    this.op('task', 'kb_extract', failed.length === batch.length && batch.length > 0 ? 'fail' : 'ok',
+      `kb=${kbId}`, `${batch.length} 个文件 · 写入 ${saved} 条实体 · ${model}`)
+    return { ok: failed.length < batch.length, files: batch.length, saved, failed, model }
+  }
+
+  /**
+   * 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。
+   *
+   * 三条纪律（V6 的全部内容）：
+   *   ① `privacyBlocked('kb_link_suggest')` 判在所有早退之前 —— 「没配嵌入模型」不能
+   *      盖掉「用户明确说过不要出网」，否则审计里看不到那次被拦下的尝试；
+   *   ② 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
+   *      （`makeEmbedFn` 内部对整批文本过一次闸，漏一半就等于漏的那半没脱敏）；
+   *   ③ 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
+   *      `parseWikiLinks` 从正文里派生 —— 模型判断错的代价因此是「没人点」，
+   *      而不是「图谱里多了一条用户没写过的边」。
+   * @param options - `kbId`、正在编辑的 `text`、可选 `topK` 与自身标题 `excludeTitle`。
+   * @returns 候选（按相似度降序）+ 参与排序的池大小 + 说明。
+   */
+  @Remote('suggestKbLinks')
+  async suggestKbLinks(options: { kbId: number; text?: string; topK?: number; excludeTitle?: string }): Promise<{
+    ok: boolean
+    error?: string
+    candidates: Array<{ label: string; kind: 'note' | 'entity'; score: number }>
+    pool: number
+    model: string
+    note?: string
+  }> {
+    const dir = this._dirs.decrypted
+    const kbId = Number(options?.kbId)
+    const text = String(options?.text ?? '')
+    const bad = kbId > 0 ? null : '没有指定知识库'
+    // 拦截判在最前：早退顺序错了会让「被拦」在界面上显示成「没配模型」（同 §6.1 C3）
+    const blocked = this.privacyBlocked('kb_link_suggest', '把笔记正文与候选标题发送给模型')
+    const model = this.kbModel(kbId, 'embed').model
+    if (bad !== null) return { ok: false, error: bad, candidates: [], pool: 0, model }
+    if (blocked !== null) {
+      this.op('task', 'kb_link_suggest', 'skip', `kb=${kbId}`, blocked)
+      return { ok: false, error: blocked, candidates: [], pool: 0, model }
+    }
+    if (text.trim().length < 8) return { ok: false, error: '正文太短，先写几句再要建议', candidates: [], pool: 0, model }
+    if (model === '') return { ok: false, error: '未配置嵌入模型（本库或全局），无法给语义建议', candidates: [], pool: 0, model }
+    const embed = this.makeEmbedFn(model, 'kb_link_suggest')
+    if (embed === undefined) return { ok: false, error: '模型通道不可用', candidates: [], pool: 0, model }
+    const exclude = (options?.excludeTitle ?? '').trim().toLowerCase()
+    const notes = listNotes(dir, kbId, { limit: SUGGEST_POOL_MAX }).items
+      .filter(n => n.title.trim().toLowerCase() !== exclude)
+      .map(n => ({ label: n.title, kind: 'note' as const }))
+    const ents = readDocEntities(dir, kbId).items
+      .filter(e => e.label.trim().toLowerCase() !== exclude)
+      .map(e => ({ label: e.label, kind: 'entity' as const }))
+    const r = await rankLinkCandidates(text, [...notes, ...ents], embed, { topK: options?.topK })
+    this.op('task', 'kb_link_suggest', r.ranked.length > 0 ? 'ok' : 'skip', `kb=${kbId}`,
+      `${r.pool} 个候选 → ${r.ranked.length} 条建议 · ${model}${r.note ? ' · ' + r.note : ''}`)
+    return {
+      ok: true,
+      candidates: r.ranked.map(c => ({ label: c.label, kind: c.kind, score: Math.round(c.score * 1000) / 1000 })),
+      pool: r.pool,
+      model,
+      ...(r.note ? { note: r.note } : {}),
+    }
+  }
+
+  /**
+   * Knowledge base list — the scope selector's data source.
+   *
+   * 两个库文件在这里**合流**：笔记数来自笔记库（`listKbs`），文件数来自文件库
+   * （`countKbFilesByKb`，一次 GROUP BY）。合并只能写在这一层 —— `notes.ts` 看不到文件库。
+   *
+   * 少了这次合并，界面上的 `fileCount` 会恒为 0，于是删库弹层对一个「0 条笔记 / 5 个文件」
+   * 的库说「这个库是空的」（真机探针实测）。文件库读失败时 `countKbFilesByKb` 返回空表 ⇒
+   * 退化成 0，与本次改动前的行为一致，不是新增风险。
+   * @returns KbListSnapshot: every kb with its note count **and** file count. An
+   *   unreadable note store yields an empty list **plus** `readError`; callers must
+   *   not read that as "there is no kb at all" and create one over the top.
+   */
+  @Remote('getKbs')
+  getKbs(): KbListSnapshot {
+    const snap = listKbs(this._dirs.decrypted)
+    if (snap.items.length === 0) return snap
+    const files = countKbFilesByKb(this._dirs.decrypted)
+    // 第三个合流源：这个库有没有自定义模型（rail 的「模型」芯片要说「继承全局」还是「N 项自定义」）。
+    // 只带计数不带引用串 —— 引用串由 `getKbModelConfig` 按需读，列表里塞三个字符串没人用。
+    const models = kbModelOverrideCounts(this._dirs.decrypted)
+    return {
+      ...snap,
+      items: snap.items.map(k => ({ ...k, fileCount: files.get(k.id) ?? 0, modelOverrides: models.get(k.id) ?? 0 })),
+    }
+  }
+
+  /**
+   * Create one knowledge base.
+   * @param options - `name`: required, normalized-unique, at most `KB_NAME_MAX` chars.
+   * @returns KbMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
+   */
+  @Remote('createKb')
+  createKb(options: { name: string }): KbMutationResult {
+    const r = createKbRow(this._dirs.decrypted, options?.name ?? '')
+    this.op('edit', 'create_kb', r.ok ? 'ok' : 'fail', options?.name ?? '', r.error ?? `id=${r.id ?? ''}`)
+    return r
+  }
+
+  /**
+   * Rename one knowledge base.
+   *
+   * 笔记**不动**：归属存在 `kb_id` 上，库名只是显示名。用库名当外键的话，
+   * 「改名」会退化成「迁移全部笔记」，还要处理迁移到一半崩掉。
+   * @param options - `id` plus the new `name`.
+   * @returns KbMutationResult.
+   */
+  @Remote('renameKb')
+  renameKb(options: { id: number; name: string }): KbMutationResult {
+    const r = renameKbRow(this._dirs.decrypted, options?.id, options?.name ?? '')
+    this.op('edit', 'rename_kb', r.ok ? 'ok' : 'fail', `id=${options?.id ?? ''}`, r.error ?? (options?.name ?? ''))
+    return r
+  }
+
+  /**
+   * Delete one knowledge base.
+   *
+   * `action` **必填、无默认值**：库里的笔记是「搬到别的库」还是「一起删掉」只有调用方
+   * 能决定，而这里最危险的默认值恰好是「一起删」—— 一次「我以为只是删个空壳库」的点击
+   * 会直接把几十条笔记带走。默认库本身也不可删（它是迁移兜底）。
+   * @param options - `id` plus `action` (`{kind:'reassign',targetKbId}` or `{kind:'purge'}`).
+   * @returns KbMutationResult carrying `movedNotes` / `removedNotes`.
+   */
+  @Remote('deleteKb')
+  deleteKb(options: { id: number; action: KbDeleteAction }): KbMutationResult {
+    const r = deleteKbRow(this._dirs.decrypted, options?.id, options?.action)
+    // 文件侧必须在**库行删成功之后**才动：`deleteKbRow` 还会做一串前置校验
+    // （默认库不可删 / 目标库必须存在 / 目标库同名笔记会让它整体拒绝）。
+    // 反过来先迁文件的话，一次**被拒绝**的删库已经把用户的文件搬走了，而库还在。
+    //
+    // 两个库文件之间没有跨库事务，所以这一步是 best-effort：失败只留痕，并把
+    // `movedFiles` / `removedFiles` 留成 undefined（≠ 0）让界面能分开说两句话。
+    let files: { movedFiles: number; removedFiles: number } | undefined
+    if (r.ok) {
+      const target = options?.action?.kind === 'reassign' ? options.action.targetKbId : undefined
+      const report = kbFilesOnKbDelete(this._dirs.decrypted, options?.id, target)
+      if (report.ok) files = { movedFiles: report.movedFiles, removedFiles: report.removedFiles }
+      else console.warn('[kb-files] 删库时清点文件失败（库已删除）：' + (report.error ?? '未知原因'))
+      // 模型设置跟着删：库已经不在了，留一行「kb_id=3 用 m:xxx」既没人读，
+      // 又会在将来出现同一个 id 的新库**继承上一个库的模型覆盖**（SQLite 的
+      // INTEGER PRIMARY KEY 会复用已释放的 rowid，这不是假设）。
+      // 搬到别的库的那种情况也一样删：目标是它自己的设置，不该把源库的覆盖带过去。
+      if (kbModelsOnKbDelete(this._dirs.decrypted, options?.id)) {
+        this.op('delete', 'kb_model_settings', 'ok', `kb=${options?.id ?? ''}`, '随库删除')
+      }
+    }
+    const merged: KbMutationResult = files === undefined ? r : { ...r, ...files }
+    const fileNote = files === undefined ? 'files=未清点' : `files=${files.movedFiles}moved/${files.removedFiles}removed`
+    this.op(
+      'delete',
+      'delete_kb',
+      r.ok ? 'ok' : 'fail',
+      `id=${options?.id ?? ''}`,
+      r.error ?? `moved=${r.movedNotes ?? 0} removed=${r.removedNotes ?? 0} ${fileNote}`,
+    )
+    return merged
+  }
+
+  /**
+   * 一个知识库里的文件列表（新上传的在前）。
+   *
+   * 与 `getNotes` 同口径，`kbId` 必填：文件、分块、检索全部按库划作用域，
+   * **没有**「所有库的文件」这种视图 —— 那正是多库之后最容易出现的串数据。
+   * @param kbId - the knowledge base to read; required, there is no "all kbs" mode.
+   * @param options - Pagination (limit/offset).
+   * @returns KbFileListSnapshot. 库读不到时给 `readError` 而不是空列表，
+   *   好让面板说「读不到」而不是「还没有文件」。
+   */
+  @Remote('getKbFiles')
+  getKbFiles(kbId: number, options?: { limit?: number; offset?: number }): KbFileListSnapshot {
+    return listKbFiles(this._dirs.decrypted, kbId, options)
+  }
+
+  /**
+   * 读某个文件解析出来的正文（分页）。界面上「就地展开看内容」走这一条。
+   *
+   * 与 `getKbFiles` 同样：`kbId` 必填、没有「所有库」模式，而且这一条**还多一道**
+   * `fileId` 必须属于该库的确认 —— 它返回的是内容而不是计数，跨库串起来的后果重得多。
+   * 返回的是解析文本，不是原文件排版（表格 / 图片 / 页眉页脚在解析阶段已丢），
+   * 界面上必须这样标注，别让人以为在看原稿。
+   * @param kbId - 目标库（必填）。
+   * @param fileId - 目标文件。
+   * @param options - 分页（limit 上限 200 块）。
+   * @returns KbFileChunkPage。
+   */
+  @Remote('getKbFileChunks')
+  getKbFileChunks(kbId: number, fileId: number, options?: { limit?: number; offset?: number }): KbFileChunkPage {
+    return listKbFileChunks(this._dirs.decrypted, kbId, fileId, options)
+  }
+
+  /**
+   * 登记一批文件（原生对话框多选的结果）。
+   *
+   * 逐个登记、逐个回执：每个文件各自一个事务，中途某一个失败不影响已经进来的那些。
+   * 于是一次多选的部分失败（重复 / 类型不支持 / 太大）是**可解释**的，
+   * 而不是一句笼统的「添加失败」。
+   * @param options - `kbId`、`paths`（绝对路径数组）、`includeInRag`（不给按 true）。
+   * @returns KbFileAddResult：`ok` = 至少进来一个；逐项原因在 `results` 里。
+   */
+  @Remote('addKbFiles')
+  addKbFiles(options: { kbId: number; paths: string[]; includeInRag?: boolean }): KbFileAddResult {
+    const raw = Array.isArray(options?.paths) ? options.paths : []
+    const paths = raw.filter((p) => typeof p === 'string' && p.trim() !== '')
+    if (paths.length === 0) return { ok: false, added: 0, failed: 0, results: [], error: '没有选择文件' }
+    const results: KbFileRegisterResult[] = []
+    for (const srcPath of paths) {
+      results.push(registerKbFile(this._dirs.decrypted, {
+        kbId: Number(options?.kbId),
+        srcPath,
+        includeInRag: options?.includeInRag,
+      }))
+    }
+    const added = results.filter((x) => x.ok).length
+    this.op('edit', 'add_kb_files', added > 0 ? 'ok' : 'fail', 'count=' + paths.length, 'added=' + added)
+    /**
+     * B 档（pdf / docx / xlsx / xls）的文件在这里才排进队列。
+     *
+     * `registerKbFile` 只落一行 `queued`、**不**触发执行 —— 存储层不反向依赖队列，
+     * 「谁在什么时候启动后台活」全部收在本文件里，一眼看得全。
+     *
+     * `void` 不等待：回执要立刻给出去（H4）。判据是「结果里真的出现了 `queued` 行」
+     * 而不是「added > 0」—— 纯文本上传不该白开一次库去发现队列是空的。
+     */
+    if (results.some((x) => x.ok && x.file?.parseState === 'queued')) {
+      void drainKbQueue(this._dirs.decrypted).catch((e: unknown) => {
+        console.warn('[kb-queue] 解析队列启动异常：' + (e instanceof Error ? e.message : String(e)))
+      })
+    }
+    return { ok: added > 0, added, failed: results.length - added, results }
+  }
+
+  /**
+   * 删除一个文件（连带它的分块 / FTS 行 / 向量 / blob 副本）。
+   *
+   * **不碰用户电脑上的原文件** —— 删的是知识库里的这一份，那份原文件仍然在他的盘上。
+   * `kbId` 是**守卫**：文件 id 全局自增，拿甲库的 id 调乙库会删掉甲库那一条，
+   * 而删除是物理的、没有撤销（与 `deleteNote` 同一条纪律）。
+   * @param options - `kbId` plus the file row id.
+   * @returns KbFileMutationResult（回执里带连带清掉的分块数与副本是否被删）。
+   */
+  @Remote('deleteKbFile')
+  deleteKbFile(options: { kbId: number; id: number }): KbFileMutationResult {
+    const r = deleteKbFileRow(this._dirs.decrypted, options?.kbId, options?.id)
+    this.op('delete', 'delete_kb_file', r.ok ? 'ok' : 'fail', `id=${options?.id ?? ''}`, r.error ?? `chunks=${r.removedChunks ?? 0}`)
+    return r
+  }
+
+  /**
+   * 切换一个文件是否参与向量化（出网）。
+   *
+   * 关掉之后该文件**完全不出网**，但仍然留在 FTS 索引里可被关键词搜到 ——
+   * 这正是「库里有合同，但我还想搜到它」的实现方式（设计稿 §9.2）。
+   * 全局「禁止 AI 出网」仍然是同一道闸门，一起拦下。
+   * @param options - `kbId`、文件 id、是否参与。
+   * @returns KbFileMutationResult.
+   */
+  @Remote('setKbFileRag')
+  setKbFileRag(options: { kbId: number; id: number; includeInRag: boolean }): KbFileMutationResult {
+    return setKbFileRagFlag(this._dirs.decrypted, options?.kbId, options?.id, options?.includeInRag !== false)
+  }
+
+  /**
+   * 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。
+   *
+   * 顺序是硬性的（照 `optimizeAskQuestion` 的口径，理由写在它头上）：
+   *   ① `privacyBlocked` 判在**最前面**，早于「未配置模型」那类早退 ——
+   *      否则用户开了「禁止 AI 出网」又没配模型时，看到的是「未配置模型」，
+   *      把「拦截真的生效了」这件事盖掉了。
+   *   ② `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
+   *      给它做摘要等于推翻用户已经做过的决定，不是「再确认一下」能补的。
+   *   ③ 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
+   *
+   * ⚠ 只喂得下前若干字：一份文件最多两万块、约一千万字，一次请求装不进去。
+   *   所以按 `SUMMARY_INPUT_CHARS` 截断，并把**实际覆盖的字符数**一起返回并落库 ——
+   *   界面必须据此标出「这只是前 N 字的摘要」。不标就是让一个局部摘要
+   *   顶着「摘要」的名字被当成整份文件的概括读，那是界面在骗人。
+   * @param options - `kbId`（守卫）与 `id`（目标文件）。
+   * @returns KbSummaryResult。
+   */
+  @Remote('summarizeKbFile')
+  async summarizeKbFile(options: { kbId: number; id: number }): Promise<KbSummaryResult> {
+    const ctx = this._ctx
+    const kbId = Number(options?.kbId)
+    const id = Number(options?.id)
+
+    const blocked = this.privacyBlocked('kb_file_summary')
+    if (blocked !== null) {
+      this.op('task', 'kb_file_summary', 'skip', '', blocked)
+      return { ok: false, error: blocked }
+    }
+
+    const file = getKbFile(this._dirs.decrypted, kbId, id)
+    if (file === null) return { ok: false, error: '文件不存在，或不属于当前知识库' }
+    if (!file.includeInRag) {
+      // 明确说「因为你关掉了那个开关」，否则用户只会看到一次失败的生成。
+      const reason = '该文件已关闭「参与语义检索（会出网）」，按此设置它的内容不得离开本机，因此不能生成摘要。'
+      this.op('task', 'kb_file_summary', 'skip', `id=${id}`, reason)
+      return { ok: false, error: reason }
+    }
+    if (file.parseState !== 'ready' || file.chunkCount === 0) {
+      return { ok: false, error: '这个文件还没有可用的正文块（解析未成功或还在排队），无法摘要。' }
+    }
+
+    const sel = (ctx as unknown as {
+      agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
+    }).agentDefaultModel?.currentSelection()
+    if (!sel || !sel.provider || !sel.model) {
+      this.op('task', 'kb_file_summary', 'fail', `id=${id}`, '未配置默认模型（agentDefaultModel）')
+      return { ok: false, error: '未配置默认模型（agentDefaultModel），无法生成摘要' }
+    }
+    /**
+     * 本库的语言模型覆盖（只换**模型名**，端点与凭据仍用当前生效的那一套）。
+     * 空 ⇒ 用全局那条。落库的 `summary_model` 记的就是这个最终值 ——
+     * 换模型之后用户要能看出这条摘要不是当前模型给的。
+     */
+    const chatModel = this.kbModel(kbId, 'chat').model || sel.model
+
+    // 按字符预算取前若干块：块本身就是文档原有顺序，截的是「开头」而不是随机片段。
+    const parts: string[] = []
+    let covered = 0
+    let offset = 0
+    for (let page = 0; page < 20 && covered < SUMMARY_INPUT_CHARS; page += 1) {
+      const chunk = listKbFileChunks(this._dirs.decrypted, kbId, id, { limit: 200, offset })
+      if (chunk.readError !== undefined) return { ok: false, error: '正文读取失败：' + chunk.readError }
+      if (chunk.items.length === 0) break
+      for (const c of chunk.items) {
+        if (covered >= SUMMARY_INPUT_CHARS) break
+        const take = c.text.slice(0, SUMMARY_INPUT_CHARS - covered)
+        parts.push((c.heading !== '' ? `【${c.heading}】\n` : '') + take)
+        covered += take.length
+      }
+      offset += chunk.items.length
+      if (offset >= chunk.total) break
+    }
+    if (covered === 0) return { ok: false, error: '这个文件没有可摘要的正文。' }
+
+    const body = parts.join('\n\n')
+    // 截断与否要写进 prompt：模型若不知道正文被切过，会理直气壮地概括出一个「全文要点」。
+    const scope = covered < file.charCount ? `前 ${covered} 字（全文 ${file.charCount} 字，已截断）` : `全文 ${file.charCount} 字`
+    const prompt = `文件名：${file.name}\n\n正文（${scope}）：\n${body}`
+    const gate = this.privacyGate('kb_file_summary', { sessions: 0, messages: 0 }, [prompt])
+    if (!gate.ok) {
+      this.op('task', 'kb_file_summary', 'skip', `id=${id}`, gate.error)
+      return { ok: false, error: gate.error }
+    }
+
+    const assembler = new BlockAssembler()
+    const opts: GenerateOptions = {
+      provider: sel.provider,
+      model: chatModel,
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+        source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+      })],
+      system: '你是文档摘要器。用中文把给定正文概括成不超过 5 条要点，每条一行、以「· 」开头，'
+        + '只写正文里确有的事实，不要推测、不要评价。若正文被截断，最后一行注明「以上仅覆盖给出的部分」。',
+      maxTokens: 400,
+    }
+    let text = ''
+    try {
+      for await (const c of ctx.llm.stream(opts)) assembler.push(c)
+      text = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+    } catch (e) {
+      this.op('task', 'kb_file_summary', 'fail', `id=${id}`, (e as Error).message)
+      return { ok: false, error: '模型调用失败：' + (e as Error).message }
+    }
+    if (text === '') return { ok: false, error: '模型没有返回内容，未写入摘要。' }
+
+    // 落库的是**实际发出去的那个模型名**（含库级覆盖），不是全局那条 ——
+    // 否则换了库级模型之后，界面上的「由 X 生成」会指着一条其实没参与过的模型。
+    const model = `${sel.provider}/${chatModel}`
+    const saved = setKbFileSummary(this._dirs.decrypted, kbId, id, text, model, covered)
+    if (!saved.ok) return { ok: false, error: '摘要已生成但保存失败：' + (saved.error ?? '未知原因') }
+    this.op('task', 'kb_file_summary', 'ok', `id=${id}`, `${model} · 覆盖 ${covered}/${file.charCount} 字`)
+    return { ok: true, summary: text, model, at: Date.now(), coveredChars: covered, totalChars: file.charCount }
+  }
+
+  /**
+   * 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。
+   *
+   * 为什么稠密这一路要在网关做而不下沉进 `searchKbRows`：稠密要**出网**（把查询词送去
+   * embedding），而隐私闸门与模型名解析都住在这一层；query 层保持「给什么函数用什么函数」，
+   * 才能被问答管道与面板同时复用（`retrieval/kb-channel.ts` 走的就是同一个 `searchKbDense`）。
+   *
+   * `degraded` 现在说的是**本次真话**（原来是一句硬编码的「未建向量索引」）：
+   * 未配模型 / 索引过期 / embedding 失败 / 稠密跑成功，四种情形的出路完全不同，
+   * 混成一句会让用户以为「知识库里没有这个东西」。
+   * @param options - `kbId`、查询词、可选条数（上限 `MAX_KB_TOP_K`）。
+   * @returns KbSearchResult：命中 + 统计 + 降级说明。
+   */
+  @Remote('searchKb')
+  async searchKb(options: { kbId: number; query?: string; topK?: number }): Promise<KbSearchResult> {
+    const dir = this._dirs.decrypted
+    const res = searchKbRows(dir, options?.kbId, { query: options?.query, topK: options?.topK })
+    const q = (options?.query ?? '').trim()
+    // 稀疏这一路自己就没跑成（无效请求 / 库打不开）或压根没查询词 ⇒ 不叠加稠密，原样返回。
+    // ⚠ **不能**因为「稀疏 0 命中」就提前返回：那正是稠密唯一有价值的场景
+    //（逐字搜不到、换个说法能搜到），提前返回等于把这条通道的意义删掉。
+    if (res.error !== undefined || res.readError !== undefined || q === '') {
+      return res
+    }
+    const cfg = loadRetrievalConfig(dir)
+    const embedModel = this.kbModel(Number(options?.kbId), 'embed').model
+    if (!cfg.embedding.enabled || embedModel === '') {
+      return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
+    }
+    const kbId = Number(options?.kbId)
+    const st = kbVectorIndexStatus(dir, kbId, embedModel)
+    if (!st.ready) {
+      // 未就绪的四种原因分开说：`no-index` 是「还没建」，`model-mismatch` 是「建过但换了模型」，
+      // 前者点一下按钮就能建，后者必须先让用户知道要重算一遍（会再次出网）。
+      const label = st.staleReason === 'no-index'
+        ? '仅关键词（本库还没有向量索引）'
+        : st.staleReason === 'model-mismatch'
+          ? '仅关键词（本库索引由别的模型生成，需重建才能语义检索）'
+          : '仅关键词（向量索引不可用）'
+      return { ...res, degraded: { reason: st.staleReason === 'model-mismatch' ? 'index-stale' : 'no-vector-index', label } }
+    }
+    const embed = this.makeEmbedFn(embedModel, 'kb_embed')
+    if (!embed) return { ...res, degraded: { reason: 'no-embed-model', label: '仅关键词（未配置向量模型）' } }
+    try {
+      const dense = await searchKbDense(dir, kbId, q, embed, {
+        topK: Math.max(res.hits.length, 1),
+        minSimilarity: cfg.channels.dense.minSimilarity,
+        candidatePool: cfg.channels.dense.candidatePool,
+        model: embedModel,
+      })
+      if (dense.note !== undefined) {
+        return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索这次没跑成：' + dense.note + '）' } }
+      }
+      const fused = fuseKbHits(res.hits, dense.hits, { k: cfg.fusion.k })
+      return {
+        ...res,
+        hits: fused.map(f => f.hit),
+        // 两路都跑成了 ⇒ 不再给任何降级说明。
+        degraded: undefined,
+      }
+    } catch (e) {
+      return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索失败：' + (e as Error).message + '）' } }
+    }
+  }
+
+  /**
+   * 某个知识库的**模型设置**（三个角色的引用 + 各自实际生效的名字）。
+   *
+   * 回包里同时给「引用串」和「解析结果」：下拉框要回填前者（用户改过什么），
+   * 而界面要说的是后者（现在到底在用哪个模型）。只给一个就会出现
+   * 「显示的是全局值、实际用的是覆盖值」这类看起来无害的错位。
+   * @param options - `kbId`。
+   * @returns 设置 + 三角色的解析结果 + 全局值（下拉里「继承全局：xxx」那半句要用）
+   *   + 实体抽取的进度（同一个回包：弹层开一次要读三样，分开读会让首帧分三次跳）。
+   */
+  @Remote('getKbModelConfig')
+  getKbModelConfig(options: { kbId: number }): {
+    kbId: number
+    settings: KbModelSettings
+    global: Record<KbModelRole, string>
+    resolved: Record<KbModelRole, ResolvedModel>
+    entities: KbEntitySummary
+  } {
+    const kbId = Number(options?.kbId)
+    return {
+      kbId,
+      settings: readKbModelSettings(this._dirs.decrypted, kbId),
+      global: {
+        chat: this.globalModelName('chat'),
+        embed: this.globalModelName('embed'),
+        rerank: this.globalModelName('rerank'),
+      },
+      resolved: {
+        chat: this.kbModel(kbId, 'chat'),
+        embed: this.kbModel(kbId, 'embed'),
+        rerank: this.kbModel(kbId, 'rerank'),
+      },
+      entities: kbEntitySummary(this._dirs.decrypted, kbId),
+    }
+  }
+
+  /**
+   * 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。
+   *
+   * 这一层**不写凭据**：引用串只能是「继承」或「m:<模型名>」，端点与 Key 永远只在 `llm.json`。
+   * 为什么收窄到这样：一条 profile 是一套同厂商的连接参数，按库引用它就会把
+   * 「A 家地址 + B 家 Key」这种 401 陷阱重新请回来（见 `model-config.ts` 头注）。
+   * @param options - `kbId` 加可选的 `chatRef` / `embedRef` / `rerankRef`。
+   * @returns 最新设置；引用串不合法时 `{ ok: false, error }`（不静默改成继承）。
+   */
+  @Remote('setKbModelConfig')
+  setKbModelConfig(options: { kbId: number; chatRef?: string; embedRef?: string; rerankRef?: string }):
+    { ok: true; settings: KbModelSettings } | { ok: false; error: string } {
+    const kbId = Number(options?.kbId)
+    const r = writeKbModelSettings(this._dirs.decrypted, kbId, {
+      ...(options?.chatRef === undefined ? {} : { chatRef: options.chatRef }),
+      ...(options?.embedRef === undefined ? {} : { embedRef: options.embedRef }),
+      ...(options?.rerankRef === undefined ? {} : { rerankRef: options.rerankRef }),
+    })
+    this.op('edit', 'set_kb_model', r.ok ? 'ok' : 'fail', `kb=${kbId}`, r.ok ? '' : r.error)
+    return r
+  }
+
+  /**
+   * 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。
+   *
+   * 为什么要单独一个读接口：向量索引此前只有一个隐式入口 —— 提问时顺手补齐
+   * （`askWechat` 里那段），于是界面上既**触发不了**它也**看不见**它：
+   * 用户只知道「有时能语义搜到、有时搜不到」，而差别其实只是这个库建没建过。
+   * @param options - `kbId`。
+   * @returns 当前生效的模型名、是否配了通道、按库状态、以及本进程内的在飞构建进度。
+   */
+  @Remote('getKbVectorIndex')
+  getKbVectorIndex(options: { kbId: number }): {
+    kbId: number
+    model: string
+    source: 'inherit' | 'inline'
+    configured: boolean
+    status: KbVectorIndexStatus
+    job: { done: number; total: number; startedAt: number; error: string } | null
+  } {
+    const dir = this._dirs.decrypted
+    const cfg = loadRetrievalConfig(dir)
+    const kbId = Number(options?.kbId)
+    const resolved = this.kbModel(kbId, 'embed')
+    const model = resolved.model
+    return {
+      kbId,
+      model,
+      // 来源回给界面：芯片要能说清「这个库跟着全局走」还是「本库指定了模型」，
+      // 只回一个模型名，用户看不出它从哪来。
+      source: resolved.source,
+      configured: cfg.embedding.enabled && model !== '' && Boolean(this.makeEmbedFn(model, 'kb_embed')),
+      status: kbVectorIndexStatus(dir, kbId, model),
+      job: this._kbIndexJobs.get(kbId) ?? null,
+    }
+  }
+
+  /**
+   * 为**某个库**构建 / 增量更新向量索引（面板上那个「语义索引」按钮）。
+   *
+   * 三条纪律：
+   *   ① 出站拦截判在**任何 embedding 之前**（`privacyBlocked` 先于「未配置模型」那类早退）；
+   *   ② 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
+   *   ③ 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
+   * @param options - `kbId`；`force` 时清空本库重算。
+   * @returns 构建结果（`ok` 为假时带 `error`）。
+   */
+  @Remote('buildKbVectorIndex')
+  async buildKbVectorIndex(options: { kbId: number; force?: boolean }): Promise<KbVectorBuildResult & { ok: boolean; error?: string }> {
+    const dir = this._dirs.decrypted
+    const kbId = Number(options?.kbId)
+    if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', status: 'bad-kb', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
+    const blocked = this.privacyBlocked('kb_embed', '把文件正文发送给向量模型')
+    if (blocked !== null) {
+      this.op('task', 'kb_embed', 'skip', `kb=${kbId}`, blocked)
+      return { ok: false, error: blocked, status: 'blocked', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
+    }
+    const cfg = loadRetrievalConfig(dir)
+    // 按库解析：这个按钮建的**就是这个库**的索引，模型名也要跟着这个库的覆盖走。
+    const model = this.kbModel(kbId, 'embed').model
+    const embed = model === '' ? undefined : this.makeEmbedFn(model, 'kb_embed')
+    if (!embed) {
+      const msg = '未配置向量模型（在「数据配置 → AI 大模型」里填写向量模型名与端点）'
+      this.op('task', 'kb_embed', 'fail', `kb=${kbId}`, msg)
+      return { ok: false, error: msg, status: 'no-embedder', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
+    }
+    const job = { done: 0, total: 0, startedAt: Date.now(), error: '' }
+    this._kbIndexJobs.set(kbId, job)
+    try {
+      const built = await buildKbVectorIndex(dir, kbId, embed, {
+        model,
+        batchSize: cfg.embedding.batchSize,
+        concurrency: cfg.embedding.concurrency,
+        maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
+        maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
+        force: Boolean(options?.force),
+        onProgress: (done, total) => { job.done = done; job.total = total },
+      })
+      this.op('task', 'kb_embed', 'ok', `kb=${kbId}`, `${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms · ${model}`)
+      return { ...built, ok: true }
+    } catch (e) {
+      job.error = (e as Error).message
+      this.op('task', 'kb_embed', 'fail', `kb=${kbId}`, job.error)
+      return { ok: false, error: job.error, status: 'failed', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: Date.now() - job.startedAt }
+    } finally {
+      // 进度槽留一小会儿再清：界面轮询间隔内还要能看见「刚跑完」的结果，直接删会让按钮闪回常态。
+      const t = setTimeout(() => { if (this._kbIndexJobs.get(kbId) === job) this._kbIndexJobs.delete(kbId) }, 3000)
+      if (typeof t.unref === 'function') t.unref()
+    }
   }
 
   /**
@@ -757,8 +1663,8 @@ export class WechatDataGateway extends TypertRemoteService {
    * @returns FavoritesSnapshot: favorite items (items + total).
    */
   @Remote('getFavorites')
-  getFavorites(options?: { limit?: number; offset?: number }): FavoritesSnapshot {
-    return queryFavorites(this._dirs.decrypted, options?.limit, options?.offset)
+  getFavorites(options?: { limit?: number; offset?: number; q?: string }): FavoritesSnapshot {
+    return queryFavorites(this._dirs.decrypted, options?.limit, options?.offset, options?.q)
   }
 
   /**
@@ -767,8 +1673,8 @@ export class WechatDataGateway extends TypertRemoteService {
    * @returns FilesSnapshot: resource file items.
    */
   @Remote('getFiles')
-  getFiles(options?: { limit?: number; offset?: number; category?: string }): FilesSnapshot {
-    return queryFiles(this._dirs.decrypted, options?.limit, options?.offset, options?.category)
+  getFiles(options?: { limit?: number; offset?: number; category?: string; q?: string }): FilesSnapshot {
+    return queryFiles(this._dirs.decrypted, options?.limit, options?.offset, options?.category, options?.q)
   }
 
   /**
@@ -1018,8 +1924,25 @@ export class WechatDataGateway extends TypertRemoteService {
     history?: Array<{ role: 'user' | 'assistant'; content: string }>
     /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
     streamId?: string
+    /**
+     * 入口来源，写进问答历史：`ask` = 「微信问答」页签，`session` = 会话内问答。
+     * 缺省按 `ask` 处理 —— 旧客户端不带这个字段时也能正常落库。
+     */
+    source?: string
+    /** 会话显示名：历史列表直接显示，省掉面板再查一次会话表。 */
+    usernameName?: string
+    /**
+     * 当前知识库 id：本次提问会把该库的文件块一并纳入检索。
+     *
+     * 缺省不检索知识库（而不是「搜所有库」）—— 与其余知识库接口同一纪律：
+     * `kbId` 是作用域，没有「所有库」这种模式；漏传应当表现为「没检索到文件」，
+     * 而不是把别的库的内容也端上来。
+     */
+    kbId?: number
   }): Promise<AskResult> {
     const ctx = this._ctx
+    /** 端到端耗时基准（提问 → 回答生成结束），写进历史记录供用户回看时判断快慢。 */
+    const askStartedAt = Date.now()
     // 先判「出站拦截」：它比「未配置模型」更该被用户看到（见 privacyBlocked 的注释）
     const blocked = this.privacyBlocked('ask_wechat')
     if (blocked !== null) {
@@ -1034,6 +1957,8 @@ export class WechatDataGateway extends TypertRemoteService {
       this.op('task', 'ask_wechat', 'fail', '', '未配置默认模型（agentDefaultModel）')
       throw new Error('未配置默认模型（agentDefaultModel），无法调用 AI 问答')
     }
+    /** 写进历史的回答模型标签（与面板底部「片段会发给谁」同一口径）。 */
+    const modelLabel = `${sel.provider} · ${sel.model}`
     // 检索范围：会话范围 / 时间范围必须真的参与检索。
     // 从前这里只传 question，用户选了「会话范围」也仍然全库检索（本次修复）。
     const scope: { username?: string; from?: string; to?: string } = {
@@ -1133,16 +2058,28 @@ export class WechatDataGateway extends TypertRemoteService {
     // ── 第 2 步：多词召回 → 打分排序 → 展开成对话窗口（chunk 级 RAG 检索）──
     // 自建 BM25 索引是「相关度排序」的前提：没有它就得退回 LIKE 扫描，
     // 每个词只能看到按行号倒序的前 20 条（实测 `合同` 全库 4062 条 → 召回率 0.49%）。
-    // 全量构建实测 5.4s / 13.5 万条，因此首次提问时自动建一次，之后直接复用。
-    const indexStatus = getSearchIndexStatus(this._dirs.decrypted)
-    if (!indexStatus.ready) {
-      try {
-        const built = await buildSearchIndex(this._dirs.decrypted, false)
-        this.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引 ${built.status} · ${built.rows ?? 0} 条 · ${built.elapsed_ms ?? 0}ms`)
-      } catch (e) {
-        // 建索引失败不阻断提问：退回 LIKE 召回（准确率低但可用）
-        this.op('task', 'ask_wechat', 'fail', 'build_index', (e as Error).message)
+    // 全量构建实测 5.4s / 13.5 万条，因此首次提问时自动建一次。
+    //
+    // **关键（本轮修）**：只有「首次构建」是不够的。「索引存在且版本对」跟「索引里有
+    // 没有今天刚聊的消息」是两件事 —— 微信是持续写入的，而构建完就不再更新，于是索引
+    // 会**永久**停在构建那一刻。实测生产索引 built_at=2026-09-13、库内最新消息 09-11，
+    // 而消息分片里已经有 09-18 的对话（09-17 一天 139 条）：问「今天聊了啥」时当天数据
+    // 根本不在检索空间里，BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月），
+    // 这就是「回复内容不正确 + 消息列表冒出其他日期」的根源。
+    // `ensureSearchIndex` 因此分两种情形：缺失/版本不符 → 全量构建；只是落后 →
+    // 按分片水位线增量补录（代价与新增条数同阶，实测毫秒级）。
+    try {
+      const ensured = await ensureSearchIndex(this._dirs.decrypted)
+      if (ensured.action === 'build') {
+        this.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引全量构建 · ${ensured.rows ?? 0} 条 · ${ensured.elapsed_ms}ms`)
+      } else if (ensured.action === 'sync') {
+        this.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引增量同步 · 新增 ${ensured.added ?? 0} 条 · ${ensured.elapsed_ms}ms`)
+      } else if (ensured.message) {
+        this.op('task', 'ask_wechat', 'fail', 'build_index', ensured.message)
       }
+    } catch (e) {
+      // 索引不可用不阻断提问：退回 LIKE 召回（准确率低但可用）
+      this.op('task', 'ask_wechat', 'fail', 'build_index', (e as Error).message)
     }
     // ── 第 2 步：多阶段检索 ──
     // 顺序：意图路由 → 查询改写 → 混合召回（稀疏 BM25 + 稠密向量 + 结构化）→
@@ -1191,18 +2128,25 @@ export class WechatDataGateway extends TypertRemoteService {
       retrievalId = ''
     }
 
+    // 依据行里那句「精排用了什么」：管道跑完才有值，而 `basisLine` 在 if 之外拼装，
+    // 所以在外层占位。走不到管道（检索被关闭）时它保持空串，那句话也就不出现 ——
+    // 比硬写一句「没精排」诚实：那次确实没有排序这回事，是**没检索**。
+    let rerankLine = ''
     if (retrConfig.enabled) {
       try {
       // 稠密通道是**新增的出网点**：embedding 调用统一过隐私闸门（见 makeEmbedFn），
       // 未配置 / 被「出站拦截」时抛错，流水线自动降级为纯稀疏，不影响问答可用性。
-      const embedFn = this.makeEmbedFn(retrConfig.embedding.model)
+      // 模型名只解析**一次**并复用：`makeEmbedFn` 发出去的是它，向量库记的也是它。
+      // （此前两边各算一遍，这边算出 `'default'`、那边发的是 llm.json 的值 —— 见 §7 F1。）
+      const embedModel = this.embedModelName(retrConfig.embedding.model)
+      const embedFn = this.makeEmbedFn(embedModel)
       // 向量索引：首次（或增量）在提问时补齐；失败只记录，不阻断（退化为纯稀疏）。
       if (embedFn && retrConfig.embedding.enabled) {
         const vst = vectorIndexStatus(this._dirs.decrypted)
         if (!vst.ready) {
           try {
             const built = await buildVectorIndex(this._dirs.decrypted, embedFn, {
-              model: retrConfig.embedding.model || 'default',
+              model: embedModel,
               batchSize: retrConfig.embedding.batchSize,
               concurrency: retrConfig.embedding.concurrency,
               maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
@@ -1217,6 +2161,44 @@ export class WechatDataGateway extends TypertRemoteService {
       const adapted = loadAdaptedWeights(this._dirs.decrypted)
       // 已知实体名：让「点名识别」走本地确定性名单，而不是只靠规划器这一跳。
       const known = this.askKnownEntities()
+      // 知识库作用域：只有传了合法 id 才开 kb 通道。非法值（0 / 负数 / NaN）当「没传」
+      // 处理并留一条操作日志 —— 静默变成「搜了整个库」才是危险的，变成「没搜文件」不是。
+      const kbId = Number.isFinite(options.kbId) && (options.kbId ?? 0) > 0 ? Math.trunc(options.kbId as number) : undefined
+      if (options.kbId !== undefined && kbId === undefined) {
+        this.op('task', 'ask_wechat', 'fail', 'kb_scope', `忽略非法的知识库标识：${String(options.kbId)}`)
+      }
+      // 知识库向量索引：与消息侧同款「提问时按需补齐」，但**按库**建。
+      // 为什么要按库而不是一次建全库：出网范围必须与用户此刻的意图一致 —— 用户在这个库里
+      // 提问，就只把这个库的正文送去 embedding；一次建全库会把**别的库**的正文也发出去，
+      // 而「文件级 RAG 开关」只表达得了文件意愿、表达不了库意愿（见 kb-vectors.ts 头注）。
+      // 失败只记录、不阻断：稠密不可用时通道如实降级为纯关键词，问答照常可用。
+      // 库级覆盖**只作用于知识库这一路**：消息域的向量不属于任何库，跟着全局走。
+      const kbEmbedModel = kbId === undefined ? embedModel : this.kbModel(kbId, 'embed').model
+      // 精排只构造一次：`makeRerankFn` 里含一次 SQLite 读（库级覆盖），调两遍就是白读一次，
+      // 而且两次结果理论上可以不一致（中间正好有人改了设置）。
+      const rerankModelName = this.kbModel(kbId ?? 0, 'rerank').model
+      const rerankFn = this.makeRerankFn(kbId ?? 0)
+      if (kbId !== undefined && retrConfig.embedding.enabled) {
+        const kbSt = kbVectorIndexStatus(this._dirs.decrypted, kbId, kbEmbedModel)
+        if (!kbSt.ready) {
+          try {
+            const kbEmbed = this.makeEmbedFn(kbEmbedModel, 'kb_embed')
+            if (kbEmbed) {
+              const built = await buildKbVectorIndex(this._dirs.decrypted, kbId, kbEmbed, {
+                model: kbEmbedModel,
+                batchSize: retrConfig.embedding.batchSize,
+                concurrency: retrConfig.embedding.concurrency,
+                maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
+                maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild,
+              })
+              this.op('task', 'ask_wechat', 'ok', 'build_kb_vectors',
+                `知识库向量 ${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms`)
+            }
+          } catch (e) {
+            this.op('task', 'ask_wechat', 'fail', 'build_kb_vectors', (e as Error).message)
+          }
+        }
+      }
       const out = await runRetrievalPipeline({
         decryptedDir: this._dirs.decrypted,
         question: options.question,
@@ -1228,10 +2210,20 @@ export class WechatDataGateway extends TypertRemoteService {
         limit: 24,
         config: retrConfig,
         ...(embedFn ? { embedFn } : {}),
+        // 与 embedFn 同一个解析出来的模型名：稠密召回靠它判「库里那批向量是不是本次模型算的」。
+        // 传 kbEmbedModel 而不是 embedModel —— 知识库这一路可能被库级覆盖改过名字。
+        embedModel: kbEmbedModel,
+        // 精排：没配 rerank 模型时这里就是 undefined，管道整段跳过并按本地加权排序。
+        ...(rerankFn ? { rerank: rerankFn } : {}),
+        rerankModel: rerankModelName,
         // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
         knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
         ...(adapted ? { weightsOverride: adapted } : {}),
+        ...(kbId !== undefined ? { kbId } : {}),
       })
+      rerankLine = out.rerankInfo.used
+        ? ` · 精排：${out.rerankInfo.model || '未知模型'}（候选 ${out.rerankInfo.candidates} → 取 ${out.rerankInfo.kept}）`
+        : ` · 精排：${out.rerankInfo.note}`
       citations = out.citations
       chunks = out.chunks
       terms = out.terms
@@ -1266,10 +2258,15 @@ export class WechatDataGateway extends TypertRemoteService {
     // ── 硬约束一：没有任何原文就**不调模型** ──
     // 提示词里写「没找到就说明没找到」只是软约束；模型完全有可能凭常识编一段。
     // 这里直接短路：没有可引用的原文，就没有可核实的回答。
-    const basisLine = askBasisLine(citations)
+    // 精排这一句必须出现在依据行里：`used:true` 与 `used:false` 是两种不同的可信度 ——
+    // 前者说明「有个模型读过这批候选并给了顺序」，后者说明「顺序是本地启发式给的」。
+    // 不写出来，用户就会把「没配模型」读成「模型认为这些最相关」。
+    const basisLine = askBasisLine(citations) + rerankLine
     if (citations.length === 0) {
       this.op('task', 'ask_wechat', 'skip', '', '未检索到任何原文，未调用模型')
-      return {
+      // 「没检索到」也是一次问答（用户确实问了、也确实拿到了回答），必须进历史 ——
+      // 否则回看历史时这一段是空的，用户会以为当时根本没问过。
+      const emptyResult: AskResult = {
         answer: '本机记录里没有检索到与这个问题相关的原文，因此不作回答（不会基于常识推测）。可以试试：换关键词、收窄时间范围，或指定某个会话再问。',
         citations: [],
         plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
@@ -1281,6 +2278,8 @@ export class WechatDataGateway extends TypertRemoteService {
           recency: statsCompat.recency, chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
         },
       }
+      this.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel)
+      return emptyResult
     }
 
     const contextBlock = formatAskContext(citations, {
@@ -1301,6 +2300,16 @@ export class WechatDataGateway extends TypertRemoteService {
     //    无引用不予采用）；
     //  · 「像微信聊天那样自然说话」是**语气**要求 —— 早先写的是「简洁分点」，模型会写成报告腔
     //    （「综上所述」「根据数据分析」），而这是个聊天记录问答工具，用户想听的是「谁说了什么」。
+    // 时间线索护栏（本轮修）：检索侧给出时间线索却 0 命中时，材料里剩下的**全是别的
+    // 日期**的记录。旧实现只在上下文头写了一句「不要声称限定在该日期」，模型于是如实
+    // 回答「今天没找到，放宽都是别的日子」—— 但这几条别日期的片段仍被当作「唯一事实
+    // 依据」并列了出来，用户看到的就是「回复不正确 + 冒出其他日期的消息」。
+    // 这里把它写成不可绕过的行为规则，并要求逐条标出真实日期。
+    const timeGuardRule = statsCompat.timeHint
+      ? (statsCompat.hintHits > 0
+        ? `\n7. **时间范围**：材料都落在 ${statsCompat.timeHint} 内，可以按该范围陈述。`
+        : `\n7. **时间范围（重要）**：检索在 ${statsCompat.timeHint} 内**一条都没找到**，下面列出的片段全部来自**其他日期**。必须先明确说一句「${statsCompat.timeHint} 这段时间没有找到相关聊天记录」，然后才可以说「另外在 X 月 X 日聊过……」并**逐条写出这些内容的真实日期**。绝对不要把其他日期的内容说成是该时间范围内发生的。`)
+      : ''
     const synthPrompt = `${historyBlock}用户本次问题：${options.question}
 
 ${contextBlock}
@@ -1311,7 +2320,7 @@ ${contextBlock}
 3. **每条事实后面标 [n]**：例如「小何说收到转账 13.00 元 [1]」，多个来源写 [1][3]。材料里形如「群名 · 某人」的，要说清是谁说的。
 4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
 5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
-6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。`
+6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}`
     const gateAnswer = this.privacyGate(
       'ask_wechat',
       { sessions: new Set(citations.map(c => c.username)).size, messages: citations.length },
@@ -1399,7 +2408,12 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     if (retrievalId && rankedFeatures.length > 0) {
       this._askTrace.set(retrievalId, {
         features: new Map(rankedFeatures.map(r => [r.docKey, r.features])),
-        citations: citations.map(c => c.username + ':' + c.local_id),
+        // 归因键**必须**与检索侧 docKey 逐字相同，否则「这条引用有用」对应不到任何
+        // 特征向量 —— 而且不报错，只是调参永远不动。知识库引用的键是
+        // `kb:<kbId>:<chunkId>`（由 citationDocKey 产出，是这条格式的唯一来源）；
+        // 从前这里手写 `username + ':' + local_id`，KB 引用会塌成 `:`，
+        // 同一轮里的多个文件引用还会**互相覆盖**，把反馈记到不存在的消息上。
+        citations: citations.map(c => citationDocKey(c)),
         question: options.question,
         answer: finalAnswer,
         intent: (statsCompat.intent ?? 'open_qa') as IntentKind,
@@ -1415,7 +2429,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
       'task', 'ask_wechat', withheld ? 'fail' : 'ok', '',
       `意图「${statsCompat.intent ?? plan.intent}」· 关键词 ${terms.length} 个 · 召回 ${statsCompat.candidates} 条 → 窗口 ${statsCompat.chunks} 段（${statsCompat.windowMessages} 条消息）· 回答引用 ${citedIndexes.length} 段${withheld ? ' · 未引用任何来源，已不予采用' : ''}${grounding.checked > 0 ? ` · 接地核对 ${grounding.checked} 项（无出处的 ${grounding.unsupported.length} 项）` : ''}${repaired ? ' · 已按核对结果重写' : ''}${statsCompat.timeHint ? ` · 时间线索 ${statsCompat.timeHint}（命中 ${statsCompat.hintHits}）` : ''}`,
     )
-    return {
+    const result: AskResult = {
       answer: finalAnswer || '（模型未返回有效回答。可点「优化提问」改写问题，或收窄会话/时间范围后重试。）',
       citations,
       plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
@@ -1441,6 +2455,59 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
         ...(statsCompat.elapsedMs !== undefined ? { elapsedMs: statsCompat.elapsedMs } : {}),
         ...(statsCompat.funnel ? { funnel: statsCompat.funnel } : {}),
       },
+    }
+    // 自动落进「问答历史」。这是两个写入点里的第二个（另一个在上面「没检索到原文」
+    // 的短路返回处）—— 只要走到 return，就有一次可回看的问答。
+    // best-effort：存历史失败绝不能把已经生成好的回答变成一次报错。
+    this.saveAskHistory(options, result, Date.now() - askStartedAt, modelLabel)
+    return result
+  }
+
+  /**
+   * 把一次问答落进「历史记录」。
+   *
+   * 为什么放在网关而不是前端：前端只持有**当前线程**的 turns（清空对话即丢），
+   * 而且窗口一关就没了。历史要求「每一次都留下」，只能由**后端在回答产出的那一刻**写。
+   *
+   * 只记成功产出的回答（含「没检索到原文」这种正常短路）；调用**报错**的轮次不写本表 ——
+   * 它们没有可回看的正文，且已经在操作日志里留痕（`op('task','ask_wechat','fail',…)`），
+   * 往历史里塞一行空回答只会让「历史记录」变成错误列表。
+   * @param options - 本次提问的入参（取范围与会话名）。
+   * @param result - 已经产出的回答。
+   * @param elapsedMs - 端到端耗时。
+   * @param model - 回答模型标签（provider · model）。
+   */
+  private saveAskHistory(
+    options: { question: string; username?: string; from?: string; to?: string; source?: string; usernameName?: string },
+    result: AskResult,
+    elapsedMs: number,
+    model: string,
+  ): void {
+    try {
+      const source = typeof options.source === 'string' && options.source.trim() ? options.source.trim() : 'ask'
+      const citations = Array.isArray(result.citations) ? result.citations : []
+      recordAsk(this._dirs.decrypted, {
+        question: typeof options.question === 'string' ? options.question : '',
+        answer: typeof result.answer === 'string' ? result.answer : '',
+        source,
+        ...(options.username ? { username: options.username } : {}),
+        ...(options.usernameName ? { usernameName: options.usernameName } : {}),
+        ...(options.from ? { from: options.from } : {}),
+        ...(options.to ? { to: options.to } : {}),
+        ...(model ? { model } : {}),
+        intent: result.plan?.intent ?? '',
+        terms: result.plan?.terms ?? [],
+        citations,
+        citedIndexes: result.citedIndexes ?? [],
+        basis: result.basis ?? '',
+        insufficient: result.insufficient === true,
+        withheld: result.withheld === true,
+        ...(result.retrieval ? { retrieval: result.retrieval } : {}),
+        elapsedMs,
+      })
+    } catch (e) {
+      // recordAsk 自身已经吞掉异常；这里再兜一层，保证历史写入永远不影响问答主链路。
+      this.op('task', 'ask_history', 'fail', '', (e as Error).message)
     }
   }
 
@@ -1555,7 +2622,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   /**
    * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
-   * @returns 供「数据健康 / 检索设置」面板展示。
+   * @returns 供「数据健康」面板与诊断脚本展示（原「检索设置」面板已于 2026-09-17 下线）。
    */
   @Remote('getRetrievalStatus')
   getRetrievalStatus(): {
@@ -1579,7 +2646,8 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   }
 
   /**
-   * 保存检索参数（阈值/权重/容量）。前端面板改一个开关也走这里。
+   * 保存检索参数（阈值/权重/容量）。
+   * **界面已不再暴露该入口**（面板下线，参数固化为产品默认值）——仅供诊断与自动化测试参考使用。
    * @param options - 形如 `{ patch: {...} }`，或直接给字段子集。
    * @returns 落盘后的完整配置。
    */
@@ -1594,21 +2662,23 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   }
 
   /**
-   * 立即构建/增量更新稠密向量索引（设置面板的「重建向量索引」按钮）。
+   * 立即构建/增量更新稠密向量索引。
+   * 界面已不暴露该入口：首次提问时网关会自动增量构建（失败则降级纯稀疏），
+   * 本方法留给诊断与自动化测试使用。
    * @param options - force=true 时清空重建。
    * @returns 构建结果。
    */
   @Remote('buildRagVectorIndex')
   async buildRagVectorIndex(options?: { force?: boolean }): Promise<{ ok: boolean; status: string; rows: number; embedded: number; elapsed_ms: number; message?: string }> {
     const cfg = loadRetrievalConfig(this._dirs.decrypted)
-    const embedFn = this.makeEmbedFn(cfg.embedding.model)
+    const embedModel = this.embedModelName()
+    const embedFn = this.makeEmbedFn(embedModel)
     if (!embedFn) return { ok: false, status: 'no-embedder', rows: 0, embedded: 0, elapsed_ms: 0, message: '未配置 embedding（请在模型配置里填写向量模型或 API Key）' }
-    if (!getSearchIndexStatus(this._dirs.decrypted).ready) {
-      try { await buildSearchIndex(this._dirs.decrypted, false) } catch { /* 交给下面状态判定 */ }
-    }
+    // 向量库是按「搜索索引里的文档」建的，所以先保证索引最新（缺失→构建，落后→增量）。
+    try { await ensureSearchIndex(this._dirs.decrypted) } catch { /* 交给下面状态判定 */ }
     try {
       const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
-        model: cfg.embedding.model || 'default',
+        model: embedModel,
         batchSize: cfg.embedding.batchSize,
         concurrency: cfg.embedding.concurrency,
         maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
@@ -1728,8 +2798,8 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   /**
    * 跑离线召回评估（合成评测集），并给出「混合 vs 纯稀疏」的消融对比。
    *
-   * 不依赖真实数据，因此可以随时在设置面板点一下就看到当前算法的 P/R/MRR/NDCG，
-   * 也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
+   * 不依赖真实数据，因此可以随时直连调一次就看到当前算法的 P/R/MRR/NDCG
+   * （界面无入口），也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
    * @param options - k（截断位置，默认 10）。
    * @returns 可读报告 + 结构化指标。
    */
@@ -2229,6 +3299,46 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     const r = pruneExportHistory(this._dirs.decrypted, options ?? {})
     this.op('delete', 'prune_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
       `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
+    return r
+  }
+
+  /**
+   * 读取问答历史（供「微信问答 → 历史记录」弹窗）。
+   *
+   * 与 `getExportHistory` 同样**不走**宿主的结果缓存：历史是「按当前事实」的数据，
+   * 刚问完就打开列表必须能看到那一条，缓存住的旧结果会表现成「问答没被保存」。
+   * @param options - 搜索 / 来源筛选 / 状态筛选 / 时间范围 / 排序 / 分页。
+   * @returns 一页条目 + 命中总数 + 各聚合计数。
+   */
+  @Remote('getAskHistory')
+  getAskHistory(options?: AskHistoryQuery): AskHistorySnapshot {
+    return listAskHistory(this._dirs.decrypted, options ?? {})
+  }
+
+  /**
+   * 删除若干条问答历史。
+   *
+   * 与导出历史不同，这里**没有**「连带删除外部文件」这个选项 —— 问答记录的内容全部在库里，
+   * 删记录就是删全部，没有第二个动作会顺手动到用户磁盘上的东西。
+   * @param options - ids。
+   * @returns 实际删除条数。
+   */
+  @Remote('deleteAskHistory')
+  deleteAskHistory(options: { ids: number[] }): AskHistoryDeleteResult {
+    const ids = Array.isArray(options?.ids) ? options.ids : []
+    const r = deleteAskHistory(this._dirs.decrypted, ids)
+    this.op('delete', 'delete_ask_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed), `${r.removed} 条问答记录`)
+    return r
+  }
+
+  /**
+   * 清空全部问答历史（由界面上的显式入口 + 二次确认触发，不做任何自动清理）。
+   * @returns 实际删除条数。
+   */
+  @Remote('clearAskHistory')
+  clearAskHistory(): AskHistoryClearResult {
+    const r = clearAskHistory(this._dirs.decrypted)
+    this.op('delete', 'clear_ask_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed), `${r.removed} 条问答记录`)
     return r
   }
 

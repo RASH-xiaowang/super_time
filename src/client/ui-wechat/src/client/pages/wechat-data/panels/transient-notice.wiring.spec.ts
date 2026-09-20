@@ -18,6 +18,8 @@
  *   Contacts(4000) Emoticons(3000) Favorites(4000) Health(3000) Ledger(3000)
  *   Moments(6000 ×3) Overview(6000, 2500) PeriodSummary(3000) Records(4000) Tasks(3000)
  *   Settings（富提示：kind/details/关闭按钮，5s/12s 两档 —— 收口批用 `useTransientNotice<Notice>` 承接）
+ *   KbRail（删库回执：**新增**的一条确认，不是从 setTimeout 迁来的 —— 删库以前成功后一句话都不说，
+ *   而它是破坏性且不可撤销的，说清「删掉了多少条笔记 / 多少个文件」理所当然）
  * 有意**未迁移**（形态不同，不是漏掉）：`DailySummary.tsx` 是 toast 队列（多条并存、各自计时）。
  * 该文件的守卫见 `read-error-and-notice.wiring.spec.ts`。
  *
@@ -53,6 +55,8 @@ const MIGRATED: ReadonlyArray<{ file: string; hook: string; render: string; flas
   { file: 'PeriodSummary.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 1 },
   { file: 'Records.tsx', hook: 'useTransientNotice(4000)', render: 'notice', flash: 1, hold: 0 },
   { file: 'Tasks.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
+  // KbRail 的这条不是「迁移」而是**新增**：删库成功以前一句话都不说。
+  { file: 'KbRail.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
 ]
 
 /** 旧写法的形状：`setTimeout(() => { setNotice(null) }, N)`（含 `window.` 前缀与 `() =>{` 变体）。 */
@@ -76,7 +80,9 @@ describe('L20 接线守卫（源码级；面板运行期行为未在浏览器验
       })
 
       it('防空转：提示语真的还在渲染，且调用点存在（不是把功能删掉换绿）', () => {
-        expect(code).toContain(`{notice && <div className={css.${m.render}}>{notice}</div>}`)
+        // 该 div 上允许再挂属性（KbRail 的删库回执是 `role="status"`，探针靠它抓回执）：
+        // 钉住 className 与 children 就够，精确到整串会把 role 判成违规。
+        expect(code).toMatch(new RegExp(`\\{notice && <div className=\\{css\\.${m.render}\\}[^>]*>\\{notice\\}</div>\\}`))
         expect((code.match(/flash\(/g) ?? []).length).toBeGreaterThanOrEqual(m.flash)
         expect((code.match(/hold\(/g) ?? []).length).toBeGreaterThanOrEqual(m.hold)
       })

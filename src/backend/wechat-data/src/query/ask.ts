@@ -23,7 +23,9 @@
  *   ⑤ 识别「最近/最新/最后一次」这类**时间意图**：把时间词从检索词里摘掉
  *      （它们是排序意图而不是内容词），改由时间降序来体现。
  */
-import { countIndexMatches, loadMessageWindow, searchIndexBatch, searchIndexMessages } from './search.ts'
+import { countIndexMatches, listMessagesInRange, loadMessageWindow, searchIndexBatch, searchIndexMessages } from './search.ts'
+// 引用的权威定义在 `types.ts`（共享域类型），本文件只转发 —— 见下方 AskCitation 的说明。
+import type { AskCitation } from '../types.ts'
 
 /** Optional retrieval scope: one talker and/or an inclusive date range (YYYY-MM-DD). */
 export interface AskScope {
@@ -32,16 +34,16 @@ export interface AskScope {
   to?: string
 }
 
-/** One citation (source message) for an Ask answer. */
-export interface AskCitation {
-  name: string
-  time: string
-  snippet: string
-  username: string
-  local_id: number
-  /** 群聊里这条消息的发送者显示名（单聊为空）。 */
-  sender?: string
-}
+/**
+ * 一条引用（原文锚点）。
+ *
+ * **权威定义在 `types.ts`，这里只做转发**（本轮改）。此前本文件自己声明了一份
+ * 逐字相同的 `AskCitation`，两份定义靠人工保持同步 —— 加字段时漏掉其中一份
+ * 不会报错：`formatAskContext` 拿到的是本文件这份，于是新字段（如 `source`）
+ * 在渲染处永远是 `undefined`，表现为「知识库引用被当成聊天消息渲染」。
+ * `export type` 是纯类型转发，运行时零开销、不引入模块环。
+ */
+export type { AskCitation }
 
 /** 规划器给出的结构化检索线索。 */
 export interface AskHints {
@@ -243,6 +245,67 @@ const STOP_BIGRAMS = new Set([
   '不过', '只是', '有时', '大概', '也许', '有没有', '是不是', '能不能', '好不好',
 ])
 
+/**
+ * 时间表达正则（**剥除用**，刻意比 `intent.ts` 的 TIME_EXPR_RE 更宽）。
+ *
+ * 为什么必须剥掉：中文没有分词器，`extractAskTerms` 会把「今天聊了啥」切成
+ * `今天 / 天聊 / 聊了 / 了啥` 并**全部当内容词**。于是 BM25 召回的不是「今天这个
+ * 日期段里的消息」，而是「正文里恰好写着『今天』的消息」—— 实测「今天聊了啥」召回的
+ * 4 条全部来自同年 2/3/7 月（那几句正文里都写了「今天」），而当天真实的 139 条
+ * 一条都没进来。时间词只应影响**时间范围**（from/to），绝不能参与内容匹配。
+ *
+ * 顺序敏感：`N月N日` 必须排在 `N月` 之前，否则「9月3日」只会被吃掉「9月」、
+ * 留下「3日」当内容词。
+ */
+const TIME_STRIP_RE = /(今天|今日|昨天|昨日|前天|明天|当天|当日|前几天|这两天|这几天|这几年|这几个月|上周[一二三四五六日天]?|这周[一二三四五六日天]?|本周[一二三四五六日天]?|上礼拜[一二三四五六日天]?|这礼拜[一二三四五六日天]?|礼拜[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|上个月|这个月|本月|下个月|去年|前年|今年|本年度|最近\d*[天月年]|\d{4}\s*年|\d{1,2}\s*月\s*[一二三四五六七八九十\d]{1,3}\s*[日号]|[一二三四五六七八九十]{1,3}\s*月\s*[一二三四五六七八九十]{1,3}\s*[日号]|\d{1,2}\s*月\s*份?|\d{4}-\d{2}-\d{2}|\d{1,2}[:：]\d{2})/g
+
+/**
+ * 剥掉问题（或规划器关键词）里的时间表达。
+ * @param text - 归一化后的问题。
+ * @returns 只剩内容部分的文本。
+ */
+export function stripTimeExpr(text: string): string {
+  return String(text || '').replace(TIME_STRIP_RE, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 「泛问骨架」词：时间问法里**不含任何具体内容**的动词/疑问词/功能词。
+ *
+ * 「今天聊了啥」剥掉时间表达后只剩「聊了啥」—— 全是骨架，没有可检索的实体或事物。
+ * 这类问题只能按日期段浏览（见 `timeBrowse`），做任何词法匹配都是纯噪音。
+ * 顺序敏感：长词必须排在短词前面（`聊天` 在 `聊` 之前，`有没有` 在 `有` 之前），
+ * 否则短词先命中会把长词切碎，反而留下残字。
+ */
+const SCAFFOLD_RE = /(聊天|聊聊|聊了|聊|说了什么|说了啥|说了|说说|说|谈谈|谈到|谈话|谈|讨论|讲到|讲|干了什么|干了啥|干了|干啥|干|做了什么|做|忙什么|忙啥|忙|有什么事|发生|进行|内容|记录|消息|对话|情况|近况|啥|什么|哪些|哪个|有没有|有|都|在|了|的|吗|呢|啊|吧|哦|嗯|我|你|他|她|它|们|和|与|跟|给|是|这|那|些|个|件|事)/g
+
+/**
+ * 剥掉时间表达与泛问骨架后，还剩多少真正的「内容」。
+ * @param text - 归一化后的问题。
+ * @returns 剩余内容（空串 = 这个问题只是「某段时间里发生了什么」，没有可匹配的目标）。
+ */
+export function contentResidue(text: string): string {
+  return stripTimeExpr(text).replace(SCAFFOLD_RE, '').replace(/[\s，,。.、？?！!：:；;…—]/g, '')
+}
+
+/**
+ * 词项是否**纯粹是时间表达**（剥离后不剩任何内容字符）。
+ *
+ * 最后一道兜底：万一规划器把「今天」直接当关键词塞进 subQueries，也要在这里挡掉 ——
+ * 它只会召回「正文里写着今天」的错日期消息。
+ * 与 `stripTimeExpr` / `contentResidue` 放在同一处，避免循环导入。
+ * @param term - 检索词。
+ * @returns true = 该词只承载时间语义，不应参与内容匹配。
+ */
+export function isTimeOnlyTerm(term: string): boolean {
+  return stripTimeExpr(term).replace(/[\s，,。.、？?！!：:；;的了吗呢啊吧哦嗯]/g, '').length === 0
+}
+
+/**
+ * 上面这几个时间词工具的落点说明：放在 ask.ts（而不是 retrieval/rewrite.ts）是为了
+ * 避免 `ask.ts ←→ retrieval/rewrite.ts` 的循环导入 —— 后者本就依赖本文件的
+ * `extractAskTerms`。两条检索路径（流水线 / 旧单通道）都需要它们。
+ */
+
 /** 「最近/最新/最后」这类**排序意图**词：不参与内容检索，只影响排序。 */
 const RECENCY_WORDS = new Set(['最近', '最新', '最后', '一次', '上次', '上一', '近一', '这两', '这几', '刚刚', '之前', '前一', '一次'])
 const RECENCY_RE = /最近|最新|最后|上一次|上一回|前几天|这两天|这几天|刚刚|近期/
@@ -360,19 +423,22 @@ export function retrieveAskCitations(
   const cap = Math.min(Math.max(limit ?? 24, 1), 60)
   const recency = hasRecencyIntent(question)
   const person = (hints?.person ?? '').trim()
-  const planned = (hints?.subQueries ?? []).flatMap(q => extractAskTerms(q))
-  const fallback = extractAskTerms(question)
+  const planned = (hints?.subQueries ?? []).flatMap(q => extractAskTerms(stripTimeExpr(q)))
+  const fallback = extractAskTerms(stripTimeExpr(question))
   // 词项集：规划器词优先（权重更高），问题 bigram 补齐；时间意图词不进检索
   const terms: Array<{ t: string; base: number; planned: boolean }> = []
   const seenTerm = new Set<string>()
   const addTerm = (t: string, base: number, isPlanned: boolean): void => {
     if (recency && RECENCY_WORDS.has(t)) return
+    if (isTimeOnlyTerm(t)) return
     if (seenTerm.has(t)) return
     seenTerm.add(t)
     terms.push({ t, base, planned: isPlanned })
   }
   for (const t of planned) addTerm(t, 1, true)
   for (const t of fallback) addTerm(t, 0.35, false)
+  // 纯时间词（今天/昨天/上周三…）只能决定时间范围，不能参与内容匹配 ——
+  // 见 stripTimeExpr 的注释（「今天聊了啥」实测召回的是正文写着「今天」的 2/3/7 月消息）。
   // 词项上限：每个词一次检索（LIKE 兜底路径下 4 张内容表各扫一次），
   // 12 个词 ≈ 48 次扫描已是可接受上限，再多提问延迟会明显上升。
   const active = terms.slice(0, 12)
@@ -518,6 +584,39 @@ export function retrieveAskCitations(
     }
   }
 
+  // ── 时间通道（本轮修）：按日期段直取消息，不做任何内容匹配 ──
+  // 纯时间问法（「今天聊了啥」）剥掉时间表达后没有任何内容词，上面两条召回路径只能靠
+  // 「今天」这个字面去撞（召回的是正文里写着「今天」的别日期消息），结构化过滤又要求
+  // 内容词命中 → 0 命中。这里按日期段把该范围内的消息**直接**取回来。
+  const pureTime = contentResidue(question).length === 0
+  if (pureTime) {
+    const browseFrom = Number.isFinite(hardFromMs) ? hardFromMs : softFromMs
+    const browseTo = Number.isFinite(hardToMs) ? hardToMs : softToMs
+    if (Number.isFinite(browseFrom) || Number.isFinite(browseTo)) {
+      const loMs = Number.isFinite(browseFrom) ? browseFrom : browseTo - 30 * 86400_000
+      const hiMs = Number.isFinite(browseTo) ? browseTo : Math.min(browseFrom + 7 * 86400_000, Date.now())
+      const win = listMessagesInRange(decryptedDir, Math.floor(loMs / 1000), Math.ceil(hiMs / 1000), cap, scope?.username)
+      for (const h of win.hits) {
+        const wkey = h.username + ':' + h.local_id
+        if (byKey.has(wkey)) continue
+        candidates += 1
+        const { body } = splitSender(String(h.text ?? ''))
+        byKey.set(wkey, {
+          name: h.name,
+          time: h.time,
+          snippet: body.replace(/\s+/g, ' ').slice(0, 120),
+          username: h.username,
+          local_id: h.local_id,
+          create_time: h.create_time,
+          score: 0,
+          matched: [],
+          pref: 1,
+          ...(h.sender ? { sender: h.sender } : {}),
+        })
+      }
+    }
+  }
+
   // 排名：时间线索优先 → 得分 → 命中词数 → 时间新→旧
   const ranked = [...byKey.values()].sort((a, b) => {
     if (a.pref !== b.pref) return b.pref - a.pref
@@ -586,11 +685,37 @@ export function retrieveAskCitations(
 }
 
 /**
+ * 知识库块 → 给模型的上下文块。
+ *
+ * 与消息块的关键差别：**必须显式写明「这是文件内容，不是聊天记录」**。
+ * 不加这句，模型会按上面几段的语气把文件内容转述成「你和某某在某天聊到…」——
+ * 而用户在「来源」里看到的是一个文件名，对不上，等于引用不可核对。
+ * 同理，这里**不写时间**：文件块没有发生时间（`create_time = 0`），
+ * 编一个日期出来就是给模型递了一个可以照抄的假事实。
+ * @param ch - 压缩后的知识库块。
+ * @param index - 该块在引用列表里的下标（0 基）。
+ * @returns 上下文块文本。
+ */
+function formatKbBlock(ch: AskChunk, index: number): string {
+  const kb = ch.anchor.kb
+  const fileName = kb?.fileName || ch.anchor.name || '知识库文件'
+  const where: string[] = []
+  if (kb && kb.page > 0) where.push(`第 ${kb.page} 页`)
+  if (kb && kb.heading) where.push(kb.heading)
+  const loc = where.length > 0 ? ' · ' + where.join(' · ') : ''
+  const body = ch.lines.map(l => `    ${l.text}`).join('\n')
+  return `[${index + 1}] 知识库文件《${fileName}》${loc}（**文件内容，不是聊天记录**，没有发生时间）\n${body}`
+}
+
+/**
  * 把检索结果格式化成给 LLM 的上下文块。
  *
  * 每个 [n] 是一个**对话窗口**而不是单条消息：窗口头给出会话、日期与命中时间点，
  * 下面按时间顺序列出这段对话（群聊带发言人）。模型因此能看到「谁问的、谁答的」，
  * 而不是一条孤立的「我没答应」。
+ *
+ * 知识库来源（`source === 'kb'`）走 `formatKbBlock` 的另一套渲染：
+ * 它没有会话/时间/发言人，套用消息格式只会产出模型无法理解的行。
  * @param citations - 已排序的引用（与 chunks 一一对应）。
  * @param meta - 意图 / 关键词 / 范围 / 时间线索，写进上下文头，便于模型判断证据是否充分。
  * @param chunks - 与 citations 对应的对话窗口；缺省时退化为逐条消息。
@@ -604,10 +729,15 @@ export function formatAskContext(
   if (citations.length === 0) {
     return '（本机微信聊天记录中未检索到相关消息。请直接说明未检索到，并给出可以缩小或换种问法的建议，不要编造。）'
   }
+  // 时间线索护栏（本轮修）：`hintHits=0` 时材料里剩下的**全是别的日期**的记录。
+  // 旧文案只说了一句「不要声称限定在该日期」，模型于是如实回答「今天没找到，放宽都是
+  // 别的日子」，但这几条别日期的片段仍被当作「唯一事实依据」并列了出来 —— 用户看到的
+  // 就是「回复不正确 + 消息列表冒出其他日期」。这里把要求写死：先声明该范围无记录，
+  // 再把其他日期的内容逐条标出真实日期，且不得说成是该范围内发生的。
   const hintLine = meta?.timeHint
     ? (meta.hintHits && meta.hintHits > 0
-      ? `时间线索：${meta.timeHint}（优先展示，其中 ${meta.hintHits} 条落在该范围内）`
-      : `时间线索：${meta.timeHint}（该范围内没有命中，以下为放宽时间后的结果，回答时不要声称限定在该日期）`)
+      ? `时间线索：${meta.timeHint}（**已限定在该范围内**，${meta.hintHits} 条命中；回答只依据这些片段）`
+      : `时间线索：${meta.timeHint}（**该范围内一条都没检索到**。以下列出的是**其他日期**的记录，仅供参考 —— 回答必须先明确说明「${meta.timeHint} 这段时间没有找到相关聊天记录」，再把下列内容逐条标出**各自的真实日期**，绝不能说成是该范围内发生的）`)
     : ''
   const head = [
     meta?.intent ? `检索意图：${meta.intent}` : '',
@@ -618,8 +748,16 @@ export function formatAskContext(
   ].filter(Boolean).join('；')
 
   const blocks: string[] = []
+  // 是否混有知识库来源：只影响**末尾那句总说明**的措辞与块渲染，不影响消息块本身。
+  // 刻意做成「有 KB 才改」而不是一律换成通用措辞 —— 后者会让没导入任何文件的用户
+  // 也从「对话片段」变成「材料」，属于无谓的措辞漂移。
+  const hasKb = Boolean(chunks && chunks.some(ch => ch.anchor.source === 'kb'))
   if (chunks && chunks.length > 0) {
     chunks.forEach((ch, i) => {
+      if (ch.anchor.source === 'kb') {
+        blocks.push(formatKbBlock(ch, i))
+        return
+      }
       const who = ch.anchor.sender ? `${ch.name} · ${ch.anchor.sender}` : ch.name
       const day = (ch.anchor.time || '').slice(0, 10)
       // 行内只给时钟；**跨天**的行带上自己的日期 —— 否则模型只能拿窗口头那天去猜，
@@ -632,11 +770,20 @@ export function formatAskContext(
     })
   } else {
     citations.forEach((c, i) => {
+      if (c.source === 'kb') {
+        const kb = c.kb
+        const loc = [kb && kb.page > 0 ? `第 ${kb.page} 页` : '', kb?.heading ?? ''].filter(Boolean).join(' · ')
+        blocks.push(`[${i + 1}] 知识库文件《${kb?.fileName ?? c.name}》${loc ? ' · ' + loc : ''}（**文件内容，不是聊天记录**，没有发生时间）\n    ${c.snippet}`)
+        return
+      }
       const who = c.sender ? `${c.name} · ${c.sender}` : c.name
       blocks.push(`[${i + 1}] ${who} (${c.time}): ${c.snippet}`)
     })
   }
-  return `${head ? head + '\n' : ''}以下是本机微信聊天记录中检索到的相关对话片段（每个 [n] 是一段连续对话，已按相关度排序），是回答的唯一事实依据：\n${blocks.join('\n\n')}`
+  const sourceLine = hasKb
+    ? '以下是本机检索到的相关材料（每个 [n] 是一段连续对话或一段文件内容，已按相关度排序），是回答的唯一事实依据：'
+    : '以下是本机微信聊天记录中检索到的相关对话片段（每个 [n] 是一段连续对话，已按相关度排序），是回答的唯一事实依据：'
+  return `${head ? head + '\n' : ''}${sourceLine}\n${blocks.join('\n\n')}`
 }
 
 /**

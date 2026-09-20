@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_GRAPH_SETTINGS, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
-import { fa2Settings, graphDataKey, layoutIterations, runLayout } from './graph-layout.ts'
+import { fa2Settings, graphDataKey, isolatedStripPositions, layoutIterations, runLayout } from './graph-layout.ts'
 
 /** 造一个节点：只写关心的字段，其余给中性默认。 */
 function node(id: string, over: Partial<GNode> = {}): GNode {
@@ -339,5 +339,144 @@ describe('runLayout（不碰 localStorage 与 Worker）', () => {
     const result = await runLayout({ graph, settings: s() })
     expect(result.engine).toBe('main')
     expect(result.positions.size).toBe(200)
+  })
+})
+
+/**
+ * 「没有任何连线」的节点单独成区。
+ *
+ * 为什么值得锁死：这些节点在力导向里只受斥力 + 向心力，会被甩到很远、彼此又没有任何约束，
+ * 于是散成一片稀疏的点 —— 画面出现大片空白，而且 `fitCamera` 按包围盒取景，**几个散点就能
+ * 把整个取景框撑大**，主簇被缩成中间一小团。所以它们的安置必须是确定性网格，而不是仿真结果。
+ */
+describe('单独展示区：无边节点不进力导向', () => {
+  /** 一条边都没有的节点。 */
+  function loners(count: number, prefix = 'iso'): GNode[] {
+    return Array.from({ length: count }, (_, i) => node(`${prefix}${i}`, { radius: 10 }))
+  }
+  /** 已定好位的主簇（用它算包围盒）。 */
+  function cluster(): Map<string, { x: number; y: number }> {
+    return new Map([
+      ['core0', { x: -100, y: -50 }],
+      ['core1', { x: 100, y: 50 }],
+      ['core2', { x: 0, y: 0 }],
+    ])
+  }
+  const RS = (): number => 10
+
+  it('没有无边节点时什么都不做', () => {
+    expect(isolatedStripPositions([], RS, cluster(), 1.7).size).toBe(0)
+  })
+
+  it('确定性：同样的输入两次给出同样的坐标（否则「重新布局」会把它们洗牌一遍）', () => {
+    const a = isolatedStripPositions(loners(7), RS, cluster(), 1.7)
+    const b = isolatedStripPositions(loners(7), RS, cluster(), 1.7)
+    expect([...a]).toEqual([...b])
+  })
+
+  it('★ 任意两个槽位都不重叠（槽距按最大半径算，含 nodeGap 的呼吸空间）', () => {
+    const list = loners(40)
+    const pos = isolatedStripPositions(list, RS, cluster(), 1.7)
+    const pts = list.map(n => pos.get(n.id)).filter((p): p is { x: number; y: number } => !!p)
+    expect(pts.length).toBe(40)
+    let minGap = Infinity
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i]
+        const b = pts[j]
+        if (!a || !b) continue
+        minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.y - b.y))
+      }
+    }
+    // 圆心距必须大于两半径之和（10+10=20），实测槽距 = 10*2*1.7 + 6 = 40
+    expect(minGap).toBeGreaterThan(20)
+    expect(minGap).toBeCloseTo(40, 6)
+  })
+
+  it('整块落在主簇下方（是「单独一区」，不是混进主图里）', () => {
+    const list = loners(5)
+    const pos = isolatedStripPositions(list, RS, cluster(), 1.7)
+    // 主簇最大 y = 50，槽距 40，空档 1.6×40 = 64 ⇒ 起点 y = 114
+    for (const n of list) expect(pos.get(n.id)?.y ?? -Infinity).toBeGreaterThan(50)
+  })
+
+  it('槽距跟着 nodeGap 走（间距滑杆是疏密参数，对它同样有效）', () => {
+    const tight = isolatedStripPositions(loners(4), RS, cluster(), 1)
+    const loose = isolatedStripPositions(loners(4), RS, cluster(), 3)
+    const x2 = (m: Map<string, { x: number; y: number }>): number => (m.get('iso1')?.x ?? 0) - (m.get('iso0')?.x ?? 0)
+    expect(x2(loose)).toBeGreaterThan(x2(tight))
+  })
+
+  it('半径大的节点得到更大的槽距（不会因为半径差异而互相压住）', () => {
+    const small = isolatedStripPositions(loners(3), () => 6, cluster(), 1.7)
+    const big = isolatedStripPositions(loners(3), () => 24, cluster(), 1.7)
+    const pitch = (m: Map<string, { x: number; y: number }>): number => (m.get('iso1')?.x ?? 0) - (m.get('iso0')?.x ?? 0)
+    expect(pitch(big)).toBeGreaterThan(pitch(small))
+  })
+})
+
+describe('runLayout：无边节点被单独安置，且主簇不再被它们撑大', () => {
+  /** 一个「我 + 4 个互连好友」的核，外加 n 个无边节点。 */
+  function graphWithLoners(n: number): BuiltGraph {
+    const nodes = [node('self'), node('a'), node('b'), node('c'), node('d'), ...Array.from({ length: n }, (_, i) => node(`iso${i}`))]
+    const edges = [
+      edge('self', 'a', 5), edge('self', 'b', 4), edge('self', 'c', 3), edge('self', 'd', 2),
+      edge('a', 'b', 3), edge('b', 'c', 2), edge('c', 'd', 1), edge('a', 'd', 1),
+    ]
+    return { nodes, edges, communityCount: 0 }
+  }
+
+  it('覆盖全部节点：无边节点也要有坐标（否则画不出、点不中）', async () => {
+    const g = graphWithLoners(6)
+    const r = await runLayout({ graph: g, settings: s(), fresh: true })
+    expect(r.positions.size).toBe(g.nodes.length)
+    for (const n of g.nodes) {
+      const p = r.positions.get(n.id)
+      expect(p, `${n.id} 没有坐标`).toBeTruthy()
+      expect(Number.isFinite(p?.x)).toBe(true)
+      expect(Number.isFinite(p?.y)).toBe(true)
+    }
+  })
+
+  it('★ 无边节点排在核心下方，不会散到四周（这是「避免大片空白」的关键）', async () => {
+    const g = graphWithLoners(8)
+    const r = await runLayout({ graph: g, settings: s(), fresh: true })
+    const coreIds = ['self', 'a', 'b', 'c', 'd']
+    const coreMaxY = Math.max(...coreIds.map(id => r.positions.get(id)?.y ?? -Infinity))
+    for (let i = 0; i < 8; i++) {
+      expect(r.positions.get(`iso${i}`)?.y ?? -Infinity).toBeGreaterThan(coreMaxY)
+    }
+  })
+
+  it('★ 力度滑杆不会把它们洗牌：不同力度下，无边节点内部的相对排布完全一致', async () => {
+    const g = graphWithLoners(9)
+    const grab = async (settings: GraphSettings): Promise<string[]> => {
+      const r = await runLayout({ graph: g, settings, fresh: true })
+      // 只取「相对第一个槽位」的偏移 —— 整块跟着主簇平移是应该的，被洗牌才是问题。
+      // 取到 6 位小数：整块平移量不同，浮点相减会留下末位噪声，那与「排布变了」是两回事。
+      const base = r.positions.get('iso0')
+      return Array.from({ length: 9 }, (_, i) => {
+        const p = r.positions.get(`iso${i}`)
+        return `${((p?.x ?? 0) - (base?.x ?? 0)).toFixed(6)},${((p?.y ?? 0) - (base?.y ?? 0)).toFixed(6)}`
+      })
+    }
+    const a = await grab(s({ forceRepulsion: 1 }))
+    const b = await grab(s({ forceRepulsion: 11 }))
+    const c = await grab(s({ forceCentripetal: 0.2, communitySeparation: 4 }))
+    expect(a).toEqual(b)
+    expect(a).toEqual(c)
+  })
+
+  it('没有无边节点时行为不变（不会凭空多出坐标或挪动已有节点）', async () => {
+    const g = graphWithLoners(0)
+    const r = await runLayout({ graph: g, settings: s(), fresh: true })
+    expect(r.positions.size).toBe(g.nodes.length)
+  })
+
+  it('全是无边节点也不炸：全部进单独展示区', async () => {
+    const g: BuiltGraph = { nodes: [node('x'), node('y')], edges: [], communityCount: 0 }
+    const r = await runLayout({ graph: g, settings: s(), fresh: true })
+    expect(r.positions.size).toBe(2)
+    expect(Number.isFinite(r.positions.get('x')?.y)).toBe(true)
   })
 })

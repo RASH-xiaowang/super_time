@@ -1,90 +1,13 @@
-/* 检索设置面板 + 回答反馈行的样式。
-   面板本体复用 ask.module.css 的 .modelPanel（同一车道、同一入场动画），
-   这里只补充面板内部与反馈行专属的类。 */
+/* 检索漏斗行 + 回答反馈行的样式（挂在每条 AI 回答下方）。
+   ⚠️ 历史上这里是「检索设置面板」的样式表；该面板已于 2026-09-17 从界面移除
+   （检索参数固化为内置默认，见 docs/rag/RAG-ARCHITECTURE.md §11）。
+   面板专属的类名（wrap / stat 系列 / group / row 系列 / switch / num / text /
+   actions / btn 系列 / msg 系列 / report / fbList / fbRow / fbMark / fbQ）
+   已一并删除，只保留 Ask 仍在引用的部分。
+   注意：本注释内不得出现 星号 与 斜杠 相邻的字符组合，否则会提前闭合注释。 */
 
-.wrap { display: flex; flex-direction: column; gap: 12px; }
-.hdRight { display: flex; align-items: center; gap: 8px; }
-
-/* —— 概览三格 —— */
-.statGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.stat {
-  display: flex; flex-direction: column; gap: 2px;
-  padding: 8px 10px; border-radius: 8px;
-  border: 0.5px solid var(--nm-border); background: var(--nm-bg-0);
-}
-.statK { font-size: 11px; color: var(--nm-text-3); }
-.statV { font-size: 15px; font-weight: 600; color: var(--nm-text-1); font-variant-numeric: tabular-nums; }
-.statV small { font-size: 11px; font-weight: 400; color: var(--nm-text-3); margin-left: 2px; }
-
-/* —— 分组 —— */
-.group { display: flex; flex-direction: column; gap: 8px; }
-.groupTitle {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-  color: var(--nm-text-3); text-transform: uppercase;
-}
-.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.rowLabel { font-size: 12px; color: var(--nm-text-2); }
+/* —— 次级说明文字（规划行/标注面板共用）—— */
 .rowHint { font-size: 11px; color: var(--nm-text-3); margin-top: 2px; line-height: 1.45; }
-
-/* 开关：原生 checkbox 外观统一 */
-.switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-.switch input { width: 14px; height: 14px; accent-color: var(--nm-cyan); cursor: pointer; }
-.switch span { font-size: 12px; color: var(--nm-text-2); }
-
-/* 数字输入 */
-.num {
-  width: 92px; padding: 5px 8px; text-align: right;
-  font-size: 12px; font-variant-numeric: tabular-nums;
-  color: var(--nm-text-1); background: var(--nm-bg-0);
-  border: 0.5px solid var(--nm-border); border-radius: 6px;
-}
-.num:focus-visible { outline: none; border-color: var(--nm-cyan); }
-.text {
-  width: 100%; padding: 5px 8px; font-size: 12px;
-  color: var(--nm-text-1); background: var(--nm-bg-0);
-  border: 0.5px solid var(--nm-border); border-radius: 6px;
-}
-
-/* —— 动作区 —— */
-.actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 32px; padding: 0 10px; font-size: 12px; font-weight: 500;
-  color: var(--nm-text-1); background: transparent;
-  border: 0.5px solid var(--nm-border); border-radius: 7px; cursor: pointer;
-  transition: var(--nm-t-ui);
-}
-.btn:hover:enabled { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btnPrimary {
-  color: var(--nm-bg-0); background: var(--nm-cyan);
-  border-color: transparent; font-weight: 600;
-}
-.btnPrimary:hover:enabled { filter: brightness(1.08); }
-
-.msg { font-size: 12px; line-height: 1.5; padding: 7px 9px; border-radius: 6px; }
-.msgOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 10%, transparent); }
-.msgErr { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
-.msgInfo { color: var(--nm-text-2); background: var(--nm-bg-0); }
-
-/* 评估报告（等宽，保留原始对齐） */
-.report {
-  margin: 0; padding: 9px 10px; overflow-x: auto;
-  font-family: var(--nm-font-mono, ui-monospace, monospace);
-  font-size: 11px; line-height: 1.6; color: var(--nm-text-2);
-  white-space: pre; background: var(--nm-bg-0);
-  border: 0.5px solid var(--nm-border); border-radius: 6px;
-}
-
-/* 最近反馈列表 */
-.fbList { display: flex; flex-direction: column; gap: 6px; }
-.fbRow {
-  display: flex; align-items: flex-start; gap: 8px;
-  padding: 6px 8px; font-size: 11px; line-height: 1.5;
-  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: 6px;
-}
-.fbMark { flex: 0 0 auto; font-size: 12px; }
-.fbQ { min-width: 0; color: var(--nm-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ───────── 回答反馈行（挂在每条 AI 回答下方）───────── */
 .fbBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

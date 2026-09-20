@@ -96,11 +96,17 @@ describe('打包内容规则（N22）', () => {
     for (const f of rules.ALLOWED_SRC_FILES) expect(f.startsWith('src/'), f).toBe(true)
   })
 
-  it('体积预算：基线通过，超过 1.3× 上界 / 读数无效都要红', () => {
-    const baseline = 24_033_395 // N21 实测的 app.asar 字节数
+  it('体积预算：基线通过，超过上界 / 读数无效都要红', () => {
+    // 阶段 D 实测的 app.asar 字节数（接入 PDF/Word/Excel 三个解析器之后；
+    // 构成见 `working/d-asar-probe2.txt`）。N21 时是 24,033,395 B。
+    const baseline = 56_478_217
     expect(rules.asarSizeViolations(baseline)).toEqual([])
     expect(rules.asarSizeViolations(rules.MAX_ASAR_BYTES)).toEqual([])
-    expect(rules.asarSizeViolations(baseline * 1.3).length, '30MB 上界对基线是 1.31×').toBe(0)
+    // ★ 上界必须**紧到还能抓住 N22 那个场景**：一个 12MB 的残留（`ui-dist.bak` 之类）
+    // 顶破上界。若哪天为了让基线过而把上界抬到 baseline×1.3 以上，这条会红 ——
+    // 那是**期望行为**：说明「体积预算」已经宽到抓不住它本来要抓的东西了。
+    expect(rules.asarSizeViolations(baseline + 12 * 1024 * 1024).map((v) => v.rule))
+      .toEqual(['size-ceiling'])
     const big = rules.asarSizeViolations(rules.MAX_ASAR_BYTES + 1)
     expect(big.map((v) => v.rule)).toEqual(['size-ceiling'])
     // 防空转核心：读不到大小（0/NaN/undefined）必须红 —— 只写上界的话这时恒真。

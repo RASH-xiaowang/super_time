@@ -48,7 +48,10 @@ function queryTable(
     const dir = direction === 'asc' ? 'ASC' : 'DESC'
     const sql = 'SELECT ' + sel + ' FROM ' + table + whereSql + ' ORDER BY ' + orderCol + ' ' + dir + ' LIMIT ? OFFSET ?'
     return db.prepare(sql).all(limit, offset) as RecordItem[]
-  } catch {
+  } catch (e) {
+    // 绝不能再静默吞掉：之前这里吞掉了 finder_live_id 的越界 int64 异常，
+    // 界面上只表现为「这个页签是空的」，而 total 仍显示 2 —— 两者互相矛盾才暴露出来。
+    console.warn('[records] 读取失败（与「确无记录」不同）：' + table + ': ' + ((e as Error)?.message ?? String(e)))
     return []
   }
 }
@@ -162,7 +165,10 @@ export function queryRecords(
       },
       finder: {
         table: 'wcfinderlivestatus',
-        cols: ['finder_live_id', 'finder_username', 'finder_export_id', 'live_status', 'replay_status', 'charge_flag'],
+        // CAST 成 TEXT：该列是 64 位整数，实测 1214293303336576460 / 2078956456102183056
+        // 都超过 Number.MAX_SAFE_INTEGER，node:sqlite 直接读会抛 ERR_OUT_OF_RANGE，
+        // 被 queryTable 的 catch 吞掉后就表现为「页签有 total 但一行都渲染不出来」。
+        cols: ['CAST(finder_live_id AS TEXT) AS finder_live_id', 'finder_username', 'finder_export_id', 'live_status', 'replay_status', 'charge_flag'],
         order: 'finder_live_id',
       },
       miniprograms: {
@@ -272,6 +278,8 @@ export function queryRevoked(
   decryptedDir: string,
   limit?: number,
   offset: number = 0,
+  /** 关键词：匹配撤回内容 / 发送者 id。放在服务端，避免只搜到已加载那一页。 */
+  q?: string,
 ): { items: Array<{ sender: string; type_label: string; content: string; create_time: number }>; total: number } {
   const { db, table } = findRevokeTable(decryptedDir)
   if (db === null || !table) return { items: [], total: 0 }
@@ -279,7 +287,13 @@ export function queryRevoked(
     const cap = Math.min(limit ?? 200, 500)
     const cols = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(r => r.name))
     const sel = (cand: string, dft: string): string => (cols.has(cand) ? cand : dft)
-    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${table} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
+    const kw = (q ?? '').trim()
+    const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
+    const whereSql = kw
+      ? ` WHERE (${sel('message_content', "''")} LIKE ? ESCAPE '\\' OR CAST(${sel('real_sender_id', '0')} AS TEXT) LIKE ? ESCAPE '\\')`
+      : ''
+    const kwParams: string[] = kw ? [like, like] : []
+    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${table}${whereSql} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(...kwParams, cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
     const items = rows.map((r) => {
       const t = r.lt ?? 0
       const realId = r.rid ?? 0
@@ -287,7 +301,7 @@ export function queryRevoked(
       const { sender, content } = parseRevokeContent(cellString(r.mc), fallback)
       return { sender, type_label: revokeTypeLabel(t), content, create_time: r.ct ?? 0 }
     })
-    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number } | undefined)?.n ?? items.length
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}${whereSql}`).get(...kwParams) as { n: number } | undefined)?.n ?? items.length
     return { items, total }
   } finally {
     db.close()

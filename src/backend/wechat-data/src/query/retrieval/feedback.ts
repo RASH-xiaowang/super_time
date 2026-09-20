@@ -183,7 +183,10 @@ export function attributeFeatures(
 ): Array<keyof RerankWeights> {
   const avg = (list: Array<Record<keyof RerankWeights, number>>, k: keyof RerankWeights): number =>
     list.length === 0 ? 0 : list.reduce((a, p) => a + (p[k] ?? 0), 0) / list.length
-  const keys: Array<keyof RerankWeights> = ['sparse', 'dense', 'entity', 'coverage', 'timePref', 'recency', 'agreement']
+  // ⚠ 这里是**手写**的特征名列表，不是从 RerankWeights 推导的：`Record<keyof …>` 的
+  // 穷尽性检查只保护对象字面量，数组漏一项不会编译报错。加新特征（如 'kb'）时必须同步这里，
+  // 否则该特征永远归因不出来（表现为「反馈调参对知识库命中毫无反应」，且不报错）。
+  const keys: Array<keyof RerankWeights> = ['sparse', 'dense', 'kb', 'entity', 'coverage', 'timePref', 'recency', 'agreement']
   const out: Array<keyof RerankWeights> = []
   for (const k of keys) {
     const u = avg(usefulProfiles, k)

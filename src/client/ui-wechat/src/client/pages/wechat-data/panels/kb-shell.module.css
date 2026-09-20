@@ -1,0 +1,41 @@
+/* 知识库外壳：左库 rail、右「分段条 + 面板体」。
+   rail 的窄容器退化写在 kb-rail.module.css（类名定义处），这里只管容器与两栏骨架。 */
+
+/* 容器查询的**承接层**。为什么要有这么一层壳而不是把 container-type 直接写在 .shell 上：
+   容器查询只能作用于容器的**后代** —— 而窄屏下要改的恰恰是 `.shell` 自己的
+   `flex-direction`（竖排）。自己查不到自己，所以容器必须往外挪一层。
+   判据用容器而不是窗口媒体查询：侧栏折叠会改变这块区域的可用宽度而窗口尺寸不变。 */
+.wrap {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: kbshell;
+}
+
+.shell {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: var(--nm-dense-g4);
+  box-sizing: border-box;
+}
+
+.main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 阈值 900px ≈ rail 176 + 列表 240 + 详情 470：再窄下去三栏会把详情压成细缝，
+   所以先把 rail 抬到顶部横过来，把整幅宽度还给列表与详情。 */
+@container kbshell (max-width: 900px) {
+  .shell {
+    flex-direction: column;
+    gap: var(--nm-dense-g3);
+  }
+}

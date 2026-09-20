@@ -6,7 +6,7 @@
  */
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
@@ -15,8 +15,62 @@ import { contactMeta, shardCatalog } from './meta.ts'
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
-/** 索引 schema 版本：结构变化时自动重建（存在 meta 表里）。 */
-const INDEX_SCHEMA_VERSION = '3'
+/**
+ * 索引 schema 版本：结构变化时自动重建（存在 meta 表里）。
+ *
+ * v3 → v4 的两处结构变更：
+ *   ① `message_meta` 增加时间范围索引 —— 「今天聊了啥」这类**纯时间问法**要按
+ *      `create_time` 直取一个日期段的消息，而不是靠词法匹配（见 listMessagesInRange）；
+ *   ② `meta` 表记录每个消息分片的**增量水位线**（`shard_wm:<分片名>` = 已入索引的
+ *      最大 `sort_seq`）与索引刷新时刻（`refreshed_ms`）。
+ *
+ * 不升版本就没法安全地做增量：老索引里没有水位线，增量会从 0 开始重读整个分片，
+ * 把已索引的消息**重复**写一遍。升版本顺带把「老索引一律停在构建当天」这个存量
+ * 问题一次性修掉（实测生产索引 built_at=2026-09-13、库内最新消息 2026-09-11，
+ * 而消息分片里已经有 2026-09-18 的对话）。
+ */
+const INDEX_SCHEMA_VERSION = '4'
+
+/** 索引最近一次构建/同步完成的时刻（毫秒 epoch，来自 Date.now()）。 */
+const REFRESHED_KEY = 'refreshed_ms'
+
+/** 每个消息分片的增量水位线（已入索引的最大 sort_seq，毫秒）在 meta 里的键前缀。 */
+const SHARD_WM_PREFIX = 'shard_wm:'
+
+/**
+ * 分片 mtime 与 `refreshed_ms` 的容许偏差（毫秒）。
+ *
+ * 「分片在我们读完它之后才 commit 出新 mtime」这一边界情形、以及文件系统的时间粒度，
+ * 都可能让刚同步完的分片看起来仍然更新。宁可多同步一次（读到 0 行、只花几次索引
+ * 查找），也不要漏掉新消息。
+ */
+const REFRESH_SLACK_MS = 3000
+
+/**
+ * 幂等创建 `message_meta` 的时间索引。
+ *
+ * 没有它，纯时间问法（「今天聊了啥」）就得对整张 `message_meta` 全表扫描 + 排序
+ * （实测 15 万行 25ms 起，且随入库消息线性变差）。
+ * @param db - 已打开的索引库（可写）。
+ */
+function ensureMetaIndexes(db: DatabaseSync): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_message_meta_ct_all ON message_meta(create_time)')
+    db.exec('CREATE INDEX IF NOT EXISTS idx_message_meta_ct_user ON message_meta(username, create_time)')
+  } catch {
+    /* 库只读 / 被写锁占用：查询仍正确，只是退化为全表扫描 */
+  }
+}
+
+/** 读取 `meta` 表里的增量水位线（分片文件名 → 已入索引的最大 sort_seq）。 */
+function readWatermarks(db: DatabaseSync): Map<string, number> {
+  const out = new Map<string, number>()
+  try {
+    const rows = db.prepare('SELECT key, value FROM meta WHERE key LIKE ?').all(SHARD_WM_PREFIX + '%') as Array<{ key: string; value: string }>
+    for (const r of rows) out.set(r.key.slice(SHARD_WM_PREFIX.length), Number(r.value) || 0)
+  } catch { /* meta 缺失：当作没有水位线 */ }
+  return out
+}
 
 /**
  * 把文本切成「unicode61 能正确检索」的形态。
@@ -46,8 +100,16 @@ export function bigramTokens(text: string): string {
   return out.join(' ')
 }
 
-/** 把一个检索词编成 FTS5 短语：bigram 之间要求连续出现（精度优先）。 */
-function ftsPhrase(term: string): string {
+/**
+ * 把一个检索词编成 FTS5 短语：bigram 之间要求连续出现（精度优先）。
+ *
+ * **导出**给知识库检索（`query/kb-search.ts`）复用：两处的索引都是 `bigramTokens`
+ * 写进去的 tokens 列，短语编法必须一模一样 —— 各写一份的后果是「消息搜得到、
+ * 文件搜不到」这种按模块分裂的怪现象，而它的成因藏在两处相似代码的细微差别里。
+ * @param term - 用户输入的一个检索词（可含空格，空格在 bigram 化时被丢弃）。
+ * @returns FTS5 短语表达式；无有效 token 时返回空串。
+ */
+export function ftsPhrase(term: string): string {
   const toks = bigramTokens(term).split(' ').filter(Boolean)
   if (toks.length === 0) return ''
   if (toks.length === 1) return '"' + toks[0].replace(/"/g, '') + '"'
@@ -291,6 +353,304 @@ export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; r
   }
 }
 
+/** 索引新鲜度（内部判据；不经 `@Remote` 暴露，避免改动 typert 的生成 schema）。 */
+export interface SearchIndexFreshness {
+  /** 索引最近一次构建/同步完成的时刻（毫秒 epoch；0 = 从未记录）。 */
+  refreshedMs: number
+  /** 是否有分片比索引新（= 存在尚未入索引的新消息）。 */
+  stale: boolean
+  /** 多少个分片比索引新。 */
+  staleShards: number
+  /** 索引内最新一条消息的时间（秒；0 = 空索引）。 */
+  latestIndexedTime: number
+}
+
+/**
+ * 判断索引是否落后于消息分片。
+ *
+ * 判据是**分片文件 mtime vs 索引刷新时刻**，而不是「分片里最大 sort_seq」：
+ * 前者只是一次 `statSync`（O(1)），后者要为 200+ 张会话表各查一次索引。
+ * 分片是追加写的，任何新消息都会推新 mtime；反过来 mtime 变新却没有新消息
+ * （被 checkpoint / vacuum 碰过）时，增量同步只会读到 0 行，代价可忽略。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 新鲜度指标。
+ */
+export function getSearchIndexFreshness(decryptedDir: string): SearchIndexFreshness {
+  let refreshedMs = 0
+  let latestIndexedTime = 0
+  const p = searchIndexPath(decryptedDir)
+  if (existsSync(p)) {
+    try {
+      const db = new DatabaseSync(p, { readOnly: true })
+      const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(REFRESHED_KEY) as { value?: string } | undefined
+      refreshedMs = Number(r?.value ?? 0) || 0
+      const m = (db.prepare('SELECT MAX(create_time) AS m FROM message_meta').get() as { m: number | null }).m
+      latestIndexedTime = Number(m ?? 0)
+      db.close()
+    } catch { /* 读不到就当成「从未刷新」→ 交给 ensureSearchIndex 处理 */ }
+  }
+  let staleShards = 0
+  for (const shard of messageShardFiles(decryptedDir)) {
+    try {
+      if (statSync(shard).mtimeMs > refreshedMs + REFRESH_SLACK_MS) staleShards += 1
+    } catch {
+      staleShards += 1
+    }
+  }
+  return { refreshedMs, stale: staleShards > 0, staleShards, latestIndexedTime }
+}
+
+/** 提问前的「索引可用且新鲜」保证结果。 */
+export interface EnsureIndexResult {
+  /** 本次实际做了什么：全量构建 / 增量同步 / 无需动作。 */
+  action: 'build' | 'sync' | 'none'
+  rows?: number
+  added?: number
+  elapsed_ms: number
+  message?: string
+}
+
+/**
+ * 保证索引**存在且包含最新的消息**（提问路径的唯一入口）。
+ *
+ * 这是把「索引过期」从**永不自愈**变成自愈的关键。旧实现只在 `!ready`（索引缺失 /
+ * schema 版本不符）时构建，而 `ready` 与「分片里有没有新消息」毫无关系 ——
+ * 索引一旦建成，之后微信写入的消息**永远不会**进入索引。实测生产索引
+ * `built_at=2026-09-13`、库内最新消息 2026-09-11，而消息分片里已经有 2026-09-18 的
+ * 对话（09-17 一天 139 条）。问「今天聊了啥」时当天数据根本不在检索空间里，
+ * BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月）—— 这就是
+ * 「回复内容不正确 + 消息列表里出现其他日期的消息」的根源。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 本次动作与耗时（写进操作日志，便于解释「为什么这次提问慢」）。
+ */
+export async function ensureSearchIndex(decryptedDir: string): Promise<EnsureIndexResult> {
+  const st = getSearchIndexStatus(decryptedDir)
+  if (!st.ready) {
+    const built = await buildSearchIndex(decryptedDir, false)
+    return {
+      action: 'build',
+      elapsed_ms: built.elapsed_ms ?? 0,
+      ...(built.rows !== undefined ? { rows: built.rows } : {}),
+      ...(built.message ? { message: built.message } : {}),
+    }
+  }
+  if (!getSearchIndexFreshness(decryptedDir).stale) return { action: 'none', elapsed_ms: 0 }
+  const synced = await syncSearchIndex(decryptedDir)
+  return {
+    action: synced.status === 'ok' ? 'sync' : 'none',
+    added: synced.added,
+    elapsed_ms: synced.elapsed_ms,
+    ...(synced.message ? { message: synced.message } : {}),
+  }
+}
+
+/** 增量同步结果。 */
+export interface SyncResult {
+  status: 'ok' | 'skipped' | 'error'
+  /** 本次新入索引的消息条数。 */
+  added: number
+  /** 本次实际读取的分片数。 */
+  shards: number
+  elapsed_ms: number
+  message?: string
+}
+
+/**
+ * 按索引文件路径键控的增量同步单飞闸。
+ *
+ * 理由与 `inflightIndexBuilds` 相同：写事务会跨 macrotask 保持开启，并发的第二次
+ * 调用只会拿到 `database is locked`。并发调用直接复用同一个在飞同步。
+ */
+const inflightIndexSyncs = new Map<string, Promise<SyncResult>>()
+
+/**
+ * 增量同步：只把「分片里新追加、尚未入索引」的消息补进 FTS。
+ *
+ * 为什么必须有它：微信是**持续写入**的，而 `buildSearchIndex` 的成本与**全量条数**
+ * 同阶（实测 13.5 万条 5.4s），不可能每次提问都全量重建。水位线按**分片**记：
+ * 分片是追加写的，`sort_seq > 水位线` 即「上次没读过的新行」，而 Msg_* 表上带有
+ * 独立的 `_SORTSEQ` 索引，实测定位尾部 0ms（见 working/sync-feasibility.txt）。
+ * 因此增量代价与**新增条数**同阶 —— 通常几十条、毫秒级。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 同步结果（added = 新入索引的条数）。
+ */
+export function syncSearchIndex(decryptedDir: string): Promise<SyncResult> {
+  const key = searchIndexPath(decryptedDir)
+  const slot = inflightIndexSyncs.get(key)
+  if (slot) return slot
+  const promise = runSyncSearchIndex(decryptedDir)
+  inflightIndexSyncs.set(key, promise)
+  // 用双参 then 而非 finally：派生的 promise 恒为 fulfilled，不会产生未处理的拒绝。
+  const release = (): void => {
+    if (inflightIndexSyncs.get(key) === promise) inflightIndexSyncs.delete(key)
+  }
+  promise.then(release, release)
+  return promise
+}
+
+/** 增量同步实现（见 syncSearchIndex 的说明）。 */
+async function runSyncSearchIndex(decryptedDir: string): Promise<SyncResult> {
+  const started = Date.now()
+  // 全量构建在飞时先等它：两者写同一个库，并发只会撞写锁。
+  const building = inflightIndexBuilds.get(searchIndexPath(decryptedDir))
+  if (building) {
+    try { await building.promise } catch { /* 构建失败：下面照常尝试增量 */ }
+  }
+  const skip = (message: string): SyncResult => ({ status: 'skipped', added: 0, shards: 0, elapsed_ms: Date.now() - started, message })
+  if (!indexReady(decryptedDir)) return skip('索引缺失或版本不符，需要全量构建')
+  const shards = messageShardFiles(decryptedDir)
+  if (shards.length === 0) return skip('消息分片清单为空（message 目录不可读？）')
+  const usernames = loadSessionUsernames(decryptedDir)
+  if (usernames.length === 0) return skip('会话清单为空')
+
+  const names = loadDisplayNames(decryptedDir)
+  let db: DatabaseSync | null = null
+  try {
+    db = new DatabaseSync(searchIndexPath(decryptedDir))
+    // WAL + NORMAL：与全量构建同一套理由（读侧不被写事务挡住；派生数据不值得每次 fsync）。
+    try { db.exec('PRAGMA journal_mode = WAL') } catch { /* 网络盘等不支持：退回 delete */ }
+    try { db.exec('PRAGMA synchronous = NORMAL') } catch { /* 个别构建不支持，忽略 */ }
+    ensureMetaIndexes(db)
+    const wm = readWatermarks(db)
+    const insMeta = db.prepare('INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)')
+    const insFts = db.prepare('INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)')
+    const insKv = db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)')
+    let added = 0
+    let handled = 0
+    let rowsSinceYield = 0
+    let charsSinceYield = 0
+    // 水位线的推进必须**在任何 continue 之前**：被跳过的行（图片/无可读文本）
+    // 也已经读过一遍了，不推水位线就会在每次提问时重复读它们。
+    const nextWm = new Map<string, number>()
+    db.exec('BEGIN')
+    for (const shard of shards) {
+      const shardName = basename(shard)
+      const since = wm.get(shardName) ?? 0
+      let sdb: DatabaseSync | null = null
+      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
+      try {
+        const tableSet = new Set(
+          (sdb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(r => r.name),
+        )
+        let tail = since
+        handled += 1
+        for (const username of usernames) {
+          const table = msgTableName(username)
+          if (!tableSet.has(table)) continue
+          let rows: Iterator<Record<string, unknown>>
+          try {
+            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '" WHERE sort_seq > ?'
+            rows = (sdb.prepare(sql).iterate(since) as Iterable<Record<string, unknown>>)[Symbol.iterator]()
+          } catch { continue }
+          const sessionWho = bigramTokens(names.get(username) ?? username)
+          for (;;) {
+            let step: IteratorResult<Record<string, unknown>>
+            try { step = rows.next() } catch { break }
+            if (step.done) break
+            const r = step.value
+            rowsSinceYield += 1
+            const seq = Number(r['sort_seq'] ?? 0)
+            if (seq > tail) tail = seq
+            const raw = decodeCell(r['message_content']) || decodeCell(r['compress_content'])
+            charsSinceYield += raw.length
+            const { sender, body } = splitGroupPrefix(raw, username)
+            const text = readableMessageText(body)
+            if (text) {
+              const who = sender
+                ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
+                : sessionWho
+              const res = insMeta.run(text, username, Number(r['create_time'] ?? 0), seq, Number(r['local_id'] ?? 0))
+              insFts.run(Number(res.lastInsertRowid), bigramTokens(text), who)
+              added += 1
+            }
+            // 周期性让出：同步是同步 sqlite + bigram 切分，纯 CPU，不让出会把
+            // 承载全部 130+ 查询方法的 worker 钉住（与全量构建同一套阈值）。
+            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              rowsSinceYield = 0
+              charsSinceYield = 0
+              await yieldToLoop()
+            }
+          }
+        }
+        if (tail > since) nextWm.set(shardName, tail)
+      } finally {
+        try { sdb.close() } catch { /* ignore */ }
+      }
+    }
+    for (const [shardName, seq] of nextWm) insKv.run(SHARD_WM_PREFIX + shardName, String(seq))
+    insKv.run(REFRESHED_KEY, String(Date.now()))
+    db.exec('COMMIT')
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } catch { /* 有并发读者时 checkpoint 失败，忽略 */ }
+    return { status: 'ok', added, shards: handled, elapsed_ms: Date.now() - started }
+  } catch (e) {
+    try { db?.exec('ROLLBACK') } catch { /* 无活动事务 */ }
+    return { status: 'error', added: 0, shards: 0, elapsed_ms: Date.now() - started, message: (e as Error).message }
+  } finally {
+    try { db?.close() } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 按时间窗口直取消息（**纯时间问法**专用）。
+ *
+ * 为什么需要它：「今天聊了啥」这类问题**没有内容词** —— 拆出来的 bigram 全是
+ * 「今天 / 天聊 / 聊了 / 了啥」，BM25 命中的是正文恰好写着「今天」的消息
+ * （实测命中的是同年 2/3/7 月的旧对话），而当天真实消息一条都召不回来
+ * （结构化通道按日期过滤后 0 命中 → `hintHits=0`）。纯时间问法的正解是
+ * **按日期段枚举**，不做任何内容匹配。
+ *
+ * 只读我们自己维护的 `message_meta`（`(username, create_time)` 索引），
+ * 不碰 200+ 张微信会话表。
+ * @param decryptedDir - 已解密数据根。
+ * @param fromSec - 起始（含，秒）。
+ * @param toSec - 结束（含，秒）。
+ * @param limit - 最多返回多少条（**按时间新→旧截断**，即保留窗口内最近的）。
+ * @param username - 可选的会话范围。
+ * @returns 命中（时间新→旧）与索引是否就绪。
+ */
+export function listMessagesInRange(
+  decryptedDir: string,
+  fromSec: number,
+  toSec: number,
+  limit?: number,
+  username?: string,
+): { hits: SearchHit[]; ready: boolean } {
+  if (!indexReady(decryptedDir)) return { hits: [], ready: false }
+  const lo = Math.floor(Math.min(fromSec, toSec))
+  const hi = Math.ceil(Math.max(fromSec, toSec))
+  if (!(lo > 0) || !(hi >= lo)) return { hits: [], ready: false }
+  const cap = Math.min(Math.max(limit ?? 120, 1), 600)
+  try {
+    const db = new DatabaseSync(searchIndexPath(decryptedDir), { readOnly: true })
+    const sql = 'SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?'
+      + (username ? ' AND username = ?' : '')
+      + ' ORDER BY create_time DESC LIMIT ?'
+    const args: Array<string | number> = username ? [lo, hi, username, cap] : [lo, hi, cap]
+    const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
+    db.close()
+    const names = loadDisplayNames(decryptedDir)
+    const hits = rows.map((r) => {
+      const text = decodeCell(r['text'])
+      const uname = decodeCell(r['username'])
+      const ts = Number(r['create_time'] ?? 0)
+      const { sender, body } = splitGroupPrefix(text, uname)
+      return {
+        text,
+        username: uname,
+        create_time: ts,
+        local_id: Number(r['local_id'] ?? 0),
+        name: names.get(uname) ?? uname,
+        time: formatFullTime(ts),
+        snippet: body.replace(/\s+/g, ' ').slice(0, 120),
+        sender: senderLabel(sender, names),
+      }
+    })
+    return { hits, ready: true }
+  } catch {
+    return { hits: [], ready: false }
+  }
+}
+
 /**
  * 让出节奏（行数上界）：限制「行数多、每行却很短」的场景。
  *
@@ -416,6 +776,8 @@ async function runBuildSearchIndex(
     // 原文存在 message_meta 里（不重复索引），rowid 一一对应。
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61')")
     db.exec('CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)')
+    // 时间范围索引：纯时间问法（「今天聊了啥」）要按 create_time 直取一个日期段。
+    ensureMetaIndexes(db)
   }
   try {
     // 事务外的 init() 只为「查 existing / schema_version」而建表：首次构建时落地空表，
@@ -452,6 +814,10 @@ async function runBuildSearchIndex(
     let charsSinceYield = 0
     let batch: Array<[string, string, string, string, number, number, number]> = []
     let batchChars = 0
+    // 分片 → 本次读到过的最大 sort_seq。构建完成后写进 meta，供增量同步当水位线。
+    // 必须按**读过的全部行**推进（包括没有可读文本、被跳过的图片/系统消息），
+    // 否则那些行会在每次增量同步里被反复重读。
+    const shardWm = new Map<string, number>()
     // 被跳过的分片（读取侧错误）。这不是「忽略」：既写进结果 message，也打 stderr，
     // 否则一个缺行的索引对外与完整索引无法区分（读侧见 ready:true → 永不重建）。
     let skippedCount = 0
@@ -513,6 +879,8 @@ async function runBuildSearchIndex(
             const localId = Number(r['local_id'] ?? 0)
             const createTime = Number(r['create_time'] ?? 0)
             const sortSeq = Number(r['sort_seq'] ?? localId)
+            const wmPrev = shardWm.get(shard) ?? 0
+            if (sortSeq > wmPrev) shardWm.set(shard, sortSeq)
             const raw = decodeCell(r['message_content']) || decodeCell(r['compress_content'])
             charsSinceYield += raw.length
             const { sender, body } = splitGroupPrefix(raw, username)
@@ -548,6 +916,11 @@ async function runBuildSearchIndex(
     const builtAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt)
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION)
+    // 水位线与 refreshed_ms 和索引本体同一次提交：否则「新索引 + 旧水位线」的中间态
+    // 会让下一次增量把整个分片重读一遍（重复入索引）。
+    const insKv = db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)')
+    for (const [shardPath, seq] of shardWm) insKv.run(SHARD_WM_PREFIX + basename(shardPath), String(seq))
+    insKv.run(REFRESHED_KEY, String(Date.now()))
     db.exec('COMMIT')
     // WAL 里可能还压着整代新数据（有并发读者时 close 不会 checkpoint）。主动截断一次让主库
     // 尽快自包含 —— 否则「只拷 wechat_search.db、不拷 -wal」的拷贝路径会静默拿到上一代索引

@@ -12,7 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   debugGates: () => ipcRenderer.invoke('app:debug-gates'),
   ping: () => ipcRenderer.invoke('app:ping'),
-  openFile: () => ipcRenderer.invoke('dialog:open-file'),
+  /** 文件选择对话框：`opts.filters` 交给主进程转给原生对话框（知识库用它传白名单）。 */
+  openFile: (opts) => ipcRenderer.invoke('dialog:open-file', opts),
   pickDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
   /** 保存对话框：只取路径，写盘由后端做（大文件不经 IPC）。 */
   saveFileDialog: (opts) => ipcRenderer.invoke('dialog:save-file', opts),
@@ -43,6 +44,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLlmConfig: () => ipcRenderer.invoke('wechat:llm-get'),
     saveLlmConfig: (config) => ipcRenderer.invoke('wechat:llm-save', config),
     listLlmModels: (options) => ipcRenderer.invoke('wechat:llm-models', options),
+    /** 已保存的模型配置集：列出 / 切换 / 新增·更新 / 删除（都走同一条 IPC，用 op 区分）。 */
+    getLlmProfiles: () => ipcRenderer.invoke('wechat:llm-profiles', { op: 'list' }),
+    activateLlmProfile: (id) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'activate', id }),
+    saveLlmProfile: (options) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'save', ...(options || {}) }),
+    deleteLlmProfile: (id) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'delete', id }),
     /** 后端进程状态快照：渲染端挂载后补一次，避免错过首启期间的状态事件。 */
     backendState: () => ipcRenderer.invoke('wechat:backend-state'),
     onEvent: (listener) => {

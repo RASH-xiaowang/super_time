@@ -328,7 +328,7 @@ export function syntheticRetrieve(c: EvalCase, opts: SyntheticEvalOptions = {}):
 
 /** 与 config 默认一致的权重（避免引入 config 全量依赖）。 */
 function defaultWeights() {
-  return { sparse: 1.0, dense: 0.9, entity: 1.2, coverage: 0.8, timePref: 0.6, recency: 0.5, agreement: 0.4 }
+  return { sparse: 1.0, dense: 0.9, kb: 1.0, entity: 1.2, coverage: 0.8, timePref: 0.6, recency: 0.5, agreement: 0.4 }
 }
 
 /** 跑合成评测，返回报告。 */

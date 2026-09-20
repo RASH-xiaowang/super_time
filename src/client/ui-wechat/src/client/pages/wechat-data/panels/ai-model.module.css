@@ -28,6 +28,26 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .modelInput:focus { border-color: var(--nm-cyan); }
+/* 角色分组标题：一行标题 + 一行说明，把「语言 / 嵌入 / 重排序」三块分开。
+   左边一道竖条是刻意的 —— 它让分组在小屏单列时仍然分得开（那时没有列可依赖）。 */
+.roleHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 18px 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--nm-cyan);
+}
+.roleTitle {
+  font-size: var(--nm-dense-fs);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.roleNote {
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.6;
+  color: var(--nm-text-3);
+}
 /* API Key 输入 + 小眼睛（显示/隐藏明文）。
    按钮绝对定位在输入框右侧 —— 不占流内空间，切换时输入框宽度不变。 */
 .keyWrap {
@@ -113,3 +133,126 @@
   background: color-mix(in srgb, var(--nm-danger) 7%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-danger) 24%, transparent);
 }
+
+/* ── 已配置模型切换条（本轮新增）──────────────────────────────
+   为什么单独成块：这块是「查看 + 切换」，下面的表单是「编辑」，两者语义不同 ——
+   不加视觉分隔时，用户会把芯片当成表单的一部分，然后去等一个「保存」按钮。 */
+.profileBlock {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: var(--nm-bg-input);
+}
+.profileHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.profileTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
+.profileHint { font-size: 12px; color: var(--nm-text-3); }
+.profileSpacer { flex: 1 1 auto; min-width: 0; }
+.profileAdd {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-cyan-text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.profileAdd:hover:enabled { background: var(--nm-cyan-10); border-color: var(--nm-cyan); }
+.profileAdd:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 芯片网格：自适应列数，窄屏自然塌成单列（不给固定列数，免得多写一组断点）。 */
+.profileList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.profileChip {
+  position: relative;
+  display: flex;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: var(--nm-bg-card);
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
+}
+.profileChip:hover { border-color: var(--nm-border-hover); }
+/* 使用中的那条：青边 + 青底，和「已配置」徽标同一套色，一眼认得出此刻在用谁。 */
+.profileChip[data-active] {
+  border-color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+}
+/* 三行栅格：① 圆点 + 名称 ② 模型名 ③ 上次使用。
+   为什么要栅格而不是 column 的 flex：圆点必须是①行里的一个格，否则它会单独占一行
+   （而用绝对定位贴上去的话，长名字会从它上面压过去）。 */
+.profilePick {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  grid-template-areas:
+    "dot label"
+    ". model"
+    ". state";
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 26px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--nm-text-1);
+  text-align: left;
+  cursor: pointer;
+}
+.profilePick:disabled { cursor: default; }
+.profileDot {
+  grid-area: dot;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nm-text-3);
+}
+.profileChip[data-active] .profileDot { background: var(--nm-cyan); box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent); }
+.profileLabel { grid-area: label; font-size: 13px; font-weight: 600; }
+.profileModel {
+  grid-area: model;
+  max-width: 100%;
+  font-size: 11px;
+  font-family: var(--nm-font-mono);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profileState { grid-area: state; font-size: 11px; color: var(--nm-text-3); }
+.profileChip[data-active] .profileState { color: var(--nm-cyan-text); }
+/* 删除：常驻但低对比（可见才找得到、才按得到 —— 用 opacity:0 藏起来会让键盘用户摸不到）；
+   hover 才升到危险色。 */
+.profileDel {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.5;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.profileDel:hover:enabled { opacity: 1; color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 12%, transparent); }
+.profileDel:disabled { cursor: not-allowed; opacity: 0.3; }
+.profileEmpty { font-size: 12px; color: var(--nm-text-3); line-height: 1.6; }

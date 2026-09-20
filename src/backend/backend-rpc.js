@@ -44,10 +44,14 @@ const LONG_CALL_METHODS = new Set([
   // 语音转写：whisper 本地推理
   'transcribeVoiceBatch', 'transcribeVoiceMessage',
   // 索引与离线评估
-  'buildSearchIndex', 'buildRagVectorIndex', 'evaluateRetrieval',
+  'buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval',
   // LLM 长任务。仓库自身 LLM 超时默认 120 秒（wechat-host.js 的 timeoutMs），
   // RPC 窗口必须明显宽于它，否则「模型还在流式输出」就先被判成调用超时。
   'askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary',
+  'summarizeKbFile',
+  // 实体抽取是一轮**最多 20 个文件**的串行 LLM 调用（每个文件一次），20 × 十几秒就能
+  // 越过默认窗口；链接建议是一次 embedding 批量（最多 80 条短标题），慢的时候同样会超。
+  'extractKbEntities', 'suggestKbLinks',
   // 年度报告/回顾：跨全年聚合，且可能触发 LLM
   'getAnnual', 'getAnnualReport', 'getAnnualReview',
   'syncHandoffTasks', 'extractTasks',

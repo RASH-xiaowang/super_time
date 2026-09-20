@@ -1,10 +1,11 @@
 /**
  * 「微信问答」UI 改动的离线冒烟（SSR，无浏览器）。
  *
- * 为什么这么做：本环境无法启动 Electron 窗口，但新加的 UI 里有两处**有分支的逻辑**
- * 值得真跑一遍而不是只看代码：
+ * 为什么这么做：本环境无法启动 Electron 窗口，但这些地方的逻辑值得真跑一遍而不是只看代码：
  *   ① `splitMarks`：把逐条标注拆成 useful/useless —— 一旦错位，反馈方向会正好相反；
- *   ② `RetrMeta` / `AnswerFeedback` 的条件渲染 —— 降级告警、已反馈态、无引用时不渲染。
+ *   ② `RetrMeta` / `AnswerFeedback` 的条件渲染 —— 降级告警、已反馈态、无引用时不渲染；
+ *   ③ 「检索设置」面板已下线（参数固化为产品默认值），这里额外承担**源码级回归闸门**：
+ *      文件是否真被删、问答页是否还有人把入口挂回来。见下方「检索设置」段。
  * 用 react-dom/server 把这些组件渲染成静态 HTML 并断言关键内容，能真实捕捉
  * 「条件写反 / 提前 return 把内容吃掉 / JSX 崩」这类问题。
  *
@@ -14,13 +15,19 @@ import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AnswerFeedback, CiteList, RetrMeta, splitMarks, type AskTurn } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx'
 import { auditAnswerGrounding, groundingWarning } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/utils/grounding.ts'
-import { RetrievalPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/RetrievalPanel.tsx'
 import { SessionAsk } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SessionAsk.tsx'
 import { AiModelConfig } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx'
 import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
 import { SetupGuideCard } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SetupGuide.tsx'
+import { DailySummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx'
+import { PeriodSummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/PeriodSummary.tsx'
+import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx'
+import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 let passed = 0
 let failed = 0
@@ -112,17 +119,71 @@ check('已反馈（踩）显示结果而非按钮', () => {
   ok(html.includes('已反馈：待改进'), `缺少待改进文案：${html}`)
 })
 
-console.log('RetrievalPanel（检索设置）')
-check('关闭时不渲染', () => {
-  // 注意：必须走 renderToStaticMarkup 而不是直接调用组件 —— 组件内部有 hooks，
-  // 直接调用会触发「Invalid hook call」。（这也说明用 SSR 断言比肉眼审查更严格。）
-  const html = renderToStaticMarkup(h(RetrievalPanel, { open: false, onClose: () => {} }))
-  ok(html === '', `open=false 应渲染为空：${html}`)
+console.log('检索设置（产品决策：面板已移除，界面不再暴露任何可调参数）')
+/**
+ * 这一段是**回归闸门**，不是功能用例。
+ *
+ * 背景：检索层参数（通道开关 / 阈值 / 权重 / 容量 / 学习率）已固化为产品默认值，
+ * 统一由后端 `query/retrieval/config.ts` 提供，且首次提问时网关会**自动**增量构建
+ * 稠密向量索引 —— 也就是说界面上从来不需要一个「让用户自己调参」的地方。
+ *
+ * 这里断言的是**源码事实**（文件在不在、Ask 里还有没有引用），而不是渲染结果：
+ * 渲染断言只有在面板真被挂回来、且默认展开时才会报警，太容易蒙混过关。
+ */
+const PAGES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'src/client/ui-wechat/src/client/pages/wechat-data',
+)
+/** 读该目录下的源码（相对 PAGES）。 */
+const src = (rel: string): string => readFileSync(join(PAGES, rel), 'utf8')
+/** 递归收集目录下的界面源码（.ts/.tsx，排除测试）。 */
+function sourcesUnder(dir: string): string[] {
+  const out: string[] = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) out.push(...sourcesUnder(p))
+    else if (/\.tsx?$/.test(e.name) && !/\.spec\.tsx?$/.test(e.name)) out.push(p)
+  }
+  return out
+}
+
+check('面板组件文件已删除', () => {
+  const panel = join(PAGES, 'panels/RetrievalPanel.tsx')
+  ok(!existsSync(panel), `RetrievalPanel.tsx 应已删除：${panel}`)
 })
-check('打开时渲染面板骨架（未读到状态时给出占位）', () => {
-  const html = renderToStaticMarkup(h(RetrievalPanel, { open: true, onClose: () => {} }))
-  ok(html.includes('检索设置（RAG）'), '缺少面板标题')
-  ok(html.includes('正在读取检索状态') || html.includes('向量库'), `面板内容异常：${html.slice(0, 200)}`)
+
+check('问答页不再引用检索面板、不再有「检索」入口', () => {
+  const ask = src('panels/Ask.tsx')
+  for (const dead of ['RetrievalPanel', 'retrOpen', 'setRetrOpen', 'retrChipRef', 'kind="retrieval"']) {
+    ok(!ask.includes(dead), `Ask.tsx 不该再出现 ${dead}（入口/面板被挂回来了？）`)
+  }
+  // 单栏布局：两栏侧开用的 data-side-open 也应一并消失
+  ok(!ask.includes('data-side-open'), 'Ask.tsx 不该再有侧栏开合标记 data-side-open')
+})
+
+check('界面不再调用任何检索配置类接口（只保留回答反馈）', () => {
+  // 反馈用过就删属于正常 UX，必须留；这些是"调参/运维"面，界面一律不碰。
+  const forbidden = [
+    'apiGetRetrievalStatus',
+    'apiSaveRetrievalConfig',
+    'apiBuildRagVectorIndex',
+    'apiListRetrievalFeedback',
+    'apiResetRetrievalWeights',
+    'apiEvaluateRetrieval',
+  ]
+  const hits: string[] = []
+  const files = sourcesUnder(PAGES)
+  // 防空转：路径算错会让 sourcesUnder 返回空数组，从而「一条都没命中」而假通过。
+  ok(files.length > 30, `扫描到的界面源码只有 ${files.length} 个，PAGES 路径可能算错了：${PAGES}`)
+  for (const f of files) {
+    // 跳过 api.ts 本身：它是这些包装的**定义处**，不是调用处。
+    if (relative(PAGES, f).replace(/\\/g, '/') === 'api.ts') continue
+    const body = readFileSync(f, 'utf8')
+    for (const name of forbidden) {
+      if (body.includes(name)) hits.push(`${relative(PAGES, f)} -> ${name}`)
+    }
+  }
+  ok(hits.length === 0, `检索配置类接口不该再被界面调用：\n     ${hits.join('\n     ')}`)
 })
 
 console.log('SessionAsk（会话级 AI 面板）')
@@ -281,6 +342,40 @@ check('语音转写是可选：没就绪不影响「完成」的计数口径', (
   ok(html.includes('已完成 4/4'), '四项必做齐了就该是 4/4（语音不计入）')
   ok(html.includes('语音转文字（可选）'), '可选行仍在，标为可选')
   ok(!html.includes('data-step="voice" data-done'), '语音没就绪时不该显示为已完成')
+})
+
+console.log('总结三页（紧凑改版的 SSR 落地）')
+check('每日总结：面板壳 + 页签 + 空态落地卡都能渲染', () => {
+  const html = renderToStaticMarkup(h(DailySummaryPanel, {}))
+  ok(html.includes('每日总结'), '缺少面板标题')
+  for (const t of ['总结任务栏', '总结阅览', '手动生成']) ok(html.includes(t), `缺少页签：${t}`)
+  ok(html.includes('三步拿到第一份总结'), '缺少空态落地卡')
+})
+check('周期总结：表单与落地卡都能渲染', () => {
+  const html = renderToStaticMarkup(h(PeriodSummaryPanel, {}))
+  ok(html.includes('周期总结'), '缺少面板标题')
+  ok(html.includes('生成总结') && html.includes('复制结果'), '缺少生成/复制动作')
+  ok(html.includes('当前区间'), '缺少当前区间说明')
+  ok(html.includes('还没有这一段的总结'), '缺少空态落地卡')
+})
+check('年度报告：面板头能渲染（无数据时停在骨架，不崩）', () => {
+  const html = renderToStaticMarkup(h(AnnualPanel, {}))
+  ok(html.includes('年度报告'), '缺少面板标题')
+  ok(html.includes('导出报告'), '缺少导出动作')
+})
+
+console.log('社交图谱（本轮改的是连线挑选与布局，这里抓渲染期崩溃）')
+check('社交图谱：无数据时面板头与右侧控制栏都能渲染', () => {
+  const html = renderToStaticMarkup(h(GraphPanel, {}))
+  ok(html.includes('社交图谱'), '缺少面板标题')
+  ok(html.includes('好友网络'), '缺少模式名')
+  for (const t of ['节点', '连线', '圈子', '重新布局', '节点间距', '圈子分离度']) {
+    ok(html.includes(t), `缺少控制项：${t}`)
+  }
+})
+check('知识图谱：同一组件换 variant 也能渲染', () => {
+  const html = renderToStaticMarkup(h(GraphPanel, { variant: 'knowledge' }))
+  ok(html.includes('知识图谱'), '缺少知识图谱标题')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)

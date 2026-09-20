@@ -12,6 +12,13 @@
  *     并提供 /embeddings（确定性向量）以真实跑通稠密通道。
  *   · 每步独立记 pass/fail，失败时截图 + dump DOM + 拉后端操作日志，最后输出报告。
  *
+ * 本次重要变化（检索参数已固化）：
+ *   · 「检索设置（RAG）」面板已**下线**：通道开关 / 相似度阈值 / RRF 常数 / 上下文预算 /
+ *     学习率一律固化为产品默认值（后端 `query/retrieval/config.ts`），稠密索引在**首次提问时
+ *     由网关自动增量构建** —— 界面上不再有任何「让用户自己调参」的地方。
+ *   · 因此本脚本不再点面板，改为两头验证：① 断言界面上**不存在**任何调参入口（这是产品决策的
+ *     验收点）；② 直连 IPC / 直接改 `rag-config.json` 来证明后端能力仍在、降级路径仍可走。
+ *
  * 安全约束（重要）：
  *   · 会临时接管 `<userData>/wechat/llm.json` 指向本地 mock，并在结束时**逐字节还原**；
  *   · 会清空向量库/反馈库让建索引从 0 开始 —— 因为要写入 mock 哈希向量（语义无效），
@@ -210,15 +217,52 @@ async function restoreConfigs() {
 
 // ───────── 小工具 ─────────
 const shot = (win, name) => win.screenshot({ path: join(OUT, name + '.png') })
-const panel = (win) => win.locator('section[aria-label="检索设置"]')
-const numInput = (win, i) => panel(win).getByRole('spinbutton').nth(i)
-const checkbox = (win, i) => panel(win).getByRole('checkbox').nth(i)
-const saveBtn = (win) => win.getByRole('button', { name: '保存检索设置' })
-const waitEnabled = (win, label) => win.waitForFunction(
-  (l) => { const b = [...document.querySelectorAll('button')].find(x => (x.textContent || '').trim() === l); return !!b && !b.disabled },
-  label, { timeout: 60000 },
-)
 const countSrc = (win) => win.locator('text=/来源 ·/').count()
+
+/**
+ * 直连后端 Remote（不经界面）。
+ *
+ * 为什么需要它：检索参数与运维动作（建索引 / 离线评估 / 看反馈）**已不再暴露给用户**，
+ * 界面上根本没有入口可点。但这些能力仍是后端契约的一部分，验收要能证明它们还在 ——
+ * 于是从「点界面」改成「直连 IPC」，同时把「界面上确实没有入口」作为独立断言。
+ */
+const callBackend = (win, method, args = []) => win.evaluate(
+  async ([m, a]) => {
+    const t0 = Date.now()
+    const to = new Promise((r) => setTimeout(() => r({ ok: false, error: { message: 'PROBE_TIMEOUT_120s' } }), 120000))
+    const r = await Promise.race([window.electronAPI.wechat.call(m, a), to])
+    return { ok: !!r?.ok, value: r?.value ?? null, error: r?.error?.message ?? '', ms: Date.now() - t0 }
+  },
+  [method, args],
+)
+
+/** 深合并（与后端 saveRetrievalConfig 的语义一致：只覆盖给到的叶子）。 */
+function deepMerge(base, patch) {
+  const out = { ...base }
+  for (const [k, v] of Object.entries(patch)) {
+    const plain = v && typeof v === 'object' && !Array.isArray(v)
+    out[k] = plain && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])
+      ? deepMerge(base[k], v)
+      : v
+  }
+  return out
+}
+
+/**
+ * 直接改 rag-config.json 造场景（替代原来点面板上的开关）。
+ *
+ * 关键前提：网关在**每次提问**时都重新 `loadRetrievalConfig()`（无内存缓存，见 gateway.ts
+ * askWechat 开头），所以文件写完立刻对下一次提问生效 —— 这正是本脚本不碰界面也能
+ * 验证「关闭稠密通道」「总开关回退」两条降级路径的原因。
+ */
+function patchRagConfig(patch) {
+  // 夹具没就位时给出可读的原因（否则 readFileSync(null) 抛的是 Node 内部措辞，
+  // 看起来像「测试自己写错了」，而真正的问题是数据根没拿到）
+  if (!backup.ragPath) throw new Error('rag-config.json 路径未就位：setup 阶段没有拿到数据根')
+  const merged = deepMerge(JSON.parse(readFileSync(backup.ragPath, 'utf8')), patch)
+  writeFileSync(backup.ragPath, JSON.stringify(merged, null, 2) + '\n', 'utf8')
+  return merged
+}
 
 /** 提问并等本轮结束：以「来源 ·」条数增加或错误 alert 出现为准。 */
 async function askAndWait(win, question) {
@@ -273,11 +317,28 @@ async function main() {
   // localStorage 里伪造「已同意隐私声明」的记录：那种做法等于绕过同意闸门本身，
   // 而本仓现在有显式的、仅非打包态生效的调试开关可用（见 RELEASE-PLAN N2）。
 
-  const info = await win.evaluate(() => window.electronAPI.wechat.info())
+  // ⚠️ 后端是**异步启动**的：`firstWindow()` 一返回就调 info() 很可能拿到
+  // `{ ok:false, error:{ message:'Super Time 后端未初始化' } }`（此时 wechatBoot 还是 null）。
+  // 旧写法 `info?.value?.decrypted || ''` 会把「后端还没起来」静默降级成「数据根 = 空串」，
+  // 于是下面整段测试夹具**被跳过**，脚本拿着**真实** rag-config.json 跑完全程，
+  // 只在最后几条断言上莫名其妙地红一片 —— 2026-09-18 实测：步骤 2/3/7/8/9 共 5 条失败，
+  // 根因只有这一个。所以这里①等到真的拿到 decrypted 为止，②拿不到就**当场抛错**。
+  let info = null
+  for (let i = 0; i < 60; i++) {
+    info = await win.evaluate(() => window.electronAPI.wechat.info())
+    if (info?.ok && info?.value?.decrypted) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
   const decrypted = info?.value?.decrypted || ''
   const root = decrypted ? join(decrypted, '..') : ''
-  backup.ragPath = root ? join(root, 'rag-config.json') : null
-  backup.weightsPath = root ? join(root, 'rag-weights.json') : null
+  if (!root) {
+    throw new Error(
+      '拿不到数据根（wechat.info() 返回 ' + JSON.stringify(info) + '）—— '
+      + '测试夹具无法就位；拒绝「静默地拿真实配置跑一遍」。'
+    )
+  }
+  backup.ragPath = join(root, 'rag-config.json')
+  backup.weightsPath = join(root, 'rag-weights.json')
   if (backup.ragPath) {
     backup.ragExisted = existsSync(backup.ragPath)
     if (backup.ragExisted) backup.rag = readFileSync(backup.ragPath)
@@ -318,7 +379,11 @@ async function main() {
     await win.locator('text=本机检索 · AI 综合回答').first().waitFor({ timeout: 40000 })
     const body = await win.locator('body').innerText()
     ok(/\d+ 个会话可检索/.test(body), '会话数徽标渲染', (body.match(/\d+ 个会话可检索/) || [''])[0])
-    ok(await win.getByRole('button', { name: '检索' }).count() > 0, '「检索」chip 存在（新增入口）')
+    // 检索参数已固化为产品默认值：界面上不该再有「检索设置」这类调参入口。
+    ok((await win.getByRole('button', { name: '检索', exact: true }).count()) === 0,
+      '问答面板不再有「检索」chip（面板已下线）')
+    ok((await win.locator('section[aria-label="检索设置"]').count()) === 0,
+      '界面上不存在「检索设置」面板')
     ok(await win.getByLabel('微信问答问题').count() > 0, '提问输入框存在')
     ok(await win.getByRole('button', { name: '优化提问' }).count() > 0, '「优化提问」按钮存在')
     // 模型配置已迁到「设置」：问答面板不该再出现模型入口
@@ -328,101 +393,79 @@ async function main() {
   })
 
   // ── 2 ──
-  await step('2. 检索设置面板与实时状态', '目标⑥参数面板 + 状态真实', async () => {
-    await win.getByRole('button', { name: '检索' }).first().click()
-    await panel(win).waitFor({ timeout: 15000 })
-    // 面板先渲染骨架、状态是异步拉取的 —— 必须等状态到达再断言
-    await panel(win).locator('text=意图分类自评').waitFor({ timeout: 20000 })
-    const t = await panel(win).innerText()
-    ok(t.includes('检索设置（RAG）'), '面板标题')
-    ok(/100\.0%/.test(t) && /7\/7/.test(t), '概览：意图分类自评 100%（7/7）', (t.match(/100\.0%7\/7/) || [''])[0])
-    ok(t.includes('向量库'), '概览：向量库')
-    ok(t.includes('反馈'), '概览：反馈')
-    ok(t.includes('多阶段检索流水线'), '开关：流水线总开关')
-    ok(t.includes('稠密向量通道'), '开关：稠密通道')
-    ok(t.includes('LLM 辅助意图分类'), '开关：意图分类 LLM 辅助')
-    // 提示文案里会出现「向量模型」四个字，所以判据必须落在**输入控件**上，不能查文本
-    ok((await panel(win).getByRole('textbox').count()) === 0, '检索设置里不再有「向量模型」输入框（已迁到设置）')
-    ok(t.includes('向量模型在「设置'), '检索设置指明向量模型去哪配')
-    ok(t.includes('稠密相似度下限') && t.includes('RRF 融合常数') && t.includes('上下文预算') && t.includes('权重微调步长'), '阈值：四项可调参数')
-    ok(t.includes('保存检索设置') && t.includes('跑离线评估') && t.includes('增量构建向量索引') && t.includes('全量重建') && t.includes('重置权重'), '动作按钮齐全')
-    const ta = await win.getByLabel('微信问答问题').boundingBox()
-    const pb = await panel(win).boundingBox()
-    ok(Boolean(ta && pb) && (ta.x + ta.width) <= pb.x + 1, '面板与对话栏并排（不遮挡输入框）', `ta.right=${ta && Math.round(ta.x + ta.width)} panel.left=${pb && Math.round(pb.x)}`)
-    await shot(win, '02-retrieval-panel')
-  })
+  await step('2. 检索参数不暴露：界面无入口，后端能力仍在', '目标⑥：开箱即用、零调参', async () => {
+    // ① 界面侧：面板与入口都必须彻底消失（连文案都不该残留）
+    ok((await win.locator('section[aria-label="检索设置"]').count()) === 0, '不存在「检索设置」面板')
+    ok((await win.getByRole('button', { name: '检索', exact: true }).count()) === 0, '不存在「检索」入口按钮')
+    const body = await win.locator('body').innerText()
+    const exposed = ['检索设置（RAG）', '多阶段检索流水线', '稠密相似度下限', 'RRF 融合常数', '保存检索设置', '跑离线评估', '重置权重']
+      .filter((s) => body.includes(s))
+    ok(exposed.length === 0, '界面上不出现任何检索参数文案', exposed.join(' / '))
 
+    // ② 后端侧：能力仍在，且默认值就是产品最优值（固化 ≠ 删除）
+    const st = await callBackend(win, 'getRetrievalStatus')
+    ok(st.ok, '后端 getRetrievalStatus 仍可用', st.error || `${st.ms}ms`)
+    const cfg = st.value?.config || {}
+    ok(cfg.enabled === true, '默认即启用多阶段检索流水线（开箱即用）', `enabled=${cfg.enabled}`)
+    ok(cfg.channels?.sparse?.enabled === true, '默认即启用稀疏通道', `sparse.enabled=${cfg.channels?.sparse?.enabled}`)
+    ok(cfg.channels?.dense?.enabled === true, '默认即启用稠密向量通道', `dense.enabled=${cfg.channels?.dense?.enabled}`)
+    ok(cfg.fusion?.k === 60, 'RRF 融合常数为文档默认值 60', `fusion.k=${cfg.fusion?.k}`)
+    ok(cfg.fusion?.keep === 120, '融合保留条数为默认值 120', `fusion.keep=${cfg.fusion?.keep}`)
+    ok(cfg.intent?.llmAssist === false, 'LLM 辅助意图分类保持默认关闭（少一跳模型调用）', `llmAssist=${cfg.intent?.llmAssist}`)
+    ok(cfg.compress?.maxChars === 4000, '夹具参数未被界面改写（maxChars=4000）', `maxChars=${cfg.compress?.maxChars}`)
+    await shot(win, '02-no-retrieval-panel')
+  })
   // ── 3 ──
-  await step('3. 阈值保存落盘且不丢未暴露参数', '目标⑥：改参数→落盘→可读回，且不重置其它参数', async () => {
-    await numInput(win, 2).fill('37')
-    await saveBtn(win).click()
-    await win.locator('text=已保存检索设置').first().waitFor({ timeout: 15000 })
-    ok(true, '保存成功提示出现')
-    const cfg = JSON.parse(readFileSync(backup.ragPath, 'utf8'))
-    ok(cfg?.fusion?.k === 37, '落盘 fusion.k=37', JSON.stringify(cfg?.fusion))
-    ok(cfg?.embedding?.maxDocsPerBuild === 400, '未暴露参数未被重置（maxDocsPerBuild 仍为 400）', `maxDocsPerBuild=${cfg?.embedding?.maxDocsPerBuild}`)
-    ok(cfg?.channels?.dense?.minSimilarity === 0, '未暴露/已改参数保留（minSimilarity=0）')
+  await step('3. 改一处不重置其它参数（后端契约，无需界面）', '目标⑥：参数合并安全', async () => {
+    const before = JSON.parse(readFileSync(backup.ragPath, 'utf8'))
+    ok(before?.embedding?.maxDocsPerBuild === 400 && before?.channels?.dense?.minSimilarity === 0,
+      '起始态：夹具参数就位（未暴露参数 = 400 / 0）',
+      `maxDocsPerBuild=${before?.embedding?.maxDocsPerBuild} minSimilarity=${before?.channels?.dense?.minSimilarity}`)
+    // 写入的是**文档默认值 60**（而不是某个临时数字）：万一脚本被中断、还原没跑到，
+    // 真实配置里也不会残留一个只有测试才知道来历的怪值。
+    const save = await callBackend(win, 'saveRetrievalConfig', [{ patch: { fusion: { k: 60 } } }])
+    ok(save.ok, '后端 saveRetrievalConfig 仍可用（诊断/测试用，界面不接线）', save.error || '')
+    const after = JSON.parse(readFileSync(backup.ragPath, 'utf8'))
+    ok(after?.fusion?.k === 60, '落盘 fusion.k=60（= 文档默认值）', JSON.stringify(after?.fusion))
+    ok(after?.embedding?.maxDocsPerBuild === 400, '未暴露参数未被重置（maxDocsPerBuild 仍为 400）',
+      `maxDocsPerBuild=${after?.embedding?.maxDocsPerBuild}`)
+    ok(after?.channels?.dense?.minSimilarity === 0, '已改参数保留（minSimilarity=0）')
   })
-
   // ── 4 ──
-  await step('4. 稠密通道：向量索引构建', '目标①混合检索的稠密底座', async () => {
+  await step('4. 稠密索引开箱即用：首次提问自动构建（界面无手动入口）', '目标①混合检索的稠密底座默认即生效', async () => {
+    // 向量库已在本脚本 setUp 时清空 → 现在就是**真正的开箱初始态**，不预先手动建索引。
+    ok(!existsSync(join(root, 'wechat_rag_vectors.db')), '起始态：向量库尚不存在（开箱初始态）')
+    ok((await win.locator('text=/构建向量索引|全量重建/').count()) === 0,
+      '界面上没有「构建向量索引」入口（用户不需要知道有这回事）')
     const embedBefore = mockCalls.embed
-    const msg = panel(win).locator('[role="status"]')
-    // 先直连 IPC 探一次（带超时），拿到后端**真实返回**，避免只看到「UI 没更新」而不知后端状态
-    const probe = await win.evaluate(async () => {
-      const t0 = Date.now()
-      const to = new Promise((r) => setTimeout(() => r({ ok: false, error: { message: 'PROBE_TIMEOUT_90s' } }), 90000))
-      const r = await Promise.race([window.electronAPI.wechat.call('buildRagVectorIndex', [{ force: false }]), to])
-      return { r, ms: Date.now() - t0 }
-    })
-    console.log('[探针] buildRagVectorIndex 直连结果:', JSON.stringify(probe).slice(0, 300))
-    ok(probe.r?.ok === true, '直连调用 buildRagVectorIndex 返回 ok', JSON.stringify(probe.r?.error ?? probe.r?.value ?? {}).slice(0, 200))
-    await win.getByRole('button', { name: /增量构建向量索引/ }).click()
-    // 先确认请求真的发出去了（按钮进入 busy 态），否则「等结果」只是在等一个没发生的事
-    const busySeen = await win.getByRole('button', { name: '构建中…' }).waitFor({ timeout: 15000 }).then(() => true).catch(() => false)
-    ok(busySeen, '点击后进入构建中状态（请求已发出）')
-    await win.waitForFunction(() => {
-      const el = document.querySelector('section[aria-label="检索设置"] [role="status"]')
-      // 必须排除「正在增量构建…」这句进行中文案 —— 它同样含「向量索引」，
-      // 只匹配「向量索引」会在点击瞬间就返回，等于没等（实测踩过）。
-      return !!el && /向量索引\s*(构建完成|已是最新)/.test(el.textContent || '')
-    }, undefined, { timeout: 120000 }).catch(() => {})
-    const msgText = await msg.first().innerText().catch(() => '')
-    ok(/向量索引\s*(构建完成|已是最新)/.test(msgText), '出现构建结果提示', msgText.trim().slice(0, 160))
-    await waitEnabled(win, '刷新状态')
-    await win.getByRole('button', { name: '刷新状态' }).click()
-    await win.waitForTimeout(1500)
-    const rows = Number(((await panel(win).innerText()).match(/向量库\s*\n?\s*(\d+)/) || [])[1] || 0)
-    ok(rows > 0, '向量库已入库（>0 条）', `rows=${rows}`)
+    // 用户侧只做一件事：提问。
+    const r = await askAndWait(win, '最近一次转账给我的是谁')
+    if (r.alert) ok(false, '问答返回错误', r.alert)
     const embedDelta = mockCalls.embed - embedBefore
-    ok(embedDelta > 0, '真实调用了 embedding 接口', `本次 embed 请求 ${embedDelta} 次（合计 ${mockCalls.embed}）`)
-    ok(embedDelta <= 40, '建索引请求量有界（未失控）', `embed ${embedDelta} 次`)
-    await shot(win, '03-vector-built')
+    ok(embedDelta > 0, '仅靠一次普通提问就真实调用了 embedding 接口（自动建索引）',
+      `本次 embed ${embedDelta} 次（合计 ${mockCalls.embed}）`)
+    ok(embedDelta <= 40, '自动建索引请求量有界（未失控）', `embed ${embedDelta} 次`)
+    const st = await callBackend(win, 'getRetrievalStatus')
+    const rows = Number(st.value?.vector?.rows || 0)
+    ok(rows > 0, '向量库已自动入库（>0 条）', `rows=${rows}`)
+    ok(Boolean(st.value?.vector?.model), '向量库记录了所用模型', String(st.value?.vector?.model || ''))
+    await shot(win, '03-auto-vector-built')
   })
-
   // ── 5 ──
-  await step('5. 召回评估机制（指标与消融）', '目标②可量化评估', async () => {
-    await win.getByRole('button', { name: '跑离线评估' }).click()
-    await panel(win).locator('pre').waitFor({ timeout: 60000 })
-    const report = await panel(win).locator('pre').innerText()
+  await step('5. 召回评估机制（指标与消融）仍在，界面无入口', '目标②可量化评估', async () => {
+    ok((await win.locator('text=/跑离线评估/').count()) === 0, '界面无「跑离线评估」入口')
+    const ev = await callBackend(win, 'evaluateRetrieval', [{ k: 10 }])
+    ok(ev.ok, '后端 evaluateRetrieval 返回 ok', ev.error || `${ev.ms}ms`)
+    const report = String(ev.value?.report || '')
+    ok(report.length > 0, '返回评估报告文本', `${report.length} 字符`)
     for (const k of ['P@10', 'R@10', 'MRR', 'NDCG@10', 'MAP']) ok(report.includes(k), `报告含 ${k}`)
     ok(report.includes('消融对照（仅稀疏）'), '报告含消融对照')
     ok(report.includes('意图分类准确率'), '报告含意图分类准确率')
-    // 报告是多行文本，按标题行定位再读下一行的 MRR
-    const lines = report.split('\n')
-    const numAfter = (title) => {
-      const i = lines.findIndex(l => l.includes(title))
-      if (i < 0) return NaN
-      const m = (lines[i + 1] || '').match(/MRR=([\d.]+)/) || (lines[i] || '').match(/MRR=([\d.]+)/)
-      return m ? Number(m[1]) : NaN
-    }
-    const hy = numAfter('混合：稀疏+稠密+结构化')
-    const sp = numAfter('消融对照（仅稀疏）')
+    const hy = Number(ev.value?.hybrid?.mrr ?? NaN)
+    const sp = Number(ev.value?.sparseOnly?.mrr ?? NaN)
     ok(Number.isFinite(hy) && Number.isFinite(sp), '解析出两组 MRR', `hybrid=${hy} sparse=${sp}`)
     ok(hy >= sp, '混合检索 MRR ≥ 纯稀疏（消融成立）', `hybrid=${hy} sparse=${sp}`)
-    await shot(win, '04-eval-report')
   })
-
   // ── 6 ──
   await step('6. 问答全链路与检索漏斗可视化', '目标①③④：召回→融合→重排→压缩可见', async () => {
     const r = await askAndWait(win, '我一共转了多少笔账')
@@ -475,47 +518,42 @@ async function main() {
     await win.locator('text=已反馈：待改进').first().waitFor({ timeout: 30000 })
     ok(true, '提交后进入「已反馈」态')
     await shot(win, '06-feedback-submitted')
-    await win.getByRole('button', { name: '查看最近反馈' }).click()
-    await win.waitForTimeout(1500)
-    const t = await panel(win).innerText()
-    ok(t.includes('👎'), '检索设置内可见该条反馈')
+    // 「查看最近反馈」原本挂在检索设置面板里 —— 面板已下线，改从后端读回同一份事实。
+    ok((await win.getByRole('button', { name: '查看最近反馈' }).count()) === 0, '界面无「查看最近反馈」入口')
+    const fb = await callBackend(win, 'listRetrievalFeedback', [{ limit: 50 }])
+    ok(fb.ok, '后端 listRetrievalFeedback 仍可用', fb.error || '')
+    const items = fb.value?.items || []
+    ok(items.length > 0, '反馈已写入后端', `total=${fb.value?.stats?.total} items=${items.length}`)
+    ok(items.some((it) => it.rating === 'down'), '👎 已落库（存在 rating=down 的记录）',
+      items[0] ? `${items[0].rating} · ${String(items[0].question || '').slice(0, 40)}` : '')
     ok(existsSync(backup.weightsPath), '权重调参结果已落盘 rag-weights.json')
   })
-
   // ── 8 ──
-  await step('8. 降级验证：关闭稠密通道', '目标①通道可独立关闭且显式告知', async () => {
-    await checkbox(win, 1).uncheck()
-    await saveBtn(win).click()
-    await win.waitForTimeout(1500)
+  await step('8. 降级验证：关闭稠密通道（改配置，界面不暴露该开关）', '目标①通道可独立降级且显式告知', async () => {
+    ok((await win.locator('text=/稠密向量通道/').count()) === 0, '界面上没有稠密通道开关')
+    patchRagConfig({ channels: { dense: { enabled: false } } })
     const r = await askAndWait(win, '最近一次转账给我的是谁')
     if (r.alert) ok(false, '问答返回错误', r.alert)
     await win.locator('text=稠密通道未生效').first().waitFor({ timeout: 30000 })
     ok(true, '关闭稠密后漏斗行显示「稠密通道未生效（纯稀疏）」')
     await shot(win, '07-degraded-dense-off')
-    await checkbox(win, 1).check()
-    await saveBtn(win).click()
-    await win.waitForTimeout(1200)
+    patchRagConfig({ channels: { dense: { enabled: true } } })
     ok(true, '已恢复稠密通道')
   })
-
   // ── 9 ──
-  await step('9. 灰度回退：总开关关闭即走旧检索', '目标⑥可一键回退', async () => {
+  await step('9. 灰度回退：总开关关闭即走旧检索（改配置，界面不暴露该开关）', '目标⑥可一键回退', async () => {
+    ok((await win.locator('text=/多阶段检索流水线/').count()) === 0, '界面上没有流水线总开关')
     const before = await win.locator('text=/召回 \d+ → 融合 \d+/').count()
-    await checkbox(win, 0).uncheck()
-    await saveBtn(win).click()
-    await win.waitForTimeout(1500)
+    patchRagConfig({ enabled: false })
     const r = await askAndWait(win, '上个月工资发了多少')
     if (r.alert) ok(false, '问答返回错误', r.alert)
     const after = await win.locator('text=/召回 \d+ → 融合 \d+/').count()
     ok(after === before, '总开关关闭后不再产生漏斗行（回退旧单通道检索）', `before=${before} after=${after}`)
     ok(r.after > r.before, '旧路径仍能返回引用（功能未失效）', `来源 ${r.before} → ${r.after}`)
     await shot(win, '08-legacy-fallback')
-    await checkbox(win, 0).check()
-    await saveBtn(win).click()
-    await win.waitForTimeout(1200)
+    patchRagConfig({ enabled: true })
     ok(true, '已恢复流水线总开关')
   })
-
   // ── 10 ──
   await step('10. 会话级 AI 对话（聊天头部入口 + 「新对话」面板）', '会话级 AI 问答可用且不遮挡消息流', async () => {
     const wait = (ms) => win.waitForTimeout(ms)
@@ -702,11 +740,24 @@ async function main() {
 
     // 手动滚到底。显式写 instant：CSS 的 scroll-behavior:smooth 会把程序化赋值也变成动画，
     // 八千多像素等它走完要好几秒（真实滚轮不受影响，这是模拟方式的坑）。
-    await win.evaluate(() => {
+    //
+    // ⚠️ 还要**等高度稳定、再滚一次**（2026-09-18 实测）：右区里有几节是异步自检（原图链路自检 /
+    // 数据库健康），它们会在滚到底之后才把结果渲染进来。内容一长高，刚才的「底」就不再是底
+    // —— 实测 scrollHeight 7033 → 7088（+55），scrollTop 停在旧的最大值 6368、新的是 6423，
+    // 于是「确实滚到了底部」差 55 而红，高亮也停在「原图链路自检」上。再滚一次即到底
+    // （高亮正确落到「高级设置」）。这是**量法没跟上异步渲染**，不是产品缺陷。
+    const scrollToBottom = () => win.evaluate(() => {
       const box = document.querySelector('[role="dialog"] nav[aria-label="设置导航"]').nextElementSibling
       box.scrollTo({ top: box.scrollHeight, behavior: 'instant' })
+      return box.scrollHeight
     })
-    await win.waitForTimeout(700)
+    let lastH = -1
+    for (let i = 0; i < 15; i++) {
+      const h = await scrollToBottom()
+      await win.waitForTimeout(400)
+      if (h === lastH) break
+      lastH = h
+    }
     const bottom = await sectionState('advanced')
     ok(bottom.scrollTop >= bottom.maxScroll - 2, '确实滚到了底部', `${bottom.scrollTop}/${bottom.maxScroll}`)
     ok(bottom.current.includes('高级'), '滚到底高亮落到最后一节', bottom.current)
@@ -923,7 +974,13 @@ async function main() {
       String(await win.locator('[class*="_rhythmCell_"]').count()))
     // 布局：目标是「一屏装下、不出滚动条」——固定 12 列网格，行高按内容需求分配。
     // 三条判据缺一不可：容器不溢出、卡片不越界、卡片内容不被裁掉。
-    const layout = await win.evaluate(() => {
+    //
+    // ⚠️ 尺寸前提（2026-09-18 实测补上）：这套判据来自**设计基准尺寸** —— annual.module.css
+    // 开头写明「实测可用区 1572×787（窗口 1664×1066）」。应用默认窗口是 1440×900，面板只有
+    // ~684px，此时组件**按设计主动退化**成 `data-compact`（瀑布流 + 滚动，卡片一张不裁，
+    // 实测 14 张卡 clip 全为 0）。那是预期降级、不是缺陷，但会让「一屏」这条判据量出
+    // 714 vs 684 的假失败。所以先在基准尺寸上验「一屏」，再切回默认窗口验「退化也不许藏内容」。
+    const measureBoard = () => win.evaluate(() => {
       const body = document.querySelector('[class*="_panelBody_"]')
       const wrap = document.querySelector('[class*="_wrap_"]')
       if (!body || !wrap) return { error: 'missing' }
@@ -933,13 +990,33 @@ async function main() {
         .map(c => c.querySelector('[class*="_cardTitle_"]')?.textContent || '?')
       const overflow = cards.filter(c => c.getBoundingClientRect().bottom > br.bottom + 1)
         .map(c => c.querySelector('[class*="_cardTitle_"]')?.textContent || '?')
-      return { scroll: body.scrollHeight, client: body.clientHeight, cards: cards.length, clipped, overflow }
+      return { scroll: body.scrollHeight, client: body.clientHeight, cards: cards.length, clipped, overflow,
+        compact: wrap.hasAttribute('data-compact') }
     })
-    ok(layout.scroll <= layout.client + 1, '一屏无滚动条（scrollHeight ≤ clientHeight）',
+    // 换尺寸要**确认换成了**：静默失败会让判据在错误尺寸下跑（本脚本上一轮就栽在这类静默降级上）。
+    const resizeWin = async (w, h) => {
+      await win.evaluate(([tw, th]) => window.resizeTo(tw, th), [w, h])
+      await win.waitForTimeout(1300)
+      const got = await win.evaluate(() => [window.innerWidth, window.innerHeight])
+      if (got[0] !== w || got[1] !== h) throw new Error(`窗口没能切到 ${w}×${h}（实测 ${got.join('×')}）`)
+      return got
+    }
+
+    await resizeWin(1664, 1066)
+    await wait(900)
+    const layout = await measureBoard()
+    ok(layout.scroll <= layout.client + 1, '一屏无滚动条（设计基准尺寸 1664×1066）',
       `${layout.scroll} vs ${layout.client}`)
     ok(layout.overflow.length === 0, '没有卡片越出可视区', layout.overflow.join(','))
     ok(layout.clipped.length === 0, '没有卡片内容被裁切', layout.clipped.join(','))
     ok(layout.cards === 14, '14 张卡片全部渲染', String(layout.cards))
+
+    // 对照：回到应用默认窗口 1440×900 ——「一屏」不再成立（组件按设计退化），但**内容不许被藏**。
+    await resizeWin(1440, 900)
+    await wait(900)
+    const small = await measureBoard()
+    ok(small.cards === 14, '1440×900 下 14 张卡片仍在', String(small.cards))
+    ok(small.clipped.length === 0, '1440×900 下退化（compact）也不裁切卡片内容', small.clipped.join(','))
 
     // 导出报告 = 界面截图（PNG）。SUPERTIME_CAPTURE_PATH 让它跳过原生保存对话框。
     const png = join(OUT, 'exported-report.png')

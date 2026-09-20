@@ -22,8 +22,17 @@ export type IntentKind =
   | 'comparison'
   | 'open_qa'
 
-/** 召回通道名。sparse=BM25 词法；dense=向量语义；structured=结构化过滤/实体。 */
-export type ChannelName = 'sparse' | 'dense' | 'structured'
+/**
+ * 召回通道名。
+ *   · sparse=BM25 词法；dense=向量语义；structured=结构化过滤/实体；
+ *   · time=**按日期段直取消息**（唯一不做内容匹配的通道）。纯时间问法（「今天聊了啥」）
+ *     没有任何内容词，只有这条通道能召回当天真实消息 —— 否则 BM25 只能靠「今天」
+ *     这个字面去撞，召回的是正文里写着「今天」的别日期消息。
+ *   · kb=**知识库文件块**（用户导入的文档）。它是唯一**换了一域名**的通道：
+ *     前四条召回的都是聊天消息，这一条返回的是文件块，因此下游的融合/重排/压缩
+ *     都对它按 `RetrievedDoc.source === 'kb'` 做了分支（见 compress.ts）。
+ */
+export type ChannelName = 'sparse' | 'dense' | 'structured' | 'time' | 'kb'
 
 /**
  * 意图对应的检索策略（由 intent.ts 产出，pipeline 消费）。
@@ -51,6 +60,14 @@ export interface RerankWeights {
   sparse: number
   /** 稠密余弦归一化分。 */
   dense: number
+  /**
+   * 知识库通道的归一化分。
+   *
+   * 为什么不并进 `sparse`：两者虽同属 BM25 族（`kb-search` 也是 FTS5 `bm25` 取负、
+   * 融合阶段同样按名次归一化到 0~1），但解释面板要如实告诉用户「这条是**文件**命中的，
+   * 不是聊天记录命中的」。合并后 `sparse` 特征会把两种来源说成同一件事。
+   */
+  kb: number
   /** 命中意图实体（人名/群名）的加成。 */
   entity: number
   /** 命中查询词项的覆盖率（稀有词权重更高）。 */
@@ -82,6 +99,12 @@ export interface QueryPlan {
   timeHard: boolean
   /** 是否含「最近/最新/最后一次」这类排序意图。 */
   recency: boolean
+  /**
+   * 纯时间问法：有日期范围，但剥掉时间表达与泛问骨架后不剩任何内容
+   * （「今天聊了啥」「昨天都干啥了」）。此时内容通道只会引入噪音，应跳过，
+   * 由 time 通道按日期段枚举该范围内的真实消息。
+   */
+  timeBrowse: boolean
 }
 
 /**
@@ -89,6 +112,7 @@ export interface QueryPlan {
  *
  * docKey 是全局去重键（`username:local_id`）——融合阶段按它把同一消息
  * 在不同通道里的命中合并成一条，避免重复计入与重复送进上下文。
+ * 知识库块用 `kb:<kbId>:<chunkId>`，与消息键**天然不冲突**（消息键里不含 `kb:` 前缀）。
  */
 export interface RetrievedDoc {
   docKey: string
@@ -99,6 +123,19 @@ export interface RetrievedDoc {
   text: string
   snippet: string
   sender?: string
+  /** 来源域：`'msg'`（缺省）或 `'kb'`。下游靠它分支，不靠 username 是否为空去猜。 */
+  source?: 'msg' | 'kb'
+  /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */
+  kb?: {
+    kbId: number
+    fileId: number
+    fileName: string
+    fileExt: string
+    chunkId: number
+    ordinal: number
+    page: number
+    heading: string
+  }
 }
 
 /** 单通道召回结果：文档 + 该通道内的原始得分与名次。 */
@@ -155,6 +192,10 @@ export interface CompressedChunk {
     username: string
     local_id: number
     sender?: string
+    /** 与 `RetrievedDoc.source` 一致：KB 块的锚点没有任何消息字段，必须靠它判别。 */
+    source?: 'msg' | 'kb'
+    /** 知识库来源专有信息（`source === 'kb'` 时存在）。 */
+    kb?: RetrievedDoc['kb']
   }
   /**
    * 窗口内的连续消息（按时间升序）。

@@ -18,6 +18,7 @@
  * 尺寸映射、标签排布都是可直接单测的纯函数。
  */
 import { DEFAULT_GRAPH_SETTINGS, communityColor, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
+import { edgeBudget } from './graph-budget.ts'
 import { readableOn } from '../utils/theme-color.ts'
 
 /** 相机：`(cam.x, cam.y)` 是画布正中对应的世界坐标，`cam.k` 是缩放。 */
@@ -47,6 +48,10 @@ export interface GraphTheme {
   edgeIntimacy: string
   edgeWiki: string
   edgeSource: string
+  /** 同备注编号(同班级):画虚线,语义上比「共同群」弱一档 */
+  edgeClass: string
+  /** 首字相同:画虚线,语义上比「同备注编号」再弱一档(最粗粒度的启发式) */
+  edgeInitial: string
   /** 无头像时的兜底圆盘 */
   disc: string
   /** 节点描边环（社区色之外的默认环） */
@@ -80,6 +85,10 @@ export function graphTheme(dark: boolean): GraphTheme {
         edgeIntimacy: 'rgba(86,170,240,0.66)',
         edgeWiki: 'rgba(169,155,255,0.62)',
         edgeSource: 'rgba(120,200,180,0.5)',
+        edgeClass: 'rgba(240,178,74,0.6)',
+        // 首字层是**蓝虚线**：蓝与「与我亲密度」同色系，靠**虚线 + 更亮的sky蓝**区分。
+        // 图例同时写明「蓝虚线 = 首字相同 / 蓝实线 = 与我亲密度」，颜色不是唯一线索。
+        edgeInitial: 'rgba(96,204,255,0.72)',
         disc: '#2a3a4a',
         ring: 'rgba(140,150,170,0.6)',
         ringDim: 'rgba(90,100,120,0.45)',
@@ -101,6 +110,8 @@ export function graphTheme(dark: boolean): GraphTheme {
         edgeIntimacy: 'rgba(44,130,210,0.66)',
         edgeWiki: 'rgba(109,91,208,0.6)',
         edgeSource: 'rgba(60,150,130,0.5)',
+        edgeClass: 'rgba(176,112,16,0.62)',
+        edgeInitial: 'rgba(0,138,196,0.62)',
         disc: '#e2e6ec',
         ring: 'rgba(90,100,115,0.5)',
         ringDim: 'rgba(140,150,165,0.4)',
@@ -155,9 +166,11 @@ export function avatarBudget(nodeCount: number): number {
   return Math.min(nodeCount, 320)
 }
 
-/** 节点是否属于「人/群」这一族（只有它们有头像）；笔记与未创建笔记是几何符号。 */
+/** 节点是否属于「人/群」这一族（只有它们有头像）；笔记、待补、文件与章节都是几何符号。 */
 export function hasAvatar(node: GNode): boolean {
   return node.kind !== 'note' && node.kind !== 'stub' && node.stub !== true
+    // 文档层的三类都不能去要头像：它们不是通讯录里的对象。
+    && node.kind !== 'file' && node.kind !== 'section' && node.kind !== 'entity'
 }
 
 /**
@@ -317,12 +330,34 @@ export interface EdgeStroke {
  * 边的线型：按类型分色/分粗细，指向 stub 的 wiki 边画虚线（「这篇笔记还不存在」）。
  * 数值与改前 ECharts 版逐项一致 —— 图例（灰线=共同群数 / 蓝线=亲密度 / 紫线=[[链接]]）
  * 就是按这套颜色写的，改色等于把图例变成谎话。
+ *
+ * 两种**推断层**边都画虚线（`class` 金虚线 / `initial` 蓝虚线）：它们是「从备注/名字结构
+ * 推出来的」，不是微信数据里观测到的共处，虚线让它们在画面上自解释，不必只靠颜色区分。
  * @param edge - 边。
  * @param theme - 主题。
  * @param settings - 设置（取 `edgeWidth`）。
  * @param stubIds - stub 节点集合。
  * @returns 线型。
  */
+/**
+ * 文档层三类节点的颜色（屏幕与导出 SVG **共用一份**）。
+ *
+ * 为什么收成函数而不是两处各写一遍字面量：导出那条分支以前就是「抄一份」，
+ * 靠注释说「逐字节一致」—— 而注释不会阻止第三类节点只加在其中一处。
+ * 身份靠颜色区分：
+ *   文件=青（与主题强调色同族，读作「资料」）；
+ *   章节=灰蓝（介于笔记紫与待补灰之间，读作「结构」）；
+ *   实体=琥珀（与「推断」的虚线边同一族语言：这是模型说的，不是文档里写着的）。
+ * @param kind - 节点类别（file / section / entity）。
+ * @param dark - 是否深色主题。
+ * @returns `{ fill, stroke }`。
+ */
+export function docColors(kind: string, dark: boolean): { fill: string; stroke: string } {
+  if (kind === 'file') return { fill: dark ? '#12707f' : '#0e7490', stroke: dark ? '#3fd8ee' : '#0f7c92' }
+  if (kind === 'entity') return { fill: dark ? '#8a5a12' : '#b45309', stroke: dark ? '#f0b35a' : '#8a4b08' }
+  return { fill: dark ? '#41506b' : '#7d8797', stroke: dark ? '#8b9bb4' : '#5b6472' }
+}
+
 export function edgeStroke(
   edge: GEdge,
   theme: GraphTheme,
@@ -331,33 +366,76 @@ export function edgeStroke(
 ): EdgeStroke {
   const isWiki = edge.kind === 'wiki'
   const isSource = edge.kind === 'source'
-  const width = isWiki
+  const isClass = edge.kind === 'class'
+  const isInitial = edge.kind === 'initial'
+  const isContain = edge.kind === 'contain'
+  const isMention = edge.kind === 'mention'
+  // suggest（模型抽出的实体 ↔ 文件）也是推断层：虚线、细，与 mention 同档。
+  const isSuggest = edge.kind === 'suggest'
+  // 三个推断层用同一档线宽（都比共同群细），首字层是三者里最粗粒度的规则
+  const isInferred = isClass || isInitial || isMention || isSuggest
+  // contain（章节确实在文件里）与 wiki 同档：两者都是**记录下来的事实**，不是猜的。
+  // mention（笔记标题出现在正文里）与 class/initial 同档：推断层，虚线、更细。
+  const isFactual = isWiki || isContain
+  const width = isFactual
     ? Math.max(0.4, settings.edgeWidth * 0.9)
     : isSource
       ? Math.max(0.4, settings.edgeWidth * 0.7)
-      : Math.max(0.3, settings.edgeWidth * (edge.kind === 'intimacy' ? 1.25 : 0.8))
-  const color = isWiki
+      : isInferred
+        ? Math.max(0.35, settings.edgeWidth * 0.6)
+        : Math.max(0.3, settings.edgeWidth * (edge.kind === 'intimacy' ? 1.25 : 0.8))
+  // 刻意**复用**已有的主题色而不是新增两个 token：新增就得同时给深色与浅色两套值，
+  // 而这两类边在图上的身份（事实 / 推断）已经由线宽与虚实表达清楚了。
+  const color = isFactual
     ? theme.edgeWiki
     : isSource
       ? theme.edgeSource
-      : edge.kind === 'intimacy'
-        ? theme.edgeIntimacy
-        : theme.edgeCommon
-  return { width, color, dashed: isWiki && stubIds.has(edge.target) }
+      : isClass
+        ? theme.edgeClass
+        : isInitial
+          ? theme.edgeInitial
+          : edge.kind === 'intimacy'
+            ? theme.edgeIntimacy
+            : theme.edgeCommon
+  return { width, color, dashed: (isWiki && stubIds.has(edge.target)) || isInferred }
 }
 
 /**
- * 连线预算：节点越多，只画权重最高的那些（改前 ECharts 版同口径，避免大图被线糊住）。
- *
- * 外层再夹一次 `edgeCount`：改前写的是 `Math.max(180, Math.min(edgeCount, …))`，边很少时
- * 会返回一个比实际边数还大的「预算」（例如 5 条边返回 180）。`slice` 之下无害，但会让
- * 任何拿它做循环上界、或打印「画了多少条」的地方对不上 —— 预算就该不超过可用量。
- * @param nodeCount - 节点数。
- * @param edgeCount - 实际边数。
- * @returns 实际绘制的边数上限。
+ * 连线预算（`MIN_EDGE_BUDGET` / `EDGES_PER_NODE` / `MAX_EDGE_BUDGET` / `edgeBudget` /
+ * `edgeHeadroom`）已移到 `graph-budget.ts` —— **建模层也要用它**，写在画布模块里
+ * 会让 `graph-model` 只能硬编码一份自己的额度（那正是「模型里有边、图上没画」的根源）。
+ * 这里保留 re-export，既有的 `import { edgeBudget } from './graph-canvas.ts'` 全部照常可用。
  */
-export function edgeBudget(nodeCount: number, edgeCount: number): number {
-  return Math.min(edgeCount, Math.max(180, Math.round(nodeCount * 0.9)))
+export { EDGES_PER_NODE, MAX_EDGE_BUDGET, MIN_EDGE_BUDGET, edgeBudget, edgeHeadroom } from './graph-budget.ts'
+
+/**
+ * 连通性骨架：每个「有边的节点」保留它最强的那一条关联边。
+ *
+ * 为什么必须有这一层：预算原本只按 kind 分桶，桶内按权重降序截断 —— 于是**度数低的节点会成片
+ * 失去唯一的连线**。真机实测（251 节点的好友网络，998 条边）：预算 226，250 条「我→对方」的
+ * 辐条被截到 113 条，剩下 **137 个节点在画面上没有任何连线** —— 它们在全量边里度数 ≥ 1，
+ * 只是那条边没被画出来。用户看到的就是「部分节点缺少连线」。
+ *
+ * 骨架是结构而不是装饰：删掉一条「我→对方」的辐条，等于把一个真实存在的人画成了局外人。
+ * 因此骨架不参与预算竞争（见 edgeBudget 的 backbone 参数），预算只约束骨架之外的边。
+ *
+ * 为什么选「每个节点一条最强边」而不是「保留全部亲密度边」：后者只对社交图谱这一种模式成立，
+ * 知识图谱的 [[链接]]、群组网络的共同成员边没有「辐条」可依；而「每个节点至少一条」是任何图上
+ * 都成立的连通性下界，且条数天然 ≤ 节点数（不会把预算顶穿）。
+ * @param edges - 全量边。
+ * @returns 要保留的边下标集合（每个有边的节点各贡献一条）。
+ */
+function connectivityBackbone(edges: readonly GEdge[]): Set<number> {
+  const best = new Map<string, { idx: number; weight: number }>()
+  edges.forEach((e, i) => {
+    for (const id of [e.source, e.target]) {
+      const cur = best.get(id)
+      if (!cur || e.weight > cur.weight) best.set(id, { idx: i, weight: e.weight })
+    }
+  })
+  const out = new Set<number>()
+  for (const v of best.values()) out.add(v.idx)
+  return out
 }
 
 /**
@@ -372,17 +450,24 @@ export function edgeBudget(nodeCount: number, edgeCount: number): number {
  * 改前的 ECharts 版也是同样的 `slice(0, maxLinks)` + 同样的 buildGraph 排序，所以这是
  * 一直在的缺陷，不是这次重写引入的。
  *
- * 按 kind 分桶、每桶先按权重取保底份额（桶数均分），剩余预算再按桶大小回填：
- * 「我↔对方」与「对方↔对方」两类边都能出现，且各自只保留权重最高的那部分。
+ * 分三层：
+ *   ① **骨架**（`connectivityBackbone`）无条件保留 —— 保证不会出现「有边却没画」的孤点；
+ *   ② 剩下的边按 kind 分桶、每桶先按权重取保底份额（桶数均分）；
+ *   ③ 剩余预算按桶大小回填。
+ * ②③ 保证「我↔对方」与「对方↔对方」两类边都能出现，且各自只保留权重最高的那部分。
  * @param edges - 全量边（按 buildGraph 的顺序）。
- * @param nodeCount - 节点数（决定预算）。
+ * @param nodes - **渲染中的节点**（决定预算，也是「谁不能成为孤点」的权威口径）。
+ *   刻意收节点表而不是个数：只出现在边表里的 id 不会被画出来，为它们保底纯属浪费预算。
  * @returns 实际要画的边（保持输入顺序，绘制顺序稳定）。
  */
-export function selectEdges(edges: readonly GEdge[], nodeCount: number): GEdge[] {
-  const budget = edgeBudget(nodeCount, edges.length)
+export function selectEdges(edges: readonly GEdge[], nodes: readonly GNode[]): GEdge[] {
+  const backbone = connectivityBackbone(edges)
+  const budget = edgeBudget(nodes.length, edges.length, backbone.size)
   if (edges.length <= budget) return [...edges]
   const byKind = new Map<GEdge['kind'], number[]>()
   edges.forEach((e, i) => {
+    // 骨架已占的位不再进桶：否则会被「桶内按权重降序」再挑一次，白占一份份额
+    if (backbone.has(i)) return
     const arr = byKind.get(e.kind)
     if (arr) arr.push(i)
     else byKind.set(e.kind, [i])
@@ -390,9 +475,9 @@ export function selectEdges(edges: readonly GEdge[], nodeCount: number): GEdge[]
   // 各桶按权重降序：桶内取前 share 条就是该类里最强的那些边
   for (const arr of byKind.values()) arr.sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0))
   const kinds = [...byKind.keys()]
-  if (kinds.length === 0) return []
-  const share = Math.max(1, Math.floor(budget / kinds.length))
-  const chosen = new Set<number>()
+  const chosen = new Set<number>(backbone)
+  if (kinds.length === 0) return edges.filter((_, i) => chosen.has(i))
+  const share = Math.max(1, Math.floor(Math.max(0, budget - chosen.size) / kinds.length))
   for (const k of kinds) {
     const arr = byKind.get(k)
     if (!arr) continue
@@ -747,7 +832,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
   const k = cam.k
   const stubIds = new Set(scene.nodes.filter(n => n.stub === true || n.kind === 'stub').map(n => n.id))
   const hoverId = scene.hoverNodeId
-  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes.length)
+  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes)
   /** 出现动画里某节点当前的显现进度；没有动画时恒为 1。 */
   const revealMap = scene.reveal ?? null
   const revealOf = (id: string): number => (revealMap ? revealMap.get(id) ?? 1 : 1)
@@ -863,12 +948,28 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
       ctx.lineWidth = 1.5
       ctx.stroke()
     } else if (isNote) {
-      // 笔记：紫色圆角方块，与「人/群」的圆盘在形状上就分得开
-      const rr = sr * 0.32
-      roundRectPath(ctx, s.x - sr, s.y - sr, sr * 2, sr * 2, rr)
+      // 笔记：紫色圆盘。形状与「人/群」一致，改由**颜色**区分身份。
+      // 曾经画成圆角方块，但下面的描边环与选中光环都无条件按 `ctx.arc(sr + …)` 画圆，
+      // 圆内切于方块 → 四角戳出环外、环与方块错位，看起来像「方块里套了个圈」。
+      // 改成圆后环天然贴合；顺带修掉一个隐性不一致 —— pickNode() 本就按半径判命中，
+      // 方块的四角以前是「看得见、点不着」。
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, sr, 0, Math.PI * 2)
       ctx.fillStyle = dark ? '#6d5bd0' : '#8b7ff0'
       ctx.fill()
       ctx.strokeStyle = dark ? '#a99bff' : '#6d5bd0'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    } else if (n.kind === 'file' || n.kind === 'section' || n.kind === 'entity') {
+      // 文档层的三类：同样是**圆盘**而不是方块 —— 下面的描边环与选中光环都无条件
+      // 按 `ctx.arc(sr + …)` 画圆，笔记那段注释里记着方块错位的旧坑，别再踩一遍。
+      // 颜色走 `docColors()`：屏幕与导出 SVG 共用一份，否则导出的图与所见不是一张图。
+      const { fill, stroke } = docColors(n.kind, dark)
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, sr, 0, Math.PI * 2)
+      ctx.fillStyle = fill
+      ctx.fill()
+      ctx.strokeStyle = stroke
       ctx.lineWidth = 1.5
       ctx.stroke()
     } else if (sprite) {
@@ -1029,6 +1130,18 @@ export function arrowEnds(bidirectional: boolean | undefined): { source: boolean
 export function bubbleText(node: GNode): { title: string; sub: string } {
   if (node.kind === 'note') return { title: node.label, sub: `笔记 · 出链 ${node.outLinks ?? 0} / 被引用 ${node.backLinks ?? 0}` }
   if (node.stub === true || node.kind === 'stub') return { title: node.label, sub: `尚未创建的笔记 · 被引用 ${node.backLinks ?? 0} 次` }
+  if (node.kind === 'file') {
+    const m = node.fileMeta
+    return { title: node.label, sub: `文件 · ${m?.ext?.toUpperCase() || '未知类型'} · ${m?.chunkCount ?? node.outLinks ?? 0} 个文本块` }
+  }
+  if (node.kind === 'section') {
+    return { title: node.label, sub: `章节 · ${(node.sectionFileIds?.length ?? 0)} 份文件里都有 · 共出现 ${node.backLinks ?? 0} 次` }
+  }
+  // 实体必须**自报是推断**：气泡是用户判断「这条关系能不能当事实引用」的第一现场，
+  // 只写「实体 · 3 份文件」会让人以为文档里明确写了三处。
+  if (node.kind === 'entity') {
+    return { title: node.label, sub: `模型推断 · 出现在 ${node.sectionFileIds?.length ?? 0} 份文件里（虚线 = 推断，不是文档里写着的）` }
+  }
   const kind = node.kind === 'group' ? '群聊' : node.kind === 'self' ? '我' : node.isOfficial ? '公众号' : node.isFriend ? '好友' : '群友'
   return { title: node.label, sub: `${kind} · 消息量 ${node.intimacy ?? node.weight}` }
 }
@@ -1139,25 +1252,34 @@ export function medianNearestDistance(
   return medianOf(dists)
 }
 
+/** 间距归一的倍率窗口：1/8 ~ 8。两端都夹住，极端坐标不会把图压成一个点或拉成噪点。 */
+export const MIN_SPACING_SCALE = 0.125
+export const MAX_SPACING_SCALE = 8
+
 /**
- * 间距安全网的缩放系数：**只在圆会真的相交时才把坐标放大**，否则原样返回 1。
+ * 间距归一系数：把「最近邻距离中位数」校准到 `nodeGap × 2 × 中位半径`（**双向**）。
  *
- * 为什么必须这么保守：坐标放大 s 倍后，画布的自适应缩放会按 1/s 缩回去 —— 屏幕上的
- * **圆心间距不变，而节点圆盘直径缩小 s 倍**。也就是说「归一化」的代价是节点在屏幕上变小。
- * 第一版按「间距 = nodeGap ×（2×中位半径 + 14）」无条件归一，在 251 节点的人脉图上把坐标
- * 放大了约 2 倍，结果头像退化成看不清的小点（真机截图对比确认），而那张图本来并不重叠。
- * 所以判据只能是「有没有重叠」，不能是「间距够不够宽松」。
+ * 目标值 `nodeGap × 2 × 中位半径` 的物理含义是「两圆相切，再按 nodeGap 留出呼吸空间」——
+ * 也就是「不重叠」与「不空旷」之间的那条线。`nodeGap` 本来就是用户调呼吸空间的滑杆，
+ * 这样它才第一次真正决定了密度（改前它只在「要放大」时才起作用）。
  *
- * 判据：圆心间距中位数 < 2×中位半径 ⇒ 必然存在相交的圆，按 `nodeGap × 2×中位半径` 放大；
- * 只放大不压缩（压缩会把本来不重叠的图解压到重叠）。
+ * **为什么从「只放大」改成双向**（实测数据驱动）：
+ *   - 只放大 ⇒ FA2 输出多松就永久多松。同一份真实数据，好友网络（251 节点）的
+ *     最近邻/中位半径 = 3.44，群组网络（65 节点）= **7.61** —— 间距差了 2.2 倍，
+ *     同一个界面里两种密度，群组网络看上去就是「几个小点撒在一大片空地上」。
+ *   - 压缩会不会压出重叠？不会 —— 压缩是**等比缩坐标**，之后紧跟的 `relaxCollisions`
+ *     会把落到相切以内的那些对推回去（网格化 Jacobi，250 节点 24 轮 <1ms）。
+ *     改前的注释担心「压缩会把本来不重叠的图解压到重叠」，那只在没有松弛步骤时成立。
+ *   - 压缩还有一个反直觉的好处：`fitCamera` 会按 1/s 放大，所以**屏幕上的圆心间距不变、
+ *     而节点圆盘直径放大 s 倍**。稀疏图压缩后头像反而更清楚（受 MAX_ZOOM=5 上限保护）。
  *
- * 触发场景就是小图：FA2 的坐标是无量纲的，2 个节点时自然量级是 ±6，而半径是 5~23px，
- * 两个圆必然叠住（真机实测：知识图谱 2 个节点相隔 16 单位、半径 21px 与 12px）。
+ * 只归一不语义化：它不关心图长什么样，只看「间距相对节点尺寸是否合适」这一个比值，
+ * 所以对 2 个节点的小图和 1 万个节点的大图是同一把尺子。
  * @param nodes - 节点。
  * @param radii - 节点半径表。
  * @param positions - 坐标表。
- * @param nodeGap - 节点间距滑杆。
- * @returns 缩放系数，≥ 1（不需要调整时为 1）。
+ * @param nodeGap - 节点间距滑杆（呼吸空间）。
+ * @returns 缩放系数，∈ [MIN_SPACING_SCALE, MAX_SPACING_SCALE]；算不出间距时返回 1。
  */
 export function spacingScale(
   nodes: readonly GNode[],
@@ -1173,10 +1295,8 @@ export function spacingScale(
     radiiList.push(radii.get(n.id) ?? nodeRadius(n, DEFAULT_GRAPH_SETTINGS, nodes.length))
   }
   const medianR = medianOf(radiiList) || 10
-  const overlapThreshold = medianR * 2
-  if (d0 >= overlapThreshold) return 1
-  const target = Math.max(1, nodeGap) * overlapThreshold
-  return Math.max(1, Math.min(8, target / d0))
+  const target = Math.max(1, nodeGap) * medianR * 2
+  return Math.max(MIN_SPACING_SCALE, Math.min(MAX_SPACING_SCALE, target / d0))
 }
 
 /* ── 碰撞松弛 ───────────────────────────────────────────────────────────
@@ -1317,7 +1437,7 @@ export function sceneToSvg(
   const theme = graphTheme(scene.dark)
   const { size, camera: cam, settings } = scene
   const stubIds = new Set(scene.nodes.filter(n => n.stub === true || n.kind === 'stub').map(n => n.id))
-  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes.length)
+  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes)
   const parts: string[] = []
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size.w}" height="${size.h}" viewBox="0 0 ${size.w} ${size.h}">`)
   parts.push(`<rect width="${size.w}" height="${size.h}" fill="${theme.bg}"/>`)
@@ -1370,8 +1490,9 @@ export function sceneToSvg(
     }) * (n.stub === true || n.kind === 'stub' ? 0.6 : 1)
     const isStub = n.stub === true || n.kind === 'stub'
     const isNote = n.kind === 'note'
+    const isDoc = n.kind === 'file' || n.kind === 'section' || n.kind === 'entity'
     const commColor = n.kind === 'self' ? theme.ringSelected : n.community >= 0 ? communityColor(n.community) : ''
-    const url = isStub || isNote ? '' : avatarUrlOf(n)
+    const url = isStub || isNote || isDoc ? '' : avatarUrlOf(n)
     const op = ` opacity="${opacity.toFixed(3)}"`
     if (isStub) {
       parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${theme.disc}" fill-opacity="0.2" stroke="${theme.ringStub}" stroke-width="1.5" stroke-dasharray="3 3"${op}/>`)
@@ -1380,7 +1501,12 @@ export function sceneToSvg(
       parts.push(`<defs><clipPath id="${id}"><circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}"/></clipPath></defs>`)
       parts.push(`<image x="${(s.x - sr).toFixed(2)}" y="${(s.y - sr).toFixed(2)}" width="${(sr * 2).toFixed(2)}" height="${(sr * 2).toFixed(2)}" clip-path="url(#${id})" xlink:href="${esc(url)}"${op}/>`)
     } else if (isNote) {
-      parts.push(`<rect x="${(s.x - sr).toFixed(2)}" y="${(s.y - sr).toFixed(2)}" width="${(sr * 2).toFixed(2)}" height="${(sr * 2).toFixed(2)}" rx="${(sr * 0.32).toFixed(2)}" fill="${scene.dark ? '#6d5bd0' : '#8b7ff0'}" stroke="${scene.dark ? '#a99bff' : '#6d5bd0'}" stroke-width="1.5"${op}/>`)
+      // 与屏幕绘制保持同一形状（圆盘）：导出/分享出去的那张图必须和画布一致
+      parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${scene.dark ? '#6d5bd0' : '#8b7ff0'}" stroke="${scene.dark ? '#a99bff' : '#6d5bd0'}" stroke-width="1.5"${op}/>`)
+    } else if (isDoc) {
+      // 文档层的三类：颜色走与屏幕同一个 `docColors()`，否则导出的图与所见不是一张图
+      const { fill, stroke } = docColors(n.kind, scene.dark)
+      parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"${op}/>`)
     } else {
       parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${commColor || theme.disc}"${op}/>`)
     }

@@ -92,6 +92,43 @@ export function compressContext(
     if (chunks.length >= opts.maxChunks) break
     if (usedChars >= opts.maxChars) break
     const d = r.doc
+
+    // ── 知识库块：不做窗口展开，**并且必须绕开下面的「同会话 + 时间相邻」去重** ──
+    // 两件事各自都是错的：
+    //   ① 窗口展开对文件块没有意义 —— 块本身就是一段完整内容，而 `create_time = 0`
+    //      会让 `loadMessageWindow` 直接返回空（它按 `!username` / `centerMs <= 0` 短路）；
+    //   ② 更隐蔽的是 `chosen` 去重：同一文件的块共享 `username`、`create_time` 同为 0，
+    //      于是第一个块被选中后，第二个块就落进「这段对话已经进上下文了」而被**跳过** ——
+    //      「命中三块的合同」在上下文里只剩一块，且不报错、不影响任何断言。
+    if (d.source === 'kb') {
+      const text = d.text || d.snippet
+      const cost = text.length + 8
+      if (usedChars + cost > opts.maxChars && chunks.length > 0) break
+      usedChars += cost
+      chunks.push({
+        username: d.username,
+        name: d.name,
+        anchor: {
+          name: d.name,
+          // 时间留空而不是编一个：文件块没有发生时间（create_time=0 ⇒ timeFull 返回空串），
+          // 编一个时间戳会让模型把文件内容说成「某天发生的事」。
+          time: '',
+          snippet: d.snippet || text.slice(0, 90),
+          username: d.username,
+          local_id: d.local_id,
+          source: 'kb',
+          ...(d.kb ? { kb: d.kb } : {}),
+        },
+        // 单行 = 整块正文。**不按 `linesPerChunk` 再切一次**：块本身已经是有语义边界的
+        // 切分单元（500 字 / 表格 40 行一组，见 kb/chunk.ts），再切只会把一句话劈成两半。
+        lines: [{ time: '', sender: '', text }],
+        score: r.score,
+        pref: r.timePref,
+        createTime: d.create_time,
+      })
+      continue
+    }
+
     // 与已选窗口重叠 → 跳过（这段对话已经进上下文了）。
     if (chosen.some(c => c.username === d.username && d.create_time >= c.start && d.create_time <= c.end)) continue
 
@@ -169,7 +206,7 @@ function timeFull(ts: number): string {
 export function docToRanked(d: RetrievedDoc, score = 0): RankedDoc {
   return {
     doc: d, score, matched: [], timePref: 0,
-    features: { sparse: 0, dense: 0, entity: 0, coverage: 0, timePref: 0, recency: 0, agreement: 0 },
+    features: { sparse: 0, dense: 0, kb: 0, entity: 0, coverage: 0, timePref: 0, recency: 0, agreement: 0 },
     ranks: {},
   }
 }

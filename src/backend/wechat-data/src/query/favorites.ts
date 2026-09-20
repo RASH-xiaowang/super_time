@@ -271,7 +271,16 @@ interface FavorItem {
  * @param limit - max rows.
  * @returns the favorites snapshot.
  */
-export function queryFavorites(decryptedDir: string, limit?: number, offset: number = 0): { favorites: FavorItem[]; total: number } {
+export function queryFavorites(
+  decryptedDir: string,
+  limit?: number,
+  offset: number = 0,
+  /**
+   * 关键词：匹配 `content`（收藏条目 XML，标题与描述就在里面）/ `fromusr` / `realchatname`。
+   * 放在服务端是因为收藏分页只有 120 条一页，客户端过滤永远只搜得到已加载的那一页。
+   */
+  q?: string,
+): { favorites: FavorItem[]; total: number } {
   const db = new DatabaseSync(join(decryptedDir, 'favorite', 'favorite.db'), { readOnly: true })
   try {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== undefined
@@ -279,15 +288,22 @@ export function queryFavorites(decryptedDir: string, limit?: number, offset: num
     const cols = new Set(db.prepare('PRAGMA table_info(fav_db_item)').all().map(r => r.name))
     const sel = (c: string, dft: string) => (cols.has(c) ? c : dft)
     const cap = Math.min(limit ?? 200, 2000)
+    const kw = (q ?? '').trim()
+    const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
+    const whereSql = kw
+      ? ` WHERE (${sel('content', "''")} LIKE ? ESCAPE '\\' OR ${sel('fromusr', "''")} LIKE ? ESCAPE '\\' OR ${sel('realchatname', "''")} LIKE ? ESCAPE '\\')`
+      : ''
+    const kwParams: string[] = kw ? [like, like, like] : []
     const sql = [
       'SELECT',
       [sel('local_id', '0'), sel('type', '0'), sel('update_time', '0'), sel('content', "''"), sel('fromusr', "''"), sel('realchatname', "''")].join(', '),
       'FROM fav_db_item',
+      whereSql,
       'ORDER BY', sel('update_time', 'local_id'), 'DESC',
       'LIMIT ? OFFSET ?',
     ].join(' ')
-    const rows = db.prepare(sql).all(cap, offset) as Array<Record<string, unknown>>
-    const total = (db.prepare('SELECT COUNT(*) AS n FROM fav_db_item').get() as { n: number } | undefined)?.n ?? rows.length
+    const rows = db.prepare(sql).all(...kwParams, cap, offset) as Array<Record<string, unknown>>
+    const total = (db.prepare('SELECT COUNT(*) AS n FROM fav_db_item' + whereSql).get(...kwParams) as { n: number } | undefined)?.n ?? rows.length
     const names = contactMeta(decryptedDir).names
     const favorites: FavorItem[] = rows.map((r) => {
       const type = Number(r[sel('type', '0')] ?? 0)

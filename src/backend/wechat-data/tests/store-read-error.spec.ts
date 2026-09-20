@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { insertTask, listTasks } from '../src/query/wechat-tasks.ts'
-import { buildKnowledgeGraph, listNotes, saveNote } from '../src/query/notes.ts'
+import { buildKnowledgeGraph, DEFAULT_KB_ID, listKbs, listNotes, saveNote } from '../src/query/notes.ts'
 import { listSummaryRecords, listSummaryTasks, saveSummaryTask } from '../src/query/summary-tasks.ts'
 
 /** SQLite 打不开库时的那句原文（三处 catch 都必须原样透出它，不能被别的错误顶替）。 */
@@ -110,7 +110,7 @@ describe('N1 数据根不存在时仍能写入（三个 store 同一语义）', 
     expect(existsSync(join(root, 'userData', 'daily_summary.db'))).toBe(true)
 
     // 笔记库（N1 的参照实现，早就有 mkdirSync）走同一条路径
-    const note = saveNote(decrypted, { title: '会议纪要' })
+    const note = saveNote(decrypted, DEFAULT_KB_ID, { title: '会议纪要' })
     expect(note.ok).toBe(true)
 
     // 读回：写进去的都在，且**都不是**「读失败」形态
@@ -120,7 +120,7 @@ describe('N1 数据根不存在时仍能写入（三个 store 同一语义）', 
     expect(tasks.readError).toBeUndefined()
 
     expect(listSummaryTasks(decrypted).items.length).toBe(1)
-    expect(listNotes(decrypted).total).toBe(1)
+    expect(listNotes(decrypted, DEFAULT_KB_ID).total).toBe(1)
   })
 
   it('写入失败时仍是既有的 {ok:false,error} 形态（不变成抛错）', () => {
@@ -134,7 +134,7 @@ describe('N1 数据根不存在时仍能写入（三个 store 同一语义）', 
     expect(inserted.ok).toBe(false)
     expect(String(inserted.error)).toContain(CANTOPEN)
     expect(saveSummaryTask(decrypted, summaryTask()).ok).toBe(false)
-    expect(saveNote(decrypted, { title: 'n' }).ok).toBe(false)
+    expect(saveNote(decrypted, DEFAULT_KB_ID, { title: 'n' }).ok).toBe(false)
   })
 })
 
@@ -164,16 +164,20 @@ describe('N1 读失败与「确无数据」可区分', () => {
     const warn = silenceWarn()
 
     const decrypted = emptyRoot()
-    expect(listNotes(decrypted).readError).toBeUndefined()
-    expect(buildKnowledgeGraph(decrypted, new Map()).readError).toBeUndefined()
+    expect(listNotes(decrypted, DEFAULT_KB_ID).readError).toBeUndefined()
+    expect(buildKnowledgeGraph(decrypted, DEFAULT_KB_ID, new Map()).readError).toBeUndefined()
+    // 库列表同理：空根目录下「一个库都没有」不能靠 readError 掩盖 ——
+    // 迁移会把默认库建出来，所以这里应当是一个**非空**列表且无 readError。
+    expect(listKbs(decrypted).readError).toBeUndefined()
+    expect(listKbs(decrypted).items.map(k => k.id)).toEqual([DEFAULT_KB_ID])
 
     const broken = brokenRoot('wechat_notes.db')
-    const notes = listNotes(broken)
+    const notes = listNotes(broken, DEFAULT_KB_ID)
     expect(notes.total).toBe(0)
     expect(notes.readError).toContain(CANTOPEN)
 
     // 知识图谱整张为空，是最容易让用户以为「数据丢了」的那种
-    const graph = buildKnowledgeGraph(broken, new Map())
+    const graph = buildKnowledgeGraph(broken, DEFAULT_KB_ID, new Map())
     expect(graph.notes).toEqual([])
     expect(graph.summary.noteCount).toBe(0)
     expect(graph.readError).toContain(CANTOPEN)
@@ -214,7 +218,11 @@ describe('N1 建目录失败不改判定（保持既有失败语义）', () => {
     expect(warnedWith(warn, '数据根目录创建失败')).toBe(true)
 
     expect(listSummaryTasks(decrypted).readError).toContain(CANTOPEN)
-    expect(listNotes(decrypted).readError).toContain(CANTOPEN)
+    expect(listNotes(decrypted, DEFAULT_KB_ID).readError).toContain(CANTOPEN)
+    // 库列表读不到时也必须是「带 readError 的空列表」，
+    // 否则调用方会去新建一个默认库，把真正的问题（库打不开）盖掉。
+    expect(listKbs(decrypted).readError).toContain(CANTOPEN)
+    expect(listKbs(decrypted).items).toEqual([])
   })
 
   it('同一个不可建目录的数据根上，写入失败仍是 {ok:false,error} 而不是抛错', () => {

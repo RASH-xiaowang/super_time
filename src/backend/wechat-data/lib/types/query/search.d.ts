@@ -16,6 +16,16 @@ import type { SearchHit } from '../types.ts';
  */
 export declare function bigramTokens(text: string): string;
 /**
+ * 把一个检索词编成 FTS5 短语：bigram 之间要求连续出现（精度优先）。
+ *
+ * **导出**给知识库检索（`query/kb-search.ts`）复用：两处的索引都是 `bigramTokens`
+ * 写进去的 tokens 列，短语编法必须一模一样 —— 各写一份的后果是「消息搜得到、
+ * 文件搜不到」这种按模块分裂的怪现象，而它的成因藏在两处相似代码的细微差别里。
+ * @param term - 用户输入的一个检索词（可含空格，空格在 bigram 化时被丢弃）。
+ * @returns FTS5 短语表达式；无有效 token 时返回空串。
+ */
+export declare function ftsPhrase(term: string): string;
+/**
  * 某个词在索引里的文档频率（df）。
  *
  * 用途：判断一个词是「有区分度的内容词」还是「到处都是的水词/跨词切分噪音」。
@@ -76,6 +86,95 @@ export declare function getSearchIndexStatus(decryptedDir: string): {
     exists: boolean;
     rows: number;
     built_at: string | null;
+    ready: boolean;
+};
+/** 索引新鲜度（内部判据；不经 `@Remote` 暴露，避免改动 typert 的生成 schema）。 */
+export interface SearchIndexFreshness {
+    /** 索引最近一次构建/同步完成的时刻（毫秒 epoch；0 = 从未记录）。 */
+    refreshedMs: number;
+    /** 是否有分片比索引新（= 存在尚未入索引的新消息）。 */
+    stale: boolean;
+    /** 多少个分片比索引新。 */
+    staleShards: number;
+    /** 索引内最新一条消息的时间（秒；0 = 空索引）。 */
+    latestIndexedTime: number;
+}
+/**
+ * 判断索引是否落后于消息分片。
+ *
+ * 判据是**分片文件 mtime vs 索引刷新时刻**，而不是「分片里最大 sort_seq」：
+ * 前者只是一次 `statSync`（O(1)），后者要为 200+ 张会话表各查一次索引。
+ * 分片是追加写的，任何新消息都会推新 mtime；反过来 mtime 变新却没有新消息
+ * （被 checkpoint / vacuum 碰过）时，增量同步只会读到 0 行，代价可忽略。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 新鲜度指标。
+ */
+export declare function getSearchIndexFreshness(decryptedDir: string): SearchIndexFreshness;
+/** 提问前的「索引可用且新鲜」保证结果。 */
+export interface EnsureIndexResult {
+    /** 本次实际做了什么：全量构建 / 增量同步 / 无需动作。 */
+    action: 'build' | 'sync' | 'none';
+    rows?: number;
+    added?: number;
+    elapsed_ms: number;
+    message?: string;
+}
+/**
+ * 保证索引**存在且包含最新的消息**（提问路径的唯一入口）。
+ *
+ * 这是把「索引过期」从**永不自愈**变成自愈的关键。旧实现只在 `!ready`（索引缺失 /
+ * schema 版本不符）时构建，而 `ready` 与「分片里有没有新消息」毫无关系 ——
+ * 索引一旦建成，之后微信写入的消息**永远不会**进入索引。实测生产索引
+ * `built_at=2026-09-13`、库内最新消息 2026-09-11，而消息分片里已经有 2026-09-18 的
+ * 对话（09-17 一天 139 条）。问「今天聊了啥」时当天数据根本不在检索空间里，
+ * BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月）—— 这就是
+ * 「回复内容不正确 + 消息列表里出现其他日期的消息」的根源。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 本次动作与耗时（写进操作日志，便于解释「为什么这次提问慢」）。
+ */
+export declare function ensureSearchIndex(decryptedDir: string): Promise<EnsureIndexResult>;
+/** 增量同步结果。 */
+export interface SyncResult {
+    status: 'ok' | 'skipped' | 'error';
+    /** 本次新入索引的消息条数。 */
+    added: number;
+    /** 本次实际读取的分片数。 */
+    shards: number;
+    elapsed_ms: number;
+    message?: string;
+}
+/**
+ * 增量同步：只把「分片里新追加、尚未入索引」的消息补进 FTS。
+ *
+ * 为什么必须有它：微信是**持续写入**的，而 `buildSearchIndex` 的成本与**全量条数**
+ * 同阶（实测 13.5 万条 5.4s），不可能每次提问都全量重建。水位线按**分片**记：
+ * 分片是追加写的，`sort_seq > 水位线` 即「上次没读过的新行」，而 Msg_* 表上带有
+ * 独立的 `_SORTSEQ` 索引，实测定位尾部 0ms（见 working/sync-feasibility.txt）。
+ * 因此增量代价与**新增条数**同阶 —— 通常几十条、毫秒级。
+ * @param decryptedDir - 已解密数据根。
+ * @returns 同步结果（added = 新入索引的条数）。
+ */
+export declare function syncSearchIndex(decryptedDir: string): Promise<SyncResult>;
+/**
+ * 按时间窗口直取消息（**纯时间问法**专用）。
+ *
+ * 为什么需要它：「今天聊了啥」这类问题**没有内容词** —— 拆出来的 bigram 全是
+ * 「今天 / 天聊 / 聊了 / 了啥」，BM25 命中的是正文恰好写着「今天」的消息
+ * （实测命中的是同年 2/3/7 月的旧对话），而当天真实消息一条都召不回来
+ * （结构化通道按日期过滤后 0 命中 → `hintHits=0`）。纯时间问法的正解是
+ * **按日期段枚举**，不做任何内容匹配。
+ *
+ * 只读我们自己维护的 `message_meta`（`(username, create_time)` 索引），
+ * 不碰 200+ 张微信会话表。
+ * @param decryptedDir - 已解密数据根。
+ * @param fromSec - 起始（含，秒）。
+ * @param toSec - 结束（含，秒）。
+ * @param limit - 最多返回多少条（**按时间新→旧截断**，即保留窗口内最近的）。
+ * @param username - 可选的会话范围。
+ * @returns 命中（时间新→旧）与索引是否就绪。
+ */
+export declare function listMessagesInRange(decryptedDir: string, fromSec: number, toSec: number, limit?: number, username?: string): {
+    hits: SearchHit[];
     ready: boolean;
 };
 /** 构建结果。 */

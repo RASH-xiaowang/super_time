@@ -12,26 +12,16 @@
   background: radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%);
 }
 
-/* hero 头部卡 */
-.hd {
-  display: flex; align-items: center; gap: 14px; padding: 16px 18px;
-  border: 1px solid var(--nm-border); border-radius: 14px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 8%, transparent)), var(--nm-bg-card);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 5%, transparent);
-  transition: all 0.2s;
-}
-.hd:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 9%, transparent); }
 .hdTitle {
-  font-size: 16px; font-weight: 800; letter-spacing: 0.02em;
+  font-size: var(--nm-fs-lg); font-weight: 800; letter-spacing: 0.02em;
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 /* 标签页 */
-.tabBar { display: flex; gap: 8px; flex-wrap: wrap; }
+.tabBar { display: flex; gap: var(--nm-dense-g3); flex-wrap: wrap; }
 .tabBtn {
-  padding: 6px 16px; border: 1px solid var(--nm-border); border-radius: 999px;
-  background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1);
+  padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: 999px;
+  background: var(--nm-bg-card); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1);
   cursor: pointer; transition: all 0.15s;
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   corner-shape: round;
@@ -43,7 +33,7 @@
   box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
 }
 
-.scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--nm-dense-g5); }
 /* 「总结任务栏」里那张卡是 .scroll 的直接子元素：让它吃掉剩余高度，
    空状态就会在卡片内居中，而不是把一整片空白堆在卡片下面
    （实测原来卡片下方留 268px）。 */
@@ -58,19 +48,22 @@
 }
 .sideCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .sideCard > .cardTitle, .cardTitle {
-  display: flex; align-items: baseline; gap: 8px; padding: 12px 14px;
-  font-size: 13px; font-weight: 700; color: var(--nm-text-1);
+  display: flex; align-items: baseline; gap: var(--nm-dense-g3); padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x);
+  font-size: var(--nm-dense-fs); font-weight: 700; color: var(--nm-text-1);
   border-bottom: 1px solid var(--nm-border); margin: 0;
   background: linear-gradient(90deg, var(--nm-bg-hover), transparent 60%);
 }
-.cardCount { font-size: 11px; font-weight: 400; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
-.sideList { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.cardCount { font-size: var(--nm-dense-fs-sm); font-weight: 400; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.sideList { display: flex; flex-direction: column; gap: var(--nm-dense-g3); padding: var(--nm-dense-g4) var(--nm-dense-pad-x); }
 
-/* 任务 / 记录行 */
+/* 任务 / 记录行。
+   改前：.taskInfo 是纵向三行（名称 / 元信息 / 徽标），一行信息吃掉三行高度；
+   改后：名称、元信息、徽标全部排在**同一行**，窄到放不下才 wrap（换行是兜底，不是默认）。
+   行高从约 74px 降到约 27px。 */
 .taskRow {
-  display: flex; align-items: center; gap: 10px;
-  border: 1px solid var(--nm-border); border-radius: 12px;
-  background: var(--nm-bg-card); padding: 10px 12px;
+  display: flex; align-items: center; gap: var(--nm-dense-g3); flex-wrap: wrap;
+  border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-card); padding: var(--nm-dense-row-y) var(--nm-dense-pad-x);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   transition: all 0.2s;
 }
@@ -78,16 +71,16 @@
   border-color: var(--nm-border-hover); background: var(--nm-bg-hover);
   box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
 }
-.taskInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.taskName { font-size: 13px; font-weight: 650; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.taskMeta { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.taskChips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.taskActions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.taskInfo { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: var(--nm-dense-g3); }
+.taskName { flex: 0 1 auto; max-width: 42%; font-size: var(--nm-dense-fs); font-weight: 650; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.taskMeta { flex: 0 1 auto; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.taskChips { display: flex; align-items: center; flex-wrap: wrap; gap: var(--nm-dense-g2); margin-top: 0; flex: 0 1 auto; }
+.taskActions { display: flex; align-items: center; gap: var(--nm-dense-g2); flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 
 /* 状态徽标 */
 .statBadge {
-  display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
-  padding: 2px 9px; border-radius: 999px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: var(--nm-dense-g2); font-size: var(--nm-dense-fs-sm);
+  padding: 1px 7px; border-radius: 999px; font-weight: 600;
   color: var(--nm-text-2); background: transparent;
   border: 1px solid var(--nm-border); font-variant-numeric: tabular-nums;
   transition: all 0.15s;
@@ -100,8 +93,8 @@
 
 /* 分类 / 操作按钮 */
 .catBtn {
-  padding: 5px 12px; border: 1px solid var(--nm-border); border-radius: 10px;
-  background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1);
+  padding: 4px 10px; border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-card); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1);
   cursor: pointer; transition: all 0.15s;
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
@@ -114,12 +107,12 @@
 }
 
 /* 双栏布局 */
-.dsLayout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; flex: 1; min-height: 0; }
+.dsLayout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--nm-dense-g5); flex: 1; min-height: 0; }
 @media (max-width: 1100px) { .dsLayout { grid-template-columns: 1fr; } }
 /* 「手动生成」只有主栏（无右侧预览栏），双栏网格会空占 380px 把内容挤窄 */
 .dsLayoutSingle { grid-template-columns: minmax(0, 1fr); }
-.dsMain { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
-.dsSide { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
+.dsMain { display: flex; flex-direction: column; gap: var(--nm-dense-g5); min-width: 0; min-height: 0; overflow-y: auto; }
+.dsSide { display: flex; flex-direction: column; gap: var(--nm-dense-g5); min-width: 0; min-height: 0; overflow-y: auto; }
 
 /* 总结预览卡 */
 .previewCard {
@@ -130,27 +123,27 @@
 }
 .previewCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .previewHd {
-  display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+  display: flex; align-items: center; gap: var(--nm-dense-g3); padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x);
   border-bottom: 1px solid var(--nm-border); background: var(--nm-bg-hover);
 }
 .previewTitle {
-  font-size: 13px; font-weight: 700;
+  font-size: var(--nm-dense-fs); font-weight: 700;
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .previewMetaChip {
   margin-left: auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px; color: var(--nm-cyan); background: var(--nm-cyan-10);
-  border: 1px solid var(--nm-border); border-radius: 999px; padding: 3px 10px;
+  font-size: var(--nm-dense-fs-sm); color: var(--nm-cyan); background: var(--nm-cyan-10);
+  border: 1px solid var(--nm-border); border-radius: 999px; padding: 1px 8px;
   font-variant-numeric: tabular-nums;
   corner-shape: round;
 }
-.previewBody { padding: 14px 16px; }
+.previewBody { padding: var(--nm-dense-g5) var(--nm-dense-pad-x); }
 .summaryText {
-  font-size: 13px; line-height: 1.85; color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs); line-height: 1.7; color: var(--nm-text-1);
   white-space: pre-wrap; word-break: break-word;
 }
-.previewActions { display: flex; gap: 8px; padding: 0 14px 12px; }
+.previewActions { display: flex; gap: var(--nm-dense-g3); padding: 0 var(--nm-dense-pad-x) var(--nm-dense-pad-y); }
 
 /* 生成卡 */
 .panelCard {
@@ -161,46 +154,46 @@
 }
 .panelCard:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .panelCard > .cardTitle {
-  padding: 12px 14px; border-bottom: 1px solid var(--nm-border); margin: 0;
-  font-size: 13px; font-weight: 700; color: var(--nm-text-1);
+  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x); border-bottom: 1px solid var(--nm-border); margin: 0;
+  font-size: var(--nm-dense-fs); font-weight: 700; color: var(--nm-text-1);
   background: linear-gradient(90deg, var(--nm-bg-hover), transparent 60%);
 }
-.cardBody { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
-.searchWrap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cardBody { display: flex; flex-direction: column; gap: var(--nm-dense-g4); padding: var(--nm-dense-g5) var(--nm-dense-pad-x); }
+.searchWrap { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g3); align-items: center; }
 .search {
-  padding: 7px 10px; border: 1px solid var(--nm-border); border-radius: 10px;
-  background: var(--nm-bg-input); font-size: 12px; color: var(--nm-text-1); min-width: 120px;
+  padding: 5px 9px; border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-input); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1); min-width: 120px;
   transition: all 0.15s;
 }
 .search:hover { border-color: var(--nm-border-hover); }
 .search:focus { outline: none; border-color: var(--nm-cyan); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 12%, transparent); }
-.fieldLabel { font-size: 12px; color: var(--nm-text-2); white-space: nowrap; }
+.fieldLabel { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); white-space: nowrap; }
 /* 统计 chips */
-.statChips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.statChips { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g3); margin-top: 0; }
 .statChip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px;
+  display: inline-flex; align-items: center; gap: var(--nm-dense-g2); padding: 2px 9px;
   border: 1px solid var(--nm-border); border-radius: 999px;
-  background: var(--nm-bg-hover); font-size: 12px; color: var(--nm-text-1);
+  background: var(--nm-bg-hover); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1);
   transition: all 0.15s;
   corner-shape: round;
 }
 .statChip:hover { border-color: var(--nm-border-hover); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .statChip b { color: var(--nm-cyan); font-weight: 700; font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
-.subHd { font-size: 11px; font-weight: 700; color: var(--nm-cyan); letter-spacing: 0.08em; text-transform: uppercase; margin: 10px 0 4px; }
+.subHd { font-size: var(--nm-dense-fs-sm); font-weight: 700; color: var(--nm-cyan); letter-spacing: 0.08em; text-transform: uppercase; margin: var(--nm-dense-g4) 0 var(--nm-dense-g1); }
 
 /* 排行条形 */
-.barRow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
-.barLabel { width: 150px; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.barTrack { flex: 1; height: 7px; border-radius: 4px; background: var(--nm-bg-hover); overflow: hidden; }
+.barRow { display: flex; align-items: center; gap: var(--nm-dense-g3); margin-bottom: var(--nm-dense-g2); font-size: var(--nm-dense-fs-sm); }
+.barLabel { width: 128px; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.barTrack { flex: 1; height: 6px; border-radius: 4px; background: var(--nm-bg-hover); overflow: hidden; }
 .barFill {
   height: 100%; border-radius: 4px;
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 20%, transparent); transition: all 0.2s;
 }
-.barValue { width: 70px; text-align: right; color: var(--nm-text-2); font-size: 11px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.barValue { width: 56px; text-align: right; color: var(--nm-text-2); font-size: var(--nm-dense-fs-sm); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* 小时活动热力 */
-.dsHourBars { display: flex; align-items: flex-end; gap: 3px; height: 56px; }
+.dsHourBars { display: flex; align-items: flex-end; gap: var(--nm-dense-g1); height: 44px; }
 .dsHourCol { flex: 1; display: flex; align-items: flex-end; height: 100%; }
 .dsHourFill {
   width: 100%; border-radius: 4px 3px 0 0; min-height: 3px;
@@ -218,13 +211,13 @@
 .formDialog {
   width: 560px; max-width: 94vw; max-height: 86vh; overflow-y: auto;
   background: var(--nm-bg-card); border: 1px solid var(--nm-border); border-radius: 14px;
-  padding: 16px; box-shadow: 0 0 22px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+  padding: var(--nm-dense-g5); box-shadow: 0 0 22px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
 .formHd { display: flex; align-items: baseline; gap: 8px; }
-.formBody { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.formBody { display: flex; flex-direction: column; gap: var(--nm-dense-g3); margin-top: var(--nm-dense-g4); }
 .formatCard {
-  display: flex; flex-direction: column; gap: 3px; padding: 8px;
+  display: flex; flex-direction: column; gap: var(--nm-dense-g1); padding: var(--nm-dense-g3);
   border: 1px solid var(--nm-border); border-radius: 10px; cursor: pointer;
   background: var(--nm-bg-card); transition: all 0.15s;
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -237,14 +230,14 @@
 .fileName { font-size: 12px; color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* toast / 错误 / 加载 */
 .errBanner {
-  padding: 10px 14px; border-radius: 10px;
+  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x); border-radius: var(--nm-dense-r);
   border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent); background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
   color: var(--nm-danger); font-size: 12px;
   font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums;
 }
-.toasts { position: fixed; bottom: 20px; right: 20px; z-index: 1200; display: flex; flex-direction: column; gap: 8px; max-width: 360px; pointer-events: none; }
+.toasts { position: fixed; bottom: 20px; right: 20px; z-index: 1200; display: flex; flex-direction: column; gap: var(--nm-dense-g3); max-width: 360px; pointer-events: none; }
 .toast {
-  display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px; border-radius: 12px;
+  display: flex; align-items: flex-start; gap: var(--nm-dense-g3); padding: var(--nm-dense-g4) var(--nm-dense-pad-x); border-radius: 10px;
   border: 1px solid var(--nm-border); background: var(--nm-bg-card); color: var(--nm-text-1);
   font-size: 12px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.40), 0 0 12px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   pointer-events: auto; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -269,17 +262,17 @@
    （2/3/4/6/8/10/12/14/16），搬进 CSS 就会被 `audit:scale` 拦下，
    所以取最近的刻度值 6px（视觉几乎无差）。 */
 .dsNewBtn { align-self: center; }
-.dsSearchWrap { margin-bottom: 8px; }
-.dsToolbarTop { margin-top: 12px; }
-.dsFormHd { margin-top: 8px; }
-.dsHdTop { margin-top: 8px; }
+.dsSearchWrap { margin-bottom: var(--nm-dense-g3); }
+.dsToolbarTop { margin-top: var(--nm-dense-g4); }
+.dsFormHd { margin-top: var(--nm-dense-g3); }
+.dsHdTop { margin-top: var(--nm-dense-g3); }
 .dsInlineLabel { display: flex; align-items: center; gap: 6px; }
-.dsMemberPick { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto; padding: 4px; }
-.dsFormatGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
-.dsFormatCardLocal { cursor: pointer; padding: 8px; border: 1px solid var(--nm-border); border-radius: 8px; }
+.dsMemberPick { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g3); max-height: 104px; overflow-y: auto; padding: var(--nm-dense-g2); }
+.dsFormatGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--nm-dense-g2); }
+.dsFormatCardLocal { cursor: pointer; padding: var(--nm-dense-g3); border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r); }
 .dsRadioHidden { display: none; }
 .dsPrompt { resize: vertical; font-family: inherit; line-height: 1.6; }
-.dsScheduleRow { display: flex; gap: 10px; align-items: center; }
+.dsScheduleRow { display: flex; gap: var(--nm-dense-g4); align-items: center; }
 
 /* ── 全新用户的落地卡（0 任务 0 记录）────────────────────────────────
    此前这里是"一张空卡 + 一句'还没有定时任务'"，下方 470px 全是空白，
@@ -288,42 +281,48 @@
 .dsStart {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 12px;
+  gap: var(--nm-dense-g5);
   align-items: start;
 }
 .dsStartCard {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--nm-dense-g4);
+  padding: var(--nm-dense-g5) var(--nm-dense-pad-x);
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-fs-md);
   background: var(--nm-bg-card);
   min-width: 0;
 }
-.dsStartTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
-.dsSteps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.dsStep { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dsStartTitle { font-size: var(--nm-dense-fs); font-weight: 700; color: var(--nm-text-1); }
+.dsSteps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--nm-dense-g3); }
+.dsStep { display: flex; align-items: center; gap: var(--nm-dense-g3); min-width: 0; }
 .dsStepNo {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  font-size: 11px;
+  font-size: var(--nm-dense-fs-xs);
   font-weight: 800;
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
 }
-.dsStepBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.dsStepName { font-size: 12.5px; font-weight: 600; color: var(--nm-text-1); }
-.dsStepMeta { font-size: 11px; line-height: 1.5; color: var(--nm-text-2); }
-.dsStartList { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
-.dsStartList li { font-size: 11.5px; line-height: 1.55; color: var(--nm-text-2); }
+/* 一步一行：标题与说明并排（改前是上下两行）。放不下时 wrap，不截断 ——
+   这里会出现「尚未配置 —— 总结由模型生成」这类必须看全的提示。 */
+.dsStepBody { display: flex; flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: var(--nm-dense-g3); min-width: 0; flex: 1; }
+.dsStepName { flex: 0 0 auto; font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-1); }
+.dsStepMeta { min-width: 0; font-size: var(--nm-dense-fs-sm); line-height: var(--nm-dense-lh); color: var(--nm-text-2); }
+.dsStartList { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: var(--nm-dense-g2); }
+.dsStartList li { font-size: var(--nm-dense-fs-sm); line-height: var(--nm-dense-lh); color: var(--nm-text-2); }
 .dsStartList b { color: var(--nm-text-1); font-weight: 600; }
 
+/* 行内动作按钮：一行里最多并排 5 个（运行/编辑/复制/启停/删除），
+   比表单里的 .catBtn 再紧一档，否则按钮组会把名称和徽标挤到换行。 */
+.taskActions .catBtn { padding: 2px 8px; }
+
 /* 阅览页的空态：给一个"去生成"的出口，而不是一句"还没有历史总结"就结束 */
-.dsEmptyRecords { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 0 14px; }
+.dsEmptyRecords { display: flex; flex-direction: column; align-items: center; gap: var(--nm-dense-g3); padding: var(--nm-dense-g3) 0 var(--nm-dense-g5); }

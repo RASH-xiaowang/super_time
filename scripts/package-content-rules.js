@@ -29,8 +29,20 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-/** asar 体积上界：30 MiB = 31,457,280 B，对基线 24,033,395 B（22.92 MiB，N21 打包）是 1.31×。 */
-const MAX_ASAR_BYTES = 30 * 1024 * 1024;
+/**
+ * asar 体积上界：64 MiB = 67,108,864 B，对基线 56,478,217 B（53.86 MiB，阶段 D 实测）是 1.19×。
+ *
+ * 基线为什么从 24,033,395 B（N21）涨到 56,478,217 B（+32.4MB）：阶段 D 接入了
+ * PDF / Word / Excel 三个解析器（`pdfjs-dist` / `mammoth` / `xlsx`），它们是**运行期**
+ * 依赖，必须随包发布。上界跟着抬，但**不比基线抬得更松** —— 仍留在 1.2× 以内，
+ * 这样 N22 那个场景（一个 `ui-dist.bak` 之类的残留，约 +12MB）依旧会顶破上界被抓住。
+ * 其中已经扣掉两处纯浪费（实测见 `working/d-asar-probe2.txt`）：
+ *   · pdfjs 只留运行期要用的那几块（`legacy/build` + `cmaps` + `standard_fonts` + wasm）：
+ *     33.17MB → 9.42MB，裁掉的是 `*.map`、非 legacy 的 `build/`、`web/`、`types/`；
+ *   · pdfjs 的 optional 依赖 `@napi-rs/canvas` 整棵排除（36.5MB 的 win32 原生 canvas，
+ *     本用途只 `getTextContent()`、从不 `render()`，实测移走后 23/23 解析用例仍全绿）。
+ */
+const MAX_ASAR_BYTES = 64 * 1024 * 1024;
 /**
  * asar 体积下界：纯上界断言在「读不到大小」（0 字节、读错文件）时**恒真**，
  * 所以下界是防空转的那一半 —— 一个真实包不可能小于 10 MiB（内含 node_modules 与前端产物）。
@@ -130,7 +142,7 @@ function asarSizeViolations(bytes) {
   if (bytes > MAX_ASAR_BYTES) {
     out.push({
       rule: 'size-ceiling',
-      detail: `${mb(bytes)} > 上界 ${mb(MAX_ASAR_BYTES)}（=${MAX_ASAR_BYTES} B；基线 24,033,395 B 的 1.31×）`,
+      detail: `${mb(bytes)} > 上界 ${mb(MAX_ASAR_BYTES)}（=${MAX_ASAR_BYTES} B；基线 56,478,217 B 的 1.19×）`,
     });
   }
   return out;

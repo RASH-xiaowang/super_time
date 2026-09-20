@@ -1,0 +1,271 @@
+/* 问答历史弹窗 —— 沿用 kit 的 Dialog 与 NEON MATRIX 令牌（同 ask.module.css）。
+   ════════════════════════════════════════════════════════════════════════
+   结构
+   ────────────────────────────────────────────────────────────────────────
+   Dialog（kit，居中）
+   ├─ .head      搜索 + 筛选 + 计数（**sticky**：列表滚动时筛选条件不跟着跑掉）
+   ├─ .list      记录卡片（每条可展开看完整回答与引用）
+   └─ sentinel   懒加载哨兵（滚到底自动取下一页）
+
+   两条刻意的取舍：
+   ① 弹窗宽度必须盖过 kit 的 520px 默认值 —— 一条问答记录里要同时放时间、状态、
+      会话、问题、回答摘要，520px 会把它们挤成三行。用 `.dialogWide.dialogWide`
+      双类名提权（两处都是单类选择器，靠书写顺序比大小不可靠，会随打包顺序翻转）。
+   ② 「清空全部」是**危险但可理解**的动作：给红底描边 + 二次确认，且不放在筛选行里
+      （避免用户筛着筛着顺手点掉全库历史）。
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* 双类名提权：稳过 kit 的 `.dialog { width: min(520px, 92vw) }`。 */
+.dialogWide.dialogWide {
+  width: min(940px, 94vw);
+}
+
+/* ── 顶部工具条（sticky）─────────────────────────────────────
+   .dialogBd 是滚动容器，所以 top:0 的 sticky 就贴在它上沿；
+   必须自带背景色，否则列表滚过去会从字缝里透出来。 */
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  padding-bottom: var(--nm-s-3);
+  margin: calc(-1 * var(--nm-s-1)) 0 0;
+  background: var(--nm-bg-1);
+  border-bottom: 1px solid var(--nm-border);
+}
+
+.headRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--nm-s-2);
+}
+
+.searchHost { flex: 1 1 220px; min-width: 0; }
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--nm-s-2);
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-3);
+}
+
+.metaCount { color: var(--nm-text-2); }
+
+/* 「清空全部」：ghost 红描边，hover 才实心 —— 常驻但不能抢眼。 */
+.dangerBtn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-danger-text);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+  transition: all var(--nm-t-fast);
+}
+.dangerBtn:hover:enabled { background: var(--nm-danger-15); border-color: var(--nm-danger); }
+.dangerBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── 列表 ── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  min-width: 0;
+  transition: border-color var(--nm-t-fast), background var(--nm-t-fast);
+}
+.item:hover { border-color: var(--nm-border-hover); }
+.item[data-open] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  background: var(--nm-bg-hover);
+}
+
+.itemTop {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.time { color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+
+/* 来源标签：微信问答 / 会话内问答 —— 同一形态、只换色，避免两种视觉语言。 */
+.srcTag {
+  padding: 1px 6px;
+  border-radius: var(--nm-r-xs);
+  border: 1px solid var(--nm-border);
+  color: var(--nm-text-3);
+}
+.srcTag[data-src='ask'] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  color: var(--nm-cyan-text);
+}
+.srcTag[data-src='session'] {
+  border-color: color-mix(in srgb, var(--nm-purple) 30%, transparent);
+  color: var(--nm-purple-text);
+}
+
+.scopeTag { color: var(--nm-text-3); }
+
+.itemActs { margin-left: auto; display: inline-flex; gap: 6px; }
+
+.ghostBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xs);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+  transition: all var(--nm-t-fast);
+}
+.ghostBtn:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-active); color: var(--nm-text-1); }
+.ghostBtn[data-danger]:hover {
+  border-color: color-mix(in srgb, var(--nm-danger) 55%, transparent);
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+}
+
+/* 问题：列表里最该被一眼扫到的内容，给最高对比度。 */
+.question {
+  font-size: var(--nm-fs-md);
+  font-weight: 600;
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-tight);
+  word-break: break-word;
+}
+
+/* 回答摘要：收起时最多 3 行（多出来的用渐变遮罩暗示），展开后交给 .answerFull。 */
+.answer {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  line-height: var(--nm-lh-body);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* 展开后的完整回答：保留换行（模型的分点原本就有换行）。 */
+.answerFull {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  line-height: var(--nm-lh-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  background: var(--nm-bg-input);
+  border-radius: 0 var(--nm-r-sm) var(--nm-r-sm) 0;
+}
+
+.basis {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+/* 引用：历史里的引用是**只读清单**（2 列网格 + 单条可点击跳转），
+   不复用问答面板那套带接地告警的 CiteList —— 历史不需要重新审计一边当初的回答。 */
+.cites {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+@media (max-width: 760px) { .cites { grid-template-columns: minmax(0, 1fr); } }
+
+.citeBtn {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--nm-t-fast);
+}
+.citeBtn:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); color: var(--nm-text-1); }
+.citeBtn[data-cited] {
+  border-color: color-mix(in srgb, var(--nm-cyan) 30%, transparent);
+  background: var(--nm-cyan-10);
+}
+.citeIdx { color: var(--nm-cyan); font-weight: 700; flex-shrink: 0; }
+/* 知识库来源：与问答面板同一套配色（紫色系），两处看到的是同一种东西。 */
+.citeBtn[data-src='kb'] {
+  border-color: color-mix(in srgb, var(--nm-purple) 30%, transparent);
+  background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
+}
+.citeBtn[data-src='kb'] .citeIdx { color: var(--nm-purple); }
+.citeBtn[data-src='kb'][data-cited] {
+  border-color: color-mix(in srgb, var(--nm-purple) 50%, transparent);
+  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+}
+.citeBtn[data-src='unknown'] { cursor: default; }
+.citeName { font-weight: 600; flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citeTime { flex-shrink: 0; color: var(--nm-text-3); }
+.citeSnippet { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 元信息（模型 / 意图 / 检索词 / 耗时）：一行小字，长内容截断。 */
+.metaLine {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.empty { padding: var(--nm-s-6) 0; }
+
+/* 提示条（删除成功 / 失败）：与「导出记录」同一形态，避免又是另一种视觉语言。 */
+.notice {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-active);
+  border: 1px solid var(--nm-border);
+}
+.notice[data-error] {
+  color: var(--nm-danger-text);
+  border-color: color-mix(in srgb, var(--nm-danger) 35%, transparent);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+}
+
+.listFoot {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+  text-align: center;
+  padding: var(--nm-s-2) 0;
+}

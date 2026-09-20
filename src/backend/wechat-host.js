@@ -134,8 +134,35 @@ function llmConfigFromEnv(overrides = {}) {
     apiPath: overrides.apiPath || file.apiPath || process.env.SUPERTIME_LLM_API_PATH || '/chat/completions',
     embeddingModel: overrides.embeddingModel || file.embeddingModel || process.env.SUPERTIME_LLM_EMBED_MODEL || '',
     embedPath: overrides.embedPath || file.embedPath || process.env.SUPERTIME_LLM_EMBED_PATH || '/embeddings',
+    // 嵌入端点的独立凭据/地址：留空 ⇒ 复用 chat 那对（同厂商是常态）。
+    embeddingApiUrl: overrides.embeddingApiUrl || file.embeddingApiUrl || process.env.SUPERTIME_LLM_EMBED_URL || '',
+    embeddingApiKey: overrides.embeddingApiKey || file.embeddingApiKey || process.env.SUPERTIME_LLM_EMBED_KEY || '',
+    // 重排序：填了 rerankModel 就启用（没有独立开关，见 docs/KB-MODEL-CONFIG.md D3）。
+    rerankModel: overrides.rerankModel || file.rerankModel || process.env.SUPERTIME_LLM_RERANK_MODEL || '',
+    rerankPath: overrides.rerankPath || file.rerankPath || process.env.SUPERTIME_LLM_RERANK_PATH || '/rerank',
+    rerankApiUrl: overrides.rerankApiUrl || file.rerankApiUrl || process.env.SUPERTIME_LLM_RERANK_URL || '',
+    rerankApiKey: overrides.rerankApiKey || file.rerankApiKey || process.env.SUPERTIME_LLM_RERANK_KEY || '',
+    rerankTimeoutMs: Number(overrides.rerankTimeoutMs || file.rerankTimeoutMs || process.env.SUPERTIME_LLM_RERANK_TIMEOUT_MS || 20_000),
     timeoutMs: Number(overrides.timeoutMs || file.timeoutMs || process.env.SUPERTIME_LLM_TIMEOUT_MS || 120_000),
   };
+}
+
+/**
+ * 解析「这次 embedding 实际会用哪个模型名」。
+ *
+ * 单独抽出来是为了让**发送方与记账方拿到同一个值**。此前 gateway 往向量库里记的是
+ * `rag-config.embedding.model || 'default'`，而这里真正发出去的是
+ * `opts.model || cfg.embeddingModel || cfg.model` —— 两个字符串来自两条互不相通的链，
+ * 而 rag-config 那个字段界面配不到、默认空 ⇒ 记进去的恒是字符串 `'default'`。
+ * 后果不是难看而是错：向量库判「换没换模型」用的就是这个记录值，恒等于 'default'
+ * 意味着**换嵌入模型永远不触发重建**，旧模型的向量被当成新模型的用。
+ * 见 `docs/KB-MODEL-CONFIG.md` §7 F1 / C4。
+ * @param cfg - {@link llmConfigFromEnv} 的结果。
+ * @param override - 调用方显式指定的模型名（可空）。
+ * @returns 实际生效的模型名；三者都空时为空串（调用方据此判「未配置」）。
+ */
+function resolveEmbedModel(cfg, override = '') {
+  return String(override || cfg.embeddingModel || cfg.model || '');
 }
 
 /** 把 dsh-llm 的 Message 内容块转成 OpenAI 聊天消息。 */
@@ -288,15 +315,19 @@ function createLlmBridge(configOverrides = {}) {
    */
   async function embed(texts, opts = {}) {
     const cfg = llmConfigFromEnv(configOverrides);
-    const model = opts.model || cfg.embeddingModel || cfg.model;
-    if (!model || (!cfg.apiKey && !cfg.baseUrl)) {
-      throw new Error('未配置 embedding（请在「微信问答 → 模型配置」填写向量模型或 API Key）');
+    const model = resolveEmbedModel(cfg, opts.model);
+    // 端点与 Key 各有一对「嵌入专用值优先、留空回落 chat」：判定必须用**回落之后**的这一对，
+    // 否则「只填了 embeddingApiKey、chat 的 Key 留空」这种配法会被误判成未配置。
+    const baseUrl = cfg.embeddingApiUrl || cfg.baseUrl;
+    const apiKey = cfg.embeddingApiKey || cfg.apiKey;
+    if (!model || (!apiKey && !baseUrl)) {
+      throw new Error('未配置 embedding（请在「数据配置 → AI 大模型」填写向量模型名与端点凭据）');
     }
     const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? ''));
     if (list.length === 0) return [];
-    const url = cfg.baseUrl.replace(/\/+$/, '') + (cfg.embedPath.startsWith('/') ? cfg.embedPath : '/' + cfg.embedPath);
+    const url = baseUrl.replace(/\/+$/, '') + (cfg.embedPath.startsWith('/') ? cfg.embedPath : '/' + cfg.embedPath);
     const headers = { 'content-type': 'application/json', accept: 'application/json' };
-    if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
     try {
@@ -320,6 +351,67 @@ function createLlmBridge(configOverrides = {}) {
     }
   }
 
+  /**
+   * 精排：把「一个查询 + N 条候选文档」发给 rerank 端点，换回每条的相关性分。
+   *
+   * 返回的是**按输入下标索引**的分数数组（调用方自己决定怎么排序/截断），
+   * 而不是排好序的文档 —— 本层只负责打分，排序语义留在检索管道里
+   * （那里还要与时间偏好、去重、配额一起算，模型不知道也不该知道那些）。
+   *
+   * 响应形状做了兼容：Cohere/Jina 的 `{results:[{index,relevance_score}]}`、
+   * OpenAI 风格的 `{results:[{index,score}]}`、以及 `{data:[...]}`。
+   * **缺项按 0 分**而不是抛错：一条没分等于「模型认为它不相关」，
+   * 为不完整响应废掉整轮问答是不成比例的代价。
+   * @param query - 查询文本（已过隐私闸门）。
+   * @param documents - 候选文档文本（顺序即返回数组的下标顺序）。
+   * @param opts - `{ model?, topN? }`。
+   * @returns 与 `documents` 等长的分数数组。
+   */
+  async function rerank(query, documents, opts = {}) {
+    const cfg = llmConfigFromEnv(configOverrides);
+    const model = String(opts.model || cfg.rerankModel || '');
+    // 端点/Key 各有一对「精排专用值优先、留空回落 chat」——与 embed 同一条理由：
+    // 判定必须用回落之后的那一对，否则「只填了 rerankApiKey」的配置会被误判成未配置。
+    const baseUrl = cfg.rerankApiUrl || cfg.baseUrl;
+    const apiKey = cfg.rerankApiKey || cfg.apiKey;
+    if (!model || (!apiKey && !baseUrl)) {
+      throw new Error('未配置 rerank（请在「数据配置 → AI 大模型」填写重排序模型名与端点凭据）');
+    }
+    const docs = (Array.isArray(documents) ? documents : []).map((d) => String(d ?? ''));
+    if (docs.length === 0) return [];
+    const url = baseUrl.replace(/\/+$/, '') + (cfg.rerankPath.startsWith('/') ? cfg.rerankPath : '/' + cfg.rerankPath);
+    const headers = { 'content-type': 'application/json', accept: 'application/json' };
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.rerankTimeoutMs);
+    const body = { model, query: String(query ?? ''), documents: docs, return_documents: false };
+    if (Number.isFinite(Number(opts.topN)) && Number(opts.topN) > 0) body.top_n = Number(opts.topN);
+    try {
+      const res = await fetchWithRetry(fetch, url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }, { onRetry: logRetry('rerank') });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`rerank HTTP ${res.status}: ${text.slice(0, 300)}`);
+      }
+      const payload = await res.json();
+      const rows = Array.isArray(payload?.results) ? payload.results : (Array.isArray(payload?.data) ? payload.data : []);
+      const scores = new Array(docs.length).fill(0);
+      for (const r of rows) {
+        const i = Number(r?.index);
+        if (!Number.isInteger(i) || i < 0 || i >= docs.length) continue;
+        const s = Number(r?.relevance_score ?? r?.score ?? r?.relevance ?? 0);
+        scores[i] = Number.isFinite(s) ? s : 0;
+      }
+      return scores;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     get configured() {
       const cfg = llmConfigFromEnv(configOverrides);
@@ -330,6 +422,27 @@ function createLlmBridge(configOverrides = {}) {
     },
     stream,
     embed,
+    /**
+     * 这次 embedding 会用的模型名 —— 与 {@link embed} **同一个解析函数**。
+     * 调用方（gateway 的向量记账、隐私审计、界面状态）拿它记账，就不可能出现
+     * 「记的模型名与实际发的模型名不是一回事」（§7 F1 的成因）。
+     * @param override - 显式指定的模型名（可空）。
+     * @returns 生效模型名；未配置时为空串。
+     */
+    embeddingModelName(override) {
+      return resolveEmbedModel(llmConfigFromEnv(configOverrides), override);
+    },
+    rerank,
+    /**
+     * 这次精排会用的模型名 —— 与 {@link rerank} 同一个取值口径。
+     * 调用方（审计、依据行、库级覆盖解析）拿它记账，就不会出现「记的模型没参与过这次请求」。
+     * @param override - 显式指定的模型名（可空）。
+     * @returns 生效模型名；未配置时为空串。
+     */
+    rerankModelName(override) {
+      const cfg = llmConfigFromEnv(configOverrides);
+      return String(override || cfg.rerankModel || '');
+    },
     async generate(opts) {
       return { content: await fetchCompletion(opts) };
     },

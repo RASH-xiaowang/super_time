@@ -1,0 +1,233 @@
+/* 库切换器：分段条右侧的「当前库」选择器 + 「⋯」菜单，以及它拉起的三个弹层。
+   令牌与 kit 的 .dialog / .selectContent 同一套（弹层底 = --nm-bg-1、描边 = --nm-border、
+   投影 = --nm-shadow-popup），跟随全局主题。 */
+
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  position: relative;
+}
+
+/* 库名可能很长，选择器触发器自己收口；这里只给一个下限，别让它塌成一条线。 */
+.picker {
+  min-width: 132px;
+}
+
+.hint {
+  color: var(--nm-text-3);
+  font-size: var(--nm-fs-xs);
+  white-space: nowrap;
+}
+
+.retry {
+  white-space: nowrap;
+}
+
+/* ── 「⋯」菜单 ─────────────────────────────────────────────── */
+.menuBtn {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--nm-r-pill, 999px);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.menuBtn:hover {
+  color: var(--nm-text-1);
+  border-color: var(--nm-border-hover);
+}
+
+/* 删库回执：挂在分段条右侧那个槽位**下面**，不占布局（弹层退场后仍看得到）。
+   z-index 高于 .backdrop(60)：回执出现的瞬间弹层还在退场。 */
+.notice {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 61;
+  max-width: 340px;
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  box-shadow: var(--nm-shadow-popup);
+}
+
+/* 点任意处收起菜单：透明全屏层而不是 document 监听 —— 不用管监听器的挂摘时序。 */
+.menuMask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 41;
+  min-width: 176px;
+  padding: 4px;
+  border-radius: var(--nm-r-md, 10px);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+  box-shadow: var(--nm-shadow-popup);
+  display: flex;
+  flex-direction: column;
+}
+.menuItem {
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--nm-r-sm, 6px);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 13px;
+  cursor: pointer;
+}
+.menuItem:hover:not(:disabled) {
+  background: var(--nm-bg-active);
+  color: var(--nm-cyan);
+}
+.menuItem:disabled {
+  color: var(--nm-text-3);
+  cursor: not-allowed;
+}
+.menuItemDanger {
+  color: var(--nm-danger);
+}
+/* 危险项悬停时保持红色：上面那条 :hover 的优先级更高，不写这条会被染成青色。 */
+.menuItemDanger:hover:not(:disabled) {
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+}
+.menuSep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--nm-border);
+}
+
+/* ── 弹层（新建 / 重命名 / 删除 / 管理）────────────────────── */
+/* 暗度与模糊与 kit 的 .dialogOverlay 取同一个值，两处弹层叠在一起时观感才一致。 */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 8, 20, 0.6);
+  backdrop-filter: blur(2px);
+  padding: 24px;
+}
+.dialog {
+  width: min(420px, 100%);
+  max-height: 84vh;
+  overflow: auto;
+  padding: 18px 18px 14px;
+  border-radius: var(--nm-r-lg, 14px);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-1);
+  box-shadow: var(--nm-shadow-popup);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dialogTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.dialogBody {
+  color: var(--nm-text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: 13px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--nm-cyan);
+}
+.err {
+  color: var(--nm-danger);
+  font-size: 13px;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 删除弹层：两个动作按钮并列，危险的那个在右。 */
+.actionsSplit {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── 管理弹层里的库列表 ───────────────────────────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--nm-border);
+  border-bottom: 1px solid var(--nm-border);
+  padding: 6px 0;
+}
+.listRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: var(--nm-r-sm, 6px);
+}
+.listRow:hover {
+  background: var(--nm-bg-hover);
+}
+.listName {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--nm-text-1);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.listMeta {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.listTag {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+  font-size: 11px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill, 999px);
+  padding: 1px 6px;
+}

@@ -395,6 +395,57 @@ describe('config 意图策略', () => {
   })
 })
 
+/**
+ * 产品默认值契约（界面已不再暴露检索设置，这些值就是用户拿到手的全部行为）。
+ *
+ * 为什么需要一条「逐字钉住数值」的用例：检索设置面板已从界面上移除，
+ * 用户不再有任何手动入口 —— 默认值一旦被静默改动，没有任何界面能让人察觉，
+ * 只能靠这条用例在 CI 里拦。数值与 `docs/rag/RAG-ARCHITECTURE.md` §11 的参数表逐条对应，
+ * 改任一数值都必须同步改那张表（表是给人看的，这条用例是给机器看的）。
+ *
+ * ⚠️ 历史坑（2026-09-18 实测）：`rag-config.json` 里曾长期留着 `fusion.k = 37`，
+ * 那是 `scripts/ui-acceptance.mjs` 第 3 步 `fill('37')` 验证「保存落盘」时的**测试残留**
+ * （脚本还原时该字段没被覆盖）。它一直静默覆盖着内置默认的 60，且因为面板上显示的
+ * 就是 37，看起来像「有人特意调过」。**默认值契约能防止这类残留再次被误认为是有意配置。**
+ */
+describe('产品默认值契约（与 RAG-ARCHITECTURE.md §11 参数表一致）', () => {
+  const cfg = defaultRetrievalConfig()
+
+  it('流水线总开关与通道容量', () => {
+    expect(cfg.enabled).toBe(true)
+    expect(cfg.channels.sparse.topK).toBe(400)
+    expect(cfg.channels.dense.topK).toBe(200)
+    expect(cfg.channels.dense.minSimilarity).toBe(0.2)
+    expect(cfg.channels.dense.candidatePool).toBe(2000)
+  })
+
+  it('RRF 融合常数 k = 60（不是测试残留的 37）', () => {
+    // k 越大越弱化头部名次差异；60 是文档记载的经验值，也是 rag:check 基线所测的值。
+    expect(cfg.fusion.k).toBe(60)
+    expect(cfg.fusion.keep).toBe(120)
+  })
+
+  it('上下文预算与去重阈值', () => {
+    expect(cfg.compress.maxChars).toBe(6000)
+    expect(cfg.compress.dedupThreshold).toBe(0.85)
+  })
+
+  it('稠密与意图：默认按「零配置可用」取向', () => {
+    // 稠密默认开：没配向量模型时 makeEmbedFn 返回 null，通道自动降级为纯稀疏（不影响可用性）；
+    // 配了模型则在首次提问时惰性建索引（gateway 的 buildVectorIndex），无需手动按钮。
+    expect(cfg.embedding.enabled).toBe(true)
+    expect(cfg.embedding.batchSize).toBe(16)
+    expect(cfg.embedding.maxDocsPerBuild).toBe(40000)
+    // LLM 辅助意图分类默认关：规则分类已覆盖常见问法，开启会多一次模型往返。
+    expect(cfg.intent.llmAssist).toBe(false)
+  })
+
+  it('反馈闭环默认开，步长 0.08', () => {
+    expect(cfg.feedback.enabled).toBe(true)
+    expect(cfg.feedback.learningRate).toBe(0.08)
+  })
+})
+
 describe('M12 复审：fusion.keep 有硬上限', () => {
   /** 写一份手改的 rag-config.json 并读回。 */
   function loadWithKeep(keep: unknown): number {

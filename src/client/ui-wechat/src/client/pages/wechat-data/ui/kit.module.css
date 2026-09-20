@@ -417,9 +417,12 @@
 }
 
 .segItem {
-  padding: 4px 12px;
+  /* 横向 12px→10px：分段条是本应用横向最容易溢出的控件（通讯录 4 分类、
+     知情同意里的两排），每项省 4px 就能少一次换行。纵向不动 —— 见下面的 min-height。 */
+  padding: 4px 10px;
   /* WCAG 2.2 SC 2.5.8：交互目标至少 24×24。实测分段控件原为 22px 高，
-     补 min-height 后达标（横向 padding 已足够）。 */
+     补 min-height 后达标（横向 padding 已足够）。**这行不能删**：
+     删掉后高度回落到 22px，键盘/触屏的最小点击尺寸就不达标了。 */
   min-height: 24px;
   font-size: var(--nm-fs-sm);
   color: var(--nm-text-2);

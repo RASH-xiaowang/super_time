@@ -83,9 +83,20 @@ function searchMoments(decryptedDir: string, q: string, cap: number): UnifiedSea
       const uname = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
       const content = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
       if (!uname || !content) { db.close(); continue }
-      const rows = db.prepare(`SELECT ${uname} AS u, ${content} AS c FROM SnsTimeLine WHERE ${content} LIKE ? LIMIT ?`).all(like(q), cap) as Array<{ u: unknown; c: unknown }>
-      db.close()
+      // 作者显示名也要能搜：朋友圈面板内是按 `m.author`（解析后的显示名）过滤的，
+      // 而这里原先只比正文 ⇒ 同一个词「面板内筛得出 57 条、全局搜索 0 条」。
+      // 显示名存在通讯录里，做法是先把匹配的用户名算出来，再用 IN 精确命中。
       const names = contactMeta(decryptedDir).names
+      const lower = q.trim().toLowerCase()
+      const authorUsers = [...names.entries()]
+        .filter(([, n]) => String(n).toLowerCase().includes(lower))
+        .map(([u]) => u)
+        .slice(0, 50)
+      const kw = like(q)
+      const inSql = authorUsers.length > 0 ? ' OR ' + uname + ' IN (' + authorUsers.map(() => '?').join(', ') + ')' : ''
+      const rows = db.prepare(`SELECT ${uname} AS u, ${content} AS c FROM SnsTimeLine WHERE ${content} LIKE ? OR ${uname} LIKE ?${inSql} LIMIT ?`)
+        .all(kw, kw, ...authorUsers, cap) as Array<{ u: unknown; c: unknown }>
+      db.close()
       return rows.map((r) => {
         const username = cellString(r.u)
         return { username, name: names.get(username) ?? username, snippet: cellString(r.c).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) }
@@ -107,7 +118,15 @@ function searchFavorites(decryptedDir: string, q: string, cap: number): UnifiedS
     const idCol = cols.has('local_id') ? 'local_id' : cols.has('Id') ? 'Id' : '0'
     const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
     if (!contentCol) { db.close(); return [] }
-    const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c FROM fav_db_item WHERE ${contentCol} LIKE ? LIMIT ?`).all(like(q), cap) as Array<{ id: unknown; c: unknown }>
+      // content 是收藏条目 XML（标题/描述就在里面），另加来源人 / 来源会话名，
+      // 与「我的收藏」面板的搜索面（标题/描述/来源/正文/来源人/会话名）对齐。
+    const cols2 = tableColumns(db, 'fav_db_item')
+    const fromCol = cols2.has('fromusr') ? 'fromusr' : ''
+    const chatCol = cols2.has('realchatname') ? 'realchatname' : ''
+    const extraSql = [fromCol, chatCol].filter(Boolean).map(c => ' OR ' + c + ' LIKE ?').join('')
+    const extraParams = [fromCol, chatCol].filter(Boolean).map(() => like(q))
+    const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c FROM fav_db_item WHERE ${contentCol} LIKE ?${extraSql} LIMIT ?`)
+      .all(like(q), ...extraParams, cap) as Array<{ id: unknown; c: unknown }>
     db.close()
     return rows.map(r => ({ id: Number(r.id ?? 0), snippet: cellString(r.c).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) }))
   } catch {
@@ -130,7 +149,12 @@ function searchFiles(decryptedDir: string, q: string, cap: number): UnifiedSearc
       const md5Col = cols.has('md5') ? 'md5' : ''
       const sizeCol = cols.has('file_size') ? 'file_size' : cols.has('fileSize') ? 'fileSize' : '0'
       if (!nameCol) continue
-      const rows = db.prepare(`SELECT ${nameCol} AS n, ${md5Col || "'0'"} AS m, ${sizeCol} AS s FROM ${table} WHERE ${nameCol} LIKE ? LIMIT ?`).all(like(q), cap - out.length) as Array<{ n: unknown; m: unknown; s: unknown }>
+      // md5 也参与匹配：与「文件资产」面板承诺的「搜索文件名 / MD5」对齐
+      // （此前两边都搜不到 md5 —— 面板是 `||` 短路，全局是只比 file_name）。
+      const md5Sql = md5Col ? ' OR ' + md5Col + ' LIKE ?' : ''
+      const md5Param = md5Col ? [like(q)] : []
+      const rows = db.prepare(`SELECT ${nameCol} AS n, ${md5Col || "'0'"} AS m, ${sizeCol} AS s FROM ${table} WHERE ${nameCol} LIKE ?${md5Sql} LIMIT ?`)
+        .all(like(q), ...md5Param, cap - out.length) as Array<{ n: unknown; m: unknown; s: unknown }>
       for (const r of rows) {
         out.push({ fileName: cellString(r.n), md5: cellString(r.m), size: Number(r.s ?? 0) })
         if (out.length >= cap) break
@@ -157,7 +181,14 @@ function searchRecords(decryptedDir: string, q: string, cap: number): UnifiedSea
       const cols = tableColumns(db, table)
       const sessionCol = cols.has('session_name') ? 'session_name' : cols.has('SessionName') ? 'SessionName' : ''
       if (!sessionCol) continue
-      const rows = db.prepare(`SELECT ${sessionCol} AS s FROM ${table} WHERE ${sessionCol} LIKE ? LIMIT ?`).all(like(q), cap - out.length) as Array<{ s: unknown }>
+      // 与「转账红包」面板对齐：转账还能按单号查、红包还能按发送人查
+      const idCol = kind === 'transfers'
+        ? (cols.has('transfer_id') ? 'transfer_id' : '')
+        : (cols.has('sender_user_name') ? 'sender_user_name' : '')
+      const extraSql = idCol ? ' OR ' + idCol + ' LIKE ?' : ''
+      const extraParam = idCol ? [like(q)] : []
+      const rows = db.prepare(`SELECT ${sessionCol} AS s FROM ${table} WHERE ${sessionCol} LIKE ?${extraSql} LIMIT ?`)
+        .all(like(q), ...extraParam, cap - out.length) as Array<{ s: unknown }>
       for (const r of rows) {
         const session = cellString(r.s)
         if (!session) continue

@@ -1,0 +1,288 @@
+/* 知识库 rail —— 三栏的第一栏。全部走已定义的 --nm-* 令牌（theme-tokens.spec.ts 会拦未定义的）。
+   底色与描边口径同 kit 的侧栏：面板底上叠一条右分隔线，选中行用 --nm-bg-active + 青色左沿，
+   不引入新色值。 */
+
+.rail {
+  flex: 0 0 176px;
+  width: 176px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  box-sizing: border-box;
+  padding: 2px var(--nm-dense-g2) 2px 0;
+  border-right: 1px solid var(--nm-border);
+}
+
+.railHd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-dense-g2);
+  padding: 0 var(--nm-dense-g2) 0 var(--nm-dense-g3);
+  font-size: var(--nm-dense-fs-xs);
+  letter-spacing: 0.08em;
+  color: var(--nm-text-3);
+}
+
+/* ＋ 新建库：rail 顶部的唯一主操作，用方形小钮而不是 pill —— 栏宽只有 176px，
+   pill 的「＋ 新建知识库」会直接折行。 */
+.addBtn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--nm-t-fast), border-color var(--nm-t-fast), background var(--nm-t-fast);
+}
+.addBtn:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
+.addBtn:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.hint {
+  padding: var(--nm-dense-g2) var(--nm-dense-g3);
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-3);
+}
+
+.kbList {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  padding-right: 2px;
+}
+
+/* 一个库 = 一行：主体是「切过去」，右侧 ⋯ 是「管这个库」。
+   菜单**就地展开在这一行下面**而不是绝对定位的浮层：rail 只有 176px 宽，
+   浮层要么溢出栏外、要么被 .kbList 的 overflow 裁掉 —— 这两种都要靠 z-index /
+   定位上下文去救，而在流内展开根本没有这个问题。 */
+.kbItem {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.kbRow {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--nm-dense-row-y) var(--nm-dense-g3);
+  border: 0;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--nm-t-fast);
+}
+.kbRow:hover { background: var(--nm-bg-hover); }
+.kbRow[data-on] { background: var(--nm-bg-active); box-shadow: inset 2px 0 0 var(--nm-cyan); }
+.kbRow:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+
+.kbName {
+  min-width: 0;
+  font-size: var(--nm-dense-fs);
+  font-weight: 600;
+  line-height: var(--nm-dense-lh);
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbRow[data-on] .kbName { color: var(--nm-text-1); }
+
+.kbMeta {
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ⋯ 平时不占视觉重量，hover / 键盘落焦到这一行才现形。
+   用 opacity 而不是 display:none —— 后者会让它退出 Tab 序列，键盘用户根本到不了。 */
+.rowBtn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 2px 2px 0 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--nm-t-fast), color var(--nm-t-fast), background var(--nm-t-fast);
+}
+.kbItem:hover .rowBtn,
+.kbItem:focus-within .rowBtn,
+.rowBtn[aria-expanded='true'] { opacity: 1; }
+.rowBtn:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+.rowBtn:focus-visible { opacity: 1; outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.rowMenu {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px var(--nm-dense-g3);
+  padding: 3px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-1);
+}
+.rowMenuItem {
+  padding: 5px 8px;
+  min-height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: var(--nm-dense-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.rowMenuItem:hover:not(:disabled) { background: var(--nm-bg-active); color: var(--nm-cyan); }
+.rowMenuItem:disabled { color: var(--nm-text-3); cursor: not-allowed; }
+.rowMenuItem:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+.rowMenuItemDanger { color: var(--nm-danger); }
+/* 危险项悬停保持红色：上面那条 :hover 优先级更高，不写这条会被染成青色。 */
+.rowMenuItemDanger:hover:not(:disabled) {
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+}
+
+/* 删库回执 */
+/* 模型芯片：常驻在 rail 底部，**不是** hover 才显形（它是配置入口，
+   而每行的 ⋯ 才是破坏性操作的位置）。有自定义时染青，一眼看出这个库不跟着全局走。 */
+.modelChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: var(--nm-dense-g3);
+  padding: 6px var(--nm-dense-g3);
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: var(--nm-bg-1);
+  color: var(--nm-text-2);
+  font-size: var(--nm-dense-fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.modelChip:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); color: var(--nm-text-1); }
+.modelChip:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: 1px; }
+
+.modelChip[data-custom] {
+  color: var(--nm-cyan-text);
+  border-color: var(--nm-cyan-20);
+  background: var(--nm-cyan-10);
+}
+
+.modelIcon { flex: 0 0 auto; font-size: 12px; }
+
+.modelText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice {
+  flex: 0 0 auto;
+  margin-top: var(--nm-dense-g2);
+  padding: 6px var(--nm-dense-g3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-1);
+  color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs-sm);
+  line-height: 1.5;
+}
+
+/* 弹层内容：kit 的 Dialog 已经给了卡片、内边距与滚动，这里只管文字与表单。 */
+.dialogLead {
+  margin: 0;
+  color: var(--nm-text-2);
+  font-size: var(--nm-dense-fs);
+  line-height: 1.6;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--nm-r-sm);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs);
+}
+.input:focus { outline: none; border-color: var(--nm-cyan); }
+
+.errBox {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-dense-g3);
+  padding: var(--nm-dense-g2) var(--nm-dense-g3);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+  color: var(--nm-danger);
+  font-size: var(--nm-dense-fs-sm);
+}
+
+/* ── 窄容器：rail 收成顶部的横向 chip 条 ───────────────────────
+   判据是**外壳**（`container-name: kbshell`，定义在 kb-shell.module.css）的内联宽度，
+   不是窗口宽度：侧栏折叠会改变这块区域的可用宽度而窗口尺寸不变，媒体查询不触发。
+   阈值 900px ≈ rail 176 + 列表 240 + 详情 470：再窄下去三栏会把详情压成细缝，
+   所以先让 rail 横过来，把整幅宽度还给列表与详情。
+   横过来时**不隐藏**每行的 ⋯：库管理只有这一个入口，藏掉就等于在窄窗口里删不了库。 */
+@container kbshell (max-width: 900px) {
+  .rail {
+    flex: 0 0 auto;
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--nm-border);
+    padding: 0 0 var(--nm-dense-g3);
+  }
+  .railHd { padding: 0 0 0 2px; }
+  .kbList {
+    flex-direction: row;
+    align-items: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    padding: 2px 0 4px;
+  }
+  .kbItem { flex: 0 0 auto; }
+  .kbName { max-width: 148px; }
+  .rowBtn { margin-top: 4px; }
+  .notice { margin-top: var(--nm-dense-g2); }
+}

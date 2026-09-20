@@ -19,6 +19,9 @@ import { NAV_GROUPS } from './nav-config.ts'
 /** 侧栏真正会画出来的条目（hidden 不渲染；settings 渲染在侧栏底部）。 */
 const VISIBLE = NAV_GROUPS.flatMap(g => g.items).filter(it => !it.hidden)
 
+/** 配置里的全部条目（含 hidden）—— 「合法 SVG」这条对它们一视同仁。 */
+const ALL = NAV_GROUPS.flatMap(g => g.items)
+
 /**
  * 官方字形本身就是线稿的条目 —— 只有它们可以不吃 filled() 包裹。
  * 收藏 = 等距立方轮廓（官方截图核对过：内部是空的，不是实心块）。
@@ -68,6 +71,31 @@ describe('侧栏图标：逐条对齐微信官方字形', () => {
     for (const it of FILLED) {
       const outside = it.icon.replace(/<g fill="currentColor" stroke="none">[\s\S]*?<\/g>/g, '')
       expect(outside, `${it.tab} 在填充分组之外还有绘制元素`).not.toMatch(/<(circle|line|polyline|rect|path|polygon)\b/)
+    }
+  })
+
+  it('图标内容必须是合法 SVG 元素：标签之外不得残留裸路径数据', () => {
+    /*
+     * 这条来自一个**真发生过、而上面所有断言全部漏过**的缺陷：
+     * `kb`（知识库）的 icon 曾写成 `filled('M4.3 17.7H19.7…')` —— 直接把裸 path 数据
+     * 当 inner 传了进去，漏掉 `<path d="…"/>` 外壳。产出就是
+     * `<g fill="currentColor" stroke="none">M4.3 17.7H19.7…</g>`：
+     * SVG 的 `<g>` **不渲染文本子节点**，于是侧栏那一格图标是**空白**的。
+     *
+     * 为什么上面 7 条全绿：填充分组壳在、`</g>` 在、「分组之外没有绘制元素」也成立
+     * （裸文本不是元素）、绝对坐标同样扫得出来（裸数据里照样是 M/L/A 大写命令）。
+     * 所以判据只能落在「标签之外有没有残留文本」上。
+     *
+     * 对 **ALL（含 hidden）** 而不是只对 VISIBLE 生效：hidden 条目不渲染、坏了看不出来，
+     * 但它的图标是逐条对照官方字形画的，将来挪去别处复用就立刻暴露。
+     */
+    for (const it of ALL) {
+      const bare = it.icon.replace(/<[^>]*>/g, '').trim()
+      expect(
+        bare,
+        `${it.tab} 的图标在标签之外还有裸文本（多半是漏了 <path d="…"/> 外壳）—— SVG 不会渲染它，图标会是空白`,
+      ).toBe('')
+      expect(it.icon, `${it.tab} 的图标里没有任何绘制元素`).toMatch(/<(path|circle|ellipse|rect|line|polyline|polygon)\b/)
     }
   })
 

@@ -49,8 +49,11 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
   const [question, setQuestion] = useState('')
 
   // 每个会话一份线程：键即 username。
+  // source/scopeUsernameName 只用于**问答历史**：让历史列表能区分「在哪问的」并直接显示会话名。
   const { turns, asking, streamText, error, ask, reset, patchTurn, clearError } = useAskSession({
     scopeUsername: target.username,
+    scopeUsernameName: nameOf(target),
+    source: 'session',
     threadKey: target.username,
   })
 

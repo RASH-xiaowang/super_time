@@ -62,15 +62,24 @@ const AVATAR_CACHE_MAX = 300
  *   onOpenMoments to jump to a member's timeline.
  * @returns the contacts element tree.
  */
-export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments }: {
+export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery }: {
   onNavigate?: (tab: string) => void
   onOpenChat?: (username: string) => void
   onOpenMoments?: (username: string) => void
+  /** 全局搜索命中「联系人」时带过来的关键词（带 nonce，同一个词连点两次也能重新种入）。 */
+  seedQuery?: { q: string; nonce: number }
 }): React.JSX.Element {
   const [contacts, setContacts] = useState<readonly ContactRow[]>([])
   const [stats, setStats] = useState<Record<string, number>>({})
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
+
+  // 全局搜索的命中直接跳到本面板时，把关键词一起带过来（否则用户得重新输一遍）。
+  useEffect(() => {
+    if (!seedQuery) return
+    setSearch(seedQuery.q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedQuery?.nonce])
   const [cat, setCat] = useState('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

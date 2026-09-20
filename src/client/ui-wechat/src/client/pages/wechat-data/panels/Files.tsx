@@ -8,7 +8,7 @@ import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } 
 import { useWechatDataUpdated } from './hooks.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
+import { clickableKey, Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import { fileIcon, fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -73,7 +73,7 @@ function fileTitle(f: FileItem): string {
  * Render the files panel.
  * @returns the files element tree.
  */
-export function FilesPanel(): React.JSX.Element {
+export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: number } } = {}): React.JSX.Element {
   const [files, setFiles] = useState<readonly FileItem[]>([])
   const [total, setTotal] = useState(0)
   const [counts, setCounts] = useState<Record<string, number>>({})
@@ -100,61 +100,48 @@ export function FilesPanel(): React.JSX.Element {
 
   const resetView = (): void => { setZoom(1); setPan({ x: 0, y: 0 }) }
 
+
+  // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
+  // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
+  useEffect(() => {
+    if (!seedQuery) return
+    setSearch(seedQuery.q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedQuery?.nonce])
+
+  // 关键词交给**服务端**：此前「搜索时拉 500 条再本地过滤」只覆盖 4305 个文件里的 11.6%，
+  // 且界面完全不提示 —— 用户会以为「这个文件不存在」。现在分页与搜索都在服务端完成。
+  const kw = useDebouncedValue(search, 250).trim()
+  const searching = kw !== ''
+
   const pager = usePagedList<FileItem>({
     pageSize: 30,
     fetchPage: async (offset, limit) => {
       // 第 83 轮：类目过滤交给后端（分页在 SQL 里做 UNION ALL + ORDER BY + LIMIT/OFFSET），
       // 否则「每页取前 30 条再本地过滤」永远翻不到视频/文件（图片 2717 行占满所有页）。
-      const env = await apiGetFiles({ limit, offset, category: cat })
+      const env = await apiGetFiles({ limit, offset, category: cat, ...(kw ? { q: kw } : {}) })
       setCounts(env.counts ?? {})
       return { items: env.files, total: env.total }
     },
   })
 
-  const searching = search.trim() !== ''
-  // 普通浏览：分页逐页加载；搜索时一次性拉取 500 条（用户主动操作），保证跨页搜索结果完整。
   useEffect(() => {
-    if (searching) {
-      let cancelled = false
-      setLoading(true)
-      setError(null)
-      void apiGetFiles({ limit: 500, category: cat })
-        .then((env) => {
-          if (cancelled) return
-          setFiles(env.files)
-          setTotal(env.total)
-          setCounts(env.counts ?? {})
-        })
-        .catch((e: unknown) => { if (!cancelled) setError((e as Error).message) })
-        .finally(() => { if (!cancelled) setLoading(false) })
-      return () => { cancelled = true }
-    }
     pager.reset()
-    return undefined
-  }, [searching, cat, pager.reset])
+  }, [kw, cat, pager.reset])
 
   useEffect(() => {
-    if (searching) return
     setFiles(pager.items)
     setTotal(pager.total)
     setLoading(pager.loading)
     setError(pager.error)
-  }, [searching, pager.items, pager.total, pager.loading, pager.error])
+  }, [pager.items, pager.total, pager.loading, pager.error])
 
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => gridRef.current)
 
   const refresh = useCallback((): void => {
     setError(null)
-    if (searching) {
-      setLoading(true)
-      void apiGetFiles({ limit: 500, category: cat })
-        .then((env) => { setFiles(env.files); setTotal(env.total); setCounts(env.counts ?? {}) })
-        .catch((e: unknown) => { setError((e as Error).message) })
-        .finally(() => { setLoading(false) })
-    } else {
-      pager.reset()
-    }
-  }, [searching, cat, pager.reset])
+    pager.reset()
+  }, [pager.reset])
 
   // 数据落地后按需安静刷新（不打断用户滚动位置）。
   // 「查找重复」标签上的数字必须用**服务端全量**统计。
@@ -172,14 +159,13 @@ export function FilesPanel(): React.JSX.Element {
   useEffect(() => { loadDupTotal() }, [loadDupTotal])
   useWechatDataUpdated(loadDupTotal)
 
-  useWechatDataUpdated(() => { if (!searching) pager.reset() })
+  useWechatDataUpdated(() => { pager.reset() })
 
-  const searched = useMemo(() => {
-    const list = files
-    const q = search.trim().toLowerCase()
-    if (!q) return list
-    return list.filter(f => (f.fileName || f.md5).toLowerCase().includes(q))
-  }, [files, search])
+  // 关键词已在服务端过滤；这里只保留「类目由后端过滤」的结论（不再做客户端关键字过滤）。
+  //
+  // 此前这行是 `(f.fileName || f.md5)`：`||` 短路让 md5 **永远不参与比较**，
+  // 所以「按 MD5 搜」在这个面板从来没生效过 —— 现在由后端 `file_name LIKE ? OR md5 LIKE ?` 承担。
+  const searched = files
 
   // 第 83 轮：不再在客户端硬过滤成 image —— 类目过滤由后端完成，
   // 「全部 / 图片 / 视频 / 文件」四个入口都能真正列出条目（此前视频 131、文件 579 全库打不开）。
@@ -352,7 +338,7 @@ export function FilesPanel(): React.JSX.Element {
           )
         })}
         {!loading && !error && visible.length > fileCount && <ListSentinel refFn={fileSentinel} />}
-        {!loading && !error && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
+        {!loading && !error && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
       <Drawer open={dupOpen} onClose={() => { setDupOpen(false) }} title="重复文件预览">
         <div className={kitCss.textCaption}>“去重”为只读建议，不在本机删除数据。下列为<strong>全库</strong>按内容（md5）归并的重复组，取前 {dupGroupsServer.length} 组（共 {dupTotal} 个重复文件、可回收约 {fmtBytes(dupReclaim)}）。</div>

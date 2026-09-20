@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
 import { apiGetRevoked } from '../api.ts'
 import type { RevokedItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, Card, clickableKey, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, clickableKey, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -25,22 +25,25 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
 
+  // 关键词交给**服务端**（类型筛选后端没有参数，仍走「一次性取回后本端筛」那条路）。
+  const kw = useDebouncedValue(search, 250).trim()
+  const searching = kw !== ''
+  const kwOpt = kw ? { q: kw } : {}
+
   const pager = usePagedList<RevokedItem>({
     pageSize: 100,
     fetchPage: async (offset, limit) => {
-      const env = await apiGetRevoked({ limit, offset })
+      const env = await apiGetRevoked({ limit, offset, ...kwOpt })
       return { items: env.items, total: env.total }
     },
   })
 
-  const searching = search.trim() !== ''
-  // 普通浏览：分页逐页加载；搜索/类型筛选时一次性拉取 500 条（用户主动操作），保证结果完整。
   useEffect(() => {
-    if (searching || typeFilter) {
+    if (typeFilter) {
       let cancelled = false
       setLoading(true)
       setError(null)
-      void apiGetRevoked({ limit: 500 })
+      void apiGetRevoked({ limit: 500, ...kwOpt })
         .then((env) => {
           if (cancelled) return
           setItems(env.items)
@@ -52,28 +55,28 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     }
     pager.reset()
     return undefined
-  }, [searching, typeFilter, pager.reset])
+  }, [kw, kwOpt.q, typeFilter, pager.reset])
 
   useEffect(() => {
-    if (searching || typeFilter) return
+    if (typeFilter) return
     setItems(pager.items)
     setTotal(pager.total)
     setLoading(pager.loading)
     setError(pager.error)
-  }, [searching, typeFilter, pager.items, pager.total, pager.loading, pager.error])
+  }, [typeFilter, pager.items, pager.total, pager.loading, pager.error])
 
   const refresh = useCallback((): void => {
     setError(null)
-    if (searching || typeFilter) {
+    if (typeFilter) {
       setLoading(true)
-      void apiGetRevoked({ limit: 500 })
+      void apiGetRevoked({ limit: 500, ...kwOpt })
         .then((env) => { setItems(env.items); setTotal(env.total) })
         .catch((e: unknown) => { setError((e as Error).message) })
         .finally(() => { setLoading(false) })
     } else {
       pager.reset()
     }
-  }, [searching, typeFilter, pager.reset])
+  }, [typeFilter, kwOpt.q, pager.reset])
 
   const revokedScrollRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => revokedScrollRef.current)
@@ -87,14 +90,11 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1])
   }, [items])
 
+  // 关键字已由服务端过滤；这里只保留类型筛选。
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return items.filter((it) => {
-      if (typeFilter && (it.type_label || '未知') !== typeFilter) return false
-      if (!q) return true
-      return (it.sender || '').toLowerCase().includes(q) || (it.content || '').toLowerCase().includes(q)
-    })
-  }, [items, search, typeFilter])
+    if (!typeFilter) return items
+    return items.filter((it) => (it.type_label || '未知') === typeFilter)
+  }, [items, typeFilter])
 
   const senderTop = useMemo(() => {
     const m = new Map<string, number>()

@@ -17,6 +17,9 @@ import type { ChannelName, IntentKind, RerankWeights, RetrievalPolicy } from './
 export const DEFAULT_RERANK_WEIGHTS: RerankWeights = {
   sparse: 1.0,
   dense: 0.9,
+  // 与 sparse 同量级：知识库通道的分同样是 BM25 取负后**归一化到 0~1**的（融合阶段
+  // 按名次 min-max），两边的量纲一致，所以可以给同一个权重而不是另拍一个数。
+  kb: 1.0,
   // 实体命中是强信号：问「李四」时答对「李四」比多命中一个通用词重要得多。
   entity: 1.2,
   coverage: 0.8,
@@ -54,6 +57,14 @@ export interface RetrievalConfig {
     sparse: { enabled: boolean; topK: number }
     dense: { enabled: boolean; topK: number; minSimilarity: number; candidatePool: number }
     structured: { enabled: boolean; topK: number }
+    /**
+     * 知识库文件块通道。
+     *
+     * 与其余通道的差别：它是**条件通道** —— 只有调用方传了 `kbId`（当前知识库）时才真正
+     * 参与召回，否则返回 `active:false` 并附 note。因此这里可以安全地默认开启：
+     * 没有导入文件的用户不受任何影响，也不会多一次检索。
+     */
+    kb: { enabled: boolean; topK: number }
   }
   fusion: {
     /** RRF 平滑常数 k；k 越大越弱化头部名次差异（经验值 60）。 */
@@ -107,6 +118,10 @@ export function defaultRetrievalConfig(): RetrievalConfig {
       // candidatePool：稠密通道先做 SimHash 粗筛，只对粗筛幸存者算精确余弦。
       dense: { enabled: true, topK: 200, minSimilarity: 0.2, candidatePool: 2000 },
       structured: { enabled: true, topK: 60 },
+      // 60 而不是 400：知识库的单元是**文件块**（一块最长 500 字，命中就已是一段完整内容），
+      // 60 块 ≈ 3 万字，远超压缩阶段的字符预算；再多召回只会被压缩阶段丢掉，
+      // 却照样要为每一块算 bm25 与摘要。召回上限最终仍由意图策略的 channelTopK 收紧。
+      kb: { enabled: true, topK: 60 },
     },
     fusion: { k: 60, keep: 120 },
     rerank: { weights: { ...DEFAULT_RERANK_WEIGHTS }, minScore: 0 },
@@ -227,44 +242,54 @@ export function effectiveParams(config: RetrievalConfig, policy: RetrievalPolicy
  * 这张表本身也是可调参的对象（未来可由反馈闭环更新）。
  */
 export function defaultPolicyFor(intent: IntentKind): RetrievalPolicy {
-  const all: ChannelName[] = ['sparse', 'dense', 'structured']
+  // 'time' 与 'kb' 都是**条件通道**：'time' 只有当查询计划里带日期线索（plan.from / plan.to）
+  // 时才真正参与召回，'kb' 只有当调用方传了当前库（kbId）时才参与（见 pipeline 的 gate），
+  // 因此它们可以安全地列在所有意图的通道表里而不必逐意图开关。
+  const all: ChannelName[] = ['sparse', 'dense', 'structured', 'time', 'kb']
   switch (intent) {
     case 'recency_lookup':
       // 「最近一次 X」：命中内容词后按时间取最新，稠密只做补充，且必须时间优先。
+      // kb 给最小额度：文件没有「最近一次」这回事，且要避免挤占消息证据的上下文预算。
       return {
         intent, channels: all,
-        channelTopK: { sparse: 300, dense: 120, structured: 40 },
+        channelTopK: { sparse: 300, dense: 120, structured: 40, time: 24, kb: 12 },
         weights: { recency: 1.4, timePref: 0.8, entity: 1.0, coverage: 0.9, dense: 0.5 },
         recencyFirst: true, wideRecall: false,
       }
     case 'entity_lookup':
       // 「某人的某信息」：实体命中压过内容得分；结构化通道（联系人/群）权重最高。
+      // kb 给到 20：文件里常写着这类事实（合同里的人名、表格里的电话），值得多取。
       return {
         intent, channels: all,
-        channelTopK: { sparse: 250, dense: 100, structured: 80 },
+        channelTopK: { sparse: 250, dense: 100, structured: 80, time: 24, kb: 20 },
         weights: { entity: 2.0, sparse: 0.9, dense: 0.9, coverage: 0.6 },
         recencyFirst: false, wideRecall: false,
       }
     case 'time_range':
       // 「上周三…」「9 月 3 号…」：时间软偏好显著，召回适度放宽。
+      // kb 给最小额度：文件没有时间轴，按日期问的问题里它只能当旁证。
       return {
         intent, channels: all,
-        channelTopK: { sparse: 400, dense: 160, structured: 40 },
+        // time: 60 —— 时间问法里「按时段直取」是主通道；60 条足够让压缩阶段把锚点
+        // 摊开到一整天（compressContext 会对 ±15 分钟内的命中做去重叠）。
+        channelTopK: { sparse: 400, dense: 160, structured: 40, time: 60, kb: 12 },
         weights: { timePref: 1.6, sparse: 1.0, dense: 0.8, coverage: 0.8 },
         recencyFirst: false, wideRecall: false,
       }
     case 'aggregation':
       // 「一共/总共/有多少」：要覆盖度，通道 topK 与融合保留都放大，压缩预算更宽。
+      // kb 给到 30：合同/报表里的合计数往往就是答案本身（「一共转了多少」）。
       return {
         intent, channels: all,
-        channelTopK: { sparse: 600, dense: 240, structured: 60 },
+        channelTopK: { sparse: 600, dense: 240, structured: 60, time: 60, kb: 30 },
         weights: { coverage: 1.2, agreement: 0.8, sparse: 1.0, dense: 0.7, recency: 0 },
         recencyFirst: false, wideRecall: true,
       }
     case 'comparison':
+      // 对比题常要同时看聊天记录与文件（「合同里写的和实际聊的对得上吗」）。
       return {
         intent, channels: all,
-        channelTopK: { sparse: 500, dense: 200, structured: 60 },
+        channelTopK: { sparse: 500, dense: 200, structured: 60, time: 30, kb: 24 },
         weights: { coverage: 1.0, dense: 1.0, sparse: 1.0, agreement: 0.8 },
         recencyFirst: false, wideRecall: true,
       }
@@ -272,7 +297,7 @@ export function defaultPolicyFor(intent: IntentKind): RetrievalPolicy {
     default:
       return {
         intent: 'open_qa', channels: all,
-        channelTopK: { sparse: 400, dense: 200, structured: 40 },
+        channelTopK: { sparse: 400, dense: 200, structured: 40, time: 24, kb: 20 },
         weights: {},
         recencyFirst: false, wideRecall: false,
       }

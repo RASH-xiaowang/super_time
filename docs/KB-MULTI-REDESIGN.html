@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>多知识库重设计 · 一个入口、多个库、一库一图</title>
+<style>
+  :root {
+    --bg: #070b16;
+    --bg-2: #0b1122;
+    --panel: #0e1526;
+    --panel-2: #121a2e;
+    --line: #1e2942;
+    --text: #e8eefc;
+    --text-2: #a8b6d4;
+    --text-3: #6f7f9e;
+    --cyan: #22d3ee;
+    --violet: #a78bfa;
+    --gold: #f6a23c;
+    --green: #36c08f;
+    --red: #ef6f6c;
+    --blue: #4f8cff;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 700px at 12% -8%, rgba(34,211,238,.13), transparent 62%),
+      radial-gradient(1000px 620px at 88% 4%, rgba(167,139,250,.13), transparent 60%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    font-size: 15px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 44px 22px 96px; }
+  header.hero { margin-bottom: 34px; }
+  .kicker {
+    display: inline-block; font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--cyan); border: 1px solid rgba(34,211,238,.35);
+    background: rgba(34,211,238,.07); padding: 3px 11px; border-radius: 999px; margin-bottom: 16px;
+  }
+  h1 {
+    font-size: clamp(25px, 4vw, 40px); line-height: 1.24; margin: 0 0 12px; font-weight: 800;
+    letter-spacing: -.01em;
+    background: linear-gradient(96deg, #ffffff 8%, var(--cyan) 52%, var(--violet) 96%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { color: var(--text-2); font-size: 15.5px; margin: 0; max-width: 78ch; }
+  .meta { color: var(--text-3); font-size: 12.5px; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+  nav.toc {
+    background: linear-gradient(180deg, rgba(18,26,46,.92), rgba(14,21,38,.92));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; margin: 26px 0 40px;
+  }
+  nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 30px; }
+  nav.toc li { margin: 3px 0; break-inside: avoid; }
+  nav.toc a { color: var(--text-2); text-decoration: none; font-size: 13.5px; }
+  nav.toc a:hover { color: var(--cyan); }
+
+  section { margin: 0 0 46px; scroll-margin-top: 18px; }
+  h2 {
+    font-size: 20px; margin: 0 0 6px; font-weight: 750; letter-spacing: -.005em;
+    display: flex; align-items: center; gap: 11px;
+  }
+  h2 .n {
+    font-size: 12px; font-weight: 700; color: var(--cyan);
+    border: 1px solid rgba(34,211,238,.4); background: rgba(34,211,238,.08);
+    width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto;
+  }
+  h3 { font-size: 15.5px; margin: 26px 0 8px; color: #fff; font-weight: 700; }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--text); font-weight: 700; }
+  .sub { color: var(--text-3); font-size: 13px; margin: 0 0 16px; }
+  p { margin: 9px 0; color: var(--text-2); }
+  p strong, li strong { color: #fff; font-weight: 650; }
+  ul, ol { padding-left: 22px; margin: 9px 0; }
+  li { margin: 5px 0; color: var(--text-2); }
+  ul.tight li { margin: 3px 0; }
+  code {
+    font-family: "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+    font-size: 12.5px; background: rgba(79,140,255,.13); color: #9dc0ff;
+    padding: 1.5px 6px; border-radius: 5px; white-space: nowrap;
+  }
+  a { color: var(--cyan); }
+
+  .card {
+    background: linear-gradient(180deg, rgba(18,26,46,.85), rgba(13,20,36,.85));
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin: 16px 0;
+  }
+  .card.accent { border-color: rgba(34,211,238,.3); box-shadow: 0 0 0 1px rgba(34,211,238,.06), 0 18px 46px -30px rgba(34,211,238,.5); }
+  .card.warn { border-color: rgba(246,162,60,.35); background: linear-gradient(180deg, rgba(46,33,14,.5), rgba(20,16,10,.5)); }
+  .card h4 { margin-top: 0; }
+  .card > :last-child { margin-bottom: 0; }
+
+  .tbl-wrap { overflow-x: auto; margin: 15px 0; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.2px; }
+  th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: rgba(34,211,238,.06); color: #fff; font-weight: 650; font-size: 12.5px; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(79,140,255,.05); }
+  td code { white-space: normal; }
+
+  .pill { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
+  .pill.obs { color: #7fe3c4; background: rgba(54,192,143,.13); border: 1px solid rgba(54,192,143,.34); }
+  .pill.inf { color: #ffd08a; background: rgba(246,162,60,.13); border: 1px solid rgba(246,162,60,.34); }
+  .pill.new { color: #9dc0ff; background: rgba(79,140,255,.14); border: 1px solid rgba(79,140,255,.36); }
+  .pill.reuse { color: var(--text-3); background: rgba(120,134,160,.12); border: 1px solid var(--line); }
+  .pill.del { color: #ffb0ae; background: rgba(239,111,108,.13); border: 1px solid rgba(239,111,108,.34); }
+
+  .grid { display: grid; gap: 14px; }
+  @media (min-width: 760px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .numcard { background: rgba(14,21,38,.7); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .numcard .t { font-size: 12.5px; color: var(--text-3); margin-bottom: 5px; }
+  .numcard .v { font-size: 14px; color: #fff; font-weight: 650; }
+  .numcard .d { font-size: 12.5px; color: var(--text-2); margin-top: 5px; }
+
+  .swatch { display: inline-block; width: 26px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 7px; }
+  .swatch.dashed { background: none; border-top: 3px dashed currentColor; height: 0; }
+  figure { margin: 20px 0; }
+  figcaption { font-size: 12.5px; color: var(--text-3); text-align: center; margin-top: 9px; }
+  svg { display: block; width: 100%; height: auto; }
+
+  .flow {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 12.3px; line-height: 1.72;
+    background: rgba(6,10,20,.72); border: 1px solid var(--line); border-radius: 12px;
+    padding: 15px 17px; overflow-x: auto; color: #b9c9e8; white-space: pre; margin: 15px 0;
+  }
+  .flow b { color: var(--cyan); font-weight: 600; }
+  .flow i { color: var(--gold); font-style: normal; }
+  .flow u { color: var(--violet); text-decoration: none; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 56px; padding-top: 18px; color: var(--text-3); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <span class="kicker">Design Proposal · v1</span>
+  <h1>多知识库重设计：一个入口、多个库、一库一图</h1>
+  <p class="lede">
+    今天整套知识库其实只有<strong>一个隐式的库</strong>：`notes` 表一张、四个 <code>@Remote</code> 不带任何库标识、
+    <code>[[链接]]</code> 全库解析、图谱读全表 —— 「多个知识库」这件事在数据层根本不存在。
+    本次重设计把它做成<strong>一等公民的作用域</strong>：<code>notes.kb_id</code> 划库、每库独立的 <code>[[链接]]</code> 解析域与知识图谱、
+    每库独立的布局坐标与缓存键，<strong>侧栏入口数不变（仍 17 / 可路由 36）</strong>，
+    面板外壳与画布<strong>一行不改</strong>。
+  </p>
+  <div class="meta">
+    范围：<code>wechat_notes.db</code>（新增 <code>kbs</code> 表 + <code>notes.kb_id</code>）·
+    <code>query/notes.ts</code> · <code>gateway.ts</code> 四个知识 Remote ·
+    <code>api.ts</code> / <code>kb-scope.ts</code> / <code>MergedSections</code> / <code>graph-layout.ts</code> ·
+    2026-09-18
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#s0">一句话结论</a></li>
+    <li><a href="#s1">现状：为什么现在只能有一个库</a></li>
+    <li><a href="#s2">目标与非目标</a></li>
+    <li><a href="#s3">存储模型：kbs 表 + notes.kb_id</a></li>
+    <li><a href="#s4">作用域契约：五处必须按库分</a></li>
+    <li><a href="#s5">后端接口变化</a></li>
+    <li><a href="#s6">前端结构：外壳 + 库切换器 + 作用域真源</a></li>
+    <li><a href="#s7">交互与空态</a></li>
+    <li><a href="#s8">边界与失败模式</a></li>
+    <li><a href="#s9">落地四步（切口）</a></li>
+    <li><a href="#s10">验证方案</a></li>
+    <li><a href="#s11">差异总表</a></li>
+    <li><a href="#s12">明确不做，以及为什么</a></li>
+  </ol>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s0">
+  <h2><span class="n">0</span>一句话结论</h2>
+  <p class="sub">先说结果，后面每一条都有代码出处与验证手段。</p>
+
+  <div class="card accent">
+    <p>
+      <strong>知识库 = 作用域（scope），不是第三种视图。</strong>
+      侧栏仍是「知识库」一个入口，顶部分段条仍是「笔记库 / 知识图谱」两段 ——
+      但在分段条<strong>右侧</strong>多一个库切换器；选中的库是全应用的<strong>当前作用域</strong>，
+      笔记库的列表与知识图谱的节点<strong>共用这一个作用域</strong>，因此「不同知识库对应不同知识图谱」
+      是默认行为而不是两个功能。
+    </p>
+  </div>
+
+  <div class="grid two">
+    <div class="numcard">
+      <div class="t">存储</div>
+      <div class="v">一张表加一列</div>
+      <div class="d"><code>kbs(id, name, created_at, updated_at)</code> + <code>notes.kb_id INTEGER NOT NULL DEFAULT 1</code>，同一个 <code>wechat_notes.db</code>。迁移幂等，老库零丢失。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">隔离边界</div>
+      <div class="v">按 kb_id 划三处</div>
+      <div class="d">查询域、标题唯一域、<code>[[链接]]</code> 解析域。三者必须同时按库，缺一处就出现「图谱有边、列表没这篇」。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">接口</div>
+      <div class="v">kbId 必填</div>
+      <div class="d">四个知识 Remote 的 <code>kbId</code> <strong>不给默认值</strong>：漏传要能被 typecheck 抓住，不能让「忘了传」退化成「串库」。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">画布</div>
+      <div class="v">零改动</div>
+      <div class="d"><code>GraphCanvas</code> / <code>buildKnowledgeNetwork</code> 只吃「一份快照」，快照按库取即可 —— 图谱侧不需要知道「库」这个概念。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s1">
+  <h2><span class="n">1</span>现状：为什么现在只能有一个库</h2>
+  <p class="sub">每一条都能指到出处。<strong>注意：代码注释里其实已经写着「库内唯一」，实现却是全库唯一</strong> —— 这次重设计就是把那句话做实。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:24%">环节</th><th style="width:40%">现在的样子</th><th>为什么这就是「单库」</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>存储</strong><br><code>query/notes.ts</code></td>
+          <td><code>CREATE TABLE notes(…)</code> 一张扁平表，<code>dbPath()</code> = <code>dirname(decryptedDir)/wechat_notes.db</code>，<strong>没有 kb_id</strong>。</td>
+          <td>库里没有任何字段能把两批笔记分开 —— 别说切换，连「这批属于谁」都无处可写。</td>
+        </tr>
+        <tr>
+          <td><strong>标题唯一</strong></td>
+          <td><code>findIdByTitleKey()</code> 用 <code>SELECT id, title FROM notes</code> 全表扫，归一化后比对。</td>
+          <td>两个库想各有一篇「项目组」是<strong>不可能</strong>的：第二篇会被判重名拒绝。<code>[[链接]]</code> 的目标名天生就是个全局命名空间。</td>
+        </tr>
+        <tr>
+          <td><strong>建图</strong><br><code>buildKnowledgeGraph()</code></td>
+          <td><code>SELECT * FROM notes ORDER BY updated_at DESC</code>，把<strong>全表</strong>装进 <code>idByKey</code> 再解析 <code>[[链接]]</code>。</td>
+          <td>「一库一图」在数据层无从表达：任何两批笔记只要同库文件，就必然被画进同一张网。</td>
+        </tr>
+        <tr>
+          <td><strong>接口</strong><br><code>gateway.ts</code></td>
+          <td><code>getNotes(options?)</code> / <code>saveNote(options)</code> / <code>deleteNote({id})</code> / <code>getKnowledgeGraph()</code> —— <strong>四个都不带库标识</strong>。</td>
+          <td>调用方就算知道「用户在看哪个库」，也没有地方把这个信息传下去。</td>
+        </tr>
+        <tr>
+          <td><strong>缓存</strong><br><code>api.ts</code></td>
+          <td>内存快照键 <code>kb:graph</code>；渲染缓存键 <code>kb-list</code> / <code>kb-graph</code>；失效一律 <code>invalidateWechatCache('kb-')</code>。</td>
+          <td>键是<strong>单值</strong>的。多库共存时会出现「切到乙库，列表显示的是甲库的缓存」—— 首帧缓存是冷启动体验的关键路径，这个串库会非常显眼。</td>
+        </tr>
+        <tr>
+          <td><strong>布局</strong><br><code>graph-layout.ts</code></td>
+          <td><code>POSITION_KEY = 'dsh-graph-layout-v1'</code>，形状 <code>Record&lt;nodeId, {x,y}&gt;</code>，<strong>社交图谱与知识图谱共用这一张表</strong>。</td>
+          <td>两库之间节点 id 是撞的（都有 <code>note:1</code> / <code>kb:项目组</code>）→ 切库时坐标会<strong>互相污染</strong>：甲库调好的形状会当成乙库的初值。</td>
+        </tr>
+        <tr>
+          <td><strong>广播</strong><br><code>notes-events.ts</code></td>
+          <td><code>NOTES_UPDATED_EVENT = 'dsh-wechat-notes-updated'</code>，无载荷；写入方只有 <code>saveNote</code>/<code>deleteNote</code> 两个入口。</td>
+          <td>事件只说明「笔记变了」，说不出「哪个库变了」。切库这件事同样需要一个信号，现在完全没有。</td>
+        </tr>
+        <tr>
+          <td><strong>界面</strong><br><code>KnowledgeBase.tsx</code></td>
+          <td>顶部文案直说「存储于 <code>wechat_notes.db</code>（notes 表）」；空态说「知识库还是空的」。</td>
+          <td>单数语义已经写进了用户可见文案 —— 多库之后这些文案都要能说出<strong>是哪个库</strong>。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card warn">
+    <h4>最关键的一条：注释已经许过愿</h4>
+    <p>
+      <code>notes.ts</code> 文件头写着「<strong>标题在库内唯一</strong>（同一归一化规则），否则 <code>[[链接]]</code> 的解析会产生歧义」，
+      而 <code>findIdByTitleKey</code> 的注释又说明它刻意全表取回在 JS 里比 ——
+      也就是说：<strong>「库」这个概念在作者的脑子里已经存在了</strong>，只是当时只有一个库，于是 <code>「库内」</code> 与 <code>「全表」</code> 恰好等价。
+      多库重设计要做的不是发明新概念，而是<strong>把这个已经写下但没落地的边界补上</strong>。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s2">
+  <h2><span class="n">2</span>目标与非目标</h2>
+  <p class="sub">先用一句话钉住「多知识库」到底指什么，避免落地时各自理解。</p>
+
+  <div class="card accent">
+    <h4>定义</h4>
+    <p>
+      一个<strong>知识库</strong> = <strong>一批笔记</strong> + <strong>一个 <code>[[链接]]</code> 解析域</strong> + <strong>一张由这批笔记构成的知识图谱</strong>。
+      切换库 = 同时切换列表、图谱、布局坐标、缓存首帧；<strong>三者不可分离</strong>。
+    </p>
+  </div>
+
+  <div class="grid two">
+    <div class="numcard">
+      <div class="t">目标 ①</div>
+      <div class="v">库之间彻底隔离</div>
+      <div class="d">甲库的 <code>[[项目组]]</code> 指向甲库的《项目组》。乙库有同名笔记时<strong>互不影响</strong>，也不合并成一条边。图谱、搜索结果、标签统计同理。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">目标 ②</div>
+      <div class="v">库是可见、可切换的一等公民</div>
+      <div class="d">能新建、重命名、删除；能一眼看出「现在在哪一库、这库有多少条」；切换不需要离开当前面板（不跳页、不重启）。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">目标 ③</div>
+      <div class="v">老数据零丢失、零感知</div>
+      <div class="d">已有 <code>wechat_notes.db</code> 打开后全部落在 <code>id=1</code> 的《默认知识库》，标题、标签、链接、图谱结构<strong>逐字节不变</strong>。用户不新建库就感觉不到变化。</div>
+    </div>
+    <div class="numcard">
+      <div class="t">目标 ④</div>
+      <div class="v">导航与外壳不动</div>
+      <div class="d">不加侧栏入口（仍 17）、不加可路由页签（仍 36）、<code>nav-config.ts</code> 不改、<code>GraphCanvas</code> 不改。库管理器是弹层，不是新页。</div>
+    </div>
+  </div>
+
+  <h3>非目标（这一版明确不做）</h3>
+  <ul class="tight">
+    <li><strong>跨库 <code>[[链接]]</code></strong>：不提供 <code>[[乙库:目标]]</code> 这类语法。理由见 <a href="#s12">§12</a> —— 它是「一库一图」的直接否定。</li>
+    <li><strong>库内嵌套 / 文件夹 / 层级</strong>：库是一层平铺列表，不做树。</li>
+    <li><strong>手动排序</strong>：列表按 <code>id ASC</code>（创建顺序）稳定排列，不加 <code>position</code> 列。</li>
+    <li><strong>库级权限 / 加密 / 单独导出</strong>：同一个库文件、同一套备份路径。</li>
+    <li><strong>标签跨库共享或命名空间</strong>：标签仍是库内的自由文本（<code>collectTags</code> 天然跟着作用域走）。</li>
+  </ul>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s3">
+  <h2><span class="n">3</span>存储模型：kbs 表 + notes.kb_id</h2>
+  <p class="sub">一个库文件、两张表、一列外键。为什么不是「一库一个 db 文件」也在这里说清楚。</p>
+
+  <h3>3.1 为什么仍然是同一个 <code>wechat_notes.db</code></h3>
+  <ul class="tight">
+    <li><strong>跨库动作变成一条 UPDATE。</strong>「把这 12 篇移进乙库」在单文件里是 <code>UPDATE notes SET kb_id=?</code>；分成多个 db 文件就得跨文件读—写—删，中间任何一步失败都会留下<strong>两处副本或两处丢失</strong>，而 <code>node:sqlite</code> 的 <code>DatabaseSync</code> 没有跨库事务。</li>
+    <li><strong>数据根目录保持干净。</strong> 现在数据根下已经有 <code>wechat_tasks.db</code> / <code>message_edits.db</code> 等一批 store；再按库铺开 <code>wechat_notes_1.db</code>、<code>_2.db</code>… 会让「库」的增删变成文件系统操作，备份与排查都变复杂。</li>
+    <li><strong>迁移只有一次。</strong> 加列是幂等的本地 DDL，不需要「扫描目录、导入每个文件」这种必须在用户机器上跑一次的搬运逻辑（搬运就有中断风险）。</li>
+  </ul>
+  <p>
+    代价也要写下来：<strong>单个库不能被单独备份/删除/移交</strong>，库文件损坏时全部库一起受损。
+    考虑到目标规模（每库几十到几百条、总计数千条），这个代价小于跨文件一致性的复杂度。
+    真要做「单库导出」，是<strong>导出成 JSON/Markdown</strong>（见 §12），而不是拆文件。
+  </p>
+
+  <h3>3.2 表结构</h3>
+  <div class="flow"><b>CREATE TABLE IF NOT EXISTS kbs</b> (          <i>-- 新增：库登记表</i>
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL,          <i>-- 唯一（normalizeTitle 归一化后）</i>
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+<b>ALTER TABLE notes ADD COLUMN kb_id INTEGER NOT NULL DEFAULT 1;</b>   <i>-- 幂等迁移</i>
+
+<b>CREATE INDEX IF NOT EXISTS idx_notes_kb</b>                <i>-- 列表与建图都按 (kb, 时间) 取</i>
+  ON notes(kb_id, updated_at DESC);</div>
+
+  <div class="card warn">
+    <h4>迁移的四条硬约束</h4>
+    <ol class="tight">
+      <li><strong>必须幂等。</strong> <code>openStore()</code> 每次开库都会被调到，迁移逻辑要能跑一百次而结果一致：先 <code>PRAGMA table_info(notes)</code> 看有没有 <code>kb_id</code>，没有才 <code>ALTER</code>。</li>
+      <li><strong><code>DEFAULT 1</code> 是给老数据用的。</strong> SQLite 的 <code>ADD COLUMN … NOT NULL DEFAULT 1</code> 会把既有行一次性置为 1 —— 这就是「老笔记全部落进默认库」，不需要额外的 <code>UPDATE</code>。仍要补一条 <code>UPDATE notes SET kb_id=1 WHERE kb_id IS NULL</code> 兜住历史脏值（防御性，正常查不到行）。</li>
+      <li><strong>保证 <code>id=1</code> 一定存在。</strong> 迁移末尾：若 <code>kbs</code> 里没有 <code>id=1</code>，插入《默认知识库》。<strong>无论有没有笔记都要插</strong> —— 新用户第一次打开就必须有一个「当前库」，否则界面要面对「没有作用域」这个不该存在的状态。</li>
+      <li><strong>默认库不许被删。</strong> <code>id=1</code> 视为系统库：可改名，不可删除（<code>deleteKb</code> 直接拒），避免「迁移兜底逻辑」每次开库都复活一个空库、或者用户删光后陷入无库状态。</li>
+    </ol>
+  </div>
+
+  <h3>3.3 唯一性的作用域变化</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:26%">约束</th><th style="width:32%">现在</th><th>改成</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>笔记标题唯一</td>
+          <td>全表（<code>findIdByTitleKey</code> 扫全表）</td>
+          <td><strong>库内唯一</strong>：扫 <code>WHERE kb_id = ?</code>。同一库内仍拒绝重名（<code>[[链接]]</code> 不能有歧义），跨库允许同名。</td>
+        </tr>
+        <tr>
+          <td>库名唯一</td>
+          <td>—</td>
+          <td>全局唯一（同一套 <code>normalizeTitle</code>），错误文案沿用既有风格：<code>已存在同名知识库「X」</code>。空名拒绝：<code>知识库名不能为空</code>。</td>
+        </tr>
+        <tr>
+          <td><code>[[目标]]</code> 解析</td>
+          <td>全表 <code>idByKey</code>（首见者胜）</td>
+          <td><strong>只在本库内建 <code>idByKey</code></strong>；库外同名笔记既不成边、也不出现在 stub 提示里（跨库提示是只读探针，见 §8.7）。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3.4 建议的签名（后端）</h3>
+  <div class="flow"><i>// 迁移 + 常量都在这一处 —— 别在别处硬编码 1</i>
+export const <b>DEFAULT_KB_ID = 1</b>
+export const DEFAULT_KB_NAME = '默认知识库'
+
+export function listKbs(decryptedDir: string): KbListSnapshot        <i>// 带每库 noteCount</i>
+export function createKb(decryptedDir: string, name: string): KbMutationResult
+export function renameKb(decryptedDir: string, id: number, name: string): KbMutationResult
+export function deleteKb(decryptedDir: string, id: number,
+  action: { kind: 'reassign'; targetKbId: number } | { kind: 'purge' }): KbMutationResult
+
+<i>// 四个既有函数一律把 kbId 提到第 2 位（必填、位置参数）—— 漏传即 typecheck 报错</i>
+export function listNotes(decryptedDir: string, <b>kbId: number</b>, options?: { query?: string; limit?: number }): NotesSnapshotRead
+export function saveNote(decryptedDir: string, <b>kbId: number</b>, input: { … }): NoteMutationResult
+export function deleteNote(decryptedDir: string, <b>kbId: number</b>, id: number): NoteMutationResult
+export function buildKnowledgeGraph(decryptedDir: string, <b>kbId: number</b>, names: Map&lt;string, string&gt;): KnowledgeSnapshotRead</div>
+
+  <div class="card accent">
+    <h4>为什么 kbId 必须是必填的位置参数</h4>
+    <p>
+      可选参数 + 隐式默认值是最舒服的写法，也是最危险的：<strong>任何一个忘了传 kbId 的新调用点，都会静默地操作默认库</strong> ——
+      表现为「保存成功但列表里没有」「删了别的库的东西」，而 typecheck、build、SSR 冒烟<b>全都不会报</b>。
+      本项目已经在这个模式上吃过一次亏（问卷额度：任一侧自写整数 → 「模型里有边、图上没画」）。
+      所以规则与 <code>graph-budget.ts</code> 同款：<strong>边界只有一处定义，两处使用都必须显式传参</strong>。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s4">
+  <h2><span class="n">4</span>作用域契约：五处必须按库分</h2>
+  <p class="sub">这张表是本次重设计的<strong>核心不变量</strong>。五处里漏掉任何一处，症状都不是「少个功能」，而是<strong>串库</strong>。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:14%">层</th><th style="width:23%">键 / 参数</th><th style="width:26%">现在</th><th>改成</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="pill new">数据</span><br>SQL</td>
+          <td><code>WHERE kb_id = ?</code></td>
+          <td>无</td>
+          <td>取列表、取图谱、删、查重全部带 <code>kb_id</code>；<code>UPDATE</code> 的 <code>WHERE</code> 也必须带（否则改一条会串改同 id？—— id 是主键，但带上是纪律：<strong>任何 <code>WHERE</code> 都不能只有一个 <code>id</code></strong>，防止未来改成批量更新时静默扩大范围）。</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">接口</span><br>Remote</td>
+          <td><code>kbId</code> 显式参数</td>
+          <td>四个 Remote 都没有</td>
+          <td>四个知识 Remote 全部加 <code>kbId</code>；新增四个库管理 Remote（<code>getKbs</code> / <code>createKb</code> / <code>renameKb</code> / <code>deleteKb</code>）。<code>getKbs</code> 与 <code>deleteKb</code> 是唯二不带 <code>kbId</code> 的（前者是全局列表，后者用 <code>id</code> 指定）。</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">缓存</span><br>内存</td>
+          <td><code>cachedGet('kb:graph:' + kbId)</code></td>
+          <td><code>cachedGet('kb:graph')</code></td>
+          <td>键后缀库 id。<code>apiGetNotes</code> 依旧<strong>刻意不走缓存</strong>（搜索框每敲一个字都要最新结果），这条注释里的理由与库无关，保持不动。</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">缓存</span><br>渲染层</td>
+          <td><code>kb-list:&lt;id&gt;</code> / <code>kb-graph:&lt;id&gt;</code></td>
+          <td><code>kb-list</code> / <code>kb-graph</code></td>
+          <td>加库后缀。库登记表自己的缓存用 <code>kbs-list</code>（<strong>不</strong>以 <code>kb-</code> 开头）。<code>KnowledgeBase.tsx</code> 里那段「key 必须带 <code>kb-</code> 前缀，否则图谱刷新了列表还是旧的」的注释仍然成立 —— 只是键多了一段。</td>
+        </tr>
+        <tr>
+          <td><span class="pill new">布局</span><br>localStorage</td>
+          <td><code>scope = 'kb:' + kbId</code><br>或 <code>'social'</code></td>
+          <td>单键 <code>dsh-graph-layout-v1</code> 扁平表</td>
+          <td>新键 <code>dsh-graph-layout-v2</code>，形状 <code>Record&lt;scope, Record&lt;nodeId, {x,y}&gt;&gt;</code>；<code>loadSavedPositions(scope)</code> / <code>savePositions(scope, pos)</code>。旧的 v1 <strong>只读回退</strong>（见 4.2）。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.1 「作用域」只有一处定义</h3>
+  <p>
+    与「额度只有 <code>graph-budget.ts</code> 一处」同一条纪律：新增前端模块
+    <code>panels/kb-scope.ts</code>，导出
+  </p>
+  <ul class="tight">
+    <li><code>kbScope(kbId)</code> → <code>'kb:' + kbId</code>，<code>SOCIAL_SCOPE = 'social'</code>；</li>
+    <li><code>POSITION_SCOPES_MAX = 8</code>（见 4.3）；</li>
+    <li>当前库的读写与订阅（<code>useKbScope()</code>、<code>setActiveKb()</code>）。</li>
+  </ul>
+  <p>
+    <strong>铁律：任何地方不得再手写 <code>'kb:' + id</code> 或 <code>'kb-list:'</code> 字面量。</strong>
+    由源码级用例守住（grep 整个 <code>wechat-data/**</code>，只允许 <code>kb-scope.ts</code> 出现这些字面量）——
+    这比运行期断言可靠：字符串拼错不会抛错，只会静默用另一个键，也就是静默串库。
+  </p>
+
+  <h3>4.2 布局坐标的迁移：只读回退，不改写</h3>
+  <div class="flow"><i>// 读：v2 命中就返回；否则回退到 v1 的扁平表（仅限两个 scope）</i>
+loadSavedPositions(scope):
+  v2 = 读 <b>dsh-graph-layout-v2</b>  →  命中 v2[scope] 即返回
+  否则若 scope ∈ { <b>'social'</b>, <b>'kb:1'</b>(默认库) }:
+      返回 v1 的扁平表（<b>不写入 v2</b>，下一次落盘自然升级）
+
+<i>// 写：永远只写 v2[scope]，并把该 scope 移到 LRU 首位</i>
+savePositions(scope, pos): v2[scope] = pos; v2.__lru = [scope, …去重]</div>
+  <p>
+    为什么<strong>不</strong>把 v1 摊进每个库的 scope：v1 里混着社交与知识两套坐标（靠节点 id 不重叠才没打架），
+    若按库复制，6000 条坐标 × N 个库会直接撞 localStorage 配额；而回退读只在<strong>首次</strong>生效，代价为零。
+    为什么不删除 v1：它是用户上一次调好的形状，删掉等于让老用户的所有库都重新布局一次；
+    回退是只读的，留着不占额外空间。
+  </p>
+
+  <h3>4.3 配额：作用域上限与 LRU</h3>
+  <p>
+    <code>GraphCanvas</code> 已有 <code>POSITION_CACHE_MAX = 6000</code>（单图上限），
+    多库之后<strong>总占用变成 6000 × 库数</strong>，而渲染进程的 localStorage 里还住着消息缓存 ——
+    真机实测过它会被占满、<code>setItem</code> 抛 <code>QuotaExceededError</code>（<code>savePositions</code> 已有「打一次日志」的降级）。
+    因此再加一条：<strong>v2 最多保留 <code>POSITION_SCOPES_MAX = 8</code> 个作用域</strong>，超出按 LRU 淘汰最久未写的一个。
+    淘汰的代价只是「那个库下次进入重新布局」，不会丢数据（笔记在主库、不在 localStorage）。
+  </p>
+
+  <h3>4.4 节点 id 保持不变（重要）</h3>
+  <p>
+    一个直觉的改动是把 stub 节点 id 也加上库前缀（<code>kb:2:项目组</code>），因为「两库都有同名 stub 会撞」。
+    <strong>不采用</strong>：布局<strong>整体按作用域隔离</strong>之后，同一份 map 里根本不会同时出现两个库的节点，
+    而节点 id 还被三处消费 —— <code>graph-model.ts</code> 的边端点、<code>Graph.tsx</code> 的选中/固定/深链、
+    以及已有的一批 <code>graph-model.stub.spec.ts</code> 断言。
+    改 id 是把风险从「一个键」扩散到「三处消费 + 一批用例」，而收益是零。
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s5">
+  <h2><span class="n">5</span>后端接口变化</h2>
+  <p class="sub">四个改签名、四个新增。签名改动是这次重设计<strong>唯一有编译期保障的护栏</strong>，所以要做彻底。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:20%">Remote</th><th style="width:34%">签名</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>getNotes</code><br><span class="pill new">改</span></td>
+          <td><code>(options: { kbId: number; query?: string; limit?: number })</code></td>
+          <td><code>kbId</code> 进 options（Remote 的既有风格就是单 options 对象）。<code>total</code> 必须改成<strong>本库</strong>计数（现在是全表 <code>COUNT(*)</code>）—— 不改就会显示「12 / 37」这种跨库总数。</td>
+        </tr>
+        <tr>
+          <td><code>saveNote</code><br><span class="pill new">改</span></td>
+          <td><code>(options: { kbId: number; id?: number; title: string; … })</code></td>
+          <td>新建时写入该 <code>kb_id</code>；<strong>编辑时也必须带 kbId 并校验行确实属于该库</strong>（<code>WHERE id=? AND kb_id=?</code>，不匹配返回 <code>笔记不存在</code>）—— 这是防串库的最后一道。</td>
+        </tr>
+        <tr>
+          <td><code>deleteNote</code><br><span class="pill new">改</span></td>
+          <td><code>(options: { kbId: number; id: number })</code></td>
+          <td>同上：删除也要 <code>AND kb_id=?</code>。返回 <code>ok:false</code> 时前端已有「删除失败」路径，无需新状态。</td>
+        </tr>
+        <tr>
+          <td><code>getKnowledgeGraph</code><br><span class="pill new">改</span></td>
+          <td><code>(options: { kbId: number })</code></td>
+          <td>建图只读本库。<code>sessionNames</code>（问答来源会话显示名）也只会包含本库涉及的会话 —— 天然收敛，无需额外处理。</td>
+        </tr>
+        <tr>
+          <td><code>getKbs</code><br><span class="pill new">新增</span></td>
+          <td><code>()</code></td>
+          <td>返回 <code>{ items: KbMeta[], total }</code>，<code>KbMeta = { id, name, noteCount, createdAt, updatedAt }</code>。<code>noteCount</code> 用一次 <code>GROUP BY kb_id</code> 拿全，别在循环里查。顺序固定 <code>id ASC</code>。</td>
+        </tr>
+        <tr>
+          <td><code>createKb</code><br><span class="pill new">新增</span></td>
+          <td><code>(options: { name: string })</code></td>
+          <td>返回 <code>{ ok, id }</code>。归一化重名拒绝。名字 trim 后长度上限 40（超出拒绝而不是截断 —— 截断会让用户看到的名字与他输入的不一致）。</td>
+        </tr>
+        <tr>
+          <td><code>renameKb</code><br><span class="pill new">新增</span></td>
+          <td><code>(options: { id: number; name: string })</code></td>
+          <td>默认库可改名。改名<strong>不影响任何笔记</strong>（笔记不存库名，只存 kb_id）—— 这正是用外键而不是「以库名为键」的理由。</td>
+        </tr>
+        <tr>
+          <td><code>deleteKb</code><br><span class="pill new">新增</span></td>
+          <td><code>(options: { id: number; action: { kind:'reassign'; targetKbId:number } | { kind:'purge' } })</code></td>
+          <td><strong>必须显式给出非空库的处理方式</strong>，后端不猜。<code>reassign</code> 在一个事务里 <code>UPDATE notes SET kb_id=target WHERE kb_id=?</code> 再删库行；<code>purge</code> 直接删笔记再删库行。<code>id=1</code> 一律拒绝。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card warn">
+    <h4>类型要改三处，别只改一处</h4>
+    <ul class="tight">
+      <li><code>src/backend/wechat-data/src/types.ts</code>：<code>KnowledgeNote</code> 加 <code>kbId</code>；新增 <code>KbMeta</code> / <code>KbListSnapshot</code> / <code>KbMutationResult</code>。</li>
+      <li><code>api.ts</code> 里的 <code>Remote</code> 接口声明（<code>getNotes</code> / <code>saveNote</code> / <code>deleteNote</code> / <code>getKnowledgeGraph</code> 四条 + 四条新增）—— <strong>这份是不走代码生成的、必须手改</strong>，漏改会退化成 <code>any</code> 风格的静默错误。</li>
+      <li>前端 <code>wechat-data/types.ts</code>：按既有说明<strong>刻意再声明一份</strong>（不从 node_modules 那份旧副本引入），同步加 <code>kbId</code> 与新类型。</li>
+    </ul>
+    <p>
+      这三处不同步时，<code>api-docs.spec.ts</code>（按文本读）与 <code>knowledge-base.wiring.spec.ts</code> 会有一部分转红 ——
+      但<strong>不要指望它们全都能抓住</strong>：Remote 声明漏一条字段，typecheck 在很多调用点仍然放行。所以 §10 的验证里有一条是「新调用点必须传 kbId」的源码级 gate。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s6">
+  <h2><span class="n">6</span>前端结构：外壳 + 库切换器 + 作用域真源</h2>
+  <p class="sub">三个新东西、两个加参数、零个面板被重写。外壳的改动只有<strong>一个可选 prop</strong>。</p>
+
+  <h3>6.1 结构总览</h3>
+  <figure>
+    <svg viewBox="0 0 1000 400" role="img" aria-label="多知识库作用域示意：一个库文件按 kb_id 划分，每库各自拥有图谱、缓存键与布局坐标">
+      <defs>
+        <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#4f8cff"/>
+        </marker>
+      </defs>
+
+      <!-- 左：库文件 -->
+      <rect x="18" y="46" width="250" height="308" rx="14" fill="#0e1526" stroke="#1e2942"/>
+      <text x="36" y="76" font-size="14" font-weight="700" fill="#e8eefc" font-family="monospace">wechat_notes.db</text>
+      <rect x="36" y="92" width="214" height="56" rx="10" fill="#121a2e" stroke="#1e2942"/>
+      <text x="50" y="114" font-size="12.5" fill="#22d3ee" font-family="monospace">kbs</text>
+      <text x="50" y="134" font-size="12" fill="#a8b6d4" font-family="monospace">id · name · created_at</text>
+      <rect x="36" y="160" width="214" height="176" rx="10" fill="#121a2e" stroke="#1e2942"/>
+      <text x="50" y="182" font-size="12.5" fill="#22d3ee" font-family="monospace">notes</text>
+      <text x="50" y="202" font-size="12" fill="#a8b6d4" font-family="monospace">id · title · body · tags …</text>
+      <rect x="44" y="214" width="198" height="26" rx="7" fill="rgba(34,211,238,.10)" stroke="rgba(34,211,238,.44)"/>
+      <text x="56" y="232" font-size="12.5" fill="#7fe3e8" font-family="monospace">+ kb_id  INTEGER NOT NULL</text>
+      <rect x="44" y="250" width="198" height="24" rx="7" fill="rgba(54,192,143,.09)" stroke="rgba(54,192,143,.34)"/>
+      <text x="56" y="267" font-size="11.5" fill="#7fe3c4" font-family="monospace">旧数据 → kb_id = 1</text>
+      <text x="50" y="296" font-size="11.5" fill="#6f7f9e">一个文件、两张表、一列外键</text>
+      <text x="50" y="318" font-size="11.5" fill="#6f7f9e">库的增删改都在库内完成</text>
+
+      <!-- 中：作用域键 -->
+      <text x="392" y="70" font-size="13" fill="#6f7f9e">作用域键（唯一真源：kb-scope.ts）</text>
+      <rect x="360" y="92" width="200" height="34" rx="9" fill="rgba(167,139,250,.10)" stroke="rgba(167,139,250,.42)"/>
+      <text x="380" y="114" font-size="13" fill="#c9b7ff" font-family="monospace">'kb:1'  默认知识库</text>
+      <rect x="360" y="136" width="200" height="34" rx="9" fill="rgba(167,139,250,.10)" stroke="rgba(167,139,250,.42)"/>
+      <text x="380" y="158" font-size="13" fill="#c9b7ff" font-family="monospace">'kb:2'  工作笔记</text>
+      <rect x="360" y="180" width="200" height="34" rx="9" fill="rgba(167,139,250,.10)" stroke="rgba(167,139,250,.42)"/>
+      <text x="380" y="202" font-size="13" fill="#c9b7ff" font-family="monospace">'kb:3'  …</text>
+      <rect x="360" y="240" width="200" height="34" rx="9" fill="rgba(120,134,160,.12)" stroke="#1e2942"/>
+      <text x="380" y="262" font-size="13" fill="#a8b6d4" font-family="monospace">'social'  社交图谱</text>
+      <text x="360" y="298" font-size="11.5" fill="#6f7f9e">同一个键同时用于：</text>
+      <text x="360" y="316" font-size="11.5" fill="#6f7f9e">缓存键后缀 / 布局坐标分组</text>
+
+      <line x1="272" y1="200" x2="352" y2="200" stroke="#4f8cff" stroke-width="1.6" marker-end="url(#arw)"/>
+      <line x1="564" y1="200" x2="644" y2="200" stroke="#4f8cff" stroke-width="1.6" marker-end="url(#arw)"/>
+
+      <!-- 右：每 scope 一份图 / 缓存 / 布局 -->
+      <rect x="652" y="60" width="330" height="76" rx="12" fill="rgba(167,139,250,.07)" stroke="rgba(167,139,250,.34)"/>
+      <text x="670" y="84" font-size="13.5" fill="#e8eefc" font-weight="650">知识图谱（默认知识库）</text>
+      <text x="670" y="104" font-size="11.5" fill="#a8b6d4" font-family="monospace">cache kb-graph:1 · layout 'kb:1'</text>
+      <text x="670" y="122" font-size="11.5" fill="#a8b6d4" font-family="monospace">[[链接]] 只解析本库标题</text>
+
+      <rect x="652" y="152" width="330" height="76" rx="12" fill="rgba(167,139,250,.07)" stroke="rgba(167,139,250,.34)"/>
+      <text x="670" y="176" font-size="13.5" fill="#e8eefc" font-weight="650">知识图谱（工作笔记）</text>
+      <text x="670" y="196" font-size="11.5" fill="#a8b6d4" font-family="monospace">cache kb-graph:2 · layout 'kb:2'</text>
+      <text x="670" y="214" font-size="11.5" fill="#a8b6d4" font-family="monospace">同名《项目组》是另一篇，不合并</text>
+
+      <rect x="652" y="244" width="330" height="76" rx="12" fill="rgba(120,134,160,.09)" stroke="#1e2942"/>
+      <text x="670" y="268" font-size="13.5" fill="#e8eefc" font-weight="650">社交图谱</text>
+      <text x="670" y="288" font-size="11.5" fill="#a8b6d4" font-family="monospace">cache graph · layout 'social'</text>
+      <text x="670" y="306" font-size="11.5" fill="#a8b6d4" font-family="monospace">本次不变，只是键从 v1 挪进 v2</text>
+    </svg>
+    <figcaption>一个库文件 → 多个作用域键 → 每个作用域各自一张图 / 一套缓存键 / 一份布局坐标</figcaption>
+  </figure>
+
+  <h3>6.2 <code>MergedSections</code> 只加一个可选 prop</h3>
+  <div class="flow"><i>// MergedSections.tsx —— 其余六个分组（通讯录/收藏/文件/资金…）一行不改</i>
+export function MergedSections({ sections, initial, ariaLabel, <b>trailing</b> }: {
+  sections: ReadonlyArray&lt;MergedSection&gt;
+  initial: string
+  ariaLabel: string
+  <b>trailing?: ReactNode</b>        <i>// 分段条右侧插槽；不传就与今天完全一致</i>
+})</div>
+  <p>
+    <code>nav-config.ts</code> 与侧栏计数<strong>完全不碰</strong>：库选择器属于合并外壳，不是导航项，
+    所以「侧栏入口 17 / 可路由 36」两个被三处文本用例守着的数字保持不变（<code>graph</code>、<code>knowledge</code> 的 <code>hidden</code> 也照旧）。
+  </p>
+
+  <h3>6.3 <code>KbSwitcher</code>（新组件）</h3>
+  <ul class="tight">
+    <li>kit 的 <code>Select</code>（<code>Graph.tsx</code> 已在用）列出该库：<code>默认知识库 · 12</code>、<code>工作笔记 · 37</code> —— <strong>条数直接进选项文案</strong>，一眼看出哪个库是空的。</li>
+    <li>右侧一个「⋯」菜单：<code>新建知识库</code> / <code>重命名</code> / <code>删除</code> / <code>管理</code>。全部走既有 <code>useConfirm</code> 弹层，<strong>不新增页面、不新增路由</strong>。</li>
+    <li>删除时的弹层必须把后果写全：<code>「工作笔记」里有 37 条笔记。删除这个知识库时它们要一起删掉，还是移到别的库？</code> 两个动作按钮（<code>移到…</code> / <code>一并删除</code>），<code>purge</code> 用 <code>tone:'danger'</code>。</li>
+    <li>该组件是<strong>唯一</strong>调用 <code>apiCreateKb/apiRenameKb/apiDeleteKb</code> 的地方；成功后广播 <code>KBS_UPDATED_EVENT</code>。</li>
+  </ul>
+
+  <h3>6.4 作用域真源与两个事件</h3>
+  <div class="flow"><i>// notes-events.ts（既有）—— 保持 new Event(名) 的形状，不加 detail</i>
+NOTES_UPDATED_EVENT = 'dsh-wechat-notes-updated'    <i>// 内容变了（save/delete 笔记）</i>
+<b>KBS_UPDATED_EVENT   = 'dsh-wechat-kbs-updated'</b>      <i>// 库表变了（新建/改名/删除/重排）</i>
+
+<i>// kb-scope.ts（新增）—— 当前库住在模块里，事件不携带载荷</i>
+const ACTIVE_KEY = 'dsh-kb-scope-v1'      <i>// localStorage 记住上次选中的库</i>
+getActiveKb(): number | null              <i>// 读 + 校验（列表里没有就退回第一个）</i>
+setActiveKb(id: number): void             <i>// 写 localStorage + 广播 KB_SCOPE_EVENT</i>
+useKbScope(): number | null               <i>// 面板订阅；id 为 null 表示「还在加载库列表」</i></div>
+
+  <div class="card warn">
+    <h4>为什么载荷不进事件（这是与既有用例的兼容点）</h4>
+    <p>
+      <code>knowledge-base.wiring.spec.ts</code> 钉住了两件事：事件名<strong>字面量</strong>，以及派发形式必须是
+      <code>new Event(NOTES_UPDATED_EVENT)</code>。改成 <code>CustomEvent + detail</code> 会让这条既有断言转红 ——
+      而它保护的是「写入后必须能叫醒面板」这个真实缺陷。
+      所以：<strong>保持无载荷事件</strong>，「哪个库」的信息走模块状态（<code>kb-scope.ts</code>）而不是事件载荷。
+      新增的 <code>KBS_UPDATED_EVENT</code> 同样用 <code>new Event(...)</code>。
+    </p>
+  </div>
+
+  <h3>6.5 两个面板的改动（都不重写）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:20%">文件</th><th style="width:38%">改动</th><th>要点</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>KnowledgeBase.tsx</code></td>
+          <td><code>cachedKb()</code> → <code>cachedKb(kbId)</code>；<code>load()</code> 带 kbId；订阅 <code>useKbScope()</code>；库切换时清空选中/查询/标签</td>
+          <td>空态文案与读失败文案要带上库名：<code>「工作笔记」读取失败（不是「暂无条目」）</code> —— 单库时代那句「笔记库读取失败」在多库下已经说不清是哪一个。</td>
+        </tr>
+        <tr>
+          <td><code>Graph.tsx</code><br>(variant=knowledge)</td>
+          <td><code>loadKnowledge(kbId)</code>；订阅 <code>useKbScope()</code>；<strong>库切换 → 清 selectedId / pinned / focusCommunity</strong> 并重取快照</td>
+          <td>这三份状态装的是节点 id（<code>note:7</code> / <code>kb:项目组</code>），跨库后指向的可能是另一条笔记 —— 轻则选中态错位，重则「详情面板显示甲库内容、画布画的是乙库」。必须清。</td>
+        </tr>
+        <tr>
+          <td><code>KnowledgeNoteEditor.tsx</code></td>
+          <td>新增必填 <code>kbId</code> prop（三个调用点各传当前作用域）；<code>allowKbPick?</code> 时显示「保存到：<span class="pill new">库选择器</span>」</td>
+          <td>这是<strong>新建笔记的唯一入口</strong>，三层调用者（笔记库 / 图谱 / 问答沉淀）都必须显式说清存到哪。问答那条尤其要能改 —— 沉淀时常常才发现该归到另一个库。</td>
+        </tr>
+        <tr>
+          <td><code>graph-layout.ts</code></td>
+          <td><code>loadSavedPositions(scope)</code> / <code>savePositions(scope, pos)</code> + v2 键 + v1 只读回退 + scope LRU</td>
+          <td>纯函数，可以完全在 node 环境单测（不需要 canvas）。<strong>这是本次唯一能写「逐位相等」断言的模块</strong> —— 见 §10.3。</td>
+        </tr>
+        <tr>
+          <td><code>GraphCanvas.tsx</code></td>
+          <td>透传一个 <code>positionScope</code> prop 给落盘调用</td>
+          <td>画布内部逻辑（绘制、命中、拖拽、导出）零改动。绝对定位浮层尺寸那类坑不受影响。</td>
+        </tr>
+        <tr>
+          <td><code>WechatDataPanel.tsx</code></td>
+          <td><code>case 'knowledge': case 'kb':</code> 的 <code>MergedSections</code> 加 <code>trailing={&lt;KbSwitcher /&gt;}</code></td>
+          <td>仍只合并一次、两个 case 仍并列（缺一个 case → 深链落 <code>default</code> 且测试不红，这条已有约定继续遵守）。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s7">
+  <h2><span class="n">7</span>交互与空态</h2>
+  <p class="sub">多库之后「空」至少有四种含义，必须句句不同 —— 这是上一版知识库用 N1 换来的一条经验。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:24%">场景</th><th style="width:34%">文案</th><th>动作</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>库里确实没有笔记</td>
+          <td><code>「工作笔记」还没有条目</code><br><span class="sub">手写笔记与「微信问答」的沉淀都进这个库，正文可以用 <code>[[目标]]</code> 互相链接。</span></td>
+          <td><code>＋ 新建第一条</code>（在原库内新建，不再问库）</td>
+        </tr>
+        <tr>
+          <td>库读不到（库被占用/损坏）</td>
+          <td><code>「工作笔记」读取失败（不是「暂无条目」）：&lt;原因&gt;</code></td>
+          <td><code>重试</code>；<strong>不写渲染缓存</strong>（现有 N1 规则：把读失败的空表写进缓存，下次打开会伪装成「库里没东西」）</td>
+        </tr>
+        <tr>
+          <td>筛选后为空</td>
+          <td><code>没有匹配的条目</code> + <code>当前条件：关键词「x」· 标签 #y</code></td>
+          <td><code>清除筛选</code>（保持现状）</td>
+        </tr>
+        <tr>
+          <td>库列表还没加载出来</td>
+          <td>作用域未知 → 两个面板都进骨架屏，<strong>不显示任何库名、也不显示「空」</strong></td>
+          <td>—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>7.1 切换库时的三个可见承诺</h3>
+  <ol class="tight">
+    <li><strong>不跳页、不重挂面板。</strong> 切库只改作用域 → 两个面板各自重取数据；分段条（笔记库 / 知识图谱）停在原地。</li>
+    <li><strong>首帧不串库。</strong> 因为渲染缓存的键里带库 id，切到乙库时读的是 <code>kb-list:2</code>：有缓存就先出乙库的内容，没有就出骨架屏 —— <strong>永远不会先闪一下甲库的列表</strong>。</li>
+    <li><strong>布局按库恢复。</strong> 切换回来还是上次的形状（scope 隔离 + v2 键）。</li>
+  </ol>
+
+  <h3>7.2 问答沉淀（Ask 面板）</h3>
+  <p>
+    <code>Ask.tsx</code> 里「沉淀为笔记」打开同一个 <code>KnowledgeNoteEditor</code>（<code>sourceKind="ask"</code>）。
+    多库之后它必须回答「存到哪个库」：默认=当前作用域，编辑器内可见并可就地改。
+    这样从问答沉淀而来的笔记也会自然成为某个库图谱里的一个节点，而不会出现「沉淀了但不知道进了哪个库」。
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s8">
+  <h2><span class="n">8</span>边界与失败模式</h2>
+  <p class="sub">十二条。每一条都写成「触发 → 期望行为」，落地时可以直接变成用例。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:5%">#</th><th style="width:30%">触发</th><th>期望行为</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>老库升级（无 <code>kb_id</code>）</td><td>全部笔记落进 <code>id=1</code>《默认知识库》，标题/标签/链接/图谱结构不变；<code>kbs</code> 若为空则建默认库。迁移跑两次结果一致（幂等）。</td></tr>
+        <tr><td>2</td><td>老库的布局（v1 单键）</td><td><code>social</code> 与 <code>kb:1</code> 两个作用域可读到它；其他库从确定性初值开始。v1 不被改写、不被删除。</td></tr>
+        <tr><td>3</td><td>删除<strong>非空</strong>库</td><td>弹层列出条数，必须二选一：<code>移到…（目标库选择器）</code> 或 <code>一并删除</code>。<strong>没有「直接删」这个默认路径</strong>，后端 <code>deleteKb</code> 也不给缺省 action。</td></tr>
+        <tr><td>4</td><td>删除<strong>当前</strong>库</td><td>作用域确定性地退回「列表里第一个剩下的库」（<code>id ASC</code>）；若一个都不剩 → 自动创建《默认知识库》并选中。**界面永不停留在无库状态。**</td></tr>
+        <tr><td>5</td><td>删除 <code>id=1</code></td><td>拒绝（<code>默认知识库不可删除，可重命名</code>）。理由见 §3.2 第 4 条：它同时是迁移兜底。</td></tr>
+        <tr><td>6</td><td>库重名 / 空名 / 超长</td><td>重名 → <code>已存在同名知识库「X」</code>；空名 → <code>知识库名不能为空</code>；&gt;40 字 → 拒绝并提示（<strong>不静默截断</strong>）。</td></tr>
+        <tr><td>7</td><td>两库有同名笔记</td><td>各自独立：互不成边、互不覆盖。详情页对 <code>[[目标]]</code> 未命中时，可给一条<strong>只读</strong>提示「其他库里有同名条目」+「在那里打开」（跳转时切换作用域）—— 但这绝不自动建边。</td></tr>
+        <tr><td>8</td><td>保存/删除时 <code>kb_id</code> 不匹配</td><td>返回 <code>笔记不存在</code>（<code>WHERE id=? AND kb_id=?</code> 改不到行）。前端已有「保存失败」路径可展示。</td></tr>
+        <tr><td>9</td><td>两个窗口开着不同库</td><td>各自独立（作用域在渲染进程内存 + localStorage）。<strong>已知限制</strong>：A 窗口在甲库改笔记，B 窗口在乙库不会看到 —— 但 B 会因 <code>NOTES_UPDATED_EVENT</code> 重载自己的库，取到的是正确（只是无关）的数据。文档里写明，不做跨窗口同步。</td></tr>
+        <tr><td>10</td><td>localStorage 配额满</td><td><code>savePositions</code> 已有的降级：只打一次日志、不抛。再加 scope LRU（上限 8）压低总占用。表现=「下次进入不恢复布局」，<strong>不丢笔记</strong>。</td></tr>
+        <tr><td>11</td><td>迁移中途失败（<code>ALTER</code> 被拒等）</td><td><code>openStore</code> 的既有策略：建目录失败仍继续尝试打开；读失败由 <code>listNotes</code> 转成 <code>readError</code> 的空快照。<strong>迁移失败不能伪装成空库</strong> —— 迁移异常要进 <code>readError</code> 文本，并且<strong>不能把空 <code>kbs</code> 列表当成「没有库」</strong>（否则会新建一个空库盖住现场）。</td></tr>
+        <tr><td>12</td><td>库列表读取失败</td><td><code>getKbs</code> 失败 → 保留上一次列表（内存）并给一次可重试的提示；作用域保持原值。等价于「不敢猜你在哪个库」。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s9">
+  <h2><span class="n">9</span>落地四步（切口）</h2>
+  <p class="sub">每一步都可独立验证、可独立回退；前两步不碰界面，后两步不碰 SQL。</p>
+
+  <div class="card">
+    <h4>第一步 · 存储与查询按库 <span class="pill new">后端</span></h4>
+    <ul class="tight">
+      <li><code>kbs</code> 表 + <code>notes.kb_id</code> 幂等迁移 + <code>idx_notes_kb</code>；<code>DEFAULT_KB_ID</code> 常量与四个函数的 <code>kbId</code> 位置参数；标题唯一改成库内；<code>buildKnowledgeGraph</code> 按库读；新增 <code>listKbs/createKb/renameKb/deleteKb</code>。</li>
+      <li>验证：<code>notes.spec.ts</code> 扩两组用例（隔离 + 迁移幂等），<strong>不需要界面</strong>。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>第二步 · 接口与作用域真源 <span class="pill new">前后端接缝</span></h4>
+    <ul class="tight">
+      <li>四个 <code>@Remote</code> 加 <code>kbId</code> + 四个库管理 Remote；三处类型同步；<code>api.ts</code> 的缓存键加库后缀、<code>invalidateKnowledgeCaches</code> 同时清 <code>kb-</code> 与 <code>kbs-</code>；新增 <code>kb-scope.ts</code> 与 <code>KBS_UPDATED_EVENT</code>。</li>
+      <li>验证：typecheck（<strong>所有忘了传 kbId 的调用点会在这里集体转红</strong>）+ 源码级 gate（字面量只许出现在 <code>kb-scope.ts</code>）。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>第三步 · 界面接上作用域 <span class="pill new">前端</span></h4>
+    <ul class="tight">
+      <li><code>MergedSections.trailing</code> + <code>KbSwitcher</code>；两个面板订阅 <code>useKbScope()</code>、切库时重置选中/固定/聚焦；<code>KnowledgeNoteEditor</code> 加必填 <code>kbId</code>（三个调用点各传）；Ask 沉淀可见目标库；空态与读失败文案带库名。</li>
+      <li>验证：<code>knowledge-base.wiring.spec.ts</code> 扩（作用域透传、切换时清理、字面量 gate）+ <code>build:ui</code> + 真机。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>第四步 · 布局与缓存按库，并迁移 <span class="pill new">前端</span></h4>
+    <ul class="tight">
+      <li><code>graph-layout.ts</code> 的 v2 键 + v1 只读回退 + scope LRU；<code>GraphCanvas</code> 透传 <code>positionScope</code>。</li>
+      <li>验证：纯函数单测（逐位相等 + 回退 + LRU）+ 真机看「切库后形状各自恢复」。</li>
+    </ul>
+  </div>
+
+  <p>
+    <strong>为什么把布局放最后：</strong>前三步的产物已经是一个可用、可验收的多库功能；布局是<em>体验层</em>，
+    它出问题只影响「切换后形状」而不影响数据正确性 —— 把它独立成最后一步，出问题时能干净地回退而不用碰数据层。
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s10">
+  <h2><span class="n">10</span>验证方案</h2>
+  <p class="sub">沿用本项目已经付出过代价的三条纪律：<strong>边界要有用例、用例要能咬人、界面要上真机</strong>。</p>
+
+  <h3>10.1 三层验证</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:18%">层</th><th style="width:34%">手段</th><th>要证明的事</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>数据层</strong><br>真 SQLite</td>
+          <td><code>working/*.spec.ts</code> 直接跑 <code>query/notes.ts</code>（<code>@vitest-environment node</code>，临时目录建真实库文件）</td>
+          <td>跨库同名不冲突；<code>[[链接]]</code> 不跨库；stub 每库独立；迁移幂等（连跑两次行数与 <code>kb_id</code> 分布逐项相等）；老库升级后 <code>summary</code> 与升级前一致。</td>
+        </tr>
+        <tr>
+          <td><strong>接缝层</strong><br>源码级 gate</td>
+          <td>读源码文本断言（这是本项目的既有强项：<code>knowledge-base.wiring.spec.ts</code> 就是这么干的）</td>
+          <td>① 字面量 <code>'kb:' + id</code> / <code>'kb-list:'</code> 只出现在 <code>kb-scope.ts</code>；② 三个编辑器调用点都传了 <code>kbId</code>；③ 事件名与 <code>new Event(...)</code> 形状未被改坏。</td>
+        </tr>
+        <tr>
+          <td><strong>产物层</strong><br>构建</td>
+          <td><code>python working/run-check.py</code>（<strong>必须含 <code>build:ui</code>：<code>sync-ui-shim.js</code> + <code>vite build</code></strong>）</td>
+          <td>CSS Modules 的语法错只在 postcss 暴露 —— jsdom 冒烟对 CSS 完全无感，「typecheck + 冒烟全绿」推不出「能构建」。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>10.2 真机验收（CDP 探针：<code>working/cdp-kb-scope.mjs</code>）</h3>
+  <div class="flow"><b>0)</b> <i>先杀残留 electron</i>（单实例锁 → 否则量到的是旧实例），
+   比对页面 bundle hash 与磁盘 index.html 一致 ⇒ 证明跑的是新产物
+<b>1)</b> 点侧栏「知识库」把面板挂起来（起手 URL 未必带 hash）
+<b>2)</b> 建库「乙」→ 断言库选择器出现两项、且<u>当前仍停在默认库</u>
+<b>3)</b> 在默认库写《甲A》正文含 <b>[[乙B]]</b> 并建《乙B》
+   → 断言 rail 统计 <b>节点 3 · 连线 2</b>（甲A / 乙B / …）
+<b>4)</b> 切到「乙」→ 断言 <b>rail 节点数 = 0</b>、空态文案含「乙」且<b>不</b>含「读取失败」
+<b>5)</b> 在乙库也建一篇同名《乙B》→ 断言 rail 节点数 = 1、<u>连线 0</u>（同名不跨库成边）
+<b>6)</b> 切回默认库 → 断言节点数回到 3（缓存键带库 id ⇒ 首帧不串）
+<b>7)</b> <u>读 localStorage</u> <span>dsh-graph-layout-v2</span> → 断言同时存在 'kb:1' 与 'kb:2' 两个 scope
+<b>8)</b> 删除「乙」（选「一并删除」）→ 断言作用域退回默认库、库列表回到 1 项</div>
+  <p>
+    第 6、7 步是关键：<strong>它们是「串库」与「布局互污」这两个最容易静默发生、静态检查完全抓不到的问题的唯一观测点。</strong>
+    第 5 步则是「同名不跨库成边」的正面证据 —— 它恰好是单库时代做不到的那件事。
+  </p>
+
+  <div class="card accent">
+    <h4>变更测试：护栏必须能咬人</h4>
+    <p>
+      与上一轮「笔记节点改圆」踩过的同一个坑：<strong>新加的用例必须先证明它会在缺陷重现时转红</strong>，否则等于没加。
+      针对本次，至少做三组：
+    </p>
+    <ul class="tight">
+      <li>把 <code>buildKnowledgeGraph</code> 的 <code>WHERE kb_id=?</code> 去掉 → 隔离用例必须红；改回后逐字节一致。</li>
+      <li>把某个 <code>cachedGet</code> 的库后缀去掉 → 串库 gate 必须红。</li>
+      <li>把 <code>loadSavedPositions</code> 的 scope 参数忽略、退回单键 → 布局隔离用例必须红。</li>
+    </ul>
+  </div>
+
+  <h3>10.3 顺带可测的纯函数清单</h3>
+  <p>
+    <code>graph-layout.ts</code> 的 <code>loadSavedPositions/savePositions</code> 与 <code>notes.ts</code> 的
+    <code>normalizeTitle/parseWikiLinks/excerptOf</code> 一样，都是<strong>不需要 canvas、不需要 DOM 的纯函数</strong>
+    （localStorage 用一个 5 行的桩即可）—— 也就是本次改动里唯一能写「同一输入两次调用结果逐位相等」这类强断言的地方。
+    画布侧的绘制逻辑照旧不能进 node（需要 <code>CanvasRenderingContext2D</code>），要验就走真机 + 像素几何，
+    但本次<strong>没有改绘制</strong>，所以不受影响。
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s11">
+  <h2><span class="n">11</span>差异总表</h2>
+  <p class="sub">左边是今天，右边是重设计之后。改动面一目了然：<strong>加一张表、加一列、加两个模块、改七处。</strong></p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:22%">维度</th><th style="width:34%">今天（单库）</th><th>重设计（多库）</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>库的概念</td><td>不存在</td><td><code>kbs</code> 表；至少一个《默认知识库》</td></tr>
+        <tr><td>笔记归属</td><td>无字段</td><td><code>notes.kb_id</code>（老数据全部=1）</td></tr>
+        <tr><td>标题唯一性</td><td>全表</td><td><strong>库内</strong>（跨库允许同名）</td></tr>
+        <tr><td><code>[[链接]]</code> 解析域</td><td>全表</td><td><strong>本库</strong>（跨库不成边、不合并）</td></tr>
+        <tr><td>知识图谱</td><td>全表一张图</td><td><strong>一库一图</strong></td></tr>
+        <tr><td>Remote 参数</td><td>无 kbId</td><td><code>kbId</code> 显式必填（+ 四个库管理接口）</td></tr>
+        <tr><td>内存快照键</td><td><code>kb:graph</code></td><td><code>kb:graph:&lt;id&gt;</code></td></tr>
+        <tr><td>渲染缓存键</td><td><code>kb-list</code> / <code>kb-graph</code></td><td><code>kb-list:&lt;id&gt;</code> / <code>kb-graph:&lt;id&gt;</code>（+ <code>kbs-list</code>）</td></tr>
+        <tr><td>布局坐标</td><td>单键 <code>…-v1</code>，与社交图谱共用</td><td><code>…-v2</code> 按 scope 分组，v1 只读回退，scope LRU 上限 8</td></tr>
+        <tr><td>事件</td><td><code>NOTES_UPDATED_EVENT</code></td><td>+ <code>KBS_UPDATED_EVENT</code>（库表变更）</td></tr>
+        <tr><td>界面入口</td><td>知识库 → 笔记库 / 知识图谱</td><td>同上，分段条右侧多一个<strong>库切换器</strong></td></tr>
+        <tr><td>侧栏入口 / 可路由页签</td><td>17 / 36</td><td><strong>17 / 36（不变）</strong></td></tr>
+        <tr><td>画布</td><td><code>GraphCanvas</code></td><td>内部零改动，只多一个透传 prop</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section id="s12">
+  <h2><span class="n">12</span>明确不做，以及为什么</h2>
+  <p class="sub">每一条都是看起来合理、但会伤到别处的东西。留在这里，避免下次又绕回来。</p>
+
+  <div class="card warn">
+    <h4>① 跨库 <code>[[链接]]</code>（<code>[[乙库:目标]]</code>）</h4>
+    <p>
+      最诱人的功能，也是最该拒绝的。<strong>「一库一图」的定义就是「图只由这一库的笔记构成」</strong>：
+      一旦允许跨库边，知识图谱就会退化成「全库图 + 一堆指向虚空的边」——
+      而 stub 机制（<code>kb:&lt;目标名&gt;</code>）正是靠「目标不存在就先记成待补」来表达「这条链接活着但还没写」，
+      跨库边会让「该在哪个库补」变成第二个需要猜的问题。
+      <strong>替代方案已给：</strong>未命中时只读提示「其他库里有同名条目」+ 一键跳过去（跳转即切库），信息不丢，隔离不破。
+    </p>
+  </div>
+
+  <div class="card warn">
+    <h4>② 一库一个 db 文件</h4>
+    <p>
+      好处是「单库可单独备份/删除」，代价是<strong>跨库移动笔记要跨文件读写</strong>，
+      而 <code>node:sqlite</code> 的 <code>DatabaseSync</code> 没有跨库事务 —— 中途失败会留下两份副本或两份丢失。
+      真需要单库出口，应当做成<strong>导出</strong>（JSON / Markdown，带 <code>[[链接]]</code> 原样），
+      那是只读且不会破坏一致性的一步。
+    </p>
+  </div>
+
+  <div class="card warn">
+    <h4>③ 把库做成第三个分段（笔记库 / 知识图谱 / 库管理）</h4>
+    <p>
+      分段表达的是「同一份数据的两种看法」，而<strong>库表达的是「看哪一份数据」——是上一层的维度</strong>。
+      两者并列会诱导出「在甲库里点知识图谱」这种语义矛盾。
+      所以库选择器放在分段条<strong>右侧</strong>（作用域位置），库管理做成弹层。
+    </p>
+  </div>
+
+  <div class="card warn">
+    <h4>④ 给笔记加「多库归属」（一篇属于多个库）</h4>
+    <p>
+      多对多立刻把「标题库内唯一」和「<code>[[链接]]</code> 解析域」两个不变量同时打穿：
+      同一篇笔记在两个库里要有两个不同的解析上下文，图谱也会把它算两个节点。
+      多库的价值在<strong>分类</strong>，而分类需要唯一归属。要复制，就用「复制到另一个库」（会产生新 id 的新笔记，两库各自独立演进）。
+    </p>
+  </div>
+
+  <div class="card warn">
+    <h4>⑤ 用库名做外键（而不是 kb_id）</h4>
+    <p>
+      用库名做键会导致「改名 = 迁移全部笔记」，并且要处理「改到一半崩了」。
+      用 <code>kb_id</code> 之后改名是<strong>一条 UPDATE、零笔记改动</strong>（§5 里 <code>renameKb</code> 的说明）。
+      库名唯一性只用于防呆，不承担引用职责。
+    </p>
+  </div>
+</section>
+
+<footer>
+  多知识库重设计 · 提案 v1 · 2026-09-18<br>
+  依据：<code>src/backend/wechat-data/src/query/notes.ts</code> · <code>gateway.ts</code> ·
+  <code>src/client/ui-wechat/src/client/pages/wechat-data/</code>（<code>api.ts</code> / <code>notes-events.ts</code> /
+  <code>panels/KnowledgeBase.tsx</code> / <code>panels/Graph.tsx</code> / <code>panels/GraphCanvas.tsx</code> /
+  <code>panels/graph-layout.ts</code> / <code>panels/MergedSections.tsx</code> / <code>nav-config.ts</code>）<br>
+  姊妹文档：<code>docs/GRAPH-KNOWLEDGE-REDESIGN.html</code>（知识图谱的层级与关系层重设计）
+</footer>
+
+</div>
+</body>
+</html>

@@ -69,7 +69,10 @@
     "electron-updater": "^6.8.9",
     "fzstd": "file:src/backend/deps/fzstd",
     "koffi": "file:src/backend/deps/koffi",
+    "mammoth": "^1.12.3",
+    "pdfjs-dist": "^6.3.289",
     "unzipper": "^0.12.5",
+    "xlsx": "^0.18.5",
     "zod": "file:src/backend/deps/zod"
   },
   "optionalDependencies": {
@@ -134,7 +137,16 @@
       "node_modules/electron-updater/**/*",
       "node_modules/fzstd/**/*",
       "node_modules/koffi/**/*",
+      "node_modules/mammoth/**/*",
+      "node_modules/pdfjs-dist/**/*",
+      "!node_modules/pdfjs-dist/**/*.map",
+      "!node_modules/pdfjs-dist/build/**",
+      "!node_modules/pdfjs-dist/legacy/web/**",
+      "!node_modules/pdfjs-dist/types/**",
+      "!node_modules/pdfjs-dist/web/**",
+      "!node_modules/@napi-rs/**",
       "node_modules/unzipper/**/*",
+      "node_modules/xlsx/**/*",
       "node_modules/zod/**/*",
       "package.json"
     ],

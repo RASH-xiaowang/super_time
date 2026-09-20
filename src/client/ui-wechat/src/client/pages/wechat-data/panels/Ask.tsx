@@ -3,32 +3,38 @@
  * 检索在本机完成；AI 生成会调用当前配置的模型（出网提示见界面）。
  *
  * ── 界面结构（本轮整体重排）──────────────────────────────
- *  askLayout（横向两栏，永远是「并排」而不是「覆盖」）
+ *  askLayout（单栏；历史上的模型配置/检索设置侧栏均已迁出或移除）
  *   ├─ askPage
- *   │  ① 面板头（固定）   标题 / 说明 / 清空对话
+ *   │  ① 面板头（固定）   标题 / 说明 / 历史记录 / 清空对话
  *   │  ② 检索上下文条（固定） 语料状态 · 会话范围 · 时间范围 · 回答模型
  *   │  ③ 对话区（滚动）   多轮问答；空态为一张引导卡，内容贴底生长
  *   │  ④ 提问区（固定）   输入框 + 发送（同一个面）+ 次要动作行
  *   │  ⑤ 隐私说明（固定） 12px 次级小字
- *   └─ modelPanel
- *      模型配置（仅在打开时渲染，占据自己的车道）
  *
  * 与上一版的关键差别：
  *  ① 把「会话/时间/模型」三个限定条件从输入框内部提到输入框**上方**的上下文条 ——
  *     输入框只负责输入与发送（三层挤 158px → 两层），限定条件常驻可见、随时可改。
- *  ② 模型配置从 `position: fixed` 的覆盖式抽屉改成**面板内的实体侧栏**：
- *     任何窗口宽度下都不遮挡顶部栏、输入框、发送键或任何对话内容
- *     （旧实现 <1100px 时用覆盖式，实测把发送键整块盖住、点击被抽屉体截获）。
+ *  ② 模型配置、检索设置都曾有各自的侧栏，现已全部迁出/移除：模型配置只在
+ *     「数据配置」页面配一次，检索参数固化为内置默认（不再暴露给用户）。
+ *     这样对话栏在整个宽度区间都不被遮挡（旧实现 <1100px 的覆盖式抽屉实测把发送键
+ *     整块盖住、点击被抽屉体截获）。
+ *
+ * ── 问答历史（本轮新增）────────────────────────────────────
+ * 面板头的「历史记录」按钮打开 `AskHistoryDialog`，查看**每一次**问答的完整记录。
+ * 记录由后端在回答产出的那一刻自动落库（`query/ask-history.ts`），面板不参与写入：
+ * 前端只持有当前线程的 turns，清空对话即丢、关窗即没，靠它存历史必然漏。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGetLlmConfig, apiGetSessions, apiOptimizeAskQuestion, apiSubmitAskFeedback } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
 import type { AskOptimizeResult, AskResult, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, DateRangeField, PanelHeader, Select } from '../ui/kit.tsx'
-import { RetrievalPanel } from './RetrievalPanel.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
+import { useKbScope } from './kb-scope.ts'
+import { AskHistoryDialog } from './AskHistoryDialog.tsx'
 import { useAskSession, type AskTurn } from './use-ask.ts'
 import { auditAnswerGrounding, groundingWarning } from './utils/grounding.ts'
+import { citeTarget, type CiteItem } from './cite-target.ts'
 import css from './ask.module.css'
 import rcss from './retrieval.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -49,8 +55,8 @@ function fmtShortDate(d: string): string {
   return d.length >= 10 ? d.slice(5).replace('-', '/') : d
 }
 
-/** 上下文条上的统一领标图标：三种限定条件用同一套 13px 线性图标。 */
-function ScopeIcon({ kind }: { kind: 'corpus' | 'time' | 'retrieval' }): React.JSX.Element {
+/** 上下文条上的统一领标图标：两种限定条件用同一套 13px 线性图标。 */
+function ScopeIcon({ kind }: { kind: 'corpus' | 'time' }): React.JSX.Element {
   const common = {
     className: css.ctxIcon, viewBox: '0 0 24 24', width: 13, height: 13,
     fill: 'none', stroke: 'currentColor', strokeWidth: 2,
@@ -70,14 +76,6 @@ function ScopeIcon({ kind }: { kind: 'corpus' | 'time' | 'retrieval' }): React.J
       <svg {...common}>
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7v5l3 2" />
-      </svg>
-    )
-  }
-  if (kind === 'retrieval') {
-    // 漏斗/过滤图标：表达「检索流水线」而不是又一次「检索」。
-    return (
-      <svg {...common}>
-        <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" />
       </svg>
     )
   }
@@ -123,10 +121,55 @@ export function BasisLine({ basis }: { basis?: string }): React.JSX.Element | nu
 /** 引用来源：2 列网格 + 默认折叠前 4 条（20 条平铺会吞没整屏）。
  *  回答正文里真正引用过的来源会高亮标记 —— 否则「来源 20 条」里哪些被用到了
  *  只能靠用户在答案里逐个对 [n]，等于没标。 */
-export function CiteList({ items, cited, onOpen, answer }: {
+/** 知识库来源的面包屑：`第 3 页 · 第二章 › 违约条款`（没有的项直接不出现，不留空段）。 */
+function kbCrumb(kb: NonNullable<CiteItem['kb']>): string {
+  return [kb.page > 0 ? `第 ${kb.page} 页` : '', kb.heading].filter(Boolean).join(' · ')
+}
+
+/** 引用条目的展示要素。
+ *  两类来源的「第三格」含义不同：消息是**发生时间**（用户靠它认那条聊天），
+ *  文件是**文件类型** —— 文件没有发生时间，写成 1970-01-01 才是撒谎。 */
+function CiteFacts({ c, index }: { c: CiteItem; index: number }): React.JSX.Element {
+  const kb = c.source === 'kb' ? c.kb : undefined
+  if (kb) {
+    return (
+      <>
+        <span className={css.citeIdx}>[{index}]</span>
+        <span className={css.citeName} title={kb.fileName}>{kb.fileName}</span>
+        <span className={css.citeTime}>{kb.fileExt ? kb.fileExt.toUpperCase() : '文件'}</span>
+        {/* 面包屑优先于摘要：核对「是不是这一段」靠章节与页码，而摘要在文件里到处都是。 */}
+        <span className={css.citeSnippet}>{kbCrumb(kb) || c.snippet}</span>
+      </>
+    )
+  }
+  return (
+    <>
+      <span className={css.citeIdx}>[{index}]</span>
+      <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
+      <span className={css.citeTime}>{c.time}</span>
+      <span className={css.citeSnippet}>{c.snippet}</span>
+    </>
+  )
+}
+
+/** 引用来源：2 列网格 + 默认折叠前 4 条（20 条平铺会吞没整屏）。
+ *  回答正文里真正引用过的来源会高亮标记 —— 否则「来源 20 条」里哪些被用到了
+ *  只能靠用户在答案里逐个对 [n]，等于没标。
+ *
+ *  ── 两类来源混在同一个编号里（本轮新增）───────────────────────────
+ *  编号仍是**一套**（消息在前、文件在后，顺序由后端决定）：模型在答案里写的 `[3]`
+ *  必须只有一个含义，分成两套编号会让 `[3]` 有两种解释。
+ *  但渲染上两者要一眼可分 —— 去向不同（消息→会话、文件→知识库·文件），
+ *  长得一样会让用户以为点错了地方（`data-src` 上色，见 ask.module.css）。 */
+export function CiteList({ items, cited, onOpen, onOpenKbFile, answer }: {
   items: NonNullable<AskResult['citations']>
   cited?: number[]
   onOpen?: (username: string, localId?: number) => void
+  /** 知识库来源的跳转（跳到「知识库 · 文件」并选中那个文件）。
+   *  不传时文件来源渲染成**只读块**：它的 `username` 是 `kb:<库>:<文件>` 这种合成键
+   *  （检索侧为了让同文件分块归组而造的），拿去当会话开会打开一个不存在的会话，
+   *  而且**不报错** —— 页面只是空着。 */
+  onOpenKbFile?: (kbId: number, fileId: number) => void
   /** 对应的回答正文：用于「回答里的金额在所引原文里找不到」的接地提示（见 utils/grounding.ts）。 */
   answer?: string
 }): React.JSX.Element {
@@ -151,21 +194,51 @@ export function CiteList({ items, cited, onOpen, answer }: {
         <div className={css.citeWarn} role="note">⚠ {groundWarn}</div>
       ) : null}
       <div className={css.citeGrid}>
-        {shown.map((c, ci) => (
-          <button
-            key={`${c.username}:${c.local_id}:${ci}`}
-            type="button"
-            className={css.citeBtn}
-            data-cited={citedSet.has(ci + 1) || undefined}
-            onClick={() => { onOpen?.(c.username, c.local_id) }}
-            title={`${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
-          >
-            <span className={css.citeIdx}>[{ci + 1}]</span>
-            <span className={css.citeName}>{c.sender ? `${c.name} · ${c.sender}` : c.name}</span>
-            <span className={css.citeTime}>{c.time}</span>
-            <span className={css.citeSnippet}>{c.snippet}</span>
-          </button>
-        ))}
+        {shown.map((c, ci) => {
+          const citedMark = citedSet.has(ci + 1) || undefined
+          const facts = <CiteFacts c={c} index={ci + 1} />
+          // 「点了去哪」只由 citeTarget 决定（问答面板 / 会话内问答 / 历史弹窗共用一份判定）。
+          const target = citeTarget(c)
+          const key = `${c.source ?? 'msg'}:${c.username ?? ''}:${c.local_id ?? 0}:${ci}`
+          if (target?.kind === 'kb') {
+            const kb = c.kb
+            const crumb = kb ? kbCrumb(kb) : ''
+            const tip = `知识库文件《${kb?.fileName ?? c.name}》${crumb ? ' · ' + crumb : ''} · ${c.snippet}`
+            if (!onOpenKbFile) {
+              return (
+                <div key={key} className={css.citeBtn} data-src="kb" data-cited={citedMark} title={`${tip}（在「知识库 · 文件」里查看）`}>
+                  {facts}
+                </div>
+              )
+            }
+            return (
+              <button
+                key={key}
+                type="button"
+                className={css.citeBtn}
+                data-src="kb"
+                data-cited={citedMark}
+                onClick={() => { onOpenKbFile(target.kbId, target.fileId) }}
+                title={tip}
+              >
+                {facts}
+              </button>
+            )
+          }
+          return (
+            <button
+              key={key}
+              type="button"
+              className={css.citeBtn}
+              data-cited={citedMark}
+              data-src={target === null ? 'unknown' : undefined}
+              onClick={() => { if (target?.kind === 'msg') onOpen?.(target.username, target.localId) }}
+              title={`${c.sender ? `${c.name} · ${c.sender}` : c.name} · ${c.time} · ${c.snippet}`}
+            >
+              {facts}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -185,7 +258,7 @@ const INTENT_LABEL: Record<string, string> = {
 }
 
 /** 召回通道的短标签。 */
-const CH_LABEL: Record<string, string> = { sparse: '稀疏', dense: '稠密', structured: '结构化' }
+const CH_LABEL: Record<string, string> = { sparse: '稀疏', dense: '稠密', structured: '结构化', kb: '知识库' }
 
 /**
  * 检索漏斗行：把「这次回答到底怎么检索出来的」摊开。
@@ -377,7 +450,20 @@ export function AnswerFeedback({ turn, patch }: {
  * @param props - optional chat navigation callback.
  * @returns the ask panel element tree.
  */
-export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
+/**
+ * Render the WeChat Q&A panel.
+ * @param props.onOpenChat - 消息引用的跳转（打开会话并定位到那条消息）。
+ * @param props.onOpenKbFile - 知识库引用的跳转（切到「知识库 · 文件」并选中该文件）。
+ * @returns the ask panel element tree.
+ */
+export function AskPanel({ onOpenChat, onOpenKbFile }: {
+  onOpenChat?: (username: string, localId?: number) => void
+  /** 不传时文件引用渲染成只读块（绝不拿去开会话）。 */
+  onOpenKbFile?: (kbId: number, fileId: number) => void
+} = {}): React.JSX.Element {
+  // 当前知识库：沉淀为笔记时默认存到这里，编辑器里可以就地改 ——
+  // 「沉淀完才发现该归到另一个库」是这个入口最常见的补正，所以这里必须能改。
+  const { kbId } = useKbScope()
   const [sessions, setSessions] = useState<readonly WechatSession[]>([])
   /**
    * 当前模型（provider · model）：底部隐私说明要写清"片段会发给谁"。
@@ -389,17 +475,31 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
   const [scopeUsername, setScopeUsername] = useState('')
   /** 「沉淀为笔记」编辑器：把某轮回答存成知识笔记（prefill 标题/正文/来源问题）。 */
   const [distill, setDistill] = useState<{ open: boolean; title?: string; body?: string; question?: string }>({ open: false })
+  /**
+   * 「历史记录」弹窗开关。
+   *
+   * 历史由**后端**在每次回答产出时自动落库（见 `query/ask-history.ts`），
+   * 前端不参与写入 —— 前端只持有当前线程的 turns（清空对话即丢、关窗即没），
+   * 靠它存历史必然漏。
+   */
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [question, setQuestion] = useState('')
+  /** 当前会话范围的显示名：写进问答历史，历史列表可直接显示而不用再查会话表。 */
+  const scopeDisplayName = scopeUsername
+    ? (sessions.find(s => s.username === scopeUsername)?.displayName || scopeUsername)
+    : ''
   /** 多轮对话状态（turns/asking/streamText/error）统一由问答 hook 提供。 */
   const { turns, asking, streamText, error, ask: askSession, reset: resetThread, patchTurn, clearError } = useAskSession({
     ...(scopeUsername ? { scopeUsername } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
+    source: 'ask',
+    // 只有这一处开知识库：会话内问答（SessionAsk）不该把文件掺进「这个群说过什么」。
+    useKb: true,
+    ...(scopeDisplayName ? { scopeUsernameName: scopeDisplayName } : {}),
   })
-  /** 检索设置侧栏：模型配置已迁到「数据配置」页面，这里只剩检索参数。 */
-  const [retrOpen, setRetrOpen] = useState(false)
   // 读一次模型配置（读本机 llm.json，很轻）：只用于底部那行"发给谁"。
   useEffect(() => {
     let cancelled = false
@@ -411,9 +511,6 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
     })()
     return () => { cancelled = true }
   }, [])
-  /** 侧栏与触发 chip 的引用（用于「点击外部收起」判定）。 */
-  const retrRef = useRef<HTMLDivElement | null>(null)
-  const retrChipRef = useRef<HTMLButtonElement | null>(null)
   /** 提问优化：加载态 + 结果（优化后的问题与建议）+ 错误。 */
   const [optLoading, setOptLoading] = useState(false)
   const [optResult, setOptResult] = useState<AskOptimizeResult | null>(null)
@@ -447,29 +544,6 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
       requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
     }
   }, [turns, asking])
-
-  /** 检索设置侧栏开着时：Esc / 点击外部收起。
-   *  「外部」= 侧栏与触发 chip 之外；Radix 下拉挂在 body 的 portal 里，不算外部。
-   *  点「可交互元素」豁免：点输入框/按钮应直接操作，不因 mousedown 引起的回流让本次 click 丢失。
-   *  点空白背景 = 明确的收起意图 → 收起。 */
-  useEffect(() => {
-    if (!retrOpen) return
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setRetrOpen(false) }
-    const onDown = (e: MouseEvent): void => {
-      const t = e.target as Node | null
-      if (!t) return
-      if (retrRef.current?.contains(t) || retrChipRef.current?.contains(t)) return
-      if (t instanceof Element && t.closest('[role="listbox"],[role="option"],[data-radix-popper-content-wrapper]')) return
-      if (t instanceof Element && t.closest('button, input, textarea, select, a, [role="button"], [contenteditable]')) return
-      setRetrOpen(false)
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onDown)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onDown)
-    }
-  }, [retrOpen])
 
   /** 提问优化：调后端 LLM 改写问题 + 给改进建议（结果内联展示，不弹窗）。 */
   const optimizeQuestion = useCallback(async (): Promise<void> => {
@@ -544,9 +618,9 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
 
   return (
     <div className={kitCss.panelShell}>
-      {/* 两栏布局：对话栏 + （按需）检索设置栏。两栏都是常规流内元素 ——
-          没有 fixed / z-index / 遮罩，因此不存在「谁盖住谁」的可能。 */}
-      <div className={css.askLayout} data-side-open={retrOpen || undefined}>
+      {/* 单栏布局：检索设置侧栏已移除（检索参数固化为内置默认，见
+          docs/rag/RAG-ARCHITECTURE.md §11），这里只剩对话栏。 */}
+      <div className={css.askLayout}>
       <div className={css.askPage}>
       <PanelHeader
         title="微信问答"
@@ -556,6 +630,22 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
             <Badge tone={noCorpus ? 'amber' : 'cyan'}>
               {!sessionsLoaded ? '会话载入中…' : noCorpus ? '无可检索会话' : `${sessions.length} 个会话可检索`}
             </Badge>
+            {/* 「历史记录」常驻可见、不受当前对话有无轮次影响 —— 历史是**跨会话累积**的，
+                刚打开面板还没提问时，恰恰是最想回看上次问过什么的时刻。 */}
+            <button
+              type="button"
+              className={css.headerHistory}
+              data-open-ask-history=""
+              onClick={() => { setHistoryOpen(true) }}
+              title="查看历史问答记录（每一次问答都会自动保存）"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                <path d="M3 4v4h4" />
+                <path d="M12 8v4l3 2" />
+              </svg>
+              历史记录
+            </button>
             {userTurnCount > 0 && (
               <button type="button" className={css.headerClear} onClick={clearConversation} title="清空全部对话轮次">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -612,20 +702,6 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
         )}
         <span className={css.ctxSpacer} />
         {hasScope && <span className={css.ctxHint} title="当前回答只基于以上范围内的聊天片段">已限定范围</span>}
-        {/* 检索设置：模型配置已迁到「数据配置」，这里只剩检索参数与离线评估。 */}
-        <button
-          type="button"
-          ref={retrChipRef}
-          className={css.ctxChip}
-          data-open={retrOpen || undefined}
-          onClick={() => { setRetrOpen(v => !v) }}
-          aria-expanded={retrOpen}
-          title="检索设置：通道开关 / 阈值 / 向量索引 / 离线评估 / 反馈统计"
-        >
-          <ScopeIcon kind="retrieval" />
-          <span className={css.ctxChipName}>检索</span>
-          <span className={css.ctxCaret} aria-hidden="true">▾</span>
-        </button>
       </div>
       {timeOpen && (
         <div className={css.scopePanel}>
@@ -703,7 +779,7 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
                     <div className={css.chatAnswer}>{t.text}</div>
                     <BasisLine basis={t.basis} />
                     {(t.citations?.length ?? 0) > 0 && (
-                      <CiteList items={t.citations!} cited={t.citedIndexes} onOpen={onOpenChat} answer={t.text} />
+                      <CiteList items={t.citations!} cited={t.citedIndexes} onOpen={onOpenChat} onOpenKbFile={onOpenKbFile} answer={t.text} />
                     )}
                     <AnswerFeedback turn={t} patch={(p) => { patchTurn(i, p) }} />
                     {/* 沉淀入口刻意放在 AnswerFeedback **之外**：后者在没有引用时返回 null，
@@ -830,7 +906,7 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
       {/* ⑤ 隐私说明：输入框下方次级小字（常驻底部，不随对话滚动）。
           「所选模型」要说清是哪一支：用户判断"这句话会不会发出去、发给谁"就靠这一行。 */}
       <div className={css.privacyNote}>
-        🔒 检索在本机完成；AI 生成会把检索片段发送到
+        🔒 检索在本机完成；AI 生成会把检索到的片段（聊天记录与知识库文件）发送到
         {model ? <>「<b>{model.provider} · {model.model}</b>」</> : '当前配置的模型'}
         {model && model.model.trim() === '' ? '（尚未配置，需先在「设置 → AI 大模型」里填写）' : ''}
         （可在「设置 → 数据边界与出网」中关闭出网）
@@ -840,13 +916,11 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
       {/* 模型配置已迁到「数据配置」页面（AiModelConfig）：全应用只在那一处设置模型，
           避免同一份 llm.json 在多个面板各配一遍、彼此不一致。 */}
 
-      {/* 检索设置栏：与对话栏并排（同一车道，只在打开时渲染）。 */}
-      {retrOpen && (
-        <RetrievalPanel open={retrOpen} onClose={() => { setRetrOpen(false) }} containerRef={retrRef} />
-      )}
-
-      {/* 「沉淀为笔记」编辑器：sourceKind='ask' + 当前会话范围，构成知识图谱连到人的那条边。 */}
+      {/* 「沉淀为笔记」编辑器：sourceKind='ask' + 当前会话范围，构成知识图谱连到人的那条边。
+          `allowKbPick`：沉淀时常常才发现该归到另一个库，所以这里要能看见并改目标库。 */}
       <KnowledgeNoteEditor
+        kbId={kbId}
+        allowKbPick
         open={distill.open}
         initialTitle={distill.title ?? ''}
         initialBody={distill.body ?? ''}
@@ -855,6 +929,21 @@ export function AskPanel({ onOpenChat }: { onOpenChat?: (username: string, local
         {...(distill.question ? { sourceQuestion: distill.question } : {})}
         onClose={() => { setDistill({ open: false }) }}
         onSaved={() => { setDistill({ open: false }) }}
+      />
+
+      {/* 「历史记录」弹窗：内容由后端在每次回答产出时自动累积，这里只读 / 删。
+          `onAskAgain` 把历史里那条问题填回输入框而**不自动发送** —— 回看历史最常见的
+          下一步确实是「再问一遍」，但自动发送会让用户失去改措辞的机会。 */}
+      <AskHistoryDialog
+        open={historyOpen}
+        onClose={() => { setHistoryOpen(false) }}
+        onOpenCitation={onOpenChat}
+        onAskAgain={(q) => {
+          setQuestion(q)
+          clearError()
+          setHistoryOpen(false)
+          taRef.current?.focus()
+        }}
       />
       </div>
     </div>

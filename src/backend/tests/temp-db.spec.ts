@@ -83,7 +83,11 @@ describe('N26：临时库夹具助手', () => {
 
       const r = await removeDirWithRetry(ws.dir, { attempts: 4, delayMs: 1 })
       expect(r.ok, '裸连接还开着却能删掉 —— 本用例的前提（Windows 锁文件）在这个环境不成立').toBe(false)
-      expect(r.code).toBe('EPERM')
+      // 错误码只接受「删不掉」这一类：本机 Node 22 / Win11 实测报 EBUSY（目录里还有被
+      // 占用的文件），文档里写过的 EPERM 是另一台机器的记录。两者都表示「锁住了」；
+      // 若这里变成 undefined 或别的东西，说明前提变了 —— 那才是该红的时候。
+      // 本用例真正钉的是「重试救不回来」（r.ok === false），错误码不承担这个职责。
+      expect(['EPERM', 'EBUSY'], `删不成但错误码是 ${r.code}，前提可能变了`).toContain(r.code)
       expect(existsSync(ws.dir), '失败时目录应原样留在 %TEMP%（fail 有痕迹，不是静默）').toBe(true)
 
       // 关掉之后立刻就能删 —— 证明瓶颈就是「连接是否关闭」，与重试次数无关

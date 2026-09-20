@@ -197,10 +197,40 @@
 .legendDot { width: 8px; height: 8px; border-radius: 50%; background: rgba(55, 66, 82, 0.8);
   corner-shape: round;
 }
+/* 知识图谱的笔记节点图例：紫色实心圆，与画布上的笔记节点同色系、同形状。
+   原先复用 .legendDot（深灰圆）+ 文案「紫方块」—— 形状和颜色都是错的。 */
+.legendDotNote { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-purple);
+  corner-shape: round;
+}
 .legendLine { width: 18px; height: 2px; border-radius: 2px; background: rgba(125, 135, 155, 0.6); }
 .legendLineBlue { width: 18px; height: 2px; border-radius: 2px; background: rgba(22, 140, 220, 0.6); }
+/* 金虚线 = 同备注编号（与画布的 edgeClass 虚线同义，图例本身也画成虚线） */
+.legendLineGold { width: 18px; height: 2px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, rgba(214, 148, 24, 0.9) 0 4px, transparent 4px 7px);
+}
+/* 蓝虚线 = 首字相同（与画布的 edgeInitial 同义）。
+   与「蓝实线 = 与我亲密度」同色系，靠**虚线**区分 —— 图例的措辞也必须写出「实线/虚线」。 */
+.legendLineBlueDash { width: 18px; height: 2px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, rgba(30, 150, 230, 0.95) 0 4px, transparent 4px 7px);
+}
 .legendBar { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(55, 66, 82, 0.7);
   corner-shape: round;
+}
+/* 文档实体层三类的图例色。刻意用**字面色值**而不是 `docColors()` 的那套：图例只有一套
+   （画布按主题切换取深/浅两支），这里给的是浅色档 —— 与 `.legendDotNote` 用 `--nm-purple`
+   同一处理方式（那个 token 也正是浅色档）。改动 `docColors` 时记得同步这里。 */
+.legendDotFile { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-cyan);
+  corner-shape: round;
+}
+.legendDotSection { width: 8px; height: 8px; border-radius: 50%; background: #7d8797;
+  corner-shape: round;
+}
+/* 琥珀 = 「这是模型说的」。与虚线边同一族语言：图上凡是琥珀的都不可当原文引用。 */
+.legendDotEntity { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-amber);
+  corner-shape: round;
+}
+.legendLineAmberDash { width: 18px; height: 2px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--nm-amber) 0 4px, transparent 4px 7px);
 }
 
 /* ── 右侧控制面板 ── */
@@ -261,6 +291,9 @@
   corner-shape: round;
 }
 .detailChip:hover { background: rgba(22, 163, 235, 0.15); color: var(--nm-cyan); }
+/* 同班级名册里「被挡在图外」的成员：不可点，压暗提示它没参与连边 */
+.detailChip[data-dim] { opacity: 0.45; cursor: default; }
+.detailChip[data-dim]:hover { background: none; color: inherit; }
 
 /* 最亲近排行 */
 .rank {
@@ -467,6 +500,72 @@
   .statBar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/*
+ * 窄窗口 / 小屏（2026-09-17 社交图谱并入「通讯录」时补）。
+ *
+ * 为什么现在要补：图谱主体是「画布 + 固定 252px 右侧控制栏」的横向两栏，
+ * 控制栏 `flex-shrink: 0` 意味着窗口再窄它也不让位 —— 画布被一路压到没有可用宽度，
+ * 而节点半径是**与画布尺寸无关的绝对值**，于是节点全挤成一团（不是缩小，是重叠）。
+ * 之前它占满整个内容区、且用户可手动收起控制栏，问题不容易暴露；并入通讯录后
+ * 上方多了一条分段条、内容区更矮，这条规则就必须显式写出来。
+ *
+ * 处理取向与其它合并组在窄屏下的做法一致：宁可让用户纵向滚一下，
+ * 也不把主视图（这里是画布）压成一条缝。
+ *   · `.stage` 的 min-height 是画布的地板 —— 纵向堆叠后若不给下限，
+ *     `flex: 1` 会被控制栏的内容高度挤到接近 0；
+ *   · `.rail` 原本 `flex-shrink: 0`（横向布局里那是「固定 252px」的意思），
+ *     纵向堆叠后必须允许收缩，否则它按内容高度把画布顶出容器。
+ */
+@media (max-width: 900px) {
+  .body { flex-direction: column; }
+  .stage { min-height: 260px; }
+  .rail {
+    width: auto;
+    flex-shrink: 1;
+    max-height: 45%;
+  }
+}
+
+/*
+ * 画布内两个底部浮层（图例 / 小地图）的避让 —— 同样是并入时补的。
+ *
+ * 画布宽度掉到 800px 以下后，底部两个浮层必然撞在一起：
+ *   · `.legend` 是**单行胶囊**（`display:flex` 且没有 `flex-wrap`），宽度不受约束 ——
+ *     空间不够时 flex 会去压每个 `<span>` 的文字，中文于是变成**一个字一行**的竖条，
+ *     图例既读不了、又变成一堵盖住画布左下的墙；
+ *   · `.minimap` 是固定 148px 且 `z-index: 5`，正好压在图例右端上。
+ * 单独把控制栏改纵排（上面那条 900px）**解决不了**这个：那是 `.body` 的布局，
+ * 而这两个浮层是 `.stage` 的绝对定位子元素，与两栏/一栏无关。
+ *
+ * 取向：图例改成占满画布宽度 + 允许换行（**必须同时给 `right`** ——
+ * 只给 `flex-wrap` 而不约束宽度，flex 行仍会被无限压缩，文字继续逐字折行）；
+ * 小地图移到右上角空处，底部整条留给图例。两者都保留，不隐藏任何信息。
+ */
+@media (max-width: 820px) {
+  .legend {
+    left: 8px;
+    right: 8px;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 6px 10px;
+    border-radius: 12px;
+  }
+  /*
+   * 小地图只改**位置**，不改尺寸 —— 尺寸写在这里是死代码：
+   * `GraphCanvas.tsx` 在 resize 时把 148×96（与 dpr 后的位图一起）直接写成**行内样式**
+   * （`mini.style.width = '148px'`），行内样式优先于任何选择器。
+   * 实测过：本块里写 `width: 104px; height: 68px` 完全不生效（量到仍是 148×96），
+   * 而 `top`/`bottom`/`right` 因为 JS 没碰、能正常生效。
+   * 而且真要缩小也**不该只改 CSS**：位图尺寸是 JS 按 148×96×dpr 分配的，
+   * 只用 CSS 缩会让小地图变糊 —— 那属于改 JS，不在这次并入的范围内。
+   */
+  .minimap {
+    top: 8px;
+    right: 8px;
+    bottom: auto;
+  }
+}
+
 /* ── 知识笔记：侧栏列表 + 编辑器弹层 ───────────────────────────────
    配色刻意避开社区色盘：知识节点用紫系（--nm-purple），与「人/群」的社区色
    在视觉上分属两套，避免看图谱时把笔记误认成某个圈子。 */
@@ -517,65 +616,7 @@
 .noteEdit:hover { color: var(--nm-purple); background: rgba(155, 109, 255, 0.14); }
 .noteDel:hover { color: #ef6f6c; background: rgba(239, 111, 108, 0.14); }
 
-.noteBackdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(4, 8, 18, 0.55);
-}
-.noteCard {
-  width: min(620px, calc(100vw - 48px));
-  max-height: calc(100vh - 80px);
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
-  background: var(--nm-bg-card, var(--nm-bg-glass));
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  box-sizing: border-box;
-}
-.noteCardTitle {
-  color: var(--nm-text-1);
-  font-size: 13px;
-  font-weight: 700;
-}
-.noteInput,
-.noteTextarea {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: rgba(128, 138, 156, 0.08);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-.noteTextarea {
-  font-family: var(--nm-font-mono, monospace);
-  line-height: 1.55;
-  resize: vertical;
-}
-.noteInput:focus,
-.noteTextarea:focus { border-color: var(--nm-purple); }
-.noteHint {
-  color: var(--nm-text-2);
-  font-size: 11px;
-  line-height: 1.5;
-}
-.noteError { color: #ef6f6c; font-size: 12px; }
-.noteActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 2px;
-}
+/* 笔记编辑器（原 .noteBackdrop / .noteCard / .noteInput / …）已于 2026-09-19 搬去
+   `note-editor.module.css`：它原先借用这张图谱样式表，而两者除了都叫「知识」毫无关系；
+   搬走之后编辑器的弹层骨架交给 kit 的 Dialog，这里只留图谱自己的东西。 */
 

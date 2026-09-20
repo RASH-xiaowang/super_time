@@ -23,7 +23,9 @@ export declare function queryRecords(decryptedDir: string, kind: string, limit?:
  * @param limit - max rows (default 200, capped 500).
  * @returns the revoked snapshot.
  */
-export declare function queryRevoked(decryptedDir: string, limit?: number, offset?: number): {
+export declare function queryRevoked(decryptedDir: string, limit?: number, offset?: number, 
+/** 关键词：匹配撤回内容 / 发送者 id。放在服务端，避免只搜到已加载那一页。 */
+q?: string): {
     items: Array<{
         sender: string;
         type_label: string;

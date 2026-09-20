@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiAskWechat } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
+import { getActiveKbId } from './kb-scope.ts'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
 
 /** 一轮对话（用户提问或助手回答）。 */
@@ -45,6 +46,23 @@ export interface UseAskSessionOptions {
   to?: string
   /** 线程键：变化即切到另一份独立对话（默认 'default'）。 */
   threadKey?: string
+  /**
+   * 写进「问答历史」的入口来源：'ask'（微信问答页签）/ 'session'（会话内问答）。
+   * 缺省由后端按 'ask' 处理 —— 这里传是为了让历史列表能区分「在哪问的」。
+   */
+  source?: string
+  /** 会话显示名：写进历史记录，列表可直接显示（不必再查会话表）。 */
+  scopeUsernameName?: string
+  /**
+   * 是否把**当前知识库**的文件块一并检索（缺省 false）。
+   *
+   * 只有「微信问答」页签打开它：会话内问答（`SessionAsk`）的范围是那一场聊天，
+   * 往里掺文件会让「这个群里谁说过」答成文件里的内容。
+   *
+   * 库 id 不在这里传：它在**提问那一刻**读（`getActiveKbId()`）。线程可以跨库续问，
+   * 渲染时定格会让第二轮问的还是切库前的那个库。
+   */
+  useKb?: boolean
 }
 
 /** hook 返回值。 */
@@ -68,9 +86,8 @@ export interface UseAskSessionResult {
  * @returns 线程状态与操作。
  */
 export function useAskSession(options: UseAskSessionOptions = {}): UseAskSessionResult {
-  const { scopeUsername, from, to } = options
+  const { scopeUsername, from, to, source, scopeUsernameName, useKb } = options
   const key = options.threadKey ?? 'default'
-
   const [threads, setThreads] = useState<Record<string, AskTurn[]>>({})
   const [asking, setAsking] = useState(false)
   const [streamText, setStreamText] = useState('')
@@ -83,8 +100,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
   // 最新线程快照：ask() 里要据它拼多轮历史，直接读 state 会拿到过期闭包。
   const threadsRef = useRef(threads)
   threadsRef.current = threads
-  const scopeRef = useRef({ scopeUsername, from, to })
-  scopeRef.current = { scopeUsername, from, to }
+  const scopeRef = useRef({ scopeUsername, from, to, source, scopeUsernameName, useKb })
+  scopeRef.current = { scopeUsername, from, to, source, scopeUsernameName, useKb }
 
   /** 流式回答增量：后端把「已生成的全文」按 80ms 节流推过来，这里整体替换。 */
   useEffect(() => {
@@ -125,14 +142,20 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     const history = prevTurns.map(t => ({ role: t.role, content: t.text }))
     setTurnList(k, prev => [...prev, { role: 'user', text: q }])
     try {
-      const { scopeUsername: su, from: f, to: t2 } = scopeRef.current
+      const { scopeUsername: su, from: f, to: t2, source: src, scopeUsernameName: suName, useKb: withKb } = scopeRef.current
+      // 知识库 id 在提问这一刻读 —— 见 UseAskSessionOptions.useKb 的说明。
+      const kbId = withKb ? getActiveKbId() : 0
       const r = await apiAskWechat({
         question: q,
         streamId,
         ...(su ? { username: su } : {}),
         ...(f ? { from: f } : {}),
         ...(t2 ? { to: t2 } : {}),
+        ...(src ? { source: src } : {}),
+        ...(suName ? { usernameName: suName } : {}),
         ...(history.length > 0 ? { history } : {}),
+        // 只在明确开启时带：不传 = 本次不检索知识库（不是「搜所有库」）
+        ...(kbId > 0 ? { kbId } : {}),
       })
       setTurnList(k, prev => [...prev, {
         role: 'assistant',

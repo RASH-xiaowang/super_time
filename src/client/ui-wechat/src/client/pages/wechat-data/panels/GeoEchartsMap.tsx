@@ -6,7 +6,7 @@
  * a region on click. Fetch/init failures call `onFallback` so the parent can
  * show the offline SVG map instead.
  */
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { MapChart } from 'echarts/charts'
 import { TooltipComponent, VisualMapComponent } from 'echarts/components'
@@ -14,7 +14,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import { fetchFirstJson, type WorldGeoFeature } from './world-map-data.ts'
 import { tokenColor } from '../utils/theme-color.ts'
-import { getThemeMode, subscribeThemeMode } from '../theme.ts'
+import { useThemeMode } from '../theme.ts'
 import css from './world-map.module.css'
 
 echarts.use([MapChart, TooltipComponent, VisualMapComponent, CanvasRenderer])
@@ -60,7 +60,7 @@ export function GeoEchartsMap(props: GeoEchartsMapProps): React.JSX.Element {
   const elRef = useRef<HTMLDivElement | null>(null)
   const propsRef = useRef(props)
   // 图表配色取自主题令牌，切换主题后必须重建 option 才会换色。
-  const themeMode = useSyncExternalStore(subscribeThemeMode, getThemeMode)
+  const themeMode = useThemeMode()
 
   useEffect(() => {
     propsRef.current = props

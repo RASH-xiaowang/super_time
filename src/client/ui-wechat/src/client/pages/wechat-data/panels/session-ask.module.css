@@ -3,8 +3,12 @@
    默认固定宽度，全屏态由 data-full + chats.module.css 的规则接管。 */
 
 .panel {
-  flex: 0 0 384px;
-  min-width: 0;
+  /* 可收缩：窗口变窄时本面板按比例收窄，而不是把消息列挤到 0 之后整行溢出。
+     下限 300px —— 引用网格在这个宽度下已切成单列（见 ask.module.css 的 @container），
+     输入区/头部都是弹性布局，300px 仍然放得下。
+     宽窗口下 basis 384 + 不增长 → 宽度仍是 384px，观感与原先完全一致。 */
+  flex: 0 1 384px;
+  min-width: 300px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--nm-border);
@@ -64,7 +68,7 @@
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
 }
 .introTitle { font-size: 17px; font-weight: 600; color: var(--nm-text-1); }
-.introSub { font-size: 12px; line-height: 1.6; color: var(--nm-text-3); }
+.introSub { font-size: 12px; line-height: 1.6; color: var(--nm-text-3); overflow-wrap: anywhere; }
 .sugList { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .sugCard {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -75,7 +79,7 @@
   transition: var(--nm-t-ui);
 }
 .sugCard:hover { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
-.sugText { min-width: 0; }
+.sugText { min-width: 0; overflow-wrap: anywhere; }
 .sugArrow { flex-shrink: 0; color: var(--nm-text-3); display: inline-flex; }
 
 /* ── 对话流 ── */
@@ -88,11 +92,15 @@
   border: 0.5px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
   border-radius: 12px 12px 3px 12px;
   white-space: pre-wrap; word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .turnAi { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .aiAnswer {
   font-size: 13px; line-height: 1.7; color: var(--nm-text-1);
   white-space: pre-wrap; word-break: break-word;
+  /* 384px 的面板常遇到不带空格的长串（URL / wxid / 哈希 / 路径）：
+     只写 word-break 时该项仍按「不可断」参与最小内容尺寸计算，会顶出容器。 */
+  overflow-wrap: anywhere;
 }
 .aiAnswer[data-streaming] { color: var(--nm-text-1); }
 .caret {
@@ -104,6 +112,8 @@
 .pending {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 12px; color: var(--nm-text-3);
+  /* 面板收窄时文案换行，而不是把面板顶宽（inline-flex 的自动最小尺寸会这么做）。 */
+  min-width: 0; flex-wrap: wrap;
 }
 .dots {
   width: 8px; height: 8px; border-radius: 50%;
@@ -118,6 +128,7 @@
   font-size: 12px; line-height: 1.5; color: var(--nm-danger);
   background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
   border-radius: 6px; flex-shrink: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ── 输入区 ──

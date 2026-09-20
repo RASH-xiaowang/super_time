@@ -78,6 +78,19 @@ export function invalidateSnapshotCache(): void {
   for (const set of _snapshotListeners.values()) for (const fn of set) { try { fn() } catch { /* ignore */ } }
 }
 
+/**
+ * Drop one snapshot entry, and notify its subscribers (who then refetch).
+ *
+ * 为什么需要「按键」而不只是「清全部」：知识库**表**的变化（新建 / 改名 / 删除）
+ * 只让库列表那一条失效，与聊天、朋友圈等面板的快照无关。用 `invalidateSnapshotCache()`
+ * 会把所有面板的缓存一起丢掉，下次切页时全体重新取数 —— 一个改名动作不该有这种代价。
+ * @param key - 快照键（与 `cachedGet` / `snapshotSet` 用同一个）。
+ */
+export function snapshotDelete(key: string): void {
+  _snapshotCache.delete(key)
+  for (const fn of _snapshotListeners.get(key) ?? []) { try { fn() } catch { /* ignore */ } }
+}
+
 if (typeof window !== 'undefined') {
   // The ui-wechat plugin relays the host realtime sync signal as this DOM event;
   // new decrypted data means every cached snapshot is stale, so drop them all.

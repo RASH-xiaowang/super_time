@@ -12,7 +12,14 @@
 .bar {
   flex: 0 0 auto;
   display: flex;
-  padding: 14px 0 0;
+  align-items: center;
+  /*
+   * 原为 `padding: 14px 0 0`。那 14px 是纯留白：外层 .content 已经给了 16px 内边距，
+   * 再叠一层就把分段条顶到「半空」，而且它比下面板内容还疏 —— 观感上变成
+   * 「条飘在上边、内容另起一段」。现在上方不留白（贴齐 .content 的内边距），
+   * 只在条与面板之间留一档 6px 收口，节奏与三页内部的紧凑刻度一致。
+   */
+  padding: 0 0 var(--nm-dense-g3);
 }
 
 .body {
@@ -20,9 +27,39 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /*
+   * 合并组的子面板上下内边距统一收一档。
+   *
+   * 为什么覆写变量而不是逐个改子面板：kit 的 `.panelShell` 与
+   * daily-summary / records / storage 自己的 `.panel` 都读同一个 `--nm-panel-pad`
+   * （这一点是上一轮引入 --nm-dense-* 时才统一的），所以在外壳上覆写一次
+   * 就能管住全部合并子面板，不必去动那 8 个面板各自的样式文件
+   * （其中 list-panel.module.css 还被 7 个非合并面板共用，改它必然波及外面）。
+   *
+   * 6px 的条下收口 + 这里的 8px，共 14px 把条与面板分开；原来是 16px 且另加
+   * 条上方 14px 留白 —— 留白总量从 30px 降到 14px，条本身也上移 14px。
+   */
+  --nm-panel-pad: var(--nm-dense-g4) 0;
 }
 
 .body > * {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/*
+ * 分段条右侧插槽（知识库的库切换器）。
+ *
+ * `margin-left: auto` 把它推到最右：分段条本身宽度是内容宽，插槽若紧跟其后会贴在
+ * 「知识图谱」右边，看起来像第三个分段 —— 而库是**上一层的作用域**，不是同一层的一种看法
+ * （「在甲库里点知识图谱」这种语义矛盾就是这么来的）。分居两端才表达出「看哪一份数据」
+ * 与「怎么看这份数据」是两件事。
+ * `min-width: 0` 让它在窄容器里可被压缩（Select 的触发器有自己的最大宽度）。
+ */
+.trailing {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g3);
+  min-width: 0;
 }

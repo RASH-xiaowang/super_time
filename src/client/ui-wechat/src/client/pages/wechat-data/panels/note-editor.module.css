@@ -1,0 +1,97 @@
+/* 笔记编辑器（新建 / 编辑）的自有样式。
+   弹层骨架（遮罩、卡片、标题栏与 ×、底部操作条、Esc、焦点收口）全部由 kit 的 Dialog 提供，
+   这里只剩表单控件本身 —— 原先这些规则寄住在 graph.module.css 里，与图谱共用一张样式表，
+   而两者除了都叫「知识」没有任何关系。 */
+
+.field,
+.body {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs);
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--nm-t-fast);
+}
+.field:focus,
+.body:focus { border-color: var(--nm-cyan); }
+
+/* 正文随内容长高，不再是一个固定 10 行的框：笔记正文常常是三五行的一句话，
+   10 行的空框既难看也让人以为「要写满」。`field-sizing` 不被支持时退回
+   min-height + 手动 resize，功能不受影响。 */
+.body {
+  field-sizing: content;
+  min-height: 96px;
+  max-height: 46vh;
+  line-height: 1.65;
+  resize: vertical;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hint {
+  color: var(--nm-text-2);
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.5;
+}
+
+.kbRow {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+}
+.kbLabel {
+  color: var(--nm-text-1);
+  font-size: var(--nm-dense-fs-sm);
+  flex: 0 0 auto;
+}
+.kbHint {
+  color: var(--nm-text-3);
+  font-size: var(--nm-dense-fs-xs);
+  flex: 1 1 140px;
+}
+
+.error {
+  color: var(--nm-danger);
+  font-size: var(--nm-dense-fs-sm);
+}
+
+/* ── 模型建议的链接（点击才插入）────────────────────────────────────
+   整条是**点一下才出网**的：正文边写边叫模型会把同一句话发几十遍，
+   而那时用户连自己要连什么都还没想清楚。 */
+.suggest {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g3);
+  flex-wrap: wrap;
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-text-2);
+}
+.suggestBtn {
+  padding: 3px 9px;
+  border: 1px solid var(--nm-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  cursor: pointer;
+}
+.suggestBtn:disabled { opacity: .5; cursor: default; }
+.suggestMeta { color: var(--nm-text-3); }
+/* 芯片与「模型实体」同用琥珀色系：屏幕上凡是这一族的东西都是「模型说的」，
+   不是自己写下的。真正的 [[链接]] 由下面那条 hint 复述。 */
+.chip {
+  padding: 2px 8px;
+  border: 1px dashed var(--nm-amber);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-amber) 10%, transparent);
+  color: var(--nm-text-1);
+  font: inherit;
+  cursor: pointer;
+}
+.chip:hover { background: color-mix(in srgb, var(--nm-amber) 20%, transparent); }

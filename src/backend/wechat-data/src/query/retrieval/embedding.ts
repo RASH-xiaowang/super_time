@@ -19,17 +19,31 @@
  *    SimHash 由固定种子随机超平面生成，索引与查询两侧一致，无需额外依赖。
  */
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RetrievedDoc } from './types.ts'
 import { retrievalRoot } from './config.ts'
 import { searchIndexPath, yieldToLoop } from '../search.ts'
+// 共用向量数学（与知识库向量库 `query/kb-vectors.ts` 同一份实现，见 `query/vector-math.ts`）：
+// 粗筛/哈希/归一化必须逐位一致，所以只留一处实现。`EmbedFn` 也从这里转出，
+// 保持 `gateway.ts` / `pipeline.ts` 既有的 `from './retrieval/embedding.ts'` 导入点不变。
+import {
+  MAX_HAMMING,
+  blobToVec,
+  getPlanes,
+  l2normalize,
+  popcount32,
+  selectByHamming,
+  simhash,
+  statSig,
+  vecToBlob,
+  type EmbedFn,
+  type HashRow,
+} from '../vector-math.ts'
+export type { EmbedFn, HashRow } from '../vector-math.ts'
 
 /** 向量库 schema 版本；结构或哈希算法变化时自动重建。 */
 const VECTOR_SCHEMA_VERSION = '1'
-
-/** 一次 embedding 请求的函数签名（由 gateway 注入，内部走 ctx.llm.embed）。 */
-export type EmbedFn = (texts: string[]) => Promise<number[][]>
 
 /** 向量库状态。 */
 export interface VectorIndexStatus {
@@ -186,84 +200,6 @@ export function vectorIndexStatus(decryptedDir: string): VectorIndexStatus {
   const status = readVectorIndexStatus(p)
   STATUS_CACHE.set(p, { sig, status })
   return { ...status }
-}
-
-// ── SimHash 随机超平面（按维度缓存；同一维度内进程生命周期内复用）──
-const PLANES_CACHE = new Map<number, Int8Array[]>()
-const SIMHASH_BITS = 64
-
-/** xorshift32 PRNG（确定性，保证索引/查询两侧同一维度的超平面一致）。 */
-function makeRng(seed: number): () => number {
-  let s = seed >>> 0 || 0x9e3779b9
-  return () => {
-    s ^= s << 13; s >>>= 0
-    s ^= s >>> 17
-    s ^= s << 5; s >>>= 0
-    return s >>> 0
-  }
-}
-
-/** 生成 SIMHASH_BITS 个随机超平面（每个长度 = dim）。 */
-function getPlanes(dim: number): Int8Array[] {
-  const cached = PLANES_CACHE.get(dim)
-  if (cached) return cached
-  const rng = makeRng(dim * 2654435761)
-  const planes: Int8Array[] = []
-  for (let b = 0; b < SIMHASH_BITS; b += 1) {
-    const p = new Int8Array(dim)
-    // 用 ±1 而非高斯：乘加更快，SimHash 性质足够（随机超平面的符号投影）。
-    for (let i = 0; i < dim; i += 1) p[i] = (rng() & 1) ? 1 : -1
-    planes.push(p)
-  }
-  PLANES_CACHE.set(dim, planes)
-  return planes
-}
-
-/** 计算向量的 64 位 SimHash（返回两个 32 位无符号整数表示的高/低位）。 */
-function simhash(vec: Float32Array, planes: Int8Array[]): { lo: number; hi: number } {
-  let lo = 0
-  let hi = 0
-  const dim = vec.length
-  for (let b = 0; b < planes.length; b += 1) {
-    const p = planes[b]
-    let dot = 0
-    for (let i = 0; i < dim; i += 1) dot += p[i] * vec[i]
-    if (dot >= 0) {
-      if (b < 32) lo |= (1 << b)
-      else hi |= (1 << (b - 32))
-    }
-  }
-  return { lo: lo >>> 0, hi: hi >>> 0 }
-}
-
-/** popcount（32 位）。 */
-function popcount32(x: number): number {
-  x = x - ((x >>> 1) & 0x55555555)
-  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333)
-  x = (x + (x >>> 4)) & 0x0f0f0f0f
-  return (x * 0x01010101) >>> 24
-}
-
-/** L2 归一化（余弦相似度 → 点积）。 */
-function l2normalize(v: number[]): Float32Array {
-  const f = Float32Array.from(v)
-  let n = 0
-  for (let i = 0; i < f.length; i += 1) n += f[i] * f[i]
-  n = Math.sqrt(n)
-  if (n > 1e-9) for (let i = 0; i < f.length; i += 1) f[i] /= n
-  return f
-}
-
-/** Float32Array → BLOB 字节。 */
-function vecToBlob(v: Float32Array): Uint8Array {
-  return new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
-}
-
-/** BLOB 字节 → Float32Array（复制，避免引用底层 buffer 被复用）。 */
-function blobToVec(b: Uint8Array, dim: number): Float32Array {
-  const copy = new Uint8Array(dim * 4)
-  copy.set(b.subarray(0, dim * 4))
-  return new Float32Array(copy.buffer)
 }
 
 /** docKey = `username:local_id`（与稀疏通道一致的去重键）。 */
@@ -579,70 +515,7 @@ async function runBuildVectorIndex(
 }
 
 // ── 内存粗筛表缓存：(dbPath, mtime) → {rowid, lo, hi}[] ──
-interface HashRow { rowid: number; lo: number; hi: number; username: string }
 const HASH_CACHE = new Map<string, { sig: string; rows: HashRow[] }>()
-
-/** 汉明距离的上界：两个 32 位 popcount 相加，最大 64。 */
-const MAX_HAMMING = 64
-
-/**
- * 按汉明距离取前 `pool` 个候选（稠密通道的粗筛）。
- *
- * 为什么不用 `map(...).sort(...).slice(...)`：粗筛表通常是**十几万行**（本地实测 13.5 万；
- * 另一处 `.all()` 的实测是 20 万行），而每个查询都要为每一行分配一个 `{r, d}` 对象、
- * 再做一次 O(N log N) 的**比较排序** —— 可是我们要的只是**前 pool 名**（pool 是几十到几百）。
- * 这里换成计数选择（计数排序的特例）：
- *   ① 一遍算距离，存进 `Uint8Array`（距离恒在 [0,64]，一字节够）并累加 65 格直方图；
- *   ② 用直方图找出「累计条数 ≥ pool」的那个距离 `limit`；
- *   ③ 再做一遍计数排序，把 `d <= limit` 的行按 **(距离升序, 原顺序)** 落位。
- *
- * 选出来的序列与「全量按距离升序排序后取前 pool」**逐项相同**（含同距离内的先后，
- * 因为计数排序是稳定的）—— 差别只在代价：零逐行分配、无比较排序、两次线性扫描。
- * `pool >= N` 时退化为整表，与原来一致。
- * @param rows - 粗筛表（`loadHashRows` 的结果）。
- * @param qh - 查询向量的 simhash。
- * @param pool - 要取多少个候选。
- * @returns 候选行（距离升序；同距离保持原表顺序）。
- */
-function selectByHamming(rows: readonly HashRow[], qh: { lo: number; hi: number }, pool: number): HashRow[] {
-  const n = rows.length
-  // pool 来自配置（`rag-config.json` 可手改，`deepMerge` 不做数值校验）：非有限值/小数/负数
-  // 都要归一到安全整数。旧实现靠 `slice` 天然容忍（`slice(0, 2000.5)` 截断成 2000、
-  // `slice(0, NaN)` 得空数组），而 `new Array(take)` 遇非整数会直接抛 RangeError。
-  // `Infinity` 要保留「取整表」的含义（`Math.floor(Infinity)` 仍是 Infinity，再被 min 夹到 n）——
-  // 别把它和 NaN 一起归零，那会与旧行为分叉。**唯一有意的分歧**：负数的 pool 旧实现是
-  // `slice(0, -k)`（返回「全部去掉后 k 条」，显然是笔误产物），新实现按 0 处理（返回空）。
-  const want = Number.isNaN(pool) ? 0 : Math.floor(pool)
-  const take = Math.min(Math.max(want, 0), n)
-  if (take <= 0) return []
-  const dist = new Uint8Array(n)
-  const hist = new Uint32Array(MAX_HAMMING + 1)
-  for (let i = 0; i < n; i += 1) {
-    const r = rows[i]
-    const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0)
-    dist[i] = d
-    hist[d] += 1
-  }
-  let limit = MAX_HAMMING
-  let cum = 0
-  for (let d = 0; d <= MAX_HAMMING; d += 1) {
-    cum += hist[d]
-    if (cum >= take) { limit = d; break }
-  }
-  // 计数排序（只排到 limit 组）：先算每组起始偏移，再按原顺序落位 —— 稳定。
-  const cursor = new Uint32Array(limit + 2)
-  let acc = 0
-  for (let d = 0; d <= limit; d += 1) { cursor[d] = acc; acc += hist[d] }
-  const order = new Uint32Array(acc)
-  const next = cursor.slice()
-  for (let i = 0; i < n; i += 1) {
-    const d = dist[i]
-    if (d <= limit) order[next[d]++] = i
-  }
-  const out: HashRow[] = new Array(take)
-  for (let k = 0; k < take; k += 1) out[k] = rows[order[k]]
-  return out
-}
 
 function loadHashRows(decryptedDir: string): HashRow[] {
   const p = vectorDbPath(decryptedDir)
@@ -667,16 +540,6 @@ function loadHashRows(decryptedDir: string): HashRow[] {
   db.close()
   HASH_CACHE.set(p, { sig, rows })
   return rows
-}
-
-/** 文件 mtime+size 指纹（粗筛表缓存的失效依据）。 */
-function statSig(p: string): string {
-  try {
-    const st = statSync(p)
-    return `${st.mtimeMs}:${st.size}`
-  } catch {
-    return 'missing'
-  }
 }
 
 /**

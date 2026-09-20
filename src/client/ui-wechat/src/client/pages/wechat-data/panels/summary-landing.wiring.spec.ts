@@ -63,7 +63,11 @@ describe('每日总结：空态把"怎么开始"说清楚', () => {
     expect(shell, 'WechatDataPanel 没有把 openSettings 传给面板').toContain('<DailySummaryPanel onOpenSettings={onOpenSettings} />')
     // renderTab 的形参里要有它，并且在调用处传进来
     expect(shell).toMatch(/clearMomentAuthor: \(\) => void,\s*\n\s*onOpenSettings: \(section\?: string\) => void,/)
-    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings\)/)
+    // 末尾三个形参是后续轮次加的，调用处必须逐个传 —— 漏传的表现是「点了没反应」，不报错：
+    //   · `seed`        —— 全局搜索命中带关键词跳转
+    //   · `openKbFile`  —— 知识库引用点开跳「知识库 · 文件」分段
+    //   · `kbFocus`     —— 跳过去之后要高亮的那个文件（含 nonce，便于同文件再点一次也能触发）
+    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings, seed, openKbFile, kbFocus\)/)
   })
 
   it('阅览页空态给一个出口（不是"还没有历史总结"就结束）', () => {

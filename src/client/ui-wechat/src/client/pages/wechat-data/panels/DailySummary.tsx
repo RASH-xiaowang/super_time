@@ -619,7 +619,10 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
 
               {form.format === 'custom' && (
                 <>
-                  <div className={`${css.hd} ${css.dsHdTop}`}><span className={kitCss.textMeta}>自定义提示词模板</span></div>
+                  {/* 与上面三处分组标签**同一形态**：改前这里用的是 `.hd`（16px 内边距 +
+                      渐变 + hover 的 hero 样式），一个行内标签撑出 32px 高，是弹窗里
+                      最显眼的一处无谓留白。 */}
+                  <div className={`${css.formHd} ${css.dsHdTop}`}><span className={kitCss.textMeta}>自定义提示词模板</span></div>
                   <textarea
                     className={`${css.search} ${css.dsPrompt}`}
                     rows={4}

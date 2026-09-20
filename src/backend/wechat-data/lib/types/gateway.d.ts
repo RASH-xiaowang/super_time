@@ -5,9 +5,14 @@
  */
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { Context } from '@deepseek-ai/cordis';
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
+import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbSearchResult, KbSummaryResult } from './types.ts';
+import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vectors.ts';
+import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts';
+import { type KbEntitySummary } from './query/kb/extract.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import { type AnnualReview } from './query/annual-review.ts';
+import type { KnowledgeSnapshotRead } from './query/notes.ts';
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
 interface ImageBatchItem {
     username: string;
@@ -57,6 +62,14 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * 两条审计），所以按内容键 + 时间窗去重（见 {@link ASK_FEEDBACK_DEDUPE_MS}）。
      */
     private readonly _askFeedbackSeen;
+    /**
+     * 按库向量索引的**在飞构建**进度（kbId → 进度），给面板的「语义索引」按钮轮询。
+     *
+     * 为什么是进程内而不是落库：这是「此刻有没有在跑、跑到哪」的瞬时态，落库就要处理
+     * 进程崩溃留下的假进行中（比不显示更糟）。真正的持久事实（多少块、哪个模型、何时建的）
+     * 在向量库自己的 meta 与行里，见 `kbVectorIndexStatus`。
+     */
+    private readonly _kbIndexJobs;
     /**
      * 已知实体名缓存（问答的「点名识别」用）：按解密目录记忆。
      *
@@ -147,14 +160,81 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     private askKnownEntities;
     /**
-     * 构造「过隐私闸门」的 embedding 函数（稠密检索通道用）。
+     * 构造「过隐私闸门」的 embedding 函数。
      *
      * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
      * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
+     *
+     * ⚠ `feature` 为什么是**参数**而不是写死 `ask_embed`：审计表按功能名分列，而这几处
+     * embedding 的**数据范围完全不同** —— 消息侧（`ask_embed`）只发检索到的聊天片段，
+     * 知识库侧（`kb_embed`）发的是用户选进知识库的**文件正文**，链接建议（`kb_link_suggest`）
+     * 发的是**用户正在写的笔记正文**加本库候选标题。写死同一个名字，
+     * 「我到底把哪一类东西发出去了」在审计里就分不开 —— 而用户完全可能只对其中一类给过同意。
      * @param model - 向量模型名（空则回退 chat model）。
+     * @param feature - 审计里的功能名（`ask_embed` 聊天片段 / `kb_embed` 知识库文件正文 /
+     *   `kb_link_suggest` 笔记正文与候选标题）。
      * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
      */
     private makeEmbedFn;
+    /**
+     * 「这次 embedding 实际用的模型名」—— 由 LLM 桥回答，与它自己发请求时用的是**同一个解析**。
+     *
+     * 为什么不在这里自己拼一遍优先级：那等于第二次实现宿主侧的 `override || embeddingModel || model`
+     * 规则，而两处规则一旦漂移，向量库里记的模型名就成了一个没人用得上的字符串 ——
+     * 「换没换嵌入模型」的判定恰恰读的就是它（`§7 F1`：此前这边记 `'default'`、那边发 llm.json 的值，
+     * 于是换模型永远不触发重建，旧向量被当成新模型的用）。所以记账名**必须**由发送方给出。
+     * 桥未提供该方法时（测试桩）退回 override 本身。
+     * @param override - 显式指定的模型名（可空）。
+     * @returns 生效模型名；未配置时为空串。
+     */
+    private embedModelName;
+    /**
+     * 某个角色的**全局**生效模型名（还没叠库级覆盖）。
+     *
+     * 三个角色都从宿主桥取值：桥是唯一知道「实际会发出去什么」的地方，
+     * 网关自己再拼一遍优先级就会重新制造 §7 F1 那种两条链各算一次的局面。
+     * @param role - 语言 / 嵌入 / 重排序。
+     * @returns 模型名；空串 = 这个角色没配。
+     */
+    private globalModelName;
+    /**
+     * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）。
+     *
+     * 每次调用都重读设置：`llm.json` 那条链就是「改完下一次生效、不必重启」的语义，
+     * 这里缓存住就会让库级覆盖比全局配置更难改。一次 SQLite 主键查是微秒级，不心疼。
+     * @param kbId - 知识库 id（非法时等价于「没有库级覆盖」）。
+     * @param role - 哪个角色。
+     * @returns 解析结果（含来源，界面与审计都要用它说话）。
+     */
+    private kbModel;
+    /**
+     * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）。
+     *
+     * 与 `summarizeKbFile` 同一套纪律：`privacyGate` 过闸 + `BlockAssembler` 收流 +
+     * 失败抛出。为什么不复用摘要那条路径：那些地方各自要拼自己的 prompt 与 system，
+     * 抽出来只共享「过闸 → 发 → 收文本」这三步，比造一个带一堆选项的大泛型函数诚实。
+     * @param kbId - 当前库（取语言模型的库级覆盖）。
+     * @param feature - 审计里登记的功能名。
+     * @returns 调用函数；桥不支持流式时 undefined（调用方据此报「模型通道不可用」）。
+     */
+    private makeChatAsker;
+    /**
+     * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）。
+     *
+     * 三条纪律，少一条都是实质性的漏洞：
+     *   ① `privacyBlocked` 判在**任何出网之前**（早于「没配模型」那类早退 —— 顺序错了
+     *      用户看到的会是「AI 不可用」，把「拦截生效了」这件事盖掉）；
+     *   ② `privacyGate` 必须一次过 `[query, ...documents]`。rerank 的入参天然是一批文档，
+     *      只 gate 查询词等于把 N 条正文**裸发出去**，而审计表还会记成「已脱敏」；
+     *   ③ 失败一律抛出而不是吞掉：调用方（pipeline）负责退回本地加权，并在 `rerankInfo`
+     *      里说清这次为什么没精排。
+     * 功能名叫 `ask_rerank` 而不是 `kb_rerank`：这一阶段跑在整个问答检索管道上，
+     * 候选既可能来自聊天记录也可能来自知识库文件 —— 按知识库命名会让审计里那一列
+     * 看起来只与文件有关，而它实际覆盖的是全部候选。
+     * @param kbId - 当前库（用于取库级覆盖；0 = 没有库上下文）。
+     * @returns 精排函数；没配模型或桥不支持时返回 undefined（管道据此跳过这一段）。
+     */
+    private makeRerankFn;
     /**
      * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
      *
@@ -228,6 +308,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
     getRevoked(options?: {
         limit?: number;
         offset?: number;
+        q?: string;
     }): RevokedSnapshot;
     /**
      * Custom emoticons.
@@ -264,11 +345,15 @@ export declare class WechatDataGateway extends TypertRemoteService {
      */
     getGraph(): GraphSnapshot;
     /**
-     * Knowledge notes list.
+     * Knowledge notes list of **one** knowledge base.
+     *
+     * 命中集与 `total` 都只统计本库：改前 `total` 是全表 `COUNT(*)`，多库之后
+     * 会显示成「12 / 37」这种跨库数字。
+     * @param kbId - the knowledge base to read; required, there is no "all kbs" mode.
      * @param options - Optional case-insensitive search query and row cap.
-     * @returns NotesSnapshot: notes (newest first) plus the unpaged total.
+     * @returns NotesSnapshot: notes (newest first) plus the same-kb unpaged total.
      */
-    getNotes(options?: {
+    getNotes(kbId: number, options?: {
         query?: string;
         limit?: number;
     }): NotesSnapshot;
@@ -278,10 +363,12 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * `sourceKind: 'ask'` marks a note distilled from a WeChat Q&A answer — that
      * is the join point with the social graph: the panel draws an edge from the
      * note to its source chat instead of leaving knowledge nodes floating.
-     * @param options - Note fields; title is required and unique (case-insensitive).
+     * @param kbId - owning knowledge base for a new note / expected owner for an update.
+     *   Title uniqueness is checked **within** that kb, not across the whole store.
+     * @param options - Note fields; title is required and unique in that kb (case-insensitive).
      * @returns NoteMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
      */
-    saveNote(options: {
+    saveNote(kbId: number, options: {
         id?: number;
         title: string;
         body?: string;
@@ -292,21 +379,333 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): NoteMutationResult;
     /**
      * Delete one knowledge note.
+     *
+     * `kbId` 不是「附加信息」而是**守卫**：笔记 id 全局自增，拿着甲库的 id 调乙库
+     * 会删掉甲库那一篇（数据直接没了）。归属不符时返回「笔记不存在」。
+     * @param kbId - expected owner; a row belonging to another kb is **not** deleted.
      * @param options - Note id.
      * @returns NoteMutationResult.
      */
-    deleteNote(options: {
+    deleteNote(kbId: number, options: {
         id: number;
     }): NoteMutationResult;
     /**
-     * Knowledge graph: note nodes, `[[…]]` edges and unresolved stubs.
+     * Knowledge graph: note nodes, `[[…]]` edges, unresolved stubs, **plus the
+     * document entity layer** (registered files and their normalized sections).
      *
      * 与 `getGraph` 分开而不是合并：社交图谱的节点口径（联系人/群/我）和知识图谱
-     * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆；融合视图交给前端把
-     * 两份快照按 `sourceUsername` 拼起来（笔记 → 来源会话）。
-     * @returns KnowledgeSnapshot.
+     * （笔记/未解析目标）是两套语义，合并会让两个面板都变脆。
+     * 两份快照**不在前端拼**：知识图谱的节点必须只来自知识库，人/群是通讯录数据，
+     * 因此曾经的「融合视图」已删除（见前端 panels/graph-model.ts 的文件头约束）。
+     *
+     * **一库一图**：`kbId` 必填且没有默认值可给 —— 改前这张图是全库合并的，
+     * 多库之后会把两个库里同名的笔记并成一个节点，`[[链接]]` 也会指错库。
+     *
+     * 文档实体在这里合流，而不是在 `notes.ts` 里：笔记库与文件库是**两个 db 文件**，
+     * `notes.ts` 那一层物理上看不见文件（它自己的注释就写着 `fileCount` 恒为 0）。
+     * 与 `getKbs` 的 fileCount 合流是同一个理由、同一个位置。
+     * 文件库读不到时图谱照常返回笔记部分，但把原因并进 `readError` ——
+     * 「这个库没登记过文件」与「文件库打不开」必须是两句话（N1）。
+     * @param kbId - the knowledge base to build from.
+     * @returns KnowledgeSnapshot（含运行期可能带上的 `readError`，见 `KnowledgeSnapshotRead`）。
      */
-    getKnowledgeGraph(): KnowledgeSnapshot;
+    getKnowledgeGraph(kbId: number): KnowledgeSnapshotRead;
+    /**
+     * 让模型读一遍本库的文件，抽出实体（推断层）。
+     *
+     * 三条纪律：
+     *   ① `privacyBlocked('kb_extract')` 判在任何模型调用之前；
+     *   ② 只处理 `include_in_rag = 1` 的文件 —— 关掉出网开关的文件连一次抽取都不该被发出去
+     *      （条件在 SQL 里，见 `extract.ts` 的 `readDigestForExtract`）；
+     *   ③ 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
+     * @param options - `kbId`；`fileIds` 限定范围（默认整库）；`limit` 单次最多几个文件。
+     * @returns 逐文件结果 + 汇总（失败的逐个带原因，不因一个失败就整批失败）。
+     */
+    extractKbEntities(options: {
+        kbId: number;
+        fileIds?: number[];
+        limit?: number;
+    }): Promise<{
+        ok: boolean;
+        error?: string;
+        files: number;
+        saved: number;
+        failed: Array<{
+            id: number;
+            error: string;
+        }>;
+        model: string;
+    }>;
+    /**
+     * 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。
+     *
+     * 三条纪律（V6 的全部内容）：
+     *   ① `privacyBlocked('kb_link_suggest')` 判在所有早退之前 —— 「没配嵌入模型」不能
+     *      盖掉「用户明确说过不要出网」，否则审计里看不到那次被拦下的尝试；
+     *   ② 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
+     *      （`makeEmbedFn` 内部对整批文本过一次闸，漏一半就等于漏的那半没脱敏）；
+     *   ③ 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
+     *      `parseWikiLinks` 从正文里派生 —— 模型判断错的代价因此是「没人点」，
+     *      而不是「图谱里多了一条用户没写过的边」。
+     * @param options - `kbId`、正在编辑的 `text`、可选 `topK` 与自身标题 `excludeTitle`。
+     * @returns 候选（按相似度降序）+ 参与排序的池大小 + 说明。
+     */
+    suggestKbLinks(options: {
+        kbId: number;
+        text?: string;
+        topK?: number;
+        excludeTitle?: string;
+    }): Promise<{
+        ok: boolean;
+        error?: string;
+        candidates: Array<{
+            label: string;
+            kind: 'note' | 'entity';
+            score: number;
+        }>;
+        pool: number;
+        model: string;
+        note?: string;
+    }>;
+    /**
+     * Knowledge base list — the scope selector's data source.
+     *
+     * 两个库文件在这里**合流**：笔记数来自笔记库（`listKbs`），文件数来自文件库
+     * （`countKbFilesByKb`，一次 GROUP BY）。合并只能写在这一层 —— `notes.ts` 看不到文件库。
+     *
+     * 少了这次合并，界面上的 `fileCount` 会恒为 0，于是删库弹层对一个「0 条笔记 / 5 个文件」
+     * 的库说「这个库是空的」（真机探针实测）。文件库读失败时 `countKbFilesByKb` 返回空表 ⇒
+     * 退化成 0，与本次改动前的行为一致，不是新增风险。
+     * @returns KbListSnapshot: every kb with its note count **and** file count. An
+     *   unreadable note store yields an empty list **plus** `readError`; callers must
+     *   not read that as "there is no kb at all" and create one over the top.
+     */
+    getKbs(): KbListSnapshot;
+    /**
+     * Create one knowledge base.
+     * @param options - `name`: required, normalized-unique, at most `KB_NAME_MAX` chars.
+     * @returns KbMutationResult: `{ ok, id }`, or `{ ok: false, error }`.
+     */
+    createKb(options: {
+        name: string;
+    }): KbMutationResult;
+    /**
+     * Rename one knowledge base.
+     *
+     * 笔记**不动**：归属存在 `kb_id` 上，库名只是显示名。用库名当外键的话，
+     * 「改名」会退化成「迁移全部笔记」，还要处理迁移到一半崩掉。
+     * @param options - `id` plus the new `name`.
+     * @returns KbMutationResult.
+     */
+    renameKb(options: {
+        id: number;
+        name: string;
+    }): KbMutationResult;
+    /**
+     * Delete one knowledge base.
+     *
+     * `action` **必填、无默认值**：库里的笔记是「搬到别的库」还是「一起删掉」只有调用方
+     * 能决定，而这里最危险的默认值恰好是「一起删」—— 一次「我以为只是删个空壳库」的点击
+     * 会直接把几十条笔记带走。默认库本身也不可删（它是迁移兜底）。
+     * @param options - `id` plus `action` (`{kind:'reassign',targetKbId}` or `{kind:'purge'}`).
+     * @returns KbMutationResult carrying `movedNotes` / `removedNotes`.
+     */
+    deleteKb(options: {
+        id: number;
+        action: KbDeleteAction;
+    }): KbMutationResult;
+    /**
+     * 一个知识库里的文件列表（新上传的在前）。
+     *
+     * 与 `getNotes` 同口径，`kbId` 必填：文件、分块、检索全部按库划作用域，
+     * **没有**「所有库的文件」这种视图 —— 那正是多库之后最容易出现的串数据。
+     * @param kbId - the knowledge base to read; required, there is no "all kbs" mode.
+     * @param options - Pagination (limit/offset).
+     * @returns KbFileListSnapshot. 库读不到时给 `readError` 而不是空列表，
+     *   好让面板说「读不到」而不是「还没有文件」。
+     */
+    getKbFiles(kbId: number, options?: {
+        limit?: number;
+        offset?: number;
+    }): KbFileListSnapshot;
+    /**
+     * 读某个文件解析出来的正文（分页）。界面上「就地展开看内容」走这一条。
+     *
+     * 与 `getKbFiles` 同样：`kbId` 必填、没有「所有库」模式，而且这一条**还多一道**
+     * `fileId` 必须属于该库的确认 —— 它返回的是内容而不是计数，跨库串起来的后果重得多。
+     * 返回的是解析文本，不是原文件排版（表格 / 图片 / 页眉页脚在解析阶段已丢），
+     * 界面上必须这样标注，别让人以为在看原稿。
+     * @param kbId - 目标库（必填）。
+     * @param fileId - 目标文件。
+     * @param options - 分页（limit 上限 200 块）。
+     * @returns KbFileChunkPage。
+     */
+    getKbFileChunks(kbId: number, fileId: number, options?: {
+        limit?: number;
+        offset?: number;
+    }): KbFileChunkPage;
+    /**
+     * 登记一批文件（原生对话框多选的结果）。
+     *
+     * 逐个登记、逐个回执：每个文件各自一个事务，中途某一个失败不影响已经进来的那些。
+     * 于是一次多选的部分失败（重复 / 类型不支持 / 太大）是**可解释**的，
+     * 而不是一句笼统的「添加失败」。
+     * @param options - `kbId`、`paths`（绝对路径数组）、`includeInRag`（不给按 true）。
+     * @returns KbFileAddResult：`ok` = 至少进来一个；逐项原因在 `results` 里。
+     */
+    addKbFiles(options: {
+        kbId: number;
+        paths: string[];
+        includeInRag?: boolean;
+    }): KbFileAddResult;
+    /**
+     * 删除一个文件（连带它的分块 / FTS 行 / 向量 / blob 副本）。
+     *
+     * **不碰用户电脑上的原文件** —— 删的是知识库里的这一份，那份原文件仍然在他的盘上。
+     * `kbId` 是**守卫**：文件 id 全局自增，拿甲库的 id 调乙库会删掉甲库那一条，
+     * 而删除是物理的、没有撤销（与 `deleteNote` 同一条纪律）。
+     * @param options - `kbId` plus the file row id.
+     * @returns KbFileMutationResult（回执里带连带清掉的分块数与副本是否被删）。
+     */
+    deleteKbFile(options: {
+        kbId: number;
+        id: number;
+    }): KbFileMutationResult;
+    /**
+     * 切换一个文件是否参与向量化（出网）。
+     *
+     * 关掉之后该文件**完全不出网**，但仍然留在 FTS 索引里可被关键词搜到 ——
+     * 这正是「库里有合同，但我还想搜到它」的实现方式（设计稿 §9.2）。
+     * 全局「禁止 AI 出网」仍然是同一道闸门，一起拦下。
+     * @param options - `kbId`、文件 id、是否参与。
+     * @returns KbFileMutationResult.
+     */
+    setKbFileRag(options: {
+        kbId: number;
+        id: number;
+        includeInRag: boolean;
+    }): KbFileMutationResult;
+    /**
+     * 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。
+     *
+     * 顺序是硬性的（照 `optimizeAskQuestion` 的口径，理由写在它头上）：
+     *   ① `privacyBlocked` 判在**最前面**，早于「未配置模型」那类早退 ——
+     *      否则用户开了「禁止 AI 出网」又没配模型时，看到的是「未配置模型」，
+     *      把「拦截真的生效了」这件事盖掉了。
+     *   ② `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
+     *      给它做摘要等于推翻用户已经做过的决定，不是「再确认一下」能补的。
+     *   ③ 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
+     *
+     * ⚠ 只喂得下前若干字：一份文件最多两万块、约一千万字，一次请求装不进去。
+     *   所以按 `SUMMARY_INPUT_CHARS` 截断，并把**实际覆盖的字符数**一起返回并落库 ——
+     *   界面必须据此标出「这只是前 N 字的摘要」。不标就是让一个局部摘要
+     *   顶着「摘要」的名字被当成整份文件的概括读，那是界面在骗人。
+     * @param options - `kbId`（守卫）与 `id`（目标文件）。
+     * @returns KbSummaryResult。
+     */
+    summarizeKbFile(options: {
+        kbId: number;
+        id: number;
+    }): Promise<KbSummaryResult>;
+    /**
+     * 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。
+     *
+     * 为什么稠密这一路要在网关做而不下沉进 `searchKbRows`：稠密要**出网**（把查询词送去
+     * embedding），而隐私闸门与模型名解析都住在这一层；query 层保持「给什么函数用什么函数」，
+     * 才能被问答管道与面板同时复用（`retrieval/kb-channel.ts` 走的就是同一个 `searchKbDense`）。
+     *
+     * `degraded` 现在说的是**本次真话**（原来是一句硬编码的「未建向量索引」）：
+     * 未配模型 / 索引过期 / embedding 失败 / 稠密跑成功，四种情形的出路完全不同，
+     * 混成一句会让用户以为「知识库里没有这个东西」。
+     * @param options - `kbId`、查询词、可选条数（上限 `MAX_KB_TOP_K`）。
+     * @returns KbSearchResult：命中 + 统计 + 降级说明。
+     */
+    searchKb(options: {
+        kbId: number;
+        query?: string;
+        topK?: number;
+    }): Promise<KbSearchResult>;
+    /**
+     * 某个知识库的**模型设置**（三个角色的引用 + 各自实际生效的名字）。
+     *
+     * 回包里同时给「引用串」和「解析结果」：下拉框要回填前者（用户改过什么），
+     * 而界面要说的是后者（现在到底在用哪个模型）。只给一个就会出现
+     * 「显示的是全局值、实际用的是覆盖值」这类看起来无害的错位。
+     * @param options - `kbId`。
+     * @returns 设置 + 三角色的解析结果 + 全局值（下拉里「继承全局：xxx」那半句要用）
+     *   + 实体抽取的进度（同一个回包：弹层开一次要读三样，分开读会让首帧分三次跳）。
+     */
+    getKbModelConfig(options: {
+        kbId: number;
+    }): {
+        kbId: number;
+        settings: KbModelSettings;
+        global: Record<KbModelRole, string>;
+        resolved: Record<KbModelRole, ResolvedModel>;
+        entities: KbEntitySummary;
+    };
+    /**
+     * 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。
+     *
+     * 这一层**不写凭据**：引用串只能是「继承」或「m:<模型名>」，端点与 Key 永远只在 `llm.json`。
+     * 为什么收窄到这样：一条 profile 是一套同厂商的连接参数，按库引用它就会把
+     * 「A 家地址 + B 家 Key」这种 401 陷阱重新请回来（见 `model-config.ts` 头注）。
+     * @param options - `kbId` 加可选的 `chatRef` / `embedRef` / `rerankRef`。
+     * @returns 最新设置；引用串不合法时 `{ ok: false, error }`（不静默改成继承）。
+     */
+    setKbModelConfig(options: {
+        kbId: number;
+        chatRef?: string;
+        embedRef?: string;
+        rerankRef?: string;
+    }): {
+        ok: true;
+        settings: KbModelSettings;
+    } | {
+        ok: false;
+        error: string;
+    };
+    /**
+     * 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。
+     *
+     * 为什么要单独一个读接口：向量索引此前只有一个隐式入口 —— 提问时顺手补齐
+     * （`askWechat` 里那段），于是界面上既**触发不了**它也**看不见**它：
+     * 用户只知道「有时能语义搜到、有时搜不到」，而差别其实只是这个库建没建过。
+     * @param options - `kbId`。
+     * @returns 当前生效的模型名、是否配了通道、按库状态、以及本进程内的在飞构建进度。
+     */
+    getKbVectorIndex(options: {
+        kbId: number;
+    }): {
+        kbId: number;
+        model: string;
+        source: 'inherit' | 'inline';
+        configured: boolean;
+        status: KbVectorIndexStatus;
+        job: {
+            done: number;
+            total: number;
+            startedAt: number;
+            error: string;
+        } | null;
+    };
+    /**
+     * 为**某个库**构建 / 增量更新向量索引（面板上那个「语义索引」按钮）。
+     *
+     * 三条纪律：
+     *   ① 出站拦截判在**任何 embedding 之前**（`privacyBlocked` 先于「未配置模型」那类早退）；
+     *   ② 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
+     *   ③ 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
+     * @param options - `kbId`；`force` 时清空本库重算。
+     * @returns 构建结果（`ok` 为假时带 `error`）。
+     */
+    buildKbVectorIndex(options: {
+        kbId: number;
+        force?: boolean;
+    }): Promise<KbVectorBuildResult & {
+        ok: boolean;
+        error?: string;
+    }>;
     /**
      * Moments page.
      * @param options - Pagination (offset/limit) and optional author filter.
@@ -340,6 +739,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
     getFavorites(options?: {
         limit?: number;
         offset?: number;
+        q?: string;
     }): FavoritesSnapshot;
     /**
      * Resource files.
@@ -350,6 +750,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
         limit?: number;
         offset?: number;
         category?: string;
+        q?: string;
     }): FilesSnapshot;
     /**
      * Messages of one talker.
@@ -516,7 +917,37 @@ export declare class WechatDataGateway extends TypertRemoteService {
         }>;
         /** 客户端生成的流式标识：带上它才会推送 wechat-ask/delta 增量事件。 */
         streamId?: string;
+        /**
+         * 入口来源，写进问答历史：`ask` = 「微信问答」页签，`session` = 会话内问答。
+         * 缺省按 `ask` 处理 —— 旧客户端不带这个字段时也能正常落库。
+         */
+        source?: string;
+        /** 会话显示名：历史列表直接显示，省掉面板再查一次会话表。 */
+        usernameName?: string;
+        /**
+         * 当前知识库 id：本次提问会把该库的文件块一并纳入检索。
+         *
+         * 缺省不检索知识库（而不是「搜所有库」）—— 与其余知识库接口同一纪律：
+         * `kbId` 是作用域，没有「所有库」这种模式；漏传应当表现为「没检索到文件」，
+         * 而不是把别的库的内容也端上来。
+         */
+        kbId?: number;
     }): Promise<AskResult>;
+    /**
+     * 把一次问答落进「历史记录」。
+     *
+     * 为什么放在网关而不是前端：前端只持有**当前线程**的 turns（清空对话即丢），
+     * 而且窗口一关就没了。历史要求「每一次都留下」，只能由**后端在回答产出的那一刻**写。
+     *
+     * 只记成功产出的回答（含「没检索到原文」这种正常短路）；调用**报错**的轮次不写本表 ——
+     * 它们没有可回看的正文，且已经在操作日志里留痕（`op('task','ask_wechat','fail',…)`），
+     * 往历史里塞一行空回答只会让「历史记录」变成错误列表。
+     * @param options - 本次提问的入参（取范围与会话名）。
+     * @param result - 已经产出的回答。
+     * @param elapsedMs - 端到端耗时。
+     * @param model - 回答模型标签（provider · model）。
+     */
+    private saveAskHistory;
     /**
      * 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。
      * 供「微信问答」面板的「优化提问」按钮调用；出站前同样过隐私闸门。
@@ -561,7 +992,7 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): BackupMutationResult;
     /**
      * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
-     * @returns 供「数据健康 / 检索设置」面板展示。
+     * @returns 供「数据健康」面板与诊断脚本展示（原「检索设置」面板已于 2026-09-17 下线）。
      */
     getRetrievalStatus(): {
         enabled: boolean;
@@ -584,7 +1015,8 @@ export declare class WechatDataGateway extends TypertRemoteService {
         };
     };
     /**
-     * 保存检索参数（阈值/权重/容量）。前端面板改一个开关也走这里。
+     * 保存检索参数（阈值/权重/容量）。
+     * **界面已不再暴露该入口**（面板下线，参数固化为产品默认值）——仅供诊断与自动化测试参考使用。
      * @param options - 形如 `{ patch: {...} }`，或直接给字段子集。
      * @returns 落盘后的完整配置。
      */
@@ -595,7 +1027,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
         config: unknown;
     };
     /**
-     * 立即构建/增量更新稠密向量索引（设置面板的「重建向量索引」按钮）。
+     * 立即构建/增量更新稠密向量索引。
+     * 界面已不暴露该入口：首次提问时网关会自动增量构建（失败则降级纯稀疏），
+     * 本方法留给诊断与自动化测试使用。
      * @param options - force=true 时清空重建。
      * @returns 构建结果。
      */
@@ -658,8 +1092,8 @@ export declare class WechatDataGateway extends TypertRemoteService {
     /**
      * 跑离线召回评估（合成评测集），并给出「混合 vs 纯稀疏」的消融对比。
      *
-     * 不依赖真实数据，因此可以随时在设置面板点一下就看到当前算法的 P/R/MRR/NDCG，
-     * 也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
+     * 不依赖真实数据，因此可以随时直连调一次就看到当前算法的 P/R/MRR/NDCG
+     * （界面无入口），也可以在 CI 里断言「混合不低于纯稀疏」防止退化。
      * @param options - k（截断位置，默认 10）。
      * @returns 可读报告 + 结构化指标。
      */
@@ -865,6 +1299,31 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @returns 删除计数与文件删除失败清单。
      */
     pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult;
+    /**
+     * 读取问答历史（供「微信问答 → 历史记录」弹窗）。
+     *
+     * 与 `getExportHistory` 同样**不走**宿主的结果缓存：历史是「按当前事实」的数据，
+     * 刚问完就打开列表必须能看到那一条，缓存住的旧结果会表现成「问答没被保存」。
+     * @param options - 搜索 / 来源筛选 / 状态筛选 / 时间范围 / 排序 / 分页。
+     * @returns 一页条目 + 命中总数 + 各聚合计数。
+     */
+    getAskHistory(options?: AskHistoryQuery): AskHistorySnapshot;
+    /**
+     * 删除若干条问答历史。
+     *
+     * 与导出历史不同，这里**没有**「连带删除外部文件」这个选项 —— 问答记录的内容全部在库里，
+     * 删记录就是删全部，没有第二个动作会顺手动到用户磁盘上的东西。
+     * @param options - ids。
+     * @returns 实际删除条数。
+     */
+    deleteAskHistory(options: {
+        ids: number[];
+    }): AskHistoryDeleteResult;
+    /**
+     * 清空全部问答历史（由界面上的显式入口 + 二次确认触发，不做任何自动清理）。
+     * @returns 实际删除条数。
+     */
+    clearAskHistory(): AskHistoryClearResult;
     /**
      * Clear one session draft (decrypted copy only).
      * @param options - username of the session to clear.

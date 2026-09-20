@@ -394,7 +394,13 @@ describe('接线守卫：真实存在、且取值来自该来的地方', () => {
   it('设置面板里有「软件更新」入口，且指向 update 这一节', () => {
     expect(settingsSrc, 'Settings.tsx 里找不到软件更新区块').toContain('function UpdateSection')
     expect(settingsSrc).toContain("key: 'update'")
-    expect(settingsSrc).toContain("activeKey !== 'update'")
+    // 2026-09 起左导航从「切节（右侧一次只渲染一节）」改成「目录（各节全部堆叠 +
+    // 高亮跟随滚动）」，旧的字面量门禁 `activeKey !== 'update'` 因此不复存在。
+    // 等价的不变量有两条：① update 节在页面上真的有锚点（否则点了也滚不到），
+    // ② 导航项与节之间的对应由 `activeKey === it.key` 驱动（否则列表只是一张死目录）。
+    expect(settingsSrc, 'update 节没有渲染锚点，导航点了也滚不到').toContain('data-settings-section="update"')
+    expect(settingsSrc, 'update 节没有挂上 UpdateSection').toMatch(/data-settings-section="update"[^>]*>\s*<UpdateSection/)
+    expect(settingsSrc, '导航高亮/定位没接 activeKey —— 左栏会变成一张死目录').toContain('activeKey === it.key')
     // NavKey 联合类型里也要有，否则 activeKey 的比较会被 TS 判成永不相等
     expect(settingsSrc).toMatch(/'license'\s*\|\s*'update'/)
     // 区块里的按钮必须真的调 electronAPI.update

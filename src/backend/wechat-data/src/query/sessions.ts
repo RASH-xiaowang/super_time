@@ -119,7 +119,11 @@ function computeSessions(
     for (const r of rows) {
       const username = bytesToString(r[key('username', '')])
       const displayName = contactNames.get(username) ?? sessionTitles.get(username) ?? username
-      if (q && !username.toLowerCase().includes(q) && !displayName.toLowerCase().includes(q)) continue
+      // summary 必须在过滤前算出来：客户端的会话搜索也匹配最后一条消息，
+      // 而这里只比 username / displayName ⇒ 那些会话在到达前端之前就被丢掉了，
+      // 前端那个 `summary` 分支永远不会命中（实测「2026」后端返回 0、前端本可命中 11）。
+      const summary = bytesToString(r[key('summary', 'NULL')])
+      if (q && !username.toLowerCase().includes(q) && !displayName.toLowerCase().includes(q) && !summary.toLowerCase().includes(q)) continue
       const srv = String(r['unread_srv'] ?? '').trim()
       if (srv && srv !== '0') srvIds.set(username, srv)
       const s: WechatSession = {
@@ -127,7 +131,7 @@ function computeSessions(
         displayName,
         type: username.endsWith('@chatroom') ? 'group' : 'private',
         lastTimestamp: Number(r[key('last_timestamp', '0')] ?? 0),
-        summary: bytesToString(r[key('summary', 'NULL')]),
+        summary,
         unreadCount: Number(r[key('unread_count', '0')] ?? 0),
         draft: bytesToString(r[key('draft', 'NULL')]),
         pinned: pinned.has(username),

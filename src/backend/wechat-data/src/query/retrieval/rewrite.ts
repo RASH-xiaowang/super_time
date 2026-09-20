@@ -10,7 +10,7 @@
  *      这是对 LLM 规划器的**兜底** —— 模型偶尔会把相对时间原样返回，
  *      而检索需要绝对日期才能做时间偏好。
  */
-import { extractAskTerms } from '../ask.ts'
+import { contentResidue, extractAskTerms, isTimeOnlyTerm, stripTimeExpr } from '../ask.ts'
 import type { QueryPlan } from './types.ts'
 import { RECENCY_RE } from './intent.ts'
 
@@ -142,6 +142,7 @@ export function resolveRelativeDate(text: string, now: Date = new Date()): { fro
   return { from: '', to: '' }
 }
 
+
 /** 从词项出发做同义扩展（返回新增词，不含原词）。 */
 export function synonymExpand(terms: string[]): string[] {
   const out: string[] = []
@@ -184,6 +185,8 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
   const now = input.now ?? new Date()
   const normalized = normalizeQuestion(input.question)
   const recency = RECENCY_RE.test(normalized)
+  // 时间词必须先剥掉再取内容词（见 TIME_STRIP_RE 注释）。
+  const contentText = stripTimeExpr(normalized)
 
   // 词项：规划器关键词优先，问题 bigram 补齐；同义扩展最后追加（权重最低，见 ask.ts）。
   //
@@ -194,12 +197,13 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
   // 只收 3-8 字、不含空格的关键词（2 字词拆出来就是它自己，无需重复）。
   const plannedPhrases: string[] = []
   for (const q of input.subQueries ?? []) {
-    const t = normalizeQuestion(q)
+    // 规划器关键词同样要先剥时间词：「今天」这类词当短语/词项用只会召回错日期的消息。
+    const t = normalizeQuestion(stripTimeExpr(q))
     if (t.length >= 3 && t.length <= 8 && !t.includes(' ')) plannedPhrases.push(t)
     if (plannedPhrases.length >= 4) break
   }
-  const planned = (input.subQueries ?? []).flatMap(q => extractAskTerms(q))
-  const fallback = extractAskTerms(normalized)
+  const planned = (input.subQueries ?? []).flatMap(q => extractAskTerms(stripTimeExpr(q)))
+  const fallback = extractAskTerms(contentText)
   const baseTerms: string[] = []
   const seen = new Set<string>()
   for (const t of [...plannedPhrases, ...planned, ...fallback]) {
@@ -208,7 +212,8 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
     seen.add(t); baseTerms.push(t)
   }
   const synonyms = synonymExpand([...planned, ...fallback])
-  const terms = [...baseTerms, ...synonyms].slice(0, 24)
+  // 兜底过滤纯时间词（见 isTimeOnlyTerm）。
+  const terms = [...baseTerms, ...synonyms].filter(t => !isTimeOnlyTerm(t)).slice(0, 24)
 
   // 时间：显式 scope 是硬过滤；规划器/确定性解析是软偏好。
   const scopeFrom = (input.scopeFrom || '').trim()
@@ -238,5 +243,10 @@ export function buildQueryPlan(input: BuildPlanInput): QueryPlan {
   for (const s of input.subQueries ?? []) pushVariant(normalizeQuestion(s))
   if (synonyms.length > 0) pushVariant(synonyms.slice(0, 4).join(' '))
 
-  return { original: input.question, normalized, terms, variants, entity, from, to, timeHard, recency }
+  // 纯时间问法：有日期范围，但剥掉时间表达与泛问骨架后不剩任何内容。
+  // 它只能靠「按日期段枚举」来回答（见 pipeline 的 timeChannel）——
+  // 交给 BM25 只会召回正文里写着「今天」的错日期消息。
+  const timeBrowse = Boolean(from || to) && contentResidue(contentText).length === 0
+
+  return { original: input.question, normalized, terms, variants, entity, from, to, timeHard, recency, timeBrowse }
 }

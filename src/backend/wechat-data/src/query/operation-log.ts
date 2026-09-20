@@ -72,6 +72,13 @@ function whereClause(query: OperationLogQuery): { sql: string; params: (string |
     clauses.push('category IN (' + categories.map(() => '?').join(', ') + ')')
     params.push(...categories)
   }
+  const kw = (query.q ?? '').trim()
+  if (kw !== '') {
+    // 转义 % 与 _，否则用户输入里的通配符会被当成 SQL 通配符（搜「%」等于全表）。
+    const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
+    clauses.push("(action LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\')")
+    params.push(like, like, like)
+  }
   return { sql: clauses.length > 0 ? ' WHERE ' + clauses.join(' AND ') : '', params }
 }
 

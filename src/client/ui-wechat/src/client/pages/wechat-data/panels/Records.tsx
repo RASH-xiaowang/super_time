@@ -23,6 +23,19 @@ const KIND_META: Record<Kind, { label: string; desc: string; icon: string }> = {
 
 const KINDS: ReadonlyArray<Kind> = ['revokes', 'transfers', 'redpackets', 'finder', 'miniprograms', 'friendverifications']
 
+/**
+ * 后端会**故意忽略**的类型词（见 `query/records.ts` 的 `isRecordTypeStopword`）：
+ * 它们是「数据源的名字」而不是记录内容，若拿去当关键词会把结果清空。
+ *
+ * 为什么要在本端再列一份：用户看到的现象是「输了「转账」却没有任何筛选」，
+ * 不解释就会被当成搜索坏了。这里给出明确说明。两份清单由
+ * `records-stopword.wiring.spec.ts` 守着，改一处忘另一处会转红。
+ */
+const TYPE_STOPWORDS: readonly string[] = [
+  '红包', '转账', '转帐', '收款', '付款', '收红包', '发红包', '红包记录', '转账记录',
+  'redpacket', 'red_packet', 'transfer', '转账明细', '红包明细',
+]
+
 const TIME_KINDS: Record<Kind, boolean> = {
   revokes: true, transfers: true, redpackets: false, finder: false, miniprograms: true, friendverifications: true,
 }
@@ -67,7 +80,10 @@ function liveStatus(v: string | number | boolean | null | undefined): { label: s
 
 const toneClass = (tone: string): string => `badge${tone.charAt(0).toUpperCase()}${tone.slice(1)}`
 
-export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void }): React.JSX.Element {
+export function RecordsPanel({ onOpenChat, seedQuery }: {
+  onOpenChat?: (username: string, localId?: number) => void
+  seedQuery?: { q: string; nonce: number }
+}): React.JSX.Element {
   /*
    * 默认子类目（第 76 轮）。
    *
@@ -100,6 +116,17 @@ export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, l
   const notify = (text: string): void => {
     flash(text)
   }
+
+  /** 关键词恰好是类型词：后端会故意不做筛选，界面要说明，否则像「搜索坏了」。 */
+  const stopwordHit = TYPE_STOPWORDS.includes(keyword.trim().toLowerCase())
+  // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
+  // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
+  useEffect(() => {
+    if (!seedQuery) return
+    setKeyword(seedQuery.q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedQuery?.nonce])
+
 
   const load = useCallback(async (reset: boolean): Promise<void> => {
     if (reset) setPage(0)
@@ -274,6 +301,12 @@ export function RecordsPanel({ onOpenChat }: { onOpenChat?: (username: string, l
           />
         )}
       />
+
+      {stopwordHit && (
+        <div className={css.stopwordHint} role="note">
+          「{keyword.trim()}」是本类目的名称，不是记录内容 —— 已按原样列出全部记录。想筛内容请换一个词（如对方昵称）。
+        </div>
+      )}
 
       <Toolbar
         left={(

@@ -139,6 +139,14 @@ interface GraphCanvasProps {
   onHoverNode?: ((id: string | null) => void) | undefined
   onOpenChat?: ((username: string) => void) | undefined
   onFocusNode?: ((id: string) => void) | undefined
+  /**
+   * 坐标落盘的作用域（`'social'` 或 `'kb:<id>'`）—— 由调用方给，画布不自己猜。
+   *
+   * 为什么不在这里从 graph 推：画布拿到的是 `BuiltGraph`，里面**没有库标识**
+   * （节点 id 刻意不带库前缀，见设计稿 §4.4）；而社交图谱与知识图谱共用这一个组件，
+   * 只有 `Graph.tsx` 知道当前是哪一个作用域。
+   */
+  positionScope: string
 }
 
 /** 指针拖拽状态：节点拖拽与画布平移共用一条状态机，免得两套事件处理互相打架。 */
@@ -192,7 +200,7 @@ const REST_STEP = 0.08
  * @returns 画布 + 小地图。
  */
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas(props, ref): React.JSX.Element {
-  const { graph, dark = false, selectedId, settings, selfUsername, pinnedIds, focusCommunity, hoverCommunity, hoverNodeId } = props
+  const { graph, dark = false, selectedId, settings, selfUsername, pinnedIds, focusCommunity, hoverCommunity, hoverNodeId, positionScope } = props
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
@@ -201,7 +209,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   propsRef.current = props
 
   /** 节点坐标（可变：拖拽直接改它）。初值取上次落盘的布局，进面板即原地恢复。 */
-  const positionsRef = useRef<Map<string, Point>>(new Map(loadSavedPositions()))
+  const positionsRef = useRef<Map<string, Point>>(new Map(loadSavedPositions(positionScope)))
   const radiiRef = useRef<Map<string, number>>(new Map())
   const camRef = useRef<Camera>({ x: 0, y: 0, k: 1 })
   const sizeRef = useRef<ViewSize>({ w: 0, h: 0 })
@@ -535,7 +543,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     for (const [id, pos] of pinnedSnapshot) positionsRef.current.set(id, pos)
     // 布局落定后再松弛一次：FA2 只保证「不挤成一团」，不保证圆不相交；
     // 固定节点在上面已经还原到位，这里让它们作为障碍把别人推开而自己不动。
-    relaxCollisions(p.graph.nodes, positionsRef.current, radiiRef.current, { iterations: 4, skip: p.pinnedIds })
+    //
+    // 轮数由 4 提到 24：间距归一改成双向之后，**压缩会一次性造出十几处相交**
+    // （真机 65 节点的群组网络压到 0.45× 后一次相交 16 对）。实测残留相交对：
+    // 2 轮 7 对 / 4 轮 **3 对** / 8 轮 0 对 / 16 轮 0 对 / 24 轮 0 对且最小间距比 1.078
+    // （目标 1.08，等于已收敛）/ 32 轮 1.080。松弛是网格化 Jacobi，250 节点一轮 <1ms，
+    // 多出来的二十轮远小于前面 FA2 那 70ms；而 4 轮会把「压缩」的收益又用重叠赔回去。
+    relaxCollisions(p.graph.nodes, positionsRef.current, radiiRef.current, { iterations: 24, skip: p.pinnedIds })
     if (needsFitRef.current) {
       needsFitRef.current = false
       fitView()
@@ -561,17 +575,42 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   useEffect(() => {
     const persist = createRestartableTimer({
       delayMs: PERSIST_SETTLE_MS,
-      run: () => { savePositions(positionsForPersist()) },
+      run: () => { savePositions(positionScope, positionsForPersist()) },
     })
     persistTimerRef.current = persist
     return () => {
       if (persist.pending()) {
         persist.cancel()
-        savePositions(positionsForPersist())
+        savePositions(positionScope, positionsForPersist())
       }
       persist.dispose()
     }
-  }, [positionsForPersist])
+  }, [positionScope, positionsForPersist])
+
+  /**
+   * 作用域变了（切库 / 切到社交图谱）：把坐标表整个换成新的那一份。
+   *
+   * 为什么画布必须知道这件事：节点 id 不带库前缀，所以上个作用域的坐标对 id 相同的节点
+   * （`note:7` 在甲库与乙库是**两条不同的笔记**）会被当成新作用域的初值 —— 切一次就把甲库
+   * 调好的形状带进乙库，落盘时还会把只属于甲库的 id 写进乙库的记录里。
+   * 设计稿 §4.4 说「同一份 map 里根本不会同时出现两个库的节点」，落实的就是这一段。
+   *
+   * **顺序很关键**：本 effect 必须排在上面那个落盘 effect **之后**。切作用域时 React 先跑完
+   * 所有 cleanup、再依次跑所有 setup：落盘 effect 的 cleanup 会先把**旧表**写回**旧作用域**
+   * （它闭包里的 positionScope 还是旧的），之后才轮到这里把坐标表换新。
+   * 反过来（把本段放前面）会给旧作用域写进一张空表，等于把旧库的布局清掉。
+   *
+   * 换完还要重新取景（`needsFitRef`）：新库的包围盒与旧库无关，否则相机会停在上一个库的位置上。
+   * 首次挂载时这里也会跑一次（`scopeRef` 初值为 null），等价于把手写初值那条路再走一遍，
+   * 结果是幂等的。
+   */
+  const scopeRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (scopeRef.current === positionScope) return
+    scopeRef.current = positionScope
+    positionsRef.current = new Map(loadSavedPositions(positionScope))
+    needsFitRef.current = true
+  }, [positionScope])
 
   // 尺寸变化：按 DPR 调 backing store，并重画（相机不动，只换视口大小）
   useEffect(() => {

@@ -60,7 +60,7 @@ describe('坐标落盘：合并到静默期，绝不逐帧写', () => {
   it('用可重启定时器把落盘合并到静默期之后执行', () => {
     expect(code).toContain("import { createRestartableTimer, type RestartableTimer } from './timers.ts'")
     expect(code).toContain('const PERSIST_SETTLE_MS = 300')
-    expect(code).toMatch(/createRestartableTimer\(\{\s*delayMs: PERSIST_SETTLE_MS,\s*run: \(\) => \{ savePositions\(positionsForPersist\(\)\) \},?\s*\}\)/)
+    expect(code).toMatch(/createRestartableTimer\(\{\s*delayMs: PERSIST_SETTLE_MS,\s*run: \(\) => \{ savePositions\(positionScope, positionsForPersist\(\)\) \},?\s*\}\)/)
   })
 
   it('拖拽节点的路径里没有 savePositions（逐帧写 localStorage 就是 L8）', () => {
@@ -75,7 +75,7 @@ describe('坐标落盘：合并到静默期，绝不逐帧写', () => {
     const start = code.indexOf('const persist = createRestartableTimer({')
     expect(start).toBeGreaterThan(-1)
     const cleanup = code.slice(code.indexOf('return () => {', start))
-    expect(cleanup).toMatch(/if \(persist\.pending\(\)\) \{\s*persist\.cancel\(\)\s*savePositions\(positionsForPersist\(\)\)/)
+    expect(cleanup).toMatch(/if \(persist\.pending\(\)\) \{\s*persist\.cancel\(\)\s*savePositions\(positionScope, positionsForPersist\(\)\)/)
     expect(cleanup.indexOf('persist.cancel()')).toBeLessThan(cleanup.indexOf('persist.dispose()'))
   })
 
@@ -377,5 +377,61 @@ describe('出现动画：「播放动画」从一个节点衍生出全图', () =
 
   it('图变化时作废旧时间表（旧 id 可能已经不在图里）', () => {
     expect(code).toMatch(/useEffect\(\(\) => \{ revealRef\.current = null \}, \[graph\]\)/)
+  })
+})
+
+/**
+ * 坐标的作用域隔离（多知识库）：同一份 localStorage 里，社交图谱与**每个库各一份布局**。
+ *
+ * 为什么这条必须看源码：节点 id（`note:7` / `kb:项目组`）刻意不带库前缀，两库之间是撞的 ——
+ * 画布一旦忘了把作用域带到读写上，甲库调好的形状就会被当成乙库的初值，
+ * 而画面上只表现为「切库后形状有点像上一个库」，静态检查与肉眼都抓不住。
+ */
+describe('坐标落盘 / 读盘按作用域隔离', () => {
+  const graphSrc = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
+  const gcode = graphSrc.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
+
+  it('作用域是画布的必填 prop，且画布不自己猜它', () => {
+    expect(code).toContain('positionScope: string')
+    // 逐处钉死：`loadSavedPositions(positionScope)` 在文件里有两处（首帧初值 + 切作用域），
+    // 只写 `toContain` 的话改掉其中一处仍然全绿（变异测试实测：改首帧那处曾存活）。
+    expect(code, '首帧读盘没带作用域（进面板会先闪一下上一个库的形状）')
+      .toMatch(/useRef<Map<string, Point>>\(new Map\(loadSavedPositions\(positionScope\)\)\)/)
+    expect(code, '切作用域读盘没带作用域')
+      .toMatch(/positionsRef\.current = new Map\(loadSavedPositions\(positionScope\)\)/)
+    // 反面：画布不许自己拼作用域名（那等于把「当前是哪个库」的判断从面板挪进画布）
+    expect(code).not.toContain("'kb:'")
+    expect(code).not.toContain('SOCIAL_SCOPE')
+  })
+
+  it('两处落盘都带作用域（静默期那一笔 + 卸载兜底那一笔）', () => {
+    expect(code).toContain('savePositions(positionScope, positionsForPersist())')
+    expect(code.match(/savePositions\(positionScope, positionsForPersist\(\)\)/g) ?? []).toHaveLength(2)
+    expect(code, '落盘 effect 的依赖少了作用域（切库时旧表写不回旧作用域）').toMatch(/\}, \[positionScope, positionsForPersist\]\)/)
+  })
+
+  it('作用域变化时把坐标表换掉，并重新取景', () => {
+    expect(code, '切作用域没有守卫（每次重渲染都重读 localStorage）').toMatch(/if \(scopeRef\.current === positionScope\) return/)
+    expect(code, '切作用域没有换坐标表').toMatch(/positionsRef\.current = new Map\(loadSavedPositions\(positionScope\)\)/)
+    expect(code, '切作用域没有重新取景（相机会停在上一个库的位置）').toMatch(/needsFitRef\.current = true\s*\n\s*\}, \[positionScope\]\)/)
+  })
+
+  it('作用域切换的 effect 排在落盘 effect 之后（否则给旧作用域写进一张空表）', () => {
+    const persistAt = code.indexOf('const persist = createRestartableTimer({')
+    const scopeAt = code.indexOf('if (scopeRef.current === positionScope) return')
+    expect(persistAt).toBeGreaterThan(-1)
+    expect(scopeAt, '找不到作用域切换的 effect').toBeGreaterThan(-1)
+    expect(scopeAt, '作用域切换排在了落盘之前：切库会把旧库的布局清成空').toBeGreaterThan(persistAt)
+  })
+
+  it('Graph.tsx 算作用域：知识图谱用 kbScope(kbId)，社交图谱用 SOCIAL_SCOPE', () => {
+    expect(gcode).toContain('const positionScope = isKnowledgeMode ? kbScope(kbId) : SOCIAL_SCOPE')
+    expect(gcode, '没把 positionScope 透传给画布').toContain('positionScope={positionScope}')
+    expect(gcode).toContain("from './kb-scope.ts'")
+  })
+
+  it('防空转：上面读到的确实是那两个文件', () => {
+    expect(code.length).toBeGreaterThan(25000)
+    expect(gcode).toContain('GraphCanvas')
   })
 })

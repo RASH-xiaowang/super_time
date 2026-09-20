@@ -23,12 +23,14 @@ export interface MergedSection {
  * @param sections - 各分段（key/label/渲染函数）。
  * @param initial - 初始分段（由路由进来的 tab 决定，保证深链落到正确分段）。
  * @param ariaLabel - Segmented 的无障碍标签。
+ * @param trailing - 分段条**右侧**的插槽（知识库用它挂库切换器）。不传就与原来完全一致。
  * @returns 合并后的面板元素。
  */
-export function MergedSections({ sections, initial, ariaLabel }: {
+export function MergedSections({ sections, initial, ariaLabel, trailing }: {
   sections: ReadonlyArray<MergedSection>
   initial: string
   ariaLabel: string
+  trailing?: ReactNode
 }): React.JSX.Element {
   const [active, setActive] = useState(initial)
   // 同一组合并面板被多个 tab 复用（同一个组件实例）：从侧栏/深链切到另一个被合并的
@@ -45,6 +47,7 @@ export function MergedSections({ sections, initial, ariaLabel }: {
           onChange={setActive}
           ariaLabel={ariaLabel}
         />
+        {trailing && <div className={css.trailing}>{trailing}</div>}
       </div>
       <div className={css.body}>{current.render()}</div>
     </div>

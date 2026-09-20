@@ -2,22 +2,25 @@
  * 社交图谱面板 — Obsidian 风格重设计
  * 顶部工具条 + 头像节点图谱画布 + 右侧折叠控制面板(统计/选中详情/圈子聚焦/筛选/外观/布局)。
  *
- * 另含**知识网络 / 融合视图**：笔记节点 + `[[链接]]` 边 + 未解析目标的 stub 虚线节点；
- * 融合视图再把笔记的来源会话（AI 问答沉淀）叠进同一张图，把「知识」和「人」接起来。
+ * 另含**知识图谱**（variant='knowledge'）：节点与连线**全部来自知识库** ——
+ * 笔记节点 + `[[链接]]` 边 + 未解析目标的 stub 虚线节点，不含任何通讯录数据。
+ * 与「笔记库」同属知识库入口，由 WechatDataPanel 的 MergedSections 分段切换。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiDeleteNote, apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph, apiGetNotes, readRenderCache, writeRenderCache } from '../api.ts'
 import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
-import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GraphSettings } from './graph-model.ts'
+import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas.tsx'
 import { readableOn } from '../utils/theme-color.ts'
 import { PanelHeader, Select } from '../ui/kit.tsx'
-import { getThemeMode, subscribeThemeMode, toggleThemeMode } from '../theme.ts'
+import { toggleThemeMode, useThemeMode } from '../theme.ts'
 import css from './graph.module.css'
 import kitCss from '../ui/kit.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
+import { NOTES_UPDATED_EVENT } from '../notes-events.ts'
+import { SOCIAL_SCOPE, kbCacheKey, kbScope, useKbScope } from './kb-scope.ts'
 
 function Slider({ label, value, min, max, step, onChange, fmt, disabled }: {
   label: string
@@ -48,6 +51,13 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 }
 
 /**
+ * 知识图谱里的那五类节点：它们都是**库里的内容**，不是通讯录里的对象。
+ * 两处判定共用这一份名单（选中去查头像、详情里的「查看聊天」）—— 之前两处各写一串
+ * `!== 'note' && !== 'stub' && …`，加一类就漏一处，于是拿 `ent:person:张三` 去查头像。
+ */
+const KNOWLEDGE_KINDS = new Set<GNode['kind']>(['note', 'stub', 'file', 'section', 'entity'])
+
+/**
  * 社交关系图谱加载画面 — 太空舱风格:旋转光环 + 脉动核心 + 环绕节点,
  * 暗示节点/连线/圈子正在成形。
  */
@@ -76,14 +86,21 @@ function GraphLoading(): React.JSX.Element {
  * @returns the graph element tree.
  */
 export function GraphPanel({ variant = 'social', onOpenChat }: {
-  /** 'social' = 我的人脉（好友/群组）；'knowledge' = 我的笔记（知识网络/融合视图）。 */
+  /** 'social' = 我的人脉（好友/群组）；'knowledge' = 我的笔记（节点只来自知识库）。 */
   variant?: 'social' | 'knowledge'
   onOpenChat?: (username: string) => void
 }): React.JSX.Element {
+  // 当前知识库：切换器挂在合并外壳的分段条上，不是本组件的父级 —— 走订阅而不是 props。
+  const { kbId, kbs } = useKbScope()
+  /** 提示语里的库名（多库之后「这张图是空的」必须说清是哪张）。 */
+  const kbLabel = useMemo(() => {
+    const name = kbs.find(k => k.id === kbId)?.name
+    return name ? `「${name}」` : ''
+  }, [kbs, kbId])
   const [data, setData] = useState<GraphSnapshot | null>(() => readRenderCache<GraphSnapshot>('graph'))
   /** 知识图谱快照（笔记 / stub / wiki 边）。与社交图谱分开加载：它是叠加维度，
    *  取不到时社交侧必须照常可用，所以单独 try/catch、不共用 error 状态。 */
-  const [knowledge, setKnowledge] = useState<KnowledgeSnapshot | null>(() => readRenderCache<KnowledgeSnapshot>('kb-graph'))
+  const [knowledge, setKnowledge] = useState<KnowledgeSnapshot | null>(() => readRenderCache<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId)))
   /** 笔记编辑器：open + 待编辑内容（id 为空表示新建）。 */
   const [noteEditor, setNoteEditor] = useState<{ open: boolean; id?: number; title?: string; body?: string }>({ open: false })
   const [settings, setSettings] = useState<GraphSettings>(() => ({
@@ -99,7 +116,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
    * 而面板 CSS 早已改用 --nm-* 令牌，两套轴必然打架。
    * 现在画布配色与面板 CSS 用同一个真相源。
    */
-  const themeMode = useSyncExternalStore(subscribeThemeMode, getThemeMode)
+  const themeMode = useThemeMode()
   const dark = themeMode === 'dark'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,7 +140,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const canvasRef = useRef<GraphCanvasHandle | null>(null)
 
   const patch = (p: Partial<GraphSettings>): void => { setSettings(prev => ({ ...prev, ...p })) }
-  /** 切换全局主题（不再是图谱私有轴）。 */
+  /** 切换全局主题（不再是图谱私有轴）。颜色过渡的触发条件 / 时长 / 缓动 / 范围见 theme.ts 文件头。 */
   const toggleTheme = (): void => { toggleThemeMode() }
   /** 恢复默认参数(含清除固定/聚焦/选中)。 */
   const isDefaultSettings = JSON.stringify(settings) === JSON.stringify(DEFAULT_GRAPH_SETTINGS)
@@ -158,16 +175,32 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     }
   }, [])
 
-  /** 知识图谱单独加载：失败只静默保持旧值（或空），不把社交图谱面板带进错误态。 */
+  /** 知识图谱单独加载：失败只静默保持旧值（或空），不把社交图谱面板带进错误态。
+   *  `kbId` 是依赖：换库就是换图，必须重取；缓存键也带库 id，两者一起才不串库。 */
   const loadKnowledge = useCallback(async (): Promise<void> => {
     try {
-      const kb = await apiGetKnowledgeGraph()
+      const kb = await apiGetKnowledgeGraph(kbId)
       setKnowledge(kb)
-      writeRenderCache('kb-graph', kb)
+      writeRenderCache(kbCacheKey('kb-graph', kbId), kb)
     } catch { /* 知识维度不可用不应影响社交图谱 */ }
-  }, [])
+  }, [kbId])
 
-  useEffect(() => { void load(); void loadKnowledge() }, [load, loadKnowledge])
+  // 两个加载器分成两个 effect：`load`（通讯录图谱）与库无关，并在一起的话每次切库
+  // 都会白拉一次社交图谱（那是几百毫秒级的大快照）。
+  useEffect(() => { void load() }, [load])
+  useEffect(() => { void loadKnowledge() }, [loadKnowledge])
+
+  // 切库：选中 / 固定 / 圈子聚焦 / 搜索装的都是**某一张图**上的位置与状态，换库就是换图。
+  // 节点 id 里不带库前缀（设计如此），所以不清就会串：选中 id 在新库里恰好存在时，
+  // 右侧详情显示的是别的库的笔记；固定集合则会把只属于旧图的节点钉在新图上。
+  useEffect(() => {
+    setSelectedId(null)
+    setPinned(new Set())
+    setFocusCommunity(null)
+    setHoverCommunity(null)
+    setHoverNodeId(null)
+    setSearch('')
+  }, [kbId])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
@@ -178,12 +211,27 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   })
 
   const isKnowledgeMode = variant === 'knowledge'
+  /**
+   * 坐标落盘的作用域：社交图谱与**每个知识库**各占一份（`'social'` / `'kb:<id>'`）。
+   *
+   * 拼法来自 `kb-scope.ts`（那句「不得手写 'kb:' + id」的铁律），这里只做选择。
+   * 为什么由面板算而不是画布自己推：画布拿到的是 `BuiltGraph`，节点 id 里没有库标识，
+   * 而两个视图共用同一个 `GraphCanvas` —— 只有这里知道现在是哪一个。
+   */
+  const positionScope = isKnowledgeMode ? kbScope(kbId) : SOCIAL_SCOPE
+
+  // 笔记增删改后重载知识快照：图谱的节点与边**就是**这份快照的投影 ——
+  // `buildKnowledgeNetwork` 在下方 useMemo 里按 `knowledge` 重建，所以刷新快照即刷新节点。
+  // 只在知识视图下重载：社交视图不消费这份数据。
+  useWechatDataUpdated(() => {
+    if (isKnowledgeMode) void loadKnowledge()
+  }, NOTES_UPDATED_EVENT)
 
   // 性能:buildGraph 只随「结构参数」(模式/上限/阈值/仅好友)重建;
   // 外观参数(大小/粗细/标签等)由画布逐帧读取,拖动滑杆不再触发全量图重建
   const graph = useMemo<BuiltGraph>(
-    () => (isKnowledgeMode ? buildKnowledgeNetwork(knowledge, data, settings) : buildGraph(data, settings)),
-    [data, knowledge, isKnowledgeMode, settings.mode, settings.nodeLimit, settings.minCommon, settings.friendsOnly],
+    () => (isKnowledgeMode ? buildKnowledgeNetwork(knowledge, settings) : buildGraph(data, settings)),
+    [data, knowledge, isKnowledgeMode, settings.mode, settings.nodeLimit, settings.minCommon, settings.friendsOnly, settings.remarkClass, settings.firstChar],
   )
   // 深度过滤:有选中节点时以它为锚,否则自动锚定「我」——深度滑杆无需先选中即可生效。
   // 知识网络没有「我」节点,退到第一个节点作锚(否则 localGraph 会返回空图)。
@@ -207,11 +255,27 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const communities = useMemo(() => groupCommunities(graph), [graph])
   const selectedConnections = useMemo(() => (selectedId ? connectedEdgesOf(graph, selectedId) : []), [graph, selectedId])
   const selectedGroupNames = useMemo(() => (selected ? sharedGroupNames(selected, data?.group_names) : []), [selected, data])
+  // 同班级名册:key 来自后端(全库盘点),成员里可能有人被「仅显示好友」或节点上限挡在图外,
+  // 所以还要标出「本视图内可见」的那部分 —— 这正是「同前缀却没有连线」的答案所在
+  const selectedClass = useMemo(() => {
+    const key = selected?.remarkGroup
+    if (!key) return null
+    const roster = data?.remark_groups?.find(g => g.key === key)
+    const members = roster?.members ?? []
+    const visible = new Set(graph.nodes.map(n => n.id))
+    return {
+      key,
+      total: roster?.total ?? members.length,
+      visibleCount: members.filter(m => visible.has(m.username)).length,
+      members: members.map(m => ({ ...m, visible: visible.has(m.username) })),
+    }
+  }, [selected, data, graph])
 
   // 选中详情头像(「我」用 self wxid 查)。知识节点没有头像，也不该拿
-  // 'note:1' / 'kb:xxx' 这种伪用户名去查 getAvatar。
+  // 'note:1' / 'kb:xxx' 这种伪用户名去查 getAvatar —— 文档实体层的
+  // 'file:37' / 'doc:简介' / 'ent:person:张三' 同理，五个前缀都要在这里挡掉。
   useEffect(() => {
-    if (selected && (selected.kind === 'note' || selected.kind === 'stub')) { setSelAvatar(''); return }
+    if (selected && KNOWLEDGE_KINDS.has(selected.kind)) { setSelAvatar(''); return }
     const user = selectedId === 'self' ? (data?.self ?? '') : selectedId ?? ''
     if (!user || user === 'self') { setSelAvatar(''); return }
     let alive = true
@@ -244,24 +308,24 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   // 图谱快照只带 excerpt（列表用），编辑需要完整正文，因此打开编辑器时按 id 回查一次 getNotes。
   const openNoteEditor = useCallback(async (id: number): Promise<void> => {
     try {
-      const list = await apiGetNotes()
+      const list = await apiGetNotes(kbId)
       const n = list.items.find(x => x.id === id)
       setNoteEditor(n ? { open: true, id: n.id, title: n.title, body: n.body } : { open: true, id })
     } catch {
       setNoteEditor({ open: true, id })
     }
-  }, [])
+  }, [kbId])
 
   const removeNote = useCallback(async (id: number): Promise<void> => {
     try {
-      const r = await apiDeleteNote(id)
+      const r = await apiDeleteNote(kbId, id)
       if (!r.ok) { setError(r.error ?? '删除笔记失败'); return }
       if (selectedId === 'note:' + id) setSelectedId(null)
       await loadKnowledge()
     } catch (e) {
       setError((e as Error).message)
     }
-  }, [selectedId, loadKnowledge])
+  }, [kbId, selectedId, loadKnowledge])
 
   /** 侧栏只列「最相关」的几篇：按连接度降序，避免把几百篇笔记铺进窄栏。 */
   const topNotes = useMemo(() => (knowledge?.notes ?? [])
@@ -331,13 +395,23 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     <div className={css.panel}>
       <PanelHeader
         title={isKnowledgeMode
-          ? (settings.mode === 'fused' ? '知识图谱 · 融合视图' : '知识图谱 · 知识网络')
+          ? '知识图谱 · 知识网络'
           : (settings.mode === 'groups' ? '社交图谱 · 群组网络' : '社交图谱 · 好友网络')}
         desc={selected ? selected.label + ' · ' + String(selected.intimacy ?? selected.weight) + ' 条消息' : `${graph.nodes.length} 节点 · ${graph.edges.length} 连线 · ${graph.communityCount} 圈子`}
         actions={(
           <>
             <div className={css.searchWrap}>
-              <input type="text" value={search} onChange={(e) => { setSearch(e.target.value) }} placeholder="搜索节点…" className={css.searchInput} />
+              {/* 搜索只覆盖「当前这张图」的节点（社交图谱与知识图谱彼此独立），
+              且最多给出 8 个候选 —— 不说清会让用户以为「搜不到 = 数据里没有」。 */}
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value) }}
+            placeholder="搜索节点…"
+            title="仅搜索当前图谱的节点（好友 / 群组 / 知识各自独立），最多给出 8 个候选"
+            aria-label="搜索节点（仅当前图谱，最多 8 个候选）"
+            className={css.searchInput}
+          />
               {searchHits.length > 0 && (
                 <div className={css.searchDrop}>
                   {searchHits.map(hit => (
@@ -395,6 +469,10 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
           <>
             <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.noteCount ?? graph.nodes.filter(n => n.kind === 'note').length}</span><span className={kitCss.textCaption}>笔记</span></div>
             <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.stubCount ?? graph.nodes.filter(n => n.kind === 'stub').length}</span><span className={kitCss.textCaption}>待补笔记</span></div>
+            {/* 文档实体层：读不到快照时退回数图上的节点，与上面两格同一口径 */}
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.fileCount ?? graph.nodes.filter(n => n.kind === 'file').length}</span><span className={kitCss.textCaption}>文件</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.sectionCount ?? graph.nodes.filter(n => n.kind === 'section').length}</span><span className={kitCss.textCaption}>章节</span></div>
+            <div className={css.statBox} title="模型从文件里抽出的实体（推断层，不是文档里写着的）"><span className={css.statNum}>{knowledge?.summary.entityCount ?? graph.nodes.filter(n => n.kind === 'entity').length}</span><span className={kitCss.textCaption}>模型实体</span></div>
           </>
         ) : (
           <>
@@ -411,7 +489,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
           {!loading && !error && (data || knowledge) && graph.nodes.length === 0 && (
             <div className={kitCss.emptyInline}>
               {isKnowledgeMode
-                ? '还没有可显示的知识节点。点右侧「＋ 新建笔记」写下第一篇，或在「微信问答」的回答下点「沉淀为笔记」。'
+                ? `知识库${kbLabel}里还没有可显示的节点。点右侧「＋ 新建笔记」写下第一篇，或在「微信问答」的回答下点「沉淀为笔记」。`
                 : '当前条件下没有可显示的节点。试试提高节点上限，或关闭「仅好友」。'}
             </div>
           )}
@@ -420,6 +498,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               <GraphCanvas
                 ref={canvasRef}
                 graph={displayGraph}
+                positionScope={positionScope}
                 dark={dark}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
@@ -436,16 +515,25 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               <div className={css.legend}>
                 {isKnowledgeMode ? (
                   <>
-                    <span><i className={css.legendDot} />紫方块 = 笔记</span>
+                    <span><i className={css.legendDotNote} />紫圆 = 笔记</span>
                     <span><i className={css.legendLineBlue} />紫线 = [[链接]]</span>
                     <span><i className={css.legendLine} />虚线圆 = 尚未创建的笔记</span>
+                    {/* 文档实体层：这三类节点是后加的，图例必须补上 —— 光看图分不出
+                        「灰蓝的小点是待补笔记还是章节」。最后一格尤其要紧：虚线在这一层
+                        表示「模型说的」，用户据此决定能不能把它当引用依据。 */}
+                    <span><i className={css.legendDotFile} />青圆 = 文件</span>
+                    <span><i className={css.legendDotSection} />灰蓝圆 = 章节</span>
+                    <span><i className={css.legendDotEntity} />琥珀圆 = 模型抽出的实体</span>
+                    <span><i className={css.legendLineAmberDash} />虚线 = 推断的关系（文档里没写着）</span>
                     <span><i className={css.legendBar} />半径 = 连接度</span>
                   </>
                 ) : (
                   <>
                     <span><i className={css.legendDot} />颜色 = 圈子(社区)</span>
                     <span><i className={css.legendLine} />灰线 = 共同群数</span>
-                    <span><i className={css.legendLineBlue} />蓝线 = 与我亲密度</span>
+                    <span><i className={css.legendLineGold} />金虚线 = 同备注编号</span>
+                    <span><i className={css.legendLineBlueDash} />蓝虚线 = 首字相同</span>
+                    <span><i className={css.legendLineBlue} />蓝实线 = 与我亲密度</span>
                     <span><i className={css.legendBar} />半径 = 消息量</span>
                   </>
                 )}
@@ -486,7 +574,15 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                         ? `笔记 · 出链 ${selected.outLinks ?? 0} / 被引用 ${selected.backLinks ?? 0}`
                         : selected.kind === 'stub'
                           ? `尚未创建的笔记 · 被引用 ${selected.backLinks ?? 0} 次`
-                          : `${selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 ${selected.intimacy ?? selected.weight}`}
+                          : selected.kind === 'file'
+                            ? `文件 · ${selected.fileMeta?.ext.toUpperCase() || '未知类型'} · ${selected.fileMeta?.chunkCount ?? 0} 个文本块 / ${selected.fileMeta?.charCount ?? 0} 字`
+                            : selected.kind === 'section'
+                              ? `章节 · ${selected.sectionFileIds?.length ?? 0} 份文件里都有 · 共出现 ${selected.backLinks ?? 0} 次`
+                              // 实体直接复读 excerpt：那句话里已经写清了「模型推断」与是哪个模型，
+                              // 详情里再拼一遍「实体 · N 份文件」反而把它最要紧的半句丢了。
+                              : selected.kind === 'entity'
+                                ? (selected.excerpt || '模型推断的实体')
+                                : `${selected.kind === 'group' ? '群聊' : selected.kind === 'self' ? '我' : selected.isOfficial ? '公众号' : (selected.isFriend ? '好友' : '群友')} · 消息量 ${selected.intimacy ?? selected.weight}`}
                       {selected.sharedCount !== undefined ? ` · 共同 ${selected.sharedCount}` : ''}
                     </span>
                   </div>
@@ -510,7 +606,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                   {selected.kind === 'stub' && (
                     <button type="button" className={css.miniBtn} onClick={() => { setNoteEditor({ open: true, title: selected.label }) }}>＋ 创建这篇笔记</button>
                   )}
-                  {onOpenChat && selected.kind !== 'note' && selected.kind !== 'stub' && (
+                  {onOpenChat && !KNOWLEDGE_KINDS.has(selected.kind) && (
                     <button type="button" className={css.miniBtn} onClick={() => { onOpenChat(selected.id) }}>💬 查看聊天</button>
                   )}
                 </div>
@@ -520,6 +616,29 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                     <div className={css.detailChips}>
                       {selectedGroupNames.map((g, gi) => (
                         <span key={gi} className={css.detailChip} title={g}>{g.length > 12 ? g.slice(0, 12) + '…' : g}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {selectedClass && (
+                  <>
+                    <div className={css.detailSub}>
+                      同班级 · {selectedClass.key}
+                      {selectedClass.members.length > 0 ? `（全库 ${selectedClass.total} 人 · 本视图 ${selectedClass.visibleCount} 人）` : ''}
+                    </div>
+                    <div className={css.detailChips}>
+                      {selectedClass.members.map(m => (
+                        <button
+                          key={m.username}
+                          type="button"
+                          className={css.detailChip}
+                          data-dim={m.visible ? undefined : true}
+                          disabled={!m.visible}
+                          title={m.visible ? m.name : `${m.name}（被「仅显示好友」或「节点上限」挡在图外，未参与连边）`}
+                          onClick={() => { if (m.visible) { setSelectedId(m.username); canvasRef.current?.centerOn(m.username) } }}
+                        >
+                          {m.name.length > 12 ? m.name.slice(0, 12) + '…' : m.name}
+                        </button>
                       ))}
                     </div>
                   </>
@@ -577,9 +696,11 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
             <div className={css.railSection}>
               <div className={css.railTitle}>数据</div>
               {isKnowledgeMode ? (
+                /* 知识图谱只有「知识网络」一种数据口径 —— 曾经的「融合视图」（把笔记的来源会话
+                   叠进图里）已整体删除：节点必须全部来自知识库，人/群是通讯录数据。
+                   这里保留同一套分段外观，让右侧栏与社交分支的高度/观感一致。 */
                 <div className={css.seg}>
-                  <button type="button" className={css.segBtn} data-on={settings.mode === 'knowledge' || undefined} onClick={() => { setMode('knowledge') }}>知识网络</button>
-                  <button type="button" className={css.segBtn} data-on={settings.mode === 'fused' || undefined} onClick={() => { setMode('fused') }}>融合视图</button>
+                  <button type="button" className={css.segBtn} data-on onClick={() => { setMode('knowledge') }}>知识网络</button>
                 </div>
               ) : (
                 <div className={css.seg}>
@@ -592,11 +713,15 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 <Slider label={settings.mode === 'people' ? '共同群阈值 ≥' : '共同成员阈值 ≥'} value={settings.minCommon} min={1} max={10} step={1} onChange={(v) => { patch({ minCommon: v }) }} />
               )}
               {settings.mode === 'people' && (
-                <Toggle label="仅显示好友" checked={settings.friendsOnly} onChange={(v) => { patch({ friendsOnly: v }) }} />
+                <>
+                  <Toggle label="仅显示好友" checked={settings.friendsOnly} onChange={(v) => { patch({ friendsOnly: v }) }} />
+                  <Toggle label="同备注编号连边" checked={settings.remarkClass} onChange={(v) => { patch({ remarkClass: v }) }} />
+                  <Toggle label="首字相同连边" checked={settings.firstChar} onChange={(v) => { patch({ firstChar: v }) }} />
+                </>
               )}
             </div>
 
-            {/* 知识笔记（仅知识网络/融合视图显示） */}
+            {/* 知识笔记（仅知识图谱显示） */}
             {isKnowledgeMode && (
               <div className={css.railSection}>
                 <div className={css.railTitle}>知识笔记</div>
@@ -677,6 +802,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
 
       {/* 笔记编辑器（新建 / 编辑）。保存/删除后统一重载知识图谱，让画布立刻反映变化。 */}
       <KnowledgeNoteEditor
+        kbId={kbId}
         open={noteEditor.open}
         {...(noteEditor.id !== undefined ? { noteId: noteEditor.id } : {})}
         initialTitle={noteEditor.title ?? ''}

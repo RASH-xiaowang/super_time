@@ -2,7 +2,7 @@
    ════════════════════════════════════════════════════════════════════════
    布局规范（本轮整体重排）
    ────────────────────────────────────────────────────────────────────────
-   askLayout（横向两栏，flex:1，不参与滚动；外壳用 kit .panelShell）
+   askLayout（单栏，flex:1，不参与滚动；外壳用 kit .panelShell）
    ├─ askPage      统一内容列 max-width 1080px 居中，flex column，gap 12
    │  ├─ PanelHeader     面板头（固定）
    │  ├─ contextBar      检索上下文条（固定）：范围胶囊 + 模型胶囊
@@ -12,18 +12,18 @@
    │  ├─ error / optStrip        本次输入的上下文（固定，紧贴输入框上方）
    │  ├─ composer        提问面（固定）：输入行 + 次要动作行
    │  └─ privacyNote     隐私说明（固定）
-   └─ modelPanel   模型配置侧栏（按需渲染，占自己的 flex 车道，永不覆盖）
 
    设计尺度：字号 11/12/13/14/15；圆角 8/10/14/16/999；间距 4/6/8/10/12/16/24；
              控件高 32（触屏 40）、发送键 44、输入框最小高 44。
    断点：≤900 上下文条换行；≤760 空态示例单列；≤680 单列 + 触屏尺寸，隐藏快捷键提示。
    ════════════════════════════════════════════════════════════════════════ */
 
-/* ── 两栏布局（对话栏 + 模型配置栏）──────────────────────────
-   两栏都是常规流内元素：没有 position:fixed、没有 z-index、没有遮罩 ——
-   结构上就不存在「谁盖住谁」。旧实现用 fixed 覆盖式抽屉，实测 <1100px 时
-   把输入框右端与发送键整块盖住（elementFromPoint 命中的是抽屉体，发送键点不到），
-   且 top:76px 在任意宽度都压住顶部栏底部 31px（窄屏顶部栏更高，压 81px）。 */
+/* ── 布局容器 ──────────────────────────────────────────────
+   历史上这里是「对话栏 + 侧栏」两栏；侧栏（模型配置、检索设置）均已迁出/移除，
+   现在是单栏。保留 flex 是有意的：它是常规流内元素 —— 没有 position:fixed、
+   没有 z-index、没有遮罩，结构上就不存在「谁盖住谁」。旧实现用 fixed 覆盖式抽屉，
+   实测 <1100px 时把输入框右端与发送键整块盖住（elementFromPoint 命中的是抽屉体，
+   发送键点不到），且 top:76px 在任意宽度都压住顶部栏底部 31px。 */
 .askLayout {
   display: flex;
   flex-direction: row;
@@ -337,6 +337,29 @@
 }
 .headerClear:hover { border-color: color-mix(in srgb, var(--nm-danger) 55%, transparent); color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }
 
+/* 面板头「历史记录」：与「清空对话」同形态（ghost 描边小按钮，12px 文字 + 12px 图标），
+   但 hover 走青色 —— 它是**查看**类动作，不该和「清空」共用危险色。
+   常驻可见：历史是跨会话累积的，跟当前对话有没有轮次无关。 */
+.headerHistory {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.headerHistory:hover {
+  border-color: color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+  color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+}
+.headerHistory svg { flex-shrink: 0; opacity: 0.9; }
+
 .chatUser { display: flex; justify-content: flex-end; }
 /* 用户气泡：宽度随内容（fit-content）+ 上限 620px —— 短问题不再拉成一条长条。 */
 .chatUserBubble {
@@ -416,9 +439,20 @@
 }
 @media (prefers-reduced-motion: reduce) { .streamCaret { animation: none; } }
 /* 引用来源块：2 列网格 + 默认前 4 条折叠（20 条单列平铺会吞没整屏） */
-.citeBlock { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
-.citeHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.citeHeadTitle { font-size: 12px; color: var(--nm-text-2); }
+/* 宽窄按**本块自己的宽度**判定，而不是窗口宽度：会话内 AI 面板（「新对话」）只有
+   384px，它在窗口里往往并排着一个很宽的消息列 —— 窗口媒体查询永远不命中，
+   2 列引用网格就会把每格压到 ~170px（见 .citeGrid 的 @container）。
+   container-type 只加内联轴尺寸包含，本块宽度仍由父级决定，不改变布局。 */
+.citeBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+}
+.citeHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.citeHeadTitle { font-size: 12px; color: var(--nm-text-2); min-width: 0; }
 /* 数据来源说明（由后端按检索结果算出）：小字、不抢眼，但一定在回答正下方。 */
 .answerBasis {
   font-size: 11.5px;
@@ -426,10 +460,13 @@
   line-height: 1.5;
   margin-top: 6px;
   font-variant-numeric: tabular-nums;
+  /* 依据行里可能出现路径/标识串等不带空格的长内容，允许在任意位置断行。 */
+  overflow-wrap: anywhere;
 }
 /* 接地提示：回答里的金额在所引原文里找不到，或一条来源都没引用。
    用警示色但不做成错误块 —— 模型可能是在做推算，措辞也是「请核对」而非「错误」。 */
 .citeWarn {
+  overflow-wrap: anywhere;
   border-left: 2px solid var(--nm-danger);
   background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
   color: var(--nm-text-1);
@@ -447,14 +484,28 @@
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s;
+  /* 展开按钮是可操作项，不能被长标题挤没；换行交给标题自己。 */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .citeMore:hover { background: var(--nm-cyan-10); }
 .citeGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+/* 窄容器（会话内 AI 面板）改单列。
+   2 列时每格仅 ~172px，而一行最多要塞 [序号] + 会话名 + 时间 + 摘要：
+   序号 ~17px、会话名 ~55px、时间 ~105px、间距 18px、内边距 22px —— 最小内容宽 ~217px，
+   旧实现里会话名/时间都不可压缩，整行必然溢出格子（实测约 45px，压到相邻列上）。
+   单列后每行 ~350px，四项都在，且长名字仍有余量。 */
+@container (max-width: 460px) {
+  .citeGrid { grid-template-columns: 1fr; }
+}
 .citeBtn {
   display: flex;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
+  /* 兜底：即使内部某项仍算出更宽的最小内容尺寸，也只在自己格子里裁掉，
+     绝不外溢到相邻按钮上（裁剪边由 border-radius 收口）。 */
+  overflow: hidden;
   padding: 7px 10px;
   border: 1px solid var(--nm-border);
   border-radius: 10px;
@@ -473,15 +524,39 @@
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .citeBtn[data-cited] .citeIdx { text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
+/* 知识库来源：换用紫色系。
+   两类来源在同一条列表里，但点开的去向完全不同（文件 → 知识库·文件；消息 → 会话），
+   只靠名字区分太弱 —— 用户点之前就该看出这条不是聊天记录。 */
+.citeBtn[data-src='kb'] {
+  border-color: color-mix(in srgb, var(--nm-purple) 32%, transparent);
+  background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
+}
+.citeBtn[data-src='kb'] .citeIdx { color: var(--nm-purple); }
+.citeBtn[data-src='kb']:hover {
+  border-color: color-mix(in srgb, var(--nm-purple) 55%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-purple) 10%, transparent);
+}
+.citeBtn[data-src='kb'][data-cited] {
+  border-color: color-mix(in srgb, var(--nm-purple) 60%, transparent);
+  background: color-mix(in srgb, var(--nm-purple) 12%, transparent);
+}
+.citeBtn[data-src='kb'][data-cited] .citeIdx { text-shadow: 0 0 8px color-mix(in srgb, var(--nm-purple) 55%, transparent); }
+/* 无法跳转的来源（如缺 username 的残缺引用）：不给指针，别骗点击。 */
+.citeBtn[data-src='unknown'] { cursor: default; }
 .citeIdx { color: var(--nm-cyan); font-weight: 700; flex-shrink: 0; }
-.citeName { font-weight: 600; flex-shrink: 0; }
-.citeTime { color: var(--nm-text-2); flex-shrink: 0; }
+/* 会话名是这行里唯一「长起来没边」的项，压缩全部由它承担：可收缩 + 省略号。
+   团聊时这里是「群名 · 发送者」，可能很长。 */
+.citeName { font-weight: 600; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 时间定长且信息密度高，保持完整不换行；让位的是会话名与摘要。 */
+.citeTime { color: var(--nm-text-2); flex-shrink: 0; white-space: nowrap; }
 .citeSnippet {
   color: var(--nm-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  /* 空间不够时摘要最先让位（可以压到 0），保证序号/会话名/时间始终可见。 */
+  flex: 1 1 0;
 }
 .chatPending {
   display: flex;
@@ -682,59 +757,13 @@ textarea.composerInput:focus-visible { outline: none; }
 .optDismiss:hover { border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 .optError { font-size: 12px; color: var(--nm-danger); flex-shrink: 0; }
 
-/* ── 模型配置栏（面板内实体侧栏，默认不渲染）────────────────────
-   占据 askLayout 的第二个 flex 车道：桌面固定 400px，对话栏同时收窄，
-   两栏并排可见、都可交互、零遮挡。入场只做「淡入 + 向右 12px 归位」的纯视觉动画
-   （transform 不参与布局，且位移方向背离对话栏，全程不会压到任何内容）。 */
-.modelPanel {
-  flex: 0 0 400px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--nm-bg-1);
-  border: 1px solid var(--nm-border-hover);
-  border-radius: 16px;
-  box-shadow: var(--nm-shadow-card);
-  overflow: hidden;
-  animation: askPanelIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-}
-@keyframes askPanelIn {
-  from { opacity: 0; transform: translateX(12px); }
-  to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .modelPanel { animation-duration: 0.01s; }
-}
-.drawerHdRight { display: flex; align-items: center; gap: 8px; }
-/* 「返回对话」：只在整栏对换（≤900px、对话栏被让位）时出现 —— 并排模式下
-   对话栏一直可见，不需要这个入口。 */
-.panelBack {
-  display: none;
-  align-items: center;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.panelBack:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); color: var(--nm-text-1); }
-
-/* ── 模型配置表单已迁出 ──
-   原本这套 .modelGrid/.modelInput/.modelPanel 等样式属于「模型配置」侧栏；
-   该侧栏已整体迁到「数据配置」页面（见 ai-model.module.css），故此处删除。 */
-
-/* ── 窄屏（≤900px）：两栏并排放不下 → 整栏对换 ──
-   侧栏占满面板宽度，对话栏暂时让位（只留面板自己的关闭按钮切回）。
-   这是「换页」而不是「覆盖」：不存在被压在下面的内容，也没有遮罩与层级竞争。
-   注：模型配置侧栏已迁到「数据配置」页面，这里只剩检索设置栏。 */
-@media (max-width: 900px) {
-  .askLayout[data-side-open] .askPage { display: none; }
-}
+/* ── 侧栏样式已全部迁出/移除 ──
+   ① .modelGrid/.modelInput/.modelPanel：原「模型配置」侧栏 → 已迁到「数据配置」页面
+      （见 ai-model.module.css）；
+   ② .modelPanel/.panelBack/.drawerHdRight 与 askPanelIn 入场动画：原「检索设置」侧栏
+      → 该面板已于 2026-09-18 从界面移除（检索参数固化为内置默认）。
+   随之一并删除的还有 `.askLayout[data-side-open] .askPage { display:none }`
+   —— 那个 ≤900px 的「整栏对换」规则失去了触发者，留着只会误导下一个人。 */
 
 /* ── 滚动顺滑度（对话滚动容器 = kit .panelBody + 本类）──
    overscroll-behavior: contain —— 滚到底/顶时不把滚动链抛给外层（面板在触控板上

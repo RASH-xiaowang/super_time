@@ -198,23 +198,45 @@ export function queryFiles(
   limit?: number,
   offset: number = 0,
   category?: string,
+  /**
+   * 关键词：匹配 `file_name` **或 `md5`**。
+   *
+   * 为什么在服务端做：此前界面「搜索时一次性拉 500 条再本地过滤」，而文件总量实测 4305
+   * —— 覆盖率 11.6%，且界面完全不提示，用户会以为「这个文件不存在」。
+   * 另外客户端那个 filter 写成 `(fileName || md5)`，`||` 短路让 md5 **永远不参与比较**，
+   * 所以「按 MD5 搜」在这个版本里根本没实现过。
+   */
+  q?: string,
 ): { files: FileItem[]; total: number; counts: Record<string, number> } {
   const db = new DatabaseSync(join(decryptedDir, 'hardlink', 'hardlink.db'), { readOnly: true })
   try {
     const want = category && category !== 'all' ? category : ''
+    const kw = (q ?? '').trim()
+    // 转义 % 与 _：否则用户输入里的通配符会被当成 SQL 通配符（搜「%」等于全表）
+    const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
     const parts: string[] = []
+    /** 与 `parts` 一一对应的关键词参数：每张表 2 个（md5、file_name）。 */
+    const allKwParams: string[] = []
     const counts: Record<string, number> = {}
     let total = 0
     for (const [table, cat] of FILE_TABLES) {
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
       if (!has) { counts[cat] = 0; continue }
+      // 关键词过滤下推到每张表的 COUNT：分类计数（界面上「图片 (N)」）与 total
+      // 都随搜索变化，否则会出现「标签写 3309、列表只有 3 条」的自相矛盾。
+      const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name))
+      const sel = (c: string, dft: string) => (cols.has(c) ? c : dft)
+      const whereSql = kw
+        ? ` WHERE (${sel('md5', "''")} LIKE ? ESCAPE '\\' OR ${sel('file_name', "''")} LIKE ? ESCAPE '\\')`
+        : ''
+      const kwParams: string[] = kw ? [like, like] : []
       let n = 0
-      try { n = (db.prepare('SELECT COUNT(*) AS n FROM ' + table).get() as { n: number }).n } catch { n = 0 }
+      try {
+        n = (db.prepare('SELECT COUNT(*) AS n FROM ' + table + whereSql).get(...kwParams) as { n: number }).n
+      } catch { n = 0 }
       counts[cat] = n
       if (want !== '' && cat !== want) continue
       total += n
-      const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name))
-      const sel = (c: string, dft: string) => (cols.has(c) ? c : dft)
       parts.push([
         'SELECT',
         [
@@ -227,7 +249,9 @@ export function queryFiles(
           `'${cat}' AS category`,
         ].join(', '),
         'FROM', table,
+        whereSql,
       ].join(' '))
+      if (kw) allKwParams.push(like, like)
     }
 
     const size = limit === undefined ? 100 : Math.max(0, limit)
@@ -236,7 +260,10 @@ export function queryFiles(
     if (parts.length > 0) {
       try {
         const sql = `SELECT * FROM (${parts.join(' UNION ALL ')}) ORDER BY modify_time DESC LIMIT ? OFFSET ?`
-        const rows = db.prepare(sql).all(size, page) as Array<Record<string, unknown>>
+        // 每张被 UNION 进来的表各贡献 2 个占位符（md5 / file_name），
+        // 参数必须与占位符**逐个对齐** —— 少了会被 SQLite 拒绝，
+        // 而这里的外层 try/catch 会把那个错误吞成「空列表」（表现就是搜不到任何东西）。
+        const rows = db.prepare(sql).all(...allKwParams, size, page) as Array<Record<string, unknown>>
         const dirSource = dirSourceCached(decryptedDir)
         for (const r of rows) {
           const dir1 = Number(r.dir1 ?? 0)

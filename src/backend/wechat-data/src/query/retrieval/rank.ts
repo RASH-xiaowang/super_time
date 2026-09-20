@@ -57,6 +57,9 @@ export function rerankDocs(input: RerankInput): RankedDoc[] {
 
     const sparse = f.scores.sparse ?? 0
     const dense = f.scores.dense ?? 0
+    // 知识库通道的归一化分。它**不并进 sparse**：虽然两者都是 BM25 族且都已归一化到
+    // 0~1，但解释面板要如实区分「聊天记录命中」与「文件命中」。
+    const kb = f.scores.kb ?? 0
     const entityHit = entity && (d.name.includes(entity) || (d.sender ?? '').includes(entity) || body.includes(entity)) ? 1 : 0
 
     let cov = 0
@@ -73,7 +76,7 @@ export function rerankDocs(input: RerankInput): RankedDoc[] {
     const agreement = Math.min(1, Math.max(0, (channelCount - 1) / 2))
 
     const features: Record<keyof RerankWeights, number> = {
-      sparse, dense, entity: entityHit, coverage, timePref, recency, agreement,
+      sparse, dense, kb, entity: entityHit, coverage, timePref, recency, agreement,
     }
     let score = 0
     for (const k of Object.keys(weights) as Array<keyof RerankWeights>) {

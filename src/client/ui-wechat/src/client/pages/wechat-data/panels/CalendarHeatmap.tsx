@@ -4,13 +4,13 @@
  * space-capsule palette as the geography maps. The chart owns its canvas and
  * disposes it on unmount; it also responds to container reflow via ResizeObserver.
  */
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { HeatmapChart } from 'echarts/charts'
 import { CalendarComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { tokenColor } from '../utils/theme-color.ts'
-import { getThemeMode, subscribeThemeMode } from '../theme.ts'
+import { useThemeMode } from '../theme.ts'
 import css from './overview.module.css'
 
 echarts.use([HeatmapChart, CalendarComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
@@ -36,7 +36,7 @@ interface CalendarHeatmapProps {
 export function CalendarHeatmap({ data }: CalendarHeatmapProps): React.JSX.Element {
   const elRef = useRef<HTMLDivElement | null>(null)
   // 图表配色取自主题令牌，切换主题后必须重建 option 才会换色。
-  const themeMode = useSyncExternalStore(subscribeThemeMode, getThemeMode)
+  const themeMode = useThemeMode()
 
   useEffect(() => {
     const el = elRef.current

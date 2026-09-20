@@ -132,15 +132,22 @@ export function EmoticonsPanel(): React.JSX.Element {
     flash(text)
   }
 
+  const q = useMemo(() => search.trim().toLowerCase(), [search])
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
     if (!q) return custom
     return custom.filter(e => e.md5.toLowerCase().includes(q) || (e.caption ?? '').toLowerCase().includes(q))
-  }, [custom, search])
+  }, [custom, q])
+
+  // 表情包此前**完全不参与过滤**：placeholder 写着「搜索表情包名称」，但渲染直接用
+  // `packages.slice()` ⇒ 在「表情包」页签下输入任何内容，界面都纹丝不动。
+  const filteredPackages = useMemo(() => {
+    if (!q) return packages
+    return packages.filter(p => p.name.toLowerCase().includes(q))
+  }, [packages, q])
 
   const shownCustom = tab === 'all' || tab === 'custom' ? filtered : []
   const { count: emoCount, sentinelRef: emoSentinel } = useProgressiveList(shownCustom.length, 150)
-  const { count: pkgCount, sentinelRef: pkgSentinel } = useProgressiveList(tab === 'packages' ? packages.length : 0, 150)
+  const { count: pkgCount, sentinelRef: pkgSentinel } = useProgressiveList(tab === 'packages' ? filteredPackages.length : 0, 150)
 
   const copyMd5 = (md5: string): void => {
     void navigator.clipboard.writeText(md5).then(() =>{  notify('已复制 MD5: ' + md5.slice(0, 8) + '…') }).catch(() =>{  notify('复制失败') })
@@ -163,9 +170,9 @@ export function EmoticonsPanel(): React.JSX.Element {
         right={(
           <Segmented
             options={[
-              { value: 'all', label: `全部 (${custom.length + packages.length})` },
-              { value: 'custom', label: `自定义 (${custom.length})` },
-              { value: 'packages', label: `表情包 (${packages.length})` },
+              { value: 'all', label: `全部 (${filtered.length + filteredPackages.length})` },
+              { value: 'custom', label: `自定义 (${filtered.length})` },
+              { value: 'packages', label: `表情包 (${filteredPackages.length})` },
             ]}
             value={tab}
             onChange={(v) => { setTab(v as 'all' | 'custom' | 'packages') }}
@@ -189,15 +196,17 @@ export function EmoticonsPanel(): React.JSX.Element {
         ))}
         {!loading && !error && tab !== 'packages' && shownCustom.length > emoCount && <ListSentinel refFn={emoSentinel} />}
         {!loading && !error && tab !== 'packages' && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
-        {!loading && !error && tab === 'packages' && packages.length === 0 && <EmptyMaybeSyncing text="暂无表情包" />}
-        {!loading && !error && tab === 'packages' && packages.slice(0, pkgCount).map(p => (
+        {!loading && !error && tab === 'packages' && filteredPackages.length === 0 && (
+          <EmptyMaybeSyncing text={q ? '未找到相关表情包' : '暂无表情包'} />
+        )}
+        {!loading && !error && tab === 'packages' && filteredPackages.slice(0, pkgCount).map(p => (
           <div key={p.name} className={css.fileCell} title={p.name}>
             <span className={css.fileIcon}>📦</span>
             <span className={css.fileName}>{p.name}</span>
             <span className={css.fileMeta}>{p.count} 个表情</span>
           </div>
         ))}
-        {!loading && !error && tab === 'packages' && packages.length > pkgCount && <ListSentinel refFn={pkgSentinel} />}
+        {!loading && !error && tab === 'packages' && filteredPackages.length > pkgCount && <ListSentinel refFn={pkgSentinel} />}
       </div>
     </div>
   )

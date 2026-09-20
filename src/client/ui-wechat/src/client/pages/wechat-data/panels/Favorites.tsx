@@ -8,7 +8,7 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressi
 import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
@@ -184,7 +184,7 @@ function parseFavItem(f: FavorItem): {
  * Render the favorites panel.
  * @returns the favorites element tree.
  */
-export function FavoritesPanel(): React.JSX.Element {
+export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: number } } = {}): React.JSX.Element {
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
   const [items, setItems] = useState<readonly FavorItem[]>([])
@@ -203,15 +203,12 @@ export function FavoritesPanel(): React.JSX.Element {
   const favImgFetched = useRef(new Set<string>())
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
+  // 类型仍在本端筛（后端没有该参数）；关键字已由服务端过滤，这里不再重复做一遍 ——
+  // 本端重复过滤只会作用在「已加载的那一页」上，正是之前漏结果的根因。
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return items.filter((f) => {
-      if (type !== 'all' && String(f.type) !== type) return false
-      if (!q) return true
-      const info = parseFavItem(f)
-      return [info.title, info.desc, info.source, f.content, f.fromUsr, f.chatName].some(v => v.toLowerCase().includes(q))
-    })
-  }, [items, search, type])
+    if (type === 'all') return items
+    return items.filter((f) => String(f.type) === type)
+  }, [items, type])
 
   const { count: favCount, sentinelRef: favSentinel } = useProgressiveList(filtered.length, 120)
 
@@ -219,42 +216,38 @@ export function FavoritesPanel(): React.JSX.Element {
     flash(text)
   }
 
+
+  // 全局搜索的命中直接跳到本面板时，把关键词一起带过来。
+  // 此前是「只切页签」—— 用户落到一份未筛选的列表上，必须把刚才输的词再打一遍。
+  useEffect(() => {
+    if (!seedQuery) return
+    setSearch(seedQuery.q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedQuery?.nonce])
+
+  // 关键词交给**服务端**（收藏条目的 XML 里就含标题/描述/来源，后端按同一口径 LIKE）。
+  // 此前是「拉 500 条再本地过滤」—— 收藏超过 500 条后就会静默漏结果，且界面不提示。
+  const kw = useDebouncedValue(search, 250).trim()
+  const searching = kw !== ''
+
   const pager = usePagedList<FavorItem>({
     pageSize: 120,
     fetchPage: async (offset, limit) => {
-      const env = await apiGetFavorites({ limit, offset })
+      const env = await apiGetFavorites({ limit, offset, ...(kw ? { q: kw } : {}) })
       return { items: env.favorites, total: env.total }
     },
   })
 
-  const searching = search.trim() !== ''
-  // 普通浏览：分页逐页加载；搜索时一次性拉取 500 条（用户主动操作），保证跨页搜索结果完整。
   useEffect(() => {
-    if (searching) {
-      let cancelled = false
-      setLoading(true)
-      setError(null)
-      void apiGetFavorites({ limit: 500 })
-        .then((env) => {
-          if (cancelled) return
-          setItems(env.favorites)
-          setTotal(env.total)
-        })
-        .catch((e: unknown) => { if (!cancelled) setError((e as Error).message) })
-        .finally(() => { if (!cancelled) setLoading(false) })
-      return () => { cancelled = true }
-    }
     pager.reset()
-    return undefined
-  }, [searching, pager.reset])
+  }, [kw, pager.reset])
 
   useEffect(() => {
-    if (searching) return
     setItems(pager.items)
     setTotal(pager.total)
     setLoading(pager.loading)
     setError(pager.error)
-  }, [searching, pager.items, pager.total, pager.loading, pager.error])
+  }, [pager.items, pager.total, pager.loading, pager.error])
 
   const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
 
@@ -335,13 +328,7 @@ export function FavoritesPanel(): React.JSX.Element {
     try {
       const r = await apiDeleteFavoriteItems({ ids })
       notify(`已删除 ${r.deleted} 项收藏`)
-      if (searching) {
-        const env = await apiGetFavorites({ limit: 500 })
-        setItems(env.favorites)
-        setTotal(env.total)
-      } else {
-        pager.reset()
-      }
+      pager.reset()
       setSelected(new Set())
       setSelectMode(false)
     } catch (e) {

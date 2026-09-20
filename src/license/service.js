@@ -176,6 +176,14 @@ const METHOD_FEATURE = {
   optimizeAskQuestion: 'ai-ask',
   generateDailySummary: 'ai-summary',
   generatePeriodSummary: 'ai-summary',
+  // 文件摘要与日/周期总结同一档：都是「把内容交给模型换一段概括」，
+  // 不该比问答要更高的授权，也不该混进 ai-ask（那样关掉摘要功能位就停不掉它）。
+  summarizeKbFile: 'ai-summary',
+  // 实体抽取与链接建议同上：都是「把内容交给模型换一段产出」，不产生新权利。
+  // 漏登记的后果不是「谁都能用」而是**反的** —— fail-closed 回落到 wechat-data 档，
+  // 只买了数据浏览没买 AI 授权的人反而能调它出网（`authorizeCall` 的默认分支）。
+  extractKbEntities: 'ai-summary',
+  suggestKbLinks: 'ai-summary',
   exportSessionMessages: 'export',
   exportCsv: 'export',
   exportAnnualReport: 'export',

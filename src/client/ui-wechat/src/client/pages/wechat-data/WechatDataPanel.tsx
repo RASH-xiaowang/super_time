@@ -39,12 +39,14 @@ import { PeriodSummaryPanel } from './panels/PeriodSummary.tsx'
 import { GraphPanel } from './panels/Graph.tsx'
 import { SettingsPanel } from './panels/Settings.tsx'
 import { MergedSections } from './panels/MergedSections.tsx'
+import { KbShell } from './panels/KbShell.tsx'
+import { setActiveKb } from './panels/kb-scope.ts'
 import css from './wechat-data.module.css'
 import kitCss from './ui/kit.module.css'
 import './scifi-theme.css'
 import './light-theme.css'
 import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
-import { getThemeMode, subscribeThemeMode, toggleThemeMode } from './theme.ts'
+import { toggleThemeMode, useThemeMode } from './theme.ts'
 import { Dialog, Tooltip } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
@@ -193,6 +195,19 @@ function StatusDot(): React.JSX.Element {
   return <span className={css.statusDot} aria-hidden="true" />
 }
 
+/**
+ * 全局搜索的命中落到某个页签时，把关键词一起带过去。
+ *
+ * 此前「联系人 / 收藏 / 文件 / 记录」四组命中只做 `setActive(tab)` —— 用户落到一份
+ * **未筛选**的列表上，必须把刚才输的词再打一遍。带上 `nonce` 是为了让「同一个词
+ * 连续点两次」也能重新种入（只靠值变化的话第二次不会触发）。
+ */
+export interface SearchSeed {
+  tab: WechatTab
+  q: string
+  nonce: number
+}
+
 /** Render the active tab; unimplemented tabs show a placeholder. */
 function renderTab(
   tab: WechatTab,
@@ -203,13 +218,16 @@ function renderTab(
   momentAuthor: string | null,
   clearMomentAuthor: () => void,
   onOpenSettings: (section?: string) => void,
+  seed: SearchSeed | null,
+  onOpenKbFile: (kbId: number, fileId: number) => void,
+  kbFocus: { fileId: number; nonce: number } | null,
 ): React.JSX.Element {
   const chatViews: Partial<Record<string, ChatView>> = {
     chats: 'chats', bizchats: 'bizchats', servicechats: 'servicechats', kefu: 'kefu',
   }
   switch (tab) {
     case 'overview': return <OverviewPanel onNavigate={(tab) =>{  onNavigate(tab as WechatTab) }} onOpenChat={onOpenChat} onOpenMoments={onOpenMoments} />
-    case 'ask': return <AskPanel onOpenChat={onOpenChat} />
+    case 'ask': return <AskPanel onOpenChat={onOpenChat} onOpenKbFile={onOpenKbFile} />
     case 'chats':
     case 'bizchats':
     case 'servicechats':
@@ -224,13 +242,45 @@ function renderTab(
         ]}
       />
     )
-    case 'contacts': return (
-      <ContactsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} onOpenChat={onOpenChat} onOpenMoments={onOpenMoments} />
+    // 通讯录与社交图谱是**同一批人的两种看法**（联系人列表 / 关系图）：2026-09-17 起
+    // 收进同一个导航项，由面板顶部段条切换 —— 与「收藏与表情」「文件与存储」「资金往来」
+    // 「群聊分析」「总结与报告」「消息视图」六组走同一个外壳（MergedSections）。
+    // 两个 tab 必须都列全：深链 #contacts / #graph 要落到正确分段，
+    // MergedSections 内部也是靠 `initial={tab}` 的变化来同步（它的 useState 只在首次生效）。
+    // 图谱面板内部零改动（Graph.tsx 的 PanelHeader / 统计条 / 画布 / 右侧控制栏 /
+    // 海报与 SVG·PNG 导出全部原样），因此不存在功能丢失。
+    case 'contacts':
+    case 'graph': return (
+      <MergedSections
+        ariaLabel="联系人与社交视图"
+        initial={tab}
+        sections={[
+          { key: 'contacts', label: '通讯录', render: () => <ContactsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} onOpenChat={onOpenChat} onOpenMoments={onOpenMoments} seedQuery={seed?.tab === 'contacts' ? seed : undefined} /> },
+          { key: 'graph', label: '社交图谱', render: () => <GraphPanel variant="social" onOpenChat={onOpenChat} /> },
+        ]}
+      />
     )
-    // 社交图谱 / 知识图谱是两个并列入口，各自独立面板：前者是「我的人脉」，
-    // 后者是「我的笔记」。不再用 MergedSections 把通讯录与图谱捆在一个导航项里。
-    case 'graph': return <GraphPanel variant="social" onOpenChat={onOpenChat} />
-    case 'knowledge': return <GraphPanel variant="knowledge" onOpenChat={onOpenChat} />
+    // 知识图谱与知识库是**同一批笔记的两种看法**（同一个 `wechat_notes.db` 的 notes 表）：
+    // 图谱把笔记当「网」看（力导向画布 / [[链接]] 边 / 待补节点），知识库把它当「文档」看
+    // （列表 / 详情 / 新建编辑 / 标签 / 关键词搜索）。2026-09-18 起收进同一个导航项，
+    // 由面板顶部段条切换 —— 与「通讯录/社交图谱」「收藏与表情」「文件与存储」等七组
+    // 走同一个外壳（MergedSections）。
+    // 三个 tab 必须都列全：深链 #kb / #knowledge / #kbfiles 要落到正确分段，
+    // MergedSections 内部也是靠 `initial={tab}` 的变化来同步（它的 useState 只在首次生效）。
+    // 2026-09-19：分段与库切换一起搬进 `KbShell`（三栏：库 rail + 分段 + 面板体），
+    // 这里只留一个分支 —— 三个 tab 仍各自是合法深链目标，落点由 `initial` 决定。
+    // 注意**不要**把它们拆进 contacts|graph 那一段：笔记不属于通讯录语义，
+    // 「联系人与社交」组下只有一次合并（contacts|graph）。
+    case 'knowledge':
+    case 'kb':
+    case 'kbfiles': return (
+      <KbShell
+        initial={tab}
+        onOpenChat={onOpenChat}
+        focusFileId={kbFocus?.fileId ?? null}
+        focusNonce={kbFocus?.nonce ?? 0}
+      />
+    )
     case 'moments': return <MomentsPanel author={momentAuthor} onClearAuthor={clearMomentAuthor} />
     // ── 合并面板：同一主题的多个视图收进一个导航项，顶部分段切换。
     //    每个 case 都列全被合并的 tab，保证深链（#assetinsights 等）仍落到正确分段。
@@ -241,7 +291,7 @@ function renderTab(
         ariaLabel="收藏与表情视图"
         initial={tab}
         sections={[
-          { key: 'favorites', label: '我的收藏', render: () => <FavoritesPanel /> },
+          { key: 'favorites', label: '我的收藏', render: () => <FavoritesPanel seedQuery={seed?.tab === 'favorites' ? seed : undefined} /> },
           { key: 'emoticons', label: '表情包', render: () => <EmoticonsPanel /> },
           { key: 'assetinsights', label: '收藏/表情统计', render: () => <AssetInsightsPanel /> },
         ]}
@@ -255,7 +305,7 @@ function renderTab(
         ariaLabel="文件与存储视图"
         initial={tab}
         sections={[
-          { key: 'files', label: '文件资产', render: () => <FilesPanel /> },
+          { key: 'files', label: '文件资产', render: () => <FilesPanel seedQuery={seed?.tab === 'files' ? seed : undefined} /> },
           { key: 'mediaassets', label: '媒体资产', render: () => <MediaAssetsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
           { key: 'storage', label: '存储分析', render: () => <StoragePanel onOpenChat={onOpenChat} /> },
           { key: 'officialassets', label: '公众号文章', render: () => <OfficialAssetsPanel onOpenChat={onOpenChat} /> },
@@ -269,7 +319,7 @@ function renderTab(
         initial={tab}
         sections={[
           { key: 'ledger', label: '月度汇总', render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
-          { key: 'records', label: '转账红包明细', render: () => <RecordsPanel onOpenChat={onOpenChat} /> },
+          { key: 'records', label: '转账红包明细', render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
         ]}
       />
     )
@@ -355,7 +405,7 @@ export function WechatDataPanel(): React.JSX.Element {
     try { if (typeof location !== 'undefined') location.hash = t } catch { /* hash 写入失败可忽略 */ }
   }, [])
   const apiStatus = useSyncExternalStore(subscribeApiStatus, getApiStatus)
-  const themeMode = useSyncExternalStore(subscribeThemeMode, getThemeMode)
+  const themeMode = useThemeMode()
   /** 导航栏展开态：由导航顶部的开关按钮点击切换（此前是鼠标悬停展开）。 */
   const [navOpen, setNavOpen] = useState(false)
   /** 导航轨滚动感知：滚动条已隐藏（scrollbar-width:none），改用「边缘渐隐 + 箭头」
@@ -422,6 +472,9 @@ export function WechatDataPanel(): React.JSX.Element {
     records: UnifiedSearchRecord[]
   }>({ sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [] })
 
+  /** 当前搜索词（渲染作用域）：命中跳转时要把同一个词带进目标面板。 */
+  const gsQuery = searchQuery.trim()
+
   /** Cross-panel navigation: jump to the chats tab and open/locate a session. */
   const openChat = useCallback((username: string, localId?: number): void => {
     const target: ChatTarget = { username, nonce: Date.now() }
@@ -431,6 +484,21 @@ export function WechatDataPanel(): React.JSX.Element {
   }, [])
 
   /**
+   * 问答引用 → 知识库文件：切到「知识库 · 文件」分段并就地选中那一份文件。
+   *
+   * 与 `openChat` 同形态（定点跳转 = 记目标 + 切页签），但目标有**两个**字段：
+   * 文件 id 是全局自增的，只带 `fileId` 切库之后会把用户送到另一个库里的同号文件。
+   * 先 `setActiveKb` 再导航 —— 文件面板的取数与首帧缓存都按当前库算，
+   * 顺序反了它会拿旧库去查，列表里根本没有这一条。
+   */
+  const [kbFocus, setKbFocus] = useState<{ fileId: number; nonce: number } | null>(null)
+  const openKbFile = useCallback((kbId: number, fileId: number): void => {
+    setActiveKb(kbId)
+    setKbFocus({ fileId, nonce: Date.now() })
+    setActive('kbfiles')
+  }, [setActive])
+
+  /**
    * 弹窗里装不下的跳转（如「文件资产 / 存储分析」）：关掉弹窗，再走正常导航切主内容区。
    * 装得下的那几节由 SettingsPanel 内部直接切节，不会走到这里。
    */
@@ -438,6 +506,16 @@ export function WechatDataPanel(): React.JSX.Element {
     setSettingsOpen(false)
     navigate(tab as WechatTab)
   }, [navigate])
+
+  /**
+   * 全局搜索命中 → 切到目标页签并把关键词种进去（面板靠 `nonce` 变化重新种入）。
+   * 刻意保留全局搜索框里已输入的内容（不清空）：用户可能还想看下一组命中。
+   */
+  const [seed, setSeed] = useState<SearchSeed | null>(null)
+  const seedTo = useCallback((tab: WechatTab, q: string): void => {
+    setSeed({ tab, q, nonce: Date.now() })
+    setActive(tab)
+  }, [setActive])
 
   /** Cross-panel navigation: jump to the moments tab filtered by one author. */
   const openMoments = useCallback((username: string): void => {
@@ -510,8 +588,8 @@ export function WechatDataPanel(): React.JSX.Element {
 
   // 只渲染活动标签；用 useMemo 避免搜索/数据库状态等无关状态变化时重建面板元素。
   const activePanel = useMemo(
-    () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings),
-    [active, navigate, openChat, chatTarget, openMoments, momentAuthor, openSettings],
+    () => renderTab(active, navigate, openChat, chatTarget, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus),
+    [active, navigate, openChat, chatTarget, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus],
   )
 
   const noSearchResults = !searchLoading
@@ -595,7 +673,7 @@ export function WechatDataPanel(): React.JSX.Element {
                 <>
                   <div className={gs.group}>联系人</div>
                   {searchResults.contacts.map((c, i) => (
-                    <button key={`c:${c.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); if (c.category === 'contact' || c.category === 'group') openChat(c.username); else setActive('contacts') }}>
+                    <button key={`c:${c.username}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); if (c.category === 'contact' || c.category === 'group') openChat(c.username); else seedTo('contacts', gsQuery) }}>
                       <span className={gs.rowName}>{c.name}</span>
                       <span className={kitCss.textCaptionTrunc}>{c.category === 'group' ? '群聊' : c.category === 'official' ? '公众号' : '联系人'}</span>
                     </button>
@@ -617,7 +695,7 @@ export function WechatDataPanel(): React.JSX.Element {
                 <>
                   <div className={gs.group}>收藏</div>
                   {searchResults.favorites.map((f, i) => (
-                    <button key={`f:${f.id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('favorites') }}>
+                    <button key={`f:${f.id}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('favorites', gsQuery) }}>
                       <span className={gs.rowName}>收藏 #{f.id}</span>
                       <span className={kitCss.textCaptionTrunc}>{f.snippet}</span>
                     </button>
@@ -628,7 +706,7 @@ export function WechatDataPanel(): React.JSX.Element {
                 <>
                   <div className={gs.group}>文件</div>
                   {searchResults.files.map((f, i) => (
-                    <button key={`file:${f.fileName}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('files') }}>
+                    <button key={`file:${f.fileName}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('files', gsQuery) }}>
                       <span className={gs.rowName}>{f.fileName}</span>
                       <span className={kitCss.textCaptionTrunc}>{f.size > 0 ? `${(f.size / 1024).toFixed(1)} KB` : f.md5}</span>
                     </button>
@@ -639,7 +717,7 @@ export function WechatDataPanel(): React.JSX.Element {
                 <>
                   <div className={gs.group}>记录</div>
                   {searchResults.records.map((r, i) => (
-                    <button key={`r:${r.kind}:${r.session}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); setActive('records') }}>
+                    <button key={`r:${r.kind}:${r.session}:${i}`} type="button" className={gs.row} onClick={() => { setSearchOpen(false); seedTo('records', gsQuery) }}>
                       <span className={gs.rowName}>{r.name}</span>
                       <span className={kitCss.textCaptionTrunc}>{r.kind === 'transfers' ? '转账' : '红包'}</span>
                     </button>

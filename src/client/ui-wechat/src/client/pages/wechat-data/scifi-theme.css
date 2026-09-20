@@ -291,6 +291,25 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --nm-s-6: 24px;
   --nm-s-8: 32px;
 
+  /* ── 紧凑数据密度（总结三页：每日总结 / 周期总结 / 年度报告 共用）──────
+     这三页的共同任务是「一屏里看尽量多的行」，而上一条阶梯是面向普通内容页的：
+     最小 8px、字号最小 11px，用它排列表行会白掉一半高度。这里给出一套更细的档位。
+     定在主题里（而不是三个面板各写一套）是「三页仍然像同一个产品」的前提：
+     行高、行内边距、字号只有一处定义，改动一处三页同步。 */
+  --nm-dense-fs: 12px;      /* 主文本（名称 / 键值 / 正文） */
+  --nm-dense-fs-sm: 11px;   /* 次要文本（元信息 / 徽标 / 图例） */
+  --nm-dense-fs-xs: 10px;   /* 极小标注（热力图坐标、月份/星期刻度） */
+  --nm-dense-lh: 1.45;
+  --nm-dense-g1: 2px;       /* 行内极紧间隔（chip 之间） */
+  --nm-dense-g2: 4px;
+  --nm-dense-g3: 6px;       /* 行内标准间隔 */
+  --nm-dense-g4: 8px;
+  --nm-dense-g5: 10px;      /* 卡片与卡片之间 */
+  --nm-dense-pad-x: 10px;   /* 卡片/行的水平内边距 */
+  --nm-dense-pad-y: 7px;    /* 卡片的垂直内边距 */
+  --nm-dense-row-y: 5px;    /* 列表行的垂直内边距（行高约 27px） */
+  --nm-dense-r: 8px;        /* 紧凑行/小按钮的圆角 */
+
   /* 语义色 */
   --nm-success: #00ff88;
   --nm-success-15: rgba(0, 255, 136, 0.15);
@@ -485,3 +504,182 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 @keyframes nmSkelSweep { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .nm-skel::after { animation: none; } }
 
+
+/* ── 主题切换：颜色令牌级过渡 ─────────────────────────────────────────────
+ * 由 theme.ts 的 commitTheme() 驱动：切换主题期间给 <html> 挂一次性的 `.theme-transition`
+ * 类，到点（时长 + 80ms）摘掉。
+ *
+ * ## 为什么是「令牌级」而不是「元素级」
+ *
+ * 上一版给文档里**每个元素**挂 transition（`background-color … , color …`，用 `*` 选择器
+ * 连 ::before / ::after 一起）。机制上能跑，但真机量化发现成本几乎全在 `color` 上：
+ * 它是**继承属性**，`*` 叠加两个伪元素后文档里有 880 个元素各建一条 color 过渡、
+ * 逐帧重算样式 —— 实测累计卡顿 265ms（10 帧超过 16.7ms），400ms 的过渡只渲染出 7 个色阶。
+ * 对照实验（working/check-output/cdp-theme-cost2.txt）里把 color 从过渡中拿掉，
+ * 立刻回到 0 帧掉帧；也就是说「元素级 color 过渡」本身就是性能缺陷，不是数据噪声。
+ *
+ * 现在改成给**颜色令牌本身**注册可插值类型（@property … syntax:'<color>'），
+ * 只让 `:root` 上这几个令牌动画。之所以这样就够用，是因为颜色属性在使用时才从 var()
+ * 取值：令牌逐帧插值后，所有引用它的元素都会逐帧拿到中间色，**不需要元素自己挂过渡**。
+ * 伪元素（::before / ::after）与 createPortal 出去的浮层同理 —— 这里没有任何选择器，
+ * 也就没有「漏掉某类元素」的可能。
+ * 实测：过渡对象 1461 → 93 个，累计卡顿 265ms → 34ms（隔离实验值；产品整段复测 45ms，
+ * 而同一轮的基线噪声本身就有 42ms，见 working/check-output/cdp-theme-token.txt），
+ * 而 400ms 内渲染出的背景色阶从 7 种涨到 22 种 —— 既更平滑也更省。
+ *
+ * ## 登记清单怎么来的（新增令牌时请同步）
+ *
+ * 下面这些 @property 的判定规则是**静态推导**出来的：「在 scifi-theme.css 或
+ * light-theme.css 里声明过、且值解析到底是颜色」的令牌。theme.spec.ts 里有等价守卫，
+ * 会**双向**比对 —— 清单里有而主题文件里不是颜色的会转红，主题文件里是颜色而清单里
+ * 没有的也会转红，所以漏登记不会静默发生。
+ *
+ * ⚠ 误注册比漏注册危险得多：`syntax: '<color>'` 一旦套在非颜色的令牌上
+ * （例如 `--dsw-font-family`、`--nm-glow-sm`），该令牌在计算值阶段会变成
+ * guaranteed-invalid，字体 / 阴影会**整块消失**。所以判定一律「var() 链解析到底再判」，
+ * 拿不准就判非颜色 —— 代价只是「这个令牌切换时不渐变」。
+ * 同理 initial-value 必须是**计算无关**的值（不能含 var()），否则整条 @property 规则被判无效。
+ *
+ * ## 范围与边界
+ *
+ * - **触发条件**：setThemeMode / toggleThemeMode 被调用且目标模式 ≠ 当前模式，一次切换只触发一次。
+ * - **时长**：400ms；`prefers-reduced-motion: reduce` 时 120ms（仍保留过渡，不做硬跳）。
+ * - **缓动**：`cubic-bezier(0.22, 1, 0.36, 1)`（先快后慢）。
+ * - **适用范围**：`<html>`（:root）上登记的颜色令牌 → 所有引用它们的元素与伪元素，
+ *   覆盖由令牌取值的一切颜色 —— background-color / color / border-color / outline-color /
+ *   fill / stroke 等。不需要任何元素级选择器。
+ * - **不在范围内**（切换时瞬变，均已实测确认）：
+ *   · 阴影令牌（`--nm-glow-*` / `--nm-shadow-*` / `--dsw-shadow-lv3` 等）—— 它们的值是
+ *     `0 0 8px rgba(…)` 这样的**阴影简写**而不是颜色，注册成 <color> 会直接让阴影失效；
+ *     改用 <shadow> 又要单独处理 `--nm-glow-lg` 这种阴影列表，故本版不动。
+ *   · ECharts / canvas —— 颜色是 JS 侧解析成具体值再交给图表的，令牌插值传不过去
+ *     （theme.ts 在切换时会清 tokenColor 缓存，保证新主题取值正确）。
+ *   · `background-image` —— CSS 无法在两个渐变之间插值，本就不该进这张表。
+ *
+ * 两个时长必须与 theme.ts 的 THEME_TRANSITION_DURATION /
+ * THEME_TRANSITION_REDUCED_DURATION 一致（theme.spec.ts 会读本文件比对）。
+ */
+
+@property --dsw-alias-bg-base { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --dsw-alias-bg-layer-0 { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --dsw-alias-bg-layer-1 { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
+@property --dsw-alias-bg-layer-2 { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
+@property --dsw-alias-bg-mask-1 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 0, 0, 0.55); }
+@property --dsw-alias-bg-overlay { syntax: '<color>'; inherits: true; initial-value: rgba(12, 20, 48, 0.72); }
+@property --dsw-alias-border-l1 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
+@property --dsw-alias-border-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
+@property --dsw-alias-border-l3 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
+@property --dsw-alias-border-l4 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
+@property --dsw-alias-brand-primary { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
+@property --dsw-alias-button-contrast-fill { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --dsw-alias-button-ghost-active-border { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.45); }
+@property --dsw-alias-button-ghost-active-fill { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
+@property --dsw-alias-button-primary-fill { syntax: '<color>'; inherits: true; initial-value: #00c2d4; }
+@property --dsw-alias-button-primary-hover { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
+@property --dsw-alias-button-tool-bar-fill { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
+@property --dsw-alias-button-tool-bar-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.14); }
+@property --dsw-alias-interactive-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
+@property --dsw-alias-interactive-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
+@property --dsw-alias-interactive-bg-hover-danger { syntax: '<color>'; inherits: true; initial-value: rgba(255, 59, 92, 0.12); }
+@property --dsw-alias-label-caption { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
+@property --dsw-alias-label-dimmed { syntax: '<color>'; inherits: true; initial-value: #64748b; }
+@property --dsw-alias-label-primary { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --dsw-alias-label-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --dsw-alias-label-primary-inverted { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --dsw-alias-label-secondary { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
+@property --dsw-alias-label-tertiary { syntax: '<color>'; inherits: true; initial-value: #64748b; }
+@property --dsw-alias-link { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
+@property --dsw-alias-markdown-code-block { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
+@property --dsw-alias-markdown-code-block-banner { syntax: '<color>'; inherits: true; initial-value: #132033; }
+@property --dsw-alias-markdown-inline-code { syntax: '<color>'; inherits: true; initial-value: #16213a; }
+@property --dsw-alias-scrollbar-bg-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.15); }
+@property --dsw-alias-scrollbar-hover-l2 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
+@property --dsw-alias-state-business-primary { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
+@property --dsw-alias-state-error-primary { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
+@property --dsw-alias-state-success-primary { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
+@property --dsw-alias-state-success-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.15); }
+@property --dsw-alias-state-warn-label { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --dsw-alias-state-warn-primary { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --dsw-alias-state-warn-tertiary { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.15); }
+@property --dsw-alias-tooltip-bg { syntax: '<color>'; inherits: true; initial-value: #132033; }
+@property --dsw-hovercard-bg { syntax: '<color>'; inherits: true; initial-value: rgba(15, 26, 54, 0.95); }
+@property --dsw-specific-menu { syntax: '<color>'; inherits: true; initial-value: rgba(15, 26, 54, 0.98); }
+@property --dsw-static-deepseek-450 { syntax: '<color>'; inherits: true; initial-value: #1e293b; }
+@property --dsw-static-neutral-bluish-00 { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --nm-amber { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --nm-bg-0 { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --nm-bg-1 { syntax: '<color>'; inherits: true; initial-value: #0b1220; }
+@property --nm-bg-2 { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
+@property --nm-bg-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
+@property --nm-bg-card { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
+@property --nm-bg-glass { syntax: '<color>'; inherits: true; initial-value: rgba(12, 20, 48, 0.72); }
+@property --nm-bg-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
+@property --nm-bg-input { syntax: '<color>'; inherits: true; initial-value: #0f172a; }
+@property --nm-black { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --nm-blue { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
+@property --nm-blue-20 { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.20); }
+@property --nm-border { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
+@property --nm-border-active { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
+@property --nm-border-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
+@property --nm-cyan { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
+@property --nm-cyan-10 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
+@property --nm-cyan-20 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.20); }
+@property --nm-cyan-50 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.50); }
+@property --nm-cyan-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #00f0ff 70%, #e2e8f0); }
+@property --nm-danger { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
+@property --nm-danger-15 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 59, 92, 0.15); }
+@property --nm-danger-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #ff3b5c 70%, #e2e8f0); }
+@property --nm-green { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
+@property --nm-green-20 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.20); }
+@property --nm-info { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
+@property --nm-info-15 { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.15); }
+@property --nm-info-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #3b82f6 70%, #e2e8f0); }
+@property --nm-map-land { syntax: '<color>'; inherits: true; initial-value: rgba(8, 40, 60, 0.90); }
+@property --nm-on-accent { syntax: '<color>'; inherits: true; initial-value: #050a18; }
+@property --nm-pink { syntax: '<color>'; inherits: true; initial-value: #ec4899; }
+@property --nm-purple { syntax: '<color>'; inherits: true; initial-value: #a855f7; }
+@property --nm-purple-20 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.20); }
+@property --nm-purple-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #a855f7 70%, #e2e8f0); }
+@property --nm-red { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
+@property --nm-success { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
+@property --nm-success-15 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 255, 136, 0.15); }
+@property --nm-success-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #00ff88 70%, #e2e8f0); }
+@property --nm-table-header-bg { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.04); }
+@property --nm-table-row-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.05); }
+@property --nm-table-row-stripe { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.015); }
+@property --nm-text-1 { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --nm-text-2 { syntax: '<color>'; inherits: true; initial-value: #94a3b8; }
+@property --nm-text-3 { syntax: '<color>'; inherits: true; initial-value: #64748b; }
+@property --nm-warning { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --nm-warning-15 { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.15); }
+@property --nm-warning-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #f59e0b 70%, #e2e8f0); }
+
+:root.theme-transition {
+  transition-property:
+    --dsw-alias-bg-base, --dsw-alias-bg-layer-0, --dsw-alias-bg-layer-1, --dsw-alias-bg-layer-2, --dsw-alias-bg-mask-1,
+    --dsw-alias-bg-overlay, --dsw-alias-border-l1, --dsw-alias-border-l2, --dsw-alias-border-l3, --dsw-alias-border-l4,
+    --dsw-alias-brand-primary, --dsw-alias-button-contrast-fill, --dsw-alias-button-ghost-active-border, --dsw-alias-button-ghost-active-fill, --dsw-alias-button-primary-fill,
+    --dsw-alias-button-primary-hover, --dsw-alias-button-tool-bar-fill, --dsw-alias-button-tool-bar-hover, --dsw-alias-interactive-bg-active, --dsw-alias-interactive-bg-hover,
+    --dsw-alias-interactive-bg-hover-danger, --dsw-alias-label-caption, --dsw-alias-label-dimmed, --dsw-alias-label-primary, --dsw-alias-label-primary-foreground,
+    --dsw-alias-label-primary-inverted, --dsw-alias-label-secondary, --dsw-alias-label-tertiary, --dsw-alias-link, --dsw-alias-markdown-code-block,
+    --dsw-alias-markdown-code-block-banner, --dsw-alias-markdown-inline-code, --dsw-alias-scrollbar-bg-l2, --dsw-alias-scrollbar-hover-l2, --dsw-alias-state-business-primary,
+    --dsw-alias-state-error-primary, --dsw-alias-state-success-primary, --dsw-alias-state-success-tertiary, --dsw-alias-state-warn-label, --dsw-alias-state-warn-primary,
+    --dsw-alias-state-warn-tertiary, --dsw-alias-tooltip-bg, --dsw-hovercard-bg, --dsw-specific-menu, --dsw-static-deepseek-450,
+    --dsw-static-neutral-bluish-00, --nm-amber, --nm-bg-0, --nm-bg-1, --nm-bg-2,
+    --nm-bg-active, --nm-bg-card, --nm-bg-glass, --nm-bg-hover, --nm-bg-input,
+    --nm-black, --nm-blue, --nm-blue-20, --nm-border, --nm-border-active,
+    --nm-border-hover, --nm-cyan, --nm-cyan-10, --nm-cyan-20, --nm-cyan-50,
+    --nm-cyan-text, --nm-danger, --nm-danger-15, --nm-danger-text, --nm-green,
+    --nm-green-20, --nm-info, --nm-info-15, --nm-info-text, --nm-map-land,
+    --nm-on-accent, --nm-pink, --nm-purple, --nm-purple-20, --nm-purple-text,
+    --nm-red, --nm-success, --nm-success-15, --nm-success-text, --nm-table-header-bg,
+    --nm-table-row-hover, --nm-table-row-stripe, --nm-text-1, --nm-text-2, --nm-text-3,
+    --nm-warning, --nm-warning-15, --nm-warning-text;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  :root.theme-transition { transition-duration: 120ms; }
+}
