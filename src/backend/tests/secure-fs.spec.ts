@@ -50,15 +50,66 @@ function aceLines(target: string): string[] {
     .map((l) => (l.startsWith(target) ? l.slice(target.length).trim() : l))
 }
 
+/**
+ * 当前用户身份：**显式用 System32 下的 whoami.exe**。
+ *
+ * 直接 `execFileSync('whoami', …)` 在 Git Bash 里解析到的是 coreutils 的 `whoami`，
+ * 它不认 `/user`（报 `extra operand '/user'`）—— 于是这四条用例在有 Git Bash 的机器上
+ * 恒失败，看起来像产品坏了。走绝对路径即可两边都对（`secure-fs.js` 也是靠 `os.userInfo()`
+ * 兜底才在同一环境活下来的）。
+ */
+function whoamiExe(): string {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+  const exe = join(root, 'System32', 'whoami.exe')
+  return existsSync(exe) ? exe : 'whoami'
+}
+
 /** 当前用户名（`domain\user` 形态，与 icacls 回显一致）。 */
 function currentUserName(): string {
-  return execFileSync('whoami', [], { encoding: 'utf8', windowsHide: true }).trim()
+  return execFileSync(whoamiExe(), [], { encoding: 'utf8', windowsHide: true }).trim()
 }
 
 /** 当前进程令牌里的 SID（与 secure-fs.js 的授权口径一致）。 */
 function currentSid(): string {
-  const out = execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true })
+  const out = execFileSync(whoamiExe(), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true })
   return (out.match(/"(S-1-[\d-]+)"/) || [])[1] ?? ''
+}
+
+/**
+ * 平台自带的特权主体：放行它们**不是**放宽安全口径 ——
+ * `BUILTIN\Administrators` 可以夺取所有权、`NT AUTHORITY\SYSTEM` 是内核，
+ * 谁都拦不住它们读，把它们算成「泄漏」既不成立也没意义。
+ *
+ * 2026-09-20 实测：GitHub 的 windows runner 把这两个主体**显式**写进 `%TEMP%` 子目录的
+ * ACL（本机是继承来的、被 `/inheritance:r` 清得掉，runner 上清不掉），于是原来那条
+ * 「除当前用户外任何 ACE 都算违规」在 CI 上必红。仍然拦住其它一切主体
+ * （`BUILTIN\Users`、`Everyone`、用户组、别的账号）—— 那才是这条断言要防的。
+ * 名字与 SID 两种形态都认（icacls 解析不出名字时会回显 SID）。
+ */
+const PRIVILEGED_ACE = /^(?:NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators|S-1-5-18|S-1-5-32-544):/i
+
+/**
+ * 收紧后的不变量：**可见主体只有当前用户与上述特权主体**。
+ *
+ * `allowInherited` 区分两种对象：**被直接收紧的目录/文件**不该再有 `(I)` 条目
+ * （`/inheritance:r` 生效）；而**它下面新建的子文件**恰恰应该带 `(I)` —— 那正是
+ * 靠目录继承生效的证据，不是问题。
+ *
+ * 断言写成「逐条 ACE 枚举」而不是「输出里含某些关键词」：后者在本机是**空转**的
+ * ——`%TEMP%` 的继承 ACL 里本来就没有 `Everyone`/`BUILTIN\Users`，所以去掉
+ * `/inheritance:r` 也照样通过（复审用变异 m9 实测）。这里改成：除了当前用户与
+ * 两个平台特权主体，**不允许出现任何其它 ACE**（别的账号、用户组、Everyone 都算）。
+ */
+function expectOnlyCurrentUser(target: string, allowInherited: boolean): void {
+  const lines = aceLines(target)
+  expect(lines.length, '该对象应当有 ACE：' + JSON.stringify(lines)).toBeGreaterThan(0)
+  const mine = lines.filter(isCurrentUserAce)
+  expect(mine.length, 'ACE 里应有当前用户：' + JSON.stringify(lines)).toBeGreaterThan(0)
+  const others = lines.filter((l) => !isCurrentUserAce(l) && !PRIVILEGED_ACE.test(l))
+  expect(others, '不该有当前用户之外的任何主体：' + JSON.stringify(lines)).toEqual([])
+  if (!allowInherited) {
+    expect(lines.some((l) => /\(I\)/.test(l)), '被直接收紧的对象不该有继承条目：' + JSON.stringify(lines)).toBe(false)
+  }
 }
 
 /** 某条 ACE 是不是「当前用户」的（用 SID 或 domain\user 或裸用户名判定）。 */
@@ -70,29 +121,6 @@ function isCurrentUserAce(line: string): boolean {
   // 三种命中方式都要留：icacls 按名字回显时是 `DOMAIN\user`，解析不出域名时可能只给裸名，
   // 而授权本来是按 SID 做的 —— 不能只认一种形态（复审指出旧断言「含用户名」恒真且脆弱）。
   return low.includes(me) || low.includes(`\\${bare}:`) || low.startsWith(`${bare}:`) || (sid !== '' && low.includes(sid.toLowerCase()))
-}
-
-/**
- * 收紧后的不变量：**可见主体只有当前用户**。
- *
- * `allowInherited` 区分两种对象：**被直接收紧的目录/文件**不该再有 `(I)` 条目
- * （`/inheritance:r` 生效）；而**它下面新建的子文件**恰恰应该带 `(I)` —— 那正是
- * 靠目录继承生效的证据，不是问题。
- *
- * 断言写成「逐条 ACE 枚举」而不是「输出里含某些关键词」：后者在本机是**空转**的
- * ——`%TEMP%` 的继承 ACL 里本来就没有 `Everyone`/`BUILTIN\Users`，所以去掉
- * `/inheritance:r` 也照样通过（复审用变异 m9 实测）。这里改成：除了当前用户的 ACE，
- * **不允许出现任何其它 ACE**（SYSTEM / Administrators / CodexSandboxUsers 等都算）。
- */
-function expectOnlyCurrentUser(target: string, allowInherited: boolean): void {
-  const lines = aceLines(target)
-  expect(lines.length, '该对象应当有 ACE：' + JSON.stringify(lines)).toBeGreaterThan(0)
-  const mine = lines.filter(isCurrentUserAce)
-  expect(mine.length, 'ACE 里应有当前用户：' + JSON.stringify(lines)).toBeGreaterThan(0)
-  expect(lines.filter((l) => !isCurrentUserAce(l)), '不该有当前用户之外的任何主体：' + JSON.stringify(lines)).toEqual([])
-  if (!allowInherited) {
-    expect(lines.some((l) => /\(I\)/.test(l)), '被直接收紧的对象不该有继承条目：' + JSON.stringify(lines)).toBe(false)
-  }
 }
 
 describe('ACL 收紧', () => {

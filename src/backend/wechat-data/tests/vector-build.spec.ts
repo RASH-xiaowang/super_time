@@ -11,23 +11,35 @@
  * 仍然每批让出一次事件循环，但那只是廉价保险，不是「修好了一个复现出来的卡顿」。
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createTempWorkspace, openTrackedDb } from '../../tests/helpers/temp-db.ts'
+import type { TempWorkspace } from '../../tests/helpers/temp-db.ts'
 import { buildVectorIndex, vectorIndexStatus } from '../src/query/retrieval/embedding.ts'
 
-const scratch: string[] = []
-afterEach(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true })
-  scratch.length = 0
+/**
+ * 临时目录与数据库连接都交给 `temp-db` 助手（与 `vector-build-gate.spec.ts` 同一套写法）。
+ *
+ * 原来这里是「裸 `mkdtempSync` + 无保护 `rmSync`」：用例中途失败或超时就走不到 `db.close()`，
+ * 残留句柄让删目录必失败 —— 2026-09-20 在 CI 上撞出
+ * `EBUSY: resource busy or locked, unlink '…wechat_rag_vectors.db'`。
+ * 助手的 `cleanup()` 是**先关连接（连接登记册）、再带退避重试删除**，顺序不能反：
+ * 光重试救不了「忘关连接」那种残留（见 `temp-db.ts` 的文件头实测记录）。
+ */
+const scratch: TempWorkspace[] = []
+afterEach(async () => {
+  const list = scratch.splice(0)
+  for (const ws of list) {
+    const r = await ws.cleanup()
+    if (!r.ok) console.warn(`[vector-build] 临时目录未能删除（${r.code}，试了 ${r.attempts} 次）：${ws.dir}`)
+  }
 })
 
 function tempRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'wx-m10-'))
-  scratch.push(dir)
-  return dir
+  const ws = createTempWorkspace('m10')
+  scratch.push(ws)
+  return ws.dir
 }
 
 /** 造一个只有 message_meta 的稀疏索引 + 一个解密目录。 */
@@ -35,7 +47,7 @@ function makeFixture(texts: string[]): { dec: string; root: string } {
   const root = tempRoot()
   const dec = join(root, 'decrypted')
   mkdirSync(dec, { recursive: true })
-  const db = new DatabaseSync(join(root, 'wechat_search.db'))
+  const db = openTrackedDb(join(root, 'wechat_search.db'))
   db.exec('CREATE TABLE message_meta (rowid INTEGER PRIMARY KEY, text TEXT, username TEXT, local_id INTEGER, create_time INTEGER)')
   const ins = db.prepare('INSERT INTO message_meta VALUES (?,?,?,?,?)')
   texts.forEach((t, i) => ins.run(i + 1, t, 'wxid_a', i + 1, 1700000000 + i))
@@ -92,7 +104,7 @@ describe('M10 向量建库：同文本只请求一次、向量扇出到所有行
     expect(sent.length).toBe(3) // 每个唯一文本只被送进去一次（没有重复请求）
 
     // 同组各行的向量与哈希必须一致
-    const db = new DatabaseSync(join(dec, '..', 'wechat_rag_vectors.db'), { readOnly: true })
+    const db = openTrackedDb(join(dec, '..', 'wechat_rag_vectors.db'), { readOnly: true })
     const rows = db.prepare('SELECT fts_rowid, vec, hash_lo, hash_hi FROM vectors ORDER BY fts_rowid').all() as Array<{ fts_rowid: number; vec: Uint8Array; hash_lo: number; hash_hi: number }>
     db.close()
     expect(rows.length).toBe(12)
@@ -137,7 +149,7 @@ describe('M10 向量建库：同文本只请求一次、向量扇出到所有行
     const stub = trackingEmbed()
     return buildVectorIndex(dec, stub.embed, { ...OPTS, concurrency: 1 }).then(() => {
       const p = join(dec, '..', 'wechat_rag_vectors.db')
-      const db = new DatabaseSync(p)
+      const db = openTrackedDb(p)
       try {
         const before = db.prepare('SELECT fts_rowid, vec FROM vectors ORDER BY fts_rowid').all() as Array<{ fts_rowid: number; vec: Uint8Array }>
         expect(before.length).toBe(3)
@@ -246,7 +258,7 @@ describe('M10 向量建库：失败不半写', () => {
       await new Promise((r) => setTimeout(r, 50))
       expect(unhandled).toEqual([])
       // 整库回滚：没有任何行，且状态仍未就绪（下次提问会重建）
-      const db = new DatabaseSync(join(dec, '..', 'wechat_rag_vectors.db'), { readOnly: true })
+      const db = openTrackedDb(join(dec, '..', 'wechat_rag_vectors.db'), { readOnly: true })
       const c = (db.prepare('SELECT COUNT(*) AS c FROM vectors').get() as { c: number }).c
       db.close()
       expect(c).toBe(0)

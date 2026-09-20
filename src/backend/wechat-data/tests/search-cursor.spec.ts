@@ -370,8 +370,15 @@ describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
     const bodies = Array.from({ length: 700 }, (_, i) => variedCjk(21000, i + 1))
     const decrypted = makeRawFixture(bodies)
     const { maxGapMs } = await buildWithTickProbe(decrypted)
-    // 验收标准的原文是「建索引不再产生秒级事件循环阻塞」，这里按更严的 300ms 卡循环内单块
-    expect(maxGapMs).toBeLessThan(300)
+    /**
+     * 钉的是**契约**：「建索引不再产生秒级事件循环阻塞」（原文见 `search-cursor.spec.ts`
+     * 顶部的验收口径）。本机实测循环内单块 32ms，所以原来写 300ms —— 但那是**本机的墙钟**，
+     * 不是代码的性质：2026-09-20 GitHub 的 windows runner 上同一夹具量到 444ms，
+     * 于是这条断言把「runner 慢」误报成「回归」。
+     * 取 900ms：既给共享 runner 的调度抖动留足余地，又仍能抓住原始缺陷
+     * （改前实测单块 550ms、叠上收尾 902ms，也正是要拦的量级）。
+     */
+    expect(maxGapMs, `单块最长阻塞 ${maxGapMs}ms`).toBeLessThan(900)
   })
 })
 

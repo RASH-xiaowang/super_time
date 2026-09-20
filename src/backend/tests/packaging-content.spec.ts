@@ -42,7 +42,16 @@ describe('打包内容规则（N22）', () => {
     const entries = rules.collectDiskEntries(join(repoRoot, 'src'), 'src')
     // 防空转：前缀写错（如漏了 'src'）会让所有条目被 `startsWith('src/')` 跳过 ⇒ 静默全绿。
     expect(entries.length).toBeGreaterThan(100)
-    expect(entries).toContain('src/client/ui-dist/index.html')
+    // 标记必须选**仓库里一定有**的文件。原先用的是 `src/client/ui-dist/index.html`，
+    // 可它是构建产物（gitignore，不进库）——CI 的「单元测试」步跑在「前端构建」**之前**，
+    // 于是那条断言在 CI 上必红：`expected [...] to include 'src/client/ui-dist/index.html'`
+    // （2026-09-20 实测）。单测不该依赖「先构建过」。
+    expect(entries).toContain('src/index.html')
+    expect(entries).toContain('src/backend/backend-rpc.js')
+    // 构建过之后再额外钉一次：产物必须被白名单放行（本机/打包流程会走到这里，CI 单测步跳过）。
+    if (entries.includes('src/client/ui-dist/index.html')) {
+      expect(rules.srcEntryViolations(['src/client/ui-dist/index.html', 'src/client/ui-dist/assets/app.js'])).toEqual([])
+    }
     expect(rules.srcEntryViolations(entries)).toEqual([])
   })
 

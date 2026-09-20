@@ -25,9 +25,20 @@ export default defineConfig({
       'src/client/ui-app/**/*.spec.ts',
     ],
     environment: 'node',
-    // spec 里会建库、写文件、跑 PBKDF2，比默认 5s 宽松些。
-    testTimeout: 30000,
-    hookTimeout: 30000,
+    /**
+     * spec 里会建库、写文件、跑 PBKDF2，比默认 5s 宽松些。
+     *
+     * 2026-09-20 由 30s 提到 180s：GitHub 的 windows runner（2 核、共享、带实时扫描）上
+     * 同一批用例的整体耗时是本机的 20 倍（整批 1119s vs 本机 50s），于是 `contacts`、
+     * `search-cursor`、`gateway-export-stream-progress` 里十几条**本地 <1s** 的用例
+     * 齐刷刷报 `Test timed out in 30000ms` —— 30s 把「runner 慢」误报成了「挂死」。
+     * 取 180s 是按本机最慢的一条算余量：`search-cursor.spec.ts` 的重夹具用例本机 8.1s，
+     * 放大 20 倍即 160s，120s 都可能不够。
+     * 代价要说清：真出现死循环时，失败会晚 3 分钟才报出来；换来的是不再把环境噪声当回归。
+     * （死锁仍然是红的 —— 只是红得慢一点，不是被放过。）
+     */
+    testTimeout: 180000,
+    hookTimeout: 180000,
     // 这些用例都在临时目录里各建各的夹具，彼此无共享状态，可并行。
     fileParallelism: true,
   },

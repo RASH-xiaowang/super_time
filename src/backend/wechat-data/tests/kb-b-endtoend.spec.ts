@@ -369,7 +369,11 @@ describe('撞锁重试：别的连接正读着库，也不许把解析成果判�
      * 上面那条真争用用例钉住了**机制**（撞上 BUSY ⇒ 重试 ⇒ 仍 ready），
      * 这条钉住**接线**（三个写步骤都还在 `withBusyRetry` 里，谁被删了都报红）。
      */
+    // 读源码做锚点时必须**先把行尾规范化**：仓库里存的是 LF，但 Windows 上 check out
+    // 出来可能是 CRLF（GitHub 的 windows runner 就是），而下面第二条断言里写了 `\n` ——
+    // 不规范化的话本机绿、CI 必红（2026-09-20 实测）。
     const src = readFileSync(fileURLToPath(new URL('../src/query/kb-queue.ts', import.meta.url)), 'utf8')
+      .replace(/\r\n/g, '\n')
     // 认领（autocommit 的 UPDATE，真机上探针轮询时最容易撞的一步）
     expect(src, '认领那一步没走 withBusyRetry').toContain("withBusyRetry('认领下一份'")
     // 提交（真机上 `季度报告.pdf` 真正失败的那一步）
