@@ -133,7 +133,7 @@ describe('操作日志搜索：覆盖全量而非「最新那一页」', () => {
     expect(byDetail.total).toBe(1)
   })
 
-  it('能搜到「最新一页之外」的条目（此前只能搜最新 500 条）', () => {
+  it('能搜到「最新一页之外」的条目（此前只能搜最新 500 条）', async () => {
     const dec = makeRoot()
     // 造 600 条：最新 500 条是 new_*，更老的 100 条是 old_*
     for (let i = 0; i < 600; i++) {
@@ -141,6 +141,12 @@ describe('操作日志搜索：覆盖全量而非「最新那一页」', () => {
         category: 'sync', action: i < 100 ? 'old_marker' : 'new_marker',
         target: '', status: 'ok', detail: '',
       })
+      // 为什么让出：`recordOperation` 每次都是独立的「开库 → 写入 → 关库」，本机是亚毫秒级，
+      // 但 CI runner（共享 2 核 + 实时扫描，慢约 24 倍）上单次可到百毫秒 —— 600 次连成一段
+      // >60s 的同步块，会让 vitest 主进程的 `onTaskUpdate` RPC 超时（用例**全过**、退出码却是 1）。
+      // 2026-09-21 的 v1.0.6 自动发布就栽在这里（release.yml 的单测步骤因此失败、后续步骤全 skip）。
+      // 让出只是把这段拉平成可应答的分片，不改变被测路径：每次仍走产品 API 的单条写入。
+      if (i % 20 === 19) await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
     }
     // 分页只取一页时看不到 old_marker
     const firstPage = listOperations(dec, { limit: 100 })
