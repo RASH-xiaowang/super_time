@@ -50,6 +50,18 @@ function fakeCtx(llm: unknown): Context {
 }
 
 beforeEach(() => {
+  /**
+   * **只冻结 `Date`**（定时器照常走）。
+   *
+   * 生产侧的到期判定是「`schedule_time` 与当前 `HH:MM` **精确相等**」（`gateway.ts` 的
+   * `sched === hhmm`），而本文件里有 6 条用例都靠「把 schedule_time 设成**现在**」来造到期
+   * （`makeDueNow`）。跑在真实时钟上时，`makeDueNow` 与随后的到期检查之间只要跨过分钟边界，
+   * 就会一个都不到期 —— 2026-09-21 在 CI 上实测到过（同一提交的另一次运行通过；
+   * 报错是 `只有「到期且一分钟内没跑过」的那一个该跑: expected +0 to be 1`）。
+   * 固定成同一个本地时刻（08:27）之后，跨分钟边界这件事不复存在，用例本身一个字没改。
+   */
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 8, 21, 8, 27, 30))
   root = mkdtempSync(join(tmpdir(), 'wx-n15-'))
   decrypted = join(root, 'decrypted')
   mkdirSync(decrypted, { recursive: true })
@@ -59,6 +71,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   for (const d of disposers) d()
   disposers = []
   vi.unstubAllEnvs()
