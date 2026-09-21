@@ -34,7 +34,6 @@ const ALLOWLIST: Record<string, number> = {
   'src/client/ui-app/onboarding/onboarding.module.css': 1618,
   'src/client/ui-wechat/src/client/pages/wechat-data/api.ts': 2434,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx': 3957,
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/GraphCanvas.tsx': 1031,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KbFiles.tsx': 1277,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx': 1696,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx': 1978,
