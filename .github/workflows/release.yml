@@ -88,13 +88,18 @@ jobs:
           $repo = '${{ github.repository }}'
           $hdr = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
 
-          # ① 收敛同一 tag 下的重复 Release：留下「带 latest.yml 的那个」
+          # ① 收敛同一 tag 下的重复 Release。
+          #    electron-builder 每次 publish 会造出**两个** Release 对象（2026-09-21 实测 v1.0.6 / v1.0.7 皆然：
+          #    同秒创建、一个只带 .blockmap），而 `/releases/latest` 取的是**较新**的那个 ——
+          #    所以 keeper 必须按 created_at 取最新，否则修好的是「不在 latest 上的那一份」。
           $all = @(Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases?per_page=100")
+          # PowerShell 5.1 的 Invoke-RestMethod 把 JSON 数组当**单个对象**返回（pwsh 7 会展开）；
+          # 这一行把两种语义归一化，免得这段逻辑只在本地/只在 runner 上对。
+          if ($all.Count -eq 1 -and $all[0] -is [array]) { $all = @($all[0]) }
           $dupes = @($all | Where-Object { $_.tag_name -eq $tag })
           if ($dupes.Count -gt 1) {
-            Write-Host "同一 tag 下有 $($dupes.Count) 个 Release —— 收敛到带 latest.yml 的那个，其余删除"
-            $keeper = @($dupes | Where-Object { @($_.assets | ForEach-Object { $_.name }) -contains 'latest.yml' })
-            $keep = if ($keeper.Count -gt 0) { $keeper[0] } else { $dupes[0] }
+            $keep = @($dupes | Sort-Object -Property created_at -Descending)[0]
+            Write-Host "同一 tag 下有 $($dupes.Count) 个 Release —— 保留最新的 id=$($keep.id)（/releases/latest 取的就是它），其余删除"
             foreach ($r in $dupes) {
               if ($r.id -ne $keep.id) {
                 Invoke-RestMethod -Method Delete -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/$($r.id)" | Out-Null
@@ -128,6 +133,10 @@ jobs:
             if ($have -notcontains $w) { Write-Error "发布不完整：Release $tag 上仍缺 $w"; exit 1 }
           }
           $asset = $rel.assets | Where-Object { $_.name -eq 'latest.yml' }
-          $yml = (Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $asset.url).Content
-          if ($yml -notmatch "(?m)^version:\s*$ver\s*$") { Write-Error "latest.yml 里的版本不是 $ver"; exit 1 }
+          $content = (Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $asset.url).Content
+          # PowerShell 7 在 application/octet-stream 下把 Content 给成 byte[]（正则匹配会**总是失败**，
+          # 于是把一份完好的发布误判成「版本不对」—— 2026-09-21 v1.0.7 首次运行就这么红过一次）
+          if ($content -is [byte[]]) { $content = [System.Text.Encoding]::UTF8.GetString($content) }
+          $yml = [string]$content
+          if ($yml -notmatch "(?m)^version:\s*$ver\s*$") { Write-Error "latest.yml 里的版本不是 $ver（回读内容前 80 字符：$($yml.Substring(0, [Math]::Min(80, $yml.Length)))）"; exit 1 }
           Write-Host "发布验收通过：$ver（3 个资产齐备、Release 唯一、latest.yml 版本一致）"
