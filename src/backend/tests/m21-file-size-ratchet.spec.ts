@@ -35,7 +35,6 @@ const ALLOWLIST: Record<string, number> = {
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx': 1696,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx': 1978,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 2904,
-  'src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.module.css': 1073,
 }
 
 /** 生成物 / 随包资产：不计入行数口径（每条给出理由）。 */

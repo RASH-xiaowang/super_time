@@ -1,0 +1,98 @@
+/* UI Kit · 数据表格（M21 第十七刀拆分自 kit.module.css）。
+   表格容器 / 表头排序按钮 / 骨架单元格。
+   规则逐字未改：只是换了文件，类名经 CSS Modules 处理，引用侧同时改前缀。
+   ⚠️ 焦点环那条选择器列表按归属一分为二（声明逐字相同）：overlay 侧在本文件，
+   `.searchClear` 那半留在 kit.module.css。 */
+/* ── 数据表格 ─────────────────────────────── */
+.tableWrap {
+  width: 100%;
+  /* 第 89 轮：原为 overflow-x: hidden —— 配合下面 `.table { table-layout: fixed; width: 100% }`，
+     窄窗口下「弹性那一列」会被压到 32px（实测操作日志在 860px 时上下文列只剩 32px，
+     文字被单元格裁掉）。改成表格给一个可读的最小宽度、容器横向可滚：
+     宽窗口下 100% ≥ min-width，行为不变；窄窗口下所有列都可达。 */
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 62vh;
+}
+
+.table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: var(--nm-fs-md);
+  table-layout: fixed;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--nm-fs-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--nm-text-2);
+  background: var(--nm-table-header-bg);
+  border-bottom: 1px solid var(--nm-border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.thSortable { cursor: pointer; }
+.thSortable:hover { color: var(--nm-text-1); }
+
+/* 排序控件：真正的 <button>，让键盘也能排序（此前只有 <th onClick>，鼠标专属）。
+ * 重置按钮外观但不能改版式：padding/border/margin 归零，字体与对齐**继承** th，
+ * 这样 text-align:right 的数值列仍然右对齐，.thInner 的 inline-flex 也照旧。 */
+.thBtn {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  corner-shape: round;
+}
+.thBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.thInner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+}
+
+.thArrow { opacity: 0; font-size: var(--nm-fs-xs); }
+.thSortable[data-sorted] .thArrow { opacity: 1; }
+
+.table tbody td {
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border-bottom: 1px solid var(--nm-border);
+  color: var(--nm-text-2);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+
+.table tbody tr:nth-child(even) { background: var(--nm-table-row-stripe); }
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.rowClickable { cursor: pointer; }
+.rowClickable:hover { background: var(--nm-table-row-hover) !important; }
+/* 整行可点时聚焦环朝内画，避免被表格容器裁掉 */
+.rowClickable:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
+.skelTdLine { display: inline-block; width: 60%; height: 12px; }

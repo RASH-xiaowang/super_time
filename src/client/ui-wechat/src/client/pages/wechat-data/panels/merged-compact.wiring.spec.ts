@@ -16,7 +16,7 @@
  * 且除本文件外没有任何用例在守 —— 是本轮最容易被后续「再压一点」误删的一行。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -28,7 +28,9 @@ const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '')
 
 const theme = read('../scifi-theme.css')
 const mergedCode = strip(read('merged.module.css'))
-const kitCode = strip(read('../ui/kit.module.css'))
+// M21 第十七刀把 kit 的 CSS 也拆了（表格 / 浮层各一份）：按**前缀联合**读全部 kit*.module.css，
+// 断言本身一条没改（规则搬到哪一份都算数）。
+const kitCode = strip(readdirSync(join(HERE, '..', 'ui')).filter((f) => /^kit(-[a-z]+)?\.module\.css$/.test(f)).sort().map((f) => read(join('..', 'ui', f))).join('\n'))
 const shellTsx = read('MergedSections.tsx')
 
 /** 取一个 CSS 块（`选择器 { … }`，不含嵌套），没有就返回空串。 */
