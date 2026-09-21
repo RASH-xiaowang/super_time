@@ -128,7 +128,8 @@ describe('N9：搜索可中断', () => {
 describe('N9：搜索可中断的后端接线', () => {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
   const gatewaySrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8')
-  const searchSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'search.ts'), 'utf8')
+  // M21 把 search.ts 拆成 scaffold/build/query 三个模块；可取消入口住在 query 侧
+  const searchSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'search-query.ts'), 'utf8')
 
   it('searchMessages 走可取消入口，并把 jobId 换成令牌', () => {
     const at = gatewaySrc.indexOf("@Remote('searchMessages')")
