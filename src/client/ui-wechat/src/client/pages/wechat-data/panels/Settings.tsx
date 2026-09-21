@@ -22,7 +22,7 @@ import { PrivacyTrustPanel } from './PrivacyTrust.tsx'
 import { BackupPanel } from './Backup.tsx'
 import { HealthPanel } from './Health.tsx'
 import { HookPanel } from './Hook.tsx'
-import css from './settings.module.css'
+import { css, modelCss, acctCss } from './settings-css.ts'
 import kitCss from '../ui/kit.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
 
@@ -103,8 +103,8 @@ function AccountAvatar({ wxid }: { wxid: string }): React.JSX.Element {
   const letter = (wxid.replace(/^wxid_/, '') || '?').slice(0, 1).toUpperCase()
   const av = avatarColors(wxid)
   return src
-    ? <img src={src} alt={letter} className={css.acctAvatarImg} width={34} height={34} referrerPolicy="no-referrer" loading="lazy" />
-    : <div className={css.acctAvatar} style={{ background: av.background, color: av.color }}>{letter}</div>
+    ? <img src={src} alt={letter} className={acctCss.acctAvatarImg} width={34} height={34} referrerPolicy="no-referrer" loading="lazy" />
+    : <div className={acctCss.acctAvatar} style={{ background: av.background, color: av.color }}>{letter}</div>
 }
 
 /** 相对时间标签（最近活动）。 */
@@ -238,7 +238,7 @@ function StatusSlot({ placeholder, active, pct, text, item, doneText, doneKind, 
           <span className={doneText ? doneKind === 'ok' ? css.slotOk : doneKind === 'err' ? css.slotErr : css.slotDone : css.slotIdle}>
             {doneText || placeholder}
           </span>
-          {detail ? <span className={css.slotDetail}>{detail}</span> : null}
+          {detail ? <span className={acctCss.slotDetail}>{detail}</span> : null}
         </>
       )}
     </div>
@@ -1491,26 +1491,26 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               <span className={css.rowName}>微信安装目录</span>
               <span className={css.rowMeta} title={detectInfo.install_dir ?? ''}>{detectInfo.install_dir ?? '检测中…'}</span>
             </div>
-            <div className={css.accounts}>
+            <div className={acctCss.accounts}>
               {accounts.length > 0 ? accounts.map(a => (
-                <div key={a.db_dir} className={clsx(css.acct, current(a) && css.acctCurrent)}>
+                <div key={a.db_dir} className={clsx(acctCss.acct, current(a) && acctCss.acctCurrent)}>
                   <AccountAvatar wxid={a.wxid} />
-                  <div className={css.acctMain}>
-                    <div className={css.acctTop}>
-                      <span className={css.acctName}>{a.wxid}</span>
-                      {current(a) && <span className={css.acctBadge}>当前使用</span>}
+                  <div className={acctCss.acctMain}>
+                    <div className={acctCss.acctTop}>
+                      <span className={acctCss.acctName}>{a.wxid}</span>
+                      {current(a) && <span className={acctCss.acctBadge}>当前使用</span>}
                     </div>
                     <span className={kitCss.textCaptionTrunc}>
                       {a.db_files !== undefined ? `${a.db_files} 个库文件` : '库文件未知'} · 最近活动 {fmtActive(a.last_active)} · 路径已确认
                     </span>
-                    <span className={css.acctPath} title={a.db_dir}>{a.db_dir}</span>
+                    <span className={acctCss.acctPath} title={a.db_dir}>{a.db_dir}</span>
                   </div>
                   <Button size="sm" variant={current(a) ? 'ghost' : 'primary'} className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { useAccount(a) }} disabled={current(a)}>
                     {current(a) ? '当前使用' : '使用此账号'}
                   </Button>
                 </div>
               )) : (
-                <div className={css.accountsEmpty}>点击「检测本机微信账号」后，可操作的账号将显示在这里</div>
+                <div className={acctCss.accountsEmpty}>点击「检测本机微信账号」后，可操作的账号将显示在这里</div>
               )}
             </div>
             <div className={css.row}>
@@ -1662,7 +1662,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               doneText={imgProgress.done > 0 ? `上次解密：成功 ${imgProgress.done - imgProgress.failed - imgProgress.skipped}/${imgProgress.total} · 跳过 ${imgProgress.skipped} · 失败 ${imgProgress.failed}` : ''}
               doneKind=""
               detail={imgProgress.done > 0 && (imgDecryptDetail.errors.length > 0 || imgDecryptDetail.skippedDetails.length > 0)
-                ? <button type="button" className={css.slotDetailBtn} onClick={() => { setImgDetailOpen(true) }}>详情</button>
+                ? <button type="button" className={acctCss.slotDetailBtn} onClick={() => { setImgDetailOpen(true) }}>详情</button>
                 : undefined}
             />
             <div className={css.row}>
@@ -1685,14 +1685,14 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
             </span>
           </header>
           <div className={css.cardBody}>
-            <div className={css.whisperBanner}>
-              <div className={css.whisperBannerText}>
-                <span className={css.whisperBannerTitle}>本地处理，不上传语音</span>
-                <span className={css.whisperBannerDesc}>
+            <div className={modelCss.whisperBanner}>
+              <div className={modelCss.whisperBannerText}>
+                <span className={modelCss.whisperBannerTitle}>本地处理，不上传语音</span>
+                <span className={modelCss.whisperBannerDesc}>
                   已由微信转写的语音会直接复用数据库文字；其余语音才会交给本地 Whisper，需 whisper.cpp 引擎。
                 </span>
               </div>
-              <button type="button" className={css.whisperRefresh} onClick={() => { void refreshWhisper() }} disabled={whisperStatusLoading}>
+              <button type="button" className={modelCss.whisperRefresh} onClick={() => { void refreshWhisper() }} disabled={whisperStatusLoading}>
                 {whisperStatusLoading ? '检测中…' : '刷新状态'}
               </button>
             </div>
@@ -1714,9 +1714,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
             </div>
             <div className={css.row}>
               <span className={css.rowName}>当前设备</span>
-              <div className={css.deviceSeg}>
-                <button type="button" className={clsx(css.deviceSegBtn, whisperDevice === 'cpu' && css.deviceSegOn)} onClick={() => { setWhisperDevice('cpu') }}>CPU</button>
-                <button type="button" className={clsx(css.deviceSegBtn, whisperDevice === 'gpu' && css.deviceSegOn)} disabled={!whisperStatus?.hasCuda} title={whisperStatus?.hasCuda ? 'NVIDIA GPU（CUDA 加速）' : '未检测到可用的 NVIDIA CUDA 设备或驱动'} onClick={() => { setWhisperDevice('gpu') }}>NVIDIA GPU</button>
+              <div className={modelCss.deviceSeg}>
+                <button type="button" className={clsx(modelCss.deviceSegBtn, whisperDevice === 'cpu' && modelCss.deviceSegOn)} onClick={() => { setWhisperDevice('cpu') }}>CPU</button>
+                <button type="button" className={clsx(modelCss.deviceSegBtn, whisperDevice === 'gpu' && modelCss.deviceSegOn)} disabled={!whisperStatus?.hasCuda} title={whisperStatus?.hasCuda ? 'NVIDIA GPU（CUDA 加速）' : '未检测到可用的 NVIDIA CUDA 设备或驱动'} onClick={() => { setWhisperDevice('gpu') }}>NVIDIA GPU</button>
               </div>
               <span className={clsx(css.rowMeta, !whisperStatus?.hasCuda && css.rowMetaWarn)}>
                 {whisperStatus?.hasCuda ? 'CUDA 可用' : '未检测到可用的 NVIDIA CUDA 设备或驱动。'}
@@ -1732,11 +1732,11 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               placeholder="点击「选择…/下载」后，结果实时显示在这里"
               msg={whisperDirMsg}
             />
-            <div className={css.gridHd}>
-              <span className={css.gridHdTitle}>选择模型</span>
+            <div className={modelCss.gridHd}>
+              <span className={modelCss.gridHdTitle}>选择模型</span>
               <span className={kitCss.textCaption}>当前设备：{whisperDevice === 'gpu' ? 'NVIDIA GPU' : 'CPU'}</span>
             </div>
-            <div className={css.modelGrid}>
+            <div className={modelCss.modelGrid}>
               {(whisperStatus?.models ?? WHISPER_MODEL_FALLBACK).map((m) => {
                 const selected = whisperModel === m.id
                 const downloading = whisperDownloading?.model === m.id
@@ -1749,29 +1749,29 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
                   // 改成 div + clickableKey（选模型）与并列的真 <button>（下载），两个动作各自可达。
                   <div
                     key={m.id}
-                    className={clsx(css.modelCard, selected && css.modelSelected, downloading && css.modelDownloadingCard)}
+                    className={clsx(modelCss.modelCard, selected && modelCss.modelSelected, downloading && modelCss.modelDownloadingCard)}
                     {...clickableKey(() => { setWhisperModel(m.id) })}
                   >
-                    <span className={css.modelName}>{m.name}{selected && <span className={css.modelTag}>已选择</span>}</span>
-                    <span className={css.modelBadge}>
+                    <span className={modelCss.modelName}>{m.name}{selected && <span className={modelCss.modelTag}>已选择</span>}</span>
+                    <span className={modelCss.modelBadge}>
                       {downloading
-                        ? <span className={css.modelStateDownloading}>下载中</span>
+                        ? <span className={modelCss.modelStateDownloading}>下载中</span>
                         : m.installed
-                          ? <span className={css.modelStateInstalled}>✓ 已安装</span>
-                          : <span className={css.modelState}>需下载</span>}
+                          ? <span className={modelCss.modelStateInstalled}>✓ 已安装</span>
+                          : <span className={modelCss.modelState}>需下载</span>}
                     </span>
                     <span className={kitCss.textCaption}>{m.sizeLabel}</span>
                     {downloading ? (
-                      <span className={css.modelProgress}>
-                        <span className={css.modelProgressTrack}><span className={css.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
-                        <span className={css.modelProgressPct}>{pct}%</span>
+                      <span className={modelCss.modelProgress}>
+                        <span className={modelCss.modelProgressTrack}><span className={modelCss.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
+                        <span className={modelCss.modelProgressPct}>{pct}%</span>
                       </span>
                     ) : m.installed ? (
-                      <span className={clsx(css.modelDownload, css.modelDownloadDone)}>已就绪</span>
+                      <span className={clsx(modelCss.modelDownload, modelCss.modelDownloadDone)}>已就绪</span>
                     ) : (
                       <button
                         type="button"
-                        className={css.modelDownload}
+                        className={modelCss.modelDownload}
                         onClick={() => { void whisperDownload(m) }}
                       >
                         下载
@@ -1788,8 +1788,8 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
                   : '模型从官方仓库下载（huggingface.co，失败自动切换 hf-mirror；可用环境变量 DSH_WECHAT_WHISPER_MIRROR 指定镜像）。'}
               </span>
             </div>
-            <div className={css.whisperThreads}>
-              <span className={css.whisperThreadsLabel}>并发线程数</span>
+            <div className={modelCss.whisperThreads}>
+              <span className={modelCss.whisperThreadsLabel}>并发线程数</span>
               <Input className={css.inputNarrow} value={String(whisperThreads)} onChange={(e) => { setWhisperThreads(Math.max(0, Number(e.target.value) || 0)) }} placeholder="0" />
               <span className={css.rowMeta}>0 自动，输入正整数</span>
             </div>
@@ -1797,8 +1797,8 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               <span className={css.rowNote}>{'🔒 模型仅本地推理，不上传语音；语音由内置 SILK 解码器本地转 WAV，转写由 whisper-cli 执行（需 ' +
                 'DSH_WECHAT_WHISPER_BIN 指向引擎且模型已安装）。'}</span>
             </div>
-            <div className={css.whisperFooter}>
-              <button type="button" className={css.whisperSkip} onClick={() => { skipTranscribe() }}>跳过，查看聊天记录</button>
+            <div className={modelCss.whisperFooter}>
+              <button type="button" className={modelCss.whisperSkip} onClick={() => { skipTranscribe() }}>跳过，查看聊天记录</button>
               <Button variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={whisperTranscribing.active ? <span className={css.spin} /> : undefined} disabled={whisperTranscribing.active} onClick={() => { void batchTranscribe() }}>
                 {whisperTranscribing.active ? '转写中…' : '本地批量转文字'}
               </Button>
@@ -1886,10 +1886,10 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
             {/* 诊断日志（M6）：GUI 态 stdout 会被管道丢弃，crash/报障时只有这份落盘日志 */}
             <div className={css.row}>
               <span className={css.rowName}>诊断日志</span>
-              <button type="button" className={css.whisperSkip} onClick={() => { void exportDiagLog() }}>
+              <button type="button" className={modelCss.whisperSkip} onClick={() => { void exportDiagLog() }}>
                 导出…
               </button>
-              <button type="button" className={css.whisperSkip} onClick={() => { void revealDiagLog() }}>
+              <button type="button" className={modelCss.whisperSkip} onClick={() => { void revealDiagLog() }}>
                 打开所在目录
               </button>
               <span className={css.rowMeta} title={diagInfo?.dir ?? ''}>
@@ -1900,7 +1900,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               <span className={css.rowName}>启动引导</span>
               <button
                 type="button"
-                className={css.whisperSkip}
+                className={modelCss.whisperSkip}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent('super-time:show-onboarding'))
                 }}
@@ -1915,9 +1915,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
 
       </div>
 
-      <div className={css.saveBar}>
+      <div className={acctCss.saveBar}>
         <span
-          className={css.saveMeta}
+          className={acctCss.saveMeta}
           title={pathConfigPath ? `打开路径配置文件：${pathConfigPath}` : '读取路径配置文件…'}
           {...(pathConfigPath ? clickableKey(() => { void apiOpenPath(pathConfigPath) }, { role: 'link' }) : {})}
           style={{
@@ -1926,7 +1926,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
             color: pathConfigPath ? 'var(--nm-cyan)' : undefined,
           }}
         >{cfg ? '配置: wechat/config.json ↗' : cfgLoading ? '读取配置…' : ''}</span>
-        <span className={saveMsg ? (saveMsg.kind === 'ok' ? css.saveMsgOk : css.saveMsgErr) : css.saveMsgIdle}>
+        <span className={saveMsg ? (saveMsg.kind === 'ok' ? acctCss.saveMsgOk : acctCss.saveMsgErr) : acctCss.saveMsgIdle}>
           {saveMsg ? saveMsg.text : '修改后点击「保存配置」生效'}
         </span>
         <Button variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={saving ? <span className={css.spin} /> : undefined} onClick={() => { void save() }} disabled={saving || !cfg}>
@@ -1942,34 +1942,34 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           <Button size="sm" variant="outline" onClick={() => { setImgDetailOpen(false) }}>关闭</Button>
         )}
       >
-        <div className={css.imgDetailBody}>
+        <div className={acctCss.imgDetailBody}>
           {imgDecryptDetail.skippedDetails.length > 0 && (
-            <div className={css.imgDetailGroup}>
-              <div className={css.imgDetailTitle}>跳过原因（{imgDecryptDetail.skippedDetails.length} 条）</div>
+            <div className={acctCss.imgDetailGroup}>
+              <div className={acctCss.imgDetailTitle}>跳过原因（{imgDecryptDetail.skippedDetails.length} 条）</div>
               {Array.from(new Map(imgDecryptDetail.skippedDetails.map(s => [s.reason, (imgDecryptDetail.skippedDetails.filter(x => x.reason === s.reason).length)])).entries()).map(([reason, count]) => (
-                <div key={reason} className={css.imgDetailRow}>
-                  <span className={css.imgDetailReason}>{reason}</span>
-                  <span className={css.imgDetailCount}>×{count}</span>
+                <div key={reason} className={acctCss.imgDetailRow}>
+                  <span className={acctCss.imgDetailReason}>{reason}</span>
+                  <span className={acctCss.imgDetailCount}>×{count}</span>
                 </div>
               ))}
             </div>
           )}
           {imgDecryptDetail.errors.length > 0 && (
-            <div className={css.imgDetailGroup}>
-              <div className={css.imgDetailTitle}>失败原因（{imgDecryptDetail.errors.length} 条）</div>
+            <div className={acctCss.imgDetailGroup}>
+              <div className={acctCss.imgDetailTitle}>失败原因（{imgDecryptDetail.errors.length} 条）</div>
               {imgDecryptDetail.errors.slice(0, 100).map((f) => (
-                <div key={f.file} className={css.imgDetailRow}>
-                  <span className={css.imgDetailFile} title={f.file}>{f.file}</span>
-                  <span className={css.imgDetailError}>{f.error}</span>
+                <div key={f.file} className={acctCss.imgDetailRow}>
+                  <span className={acctCss.imgDetailFile} title={f.file}>{f.file}</span>
+                  <span className={acctCss.imgDetailError}>{f.error}</span>
                 </div>
               ))}
               {imgDecryptDetail.errors.length > 100 && (
-                <div className={css.imgDetailMore}>仅显示前 100 条失败，共 {imgDecryptDetail.errors.length} 条</div>
+                <div className={acctCss.imgDetailMore}>仅显示前 100 条失败，共 {imgDecryptDetail.errors.length} 条</div>
               )}
             </div>
           )}
           {imgDecryptDetail.errors.length === 0 && imgDecryptDetail.skippedDetails.length === 0 && (
-            <div className={css.imgDetailEmpty}>暂无失败或跳过记录</div>
+            <div className={acctCss.imgDetailEmpty}>暂无失败或跳过记录</div>
           )}
         </div>
       </Dialog>

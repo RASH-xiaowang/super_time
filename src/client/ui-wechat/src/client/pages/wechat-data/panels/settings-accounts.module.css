@@ -1,0 +1,229 @@
+/* 设置面板 · 账号与维护（M21 拆分自 settings.module.css 尾段）。
+   账号列表 / 底部保存条 / 状态行「详情」链接 / 图片解密详情弹窗。
+   规则逐字未改 —— 只是换了文件；类名经 CSS Modules 处理，引用侧同时改前缀。 */
+
+/* account list — 固定高度占位区,账号列表出现/切换不改变卡片布局 */
+.accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 4px 0;
+  height: 252px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.accountsEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  opacity: 0.85;
+  text-align: center;
+  padding: 0 18px;
+  line-height: 18px;
+  border: 1px dashed var(--nm-border-hover);
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+.acct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  transition: all 0.15s;
+}
+.acct:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.acctCurrent {
+  border-color: var(--nm-cyan);
+  background: var(--nm-cyan-10);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+.acctMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.acctTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.acctName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+  white-space: nowrap;
+}
+.acctBadge {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--nm-on-accent);
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+  corner-shape: round;
+}
+.acctPath {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--nm-font-mono, monospace);
+}
+.acctAvatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border-hover);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 15%, transparent);
+  corner-shape: round;
+}
+.acctAvatarImg {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--nm-bg-hover);
+  border: 1px solid var(--nm-border);
+  corner-shape: round;
+}
+
+/* footer save bar */
+.saveBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.saveMeta {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saveMsgIdle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.7;
+}
+.saveMsgOk {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nm-success);
+}
+.saveMsgErr {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nm-danger);
+}
+
+/* 状态行“详情”链接 */
+.slotDetail {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.slotDetailBtn {
+  border: none;
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0 2px;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+.slotDetailBtn:hover {
+  opacity: 1;
+}
+
+/* 图片解密详情弹窗 */
+.imgDetailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.imgDetailGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.imgDetailTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+}
+.imgDetailRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.imgDetailReason {
+  color: var(--nm-text-2);
+}
+.imgDetailCount {
+  flex-shrink: 0;
+  color: var(--nm-cyan);
+  font-weight: 700;
+}
+.imgDetailFile {
+  flex-shrink: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+}
+.imgDetailError {
+  color: var(--nm-danger);
+}
+.imgDetailMore {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  opacity: 0.75;
+}
+.imgDetailEmpty {
+  font-size: 12px;
+  color: var(--nm-text-2);
+  padding: 12px 0;
+  text-align: center;
+}

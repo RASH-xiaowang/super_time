@@ -36,7 +36,6 @@ const ALLOWLIST: Record<string, number> = {
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx': 1978,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 2904,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview.module.css': 1030,
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings.module.css': 1007,
   'src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.module.css': 1073,
 }
 

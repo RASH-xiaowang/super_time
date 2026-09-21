@@ -44,7 +44,8 @@
     "license-studio": "electron tools/license-studio",
     "license-keygen": "node scripts/license-keygen.js",
     "license-issue": "node scripts/license-issue.js",
-    "license-smoke": "node scripts/license-smoke.js"
+    "license-smoke": "node scripts/license-smoke.js",
+    "css:bundle-diff": "node scripts/css-bundle-diff.mjs"
   },
   "keywords": [
     "electron",
