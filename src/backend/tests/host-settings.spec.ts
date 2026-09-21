@@ -87,11 +87,11 @@ describe('M1：宿主 config.json 不再留存密钥镜像', () => {
   it('mirroredSecretValues 只读地取出镜像里的密钥（回灌时要把它们并进 patch）', () => {
     const { cfg } = initState()
     writeFileSync(cfg, JSON.stringify({
-      wechatSettings: { db_dir: 'D:\\wx', db_enc_key: KEY, image_aes_key: '***REMOVED-SECRET***', api_token: '', whisper_bin: 'x' },
+      wechatSettings: { db_dir: 'D:\\wx', db_enc_key: KEY, image_aes_key: '0123456789abcdef', api_token: '', whisper_bin: 'x' },
     }), 'utf8')
     const secrets = mirroredSecretValues()
     expect(secrets['db_enc_key']).toBe(KEY)
-    expect(secrets['image_aes_key']).toBe('***REMOVED-SECRET***')
+    expect(secrets['image_aes_key']).toBe('0123456789abcdef')
     // 空串不进 RPC 字段（后端还会再按「是否有意义」筛一次）
     expect('api_token' in secrets).toBe(false)
     // 纯读取：文件一字未动

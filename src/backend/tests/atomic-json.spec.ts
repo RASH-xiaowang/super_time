@@ -187,7 +187,7 @@ describe('原子性的真实判别（跨进程观察中间态）', () => {
 })
 
 describe('M1：密钥不再写在 config.json 里', () => {
-  const SECRET = { db_enc_key: 'a'.repeat(64), image_aes_key: '***REMOVED-SECRET***' }
+  const SECRET = { db_enc_key: 'a'.repeat(64), image_aes_key: '0123456789abcdef' }
 
   it('saveConfig 把密钥写进 secrets.json，config.json 里没有', () => {
     const root = tempRoot()
@@ -265,8 +265,8 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
   it('用户显式保存过的密钥字段，secrets.json 优先', () => {
     const root = tempRoot()
     const decrypted = join(root, 'decrypted')
-    saveConfig(decrypted, { image_aes_key: '***REMOVED-SECRET***' })
-    expect(getConfig(decrypted)['image_aes_key']).toBe('***REMOVED-SECRET***')
+    saveConfig(decrypted, { image_aes_key: '0123456789abcdef' })
+    expect(getConfig(decrypted)['image_aes_key']).toBe('0123456789abcdef')
   })
 
   it('合并语义：patch 只带一个密钥字段时，secrets.json 里其它密钥不被抹掉', () => {
@@ -274,10 +274,10 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
     const root = tempRoot()
     const decrypted = join(root, 'decrypted')
     saveConfig(decrypted, { db_enc_key: 'a'.repeat(64) })
-    saveConfig(decrypted, { image_aes_key: '***REMOVED-SECRET***' })
+    saveConfig(decrypted, { image_aes_key: '0123456789abcdef' })
     const secrets = JSON.parse(readFileSync(join(root, 'secrets.json'), 'utf8'))
     expect(secrets['db_enc_key']).toBe('a'.repeat(64))
-    expect(secrets['image_aes_key']).toBe('***REMOVED-SECRET***')
+    expect(secrets['image_aes_key']).toBe('0123456789abcdef')
   })
 
   it('secrets.json 里的空串不算「有值」，仍回退到 config.json', () => {
@@ -372,7 +372,7 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
     const root = tempRoot()
     const decrypted = join(root, 'decrypted')
     const dbKey = 'a'.repeat(64)
-    saveConfig(decrypted, { db_enc_key: dbKey, image_aes_key: '***REMOVED-SECRET***', api_token: 'tok-real' })
+    saveConfig(decrypted, { db_enc_key: dbKey, image_aes_key: '0123456789abcdef', api_token: 'tok-real' })
     const secretsFile = join(root, 'secrets.json')
     const before = readFileSync(secretsFile, 'utf8')
 
@@ -385,7 +385,7 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
     expect(readFileSync(secretsFile, 'utf8')).toBe(before) // 一字未动（连重写都没有）
     const cfgNow = getConfig(decrypted)
     expect(cfgNow['db_enc_key']).toBe(dbKey)
-    expect(cfgNow['image_aes_key']).toBe('***REMOVED-SECRET***')
+    expect(cfgNow['image_aes_key']).toBe('0123456789abcdef')
     expect(cfgNow['api_token']).toBe('tok-real')
   })
 
