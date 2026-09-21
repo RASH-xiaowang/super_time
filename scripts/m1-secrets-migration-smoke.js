@@ -43,7 +43,7 @@ const exe = path.join(root, 'dist', 'win-unpacked', 'Super Time.exe');
 
 /** 假密钥：64 位 hex 的库密钥 + 32 位 hex 的图片 AES 密钥，形状与真实值一致。 */
 const DB_KEY = 'f'.repeat(64);
-const IMG_KEY = '***REMOVED-SECRET***';
+const IMG_KEY = '0123456789abcdef';
 const MIRROR_DB_KEY = 'd'.repeat(64);
 
 if (!fs.existsSync(exe)) {

@@ -175,7 +175,7 @@ describe('真值级接线：解码输入指纹真的来自那两份文件（复�
       expect(calls, '无变更必须命中缓存').toBe(1)
 
       // 手工改密钥（不走任何 RPC）—— 内容长度不同，保证 mtime+size 指纹必变
-      writeFileSync(secFile, '{"image_aes_key":"***REMOVED-SECRET***"}', 'utf8')
+      writeFileSync(secFile, '{"image_aes_key":"0123456789abcdef"}', 'utf8')
       await backend.call('getImageDataUrl', args)
       expect(calls, '改了 secrets.json 必须重新解码').toBe(2)
 

@@ -146,10 +146,10 @@ describe('脱敏：日志里不得出现密钥', () => {
 
   it('对象里的密钥字段与长 16 进制串都会被脱敏', () => {
     const log = createDiagLog({ dir: tempDir(), now: fixedNow })
-    log.write('info', [{ db_enc_key: 'a'.repeat(64), image_aes_key: '***REMOVED-SECRET***', nested: { token: 'abc123456' } }])
+    log.write('info', [{ db_enc_key: 'a'.repeat(64), image_aes_key: '0123456789abcdef', nested: { token: 'abc123456' } }])
     const text = readFileSync(log.path, 'utf8')
     expect(text).not.toContain('a'.repeat(64))
-    expect(text).not.toContain('***REMOVED-SECRET***')
+    expect(text).not.toContain('0123456789abcdef')
     expect(text).not.toContain('abc123456')
     expect(text).toContain('***')
   })
