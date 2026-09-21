@@ -192,8 +192,11 @@ check('界面不再调用任何检索配置类接口（只保留回答反馈）'
   // 防空转：路径算错会让 sourcesUnder 返回空数组，从而「一条都没命中」而假通过。
   ok(files.length > 30, `扫描到的界面源码只有 ${files.length} 个，PAGES 路径可能算错了：${PAGES}`)
   for (const f of files) {
-    // 跳过 api.ts 本身：它是这些包装的**定义处**，不是调用处。
-    if (relative(PAGES, f).replace(/\\/g, '/') === 'api.ts') continue
+    // 跳过 API 层本身：它是这些包装的**定义处**，不是调用处。
+    // M21 把 `api.ts` 拆成转发桶 + 8 个域模块（`api-core/api-read/api-kb/api-search/
+    // api-media/api-export-ops/api-config/api-status`），所以按**前缀**整层跳过 ——
+    // 只跳 `api.ts` 会让「定义搬去了 api-config.ts」被误报成「界面又在调这些接口」。
+    if (/^api(-[a-z-]+)?\.ts$/.test(relative(PAGES, f).replace(/\\/g, '/'))) continue
     const body = readFileSync(f, 'utf8')
     for (const name of forbidden) {
       if (body.includes(name)) hits.push(`${relative(PAGES, f)} -> ${name}`)

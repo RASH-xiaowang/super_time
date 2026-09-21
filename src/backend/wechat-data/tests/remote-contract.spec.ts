@@ -18,6 +18,14 @@ const ROOT = join(HERE, '..', '..', '..', '..')
 const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
 const API = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'api.ts')
 
+/**
+ * M21：`api.ts` 拆成转发桶 + 8 个域模块（`WechatRemote` 现在住 `api-core.ts`）——
+ * 这里读它们的**联合**再抠接口成员，断言（前后端方法名对齐）一条没改。
+ * 目录取上面那条路径的 dirname，模块名只是加在同一个目录里。
+ */
+const API_FILES = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts']
+const API_SRC = API_FILES.map((f2) => readFileSync(join(dirname(API), f2), 'utf8')).join('\n')
+
 /** 后端所有 `@Remote('name')` 装饰器里的名字。 */
 function remoteNames(rawSource: string): string[] {
   return [...stripComments(rawSource).matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map(m => m[1])
@@ -57,7 +65,7 @@ function interfaceMembers(rawSource: string): string[] {
 
 describe('Remote 契约：前端镜像与后端 @Remote 对齐', () => {
   const backend = remoteNames(readFileSync(GATEWAY, 'utf8'))
-  const client = interfaceMembers(readFileSync(API, 'utf8'))
+  const client = interfaceMembers(API_SRC)
 
   it('后端每个 @Remote 都在 WechatRemote 里声明了', () => {
     expect([...backend].sort().filter(n => !client.includes(n))).toEqual([])

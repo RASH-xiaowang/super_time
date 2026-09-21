@@ -16,7 +16,11 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 const chats = strip(readFileSync(join(HERE, 'Chats.tsx'), 'utf8'))
-const api = strip(readFileSync(join(HERE, '..', 'api.ts'), 'utf8'))
+/**
+ * M21：`api.ts` 拆成转发桶 + 8 个域模块（core / read / kb / search / media / export-ops / config / status）——
+ * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
+ */
+const api = strip(['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(HERE, '..', f), 'utf8')).join('\n'))
 
 describe('取原图的接线', () => {
   const at = chats.indexOf('const getOriginal')

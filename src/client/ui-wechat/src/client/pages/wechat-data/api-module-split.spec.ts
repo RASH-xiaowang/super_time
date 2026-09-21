@@ -19,6 +19,8 @@ import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (f: string): string => readFileSync(join(HERE, f), 'utf8')
+/** `api.ts` 拆出的 8 个域模块（桶按顺序 `export *` 它们）。 */
+const DOMAIN_MODULES = ['api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts']
 const api = read('api.ts')
 const cache = read('cache.ts')
 const media = read('media-cache.ts')
@@ -70,40 +72,38 @@ describe('M21 切片：api.ts 的缓存层拆分', () => {
     }
   })
 
-  it('公开面不变：api.ts 继续转发全部缓存导出', () => {
+  it('公开面不变：api.ts（转发桶）继续把全部缓存导出放出来', () => {
+    // M21 第十二刀把 api.ts 拆成桶 + 8 个域模块之后，「继续转发」这件事的判据变了：
+    // 名字的定义/再导出落在某个域模块里，只要桶把那个模块 `export *` 出来，
+    // 面板的 `from '../api.ts'` 就照样拿得到。所以这里按**可达性**判：
+    // 桶转发了哪些模块 → 那些模块的源码合起来必须含这些名字与两种形态。
+    const barrelTargets = [...api.matchAll(/export \* from '\.\/([\w.-]+)'/g)].map((m) => m[1])
+    expect(barrelTargets.length, 'api.ts 不再是转发桶了 —— 域模块没被转发出去').toBeGreaterThan(5)
+    const reachable = barrelTargets.map((f) => read(f)).join('\n')
     for (const name of PUBLIC) {
-      expect(api, `api.ts 没再转发 ${name} —— 40 多个面板的 import 会静默少方法`).toContain(name)
+      expect(reachable, `api.ts 侧拿不到 ${name} —— 40 多个面板的 import 会静默少方法`).toContain(name)
     }
-    // 至少要有 import（内部调用用）与 export … from（外部用）两种形态
-    expect(api).toMatch(/import \{[\s\S]*?\} from '\.\/cache\.ts'/)
-    expect(api).toMatch(/export \{[\s\S]*?\} from '\.\/cache\.ts'/)
-    expect(api).toMatch(/export \{[^}]*\} from '\.\/media-cache\.ts'/)
+    // 至少要有 import（内部调用用）与 export … from（外部用）两种形态，且必须仍指向 cache.ts
+    expect(reachable).toMatch(/import \{[\s\S]*?\} from '\.\/cache\.ts'/)
+    expect(reachable).toMatch(/export \{[\s\S]*?\} from '\.\/cache\.ts'/)
+    expect(reachable).toMatch(/export \{[^}]*\} from '\.\/media-cache\.ts'/)
   })
 
-  it('新模块不得反向 import api.ts（否则拆出循环依赖）', () => {
-    for (const [name, src] of [['cache.ts', cache], ['media-cache.ts', media]] as const) {
-      expect(src, `${name} 不应 import api.ts`).not.toMatch(/from '\.\/api\.ts'/)
+  it('8 个域模块都不得反向 import api.ts（否则拆出循环依赖）', () => {
+    // 先剥注释：模块头里**必然**会出现 `from './api.ts'` 这句话（它就是在讲这次拆分），
+    // 不剥就会把自己的说明文字当成违规（这条断言第一次跑就是这么红的）。
+    const noComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
+    for (const name of ['cache.ts', 'media-cache.ts', ...DOMAIN_MODULES]) {
+      const src = name === 'cache.ts' ? cache : name === 'media-cache.ts' ? media : read(name)
+      expect(noComments(src), `${name} 不应 import api.ts`).not.toMatch(/from '\.\/api\.ts'/)
     }
   })
 
-  it('api.ts 已明显变短（本片目标是把它往下降，不是一次拆到上限）', () => {
+  it('api.ts 已收缩为转发桶（实现被搬回来就会涨起来）', () => {
+    // 这条原来是「api.ts 行数 < 阈值」的启发式（阈值一路从 1950 抬到 2450，因为正常功能增长）。
+    // 拆成桶 + 域模块之后，行数上限由 `m21-file-size-ratchet.spec.ts` 统一管（每份 ≤1000 行），
+    // 这里只钉「桶就是桶」—— 谁把实现搬回 api.ts，它立刻从 18 行涨上去。
     const lines = api.split(/\r?\n/).length
-    // 这条断言是**启发式**，不是「单文件行数上限」（M21 的整体达标仍未完成，见文件头注释）。
-    // 它要抓的是「缓存层又被搬回 api.ts」这种回归，而不是阻止正常功能增长。
-    // 硬保证（搬移没被撤销）由上面 MOVED / PUBLIC 三条承担。
-    //
-    // 阈值沿革：1950 → 2010（导出历史新增 4 个 api* 函数）→ 2150（2026-09-18 多库重设计：
-    // api.ts 新增 4 个库管理包装 + 快照/渲染缓存的库后缀，净 +109 行，实测 2090 行）
-    // → 2300（2026-09-18 T2：知识库**文件域** 5 个包装 + 4 个类型再导出 + 缓存失效，
-    // 净 +126 行，实测 2216 行）
-    // → 2400（2026-09-19 KB-MODEL-CONFIG P0：向量索引的两个包装 + 接口两行声明，实测 2326 行）。
-    // → 2450（2026-09-20「推荐回复」：1 个包装 + 1 行接口声明，实测 2409 行）。
-    // 为什么这次仍然抬而不是搬：搬走的正解是把 `WechatRemote` 接口摘到独立模块，
-    // 而它引用了 **16 个声明在 api.ts 本地的类型**（`RemoteResult`、`VectorBuildResult`、
-    // `RetrievalStatus`、`*SnapshotRead` 等），摘出去就得连它们一起搬，或者反向 import api.ts
-    // —— 后者正是本文件第 3 条要防的循环。那是 M21 的独立一片，不该塞进一次功能改动里做。
-    // 2400 仍然咬得住原目标：cache.ts 209 行、media-cache.ts 113 行，
-    // 任一份被内联回来都会把 api.ts 推到 2439 / 2535 行，两份都回来是 2648 行。
-    expect(lines, `api.ts 现在 ${lines} 行：超过 2450 说明缓存层被搬回来了（cache.ts 209 / media-cache.ts 113）`).toBeLessThan(2450)
+    expect(lines, `api.ts 现在 ${lines} 行：它应该只是转发桶（实现落在域模块里）`).toBeLessThan(60)
   })
 })

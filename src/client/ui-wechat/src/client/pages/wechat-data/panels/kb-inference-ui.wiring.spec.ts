@@ -33,7 +33,11 @@ const SHELL_DIR = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pag
 
 const dialog = readFileSync(join(HERE, 'KbModelDialog.tsx'), 'utf8')
 const editor = readFileSync(join(HERE, 'KnowledgeNoteEditor.tsx'), 'utf8')
-const apiSrc = readFileSync(join(SHELL_DIR, 'api.ts'), 'utf8')
+/**
+ * M21：`api.ts` 拆成转发桶 + 8 个域模块（core / read / kb / search / media / export-ops / config / status）——
+ * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
+ */
+const apiSrc = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(SHELL_DIR, f), 'utf8')).join('\n')
 const dialogCss = readFileSync(join(HERE, 'kb-model-dialog.module.css'), 'utf8')
 const editorCss = readFileSync(join(HERE, 'note-editor.module.css'), 'utf8')
 
