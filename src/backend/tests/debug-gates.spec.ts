@@ -40,7 +40,14 @@ const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
 const entryPath = join(ROOT, 'src', 'client', 'ui-app', 'ui-entry.tsx')
 const entrySrc = readFileSync(entryPath, 'utf8')
-const acceptanceSrc = readFileSync(join(ROOT, 'scripts', 'ui-acceptance.mjs'), 'utf8')
+const acceptanceSrc = (() => {
+  // M21：验收脚本拆成「场景」+「夹具/助手」两个模块 —— 读它们的联合，
+  // 断言一条没改（搬去 lib 的助手照样算这个脚本的一部分）。
+  const dir = join(ROOT, 'scripts')
+  return ['ui-acceptance.mjs', 'ui-acceptance-lib.mjs']
+    .map((f) => { try { return readFileSync(join(dir, f), 'utf8') } catch { return '' } })
+    .join('\n')
+})()
 
 /** 解析一段源码（.js 用 JS，.tsx 用 TSX）以便只认真实节点。 */
 function parse(file: string, src: string): ts.SourceFile {
