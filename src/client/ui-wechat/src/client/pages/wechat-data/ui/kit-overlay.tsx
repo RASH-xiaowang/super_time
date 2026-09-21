@@ -13,7 +13,7 @@ import clsx from 'clsx'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 import * as ToggleGroup from '@radix-ui/react-toggle-group'
-import css from './kit.module.css'
+import overlayCss from './kit-overlay.module.css'
 
 /** 胶囊标签页（Radix Tabs 样式化）。 */
 export function Tabs({ tabs, value, onChange, children }: {
@@ -23,10 +23,10 @@ export function Tabs({ tabs, value, onChange, children }: {
   children?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <TabsPrimitive.Root className={css.tabs} value={value} onValueChange={onChange}>
-      <TabsPrimitive.List className={css.tabList}>
+    <TabsPrimitive.Root className={overlayCss.tabs} value={value} onValueChange={onChange}>
+      <TabsPrimitive.List className={overlayCss.tabList}>
         {tabs.map(t => (
-          <TabsPrimitive.Trigger key={t.value} className={css.tabTrigger} value={t.value}>
+          <TabsPrimitive.Trigger key={t.value} className={overlayCss.tabTrigger} value={t.value}>
             {t.label}
           </TabsPrimitive.Trigger>
         ))}
@@ -45,14 +45,14 @@ export function Segmented({ options, value, onChange, ariaLabel }: {
 }): React.JSX.Element {
   return (
     <ToggleGroup.Root
-      className={css.seg}
+      className={overlayCss.seg}
       type="single"
       value={value}
       aria-label={ariaLabel}
       onValueChange={(v) => { if (v) onChange(v) }}
     >
       {options.map(o => (
-        <ToggleGroup.Item key={o.value} className={css.segItem} value={o.value}>
+        <ToggleGroup.Item key={o.value} className={overlayCss.segItem} value={o.value}>
           {o.label}
         </ToggleGroup.Item>
       ))}
@@ -72,14 +72,14 @@ export function Drawer({ open, onClose, title, children, footer, width }: {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className={css.drawerOverlay} />
-        <DialogPrimitive.Content className={css.drawer} style={width ? { width: Math.min(width, 560) } : undefined}>
-          <div className={css.drawerHd}>
-            <DialogPrimitive.Title className={css.drawerTitle}>{title}</DialogPrimitive.Title>
-            <DialogPrimitive.Close className={css.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
+        <DialogPrimitive.Overlay className={overlayCss.drawerOverlay} />
+        <DialogPrimitive.Content className={overlayCss.drawer} style={width ? { width: Math.min(width, 560) } : undefined}>
+          <div className={overlayCss.drawerHd}>
+            <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>
+            <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
           </div>
-          <div className={css.drawerBd}>{children}</div>
-          {footer && <div className={css.drawerFt}>{footer}</div>}
+          <div className={overlayCss.drawerBd}>{children}</div>
+          {footer && <div className={overlayCss.drawerFt}>{footer}</div>}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -98,16 +98,16 @@ export function Dialog({ open, onClose, title, children, footer, className }: {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className={css.dialogOverlay} />
-        <DialogPrimitive.Content className={clsx(css.dialog, className)}>
+        <DialogPrimitive.Overlay className={overlayCss.dialogOverlay} />
+        <DialogPrimitive.Content className={clsx(overlayCss.dialog, className)}>
           {title && (
-            <div className={css.drawerHd}>
-              <DialogPrimitive.Title className={css.drawerTitle}>{title}</DialogPrimitive.Title>
-              <DialogPrimitive.Close className={css.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
+            <div className={overlayCss.drawerHd}>
+              <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>
+              <DialogPrimitive.Close className={overlayCss.drawerClose} aria-label="关闭">×</DialogPrimitive.Close>
             </div>
           )}
-          <div className={css.dialogBd}>{children}</div>
-          {footer && <div className={css.drawerFt}>{footer}</div>}
+          <div className={overlayCss.dialogBd}>{children}</div>
+          {footer && <div className={overlayCss.drawerFt}>{footer}</div>}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

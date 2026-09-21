@@ -27,7 +27,7 @@
  *   ⑪ 编辑器漏传 kbId（或给它默认值）—— 笔记静默落进默认库。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -357,7 +357,9 @@ describe('CSS Module 引用一致性：TSX 里用到的类名必须真的在样�
     return out
   }
 
-  const kitCssSrc = readFileSync(join(SHELL_DIR, 'ui', 'kit.module.css'), 'utf8')
+  // M21：kit 的 CSS 拆成多份（表格 / 浮层…），读**前缀联合**——「借用的 kitCss 类有没有定义」
+  // 这个问题不该因为规则换了文件而改变答案。
+  const kitCssSrc = readdirSync(join(SHELL_DIR, 'ui')).filter((f) => /^kit(-[a-z]+)?\.module\.css$/.test(f)).sort().map((f) => readFileSync(join(SHELL_DIR, 'ui', f), 'utf8')).join('\n')
 
   it('本面板的 css.xxx 都有定义（写错/删掉规则后剩下的引用是死代码，不会报错）', () => {
     const own = defined(panelCss)

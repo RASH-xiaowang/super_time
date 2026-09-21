@@ -17,8 +17,8 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import css from './kit.module.css'
 import { EmptyState } from './kit-fields.tsx'
+import tableCss from './kit-table.module.css'
 
 /** 数据表格列定义（headless：渲染完全由面板提供）。 */
 export interface DataColumn<T> {
@@ -89,8 +89,8 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   })
   if (loading && rows.length === 0) {
     return (
-      <div className={css.tableWrap}>
-        <table className={css.table} aria-busy="true">
+      <div className={tableCss.tableWrap}>
+        <table className={tableCss.table} aria-busy="true">
           <thead>
             <tr>{columns.map(col => <th key={col.id}>{col.header}</th>)}</tr>
           </thead>
@@ -98,7 +98,7 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
             {Array.from({ length: skeletonRows }).map((_, i) => (
               <tr key={i}>
                 {columns.map(col => (
-                  <td key={col.id}><span className={`nm-skel ${css.skelTdLine}`} /></td>
+                  <td key={col.id}><span className={`nm-skel ${tableCss.skelTdLine}`} /></td>
                 ))}
               </tr>
             ))}
@@ -111,8 +111,8 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
     return <EmptyState title={emptyTitle} desc={emptyDesc} />
   }
   return (
-    <div className={css.tableWrap}>
-      <table className={css.table}>
+    <div className={tableCss.tableWrap}>
+      <table className={tableCss.table}>
         <thead>
           {table.getHeaderGroups().map(hg => (
             <tr key={hg.id}>
@@ -122,15 +122,15 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
                 const dir = header.column.getIsSorted()
                 const thStyle = col?.align === 'right' ? { textAlign: 'right' as const } : col?.align === 'center' ? { textAlign: 'center' as const } : undefined
                 const inner = (
-                  <span className={css.thInner}>
+                  <span className={tableCss.thInner}>
                     {flexRender(header.column.columnDef.header, header.getContext())}
-                    {sortable && <span className={css.thArrow}>{dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : '↕'}</span>}
+                    {sortable && <span className={tableCss.thArrow}>{dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : '↕'}</span>}
                   </span>
                 )
                 return (
                   <th
                     key={header.id}
-                    className={clsx(sortable && css.thSortable, col?.className)}
+                    className={clsx(sortable && tableCss.thSortable, col?.className)}
                     data-sorted={dir || undefined}
                     // 排序状态用 aria-sort 表达；排序控件本身是下面的真 <button>，
                     // 所以键盘用户也能排序（原来只有 <th onClick>，鼠标专属）。
@@ -140,7 +140,7 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
                     {sortable ? (
                       <button
                         type="button"
-                        className={css.thBtn}
+                        className={tableCss.thBtn}
                         onClick={header.column.getToggleSortingHandler()}
                         title={typeof col?.header === 'string' ? `按「${col.header}」排序` : '排序'}
                       >
@@ -157,7 +157,7 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
           {table.getRowModel().rows.map(row => (
             <tr
               key={row.id}
-              className={clsx(onRowClick && css.rowClickable)}
+              className={clsx(onRowClick && tableCss.rowClickable)}
               onClick={onRowClick ? () => { onRowClick(row.original) } : undefined}
               // 整行可点时也必须能键盘触发：tr 不能包 button，所以给它 tabIndex + Enter/Space。
               // 注意保留 tr 的隐式 row 角色（不加 role="button"），以免破坏表格语义。

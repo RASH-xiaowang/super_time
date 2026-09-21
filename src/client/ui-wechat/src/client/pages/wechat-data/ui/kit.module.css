@@ -265,99 +265,6 @@
   .cardGrid { grid-template-columns: 1fr; }
 }
 
-/* ── 数据表格 ─────────────────────────────── */
-.tableWrap {
-  width: 100%;
-  /* 第 89 轮：原为 overflow-x: hidden —— 配合下面 `.table { table-layout: fixed; width: 100% }`，
-     窄窗口下「弹性那一列」会被压到 32px（实测操作日志在 860px 时上下文列只剩 32px，
-     文字被单元格裁掉）。改成表格给一个可读的最小宽度、容器横向可滚：
-     宽窗口下 100% ≥ min-width，行为不变；窄窗口下所有列都可达。 */
-  overflow-x: auto;
-  overflow-y: auto;
-  max-height: 62vh;
-}
-
-.table {
-  width: 100%;
-  min-width: 640px;
-  border-collapse: collapse;
-  font-size: var(--nm-fs-md);
-  table-layout: fixed;
-}
-
-.table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: var(--nm-s-2) var(--nm-s-3);
-  text-align: left;
-  font-weight: 600;
-  font-size: var(--nm-fs-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--nm-text-2);
-  background: var(--nm-table-header-bg);
-  border-bottom: 1px solid var(--nm-border);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.thSortable { cursor: pointer; }
-.thSortable:hover { color: var(--nm-text-1); }
-
-/* 排序控件：真正的 <button>，让键盘也能排序（此前只有 <th onClick>，鼠标专属）。
- * 重置按钮外观但不能改版式：padding/border/margin 归零，字体与对齐**继承** th，
- * 这样 text-align:right 的数值列仍然右对齐，.thInner 的 inline-flex 也照旧。 */
-.thBtn {
-  display: block;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
-  corner-shape: round;
-}
-.thBtn:focus-visible {
-  outline: 2px solid var(--nm-cyan);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-.thInner {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--nm-s-1);
-}
-
-.thArrow { opacity: 0; font-size: var(--nm-fs-xs); }
-.thSortable[data-sorted] .thArrow { opacity: 1; }
-
-.table tbody td {
-  padding: var(--nm-s-2) var(--nm-s-3);
-  border-bottom: 1px solid var(--nm-border);
-  color: var(--nm-text-2);
-  vertical-align: middle;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 480px;
-}
-
-.table tbody tr:nth-child(even) { background: var(--nm-table-row-stripe); }
-
-.table tbody tr:last-child td { border-bottom: none; }
-
-.rowClickable { cursor: pointer; }
-.rowClickable:hover { background: var(--nm-table-row-hover) !important; }
-/* 整行可点时聚焦环朝内画，避免被表格容器裁掉 */
-.rowClickable:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
-
 .cellMono {
   font-family: var(--nm-font-mono);
   font-size: var(--nm-fs-xs);
@@ -365,204 +272,6 @@
 }
 
 .cellPrimary { color: var(--nm-text-1); font-weight: 500; }
-
-/* ── Tabs（Radix） ────────────────────────── */
-.tabs { display: flex; flex-direction: column; gap: var(--nm-s-3); }
-
-.tabList {
-  display: inline-flex;
-  gap: var(--nm-s-1);
-  padding: 3px;
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  width: fit-content;
-  max-width: 100%;
-  overflow-x: auto;
-}
-
-.tabTrigger {
-  padding: 5px 14px;
-  font-size: var(--nm-fs-md);
-  color: var(--nm-text-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--nm-r-sm);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--nm-t-fast), background var(--nm-t-fast);
-}
-
-.tabTrigger:hover { color: var(--nm-text-1); }
-
-.tabTrigger[data-state='active'] {
-  color: var(--nm-cyan);
-  background: var(--nm-bg-active);
-  box-shadow: inset 0 0 0 1px var(--nm-border-active);
-}
-
-/* ── Segmented（Radix ToggleGroup） ───────── */
-.seg {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  /* 第 89 轮：窄窗口下分段控件（如通讯录的 4 个分类）会宽过工具栏，
-     把整个内容区顶出横向滚动条（实测 980px 越界 12px、860px 越界 132px）。
-     允许换行后所有选项仍在视口内、可点，不再需要横向滚动。 */
-  flex-wrap: wrap;
-  max-width: 100%;
-}
-
-.segItem {
-  /* 横向 12px→10px：分段条是本应用横向最容易溢出的控件（通讯录 4 分类、
-     知情同意里的两排），每项省 4px 就能少一次换行。纵向不动 —— 见下面的 min-height。 */
-  padding: 4px 10px;
-  /* WCAG 2.2 SC 2.5.8：交互目标至少 24×24。实测分段控件原为 22px 高，
-     补 min-height 后达标（横向 padding 已足够）。**这行不能删**：
-     删掉后高度回落到 22px，键盘/触屏的最小点击尺寸就不达标了。 */
-  min-height: 24px;
-  font-size: var(--nm-fs-sm);
-  color: var(--nm-text-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--nm-r-sm);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--nm-t-fast), background var(--nm-t-fast);
-}
-
-.segItem:hover { color: var(--nm-text-1); }
-
-.segItem[data-state='on'] {
-  color: var(--nm-cyan);
-  background: var(--nm-bg-active);
-}
-
-/* ── Drawer（Radix Dialog，右侧抽屉） ─────── */
-.drawerOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: rgba(4, 8, 20, 0.6);
-  backdrop-filter: blur(2px);
-}
-
-.drawerOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
-
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 61;
-  width: min(560px, 92vw);
-  display: flex;
-  flex-direction: column;
-  background: var(--nm-bg-1);
-  border-left: 1px solid var(--nm-border);
-  box-shadow: var(--nm-shadow-popup);
-  outline: none;
-}
-
-.drawer[data-state='open'] { animation: kitSlideIn var(--nm-t-normal); }
-
-.drawerHd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--nm-s-3);
-  padding: var(--nm-s-3) var(--nm-s-4);
-  border-bottom: 1px solid var(--nm-border);
-}
-
-.drawerTitle { font-size: var(--nm-fs-lg); font-weight: 600; color: var(--nm-text-1); }
-
-.drawerClose {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--nm-text-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--nm-r-sm);
-  cursor: pointer;
-  font-size: var(--nm-fs-lg);
-}
-
-.drawerClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
-
-.drawerBd {
-  flex: 1;
-  overflow: auto;
-  padding: var(--nm-s-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--nm-s-3);
-}
-
-.drawerFt {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--nm-s-2);
-  padding: var(--nm-s-3) var(--nm-s-4);
-  border-top: 1px solid var(--nm-border);
-}
-
-/* ── Dialog（居中） ───────────────────────── */
-/* 遮罩：Radix 把 Overlay 与 Content 渲染成**兄弟节点**（都挂在 body 下），
-   所以遮罩上的 `display:grid; place-items:center` 其实**居中不了**对话框 —— 定位必须写在
-   .dialog 自己身上（见下）。遮罩只负责铺满 + 变暗 + 轻模糊。 */
-.dialogOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  background: rgba(4, 8, 20, 0.6);
-  backdrop-filter: blur(2px);
-}
-
-.dialogOverlay[data-state='open'] { animation: kitFadeIn var(--nm-t-normal); }
-
-/* 居中定位与层级都在这里：
-   1) 不给 .dialog 定位于是把落进 body 的常规流 —— 实测会掉到窗口左下角（body 是 flex）；
-   2) z-index 必须高于 .dialogOverlay（70），否则对话框会被画在遮罩**下面**，
-      隔着 60% 暗色 + 2px 模糊看自己，就是用户报的「编辑框跑到左下角且模糊」。 */
-.dialog {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 71;
-  width: min(520px, 92vw);
-  max-height: 84vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--nm-bg-1);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-xl);
-  box-shadow: var(--nm-shadow-popup);
-  outline: none;
-}
-
-.dialog[data-state='open'] { animation: kitPopIn var(--nm-t-normal); }
-
-.dialogBd {
-  flex: 1;
-  overflow: auto;
-  padding: var(--nm-s-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--nm-s-3);
-  font-size: var(--nm-fs-md);
-  color: var(--nm-text-2);
-  line-height: var(--nm-lh-body);
-}
 
 /* ── Tooltip ──────────────────────────────── */
 .tooltip {
@@ -878,7 +587,6 @@
 .skelAvatar { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; }
 .skelLine { width: 55%; height: 12px; flex-shrink: 1; }
 .skelMeta { width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
-.skelTdLine { display: inline-block; width: 60%; height: 12px; }
 /* 列表哨兵：2px 占位，靠 IntersectionObserver 触发下一页。 */
 .sentinel { height: 2px; flex-shrink: 0; }
 
@@ -905,21 +613,6 @@
 @keyframes kitPopIn {
   from { transform: translate(-50%, -50%) translateY(8px) scale(0.98); opacity: 0.6; }
   to { transform: translate(-50%, -50%) translateY(0) scale(1); opacity: 1; }
-}
-
-/* ────────────────────────────────────────────
- * 键盘可达性（a11y）
- *
- * 此前全套 kit 只在 .selectTrigger 上有 :focus-visible，其余可交互元素
- * （页签、分段控件、搜索清除、抽屉关闭）用键盘 Tab 时看不到焦点位置。
- * 统一在这里补上，焦点环用主题强调色，深浅两套主题都清晰可见。
- * ──────────────────────────────────────────── */
-.tabTrigger:focus-visible,
-.segItem:focus-visible,
-.searchClear:focus-visible,
-.drawerClose:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
 }
 
 /* ────────────────────────────────────────────
@@ -1070,4 +763,16 @@
 @media (prefers-reduced-motion: reduce) {
   .foldableBody { transition: none; }
   .foldableChevron { transition: none; }
+}
+
+/* ────────────────────────────────────────────
+ * 键盘可达性（a11y）
+ *
+ * 此前全套 kit 只在 .selectTrigger 上有 :focus-visible，其余可交互元素
+ * （页签、分段控件、搜索清除、抽屉关闭）用键盘 Tab 时看不到焦点位置。
+ * 统一在这里补上，焦点环用主题强调色，深浅两套主题都清晰可见。
+ * ──────────────────────────────────────────── */
+.searchClear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
 }
