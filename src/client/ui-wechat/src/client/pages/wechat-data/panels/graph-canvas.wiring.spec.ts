@@ -21,7 +21,10 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const src = readFileSync(join(HERE, 'GraphCanvas.tsx'), 'utf8')
+// M21：宿主组件被拆成 host + support 两个模块（`GraphCanvas.tsx` 只剩转发桶）——
+// 这里读**这三份的联合**（断言不变；不把 `graph-canvas*.ts` 的绘图模块卷进来，那是另一组断言的读取面）。
+const src = ['GraphCanvas.tsx', 'graph-canvas-host.tsx', 'graph-canvas-support.ts']
+  .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 // 去掉注释：注释里会提到旧写法与原因说明，别让它影响断言
 const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
 
@@ -334,7 +337,8 @@ describe('头像：候选、解码与「解码完成后必须重画」', () => {
   })
 
   it('远端头像必须带 crossOrigin 请求 —— 不带就会污染 canvas，PNG 导出直接抛 SecurityError', () => {
-    const canvasSrc = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
+    const canvasSrc = ['graph-canvas.ts', 'graph-canvas-theme.ts', 'graph-canvas-geometry.ts', 'graph-canvas-render.ts']
+      .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
     const decode = canvasSrc.slice(canvasSrc.indexOf('export function decodeAvatar'))
     expect(decode).toContain("if (!url.startsWith('data:')) image.crossOrigin = 'anonymous'")
     // data URL 是本地字节，加 crossOrigin 反而多一次无谓的 CORS 判定
