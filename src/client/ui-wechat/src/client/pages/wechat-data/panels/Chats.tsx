@@ -3,7 +3,7 @@
  * 列表（搜索/统计/置顶/批量导出），右侧消息流（分页加载 + 多类型消息渲染）。
  * 数据通过 DSH 后端 Remote（sessions + messages）。
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
@@ -23,7 +23,8 @@ import {
 import { RainWindow } from './rain-window.tsx'
 import { cacheBounded } from '../utils/misc.ts'
 import { MessageText } from '../utils/message-text.tsx'
-import { buildMessageItems, renderKindOf } from '../utils/message-items.ts'
+import { buildMessageItems, renderKindOf, type MessageRenderItem } from '../utils/message-items.ts'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { cspSafeSrc } from '../utils/url.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './chats.module.css'
@@ -1754,6 +1755,47 @@ const POLL_VISIBLE_MS = 1000
 const POLL_HIDDEN_MS = 5000
 
 /**
+ * 取渲染项代表的 local_id（日期分隔项没有，返回 -1）。
+ * @param item - `buildMessageItems` 的产物。
+ * @returns local_id，或 -1。
+ */
+function itemLocalId(item: MessageRenderItem | undefined): number {
+  if (!item || item.kind === 'day') return -1
+  const head = item.kind === 'group' ? item.items[0] : item.m
+  return head?.localId ?? -1
+}
+
+/**
+ * 取渲染项的稳定 key（day 自带 key；消息按 localId，图片组按 gid+首条 localId）。
+ * @param item - `buildMessageItems` 的产物。
+ * @returns 虚拟化与 React 共用的 key。
+ */
+function msgItemKey(item: MessageRenderItem | undefined): string {
+  if (!item) return 'nil'
+  if (item.kind === 'day') return item.key
+  if (item.kind === 'group') return 'grp-' + item.gid + '-' + String(item.items[0]?.localId ?? '')
+  return 'msg-' + String(item.m.localId)
+}
+
+/**
+ * 虚拟化的初始高度估算（真实高度由 `measureElement` 量完回填）。
+ *
+ * 估得准不准只影响首帧的滚动条长度，不影响正确性；但**偏差太大**会让「回到底部」
+ * 之类的定位多跳几次，所以这里按文本长度粗分三档（长文本在气泡里会换行）。
+ * @param item - `buildMessageItems` 的产物。
+ * @returns 预估像素高度。
+ */
+function estimateMsgItemHeight(item: MessageRenderItem | undefined): number {
+  if (!item) return 72
+  if (item.kind === 'day') return 30
+  const head = item.kind === 'group' ? item.items[0] : item.m
+  const len = (head?.strContent ?? head?.displayText ?? head?.msgContent ?? '').length
+  if (len > 400) return 160
+  if (len > 120) return 104
+  return 72
+}
+
+/**
  * Render the chats panel.
  * @param props - optional view filter for subscription tabs and an external
  *   navigation target (records/privacy/ask jump into a session + message).
@@ -2539,9 +2581,124 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   const { count: sessCount, sentinelRef: sessSentinel } = useProgressiveList(normalList.length, 120)
 
-  // 消息流渐进渲染：窗口从底部截取（最新消息永远可见），向上滚动越过哨兵
-  // 时逐步展开更早的消息，长会话不再一次性渲染上千条 DOM。
-  const { count: msgWinCount, sentinelRef: msgWinSentinel, reveal: revealMsgWindow } = useProgressiveList(messages.length, 120)
+  /**
+   * 消息流的滚动容器与**虚拟化**（N18）。
+   *
+   * 为什么改：原先是「渐进窗口」（`useProgressiveList(count, 120)`，向上滚动只增不减）——
+   * 把一段历史滚过一遍之后，DOM 会把整段都留着（实测 1 万条消息 = **9,700** 个节点，
+   * `scripts/longlist-virtualization-e2e.mjs` 的基线就是这么量的）。现在按视口渲染：
+   * 只挂载可见范围 + overscan，节点数与历史长度解耦；`#msg-<localId>` 锚点、跳到某条消息、
+   * 回到底部这些既有交互分别由 `locateMessage` 与末尾哨兵保持可用。
+   */
+  const msgScrollRef = useRef<HTMLDivElement | null>(null)
+  const msgItems = useMemo(() => buildMessageItems(messages, 0), [messages])
+  const msgVirtualizer = useVirtualizer({
+    count: msgItems.length,
+    getScrollElement: () => msgScrollRef.current,
+    estimateSize: (i) => estimateMsgItemHeight(msgItems[i]),
+    overscan: 6,
+    getItemKey: (i) => msgItemKey(msgItems[i]),
+  })
+  /**
+   * 跳到某条消息：先把虚拟窗口滚到它的位置，等元素真正挂载后再精确对齐。
+   * @param localId - 目标消息的 local_id。
+   */
+  const locateMessage = useCallback((localId: number): void => {
+    const idx = msgItems.findIndex((it) => itemLocalId(it) === localId)
+    if (idx >= 0) msgVirtualizer.scrollToIndex(idx, { align: 'center' })
+    setTimeout(() => { document.getElementById('msg-' + String(localId))?.scrollIntoView({ block: 'center' }) }, 80)
+  }, [msgItems, msgVirtualizer])
+  /**
+   * 渲染一个「消息渲染项」（日期分隔 / 系统行 / 普通气泡 / 图片组）。
+   *
+   * 从原来的内联循环里抽出来：虚拟化后每项要单独套一层定位容器，
+   * 而**行内结构必须保持原样**（`id="msg-<localId>"`、头像身份键、悬停时间戳这些
+   * 都被守卫与深链依赖）。
+   * @param item - `buildMessageItems` 的产物。
+   * @returns 行元素（日期分隔没有 id）。
+   */
+  function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
+    if (item.kind === 'day') {
+      return <div className={css.msgDayDivider}><span>{item.label}</span></div>
+    }
+    const head = item.kind === 'group' ? item.items[0] : item.m
+    if (!head || !curSession) return null
+    const kind = renderKindOf(head)
+    // 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。
+    if (kind === 'system' || kind === 'revoke' || kind === 'pat' || kind === 'empty') {
+      return (
+        <div id={`msg-${head.localId}`} className={css.msgRowSystem}>
+          <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />
+        </div>
+      )
+    }
+    const isSelf = head.isSender === 1
+    const isGroup = curSession.type === 'group'
+    /*
+     * 头像的身份键必须是真实 wxid，拿不到就留空（只渲染首字母占位）。
+     *
+     *  - 自己：用登录账号的 wxid。以前 fallback 到 `curSession.username`，
+     *    那会把「我」键成**对方**的 username，于是自己和对方显示同一个头像；
+     *    账号 wxid 未知时宁可不取头像，也不要取错。
+     *  - 群成员：用消息里的 sender wxid；解析不出来时留空，
+     *    绝不用昵称当键（群里同名成员会互相顶掉头像）。
+     *  - 私聊对方：就是会话 username 本身。
+     */
+    const avUsername = isSelf
+      ? selfWxid
+      : (isGroup ? (head.sender ?? '') : curSession.username)
+    const avName = isSelf ? '我' : (isGroup ? (head.senderName || head.sender || '') : curSession.displayName)
+    const isEdited = editedIds.has(head.localId)
+    return (
+      <div
+        id={`msg-${head.localId}`}
+        className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
+        onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
+      >
+        <Avatar name={avName} username={avUsername} size={34} />
+        <div className={css.msgCol}>
+          {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
+          <span className={css.msgTimeChip}>
+            {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
+          </span>
+          {isGroup && !isSelf && head.sender && <div className={css.msgSender}>{avName}</div>}
+          {item.kind === 'group' ? (
+            <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
+              <MessageImageGroup items={item.items} username={curSession.username} onOpenAt={openViewer} />
+            </div>
+          ) : (
+            <MessageBody
+              m={item.m}
+              selfName={curSession.username}
+              onOpenImage={openViewer}
+              onOpenChatlog={openChatlog}
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+  /**
+   * 「加载更多」不跳位（N18）：插入后把 scrollTop 补上「新增内容的高度」，
+   * 让视口里那条消息留在原地。
+   *
+   * 为什么要跑三帧：动态测高是一帧一帧回填的（先估、后量、再量修正），
+   * 只补一次会差出几十像素；每次都按**最初的**基准重算，所以重复执行是安全的。
+   */
+  /** 往上插入更早消息前的滚动位置（见 loadMore）；由下面的 effect 消费。 */
+  const prependAnchorRef = useRef<{ h: number; top: number } | null>(null)
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current
+    const box = msgScrollRef.current
+    if (!anchor || !box) return
+    prependAnchorRef.current = null
+    const apply = (): void => {
+      const delta = box.scrollHeight - anchor.h
+      if (delta > 0) box.scrollTop = anchor.top + delta
+    }
+    apply()
+    requestAnimationFrame(() => { apply(); requestAnimationFrame(apply) })
+  }, [messages.length])
 
   /**
    * 当前 `messages` 是否确实属于正在显示的会话。
@@ -2772,6 +2929,10 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       // 翻页结果按会话拼接：切走之后到达的上一页属于上一个会话，必须丢弃。
       if (!sessionAlive(epoch, talker)) return
       const list = env.messages
+      // N18：往上插入**更早**的消息会让整段内容下移，视口看着像「跳了一下」。
+      // 先记下当前的滚动高度与位置，插完由下面那个 effect 按差值补回 scrollTop。
+      const box = msgScrollRef.current
+      if (box) prependAnchorRef.current = { h: box.scrollHeight, top: box.scrollTop }
       setMessages(prev => (sessionAlive(epoch, talker) ? [...list, ...prev] : prev))
       setWatermarkFrom(list)
       setHasMore(env.hasMore ?? false)
@@ -2833,16 +2994,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
       setCursor(env.cursor ?? 0)
       setCursorLocalId(env.cursorLocalId)
       setTypeStats(env.typeStats ?? [])
-      // 渐进渲染窗口从底部截取：先展开到目标消息所在位置，保证定位元素已渲染。
-      if (hit >= 0) revealMsgWindow(list.length - hit)
+      // N18：虚拟化后不必再「预先展开窗口」—— 目标消息没挂载时由 locateMessage 先滚到它的位置
       setTimeout(() => {
         if (!sessionAlive(epoch, username)) return
         if (hit >= 0) {
           const m = list[hit]
-          if (m) {
-            const el = document.getElementById('msg-' + String(m.localId))
-            el?.scrollIntoView({ block: 'center' })
-          }
+          if (m) locateMessage(m.localId)
         } else {
           msgEndRef.current?.scrollIntoView({ block: 'end' })
         }
@@ -2852,7 +3009,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     } finally {
       if (sessionAlive(epoch, username)) setMsgLoading(false)
     }
-  }, [sessions, revealMsgWindow])
+  }, [sessions, locateMessage])
 
   // External navigation (records/privacy/ask/contacts): open the target
   // session and locate the message (or just open when no localId).
@@ -3281,7 +3438,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                 )}
               </div>
             )}
-            <div className={css.msgBody}>
+            <div className={css.msgBody} ref={msgScrollRef}>
               {/* 归属不符（正在切会话）时只显示骨架，绝不把上一个会话的消息画出来 */}
               {!messagesMatchSession && <ListSkeleton rows={8} />}
               {messagesMatchSession && hasMore && (
@@ -3290,82 +3447,30 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
                 </button>
               )}
               {messagesMatchSession && msgError && <div className={css.msgErr}>{msgError}</div>}
-              {messagesMatchSession && messages.length > msgWinCount && <ListSentinel refFn={msgWinSentinel} />}
-              {messagesMatchSession && (() => {
-                // 渐进窗口：只渲染靠近底部的 msgWinCount 条，向上滚动越过哨兵
-                // 时逐步展开更早消息（窗口起点随 count 增长向历史方向移动）。
-                const start = Math.max(0, messages.length - msgWinCount)
-                // 「消息 → 渲染项」的组装（含图片组归并）已抽到 utils/message-items.ts，
-                // 纯函数才好用 scripts/check-message-items.js 逐条断言各分支。
-                const items = buildMessageItems(messages, start)
-                const kindOf = renderKindOf
-                const out: React.JSX.Element[] = []
-                for (const item of items) {
-                  if (item.kind === 'day') {
-                    out.push(<div key={item.key} className={css.msgDayDivider}><span>{item.label}</span></div>)
-                    continue
-                  }
-                  const head = item.kind === 'group' ? item.items[0] : item.m
-                  if (!head) continue
-                  const kind = kindOf(head)
-                  // 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。
-                  if (kind === 'system' || kind === 'revoke' || kind === 'pat' || kind === 'empty') {
-                    out.push(
-                      <div key={`sys-${head.localId}`} id={`msg-${head.localId}`} className={css.msgRowSystem}>
-                        <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />
-                      </div>,
-                    )
-                    continue
-                  }
-                  const isSelf = head.isSender === 1
-                  const isGroup = curSession.type === 'group'
-                  /*
-                   * 头像的身份键必须是真实 wxid，拿不到就留空（只渲染首字母占位）。
-                   *
-                   *  - 自己：用登录账号的 wxid。以前 fallback 到 `curSession.username`，
-                   *    那会把「我」键成**对方**的 username，于是自己和对方显示同一个头像；
-                   *    账号 wxid 未知时宁可不取头像，也不要取错。
-                   *  - 群成员：用消息里的 sender wxid；解析不出来时留空，
-                   *    绝不用昵称当键（群里同名成员会互相顶掉头像）。
-                   *  - 私聊对方：就是会话 username 本身。
-                   */
-                  const avUsername = isSelf
-                    ? selfWxid
-                    : (isGroup ? (head.sender ?? '') : curSession.username)
-                  const avName = isSelf ? '我' : (isGroup ? (head.senderName || head.sender || '') : curSession.displayName)
-                  const isEdited = editedIds.has(head.localId)
-                  out.push(
-                    <div
-                      key={item.kind === 'group' ? `grp-${item.gid}-${head.localId}` : head.localId}
-                      id={`msg-${head.localId}`}
-                      className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
-                      onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
-                    >
-                      <Avatar name={avName} username={avUsername} size={34} />
-                      <div className={css.msgCol}>
-                        {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
-                        <span className={css.msgTimeChip}>
-                          {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
-                        </span>
-                        {isGroup && !isSelf && head.sender && <div className={css.msgSender}>{avName}</div>}
-                        {item.kind === 'group' ? (
-                          <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
-                            <MessageImageGroup items={item.items} username={curSession.username} onOpenAt={openViewer} />
-                          </div>
-                        ) : (
-                          <MessageBody
-                            m={item.m}
-                            selfName={curSession.username}
-                            onOpenImage={openViewer}
-                            onOpenChatlog={openChatlog}
-                          />
-                        )}
+              {messagesMatchSession && (
+                /*
+                 * 虚拟化（N18）：外层按总高度撑开滚动条，行按各自偏移绝对定位。
+                 * 只挂载视口附近（`overscan`）+ 动态测高（`measureElement`），
+                 * 所以 DOM 节点数与已加载的历史长度**解耦**（实测 1 万条消息从 9,700 个节点降到几十个）。
+                 * `id="msg-<localId>"` 仍在行上，深链与 `locateMessage` 照旧可用。
+                 */
+                <div style={{ height: msgVirtualizer.getTotalSize(), position: 'relative', flex: '0 0 auto' }}>
+                  {msgVirtualizer.getVirtualItems().map((vi) => {
+                    const item = msgItems[vi.index]
+                    if (!item) return null
+                    return (
+                      <div
+                        key={vi.key}
+                        data-index={vi.index}
+                        ref={msgVirtualizer.measureElement}
+                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
+                      >
+                        {renderMsgItem(item)}
                       </div>
-                    </div>,
-                  )
-                }
-                return out
-              })()}
+                    )
+                  })}
+                </div>
+              )}
               {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
               <div ref={msgEndRef} />
             </div>
