@@ -54,7 +54,7 @@ const licenseService = require('./src/license/service');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
 const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
-const { resolveDebugGates } = require('./src/backend/debug-gates');
+const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = require('./src/backend/debug-gates');
 const { createUpdateService } = require('./src/backend/update');
 
 /**
@@ -213,10 +213,16 @@ function spawnBackendProcess(userDataPath, onExit) {
   // console-safe 会静默 —— 于是「打不开」这类最可能来自后端的报障，我们手上什么都没留下。
   // 这里把两条流转进文件日志，同时转写一份到本进程的标准流（保持开发态可见性）。
   // RPC 不受影响：它与后端之间走 process.parentPort，与 stdio 无关。
+  // H7 验收：「永不回包」注入名单（非打包态专用）。打包态下 `resolveHangMethods` 恒返回空表，
+  // 并且这里**显式删掉**该变量而不是「不设置」—— worker 就不再可能继承到一个卡死的注入名单。
+  const hangMethods = resolveHangMethods({ isPackaged: app.isPackaged, env: process.env });
+  const workerEnv = { ...process.env };
+  if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
+  else delete workerEnv[DEBUG_HANG_ENV];
   const child = utilityProcess.fork(
     path.join(__dirname, 'src', 'backend', 'wechat-worker.js'),
     [],
-    { serviceName: 'super-time-wechat-backend', stdio: 'pipe' }
+    { serviceName: 'super-time-wechat-backend', stdio: 'pipe', env: workerEnv }
   );
   for (const [stream, level, target] of [
     [child.stdout, 'backend', process.stdout],

@@ -36,6 +36,17 @@ console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=
 
 let backend = null;
 
+/**
+ * H7 验收的「永不回包」注入名单（`SUPERTIME_DEBUG_HANG_METHODS`）。
+ *
+ * 名单由主进程决定并在 fork 时显式传给本进程（打包态下主进程会删掉该变量，见 `debug-gates.js`）。
+ * 命中的调用**不回应答**，由主进程的超时预算收敛成一条可读错误 —— 这正是「后端卡死」的形状。
+ */
+const HANG_METHODS = String(process.env.SUPERTIME_DEBUG_HANG_METHODS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s !== '');
+
 /** 向父进程回传；父进程已退出时静默忽略。 */
 function post(message) {
   try {
@@ -60,6 +71,11 @@ async function handle(msg) {
       }
       case 'call': {
         if (!backend) throw new Error('Super Time 后端未初始化');
+        // H7 验收注入：只记一条日志、不回任何应答 —— 主进程按超时预算收敛（见 HANG_METHODS 注释）。
+        if (HANG_METHODS.includes(String(payload?.method ?? ''))) {
+          console.warn('[wechat-worker] 注入「永不回包」: ' + String(payload?.method));
+          return;
+        }
         post({ id, value: await backend.call(payload?.method, payload?.args) });
         return;
       }

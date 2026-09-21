@@ -686,7 +686,7 @@ async function createWechatBackend(options = {}) {
         const result = {
           ok: false,
           error: {
-            message: e.message || String(e),
+            message: readableCallError(method, e),
             code: typeof e.code === 'string' ? e.code : undefined,
             details: e.details ?? undefined,
           },
@@ -704,6 +704,27 @@ async function createWechatBackend(options = {}) {
       }
     },
   };
+}
+
+/**
+ * 把底层英文错误翻译成用户能照着做的一句话。
+ *
+ * 为什么得有这一层：面板把 `error.message` 原样渲染进 `role="alert"`（`Chats` / `Contacts`
+ * 等皆是），而「还没配置数据目录 / 还没解密」是**每个查询面板都会撞到**的首启状态 ——
+ * `node:sqlite` 的原文是 `unable to open database file`，用户既看不懂也不知道下一步做什么。
+ * 只在这一处翻译，所有 Remote 方法一起受益。**只翻译这一个已知形态，其余原样透传** ——
+ * 不猜、不美化，避免把真实故障说成「未配置」。
+ *
+ * @param {string} method - Remote 方法名（只用于留痕）。
+ * @param {Error} e - 原始错误。
+ * @returns {string} 可直接显示的消息。
+ */
+function readableCallError(method, e) {
+  const raw = (e && e.message) || String(e);
+  if (/unable to open database file|SQLITE_CANTOPEN/i.test(raw)) {
+    return '读不到本机的微信数据：请先在「数据配置」中设置数据目录并完成解密（原始错误：' + raw + '）';
+  }
+  return raw;
 }
 
 /**
@@ -730,4 +751,6 @@ module.exports = {
   applySqlitePageCacheLimit,
   /** 单测入口（见 resultCacheHandles 的说明）。 */
   resultCacheHandles,
+  /** 单测入口：错误文案翻译（见 readableCallError 的说明）。 */
+  readableCallError,
 };

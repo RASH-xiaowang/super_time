@@ -34,6 +34,7 @@
     "ui:e2e-smoke": "node scripts/ui-e2e-smoke.mjs",
     "ui:nav-e2e": "node scripts/nav-shell-e2e.mjs",
     "ui:overview-audit": "node scripts/overview-layout-audit.mjs",
+    "ui:loading-e2e": "node scripts/loading-recovery-e2e.mjs",
     "package:smoke": "node scripts/packaged-smoke.js",
     "m1-secrets:smoke": "node scripts/m1-secrets-migration-smoke.js",
     "epipe:smoke": "node scripts/epipe-smoke.js",
