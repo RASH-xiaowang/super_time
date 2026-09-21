@@ -25,7 +25,11 @@ function codeOf(file: string): string {
 
 const card = codeOf('AiModelConfig.tsx')
 const llmApi = codeOf('../llm-config.ts')
-const api = codeOf('../api.ts')
+/**
+ * M21：`api.ts` 拆成转发桶 + 8 个域模块 —— 这里读它们的**联合**
+ * （断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
+ */
+const api = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => codeOf('../' + f)).join('\n')
 
 describe('已配置模型：切换条接线', () => {
   it('卡片里有切换条与新增入口', () => {

@@ -66,7 +66,11 @@ const panel = ['KbFiles.tsx', 'kb-files-support.tsx', 'kb-files-panel.tsx', 'kb-
 const panelCss = readFileSync(join(HERE, 'kbfiles.module.css'), 'utf8')
 const panelShell = readFileSync(join(SHELL_DIR, 'WechatDataPanel.tsx'), 'utf8')
 const kbShellSrc = readFileSync(join(HERE, 'KbShell.tsx'), 'utf8')
-const apiSrc = readFileSync(join(SHELL_DIR, 'api.ts'), 'utf8')
+/**
+ * M21：`api.ts` 拆成转发桶 + 8 个域模块（core / read / kb / search / media / export-ops / config / status）——
+ * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
+ */
+const apiSrc = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(SHELL_DIR, f), 'utf8')).join('\n')
 const navSrc = readFileSync(join(SHELL_DIR, 'nav-config.ts'), 'utf8')
 const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
