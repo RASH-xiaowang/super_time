@@ -41,11 +41,21 @@ export default defineConfig({
     hookTimeout: 180000,
     // 这些用例都在临时目录里各建各的夹具，彼此无共享状态，本机可并行。
     fileParallelism: true,
-    // CI 上把并行度压到 2（2026-09-20）：runner 核少且与别的任务共享，几个重文件同时跑时
-    // 会有 worker 长时间抢不到 CPU，vitest 的内部 RPC（`onTaskUpdate`）因此超时 ——
-    // 症状是「用例全部通过、退出码却是 1」加 3 条 `[vitest-worker]: Timeout calling`，
-    // 在本地（核多）复现不出来。不彻底串行，是因为夹具改成单事务插入后整批已快约 4 倍
-    // （本机 35s → 8.5s），限到 2 就够把 CPU 还给正在跑的那一个。
-    maxWorkers: process.env.CI ? 2 : undefined,
+    /**
+     * CI 上把并行度压到 **1**（2026-09-21；此前是 2）。
+     *
+     * 机制（09-20 就写在这条注释里，今天的证据把它坐实了）：`onTaskUpdate` 是 worker 向**主进程**
+     * （reporter）发起的 RPC，主进程被饿住时 worker 那侧的调用就会超时 —— 症状是「用例全部通过、
+     * 退出码却是 1」加若干条 `[vitest-worker]: Timeout calling "onTaskUpdate"`，本地（核多）复现不出来。
+     * runner 只有 2 核、还要和实时扫描抢 CPU：2 个 worker 同时跑重库操作时，主进程也一起被饿住。
+     *
+     * 为什么从 2 收到 1：**这个超时值不是配置项**（vitest 内部走 birpc 的默认超时），
+     * 所以唯一的杠杆是拿掉争抢。证据（2026-09-21 的 `6e709fc` push 运行）：单条用例在 runner 上
+     * 最长跑到 124s（`gateway-export-stream-progress`），整轮出现 **3 条** onTaskUpdate 超时；
+     * 同一提交的 PR 运行（同一套配置）却全绿 —— 典型的争抢型抖动，不是产品缺陷。
+     * 代价与 09-20 抬 `testTimeout` 是同一笔账：整批串行后墙钟更长（作业预算 45 分钟，实测 test 步
+     * 约 10 分钟量级），换来的是这条门禁不再随机把绿灯判红。
+     */
+    maxWorkers: process.env.CI ? 1 : undefined,
   },
 })
