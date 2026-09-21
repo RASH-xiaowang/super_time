@@ -415,7 +415,7 @@ import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { statSync as statSync2 } from "node:fs";
 import { decompress } from "fzstd";
 
-// src/backend/wechat-data/src/query/parse.ts
+// src/backend/wechat-data/src/query/parse-xml.ts
 function stripCdata(value) {
   const t = value.trim();
   const m = t.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
@@ -474,6 +474,35 @@ function extractXmlTextNodes(xml) {
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
+
+// src/backend/wechat-data/src/query/parse-call.ts
+function parseCallDuration(text) {
+  const m = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(text);
+  if (!m) return void 0;
+  const a = Number(m[1] ?? 0);
+  const b = Number(m[2] ?? 0);
+  return m[3] === void 0 ? a * 60 + b : a * 3600 + b * 60 + Number(m[3]);
+}
+var CALL_ANSWERED_ELSEWHERE = /已在其它设备接听/;
+function classifyCallStatus(status, connected) {
+  const s = status || "";
+  if (connected) return "connected";
+  if (s.includes("\u5DF2\u53D6\u6D88") || s.includes("\u5BF9\u65B9\u5DF2\u53D6\u6D88")) return "cancelled";
+  if (s.includes("\u5DF2\u62D2\u7EDD")) return "rejected";
+  if (s.includes("\u672A\u5E94\u7B54")) return "no-answer";
+  if (s.includes("\u5FD9\u7EBF")) return "busy";
+  if (s.includes("\u4E2D\u65AD")) return "interrupted";
+  if (s.includes("\u672A\u63A5\u542C") || s.includes("\u672A\u63A5\u901A")) return "missed";
+  return "unknown";
+}
+function parseVoipKind(roomType) {
+  const v = (roomType ?? "").trim();
+  if (v === "0") return "audio";
+  if (v === "1") return "video";
+  return "";
+}
+
+// src/backend/wechat-data/src/query/parse-rich.ts
 function cleanRichText(s) {
   const v = (s ?? "").trim();
   if (!v) return "";
@@ -706,31 +735,6 @@ function quotedThumbUrl(raw) {
     const v = xmlTagOrAttr(candidate, key);
     if (v) return unescapeXmlEntities(v);
   }
-  return "";
-}
-function parseCallDuration(text) {
-  const m = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(text);
-  if (!m) return void 0;
-  const a = Number(m[1] ?? 0);
-  const b = Number(m[2] ?? 0);
-  return m[3] === void 0 ? a * 60 + b : a * 3600 + b * 60 + Number(m[3]);
-}
-var CALL_ANSWERED_ELSEWHERE = /已在其它设备接听/;
-function classifyCallStatus(status, connected) {
-  const s = status || "";
-  if (connected) return "connected";
-  if (s.includes("\u5DF2\u53D6\u6D88") || s.includes("\u5BF9\u65B9\u5DF2\u53D6\u6D88")) return "cancelled";
-  if (s.includes("\u5DF2\u62D2\u7EDD")) return "rejected";
-  if (s.includes("\u672A\u5E94\u7B54")) return "no-answer";
-  if (s.includes("\u5FD9\u7EBF")) return "busy";
-  if (s.includes("\u4E2D\u65AD")) return "interrupted";
-  if (s.includes("\u672A\u63A5\u542C") || s.includes("\u672A\u63A5\u901A")) return "missed";
-  return "unknown";
-}
-function parseVoipKind(roomType) {
-  const v = (roomType ?? "").trim();
-  if (v === "0") return "audio";
-  if (v === "1") return "video";
   return "";
 }
 var IMAGE_GROUP_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
@@ -1140,6 +1144,8 @@ function parseChatlogRecords(recordXml, depth = 0) {
   }
   return out;
 }
+
+// src/backend/wechat-data/src/query/parse-system.ts
 function parseChatroomTop(xml) {
   const block = xml.match(/<chatroomtopmsg\b[^>]*>[\s\S]*?<\/chatroomtopmsg>/i);
   if (!block) return "";
@@ -1215,6 +1221,8 @@ function parseAtUsernames(source) {
   }
   return out;
 }
+
+// src/backend/wechat-data/src/query/parse.ts
 function parseEmbeddedPayload(body) {
   if (/<emoji\b/.test(body)) {
     return { text: "", rich: { type: "emoji", title: xmlAttr(body, "emoji", "md5") || xmlTagText(body, "emoji"), md5: xmlAttr(body, "emoji", "md5") } };
