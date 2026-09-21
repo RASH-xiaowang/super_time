@@ -4,7 +4,7 @@
  * 从原模块原样搬出，**行为逐字节不变**；原文件继续以 `export *` 转发
  * ⇒ 所有既有 import 一行都不用改。
  *
- * @module kb-files-supportx
+ * @module kb-files-support
  */
 
 import {
