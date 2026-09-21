@@ -49,7 +49,7 @@ import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
 import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
-import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages } from './query/search.ts'
+import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages, searchIndexMessagesCancellable } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
 import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
@@ -343,6 +343,13 @@ export class WechatDataGateway extends TypertRemoteService {
   private whisperTranscribing: WhisperTranscribing = { active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
   /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
   private readonly _streamJobs = new Map<string, StreamJob>()
+  /**
+   * 消息搜索的取消槽（N9）：jobId → 取消控制器。
+   *
+   * 与导出的槽分开：搜索没有进度可言，也不想占用 `wechat-export/progress` 那个事件名。
+   * 槽位会在搜索收尾时删掉（见 {@link searchSignal}），所以这里不需要上限。
+   */
+  private readonly _searchJobs = new Map<string, AbortController>()
   /**
    * 反馈去重窗口（N27）：键 → 到期时间。
    *
@@ -1753,12 +1760,53 @@ export class WechatDataGateway extends TypertRemoteService {
 
   /**
    * Full-text search over text messages (index first, scan fallback).
+   *
+   * N9：可取消。渲染层每次搜索生成一个 `jobId`，切换面板/发起新搜索时用 `cancelSearch({ jobId })`
+   * 打断上一次 —— 兜底扫描会在百毫秒内收尾并返回部分结果（见 `query/search.ts` 的 `SearchControl`）。
+   * 不带 jobId 时行为与从前一致（跑完为止）。
    * @param options - query string, optional result limit and optional talker scope.
-   * @returns SearchSnapshot: matched message items.
+   * @returns SearchSnapshot: matched message items（被取消时带 `cancelled: true`）。
    */
   @Remote('searchMessages')
-  searchMessages(options: { query: string; limit?: number; username?: string }): SearchSnapshot {
-    return searchIndexMessages(this._dirs.decrypted, options.query, options.limit, options.username)
+  async searchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<SearchSnapshot> {
+    const job = this.searchSignal(options?.jobId)
+    try {
+      return await searchIndexMessagesCancellable(this._dirs.decrypted, options.query, options.limit, options.username,
+        job ? { signal: job.signal } : undefined)
+    } finally {
+      job?.done()
+    }
+  }
+
+  /**
+   * 取一个搜索任务的取消信号（N9）。
+   * @param jobId - 渲染层生成的不透明标识；缺省/空白时返回 undefined（＝不可取消）。
+   * @returns 信号与收尾函数；收尾只在槽里还是自己这一枚控制器时才删 —— 否则会把「先取消、再重跑」
+   *   的新令牌一起删掉。
+   */
+  private searchSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    const id = normalizeJobId(jobId)
+    if (id === '') return undefined
+    const ctrl = new AbortController()
+    this._searchJobs.set(id, ctrl)
+    return {
+      signal: ctrl.signal,
+      done: () => { if (this._searchJobs.get(id) === ctrl) this._searchJobs.delete(id) },
+    }
+  }
+
+  /**
+   * 取消一次正在跑的消息搜索（N9）。
+   * @param options - `jobId` 为渲染层生成的任务标识。
+   * @returns `ok: true` 表示确实打断了一个在跑的搜索；找不到（已跑完/从未注册）时为 false。
+   */
+  @Remote('cancelSearch')
+  cancelSearch(options?: { jobId?: string }): { ok: boolean } {
+    const id = normalizeJobId(options?.jobId)
+    const ctrl = id === '' ? undefined : this._searchJobs.get(id)
+    if (!ctrl) return { ok: false }
+    ctrl.abort()
+    return { ok: true }
   }
 
   /**

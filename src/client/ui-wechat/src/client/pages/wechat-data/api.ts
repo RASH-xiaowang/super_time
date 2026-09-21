@@ -286,7 +286,8 @@ export interface WechatRemote {
   suggestKbLinks(options: { kbId: number; text?: string; topK?: number; excludeTitle?: string }): Promise<RemoteResult<KbLinkSuggestResult>>
   getSearchIndexStatus(): Promise<RemoteResult<SearchIndexStatus>>
   buildSearchIndex(options?: { force?: boolean }): Promise<RemoteResult<SearchBuildResult>>
-  searchMessages(options: { query: string; limit?: number; username?: string }): Promise<RemoteResult<SearchSnapshot>>
+  searchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<RemoteResult<SearchSnapshot>>
+  cancelSearch(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean }>>
   searchUnified(options: { query: string; limit?: number }): Promise<RemoteResult<UnifiedSearchSnapshot>>
   suggestReplies(options: { username: string; kbId?: number; count?: number }): Promise<RemoteResult<ReplySuggestResult>>
   askWechat(options: {
@@ -1261,8 +1262,19 @@ export async function apiBuildSearchIndex(options?: { force?: boolean }): Promis
  * @param options - Query options: query text and limit.
  * @returns SearchSnapshot.
  */
-export async function apiSearchMessages(options: { query: string; limit?: number; username?: string }): Promise<SearchSnapshot> {
+export async function apiSearchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<SearchSnapshot> {
   return unwrap(await remote().searchMessages(options))
+}
+/**
+ * 取消一次正在跑的消息搜索（N9）。
+ *
+ * 用途是「用户不再关心这次搜索了」：换关键词、清空输入、离开面板 —— 兜底扫描可能还要跑几百毫秒，
+ * 而它占着 worker 不放。取消后那一侧的扫描会在百毫秒内收尾（返回部分结果并带 `cancelled`）。
+ * @param options - `jobId` 为发起搜索时生成的那个标识。
+ * @returns `ok: true` 表示确实打断了一个在跑的搜索。
+ */
+export async function apiCancelSearch(options: { jobId: string }): Promise<{ ok: boolean }> {
+  return unwrap(await remote().cancelSearch(options))
 }
 /**
  * Run the unified local search across several data domains.

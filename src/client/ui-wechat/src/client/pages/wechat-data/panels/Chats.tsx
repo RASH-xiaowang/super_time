@@ -12,7 +12,7 @@ import { SessionAsk } from './SessionAsk.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiBuildSearchIndex, apiCancelSearch, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
@@ -2241,6 +2241,18 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [indexBuilding, setIndexBuilding] = useState(false)
   const msgSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const msgSearchSeqRef = useRef(0)
+  /**
+   * 在跑的消息搜索的 jobId（N9）。换关键词/清空/离开面板时用它打断上一轮扫描 ——
+   * 后端兜底扫描最长可达秒级，不打断就白占着 worker（用户已经不看结果了）。
+   */
+  const activeSearchJobRef = useRef<string | null>(null)
+  /** 打断在跑的那次搜索（没有就别调 RPC）。 */
+  const cancelActiveSearch = useCallback((): void => {
+    const jobId = activeSearchJobRef.current
+    activeSearchJobRef.current = null
+    if (jobId === null) return
+    void apiCancelSearch({ jobId }).catch(() => { /* 搜索已跑完 —— cancelSearch 会回 ok:false，不是错误 */ })
+  }, [])
 
   // ── group chat info panel (群聊信息) ──
   const [groupInfoOpen, setGroupInfoOpen] = useState(false)
@@ -2312,18 +2324,23 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     const term = q.trim()
     if (term.length < 1) {
       msgSearchSeqRef.current += 1
+      cancelActiveSearch()
       setMsgHits([])
       setMsgSearched(false)
       setMsgSearchError(null)
       return
     }
     const seq = ++msgSearchSeqRef.current
+    // 新一轮搜索开始即打断上一轮（N9）：上一次的兜底扫描可能还在 worker 里跑
+    cancelActiveSearch()
     if (!msgIndexed && !indexBuilding) void buildIndex(true)
     msgSearchTimer.current = setTimeout(async () => {
       setMsgSearchLoading(true)
       setMsgSearchError(null)
+      const jobId = 'chats-search-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
+      activeSearchJobRef.current = jobId
       try {
-        const r = await apiSearchMessages({ query: term, limit: 200 })
+        const r = await apiSearchMessages({ query: term, limit: 200, jobId })
         if (seq !== msgSearchSeqRef.current) return
         setMsgHits(r.hits)
         setMsgIndexed(r.indexed)
@@ -2333,10 +2350,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
         setMsgSearchError((e as Error).message)
         setMsgHits([])
       } finally {
+        if (activeSearchJobRef.current === jobId) activeSearchJobRef.current = null
         if (seq === msgSearchSeqRef.current) setMsgSearchLoading(false)
       }
     }, 350)
-  }, [msgIndexed, indexBuilding, buildIndex])
+  }, [msgIndexed, indexBuilding, buildIndex, cancelActiveSearch])
+
+  // 离开面板时打断在跑的搜索（N9；与上面那条「新搜索打断旧搜索」同一套 token）
+  useEffect(() => () => { cancelActiveSearch() }, [cancelActiveSearch])
 
   // ── message calendar (A8) ──
   const [calOpen, setCalOpen] = useState(false)

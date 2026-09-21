@@ -55,6 +55,13 @@ export declare class WechatDataGateway extends TypertRemoteService {
     /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
     private readonly _streamJobs;
     /**
+     * 消息搜索的取消槽（N9）：jobId → 取消控制器。
+     *
+     * 与导出的槽分开：搜索没有进度可言，也不想占用 `wechat-export/progress` 那个事件名。
+     * 槽位会在搜索收尾时删掉（见 {@link searchSignal}），所以这里不需要上限。
+     */
+    private readonly _searchJobs;
+    /**
      * 反馈去重窗口（N27）：键 → 到期时间。
      *
      * 为什么不是 `inflightXxx: Set` 那种「在飞合并」的闸：`submitAskFeedback` 是**同步** RPC，
@@ -789,14 +796,36 @@ export declare class WechatDataGateway extends TypertRemoteService {
     }): Promise<SearchBuildResult>;
     /**
      * Full-text search over text messages (index first, scan fallback).
+     *
+     * N9：可取消。渲染层每次搜索生成一个 `jobId`，切换面板/发起新搜索时用 `cancelSearch({ jobId })`
+     * 打断上一次 —— 兜底扫描会在百毫秒内收尾并返回部分结果（见 `query/search.ts` 的 `SearchControl`）。
+     * 不带 jobId 时行为与从前一致（跑完为止）。
      * @param options - query string, optional result limit and optional talker scope.
-     * @returns SearchSnapshot: matched message items.
+     * @returns SearchSnapshot: matched message items（被取消时带 `cancelled: true`）。
      */
     searchMessages(options: {
         query: string;
         limit?: number;
         username?: string;
-    }): SearchSnapshot;
+        jobId?: string;
+    }): Promise<SearchSnapshot>;
+    /**
+     * 取一个搜索任务的取消信号（N9）。
+     * @param jobId - 渲染层生成的不透明标识；缺省/空白时返回 undefined（＝不可取消）。
+     * @returns 信号与收尾函数；收尾只在槽里还是自己这一枚控制器时才删 —— 否则会把「先取消、再重跑」
+     *   的新令牌一起删掉。
+     */
+    private searchSignal;
+    /**
+     * 取消一次正在跑的消息搜索（N9）。
+     * @param options - `jobId` 为渲染层生成的任务标识。
+     * @returns `ok: true` 表示确实打断了一个在跑的搜索；找不到（已跑完/从未注册）时为 false。
+     */
+    cancelSearch(options?: {
+        jobId?: string;
+    }): {
+        ok: boolean;
+    };
     /**
      * Group chat info (群聊信息): name/remark, announcement, own alias, member
      * grid and local settings mirror.

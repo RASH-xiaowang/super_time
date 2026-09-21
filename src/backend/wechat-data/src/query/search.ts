@@ -1166,6 +1166,127 @@ function searchWechatFts(
 }
 
 /**
+ * 搜索的取消通道（N9）。与导出的 `StreamControl` 同构，但搜索没有进度可言，只留取消令牌。
+ */
+export interface SearchControl {
+  /** 取消令牌；aborted 后兜底扫描尽快收尾，返回已找到的部分并带 `cancelled: true`。 */
+  signal?: AbortSignal
+}
+
+/** 兜底扫描的协作粒度：每 128 行查一次取消（在慢 20 倍的 runner 上也能守住 100ms 口径）。 */
+const ABORT_CHECK_EVERY_ROWS = 128
+
+/** 让出事件循环的时间预算：单次不让出的时间超过它就 `await setImmediate`。 */
+const YIELD_EVERY_MS = 25
+
+/**
+ * 兜底扫描的**遍历核心**：逐条产出「talker + 原始行」，直到预算耗尽或调用方提前 break。
+ *
+ * 为什么是生成器：扫描有两种驱动方式（见下两个导出函数），而遍历/连接/预算只能有一份 ——
+ *   · 同步驱动：一口气跑完，行为与改造前逐字节一致（问答路径与既有调用方在用）；
+ *   · 协作驱动：每 {@link ABORT_CHECK_EVERY_ROWS} 行查取消、每 {@link YIELD_EVERY_MS} 毫秒让出。
+ * 生成器的 `finally` 保证调用方 break/return（命中上限 / 取消）时 shard 读连接一定被关掉。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param username - 可选：只扫一个 talker（群聊内搜索）。
+ * @returns `{ talker, row }`。
+ */
+function* scanFallbackRows(
+  decryptedDir: string,
+  username?: string,
+): Generator<{ talker: string; row: Record<string, unknown> }, void, void> {
+  let budget = 800_000
+  const shards = messageShardFiles(decryptedDir)
+  const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800)
+  for (const talker of scopeUsernames) {
+    if (budget <= 0) return
+    const table = msgTableName(talker)
+    for (const shard of shards) {
+      if (budget <= 0) return
+      let sdb: DatabaseSync | null = null
+      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
+      const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+      if (!has) { sdb.close(); continue }
+      try {
+        const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1'
+        // 用 iterate() 而不是 all()：all() 会把整张 Msg_ 表先物化成一个数组，
+        // 单会话几十万条时峰值直接与消息数同阶；而下面本来就是逐条判断后即丢。
+        for (const row of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
+          budget -= 1
+          if (budget <= 0) return
+          yield { talker, row }
+        }
+      } catch {
+        // skip unreadable shard
+      } finally {
+        sdb.close()
+      }
+    }
+  }
+}
+
+/**
+ * 一行 → 命中（不匹配返回 null）。两个驱动共用，保证匹配与摘要口径只有一份。
+ * @param row - 消息表原始行。
+ * @param talker - 该行所属会话 username。
+ * @param qLower - 已小写的查询词。
+ * @param names - username → 显示名。
+ * @returns SearchHit 或 null。
+ */
+function hitFromRow(
+  row: Record<string, unknown>,
+  talker: string,
+  qLower: string,
+  names: Map<string, string>,
+): SearchHit | null {
+  const text = decodeCell(row['message_content']).replace(/\n/g, ' ').trim()
+  if (!text || !text.toLowerCase().includes(qLower)) return null
+  const localId = Number(row['local_id'] ?? 0)
+  const ts = Number(row['create_time'] ?? 0)
+  const { sender, body: display } = splitGroupPrefix(text, talker)
+  const dIdx = display.toLowerCase().indexOf(qLower)
+  const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20)
+  const snippet = (dStart > 0 ? '…' : '') + display.slice(dStart, dStart + 100)
+  return {
+    text,
+    username: talker,
+    create_time: ts,
+    local_id: localId,
+    name: names.get(talker) ?? talker,
+    time: formatFullTime(ts),
+    snippet,
+    sender: senderLabel(sender, names),
+  }
+}
+
+/**
+ * 索引与内置 FTS 两条快路径。都没命中时返回 null —— 由调用方决定要不要走兜底扫描。
+ * @param decryptedDir - decrypted data root.
+ * @param q - 原始查询词。
+ * @param cap - 命中上限。
+ * @param names - username → 显示名。
+ * @param username - 可选：只搜一个 talker。
+ * @returns 命中结果，或 null（两条快路径都没命中）。
+ */
+function probeIndexedSources(
+  decryptedDir: string,
+  q: string,
+  cap: number,
+  names: Map<string, string>,
+  username?: string,
+): { hits: SearchHit[]; total: number; indexed: boolean } | null {
+  // ---- 自建 BM25 索引优先（bigram 切分 + 真实 IDF + 相关度排序）----
+  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : undefined)
+  if (indexed.ranked && indexed.hits.length > 0) {
+    return { hits: indexed.hits, total: indexed.hits.length, indexed: true }
+  }
+  // ---- WeChat built-in content tables (LIKE, tokenizer-independent) ----
+  const builtin = searchWechatFts(decryptedDir, q, cap, names, username)
+  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false }
+  return null
+}
+
+/**
  * Search text messages: FTS5 index first, bounded full-table scan fallback.
  * @param decryptedDir - decrypted data root.
  * @param query - search term.
@@ -1183,62 +1304,70 @@ export function searchIndexMessages(
   if (!q) return { hits: [], total: 0, indexed: false }
   const cap = Math.min(limit ?? 100, 300)
   const names = loadDisplayNames(decryptedDir)
-  // ---- 自建 BM25 索引优先（bigram 切分 + 真实 IDF + 相关度排序）----
-  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : undefined)
-  if (indexed.ranked && indexed.hits.length > 0) {
-    return { hits: indexed.hits, total: indexed.hits.length, indexed: true }
-  }
-  // ---- WeChat built-in content tables (LIKE, tokenizer-independent) ----
-  const builtin = searchWechatFts(decryptedDir, q, cap, names, username)
-  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false }
-
-  // ---- Full-table scan fallback ----
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username)
+  if (early) return early
   const hits: SearchHit[] = []
   const qLower = q.toLowerCase()
-  let budget = 800_000
-  const shards = messageShardFiles(decryptedDir)
-  const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800)
-  for (const username of scopeUsernames) {
-    if (hits.length >= cap || budget <= 0) break
-    const table = msgTableName(username)
-    for (const shard of shards) {
-      if (hits.length >= cap || budget <= 0) break
-      let sdb: DatabaseSync | null = null
-      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
-      const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-      if (!has) { sdb.close(); continue }
-      try {
-        const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1'
-        // 用 iterate() 而不是 all()：all() 会把整张 Msg_ 表先物化成一个数组，
-        // 单会话几十万条时峰值直接与消息数同阶；而下面本来就是逐条判断后即丢。
-        for (const r of sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
-          budget -= 1
-          if (hits.length >= cap || budget <= 0) break
-          const localId = Number(r['local_id'] ?? 0)
-          const ts = Number(r['create_time'] ?? 0)
-          const text = decodeCell(r['message_content']).replace(/\n/g, ' ').trim()
-          if (!text || !text.toLowerCase().includes(qLower)) continue
-          const { sender, body: display } = splitGroupPrefix(text, username)
-          const dIdx = display.toLowerCase().indexOf(qLower)
-          const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20)
-          const snippet = (dStart > 0 ? '…' : '') + display.slice(dStart, dStart + 100)
-          hits.push({
-            text,
-            username,
-            create_time: ts,
-            local_id: localId,
-            name: names.get(username) ?? username,
-            time: formatFullTime(ts),
-            snippet,
-            sender: senderLabel(sender, names),
-          })
-        }
-      } catch {
-        // skip unreadable shard
-      } finally {
-        sdb.close()
-      }
-    }
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    const hit = hitFromRow(row, talker, qLower, names)
+    if (hit) hits.push(hit)
+    if (hits.length >= cap) break
   }
   return { hits, total: hits.length, indexed: false }
+}
+
+/**
+ * 与 {@link searchIndexMessages} 同一条链路，但**可取消**（N9，界面搜索专用）。
+ *
+ * 两件事一起做才有意义 ——
+ *   · 每 {@link ABORT_CHECK_EVERY_ROWS} 行看一眼 `ctrl.signal`，取消即收尾（返回部分结果 + `cancelled`）；
+ *   · 每 {@link YIELD_EVERY_MS} 毫秒 `await setImmediate` 让出 —— **这是取消能生效的前提**：
+ *     本函数跑在后端 worker 里，不让出的话 worker 根本读不到 `cancelSearch` 那条消息，
+ *     令牌永远不会被 aborted（旧实现实测单次 621ms~2.5s、期间 10ms 定时器 0 次触发）。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param query - search term.
+ * @param limit - max hits.
+ * @param username - optional scope: only search one talker (chatroom).
+ * @param ctrl - 可选的取消令牌（见 {@link SearchControl}）。
+ * @returns hits plus whether the index was used；被取消时多一个 `cancelled: true`。
+ */
+export async function searchIndexMessagesCancellable(
+  decryptedDir: string,
+  query: string,
+  limit?: number,
+  username?: string,
+  ctrl?: SearchControl,
+): Promise<{ hits: SearchHit[]; total: number; indexed: boolean; cancelled?: boolean }> {
+  const q = (query || '').trim()
+  if (!q) return { hits: [], total: 0, indexed: false }
+  const cap = Math.min(limit ?? 100, 300)
+  const names = loadDisplayNames(decryptedDir)
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username)
+  if (early) return early
+  // 走到兜底扫描前先看一眼：已经被取消就没必要开库了
+  if (ctrl?.signal?.aborted) return { hits: [], total: 0, indexed: false, cancelled: true }
+  const hits: SearchHit[] = []
+  const qLower = q.toLowerCase()
+  let rowsSeen = 0
+  let lastYieldAt = Date.now()
+  let cancelled = false
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    rowsSeen += 1
+    if ((rowsSeen & (ABORT_CHECK_EVERY_ROWS - 1)) === 0) {
+      if (ctrl?.signal?.aborted) { cancelled = true; break }
+      if (Date.now() - lastYieldAt >= YIELD_EVERY_MS) {
+        // 让出：worker 的消息泵要能跑，取消消息才进得来（见函数头注释）
+        await new Promise<void>((resolve) => { setImmediate(resolve) })
+        lastYieldAt = Date.now()
+        if (ctrl?.signal?.aborted) { cancelled = true; break }
+      }
+    }
+    const hit = hitFromRow(row, talker, qLower, names)
+    if (hit) hits.push(hit)
+    if (hits.length >= cap) break
+  }
+  return cancelled
+    ? { hits, total: hits.length, indexed: false, cancelled: true }
+    : { hits, total: hits.length, indexed: false }
 }

@@ -5379,27 +5379,17 @@ function searchWechatFts(decryptedDir, q, cap, names, scopeUsername) {
     return { hits: [] };
   }
 }
-function searchIndexMessages(decryptedDir, query, limit, username) {
-  const q = (query || "").trim();
-  if (!q) return { hits: [], total: 0, indexed: false };
-  const cap = Math.min(limit ?? 100, 300);
-  const names = loadDisplayNames(decryptedDir);
-  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : void 0);
-  if (indexed.ranked && indexed.hits.length > 0) {
-    return { hits: indexed.hits, total: indexed.hits.length, indexed: true };
-  }
-  const builtin = searchWechatFts(decryptedDir, q, cap, names, username);
-  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false };
-  const hits = [];
-  const qLower = q.toLowerCase();
+var ABORT_CHECK_EVERY_ROWS = 128;
+var YIELD_EVERY_MS = 25;
+function* scanFallbackRows(decryptedDir, username) {
   let budget = 8e5;
   const shards = messageShardFiles(decryptedDir);
   const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800);
-  for (const username2 of scopeUsernames) {
-    if (hits.length >= cap || budget <= 0) break;
-    const table = msgTableName3(username2);
+  for (const talker of scopeUsernames) {
+    if (budget <= 0) return;
+    const table = msgTableName3(talker);
     for (const shard of shards) {
-      if (hits.length >= cap || budget <= 0) break;
+      if (budget <= 0) return;
       let sdb = null;
       try {
         sdb = new DatabaseSync10(shard, { readOnly: true });
@@ -5413,27 +5403,10 @@ function searchIndexMessages(decryptedDir, query, limit, username) {
       }
       try {
         const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1';
-        for (const r of sdb.prepare(sql).iterate()) {
+        for (const row of sdb.prepare(sql).iterate()) {
           budget -= 1;
-          if (hits.length >= cap || budget <= 0) break;
-          const localId = Number(r["local_id"] ?? 0);
-          const ts2 = Number(r["create_time"] ?? 0);
-          const text = decodeCell(r["message_content"]).replace(/\n/g, " ").trim();
-          if (!text || !text.toLowerCase().includes(qLower)) continue;
-          const { sender, body: display } = splitGroupPrefix(text, username2);
-          const dIdx = display.toLowerCase().indexOf(qLower);
-          const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20);
-          const snippet = (dStart > 0 ? "\u2026" : "") + display.slice(dStart, dStart + 100);
-          hits.push({
-            text,
-            username: username2,
-            create_time: ts2,
-            local_id: localId,
-            name: names.get(username2) ?? username2,
-            time: formatFullTime(ts2),
-            snippet,
-            sender: senderLabel(sender, names)
-          });
+          if (budget <= 0) return;
+          yield { talker, row };
         }
       } catch {
       } finally {
@@ -5441,7 +5414,88 @@ function searchIndexMessages(decryptedDir, query, limit, username) {
       }
     }
   }
+}
+function hitFromRow(row, talker, qLower, names) {
+  const text = decodeCell(row["message_content"]).replace(/\n/g, " ").trim();
+  if (!text || !text.toLowerCase().includes(qLower)) return null;
+  const localId = Number(row["local_id"] ?? 0);
+  const ts2 = Number(row["create_time"] ?? 0);
+  const { sender, body: display } = splitGroupPrefix(text, talker);
+  const dIdx = display.toLowerCase().indexOf(qLower);
+  const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20);
+  const snippet = (dStart > 0 ? "\u2026" : "") + display.slice(dStart, dStart + 100);
+  return {
+    text,
+    username: talker,
+    create_time: ts2,
+    local_id: localId,
+    name: names.get(talker) ?? talker,
+    time: formatFullTime(ts2),
+    snippet,
+    sender: senderLabel(sender, names)
+  };
+}
+function probeIndexedSources(decryptedDir, q, cap, names, username) {
+  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : void 0);
+  if (indexed.ranked && indexed.hits.length > 0) {
+    return { hits: indexed.hits, total: indexed.hits.length, indexed: true };
+  }
+  const builtin = searchWechatFts(decryptedDir, q, cap, names, username);
+  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false };
+  return null;
+}
+function searchIndexMessages(decryptedDir, query, limit, username) {
+  const q = (query || "").trim();
+  if (!q) return { hits: [], total: 0, indexed: false };
+  const cap = Math.min(limit ?? 100, 300);
+  const names = loadDisplayNames(decryptedDir);
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
+  if (early) return early;
+  const hits = [];
+  const qLower = q.toLowerCase();
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    const hit = hitFromRow(row, talker, qLower, names);
+    if (hit) hits.push(hit);
+    if (hits.length >= cap) break;
+  }
   return { hits, total: hits.length, indexed: false };
+}
+async function searchIndexMessagesCancellable(decryptedDir, query, limit, username, ctrl) {
+  const q = (query || "").trim();
+  if (!q) return { hits: [], total: 0, indexed: false };
+  const cap = Math.min(limit ?? 100, 300);
+  const names = loadDisplayNames(decryptedDir);
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
+  if (early) return early;
+  if (ctrl?.signal?.aborted) return { hits: [], total: 0, indexed: false, cancelled: true };
+  const hits = [];
+  const qLower = q.toLowerCase();
+  let rowsSeen = 0;
+  let lastYieldAt = Date.now();
+  let cancelled = false;
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    rowsSeen += 1;
+    if ((rowsSeen & ABORT_CHECK_EVERY_ROWS - 1) === 0) {
+      if (ctrl?.signal?.aborted) {
+        cancelled = true;
+        break;
+      }
+      if (Date.now() - lastYieldAt >= YIELD_EVERY_MS) {
+        await new Promise((resolve3) => {
+          setImmediate(resolve3);
+        });
+        lastYieldAt = Date.now();
+        if (ctrl?.signal?.aborted) {
+          cancelled = true;
+          break;
+        }
+      }
+    }
+    const hit = hitFromRow(row, talker, qLower, names);
+    if (hit) hits.push(hit);
+    if (hits.length >= cap) break;
+  }
+  return cancelled ? { hits, total: hits.length, indexed: false, cancelled: true } : { hits, total: hits.length, indexed: false };
 }
 
 // src/backend/wechat-data/src/query/kb/chunk.ts
@@ -23734,8 +23788,8 @@ function cellStr19(v) {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
 }
-var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _searchUnified_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getHandoffReminds_dec, _getGroupInsights_dec, _getCalls_dec, _getDbHealth_dec, _getContact360_dec, _getAssetInsights_dec, _generatePeriodSummary_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getArticleCover_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _openPath_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _suggestReplies_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _listSummaryRecords_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _clearAskHistory_dec, _deleteAskHistory_dec, _getAskHistory_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _resetEditedMessage_dec, _editChatMessage_dec, _listEditedMessages_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _resetRetrievalWeights_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _optimizeAskQuestion_dec, _askWechat_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _searchMessages_dec, _buildSearchIndex_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFiles_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _buildKbVectorIndex_dec, _getKbVectorIndex_dec, _setKbModelConfig_dec, _getKbModelConfig_dec, _searchKb_dec, _summarizeKbFile_dec, _setKbFileRag_dec, _deleteKbFile_dec, _addKbFiles_dec, _getKbFileChunks_dec, _getKbFiles_dec, _deleteKb_dec, _renameKb_dec, _createKb_dec, _getKbs_dec, _suggestKbLinks_dec, _extractKbEntities_dec, _getKnowledgeGraph_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getGraph_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getAnnual_dec, _getStorageStats_dec, _getEmoticons_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
-var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteService, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getEmoticons_dec = [Remote("getEmoticons")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getWechatConfig_dec = [Remote("getWechatConfig")], _getPrivacyScan_dec = [Remote("getPrivacyScan")], _getGraph_dec = [Remote("getGraph")], _getNotes_dec = [Remote("getNotes")], _saveNote_dec = [Remote("saveNote")], _deleteNote_dec = [Remote("deleteNote")], _getKnowledgeGraph_dec = [Remote("getKnowledgeGraph")], _extractKbEntities_dec = [Remote("extractKbEntities")], _suggestKbLinks_dec = [Remote("suggestKbLinks")], _getKbs_dec = [Remote("getKbs")], _createKb_dec = [Remote("createKb")], _renameKb_dec = [Remote("renameKb")], _deleteKb_dec = [Remote("deleteKb")], _getKbFiles_dec = [Remote("getKbFiles")], _getKbFileChunks_dec = [Remote("getKbFileChunks")], _addKbFiles_dec = [Remote("addKbFiles")], _deleteKbFile_dec = [Remote("deleteKbFile")], _setKbFileRag_dec = [Remote("setKbFileRag")], _summarizeKbFile_dec = [Remote("summarizeKbFile")], _searchKb_dec = [Remote("searchKb")], _getKbModelConfig_dec = [Remote("getKbModelConfig")], _setKbModelConfig_dec = [Remote("setKbModelConfig")], _getKbVectorIndex_dec = [Remote("getKbVectorIndex")], _buildKbVectorIndex_dec = [Remote("buildKbVectorIndex")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getFiles_dec = [Remote("getFiles")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _buildSearchIndex_dec = [Remote("buildSearchIndex")], _searchMessages_dec = [Remote("searchMessages")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _getVoiceInfo_dec = [Remote("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote("getVoiceDataUrl")], _getVideoInfo_dec = [Remote("getVideoInfo")], _exportSessionMessages_dec = [Remote("exportSessionMessages")], _askWechat_dec = [Remote("askWechat")], _optimizeAskQuestion_dec = [Remote("optimizeAskQuestion")], _listBackups_dec = [Remote("listBackups")], _previewBackup_dec = [Remote("previewBackup")], _createBackup_dec = [Remote("createBackup")], _deleteBackup_dec = [Remote("deleteBackup")], _getRetrievalStatus_dec = [Remote("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote("listRetrievalFeedback")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _evaluateRetrieval_dec = [Remote("evaluateRetrieval")], _generateDailySummary_dec = [Remote("generateDailySummary")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _resetEditedMessage_dec = [Remote("resetEditedMessage")], _listLlmProviders_dec = [Remote("listLlmProviders")], _listLlmModels_dec = [Remote("listLlmModels")], _exportAnnualReport_dec = [Remote("exportAnnualReport")], _exportAllSessions_dec = [Remote("exportAllSessions")], _cancelExportJob_dec = [Remote("cancelExportJob")], _getExportProgress_dec = [Remote("getExportProgress")], _exportMoments_dec = [Remote("exportMoments")], _exportCsv_dec = [Remote("exportCsv")], _getExportHistory_dec = [Remote("getExportHistory")], _deleteExportHistory_dec = [Remote("deleteExportHistory")], _pruneExportHistory_dec = [Remote("pruneExportHistory")], _getAskHistory_dec = [Remote("getAskHistory")], _deleteAskHistory_dec = [Remote("deleteAskHistory")], _clearAskHistory_dec = [Remote("clearAskHistory")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryTasks_dec = [Remote("listSummaryTasks")], _saveSummaryTask_dec = [Remote("saveSummaryTask")], _deleteSummaryTask_dec = [Remote("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote("toggleSummaryTask")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _deleteSummaryRecord_dec = [Remote("deleteSummaryRecord")], _runSummaryTask_dec = [Remote("runSummaryTask")], _suggestReplies_dec = [Remote("suggestReplies")], _getAvatar_dec = [Remote("getAvatar")], _getAvatarsLocal_dec = [Remote("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote("getWechatConfigFull")], _saveWechatConfig_dec = [Remote("saveWechatConfig")], _getWhisperStatus_dec = [Remote("getWhisperStatus")], _downloadWhisperModel_dec = [Remote("downloadWhisperModel")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _generateKeysFile_dec = [Remote("generateKeysFile")], _getWechatKeysInfo_dec = [Remote("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote("autoGetDbKey")], _autoGetImageKey_dec = [Remote("autoGetImageKey")], _openPath_dec = [Remote("openPath")], _openConfig_dec = [Remote("openConfig")], _verifyImageKey_dec = [Remote("verifyImageKey")], _decryptAllDatabases_dec = [Remote("decryptAllDatabases")], _decryptAllImages_dec = [Remote("decryptAllImages")], _getDecryptStatus_dec = [Remote("getDecryptStatus")], _installWhisperEngine_dec = [Remote("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote("transcribeVoiceBatch")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getDbStatus_dec = [Remote("getDbStatus")], _getImageDataUrl_dec = [Remote("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote("getImageOriginal")], _getArticleCover_dec = [Remote("getArticleCover")], _getMessageFile_dec = [Remote("getMessageFile")], _addTask_dec = [Remote("addTask")], _clearOperationLog_dec = [Remote("clearOperationLog")], _clearPrivacyAudit_dec = [Remote("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote("createEncryptedBackup")], _deleteTask_dec = [Remote("deleteTask")], _extractTasks_dec = [Remote("extractTasks")], _generatePeriodSummary_dec = [Remote("generatePeriodSummary")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getDbHealth_dec = [Remote("getDbHealth")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getHandoffReminds_dec = [Remote("getHandoffReminds")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _getOperationLog_dec = [Remote("getOperationLog")], _getPrivacyAuditRows_dec = [Remote("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote("exportSnsVideo")], _listTasks_dec = [Remote("listTasks")], _restoreBackup_dec = [Remote("restoreBackup")], _searchUnified_dec = [Remote("searchUnified")], _setPrivacyState_dec = [Remote("setPrivacyState")], _setTaskStatus_dec = [Remote("setTaskStatus")], _syncHandoffTasks_dec = [Remote("syncHandoffTasks")], _a) {
+var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _searchUnified_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getHandoffReminds_dec, _getGroupInsights_dec, _getCalls_dec, _getDbHealth_dec, _getContact360_dec, _getAssetInsights_dec, _generatePeriodSummary_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getArticleCover_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _openPath_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _suggestReplies_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _listSummaryRecords_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _clearAskHistory_dec, _deleteAskHistory_dec, _getAskHistory_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _resetEditedMessage_dec, _editChatMessage_dec, _listEditedMessages_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _resetRetrievalWeights_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _optimizeAskQuestion_dec, _askWechat_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _cancelSearch_dec, _searchMessages_dec, _buildSearchIndex_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFiles_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _buildKbVectorIndex_dec, _getKbVectorIndex_dec, _setKbModelConfig_dec, _getKbModelConfig_dec, _searchKb_dec, _summarizeKbFile_dec, _setKbFileRag_dec, _deleteKbFile_dec, _addKbFiles_dec, _getKbFileChunks_dec, _getKbFiles_dec, _deleteKb_dec, _renameKb_dec, _createKb_dec, _getKbs_dec, _suggestKbLinks_dec, _extractKbEntities_dec, _getKnowledgeGraph_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getGraph_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getAnnual_dec, _getStorageStats_dec, _getEmoticons_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
+var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteService, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getEmoticons_dec = [Remote("getEmoticons")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getWechatConfig_dec = [Remote("getWechatConfig")], _getPrivacyScan_dec = [Remote("getPrivacyScan")], _getGraph_dec = [Remote("getGraph")], _getNotes_dec = [Remote("getNotes")], _saveNote_dec = [Remote("saveNote")], _deleteNote_dec = [Remote("deleteNote")], _getKnowledgeGraph_dec = [Remote("getKnowledgeGraph")], _extractKbEntities_dec = [Remote("extractKbEntities")], _suggestKbLinks_dec = [Remote("suggestKbLinks")], _getKbs_dec = [Remote("getKbs")], _createKb_dec = [Remote("createKb")], _renameKb_dec = [Remote("renameKb")], _deleteKb_dec = [Remote("deleteKb")], _getKbFiles_dec = [Remote("getKbFiles")], _getKbFileChunks_dec = [Remote("getKbFileChunks")], _addKbFiles_dec = [Remote("addKbFiles")], _deleteKbFile_dec = [Remote("deleteKbFile")], _setKbFileRag_dec = [Remote("setKbFileRag")], _summarizeKbFile_dec = [Remote("summarizeKbFile")], _searchKb_dec = [Remote("searchKb")], _getKbModelConfig_dec = [Remote("getKbModelConfig")], _setKbModelConfig_dec = [Remote("setKbModelConfig")], _getKbVectorIndex_dec = [Remote("getKbVectorIndex")], _buildKbVectorIndex_dec = [Remote("buildKbVectorIndex")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getFiles_dec = [Remote("getFiles")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _buildSearchIndex_dec = [Remote("buildSearchIndex")], _searchMessages_dec = [Remote("searchMessages")], _cancelSearch_dec = [Remote("cancelSearch")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _getVoiceInfo_dec = [Remote("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote("getVoiceDataUrl")], _getVideoInfo_dec = [Remote("getVideoInfo")], _exportSessionMessages_dec = [Remote("exportSessionMessages")], _askWechat_dec = [Remote("askWechat")], _optimizeAskQuestion_dec = [Remote("optimizeAskQuestion")], _listBackups_dec = [Remote("listBackups")], _previewBackup_dec = [Remote("previewBackup")], _createBackup_dec = [Remote("createBackup")], _deleteBackup_dec = [Remote("deleteBackup")], _getRetrievalStatus_dec = [Remote("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote("listRetrievalFeedback")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _evaluateRetrieval_dec = [Remote("evaluateRetrieval")], _generateDailySummary_dec = [Remote("generateDailySummary")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _resetEditedMessage_dec = [Remote("resetEditedMessage")], _listLlmProviders_dec = [Remote("listLlmProviders")], _listLlmModels_dec = [Remote("listLlmModels")], _exportAnnualReport_dec = [Remote("exportAnnualReport")], _exportAllSessions_dec = [Remote("exportAllSessions")], _cancelExportJob_dec = [Remote("cancelExportJob")], _getExportProgress_dec = [Remote("getExportProgress")], _exportMoments_dec = [Remote("exportMoments")], _exportCsv_dec = [Remote("exportCsv")], _getExportHistory_dec = [Remote("getExportHistory")], _deleteExportHistory_dec = [Remote("deleteExportHistory")], _pruneExportHistory_dec = [Remote("pruneExportHistory")], _getAskHistory_dec = [Remote("getAskHistory")], _deleteAskHistory_dec = [Remote("deleteAskHistory")], _clearAskHistory_dec = [Remote("clearAskHistory")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryTasks_dec = [Remote("listSummaryTasks")], _saveSummaryTask_dec = [Remote("saveSummaryTask")], _deleteSummaryTask_dec = [Remote("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote("toggleSummaryTask")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _deleteSummaryRecord_dec = [Remote("deleteSummaryRecord")], _runSummaryTask_dec = [Remote("runSummaryTask")], _suggestReplies_dec = [Remote("suggestReplies")], _getAvatar_dec = [Remote("getAvatar")], _getAvatarsLocal_dec = [Remote("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote("getWechatConfigFull")], _saveWechatConfig_dec = [Remote("saveWechatConfig")], _getWhisperStatus_dec = [Remote("getWhisperStatus")], _downloadWhisperModel_dec = [Remote("downloadWhisperModel")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _generateKeysFile_dec = [Remote("generateKeysFile")], _getWechatKeysInfo_dec = [Remote("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote("autoGetDbKey")], _autoGetImageKey_dec = [Remote("autoGetImageKey")], _openPath_dec = [Remote("openPath")], _openConfig_dec = [Remote("openConfig")], _verifyImageKey_dec = [Remote("verifyImageKey")], _decryptAllDatabases_dec = [Remote("decryptAllDatabases")], _decryptAllImages_dec = [Remote("decryptAllImages")], _getDecryptStatus_dec = [Remote("getDecryptStatus")], _installWhisperEngine_dec = [Remote("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote("transcribeVoiceBatch")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getDbStatus_dec = [Remote("getDbStatus")], _getImageDataUrl_dec = [Remote("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote("getImageOriginal")], _getArticleCover_dec = [Remote("getArticleCover")], _getMessageFile_dec = [Remote("getMessageFile")], _addTask_dec = [Remote("addTask")], _clearOperationLog_dec = [Remote("clearOperationLog")], _clearPrivacyAudit_dec = [Remote("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote("createEncryptedBackup")], _deleteTask_dec = [Remote("deleteTask")], _extractTasks_dec = [Remote("extractTasks")], _generatePeriodSummary_dec = [Remote("generatePeriodSummary")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getDbHealth_dec = [Remote("getDbHealth")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getHandoffReminds_dec = [Remote("getHandoffReminds")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _getOperationLog_dec = [Remote("getOperationLog")], _getPrivacyAuditRows_dec = [Remote("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote("exportSnsVideo")], _listTasks_dec = [Remote("listTasks")], _restoreBackup_dec = [Remote("restoreBackup")], _searchUnified_dec = [Remote("searchUnified")], _setPrivacyState_dec = [Remote("setPrivacyState")], _setTaskStatus_dec = [Remote("setTaskStatus")], _syncHandoffTasks_dec = [Remote("syncHandoffTasks")], _a) {
   constructor(ctx) {
     super(ctx, "wechatData");
     __runInitializers(_init, 5, this);
@@ -23775,6 +23829,13 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     this.whisperTranscribing = { active: false, done: 0, total: 0, failed: 0, skipped: 0, current: "" };
     /** 导出/加密备份的控制槽：jobId → 取消令牌 + 最近一次进度（见 {@link StreamJob}）。 */
     this._streamJobs = /* @__PURE__ */ new Map();
+    /**
+     * 消息搜索的取消槽（N9）：jobId → 取消控制器。
+     *
+     * 与导出的槽分开：搜索没有进度可言，也不想占用 `wechat-export/progress` 那个事件名。
+     * 槽位会在搜索收尾时删掉（见 {@link searchSignal}），所以这里不需要上限。
+     */
+    this._searchJobs = /* @__PURE__ */ new Map();
     /**
      * 反馈去重窗口（N27）：键 → 到期时间。
      *
@@ -24630,8 +24691,44 @@ ${body}`;
       throw e;
     }
   }
-  searchMessages(options) {
-    return searchIndexMessages(this._dirs.decrypted, options.query, options.limit, options.username);
+  async searchMessages(options) {
+    const job = this.searchSignal(options?.jobId);
+    try {
+      return await searchIndexMessagesCancellable(
+        this._dirs.decrypted,
+        options.query,
+        options.limit,
+        options.username,
+        job ? { signal: job.signal } : void 0
+      );
+    } finally {
+      job?.done();
+    }
+  }
+  /**
+   * 取一个搜索任务的取消信号（N9）。
+   * @param jobId - 渲染层生成的不透明标识；缺省/空白时返回 undefined（＝不可取消）。
+   * @returns 信号与收尾函数；收尾只在槽里还是自己这一枚控制器时才删 —— 否则会把「先取消、再重跑」
+   *   的新令牌一起删掉。
+   */
+  searchSignal(jobId) {
+    const id = normalizeJobId(jobId);
+    if (id === "") return void 0;
+    const ctrl = new AbortController();
+    this._searchJobs.set(id, ctrl);
+    return {
+      signal: ctrl.signal,
+      done: () => {
+        if (this._searchJobs.get(id) === ctrl) this._searchJobs.delete(id);
+      }
+    };
+  }
+  cancelSearch(options) {
+    const id = normalizeJobId(options?.jobId);
+    const ctrl = id === "" ? void 0 : this._searchJobs.get(id);
+    if (!ctrl) return { ok: false };
+    ctrl.abort();
+    return { ok: true };
   }
   getGroupInfo(options) {
     return queryGroupInfo(this._dirs.decrypted, options.username, this.selfUsername());
@@ -26760,6 +26857,7 @@ __decorateElement(_init, 1, "getNewMessages", _getNewMessages_dec, _WechatDataGa
 __decorateElement(_init, 1, "getSearchIndexStatus", _getSearchIndexStatus_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "buildSearchIndex", _buildSearchIndex_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "searchMessages", _searchMessages_dec, _WechatDataGateway);
+__decorateElement(_init, 1, "cancelSearch", _cancelSearch_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getGroupInfo", _getGroupInfo_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "getPaymentStatus", _getPaymentStatus_dec, _WechatDataGateway);
 __decorateElement(_init, 1, "resolveChatHistory", _resolveChatHistory_dec, _WechatDataGateway);
