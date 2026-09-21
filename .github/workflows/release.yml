@@ -67,3 +67,67 @@ jobs:
         run: npm run dist -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 发布验收：资产必须齐、latest.yml 的版本必须对；缺了就从 dist/ 补传 ──
+      #
+      # 为什么必须有这一步（2026-09-21 实测的两种**静默成功**）：
+      #   ① 资产被截断：v1.0.6 首次由 CI 自动发布时，electron-builder 打印了「uploading …exe」
+      #      之后作业就结束了 —— 100MB 的 exe 没传完、latest.yml 也没轮到，Release 上只剩一个
+      #      .blockmap，而这一步仍判 success。客户端读不到 latest.yml ⇒ 永远收不到更新，CI 却全绿。
+      #   ② 同一 tag 两个 Release：删除并重推 tag 后出现过一个只带 .blockmap 的孤儿 Release，
+      #      而 `/releases/latest` 恰好返回它 —— 同样让客户端读不到 latest.yml。
+      # 所以这里做三件事：收敛重复 Release → 缺的资产用**同一次构建**的 dist/ 产物补传 →
+      # 回读 latest.yml 校验版本号。任一条不满足即失败（宁可红，不要骗过自己的绿）。
+      - name: 验收发布资产（收敛重复 / 缺则补传）+ 回读 latest.yml
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $ver = $tag.TrimStart('v')
+          $repo = '${{ github.repository }}'
+          $hdr = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+
+          # ① 收敛同一 tag 下的重复 Release：留下「带 latest.yml 的那个」
+          $all = @(Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases?per_page=100")
+          $dupes = @($all | Where-Object { $_.tag_name -eq $tag })
+          if ($dupes.Count -gt 1) {
+            Write-Host "同一 tag 下有 $($dupes.Count) 个 Release —— 收敛到带 latest.yml 的那个，其余删除"
+            $keeper = @($dupes | Where-Object { @($_.assets | ForEach-Object { $_.name }) -contains 'latest.yml' })
+            $keep = if ($keeper.Count -gt 0) { $keeper[0] } else { $dupes[0] }
+            foreach ($r in $dupes) {
+              if ($r.id -ne $keep.id) {
+                Invoke-RestMethod -Method Delete -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/$($r.id)" | Out-Null
+                Write-Host "已删重复 Release id=$($r.id)（资产：$((@($r.assets | ForEach-Object { $_.name }) -join ', '))）"
+              }
+            }
+          }
+
+          # ② 缺资产则用同一次构建的 dist/ 产物补传（三份一起，避免 exe 与 blockmap 不同源）
+          $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+          $want = @('latest.yml', "Super-Time-Setup-$ver.exe", "Super-Time-Setup-$ver.exe.blockmap")
+          $have = @($rel.assets | ForEach-Object { $_.name })
+          $missing = @($want | Where-Object { $have -notcontains $_ })
+          if ($missing.Count -gt 0) {
+            Write-Host "缺资产：$($missing -join ', ') —— 补传 dist/ 产物"
+            foreach ($a in $rel.assets) {
+              Invoke-RestMethod -Method Delete -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/assets/$($a.id)" | Out-Null
+            }
+            foreach ($f in Get-ChildItem dist -File | Where-Object { $_.Name -like '*.exe' -or $_.Name -like '*.blockmap' -or $_.Name -eq 'latest.yml' }) {
+              $name = $f.Name -replace ' ', '-'
+              $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$name"
+              Invoke-RestMethod -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'Content-Type' = 'application/octet-stream' } -InFile $f.FullName -Uri $url | Out-Null
+              Write-Host "已补传：$name（$([math]::Round($f.Length / 1MB, 1)) MB）"
+            }
+            $rel = Invoke-RestMethod -Headers $hdr -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+            $have = @($rel.assets | ForEach-Object { $_.name })
+          }
+
+          # ③ 断言 + 回读 latest.yml（客户端判断「有没有新版本」的唯一依据）
+          foreach ($w in $want) {
+            if ($have -notcontains $w) { Write-Error "发布不完整：Release $tag 上仍缺 $w"; exit 1 }
+          }
+          $asset = $rel.assets | Where-Object { $_.name -eq 'latest.yml' }
+          $yml = (Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $asset.url).Content
+          if ($yml -notmatch "(?m)^version:\s*$ver\s*$") { Write-Error "latest.yml 里的版本不是 $ver"; exit 1 }
+          Write-Host "发布验收通过：$ver（3 个资产齐备、Release 唯一、latest.yml 版本一致）"
