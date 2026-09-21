@@ -33,14 +33,14 @@
 
 | 阶段 | 目标 | 条目数 | 未开始 | 进行中 | 待验收 | 已完成 |
 |---|---|---|---|---|---|---|
-| 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 1 | 0 | 1 |
+| 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 0 | 0 | 2 |
 | 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 2 | 合规闸门（并行推进） | 2 | 0 | 0 | 0 | 2 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 5 | 中优先级：稳定性与性能 | 51 | 2 | 2 | 0 | 47 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 0 | 0 | 0 | 23 |
-| **合计** | | **89** | **2** | **3** | **0** | **84** |
+| **合计** | | **89** | **2** | **2** | **0** | **85** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 > 计数口径：只数本文件里**有独立条目的** ID，逐阶段相加（2026-09-15 重算：此前几处合计与各阶段明细不一致，以本表为准）。
@@ -75,14 +75,14 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 进行中（仓库侧与历史重写已完成并实测；待用户轮换凭据） |
+| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 已完成（仓库侧 + 历史重写 + 轮换 401 实测，2026-09-21） |
 | H2 | 收敛工作区与 HEAD 的脱节 | 无 | 1d | 已完成 |
 
 ---
 
-### `[~]` H1 · 真实密钥已被 git 跟踪
+### `[x]` H1 · 真实密钥已被 git 跟踪
 
-- **状态**：进行中（仓库侧与历史重写已于 2026-09-21 完成并实测验收；**仅剩「用户侧凭据轮换」**——该项本机不可代劳，故不置「已完成」）　**依赖**：无　**预估**：0.5d
+- **状态**：已完成（2026-09-21）——仓库侧清理、历史重写与强推、fresh clone 验收、用户侧轮换与 401 实测全部闭环　**依赖**：无　**预估**：0.5d
 - **证据**：
   - `git ls-files wechat/` 列出 `wechat/config.json` 与 `wechat/llm.json`
   - `git show HEAD:wechat/llm.json` → `apiKey` 为一条真实 DeepSeek Key（形如 `sk-<32 位十六进制>`，此处不复制明文，避免二次泄露）
@@ -93,7 +93,7 @@ flowchart TD
 - **动作**：
   1. ✅ `git rm --cached wechat/config.json wechat/llm.json`（09-13）
   2. ✅ `.gitignore` 追加 `wechat/*.json`（保留 `wechat/README.md`）（09-13）
-  3. ⛔ **待用户执行**：作废并重发 DeepSeek API Key——它是唯一可被远程直接滥用的一项，轮换后应实测旧 Key 返回 401。微信 DB key / image key 的泄露要同时拿到本机库文件才可利用（库不出本机），处置按用户风险偏好决定（可选：重登微信触发换钥）
+  3. ✅ **已完成（2026-09-21，用户执行）**：DeepSeek API Key 已作废重发 —— 旧 Key 实测 `GET https://api.deepseek.com/v1/models` 返回 **HTTP 401**（`Your api key: ****8116 is invalid`）。微信 DB key / image key 处置：**不轮换**（其泄露面要求攻击者同时持有本机库文件，而库不出本机），作为残余风险保留在风险登记
   4. ✅ 历史重写（见下）。远端无 fork、无 PR（09-21 实测），但仍需告知克隆者重新克隆
   5. ✅ `wechat/llm.example.json` / `wechat/config.example.json` 已在册（09-13）
 - **历史重写（2026-09-21，用户授权执行）**：
@@ -105,7 +105,7 @@ flowchart TD
 - **验收标准**：
   - [x] fresh clone 后 `wechat/` 下无任何含密钥的文件（2026-09-21 实测：只剩 `README.md` / `config.example.json` / `llm.example.json`）
   - [x] `git log --all -p -- wechat/llm.json wechat/config.json | rg 'sk-|db_enc_key'` 无命中（fresh clone 实测 0；另加「三把密钥字面量全历史 git grep = 0」的加强版）
-  - [ ] 旧 Key 调用返回 401（已作废）——**待用户轮换后实测**
+  - [x] 旧 Key 调用返回 401（已作废）——2026-09-21 用户完成轮换后实测命中（见动作 3）
   - [x] 应用首次启动引导用户自行填写 LLM 配置（首启引导第 2 页明示「需先在数据配置中接入 OpenAI 兼容模型（供应商、模型名、API Key、Base URL）」；`Ask` / `DailySummary` / `PeriodSummary` 在未配置模型时都给出「尚未配置」的明确文案）
 - **备注**：安装包本身是干净的——`package.json` 的 `!wechat/*.json` 排除已生效，asar 中检索不到该串，**无需重新打包**。
 
@@ -928,8 +928,8 @@ flowchart TD
 
 **可验证性**
 - [x] `npm test` 全绿（H3；2026-09-21 实测 **191 文件 / 2176 用例 / 14 跳过 / 0 失败**——「36 个 spec」是 H3 当时的数字，已随两年演进）
-- [ ] CI 全绿且能阻断合并，含 bundle 一致性门禁（H4）——**拆开看**：CI 全绿 ✅（2026-09-21 在**重写后**的 main `7339eec` 上实测 success）；「能阻断合并」⛔ **未成立**：仓库未开分支保护（`GET /branches/main/protection` → 404），当前没有任何机制阻止红灯合并，待用户决策
-- [ ] `ui-acceptance.mjs` 失败时退出码非 0（H5）
+- [x] CI 全绿且能阻断合并，含 bundle 一致性门禁（H4；2026-09-21：CI 全绿在**重写后**的 main `7339eec` 上实测 success；分支保护已按用户选择开启 —— 要求 PR + 必过检查 `verify`、`enforce_admins: true`、禁 force push/删除。**注意：此保护下直接 push main 会被拒**，发版改走「PR → CI 绿 → 合并 → 打 tag」）
+- [x] `ui-acceptance.mjs` 失败时退出码非 0（H5；2026-09-21 **负向实测**：隔离 userData 下运行（不碰真实库），12 条断言失败 → 打印「退出码 1：断言未全通过（12 条失败 / 93 条通过，步骤 4/14）」且进程 exit 1；**正向**：2026-09-18 全绿 14/14 exit 0）
 - [x] `npm run typecheck` 全绿（H11）
 
 **版本与可复现**
@@ -1153,3 +1153,4 @@ flowchart TD
 | 2026-09-21 | 实施 | H1 | 进行中（仓库侧与历史重写完成并实测；仅剩用户轮换） | 用户授权后执行 `git filter-repo` 重写：移除 `wechat/config.json`/`wechat/llm.json` 全历史路径 + 三把密钥字面量全历史替换；重写前做完整镜像备份（本地，112 refs）；`main` `ee9c956→7339eec`、`feat/chat-message-module` `658af7d→e039041`、tags v1.0.3–1.0.5 同步强推；**自 GitHub fresh clone 实测**：两文件全历史 0 条、三把密钥字面量 0 命中、Releases 完好。**另补出第二轮遗漏**：5 个跟踪文件（`m1-secrets-migration-smoke.js` + 4 个后端 spec）共 13 处硬编码同一把 image key，已换假值（`c5e7b33`）。剩余：用户轮换凭据（旧 Key 应实测 401）；旧对象仍可按 SHA 经 GitHub API 取到，需官方支持清理缓存。顺带修正本分支上游（原指向 `origin/main`，现为 `origin/feat/chat-message-module`） |
 | 2026-09-21 | 实施 | H13 | 未开始 → 已完成 | 用户确认法务结论为「允许保留」（方案 A，方案 B 未启用）；README「已知限制」与 `PROVENANCE.md` 中「许可未明」的表述同步更新（PROVENANCE 保留原记述并加日期标注取代）；风险登记表对应行加闭环标注 |
 | 2026-09-21 | 实施 | H7、N30 | H7 的「UI 解除 loading」验收项：未达标 → 已验证；N30 新增 → 已完成 | **H7**：new `scripts/loading-recovery-e2e.mjs`（`npm run ui:loading-e2e`）—— 用 `SUPERTIME_DEBUG_HANG_METHODS`（主进程按 `app.isPackaged` 判定、打包态显式删变量后 fork；worker 命中即不回应答）+ `SUPERTIME_CALL_TIMEOUT_MS=1500` 在真实窗口里复现「后端卡死」，断言超时 alert（含方法名）、骨架屏清零、两侧日志留痕、下一条调用照常收尾。变异（禁用注入）4 条转红、接线守卫变异 1 条转红，均按 sha256 还原。**N30**：同一次复跑暴露 —— 空数据源下「通讯录」显示原始英文 `unable to open database file`；在 `wechat-host` 的 call 错误路径集中翻译为可执行中文并保留原文，其余错误原样透传；`host-error-message.spec.ts` 6 项 + e2e 断言。**验收**：`npm test` 191 文件 / 2176 通过 / 14 跳过；`ui:loading-e2e` 10 项；`license-gate:smoke` / `security-guard:smoke` / `check:backend-restart` / `check:sns-video`(18) / `check:whisper-paths`(11) / `rag:check`(20) 复跑全过。**门禁清单**：License 异常路径、openExternal/导航、npm test、git status、fresh clone 全流程、package:smoke、后端自愈、无限 loading、H9 内存上界 已勾选；H4 的「CI 能阻断合并」仍缺分支保护机制、H5（负向退出码）与 H8（导出内存）复跑在途 |
+| 2026-09-21 | 实施 | H1、H4、H5 | H1 进行中 → 已完成；H4/H5 的门禁项勾选 | **H1**：用户完成 DeepSeek Key 轮换，旧 Key 实测 401（作废生效）；微信 db/image key 决定不轮换（需同时持有本机库文件才可利用，列残余风险）。**H4**：用户选择「要求 PR + CI」→ 已通过 API 开启 main 分支保护（required check `verify`、require PR、`enforce_admins: true`、禁 force push/删除），直接 push main 从此被拒，发版走 PR。**H5**：负向实测（隔离 userData、不碰真实数据）12 条断言失败 → exit 1，与 09-18 的全绿 exit 0 构成完整口径 |
