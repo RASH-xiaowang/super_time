@@ -55,7 +55,14 @@ const SHELL_DIR = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pag
 /** 后端包源码根（类型模块所在目录）。 */
 const BACKEND_SRC = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
 
-const panel = readFileSync(join(HERE, 'KbFiles.tsx'), 'utf8')
+/**
+ * M21：`KbFiles.tsx`（1277 行）拆成了 `kb-files-support.tsx`（类型/常量/纯助手）
+ * + `kb-files-panel.tsx`（取数与渲染）+ `kb-files-detail.tsx`（右栏详情），
+ * 原文件只剩转发桶 —— 这里读**桶与那三个模块的联合**（断言一条没放宽；拆出去的边界
+ * 不该影响任何一条守卫的结论）。
+ */
+const panel = ['KbFiles.tsx', 'kb-files-support.tsx', 'kb-files-panel.tsx', 'kb-files-detail.tsx']
+  .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const panelCss = readFileSync(join(HERE, 'kbfiles.module.css'), 'utf8')
 const panelShell = readFileSync(join(SHELL_DIR, 'WechatDataPanel.tsx'), 'utf8')
 const kbShellSrc = readFileSync(join(HERE, 'KbShell.tsx'), 'utf8')
@@ -187,8 +194,14 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
     // 带库 id 的键字面量一旦散开，就会出现「模型里有、图上看不到」那类只在切库后
     // 才现形的偏差。这里用「出现次数必须全部落在 kbCacheKey(...) 里」来钉：
     // 任何一处手写都会让 mentions > viaHelper。
-    const mentions = (panelCode.match(/kb-files/g) ?? []).length
-    const viaHelper = (panelCode.match(/kbCacheKey\('kb-files', kbId\)/g) ?? []).length
+    //
+    // M21 把本面板拆成多个模块后，**模块说明符**（`from './kb-files-support.tsx'`）
+    // 里也含 `kb-files` 这五个字，按裸子串数会把「拆文件」误报成「手写缓存键」。
+    // 所以先剥掉 `from '…'` 那一段（只剥说明符，不动其余源码）—— 口径与拆分前一致：
+    // 手写 `'kb-files:' + id` 这类仍会让 mentions > viaHelper。
+    const noSpecifiers = panelCode.replace(/from '[^']*'/g, "from ''")
+    const mentions = (noSpecifiers.match(/kb-files/g) ?? []).length
+    const viaHelper = (noSpecifiers.match(/kbCacheKey\('kb-files', kbId\)/g) ?? []).length
     expect(mentions, '面板里根本没用到文件列表缓存键').toBeGreaterThan(0)
     expect(mentions, '有 kb-files 键被手写了 —— 必须一律经 kbCacheKey 拼').toBe(viaHelper)
   })
