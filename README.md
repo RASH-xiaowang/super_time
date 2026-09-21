@@ -129,9 +129,10 @@ docs/                    隐私声明、接口参考、RAG 架构、实施计划
   （**允许随包分发**，2026-09-21，见 [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) H13）。
 - **密钥获取依赖运行中的微信进程**：应用只读扫描 `Weixin.exe` 进程内存取密钥，
   微信未运行时需手动填写密钥。
-- **尚无出网总闸门**：应用内的「禁止 AI 出网」只覆盖 LLM/embedding 调用；
-  头像、聊天图片、视频、地图 GeoJSON 与 whisper 下载仍会按需出网，
-  [`docs/PRIVACY.md`](docs/PRIVACY.md) 里逐条列明。
+- **尚无统一出网总闸门**：应用内的「禁止 AI 出网」只覆盖 LLM/embedding 调用；**媒体类出网点**
+  （表情、聊天图片/原图、文章封面、朋友圈封面/视频）由设置里的「CDN 获取」开关单独控制；
+  **头像、地图底图 GeoJSON 与语音模型下载目前没有内置开关**，按需出网。
+  每个出网点逐条列在 [`docs/PRIVACY.md`](docs/PRIVACY.md)。
 - 其余未闭环项（含性能与工程化遗留）逐条登记在 [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md)。
 
 ## 免责声明
