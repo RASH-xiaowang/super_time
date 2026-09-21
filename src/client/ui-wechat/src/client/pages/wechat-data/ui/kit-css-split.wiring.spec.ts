@@ -22,7 +22,9 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FILES = ['kit.module.css', 'kit-table.module.css', 'kit-overlay.module.css']
 const src = (f: string): string => readFileSync(join(HERE, f), 'utf8')
-const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '')
+/** 去注释前**先把行尾归一**：CI 的 windows runner 检出的是 CRLF，而下面的断言里有 `{\n` 这种
+ *  带换行的字面量 —— 不归一就会「本地绿、CI 红」（这条坑本项目栽过不止一次）。 */
+const strip = (s: string): string => s.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '')
 
 /** 一份 CSS 里**定义**的类（行首 `.X`）。 */
 function defined(s: string): Set<string> {
