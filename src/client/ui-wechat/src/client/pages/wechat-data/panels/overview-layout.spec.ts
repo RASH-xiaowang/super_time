@@ -21,13 +21,15 @@
  * 在真实 Electron + 真实解密数据下量出来，这里只锁住源码层面的形状。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const tsx = readFileSync(join(HERE, 'Overview.tsx'), 'utf8')
+// M21 把 Overview.tsx 拆成 overview-export/parts/panel + 转发桶；源码类断言的读取面改成
+// **全部 overview* 源码的联合**（断言本身不变，文件再搬家也不会误报）。
+const tsx = readdirSync(HERE).filter((f) => /^overview(-[a-z]+)?\.(ts|tsx)$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const css = readFileSync(join(HERE, 'overview.module.css'), 'utf8')
 const board = readFileSync(join(HERE, 'RegionBoard.tsx'), 'utf8')
 

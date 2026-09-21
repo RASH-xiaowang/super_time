@@ -36,7 +36,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 /** 去掉注释后读源码：注释里会提到旧写法（例如 hooks.tsx 的迁移说明），不能让断言误判。 */
 function readCode(file: string): string {
-  return readFileSync(join(HERE, file), 'utf8')
+  // M21：面板文件可能已被拆成多个模块（如 Overview.tsx 现在只是转发桶）——
+  // 传入的若是「前缀」，就把该前缀的全部源码拼起来再断言。
+  const stem = file.replace(/\.tsx?$/, '')
+  // 注意大小写：拆分后的模块可能用小写前缀（Overview.tsx → overview-panel.tsx），匹配必须不区分大小写
+  const siblings = readdirSync(HERE).filter((f) => new RegExp('^' + stem + '(-[a-z]+)?\.(ts|tsx)$', 'i').test(f))
+  const target = siblings.length > 0 ? siblings.sort() : [file]
+  return target.map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split(/\r?\n/)
     .map(l => l.replace(/\/\/.*$/, ''))
