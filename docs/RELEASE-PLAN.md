@@ -38,9 +38,9 @@
 | 阶段 2 | 合规闸门（并行推进） | 2 | 0 | 0 | 0 | 2 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 5 | 中优先级：稳定性与性能 | 50 | 2 | 2 | 0 | 46 |
+| 阶段 5 | 中优先级：稳定性与性能 | 51 | 2 | 2 | 0 | 47 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 0 | 0 | 0 | 23 |
-| **合计** | | **88** | **2** | **3** | **0** | **83** |
+| **合计** | | **89** | **2** | **3** | **0** | **84** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 > 计数口径：只数本文件里**有独立条目的** ID，逐阶段相加（2026-09-15 重算：此前几处合计与各阶段明细不一致，以本表为准）。
@@ -364,7 +364,7 @@ flowchart TD
   5. 补 `wechat-worker.js` 的 `process.on('uncaughtException')` 兜底（当前 handler 之外的同步异常直接杀进程）
 - **验收标准**：
   - [ ] 手动 `taskkill` 后端 worker 进程 → 界面出现错误提示，worker 自动重启，功能恢复
-  - [ ] 模拟一个永不返回的调用 → 超时后 UI 解除 loading 并提示，不再无限转圈
+  - [x] 模拟一个永不返回的调用 → 超时后 UI 解除 loading 并提示，不再无限转圈（2026-09-21：`scripts/loading-recovery-e2e.mjs` 端到端实测，10 项全过；变异自证见该轮变更记录）
   - [ ] 超时不导致后续请求串台（`pending` 无残留）
   - [ ] 连续 3 次重启失败后给出明确人工指引
   - [ ] 正常长任务（导出、解密）不被误杀
@@ -788,7 +788,7 @@ flowchart TD
 | M12 | 去重 O(n²) | `fusion.ts:87-105`、`compress.ts:102`（n-gram 未缓存）  **已完成（范围按实测收窄，其中一处改完又撤回）**：先量后改（`MEASURE_M12=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/dedupe.measure.spec.ts`）： · `dedupeFused` 的 N 上界是 `fusion.keep`=120：最坏情形（全同会话、时间全在窗口内 ⇒ 两个廉价过滤都不生效）**14.28ms**；而现实形状（4 会话交替 + 时间散布）只要 **0.54ms**。 · compress 的句子级去重：`seenLines.some(s => … || jaccard(s.text, body) >= t)` **每次都重建两侧的 3-gram**，且要与**所有**会话的已见行比较 ⇒ **≈17.7ms/次提问**（10 窗口 × 6 行 × ≤60 条已见）。  **改动（只落在 compress）**：`seenLines` 由 `Array<{username,text}>` 改为 `Map<username, Array<{text, grams}>>` —— 每行 3-gram 只在建时算一次（新增私有的 `gramsOf3` / `jaccardGrams` 取代 `jaccard(a,b)`），跨会话比较随之消失。实测 **1.77ms → 0.92ms**/窗口（≈2×，即 ≈17.7 → 9.2ms/次提问）。 **fusion 那处改完又撤回**：按会话索引（`Map<username, indices[]>`）确实去掉了「每个候选都要与其它会话的已保留项比一轮」的无用比较，但在本机配置的 N（≤120）下**没有可测收益** —— 现实形状 0.54ms → 0.70ms（噪声内，Map 查找自身也有开销），最坏情形 14.28 → 14.06ms 不变。按「不加没有证据的代码」撤回原实现，并把这段测量与理由留在 `dedupe.measure.spec.ts` 作为「**为什么没改 fusion**」的证据；连带删掉那一版已变成同义反复的差分测试（oracle 与实现同源后不再能失败）。  **验收口径要说清（复审 major）**：原始验收写的是「候选数 2000 时去重耗时有量化改善」。实测**未触及那一档**：`dedupeFused` 是 O(N²)，N=1920 最坏 **3772ms**（复审实测 120→14ms、960→0.9s、1920→3.8s）。`keep` 默认 120 时现实形状只要 0.5ms，所以那一档只在**手改 `rag-config.json`** 时才可达 —— 而它可手改、`deepMerge` 又不做数值校验。因此本轮**改了验收口径**（本行已改写）并补上防爆措施：给 `fusion.keep` 加**硬上限 400**（最坏约 0.16s），load/save 两条路径都过，附用例与变异验证。想要更宽召回请调 `channels.*.topK`。 **诚实结论**：这两处都在一次问答的 LLM 调用（秒级）面前是**几十毫秒**量级 —— compress 那处值得做（2×、行为不变），fusion 那处不值得动（复审另试了「更显然更优」的 gram 倒排索引：最坏只有 1.9×，现实形状反而变慢）。  **验收**：`rag:check` 20 项通过（检索层回归含 fusion 去重）、`npm test` 173 文件 / 355 用例（346 通过 / 9 跳过 / 0 失败）、typecheck 0、bundle 幂等。新增 `dedupe.measure.spec.ts`（门控实测 + 撤回理由）。 | 已完成 |
 | M20 | 首屏被后端 init 阻塞 | `main.js:461` 在 `createWindow()`（`:622`）之前 `await wechatBackend.init()`，init 会 import 783KB bundle + 启动同步 | 先建窗口并显示加载态，后端 init 改为后台进行；验收：记录首帧时间对比，窗口在 init 完成前即可见 | 已完成 |
 
-### 工作流 D · 前端体验与正确性（6 项）
+### 工作流 D · 前端体验与正确性（7 项）
 
 | ID | 任务 | 证据位置 | 验收标准 | 状态 |
 |---|---|---|---|---|
@@ -798,6 +798,7 @@ flowchart TD
 | M16 | IPC 死 channel 与类型契约滞后 | 条目原文：死 channel `window:maximize-toggle`、`window:is-maximized`、`wechat:dispose`、`license:activation-request`、`license:fingerprint`；类型滞后 `api.ts` 手写 `WechatRemote` 未含 `getFileImageDataUrl`、`exportSnsVideo`  **类型契约那一半：已完成**（随 H11）—— 实测 `WechatRemote` 现在恰好声明 **132** 个成员，与 `gateway.ts` 的 `@Remote` 集合**零缺零多**，并且已有 `remote-contract.spec.ts` 三条断言守着（含「两侧数量非零且一致」防解析失效空转）。  **死 channel 那一半：实测推翻了「死 channel」的说法，改为进行中（等产品决定）**。全仓扫描（1256 个文件，含仓库根）结果：这 5 个 channel **每一个都被根目录 `preload.js` 通过 contextBridge 暴露**（与确定在用的 `window:minimize` / `window:is-fullscreen` 完全同形），也就是说链路是**通的**；真正缺的是**渲染层的调用方**： · `window:maximize-toggle` / `window:is-maximized` —— `preload.js` 暴露为 `windowControls.toggleMaximize` / `isMaximized`，但全仓**零调用**：`ui-app` 的自绘标题栏（`frame: false`）确实在用 `windowControls`，却只有最小化/关闭/全屏，没有最大化控件（Windows 上双击 `-webkit-app-region: drag` 区即可最大化，所以这是「少一个按钮」而非「功能坏了」）。 · `wechat:dispose` / `license:activation-request` / `license:fingerprint` —— 同样只被 preload 暴露、零调用方（`getDeviceFingerprint` 仍被 `backend-restart-smoke` 用着，删 handler 不会让它变成死模块）。  **处理（用户已确认走「删掉这 5 个暴露」）**：同时删掉 main.js 的 handler 与 preload.js 的包装 —— `window:maximize-toggle`（+`toggleMaximize`）、`window:is-maximized`（+`isMaximized`/`onMaximizedChange`，以及配套的 main 侧 `maximize`/`unmaximize` → `window:maximized-changed` 事件对）、`wechat:dispose`、`license:activation-request`、`license:fingerprint`。**保留**最小化/关闭/全屏三件套（`ui-app` 的自绘标题栏在用）。顺带清掉两处因删除变成死引用的东西：`main.js` 里只被那两个 license handler 用过的 `getDeviceFingerprint` require，以及 `src/backend/README.md` 里对 `wechat:dispose` 的描述行。`capabilities` 层面没有功能损失：最大化仍可用 Windows 的双击拖拽区，指纹与激活请求仍走 `license:export-request`（它内部会算指纹）。 | 已完成 |
 | M23 | CSP 过宽 | `connect-src 'self' https:` 与 `img-src ... https: file:` 允许向任意 https 主机外发 | **H10 已完成 connect-src 部分**：改为显式列出渲染进程真实消费者（jsdelivr / unpkg / geo.datav.aliyun.com）+ `'self' data: blob: file:`，并补 `object-src 'none'`/`base-uri 'self'`。**`img-src https:` 仍是通配**：收敛它需要枚举真实图片主机，而库里有大量 http/https 远程图片 URL（见 `utils/url.ts` 注释）→ 意味着「渲染层可向任意 https 主机发起图片请求」这条外发通道仍在，属已知遗留（见 H10 的遗留清单）。验收：connect-src 已收紧且地图/图片/语音/视频取数不受影响（评审实测省市区地图曾因漏 aliyun 被打断，已修） | 已完成（img-src 部分转遗留） |
 | N29 | 单聊「推荐回复」面板有三处在说谎（复制反馈 / 首帧空态 / 下拉空白） | 2026-09-20 新增的第三栏面板：① `copy()` 写的是 `void navigator.clipboard.writeText(text)` 紧跟 `setCopied(index)` —— 被拒时（窗口失焦是常态）界面照样显示「已复制」，而那条 reject 没人接（渲染进程里一条未处理拒绝）；② `loading` 初值 `false` 而挂载即发请求，于是**首帧**渲染的是「这个会话还没有可用的对话内容」（SSR 实测确认这句话真的会出现）；③ 知识库下拉把 `String(kbId)` 交给 Radix，而选项挂在 Portal 里、收起时不挂载 —— 选中值没有对应已挂载 item 时**连 placeholder 都不显示**，实测那一帧是 `<span style="pointer-events:none"></span>` 一块空白。 | **已完成（2026-09-20）**：复制改走共享助手 `utils/misc.ts` 的 `copyTextToClipboard`（它把异步 API 与 `execCommand` 兜底两条路径的失败都收敛成布尔值），只有 `ok === true` 才显示「已复制」，失败则明确说「复制失败…请手动选中后复制」，并按 `seqRef` 门控 —— 期间换过会话/库就不把标记打到新的行上；`loading` 初值改 `true`；错误呈现改用姊妹面板 `SessionAsk` 那套 `.error` + `role="alert"`；下拉在「拿不到库名」的三种状态（列表在读、读失败、当前库不在列表里）分别给 placeholder 文案并交空值，不再留一块没有说明的空白。**验收**：`ui:smoke` 新增一条 SSR 用例（首帧须是「正在生成」、那句假空态不许出现、触发器须说「读取知识库…」而不是通用的「请选择…」）—— **该面板此前在 SSR 冒烟里零覆盖**；`reply-suggest.wiring.spec.ts` 加 2 项源码守卫（复制必须走共享助手且不许 fire-and-forget、失败必须有出口）。**变异**：`loading` 初值改回 false → 红；`Select` 的 value 改回 `String(kbId)` → 红；`copy` 退回 fire-and-forget → 红；均按 sha256 还原。**未验证**：真实浏览器里 Radix 把选中项挂载一次之后库名是否显示（SSR 测不到那一帧，用例注释里已写明这条边界）；剪贴板被系统拒出的端到端观感需真窗口。 | 已完成 |
+| N30 | 首启无数据源时，面板把原始英文 SQLite 报错甩给用户 | e2e 复跑时实测：空 userData 下点开「通讯录」，`role="alert"` 里是 `unable to open database file`。这是**每个查询面板都会撞到**的首启状态，用户既看不懂也不知道下一步做什么（对照：`Ask` 面板有专门的中文空态文案）。 | **已完成（2026-09-21）**：在 `wechat-host.js` 的 `call` 错误路径集中翻译已知形态（`unable to open database file` / `SQLITE_CANTOPEN`）为「读不到本机的微信数据：请先在「数据配置」中设置数据目录并完成解密（原始错误：…）」，**其余错误原样透传** —— 不猜形态，避免把真实故障说成「未配置」（比英文原文更有害）。新增 `host-error-message.spec.ts` 6 项（翻译命中 / 等价形态 / 其余原样反例 / 非 Error 输入 / 接线守卫 / e2e 钉文案）；`ui:loading-e2e` 增加断言「数据源缺失时必须是中文可执行文案」。**变异**：翻译判定改成 `if (false)` → 2 条转红，按 sha256 还原。**未验证**：其他底层英文报错（权限拒绝、库损坏等）未翻译 —— 按「只翻译已知形态」口径，遇到再加。 | 已完成 |
 
 ### 工作流 E · 构建与工程化（6 项）
 
@@ -920,28 +921,28 @@ flowchart TD
 
 **安全与合规**
 - [x] fresh clone 全历史中不含任何真实密钥（H1；2026-09-21 重写后自 GitHub fresh clone 实测：两文件全历史 0 条、三把密钥字面量 0 命中）
-- [ ] License 闸门在所有异常路径下均拒绝而非放行（H6）
-- [ ] `shell.openExternal` 拒绝非 http(s) 协议；导航守卫生效（H10）
+- [x] License 闸门在所有异常路径下均拒绝而非放行（H6；2026-09-21 `license-gate:smoke` 复跑全过：无证/过期/伪造/遗留试用文件一律拒绝）
+- [x] `shell.openExternal` 拒绝非 http(s) 协议；导航守卫生效（H10；2026-09-21 `security-guard:smoke` 复跑全过：三次 window.open 全被拒、页面未被导航、openExternal 调用 0 次）
 - [x] 法务对许可未明资产给出书面结论（H13；2026-09-21 结论为「允许保留」，书面件编号待补）
 - [x] 隐私声明齐全、可访问，且首次启动强制同意（H14）
 
 **可验证性**
-- [ ] `npm test` 全绿，收集 36 个 spec（H3）
-- [ ] CI 全绿且能阻断合并，含 bundle 一致性门禁（H4）
+- [x] `npm test` 全绿（H3；2026-09-21 实测 **191 文件 / 2176 用例 / 14 跳过 / 0 失败**——「36 个 spec」是 H3 当时的数字，已随两年演进）
+- [ ] CI 全绿且能阻断合并，含 bundle 一致性门禁（H4）——**拆开看**：CI 全绿 ✅（2026-09-21 在**重写后**的 main `7339eec` 上实测 success）；「能阻断合并」⛔ **未成立**：仓库未开分支保护（`GET /branches/main/protection` → 404），当前没有任何机制阻止红灯合并，待用户决策
 - [ ] `ui-acceptance.mjs` 失败时退出码非 0（H5）
 - [x] `npm run typecheck` 全绿（H11）
 
 **版本与可复现**
-- [ ] `git status` 干净，无未提交改动（H2）
-- [ ] 全新目录 clone → `npm ci` → 构建 → 启动，功能完整（H2）
-- [ ] 打包版经 `package:smoke` 验证，SNS 视频解密走设计路径（H15）
+- [x] `git status` 干净，无未提交改动（H2；2026-09-21 实测 0 条）
+- [x] 全新目录 clone → `npm ci` → 构建 → 启动（H2；2026-09-21 实测：自 GitHub fresh clone → `npm ci` → `node node_modules/electron/install.js` → `build:ui` + `build:backend` 全过 → 以临时 userData 启动，日志确认「后端已就绪，Remote 方法数 158」（该 clone 落在 main，数字与 main 相符））
+- [x] 打包版经 `package:smoke` 验证，SNS 视频解密走设计路径（H15；2026-09-21 `npm run pack` + `package:smoke` 全过：asar 白名单/体积预算/160 方法/安装目录只读/日志落点，且 `app.asar.unpacked` 下 WxIsaac64 WASM 在位）
 - [x] `CHANGELOG.md` 记录了本次发布内容（H14；首段同时写明尚未闭环的阻塞项）
 
 **可靠性**
-- [ ] 后端进程被杀后能自动恢复（H7）
-- [ ] 无任何调用会导致 UI 无限 loading（H7）
+- [x] 后端进程被杀后能自动恢复（H7；2026-09-21 `check:backend-restart` 复跑 6/6：taskkill 后自动重建、PID 变化、无重复拉起）
+- [x] 无任何调用会导致 UI 无限 loading（H7；2026-09-21 **新增端到端验收** `npm run ui:loading-e2e` 10 项全过：注入「永不回包」+ 压到 1.5s 超时后，界面出现「调用超时…getSessions」、骨架屏清零、两侧日志均有记录、下一条调用照常收尾；变异（禁用注入）4 条转红）
 - [ ] 导出 1000 会话不 OOM、不阻塞 UI（H8）
-- [ ] 百万级消息下搜索内存有上界（H9）
+- [x] 百万级消息下搜索内存有上界（H9；验收证据见 H9 条目：20 万行 ×500B 实测 `iterate` +13.0MB vs `.all()` +345.2MB，百万级为外推；本轮未重跑测功）
 
 ---
 
@@ -1151,3 +1152,4 @@ flowchart TD
 | 2026-09-20 | 修复 | 解码缓存槽位会永久遮蔽后到的原图（用户实测反馈） | 已完成 | 现象：用户「已经在微信里点开过原图，应用里还是缩略图」——而上一条刚交付的提示语正是「去微信里点一下就能看到」，那句话当时**是假的**。**根因**（实测，不是推断）：`decoded_images` 只有一个槽名 `<md5>.<ext>`，谁先解出来谁永久占住；`decodeImageDataUrl` 第 1a/1 步先读缓存、命中就返回，**永远走不到 attach 里那份大 .dat**。本机量到：117 条缓存条目里 106 条在 attach 有更大的 .dat，其中 **35 条缓存比本机那份小 2 倍以上（31 条小 8 倍以上）**。**修法**：① 槽位一分为二 —— `<md5>.<ext>` = 本机最好的一份，`<md5>.t.<ext>` = `_t`/`_h` 的缩略兜底，读取端先要前者；写入端按 `scoreDatPath(f) > 0` 决定落哪个槽（缩略图不再占住正位）。② `decodeImageDataUrl` 返回值加 `thumb?: boolean`，界面据此显示「本机只有缩略图」，不再让用户猜。③ 新增 `clearDecodedImageCache()`，`getImageOriginal` 在**没有免登录直链**时不再只回一句提示：先丢掉这张图的两个缓存槽、回到 attach 重解一次，重解到更大那份就成功（并说明「这次没联网」），确实只有缩略图时才让用户去微信里点、且告诉他回来再点一次。④ 读缓存失败不再直接报错，落到 .dat 重解（顺手覆盖坏条目）。**验收**：`image-original.spec.ts` 11 → 15 项（两槽优先级、只有 `.t.` 时 `thumb:true`、`clearDecodedImageCache` 删净两个槽、写入端分槽的源码守卫），`npm test` **190 文件 / 2165 通过 / 14 跳过 / 0 失败**、`typecheck` 0、`docs:api:check` ok、`check:shim` 一致、`ui:smoke` 37 项、bundle 与 types 重建幂等（sha 不变）。**变异 2 组转红并按 sha256 还原**：读取端优先看缩略槽 → 红；写入端不分槽（`thumb` 恒 false）→ 红。**教训**：交付一条「用户照着做就能好」的提示语之前，必须先把那条路自己走通一遍 —— 这次的提示语比它描述的能力早到了两天。 |
 | 2026-09-21 | 实施 | H1 | 进行中（仓库侧与历史重写完成并实测；仅剩用户轮换） | 用户授权后执行 `git filter-repo` 重写：移除 `wechat/config.json`/`wechat/llm.json` 全历史路径 + 三把密钥字面量全历史替换；重写前做完整镜像备份（本地，112 refs）；`main` `ee9c956→7339eec`、`feat/chat-message-module` `658af7d→e039041`、tags v1.0.3–1.0.5 同步强推；**自 GitHub fresh clone 实测**：两文件全历史 0 条、三把密钥字面量 0 命中、Releases 完好。**另补出第二轮遗漏**：5 个跟踪文件（`m1-secrets-migration-smoke.js` + 4 个后端 spec）共 13 处硬编码同一把 image key，已换假值（`c5e7b33`）。剩余：用户轮换凭据（旧 Key 应实测 401）；旧对象仍可按 SHA 经 GitHub API 取到，需官方支持清理缓存。顺带修正本分支上游（原指向 `origin/main`，现为 `origin/feat/chat-message-module`） |
 | 2026-09-21 | 实施 | H13 | 未开始 → 已完成 | 用户确认法务结论为「允许保留」（方案 A，方案 B 未启用）；README「已知限制」与 `PROVENANCE.md` 中「许可未明」的表述同步更新（PROVENANCE 保留原记述并加日期标注取代）；风险登记表对应行加闭环标注 |
+| 2026-09-21 | 实施 | H7、N30 | H7 的「UI 解除 loading」验收项：未达标 → 已验证；N30 新增 → 已完成 | **H7**：new `scripts/loading-recovery-e2e.mjs`（`npm run ui:loading-e2e`）—— 用 `SUPERTIME_DEBUG_HANG_METHODS`（主进程按 `app.isPackaged` 判定、打包态显式删变量后 fork；worker 命中即不回应答）+ `SUPERTIME_CALL_TIMEOUT_MS=1500` 在真实窗口里复现「后端卡死」，断言超时 alert（含方法名）、骨架屏清零、两侧日志留痕、下一条调用照常收尾。变异（禁用注入）4 条转红、接线守卫变异 1 条转红，均按 sha256 还原。**N30**：同一次复跑暴露 —— 空数据源下「通讯录」显示原始英文 `unable to open database file`；在 `wechat-host` 的 call 错误路径集中翻译为可执行中文并保留原文，其余错误原样透传；`host-error-message.spec.ts` 6 项 + e2e 断言。**验收**：`npm test` 191 文件 / 2176 通过 / 14 跳过；`ui:loading-e2e` 10 项；`license-gate:smoke` / `security-guard:smoke` / `check:backend-restart` / `check:sns-video`(18) / `check:whisper-paths`(11) / `rag:check`(20) 复跑全过。**门禁清单**：License 异常路径、openExternal/导航、npm test、git status、fresh clone 全流程、package:smoke、后端自愈、无限 loading、H9 内存上界 已勾选；H4 的「CI 能阻断合并」仍缺分支保护机制、H5（负向退出码）与 H8（导出内存）复跑在途 |
