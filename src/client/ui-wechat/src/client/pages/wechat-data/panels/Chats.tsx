@@ -12,7 +12,7 @@ import { SessionAsk } from './SessionAsk.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiBuildSearchIndex, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
@@ -1183,7 +1183,15 @@ function MessageCall({ m }: { m: WechatMessage }): React.JSX.Element {
   )
 }
 
-/** Lazy message image: resolve + decode via Remote, render as data URL. */
+/**
+ * Lazy message image: resolve + decode via Remote, render as data URL.
+ *
+ * 下方那个「取原图」是 2026-09-20 加的：本机实测 93% 的图片在磁盘上**只有缩略图**
+ * （微信从不主动下载原图），所以「图糊」不是解码失败。能不能自动补回来取决于消息 XML 里
+ * 带的是哪种指针 —— 只有免登录预签名直链（`tpurl`/`tphdurl`，实测约 16%）能直接取，
+ * 另一类 `cdnbigimgurl` 需要微信登录态，本应用不做。而「这条属于哪一种」只有查过 XML
+ * 才知道，所以按钮常在、取不到时把**具体原因**显示出来，而不是一句「失败」。
+ */
 function MessageImage({ m, selfName, onOpen }: {
   m: WechatMessage
   selfName: string
@@ -1191,6 +1199,10 @@ function MessageImage({ m, selfName, onOpen }: {
 }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const [imgErr, setImgErr] = useState<string | null>(null)
+  const [isThumb, setIsThumb] = useState(false)
+  const [nonce, setNonce] = useState(0)
+  const [fetching, setFetching] = useState(false)
+  const [origNote, setOrigNote] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     setSrc(null)
@@ -1198,12 +1210,32 @@ function MessageImage({ m, selfName, onOpen }: {
     apiGetImageDataUrl({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
-        if (r.url) setSrc(r.url)
+        if (r.url) { setSrc(r.url); setIsThumb(r.thumb === true) }
         else setImgErr(r.error ?? '图片不可用')
       })
       .catch((e: unknown) => { if (!cancelled) setImgErr((e as Error).message) })
     return () => { cancelled = true }
-  }, [selfName, m.localId])
+  }, [selfName, m.localId, nonce])
+
+  /** 取回的原图会落进后端解码路径优先读的那个缓存槽，所以成功后只需重跑一次取图。 */
+  const getOriginal = async (): Promise<void> => {
+    setFetching(true)
+    setOrigNote(null)
+    try {
+      const r = await apiGetImageOriginal({ username: selfName, localId: m.localId })
+      if (r.ok) {
+        setOrigNote(r.note ?? (r.bytes ? `已取回原图（约 ${String(Math.max(1, Math.round(r.bytes / 1024)))} KB），正在重新加载` : '已取到原图，正在重新加载'))
+        setNonce((n) => n + 1)
+      } else {
+        setOrigNote(r.error ?? '这条消息取不到原图')
+      }
+    } catch (e) {
+      setOrigNote((e as Error).message)
+    } finally {
+      setFetching(false)
+    }
+  }
+
   if (imgErr) {
     const isHevc = imgErr === 'hevc-unsupported'
     const isNoDat = imgErr.startsWith('找不到 .dat')
@@ -1216,9 +1248,18 @@ function MessageImage({ m, selfName, onOpen }: {
     return <div className={`${css.msgBubble} ${css.msgBubbleTight}`}><span className={kitCss.textMeta}><IconImage /> 图片加载中…</span></div>
   }
   return (
-    <div className={`${css.msgBubble} ${css.msgBubbleZoom}`} {...clickableKey(() => { if (onOpen) onOpen(m) }, { label: '查看大图' })}>
-      <img src={src} alt="图片" className={css.msgImage} loading="lazy" />
-    </div>
+    <>
+      <div className={`${css.msgBubble} ${css.msgBubbleZoom}`} {...clickableKey(() => { if (onOpen) onOpen(m) }, { label: '查看大图' })}>
+        <img src={src} alt="图片" className={css.msgImage} loading="lazy" />
+      </div>
+      <div className={css.msgFileHint}>
+        {isThumb && <span className={kitCss.textMeta}>本机只有缩略图 </span>}
+        {fetching
+          ? <span className={kitCss.textMeta}>正在取原图…</span>
+          : <button type="button" className={css.msgVoiceBtn} onClick={() => { void getOriginal() }}>取原图</button>}
+        {origNote !== null && <span className={kitCss.textMeta}> {origNote}</span>}
+      </div>
+    </>
   )
 }
 

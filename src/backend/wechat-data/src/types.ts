@@ -982,6 +982,8 @@ export interface CalendarSnapshot {
 export interface ImageDataUrlResult {
   url?: string
   format?: string
+  /** true = 这次给的是缩略/中图那一份（本机还没有更大的）。界面据此说明「点取原图试试」。 */
+  thumb?: boolean
   error?: string
 }
 

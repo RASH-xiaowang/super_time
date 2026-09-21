@@ -52,6 +52,14 @@ export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | st
     error: string;
 };
 /**
+ * 清掉一张图的全部解码缓存（两个槽位都删）。
+ * @param decodedDir - 解码缓存根。
+ * @param username - 会话 username（按用户名的那个槽）。
+ * @param md5 - 图片 md5。
+ * @returns 删掉的条目数。
+ */
+export declare function clearDecodedImageCache(decodedDir: string, username: string, md5: string): number;
+/**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root (data/wechat/decoded_images).
@@ -60,11 +68,12 @@ export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | st
  * @param wechatBaseDir - optional raw WeChat install dir for .dat fallback.
  * @param aesKey - optional V2 AES key (16-char ASCII string or raw bytes).
  * @param xorKey - XOR key byte, defaults to 0xFF.
- * @returns data URL + format, or an error description.
+ * @returns data URL + format（`thumb: true` 表示这次给的是缩略/中图那一份）, or an error description.
  */
 export declare function decodeImageDataUrl(decryptedDir: string, decodedDir: string, username: string, localId: number, wechatBaseDir?: string, aesKey?: string | Uint8Array, xorKey?: number): {
     url?: string;
     format?: string;
+    thumb?: boolean;
     error?: string;
 };
 /**

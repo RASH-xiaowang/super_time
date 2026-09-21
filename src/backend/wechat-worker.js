@@ -5,7 +5,7 @@
  *
  * ## 为什么要把后端挪出主进程
  *
- * 全部 115 个 Remote 方法都建立在**同步**的 node:sqlite 之上，而个别方法实测
+ * 全部 Remote 方法都建立在**同步**的 node:sqlite 之上，而个别方法实测
  * 单次耗时 12–21 秒：`getSnsImageDataUrl` 在哈希路径压不中时会退化成对整个
  * `cache/<月>/Sns/Img` 乃至 `msg/attach` 做全量「读取 + AES 解密 + MD5」扫描，
  * 并且没有负缓存，于是每调用一次就重扫一次。

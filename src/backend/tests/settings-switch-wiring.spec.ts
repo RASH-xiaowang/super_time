@@ -30,6 +30,7 @@ const REMOTE_CALL_SITES = [
   'fetchSnsCoverDataUrl',
   'fetchSnsVideoDataUrl',
   'loadSnsVideoBytes',
+  'fetchImageOriginalToCache',
 ]
 
 /**

@@ -60,4 +60,20 @@ describe('推荐回复的接线', () => {
   it('面板说明「只读、不代发」——本应用没有发送路径', () => {
     expect(panel.includes('不会替你发消息'), '面板应写明只读、需手动粘贴（避免用户以为它能直接发）').toBe(true)
   })
+
+  it('复制走共享剪贴板助手，且拿到真实结果之前不改口径', () => {
+    // 原先写的是 `void navigator.clipboard.writeText(text)` 紧跟 `setCopied(index)`：
+    // `writeText` 是 Promise，被拒时界面照样显示「已复制」—— 把「我试过了」演成「成功了」，
+    // 还顺手在渲染进程里留一条没人接的 rejection。共享助手 `copyTextToClipboard`
+    // 已经把异步 API 与 execCommand 兜底两条路径的失败都收敛成布尔值，所以这里只判布尔。
+    expect(panel.includes('copyTextToClipboard('), '复制必须走 utils/misc.ts 的共享助手').toBe(true)
+    expect(/if \(ok\) setCopied\(/.test(panel), '「已复制」只能在助手真的返回 true 之后出现').toBe(true)
+    expect(/void navigator\.clipboard/.test(strip(panel)), '不许再 fire-and-forget 直接写剪贴板').toBe(false)
+  })
+
+  it('复制失败要说出来，不能静默', () => {
+    // 剪贴板被系统/焦点拦下是常态（窗口失焦时 Chrome 就拒），静默等于让用户以为已经复制走了。
+    expect(panel.includes('setCopyFailed(true)'), '助手返回 false 时必须落到状态里').toBe(true)
+    expect(panel.includes('复制失败'), '要有给用户看的失败文案（含「手动选中复制」这条退路）').toBe(true)
+  })
 })

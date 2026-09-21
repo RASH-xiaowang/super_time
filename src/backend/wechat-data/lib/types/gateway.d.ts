@@ -1718,6 +1718,31 @@ export declare class WechatDataGateway extends TypertRemoteService {
         emojiUrl?: string;
     }): Promise<ImageDataUrlResult>;
     /**
+     * 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。
+     *
+     * 为什么只做这一类：本机 39,923 张图片消息里 93% 磁盘上只有缩略图，而指向原图的指针有两种，
+     * `cdnbigimgurl` 那一种需要**微信登录态凭据**去发私有媒体请求 —— 那已经不是「读本机已有的密钥」，
+     * 而是「以你的身份向服务器发请求」，与本应用「不登录、不连微信服务器同步」的边界冲突
+     * （口径写在 `query/image-original.ts` 的模块注释）。所以拿不到直链时要把话说清：
+     * 让用户回微信里打开那张图点「查看原图」，本机存下来之后这里自然就是原图。
+     *
+     * 取回的原图写进 `<decoded>/<md5>.<ext>`，也就是 `getImageDataUrl` 第 1a 步优先读的缓存槽，
+     * 于是**下一次渲染直接是原图**、之后离线可用（网络只花一次）。字节不经 RPC 回传。
+     * @param options - `username` 会话 username；`localId` 消息 local_id。
+     * @returns `{ok:true, format, bytes?, note?}`；失败时 `{ok:false, error}`，error 可直接显示。
+     *   `note` 是成功时要一并告诉用户的话（例如「这次是重解本机那一份，没联网」）。
+     */
+    getImageOriginal(options: {
+        username?: string;
+        localId?: number;
+    }): Promise<{
+        ok: boolean;
+        format?: string;
+        bytes?: number;
+        note?: string;
+        error?: string;
+    }>;
+    /**
      * Resolve a 公众号 article cover (og:image) to a base64 data URL.
      * @param options - mp.weixin.qq.com article URL.
      * @returns ImageDataUrlResult: base64 data URL or error.

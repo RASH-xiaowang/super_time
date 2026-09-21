@@ -8,7 +8,7 @@
  */
 import { createDecipheriv } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 // 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
@@ -299,6 +299,61 @@ function toDataUrl(format: string, bytes: Uint8Array): string {
 const RENDERABLE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
 
 /**
+ * 读一个目录下的解码缓存。**两个槽位**：
+ *   `<md5>.<ext>`   = 本机最好的一份（原图，或 `getImageOriginal` 取回的那一份）
+ *   `<md5>.t.<ext>` = 缩略/中图兜底（`_t.dat` / `_h.dat` 解出来的）
+ *
+ * 分成两个名字是 2026-09-20 修的缺陷：原先只有一个槽位，**谁先解出来谁永久占住**，
+ * 于是缩略图一旦先缓存，用户之后在微信里点开的原图（attach 里多出一个大得多的 .dat）
+ * 就再也读不到 —— 实测 106 条缓存里 35 条本机已有 2 倍以上大的 .dat（31 条大 8 倍以上），
+ * 症状正是「我明明在微信里看过原图，这里还是糊的」。
+ *
+ * @param dir - 缓存目录（全局槽或按用户名的槽）。
+ * @param md5 - 图片 md5（`packed_info_data` 那份）。
+ * @returns 带 data URL 的结果（缩略槽命中时多一个 `thumb: true`），未命中返回 null。
+ */
+function cachedImage(dir: string, md5: string): { url?: string; format?: string; thumb?: boolean } | null {
+  for (const thumb of [false, true]) {
+    for (const ext of RENDERABLE_EXTS) {
+      const p = join(dir, md5 + (thumb ? '.t.' : '.') + ext)
+      if (!existsSync(p)) continue
+      try {
+        const bytes = readFileSync(p)
+        const fmt = ext === 'jpeg' ? 'jpg' : ext
+        return { url: toDataUrl(fmt, new Uint8Array(bytes)), format: fmt, ...(thumb ? { thumb: true } : {}) }
+      } catch {
+        // 读缓存失败不再直接报错：落到下面的 .dat 重解，解出来会顺手把这个坏条目覆盖掉
+        return null
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * 清掉一张图的全部解码缓存（两个槽位都删）。
+ * @param decodedDir - 解码缓存根。
+ * @param username - 会话 username（按用户名的那个槽）。
+ * @param md5 - 图片 md5。
+ * @returns 删掉的条目数。
+ */
+export function clearDecodedImageCache(decodedDir: string, username: string, md5: string): number {
+  if (!md5) return 0
+  let removed = 0
+  for (const dir of [decodedDir, join(decodedDir, username)]) {
+    for (const ext of [...RENDERABLE_EXTS, 'hevc']) {
+      for (const thumb of [false, true]) {
+        const p = join(dir, md5 + (thumb ? '.t.' : '.') + ext)
+        try {
+          if (existsSync(p)) { rmSync(p); removed += 1 }
+        } catch { /* 删不掉就留着，下一次照样能读 */ }
+      }
+    }
+  }
+  return removed
+}
+
+/**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root (data/wechat/decoded_images).
@@ -307,7 +362,7 @@ const RENDERABLE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
  * @param wechatBaseDir - optional raw WeChat install dir for .dat fallback.
  * @param aesKey - optional V2 AES key (16-char ASCII string or raw bytes).
  * @param xorKey - XOR key byte, defaults to 0xFF.
- * @returns data URL + format, or an error description.
+ * @returns data URL + format（`thumb: true` 表示这次给的是缩略/中图那一份）, or an error description.
  */
 export function decodeImageDataUrl(
   decryptedDir: string,
@@ -317,42 +372,17 @@ export function decodeImageDataUrl(
   wechatBaseDir?: string,
   aesKey?: string | Uint8Array,
   xorKey?: number,
-): { url?: string; format?: string; error?: string } {
+): { url?: string; format?: string; thumb?: boolean; error?: string } {
   const hint = resolveImageResourceHint(decryptedDir, username, localId)
   const md5 = hint.md5
   if (!md5 && !hint.dataIndex) return { error: '无法找到图片 MD5' }
-  // 1a. global decoded cache (批量解密产物,与用户名无关,md5 独占)
+  // 1a/1. 已解码缓存：全局槽（批量解密产物，与用户名无关）优先，再看按用户名的槽。
+  //       每个槽里都先要「最好的一份」，再退到 `.t.` 的缩略兜底 —— 见 `cachedImage` 的注释。
   if (md5) {
-    for (const ext of RENDERABLE_EXTS) {
-      const p = join(decodedDir, md5 + '.' + ext)
-      if (existsSync(p)) {
-        try {
-          const bytes = readFileSync(p)
-          return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)), format: ext === 'jpeg' ? 'jpg' : ext }
-        } catch (e) {
-          return { error: '读取已解码图片失败: ' + (e as Error).message }
-        }
-      }
-    }
-  }
-  // 1. pre-decoded cache
-  if (md5) {
-    const userDir = join(decodedDir, username)
-    if (existsSync(userDir)) {
-      for (const ext of RENDERABLE_EXTS) {
-        const p = join(userDir, md5 + '.' + ext)
-        if (existsSync(p)) {
-          try {
-            const bytes = readFileSync(p)
-            return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)), format: ext === 'jpeg' ? 'jpg' : ext }
-          } catch (e) {
-            return { error: '读取已解码图片失败: ' + (e as Error).message }
-          }
-        }
-      }
-      const hevc = join(userDir, md5 + '.hevc')
-      if (existsSync(hevc)) return { error: 'hevc-unsupported' }
-    }
+    const hit = cachedImage(decodedDir, md5) ?? cachedImage(join(decodedDir, username), md5)
+    if (hit) return hit
+    const hevc = join(decodedDir, username, md5 + '.hevc')
+    if (existsSync(hevc)) return { error: 'hevc-unsupported' }
   }
   // 2. raw .dat decode (requires the raw WeChat base dir)
   if (wechatBaseDir && md5) {
@@ -370,10 +400,12 @@ export function decodeImageDataUrl(
           const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
           if ('error' in dec) continue
           if (dec.format === 'hevc') continue
+          // `_t`/`_h` 解出来的是缩略/中图：必须写进 `.t.` 那个兜底槽，不能占住「最好的一份」
+          const thumb = scoreDatPath(f) > 0
           try {
-            writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes)
+            writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, thumb)
           } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format }
+          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
         } catch { /* try next candidate */ }
       }
       return { error: 'hevc-unsupported' }
@@ -388,10 +420,11 @@ export function decodeImageDataUrl(
         const bytes = readFileSync(hd)
         const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
         if (!('error' in dec) && dec.format !== 'hevc') {
+          const thumb = scoreDatPath(hd) > 0
           try {
-            writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes)
+            writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, thumb)
           } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format }
+          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
         }
       } catch { /* unreadable dat fall through */ }
     }
@@ -557,11 +590,15 @@ function scoreDatPath(p: string): number {
   return 0
 }
 
-/** Write a decoded image into the cache so later lookups hit instantly. */
-function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array): void {
+/**
+ * Write a decoded image into the cache so later lookups hit instantly.
+ * @param thumb - true 表示这是 `_t`/`_h` 解出来的缩略/中图，写进 `<md5>.t.<ext>` 兜底槽，
+ *   不占「本机最好的一份」那个槽（否则原图后到也会被永久遮蔽，见 `cachedImage`）。
+ */
+function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array, thumb = false): void {
   const dir = join(decodedDir, username)
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, md5 + '.' + format), Buffer.from(bytes))
+  writeFileSync(join(dir, md5 + (thumb ? '.t.' : '.') + format), Buffer.from(bytes))
 }
 
 /** Recursively find .dat files whose name starts with the image MD5. */

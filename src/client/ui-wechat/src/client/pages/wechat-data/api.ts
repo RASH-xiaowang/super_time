@@ -346,6 +346,7 @@ export interface WechatRemote {
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
   getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  getImageOriginal(options: { username?: string; localId?: number }): Promise<RemoteResult<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }>>
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
@@ -1377,6 +1378,19 @@ export async function apiGetFileImageDataUrl(options: { md5: string }): Promise<
  */
 export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
   return cachedGet('emoticon:' + options.md5, async () => unwrap(await remote().getEmoticonDataUrl(options)))
+}
+
+/**
+ * 取一条图片消息的**原图**（只覆盖消息里带免登录预签名直链 `tpurl` 的那部分，约 16%）。
+ *
+ * 故意**不走 `cachedGet`**：这是一次会改变本机状态的动作（原图落进 decoded 缓存），
+ * 缓存结果会让第二次点击什么都不做。成功后界面重新调 `apiGetImageDataUrl` 即可拿到原图 ——
+ * 那条路是攒批队列、不缓存返回值，而后端第一站读的就是刚落盘的那个缓存槽。
+ * @param options - 会话 username 与消息 localId。
+ * @returns `{ok:true, format, bytes}` 或 `{ok:false, error}`；`error` 是可以直接显示给用户的话。
+ */
+export async function apiGetImageOriginal(options: { username: string; localId: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
+  return unwrap(await remote().getImageOriginal(options))
 }
 /**
  * Resolve a moments video cover to a data URL (offline Sns/Video jpg).

@@ -24,7 +24,7 @@
 | wechat_tasks.db | 待办提取存储（插件写入） | `<root>/wechat_tasks.db` |
 | wechat_privacy.db | 隐私设置与 AI 审计 + 操作日志（插件写入） | `<root>/wechat_privacy.db` |
 | config.json | 微信配置（读写）—— **不含密钥**（见下） | `<root>/config.json` |
-| keys.json | 自动获取的密钥存储（autoGetDbKey/autoGetImageKey 写入） | `<root>/keys.json` |
+| keys.json | 自动获取的密钥存储（`autoGetDbKey` / `autoGetImageKey` 写入；解图片时在 config/secrets 之后作为**回退**被读取，见 `query/image-key.ts`） | `<root>/keys.json` |
 | all_keys.json | 生成的密钥信息 | `<root>/all_keys.json` |
 
 ## 密钥存储与保护（M1）
@@ -34,7 +34,13 @@
 | 内容 | 位置 | 谁写 |
 |---|---|---|
 | 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<数据根>/secrets.json`（与后端 config.json 同级） | 后端 `query/config.ts`（`SECRET_FIELDS`） |
-| 自动获取的按账号密钥 | `<数据根>/keys.json` | `keys/key-store.ts` |
+| 自动获取的密钥（库密钥 + 图片 AES/XOR） | `<数据根>/keys.json` | `keys/key-store.ts` |
+
+`keys.json` 目前**只有一个 `'default'` 槽位**（`keys/service.ts` 的三处写入都用这个字面量），
+不按 wxid 分账 —— 所以同机换过账号时，那里面可能是上一个账号的密钥。解码侧因此加了归属校验：
+记录里写明属于别的账号（`image_key_derived_wxid`，或内存扫描路径记的 `image_key_source_wxid_dir`）
+且与当前账号明确不同时，按「没有密钥」处理，而不是拿错的钥匙解出一张垃圾图（详见 `RELEASE-PLAN.md` N28）。
+手工填写并保存的密钥仍走 `secrets.json`，且**优先级高于**这里自动获取的结果。
 | LLM API Key | `<STATE_DIR>/llm.json` | 宿主层 `wechat-paths.js` |
 
 `STATE_DIR` = `<userData>/wechat`（宿主配置与日志）；数据根默认 `<userData>/wechat-data`（后端配置 `config.json`、`secrets.json`、`keys.json` 都在这里）。
