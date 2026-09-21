@@ -51,4 +51,33 @@ function resolveDebugGates(opts) {
   return { packaged, requested, skipGates: requested && isPackaged === false };
 }
 
-module.exports = { SKIP_GATES_ENV, resolveDebugGates };
+/**
+ * 「永不回包」故障注入的环境变量名（H7 验收专用）。
+ *
+ * 值：逗号分隔的 Remote 方法名；命中的调用**只被 worker 记一条日志、不回任何应答**，
+ * 于是主进程的超时预算把它收敛成一条可读错误 —— 用来端到端验证「后端卡死时
+ * UI 会解除 loading 并提示」，而不是只能靠单测覆盖主进程那一半。
+ */
+const HANG_ENV = 'SUPERTIME_DEBUG_HANG_METHODS';
+
+/**
+ * 解析需要注入「永不回包」的方法名。
+ *
+ * 与 `resolveDebugGates` 同一套信任模型：**打包态一律忽略**（`isPackaged` 不是 `false` 就返回空表）。
+ * 主进程在 fork worker 时按这里的结果显式改写子进程环境 —— 打包态下连环境变量都不会传给 worker，
+ * 所以「打包版被 env 卡死」不成立。
+ *
+ * @param {{ isPackaged?: unknown, env?: Record<string, string | undefined> }} [opts]
+ * @returns {string[]} 规范化后的方法名列表（去空白、去空项）；空数组 = 不注入。
+ */
+function resolveHangMethods(opts) {
+  const isPackaged = opts && opts.isPackaged;
+  const env = (opts && opts.env) || {};
+  if (isPackaged !== false) return [];
+  return String(env[HANG_ENV] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
+module.exports = { SKIP_GATES_ENV, HANG_ENV, resolveDebugGates, resolveHangMethods };

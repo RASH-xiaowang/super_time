@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { SKIP_GATES_ENV, resolveDebugGates } from '../debug-gates.js'
+import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from '../debug-gates.js'
 // @ts-expect-error —— 前端纯逻辑（不 import react），vitest 由 vite 直接转译
 import { shouldSkipGates } from '../../client/ui-app/debug-gates.ts'
 
@@ -196,5 +196,71 @@ describe('N2：接线守卫（主进程 / preload / 渲染层 / 验收脚本）'
     expect(acceptanceSrc).not.toContain('addInitScript')
     // 而且要有断言证明豁免真的生效（否则开关坏了脚本照样绿）
     expect(acceptanceSrc).toContain("#debug-gates-banner")
+  })
+})
+
+/**
+ * H7 的「永不回包」注入（`SUPERTIME_DEBUG_HANG_METHODS`）。
+ *
+ * 它存在的唯一理由是**验收**：让某个 Remote 调用真的悬挂到主进程超时，
+ * 才能端到端回答「界面会不会无限转圈」（脚本见 `scripts/loading-recovery-e2e.mjs`）。
+ * 与豁免开关同一套信任模型 —— 打包态一律不生效：判定函数返回空表，
+ * 主进程还会**显式删掉**该变量再 fork，worker 连继承都继承不到。
+ */
+describe('H7：永不回包注入的判定与接线（打包态恒不生效）', () => {
+  const workerSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-worker.js'), 'utf8')
+  const e2eSrc = readFileSync(join(ROOT, 'scripts', 'loading-recovery-e2e.mjs'), 'utf8')
+
+  it('打包态（含 isPackaged 缺失/类型不对）⇒ 恒为空表', () => {
+    expect(HANG_ENV).toBe('SUPERTIME_DEBUG_HANG_METHODS')
+    for (const bogus of [true, undefined, null, 'false', 0, 1, {}]) {
+      expect(
+        resolveHangMethods({ isPackaged: bogus, env: { SUPERTIME_DEBUG_HANG_METHODS: 'getSessions' } }),
+        `isPackaged=${JSON.stringify(bogus)} 时不应注入`,
+      ).toEqual([])
+    }
+    expect(resolveHangMethods()).toEqual([])
+  })
+
+  it('非打包态 ⇒ 逗号分隔、去空白、去空项；未设 ⇒ 空表', () => {
+    expect(resolveHangMethods({ isPackaged: false, env: { SUPERTIME_DEBUG_HANG_METHODS: ' getSessions , queryContacts ,' } }))
+      .toEqual(['getSessions', 'queryContacts'])
+    expect(resolveHangMethods({ isPackaged: false, env: {} })).toEqual([])
+    expect(resolveHangMethods({ isPackaged: false, env: { SUPERTIME_DEBUG_HANG_METHODS: '' } })).toEqual([])
+  })
+
+  it('主进程取名单也用 app.isPackaged，且给 worker 的 env「有则写、无则删」', () => {
+    const calls = callExpressions('main.js', mainSrc).filter((c) => c.callee === 'resolveHangMethods')
+    expect(calls.length, 'main.js 里找不到 resolveHangMethods(...) 的真实调用点').toBeGreaterThan(0)
+    for (const c of calls) {
+      expect(c.args.join(','), 'isPackaged 的取值必须来自 Electron 的 app.isPackaged')
+        .toContain('isPackaged: app.isPackaged')
+    }
+    // fork 必须收到 env；打包态走 delete 分支（不是「不设置」—— 否则会继承到父进程的同名变量）
+    const fork = callExpressions('main.js', mainSrc).filter((c) => c.callee === 'utilityProcess.fork')
+    expect(fork.length, '找不到 utilityProcess.fork 调用点（用例前提不成立）').toBe(1)
+    expect(fork[0]!.args.join(','), 'fork 没有把 workerEnv 交给子进程').toContain('env: workerEnv')
+    expect(mainSrc).toMatch(/if \(hangMethods\.length > 0\) workerEnv\[DEBUG_HANG_ENV\]/)
+    expect(mainSrc, '打包态必须显式删除该变量').toContain('delete workerEnv[DEBUG_HANG_ENV]')
+  })
+
+  it('worker 命中名单时不回包（客户端才会走到超时），且判定在回包之前', () => {
+    expect(workerSrc).toContain('SUPERTIME_DEBUG_HANG_METHODS')
+    const at = workerSrc.indexOf("case 'call'")
+    expect(at, 'worker 里找不到 call 分支（用例前提不成立）').toBeGreaterThan(0)
+    const body = workerSrc.slice(at, at + 700)
+    const gate = body.indexOf('HANG_METHODS.includes')
+    const post = body.indexOf('post({ id, value: await backend.call')
+    expect(gate, 'call 分支里没有注入判定 —— 注入形同虚设').toBeGreaterThan(0)
+    expect(post, 'call 分支里找不到回包点（用例前提不成立）').toBeGreaterThan(0)
+    expect(gate, '注入判定必须在回包之前').toBeLessThan(post)
+  })
+
+  it('验收脚本把注入与超时都压到秒级，并断言「注入真的命中过」', () => {
+    expect(e2eSrc).toContain('SUPERTIME_DEBUG_HANG_METHODS')
+    expect(e2eSrc).toContain('SUPERTIME_CALL_TIMEOUT_MS')
+    // 防空转：脚本必须读日志确认注入与超时都发生过（否则界面出错也可能是别的原因）
+    expect(e2eSrc).toContain('注入「永不回包」')
+    expect(e2eSrc).toMatch(/日志|app\.log/)
   })
 })
