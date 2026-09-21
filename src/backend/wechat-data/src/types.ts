@@ -960,6 +960,8 @@ export interface SearchSnapshot {
   hits: SearchHit[]
   total: number
   indexed: boolean
+  /** N9：本次搜索被取消（返回的是取消前已找到的部分结果）。 */
+  cancelled?: boolean
 }
 
 /** Search index build result. */

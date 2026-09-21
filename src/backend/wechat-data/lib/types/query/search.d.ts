@@ -251,6 +251,13 @@ export interface WindowMessage {
  */
 export declare function loadMessageWindow(decryptedDir: string, username: string, centerMs: number, spanMs: number, limit?: number): WindowMessage[];
 /**
+ * 搜索的取消通道（N9）。与导出的 `StreamControl` 同构，但搜索没有进度可言，只留取消令牌。
+ */
+export interface SearchControl {
+    /** 取消令牌；aborted 后兜底扫描尽快收尾，返回已找到的部分并带 `cancelled: true`。 */
+    signal?: AbortSignal;
+}
+/**
  * Search text messages: FTS5 index first, bounded full-table scan fallback.
  * @param decryptedDir - decrypted data root.
  * @param query - search term.
@@ -263,3 +270,25 @@ export declare function searchIndexMessages(decryptedDir: string, query: string,
     total: number;
     indexed: boolean;
 };
+/**
+ * 与 {@link searchIndexMessages} 同一条链路，但**可取消**（N9，界面搜索专用）。
+ *
+ * 两件事一起做才有意义 ——
+ *   · 每 {@link ABORT_CHECK_EVERY_ROWS} 行看一眼 `ctrl.signal`，取消即收尾（返回部分结果 + `cancelled`）；
+ *   · 每 {@link YIELD_EVERY_MS} 毫秒 `await setImmediate` 让出 —— **这是取消能生效的前提**：
+ *     本函数跑在后端 worker 里，不让出的话 worker 根本读不到 `cancelSearch` 那条消息，
+ *     令牌永远不会被 aborted（旧实现实测单次 621ms~2.5s、期间 10ms 定时器 0 次触发）。
+ *
+ * @param decryptedDir - decrypted data root.
+ * @param query - search term.
+ * @param limit - max hits.
+ * @param username - optional scope: only search one talker (chatroom).
+ * @param ctrl - 可选的取消令牌（见 {@link SearchControl}）。
+ * @returns hits plus whether the index was used；被取消时多一个 `cancelled: true`。
+ */
+export declare function searchIndexMessagesCancellable(decryptedDir: string, query: string, limit?: number, username?: string, ctrl?: SearchControl): Promise<{
+    hits: SearchHit[];
+    total: number;
+    indexed: boolean;
+    cancelled?: boolean;
+}>;
