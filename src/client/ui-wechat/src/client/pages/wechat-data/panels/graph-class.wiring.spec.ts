@@ -14,7 +14,7 @@
  * （`className={undefined}` 会静默退化成无样式）。单独一个 `it`，出问题能一眼看出是哪一类。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -34,7 +34,7 @@ const ROOT = findRoot(HERE)
 const panel = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
 const css = readFileSync(join(HERE, 'graph.module.css'), 'utf8')
 const model = readFileSync(join(HERE, 'graph-model.ts'), 'utf8')
-const canvas = readFileSync(join(HERE, 'graph-canvas.ts'), 'utf8')
+const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const backendGraph = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'graph.ts'), 'utf8')
 
 describe('同备注编号边：图例 / 开关 / 名册三处都在', () => {
