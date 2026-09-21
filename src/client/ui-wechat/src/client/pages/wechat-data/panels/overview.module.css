@@ -913,66 +913,6 @@
   display: none;
 }
 
-/* 榜单（省份 / 城市）：等高两栏、行内条形对比 */
-.regionRank {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  height: 310px;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-}
-.regionRankHd {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  flex-shrink: 0;
-  font-size: 11px;
-}
-.regionRankTitle { font-weight: 700; color: var(--nm-text-1); }
-.regionRankHint { color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.regionRows {
-  display: flex;
-  flex-direction: column;
-  /* 行数固定（省份 10 / 城市 12），用 space-between 把卡片高度均分给各行，
-     条数少时也不会在底部堆出一片空白 */
-  justify-content: space-between;
-  gap: 3px;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-.regionRow {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  grid-template-rows: auto 3px;
-  align-items: center;
-  gap: 0 6px;
-  font-size: 11px;
-  line-height: 1.15;
-}
-.regionRankNo { color: var(--nm-cyan); font-weight: 800; font-family: var(--nm-font-mono, monospace); font-size: 10px; }
-.regionName { color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.regionCount { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
-.regionBar {
-  grid-column: 2 / 4;
-  height: 3px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  overflow: hidden;
-}
-.regionBarFill {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-}
-.regionEmpty { color: var(--nm-text-2); font-size: 11.5px; padding: 6px 2px; }
 
 /* ── 让"指标格网格"吃掉同行卡片之间的高度差 ────────────────────────────
    同行两张卡片默认等高（grid stretch）。较矮的那张若内容固定，差额就变成

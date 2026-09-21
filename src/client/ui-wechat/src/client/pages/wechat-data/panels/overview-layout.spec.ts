@@ -30,7 +30,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 // M21 把 Overview.tsx 拆成 overview-export/parts/panel + 转发桶；源码类断言的读取面改成
 // **全部 overview* 源码的联合**（断言本身不变，文件再搬家也不会误报）。
 const tsx = readdirSync(HERE).filter((f) => /^overview(-[a-z]+)?\.(ts|tsx)$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
-const css = readFileSync(join(HERE, 'overview.module.css'), 'utf8')
+// M21 第十六刀把 CSS 也拆了（地区分布榜 → overview-region.module.css）：样式侧同样读前缀联合，
+// 否则「JSX 用到的类必须在样式里有定义」这条会对着拆分后的主文件误报。
+const css = readdirSync(HERE).filter((f) => /^overview(-[a-z]+)?\.module\.css$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const board = readFileSync(join(HERE, 'RegionBoard.tsx'), 'utf8')
 
 /** 去掉注释：注释里提到旧做法不该影响断言（本文件自己也提到 `:global`）。 */

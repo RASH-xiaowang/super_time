@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react'
 import { apiGetRegionMap } from '../api.ts'
 import type { RegionMapSnapshot, RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import css from './overview.module.css'
+import regionCss from './overview-region.module.css'
 
 /** 单条榜单行。 */
 interface RankRow {
@@ -61,19 +62,19 @@ function RankColumn({ title, hint, rows, max }: {
   max: number
 }) {
   return (
-    <div className={css.regionRank}>
-      <div className={css.regionRankHd}>
-        <span className={css.regionRankTitle}>{title}</span>
-        <span className={css.regionRankHint}>{hint}</span>
+    <div className={regionCss.regionRank}>
+      <div className={regionCss.regionRankHd}>
+        <span className={regionCss.regionRankTitle}>{title}</span>
+        <span className={regionCss.regionRankHint}>{hint}</span>
       </div>
-      <div className={css.regionRows}>
+      <div className={regionCss.regionRows}>
         {rows.map((r, i) => (
-          <div key={r.key} className={css.regionRow} title={`${r.name} · ${r.count} 位好友`}>
-            <span className={css.regionRankNo}>{i + 1}</span>
-            <span className={css.regionName}>{r.name}</span>
-            <span className={css.regionCount}>{r.count}</span>
-            <span className={css.regionBar}>
-              <span className={css.regionBarFill} style={{ width: `${Math.max(6, Math.round((r.count / max) * 100))}%` }} />
+          <div key={r.key} className={regionCss.regionRow} title={`${r.name} · ${r.count} 位好友`}>
+            <span className={regionCss.regionRankNo}>{i + 1}</span>
+            <span className={regionCss.regionName}>{r.name}</span>
+            <span className={regionCss.regionCount}>{r.count}</span>
+            <span className={regionCss.regionBar}>
+              <span className={regionCss.regionBarFill} style={{ width: `${Math.max(6, Math.round((r.count / max) * 100))}%` }} />
             </span>
           </div>
         ))}
@@ -105,20 +106,20 @@ export function RegionBoard(): React.JSX.Element {
   }, [])
 
   if (failed) {
-    return <div className={css.regionRank}><div className={css.regionEmpty}>地区数据暂不可用</div></div>
+    return <div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div>
   }
   if (!snap) {
     return (
       <>
-        <div className={css.regionRank}><div className={css.regionRankHd}><span className={css.regionRankTitle}>省份 Top 10</span></div><div className={css.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
-        <div className={css.regionRank}><div className={css.regionRankHd}><span className={css.regionRankTitle}>城市 Top 12</span></div><div className={css.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
+        <div className={regionCss.regionRank}><div className={regionCss.regionRankHd}><span className={regionCss.regionRankTitle}>省份 Top 10</span></div><div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
+        <div className={regionCss.regionRank}><div className={regionCss.regionRankHd}><span className={regionCss.regionRankTitle}>城市 Top 12</span></div><div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
       </>
     )
   }
 
   const country = topCountry(snap.world)
   if (!country) {
-    return <div className={css.regionRank}><div className={css.regionEmpty}>暂无好友地区信息</div></div>
+    return <div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div>
   }
   const prov = topN(country.children.map(c => ({ key: c.key, name: c.name, count: c.count })), 10)
   const city = topN(allCities(country), 12)
