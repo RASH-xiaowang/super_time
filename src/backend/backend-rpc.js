@@ -40,7 +40,7 @@ const LONG_CALL_METHODS = new Set([
   // 就是它）。60 秒只有约 3 倍余量，冷启动/大库上不够稳；这类方法本身有负缓存，
   // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
   'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
-  'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl',
+  'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal',
   // 语音转写：whisper 本地推理
   'transcribeVoiceBatch', 'transcribeVoiceMessage',
   // 索引与离线评估

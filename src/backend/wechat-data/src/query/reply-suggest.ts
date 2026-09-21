@@ -40,7 +40,8 @@ export function collectReplyContext(
   limit = 20,
 ): ReplyContext {
   const cap = Math.max(1, Math.min(limit, 60))
-  // 第三/第四个参数分别是 cursor 与 cursorLocalId：不传即「最新一页」。
+  // `queryMessages` 的第 4、6 个参数才是游标（cursor / cursorLocalId），这里都不传 = 「最新一页」；
+  // 第 5 个是 selfUsername，用来把每条标成「我」还是「对方」（也用于判定发送者）。
   const snapshot = queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
   const lines: string[] = []
   let latestPeer = ''

@@ -14,6 +14,8 @@ import { queryPaymentStatus } from './query/payments.ts'
 import { queryContacts } from './query/contacts.ts'
 import { queryRegionMap } from './query/region-map.ts'
 import { queryMessageByServerId, queryMessages, queryNewMessages } from './query/messages.ts'
+import { resolveImageKeyPair } from './query/image-key.ts'
+import { fetchImageOriginalToCache, resolveImageOriginalLink } from './query/image-original.ts'
 import { buildReplyPrompt, collectReplyContext, collectReplyKbSnippets, parseReplyCandidates } from './query/reply-suggest.ts'
 import { queryMoments, queryMomentsAuthors } from './query/moments.ts'
 import { deleteFavoriteItems, queryFavorites } from './query/favorites.ts'
@@ -49,7 +51,7 @@ import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
 import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
-import { decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
+import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
 import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbFileRegisterResult, KbSearchResult, KbSummaryResult } from './types.ts'
 import { resolveSnsImageDataUrl } from './query/sns-image.ts'
@@ -3990,9 +3992,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   @Remote('decryptAllImages')
   async decryptAllImages(options: { concurrency?: number }): Promise<DecryptImagesResult> {
     if (this.decryptState.active) { this.op('sync', 'decrypt_images', 'fail', '', '已有解密任务进行中'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '已有解密任务进行中' } }
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
     const rawRoot = rawWechatBase(this._dirs.decrypted)
     if (!rawRoot) { this.op('sync', 'decrypt_images', 'fail', '', '未配置数据库目录，无法定位图片数据'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '未配置数据库目录，无法定位图片数据' } }
     const concurrency = Math.floor(options.concurrency ?? 8) || 8
@@ -4228,9 +4228,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   @Remote('getImageDataUrl')
   getImageDataUrl(options: { username: string; localId: number }): ImageDataUrlResult {
     const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
     return decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId, base, aesKey, xorKey)
   }
 
@@ -4253,9 +4251,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     const decrypted = this._dirs.decrypted
     const decoded = this._dirs.decoded
     const base = rawWechatBase(decrypted) || undefined
-    const cfg = getConfig(decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
     const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX)
     if (base) this.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
     return {
@@ -4333,9 +4329,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   @Remote('getSnsImageDataUrl')
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
     const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
     return resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
   }
 
@@ -4348,9 +4342,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   @Remote('getFileImageDataUrl')
   getFileImageDataUrl(options: { md5: string }): ImageDataUrlResult {
     const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
     return decodeFileImageDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
   }
 
@@ -4365,15 +4357,68 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   @Remote('getEmoticonDataUrl')
   async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
     const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-    const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
     const local = decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
     if (local.url) return local
     if (!options.emojiUrl) return local
     const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase(), this.cdnSwitches())
     // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
     return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
+  }
+
+  /**
+   * 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。
+   *
+   * 为什么只做这一类：本机 39,923 张图片消息里 93% 磁盘上只有缩略图，而指向原图的指针有两种，
+   * `cdnbigimgurl` 那一种需要**微信登录态凭据**去发私有媒体请求 —— 那已经不是「读本机已有的密钥」，
+   * 而是「以你的身份向服务器发请求」，与本应用「不登录、不连微信服务器同步」的边界冲突
+   * （口径写在 `query/image-original.ts` 的模块注释）。所以拿不到直链时要把话说清：
+   * 让用户回微信里打开那张图点「查看原图」，本机存下来之后这里自然就是原图。
+   *
+   * 取回的原图写进 `<decoded>/<md5>.<ext>`，也就是 `getImageDataUrl` 第 1a 步优先读的缓存槽，
+   * 于是**下一次渲染直接是原图**、之后离线可用（网络只花一次）。字节不经 RPC 回传。
+   * @param options - `username` 会话 username；`localId` 消息 local_id。
+   * @returns `{ok:true, format, bytes?, note?}`；失败时 `{ok:false, error}`，error 可直接显示。
+   *   `note` 是成功时要一并告诉用户的话（例如「这次是重解本机那一份，没联网」）。
+   */
+  @Remote('getImageOriginal')
+  async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
+    const talker = String(options.username ?? '').trim()
+    const localId = Math.trunc(Number(options.localId))
+    if (talker === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
+    // 「禁止出网」也拦这一条 —— 与朋友圈封面/视频同一口径（PRIVACY 第四节 B/C 段），
+    // 否则用户关掉总闸后这里仍然会向微信 CDN 发请求，那句承诺就成了假的。
+    const blocked = this.privacyBlocked('image_original_fetch', '从微信 CDN 取回原图')
+    if (blocked !== null) {
+      this.op('task', 'image_original_fetch', 'fail', talker, blocked)
+      return { ok: false, error: blocked }
+    }
+    const link = resolveImageOriginalLink(this._dirs.decrypted, talker, localId)
+    if (link === null) {
+      // 「没有免登录直链」不等于「本机没有原图」：用户可能已经在微信里点开过，attach 里就有
+      // 更大的那份 .dat。原先这里只回一句「去微信里点一下」，但那句话当时是假的 —— 解码缓存的
+      // 槽位被先解出来的缩略图占住后，后到的原图永远读不到（实测 106 条缓存里 35 条如此）。
+      // 所以这里主动丢掉这张图的缓存条目再重解一次，让「我在微信里点过了」真的能反映到界面上。
+      const hint = resolveImageResourceHint(this._dirs.decrypted, talker, localId)
+      if (hint.md5) {
+        clearDecodedImageCache(this._dirs.decoded, talker, hint.md5)
+        const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
+        const redone = decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, talker, localId,
+          rawWechatBase(this._dirs.decrypted) || undefined, aesKey, xorKey)
+        if (redone.url && !redone.thumb) {
+          this.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (redone.format ?? '?') + '）')
+          return { ok: true, format: redone.format, note: '本机已重解到更大的那一份，这次没有联网' }
+        }
+      }
+      return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
+    }
+    const r = await fetchImageOriginalToCache(link, this._dirs.decoded, this.cdnSwitches())
+    if (r.bytes === undefined) {
+      this.op('task', 'image_original_fetch', 'fail', talker, r.error ?? '取回失败')
+      return { ok: false, error: r.error ?? '原图取回失败' }
+    }
+    this.op('task', 'image_original_fetch', 'ok', talker, String(r.bytes) + ' 字节 · ' + (r.format ?? '?'))
+    return { ok: true, format: r.format, bytes: r.bytes }
   }
 
   /**

@@ -213,6 +213,9 @@ export async function fetchImageKey(opts: { accountDir?: string; pid?: number } 
     image_xor_key: String(xorKey),
     image_key_verified: true,
     image_key_source: 'memory_v2',
+    // 内存扫描出来的密钥不是「由 wxid 派生」的，但它同样属于这个账号目录 —— 记下来源目录名，
+    // 解码侧才能判断「这把钥匙是不是当前账号的」（见 query/image-key.ts 的归属校验）。
+    image_key_source_wxid_dir: basename(accountDir),
   })
   return result
 }

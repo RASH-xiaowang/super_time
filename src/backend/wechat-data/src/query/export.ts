@@ -14,6 +14,7 @@ import { queryFavorites } from './favorites.ts'
 import { queryRecords } from './records.ts'
 import { queryMoments } from './moments.ts'
 import { getConfig } from './config.ts'
+import { resolveImageKeyPair } from './image-key.ts'
 import { resolveSnsImageDataUrl } from './sns-image.ts'
 import { resolveSnsVideoDataUrl } from './sns-video.ts'
 
@@ -97,8 +98,8 @@ function exportMediaCtx(decrypted: string): { base: string | undefined; aesKey: 
     const parts = dbDir.replace(/[\\/]+$/, '').split(/[\\/]/)
     base = (parts[parts.length - 1] ?? '') === 'db_storage' ? parts.slice(0, -1).join('/') : ''
   }
-  const aesKey = typeof cfg['image_aes_key'] === 'string' && cfg['image_aes_key'].length > 0 ? cfg['image_aes_key'] : undefined
-  const xorKey = Number(cfg['image_xor_key'] ?? 0xff)
+  // 密钥对只在 `image-key.ts` 一处判定（config/secrets 优先，回退 keys.json 的自动获取结果）
+  const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
   return { base: base || undefined, aesKey, xorKey }
 }
 import { queryPrivacyScan } from './privacy.ts'

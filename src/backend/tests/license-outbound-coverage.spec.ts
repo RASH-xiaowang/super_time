@@ -35,6 +35,7 @@ const requireCjs = createRequire(import.meta.url)
 const NON_AI_OUTBOUND: Record<string, string> = {
   getSnsVideoDataUrl: '从微信 CDN 取回视频字节，不发内容给模型',
   getSnsVideoCoverDataUrl: '从微信 CDN 取回封面字节，不发内容给模型',
+  getImageOriginal: '从微信 CDN 取回聊天图片原图字节，不发内容给模型（只走消息自带的免登录直链）',
 }
 
 const PRIVACY_SEAMS = new Set(['privacyBlocked', 'privacyGate'])
