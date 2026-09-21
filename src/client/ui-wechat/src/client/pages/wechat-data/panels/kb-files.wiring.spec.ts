@@ -33,7 +33,7 @@
  *      一段只喂了前 8,000 字的局部概括就会顶着「摘要」两个字被当成整份文件的结论引用出去。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -52,6 +52,8 @@ function findRoot(start: string): string {
 }
 const ROOT = findRoot(HERE)
 const SHELL_DIR = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data')
+/** 后端包源码根（类型模块所在目录）。 */
+const BACKEND_SRC = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
 
 const panel = readFileSync(join(HERE, 'KbFiles.tsx'), 'utf8')
 const panelCss = readFileSync(join(HERE, 'kbfiles.module.css'), 'utf8')
@@ -374,7 +376,18 @@ describe('解析状态：八档齐、分档不合并、且不许说「文件损�
 
 describe('正文检索：一个搜索框同时做文件名过滤与正文检索（设计稿 §8.4）', () => {
   const clientTypesSrc = readFileSync(join(SHELL_DIR, 'types.ts'), 'utf8')
-  const backendTypesSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'types.ts'), 'utf8')
+  /**
+   * 后端类型源码：**桶 + 所有拆出的模块**的联合。
+   *
+   * M21 把 `src/types.ts`（2782 行）拆成了 `types-*.ts` 若干模块 + 一个转发桶，
+   * 类型搬到哪个文件不该影响这条守卫 —— 所以这里按目录读全部 `types*.ts` 再拼起来，
+   * 断言本身（逐字段一致）一条没改。
+   */
+  const backendTypesSrc = readdirSync(BACKEND_SRC)
+    .filter((f) => /^types.*\.ts$/.test(f))
+    .sort()
+    .map((f) => readFileSync(join(BACKEND_SRC, f), 'utf8'))
+    .join('\n')
 
   /** 抠出一个 `export interface X { … }` 里的**顶层字段名**（两个空格缩进）。 */
   function fieldNames(src: string, name: string): string[] {
