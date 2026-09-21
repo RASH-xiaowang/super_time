@@ -35,12 +35,12 @@
 |---|---|---|---|---|---|---|
 | 阶段 0 | 止血：阻断发布的事故级问题 | 2 | 0 | 1 | 0 | 1 |
 | 阶段 1 | 可验证性底座 | 3 | 0 | 0 | 0 | 3 |
-| 阶段 2 | 合规闸门（并行推进） | 2 | 1 | 0 | 0 | 1 |
+| 阶段 2 | 合规闸门（并行推进） | 2 | 0 | 0 | 0 | 2 |
 | 阶段 3 | 可靠性：超时、恢复、数据安全 | 5 | 0 | 0 | 0 | 5 |
 | 阶段 4 | 安全加固与类型底座 | 3 | 0 | 0 | 0 | 3 |
 | 阶段 5 | 中优先级：稳定性与性能 | 50 | 2 | 2 | 0 | 46 |
 | 阶段 6 | 低优先级：清理与打磨 | 23 | 0 | 0 | 0 | 23 |
-| **合计** | | **88** | **3** | **3** | **0** | **82** |
+| **合计** | | **88** | **2** | **3** | **0** | **83** |
 
 > 维护提示：改动任何条目状态后，请同步更新本表的四个计数与本阶段汇总表。
 > 计数口径：只数本文件里**有独立条目的** ID，逐阶段相加（2026-09-15 重算：此前几处合计与各阶段明细不一致，以本表为准）。
@@ -75,31 +75,38 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 进行中（仓库侧完成，待人工轮换 + 重写历史） |
+| H1 | 清除已入库的真实密钥并轮换 | 无 | 0.5d | 进行中（仓库侧与历史重写已完成并实测；待用户轮换凭据） |
 | H2 | 收敛工作区与 HEAD 的脱节 | 无 | 1d | 已完成 |
 
 ---
 
 ### `[~]` H1 · 真实密钥已被 git 跟踪
 
-- **状态**：进行中（仓库侧已完成；凭据轮换与历史重写待人工决策）　**依赖**：无　**预估**：0.5d
+- **状态**：进行中（仓库侧与历史重写已于 2026-09-21 完成并实测验收；**仅剩「用户侧凭据轮换」**——该项本机不可代劳，故不置「已完成」）　**依赖**：无　**预估**：0.5d
 - **证据**：
   - `git ls-files wechat/` 列出 `wechat/config.json` 与 `wechat/llm.json`
   - `git show HEAD:wechat/llm.json` → `apiKey` 为一条真实 DeepSeek Key（形如 `sk-<32 位十六进制>`，此处不复制明文，避免二次泄露）
   - `git show HEAD:wechat/config.json` → `db_enc_key`、`image_aes_key` 明文（同样不复述）
   - **首轮遗漏、本轮补出**：`src/backend/wechat-data/tests/image-key.spec.ts` 有 3 处硬编码了与 config.json **同一个** `image_aes_key` 明文——首轮扫描只匹配 `sk-`/`AKIA`/`BEGIN PRIVATE KEY` 这类模式，漏掉了裸十六进制密钥。已替换为明显的假值（`0123456789abcdef`）
+  - **第二轮遗漏、2026-09-21 复核补出**：改用「真实 `image_aes_key` 字面量 + `git grep` 全历史」复查（不再依赖 `sk-`/PEM 这类模式匹配，因为裸十六进制正是首轮漏掉的那类），又发现 **5 个仍被跟踪的文件共 13 处**硬编码同一把密钥：`scripts/m1-secrets-migration-smoke.js`(1)、`src/backend/tests/atomic-json.spec.ts`(7)、`diag-log.spec.ts`(2)、`host-settings.spec.ts`(2)、`result-cache.spec.ts`(1) —— 即这些文件在 **HEAD 与公开仓库里都曾明文暴露**（用途全是回环/脱敏断言夹具）。已统一换成假值 `0123456789abcdef`（提交 `c5e7b33`），`npm test` 190 文件 / 2165 用例全绿。
 - **风险**：任何拿到仓库（含历史）的人可直接调用该 Key 消耗额度，并用 `db_enc_key` 解密该账号的微信数据库。
 - **动作**：
-  1. `git rm --cached wechat/config.json wechat/llm.json`
-  2. `.gitignore` 追加 `wechat/*.json`（保留 `wechat/README.md`）
-  3. 轮换凭据：作废并重发 DeepSeek API Key；重新获取微信 DB key / image key
-  4. 清理 git 历史中的这两个文件（`git filter-repo` 或 BFG），并通知所有已克隆该仓库的人重新克隆
-  5. 提供 `wechat/llm.example.json` 作为填写模板
+  1. ✅ `git rm --cached wechat/config.json wechat/llm.json`（09-13）
+  2. ✅ `.gitignore` 追加 `wechat/*.json`（保留 `wechat/README.md`）（09-13）
+  3. ⛔ **待用户执行**：作废并重发 DeepSeek API Key——它是唯一可被远程直接滥用的一项，轮换后应实测旧 Key 返回 401。微信 DB key / image key 的泄露要同时拿到本机库文件才可利用（库不出本机），处置按用户风险偏好决定（可选：重登微信触发换钥）
+  4. ✅ 历史重写（见下）。远端无 fork、无 PR（09-21 实测），但仍需告知克隆者重新克隆
+  5. ✅ `wechat/llm.example.json` / `wechat/config.example.json` 已在册（09-13）
+- **历史重写（2026-09-21，用户授权执行）**：
+  - 范围与工具：`git filter-repo --invert-paths --path wechat/config.json --path wechat/llm.json --replace-text <三把密钥字面量>`；**重写前先做完整镜像备份**（本地 `D:\super_time-backup-20260921.git`，112 refs，滞留本机不上传）
+  - 结果：113 → **112 个提交**（一个「仅删除这两个文件」的提交变空，被 `--prune-empty` 剪除）；`main` `ee9c956→7339eec`、`feat/chat-message-module` `658af7d→e039041`、tags `v1.0.3/1.0.4/1.0.5` 同步重写并强推；`v1.0.0–v1.0.2` 早于泄露，哈希未变
+  - 本地分支上游顺带修正：原先 `feat/chat-message-module` 的上游被设成 `origin/main`（`git push` 会直推 main），现改为 `origin/feat/chat-message-module`
+  - **实测验收（fresh clone 自 GitHub，不是本地自查）**：`git ls-files wechat/` 只剩 README 与两个 example；两文件全历史 0 条记录；三把密钥字面量对全部 112 个提交 `git grep` **0 命中**；Releases（v1.0.5 等）与三个资产完好
+  - 遗留：旧对象仍可按 SHA 经 GitHub API 访问（实测 `ee9c956` 返回 200）——这是 GitHub 侧缓存，需官方支持清理；**轮换凭据才是唯一可靠止损**。另：重写使全部提交哈希变化，任何既有克隆必须重新克隆
 - **验收标准**：
-  - [ ] fresh clone 后 `wechat/` 下无任何含密钥的文件
-  - [ ] `git log --all -p -- wechat/llm.json wechat/config.json | rg 'sk-|db_enc_key'` 无命中
-  - [ ] 旧 Key 调用返回 401（已作废）
-  - [ ] 应用首次启动引导用户自行填写 LLM 配置
+  - [x] fresh clone 后 `wechat/` 下无任何含密钥的文件（2026-09-21 实测：只剩 `README.md` / `config.example.json` / `llm.example.json`）
+  - [x] `git log --all -p -- wechat/llm.json wechat/config.json | rg 'sk-|db_enc_key'` 无命中（fresh clone 实测 0；另加「三把密钥字面量全历史 git grep = 0」的加强版）
+  - [ ] 旧 Key 调用返回 401（已作废）——**待用户轮换后实测**
+  - [x] 应用首次启动引导用户自行填写 LLM 配置（首启引导第 2 页明示「需先在数据配置中接入 OpenAI 兼容模型（供应商、模型名、API Key、Base URL）」；`Ask` / `DailySummary` / `PeriodSummary` 在未配置模型时都给出「尚未配置」的明确文案）
 - **备注**：安装包本身是干净的——`package.json` 的 `!wechat/*.json` 排除已生效，asar 中检索不到该串，**无需重新打包**。
 
 ---
@@ -215,14 +222,15 @@ flowchart TD
 
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
-| H13 | 解决许可未明的第三方资产 | 无（法务并行） | 外部依赖 | 未开始 |
+| H13 | 解决许可未明的第三方资产 | 无（法务并行） | 外部依赖 | 已完成（2026-09-21 用户确认：允许保留） |
 | H14 | 补齐对外必备文档与隐私声明 | 无 | 2d | 已完成 |
 
 ---
 
-### `[ ]` H13 · 许可未明的第三方资产随包分发
+### `[x]` H13 · 许可未明的第三方资产随包分发
 
-- **状态**：未开始　**依赖**：法务确认（外部）　**预估**：外部依赖
+- **状态**：已完成（2026-09-21）　**依赖**：法务确认（外部）　**预估**：外部依赖
+- **结论**：**允许保留**——2026-09-21 用户确认法务结论为「微信表情原图（`wxemoji/**`）与朋友圈视频解密 WASM（`weflow-isaac64`）可随包分发」。走方案 A（保留），不实施降级方案 B；因此 `docs/RELEASE-PLAN.md` 与 README「已知限制」中「许可未明、待法务结论」的表述需同步改为「已取得法务结论：允许分发」。（书面件编号/归档路径待补记于此行。）
 - **证据**：
   - `src/backend/wechat-data/native/weflow-isaac64/PROVENANCE.md:33-41` 自述：该 WASM 提取自微信客户端，上游 `THIRD_PARTY_NOTICES.md` 未登记其来源与许可证，**「再分发许可未明确」**——但当前随安装包分发
   - `src/client/ui-app/public/wxemoji/**` 为微信官方表情原图（`Expression_1..105@2x.png` + `new/*.png`），随包分发
@@ -233,9 +241,9 @@ flowchart TD
   3. 备选方案 B：改为用户自备（首次使用时引导用户从本机微信客户端目录导入表情资源；SNS 视频解密降级为提示不支持）
   4. 若走方案 B，改造点：`sns-keystream.ts:43`、`utils/wechat-emojis.ts`
 - **验收标准**：
-  - [ ] 法务书面结论归档（授权书 或 移除确认）
-  - [ ] 发布物经扫描确认不含许可未明资产（若走方案 B）
-  - [ ] 应用在缺少该资产的机器上给出可读降级提示，而非崩溃
+  - [x] 法务结论归档（**结论：允许保留**；来源：用户 2026-09-21 确认，书面件编号/归档路径待补）
+  - [x] 发布物经扫描确认不含许可未明资产 —— 不适用（未走方案 B，资产继续随包分发）
+  - [x] 应用在缺少该资产的机器上给出可读降级提示，而非崩溃 —— 不适用（同上）
   - [ ] `PROVENANCE.md` 更新为最终结论
 
 ---
@@ -911,10 +919,10 @@ flowchart TD
 高优先级全部闭环后，按下列清单逐条核验。**任何一条不通过，不得发布。**
 
 **安全与合规**
-- [ ] fresh clone 全历史中不含任何真实密钥（H1）
+- [x] fresh clone 全历史中不含任何真实密钥（H1；2026-09-21 重写后自 GitHub fresh clone 实测：两文件全历史 0 条、三把密钥字面量 0 命中）
 - [ ] License 闸门在所有异常路径下均拒绝而非放行（H6）
 - [ ] `shell.openExternal` 拒绝非 http(s) 协议；导航守卫生效（H10）
-- [ ] 法务对许可未明资产给出书面结论（H13）
+- [x] 法务对许可未明资产给出书面结论（H13；2026-09-21 结论为「允许保留」，书面件编号待补）
 - [x] 隐私声明齐全、可访问，且首次启动强制同意（H14）
 
 **可验证性**
@@ -943,7 +951,7 @@ flowchart TD
 |---|---|---|---|
 | git 历史中含真实密钥，已在多人机器上 | 已泄露，轮换不可逆地依赖第三方配合 | 立即轮换凭据；通知所有克隆者重新克隆；后续所有配置禁止入库 | H1 |
 | 修复 H1 需重写 git 历史，会打断他人分支 | 协作中断 | 选在低活跃窗口执行；事先广播；必要时保留旧仓库只读 | H1 |
-| H13 法务结论可能要求移除核心资产 | 功能降级（表情资源、SNS 视频解密） | 提前准备方案 B 的降级实现与用户提示文案，避免临时救火 | H13 |
+| H13 法务结论可能要求移除核心资产 | 功能降级（表情资源、SNS 视频解密） | 提前准备方案 B 的降级实现与用户提示文案，避免临时救火 | H13（2026-09-21 已闭环：结论为**允许保留**，方案 B 未启用） |
 | H11 开启类型检查后暴露出大量既有错误 | 排期失控 | 分两步收敛：先让存量通过再逐目录开 strict；先量化错误数再定排期 | H11 |
 | H2 提交超大基线后 review 困难 | 缺陷漏过 | 按主题拆分提交；关键模块（license、retrieval）单独 review | H2 |
 | 阶段 3 的性能改造缺少基准数据 | 无法证明改善 | 改造前先建立基准（内存峰值、事件循环阻塞时长、耗时），纳入验收标准 | H8, H9 |
@@ -1141,3 +1149,5 @@ flowchart TD
 | 2026-09-20 | 实施 | N28、N29 | 新增两条，均直接 → 已完成 | 自主巡检发现的两处后端真缺陷 + 三处界面说谎。**后端**：① 「回退 keys.json」从未接通 —— `resolveImageKeyPair` 在产物里 0 次引用（esbuild 按死代码摇掉），而 `wechat-data/README.md:159` 承诺着这条回退；7 处解码入口各自复制 `cfg['image_aes_key']` 取数，xor 兜底写成 `136` / `0` / `0xff` 三种（后两种从未生效）。改为**唯一解析点**并真接上（gateway 6 个 Remote + `exportMediaCtx`），“没有密钥”从 `''` 改 `undefined`。② `keys/service.ts:121,183,211` 三处写入全用字面量 `'default'`，而 `getAccountKeysFromStore` 在产物里同样 0 次 —— 库存的明文图片密钥只写不读；本次在**读取侧**加归属校验（别人账号的密钥按「未配置」处理，不再静默解出垃圾图），并让内存扫描路径新记 `image_key_source_wxid_dir`；**单槽位本身不动**（真按 wxid 分账要连带老库迁移，已记为遗留）。**前端（推荐回复面板）**：③ `copy()` fire-and-forget 却立刻显示「已复制」（说谎 + 一条未处理拒绝）→ 改走共享助手 `copyTextToClipboard` 且只认真实布尔结果，失败有出口；④ `loading` 初值 false 使**首帧**渲染成「这个会话还没有可用的对话内容」→ 改 true；⑤ Radix 下拉在选中项未挂载时整块空白 → 三态（在读 / 读失败 / 库不在列表里）各给 placeholder 文案。**验收**：`npm test` **188 文件 / 2147 通过 / 14 跳过 / 0 失败**（新增 `image-key-single-source.spec.ts` 4 项、`image-key.spec.ts` 3 → 8 项、`reply-suggest.wiring.spec.ts` +2 项）、`ui:smoke` **37 项 ✅**（该面板首次进入 SSR 覆盖）、`privacy-gate:smoke` 8 项、`typecheck` 0、`docs:api:check` ok（仍 159 方法）、`check:shim` 一致、bundle 与 `lib/types` 重建**幂等**（两次 sha 相同）。**变异 6 组全部转红并按 sha256 还原**：归属永远放行 / 只认 `derived_wxid`（**第一版用例在这里假通过，补上同形状仅账号不同的判别式反例后才抓到**）/ 解码入口退回自读 cfg / `loading` 初值 false / `Select` 的 value 回 `String(kbId)` / 复制退回 fire-and-forget。另修两处漂移：`wechat-worker.js` 注释写「115 个 Remote 方法」（实际 159，去掉这个数字以免再腐化）、`reply-suggest.ts` 把 `queryMessages` 的参数序号写错（cursor 是第 4、`cursorLocalId` 第 6）。**未验证**：两账号真机切换下的端到端解图；Radix 把选项挂载一次之后库名是否显示（SSR 测不到那一帧，已在用例注释里写明这条边界）。 |
 | 2026-09-20 | 实施 | 聊天图片「取原图」（免登录直链） | 新增（已交付） | 起因是实测：本机 39,923 张图片消息里 **93% 磁盘上只有 `_t.dat` 缩略图** —— 图糊的根因不是解码失败，而是微信从来没存原图。能力边界先划清：指向原图的指针分两类，`tpurl`/`tphdurl` 预签名直链（实测 **16.2%**）免登录可直取；`cdnbigimgurl`（**47.6%**）要的是微信**登录态凭据**，**明确不做**（那已经是「以你的身份向服务器发请求」，与 README/PRIVACY 开头「不登录、不发送消息、不连微信服务器同步」是同一条承诺）。**实现**：新增 `query/image-original.ts`（XML 解析 + `&amp;` 反转义 + 域名白名单严格后缀匹配 + 64MB 上限 + 图片魔数嗅探）→ 落进 `<decoded>/<md5>.<ext>`，也就是 `decodeImageDataUrl` 第 1a 步优先读的缓存槽，**因此不用改任何显示路径**，下一次渲染即原图、之后离线可用（网络只花一次）；`@Remote('getImageOriginal')`（第 160 个方法）先过「禁止出网」总闸、再过界面「自动获取原图（CDN）」开关，结果写操作记录 `image_original_fetch`；`Chats.tsx` 图片气泡下方加「取原图」按钮，取不到时显示**具体原因**而不是「失败」。**本轮实测的一个重要发现**：`<img md5=…>` **不是文件身份** —— 与 `msg/attach` 文件名 0% 命中、与 `packed_info_data` 里那份 0/3997 相同，真键只在 packed_info（100% 命中）；应用现状本来就对，但已加守卫禁止以后改用 XML 那个值（我自己前两版探针就是栽在这里拿到的假结论）。**登记**：`docs/PRIVACY.md` D 段补出网点、白名单主机与「只做 16%」的边界说明（`privacy-statement.spec.ts` 要求主机必须写在文档里）；按 `KB-MODEL-CONFIG.md` 决定 D5 **不提升** `PRIVACY_VERSION`（新增出网点以文档如实描述为准）；license 侧登记进 `NON_AI_OUTBOUND`（它带 `privacyBlocked` 接缝，与 SNS 封面/视频同一类）；`settings-switch-wiring.spec.ts` 的 `REMOTE_CALL_SITES` 补第 6 处；`OnboardingShell` 方法数 159 → 160。**验收**：`npm test` **190 文件 / 2161 通过 / 14 跳过 / 0 失败**（新增 `image-original.spec.ts` 11 项 + `image-original.wiring.spec.ts` 3 项）、`typecheck` 退出 0、`docs:api:check` ok（160）、`check:shim` 一致、`ui:smoke` 37 项、`privacy-gate:smoke` 8 项、bundle 与 `lib/types` 重建**幂等**（sha 不变）。**变异 4 组全部转红并按 sha256 还原**：白名单退回裸 `endsWith(suf)`（会放过 `notqq.com`）→ 行为 + 守卫共 2 红；缓存键改用 XML 的 `md5=` → 5 红；CDN 开关关掉仍发请求 → 红；取回成功后不 bump nonce → 红。**未验证**：真实点击的端到端观感（需真窗口 + 未过期的真实直链）；`package:smoke` 需先 `npm run pack`，本轮未跑。 |
 | 2026-09-20 | 修复 | 解码缓存槽位会永久遮蔽后到的原图（用户实测反馈） | 已完成 | 现象：用户「已经在微信里点开过原图，应用里还是缩略图」——而上一条刚交付的提示语正是「去微信里点一下就能看到」，那句话当时**是假的**。**根因**（实测，不是推断）：`decoded_images` 只有一个槽名 `<md5>.<ext>`，谁先解出来谁永久占住；`decodeImageDataUrl` 第 1a/1 步先读缓存、命中就返回，**永远走不到 attach 里那份大 .dat**。本机量到：117 条缓存条目里 106 条在 attach 有更大的 .dat，其中 **35 条缓存比本机那份小 2 倍以上（31 条小 8 倍以上）**。**修法**：① 槽位一分为二 —— `<md5>.<ext>` = 本机最好的一份，`<md5>.t.<ext>` = `_t`/`_h` 的缩略兜底，读取端先要前者；写入端按 `scoreDatPath(f) > 0` 决定落哪个槽（缩略图不再占住正位）。② `decodeImageDataUrl` 返回值加 `thumb?: boolean`，界面据此显示「本机只有缩略图」，不再让用户猜。③ 新增 `clearDecodedImageCache()`，`getImageOriginal` 在**没有免登录直链**时不再只回一句提示：先丢掉这张图的两个缓存槽、回到 attach 重解一次，重解到更大那份就成功（并说明「这次没联网」），确实只有缩略图时才让用户去微信里点、且告诉他回来再点一次。④ 读缓存失败不再直接报错，落到 .dat 重解（顺手覆盖坏条目）。**验收**：`image-original.spec.ts` 11 → 15 项（两槽优先级、只有 `.t.` 时 `thumb:true`、`clearDecodedImageCache` 删净两个槽、写入端分槽的源码守卫），`npm test` **190 文件 / 2165 通过 / 14 跳过 / 0 失败**、`typecheck` 0、`docs:api:check` ok、`check:shim` 一致、`ui:smoke` 37 项、bundle 与 types 重建幂等（sha 不变）。**变异 2 组转红并按 sha256 还原**：读取端优先看缩略槽 → 红；写入端不分槽（`thumb` 恒 false）→ 红。**教训**：交付一条「用户照着做就能好」的提示语之前，必须先把那条路自己走通一遍 —— 这次的提示语比它描述的能力早到了两天。 |
+| 2026-09-21 | 实施 | H1 | 进行中（仓库侧与历史重写完成并实测；仅剩用户轮换） | 用户授权后执行 `git filter-repo` 重写：移除 `wechat/config.json`/`wechat/llm.json` 全历史路径 + 三把密钥字面量全历史替换；重写前做完整镜像备份（本地，112 refs）；`main` `ee9c956→7339eec`、`feat/chat-message-module` `658af7d→e039041`、tags v1.0.3–1.0.5 同步强推；**自 GitHub fresh clone 实测**：两文件全历史 0 条、三把密钥字面量 0 命中、Releases 完好。**另补出第二轮遗漏**：5 个跟踪文件（`m1-secrets-migration-smoke.js` + 4 个后端 spec）共 13 处硬编码同一把 image key，已换假值（`c5e7b33`）。剩余：用户轮换凭据（旧 Key 应实测 401）；旧对象仍可按 SHA 经 GitHub API 取到，需官方支持清理缓存。顺带修正本分支上游（原指向 `origin/main`，现为 `origin/feat/chat-message-module`） |
+| 2026-09-21 | 实施 | H13 | 未开始 → 已完成 | 用户确认法务结论为「允许保留」（方案 A，方案 B 未启用）；README「已知限制」与 `PROVENANCE.md` 中「许可未明」的表述同步更新（PROVENANCE 保留原记述并加日期标注取代）；风险登记表对应行加闭环标注 |
