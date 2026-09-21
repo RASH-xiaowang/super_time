@@ -133,21 +133,25 @@ describe('操作日志搜索：覆盖全量而非「最新那一页」', () => {
     expect(byDetail.total).toBe(1)
   })
 
-  it('能搜到「最新一页之外」的条目（此前只能搜最新 500 条）', async () => {
+  it('能搜到「最新一页之外」的条目（此前只能搜最新 500 条）', () => {
     const dec = makeRoot()
     // 造 600 条：最新 500 条是 new_*，更老的 100 条是 old_*
+    //
+    // 为什么直插而不是 600 次 `recordOperation`：产品 API 每次都是独立的「开库 → INSERT → 关库」，
+    // 本机亚毫秒级，但 runner（共享 2 核 + 实时扫描，慢约 24 倍）上单次可到百毫秒 —— 600 次连成
+    // 一段 ~100s 的同步块，会让 vitest 主进程的 `onTaskUpdate` RPC 超时（用例**全过**、退出码 1）。
+    // 2026-09-21 的 v1.0.6 自动发布因此连续失败两次（release.yml 的单测步骤挂掉、后续步骤全 skip）。
+    // 本用例的被测对象是 `listOperations` 的**查询语义**（关键词过滤在服务端、不限于最新一页）；
+    // 写路径由上面那条 12 次 `recordOperation` 的用例覆盖 —— 这里按产品表结构直插 + 单事务提交。
+    const odb = db(dec, '../wechat_privacy.db')
+    odb.exec('CREATE TABLE IF NOT EXISTS operation_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, category TEXT NOT NULL, action TEXT, target TEXT, status TEXT NOT NULL, detail TEXT)')
+    odb.exec('BEGIN')
+    const ins = odb.prepare('INSERT INTO operation_log(ts, category, action, target, status, detail) VALUES (?, ?, ?, ?, ?, ?)')
     for (let i = 0; i < 600; i++) {
-      recordOperation(dec, {
-        category: 'sync', action: i < 100 ? 'old_marker' : 'new_marker',
-        target: '', status: 'ok', detail: '',
-      })
-      // 为什么让出：`recordOperation` 每次都是独立的「开库 → 写入 → 关库」，本机是亚毫秒级，
-      // 但 CI runner（共享 2 核 + 实时扫描，慢约 24 倍）上单次可到百毫秒 —— 600 次连成一段
-      // >60s 的同步块，会让 vitest 主进程的 `onTaskUpdate` RPC 超时（用例**全过**、退出码却是 1）。
-      // 2026-09-21 的 v1.0.6 自动发布就栽在这里（release.yml 的单测步骤因此失败、后续步骤全 skip）。
-      // 让出只是把这段拉平成可应答的分片，不改变被测路径：每次仍走产品 API 的单条写入。
-      if (i % 20 === 19) await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+      ins.run(1700000000 + i, 'sync', i < 100 ? 'old_marker' : 'new_marker', '', 'ok', '')
     }
+    odb.exec('COMMIT')
+    odb.close()
     // 分页只取一页时看不到 old_marker
     const firstPage = listOperations(dec, { limit: 100 })
     expect(firstPage.items.every(r => r.action === 'new_marker')).toBe(true)
