@@ -15,7 +15,7 @@
  * 匹配花括号一律用 `[^}]` 限制在同一层：`[\s\S]*?` 会跨过内层 `}`，对**正确**的代码也误报红。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -334,7 +334,7 @@ describe('头像：候选、解码与「解码完成后必须重画」', () => {
   })
 
   it('远端头像必须带 crossOrigin 请求 —— 不带就会污染 canvas，PNG 导出直接抛 SecurityError', () => {
-    const canvasSrc = readFileSync(join(HERE, 'graph-canvas.ts'), 'utf8')
+    const canvasSrc = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
     const decode = canvasSrc.slice(canvasSrc.indexOf('export function decodeAvatar'))
     expect(decode).toContain("if (!url.startsWith('data:')) image.crossOrigin = 'anonymous'")
     // data URL 是本地字节，加 crossOrigin 反而多一次无谓的 CORS 判定

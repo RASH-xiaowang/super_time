@@ -10,7 +10,7 @@
  * 里（绘制与解码路径），本文件不调它们。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -970,7 +970,7 @@ describe('节点形状：笔记也是圆盘，描边环才贴得住', () => {
 
   it('源码层：两个 isNote 分支都不许出现 rect，圆角半径系数必须绝迹', () => {
     // drawScene 要真跑需要 2D context，node 环境没有 —— 按仓库既有做法用源码断言补位
-    const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'graph-canvas.ts'), 'utf8')
+    const raw = readdirSync(dirname(fileURLToPath(import.meta.url))).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), f), 'utf8')).join('\n')
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
 
     expect(code, 'sr * 0.32 是当初的圆角方块系数，笔记改圆后不该再有').not.toContain('sr * 0.32')
@@ -1087,7 +1087,7 @@ describe('文档层三类节点的取色、头像与气泡', () => {
   })
 
   it('源码层：docColors 只有一处定义，且 drawScene 与 sceneToSvg 两支都调用它', () => {
-    const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'graph-canvas.ts'), 'utf8')
+    const raw = readdirSync(dirname(fileURLToPath(import.meta.url))).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), f), 'utf8')).join('\n')
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
     expect([...code.matchAll(/function docColors\(/g)]).toHaveLength(1)
     // 两处调用 = 屏幕一支 + 导出支；谁把某一支改回硬编码色值，这条就红

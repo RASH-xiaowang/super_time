@@ -19,7 +19,7 @@
  *     分开之后还有一条可断言的不变量：模型边总数 ≤ `edgeDensityCap(n)` ≤ 绘制层额度。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -39,7 +39,7 @@ const ROOT = findRoot(HERE)
 const panel = readFileSync(join(HERE, 'Graph.tsx'), 'utf8')
 const css = readFileSync(join(HERE, 'graph.module.css'), 'utf8')
 const model = readFileSync(join(HERE, 'graph-model.ts'), 'utf8')
-const canvas = readFileSync(join(HERE, 'graph-canvas.ts'), 'utf8')
+const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.test(f)).sort().map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const budget = readFileSync(join(HERE, 'graph-budget.ts'), 'utf8')
 
 describe('首字连边：图例 / 开关 / 依赖三处都在', () => {
