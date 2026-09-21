@@ -15,7 +15,7 @@
  * 只断言字符串锚点、先剥注释、锚点均为单行（不受行尾影响）。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -24,7 +24,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(HERE, '..', 'src')
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 const gateway = strip(readFileSync(join(SRC, 'gateway.ts'), 'utf8'))
-const exportTs = strip(readFileSync(join(SRC, 'query', 'export.ts'), 'utf8'))
+// M21 把 query/export.ts 拆成 export-io/format/flows 三个模块；这里读**桶 + 拆出模块**的联合，
+// 断言本身不变，类型/函数再搬家也不会误报。
+const exportTs = strip(readdirSync(join(SRC, 'query'))
+  .filter((f) => /^export(-[a-z]+)?\.ts$/.test(f))
+  .sort()
+  .map((f) => readFileSync(join(SRC, 'query', f), 'utf8'))
+  .join('\n'))
 
 /** 会拿图密钥去解本地 .dat 的 Remote 方法（第三栏/列表里的每一条图片都是它们在服务）。 */
 const DECODE_METHODS = [

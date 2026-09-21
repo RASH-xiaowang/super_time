@@ -185,7 +185,7 @@ var require_llm_retry = __commonJS({
 
 // src/backend/wechat-data/src/gateway.ts
 import { TypertRemoteService, Remote } from "@deepseek-ai/dsh-typert-protocol";
-import { existsSync as existsSync66, mkdirSync as mkdirSync21, readFileSync as readFileSync26, writeFileSync as writeFileSync14 } from "node:fs";
+import { existsSync as existsSync66, mkdirSync as mkdirSync22, readFileSync as readFileSync26, writeFileSync as writeFileSync15 } from "node:fs";
 import { join as join85 } from "node:path";
 
 // src/backend/wechat-data/src/query/sessions.ts
@@ -13940,9 +13940,8 @@ function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engi
   });
 }
 
-// src/backend/wechat-data/src/query/export.ts
-import { mkdirSync as mkdirSync13, renameSync as renameSync5, rmSync as rmSync7, writeFileSync as writeFileSync10 } from "node:fs";
-import { basename as basename8, dirname as dirname19, join as join58 } from "node:path";
+// src/backend/wechat-data/src/query/export-io.ts
+import { renameSync as renameSync5, rmSync as rmSync7, writeFileSync as writeFileSync10 } from "node:fs";
 
 // src/backend/wechat-data/src/query/zip.ts
 import { createReadStream, createWriteStream as createWriteStream2, promises as fsp } from "node:fs";
@@ -14429,6 +14428,278 @@ var ZipFileWriter = class _ZipFileWriter {
     this.entryTemps.clear();
   }
 };
+
+// src/backend/wechat-data/src/query/export-io.ts
+var MAX_MOMENT_MEDIA = 5e3;
+function writeFileAtomicSync(filePath, data) {
+  const tmp = partialPath(filePath);
+  try {
+    writeFileSync10(tmp, data);
+    renameSync5(tmp, filePath);
+  } catch (e) {
+    try {
+      rmSync7(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+async function writeZipAtomic(filePath, produce) {
+  const tmp = partialPath(filePath);
+  let zip = null;
+  try {
+    zip = await ZipFileWriter.create(tmp);
+    await produce(zip);
+    await zip.close();
+    renameSync5(tmp, filePath);
+  } catch (e) {
+    if (zip) await zip.abort();
+    try {
+      rmSync7(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function dataUrlToBuffer(url) {
+  const m = url.match(/^data:[^;,]+;base64,(.*)$/);
+  if (!m || !m[1]) return null;
+  try {
+    return Buffer.from(m[1], "base64");
+  } catch {
+    return null;
+  }
+}
+function exportMediaCtx(decrypted) {
+  const cfg = getConfig(decrypted);
+  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
+  let base = "";
+  if (dbDir) {
+    const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
+    base = (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
+  }
+  const { aesKey, xorKey } = resolveImageKeyPair(decrypted);
+  return { base: base || void 0, aesKey, xorKey };
+}
+
+// src/backend/wechat-data/src/query/export-format.ts
+function fmtFull2(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function collectMessages(decryptedDir, username, count, ctrl) {
+  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
+  const pages = [];
+  let cursor;
+  let cursorLocalId;
+  let guard = 0;
+  while (pages.length < target && guard < 600) {
+    throwIfCancelled(ctrl?.signal);
+    const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
+    if (env.messages.length === 0) break;
+    pages.push(...env.messages);
+    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
+    if (!env.hasMore) break;
+    cursor = env.cursor;
+    cursorLocalId = env.cursorLocalId;
+    guard += 1;
+  }
+  const all = pages.slice(0, target).reverse();
+  return all;
+}
+function csvCell(v) {
+  return '"' + v.replace(/"/g, '""') + '"';
+}
+var UTF8_BOM = "\uFEFF";
+function buildCsv(header, rows) {
+  const lines = [header.map(csvCell).join(",")];
+  for (const r of rows) lines.push(r.map((c) => csvCell(c ?? "")).join(","));
+  return UTF8_BOM + lines.join("\r\n") + "\r\n";
+}
+function htmlEscape(v) {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function rowOf(m, username) {
+  const sender = m.isSender === 1 ? "\u6211" : m.sender || username;
+  const typeLabel3 = m.type === 1 ? "\u6587\u672C" : m.typeLabel || String(m.type);
+  return { time: fmtFull2(m.createTime), sender, typeLabel: typeLabel3, text: m.displayText || "" };
+}
+function formatTxt(msgs, username) {
+  const lines = [`\u6D88\u606F\u5BFC\u51FA (${msgs.length})`];
+  lines.push("=".repeat(48));
+  lines.push("");
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    lines.push(r.time + " " + r.sender);
+    lines.push(r.typeLabel + ": " + r.text);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+function formatCsv(msgs, username) {
+  const rows = msgs.map((m) => {
+    const r = rowOf(m, username);
+    return [r.time, r.sender, r.typeLabel, r.text];
+  });
+  return buildCsv(["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9"], rows);
+}
+function formatHtml(msgs, username, now) {
+  let body = "";
+  let lastDay = "";
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    const day = r.time.split(" ")[0] || "";
+    if (day !== lastDay) {
+      lastDay = day;
+      body += '<div class="date-divider"><span>' + htmlEscape(day) + "</span></div>";
+    }
+    const side = m.isSender === 1 ? "right" : "left";
+    const content = m.type === 3 ? '<span class="muted">[\u56FE\u7247]</span>' : htmlEscape(r.text);
+    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div><div class="content">' + content + '</div><div class="time">' + htmlEscape(r.time) + "</div></div></div>";
+  }
+  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA</title><style>body{font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;background:#ededed;margin:0;padding:24px 12px;color:#1f1f1f}.wrap{max-width:760px;margin:0 auto}.hd{text-align:center;padding:16px 0 8px}.hd h1{font-size:18px;margin:0 0 4px}.hd p{font-size:12px;color:#888;margin:0}.date-divider{text-align:center;margin:18px 0 10px}.date-divider span{background:#c8c8c8;color:#fff;font-size:11px;padding:2px 12px;border-radius:999px}.row{display:flex;margin:10px 0}.row.right{justify-content:flex-end}.bubble{max-width:72%;padding:9px 12px;border-radius:8px;background:#fff;position:relative;box-shadow:0 1px 2px rgba(0,0,0,.08)}.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:3px}.content{font-size:14px;line-height:1.5;word-break:break-word}.time{font-size:10px;color:#aaa;margin-top:4px;text-align:right}.muted{color:#999;font-size:12px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55</h1><p>\u5171 ' + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + htmlEscape(now) + "</p></div>" + body + "</div></body></html>";
+}
+function formatMarkdown(msgs, username) {
+  const lines = ["# \u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA", "", "> \u5171 " + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + (/* @__PURE__ */ new Date()).toLocaleString(), ""];
+  let lastDay = "";
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    const day = r.time.split(" ")[0] || "";
+    if (day !== lastDay) {
+      lastDay = day;
+      lines.push("## " + day, "");
+    }
+    lines.push("**" + r.time + " " + r.sender + "**  ", r.typeLabel + "\uFF1A" + r.text.replace(/\r?\n/g, "  "), "");
+  }
+  return lines.join("\n");
+}
+function formatSql(msgs, username) {
+  const q = (v) => "'" + v.replace(/'/g, "''") + "'";
+  const lines = [
+    "CREATE TABLE IF NOT EXISTS chat_messages (",
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
+    "  chatroom TEXT NOT NULL,",
+    "  create_time TEXT,",
+    "  sender TEXT,",
+    "  type_label TEXT,",
+    "  content TEXT,",
+    "  local_id INTEGER",
+    ");",
+    ""
+  ];
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    lines.push("INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (" + q(username) + ", " + q(r.time) + ", " + q(r.sender) + ", " + q(r.typeLabel) + ", " + q(r.text) + ", " + String(m.localId) + ");");
+  }
+  return lines.join("\n");
+}
+function formatJson(msgs, username) {
+  const items = msgs.map((m) => {
+    const r = rowOf(m, username);
+    const item = {
+      localId: m.localId,
+      sortSeq: m.sortSeq ?? 0,
+      time: r.time,
+      sender: r.sender,
+      type: m.type,
+      typeLabel: r.typeLabel,
+      content: r.text
+    };
+    if (m.rich) item.rich = m.rich;
+    return item;
+  });
+  return JSON.stringify(items, null, 2);
+}
+function xmlEsc(v) {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+var XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
+var XLSX_SHEET_TAIL = "</sheetData></worksheet>";
+var XLSX_CHUNK_ROWS = 200;
+function xlsxStaticParts() {
+  const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
+  const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
+  const rootRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>';
+  return [
+    { name: "[Content_Types].xml", data: contentTypes },
+    { name: "_rels/.rels", data: rootRel },
+    { name: "xl/workbook.xml", data: workbook },
+    { name: "xl/_rels/workbook.xml.rels", data: wbRel }
+  ];
+}
+function xlsxRowXml(row) {
+  return "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
+}
+function makeXlsxChunker(ctrl, total) {
+  let buf = "";
+  let done = 0;
+  return {
+    push: (row) => {
+      throwIfCancelled(ctrl?.signal);
+      buf += xlsxRowXml(row);
+      done += 1;
+      if (done % XLSX_CHUNK_ROWS !== 0) return null;
+      const out = buf;
+      buf = "";
+      reportProgress(ctrl, "format", done, total);
+      return out;
+    },
+    finish: () => {
+      const out = [];
+      if (buf) out.push(buf);
+      reportProgress(ctrl, "format", done, total);
+      out.push(XLSX_SHEET_TAIL);
+      return out;
+    }
+  };
+}
+function* xlsxSheetChunks(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  yield* chunker.finish();
+}
+async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for await (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  for (const chunk of chunker.finish()) yield chunk;
+}
+function* messageRows(msgs, username) {
+  yield ["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"];
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)];
+  }
+}
+function xlsxSheetXml(rows, ctrl) {
+  return Array.from(xlsxSheetChunks(rows, ctrl)).join("");
+}
+function formatXlsx(msgs, username, ctrl) {
+  return zipFiles([
+    ...xlsxStaticParts(),
+    { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
+  ]);
+}
+async function writeXlsxStream(filePath, rows, ctrl) {
+  await writeZipAtomic(filePath, async (zip) => {
+    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
+    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
+  });
+}
+
+// src/backend/wechat-data/src/query/export-flows.ts
+import { mkdirSync as mkdirSync14 } from "node:fs";
+import { basename as basename8, dirname as dirname19, join as join58 } from "node:path";
 
 // src/backend/wechat-data/src/query/sns-video.ts
 var import_llm_retry5 = __toESM(require_llm_retry(), 1);
@@ -15113,271 +15384,7 @@ function typeLabel(t) {
   return "\u5176\u4ED6";
 }
 
-// src/backend/wechat-data/src/query/export.ts
-var MAX_MOMENT_MEDIA = 5e3;
-function writeFileAtomicSync(filePath, data) {
-  const tmp = partialPath(filePath);
-  try {
-    writeFileSync10(tmp, data);
-    renameSync5(tmp, filePath);
-  } catch (e) {
-    try {
-      rmSync7(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-async function writeZipAtomic(filePath, produce) {
-  const tmp = partialPath(filePath);
-  let zip = null;
-  try {
-    zip = await ZipFileWriter.create(tmp);
-    await produce(zip);
-    await zip.close();
-    renameSync5(tmp, filePath);
-  } catch (e) {
-    if (zip) await zip.abort();
-    try {
-      rmSync7(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-function dataUrlToBuffer(url) {
-  const m = url.match(/^data:[^;,]+;base64,(.*)$/);
-  if (!m || !m[1]) return null;
-  try {
-    return Buffer.from(m[1], "base64");
-  } catch {
-    return null;
-  }
-}
-function exportMediaCtx(decrypted) {
-  const cfg = getConfig(decrypted);
-  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
-  let base = "";
-  if (dbDir) {
-    const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
-    base = (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
-  }
-  const { aesKey, xorKey } = resolveImageKeyPair(decrypted);
-  return { base: base || void 0, aesKey, xorKey };
-}
-function fmtFull2(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function collectMessages(decryptedDir, username, count, ctrl) {
-  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
-  const pages = [];
-  let cursor;
-  let cursorLocalId;
-  let guard = 0;
-  while (pages.length < target && guard < 600) {
-    throwIfCancelled(ctrl?.signal);
-    const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
-    if (env.messages.length === 0) break;
-    pages.push(...env.messages);
-    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
-    if (!env.hasMore) break;
-    cursor = env.cursor;
-    cursorLocalId = env.cursorLocalId;
-    guard += 1;
-  }
-  const all = pages.slice(0, target).reverse();
-  return all;
-}
-function csvCell(v) {
-  return '"' + v.replace(/"/g, '""') + '"';
-}
-var UTF8_BOM = "\uFEFF";
-function buildCsv(header, rows) {
-  const lines = [header.map(csvCell).join(",")];
-  for (const r of rows) lines.push(r.map((c) => csvCell(c ?? "")).join(","));
-  return UTF8_BOM + lines.join("\r\n") + "\r\n";
-}
-function htmlEscape(v) {
-  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-function rowOf(m, username) {
-  const sender = m.isSender === 1 ? "\u6211" : m.sender || username;
-  const typeLabel3 = m.type === 1 ? "\u6587\u672C" : m.typeLabel || String(m.type);
-  return { time: fmtFull2(m.createTime), sender, typeLabel: typeLabel3, text: m.displayText || "" };
-}
-function formatTxt(msgs, username) {
-  const lines = [`\u6D88\u606F\u5BFC\u51FA (${msgs.length})`];
-  lines.push("=".repeat(48));
-  lines.push("");
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    lines.push(r.time + " " + r.sender);
-    lines.push(r.typeLabel + ": " + r.text);
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-function formatCsv(msgs, username) {
-  const rows = msgs.map((m) => {
-    const r = rowOf(m, username);
-    return [r.time, r.sender, r.typeLabel, r.text];
-  });
-  return buildCsv(["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9"], rows);
-}
-function formatHtml(msgs, username, now) {
-  let body = "";
-  let lastDay = "";
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    const day = r.time.split(" ")[0] || "";
-    if (day !== lastDay) {
-      lastDay = day;
-      body += '<div class="date-divider"><span>' + htmlEscape(day) + "</span></div>";
-    }
-    const side = m.isSender === 1 ? "right" : "left";
-    const content = m.type === 3 ? '<span class="muted">[\u56FE\u7247]</span>' : htmlEscape(r.text);
-    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div><div class="content">' + content + '</div><div class="time">' + htmlEscape(r.time) + "</div></div></div>";
-  }
-  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA</title><style>body{font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;background:#ededed;margin:0;padding:24px 12px;color:#1f1f1f}.wrap{max-width:760px;margin:0 auto}.hd{text-align:center;padding:16px 0 8px}.hd h1{font-size:18px;margin:0 0 4px}.hd p{font-size:12px;color:#888;margin:0}.date-divider{text-align:center;margin:18px 0 10px}.date-divider span{background:#c8c8c8;color:#fff;font-size:11px;padding:2px 12px;border-radius:999px}.row{display:flex;margin:10px 0}.row.right{justify-content:flex-end}.bubble{max-width:72%;padding:9px 12px;border-radius:8px;background:#fff;position:relative;box-shadow:0 1px 2px rgba(0,0,0,.08)}.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:3px}.content{font-size:14px;line-height:1.5;word-break:break-word}.time{font-size:10px;color:#aaa;margin-top:4px;text-align:right}.muted{color:#999;font-size:12px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55</h1><p>\u5171 ' + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + htmlEscape(now) + "</p></div>" + body + "</div></body></html>";
-}
-function formatMarkdown(msgs, username) {
-  const lines = ["# \u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA", "", "> \u5171 " + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + (/* @__PURE__ */ new Date()).toLocaleString(), ""];
-  let lastDay = "";
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    const day = r.time.split(" ")[0] || "";
-    if (day !== lastDay) {
-      lastDay = day;
-      lines.push("## " + day, "");
-    }
-    lines.push("**" + r.time + " " + r.sender + "**  ", r.typeLabel + "\uFF1A" + r.text.replace(/\r?\n/g, "  "), "");
-  }
-  return lines.join("\n");
-}
-function formatSql(msgs, username) {
-  const q = (v) => "'" + v.replace(/'/g, "''") + "'";
-  const lines = [
-    "CREATE TABLE IF NOT EXISTS chat_messages (",
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
-    "  chatroom TEXT NOT NULL,",
-    "  create_time TEXT,",
-    "  sender TEXT,",
-    "  type_label TEXT,",
-    "  content TEXT,",
-    "  local_id INTEGER",
-    ");",
-    ""
-  ];
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    lines.push("INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (" + q(username) + ", " + q(r.time) + ", " + q(r.sender) + ", " + q(r.typeLabel) + ", " + q(r.text) + ", " + String(m.localId) + ");");
-  }
-  return lines.join("\n");
-}
-function formatJson(msgs, username) {
-  const items = msgs.map((m) => {
-    const r = rowOf(m, username);
-    const item = {
-      localId: m.localId,
-      sortSeq: m.sortSeq ?? 0,
-      time: r.time,
-      sender: r.sender,
-      type: m.type,
-      typeLabel: r.typeLabel,
-      content: r.text
-    };
-    if (m.rich) item.rich = m.rich;
-    return item;
-  });
-  return JSON.stringify(items, null, 2);
-}
-function xmlEsc(v) {
-  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-var XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
-var XLSX_SHEET_TAIL = "</sheetData></worksheet>";
-var XLSX_CHUNK_ROWS = 200;
-function xlsxStaticParts() {
-  const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
-  const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
-  const rootRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
-  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>';
-  return [
-    { name: "[Content_Types].xml", data: contentTypes },
-    { name: "_rels/.rels", data: rootRel },
-    { name: "xl/workbook.xml", data: workbook },
-    { name: "xl/_rels/workbook.xml.rels", data: wbRel }
-  ];
-}
-function xlsxRowXml(row) {
-  return "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
-}
-function makeXlsxChunker(ctrl, total) {
-  let buf = "";
-  let done = 0;
-  return {
-    push: (row) => {
-      throwIfCancelled(ctrl?.signal);
-      buf += xlsxRowXml(row);
-      done += 1;
-      if (done % XLSX_CHUNK_ROWS !== 0) return null;
-      const out = buf;
-      buf = "";
-      reportProgress(ctrl, "format", done, total);
-      return out;
-    },
-    finish: () => {
-      const out = [];
-      if (buf) out.push(buf);
-      reportProgress(ctrl, "format", done, total);
-      out.push(XLSX_SHEET_TAIL);
-      return out;
-    }
-  };
-}
-function* xlsxSheetChunks(rows, ctrl, total = 0) {
-  yield XLSX_SHEET_HEAD;
-  const chunker = makeXlsxChunker(ctrl, total);
-  for (const row of rows) {
-    const chunk = chunker.push(row);
-    if (chunk !== null) yield chunk;
-  }
-  yield* chunker.finish();
-}
-async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
-  yield XLSX_SHEET_HEAD;
-  const chunker = makeXlsxChunker(ctrl, total);
-  for await (const row of rows) {
-    const chunk = chunker.push(row);
-    if (chunk !== null) yield chunk;
-  }
-  for (const chunk of chunker.finish()) yield chunk;
-}
-function* messageRows(msgs, username) {
-  yield ["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"];
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)];
-  }
-}
-function xlsxSheetXml(rows, ctrl) {
-  return Array.from(xlsxSheetChunks(rows, ctrl)).join("");
-}
-function formatXlsx(msgs, username, ctrl) {
-  return zipFiles([
-    ...xlsxStaticParts(),
-    { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
-  ]);
-}
-async function writeXlsxStream(filePath, rows, ctrl) {
-  await writeZipAtomic(filePath, async (zip) => {
-    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
-    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
-  });
-}
+// src/backend/wechat-data/src/query/export-flows.ts
 function collectChatlogMedia(msgs) {
   const out = [];
   for (const m of msgs) {
@@ -15431,7 +15438,7 @@ function planSessionExport(decryptedDir, username, format, count, dir, types, ri
   const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
   const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
   const exportDir = dir && dir.trim() ? dir.trim() : join58(dirname19(decryptedDir), "exports");
-  mkdirSync13(exportDir, { recursive: true });
+  mkdirSync14(exportDir, { recursive: true });
   const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
   const autoBase = sanitized + "_" + now + "_" + ((count ?? 0) === 0 ? "all" : String(count));
   const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : "";
@@ -15541,7 +15548,7 @@ function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
   }
   const chosen = typeof dest === "string" && dest.trim() !== "" ? dest.trim() : "";
   const filepath = chosen || join58(join58(dirname19(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
-  mkdirSync13(dirname19(filepath), { recursive: true });
+  mkdirSync14(dirname19(filepath), { recursive: true });
   writeFileAtomicSync(filepath, buildCsv(header, rows));
   return { path: filepath, filename: basename8(filepath), count: rows.length };
 }
@@ -15572,7 +15579,7 @@ function exportAnnualReport(decryptedDir, year, format, dir, filename) {
   const ext = format === "html" ? "html" : format === "json" ? "json" : "md";
   const base = dir && dir.trim() ? dir.trim() : join58(dirname19(decryptedDir), "exports");
   const safeName = filename && filename.trim() ? filename.trim().replace(/\.(md|html|json)$/i, "") + "." + ext : "wechat_annual_" + String(year) + "." + ext;
-  mkdirSync13(base, { recursive: true });
+  mkdirSync14(base, { recursive: true });
   let content = "";
   const total = Number(report["total"] ?? 0);
   const activeDays = Number(report["active_days"] ?? 0);
@@ -15685,7 +15692,7 @@ async function exportMoments(decryptedDir, opts) {
     return m.author.toLowerCase().includes(q) || m.text.toLowerCase().includes(q) || m.location.toLowerCase().includes(q) || m.link_title.toLowerCase().includes(q) || (m.link_url ?? "").toLowerCase().includes(q) || (m.sourceNickName ?? "").toLowerCase().includes(q) || (m.publicUserName ?? "").toLowerCase().includes(q) || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q)) || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q));
   });
   const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join58(dirname19(decryptedDir), "exports");
-  mkdirSync13(base, { recursive: true });
+  mkdirSync14(base, { recursive: true });
   if (opts?.zip) {
     const mediaCtx2 = exportMediaCtx(decryptedDir);
     const rawName = (opts.filename ?? "").trim();
@@ -15804,7 +15811,7 @@ async function exportAllSessions(decryptedDir, opts) {
   const env = querySessions(decryptedDir);
   const sessions = env.sessions.slice(0, 1e3);
   const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join58(dirname19(decryptedDir), "exports");
-  mkdirSync13(base, { recursive: true });
+  mkdirSync14(base, { recursive: true });
   const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
   const path = join58(base, filename);
   const seen = /* @__PURE__ */ new Set();
@@ -15838,7 +15845,7 @@ async function exportAllSessions(decryptedDir, opts) {
 
 // src/backend/wechat-data/src/query/export-history.ts
 import { DatabaseSync as DatabaseSync35 } from "node:sqlite";
-import { existsSync as existsSync45, rmSync as rmSync8, statSync as statSync22 } from "node:fs";
+import { existsSync as existsSync45, rmSync as rmSync9, statSync as statSync22 } from "node:fs";
 import { basename as basename9, dirname as dirname20, join as join59 } from "node:path";
 var DEFAULT_LIMIT = 200;
 var MAX_LIMIT = 2e3;
@@ -16025,7 +16032,7 @@ function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
           seen.add(p);
           try {
             if (existsSync45(p)) {
-              rmSync8(p, { recursive: true, force: true });
+              rmSync9(p, { recursive: true, force: true });
               result.filesDeleted += 1;
             }
           } catch (e) {
@@ -17038,7 +17045,7 @@ function groundingRepairHint(audit) {
 }
 
 // src/backend/wechat-data/src/query/retrieval/config.ts
-import { existsSync as existsSync46, readFileSync as readFileSync23, writeFileSync as writeFileSync11, mkdirSync as mkdirSync14 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync23, writeFileSync as writeFileSync12, mkdirSync as mkdirSync15 } from "node:fs";
 import { dirname as dirname22, join as join61 } from "node:path";
 var DEFAULT_RERANK_WEIGHTS = {
   sparse: 1,
@@ -17125,8 +17132,8 @@ function saveRetrievalConfig(decryptedDir, patch) {
   const base = loadRetrievalConfig(decryptedDir);
   const merged = clampFusionKeep(deepMerge(base, patch));
   const p = retrievalConfigPath(decryptedDir);
-  mkdirSync14(dirname22(p), { recursive: true });
-  writeFileSync11(p, JSON.stringify(merged, null, 2) + "\n", "utf8");
+  mkdirSync15(dirname22(p), { recursive: true });
+  writeFileSync12(p, JSON.stringify(merged, null, 2) + "\n", "utf8");
   return merged;
 }
 function effectiveParams(config, policy) {
@@ -18435,7 +18442,7 @@ async function runRetrievalPipeline(input) {
 }
 
 // src/backend/wechat-data/src/query/kb/model-config.ts
-import { existsSync as existsSync48, mkdirSync as mkdirSync15 } from "node:fs";
+import { existsSync as existsSync48, mkdirSync as mkdirSync16 } from "node:fs";
 import { dirname as dirname23 } from "node:path";
 import { DatabaseSync as DatabaseSync38 } from "node:sqlite";
 var KB_MODELS_TABLE = "kb_models";
@@ -18458,7 +18465,7 @@ function openModelsDb(decryptedDir, readOnly = false) {
   const file = kbModelsDbPath(decryptedDir);
   if (!readOnly) {
     try {
-      mkdirSync15(dirname23(file), { recursive: true });
+      mkdirSync16(dirname23(file), { recursive: true });
     } catch (e) {
       console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText6(e));
     }
@@ -18912,7 +18919,7 @@ function dot(a, b) {
 // src/backend/wechat-data/src/query/retrieval/feedback.ts
 import { DatabaseSync as DatabaseSync40 } from "node:sqlite";
 import { existsSync as existsSync49 } from "node:fs";
-import { readFileSync as readFileSync24, writeFileSync as writeFileSync12, mkdirSync as mkdirSync16 } from "node:fs";
+import { readFileSync as readFileSync24, writeFileSync as writeFileSync13, mkdirSync as mkdirSync17 } from "node:fs";
 import { join as join63 } from "node:path";
 function feedbackDbPath(decryptedDir) {
   return join63(retrievalRoot(decryptedDir), "wechat_rag_feedback.db");
@@ -19023,8 +19030,8 @@ function loadAdaptedWeights(decryptedDir) {
 }
 function saveAdaptedWeights(decryptedDir, w) {
   const p = weightsPath(decryptedDir);
-  mkdirSync16(retrievalRoot(decryptedDir), { recursive: true });
-  writeFileSync12(p, JSON.stringify(w, null, 2) + "\n", "utf8");
+  mkdirSync17(retrievalRoot(decryptedDir), { recursive: true });
+  writeFileSync13(p, JSON.stringify(w, null, 2) + "\n", "utf8");
 }
 function attributeFeatures(usefulProfiles, uselessProfiles) {
   const avg = (list, k) => list.length === 0 ? 0 : list.reduce((a, p) => a + (p[k] ?? 0), 0) / list.length;
@@ -19423,7 +19430,7 @@ function syntheticIntentAccuracy() {
 }
 
 // src/backend/wechat-data/src/query/backup.ts
-import { closeSync as closeSync5, cpSync as cpSync3, createReadStream as createReadStream2, existsSync as existsSync50, mkdirSync as mkdirSync17, openSync as openSync5, readSync as readSync5, readdirSync as readdirSync27, renameSync as renameSync6, rmSync as rmSync9, statSync as statSync23, writeFileSync as writeFileSync13 } from "node:fs";
+import { closeSync as closeSync5, cpSync as cpSync3, createReadStream as createReadStream2, existsSync as existsSync50, mkdirSync as mkdirSync18, openSync as openSync5, readSync as readSync5, readdirSync as readdirSync27, renameSync as renameSync7, rmSync as rmSync10, statSync as statSync23, writeFileSync as writeFileSync14 } from "node:fs";
 import { dirname as dirname24, join as join64, relative as relative3 } from "node:path";
 import { createCipheriv, createDecipheriv as createDecipheriv5, createHmac as createHmac2, randomBytes, scryptSync } from "node:crypto";
 var MAGIC = Buffer.from("DSHWCB1\n", "utf8");
@@ -19591,10 +19598,10 @@ function createBackup(decryptedDir) {
   const ts2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").slice(0, 14);
   const name = "wechat_backup_" + ts2;
   const dir = backupDir(decryptedDir);
-  mkdirSync17(dir, { recursive: true });
+  mkdirSync18(dir, { recursive: true });
   const target = join64(dir, name);
   const tmp = partialPath(target);
-  mkdirSync17(tmp, { recursive: true });
+  mkdirSync18(tmp, { recursive: true });
   const failed = [];
   try {
     if (existsSync50(decryptedDir)) {
@@ -19611,11 +19618,11 @@ function createBackup(decryptedDir) {
     if (failed.length > 0) {
       throw new Error("\u5907\u4EFD\u4E0D\u5B8C\u6574\uFF1A" + String(failed.length) + " \u4E2A\u5B50\u76EE\u5F55\u590D\u5236\u5931\u8D25 \u2014\u2014 " + failed.join("\uFF1B"));
     }
-    if (existsSync50(target)) rmSync9(target, { recursive: true, force: true });
-    renameSync6(tmp, target);
+    if (existsSync50(target)) rmSync10(target, { recursive: true, force: true });
+    renameSync7(tmp, target);
   } catch (e) {
     try {
-      rmSync9(tmp, { recursive: true, force: true });
+      rmSync10(tmp, { recursive: true, force: true });
     } catch {
     }
     throw e;
@@ -19628,7 +19635,7 @@ async function createEncryptedBackup(decryptedDir, password, ctrl) {
   const ts2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").slice(0, 14);
   const name = "wechat_backup_" + ts2 + ".wcb";
   const dir = backupDir(decryptedDir);
-  mkdirSync17(dir, { recursive: true });
+  mkdirSync18(dir, { recursive: true });
   const target = join64(dir, name);
   const tmp = partialPath(target);
   const salt = randomBytes(SALT_LEN);
@@ -19675,11 +19682,11 @@ async function createEncryptedBackup(decryptedDir, password, ctrl) {
       reportProgress(ctrl, "files", i + 1, files.length);
     }
     await sink.end();
-    renameSync6(tmp, target);
+    renameSync7(tmp, target);
   } catch (e) {
     await sink.abort();
     try {
-      rmSync9(tmp, { force: true });
+      rmSync10(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -19692,7 +19699,7 @@ function restoreEncryptedBackup(decryptedDir, name, password) {
   const src = join64(dir, name);
   if (!name.endsWith(".wcb") || !existsSync50(src)) return { ok: false, error: "\u52A0\u5BC6\u5907\u4EFD\u4E0D\u5B58\u5728" };
   const target = join64(dir, name.replace(/\.wcb$/, "") + ".restored");
-  if (existsSync50(target)) rmSync9(target, { recursive: true, force: true });
+  if (existsSync50(target)) rmSync10(target, { recursive: true, force: true });
   let fd = null;
   try {
     fd = openSync5(src, "r");
@@ -19714,10 +19721,10 @@ function restoreEncryptedBackup(decryptedDir, name, password) {
       const decipher = createDecipheriv5("aes-256-gcm", key, iv);
       decipher.setAuthTag(tag);
       const outPath = join64(target, f.name.split("/").join(process.platform === "win32" ? "\\" : "/"));
-      mkdirSync17(dirname24(outPath), { recursive: true });
+      mkdirSync18(dirname24(outPath), { recursive: true });
       try {
         const plain = Buffer.concat([decipher.update(cipherText), decipher.final()]);
-        writeFileSync13(outPath, plain);
+        writeFileSync14(outPath, plain);
       } catch {
         return { ok: false, error: "\u89E3\u5BC6\u6821\u9A8C\u5931\u8D25\uFF08\u6570\u636E\u635F\u574F\u6216\u5BC6\u7801\u9519\u8BEF\uFF09" };
       }
@@ -19744,7 +19751,7 @@ function deleteBackup(decryptedDir, name) {
   const target = join64(dir, name);
   if (!target.startsWith(dir) || !existsSync50(target)) return { ok: false, error: "\u5907\u4EFD\u4E0D\u5B58\u5728" };
   try {
-    rmSync9(target, { recursive: true, force: true });
+    rmSync10(target, { recursive: true, force: true });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -21508,7 +21515,7 @@ import { join as join78 } from "node:path";
 
 // src/backend/wechat-data/src/query/wechat-tasks.ts
 import { DatabaseSync as DatabaseSync52 } from "node:sqlite";
-import { mkdirSync as mkdirSync18 } from "node:fs";
+import { mkdirSync as mkdirSync19 } from "node:fs";
 import { dirname as dirname28, join as join77 } from "node:path";
 function dbPath5(decryptedDir) {
   return join77(dirname28(decryptedDir), "wechat_tasks.db");
@@ -21516,7 +21523,7 @@ function dbPath5(decryptedDir) {
 function openStore6(decryptedDir) {
   const file = dbPath5(decryptedDir);
   try {
-    mkdirSync18(dirname28(file), { recursive: true });
+    mkdirSync19(dirname28(file), { recursive: true });
   } catch (e) {
     console.warn("[wechat-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText8(e));
   }
@@ -22776,7 +22783,7 @@ function clearAllSessionDrafts(decryptedDir) {
 
 // src/backend/wechat-data/src/query/notes.ts
 import { DatabaseSync as DatabaseSync58 } from "node:sqlite";
-import { mkdirSync as mkdirSync19 } from "node:fs";
+import { mkdirSync as mkdirSync20 } from "node:fs";
 import { dirname as dirname30, join as join82 } from "node:path";
 var DEFAULT_KB_ID = 1;
 var DEFAULT_KB_NAME = "\u9ED8\u8BA4\u77E5\u8BC6\u5E93";
@@ -22804,7 +22811,7 @@ function columnNames2(db, table) {
 function openStore7(decryptedDir) {
   const file = dbPath6(decryptedDir);
   try {
-    mkdirSync19(dirname30(file), { recursive: true });
+    mkdirSync20(dirname30(file), { recursive: true });
   } catch (e) {
     console.warn("[notes] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText9(e));
   }
@@ -23569,7 +23576,7 @@ async function drainKbQueue(decryptedDir) {
 
 // src/backend/wechat-data/src/query/summary-tasks.ts
 import { DatabaseSync as DatabaseSync59 } from "node:sqlite";
-import { mkdirSync as mkdirSync20 } from "node:fs";
+import { mkdirSync as mkdirSync21 } from "node:fs";
 import { dirname as dirname31, join as join84 } from "node:path";
 function dbPath7(decryptedDir) {
   return join84(dirname31(decryptedDir), "daily_summary.db");
@@ -23581,7 +23588,7 @@ function errorText10(e) {
 function openStore8(decryptedDir) {
   const file = dbPath7(decryptedDir);
   try {
-    mkdirSync20(dirname31(file), { recursive: true });
+    mkdirSync21(dirname31(file), { recursive: true });
   } catch (e) {
     console.warn("[summary-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
   }
@@ -26505,8 +26512,8 @@ ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA
         try {
           const dec = decodeDatBytes(new Uint8Array(readFileSync26(src)), aesBytes, xorKey);
           if ("error" in dec || dec.format === "hevc") continue;
-          mkdirSync21(outDir, { recursive: true });
-          writeFileSync14(join85(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
+          mkdirSync22(outDir, { recursive: true });
+          writeFileSync15(join85(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
         } catch {
         }
       }
@@ -26788,7 +26795,7 @@ ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA
       return { ok: false, error: loaded.error ?? "\u53D6\u4E0D\u5230\u89C6\u9891\u5B57\u8282" };
     }
     try {
-      writeFileSync14(dest, loaded.bytes);
+      writeFileSync15(dest, loaded.bytes);
     } catch (e) {
       const msg = e?.message ?? String(e);
       this.op("task", "export_sns_video", "fail", options.md5?.slice(0, 8) ?? "", msg);
