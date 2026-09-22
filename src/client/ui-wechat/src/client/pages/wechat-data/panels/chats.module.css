@@ -1707,16 +1707,16 @@
 
 /* ── 消息日历弹窗 ─────────────────────────────────────────────── */
 .calOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  /* 窗口比弹窗矮时（小屏、系统缩放、CI runner）覆盖层必须自己可滚：原先只居中 + 子元素
+     `overflow:hidden`，「导出/中止」那颗按钮被推到视口之外且无处可滚（真机实测点不到）。
+     子元素用 `margin:auto` 而不是 align-items 居中 —— 溢出时顶部才滚得到，kit 的 Dialog 同款。 */
+  overflow: auto; overscroll-behavior: contain; padding: 16px;
   background: rgba(3, 6, 14, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
 }
+.calOverlay > * { margin: auto; }
 .calDialog {
   width: 420px;
   max-width: 92vw;
