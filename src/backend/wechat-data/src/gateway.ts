@@ -45,6 +45,8 @@ function compactDailyDigest(lines: string[]): string {
 }
 import { startRealtimeSync } from './query/sync.ts'
 import { createKbRemotes } from './remotes/kb.ts'
+import { createMediaRemotes } from './remotes/media.ts'
+import type { ImageBatchItem } from './remotes/media.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
 import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
@@ -258,8 +260,6 @@ const ASK_FEEDBACK_DEDUPE_MS = 10_000
 /** 反馈去重表的键上限（进程内，只记窗口内的键）。 */
 const ASK_FEEDBACK_CAP = 200
 
-/** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
-const IMAGE_BATCH_MAX = 200
 
 /**
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
@@ -267,14 +267,6 @@ const IMAGE_BATCH_MAX = 200
  */
 const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
 
-/** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
-interface ImageBatchItem {
-  username: string
-  localId: number
-  url?: string
-  format?: string
-  error?: string
-}
 
 /**
  * 规整渲染层传来的 jobId：只当**不透明标识**用（不落盘、不回显），所以限长截断即可。
@@ -796,6 +788,21 @@ export class WechatDataGateway extends TypertRemoteService {
     }))
   }
 
+  private _mediaRemotes?: ReturnType<typeof createMediaRemotes>
+
+  /** 媒体域的处理器（体在 remotes/media.ts）；这里只组装 ctx 与转发。 */
+  private mediaRemotes(): ReturnType<typeof createMediaRemotes> {
+    return (this._mediaRemotes ??= createMediaRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      cdnSwitches: () => this.cdnSwitches(),
+      outboundBlocked: () => this.outboundBlocked(),
+      rawWechatBase: (decrypted) => rawWechatBase(decrypted),
+      warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+    }))
+  }
+
   @Remote('getSessions')
   getSessions(options?: { keyword?: string; limit?: number; offset?: number }): SessionsSnapshot {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
@@ -877,7 +884,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getEmoticons')
   getEmoticons(options?: { limit?: number; offset?: number }): EmoticonsSnapshot {
-    return queryEmoticons(this._dirs.decrypted, options?.limit, options?.offset)
+  return this.mediaRemotes().getEmoticons(options)
   }
 
   /**
@@ -1364,7 +1371,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getFiles')
   getFiles(options?: { limit?: number; offset?: number; category?: string; q?: string }): FilesSnapshot {
-    return queryFiles(this._dirs.decrypted, options?.limit, options?.offset, options?.category, options?.q)
+  return this.mediaRemotes().getFiles(options)
   }
 
   /**
@@ -1515,7 +1522,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVoiceInfo')
   getVoiceInfo(options: { username: string; localId: number }): VoiceInfoResult {
-    return resolveVoiceInfo(this._dirs.decrypted, options.username, options.localId)
+  return this.mediaRemotes().getVoiceInfo(options)
   }
 
   /**
@@ -1526,7 +1533,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVoiceDataUrl')
   getVoiceDataUrl(options: { username: string; localId: number }): VoiceDataUrlResult {
-    return resolveVoiceDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId)
+  return this.mediaRemotes().getVoiceDataUrl(options)
   }
 
   /**
@@ -1537,10 +1544,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVideoInfo')
   getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
-    return resolveVideoInfo(
-      this._dirs.decrypted, this._dirs.decoded, options.username, options.localId,
-      rawWechatBase(this._dirs.decrypted) || undefined,
-    )
+  return this.mediaRemotes().getVideoInfo(options)
   }
 
   /**
@@ -3375,7 +3379,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getAvatar')
   getAvatar(options: { username: string; nickname?: string }): AvatarResult {
-    return resolveAvatar(this._dirs.decrypted, options.username, rawWechatBase(this._dirs.decrypted) || undefined, options.nickname)
+  return this.mediaRemotes().getAvatar(options)
   }
 
   /**
@@ -3385,10 +3389,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getAvatarsLocal')
   getAvatarsLocal(options: { usernames: string[] }): Record<string, string> {
-    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames, {
-      wechatBaseDir: rawWechatBase(this._dirs.decrypted) || undefined,
-      allowRemote: !this.outboundBlocked(),
-    })
+  return this.mediaRemotes().getAvatarsLocal(options)
   }
 
   /**
@@ -3933,9 +3934,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageDataUrl')
   getImageDataUrl(options: { username: string; localId: number }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId, base, aesKey, xorKey)
+  return this.mediaRemotes().getImageDataUrl(options)
   }
 
   /**
@@ -3954,19 +3953,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageDataUrlsBatch')
   getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): { items: ImageBatchItem[] } {
-    const decrypted = this._dirs.decrypted
-    const decoded = this._dirs.decoded
-    const base = rawWechatBase(decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
-    const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX)
-    if (base) this.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
-    return {
-      items: items.map((it) => ({
-        username: it.username,
-        localId: it.localId,
-        ...decodeImageDataUrl(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey),
-      })),
-    }
+  return this.mediaRemotes().getImageDataUrlsBatch(options)
   }
 
   /**
@@ -4034,9 +4021,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsImageDataUrl')
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
+  return this.mediaRemotes().getSnsImageDataUrl(options)
   }
 
   /**
@@ -4047,9 +4032,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getFileImageDataUrl')
   getFileImageDataUrl(options: { md5: string }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return decodeFileImageDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
+  return this.mediaRemotes().getFileImageDataUrl(options)
   }
 
   /**
@@ -4062,14 +4045,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getEmoticonDataUrl')
   async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    const local = decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
-    if (local.url) return local
-    if (!options.emojiUrl) return local
-    const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase(), this.cdnSwitches())
-    // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
-    return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
+  return this.mediaRemotes().getEmoticonDataUrl(options)
   }
 
   /**
@@ -4089,42 +4065,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageOriginal')
   async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
-    const talker = String(options.username ?? '').trim()
-    const localId = Math.trunc(Number(options.localId))
-    if (talker === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
-    // 「禁止出网」也拦这一条 —— 与朋友圈封面/视频同一口径（PRIVACY 第四节 B/C 段），
-    // 否则用户关掉总闸后这里仍然会向微信 CDN 发请求，那句承诺就成了假的。
-    const blocked = this.privacyBlocked('image_original_fetch', '从微信 CDN 取回原图')
-    if (blocked !== null) {
-      this.op('task', 'image_original_fetch', 'fail', talker, blocked)
-      return { ok: false, error: blocked }
-    }
-    const link = resolveImageOriginalLink(this._dirs.decrypted, talker, localId)
-    if (link === null) {
-      // 「没有免登录直链」不等于「本机没有原图」：用户可能已经在微信里点开过，attach 里就有
-      // 更大的那份 .dat。原先这里只回一句「去微信里点一下」，但那句话当时是假的 —— 解码缓存的
-      // 槽位被先解出来的缩略图占住后，后到的原图永远读不到（实测 106 条缓存里 35 条如此）。
-      // 所以这里主动丢掉这张图的缓存条目再重解一次，让「我在微信里点过了」真的能反映到界面上。
-      const hint = resolveImageResourceHint(this._dirs.decrypted, talker, localId)
-      if (hint.md5) {
-        clearDecodedImageCache(this._dirs.decoded, talker, hint.md5)
-        const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-        const redone = decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, talker, localId,
-          rawWechatBase(this._dirs.decrypted) || undefined, aesKey, xorKey)
-        if (redone.url && !redone.thumb) {
-          this.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (redone.format ?? '?') + '）')
-          return { ok: true, format: redone.format, note: '本机已重解到更大的那一份，这次没有联网' }
-        }
-      }
-      return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
-    }
-    const r = await fetchImageOriginalToCache(link, this._dirs.decoded, this.cdnSwitches())
-    if (r.bytes === undefined) {
-      this.op('task', 'image_original_fetch', 'fail', talker, r.error ?? '取回失败')
-      return { ok: false, error: r.error ?? '原图取回失败' }
-    }
-    this.op('task', 'image_original_fetch', 'ok', talker, String(r.bytes) + ' 字节 · ' + (r.format ?? '?'))
-    return { ok: true, format: r.format, bytes: r.bytes }
+  return this.mediaRemotes().getImageOriginal(options)
   }
 
   /**
@@ -4144,12 +4085,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getMessageFile')
   getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
-    // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
-    // 用于在「同名文件」里挑出属于这条消息的那一份，见 resolveMessageFileDataUrl。
-    return resolveMessageFileDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.fileName, {
-      ...(options.size !== undefined ? { size: options.size } : {}),
-      ...(options.createTime !== undefined ? { createTime: options.createTime } : {}),
-    })
+  return this.mediaRemotes().getMessageFile(options)
   }
   /**
    * Add a WeChat task.
@@ -4363,17 +4299,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsVideoCoverDataUrl')
   async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
-    if (local.url) return local
-    const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
-    if (!remote || !/^https?:\/\//i.test(remote)) return local
-    const blocked = this.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
-    if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
-    if (fetched.url) return fetched
-    this.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
-    return { error: fetched.error }
+  return this.mediaRemotes().getSnsVideoCoverDataUrl(options)
   }
 
   /**
@@ -4389,20 +4315,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsVideoDataUrl')
   async getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const local = resolveSnsVideoDataUrl(base, options.md5, options.timelineId, options.mediaId)
-    if (local.url) return local
-    const remote = typeof options.url === 'string' ? options.url.trim() : ''
-    if (!remote || !/^https?:\/\//i.test(remote)) return local
-    const blocked = this.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
-    if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
-    if (fetched.url) {
-      this.op('task', 'sns_video_fetch', 'ok', '', `从 CDN 取回并解密朋友圈视频（${options.md5?.slice(0, 8) ?? '?'}…）`)
-      return fetched
-    }
-    this.op('task', 'sns_video_fetch', 'fail', '', fetched.error ?? '')
-    return { error: fetched.error }
+  return this.mediaRemotes().getSnsVideoDataUrl(options)
   }
 
   /**
@@ -4419,31 +4332,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   async exportSnsVideo(options: {
     md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
   }): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
-    const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
-    if (!dest) return { ok: false, error: '未指定保存路径' }
-    const loaded = await loadSnsVideoBytes({
-      base: rawWechatBase(this._dirs.decrypted) || undefined,
-      md5: options.md5,
-      timelineId: options.timelineId,
-      mediaId: options.mediaId,
-      url: options.url,
-      seed: options.key,
-      version: weixinVersion(),
-      ...this.cdnSwitches(),
-    })
-    if (loaded.error || !loaded.bytes) {
-      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')
-      return { ok: false, error: loaded.error ?? '取不到视频字节' }
-    }
-    try {
-      writeFileSync(dest, loaded.bytes)
-    } catch (e) {
-      const msg = (e as Error)?.message ?? String(e)
-      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', msg)
-      return { ok: false, error: `写入失败：${msg}` }
-    }
-    this.op('task', 'export_sns_video', 'ok', options.md5?.slice(0, 8) ?? '', `${loaded.bytes.length} 字节 · ${loaded.source}`)
-    return { ok: true, bytes: loaded.bytes.length, source: loaded.source }
+  return this.mediaRemotes().exportSnsVideo(options)
   }
 
   @Remote('listTasks')
