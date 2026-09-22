@@ -684,9 +684,7 @@ app.whenReady().then(async () => {
   // 正常情况下日志落在 STATE_DIR/logs，用户报障时把它交出来即可。
   registerMiscIpc({
     ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
-    getMainWindow: () => mainWindow,
-    buildDiagnosticReport,
-    installWebContentsGuards,
+    getMainWindow: () => mainWindow, buildDiagnosticReport, installWebContentsGuards,
   });
 
   // —— Super Time 后端相关的 IPC ——
