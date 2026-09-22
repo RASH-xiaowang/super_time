@@ -6,11 +6,14 @@
  * Electron 冒烟要跑几十秒且只在 windows runner 上跑。这里用**假 ipcMain** 把注册过程
  * 跑一遍：不需要 Electron，秒级，而且能逐条点名缺了哪个频道。
  *
+ * 接线守卫（解构字段 ↔ main.js 实参、裸用 ctx 名字）已抽到 （覆盖所有 ipc-*.js）。
+ * 这里只管**频道**：注册时机与频道清单。
  * 顺带钉住「注册时机」这件事：`registerMiscIpc` 是被 `app.whenReady()` 回调调用的，
  * 所以它必须是**同步注册**（返回后再注册就晚了 —— 渲染层首次 invoke 会拿到
  * `No handler registered`）。
  * @vitest-environment node
  */
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +22,7 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const { registerMiscIpc } = require(join(HERE, '..', 'ipc-misc.js'))
+
 
 /** 该模块负责的频道（与拆分前 main.js 里的注册一一对应）。 */
 const HANDLE = [
@@ -49,6 +53,7 @@ function ctx(handled: string[], onned: string[]) {
     licenseService: { status: () => ({ state: 'ok' }), verify: async () => ({ ok: true }), METHOD_FEATURE: {} },
     getMainWindow: () => null,
     buildDiagnosticReport: () => 'report',
+    installWebContentsGuards: () => {},
   }
 }
 
