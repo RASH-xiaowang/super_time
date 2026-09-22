@@ -8,6 +8,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
+import { readChatsSource } from './chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -20,7 +21,8 @@ const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..', '..')
  * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
  */
 const apiSrc = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(HERE, '..', f), 'utf8')).join('\n')
-const chatsSrc = readFileSync(join(HERE, 'Chats.tsx'), 'utf8')
+// M21 把 Chats 的子系统拆成 chats-*.tsx ⇒ 读联合（断言未改）
+const chatsSrc = readChatsSource()
 const backendSpecSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'tests', 'search-cancel.spec.ts'), 'utf8')
 
 describe('N9：搜索可中断的客户端接线', () => {

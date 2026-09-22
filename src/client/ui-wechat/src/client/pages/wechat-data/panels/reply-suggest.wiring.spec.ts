@@ -10,6 +10,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
+import { readChatsSource } from './chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -18,7 +19,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 /** 仓库根：本文件在 `src/client/ui-wechat/src/client/pages/wechat-data/panels/` 下，上溯 8 级。 */
 const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..', '..')
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-const chats = strip(readFileSync(join(HERE, 'Chats.tsx'), 'utf8'))
+// M21 拆了 Chats.tsx ⇒ 读联合（断言未改）
+const chats = strip(readChatsSource())
 const panel = readFileSync(join(HERE, 'ReplySuggest.tsx'), 'utf8')
 const data = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'reply-suggest.ts'), 'utf8')
 
