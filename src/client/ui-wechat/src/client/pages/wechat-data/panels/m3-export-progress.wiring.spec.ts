@@ -62,3 +62,39 @@ describe('M3：导出进度与取消的接线', () => {
     expect(blk).toContain('exportProgress.done / exportProgress.total')
   })
 })
+
+describe('M3：加密备份入口接同一条进度', () => {
+  /**
+   * 后端 `createEncryptedBackup` 早就收 `jobId`（M3 的控制槽覆盖导出与加密备份两件事），
+   * 但界面上原先只有一个 `busy` 布尔 —— 同一个事件、同一个中继，第二条入口不认领就等于没接。
+   */
+  const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
+
+  it('createEncrypted 生成 jobId 并透传给后端', () => {
+    const at = backup.indexOf('const createEncrypted = async')
+    expect(at).toBeGreaterThan(-1)
+    const body = backup.slice(at, at + 1400)
+    expect(body).toContain("const jobId = 'backup-enc-'")
+    expect(body).toContain('encJobRef.current = jobId')
+    expect(body).toContain('apiCreateEncryptedBackup({ password: password.trim(), jobId })')
+  })
+
+  it('按 jobId 认领进度事件，并在 finally 里清槽', () => {
+    expect(backup).toMatch(/addEventListener\('dsh-wechat-export-progress'/)
+    expect(backup).toContain('if (!p || p.jobId !== encJobRef.current) return')
+    const fin = backup.slice(backup.indexOf('const createEncrypted = async'))
+    const blk = fin.slice(fin.indexOf('} finally {'), fin.indexOf('} finally {') + 300)
+    expect(blk).toContain("encJobRef.current = ''")
+    expect(blk).toContain('setEncProgress(null)')
+  })
+
+  it('进度条与中止都在（不再只有一个 busy 布尔）', () => {
+    const at = backup.indexOf('encProgress ? (')
+    expect(at, '加密备份没有进度分支').toBeGreaterThan(-1)
+    const blk = backup.slice(at, at + 900)
+    expect(blk).toContain('<ProgressBar value=')
+    expect(blk).toContain('encProgress.done / encProgress.total')
+    expect(blk).toContain('onClick={cancelEncrypted}')
+    expect(backup).toMatch(/apiCancelExportJob\(jobId\)/)
+  })
+})

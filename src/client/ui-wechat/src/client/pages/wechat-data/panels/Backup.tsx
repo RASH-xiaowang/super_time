@@ -2,11 +2,11 @@
  * 备份管家面板 — React 版，忠实迁移 BackupManager：备份列表 + 创建/删除。
  * 走 Remote（listBackups / createBackup / deleteBackup），无 HTTP 依赖。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ListSkeleton } from './hooks.tsx'
-import { apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup, readRenderCache, writeRenderCache } from '../api.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, PanelHeader } from '../ui/kit.tsx'
+import { Dialog, PanelHeader, ProgressBar } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
@@ -27,6 +27,28 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
   const [password, setPassword] = useState('')
   const [preview, setPreview] = useState<{ name: string; items: BackupPreviewItem[]; total: number } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+
+  /* 加密备份的实时进度（M3）：`createEncryptedBackup` 收 jobId，后端按它推
+     `wechat-export/progress`（经 ui-entry 中继成 DOM 事件）—— 不认领就只有一个 busy 布尔。 */
+  const [encProgress, setEncProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
+  const encJobRef = useRef('')
+
+  useEffect(() => {
+    const onProgress = (e: Event): void => {
+      const p = (e as CustomEvent<{ jobId?: string; phase?: string; done?: number; total?: number }>).detail
+      if (!p || p.jobId !== encJobRef.current) return
+      setEncProgress({ phase: String(p.phase ?? ''), done: Number(p.done ?? 0), total: Number(p.total ?? 0) })
+    }
+    window.addEventListener('dsh-wechat-export-progress', onProgress)
+    return (): void => { window.removeEventListener('dsh-wechat-export-progress', onProgress) }
+  }, [])
+
+  /** 中止正在跑的加密备份：只发取消信号，终态由后端的槽记着，收尾在 finally。 */
+  const cancelEncrypted = useCallback((): void => {
+    const jobId = encJobRef.current
+    if (!jobId) return
+    void apiCancelExportJob(jobId).catch(() => { /* 取消失败：不谎报，让 finally 收尾 */ })
+  }, [])
 
   const openPreview = async (name: string): Promise<void> => {
     setPreview({ name, items: [], total: 0 })
@@ -96,14 +118,20 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     if (!password.trim()) { setError('请输入备份密码'); return }
     setBusy(true)
     setError(null)
+    const jobId = 'backup-enc-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
+    encJobRef.current = jobId
+    setEncProgress(null)
     try {
-      const r = await apiCreateEncryptedBackup({ password: password.trim() })
+      const r = await apiCreateEncryptedBackup({ password: password.trim(), jobId })
       if (!r.ok) setError(r.error ?? '加密备份失败')
       setPassword('')
       await refresh()
     } catch (e) {
       setError((e as Error).message)
     } finally {
+      // 终态（含被取消）由后端记在槽里；这里只保证别再显示旧进度
+      encJobRef.current = ''
+      setEncProgress(null)
       setBusy(false)
     }
   }
@@ -148,6 +176,15 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
           </>
         )}
       />
+      {encProgress ? (
+        <div className={css.backupProgress}>
+          <span className={css.backupProgressBar}>
+            <ProgressBar value={encProgress.total > 0 ? Math.min(100, (encProgress.done / encProgress.total) * 100) : 0} />
+          </span>
+          <span className={css.backupProgressLabel}>{(encProgress.phase || '加密中') + ' · ' + encProgress.done + (encProgress.total ? ' / ' + encProgress.total : '')}</span>
+          <button type="button" className={css.catBtn} onClick={cancelEncrypted}>中止</button>
+        </div>
+      ) : null}
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
       <div className={css.scroll}>
         {loading && <ListSkeleton rows={4} />}

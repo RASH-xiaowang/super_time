@@ -605,6 +605,10 @@
   flex: 1;
 }
 .backupInput:focus { border-color: var(--nm-cyan); }
+/* 加密备份的实时进度（M3）：进度条 + 计数 + 中止，一行放完，不额外撑高度 */
+.backupProgress { display: flex; align-items: center; gap: 10px; padding: 8px 16px 0; font-size: 12px; color: var(--nm-text-2); }
+.backupProgressBar { flex: 1; min-width: 0; }
+.backupProgressLabel { flex: 0 0 auto; white-space: nowrap; }
 
 /* 原图能力自检 */
 .hookIntro { font-size: 12px; color: var(--nm-text-2); line-height: 1.7; }
