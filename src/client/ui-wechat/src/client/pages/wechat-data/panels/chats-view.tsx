@@ -8,7 +8,7 @@
  * 下一步把逻辑搬进钩子时不必再动这棵树。
  */
 import kitCss from '../ui/kit.module.css'
-import { DateRangeField, Dialog, SearchInput, Segmented } from '../ui/kit.tsx'
+import { DateRangeField, Dialog, ProgressBar, SearchInput, Segmented } from '../ui/kit.tsx'
 import { cspSafeSrc } from '../utils/url.ts'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
@@ -80,6 +80,8 @@ export interface ChatsViewProps {
       expTo: string
       expTypes: readonly string[]
       expZip: boolean
+      cancelExport: () => void
+      exportProgress: { phase: string; done: number; total: number } | null
       exportBatch: () => Promise<void>
       exportMsg: string | null
       exportOpen: boolean
@@ -185,7 +187,7 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
   return (
     <div className={css.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}
@@ -678,8 +680,21 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                   </button>
                 </div>
               </div>
+              {/* 实时进度（M3）：后端按 jobId 推 `wechat-export/progress`，
+                  没有这一段时用户只有一个「导出中…」的按钮可以看，取消也无从下手。 */}
+              {exportProgress ? (
+                <div className={css.exportField}>
+                  <ProgressBar value={exportProgress.total > 0 ? Math.min(100, (exportProgress.done / exportProgress.total) * 100) : 0} />
+                  <span className={kitCss.textCaptionTrunc}>
+                    {(exportProgress.phase || '导出中') + ' · ' + exportProgress.done + (exportProgress.total ? ' / ' + exportProgress.total : '')}
+                  </span>
+                </div>
+              ) : null}
               <div className={css.exportActions}>
                 <button type="button" className={css.exportBtnGhost} onClick={() => { setExportOpen(false) }}>取消</button>
+                {exporting ? (
+                  <button type="button" className={css.exportBtnGhost} onClick={cancelExport}>中止导出</button>
+                ) : null}
                 <button type="button" className={css.exportBtnPrimary} onClick={() => { void exportSession() }} disabled={exporting}>
                   {exporting ? '导出中…' : '导出'}
                 </button>

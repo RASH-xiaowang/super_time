@@ -676,6 +676,15 @@ function installWebContentsGuards(contents) {
     event.preventDefault();
     console.warn('[security] 已阻止挂载 webview');
   });
+  // will-frame-navigate 与 will-navigate 不是一对：它还覆盖**子框架**的导航。
+  // 本应用不渲染任何 iframe（源码里 0 处 <iframe>），所以这条正常永远不该放行；
+  // 但一旦有人将来加了 iframe，缺了这条守卫就等于给「子框架里加载任意外部页」开门。
+  contents.on('will-frame-navigate', (event, details) => {
+    const url = typeof details === 'string' ? details : (details && details.url);
+    if (typeof url === 'string' && decideNavigation(url, __dirname) === 'allow') return;
+    event.preventDefault();
+    console.warn('[security] 已阻止框架导航：' + String(url));
+  });
 }
 
 app.whenReady().then(async () => {
