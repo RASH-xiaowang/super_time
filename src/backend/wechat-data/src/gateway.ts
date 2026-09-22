@@ -50,6 +50,8 @@ import { createBackupRemotes } from './remotes/backup.ts'
 import { createConfigRemotes } from './remotes/config.ts'
 import { createSummaryRemotes } from './remotes/summary.ts'
 import { createAskRemotes } from './remotes/ask.ts'
+import { createKeysDecryptRemotes } from './remotes/keysdec.ts'
+import { createGraphSearchRemotes } from './remotes/graphsearch.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
@@ -868,6 +870,30 @@ export class WechatDataGateway extends TypertRemoteService {
     }))
   }
 
+  private _keysDecryptRemotes?: ReturnType<typeof createKeysDecryptRemotes>
+
+  /** 密钥获取与全库/全图解密（图片密钥自动获取、验证、解密状态） 的处理器（体在 remotes/keysdec.ts）；这里只组装 ctx 与转发。 */
+  private keysDecryptRemotes(): ReturnType<typeof createKeysDecryptRemotes> {
+    return (this._keysDecryptRemotes ??= createKeysDecryptRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      decryptState: this.decryptState,
+      rawWechatBase: (decrypted) => rawWechatBase(decrypted),
+    }))
+  }
+
+  private _graphSearchRemotes?: ReturnType<typeof createGraphSearchRemotes>
+
+  /** 知识图谱、消息检索与索引（含编辑历史复位） 的处理器（体在 remotes/graphsearch.ts）；这里只组装 ctx 与转发。 */
+  private graphSearchRemotes(): ReturnType<typeof createGraphSearchRemotes> {
+    return (this._graphSearchRemotes ??= createGraphSearchRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      searchJobs: this._searchJobs,
+      searchSignal: (jobId) => this.searchSignal(jobId),
+    }))
+  }
+
   @Remote('getSessions')
   getSessions(options?: { keyword?: string; limit?: number; offset?: number }): SessionsSnapshot {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
@@ -1071,26 +1097,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getKnowledgeGraph')
   getKnowledgeGraph(kbId: number): KnowledgeSnapshotRead {
-    const names = contactMeta(this._dirs.decrypted).names
-    const snap = buildKnowledgeGraph(this._dirs.decrypted, kbId, names)
-    const doc = readDocGraph(this._dirs.decrypted, kbId, snap.notes.map(n => ({ id: n.id, title: n.title })))
-    if (doc.readError !== undefined) {
-      return { ...snap, readError: snap.readError ?? `文件库读取失败（图上没有文件节点，但不是「这个库没有文件」）：${doc.readError}` }
-    }
-    /**
-     * 推断层合流：把「模型说这份文件里有哪些实体」变成 `ent:<key>` 节点 + `suggest` 边。
-     * 与上面观测层的区别只在**可信度**，所以命名空间与边 kind 都另起一套，
-     * 让画布能用虚线把它们分开画（同一 label 在多个文件被抽出 ⇒ 合成一个节点）。
-     */
-    const ent = mergeDocEntities(readDocEntities(this._dirs.decrypted, kbId).items)
-    return {
-      ...snap,
-      docFiles: doc.files,
-      docSections: doc.sections,
-      docEntities: ent.nodes,
-      edges: [...snap.edges, ...doc.containEdges, ...doc.mentionEdges, ...ent.edges],
-      summary: { ...snap.summary, fileCount: doc.files.length, sectionCount: doc.sections.length, entityCount: ent.nodes.length },
-    }
+    return this.graphSearchRemotes().getKnowledgeGraph(kbId)
   }
 
   /**
@@ -1472,14 +1479,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('buildSearchIndex')
   async buildSearchIndex(options?: { force?: boolean }): Promise<SearchBuildResult> {
-    try {
-      const r = await buildSearchIndex(this._dirs.decrypted, options?.force)
-      this.op('sync', 'build_search_index', r.status === 'ok' ? 'ok' : 'skip', '', r.message ?? `rows=${r.rows ?? 0}`)
-      return r
-    } catch (e) {
-      this.op('sync', 'build_search_index', 'fail', '', (e as Error).message)
-      throw e
-    }
+    return this.graphSearchRemotes().buildSearchIndex(options)
   }
 
   /**
@@ -1493,13 +1493,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('searchMessages')
   async searchMessages(options: { query: string; limit?: number; username?: string; jobId?: string }): Promise<SearchSnapshot> {
-    const job = this.searchSignal(options?.jobId)
-    try {
-      return await searchIndexMessagesCancellable(this._dirs.decrypted, options.query, options.limit, options.username,
-        job ? { signal: job.signal } : undefined)
-    } finally {
-      job?.done()
-    }
+    return this.graphSearchRemotes().searchMessages(options)
   }
 
   /**
@@ -2499,20 +2493,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     sparseOnly: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
     intentAccuracy: { correct: number; total: number; accuracy: number }
   } {
-    const k = options?.k ?? 10
-    const hybrid = runSyntheticEval({ k })
-    const sparseOnly = runSyntheticEval({ k, denseEnabled: false, structuredEnabled: false })
-    const intentAccuracy = syntheticIntentAccuracy()
-    const brief = (r: typeof hybrid): { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number } => ({
-      precision: r.precision, recall: r.recall, mrr: r.mrr, ndcg: r.ndcg, map: r.map, cases: r.cases, hits: r.hits,
-    })
-    const report = [
-      formatEvalReport('合成评测集（混合：稀疏+稠密+结构化）', hybrid, k),
-      formatEvalReport('消融对照（仅稀疏）', sparseOnly, k),
-      `意图分类准确率：${intentAccuracy.correct}/${intentAccuracy.total} = ${(intentAccuracy.accuracy * 100).toFixed(1)}%`,
-    ].join('\n')
-    this.op('task', 'evaluate_retrieval', 'ok', '', `MRR ${hybrid.mrr.toFixed(3)} vs 稀疏 ${sparseOnly.mrr.toFixed(3)}`)
-    return { report, hybrid: brief(hybrid), sparseOnly: brief(sparseOnly), intentAccuracy }
+    return this.graphSearchRemotes().evaluateRetrieval(options)
   }
 
   /**
@@ -2622,9 +2603,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('resetEditedMessage')
   resetEditedMessage(options: { username: string; localId: number }): EditMutationResult {
-    const r = resetEdit(this._dirs.decrypted, options.username, options.localId)
-    this.op('edit', 'reset_edited_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? `localId=${options.localId}`)
-    return r
+    return this.graphSearchRemotes().resetEditedMessage(options)
   }
 
   /**
@@ -3254,29 +3233,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('autoGetImageKey')
   async autoGetImageKey(options: { accountDir?: string; pid?: number }): Promise<AutoImageKeyResult> {
-    const accountDir = normalizeAccountDir(options.accountDir ?? '')
-    if (accountDir && existsSync(accountDir)) {
-      const cfg = getConfig(this._dirs.decrypted)
-      const savedAes = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'].trim() : ''
-      if (savedAes) {
-        const scan = scanV2Templates(accountDir)
-        if (scan.templates.length > 0) {
-          const xor = trustedXorForVerifiedAesKey(savedAes, scan)
-          if (xor !== null) {
-            const result: AutoImageKeyResult = { ok: true, aesKey: savedAes, xorKey: xor, verified: true }
-            const template = scan.templates[0]
-            if (template) result.templatePath = template.path
-            this.op('keys', 'auto_get_image_key', 'ok', accountDir, '使用已保存并验证的图片密钥')
-            return result
-          }
-        }
-      }
-    }
-    const fetchOpts: { accountDir?: string; pid?: number } = { accountDir }
-    if (options.pid !== undefined) fetchOpts.pid = options.pid
-    const r = await fetchImageKey(fetchOpts)
-    this.op('keys', 'auto_get_image_key', r.ok ? 'ok' : 'fail', accountDir, r.error ?? (r.verified ? '内存扫描成功' : ''))
-    return r
+    return this.keysDecryptRemotes().autoGetImageKey(options)
   }
 
   /**
@@ -3307,23 +3264,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('verifyImageKey')
   verifyImageKey(): VerifyImageKeyResult {
-    const cfg = getConfig(this._dirs.decrypted)
-    const aesKey = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'].trim() : ''
-    if (!aesKey) { this.op('keys', 'verify_image_key', 'fail', '', '尚未配置图片 AES 密钥'); return { verified: false, error: '尚未配置图片 AES 密钥' } }
-    const rawRoot = rawWechatBase(this._dirs.decrypted)
-    if (!rawRoot) { this.op('keys', 'verify_image_key', 'fail', '', '未配置数据库目录，无法定位账号数据'); return { verified: false, error: '未配置数据库目录，无法定位账号数据' } }
-    const scan = scanV2Templates(rawRoot)
-    if (scan.templates.length === 0) { this.op('keys', 'verify_image_key', 'fail', '', '未找到 V2 图片模板（_t.dat）'); return { verified: false, error: '未找到 V2 图片模板（_t.dat）' } }
-    const xor = trustedXorForVerifiedAesKey(aesKey, scan)
-    const result: VerifyImageKeyResult = {
-      verified: xor !== null,
-      aesKey,
-      xorKey: xor ?? Number(cfg['image_xor_key'] ?? 0),
-    }
-    const template = scan.templates[0]
-    if (template) result.templatePath = template.path
-    this.op('keys', 'verify_image_key', result.verified ? 'ok' : 'fail', '', result.error ?? (result.verified ? '已通过' : '验证失败'))
-    return result
+    return this.keysDecryptRemotes().verifyImageKey()
   }
 
   /**
@@ -3334,31 +3275,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('decryptAllDatabases')
   async decryptAllDatabases(): Promise<DecryptAllResult> {
-    if (this.decryptState.active) { this.op('sync', 'decrypt_databases', 'fail', '', '已有解密任务进行中'); return { ok: false, total: 0, okCount: 0, failed: [], error: '已有解密任务进行中' } }
-    const cfg = getConfig(this._dirs.decrypted)
-    const rawDbDir = typeof cfg['db_dir'] === 'string' ? cfg['db_dir'] : ''
-    this.decryptState.op = 'databases'
-    this.decryptState.active = true
-    this.decryptState.done = 0
-    this.decryptState.total = 0
-    this.decryptState.failed = 0
-    this.decryptState.skipped = 0
-    this.decryptState.message = ''
-    try {
-      const r = await decryptAllDbs(rawDbDir, this._dirs.decrypted, (done, total, failed, message) => {
-        this.decryptState.done = done
-        this.decryptState.total = total
-        this.decryptState.failed = failed
-        this.decryptState.message = message
-      })
-      // 全部解密库被原子替换：进程内元数据/统计缓存必须整体失效。
-      invalidateWechatMeta()
-      this.op('sync', 'decrypt_databases', r.ok ? 'ok' : 'fail', '', r.error ?? `成功 ${r.okCount}/${r.total}${r.failed.length > 0 ? `，失败 ${r.failed.length}` : ''}`)
-      return r
-    } finally {
-      this.decryptState.active = false
-      this.decryptState.message = ''
-    }
+    return this.keysDecryptRemotes().decryptAllDatabases()
   }
 
   /**
@@ -3370,33 +3287,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('decryptAllImages')
   async decryptAllImages(options: { concurrency?: number }): Promise<DecryptImagesResult> {
-    if (this.decryptState.active) { this.op('sync', 'decrypt_images', 'fail', '', '已有解密任务进行中'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '已有解密任务进行中' } }
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    const rawRoot = rawWechatBase(this._dirs.decrypted)
-    if (!rawRoot) { this.op('sync', 'decrypt_images', 'fail', '', '未配置数据库目录，无法定位图片数据'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '未配置数据库目录，无法定位图片数据' } }
-    const concurrency = Math.floor(options.concurrency ?? 8) || 8
-    this.decryptState.op = 'images'
-    this.decryptState.active = true
-    this.decryptState.done = 0
-    this.decryptState.total = 0
-    this.decryptState.failed = 0
-    this.decryptState.skipped = 0
-    this.decryptState.message = ''
-    try {
-      const result = await decryptAllImageDats(rawRoot, this._dirs.decoded, aesKey, xorKey, concurrency,
-        (processed, total, failed, message) => {
-          this.decryptState.done = processed
-          this.decryptState.total = total
-          this.decryptState.failed = failed
-          this.decryptState.message = message
-        })
-      this.decryptState.skipped = result.skipped
-      this.op('sync', 'decrypt_images', result.failed === 0 ? 'ok' : 'fail', '', `成功 ${result.okCount}/${result.total}${result.failed > 0 ? `，失败 ${result.failed}` : ''}`)
-      return { ok: true, ...result }
-    } finally {
-      this.decryptState.active = false
-      this.decryptState.message = ''
-    }
+    return this.keysDecryptRemotes().decryptAllImages(options)
   }
 
   /**

@@ -291,6 +291,12 @@ export declare class WechatDataGateway extends TypertRemoteService {
     private _askRemotes?;
     /** 问答反馈与检索配置（画像表 / 反馈表 / 配置） 的处理器（体在 remotes/ask.ts）；这里只组装 ctx 与转发。 */
     private askRemotes;
+    private _keysDecryptRemotes?;
+    /** 密钥获取与全库/全图解密（图片密钥自动获取、验证、解密状态） 的处理器（体在 remotes/keysdec.ts）；这里只组装 ctx 与转发。 */
+    private keysDecryptRemotes;
+    private _graphSearchRemotes?;
+    /** 知识图谱、消息检索与索引（含编辑历史复位） 的处理器（体在 remotes/graphsearch.ts）；这里只组装 ctx 与转发。 */
+    private graphSearchRemotes;
     getSessions(options?: {
         keyword?: string;
         limit?: number;

@@ -12,7 +12,7 @@
  * 取消发生在 ~30ms 处，离扫完还远；CI runner 慢约 24 倍只会更稳）。
  * @vitest-environment node
  */
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -127,17 +127,22 @@ describe('N9：搜索可中断', () => {
  */
 describe('N9：搜索可中断的后端接线', () => {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
-  const gatewaySrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8')
+  // M21：域方法体搬进 remotes/（网关只留一行转发）⇒ 读联合，断言本身不动
+  const _gw = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
+  const gatewaySrc = [_gw, ...readdirSync(join(dirname(_gw), 'remotes')).filter((f) => f.endsWith('.ts'))
+    .sort().map((f) => join(dirname(_gw), 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n')
   // M21 把 search.ts 拆成 scaffold/build/query 三个模块；可取消入口住在 query 侧
   const searchSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'search-query.ts'), 'utf8')
 
   it('searchMessages 走可取消入口，并把 jobId 换成令牌', () => {
-    const at = gatewaySrc.indexOf("@Remote('searchMessages')")
+    // 实现那份（末次出现；网关里那次只剩转发）
+    const implAt = gatewaySrc.lastIndexOf('searchMessages(')
+    const at = implAt >= 0 && gatewaySrc.slice(implAt).includes('rc.') ? implAt : gatewaySrc.indexOf("@Remote('searchMessages')")
     expect(at, 'gateway 里找不到 searchMessages').toBeGreaterThan(0)
     const body = gatewaySrc.slice(at, at + 900)
     expect(body, '没有调用可取消入口').toContain('searchIndexMessagesCancellable(')
     expect(body, '没有把 signal 传下去').toContain('{ signal: job.signal }')
-    expect(body, 'jobId 没有换成令牌').toContain('this.searchSignal(options?.jobId)')
+    expect(body, 'jobId 没有换成令牌').toMatch(/(?:this|rc)\.searchSignal\(options\?\.jobId\)/)
     expect(body, '不允许退回不可取消的同步入口').not.toContain('await searchIndexMessages(')
   })
 
