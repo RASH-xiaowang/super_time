@@ -15,15 +15,24 @@
  * 只断言字符串锚点、先剥注释、锚点均为单行（不受行尾影响）。
  * @vitest-environment node
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+/** M21：域方法体搬进 `remotes/*.ts`（网关只留签名 + 转发）⇒ 源码断言读联合。 */
+function gatewayPlusRemotes(p: string): string {
+  const dir = join(dirname(p), 'remotes')
+  const extra = existsSync(dir)
+    ? readdirSync(dir).filter((f) => f.endsWith('.ts')).sort().map((f) => join(dir, f))
+    : []
+  return [p, ...extra].map((f) => readFileSync(f, 'utf8')).join('\n')
+}
+
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(HERE, '..', 'src')
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-const gateway = strip(readFileSync(join(SRC, 'gateway.ts'), 'utf8'))
+const gateway = strip(gatewayPlusRemotes(join(SRC, 'gateway.ts')))
 // M21 把 query/export.ts 拆成 export-io/format/flows 三个模块；这里读**桶 + 拆出模块**的联合，
 // 断言本身不变，类型/函数再搬家也不会误报。
 const exportTs = strip(readdirSync(join(SRC, 'query'))
@@ -49,6 +58,13 @@ const DECODE_METHODS = [
  * @returns 方法体文本；找不到装饰器时返回 null。
  */
 function methodBody(code: string, remoteName: string): string | null {
+  // M21：方法体搬进 `remotes/*.ts`（`@Remote` 处只剩一行转发）⇒ 取**实现**那段
+  const implAt = code.lastIndexOf(`${remoteName}(`)
+  if (implAt >= 0 && code.slice(implAt).includes('rc.')) {
+    const rest = code.slice(implAt)
+    const end = rest.indexOf('\n    },')
+    return end > 0 ? rest.slice(0, end) : rest
+  }
   const at = code.indexOf(`@Remote('${remoteName}')`)
   if (at < 0) return null
   const next = code.indexOf("@Remote('", at + 1)

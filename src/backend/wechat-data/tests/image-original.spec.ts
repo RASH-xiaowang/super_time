@@ -15,13 +15,22 @@
  * 是会污染后面用例和自己的判据的。
  * @vitest-environment node
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from '../src/query/image-original.ts'
 import { clearDecodedImageCache, decodeImageDataUrl } from '../src/query/media-image.ts'
+
+/** M21：域方法体搬进 `remotes/*.ts`（网关只留签名 + 转发）⇒ 源码断言读联合。 */
+function gatewayPlusRemotes(p: string): string {
+  const dir = join(dirname(p), 'remotes')
+  const extra = existsSync(dir)
+    ? readdirSync(dir).filter((f) => f.endsWith('.ts')).sort().map((f) => join(dir, f))
+    : []
+  return [p, ...extra].map((f) => readFileSync(f, 'utf8')).join('\n')
+}
 
 const scratch: string[] = []
 afterEach(() => {
@@ -177,7 +186,7 @@ describe('解码缓存的两个槽位（缩略图不许永久遮蔽后到的原�
 })
 
 describe('接线守卫', () => {
-  const gateway = readFileSync(join(import.meta.dirname, '..', 'src', 'gateway.ts'), 'utf8')
+  const gateway = gatewayPlusRemotes(join(import.meta.dirname, '..', 'src', 'gateway.ts'))
   const impl = readFileSync(join(import.meta.dirname, '..', 'src', 'query', 'image-original.ts'), 'utf8')
 
   it('解码缓存写入端：缩略/中图必须落到 `.t.` 槽（否则又会永久遮蔽后到的原图）', () => {
@@ -189,11 +198,14 @@ describe('接线守卫', () => {
   })
 
   it('getImageOriginal 过两道闸：隐私出网闸门 + CDN 开关', () => {
-    const at = gateway.indexOf("@Remote('getImageOriginal')")
+    // M21：方法体搬到 remotes/media.ts（@Remote 处只剩转发）⇒ 取实现那段
+    const implAt = gateway.lastIndexOf('getImageOriginal(')
+    const at = implAt >= 0 && gateway.slice(implAt).includes('rc.') ? implAt : gateway.indexOf("@Remote('getImageOriginal')")
     expect(at, '找不到 getImageOriginal —— 改名时请同步本用例').toBeGreaterThan(-1)
-    const body = gateway.slice(at, gateway.indexOf("@Remote('", at + 1))
+    const endImpl = gateway.slice(at).indexOf('\n    },')
+    const body = endImpl > 0 ? gateway.slice(at, at + endImpl) : gateway.slice(at, gateway.indexOf("@Remote('", at + 1))
     expect(body.includes("privacyBlocked('image_original_fetch'"), '必须过「禁止出网」总闸').toBe(true)
-    expect(body.includes('this.cdnSwitches()'), '必须把「自动获取原图（CDN）」开关传进去').toBe(true)
+    expect(/(?:this|rc)\.cdnSwitches\(\)/.test(body), '必须把「自动获取原图（CDN）」开关传进去').toBe(true)
     expect(body.includes("op('task', 'image_original_fetch'"), '取回结果要进操作记录').toBe(true)
   })
 

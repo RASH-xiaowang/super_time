@@ -28,7 +28,7 @@ const LIMIT = 1000
  * 数值是 2026-09-21 实测的行数（`wc -l` 口径）。
  */
 const ALLOWLIST: Record<string, number> = {
-  'src/backend/wechat-data/src/gateway.ts': 4495,
+  'src/backend/wechat-data/src/gateway.ts': 4210,
   'src/client/ui-app/onboarding/onboarding.module.css': 1618,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 2904,
 }

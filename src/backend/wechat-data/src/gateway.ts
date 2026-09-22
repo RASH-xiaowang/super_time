@@ -45,6 +45,9 @@ function compactDailyDigest(lines: string[]): string {
 }
 import { startRealtimeSync } from './query/sync.ts'
 import { createKbRemotes } from './remotes/kb.ts'
+import { createMediaRemotes } from './remotes/media.ts'
+import type { ImageBatchItem } from './remotes/media.ts'
+import { createExportRemotes } from './remotes/export.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
 import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
@@ -222,7 +225,7 @@ function resolveDirs(): ResolvedDirs {
  * `jobId`：进度由网关通过 `wechat-export/progress` 事件推出去（与 `wechat-data/updated`、
  * `wechat-ask/delta` 同一种做法），取消走 `cancelExportJob({ jobId })` 唤醒这里的令牌。
  */
-interface StreamJob {
+export interface StreamJob {
   /** 本轮取消令牌；每次开跑都换新的（否则「取消过一次的 jobId 再也跑不动」）。 */
   ctrl: AbortController
   /** 最近一次进度；终态也留着，供迟到的轮询读到。 */
@@ -237,14 +240,6 @@ const STREAM_JOB_CAP = 20
 /** 导出/备份进度事件名（渲染层按 jobId 过滤）。 */
 const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
 
-/** CSV 导出种类的中文说明（只用于导出历史的可读 label，不参与导出本身）。 */
-const CSV_KIND_LABEL: Record<string, string> = {
-  contacts: '通讯录',
-  favorites: '收藏',
-  records: '记录',
-  moments: '朋友圈',
-  privacy: '隐私扫描',
-}
 
 /**
  * N27：同一轮问答反馈的重复提交窗口。
@@ -258,8 +253,6 @@ const ASK_FEEDBACK_DEDUPE_MS = 10_000
 /** 反馈去重表的键上限（进程内，只记窗口内的键）。 */
 const ASK_FEEDBACK_CAP = 200
 
-/** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
-const IMAGE_BATCH_MAX = 200
 
 /**
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
@@ -267,14 +260,6 @@ const IMAGE_BATCH_MAX = 200
  */
 const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
 
-/** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
-interface ImageBatchItem {
-  username: string
-  localId: number
-  url?: string
-  format?: string
-  error?: string
-}
 
 /**
  * 规整渲染层传来的 jobId：只当**不透明标识**用（不落盘、不回显），所以限长截断即可。
@@ -796,6 +781,37 @@ export class WechatDataGateway extends TypertRemoteService {
     }))
   }
 
+  private _mediaRemotes?: ReturnType<typeof createMediaRemotes>
+
+  /** 媒体域的处理器（体在 remotes/media.ts）；这里只组装 ctx 与转发。 */
+  private mediaRemotes(): ReturnType<typeof createMediaRemotes> {
+    return (this._mediaRemotes ??= createMediaRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      cdnSwitches: () => this.cdnSwitches(),
+      outboundBlocked: () => this.outboundBlocked(),
+      rawWechatBase: (decrypted) => rawWechatBase(decrypted),
+      warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+    }))
+  }
+
+  private _exportRemotes?: ReturnType<typeof createExportRemotes>
+
+  /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
+  private exportRemotes(): ReturnType<typeof createExportRemotes> {
+    return (this._exportRemotes ??= createExportRemotes({
+      dirs: () => this._dirs,
+      ctx: () => this._ctx,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      recordExport: (input) => this.recordExport(input),
+      streamControl: (jobId) => this.streamControl(jobId),
+      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      streamJobs: this._streamJobs,
+      normalizeJobId: (jobId) => normalizeJobId(jobId),
+    }))
+  }
+
   @Remote('getSessions')
   getSessions(options?: { keyword?: string; limit?: number; offset?: number }): SessionsSnapshot {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
@@ -877,7 +893,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getEmoticons')
   getEmoticons(options?: { limit?: number; offset?: number }): EmoticonsSnapshot {
-    return queryEmoticons(this._dirs.decrypted, options?.limit, options?.offset)
+  return this.mediaRemotes().getEmoticons(options)
   }
 
   /**
@@ -1364,7 +1380,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getFiles')
   getFiles(options?: { limit?: number; offset?: number; category?: string; q?: string }): FilesSnapshot {
-    return queryFiles(this._dirs.decrypted, options?.limit, options?.offset, options?.category, options?.q)
+  return this.mediaRemotes().getFiles(options)
   }
 
   /**
@@ -1515,7 +1531,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVoiceInfo')
   getVoiceInfo(options: { username: string; localId: number }): VoiceInfoResult {
-    return resolveVoiceInfo(this._dirs.decrypted, options.username, options.localId)
+  return this.mediaRemotes().getVoiceInfo(options)
   }
 
   /**
@@ -1526,7 +1542,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVoiceDataUrl')
   getVoiceDataUrl(options: { username: string; localId: number }): VoiceDataUrlResult {
-    return resolveVoiceDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId)
+  return this.mediaRemotes().getVoiceDataUrl(options)
   }
 
   /**
@@ -1537,10 +1553,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getVideoInfo')
   getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
-    return resolveVideoInfo(
-      this._dirs.decrypted, this._dirs.decoded, options.username, options.localId,
-      rawWechatBase(this._dirs.decrypted) || undefined,
-    )
+  return this.mediaRemotes().getVideoInfo(options)
   }
 
   /**
@@ -1567,34 +1580,7 @@ export class WechatDataGateway extends TypertRemoteService {
     /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
     sessionName?: string
   }): Promise<ExportResult> {
-    try {
-      const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options })
-      this.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'session',
-        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-        format: options.zip ? 'zip' : options.format,
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
-      // 失败也记一条：用户要能看到「这次没成功」，而不是以为没发生过。
-      this.recordExport({
-        kind: 'session',
-        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-        format: options.zip ? 'zip' : options.format,
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportSessionMessages(options)
   }
 
   /**
@@ -2759,32 +2745,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('exportAnnualReport')
   exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): ExportResult {
-    try {
-      const r = exportAnnualReport(this._dirs.decrypted, options.year, options.format, options.dir, options.filename)
-      this.op('export', 'export_annual_report', 'ok', String(options.year), `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'annual',
-        label: `年度报告 · ${options.year} 年`,
-        format: options.format,
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_annual_report', 'fail', String(options.year), (e as Error).message)
-      this.recordExport({
-        kind: 'annual',
-        label: `年度报告 · ${options.year} 年`,
-        format: options.format,
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportAnnualReport(options)
   }
 
   /**
@@ -2794,44 +2755,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('exportAllSessions')
   async exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
-    const jobId = normalizeJobId(options?.jobId)
-    try {
-      // M3：进度/取消三件套（jobId → 本地 onProgress + AbortController）在本层接上，
-      // 参数原样透传给 query 层（`& StreamControl`）—— 取消后写盘走 temp+rename，
-      // 所以「取消」不会留下半成品文件。
-      const r = await exportAllSessions(this._dirs.decrypted, {
-        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
-        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-        ...this.streamControl(jobId),
-      })
-      this.finishStreamJob(jobId)
-      this.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'all_sessions',
-        label: '全部会话归档',
-        format: 'zip',
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options ?? {},
-      })
-      return r
-    } catch (e) {
-      this.finishStreamJob(jobId, (e as Error).message)
-      this.op('export', 'export_all_sessions', 'fail', '', (e as Error).message)
-      // 取消也是一种正常结局，与「失败」分开记：用户主动取消不该在历史里显示成红叉。
-      const canceled = /cancel|取消|abort/i.test((e as Error).message)
-      this.recordExport({
-        kind: 'all_sessions',
-        label: '全部会话归档',
-        format: 'zip',
-        path: '',
-        status: canceled ? 'canceled' : 'fail',
-        error: canceled ? '' : (e as Error).message,
-        params: options ?? {},
-      })
-      throw e
-    }
+  return this.exportRemotes().exportAllSessions(options)
   }
 
   /**
@@ -2844,13 +2768,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('cancelExportJob')
   cancelExportJob(options: { jobId: string }): { ok: boolean; error?: string } {
-    const id = normalizeJobId(options?.jobId)
-    const job = id ? this._streamJobs.get(id) : undefined
-    if (!job) return { ok: false, error: '没有该导出任务（jobId 不存在，或进程已重启）' }
-    if (job.finished) return { ok: false, error: '该导出任务已结束' }
-    job.ctrl.abort()
-    this.op('export', 'cancel_export_job', 'ok', id)
-    return { ok: true }
+  return this.exportRemotes().cancelExportJob(options)
   }
 
   /**
@@ -2871,17 +2789,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     finished: boolean
     error?: string
   } {
-    const id = normalizeJobId(options?.jobId)
-    const job = id ? this._streamJobs.get(id) : undefined
-    if (!job) return { found: false, phase: '', done: 0, total: 0, finished: true }
-    return {
-      found: true,
-      phase: job.progress?.phase ?? '',
-      done: job.progress?.done ?? 0,
-      total: job.progress?.total ?? 0,
-      finished: job.finished,
-      ...(job.error ? { error: job.error } : {}),
-    }
+  return this.exportRemotes().getExportProgress(options)
   }
 
   /**
@@ -2906,52 +2814,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     filename?: string
     jobId?: string
   }): Promise<ExportResult> {
-    const jobId = normalizeJobId(options?.jobId)
-    try {
-      // 与 exportAllSessions 同一套接线：进度事件 + 取消令牌都由 streamControl 提供。
-      const r = await exportMoments(this._dirs.decrypted, {
-        ...(options?.format !== undefined ? { format: options.format } : {}),
-        ...(options?.username !== undefined ? { username: options.username } : {}),
-        ...(options?.authorName !== undefined ? { authorName: options.authorName } : {}),
-        ...(options?.q !== undefined ? { q: options.q } : {}),
-        ...(options?.images !== undefined ? { images: options.images } : {}),
-        ...(options?.media !== undefined ? { media: options.media } : {}),
-        ...(options?.month !== undefined ? { month: options.month } : {}),
-        ...(options?.mine !== undefined ? { mine: options.mine } : {}),
-        ...(options?.zip !== undefined ? { zip: options.zip } : {}),
-        ...(options?.from !== undefined ? { from: options.from } : {}),
-        ...(options?.to !== undefined ? { to: options.to } : {}),
-        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
-        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-        ...this.streamControl(jobId),
-      })
-      this.finishStreamJob(jobId)
-      this.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'moments',
-        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
-        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options ?? {},
-      })
-      return r
-    } catch (e) {
-      this.finishStreamJob(jobId, (e as Error).message)
-      this.op('export', 'export_moments', 'fail', options?.username ?? '', (e as Error).message)
-      const canceled = /cancel|取消|abort/i.test((e as Error).message)
-      this.recordExport({
-        kind: 'moments',
-        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
-        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
-        path: '',
-        status: canceled ? 'canceled' : 'fail',
-        error: canceled ? '' : (e as Error).message,
-        params: options ?? {},
-      })
-      throw e
-    }
+  return this.exportRemotes().exportMoments(options)
   }
 
   /**
@@ -2964,33 +2827,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('exportCsv')
   exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
-    const label = CSV_KIND_LABEL[options.kind] ?? options.kind
-    try {
-      const r = exportCsv(this._dirs.decrypted, options.kind, options.recordsKind, options.dest, options.category)
-      this.op('export', 'export_csv', 'ok', options.kind, `共 ${r.count} 行`)
-      this.recordExport({
-        kind: options.kind,
-        label: options.category && options.category !== 'all' ? `${label} · ${options.category}` : label,
-        format: 'csv',
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_csv', 'fail', options.kind, (e as Error).message)
-      this.recordExport({
-        kind: options.kind,
-        label,
-        format: 'csv',
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportCsv(options)
   }
 
   /**
@@ -3000,7 +2837,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getExportHistory')
   getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot {
-    return listExportHistory(this._dirs.decrypted, options ?? {})
+  return this.exportRemotes().getExportHistory(options)
   }
 
   /**
@@ -3013,11 +2850,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('deleteExportHistory')
   deleteExportHistory(options: { ids: number[]; deleteFiles?: boolean }): ExportHistoryDeleteResult {
-    const ids = Array.isArray(options?.ids) ? options.ids : []
-    const r = deleteExportHistory(this._dirs.decrypted, ids, options?.deleteFiles === true)
-    this.op('delete', 'delete_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
-      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
-    return r
+  return this.exportRemotes().deleteExportHistory(options)
   }
 
   /**
@@ -3027,10 +2860,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('pruneExportHistory')
   pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult {
-    const r = pruneExportHistory(this._dirs.decrypted, options ?? {})
-    this.op('delete', 'prune_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
-      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
-    return r
+  return this.exportRemotes().pruneExportHistory(options)
   }
 
   /**
@@ -3375,7 +3205,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getAvatar')
   getAvatar(options: { username: string; nickname?: string }): AvatarResult {
-    return resolveAvatar(this._dirs.decrypted, options.username, rawWechatBase(this._dirs.decrypted) || undefined, options.nickname)
+  return this.mediaRemotes().getAvatar(options)
   }
 
   /**
@@ -3385,10 +3215,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getAvatarsLocal')
   getAvatarsLocal(options: { usernames: string[] }): Record<string, string> {
-    return resolveAvatarsLocal(this._dirs.decrypted, options.usernames, {
-      wechatBaseDir: rawWechatBase(this._dirs.decrypted) || undefined,
-      allowRemote: !this.outboundBlocked(),
-    })
+  return this.mediaRemotes().getAvatarsLocal(options)
   }
 
   /**
@@ -3933,9 +3760,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageDataUrl')
   getImageDataUrl(options: { username: string; localId: number }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, options.username, options.localId, base, aesKey, xorKey)
+  return this.mediaRemotes().getImageDataUrl(options)
   }
 
   /**
@@ -3954,19 +3779,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageDataUrlsBatch')
   getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): { items: ImageBatchItem[] } {
-    const decrypted = this._dirs.decrypted
-    const decoded = this._dirs.decoded
-    const base = rawWechatBase(decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
-    const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX)
-    if (base) this.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
-    return {
-      items: items.map((it) => ({
-        username: it.username,
-        localId: it.localId,
-        ...decodeImageDataUrl(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey),
-      })),
-    }
+  return this.mediaRemotes().getImageDataUrlsBatch(options)
   }
 
   /**
@@ -4034,9 +3847,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsImageDataUrl')
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
+  return this.mediaRemotes().getSnsImageDataUrl(options)
   }
 
   /**
@@ -4047,9 +3858,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getFileImageDataUrl')
   getFileImageDataUrl(options: { md5: string }): ImageDataUrlResult {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    return decodeFileImageDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
+  return this.mediaRemotes().getFileImageDataUrl(options)
   }
 
   /**
@@ -4062,14 +3871,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getEmoticonDataUrl')
   async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-    const local = decodeEmoticonDataUrl(this._dirs.decrypted, this._dirs.decoded, base, options.md5, aesKey, xorKey)
-    if (local.url) return local
-    if (!options.emojiUrl) return local
-    const remote = await fetchEmoticonRemote(options.emojiUrl, this._dirs.decoded, options.md5.toLowerCase(), this.cdnSwitches())
-    // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
-    return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
+  return this.mediaRemotes().getEmoticonDataUrl(options)
   }
 
   /**
@@ -4089,42 +3891,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getImageOriginal')
   async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
-    const talker = String(options.username ?? '').trim()
-    const localId = Math.trunc(Number(options.localId))
-    if (talker === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
-    // 「禁止出网」也拦这一条 —— 与朋友圈封面/视频同一口径（PRIVACY 第四节 B/C 段），
-    // 否则用户关掉总闸后这里仍然会向微信 CDN 发请求，那句承诺就成了假的。
-    const blocked = this.privacyBlocked('image_original_fetch', '从微信 CDN 取回原图')
-    if (blocked !== null) {
-      this.op('task', 'image_original_fetch', 'fail', talker, blocked)
-      return { ok: false, error: blocked }
-    }
-    const link = resolveImageOriginalLink(this._dirs.decrypted, talker, localId)
-    if (link === null) {
-      // 「没有免登录直链」不等于「本机没有原图」：用户可能已经在微信里点开过，attach 里就有
-      // 更大的那份 .dat。原先这里只回一句「去微信里点一下」，但那句话当时是假的 —— 解码缓存的
-      // 槽位被先解出来的缩略图占住后，后到的原图永远读不到（实测 106 条缓存里 35 条如此）。
-      // 所以这里主动丢掉这张图的缓存条目再重解一次，让「我在微信里点过了」真的能反映到界面上。
-      const hint = resolveImageResourceHint(this._dirs.decrypted, talker, localId)
-      if (hint.md5) {
-        clearDecodedImageCache(this._dirs.decoded, talker, hint.md5)
-        const { aesKey, xorKey } = resolveImageKeyPair(this._dirs.decrypted)
-        const redone = decodeImageDataUrl(this._dirs.decrypted, this._dirs.decoded, talker, localId,
-          rawWechatBase(this._dirs.decrypted) || undefined, aesKey, xorKey)
-        if (redone.url && !redone.thumb) {
-          this.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (redone.format ?? '?') + '）')
-          return { ok: true, format: redone.format, note: '本机已重解到更大的那一份，这次没有联网' }
-        }
-      }
-      return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
-    }
-    const r = await fetchImageOriginalToCache(link, this._dirs.decoded, this.cdnSwitches())
-    if (r.bytes === undefined) {
-      this.op('task', 'image_original_fetch', 'fail', talker, r.error ?? '取回失败')
-      return { ok: false, error: r.error ?? '原图取回失败' }
-    }
-    this.op('task', 'image_original_fetch', 'ok', talker, String(r.bytes) + ' 字节 · ' + (r.format ?? '?'))
-    return { ok: true, format: r.format, bytes: r.bytes }
+  return this.mediaRemotes().getImageOriginal(options)
   }
 
   /**
@@ -4144,12 +3911,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getMessageFile')
   getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
-    // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
-    // 用于在「同名文件」里挑出属于这条消息的那一份，见 resolveMessageFileDataUrl。
-    return resolveMessageFileDataUrl(rawWechatBase(this._dirs.decrypted) || undefined, options.fileName, {
-      ...(options.size !== undefined ? { size: options.size } : {}),
-      ...(options.createTime !== undefined ? { createTime: options.createTime } : {}),
-    })
+  return this.mediaRemotes().getMessageFile(options)
   }
   /**
    * Add a WeChat task.
@@ -4363,17 +4125,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsVideoCoverDataUrl')
   async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
-    if (local.url) return local
-    const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
-    if (!remote || !/^https?:\/\//i.test(remote)) return local
-    const blocked = this.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
-    if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
-    if (fetched.url) return fetched
-    this.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
-    return { error: fetched.error }
+  return this.mediaRemotes().getSnsVideoCoverDataUrl(options)
   }
 
   /**
@@ -4389,20 +4141,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getSnsVideoDataUrl')
   async getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
-    const base = rawWechatBase(this._dirs.decrypted) || undefined
-    const local = resolveSnsVideoDataUrl(base, options.md5, options.timelineId, options.mediaId)
-    if (local.url) return local
-    const remote = typeof options.url === 'string' ? options.url.trim() : ''
-    if (!remote || !/^https?:\/\//i.test(remote)) return local
-    const blocked = this.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
-    if (blocked) return { error: `${local.error}；${blocked}` }
-    const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key, ...this.cdnSwitches() })
-    if (fetched.url) {
-      this.op('task', 'sns_video_fetch', 'ok', '', `从 CDN 取回并解密朋友圈视频（${options.md5?.slice(0, 8) ?? '?'}…）`)
-      return fetched
-    }
-    this.op('task', 'sns_video_fetch', 'fail', '', fetched.error ?? '')
-    return { error: fetched.error }
+  return this.mediaRemotes().getSnsVideoDataUrl(options)
   }
 
   /**
@@ -4419,31 +4158,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
   async exportSnsVideo(options: {
     md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string; dest: string
   }): Promise<{ ok: boolean; bytes?: number; source?: string; error?: string }> {
-    const dest = typeof options.dest === 'string' ? options.dest.trim() : ''
-    if (!dest) return { ok: false, error: '未指定保存路径' }
-    const loaded = await loadSnsVideoBytes({
-      base: rawWechatBase(this._dirs.decrypted) || undefined,
-      md5: options.md5,
-      timelineId: options.timelineId,
-      mediaId: options.mediaId,
-      url: options.url,
-      seed: options.key,
-      version: weixinVersion(),
-      ...this.cdnSwitches(),
-    })
-    if (loaded.error || !loaded.bytes) {
-      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')
-      return { ok: false, error: loaded.error ?? '取不到视频字节' }
-    }
-    try {
-      writeFileSync(dest, loaded.bytes)
-    } catch (e) {
-      const msg = (e as Error)?.message ?? String(e)
-      this.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', msg)
-      return { ok: false, error: `写入失败：${msg}` }
-    }
-    this.op('task', 'export_sns_video', 'ok', options.md5?.slice(0, 8) ?? '', `${loaded.bytes.length} 字节 · ${loaded.source}`)
-    return { ok: true, bytes: loaded.bytes.length, source: loaded.source }
+  return this.mediaRemotes().exportSnsVideo(options)
   }
 
   @Remote('listTasks')
