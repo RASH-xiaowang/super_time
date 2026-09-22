@@ -17,7 +17,7 @@
  *       onError 兜底都会打一条 error。现在外部资源失败单独计数，不参与"面板是否健康"的判定。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -33,9 +33,14 @@ function findRoot(start: string): string {
   throw new Error('找不到仓库根')
 }
 const ROOT = findRoot(HERE)
-// M21 第二十二刀把 Moments.tsx 拆成 support + panel + 转发桶 ⇒ 读**三份的联合**
-// （断言一条没改；源码搬到哪份都算数）。
-const moments = ['Moments.tsx', 'moments-support.tsx', 'moments-panel.tsx']
+// M21 第二十二/二十四刀把 Moments.tsx 拆成 support + panel + portals + 转发桶
+// ⇒ 读**该前缀的全部模块的联合**（断言一条没改；源码搬到哪份都算数）。
+// 用 readdir 扫描而不是手写清单：下次再拆一刀不必回来补名字（troubleshoot 过一次：
+// 第二十四刀搬走详情弹层后，手写清单漏了 portals，`setFailedImgs(prev => …add(dfk))` 当场变红）。
+const moments = readdirSync(HERE)
+  .filter((f) => /^moments-[a-z-]+\.tsx$/.test(f))
+  .concat(['Moments.tsx'])
+  .sort()
   .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const momentsCss = readFileSync(join(HERE, 'moments.module.css'), 'utf8')
 const audit = readFileSync(join(ROOT, 'scripts', 'panel-audit.mjs'), 'utf8')

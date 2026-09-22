@@ -7,19 +7,22 @@
  * @module moments-panelx
  */
 
-import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, DateRangeField, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { MomentsCard } from './moments-card.tsx'
+import { MomentsSidebar } from './moments-sidebar.tsx'
+import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
-import { ARTICLE_COVER_CACHE_MAX, MEDIA_LABELS, MediaFilter, MomentsAvatar, MomentsMiniAvatar, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtCommentTime, fmtSyncTime, groupByDate, imgKey, replyTarget } from './moments-support.tsx'
+import { ARTICLE_COVER_CACHE_MAX, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -780,142 +783,32 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       />
 
       <div className={css.layout}>
-        <aside className={css.sidebar}>
-
-          {/* 筛选面板：分组布局（作者 / 类型 / 范围 / 排序 / 月份），作者名截断 */}
-          <div className={css.filterPanel}>
-            {topAuthors.length > 0 && (
-              <div className={css.filterGroup}>
-                <span className={css.filterLabel}>作者</span>
-                <div className={css.filterChips}>
-                  {(showAllAuthors ? topAuthors : topAuthors.slice(0, 8)).map(([name, count]) => (
-                    <button key={name} type="button" className={css.authorChip} data-on={authorFilter === name || undefined} title={authorFilter === name ? '清除 ' + name : '只看 ' + name} onClick={() => { setAuthorFilter(authorFilter === name ? null : name) }}>
-                      <span className={css.chipName}>{name}</span>
-                      <span className={css.chipCount}>{String(count)}</span>
-                    </button>
-                  ))}
-                  {topAuthors.length > 8 && (
-                    <button type="button" className={css.authorChip} onClick={() => { setShowAllAuthors(v => !v) }} title={showAllAuthors ? '收起作者' : '更多作者'}>{showAllAuthors ? '↑ 收起' : '… 更多作者'}</button>
-                  )}
-                  {authorFilter && <button type="button" className={css.authorChip} data-on="" onClick={() => { setAuthorFilter(null) }} title="清除作者筛选">✕ {authorFilter}</button>}
-                </div>
-              </div>
-            )}
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>类型</span>
-              <Segmented
-                options={(Object.keys(MEDIA_LABELS) as MediaFilter[]).map(f => ({ value: f, label: MEDIA_LABELS[f] }))}
-                value={mediaFilter}
-                onChange={(v) => { setMediaFilter(v as MediaFilter) }}
-                ariaLabel="媒体类型筛选"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>范围</span>
-              <Segmented
-                options={[
-                  { value: 'all', label: '全部' },
-                  { value: 'mine', label: '我' },
-                  { value: 'others', label: '他人' },
-                ]}
-                value={mineFilter}
-                onChange={(v) => { setMineFilter(v as 'all' | 'mine' | 'others') }}
-                ariaLabel="范围筛选"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>排序</span>
-              <Segmented
-                options={[
-                  { value: 'desc', label: '最新在前' },
-                  { value: 'asc', label: '最早在前' },
-                ]}
-                value={sortOrder}
-                onChange={(v) => { setSortOrder(v as 'asc' | 'desc') }}
-                ariaLabel="排序方向"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>时间</span>
-              <DateRangeField
-                from={dateFrom}
-                to={dateTo}
-                onFrom={setDateFrom}
-                onTo={setDateTo}
-                onClear={() => { setDateFrom(''); setDateTo('') }}
-                presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                ariaLabel="朋友圈时间筛选"
-              />
-            </div>
-            {monthFilter && (
-              <div className={css.filterGroup}>
-                <span className={css.filterLabel}>月份</span>
-                <div className={css.segTrack}>
-                  <button type="button" className={css.segChip} data-on="" onClick={() => { setMonthFilter(null) }} title="清除月份筛选">✕ {monthFilter}</button>
-                </div>
-              </div>
-            )}
-            {(search || mediaFilter !== 'all' || monthFilter !== null || mineFilter !== 'all' || authorFilter !== null) && (
-              <button type="button" className={css.clearBtn} onClick={clearFilters} title="清除所有筛选">✕ 清除</button>
-            )}
-          </div>
-
-          {/* monthly histogram (click a bar to filter that month) */}
-          <div className={css.monthCard}>
-            <div className={css.monthTitle}>
-              <span>全部月份动态{authorFilter ? '（作者：' + authorFilter + '）' : ''}（{monthly.length} 个月）</span>
-              <span className={css.monthHint}>点击柱条按月份筛选</span>
-              {monthFilter && <span className={css.monthHint}>{moments.length < total ? '（结果仅覆盖已加载部分）' : null}</span>}
-              {monthFilter && <button type="button" className={css.textToggle} onClick={() => { setMonthFilter(null) }}>✕ 清除 {monthFilter}</button>}
-            </div>
-            <div className={css.monthBars}>
-              {monthly.map(m => (
-                // 点击目标放在**整列**而非柱子：柱高正比于数量，低数量的月份只有 2px 高，
-                // 实测（WCAG 2.2 SC 2.5.8 目标尺寸）该面板 105 个控件里有 80 个小于 24×24，
-                // 全部来自这里。整列高度始终包含「数值 + 柱 + 月份标签」，是稳定的目标。
-                <div
-                  key={m.key}
-                  className={[css.monthCol, m.key === monthFilter ? css.monthColActive : ''].filter(Boolean).join(' ')}
-                  title={m.key + ' ' + String(m.count) + ' 条'}
-                  {...clickableKey(() => { setMonthFilter(m.key === monthFilter ? null : m.key) })}
-                >
-                  <span className={css.monthValue}>{m.count > 0 ? String(m.count) : ''}</span>
-                  <div className={css.monthFill} data-peak={m.count === monthMax || undefined} data-on={m.key === monthFilter || undefined} style={{ height: String(Math.max(2, Math.round((m.count / monthMax) * 30))) + 'px' }} />
-                  <span className={css.monthLabel}>{m.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* insight stats */}
-          <div className={css.insight}>
-            <div className={css.stat}>
-              <span className={css.statIcon}>📊</span>
-              <span className={css.statNum} title="服务端全量动态数">{String(total)}</span>
-              <span className={kitCss.textCaption}>总动态</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🖼</span>
-              <span className={css.statNum}>{insight.withImages}</span>
-              <span className={kitCss.textCaption}>含图片</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🎬</span>
-              <span className={css.statNum}>{insight.withVideos}</span>
-              <span className={kitCss.textCaption}>含视频</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>📍</span>
-              <span className={css.statNum}>{insight.withLocation}</span>
-              <span className={kitCss.textCaption}>带位置</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🔗</span>
-              <span className={css.statNum}>{insight.withLink}</span>
-              <span className={kitCss.textCaption}>分享链接</span>
-            </div>
-          </div>
-        </aside>
+        <MomentsSidebar
+          search={search}
+          clearFilters={clearFilters}
+          topAuthors={topAuthors}
+          showAllAuthors={showAllAuthors}
+          setShowAllAuthors={setShowAllAuthors}
+          authorFilter={authorFilter}
+          setAuthorFilter={setAuthorFilter}
+          mediaFilter={mediaFilter}
+          setMediaFilter={setMediaFilter}
+          mineFilter={mineFilter}
+          setMineFilter={setMineFilter}
+          sortOrder={sortOrder}
+          setSortOrder={setSortOrder}
+          dateFrom={dateFrom}
+          setDateFrom={setDateFrom}
+          dateTo={dateTo}
+          setDateTo={setDateTo}
+          monthFilter={monthFilter}
+          setMonthFilter={setMonthFilter}
+          monthly={monthly}
+          monthMax={monthMax}
+          loadedCount={moments.length}
+          total={total}
+          insight={insight}
+        />
 
         <div className={css.main}>
           <div ref={scrollRef} className={css.scroll}>
@@ -945,287 +838,42 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             {!loading && !error && groups.slice(0, grpCount).map(g => (
               <div key={g.day} className={css.dayGroup}>
                 <div className={css.dayLabel}>{g.day}</div>
-                {g.items.map((m) => {
-                  const cover = m.images[0]
-                  const isArticle = m.contentType === 3
-                  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || cspSafeSrc(cover?.thumb, cover?.url)
-                  const textExpanded = expandedTextByCard.has(m.tid)
-                  const socialExpanded = expandedSocialByCard.has(m.tid)
-                  const commentShown = commentCounts[m.tid] ?? 5
-                  const commentSort = commentSortByCard[m.tid] ?? 'asc'
-                  let commentList = commentSort === 'desc' ? [...m.comments].reverse() : m.comments
-                  if (onlyMineComments && selfUsername) commentList = commentList.filter(c => c.username === selfUsername)
-                  const visibleComments = commentList.slice(0, Math.min(commentShown, commentList.length))
-                  return (
-                    <div key={m.tid} className={[css.card, privacy ? css.blurCard : ''].filter(Boolean).join(' ')}>
-                      <div className={css.avatarClick} title="查看详情" {...clickableKey(() => { setDetail({ m }) })}>
-                        <MomentsAvatar username={m.username} name={m.author || '?'} />
-                      </div>
-                      <div className={css.body}>
-                        <div className={css.meta} title="查看详情" {...clickableKey(() => { setDetail({ m }) })}>
-                          <span className={css.author}>{m.author || '未知'}</span>
-                          {m.is_self && <span className={css.selfTag}>我</span>}
-                        </div>
-                        {m.text && (
-                          <div className={css.content}>
-                            {textExpanded || m.text.length <= 200 ? m.text : m.text.slice(0, 200) + '…'}
-                            {m.text.length > 200 && (<button type="button" className={css.textToggle} onClick={() => { toggleText(m.tid) }}>{textExpanded ? '收起' : '展开'}</button>)}
-                          </div>
-                        )}
-                        {m.images.length > 0 && !isArticle && (
-                          <div className={[css.images, m.images.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
-                            {m.images.map((im, ii) => {
-                              const key = imgKey(im)
-                              const dataSrc = key ? snsImgs[key] : undefined
-                              const fk = m.tid + ':' + String(ii)
-                              const failed = failedImgs.has(fk)
-                              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img' })
-                              const haveSrc = !!(dataSrc || cspSafeSrc(im.thumb, im.url))
-                              return (
-                                <div key={fk}
-                                  className={css.imgWrap}
-                                  {...clickableKey(() => { setViewer({ images: m.images, index: ii, author: m.author }) })}
-                                  title="点击查看大图"
-                                  data-sns-key={key || undefined}
-                                  data-sns-md5={im.md5 || undefined}
-                                  data-sns-tid={im.timelineId || undefined}
-                                  data-sns-mid={im.id || undefined}
-                                >
-                                  {haveSrc && (!failed || dataSrc) ? (
-                                    <img
-                                      key={dataSrc ? 'd' : 'c'}
-                                      src={dataSrc || cspSafeSrc(im.thumb, im.url)}
-                                      alt=""
-                                      loading="lazy"
-                                      decoding="async"
-                                      referrerPolicy="no-referrer"
-                                      className={css.img}
-                                      onError={() => {
-                                        // 如果当前src是CDN URL（非data URL），标记为失败
-                                        // 避免反复尝试无法访问的CDN URL
-                                        const currentSrc = dataSrc || cspSafeSrc(im.thumb, im.url)
-                                        if (!currentSrc.startsWith('data:')) {
-                                          setFailedImgs(prev => new Set(prev).add(fk))
-                                        }
-                                      }}
-                                    />
-                                  ) : (
-                                    <div className={css.imgFallback}>
-                                      {failed ? (
-                                        <div className={css.imgFallbackContent}>
-                                          <span className={css.imgFallbackIcon}>🖼</span>
-                                          <span className={css.imgFallbackText}>图片加载失败</span>
-                                          <span className={css.imgFallbackHint}>本地缓存未找到</span>
-                                        </div>
-                                      ) : '加载中'}
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                        {m.videos.length > 0 && (
-                          <div className={css.videos}>
-                            {m.videos.map((v, vi) => {
-                              const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
-                              const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
-                              if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
-                              const src = vk ? videoSrcs[vk] : undefined
-                              const playing = !!src
-                              const meta = vk ? videoMeta[vk] : undefined
-                              return (
-                                <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
-                                  data-sns-key={vk || undefined}
-                                  data-sns-md5={v.md5 || undefined}
-                                  data-sns-tid={v.timelineId || undefined}
-                                  data-sns-mid={v.id || undefined}
-                                  style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
-                                  {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}
-                                >
-                                  {playing ? (
-                                    <>
-                                      <video
-                                        className={css.videoPlayer}
-                                        src={src}
-                                        controls
-                                        autoPlay
-                                        poster={vCover || ''}
-                                        onLoadedMetadata={(e) => {
-                                          const el = e.currentTarget
-                                          if (!vk || !el.videoWidth || !el.videoHeight) return
-                                          setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
-                                        }}
-                                      />
-                                      <div className={css.videoActions}>
-                                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
-                                        <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
-                                        <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
-                                      </div>
-                                    </>
-                                  ) : vCover ? (
-                                    <>
-                                      <img className={css.videoCover} src={vCover} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={(e) => {
-                                        // 如果当前src是CDN URL（非data URL），隐藏图片
-                                        if (!vCover.startsWith('data:')) {
-                                          e.currentTarget.style.display = 'none'
-                                        }
-                                      }} />
-                                      <span className={css.videoPlayBadge}>▶</span>
-                                      {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
-                                    </>
-                                  ) : (
-                                    <>
-                                      {videoFailed.has(vk) ? (
-                                        <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>
-                                          本机未缓存<em>微信里播一次后可看</em>
-                                        </span>
-                                      ) : (
-                                        <span className={css.videoBadge}>▶</span>
-                                      )}
-                                      {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
-                                    </>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                        {m.link_title && (
-                          <div className={css.linkCard}>
-                            {cover ? (
-                              <div className={css.linkCover}>
-                                {failedImgs.has('cover:' + m.tid)
-                                  ? <span className={css.linkCoverFallback} title="封面来自公众号 CDN，原链接已失效">🔗</span>
-                                  : <img
-                                    key={coverSrc.startsWith('data:') ? 'd' : 'c'}
-                                    src={coverSrc}
-                                    alt=""
-                                    referrerPolicy="no-referrer"
-                                    onError={() => {
-                                      // 原来是直接把 <img> 设成 display:none —— 但 .linkCover 是固定 60×60 的框，
-                                      // 隐藏图片只会留下一个**没有意义的空格子**（实测共享文章封面里
-                                      // 有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块）。
-                                      // 改成标记失败并渲染占位图标，与评论图/朋友圈图的失败口径一致。
-                                      if (!coverSrc.startsWith('data:')) {
-                                        setFailedImgs(prev => new Set(prev).add('cover:' + m.tid))
-                                      }
-                                    }}
-                                  />}
-                              </div>
-                            ) : null}
-                            <div className={css.linkBody}>
-                              {/* 标题被 2 行截断（.linkTitle 的 line-clamp），所以必须给全文入口：
-                                  第 60 轮把「纵向截断但无 title」并入截断巡检后，这里立刻被抓出来
-                                  （视频号长标题可见 45px、实际 67px，用户无法拿到全文）。 */}
-                              {m.link_url
-                                ? <a className={css.linkTitle} href={m.link_url} target="_blank" rel="noopener noreferrer" title={m.link_title}>{m.link_title}</a>
-                                : <span className={css.linkTitle} title={m.link_title}>{m.link_title}</span>}
-                              <div className={kitCss.textMeta}>{m.sourceNickName ? '公众号 · ' + m.sourceNickName : (m.contentType === 28 ? '视频号' : '链接')}</div>
-                            </div>
-                          </div>
-                        )}
-                        {m.location && (
-                          <div className={css.tags}>
-                            <span className={kitCss.textMeta}>📍 {m.location}</span>
-                          </div>
-                        )}
-                        {(m.likes.length > 0 || m.comments.length > 0) && (
-                          <div className={css.social}>
-                            {m.likes.length > 0 && (
-                              <div className={css.likesRow}>
-                                <span className={css.likesCount}>❤ {m.likes.length}</span>
-                                <span className={css.likeNames}>
-                                  {(() => {
-                                    const names = socialExpanded ? m.likes : m.likes.slice(0, 8)
-                                    return names.map((l, idx) => (
-                                      <Fragment key={idx}>
-                                        <span className={css.clickableName} title={'只看 ' + (l.nickname || l.username)} {...clickableKey(() => { setAuthorFilter(l.nickname || l.username || null) }, { stopPropagation: true })}>{l.nickname || l.username || '未知'}</span>
-                                        {idx < names.length - 1 ? '、' : null}
-                                      </Fragment>
-                                    ))
-                                  })()}
-                                  {!socialExpanded && m.likes.length > 8 ? ' 等' : ''}
-                                  {m.likes.length > 8 && (
-                                    <button type="button" className={css.textToggle} onClick={() => { toggleSocial(m.tid) }}>{socialExpanded ? '收起' : '展开全部 ' + String(m.likes.length) + ' 人'}</button>
-                                  )}
-                                </span>
-                              </div>
-                            )}
-                            {m.comments.length > 0 && (
-                              <div className={css.comments}>
-                                {m.comments.length > 1 && (
-                                  <div className={css.commentsHead}>
-                                    <span className={css.commentsTitle}>评论 {m.comments.length}</span>
-                                    <div className={css.commentsHeadActs}>
-                                      {selfUsername && (
-                                        <button type="button" className={css.textToggle} data-on={onlyMineComments || undefined} onClick={() => { setOnlyMineComments(v => !v) }}>仅看我的</button>
-                                      )}
-                                      <button type="button" className={css.textToggle} onClick={() => { setCommentSortByCard(prev => ({ ...prev, [m.tid]: commentSort === 'asc' ? 'desc' : 'asc' })) }}>{commentSort === 'asc' ? '最新在前' : '最早在前'}</button>
-                                      <button type="button" className={css.textToggle} onClick={() => { copyText(m.comments.map(c => ((c.nickname || c.username) + '：' + (c.content || '')).trim()).join('\n')) }}>复制</button>
-                                    </div>
-                                  </div>
-                                )}
-                                {visibleComments.map((c, ci) => {
-                                  const target = replyTarget(m, c)
-                                  return (
-                                    <div key={ci} className={css.comment}>
-                                      <span className={css.commentName} title={'只看 ' + (c.nickname || c.username)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{c.nickname || c.username || '未知'}</span>
-                                      {c.to_username && c.to_username !== m.username && (
-                                        <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>
-                                      )}
-                                      {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
-                                      <span className={css.commentText}>{c.content || ''}</span>
-                                      {c.image && (() => {
-                                        const img = c.image
-                                        const cdata = (img.md5 && snsImgs[img.md5]) || ''
-                                        const cfk = m.tid + ':c' + String(ci)
-                                        const cfailed = failedImgs.has(cfk)
-                                        if (img.md5) mediaKeySpec.current.set(img.md5, { md5: img.md5, kind: 'comment' })
-                                        if (cdata || cspSafeSrc(img.thumb, img.url)) return (
-                                          <img
-                                            key={cdata ? 'd' : 'c'}
-                                            src={cdata || cspSafeSrc(img.thumb, img.url)}
-                                            alt=""
-                                            loading="lazy"
-                                            decoding="async"
-                                            referrerPolicy="no-referrer"
-                                            className={css.commentImg}
-                                            data-sns-key={img.md5 || undefined}
-                                            data-sns-md5={img.md5 || undefined}
-                                            {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })}
-                                            onError={() => {
-                                              // 如果当前src是CDN URL（非data URL），标记为失败
-                                              const currentSrc = cdata || cspSafeSrc(img.thumb, img.url)
-                                              if (!currentSrc.startsWith('data:')) {
-                                                setFailedImgs(prev => new Set(prev).add(cfk))
-                                              }
-                                            }}
-                                          />
-                                        )
-                                        return !cfailed ? <span className={css.commentImgFallback}>[图]</span> : null
-                                      })()}
-                                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
-                                    </div>
-                                  )
-                                })}
-                                {m.comments.length > commentShown && (
-                                  <button type="button" className={css.textToggle} onClick={() => { setCommentCounts(prev => ({ ...prev, [m.tid]: Math.min(m.comments.length, commentShown + 10) })) }}>
-                                    加载更多评论（剩余 {String(m.comments.length - commentShown)} 条）
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        <div className={css.timeRow}>
-                          <span className={kitCss.textMeta}>{m.time}</span>
-                          {m.is_self && <span className={css.delIcon}>🗑</span>}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
+                {g.items.map((m) => (
+                  <MomentsCard
+                    key={m.tid}
+                    m={m}
+                    privacy={privacy}
+                    snsImgs={snsImgs}
+                    articleCovers={articleCovers}
+                    expandedTextByCard={expandedTextByCard}
+                    expandedSocialByCard={expandedSocialByCard}
+                    commentCounts={commentCounts}
+                    commentSortByCard={commentSortByCard}
+                    onlyMineComments={onlyMineComments}
+                    selfUsername={selfUsername}
+                    failedImgs={failedImgs}
+                    setFailedImgs={setFailedImgs}
+                    videoSrcs={videoSrcs}
+                    videoMeta={videoMeta}
+                    setVideoMeta={setVideoMeta}
+                    videoFailed={videoFailed}
+                    videoErr={videoErr}
+                    mediaKeySpec={mediaKeySpec}
+                    setViewer={setViewer}
+                    setDetail={setDetail}
+                    setAuthorFilter={setAuthorFilter}
+                    setOnlyMineComments={setOnlyMineComments}
+                    setCommentCounts={setCommentCounts}
+                    setCommentSortByCard={setCommentSortByCard}
+                    toggleText={toggleText}
+                    toggleSocial={toggleSocial}
+                    copyText={copyText}
+                    loadVideo={loadVideo}
+                    saveVideo={saveVideo}
+                    fullscreenVideo={fullscreenVideo}
+                    closeVideo={closeVideo}
+                  />
+                ))}
               </div>
             ))}
             {!loading && !error && moments.length > 0 && moments.length < total && (
@@ -1258,314 +906,53 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       )}
 
       {/* 图片查看器 */}
-      {viewer && createPortal(
-        <div className={[css.overlay, css.overlayTop].join(' ')} data-st-dialog="moments-viewer" onClick={() => { setViewer(null) }} role="dialog" aria-modal="true">
-          <div className={css.lightbox} onClick={(e) => { e.stopPropagation() }}>
-            <div className={css.lightboxHead}>
-              <span>{viewer.author} · {String(viewer.index + 1)}/{String(viewer.images.length)}</span>
-              <div className={css.lightboxHeadActions}>
-                <button type="button" className={css.btn} onClick={copyCurrentLink} disabled={!((curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || curImg?.thumb)} title="复制链接">复制</button>
-                <button type="button" className={css.btn} onClick={saveCurrentImage} disabled={!((curImg && snsImgs[imgKey(curImg)]) || curImg?.url || curImg?.thumb)} title="保存到本地">保存</button>
-                <button type="button" className={css.btn} data-on={viewOriginal || undefined} onClick={() => { setViewOriginal(v => !v) }} disabled={!cspSafeSrc(curImg?.url)} title={viewOriginal ? '当前为原始链接，点按回离线解码图' : '切换为原始链接'}>原图</button>
-                <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
-                <button type="button" className={css.btn} onClick={() => { setViewZoom(1); setViewPan({ x: 0, y: 0 }) }} disabled={viewZoom === 1} title="重置缩放">1:1</button>
-                <button type="button" className={css.btn} onClick={() => { setViewer(null) }} aria-label="关闭">×</button>
-              </div>
-            </div>
-            <div ref={lightboxWrapRef} className={css.lightboxImgWrap}
-              onDoubleClick={() => { setViewZoom(z => (z === 1 ? 2.5 : 1)); setViewPan({ x: 0, y: 0 }) }}
-              onTouchStart={(e) => {
-                const a = e.touches[0]
-                const b = e.touches[1]
-                if (e.touches.length === 2 && a && b) {
-                  const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-                  pinchRef.current = { dist: d, zoom: viewZoomRef.current }
-                }
-              }}
-              onTouchMove={(e) => {
-                const p = pinchRef.current
-                const a = e.touches[0]
-                const b = e.touches[1]
-                if (p && e.touches.length === 2 && a && b) {
-                  const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-                  const n = Math.min(5, Math.max(1, p.zoom * (d / p.dist)))
-                  setViewZoom(n)
-                  if (n === 1) setViewPan({ x: 0, y: 0 })
-                }
-              }}
-              onTouchEnd={() => { pinchRef.current = null }}
-              onMouseDown={(e) => {
-                if (viewZoom <= 1) return
-                dragRef.current = { sx: e.clientX, sy: e.clientY, ox: viewPan.x, oy: viewPan.y }
-              }}
-              onMouseMove={(e) => {
-                const d = dragRef.current
-                if (d) setViewPan({ x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) })
-              }}
-              onMouseUp={() => { dragRef.current = null }}
-              onMouseLeave={() => { dragRef.current = null }}
-              style={{ cursor: viewZoom > 1 ? 'move' : 'zoom-in' }}
-            >
-              {viewFailed ? (
-                <div className={css.lightboxFail}>图片加载失败</div>
-              ) : (
-                <img
-                  src={viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  draggable={false}
-                  className={css.lightboxImg}
-                  style={{ transform: 'rotate(' + String(viewRotate) + 'deg) scale(' + String(viewZoom) + ') translate(' + String(viewPan.x) + 'px,' + String(viewPan.y) + 'px)' }}
-                  onError={() => {
-                    // 如果当前src是CDN URL（非data URL），标记为失败
-                    const currentSrc = viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')
-                    if (!currentSrc.startsWith('data:')) {
-                      setViewFailed(true)
-                    }
-                  }}
-                />
-              )}
-            </div>
-            <div className={css.lightboxNav}>
-              <button type="button" className={css.btn} disabled={viewer.index <= 0} onClick={() => { setViewerIndex(viewer.index - 1) }}>‹ 上一张</button>
-              <button type="button" className={css.btn} disabled={viewer.index >= viewer.images.length - 1} onClick={() => { setViewerIndex(viewer.index + 1) }}>下一张 ›</button>
-            </div>
-            {viewer.images.length > 1 && (
-              <div className={css.lightboxThumbs}>
-                {viewer.images.map((im, i) => {
-                  const t = (snsImgs[imgKey(im)] || cspSafeSrc(im.thumb, im.url))
-                  return (
-                    <img
-                      key={i}
-                      src={t || ''}
-                      alt=""
-                      className={[css.lightboxThumb, i === viewer.index ? css.lightboxThumbActive : ''].filter(Boolean).join(' ')}
-                      {...clickableKey(() => { setViewerIndex(i) }, { label: `查看第 ${i + 1} 张图` })}
-                      onError={(e) => {
-                        // 如果当前src是CDN URL（非data URL），隐藏缩略图
-                        if (!t.startsWith('data:')) {
-                          e.currentTarget.style.display = 'none'
-                        }
-                      }}
-                    />
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </div>,
-        document.body,
-      )}
+      <MomentsImageViewer
+        viewer={viewer}
+        setViewer={setViewer}
+        setViewerIndex={setViewerIndex}
+        curImg={curImg}
+        snsImgs={snsImgs}
+        copyCurrentLink={copyCurrentLink}
+        saveCurrentImage={saveCurrentImage}
+        viewOriginal={viewOriginal}
+        setViewOriginal={setViewOriginal}
+        viewRotate={viewRotate}
+        setViewRotate={setViewRotate}
+        viewZoom={viewZoom}
+        setViewZoom={setViewZoom}
+        viewPan={viewPan}
+        setViewPan={setViewPan}
+        viewFailed={viewFailed}
+        setViewFailed={setViewFailed}
+        lightboxWrapRef={lightboxWrapRef}
+        pinchRef={pinchRef}
+        viewZoomRef={viewZoomRef}
+        dragRef={dragRef}
+      />
 
       {/* 单条动态详情 */}
-      {detail && createPortal(
-        <div className={css.overlay} data-st-dialog="moments-detail" onClick={() => { setDetail(null) }} role="dialog" aria-modal="true">
-          <div className={css.detailCard} onClick={(e) => { e.stopPropagation() }}>
-            <div className={css.lightboxHead}>
-              <span>{detail.m.author || '未知'} · {detail.m.time}</span>
-              <button type="button" className={css.btn} onClick={() => { setDetail(null) }} aria-label="关闭">×</button>
-            </div>
-            <div className={css.detailBody}>
-              {detail.m.text && <div className={css.content}>{detail.m.text}</div>}
-              {detail.m.images.length > 0 && (
-                <div className={[css.images, detail.m.images.length === 1 ? css.imagesSingle : ''].filter(Boolean).join(' ')}>
-                  {detail.m.images.map((im, ii) => {
-                    const key = imgKey(im)
-                    const dataSrc = key ? snsImgs[key] : undefined
-                    const haveSrc = !!(dataSrc || cspSafeSrc(im.thumb, im.url))
-                    // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
-                    // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：标记失败 + 占位。
-                    const dfk = 'detail:' + detail.m.tid + ':' + String(ii)
-                    return (
-                      <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: detail.m.author }) })}>
-                        {haveSrc && !failedImgs.has(dfk)
-                          ? <img src={dataSrc || cspSafeSrc(im.thumb, im.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.img} onError={() => {
-                            const currentSrc = dataSrc || cspSafeSrc(im.thumb, im.url)
-                            if (!currentSrc.startsWith('data:')) {
-                              setFailedImgs(prev => new Set(prev).add(dfk))
-                            }
-                          }} />
-                          : <div className={css.imgFallback}>{haveSrc ? '图片加载失败' : '加载中'}</div>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              {detail.m.videos.length > 0 && (
-                <div className={css.videos}>
-                  {detail.m.videos.map((v, vi) => {
-                    const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
-                    const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
-                    const src = vk ? videoSrcs[vk] : undefined
-                    const playing = !!src
-                    const meta = vk ? videoMeta[vk] : undefined
-                    return (
-                      <div key={vi} className={[css.videoTile, playing ? css.videoTilePlaying : '', playing ? css.videoTileDetail : ''].filter(Boolean).join(' ')} title={v.url || v.md5 || ''}
-                        style={playing && meta ? { ['--video-ar' as string]: `${meta.w} / ${meta.h}` } : undefined}
-                        {...(playing ? {} : clickableKey(() => { loadVideo(vk, v) }, { label: '播放视频' }))}>
-                        {playing
-                          ? <>
-                            <video
-                              className={css.videoPlayer}
-                              src={src}
-                              controls
-                              autoPlay
-                              poster={vCover || ''}
-                              onLoadedMetadata={(e) => {
-                                const el = e.currentTarget
-                                if (!vk || !el.videoWidth || !el.videoHeight) return
-                                setVideoMeta((prev) => (prev[vk]?.w === el.videoWidth ? prev : { ...prev, [vk]: { w: el.videoWidth, h: el.videoHeight } }))
-                              }}
-                            />
-                            <div className={css.videoActions}>
-                              <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
-                              <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
-                              <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
-                            </div>
-                          </>
-                          : vCover
-                            ? <><img className={css.videoCover} src={vCover} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => {
-                              // 如果当前src是CDN URL（非data URL），隐藏图片
-                              if (!vCover.startsWith('data:')) {
-                                e.currentTarget.style.display = 'none'
-                              }
-                            }} /><span className={css.videoPlayBadge}>▶</span>{v.duration > 0 && (
-                              <span className={css.videoDur}>{Math.round(v.duration)}s</span>
-                            )}</>
-                            : <>{videoFailed.has(vk)
-                              ? <span className={css.videoMissing} title={videoErr.get(vk) || '朋友圈视频要在微信里播放过才会缓存到本机'}>本机未缓存<em>微信里播一次后可看</em></span>
-                              : <span className={css.videoBadge}>▶</span>}{v.duration > 0 && (
-                              <span className={css.videoDur}>{Math.round(v.duration)}s</span>
-                            )}</>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              {detail.m.link_title && (
-                <div className={css.linkCard}>
-                  <div className={css.linkBody}>
-                    {detail.m.link_url
-                      ? <a className={css.linkTitle} href={detail.m.link_url} target="_blank" rel="noopener noreferrer" title={detail.m.link_title}>{detail.m.link_title}</a>
-                      : <span className={css.linkTitle} title={detail.m.link_title}>{detail.m.link_title}</span>}
-                    <div className={kitCss.textMeta}>{detail.m.sourceNickName ? '公众号 · ' + detail.m.sourceNickName : (detail.m.contentType === 28 ? '视频号' : '链接')}</div>
-                  </div>
-                </div>
-              )}
-              {detail.m.location && <div className={css.tags}><span className={kitCss.textMeta}>📍 {detail.m.location}</span></div>}
-              {detail.m.likes.length > 0 && (
-                <div className={css.likesRow}>
-                  <span className={css.likesCount}>❤ {detail.m.likes.length}</span>
-                  <span className={css.likeNames}>
-                    {detail.m.likes.map((l, idx) => (
-                      <Fragment key={idx}>
-                        <MomentsMiniAvatar username={l.username} name={l.nickname || l.username} />
-                        <span className={css.clickableName} title={'只看 ' + (l.nickname || l.username)} {...clickableKey(() => { setAuthorFilter(l.nickname || l.username || null) }, { stopPropagation: true })}>{l.nickname || l.username || '未知'}</span>
-                        {idx < detail.m.likes.length - 1 ? '、' : null}
-                      </Fragment>
-                    ))}
-                  </span>
-                </div>
-              )}
-              {detail.m.comments.length > 0 && (
-                <div className={css.comments}>
-                  {detail.m.comments.map((c, ci) => {
-                    const target = replyTarget(detail.m, c)
-                    const img = c.image
-                    const cdata = (img?.md5 && snsImgs[img.md5]) || ''
-                    return (
-                      <div key={ci} className={css.comment}>
-                        <MomentsMiniAvatar username={c.username} name={c.nickname || c.username} />
-                        <span className={css.commentName} title={'只看 ' + (c.nickname || c.username)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{c.nickname || c.username || '未知'}</span>
-                        {c.to_username && c.to_username !== detail.m.username && <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>}
-                        {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
-                        <span className={css.commentText}>{c.content || ''}</span>
-                        {img && (cdata || cspSafeSrc(img.thumb, img.url)) && (
-                          <img key={'img' + String(ci)} src={cdata || cspSafeSrc(img.thumb, img.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.commentImg} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
-                        )}
-                        {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
+      <MomentsDetail
+        detail={detail}
+        setDetail={setDetail}
+        setViewer={setViewer}
+        setAuthorFilter={setAuthorFilter}
+        failedImgs={failedImgs}
+        setFailedImgs={setFailedImgs}
+        snsImgs={snsImgs}
+        videoSrcs={videoSrcs}
+        videoMeta={videoMeta}
+        setVideoMeta={setVideoMeta}
+        videoFailed={videoFailed}
+        videoErr={videoErr}
+        loadVideo={loadVideo}
+        saveVideo={saveVideo}
+        fullscreenVideo={fullscreenVideo}
+        closeVideo={closeVideo}
+      />
 
-      {/* 导出对话框 */}
-      {exportOpen && (
-        <div className={css.overlay} data-st-dialog="moments-export" onClick={() => { setExportOpen(false) }} role="dialog" aria-modal="true">
-          <div className={css.lightbox} onClick={(e) => { e.stopPropagation() }}>
-            <div className={css.lightboxHead}>
-              <span>导出朋友圈</span>
-              <button type="button" className={css.btn} onClick={() => { setExportOpen(false) }} aria-label="关闭">×</button>
-            </div>
-            <div className={css.exportForm}>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>格式</span>
-                <div className={css.exportChips}>
-                  {['html', 'json', 'txt', 'csv'].map(f => (
-                    <button key={f} type="button" className={css.btn} data-on={expFormat === f || undefined} onClick={() => { setExpFormat(f) }}>{f.toUpperCase()}</button>
-                  ))}
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>范围</span>
-                <span className={css.exportHint}>
-                  {(() => {
-                    const parts: string[] = []
-                    if (authorFilter) parts.push('作者：' + authorFilter)
-                    if (author) parts.push('指定用户：' + author)
-                    if (search.trim()) parts.push('关键词：' + search.trim())
-                    if (mediaFilter !== 'all') parts.push('类型：' + MEDIA_LABELS[mediaFilter])
-                    if (monthFilter) parts.push('月份：' + monthFilter)
-                    if (mineFilter !== 'all') parts.push('范围：' + (mineFilter === 'mine' ? '我' : '他人'))
-                    return (parts.length > 0 ? parts.join(' · ') : '全部联系人') + ' · 服务端全量'
-                  })()}
-                </span>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>时间</span>
-                <div className={css.exportChips}>
-                  <DateRangeField
-                    from={expFrom}
-                    to={expTo}
-                    onFrom={setExpFrom}
-                    onTo={setExpTo}
-                    onClear={() => { setExpFrom(''); setExpTo('') }}
-                    presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                    ariaLabel="朋友圈导出时间"
-                  />
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>目录</span>
-                <div className={css.exportChips}>
-                  <button type="button" className={css.btn} onClick={() => { void pickDir() }} disabled={pickingDir}>选择目录{expDir ? ' ✓' : ''}</button>
-                  {expDir && <span className={css.exportHint} title={expDir}>{expDir}</span>}
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>媒体</span>
-                <div className={css.exportChips}>
-                  <label className={css.exportCheck} title="HTML 导出时内嵌离线解码图片（base64），体积较大">
-                    <input type="checkbox" checked={expImages} onChange={(e) => { setExpImages(e.target.checked) }} disabled={expFormat !== 'html'} />
-                    <span>HTML 内嵌离线图片</span>
-                  </label>
-                  <label className={css.exportCheck} title="把动态 JSON + 离线图片/视频打包成一个 ZIP（媒体较多时体积大）">
-                    <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
-                    <span>ZIP 含媒体</span>
-                  </label>
-                </div>
-              </div>
-              <button type="button" className={`${css.btn} ${css.btnBottom}`} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MomentsExportDialog
+        {...{ exportOpen, setExportOpen, authorFilter, author, search, mediaFilter, monthFilter, mineFilter, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo, expDir, pickDir, pickingDir, expImages, setExpImages, expZip, setExpZip, doExport, exporting }}
+      />
     </div>
   )
 }

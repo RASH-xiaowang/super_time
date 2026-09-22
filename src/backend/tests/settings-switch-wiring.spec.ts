@@ -11,7 +11,7 @@
  *
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -19,9 +19,14 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
-const SETTINGS = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'Settings.tsx')
+const SETTINGS_DIR = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
 const gatewaySrc = readFileSync(GATEWAY, 'utf8')
-const settingsSrc = readFileSync(SETTINGS, 'utf8')
+// M21 拆 Settings ⇒ 读**面板 + 它的拆分模块**的联合（断言一条没改；密钥清单搬到 settings-common 也算数）。
+const settingsSrc = readdirSync(SETTINGS_DIR)
+  .filter((f) => /^settings-[a-z-]+\.tsx?$/.test(f))
+  .concat(['Settings.tsx'])
+  .sort()
+  .map((f) => readFileSync(join(SETTINGS_DIR, f), 'utf8')).join('\n')
 
 /** 必须把 `cdnSwitches()` 传进去的远端取媒体调用点。 */
 const REMOTE_CALL_SITES = [
