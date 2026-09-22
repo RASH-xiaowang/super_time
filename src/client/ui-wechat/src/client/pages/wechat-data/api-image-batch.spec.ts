@@ -154,7 +154,7 @@ describe('M3：jobId / 取消 / 进度三条 RPC 的前端镜像', () => {
 describe('N1：readError 透传到前端', () => {
   it('待办快照把「库读不到」的原因原样带出来（不是空列表）', async () => {
     stubRemote({
-      listTasks: async () => ({ ok: true as const, value: { items: [], total: 0, readError: 'database is locked' } }),
+      listTasks: async () => ({ ok: true as const, value: { items: [] as never[], total: 0, readError: 'database is locked' } }),
     })
     const r = await apiListTasks()
     expect(r.items).toEqual([])
@@ -162,7 +162,7 @@ describe('N1：readError 透传到前端', () => {
   })
 
   it('确无数据时不带 readError（两条路径必须可区分）', async () => {
-    stubRemote({ listTasks: async () => ({ ok: true as const, value: { items: [], total: 0 } }) })
+    stubRemote({ listTasks: async () => ({ ok: true as const, value: { items: [] as never[], total: 0 } }) })
     const r = await apiListTasks()
     expect(r.readError).toBeUndefined()
   })

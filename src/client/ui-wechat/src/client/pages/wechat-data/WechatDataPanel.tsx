@@ -540,8 +540,8 @@ export function WechatDataPanel(): React.JSX.Element {
     const seq = ++searchSeqRef.current
     const t = window.setTimeout(() => {
       void Promise.all([
-        apiGetSessions({ keyword: q, limit: 8 }).catch(() => ({ sessions: [], total: 0 })),
-        apiSearchUnified({ query: q, limit: 8 }).catch(() => ({
+        apiGetSessions({ keyword: q, limit: 8 }).catch((): { sessions: never[]; total: number } => ({ sessions: [], total: 0 })),
+        apiSearchUnified({ query: q, limit: 8 }).catch((): { query: string; messages: never[]; contacts: never[]; moments: never[]; favorites: never[]; files: never[]; records: never[] } => ({
           query: q, messages: [], contacts: [], moments: [], favorites: [], files: [], records: [],
         })),
       ]).then(([sessionRes, un]) => {

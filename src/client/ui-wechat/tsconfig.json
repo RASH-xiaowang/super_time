@@ -1,8 +1,13 @@
 {
+  "//": "H11：客户端已量过 0 处报错，比基座更严一档（noUncheckedIndexedAccess）。基座侧的账见 tsconfig.base.json 顶部注释。",
   "//paths": "后端类型与 UI shim 都只从仓库里的源码取，不取 node_modules 里那份 file: 拷贝 —— 那份只在 npm install 时刷新，很容易落后于源码（前者因此把 48 条类型错误带进过前端；后者在构建侧也踩过，见 M17）。",
   "//exclude": "src/client/index.tsx 是本包对宿主插槽的注册点（upstream monorepo 的入口），它 import 的 @deepseek-ai/dsh-client-ui-* / dsh-api-remotes 在本仓库没有 vendored，且它不在实际打包图里（打包入口是 src/client/ui-app/ui-entry.tsx）。放进 typecheck 只会得到 5 条无法修复的 TS2307。",
   "extends": "../../../tsconfig.base.client.json",
   "compilerOptions": {
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictFunctionTypes": true,
+    "noUncheckedIndexedAccess": true,
     "rootDir": "src",
     "outDir": "lib/types",
     "exactOptionalPropertyTypes": false,
