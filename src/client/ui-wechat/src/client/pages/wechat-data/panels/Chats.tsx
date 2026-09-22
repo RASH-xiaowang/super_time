@@ -22,6 +22,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RainWindow } from './rain-window.tsx'
 import { ChatsView } from './chats-view.tsx'
+import { useChatsEdit } from './chats-edit.tsx'
+import { useChatsExport } from './chats-export.tsx'
 export { ChatView, isEnterpriseChat } from './chats-support.tsx'
 export { ViewerImage } from './chats-media.tsx'
 import { AVATAR_CACHE_MAX, Avatar, ChatView, FILE_STYLE, IconCalendar, IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, IconPin, MsgMenuAction, MsgMenuItem, POLL_HIDDEN_MS, POLL_VISIBLE_MS, TransferArrowGlyph, TransferCheckGlyph, avatarCache, buildMsgMenu, decodeEntities, downloadMessageFile, estimateMsgItemHeight, fileStyle, isEnterpriseChat, isKefuSession, itemLocalId, liveStatusText, msgItemKey, openLink, quoteTypeLabel, sessionInView, transferStateKey, transferStatusLabel, unreadTitle } from './chats-support.tsx'
@@ -176,12 +178,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [pinnedCollapsed, setPinnedCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('wc_pinned_collapsed') === '1' } catch { return false }
   })
-  const [batchMode, setBatchMode] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [batchExporting, setBatchExporting] = useState(false)
-  const [batchMsg, setBatchMsg] = useState<string | null>(null)
-  const [, setAvatarVersion] = useState(0)
-
   const setWatermarkFrom = (list: readonly WechatMessage[]): void => {
     let w = watermarkRef.current
     for (const m of list) if (m.sortSeq && m.sortSeq > w) w = m.sortSeq
@@ -239,46 +235,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setViewer(null)
   }, [])
 
-  const toggleSelect = (username: string): void => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(username)) next.delete(username)
-      else next.add(username)
-      return next
-    })
-  }
-
-  const exportBatch = useCallback(async (): Promise<void> => {
-    const list = [...selected]
-    if (list.length === 0) return
-    setBatchExporting(true)
-    setBatchMsg(null)
-    let done = 0
-    const errors: string[] = []
-    try {
-      for (const username of list) {
-        try {
-          await apiExportSessionMessages({ username, format: 'txt', count: 0 })
-          done += 1
-        } catch (e) {
-          errors.push(username + ': ' + (e as Error).message)
-        }
-      }
-      setBatchMsg(`已导出 ${done}/${list.length} 个会话${errors.length ? `，失败 ${errors.length} 个` : ''}`)
-    } finally {
-      setBatchExporting(false)
-    }
-  }, [selected])
-
-  const togglePinned = (): void => {
-    setPinnedCollapsed((v) => {
-      const nv = !v
-      try { localStorage.setItem('wc_pinned_collapsed', nv ? '1' : '0') } catch { /* ignore */ }
-      return nv
-    })
-  }
-
-  /** Open the lightbox at a message image (strip = all type-3 messages loaded). */
   const openViewer = useCallback((m: WechatMessage): void => {
     const imgs: ViewerImage[] = messages
       .filter(x => x.type === 3)
@@ -288,24 +244,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setViewer({ images: imgs, index: idx >= 0 ? idx : 0 })
   }, [messages, curSession])
 
-  const [exporting, setExporting] = useState(false)
-  const [exportMsg, setExportMsg] = useState<string | null>(null)
-  // export dialog state
-  const [exportOpen, setExportOpen] = useState(false)
-  const [expFormat, setExpFormat] = useState<'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'>('txt')
-  const [expCount, setExpCount] = useState(0)
-  const [expDir, setExpDir] = useState('')
-  const [expTypes, setExpTypes] = useState<readonly string[]>([])
-  const [expFrom, setExpFrom] = useState('')
-  const [expTo, setExpTo] = useState('')
-  const [expFilename, setExpFilename] = useState('')
-  const [expZip, setExpZip] = useState(false)
-  const [pickingDir, setPickingDir] = useState(false)
-
-  const EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }> = [
-    { value: 'txt', label: 'TXT' }, { value: 'html', label: 'HTML' }, { value: 'md', label: 'Markdown' },
-    { value: 'excel', label: 'Excel' }, { value: 'sql', label: 'SQL' }, { value: 'json', label: 'JSON' },
-  ]
   const EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }> = [
     { key: 'text', label: '文本', types: [1] },
     { key: 'image', label: '图片', types: [3] },
@@ -322,181 +260,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     { key: 'call', label: '通话', types: [50] },
   ]
 
-  const exportSession = useCallback(async (): Promise<void> => {
-    if (!curSession || exporting) return
-    setExporting(true)
-    setExportMsg(null)
-    try {
-      const chosen = EXPO_TYPES.filter(c => expTypes.includes(c.key))
-      const types = chosen.flatMap(c => [...(c.types ?? [])])
-      const richTypes = chosen.flatMap(c => [...(c.rich ?? [])])
-      const fromSec = expFrom ? Math.floor(new Date(expFrom + 'T00:00:00').getTime() / 1000) : 0
-      const toSec = expTo ? Math.floor(new Date(expTo + 'T23:59:59').getTime() / 1000) : 0
-      const opts: {
-        username: string
-        format: string
-        count: number
-        dir?: string
-        types?: number[]
-        richTypes?: string[]
-        from?: number
-        to?: number
-        filename?: string
-        zip?: boolean
-      } = {
-        username: curSession.username,
-        format: expFormat,
-        count: expCount,
-      }
-      if (expDir.trim()) opts.dir = expDir.trim()
-      if (types.length > 0) opts.types = types
-      if (richTypes.length > 0) opts.richTypes = richTypes
-      if (fromSec > 0) opts.from = fromSec
-      if (toSec > 0) opts.to = toSec
-      if (expFilename.trim()) opts.filename = expFilename.trim()
-      if (expZip) opts.zip = true
-      const r = await apiExportSessionMessages(opts)
-      setExportMsg(`已导出 ${r.count} 条 → ${r.path}`)
-      setExportOpen(false)
-    } catch (e) {
-      setExportMsg('导出失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
-  }, [curSession, exporting, expFormat, expCount, expDir, expTypes, expFrom, expTo, expFilename, expZip])
-
-  const chooseExportDir = async (): Promise<void> => {
-    if (pickingDir) return
-    setPickingDir(true)
-    try {
-      const dir = await pickDirectory()
-      if (dir) setExpDir(dir)
-    } finally {
-      setPickingDir(false)
-    }
-  }
-
-  const openNestedChatlog = async (rec: ChatlogRecord): Promise<void> => {
-    if (rec.nested && rec.nested.length > 0) {
-      setChatlogStack(prev => [...prev, { title: rec.datatitle || rec.text || '聊天记录', records: rec.nested ?? [] }])
-      return
-    }
-    if (rec.fromnewmsgid && !chatlogResolving) {
-      setChatlogResolving(true)
-      try {
-        const r = await apiResolveChatHistory(rec.fromnewmsgid)
-        const rich = r.found ? r.message?.rich : null
-        if (r.found && rich && Array.isArray(rich.records) && rich.records.length > 0) {
-          setChatlogStack(prev => [...prev, { title: rich.title || '聊天记录', records: rich.records ?? [] }])
-        } else {
-          window.alert('未找到该聊天记录（可能需要微信端完整同步）')
-        }
-      } catch (e) {
-        window.alert('解析聊天记录失败: ' + (e as Error).message)
-      } finally {
-        setChatlogResolving(false)
-      }
-    }
-  }
-
-  // ── message edit (C5) ──
-  const [editedOpen, setEditedOpen] = useState(false)
-  const [edits, setEdits] = useState<readonly EditedMessageRecord[]>([])
-  const [editedIds, setEditedIds] = useState<Set<number>>(new Set())
-  const [editing, setEditing] = useState(false)
-  /** 「编辑消息副本」对话框：目标消息 / 编辑中的文本 / 失败原因 / 保存中 */
-  const [editTarget, setEditTarget] = useState<WechatMessage | null>(null)
-  const [editText, setEditText] = useState('')
-  const [editErr, setEditErr] = useState<string | null>(null)
-  const [editBusy, setEditBusy] = useState(false)
-  const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
-
-  // 打开即把光标放进编辑框并全选原文（Radix 默认聚焦标题栏的关闭按钮）。
-  useEffect(() => {
-    if (!editTarget) return undefined
-    const t = window.setTimeout(() => { editAreaRef.current?.focus(); editAreaRef.current?.select() }, 60)
-    return () => { window.clearTimeout(t) }
-  }, [editTarget])
-
-  const loadEdits = useCallback(async (): Promise<void> => {
-    try {
-      const r = await apiListEditedMessages(curSession ? { sessionId: curSession.username } : undefined)
-      setEdits(r.items)
-      setEditedIds(new Set(r.items.map(it => it.localId)))
-    } catch { setEdits([]); setEditedIds(new Set()) }
-  }, [curSession])
-
-  const openEdits = useCallback(async (): Promise<void> => {
-    setEditedOpen(v => !v)
-    if (!editedOpen) await loadEdits()
-  }, [editedOpen, loadEdits])
-
-  const reloadCurrent = useCallback(async (): Promise<void> => {
-    if (!curSession) return
-    // 记下发起时的归属：编辑后刷新期间用户可能已经切走，回来必须校验。
-    const talker = curSession.username
-    const epoch = sessionEpochRef.current
-    try {
-      // 键带 v2：早期版本在「切会话」竞态下把上一个会话写进过 v1 缓存（别人的消息留在本会话里），
-      // 升版让那些脏数据彻底读不到；读到之后还要再校验一次归属（见 msg-scope.ts）。
-      const raw = readRenderCache<WechatMessage[]>('chat-msgs:v2:' + talker)
-      const cached = raw && messagesMatchTalker(raw, talker, selfWxid) ? raw : null
-      if (!sessionAlive(epoch, talker)) return
-      if (cached && cached.length > 0) {
-        setMessages(cached)
-        setHasMore(true)
-      }
-      const env = await apiGetMessages({ talker, limit: 100 })
-      if (!sessionAlive(epoch, talker)) return
-      setMessages(env.messages)
-      setWatermarkFrom(env.messages)
-      setSelfWxid(env.selfWxid ?? '')
-      setHasMore(env.hasMore ?? false)
-      setCursor(env.cursor ?? 0)
-      setCursorLocalId(env.cursorLocalId)
-      setTypeStats(env.typeStats ?? [])
-      writeRenderCache('chat-msgs:v2:' + talker, env.messages)
-    } catch { /* keep current view */ }
-  }, [curSession])
-
-  /**
-   * 打开「编辑消息副本」对话框。
-   *
-   * 原实现用 `window.prompt(...)` 取新内容 —— **Electron 渲染进程不支持 prompt**
-   * （调用即抛 `prompt() is not supported.`），于是右键菜单点「编辑消息副本」除了在
-   * 控制台留一条报错外什么都不发生（用户反馈「为什么还不能编辑信息」）。
-   * 改成应用内对话框：可多行、能显示保存失败的原文、Esc/取消可退。
-   */
-  const doEdit = useCallback((m: WechatMessage): void => {
-    setEditTarget(m)
-    setEditText(m.displayText || m.strContent || '')
-    setEditErr(null)
-  }, [])
-
-  const closeEdit = useCallback((): void => {
-    setEditTarget(null)
-    setEditErr(null)
-  }, [])
-
-  const saveEdit = useCallback(async (): Promise<void> => {
-    const m = editTarget
-    if (!m || !curSession) return
-    setEditBusy(true)
-    setEditErr(null)
-    try {
-      const r = await apiEditChatMessage({ username: curSession.username, localId: m.localId, content: editText })
-      if (!r.ok) { setEditErr(r.error ?? '未知错误'); return }
-      setEditTarget(null)
-      await reloadCurrent()
-      await loadEdits()
-    } catch (e) {
-      setEditErr((e as Error).message)
-    } finally {
-      setEditBusy(false)
-    }
-  }, [editTarget, editText, curSession, reloadCurrent, loadEdits])
-
-  const sessionListRef = useRef<HTMLDivElement | null>(null)
   const sessionsPager = usePagedList<WechatSession>({
     pageSize: 120,
     fetchPage: async (offset, limit) => {
@@ -517,75 +280,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [sessionsPager.refresh])
 
   /** Clear the current session's draft (only the local decrypted copy). */
-  const clearDraft = useCallback(async (): Promise<void> => {
-    if (!curSession || !curSession.draft) return
-    const ok = await confirm({
-      title: `清空「${curSession.displayName || curSession.username}」的草稿？`,
-      message: '清空的是本地解密副本里的草稿，不影响微信本身。',
-      tone: 'danger',
-    })
-    if (!ok) return
-    try {
-      const r = await apiClearSessionDraft({ username: curSession.username })
-      if (r.ok) reloadSessionsList()
-    } catch { /* keep view */ }
-  }, [curSession, reloadSessionsList])
-
-  const clearAllDrafts = useCallback(async (): Promise<void> => {
-    const ok = await confirm({
-      title: '清空所有会话草稿？',
-      message: '清空的是本地解密副本里的草稿，不影响微信本身。',
-      tone: 'danger',
-    })
-    if (!ok) return
-    try {
-      const r = await apiClearAllSessionDrafts()
-      window.alert(`已清空 ${r.count} 条草稿`)
-      reloadSessionsList()
-    } catch (e) {
-      window.alert('清空失败: ' + (e as Error).message)
-    }
-  }, [reloadSessionsList])
-
-  const copyMsgJson = useCallback((m: WechatMessage): void => {
-    try {
-      const json = JSON.stringify({
-        localId: m.localId,
-        type: m.type,
-        isSender: m.isSender,
-        createTime: m.createTime,
-        displayText: m.displayText,
-        typeLabel: m.typeLabel,
-        sender: m.sender ?? undefined,
-        rich: m.rich ?? undefined,
-      }, null, 2)
-      void navigator.clipboard.writeText(json).then(() => { window.alert('消息 JSON 已复制') }).catch(() => { window.alert('复制失败') })
-    } catch { window.alert('复制失败') }
-  }, [])
-
-  const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
-    if (!curSession) return
-    const ok = await confirm({
-      title: '恢复该消息为原始内容？',
-      message: '本次编辑会被撤销。',
-      tone: 'danger',
-      confirmText: '恢复原文',
-    })
-    if (!ok) return
-    setEditing(true)
-    try {
-      const r = await apiResetEditedMessage({ username: rec.sessionId, localId: rec.localId })
-      if (!r.ok) window.alert('恢复失败: ' + (r.error ?? ''))
-      else { await reloadCurrent(); await loadEdits() }
-    } catch (e) {
-      window.alert('恢复失败: ' + (e as Error).message)
-    } finally {
-      setEditing(false)
-    }
-  }, [curSession, reloadCurrent, loadEdits])
-
-  // ── message search (A7) ──
-  const [searchMode, setSearchMode] = useState<'session' | 'message'>('session')
+  const { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
   const [msgHits, setMsgHits] = useState<readonly SearchHit[]>([])
   const [msgSearchLoading, setMsgSearchLoading] = useState(false)
   const [msgSearchError, setMsgSearchError] = useState<string | null>(null)
@@ -627,6 +322,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
   const [chatlogStack, setChatlogStack] = useState<Array<{ title: string; records: ChatlogRecord[] }>>([])
   const [chatlogResolving, setChatlogResolving] = useState(false)
+  const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
   const chatlogOpen = chatlogStack.length > 0 ? chatlogStack[chatlogStack.length - 1] : null
   const profileHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1329,20 +1025,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     void openSessionAndLocate(initialTarget.username, initialTarget.localId)
   }, [initialTarget, openSessionAndLocate])
 
-  const onEditFn = doEdit
-
-  /** 消息右键菜单的光标定位状态（null = 未打开）。 */
-  const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>(null)
-
-  /**
-   * 切换分类视图（全部 / 公众号 / 服务号 / 客服）。
-   *
-   * 类目互斥：列表换类目后，右侧那个「打开中的会话」已经不属于当前界面，
-   * 必须一并关掉 —— 否则在「客服」视图里会看到之前打开的某个公众号聊天，
-   * 就是这个界面上出现了别的类目的信息。会话无关的浮层（聊天记录弹窗、
-   * 右键菜单）也一起收起，避免残留指向上一个会话的内容。
-   * @param next - the category to switch to.
-   */
   const changeView = useCallback((next: ChatView): void => {
     if (next === view) return
     setView(next)
