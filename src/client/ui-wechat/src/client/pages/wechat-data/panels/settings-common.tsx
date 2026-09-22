@@ -238,3 +238,4 @@ export interface Notice {
   text: string
   details?: readonly string[]
 }
+

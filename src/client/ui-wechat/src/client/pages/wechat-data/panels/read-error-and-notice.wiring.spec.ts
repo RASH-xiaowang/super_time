@@ -16,12 +16,19 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { readSettingsSource } from './settings-source.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 /** 去注释后读源码（注释里会提到旧写法，不能让断言误判）。 */
 function readCode(file: string): string {
-  return readFileSync(join(HERE, file), 'utf8')
+  // M21：设置面板已拆成多份 —— 前缀匹配（不区分大小写）读联合。
+  // 注意联合也要走下面的**去注释**：第一版在这里直接 return，注释里那句
+  // 「改前是 `setMessage(x); setTimeout(() => setMessage(null), N)`」当场把反例断言打红。
+  const raw = /^settings(-[a-z-]+)?\.tsx?$/i.test(file)
+    ? readSettingsSource()
+    : readFileSync(join(HERE, file), 'utf8')
+  return raw
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split(/\r?\n/)
     .map(l => l.replace(/\/\/.*$/, ''))

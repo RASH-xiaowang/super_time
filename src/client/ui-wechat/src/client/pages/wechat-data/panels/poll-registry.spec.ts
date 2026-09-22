@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPollRegistry } from './poll-registry.ts'
+import { readSettingsSource } from './settings-source.ts'
 
 afterEach(() => { vi.useRealTimers() })
 
@@ -89,7 +90,8 @@ describe('M15 轮询登记表', () => {
  * 模块级用例测不到接线。
  */
 describe('M15 接线：Settings 的轮询必须登记 + 卸载清理', () => {
-  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Settings.tsx'), 'utf8')
+  // M21：设置面板已拆成多份 ⇒ 读联合（断言未改）
+  const src = readSettingsSource()
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')
 
   it('文件里没有裸 setInterval（全部经登记表）', () => {

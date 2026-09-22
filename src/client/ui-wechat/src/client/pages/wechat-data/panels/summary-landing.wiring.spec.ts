@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { readSettingsSource } from './settings-source.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -31,7 +32,8 @@ const ROOT = findRoot(HERE)
 const panel = readFileSync(join(HERE, 'DailySummary.tsx'), 'utf8')
 const panelCss = readFileSync(join(HERE, 'daily-summary.module.css'), 'utf8')
 const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx'), 'utf8')
-const settings = readFileSync(join(HERE, 'Settings.tsx'), 'utf8')
+// M21：设置面板已拆成多份 ⇒ 节定义读联合（断言未改）
+const settings = readSettingsSource()
 
 describe('每日总结：空态把"怎么开始"说清楚', () => {
   it('0 任务 0 记录时渲染落地卡，而不是只留一张空卡', () => {
