@@ -1362,7 +1362,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             )}
             {!loading && !error && groups.length > grpCount && <ListSentinel refFn={grpSentinel} />}
           </div>
-          {createPortal(
+          {typeof document !== 'undefined' && createPortal(
             <button
               type="button"
               className={css.backTop}

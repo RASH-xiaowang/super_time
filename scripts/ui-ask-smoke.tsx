@@ -25,6 +25,7 @@ import { DailySummaryPanel } from '../src/client/ui-wechat/src/client/pages/wech
 import { PeriodSummaryPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/PeriodSummary.tsx'
 import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx'
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
+import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -415,6 +416,23 @@ check('社交图谱：无数据时面板头与右侧控制栏都能渲染', () =
 check('知识图谱：同一组件换 variant 也能渲染', () => {
   const html = renderToStaticMarkup(h(GraphPanel, { variant: 'knowledge' }))
   ok(html.includes('知识图谱'), '缺少知识图谱标题')
+})
+
+// M21 要拆 Moments.tsx（1696 行）前先补的**渲染兜底**：这一屏此前只有源码级守卫、
+// 没有任何一处真的把它渲染出来（拆 JSX 时最容易出的错是运行期崩溃，源码断言看不见）。
+console.log('朋友圈（M21 拆 Moments 前的渲染兜底）')
+check('朋友圈：无数据时面板头与工具栏都能渲染（不崩）', () => {
+  const html = renderToStaticMarkup(h(MomentsPanel, { author: null }))
+  ok(html.includes('朋友圈'), '缺少面板标题')
+  ok(html.includes('本机朋友圈动态'), '缺少面板说明（desc）')
+  for (const t of ['搜索作者 / 内容 / 位置 / 评论', '隐私', '导出', '排序']) {
+    ok(html.includes(t), `缺少工具栏项：${t}`)
+  }
+})
+check('朋友圈：带 author 过滤时给出「仅看 X」与返回入口', () => {
+  const html = renderToStaticMarkup(h(MomentsPanel, { author: '某人', onClearAuthor: () => {} }))
+  ok(html.includes('仅看 某人'), '缺少「仅看 X」入口')
+  ok(html.includes('返回全部动态'), '缺少返回全部动态入口')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)
