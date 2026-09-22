@@ -26,214 +26,166 @@ import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
 export interface ChatsViewProps {
-  EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
-  EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
-  aiEligible: boolean
-  aiFull: boolean
-  aiOpen: boolean
-  aiTarget: WechatSession | null
-  annCanExpand: boolean
-  annExpanded: boolean
-  annRef: React.MutableRefObject<HTMLDivElement | null>
-  batchExporting: boolean
-  batchMode: boolean
-  batchMsg: string | null
-  buildIndex: (silent?: boolean) => Promise<void>
-  calActiveDays: number
-  calAvg: number
-  calCounts: Record<string, number>
-  calDays: number
-  calFirstDow: number
-  calHeat: (cnt: number) => string
-  calLoading: boolean
-  calMonth: number
-  calOpen: boolean
-  calTop: { day: number; count: number } | null
-  calTotal: number
-  calYear: number
-  changeView: (next: ChatView) => void
-  chatlogOpen: { title: string; records: ChatlogRecord[] } | null
-  chatlogResolving: boolean
-  chatlogStack: Array<{ title: string; records: ChatlogRecord[] }>
-  chooseExportDir: () => Promise<void>
-  clearAllDrafts: () => Promise<void>
-  clearDraft: () => Promise<void>
-  closeEdit: () => void
-  curSession: WechatSession | null
-  doReset: (rec: EditedMessageRecord) => Promise<void>
-  editAreaRef: React.MutableRefObject<HTMLTextAreaElement | null>
-  editBusy: boolean
-  editErr: string | null
-  editTarget: WechatMessage | null
-  editText: string
-  editedOpen: boolean
-  editing: boolean
-  edits: readonly EditedMessageRecord[]
-  error: string | null
-  expCount: number
-  expDir: string
-  expFilename: string
-  expFormat: 'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'
-  expFrom: string
-  expTo: string
-  expTypes: readonly string[]
-  expZip: boolean
-  exportBatch: () => Promise<void>
-  exportMsg: string | null
-  exportOpen: boolean
-  exportSession: () => Promise<void>
-  exporting: boolean
-  filtered: readonly WechatSession[]
-  filteredMembers: GroupMember[]
-  groupInfo: GroupInfo | null
-  groupInfoErr: string | null
-  groupInfoLoading: boolean
-  groupInfoOpen: boolean
-  groupInfoTitleId: string
-  hasMore: boolean
-  hideMemberProfile: () => void
-  indexBuilding: boolean
-  jumpToDay: (day: number) => void
-  loadMore: () => Promise<void>
-  loading: boolean
-  memberExpanded: boolean
-  memberLimit: number
-  memberQuery: string
-  memberSearch: string
-  memberTotal: number
-  messages: readonly WechatMessage[]
-  messagesMatchSession: boolean
-  moreOpen: boolean
-  msgEndRef: React.MutableRefObject<HTMLDivElement | null>
-  msgError: string | null
-  msgHits: readonly SearchHit[]
-  msgIndexed: boolean
-  msgItems: MessageRenderItem[]
-  msgLoading: boolean
-  msgMenu: { x: number; y: number; m: WechatMessage; kind: RenderKind } | null
-  msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
-  msgSearchError: string | null
-  msgSearchLoading: boolean
-  msgSearched: boolean
-  msgVirtualizer: Virtualizer<HTMLDivElement, Element>
-  normalList: readonly WechatSession[]
-  onSearchInput: (q: string) => void
-  openCalendar: () => Promise<void>
-  openEdits: () => Promise<void>
-  openGroupInfo: () => void
-  openNestedChatlog: (rec: ChatlogRecord) => Promise<void>
-  openSession: (s: WechatSession) => Promise<void>
-  openSessionAndLocate: (username: string, localId?: number, dayStart?: number) => Promise<void>
-  pickingDir: boolean
-  pinnedCollapsed: boolean
-  pinnedList: readonly WechatSession[]
-  pollStatus: string
-  profileMember: GroupMember | null
-  profilePos: { left: number; top: number } | null
-  renderMsgItem: (item: MessageRenderItem) => React.JSX.Element | null
-  renderSession: (s: WechatSession) => React.JSX.Element
-  runMenuAction: (item: MsgMenuItem, m: WechatMessage) => void
-  saveEdit: () => Promise<void>
-  search: string
-  searchMode: 'session' | 'message'
-  selected: Set<string>
-  sessCount: number
-  sessSentinel: (el: HTMLDivElement | null) => void
-  sessionListRef: React.MutableRefObject<HTMLDivElement | null>
-  sessionSearching: boolean
-  sessionsLoadMoreRef: (el: HTMLDivElement | null) => void
-  sessionsPager: ReturnType<typeof usePagedList<WechatSession>>
-  setAiFull: React.Dispatch<React.SetStateAction<boolean>>
-  setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setAnnExpanded: React.Dispatch<React.SetStateAction<boolean>>
-  setBatchMode: React.Dispatch<React.SetStateAction<boolean>>
-  setCalOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
-  setEditText: React.Dispatch<React.SetStateAction<string>>
-  setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setExpCount: React.Dispatch<React.SetStateAction<number>>
-  setExpFilename: React.Dispatch<React.SetStateAction<string>>
-  setExpFormat: React.Dispatch<React.SetStateAction<'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'>>
-  setExpFrom: React.Dispatch<React.SetStateAction<string>>
-  setExpTo: React.Dispatch<React.SetStateAction<string>>
-  setExpTypes: React.Dispatch<React.SetStateAction<readonly string[]>>
-  setExpZip: React.Dispatch<React.SetStateAction<boolean>>
-  setExportOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setMemberExpanded: React.Dispatch<React.SetStateAction<boolean>>
-  setMemberSearch: React.Dispatch<React.SetStateAction<string>>
-  setMoreOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setMsgMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>>
-  setProfileMember: React.Dispatch<React.SetStateAction<GroupMember | null>>
-  setSearch: React.Dispatch<React.SetStateAction<string>>
-  setSearchMode: React.Dispatch<React.SetStateAction<'session' | 'message'>>
-  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>
-  setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setViewer: React.Dispatch<React.SetStateAction<{ images: ViewerImage[]; index: number } | null>>
-  showMemberProfile: (m: GroupMember, el: HTMLElement) => void
-  shownMembers: GroupMember[]
-  stats: { friends: number; groups: number; unread: number }
-  suggestOpen: boolean
-  switchCalMonth: (delta: number) => Promise<void>
-  togglePinned: () => void
-  typeStats: readonly { type: number; label: string; count: number }[]
-  view: ChatView
-  viewer: { images: ViewerImage[]; index: number } | null
+  /** 面板作用域里那批状态/回调（收成一个对象：调用点是 155 行道具字面量，太长）。 */
+  state: {
+      EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
+      EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
+      aiEligible: boolean
+      aiFull: boolean
+      aiOpen: boolean
+      aiTarget: WechatSession | null
+      annCanExpand: boolean
+      annExpanded: boolean
+      annRef: React.MutableRefObject<HTMLDivElement | null>
+      batchExporting: boolean
+      batchMode: boolean
+      batchMsg: string | null
+      buildIndex: (silent?: boolean) => Promise<void>
+      calActiveDays: number
+      calAvg: number
+      calCounts: Record<string, number>
+      calDays: number
+      calFirstDow: number
+      calHeat: (cnt: number) => string
+      calLoading: boolean
+      calMonth: number
+      calOpen: boolean
+      calTop: { day: number; count: number } | null
+      calTotal: number
+      calYear: number
+      changeView: (next: ChatView) => void
+      chatlogOpen: { title: string; records: ChatlogRecord[] } | null
+      chatlogResolving: boolean
+      chatlogStack: Array<{ title: string; records: ChatlogRecord[] }>
+      chooseExportDir: () => Promise<void>
+      clearAllDrafts: () => Promise<void>
+      clearDraft: () => Promise<void>
+      closeEdit: () => void
+      curSession: WechatSession | null
+      doReset: (rec: EditedMessageRecord) => Promise<void>
+      editAreaRef: React.MutableRefObject<HTMLTextAreaElement | null>
+      editBusy: boolean
+      editErr: string | null
+      editTarget: WechatMessage | null
+      editText: string
+      editedOpen: boolean
+      editing: boolean
+      edits: readonly EditedMessageRecord[]
+      error: string | null
+      expCount: number
+      expDir: string
+      expFilename: string
+      expFormat: 'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'
+      expFrom: string
+      expTo: string
+      expTypes: readonly string[]
+      expZip: boolean
+      exportBatch: () => Promise<void>
+      exportMsg: string | null
+      exportOpen: boolean
+      exportSession: () => Promise<void>
+      exporting: boolean
+      filtered: readonly WechatSession[]
+      filteredMembers: GroupMember[]
+      groupInfo: GroupInfo | null
+      groupInfoErr: string | null
+      groupInfoLoading: boolean
+      groupInfoOpen: boolean
+      groupInfoTitleId: string
+      hasMore: boolean
+      hideMemberProfile: () => void
+      indexBuilding: boolean
+      jumpToDay: (day: number) => void
+      loadMore: () => Promise<void>
+      loading: boolean
+      memberExpanded: boolean
+      memberLimit: number
+      memberQuery: string
+      memberSearch: string
+      memberTotal: number
+      messages: readonly WechatMessage[]
+      messagesMatchSession: boolean
+      moreOpen: boolean
+      msgEndRef: React.MutableRefObject<HTMLDivElement | null>
+      msgError: string | null
+      msgHits: readonly SearchHit[]
+      msgIndexed: boolean
+      msgItems: MessageRenderItem[]
+      msgLoading: boolean
+      msgMenu: { x: number; y: number; m: WechatMessage; kind: RenderKind } | null
+      msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
+      msgSearchError: string | null
+      msgSearchLoading: boolean
+      msgSearched: boolean
+      msgVirtualizer: Virtualizer<HTMLDivElement, Element>
+      normalList: readonly WechatSession[]
+      onSearchInput: (q: string) => void
+      openCalendar: () => Promise<void>
+      openEdits: () => Promise<void>
+      openGroupInfo: () => void
+      openNestedChatlog: (rec: ChatlogRecord) => Promise<void>
+      openSession: (s: WechatSession) => Promise<void>
+      openSessionAndLocate: (username: string, localId?: number, dayStart?: number) => Promise<void>
+      pickingDir: boolean
+      pinnedCollapsed: boolean
+      pinnedList: readonly WechatSession[]
+      pollStatus: string
+      profileMember: GroupMember | null
+      profilePos: { left: number; top: number } | null
+      renderMsgItem: (item: MessageRenderItem) => React.JSX.Element | null
+      renderSession: (s: WechatSession) => React.JSX.Element
+      runMenuAction: (item: MsgMenuItem, m: WechatMessage) => void
+      saveEdit: () => Promise<void>
+      search: string
+      searchMode: 'session' | 'message'
+      selected: Set<string>
+      sessCount: number
+      sessSentinel: (el: HTMLDivElement | null) => void
+      sessionListRef: React.MutableRefObject<HTMLDivElement | null>
+      sessionSearching: boolean
+      sessionsLoadMoreRef: (el: HTMLDivElement | null) => void
+      sessionsPager: ReturnType<typeof usePagedList<WechatSession>>
+      setAiFull: React.Dispatch<React.SetStateAction<boolean>>
+      setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setAnnExpanded: React.Dispatch<React.SetStateAction<boolean>>
+      setBatchMode: React.Dispatch<React.SetStateAction<boolean>>
+      setCalOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
+      setEditText: React.Dispatch<React.SetStateAction<string>>
+      setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setExpCount: React.Dispatch<React.SetStateAction<number>>
+      setExpFilename: React.Dispatch<React.SetStateAction<string>>
+      setExpFormat: React.Dispatch<React.SetStateAction<'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'>>
+      setExpFrom: React.Dispatch<React.SetStateAction<string>>
+      setExpTo: React.Dispatch<React.SetStateAction<string>>
+      setExpTypes: React.Dispatch<React.SetStateAction<readonly string[]>>
+      setExpZip: React.Dispatch<React.SetStateAction<boolean>>
+      setExportOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setMemberExpanded: React.Dispatch<React.SetStateAction<boolean>>
+      setMemberSearch: React.Dispatch<React.SetStateAction<string>>
+      setMoreOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setMsgMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>>
+      setProfileMember: React.Dispatch<React.SetStateAction<GroupMember | null>>
+      setSearch: React.Dispatch<React.SetStateAction<string>>
+      setSearchMode: React.Dispatch<React.SetStateAction<'session' | 'message'>>
+      setSelected: React.Dispatch<React.SetStateAction<Set<string>>>
+      setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
+      setViewer: React.Dispatch<React.SetStateAction<{ images: ViewerImage[]; index: number } | null>>
+      showMemberProfile: (m: GroupMember, el: HTMLElement) => void
+      shownMembers: GroupMember[]
+      stats: { friends: number; groups: number; unread: number }
+      suggestOpen: boolean
+      switchCalMonth: (delta: number) => Promise<void>
+      togglePinned: () => void
+      typeStats: readonly { type: number; label: string; count: number }[]
+      view: ChatView
+      viewer: { images: ViewerImage[]; index: number } | null
+  }
 }
 
-export function ChatsView({
-  EXPO_FORMATS, EXPO_TYPES, aiEligible,
-  aiFull, aiOpen, aiTarget,
-  annCanExpand, annExpanded, annRef,
-  batchExporting, batchMode, batchMsg,
-  buildIndex, calActiveDays, calAvg,
-  calCounts, calDays, calFirstDow,
-  calHeat, calLoading, calMonth,
-  calOpen, calTop, calTotal,
-  calYear, changeView, chatlogOpen,
-  chatlogResolving, chatlogStack, chooseExportDir,
-  clearAllDrafts, clearDraft, closeEdit,
-  curSession, doReset, editAreaRef,
-  editBusy, editErr, editTarget,
-  editText, editedOpen, editing,
-  edits, error, expCount,
-  expDir, expFilename, expFormat,
-  expFrom, expTo, expTypes,
-  expZip, exportBatch, exportMsg,
-  exportOpen, exportSession, exporting,
-  filtered, filteredMembers, groupInfo,
-  groupInfoErr, groupInfoLoading, groupInfoOpen,
-  groupInfoTitleId, hasMore, hideMemberProfile,
-  indexBuilding, jumpToDay, loadMore,
-  loading, memberExpanded, memberLimit,
-  memberQuery, memberSearch, memberTotal,
-  messages, messagesMatchSession, moreOpen,
-  msgEndRef, msgError, msgHits,
-  msgIndexed, msgItems, msgLoading,
-  msgMenu, msgScrollRef, msgSearchError,
-  msgSearchLoading, msgSearched, msgVirtualizer,
-  normalList, onSearchInput, openCalendar,
-  openEdits, openGroupInfo, openNestedChatlog,
-  openSession, openSessionAndLocate, pickingDir,
-  pinnedCollapsed, pinnedList, pollStatus,
-  profileMember, profilePos, renderMsgItem,
-  renderSession, runMenuAction, saveEdit,
-  search, searchMode, selected,
-  sessCount, sessSentinel, sessionListRef,
-  sessionSearching, sessionsLoadMoreRef, sessionsPager,
-  setAiFull, setAiOpen, setAnnExpanded,
-  setBatchMode, setCalOpen, setChatlogStack,
-  setEditText, setEditedOpen, setExpCount,
-  setExpFilename, setExpFormat, setExpFrom,
-  setExpTo, setExpTypes, setExpZip,
-  setExportOpen, setGroupInfoOpen, setMemberExpanded,
-  setMemberSearch, setMoreOpen, setMsgMenu,
-  setProfileMember, setSearch, setSearchMode,
-  setSelected, setSuggestOpen, setViewer,
-  showMemberProfile, shownMembers, stats,
-  suggestOpen, switchCalMonth, togglePinned,
-  typeStats, view, viewer,
-}: ChatsViewProps): React.JSX.Element {
+export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
   return (
     <div className={css.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}

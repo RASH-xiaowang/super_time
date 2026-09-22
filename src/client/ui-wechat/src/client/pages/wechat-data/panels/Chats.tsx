@@ -1058,162 +1058,37 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
+  const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget,
+    annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
+    buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
+    calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
+    calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir,
+    clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef,
+    editBusy, editErr, editTarget, editText, editedOpen, editing,
+    edits, error, expCount, expDir, expFilename, expFormat,
+    expFrom, expTo, expTypes, expZip, exportBatch, exportMsg,
+    exportOpen, exportSession, exporting, filtered, filteredMembers, groupInfo,
+    groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile,
+    indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit,
+    memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen,
+    msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading,
+    msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer,
+    normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog,
+    openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus,
+    profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
+    search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
+    sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
+    setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount,
+    setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
+    setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
+    setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,
+    showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned,
+    typeStats, view, viewer,
+  }
+
   return (
-    <ChatsView
-      EXPO_FORMATS={EXPO_FORMATS}
-      EXPO_TYPES={EXPO_TYPES}
-      aiEligible={aiEligible}
-      aiFull={aiFull}
-      aiOpen={aiOpen}
-      aiTarget={aiTarget}
-      annCanExpand={annCanExpand}
-      annExpanded={annExpanded}
-      annRef={annRef}
-      batchExporting={batchExporting}
-      batchMode={batchMode}
-      batchMsg={batchMsg}
-      buildIndex={buildIndex}
-      calActiveDays={calActiveDays}
-      calAvg={calAvg}
-      calCounts={calCounts}
-      calDays={calDays}
-      calFirstDow={calFirstDow}
-      calHeat={calHeat}
-      calLoading={calLoading}
-      calMonth={calMonth}
-      calOpen={calOpen}
-      calTop={calTop}
-      calTotal={calTotal}
-      calYear={calYear}
-      changeView={changeView}
-      chatlogOpen={chatlogOpen}
-      chatlogResolving={chatlogResolving}
-      chatlogStack={chatlogStack}
-      chooseExportDir={chooseExportDir}
-      clearAllDrafts={clearAllDrafts}
-      clearDraft={clearDraft}
-      closeEdit={closeEdit}
-      curSession={curSession}
-      doReset={doReset}
-      editAreaRef={editAreaRef}
-      editBusy={editBusy}
-      editErr={editErr}
-      editTarget={editTarget}
-      editText={editText}
-      editedOpen={editedOpen}
-      editing={editing}
-      edits={edits}
-      error={error}
-      expCount={expCount}
-      expDir={expDir}
-      expFilename={expFilename}
-      expFormat={expFormat}
-      expFrom={expFrom}
-      expTo={expTo}
-      expTypes={expTypes}
-      expZip={expZip}
-      exportBatch={exportBatch}
-      exportMsg={exportMsg}
-      exportOpen={exportOpen}
-      exportSession={exportSession}
-      exporting={exporting}
-      filtered={filtered}
-      filteredMembers={filteredMembers}
-      groupInfo={groupInfo}
-      groupInfoErr={groupInfoErr}
-      groupInfoLoading={groupInfoLoading}
-      groupInfoOpen={groupInfoOpen}
-      groupInfoTitleId={groupInfoTitleId}
-      hasMore={hasMore}
-      hideMemberProfile={hideMemberProfile}
-      indexBuilding={indexBuilding}
-      jumpToDay={jumpToDay}
-      loadMore={loadMore}
-      loading={loading}
-      memberExpanded={memberExpanded}
-      memberLimit={memberLimit}
-      memberQuery={memberQuery}
-      memberSearch={memberSearch}
-      memberTotal={memberTotal}
-      messages={messages}
-      messagesMatchSession={messagesMatchSession}
-      moreOpen={moreOpen}
-      msgEndRef={msgEndRef}
-      msgError={msgError}
-      msgHits={msgHits}
-      msgIndexed={msgIndexed}
-      msgItems={msgItems}
-      msgLoading={msgLoading}
-      msgMenu={msgMenu}
-      msgScrollRef={msgScrollRef}
-      msgSearchError={msgSearchError}
-      msgSearchLoading={msgSearchLoading}
-      msgSearched={msgSearched}
-      msgVirtualizer={msgVirtualizer}
-      normalList={normalList}
-      onSearchInput={onSearchInput}
-      openCalendar={openCalendar}
-      openEdits={openEdits}
-      openGroupInfo={openGroupInfo}
-      openNestedChatlog={openNestedChatlog}
-      openSession={openSession}
-      openSessionAndLocate={openSessionAndLocate}
-      pickingDir={pickingDir}
-      pinnedCollapsed={pinnedCollapsed}
-      pinnedList={pinnedList}
-      pollStatus={pollStatus}
-      profileMember={profileMember}
-      profilePos={profilePos}
-      renderMsgItem={renderMsgItem}
-      renderSession={renderSession}
-      runMenuAction={runMenuAction}
-      saveEdit={saveEdit}
-      search={search}
-      searchMode={searchMode}
-      selected={selected}
-      sessCount={sessCount}
-      sessSentinel={sessSentinel}
-      sessionListRef={sessionListRef}
-      sessionSearching={sessionSearching}
-      sessionsLoadMoreRef={sessionsLoadMoreRef}
-      sessionsPager={sessionsPager}
-      setAiFull={setAiFull}
-      setAiOpen={setAiOpen}
-      setAnnExpanded={setAnnExpanded}
-      setBatchMode={setBatchMode}
-      setCalOpen={setCalOpen}
-      setChatlogStack={setChatlogStack}
-      setEditText={setEditText}
-      setEditedOpen={setEditedOpen}
-      setExpCount={setExpCount}
-      setExpFilename={setExpFilename}
-      setExpFormat={setExpFormat}
-      setExpFrom={setExpFrom}
-      setExpTo={setExpTo}
-      setExpTypes={setExpTypes}
-      setExpZip={setExpZip}
-      setExportOpen={setExportOpen}
-      setGroupInfoOpen={setGroupInfoOpen}
-      setMemberExpanded={setMemberExpanded}
-      setMemberSearch={setMemberSearch}
-      setMoreOpen={setMoreOpen}
-      setMsgMenu={setMsgMenu}
-      setProfileMember={setProfileMember}
-      setSearch={setSearch}
-      setSearchMode={setSearchMode}
-      setSelected={setSelected}
-      setSuggestOpen={setSuggestOpen}
-      setViewer={setViewer}
-      showMemberProfile={showMemberProfile}
-      shownMembers={shownMembers}
-      stats={stats}
-      suggestOpen={suggestOpen}
-      switchCalMonth={switchCalMonth}
-      togglePinned={togglePinned}
-      typeStats={typeStats}
-      view={view}
-      viewer={viewer}
-    />
+    <ChatsView state={viewState} />
   )
 }
 
