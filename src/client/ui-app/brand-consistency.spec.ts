@@ -51,6 +51,10 @@ function walk(rel = ''): string[] {
 }
 
 const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
+/** 宿主层源码的联合（M21 把 IPC 频道拆进了 src/backend/ipc-*.js：界面文案断言跟到哪份都算数）。 */
+const readHost = (): string => [read('main.js')]
+  .concat(readdirSync(join(ROOT, 'src', 'backend')).filter((f) => /^ipc-[a-z]+\.js$/.test(f)).sort()
+    .map((f) => read(join('src', 'backend', f)))).join('\n')
 
 describe('品牌统一为 Super Time', () => {
   it('仓库（除历史记录文档外）不得再出现旧名「微信+」', () => {
@@ -83,8 +87,8 @@ describe('品牌统一为 Super Time', () => {
   })
 
   it('后端错误文案也走新名（这些字符串会直接显示在界面上）', () => {
-    expect(read('main.js')).toContain("'Super Time 后端未初始化'")
+    expect(readHost()).toContain("'Super Time 后端未初始化'")
     expect(read('src/backend/wechat-worker.js')).toContain("'Super Time 后端未初始化'")
-    expect(read('main.js')).toContain('Super Time 后端连续')
+    expect(readHost()).toContain('Super Time 后端连续')
   })
 })
