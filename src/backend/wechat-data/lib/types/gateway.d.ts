@@ -252,6 +252,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
      * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
      */
     private cdnSwitches;
+    private _kbRemotes?;
+    /** KB 域的处理器（体在 remotes/kb.ts）；这里只组装 ctx 与转发。 */
+    private kbRemotes;
     getSessions(options?: {
         keyword?: string;
         limit?: number;

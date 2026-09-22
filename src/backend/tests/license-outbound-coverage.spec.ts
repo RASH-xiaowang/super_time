@@ -20,7 +20,7 @@
  * @vitest-environment node
  */
 import { createRequire } from 'node:module'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -49,7 +49,46 @@ function isCapabilityProbe(node: ts.CallExpression): boolean {
 
 type MethodScan = { name: string; seams: string[] }
 
-function scanGateway(src: string): { methods: MethodScan[]; decoratedCount: number } {
+/** 方法体里出现 `this.kbRemotes().NAME(` 这类**转发**时，接缝要看被转发到的那份实现。 */
+function delegationTarget(bodyText: string): string | null {
+  const m = /this\.[A-Za-z_$][\w$]*\(\)\.([A-Za-z_$][\w$]*)\(/.exec(bodyText)
+  return m ? m[1] : null
+}
+
+/**
+ * 扫「搬出去的处理器」：`createXxxRemotes(rc)` 返回的对象字面量里的方法/箭头函数，按名字索引其接缝。
+ * M21 把 gateway 的域方法体搬进 `src/backend/wechat-data/src/remotes/*.ts`，网关上只剩签名 + 转发 ——
+ * 不跟这一步的话，出网判据会**静默失效**（搬走的方法一个个都不再被视为出网）。
+ */
+function scanImpls(src: string): Map<string, string[]> {
+  const sf = ts.createSourceFile('impls.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const impls = new Map<string, string[]>()
+  const seamsOf = (root: ts.Node): string[] => {
+    const seams: string[] = []
+    const walk = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
+        const callee = n.expression.name.text
+        if (PRIVACY_SEAMS.has(callee)) seams.push(callee)
+        else if (EMBED_SEAMS.has(callee) && !isCapabilityProbe(n)) seams.push(callee)
+      }
+      n.forEachChild(walk)
+    }
+    walk(root)
+    return seams
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
+      impls.set(node.name.text, seamsOf(node))
+    } else if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)) {
+      impls.set(node.name.text, seamsOf(node.initializer))
+    }
+    node.forEachChild(visit)
+  }
+  visit(sf)
+  return impls
+}
+
+function scanGateway(src: string, impls: Map<string, string[]>): { methods: MethodScan[]; decoratedCount: number } {
   const sf = ts.createSourceFile('gateway.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const methods: MethodScan[] = []
   let decoratedCount = 0
@@ -74,6 +113,11 @@ function scanGateway(src: string): { methods: MethodScan[]; decoratedCount: numb
           n.forEachChild(walkBody)
         }
         if (node.body) walkBody(node.body)
+        // 转发形态：方法体只有 `return this.kbRemotes().NAME(…)` ⇒ 接缝取被转发实现的
+        if (node.body) {
+          const target = delegationTarget(node.body.getText(sf))
+          if (target) seams.push(...(impls.get(target) ?? []))
+        }
         if (seams.length > 0) methods.push({ name: arg.text, seams })
       }
     }
@@ -83,8 +127,12 @@ function scanGateway(src: string): { methods: MethodScan[]; decoratedCount: numb
   return { methods, decoratedCount }
 }
 
-const gatewaySrc = readFileSync(GATEWAY, 'utf8')
-const { methods: outbound, decoratedCount } = scanGateway(gatewaySrc)
+// M21：KB 域的 @Remote 方法体搬进了 remotes/（网关只留签名 + 转发）⇒ 读联合（断言未改）
+const gatewaySrc = [GATEWAY, ...(existsSync(join(dirname(GATEWAY), 'remotes'))
+  ? readdirSync(join(dirname(GATEWAY), 'remotes')).filter((f) => f.endsWith('.ts')).sort()
+    .map((f) => join(dirname(GATEWAY), 'remotes', f))
+  : [])].map((f) => readFileSync(f, 'utf8')).join('\n')
+const { methods: outbound, decoratedCount } = scanGateway(gatewaySrc, scanImpls(gatewaySrc))
 const outboundNames = new Set(outbound.map((m) => m.name))
 const service = requireCjs(join(ROOT, 'src', 'license', 'service.js')) as {
   METHOD_FEATURE: Record<string, string>
