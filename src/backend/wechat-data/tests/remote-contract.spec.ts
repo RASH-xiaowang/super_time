@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-
+import { gatewayClassSource } from '../../tests/gateway-source.ts'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..', '..')
 
@@ -64,7 +64,8 @@ function interfaceMembers(rawSource: string): string[] {
 }
 
 describe('Remote 契约：前端镜像与后端 @Remote 对齐', () => {
-  const backend = remoteNames(readFileSync(GATEWAY, 'utf8'))
+  // M21 结构刀：方法面拆成多层壳 ⇒ 后端名单读「组成这个类的文件」
+  const backend = remoteNames(gatewayClassSource())
   const client = interfaceMembers(API_SRC)
 
   it('后端每个 @Remote 都在 WechatRemote 里声明了', () => {

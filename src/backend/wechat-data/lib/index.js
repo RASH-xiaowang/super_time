@@ -183,7 +183,13 @@ var require_llm_retry = __commonJS({
   }
 });
 
-// src/backend/wechat-data/src/gateway.ts
+// src/backend/wechat-data/src/gateway-data-ops.ts
+import { Remote as Remote3 } from "@deepseek-ai/dsh-typert-protocol";
+
+// src/backend/wechat-data/src/gateway-ask-ops.ts
+import { Remote as Remote2 } from "@deepseek-ai/dsh-typert-protocol";
+
+// src/backend/wechat-data/src/gateway-read.ts
 import { Remote } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/backend/wechat-data/src/query/sessions.ts
@@ -4251,7 +4257,7 @@ function computeAnnual(decryptedDir) {
   return { years: Array.from(years).sort((a, b) => b - a) };
 }
 
-// src/backend/wechat-data/src/gateway.ts
+// src/backend/wechat-data/src/gateway-read.ts
 import { openNativePath as openNativePath2 } from "@deepseek-ai/dsh-native-command";
 
 // src/backend/wechat-data/src/query/calls.ts
@@ -11158,6 +11164,30 @@ function listSummaryRecords(decryptedDir, taskId) {
     console.warn("[summary-tasks] \u6458\u8981\u8BB0\u5F55\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0E\u300C\u786E\u65E0\u8BB0\u5F55\u300D\u4E0D\u540C\uFF09\uFF1A" + dbPath2(decryptedDir) + ": " + readError);
     return { items: [], total: 0, readError };
   }
+}
+
+// src/backend/wechat-data/src/gateway-support.ts
+function privacyStoreUnreadable(feature, detail) {
+  return `\u8BFB\u5230\u9690\u79C1\u8BBE\u7F6E\u5931\u8D25\uFF08wechat_privacy.db \u4E0D\u53EF\u8BFB\uFF09\uFF0C\u5DF2\u6309\u300C\u51FA\u7AD9\u62E6\u622A\u300D\u5904\u7406\uFF1A\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}`;
+}
+function rawWechatBase(decrypted) {
+  const pinned = process.env.DSH_WECHAT_BASE_DIR;
+  if (pinned && pinned.trim().length > 0) return pinned.trim();
+  const cfg = getConfig(decrypted);
+  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
+  if (!dbDir) return "";
+  const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
+}
+function resolveDirs() {
+  bootstrapWechatData();
+  return { decrypted: resolveDecryptedDir(), decoded: resolveDecodedDir() };
+}
+var STREAM_JOB_CAP = 20;
+var EXPORT_PROGRESS_EVENT = "wechat-export/progress";
+var CACHED_IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif"];
+function normalizeJobId(jobId) {
+  return typeof jobId === "string" ? jobId.trim().slice(0, 64) : "";
 }
 
 // src/backend/wechat-data/src/gateway-core.ts
@@ -26063,32 +26093,6 @@ function createExportRemotes(rc) {
 
 // src/backend/wechat-data/src/gateway-core.ts
 import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
-
-// src/backend/wechat-data/src/gateway-support.ts
-function privacyStoreUnreadable(feature, detail) {
-  return `\u8BFB\u5230\u9690\u79C1\u8BBE\u7F6E\u5931\u8D25\uFF08wechat_privacy.db \u4E0D\u53EF\u8BFB\uFF09\uFF0C\u5DF2\u6309\u300C\u51FA\u7AD9\u62E6\u622A\u300D\u5904\u7406\uFF1A\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}`;
-}
-function rawWechatBase(decrypted) {
-  const pinned = process.env.DSH_WECHAT_BASE_DIR;
-  if (pinned && pinned.trim().length > 0) return pinned.trim();
-  const cfg = getConfig(decrypted);
-  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
-  if (!dbDir) return "";
-  const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
-  return (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
-}
-function resolveDirs() {
-  bootstrapWechatData();
-  return { decrypted: resolveDecryptedDir(), decoded: resolveDecodedDir() };
-}
-var STREAM_JOB_CAP = 20;
-var EXPORT_PROGRESS_EVENT = "wechat-export/progress";
-var CACHED_IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif"];
-function normalizeJobId(jobId) {
-  return typeof jobId === "string" ? jobId.trim().slice(0, 64) : "";
-}
-
-// src/backend/wechat-data/src/gateway-core.ts
 var GatewayCore = class _GatewayCore extends TypertRemoteService {
   constructor(ctx) {
     super(ctx, "wechatData");
@@ -26876,9 +26880,9 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
   }
 };
 
-// src/backend/wechat-data/src/gateway.ts
-var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _searchUnified_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getHandoffReminds_dec, _getGroupInsights_dec, _getCalls_dec, _getDbHealth_dec, _getContact360_dec, _getAssetInsights_dec, _generatePeriodSummary_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getArticleCover_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _openPath_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _suggestReplies_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _listSummaryRecords_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _clearAskHistory_dec, _deleteAskHistory_dec, _getAskHistory_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _resetEditedMessage_dec, _editChatMessage_dec, _listEditedMessages_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _resetRetrievalWeights_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _optimizeAskQuestion_dec, _askWechat_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _cancelSearch_dec, _searchMessages_dec, _buildSearchIndex_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFiles_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _buildKbVectorIndex_dec, _getKbVectorIndex_dec, _setKbModelConfig_dec, _getKbModelConfig_dec, _searchKb_dec, _summarizeKbFile_dec, _setKbFileRag_dec, _deleteKbFile_dec, _addKbFiles_dec, _getKbFileChunks_dec, _getKbFiles_dec, _deleteKb_dec, _renameKb_dec, _createKb_dec, _getKbs_dec, _suggestKbLinks_dec, _extractKbEntities_dec, _getKnowledgeGraph_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getGraph_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getAnnual_dec, _getStorageStats_dec, _getEmoticons_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
-var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getEmoticons_dec = [Remote("getEmoticons")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getWechatConfig_dec = [Remote("getWechatConfig")], _getPrivacyScan_dec = [Remote("getPrivacyScan")], _getGraph_dec = [Remote("getGraph")], _getNotes_dec = [Remote("getNotes")], _saveNote_dec = [Remote("saveNote")], _deleteNote_dec = [Remote("deleteNote")], _getKnowledgeGraph_dec = [Remote("getKnowledgeGraph")], _extractKbEntities_dec = [Remote("extractKbEntities")], _suggestKbLinks_dec = [Remote("suggestKbLinks")], _getKbs_dec = [Remote("getKbs")], _createKb_dec = [Remote("createKb")], _renameKb_dec = [Remote("renameKb")], _deleteKb_dec = [Remote("deleteKb")], _getKbFiles_dec = [Remote("getKbFiles")], _getKbFileChunks_dec = [Remote("getKbFileChunks")], _addKbFiles_dec = [Remote("addKbFiles")], _deleteKbFile_dec = [Remote("deleteKbFile")], _setKbFileRag_dec = [Remote("setKbFileRag")], _summarizeKbFile_dec = [Remote("summarizeKbFile")], _searchKb_dec = [Remote("searchKb")], _getKbModelConfig_dec = [Remote("getKbModelConfig")], _setKbModelConfig_dec = [Remote("setKbModelConfig")], _getKbVectorIndex_dec = [Remote("getKbVectorIndex")], _buildKbVectorIndex_dec = [Remote("buildKbVectorIndex")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getFiles_dec = [Remote("getFiles")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _buildSearchIndex_dec = [Remote("buildSearchIndex")], _searchMessages_dec = [Remote("searchMessages")], _cancelSearch_dec = [Remote("cancelSearch")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _getVoiceInfo_dec = [Remote("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote("getVoiceDataUrl")], _getVideoInfo_dec = [Remote("getVideoInfo")], _exportSessionMessages_dec = [Remote("exportSessionMessages")], _askWechat_dec = [Remote("askWechat")], _optimizeAskQuestion_dec = [Remote("optimizeAskQuestion")], _listBackups_dec = [Remote("listBackups")], _previewBackup_dec = [Remote("previewBackup")], _createBackup_dec = [Remote("createBackup")], _deleteBackup_dec = [Remote("deleteBackup")], _getRetrievalStatus_dec = [Remote("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote("listRetrievalFeedback")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _evaluateRetrieval_dec = [Remote("evaluateRetrieval")], _generateDailySummary_dec = [Remote("generateDailySummary")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _resetEditedMessage_dec = [Remote("resetEditedMessage")], _listLlmProviders_dec = [Remote("listLlmProviders")], _listLlmModels_dec = [Remote("listLlmModels")], _exportAnnualReport_dec = [Remote("exportAnnualReport")], _exportAllSessions_dec = [Remote("exportAllSessions")], _cancelExportJob_dec = [Remote("cancelExportJob")], _getExportProgress_dec = [Remote("getExportProgress")], _exportMoments_dec = [Remote("exportMoments")], _exportCsv_dec = [Remote("exportCsv")], _getExportHistory_dec = [Remote("getExportHistory")], _deleteExportHistory_dec = [Remote("deleteExportHistory")], _pruneExportHistory_dec = [Remote("pruneExportHistory")], _getAskHistory_dec = [Remote("getAskHistory")], _deleteAskHistory_dec = [Remote("deleteAskHistory")], _clearAskHistory_dec = [Remote("clearAskHistory")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryTasks_dec = [Remote("listSummaryTasks")], _saveSummaryTask_dec = [Remote("saveSummaryTask")], _deleteSummaryTask_dec = [Remote("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote("toggleSummaryTask")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _deleteSummaryRecord_dec = [Remote("deleteSummaryRecord")], _runSummaryTask_dec = [Remote("runSummaryTask")], _suggestReplies_dec = [Remote("suggestReplies")], _getAvatar_dec = [Remote("getAvatar")], _getAvatarsLocal_dec = [Remote("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote("getWechatConfigFull")], _saveWechatConfig_dec = [Remote("saveWechatConfig")], _getWhisperStatus_dec = [Remote("getWhisperStatus")], _downloadWhisperModel_dec = [Remote("downloadWhisperModel")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _generateKeysFile_dec = [Remote("generateKeysFile")], _getWechatKeysInfo_dec = [Remote("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote("autoGetDbKey")], _autoGetImageKey_dec = [Remote("autoGetImageKey")], _openPath_dec = [Remote("openPath")], _openConfig_dec = [Remote("openConfig")], _verifyImageKey_dec = [Remote("verifyImageKey")], _decryptAllDatabases_dec = [Remote("decryptAllDatabases")], _decryptAllImages_dec = [Remote("decryptAllImages")], _getDecryptStatus_dec = [Remote("getDecryptStatus")], _installWhisperEngine_dec = [Remote("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote("transcribeVoiceBatch")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getDbStatus_dec = [Remote("getDbStatus")], _getImageDataUrl_dec = [Remote("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote("getImageOriginal")], _getArticleCover_dec = [Remote("getArticleCover")], _getMessageFile_dec = [Remote("getMessageFile")], _addTask_dec = [Remote("addTask")], _clearOperationLog_dec = [Remote("clearOperationLog")], _clearPrivacyAudit_dec = [Remote("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote("createEncryptedBackup")], _deleteTask_dec = [Remote("deleteTask")], _extractTasks_dec = [Remote("extractTasks")], _generatePeriodSummary_dec = [Remote("generatePeriodSummary")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getDbHealth_dec = [Remote("getDbHealth")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getHandoffReminds_dec = [Remote("getHandoffReminds")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _getOperationLog_dec = [Remote("getOperationLog")], _getPrivacyAuditRows_dec = [Remote("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote("exportSnsVideo")], _listTasks_dec = [Remote("listTasks")], _restoreBackup_dec = [Remote("restoreBackup")], _searchUnified_dec = [Remote("searchUnified")], _setPrivacyState_dec = [Remote("setPrivacyState")], _setTaskStatus_dec = [Remote("setTaskStatus")], _syncHandoffTasks_dec = [Remote("syncHandoffTasks")], _a) {
+// src/backend/wechat-data/src/gateway-read.ts
+var _searchUnified_dec, _getOfficialAssets_dec, _getMomentsMonthly_dec, _getMomentsInsights_dec, _getMediaAssets_dec, _getLedger_dec, _getGroupInsights_dec, _getCalls_dec, _getContact360_dec, _getAssetInsights_dec, _getArticleCover_dec, _getAnnualReport_dec, _getAnnualReview_dec, _deleteFavoriteItems_dec, _setCdnImageLocalDecrypt_dec, _setCdnImageEnabled_dec, _transcribeVoiceMessage_dec, _getVoiceTranscript_dec, _openPath_dec, _verifyDatabaseKey_dec, _detectWechatAccounts_dec, _listSummaryRecords_dec, _clearAllSessionDrafts_dec, _clearSessionDraft_dec, _clearAskHistory_dec, _deleteAskHistory_dec, _editChatMessage_dec, _listEditedMessages_dec, _resetRetrievalWeights_dec, _getDailyCounts_dec, _resolveChatHistory_dec, _getPaymentStatus_dec, _getGroupInfo_dec, _cancelSearch_dec, _getSearchIndexStatus_dec, _getNewMessages_dec, _getMessages_dec, _getFavorites_dec, _getMomentsAuthors_dec, _getSelfUsername_dec, _getMoments_dec, _getGraph_dec, _getAnnual_dec, _getStorageStats_dec, _getRevoked_dec, _searchMembers_dec, _getRecords_dec, _getRegionMap_dec, _getOverview_dec, _getOverviewInsights_dec, _getContacts_dec, _getSessions_dec, _a, _init;
+var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("getSessions")], _getContacts_dec = [Remote("getContacts")], _getOverviewInsights_dec = [Remote("getOverviewInsights")], _getOverview_dec = [Remote("getOverview")], _getRegionMap_dec = [Remote("getRegionMap")], _getRecords_dec = [Remote("getRecords")], _searchMembers_dec = [Remote("searchMembers")], _getRevoked_dec = [Remote("getRevoked")], _getStorageStats_dec = [Remote("getStorageStats")], _getAnnual_dec = [Remote("getAnnual")], _getGraph_dec = [Remote("getGraph")], _getMoments_dec = [Remote("getMoments")], _getSelfUsername_dec = [Remote("getSelfUsername")], _getMomentsAuthors_dec = [Remote("getMomentsAuthors")], _getFavorites_dec = [Remote("getFavorites")], _getMessages_dec = [Remote("getMessages")], _getNewMessages_dec = [Remote("getNewMessages")], _getSearchIndexStatus_dec = [Remote("getSearchIndexStatus")], _cancelSearch_dec = [Remote("cancelSearch")], _getGroupInfo_dec = [Remote("getGroupInfo")], _getPaymentStatus_dec = [Remote("getPaymentStatus")], _resolveChatHistory_dec = [Remote("resolveChatHistory")], _getDailyCounts_dec = [Remote("getDailyCounts")], _resetRetrievalWeights_dec = [Remote("resetRetrievalWeights")], _listEditedMessages_dec = [Remote("listEditedMessages")], _editChatMessage_dec = [Remote("editChatMessage")], _deleteAskHistory_dec = [Remote("deleteAskHistory")], _clearAskHistory_dec = [Remote("clearAskHistory")], _clearSessionDraft_dec = [Remote("clearSessionDraft")], _clearAllSessionDrafts_dec = [Remote("clearAllSessionDrafts")], _listSummaryRecords_dec = [Remote("listSummaryRecords")], _detectWechatAccounts_dec = [Remote("detectWechatAccounts")], _verifyDatabaseKey_dec = [Remote("verifyDatabaseKey")], _openPath_dec = [Remote("openPath")], _getVoiceTranscript_dec = [Remote("getVoiceTranscript")], _transcribeVoiceMessage_dec = [Remote("transcribeVoiceMessage")], _setCdnImageEnabled_dec = [Remote("setCdnImageEnabled")], _setCdnImageLocalDecrypt_dec = [Remote("setCdnImageLocalDecrypt")], _deleteFavoriteItems_dec = [Remote("deleteFavoriteItems")], _getAnnualReview_dec = [Remote("getAnnualReview")], _getAnnualReport_dec = [Remote("getAnnualReport")], _getArticleCover_dec = [Remote("getArticleCover")], _getAssetInsights_dec = [Remote("getAssetInsights")], _getContact360_dec = [Remote("getContact360")], _getCalls_dec = [Remote("getCalls")], _getGroupInsights_dec = [Remote("getGroupInsights")], _getLedger_dec = [Remote("getLedger")], _getMediaAssets_dec = [Remote("getMediaAssets")], _getMomentsInsights_dec = [Remote("getMomentsInsights")], _getMomentsMonthly_dec = [Remote("getMomentsMonthly")], _getOfficialAssets_dec = [Remote("getOfficialAssets")], _searchUnified_dec = [Remote("searchUnified")], _a) {
   constructor() {
     super(...arguments);
     __runInitializers(_init, 5, this);
@@ -26907,86 +26911,14 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   getRevoked(options) {
     return queryRevoked(this._dirs.decrypted, options?.limit, options?.offset, options?.q);
   }
-  getEmoticons(options) {
-    return this.mediaRemotes().getEmoticons(options);
-  }
   getStorageStats() {
     return queryStorageStats(this._dirs.decrypted, rawWechatBase(this._dirs.decrypted) || void 0);
   }
   getAnnual() {
     return queryAnnual(this._dirs.decrypted);
   }
-  getWechatConfig() {
-    return this.configRemotes().getWechatConfig();
-  }
-  getPrivacyScan() {
-    return this.opsLogRemotes().getPrivacyScan();
-  }
   getGraph() {
     return queryGraph(this._dirs.decrypted, this.selfUsername());
-  }
-  getNotes(kbId, options) {
-    return this.tasksRemotes().getNotes(kbId, options);
-  }
-  saveNote(kbId, options) {
-    return this.tasksRemotes().saveNote(kbId, options);
-  }
-  deleteNote(kbId, options) {
-    return this.tasksRemotes().deleteNote(kbId, options);
-  }
-  getKnowledgeGraph(kbId) {
-    return this.graphSearchRemotes().getKnowledgeGraph(kbId);
-  }
-  async extractKbEntities(options) {
-    return this.kbRemotes().extractKbEntities(options);
-  }
-  async suggestKbLinks(options) {
-    return this.kbRemotes().suggestKbLinks(options);
-  }
-  getKbs() {
-    return this.kbRemotes().getKbs();
-  }
-  createKb(options) {
-    return this.kbRemotes().createKb(options);
-  }
-  renameKb(options) {
-    return this.kbRemotes().renameKb(options);
-  }
-  deleteKb(options) {
-    return this.kbRemotes().deleteKb(options);
-  }
-  getKbFiles(kbId, options) {
-    return this.kbRemotes().getKbFiles(kbId, options);
-  }
-  getKbFileChunks(kbId, fileId, options) {
-    return this.kbRemotes().getKbFileChunks(kbId, fileId, options);
-  }
-  addKbFiles(options) {
-    return this.kbRemotes().addKbFiles(options);
-  }
-  deleteKbFile(options) {
-    return this.kbRemotes().deleteKbFile(options);
-  }
-  setKbFileRag(options) {
-    return this.kbRemotes().setKbFileRag(options);
-  }
-  async summarizeKbFile(options) {
-    return this.kbRemotes().summarizeKbFile(options);
-  }
-  async searchKb(options) {
-    return this.kbRemotes().searchKb(options);
-  }
-  getKbModelConfig(options) {
-    return this.kbRemotes().getKbModelConfig(options);
-  }
-  setKbModelConfig(options) {
-    return this.kbRemotes().setKbModelConfig(options);
-  }
-  getKbVectorIndex(options) {
-    return this.kbRemotes().getKbVectorIndex(options);
-  }
-  async buildKbVectorIndex(options) {
-    return this.kbRemotes().buildKbVectorIndex(options);
   }
   getMoments(options) {
     return queryMoments(this._dirs.decrypted, options?.offset, options?.limit, options?.author, this.selfUsername());
@@ -26999,9 +26931,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   }
   getFavorites(options) {
     return queryFavorites(this._dirs.decrypted, options?.limit, options?.offset, options?.q);
-  }
-  getFiles(options) {
-    return this.mediaRemotes().getFiles(options);
   }
   getMessages(options) {
     return queryMessages(
@@ -27018,12 +26947,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   }
   getSearchIndexStatus() {
     return getSearchIndexStatus(this._dirs.decrypted);
-  }
-  async buildSearchIndex(options) {
-    return this.graphSearchRemotes().buildSearchIndex(options);
-  }
-  async searchMessages(options) {
-    return this.graphSearchRemotes().searchMessages(options);
   }
   cancelSearch(options) {
     const id = normalizeJobId(options?.jobId);
@@ -27044,62 +26967,11 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   getDailyCounts(options) {
     return getDailyCounts(this._dirs.decrypted, options.username, options.year, options.month);
   }
-  getVoiceInfo(options) {
-    return this.mediaRemotes().getVoiceInfo(options);
-  }
-  getVoiceDataUrl(options) {
-    return this.mediaRemotes().getVoiceDataUrl(options);
-  }
-  getVideoInfo(options) {
-    return this.mediaRemotes().getVideoInfo(options);
-  }
-  async exportSessionMessages(options) {
-    return this.exportRemotes().exportSessionMessages(options);
-  }
-  async askWechat(options) {
-    return this.askDeepRemotes().askWechat(options);
-  }
-  async optimizeAskQuestion(options) {
-    return this.askDeepRemotes().optimizeAskQuestion(options);
-  }
-  listBackups() {
-    return this.backupRemotes().listBackups();
-  }
-  previewBackup(options) {
-    return this.backupRemotes().previewBackup(options);
-  }
-  createBackup() {
-    return this.backupRemotes().createBackup();
-  }
-  deleteBackup(options) {
-    return this.backupRemotes().deleteBackup(options);
-  }
-  getRetrievalStatus() {
-    return this.askRemotes().getRetrievalStatus();
-  }
-  saveRetrievalConfig(options) {
-    return this.askRemotes().saveRetrievalConfig(options);
-  }
-  async buildRagVectorIndex(options) {
-    return this.askDeepRemotes().buildRagVectorIndex(options);
-  }
-  submitAskFeedback(options) {
-    return this.askRemotes().submitAskFeedback(options);
-  }
-  listRetrievalFeedback(options) {
-    return this.askRemotes().listRetrievalFeedback(options);
-  }
   resetRetrievalWeights() {
     const cfg = loadRetrievalConfig(this._dirs.decrypted);
     saveAdaptedWeights(this._dirs.decrypted, cfg.rerank.weights);
     this.op("settings", "reset_retrieval_weights", "ok");
     return { ok: true, weights: cfg.rerank.weights };
-  }
-  evaluateRetrieval(options) {
-    return this.graphSearchRemotes().evaluateRetrieval(options);
-  }
-  async generateDailySummary(options) {
-    return this.summaryRecordRemotes().generateDailySummary(options);
   }
   listEditedMessages(options) {
     return listEditedMessages(this._dirs.decrypted, options?.sessionId);
@@ -27108,45 +26980,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
     const r = editChatMessage(this._dirs.decrypted, options.username, options.localId, options.content);
     this.op("edit", "edit_chat_message", r.ok ? "ok" : "fail", options.username, r.error ?? `localId=${options.localId}`);
     return r;
-  }
-  resetEditedMessage(options) {
-    return this.graphSearchRemotes().resetEditedMessage(options);
-  }
-  listLlmProviders() {
-    return this.voiceLlmRemotes().listLlmProviders();
-  }
-  async listLlmModels(options) {
-    return this.voiceLlmRemotes().listLlmModels(options);
-  }
-  exportAnnualReport(options) {
-    return this.exportRemotes().exportAnnualReport(options);
-  }
-  async exportAllSessions(options) {
-    return this.exportRemotes().exportAllSessions(options);
-  }
-  cancelExportJob(options) {
-    return this.exportRemotes().cancelExportJob(options);
-  }
-  getExportProgress(options) {
-    return this.exportRemotes().getExportProgress(options);
-  }
-  async exportMoments(options) {
-    return this.exportRemotes().exportMoments(options);
-  }
-  exportCsv(options) {
-    return this.exportRemotes().exportCsv(options);
-  }
-  getExportHistory(options) {
-    return this.exportRemotes().getExportHistory(options);
-  }
-  deleteExportHistory(options) {
-    return this.exportRemotes().deleteExportHistory(options);
-  }
-  pruneExportHistory(options) {
-    return this.exportRemotes().pruneExportHistory(options);
-  }
-  getAskHistory(options) {
-    return this.askRemotes().getAskHistory(options);
   }
   deleteAskHistory(options) {
     const ids = Array.isArray(options?.ids) ? options.ids : [];
@@ -27169,47 +27002,8 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
     this.op("delete", "clear_all_session_drafts", r.ok ? "ok" : "fail", "", r.error ?? `\u5DF2\u6E05\u9664 ${r.count} \u4E2A\u4F1A\u8BDD\u8349\u7A3F`);
     return r;
   }
-  listSummaryTasks() {
-    return this.summaryRemotes().listSummaryTasks();
-  }
-  saveSummaryTask(options) {
-    return this.summaryRemotes().saveSummaryTask(options);
-  }
-  deleteSummaryTask(options) {
-    return this.summaryRemotes().deleteSummaryTask(options);
-  }
-  toggleSummaryTask(options) {
-    return this.summaryRemotes().toggleSummaryTask(options);
-  }
   listSummaryRecords(options) {
     return listSummaryRecords(this._dirs.decrypted, options?.taskId);
-  }
-  deleteSummaryRecord(options) {
-    return this.summaryRecordRemotes().deleteSummaryRecord(options);
-  }
-  async runSummaryTask(options) {
-    return this.summaryRemotes().runSummaryTask(options);
-  }
-  async suggestReplies(options) {
-    return this.summaryRecordRemotes().suggestReplies(options);
-  }
-  getAvatar(options) {
-    return this.mediaRemotes().getAvatar(options);
-  }
-  getAvatarsLocal(options) {
-    return this.mediaRemotes().getAvatarsLocal(options);
-  }
-  getWechatConfigFull() {
-    return this.configRemotes().getWechatConfigFull();
-  }
-  saveWechatConfig(options) {
-    return this.configRemotes().saveWechatConfig(options);
-  }
-  getWhisperStatus() {
-    return this.voiceLlmRemotes().getWhisperStatus();
-  }
-  async downloadWhisperModel(options) {
-    return this.voiceLlmRemotes().downloadWhisperModel(options);
   }
   detectWechatAccounts() {
     const accounts = detectWechatAccounts();
@@ -27228,18 +27022,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
     this.op("keys", "verify_db_key", r.valid ? "ok" : "fail", options.dbPath, r.error ?? (r.valid ? "\u6709\u6548" : "\u65E0\u6548"));
     return r;
   }
-  generateKeysFile(options) {
-    return this.configRemotes().generateKeysFile(options);
-  }
-  getWechatKeysInfo() {
-    return this.configRemotes().getWechatKeysInfo();
-  }
-  async autoGetDbKey(options) {
-    return this.configRemotes().autoGetDbKey(options);
-  }
-  async autoGetImageKey(options) {
-    return this.keysDecryptRemotes().autoGetImageKey(options);
-  }
   async openPath(options, signal) {
     const p = options.path;
     try {
@@ -27248,27 +27030,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
     } catch {
       return { ok: false, path: p };
     }
-  }
-  async openConfig(signal) {
-    return this.configRemotes().openConfig(signal);
-  }
-  verifyImageKey() {
-    return this.keysDecryptRemotes().verifyImageKey();
-  }
-  async decryptAllDatabases() {
-    return this.keysDecryptRemotes().decryptAllDatabases();
-  }
-  async decryptAllImages(options) {
-    return this.keysDecryptRemotes().decryptAllImages(options);
-  }
-  getDecryptStatus() {
-    return this.configRemotes().getDecryptStatus();
-  }
-  async installWhisperEngine() {
-    return this.voiceLlmRemotes().installWhisperEngine();
-  }
-  async transcribeVoiceBatch(options) {
-    return this.voiceLlmRemotes().transcribeVoiceBatch(options);
   }
   getVoiceTranscript(options) {
     const svrId = svrIdByChatLocal(this._dirs.decrypted, options.username, options.localId);
@@ -27335,6 +27096,398 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
       throw e;
     }
   }
+  async getArticleCover(options) {
+    return resolveArticleCoverDataUrl(options.contentUrl, this._dirs.decoded, this.cdnSwitches());
+  }
+  getAssetInsights() {
+    return queryAssetInsights(this._dirs.decrypted);
+  }
+  getContact360(options) {
+    return queryContact360(this._dirs.decrypted, options.username);
+  }
+  getCalls(options) {
+    return queryCalls(this._dirs.decrypted, this.selfUsername(), options?.topPeers, options?.recentLimit);
+  }
+  getGroupInsights(options) {
+    return queryGroupInsights(this._dirs.decrypted, options.username);
+  }
+  getLedger(options) {
+    return queryLedger(this._dirs.decrypted, options?.month, this.selfUsername());
+  }
+  getMediaAssets() {
+    return queryMediaAssets(this._dirs.decrypted);
+  }
+  getMomentsInsights(options) {
+    return queryMomentsInsights(this._dirs.decrypted, options?.author);
+  }
+  getMomentsMonthly(options) {
+    return queryMomentsMonthly(this._dirs.decrypted, options?.author, options?.authorName);
+  }
+  getOfficialAssets() {
+    return queryOfficialAssets(this._dirs.decrypted);
+  }
+  searchUnified(options) {
+    return searchUnified(this._dirs.decrypted, options.query, options.limit);
+  }
+};
+_init = __decoratorStart(_a);
+__decorateElement(_init, 1, "getSessions", _getSessions_dec, GatewayRead);
+__decorateElement(_init, 1, "getContacts", _getContacts_dec, GatewayRead);
+__decorateElement(_init, 1, "getOverviewInsights", _getOverviewInsights_dec, GatewayRead);
+__decorateElement(_init, 1, "getOverview", _getOverview_dec, GatewayRead);
+__decorateElement(_init, 1, "getRegionMap", _getRegionMap_dec, GatewayRead);
+__decorateElement(_init, 1, "getRecords", _getRecords_dec, GatewayRead);
+__decorateElement(_init, 1, "searchMembers", _searchMembers_dec, GatewayRead);
+__decorateElement(_init, 1, "getRevoked", _getRevoked_dec, GatewayRead);
+__decorateElement(_init, 1, "getStorageStats", _getStorageStats_dec, GatewayRead);
+__decorateElement(_init, 1, "getAnnual", _getAnnual_dec, GatewayRead);
+__decorateElement(_init, 1, "getGraph", _getGraph_dec, GatewayRead);
+__decorateElement(_init, 1, "getMoments", _getMoments_dec, GatewayRead);
+__decorateElement(_init, 1, "getSelfUsername", _getSelfUsername_dec, GatewayRead);
+__decorateElement(_init, 1, "getMomentsAuthors", _getMomentsAuthors_dec, GatewayRead);
+__decorateElement(_init, 1, "getFavorites", _getFavorites_dec, GatewayRead);
+__decorateElement(_init, 1, "getMessages", _getMessages_dec, GatewayRead);
+__decorateElement(_init, 1, "getNewMessages", _getNewMessages_dec, GatewayRead);
+__decorateElement(_init, 1, "getSearchIndexStatus", _getSearchIndexStatus_dec, GatewayRead);
+__decorateElement(_init, 1, "cancelSearch", _cancelSearch_dec, GatewayRead);
+__decorateElement(_init, 1, "getGroupInfo", _getGroupInfo_dec, GatewayRead);
+__decorateElement(_init, 1, "getPaymentStatus", _getPaymentStatus_dec, GatewayRead);
+__decorateElement(_init, 1, "resolveChatHistory", _resolveChatHistory_dec, GatewayRead);
+__decorateElement(_init, 1, "getDailyCounts", _getDailyCounts_dec, GatewayRead);
+__decorateElement(_init, 1, "resetRetrievalWeights", _resetRetrievalWeights_dec, GatewayRead);
+__decorateElement(_init, 1, "listEditedMessages", _listEditedMessages_dec, GatewayRead);
+__decorateElement(_init, 1, "editChatMessage", _editChatMessage_dec, GatewayRead);
+__decorateElement(_init, 1, "deleteAskHistory", _deleteAskHistory_dec, GatewayRead);
+__decorateElement(_init, 1, "clearAskHistory", _clearAskHistory_dec, GatewayRead);
+__decorateElement(_init, 1, "clearSessionDraft", _clearSessionDraft_dec, GatewayRead);
+__decorateElement(_init, 1, "clearAllSessionDrafts", _clearAllSessionDrafts_dec, GatewayRead);
+__decorateElement(_init, 1, "listSummaryRecords", _listSummaryRecords_dec, GatewayRead);
+__decorateElement(_init, 1, "detectWechatAccounts", _detectWechatAccounts_dec, GatewayRead);
+__decorateElement(_init, 1, "verifyDatabaseKey", _verifyDatabaseKey_dec, GatewayRead);
+__decorateElement(_init, 1, "openPath", _openPath_dec, GatewayRead);
+__decorateElement(_init, 1, "getVoiceTranscript", _getVoiceTranscript_dec, GatewayRead);
+__decorateElement(_init, 1, "transcribeVoiceMessage", _transcribeVoiceMessage_dec, GatewayRead);
+__decorateElement(_init, 1, "setCdnImageEnabled", _setCdnImageEnabled_dec, GatewayRead);
+__decorateElement(_init, 1, "setCdnImageLocalDecrypt", _setCdnImageLocalDecrypt_dec, GatewayRead);
+__decorateElement(_init, 1, "deleteFavoriteItems", _deleteFavoriteItems_dec, GatewayRead);
+__decorateElement(_init, 1, "getAnnualReview", _getAnnualReview_dec, GatewayRead);
+__decorateElement(_init, 1, "getAnnualReport", _getAnnualReport_dec, GatewayRead);
+__decorateElement(_init, 1, "getArticleCover", _getArticleCover_dec, GatewayRead);
+__decorateElement(_init, 1, "getAssetInsights", _getAssetInsights_dec, GatewayRead);
+__decorateElement(_init, 1, "getContact360", _getContact360_dec, GatewayRead);
+__decorateElement(_init, 1, "getCalls", _getCalls_dec, GatewayRead);
+__decorateElement(_init, 1, "getGroupInsights", _getGroupInsights_dec, GatewayRead);
+__decorateElement(_init, 1, "getLedger", _getLedger_dec, GatewayRead);
+__decorateElement(_init, 1, "getMediaAssets", _getMediaAssets_dec, GatewayRead);
+__decorateElement(_init, 1, "getMomentsInsights", _getMomentsInsights_dec, GatewayRead);
+__decorateElement(_init, 1, "getMomentsMonthly", _getMomentsMonthly_dec, GatewayRead);
+__decorateElement(_init, 1, "getOfficialAssets", _getOfficialAssets_dec, GatewayRead);
+__decorateElement(_init, 1, "searchUnified", _searchUnified_dec, GatewayRead);
+__decoratorMetadata(_init, GatewayRead);
+
+// src/backend/wechat-data/src/gateway-ask-ops.ts
+var _generatePeriodSummary_dec, _suggestReplies_dec, _runSummaryTask_dec, _deleteSummaryRecord_dec, _toggleSummaryTask_dec, _deleteSummaryTask_dec, _saveSummaryTask_dec, _listSummaryTasks_dec, _getAskHistory_dec, _resetEditedMessage_dec, _generateDailySummary_dec, _evaluateRetrieval_dec, _listRetrievalFeedback_dec, _submitAskFeedback_dec, _buildRagVectorIndex_dec, _saveRetrievalConfig_dec, _getRetrievalStatus_dec, _optimizeAskQuestion_dec, _askWechat_dec, _searchMessages_dec, _buildSearchIndex_dec, _buildKbVectorIndex_dec, _getKbVectorIndex_dec, _setKbModelConfig_dec, _getKbModelConfig_dec, _searchKb_dec, _summarizeKbFile_dec, _setKbFileRag_dec, _deleteKbFile_dec, _addKbFiles_dec, _getKbFileChunks_dec, _getKbFiles_dec, _deleteKb_dec, _renameKb_dec, _createKb_dec, _getKbs_dec, _suggestKbLinks_dec, _extractKbEntities_dec, _getKnowledgeGraph_dec, _a2, _init2;
+var GatewayAskOps = class extends (_a2 = GatewayRead, _getKnowledgeGraph_dec = [Remote2("getKnowledgeGraph")], _extractKbEntities_dec = [Remote2("extractKbEntities")], _suggestKbLinks_dec = [Remote2("suggestKbLinks")], _getKbs_dec = [Remote2("getKbs")], _createKb_dec = [Remote2("createKb")], _renameKb_dec = [Remote2("renameKb")], _deleteKb_dec = [Remote2("deleteKb")], _getKbFiles_dec = [Remote2("getKbFiles")], _getKbFileChunks_dec = [Remote2("getKbFileChunks")], _addKbFiles_dec = [Remote2("addKbFiles")], _deleteKbFile_dec = [Remote2("deleteKbFile")], _setKbFileRag_dec = [Remote2("setKbFileRag")], _summarizeKbFile_dec = [Remote2("summarizeKbFile")], _searchKb_dec = [Remote2("searchKb")], _getKbModelConfig_dec = [Remote2("getKbModelConfig")], _setKbModelConfig_dec = [Remote2("setKbModelConfig")], _getKbVectorIndex_dec = [Remote2("getKbVectorIndex")], _buildKbVectorIndex_dec = [Remote2("buildKbVectorIndex")], _buildSearchIndex_dec = [Remote2("buildSearchIndex")], _searchMessages_dec = [Remote2("searchMessages")], _askWechat_dec = [Remote2("askWechat")], _optimizeAskQuestion_dec = [Remote2("optimizeAskQuestion")], _getRetrievalStatus_dec = [Remote2("getRetrievalStatus")], _saveRetrievalConfig_dec = [Remote2("saveRetrievalConfig")], _buildRagVectorIndex_dec = [Remote2("buildRagVectorIndex")], _submitAskFeedback_dec = [Remote2("submitAskFeedback")], _listRetrievalFeedback_dec = [Remote2("listRetrievalFeedback")], _evaluateRetrieval_dec = [Remote2("evaluateRetrieval")], _generateDailySummary_dec = [Remote2("generateDailySummary")], _resetEditedMessage_dec = [Remote2("resetEditedMessage")], _getAskHistory_dec = [Remote2("getAskHistory")], _listSummaryTasks_dec = [Remote2("listSummaryTasks")], _saveSummaryTask_dec = [Remote2("saveSummaryTask")], _deleteSummaryTask_dec = [Remote2("deleteSummaryTask")], _toggleSummaryTask_dec = [Remote2("toggleSummaryTask")], _deleteSummaryRecord_dec = [Remote2("deleteSummaryRecord")], _runSummaryTask_dec = [Remote2("runSummaryTask")], _suggestReplies_dec = [Remote2("suggestReplies")], _generatePeriodSummary_dec = [Remote2("generatePeriodSummary")], _a2) {
+  constructor() {
+    super(...arguments);
+    __runInitializers(_init2, 5, this);
+  }
+  getKnowledgeGraph(kbId) {
+    return this.graphSearchRemotes().getKnowledgeGraph(kbId);
+  }
+  async extractKbEntities(options) {
+    return this.kbRemotes().extractKbEntities(options);
+  }
+  async suggestKbLinks(options) {
+    return this.kbRemotes().suggestKbLinks(options);
+  }
+  getKbs() {
+    return this.kbRemotes().getKbs();
+  }
+  createKb(options) {
+    return this.kbRemotes().createKb(options);
+  }
+  renameKb(options) {
+    return this.kbRemotes().renameKb(options);
+  }
+  deleteKb(options) {
+    return this.kbRemotes().deleteKb(options);
+  }
+  getKbFiles(kbId, options) {
+    return this.kbRemotes().getKbFiles(kbId, options);
+  }
+  getKbFileChunks(kbId, fileId, options) {
+    return this.kbRemotes().getKbFileChunks(kbId, fileId, options);
+  }
+  addKbFiles(options) {
+    return this.kbRemotes().addKbFiles(options);
+  }
+  deleteKbFile(options) {
+    return this.kbRemotes().deleteKbFile(options);
+  }
+  setKbFileRag(options) {
+    return this.kbRemotes().setKbFileRag(options);
+  }
+  async summarizeKbFile(options) {
+    return this.kbRemotes().summarizeKbFile(options);
+  }
+  async searchKb(options) {
+    return this.kbRemotes().searchKb(options);
+  }
+  getKbModelConfig(options) {
+    return this.kbRemotes().getKbModelConfig(options);
+  }
+  setKbModelConfig(options) {
+    return this.kbRemotes().setKbModelConfig(options);
+  }
+  getKbVectorIndex(options) {
+    return this.kbRemotes().getKbVectorIndex(options);
+  }
+  async buildKbVectorIndex(options) {
+    return this.kbRemotes().buildKbVectorIndex(options);
+  }
+  async buildSearchIndex(options) {
+    return this.graphSearchRemotes().buildSearchIndex(options);
+  }
+  async searchMessages(options) {
+    return this.graphSearchRemotes().searchMessages(options);
+  }
+  async askWechat(options) {
+    return this.askDeepRemotes().askWechat(options);
+  }
+  async optimizeAskQuestion(options) {
+    return this.askDeepRemotes().optimizeAskQuestion(options);
+  }
+  getRetrievalStatus() {
+    return this.askRemotes().getRetrievalStatus();
+  }
+  saveRetrievalConfig(options) {
+    return this.askRemotes().saveRetrievalConfig(options);
+  }
+  async buildRagVectorIndex(options) {
+    return this.askDeepRemotes().buildRagVectorIndex(options);
+  }
+  submitAskFeedback(options) {
+    return this.askRemotes().submitAskFeedback(options);
+  }
+  listRetrievalFeedback(options) {
+    return this.askRemotes().listRetrievalFeedback(options);
+  }
+  evaluateRetrieval(options) {
+    return this.graphSearchRemotes().evaluateRetrieval(options);
+  }
+  async generateDailySummary(options) {
+    return this.summaryRecordRemotes().generateDailySummary(options);
+  }
+  resetEditedMessage(options) {
+    return this.graphSearchRemotes().resetEditedMessage(options);
+  }
+  getAskHistory(options) {
+    return this.askRemotes().getAskHistory(options);
+  }
+  listSummaryTasks() {
+    return this.summaryRemotes().listSummaryTasks();
+  }
+  saveSummaryTask(options) {
+    return this.summaryRemotes().saveSummaryTask(options);
+  }
+  deleteSummaryTask(options) {
+    return this.summaryRemotes().deleteSummaryTask(options);
+  }
+  toggleSummaryTask(options) {
+    return this.summaryRemotes().toggleSummaryTask(options);
+  }
+  deleteSummaryRecord(options) {
+    return this.summaryRecordRemotes().deleteSummaryRecord(options);
+  }
+  async runSummaryTask(options) {
+    return this.summaryRemotes().runSummaryTask(options);
+  }
+  async suggestReplies(options) {
+    return this.summaryRecordRemotes().suggestReplies(options);
+  }
+  async generatePeriodSummary(options) {
+    return this.summaryRecordRemotes().generatePeriodSummary(options);
+  }
+};
+_init2 = __decoratorStart(_a2);
+__decorateElement(_init2, 1, "getKnowledgeGraph", _getKnowledgeGraph_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "extractKbEntities", _extractKbEntities_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "suggestKbLinks", _suggestKbLinks_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getKbs", _getKbs_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "createKb", _createKb_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "renameKb", _renameKb_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "deleteKb", _deleteKb_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getKbFiles", _getKbFiles_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getKbFileChunks", _getKbFileChunks_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "addKbFiles", _addKbFiles_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "deleteKbFile", _deleteKbFile_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "setKbFileRag", _setKbFileRag_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "summarizeKbFile", _summarizeKbFile_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "searchKb", _searchKb_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getKbModelConfig", _getKbModelConfig_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "setKbModelConfig", _setKbModelConfig_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getKbVectorIndex", _getKbVectorIndex_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "buildKbVectorIndex", _buildKbVectorIndex_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "buildSearchIndex", _buildSearchIndex_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "searchMessages", _searchMessages_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "askWechat", _askWechat_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "optimizeAskQuestion", _optimizeAskQuestion_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getRetrievalStatus", _getRetrievalStatus_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "saveRetrievalConfig", _saveRetrievalConfig_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "buildRagVectorIndex", _buildRagVectorIndex_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "submitAskFeedback", _submitAskFeedback_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "listRetrievalFeedback", _listRetrievalFeedback_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "evaluateRetrieval", _evaluateRetrieval_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "generateDailySummary", _generateDailySummary_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "resetEditedMessage", _resetEditedMessage_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "getAskHistory", _getAskHistory_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "listSummaryTasks", _listSummaryTasks_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "saveSummaryTask", _saveSummaryTask_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "deleteSummaryTask", _deleteSummaryTask_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "toggleSummaryTask", _toggleSummaryTask_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "deleteSummaryRecord", _deleteSummaryRecord_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "runSummaryTask", _runSummaryTask_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "suggestReplies", _suggestReplies_dec, GatewayAskOps);
+__decorateElement(_init2, 1, "generatePeriodSummary", _generatePeriodSummary_dec, GatewayAskOps);
+__decoratorMetadata(_init2, GatewayAskOps);
+
+// src/backend/wechat-data/src/gateway-data-ops.ts
+var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
+var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _a3) {
+  constructor() {
+    super(...arguments);
+    __runInitializers(_init3, 5, this);
+  }
+  getEmoticons(options) {
+    return this.mediaRemotes().getEmoticons(options);
+  }
+  getWechatConfig() {
+    return this.configRemotes().getWechatConfig();
+  }
+  getPrivacyScan() {
+    return this.opsLogRemotes().getPrivacyScan();
+  }
+  getNotes(kbId, options) {
+    return this.tasksRemotes().getNotes(kbId, options);
+  }
+  saveNote(kbId, options) {
+    return this.tasksRemotes().saveNote(kbId, options);
+  }
+  deleteNote(kbId, options) {
+    return this.tasksRemotes().deleteNote(kbId, options);
+  }
+  getFiles(options) {
+    return this.mediaRemotes().getFiles(options);
+  }
+  getVoiceInfo(options) {
+    return this.mediaRemotes().getVoiceInfo(options);
+  }
+  getVoiceDataUrl(options) {
+    return this.mediaRemotes().getVoiceDataUrl(options);
+  }
+  getVideoInfo(options) {
+    return this.mediaRemotes().getVideoInfo(options);
+  }
+  async exportSessionMessages(options) {
+    return this.exportRemotes().exportSessionMessages(options);
+  }
+  listBackups() {
+    return this.backupRemotes().listBackups();
+  }
+  previewBackup(options) {
+    return this.backupRemotes().previewBackup(options);
+  }
+  createBackup() {
+    return this.backupRemotes().createBackup();
+  }
+  deleteBackup(options) {
+    return this.backupRemotes().deleteBackup(options);
+  }
+  listLlmProviders() {
+    return this.voiceLlmRemotes().listLlmProviders();
+  }
+  async listLlmModels(options) {
+    return this.voiceLlmRemotes().listLlmModels(options);
+  }
+  exportAnnualReport(options) {
+    return this.exportRemotes().exportAnnualReport(options);
+  }
+  async exportAllSessions(options) {
+    return this.exportRemotes().exportAllSessions(options);
+  }
+  cancelExportJob(options) {
+    return this.exportRemotes().cancelExportJob(options);
+  }
+  getExportProgress(options) {
+    return this.exportRemotes().getExportProgress(options);
+  }
+  async exportMoments(options) {
+    return this.exportRemotes().exportMoments(options);
+  }
+  exportCsv(options) {
+    return this.exportRemotes().exportCsv(options);
+  }
+  getExportHistory(options) {
+    return this.exportRemotes().getExportHistory(options);
+  }
+  deleteExportHistory(options) {
+    return this.exportRemotes().deleteExportHistory(options);
+  }
+  pruneExportHistory(options) {
+    return this.exportRemotes().pruneExportHistory(options);
+  }
+  getAvatar(options) {
+    return this.mediaRemotes().getAvatar(options);
+  }
+  getAvatarsLocal(options) {
+    return this.mediaRemotes().getAvatarsLocal(options);
+  }
+  getWechatConfigFull() {
+    return this.configRemotes().getWechatConfigFull();
+  }
+  saveWechatConfig(options) {
+    return this.configRemotes().saveWechatConfig(options);
+  }
+  getWhisperStatus() {
+    return this.voiceLlmRemotes().getWhisperStatus();
+  }
+  async downloadWhisperModel(options) {
+    return this.voiceLlmRemotes().downloadWhisperModel(options);
+  }
+  generateKeysFile(options) {
+    return this.configRemotes().generateKeysFile(options);
+  }
+  getWechatKeysInfo() {
+    return this.configRemotes().getWechatKeysInfo();
+  }
+  async autoGetDbKey(options) {
+    return this.configRemotes().autoGetDbKey(options);
+  }
+  async autoGetImageKey(options) {
+    return this.keysDecryptRemotes().autoGetImageKey(options);
+  }
+  async openConfig(signal) {
+    return this.configRemotes().openConfig(signal);
+  }
+  verifyImageKey() {
+    return this.keysDecryptRemotes().verifyImageKey();
+  }
+  async decryptAllDatabases() {
+    return this.keysDecryptRemotes().decryptAllDatabases();
+  }
+  async decryptAllImages(options) {
+    return this.keysDecryptRemotes().decryptAllImages(options);
+  }
+  getDecryptStatus() {
+    return this.configRemotes().getDecryptStatus();
+  }
+  async installWhisperEngine() {
+    return this.voiceLlmRemotes().installWhisperEngine();
+  }
+  async transcribeVoiceBatch(options) {
+    return this.voiceLlmRemotes().transcribeVoiceBatch(options);
+  }
   getDbStatus() {
     return this.configRemotes().getDbStatus();
   }
@@ -27355,9 +27508,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   }
   async getImageOriginal(options) {
     return this.mediaRemotes().getImageOriginal(options);
-  }
-  async getArticleCover(options) {
-    return resolveArticleCoverDataUrl(options.contentUrl, this._dirs.decoded, this.cdnSwitches());
   }
   getMessageFile(options) {
     return this.mediaRemotes().getMessageFile(options);
@@ -27380,41 +27530,11 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   extractTasks(options) {
     return this.tasksRemotes().extractTasks(options);
   }
-  async generatePeriodSummary(options) {
-    return this.summaryRecordRemotes().generatePeriodSummary(options);
-  }
-  getAssetInsights() {
-    return queryAssetInsights(this._dirs.decrypted);
-  }
-  getContact360(options) {
-    return queryContact360(this._dirs.decrypted, options.username);
-  }
   getDbHealth() {
     return this.configRemotes().getDbHealth();
   }
-  getCalls(options) {
-    return queryCalls(this._dirs.decrypted, this.selfUsername(), options?.topPeers, options?.recentLimit);
-  }
-  getGroupInsights(options) {
-    return queryGroupInsights(this._dirs.decrypted, options.username);
-  }
   getHandoffReminds() {
     return this.tasksRemotes().getHandoffReminds();
-  }
-  getLedger(options) {
-    return queryLedger(this._dirs.decrypted, options?.month, this.selfUsername());
-  }
-  getMediaAssets() {
-    return queryMediaAssets(this._dirs.decrypted);
-  }
-  getMomentsInsights(options) {
-    return queryMomentsInsights(this._dirs.decrypted, options?.author);
-  }
-  getMomentsMonthly(options) {
-    return queryMomentsMonthly(this._dirs.decrypted, options?.author, options?.authorName);
-  }
-  getOfficialAssets() {
-    return queryOfficialAssets(this._dirs.decrypted);
   }
   getOperationLog(options) {
     return this.opsLogRemotes().getOperationLog(options);
@@ -27440,9 +27560,6 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
   restoreBackup(options) {
     return this.backupRemotes().restoreBackup(options);
   }
-  searchUnified(options) {
-    return searchUnified(this._dirs.decrypted, options.query, options.limit);
-  }
   setPrivacyState(options) {
     return this.opsLogRemotes().setPrivacyState(options);
   }
@@ -27453,169 +27570,82 @@ var WechatDataGateway = class extends (_a = GatewayCore, _getSessions_dec = [Rem
     return this.tasksRemotes().syncHandoffTasks();
   }
 };
-_init = __decoratorStart(_a);
-__decorateElement(_init, 1, "getSessions", _getSessions_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getContacts", _getContacts_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getOverviewInsights", _getOverviewInsights_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getOverview", _getOverview_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getRegionMap", _getRegionMap_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getRecords", _getRecords_dec, WechatDataGateway);
-__decorateElement(_init, 1, "searchMembers", _searchMembers_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getRevoked", _getRevoked_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getEmoticons", _getEmoticons_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getStorageStats", _getStorageStats_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAnnual", _getAnnual_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getWechatConfig", _getWechatConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getPrivacyScan", _getPrivacyScan_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getGraph", _getGraph_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getNotes", _getNotes_dec, WechatDataGateway);
-__decorateElement(_init, 1, "saveNote", _saveNote_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteNote", _deleteNote_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKnowledgeGraph", _getKnowledgeGraph_dec, WechatDataGateway);
-__decorateElement(_init, 1, "extractKbEntities", _extractKbEntities_dec, WechatDataGateway);
-__decorateElement(_init, 1, "suggestKbLinks", _suggestKbLinks_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKbs", _getKbs_dec, WechatDataGateway);
-__decorateElement(_init, 1, "createKb", _createKb_dec, WechatDataGateway);
-__decorateElement(_init, 1, "renameKb", _renameKb_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteKb", _deleteKb_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKbFiles", _getKbFiles_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKbFileChunks", _getKbFileChunks_dec, WechatDataGateway);
-__decorateElement(_init, 1, "addKbFiles", _addKbFiles_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteKbFile", _deleteKbFile_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setKbFileRag", _setKbFileRag_dec, WechatDataGateway);
-__decorateElement(_init, 1, "summarizeKbFile", _summarizeKbFile_dec, WechatDataGateway);
-__decorateElement(_init, 1, "searchKb", _searchKb_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKbModelConfig", _getKbModelConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setKbModelConfig", _setKbModelConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getKbVectorIndex", _getKbVectorIndex_dec, WechatDataGateway);
-__decorateElement(_init, 1, "buildKbVectorIndex", _buildKbVectorIndex_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMoments", _getMoments_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getSelfUsername", _getSelfUsername_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMomentsAuthors", _getMomentsAuthors_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getFavorites", _getFavorites_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getFiles", _getFiles_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMessages", _getMessages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getNewMessages", _getNewMessages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getSearchIndexStatus", _getSearchIndexStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "buildSearchIndex", _buildSearchIndex_dec, WechatDataGateway);
-__decorateElement(_init, 1, "searchMessages", _searchMessages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "cancelSearch", _cancelSearch_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getGroupInfo", _getGroupInfo_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getPaymentStatus", _getPaymentStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "resolveChatHistory", _resolveChatHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getDailyCounts", _getDailyCounts_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getVoiceInfo", _getVoiceInfo_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getVoiceDataUrl", _getVoiceDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getVideoInfo", _getVideoInfo_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportSessionMessages", _exportSessionMessages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "askWechat", _askWechat_dec, WechatDataGateway);
-__decorateElement(_init, 1, "optimizeAskQuestion", _optimizeAskQuestion_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listBackups", _listBackups_dec, WechatDataGateway);
-__decorateElement(_init, 1, "previewBackup", _previewBackup_dec, WechatDataGateway);
-__decorateElement(_init, 1, "createBackup", _createBackup_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteBackup", _deleteBackup_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getRetrievalStatus", _getRetrievalStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "saveRetrievalConfig", _saveRetrievalConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "buildRagVectorIndex", _buildRagVectorIndex_dec, WechatDataGateway);
-__decorateElement(_init, 1, "submitAskFeedback", _submitAskFeedback_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listRetrievalFeedback", _listRetrievalFeedback_dec, WechatDataGateway);
-__decorateElement(_init, 1, "resetRetrievalWeights", _resetRetrievalWeights_dec, WechatDataGateway);
-__decorateElement(_init, 1, "evaluateRetrieval", _evaluateRetrieval_dec, WechatDataGateway);
-__decorateElement(_init, 1, "generateDailySummary", _generateDailySummary_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listEditedMessages", _listEditedMessages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "editChatMessage", _editChatMessage_dec, WechatDataGateway);
-__decorateElement(_init, 1, "resetEditedMessage", _resetEditedMessage_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listLlmProviders", _listLlmProviders_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listLlmModels", _listLlmModels_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportAnnualReport", _exportAnnualReport_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportAllSessions", _exportAllSessions_dec, WechatDataGateway);
-__decorateElement(_init, 1, "cancelExportJob", _cancelExportJob_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getExportProgress", _getExportProgress_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportMoments", _exportMoments_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportCsv", _exportCsv_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getExportHistory", _getExportHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteExportHistory", _deleteExportHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "pruneExportHistory", _pruneExportHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAskHistory", _getAskHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteAskHistory", _deleteAskHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "clearAskHistory", _clearAskHistory_dec, WechatDataGateway);
-__decorateElement(_init, 1, "clearSessionDraft", _clearSessionDraft_dec, WechatDataGateway);
-__decorateElement(_init, 1, "clearAllSessionDrafts", _clearAllSessionDrafts_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listSummaryTasks", _listSummaryTasks_dec, WechatDataGateway);
-__decorateElement(_init, 1, "saveSummaryTask", _saveSummaryTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteSummaryTask", _deleteSummaryTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "toggleSummaryTask", _toggleSummaryTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listSummaryRecords", _listSummaryRecords_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteSummaryRecord", _deleteSummaryRecord_dec, WechatDataGateway);
-__decorateElement(_init, 1, "runSummaryTask", _runSummaryTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "suggestReplies", _suggestReplies_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAvatar", _getAvatar_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAvatarsLocal", _getAvatarsLocal_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getWechatConfigFull", _getWechatConfigFull_dec, WechatDataGateway);
-__decorateElement(_init, 1, "saveWechatConfig", _saveWechatConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getWhisperStatus", _getWhisperStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "downloadWhisperModel", _downloadWhisperModel_dec, WechatDataGateway);
-__decorateElement(_init, 1, "detectWechatAccounts", _detectWechatAccounts_dec, WechatDataGateway);
-__decorateElement(_init, 1, "verifyDatabaseKey", _verifyDatabaseKey_dec, WechatDataGateway);
-__decorateElement(_init, 1, "generateKeysFile", _generateKeysFile_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getWechatKeysInfo", _getWechatKeysInfo_dec, WechatDataGateway);
-__decorateElement(_init, 1, "autoGetDbKey", _autoGetDbKey_dec, WechatDataGateway);
-__decorateElement(_init, 1, "autoGetImageKey", _autoGetImageKey_dec, WechatDataGateway);
-__decorateElement(_init, 1, "openPath", _openPath_dec, WechatDataGateway);
-__decorateElement(_init, 1, "openConfig", _openConfig_dec, WechatDataGateway);
-__decorateElement(_init, 1, "verifyImageKey", _verifyImageKey_dec, WechatDataGateway);
-__decorateElement(_init, 1, "decryptAllDatabases", _decryptAllDatabases_dec, WechatDataGateway);
-__decorateElement(_init, 1, "decryptAllImages", _decryptAllImages_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getDecryptStatus", _getDecryptStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "installWhisperEngine", _installWhisperEngine_dec, WechatDataGateway);
-__decorateElement(_init, 1, "transcribeVoiceBatch", _transcribeVoiceBatch_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getVoiceTranscript", _getVoiceTranscript_dec, WechatDataGateway);
-__decorateElement(_init, 1, "transcribeVoiceMessage", _transcribeVoiceMessage_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setCdnImageEnabled", _setCdnImageEnabled_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setCdnImageLocalDecrypt", _setCdnImageLocalDecrypt_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteFavoriteItems", _deleteFavoriteItems_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAnnualReview", _getAnnualReview_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAnnualReport", _getAnnualReport_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getDbStatus", _getDbStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getImageDataUrl", _getImageDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getImageDataUrlsBatch", _getImageDataUrlsBatch_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getSnsImageDataUrl", _getSnsImageDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getFileImageDataUrl", _getFileImageDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getEmoticonDataUrl", _getEmoticonDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getImageOriginal", _getImageOriginal_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getArticleCover", _getArticleCover_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMessageFile", _getMessageFile_dec, WechatDataGateway);
-__decorateElement(_init, 1, "addTask", _addTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "clearOperationLog", _clearOperationLog_dec, WechatDataGateway);
-__decorateElement(_init, 1, "clearPrivacyAudit", _clearPrivacyAudit_dec, WechatDataGateway);
-__decorateElement(_init, 1, "createEncryptedBackup", _createEncryptedBackup_dec, WechatDataGateway);
-__decorateElement(_init, 1, "deleteTask", _deleteTask_dec, WechatDataGateway);
-__decorateElement(_init, 1, "extractTasks", _extractTasks_dec, WechatDataGateway);
-__decorateElement(_init, 1, "generatePeriodSummary", _generatePeriodSummary_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getAssetInsights", _getAssetInsights_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getContact360", _getContact360_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getDbHealth", _getDbHealth_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getCalls", _getCalls_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getGroupInsights", _getGroupInsights_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getHandoffReminds", _getHandoffReminds_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getLedger", _getLedger_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMediaAssets", _getMediaAssets_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMomentsInsights", _getMomentsInsights_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getMomentsMonthly", _getMomentsMonthly_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getOfficialAssets", _getOfficialAssets_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getOperationLog", _getOperationLog_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getPrivacyAuditRows", _getPrivacyAuditRows_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getPrivacyState", _getPrivacyState_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getSnsVideoCoverDataUrl", _getSnsVideoCoverDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "getSnsVideoDataUrl", _getSnsVideoDataUrl_dec, WechatDataGateway);
-__decorateElement(_init, 1, "exportSnsVideo", _exportSnsVideo_dec, WechatDataGateway);
-__decorateElement(_init, 1, "listTasks", _listTasks_dec, WechatDataGateway);
-__decorateElement(_init, 1, "restoreBackup", _restoreBackup_dec, WechatDataGateway);
-__decorateElement(_init, 1, "searchUnified", _searchUnified_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setPrivacyState", _setPrivacyState_dec, WechatDataGateway);
-__decorateElement(_init, 1, "setTaskStatus", _setTaskStatus_dec, WechatDataGateway);
-__decorateElement(_init, 1, "syncHandoffTasks", _syncHandoffTasks_dec, WechatDataGateway);
-__decoratorMetadata(_init, WechatDataGateway);
+_init3 = __decoratorStart(_a3);
+__decorateElement(_init3, 1, "getEmoticons", _getEmoticons_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getWechatConfig", _getWechatConfig_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getPrivacyScan", _getPrivacyScan_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getNotes", _getNotes_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "saveNote", _saveNote_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "deleteNote", _deleteNote_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getFiles", _getFiles_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getVoiceInfo", _getVoiceInfo_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getVoiceDataUrl", _getVoiceDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getVideoInfo", _getVideoInfo_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportSessionMessages", _exportSessionMessages_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "listBackups", _listBackups_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "previewBackup", _previewBackup_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "createBackup", _createBackup_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "deleteBackup", _deleteBackup_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "listLlmProviders", _listLlmProviders_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "listLlmModels", _listLlmModels_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportAnnualReport", _exportAnnualReport_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportAllSessions", _exportAllSessions_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "cancelExportJob", _cancelExportJob_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getExportProgress", _getExportProgress_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportMoments", _exportMoments_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportCsv", _exportCsv_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getExportHistory", _getExportHistory_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "deleteExportHistory", _deleteExportHistory_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "pruneExportHistory", _pruneExportHistory_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getAvatar", _getAvatar_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getAvatarsLocal", _getAvatarsLocal_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getWechatConfigFull", _getWechatConfigFull_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "saveWechatConfig", _saveWechatConfig_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getWhisperStatus", _getWhisperStatus_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "downloadWhisperModel", _downloadWhisperModel_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "generateKeysFile", _generateKeysFile_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getWechatKeysInfo", _getWechatKeysInfo_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "autoGetDbKey", _autoGetDbKey_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "autoGetImageKey", _autoGetImageKey_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "openConfig", _openConfig_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "verifyImageKey", _verifyImageKey_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "decryptAllDatabases", _decryptAllDatabases_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "decryptAllImages", _decryptAllImages_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getDecryptStatus", _getDecryptStatus_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "installWhisperEngine", _installWhisperEngine_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "transcribeVoiceBatch", _transcribeVoiceBatch_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getDbStatus", _getDbStatus_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getImageDataUrl", _getImageDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getImageDataUrlsBatch", _getImageDataUrlsBatch_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getSnsImageDataUrl", _getSnsImageDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getFileImageDataUrl", _getFileImageDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getEmoticonDataUrl", _getEmoticonDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getImageOriginal", _getImageOriginal_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getMessageFile", _getMessageFile_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "addTask", _addTask_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "clearOperationLog", _clearOperationLog_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "clearPrivacyAudit", _clearPrivacyAudit_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "createEncryptedBackup", _createEncryptedBackup_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "deleteTask", _deleteTask_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "extractTasks", _extractTasks_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getDbHealth", _getDbHealth_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getHandoffReminds", _getHandoffReminds_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getOperationLog", _getOperationLog_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getPrivacyAuditRows", _getPrivacyAuditRows_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getPrivacyState", _getPrivacyState_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getSnsVideoCoverDataUrl", _getSnsVideoCoverDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getSnsVideoDataUrl", _getSnsVideoDataUrl_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "exportSnsVideo", _exportSnsVideo_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "listTasks", _listTasks_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "restoreBackup", _restoreBackup_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "setPrivacyState", _setPrivacyState_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "setTaskStatus", _setTaskStatus_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "syncHandoffTasks", _syncHandoffTasks_dec, GatewayDataOps);
+__decoratorMetadata(_init3, GatewayDataOps);
+
+// src/backend/wechat-data/src/gateway.ts
+var WechatDataGateway = class extends GatewayDataOps {
+};
 
 // src/backend/wechat-data/src/index.ts
 function apply(ctx) {

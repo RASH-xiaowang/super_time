@@ -13,9 +13,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { gatewayClassSource } from './gateway-source.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const gateway = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8')
+// M21 结构刀：一个类拆成 5 个文件（核 + 三层方法面壳 + 叶子）=> 读「组成这个类的文件」
+const gateway = gatewayClassSource()
 const docPath = join(ROOT, 'docs', 'API.md')
 
 /** 源码里的方法集合（去重，便于发现重复注册）。 */

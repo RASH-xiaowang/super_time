@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
+import { gatewayClassSource } from './gateway-source.ts'// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { callTimeoutFor, createWorkerChannel, LONG_CALL_METHODS } from '../backend-rpc.js'
 
 /** 最小的 utilityProcess 替身：能收能发能被杀。 */
@@ -49,10 +49,7 @@ function makeChannel(timeoutMs = 30, extra: Record<string, unknown> = {}) {
 describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
   // 直接从源码抽 @Remote 名单。写错方法名不会报任何错、只会让该方法静默退回 60s 窗口，
   // 而 60s 对导出/解密/LLM 这类任务明显不够 —— 必须由测试挡住。
-  const gatewaySrc = readFileSync(
-    join(__dirname, '..', 'wechat-data', 'src', 'gateway.ts'),
-    'utf8',
-  )
+  const gatewaySrc = gatewayClassSource()
   const remoteNames = new Set(
     [...gatewaySrc.matchAll(/@Remote\('([A-Za-z0-9_]+)'\)/g)].map((m) => m[1] as string),
   )
