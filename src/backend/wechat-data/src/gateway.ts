@@ -28,21 +28,6 @@ import { queryAnnual } from './query/annual.ts'
 import { queryWechatConfig } from './query/settings.ts'
 import { resolveSelfUsername } from './query/config.ts'
 
-/** Compact, readable daily digest for the no-LLM fallback (short per-message previews). */
-function compactDailyDigest(lines: string[]): string {
-  const parts: string[] = []
-  let lastSession = ''
-  let shown = 0
-  for (const line of lines) {
-    const m = line.match(/^【(.+?)】/)
-    if (m && m[1]) { lastSession = m[1]; parts.push('\n【' + lastSession + '】'); continue }
-    if (shown >= 6) { parts.push('……'); break }
-    const s = line.replace(/\s+/g, ' ').slice(0, 48)
-    parts.push('- ' + s + (line.length > 48 ? '…' : ''))
-    shown += 1
-  }
-  return parts.join('\n')
-}
 import { startRealtimeSync } from './query/sync.ts'
 import { createTasksRemotes } from './remotes/tasks.ts'
 import { createOpsLogRemotes } from './remotes/opslog.ts'
@@ -52,6 +37,8 @@ import { createSummaryRemotes } from './remotes/summary.ts'
 import { createAskRemotes } from './remotes/ask.ts'
 import { createKeysDecryptRemotes } from './remotes/keysdec.ts'
 import { createGraphSearchRemotes } from './remotes/graphsearch.ts'
+import { createSummaryRecordRemotes } from './remotes/summaryrec.ts'
+import { createVoiceLlmRemotes } from './remotes/voicellm.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
@@ -891,6 +878,38 @@ export class WechatDataGateway extends TypertRemoteService {
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       searchJobs: this._searchJobs,
       searchSignal: (jobId) => this.searchSignal(jobId),
+    }))
+  }
+
+  private _summaryRecordRemotes?: ReturnType<typeof createSummaryRecordRemotes>
+
+  /** 总结记录（每日/周期总结生成、记录删除、推荐回复） 的处理器（体在 remotes/summaryrec.ts）；这里只组装 ctx 与转发。 */
+  private summaryRecordRemotes(): ReturnType<typeof createSummaryRecordRemotes> {
+    return (this._summaryRecordRemotes ??= createSummaryRecordRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      ctx: () => this._ctx,
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+      runSummaryTask: (options) => this.runSummaryTask(options),
+      selfUsername: () => this.selfUsername(),
+      getSchedBusy: () => this._schedBusy,
+      setSchedBusy: (v) => { this._schedBusy = v },
+    }))
+  }
+
+  private _voiceLlmRemotes?: ReturnType<typeof createVoiceLlmRemotes>
+
+  /** 语音转写与模型清单（whisper 安装/下载/状态、可用模型与提供方） 的处理器（体在 remotes/voicellm.ts）；这里只组装 ctx 与转发。 */
+  private voiceLlmRemotes(): ReturnType<typeof createVoiceLlmRemotes> {
+    return (this._voiceLlmRemotes ??= createVoiceLlmRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      ctx: () => this._ctx,
+      getWhisperDownload: () => this.whisperDownload,
+      setWhisperDownload: (v) => { this.whisperDownload = v },
+      getWhisperTranscribing: () => this.whisperTranscribing,
+      setWhisperTranscribing: (v) => { this.whisperTranscribing = v },
     }))
   }
 
@@ -2503,75 +2522,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('generateDailySummary')
   async generateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<DailySummaryResult> {
-    const { lines, count, sessions, total, types, hourly, topSessions } = collectDayMessages(this._dirs.decrypted, options.date)
-    // 出站拦截要在这里判：再往下就是「未配置默认模型」的早退分支，它会盖掉拦截提示
-    const blockedDay = this.privacyBlocked('daily_summary')
-    if (blockedDay !== null) {
-      this.op('task', 'generate_daily_summary', 'skip', options.date, blockedDay)
-      return {
-        summary: '⛔ ' + blockedDay + '\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）'),
-        date: options.date, sessions, messages: count, total, types, hourly, topSessions,
-      }
-    }
-    const ctx = this._ctx
-    const defaultModel = (ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
-    }).agentDefaultModel
-    const sel = defaultModel?.currentSelection()
-    const useProvider = (options.provider && options.provider.trim()) ? options.provider.trim() : (sel?.provider ?? '')
-    let useModel = (options.model && options.model.trim()) ? options.model.trim() : (sel?.model ?? '')
-    const llm = ctx.llm
-    // Plain-text summarization: avoid a default vision/experimental model that returns empty text. Respect an explicit selection.
-    if (!options.model && useModel && /vision|-exp/i.test(useModel)) {
-      try {
-        const ms = await llm.listModels(useProvider)
-        const chatModelRe = /chat|flash|pro|v4/i
-        const pick = ms.find(m => chatModelRe.test(m.id) && !/vision|image|exp/i.test(m.id))
-          ?? ms.find(m => !/vision|image|exp/i.test(m.id))
-          ?? ms[0]
-        if (pick && pick.id) useModel = pick.id
-      } catch { /* keep */ }
-    }
-    if (!useProvider || !useModel) {
-      const fallback = 'AI 不可用（未配置默认模型或 LLM 服务）。\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）')
-      this.op('task', 'generate_daily_summary', 'fail', options.date, '未配置默认模型或 LLM 服务')
-      return { summary: fallback, date: options.date, sessions, messages: count, total, types, hourly, topSessions }
-    }
-    const prompt = '请总结 ' + options.date + ' 当天的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
-    const gate = this.privacyGate('daily_summary', { sessions, messages: count }, [prompt])
-    if (!gate.ok) {
-      this.op('task', 'generate_daily_summary', 'skip', options.date, gate.error)
-      return {
-        summary: '⛔ ' + gate.error + '\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）'),
-        date: options.date, sessions, messages: count, total, types, hourly, topSessions,
-      }
-    }
-    const userMsg = createUserMessage({
-      content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
-      source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-    })
-    const assembler = new BlockAssembler()
-    const opts: GenerateOptions = {
-      provider: useProvider,
-      model: useModel,
-      messages: [userMsg],
-      system: '你是微信每日总结助手，用中文输出简洁的当日聊天要点总结。',
-      maxTokens: 1024,
-    }
-    let summary = ''
-    try {
-      for await (const chunk of llm.stream(opts)) assembler.push(chunk)
-      summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-    } catch (e) {
-      summary = 'LLM 调用失败: ' + (e as Error).message
-    }
-    const finalSummary = summary ||
-      (lines.length > 0
-        ? '模型未返回内容（请为默认模型配置 DEEPSEEK_API_KEY 或其它 LLM 密钥）。\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）')
-        : '（当天没有可用的文本消息）')
-    const ok = !finalSummary.startsWith('LLM 调用失败')
-    this.op('task', 'generate_daily_summary', ok ? 'ok' : 'fail', options.date, ok ? `共 ${count} 条消息` : finalSummary.slice(0, 120))
-    return { summary: finalSummary, date: options.date, sessions, messages: count, total, types, hourly, topSessions }
+    return this.summaryRecordRemotes().generateDailySummary(options)
   }
 
   /**
@@ -2622,76 +2573,13 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('listLlmProviders')
   listLlmProviders(): { providers: Array<{ id: string; name: string }> } {
-    const ctx = this._ctx as unknown as {
-      settings?: { get(ns: string): unknown }
-      llm?: { listConfigurableProviders(): Array<{ provider: string; displayName: string }> }
-    }
-    let provider = ''
-    try {
-      const am = (ctx.settings?.get('agent-default-model') ?? {}) as { provider?: string }
-      provider = am.provider ?? ''
-    } catch { /* ignore */ }
-    if (!provider) {
-      try {
-        const adm = (this._ctx as unknown as {
-          agentDefaultModel?: { currentSelection?: () => { provider: string } | undefined }
-        }).agentDefaultModel
-        const sel = adm && adm.currentSelection ? adm.currentSelection() : undefined
-        provider = sel?.provider ?? ''
-      } catch { /* ignore */ }
-    }
-    if (!provider) return { providers: [] }
-    const name = (() => {
-      try {
-        const found = ctx.llm?.listConfigurableProviders().find(p => p.provider === provider)
-        return found?.displayName ?? provider
-      } catch {
-        return provider
-      }
-    })()
-    return { providers: [{ id: provider, name }] }
+    return this.voiceLlmRemotes().listLlmProviders()
   }
 
   /** List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider catalog. */
   @Remote('listLlmModels')
   async listLlmModels(options: { provider: string }): Promise<{ models: Array<{ id: string; name: string }> }> {
-    const ctx = this._ctx as unknown as {
-      llm?: {
-        listConfigurableProviders(): Array<{ provider: string; settingsNs: string; settingsPath: string[] }>
-        listModels(provider: string): Promise<Array<{ id: string; name: string }>>
-      }
-      settings?: { get(ns: string): unknown }
-    }
-    // 1) read the configured models from the provider's settings section.
-    let ns = ''
-    let settingsPath: string[] = []
-    try {
-      const conf = (ctx.llm?.listConfigurableProviders() ?? []).find(p => p.provider === options.provider)
-      if (conf) { ns = conf.settingsNs; settingsPath = conf.settingsPath }
-    } catch { /* ignore */ }
-    if (ns) {
-      try {
-        const doc = (ctx.settings?.get(ns) ?? {}) as Record<string, unknown>
-        let profile: Record<string, unknown> = doc
-        if (settingsPath.length > 0) {
-          profile = settingsPath.reduce<Record<string, unknown>>((acc, k) => {
-            const v = acc[k] as Record<string, unknown> | undefined
-            return v ?? {}
-          }, doc)
-        }
-        const ms = (profile.models ?? []) as Array<{ id?: string; name?: string } | string>
-        if (Array.isArray(ms) && ms.length > 0) {
-          return { models: ms.map(m => ({ id: typeof m === 'string' ? m : (m.id ?? ''), name: typeof m === 'string' ? m : (m.name ?? m.id ?? '') })).filter(m => m.id) }
-        }
-      } catch { /* ignore */ }
-    }
-    // 2) fallback: provider catalog.
-    try {
-      const ms = (await ctx.llm?.listModels(options.provider)) ?? []
-      return { models: ms.map(m => ({ id: m.id, name: m.name })).filter(m => m.id) }
-    } catch {
-      return { models: [] }
-    }
+    return this.voiceLlmRemotes().listLlmModels(options)
   }
 
   @Remote('exportAnnualReport')
@@ -2933,9 +2821,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('deleteSummaryRecord')
   deleteSummaryRecord(options: { id: number }): SummaryTaskMutationResult {
-    const r = delRec(this._dirs.decrypted, options.id)
-    this.op('delete', 'delete_summary_record', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? '')
-    return r
+    return this.summaryRecordRemotes().deleteSummaryRecord(options)
   }
 
   /**
@@ -3025,52 +2911,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('suggestReplies')
   async suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<ReplySuggestResult> {
-    const talker = String(options.username ?? '').trim()
-    if (talker === '') return { ok: false, error: '缺少会话' }
-    const want = Math.max(1, Math.min(Math.trunc(options.count ?? 3), 5))
-    const { lines, latestPeer, count } = collectReplyContext(this._dirs.decrypted, talker, this.selfUsername())
-    if (count === 0) return { ok: false, error: '这个会话还没有可用的对话内容' }
-    const kbId = Math.trunc(Number(options.kbId ?? 0))
-    const snippets = kbId > 0
-      ? collectReplyKbSnippets(this._dirs.decrypted, kbId, latestPeer || lines[lines.length - 1] || '', 3)
-      : []
-    const blocked = this.privacyBlocked('suggest_reply')
-    if (blocked !== null) return { ok: false, error: blocked }
-    const llm = this._ctx.llm
-    const defaultModel = (this._ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
-    }).agentDefaultModel
-    const sel = defaultModel?.currentSelection()
-    if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
-    const prompt = buildReplyPrompt(lines, snippets, want)
-    const gate = this.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
-    if (!gate.ok) return { ok: false, error: gate.error }
-    const userMsg = createUserMessage({
-      content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
-      source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-    })
-    const assembler = new BlockAssembler()
-    const opts: GenerateOptions = {
-      provider: sel.provider, model: sel.model, messages: [userMsg],
-      system: '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。',
-    }
-    try {
-      for await (const chunk of llm.stream(opts)) assembler.push(chunk)
-    } catch (e) {
-      this.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
-      return { ok: false, error: (e as Error).message }
-    }
-    const raw = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-    const replies = parseReplyCandidates(raw, want)
-    if (replies.length === 0) {
-      this.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
-      return { ok: false, error: '模型没给出可用的候选回复' }
-    }
-    this.op('task', 'suggest_replies', 'ok', talker, `${replies.length} 条 · 上下文 ${count} 条 · 知识库 ${snippets.length} 段`)
-    const base: ReplySuggestResult = { ok: true, replies, messageCount: count, kbSnippetCount: snippets.length }
-    return snippets.length === 0 && kbId > 0
-      ? { ...base, degraded: '知识库里没有相关内容，这次只用了会话上下文' }
-      : base
+    return this.summaryRecordRemotes().suggestReplies(options)
   }
 
   /**
@@ -3120,20 +2961,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getWhisperStatus')
   getWhisperStatus(): WhisperStatus {
-    const cfg = getConfig(this._dirs.decrypted)
-    const configured = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
-    const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
-    const engine = whisperEnginePath(configBin, configured)
-    const result: WhisperStatus = {
-      engine,
-      hasCuda: whisperHasCuda(),
-      modelsDir: configured,
-      models: whisperModelsStatus(configured),
-      downloading: this.whisperDownload,
-      transcribing: this.whisperTranscribing,
-    }
-    if (engine) result.enginePath = engine
-    return result
+    return this.voiceLlmRemotes().getWhisperStatus()
   }
 
   /**
@@ -3144,24 +2972,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('downloadWhisperModel')
   async downloadWhisperModel(options: { model: string }): Promise<WhisperDownloadResult> {
-    if (this.whisperDownload !== null) { this.op('settings', 'download_whisper_model', 'fail', options.model, '已有模型下载任务进行中'); return { ok: false, error: '已有模型下载任务进行中' } }
-    const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
-    this.whisperDownload = { model: options.model, file: '', received: 0, total: 0 }
-    try {
-      const result = await whisperDownloadModel(options.model, modelsDir, (received, total) => {
-        if (this.whisperDownload !== null) {
-          this.whisperDownload.received = received
-          this.whisperDownload.total = total
-        }
-      })
-      // whisperDownload 在本方法开头必然已赋非空值，直到 finally 才清空。
-      this.whisperDownload.file = WHISPER_DOWNLOAD_FILES.find(([id]) => id === options.model)?.[1] ?? options.model
-      this.op('settings', 'download_whisper_model', result.ok ? 'ok' : 'fail', options.model, result.error ?? `bytes=${result.bytes ?? 0}`)
-      return result
-    } finally {
-      this.whisperDownload = null
-    }
+    return this.voiceLlmRemotes().downloadWhisperModel(options)
   }
 
   /**
@@ -3306,30 +3117,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('installWhisperEngine')
   async installWhisperEngine(): Promise<WhisperDownloadResult> {
-    if (this.whisperDownload !== null) { this.op('settings', 'install_whisper_engine', 'fail', '', '已有下载任务进行中'); return { ok: false, error: '已有下载任务进行中' } }
-    const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
-    const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
-    const existing = whisperEnginePath(configBin, modelsDir)
-    if (existing) { this.op('settings', 'install_whisper_engine', 'skip', '', '引擎已存在'); return { ok: true, file: 'whisper-cli.exe', bytes: 0 } }
-    this.whisperDownload = { model: 'engine', file: 'whisper-bin-x64.zip', received: 0, total: 0 }
-    try {
-      const result = await installWhisperEngine(modelsDir, (received, total) => {
-        if (this.whisperDownload !== null) {
-          this.whisperDownload.received = received
-          this.whisperDownload.total = total
-        }
-      })
-      if (result.ok && result.path) {
-        saveConfig(this._dirs.decrypted, { whisper_bin: result.path })
-      }
-      const out: WhisperDownloadResult = { ok: result.ok, file: 'whisper-cli.exe' }
-      if (result.error) out.error = result.error
-      this.op('settings', 'install_whisper_engine', out.ok ? 'ok' : 'fail', '', out.error ?? '引擎已安装')
-      return out
-    } finally {
-      this.whisperDownload = null
-    }
+    return this.voiceLlmRemotes().installWhisperEngine()
   }
 
   /**
@@ -3340,37 +3128,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('transcribeVoiceBatch')
   async transcribeVoiceBatch(options: { limit?: number }): Promise<VoiceTranscribeResult> {
-    if (this.whisperTranscribing.active) { this.op('task', 'transcribe_voice_batch', 'fail', '', '已有转写任务进行中'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: '', error: '已有转写任务进行中' } }
-    const cfg = getConfig(this._dirs.decrypted)
-    const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
-    const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
-    const engine = whisperEnginePath(configBin, modelsDir)
-    if (!engine) { this.op('task', 'transcribe_voice_batch', 'fail', '', '未检测到 whisper.cpp 引擎'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」，或设 DSH_WECHAT_WHISPER_BIN）' } }
-    const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
-    const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 50), 200))
-    this.whisperTranscribing = { active: true, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
-    try {
-      const result = await transcribeVoiceBatch(
-        this._dirs.decrypted,
-        this._dirs.decoded,
-        modelsDir,
-        modelId,
-        engine,
-        limit,
-        (done, total, failed, current) => {
-          this.whisperTranscribing.done = done
-          this.whisperTranscribing.total = total
-          this.whisperTranscribing.failed = failed
-          this.whisperTranscribing.current = current
-        },
-      )
-      this.whisperTranscribing.skipped = result.skipped
-      this.op('task', 'transcribe_voice_batch', result.ok ? 'ok' : 'fail', '', result.error ?? `成功 ${result.done}/${result.total}，失败 ${result.failed}`)
-      return result
-    } finally {
-      this.whisperTranscribing.active = false
-      this.whisperTranscribing.current = ''
-    }
+    return this.voiceLlmRemotes().transcribeVoiceBatch(options)
   }
 
   /**
@@ -3679,58 +3437,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('generatePeriodSummary')
   async generatePeriodSummary(options: { from: string; to: string; provider?: string; model?: string }): Promise<PeriodSummaryResult> {
-    const collected = collectPeriodMessages(this._dirs.decrypted, options.from, options.to)
-    const { lines, count, sessions, total, types, hourly, topSessions } = collected
-    // 同每日总结：拦截要在「未配置默认模型」早退之前判
-    const blockedPeriod = this.privacyBlocked('period_summary')
-    if (blockedPeriod !== null) {
-      this.op('task', 'generate_period_summary', 'skip', `${options.from}~${options.to}`, blockedPeriod)
-      return {
-        summary: '⛔ ' + blockedPeriod + '\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || ''),
-        from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions,
-      }
-    }
-    const ctx = this._ctx
-    const defaultModel = (ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
-    }).agentDefaultModel
-    const sel = defaultModel?.currentSelection()
-    const useProvider = (options.provider && options.provider.trim()) ? options.provider.trim() : (sel?.provider ?? '')
-    let useModel = (options.model && options.model.trim()) ? options.model.trim() : (sel?.model ?? '')
-    const llm = ctx.llm
-    if (!options.model && useModel && /vision|-exp/i.test(useModel)) {
-      try {
-        const ms = await llm.listModels(useProvider)
-        const chatModelRe = /chat|flash|pro|v4/i
-        const pick = ms.find(m => chatModelRe.test(m.id) && !/vision|image|exp/i.test(m.id))
-          ?? ms.find(m => !/vision|image|exp/i.test(m.id))
-          ?? ms[0]
-        if (pick && pick.id) useModel = pick.id
-      } catch { /* keep */ }
-    }
-    if (!useProvider || !useModel) {
-      const fallback = 'AI 不可用（未配置默认模型或 LLM 服务）。\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '')
-      this.op('task', 'generate_period_summary', 'fail', `${options.from}~${options.to}`, '未配置默认模型或 LLM 服务')
-      return { summary: fallback, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
-    }
-    const prompt = '请总结 ' + options.from + ' 至 ' + options.to + ' 的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
-    const gate = this.privacyGate('period_summary', { sessions, messages: count }, [prompt])
-    if (!gate.ok) {
-      this.op('task', 'generate_period_summary', 'skip', `${options.from}~${options.to}`, gate.error)
-      return {
-        summary: '⛔ ' + gate.error + '\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || ''),
-        from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions,
-      }
-    }
-    const userMsg = createUserMessage({ content: [{ type: 'text', text: gate.texts[0] ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
-    const assembler = new BlockAssembler()
-    const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信周期总结助手，用中文输出简洁的要点总结。', maxTokens: 1024 }
-    let summary = ''
-    try { for await (const chunk of llm.stream(opts)) assembler.push(chunk); summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim() } catch (e) { summary = 'LLM 调用失败: ' + (e as Error).message }
-    const finalSummary = summary || (lines.length > 0 ? '模型未返回内容。\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '') : '（该周期没有可用的文本消息）')
-    const ok = !finalSummary.startsWith('LLM 调用失败')
-    this.op('task', 'generate_period_summary', ok ? 'ok' : 'fail', `${options.from}~${options.to}`, ok ? `共 ${count} 条消息` : finalSummary.slice(0, 120))
-    return { summary: finalSummary, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
+    return this.summaryRecordRemotes().generatePeriodSummary(options)
   }
 
   @Remote('getAssetInsights')
