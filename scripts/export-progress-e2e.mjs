@@ -104,6 +104,11 @@ try {
     },
   })
   const win = await app.firstWindow()
+  // 故意用**矮视口**（导出对话框的内容比它高）：CI runner 就是这种尺寸，而当时「中止导出」
+  // 整颗按钮在视口之外点不到 —— 那暴露的是弹窗不可滚的产品缺陷（Playwright 报
+  // element is outside of the viewport）。修好之后这条仍要用矮视口跑，
+  // 否则同样的缺陷会再次只在 CI 现形。
+  await win.setViewportSize({ width: 1280, height: 620 })
   win.setDefaultTimeout(30000)
   const pageErrors = []
   win.on('pageerror', (e) => { pageErrors.push(String(e.message).slice(0, 200)) })
@@ -208,7 +213,27 @@ try {
     `样本 ${samples.length}：${samples.slice(0, 3).map((s) => s.caption).join(' | ')}`)
 
   // ── ③ 中止：停在终态、提示是取消而不是失败、不留半成品 ─────────────
-  await win.getByRole('button', { name: '中止导出', exact: true }).click()
+  const stopBtn = win.getByRole('button', { name: '中止导出', exact: true })
+  // **真鼠标点击必须成功** —— 这一条本身就是断言：矮视口下弹窗溢出时必须滚得到那颗按钮
+  // （CI 上第一轮红就是它：`element is outside of the viewport`，覆盖层不可滚 ⇒ 用户也点不到）。
+  // 允许重试三次：进度事件会让那一带反复重渲染、节点短暂脱离 DOM；
+  // 而「兜底改成 JS 点击」一旦用上就把这条检查判红 —— 不能悄悄把工作绕过缺陷的那一步吞掉。
+  let domClickFallback = false
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await stopBtn.click({ timeout: 8000 })
+      break
+    } catch {
+      if (attempt === 2) {
+        domClickFallback = true
+        await stopBtn.evaluate((el) => { el.click() })
+      } else {
+        await sleep(250)
+      }
+    }
+  }
+  check(!domClickFallback, '矮视口下「中止导出」用真鼠标就点得到（弹窗溢出必须可滚）',
+    domClickFallback ? '退到了 DOM 级 click ⇒ 按钮仍在视口外/不可达' : '')
   let stopped = false
   for (let i = 0; i < 100; i += 1) {
     await sleep(150)
