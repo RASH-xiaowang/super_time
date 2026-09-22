@@ -25,7 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-
+import { gatewaySource } from './gateway-source.ts'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
 const requireCjs = createRequire(import.meta.url)
@@ -127,11 +127,8 @@ function scanGateway(src: string, impls: Map<string, string[]>): { methods: Meth
   return { methods, decoratedCount }
 }
 
-// M21：KB 域的 @Remote 方法体搬进了 remotes/（网关只留签名 + 转发）⇒ 读联合（断言未改）
-const gatewaySrc = [GATEWAY, ...(existsSync(join(dirname(GATEWAY), 'remotes'))
-  ? readdirSync(join(dirname(GATEWAY), 'remotes')).filter((f) => f.endsWith('.ts')).sort()
-    .map((f) => join(dirname(GATEWAY), 'remotes', f))
-  : [])].map((f) => readFileSync(f, 'utf8')).join('\n')
+// M21：方法面拆成多层壳、@Remote 方法体在 remotes/ ⇒ 读「类 + 域处理器」的联合（断言未改）
+const gatewaySrc = gatewaySource()
 const { methods: outbound, decoratedCount } = scanGateway(gatewaySrc, scanImpls(gatewaySrc))
 const outboundNames = new Set(outbound.map((m) => m.name))
 const service = requireCjs(join(ROOT, 'src', 'license', 'service.js')) as {

@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { gatewaySource } from '../../tests/gateway-source.ts'
 import { closeAllTrackedDbs, openTrackedDb, removeDirWithRetry } from '../../tests/helpers/temp-db.ts'
 import { searchIndexMessages, searchIndexMessagesCancellable } from '../src/query/search.ts'
 
@@ -127,10 +128,8 @@ describe('N9：搜索可中断', () => {
  */
 describe('N9：搜索可中断的后端接线', () => {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
-  // M21：域方法体搬进 remotes/（网关只留一行转发）⇒ 读联合，断言本身不动
-  const _gw = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
-  const gatewaySrc = [_gw, ...readdirSync(join(dirname(_gw), 'remotes')).filter((f) => f.endsWith('.ts'))
-    .sort().map((f) => join(dirname(_gw), 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n')
+  // M21：方法面拆成多层壳、可取消入口的实现在 remotes/graphsearch.ts ⇒ 读「类 + 域处理器」的联合
+  const gatewaySrc = gatewaySource()
   // M21 把 search.ts 拆成 scaffold/build/query 三个模块；可取消入口住在 query 侧
   const searchSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'search-query.ts'), 'utf8')
 

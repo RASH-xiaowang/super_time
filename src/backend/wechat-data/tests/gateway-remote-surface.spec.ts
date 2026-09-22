@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol'
 import { WechatDataGateway } from '../src/gateway.ts'
+import { gatewayClassSource } from '../../tests/gateway-source.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 let root = ''
@@ -53,9 +54,10 @@ afterEach(async () => {
 
 describe('@Remote 方法面：真实的 WechatDataGateway', () => {
   it('枚举到的集合与源码声明的集合逐名相同（拆分继承链不许丢接口）', () => {
-    const declared = [...readFileSync(join(SRC, 'gateway.ts'), 'utf8').matchAll(/@Remote\('([A-Za-z0-9]+)'/g)]
+    const declared = [...gatewayClassSource().matchAll(/@Remote\('([A-Za-z0-9]+)'/g)]
       .map((m) => m[1]).sort()
-    expect(declared.length, '源码里一个 @Remote 都没找到 —— 抓取口径失效').toBeGreaterThan(100)
+    expect(declared.length, '网关类文件里一个 @Remote 都没找到 —— 抓取口径失效').toBeGreaterThan(100)
+    expect(new Set(declared).size, '同一个方法名被声明了两次（分层时搬重了）').toBe(declared.length)
     const markers = remoteMethods(new WechatDataGateway(fakeCtx())).map((m) => m.method).sort()
     expect(markers).toEqual(declared)
   })

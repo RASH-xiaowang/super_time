@@ -18,7 +18,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const GATEWAY = path.join(root, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts');
+const GW_DIR = path.join(root, 'src', 'backend', 'wechat-data', 'src');
+/**
+ * M21 结构刀之后，一个类住在多个文件里（`gateway-core.ts` + 三层方法面壳 + `gateway.ts` 叶子）。
+ * 因此按目录扫 `gateway*.ts` —— 以后再拆一层也不用回来改这里。
+ * （另一处需要同步口径的是 `src/backend/tests/gateway-source.ts` 里的类文件清单。）
+ */
+const GATEWAY_FILES = fs.readdirSync(GW_DIR).filter((f) => /^gateway[a-z-]*\.ts$/.test(f)).sort()
+  .map((f) => path.join(GW_DIR, f));
+const GATEWAY = path.join(GW_DIR, 'gateway.ts');
 const OUT = path.join(root, 'docs', 'API.md');
 
 /** 装饰器形如 `@Remote('getSessions')`（允许参数两侧有空白）。 */
@@ -194,10 +202,9 @@ function render(methods) {
 
 function main() {
   const check = process.argv.includes('--check');
-  const src = fs.readFileSync(GATEWAY, 'utf8');
-  const methods = extractMethods(src);
+  const methods = GATEWAY_FILES.flatMap((f) => extractMethods(fs.readFileSync(f, 'utf8')));
   if (methods.length === 0) {
-    console.error('❌ 没有从 gateway.ts 抽到任何 @Remote 方法 —— 解析失效，请检查装饰器写法');
+    console.error('❌ 没有从网关类文件里抽到任何 @Remote 方法 —— 解析失效，请检查装饰器写法');
     process.exit(1);
   }
   const content = render(methods);

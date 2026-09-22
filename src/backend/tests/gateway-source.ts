@@ -20,8 +20,9 @@ import { fileURLToPath } from 'node:url'
 /** `src/backend/wechat-data/src` */
 export const GW_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'wechat-data', 'src')
 
-/** 组成 `WechatDataGateway` 这个类的文件（按声明顺序：核在前、方法面在后）。 */
-export const GATEWAY_CLASS_FILES = ['gateway-core.ts', 'gateway.ts']
+/** 组成 `WechatDataGateway` 这个类的文件（按声明顺序：核在前、三层方法面壳居中、叶子最后）。 */
+export const GATEWAY_CLASS_FILES = ['gateway-core.ts', 'gateway-read.ts', 'gateway-ask-ops.ts',
+  'gateway-data-ops.ts', 'gateway.ts']
 
 export function gatewayClassSource(): string {
   return GATEWAY_CLASS_FILES.map((f) => readFileSync(join(GW_DIR, f), 'utf8')).join('\n')
