@@ -89,7 +89,10 @@ function parseRules(css, atPrefix = '', out = []) {
       // 至少带一层块（media/container/keyframes…）→ 递归；@layer 之类同理
       parseRules(body, atPrefix ? atPrefix + ' >> ' + normSel(head) : normSel(head), out)
     } else {
-      out.push({ at: atPrefix, sel: normSel(head), decls: normDecl(body) })
+      // 模块身份：选择器里每个类名都带**它所属文件**的哈希（`_name_HASH_line`）。冲突分析要按它配对 ——
+      // 否则「`.actions` 在别的模块里也有」这种同名类会被当成同一对规则来比次序（2026-09-22 实测的假阳性）。
+      const hashes = [...new Set([...head.matchAll(/_([A-Za-z_][\w-]*)_([a-z0-9]{4,})_\d+/g)].map((m) => m[2]))]
+      out.push({ at: atPrefix, sel: normSel(head), decls: normDecl(body), mods: hashes })
     }
     i = close + 1
   }
@@ -193,6 +196,12 @@ function dangerousFlips(before, after, cooc) {
     checked += 1
     for (const x1 of b1) {
       for (const x2 of b2) {
+        // **只比改动前同属一个模块的规则对**：跨模块的同名类（`.actions` 在 6+ 个模块里都有）
+        // 归并后会被当成「同一对」误报，而它们的相对次序本来就不受这次改动影响。
+        // （模块身份的哈希写在 `r.mods` 里。这一条 2026-09-22 补：onboarding 那刀报的 76 处
+        // 危险里，`._actions`/`._hint` 各只定义一次 —— 全是跨模块撞名的假阳性。）
+        if (!x1.r.mods?.length || !x2.r.mods?.length) continue
+        if (!x1.r.mods.some((m) => x2.r.mods.includes(m))) continue
         // 规则内容若在两次构建里都出现过，就能给每条规则找到「它自己」在另一半里的位置；
         // 只对「同一条规则 × 同一条规则」判次序，别拿 A 模块的 .btnFx 去和 B 模块的 .btnFixed 比。
         const h1 = line(x1.r); const h2 = line(x2.r)
@@ -237,6 +246,12 @@ function main() {
     process.exit(2)
   }
   const before = JSON.parse(readFileSync(path, 'utf8'))
+  // 防空转：旧版基线没有 `mods`（模块身份），配对时会全被跳过 ⇒ 冲突分析**恒真**。
+  // 宁可报错让人重存基线，也不要给一个「看起来 ✅」的空结论。
+  if (before.length && before[0].mods === undefined) {
+    console.error('基线是旧版工具存的（缺 mods 字段）—— 请重跑 `--save` 再比。')
+    process.exit(2)
+  }
   const seqBefore = before.map(line)
   const seqAfter = rules.map(line)
   const identical = seqBefore.length === seqAfter.length && seqBefore.every((x, i) => x === seqAfter[i])
