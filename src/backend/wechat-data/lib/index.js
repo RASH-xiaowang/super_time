@@ -25392,10 +25392,10 @@ function formatXlsx(msgs, username, ctrl) {
     { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
   ]);
 }
-async function writeXlsxStream(filePath, rows, ctrl) {
+async function writeXlsxStream(filePath, rows, ctrl, total = 0) {
   await writeZipAtomic(filePath, async (zip) => {
     for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
-    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
+    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl, total), ctrl);
   });
 }
 
@@ -25491,7 +25491,7 @@ async function exportSessionMessagesStreamed(decryptedDir, options) {
   );
   const { msgs } = plan;
   if (plan.isXlsx && !options.zip) {
-    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl);
+    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl, msgs.length + 1);
   } else if (plan.isXlsx) {
     const content = formatXlsx(msgs, options.username, ctrl);
     await writeZipAtomic(plan.outPath, async (zip) => {
@@ -25872,8 +25872,13 @@ function createExportRemotes(rc) {
   const normalizeJobId2 = rc.normalizeJobId;
   return {
     async exportSessionMessages(options) {
+      const jobId = normalizeJobId2(options?.jobId);
       try {
-        const r = await exportSessionMessagesStreamed(rc.dirs().decrypted, { ...options });
+        const r = await exportSessionMessagesStreamed(rc.dirs().decrypted, {
+          ...options,
+          ...rc.streamControl(jobId)
+        });
+        rc.finishStreamJob(jobId);
         rc.op("export", "export_session_messages", "ok", options.username, `\u5171 ${r.count} \u6761`);
         rc.recordExport({
           kind: "session",
@@ -25887,14 +25892,16 @@ function createExportRemotes(rc) {
         });
         return r;
       } catch (e) {
+        rc.finishStreamJob(jobId, e.message);
         rc.op("export", "export_session_messages", "fail", options.username, e.message);
+        const canceled = /cancel|取消|abort/i.test(e.message);
         rc.recordExport({
           kind: "session",
           label: options.sessionName ? `\u4F1A\u8BDD \xB7 ${options.sessionName}` : `\u4F1A\u8BDD \xB7 ${options.username}`,
           format: options.zip ? "zip" : options.format,
           path: "",
-          status: "fail",
-          error: e.message,
+          status: canceled ? "canceled" : "fail",
+          error: canceled ? "" : e.message,
           params: options
         });
         throw e;

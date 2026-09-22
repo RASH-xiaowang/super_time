@@ -40,6 +40,8 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         zip?: boolean;
         /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
         sessionName?: string;
+        /** 进度/取消的任务标识（M3）：客户端按它认领 `wechat-export/progress` 事件。 */
+        jobId?: string;
     }): Promise<ExportResult>;
     exportAnnualReport(options: {
         year: number;
