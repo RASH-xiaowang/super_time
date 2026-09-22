@@ -28,6 +28,7 @@ import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data
 import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
 import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
+import { ProgressBar } from '../src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.tsx'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -443,6 +444,31 @@ check('设置：左导航与右内容都能渲染（不崩）', () => {
   for (const t of ['智能与隐私', '高级', 'AI 大模型', '数据边界与出网']) {
     ok(html.includes(t), `缺少导航项：${t}`)
   }
+})
+
+/**
+ * M3 真机验收发现的第四个断链（`scripts/export-progress-e2e.mjs` / `backup-progress-e2e.mjs`
+ * 也在真应用里钉着同一条）：「导全部」时后端**故意**报 `total=0`（总量未知），客户端若仍按
+ * 百分比画，就是一根钉在 0% 的空条，用户眼里等于卡死。组件层面的口径钉在这里 ——
+ * 界面上两条入口（导出 / 加密备份）共用同一个 ProgressBar。
+ */
+console.log('进度条：定量与不定量（M3）')
+check('总量未知时走不定量态：不给 aria-valuenow，也不写内联宽度', () => {
+  const html = renderToStaticMarkup(h(ProgressBar, { value: 0, indeterminate: true }))
+  ok(html.includes('role="progressbar"'), '进度条失去了 role')
+  ok(html.includes('data-indeterminate'), 'indeterminate 没落到 DOM 上（CSS 就没法画扫动）')
+  ok(!html.includes('aria-valuenow'), '总量未知却报了 aria-valuenow ⇒ 读屏会念「0%」')
+  ok(!html.includes('width:'), '总量未知却写了内联宽度 ⇒ 那正是「钉在 0%」的成因')
+})
+check('总量已知时按百分比画，并且不披不定量态', () => {
+  const html = renderToStaticMarkup(h(ProgressBar, { value: 42.6 }))
+  ok(!html.includes('data-indeterminate'), '总量已知却走了不定量态')
+  ok(html.includes('aria-valuenow="43"'), `aria-valuenow 应当是四舍五入的整数：${html}`)
+  ok(html.includes('width:42.6%'), `宽度应当按百分比画：${html}`)
+})
+check('百分比越界要夹住（负数与超过 100 都不该画崩）', () => {
+  ok(renderToStaticMarkup(h(ProgressBar, { value: -5 })).includes('width:0%'), '负值没夹到 0')
+  ok(renderToStaticMarkup(h(ProgressBar, { value: 130 })).includes('aria-valuenow="100"'), '超界没夹到 100')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)

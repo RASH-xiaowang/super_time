@@ -92,9 +92,40 @@ describe('M3：导出进度与取消的接线', () => {
     expect(cat).toContain('已取消导出')
     const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
     const enc = backup.slice(backup.indexOf('const createEncrypted = async'))
-    const blk = enc.slice(enc.indexOf('if (!r.ok)'), enc.indexOf('if (!r.ok)') + 400)
+    const blk = enc.slice(enc.indexOf('if (r.ok)'), enc.indexOf('if (r.ok)') + 500)
     expect(blk).toMatch(/取消\|cancel\|abort/)
     expect(blk).toContain('已取消加密备份')
+  })
+})
+
+describe('M3：备份面板的失败提示不能被列表刷新顶掉', () => {
+  /**
+   * 真机验收（`scripts/backup-progress-e2e.mjs`）跑出来的第三个问题，与进度无关却更严重：
+   * `create` / `createEncrypted` / `remove` 原先都是「`setError(失败)` 之后无条件 `await refresh()`」，
+   * 而 `refresh()` 开头就 `setError(null)` —— **加密备份失败时界面一个字都不显示**，
+   * 用户只看得到进度条消失，等于静默失败。三个入口一律改成走 `finishWith`：
+   * 成功才刷新，失败只报因。
+   */
+  const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
+
+  it('失败提示与刷新二选一，统一走 finishWith', () => {
+    expect(backup).toContain('const finishWith = async (msg: string | null)')
+    expect(backup).toMatch(/if \(msg === null\) \{ await refresh\(\); return \}/)
+    // 三条动作路径都不许再「先 setError 再 refresh」
+    for (const handler of ['const create = async', 'const createEncrypted = async', 'const remove = async']) {
+      const at = backup.indexOf(handler)
+      expect(at, `备份面板里没有 ${handler}`).toBeGreaterThan(-1)
+      const body = backup.slice(at, at + 1600)
+      expect(body, `${handler} 又回到「报错后刷新」的老写法`).toContain('await finishWith(')
+      expect(body).not.toMatch(/if \(!r\.ok\) setError[\s\S]{0,80}await refresh\(\)/)
+    }
+  })
+
+  it('失败时留着密码（取消后重试不该重新输入），成功才清空', () => {
+    const at = backup.indexOf('const createEncrypted = async')
+    const body = backup.slice(at, at + 1600)
+    expect(body).toContain('if (r.ok) setPassword(')
+    expect(body).not.toMatch(/\n\s*setPassword\(''\)/)
   })
 })
 
