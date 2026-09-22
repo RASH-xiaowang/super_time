@@ -686,6 +686,7 @@ app.whenReady().then(async () => {
     ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
     getMainWindow: () => mainWindow,
     buildDiagnosticReport,
+    installWebContentsGuards,
   });
 
   // —— Super Time 后端相关的 IPC ——
