@@ -17391,6 +17391,1239 @@ function createVoiceLlmRemotes(rc) {
   };
 }
 
+// src/backend/wechat-data/src/query/grounding.ts
+var MAX_REPORTED = 6;
+var MAX_SUM_POOL = 40;
+var MAX_SUM_CENTS = 1e7;
+var MAX_SUM_TERMS = 3;
+var VALUE_RE = /(\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*[日号]?)|([¥￥]?\s*\d[\d,]*(?:\.\d+)?\s*(?:万元|万块|万|元|块钱|块|圆))|(\+?\d[\d\-\s]{5,}\d)/g;
+var NUMBER_RE = /\d+(?:[.,]\d+)?/g;
+var CLOCK_RE = /\d{1,2}:\d{2}/g;
+var SENTENCE_RE = /[^\n。！？!?；;]+/g;
+function normDate(raw) {
+  const m = raw.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/);
+  if (!m) return "";
+  const p = (n) => String(Number(n)).padStart(2, "0");
+  return `${m[1]}-${p(m[2])}-${p(m[3])}`;
+}
+function amountToCents(raw) {
+  const m = raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(万元|万块|万|元|块钱|块|圆)/);
+  if (!m) return NaN;
+  const n = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return NaN;
+  const unit = m[2];
+  const scale = unit === "\u4E07\u5143" || unit === "\u4E07\u5757" || unit === "\u4E07" ? 1e4 : 1;
+  return Math.round(n * scale * 100);
+}
+function numberToCents(raw) {
+  const n = Number(raw.replace(/,/g, ""));
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+function digitsOnly(raw) {
+  return raw.replace(/\D+/g, "");
+}
+function scanValues(text) {
+  const out = [];
+  for (const m of String(text || "").matchAll(VALUE_RE)) {
+    if (m[1]) out.push({ kind: "date", raw: m[1] });
+    else if (m[2]) out.push({ kind: "amount", raw: m[2] });
+    else if (m[3]) out.push({ kind: "digits", raw: m[3] });
+  }
+  return out;
+}
+function buildValuePools(evidenceTexts) {
+  const text = evidenceTexts.join("\n");
+  const dates = /* @__PURE__ */ new Set();
+  const digits = [];
+  const amounts = [];
+  const timeRanges = [];
+  for (const m of text.matchAll(VALUE_RE)) {
+    const at = m.index ?? 0;
+    if (m[1]) {
+      const d = normDate(m[1]);
+      if (d) dates.add(d);
+      timeRanges.push([at, at + m[1].length]);
+    } else if (m[2]) {
+      const c = amountToCents(m[2]);
+      if (Number.isFinite(c) && c > 0) amounts.push(c);
+    } else if (m[3]) {
+      const s = digitsOnly(m[3]);
+      if (s.length >= 7) digits.push(s);
+    }
+  }
+  for (const m of text.matchAll(CLOCK_RE)) {
+    const at = m.index ?? 0;
+    timeRanges.push([at, at + m[0].length]);
+  }
+  const cents = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(NUMBER_RE)) {
+    const at = m.index ?? 0;
+    if (timeRanges.some(([a, b]) => at >= a && at < b)) continue;
+    const c = numberToCents(m[0]);
+    if (Number.isFinite(c) && c > 0) cents.add(c);
+  }
+  return { dates, digits, cents, sums: buildSums(amounts) };
+}
+function buildSums(cents) {
+  const out = /* @__PURE__ */ new Set();
+  const pool = [];
+  const used = /* @__PURE__ */ new Map();
+  for (const c of cents) {
+    const n = used.get(c) ?? 0;
+    if (n >= MAX_SUM_TERMS) continue;
+    used.set(c, n + 1);
+    pool.push(c);
+    if (pool.length >= MAX_SUM_POOL) break;
+  }
+  for (const c of pool) if (c <= MAX_SUM_CENTS) out.add(c);
+  for (let i = 0; i < pool.length; i += 1) {
+    for (let j = i + 1; j < pool.length; j += 1) {
+      const s2 = pool[i] + pool[j];
+      if (s2 <= MAX_SUM_CENTS) out.add(s2);
+      for (let k = j + 1; k < pool.length; k += 1) {
+        const s3 = s2 + pool[k];
+        if (s3 <= MAX_SUM_CENTS) out.add(s3);
+      }
+    }
+  }
+  return out;
+}
+function digitsSupported(value, pool) {
+  for (const p of pool) {
+    if (p === value || p.includes(value) || value.includes(p)) return true;
+  }
+  return false;
+}
+function auditGrounding(answer, evidenceTexts, citationCount) {
+  const text = String(answer || "");
+  const pools = buildValuePools(evidenceTexts);
+  const seen = /* @__PURE__ */ new Set();
+  const unsupported = [];
+  let checked = 0;
+  for (const v of scanValues(text)) {
+    let key = "";
+    let supported = false;
+    if (v.kind === "date") {
+      const d = normDate(v.raw);
+      if (!d) continue;
+      key = "date:" + d;
+      supported = pools.dates.has(d);
+    } else if (v.kind === "amount") {
+      const c = amountToCents(v.raw);
+      if (!Number.isFinite(c)) continue;
+      key = "amount:" + c;
+      supported = pools.cents.has(c) || pools.sums.has(c);
+    } else {
+      const s = digitsOnly(v.raw);
+      if (s.length < 7) continue;
+      key = "digits:" + s;
+      supported = digitsSupported(s, pools.digits);
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    checked += 1;
+    if (!supported && unsupported.length < MAX_REPORTED) {
+      unsupported.push({ kind: v.kind, value: v.raw.replace(/\s+/g, "").trim() });
+    }
+  }
+  let uncited = 0;
+  for (const sentence of text.match(SENTENCE_RE) ?? []) {
+    if (scanValues(sentence).length === 0) continue;
+    if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1;
+  }
+  return {
+    checked,
+    unsupported,
+    uncited,
+    cited: parseCitedIndexes(text, citationCount),
+    ok: unsupported.length === 0
+  };
+}
+function groundingRepairHint(audit) {
+  if (audit.unsupported.length === 0) return "";
+  const list = audit.unsupported.map((v) => `\u300C${v.value}\u300D`).join("\u3001");
+  return `\u3010\u6838\u5BF9\u672A\u901A\u8FC7\u3011\u4F60\u5199\u7684 ${list} \u5728\u4F60\u5F15\u7528\u7684\u539F\u6587\u91CC\u627E\u4E0D\u5230\u51FA\u5904\u3002\u8BF7\u6539\u5199\uFF1A
+ \xB7 \u5982\u679C\u5B83\u4EEC\u662F**\u5408\u8BA1**\uFF0C\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\u5F97\u51FA\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF1B
+ \xB7 \u5982\u679C\u4E0D\u662F\u5408\u8BA1\uFF0C\u5C31\u5220\u6389\uFF0C\u6216\u6539\u6210\u539F\u6587\u91CC**\u539F\u6837\u51FA\u73B0**\u7684\u503C\uFF1B
+ \xB7 \u65E5\u671F\u53EA\u80FD\u5199\u539F\u6587\u91CC\u51FA\u73B0\u8FC7\u7684\u65E5\u671F\uFF0C\u4E0D\u8981\u81EA\u5DF1\u6362\u7B97\u6216\u63A8\u6D4B\u3002`;
+}
+
+// src/backend/wechat-data/src/query/retrieval/kb-channel.ts
+function kbDocKey(kbId, chunkId) {
+  return "kb:" + kbId + ":" + chunkId;
+}
+function citationDocKey(c) {
+  if (c.source === "kb") {
+    const kb = c.kb;
+    return kb ? kbDocKey(kb.kbId, kb.chunkId) : "";
+  }
+  return (c.username ?? "") + ":" + (c.local_id ?? 0);
+}
+function kbDocFromHit(kbId, h) {
+  return {
+    docKey: kbDocKey(kbId, h.chunkId),
+    username: "kb:" + kbId + ":" + h.fileId,
+    // name 只放文件名：界面要把它与面包屑分开展示（`知识库文件 合同.pdf · 第 3 节`），
+    // 合并成一个字符串后界面只能整体显示或自己做字符串切割，两种都不好。
+    name: h.fileName,
+    local_id: 0,
+    create_time: 0,
+    // text 是块全文（kb-search 随命中一并返回）：重排的词覆盖率要在全文上判命中，
+    // 只拿 snippet（命中词前后各 60 字）会把落在窗口外的检索词误判为未命中。
+    text: h.text || h.snippet,
+    snippet: h.snippet,
+    source: "kb",
+    kb: {
+      kbId,
+      fileId: h.fileId,
+      fileName: h.fileName,
+      fileExt: h.fileExt,
+      chunkId: h.chunkId,
+      ordinal: h.ordinal,
+      page: h.page,
+      heading: h.heading
+    }
+  };
+}
+function errorText8(e) {
+  const msg = e?.message;
+  return typeof msg === "string" && msg !== "" ? msg : String(e);
+}
+var DEFAULT_FUSION_K = 60;
+function fuseKbHits(sparseHits, denseHits, opts = {}) {
+  const rawK = Number(opts.k);
+  const k = Number.isFinite(rawK) && rawK >= 0 ? rawK : DEFAULT_FUSION_K;
+  const acc = /* @__PURE__ */ new Map();
+  const put = (side, hit, rank) => {
+    const id = Math.trunc(Number(hit.chunkId));
+    if (!Number.isFinite(id) || id <= 0) return;
+    const e = acc.get(id) ?? {};
+    const prev = e[side];
+    if (prev === void 0 || rank < prev.rank) e[side] = { hit, rank };
+    acc.set(id, e);
+  };
+  sparseHits.forEach((h, i) => put("sparse", h, i + 1));
+  denseHits.forEach((h, i) => {
+    const r = Number(h.ranks?.dense ?? 0);
+    put("dense", h, r > 0 ? r : i + 1);
+  });
+  const out = [];
+  for (const e of acc.values()) {
+    const ranks = {};
+    if (e.sparse) ranks.sparse = e.sparse.rank;
+    if (e.dense) ranks.dense = e.dense.rank;
+    const base = e.sparse?.hit ?? e.dense?.hit;
+    out.push({
+      hit: { ...base, ranks },
+      score: (e.sparse ? 1 / (k + e.sparse.rank) : 0) + (e.dense ? 1 / (k + e.dense.rank) : 0)
+    });
+  }
+  out.sort((a, b) => b.score - a.score || a.hit.chunkId - b.hit.chunkId);
+  return out;
+}
+async function kbChannel(decryptedDir, kbId, query, topK, opts = {}) {
+  if (!Number.isFinite(kbId) || (kbId ?? 0) <= 0) {
+    return { channel: "kb", hits: [], active: false, note: "\u672C\u6B21\u63D0\u95EE\u672A\u6307\u5B9A\u77E5\u8BC6\u5E93" };
+  }
+  const q = (query ?? "").trim();
+  if (q === "") return { channel: "kb", hits: [], active: false, note: "\u65E0\u68C0\u7D22\u8BCD" };
+  if (!Number.isFinite(topK) || topK <= 0) return { channel: "kb", hits: [], active: false, note: "\u901A\u9053\u914D\u989D\u4E3A 0" };
+  const kb = kbId;
+  const embed = opts.embedFn;
+  const useDense = opts.denseEnabled === true && typeof embed === "function";
+  const sparseTask = (async () => {
+    try {
+      const res = searchKb(decryptedDir, kb, { query: q, topK, onlyRag: true });
+      if (res.error) return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u65E0\u6548\uFF1A" + res.error };
+      if (res.readError) return { hits: [], failed: "\u77E5\u8BC6\u5E93\u6253\u4E0D\u5F00\uFF1A" + res.readError };
+      return { hits: res.hits, ...res.degraded ? { degraded: res.degraded } : {} };
+    } catch (e) {
+      return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u5931\u8D25\uFF1A" + errorText8(e) };
+    }
+  })();
+  const denseTask = useDense ? (async () => {
+    try {
+      const res = await searchKbDense(decryptedDir, kb, q, embed, {
+        topK,
+        minSimilarity: opts.minSimilarity ?? 0,
+        candidatePool: opts.candidatePool ?? Math.max(Math.trunc(topK), 1),
+        model: opts.embedModel ?? ""
+      });
+      return { hits: res.hits, ...res.note ? { note: res.note } : {} };
+    } catch (e) {
+      return { hits: [], note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25\uFF1A" + errorText8(e) };
+    }
+  })() : Promise.resolve(null);
+  const [sparse, dense] = await Promise.all([sparseTask, denseTask]);
+  const fused = fuseKbHits(sparse.hits, dense?.hits ?? [], { k: opts.fusionK ?? DEFAULT_FUSION_K });
+  const hits = fused.slice(0, Math.max(1, Math.trunc(topK))).map((f, i) => ({
+    doc: kbDocFromHit(kb, f.hit),
+    // score 给融合分而不是 bm25 / 余弦：本通道内部已经把两路合成一个序，
+    // 拿其中任何一把尺子当分都是「两把尺子量同一件事」（跨通道融合只用名次，分数不外传）。
+    score: f.score,
+    rank: i + 1
+  }));
+  const notes = [];
+  if (sparse.failed) notes.push(sparse.failed);
+  if (dense) {
+    if (dense.note) notes.push(dense.note);
+  } else if (sparse.failed === void 0) {
+    if (sparse.degraded && sparse.degraded.reason !== "no-vector-index") notes.push(sparse.degraded.label);
+    notes.push(opts.denseEnabled === true ? "\u4EC5\u5173\u952E\u8BCD\uFF08\u672A\u914D\u7F6E\u5411\u91CF\u6A21\u578B\uFF09" : "\u4EC5\u5173\u952E\u8BCD\uFF08\u672C\u6B21\u672A\u542F\u7528\u5411\u91CF\u901A\u9053\uFF09");
+  }
+  return {
+    channel: "kb",
+    hits,
+    active: hits.length > 0,
+    // 命中为空时也要给出**如实**的原因（例如「查询里没有可检索的字词」），
+    // 而不是让它显示成「知识库是空的」。
+    ...notes.length > 0 ? { note: notes.join("\uFF1B") } : {},
+    ...hits.length === 0 && notes.length === 0 ? { note: "\u77E5\u8BC6\u5E93\u6CA1\u6709\u5339\u914D\u7684\u5185\u5BB9" } : {}
+  };
+}
+
+// src/backend/wechat-data/src/query/retrieval/compress.ts
+var WINDOW_SPAN_MS2 = 15 * 60 * 1e3;
+var WINDOW_MAX_MSGS2 = 14;
+function formatDay2(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function formatClock2(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function norm(s) {
+  return String(s || "").replace(/\s+/g, "");
+}
+function gramsOf3(s) {
+  const out = /* @__PURE__ */ new Set();
+  for (let i = 0; i + 3 <= s.length; i += 1) out.add(s.slice(i, i + 3));
+  if (out.size === 0 && s) out.add(s);
+  return out;
+}
+function jaccardGrams(ga, gb) {
+  if (ga.size === 0 || gb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ga) if (gb.has(t)) inter += 1;
+  return inter / (ga.size + gb.size - inter);
+}
+function compressContext(decryptedDir, ranked, opts) {
+  const chunks = [];
+  let windowMessages = 0;
+  let usedChars = 0;
+  const chosen = [];
+  const seenByUser = /* @__PURE__ */ new Map();
+  for (const r of ranked) {
+    if (chunks.length >= opts.maxChunks) break;
+    if (usedChars >= opts.maxChars) break;
+    const d = r.doc;
+    if (d.source === "kb") {
+      const text = d.text || d.snippet;
+      const cost2 = text.length + 8;
+      if (usedChars + cost2 > opts.maxChars && chunks.length > 0) break;
+      usedChars += cost2;
+      chunks.push({
+        username: d.username,
+        name: d.name,
+        anchor: {
+          name: d.name,
+          // 时间留空而不是编一个：文件块没有发生时间（create_time=0 ⇒ timeFull 返回空串），
+          // 编一个时间戳会让模型把文件内容说成「某天发生的事」。
+          time: "",
+          snippet: d.snippet || text.slice(0, 90),
+          username: d.username,
+          local_id: d.local_id,
+          source: "kb",
+          ...d.kb ? { kb: d.kb } : {}
+        },
+        // 单行 = 整块正文。**不按 `linesPerChunk` 再切一次**：块本身已经是有语义边界的
+        // 切分单元（500 字 / 表格 40 行一组，见 kb/chunk.ts），再切只会把一句话劈成两半。
+        lines: [{ time: "", sender: "", text }],
+        score: r.score,
+        pref: r.timePref,
+        createTime: d.create_time
+      });
+      continue;
+    }
+    if (chosen.some((c) => c.username === d.username && d.create_time >= c.start && d.create_time <= c.end)) continue;
+    const centerMs = d.create_time * 1e3;
+    const win = loadMessageWindow(decryptedDir, d.username, centerMs, WINDOW_SPAN_MS2, WINDOW_MAX_MSGS2);
+    windowMessages += win.length;
+    const rawLines = win.length > 0 ? win.map((w) => ({ time: formatClock2(w.create_time), day: formatDay2(w.create_time), sender: w.sender ? w.sender : "", text: w.text, ts: w.create_time, localId: w.local_id })) : [{ time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }];
+    const lines = [];
+    let anchorPresent = false;
+    for (const l of rawLines) {
+      if (lines.length >= opts.linesPerChunk) break;
+      const body = norm(l.text);
+      if (!body) continue;
+      const bodyGrams = gramsOf3(body);
+      const isAnchor = l.localId === d.local_id;
+      const seen = seenByUser.get(d.username);
+      if (!isAnchor && seen && seen.some((s) => s.text === body || jaccardGrams(s.grams, bodyGrams) >= opts.dedupThreshold)) continue;
+      lines.push({ time: l.time, day: l.day, sender: l.sender, text: l.text });
+      const bucket = seen ?? [];
+      bucket.push({ text: body, grams: bodyGrams });
+      if (!seen) seenByUser.set(d.username, bucket);
+      if (isAnchor) anchorPresent = true;
+    }
+    if (!anchorPresent) {
+      const al = { time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text };
+      const at = lines.findIndex((l) => l.time > al.time);
+      if (at < 0) lines.push(al);
+      else lines.splice(at, 0, al);
+      while (lines.length > opts.linesPerChunk) lines.pop();
+    }
+    if (lines.length === 0) continue;
+    const cost = lines.reduce((a, l) => a + l.text.length + 8, 0);
+    if (usedChars + cost > opts.maxChars && chunks.length > 0) break;
+    usedChars += cost;
+    chunks.push({
+      username: d.username,
+      name: d.name,
+      anchor: {
+        name: d.name,
+        time: timeFull(d.create_time),
+        snippet: d.snippet || d.text.slice(0, 90),
+        username: d.username,
+        local_id: d.local_id,
+        ...d.sender ? { sender: d.sender } : {}
+      },
+      lines,
+      score: r.score,
+      pref: r.timePref,
+      createTime: d.create_time
+    });
+    chosen.push({ username: d.username, start: centerMs - WINDOW_SPAN_MS2, end: centerMs + WINDOW_SPAN_MS2 });
+  }
+  return { chunks, windowMessages, usedChars };
+}
+function timeFull(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// src/backend/wechat-data/src/query/retrieval/pipeline.ts
+var RERANK_CANDIDATE_LIMIT = 60;
+function errorText9(e) {
+  const msg = e?.message;
+  return typeof msg === "string" && msg !== "" ? msg : String(e);
+}
+function docFromHit(h) {
+  return {
+    docKey: h.username + ":" + h.local_id,
+    username: h.username,
+    name: h.name,
+    local_id: h.local_id,
+    create_time: h.create_time,
+    text: h.text,
+    snippet: h.snippet,
+    ...h.sender ? { sender: h.sender } : {}
+  };
+}
+function inRange(tsSec, fromMs, toMs) {
+  if (!Number.isFinite(fromMs) && !Number.isFinite(toMs)) return true;
+  const ms = tsSec * 1e3;
+  if (ms <= 0) return false;
+  if (Number.isFinite(fromMs) && ms < fromMs) return false;
+  if (Number.isFinite(toMs) && ms > toMs) return false;
+  return true;
+}
+function sparseChannel2(decryptedDir, terms, topK, username) {
+  if (terms.length === 0) return { channel: "sparse", hits: [], active: false, note: "\u65E0\u68C0\u7D22\u8BCD" };
+  const res = searchIndexBatch(decryptedDir, terms, topK, username ? { username } : void 0);
+  if (!res.ranked) return { channel: "sparse", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
+  const hits = res.hits.map((h, i) => ({ doc: docFromHit(h), score: h.score ?? 0, rank: i + 1 }));
+  return { channel: "sparse", hits, active: true };
+}
+function structuredChannel2(decryptedDir, plan, topK, scopeFrom, scopeTo, scopeUsername) {
+  const hasEntity = Boolean(plan.entity);
+  const hasTime = Boolean(plan.from || plan.to);
+  if (!hasEntity && !hasTime) return { channel: "structured", hits: [], active: false, note: "\u65E0\u5B9E\u4F53/\u65F6\u95F4\u7EBF\u7D22" };
+  const terms = hasEntity ? [] : plan.terms.slice(0, 4);
+  const res = searchIndexBatch(decryptedDir, terms, topK, {
+    ...scopeUsername ? { username: scopeUsername } : {},
+    ...hasEntity ? { person: plan.entity } : {}
+  });
+  if (!res.ranked) return { channel: "structured", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
+  const hardFrom = scopeFrom ? (/* @__PURE__ */ new Date(scopeFrom + "T00:00:00")).getTime() : NaN;
+  const hardTo = scopeTo ? (/* @__PURE__ */ new Date(scopeTo + "T23:59:59")).getTime() : NaN;
+  const useHard = Number.isFinite(hardFrom) || Number.isFinite(hardTo);
+  const softFrom = !useHard && plan.from ? (/* @__PURE__ */ new Date(plan.from + "T00:00:00")).getTime() : NaN;
+  const softTo = !useHard && plan.to ? (/* @__PURE__ */ new Date(plan.to + "T23:59:59")).getTime() : NaN;
+  const fromMs = useHard ? hardFrom : softFrom;
+  const toMs = useHard ? hardTo : softTo;
+  const filtered = Number.isFinite(fromMs) || Number.isFinite(toMs) ? res.hits.filter((h) => inRange(h.create_time, fromMs, toMs)) : res.hits;
+  const hits = filtered.slice(0, topK).map((h, i) => ({ doc: docFromHit(h), score: h.score ?? 1 / (i + 1), rank: i + 1 }));
+  return {
+    channel: "structured",
+    hits,
+    active: hits.length > 0,
+    ...hits.length === 0 ? { note: "\u7ED3\u6784\u5316\u8FC7\u6EE4\u540E\u65E0\u547D\u4E2D" } : {}
+  };
+}
+function dayStartMs2(day) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? (/* @__PURE__ */ new Date(day + "T00:00:00")).getTime() : NaN;
+}
+function dayEndMs2(day) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? (/* @__PURE__ */ new Date(day + "T23:59:59")).getTime() + 999 : NaN;
+}
+var TIME_BUCKET_MS = 30 * 60 * 1e3;
+function spreadByBucket(hits) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const h of hits) {
+    const slot = Math.floor(h.create_time * 1e3 / TIME_BUCKET_MS);
+    const b = buckets.get(slot);
+    if (b) b.count += 1;
+    else buckets.set(slot, { hit: h, count: 1 });
+  }
+  const slots = [...buckets.keys()];
+  if (slots.length <= 1) return [...buckets.values()].map((b) => b.hit);
+  let seed = slots[0];
+  for (const s of slots) {
+    const c = buckets.get(s).count;
+    const cs = buckets.get(seed).count;
+    if (c > cs || c === cs && s > seed) seed = s;
+  }
+  const picked = [seed];
+  const rest = new Set(slots.filter((s) => s !== seed));
+  while (rest.size > 0) {
+    let best = -1;
+    let bestDist = -1;
+    let bestCount = -1;
+    for (const s of rest) {
+      let d = Infinity;
+      for (const p of picked) d = Math.min(d, Math.abs(s - p));
+      const c = buckets.get(s).count;
+      if (d > bestDist || d === bestDist && c > bestCount) {
+        best = s;
+        bestDist = d;
+        bestCount = c;
+      }
+    }
+    picked.push(best);
+    rest.delete(best);
+  }
+  return picked.map((s) => buckets.get(s).hit);
+}
+function spreadOrderRanked(ranked, channels) {
+  const timeCh = channels.find((c) => c.channel === "time");
+  if (!timeCh || timeCh.hits.length === 0) return ranked;
+  const order = /* @__PURE__ */ new Map();
+  timeCh.hits.forEach((h, i) => order.set(h.doc.docKey, i));
+  return [...ranked].sort((a, b) => {
+    const ia = order.get(a.doc.docKey) ?? Number.MAX_SAFE_INTEGER;
+    const ib = order.get(b.doc.docKey) ?? Number.MAX_SAFE_INTEGER;
+    return ia - ib || b.doc.create_time - a.doc.create_time;
+  });
+}
+function timeChannel(decryptedDir, plan, topK, scopeUsername, now, stratify) {
+  let loMs = plan.from ? dayStartMs2(plan.from) : NaN;
+  let hiMs = plan.to ? dayEndMs2(plan.to) : NaN;
+  if (!Number.isFinite(loMs) && Number.isFinite(hiMs)) loMs = hiMs - 30 * 864e5;
+  if (Number.isFinite(loMs) && !Number.isFinite(hiMs)) hiMs = Math.min(loMs + 7 * 864e5, now.getTime());
+  if (!Number.isFinite(loMs) || !Number.isFinite(hiMs)) {
+    return { channel: "time", hits: [], active: false, note: "\u65E0\u6709\u6548\u65F6\u95F4\u7EBF\u7D22" };
+  }
+  const fetchCap = stratify ? 600 : topK;
+  const res = listMessagesInRange(
+    decryptedDir,
+    Math.floor(Math.min(loMs, hiMs) / 1e3),
+    Math.ceil(Math.max(loMs, hiMs) / 1e3),
+    fetchCap,
+    scopeUsername
+  );
+  if (!res.ready) return { channel: "time", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
+  const picked = stratify ? spreadByBucket(res.hits) : res.hits;
+  const capped = stratify ? picked.slice(0, 240) : picked.slice(0, topK);
+  const hits = capped.map((h, i) => ({ doc: docFromHit(h), score: 1 / (i + 1), rank: i + 1 }));
+  return {
+    channel: "time",
+    hits,
+    active: hits.length > 0,
+    ...hits.length === 0 ? { note: "\u8BE5\u65E5\u671F\u8303\u56F4\u5185\u6CA1\u6709\u6D88\u606F" } : {}
+  };
+}
+async function denseChannel2(decryptedDir, plan, config, policy, embedFn, username) {
+  if (!config.embedding.enabled) return { channel: "dense", hits: [], active: false, note: "\u7A20\u5BC6\u901A\u9053\u5DF2\u5173\u95ED" };
+  if (!embedFn) return { channel: "dense", hits: [], active: false, note: "\u672A\u914D\u7F6E embedding" };
+  const st = vectorIndexStatus(decryptedDir);
+  if (!st.ready) return { channel: "dense", hits: [], active: false, note: "\u5411\u91CF\u7D22\u5F15\u672A\u5C31\u7EEA" };
+  try {
+    const res = await searchDense(decryptedDir, plan.normalized, embedFn, {
+      topK: policy.channelTopK.dense,
+      minSimilarity: config.channels.dense.minSimilarity,
+      candidatePool: config.channels.dense.candidatePool,
+      ...username ? { username } : {}
+    });
+    const hits = res.docs.map((d, i) => ({ doc: d, score: res.scores[i] ?? 0, rank: i + 1 }));
+    return {
+      channel: "dense",
+      hits,
+      active: hits.length > 0,
+      ...res.note ? { note: res.note } : {}
+    };
+  } catch (e) {
+    return { channel: "dense", hits: [], active: false, note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25: " + e.message };
+  }
+}
+async function runRetrievalPipeline(input) {
+  const started = Date.now();
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const config = input.config;
+  const limit = Math.min(Math.max(input.limit ?? 24, 1), 60);
+  let decision = classifyIntent(input.question, input.knownEntities ?? []);
+  if (config.intent.llmAssist && input.llmIntent) {
+    try {
+      const llmIntent = await input.llmIntent();
+      decision = refineIntentWithLlm(decision, llmIntent);
+    } catch {
+    }
+  }
+  const policy = defaultPolicyFor(decision.intent);
+  const params = effectiveParams(config, policy);
+  if (input.weightsOverride) params.weights = { ...params.weights, ...input.weightsOverride };
+  const plan = buildQueryPlan({
+    question: input.question,
+    subQueries: input.subQueries,
+    entity: input.entity,
+    from: input.from,
+    to: input.to,
+    scopeFrom: input.scope?.from,
+    scopeTo: input.scope?.to,
+    knownEntities: input.knownEntities,
+    now
+  });
+  const scopeUsername = input.scope?.username;
+  const channels = [];
+  const pureTime = plan.timeBrowse;
+  if (!pureTime && config.channels.sparse.enabled && policy.channels.includes("sparse")) {
+    channels.push(sparseChannel2(input.decryptedDir, plan.terms.slice(0, 12), params.channelTopK.sparse, scopeUsername));
+  }
+  if (!pureTime && config.channels.dense.enabled && policy.channels.includes("dense")) {
+    channels.push(await denseChannel2(input.decryptedDir, plan, config, policy, input.embedFn, scopeUsername));
+  }
+  if (config.channels.structured.enabled && policy.channels.includes("structured")) {
+    channels.push(structuredChannel2(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? "", input.scope?.to ?? "", scopeUsername));
+  }
+  if (!pureTime && config.channels.kb.enabled && policy.channels.includes("kb")) {
+    const kbDenseEnabled = config.embedding.enabled && config.channels.dense.enabled && policy.channels.includes("dense");
+    channels.push(await kbChannel(
+      input.decryptedDir,
+      input.kbId,
+      plan.terms.slice(0, 12).join(" "),
+      params.channelTopK.kb,
+      {
+        ...input.embedFn ? { embedFn: input.embedFn } : {},
+        embedModel: input.embedModel ?? "",
+        denseEnabled: kbDenseEnabled,
+        minSimilarity: config.channels.dense.minSimilarity,
+        candidatePool: config.channels.dense.candidatePool,
+        fusionK: config.fusion.k
+      }
+    ));
+  }
+  if (policy.channels.includes("time") && (plan.from || plan.to)) {
+    const timeTopK = pureTime ? params.channelTopK.time : Math.min(params.channelTopK.time, 24);
+    channels.push(timeChannel(input.decryptedDir, plan, timeTopK, scopeUsername, now, pureTime));
+  }
+  const termWeights = /* @__PURE__ */ new Map();
+  const sparse = channels.find((c) => c.channel === "sparse");
+  const allTexts = channels.flatMap((c) => c.hits.map((h) => h.doc.text));
+  for (const t of plan.terms) {
+    let n = 0;
+    for (const txt of allTexts) if (txt.includes(t)) n += 1;
+    if (n > 0) termWeights.set(t, 1 / (1 + Math.min(n, 200)));
+  }
+  if (termWeights.size === 0) for (const t of plan.terms) termWeights.set(t, 1);
+  const recalled = channels.reduce((a, c) => a + c.hits.length, 0);
+  void sparse;
+  const fused = dedupeFused(fuseResults(channels, config.fusion.k, config.fusion.keep), config.compress.dedupThreshold);
+  const softFromMs = plan.from ? (/* @__PURE__ */ new Date(plan.from + "T00:00:00")).getTime() : NaN;
+  const softToMs = plan.to ? (/* @__PURE__ */ new Date(plan.to + "T23:59:59")).getTime() : NaN;
+  const ranked = rerankDocs({
+    fused,
+    terms: plan.terms,
+    termWeights,
+    entity: plan.entity,
+    softFromMs,
+    softToMs,
+    recency: plan.recency,
+    recencyFirst: policy.recencyFirst,
+    weights: params.weights,
+    now: Math.floor(now.getTime() / 1e3)
+  });
+  let rerankInfo = { used: false, note: "\u672C\u5730\u7EBF\u6027\u52A0\u6743\uFF08\u672A\u914D\u7F6E\u91CD\u6392\u5E8F\u6A21\u578B\uFF09" };
+  let poolRanked = ranked;
+  if (typeof input.rerank === "function" && ranked.length > 1 && !policy.recencyFirst && !pureTime) {
+    const take = Math.min(ranked.length, RERANK_CANDIDATE_LIMIT);
+    const head = ranked.slice(0, take);
+    const tail = ranked.slice(take);
+    try {
+      const scores = await input.rerank(plan.normalized, head.map((r) => r.doc.text));
+      const order = head.map((r, i) => ({ r, s: Number(scores[i] ?? 0), i }));
+      order.sort((a, b) => b.s - a.s || a.i - b.i);
+      poolRanked = [...order.map((o) => o.r), ...tail];
+      rerankInfo = { used: true, candidates: take, kept: Math.min(limit, take), model: input.rerankModel ?? "" };
+    } catch (e) {
+      rerankInfo = { used: false, note: "\u7CBE\u6392\u8FD9\u6B21\u6CA1\u8DD1\u6210\uFF1A" + errorText9(e) + "\uFF08\u5DF2\u9000\u56DE\u672C\u5730\u52A0\u6743\uFF09" };
+    }
+  } else if (typeof input.rerank === "function") {
+    rerankInfo = { used: false, note: "\u672C\u6B21\u672A\u505A\u6A21\u578B\u7CBE\u6392\uFF08\u5019\u9009\u4E0D\u8DB3\u4E24\u6761\uFF0C\u6216\u95EE\u6CD5\u8981\u7684\u662F\u65F6\u95F4\u5E8F\uFF09" };
+  }
+  const finalRanked = pureTime ? spreadOrderRanked(poolRanked, channels) : poolRanked;
+  const compressOpts = policy.wideRecall ? { ...config.compress, maxChunks: config.compress.maxChunks + 4, maxChars: Math.round(config.compress.maxChars * 1.5) } : config.compress;
+  const { chunks, windowMessages } = compressContext(input.decryptedDir, finalRanked.slice(0, limit), compressOpts);
+  const citations = chunks.map((c) => c.anchor);
+  const hintHits = Number.isFinite(softFromMs) || Number.isFinite(softToMs) ? finalRanked.slice(0, limit).filter((r) => r.timePref === 1).length : 0;
+  const stats = {
+    intent: decision.intent,
+    channels: channelSummary(channels),
+    recalled,
+    fused: fused.length,
+    ranked: ranked.length,
+    kept: citations.length,
+    compressed: chunks.length,
+    windowMessages,
+    terms: plan.terms.length,
+    entity: plan.entity,
+    timeHint: plan.from || plan.to ? `${plan.from || "\u2026"} ~ ${plan.to || "\u2026"}` : "",
+    hintHits,
+    recency: plan.recency,
+    denseActive: channels.some((c) => c.channel === "dense" && c.active),
+    elapsedMs: Date.now() - started
+  };
+  return {
+    citations,
+    chunks,
+    terms: plan.terms,
+    plan,
+    policy,
+    rankedFeatures: finalRanked.slice(0, limit).map((r) => ({ docKey: r.doc.docKey, features: r.features })),
+    stats,
+    rerankInfo
+  };
+}
+
+// src/backend/wechat-data/src/remotes/askdeep.ts
+import { BlockAssembler as BlockAssembler3, createUserMessage as createUserMessage3 } from "@deepseek-ai/dsh-llm";
+function askBasisLine(citations) {
+  if (citations.length === 0) return "";
+  const msgs = citations.filter((c) => c.source !== "kb");
+  const kbItems = citations.filter((c) => c.source === "kb");
+  const sessions = new Set(msgs.map((c) => c.username ?? "")).size;
+  const days = msgs.map((c) => (c.time ?? "").slice(0, 10)).filter(Boolean).sort();
+  const span = days.length > 0 ? ` \xB7 ${days[0]} ~ ${days[days.length - 1]}` : "";
+  const parts = [`${citations.length} \u6761\u539F\u6587`];
+  if (msgs.length > 0) parts.push(`${sessions} \u4E2A\u4F1A\u8BDD`);
+  if (kbItems.length > 0) {
+    const files = new Set(kbItems.map((c) => c.kb?.fileId !== void 0 ? "f" + c.kb.fileId : c.kb?.fileName ?? c.snippet ?? ""));
+    parts.push(`${files.size} \u4E2A\u77E5\u8BC6\u5E93\u6587\u4EF6`);
+  }
+  return `\u4F9D\u636E\u672C\u673A\u8BB0\u5F55\uFF1A${parts.join(" \xB7 ")}${span}`;
+}
+function createAskDeepRemotes(rc) {
+  return {
+    async askWechat(options) {
+      const ctx = rc.ctx();
+      const askStartedAt = Date.now();
+      const blocked = rc.privacyBlocked("ask_wechat");
+      if (blocked !== null) {
+        rc.op("task", "ask_wechat", "skip", "", blocked);
+        throw new Error(blocked);
+      }
+      const defaultModel = ctx.agentDefaultModel;
+      const sel = defaultModel?.currentSelection();
+      if (!sel || !sel.provider || !sel.model) {
+        rc.op("task", "ask_wechat", "fail", "", "\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09");
+        throw new Error("\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09\uFF0C\u65E0\u6CD5\u8C03\u7528 AI \u95EE\u7B54");
+      }
+      const modelLabel = `${sel.provider} \xB7 ${sel.model}`;
+      const scope = {
+        username: typeof options.username === "string" && options.username ? options.username : void 0,
+        from: typeof options.from === "string" && options.from ? options.from : void 0,
+        to: typeof options.to === "string" && options.to ? options.to : void 0
+      };
+      const history = (Array.isArray(options.history) ? options.history : []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim().length > 0).slice(-16);
+      const HISTORY_BUDGET = 4e3;
+      let historyUsed = 0;
+      const trimmedHistory = [];
+      for (const m of [...history].reverse()) {
+        const room = HISTORY_BUDGET - historyUsed;
+        if (room <= 80) break;
+        const text = m.content.trim().slice(0, Math.min(m.role === "assistant" ? 1200 : 400, room));
+        trimmedHistory.unshift({ role: m.role, content: text });
+        historyUsed += text.length;
+      }
+      const llm = ctx.llm;
+      const runChat = async (system, userText, maxTokens, onDelta) => {
+        const assembler = new BlockAssembler3();
+        const opts = {
+          provider: sel.provider,
+          model: sel.model,
+          messages: [createUserMessage3({
+            content: [{ type: "text", text: userText }],
+            source: { kind: "plugin", plugin: "dsh-wechat-data" }
+          })],
+          system,
+          maxTokens
+        };
+        let acc = "";
+        let emitted = false;
+        for await (const chunk of llm.stream(opts)) {
+          assembler.push(chunk);
+          const c = chunk;
+          if (onDelta && c.type === "text-delta" && typeof c.text === "string") {
+            acc += c.text;
+            emitted = true;
+            onDelta(acc);
+          }
+        }
+        if (onDelta && !emitted) {
+          const finalText = assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
+          if (finalText) onDelta(finalText);
+        }
+        return assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
+      };
+      const today = /* @__PURE__ */ new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const weekday = ["\u5468\u65E5", "\u5468\u4E00", "\u5468\u4E8C", "\u5468\u4E09", "\u5468\u56DB", "\u5468\u4E94", "\u5468\u516D"][today.getDay()];
+      const scopeDesc = `\u4F1A\u8BDD=${scope.username ?? "\u5168\u90E8"}${scope.from ? `\uFF0C\u8D77\u59CB=${scope.from}` : ""}${scope.to ? `\uFF0C\u622A\u6B62=${scope.to}` : ""}`;
+      const historyBrief = history.length > 0 ? "\n\u5BF9\u8BDD\u5386\u53F2\uFF08\u6700\u8FD1\uFF09\uFF1A\n" + trimmedHistory.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content.slice(0, 300)).join("\n") : "";
+      const planPrompt = `\u4ECA\u5929\u662F ${todayStr}\uFF08${weekday}\uFF09\u3002
+\u7528\u6237\u95EE\u9898\uFF1A${options.question}
+\u5F53\u524D\u7B5B\u9009\u8303\u56F4\uFF1A${scopeDesc}${historyBrief}
+
+\u8BF7\u8F93\u51FA JSON\uFF08\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u5185\u5BB9\uFF09\u3002`;
+      const gatePlan = rc.privacyGate("ask_wechat", { sessions: 0, messages: 0 }, [planPrompt]);
+      if (!gatePlan.ok) {
+        rc.op("task", "ask_wechat", "skip", "", gatePlan.error);
+        throw new Error(gatePlan.error);
+      }
+      let plan;
+      try {
+        const planText = await runChat(
+          '\u4F60\u662F\u5FAE\u4FE1\u672C\u5730\u804A\u5929\u8BB0\u5F55\u7684\u68C0\u7D22\u89C4\u5212\u5668\u3002\u4EFB\u52A1\uFF1A\u5206\u6790\u7528\u6237\u95EE\u9898\uFF0C\u8F93\u51FA**\u68C0\u7D22\u5173\u952E\u8BCD**\u4E0E**\u9690\u542B\u6761\u4EF6**\u3002\u8981\u6C42\uFF1A\u2460 subQueries \u7ED9 1-4 \u4E2A\u771F\u6B63\u6709\u533A\u5206\u5EA6\u7684\u4E2D\u6587\u5173\u952E\u8BCD\u6216\u77ED\u8BED\uFF08\u4EBA\u540D\u3001\u4E8B\u7269\u3001\u52A8\u4F5C\u3001\u4E13\u6709\u540D\u8BCD\uFF09\uFF0C\u4E0D\u8981\u8F93\u51FA\u300C\u4EC0\u4E48/\u600E\u4E48/\u6211\u7684/\u7ED9\u6211/\u6700\u8FD1/\u4E00\u6B21\u300D\u8FD9\u7C7B\u7591\u95EE\u8BCD\u3001\u505C\u7528\u8BCD\u6216\u6CDB\u5316\u65F6\u95F4\u8BCD\uFF1B\u2461 \u95EE\u9898\u91CC\u51FA\u73B0\u76F8\u5BF9\u65F6\u95F4\uFF08\u4E0A\u5468\u4E09/\u6628\u5929/\u4E0A\u4E2A\u6708\uFF09\u65F6\uFF0C\u6309\u7ED9\u5B9A\u7684\u4ECA\u5929\u65E5\u671F\u6362\u7B97\u6210\u7EDD\u5BF9\u65E5\u671F\u586B from/to\uFF08YYYY-MM-DD\uFF0C\u5355\u65E5\u5219 from=to\uFF09\uFF0C\u8BC6\u522B\u4E0D\u51FA\u5C31\u7559\u7A7A\u5B57\u7B26\u4E32\uFF1B\u2462 \u95EE\u9898\u70B9\u540D\u4E86\u67D0\u4E2A\u4EBA\u5C31\u586B person\uFF0C\u5426\u5219\u7559\u7A7A\u5B57\u7B26\u4E32\u3002\u53EA\u8F93\u51FA\u4E00\u884C JSON\uFF1A{"intent":"\u4E00\u53E5\u8BDD\u610F\u56FE","subQueries":["\u5173\u952E\u8BCD1","\u5173\u952E\u8BCD2"],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","person":"\u4EBA\u540D"}',
+          gatePlan.texts[0] ?? planPrompt,
+          512
+        );
+        plan = parseAskPlan(planText);
+        if (plan.subQueries.length === 0 && options.question.trim()) plan.subQueries = [options.question.trim()];
+      } catch (e) {
+        plan = { intent: "\uFF08\u89C4\u5212\u5931\u8D25\uFF0C\u76F4\u63A5\u68C0\u7D22\u539F\u95EE\u9898\uFF09", subQueries: options.question.trim() ? [options.question.trim()] : [], from: "", to: "", person: "" };
+        rc.op("task", "ask_wechat", "fail", "intent_plan", e.message);
+      }
+      try {
+        const ensured = await ensureSearchIndex(rc.dirs().decrypted);
+        if (ensured.action === "build") {
+          rc.op("task", "ask_wechat", "ok", "build_index", `\u68C0\u7D22\u7D22\u5F15\u5168\u91CF\u6784\u5EFA \xB7 ${ensured.rows ?? 0} \u6761 \xB7 ${ensured.elapsed_ms}ms`);
+        } else if (ensured.action === "sync") {
+          rc.op("task", "ask_wechat", "ok", "build_index", `\u68C0\u7D22\u7D22\u5F15\u589E\u91CF\u540C\u6B65 \xB7 \u65B0\u589E ${ensured.added ?? 0} \u6761 \xB7 ${ensured.elapsed_ms}ms`);
+        } else if (ensured.message) {
+          rc.op("task", "ask_wechat", "fail", "build_index", ensured.message);
+        }
+      } catch (e) {
+        rc.op("task", "ask_wechat", "fail", "build_index", e.message);
+      }
+      const retrConfig = loadRetrievalConfig(rc.dirs().decrypted);
+      const scopeDescText = [
+        scope.username ? "\u4F1A\u8BDD\u9650\u5B9A" : "",
+        scope.from ? `\u8D77 ${scope.from}` : "",
+        scope.to ? `\u6B62 ${scope.to}` : ""
+      ].filter(Boolean).join(" ") || "\u5168\u5E93";
+      let citations = [];
+      let chunks = [];
+      let terms = [];
+      let statsCompat = {
+        candidates: 0,
+        kept: 0,
+        scope: scopeDescText,
+        recency: false,
+        timeHint: "",
+        hintHits: 0,
+        chunks: 0,
+        windowMessages: 0
+      };
+      let rankedFeatures = [];
+      let retrievalId = "";
+      const legacyRetrieve = () => {
+        const legacy = retrieveAskCitations(
+          rc.dirs().decrypted,
+          options.question,
+          { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
+          scope,
+          24
+        );
+        citations = legacy.citations;
+        chunks = legacy.chunks;
+        terms = legacy.terms;
+        statsCompat = { ...legacy.stats };
+        rankedFeatures = [];
+        retrievalId = "";
+      };
+      let rerankLine = "";
+      if (retrConfig.enabled) {
+        try {
+          const embedModel = rc.embedModelName(retrConfig.embedding.model);
+          const embedFn = rc.makeEmbedFn(embedModel);
+          if (embedFn && retrConfig.embedding.enabled) {
+            const vst = vectorIndexStatus(rc.dirs().decrypted);
+            if (!vst.ready) {
+              try {
+                const built = await buildVectorIndex(rc.dirs().decrypted, embedFn, {
+                  model: embedModel,
+                  batchSize: retrConfig.embedding.batchSize,
+                  concurrency: retrConfig.embedding.concurrency,
+                  maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
+                  maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild
+                });
+                rc.op("task", "ask_wechat", "ok", "build_vectors", `\u5411\u91CF\u7D22\u5F15 ${built.status} \xB7 ${built.rows} \u6761\uFF08\u672C\u6B21 ${built.embedded}\uFF09\xB7 ${built.elapsed_ms}ms`);
+              } catch (e) {
+                rc.op("task", "ask_wechat", "fail", "build_vectors", e.message);
+              }
+            }
+          }
+          const adapted = loadAdaptedWeights(rc.dirs().decrypted);
+          const known = rc.askKnownEntities();
+          const kbId = Number.isFinite(options.kbId) && (options.kbId ?? 0) > 0 ? Math.trunc(options.kbId) : void 0;
+          if (options.kbId !== void 0 && kbId === void 0) {
+            rc.op("task", "ask_wechat", "fail", "kb_scope", `\u5FFD\u7565\u975E\u6CD5\u7684\u77E5\u8BC6\u5E93\u6807\u8BC6\uFF1A${String(options.kbId)}`);
+          }
+          const kbEmbedModel = kbId === void 0 ? embedModel : rc.kbModel(kbId, "embed").model;
+          const rerankModelName = rc.kbModel(kbId ?? 0, "rerank").model;
+          const rerankFn = rc.makeRerankFn(kbId ?? 0);
+          if (kbId !== void 0 && retrConfig.embedding.enabled) {
+            const kbSt = kbVectorIndexStatus(rc.dirs().decrypted, kbId, kbEmbedModel);
+            if (!kbSt.ready) {
+              try {
+                const kbEmbed = rc.makeEmbedFn(kbEmbedModel, "kb_embed");
+                if (kbEmbed) {
+                  const built = await buildKbVectorIndex(rc.dirs().decrypted, kbId, kbEmbed, {
+                    model: kbEmbedModel,
+                    batchSize: retrConfig.embedding.batchSize,
+                    concurrency: retrConfig.embedding.concurrency,
+                    maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
+                    maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild
+                  });
+                  rc.op(
+                    "task",
+                    "ask_wechat",
+                    "ok",
+                    "build_kb_vectors",
+                    `\u77E5\u8BC6\u5E93\u5411\u91CF ${built.status} \xB7 ${built.rows} \u6761\uFF08\u672C\u6B21 ${built.embedded}\uFF09\xB7 ${built.elapsed_ms}ms`
+                  );
+                }
+              } catch (e) {
+                rc.op("task", "ask_wechat", "fail", "build_kb_vectors", e.message);
+              }
+            }
+          }
+          const out = await runRetrievalPipeline({
+            decryptedDir: rc.dirs().decrypted,
+            question: options.question,
+            subQueries: plan.subQueries,
+            entity: plan.person,
+            from: plan.from,
+            to: plan.to,
+            scope,
+            limit: 24,
+            config: retrConfig,
+            ...embedFn ? { embedFn } : {},
+            // 与 embedFn 同一个解析出来的模型名：稠密召回靠它判「库里那批向量是不是本次模型算的」。
+            // 传 kbEmbedModel 而不是 embedModel —— 知识库这一路可能被库级覆盖改过名字。
+            embedModel: kbEmbedModel,
+            // 精排：没配 rerank 模型时这里就是 undefined，管道整段跳过并按本地加权排序。
+            ...rerankFn ? { rerank: rerankFn } : {},
+            rerankModel: rerankModelName,
+            // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
+            knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
+            ...adapted ? { weightsOverride: adapted } : {},
+            ...kbId !== void 0 ? { kbId } : {}
+          });
+          rerankLine = out.rerankInfo.used ? ` \xB7 \u7CBE\u6392\uFF1A${out.rerankInfo.model || "\u672A\u77E5\u6A21\u578B"}\uFF08\u5019\u9009 ${out.rerankInfo.candidates} \u2192 \u53D6 ${out.rerankInfo.kept}\uFF09` : ` \xB7 \u7CBE\u6392\uFF1A${out.rerankInfo.note}`;
+          citations = out.citations;
+          chunks = out.chunks;
+          terms = out.terms;
+          rankedFeatures = out.rankedFeatures;
+          retrievalId = "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+          statsCompat = {
+            candidates: out.stats.recalled,
+            kept: out.stats.kept,
+            scope: scopeDescText,
+            recency: out.stats.recency,
+            timeHint: out.stats.timeHint,
+            hintHits: out.stats.hintHits,
+            chunks: out.stats.compressed,
+            windowMessages: out.stats.windowMessages,
+            intent: out.stats.intent,
+            denseActive: out.stats.denseActive,
+            elapsedMs: out.stats.elapsedMs,
+            channels: out.stats.channels.map((c) => ({ channel: c.channel, count: c.count, active: c.active, ...c.note ? { note: c.note } : {} })),
+            funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked }
+          };
+          rc.op(
+            "task",
+            "ask_wechat",
+            "ok",
+            "route",
+            `\u610F\u56FE ${out.stats.intent} \xB7 \u901A\u9053[${out.stats.channels.map((c) => `${c.channel}:${c.count}${c.active ? "" : "(off)"}`).join(" ")}] \xB7 \u53EC\u56DE ${out.stats.recalled} \u2192 \u878D\u5408 ${out.stats.fused} \u2192 \u91CD\u6392 ${out.stats.ranked} \u2192 \u7A97\u53E3 ${out.stats.compressed} \xB7 ${out.stats.elapsedMs}ms`
+          );
+        } catch (e) {
+          rc.op("task", "ask_wechat", "fail", "retrieval_pipeline", e.message);
+          legacyRetrieve();
+        }
+      } else {
+        legacyRetrieve();
+      }
+      const basisLine = askBasisLine(citations) + rerankLine;
+      if (citations.length === 0) {
+        rc.op("task", "ask_wechat", "skip", "", "\u672A\u68C0\u7D22\u5230\u4EFB\u4F55\u539F\u6587\uFF0C\u672A\u8C03\u7528\u6A21\u578B");
+        const emptyResult = {
+          answer: "\u672C\u673A\u8BB0\u5F55\u91CC\u6CA1\u6709\u68C0\u7D22\u5230\u4E0E\u8FD9\u4E2A\u95EE\u9898\u76F8\u5173\u7684\u539F\u6587\uFF0C\u56E0\u6B64\u4E0D\u4F5C\u56DE\u7B54\uFF08\u4E0D\u4F1A\u57FA\u4E8E\u5E38\u8BC6\u63A8\u6D4B\uFF09\u3002\u53EF\u4EE5\u8BD5\u8BD5\uFF1A\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\uFF0C\u6216\u6307\u5B9A\u67D0\u4E2A\u4F1A\u8BDD\u518D\u95EE\u3002",
+          citations: [],
+          plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
+          citedIndexes: [],
+          basis: "",
+          insufficient: true,
+          retrieval: {
+            candidates: statsCompat.candidates,
+            kept: statsCompat.kept,
+            scope: statsCompat.scope,
+            recency: statsCompat.recency,
+            chunks: statsCompat.chunks,
+            windowMessages: statsCompat.windowMessages
+          }
+        };
+        rc.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel);
+        return emptyResult;
+      }
+      const contextBlock = formatAskContext(citations, {
+        intent: plan.intent,
+        terms,
+        scope: statsCompat.scope,
+        recency: statsCompat.recency,
+        timeHint: statsCompat.timeHint,
+        hintHits: statsCompat.hintHits
+      }, chunks);
+      const historyBlock = trimmedHistory.length > 0 ? "\u6B64\u524D\u7684\u5BF9\u8BDD\uFF08\u4FDD\u6301\u591A\u8F6E\u8FDE\u8D2F\uFF0C\u4F46\u7B54\u6848\u5FC5\u987B\u4EE5\u672C\u6B21\u68C0\u7D22\u7ED3\u679C\u4E3A\u51C6\uFF09\uFF1A\n" + trimmedHistory.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content).join("\n") + "\n\n" : "";
+      const timeGuardRule = statsCompat.timeHint ? statsCompat.hintHits > 0 ? `
+7. **\u65F6\u95F4\u8303\u56F4**\uFF1A\u6750\u6599\u90FD\u843D\u5728 ${statsCompat.timeHint} \u5185\uFF0C\u53EF\u4EE5\u6309\u8BE5\u8303\u56F4\u9648\u8FF0\u3002` : `
+7. **\u65F6\u95F4\u8303\u56F4\uFF08\u91CD\u8981\uFF09**\uFF1A\u68C0\u7D22\u5728 ${statsCompat.timeHint} \u5185**\u4E00\u6761\u90FD\u6CA1\u627E\u5230**\uFF0C\u4E0B\u9762\u5217\u51FA\u7684\u7247\u6BB5\u5168\u90E8\u6765\u81EA**\u5176\u4ED6\u65E5\u671F**\u3002\u5FC5\u987B\u5148\u660E\u786E\u8BF4\u4E00\u53E5\u300C${statsCompat.timeHint} \u8FD9\u6BB5\u65F6\u95F4\u6CA1\u6709\u627E\u5230\u76F8\u5173\u804A\u5929\u8BB0\u5F55\u300D\uFF0C\u7136\u540E\u624D\u53EF\u4EE5\u8BF4\u300C\u53E6\u5916\u5728 X \u6708 X \u65E5\u804A\u8FC7\u2026\u2026\u300D\u5E76**\u9010\u6761\u5199\u51FA\u8FD9\u4E9B\u5185\u5BB9\u7684\u771F\u5B9E\u65E5\u671F**\u3002\u7EDD\u5BF9\u4E0D\u8981\u628A\u5176\u4ED6\u65E5\u671F\u7684\u5185\u5BB9\u8BF4\u6210\u662F\u8BE5\u65F6\u95F4\u8303\u56F4\u5185\u53D1\u751F\u7684\u3002` : "";
+      const synthPrompt = `${historyBlock}\u7528\u6237\u672C\u6B21\u95EE\u9898\uFF1A${options.question}
+
+  ${contextBlock}
+
+  \u8BF7\u6309\u4EE5\u4E0B\u8981\u6C42\u56DE\u7B54\uFF1A
+  1. **\u53EA\u7528\u6750\u6599\u91CC\u7684\u4E8B\u5B9E**\uFF1A\u4E0A\u9762\u68C0\u7D22\u7ED3\u679C\u91CC\u6CA1\u6709\u7684\u4FE1\u606F\u4E00\u5F8B\u4E0D\u8981\u8865\u5145\uFF0C\u5C24\u5176\u4E0D\u8981\u51ED\u5E38\u8BC6\u63A8\u6D4B\u4EBA\u540D\u3001\u91D1\u989D\u3001\u65E5\u671F\u3001\u65F6\u95F4\u3002\u5B81\u53EF\u5C11\u8BF4\uFF0C\u4E5F\u4E0D\u8981\u7F16\u3002\u91D1\u989D\u3001\u65E5\u671F\u3001\u7535\u8BDD/\u5361\u53F7\u8FD9\u7C7B\u503C**\u53EA\u80FD\u539F\u6837\u7167\u6284**\u6750\u6599\u91CC\u7684\u5199\u6CD5 \u2014\u2014 \u8981\u8BF4\u5408\u8BA1\u5C31\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF0C\u4E0D\u8981\u81EA\u884C\u6362\u7B97\u5355\u4F4D\u6216\u63A8\u7B97\u65E5\u671F\u3002
+  2. **\u50CF\u5FAE\u4FE1\u91CC\u8DDF\u4EBA\u8BF4\u8BDD\u90A3\u6837\u81EA\u7136**\uFF1A\u53E3\u8BED\u5316\u4E2D\u6587\uFF0C\u76F4\u63A5\u628A\u4E8B\u60C5\u8BB2\u6E05\u695A\uFF0C\u4E0D\u8981\u5199\u6210\u62A5\u544A\u6216\u5206\u6790\uFF08\u4E0D\u8981\u300C\u7EFC\u4E0A\u6240\u8FF0\u300D\u300C\u6839\u636E\u6570\u636E\u5206\u6790\u300D\u300C\u7ECF\u68B3\u7406\u300D\u8FD9\u7C7B\u8154\u8C03\uFF09\uFF0C\u4E5F\u4E0D\u8981\u590D\u8FF0\u68C0\u7D22\u8FC7\u7A0B\u3002\u8981\u7F57\u5217\u591A\u6761\u65F6\u53EF\u4EE5\u5206\u70B9\uFF0C\u4F46\u6BCF\u6761\u90FD\u8981\u50CF\u5728\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\u3002
+  3. **\u6BCF\u6761\u4E8B\u5B9E\u540E\u9762\u6807 [n]**\uFF1A\u4F8B\u5982\u300C\u5C0F\u4F55\u8BF4\u6536\u5230\u8F6C\u8D26 13.00 \u5143 [1]\u300D\uFF0C\u591A\u4E2A\u6765\u6E90\u5199 [1][3]\u3002\u6750\u6599\u91CC\u5F62\u5982\u300C\u7FA4\u540D \xB7 \u67D0\u4EBA\u300D\u7684\uFF0C\u8981\u8BF4\u6E05\u662F\u8C01\u8BF4\u7684\u3002
+  4. **\u65F6\u95F4\u5199\u7EDD\u5BF9\u65E5\u671F**\uFF08\u5982 2026-09-05\uFF09\uFF0C\u4E0D\u8981\u5199\u300C\u4E0A\u5468\u300D\u300C\u524D\u51E0\u5929\u300D\u8FD9\u7C7B\u76F8\u5BF9\u8868\u8FF0\u3002
+  5. **\u627E\u4E0D\u5230\u5C31\u76F4\u8BF4**\uFF1A\u6750\u6599\u4E0D\u8DB3\u4EE5\u56DE\u7B54\u65F6\uFF0C\u76F4\u63A5\u8BF4\u660E\u300C\u804A\u5929\u8BB0\u5F55\u91CC\u6CA1\u6709\u627E\u5230\u2026\u2026\u300D\uFF0C\u518D\u7ED9 1-2 \u6761\u6539\u95EE\u5EFA\u8BAE\uFF08\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u6216\u6307\u5B9A\u4F1A\u8BDD\uFF09\u3002\u4E0D\u8981\u7528\u63A8\u6D4B\u586B\u7A7A\u3002
+  6. \u53EA\u5F15\u7528\u771F\u6B63\u652F\u6301\u7ED3\u8BBA\u7684\u90A3\u51E0\u6761\u6765\u6E90\uFF0C\u4E0D\u8981\u7F57\u5217\u5168\u90E8\uFF1B\u4E5F\u4E0D\u7528\u5199\u300C\u4F9D\u636E\u672C\u673A\u8BB0\u5F55\u300D\u8FD9\u7C7B\u6765\u6E90\u8BF4\u660E\uFF0C\u754C\u9762\u4E0A\u5DF2\u5355\u72EC\u663E\u793A\u3002${timeGuardRule}`;
+      const gateAnswer = rc.privacyGate(
+        "ask_wechat",
+        { sessions: new Set(citations.map((c) => c.username)).size, messages: citations.length },
+        [synthPrompt]
+      );
+      if (!gateAnswer.ok) {
+        rc.op("task", "ask_wechat", "skip", "", gateAnswer.error);
+        throw new Error(gateAnswer.error);
+      }
+      const answer = await runChat(
+        "\u4F60\u662F\u7528\u6237\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u91CC\u7684\u95EE\u7B54\u52A9\u624B\u3002\u53EA\u7528\u4E0B\u9762\u7ED9\u51FA\u7684\u68C0\u7D22\u7ED3\u679C\u56DE\u7B54\uFF0C\u8BF4\u8BDD\u81EA\u7136\u3001\u53E3\u8BED\u5316\uFF0C\u50CF\u5728\u5FAE\u4FE1\u91CC\u8DDF\u4EBA\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\uFF1B\u6BCF\u53E5\u4E8B\u5B9E\u540E\u9762\u7528 [n] \u6807\u6CE8\u6765\u6E90\uFF1B\u8BB0\u5F55\u91CC\u6CA1\u6709\u7684\u5C31\u8BF4\u6CA1\u627E\u5230\uFF0C\u7EDD\u4E0D\u63A8\u6D4B\u6216\u7F16\u9020\u3002",
+        gateAnswer.texts[0] ?? synthPrompt,
+        1600,
+        // 必须走 this.：makeDeltaEmitter 是实例方法。裸调用会抛
+        // 「ReferenceError: makeDeltaEmitter is not defined」—— 它出现在**综合生成那一刻**，
+        // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
+        rc.makeDeltaEmitter(options.streamId)
+      );
+      const evidenceFor = (cited) => {
+        const idx = cited.length > 0 ? cited : citations.map((_, i) => i + 1);
+        return idx.map((n) => {
+          const ch = chunks[n - 1];
+          if (ch) {
+            const head = `${ch.name} ${ch.anchor.sender ?? ""} ${ch.anchor.time}`;
+            return head + "\n" + ch.lines.map((l) => `${l.day ?? ""} ${l.time} ${l.sender} ${l.text}`).join("\n");
+          }
+          const c = citations[n - 1];
+          return c ? `${c.name} ${c.sender ?? ""} ${c.time} ${c.snippet}` : "";
+        });
+      };
+      const groundingAuditFor = (text, cited) => auditGrounding(text, evidenceFor(cited), citations.length);
+      let citedIndexes = parseCitedIndexes(answer, citations.length);
+      let finalAnswer = answer;
+      let withheld = false;
+      let grounding = groundingAuditFor(answer, citedIndexes);
+      let repaired = false;
+      if (citedIndexes.length === 0 || grounding.unsupported.length > 0 || grounding.uncited > 0) {
+        const repairHint = groundingRepairHint(grounding);
+        const strictPrompt = `${synthPrompt}
+
+  \u3010\u91CD\u8981\u3011\u8BF7\u91CD\u5199\u4E0A\u4E00\u6B21\u7684\u56DE\u7B54\uFF0C\u9010\u6761\u4FEE\u6389\u4E0B\u9762\u7684\u95EE\u9898\u3002
+  ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA1\u6709\u6807\u6CE8\u4EFB\u4F55 [n] \u6765\u6E90**\u3002\n" : ""}${repairHint ? repairHint + "\n" : ""} \xB7 \u6BCF\u4E00\u53E5\u4E8B\u5B9E\u6027\u9648\u8FF0\u540E\u9762\u90FD\u5FC5\u987B\u7D27\u8DDF\u5BF9\u5E94\u7684 [n]\uFF0C\u4E14\u53EA\u6807\u771F\u6B63\u652F\u6301\u8FD9\u53E5\u8BDD\u7684\u90A3\u51E0\u6761\uFF1B
+   \xB7 \u8BED\u6C14\u4FDD\u6301\u81EA\u7136\u53E3\u8BED\u5316\uFF0C\u50CF\u5728\u5FAE\u4FE1\u91CC\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\uFF1B
+   \xB7 \u5982\u679C\u68C0\u7D22\u7ED3\u679C\u4E0D\u8DB3\u4EE5\u56DE\u7B54\uFF0C\u53EA\u8F93\u51FA\u4E00\u53E5\u8BDD\uFF1A\u300C\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\u300D\u3002`;
+        const second = await runChat(
+          "\u4F60\u662F\u7528\u6237\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u91CC\u7684\u95EE\u7B54\u52A9\u624B\u3002\u53EA\u7528\u7ED9\u5B9A\u68C0\u7D22\u7ED3\u679C\u56DE\u7B54\uFF0C\u81EA\u7136\u53E3\u8BED\u5316\uFF0C\u6BCF\u53E5\u4E8B\u5B9E\u6807\u6CE8 [n]\uFF1B\u8BB0\u5F55\u91CC\u6CA1\u6709\u5C31\u76F4\u8BF4\u6CA1\u627E\u5230\uFF0C\u4E0D\u8981\u63A8\u6D4B\u6216\u7F16\u9020\u3002",
+          strictPrompt,
+          1600
+        );
+        const secondCited = parseCitedIndexes(second, citations.length);
+        const secondAudit = groundingAuditFor(second, secondCited);
+        const better = secondCited.length > 0 && (secondAudit.unsupported.length < grounding.unsupported.length || secondAudit.unsupported.length === grounding.unsupported.length && secondCited.length > citedIndexes.length);
+        if (better) {
+          finalAnswer = second;
+          citedIndexes = secondCited;
+          grounding = secondAudit;
+          repaired = true;
+        }
+      }
+      if (citedIndexes.length === 0) {
+        withheld = true;
+        finalAnswer = "\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\uFF08\u6A21\u578B\u7ED9\u51FA\u7684\u5185\u5BB9\u65E0\u6CD5\u5BF9\u5E94\u5230\u4EFB\u4F55\u4E00\u6761\u539F\u6587\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528\uFF09\u3002\u53EF\u4EE5\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\u6216\u6307\u5B9A\u4F1A\u8BDD\u540E\u91CD\u8BD5\u3002";
+      }
+      const answer_basis = citedIndexes.length > 0 ? `${basisLine}\uFF08\u56DE\u7B54\u5F15\u7528\u4E86\u5176\u4E2D ${citedIndexes.length} \u6761\uFF1A[${citedIndexes.join("][")}]\uFF09` : basisLine;
+      if (retrievalId && rankedFeatures.length > 0) {
+        rc.askTrace.set(retrievalId, {
+          features: new Map(rankedFeatures.map((r) => [r.docKey, r.features])),
+          // 归因键**必须**与检索侧 docKey 逐字相同，否则「这条引用有用」对应不到任何
+          // 特征向量 —— 而且不报错，只是调参永远不动。知识库引用的键是
+          // `kb:<kbId>:<chunkId>`（由 citationDocKey 产出，是这条格式的唯一来源）；
+          // 从前这里手写 `username + ':' + local_id`，KB 引用会塌成 `:`，
+          // 同一轮里的多个文件引用还会**互相覆盖**，把反馈记到不存在的消息上。
+          citations: citations.map((c) => citationDocKey(c)),
+          question: options.question,
+          answer: finalAnswer,
+          intent: statsCompat.intent ?? "open_qa"
+        });
+        while (rc.askTrace.size > 20) {
+          const oldest = rc.askTrace.keys().next();
+          if (oldest.done) break;
+          rc.askTrace.delete(oldest.value);
+        }
+      }
+      rc.op(
+        "task",
+        "ask_wechat",
+        withheld ? "fail" : "ok",
+        "",
+        `\u610F\u56FE\u300C${statsCompat.intent ?? plan.intent}\u300D\xB7 \u5173\u952E\u8BCD ${terms.length} \u4E2A \xB7 \u53EC\u56DE ${statsCompat.candidates} \u6761 \u2192 \u7A97\u53E3 ${statsCompat.chunks} \u6BB5\uFF08${statsCompat.windowMessages} \u6761\u6D88\u606F\uFF09\xB7 \u56DE\u7B54\u5F15\u7528 ${citedIndexes.length} \u6BB5${withheld ? " \xB7 \u672A\u5F15\u7528\u4EFB\u4F55\u6765\u6E90\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528" : ""}${grounding.checked > 0 ? ` \xB7 \u63A5\u5730\u6838\u5BF9 ${grounding.checked} \u9879\uFF08\u65E0\u51FA\u5904\u7684 ${grounding.unsupported.length} \u9879\uFF09` : ""}${repaired ? " \xB7 \u5DF2\u6309\u6838\u5BF9\u7ED3\u679C\u91CD\u5199" : ""}${statsCompat.timeHint ? ` \xB7 \u65F6\u95F4\u7EBF\u7D22 ${statsCompat.timeHint}\uFF08\u547D\u4E2D ${statsCompat.hintHits}\uFF09` : ""}`
+      );
+      const result = {
+        answer: finalAnswer || "\uFF08\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548\u56DE\u7B54\u3002\u53EF\u70B9\u300C\u4F18\u5316\u63D0\u95EE\u300D\u6539\u5199\u95EE\u9898\uFF0C\u6216\u6536\u7A84\u4F1A\u8BDD/\u65F6\u95F4\u8303\u56F4\u540E\u91CD\u8BD5\u3002\uFF09",
+        citations,
+        plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
+        citedIndexes,
+        basis: answer_basis,
+        withheld: withheld || void 0,
+        // 接地核对结果：界面上「回答里某某在原文里没有出现」的提示与操作日志共用它，
+        // 也让「这轮到底核对了什么」可被追问。
+        grounding: {
+          checked: grounding.checked,
+          unsupported: grounding.unsupported.map((v) => v.value),
+          cited: citedIndexes.length,
+          repaired
+        },
+        retrievalId: retrievalId || void 0,
+        retrieval: {
+          candidates: statsCompat.candidates,
+          kept: statsCompat.kept,
+          scope: statsCompat.scope,
+          recency: statsCompat.recency,
+          timeHint: statsCompat.timeHint,
+          hintHits: statsCompat.hintHits,
+          chunks: statsCompat.chunks,
+          windowMessages: statsCompat.windowMessages,
+          ...statsCompat.intent ? { intent: statsCompat.intent } : {},
+          ...statsCompat.denseActive !== void 0 ? { denseActive: statsCompat.denseActive } : {},
+          ...statsCompat.channels ? { channels: statsCompat.channels } : {},
+          ...statsCompat.elapsedMs !== void 0 ? { elapsedMs: statsCompat.elapsedMs } : {},
+          ...statsCompat.funnel ? { funnel: statsCompat.funnel } : {}
+        }
+      };
+      rc.saveAskHistory(options, result, Date.now() - askStartedAt, modelLabel);
+      return result;
+    },
+    async optimizeAskQuestion(options) {
+      const ctx = rc.ctx();
+      const blocked = rc.privacyBlocked("ask_optimize");
+      if (blocked !== null) {
+        rc.op("task", "ask_optimize", "skip", "", blocked);
+        throw new Error(blocked);
+      }
+      const question = String(options?.question || "").trim();
+      if (!question) throw new Error("\u8BF7\u5148\u8F93\u5165\u95EE\u9898\uFF0C\u518D\u8FDB\u884C\u4F18\u5316");
+      const defaultModel = ctx.agentDefaultModel;
+      const sel = defaultModel?.currentSelection();
+      if (!sel || !sel.provider || !sel.model) {
+        rc.op("task", "ask_optimize", "fail", "", "\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09");
+        throw new Error("\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09\uFF0C\u65E0\u6CD5\u4F18\u5316\u63D0\u95EE");
+      }
+      const scopeDesc = `\u4F1A\u8BDD=${options.username || "\u5168\u90E8"}${options.from ? `\uFF0C\u8D77\u59CB=${options.from}` : ""}${options.to ? `\uFF0C\u622A\u6B62=${options.to}` : ""}`;
+      const history = (Array.isArray(options.history) ? options.history : []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string").slice(-6);
+      const historyBrief = history.length > 0 ? "\n\u6700\u8FD1\u5BF9\u8BDD\u80CC\u666F\uFF1A\n" + history.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content.slice(0, 200)).join("\n") : "";
+      const prompt = `\u7528\u6237\u539F\u59CB\u95EE\u9898\uFF1A${question}
+\u5F53\u524D\u68C0\u7D22\u8303\u56F4\uFF1A${scopeDesc}${historyBrief}
+
+\u8BF7\u8F93\u51FA JSON\uFF08\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u5185\u5BB9\uFF09\u3002`;
+      const gate = rc.privacyGate("ask_optimize", { sessions: 0, messages: 0 }, [prompt]);
+      if (!gate.ok) {
+        rc.op("task", "ask_optimize", "skip", "", gate.error);
+        throw new Error(gate.error);
+      }
+      const assembler = new BlockAssembler3();
+      const opts = {
+        provider: sel.provider,
+        model: sel.model,
+        messages: [createUserMessage3({
+          content: [{ type: "text", text: gate.texts[0] ?? prompt }],
+          source: { kind: "plugin", plugin: "dsh-wechat-data" }
+        })],
+        system: '\u4F60\u662F\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u7684\u63D0\u95EE\u4F18\u5316\u5668\u3002\u628A\u7528\u6237\u95EE\u9898\u6539\u5199\u5F97\u66F4\u6E05\u6670\u3001\u66F4\u5229\u4E8E\u5168\u6587\u68C0\u7D22\uFF08\u4FDD\u7559\u539F\u610F\uFF0C\u8865\u5145\u9690\u542B\u7684\u65F6\u95F4/\u5BF9\u8C61\u7B49\u9650\u5B9A\uFF0C\u53BB\u6389\u53E3\u8BED\u53E3\u6C34\u8BCD\uFF09\uFF0C\u5E76\u7ED9\u51FA\u81F3\u591A 3 \u6761\u5177\u4F53\u7684\u6539\u8FDB\u5EFA\u8BAE\u3002\u53EA\u8F93\u51FA\u4E00\u884C JSON\uFF1A{"optimized":"\u4F18\u5316\u540E\u7684\u95EE\u9898","suggestions":["\u5EFA\u8BAE1","\u5EFA\u8BAE2"]}',
+        maxTokens: 512
+      };
+      for await (const chunk of ctx.llm.stream(opts)) assembler.push(chunk);
+      const text = assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
+      const parsed = parseAskOptimize(text);
+      const optimized = parsed.optimized || text.slice(0, 300);
+      rc.op("task", "ask_optimize", "ok", "", optimized.slice(0, 80));
+      return { optimized, suggestions: parsed.suggestions };
+    },
+    async buildRagVectorIndex(options) {
+      const cfg = loadRetrievalConfig(rc.dirs().decrypted);
+      const embedModel = rc.embedModelName();
+      const embedFn = rc.makeEmbedFn(embedModel);
+      if (!embedFn) return { ok: false, status: "no-embedder", rows: 0, embedded: 0, elapsed_ms: 0, message: "\u672A\u914D\u7F6E embedding\uFF08\u8BF7\u5728\u6A21\u578B\u914D\u7F6E\u91CC\u586B\u5199\u5411\u91CF\u6A21\u578B\u6216 API Key\uFF09" };
+      try {
+        await ensureSearchIndex(rc.dirs().decrypted);
+      } catch {
+      }
+      try {
+        const r = await buildVectorIndex(rc.dirs().decrypted, embedFn, {
+          model: embedModel,
+          batchSize: cfg.embedding.batchSize,
+          concurrency: cfg.embedding.concurrency,
+          maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
+          maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
+          force: Boolean(options?.force)
+        });
+        rc.op("task", "build_vectors", "ok", "", `${r.status} rows=${r.rows} embedded=${r.embedded} ${r.elapsed_ms}ms`);
+        return { ok: true, ...r };
+      } catch (e) {
+        rc.op("task", "build_vectors", "fail", "", e.message);
+        return { ok: false, status: "error", rows: 0, embedded: 0, elapsed_ms: 0, message: e.message };
+      }
+    }
+  };
+}
+
 // src/backend/wechat-data/src/query/kb-queue.ts
 import { createHash as createHash11 } from "node:crypto";
 import { existsSync as existsSync41, readFileSync as readFileSync19 } from "node:fs";
@@ -17572,7 +18805,7 @@ import { dirname as dirname29 } from "node:path";
 import { DatabaseSync as DatabaseSync34 } from "node:sqlite";
 var KB_MODELS_TABLE = "kb_models";
 var INLINE_PREFIX = "m:";
-function errorText8(e) {
+function errorText10(e) {
   const msg = e?.message;
   return typeof msg === "string" && msg !== "" ? msg : String(e);
 }
@@ -17592,7 +18825,7 @@ function openModelsDb(decryptedDir, readOnly = false) {
     try {
       mkdirSync18(dirname29(file), { recursive: true });
     } catch (e) {
-      console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText8(e));
+      console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
     }
   }
   const db = new DatabaseSync34(file, readOnly ? { readOnly: true } : {});
@@ -17789,142 +19022,8 @@ function dot(a, b) {
   return s;
 }
 
-// src/backend/wechat-data/src/query/retrieval/kb-channel.ts
-function kbDocKey(kbId, chunkId) {
-  return "kb:" + kbId + ":" + chunkId;
-}
-function citationDocKey(c) {
-  if (c.source === "kb") {
-    const kb = c.kb;
-    return kb ? kbDocKey(kb.kbId, kb.chunkId) : "";
-  }
-  return (c.username ?? "") + ":" + (c.local_id ?? 0);
-}
-function kbDocFromHit(kbId, h) {
-  return {
-    docKey: kbDocKey(kbId, h.chunkId),
-    username: "kb:" + kbId + ":" + h.fileId,
-    // name 只放文件名：界面要把它与面包屑分开展示（`知识库文件 合同.pdf · 第 3 节`），
-    // 合并成一个字符串后界面只能整体显示或自己做字符串切割，两种都不好。
-    name: h.fileName,
-    local_id: 0,
-    create_time: 0,
-    // text 是块全文（kb-search 随命中一并返回）：重排的词覆盖率要在全文上判命中，
-    // 只拿 snippet（命中词前后各 60 字）会把落在窗口外的检索词误判为未命中。
-    text: h.text || h.snippet,
-    snippet: h.snippet,
-    source: "kb",
-    kb: {
-      kbId,
-      fileId: h.fileId,
-      fileName: h.fileName,
-      fileExt: h.fileExt,
-      chunkId: h.chunkId,
-      ordinal: h.ordinal,
-      page: h.page,
-      heading: h.heading
-    }
-  };
-}
-function errorText9(e) {
-  const msg = e?.message;
-  return typeof msg === "string" && msg !== "" ? msg : String(e);
-}
-var DEFAULT_FUSION_K = 60;
-function fuseKbHits(sparseHits, denseHits, opts = {}) {
-  const rawK = Number(opts.k);
-  const k = Number.isFinite(rawK) && rawK >= 0 ? rawK : DEFAULT_FUSION_K;
-  const acc = /* @__PURE__ */ new Map();
-  const put = (side, hit, rank) => {
-    const id = Math.trunc(Number(hit.chunkId));
-    if (!Number.isFinite(id) || id <= 0) return;
-    const e = acc.get(id) ?? {};
-    const prev = e[side];
-    if (prev === void 0 || rank < prev.rank) e[side] = { hit, rank };
-    acc.set(id, e);
-  };
-  sparseHits.forEach((h, i) => put("sparse", h, i + 1));
-  denseHits.forEach((h, i) => {
-    const r = Number(h.ranks?.dense ?? 0);
-    put("dense", h, r > 0 ? r : i + 1);
-  });
-  const out = [];
-  for (const e of acc.values()) {
-    const ranks = {};
-    if (e.sparse) ranks.sparse = e.sparse.rank;
-    if (e.dense) ranks.dense = e.dense.rank;
-    const base = e.sparse?.hit ?? e.dense?.hit;
-    out.push({
-      hit: { ...base, ranks },
-      score: (e.sparse ? 1 / (k + e.sparse.rank) : 0) + (e.dense ? 1 / (k + e.dense.rank) : 0)
-    });
-  }
-  out.sort((a, b) => b.score - a.score || a.hit.chunkId - b.hit.chunkId);
-  return out;
-}
-async function kbChannel(decryptedDir, kbId, query, topK, opts = {}) {
-  if (!Number.isFinite(kbId) || (kbId ?? 0) <= 0) {
-    return { channel: "kb", hits: [], active: false, note: "\u672C\u6B21\u63D0\u95EE\u672A\u6307\u5B9A\u77E5\u8BC6\u5E93" };
-  }
-  const q = (query ?? "").trim();
-  if (q === "") return { channel: "kb", hits: [], active: false, note: "\u65E0\u68C0\u7D22\u8BCD" };
-  if (!Number.isFinite(topK) || topK <= 0) return { channel: "kb", hits: [], active: false, note: "\u901A\u9053\u914D\u989D\u4E3A 0" };
-  const kb = kbId;
-  const embed = opts.embedFn;
-  const useDense = opts.denseEnabled === true && typeof embed === "function";
-  const sparseTask = (async () => {
-    try {
-      const res = searchKb(decryptedDir, kb, { query: q, topK, onlyRag: true });
-      if (res.error) return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u65E0\u6548\uFF1A" + res.error };
-      if (res.readError) return { hits: [], failed: "\u77E5\u8BC6\u5E93\u6253\u4E0D\u5F00\uFF1A" + res.readError };
-      return { hits: res.hits, ...res.degraded ? { degraded: res.degraded } : {} };
-    } catch (e) {
-      return { hits: [], failed: "\u77E5\u8BC6\u5E93\u68C0\u7D22\u5931\u8D25\uFF1A" + errorText9(e) };
-    }
-  })();
-  const denseTask = useDense ? (async () => {
-    try {
-      const res = await searchKbDense(decryptedDir, kb, q, embed, {
-        topK,
-        minSimilarity: opts.minSimilarity ?? 0,
-        candidatePool: opts.candidatePool ?? Math.max(Math.trunc(topK), 1),
-        model: opts.embedModel ?? ""
-      });
-      return { hits: res.hits, ...res.note ? { note: res.note } : {} };
-    } catch (e) {
-      return { hits: [], note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25\uFF1A" + errorText9(e) };
-    }
-  })() : Promise.resolve(null);
-  const [sparse, dense] = await Promise.all([sparseTask, denseTask]);
-  const fused = fuseKbHits(sparse.hits, dense?.hits ?? [], { k: opts.fusionK ?? DEFAULT_FUSION_K });
-  const hits = fused.slice(0, Math.max(1, Math.trunc(topK))).map((f, i) => ({
-    doc: kbDocFromHit(kb, f.hit),
-    // score 给融合分而不是 bm25 / 余弦：本通道内部已经把两路合成一个序，
-    // 拿其中任何一把尺子当分都是「两把尺子量同一件事」（跨通道融合只用名次，分数不外传）。
-    score: f.score,
-    rank: i + 1
-  }));
-  const notes = [];
-  if (sparse.failed) notes.push(sparse.failed);
-  if (dense) {
-    if (dense.note) notes.push(dense.note);
-  } else if (sparse.failed === void 0) {
-    if (sparse.degraded && sparse.degraded.reason !== "no-vector-index") notes.push(sparse.degraded.label);
-    notes.push(opts.denseEnabled === true ? "\u4EC5\u5173\u952E\u8BCD\uFF08\u672A\u914D\u7F6E\u5411\u91CF\u6A21\u578B\uFF09" : "\u4EC5\u5173\u952E\u8BCD\uFF08\u672C\u6B21\u672A\u542F\u7528\u5411\u91CF\u901A\u9053\uFF09");
-  }
-  return {
-    channel: "kb",
-    hits,
-    active: hits.length > 0,
-    // 命中为空时也要给出**如实**的原因（例如「查询里没有可检索的字词」），
-    // 而不是让它显示成「知识库是空的」。
-    ...notes.length > 0 ? { note: notes.join("\uFF1B") } : {},
-    ...hits.length === 0 && notes.length === 0 ? { note: "\u77E5\u8BC6\u5E93\u6CA1\u6709\u5339\u914D\u7684\u5185\u5BB9" } : {}
-  };
-}
-
 // src/backend/wechat-data/src/remotes/kb.ts
-import { BlockAssembler as BlockAssembler3, createUserMessage as createUserMessage3 } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler as BlockAssembler4, createUserMessage as createUserMessage4 } from "@deepseek-ai/dsh-llm";
 var SUMMARY_INPUT_CHARS = 8e3;
 function createKbRemotes(rc) {
   return {
@@ -18060,11 +19159,11 @@ ${body}`;
         rc.op("task", "kb_file_summary", "skip", `id=${id}`, gate.error);
         return { ok: false, error: gate.error };
       }
-      const assembler = new BlockAssembler3();
+      const assembler = new BlockAssembler4();
       const opts = {
         provider: sel.provider,
         model: chatModel,
-        messages: [createUserMessage3({
+        messages: [createUserMessage4({
           content: [{ type: "text", text: gate.texts[0] ?? prompt }],
           source: { kind: "plugin", plugin: "dsh-wechat-data" }
         })],
@@ -22783,592 +23882,6 @@ function countRows2(path, table) {
   }
 }
 
-// src/backend/wechat-data/src/query/grounding.ts
-var MAX_REPORTED = 6;
-var MAX_SUM_POOL = 40;
-var MAX_SUM_CENTS = 1e7;
-var MAX_SUM_TERMS = 3;
-var VALUE_RE = /(\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*[日号]?)|([¥￥]?\s*\d[\d,]*(?:\.\d+)?\s*(?:万元|万块|万|元|块钱|块|圆))|(\+?\d[\d\-\s]{5,}\d)/g;
-var NUMBER_RE = /\d+(?:[.,]\d+)?/g;
-var CLOCK_RE = /\d{1,2}:\d{2}/g;
-var SENTENCE_RE = /[^\n。！？!?；;]+/g;
-function normDate(raw) {
-  const m = raw.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/);
-  if (!m) return "";
-  const p = (n) => String(Number(n)).padStart(2, "0");
-  return `${m[1]}-${p(m[2])}-${p(m[3])}`;
-}
-function amountToCents(raw) {
-  const m = raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(万元|万块|万|元|块钱|块|圆)/);
-  if (!m) return NaN;
-  const n = Number(m[1].replace(/,/g, ""));
-  if (!Number.isFinite(n)) return NaN;
-  const unit = m[2];
-  const scale = unit === "\u4E07\u5143" || unit === "\u4E07\u5757" || unit === "\u4E07" ? 1e4 : 1;
-  return Math.round(n * scale * 100);
-}
-function numberToCents(raw) {
-  const n = Number(raw.replace(/,/g, ""));
-  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
-}
-function digitsOnly(raw) {
-  return raw.replace(/\D+/g, "");
-}
-function scanValues(text) {
-  const out = [];
-  for (const m of String(text || "").matchAll(VALUE_RE)) {
-    if (m[1]) out.push({ kind: "date", raw: m[1] });
-    else if (m[2]) out.push({ kind: "amount", raw: m[2] });
-    else if (m[3]) out.push({ kind: "digits", raw: m[3] });
-  }
-  return out;
-}
-function buildValuePools(evidenceTexts) {
-  const text = evidenceTexts.join("\n");
-  const dates = /* @__PURE__ */ new Set();
-  const digits = [];
-  const amounts = [];
-  const timeRanges = [];
-  for (const m of text.matchAll(VALUE_RE)) {
-    const at = m.index ?? 0;
-    if (m[1]) {
-      const d = normDate(m[1]);
-      if (d) dates.add(d);
-      timeRanges.push([at, at + m[1].length]);
-    } else if (m[2]) {
-      const c = amountToCents(m[2]);
-      if (Number.isFinite(c) && c > 0) amounts.push(c);
-    } else if (m[3]) {
-      const s = digitsOnly(m[3]);
-      if (s.length >= 7) digits.push(s);
-    }
-  }
-  for (const m of text.matchAll(CLOCK_RE)) {
-    const at = m.index ?? 0;
-    timeRanges.push([at, at + m[0].length]);
-  }
-  const cents = /* @__PURE__ */ new Set();
-  for (const m of text.matchAll(NUMBER_RE)) {
-    const at = m.index ?? 0;
-    if (timeRanges.some(([a, b]) => at >= a && at < b)) continue;
-    const c = numberToCents(m[0]);
-    if (Number.isFinite(c) && c > 0) cents.add(c);
-  }
-  return { dates, digits, cents, sums: buildSums(amounts) };
-}
-function buildSums(cents) {
-  const out = /* @__PURE__ */ new Set();
-  const pool = [];
-  const used = /* @__PURE__ */ new Map();
-  for (const c of cents) {
-    const n = used.get(c) ?? 0;
-    if (n >= MAX_SUM_TERMS) continue;
-    used.set(c, n + 1);
-    pool.push(c);
-    if (pool.length >= MAX_SUM_POOL) break;
-  }
-  for (const c of pool) if (c <= MAX_SUM_CENTS) out.add(c);
-  for (let i = 0; i < pool.length; i += 1) {
-    for (let j = i + 1; j < pool.length; j += 1) {
-      const s2 = pool[i] + pool[j];
-      if (s2 <= MAX_SUM_CENTS) out.add(s2);
-      for (let k = j + 1; k < pool.length; k += 1) {
-        const s3 = s2 + pool[k];
-        if (s3 <= MAX_SUM_CENTS) out.add(s3);
-      }
-    }
-  }
-  return out;
-}
-function digitsSupported(value, pool) {
-  for (const p of pool) {
-    if (p === value || p.includes(value) || value.includes(p)) return true;
-  }
-  return false;
-}
-function auditGrounding(answer, evidenceTexts, citationCount) {
-  const text = String(answer || "");
-  const pools = buildValuePools(evidenceTexts);
-  const seen = /* @__PURE__ */ new Set();
-  const unsupported = [];
-  let checked = 0;
-  for (const v of scanValues(text)) {
-    let key = "";
-    let supported = false;
-    if (v.kind === "date") {
-      const d = normDate(v.raw);
-      if (!d) continue;
-      key = "date:" + d;
-      supported = pools.dates.has(d);
-    } else if (v.kind === "amount") {
-      const c = amountToCents(v.raw);
-      if (!Number.isFinite(c)) continue;
-      key = "amount:" + c;
-      supported = pools.cents.has(c) || pools.sums.has(c);
-    } else {
-      const s = digitsOnly(v.raw);
-      if (s.length < 7) continue;
-      key = "digits:" + s;
-      supported = digitsSupported(s, pools.digits);
-    }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    checked += 1;
-    if (!supported && unsupported.length < MAX_REPORTED) {
-      unsupported.push({ kind: v.kind, value: v.raw.replace(/\s+/g, "").trim() });
-    }
-  }
-  let uncited = 0;
-  for (const sentence of text.match(SENTENCE_RE) ?? []) {
-    if (scanValues(sentence).length === 0) continue;
-    if (!/\[\d{1,3}\]/.test(sentence)) uncited += 1;
-  }
-  return {
-    checked,
-    unsupported,
-    uncited,
-    cited: parseCitedIndexes(text, citationCount),
-    ok: unsupported.length === 0
-  };
-}
-function groundingRepairHint(audit) {
-  if (audit.unsupported.length === 0) return "";
-  const list = audit.unsupported.map((v) => `\u300C${v.value}\u300D`).join("\u3001");
-  return `\u3010\u6838\u5BF9\u672A\u901A\u8FC7\u3011\u4F60\u5199\u7684 ${list} \u5728\u4F60\u5F15\u7528\u7684\u539F\u6587\u91CC\u627E\u4E0D\u5230\u51FA\u5904\u3002\u8BF7\u6539\u5199\uFF1A
- \xB7 \u5982\u679C\u5B83\u4EEC\u662F**\u5408\u8BA1**\uFF0C\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\u5F97\u51FA\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF1B
- \xB7 \u5982\u679C\u4E0D\u662F\u5408\u8BA1\uFF0C\u5C31\u5220\u6389\uFF0C\u6216\u6539\u6210\u539F\u6587\u91CC**\u539F\u6837\u51FA\u73B0**\u7684\u503C\uFF1B
- \xB7 \u65E5\u671F\u53EA\u80FD\u5199\u539F\u6587\u91CC\u51FA\u73B0\u8FC7\u7684\u65E5\u671F\uFF0C\u4E0D\u8981\u81EA\u5DF1\u6362\u7B97\u6216\u63A8\u6D4B\u3002`;
-}
-
-// src/backend/wechat-data/src/query/retrieval/compress.ts
-var WINDOW_SPAN_MS2 = 15 * 60 * 1e3;
-var WINDOW_MAX_MSGS2 = 14;
-function formatDay2(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function formatClock2(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function norm(s) {
-  return String(s || "").replace(/\s+/g, "");
-}
-function gramsOf3(s) {
-  const out = /* @__PURE__ */ new Set();
-  for (let i = 0; i + 3 <= s.length; i += 1) out.add(s.slice(i, i + 3));
-  if (out.size === 0 && s) out.add(s);
-  return out;
-}
-function jaccardGrams(ga, gb) {
-  if (ga.size === 0 || gb.size === 0) return 0;
-  let inter = 0;
-  for (const t of ga) if (gb.has(t)) inter += 1;
-  return inter / (ga.size + gb.size - inter);
-}
-function compressContext(decryptedDir, ranked, opts) {
-  const chunks = [];
-  let windowMessages = 0;
-  let usedChars = 0;
-  const chosen = [];
-  const seenByUser = /* @__PURE__ */ new Map();
-  for (const r of ranked) {
-    if (chunks.length >= opts.maxChunks) break;
-    if (usedChars >= opts.maxChars) break;
-    const d = r.doc;
-    if (d.source === "kb") {
-      const text = d.text || d.snippet;
-      const cost2 = text.length + 8;
-      if (usedChars + cost2 > opts.maxChars && chunks.length > 0) break;
-      usedChars += cost2;
-      chunks.push({
-        username: d.username,
-        name: d.name,
-        anchor: {
-          name: d.name,
-          // 时间留空而不是编一个：文件块没有发生时间（create_time=0 ⇒ timeFull 返回空串），
-          // 编一个时间戳会让模型把文件内容说成「某天发生的事」。
-          time: "",
-          snippet: d.snippet || text.slice(0, 90),
-          username: d.username,
-          local_id: d.local_id,
-          source: "kb",
-          ...d.kb ? { kb: d.kb } : {}
-        },
-        // 单行 = 整块正文。**不按 `linesPerChunk` 再切一次**：块本身已经是有语义边界的
-        // 切分单元（500 字 / 表格 40 行一组，见 kb/chunk.ts），再切只会把一句话劈成两半。
-        lines: [{ time: "", sender: "", text }],
-        score: r.score,
-        pref: r.timePref,
-        createTime: d.create_time
-      });
-      continue;
-    }
-    if (chosen.some((c) => c.username === d.username && d.create_time >= c.start && d.create_time <= c.end)) continue;
-    const centerMs = d.create_time * 1e3;
-    const win = loadMessageWindow(decryptedDir, d.username, centerMs, WINDOW_SPAN_MS2, WINDOW_MAX_MSGS2);
-    windowMessages += win.length;
-    const rawLines = win.length > 0 ? win.map((w) => ({ time: formatClock2(w.create_time), day: formatDay2(w.create_time), sender: w.sender ? w.sender : "", text: w.text, ts: w.create_time, localId: w.local_id })) : [{ time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text, ts: d.create_time, localId: d.local_id }];
-    const lines = [];
-    let anchorPresent = false;
-    for (const l of rawLines) {
-      if (lines.length >= opts.linesPerChunk) break;
-      const body = norm(l.text);
-      if (!body) continue;
-      const bodyGrams = gramsOf3(body);
-      const isAnchor = l.localId === d.local_id;
-      const seen = seenByUser.get(d.username);
-      if (!isAnchor && seen && seen.some((s) => s.text === body || jaccardGrams(s.grams, bodyGrams) >= opts.dedupThreshold)) continue;
-      lines.push({ time: l.time, day: l.day, sender: l.sender, text: l.text });
-      const bucket = seen ?? [];
-      bucket.push({ text: body, grams: bodyGrams });
-      if (!seen) seenByUser.set(d.username, bucket);
-      if (isAnchor) anchorPresent = true;
-    }
-    if (!anchorPresent) {
-      const al = { time: formatClock2(d.create_time), day: formatDay2(d.create_time), sender: d.sender ?? "", text: d.snippet || d.text };
-      const at = lines.findIndex((l) => l.time > al.time);
-      if (at < 0) lines.push(al);
-      else lines.splice(at, 0, al);
-      while (lines.length > opts.linesPerChunk) lines.pop();
-    }
-    if (lines.length === 0) continue;
-    const cost = lines.reduce((a, l) => a + l.text.length + 8, 0);
-    if (usedChars + cost > opts.maxChars && chunks.length > 0) break;
-    usedChars += cost;
-    chunks.push({
-      username: d.username,
-      name: d.name,
-      anchor: {
-        name: d.name,
-        time: timeFull(d.create_time),
-        snippet: d.snippet || d.text.slice(0, 90),
-        username: d.username,
-        local_id: d.local_id,
-        ...d.sender ? { sender: d.sender } : {}
-      },
-      lines,
-      score: r.score,
-      pref: r.timePref,
-      createTime: d.create_time
-    });
-    chosen.push({ username: d.username, start: centerMs - WINDOW_SPAN_MS2, end: centerMs + WINDOW_SPAN_MS2 });
-  }
-  return { chunks, windowMessages, usedChars };
-}
-function timeFull(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-// src/backend/wechat-data/src/query/retrieval/pipeline.ts
-var RERANK_CANDIDATE_LIMIT = 60;
-function errorText10(e) {
-  const msg = e?.message;
-  return typeof msg === "string" && msg !== "" ? msg : String(e);
-}
-function docFromHit(h) {
-  return {
-    docKey: h.username + ":" + h.local_id,
-    username: h.username,
-    name: h.name,
-    local_id: h.local_id,
-    create_time: h.create_time,
-    text: h.text,
-    snippet: h.snippet,
-    ...h.sender ? { sender: h.sender } : {}
-  };
-}
-function inRange(tsSec, fromMs, toMs) {
-  if (!Number.isFinite(fromMs) && !Number.isFinite(toMs)) return true;
-  const ms = tsSec * 1e3;
-  if (ms <= 0) return false;
-  if (Number.isFinite(fromMs) && ms < fromMs) return false;
-  if (Number.isFinite(toMs) && ms > toMs) return false;
-  return true;
-}
-function sparseChannel2(decryptedDir, terms, topK, username) {
-  if (terms.length === 0) return { channel: "sparse", hits: [], active: false, note: "\u65E0\u68C0\u7D22\u8BCD" };
-  const res = searchIndexBatch(decryptedDir, terms, topK, username ? { username } : void 0);
-  if (!res.ranked) return { channel: "sparse", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
-  const hits = res.hits.map((h, i) => ({ doc: docFromHit(h), score: h.score ?? 0, rank: i + 1 }));
-  return { channel: "sparse", hits, active: true };
-}
-function structuredChannel2(decryptedDir, plan, topK, scopeFrom, scopeTo, scopeUsername) {
-  const hasEntity = Boolean(plan.entity);
-  const hasTime = Boolean(plan.from || plan.to);
-  if (!hasEntity && !hasTime) return { channel: "structured", hits: [], active: false, note: "\u65E0\u5B9E\u4F53/\u65F6\u95F4\u7EBF\u7D22" };
-  const terms = hasEntity ? [] : plan.terms.slice(0, 4);
-  const res = searchIndexBatch(decryptedDir, terms, topK, {
-    ...scopeUsername ? { username: scopeUsername } : {},
-    ...hasEntity ? { person: plan.entity } : {}
-  });
-  if (!res.ranked) return { channel: "structured", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
-  const hardFrom = scopeFrom ? (/* @__PURE__ */ new Date(scopeFrom + "T00:00:00")).getTime() : NaN;
-  const hardTo = scopeTo ? (/* @__PURE__ */ new Date(scopeTo + "T23:59:59")).getTime() : NaN;
-  const useHard = Number.isFinite(hardFrom) || Number.isFinite(hardTo);
-  const softFrom = !useHard && plan.from ? (/* @__PURE__ */ new Date(plan.from + "T00:00:00")).getTime() : NaN;
-  const softTo = !useHard && plan.to ? (/* @__PURE__ */ new Date(plan.to + "T23:59:59")).getTime() : NaN;
-  const fromMs = useHard ? hardFrom : softFrom;
-  const toMs = useHard ? hardTo : softTo;
-  const filtered = Number.isFinite(fromMs) || Number.isFinite(toMs) ? res.hits.filter((h) => inRange(h.create_time, fromMs, toMs)) : res.hits;
-  const hits = filtered.slice(0, topK).map((h, i) => ({ doc: docFromHit(h), score: h.score ?? 1 / (i + 1), rank: i + 1 }));
-  return {
-    channel: "structured",
-    hits,
-    active: hits.length > 0,
-    ...hits.length === 0 ? { note: "\u7ED3\u6784\u5316\u8FC7\u6EE4\u540E\u65E0\u547D\u4E2D" } : {}
-  };
-}
-function dayStartMs2(day) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? (/* @__PURE__ */ new Date(day + "T00:00:00")).getTime() : NaN;
-}
-function dayEndMs2(day) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? (/* @__PURE__ */ new Date(day + "T23:59:59")).getTime() + 999 : NaN;
-}
-var TIME_BUCKET_MS = 30 * 60 * 1e3;
-function spreadByBucket(hits) {
-  const buckets = /* @__PURE__ */ new Map();
-  for (const h of hits) {
-    const slot = Math.floor(h.create_time * 1e3 / TIME_BUCKET_MS);
-    const b = buckets.get(slot);
-    if (b) b.count += 1;
-    else buckets.set(slot, { hit: h, count: 1 });
-  }
-  const slots = [...buckets.keys()];
-  if (slots.length <= 1) return [...buckets.values()].map((b) => b.hit);
-  let seed = slots[0];
-  for (const s of slots) {
-    const c = buckets.get(s).count;
-    const cs = buckets.get(seed).count;
-    if (c > cs || c === cs && s > seed) seed = s;
-  }
-  const picked = [seed];
-  const rest = new Set(slots.filter((s) => s !== seed));
-  while (rest.size > 0) {
-    let best = -1;
-    let bestDist = -1;
-    let bestCount = -1;
-    for (const s of rest) {
-      let d = Infinity;
-      for (const p of picked) d = Math.min(d, Math.abs(s - p));
-      const c = buckets.get(s).count;
-      if (d > bestDist || d === bestDist && c > bestCount) {
-        best = s;
-        bestDist = d;
-        bestCount = c;
-      }
-    }
-    picked.push(best);
-    rest.delete(best);
-  }
-  return picked.map((s) => buckets.get(s).hit);
-}
-function spreadOrderRanked(ranked, channels) {
-  const timeCh = channels.find((c) => c.channel === "time");
-  if (!timeCh || timeCh.hits.length === 0) return ranked;
-  const order = /* @__PURE__ */ new Map();
-  timeCh.hits.forEach((h, i) => order.set(h.doc.docKey, i));
-  return [...ranked].sort((a, b) => {
-    const ia = order.get(a.doc.docKey) ?? Number.MAX_SAFE_INTEGER;
-    const ib = order.get(b.doc.docKey) ?? Number.MAX_SAFE_INTEGER;
-    return ia - ib || b.doc.create_time - a.doc.create_time;
-  });
-}
-function timeChannel(decryptedDir, plan, topK, scopeUsername, now, stratify) {
-  let loMs = plan.from ? dayStartMs2(plan.from) : NaN;
-  let hiMs = plan.to ? dayEndMs2(plan.to) : NaN;
-  if (!Number.isFinite(loMs) && Number.isFinite(hiMs)) loMs = hiMs - 30 * 864e5;
-  if (Number.isFinite(loMs) && !Number.isFinite(hiMs)) hiMs = Math.min(loMs + 7 * 864e5, now.getTime());
-  if (!Number.isFinite(loMs) || !Number.isFinite(hiMs)) {
-    return { channel: "time", hits: [], active: false, note: "\u65E0\u6709\u6548\u65F6\u95F4\u7EBF\u7D22" };
-  }
-  const fetchCap = stratify ? 600 : topK;
-  const res = listMessagesInRange(
-    decryptedDir,
-    Math.floor(Math.min(loMs, hiMs) / 1e3),
-    Math.ceil(Math.max(loMs, hiMs) / 1e3),
-    fetchCap,
-    scopeUsername
-  );
-  if (!res.ready) return { channel: "time", hits: [], active: false, note: "\u7A00\u758F\u7D22\u5F15\u672A\u5C31\u7EEA" };
-  const picked = stratify ? spreadByBucket(res.hits) : res.hits;
-  const capped = stratify ? picked.slice(0, 240) : picked.slice(0, topK);
-  const hits = capped.map((h, i) => ({ doc: docFromHit(h), score: 1 / (i + 1), rank: i + 1 }));
-  return {
-    channel: "time",
-    hits,
-    active: hits.length > 0,
-    ...hits.length === 0 ? { note: "\u8BE5\u65E5\u671F\u8303\u56F4\u5185\u6CA1\u6709\u6D88\u606F" } : {}
-  };
-}
-async function denseChannel2(decryptedDir, plan, config, policy, embedFn, username) {
-  if (!config.embedding.enabled) return { channel: "dense", hits: [], active: false, note: "\u7A20\u5BC6\u901A\u9053\u5DF2\u5173\u95ED" };
-  if (!embedFn) return { channel: "dense", hits: [], active: false, note: "\u672A\u914D\u7F6E embedding" };
-  const st = vectorIndexStatus(decryptedDir);
-  if (!st.ready) return { channel: "dense", hits: [], active: false, note: "\u5411\u91CF\u7D22\u5F15\u672A\u5C31\u7EEA" };
-  try {
-    const res = await searchDense(decryptedDir, plan.normalized, embedFn, {
-      topK: policy.channelTopK.dense,
-      minSimilarity: config.channels.dense.minSimilarity,
-      candidatePool: config.channels.dense.candidatePool,
-      ...username ? { username } : {}
-    });
-    const hits = res.docs.map((d, i) => ({ doc: d, score: res.scores[i] ?? 0, rank: i + 1 }));
-    return {
-      channel: "dense",
-      hits,
-      active: hits.length > 0,
-      ...res.note ? { note: res.note } : {}
-    };
-  } catch (e) {
-    return { channel: "dense", hits: [], active: false, note: "\u7A20\u5BC6\u53EC\u56DE\u5931\u8D25: " + e.message };
-  }
-}
-async function runRetrievalPipeline(input) {
-  const started = Date.now();
-  const now = input.now ?? /* @__PURE__ */ new Date();
-  const config = input.config;
-  const limit = Math.min(Math.max(input.limit ?? 24, 1), 60);
-  let decision = classifyIntent(input.question, input.knownEntities ?? []);
-  if (config.intent.llmAssist && input.llmIntent) {
-    try {
-      const llmIntent = await input.llmIntent();
-      decision = refineIntentWithLlm(decision, llmIntent);
-    } catch {
-    }
-  }
-  const policy = defaultPolicyFor(decision.intent);
-  const params = effectiveParams(config, policy);
-  if (input.weightsOverride) params.weights = { ...params.weights, ...input.weightsOverride };
-  const plan = buildQueryPlan({
-    question: input.question,
-    subQueries: input.subQueries,
-    entity: input.entity,
-    from: input.from,
-    to: input.to,
-    scopeFrom: input.scope?.from,
-    scopeTo: input.scope?.to,
-    knownEntities: input.knownEntities,
-    now
-  });
-  const scopeUsername = input.scope?.username;
-  const channels = [];
-  const pureTime = plan.timeBrowse;
-  if (!pureTime && config.channels.sparse.enabled && policy.channels.includes("sparse")) {
-    channels.push(sparseChannel2(input.decryptedDir, plan.terms.slice(0, 12), params.channelTopK.sparse, scopeUsername));
-  }
-  if (!pureTime && config.channels.dense.enabled && policy.channels.includes("dense")) {
-    channels.push(await denseChannel2(input.decryptedDir, plan, config, policy, input.embedFn, scopeUsername));
-  }
-  if (config.channels.structured.enabled && policy.channels.includes("structured")) {
-    channels.push(structuredChannel2(input.decryptedDir, plan, params.channelTopK.structured, input.scope?.from ?? "", input.scope?.to ?? "", scopeUsername));
-  }
-  if (!pureTime && config.channels.kb.enabled && policy.channels.includes("kb")) {
-    const kbDenseEnabled = config.embedding.enabled && config.channels.dense.enabled && policy.channels.includes("dense");
-    channels.push(await kbChannel(
-      input.decryptedDir,
-      input.kbId,
-      plan.terms.slice(0, 12).join(" "),
-      params.channelTopK.kb,
-      {
-        ...input.embedFn ? { embedFn: input.embedFn } : {},
-        embedModel: input.embedModel ?? "",
-        denseEnabled: kbDenseEnabled,
-        minSimilarity: config.channels.dense.minSimilarity,
-        candidatePool: config.channels.dense.candidatePool,
-        fusionK: config.fusion.k
-      }
-    ));
-  }
-  if (policy.channels.includes("time") && (plan.from || plan.to)) {
-    const timeTopK = pureTime ? params.channelTopK.time : Math.min(params.channelTopK.time, 24);
-    channels.push(timeChannel(input.decryptedDir, plan, timeTopK, scopeUsername, now, pureTime));
-  }
-  const termWeights = /* @__PURE__ */ new Map();
-  const sparse = channels.find((c) => c.channel === "sparse");
-  const allTexts = channels.flatMap((c) => c.hits.map((h) => h.doc.text));
-  for (const t of plan.terms) {
-    let n = 0;
-    for (const txt of allTexts) if (txt.includes(t)) n += 1;
-    if (n > 0) termWeights.set(t, 1 / (1 + Math.min(n, 200)));
-  }
-  if (termWeights.size === 0) for (const t of plan.terms) termWeights.set(t, 1);
-  const recalled = channels.reduce((a, c) => a + c.hits.length, 0);
-  void sparse;
-  const fused = dedupeFused(fuseResults(channels, config.fusion.k, config.fusion.keep), config.compress.dedupThreshold);
-  const softFromMs = plan.from ? (/* @__PURE__ */ new Date(plan.from + "T00:00:00")).getTime() : NaN;
-  const softToMs = plan.to ? (/* @__PURE__ */ new Date(plan.to + "T23:59:59")).getTime() : NaN;
-  const ranked = rerankDocs({
-    fused,
-    terms: plan.terms,
-    termWeights,
-    entity: plan.entity,
-    softFromMs,
-    softToMs,
-    recency: plan.recency,
-    recencyFirst: policy.recencyFirst,
-    weights: params.weights,
-    now: Math.floor(now.getTime() / 1e3)
-  });
-  let rerankInfo = { used: false, note: "\u672C\u5730\u7EBF\u6027\u52A0\u6743\uFF08\u672A\u914D\u7F6E\u91CD\u6392\u5E8F\u6A21\u578B\uFF09" };
-  let poolRanked = ranked;
-  if (typeof input.rerank === "function" && ranked.length > 1 && !policy.recencyFirst && !pureTime) {
-    const take = Math.min(ranked.length, RERANK_CANDIDATE_LIMIT);
-    const head = ranked.slice(0, take);
-    const tail = ranked.slice(take);
-    try {
-      const scores = await input.rerank(plan.normalized, head.map((r) => r.doc.text));
-      const order = head.map((r, i) => ({ r, s: Number(scores[i] ?? 0), i }));
-      order.sort((a, b) => b.s - a.s || a.i - b.i);
-      poolRanked = [...order.map((o) => o.r), ...tail];
-      rerankInfo = { used: true, candidates: take, kept: Math.min(limit, take), model: input.rerankModel ?? "" };
-    } catch (e) {
-      rerankInfo = { used: false, note: "\u7CBE\u6392\u8FD9\u6B21\u6CA1\u8DD1\u6210\uFF1A" + errorText10(e) + "\uFF08\u5DF2\u9000\u56DE\u672C\u5730\u52A0\u6743\uFF09" };
-    }
-  } else if (typeof input.rerank === "function") {
-    rerankInfo = { used: false, note: "\u672C\u6B21\u672A\u505A\u6A21\u578B\u7CBE\u6392\uFF08\u5019\u9009\u4E0D\u8DB3\u4E24\u6761\uFF0C\u6216\u95EE\u6CD5\u8981\u7684\u662F\u65F6\u95F4\u5E8F\uFF09" };
-  }
-  const finalRanked = pureTime ? spreadOrderRanked(poolRanked, channels) : poolRanked;
-  const compressOpts = policy.wideRecall ? { ...config.compress, maxChunks: config.compress.maxChunks + 4, maxChars: Math.round(config.compress.maxChars * 1.5) } : config.compress;
-  const { chunks, windowMessages } = compressContext(input.decryptedDir, finalRanked.slice(0, limit), compressOpts);
-  const citations = chunks.map((c) => c.anchor);
-  const hintHits = Number.isFinite(softFromMs) || Number.isFinite(softToMs) ? finalRanked.slice(0, limit).filter((r) => r.timePref === 1).length : 0;
-  const stats = {
-    intent: decision.intent,
-    channels: channelSummary(channels),
-    recalled,
-    fused: fused.length,
-    ranked: ranked.length,
-    kept: citations.length,
-    compressed: chunks.length,
-    windowMessages,
-    terms: plan.terms.length,
-    entity: plan.entity,
-    timeHint: plan.from || plan.to ? `${plan.from || "\u2026"} ~ ${plan.to || "\u2026"}` : "",
-    hintHits,
-    recency: plan.recency,
-    denseActive: channels.some((c) => c.channel === "dense" && c.active),
-    elapsedMs: Date.now() - started
-  };
-  return {
-    citations,
-    chunks,
-    terms: plan.terms,
-    plan,
-    policy,
-    rankedFeatures: finalRanked.slice(0, limit).map((r) => ({ docKey: r.doc.docKey, features: r.features })),
-    stats,
-    rerankInfo
-  };
-}
-
 // src/backend/wechat-data/src/query/ledger.ts
 import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
 import { existsSync as existsSync58 } from "node:fs";
@@ -25552,24 +26065,9 @@ function clearAllSessionDrafts(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/gateway.ts
-import { BlockAssembler as BlockAssembler4, createUserMessage as createUserMessage4 } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
 function privacyStoreUnreadable(feature, detail) {
   return `\u8BFB\u5230\u9690\u79C1\u8BBE\u7F6E\u5931\u8D25\uFF08wechat_privacy.db \u4E0D\u53EF\u8BFB\uFF09\uFF0C\u5DF2\u6309\u300C\u51FA\u7AD9\u62E6\u622A\u300D\u5904\u7406\uFF1A\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}`;
-}
-function askBasisLine(citations) {
-  if (citations.length === 0) return "";
-  const msgs = citations.filter((c) => c.source !== "kb");
-  const kbItems = citations.filter((c) => c.source === "kb");
-  const sessions = new Set(msgs.map((c) => c.username ?? "")).size;
-  const days = msgs.map((c) => (c.time ?? "").slice(0, 10)).filter(Boolean).sort();
-  const span = days.length > 0 ? ` \xB7 ${days[0]} ~ ${days[days.length - 1]}` : "";
-  const parts = [`${citations.length} \u6761\u539F\u6587`];
-  if (msgs.length > 0) parts.push(`${sessions} \u4E2A\u4F1A\u8BDD`);
-  if (kbItems.length > 0) {
-    const files = new Set(kbItems.map((c) => c.kb?.fileId !== void 0 ? "f" + c.kb.fileId : c.kb?.fileName ?? c.snippet ?? ""));
-    parts.push(`${files.size} \u4E2A\u77E5\u8BC6\u5E93\u6587\u4EF6`);
-  }
-  return `\u4F9D\u636E\u672C\u673A\u8BB0\u5F55\uFF1A${parts.join(" \xB7 ")}${span}`;
 }
 function rawWechatBase(decrypted) {
   const pinned = process.env.DSH_WECHAT_BASE_DIR;
@@ -25675,6 +26173,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     this._graphSearchRemotes = void 0;
     this._summaryRecordRemotes = void 0;
     this._voiceLlmRemotes = void 0;
+    this._askDeepRemotes = void 0;
     this._ctx = ctx;
     this._dirs = resolveDirs();
     const decrypted = this._dirs.decrypted;
@@ -25967,11 +26466,11 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
       if (blocked !== null) throw new Error(blocked);
       const gate = this.privacyGate(feature, { sessions: 0, messages: 0 }, [prompt]);
       if (!gate.ok) throw new Error(gate.error);
-      const assembler = new BlockAssembler4();
+      const assembler = new BlockAssembler5();
       const opts = {
         provider,
         model,
-        messages: [createUserMessage4({
+        messages: [createUserMessage5({
           content: [{ type: "text", text: gate.texts[0] ?? prompt }],
           source: { kind: "plugin", plugin: "dsh-wechat-data" }
         })],
@@ -26170,6 +26669,24 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
       setWhisperTranscribing: (v) => {
         this.whisperTranscribing = v;
       }
+    });
+  }
+  /** 问答主链路（提问检索生成、问题优化、向量索引重建） 的处理器（体在 remotes/askdeep.ts）；这里只组装 ctx 与转发。 */
+  askDeepRemotes() {
+    return this._askDeepRemotes ??= createAskDeepRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      ctx: () => this._ctx,
+      askTrace: this._askTrace,
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+      embedModelName: (override) => this.embedModelName(override),
+      makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
+      makeRerankFn: (kbId) => this.makeRerankFn(kbId),
+      makeDeltaEmitter: (streamId) => this.makeDeltaEmitter(streamId),
+      kbModel: (kbId, role) => this.kbModel(kbId, role),
+      askKnownEntities: () => this.askKnownEntities(),
+      saveAskHistory: (options, result, elapsedMs, model) => this.saveAskHistory(options, result, elapsedMs, model)
     });
   }
   getSessions(options) {
@@ -26401,425 +26918,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     };
   }
   async askWechat(options) {
-    const ctx = this._ctx;
-    const askStartedAt = Date.now();
-    const blocked = this.privacyBlocked("ask_wechat");
-    if (blocked !== null) {
-      this.op("task", "ask_wechat", "skip", "", blocked);
-      throw new Error(blocked);
-    }
-    const defaultModel = ctx.agentDefaultModel;
-    const sel = defaultModel?.currentSelection();
-    if (!sel || !sel.provider || !sel.model) {
-      this.op("task", "ask_wechat", "fail", "", "\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09");
-      throw new Error("\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09\uFF0C\u65E0\u6CD5\u8C03\u7528 AI \u95EE\u7B54");
-    }
-    const modelLabel = `${sel.provider} \xB7 ${sel.model}`;
-    const scope = {
-      username: typeof options.username === "string" && options.username ? options.username : void 0,
-      from: typeof options.from === "string" && options.from ? options.from : void 0,
-      to: typeof options.to === "string" && options.to ? options.to : void 0
-    };
-    const history = (Array.isArray(options.history) ? options.history : []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim().length > 0).slice(-16);
-    const HISTORY_BUDGET = 4e3;
-    let historyUsed = 0;
-    const trimmedHistory = [];
-    for (const m of [...history].reverse()) {
-      const room = HISTORY_BUDGET - historyUsed;
-      if (room <= 80) break;
-      const text = m.content.trim().slice(0, Math.min(m.role === "assistant" ? 1200 : 400, room));
-      trimmedHistory.unshift({ role: m.role, content: text });
-      historyUsed += text.length;
-    }
-    const llm = ctx.llm;
-    const runChat = async (system, userText, maxTokens, onDelta) => {
-      const assembler = new BlockAssembler4();
-      const opts = {
-        provider: sel.provider,
-        model: sel.model,
-        messages: [createUserMessage4({
-          content: [{ type: "text", text: userText }],
-          source: { kind: "plugin", plugin: "dsh-wechat-data" }
-        })],
-        system,
-        maxTokens
-      };
-      let acc = "";
-      let emitted = false;
-      for await (const chunk of llm.stream(opts)) {
-        assembler.push(chunk);
-        const c = chunk;
-        if (onDelta && c.type === "text-delta" && typeof c.text === "string") {
-          acc += c.text;
-          emitted = true;
-          onDelta(acc);
-        }
-      }
-      if (onDelta && !emitted) {
-        const finalText = assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
-        if (finalText) onDelta(finalText);
-      }
-      return assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
-    };
-    const today = /* @__PURE__ */ new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    const weekday = ["\u5468\u65E5", "\u5468\u4E00", "\u5468\u4E8C", "\u5468\u4E09", "\u5468\u56DB", "\u5468\u4E94", "\u5468\u516D"][today.getDay()];
-    const scopeDesc = `\u4F1A\u8BDD=${scope.username ?? "\u5168\u90E8"}${scope.from ? `\uFF0C\u8D77\u59CB=${scope.from}` : ""}${scope.to ? `\uFF0C\u622A\u6B62=${scope.to}` : ""}`;
-    const historyBrief = history.length > 0 ? "\n\u5BF9\u8BDD\u5386\u53F2\uFF08\u6700\u8FD1\uFF09\uFF1A\n" + trimmedHistory.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content.slice(0, 300)).join("\n") : "";
-    const planPrompt = `\u4ECA\u5929\u662F ${todayStr}\uFF08${weekday}\uFF09\u3002
-\u7528\u6237\u95EE\u9898\uFF1A${options.question}
-\u5F53\u524D\u7B5B\u9009\u8303\u56F4\uFF1A${scopeDesc}${historyBrief}
-
-\u8BF7\u8F93\u51FA JSON\uFF08\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u5185\u5BB9\uFF09\u3002`;
-    const gatePlan = this.privacyGate("ask_wechat", { sessions: 0, messages: 0 }, [planPrompt]);
-    if (!gatePlan.ok) {
-      this.op("task", "ask_wechat", "skip", "", gatePlan.error);
-      throw new Error(gatePlan.error);
-    }
-    let plan;
-    try {
-      const planText = await runChat(
-        '\u4F60\u662F\u5FAE\u4FE1\u672C\u5730\u804A\u5929\u8BB0\u5F55\u7684\u68C0\u7D22\u89C4\u5212\u5668\u3002\u4EFB\u52A1\uFF1A\u5206\u6790\u7528\u6237\u95EE\u9898\uFF0C\u8F93\u51FA**\u68C0\u7D22\u5173\u952E\u8BCD**\u4E0E**\u9690\u542B\u6761\u4EF6**\u3002\u8981\u6C42\uFF1A\u2460 subQueries \u7ED9 1-4 \u4E2A\u771F\u6B63\u6709\u533A\u5206\u5EA6\u7684\u4E2D\u6587\u5173\u952E\u8BCD\u6216\u77ED\u8BED\uFF08\u4EBA\u540D\u3001\u4E8B\u7269\u3001\u52A8\u4F5C\u3001\u4E13\u6709\u540D\u8BCD\uFF09\uFF0C\u4E0D\u8981\u8F93\u51FA\u300C\u4EC0\u4E48/\u600E\u4E48/\u6211\u7684/\u7ED9\u6211/\u6700\u8FD1/\u4E00\u6B21\u300D\u8FD9\u7C7B\u7591\u95EE\u8BCD\u3001\u505C\u7528\u8BCD\u6216\u6CDB\u5316\u65F6\u95F4\u8BCD\uFF1B\u2461 \u95EE\u9898\u91CC\u51FA\u73B0\u76F8\u5BF9\u65F6\u95F4\uFF08\u4E0A\u5468\u4E09/\u6628\u5929/\u4E0A\u4E2A\u6708\uFF09\u65F6\uFF0C\u6309\u7ED9\u5B9A\u7684\u4ECA\u5929\u65E5\u671F\u6362\u7B97\u6210\u7EDD\u5BF9\u65E5\u671F\u586B from/to\uFF08YYYY-MM-DD\uFF0C\u5355\u65E5\u5219 from=to\uFF09\uFF0C\u8BC6\u522B\u4E0D\u51FA\u5C31\u7559\u7A7A\u5B57\u7B26\u4E32\uFF1B\u2462 \u95EE\u9898\u70B9\u540D\u4E86\u67D0\u4E2A\u4EBA\u5C31\u586B person\uFF0C\u5426\u5219\u7559\u7A7A\u5B57\u7B26\u4E32\u3002\u53EA\u8F93\u51FA\u4E00\u884C JSON\uFF1A{"intent":"\u4E00\u53E5\u8BDD\u610F\u56FE","subQueries":["\u5173\u952E\u8BCD1","\u5173\u952E\u8BCD2"],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","person":"\u4EBA\u540D"}',
-        gatePlan.texts[0] ?? planPrompt,
-        512
-      );
-      plan = parseAskPlan(planText);
-      if (plan.subQueries.length === 0 && options.question.trim()) plan.subQueries = [options.question.trim()];
-    } catch (e) {
-      plan = { intent: "\uFF08\u89C4\u5212\u5931\u8D25\uFF0C\u76F4\u63A5\u68C0\u7D22\u539F\u95EE\u9898\uFF09", subQueries: options.question.trim() ? [options.question.trim()] : [], from: "", to: "", person: "" };
-      this.op("task", "ask_wechat", "fail", "intent_plan", e.message);
-    }
-    try {
-      const ensured = await ensureSearchIndex(this._dirs.decrypted);
-      if (ensured.action === "build") {
-        this.op("task", "ask_wechat", "ok", "build_index", `\u68C0\u7D22\u7D22\u5F15\u5168\u91CF\u6784\u5EFA \xB7 ${ensured.rows ?? 0} \u6761 \xB7 ${ensured.elapsed_ms}ms`);
-      } else if (ensured.action === "sync") {
-        this.op("task", "ask_wechat", "ok", "build_index", `\u68C0\u7D22\u7D22\u5F15\u589E\u91CF\u540C\u6B65 \xB7 \u65B0\u589E ${ensured.added ?? 0} \u6761 \xB7 ${ensured.elapsed_ms}ms`);
-      } else if (ensured.message) {
-        this.op("task", "ask_wechat", "fail", "build_index", ensured.message);
-      }
-    } catch (e) {
-      this.op("task", "ask_wechat", "fail", "build_index", e.message);
-    }
-    const retrConfig = loadRetrievalConfig(this._dirs.decrypted);
-    const scopeDescText = [
-      scope.username ? "\u4F1A\u8BDD\u9650\u5B9A" : "",
-      scope.from ? `\u8D77 ${scope.from}` : "",
-      scope.to ? `\u6B62 ${scope.to}` : ""
-    ].filter(Boolean).join(" ") || "\u5168\u5E93";
-    let citations = [];
-    let chunks = [];
-    let terms = [];
-    let statsCompat = {
-      candidates: 0,
-      kept: 0,
-      scope: scopeDescText,
-      recency: false,
-      timeHint: "",
-      hintHits: 0,
-      chunks: 0,
-      windowMessages: 0
-    };
-    let rankedFeatures = [];
-    let retrievalId = "";
-    const legacyRetrieve = () => {
-      const legacy = retrieveAskCitations(
-        this._dirs.decrypted,
-        options.question,
-        { subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person },
-        scope,
-        24
-      );
-      citations = legacy.citations;
-      chunks = legacy.chunks;
-      terms = legacy.terms;
-      statsCompat = { ...legacy.stats };
-      rankedFeatures = [];
-      retrievalId = "";
-    };
-    let rerankLine = "";
-    if (retrConfig.enabled) {
-      try {
-        const embedModel = this.embedModelName(retrConfig.embedding.model);
-        const embedFn = this.makeEmbedFn(embedModel);
-        if (embedFn && retrConfig.embedding.enabled) {
-          const vst = vectorIndexStatus(this._dirs.decrypted);
-          if (!vst.ready) {
-            try {
-              const built = await buildVectorIndex(this._dirs.decrypted, embedFn, {
-                model: embedModel,
-                batchSize: retrConfig.embedding.batchSize,
-                concurrency: retrConfig.embedding.concurrency,
-                maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
-                maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild
-              });
-              this.op("task", "ask_wechat", "ok", "build_vectors", `\u5411\u91CF\u7D22\u5F15 ${built.status} \xB7 ${built.rows} \u6761\uFF08\u672C\u6B21 ${built.embedded}\uFF09\xB7 ${built.elapsed_ms}ms`);
-            } catch (e) {
-              this.op("task", "ask_wechat", "fail", "build_vectors", e.message);
-            }
-          }
-        }
-        const adapted = loadAdaptedWeights(this._dirs.decrypted);
-        const known = this.askKnownEntities();
-        const kbId = Number.isFinite(options.kbId) && (options.kbId ?? 0) > 0 ? Math.trunc(options.kbId) : void 0;
-        if (options.kbId !== void 0 && kbId === void 0) {
-          this.op("task", "ask_wechat", "fail", "kb_scope", `\u5FFD\u7565\u975E\u6CD5\u7684\u77E5\u8BC6\u5E93\u6807\u8BC6\uFF1A${String(options.kbId)}`);
-        }
-        const kbEmbedModel = kbId === void 0 ? embedModel : this.kbModel(kbId, "embed").model;
-        const rerankModelName = this.kbModel(kbId ?? 0, "rerank").model;
-        const rerankFn = this.makeRerankFn(kbId ?? 0);
-        if (kbId !== void 0 && retrConfig.embedding.enabled) {
-          const kbSt = kbVectorIndexStatus(this._dirs.decrypted, kbId, kbEmbedModel);
-          if (!kbSt.ready) {
-            try {
-              const kbEmbed = this.makeEmbedFn(kbEmbedModel, "kb_embed");
-              if (kbEmbed) {
-                const built = await buildKbVectorIndex(this._dirs.decrypted, kbId, kbEmbed, {
-                  model: kbEmbedModel,
-                  batchSize: retrConfig.embedding.batchSize,
-                  concurrency: retrConfig.embedding.concurrency,
-                  maxCharsPerDoc: retrConfig.embedding.maxCharsPerDoc,
-                  maxDocsPerBuild: retrConfig.embedding.maxDocsPerBuild
-                });
-                this.op(
-                  "task",
-                  "ask_wechat",
-                  "ok",
-                  "build_kb_vectors",
-                  `\u77E5\u8BC6\u5E93\u5411\u91CF ${built.status} \xB7 ${built.rows} \u6761\uFF08\u672C\u6B21 ${built.embedded}\uFF09\xB7 ${built.elapsed_ms}ms`
-                );
-              }
-            } catch (e) {
-              this.op("task", "ask_wechat", "fail", "build_kb_vectors", e.message);
-            }
-          }
-        }
-        const out = await runRetrievalPipeline({
-          decryptedDir: this._dirs.decrypted,
-          question: options.question,
-          subQueries: plan.subQueries,
-          entity: plan.person,
-          from: plan.from,
-          to: plan.to,
-          scope,
-          limit: 24,
-          config: retrConfig,
-          ...embedFn ? { embedFn } : {},
-          // 与 embedFn 同一个解析出来的模型名：稠密召回靠它判「库里那批向量是不是本次模型算的」。
-          // 传 kbEmbedModel 而不是 embedModel —— 知识库这一路可能被库级覆盖改过名字。
-          embedModel: kbEmbedModel,
-          // 精排：没配 rerank 模型时这里就是 undefined，管道整段跳过并按本地加权排序。
-          ...rerankFn ? { rerank: rerankFn } : {},
-          rerankModel: rerankModelName,
-          // 名单里已有的就不重复；规划器额外点出的名字也一并带上（可能不在通讯录里）。
-          knownEntities: plan.person && !known.includes(plan.person) ? [...known, plan.person] : known,
-          ...adapted ? { weightsOverride: adapted } : {},
-          ...kbId !== void 0 ? { kbId } : {}
-        });
-        rerankLine = out.rerankInfo.used ? ` \xB7 \u7CBE\u6392\uFF1A${out.rerankInfo.model || "\u672A\u77E5\u6A21\u578B"}\uFF08\u5019\u9009 ${out.rerankInfo.candidates} \u2192 \u53D6 ${out.rerankInfo.kept}\uFF09` : ` \xB7 \u7CBE\u6392\uFF1A${out.rerankInfo.note}`;
-        citations = out.citations;
-        chunks = out.chunks;
-        terms = out.terms;
-        rankedFeatures = out.rankedFeatures;
-        retrievalId = "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        statsCompat = {
-          candidates: out.stats.recalled,
-          kept: out.stats.kept,
-          scope: scopeDescText,
-          recency: out.stats.recency,
-          timeHint: out.stats.timeHint,
-          hintHits: out.stats.hintHits,
-          chunks: out.stats.compressed,
-          windowMessages: out.stats.windowMessages,
-          intent: out.stats.intent,
-          denseActive: out.stats.denseActive,
-          elapsedMs: out.stats.elapsedMs,
-          channels: out.stats.channels.map((c) => ({ channel: c.channel, count: c.count, active: c.active, ...c.note ? { note: c.note } : {} })),
-          funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked }
-        };
-        this.op(
-          "task",
-          "ask_wechat",
-          "ok",
-          "route",
-          `\u610F\u56FE ${out.stats.intent} \xB7 \u901A\u9053[${out.stats.channels.map((c) => `${c.channel}:${c.count}${c.active ? "" : "(off)"}`).join(" ")}] \xB7 \u53EC\u56DE ${out.stats.recalled} \u2192 \u878D\u5408 ${out.stats.fused} \u2192 \u91CD\u6392 ${out.stats.ranked} \u2192 \u7A97\u53E3 ${out.stats.compressed} \xB7 ${out.stats.elapsedMs}ms`
-        );
-      } catch (e) {
-        this.op("task", "ask_wechat", "fail", "retrieval_pipeline", e.message);
-        legacyRetrieve();
-      }
-    } else {
-      legacyRetrieve();
-    }
-    const basisLine = askBasisLine(citations) + rerankLine;
-    if (citations.length === 0) {
-      this.op("task", "ask_wechat", "skip", "", "\u672A\u68C0\u7D22\u5230\u4EFB\u4F55\u539F\u6587\uFF0C\u672A\u8C03\u7528\u6A21\u578B");
-      const emptyResult = {
-        answer: "\u672C\u673A\u8BB0\u5F55\u91CC\u6CA1\u6709\u68C0\u7D22\u5230\u4E0E\u8FD9\u4E2A\u95EE\u9898\u76F8\u5173\u7684\u539F\u6587\uFF0C\u56E0\u6B64\u4E0D\u4F5C\u56DE\u7B54\uFF08\u4E0D\u4F1A\u57FA\u4E8E\u5E38\u8BC6\u63A8\u6D4B\uFF09\u3002\u53EF\u4EE5\u8BD5\u8BD5\uFF1A\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\uFF0C\u6216\u6307\u5B9A\u67D0\u4E2A\u4F1A\u8BDD\u518D\u95EE\u3002",
-        citations: [],
-        plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
-        citedIndexes: [],
-        basis: "",
-        insufficient: true,
-        retrieval: {
-          candidates: statsCompat.candidates,
-          kept: statsCompat.kept,
-          scope: statsCompat.scope,
-          recency: statsCompat.recency,
-          chunks: statsCompat.chunks,
-          windowMessages: statsCompat.windowMessages
-        }
-      };
-      this.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel);
-      return emptyResult;
-    }
-    const contextBlock = formatAskContext(citations, {
-      intent: plan.intent,
-      terms,
-      scope: statsCompat.scope,
-      recency: statsCompat.recency,
-      timeHint: statsCompat.timeHint,
-      hintHits: statsCompat.hintHits
-    }, chunks);
-    const historyBlock = trimmedHistory.length > 0 ? "\u6B64\u524D\u7684\u5BF9\u8BDD\uFF08\u4FDD\u6301\u591A\u8F6E\u8FDE\u8D2F\uFF0C\u4F46\u7B54\u6848\u5FC5\u987B\u4EE5\u672C\u6B21\u68C0\u7D22\u7ED3\u679C\u4E3A\u51C6\uFF09\uFF1A\n" + trimmedHistory.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content).join("\n") + "\n\n" : "";
-    const timeGuardRule = statsCompat.timeHint ? statsCompat.hintHits > 0 ? `
-7. **\u65F6\u95F4\u8303\u56F4**\uFF1A\u6750\u6599\u90FD\u843D\u5728 ${statsCompat.timeHint} \u5185\uFF0C\u53EF\u4EE5\u6309\u8BE5\u8303\u56F4\u9648\u8FF0\u3002` : `
-7. **\u65F6\u95F4\u8303\u56F4\uFF08\u91CD\u8981\uFF09**\uFF1A\u68C0\u7D22\u5728 ${statsCompat.timeHint} \u5185**\u4E00\u6761\u90FD\u6CA1\u627E\u5230**\uFF0C\u4E0B\u9762\u5217\u51FA\u7684\u7247\u6BB5\u5168\u90E8\u6765\u81EA**\u5176\u4ED6\u65E5\u671F**\u3002\u5FC5\u987B\u5148\u660E\u786E\u8BF4\u4E00\u53E5\u300C${statsCompat.timeHint} \u8FD9\u6BB5\u65F6\u95F4\u6CA1\u6709\u627E\u5230\u76F8\u5173\u804A\u5929\u8BB0\u5F55\u300D\uFF0C\u7136\u540E\u624D\u53EF\u4EE5\u8BF4\u300C\u53E6\u5916\u5728 X \u6708 X \u65E5\u804A\u8FC7\u2026\u2026\u300D\u5E76**\u9010\u6761\u5199\u51FA\u8FD9\u4E9B\u5185\u5BB9\u7684\u771F\u5B9E\u65E5\u671F**\u3002\u7EDD\u5BF9\u4E0D\u8981\u628A\u5176\u4ED6\u65E5\u671F\u7684\u5185\u5BB9\u8BF4\u6210\u662F\u8BE5\u65F6\u95F4\u8303\u56F4\u5185\u53D1\u751F\u7684\u3002` : "";
-    const synthPrompt = `${historyBlock}\u7528\u6237\u672C\u6B21\u95EE\u9898\uFF1A${options.question}
-
-${contextBlock}
-
-\u8BF7\u6309\u4EE5\u4E0B\u8981\u6C42\u56DE\u7B54\uFF1A
-1. **\u53EA\u7528\u6750\u6599\u91CC\u7684\u4E8B\u5B9E**\uFF1A\u4E0A\u9762\u68C0\u7D22\u7ED3\u679C\u91CC\u6CA1\u6709\u7684\u4FE1\u606F\u4E00\u5F8B\u4E0D\u8981\u8865\u5145\uFF0C\u5C24\u5176\u4E0D\u8981\u51ED\u5E38\u8BC6\u63A8\u6D4B\u4EBA\u540D\u3001\u91D1\u989D\u3001\u65E5\u671F\u3001\u65F6\u95F4\u3002\u5B81\u53EF\u5C11\u8BF4\uFF0C\u4E5F\u4E0D\u8981\u7F16\u3002\u91D1\u989D\u3001\u65E5\u671F\u3001\u7535\u8BDD/\u5361\u53F7\u8FD9\u7C7B\u503C**\u53EA\u80FD\u539F\u6837\u7167\u6284**\u6750\u6599\u91CC\u7684\u5199\u6CD5 \u2014\u2014 \u8981\u8BF4\u5408\u8BA1\u5C31\u5199\u660E\u7531\u54EA\u51E0\u6761\u76F8\u52A0\uFF08\u5982\u300C3500+3500=7000\u300D\uFF09\uFF0C\u4E0D\u8981\u81EA\u884C\u6362\u7B97\u5355\u4F4D\u6216\u63A8\u7B97\u65E5\u671F\u3002
-2. **\u50CF\u5FAE\u4FE1\u91CC\u8DDF\u4EBA\u8BF4\u8BDD\u90A3\u6837\u81EA\u7136**\uFF1A\u53E3\u8BED\u5316\u4E2D\u6587\uFF0C\u76F4\u63A5\u628A\u4E8B\u60C5\u8BB2\u6E05\u695A\uFF0C\u4E0D\u8981\u5199\u6210\u62A5\u544A\u6216\u5206\u6790\uFF08\u4E0D\u8981\u300C\u7EFC\u4E0A\u6240\u8FF0\u300D\u300C\u6839\u636E\u6570\u636E\u5206\u6790\u300D\u300C\u7ECF\u68B3\u7406\u300D\u8FD9\u7C7B\u8154\u8C03\uFF09\uFF0C\u4E5F\u4E0D\u8981\u590D\u8FF0\u68C0\u7D22\u8FC7\u7A0B\u3002\u8981\u7F57\u5217\u591A\u6761\u65F6\u53EF\u4EE5\u5206\u70B9\uFF0C\u4F46\u6BCF\u6761\u90FD\u8981\u50CF\u5728\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\u3002
-3. **\u6BCF\u6761\u4E8B\u5B9E\u540E\u9762\u6807 [n]**\uFF1A\u4F8B\u5982\u300C\u5C0F\u4F55\u8BF4\u6536\u5230\u8F6C\u8D26 13.00 \u5143 [1]\u300D\uFF0C\u591A\u4E2A\u6765\u6E90\u5199 [1][3]\u3002\u6750\u6599\u91CC\u5F62\u5982\u300C\u7FA4\u540D \xB7 \u67D0\u4EBA\u300D\u7684\uFF0C\u8981\u8BF4\u6E05\u662F\u8C01\u8BF4\u7684\u3002
-4. **\u65F6\u95F4\u5199\u7EDD\u5BF9\u65E5\u671F**\uFF08\u5982 2026-09-05\uFF09\uFF0C\u4E0D\u8981\u5199\u300C\u4E0A\u5468\u300D\u300C\u524D\u51E0\u5929\u300D\u8FD9\u7C7B\u76F8\u5BF9\u8868\u8FF0\u3002
-5. **\u627E\u4E0D\u5230\u5C31\u76F4\u8BF4**\uFF1A\u6750\u6599\u4E0D\u8DB3\u4EE5\u56DE\u7B54\u65F6\uFF0C\u76F4\u63A5\u8BF4\u660E\u300C\u804A\u5929\u8BB0\u5F55\u91CC\u6CA1\u6709\u627E\u5230\u2026\u2026\u300D\uFF0C\u518D\u7ED9 1-2 \u6761\u6539\u95EE\u5EFA\u8BAE\uFF08\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u6216\u6307\u5B9A\u4F1A\u8BDD\uFF09\u3002\u4E0D\u8981\u7528\u63A8\u6D4B\u586B\u7A7A\u3002
-6. \u53EA\u5F15\u7528\u771F\u6B63\u652F\u6301\u7ED3\u8BBA\u7684\u90A3\u51E0\u6761\u6765\u6E90\uFF0C\u4E0D\u8981\u7F57\u5217\u5168\u90E8\uFF1B\u4E5F\u4E0D\u7528\u5199\u300C\u4F9D\u636E\u672C\u673A\u8BB0\u5F55\u300D\u8FD9\u7C7B\u6765\u6E90\u8BF4\u660E\uFF0C\u754C\u9762\u4E0A\u5DF2\u5355\u72EC\u663E\u793A\u3002${timeGuardRule}`;
-    const gateAnswer = this.privacyGate(
-      "ask_wechat",
-      { sessions: new Set(citations.map((c) => c.username)).size, messages: citations.length },
-      [synthPrompt]
-    );
-    if (!gateAnswer.ok) {
-      this.op("task", "ask_wechat", "skip", "", gateAnswer.error);
-      throw new Error(gateAnswer.error);
-    }
-    const answer = await runChat(
-      "\u4F60\u662F\u7528\u6237\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u91CC\u7684\u95EE\u7B54\u52A9\u624B\u3002\u53EA\u7528\u4E0B\u9762\u7ED9\u51FA\u7684\u68C0\u7D22\u7ED3\u679C\u56DE\u7B54\uFF0C\u8BF4\u8BDD\u81EA\u7136\u3001\u53E3\u8BED\u5316\uFF0C\u50CF\u5728\u5FAE\u4FE1\u91CC\u8DDF\u4EBA\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\uFF1B\u6BCF\u53E5\u4E8B\u5B9E\u540E\u9762\u7528 [n] \u6807\u6CE8\u6765\u6E90\uFF1B\u8BB0\u5F55\u91CC\u6CA1\u6709\u7684\u5C31\u8BF4\u6CA1\u627E\u5230\uFF0C\u7EDD\u4E0D\u63A8\u6D4B\u6216\u7F16\u9020\u3002",
-      gateAnswer.texts[0] ?? synthPrompt,
-      1600,
-      // 必须走 this.：makeDeltaEmitter 是实例方法。裸调用会抛
-      // 「ReferenceError: makeDeltaEmitter is not defined」—— 它出现在**综合生成那一刻**，
-      // 于是每次提问都在出答案前崩掉（UI 自动化验收实测捕捉到）。
-      this.makeDeltaEmitter(options.streamId)
-    );
-    const evidenceFor = (cited) => {
-      const idx = cited.length > 0 ? cited : citations.map((_, i) => i + 1);
-      return idx.map((n) => {
-        const ch = chunks[n - 1];
-        if (ch) {
-          const head = `${ch.name} ${ch.anchor.sender ?? ""} ${ch.anchor.time}`;
-          return head + "\n" + ch.lines.map((l) => `${l.day ?? ""} ${l.time} ${l.sender} ${l.text}`).join("\n");
-        }
-        const c = citations[n - 1];
-        return c ? `${c.name} ${c.sender ?? ""} ${c.time} ${c.snippet}` : "";
-      });
-    };
-    const groundingAuditFor = (text, cited) => auditGrounding(text, evidenceFor(cited), citations.length);
-    let citedIndexes = parseCitedIndexes(answer, citations.length);
-    let finalAnswer = answer;
-    let withheld = false;
-    let grounding = groundingAuditFor(answer, citedIndexes);
-    let repaired = false;
-    if (citedIndexes.length === 0 || grounding.unsupported.length > 0 || grounding.uncited > 0) {
-      const repairHint = groundingRepairHint(grounding);
-      const strictPrompt = `${synthPrompt}
-
-\u3010\u91CD\u8981\u3011\u8BF7\u91CD\u5199\u4E0A\u4E00\u6B21\u7684\u56DE\u7B54\uFF0C\u9010\u6761\u4FEE\u6389\u4E0B\u9762\u7684\u95EE\u9898\u3002
-${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA1\u6709\u6807\u6CE8\u4EFB\u4F55 [n] \u6765\u6E90**\u3002\n" : ""}${repairHint ? repairHint + "\n" : ""} \xB7 \u6BCF\u4E00\u53E5\u4E8B\u5B9E\u6027\u9648\u8FF0\u540E\u9762\u90FD\u5FC5\u987B\u7D27\u8DDF\u5BF9\u5E94\u7684 [n]\uFF0C\u4E14\u53EA\u6807\u771F\u6B63\u652F\u6301\u8FD9\u53E5\u8BDD\u7684\u90A3\u51E0\u6761\uFF1B
- \xB7 \u8BED\u6C14\u4FDD\u6301\u81EA\u7136\u53E3\u8BED\u5316\uFF0C\u50CF\u5728\u5FAE\u4FE1\u91CC\u8F6C\u8FF0\u804A\u5929\u5185\u5BB9\uFF1B
- \xB7 \u5982\u679C\u68C0\u7D22\u7ED3\u679C\u4E0D\u8DB3\u4EE5\u56DE\u7B54\uFF0C\u53EA\u8F93\u51FA\u4E00\u53E5\u8BDD\uFF1A\u300C\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\u300D\u3002`;
-      const second = await runChat(
-        "\u4F60\u662F\u7528\u6237\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u91CC\u7684\u95EE\u7B54\u52A9\u624B\u3002\u53EA\u7528\u7ED9\u5B9A\u68C0\u7D22\u7ED3\u679C\u56DE\u7B54\uFF0C\u81EA\u7136\u53E3\u8BED\u5316\uFF0C\u6BCF\u53E5\u4E8B\u5B9E\u6807\u6CE8 [n]\uFF1B\u8BB0\u5F55\u91CC\u6CA1\u6709\u5C31\u76F4\u8BF4\u6CA1\u627E\u5230\uFF0C\u4E0D\u8981\u63A8\u6D4B\u6216\u7F16\u9020\u3002",
-        strictPrompt,
-        1600
-      );
-      const secondCited = parseCitedIndexes(second, citations.length);
-      const secondAudit = groundingAuditFor(second, secondCited);
-      const better = secondCited.length > 0 && (secondAudit.unsupported.length < grounding.unsupported.length || secondAudit.unsupported.length === grounding.unsupported.length && secondCited.length > citedIndexes.length);
-      if (better) {
-        finalAnswer = second;
-        citedIndexes = secondCited;
-        grounding = secondAudit;
-        repaired = true;
-      }
-    }
-    if (citedIndexes.length === 0) {
-      withheld = true;
-      finalAnswer = "\u672C\u673A\u8BB0\u5F55\u4E2D\u6CA1\u6709\u627E\u5230\u53EF\u636E\u4EE5\u56DE\u7B54\u7684\u8BC1\u636E\uFF08\u6A21\u578B\u7ED9\u51FA\u7684\u5185\u5BB9\u65E0\u6CD5\u5BF9\u5E94\u5230\u4EFB\u4F55\u4E00\u6761\u539F\u6587\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528\uFF09\u3002\u53EF\u4EE5\u6362\u5173\u952E\u8BCD\u3001\u6536\u7A84\u65F6\u95F4\u8303\u56F4\u6216\u6307\u5B9A\u4F1A\u8BDD\u540E\u91CD\u8BD5\u3002";
-    }
-    const answer_basis = citedIndexes.length > 0 ? `${basisLine}\uFF08\u56DE\u7B54\u5F15\u7528\u4E86\u5176\u4E2D ${citedIndexes.length} \u6761\uFF1A[${citedIndexes.join("][")}]\uFF09` : basisLine;
-    if (retrievalId && rankedFeatures.length > 0) {
-      this._askTrace.set(retrievalId, {
-        features: new Map(rankedFeatures.map((r) => [r.docKey, r.features])),
-        // 归因键**必须**与检索侧 docKey 逐字相同，否则「这条引用有用」对应不到任何
-        // 特征向量 —— 而且不报错，只是调参永远不动。知识库引用的键是
-        // `kb:<kbId>:<chunkId>`（由 citationDocKey 产出，是这条格式的唯一来源）；
-        // 从前这里手写 `username + ':' + local_id`，KB 引用会塌成 `:`，
-        // 同一轮里的多个文件引用还会**互相覆盖**，把反馈记到不存在的消息上。
-        citations: citations.map((c) => citationDocKey(c)),
-        question: options.question,
-        answer: finalAnswer,
-        intent: statsCompat.intent ?? "open_qa"
-      });
-      while (this._askTrace.size > 20) {
-        const oldest = this._askTrace.keys().next();
-        if (oldest.done) break;
-        this._askTrace.delete(oldest.value);
-      }
-    }
-    this.op(
-      "task",
-      "ask_wechat",
-      withheld ? "fail" : "ok",
-      "",
-      `\u610F\u56FE\u300C${statsCompat.intent ?? plan.intent}\u300D\xB7 \u5173\u952E\u8BCD ${terms.length} \u4E2A \xB7 \u53EC\u56DE ${statsCompat.candidates} \u6761 \u2192 \u7A97\u53E3 ${statsCompat.chunks} \u6BB5\uFF08${statsCompat.windowMessages} \u6761\u6D88\u606F\uFF09\xB7 \u56DE\u7B54\u5F15\u7528 ${citedIndexes.length} \u6BB5${withheld ? " \xB7 \u672A\u5F15\u7528\u4EFB\u4F55\u6765\u6E90\uFF0C\u5DF2\u4E0D\u4E88\u91C7\u7528" : ""}${grounding.checked > 0 ? ` \xB7 \u63A5\u5730\u6838\u5BF9 ${grounding.checked} \u9879\uFF08\u65E0\u51FA\u5904\u7684 ${grounding.unsupported.length} \u9879\uFF09` : ""}${repaired ? " \xB7 \u5DF2\u6309\u6838\u5BF9\u7ED3\u679C\u91CD\u5199" : ""}${statsCompat.timeHint ? ` \xB7 \u65F6\u95F4\u7EBF\u7D22 ${statsCompat.timeHint}\uFF08\u547D\u4E2D ${statsCompat.hintHits}\uFF09` : ""}`
-    );
-    const result = {
-      answer: finalAnswer || "\uFF08\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548\u56DE\u7B54\u3002\u53EF\u70B9\u300C\u4F18\u5316\u63D0\u95EE\u300D\u6539\u5199\u95EE\u9898\uFF0C\u6216\u6536\u7A84\u4F1A\u8BDD/\u65F6\u95F4\u8303\u56F4\u540E\u91CD\u8BD5\u3002\uFF09",
-      citations,
-      plan: { intent: plan.intent, subQueries: plan.subQueries, from: plan.from, to: plan.to, person: plan.person, terms },
-      citedIndexes,
-      basis: answer_basis,
-      withheld: withheld || void 0,
-      // 接地核对结果：界面上「回答里某某在原文里没有出现」的提示与操作日志共用它，
-      // 也让「这轮到底核对了什么」可被追问。
-      grounding: {
-        checked: grounding.checked,
-        unsupported: grounding.unsupported.map((v) => v.value),
-        cited: citedIndexes.length,
-        repaired
-      },
-      retrievalId: retrievalId || void 0,
-      retrieval: {
-        candidates: statsCompat.candidates,
-        kept: statsCompat.kept,
-        scope: statsCompat.scope,
-        recency: statsCompat.recency,
-        timeHint: statsCompat.timeHint,
-        hintHits: statsCompat.hintHits,
-        chunks: statsCompat.chunks,
-        windowMessages: statsCompat.windowMessages,
-        ...statsCompat.intent ? { intent: statsCompat.intent } : {},
-        ...statsCompat.denseActive !== void 0 ? { denseActive: statsCompat.denseActive } : {},
-        ...statsCompat.channels ? { channels: statsCompat.channels } : {},
-        ...statsCompat.elapsedMs !== void 0 ? { elapsedMs: statsCompat.elapsedMs } : {},
-        ...statsCompat.funnel ? { funnel: statsCompat.funnel } : {}
-      }
-    };
-    this.saveAskHistory(options, result, Date.now() - askStartedAt, modelLabel);
-    return result;
+    return this.askDeepRemotes().askWechat(options);
   }
   /**
    * 把一次问答落进「历史记录」。
@@ -26863,49 +26962,7 @@ ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA
     }
   }
   async optimizeAskQuestion(options) {
-    const ctx = this._ctx;
-    const blocked = this.privacyBlocked("ask_optimize");
-    if (blocked !== null) {
-      this.op("task", "ask_optimize", "skip", "", blocked);
-      throw new Error(blocked);
-    }
-    const question = String(options?.question || "").trim();
-    if (!question) throw new Error("\u8BF7\u5148\u8F93\u5165\u95EE\u9898\uFF0C\u518D\u8FDB\u884C\u4F18\u5316");
-    const defaultModel = ctx.agentDefaultModel;
-    const sel = defaultModel?.currentSelection();
-    if (!sel || !sel.provider || !sel.model) {
-      this.op("task", "ask_optimize", "fail", "", "\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09");
-      throw new Error("\u672A\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF08agentDefaultModel\uFF09\uFF0C\u65E0\u6CD5\u4F18\u5316\u63D0\u95EE");
-    }
-    const scopeDesc = `\u4F1A\u8BDD=${options.username || "\u5168\u90E8"}${options.from ? `\uFF0C\u8D77\u59CB=${options.from}` : ""}${options.to ? `\uFF0C\u622A\u6B62=${options.to}` : ""}`;
-    const history = (Array.isArray(options.history) ? options.history : []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string").slice(-6);
-    const historyBrief = history.length > 0 ? "\n\u6700\u8FD1\u5BF9\u8BDD\u80CC\u666F\uFF1A\n" + history.map((m) => (m.role === "user" ? "\u7528\u6237\uFF1A" : "\u52A9\u624B\uFF1A") + m.content.slice(0, 200)).join("\n") : "";
-    const prompt = `\u7528\u6237\u539F\u59CB\u95EE\u9898\uFF1A${question}
-\u5F53\u524D\u68C0\u7D22\u8303\u56F4\uFF1A${scopeDesc}${historyBrief}
-
-\u8BF7\u8F93\u51FA JSON\uFF08\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u5185\u5BB9\uFF09\u3002`;
-    const gate = this.privacyGate("ask_optimize", { sessions: 0, messages: 0 }, [prompt]);
-    if (!gate.ok) {
-      this.op("task", "ask_optimize", "skip", "", gate.error);
-      throw new Error(gate.error);
-    }
-    const assembler = new BlockAssembler4();
-    const opts = {
-      provider: sel.provider,
-      model: sel.model,
-      messages: [createUserMessage4({
-        content: [{ type: "text", text: gate.texts[0] ?? prompt }],
-        source: { kind: "plugin", plugin: "dsh-wechat-data" }
-      })],
-      system: '\u4F60\u662F\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u7684\u63D0\u95EE\u4F18\u5316\u5668\u3002\u628A\u7528\u6237\u95EE\u9898\u6539\u5199\u5F97\u66F4\u6E05\u6670\u3001\u66F4\u5229\u4E8E\u5168\u6587\u68C0\u7D22\uFF08\u4FDD\u7559\u539F\u610F\uFF0C\u8865\u5145\u9690\u542B\u7684\u65F6\u95F4/\u5BF9\u8C61\u7B49\u9650\u5B9A\uFF0C\u53BB\u6389\u53E3\u8BED\u53E3\u6C34\u8BCD\uFF09\uFF0C\u5E76\u7ED9\u51FA\u81F3\u591A 3 \u6761\u5177\u4F53\u7684\u6539\u8FDB\u5EFA\u8BAE\u3002\u53EA\u8F93\u51FA\u4E00\u884C JSON\uFF1A{"optimized":"\u4F18\u5316\u540E\u7684\u95EE\u9898","suggestions":["\u5EFA\u8BAE1","\u5EFA\u8BAE2"]}',
-      maxTokens: 512
-    };
-    for await (const chunk of ctx.llm.stream(opts)) assembler.push(chunk);
-    const text = assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
-    const parsed = parseAskOptimize(text);
-    const optimized = parsed.optimized || text.slice(0, 300);
-    this.op("task", "ask_optimize", "ok", "", optimized.slice(0, 80));
-    return { optimized, suggestions: parsed.suggestions };
+    return this.askDeepRemotes().optimizeAskQuestion(options);
   }
   listBackups() {
     return this.backupRemotes().listBackups();
@@ -26926,29 +26983,7 @@ ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA
     return this.askRemotes().saveRetrievalConfig(options);
   }
   async buildRagVectorIndex(options) {
-    const cfg = loadRetrievalConfig(this._dirs.decrypted);
-    const embedModel = this.embedModelName();
-    const embedFn = this.makeEmbedFn(embedModel);
-    if (!embedFn) return { ok: false, status: "no-embedder", rows: 0, embedded: 0, elapsed_ms: 0, message: "\u672A\u914D\u7F6E embedding\uFF08\u8BF7\u5728\u6A21\u578B\u914D\u7F6E\u91CC\u586B\u5199\u5411\u91CF\u6A21\u578B\u6216 API Key\uFF09" };
-    try {
-      await ensureSearchIndex(this._dirs.decrypted);
-    } catch {
-    }
-    try {
-      const r = await buildVectorIndex(this._dirs.decrypted, embedFn, {
-        model: embedModel,
-        batchSize: cfg.embedding.batchSize,
-        concurrency: cfg.embedding.concurrency,
-        maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
-        maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
-        force: Boolean(options?.force)
-      });
-      this.op("task", "build_vectors", "ok", "", `${r.status} rows=${r.rows} embedded=${r.embedded} ${r.elapsed_ms}ms`);
-      return { ok: true, ...r };
-    } catch (e) {
-      this.op("task", "build_vectors", "fail", "", e.message);
-      return { ok: false, status: "error", rows: 0, embedded: 0, elapsed_ms: 0, message: e.message };
-    }
+    return this.askDeepRemotes().buildRagVectorIndex(options);
   }
   submitAskFeedback(options) {
     return this.askRemotes().submitAskFeedback(options);

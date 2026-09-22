@@ -42,7 +42,11 @@ describe('问答历史：网关自动保存', () => {
   })
 
   it('askWechat 的两条成功返回路径都落库（≥2 个调用点）', () => {
-    const calls = [...gateway.matchAll(/this\.saveAskHistory\(/g)]
+    // M21：askWechat 搬进 remotes/askdeep.ts ⇒ 调用点前缀变成 `rc.`；同时先剥掉网关里那行
+    // ctx 接线（`saveAskHistory: (…) => this.saveAskHistory(…)` 是转发装配，不是落库调用点），
+    // 否则「≥2」会被它虚增成恒真。
+    const calls = [...gateway.replace(/\bsaveAskHistory: \([^)]*\) => this\.saveAskHistory\(/g, '')
+      .matchAll(/(?:this|rc)\.saveAskHistory\(/g)]
     expect(calls.length, '只在一条路径上落库 ⇒ 另一类问答会整段从历史消失').toBeGreaterThanOrEqual(2)
   })
 
