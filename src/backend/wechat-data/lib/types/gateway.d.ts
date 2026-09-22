@@ -35,7 +35,6 @@ export interface StreamJob {
     finished: boolean;
     error?: string;
 }
-/** Remote-only service exposing WeChat data queries. */
 export declare class WechatDataGateway extends TypertRemoteService {
     /** Services this gateway depends on at runtime (LLM + default model). */
     static inject: string[];
@@ -274,6 +273,24 @@ export declare class WechatDataGateway extends TypertRemoteService {
     private _exportRemotes?;
     /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
     private exportRemotes;
+    private _tasksRemotes?;
+    /** 任务与笔记（待办 / 笔记 / 交接提醒） 的处理器（体在 remotes/tasks.ts）；这里只组装 ctx 与转发。 */
+    private tasksRemotes;
+    private _opsLogRemotes?;
+    /** 操作日志与隐私审计（含隐私开关读数） 的处理器（体在 remotes/opslog.ts）；这里只组装 ctx 与转发。 */
+    private opsLogRemotes;
+    private _backupRemotes?;
+    /** 备份与恢复（含加密备份） 的处理器（体在 remotes/backup.ts）；这里只组装 ctx 与转发。 */
+    private backupRemotes;
+    private _configRemotes?;
+    /** 数据配置与密钥状态（含解密/数据库状态） 的处理器（体在 remotes/config.ts）；这里只组装 ctx 与转发。 */
+    private configRemotes;
+    private _summaryRemotes?;
+    /** 总结任务（每日/周期总结的排程与运行） 的处理器（体在 remotes/summary.ts）；这里只组装 ctx 与转发。 */
+    private summaryRemotes;
+    private _askRemotes?;
+    /** 问答反馈与检索配置（画像表 / 反馈表 / 配置） 的处理器（体在 remotes/ask.ts）；这里只组装 ctx 与转发。 */
+    private askRemotes;
     getSessions(options?: {
         keyword?: string;
         limit?: number;

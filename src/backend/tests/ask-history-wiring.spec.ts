@@ -12,7 +12,7 @@
  * 这类轮次会整段从历史里消失。所以这里断言调用点 ≥ 2，而不是「存在即可」。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -21,13 +21,18 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const GATEWAY = join(HERE, '..', 'wechat-data', 'src', 'gateway.ts')
 const STORE = join(HERE, '..', 'wechat-data', 'src', 'query', 'ask-history.ts')
 
-/** 读源码并去掉注释 —— 否则注释里提到旧做法会让断言误判。 */
-function codeOf(file: string): string {
-  const src = readFileSync(file, 'utf8')
+/** 去掉注释 —— 否则注释里提到旧做法会让断言误判。 */
+function stripCode(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l => l.replace(/\/\/.*$/, '')).join('\n')
 }
+function codeOf(file: string): string {
+  return stripCode(readFileSync(file, 'utf8'))
+}
 
-const gateway = codeOf(GATEWAY)
+// M21：三个问答历史方法体搬进 remotes/ask.ts（网关只留一行转发）⇒ 读联合（断言未改）；
+// 三处「方法体里必须打到存储模块」的正则因此能匹配到实现那份。
+const gateway = stripCode([GATEWAY, ...readdirSync(join(dirname(GATEWAY), 'remotes')).filter((f) => f.endsWith('.ts'))
+  .sort().map((f) => join(dirname(GATEWAY), 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n'))
 const store = codeOf(STORE)
 
 describe('问答历史：网关自动保存', () => {

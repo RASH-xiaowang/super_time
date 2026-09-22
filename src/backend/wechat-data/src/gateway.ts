@@ -44,6 +44,12 @@ function compactDailyDigest(lines: string[]): string {
   return parts.join('\n')
 }
 import { startRealtimeSync } from './query/sync.ts'
+import { createTasksRemotes } from './remotes/tasks.ts'
+import { createOpsLogRemotes } from './remotes/opslog.ts'
+import { createBackupRemotes } from './remotes/backup.ts'
+import { createConfigRemotes } from './remotes/config.ts'
+import { createSummaryRemotes } from './remotes/summary.ts'
+import { createAskRemotes } from './remotes/ask.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
@@ -241,17 +247,7 @@ const STREAM_JOB_CAP = 20
 const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
 
 
-/**
- * N27：同一轮问答反馈的重复提交窗口。
- *
- * 10 秒的依据：真正的重复来自「同一轮被提交两次」——两个面板同时提交、旧版客户端重试、
- * 直接 RPC 调用，间隔都在一次点击的量级；而用户**改变主意重新评分**（up→down、或改了
- * 标注集合）会落到另一个键（键含 rating 与引用序号），不受这个窗口影响。
- */
-const ASK_FEEDBACK_DEDUPE_MS = 10_000
 
-/** 反馈去重表的键上限（进程内，只记窗口内的键）。 */
-const ASK_FEEDBACK_CAP = 200
 
 
 /**
@@ -270,15 +266,6 @@ function normalizeJobId(jobId?: unknown): string {
   return typeof jobId === 'string' ? jobId.trim().slice(0, 64) : ''
 }
 
-/** Coerce a config cell to a string (null -> '', else String()). */
-function cellStr(v: unknown): string {
-  if (typeof v === 'string') return v
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
-  return ''
-}
-
-/** Remote-only service exposing WeChat data queries. */
 export class WechatDataGateway extends TypertRemoteService {
   /** Services this gateway depends on at runtime (LLM + default model). */
   static inject = ['llm', 'agentDefaultModel']
@@ -807,8 +794,77 @@ export class WechatDataGateway extends TypertRemoteService {
       recordExport: (input) => this.recordExport(input),
       streamControl: (jobId) => this.streamControl(jobId),
       finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
-      streamJobs: this._streamJobs,
       normalizeJobId: (jobId) => normalizeJobId(jobId),
+      streamJobs: this._streamJobs,
+    }))
+  }
+
+  private _tasksRemotes?: ReturnType<typeof createTasksRemotes>
+
+  /** 任务与笔记（待办 / 笔记 / 交接提醒） 的处理器（体在 remotes/tasks.ts）；这里只组装 ctx 与转发。 */
+  private tasksRemotes(): ReturnType<typeof createTasksRemotes> {
+    return (this._tasksRemotes ??= createTasksRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+    }))
+  }
+
+  private _opsLogRemotes?: ReturnType<typeof createOpsLogRemotes>
+
+  /** 操作日志与隐私审计（含隐私开关读数） 的处理器（体在 remotes/opslog.ts）；这里只组装 ctx 与转发。 */
+  private opsLogRemotes(): ReturnType<typeof createOpsLogRemotes> {
+    return (this._opsLogRemotes ??= createOpsLogRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+    }))
+  }
+
+  private _backupRemotes?: ReturnType<typeof createBackupRemotes>
+
+  /** 备份与恢复（含加密备份） 的处理器（体在 remotes/backup.ts）；这里只组装 ctx 与转发。 */
+  private backupRemotes(): ReturnType<typeof createBackupRemotes> {
+    return (this._backupRemotes ??= createBackupRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      streamControl: (jobId) => this.streamControl(jobId),
+      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      normalizeJobId: (jobId) => normalizeJobId(jobId),
+    }))
+  }
+
+  private _configRemotes?: ReturnType<typeof createConfigRemotes>
+
+  /** 数据配置与密钥状态（含解密/数据库状态） 的处理器（体在 remotes/config.ts）；这里只组装 ctx 与转发。 */
+  private configRemotes(): ReturnType<typeof createConfigRemotes> {
+    return (this._configRemotes ??= createConfigRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      decryptState: this.decryptState,
+    }))
+  }
+
+  private _summaryRemotes?: ReturnType<typeof createSummaryRemotes>
+
+  /** 总结任务（每日/周期总结的排程与运行） 的处理器（体在 remotes/summary.ts）；这里只组装 ctx 与转发。 */
+  private summaryRemotes(): ReturnType<typeof createSummaryRemotes> {
+    return (this._summaryRemotes ??= createSummaryRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      ctx: () => this._ctx,
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+    }))
+  }
+
+  private _askRemotes?: ReturnType<typeof createAskRemotes>
+
+  /** 问答反馈与检索配置（画像表 / 反馈表 / 配置） 的处理器（体在 remotes/ask.ts）；这里只组装 ctx 与转发。 */
+  private askRemotes(): ReturnType<typeof createAskRemotes> {
+    return (this._askRemotes ??= createAskRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      askFeedbackSeen: this._askFeedbackSeen,
+      askTrace: this._askTrace,
     }))
   }
 
@@ -920,7 +976,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getWechatConfig')
   getWechatConfig(): ConfigSnapshot {
-    return queryWechatConfig(this._dirs.decrypted)
+    return this.configRemotes().getWechatConfig()
   }
 
   /**
@@ -929,7 +985,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getPrivacyScan')
   getPrivacyScan(): PrivacySnapshot {
-    return queryPrivacyScan(this._dirs.decrypted)
+    return this.opsLogRemotes().getPrivacyScan()
   }
 
   /**
@@ -952,7 +1008,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('getNotes')
   getNotes(kbId: number, options?: { query?: string; limit?: number }): NotesSnapshot {
-    return listNotes(this._dirs.decrypted, kbId, options)
+    return this.tasksRemotes().getNotes(kbId, options)
   }
 
   /**
@@ -976,11 +1032,7 @@ export class WechatDataGateway extends TypertRemoteService {
     sourceUsername?: string
     sourceQuestion?: string
   }): NoteMutationResult {
-    const r = saveNoteRow(this._dirs.decrypted, kbId, options)
-    // 只用于留痕，因此必须容错：kbId 变成独立参数后，漏传 options 会让 `options.title`
-    // 直接抛 TypeError，把 `saveNoteRow` 那句「知识库标识无效」的守卫信息顶掉。
-    this.op('edit', 'save_note', r.ok ? 'ok' : 'fail', options?.title ?? '', r.error ?? `id=${r.id ?? ''}`)
-    return r
+    return this.tasksRemotes().saveNote(kbId, options)
   }
 
   /**
@@ -994,9 +1046,7 @@ export class WechatDataGateway extends TypertRemoteService {
    */
   @Remote('deleteNote')
   deleteNote(kbId: number, options: { id: number }): NoteMutationResult {
-    const r = deleteNoteRow(this._dirs.decrypted, kbId, options?.id)
-    this.op('delete', 'delete_note', r.ok ? 'ok' : 'fail', `id=${options?.id ?? ''}`, r.error ?? '')
-    return r
+    return this.tasksRemotes().deleteNote(kbId, options)
   }
 
   /**
@@ -2296,7 +2346,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('listBackups')
   listBackups(): BackupSnapshot {
-    return listBackupEntries(this._dirs.decrypted)
+    return this.backupRemotes().listBackups()
   }
 
   /**
@@ -2306,7 +2356,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('previewBackup')
   previewBackup(options: { name: string }): BackupPreviewSnapshot {
-    return previewBackupEntry(this._dirs.decrypted, options.name)
+    return this.backupRemotes().previewBackup(options)
   }
 
   /**
@@ -2315,14 +2365,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('createBackup')
   createBackup(): BackupMutationResult {
-    try {
-      const e = createBackupEntry(this._dirs.decrypted)
-      this.op('backup', 'create_backup', 'ok', e.name)
-      return { ok: true, name: e.name }
-    } catch (err) {
-      this.op('backup', 'create_backup', 'fail', '', (err as Error).message)
-      return { ok: false, error: (err as Error).message }
-    }
+    return this.backupRemotes().createBackup()
   }
 
   /**
@@ -2332,9 +2375,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('deleteBackup')
   deleteBackup(options: { name: string }): BackupMutationResult {
-    const r = deleteBackupEntry(this._dirs.decrypted, options.name)
-    this.op('delete', 'delete_backup', r.ok ? 'ok' : 'fail', options.name, r.error ?? '')
-    return r
+    return this.backupRemotes().deleteBackup(options)
   }
 
   /**
@@ -2350,16 +2391,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     weights: RerankWeights
     intentAccuracy: { correct: number; total: number; accuracy: number }
   } {
-    const cfg = loadRetrievalConfig(this._dirs.decrypted)
-    const adapted = loadAdaptedWeights(this._dirs.decrypted)
-    return {
-      enabled: cfg.enabled,
-      config: cfg,
-      vector: vectorIndexSummary(this._dirs.decrypted),
-      feedback: feedbackStats(this._dirs.decrypted),
-      weights: adapted ?? cfg.rerank.weights,
-      intentAccuracy: syntheticIntentAccuracy(),
-    }
+    return this.askRemotes().getRetrievalStatus()
   }
 
   /**
@@ -2370,12 +2402,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('saveRetrievalConfig')
   saveRetrievalConfig(options?: { patch?: unknown } | unknown): { ok: boolean; config: unknown } {
-    const patch = (options && typeof options === 'object' && 'patch' in (options as Record<string, unknown>))
-      ? (options as { patch?: unknown }).patch
-      : options
-    const saved = saveRetrievalConfigFile(this._dirs.decrypted, patch)
-    this.op('settings', 'save_retrieval_config', 'ok', '', JSON.stringify(patch ?? {}).slice(0, 200))
-    return { ok: true, config: saved }
+    return this.askRemotes().saveRetrievalConfig(options)
   }
 
   /**
@@ -2431,59 +2458,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     question?: string
     answer?: string
   }): { ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; message?: string } {
-    const cfg = loadRetrievalConfig(this._dirs.decrypted)
-    if (!cfg.feedback.enabled) return { ok: false, message: '反馈闭环已在检索配置里关闭' }
-    // N27：同一轮反馈的重复提交在这里挡掉。放在副作用之前 —— 挡晚了（比如在 recordFeedback
-    // 之后）就等于「只去重审计、副作用照样跑两遍」。
-    //
-    // 键含 rating 与引用序号：用户改主意（up→down、或改标注集合）是**另一次**反馈，必须放行；
-    // 键里的 answer 片段用于「客户端没给 retrievalId 也没给 question」时区分不同轮次
-    // （否则两轮不同的问答会共用 `''` 这个键，被窗口误挡）。
-    const dedupeKey = [
-      options.retrievalId ?? '',
-      options.question ?? '',
-      String(options.answer ?? '').slice(0, 120),
-      options.rating,
-      (options.useful ?? []).join(','),
-      (options.useless ?? []).join(','),
-    ].join('\u0000')
-    const now = Date.now()
-    const until = this._askFeedbackSeen.get(dedupeKey)
-    if (until !== undefined && until > now) {
-      this.op('task', 'ask_feedback', 'ok', options.rating, '重复提交（同一轮，已忽略）')
-      return { ok: false, message: '该反馈已在处理（同一轮重复提交已忽略，未重复记录）' }
-    }
-    boundedSet(this._askFeedbackSeen, dedupeKey, now + ASK_FEEDBACK_DEDUPE_MS, ASK_FEEDBACK_CAP)
-    const trace = options.retrievalId ? this._askTrace.get(options.retrievalId) : undefined
-    const keyOf = (i: number): string | null => (trace && i >= 1 && i <= trace.citations.length) ? trace.citations[i - 1] : null
-    const pick = (idx: number[] | undefined): RerankWeights[] => {
-      if (!trace) return []
-      const out: RerankWeights[] = []
-      for (const i of idx ?? []) {
-        const k = keyOf(i)
-        const f = k ? trace.features.get(k) : undefined
-        if (f) out.push(f)
-      }
-      return out
-    }
-    const features = attributeFeatures(pick(options.useful), pick(options.useless))
-    const rec: FeedbackRecord = {
-      id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      question: options.question ?? trace?.question ?? '',
-      answer: options.answer ?? trace?.answer ?? '',
-      rating: options.rating === 'down' ? 'down' : 'up',
-      citedUseful: options.useful ?? [],
-      citedUseless: options.useless ?? [],
-      intent: trace?.intent ?? 'open_qa',
-      createdAt: Date.now(),
-      features,
-    }
-    recordFeedback(this._dirs.decrypted, rec, cfg.feedback.maxRecords)
-    const all = listFeedback(this._dirs.decrypted, cfg.feedback.maxRecords)
-    const adapted = adaptWeights(cfg.rerank.weights, all, cfg.feedback.learningRate)
-    saveAdaptedWeights(this._dirs.decrypted, adapted)
-    this.op('task', 'ask_feedback', 'ok', options.rating, `features=${features.join(',')} total=${all.length}`)
-    return { ok: true, adaptedWeights: adapted, features }
+    return this.askRemotes().submitAskFeedback(options)
   }
 
   /**
@@ -2495,10 +2470,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     items: FeedbackRecord[]
     stats: { total: number; up: number; down: number }
   } {
-    return {
-      items: listFeedback(this._dirs.decrypted, options?.limit ?? 50),
-      stats: feedbackStats(this._dirs.decrypted),
-    }
+    return this.askRemotes().listRetrievalFeedback(options)
   }
 
   /**
@@ -2873,7 +2845,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getAskHistory')
   getAskHistory(options?: AskHistoryQuery): AskHistorySnapshot {
-    return listAskHistory(this._dirs.decrypted, options ?? {})
+    return this.askRemotes().getAskHistory(options)
   }
 
   /**
@@ -2932,7 +2904,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('listSummaryTasks')
   listSummaryTasks(): SummaryTaskSnapshot {
-    return listTasks(this._dirs.decrypted)
+    return this.summaryRemotes().listSummaryTasks()
   }
 
   /**
@@ -2942,9 +2914,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('saveSummaryTask')
   saveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): SummaryTaskMutationResult {
-    const r = saveTask(this._dirs.decrypted, options.task)
-    this.op('task', 'save_summary_task', r.ok ? 'ok' : 'fail', options.task.groupUsername, r.error ?? `id=${r.id ?? ''}`)
-    return r
+    return this.summaryRemotes().saveSummaryTask(options)
   }
 
   /**
@@ -2954,9 +2924,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('deleteSummaryTask')
   deleteSummaryTask(options: { id: number }): SummaryTaskMutationResult {
-    const r = delTask(this._dirs.decrypted, options.id)
-    this.op('delete', 'delete_summary_task', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? '')
-    return r
+    return this.summaryRemotes().deleteSummaryTask(options)
   }
 
   /**
@@ -2966,9 +2934,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('toggleSummaryTask')
   toggleSummaryTask(options: { id: number; enabled: boolean }): SummaryTaskMutationResult {
-    const r = toggleTask(this._dirs.decrypted, options.id, options.enabled)
-    this.op('task', 'toggle_summary_task', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? (options.enabled ? '启用' : '停用'))
-    return r
+    return this.summaryRemotes().toggleSummaryTask(options)
   }
 
   /**
@@ -3063,77 +3029,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('runSummaryTask')
   async runSummaryTask(options: { id: number }): Promise<SummaryTaskRunResult> {
-    const tasks = listTasks(this._dirs.decrypted).items
-    const task = tasks.find(t => t.id === options.id)
-    if (!task) return { ok: false, error: '任务不存在' }
-    const prev = new Date()
-    prev.setDate(prev.getDate() - 1)
-    const date = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
-    const { lines, count } = collectDayMessages(this._dirs.decrypted, date, 50, task.groupUsername)
-    const ctx = this._ctx
-    const llm = ctx.llm
-    const defaultModel = (ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
-    }).agentDefaultModel
-    const sel = defaultModel?.currentSelection()
-    let summary = ''
-    let status = 'done'
-    let errMsg = ''
-    // 拦截优先于「模型不可用」：否则用户开了「禁止 AI 出网」却只看到「LLM/模型不可用」
-    const blockedTask = this.privacyBlocked('summary_task')
-    if (blockedTask !== null) {
-      status = 'error'
-      errMsg = blockedTask
-    } else if (!sel || !sel.provider || !sel.model) {
-      status = 'error'
-      errMsg = 'LLM/模型不可用'
-    } else {
-      // build the prompt from the task's format (mirror daily_summary.rs summary_formats)
-      const targets = task.targetUsers.length > 0 ? task.targetUsers.join('、') : '全部成员'
-      const formats: Record<string, string> = {
-        brief: '请用简洁的中文概括当天聊天记录的重点，3-5 句话以内，不要分点。',
-        detailed: '请对当天聊天记录做详细总结：按主题分点（Markdown 列表），包含关键事件、讨论的话题、达成的共识与结论；只依据记录内容，不编造。',
-        bullets: '请用 Markdown 无序列表提炼当天聊天记录的核心要点，每条一句话，控制在 10 条以内。',
-        story: '请以第三人称、叙事的方式回顾当天聊天记录：谁和谁聊了什么、发生了什么、有什么进展或插曲，读起来像一篇日记。',
-        custom: (task.customPrompt || '').replace(/\{date\}/g, date).replace(/\{group\}/g, task.groupName || task.groupUsername).replace(/\{targets\}/g, targets),
-      }
-      const fmtPrompt = formats[task.format || 'brief'] || formats['brief'] || ''
-      const prompt = '群聊【' + task.groupName + '】(' + task.groupUsername + ') ' + date + ' 的聊天记录如下：\n\n' + lines.join('\n') + '\n\n' + fmtPrompt
-      const gate = this.privacyGate('summary_task', { sessions: 1, messages: count }, [prompt])
-      if (!gate.ok) {
-        // 群总结任务不抛错：状态写进任务运行状态与记录里，界面能看到「被隐私设置拦下」
-        status = 'error'
-        errMsg = gate.error
-      } else {
-        const userMsg = createUserMessage({ content: [{ type: 'text', text: gate.texts[0] ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
-        const assembler = new BlockAssembler()
-        const opts: GenerateOptions = { provider: sel.provider, model: sel.model, messages: [userMsg], system: '你是微信每日总结助手，按要求的格式输出总结。', maxTokens: 1024 }
-        try {
-          for await (const chunk of llm.stream(opts)) assembler.push(chunk)
-          summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-        } catch (e) {
-          status = 'error'
-          errMsg = (e as Error).message
-        }
-      }
-    }
-    const rec: SummaryRecord = {
-      id: 0,
-      taskId: task.id,
-      groupUsername: task.groupUsername,
-      summaryDate: date,
-      summary,
-      messageCount: count,
-      status,
-      error: errMsg,
-      createdAt: Date.now(),
-    }
-    saveRec(this._dirs.decrypted, rec)
-    // update task last run state
-    updateSummaryTaskRunState(this._dirs.decrypted, task.id, Date.now(), status, errMsg)
-    const done = status === 'done'
-    this.op('task', 'run_summary_task', done ? 'ok' : 'fail', task.groupUsername, errMsg || `共 ${count} 条消息`)
-    return done ? { ok: true, summary, messageCount: count } : { ok: false, error: errMsg || '生成失败' }
+    return this.summaryRemotes().runSummaryTask(options)
   }
 
   /**
@@ -3224,27 +3120,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getWechatConfigFull')
   getWechatConfigFull(): WechatConfigFull {
-    const cfg = getConfig(this._dirs.decrypted)
-    const resolved = (cfg['resolved'] as Record<string, string> | undefined) ?? {}
-    return {
-      db_dir: cellStr(cfg['db_dir'] ?? ''),
-      wechat_process: cellStr(cfg['wechat_process'] ?? 'Weixin.exe'),
-      key_format: cellStr(cfg['key_format'] ?? 'wx_key_v4.1'),
-      db_enc_key: cellStr(cfg['db_enc_key'] ?? ''),
-      image_aes_key: cellStr(cfg['image_aes_key'] ?? ''),
-      image_xor_key: Number(cfg['image_xor_key'] ?? 136),
-      api_enabled: Boolean(cfg['api_enabled'] ?? true),
-      api_port: Number(cfg['api_port'] ?? 5032),
-      api_token: cellStr(cfg['api_token'] ?? ''),
-      cdn_enabled: Boolean(cfg['cdn_enabled'] ?? true),
-      cdn_local_decrypt: Boolean(cfg['cdn_local_decrypt'] ?? true),
-      whisper_device: cfg['whisper_device'] === 'gpu' ? 'gpu' : 'cpu',
-      whisper_model: cellStr(cfg['whisper_model'] ?? 'medium'),
-      whisper_threads: Number(cfg['whisper_threads'] ?? 0),
-      whisper_models_dir: cellStr(cfg['whisper_models_dir'] ?? ''),
-      whisper_bin: cellStr(cfg['whisper_bin'] ?? ''),
-      resolved,
-    }
+    return this.configRemotes().getWechatConfigFull()
   }
 
   /**
@@ -3254,27 +3130,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('saveWechatConfig')
   saveWechatConfig(options: { patch: WechatConfigPatch }): SimpleResult {
-    const before = getConfig(this._dirs.decrypted)
-    // Models/engine may live in the default dir even when none was persisted.
-    const oldDirRaw = resolveWhisperModelsDir(before['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
-    const oldBin = typeof before['whisper_bin'] === 'string' ? before['whisper_bin'] : ''
-    // Resolved before the switch: engines found by search (e.g. Release/ layout)
-    // also need to move to the new dir, even when whisper_bin was never persisted.
-    const oldEngine = whisperEnginePath(oldBin, oldDirRaw)
-    const res = saveConfig(this._dirs.decrypted, options.patch as unknown as Record<string, unknown>)
-    if (res.ok && typeof options.patch.whisper_models_dir === 'string') {
-      const newDir = (options.patch.whisper_models_dir ?? '').trim()
-      if (newDir && newDir.toLowerCase() !== oldDirRaw.toLowerCase()) {
-        // Move previously downloaded models + engine install into the new dir.
-        migrateWhisperModels(oldDirRaw, newDir)
-        const after = getConfig(this._dirs.decrypted)
-        const bin = typeof after['whisper_bin'] === 'string' ? after['whisper_bin'] : ''
-        const relocated = migrateWhisperEngineDir(bin || oldEngine, oldDirRaw, newDir)
-        if (relocated && relocated !== (bin || oldEngine)) saveConfig(this._dirs.decrypted, { whisper_bin: relocated })
-      }
-    }
-    this.op('settings', 'save_wechat_config', res.ok ? 'ok' : 'fail', '', res.error ?? '配置已保存')
-    return res
+    return this.configRemotes().saveWechatConfig(options)
   }
 
   /**
@@ -3366,9 +3222,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('generateKeysFile')
   generateKeysFile(options: { dbDir: string; keysFile: string; encKeyHex: string; keyFormat?: string }): GenerateKeysResult {
-    const r = generateKeysFile(options.dbDir, options.keysFile, options.encKeyHex, options.keyFormat)
-    this.op('keys', 'generate_keys_file', r.ok ? 'ok' : 'fail', options.keysFile, r.error ?? `通过 ${r.verified}/${r.total}`)
-    return r
+    return this.configRemotes().generateKeysFile(options)
   }
 
   /**
@@ -3377,7 +3231,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getWechatKeysInfo')
   getWechatKeysInfo(): KeysInfoResult {
-    return getKeysInfo(this._dirs.decrypted)
+    return this.configRemotes().getWechatKeysInfo()
   }
 
   /**
@@ -3388,9 +3242,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('autoGetDbKey')
   async autoGetDbKey(options: { dbPath?: string; wechatInstallDir?: string }): Promise<AutoDbKeyResult> {
-    const r = await fetchDbKey(options)
-    this.op('keys', 'auto_get_db_key', r.ok ? 'ok' : 'fail', options.dbPath ?? '', r.error ?? (r.source ?? ''))
-    return r
+    return this.configRemotes().autoGetDbKey(options)
   }
 
   /**
@@ -3450,13 +3302,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('openConfig')
   async openConfig(signal: AbortSignal): Promise<{ ok: boolean; path: string }> {
-    const p = join(this._dirs.decrypted, '..', 'config.json')
-    try {
-      await openNativePath(p, signal)
-      return { ok: true, path: p }
-    } catch {
-      return { ok: false, path: p }
-    }
+    return this.configRemotes().openConfig(signal)
   }
 
   @Remote('verifyImageKey')
@@ -3559,15 +3405,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getDecryptStatus')
   getDecryptStatus(): DecryptStatus {
-    return {
-      op: this.decryptState.op,
-      active: this.decryptState.active,
-      done: this.decryptState.done,
-      total: this.decryptState.total,
-      failed: this.decryptState.failed,
-      skipped: this.decryptState.skipped,
-      message: this.decryptState.message,
-    }
+    return this.configRemotes().getDecryptStatus()
   }
 
   /**
@@ -3750,7 +3588,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getDbStatus')
   getDbStatus(): DbStatusSnapshot {
-    return getDbStatus(this._dirs.decrypted)
+    return this.configRemotes().getDbStatus()
   }
 
   /**
@@ -3920,67 +3758,32 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('addTask')
   addTask(options: { title: string; dueAt?: number }): TaskMutationResult {
-    const r = insertTask(this._dirs.decrypted, options)
-    this.op('task', 'add_task', r.ok ? 'ok' : 'fail', options.title, r.error ?? '')
-    return r
+    return this.tasksRemotes().addTask(options)
   }
 
   @Remote('clearOperationLog')
   clearOperationLog(): OperationLogClearResult {
-    const r = clearOperationLog(this._dirs.decrypted)
-    this.op('delete', 'clear_operation_log', r.ok ? 'ok' : 'fail', '', r.ok ? `已清除 ${r.removed} 条` : '清除失败')
-    return r
+    return this.opsLogRemotes().clearOperationLog()
   }
 
   @Remote('clearPrivacyAudit')
   clearPrivacyAudit(): PrivacyAuditClearResult {
-    const r = clearPrivacyAudit(this._dirs.decrypted)
-    this.op('delete', 'clear_privacy_audit', r.ok ? 'ok' : 'fail', '', r.ok ? `已清除 ${r.removed} 条` : '清除失败')
-    return r
+    return this.opsLogRemotes().clearPrivacyAudit()
   }
 
   @Remote('createEncryptedBackup')
   async createEncryptedBackup(options: { password: string; jobId?: string }): Promise<BackupMutationResult> {
-    const jobId = normalizeJobId(options?.jobId)
-    try {
-      // M3：加密备份同样支持进度/取消（同一套 jobId → 本地 onProgress + AbortController）。
-      const entry = await createEncryptedBackup(this._dirs.decrypted, options.password, this.streamControl(jobId))
-      this.finishStreamJob(jobId)
-      this.op('backup', 'create_encrypted_backup', 'ok', entry.name)
-      return { ok: true, name: entry.name }
-    } catch (e) {
-      this.finishStreamJob(jobId, (e as Error).message)
-      this.op('backup', 'create_encrypted_backup', 'fail', '', (e as Error).message)
-      // 注意：这里**不能**把失败吞掉 —— `createBackup` 现在对「部分子目录复制失败」直接抛错
-      // （不再是「静默报成功」），所以本 catch 是那条错误的唯一出口，转成可读的 { ok:false }。
-      return { ok: false, error: (e as Error).message }
-    }
+    return this.backupRemotes().createEncryptedBackup(options)
   }
 
   @Remote('deleteTask')
   deleteTask(options: { id: number }): TaskMutationResult {
-    const r = deleteTask(this._dirs.decrypted, options.id)
-    this.op('delete', 'delete_task', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? '')
-    return r
+    return this.tasksRemotes().deleteTask(options)
   }
 
   @Remote('extractTasks')
   extractTasks(options?: { days?: number }): TaskMutationResult {
-    const days = options?.days ?? 7
-    const to = new Date()
-    const from = new Date(to.getTime() - days * 86400000)
-    const { lines } = collectPeriodMessages(this._dirs.decrypted, from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), 50)
-    const re = /(记得|待办|要做|提醒|别忘了|稍后|待处理|deadline)/i
-    let added = 0
-    for (const line of lines) {
-      if (re.test(line)) {
-        const title = line.trim().slice(0, 60) || '待办'
-        const r = insertTask(this._dirs.decrypted, { title })
-        if (r.ok) added += 1
-      }
-    }
-    this.op('task', 'extract_tasks', 'ok', '', `新增 ${added} 条待办`)
-    return { ok: true, added }
+    return this.tasksRemotes().extractTasks(options)
   }
 
   @Remote('generatePeriodSummary')
@@ -4051,7 +3854,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('getDbHealth')
   getDbHealth(): DbHealthSnapshot {
-    return queryDbHealth(this._dirs.decrypted)
+    return this.configRemotes().getDbHealth()
   }
 
   @Remote('getCalls')
@@ -4071,7 +3874,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getHandoffReminds')
   getHandoffReminds(): HandoffRemindsSnapshot {
-    return listHandoffReminds(this._dirs.decrypted)
+    return this.tasksRemotes().getHandoffReminds()
   }
 
   @Remote('getLedger')
@@ -4101,17 +3904,17 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('getOperationLog')
   getOperationLog(options?: OperationLogQuery): OperationLogSnapshot {
-    return listOperations(this._dirs.decrypted, options)
+    return this.opsLogRemotes().getOperationLog(options)
   }
 
   @Remote('getPrivacyAuditRows')
   getPrivacyAuditRows(): PrivacyAuditRow[] {
-    return listPrivacyAudit(this._dirs.decrypted)
+    return this.opsLogRemotes().getPrivacyAuditRows()
   }
 
   @Remote('getPrivacyState')
   getPrivacyState(): PrivacyStateSnapshot {
-    return getPrivacyStateSnapshot(this._dirs.decrypted)
+    return this.opsLogRemotes().getPrivacyState()
   }
 
   /**
@@ -4163,14 +3966,12 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('listTasks')
   listTasks(): TasksSnapshot {
-    return listWechatTasks(this._dirs.decrypted)
+    return this.tasksRemotes().listTasks()
   }
 
   @Remote('restoreBackup')
   restoreBackup(options: { name: string; password: string }): BackupRestoreResult {
-    const r = restoreEncryptedBackup(this._dirs.decrypted, options.name, options.password)
-    this.op('backup', 'restore_backup', r.ok ? 'ok' : 'fail', options.name, r.path ?? r.error ?? '')
-    return r
+    return this.backupRemotes().restoreBackup(options)
   }
 
   @Remote('searchUnified')
@@ -4180,29 +3981,17 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('setPrivacyState')
   setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): PrivacyStateSnapshot {
-    try {
-      writePrivacySettings(this._dirs.decrypted, options)
-      const snapshot = getPrivacyStateSnapshot(this._dirs.decrypted)
-      this.op('settings', 'set_privacy_state', 'ok', '', `脱敏=${options.redactSensitive ?? '不变'}，出站拦截=${options.blockOutbound ?? '不变'}`)
-      return snapshot
-    } catch (e) {
-      this.op('settings', 'set_privacy_state', 'fail', '', (e as Error).message)
-      throw e
-    }
+    return this.opsLogRemotes().setPrivacyState(options)
   }
 
   @Remote('setTaskStatus')
   setTaskStatus(options: { id: number; status: 'open' | 'done' }): TaskMutationResult {
-    const r = setTaskStatus(this._dirs.decrypted, options.id, options.status)
-    this.op('task', 'set_task_status', r.ok ? 'ok' : 'fail', `id=${options.id}`, r.error ?? options.status)
-    return r
+    return this.tasksRemotes().setTaskStatus(options)
   }
 
   @Remote('syncHandoffTasks')
   syncHandoffTasks(): TaskMutationResult {
-    const r = importHandoffTasks(this._dirs.decrypted)
-    this.op('task', 'sync_handoff_tasks', r.ok ? 'ok' : 'fail', '', r.error ?? `导入 ${r.added ?? 0} 条`)
-    return r
+    return this.tasksRemotes().syncHandoffTasks()
   }
 
 }
