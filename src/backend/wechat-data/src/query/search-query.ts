@@ -57,8 +57,9 @@ export function readableMessageText(raw: string): string {
       const ei = t.indexOf('</' + tag, gt)
       if (ei < 0) break
       let v = t.slice(gt + 1, ei).trim()
+      // 匹配成功就一定有捕获组 1；兜回 `v` 本身而不是空串 —— 万一没有，宁可留着原文也不静默丢内容。
       const cdata = v.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/)
-      if (cdata) v = cdata[1]
+      if (cdata) v = cdata[1] ?? v
       v = v.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
       if (v) parts.push(v)
       from = ei + 1

@@ -89,12 +89,15 @@ export function dedupeFused(docs: FusedDoc[], threshold: number, maxGapSec = 300
     if (g.size === 0) { kept.push(d); keptGrams.push(g); continue }
     let dup = false
     for (let i = 0; i < keptGrams.length; i += 1) {
+      // `kept` 与 `keptGrams` 只在同一处成对 push ⇒ 两表等长；读不到就当这一格不参与比较。
       const o = keptGrams[i]
+      const k = kept[i]
+      if (!o || !k) continue
       if (o.size === 0) continue
       // 只在同会话内判定重复：跨会话的同名句子往往是不同人在不同语境说的，不应合并。
-      if (kept[i].doc.username !== d.doc.username) continue
+      if (k.doc.username !== d.doc.username) continue
       // 时间不相近 → 视为不同事件（模板消息逐月重复的情形）。
-      if (Math.abs(kept[i].doc.create_time - d.doc.create_time) > maxGapSec) continue
+      if (Math.abs(k.doc.create_time - d.doc.create_time) > maxGapSec) continue
       let inter = 0
       for (const t of g) if (o.has(t)) inter += 1
       const jac = inter / (g.size + o.size - inter)

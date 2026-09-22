@@ -31,6 +31,7 @@ import {
   MAX_HAMMING,
   blobToVec,
   getPlanes,
+  dotProduct,
   l2normalize,
   popcount32,
   selectByHamming,
@@ -448,14 +449,16 @@ async function runBuildVectorIndex(
         }
         if (failure) return
         for (let j = 0; j < batch.length; j += 1) {
-          const groupRows = groups.get(batch[j])
+          const key = batch[j]
+          if (key === undefined) continue
+          const groupRows = groups.get(key)
           if (!groupRows) continue
           const raw = vecs[j]
           if (raw && raw.length > 0) {
             const v = l2normalize(raw)
             dim = v.length
             const h = simhash(v, getPlanes(dim))
-            vectors.set(batch[j], { blob: vecToBlob(v), lo: h.lo, hi: h.hi })
+            vectors.set(key, { blob: vecToBlob(v), lo: h.lo, hi: h.hi })
           }
           // 进度按**行数**报（一个热门文本可能带几千行），口径与改前一致
           processedRows += groupRows.length
@@ -589,9 +592,7 @@ export async function searchDense(
       const vr = getVec.get(r.rowid) as { vec?: Uint8Array; dim?: number } | undefined
       if (!vr?.vec) continue
       const v = blobToVec(vr.vec, Number(vr.dim ?? dim))
-      let dot = 0
-      const n = Math.min(v.length, qv.length)
-      for (let i = 0; i < n; i += 1) dot += v[i] * qv[i]
+      const dot = dotProduct(v, qv)
       if (dot < opts.minSimilarity) continue
       const mr = getMeta.get(r.rowid) as Record<string, unknown> | undefined
       if (!mr) continue

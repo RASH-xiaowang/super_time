@@ -41,6 +41,7 @@ export { KB_VECTORS_DB, kbVectorsDbPath } from './kb-paths.ts'
 import { yieldToLoop } from './search.ts'
 import {
   blobToVec,
+  dotProduct,
   getPlanes,
   l2normalize,
   selectByHamming,
@@ -545,14 +546,16 @@ async function runBuildKbVectorIndex(
         }
         if (failure) return
         for (let j = 0; j < batch.length; j += 1) {
-          const groupRows = groups.get(batch[j])
+          const key = batch[j]
+          if (key === undefined) continue
+          const groupRows = groups.get(key)
           if (!groupRows) continue
           const raw = vecs[j]
           if (raw && raw.length > 0) {
             const v = l2normalize(raw)
             dim = v.length
             const h = simhash(v, getPlanes(dim))
-            vectors.set(batch[j], { blob: vecToBlob(v), lo: h.lo, hi: h.hi })
+            vectors.set(key, { blob: vecToBlob(v), lo: h.lo, hi: h.hi })
           }
           processedRows += groupRows.length
         }
@@ -704,9 +707,7 @@ export async function searchKbDense(
       const vr = getVec.get(r.rowid) as { vec?: Uint8Array; dim?: number } | undefined
       if (!vr?.vec) continue
       const v = blobToVec(vr.vec, Number(vr.dim ?? qv.length))
-      let dot = 0
-      const n = Math.min(v.length, qv.length)
-      for (let i = 0; i < n; i += 1) dot += v[i] * qv[i]
+      const dot = dotProduct(v, qv)
       if (dot < opts.minSimilarity) continue
       const mr = byId.get(r.rowid)
       if (!mr) continue

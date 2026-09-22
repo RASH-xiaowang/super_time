@@ -85,7 +85,8 @@ export function recallAtK(retrieved: string[], relevant: string[], k: number): n
 export function mrr(retrieved: string[], relevant: string[]): number {
   const rel = new Set(relevant)
   for (let i = 0; i < retrieved.length; i += 1) {
-    if (rel.has(retrieved[i])) return 1 / (i + 1)
+    const id = retrieved[i]
+    if (id !== undefined && rel.has(id)) return 1 / (i + 1)
   }
   return 0
 }
@@ -106,7 +107,8 @@ export function ndcgAtK(retrieved: string[], relevant: string[], k: number, grad
   const dcg = (list: string[]): number => {
     let s = 0
     for (let i = 0; i < list.length && i < k; i += 1) {
-      const g = gain(list[i])
+      const id = list[i]
+      const g = id === undefined ? 0 : gain(id)
       if (g > 0) s += g / Math.log2(i + 2)
     }
     return s
@@ -127,7 +129,8 @@ export function averagePrecision(retrieved: string[], relevant: string[]): numbe
   let hit = 0
   let sum = 0
   for (let i = 0; i < retrieved.length; i += 1) {
-    if (rel.has(retrieved[i])) {
+    const id = retrieved[i]
+    if (id !== undefined && rel.has(id)) {
       hit += 1
       sum += hit / (i + 1)
     }

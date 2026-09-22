@@ -59,7 +59,8 @@ function decodeCell(v: unknown): string {
 /** 群聊正文前缀 `wxid_xxx:` 剥离。 */
 function splitSender(content: string): { sender: string; body: string } {
   const m = content.match(/^([A-Za-z0-9_@.\-]{4,64}):[\s]/)
-  return m ? { sender: m[1], body: content.slice(m[0].length) } : { sender: '', body: content }
+  // 匹配成功就一定有捕获组 1；兜回的空串正是「没有发言人前缀」这条分支本来的取值。
+  return m ? { sender: m[1] ?? '', body: content.slice(m[0].length) } : { sender: '', body: content }
 }
 
 /** 去掉 XML 标签与压缩二进制逗号表，得到可读短句。 */
@@ -70,12 +71,13 @@ function readableText(raw: string): string {
 
 function xmlAttr(text: string, tag: string, attr: string): string {
   const m = text.match(new RegExp('<' + tag + '\\b[^>]*\\b' + attr + '="([^"]*)"', 'i'))
-  return m ? m[1] : ''
+  // 取不到属性与「属性是空串」在调用方是同一件事（下面 `|| 缺省` 会接手），所以兜空串不改变口径。
+  return m ? (m[1] ?? '') : ''
 }
 
 function tagText(text: string, tag: string): string {
   const m = text.match(new RegExp('<' + tag + '\\b[^>]*>([\\s\\S]*?)</' + tag + '>', 'i'))
-  return m ? m[1].trim() : ''
+  return m ? (m[1] ?? '').trim() : ''
 }
 
 function normType(lt: number): number {
@@ -219,26 +221,42 @@ function median(list: number[]): number {
   if (list.length === 0) return 0
   const s = [...list].sort((a, b) => a - b)
   const mid = Math.floor(s.length / 2)
-  return s.length % 2 === 1 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2)
+  // 中位数：奇数取正中那一个，偶数取中间两个的平均（偶数分支才四舍五入 —— 与抽出下面这两行之前一致）。
+  // 用 slice + reduce 而不是 `s[mid]`：后者的类型是 `number | undefined`，而这里没有任何合法的兜底数值 ——
+  // 兜 0 等于在年报里凭空造一个「0 秒」，跟真实统计值完全无法区分。
+  const even = s.length % 2 === 0
+  const middle = even ? s.slice(mid - 1, mid + 1) : s.slice(mid, mid + 1)
+  const avg = middle.reduce((a, x) => a + x, 0) / middle.length
+  return even ? Math.round(avg) : avg
 }
 function percentile(list: number[], q: number): number {
   if (list.length === 0) return 0
   const s = [...list].sort((a, b) => a - b)
-  return s[Math.min(s.length - 1, Math.floor(s.length * q))]
+  const i = Math.min(s.length - 1, Math.max(0, Math.floor(s.length * q)))
+  // 同上：取那一个元素走 slice，不按下标读。`q` 现在恒在 [0,1]（唯一的调用方传 0.9），
+  // 加上 `Math.max(0, …)` 只是把「越界 ⇒ 旧代码返回 undefined」这条静默路径堵掉。
+  return s.slice(i, i + 1).reduce((a, x) => a + x, 0)
 }
 /** 最长连续日期段。 */
 function longestRun(days: Set<string> | Iterable<string>): { from: string; to: string; days: number } {
   const sorted = [...days].sort()
-  if (sorted.length === 0) return { from: '', to: '', days: 0 }
-  let best = { from: sorted[0], to: sorted[0], days: 1 }
-  let curFrom = sorted[0]
+  const [firstDay] = sorted
+  // 空集合（含「首格读不到」这条类型上的分支）都是同一个答案：没有连续段。
+  if (firstDay === undefined) return { from: '', to: '', days: 0 }
+  let best = { from: firstDay, to: firstDay, days: 1 }
+  let curFrom = firstDay
   let curLen = 1
   for (let i = 1; i < sorted.length; i += 1) {
-    const prev = new Date(sorted[i - 1] + 'T00:00:00').getTime()
-    const now = new Date(sorted[i] + 'T00:00:00').getTime()
+    const prevDay = sorted[i - 1]
+    const day = sorted[i]
+    // 相邻两天都取得到才比较（`i < length` 已保证）；宁可跳过一天，也不拿 `undefined` 拼出一个
+    // `Invalid DateT00:00:00` 的时间戳 —— 那会被当成一个真实的日期边界。
+    if (prevDay === undefined || day === undefined) continue
+    const prev = new Date(prevDay + 'T00:00:00').getTime()
+    const now = new Date(day + 'T00:00:00').getTime()
     if (now - prev === 86400000) curLen += 1
-    else { curFrom = sorted[i]; curLen = 1 }
-    if (curLen > best.days) best = { from: curFrom, to: sorted[i], days: curLen }
+    else { curFrom = day; curLen = 1 }
+    if (curLen > best.days) best = { from: curFrom, to: day, days: curLen }
   }
   return best
 }

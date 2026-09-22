@@ -68,7 +68,7 @@ export function createAskRemotes(rc: createAskRemotesInputs) {
       }
       boundedSet(rc.askFeedbackSeen, dedupeKey, now + ASK_FEEDBACK_DEDUPE_MS, ASK_FEEDBACK_CAP)
       const trace = options.retrievalId ? rc.askTrace.get(options.retrievalId) : undefined
-      const keyOf = (i: number): string | null => (trace && i >= 1 && i <= trace.citations.length) ? trace.citations[i - 1] : null
+      const keyOf = (i: number): string | null => (trace && i >= 1 && i <= trace.citations.length) ? trace.citations[i - 1] ?? null : null
       const pick = (idx: number[] | undefined): RerankWeights[] => {
         if (!trace) return []
         const out: RerankWeights[] = []

@@ -222,9 +222,9 @@ function sparseChannel(terms: string[], corpus: RetrievedDoc[], topK: number): C
   const tfCache = new Map<string, Map<string, number>>()
   for (const t of terms) {
     const m = new Map<string, number>()
-    for (let i = 0; i < docs.length; i += 1) {
-      const f = termFreq(t, docs[i].d.text, docs[i].toks)
-      if (f > 0) m.set(docs[i].d.docKey, f)
+    for (const { d, toks } of docs) {
+      const f = termFreq(t, d.text, toks)
+      if (f > 0) m.set(d.docKey, f)
     }
     tfCache.set(t, m)
   }

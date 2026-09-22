@@ -193,7 +193,8 @@ function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: num
       if (c.connected) row.connected += 1
       row.durationSec += d
       byMonth.set(m, row)
-      byHour[new Date(c.createTime * 1000).getHours()] += 1
+      const hour = new Date(c.createTime * 1000).getHours()
+      byHour[hour] = (byHour[hour] ?? 0) + 1
       if (firstTime == null || c.createTime < firstTime) firstTime = c.createTime
       if (lastTime == null || c.createTime > lastTime) lastTime = c.createTime
     }

@@ -124,7 +124,8 @@ export function bigramTokens(text: string): string {
 export function ftsPhrase(term: string): string {
   const toks = bigramTokens(term).split(' ').filter(Boolean)
   if (toks.length === 0) return ''
-  if (toks.length === 1) return '"' + toks[0].replace(/"/g, '') + '"'
+  // 上面已判 `length === 1`，这里必定取得到；`?? ''` 只是类型口径（取不到就是空短语，与「无 token」同归）。
+  if (toks.length === 1) return '"' + (toks[0] ?? '').replace(/"/g, '') + '"'
   return '"' + toks.join(' ') + '"'
 }
 

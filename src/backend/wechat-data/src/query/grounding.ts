@@ -74,17 +74,22 @@ const SENTENCE_RE = /[^\n。！？!?；;]+/g
 function normDate(raw: string): string {
   const m = raw.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/)
   if (!m) return ''
+  // 三个组都是必选的，匹配成功就一定取得到；万一取不到仍算「解析不出来」⇒ 返回空串，
+  // 而不是拿 `''` 去拼出一个 `NaN-NaN-NaN`（那会被当成一个看起来很正常的日期出处）。
+  const [y, mo, d] = [m[1], m[2], m[3]]
+  if (!y || !mo || !d) return ''
   const p = (n: string): string => String(Number(n)).padStart(2, '0')
-  return `${m[1]}-${p(m[2])}-${p(m[3])}`
+  return `${y}-${p(mo)}-${p(d)}`
 }
 
 /** 金额 → 分（`3万元` = 3000000 分；解析不出来返回 NaN）。 */
 function amountToCents(raw: string): number {
   const m = raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(万元|万块|万|元|块钱|块|圆)/)
   if (!m) return NaN
-  const n = Number(m[1].replace(/,/g, ''))
+  const [digits, unit] = [m[1], m[2]]
+  if (!digits || !unit) return NaN
+  const n = Number(digits.replace(/,/g, ''))
   if (!Number.isFinite(n)) return NaN
-  const unit = m[2]
   const scale = unit === '万元' || unit === '万块' || unit === '万' ? 10000 : 1
   return Math.round(n * scale * 100)
 }
@@ -179,11 +184,18 @@ function buildSums(cents: readonly number[]): Set<number> {
   }
   for (const c of pool) if (c <= MAX_SUM_CENTS) out.add(c)
   for (let i = 0; i < pool.length; i += 1) {
+    const a = pool[i]
+    // 读不到就跳过：**不能兜成 0** —— 这个池里的 0 是一个合法的、会进答案的金额（`out.add(0)`）。
+    if (a === undefined) continue
     for (let j = i + 1; j < pool.length; j += 1) {
-      const s2 = pool[i] + pool[j]
+      const b = pool[j]
+      if (b === undefined) continue
+      const s2 = a + b
       if (s2 <= MAX_SUM_CENTS) out.add(s2)
       for (let k = j + 1; k < pool.length; k += 1) {
-        const s3 = s2 + pool[k]
+        const c = pool[k]
+        if (c === undefined) continue
+        const s3 = s2 + c
         if (s3 <= MAX_SUM_CENTS) out.add(s3)
       }
     }
