@@ -11,14 +11,18 @@
  *
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const doc = readFileSync(join(ROOT, 'docs', 'PRIVACY.md'), 'utf8')
-const gateway = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8')
+// M21：KB 域方法体搬进 remotes/ ⇒ 读联合（断言未改）
+const _gwPath = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
+const _gwDir = dirname(_gwPath)
+const gateway = [_gwPath, ...readdirSync(join(_gwDir, 'remotes')).filter((f) => f.endsWith('.ts')).sort()
+  .map((f) => join(_gwDir, 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n')
 
 /**
  * 去掉注释（行注释 + 块注释），用于源码级断言。
@@ -184,12 +188,23 @@ describe('H14：隐私声明 ↔ 出网点', () => {
    * 第三条尤其要紧 —— 「只出建议、不自动写正文」是整个推断层不污染图谱的前提，
    * 它一旦破功，症状是用户的笔记里出现他没写过的链接，而没人会想到去看代码。
    */
+  /**
+   * M21：KB 域方法体搬进 `remotes/*.ts` 后，`@Remote('x')` 处只剩一行转发 ⇒
+   * 这些断言要看**被转发到的那份实现**（联合读里它在后面，取最后一次出现）。
+   */
+  const implBody = (code: string, method: string): string => {
+    const at = code.lastIndexOf(`${method}(`)
+    if (at < 0) return ''
+    const rest = code.slice(at)
+    const end = rest.indexOf('\n    },')
+    return end > 0 ? rest.slice(0, end) : rest.slice(0, 2600)
+  }
+
   it('实体抽取与链接建议：拦截判在早退前、功能名各自独立、建议**不写**任何数据', () => {
     const code = stripComments(gateway)
     for (const [method, feature] of [['extractKbEntities', 'kb_extract'], ['suggestKbLinks', 'kb_link_suggest']] as const) {
-      const from = code.indexOf(`@Remote('${method}')`)
-      expect(from, `gateway 里没有 ${method}（接线被删了？）`).toBeGreaterThan(0)
-      const body = code.slice(from, from + 2600)
+      const body = implBody(code, method)
+      expect(body.length, `gateway/remotes 里没有 ${method}（接线被删了？）`).toBeGreaterThan(0)
       const blockedAt = body.indexOf(`privacyBlocked('${feature}'`)
       expect(blockedAt, `${method} 没判出站拦截`).toBeGreaterThan(-1)
       // 「没配模型」这类早退必须在拦截**之后**：顺序错了，被拦下的那次会显示成
@@ -205,12 +220,11 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     // 「文件正文进向量索引」。混记之后「我把哪一类数据发出去了」在审计表里就分不开
     // —— 与上面 `kb_embed` 那条守卫同一个理由。
     expect(code, '链接建议没有独立的审计功能名（蹭了 kb_embed？）')
-      .toMatch(/this\.makeEmbedFn\([^)]*'kb_link_suggest'/)
+      .toMatch(/(?:this|rc)\.makeEmbedFn\([^)]*'kb_link_suggest'/)
     // 恰好一处**调用点**（`this.` 把签名那一处排除掉）：两处就会让人分不清哪个是真的在过闸
-    expect(code.match(/this\.makeEmbedFn\([^)]*'kb_link_suggest'/g) ?? []).toHaveLength(1)
+    expect(code.match(/(?:this|rc)\.makeEmbedFn\([^)]*'kb_link_suggest'/g) ?? []).toHaveLength(1)
     // 建议是**只读**的：这个方法里不许出现任何写路径
-    const sFrom = code.indexOf("@Remote('suggestKbLinks')")
-    const sBody = code.slice(sFrom, code.indexOf('@Remote(', sFrom + 10))
+    const sBody = implBody(code, 'suggestKbLinks')
     for (const writer of ['saveNote', 'saveDocEntities', 'setKbModel', 'writeKb', 'deleteNote', 'touchKbEntitiesAt', 'INSERT INTO']) {
       expect(sBody, `suggestKbLinks 里出现了写路径 ${writer}（建议不该改任何数据）`).not.toContain(writer)
     }
