@@ -72,7 +72,10 @@ const kbShellSrc = readFileSync(join(HERE, 'KbShell.tsx'), 'utf8')
  */
 const apiSrc = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => readFileSync(join(SHELL_DIR, f), 'utf8')).join('\n')
 const navSrc = readFileSync(join(SHELL_DIR, 'nav-config.ts'), 'utf8')
-const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
+// M21 第二十刀把 misc IPC 频道（diag/app/license/dialog/shell/window）搬去了
+// `src/backend/ipc-misc.js`：读取面改成**联合**（断言一条没改，符号搬到哪份都算数）。
+const mainSrc = [join(ROOT, 'main.js'), join(ROOT, 'src', 'backend', 'ipc-misc.js')]
+  .map((f) => readFileSync(f, 'utf8')).join('\n')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
 const kbTypesSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'kb', 'types.ts'), 'utf8')
 
