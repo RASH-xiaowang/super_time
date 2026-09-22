@@ -79,7 +79,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
       // 需要最新结果时前往「隐私体检」页点击扫描。
       const [st, rws] = await Promise.all([
         apiGetPrivacyState(),
-        apiGetPrivacyAuditRows().catch(() => []),
+        apiGetPrivacyAuditRows().catch((): never[] => []),
       ])
       setState(st)
       setRows(rws)

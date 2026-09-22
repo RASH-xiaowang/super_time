@@ -156,7 +156,7 @@ export function centeredSquarify(items: TreemapItem[], box: Box, centerIndex: nu
   const totalStrip = stripArea.reduce((a, b) => a + b, 0)
   if (totalStrip <= 0) return squarify(items, box)
 
-  const buckets: number[][] = strips.map(() => [])
+  const buckets: number[][] = strips.map((): number[] => [])
   const bucketArea = [...stripArea]
   const order: Array<{ o: TreemapItem; i: number }> = []
   for (let i = 0; i < others.length; i += 1) { const o = others[i]; if (o) order.push({ o, i }) }

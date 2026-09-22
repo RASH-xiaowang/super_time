@@ -1,5 +1,5 @@
 {
-  "//": "后端 TypeScript 基座。注意：原仓库从未提交过本文件，但 src/backend/wechat-data/tsconfig.json 与 tsconfig.host.json 都 extends 它，且 src/backend/deps/* 的构建产物（lib/tsconfig.tsbuildinfo）里留下了上游的编译选项。这里是按那些选项还原出来的，因此 strict 的若干放宽项（noImplicitAny/noImplicitThis/noUncheckedIndexedAccess = false）不是我的偏好，而是为了让既有代码能过——收紧它们属 RELEASE-PLAN 的 H11 收尾项。",
+  "//": "后端 TypeScript 基座。注意：原仓库从未提交过本文件，但 src/backend/wechat-data/tsconfig.json 与 tsconfig.host.json 都 extends 它，且 src/backend/deps/* 的构建产物（lib/tsconfig.tsbuildinfo）里留下了上游的编译选项。这里是按那些选项还原出来的，因此 strict 的若干放宽项（noImplicitThis/noUncheckedIndexedAccess = false）不是我的偏好，而是为了让既有代码能过——收紧它们属 RELEASE-PLAN 的 H11 收尾项。 **2026-09-22（H11 第一档）：noImplicitAny 已开成 true** —— 全仓只有 36 处报错（后端 5 处是宿主层 llm-retry.js 缺声明，已补 src/backend/llm-retry.d.ts；客户端 31 处是空数组/裸 null 的字面量与缺返回类型的箭头函数），所以这一档的收益大于代价；剩下两档仍按各自的报错量决定。",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -15,9 +15,9 @@
     "declarationMap": true,
     "composite": true,
     "strict": true,
-    "strictFunctionTypes": false,
-    "noImplicitAny": false,
-    "noImplicitThis": false,
+    "strictFunctionTypes": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
     "noImplicitOverride": false,
     "noUncheckedIndexedAccess": false,
     "noUnusedLocals": false,
