@@ -80,13 +80,23 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
 
   useEffect(() => { void refresh() }, [refresh])
 
+  /**
+   * 失败之后**不能**再调 `refresh()`：它开头就 `setError(null)`，会把刚报出来的错误抹掉。
+   * 2026-09-22 真机验收（`scripts/backup-progress-e2e.mjs`）发现：加密备份失败/被取消时
+   * 界面上一个字都不显示（进度行消失 + 错误被清空），用户只能猜。
+   * @param msg - 要显示的原因（成功时不传，改为刷新列表）。
+   */
+  const finishWith = async (msg: string | null): Promise<void> => {
+    if (msg === null) { await refresh(); return }
+    setError(msg)
+  }
+
   const create = async (): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
       const r = await apiCreateBackup()
-      if (!r.ok) setError(r.error ?? '创建备份失败')
-      await refresh()
+      await finishWith(r.ok ? null : (r.error ?? '创建备份失败'))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -105,8 +115,7 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     setBusy(true)
     try {
       const r = await apiDeleteBackup({ name })
-      if (!r.ok) setError(r.error ?? '删除失败')
-      await refresh()
+      await finishWith(r.ok ? null : (r.error ?? '删除失败'))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -123,13 +132,13 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     setEncProgress(null)
     try {
       const r = await apiCreateEncryptedBackup({ password: password.trim(), jobId })
-      if (!r.ok) {
+      if (r.ok) setPassword('')
+      // 失败/取消都要留着密码：用户多半是改一下参数重试，而清空输入框会连带把这条消息顶掉
+      await finishWith(r.ok ? null : (() => {
         const msg = r.error ?? '加密备份失败'
-        // 「中止」是用户按的，不是失败 —— 与后端 canceled 同一口径，别报成失败
-        setError(/取消|cancel|abort/i.test(msg) ? '已取消加密备份' : msg)
-      }
-      setPassword('')
-      await refresh()
+        // 「中止」是用户按的，不是失败 —— 与后端 canceled 同一口径
+        return /取消|cancel|abort/i.test(msg) ? '已取消加密备份' : msg
+      })())
     } catch (e) {
       setError((e as Error).message)
     } finally {
