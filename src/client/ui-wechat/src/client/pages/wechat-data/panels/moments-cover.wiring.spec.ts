@@ -33,7 +33,10 @@ function findRoot(start: string): string {
   throw new Error('找不到仓库根')
 }
 const ROOT = findRoot(HERE)
-const moments = readFileSync(join(HERE, 'Moments.tsx'), 'utf8')
+// M21 第二十二刀把 Moments.tsx 拆成 support + panel + 转发桶 ⇒ 读**三份的联合**
+// （断言一条没改；源码搬到哪份都算数）。
+const moments = ['Moments.tsx', 'moments-support.tsx', 'moments-panel.tsx']
+  .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
 const momentsCss = readFileSync(join(HERE, 'moments.module.css'), 'utf8')
 const audit = readFileSync(join(ROOT, 'scripts', 'panel-audit.mjs'), 'utf8')
 
