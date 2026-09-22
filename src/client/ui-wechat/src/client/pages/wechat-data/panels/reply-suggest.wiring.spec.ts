@@ -46,7 +46,7 @@ describe('推荐回复的接线', () => {
     // collectReplyContext 必须把 talker 交给 queryMessages（唯一的数据入口）
     const m = /export function collectReplyContext\(([\s\S]*?)\n\}/.exec(data)
     expect(m, '找不到 collectReplyContext —— 改名后请同步本用例').not.toBeNull()
-    const body = m![1]
+    const body = m?.[1] ?? ''
     expect(body.includes('queryMessages('), '上下文必须来自 queryMessages（不要自己开库）').toBe(true)
     expect(/\bqueryMessages\([^)]*talker/.test(body), 'queryMessages 的第一个业务参数必须是 talker').toBe(true)
   })

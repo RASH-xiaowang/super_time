@@ -36,7 +36,7 @@ const shellTsx = read('MergedSections.tsx')
 /** 取一个 CSS 块（`选择器 { … }`，不含嵌套），没有就返回空串。 */
 const block = (css: string, selector: string): string => {
   const m = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(css)
-  return m ? m[1] : ''
+  return m?.[1] ?? ''
 }
 
 describe('分段条：上方不再留白', () => {

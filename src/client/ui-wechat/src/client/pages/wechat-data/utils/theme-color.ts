@@ -42,10 +42,13 @@ function parseChannels(color: string): [number, number, number] | null {
   const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
   if (hex) {
     const h = hex[1]
-    if (h.length === 3) {
-      return [parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16)]
-    }
-    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+    // 正则只有这一个必选组，匹配成功就一定取得到；取不到按「解析不出颜色」同一个出口返回 null，
+    // 而不是让下面 `h[0] + h[0]` 去拼一个 `undefinedundefined`（parseInt 会静默给出 NaN 通道值）。
+    if (!h) return null
+    // 三位缩写先展开成六位，再一律用 `slice` 取通道：`h[i]` 在类型上是 `string | undefined`
+    // （越界会静默拼出 `undefinedundefined` ⇒ parseInt 给 NaN 通道），而 `slice` 返回的是 `string`。
+    const six = h.length === 3 ? h.split('').map(c => c + c).join('') : h
+    return [parseInt(six.slice(0, 2), 16), parseInt(six.slice(2, 4), 16), parseInt(six.slice(4, 6), 16)]
   }
   return null
 }
@@ -69,7 +72,9 @@ export function readableOn(background: string): string {
     const v = c / 255
     return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
   }
-  const luminance = (rgb: readonly number[]): number => 0.2126 * rel(rgb[0]) + 0.7152 * rel(rgb[1]) + 0.0722 * rel(rgb[2])
+  // 三个通道恒在 ⇒ 签名写成三元组，而不是 `readonly number[]`（后者每次下标读都是
+  // `number | undefined`，只能靠兜底糊过去 —— 而兜成 0 就是把「没取到」当成「黑色通道」）。
+  const luminance = (rgb: readonly [number, number, number]): number => 0.2126 * rel(rgb[0]) + 0.7152 * rel(rgb[1]) + 0.0722 * rel(rgb[2])
   const bg = luminance(channels)
   const contrast = (other: number): number => (Math.max(bg, other) + 0.05) / (Math.min(bg, other) + 0.05)
   const white = contrast(1)

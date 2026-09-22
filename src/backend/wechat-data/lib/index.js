@@ -25433,12 +25433,19 @@ function* xlsxSheetChunks(rows, ctrl, total = 0) {
   }
   yield* chunker.finish();
 }
+var WRITE_YIELD_EVERY_ROWS = 256;
 async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
   yield XLSX_SHEET_HEAD;
   const chunker = makeXlsxChunker(ctrl, total);
+  let sinceYield = 0;
   for await (const row of rows) {
     const chunk = chunker.push(row);
     if (chunk !== null) yield chunk;
+    sinceYield += 1;
+    if (sinceYield >= WRITE_YIELD_EVERY_ROWS) {
+      sinceYield = 0;
+      await yieldToEventLoop();
+    }
   }
   for (const chunk of chunker.finish()) yield chunk;
 }

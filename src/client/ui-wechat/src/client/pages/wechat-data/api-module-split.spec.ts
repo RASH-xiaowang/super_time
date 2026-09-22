@@ -77,7 +77,7 @@ describe('M21 切片：api.ts 的缓存层拆分', () => {
     // 名字的定义/再导出落在某个域模块里，只要桶把那个模块 `export *` 出来，
     // 面板的 `from '../api.ts'` 就照样拿得到。所以这里按**可达性**判：
     // 桶转发了哪些模块 → 那些模块的源码合起来必须含这些名字与两种形态。
-    const barrelTargets = [...api.matchAll(/export \* from '\.\/([\w.-]+)'/g)].map((m) => m[1])
+    const barrelTargets = [...api.matchAll(/export \* from '\.\/([\w.-]+)'/g)].map((m) => m[1] ?? '')
     expect(barrelTargets.length, 'api.ts 不再是转发桶了 —— 域模块没被转发出去').toBeGreaterThan(5)
     const reachable = barrelTargets.map((f) => read(f)).join('\n')
     for (const name of PUBLIC) {

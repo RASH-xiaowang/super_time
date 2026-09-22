@@ -657,15 +657,15 @@ describe('命中测试', () => {
   it('只在半径 + 容差之外 → 不命中', () => {
     expect(pickNode(nodes, pos, radiusOf, cam, 100, 0)).toBeNull()
     // 容差 4px：半径 30 的节点在 33 处仍可命中，在 36 处不可
-    expect(pickNode([nodes[0]], pos, radiusOf, cam, 33, 0)).toBe('under')
-    expect(pickNode([nodes[0]], pos, radiusOf, cam, 36, 0)).toBeNull()
+    expect(pickNode(nodes.slice(0, 1), pos, radiusOf, cam, 33, 0)).toBe('under')
+    expect(pickNode(nodes.slice(0, 1), pos, radiusOf, cam, 36, 0)).toBeNull()
   })
 
   it('容差随缩放换算成世界单位（缩小后容差变大，而不是固定 4 个世界单位）', () => {
     const zoomedOut: Camera = { x: 0, y: 0, k: 0.5 }
     // k=0.5 时 4px 容差 = 8 世界单位 → 半径 30 的节点在 37 处仍可命中
-    expect(pickNode([nodes[0]], pos, radiusOf, zoomedOut, 37, 0)).toBe('under')
-    expect(pickNode([nodes[0]], pos, radiusOf, zoomedOut, 39, 0)).toBeNull()
+    expect(pickNode(nodes.slice(0, 1), pos, radiusOf, zoomedOut, 37, 0)).toBe('under')
+    expect(pickNode(nodes.slice(0, 1), pos, radiusOf, zoomedOut, 39, 0)).toBeNull()
   })
 
   it('没有坐标的节点不会命中（防空转：否则上一条可能只是「谁都没中」）', () => {

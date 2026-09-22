@@ -138,14 +138,14 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       if (secs.length === 0) return
       // 触底时直接选最后一节：「某节顶端对齐容器顶端」对末尾几节做不到（下方内容不够高）
       if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2) {
-        const last = secs[secs.length - 1].dataset.settingsSection
+        const last = secs.at(-1)?.dataset.settingsSection
         if (last) setActiveKey((prev) => (prev === last ? prev : last))
         return
       }
       const boxTop = box.getBoundingClientRect().top
       // 判定线取容器上沿下方 24px：跨过它的最后一节就是当前节。用固定小偏移而不是
       // 「视口 1/4」这类大偏移，短节（如高级设置）才不会被整节跳过。
-      let cur = secs[0].dataset.settingsSection ?? ''
+      let cur = secs[0]?.dataset.settingsSection ?? ''
       for (const el of secs) {
         if (el.getBoundingClientRect().top - boxTop <= 24) cur = el.dataset.settingsSection ?? cur
       }

@@ -220,9 +220,12 @@ describe('FA2 参数 fa2Settings', () => {
 
   it('拉到极端只停在钳制窗口上，不会掉头', () => {
     const base = DEFAULT_GRAPH_SETTINGS.forceRepulsion
-    const sweep = [0, 0.1, 0.25, 0.5, 1, 2, 4, 10, 100].map(factor => scalingRatio(withForce('forceRepulsion', base * factor)))
-    for (let i = 1; i < sweep.length; i++) {
-      expect(sweep[i] as number).toBeGreaterThanOrEqual(sweep[i - 1] as number)
+    // 与相邻两条同样的「previous 跟踪」写法：不按下标回读 sweep，就不需要 `as number` 断言。
+    let previous = Number.NEGATIVE_INFINITY
+    for (const factor of [0, 0.1, 0.25, 0.5, 1, 2, 4, 10, 100]) {
+      const ratio = scalingRatio(withForce('forceRepulsion', base * factor))
+      expect(ratio).toBeGreaterThanOrEqual(previous)
+      previous = ratio
     }
   })
 

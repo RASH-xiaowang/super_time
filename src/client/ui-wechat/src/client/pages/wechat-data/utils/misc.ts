@@ -83,8 +83,11 @@ export function cacheBounded<K, V>(map: Map<K, V>, key: K, value: V, max: number
 export function capRecord<V>(rec: Record<string, V>, max: number): Record<string, V> {
   const keys = Object.keys(rec)
   if (keys.length <= max) return rec
+  const keep = new Set(keys.slice(keys.length - max))
   const next: Record<string, V> = {}
-  for (const k of keys.slice(keys.length - max)) next[k] = rec[k]
+  // 走 Object.entries 而不是 `rec[k]`：后者的类型是 `V | undefined`，只能靠兜底或断言糊过去，
+  // 而这里本来就只是「按原顺序留下还活着的键」—— 迭代器给的是值本身，没有下标读取。
+  for (const [k, v] of Object.entries(rec)) if (keep.has(k)) next[k] = v
   return next
 }
 

@@ -28,7 +28,7 @@ const strip = (s: string): string => s.replace(/\r\n/g, '\n').replace(/\/\*[\s\S
 
 /** 一份 CSS 里**定义**的类（行首 `.X`）。 */
 function defined(s: string): Set<string> {
-  return new Set([...strip(s).matchAll(/^\.([A-Za-z_][\w-]*)/gm)].map((m) => m[1]))
+  return new Set([...strip(s).matchAll(/^\.([A-Za-z_][\w-]*)/gm)].map((m) => m[1] ?? ''))
 }
 
 /** 一份 CSS 里**被选择器引用**的类（`.<类>` 出现在某个 `{` 之前）。 */

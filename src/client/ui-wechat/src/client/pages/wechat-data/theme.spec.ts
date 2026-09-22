@@ -205,7 +205,7 @@ function tokenMap(css: string): Map<string, string> {
   const out = new Map<string, string>()
   const re = /(--[A-Za-z0-9_-]+)\s*:\s*([^;{}]+);/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(css)) !== null) out.set(m[1], m[2].replace(/\s+/g, ' ').trim())
+  while ((m = re.exec(css)) !== null) if (m[1] && m[2]) out.set(m[1], m[2].replace(/\s+/g, ' ').trim())
   return out
 }
 
@@ -245,7 +245,7 @@ function subst(value: string, dark: Map<string, string>, seen: Set<string>): str
     }
     const inner = value.slice(open + 1, j - 1)
     const parts = splitTopCommas(inner)
-    const ref = parts[0]
+    const ref = parts[0] ?? ''
     const fallback = parts.length > 1 ? parts.slice(1).join(',').trim() : null
     let got: string | null = null
     if (ref.startsWith('--') && !seen.has(ref) && dark.has(ref)) {
@@ -286,7 +286,7 @@ const registered = (() => {
   const out = new Set<string>()
   const re = /^@property\s+(--[A-Za-z0-9_-]+)\s*\{[^}]*syntax:\s*'<color>'/gm
   let m: RegExpExecArray | null
-  while ((m = re.exec(rawCss)) !== null) out.add(m[1])
+  while ((m = re.exec(rawCss)) !== null) if (m[1]) out.add(m[1])
   return out
 })()
 
@@ -333,7 +333,7 @@ describe('令牌登记清单：静态重算 + 双向比对', () => {
     let n = 0
     while ((m = re.exec(rawCss)) !== null) {
       n++
-      const body = m[2]
+      const body = m[2] ?? ''
       expect(body).toContain("syntax: '<color>'")
       expect(body).toContain('inherits: true')
       const ini = /initial-value:\s*([^;]+);/.exec(body)?.[1]?.trim() ?? ''

@@ -237,8 +237,10 @@ describe('文档实体层进图', () => {
 
   it('mention 边是推断层：观测层占满额度时它被裁掉，而 [[链接]] 一条不少', () => {
     const base = withDocs()
+    const [proto] = base.notes
+    if (!proto) throw new Error('夹具里没有笔记，造不出 30 条 [[链接]]')
     // 造一批真实 [[链接]] 把额度吃满，再看 mention 是否被裁而不是把 wiki 边挤掉
-    const many = Array.from({ length: 30 }, (_, i) => ({ ...base.notes[0], id: 100 + i, title: `笔记${i}` }))
+    const many = Array.from({ length: 30 }, (_, i) => ({ ...proto, id: 100 + i, title: `笔记${i}` }))
     const wikiEdges = many.map(n => ({ source: `note:${n.id}`, target: 'kb:rust', weight: 1, kind: 'wiki' as const }))
     const g = buildKnowledgeNetwork({
       ...base,
@@ -313,7 +315,9 @@ describe('模型实体层进图（推断层的推断层）', () => {
 
   it('suggest 与 mention 同属推断层：观测层占满额度时被裁的是它们', () => {
     const base = withEntities()
-    const many = Array.from({ length: 30 }, (_, i) => ({ ...base.notes[0], id: 100 + i, title: `笔记${i}` }))
+    const [proto] = base.notes
+    if (!proto) throw new Error('夹具里没有笔记，造不出 30 条 [[链接]]')
+    const many = Array.from({ length: 30 }, (_, i) => ({ ...proto, id: 100 + i, title: `笔记${i}` }))
     const wikiEdges = many.map(n => ({ source: `note:${n.id}`, target: 'kb:rust', weight: 1, kind: 'wiki' as const }))
     const g = buildKnowledgeNetwork({
       ...base,

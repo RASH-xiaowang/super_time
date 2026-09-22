@@ -191,7 +191,7 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
   const selected = useMemo(() => notes.find(n => n.id === selectedId) ?? null, [notes, selectedId])
   const links = useMemo(() => (selected ? linkRefs(selected.body, byTitle) : []), [selected, byTitle])
 
-  const firstVisibleId = visible.length > 0 ? visible[0].id : null
+  const firstVisibleId = visible.at(0)?.id ?? null
 
   // 详情默认落在第一条：主从视图里右侧空着，用户得自己猜「要点一下左边」。
   // 只依赖两个原子值而不是 `visible` 数组，数组每次渲染都是新引用，会让 effect 空转。

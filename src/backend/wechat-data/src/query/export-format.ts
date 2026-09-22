@@ -357,6 +357,13 @@ export function* xlsxSheetChunks(
 }
 
 /**
+ * 每写出这么多行就让出一次事件循环。让的是 `setImmediate`（宏任务）而不是
+ * 「`await` 异步生成器的下一跳」（微任务）—— 微任务永远不让定时器与其它请求插进来，
+ * 而 H8 要保的正是「导出期间其它面板还查得到东西」。
+ */
+const WRITE_YIELD_EVERY_ROWS = 256
+
+/**
  * sheetData 的分块源（同步/异步行源都可）：流式版走这条。
  *
  * 这是「xlsx 不再随行数涨内存」的关键——改造前是先把所有行变成 `rows` 数组、
@@ -370,9 +377,15 @@ export async function* xlsxSheetChunksAsync(
 ): AsyncGenerator<string> {
   yield XLSX_SHEET_HEAD
   const chunker = makeXlsxChunker(ctrl, total)
+  let sinceYield = 0
   for await (const row of rows) {
     const chunk = chunker.push(row)
     if (chunk !== null) yield chunk
+    sinceYield += 1
+    if (sinceYield >= WRITE_YIELD_EVERY_ROWS) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
   }
   for (const chunk of chunker.finish()) yield chunk
 }

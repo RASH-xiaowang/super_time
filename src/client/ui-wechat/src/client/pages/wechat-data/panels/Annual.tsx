@@ -102,7 +102,8 @@ function CalendarCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
     for (let c = 0; c < n; c += 1) {
       for (let w = 0; w < 7; w += 1) {
         const idx = c * 7 + w - off
-        cells.push(idx >= 0 && idx < total ? { col: c, row: w, n: r.calendar[idx].n, d: r.calendar[idx].d } : null)
+        const day = idx >= 0 && idx < total ? r.calendar[idx] : null
+        cells.push(day ? { col: c, row: w, n: day.n, d: day.d } : null)
       }
     }
     // 每个月的起始列（放月份标签）
@@ -463,7 +464,7 @@ export function AnnualPanel(): React.JSX.Element {
       const env = await apiGetAnnual()
       const ys = env.years.filter(n => Number.isFinite(n) && n > 2000)
       setYears(ys)
-      setYear(prev => prev ?? (ys.length > 0 ? ys[ys.length - 1] : new Date().getFullYear()))
+      setYear(prev => prev ?? ys.at(-1) ?? new Date().getFullYear())
     } catch (e) {
       setError((e as Error).message)
       setYear(prev => prev ?? new Date().getFullYear())
