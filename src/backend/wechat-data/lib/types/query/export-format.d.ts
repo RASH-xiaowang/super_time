@@ -18,6 +18,17 @@ export declare function fmtFull(ts: number): string;
  * @param ctrl - 可选的进度/取消（每页检查一次取消）。
  */
 export declare function collectMessages(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): WechatMessage[];
+/**
+ * `collectMessages` 的**让出版**：翻页口径完全相同，只是每 8 页让出一次事件循环。
+ *
+ * 只给异步入口用（`exportSessionMessagesStreamed` / `exportAllSessions`）—— 同步入口
+ * `exportSessionMessages` 的 RPC 契约必须同步返回，改不了。
+ * @param decryptedDir - decrypted data root.
+ * @param username - conversation username.
+ * @param count - 0 = all (max 50000), else up to count.
+ * @param ctrl - 可选的进度/取消。
+ */
+export declare function collectMessagesAsync(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): Promise<WechatMessage[]>;
 /** Escape a CSV cell (wrap in quotes, double inner quotes). */
 export declare function csvCell(v: string): string;
 /**

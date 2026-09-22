@@ -48,7 +48,12 @@ export interface SessionExportPlan {
  * 抽出来是为了让同步入口（`exportSessionMessages`，现有 RPC 的同步返回不能动）
  * 与流式入口（`exportSessionMessagesStreamed`）**不会各自漂移出不同的文件名/条数**。
  */
-export declare function planSessionExport(decryptedDir: string, username: string, format: string, count: number | undefined, dir: string | undefined, types: number[] | undefined, richTypes: string[] | undefined, from: number | undefined, to: number | undefined, filename: string | undefined, zip: boolean | undefined, ctrl?: StreamControl): SessionExportPlan;
+export declare function planSessionExport(decryptedDir: string, username: string, format: string, count: number | undefined, dir: string | undefined, types: number[] | undefined, richTypes: string[] | undefined, from: number | undefined, to: number | undefined, filename: string | undefined, zip: boolean | undefined, ctrl?: StreamControl, 
+/**
+ * 已经收集好的消息（流式入口自己 `collectMessagesAsync` 完再进来）。
+ * 不传就按同步方式收集 —— 两条路共用下面这一份过滤与命名，才不会各导出不同内容。
+ */
+preCollected?: WechatMessage[]): SessionExportPlan;
 /** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
 export declare function formatTextBody(format: string, msgs: WechatMessage[], username: string, now: string): string;
 export declare function exportSessionMessages(decryptedDir: string, username: string, format: string, count?: number, dir?: string, types?: number[], richTypes?: string[], from?: number, to?: number, filename?: string, zip?: boolean, ctrl?: StreamControl): {

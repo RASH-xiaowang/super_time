@@ -28,18 +28,20 @@ const PAGES = TOTAL / 100
 
 let root = ''
 let decrypted = ''
+/** 当前这一条用例要多少条消息（事件循环那条要多得多，见下面的 describe）。 */
+let fixtureTotal = TOTAL
 let disposers: Array<() => void> = []
 let events: Array<Record<string, unknown>> = []
 let onEvent: ((p: Record<string, unknown>) => void) | null = null
 
 /** 造一份「网关读得到」的解密根：SessionTable + 该会话的消息分片。 */
-function makeFixture(dir: string): void {
+function makeFixture(dir: string, total: number): void {
   mkdirSync(join(dir, 'session'), { recursive: true })
   mkdirSync(join(dir, 'message'), { recursive: true })
   const sdb = new DatabaseSync(join(dir, 'session', 'session.db'))
   sdb.exec('CREATE TABLE SessionTable (username TEXT, display_name TEXT, last_timestamp INTEGER, sort_timestamp INTEGER, unread_count INTEGER, last_msg_type INTEGER, last_msg_sender TEXT)')
   sdb.prepare("INSERT INTO SessionTable (username, display_name, last_timestamp, sort_timestamp, unread_count, last_msg_type, last_msg_sender) VALUES (?, ?, ?, ?, 0, 1, '')")
-    .run(USER, 'M3 进度夹具', 1700000000 + TOTAL, 1700000000 + TOTAL)
+    .run(USER, 'M3 进度夹具', 1700000000 + total, 1700000000 + total)
   sdb.close()
 
   const mdb = new DatabaseSync(join(dir, 'message', 'message_0.db'))
@@ -47,7 +49,7 @@ function makeFixture(dir: string): void {
   mdb.exec(`CREATE TABLE "${t}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, is_sender INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id INTEGER, compress_content TEXT)`)
   const ins = mdb.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
   mdb.exec('BEGIN')
-  for (let i = 1; i <= TOTAL; i += 1) ins.run(i, i, 1, i % 2, 1700000000 + i, 1, `第 ${i} 条消息`, i, '')
+  for (let i = 1; i <= total; i += 1) ins.run(i, i, 1, i % 2, 1700000000 + i, 1, `第 ${i} 条消息`, i, '')
   mdb.exec('COMMIT')
   mdb.close()
 }
@@ -74,9 +76,10 @@ function fakeCtx(): Context {
 beforeEach(async () => {
   events = []
   onEvent = null
+  fixtureTotal = TOTAL
   root = await mkdtemp(join(tmpdir(), 'dsh-wechat-m3job-'))
   decrypted = join(root, 'decrypted')
-  makeFixture(decrypted)
+  makeFixture(decrypted, fixtureTotal)
   vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
   vi.stubEnv('DSH_WECHAT_DECODED_DIR', join(root, 'decoded_images'))
 })
@@ -86,7 +89,8 @@ afterEach(async () => {
   disposers = []
   onEvent = null
   vi.unstubAllEnvs()
-  await rm(root, { recursive: true, force: true })
+  // Windows：刚关掉的 sqlite 句柄可能还在释放中，`maxRetries` 专治这个 EBUSY。
+  await rm(root, { recursive: true, force: true, maxRetries: 12, retryDelay: 120 })
 })
 
 describe('M3：单会话导出的进度与取消', () => {
@@ -185,4 +189,40 @@ describe('M3：单会话导出的进度与取消', () => {
     }
     expect(gatewaySource()).toMatch(/EXPORT_PROGRESS_EVENT/)
   })
+})
+/**
+ * H8 的验收项「其他面板查询不被阻塞超过 1 秒」在**单会话导出**这条路上原先不成立：
+ * 收集 4 万条要翻 400 页，而整个翻页是一个同步循环 ⇒ 后端 worker 在此期间一个请求都进不来。
+ * 真机量到的是「导出中一次 getSessions 往返 2573ms，空闲时 1ms」（`scripts/export-nonblocking-e2e.mjs`），
+ * 但那份脚本不在 CI 门禁里 —— 所以这里用「事件循环延迟探针」把同一条事实钉进 CI。
+ *
+ * 阈值取 400ms：让出版每 8 页让出一次（约 50ms 一段），留给 CI 机器 8 倍余量；
+ * 而一旦退回不让出的收集，最长一段就是整次收集的时长（真机 4 万条实测 2573ms）。
+ */
+describe('H8：单会话导出不独占后端事件循环', () => {
+  it('导出期间的最长一段停顿 < 400ms（每 8 页让出一次）', async () => {
+    fixtureTotal = 40_000
+    for (const d of disposers) d()
+    disposers = []
+    root = await mkdtemp(join(tmpdir(), 'dsh-wechat-m3loop-'))
+    decrypted = join(root, 'decrypted')
+    makeFixture(decrypted, fixtureTotal)
+    vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
+    const gw = new WechatDataGateway(fakeCtx())
+    const delays: number[] = []
+    let last = performance.now()
+    const timer = setInterval(() => {
+      const now = performance.now()
+      delays.push(now - last)
+      last = now
+    }, 20)
+    const r = await gw.exportSessionMessages({ username: USER, format: 'excel', count: 0, jobId: 'job-loop' })
+    clearInterval(timer)
+    const max = delays.length ? Math.max(...delays) : 0
+    expect(r.count, '夹具没按预期收满').toBe(40_000)
+    expect(delays.length, '探针一次都没跑到（用例前提不成立）').toBeGreaterThan(0)
+    // 这一条就是断言本体：停顿超过 400ms 说明收集段又变回「一口气翻 120 页」的同步循环。
+    // （夹具取 4 万条：真机上就是这个量级，退回同步版时单次停顿 ~2.5 秒。）
+    expect(max, `后端事件循环被独占 ${Math.round(max)}ms（探针仅 ${delays.length} 次心跳）⇒ 收集段必须每 8 页让出一次`).toBeLessThan(400)
+  }, 120_000)
 })
