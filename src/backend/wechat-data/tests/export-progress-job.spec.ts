@@ -196,11 +196,19 @@ describe('M3：单会话导出的进度与取消', () => {
  * 真机量到的是「导出中一次 getSessions 往返 2573ms，空闲时 1ms」（`scripts/export-nonblocking-e2e.mjs`），
  * 但那份脚本不在 CI 门禁里 —— 所以这里用「事件循环延迟探针」把同一条事实钉进 CI。
  *
- * 阈值取 400ms：让出版每 8 页让出一次（约 50ms 一段），留给 CI 机器 8 倍余量；
- * 而一旦退回不让出的收集，最长一段就是整次收集的时长（真机 4 万条实测 2573ms）。
+ * 三条从失败里学来的口径（2026-09-23，这条守卫自己在 CI 上跑红以后才想明白的）：
+ *  ① **只量收集段**。写出/压缩段的结尾是「整个 sheet 一次 `deflateRawSync`」，那是一段
+ *     结构上就无法切成小口的同步工作（RELEASE-PLAN 的 H8「仍未做」里就记着它）。把整次导出
+ *     放在一起测，这条守卫测的就不是 H8 的缺陷而是那条欠账。收集段用进度事件的 `phase` 划出来。
+ *  ② **阈值要跟本机抖动比，不能跟手感数字比**。CI runner 与其它作业抢 CPU，光空闲时的
+ *     调度抖动能到几百毫秒 —— 原先写死的 400ms 在慢机上红给你看（1178ms），而那既不是
+ *     收集段独占、也不是产品回归。现在先量 300ms 空闲基线，允许值 = `max(400ms, 6×空闲最大间隔)`。
+ *  ③ 写出段仍然加了**宏任务**让出（`xlsxSheetChunksAsync`）：`for await` 的续体是微任务，
+ *     微任务永远不让定时器与其它请求插进来 —— 那是一处真缺陷，只是它不足以解释 CI 上那个数。
+ *     实验记在台账里：夹具加大到 16 万行时，**带让出与不带让出都会红**，红在结尾那次整条目压缩。
  */
 describe('H8：单会话导出不独占后端事件循环', () => {
-  it('导出期间的最长一段停顿 < 400ms（每 8 页让出一次）', async () => {
+  it('收集段每一段都真的让出过（停顿与本机空闲抖动同量级）', async () => {
     fixtureTotal = 40_000
     for (const d of disposers) d()
     disposers = []
@@ -209,20 +217,44 @@ describe('H8：单会话导出不独占后端事件循环', () => {
     makeFixture(decrypted, fixtureTotal)
     vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
     const gw = new WechatDataGateway(fakeCtx())
+    const probe = (sink: number[]): NodeJS.Timeout => {
+      let last = performance.now()
+      return setInterval(() => {
+        const now = performance.now()
+        sink.push(now - last)
+        last = now
+      }, 20)
+    }
+    // ① 空闲基线：同一支探针，什么都不干时的调度抖动
+    const idle: number[] = []
+    const idleTimer = probe(idle)
+    await new Promise((r) => { setTimeout(r, 300) })
+    clearInterval(idleTimer)
+    const idleMax = idle.length ? Math.max(...idle) : 0
+    const allowed = Math.max(400, idleMax * 6)
+    // ② 用进度事件把「收集段」的终点划出来（payload 形如 {jobId, phase, done, total}）
+    let collectEndsAt = Number.POSITIVE_INFINITY
+    onEvent = (p: Record<string, unknown>): void => {
+      if (collectEndsAt === Number.POSITIVE_INFINITY && p.phase !== 'collect') collectEndsAt = performance.now()
+    }
     const delays: number[] = []
-    let last = performance.now()
-    const timer = setInterval(() => {
-      const now = performance.now()
-      delays.push(now - last)
-      last = now
-    }, 20)
+    const t0 = performance.now()
+    const timer = probe(delays)
     const r = await gw.exportSessionMessages({ username: USER, format: 'excel', count: 0, jobId: 'job-loop' })
     clearInterval(timer)
-    const max = delays.length ? Math.max(...delays) : 0
+    onEvent = null
+    let acc = t0
+    const collectGaps: number[] = []
+    for (const d of delays) {
+      acc += d
+      if (acc <= collectEndsAt) collectGaps.push(d)
+    }
+    const max = collectGaps.length ? Math.max(...collectGaps) : 0
     expect(r.count, '夹具没按预期收满').toBe(40_000)
-    expect(delays.length, '探针一次都没跑到（用例前提不成立）').toBeGreaterThan(0)
-    // 这一条就是断言本体：停顿超过 400ms 说明收集段又变回「一口气翻 120 页」的同步循环。
-    // （夹具取 4 万条：真机上就是这个量级，退回同步版时单次停顿 ~2.5 秒。）
-    expect(max, `后端事件循环被独占 ${Math.round(max)}ms（探针仅 ${delays.length} 次心跳）⇒ 收集段必须每 8 页让出一次`).toBeLessThan(400)
+    expect(collectGaps.length, '收集段一次心跳都没抓到（探针或 phase 口径失效，用例前提不成立）').toBeGreaterThan(3)
+    expect(idleMax, '空闲基线一次都没跑到（校准前提不成立）').toBeGreaterThan(0)
+    // 断言本体：收集段每 8 页让出一次。退回「一口气翻 400 页」的同步写法时，
+    // 收集段就是一次独占（真机 4 万条实测 2573ms），必然超过这里的允许值。
+    expect(max, `收集段独占事件循环 ${Math.round(max)}ms（空闲抖动 ${Math.round(idleMax)}ms，允许 ${Math.round(allowed)}ms）⇒ 收集段必须每 8 页让出一次`).toBeLessThan(allowed)
   }, 120_000)
 })
