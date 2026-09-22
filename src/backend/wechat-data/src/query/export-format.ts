@@ -24,6 +24,50 @@ export function fmtFull(ts: number): string {
 }
 
 /**
+ * 逐页取消息（**同步与流式两条入口共用同一个翻页口径**，否则两条路会导出不同内容）。
+ * @param decryptedDir - 解密数据根。
+ * @param username - 会话 username。
+ * @param target - 要收集到的条数上限（`collectMessages` 已把 `count=0` 折成 5 万）。
+ * @param ctrl - 取消令牌（每页检查一次）。
+ */
+function* messagePages(decryptedDir: string, username: string, target: number, ctrl?: StreamControl): Generator<WechatMessage[]> {
+  const MAX_PAGES = 600
+  let cursor: number | undefined
+  let cursorLocalId: number | undefined
+  let collected = 0
+  let pages = 0
+  while (collected < target && pages < MAX_PAGES) {
+    // 分页收集是最长的同步循环之一（最多 500 轮），取消要在这里能生效。
+    throwIfCancelled(ctrl?.signal)
+    // 传复合游标，避免 sort_seq 重复处分页丢消息（导出必须一条不漏）。
+    const env = queryMessages(decryptedDir, username, 100, cursor, undefined, cursorLocalId)
+    if (env.messages.length === 0) break
+    collected += env.messages.length
+    pages += 1
+    yield env.messages
+    if (!env.hasMore) break
+    cursor = env.cursor
+    cursorLocalId = env.cursorLocalId
+  }
+}
+
+/**
+ * 让出一次事件循环。
+ *
+ * 为什么必须让：4 万条会话的收集要翻 400 页，**整段是一个同步循环**，后端 worker 在它跑完
+ * 之前不会处理任何别的请求 —— 真机量过（`scripts/export-nonblocking-e2e.mjs`）：导出期间
+ * 一次 `getSessions` 往返 **2573ms**，而同样的调用在空闲时是 **1ms**。H8 的验收项写的是
+ * 「其他面板查询不被阻塞超过 1 秒」，此前那句「73ms」是查询层自己量的循环占用，
+ * 不是用户那侧的往返。每 8 页让出一次 ⇒ 单段约 50ms，400 页也只多花几十毫秒。
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => { setImmediate(resolve) })
+}
+
+/** 每收集这么多页就让出一次（8 页 ≈ 800 条 ≈ 50ms，见 `yieldToEventLoop` 的实测）。 */
+const COLLECT_YIELD_EVERY_PAGES = 8
+
+/**
  * Collect a conversation messages chronologically (oldest first).
  * @param decryptedDir - decrypted data root.
  * @param username - conversation username.
@@ -33,26 +77,39 @@ export function fmtFull(ts: number): string {
 export function collectMessages(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): WechatMessage[] {
   const target = count === 0 ? 50000 : Math.max(1, Math.min(count, 50000))
   const pages: WechatMessage[] = []
-  let cursor: number | undefined
-  let cursorLocalId: number | undefined
-  let guard = 0
-  while (pages.length < target && guard < 600) {
-    // 分页收集是最长的同步循环之一（最多 500 轮），取消要在这里能生效。
-    throwIfCancelled(ctrl?.signal)
-    // 传复合游标，避免 sort_seq 重复处分页丢消息（导出必须一条不漏）。
-    const env = queryMessages(decryptedDir, username, 100, cursor, undefined, cursorLocalId)
-    if (env.messages.length === 0) break
-    pages.push(...env.messages)
+  for (const part of messagePages(decryptedDir, username, target, ctrl)) {
+    pages.push(...part)
     // count=0（导全部）时总量未知，报 0 让调用方显示不定量进度，而不是永远停在 0%（目标上限是 5 万）。
     reportProgress(ctrl, 'collect', pages.length, count === 0 ? 0 : target)
-    if (!env.hasMore) break
-    cursor = env.cursor
-    cursorLocalId = env.cursorLocalId
-    guard += 1
   }
   // newest-first pages -> chronological (oldest first)
-  const all = pages.slice(0, target).reverse()
-  return all
+  return pages.slice(0, target).reverse()
+}
+
+/**
+ * `collectMessages` 的**让出版**：翻页口径完全相同，只是每 8 页让出一次事件循环。
+ *
+ * 只给异步入口用（`exportSessionMessagesStreamed` / `exportAllSessions`）—— 同步入口
+ * `exportSessionMessages` 的 RPC 契约必须同步返回，改不了。
+ * @param decryptedDir - decrypted data root.
+ * @param username - conversation username.
+ * @param count - 0 = all (max 50000), else up to count.
+ * @param ctrl - 可选的进度/取消。
+ */
+export async function collectMessagesAsync(decryptedDir: string, username: string, count: number, ctrl?: StreamControl): Promise<WechatMessage[]> {
+  const target = count === 0 ? 50000 : Math.max(1, Math.min(count, 50000))
+  const pages: WechatMessage[] = []
+  let sinceYield = 0
+  for (const part of messagePages(decryptedDir, username, target, ctrl)) {
+    pages.push(...part)
+    reportProgress(ctrl, 'collect', pages.length, count === 0 ? 0 : target)
+    sinceYield += 1
+    if (sinceYield >= COLLECT_YIELD_EVERY_PAGES) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  return pages.slice(0, target).reverse()
 }
 
 /** Escape a CSV cell (wrap in quotes, double inner quotes). */

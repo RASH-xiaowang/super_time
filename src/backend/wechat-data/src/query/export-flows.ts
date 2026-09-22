@@ -22,7 +22,7 @@ import { queryPrivacyScan } from './privacy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
 import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
-import { buildCsv, collectMessages, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
+import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
 
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>> {
@@ -120,8 +120,13 @@ export function planSessionExport(
   filename: string | undefined,
   zip: boolean | undefined,
   ctrl?: StreamControl,
+  /**
+   * 已经收集好的消息（流式入口自己 `collectMessagesAsync` 完再进来）。
+   * 不传就按同步方式收集 —— 两条路共用下面这一份过滤与命名，才不会各导出不同内容。
+   */
+  preCollected?: WechatMessage[],
 ): SessionExportPlan {
-  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl)
+  const all = preCollected ?? collectMessages(decryptedDir, username, count ?? 0, ctrl)
   const msgs = filterMessages(all, types, richTypes).filter((m) => {
     if (from && from > 0 && m.createTime < from) return false
     if (to && to > 0 && m.createTime > to) return false
@@ -218,9 +223,13 @@ export async function exportSessionMessagesStreamed(
   } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number }> {
   const ctrl: StreamControl = { onProgress: options.onProgress, signal: options.signal }
+  // 收集这一段是整条导出里最耗时的同步循环 ⇒ 走**会让出**的版本：不让出时 4 万条会把
+  // 后端事件循环独占 2.5 秒，期间别的面板一个查询都进不来（H8 验收项，实测见
+  // scripts/export-nonblocking-e2e.mjs）。
+  const collected = await collectMessagesAsync(decryptedDir, options.username, options.count ?? 0, ctrl)
   const plan = planSessionExport(
     decryptedDir, options.username, options.format, options.count, options.dir,
-    options.types, options.richTypes, options.from, options.to, options.filename, options.zip, ctrl,
+    options.types, options.richTypes, options.from, options.to, options.filename, options.zip, ctrl, collected,
   )
   const { msgs } = plan
   if (plan.isXlsx && !options.zip) {
@@ -676,7 +685,7 @@ export async function exportAllSessions(
       // 会话边界是这块最自然的取消/进度点：每个会话最多 5 万条，卡在中途用户会等很久。
       throwIfCancelled(ctrl.signal)
       reportProgress(ctrl, 'sessions', i, sessions.length)
-      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl)
+      const msgs = await collectMessagesAsync(decryptedDir, s.username, 0, ctrl)
       const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 40)
       const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, '_')
       let name = safeName + '_' + uid + '.txt'

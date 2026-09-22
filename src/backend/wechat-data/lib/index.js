@@ -25191,25 +25191,53 @@ function fmtFull2(ts2) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function collectMessages(decryptedDir, username, count, ctrl) {
-  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
-  const pages = [];
+function* messagePages(decryptedDir, username, target, ctrl) {
+  const MAX_PAGES = 600;
   let cursor;
   let cursorLocalId;
-  let guard = 0;
-  while (pages.length < target && guard < 600) {
+  let collected = 0;
+  let pages = 0;
+  while (collected < target && pages < MAX_PAGES) {
     throwIfCancelled(ctrl?.signal);
     const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
     if (env.messages.length === 0) break;
-    pages.push(...env.messages);
-    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
+    collected += env.messages.length;
+    pages += 1;
+    yield env.messages;
     if (!env.hasMore) break;
     cursor = env.cursor;
     cursorLocalId = env.cursorLocalId;
-    guard += 1;
   }
-  const all = pages.slice(0, target).reverse();
-  return all;
+}
+function yieldToEventLoop() {
+  return new Promise((resolve3) => {
+    setImmediate(resolve3);
+  });
+}
+var COLLECT_YIELD_EVERY_PAGES = 8;
+function collectMessages(decryptedDir, username, count, ctrl) {
+  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
+  const pages = [];
+  for (const part of messagePages(decryptedDir, username, target, ctrl)) {
+    pages.push(...part);
+    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
+  }
+  return pages.slice(0, target).reverse();
+}
+async function collectMessagesAsync(decryptedDir, username, count, ctrl) {
+  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
+  const pages = [];
+  let sinceYield = 0;
+  for (const part of messagePages(decryptedDir, username, target, ctrl)) {
+    pages.push(...part);
+    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
+    sinceYield += 1;
+    if (sinceYield >= COLLECT_YIELD_EVERY_PAGES) {
+      sinceYield = 0;
+      await yieldToEventLoop();
+    }
+  }
+  return pages.slice(0, target).reverse();
 }
 function csvCell(v) {
   return '"' + v.replace(/"/g, '""') + '"';
@@ -25444,8 +25472,8 @@ function filterMessages(msgs, types, richTypes) {
 function sanitizeBasename(name) {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").trim().slice(0, 100);
 }
-function planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl) {
-  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl);
+function planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl, preCollected) {
+  const all = preCollected ?? collectMessages(decryptedDir, username, count ?? 0, ctrl);
   const msgs = filterMessages(all, types, richTypes).filter((m) => {
     if (from && from > 0 && m.createTime < from) return false;
     if (to && to > 0 && m.createTime > to) return false;
@@ -25475,6 +25503,7 @@ function formatTextBody(format, msgs, username, now) {
 }
 async function exportSessionMessagesStreamed(decryptedDir, options) {
   const ctrl = { onProgress: options.onProgress, signal: options.signal };
+  const collected = await collectMessagesAsync(decryptedDir, options.username, options.count ?? 0, ctrl);
   const plan = planSessionExport(
     decryptedDir,
     options.username,
@@ -25487,7 +25516,8 @@ async function exportSessionMessagesStreamed(decryptedDir, options) {
     options.to,
     options.filename,
     options.zip,
-    ctrl
+    ctrl,
+    collected
   );
   const { msgs } = plan;
   if (plan.isXlsx && !options.zip) {
@@ -25838,7 +25868,7 @@ async function exportAllSessions(decryptedDir, opts) {
       const s = sessions[i];
       throwIfCancelled(ctrl.signal);
       reportProgress(ctrl, "sessions", i, sessions.length);
-      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl);
+      const msgs = await collectMessagesAsync(decryptedDir, s.username, 0, ctrl);
       const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
       const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
       let name = safeName + "_" + uid + ".txt";
