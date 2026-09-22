@@ -276,7 +276,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [annCanExpand, setAnnCanExpand] = useState(false)
   const annRef = useRef<HTMLDivElement | null>(null)
   const [chatlogResolving, setChatlogResolving] = useState(false)
-  const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
+  const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
   const { activeSearchJobRef, buildIndex, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen } = useChatsMsgSearch({ cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen })
   const chatlogOpen = chatlogStack.length > 0 ? chatlogStack[chatlogStack.length - 1] : null
   const [calYear, setCalYear] = useState(new Date().getFullYear())
@@ -627,7 +627,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     editBusy, editErr, editTarget, editText, editedOpen, editing,
     edits, error, expCount, expDir, expFilename, expFormat,
     expFrom, expTo, expTypes, expZip, exportBatch, exportMsg,
-    exportOpen, exportSession, exporting, filtered, filteredMembers, groupInfo,
+    cancelExport, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo,
     groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile,
     indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit,
     memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen,
