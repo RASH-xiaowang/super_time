@@ -14,14 +14,15 @@ import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, DateRangeField, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
+import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
-import { ARTICLE_COVER_CACHE_MAX, MEDIA_LABELS, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
+import { ARTICLE_COVER_CACHE_MAX, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -782,142 +783,32 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       />
 
       <div className={css.layout}>
-        <aside className={css.sidebar}>
-
-          {/* 筛选面板：分组布局（作者 / 类型 / 范围 / 排序 / 月份），作者名截断 */}
-          <div className={css.filterPanel}>
-            {topAuthors.length > 0 && (
-              <div className={css.filterGroup}>
-                <span className={css.filterLabel}>作者</span>
-                <div className={css.filterChips}>
-                  {(showAllAuthors ? topAuthors : topAuthors.slice(0, 8)).map(([name, count]) => (
-                    <button key={name} type="button" className={css.authorChip} data-on={authorFilter === name || undefined} title={authorFilter === name ? '清除 ' + name : '只看 ' + name} onClick={() => { setAuthorFilter(authorFilter === name ? null : name) }}>
-                      <span className={css.chipName}>{name}</span>
-                      <span className={css.chipCount}>{String(count)}</span>
-                    </button>
-                  ))}
-                  {topAuthors.length > 8 && (
-                    <button type="button" className={css.authorChip} onClick={() => { setShowAllAuthors(v => !v) }} title={showAllAuthors ? '收起作者' : '更多作者'}>{showAllAuthors ? '↑ 收起' : '… 更多作者'}</button>
-                  )}
-                  {authorFilter && <button type="button" className={css.authorChip} data-on="" onClick={() => { setAuthorFilter(null) }} title="清除作者筛选">✕ {authorFilter}</button>}
-                </div>
-              </div>
-            )}
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>类型</span>
-              <Segmented
-                options={(Object.keys(MEDIA_LABELS) as MediaFilter[]).map(f => ({ value: f, label: MEDIA_LABELS[f] }))}
-                value={mediaFilter}
-                onChange={(v) => { setMediaFilter(v as MediaFilter) }}
-                ariaLabel="媒体类型筛选"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>范围</span>
-              <Segmented
-                options={[
-                  { value: 'all', label: '全部' },
-                  { value: 'mine', label: '我' },
-                  { value: 'others', label: '他人' },
-                ]}
-                value={mineFilter}
-                onChange={(v) => { setMineFilter(v as 'all' | 'mine' | 'others') }}
-                ariaLabel="范围筛选"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>排序</span>
-              <Segmented
-                options={[
-                  { value: 'desc', label: '最新在前' },
-                  { value: 'asc', label: '最早在前' },
-                ]}
-                value={sortOrder}
-                onChange={(v) => { setSortOrder(v as 'asc' | 'desc') }}
-                ariaLabel="排序方向"
-              />
-            </div>
-            <div className={css.filterGroup}>
-              <span className={css.filterLabel}>时间</span>
-              <DateRangeField
-                from={dateFrom}
-                to={dateTo}
-                onFrom={setDateFrom}
-                onTo={setDateTo}
-                onClear={() => { setDateFrom(''); setDateTo('') }}
-                presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                ariaLabel="朋友圈时间筛选"
-              />
-            </div>
-            {monthFilter && (
-              <div className={css.filterGroup}>
-                <span className={css.filterLabel}>月份</span>
-                <div className={css.segTrack}>
-                  <button type="button" className={css.segChip} data-on="" onClick={() => { setMonthFilter(null) }} title="清除月份筛选">✕ {monthFilter}</button>
-                </div>
-              </div>
-            )}
-            {(search || mediaFilter !== 'all' || monthFilter !== null || mineFilter !== 'all' || authorFilter !== null) && (
-              <button type="button" className={css.clearBtn} onClick={clearFilters} title="清除所有筛选">✕ 清除</button>
-            )}
-          </div>
-
-          {/* monthly histogram (click a bar to filter that month) */}
-          <div className={css.monthCard}>
-            <div className={css.monthTitle}>
-              <span>全部月份动态{authorFilter ? '（作者：' + authorFilter + '）' : ''}（{monthly.length} 个月）</span>
-              <span className={css.monthHint}>点击柱条按月份筛选</span>
-              {monthFilter && <span className={css.monthHint}>{moments.length < total ? '（结果仅覆盖已加载部分）' : null}</span>}
-              {monthFilter && <button type="button" className={css.textToggle} onClick={() => { setMonthFilter(null) }}>✕ 清除 {monthFilter}</button>}
-            </div>
-            <div className={css.monthBars}>
-              {monthly.map(m => (
-                // 点击目标放在**整列**而非柱子：柱高正比于数量，低数量的月份只有 2px 高，
-                // 实测（WCAG 2.2 SC 2.5.8 目标尺寸）该面板 105 个控件里有 80 个小于 24×24，
-                // 全部来自这里。整列高度始终包含「数值 + 柱 + 月份标签」，是稳定的目标。
-                <div
-                  key={m.key}
-                  className={[css.monthCol, m.key === monthFilter ? css.monthColActive : ''].filter(Boolean).join(' ')}
-                  title={m.key + ' ' + String(m.count) + ' 条'}
-                  {...clickableKey(() => { setMonthFilter(m.key === monthFilter ? null : m.key) })}
-                >
-                  <span className={css.monthValue}>{m.count > 0 ? String(m.count) : ''}</span>
-                  <div className={css.monthFill} data-peak={m.count === monthMax || undefined} data-on={m.key === monthFilter || undefined} style={{ height: String(Math.max(2, Math.round((m.count / monthMax) * 30))) + 'px' }} />
-                  <span className={css.monthLabel}>{m.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* insight stats */}
-          <div className={css.insight}>
-            <div className={css.stat}>
-              <span className={css.statIcon}>📊</span>
-              <span className={css.statNum} title="服务端全量动态数">{String(total)}</span>
-              <span className={kitCss.textCaption}>总动态</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🖼</span>
-              <span className={css.statNum}>{insight.withImages}</span>
-              <span className={kitCss.textCaption}>含图片</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🎬</span>
-              <span className={css.statNum}>{insight.withVideos}</span>
-              <span className={kitCss.textCaption}>含视频</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>📍</span>
-              <span className={css.statNum}>{insight.withLocation}</span>
-              <span className={kitCss.textCaption}>带位置</span>
-            </div>
-            <div className={css.stat}>
-              <span className={css.statIcon}>🔗</span>
-              <span className={css.statNum}>{insight.withLink}</span>
-              <span className={kitCss.textCaption}>分享链接</span>
-            </div>
-          </div>
-        </aside>
+        <MomentsSidebar
+          search={search}
+          clearFilters={clearFilters}
+          topAuthors={topAuthors}
+          showAllAuthors={showAllAuthors}
+          setShowAllAuthors={setShowAllAuthors}
+          authorFilter={authorFilter}
+          setAuthorFilter={setAuthorFilter}
+          mediaFilter={mediaFilter}
+          setMediaFilter={setMediaFilter}
+          mineFilter={mineFilter}
+          setMineFilter={setMineFilter}
+          sortOrder={sortOrder}
+          setSortOrder={setSortOrder}
+          dateFrom={dateFrom}
+          setDateFrom={setDateFrom}
+          dateTo={dateTo}
+          setDateTo={setDateTo}
+          monthFilter={monthFilter}
+          setMonthFilter={setMonthFilter}
+          monthly={monthly}
+          monthMax={monthMax}
+          loadedCount={moments.length}
+          total={total}
+          insight={insight}
+        />
 
         <div className={css.main}>
           <div ref={scrollRef} className={css.scroll}>
