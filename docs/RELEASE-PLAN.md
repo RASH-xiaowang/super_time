@@ -615,7 +615,7 @@ flowchart TD
 | ID | 任务 | 依赖 | 预估 | 状态 |
 |---|---|---|---|---|
 | H10 | Electron 安全基线加固 | H3 | 2d | 已完成 |
-| H11 | 修复类型检查为零的现状 | H2 | 3d | 已完成（原定第二步的四档已全开；只剩客户端基座 `strict`，实测 90 处） |
+| H11 | 修复类型检查为零的现状 | H2 | 3d | 已完成（原定第二步的四档 + 客户端 `strict` + `noImplicitOverride` 全开，两侧 `tsc` 0 错；只剩 `exactOptionalPropertyTypes` 与 `noUnusedLocals` 两项照实记账） |
 | H15 | asarUnpack 补 native 资产 | H2 | 0.5d | 已完成 |
 
 ---
