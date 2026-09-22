@@ -11,6 +11,7 @@
  * @vitest-environment node
  */
 import { readFileSync, existsSync } from 'node:fs'
+import { readChatsSource } from './chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -18,7 +19,8 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** 仓库根：panels → wechat-data → pages → client → src → ui-wechat → client → src（8 层）。 */
 const ROOT = join(HERE, '..', '..', '..', '..', '..', '..', '..', '..')
-const chatsSrc = readFileSync(join(HERE, 'Chats.tsx'), 'utf8')
+// M21 拆了 Chats.tsx ⇒ 读面板 + chats-*.tsx 的联合（断言未改）
+const chatsSrc = readChatsSource()
 const harnessPath = join(ROOT, 'scripts', 'longlist-virtualization-e2e.mjs')
 
 describe('N18：消息流虚拟化的接线', () => {

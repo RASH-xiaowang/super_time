@@ -9,6 +9,7 @@
  *      等于让第二次点击什么都不做。
  */
 import { readFileSync } from 'node:fs'
+import { readChatsSource } from './chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -16,8 +17,7 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 // M21 把 Chats.tsx 的媒体渲染拆成 chats-*.tsx ⇒ 读联合（断言未改）
-const chats = strip(['Chats.tsx', 'chats-support.tsx', 'chats-media.tsx', 'chats-cards.tsx']
-  .map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n'))
+const chats = strip(readChatsSource())
 /**
  * M21：`api.ts` 拆成转发桶 + 8 个域模块（core / read / kb / search / media / export-ops / config / status）——
  * 这里读它们的**联合**（断言一条没放宽；拆出去的边界不该影响任何一条守卫的结论）。
