@@ -8,10 +8,11 @@
  * 为什么单列一个模块：这些频道与「微信数据后端」无关，是宿主层的基础设施；
  * 分开之后 `main.js` 只剩编排。
  * @param {object} ctx - 由 main.js 组装：ipcMain / app / dialog / shell / path / fs /
- *   diagLog / STATE_DIR / APP_VERSION / debugGates / licenseService / getMainWindow / buildDiagnosticReport。
+ *   diagLog / STATE_DIR / APP_VERSION / debugGates / licenseService / getMainWindow /
+ *   buildDiagnosticReport / installWebContentsGuards（后两个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
 function registerMiscIpc(ctx) {
-  const { ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticReport } = ctx;
+  const { ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticReport, installWebContentsGuards } = ctx;
   ipcMain.handle('diag:log-info', () => {
     const files = diagLog.files()
       .map((p) => {
