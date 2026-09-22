@@ -16,6 +16,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
+import { readChatsSource } from './chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -23,7 +24,8 @@ import { describe, expect, it } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const stripComments = (s: string): string =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-const code = stripComments(readFileSync(join(HERE, 'Chats.tsx'), 'utf8'))
+// M21 拆了 Chats.tsx ⇒ 读面板 + chats-*.tsx 的联合（断言未改）
+const code = stripComments(readChatsSource())
 
 describe('会话列表的后台刷新', () => {
   it('实时事件处理器里不再刷会话列表（钩子内部已做非破坏性 refresh）', () => {
