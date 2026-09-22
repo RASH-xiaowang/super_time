@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cachedBySig, contactMeta, shardCatalog, invalidateWechatMeta, bumpDataGeneration, dataGenerationSig } from '../src/query/meta.ts'
 import { getDbStatus } from '../src/query/status.ts'
+import { gatewayClassSource } from '../../tests/gateway-source.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -203,7 +204,8 @@ describe('接线：同步事件必须推进数据世代，且不得改回整体�
    * 无声退化（整树统计类条目会退回只剩 TTL，且没人看得出来）。
    * 仓库里 `llm-retry.spec.ts` 的「不得有裸 fetch」是同款守卫。
    */
-  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'gateway.ts'), 'utf8')
+  // M21 结构刀：构造器（含实时同步接线）住在 gateway-core.ts ⇒ 读组成网关类的两个文件
+  const src = gatewayClassSource()
 
   /**
    * 截出同步回调那一段（从 `startRealtimeSync(` 到紧随其后的 `ctx.effect(() => stopSync`），
@@ -212,9 +214,9 @@ describe('接线：同步事件必须推进数据世代，且不得改回整体�
    */
   function syncCallbackSource(): string {
     const start = src.indexOf('startRealtimeSync(')
-    expect(start, 'gateway.ts 里找不到 startRealtimeSync(').toBeGreaterThan(-1)
+    expect(start, '网关类里找不到 startRealtimeSync(').toBeGreaterThan(-1)
     const end = src.indexOf('ctx.effect(() => stopSync', start)
-    expect(end, 'gateway.ts 里找不到 stopSync 的 effect 注册（同步回调的结束标志）').toBeGreaterThan(start)
+    expect(end, '网关类里找不到 stopSync 的 effect 注册（同步回调的结束标志）').toBeGreaterThan(start)
     return src.slice(start, end)
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n')

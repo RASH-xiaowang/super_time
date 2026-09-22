@@ -15,14 +15,12 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { gatewaySource } from './gateway-source.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const doc = readFileSync(join(ROOT, 'docs', 'PRIVACY.md'), 'utf8')
-// M21：KB 域方法体搬进 remotes/ ⇒ 读联合（断言未改）
-const _gwPath = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
-const _gwDir = dirname(_gwPath)
-const gateway = [_gwPath, ...readdirSync(join(_gwDir, 'remotes')).filter((f) => f.endsWith('.ts')).sort()
-  .map((f) => join(_gwDir, 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n')
+// M21：KB/域方法体在 remotes/、隐私闸与出网接缝在 gateway-core.ts ⇒ 读「类 + 域处理器」的联合
+const gateway = gatewaySource()
 
 /**
  * 去掉注释（行注释 + 块注释），用于源码级断言。
@@ -164,7 +162,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
    */
   it('精排：候选文档必须与查询一起过闸，且拦截判在出网之前', () => {
     const code = stripComments(gateway)
-    const from = code.indexOf('private makeRerankFn')
+    const from = code.search(/\n  (?:private|protected) makeRerankFn/)
     expect(from, 'gateway 里没有 makeRerankFn（精排接线被删了？）').toBeGreaterThan(0)
     const body = code.slice(from, from + 1600)
     // ① gate 的入参必须同时含 query 与全部 documents。只 gate query 等于把 N 条正文
