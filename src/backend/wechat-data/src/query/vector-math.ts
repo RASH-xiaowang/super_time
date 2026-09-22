@@ -71,15 +71,31 @@ export function getPlanes(dim: number): Int8Array[] {
   return planes
 }
 
+/**
+ * 两个向量前 `min(len)` 维的点积。
+ *
+ * 这是 SimHash 与精确余弦打分共用的那一步（向量都已 L2 归一化 ⇒ 点积就是余弦），也正是本文件
+ * 存在的理由：两套向量库各写一份，某天只改了一处就是「检索质量悄悄下降而不报错」。
+ *
+ * 越界读兜成 0 是**点积的加法单位元** —— 「少一项」与「这项是 0」是同一件事，不存在把
+ * 「没取到」伪装成「取到 0」的问题。长度不等只可能是存的 dim 与查询的 dim 不一致（换过
+ * embedding 模型），那时按短的算 —— 与抽出本函数之前两处写法的口径逐字相同。
+ */
+export function dotProduct(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  const n = Math.min(a.length, b.length)
+  let dot = 0
+  for (let i = 0; i < n; i += 1) dot += (a[i] ?? 0) * (b[i] ?? 0)
+  return dot
+}
+
 /** 计算向量的 64 位 SimHash（返回两个 32 位无符号整数表示的高/低位）。 */
 export function simhash(vec: Float32Array, planes: Int8Array[]): { lo: number; hi: number } {
   let lo = 0
   let hi = 0
-  const dim = vec.length
+  // 超平面一律由 `getPlanes(vec.length)` 生成 ⇒ 与向量等长（长度口径见 {@link dotProduct}）。
   for (let b = 0; b < planes.length; b += 1) {
     const p = planes[b]
-    let dot = 0
-    for (let i = 0; i < dim; i += 1) dot += p[i] * vec[i]
+    const dot = p ? dotProduct(p, vec) : 0
     if (dot >= 0) {
       if (b < 32) lo |= (1 << b)
       else hi |= (1 << (b - 32))
@@ -99,10 +115,10 @@ export function popcount32(x: number): number {
 /** L2 归一化（余弦相似度 → 点积）。 */
 export function l2normalize(v: number[]): Float32Array {
   const f = Float32Array.from(v)
-  let n = 0
-  for (let i = 0; i < f.length; i += 1) n += f[i] * f[i]
-  n = Math.sqrt(n)
-  if (n > 1e-9) for (let i = 0; i < f.length; i += 1) f[i] /= n
+  // 用 reduce/forEach 而不是 `for (let i…) f[i]`：回调拿到的是**元素值**（不是 `number | undefined`），
+  // 所以这一趟没有下标读取；同时避免 `.entries()` 迭代器 —— 实测它在十几万行的热循环里明显更慢。
+  const n = Math.sqrt(f.reduce((s, x) => s + x * x, 0))
+  if (n > 1e-9) f.forEach((x, i) => { f[i] = x / n })
   return f
 }
 
@@ -137,7 +153,10 @@ export function statSig(p: string): string {
  * 这里换成计数选择（计数排序的特例）：
  *   ① 一遍算距离，存进 `Uint8Array`（距离恒在 [0,64]，一字节够）并累加 65 格直方图；
  *   ② 用直方图找出「累计条数 ≥ pool」的那个距离 `limit`；
- *   ③ 再做一遍计数排序，把 `d <= limit` 的行按 **(距离升序, 原顺序)** 落位。
+ *   ③ 再扫一遍按 **(距离升序, 原顺序)** 把**行本身**落位到前 pool 个位置。
+ *
+ * 第 ③ 步不先排出下标数组再回取行（那是两次 O(N) 访问 + 一张中间数组），而是直接写行 ——
+ * 距离表已经是「每行一个字节」，回它一次就够了。
  *
  * 选出来的序列与「全量按距离升序排序后取前 pool」**逐项相同**（含同距离内的先后，
  * 因为计数排序是稳定的）—— 差别只在代价：零逐行分配、无比较排序、两次线性扫描。
@@ -158,32 +177,45 @@ export function selectByHamming(rows: readonly HashRow[], qh: { lo: number; hi: 
   const want = Number.isNaN(pool) ? 0 : Math.floor(pool)
   const take = Math.min(Math.max(want, 0), n)
   if (take <= 0) return []
-  const dist = new Uint8Array(n)
   const hist = new Uint32Array(MAX_HAMMING + 1)
+  const dist = new Uint8Array(n)
   for (let i = 0; i < n; i += 1) {
     const r = rows[i]
+    if (!r) continue
     const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0)
     dist[i] = d
-    hist[d] += 1
+    // 直方图格子读不到只可能是下标越界（`d` 由两次 32 位 popcount 相加 ⇒ 恒在 [0,64]），
+    // 而 `?? 0` 与原来的 `hist[d] += 1` 在越界时同样是什么都不做，没有行为分歧。
+    hist[d] = (hist[d] ?? 0) + 1
   }
   let limit = MAX_HAMMING
   let cum = 0
   for (let d = 0; d <= MAX_HAMMING; d += 1) {
-    cum += hist[d]
+    cum += hist[d] ?? 0
     if (cum >= take) { limit = d; break }
   }
   // 计数排序（只排到 limit 组）：先算每组起始偏移，再按原顺序落位 —— 稳定。
   const cursor = new Uint32Array(limit + 2)
   let acc = 0
-  for (let d = 0; d <= limit; d += 1) { cursor[d] = acc; acc += hist[d] }
-  const order = new Uint32Array(acc)
+  for (let d = 0; d <= limit; d += 1) { cursor[d] = acc; acc += hist[d] ?? 0 }
+  // 落位时直接把**行本身**写进 out（旧写法是先排出一张 `order` 下标数组、再 `rows[order[k]]` 回读）：
+  // 少一次 O(N) 分配，也少一处「按下标回读、类型上可能读不到」。
+  // `acc >= take` 由上面选 `limit` 的口径保证；同距离内按原顺序取，所以 `at` 是 0,1,2,… 连续递增，
+  // `at < take` 只是丢掉多出来的候选，out 的前 take 个位置必然填满。
+  const out: HashRow[] = new Array(take)
   const next = cursor.slice()
   for (let i = 0; i < n; i += 1) {
+    const r = rows[i]
     const d = dist[i]
-    if (d <= limit) order[next[d]++] = i
+    // 读不到行或距离就当这一行不进候选 —— 宁可少一个候选，也不能把「缺失」当成距离 0（那会排最前）。
+    if (!r || d === undefined || d > limit) continue
+    const at = next[d] ?? 0
+    next[d] = at + 1
+    if (at < take) out[at] = r
   }
-  const out: HashRow[] = new Array(take)
-  for (let k = 0; k < take; k += 1) out[k] = rows[order[k]]
+  // 计数排序把 0..acc-1 每个位置**恰好写一次**，而 `acc >= take`（`limit` 就是按「累计首次 ≥ take」选的），
+  // 所以 out 的前 take 个位置必然填满 —— 上面两趟的取舍条件一致（同一批 `!r` 的行在两趟都跳过），
+  // 不会有「直方图记了数、落位时却没写」的空槽。
   return out
 }
 

@@ -901,9 +901,11 @@ export abstract class GatewayCore extends TypertRemoteService {
         for (;;) {
           const i = next
           next += 1
-          if (i >= due.length) return
+          // `due` 是稠密的 number 数组 ⇒ 「取不到」与「下标越界」是同一件事，正好就是「没有到期任务了」。
+          const id = i >= due.length ? undefined : due[i]
+          if (id === undefined) return
           try {
-            await this.runSummaryTask({ id: due[i] })
+            await this.runSummaryTask({ id })
           } catch (e) {
             failure = failure ?? e
           }

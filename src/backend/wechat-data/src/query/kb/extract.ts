@@ -85,22 +85,26 @@ export function parseEntityLines(raw: string): { items: Array<{ label: string; k
     const line = line0.replace(/^\s*[-*•\d.、\s]+/, '').replace(/^["'`]+|["'`]+$/g, '').trim()
     if (line === '') continue
     const parts = line.split(/[|\t]/).map(p => p.replace(/^["'`]+|["'`]+$/g, '').trim()).filter(p => p !== '')
-    if (parts.length === 0) { dropped += 1; continue }
+    // 先解构再判空：`parts[0]` 在这个开关下是 `string | undefined`，而下面每个分支用的都是
+    // 「已经验过长度」的位置 —— 用解构把它们一次性钉成 `string`，比在每处兜缺省值更难读错。
+    const [first, second, third] = parts
+    if (first === undefined) { dropped += 1; continue }
+    const last = parts.at(-1)
     // 允许两种顺序：`kind|label` 与 `label|kind`（前者是指定格式，后者是模型常犯的）
     let kindRaw = ''
     let label = ''
     let weightRaw = ''
-    if (parts.length >= 2 && (ENTITY_KINDS as readonly string[]).includes(parts[0].toLowerCase())) {
-      kindRaw = parts[0].toLowerCase()
-      label = parts[1]
-      weightRaw = parts[2] ?? ''
-    } else if ((ENTITY_KINDS as readonly string[]).includes(parts[parts.length - 1].toLowerCase())) {
-      kindRaw = parts[parts.length - 1].toLowerCase()
-      label = parts[0]
-      weightRaw = parts[1] ?? ''
+    if (second !== undefined && (ENTITY_KINDS as readonly string[]).includes(first.toLowerCase())) {
+      kindRaw = first.toLowerCase()
+      label = second
+      weightRaw = third ?? ''
+    } else if (last !== undefined && (ENTITY_KINDS as readonly string[]).includes(last.toLowerCase())) {
+      kindRaw = last.toLowerCase()
+      label = first
+      weightRaw = second ?? ''
     } else if (parts.length === 1) {
       // 只给了名字：类别归 topic，不猜别的
-      label = parts[0]
+      label = first
     } else {
       dropped += 1
       continue

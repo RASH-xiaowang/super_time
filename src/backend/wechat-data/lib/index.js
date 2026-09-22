@@ -4410,7 +4410,8 @@ function buildSnapshot(raw, names, topPeers, recentLimit) {
       if (c.connected) row.connected += 1;
       row.durationSec += d;
       byMonth.set(m, row);
-      byHour[new Date(c.createTime * 1e3).getHours()] += 1;
+      const hour = new Date(c.createTime * 1e3).getHours();
+      byHour[hour] = (byHour[hour] ?? 0) + 1;
       if (firstTime == null || c.createTime < firstTime) firstTime = c.createTime;
       if (lastTime == null || c.createTime > lastTime) lastTime = c.createTime;
     }
@@ -4826,7 +4827,7 @@ function readableMessageText(raw) {
       if (ei < 0) break;
       let v = t.slice(gt + 1, ei).trim();
       const cdata = v.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
-      if (cdata) v = cdata[1];
+      if (cdata) v = cdata[1] ?? v;
       v = v.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
       if (v) parts.push(v);
       from = ei + 1;
@@ -5110,7 +5111,7 @@ function bigramTokens(text) {
 function ftsPhrase(term) {
   const toks = bigramTokens(term).split(" ").filter(Boolean);
   if (toks.length === 0) return "";
-  if (toks.length === 1) return '"' + toks[0].replace(/"/g, "") + '"';
+  if (toks.length === 1) return '"' + (toks[0] ?? "").replace(/"/g, "") + '"';
   return '"' + toks.join(" ") + '"';
 }
 function indexReady(decryptedDir) {
@@ -10127,7 +10128,7 @@ function decodeCell7(v) {
 }
 function splitSender(content) {
   const m = content.match(/^([A-Za-z0-9_@.\-]{4,64}):[\s]/);
-  return m ? { sender: m[1], body: content.slice(m[0].length) } : { sender: "", body: content };
+  return m ? { sender: m[1] ?? "", body: content.slice(m[0].length) } : { sender: "", body: content };
 }
 function readableText(raw) {
   if (/^[0-9,]{20,}$/.test(raw.slice(0, 60))) return "";
@@ -10135,11 +10136,11 @@ function readableText(raw) {
 }
 function xmlAttr2(text, tag, attr) {
   const m = text.match(new RegExp("<" + tag + "\\b[^>]*\\b" + attr + '="([^"]*)"', "i"));
-  return m ? m[1] : "";
+  return m ? m[1] ?? "" : "";
 }
 function tagText2(text, tag) {
   const m = text.match(new RegExp("<" + tag + "\\b[^>]*>([\\s\\S]*?)</" + tag + ">", "i"));
-  return m ? m[1].trim() : "";
+  return m ? (m[1] ?? "").trim() : "";
 }
 function normType(lt) {
   return lt > 4294967296 ? lt % 4294967296 : lt;
@@ -10169,28 +10170,36 @@ function median(list) {
   if (list.length === 0) return 0;
   const s = [...list].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 1 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+  const even = s.length % 2 === 0;
+  const middle = even ? s.slice(mid - 1, mid + 1) : s.slice(mid, mid + 1);
+  const avg = middle.reduce((a, x) => a + x, 0) / middle.length;
+  return even ? Math.round(avg) : avg;
 }
 function percentile(list, q) {
   if (list.length === 0) return 0;
   const s = [...list].sort((a, b) => a - b);
-  return s[Math.min(s.length - 1, Math.floor(s.length * q))];
+  const i = Math.min(s.length - 1, Math.max(0, Math.floor(s.length * q)));
+  return s.slice(i, i + 1).reduce((a, x) => a + x, 0);
 }
 function longestRun(days) {
   const sorted = [...days].sort();
-  if (sorted.length === 0) return { from: "", to: "", days: 0 };
-  let best = { from: sorted[0], to: sorted[0], days: 1 };
-  let curFrom = sorted[0];
+  const [firstDay] = sorted;
+  if (firstDay === void 0) return { from: "", to: "", days: 0 };
+  let best = { from: firstDay, to: firstDay, days: 1 };
+  let curFrom = firstDay;
   let curLen = 1;
   for (let i = 1; i < sorted.length; i += 1) {
-    const prev = (/* @__PURE__ */ new Date(sorted[i - 1] + "T00:00:00")).getTime();
-    const now = (/* @__PURE__ */ new Date(sorted[i] + "T00:00:00")).getTime();
+    const prevDay = sorted[i - 1];
+    const day = sorted[i];
+    if (prevDay === void 0 || day === void 0) continue;
+    const prev = (/* @__PURE__ */ new Date(prevDay + "T00:00:00")).getTime();
+    const now = (/* @__PURE__ */ new Date(day + "T00:00:00")).getTime();
     if (now - prev === 864e5) curLen += 1;
     else {
-      curFrom = sorted[i];
+      curFrom = day;
       curLen = 1;
     }
-    if (curLen > best.days) best = { from: curFrom, to: sorted[i], days: curLen };
+    if (curLen > best.days) best = { from: curFrom, to: day, days: curLen };
   }
   return best;
 }
@@ -15380,14 +15389,18 @@ function getPlanes(dim) {
   PLANES_CACHE.set(dim, planes);
   return planes;
 }
+function dotProduct(a, b) {
+  const n = Math.min(a.length, b.length);
+  let dot2 = 0;
+  for (let i = 0; i < n; i += 1) dot2 += (a[i] ?? 0) * (b[i] ?? 0);
+  return dot2;
+}
 function simhash(vec, planes) {
   let lo = 0;
   let hi = 0;
-  const dim = vec.length;
   for (let b = 0; b < planes.length; b += 1) {
     const p = planes[b];
-    let dot2 = 0;
-    for (let i = 0; i < dim; i += 1) dot2 += p[i] * vec[i];
+    const dot2 = p ? dotProduct(p, vec) : 0;
     if (dot2 >= 0) {
       if (b < 32) lo |= 1 << b;
       else hi |= 1 << b - 32;
@@ -15403,10 +15416,10 @@ function popcount32(x) {
 }
 function l2normalize(v) {
   const f = Float32Array.from(v);
-  let n = 0;
-  for (let i = 0; i < f.length; i += 1) n += f[i] * f[i];
-  n = Math.sqrt(n);
-  if (n > 1e-9) for (let i = 0; i < f.length; i += 1) f[i] /= n;
+  const n = Math.sqrt(f.reduce((s, x) => s + x * x, 0));
+  if (n > 1e-9) f.forEach((x, i) => {
+    f[i] = x / n;
+  });
   return f;
 }
 function vecToBlob(v) {
@@ -15430,18 +15443,19 @@ function selectByHamming(rows, qh, pool) {
   const want = Number.isNaN(pool) ? 0 : Math.floor(pool);
   const take = Math.min(Math.max(want, 0), n);
   if (take <= 0) return [];
-  const dist = new Uint8Array(n);
   const hist = new Uint32Array(MAX_HAMMING + 1);
+  const dist = new Uint8Array(n);
   for (let i = 0; i < n; i += 1) {
     const r = rows[i];
+    if (!r) continue;
     const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0);
     dist[i] = d;
-    hist[d] += 1;
+    hist[d] = (hist[d] ?? 0) + 1;
   }
   let limit = MAX_HAMMING;
   let cum = 0;
   for (let d = 0; d <= MAX_HAMMING; d += 1) {
-    cum += hist[d];
+    cum += hist[d] ?? 0;
     if (cum >= take) {
       limit = d;
       break;
@@ -15451,16 +15465,18 @@ function selectByHamming(rows, qh, pool) {
   let acc = 0;
   for (let d = 0; d <= limit; d += 1) {
     cursor[d] = acc;
-    acc += hist[d];
-  }
-  const order = new Uint32Array(acc);
-  const next = cursor.slice();
-  for (let i = 0; i < n; i += 1) {
-    const d = dist[i];
-    if (d <= limit) order[next[d]++] = i;
+    acc += hist[d] ?? 0;
   }
   const out = new Array(take);
-  for (let k = 0; k < take; k += 1) out[k] = rows[order[k]];
+  const next = cursor.slice();
+  for (let i = 0; i < n; i += 1) {
+    const r = rows[i];
+    const d = dist[i];
+    if (!r || d === void 0 || d > limit) continue;
+    const at = next[d] ?? 0;
+    next[d] = at + 1;
+    if (at < take) out[at] = r;
+  }
   return out;
 }
 
@@ -15656,14 +15672,16 @@ async function runBuildVectorIndex(decryptedDir, embed, opts) {
         }
         if (failure) return;
         for (let j = 0; j < batch.length; j += 1) {
-          const groupRows = groups.get(batch[j]);
+          const key = batch[j];
+          if (key === void 0) continue;
+          const groupRows = groups.get(key);
           if (!groupRows) continue;
           const raw = vecs[j];
           if (raw && raw.length > 0) {
             const v = l2normalize(raw);
             dim = v.length;
             const h = simhash(v, getPlanes(dim));
-            vectors.set(batch[j], { blob: vecToBlob(v), lo: h.lo, hi: h.hi });
+            vectors.set(key, { blob: vecToBlob(v), lo: h.lo, hi: h.hi });
           }
           processedRows += groupRows.length;
         }
@@ -15760,9 +15778,7 @@ async function searchDense(decryptedDir, queryText, embed, opts) {
       const vr = getVec.get(r.rowid);
       if (!vr?.vec) continue;
       const v = blobToVec(vr.vec, Number(vr.dim ?? dim));
-      let dot2 = 0;
-      const n = Math.min(v.length, qv.length);
-      for (let i = 0; i < n; i += 1) dot2 += v[i] * qv[i];
+      const dot2 = dotProduct(v, qv);
       if (dot2 < opts.minSimilarity) continue;
       const mr = getMeta.get(r.rowid);
       if (!mr) continue;
@@ -15815,8 +15831,11 @@ function buildChunks(decryptedDir, ranked, termWeight, person, recency) {
   const chunks = [];
   let windowMessages = 0;
   for (const members of clusters) {
+    const first = members[0];
+    const last = members.at(-1);
+    if (!first || !last) continue;
     const anchor = members.reduce((a, b) => b.score > a.score ? b : a);
-    const centerMs = Math.round((members[0].create_time + members[members.length - 1].create_time) / 2 * 1e3);
+    const centerMs = Math.round((first.create_time + last.create_time) / 2 * 1e3);
     const win = loadMessageWindow(decryptedDir, anchor.username, centerMs, WINDOW_SPAN_MS, WINDOW_MAX_MSGS);
     windowMessages += win.length;
     let lines = (win.length > 0 ? win.map((w) => ({
@@ -15983,7 +16002,7 @@ function extractAskTerms(text) {
     for (let i = 0; i + 2 <= run.length; i += 1) {
       const bg = run.slice(i, i + 2);
       if (STOP_BIGRAMS.has(bg)) continue;
-      if (FUNCTION_CHARS.has(bg[0]) && FUNCTION_CHARS.has(bg[1])) continue;
+      if (FUNCTION_CHARS.has(bg[0] ?? "") && FUNCTION_CHARS.has(bg[1] ?? "")) continue;
       push(bg);
     }
   }
@@ -15997,7 +16016,7 @@ function dayEndMs(s) {
 }
 function splitSender2(raw) {
   const m = raw.match(/^([A-Za-z0-9_@.\-]{4,64}):\s/);
-  return m ? { sender: m[1], body: raw.slice(m[0].length) } : { sender: "", body: raw };
+  return m ? { sender: m[1] ?? "", body: raw.slice(m[0].length) } : { sender: "", body: raw };
 }
 function centerSnippet(text, terms, max = 90) {
   const body = text.replace(/\s+/g, " ").trim();
@@ -16294,7 +16313,7 @@ function parseAskPlan(text) {
   if (!text) return out;
   let t = String(text).trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) t = fence[1].trim();
+  if (fence) t = (fence[1] ?? "").trim();
   const start = t.indexOf("{");
   const end = t.lastIndexOf("}");
   if (start >= 0 && end > start) {
@@ -16326,7 +16345,7 @@ function parseAskOptimize(text) {
   if (!text) return out;
   let t = String(text).trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) t = fence[1].trim();
+  if (fence) t = (fence[1] ?? "").trim();
   const start = t.indexOf("{");
   const end = t.lastIndexOf("}");
   if (start >= 0 && end > start) {
@@ -16427,9 +16446,10 @@ function cnNum(s) {
   };
   if (/^\d+$/.test(s)) return Number(s);
   if (s === "\u5341") return 10;
-  if (s.length === 2 && s[0] === "\u5341") return 10 + (map[s[1]] ?? 0);
-  if (s.length === 2 && s[1] === "\u5341") return (map[s[0]] ?? 0) * 10;
-  if (s.length === 3 && s[1] === "\u5341") return (map[s[0]] ?? 0) * 10 + (map[s[2]] ?? 0);
+  const ch = (i) => s[i] ?? "";
+  if (s.length === 2 && s[0] === "\u5341") return 10 + (map[ch(1)] ?? 0);
+  if (s.length === 2 && s[1] === "\u5341") return (map[ch(0)] ?? 0) * 10;
+  if (s.length === 3 && s[1] === "\u5341") return (map[ch(0)] ?? 0) * 10 + (map[ch(2)] ?? 0);
   return map[s] ?? NaN;
 }
 function resolveRelativeDate(text, now = /* @__PURE__ */ new Date()) {
@@ -16445,7 +16465,7 @@ function resolveRelativeDate(text, now = /* @__PURE__ */ new Date()) {
   const wm = q.match(/(上|这|本)?(?:周|星期)([一二三四五六日天])/);
   if (wm) {
     const wantsLast = wm[1] === "\u4E0A";
-    const idx = { \u4E00: 1, \u4E8C: 2, \u4E09: 3, \u56DB: 4, \u4E94: 5, \u516D: 6, \u65E5: 7, \u5929: 7 }[wm[2]];
+    const idx = { \u4E00: 1, \u4E8C: 2, \u4E09: 3, \u56DB: 4, \u4E94: 5, \u516D: 6, \u65E5: 7, \u5929: 7 }[wm[2] ?? ""];
     if (idx) {
       const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset(now));
       const target = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() + (idx - 1) + (wantsLast ? -7 : 0));
@@ -16462,8 +16482,8 @@ function resolveRelativeDate(text, now = /* @__PURE__ */ new Date()) {
   }
   const mdc = q.match(/([一二三四五六七八九十]{1,3})月([一二三四五六七八九十]{1,3})[日号]/);
   if (mdc) {
-    const mo = cnNum(mdc[1]);
-    const da = cnNum(mdc[2]);
+    const mo = cnNum(mdc[1] ?? "");
+    const da = cnNum(mdc[2] ?? "");
     if (Number.isFinite(mo) && Number.isFinite(da)) {
       const d = new Date(now.getFullYear(), mo - 1, da);
       if (d.getTime() > now.getTime() + 864e5) d.setFullYear(d.getFullYear() - 1);
@@ -16611,9 +16631,11 @@ function dedupeFused(docs, threshold, maxGapSec = 300) {
     let dup = false;
     for (let i = 0; i < keptGrams.length; i += 1) {
       const o = keptGrams[i];
+      const k = kept[i];
+      if (!o || !k) continue;
       if (o.size === 0) continue;
-      if (kept[i].doc.username !== d.doc.username) continue;
-      if (Math.abs(kept[i].doc.create_time - d.doc.create_time) > maxGapSec) continue;
+      if (k.doc.username !== d.doc.username) continue;
+      if (Math.abs(k.doc.create_time - d.doc.create_time) > maxGapSec) continue;
       let inter = 0;
       for (const t of g) if (o.has(t)) inter += 1;
       const jac = inter / (g.size + o.size - inter);
@@ -16721,7 +16743,8 @@ function recallAtK(retrieved, relevant, k) {
 function mrr(retrieved, relevant) {
   const rel = new Set(relevant);
   for (let i = 0; i < retrieved.length; i += 1) {
-    if (rel.has(retrieved[i])) return 1 / (i + 1);
+    const id = retrieved[i];
+    if (id !== void 0 && rel.has(id)) return 1 / (i + 1);
   }
   return 0;
 }
@@ -16733,7 +16756,8 @@ function ndcgAtK(retrieved, relevant, k, graded) {
   const dcg = (list) => {
     let s = 0;
     for (let i = 0; i < list.length && i < k; i += 1) {
-      const g = gain(list[i]);
+      const id = list[i];
+      const g = id === void 0 ? 0 : gain(id);
       if (g > 0) s += g / Math.log2(i + 2);
     }
     return s;
@@ -16750,7 +16774,8 @@ function averagePrecision(retrieved, relevant) {
   let hit = 0;
   let sum = 0;
   for (let i = 0; i < retrieved.length; i += 1) {
-    if (rel.has(retrieved[i])) {
+    const id = retrieved[i];
+    if (id !== void 0 && rel.has(id)) {
       hit += 1;
       sum += hit / (i + 1);
     }
@@ -16976,9 +17001,9 @@ function sparseChannel(terms, corpus, topK) {
   const tfCache = /* @__PURE__ */ new Map();
   for (const t of terms) {
     const m = /* @__PURE__ */ new Map();
-    for (let i = 0; i < docs.length; i += 1) {
-      const f = termFreq(t, docs[i].d.text, docs[i].toks);
-      if (f > 0) m.set(docs[i].d.docKey, f);
+    for (const { d, toks } of docs) {
+      const f = termFreq(t, d.text, toks);
+      if (f > 0) m.set(d.docKey, f);
     }
     tfCache.set(t, m);
   }
@@ -17101,7 +17126,7 @@ function createAskRemotes(rc) {
       }
       boundedSet(rc.askFeedbackSeen, dedupeKey, now + ASK_FEEDBACK_DEDUPE_MS, ASK_FEEDBACK_CAP);
       const trace = options.retrievalId ? rc.askTrace.get(options.retrievalId) : void 0;
-      const keyOf2 = (i) => trace && i >= 1 && i <= trace.citations.length ? trace.citations[i - 1] : null;
+      const keyOf2 = (i) => trace && i >= 1 && i <= trace.citations.length ? trace.citations[i - 1] ?? null : null;
       const pick = (idx) => {
         if (!trace) return [];
         const out = [];
@@ -19477,14 +19502,16 @@ async function runBuildKbVectorIndex(decryptedDir, kbId, embed, opts) {
         }
         if (failure) return;
         for (let j = 0; j < batch.length; j += 1) {
-          const groupRows = groups.get(batch[j]);
+          const key = batch[j];
+          if (key === void 0) continue;
+          const groupRows = groups.get(key);
           if (!groupRows) continue;
           const raw = vecs[j];
           if (raw && raw.length > 0) {
             const v = l2normalize(raw);
             dim = v.length;
             const h = simhash(v, getPlanes(dim));
-            vectors.set(batch[j], { blob: vecToBlob(v), lo: h.lo, hi: h.hi });
+            vectors.set(key, { blob: vecToBlob(v), lo: h.lo, hi: h.hi });
           }
           processedRows += groupRows.length;
         }
@@ -19581,9 +19608,7 @@ async function searchKbDense(decryptedDir, kbId, queryText, embed, opts) {
       const vr = getVec.get(r.rowid);
       if (!vr?.vec) continue;
       const v = blobToVec(vr.vec, Number(vr.dim ?? qv.length));
-      let dot2 = 0;
-      const n = Math.min(v.length, qv.length);
-      for (let i = 0; i < n; i += 1) dot2 += v[i] * qv[i];
+      const dot2 = dotProduct(v, qv);
       if (dot2 < opts.minSimilarity) continue;
       const mr = byId.get(r.rowid);
       if (!mr) continue;
@@ -20191,23 +20216,25 @@ function parseEntityLines(raw) {
     const line = line0.replace(/^\s*[-*•\d.、\s]+/, "").replace(/^["'`]+|["'`]+$/g, "").trim();
     if (line === "") continue;
     const parts = line.split(/[|\t]/).map((p) => p.replace(/^["'`]+|["'`]+$/g, "").trim()).filter((p) => p !== "");
-    if (parts.length === 0) {
+    const [first, second, third] = parts;
+    if (first === void 0) {
       dropped += 1;
       continue;
     }
+    const last = parts.at(-1);
     let kindRaw = "";
     let label = "";
     let weightRaw = "";
-    if (parts.length >= 2 && ENTITY_KINDS.includes(parts[0].toLowerCase())) {
-      kindRaw = parts[0].toLowerCase();
-      label = parts[1];
-      weightRaw = parts[2] ?? "";
-    } else if (ENTITY_KINDS.includes(parts[parts.length - 1].toLowerCase())) {
-      kindRaw = parts[parts.length - 1].toLowerCase();
-      label = parts[0];
-      weightRaw = parts[1] ?? "";
+    if (second !== void 0 && ENTITY_KINDS.includes(first.toLowerCase())) {
+      kindRaw = first.toLowerCase();
+      label = second;
+      weightRaw = third ?? "";
+    } else if (last !== void 0 && ENTITY_KINDS.includes(last.toLowerCase())) {
+      kindRaw = last.toLowerCase();
+      label = first;
+      weightRaw = second ?? "";
     } else if (parts.length === 1) {
-      label = parts[0];
+      label = first;
     } else {
       dropped += 1;
       continue;
@@ -21148,15 +21175,18 @@ var SENTENCE_RE = /[^\n。！？!?；;]+/g;
 function normDate(raw) {
   const m = raw.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/);
   if (!m) return "";
+  const [y, mo, d] = [m[1], m[2], m[3]];
+  if (!y || !mo || !d) return "";
   const p = (n) => String(Number(n)).padStart(2, "0");
-  return `${m[1]}-${p(m[2])}-${p(m[3])}`;
+  return `${y}-${p(mo)}-${p(d)}`;
 }
 function amountToCents(raw) {
   const m = raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(万元|万块|万|元|块钱|块|圆)/);
   if (!m) return NaN;
-  const n = Number(m[1].replace(/,/g, ""));
+  const [digits, unit] = [m[1], m[2]];
+  if (!digits || !unit) return NaN;
+  const n = Number(digits.replace(/,/g, ""));
   if (!Number.isFinite(n)) return NaN;
-  const unit = m[2];
   const scale = unit === "\u4E07\u5143" || unit === "\u4E07\u5757" || unit === "\u4E07" ? 1e4 : 1;
   return Math.round(n * scale * 100);
 }
@@ -21222,11 +21252,17 @@ function buildSums(cents) {
   }
   for (const c of pool) if (c <= MAX_SUM_CENTS) out.add(c);
   for (let i = 0; i < pool.length; i += 1) {
+    const a = pool[i];
+    if (a === void 0) continue;
     for (let j = i + 1; j < pool.length; j += 1) {
-      const s2 = pool[i] + pool[j];
+      const b = pool[j];
+      if (b === void 0) continue;
+      const s2 = a + b;
       if (s2 <= MAX_SUM_CENTS) out.add(s2);
       for (let k = j + 1; k < pool.length; k += 1) {
-        const s3 = s2 + pool[k];
+        const c = pool[k];
+        if (c === void 0) continue;
+        const s3 = s2 + c;
         if (s3 <= MAX_SUM_CENTS) out.add(s3);
       }
     }
@@ -21630,7 +21666,9 @@ function spreadByBucket(hits) {
   }
   const slots = [...buckets.keys()];
   if (slots.length <= 1) return [...buckets.values()].map((b) => b.hit);
-  let seed = slots[0];
+  const first = slots[0];
+  if (first === void 0) return [...buckets.values()].map((b) => b.hit);
+  let seed = first;
   for (const s of slots) {
     const c = buckets.get(s).count;
     const cs = buckets.get(seed).count;
@@ -23730,7 +23768,7 @@ function resolveImageOriginalLink(decryptedDir, username, localId) {
       const m = /<img\b([^>]*)>/i.exec(cellText5(row.c));
       if (m === null) continue;
       const at = {};
-      for (const p of m[1].matchAll(/([A-Za-z_][\w:-]*)\s*=\s*"([^"]*)"/g)) at[(p[1] ?? "").toLowerCase()] = unescapeXml2(p[2] ?? "");
+      for (const p of (m[1] ?? "").matchAll(/([A-Za-z_][\w:-]*)\s*=\s*"([^"]*)"/g)) at[(p[1] ?? "").toLowerCase()] = unescapeXml2(p[2] ?? "");
       const url = (at.tphdurl ?? "") !== "" ? at.tphdurl : at.tpurl ?? "";
       if (url === "" || !/^https?:\/\//i.test(url) || !hostAllowed(url)) continue;
       const n = (s) => {
@@ -26849,9 +26887,10 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
         for (; ; ) {
           const i = next;
           next += 1;
-          if (i >= due.length) return;
+          const id = i >= due.length ? void 0 : due[i];
+          if (id === void 0) return;
           try {
-            await this.runSummaryTask({ id: due[i] });
+            await this.runSummaryTask({ id });
           } catch (e) {
             failure = failure ?? e;
           }

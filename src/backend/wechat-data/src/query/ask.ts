@@ -156,9 +156,14 @@ function buildChunks(
   const chunks: AskChunk[] = []
   let windowMessages = 0
   for (const members of clusters) {
+    // 首尾两条定出簇的时间中心。空簇跳过（`clusterChunks` 不会产生）：兜 0 会把窗口锚到 1970 年，
+    // 那是「静默丢掉这一组上下文」，比下面的 reduce 直接抛错还难查。
+    const first = members[0]
+    const last = members.at(-1)
+    if (!first || !last) continue
     // 锚点：组内单条得分最高的那条（引用卡片显示它）
     const anchor = members.reduce((a, b) => (b.score > a.score ? b : a))
-    const centerMs = Math.round(((members[0].create_time + members[members.length - 1].create_time) / 2) * 1000)
+    const centerMs = Math.round(((first.create_time + last.create_time) / 2) * 1000)
     const win = loadMessageWindow(decryptedDir, anchor.username, centerMs, WINDOW_SPAN_MS, WINDOW_MAX_MSGS)
     windowMessages += win.length
     let lines = (win.length > 0
@@ -341,7 +346,9 @@ export function extractAskTerms(text: string): string[] {
     for (let i = 0; i + 2 <= run.length; i += 1) {
       const bg = run.slice(i, i + 2)
       if (STOP_BIGRAMS.has(bg)) continue
-      if (FUNCTION_CHARS.has(bg[0]) && FUNCTION_CHARS.has(bg[1])) continue
+      // `i + 2 <= run.length` 已保证两个字符都在；兜成 `''` 与旧的「读到 undefined」在 `Set.has` 上
+      // 是同一个答案（都不命中），所以这里没有任何口径变化。
+      if (FUNCTION_CHARS.has(bg[0] ?? '') && FUNCTION_CHARS.has(bg[1] ?? '')) continue
       push(bg)
     }
   }
@@ -363,7 +370,7 @@ function dayEndMs(s: string): number {
  *  只认 `:\n` 会让 `wxid_xxx: 内容` 整段原样进上下文，既脏又看不出是谁说的。 */
 function splitSender(raw: string): { sender: string; body: string } {
   const m = raw.match(/^([A-Za-z0-9_@.\-]{4,64}):\s/)
-  return m ? { sender: m[1], body: raw.slice(m[0].length) } : { sender: '', body: raw }
+  return m ? { sender: m[1] ?? '', body: raw.slice(m[0].length) } : { sender: '', body: raw }
 }
 
 /** 以首个命中词为中心截取片段（旧实现恒从第 0 字开始，命中点常被截掉）。 */
@@ -834,7 +841,9 @@ export function parseAskPlan(text: string): { intent: string; subQueries: string
   if (!text) return out
   let t = String(text).trim()
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fence) t = fence[1].trim()
+  // 围栏里一定跟着捕获组 1（`[\s\S]*?` 可以是空串）；兜成空串后走的就是本函数原本那条
+  // 「什么也没解析到 ⇒ 返回空结果」的路径，而不是让 `undefined.trim()` 抛出去。
+  if (fence) t = (fence[1] ?? '').trim()
   const start = t.indexOf('{')
   const end = t.lastIndexOf('}')
   if (start >= 0 && end > start) {
@@ -874,7 +883,9 @@ export function parseAskOptimize(text: string): { optimized: string; suggestions
   if (!text) return out
   let t = String(text).trim()
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fence) t = fence[1].trim()
+  // 围栏里一定跟着捕获组 1（`[\s\S]*?` 可以是空串）；兜成空串后走的就是本函数原本那条
+  // 「什么也没解析到 ⇒ 返回空结果」的路径，而不是让 `undefined.trim()` 抛出去。
+  if (fence) t = (fence[1] ?? '').trim()
   const start = t.indexOf('{')
   const end = t.lastIndexOf('}')
   if (start >= 0 && end > start) {

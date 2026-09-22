@@ -118,8 +118,10 @@ export function resolveImageOriginalLink(
       if (!row) continue
       const m = /<img\b([^>]*)>/i.exec(cellText(row.c))
       if (m === null) continue
+      // 捕获组在类型上是 `string | undefined`；这个式子只有一个组、匹配成功就一定有值。
+      // 兜成 `''` 的走向是「拿不到任何属性」⇒ 下面 url 为空 ⇒ 这一条被跳过，不会当成命中。
       const at: Record<string, string> = {}
-      for (const p of m[1].matchAll(/([A-Za-z_][\w:-]*)\s*=\s*"([^"]*)"/g)) at[(p[1] ?? '').toLowerCase()] = unescapeXml(p[2] ?? '')
+      for (const p of (m[1] ?? '').matchAll(/([A-Za-z_][\w:-]*)\s*=\s*"([^"]*)"/g)) at[(p[1] ?? '').toLowerCase()] = unescapeXml(p[2] ?? '')
       const url = (at.tphdurl ?? '') !== '' ? (at.tphdurl as string) : (at.tpurl ?? '')
       if (url === '' || !/^https?:\/\//i.test(url) || !hostAllowed(url)) continue
       const n = (s: string | undefined): number => { const x = Number(String(s ?? '').trim()); return Number.isFinite(x) && x > 0 ? x : 0 }

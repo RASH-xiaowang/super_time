@@ -1,5 +1,5 @@
 {
-  "//": "后端 TypeScript 基座。注意：原仓库从未提交过本文件，但 src/backend/wechat-data/tsconfig.json 与 tsconfig.host.json 都 extends 它，且 src/backend/deps/* 的构建产物（lib/tsconfig.tsbuildinfo）里留下了上游的编译选项。这里是按那些选项还原出来的，因此 strict 的若干放宽项（noImplicitThis/noUncheckedIndexedAccess = false）不是我的偏好，而是为了让既有代码能过——收紧它们属 RELEASE-PLAN 的 H11 收尾项。 **2026-09-22（H11 第一档）：noImplicitAny 已开成 true** —— 全仓只有 36 处报错（后端 5 处是宿主层 llm-retry.js 缺声明，已补 src/backend/llm-retry.d.ts；客户端 31 处是空数组/裸 null 的字面量与缺返回类型的箭头函数），所以这一档的收益大于代价；剩下两档仍按各自的报错量决定。",
+  "//": "后端 TypeScript 基座。注意：原仓库从未提交过本文件，但 src/backend/wechat-data/tsconfig.json 与 tsconfig.host.json 都 extends 它，且 src/backend/deps/* 的构建产物（lib/tsconfig.tsbuildinfo）里留下了上游的编译选项。这里是按那些选项还原出来的，所以最初几个 strict 子开关是关着的（为了让既有代码能过）——收紧它们属 RELEASE-PLAN 的 H11 收尾项，**现已全部收紧**：2026-09-22 第一档开 `noImplicitAny`（全仓仅 36 处：后端 5 处同一个根因，宿主层 llm-retry.js 缺声明 ⇒ 补 src/backend/llm-retry.d.ts；客户端 31 处是空数组/裸 null 与缺返回类型的箭头）；同日第二档 `noImplicitThis`、`strictFunctionTypes` 全仓 0 处报错，直接开；2026-09-23 第三档 `noUncheckedIndexedAccess` 后端 77 处逐处收口（分布地图与每处为什么那样改见 docs/RELEASE-PLAN.md 文末台账同名条目：只有「加边界判断」与「给一个不会与真实值混淆的缺省值」两种写法，`?? 0` 在向量数学/年报统计里是假的）。已收紧的档位由 src/backend/tests/tsconfig-strictness.spec.ts 钉住，退回去会红。 **还剩一档没开：客户端基座 tsconfig.base.client.json 的 `strict`（实测 90 处：41 在 *.spec.ts、49 在源码，其中 31 集中在 theme-color.ts 与 overview-panel.tsx）—— 注意客户端 extends 的是另一个基座，改这里不会波及它。**",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -19,7 +19,7 @@
     "noImplicitAny": true,
     "noImplicitThis": true,
     "noImplicitOverride": false,
-    "noUncheckedIndexedAccess": false,
+    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "exactOptionalPropertyTypes": false,

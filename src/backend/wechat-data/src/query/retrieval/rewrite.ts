@@ -64,9 +64,12 @@ function cnNum(s: string): number {
   }
   if (/^\d+$/.test(s)) return Number(s)
   if (s === '十') return 10
-  if (s.length === 2 && s[0] === '十') return 10 + (map[s[1]] ?? 0)
-  if (s.length === 2 && s[1] === '十') return (map[s[0]] ?? 0) * 10
-  if (s.length === 3 && s[1] === '十') return (map[s[0]] ?? 0) * 10 + (map[s[2]] ?? 0)
+  // `s[i]` 的类型是 `string | undefined`；下面每个分支都先验过 `s.length`，所以「取不到字符」不会发生。
+  // 这里仍把越界折成空串，是因为 `map['']` 得 undefined → `?? 0`，与「这一位不是数字汉字」同归。
+  const ch = (i: number): string => s[i] ?? ''
+  if (s.length === 2 && s[0] === '十') return 10 + (map[ch(1)] ?? 0)
+  if (s.length === 2 && s[1] === '十') return (map[ch(0)] ?? 0) * 10
+  if (s.length === 3 && s[1] === '十') return (map[ch(0)] ?? 0) * 10 + (map[ch(2)] ?? 0)
   return map[s] ?? NaN
 }
 
@@ -94,7 +97,9 @@ export function resolveRelativeDate(text: string, now: Date = new Date()): { fro
   const wm = q.match(/(上|这|本)?(?:周|星期)([一二三四五六日天])/)
   if (wm) {
     const wantsLast = wm[1] === '上'
-    const idx = ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 } as Record<string, number>)[wm[2]]
+    // 第二组是必选的，匹配成功就一定有；兜成空串后 `map['']` 取不到 → 下面 `if (idx)` 不成立，
+    // 等于「这句没说到星期几」，交给后面的分支继续解析。
+    const idx = ({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 } as Record<string, number>)[wm[2] ?? '']
     if (idx) {
       const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset(now))
       const target = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() + (idx - 1) + (wantsLast ? -7 : 0))
@@ -115,8 +120,10 @@ export function resolveRelativeDate(text: string, now: Date = new Date()): { fro
   // 中文数字日期：九月三号
   const mdc = q.match(/([一二三四五六七八九十]{1,3})月([一二三四五六七八九十]{1,3})[日号]/)
   if (mdc) {
-    const mo = cnNum(mdc[1])
-    const da = cnNum(mdc[2])
+    // 两组都是必选的。兜成空串让 `cnNum('')` 走它自己的 NaN 口径 → 下面的 isFinite 不成立 ⇒ 不解析成日期，
+    // 而不是把缺失当成 0 月 / 0 号（那会造出一个看起来合法的日期区间）。
+    const mo = cnNum(mdc[1] ?? '')
+    const da = cnNum(mdc[2] ?? '')
     if (Number.isFinite(mo) && Number.isFinite(da)) {
       const d = new Date(now.getFullYear(), mo - 1, da)
       if (d.getTime() > now.getTime() + 86400000) d.setFullYear(d.getFullYear() - 1)

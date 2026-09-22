@@ -219,7 +219,10 @@ function spreadByBucket(hits: SearchHit[]): SearchHit[] {
   const slots = [...buckets.keys()]
   if (slots.length <= 1) return [...buckets.values()].map(b => b.hit)
   // 种子：最活跃的桶（并列取时间最新的那个）—— 纯时间浏览的「重点」就是最热闹的时段。
-  let seed = slots[0]
+  // 上面已对 `slots.length <= 1` 早退 ⇒ 首格必在；类型看不出来，就显式取一次并兜回同一个早退。
+  const first = slots[0]
+  if (first === undefined) return [...buckets.values()].map(b => b.hit)
+  let seed = first
   for (const s of slots) {
     const c = buckets.get(s)!.count
     const cs = buckets.get(seed)!.count

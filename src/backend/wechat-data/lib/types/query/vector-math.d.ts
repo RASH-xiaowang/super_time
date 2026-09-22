@@ -23,6 +23,17 @@ export interface HashRow {
 }
 /** 生成 SIMHASH_BITS 个随机超平面（每个长度 = dim）。 */
 export declare function getPlanes(dim: number): Int8Array[];
+/**
+ * 两个向量前 `min(len)` 维的点积。
+ *
+ * 这是 SimHash 与精确余弦打分共用的那一步（向量都已 L2 归一化 ⇒ 点积就是余弦），也正是本文件
+ * 存在的理由：两套向量库各写一份，某天只改了一处就是「检索质量悄悄下降而不报错」。
+ *
+ * 越界读兜成 0 是**点积的加法单位元** —— 「少一项」与「这项是 0」是同一件事，不存在把
+ * 「没取到」伪装成「取到 0」的问题。长度不等只可能是存的 dim 与查询的 dim 不一致（换过
+ * embedding 模型），那时按短的算 —— 与抽出本函数之前两处写法的口径逐字相同。
+ */
+export declare function dotProduct(a: ArrayLike<number>, b: ArrayLike<number>): number;
 /** 计算向量的 64 位 SimHash（返回两个 32 位无符号整数表示的高/低位）。 */
 export declare function simhash(vec: Float32Array, planes: Int8Array[]): {
     lo: number;
@@ -47,7 +58,10 @@ export declare function statSig(p: string): string;
  * 这里换成计数选择（计数排序的特例）：
  *   ① 一遍算距离，存进 `Uint8Array`（距离恒在 [0,64]，一字节够）并累加 65 格直方图；
  *   ② 用直方图找出「累计条数 ≥ pool」的那个距离 `limit`；
- *   ③ 再做一遍计数排序，把 `d <= limit` 的行按 **(距离升序, 原顺序)** 落位。
+ *   ③ 再扫一遍按 **(距离升序, 原顺序)** 把**行本身**落位到前 pool 个位置。
+ *
+ * 第 ③ 步不先排出下标数组再回取行（那是两次 O(N) 访问 + 一张中间数组），而是直接写行 ——
+ * 距离表已经是「每行一个字节」，回它一次就够了。
  *
  * 选出来的序列与「全量按距离升序排序后取前 pool」**逐项相同**（含同距离内的先后，
  * 因为计数排序是稳定的）—— 差别只在代价：零逐行分配、无比较排序、两次线性扫描。
