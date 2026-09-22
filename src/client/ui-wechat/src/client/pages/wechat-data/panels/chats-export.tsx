@@ -7,8 +7,8 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
-import { useCallback, useState } from 'react'
-import { apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiCancelExportJob, apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
 import type { ChatlogRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsExportInputs {
@@ -27,6 +27,28 @@ const [selected, setSelected] = useState<Set<string>>(new Set())
 const [batchExporting, setBatchExporting] = useState(false)
 const [batchMsg, setBatchMsg] = useState<string | null>(null)
 const [, setAvatarVersion] = useState(0)
+
+/* 单次导出的实时进度（M3）：回调与 AbortSignal 都过不了 IPC，后端只能把进度**推**出来
+   （`wechat-export/progress` → ui-entry 中继成 DOM 事件），所以这里按 jobId 认领。 */
+const [exportProgress, setExportProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
+const exportJobRef = useRef('')
+
+useEffect(() => {
+  const onProgress = (e: Event): void => {
+    const p = (e as CustomEvent<{ jobId?: string; phase?: string; done?: number; total?: number }>).detail
+    if (!p || p.jobId !== exportJobRef.current) return
+    setExportProgress({ phase: String(p.phase ?? ''), done: Number(p.done ?? 0), total: Number(p.total ?? 0) })
+  }
+  window.addEventListener('dsh-wechat-export-progress', onProgress)
+  return () => { window.removeEventListener('dsh-wechat-export-progress', onProgress) }
+}, [])
+
+/** 取消正在跑的导出：只发取消信号，收尾仍由 `exportSession` 的 finally 做（终态由后端记）。 */
+const cancelExport = useCallback((): void => {
+  const jobId = exportJobRef.current
+  if (!jobId) return
+  void apiCancelExportJob(jobId).catch(() => { /* 取消失败：让 finally 收尾，不谎报 */ })
+}, [])
 
 const toggleSelect = (username: string): void => {
   setSelected((prev) => {
@@ -91,6 +113,9 @@ const exportSession = useCallback(async (): Promise<void> => {
   setExporting(true)
   setExportMsg(null)
   try {
+    const jobId = 'chats-export-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
+    exportJobRef.current = jobId
+    setExportProgress(null)
     const chosen = EXPO_TYPES.filter(c => expTypes.includes(c.key))
     const types = chosen.flatMap(c => [...(c.types ?? [])])
     const richTypes = chosen.flatMap(c => [...(c.rich ?? [])])
@@ -100,6 +125,7 @@ const exportSession = useCallback(async (): Promise<void> => {
       username: string
       format: string
       count: number
+      jobId: string
       dir?: string
       types?: number[]
       richTypes?: string[]
@@ -111,6 +137,7 @@ const exportSession = useCallback(async (): Promise<void> => {
       username: curSession.username,
       format: expFormat,
       count: expCount,
+      jobId,
     }
     if (expDir.trim()) opts.dir = expDir.trim()
     if (types.length > 0) opts.types = types
@@ -125,6 +152,9 @@ const exportSession = useCallback(async (): Promise<void> => {
   } catch (e) {
     setExportMsg('导出失败: ' + (e as Error).message)
   } finally {
+    // 终态（含被取消）由后端记在槽里；这里只管「别再显示进度条」
+    exportJobRef.current = ''
+    setExportProgress(null)
     setExporting(false)
   }
 }, [curSession, exporting, expFormat, expCount, expDir, expTypes, expFrom, expTo, expFilename, expZip])
@@ -164,5 +194,5 @@ const openNestedChatlog = async (rec: ChatlogRecord): Promise<void> => {
 }
 
 // ── message edit (C5) ──
-  return { EXPO_FORMATS, batchExporting, batchMode, batchMsg, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect }
+  return { EXPO_FORMATS, batchExporting, batchMode, batchMsg, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect }
 }

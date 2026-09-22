@@ -40,12 +40,17 @@ setDirectoryPicker(async () => {
 /** 将后端实时更新事件转发为 api.ts / 面板监听的 DOM 事件。
  *  · wechat-data/updated —— 解密数据有更新（原有）
  *  · wechat-ask/delta     —— 微信问答的**流式回答增量**：payload 是 { id, text }，
- *    text 是「已生成的全文」（不是片段），渲染端整体替换即可。 */
+ *    text 是「已生成的全文」（不是片段），渲染端整体替换即可。
+ *  · wechat-export/progress —— 长任务（导出/加密备份）进度：payload 是
+ *    { jobId, phase, done, total }。回调与 AbortSignal 都过不了 IPC（M3 的整个设计前提），
+ *    所以进度只能这样推 —— 少中继这一条，界面上就只有一个「导出中…」的按钮在空转。 */
 ;(window as any).electronAPI.wechat.onEvent((ev: { name: string; args?: unknown[] }) => {
   if (ev.name === 'wechat-data/updated') {
     window.dispatchEvent(new CustomEvent('dsh-wechat-data-updated'))
   } else if (ev.name === 'wechat-ask/delta') {
     window.dispatchEvent(new CustomEvent('dsh-wechat-ask-delta', { detail: ev.args?.[0] ?? null }))
+  } else if (ev.name === 'wechat-export/progress') {
+    window.dispatchEvent(new CustomEvent('dsh-wechat-export-progress', { detail: ev.args?.[0] ?? null }))
   }
 })
 
