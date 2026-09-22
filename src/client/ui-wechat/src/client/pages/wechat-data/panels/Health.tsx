@@ -35,7 +35,7 @@ export function HealthPanel({ onNavigate, embedded = false }: {
     try {
       const cached = readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')
       if (cached) { setSnap(cached.snap); setStatus(cached.status) }
-      const [h, s] = await Promise.all([apiGetDbHealth(), apiGetDbStatus().catch(() => null)])
+      const [h, s] = await Promise.all([apiGetDbHealth(), apiGetDbStatus().catch((): null => null)])
       setSnap(h)
       setStatus(s)
       writeRenderCache('health', { snap: h, status: s })

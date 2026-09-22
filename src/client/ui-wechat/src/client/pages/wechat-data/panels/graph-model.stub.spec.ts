@@ -14,7 +14,7 @@ import type { KnowledgeSnapshot } from '../types.ts'
 
 /** 2 篇笔记 + 3 个 stub（其中 rust 被 6 处引用，用于验证 weight 封顶）。 */
 function snapshot(): KnowledgeSnapshot {
-  const note = (id: number, title: string, extra: Partial<KnowledgeSnapshot['notes'][number]> = {}) => ({
+  const note = (id: number, title: string, extra: Partial<KnowledgeSnapshot['notes'][number]> = {}): KnowledgeSnapshot['notes'][number] => ({
     id, title, excerpt: '', tags: [], sourceKind: 'manual' as const,
     createdAt: id, updatedAt: id, outLinks: 1, backLinks: 0, ...extra,
   })
@@ -107,7 +107,7 @@ describe('L14 知识库 stub 节点', () => {
  * 这样放宽命名空间不会顺手把「防人/群回流」这道闸一起放松。
  */
 export function notesWithSourceFriend(): KnowledgeSnapshot {
-  const note = (id: number, title: string, extra: Partial<KnowledgeSnapshot['notes'][number]> = {}) => ({
+  const note = (id: number, title: string, extra: Partial<KnowledgeSnapshot['notes'][number]> = {}): KnowledgeSnapshot['notes'][number] => ({
     id, title, excerpt: '', tags: [], sourceKind: 'manual' as const,
     createdAt: id, updatedAt: id, outLinks: 0, backLinks: 0, ...extra,
   })

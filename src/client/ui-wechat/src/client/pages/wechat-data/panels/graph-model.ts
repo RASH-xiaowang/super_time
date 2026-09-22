@@ -393,7 +393,7 @@ export function buildGraph(env: {
       weight: 0,
       radius: 16,
       community: -1,
-      x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+      x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
     }] : []),
     ...top.map(n => ({
       id: n.id,
@@ -408,7 +408,7 @@ export function buildGraph(env: {
         ? radiusByIntimacy(personWeight(n.is_friend === true, n.msg_count ?? 0))
         : radiusBySqrt(n.shared_count ?? 0, 8, 9, 18),
       community: -1,
-      x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+      x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
       ...(n.msg_count !== undefined ? { intimacy: n.msg_count } : {}),
       ...(n.is_friend !== undefined ? { isFriend: n.is_friend } : {}),
       ...(n.shared_count !== undefined || n.member_count !== undefined ? { sharedCount: n.shared_count ?? n.member_count } : {}),
@@ -797,7 +797,7 @@ export function buildKnowledgeNetwork(
       outLinks: n.outLinks,
       ...(n.sourceUsername ? { sourceUsername: n.sourceUsername } : {}),
       ...(n.excerpt ? { excerpt: n.excerpt } : {}),
-      x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+      x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
     }
   })
 
@@ -812,7 +812,7 @@ export function buildKnowledgeNetwork(
     community: -1,
     backLinks: st.refCount,
     excerpt: `被 ${st.refCount} 处引用，尚无同名笔记`,
-    x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+    x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
   }))
 
   // ── 文档实体层 ─────────────────────────────────────────────
@@ -829,7 +829,7 @@ export function buildKnowledgeNetwork(
     community: -1,
     outLinks: f.chunkCount,
     fileMeta: { ext: f.ext, chunkCount: f.chunkCount, charCount: f.charCount, parseState: f.parseState },
-    x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+    x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
   }))
   const sectionNodes: GNode[] = (knowledge.docSections ?? []).map(st => ({
     id: 'doc:' + st.key,
@@ -843,7 +843,7 @@ export function buildKnowledgeNetwork(
     excerpt: st.files.length > 1
       ? `${st.files.length} 份文件里都有这一节 · 共出现 ${st.occurrences} 次`
       : `出现 ${st.occurrences} 次`,
-    x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+    x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
   }))
 
   /**
@@ -866,7 +866,7 @@ export function buildKnowledgeNetwork(
       ? `模型推断 · ${en.files.length} 份文件里都抽到了它`
       : `模型推断的${ENTITY_KIND_LABEL[en.kind] ?? '实体'}`)
       + ` · 由 ${en.model || '未知模型'} 抽出`,
-    x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null,
+    x: 0, y: 0, vx: 0, vy: 0, fx: null as number | null, fy: null as number | null,
   }))
 
   const edges: GEdge[] = knowledge.edges.map(e => ({

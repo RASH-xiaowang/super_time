@@ -35,7 +35,7 @@ describe('淡出规则', () => {
   })
 
   it('有悬停节点时只留它与其一阶邻居', () => {
-    const view = { hoverNodeId: 'a', hoverNeighbours: new Set(['b']), focusCommunity: null, hoverCommunity: null }
+    const view = { hoverNodeId: 'a' as string | null, hoverNeighbours: new Set(['b']) as Set<string> | null, focusCommunity: null as number | null, hoverCommunity: null as number | null }
     expect(nodeOpacity(node('a'), view)).toBe(1)
     expect(nodeOpacity(node('b'), view)).toBe(1)
     expect(nodeOpacity(node('c'), view)).toBe(0.15)
@@ -44,7 +44,7 @@ describe('淡出规则', () => {
   })
 
   it('没有悬停时回落到社区规则', () => {
-    const view = { hoverNodeId: null, hoverNeighbours: null, focusCommunity: 0, hoverCommunity: null }
+    const view = { hoverNodeId: null as string | null, hoverNeighbours: null as Set<string> | null, focusCommunity: 0 as number | null, hoverCommunity: null as number | null }
     expect(nodeOpacity(node('a', { community: 0 }), view)).toBe(1)
     expect(nodeOpacity(node('b', { community: 3 }), view)).toBe(0.12)
   })
