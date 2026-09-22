@@ -357,22 +357,19 @@ export function* xlsxSheetChunks(
 }
 
 /**
+ * 每写出这么多行就让出一次事件循环。让的是 `setImmediate`（宏任务）而不是
+ * 「`await` 异步生成器的下一跳」（微任务）—— 微任务永远不让定时器与其它请求插进来，
+ * 而 H8 要保的正是「导出期间其它面板还查得到东西」。
+ */
+const WRITE_YIELD_EVERY_ROWS = 256
+
+/**
  * sheetData 的分块源（同步/异步行源都可）：流式版走这条。
  *
  * 这是「xlsx 不再随行数涨内存」的关键——改造前是先把所有行变成 `rows` 数组、
  * 再由 `parts.join('')` 拼出整份 sheet，峰值与行数线性（10 万行时同时存在
  * 整份 XML 与所有行数组）。
  */
-/**
- * 每写出这么多行就让出一次事件循环。
- *
- * 必须是 `setImmediate`（宏任务）而不是「`await` 一个异步生成器的下一跳」（微任务）：
- * 微任务不会让定时器与其它请求插进来，而 H8 要保的正是「导出期间其它面板还查得到东西」。
- * 原先只有收集段让出，**写出/压缩段一口气跑完** —— 真机（慢机 / CI runner）实测那一段
- * 单独就能占住循环 1.2 秒，见 `export-progress-job.spec.ts` 里的事件循环探针。
- */
-const WRITE_YIELD_EVERY_ROWS = 256
-
 export async function* xlsxSheetChunksAsync(
   rows: Iterable<string[]> | AsyncIterable<string[]>,
   ctrl?: StreamControl,
