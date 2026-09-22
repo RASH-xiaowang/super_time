@@ -96,8 +96,6 @@ import { avatarColors, fmtBytes, fmtDateTimeSec, fmtMsgClockSec, fmtSessionTimeS
 
 
 
-
-
 /** External navigation target: open a session and (optionally) locate a message. */
 export interface ChatTarget {
   username: string
