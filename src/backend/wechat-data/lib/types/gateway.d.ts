@@ -303,6 +303,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
     private _voiceLlmRemotes?;
     /** 语音转写与模型清单（whisper 安装/下载/状态、可用模型与提供方） 的处理器（体在 remotes/voicellm.ts）；这里只组装 ctx 与转发。 */
     private voiceLlmRemotes;
+    private _askDeepRemotes?;
+    /** 问答主链路（提问检索生成、问题优化、向量索引重建） 的处理器（体在 remotes/askdeep.ts）；这里只组装 ctx 与转发。 */
+    private askDeepRemotes;
     getSessions(options?: {
         keyword?: string;
         limit?: number;
