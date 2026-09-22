@@ -26,6 +26,13 @@ const LIMIT = 1000
 /**
  * 当前超限文件的白名单：**只许下调，降到位就删条目**。
  * 数值是 2026-09-21 实测的行数（`wc -l` 口径）。
+ *
+ * 剩下这两个 CSS 不是「还没轮到」，而是**量过之后确认拆不动**（2026-09-22 第 47 轮勘测）：
+ * CSS Modules 按文件给同名类 / 同名 `@keyframes` 打 hash，所以「同一条规则里的类名」必须同份；
+ * 再叠上「同一元素共现且抢同一批属性的类对」（分家后谁生效取决于 import 顺序），
+ * `onboarding.module.css` 的最大不可分簇 = 1113 行、`chats.module.css` = 1140 行 —— 都超过上限。
+ * 要再往下必须**改层叠语义**（逐类展开 `:is()` 覆盖列表 / 把浅色覆盖搬进非 module 的全局表），
+ * 那属于需要逐屏验收的设计改动，见 `docs/RELEASE-PLAN.md` 的同日勘测行。
  */
 const ALLOWLIST: Record<string, number> = {
   'src/client/ui-app/onboarding/onboarding.module.css': 1618,
