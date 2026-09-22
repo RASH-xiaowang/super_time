@@ -45,7 +45,7 @@ function absoluteCoords(icon: string): number[] {
   while ((m = re.exec(icon)) !== null) {
     const cmd = m[1]
     if (!cmd || !/^[MLHVCSQTAZ]$/.test(cmd)) continue
-    const nums = (m[2].match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
+    const nums = (m[2]?.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
     out.push(...nums)
   }
   return out

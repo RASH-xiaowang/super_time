@@ -68,14 +68,28 @@ function densityScale(nodeCount: number): number {
 
 /**
  * 力度滑块 → FA2 的数值档位。返回值只含数字，布尔开关由 assignLayout 补齐
- * （Record<string, number> 装不下布尔值，而签名必须是数字表）。
+ * （装不下布尔值，而签名必须是数字表）。
+ *
+ * 键**具名**而不是 `Record<string, number>`：后者在 `noUncheckedIndexedAccess` 下让每个消费方
+ * 都把一定存在的键读成 `number | undefined`，于是数值比较只能靠兜底糊 —— 而这里兜什么都是假的，
+ * 五个键在下面的字面量里逐个算出来，少一个就是编译不过。
  *
  * FA2 的物理量（见 graphology-layout-forceatlas2/iterate.js）：
  *   斥力 ∝ scalingRatio；强引力模式下引力 = mass × gravity；边长 ≈ √(scalingRatio × m₁m₂ / 边权影响)。
  * 所以：斥力/间距/圈子分离/连线长度四档都乘进缩放比（越大越开），
  * 而「吸引力」反向除 —— 拉得越紧，连线越短、边长越短。
  */
-export function fa2Settings(settings: GraphSettings, nodeCount: number): Record<string, number> {
+// 用 type 而不是 interface：只有对象字面量类型能隐式满足 `Record<string, number>` 的索引签名，
+// 换成 interface 会在下面喂给布局器的那一处报 TS2322（而那个接收方签名不该被放宽）。
+export type Fa2Params = {
+  scalingRatio: number
+  gravity: number
+  edgeWeightInfluence: number
+  slowDown: number
+  barnesHutTheta: number
+}
+
+export function fa2Settings(settings: GraphSettings, nodeCount: number): Fa2Params {
   const d = DEFAULT_GRAPH_SETTINGS
   const repulsionK = forceFactor(settings.forceRepulsion, d.forceRepulsion)
   const gapK = forceFactor(settings.nodeGap, d.nodeGap)

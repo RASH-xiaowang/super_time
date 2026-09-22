@@ -56,7 +56,7 @@ function fmtShortDate(d: string): string {
 }
 
 /** 上下文条上的统一领标图标：两种限定条件用同一套 13px 线性图标。 */
-function ScopeIcon({ kind }: { kind: 'corpus' | 'time' }): React.JSX.Element {
+function ScopeIcon({ kind }: { kind: 'corpus' | 'time' }): React.JSX.Element | null {
   const common = {
     className: css.ctxIcon, viewBox: '0 0 24 24', width: 13, height: 13,
     fill: 'none', stroke: 'currentColor', strokeWidth: 2,

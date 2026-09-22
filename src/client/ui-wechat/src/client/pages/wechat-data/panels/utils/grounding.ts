@@ -65,7 +65,11 @@ export function auditAnswerGrounding(
   const ghostAmounts: string[] = []
   for (const m of answer.matchAll(AMOUNT_RE)) {
     const label = m[0].replace(/\s+/g, '')
-    if (pool.has(normNumber(m[1]))) continue
+    // 组 1 是必选的数字部分；读不到就跳过这一条。**不能兜成 `''`** —— `normNumber('')` 会算出 `'0'`，
+    // 而 `'0'` 是一个可能真的在 pool 里的数，那会把一条幽灵金额当成「有出处」放掉。
+    const digits = m[1]
+    if (digits === undefined) continue
+    if (pool.has(normNumber(digits))) continue
     if (ghostAmounts.includes(label)) continue
     ghostAmounts.push(label)
     if (ghostAmounts.length >= MAX_GHOST_AMOUNTS) break

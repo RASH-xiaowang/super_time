@@ -312,11 +312,14 @@ export function OvSection({ icon, title, action, children, span, className }: {
   title: React.ReactNode
   action?: React.ReactNode
   children: React.ReactNode
-  span: string
+  /** 版式类名（`ovSpan*`）—— CSS Modules 的按键取值在类型上就是 `string | undefined`，
+   *  与 React 自己允许 `className` 为 undefined 是同一件事，所以这里不强求必有。 */
+  span?: string
   className?: string
 }): React.JSX.Element {
   return (
-    <section className={`${css.ovCard} ${span} ${className ?? ''}`}>
+    // 用 filter+join 而不是模板串：模板串会把 undefined 拼成一个字面量 "undefined" 类名。
+    <section className={[css.ovCard, span, className].filter(Boolean).join(' ')}>
       <header className={css.ovCardHd}>
         <span className={css.ovIcon}><OvIcon name={icon} /></span>
         <h3 className={css.ovTitle}>{title}</h3>

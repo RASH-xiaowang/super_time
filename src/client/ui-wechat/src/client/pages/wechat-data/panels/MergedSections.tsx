@@ -31,13 +31,16 @@ export function MergedSections({ sections, initial, ariaLabel, trailing }: {
   initial: string
   ariaLabel: string
   trailing?: ReactNode
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const [active, setActive] = useState(initial)
   // 同一组合并面板被多个 tab 复用（同一个组件实例）：从侧栏/深链切到另一个被合并的
   // tab 时 `initial` 变了，但 useState 只在首次生效 —— 不同步就会出现「点了撤回消息
   // 却还停在会话列表」。这与 ChatsPanel 内部 view 同步的做法一致。
   useEffect(() => { setActive(initial) }, [initial])
-  const current = sections.find(s => s.key === active) ?? sections[0]
+  const current = sections.find(s => s.key === active) ?? sections.at(0)
+  // 一个分区都没有就没有东西可渲染（调用方恒给至少一个）—— 这里不兜第一个分区，
+  // 因为 `current.key` / `current.render()` 拿一个不存在的分区当默认会白屏且无声。
+  if (!current) return null
   return (
     <div className={css.root}>
       <div className={css.bar}>

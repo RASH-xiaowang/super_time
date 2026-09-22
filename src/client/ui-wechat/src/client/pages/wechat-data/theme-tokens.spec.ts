@@ -42,7 +42,7 @@ describe('主题令牌引用', () => {
     // 定义侧同时看 .ts/.tsx：有些令牌是运行期在 TS 里 setProperty 上去的。
     const defined = new Set<string>()
     for (const f of walk(CLIENT_ROOT, /\.(css|ts|tsx)$/)) {
-      for (const m of readFileSync(f, 'utf8').matchAll(/(--nm-[a-z0-9-]+)\s*:/g)) defined.add(m[1])
+      for (const m of readFileSync(f, 'utf8').matchAll(/(--nm-[a-z0-9-]+)\s*:/g)) if (m[1]) defined.add(m[1])
     }
     expect(defined.size, '一个令牌定义都没抓到 ⇒ 扫描根配错了').toBeGreaterThan(50)
 
@@ -50,7 +50,7 @@ describe('主题令牌引用', () => {
     for (const f of walk(CLIENT_ROOT, /\.css$/)) {
       readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
         for (const m of line.matchAll(/var\((--nm-[a-z0-9-]+)(\s*,)?/g)) {
-          if (!defined.has(m[1]) && !m[2]) {
+          if (!m[1] || (!defined.has(m[1]) && !m[2])) {
             dangling.push(`${relative(CLIENT_ROOT, f)}:${i + 1} 引用了未定义的 ${m[1]}`)
           }
         }

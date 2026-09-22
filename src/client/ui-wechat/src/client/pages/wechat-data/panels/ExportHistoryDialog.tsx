@@ -78,7 +78,9 @@ function fmtSize(n: number | null): string {
   return (n / 1073741824).toFixed(2) + ' GB'
 }
 
-function statusClass(status: ExportStatus): string {
+// 返回 `string | undefined`：CSS Modules 的按键取值在类型上就是可选的，而唯一调用点把它交给
+// `clsx(...)` —— clsx 与 React 的 className 本来就接受 undefined。
+function statusClass(status: ExportStatus): string | undefined {
   return status === 'ok' ? css.stOk : status === 'fail' ? css.stFail : css.stSkip
 }
 

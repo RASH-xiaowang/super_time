@@ -41,7 +41,7 @@ describe('会话列表的后台刷新', () => {
   it('reloadSessionsList 用 refresh() 而不是 reset()', () => {
     const m = /const reloadSessionsList = useCallback\(\(\): void => \{([\s\S]*?)\}, \[/.exec(code)
     expect(m, '找不到 reloadSessionsList 的定义 —— 改名后请同步本用例').not.toBeNull()
-    const body = m![1]
+    const body = m?.[1] ?? ''
     expect(body.includes('.refresh('), 'reloadSessionsList 应当走非破坏性 refresh()').toBe(true)
     expect(body.includes('.reset('), 'reloadSessionsList 不该走 reset()（会闪骨架屏并把滚动钳回顶部）').toBe(false)
     // 防空转：剥注释后若把整份源码剥没了，上面几条会恒真。

@@ -42,7 +42,9 @@ export function GlobalSearch({ value, onChange, open, onOpenChange, inputRef, ch
   onChange: (v: string) => void
   open: boolean
   onOpenChange: (v: boolean) => void
-  inputRef: React.RefObject<HTMLInputElement | null>
+  // 与调用方 / `confirm.tsx` 同形：`useRef<HTMLInputElement | null>(null)` 给的是 MutableRefObject，
+  // 声明成 RefObject 反而在 `<input ref=…>` 处不匹配（strictNullChecks 之后才暴露）。
+  inputRef: React.MutableRefObject<HTMLInputElement | null>
   children: React.ReactNode
 }): React.JSX.Element {
   const boxRef = useRef<HTMLDivElement | null>(null)

@@ -32,7 +32,7 @@ function typesWithReadError(): string[] {
   const out = new Set<string>()
   for (const f of files) {
     for (const m of read(join(BACKEND_TYPES, f)).matchAll(/export interface (\w+)[\s\S]*?\n\}/g)) {
-      if (/readError\??:/.test(m[0])) out.add(m[1])
+      if (/readError\??:/.test(m[0]) && m[1]) out.add(m[1])
     }
   }
   return [...out].sort()
@@ -43,7 +43,7 @@ function apiWrappersReturning(names: string[]): Array<{ fn: string; type: string
   const hits: Array<{ fn: string; type: string }> = []
   for (const f of readdirSync(HERE).filter((x) => /^api(-[a-z-]+)?\.ts$/.test(x))) {
     for (const m of read(join(HERE, f)).matchAll(/export async function (\w+)\s*\([\s\S]*?\)\s*:\s*Promise<(\w+)>/g)) {
-      if (names.includes(m[2])) hits.push({ fn: m[1], type: m[2] })
+      if (m[1] && m[2] && names.includes(m[2])) hits.push({ fn: m[1], type: m[2] })
     }
   }
   return hits.sort((a, b) => a.fn.localeCompare(b.fn))

@@ -608,8 +608,8 @@ describe('2026-09-19 布局：文件面板两栏铺满滚动区', () => {
   it('正文区不再套第二层滚动（外层已经是滚动容器，嵌套滚轮会抢）', () => {
     const reader = /\.readerBody\s*\{([^}]*)\}/.exec(panelCss)
     expect(reader, '找不到 .readerBody').toBeTruthy()
-    expect(stripComments(reader![1])).not.toMatch(/max-height/)
-    expect(stripComments(reader![1])).not.toMatch(/overflow-y:\s*auto/)
+    expect(stripComments(reader?.[1] ?? '')).not.toMatch(/max-height/)
+    expect(stripComments(reader?.[1] ?? '')).not.toMatch(/overflow-y:\s*auto/)
   })
 })
 

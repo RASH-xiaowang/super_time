@@ -131,7 +131,7 @@ describe('图标：走填充口径，且不与「知识图谱」撞形', () => {
     let m: RegExpExecArray | null = re.exec(icon)
     while (m !== null) {
       if (/^[MLHVCSQTAZ]$/.test(m[1] ?? '')) {
-        coords.push(...(m[2].match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number))
+        coords.push(...(m[2]?.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number))
       }
       m = re.exec(icon)
     }

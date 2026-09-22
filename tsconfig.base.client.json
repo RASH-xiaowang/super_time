@@ -1,4 +1,5 @@
 {
+  "//": "客户端基座（H11）。注意两件容易踩的事：① 本仓库的**后端**基座是 tsconfig.base.json，改那边不会影响这里；② 这里原先是 `strict: false`，2026-09-23 开成 true —— 依据是实测 90 处报错（41 在 *.spec.ts、49 在源码，源码里 31 处集中在 utils/theme-color.ts 与 panels/overview-panel.tsx），不是「感觉差不多了」。`noImplicitOverride` 同时量过：全仓 0 处 ⇒ 一并开。已收紧的档位由 src/backend/tests/tsconfig-strictness.spec.ts 钉住，退回去会红。还欠的：`exactOptionalPropertyTypes`（本侧 2026-09-23 实测：打开后总报错从 41 涨到 98 ⇒ 这一档自身约 57 处；后端侧 32 处）、`noUnusedLocals`（后端 515 处，属 lint 范畴）。",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -8,7 +9,8 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "strict": false,
+    "strict": true,
+    "noImplicitOverride": true,
     "noEmit": true
   }
 }

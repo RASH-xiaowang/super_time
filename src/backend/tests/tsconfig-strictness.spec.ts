@@ -3,13 +3,14 @@
  *
  * `tsconfig.base.json` 是按上游构建产物反推出来的，里面若干 `strict` 子开关最初是关着的
  * （为了让既有代码能过）。每收紧一档就该钉住一档 —— 否则下一次「类型报错太多了，先关掉」
- * 就会把成果静默丢掉。逐档实测（2026-09-22 / 09-23）：
+ * 就会把成果静默丢掉。逐档实测：
  *   · `noImplicitAny` 36 处、`noImplicitThis` 与 `strictFunctionTypes` **0 处** ⇒ 全仓开；
- *   · `noUncheckedIndexedAccess` 客户端 0 处、后端 77 处 ⇒ 两侧都开（后端那 77 处逐处收口）。
- * 只剩客户端基座的 `strict`（含 `strictNullChecks`）没开：实测 90 处，其中 41 处在 `*.spec.ts` 里、
- * 49 处在源码，而源码的 49 处里有 31 处集中在 `utils/theme-color.ts`(19) 与
- * `panels/overview-panel.tsx`(12) 两个文件 —— 下面最后一条用例把「还有多少、欠在哪」照实钉住，
- * 不给粉饰的空间（收紧之后这条要主动改，改不动就说明没收紧）。
+ *   · `noUncheckedIndexedAccess` 客户端 0 处、后端 77 处 ⇒ 两侧都开（后端那 77 处逐处收口）；
+ *   · 客户端基座的 `strict`（含 `strictNullChecks`）实测 90 处 ⇒ 开（2026-09-23）；
+ *   · `noImplicitOverride` 两侧各 **0 处** ⇒ 顺手一起开。
+ * 剩下的债照实钉在最后一条用例里（`exactOptionalPropertyTypes`、`noUnusedLocals`），
+ * 数字都是当场量过的 —— 2026-09-22 曾把「客户端 strictNullChecks」写成「唯一真正的大工程」，
+ * 实际只有 90 处，而那个「实测」根本没量过。收紧或退回都要主动改用例，不给粉饰空间。
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
@@ -35,6 +36,9 @@ const ON: Array<[string, Record<string, unknown>, string]> = [
   ['noImplicitThis', base, '基座（后端）'],
   ['strictFunctionTypes', base, '基座（后端）'],
   ['noUncheckedIndexedAccess', base, '基座（后端）'],
+  ['noImplicitOverride', base, '基座（后端）'],
+  ['strict', clientBase, '客户端基座（含 strictNullChecks，2026-09-23 开）'],
+  ['noImplicitOverride', clientBase, '客户端基座'],
   ['noImplicitAny', client, '客户端'],
   ['noImplicitThis', client, '客户端'],
   ['strictFunctionTypes', client, '客户端'],
@@ -42,7 +46,7 @@ const ON: Array<[string, Record<string, unknown>, string]> = [
 ]
 
 /** 已收紧的档位清单（项目工程不许在 extends 之后再覆盖回 false）。 */
-const TIGHTENED = ['noImplicitAny', 'noImplicitThis', 'strictFunctionTypes', 'noUncheckedIndexedAccess']
+const TIGHTENED = ['noImplicitAny', 'noImplicitThis', 'strictFunctionTypes', 'noUncheckedIndexedAccess', 'noImplicitOverride']
 
 describe('H11：TypeScript 严格度档位', () => {
   for (const [flag, where, label] of ON) {
@@ -60,10 +64,13 @@ describe('H11：TypeScript 严格度档位', () => {
     }
   })
 
-  it('客户端基座的 strict 仍未开，欠多少照实记着（不给粉饰的空间）', () => {
-    expect(clientBase.strict).toBe(false)
-    // 2026-09-23 实测：`tsc -p src/client/ui-wechat` 在基座开 strict 之后报 90 处
-    // （41 在 *.spec.ts、49 在源码）。这条注释是那一档的「欠条」，真收紧时连同上面的 ON 一起改。
-    expect(client.strictNullChecks ?? false).toBe(false)
+  it('还没收紧的档位照实记成 false，并写清各测过多少（不给粉饰的空间）', () => {
+    // 数字都是 2026-09-23 当场量的（方法：临时把该项改成 true 跑 tsc 数报错，再按 sha256 还原）。
+    // exactOptionalPropertyTypes：后端 32 处；客户端从「已收口的 0 处」涨到 57 处上下
+    //   （打开后 tsc 总报错 98，其中 41 是当时尚未收完的 spec ⇒ EOPT 自身约 57 处）。
+    expect(base.exactOptionalPropertyTypes).toBe(false)
+    expect(client.exactOptionalPropertyTypes).toBe(false)
+    // noUnusedLocals：后端 515 处 —— 这一项更像 lint 而不是类型口径，刻意留在这里记账。
+    expect(base.noUnusedLocals).toBe(false)
   })
 })

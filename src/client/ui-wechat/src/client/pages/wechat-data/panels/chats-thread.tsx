@@ -33,13 +33,16 @@ export interface useChatsThreadInputs {
   groupInfoOpen: boolean
   hasMore: boolean
   inFlightRef: React.MutableRefObject<boolean>
-  initialTarget: ChatTarget | null
+  /** 深链进来的「定位到某条消息」，没有就是没有（`ChatsPanel` 的道具本就是可选的）。 */
+  initialTarget?: ChatTarget | null
   initialView: ChatView | undefined
   locateMessage: (localId: number) => void
   messages: readonly WechatMessage[]
   messagesTalkerRef: React.MutableRefObject<string | null>
   moreOpen: boolean
-  msgEndRef: React.MutableRefObject<HTMLDivElement>
+  /** 只读的消息尾部锚点：调用方给的是 `useRef<HTMLDivElement>(null)`，那是 `RefObject`（current 只读），
+   *  本模块只 `msgEndRef.current` 读它、从不赋值 ⇒ 不许声明成 `MutableRefObject`。 */
+  msgEndRef: React.RefObject<HTMLDivElement>
   msgLoading: boolean
   msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
   openMsgMenu: (ev: React.MouseEvent, m: WechatMessage, kind: RenderKind) => void
@@ -518,7 +521,7 @@ const changeView = useCallback((next: ChatView): void => {
  */
 const changeViewRef = useRef(changeView)
 changeViewRef.current = changeView
-useEffect(() => { changeViewRef.current(initialView) }, [initialView])
+useEffect(() => { if (initialView) changeViewRef.current(initialView) }, [initialView])
 
 /** 打开「聊天记录」弹窗（合并转发卡片与右键菜单两条入口共用同一实现）。 */
 const openChatlog = useCallback((rich: MessageRich): void => {

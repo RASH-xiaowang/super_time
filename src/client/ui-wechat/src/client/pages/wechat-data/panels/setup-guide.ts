@@ -46,7 +46,9 @@ export interface SetupStep {
 }
 
 /** 必做的四步，顺序与设置里的「配置向导」分组一致。 */
-export const SETUP_STEPS: readonly SetupStep[] = [
+/** 非空元组类型：`firstPendingStep` 的兜底要取「第一步」，声明成 `readonly SetupStep[]`
+ *  就得靠断言或硬写一个 key（改了顺序就悄悄不一致）。元组让「至少有一步」成为类型事实。 */
+export const SETUP_STEPS: readonly [SetupStep, ...SetupStep[]] = [
   { key: 'detect', label: '检测账号', todo: '扫描本机微信账号与安装目录', done: '已检测到微信账号' },
   { key: 'dbkey', label: '数据库密钥', todo: '获取 64 位数据库密钥以解密聊天记录', done: '密钥已就绪' },
   { key: 'imgkey', label: '图片密钥', todo: '填写图片 AES 密钥与 XOR 偏移量', done: '图片密钥已就绪' },

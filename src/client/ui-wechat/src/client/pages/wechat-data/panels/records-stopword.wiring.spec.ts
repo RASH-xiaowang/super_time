@@ -17,20 +17,20 @@ const FRONTEND = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'page
 
 /** 从一个 TS 源码块里抽出所有单引号字符串。 */
 function stringsOf(block: string): string[] {
-  return [...block.matchAll(/'([^']*)'/g)].map(m => m[1])
+  return [...block.matchAll(/'([^']*)'/g)].map(m => m[1] ?? '')
 }
 
 /** 抓 `function isRecordTypeStopword` 里 return 的那个数组字面量。 */
 function backendWords(src: string): string[] {
   const m = src.match(/function isRecordTypeStopword[\s\S]*?return\s*\[([\s\S]*?)\]\.includes/)
-  if (!m) throw new Error('后端找不到 isRecordTypeStopword 的数组字面量')
+  if (!m?.[1]) throw new Error('后端找不到 isRecordTypeStopword 的数组字面量')
   return stringsOf(m[1]).map(w => w.trim().toLowerCase()).filter(Boolean)
 }
 
 /** 抓 `const TYPE_STOPWORDS` 的数组字面量。 */
 function frontendWords(src: string): string[] {
   const m = src.match(/const TYPE_STOPWORDS[^=]*=\s*\[([\s\S]*?)\n\]/)
-  if (!m) throw new Error('前端找不到 TYPE_STOPWORDS 的数组字面量')
+  if (!m?.[1]) throw new Error('前端找不到 TYPE_STOPWORDS 的数组字面量')
   return stringsOf(m[1]).map(w => w.trim().toLowerCase()).filter(Boolean)
 }
 
