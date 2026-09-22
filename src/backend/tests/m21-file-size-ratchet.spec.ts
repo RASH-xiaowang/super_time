@@ -30,7 +30,7 @@ const LIMIT = 1000
 const ALLOWLIST: Record<string, number> = {
   'src/backend/wechat-data/src/gateway.ts': 4837,
   'src/client/ui-app/onboarding/onboarding.module.css': 1618,
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx': 1352,
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx': 1219,
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 2904,
 }
 

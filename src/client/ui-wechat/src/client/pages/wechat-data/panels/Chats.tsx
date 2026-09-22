@@ -22,6 +22,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RainWindow } from './rain-window.tsx'
 import { ChatsView } from './chats-view.tsx'
+import { useChatsMsgSearch } from './chats-msg-search.tsx'
+import { useChatsGroupInfo } from './chats-group-info.tsx'
 import { useChatsEdit } from './chats-edit.tsx'
 import { useChatsExport } from './chats-export.tsx'
 export { ChatView, isEnterpriseChat } from './chats-support.tsx'
@@ -281,20 +283,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   /** Clear the current session's draft (only the local decrypted copy). */
   const { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
-  const [msgHits, setMsgHits] = useState<readonly SearchHit[]>([])
-  const [msgSearchLoading, setMsgSearchLoading] = useState(false)
-  const [msgSearchError, setMsgSearchError] = useState<string | null>(null)
-  const [msgSearched, setMsgSearched] = useState(false)
-  const [msgIndexed, setMsgIndexed] = useState(true)
-  const [indexBuilding, setIndexBuilding] = useState(false)
-  const msgSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const msgSearchSeqRef = useRef(0)
-  /**
-   * 在跑的消息搜索的 jobId（N9）。换关键词/清空/离开面板时用它打断上一轮扫描 ——
-   * 后端兜底扫描最长可达秒级，不打断就白占着 worker（用户已经不看结果了）。
-   */
-  const activeSearchJobRef = useRef<string | null>(null)
-  /** 打断在跑的那次搜索（没有就别调 RPC）。 */
   const cancelActiveSearch = useCallback((): void => {
     const jobId = activeSearchJobRef.current
     activeSearchJobRef.current = null
@@ -303,123 +291,13 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [])
 
   // ── group chat info panel (群聊信息) ──
-  const [groupInfoOpen, setGroupInfoOpen] = useState(false)
-  const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null)
-  const [groupInfoLoading, setGroupInfoLoading] = useState(false)
-  const [groupInfoErr, setGroupInfoErr] = useState<string | null>(null)
-  const [memberSearch, setMemberSearch] = useState('')
-  const [memberExpanded, setMemberExpanded] = useState(false)
-  /**
-   * 群公告展开态。公告是自由文本（实测样本 5 行）。
-   * 原先 `.groupInfoValue` 用 -webkit-line-clamp:3 **静默**截断且没有展开入口 ——
-   * 用户不知道内容被吃掉了（审计 P1-5）。这里给可展开的行内开关。
-   */
-  const [annExpanded, setAnnExpanded] = useState(false)
+  const { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers } = useChatsGroupInfo({  })
   const [annCanExpand, setAnnCanExpand] = useState(false)
   const annRef = useRef<HTMLDivElement | null>(null)
-  const groupInfoTitleId = useId()
-  const [profileMember, setProfileMember] = useState<GroupMember | null>(null)
-  const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
-  const [chatlogStack, setChatlogStack] = useState<Array<{ title: string; records: ChatlogRecord[] }>>([])
   const [chatlogResolving, setChatlogResolving] = useState(false)
   const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
+  const { activeSearchJobRef, buildIndex, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen } = useChatsMsgSearch({ cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen })
   const chatlogOpen = chatlogStack.length > 0 ? chatlogStack[chatlogStack.length - 1] : null
-  const profileHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const showMemberProfile = (m: GroupMember, el: HTMLElement): void => {
-    if (profileHideTimer.current) clearTimeout(profileHideTimer.current)
-    setProfileMember(m)
-    const rect = el.getBoundingClientRect()
-    const width = 232
-    const left = rect.left - width - 10 >= 8 ? rect.left - width - 10 : rect.right + 10
-    const top = Math.max(8, Math.min(rect.top, window.innerHeight - 170))
-    setProfilePos({ left, top })
-  }
-
-  const hideMemberProfile = (): void => {
-    if (profileHideTimer.current) clearTimeout(profileHideTimer.current)
-    profileHideTimer.current = setTimeout(() => {
-      setProfileMember(null)
-      setProfilePos(null)
-    }, 150)
-  }
-  const buildIndex = useCallback(async (silent = false): Promise<void> => {
-    setIndexBuilding(true)
-    try {
-      const r = await apiBuildSearchIndex({ force: false })
-      setMsgIndexed(true)
-      // r.message 只在「跳过不可读分片」时出现：索引残缺必须让用户看见
-      if (!silent) {
-        setMsgSearchError(r.message
-          ? `搜索索引已就绪（${r.rows ?? 0} 条，但${r.message}）`
-          : `搜索索引已就绪（${r.rows ?? 0} 条）`)
-      }
-    } catch (e) {
-      if (!silent) setMsgSearchError('索引构建失败: ' + (e as Error).message)
-    } finally {
-      setIndexBuilding(false)
-    }
-  }, [])
-
-  const checkIndexStatus = useCallback(async (): Promise<void> => {
-    try {
-      const st = await apiGetSearchIndexStatus()
-      setMsgIndexed(st.exists && st.rows > 0)
-    } catch { /* keep default */ }
-  }, [])
-
-  const onSearchInput = useCallback((q: string): void => {
-    if (msgSearchTimer.current) clearTimeout(msgSearchTimer.current)
-    const term = q.trim()
-    if (term.length < 1) {
-      msgSearchSeqRef.current += 1
-      cancelActiveSearch()
-      setMsgHits([])
-      setMsgSearched(false)
-      setMsgSearchError(null)
-      return
-    }
-    const seq = ++msgSearchSeqRef.current
-    // 新一轮搜索开始即打断上一轮（N9）：上一次的兜底扫描可能还在 worker 里跑
-    cancelActiveSearch()
-    if (!msgIndexed && !indexBuilding) void buildIndex(true)
-    msgSearchTimer.current = setTimeout(async () => {
-      setMsgSearchLoading(true)
-      setMsgSearchError(null)
-      const jobId = 'chats-search-' + (globalThis.crypto?.randomUUID?.() ?? String(Date.now()))
-      activeSearchJobRef.current = jobId
-      try {
-        const r = await apiSearchMessages({ query: term, limit: 200, jobId })
-        if (seq !== msgSearchSeqRef.current) return
-        setMsgHits(r.hits)
-        setMsgIndexed(r.indexed)
-        setMsgSearched(true)
-      } catch (e) {
-        if (seq !== msgSearchSeqRef.current) return
-        setMsgSearchError((e as Error).message)
-        setMsgHits([])
-      } finally {
-        if (activeSearchJobRef.current === jobId) activeSearchJobRef.current = null
-        if (seq === msgSearchSeqRef.current) setMsgSearchLoading(false)
-      }
-    }, 350)
-  }, [msgIndexed, indexBuilding, buildIndex, cancelActiveSearch])
-
-  // 离开面板时打断在跑的搜索（N9；与上面那条「新搜索打断旧搜索」同一套 token）
-  useEffect(() => () => { cancelActiveSearch() }, [cancelActiveSearch])
-
-  // ── message calendar (A8) ──
-  const [calOpen, setCalOpen] = useState(false)
-  // 手写覆盖层的 Esc 关闭（kit 的 Drawer/Dialog 由 Radix 提供；这几个是手写的）
-  useEscapeToClose(exportOpen, () => { setExportOpen(false) })
-  useEscapeToClose(chatlogStack.length > 0, () => { setChatlogStack([]) })
-  useEscapeToClose(calOpen, () => { setCalOpen(false) })
-  useEscapeToClose(editedOpen, () => { setEditedOpen(false) })
-  // 焦点管理：进入移入、Tab 循环、关闭还原（手写弹窗没有 Radix 的那套）
-  useDialogFocus(exportOpen, '[data-st-dialog="chats-export"]')
-  useDialogFocus(chatlogStack.length > 0, '[data-st-dialog="chats-chatlog"]')
-  useDialogFocus(calOpen, '[data-st-dialog="chats-cal"]')
-  useDialogFocus(editedOpen, '[data-st-dialog="chats-edited"]')
   const [calYear, setCalYear] = useState(new Date().getFullYear())
   const [calMonth, setCalMonth] = useState(new Date().getMonth() + 1)
   const [calCounts, setCalCounts] = useState<Record<string, number>>({})
@@ -1179,17 +1057,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
-  const memberQuery = memberSearch.trim().toLowerCase()
-  const memberTotal = groupInfo ? groupInfo.members.length : 0
-  const filteredMembers = ((): GroupMember[] => {
-    if (!groupInfo) return []
-    if (!memberQuery) return groupInfo.members
-    return groupInfo.members.filter((m) =>
-      m.name.toLowerCase().includes(memberQuery) || m.username.toLowerCase().includes(memberQuery))
-  })()
-  const memberLimit = memberExpanded ? 200 : 24
-  const shownMembers = filteredMembers.slice(0, memberLimit)
-
   return (
     <ChatsView
       EXPO_FORMATS={EXPO_FORMATS}
