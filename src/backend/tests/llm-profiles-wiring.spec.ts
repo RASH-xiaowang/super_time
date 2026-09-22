@@ -12,7 +12,7 @@
  *   ② 每次写盘都要把「当前生效值」摊平到顶层（老读者 `loadLlmConfig` 与旧版本只认顶层）。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -26,7 +26,10 @@ function codeOf(...parts: string[]): string {
 }
 
 const paths = codeOf('src', 'backend', 'wechat-paths.js')
-const main = codeOf('main.js')
+// M21：wechat:* 频道搬去了 src/backend/ipc-wechat.js ⇒ 读「main.js + 全部 ipc-*.js」的联合
+const main = [codeOf('main.js'), readdirSync(join(ROOT, 'src', 'backend'))
+  .filter((f) => /^ipc-[a-z]+\.js$/.test(f)).sort()
+  .map((f) => readFileSync(join(ROOT, 'src', 'backend', f), 'utf8')).join('\n')].join('\n')
 const preload = codeOf('preload.js')
 
 describe('模型配置集：存储层导出', () => {

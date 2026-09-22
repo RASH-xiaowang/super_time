@@ -25,7 +25,7 @@
  *
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -36,7 +36,12 @@ import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from 
 import { shouldSkipGates } from '../../client/ui-app/debug-gates.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
+// M21 第二十刀：misc IPC 频道搬去了 `src/backend/ipc-misc.js` ⇒ 读取面改**联合**
+// （断言一条没改；app:debug-gates / dialog:open-file 这些字符串搬到哪份都算数）。
+const mainSrc = [join(ROOT, 'main.js')]
+  .concat(readdirSync(join(ROOT, 'src', 'backend')).filter((f) => /^ipc-[a-z]+\.js$/.test(f))
+    .map((f) => join(ROOT, 'src', 'backend', f)))
+  .map((f) => readFileSync(f, 'utf8')).join('\n')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
 const entryPath = join(ROOT, 'src', 'client', 'ui-app', 'ui-entry.tsx')
 const entrySrc = readFileSync(entryPath, 'utf8')

@@ -26,6 +26,7 @@ import { PeriodSummaryPanel } from '../src/client/ui-wechat/src/client/pages/wec
 import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Annual.tsx'
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
 import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
+import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -433,6 +434,15 @@ check('朋友圈：带 author 过滤时给出「仅看 X」与返回入口', () 
   const html = renderToStaticMarkup(h(MomentsPanel, { author: '某人', onClearAuthor: () => {} }))
   ok(html.includes('仅看 某人'), '缺少「仅看 X」入口')
   ok(html.includes('返回全部动态'), '缺少返回全部动态入口')
+})
+
+console.log('设置（M21 拆 Settings 前的渲染兜底）')
+check('设置：左导航与右内容都能渲染（不崩）', () => {
+  const html = renderToStaticMarkup(h(SettingsPanel, {}))
+  ok(html.includes('设置'), '缺少面板标题')
+  for (const t of ['智能与隐私', '高级', 'AI 大模型', '数据边界与出网']) {
+    ok(html.includes(t), `缺少导航项：${t}`)
+  }
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)
