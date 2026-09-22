@@ -89,6 +89,20 @@ jobs:
       - name: 问答界面 SSR 冒烟
         run: npm run ui:smoke
 
+      # M3 真机验收（导出进度与中止）—— 2026-09-22 这一刀是被它逼出来的：网关
+      # `exportSessionMessages` 的入参里没有 jobId，客户端传了也在 RPC 边界被静默咽掉，
+      # 而当时**所有源码级守卫都是绿的**（它们只看客户端有没有传、只看中继那一行在不在）。
+      # 所以把这份「真点一次按钮」的脚本钉进门禁：Playwright 驱动真实 Electron，
+      # 合成 4 万条会话，走 后端 → 主进程 → ui-entry → DOM 事件 → 面板 整条链，
+      # 断言进度按 jobId 认领、总量未知时走不定量态、点中止后停在终态且不留 `.partial-*`。
+      # 需要真窗口（前面「准备 Electron 二进制」那步已备好）；`playwright` 是 devDependency，
+      # `_electron.launch` 用本地 electron.exe，不需要下载浏览器。
+      # 单步上限 12 分钟：脚本里的等待多是墙上时钟（不随 CPU 变慢线性放大），
+      # CPU 重的部分（4 万条插入 + xlsx 压缩）在 runner 上实测留了足够余量。
+      - name: 导出进度与中止（真机 e2e，M3）
+        timeout-minutes: 12
+        run: npm run e2e:export-progress
+
       # 隐私同意闸门（H14）：未勾选时按钮必须是禁用态 —— SSR 渲染事实，不是读代码。
       - name: 隐私同意闸门 SSR 冒烟
         run: npm run privacy-gate:smoke
