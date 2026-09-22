@@ -684,7 +684,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                   没有这一段时用户只有一个「导出中…」的按钮可以看，取消也无从下手。 */}
               {exportProgress ? (
                 <div className={css.exportField}>
-                  <ProgressBar value={exportProgress.total > 0 ? Math.min(100, (exportProgress.done / exportProgress.total) * 100) : 0} />
+                  <ProgressBar value={exportProgress.total > 0 ? Math.min(100, (exportProgress.done / exportProgress.total) * 100) : 0} indeterminate={exportProgress.total <= 0} />
                   <span className={kitCss.textCaptionTrunc}>
                     {(exportProgress.phase || '导出中') + ' · ' + exportProgress.done + (exportProgress.total ? ' / ' + exportProgress.total : '')}
                   </span>

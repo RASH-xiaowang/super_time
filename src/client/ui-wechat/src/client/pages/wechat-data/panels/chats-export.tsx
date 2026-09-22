@@ -150,7 +150,9 @@ const exportSession = useCallback(async (): Promise<void> => {
     setExportMsg(`已导出 ${r.count} 条 → ${r.path}`)
     setExportOpen(false)
   } catch (e) {
-    setExportMsg('导出失败: ' + (e as Error).message)
+    const msg = String((e as Error)?.message ?? e)
+    // 「中止」是用户自己按的，不是失败：后端按 canceled 记账，这里也不能报成「导出失败」
+    setExportMsg(/取消|cancel|abort/i.test(msg) ? '已取消导出' : '导出失败: ' + msg)
   } finally {
     // 终态（含被取消）由后端记在槽里；这里只管「别再显示进度条」
     exportJobRef.current = ''

@@ -168,6 +168,8 @@ export abstract class GatewayDataOps extends GatewayAskOps {
     zip?: boolean
     /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
     sessionName?: string
+    /** 进度/取消的任务标识（M3）：传了才有 `wechat-export/progress`，也才谈得上「中止」。 */
+    jobId?: string
   }): Promise<ExportResult> {
   return this.exportRemotes().exportSessionMessages(options)
   }

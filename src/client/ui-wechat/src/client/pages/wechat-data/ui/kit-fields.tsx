@@ -43,15 +43,21 @@ export function Badge({ tone = 'default', children, title }: {
   return <span className={css.badge} data-tone={tone} title={title}>{children}</span>
 }
 
-/** 进度条（0-100）。 */
-export function ProgressBar({ value, tone = 'cyan' }: {
+/**
+ * 进度条（0-100）。
+ * @param props - `value` 百分比；`indeterminate` 表示**总量未知**（后端此时报 total=0），
+ * 画一段来回扫的短条 —— 否则总量未知的长任务会钉在一根 0% 的空条上，看着像卡死。
+ */
+export function ProgressBar({ value, tone = 'cyan', indeterminate = false }: {
   value: number
   tone?: 'cyan' | 'green' | 'amber' | 'red'
+  indeterminate?: boolean
 }): React.JSX.Element {
   const v = Math.max(0, Math.min(100, value))
   return (
-    <div className={css.progress} data-tone={tone} role="progressbar" aria-valuenow={Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
-      <div className={css.progressFill} style={{ width: `${v}%` }} />
+    <div className={css.progress} data-tone={tone} data-indeterminate={indeterminate || undefined}
+      role="progressbar" aria-valuenow={indeterminate ? undefined : Math.round(v)} aria-valuemin={0} aria-valuemax={100}>
+      <div className={css.progressFill} style={indeterminate ? undefined : { width: `${v}%` }} />
     </div>
   )
 }

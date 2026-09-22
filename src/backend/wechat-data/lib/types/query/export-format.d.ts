@@ -126,4 +126,6 @@ export declare function formatXlsx(msgs: WechatMessage[], username: string, ctrl
  * @param rows - 行源（含表头；同步或异步迭代器）。
  * @param ctrl - 可选的进度/取消。
  */
-export declare function writeXlsxStream(filePath: string, rows: Iterable<string[]> | AsyncIterable<string[]>, ctrl?: StreamControl): Promise<void>;
+export declare function writeXlsxStream(filePath: string, rows: Iterable<string[]> | AsyncIterable<string[]>, ctrl?: StreamControl, 
+/** 行数总量（已知就传）：不传则 'format' 阶段报 total=0，界面只能显示不定量进度。 */
+total?: number): Promise<void>;

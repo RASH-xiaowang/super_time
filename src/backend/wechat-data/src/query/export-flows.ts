@@ -225,7 +225,9 @@ export async function exportSessionMessagesStreamed(
   const { msgs } = plan
   if (plan.isXlsx && !options.zip) {
     // 大行数的正路：sheet 逐块产出 → 流式 deflate → temp+rename。
-    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl)
+    // 行数此刻已经知道（消息都已收集），把它报给流式层 ⇒ 'format' 阶段才有 done/total，
+    // 进度条才真能按百分比填（不传就一路 total=0，界面只能显示「数字在涨」）。
+    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl, msgs.length + 1)
   } else if (plan.isXlsx) {
     // zip 包裹时内层必须是完整的 xlsx 字节：仍走内存版（多一层流式需要再落一次临时文件，
     // 而单会话上限 5 万条、内层 xlsx 本身是压缩数据，收益不抵复杂度）。

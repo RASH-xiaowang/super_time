@@ -330,6 +330,19 @@
 .progress[data-tone='amber'] .progressFill { background: var(--nm-warning); }
 .progress[data-tone='red'] .progressFill { background: var(--nm-danger); }
 
+/* 不定量进度（M3）：总量未知时后端报 total=0，按百分比画就是一根钉在 0% 的空条，
+   用户会当成卡死。这里改画一段来回扫的短条 —— 宽度不写内联样式（组件在 indeterminate
+   时不给 style），所以这条 width 不会被覆盖掉。 */
+.progress[data-indeterminate] .progressFill {
+  width: 34%;
+  animation: progressSweep 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes progressSweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(240%); }
+}
+
 /* ── 面板胶囊按钮：已并入 `Button` 组件 ─────────────
  * 5 个面板（group-insights / ledger / period-summary / privacy-trust / tasks）曾各自
  * 定义**逐字节相同**的 `.btn` 及其 hover / :disabled / [data-active]（第 29 轮重复审计：
@@ -763,6 +776,9 @@
 @media (prefers-reduced-motion: reduce) {
   .foldableBody { transition: none; }
   .foldableChevron { transition: none; }
+  /* 关掉动画后不定量进度也得能被*感知*：静止的短条至少表示「在动，只是不知道还剩多少」，
+     而不是回到一根 0% 的空条。 */
+  .progress[data-indeterminate] .progressFill { animation: none; width: 60%; }
 }
 
 /* ────────────────────────────────────────────

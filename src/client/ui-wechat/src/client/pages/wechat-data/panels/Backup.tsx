@@ -123,7 +123,11 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     setEncProgress(null)
     try {
       const r = await apiCreateEncryptedBackup({ password: password.trim(), jobId })
-      if (!r.ok) setError(r.error ?? '加密备份失败')
+      if (!r.ok) {
+        const msg = r.error ?? '加密备份失败'
+        // 「中止」是用户按的，不是失败 —— 与后端 canceled 同一口径，别报成失败
+        setError(/取消|cancel|abort/i.test(msg) ? '已取消加密备份' : msg)
+      }
       setPassword('')
       await refresh()
     } catch (e) {
@@ -179,7 +183,7 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
       {encProgress ? (
         <div className={css.backupProgress}>
           <span className={css.backupProgressBar}>
-            <ProgressBar value={encProgress.total > 0 ? Math.min(100, (encProgress.done / encProgress.total) * 100) : 0} />
+            <ProgressBar value={encProgress.total > 0 ? Math.min(100, (encProgress.done / encProgress.total) * 100) : 0} indeterminate={encProgress.total <= 0} />
           </span>
           <span className={css.backupProgressLabel}>{(encProgress.phase || '加密中') + ' · ' + encProgress.done + (encProgress.total ? ' / ' + encProgress.total : '')}</span>
           <button type="button" className={css.catBtn} onClick={cancelEncrypted}>中止</button>

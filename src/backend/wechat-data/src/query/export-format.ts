@@ -360,9 +360,11 @@ export async function writeXlsxStream(
   filePath: string,
   rows: Iterable<string[]> | AsyncIterable<string[]>,
   ctrl?: StreamControl,
+  /** 行数总量（已知就传）：不传则 'format' 阶段报 total=0，界面只能显示不定量进度。 */
+  total = 0,
 ): Promise<void> {
   await writeZipAtomic(filePath, async (zip) => {
     for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data)
-    await zip.addStream('xl/worksheets/sheet1.xml', xlsxSheetChunksAsync(rows, ctrl), ctrl)
+    await zip.addStream('xl/worksheets/sheet1.xml', xlsxSheetChunksAsync(rows, ctrl, total), ctrl)
   })
 }

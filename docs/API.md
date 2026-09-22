@@ -582,7 +582,7 @@ Export moments (朋友圈) with author + keyword + time filters.
 ### `exportSessionMessages`
 
 ```ts
-async exportSessionMessages(options: { username: string format: string count?: number dir?: string types?: number[] richTypes?: string[] from?: number to?: number filename?: string zip?: boolean sessionName?: string }): Promise<ExportResult>
+async exportSessionMessages(options: { username: string format: string count?: number dir?: string types?: number[] richTypes?: string[] from?: number to?: number filename?: string zip?: boolean sessionName?: string jobId?: string }): Promise<ExportResult>
 ```
 
 Export a conversation messages to txt/csv/excel/html.  M3：本入口改为 `async` 并走**流式**实现 —— 同步版必须「先把整份 xlsx 拼进内存」， 行数一大峰值就与行数成正比；`exportSessionMessagesStreamed` 把 sheet 逐块写进 zip 条目 （峰值与行数无关）。契约没变：仍是 `Promise<ExportResult>`，客户端镜像无需改。
