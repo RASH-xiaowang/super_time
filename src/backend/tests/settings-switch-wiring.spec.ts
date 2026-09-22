@@ -16,20 +16,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-/** M21：域方法体搬进 `remotes/*.ts`（网关只留签名 + 转发）⇒ 源码断言读联合。 */
-function gatewayPlusRemotes(p: string): string {
-  const dir = join(dirname(p), 'remotes')
-  const extra = existsSync(dir)
-    ? readdirSync(dir).filter((f) => f.endsWith('.ts')).sort().map((f) => join(dir, f))
-    : []
-  return [p, ...extra].map((f) => readFileSync(f, 'utf8')).join('\n')
-}
-
-
+import { gatewaySource } from './gateway-source.ts'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
 const SETTINGS_DIR = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
-const gatewaySrc = gatewayPlusRemotes(GATEWAY)
+// M21：域方法体在 `remotes/*.ts`、网关侧的接线（`cdnSwitches` 等）在 `gateway-core.ts`
+// ⇒ 读「类 + 域处理器」的联合（AST 口径不变，只是文件集合跟着搬家走）。
+const gatewaySrc = gatewaySource()
 // M21 拆 Settings ⇒ 读**面板 + 它的拆分模块**的联合（断言一条没改；密钥清单搬到 settings-common 也算数）。
 const settingsSrc = readdirSync(SETTINGS_DIR)
   .filter((f) => /^settings-[a-z-]+\.tsx?$/.test(f))

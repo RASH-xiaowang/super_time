@@ -15,14 +15,11 @@
  * 「拦截出站」处理」）与 `privacy-audit.spec.ts`（读不到要抛，不许编默认值）。
  * @vitest-environment node
  */
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
+// M21 结构刀：三处接缝都住在网关的「核」里 ⇒ 读组成这个类的两个文件（**不**含 remotes/ ——
+// 判据要的就是「接缝在网关类里」，实现模块里的同名调用不算）。
+import { gatewayClassSource } from './gateway-source.ts'
 
 /** 三处接缝：失败时必须拦下，不许在 catch 里编一个「没开拦截」。 */
 const SEAMS = ['outboundBlocked', 'privacyBlocked', 'privacyGate']
@@ -68,7 +65,7 @@ function scan(src: string): Map<string, SeamScan> {
 }
 
 describe('隐私闸门的失败方向', () => {
-  const scans = scan(readFileSync(GATEWAY, 'utf8'))
+  const scans = scan(gatewayClassSource())
 
   it('三个接缝都还在（防空转）：找不到方法名说明守卫已失效', () => {
     for (const name of SEAMS) {

@@ -12,10 +12,11 @@
  * 这类轮次会整段从历史里消失。所以这里断言调用点 ≥ 2，而不是「存在即可」。
  * @vitest-environment node
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { gatewaySource } from './gateway-source.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const GATEWAY = join(HERE, '..', 'wechat-data', 'src', 'gateway.ts')
@@ -29,10 +30,9 @@ function codeOf(file: string): string {
   return stripCode(readFileSync(file, 'utf8'))
 }
 
-// M21：三个问答历史方法体搬进 remotes/ask.ts（网关只留一行转发）⇒ 读联合（断言未改）；
-// 三处「方法体里必须打到存储模块」的正则因此能匹配到实现那份。
-const gateway = stripCode([GATEWAY, ...readdirSync(join(dirname(GATEWAY), 'remotes')).filter((f) => f.endsWith('.ts'))
-  .sort().map((f) => join(dirname(GATEWAY), 'remotes', f))].map((f) => readFileSync(f, 'utf8')).join('\n'))
+// M21：三个问答历史方法体搬进 remotes/ask.ts、`saveAskHistory` 住进 gateway-core.ts
+// ⇒ 读「类 + 域处理器」的联合（断言未改）。
+const gateway = stripCode(gatewaySource())
 const store = codeOf(STORE)
 
 describe('问答历史：网关自动保存', () => {
@@ -51,7 +51,7 @@ describe('问答历史：网关自动保存', () => {
   })
 
   it('落库内容取的是**回答本身**（问题/回答/引用/basis/检索统计）', () => {
-    const at = gateway.indexOf('private saveAskHistory(')
+    const at = gateway.search(/\n  (?:private|protected) saveAskHistory\(/)
     expect(at).toBeGreaterThan(-1)
     // 取到方法体（到下一个方法声明前的收尾括号）
     const body = gateway.slice(at, at + 3000)
@@ -61,7 +61,7 @@ describe('问答历史：网关自动保存', () => {
   })
 
   it('记录写入是 best-effort：包在 try 里，失败不影响已经生成好的回答', () => {
-    const at = gateway.indexOf('private saveAskHistory(')
+    const at = gateway.search(/\n  (?:private|protected) saveAskHistory\(/)
     const body = gateway.slice(at, at + 3000)
     expect(body).toMatch(/try \{/)
   })
@@ -69,7 +69,7 @@ describe('问答历史：网关自动保存', () => {
   it('问了哪个「入口」也记下来（面板问答 / 会话内问答可分开回看）', () => {
     // askWechat 暴露 source 选项，并把它透传进历史
     expect(gateway).toMatch(/source\?: string/)
-    const at = gateway.indexOf('private saveAskHistory(')
+    const at = gateway.search(/\n  (?:private|protected) saveAskHistory\(/)
     expect(gateway.slice(at, at + 3000)).toContain('options.source')
   })
 })
