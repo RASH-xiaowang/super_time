@@ -87,7 +87,7 @@ function registerWechatIpc(ctx) {
    * 后端可能先于订阅就报出 down/ready/failed —— 那些事件会丢失。
    * 界面挂载后用这个接口补一次状态，才能保证「该提示的一定提示到」。
    */
-  ipcMain.handle('wechat:backend-state', () => ({ ok: true, value: { ...backendStatus } }));
+  ipcMain.handle('wechat:backend-state', () => ({ ok: true, value: { ...getBackendStatus() } }));
 
   // —— 微信问答模型配置（wechat/llm.json） ——
   ipcMain.handle('wechat:llm-get', () => {

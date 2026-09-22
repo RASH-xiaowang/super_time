@@ -11,7 +11,7 @@
  *   diagLog / STATE_DIR / APP_VERSION / debugGates / licenseService / getMainWindow / buildDiagnosticReport。
  */
 function registerMiscIpc(ctx) {
-  const { ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticReport } = ctx;
+  const { ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticReport, installWebContentsGuards } = ctx;
   ipcMain.handle('diag:log-info', () => {
     const files = diagLog.files()
       .map((p) => {
