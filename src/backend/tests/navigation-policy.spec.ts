@@ -6,10 +6,14 @@
  * **默认拒绝**：只放行已知安全的形态，新协议不会被意外放行。
  * @vitest-environment node
  */
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { decideNavigation, decideWindowOpen, isInsidePath, isSafeExternalUrl } from '../navigation-policy.js'
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const APP_ROOT = 'D:\\super-time-wechat'
 
 describe('shell.openExternal 白名单：只放行 http(s)', () => {
@@ -98,5 +102,45 @@ describe('路径包含判定', () => {
     // 关键边界：`super-time-wechat-evil` 不能因为「前缀相同」被放行
     expect(isInsidePath(APP_ROOT, 'D:\\super-time-wechat-evil\\x')).toBe(false)
     expect(isInsidePath(APP_ROOT, 'D:\\other\\x')).toBe(false)
+  })
+})
+
+describe('主进程接线：每个导航入口都真的挂了守卫', () => {
+  /**
+   * 上面这些用例只证明**判定函数**是对的。判定函数写得再好，
+   * 主进程少挂一个事件就等于该路径完全没守卫 —— 而这类缺失不会有任何报错。
+   * `will-frame-navigate` 就是这么漏掉的（它管子框架导航，`will-navigate` 不覆盖它）。
+   * 所以这里钉三件事：五个入口都在 `installWebContentsGuards` 里挂上、
+   * 每个都走同一个 `decideNavigation`/`preventDefault`、以及**新出现的导航类事件必须进清单**。
+   */
+  const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
+  const guards = mainSrc.slice(mainSrc.indexOf('function installWebContentsGuards'))
+  const ATTACHED = ['setWindowOpenHandler', 'will-navigate', 'will-redirect', 'will-frame-navigate', 'will-attach-webview']
+
+  for (const ev of ATTACHED) {
+    it(`守卫里挂了 ${ev}`, () => {
+      // 按**完整调用形态**找，不能只找子串：改名成 `will-navigate-legacy` 也算「挂着」，
+      // 而那是完全失效的监听（第 8 刀变异自证时就是这么漏的）。
+      const shape = ev === 'setWindowOpenHandler' ? `contents.${ev}(` : `contents.on('${ev}'`
+      expect(guards.includes(shape), `${ev} 没在 installWebContentsGuards 里以 ${shape} 出现`).toBe(true)
+    })
+  }
+
+  it('三条导航事件都走同一个判定函数（不许就地写一套新判定）', () => {
+    const nav = ['will-navigate', 'will-redirect', 'will-frame-navigate']
+    for (const ev of nav) {
+      const at = guards.indexOf(`'${ev}'`)
+      expect(at, ev).toBeGreaterThan(-1)
+      expect(guards.slice(at, at + 700), `${ev} 没调用 decideNavigation`).toContain('decideNavigation')
+    }
+  })
+
+  it('防空转：main.js 里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
+    const seen = [...mainSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => m[1])
+    const unexpected = seen.filter((e) => !ATTACHED.includes(e))
+    expect(unexpected, `未挂守卫的导航事件：${unexpected.join(', ')}`).toEqual([])
+    for (const ev of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {
+      expect(seen, `main.js 不再监听 ${ev} —— 守卫被删了？`).toContain(ev)
+    }
   })
 })
