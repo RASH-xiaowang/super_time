@@ -407,7 +407,7 @@ flowchart TD
   - [x] 导出期间 UI 保持可交互，其他面板查询不被阻塞超过 1 秒 —— **真机量过（2026-09-22，`scripts/export-nonblocking-e2e.mjs`）**：4 万条会话导出期间一次 `getSessions` 往返 **95ms**（空闲基线 1ms），面板点击能切走；此前该项只打过查询层的桩（「循环最长占用 73ms」量的不是用户那侧的往返），而单会话导出的收集段是**一个 400 页的同步循环、整段不让出**，实测独占 **2573ms**（>1 秒，不达标）。修法是让收集段每 8 页 `setImmediate` 让出一次（`collectMessagesAsync`，翻页口径仍与同步版共用同一份 `messagePages`，两条路不会导出不同内容），单会话流式导出与 `exportAllSessions` 的逐会话收集都改走它；同一事实钉进 CI：`export-progress-job.spec.ts` 的事件循环停顿断言 <400ms（退回同步收集实测 2312ms ⇒ 红）
   - [ ] 中途取消/杀进程不留半成品文件
   - [ ] 输出内容与改造前逐字节一致（用同一数据集比对）
-  - [ ] xlsx 导出 10 万行不 OOM
+  - [x] xlsx 导出 10 万行不 OOM —— **2026-09-22 复测**（`MEASURE_XLSX_STREAM=1 npx vitest run src/backend/wechat-data/tests/xlsx-stream.measure.spec.ts`，在本轮改过 `writeXlsxStream` 签名之后重跑）：流式路径 RSS 峰值增量 **27.0MB** / heapUsed 15.5MB，对照「行数组 + join + 整块压」**220.6MB** / 138.9MB（**8.2×**）；真实链路 5 万条会话 15.0MB vs 同步内存版 36.2MB。注意这是**门控测功脚本**（默认 `describe.skipIf`，不入 CI 门禁）
 - **本轮结果（2026-09-13）**：
   - [x] 内存有明确上界：`exportAllSessions` 改为逐条目流式写盘（`zip.ts` 新增 `ZipFileWriter`），
     峰值只与**单个条目**相关。实测 240MB 输入时攒内存路径 RSS +738.3MB vs 流式**无可测增长**；
@@ -418,8 +418,14 @@ flowchart TD
   - [x] 输出逐字节一致：`ZipFileWriter` 与旧 `zipFiles` 对同组条目**逐字节等价**，
     由 12 项测试覆盖（含同名跳过、STORE/DEFLATE 选择、中文/emoji 名、嵌套、反斜杠、
     65535 条目、3MB 随机块）；端到端另验证确定性与失败不留 `.partial-`
-  - [ ] **xlsx 10 万行未验证**：单会话上限 5 万条走不到；且 `formatXlsx` 只把 `cells +=`
-    改成数组 join，峰值仍与行数线性（真流式需要 zip 条目级流式 deflate，未做）
+  - [x] **xlsx 10 万行的真流式已做完并复测**（2026-09-22）：本条目原先写的是「`formatXlsx` 只把 `cells +=`
+    改成数组 join，峰值仍与行数线性；真流式需要 zip 条目级流式 deflate，未做」—— 那是**W1A（2026-09-15）之前**的状态，
+    之后 `zip.ts` 落了 `ZipFileWriter.addStream`（分块流式 deflate → 临时文件 → 用真实 CRC/长度回填本地头，归档格式不变）
+    与 `writeXlsxStream`（sheet 逐块产出，行 XML 分块规则与内存版**共用同一份**以防漂移），数字见上一条。
+    **仍然成立的边界**：① 单会话导出的 RPC 上限是 5 万条，所以 10 万行只能在 `writeXlsxStream` 层直接喂行源去量
+    （测功脚本就是这么做的），走业务入口到不了那个规模；② `formatXlsx`（内存版）确实还与行数线性，
+    但它只剩「`zip=true` 时包裹内层 xlsx」这一条路 —— 内层本身已是压缩数据，再叠一层流式要多落一次临时文件，
+    收益不抵复杂度，这个取舍写在 `export-flows.ts` 的注释里，不是漏做。
   - **评审发现并已修**：① critical —— 写流错误被吞且只等 `drain`，磁盘满时后续写入
     **永久挂起**（Node 出错时先 emit drain 再 emit error）；② moments 媒体上限 off-by-one
     （`>=4999` vs 旧语义 5000）；③ 补上内存与阻塞时长的实测证据
