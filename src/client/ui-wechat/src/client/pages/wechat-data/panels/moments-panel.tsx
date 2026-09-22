@@ -15,6 +15,7 @@ import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
 import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField, PanelHeader, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { MomentsExportDialog } from './moments-portals.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
 import { cspSafeSrc } from '../utils/url.ts'
 import css from './moments.module.css'
@@ -1495,77 +1496,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         document.body,
       )}
 
-      {/* 导出对话框 */}
-      {exportOpen && (
-        <div className={css.overlay} data-st-dialog="moments-export" onClick={() => { setExportOpen(false) }} role="dialog" aria-modal="true">
-          <div className={css.lightbox} onClick={(e) => { e.stopPropagation() }}>
-            <div className={css.lightboxHead}>
-              <span>导出朋友圈</span>
-              <button type="button" className={css.btn} onClick={() => { setExportOpen(false) }} aria-label="关闭">×</button>
-            </div>
-            <div className={css.exportForm}>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>格式</span>
-                <div className={css.exportChips}>
-                  {['html', 'json', 'txt', 'csv'].map(f => (
-                    <button key={f} type="button" className={css.btn} data-on={expFormat === f || undefined} onClick={() => { setExpFormat(f) }}>{f.toUpperCase()}</button>
-                  ))}
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>范围</span>
-                <span className={css.exportHint}>
-                  {(() => {
-                    const parts: string[] = []
-                    if (authorFilter) parts.push('作者：' + authorFilter)
-                    if (author) parts.push('指定用户：' + author)
-                    if (search.trim()) parts.push('关键词：' + search.trim())
-                    if (mediaFilter !== 'all') parts.push('类型：' + MEDIA_LABELS[mediaFilter])
-                    if (monthFilter) parts.push('月份：' + monthFilter)
-                    if (mineFilter !== 'all') parts.push('范围：' + (mineFilter === 'mine' ? '我' : '他人'))
-                    return (parts.length > 0 ? parts.join(' · ') : '全部联系人') + ' · 服务端全量'
-                  })()}
-                </span>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>时间</span>
-                <div className={css.exportChips}>
-                  <DateRangeField
-                    from={expFrom}
-                    to={expTo}
-                    onFrom={setExpFrom}
-                    onTo={setExpTo}
-                    onClear={() => { setExpFrom(''); setExpTo('') }}
-                    presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                    ariaLabel="朋友圈导出时间"
-                  />
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>目录</span>
-                <div className={css.exportChips}>
-                  <button type="button" className={css.btn} onClick={() => { void pickDir() }} disabled={pickingDir}>选择目录{expDir ? ' ✓' : ''}</button>
-                  {expDir && <span className={css.exportHint} title={expDir}>{expDir}</span>}
-                </div>
-              </div>
-              <div className={css.exportField}>
-                <span className={css.exportLabel}>媒体</span>
-                <div className={css.exportChips}>
-                  <label className={css.exportCheck} title="HTML 导出时内嵌离线解码图片（base64），体积较大">
-                    <input type="checkbox" checked={expImages} onChange={(e) => { setExpImages(e.target.checked) }} disabled={expFormat !== 'html'} />
-                    <span>HTML 内嵌离线图片</span>
-                  </label>
-                  <label className={css.exportCheck} title="把动态 JSON + 离线图片/视频打包成一个 ZIP（媒体较多时体积大）">
-                    <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
-                    <span>ZIP 含媒体</span>
-                  </label>
-                </div>
-              </div>
-              <button type="button" className={`${css.btn} ${css.btnBottom}`} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MomentsExportDialog
+        {...{ exportOpen, setExportOpen, authorFilter, author, search, mediaFilter, monthFilter, mineFilter, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo, expDir, pickDir, pickingDir, expImages, setExpImages, expZip, setExpZip, doExport, exporting }}
+      />
     </div>
   )
 }
