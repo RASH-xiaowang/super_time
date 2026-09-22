@@ -36,6 +36,20 @@ function collect(dir: string, out: string[] = []): string[] {
 }
 
 const FILES = collect(ROOT)
+
+/**
+ * 面板本体 + 它的拆分模块（M21：`Settings.tsx` → `settings-sections.tsx`）。
+ * 「这个面板接没接 useConfirm」问的是面板这一块功能，源码搬到哪份都算数 ——
+ * 否则每拆一刀都要回来手改清单（`update.spec.ts` 的同款联合读）。
+ * 注意 `i` 标志：拆分后的模块用小写前缀（`Settings.tsx` → `settings-sections.tsx`）。
+ */
+function panelWithModules(file: string): string {
+  const stem = file.replace(/\.tsx$/, '')
+  const mods = readdirSync(join(ROOT, 'panels'))
+    .filter((f) => new RegExp('^' + stem + '-[a-z-]+\\.tsx$', 'i').test(f))
+    .sort()
+  return [file, ...mods].map((f) => readFileSync(join(ROOT, 'panels', f), 'utf8')).join('\n')
+}
 /** 唯一允许出现 window.confirm 的地方：确认框自身的**无 Provider 降级分支**。 */
 const ALLOWED = join(ROOT, 'ui', 'confirm.tsx')
 /** 守卫自身：文里必然出现 `window.confirm` 这个词，必须排除，否则自己抓自己。 */
@@ -91,7 +105,7 @@ describe('确认框：必须挂在应用根部', () => {
   it('每个面板都用 useConfirm() 而不是自带原生框', () => {
     // 曾用过原生框的面板至少要 import 我们的 hook（防止迁移被回退）
     for (const f of ['Backup.tsx', 'Chats.tsx', 'DailySummary.tsx', 'Favorites.tsx', 'OperationLogPanel.tsx', 'Settings.tsx', 'ExportHistoryDialog.tsx']) {
-      const src = readFileSync(join(ROOT, 'panels', f), 'utf8')
+      const src = panelWithModules(f)
       expect(src, `${f} 未接入 useConfirm()`).toMatch(/useConfirm/)
       expect(src, `${f} 仍带 window.confirm`).not.toMatch(/window\.confirm\s*\(/)
     }

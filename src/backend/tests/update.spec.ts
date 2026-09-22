@@ -27,7 +27,7 @@
  * @vitest-environment node
  */
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -42,8 +42,14 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as any
-const settingsPath = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'Settings.tsx')
-const settingsSrc = readFileSync(settingsPath, 'utf8')
+const settingsDir = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
+// M21 第二十七刀把「软件更新」区块搬进 settings-sections.tsx ⇒ 读**面板 + 它的拆分模块**的联合
+// （断言一条没改；更新区块搬到哪份都算数）。用 readdir 而不是手写清单，下次再拆不必回来补名字。
+const settingsSrc = readdirSync(settingsDir)
+  .filter((f) => /^settings-[a-z-]+\.tsx$/.test(f))
+  .concat(['Settings.tsx'])
+  .sort()
+  .map((f) => readFileSync(join(settingsDir, f), 'utf8')).join('\n')
 
 /** 收集源码里所有真实 `CallExpression`，键是「被调表达式的源码文本」。 */
 function callExpressions(file: string, src: string): Array<{ callee: string; args: string[] }> {
