@@ -15,6 +15,26 @@ import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import type { ReplySuggestResult } from './types.ts';
 import { type AnnualReview } from './query/annual-review.ts';
 import type { KnowledgeSnapshotRead } from './query/notes.ts';
+/**
+ * 一个长任务（导出/加密备份）的控制槽（M3）。
+ *
+ * 为什么不能把 `onProgress` / `AbortSignal` 直接当 RPC 参数传：**两者都过不了 IPC** ——
+ * 回调是函数、signal 是宿主对象，序列化时会被丢掉（或被拒）。所以渲染层只带一个自己生成的
+ * `jobId`：进度由网关通过 `wechat-export/progress` 事件推出去（与 `wechat-data/updated`、
+ * `wechat-ask/delta` 同一种做法），取消走 `cancelExportJob({ jobId })` 唤醒这里的令牌。
+ */
+export interface StreamJob {
+    /** 本轮取消令牌；每次开跑都换新的（否则「取消过一次的 jobId 再也跑不动」）。 */
+    ctrl: AbortController;
+    /** 最近一次进度；终态也留着，供迟到的轮询读到。 */
+    progress: {
+        phase: string;
+        done: number;
+        total: number;
+    } | null;
+    finished: boolean;
+    error?: string;
+}
 /** Remote-only service exposing WeChat data queries. */
 export declare class WechatDataGateway extends TypertRemoteService {
     /** Services this gateway depends on at runtime (LLM + default model). */
@@ -251,6 +271,9 @@ export declare class WechatDataGateway extends TypertRemoteService {
     private _mediaRemotes?;
     /** 媒体域的处理器（体在 remotes/media.ts）；这里只组装 ctx 与转发。 */
     private mediaRemotes;
+    private _exportRemotes?;
+    /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
+    private exportRemotes;
     getSessions(options?: {
         keyword?: string;
         limit?: number;

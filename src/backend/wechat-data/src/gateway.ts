@@ -47,6 +47,7 @@ import { startRealtimeSync } from './query/sync.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
+import { createExportRemotes } from './remotes/export.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
 import { queryPrivacyScan } from './query/privacy.ts'
 import { queryCalls } from './query/calls.ts'
@@ -224,7 +225,7 @@ function resolveDirs(): ResolvedDirs {
  * `jobId`：进度由网关通过 `wechat-export/progress` 事件推出去（与 `wechat-data/updated`、
  * `wechat-ask/delta` 同一种做法），取消走 `cancelExportJob({ jobId })` 唤醒这里的令牌。
  */
-interface StreamJob {
+export interface StreamJob {
   /** 本轮取消令牌；每次开跑都换新的（否则「取消过一次的 jobId 再也跑不动」）。 */
   ctrl: AbortController
   /** 最近一次进度；终态也留着，供迟到的轮询读到。 */
@@ -239,14 +240,6 @@ const STREAM_JOB_CAP = 20
 /** 导出/备份进度事件名（渲染层按 jobId 过滤）。 */
 const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
 
-/** CSV 导出种类的中文说明（只用于导出历史的可读 label，不参与导出本身）。 */
-const CSV_KIND_LABEL: Record<string, string> = {
-  contacts: '通讯录',
-  favorites: '收藏',
-  records: '记录',
-  moments: '朋友圈',
-  privacy: '隐私扫描',
-}
 
 /**
  * N27：同一轮问答反馈的重复提交窗口。
@@ -800,6 +793,22 @@ export class WechatDataGateway extends TypertRemoteService {
       outboundBlocked: () => this.outboundBlocked(),
       rawWechatBase: (decrypted) => rawWechatBase(decrypted),
       warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+    }))
+  }
+
+  private _exportRemotes?: ReturnType<typeof createExportRemotes>
+
+  /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
+  private exportRemotes(): ReturnType<typeof createExportRemotes> {
+    return (this._exportRemotes ??= createExportRemotes({
+      dirs: () => this._dirs,
+      ctx: () => this._ctx,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      recordExport: (input) => this.recordExport(input),
+      streamControl: (jobId) => this.streamControl(jobId),
+      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      streamJobs: this._streamJobs,
+      normalizeJobId: (jobId) => normalizeJobId(jobId),
     }))
   }
 
@@ -1571,34 +1580,7 @@ export class WechatDataGateway extends TypertRemoteService {
     /** 会话显示名，仅用于导出历史的可读说明（不参与导出本身）。 */
     sessionName?: string
   }): Promise<ExportResult> {
-    try {
-      const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options })
-      this.op('export', 'export_session_messages', 'ok', options.username, `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'session',
-        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-        format: options.zip ? 'zip' : options.format,
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_session_messages', 'fail', options.username, (e as Error).message)
-      // 失败也记一条：用户要能看到「这次没成功」，而不是以为没发生过。
-      this.recordExport({
-        kind: 'session',
-        label: options.sessionName ? `会话 · ${options.sessionName}` : `会话 · ${options.username}`,
-        format: options.zip ? 'zip' : options.format,
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportSessionMessages(options)
   }
 
   /**
@@ -2763,32 +2745,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
 
   @Remote('exportAnnualReport')
   exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): ExportResult {
-    try {
-      const r = exportAnnualReport(this._dirs.decrypted, options.year, options.format, options.dir, options.filename)
-      this.op('export', 'export_annual_report', 'ok', String(options.year), `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'annual',
-        label: `年度报告 · ${options.year} 年`,
-        format: options.format,
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_annual_report', 'fail', String(options.year), (e as Error).message)
-      this.recordExport({
-        kind: 'annual',
-        label: `年度报告 · ${options.year} 年`,
-        format: options.format,
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportAnnualReport(options)
   }
 
   /**
@@ -2798,44 +2755,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('exportAllSessions')
   async exportAllSessions(options?: { dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
-    const jobId = normalizeJobId(options?.jobId)
-    try {
-      // M3：进度/取消三件套（jobId → 本地 onProgress + AbortController）在本层接上，
-      // 参数原样透传给 query 层（`& StreamControl`）—— 取消后写盘走 temp+rename，
-      // 所以「取消」不会留下半成品文件。
-      const r = await exportAllSessions(this._dirs.decrypted, {
-        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
-        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-        ...this.streamControl(jobId),
-      })
-      this.finishStreamJob(jobId)
-      this.op('export', 'export_all_sessions', 'ok', '', `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'all_sessions',
-        label: '全部会话归档',
-        format: 'zip',
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options ?? {},
-      })
-      return r
-    } catch (e) {
-      this.finishStreamJob(jobId, (e as Error).message)
-      this.op('export', 'export_all_sessions', 'fail', '', (e as Error).message)
-      // 取消也是一种正常结局，与「失败」分开记：用户主动取消不该在历史里显示成红叉。
-      const canceled = /cancel|取消|abort/i.test((e as Error).message)
-      this.recordExport({
-        kind: 'all_sessions',
-        label: '全部会话归档',
-        format: 'zip',
-        path: '',
-        status: canceled ? 'canceled' : 'fail',
-        error: canceled ? '' : (e as Error).message,
-        params: options ?? {},
-      })
-      throw e
-    }
+  return this.exportRemotes().exportAllSessions(options)
   }
 
   /**
@@ -2848,13 +2768,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('cancelExportJob')
   cancelExportJob(options: { jobId: string }): { ok: boolean; error?: string } {
-    const id = normalizeJobId(options?.jobId)
-    const job = id ? this._streamJobs.get(id) : undefined
-    if (!job) return { ok: false, error: '没有该导出任务（jobId 不存在，或进程已重启）' }
-    if (job.finished) return { ok: false, error: '该导出任务已结束' }
-    job.ctrl.abort()
-    this.op('export', 'cancel_export_job', 'ok', id)
-    return { ok: true }
+  return this.exportRemotes().cancelExportJob(options)
   }
 
   /**
@@ -2875,17 +2789,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     finished: boolean
     error?: string
   } {
-    const id = normalizeJobId(options?.jobId)
-    const job = id ? this._streamJobs.get(id) : undefined
-    if (!job) return { found: false, phase: '', done: 0, total: 0, finished: true }
-    return {
-      found: true,
-      phase: job.progress?.phase ?? '',
-      done: job.progress?.done ?? 0,
-      total: job.progress?.total ?? 0,
-      finished: job.finished,
-      ...(job.error ? { error: job.error } : {}),
-    }
+  return this.exportRemotes().getExportProgress(options)
   }
 
   /**
@@ -2910,52 +2814,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
     filename?: string
     jobId?: string
   }): Promise<ExportResult> {
-    const jobId = normalizeJobId(options?.jobId)
-    try {
-      // 与 exportAllSessions 同一套接线：进度事件 + 取消令牌都由 streamControl 提供。
-      const r = await exportMoments(this._dirs.decrypted, {
-        ...(options?.format !== undefined ? { format: options.format } : {}),
-        ...(options?.username !== undefined ? { username: options.username } : {}),
-        ...(options?.authorName !== undefined ? { authorName: options.authorName } : {}),
-        ...(options?.q !== undefined ? { q: options.q } : {}),
-        ...(options?.images !== undefined ? { images: options.images } : {}),
-        ...(options?.media !== undefined ? { media: options.media } : {}),
-        ...(options?.month !== undefined ? { month: options.month } : {}),
-        ...(options?.mine !== undefined ? { mine: options.mine } : {}),
-        ...(options?.zip !== undefined ? { zip: options.zip } : {}),
-        ...(options?.from !== undefined ? { from: options.from } : {}),
-        ...(options?.to !== undefined ? { to: options.to } : {}),
-        ...(options?.dir !== undefined ? { dir: options.dir } : {}),
-        ...(options?.filename !== undefined ? { filename: options.filename } : {}),
-        ...this.streamControl(jobId),
-      })
-      this.finishStreamJob(jobId)
-      this.op('export', 'export_moments', 'ok', options?.username ?? '', `共 ${r.count} 条`)
-      this.recordExport({
-        kind: 'moments',
-        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
-        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options ?? {},
-      })
-      return r
-    } catch (e) {
-      this.finishStreamJob(jobId, (e as Error).message)
-      this.op('export', 'export_moments', 'fail', options?.username ?? '', (e as Error).message)
-      const canceled = /cancel|取消|abort/i.test((e as Error).message)
-      this.recordExport({
-        kind: 'moments',
-        label: options?.username ? `朋友圈 · ${options.authorName ?? options.username}` : '朋友圈 · 全部',
-        format: options?.zip ? 'zip' : (options?.format ?? 'txt'),
-        path: '',
-        status: canceled ? 'canceled' : 'fail',
-        error: canceled ? '' : (e as Error).message,
-        params: options ?? {},
-      })
-      throw e
-    }
+  return this.exportRemotes().exportMoments(options)
   }
 
   /**
@@ -2968,33 +2827,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('exportCsv')
   exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
-    const label = CSV_KIND_LABEL[options.kind] ?? options.kind
-    try {
-      const r = exportCsv(this._dirs.decrypted, options.kind, options.recordsKind, options.dest, options.category)
-      this.op('export', 'export_csv', 'ok', options.kind, `共 ${r.count} 行`)
-      this.recordExport({
-        kind: options.kind,
-        label: options.category && options.category !== 'all' ? `${label} · ${options.category}` : label,
-        format: 'csv',
-        path: r.path,
-        rows: r.count,
-        status: 'ok',
-        params: options,
-      })
-      return r
-    } catch (e) {
-      this.op('export', 'export_csv', 'fail', options.kind, (e as Error).message)
-      this.recordExport({
-        kind: options.kind,
-        label,
-        format: 'csv',
-        path: '',
-        status: 'fail',
-        error: (e as Error).message,
-        params: options,
-      })
-      throw e
-    }
+  return this.exportRemotes().exportCsv(options)
   }
 
   /**
@@ -3004,7 +2837,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('getExportHistory')
   getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot {
-    return listExportHistory(this._dirs.decrypted, options ?? {})
+  return this.exportRemotes().getExportHistory(options)
   }
 
   /**
@@ -3017,11 +2850,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('deleteExportHistory')
   deleteExportHistory(options: { ids: number[]; deleteFiles?: boolean }): ExportHistoryDeleteResult {
-    const ids = Array.isArray(options?.ids) ? options.ids : []
-    const r = deleteExportHistory(this._dirs.decrypted, ids, options?.deleteFiles === true)
-    this.op('delete', 'delete_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
-      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
-    return r
+  return this.exportRemotes().deleteExportHistory(options)
   }
 
   /**
@@ -3031,10 +2860,7 @@ ${citedIndexes.length === 0 ? ' · 上一次的回答**没有标注任何 [n] �
    */
   @Remote('pruneExportHistory')
   pruneExportHistory(options?: ExportHistoryPruneOptions): ExportHistoryDeleteResult {
-    const r = pruneExportHistory(this._dirs.decrypted, options ?? {})
-    this.op('delete', 'prune_export_history', r.removed > 0 ? 'ok' : 'skip', String(r.removed),
-      `${r.removed} 条记录${options?.deleteFiles ? `，${r.filesDeleted} 个文件` : ''}`)
-    return r
+  return this.exportRemotes().pruneExportHistory(options)
   }
 
   /**

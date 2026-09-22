@@ -13424,14 +13424,1028 @@ function createMediaRemotes(rc) {
   };
 }
 
-// src/backend/wechat-data/src/gateway.ts
-import { openNativePath } from "@deepseek-ai/dsh-native-command";
+// src/backend/wechat-data/src/query/export-history.ts
+import { DatabaseSync as DatabaseSync30 } from "node:sqlite";
+import { existsSync as existsSync35, rmSync as rmSync5, statSync as statSync19 } from "node:fs";
+import { basename as basename7, dirname as dirname19, join as join47 } from "node:path";
+var DEFAULT_LIMIT = 200;
+var MAX_LIMIT = 2e3;
+var STATUSES = ["ok", "fail", "canceled"];
+var ALLOWED_STATUS = new Set(STATUSES);
+var SORT_COLUMNS = {
+  ts: "ts",
+  size: "size_bytes",
+  rows: "rows",
+  name: "filename"
+};
+function dbPath2(decryptedDir) {
+  return join47(dirname19(decryptedDir), "wechat_privacy.db");
+}
+function openStore3(decryptedDir) {
+  const db = new DatabaseSync30(dbPath2(decryptedDir));
+  db.exec(`CREATE TABLE IF NOT EXISTS export_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT,
+    format TEXT,
+    path TEXT NOT NULL,
+    filename TEXT,
+    size_bytes INTEGER,
+    rows INTEGER,
+    status TEXT NOT NULL,
+    error TEXT,
+    params TEXT
+  )`);
+  db.exec("CREATE INDEX IF NOT EXISTS export_history_ts ON export_history(ts)");
+  return db;
+}
+function cleanText(v) {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  return t === "undefined" || t === "null" ? "" : t;
+}
+function recordExport(decryptedDir, input) {
+  try {
+    const filePath = cleanText(input.path);
+    if (!filePath) return null;
+    let size = input.sizeBytes ?? null;
+    if (size === null && input.status === "ok") {
+      try {
+        const st = statSync19(filePath);
+        if (st.isFile()) size = st.size;
+      } catch {
+      }
+    }
+    const db = openStore3(decryptedDir);
+    try {
+      const info = db.prepare(`INSERT INTO export_history
+        (ts, kind, label, format, path, filename, size_bytes, rows, status, error, params)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        input.ts ?? Date.now(),
+        cleanText(input.kind) || "unknown",
+        cleanText(input.label),
+        cleanText(input.format),
+        filePath,
+        cleanText(input.filename) || basename7(filePath),
+        size,
+        Number.isFinite(input.rows) ? Number(input.rows) : 0,
+        ALLOWED_STATUS.has(input.status) ? input.status : "ok",
+        cleanText(input.error),
+        input.params === void 0 ? "" : safeJson(input.params)
+      );
+      return Number(info.lastInsertRowid ?? 0) || null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+function safeJson(v) {
+  try {
+    const s = JSON.stringify(v);
+    return typeof s === "string" ? s : "";
+  } catch {
+    return "";
+  }
+}
+function buildWhere(query) {
+  const clauses = [];
+  const params = [];
+  const kinds = (query.kinds ?? []).filter((k) => typeof k === "string" && k.trim() !== "");
+  if (kinds.length > 0) {
+    clauses.push("kind IN (" + kinds.map(() => "?").join(", ") + ")");
+    params.push(...kinds);
+  }
+  if (query.status && ALLOWED_STATUS.has(query.status)) {
+    clauses.push("status = ?");
+    params.push(query.status);
+  }
+  if (typeof query.from === "number" && Number.isFinite(query.from)) {
+    clauses.push("ts >= ?");
+    params.push(query.from);
+  }
+  if (typeof query.to === "number" && Number.isFinite(query.to)) {
+    clauses.push("ts <= ?");
+    params.push(query.to);
+  }
+  const q = cleanText(query.q);
+  if (q) {
+    const like2 = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+    clauses.push("(filename LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' OR kind LIKE ? ESCAPE '\\')");
+    params.push(like2, like2, like2, like2);
+  }
+  return { sql: clauses.length > 0 ? " WHERE " + clauses.join(" AND ") : "", params };
+}
+function rowToEntry(r) {
+  const path = cleanText(r["path"]);
+  return {
+    id: Number(r["id"] ?? 0),
+    ts: Number(r["ts"] ?? 0),
+    kind: cleanText(r["kind"]),
+    label: cleanText(r["label"]),
+    format: cleanText(r["format"]),
+    path,
+    filename: cleanText(r["filename"]) || (path ? basename7(path) : ""),
+    sizeBytes: r["size_bytes"] === null || r["size_bytes"] === void 0 ? null : Number(r["size_bytes"]),
+    rows: Number(r["rows"] ?? 0),
+    status: ALLOWED_STATUS.has(cleanText(r["status"])) ? cleanText(r["status"]) : "ok",
+    error: cleanText(r["error"]),
+    params: cleanText(r["params"]),
+    // 每次读取都重新核对 —— 用户可能在资源管理器里移走/删掉了文件，
+    // 历史列表必须显示「已不在」，否则「打开」按钮点了没反应会像 bug。
+    existsNow: path ? existsSync35(path) : false
+  };
+}
+function listExportHistory(decryptedDir, query = {}) {
+  const empty = { items: [], total: 0, statusCounts: {}, kindCounts: {}, totalBytes: 0, missingCount: 0 };
+  const { sql: where, params } = buildWhere(query);
+  const limitRaw = Number(query.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), MAX_LIMIT) : DEFAULT_LIMIT;
+  const offsetRaw = Number(query.offset);
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
+  const col2 = SORT_COLUMNS[String(query.sort ?? "ts")] ?? "ts";
+  const dir = query.order === "asc" ? "ASC" : "DESC";
+  try {
+    const db = openStore3(decryptedDir);
+    try {
+      const rows = db.prepare(
+        `SELECT id, ts, kind, label, format, path, filename, size_bytes, rows, status, error, params
+         FROM export_history${where} ORDER BY ${col2} ${dir}, id DESC LIMIT ? OFFSET ?`
+      ).all(...params, limit, offset);
+      const total = Number(db.prepare(`SELECT COUNT(*) AS c FROM export_history${where}`).get(...params)?.c ?? 0);
+      const statusRows = db.prepare(`SELECT status, COUNT(*) AS c FROM export_history${where} GROUP BY status`).all(...params);
+      const kindRows = db.prepare(`SELECT kind, COUNT(*) AS c FROM export_history${where} GROUP BY kind`).all(...params);
+      const statusCounts = {};
+      for (const r of statusRows) statusCounts[cleanText(r.status)] = Number(r.c ?? 0);
+      const kindCounts = {};
+      for (const r of kindRows) kindCounts[cleanText(r.kind)] = Number(r.c ?? 0);
+      const items = rows.map(rowToEntry);
+      let totalBytes = 0;
+      let missingCount = 0;
+      for (const it of items) {
+        if (it.existsNow) totalBytes += Math.max(0, it.sizeBytes ?? 0);
+        else missingCount += 1;
+      }
+      return { items, total, statusCounts, kindCounts, totalBytes, missingCount };
+    } finally {
+      db.close();
+    }
+  } catch {
+    return empty;
+  }
+}
+function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
+  const result = { removed: 0, filesDeleted: 0, fileErrors: [] };
+  const wanted = ids.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (wanted.length === 0) return result;
+  try {
+    const db = openStore3(decryptedDir);
+    try {
+      const sel = db.prepare(`SELECT id, path FROM export_history WHERE id IN (${wanted.map(() => "?").join(", ")})`);
+      const rows = sel.all(...wanted);
+      if (deleteFiles) {
+        const seen = /* @__PURE__ */ new Set();
+        for (const r of rows) {
+          const p = cleanText(r.path);
+          if (!p || seen.has(p)) continue;
+          seen.add(p);
+          try {
+            if (existsSync35(p)) {
+              rmSync5(p, { recursive: true, force: true });
+              result.filesDeleted += 1;
+            }
+          } catch (e) {
+            result.fileErrors.push(basename7(p) + " \u2014 " + e.message);
+          }
+        }
+      }
+      const del = db.prepare(`DELETE FROM export_history WHERE id IN (${wanted.map(() => "?").join(", ")})`);
+      const info = del.run(...wanted);
+      result.removed = Number(info.changes ?? rows.length);
+      return result;
+    } finally {
+      db.close();
+    }
+  } catch (e) {
+    result.fileErrors.push(e.message);
+    return result;
+  }
+}
+function pruneExportHistory(decryptedDir, opts = {}) {
+  const result = { removed: 0, filesDeleted: 0, fileErrors: [] };
+  const days = Number(opts.olderThanDays);
+  const keep = Number(opts.keepLatest);
+  const hasDays = Number.isFinite(days) && days > 0;
+  const hasKeep = Number.isFinite(keep) && keep > 0;
+  if (!opts.onlyMissing && !hasDays && !hasKeep) return result;
+  try {
+    const db = openStore3(decryptedDir);
+    let ids = [];
+    try {
+      if (opts.onlyMissing) {
+        const rows = db.prepare("SELECT id, path FROM export_history").all();
+        ids = rows.filter((r) => {
+          const p = cleanText(r.path);
+          return !p || !existsSync35(p);
+        }).map((r) => Number(r.id));
+      } else {
+        const clauses = [];
+        const params = [];
+        if (hasKeep) {
+          const anchor = db.prepare("SELECT ts FROM export_history ORDER BY ts DESC, id DESC LIMIT 1 OFFSET ?").get(Math.max(0, Math.floor(keep) - 1));
+          if (anchor && typeof anchor.ts === "number") {
+            clauses.push("ts < ?");
+            params.push(anchor.ts);
+          }
+        }
+        if (hasDays) {
+          clauses.push("ts < ?");
+          params.push(Date.now() - Math.floor(days) * 864e5);
+        }
+        if (clauses.length > 0) {
+          const rows = db.prepare(`SELECT id FROM export_history WHERE ${clauses.join(" AND ")}`).all(...params);
+          ids = rows.map((r) => Number(r.id));
+        }
+      }
+    } finally {
+      db.close();
+    }
+    if (ids.length === 0) return result;
+    return deleteExportHistory(decryptedDir, ids, opts.deleteFiles === true);
+  } catch (e) {
+    result.fileErrors.push(e.message);
+    return result;
+  }
+}
+
+// src/backend/wechat-data/src/query/export-io.ts
+import { renameSync as renameSync3, rmSync as rmSync6, writeFileSync as writeFileSync11 } from "node:fs";
+
+// src/backend/wechat-data/src/query/zip.ts
+import { createReadStream, createWriteStream, promises as fsp } from "node:fs";
+import { once } from "node:events";
+import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
+import { createDeflateRaw, deflateRawSync } from "node:zlib";
+var METHOD_STORE = 0;
+var METHOD_DEFLATE = 8;
+var CRC_TABLE = (() => {
+  const table = new Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = (c & 1) !== 0 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32Start() {
+  return 4294967295;
+}
+function crc32Update(c, buf) {
+  let acc = c;
+  for (let i = 0; i < buf.length; i += 1) {
+    const byte = buf[i] ?? 0;
+    acc = (CRC_TABLE[(acc ^ byte) & 255] ?? 0) ^ acc >>> 8;
+  }
+  return acc;
+}
+function crc32Finish(c) {
+  return (c ^ 4294967295) >>> 0;
+}
+function crc32(buf) {
+  return crc32Finish(crc32Update(crc32Start(), buf));
+}
+var COPY_CHUNK_SIZE = 64 * 1024;
+var CancelledError = class extends Error {
+  constructor(message = "\u64CD\u4F5C\u5DF2\u53D6\u6D88") {
+    super(message);
+    this.name = "AbortError";
+  }
+};
+function throwIfCancelled(signal) {
+  if (signal?.aborted) throw new CancelledError();
+}
+function reportProgress(ctrl, phase, done, total) {
+  try {
+    ctrl?.onProgress?.({ phase, done, total });
+  } catch {
+  }
+}
+var partialSeq = 0;
+function partialPath(filePath) {
+  partialSeq += 1;
+  return filePath + ".partial-" + String(process.pid) + "-" + String(partialSeq);
+}
+function u162(v) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(v);
+  return b;
+}
+function u322(v) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(v >>> 0);
+  return b;
+}
+function packEntry(raw) {
+  const deflated = deflateRawSync(raw);
+  return deflated.length >= raw.length ? { data: raw, method: METHOD_STORE } : { data: deflated, method: METHOD_DEFLATE };
+}
+function zipFiles(entries2) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  const names = /* @__PURE__ */ new Set();
+  for (const entry of entries2) {
+    const name = entry.name.replace(/\\/g, "/");
+    if (names.has(name)) continue;
+    names.add(name);
+    const raw = typeof entry.data === "string" ? Buffer.from(entry.data, "utf8") : Buffer.from(entry.data);
+    const { data, method } = packEntry(raw);
+    const crc = crc32(raw);
+    const nameBuf = Buffer.from(name, "utf8");
+    const local = Buffer.concat([
+      u322(67324752),
+      u162(20),
+      u162(0),
+      u162(method),
+      u162(0),
+      u162(0),
+      u322(crc),
+      u322(data.length),
+      u322(data.length),
+      u162(nameBuf.length),
+      u162(0),
+      nameBuf,
+      data
+    ]);
+    locals.push(local);
+    centrals.push(Buffer.concat([
+      u322(33639248),
+      u162(20),
+      u162(20),
+      u162(0),
+      u162(method),
+      u162(0),
+      u162(0),
+      u322(crc),
+      u322(data.length),
+      u322(data.length),
+      u162(nameBuf.length),
+      u162(0),
+      u162(0),
+      u162(0),
+      u162(0),
+      u322(0),
+      u322(offset),
+      nameBuf
+    ]));
+    offset += local.length;
+  }
+  const centralStart = offset;
+  const central = Buffer.concat(centrals);
+  const eocd = Buffer.concat([
+    u322(101010256),
+    u162(0),
+    u162(0),
+    u162(centrals.length),
+    u162(centrals.length),
+    u322(central.length),
+    u322(centralStart),
+    u162(0)
+  ]);
+  return Buffer.concat([...locals, central, eocd]);
+}
+var StreamWriter = class _StreamWriter {
+  constructor(filePath, out) {
+    this.offsetValue = 0;
+    this.closedFlag = false;
+    this.abortedFlag = false;
+    /** 写流报出的错误（见 write() 里「drain 掩盖 error」的说明）。 */
+    this.streamError = null;
+    this.filePath = filePath;
+    this.out = out;
+  }
+  /** 打开目标文件准备写入（覆盖已有文件）。 */
+  static async create(filePath) {
+    const out = createWriteStream(filePath);
+    const w = new _StreamWriter(filePath, out);
+    out.on("error", (e) => {
+      if (!w.streamError) w.streamError = e;
+    });
+    await once(out, "open");
+    return w;
+  }
+  /** 已写入的字节数。 */
+  get offset() {
+    return this.offsetValue;
+  }
+  /** 是否已正常收尾（end 之后 abort 是空操作）。 */
+  get closed() {
+    return this.closedFlag;
+  }
+  /** 是否已中止。 */
+  get aborted() {
+    return this.abortedFlag;
+  }
+  /** 写流报出的错误（尚未抛出时调用方用它提前失败，而不是等一次写入再失败）。 */
+  get failed() {
+    return this.streamError;
+  }
+  /** 写流上的监听器总数（诊断用：背压等待不应累积监听器）。 */
+  get listenerCount() {
+    return this.out.listenerCount("drain") + this.out.listenerCount("close") + this.out.listenerCount("error");
+  }
+  /**
+   * 底层写入：更新偏移量并等待背压。
+   *
+   * 这里有个坑（评审实测出来的）：写流出错时（例如 ENOSPC）Node 会先 emit `drain`
+   * 再 emit `error`。若只写 `if (!write()) await once('drain')`，那次 drain 会把
+   * 挂起的等待**当成成功**放行，而流其实已经毁了 —— 之后每次 write() 都返回 false
+   * 且再也不会有 drain，于是**永久挂起**：用户看不到报错、RPC 一直等到超时、
+   * 临时文件也不会被清理。所以要同时等 drain 与 close/error，并在事后复查标志位。
+   */
+  async write(buf) {
+    if (this.streamError) throw this.streamError;
+    if (this.abortedFlag || this.out.destroyed || this.out.writableEnded) {
+      throw new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
+    }
+    this.offsetValue += buf.length;
+    let needDrain;
+    try {
+      needDrain = !this.out.write(buf);
+    } catch (e) {
+      this.streamError = e;
+      throw this.streamError;
+    }
+    if (this.streamError) throw this.streamError;
+    if (needDrain) await this.waitDrainOrDeath();
+    if (this.streamError) throw this.streamError;
+  }
+  /**
+   * 等背压解除，或被 close/error 打断。
+   *
+   * 手写监听而不是 `Promise.race([once(...)])`：once() 不暴露它的监听器，
+   * race 里没赢的那两个会永远挂着 —— 每次背压写入就多留 2 个监听器，
+   * 长生命周期流上会累积到触发 `MaxListenersExceededWarning`
+   * （评审实测 24 会话×3000 条就到 close 25 / error 50，1000 会话会到千级）。
+   */
+  async waitDrainOrDeath() {
+    await new Promise((resolve3, reject) => {
+      const cleanup = () => {
+        this.out.off("drain", onDrain);
+        this.out.off("close", onClose);
+        this.out.off("error", onError);
+      };
+      const onDrain = () => {
+        cleanup();
+        resolve3();
+      };
+      const onClose = () => {
+        cleanup();
+        reject(this.streamError ?? new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210"));
+      };
+      const onError = (e) => {
+        cleanup();
+        reject(this.streamError ?? e);
+      };
+      this.out.once("drain", onDrain);
+      this.out.once("close", onClose);
+      this.out.once("error", onError);
+      if (this.streamError || this.abortedFlag || this.out.destroyed) onClose();
+    });
+  }
+  /**
+   * 收尾并关闭文件。
+   *
+   * 用 `finished()` 而不是 `once('close')`：后者对流**已经关闭**的情况会永远等下去。
+   */
+  async end() {
+    if (this.closedFlag) return;
+    if (this.abortedFlag) throw new Error("\u5199\u5165\u6D41\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u6536\u5C3E");
+    this.closedFlag = true;
+    this.out.end();
+    await finished(this.out, { readable: false });
+  }
+  /**
+   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的文件）。
+   *
+   * 幂等；对已收尾的写入是**空操作** —— 否则出错后的 catch 会把一个已经成功
+   * 落盘的文件删掉（评审实测复现过：close 之后再 abort，成品被 DELETED）。
+   */
+  async abort() {
+    if (this.closedFlag || this.abortedFlag) return;
+    this.abortedFlag = true;
+    try {
+      this.out.destroy();
+    } catch {
+    }
+    try {
+      await fsp.rm(this.filePath, { force: true });
+    } catch {
+    }
+  }
+};
+var ZipFileWriter = class _ZipFileWriter {
+  constructor(filePath, sink) {
+    this.centrals = [];
+    this.names = /* @__PURE__ */ new Set();
+    this.entryTemps = /* @__PURE__ */ new Set();
+    this.entrySeq = 0;
+    this.closed = false;
+    this.filePath = filePath;
+    this.sink = sink;
+  }
+  /** 打开目标文件准备写入（覆盖已有文件）。 */
+  static async create(filePath) {
+    const sink = await StreamWriter.create(filePath);
+    return new _ZipFileWriter(filePath, sink);
+  }
+  /** 当前写入偏移（中央目录里要记每个条目的起始位置）。 */
+  get offset() {
+    return this.sink.offset;
+  }
+  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
+  get listenerCount() {
+    return this.sink.listenerCount;
+  }
+  write(buf) {
+    return this.sink.write(buf);
+  }
+  /**
+   * 追加一个条目。
+   * @param name - 归档内路径（反斜杠会转成正斜杠）。
+   * @param data - 字符串（UTF-8）或字节。
+   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
+   */
+  async addFile(name, data) {
+    const safeName = name.replace(/\\/g, "/");
+    if (this.names.has(safeName)) return false;
+    this.names.add(safeName);
+    const raw = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
+    const { data: packed, method } = packEntry(raw);
+    const crc = crc32(raw);
+    const nameBuf = Buffer.from(safeName, "utf8");
+    const entryOffset = this.offset;
+    await this.write(Buffer.concat([
+      u322(67324752),
+      u162(20),
+      u162(0),
+      u162(method),
+      u162(0),
+      u162(0),
+      u322(crc),
+      u322(packed.length),
+      u322(packed.length),
+      u162(nameBuf.length),
+      u162(0),
+      nameBuf
+    ]));
+    await this.write(packed);
+    this.centrals.push(Buffer.concat([
+      u322(33639248),
+      u162(20),
+      u162(20),
+      u162(0),
+      u162(method),
+      u162(0),
+      u162(0),
+      u322(crc),
+      u322(packed.length),
+      u322(packed.length),
+      u162(nameBuf.length),
+      u162(0),
+      u162(0),
+      u162(0),
+      u162(0),
+      u322(0),
+      u322(entryOffset),
+      nameBuf
+    ]));
+    return true;
+  }
+  /**
+   * 追加一个「内容现场产出」的条目：分块做流式 deflate。
+   *
+   * 为什么需要它：`addFile` 要求整条内容的字节都在内存里（`deflateRawSync` 也要整块输入），
+   * 所以 10 万行的 xlsx（sheet XML ≈ 10MB 以上、还要再叠上所有行数组）峰值仍与行数线性。
+   * 这里把产出方给的分块**先流式压到临时文件**，拿到真实的 CRC/长度后再补本地头、
+   * 分块拷进归档 —— 峰值只与「一块」相关，与条目总大小无关。
+   *
+   * 为什么不直接用 data descriptor 边压边写：那会改动归档格式（本地头里长度写 0 +
+   * 置 bit 3），而 `zipFiles`/`addFile` 产出的格式不能被悄悄换掉。多一次磁盘往返
+   * 只发生在流式条目上，换的是「格式不变」。
+   *
+   * @param name - 归档内路径（反斜杠会转成正斜杠）。
+   * @param source - 分块源（字符串按 UTF-8，或字节）；可为同步/异步迭代器。
+   * @param ctrl - 可选的进度/取消（每块都会检查取消）。
+   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
+   */
+  async addStream(name, source, ctrl) {
+    const safeName = name.replace(/\\/g, "/");
+    if (this.names.has(safeName)) return false;
+    this.names.add(safeName);
+    if (this.closed) throw new Error("\u5F52\u6863\u5DF2\u6536\u5C3E\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
+    if (this.sink.failed) throw this.sink.failed;
+    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
+    this.entrySeq += 1;
+    const tmp = this.filePath + ".entry-" + String(this.entrySeq);
+    this.entryTemps.add(tmp);
+    let crc = crc32Start();
+    let rawSize = 0;
+    try {
+      async function* raw() {
+        for await (const chunk of source) {
+          throwIfCancelled(ctrl?.signal);
+          const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
+          crc = crc32Update(crc, buf);
+          rawSize += buf.length;
+          reportProgress(ctrl, "compress", rawSize, 0);
+          yield buf;
+        }
+      }
+      await pipeline(Readable.from(raw(), { objectMode: false }), createDeflateRaw(), createWriteStream(tmp));
+      const csize = (await fsp.stat(tmp)).size;
+      const crcFinal = crc32Finish(crc);
+      const nameBuf = Buffer.from(safeName, "utf8");
+      const entryOffset = this.offset;
+      await this.write(Buffer.concat([
+        u322(67324752),
+        u162(20),
+        u162(0),
+        u162(METHOD_DEFLATE),
+        u162(0),
+        u162(0),
+        u322(crcFinal),
+        u322(csize),
+        u322(rawSize),
+        u162(nameBuf.length),
+        u162(0),
+        nameBuf
+      ]));
+      let copied = 0;
+      for await (const chunk of createReadStream(tmp, { highWaterMark: COPY_CHUNK_SIZE })) {
+        throwIfCancelled(ctrl?.signal);
+        await this.write(chunk);
+        copied += chunk.length;
+        reportProgress(ctrl, "write", copied, csize);
+      }
+      this.centrals.push(Buffer.concat([
+        u322(33639248),
+        u162(20),
+        u162(20),
+        u162(0),
+        u162(METHOD_DEFLATE),
+        u162(0),
+        u162(0),
+        u322(crcFinal),
+        u322(csize),
+        u322(rawSize),
+        u162(nameBuf.length),
+        u162(0),
+        u162(0),
+        u162(0),
+        u162(0),
+        u322(0),
+        u322(entryOffset),
+        nameBuf
+      ]));
+      return true;
+    } finally {
+      this.entryTemps.delete(tmp);
+      try {
+        await fsp.rm(tmp, { force: true });
+      } catch {
+      }
+    }
+  }
+  /**
+   * 写中央目录与 EOCD 并关闭文件。
+   *
+   * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
+   */
+  async close() {
+    if (this.closed) return;
+    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
+    const centralStart = this.offset;
+    const central = Buffer.concat(this.centrals);
+    if (centralStart + central.length >= 4294967295) {
+      await this.abort();
+      throw new Error("\u5F52\u6863\u8D85\u8FC7 4GiB\uFF0C\u5F53\u524D\u5B9E\u73B0\u4E0D\u652F\u6301 ZIP64\uFF1B\u8BF7\u5206\u6279\u5BFC\u51FA");
+    }
+    this.closed = true;
+    const eocd = Buffer.concat([
+      u322(101010256),
+      u162(0),
+      u162(0),
+      u162(this.centrals.length),
+      u162(this.centrals.length),
+      u322(central.length),
+      u322(centralStart),
+      u162(0)
+    ]);
+    await this.write(central);
+    await this.write(eocd);
+    await this.sink.end();
+  }
+  /**
+   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。
+   *
+   * 幂等；对已 close 的归档是**空操作** —— 否则出错后的 catch 会把一个已经成功
+   * 落盘的归档删掉（评审实测复现过：close 之后再 abort，文件被 DELETED）。
+   */
+  async abort() {
+    if (this.closed) return;
+    await this.sink.abort();
+    for (const tmp of this.entryTemps) {
+      try {
+        await fsp.rm(tmp, { force: true });
+      } catch {
+      }
+    }
+    this.entryTemps.clear();
+  }
+};
+
+// src/backend/wechat-data/src/query/export-io.ts
+var MAX_MOMENT_MEDIA = 5e3;
+function writeFileAtomicSync(filePath, data) {
+  const tmp = partialPath(filePath);
+  try {
+    writeFileSync11(tmp, data);
+    renameSync3(tmp, filePath);
+  } catch (e) {
+    try {
+      rmSync6(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+async function writeZipAtomic(filePath, produce) {
+  const tmp = partialPath(filePath);
+  let zip = null;
+  try {
+    zip = await ZipFileWriter.create(tmp);
+    await produce(zip);
+    await zip.close();
+    renameSync3(tmp, filePath);
+  } catch (e) {
+    if (zip) await zip.abort();
+    try {
+      rmSync6(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function dataUrlToBuffer(url) {
+  const m = url.match(/^data:[^;,]+;base64,(.*)$/);
+  if (!m || !m[1]) return null;
+  try {
+    return Buffer.from(m[1], "base64");
+  } catch {
+    return null;
+  }
+}
+function exportMediaCtx(decrypted) {
+  const cfg = getConfig(decrypted);
+  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
+  let base = "";
+  if (dbDir) {
+    const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
+    base = (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
+  }
+  const { aesKey, xorKey } = resolveImageKeyPair(decrypted);
+  return { base: base || void 0, aesKey, xorKey };
+}
+
+// src/backend/wechat-data/src/query/export-format.ts
+function fmtFull(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function collectMessages(decryptedDir, username, count, ctrl) {
+  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
+  const pages = [];
+  let cursor;
+  let cursorLocalId;
+  let guard = 0;
+  while (pages.length < target && guard < 600) {
+    throwIfCancelled(ctrl?.signal);
+    const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
+    if (env.messages.length === 0) break;
+    pages.push(...env.messages);
+    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
+    if (!env.hasMore) break;
+    cursor = env.cursor;
+    cursorLocalId = env.cursorLocalId;
+    guard += 1;
+  }
+  const all = pages.slice(0, target).reverse();
+  return all;
+}
+function csvCell(v) {
+  return '"' + v.replace(/"/g, '""') + '"';
+}
+var UTF8_BOM = "\uFEFF";
+function buildCsv(header, rows) {
+  const lines = [header.map(csvCell).join(",")];
+  for (const r of rows) lines.push(r.map((c) => csvCell(c ?? "")).join(","));
+  return UTF8_BOM + lines.join("\r\n") + "\r\n";
+}
+function htmlEscape(v) {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function rowOf(m, username) {
+  const sender = m.isSender === 1 ? "\u6211" : m.sender || username;
+  const typeLabel3 = m.type === 1 ? "\u6587\u672C" : m.typeLabel || String(m.type);
+  return { time: fmtFull(m.createTime), sender, typeLabel: typeLabel3, text: m.displayText || "" };
+}
+function formatTxt(msgs, username) {
+  const lines = [`\u6D88\u606F\u5BFC\u51FA (${msgs.length})`];
+  lines.push("=".repeat(48));
+  lines.push("");
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    lines.push(r.time + " " + r.sender);
+    lines.push(r.typeLabel + ": " + r.text);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+function formatCsv(msgs, username) {
+  const rows = msgs.map((m) => {
+    const r = rowOf(m, username);
+    return [r.time, r.sender, r.typeLabel, r.text];
+  });
+  return buildCsv(["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9"], rows);
+}
+function formatHtml(msgs, username, now) {
+  let body = "";
+  let lastDay = "";
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    const day = r.time.split(" ")[0] || "";
+    if (day !== lastDay) {
+      lastDay = day;
+      body += '<div class="date-divider"><span>' + htmlEscape(day) + "</span></div>";
+    }
+    const side = m.isSender === 1 ? "right" : "left";
+    const content = m.type === 3 ? '<span class="muted">[\u56FE\u7247]</span>' : htmlEscape(r.text);
+    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div><div class="content">' + content + '</div><div class="time">' + htmlEscape(r.time) + "</div></div></div>";
+  }
+  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA</title><style>body{font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;background:#ededed;margin:0;padding:24px 12px;color:#1f1f1f}.wrap{max-width:760px;margin:0 auto}.hd{text-align:center;padding:16px 0 8px}.hd h1{font-size:18px;margin:0 0 4px}.hd p{font-size:12px;color:#888;margin:0}.date-divider{text-align:center;margin:18px 0 10px}.date-divider span{background:#c8c8c8;color:#fff;font-size:11px;padding:2px 12px;border-radius:999px}.row{display:flex;margin:10px 0}.row.right{justify-content:flex-end}.bubble{max-width:72%;padding:9px 12px;border-radius:8px;background:#fff;position:relative;box-shadow:0 1px 2px rgba(0,0,0,.08)}.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:3px}.content{font-size:14px;line-height:1.5;word-break:break-word}.time{font-size:10px;color:#aaa;margin-top:4px;text-align:right}.muted{color:#999;font-size:12px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55</h1><p>\u5171 ' + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + htmlEscape(now) + "</p></div>" + body + "</div></body></html>";
+}
+function formatMarkdown(msgs, username) {
+  const lines = ["# \u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA", "", "> \u5171 " + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + (/* @__PURE__ */ new Date()).toLocaleString(), ""];
+  let lastDay = "";
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    const day = r.time.split(" ")[0] || "";
+    if (day !== lastDay) {
+      lastDay = day;
+      lines.push("## " + day, "");
+    }
+    lines.push("**" + r.time + " " + r.sender + "**  ", r.typeLabel + "\uFF1A" + r.text.replace(/\r?\n/g, "  "), "");
+  }
+  return lines.join("\n");
+}
+function formatSql(msgs, username) {
+  const q = (v) => "'" + v.replace(/'/g, "''") + "'";
+  const lines = [
+    "CREATE TABLE IF NOT EXISTS chat_messages (",
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
+    "  chatroom TEXT NOT NULL,",
+    "  create_time TEXT,",
+    "  sender TEXT,",
+    "  type_label TEXT,",
+    "  content TEXT,",
+    "  local_id INTEGER",
+    ");",
+    ""
+  ];
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    lines.push("INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (" + q(username) + ", " + q(r.time) + ", " + q(r.sender) + ", " + q(r.typeLabel) + ", " + q(r.text) + ", " + String(m.localId) + ");");
+  }
+  return lines.join("\n");
+}
+function formatJson(msgs, username) {
+  const items = msgs.map((m) => {
+    const r = rowOf(m, username);
+    const item = {
+      localId: m.localId,
+      sortSeq: m.sortSeq ?? 0,
+      time: r.time,
+      sender: r.sender,
+      type: m.type,
+      typeLabel: r.typeLabel,
+      content: r.text
+    };
+    if (m.rich) item.rich = m.rich;
+    return item;
+  });
+  return JSON.stringify(items, null, 2);
+}
+function xmlEsc(v) {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+var XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
+var XLSX_SHEET_TAIL = "</sheetData></worksheet>";
+var XLSX_CHUNK_ROWS = 200;
+function xlsxStaticParts() {
+  const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
+  const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
+  const rootRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>';
+  return [
+    { name: "[Content_Types].xml", data: contentTypes },
+    { name: "_rels/.rels", data: rootRel },
+    { name: "xl/workbook.xml", data: workbook },
+    { name: "xl/_rels/workbook.xml.rels", data: wbRel }
+  ];
+}
+function xlsxRowXml(row) {
+  return "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
+}
+function makeXlsxChunker(ctrl, total) {
+  let buf = "";
+  let done = 0;
+  return {
+    push: (row) => {
+      throwIfCancelled(ctrl?.signal);
+      buf += xlsxRowXml(row);
+      done += 1;
+      if (done % XLSX_CHUNK_ROWS !== 0) return null;
+      const out = buf;
+      buf = "";
+      reportProgress(ctrl, "format", done, total);
+      return out;
+    },
+    finish: () => {
+      const out = [];
+      if (buf) out.push(buf);
+      reportProgress(ctrl, "format", done, total);
+      out.push(XLSX_SHEET_TAIL);
+      return out;
+    }
+  };
+}
+function* xlsxSheetChunks(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  yield* chunker.finish();
+}
+async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
+  yield XLSX_SHEET_HEAD;
+  const chunker = makeXlsxChunker(ctrl, total);
+  for await (const row of rows) {
+    const chunk = chunker.push(row);
+    if (chunk !== null) yield chunk;
+  }
+  for (const chunk of chunker.finish()) yield chunk;
+}
+function* messageRows(msgs, username) {
+  yield ["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"];
+  for (const m of msgs) {
+    const r = rowOf(m, username);
+    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)];
+  }
+}
+function xlsxSheetXml(rows, ctrl) {
+  return Array.from(xlsxSheetChunks(rows, ctrl)).join("");
+}
+function formatXlsx(msgs, username, ctrl) {
+  return zipFiles([
+    ...xlsxStaticParts(),
+    { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
+  ]);
+}
+async function writeXlsxStream(filePath, rows, ctrl) {
+  await writeZipAtomic(filePath, async (zip) => {
+    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
+    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
+  });
+}
+
+// src/backend/wechat-data/src/query/export-flows.ts
+import { mkdirSync as mkdirSync14 } from "node:fs";
+import { basename as basename8, dirname as dirname20, join as join50 } from "node:path";
 
 // src/backend/wechat-data/src/query/privacy.ts
-import { DatabaseSync as DatabaseSync30 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync31 } from "node:sqlite";
 import { createHash as createHash15 } from "node:crypto";
-import { existsSync as existsSync35, readdirSync as readdirSync18 } from "node:fs";
-import { join as join47 } from "node:path";
+import { existsSync as existsSync36, readdirSync as readdirSync18 } from "node:fs";
+import { join as join48 } from "node:path";
 var CATEGORIES = [
   { key: "phone", label: "\u624B\u673A\u53F7", icon: "\u{1F4F1}", re: /1[3-9]\d{9}/g, insensitive: false },
   { key: "id_card", label: "\u8EAB\u4EFD\u8BC1\u53F7", icon: "\u{1FAAA}", re: /[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]/g, insensitive: false },
@@ -13448,7 +14462,7 @@ function makeSnippet(text, matched) {
   const mid = text.slice(start, end);
   return start > 0 ? "\u2026" + mid : mid;
 }
-function fmtFull(ts2) {
+function fmtFull2(ts2) {
   if (!ts2) return "";
   const d = new Date(ts2 * 1e3);
   const p = (n) => String(n).padStart(2, "0");
@@ -13463,7 +14477,7 @@ function cellStr9(v) {
 function loadSessionUsernames2(decryptedDir) {
   const out = [];
   try {
-    const db = new DatabaseSync30(join47(decryptedDir, "session", "session.db"), { readOnly: true });
+    const db = new DatabaseSync31(join48(decryptedDir, "session", "session.db"), { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0;
     if (!has) {
       db.close();
@@ -13488,7 +14502,7 @@ function loadSessionUsernames2(decryptedDir) {
 function loadDisplayNames2(decryptedDir) {
   const map = /* @__PURE__ */ new Map();
   try {
-    const db = new DatabaseSync30(join47(decryptedDir, "contact", "contact.db"), { readOnly: true });
+    const db = new DatabaseSync31(join48(decryptedDir, "contact", "contact.db"), { readOnly: true });
     const cols = new Set(db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name));
     if (!cols.has("username")) {
       db.close();
@@ -13515,7 +14529,7 @@ function decodeCell2(v) {
   return "";
 }
 function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
-  const msgDir = join47(decryptedDir, "message");
+  const msgDir = join48(decryptedDir, "message");
   const categories = CATEGORIES.map((c) => ({ key: c.key, label: c.label, count: 0, icon: c.icon, samples: [] }));
   const hitsByKey = /* @__PURE__ */ new Map();
   const perContact = /* @__PURE__ */ new Map();
@@ -13523,7 +14537,7 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
   const names = loadDisplayNames2(decryptedDir);
   let scanned = 0;
   let involved = 0;
-  if (existsSync35(msgDir)) {
+  if (existsSync36(msgDir)) {
     const shards = readdirSync18(msgDir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("tmp"));
     const targetUsernames = usernames.slice(0, 800);
     const tableToUser = /* @__PURE__ */ new Map();
@@ -13532,7 +14546,7 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
     for (const file of shards) {
       let probe = null;
       try {
-        probe = new DatabaseSync30(join47(msgDir, file), { readOnly: true });
+        probe = new DatabaseSync31(join48(msgDir, file), { readOnly: true });
       } catch {
         continue;
       }
@@ -13543,7 +14557,7 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
           const u = tableToUser.get(n);
           if (u) tables.push([n, u]);
         }
-        if (tables.length > 0) fileInfos.push({ path: join47(msgDir, file), tables });
+        if (tables.length > 0) fileInfos.push({ path: join48(msgDir, file), tables });
       } catch {
       } finally {
         probe.close();
@@ -13553,7 +14567,7 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
       if (scanned >= rowBudget) break;
       let db = null;
       try {
-        db = new DatabaseSync30(fi.path, { readOnly: true });
+        db = new DatabaseSync31(fi.path, { readOnly: true });
       } catch {
         continue;
       }
@@ -13591,7 +14605,7 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
                     name: names.get(username) ?? username,
                     local_id: localId,
                     ts: ts2,
-                    time: fmtFull(ts2),
+                    time: fmtFull2(ts2),
                     snippet: makeSnippet(text, matched)
                   });
                 }
@@ -13616,12 +14630,958 @@ function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
   return { categories, total_hits: totalHits, involved_sessions: involved, top_contacts: topContacts, top_groups: topGroups };
 }
 
-// src/backend/wechat-data/src/query/calls.ts
-import { createHash as createHash16 } from "node:crypto";
-import { DatabaseSync as DatabaseSync31 } from "node:sqlite";
+// src/backend/wechat-data/src/query/annual-report.ts
+import { DatabaseSync as DatabaseSync32 } from "node:sqlite";
 import { decompress as decompress5 } from "fzstd";
-import { join as join48 } from "node:path";
+import { existsSync as existsSync37, readdirSync as readdirSync19 } from "node:fs";
+import { createHash as createHash16 } from "node:crypto";
+import { join as join49 } from "node:path";
+function msgTableName6(username) {
+  return "Msg_" + createHash16("md5").update(username, "utf8").digest("hex");
+}
+function cellStr10(v) {
+  if (typeof v === "string") return v;
+  if (v === null || v === void 0) return "";
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
+  return "";
+}
 var ZSTD_MAGIC5 = Buffer.from([40, 181, 47, 253]);
+function tryDecompress3(data) {
+  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC5)) {
+    try {
+      return Buffer.from(decompress5(data));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+function decodeUtfOrGbk(bytes) {
+  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (!utf8.includes("\uFFFD")) return utf8;
+  try {
+    const gbk = new TextDecoder("gbk", { fatal: false }).decode(bytes);
+    const utf8Bad = (utf8.match(/\uFFFD/g) ?? []).length;
+    const gbkBad = (gbk.match(/\uFFFD/g) ?? []).length;
+    return gbkBad < utf8Bad ? gbk : utf8;
+  } catch {
+    return utf8;
+  }
+}
+function decodeCell3(v) {
+  if (v === null || v === void 0) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
+  const raw = Buffer.from(v instanceof Uint8Array ? v : []);
+  const decompressed = tryDecompress3(raw);
+  return decodeUtfOrGbk(decompressed ?? raw);
+}
+function stripXml(x) {
+  return x.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+function senderFromContent2(content) {
+  const m = content.match(/([A-Za-z0-9_@.\-]{3,64}):\n/);
+  return m ? m[1] ?? null : null;
+}
+function cleanMessage(text) {
+  let t = text;
+  const m = t.match(/(?:[A-Za-z0-9_@.\-]{3,64}:\s*)([\s\S]*)/);
+  if (m && m[1] && !m[1].startsWith("<")) t = m[1];
+  t = t.replace(/^[\x00-\x1f\x7f-\x9f]*/, "");
+  t = t.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return t.slice(0, 120);
+}
+function personaTags(s) {
+  const tags = [];
+  if (s.nightShare >= 0.2) tags.push("\u591C\u732B\u5B50");
+  if (s.morningShare >= 0.15) tags.push("\u65E9\u8D77\u9E1F");
+  if (s.weekendShare >= 0.25) tags.push("\u5468\u672B\u8FBE\u4EBA");
+  if (s.groupShare >= 0.6) tags.push("\u7FA4\u804A\u4E4B\u738B");
+  if (s.dailyAvg >= 50) tags.push("\u8BDD\u75E8");
+  if (tags.length === 0) tags.push("\u7A33\u5065\u6C9F\u901A\u8005");
+  return tags;
+}
+function queryAnnualReport(decryptedDir, year) {
+  const msgDir = join49(decryptedDir, "message");
+  if (!existsSync37(msgDir)) return { year, total: 0 };
+  const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1e3);
+  const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1e3);
+  const usernames = loadUsernames(decryptedDir);
+  const perSender = /* @__PURE__ */ new Map();
+  const perChat = /* @__PURE__ */ new Map();
+  const heat = new Array(7 * 24).fill(0);
+  const monthly = new Array(12).fill(0);
+  const kindCounts = /* @__PURE__ */ new Map();
+  const emojiCount = /* @__PURE__ */ new Map();
+  const phraseCount = /* @__PURE__ */ new Map();
+  const activeDays = /* @__PURE__ */ new Set();
+  let total = 0;
+  let textCount = 0;
+  let textChars = 0;
+  let nightCount = 0;
+  let morningCount = 0;
+  let weekendCount = 0;
+  let groupCount = 0;
+  let firstMsg = null;
+  let lastMsg = null;
+  let firstTs = Number.POSITIVE_INFINITY;
+  let lastTs = 0;
+  const files = readdirSync19(msgDir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("monitor_cache") && !f.includes("media") && !f.includes("resource") && !f.includes("fts"));
+  const tableToUser = /* @__PURE__ */ new Map();
+  for (const username of usernames) tableToUser.set(msgTableName6(username), username);
+  const fileInfos = [];
+  for (const file of files) {
+    let probe = null;
+    try {
+      probe = new DatabaseSync32(join49(msgDir, file), { readOnly: true });
+    } catch {
+      continue;
+    }
+    try {
+      const names = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all().map((r) => r.name);
+      const tables = [];
+      for (const n of names) {
+        const u = tableToUser.get(n);
+        if (u) tables.push([n, u]);
+      }
+      if (tables.length > 0) fileInfos.push({ path: join49(msgDir, file), tables });
+    } catch {
+    } finally {
+      probe.close();
+    }
+  }
+  for (const fi of fileInfos) {
+    let db = null;
+    try {
+      db = new DatabaseSync32(fi.path, { readOnly: true });
+    } catch {
+      continue;
+    }
+    try {
+      for (const [table, username] of fi.tables) {
+        try {
+          const rows = db.prepare('SELECT create_time, local_type, message_content FROM "' + table + '" WHERE create_time >= ? AND create_time < ?').all(start, end);
+          for (const r of rows) {
+            const ts2 = Number(r["create_time"] ?? 0);
+            const lt = Number(r["local_type"] ?? 0);
+            const content = decodeCell3(r["message_content"]);
+            const text = stripXml(content);
+            if (text && /^[0-9,]+$/.test(text.slice(0, 80))) continue;
+            total += 1;
+            if (username.endsWith("@chatroom")) {
+              const sender = senderFromContent2(content);
+              if (sender && !sender.endsWith("@chatroom")) perSender.set(sender, (perSender.get(sender) ?? 0) + 1);
+            } else {
+              perSender.set(username, (perSender.get(username) ?? 0) + 1);
+            }
+            perChat.set(username, (perChat.get(username) ?? 0) + 1);
+            if (username.endsWith("@chatroom")) groupCount += 1;
+            const d = new Date(ts2 * 1e3);
+            const h = d.getHours();
+            const dow = d.getDay();
+            heat[dow * 24 + h] = (heat[dow * 24 + h] ?? 0) + 1;
+            monthly[d.getMonth()] = (monthly[d.getMonth()] ?? 0) + 1;
+            const dayKey2 = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+            activeDays.add(dayKey2);
+            if (h >= 23 || h <= 4) nightCount += 1;
+            if (h >= 5 && h <= 9) morningCount += 1;
+            if (dow === 0 || dow === 6) weekendCount += 1;
+            const normType2 = lt > 4294967296 ? lt % 4294967296 : lt;
+            if (normType2 === 1 && text) {
+              textCount += 1;
+              textChars += text.length;
+              for (let i = 0; i + 2 <= text.length; i += 1) {
+                const bi = text.slice(i, i + 2);
+                if (/[\u4e00-\u9fff]{2}/.test(bi)) phraseCount.set(bi, (phraseCount.get(bi) ?? 0) + 1);
+              }
+              const emo = text.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) ?? [];
+              for (const e of emo) emojiCount.set(e, (emojiCount.get(e) ?? 0) + 1);
+            }
+            kindCounts.set(typeLabel(normType2), (kindCounts.get(typeLabel(normType2)) ?? 0) + 1);
+            if (ts2 > lastTs && text) {
+              lastTs = ts2;
+              lastMsg = text.slice(0, 80);
+            }
+            if (ts2 < firstTs && text) {
+              firstTs = ts2;
+              firstMsg = text.slice(0, 80);
+            }
+          }
+        } catch {
+        }
+      }
+    } finally {
+      db.close();
+    }
+  }
+  const activeDaysCount = activeDays.size;
+  const dailyAvg = activeDaysCount > 0 ? Math.round(total / activeDaysCount) : 0;
+  const textShare = total > 0 ? textCount / total : 0;
+  const nightShare = total > 0 ? nightCount / total : 0;
+  const morningShare = total > 0 ? morningCount / total : 0;
+  const weekendShare = total > 0 ? weekendCount / total : 0;
+  const groupShare = total > 0 ? groupCount / total : 0;
+  const nameMap = contactMeta(decryptedDir).names;
+  const topContacts = Array.from(perSender.entries()).filter(([u]) => !u.endsWith("@chatroom") && !u.startsWith("gh_")).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10);
+  const topGroups = Array.from(perChat.entries()).filter(([u]) => u.endsWith("@chatroom")).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10);
+  const topEmoji = Array.from(emojiCount.entries()).map(([e, n]) => ({ emoji: e, count: n })).sort((a, b) => b.count - a.count).slice(0, 8);
+  const topPhrases = Array.from(phraseCount.entries()).map(([p, n]) => ({ phrase: p, count: n })).sort((a, b) => b.count - a.count).slice(0, 20);
+  const out = {
+    year,
+    total,
+    active_days: activeDaysCount,
+    text_chars: textChars,
+    daily_avg: dailyAvg,
+    text_share: Number(textShare.toFixed(4)),
+    night_share: Number(nightShare.toFixed(4)),
+    morning_share: Number(morningShare.toFixed(4)),
+    weekend_share: Number(weekendShare.toFixed(4)),
+    group_share: Number(groupShare.toFixed(4)),
+    heat,
+    monthly,
+    kind_counts: Object.fromEntries(kindCounts),
+    top_phrases: topPhrases,
+    top_emoji: topEmoji,
+    top_contacts: topContacts,
+    top_groups: topGroups,
+    persona_tags: personaTags({ nightShare, morningShare, weekendShare, groupShare, dailyAvg })
+  };
+  if (firstMsg) out.first_message = cleanMessage(firstMsg);
+  if (lastMsg) out.last_message = cleanMessage(lastMsg);
+  return out;
+}
+function loadUsernames(decryptedDir) {
+  const p = join49(decryptedDir, "session", "session.db");
+  if (!existsSync37(p)) return [];
+  const out = [];
+  try {
+    const db = new DatabaseSync32(p, { readOnly: true });
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+    const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
+    if (table) {
+      const rows = db.prepare('SELECT username FROM "' + table + '"').all();
+      for (const r of rows) {
+        const u = cellStr10(r["username"] ?? "").trim();
+        if (u) out.push(u);
+      }
+    }
+    db.close();
+  } catch {
+  }
+  return out;
+}
+function typeLabel(t) {
+  if (t === 1) return "\u6587\u672C";
+  if (t === 3) return "\u56FE\u7247";
+  if (t === 34) return "\u8BED\u97F3";
+  if (t === 42) return "\u540D\u7247";
+  if (t === 43) return "\u89C6\u9891";
+  if (t === 47) return "\u8868\u60C5";
+  if (t === 48) return "\u4F4D\u7F6E";
+  if (t === 49) return "\u94FE\u63A5";
+  if (t === 1e4) return "\u7CFB\u7EDF\u6D88\u606F";
+  return "\u5176\u4ED6";
+}
+
+// src/backend/wechat-data/src/query/export-flows.ts
+function collectChatlogMedia(msgs) {
+  const out = [];
+  for (const m of msgs) {
+    const rich = m.rich;
+    if (!rich || rich.type !== "chatlog" || !Array.isArray(rich.records)) continue;
+    for (const rec of rich.records) {
+      const item = {
+        name: rec.name,
+        time: rec.time,
+        text: rec.text,
+        renderType: rec.renderType ?? (rec.isImage ? "image" : "text")
+      };
+      if (rec.datatype) item.datatype = rec.datatype;
+      if (rec.fullmd5) item.fullmd5 = rec.fullmd5;
+      if (rec.thumbfullmd5) item.thumbfullmd5 = rec.thumbfullmd5;
+      if (rec.md5) item.md5 = rec.md5;
+      if (rec.cdnurlstring) item.cdnurlstring = rec.cdnurlstring;
+      if (rec.encrypturlstring) item.encrypturlstring = rec.encrypturlstring;
+      if (rec.link) item.link = rec.link;
+      if (rec.fromnewmsgid) item.fromnewmsgid = rec.fromnewmsgid;
+      out.push(item);
+    }
+  }
+  return out;
+}
+function filterMessages(msgs, types, richTypes) {
+  const matchTypes = types !== void 0 && types.length > 0;
+  const matchRich = richTypes !== void 0 && richTypes.length > 0;
+  if (!matchTypes && !matchRich) return msgs;
+  const tList = matchTypes ? types : [];
+  const rList = matchRich ? richTypes : [];
+  return msgs.filter((m) => {
+    if (matchTypes && matchRich) {
+      return tList.includes(m.type) || (m.rich?.type ? rList.includes(m.rich.type) : false);
+    }
+    if (matchTypes) return tList.includes(m.type);
+    return m.rich?.type ? rList.includes(m.rich.type) : false;
+  });
+}
+function sanitizeBasename(name) {
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").trim().slice(0, 100);
+}
+function planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl) {
+  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl);
+  const msgs = filterMessages(all, types, richTypes).filter((m) => {
+    if (from && from > 0 && m.createTime < from) return false;
+    if (to && to > 0 && m.createTime > to) return false;
+    return true;
+  });
+  const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
+  const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
+  const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
+  const exportDir = dir && dir.trim() ? dir.trim() : join50(dirname20(decryptedDir), "exports");
+  mkdirSync14(exportDir, { recursive: true });
+  const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
+  const autoBase = sanitized + "_" + now + "_" + ((count ?? 0) === 0 ? "all" : String(count));
+  const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : "";
+  const base = userBase || autoBase;
+  const outExt = zip ? "zip" : ext;
+  const innerName = base.toLowerCase().endsWith("." + ext) ? base : base + "." + ext;
+  const filenameOut = base.toLowerCase().endsWith("." + outExt) ? base : base + "." + outExt;
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join50(exportDir, filenameOut), now };
+}
+function formatTextBody(format, msgs, username, now) {
+  if (format === "csv") return formatCsv(msgs, username);
+  if (format === "html") return formatHtml(msgs, username, now);
+  if (format === "md") return formatMarkdown(msgs, username);
+  if (format === "sql") return formatSql(msgs, username);
+  if (format === "json") return formatJson(msgs, username);
+  return formatTxt(msgs, username);
+}
+async function exportSessionMessagesStreamed(decryptedDir, options) {
+  const ctrl = { onProgress: options.onProgress, signal: options.signal };
+  const plan = planSessionExport(
+    decryptedDir,
+    options.username,
+    options.format,
+    options.count,
+    options.dir,
+    options.types,
+    options.richTypes,
+    options.from,
+    options.to,
+    options.filename,
+    options.zip,
+    ctrl
+  );
+  const { msgs } = plan;
+  if (plan.isXlsx && !options.zip) {
+    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl);
+  } else if (plan.isXlsx) {
+    const content = formatXlsx(msgs, options.username, ctrl);
+    await writeZipAtomic(plan.outPath, async (zip) => {
+      await zip.addFile(plan.innerName, content);
+      await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
+    });
+  } else {
+    const content = formatTextBody(plan.format, msgs, options.username, plan.now);
+    if (options.zip) {
+      await writeZipAtomic(plan.outPath, async (zip) => {
+        await zip.addFile(plan.innerName, content);
+        await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
+      });
+    } else {
+      writeFileAtomicSync(plan.outPath, content);
+    }
+  }
+  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length };
+}
+function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
+  const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
+  const stamp = now.slice(0, 8) + "_" + now.slice(9);
+  let header = [];
+  let rows = [];
+  if (kind === "contacts") {
+    header = ["\u663E\u793A\u540D", "\u5907\u6CE8", "\u6635\u79F0", "\u5FAE\u4FE1\u53F7", "\u522B\u540D", "\u7C7B\u578B", "\u9996\u5B57\u6BCD", "\u5168\u62FC", "\u7FA4\u6210\u5458\u6570", "\u7FA4\u4E3B", "\u6240\u5728\u7FA4"];
+    const env = queryContacts(decryptedDir, category ? { category } : void 0);
+    for (const c of env.contacts) {
+      rows.push([
+        c.displayName ?? "",
+        c.remark ?? "",
+        c.nickName ?? "",
+        c.username ?? "",
+        c.alias ?? "",
+        c.localTypeLabel ?? c.category ?? "",
+        c.initial ?? "",
+        c.quanPin ?? "",
+        c.memberCount != null ? String(c.memberCount) : "",
+        c.owner ?? "",
+        c.groupName ?? ""
+      ]);
+    }
+  } else if (kind === "favorites") {
+    header = ["localId", "\u7C7B\u578B", "\u66F4\u65B0\u65F6\u95F4", "\u5185\u5BB9", "\u6765\u6E90"];
+    const env = queryFavorites(decryptedDir, 5e3);
+    for (const f of env.favorites) {
+      rows.push([String(f.localId), String(f.type), String(f.updateTime), f.content, f.fromUsr]);
+    }
+  } else if (kind === "records") {
+    header = ["\u5B57\u6BB5"];
+    const env = queryRecords(decryptedDir, recordsKind ?? "revokes", 5e3);
+    for (const it of env.items) {
+      rows.push(Object.values(it).map((v) => String(v)));
+    }
+  } else if (kind === "moments") {
+    header = ["tid", "\u7528\u6237\u540D", "\u4F5C\u8005", "\u65F6\u95F4", "\u5185\u5BB9", "\u5A92\u4F53"];
+    const env = queryMoments(decryptedDir, 0, 5e3);
+    for (const m of env.moments) {
+      rows.push([m.tid, m.username, m.author, m.time, m.text, m.media_desc]);
+    }
+  } else if (kind === "privacy") {
+    header = ["\u7C7B\u522B", "\u4F1A\u8BDD", "\u8054\u7CFB\u4EBA", "\u65F6\u95F4", "\u7247\u6BB5"];
+    const env = queryPrivacyScan(decryptedDir);
+    for (const c of env.categories) {
+      for (const s of c.samples) {
+        rows.push([c.label, s.username, s.name, s.time, s.snippet]);
+      }
+    }
+  } else {
+    throw new Error("\u672A\u77E5\u5BFC\u51FA\u7C7B\u578B: " + kind);
+  }
+  const chosen = typeof dest === "string" && dest.trim() !== "" ? dest.trim() : "";
+  const filepath = chosen || join50(join50(dirname20(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
+  mkdirSync14(dirname20(filepath), { recursive: true });
+  writeFileAtomicSync(filepath, buildCsv(header, rows));
+  return { path: filepath, filename: basename8(filepath), count: rows.length };
+}
+function strOf(v) {
+  if (v === null || v === void 0) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
+  return "";
+}
+function pctOf(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n * 100)) + "%" : "";
+}
+function topOf(arr, limit = 12) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, limit).map((it) => {
+    const o = it;
+    const username = strOf(o["username"]);
+    return {
+      username,
+      name: strOf(o["name"]) || username,
+      count: Number(o["count"] ?? 0)
+    };
+  });
+}
+function exportAnnualReport(decryptedDir, year, format, dir, filename) {
+  const report = queryAnnualReport(decryptedDir, year);
+  const ext = format === "html" ? "html" : format === "json" ? "json" : "md";
+  const base = dir && dir.trim() ? dir.trim() : join50(dirname20(decryptedDir), "exports");
+  const safeName = filename && filename.trim() ? filename.trim().replace(/\.(md|html|json)$/i, "") + "." + ext : "wechat_annual_" + String(year) + "." + ext;
+  mkdirSync14(base, { recursive: true });
+  let content = "";
+  const total = Number(report["total"] ?? 0);
+  const activeDays = Number(report["active_days"] ?? 0);
+  const textChars = Number(report["text_chars"] ?? 0);
+  const dailyAvg = Number(report["daily_avg"] ?? 0);
+  const tags = Array.isArray(report["persona_tags"]) ? report["persona_tags"].map((t) => strOf(t)).join(" ") : "";
+  const kinds = report["kind_counts"];
+  const kindLine = kinds ? Object.entries(kinds).map(([k, v]) => k + " " + strOf(v)).join(" \xB7 ") : "";
+  const phrases = Array.isArray(report["top_phrases"]) ? report["top_phrases"].slice(0, 12).map((p) => {
+    const o = p;
+    return strOf(o["phrase"]) + "(" + strOf(o["count"]) + ")";
+  }).join(" \xB7 ") : "";
+  const emoji = Array.isArray(report["top_emoji"]) ? report["top_emoji"].slice(0, 8).map((e) => {
+    const o = e;
+    return strOf(o["emoji"]) + "\xD7" + strOf(o["count"]);
+  }).join(" ") : "";
+  const contacts = topOf(report["top_contacts"]);
+  const groups = topOf(report["top_groups"]);
+  const firstRaw = report["first_message"];
+  const lastRaw = report["last_message"];
+  const first = firstRaw == null ? "\u2014" : strOf(firstRaw) || "\u2014";
+  const last = lastRaw == null ? "\u2014" : strOf(lastRaw) || "\u2014";
+  if (ext === "html") {
+    const items = [];
+    items.push("<style>body{background:#0b0e13;color:#e6ebf2;font-family:sans-serif;max-width:760px;margin:40px auto;padding:0 18px}h1{color:#22d3ee}h2{border-left:4px solid #22d3ee;padding-left:8px;color:#fff}li{line-height:1.8}</style>");
+    items.push("<h1>" + String(year) + " \u5E74\uFF0C\u4F60\u8BF4\u4E86 " + String(total) + " \u6761\u6D88\u606F</h1>");
+    items.push("<p>\u6D3B\u8DC3 " + String(activeDays) + " \u5929 \xB7 \u6587\u5B57 " + String(textChars) + " \u5B57 \xB7 \u65E5\u5747 " + String(dailyAvg) + " \u6761 \xB7 \u4EBA\u7269\u6807\u7B7E: " + (tags || "\u2014") + "</p>");
+    items.push("<p>\u7C7B\u578B\u5360\u6BD4: \u6587\u5B57 " + pctOf(report["text_share"]) + " \xB7 \u6DF1\u591C " + pctOf(report["night_share"]) + " \xB7 \u6E05\u6668 " + pctOf(report["morning_share"]) + " \xB7 \u5468\u672B " + pctOf(report["weekend_share"]) + " \xB7 \u7FA4\u804A " + pctOf(report["group_share"]) + "</p>");
+    if (kindLine) items.push("<h2>\u6D88\u606F\u7C7B\u578B</h2><p>" + kindLine + "</p>");
+    if (phrases) items.push("<h2>\u9AD8\u9891\u77ED\u8BED</h2><p>" + phrases + "</p>");
+    if (emoji) items.push("<h2>\u8868\u60C5\u5B87\u5B99</h2><p>" + emoji + "</p>");
+    if (contacts.length > 0) {
+      items.push("<h2>\u804A\u5F97\u6700\u591A\u7684\u4EBA</h2><ul>" + contacts.map((c) => "<li>" + c.name + " \u2014 " + String(c.count) + " \u6761</li>").join("") + "</ul>");
+    }
+    if (groups.length > 0) {
+      items.push("<h2>\u6700\u6D3B\u8DC3\u7684\u7FA4\u804A</h2><ul>" + groups.map((c) => "<li>" + c.name + " \u2014 " + String(c.count) + " \u6761</li>").join("") + "</ul>");
+    }
+    items.push("<h2>\u9996\u53E5\u4E0E\u672B\u53E5</h2><p><b>\u9996\u53E5\uFF1A</b>" + first + "</p><p><b>\u672B\u53E5\uFF1A</b>" + last + "</p>");
+    content = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u5E74\u5EA6\u603B\u7ED3 ' + String(year) + "</title>" + items.join("") + "</body></html>";
+  } else if (ext === "json") {
+    content = JSON.stringify(report, null, 2);
+  } else {
+    const md = [];
+    md.push("# \u5FAE\u4FE1\u5E74\u5EA6\u603B\u7ED3 " + String(year));
+    md.push("");
+    md.push("\u603B\u6D88\u606F " + String(total) + " \u6761 \xB7 \u6D3B\u8DC3 " + String(activeDays) + " \u5929 \xB7 \u6587\u5B57 " + String(textChars) + " \u5B57 \xB7 \u65E5\u5747 " + String(dailyAvg) + " \u6761");
+    if (tags) md.push("\u4EBA\u7269\u6807\u7B7E: " + tags);
+    md.push("\u7C7B\u578B\u5360\u6BD4: \u6587\u5B57 " + pctOf(report["text_share"]) + " \xB7 \u6DF1\u591C " + pctOf(report["night_share"]) + " \xB7 \u6E05\u6668 " + pctOf(report["morning_share"]) + " \xB7 \u5468\u672B " + pctOf(report["weekend_share"]) + " \xB7 \u7FA4\u804A " + pctOf(report["group_share"]));
+    if (kindLine) md.push("\u6D88\u606F\u7C7B\u578B: " + kindLine);
+    if (phrases) md.push("\u9AD8\u9891\u77ED\u8BED: " + phrases);
+    if (emoji) md.push("\u8868\u60C5\u5B87\u5B99: " + emoji);
+    if (contacts.length > 0) {
+      md.push("\u804A\u5F97\u6700\u591A\u7684\u4EBA:");
+      contacts.forEach((c, i) => md.push(String(i + 1) + ". " + c.name + " \u2014 " + String(c.count) + " \u6761"));
+    }
+    if (groups.length > 0) {
+      md.push("\u6700\u6D3B\u8DC3\u7684\u7FA4\u804A:");
+      groups.forEach((c, i) => md.push(String(i + 1) + ". " + c.name + " \u2014 " + String(c.count) + " \u6761"));
+    }
+    md.push("\u9996\u53E5: " + first);
+    md.push("\u672B\u53E5: " + last);
+    content = md.join("\n");
+  }
+  const path = join50(base, safeName);
+  writeFileAtomicSync(path, content);
+  return { path, filename: safeName, count: total };
+}
+async function exportMoments(decryptedDir, opts) {
+  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
+  const format = opts?.format === "html" ? "html" : opts?.format === "json" ? "json" : opts?.format === "csv" ? "csv" : "txt";
+  const NL = String.fromCharCode(10);
+  const items = [];
+  let offset = 0;
+  for (; ; ) {
+    throwIfCancelled(ctrl.signal);
+    const env = queryMoments(decryptedDir, offset, 500, opts?.username);
+    items.push(...env.moments);
+    offset += env.moments.length;
+    reportProgress(ctrl, "collect", items.length, 0);
+    if (env.moments.length < 500) break;
+    if (items.length > 1e4) break;
+  }
+  const from = opts?.from ?? 0;
+  const to = opts?.to ?? 0;
+  const q = (opts?.q ?? "").trim().toLowerCase();
+  const authorName = (opts?.authorName ?? "").trim();
+  const media = opts?.media;
+  const month = opts?.month;
+  const mine = opts?.mine;
+  const mediaCtx = opts?.images && format === "html" ? exportMediaCtx(decryptedDir) : void 0;
+  const filtered = items.filter((m) => {
+    if (authorName && m.author !== authorName) return false;
+    if (media && media !== "all") {
+      if (media === "image" && m.images.length === 0) return false;
+      if (media === "video" && m.videos.length === 0) return false;
+      if (media === "link" && !(m.link_title || m.contentType === 3 || m.contentType === 28)) return false;
+      if (media === "location" && !m.location) return false;
+      if (media === "text" && !(m.images.length === 0 && m.videos.length === 0 && !m.link_title)) return false;
+    }
+    if (mine === "mine" && !m.is_self) return false;
+    if (mine === "others" && m.is_self) return false;
+    if (month && m.ts) {
+      const d = new Date(m.ts * 1e3);
+      const k = String(d.getFullYear()) + "-" + String(d.getMonth() + 1).padStart(2, "0");
+      if (k !== month) return false;
+    }
+    if (from > 0 && m.ts < from) return false;
+    if (to > 0 && m.ts > to) return false;
+    if (!q) return true;
+    return m.author.toLowerCase().includes(q) || m.text.toLowerCase().includes(q) || m.location.toLowerCase().includes(q) || m.link_title.toLowerCase().includes(q) || (m.link_url ?? "").toLowerCase().includes(q) || (m.sourceNickName ?? "").toLowerCase().includes(q) || (m.publicUserName ?? "").toLowerCase().includes(q) || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q)) || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q));
+  });
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join50(dirname20(decryptedDir), "exports");
+  mkdirSync14(base, { recursive: true });
+  if (opts?.zip) {
+    const mediaCtx2 = exportMediaCtx(decryptedDir);
+    const rawName = (opts.filename ?? "").trim();
+    const zipBase = rawName ? rawName.replace(/\.zip$/i, "") : "";
+    const zipName = zipBase ? zipBase + ".zip" : "wechat_moments_" + String(Date.now()) + ".zip";
+    const zipPath = join50(base, zipName);
+    let mediaCount = 0;
+    await writeZipAtomic(zipPath, async (zip) => {
+      await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
+      let idx = 0;
+      for (const m of filtered) {
+        if (mediaCount >= MAX_MOMENT_MEDIA) break;
+        throwIfCancelled(ctrl.signal);
+        for (const im of m.images) {
+          if (mediaCount >= MAX_MOMENT_MEDIA) break;
+          const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url);
+            if (buf) {
+              await zip.addFile("media/images/img_" + String(idx++) + ".jpg", buf);
+              mediaCount += 1;
+            }
+          }
+        }
+        if (mediaCount >= MAX_MOMENT_MEDIA) break;
+        for (const v of m.videos) {
+          if (mediaCount >= MAX_MOMENT_MEDIA) break;
+          const r = resolveSnsVideoDataUrl(mediaCtx2.base, v.md5, v.timelineId, v.id);
+          if (r.url) {
+            const buf = dataUrlToBuffer(r.url);
+            if (buf) {
+              await zip.addFile("media/videos/vid_" + String(idx++) + ".mp4", buf);
+              mediaCount += 1;
+            }
+          }
+        }
+        reportProgress(ctrl, "media", mediaCount, MAX_MOMENT_MEDIA);
+      }
+    });
+    return { path: zipPath, filename: zipName, count: filtered.length };
+  }
+  const ext = format;
+  const name = opts?.filename && opts.filename.trim() ? opts.filename.trim().replace(/\.(txt|html|json|csv)$/i, "") + "." + ext : "wechat_moments_" + String(Date.now()) + "." + ext;
+  let content = "";
+  if (ext === "json") {
+    content = JSON.stringify(filtered, null, 2);
+  } else if (ext === "csv") {
+    const lines = ["\u65F6\u95F4,\u4F5C\u8005,\u5185\u5BB9,\u56FE\u7247\u6570,\u89C6\u9891\u6570,\u4F4D\u7F6E,\u94FE\u63A5\u6807\u9898,\u94FE\u63A5URL"];
+    for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
+      lines.push(csvCell(m.time) + "," + csvCell(m.author) + "," + csvCell(m.text) + "," + String(m.images.length) + "," + String(m.videos.length) + "," + csvCell(m.location) + "," + csvCell(m.link_title) + "," + csvCell(m.link_url ?? ""));
+    }
+    content = lines.join(NL);
+  } else if (ext === "html") {
+    const parts = [];
+    parts.push('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u670B\u53CB\u5708\u5BFC\u51FA</title>');
+    parts.push('<style>body{background:#f2f2f2;font-family:sans-serif;margin:0;padding:24px 12px;color:#222}.wrap{max-width:680px;margin:0 auto}.hd{text-align:center;margin-bottom:18px}.card{background:#fff;border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}.meta{color:#888;font-size:12px;margin-bottom:6px}.content{font-size:14px;line-height:1.6;white-space:pre-wrap}.tag{color:#576b95;font-size:12px;margin-top:6px}.divider{text-align:center;color:#bbb;font-size:12px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block}.grid.single{grid-template-columns:1fr;max-width:240px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u670B\u53CB\u5708</h1><p>\u5171 ' + String(filtered.length) + " \u6761\u52A8\u6001</p></div>");
+    for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
+      parts.push('<div class="card"><div class="meta">' + htmlEscape(m.author) + " \xB7 " + htmlEscape(m.time) + "</div>");
+      if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + "</div>");
+      if (m.images.length > 0) {
+        const single = m.images.length === 1 ? " single" : "";
+        const imgs = m.images.map((im) => {
+          let src = im.url || im.thumb || "";
+          if (mediaCtx && im.md5) {
+            const r = resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id);
+            if (r.url) src = r.url;
+          }
+          return '<img src="' + htmlEscape(src) + '" loading="lazy" />';
+        }).join("");
+        parts.push('<div class="grid' + single + '">' + imgs + "</div>");
+      }
+      if (m.videos.length > 0) {
+        const cover = m.videos[0] && (m.videos[0].thumb || "");
+        parts.push('<div class="tag">\u89C6\u9891\xD7' + String(m.videos.length) + (cover ? ' <img src="' + htmlEscape(cover) + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-left:4px" />' : "") + "</div>");
+      }
+      if (m.location) parts.push('<div class="tag">\u{1F4CD}' + htmlEscape(m.location) + "</div>");
+      if (m.link_title) {
+        const link = m.link_url ? ' href="' + htmlEscape(m.link_url) + '" target="_blank" rel="noopener"' : "";
+        parts.push('<div class="tag"><a' + link + ">\u{1F517}" + htmlEscape(m.link_title) + "</a></div>");
+      }
+      if (m.likes.length > 0) parts.push('<div class="tag">\u2764 ' + htmlEscape(m.likes.map((l) => l.nickname || l.username || "").join("\u3001")) + "</div>");
+      if (m.comments.length > 0) {
+        parts.push('<div class="tag">\u{1F4AC} ' + String(m.comments.length) + " \u6761\u8BC4\u8BBA</div>");
+        for (const c of m.comments) {
+          parts.push('<div class="tag" style="color:#555">' + htmlEscape((c.nickname || c.username) + (c.content ? "\uFF1A" + c.content : "")) + "</div>");
+        }
+      }
+      parts.push("</div>");
+    }
+    parts.push("</div></body></html>");
+    content = parts.join("");
+  } else {
+    const lines = [];
+    for (const m of filtered) {
+      throwIfCancelled(ctrl.signal);
+      lines.push(m.time + " " + m.author);
+      if (m.text) lines.push(m.text);
+      const tags = [];
+      if (m.images.length > 0) tags.push("\u56FE\u7247\xD7" + String(m.images.length));
+      if (m.videos.length > 0) tags.push("\u89C6\u9891\xD7" + String(m.videos.length));
+      if (m.location) tags.push("\u{1F4CD}" + m.location);
+      if (m.link_title) tags.push("\u{1F517}" + m.link_title + (m.link_url ? " " + m.link_url : ""));
+      if (tags.length > 0) lines.push(tags.join("  "));
+      lines.push("---");
+    }
+    content = lines.join(NL);
+  }
+  const path = join50(base, name);
+  writeFileAtomicSync(path, content);
+  return { path, filename: name, count: filtered.length };
+}
+async function exportAllSessions(decryptedDir, opts) {
+  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
+  const env = querySessions(decryptedDir);
+  const sessions = env.sessions.slice(0, 1e3);
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join50(dirname20(decryptedDir), "exports");
+  mkdirSync14(base, { recursive: true });
+  const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
+  const path = join50(base, filename);
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  await writeZipAtomic(path, async (zip) => {
+    for (let i = 0; i < sessions.length; i += 1) {
+      const s = sessions[i];
+      throwIfCancelled(ctrl.signal);
+      reportProgress(ctrl, "sessions", i, sessions.length);
+      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl);
+      const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
+      const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
+      let name = safeName + "_" + uid + ".txt";
+      let n = 2;
+      while (seen.has(name)) {
+        name = safeName + "_" + uid + "_" + String(n) + ".txt";
+        n += 1;
+      }
+      seen.add(name);
+      if (msgs.length === 0) {
+        await zip.addFile(name, "\uFF08\u65E0\u6D88\u606F\uFF09\n");
+      } else {
+        await zip.addFile(name, formatTxt(msgs, s.username));
+        total += msgs.length;
+      }
+      reportProgress(ctrl, "sessions", i + 1, sessions.length);
+    }
+  });
+  return { path, filename, count: total };
+}
+
+// src/backend/wechat-data/src/remotes/export.ts
+var CSV_KIND_LABEL = {
+  contacts: "\u901A\u8BAF\u5F55",
+  favorites: "\u6536\u85CF",
+  records: "\u8BB0\u5F55",
+  moments: "\u670B\u53CB\u5708",
+  privacy: "\u9690\u79C1\u626B\u63CF"
+};
+function createExportRemotes(rc) {
+  const normalizeJobId2 = rc.normalizeJobId;
+  return {
+    async exportSessionMessages(options) {
+      try {
+        const r = await exportSessionMessagesStreamed(rc.dirs().decrypted, { ...options });
+        rc.op("export", "export_session_messages", "ok", options.username, `\u5171 ${r.count} \u6761`);
+        rc.recordExport({
+          kind: "session",
+          label: options.sessionName ? `\u4F1A\u8BDD \xB7 ${options.sessionName}` : `\u4F1A\u8BDD \xB7 ${options.username}`,
+          format: options.zip ? "zip" : options.format,
+          path: r.path,
+          rows: r.count,
+          status: "ok",
+          // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
+          params: options
+        });
+        return r;
+      } catch (e) {
+        rc.op("export", "export_session_messages", "fail", options.username, e.message);
+        rc.recordExport({
+          kind: "session",
+          label: options.sessionName ? `\u4F1A\u8BDD \xB7 ${options.sessionName}` : `\u4F1A\u8BDD \xB7 ${options.username}`,
+          format: options.zip ? "zip" : options.format,
+          path: "",
+          status: "fail",
+          error: e.message,
+          params: options
+        });
+        throw e;
+      }
+    },
+    exportAnnualReport(options) {
+      try {
+        const r = exportAnnualReport(rc.dirs().decrypted, options.year, options.format, options.dir, options.filename);
+        rc.op("export", "export_annual_report", "ok", String(options.year), `\u5171 ${r.count} \u6761`);
+        rc.recordExport({
+          kind: "annual",
+          label: `\u5E74\u5EA6\u62A5\u544A \xB7 ${options.year} \u5E74`,
+          format: options.format,
+          path: r.path,
+          rows: r.count,
+          status: "ok",
+          params: options
+        });
+        return r;
+      } catch (e) {
+        rc.op("export", "export_annual_report", "fail", String(options.year), e.message);
+        rc.recordExport({
+          kind: "annual",
+          label: `\u5E74\u5EA6\u62A5\u544A \xB7 ${options.year} \u5E74`,
+          format: options.format,
+          path: "",
+          status: "fail",
+          error: e.message,
+          params: options
+        });
+        throw e;
+      }
+    },
+    async exportAllSessions(options) {
+      const jobId = normalizeJobId2(options?.jobId);
+      try {
+        const r = await exportAllSessions(rc.dirs().decrypted, {
+          ...options?.dir !== void 0 ? { dir: options.dir } : {},
+          ...options?.filename !== void 0 ? { filename: options.filename } : {},
+          ...rc.streamControl(jobId)
+        });
+        rc.finishStreamJob(jobId);
+        rc.op("export", "export_all_sessions", "ok", "", `\u5171 ${r.count} \u6761`);
+        rc.recordExport({
+          kind: "all_sessions",
+          label: "\u5168\u90E8\u4F1A\u8BDD\u5F52\u6863",
+          format: "zip",
+          path: r.path,
+          rows: r.count,
+          status: "ok",
+          params: options ?? {}
+        });
+        return r;
+      } catch (e) {
+        rc.finishStreamJob(jobId, e.message);
+        rc.op("export", "export_all_sessions", "fail", "", e.message);
+        const canceled = /cancel|取消|abort/i.test(e.message);
+        rc.recordExport({
+          kind: "all_sessions",
+          label: "\u5168\u90E8\u4F1A\u8BDD\u5F52\u6863",
+          format: "zip",
+          path: "",
+          status: canceled ? "canceled" : "fail",
+          error: canceled ? "" : e.message,
+          params: options ?? {}
+        });
+        throw e;
+      }
+    },
+    cancelExportJob(options) {
+      const id = normalizeJobId2(options?.jobId);
+      const job = id ? rc.streamJobs.get(id) : void 0;
+      if (!job) return { ok: false, error: "\u6CA1\u6709\u8BE5\u5BFC\u51FA\u4EFB\u52A1\uFF08jobId \u4E0D\u5B58\u5728\uFF0C\u6216\u8FDB\u7A0B\u5DF2\u91CD\u542F\uFF09" };
+      if (job.finished) return { ok: false, error: "\u8BE5\u5BFC\u51FA\u4EFB\u52A1\u5DF2\u7ED3\u675F" };
+      job.ctrl.abort();
+      rc.op("export", "cancel_export_job", "ok", id);
+      return { ok: true };
+    },
+    getExportProgress(options) {
+      const id = normalizeJobId2(options?.jobId);
+      const job = id ? rc.streamJobs.get(id) : void 0;
+      if (!job) return { found: false, phase: "", done: 0, total: 0, finished: true };
+      return {
+        found: true,
+        phase: job.progress?.phase ?? "",
+        done: job.progress?.done ?? 0,
+        total: job.progress?.total ?? 0,
+        finished: job.finished,
+        ...job.error ? { error: job.error } : {}
+      };
+    },
+    async exportMoments(options) {
+      const jobId = normalizeJobId2(options?.jobId);
+      try {
+        const r = await exportMoments(rc.dirs().decrypted, {
+          ...options?.format !== void 0 ? { format: options.format } : {},
+          ...options?.username !== void 0 ? { username: options.username } : {},
+          ...options?.authorName !== void 0 ? { authorName: options.authorName } : {},
+          ...options?.q !== void 0 ? { q: options.q } : {},
+          ...options?.images !== void 0 ? { images: options.images } : {},
+          ...options?.media !== void 0 ? { media: options.media } : {},
+          ...options?.month !== void 0 ? { month: options.month } : {},
+          ...options?.mine !== void 0 ? { mine: options.mine } : {},
+          ...options?.zip !== void 0 ? { zip: options.zip } : {},
+          ...options?.from !== void 0 ? { from: options.from } : {},
+          ...options?.to !== void 0 ? { to: options.to } : {},
+          ...options?.dir !== void 0 ? { dir: options.dir } : {},
+          ...options?.filename !== void 0 ? { filename: options.filename } : {},
+          ...rc.streamControl(jobId)
+        });
+        rc.finishStreamJob(jobId);
+        rc.op("export", "export_moments", "ok", options?.username ?? "", `\u5171 ${r.count} \u6761`);
+        rc.recordExport({
+          kind: "moments",
+          label: options?.username ? `\u670B\u53CB\u5708 \xB7 ${options.authorName ?? options.username}` : "\u670B\u53CB\u5708 \xB7 \u5168\u90E8",
+          format: options?.zip ? "zip" : options?.format ?? "txt",
+          path: r.path,
+          rows: r.count,
+          status: "ok",
+          params: options ?? {}
+        });
+        return r;
+      } catch (e) {
+        rc.finishStreamJob(jobId, e.message);
+        rc.op("export", "export_moments", "fail", options?.username ?? "", e.message);
+        const canceled = /cancel|取消|abort/i.test(e.message);
+        rc.recordExport({
+          kind: "moments",
+          label: options?.username ? `\u670B\u53CB\u5708 \xB7 ${options.authorName ?? options.username}` : "\u670B\u53CB\u5708 \xB7 \u5168\u90E8",
+          format: options?.zip ? "zip" : options?.format ?? "txt",
+          path: "",
+          status: canceled ? "canceled" : "fail",
+          error: canceled ? "" : e.message,
+          params: options ?? {}
+        });
+        throw e;
+      }
+    },
+    exportCsv(options) {
+      const label = CSV_KIND_LABEL[options.kind] ?? options.kind;
+      try {
+        const r = exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category);
+        rc.op("export", "export_csv", "ok", options.kind, `\u5171 ${r.count} \u884C`);
+        rc.recordExport({
+          kind: options.kind,
+          label: options.category && options.category !== "all" ? `${label} \xB7 ${options.category}` : label,
+          format: "csv",
+          path: r.path,
+          rows: r.count,
+          status: "ok",
+          params: options
+        });
+        return r;
+      } catch (e) {
+        rc.op("export", "export_csv", "fail", options.kind, e.message);
+        rc.recordExport({
+          kind: options.kind,
+          label,
+          format: "csv",
+          path: "",
+          status: "fail",
+          error: e.message,
+          params: options
+        });
+        throw e;
+      }
+    },
+    getExportHistory(options) {
+      return listExportHistory(rc.dirs().decrypted, options ?? {});
+    },
+    deleteExportHistory(options) {
+      const ids = Array.isArray(options?.ids) ? options.ids : [];
+      const r = deleteExportHistory(rc.dirs().decrypted, ids, options?.deleteFiles === true);
+      rc.op(
+        "delete",
+        "delete_export_history",
+        r.removed > 0 ? "ok" : "skip",
+        String(r.removed),
+        `${r.removed} \u6761\u8BB0\u5F55${options?.deleteFiles ? `\uFF0C${r.filesDeleted} \u4E2A\u6587\u4EF6` : ""}`
+      );
+      return r;
+    },
+    pruneExportHistory(options) {
+      const r = pruneExportHistory(rc.dirs().decrypted, options ?? {});
+      rc.op(
+        "delete",
+        "prune_export_history",
+        r.removed > 0 ? "ok" : "skip",
+        String(r.removed),
+        `${r.removed} \u6761\u8BB0\u5F55${options?.deleteFiles ? `\uFF0C${r.filesDeleted} \u4E2A\u6587\u4EF6` : ""}`
+      );
+      return r;
+    }
+  };
+}
+
+// src/backend/wechat-data/src/gateway.ts
+import { openNativePath } from "@deepseek-ai/dsh-native-command";
+
+// src/backend/wechat-data/src/query/calls.ts
+import { createHash as createHash17 } from "node:crypto";
+import { DatabaseSync as DatabaseSync33 } from "node:sqlite";
+import { decompress as decompress6 } from "fzstd";
+import { join as join51 } from "node:path";
+var ZSTD_MAGIC6 = Buffer.from([40, 181, 47, 253]);
 var ANSWERED_ELSEWHERE = /已在其它设备接听/;
 function decodeContent(v) {
   let raw;
@@ -13630,9 +15590,9 @@ function decodeContent(v) {
     raw = /^\d+(,\d+)*$/.test(v.trim()) ? Buffer.from(v.split(",").map(Number)) : Buffer.from(v, "utf8");
   } else return "";
   if (raw.length === 0) return "";
-  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC5) ? (() => {
+  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC6) ? (() => {
     try {
-      return Buffer.from(decompress5(raw));
+      return Buffer.from(decompress6(raw));
     } catch {
       return raw;
     }
@@ -13665,7 +15625,7 @@ function parseDuration(text) {
 function md5Index(decryptedDir) {
   const names = contactMeta(decryptedDir).names;
   const map = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) map.set(createHash16("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) map.set(createHash17("md5").update(u, "utf8").digest("hex"), u);
   return map;
 }
 function scanCalls(decryptedDir, selfUsername) {
@@ -13677,7 +15637,7 @@ function scanCalls(decryptedDir, selfUsername) {
     if (tables.length === 0) continue;
     let db;
     try {
-      db = new DatabaseSync31(shard.file, { readOnly: true });
+      db = new DatabaseSync33(shard.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -13807,7 +15767,7 @@ function buildSnapshot(raw, names, topPeers, recentLimit) {
 }
 function queryCalls(decryptedDir, selfUsername, topPeers = 20, recentLimit = 50) {
   const self = selfUsername ?? "";
-  const sig = shardCatalogSig(decryptedDir, ["message"]) + "|" + self + "|" + fileSigOf(join48(decryptedDir, "contact", "contact.db"));
+  const sig = shardCatalogSig(decryptedDir, ["message"]) + "|" + self + "|" + fileSigOf(join51(decryptedDir, "contact", "contact.db"));
   const names = contactMeta(decryptedDir).names;
   return cachedBySig("calls:" + decryptedDir, sig, () => {
     const raw = scanCalls(decryptedDir, self);
@@ -13816,10 +15776,10 @@ function queryCalls(decryptedDir, selfUsername, topPeers = 20, recentLimit = 50)
 }
 
 // src/backend/wechat-data/src/query/graph.ts
-import { DatabaseSync as DatabaseSync32 } from "node:sqlite";
-import { createHash as createHash17 } from "node:crypto";
-import { existsSync as existsSync36 } from "node:fs";
-import { join as join49 } from "node:path";
+import { DatabaseSync as DatabaseSync34 } from "node:sqlite";
+import { createHash as createHash18 } from "node:crypto";
+import { existsSync as existsSync38 } from "node:fs";
+import { join as join52 } from "node:path";
 function cellString4(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
@@ -13856,14 +15816,14 @@ function remarkClassKey(remark) {
 function loadMessageCounts(decryptedDir, usernames) {
   const counts = /* @__PURE__ */ new Map();
   const tableToUser = /* @__PURE__ */ new Map();
-  for (const u of usernames) tableToUser.set("Msg_" + createHash17("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of usernames) tableToUser.set("Msg_" + createHash18("md5").update(u, "utf8").digest("hex"), u);
   for (const sh of shardCatalog(decryptedDir)) {
     for (const t of sh.tables.keys()) {
       const u = tableToUser.get(t);
       if (!u || counts.has(u)) continue;
       let db = null;
       try {
-        db = new DatabaseSync32(sh.file, { readOnly: true });
+        db = new DatabaseSync34(sh.file, { readOnly: true });
       } catch {
         continue;
       }
@@ -13879,10 +15839,10 @@ function loadMessageCounts(decryptedDir, usernames) {
 }
 function loadContactMeta(decryptedDir) {
   const meta = /* @__PURE__ */ new Map();
-  const p = join49(decryptedDir, "contact", "contact.db");
-  if (!existsSync36(p)) return meta;
+  const p = join52(decryptedDir, "contact", "contact.db");
+  if (!existsSync38(p)) return meta;
   try {
-    const db = new DatabaseSync32(p, { readOnly: true });
+    const db = new DatabaseSync34(p, { readOnly: true });
     const cols = tableColumns5(db, "contact");
     if (!cols.has("username")) {
       db.close();
@@ -13904,10 +15864,10 @@ function loadContactMeta(decryptedDir) {
 }
 function loadRoomData(decryptedDir) {
   const out = { memberGroups: /* @__PURE__ */ new Map(), roomMembers: /* @__PURE__ */ new Map(), roomCounts: /* @__PURE__ */ new Map() };
-  const p = join49(decryptedDir, "contact", "contact.db");
-  if (!existsSync36(p)) return out;
+  const p = join52(decryptedDir, "contact", "contact.db");
+  if (!existsSync38(p)) return out;
   try {
-    const db = new DatabaseSync32(p, { readOnly: true });
+    const db = new DatabaseSync34(p, { readOnly: true });
     const cols = tableColumns5(db, "contact");
     const cid = cols.has("id") ? "id" : "rowid";
     const idToUser = /* @__PURE__ */ new Map();
@@ -13979,11 +15939,11 @@ function loadRoomData(decryptedDir) {
 }
 function queryGraph(decryptedDir, selfUsername) {
   const nodes = [];
-  const sessionPath = join49(decryptedDir, "session", "session.db");
+  const sessionPath = join52(decryptedDir, "session", "session.db");
   const talkers = [];
-  if (existsSync36(sessionPath)) {
+  if (existsSync38(sessionPath)) {
     try {
-      const db = new DatabaseSync32(sessionPath, { readOnly: true });
+      const db = new DatabaseSync34(sessionPath, { readOnly: true });
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0;
       if (has) {
         const rows = db.prepare("SELECT username FROM SessionTable").all();
@@ -14099,12 +16059,12 @@ function queryGraph(decryptedDir, selfUsername) {
 }
 
 // src/backend/wechat-data/src/query/calendar.ts
-import { createHash as createHash18 } from "node:crypto";
-import { DatabaseSync as DatabaseSync33 } from "node:sqlite";
-import { existsSync as existsSync37, readdirSync as readdirSync19 } from "node:fs";
-import { join as join50 } from "node:path";
-function msgTableName6(username) {
-  return "Msg_" + createHash18("md5").update(username, "utf8").digest("hex");
+import { createHash as createHash19 } from "node:crypto";
+import { DatabaseSync as DatabaseSync35 } from "node:sqlite";
+import { existsSync as existsSync39, readdirSync as readdirSync20 } from "node:fs";
+import { join as join53 } from "node:path";
+function msgTableName7(username) {
+  return "Msg_" + createHash19("md5").update(username, "utf8").digest("hex");
 }
 function getDailyCounts(decryptedDir, username, year, month) {
   if (month < 1 || month > 12) throw new Error("\u65E0\u6548\u6708\u4EFD");
@@ -14113,16 +16073,16 @@ function getDailyCounts(decryptedDir, username, year, month) {
   const startTs = Math.floor(start.getTime() / 1e3);
   const endTs = Math.floor(end.getTime() / 1e3);
   const counts = {};
-  const msgDir = join50(decryptedDir, "message");
-  if (!existsSync37(msgDir)) return { counts, year, month };
-  const files = readdirSync19(msgDir).filter(
+  const msgDir = join53(decryptedDir, "message");
+  if (!existsSync39(msgDir)) return { counts, year, month };
+  const files = readdirSync20(msgDir).filter(
     (f) => f.endsWith(".db") && f.startsWith("message_") && !f.includes("fts") && !f.includes("resource") && !f.includes("media")
   ).sort();
-  const table = msgTableName6(username);
+  const table = msgTableName7(username);
   for (const f of files) {
     let db = null;
     try {
-      db = new DatabaseSync33(join50(msgDir, f), { readOnly: true });
+      db = new DatabaseSync35(join53(msgDir, f), { readOnly: true });
     } catch {
       continue;
     }
@@ -14147,9 +16107,9 @@ function getDailyCounts(decryptedDir, username, year, month) {
 }
 
 // src/backend/wechat-data/src/query/members.ts
-import { DatabaseSync as DatabaseSync34 } from "node:sqlite";
-import { existsSync as existsSync38 } from "node:fs";
-import { join as join51 } from "node:path";
+import { DatabaseSync as DatabaseSync36 } from "node:sqlite";
+import { existsSync as existsSync40 } from "node:fs";
+import { join as join54 } from "node:path";
 var CONTACT_FTS_META = "contact_rows";
 function cellText5(v) {
   if (v === null || v === void 0) return "";
@@ -14191,12 +16151,12 @@ function contactFtsReady(db) {
   return row !== void 0 && Number(row.value ?? 0) > 0;
 }
 function buildContactFts(db, decryptedDir) {
-  const contactPath = join51(decryptedDir, "contact", "contact.db");
-  if (!existsSync38(contactPath)) return "unavailable";
+  const contactPath = join54(decryptedDir, "contact", "contact.db");
+  if (!existsSync40(contactPath)) return "unavailable";
   let cdb = null;
   let rows;
   try {
-    cdb = new DatabaseSync34(contactPath, { readOnly: true });
+    cdb = new DatabaseSync36(contactPath, { readOnly: true });
     if (!tableExists(cdb, "contact")) return "unavailable";
     rows = cdb.prepare("SELECT username, remark, nick_name, alias, quan_pin FROM contact").all();
   } catch (e) {
@@ -14242,10 +16202,10 @@ function ensureContactFts(db, decryptedDir) {
 }
 function searchGlobalMembers(decryptedDir, term, cap) {
   const p = searchIndexPath(decryptedDir);
-  if (existsSync38(p)) {
+  if (existsSync40(p)) {
     let db = null;
     try {
-      db = new DatabaseSync34(p);
+      db = new DatabaseSync36(p);
       const state = ensureContactFts(db, decryptedDir);
       if (state === "busy") {
         console.warn("[members] \u641C\u7D22\u7D22\u5F15\u6784\u5EFA\u5728\u98DE\uFF0C\u672C\u6B21\u6210\u5458\u641C\u7D22\u663E\u5F0F\u8D70 LIKE\uFF08\u672A\u5C1D\u8BD5\u5199 contact_fts\uFF09");
@@ -14256,10 +16216,10 @@ function searchGlobalMembers(decryptedDir, term, cap) {
         const rows = db.prepare("SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?").all(escaped, cap * 4);
         if (rows.length > 0) {
           const items = [];
-          const cdbPath = join51(decryptedDir, "contact", "contact.db");
+          const cdbPath = join54(decryptedDir, "contact", "contact.db");
           let cdb = null;
           try {
-            cdb = new DatabaseSync34(cdbPath, { readOnly: true });
+            cdb = new DatabaseSync36(cdbPath, { readOnly: true });
           } catch {
             cdb = null;
           }
@@ -14300,10 +16260,10 @@ function searchGlobalMembers(decryptedDir, term, cap) {
   return searchGlobalLike(decryptedDir, term, cap);
 }
 function searchGlobalLike(decryptedDir, term, cap) {
-  const p = join51(decryptedDir, "contact", "contact.db");
-  if (!existsSync38(p)) return { items: [], total: 0, source: "like" };
+  const p = join54(decryptedDir, "contact", "contact.db");
+  if (!existsSync40(p)) return { items: [], total: 0, source: "like" };
   try {
-    const db = new DatabaseSync34(p, { readOnly: true });
+    const db = new DatabaseSync36(p, { readOnly: true });
     try {
       if (!tableExists(db, "contact")) return { items: [], total: 0, source: "like" };
       const like2 = "%" + term + "%";
@@ -14318,10 +16278,10 @@ function searchGlobalLike(decryptedDir, term, cap) {
   }
 }
 function searchRoomMembers(decryptedDir, roomUsername, term, cap) {
-  const p = join51(decryptedDir, "contact", "contact.db");
-  if (!existsSync38(p)) return { items: [], total: 0, source: "like" };
+  const p = join54(decryptedDir, "contact", "contact.db");
+  if (!existsSync40(p)) return { items: [], total: 0, source: "like" };
   try {
-    const db = new DatabaseSync34(p, { readOnly: true });
+    const db = new DatabaseSync36(p, { readOnly: true });
     try {
       if (!tableExists(db, "chat_room") || !tableExists(db, "chatroom_member") || !tableExists(db, "contact")) {
         return { items: [], total: 0, source: "like" };
@@ -14351,9 +16311,9 @@ function searchMembers(decryptedDir, q, opts) {
 
 // src/backend/wechat-data/src/query/article-cover.ts
 var import_llm_retry4 = __toESM(require_llm_retry(), 1);
-import { createHash as createHash19 } from "node:crypto";
-import { existsSync as existsSync39, mkdirSync as mkdirSync13, readFileSync as readFileSync22, writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join52 } from "node:path";
+import { createHash as createHash20 } from "node:crypto";
+import { existsSync as existsSync41, mkdirSync as mkdirSync15, readFileSync as readFileSync22, writeFileSync as writeFileSync13 } from "node:fs";
+import { join as join55 } from "node:path";
 var coverCache2 = /* @__PURE__ */ new Map();
 var coverFailUntil = /* @__PURE__ */ new Map();
 var FAIL_TTL_MS = 6e4;
@@ -14386,8 +16346,8 @@ function articleCoverUrl(html) {
 }
 function coverFile(cacheDir, key) {
   if (!cacheDir) return null;
-  const hash = createHash19("md5").update(Buffer.from(key, "utf8")).digest("hex");
-  return join52(cacheDir, "article-covers", hash + ".img");
+  const hash = createHash20("md5").update(Buffer.from(key, "utf8")).digest("hex");
+  return join55(cacheDir, "article-covers", hash + ".img");
 }
 async function resolveArticleCoverDataUrl(contentUrl, cacheDir, opts = {}) {
   const key = (contentUrl || "").trim();
@@ -14398,7 +16358,7 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir, opts = {}) {
   }
   if ((coverFailUntil.get(key) ?? 0) > Date.now()) return { error: "\u6587\u7AE0\u6216\u5C01\u9762\u83B7\u53D6\u5931\u8D25" };
   const file = coverFile(cacheDir, key);
-  if (file && existsSync39(file)) {
+  if (file && existsSync41(file)) {
     try {
       const bytes = readFileSync22(file);
       if (bytes.length >= 16) {
@@ -14425,8 +16385,8 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir, opts = {}) {
     const data = "data:image/" + fmt + ";base64," + Buffer.from(bytes).toString("base64");
     if (file) {
       try {
-        mkdirSync13(join52(cacheDir ?? "", "article-covers"), { recursive: true });
-        writeFileSync11(file, Buffer.from(bytes));
+        mkdirSync15(join55(cacheDir ?? "", "article-covers"), { recursive: true });
+        writeFileSync13(file, Buffer.from(bytes));
       } catch {
       }
     }
@@ -14439,17 +16399,17 @@ async function resolveArticleCoverDataUrl(contentUrl, cacheDir, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/overview-insights.ts
-import { DatabaseSync as DatabaseSync36 } from "node:sqlite";
-import { createHash as createHash21 } from "node:crypto";
-import { existsSync as existsSync41, readdirSync as readdirSync21, statSync as statSync20 } from "node:fs";
-import { join as join54 } from "node:path";
+import { DatabaseSync as DatabaseSync38 } from "node:sqlite";
+import { createHash as createHash22 } from "node:crypto";
+import { existsSync as existsSync43, readdirSync as readdirSync22, statSync as statSync21 } from "node:fs";
+import { join as join57 } from "node:path";
 
 // src/backend/wechat-data/src/query/overview-extras.ts
-import { DatabaseSync as DatabaseSync35 } from "node:sqlite";
-import { createHash as createHash20 } from "node:crypto";
-import { existsSync as existsSync40, readdirSync as readdirSync20, statSync as statSync19 } from "node:fs";
-import { join as join53 } from "node:path";
-function cellStr10(v) {
+import { DatabaseSync as DatabaseSync37 } from "node:sqlite";
+import { createHash as createHash21 } from "node:crypto";
+import { existsSync as existsSync42, readdirSync as readdirSync21, statSync as statSync20 } from "node:fs";
+import { join as join56 } from "node:path";
+function cellStr11(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
@@ -14460,15 +16420,15 @@ function dayKey(sec) {
   return new Date(sec * 1e3).toISOString().slice(0, 10);
 }
 function walkDb(dir, depth, out) {
-  if (depth > 4 || !existsSync40(dir)) return;
-  for (const e of readdirSync20(dir, { withFileTypes: true })) {
-    const p = join53(dir, e.name);
+  if (depth > 4 || !existsSync42(dir)) return;
+  for (const e of readdirSync21(dir, { withFileTypes: true })) {
+    const p = join56(dir, e.name);
     if (e.isDirectory()) {
       walkDb(p, depth + 1, out);
     } else if (e.name.endsWith(".db") && !e.name.includes("-wal") && !e.name.includes("-shm")) {
       try {
         out.files += 1;
-        out.bytes += statSync19(p).size;
+        out.bytes += statSync20(p).size;
       } catch {
       }
     } else if (e.name.endsWith("-wal") || e.name.endsWith(".db-wal")) {
@@ -14480,11 +16440,11 @@ function queryOverviewExtras(decryptedDir) {
   const dec = decryptedDir;
   const sig = [
     shardCatalogSig(dec, ["message", "bizchat"]),
-    fileSigOf(join53(dec, "message", "message_resource.db")),
+    fileSigOf(join56(dec, "message", "message_resource.db")),
     // loader 真正读了却没进签名的三处（原先靠「事件后整表清空」兜住，M8 去掉那层兜底后补齐）：
     // contact.db、session.db，以及整树 `walkDb` —— 后者没法用文件签名表达，用数据世代签名。
-    fileSigOf(join53(dec, "contact", "contact.db")),
-    fileSigOf(join53(dec, "session", "session.db")),
+    fileSigOf(join56(dec, "contact", "contact.db")),
+    fileSigOf(join56(dec, "session", "session.db")),
     dataGenerationSig()
   ].join("|");
   return cachedBySig("overview-extras:" + dec, sig, () => computeOverviewExtras(dec), 3e4);
@@ -14498,15 +16458,15 @@ function computeOverviewExtras(dec) {
   const day90 = now - 90 * 86400;
   const names = contactMeta(dec).names;
   const md5ToUser = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) md5ToUser.set(createHash20("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) md5ToUser.set(createHash21("md5").update(u, "utf8").digest("hex"), u);
   try {
-    const sp = join53(dec, "session", "session.db");
-    if (existsSync40(sp)) {
-      const db = new DatabaseSync35(sp, { readOnly: true });
+    const sp = join56(dec, "session", "session.db");
+    if (existsSync42(sp)) {
+      const db = new DatabaseSync37(sp, { readOnly: true });
       if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0) {
         for (const r of db.prepare("SELECT username FROM SessionTable").all()) {
-          const u = cellStr10(r["username"]);
-          if (u) md5ToUser.set(createHash20("md5").update(u, "utf8").digest("hex"), u);
+          const u = cellStr11(r["username"]);
+          if (u) md5ToUser.set(createHash21("md5").update(u, "utf8").digest("hex"), u);
         }
       }
       db.close();
@@ -14526,7 +16486,7 @@ function computeOverviewExtras(dec) {
   let lastSync = 0;
   for (const sh of shardCatalogDirs(dec, ["message", "bizchat"])) {
     try {
-      const db = new DatabaseSync35(sh.file, { readOnly: true });
+      const db = new DatabaseSync37(sh.file, { readOnly: true });
       try {
         for (const [table, meta] of sh.tables) {
           if (!meta.cols.has("create_time")) continue;
@@ -14568,10 +16528,10 @@ function computeOverviewExtras(dec) {
     heatmap.push({ d, count: dayCounts.get(d) ?? 0 });
   }
   let storageBytes30 = 0;
-  const rp = join53(dec, "message", "message_resource.db");
-  if (existsSync40(rp)) {
+  const rp = join56(dec, "message", "message_resource.db");
+  if (existsSync42(rp)) {
     try {
-      const db = new DatabaseSync35(rp, { readOnly: true });
+      const db = new DatabaseSync37(rp, { readOnly: true });
       if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0) {
         const cols = new Set(db.prepare("PRAGMA table_info(MessageResourceDetail)").all().map((r) => r.name));
         if (cols.has("create_time")) {
@@ -14610,7 +16570,7 @@ function computeOverviewExtras(dec) {
 }
 
 // src/backend/wechat-data/src/query/overview-insights.ts
-function cellStr11(v) {
+function cellStr12(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
@@ -14618,14 +16578,14 @@ function cellStr11(v) {
   return "";
 }
 function walkDbFiles(dir, out, depth) {
-  if (depth > 4 || !existsSync41(dir)) return;
-  for (const e of readdirSync21(dir, { withFileTypes: true })) {
-    const p = join54(dir, e.name);
+  if (depth > 4 || !existsSync43(dir)) return;
+  for (const e of readdirSync22(dir, { withFileTypes: true })) {
+    const p = join57(dir, e.name);
     if (e.isDirectory()) {
       walkDbFiles(p, out, depth + 1);
     } else if (e.name.endsWith(".db") && !e.name.includes("-wal") && !e.name.includes("-shm")) {
       try {
-        out.push({ path: p, bytes: statSync20(p).size });
+        out.push({ path: p, bytes: statSync21(p).size });
       } catch {
       }
     }
@@ -14645,16 +16605,16 @@ function typeBucket(t) {
 function queryOverviewInsights(decryptedDir, selfUsername) {
   const dec = decryptedDir;
   const self = (selfUsername ?? "").trim();
-  const sns = existsSync41(join54(dec, "sns", "db_sns", "sns.db")) ? join54(dec, "sns", "db_sns", "sns.db") : join54(dec, "sns", "sns.db");
+  const sns = existsSync43(join57(dec, "sns", "db_sns", "sns.db")) ? join57(dec, "sns", "db_sns", "sns.db") : join57(dec, "sns", "sns.db");
   const sig = [
     shardCatalogSig(dec, ["message", "bizchat"]),
-    fileSigOf(join54(dec, "contact", "contact.db")),
-    fileSigOf(join54(dec, "session", "session.db")),
+    fileSigOf(join57(dec, "contact", "contact.db")),
+    fileSigOf(join57(dec, "session", "session.db")),
     fileSigOf(sns),
-    fileSigOf(join54(dec, "favorite", "favorite.db")),
-    fileSigOf(join54(dec, "emoticon", "emoticon.db")),
-    fileSigOf(join54(dec, "hardlink", "hardlink.db")),
-    fileSigOf(join54(dec, "message", "message_resource.db"))
+    fileSigOf(join57(dec, "favorite", "favorite.db")),
+    fileSigOf(join57(dec, "emoticon", "emoticon.db")),
+    fileSigOf(join57(dec, "hardlink", "hardlink.db")),
+    fileSigOf(join57(dec, "message", "message_resource.db"))
   ].join("|");
   return cachedBySig("overview-insights:" + dec + ":" + self, sig, () => computeOverviewInsights(decryptedDir, self));
 }
@@ -14662,17 +16622,17 @@ function computeOverviewInsights(decryptedDir, self = "") {
   const dec = decryptedDir;
   const names = contactMeta(dec).names;
   const md5ToUser = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) md5ToUser.set(createHash21("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) md5ToUser.set(createHash22("md5").update(u, "utf8").digest("hex"), u);
   try {
-    const sp = join54(dec, "session", "session.db");
-    if (existsSync41(sp)) {
-      const db = new DatabaseSync36(sp, { readOnly: true });
+    const sp = join57(dec, "session", "session.db");
+    if (existsSync43(sp)) {
+      const db = new DatabaseSync38(sp, { readOnly: true });
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0;
       if (has) {
         const rows = db.prepare("SELECT username FROM SessionTable").all();
         for (const r of rows) {
-          const u = cellStr11(r["username"]);
-          if (u) md5ToUser.set(createHash21("md5").update(u, "utf8").digest("hex"), u);
+          const u = cellStr12(r["username"]);
+          if (u) md5ToUser.set(createHash22("md5").update(u, "utf8").digest("hex"), u);
         }
       }
       db.close();
@@ -14689,7 +16649,7 @@ function computeOverviewInsights(decryptedDir, self = "") {
   let lastActive = 0;
   for (const sh of shardCatalogDirs(dec, ["message", "bizchat"])) {
     try {
-      const db = new DatabaseSync36(sh.file, { readOnly: true });
+      const db = new DatabaseSync38(sh.file, { readOnly: true });
       try {
         let selfRowId;
         if (self) {
@@ -14750,17 +16710,17 @@ function computeOverviewInsights(decryptedDir, self = "") {
   }
   const totalSafe = Math.max(1, total.n);
   const contactRows = [];
-  const cp = join54(dec, "contact", "contact.db");
-  if (existsSync41(cp)) {
+  const cp = join57(dec, "contact", "contact.db");
+  if (existsSync43(cp)) {
     try {
-      const db = new DatabaseSync36(cp, { readOnly: true });
+      const db = new DatabaseSync38(cp, { readOnly: true });
       const cols = new Set(db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name));
       if (cols.has("username")) {
         const lt = cols.has("local_type") ? "local_type" : "0";
         const df = cols.has("delete_flag") ? "delete_flag" : "0";
         const rows = db.prepare(`SELECT username, ${lt} AS lt, ${df} AS df FROM contact WHERE (${df} = 0 OR ${df} IS NULL)`).all();
         for (const r of rows) {
-          const u = cellStr11(r["username"]);
+          const u = cellStr12(r["username"]);
           if (!u) continue;
           if (u.startsWith("@")) continue;
           contactRows.push({ username: u, isGroup: u.includes("@chatroom"), isGh: u.startsWith("gh_") });
@@ -14782,14 +16742,14 @@ function computeOverviewInsights(decryptedDir, self = "") {
     return { username: u, name, count };
   });
   const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 };
-  const sp2 = existsSync41(join54(dec, "sns", "db_sns", "sns.db")) ? join54(dec, "sns", "db_sns", "sns.db") : join54(dec, "sns", "sns.db");
-  if (existsSync41(sp2)) {
+  const sp2 = existsSync43(join57(dec, "sns", "db_sns", "sns.db")) ? join57(dec, "sns", "db_sns", "sns.db") : join57(dec, "sns", "sns.db");
+  if (existsSync43(sp2)) {
     try {
-      const db = new DatabaseSync36(sp2, { readOnly: true });
+      const db = new DatabaseSync38(sp2, { readOnly: true });
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
       if (has) {
         for (const r of db.prepare("SELECT content AS c FROM SnsTimeLine").iterate()) {
-          const xml = cellStr11(r.c);
+          const xml = cellStr12(r.c);
           moments.total += 1;
           moments.images += xml.split("<media>").length - 1 + xml.split("<media ").length - 1;
           if (xml.includes("<type>6</type>") || xml.includes("<type>4</type>") || xml.includes("<type>15</type>")) moments.videos += 1;
@@ -14808,13 +16768,13 @@ function computeOverviewInsights(decryptedDir, self = "") {
     }
   }
   const assets = { favorites: 0, emoticons: 0, files: 0, fileBytes: 0, mediaItems: 0, mediaBytes: 0 };
-  assets.favorites = countRows2(join54(dec, "favorite", "favorite.db"), "fav_db_item");
-  assets.emoticons = countRows2(join54(dec, "emoticon", "emoticon.db"), "kNonStoreEmoticonTable");
+  assets.favorites = countRows2(join57(dec, "favorite", "favorite.db"), "fav_db_item");
+  assets.emoticons = countRows2(join57(dec, "emoticon", "emoticon.db"), "kNonStoreEmoticonTable");
   for (const table of ["image_hardlink_info_v4", "file_hardlink_info_v4", "video_hardlink_info_v4"]) {
-    const hp = join54(dec, "hardlink", "hardlink.db");
-    if (!existsSync41(hp)) break;
+    const hp = join57(dec, "hardlink", "hardlink.db");
+    if (!existsSync43(hp)) break;
     try {
-      const db = new DatabaseSync36(hp, { readOnly: true });
+      const db = new DatabaseSync38(hp, { readOnly: true });
       const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== void 0;
       if (has) {
         const c = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM ${table}`).get();
@@ -14825,10 +16785,10 @@ function computeOverviewInsights(decryptedDir, self = "") {
     } catch {
     }
   }
-  const rp = join54(dec, "message", "message_resource.db");
-  if (existsSync41(rp)) {
+  const rp = join57(dec, "message", "message_resource.db");
+  if (existsSync43(rp)) {
     try {
-      const db = new DatabaseSync36(rp, { readOnly: true });
+      const db = new DatabaseSync38(rp, { readOnly: true });
       if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0) {
         const c = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS s FROM MessageResourceDetail").get();
         assets.mediaItems = c.n;
@@ -14878,9 +16838,9 @@ function computeOverviewInsights(decryptedDir, self = "") {
   };
 }
 function countRows2(path, table) {
-  if (!existsSync41(path)) return 0;
+  if (!existsSync43(path)) return 0;
   try {
-    const db = new DatabaseSync36(path, { readOnly: true });
+    const db = new DatabaseSync38(path, { readOnly: true });
     const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== void 0;
     if (!has) {
       db.close();
@@ -14895,8 +16855,8 @@ function countRows2(path, table) {
 }
 
 // src/backend/wechat-data/src/query/status.ts
-import { existsSync as existsSync42, readdirSync as readdirSync22 } from "node:fs";
-import { join as join55 } from "node:path";
+import { existsSync as existsSync44, readdirSync as readdirSync23 } from "node:fs";
+import { join as join58 } from "node:path";
 var LABEL_MAP = [
   ["session", "\u4F1A\u8BDD(session)"],
   ["message", "\u6D88\u606F(message)"],
@@ -14913,15 +16873,15 @@ var LABEL_MAP = [
 ];
 var EXCLUDED = ["monitor_cache", "exports"];
 function hasDbFile(dir, depth = 0) {
-  if (depth > 5 || !existsSync42(dir)) return false;
+  if (depth > 5 || !existsSync44(dir)) return false;
   let entries2 = [];
   try {
-    entries2 = readdirSync22(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+    entries2 = readdirSync23(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
   } catch {
     return false;
   }
   for (const e of entries2) {
-    const p = join55(dir, e.name);
+    const p = join58(dir, e.name);
     if (e.isDir) {
       if (hasDbFile(p, depth + 1)) return true;
     } else if (e.name.endsWith(".db")) return true;
@@ -14934,20 +16894,20 @@ function getDbStatus(decryptedDir) {
 }
 function computeDbStatus(decryptedDir) {
   const lines = [];
-  if (!existsSync42(decryptedDir)) {
+  if (!existsSync44(decryptedDir)) {
     lines.push("\u26A0\uFE0F \u89E3\u5BC6\u76EE\u5F55\u4E0D\u5B58\u5728");
     return { lines, path: decryptedDir };
   }
   let dirs = [];
   try {
-    dirs = readdirSync22(decryptedDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ name: e.name })).sort((a, b) => a.name.localeCompare(b.name));
+    dirs = readdirSync23(decryptedDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ name: e.name })).sort((a, b) => a.name.localeCompare(b.name));
   } catch (e) {
     lines.push("\u26A0\uFE0F \u8BFB\u53D6\u76EE\u5F55\u5931\u8D25: " + e.message);
     return { lines, path: decryptedDir };
   }
   for (const d of dirs) {
     if (EXCLUDED.includes(d.name) || d.name.startsWith(".")) continue;
-    const ok = hasDbFile(join55(decryptedDir, d.name));
+    const ok = hasDbFile(join58(decryptedDir, d.name));
     const label = LABEL_MAP.find(([k]) => k === d.name)?.[1] ?? d.name;
     lines.push(ok ? label + ": \u2705 \u53EF\u7528" : label + ": \u26A0\uFE0F \u7A7A\u76EE\u5F55");
   }
@@ -14957,11 +16917,11 @@ function computeDbStatus(decryptedDir) {
 
 // src/backend/wechat-data/src/keys/service.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync43, readdirSync as readdirSync23 } from "node:fs";
-import { basename as basename7, dirname as dirname19, join as join56 } from "node:path";
+import { existsSync as existsSync45, readdirSync as readdirSync24 } from "node:fs";
+import { basename as basename9, dirname as dirname21, join as join59 } from "node:path";
 
 // src/backend/wechat-data/src/keys/dll-key-scan.ts
-import { readFileSync as readFileSync23, statSync as statSync21 } from "node:fs";
+import { readFileSync as readFileSync23, statSync as statSync22 } from "node:fs";
 var MOV_RDX = Buffer.from([72, 186]);
 var TEST_RAX_RAX = Buffer.from([72, 133, 192]);
 var CODE_SECTION_CHARACTERISTIC = 536870912;
@@ -15002,7 +16962,7 @@ function scanChunk(buf, chunkSize) {
   return out;
 }
 function extractXorKeysFromDll(dllPath) {
-  const stat = statSync21(dllPath);
+  const stat = statSync22(dllPath);
   if (stat.size < 1024) return [];
   const file = readFileSync23(dllPath);
   const peOffset = file.readUInt32LE(60);
@@ -15356,7 +17316,7 @@ function defaultWeixinDllCandidates() {
     "C:/Program Files (x86)/Tencent/Weixin/Weixin.dll"
   ];
   const userProfile = process.env.USERPROFILE;
-  if (userProfile) out.push(join56(userProfile, "AppData", "Roaming", "Tencent", "Weixin", "Weixin.dll"));
+  if (userProfile) out.push(join59(userProfile, "AppData", "Roaming", "Tencent", "Weixin", "Weixin.dll"));
   return out;
 }
 function findWechatPid() {
@@ -15376,19 +17336,19 @@ function findWechatPid() {
 function scanDllInternalKey(wechatInstallDir) {
   const candidates = [];
   if (wechatInstallDir) {
-    candidates.push(join56(wechatInstallDir, "Weixin.dll"));
+    candidates.push(join59(wechatInstallDir, "Weixin.dll"));
     try {
-      for (const entry of readdirSync23(wechatInstallDir, { withFileTypes: true })) {
-        if (entry.isDirectory() && /^\d+\.\d+\.\d+/.test(entry.name)) candidates.push(join56(wechatInstallDir, entry.name, "Weixin.dll"));
+      for (const entry of readdirSync24(wechatInstallDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^\d+\.\d+\.\d+/.test(entry.name)) candidates.push(join59(wechatInstallDir, entry.name, "Weixin.dll"));
       }
     } catch {
     }
   }
   const base = process.env.DSH_WECHAT_BASE_DIR;
-  if (base) candidates.push(join56(base, "Weixin.dll"));
+  if (base) candidates.push(join59(base, "Weixin.dll"));
   candidates.push(...defaultWeixinDllCandidates());
   for (const p of candidates) {
-    if (!existsSync43(p)) continue;
+    if (!existsSync45(p)) continue;
     try {
       const hits = extractXorKeysFromDll(p);
       const first = hits[0];
@@ -15399,16 +17359,16 @@ function scanDllInternalKey(wechatInstallDir) {
   return null;
 }
 function pickProbeDb(decrypted, explicit) {
-  if (explicit && existsSync43(explicit)) return explicit;
+  if (explicit && existsSync45(explicit)) return explicit;
   const names = ["msg0.db", "msg.db", "micromsg.db", "favorite.db", "mediamsg0.db", "msg0.db"];
   for (const name of names) {
-    const p = join56(decrypted, name);
-    if (existsSync43(p)) return p;
+    const p = join59(decrypted, name);
+    if (existsSync45(p)) return p;
   }
-  const msgDir = join56(decrypted, "message");
-  if (existsSync43(msgDir)) {
-    for (const f of readdirSync23(msgDir)) {
-      if (f.endsWith(".db") && !f.includes("-wal") && !f.includes("-shm")) return join56(msgDir, f);
+  const msgDir = join59(decrypted, "message");
+  if (existsSync45(msgDir)) {
+    for (const f of readdirSync24(msgDir)) {
+      if (f.endsWith(".db") && !f.includes("-wal") && !f.includes("-shm")) return join59(msgDir, f);
     }
   }
   return null;
@@ -15423,7 +17383,7 @@ async function fetchDbKey(opts = {}) {
   if (result.ok && result.key) {
     upsertAccountKeysInStore("default", {
       db_key: result.key,
-      db_key_source_db_storage_path: dirname19(probe)
+      db_key_source_db_storage_path: dirname21(probe)
     });
   }
   return result;
@@ -15431,23 +17391,23 @@ async function fetchDbKey(opts = {}) {
 function normalizeAccountDir(accountDir) {
   const dir = (accountDir || "").replace(/[\\/]+$/, "");
   if (!dir) return "";
-  return (dir.split(/[\\/]/).pop() ?? "").toLowerCase() === "db_storage" ? dirname19(dir) : dir;
+  return (dir.split(/[\\/]/).pop() ?? "").toLowerCase() === "db_storage" ? dirname21(dir) : dir;
 }
 function kvcommCacheDir() {
   const appData = process.env.APPDATA;
-  return appData ? join56(appData, "Tencent", "xwechat", "net", "kvcomm") : "";
+  return appData ? join59(appData, "Tencent", "xwechat", "net", "kvcomm") : "";
 }
 async function fetchImageKey(opts = {}) {
   const pid = opts.pid ?? findWechatPid();
   if (pid === null || pid <= 0) return { ok: false, error: "\u672A\u68C0\u6D4B\u5230\u8FD0\u884C\u4E2D\u7684\u5FAE\u4FE1\u8FDB\u7A0B" };
   const accountDir = normalizeAccountDir(opts.accountDir ?? "");
-  if (!accountDir || !existsSync43(accountDir)) {
+  if (!accountDir || !existsSync45(accountDir)) {
     return { ok: false, error: "\u672A\u63D0\u4F9B\u6709\u6548\u8D26\u53F7\u6570\u636E\u76EE\u5F55\uFF08wxid_* \u6587\u4EF6\u5939\uFF09" };
   }
   const kvDir = kvcommCacheDir();
-  if (existsSync43(kvDir)) {
+  if (existsSync45(kvDir)) {
     const localWxids = detectWechatAccounts().map((a) => a.wxid);
-    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename7(accountDir), localNativeWxids: localWxids });
+    const resolution = resolveLocalImageKey({ kvcommDir: kvDir, accountDir, account: basename9(accountDir), localNativeWxids: localWxids });
     if (resolution !== null) {
       const result2 = {
         ok: true,
@@ -15490,7 +17450,7 @@ async function fetchImageKey(opts = {}) {
     image_key_source: "memory_v2",
     // 内存扫描出来的密钥不是「由 wxid 派生」的，但它同样属于这个账号目录 —— 记下来源目录名，
     // 解码侧才能判断「这把钥匙是不是当前账号的」（见 query/image-key.ts 的归属校验）。
-    image_key_source_wxid_dir: basename7(accountDir)
+    image_key_source_wxid_dir: basename9(accountDir)
   });
   return result;
 }
@@ -15499,14 +17459,14 @@ async function fetchImageKey(opts = {}) {
 import { pbkdf2Sync as pbkdf2Sync3 } from "node:crypto";
 import {
   closeSync as closeSync4,
-  existsSync as existsSync44,
-  mkdirSync as mkdirSync14,
+  existsSync as existsSync46,
+  mkdirSync as mkdirSync16,
   openSync as openSync4,
   readSync as readSync4,
-  renameSync as renameSync3,
+  renameSync as renameSync5,
   unlinkSync as unlinkSync3
 } from "node:fs";
-import { dirname as dirname20, join as join57, relative as relative2 } from "node:path";
+import { dirname as dirname22, join as join60, relative as relative2 } from "node:path";
 var PBKDF2_ITERS3 = 256e3;
 var SQLITE_HDR3 = Buffer.from("SQLite format 3\0");
 function readPrefix2(file, n) {
@@ -15526,8 +17486,8 @@ function readPrefix2(file, n) {
 }
 function rawKeyHexFor(decryptedDir, rel, fallbackHex) {
   try {
-    const keysPath = join57(decryptedDir, "..", "all_keys.json");
-    if (existsSync44(keysPath)) {
+    const keysPath = join60(decryptedDir, "..", "all_keys.json");
+    if (existsSync46(keysPath)) {
       const raw = JSON.parse(readPrefix2(keysPath, 1024 * 1024).toString("utf8"));
       const entry = raw[rel.replace(/\\/g, "/")];
       if (typeof entry?.["key"] === "string" && entry["key"].length === 64) return entry["key"];
@@ -15541,7 +17501,7 @@ function deriveEncKey2(rawKey, salt, keyFormat) {
   return rawKey;
 }
 async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
-  if (!rawDbDir || !existsSync44(rawDbDir)) {
+  if (!rawDbDir || !existsSync46(rawDbDir)) {
     return {
       ok: false,
       total: 0,
@@ -15566,10 +17526,10 @@ async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
   let done = 0;
   for (const db of dbs) {
     const rel = relative2(rawDbDir, db).replace(/\\/g, "/");
-    const target = join57(decryptedDir, rel);
+    const target = join60(decryptedDir, rel);
     const staged = target + ".decrypt_tmp";
     try {
-      mkdirSync14(dirname20(target), { recursive: true });
+      mkdirSync16(dirname22(target), { recursive: true });
       const salt = readPrefix2(db, 16);
       if (salt.length < 16) throw new Error("\u6587\u4EF6\u8FC7\u5C0F");
       const keyHex = rawKeyHexFor(decryptedDir, rel, rawKeyHex);
@@ -15582,7 +17542,7 @@ async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
         unlinkSync3(target);
       } catch {
       }
-      renameSync3(staged, target);
+      renameSync5(staged, target);
       okCount += 1;
     } catch (e) {
       try {
@@ -15602,8 +17562,8 @@ async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
 
 // src/backend/wechat-data/src/query/decrypt-images.ts
 import { promises as fs } from "node:fs";
-import { existsSync as existsSync45, readdirSync as readdirSync24 } from "node:fs";
-import { join as join58 } from "node:path";
+import { existsSync as existsSync47, readdirSync as readdirSync25 } from "node:fs";
+import { join as join61 } from "node:path";
 var MD5_PREFIX_RE = /^([0-9a-f]{32})/i;
 var WRITE_EXTS = /* @__PURE__ */ new Set(["jpg", "png", "gif", "webp"]);
 function scoreDatPath2(p) {
@@ -15612,22 +17572,22 @@ function scoreDatPath2(p) {
   return 0;
 }
 function walkDataDats(dir, out, depth) {
-  if (depth > 10 || !existsSync45(dir)) return;
+  if (depth > 10 || !existsSync47(dir)) return;
   let entries2;
   try {
-    entries2 = readdirSync24(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+    entries2 = readdirSync25(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
   } catch {
     return;
   }
   for (const e of entries2) {
-    const p = join58(dir, e.name);
+    const p = join61(dir, e.name);
     if (e.isDir) walkDataDats(p, out, depth + 1);
     else if (e.name.toLowerCase().endsWith(".dat") && MD5_PREFIX_RE.test(e.name)) out.push(p);
   }
 }
 async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurrency = 8, onProgress) {
   const files = [];
-  walkDataDats(join58(rawRoot, "msg", "attach"), files, 0);
+  walkDataDats(join61(rawRoot, "msg", "attach"), files, 0);
   files.sort((a, b) => scoreDatPath2(a) - scoreDatPath2(b));
   const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null;
   let okCount = 0;
@@ -15648,7 +17608,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
       const md5 = (MD5_PREFIX_RE.exec(name)?.[1] ?? "").toLowerCase();
       try {
         for (const ext2 of WRITE_EXTS) {
-          if (existsSync45(join58(decodedDir, md5 + "." + ext2))) {
+          if (existsSync47(join61(decodedDir, md5 + "." + ext2))) {
             skipped += 1;
             skippedDetails.push({ file: name, reason: `\u5DF2\u5B58\u5728\u89E3\u7801\u7F13\u5B58\uFF08${md5}.${ext2}\uFF09\uFF0C\u65E0\u9700\u91CD\u590D\u89E3\u7801` });
             continue;
@@ -15673,7 +17633,7 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
           continue;
         }
         await fs.mkdir(decodedDir, { recursive: true });
-        await fs.writeFile(join58(decodedDir, md5 + "." + ext), Buffer.from(dec.bytes));
+        await fs.writeFile(join61(decodedDir, md5 + "." + ext), Buffer.from(dec.bytes));
         okCount += 1;
       } catch (e) {
         failed += 1;
@@ -15698,17 +17658,17 @@ import { createRequire as createRequire2 } from "node:module";
 import {
   copyFileSync,
   cpSync as cpSync2,
-  createWriteStream,
-  existsSync as existsSync46,
+  createWriteStream as createWriteStream2,
+  existsSync as existsSync48,
   linkSync,
-  mkdirSync as mkdirSync15,
-  readdirSync as readdirSync25,
-  renameSync as renameSync4,
-  rmSync as rmSync5,
-  statSync as statSync22,
+  mkdirSync as mkdirSync17,
+  readdirSync as readdirSync26,
+  renameSync as renameSync6,
+  rmSync as rmSync8,
+  statSync as statSync23,
   unlinkSync as unlinkSync4
 } from "node:fs";
-import { dirname as dirname21, join as join59, resolve as resolve2 } from "node:path";
+import { dirname as dirname23, join as join62, resolve as resolve2 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var WHISPER_MODELS = [
   { id: "tiny", name: "Tiny", sizeLabel: "\u7EA6 75 MB \xB7 \u6700\u5FEB" },
@@ -15741,7 +17701,7 @@ var DOWNLOAD_MAX_ATTEMPTS = 2;
 async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
   let have = 0;
   try {
-    have = statSync22(dest).size;
+    have = statSync23(dest).size;
   } catch {
     have = 0;
   }
@@ -15775,7 +17735,7 @@ async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
   const rest = Number(res.headers.get("content-length") ?? 0);
   const total = rest > 0 ? append ? have + rest : rest : 0;
   let received = append ? have : 0;
-  const stream = createWriteStream(dest, { flags: append ? "a" : "w" });
+  const stream = createWriteStream2(dest, { flags: append ? "a" : "w" });
   let settled = false;
   try {
     const reader = res.body.getReader();
@@ -15809,7 +17769,7 @@ async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
   }
   const size = (() => {
     try {
-      return statSync22(dest).size;
+      return statSync23(dest).size;
     } catch {
       return -1;
     }
@@ -15819,25 +17779,25 @@ async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
 }
 function moveItem(src, dest) {
   try {
-    if (existsSync46(dest)) {
-      if (!statSync22(src).isDirectory()) return 0;
+    if (existsSync48(dest)) {
+      if (!statSync23(src).isDirectory()) return 0;
       let moved = 0;
-      for (const entry of readdirSync25(src, { withFileTypes: true })) {
-        moved += moveItem(join59(src, entry.name), join59(dest, entry.name));
+      for (const entry of readdirSync26(src, { withFileTypes: true })) {
+        moved += moveItem(join62(src, entry.name), join62(dest, entry.name));
       }
       try {
-        rmSync5(src, { recursive: true, force: true });
+        rmSync8(src, { recursive: true, force: true });
       } catch {
       }
       return moved;
     }
-    mkdirSync15(dirname21(dest), { recursive: true });
+    mkdirSync17(dirname23(dest), { recursive: true });
     try {
-      renameSync4(src, dest);
+      renameSync6(src, dest);
       return 1;
     } catch {
       cpSync2(src, dest, { recursive: true });
-      rmSync5(src, { recursive: true, force: true });
+      rmSync8(src, { recursive: true, force: true });
       return 1;
     }
   } catch {
@@ -15847,10 +17807,10 @@ function moveItem(src, dest) {
 function moveTopLevelEngineFiles(fromDir, toDir) {
   let moved = 0;
   try {
-    for (const entry of readdirSync25(fromDir, { withFileTypes: true })) {
+    for (const entry of readdirSync26(fromDir, { withFileTypes: true })) {
       if (entry.isDirectory()) continue;
       if (/^whisper(?:-cli)?(?:\.exe)?$/i.test(entry.name) || /^(?:ggml-.+|llama)\.dll$/i.test(entry.name)) {
-        moved += moveItem(join59(fromDir, entry.name), join59(toDir, entry.name));
+        moved += moveItem(join62(fromDir, entry.name), join62(toDir, entry.name));
       }
     }
   } catch {
@@ -15860,20 +17820,20 @@ function moveTopLevelEngineFiles(fromDir, toDir) {
 function migrateWhisperModels(fromDir, toDir) {
   if (!fromDir || !toDir) return { ok: false, moved: 0, error: "\u76EE\u5F55\u4E3A\u7A7A" };
   if (fromDir.toLowerCase() === toDir.toLowerCase()) return { ok: true, moved: 0 };
-  if (!existsSync46(fromDir)) return { ok: true, moved: 0 };
+  if (!existsSync48(fromDir)) return { ok: true, moved: 0 };
   try {
-    mkdirSync15(toDir, { recursive: true });
+    mkdirSync17(toDir, { recursive: true });
     let moved = 0;
-    for (const entry of readdirSync25(fromDir, { withFileTypes: true })) {
-      const src = join59(fromDir, entry.name);
+    for (const entry of readdirSync26(fromDir, { withFileTypes: true })) {
+      const src = join62(fromDir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === "bin") {
-          moved += moveItem(src, join59(toDir, "bin"));
+          moved += moveItem(src, join62(toDir, "bin"));
         }
         continue;
       }
       if (/^ggml-.+\.bin$/i.test(entry.name)) {
-        moved += moveItem(src, join59(toDir, entry.name));
+        moved += moveItem(src, join62(toDir, entry.name));
       }
       if (entry.name === "whisper-bin-x64.zip" || entry.name === "whisper-bin-x64.zip.part") {
         try {
@@ -15884,7 +17844,7 @@ function migrateWhisperModels(fromDir, toDir) {
     }
     moved += moveTopLevelEngineFiles(fromDir, toDir);
     try {
-      rmSync5(join59(fromDir, ".engine-staging"), { recursive: true, force: true });
+      rmSync8(join62(fromDir, ".engine-staging"), { recursive: true, force: true });
     } catch {
     }
     return { ok: true, moved };
@@ -15901,9 +17861,9 @@ function migrateWhisperEngineDir(binPath, fromDir, toDir) {
   if (!n.startsWith(f + "/")) return "";
   const rel = norm2.slice(from.length).split(/[\\/]+/).filter(Boolean);
   const dirSegs = rel.slice(0, -1);
-  if (dirSegs.length > 0) moveItem(dirname21(norm2), join59(toDir, ...dirSegs));
+  if (dirSegs.length > 0) moveItem(dirname23(norm2), join62(toDir, ...dirSegs));
   else moveTopLevelEngineFiles(fromDir, toDir);
-  return join59(toDir, ...rel);
+  return join62(toDir, ...rel);
 }
 var MODEL_FILE_PREFIX = [
   ["turbo", "ggml-large-v3-turbo"],
@@ -15917,11 +17877,11 @@ function resolveEngineCandidate(candidate) {
   const c = candidate.trim();
   if (!c) return "";
   for (const name of ["whisper-cli.exe", "whisper.exe", "whisper-cli", "whisper"]) {
-    const p = join59(c, name);
-    if (existsSync46(p)) return p;
+    const p = join62(c, name);
+    if (existsSync48(p)) return p;
   }
   try {
-    if (existsSync46(c) && statSync22(c).isFile()) return c;
+    if (existsSync48(c) && statSync23(c).isFile()) return c;
   } catch {
   }
   return "";
@@ -15941,7 +17901,7 @@ function resolveWhisperEngine(configBin, modelsDir) {
   const pinned = process.env.DSH_WECHAT_WHISPER_BIN;
   if (pinned && pinned.trim().length > 0) candidates.push(pinned);
   if (modelsDir) {
-    candidates.push(join59(modelsDir, "bin"), join59(modelsDir, "whisper-cli.exe"));
+    candidates.push(join62(modelsDir, "bin"), join62(modelsDir, "whisper-cli.exe"));
   }
   for (const candidate of candidates) {
     const resolved = resolveEngineCandidate(candidate);
@@ -15954,7 +17914,7 @@ function resolveWhisperEngine(configBin, modelsDir) {
   for (const name of ["whisper-cli", "whisper"]) {
     try {
       const found = resolveCommand(name);
-      if (found && existsSync46(found)) return found;
+      if (found && existsSync48(found)) return found;
     } catch {
     }
   }
@@ -15981,7 +17941,7 @@ function whisperModelsStatus(modelsDir) {
   return cachedBySig("whisper-models:" + modelsDir, fileSigOf(modelsDir), () => {
     let names = [];
     try {
-      names = readdirSync25(modelsDir);
+      names = readdirSync26(modelsDir);
     } catch {
     }
     return WHISPER_MODELS.map((m) => ({
@@ -15998,12 +17958,12 @@ var seededWhisperDirs = /* @__PURE__ */ new Set();
 function mirrorWhisperItem(src, dst) {
   let size = -1;
   try {
-    size = statSync22(src).size;
+    size = statSync23(src).size;
   } catch {
     return;
   }
   try {
-    if (statSync22(dst).size === size) return;
+    if (statSync23(dst).size === size) return;
   } catch {
   }
   try {
@@ -16021,23 +17981,23 @@ function seedBundledWhisper(modelsDir) {
   if (!bundled || bundled === modelsDir) return;
   let names = [];
   try {
-    names = readdirSync25(bundled);
+    names = readdirSync26(bundled);
   } catch {
     return;
   }
   const items = names.filter((n) => n === "bin" || n.toLowerCase().endsWith(".bin"));
   if (items.length === 0) return;
   try {
-    mkdirSync15(modelsDir, { recursive: true });
+    mkdirSync17(modelsDir, { recursive: true });
   } catch {
     return;
   }
   for (const name of items) {
-    const src = join59(bundled, name);
-    const dst = join59(modelsDir, name);
+    const src = join62(bundled, name);
+    const dst = join62(modelsDir, name);
     let isDir = false;
     try {
-      isDir = statSync22(src).isDirectory();
+      isDir = statSync23(src).isDirectory();
     } catch {
       continue;
     }
@@ -16046,32 +18006,32 @@ function seedBundledWhisper(modelsDir) {
       continue;
     }
     try {
-      mkdirSync15(dst, { recursive: true });
+      mkdirSync17(dst, { recursive: true });
     } catch {
       continue;
     }
     let inner = [];
     try {
-      inner = readdirSync25(src);
+      inner = readdirSync26(src);
     } catch {
       continue;
     }
-    for (const child of inner) mirrorWhisperItem(join59(src, child), join59(dst, child));
+    for (const child of inner) mirrorWhisperItem(join62(src, child), join62(dst, child));
   }
 }
 function whisperDirUsable(dir) {
-  if (existsSync46(join59(dir, "bin", "whisper-cli.exe"))) return true;
+  if (existsSync48(join62(dir, "bin", "whisper-cli.exe"))) return true;
   try {
-    return readdirSync25(dir).some((n) => n.toLowerCase().endsWith(".bin"));
+    return readdirSync26(dir).some((n) => n.toLowerCase().endsWith(".bin"));
   } catch {
     return false;
   }
 }
 function defaultWhisperModelsDir(decryptedDir) {
   const bundled = bundledWhisperAssetsDir();
-  const root = decryptedDir ? dirname21(decryptedDir) : resolveWechatDataRoot();
+  const root = decryptedDir ? dirname23(decryptedDir) : resolveWechatDataRoot();
   if (!root) return bundled;
-  const dir = join59(root, "whisper");
+  const dir = join62(root, "whisper");
   if (!seededWhisperDirs.has(dir)) {
     seededWhisperDirs.add(dir);
     seedBundledWhisper(dir);
@@ -16087,10 +18047,10 @@ function resolveWhisperModelsDir(configured, decryptedDir) {
   return defaultWhisperModelsDir(decryptedDir);
 }
 async function installWhisperEngine(modelsDir, onProgress) {
-  const binDir = join59(modelsDir, "bin");
-  const target = join59(binDir, "whisper-cli.exe");
-  if (existsSync46(target)) return { ok: true, path: target };
-  mkdirSync15(binDir, { recursive: true });
+  const binDir = join62(modelsDir, "bin");
+  const target = join62(binDir, "whisper-cli.exe");
+  if (existsSync48(target)) return { ok: true, path: target };
+  mkdirSync17(binDir, { recursive: true });
   const urls = [
     process.env.DSH_WECHAT_WHISPER_ENGINE_URL?.trim().replace(/\/$/, ""),
     "https://github.com/ggml-org/whisper.cpp/releases/latest/download/whisper-bin-x64.zip",
@@ -16098,7 +18058,7 @@ async function installWhisperEngine(modelsDir, onProgress) {
   ].filter((u) => Boolean(u));
   let lastError = "\u5F15\u64CE\u4E0B\u8F7D\u5931\u8D25";
   for (const url of urls) {
-    const zipPath = join59(modelsDir, "whisper-bin-x64.zip");
+    const zipPath = join62(modelsDir, "whisper-bin-x64.zip");
     try {
       const res = await (0, import_llm_retry5.fetchWithRetry)(fetch, url, { redirect: "follow" }, {
         timeoutMs: ENGINE_CONNECT_TIMEOUT_MS,
@@ -16108,7 +18068,7 @@ async function installWhisperEngine(modelsDir, onProgress) {
       if (!res.ok || res.body === null) throw new Error(`HTTP ${res.status}`);
       const total = Number(res.headers.get("content-length") ?? 0);
       const reader = res.body.getReader();
-      const stream = createWriteStream(zipPath);
+      const stream = createWriteStream2(zipPath);
       let received = 0;
       for (; ; ) {
         const { done, value } = await reader.read();
@@ -16126,17 +18086,17 @@ async function installWhisperEngine(modelsDir, onProgress) {
       const extractedBase = await extractZip(zipPath, modelsDir);
       const found = findFile(extractedBase, "whisper-cli.exe");
       if (!found) throw new Error("\u538B\u7F29\u5305\u5185\u672A\u627E\u5230 whisper-cli.exe");
-      const releaseDir = dirname21(found);
-      mkdirSync15(binDir, { recursive: true });
-      for (const name of readdirSync25(releaseDir)) {
-        const src = join59(releaseDir, name);
-        const dest = join59(binDir, name);
-        if (existsSync46(dest)) continue;
+      const releaseDir = dirname23(found);
+      mkdirSync17(binDir, { recursive: true });
+      for (const name of readdirSync26(releaseDir)) {
+        const src = join62(releaseDir, name);
+        const dest = join62(binDir, name);
+        if (existsSync48(dest)) continue;
         try {
-          renameSync4(src, dest);
+          renameSync6(src, dest);
         } catch {
         }
-        if (!existsSync46(dest)) {
+        if (!existsSync48(dest)) {
           try {
             copyFileSync(src, dest);
             unlinkSync4(src);
@@ -16145,14 +18105,14 @@ async function installWhisperEngine(modelsDir, onProgress) {
         }
       }
       try {
-        rmSync5(extractedBase, { recursive: true, force: true });
+        rmSync8(extractedBase, { recursive: true, force: true });
       } catch {
       }
       try {
         unlinkSync4(zipPath);
       } catch {
       }
-      return existsSync46(target) ? { ok: true, path: target } : { ok: false, error: "whisper-cli.exe \u5B89\u88C5\u5931\u8D25\uFF08\u62F7\u8D1D/\u79FB\u52A8\u672A\u5B8C\u6210\uFF09" };
+      return existsSync48(target) ? { ok: true, path: target } : { ok: false, error: "whisper-cli.exe \u5B89\u88C5\u5931\u8D25\uFF08\u62F7\u8D1D/\u79FB\u52A8\u672A\u5B8C\u6210\uFF09" };
     } catch (e) {
       lastError = `${url} ${e.message}`;
       try {
@@ -16164,12 +18124,12 @@ async function installWhisperEngine(modelsDir, onProgress) {
   return { ok: false, error: lastError + "\uFF08\u53EF\u8BBE\u7F6E DSH_WECHAT_WHISPER_ENGINE_URL \u6307\u5411\u53EF\u8FBE\u955C\u50CF\uFF0C\u6216 DSH_WECHAT_WHISPER_BIN \u6307\u5411\u5DF2\u5B89\u88C5\u7684 whisper-cli.exe\uFF09" };
 }
 async function extractZip(zipPath, destDir) {
-  const staging = join59(destDir, ".engine-staging");
+  const staging = join62(destDir, ".engine-staging");
   try {
-    rmSync5(staging, { recursive: true, force: true });
+    rmSync8(staging, { recursive: true, force: true });
   } catch {
   }
-  mkdirSync15(staging, { recursive: true });
+  mkdirSync17(staging, { recursive: true });
   const tar = spawnSync2("tar.exe", ["-xf", zipPath, "-C", staging], { windowsHide: true });
   if (tar.status === 0) return staging;
   const ps = spawnSync2("powershell.exe", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${staging}' -Force`], { windowsHide: true });
@@ -16185,11 +18145,11 @@ async function extractZip(zipPath, destDir) {
   }
 }
 function findFile(dir, name, depth = 0) {
-  if (depth > 4 || !existsSync46(dir)) return "";
+  if (depth > 4 || !existsSync48(dir)) return "";
   try {
-    for (const entry of readdirSync25(dir, { withFileTypes: true })) {
+    for (const entry of readdirSync26(dir, { withFileTypes: true })) {
       if (entry.name.startsWith(".")) continue;
-      const p = join59(dir, entry.name);
+      const p = join62(dir, entry.name);
       if (entry.isDirectory()) {
         const found = findFile(p, name, depth + 1);
         if (found) return found;
@@ -16205,16 +18165,16 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
   const entry = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId);
   if (!entry) return { ok: false, error: "\u672A\u77E5\u6A21\u578B: " + modelId };
   const file = entry[1];
-  mkdirSync15(modelsDir, { recursive: true });
-  const finalPath = join59(modelsDir, file);
-  if (existsSync46(finalPath)) return { ok: true, file, bytes: 0 };
+  mkdirSync17(modelsDir, { recursive: true });
+  const finalPath = join62(modelsDir, file);
+  if (existsSync48(finalPath)) return { ok: true, file, bytes: 0 };
   let lastError = "\u4E0B\u8F7D\u5931\u8D25";
   for (const base of whisperDownloadBases()) {
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`;
-    const tmp = join59(modelsDir, file + ".part");
+    const tmp = join62(modelsDir, file + ".part");
     try {
       const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress);
-      renameSync4(tmp, finalPath);
+      renameSync6(tmp, finalPath);
       reachableBase = base;
       return { ok: true, file, bytes };
     } catch (e) {
@@ -16226,15 +18186,15 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
 
 // src/backend/wechat-data/src/query/voice-transcribe.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { createHash as createHash22 } from "node:crypto";
-import { existsSync as existsSync47, mkdirSync as mkdirSync16, readFileSync as readFileSync25, readlinkSync, rmSync as rmSync6, symlinkSync, writeFileSync as writeFileSync12 } from "node:fs";
+import { createHash as createHash23 } from "node:crypto";
+import { existsSync as existsSync49, mkdirSync as mkdirSync18, readFileSync as readFileSync25, readlinkSync, rmSync as rmSync9, symlinkSync, writeFileSync as writeFileSync14 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename as basename8, dirname as dirname22, join as join60 } from "node:path";
+import { basename as basename10, dirname as dirname24, join as join63 } from "node:path";
 function voicesDir(decodedDir) {
-  return join60(decodedDir, "voices");
+  return join63(decodedDir, "voices");
 }
 function transcriptPath(decodedDir, svrId) {
-  return join60(voicesDir(decodedDir), svrId + ".txt");
+  return join63(voicesDir(decodedDir), svrId + ".txt");
 }
 function cachedTranscript(decodedDir, svrId) {
   try {
@@ -16249,11 +18209,11 @@ function isAscii(s) {
   return !/[^\x00-\x7f]/.test(s);
 }
 function pickAliasBase(decodedDir) {
-  const candidates = [join60(decodedDir, "..", "whisper-aliases"), join60(tmpdir(), "dsh-whisper-aliases")];
+  const candidates = [join63(decodedDir, "..", "whisper-aliases"), join63(tmpdir(), "dsh-whisper-aliases")];
   for (const c of candidates) {
     if (!isAscii(c)) continue;
     try {
-      mkdirSync16(c, { recursive: true });
+      mkdirSync18(c, { recursive: true });
       return c;
     } catch {
     }
@@ -16263,12 +18223,12 @@ function pickAliasBase(decodedDir) {
 function ensureAsciiLink(realDir, aliasBase) {
   const cached = aliasLinks.get(realDir);
   if (cached) return cached;
-  let link = join60(aliasBase, "wpa-" + createHash22("sha1").update(realDir.toLowerCase()).digest("hex").slice(0, 12));
+  let link = join63(aliasBase, "wpa-" + createHash23("sha1").update(realDir.toLowerCase()).digest("hex").slice(0, 12));
   try {
-    if (existsSync47(link)) {
+    if (existsSync49(link)) {
       const target = readlinkSync(link).replace(/[\\/]+$/, "").toLowerCase();
       if (target !== realDir.replace(/[\\/]+$/, "").toLowerCase()) {
-        rmSync6(link, { recursive: true, force: true });
+        rmSync9(link, { recursive: true, force: true });
         symlinkSync(realDir, link, "junction");
       }
     } else {
@@ -16282,7 +18242,7 @@ function ensureAsciiLink(realDir, aliasBase) {
 }
 function asciiPathForWhisper(filePath, aliasBase) {
   if (isAscii(filePath)) return filePath;
-  return join60(ensureAsciiLink(dirname22(filePath), aliasBase), basename8(filePath));
+  return join63(ensureAsciiLink(dirname24(filePath), aliasBase), basename10(filePath));
 }
 function whisperOne(bin, modelPath, wavPath, outBase) {
   const done = spawnSync3(bin, ["-m", modelPath, "-f", wavPath, "-l", "auto", "-np", "--no-timestamps", "-otxt", "-of", outBase], {
@@ -16290,7 +18250,7 @@ function whisperOne(bin, modelPath, wavPath, outBase) {
     windowsHide: true,
     timeout: 6e5
   });
-  if (done.status === 0 && existsSync47(outBase + ".txt")) {
+  if (done.status === 0 && existsSync49(outBase + ".txt")) {
     const text = readFileSync25(outBase + ".txt", "utf8").trim();
     if (text) return text;
   }
@@ -16301,23 +18261,23 @@ function whisperOne(bin, modelPath, wavPath, outBase) {
 }
 function transcribeVoiceText(decryptedDir, decodedDir, modelPath, engineBin, svrId, aliasBase) {
   const vdir = voicesDir(decodedDir);
-  mkdirSync16(vdir, { recursive: true });
+  mkdirSync18(vdir, { recursive: true });
   const existing = cachedTranscript(decodedDir, svrId);
   if (existing) return { text: existing };
   try {
-    const wavPath = join60(vdir, svrId + ".wav");
-    if (!existsSync47(wavPath)) {
+    const wavPath = join63(vdir, svrId + ".wav");
+    if (!existsSync49(wavPath)) {
       const silk = voiceDataBySvr(decryptedDir, svrId);
       if (!silk) return { error: "VoiceInfo \u65E0\u8BED\u97F3\u6570\u636E" };
       const dec = silkToWav(silk, wavPath);
       if (!dec.ok) return { error: "SILK \u89E3\u7801\u5931\u8D25: " + (dec.error ?? "") };
     }
     const wavPathA = asciiPathForWhisper(wavPath, aliasBase);
-    const outBaseA = asciiPathForWhisper(join60(vdir, svrId), aliasBase);
+    const outBaseA = asciiPathForWhisper(join63(vdir, svrId), aliasBase);
     const modelPathA = asciiPathForWhisper(modelPath, aliasBase);
     const text = whisperOne(engineBin, modelPathA, wavPathA, outBaseA);
     if (text) {
-      writeFileSync12(transcriptPath(decodedDir, svrId), text, "utf8");
+      writeFileSync14(transcriptPath(decodedDir, svrId), text, "utf8");
       return { text };
     }
     return { error: "\u8F6C\u5199\u7ED3\u679C\u4E3A\u7A7A" };
@@ -16328,9 +18288,9 @@ function transcribeVoiceText(decryptedDir, decodedDir, modelPath, engineBin, svr
 function transcribeOneVoice(decryptedDir, decodedDir, modelsDir, modelId, engineBin, username, localId) {
   const modelFile = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)?.[1];
   if (!modelFile) return { ok: false, error: "\u672A\u77E5\u6A21\u578B: " + modelId };
-  const modelPath = join60(modelsDir, modelFile);
-  if (!existsSync47(modelPath)) return { ok: false, error: `\u6A21\u578B\u672A\u5B89\u88C5: ${modelFile}` };
-  if (!existsSync47(engineBin)) return { ok: false, error: "\u672A\u627E\u5230 whisper.cpp \u5F15\u64CE: " + engineBin };
+  const modelPath = join63(modelsDir, modelFile);
+  if (!existsSync49(modelPath)) return { ok: false, error: `\u6A21\u578B\u672A\u5B89\u88C5: ${modelFile}` };
+  if (!existsSync49(engineBin)) return { ok: false, error: "\u672A\u627E\u5230 whisper.cpp \u5F15\u64CE: " + engineBin };
   const svrId = svrIdByChatLocal(decryptedDir, username, localId);
   if (!svrId) return { ok: false, error: "\u672A\u627E\u5230\u8BED\u97F3\u6D88\u606F" };
   const r = transcribeVoiceText(decryptedDir, decodedDir, modelPath, engineBin, svrId, pickAliasBase(decodedDir));
@@ -16339,11 +18299,11 @@ function transcribeOneVoice(decryptedDir, decodedDir, modelsDir, modelId, engine
 function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engineBin, limit, onProgress) {
   const modelFile = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)?.[1];
   if (!modelFile) return Promise.resolve({ ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: engineBin, error: "\u672A\u77E5\u6A21\u578B: " + modelId });
-  const modelPath = join60(modelsDir, modelFile);
-  if (!existsSync47(modelPath)) {
+  const modelPath = join63(modelsDir, modelFile);
+  if (!existsSync49(modelPath)) {
     return Promise.resolve({ ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: engineBin, model: modelFile, error: `\u6A21\u578B\u672A\u5B89\u88C5: ${modelFile}\uFF08\u8BF7\u5148\u4E0B\u8F7D\u6216\u653E\u5165\u6A21\u578B\u76EE\u5F55\uFF09` });
   }
-  if (!existsSync47(engineBin)) {
+  if (!existsSync49(engineBin)) {
     return Promise.resolve({ ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: engineBin, model: modelFile, error: "\u672A\u627E\u5230 whisper.cpp \u5F15\u64CE: " + engineBin });
   }
   const sources = recentVoiceMessages(decryptedDir, Math.max(1, limit));
@@ -16382,1735 +18342,6 @@ function transcribeVoiceBatch(decryptedDir, decodedDir, modelsDir, modelId, engi
     engine: engineBin,
     model: modelFile
   });
-}
-
-// src/backend/wechat-data/src/query/export-io.ts
-import { renameSync as renameSync5, rmSync as rmSync7, writeFileSync as writeFileSync13 } from "node:fs";
-
-// src/backend/wechat-data/src/query/zip.ts
-import { createReadStream, createWriteStream as createWriteStream2, promises as fsp } from "node:fs";
-import { once } from "node:events";
-import { Readable } from "node:stream";
-import { finished } from "node:stream/promises";
-import { pipeline } from "node:stream/promises";
-import { createDeflateRaw, deflateRawSync } from "node:zlib";
-var METHOD_STORE = 0;
-var METHOD_DEFLATE = 8;
-var CRC_TABLE = (() => {
-  const table = new Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = (c & 1) !== 0 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-function crc32Start() {
-  return 4294967295;
-}
-function crc32Update(c, buf) {
-  let acc = c;
-  for (let i = 0; i < buf.length; i += 1) {
-    const byte = buf[i] ?? 0;
-    acc = (CRC_TABLE[(acc ^ byte) & 255] ?? 0) ^ acc >>> 8;
-  }
-  return acc;
-}
-function crc32Finish(c) {
-  return (c ^ 4294967295) >>> 0;
-}
-function crc32(buf) {
-  return crc32Finish(crc32Update(crc32Start(), buf));
-}
-var COPY_CHUNK_SIZE = 64 * 1024;
-var CancelledError = class extends Error {
-  constructor(message = "\u64CD\u4F5C\u5DF2\u53D6\u6D88") {
-    super(message);
-    this.name = "AbortError";
-  }
-};
-function throwIfCancelled(signal) {
-  if (signal?.aborted) throw new CancelledError();
-}
-function reportProgress(ctrl, phase, done, total) {
-  try {
-    ctrl?.onProgress?.({ phase, done, total });
-  } catch {
-  }
-}
-var partialSeq = 0;
-function partialPath(filePath) {
-  partialSeq += 1;
-  return filePath + ".partial-" + String(process.pid) + "-" + String(partialSeq);
-}
-function u162(v) {
-  const b = Buffer.alloc(2);
-  b.writeUInt16LE(v);
-  return b;
-}
-function u322(v) {
-  const b = Buffer.alloc(4);
-  b.writeUInt32LE(v >>> 0);
-  return b;
-}
-function packEntry(raw) {
-  const deflated = deflateRawSync(raw);
-  return deflated.length >= raw.length ? { data: raw, method: METHOD_STORE } : { data: deflated, method: METHOD_DEFLATE };
-}
-function zipFiles(entries2) {
-  const locals = [];
-  const centrals = [];
-  let offset = 0;
-  const names = /* @__PURE__ */ new Set();
-  for (const entry of entries2) {
-    const name = entry.name.replace(/\\/g, "/");
-    if (names.has(name)) continue;
-    names.add(name);
-    const raw = typeof entry.data === "string" ? Buffer.from(entry.data, "utf8") : Buffer.from(entry.data);
-    const { data, method } = packEntry(raw);
-    const crc = crc32(raw);
-    const nameBuf = Buffer.from(name, "utf8");
-    const local = Buffer.concat([
-      u322(67324752),
-      u162(20),
-      u162(0),
-      u162(method),
-      u162(0),
-      u162(0),
-      u322(crc),
-      u322(data.length),
-      u322(data.length),
-      u162(nameBuf.length),
-      u162(0),
-      nameBuf,
-      data
-    ]);
-    locals.push(local);
-    centrals.push(Buffer.concat([
-      u322(33639248),
-      u162(20),
-      u162(20),
-      u162(0),
-      u162(method),
-      u162(0),
-      u162(0),
-      u322(crc),
-      u322(data.length),
-      u322(data.length),
-      u162(nameBuf.length),
-      u162(0),
-      u162(0),
-      u162(0),
-      u162(0),
-      u322(0),
-      u322(offset),
-      nameBuf
-    ]));
-    offset += local.length;
-  }
-  const centralStart = offset;
-  const central = Buffer.concat(centrals);
-  const eocd = Buffer.concat([
-    u322(101010256),
-    u162(0),
-    u162(0),
-    u162(centrals.length),
-    u162(centrals.length),
-    u322(central.length),
-    u322(centralStart),
-    u162(0)
-  ]);
-  return Buffer.concat([...locals, central, eocd]);
-}
-var StreamWriter = class _StreamWriter {
-  constructor(filePath, out) {
-    this.offsetValue = 0;
-    this.closedFlag = false;
-    this.abortedFlag = false;
-    /** 写流报出的错误（见 write() 里「drain 掩盖 error」的说明）。 */
-    this.streamError = null;
-    this.filePath = filePath;
-    this.out = out;
-  }
-  /** 打开目标文件准备写入（覆盖已有文件）。 */
-  static async create(filePath) {
-    const out = createWriteStream2(filePath);
-    const w = new _StreamWriter(filePath, out);
-    out.on("error", (e) => {
-      if (!w.streamError) w.streamError = e;
-    });
-    await once(out, "open");
-    return w;
-  }
-  /** 已写入的字节数。 */
-  get offset() {
-    return this.offsetValue;
-  }
-  /** 是否已正常收尾（end 之后 abort 是空操作）。 */
-  get closed() {
-    return this.closedFlag;
-  }
-  /** 是否已中止。 */
-  get aborted() {
-    return this.abortedFlag;
-  }
-  /** 写流报出的错误（尚未抛出时调用方用它提前失败，而不是等一次写入再失败）。 */
-  get failed() {
-    return this.streamError;
-  }
-  /** 写流上的监听器总数（诊断用：背压等待不应累积监听器）。 */
-  get listenerCount() {
-    return this.out.listenerCount("drain") + this.out.listenerCount("close") + this.out.listenerCount("error");
-  }
-  /**
-   * 底层写入：更新偏移量并等待背压。
-   *
-   * 这里有个坑（评审实测出来的）：写流出错时（例如 ENOSPC）Node 会先 emit `drain`
-   * 再 emit `error`。若只写 `if (!write()) await once('drain')`，那次 drain 会把
-   * 挂起的等待**当成成功**放行，而流其实已经毁了 —— 之后每次 write() 都返回 false
-   * 且再也不会有 drain，于是**永久挂起**：用户看不到报错、RPC 一直等到超时、
-   * 临时文件也不会被清理。所以要同时等 drain 与 close/error，并在事后复查标志位。
-   */
-  async write(buf) {
-    if (this.streamError) throw this.streamError;
-    if (this.abortedFlag || this.out.destroyed || this.out.writableEnded) {
-      throw new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210");
-    }
-    this.offsetValue += buf.length;
-    let needDrain;
-    try {
-      needDrain = !this.out.write(buf);
-    } catch (e) {
-      this.streamError = e;
-      throw this.streamError;
-    }
-    if (this.streamError) throw this.streamError;
-    if (needDrain) await this.waitDrainOrDeath();
-    if (this.streamError) throw this.streamError;
-  }
-  /**
-   * 等背压解除，或被 close/error 打断。
-   *
-   * 手写监听而不是 `Promise.race([once(...)])`：once() 不暴露它的监听器，
-   * race 里没赢的那两个会永远挂着 —— 每次背压写入就多留 2 个监听器，
-   * 长生命周期流上会累积到触发 `MaxListenersExceededWarning`
-   * （评审实测 24 会话×3000 条就到 close 25 / error 50，1000 会话会到千级）。
-   */
-  async waitDrainOrDeath() {
-    await new Promise((resolve3, reject) => {
-      const cleanup = () => {
-        this.out.off("drain", onDrain);
-        this.out.off("close", onClose);
-        this.out.off("error", onError);
-      };
-      const onDrain = () => {
-        cleanup();
-        resolve3();
-      };
-      const onClose = () => {
-        cleanup();
-        reject(this.streamError ?? new Error("\u5199\u5165\u6D41\u5DF2\u5173\u95ED\uFF0C\u5F52\u6863\u672A\u5B8C\u6210"));
-      };
-      const onError = (e) => {
-        cleanup();
-        reject(this.streamError ?? e);
-      };
-      this.out.once("drain", onDrain);
-      this.out.once("close", onClose);
-      this.out.once("error", onError);
-      if (this.streamError || this.abortedFlag || this.out.destroyed) onClose();
-    });
-  }
-  /**
-   * 收尾并关闭文件。
-   *
-   * 用 `finished()` 而不是 `once('close')`：后者对流**已经关闭**的情况会永远等下去。
-   */
-  async end() {
-    if (this.closedFlag) return;
-    if (this.abortedFlag) throw new Error("\u5199\u5165\u6D41\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u6536\u5C3E");
-    this.closedFlag = true;
-    this.out.end();
-    await finished(this.out, { readable: false });
-  }
-  /**
-   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的文件）。
-   *
-   * 幂等；对已收尾的写入是**空操作** —— 否则出错后的 catch 会把一个已经成功
-   * 落盘的文件删掉（评审实测复现过：close 之后再 abort，成品被 DELETED）。
-   */
-  async abort() {
-    if (this.closedFlag || this.abortedFlag) return;
-    this.abortedFlag = true;
-    try {
-      this.out.destroy();
-    } catch {
-    }
-    try {
-      await fsp.rm(this.filePath, { force: true });
-    } catch {
-    }
-  }
-};
-var ZipFileWriter = class _ZipFileWriter {
-  constructor(filePath, sink) {
-    this.centrals = [];
-    this.names = /* @__PURE__ */ new Set();
-    this.entryTemps = /* @__PURE__ */ new Set();
-    this.entrySeq = 0;
-    this.closed = false;
-    this.filePath = filePath;
-    this.sink = sink;
-  }
-  /** 打开目标文件准备写入（覆盖已有文件）。 */
-  static async create(filePath) {
-    const sink = await StreamWriter.create(filePath);
-    return new _ZipFileWriter(filePath, sink);
-  }
-  /** 当前写入偏移（中央目录里要记每个条目的起始位置）。 */
-  get offset() {
-    return this.sink.offset;
-  }
-  /** 诊断：写流上的监听器总数。背压等待不应累积监听器（曾经的泄漏点）。 */
-  get listenerCount() {
-    return this.sink.listenerCount;
-  }
-  write(buf) {
-    return this.sink.write(buf);
-  }
-  /**
-   * 追加一个条目。
-   * @param name - 归档内路径（反斜杠会转成正斜杠）。
-   * @param data - 字符串（UTF-8）或字节。
-   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
-   */
-  async addFile(name, data) {
-    const safeName = name.replace(/\\/g, "/");
-    if (this.names.has(safeName)) return false;
-    this.names.add(safeName);
-    const raw = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
-    const { data: packed, method } = packEntry(raw);
-    const crc = crc32(raw);
-    const nameBuf = Buffer.from(safeName, "utf8");
-    const entryOffset = this.offset;
-    await this.write(Buffer.concat([
-      u322(67324752),
-      u162(20),
-      u162(0),
-      u162(method),
-      u162(0),
-      u162(0),
-      u322(crc),
-      u322(packed.length),
-      u322(packed.length),
-      u162(nameBuf.length),
-      u162(0),
-      nameBuf
-    ]));
-    await this.write(packed);
-    this.centrals.push(Buffer.concat([
-      u322(33639248),
-      u162(20),
-      u162(20),
-      u162(0),
-      u162(method),
-      u162(0),
-      u162(0),
-      u322(crc),
-      u322(packed.length),
-      u322(packed.length),
-      u162(nameBuf.length),
-      u162(0),
-      u162(0),
-      u162(0),
-      u162(0),
-      u322(0),
-      u322(entryOffset),
-      nameBuf
-    ]));
-    return true;
-  }
-  /**
-   * 追加一个「内容现场产出」的条目：分块做流式 deflate。
-   *
-   * 为什么需要它：`addFile` 要求整条内容的字节都在内存里（`deflateRawSync` 也要整块输入），
-   * 所以 10 万行的 xlsx（sheet XML ≈ 10MB 以上、还要再叠上所有行数组）峰值仍与行数线性。
-   * 这里把产出方给的分块**先流式压到临时文件**，拿到真实的 CRC/长度后再补本地头、
-   * 分块拷进归档 —— 峰值只与「一块」相关，与条目总大小无关。
-   *
-   * 为什么不直接用 data descriptor 边压边写：那会改动归档格式（本地头里长度写 0 +
-   * 置 bit 3），而 `zipFiles`/`addFile` 产出的格式不能被悄悄换掉。多一次磁盘往返
-   * 只发生在流式条目上，换的是「格式不变」。
-   *
-   * @param name - 归档内路径（反斜杠会转成正斜杠）。
-   * @param source - 分块源（字符串按 UTF-8，或字节）；可为同步/异步迭代器。
-   * @param ctrl - 可选的进度/取消（每块都会检查取消）。
-   * @returns 是否真的写入（同名条目会被跳过，与 zipFiles 行为一致）。
-   */
-  async addStream(name, source, ctrl) {
-    const safeName = name.replace(/\\/g, "/");
-    if (this.names.has(safeName)) return false;
-    this.names.add(safeName);
-    if (this.closed) throw new Error("\u5F52\u6863\u5DF2\u6536\u5C3E\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
-    if (this.sink.failed) throw this.sink.failed;
-    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D\u8FFD\u52A0\u6761\u76EE");
-    this.entrySeq += 1;
-    const tmp = this.filePath + ".entry-" + String(this.entrySeq);
-    this.entryTemps.add(tmp);
-    let crc = crc32Start();
-    let rawSize = 0;
-    try {
-      async function* raw() {
-        for await (const chunk of source) {
-          throwIfCancelled(ctrl?.signal);
-          const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
-          crc = crc32Update(crc, buf);
-          rawSize += buf.length;
-          reportProgress(ctrl, "compress", rawSize, 0);
-          yield buf;
-        }
-      }
-      await pipeline(Readable.from(raw(), { objectMode: false }), createDeflateRaw(), createWriteStream2(tmp));
-      const csize = (await fsp.stat(tmp)).size;
-      const crcFinal = crc32Finish(crc);
-      const nameBuf = Buffer.from(safeName, "utf8");
-      const entryOffset = this.offset;
-      await this.write(Buffer.concat([
-        u322(67324752),
-        u162(20),
-        u162(0),
-        u162(METHOD_DEFLATE),
-        u162(0),
-        u162(0),
-        u322(crcFinal),
-        u322(csize),
-        u322(rawSize),
-        u162(nameBuf.length),
-        u162(0),
-        nameBuf
-      ]));
-      let copied = 0;
-      for await (const chunk of createReadStream(tmp, { highWaterMark: COPY_CHUNK_SIZE })) {
-        throwIfCancelled(ctrl?.signal);
-        await this.write(chunk);
-        copied += chunk.length;
-        reportProgress(ctrl, "write", copied, csize);
-      }
-      this.centrals.push(Buffer.concat([
-        u322(33639248),
-        u162(20),
-        u162(20),
-        u162(0),
-        u162(METHOD_DEFLATE),
-        u162(0),
-        u162(0),
-        u322(crcFinal),
-        u322(csize),
-        u322(rawSize),
-        u162(nameBuf.length),
-        u162(0),
-        u162(0),
-        u162(0),
-        u162(0),
-        u322(0),
-        u322(entryOffset),
-        nameBuf
-      ]));
-      return true;
-    } finally {
-      this.entryTemps.delete(tmp);
-      try {
-        await fsp.rm(tmp, { force: true });
-      } catch {
-      }
-    }
-  }
-  /**
-   * 写中央目录与 EOCD 并关闭文件。
-   *
-   * 非 ZIP64：偏移或长度超过 4GiB 时明确报错，而不是产出一个损坏的归档。
-   */
-  async close() {
-    if (this.closed) return;
-    if (this.sink.aborted) throw new Error("\u5F52\u6863\u5DF2\u4E2D\u6B62\uFF0C\u4E0D\u80FD\u518D close");
-    const centralStart = this.offset;
-    const central = Buffer.concat(this.centrals);
-    if (centralStart + central.length >= 4294967295) {
-      await this.abort();
-      throw new Error("\u5F52\u6863\u8D85\u8FC7 4GiB\uFF0C\u5F53\u524D\u5B9E\u73B0\u4E0D\u652F\u6301 ZIP64\uFF1B\u8BF7\u5206\u6279\u5BFC\u51FA");
-    }
-    this.closed = true;
-    const eocd = Buffer.concat([
-      u322(101010256),
-      u162(0),
-      u162(0),
-      u162(this.centrals.length),
-      u162(this.centrals.length),
-      u322(central.length),
-      u322(centralStart),
-      u162(0)
-    ]);
-    await this.write(central);
-    await this.write(eocd);
-    await this.sink.end();
-  }
-  /**
-   * 中止：关流并删除半成品文件（失败路径必须调用，否则留下截断的归档）。
-   *
-   * 幂等；对已 close 的归档是**空操作** —— 否则出错后的 catch 会把一个已经成功
-   * 落盘的归档删掉（评审实测复现过：close 之后再 abort，文件被 DELETED）。
-   */
-  async abort() {
-    if (this.closed) return;
-    await this.sink.abort();
-    for (const tmp of this.entryTemps) {
-      try {
-        await fsp.rm(tmp, { force: true });
-      } catch {
-      }
-    }
-    this.entryTemps.clear();
-  }
-};
-
-// src/backend/wechat-data/src/query/export-io.ts
-var MAX_MOMENT_MEDIA = 5e3;
-function writeFileAtomicSync(filePath, data) {
-  const tmp = partialPath(filePath);
-  try {
-    writeFileSync13(tmp, data);
-    renameSync5(tmp, filePath);
-  } catch (e) {
-    try {
-      rmSync7(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-async function writeZipAtomic(filePath, produce) {
-  const tmp = partialPath(filePath);
-  let zip = null;
-  try {
-    zip = await ZipFileWriter.create(tmp);
-    await produce(zip);
-    await zip.close();
-    renameSync5(tmp, filePath);
-  } catch (e) {
-    if (zip) await zip.abort();
-    try {
-      rmSync7(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-function dataUrlToBuffer(url) {
-  const m = url.match(/^data:[^;,]+;base64,(.*)$/);
-  if (!m || !m[1]) return null;
-  try {
-    return Buffer.from(m[1], "base64");
-  } catch {
-    return null;
-  }
-}
-function exportMediaCtx(decrypted) {
-  const cfg = getConfig(decrypted);
-  const dbDir = typeof cfg["db_dir"] === "string" ? cfg["db_dir"] : "";
-  let base = "";
-  if (dbDir) {
-    const parts = dbDir.replace(/[\\/]+$/, "").split(/[\\/]/);
-    base = (parts[parts.length - 1] ?? "") === "db_storage" ? parts.slice(0, -1).join("/") : "";
-  }
-  const { aesKey, xorKey } = resolveImageKeyPair(decrypted);
-  return { base: base || void 0, aesKey, xorKey };
-}
-
-// src/backend/wechat-data/src/query/export-format.ts
-function fmtFull2(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function collectMessages(decryptedDir, username, count, ctrl) {
-  const target = count === 0 ? 5e4 : Math.max(1, Math.min(count, 5e4));
-  const pages = [];
-  let cursor;
-  let cursorLocalId;
-  let guard = 0;
-  while (pages.length < target && guard < 600) {
-    throwIfCancelled(ctrl?.signal);
-    const env = queryMessages(decryptedDir, username, 100, cursor, void 0, cursorLocalId);
-    if (env.messages.length === 0) break;
-    pages.push(...env.messages);
-    reportProgress(ctrl, "collect", pages.length, count === 0 ? 0 : target);
-    if (!env.hasMore) break;
-    cursor = env.cursor;
-    cursorLocalId = env.cursorLocalId;
-    guard += 1;
-  }
-  const all = pages.slice(0, target).reverse();
-  return all;
-}
-function csvCell(v) {
-  return '"' + v.replace(/"/g, '""') + '"';
-}
-var UTF8_BOM = "\uFEFF";
-function buildCsv(header, rows) {
-  const lines = [header.map(csvCell).join(",")];
-  for (const r of rows) lines.push(r.map((c) => csvCell(c ?? "")).join(","));
-  return UTF8_BOM + lines.join("\r\n") + "\r\n";
-}
-function htmlEscape(v) {
-  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-function rowOf(m, username) {
-  const sender = m.isSender === 1 ? "\u6211" : m.sender || username;
-  const typeLabel3 = m.type === 1 ? "\u6587\u672C" : m.typeLabel || String(m.type);
-  return { time: fmtFull2(m.createTime), sender, typeLabel: typeLabel3, text: m.displayText || "" };
-}
-function formatTxt(msgs, username) {
-  const lines = [`\u6D88\u606F\u5BFC\u51FA (${msgs.length})`];
-  lines.push("=".repeat(48));
-  lines.push("");
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    lines.push(r.time + " " + r.sender);
-    lines.push(r.typeLabel + ": " + r.text);
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-function formatCsv(msgs, username) {
-  const rows = msgs.map((m) => {
-    const r = rowOf(m, username);
-    return [r.time, r.sender, r.typeLabel, r.text];
-  });
-  return buildCsv(["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9"], rows);
-}
-function formatHtml(msgs, username, now) {
-  let body = "";
-  let lastDay = "";
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    const day = r.time.split(" ")[0] || "";
-    if (day !== lastDay) {
-      lastDay = day;
-      body += '<div class="date-divider"><span>' + htmlEscape(day) + "</span></div>";
-    }
-    const side = m.isSender === 1 ? "right" : "left";
-    const content = m.type === 3 ? '<span class="muted">[\u56FE\u7247]</span>' : htmlEscape(r.text);
-    body += '<div class="row ' + side + '"><div class="bubble"><div class="sender">' + htmlEscape(r.sender) + '</div><div class="content">' + content + '</div><div class="time">' + htmlEscape(r.time) + "</div></div></div>";
-  }
-  return '<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA</title><style>body{font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;background:#ededed;margin:0;padding:24px 12px;color:#1f1f1f}.wrap{max-width:760px;margin:0 auto}.hd{text-align:center;padding:16px 0 8px}.hd h1{font-size:18px;margin:0 0 4px}.hd p{font-size:12px;color:#888;margin:0}.date-divider{text-align:center;margin:18px 0 10px}.date-divider span{background:#c8c8c8;color:#fff;font-size:11px;padding:2px 12px;border-radius:999px}.row{display:flex;margin:10px 0}.row.right{justify-content:flex-end}.bubble{max-width:72%;padding:9px 12px;border-radius:8px;background:#fff;position:relative;box-shadow:0 1px 2px rgba(0,0,0,.08)}.row.right .bubble{background:#95ec69}.sender{font-size:11px;color:#576b95;margin-bottom:3px}.content{font-size:14px;line-height:1.5;word-break:break-word}.time{font-size:10px;color:#aaa;margin-top:4px;text-align:right}.muted{color:#999;font-size:12px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55</h1><p>\u5171 ' + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + htmlEscape(now) + "</p></div>" + body + "</div></body></html>";
-}
-function formatMarkdown(msgs, username) {
-  const lines = ["# \u5FAE\u4FE1\u804A\u5929\u8BB0\u5F55\u5BFC\u51FA", "", "> \u5171 " + String(msgs.length) + " \u6761\u6D88\u606F \xB7 \u5BFC\u51FA\u65F6\u95F4 " + (/* @__PURE__ */ new Date()).toLocaleString(), ""];
-  let lastDay = "";
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    const day = r.time.split(" ")[0] || "";
-    if (day !== lastDay) {
-      lastDay = day;
-      lines.push("## " + day, "");
-    }
-    lines.push("**" + r.time + " " + r.sender + "**  ", r.typeLabel + "\uFF1A" + r.text.replace(/\r?\n/g, "  "), "");
-  }
-  return lines.join("\n");
-}
-function formatSql(msgs, username) {
-  const q = (v) => "'" + v.replace(/'/g, "''") + "'";
-  const lines = [
-    "CREATE TABLE IF NOT EXISTS chat_messages (",
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
-    "  chatroom TEXT NOT NULL,",
-    "  create_time TEXT,",
-    "  sender TEXT,",
-    "  type_label TEXT,",
-    "  content TEXT,",
-    "  local_id INTEGER",
-    ");",
-    ""
-  ];
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    lines.push("INSERT INTO chat_messages (chatroom, create_time, sender, type_label, content, local_id) VALUES (" + q(username) + ", " + q(r.time) + ", " + q(r.sender) + ", " + q(r.typeLabel) + ", " + q(r.text) + ", " + String(m.localId) + ");");
-  }
-  return lines.join("\n");
-}
-function formatJson(msgs, username) {
-  const items = msgs.map((m) => {
-    const r = rowOf(m, username);
-    const item = {
-      localId: m.localId,
-      sortSeq: m.sortSeq ?? 0,
-      time: r.time,
-      sender: r.sender,
-      type: m.type,
-      typeLabel: r.typeLabel,
-      content: r.text
-    };
-    if (m.rich) item.rich = m.rich;
-    return item;
-  });
-  return JSON.stringify(items, null, 2);
-}
-function xmlEsc(v) {
-  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-var XLSX_SHEET_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
-var XLSX_SHEET_TAIL = "</sheetData></worksheet>";
-var XLSX_CHUNK_ROWS = 200;
-function xlsxStaticParts() {
-  const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\u804A\u5929\u8BB0\u5F55" sheetId="1" r:id="rId1"/></sheets></workbook>';
-  const wbRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
-  const rootRel = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
-  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>';
-  return [
-    { name: "[Content_Types].xml", data: contentTypes },
-    { name: "_rels/.rels", data: rootRel },
-    { name: "xl/workbook.xml", data: workbook },
-    { name: "xl/_rels/workbook.xml.rels", data: wbRel }
-  ];
-}
-function xlsxRowXml(row) {
-  return "<row>" + row.map((c) => '<c t="inlineStr"><is><t>' + xmlEsc(c) + "</t></is></c>").join("") + "</row>";
-}
-function makeXlsxChunker(ctrl, total) {
-  let buf = "";
-  let done = 0;
-  return {
-    push: (row) => {
-      throwIfCancelled(ctrl?.signal);
-      buf += xlsxRowXml(row);
-      done += 1;
-      if (done % XLSX_CHUNK_ROWS !== 0) return null;
-      const out = buf;
-      buf = "";
-      reportProgress(ctrl, "format", done, total);
-      return out;
-    },
-    finish: () => {
-      const out = [];
-      if (buf) out.push(buf);
-      reportProgress(ctrl, "format", done, total);
-      out.push(XLSX_SHEET_TAIL);
-      return out;
-    }
-  };
-}
-function* xlsxSheetChunks(rows, ctrl, total = 0) {
-  yield XLSX_SHEET_HEAD;
-  const chunker = makeXlsxChunker(ctrl, total);
-  for (const row of rows) {
-    const chunk = chunker.push(row);
-    if (chunk !== null) yield chunk;
-  }
-  yield* chunker.finish();
-}
-async function* xlsxSheetChunksAsync(rows, ctrl, total = 0) {
-  yield XLSX_SHEET_HEAD;
-  const chunker = makeXlsxChunker(ctrl, total);
-  for await (const row of rows) {
-    const chunk = chunker.push(row);
-    if (chunk !== null) yield chunk;
-  }
-  for (const chunk of chunker.finish()) yield chunk;
-}
-function* messageRows(msgs, username) {
-  yield ["\u65F6\u95F4", "\u53D1\u9001\u8005", "\u7C7B\u578B", "\u5185\u5BB9", "localId"];
-  for (const m of msgs) {
-    const r = rowOf(m, username);
-    yield [r.time, r.sender, r.typeLabel, r.text, String(m.localId)];
-  }
-}
-function xlsxSheetXml(rows, ctrl) {
-  return Array.from(xlsxSheetChunks(rows, ctrl)).join("");
-}
-function formatXlsx(msgs, username, ctrl) {
-  return zipFiles([
-    ...xlsxStaticParts(),
-    { name: "xl/worksheets/sheet1.xml", data: xlsxSheetXml(messageRows(msgs, username), ctrl) }
-  ]);
-}
-async function writeXlsxStream(filePath, rows, ctrl) {
-  await writeZipAtomic(filePath, async (zip) => {
-    for (const part of xlsxStaticParts()) await zip.addFile(part.name, part.data);
-    await zip.addStream("xl/worksheets/sheet1.xml", xlsxSheetChunksAsync(rows, ctrl), ctrl);
-  });
-}
-
-// src/backend/wechat-data/src/query/export-flows.ts
-import { mkdirSync as mkdirSync18 } from "node:fs";
-import { basename as basename9, dirname as dirname23, join as join62 } from "node:path";
-
-// src/backend/wechat-data/src/query/annual-report.ts
-import { DatabaseSync as DatabaseSync37 } from "node:sqlite";
-import { decompress as decompress6 } from "fzstd";
-import { existsSync as existsSync48, readdirSync as readdirSync26 } from "node:fs";
-import { createHash as createHash23 } from "node:crypto";
-import { join as join61 } from "node:path";
-function msgTableName7(username) {
-  return "Msg_" + createHash23("md5").update(username, "utf8").digest("hex");
-}
-function cellStr12(v) {
-  if (typeof v === "string") return v;
-  if (v === null || v === void 0) return "";
-  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
-  return "";
-}
-var ZSTD_MAGIC6 = Buffer.from([40, 181, 47, 253]);
-function tryDecompress3(data) {
-  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC6)) {
-    try {
-      return Buffer.from(decompress6(data));
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-function decodeUtfOrGbk(bytes) {
-  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  if (!utf8.includes("\uFFFD")) return utf8;
-  try {
-    const gbk = new TextDecoder("gbk", { fatal: false }).decode(bytes);
-    const utf8Bad = (utf8.match(/\uFFFD/g) ?? []).length;
-    const gbkBad = (gbk.match(/\uFFFD/g) ?? []).length;
-    return gbkBad < utf8Bad ? gbk : utf8;
-  } catch {
-    return utf8;
-  }
-}
-function decodeCell3(v) {
-  if (v === null || v === void 0) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
-  const raw = Buffer.from(v instanceof Uint8Array ? v : []);
-  const decompressed = tryDecompress3(raw);
-  return decodeUtfOrGbk(decompressed ?? raw);
-}
-function stripXml(x) {
-  return x.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-function senderFromContent2(content) {
-  const m = content.match(/([A-Za-z0-9_@.\-]{3,64}):\n/);
-  return m ? m[1] ?? null : null;
-}
-function cleanMessage(text) {
-  let t = text;
-  const m = t.match(/(?:[A-Za-z0-9_@.\-]{3,64}:\s*)([\s\S]*)/);
-  if (m && m[1] && !m[1].startsWith("<")) t = m[1];
-  t = t.replace(/^[\x00-\x1f\x7f-\x9f]*/, "");
-  t = t.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-  return t.slice(0, 120);
-}
-function personaTags(s) {
-  const tags = [];
-  if (s.nightShare >= 0.2) tags.push("\u591C\u732B\u5B50");
-  if (s.morningShare >= 0.15) tags.push("\u65E9\u8D77\u9E1F");
-  if (s.weekendShare >= 0.25) tags.push("\u5468\u672B\u8FBE\u4EBA");
-  if (s.groupShare >= 0.6) tags.push("\u7FA4\u804A\u4E4B\u738B");
-  if (s.dailyAvg >= 50) tags.push("\u8BDD\u75E8");
-  if (tags.length === 0) tags.push("\u7A33\u5065\u6C9F\u901A\u8005");
-  return tags;
-}
-function queryAnnualReport(decryptedDir, year) {
-  const msgDir = join61(decryptedDir, "message");
-  if (!existsSync48(msgDir)) return { year, total: 0 };
-  const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1e3);
-  const end = Math.floor(new Date(year + 1, 0, 1, 0, 0, 0, 0).getTime() / 1e3);
-  const usernames = loadUsernames(decryptedDir);
-  const perSender = /* @__PURE__ */ new Map();
-  const perChat = /* @__PURE__ */ new Map();
-  const heat = new Array(7 * 24).fill(0);
-  const monthly = new Array(12).fill(0);
-  const kindCounts = /* @__PURE__ */ new Map();
-  const emojiCount = /* @__PURE__ */ new Map();
-  const phraseCount = /* @__PURE__ */ new Map();
-  const activeDays = /* @__PURE__ */ new Set();
-  let total = 0;
-  let textCount = 0;
-  let textChars = 0;
-  let nightCount = 0;
-  let morningCount = 0;
-  let weekendCount = 0;
-  let groupCount = 0;
-  let firstMsg = null;
-  let lastMsg = null;
-  let firstTs = Number.POSITIVE_INFINITY;
-  let lastTs = 0;
-  const files = readdirSync26(msgDir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("monitor_cache") && !f.includes("media") && !f.includes("resource") && !f.includes("fts"));
-  const tableToUser = /* @__PURE__ */ new Map();
-  for (const username of usernames) tableToUser.set(msgTableName7(username), username);
-  const fileInfos = [];
-  for (const file of files) {
-    let probe = null;
-    try {
-      probe = new DatabaseSync37(join61(msgDir, file), { readOnly: true });
-    } catch {
-      continue;
-    }
-    try {
-      const names = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all().map((r) => r.name);
-      const tables = [];
-      for (const n of names) {
-        const u = tableToUser.get(n);
-        if (u) tables.push([n, u]);
-      }
-      if (tables.length > 0) fileInfos.push({ path: join61(msgDir, file), tables });
-    } catch {
-    } finally {
-      probe.close();
-    }
-  }
-  for (const fi of fileInfos) {
-    let db = null;
-    try {
-      db = new DatabaseSync37(fi.path, { readOnly: true });
-    } catch {
-      continue;
-    }
-    try {
-      for (const [table, username] of fi.tables) {
-        try {
-          const rows = db.prepare('SELECT create_time, local_type, message_content FROM "' + table + '" WHERE create_time >= ? AND create_time < ?').all(start, end);
-          for (const r of rows) {
-            const ts2 = Number(r["create_time"] ?? 0);
-            const lt = Number(r["local_type"] ?? 0);
-            const content = decodeCell3(r["message_content"]);
-            const text = stripXml(content);
-            if (text && /^[0-9,]+$/.test(text.slice(0, 80))) continue;
-            total += 1;
-            if (username.endsWith("@chatroom")) {
-              const sender = senderFromContent2(content);
-              if (sender && !sender.endsWith("@chatroom")) perSender.set(sender, (perSender.get(sender) ?? 0) + 1);
-            } else {
-              perSender.set(username, (perSender.get(username) ?? 0) + 1);
-            }
-            perChat.set(username, (perChat.get(username) ?? 0) + 1);
-            if (username.endsWith("@chatroom")) groupCount += 1;
-            const d = new Date(ts2 * 1e3);
-            const h = d.getHours();
-            const dow = d.getDay();
-            heat[dow * 24 + h] = (heat[dow * 24 + h] ?? 0) + 1;
-            monthly[d.getMonth()] = (monthly[d.getMonth()] ?? 0) + 1;
-            const dayKey2 = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-            activeDays.add(dayKey2);
-            if (h >= 23 || h <= 4) nightCount += 1;
-            if (h >= 5 && h <= 9) morningCount += 1;
-            if (dow === 0 || dow === 6) weekendCount += 1;
-            const normType2 = lt > 4294967296 ? lt % 4294967296 : lt;
-            if (normType2 === 1 && text) {
-              textCount += 1;
-              textChars += text.length;
-              for (let i = 0; i + 2 <= text.length; i += 1) {
-                const bi = text.slice(i, i + 2);
-                if (/[\u4e00-\u9fff]{2}/.test(bi)) phraseCount.set(bi, (phraseCount.get(bi) ?? 0) + 1);
-              }
-              const emo = text.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) ?? [];
-              for (const e of emo) emojiCount.set(e, (emojiCount.get(e) ?? 0) + 1);
-            }
-            kindCounts.set(typeLabel(normType2), (kindCounts.get(typeLabel(normType2)) ?? 0) + 1);
-            if (ts2 > lastTs && text) {
-              lastTs = ts2;
-              lastMsg = text.slice(0, 80);
-            }
-            if (ts2 < firstTs && text) {
-              firstTs = ts2;
-              firstMsg = text.slice(0, 80);
-            }
-          }
-        } catch {
-        }
-      }
-    } finally {
-      db.close();
-    }
-  }
-  const activeDaysCount = activeDays.size;
-  const dailyAvg = activeDaysCount > 0 ? Math.round(total / activeDaysCount) : 0;
-  const textShare = total > 0 ? textCount / total : 0;
-  const nightShare = total > 0 ? nightCount / total : 0;
-  const morningShare = total > 0 ? morningCount / total : 0;
-  const weekendShare = total > 0 ? weekendCount / total : 0;
-  const groupShare = total > 0 ? groupCount / total : 0;
-  const nameMap = contactMeta(decryptedDir).names;
-  const topContacts = Array.from(perSender.entries()).filter(([u]) => !u.endsWith("@chatroom") && !u.startsWith("gh_")).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10);
-  const topGroups = Array.from(perChat.entries()).filter(([u]) => u.endsWith("@chatroom")).map(([username, count]) => ({ username, name: nameMap.get(username) || username, count, share: total > 0 ? count / total : 0 })).sort((a, b) => b.count - a.count).slice(0, 10);
-  const topEmoji = Array.from(emojiCount.entries()).map(([e, n]) => ({ emoji: e, count: n })).sort((a, b) => b.count - a.count).slice(0, 8);
-  const topPhrases = Array.from(phraseCount.entries()).map(([p, n]) => ({ phrase: p, count: n })).sort((a, b) => b.count - a.count).slice(0, 20);
-  const out = {
-    year,
-    total,
-    active_days: activeDaysCount,
-    text_chars: textChars,
-    daily_avg: dailyAvg,
-    text_share: Number(textShare.toFixed(4)),
-    night_share: Number(nightShare.toFixed(4)),
-    morning_share: Number(morningShare.toFixed(4)),
-    weekend_share: Number(weekendShare.toFixed(4)),
-    group_share: Number(groupShare.toFixed(4)),
-    heat,
-    monthly,
-    kind_counts: Object.fromEntries(kindCounts),
-    top_phrases: topPhrases,
-    top_emoji: topEmoji,
-    top_contacts: topContacts,
-    top_groups: topGroups,
-    persona_tags: personaTags({ nightShare, morningShare, weekendShare, groupShare, dailyAvg })
-  };
-  if (firstMsg) out.first_message = cleanMessage(firstMsg);
-  if (lastMsg) out.last_message = cleanMessage(lastMsg);
-  return out;
-}
-function loadUsernames(decryptedDir) {
-  const p = join61(decryptedDir, "session", "session.db");
-  if (!existsSync48(p)) return [];
-  const out = [];
-  try {
-    const db = new DatabaseSync37(p, { readOnly: true });
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-    const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all();
-      for (const r of rows) {
-        const u = cellStr12(r["username"] ?? "").trim();
-        if (u) out.push(u);
-      }
-    }
-    db.close();
-  } catch {
-  }
-  return out;
-}
-function typeLabel(t) {
-  if (t === 1) return "\u6587\u672C";
-  if (t === 3) return "\u56FE\u7247";
-  if (t === 34) return "\u8BED\u97F3";
-  if (t === 42) return "\u540D\u7247";
-  if (t === 43) return "\u89C6\u9891";
-  if (t === 47) return "\u8868\u60C5";
-  if (t === 48) return "\u4F4D\u7F6E";
-  if (t === 49) return "\u94FE\u63A5";
-  if (t === 1e4) return "\u7CFB\u7EDF\u6D88\u606F";
-  return "\u5176\u4ED6";
-}
-
-// src/backend/wechat-data/src/query/export-flows.ts
-function collectChatlogMedia(msgs) {
-  const out = [];
-  for (const m of msgs) {
-    const rich = m.rich;
-    if (!rich || rich.type !== "chatlog" || !Array.isArray(rich.records)) continue;
-    for (const rec of rich.records) {
-      const item = {
-        name: rec.name,
-        time: rec.time,
-        text: rec.text,
-        renderType: rec.renderType ?? (rec.isImage ? "image" : "text")
-      };
-      if (rec.datatype) item.datatype = rec.datatype;
-      if (rec.fullmd5) item.fullmd5 = rec.fullmd5;
-      if (rec.thumbfullmd5) item.thumbfullmd5 = rec.thumbfullmd5;
-      if (rec.md5) item.md5 = rec.md5;
-      if (rec.cdnurlstring) item.cdnurlstring = rec.cdnurlstring;
-      if (rec.encrypturlstring) item.encrypturlstring = rec.encrypturlstring;
-      if (rec.link) item.link = rec.link;
-      if (rec.fromnewmsgid) item.fromnewmsgid = rec.fromnewmsgid;
-      out.push(item);
-    }
-  }
-  return out;
-}
-function filterMessages(msgs, types, richTypes) {
-  const matchTypes = types !== void 0 && types.length > 0;
-  const matchRich = richTypes !== void 0 && richTypes.length > 0;
-  if (!matchTypes && !matchRich) return msgs;
-  const tList = matchTypes ? types : [];
-  const rList = matchRich ? richTypes : [];
-  return msgs.filter((m) => {
-    if (matchTypes && matchRich) {
-      return tList.includes(m.type) || (m.rich?.type ? rList.includes(m.rich.type) : false);
-    }
-    if (matchTypes) return tList.includes(m.type);
-    return m.rich?.type ? rList.includes(m.rich.type) : false;
-  });
-}
-function sanitizeBasename(name) {
-  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").trim().slice(0, 100);
-}
-function planSessionExport(decryptedDir, username, format, count, dir, types, richTypes, from, to, filename, zip, ctrl) {
-  const all = collectMessages(decryptedDir, username, count ?? 0, ctrl);
-  const msgs = filterMessages(all, types, richTypes).filter((m) => {
-    if (from && from > 0 && m.createTime < from) return false;
-    if (to && to > 0 && m.createTime > to) return false;
-    return true;
-  });
-  const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
-  const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
-  const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
-  const exportDir = dir && dir.trim() ? dir.trim() : join62(dirname23(decryptedDir), "exports");
-  mkdirSync18(exportDir, { recursive: true });
-  const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
-  const autoBase = sanitized + "_" + now + "_" + ((count ?? 0) === 0 ? "all" : String(count));
-  const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : "";
-  const base = userBase || autoBase;
-  const outExt = zip ? "zip" : ext;
-  const innerName = base.toLowerCase().endsWith("." + ext) ? base : base + "." + ext;
-  const filenameOut = base.toLowerCase().endsWith("." + outExt) ? base : base + "." + outExt;
-  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join62(exportDir, filenameOut), now };
-}
-function formatTextBody(format, msgs, username, now) {
-  if (format === "csv") return formatCsv(msgs, username);
-  if (format === "html") return formatHtml(msgs, username, now);
-  if (format === "md") return formatMarkdown(msgs, username);
-  if (format === "sql") return formatSql(msgs, username);
-  if (format === "json") return formatJson(msgs, username);
-  return formatTxt(msgs, username);
-}
-async function exportSessionMessagesStreamed(decryptedDir, options) {
-  const ctrl = { onProgress: options.onProgress, signal: options.signal };
-  const plan = planSessionExport(
-    decryptedDir,
-    options.username,
-    options.format,
-    options.count,
-    options.dir,
-    options.types,
-    options.richTypes,
-    options.from,
-    options.to,
-    options.filename,
-    options.zip,
-    ctrl
-  );
-  const { msgs } = plan;
-  if (plan.isXlsx && !options.zip) {
-    await writeXlsxStream(plan.outPath, messageRows(msgs, options.username), ctrl);
-  } else if (plan.isXlsx) {
-    const content = formatXlsx(msgs, options.username, ctrl);
-    await writeZipAtomic(plan.outPath, async (zip) => {
-      await zip.addFile(plan.innerName, content);
-      await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
-    });
-  } else {
-    const content = formatTextBody(plan.format, msgs, options.username, plan.now);
-    if (options.zip) {
-      await writeZipAtomic(plan.outPath, async (zip) => {
-        await zip.addFile(plan.innerName, content);
-        await zip.addFile("record_media.json", JSON.stringify({ username: options.username, exportedAt: plan.now, total: msgs.length, media: collectChatlogMedia(msgs) }, null, 2));
-      });
-    } else {
-      writeFileAtomicSync(plan.outPath, content);
-    }
-  }
-  return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length };
-}
-function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
-  const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
-  const stamp = now.slice(0, 8) + "_" + now.slice(9);
-  let header = [];
-  let rows = [];
-  if (kind === "contacts") {
-    header = ["\u663E\u793A\u540D", "\u5907\u6CE8", "\u6635\u79F0", "\u5FAE\u4FE1\u53F7", "\u522B\u540D", "\u7C7B\u578B", "\u9996\u5B57\u6BCD", "\u5168\u62FC", "\u7FA4\u6210\u5458\u6570", "\u7FA4\u4E3B", "\u6240\u5728\u7FA4"];
-    const env = queryContacts(decryptedDir, category ? { category } : void 0);
-    for (const c of env.contacts) {
-      rows.push([
-        c.displayName ?? "",
-        c.remark ?? "",
-        c.nickName ?? "",
-        c.username ?? "",
-        c.alias ?? "",
-        c.localTypeLabel ?? c.category ?? "",
-        c.initial ?? "",
-        c.quanPin ?? "",
-        c.memberCount != null ? String(c.memberCount) : "",
-        c.owner ?? "",
-        c.groupName ?? ""
-      ]);
-    }
-  } else if (kind === "favorites") {
-    header = ["localId", "\u7C7B\u578B", "\u66F4\u65B0\u65F6\u95F4", "\u5185\u5BB9", "\u6765\u6E90"];
-    const env = queryFavorites(decryptedDir, 5e3);
-    for (const f of env.favorites) {
-      rows.push([String(f.localId), String(f.type), String(f.updateTime), f.content, f.fromUsr]);
-    }
-  } else if (kind === "records") {
-    header = ["\u5B57\u6BB5"];
-    const env = queryRecords(decryptedDir, recordsKind ?? "revokes", 5e3);
-    for (const it of env.items) {
-      rows.push(Object.values(it).map((v) => String(v)));
-    }
-  } else if (kind === "moments") {
-    header = ["tid", "\u7528\u6237\u540D", "\u4F5C\u8005", "\u65F6\u95F4", "\u5185\u5BB9", "\u5A92\u4F53"];
-    const env = queryMoments(decryptedDir, 0, 5e3);
-    for (const m of env.moments) {
-      rows.push([m.tid, m.username, m.author, m.time, m.text, m.media_desc]);
-    }
-  } else if (kind === "privacy") {
-    header = ["\u7C7B\u522B", "\u4F1A\u8BDD", "\u8054\u7CFB\u4EBA", "\u65F6\u95F4", "\u7247\u6BB5"];
-    const env = queryPrivacyScan(decryptedDir);
-    for (const c of env.categories) {
-      for (const s of c.samples) {
-        rows.push([c.label, s.username, s.name, s.time, s.snippet]);
-      }
-    }
-  } else {
-    throw new Error("\u672A\u77E5\u5BFC\u51FA\u7C7B\u578B: " + kind);
-  }
-  const chosen = typeof dest === "string" && dest.trim() !== "" ? dest.trim() : "";
-  const filepath = chosen || join62(join62(dirname23(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
-  mkdirSync18(dirname23(filepath), { recursive: true });
-  writeFileAtomicSync(filepath, buildCsv(header, rows));
-  return { path: filepath, filename: basename9(filepath), count: rows.length };
-}
-function strOf(v) {
-  if (v === null || v === void 0) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
-  return "";
-}
-function pctOf(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? String(Math.round(n * 100)) + "%" : "";
-}
-function topOf(arr, limit = 12) {
-  if (!Array.isArray(arr)) return [];
-  return arr.slice(0, limit).map((it) => {
-    const o = it;
-    const username = strOf(o["username"]);
-    return {
-      username,
-      name: strOf(o["name"]) || username,
-      count: Number(o["count"] ?? 0)
-    };
-  });
-}
-function exportAnnualReport(decryptedDir, year, format, dir, filename) {
-  const report = queryAnnualReport(decryptedDir, year);
-  const ext = format === "html" ? "html" : format === "json" ? "json" : "md";
-  const base = dir && dir.trim() ? dir.trim() : join62(dirname23(decryptedDir), "exports");
-  const safeName = filename && filename.trim() ? filename.trim().replace(/\.(md|html|json)$/i, "") + "." + ext : "wechat_annual_" + String(year) + "." + ext;
-  mkdirSync18(base, { recursive: true });
-  let content = "";
-  const total = Number(report["total"] ?? 0);
-  const activeDays = Number(report["active_days"] ?? 0);
-  const textChars = Number(report["text_chars"] ?? 0);
-  const dailyAvg = Number(report["daily_avg"] ?? 0);
-  const tags = Array.isArray(report["persona_tags"]) ? report["persona_tags"].map((t) => strOf(t)).join(" ") : "";
-  const kinds = report["kind_counts"];
-  const kindLine = kinds ? Object.entries(kinds).map(([k, v]) => k + " " + strOf(v)).join(" \xB7 ") : "";
-  const phrases = Array.isArray(report["top_phrases"]) ? report["top_phrases"].slice(0, 12).map((p) => {
-    const o = p;
-    return strOf(o["phrase"]) + "(" + strOf(o["count"]) + ")";
-  }).join(" \xB7 ") : "";
-  const emoji = Array.isArray(report["top_emoji"]) ? report["top_emoji"].slice(0, 8).map((e) => {
-    const o = e;
-    return strOf(o["emoji"]) + "\xD7" + strOf(o["count"]);
-  }).join(" ") : "";
-  const contacts = topOf(report["top_contacts"]);
-  const groups = topOf(report["top_groups"]);
-  const firstRaw = report["first_message"];
-  const lastRaw = report["last_message"];
-  const first = firstRaw == null ? "\u2014" : strOf(firstRaw) || "\u2014";
-  const last = lastRaw == null ? "\u2014" : strOf(lastRaw) || "\u2014";
-  if (ext === "html") {
-    const items = [];
-    items.push("<style>body{background:#0b0e13;color:#e6ebf2;font-family:sans-serif;max-width:760px;margin:40px auto;padding:0 18px}h1{color:#22d3ee}h2{border-left:4px solid #22d3ee;padding-left:8px;color:#fff}li{line-height:1.8}</style>");
-    items.push("<h1>" + String(year) + " \u5E74\uFF0C\u4F60\u8BF4\u4E86 " + String(total) + " \u6761\u6D88\u606F</h1>");
-    items.push("<p>\u6D3B\u8DC3 " + String(activeDays) + " \u5929 \xB7 \u6587\u5B57 " + String(textChars) + " \u5B57 \xB7 \u65E5\u5747 " + String(dailyAvg) + " \u6761 \xB7 \u4EBA\u7269\u6807\u7B7E: " + (tags || "\u2014") + "</p>");
-    items.push("<p>\u7C7B\u578B\u5360\u6BD4: \u6587\u5B57 " + pctOf(report["text_share"]) + " \xB7 \u6DF1\u591C " + pctOf(report["night_share"]) + " \xB7 \u6E05\u6668 " + pctOf(report["morning_share"]) + " \xB7 \u5468\u672B " + pctOf(report["weekend_share"]) + " \xB7 \u7FA4\u804A " + pctOf(report["group_share"]) + "</p>");
-    if (kindLine) items.push("<h2>\u6D88\u606F\u7C7B\u578B</h2><p>" + kindLine + "</p>");
-    if (phrases) items.push("<h2>\u9AD8\u9891\u77ED\u8BED</h2><p>" + phrases + "</p>");
-    if (emoji) items.push("<h2>\u8868\u60C5\u5B87\u5B99</h2><p>" + emoji + "</p>");
-    if (contacts.length > 0) {
-      items.push("<h2>\u804A\u5F97\u6700\u591A\u7684\u4EBA</h2><ul>" + contacts.map((c) => "<li>" + c.name + " \u2014 " + String(c.count) + " \u6761</li>").join("") + "</ul>");
-    }
-    if (groups.length > 0) {
-      items.push("<h2>\u6700\u6D3B\u8DC3\u7684\u7FA4\u804A</h2><ul>" + groups.map((c) => "<li>" + c.name + " \u2014 " + String(c.count) + " \u6761</li>").join("") + "</ul>");
-    }
-    items.push("<h2>\u9996\u53E5\u4E0E\u672B\u53E5</h2><p><b>\u9996\u53E5\uFF1A</b>" + first + "</p><p><b>\u672B\u53E5\uFF1A</b>" + last + "</p>");
-    content = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u5E74\u5EA6\u603B\u7ED3 ' + String(year) + "</title>" + items.join("") + "</body></html>";
-  } else if (ext === "json") {
-    content = JSON.stringify(report, null, 2);
-  } else {
-    const md = [];
-    md.push("# \u5FAE\u4FE1\u5E74\u5EA6\u603B\u7ED3 " + String(year));
-    md.push("");
-    md.push("\u603B\u6D88\u606F " + String(total) + " \u6761 \xB7 \u6D3B\u8DC3 " + String(activeDays) + " \u5929 \xB7 \u6587\u5B57 " + String(textChars) + " \u5B57 \xB7 \u65E5\u5747 " + String(dailyAvg) + " \u6761");
-    if (tags) md.push("\u4EBA\u7269\u6807\u7B7E: " + tags);
-    md.push("\u7C7B\u578B\u5360\u6BD4: \u6587\u5B57 " + pctOf(report["text_share"]) + " \xB7 \u6DF1\u591C " + pctOf(report["night_share"]) + " \xB7 \u6E05\u6668 " + pctOf(report["morning_share"]) + " \xB7 \u5468\u672B " + pctOf(report["weekend_share"]) + " \xB7 \u7FA4\u804A " + pctOf(report["group_share"]));
-    if (kindLine) md.push("\u6D88\u606F\u7C7B\u578B: " + kindLine);
-    if (phrases) md.push("\u9AD8\u9891\u77ED\u8BED: " + phrases);
-    if (emoji) md.push("\u8868\u60C5\u5B87\u5B99: " + emoji);
-    if (contacts.length > 0) {
-      md.push("\u804A\u5F97\u6700\u591A\u7684\u4EBA:");
-      contacts.forEach((c, i) => md.push(String(i + 1) + ". " + c.name + " \u2014 " + String(c.count) + " \u6761"));
-    }
-    if (groups.length > 0) {
-      md.push("\u6700\u6D3B\u8DC3\u7684\u7FA4\u804A:");
-      groups.forEach((c, i) => md.push(String(i + 1) + ". " + c.name + " \u2014 " + String(c.count) + " \u6761"));
-    }
-    md.push("\u9996\u53E5: " + first);
-    md.push("\u672B\u53E5: " + last);
-    content = md.join("\n");
-  }
-  const path = join62(base, safeName);
-  writeFileAtomicSync(path, content);
-  return { path, filename: safeName, count: total };
-}
-async function exportMoments(decryptedDir, opts) {
-  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
-  const format = opts?.format === "html" ? "html" : opts?.format === "json" ? "json" : opts?.format === "csv" ? "csv" : "txt";
-  const NL = String.fromCharCode(10);
-  const items = [];
-  let offset = 0;
-  for (; ; ) {
-    throwIfCancelled(ctrl.signal);
-    const env = queryMoments(decryptedDir, offset, 500, opts?.username);
-    items.push(...env.moments);
-    offset += env.moments.length;
-    reportProgress(ctrl, "collect", items.length, 0);
-    if (env.moments.length < 500) break;
-    if (items.length > 1e4) break;
-  }
-  const from = opts?.from ?? 0;
-  const to = opts?.to ?? 0;
-  const q = (opts?.q ?? "").trim().toLowerCase();
-  const authorName = (opts?.authorName ?? "").trim();
-  const media = opts?.media;
-  const month = opts?.month;
-  const mine = opts?.mine;
-  const mediaCtx = opts?.images && format === "html" ? exportMediaCtx(decryptedDir) : void 0;
-  const filtered = items.filter((m) => {
-    if (authorName && m.author !== authorName) return false;
-    if (media && media !== "all") {
-      if (media === "image" && m.images.length === 0) return false;
-      if (media === "video" && m.videos.length === 0) return false;
-      if (media === "link" && !(m.link_title || m.contentType === 3 || m.contentType === 28)) return false;
-      if (media === "location" && !m.location) return false;
-      if (media === "text" && !(m.images.length === 0 && m.videos.length === 0 && !m.link_title)) return false;
-    }
-    if (mine === "mine" && !m.is_self) return false;
-    if (mine === "others" && m.is_self) return false;
-    if (month && m.ts) {
-      const d = new Date(m.ts * 1e3);
-      const k = String(d.getFullYear()) + "-" + String(d.getMonth() + 1).padStart(2, "0");
-      if (k !== month) return false;
-    }
-    if (from > 0 && m.ts < from) return false;
-    if (to > 0 && m.ts > to) return false;
-    if (!q) return true;
-    return m.author.toLowerCase().includes(q) || m.text.toLowerCase().includes(q) || m.location.toLowerCase().includes(q) || m.link_title.toLowerCase().includes(q) || (m.link_url ?? "").toLowerCase().includes(q) || (m.sourceNickName ?? "").toLowerCase().includes(q) || (m.publicUserName ?? "").toLowerCase().includes(q) || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q)) || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q));
-  });
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join62(dirname23(decryptedDir), "exports");
-  mkdirSync18(base, { recursive: true });
-  if (opts?.zip) {
-    const mediaCtx2 = exportMediaCtx(decryptedDir);
-    const rawName = (opts.filename ?? "").trim();
-    const zipBase = rawName ? rawName.replace(/\.zip$/i, "") : "";
-    const zipName = zipBase ? zipBase + ".zip" : "wechat_moments_" + String(Date.now()) + ".zip";
-    const zipPath = join62(base, zipName);
-    let mediaCount = 0;
-    await writeZipAtomic(zipPath, async (zip) => {
-      await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
-      let idx = 0;
-      for (const m of filtered) {
-        if (mediaCount >= MAX_MOMENT_MEDIA) break;
-        throwIfCancelled(ctrl.signal);
-        for (const im of m.images) {
-          if (mediaCount >= MAX_MOMENT_MEDIA) break;
-          const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx2.base, mediaCtx2.aesKey, mediaCtx2.xorKey, im.md5, im.timelineId, im.id) : { error: "" };
-          if (r.url) {
-            const buf = dataUrlToBuffer(r.url);
-            if (buf) {
-              await zip.addFile("media/images/img_" + String(idx++) + ".jpg", buf);
-              mediaCount += 1;
-            }
-          }
-        }
-        if (mediaCount >= MAX_MOMENT_MEDIA) break;
-        for (const v of m.videos) {
-          if (mediaCount >= MAX_MOMENT_MEDIA) break;
-          const r = resolveSnsVideoDataUrl(mediaCtx2.base, v.md5, v.timelineId, v.id);
-          if (r.url) {
-            const buf = dataUrlToBuffer(r.url);
-            if (buf) {
-              await zip.addFile("media/videos/vid_" + String(idx++) + ".mp4", buf);
-              mediaCount += 1;
-            }
-          }
-        }
-        reportProgress(ctrl, "media", mediaCount, MAX_MOMENT_MEDIA);
-      }
-    });
-    return { path: zipPath, filename: zipName, count: filtered.length };
-  }
-  const ext = format;
-  const name = opts?.filename && opts.filename.trim() ? opts.filename.trim().replace(/\.(txt|html|json|csv)$/i, "") + "." + ext : "wechat_moments_" + String(Date.now()) + "." + ext;
-  let content = "";
-  if (ext === "json") {
-    content = JSON.stringify(filtered, null, 2);
-  } else if (ext === "csv") {
-    const lines = ["\u65F6\u95F4,\u4F5C\u8005,\u5185\u5BB9,\u56FE\u7247\u6570,\u89C6\u9891\u6570,\u4F4D\u7F6E,\u94FE\u63A5\u6807\u9898,\u94FE\u63A5URL"];
-    for (const m of filtered) {
-      throwIfCancelled(ctrl.signal);
-      lines.push(csvCell(m.time) + "," + csvCell(m.author) + "," + csvCell(m.text) + "," + String(m.images.length) + "," + String(m.videos.length) + "," + csvCell(m.location) + "," + csvCell(m.link_title) + "," + csvCell(m.link_url ?? ""));
-    }
-    content = lines.join(NL);
-  } else if (ext === "html") {
-    const parts = [];
-    parts.push('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>\u5FAE\u4FE1\u670B\u53CB\u5708\u5BFC\u51FA</title>');
-    parts.push('<style>body{background:#f2f2f2;font-family:sans-serif;margin:0;padding:24px 12px;color:#222}.wrap{max-width:680px;margin:0 auto}.hd{text-align:center;margin-bottom:18px}.card{background:#fff;border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}.meta{color:#888;font-size:12px;margin-bottom:6px}.content{font-size:14px;line-height:1.6;white-space:pre-wrap}.tag{color:#576b95;font-size:12px;margin-top:6px}.divider{text-align:center;color:#bbb;font-size:12px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block}.grid.single{grid-template-columns:1fr;max-width:240px}</style></head><body><div class="wrap"><div class="hd"><h1>\u5FAE\u4FE1\u670B\u53CB\u5708</h1><p>\u5171 ' + String(filtered.length) + " \u6761\u52A8\u6001</p></div>");
-    for (const m of filtered) {
-      throwIfCancelled(ctrl.signal);
-      parts.push('<div class="card"><div class="meta">' + htmlEscape(m.author) + " \xB7 " + htmlEscape(m.time) + "</div>");
-      if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + "</div>");
-      if (m.images.length > 0) {
-        const single = m.images.length === 1 ? " single" : "";
-        const imgs = m.images.map((im) => {
-          let src = im.url || im.thumb || "";
-          if (mediaCtx && im.md5) {
-            const r = resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id);
-            if (r.url) src = r.url;
-          }
-          return '<img src="' + htmlEscape(src) + '" loading="lazy" />';
-        }).join("");
-        parts.push('<div class="grid' + single + '">' + imgs + "</div>");
-      }
-      if (m.videos.length > 0) {
-        const cover = m.videos[0] && (m.videos[0].thumb || "");
-        parts.push('<div class="tag">\u89C6\u9891\xD7' + String(m.videos.length) + (cover ? ' <img src="' + htmlEscape(cover) + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-left:4px" />' : "") + "</div>");
-      }
-      if (m.location) parts.push('<div class="tag">\u{1F4CD}' + htmlEscape(m.location) + "</div>");
-      if (m.link_title) {
-        const link = m.link_url ? ' href="' + htmlEscape(m.link_url) + '" target="_blank" rel="noopener"' : "";
-        parts.push('<div class="tag"><a' + link + ">\u{1F517}" + htmlEscape(m.link_title) + "</a></div>");
-      }
-      if (m.likes.length > 0) parts.push('<div class="tag">\u2764 ' + htmlEscape(m.likes.map((l) => l.nickname || l.username || "").join("\u3001")) + "</div>");
-      if (m.comments.length > 0) {
-        parts.push('<div class="tag">\u{1F4AC} ' + String(m.comments.length) + " \u6761\u8BC4\u8BBA</div>");
-        for (const c of m.comments) {
-          parts.push('<div class="tag" style="color:#555">' + htmlEscape((c.nickname || c.username) + (c.content ? "\uFF1A" + c.content : "")) + "</div>");
-        }
-      }
-      parts.push("</div>");
-    }
-    parts.push("</div></body></html>");
-    content = parts.join("");
-  } else {
-    const lines = [];
-    for (const m of filtered) {
-      throwIfCancelled(ctrl.signal);
-      lines.push(m.time + " " + m.author);
-      if (m.text) lines.push(m.text);
-      const tags = [];
-      if (m.images.length > 0) tags.push("\u56FE\u7247\xD7" + String(m.images.length));
-      if (m.videos.length > 0) tags.push("\u89C6\u9891\xD7" + String(m.videos.length));
-      if (m.location) tags.push("\u{1F4CD}" + m.location);
-      if (m.link_title) tags.push("\u{1F517}" + m.link_title + (m.link_url ? " " + m.link_url : ""));
-      if (tags.length > 0) lines.push(tags.join("  "));
-      lines.push("---");
-    }
-    content = lines.join(NL);
-  }
-  const path = join62(base, name);
-  writeFileAtomicSync(path, content);
-  return { path, filename: name, count: filtered.length };
-}
-async function exportAllSessions(decryptedDir, opts) {
-  const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
-  const env = querySessions(decryptedDir);
-  const sessions = env.sessions.slice(0, 1e3);
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join62(dirname23(decryptedDir), "exports");
-  mkdirSync18(base, { recursive: true });
-  const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
-  const path = join62(base, filename);
-  const seen = /* @__PURE__ */ new Set();
-  let total = 0;
-  await writeZipAtomic(path, async (zip) => {
-    for (let i = 0; i < sessions.length; i += 1) {
-      const s = sessions[i];
-      throwIfCancelled(ctrl.signal);
-      reportProgress(ctrl, "sessions", i, sessions.length);
-      const msgs = collectMessages(decryptedDir, s.username, 0, ctrl);
-      const safeName = (s.displayName || s.username).replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 40);
-      const uid = s.username.replace(/[^A-Za-z0-9@._-]/g, "_");
-      let name = safeName + "_" + uid + ".txt";
-      let n = 2;
-      while (seen.has(name)) {
-        name = safeName + "_" + uid + "_" + String(n) + ".txt";
-        n += 1;
-      }
-      seen.add(name);
-      if (msgs.length === 0) {
-        await zip.addFile(name, "\uFF08\u65E0\u6D88\u606F\uFF09\n");
-      } else {
-        await zip.addFile(name, formatTxt(msgs, s.username));
-        total += msgs.length;
-      }
-      reportProgress(ctrl, "sessions", i + 1, sessions.length);
-    }
-  });
-  return { path, filename, count: total };
-}
-
-// src/backend/wechat-data/src/query/export-history.ts
-import { DatabaseSync as DatabaseSync38 } from "node:sqlite";
-import { existsSync as existsSync49, rmSync as rmSync9, statSync as statSync23 } from "node:fs";
-import { basename as basename10, dirname as dirname24, join as join63 } from "node:path";
-var DEFAULT_LIMIT = 200;
-var MAX_LIMIT = 2e3;
-var STATUSES = ["ok", "fail", "canceled"];
-var ALLOWED_STATUS = new Set(STATUSES);
-var SORT_COLUMNS = {
-  ts: "ts",
-  size: "size_bytes",
-  rows: "rows",
-  name: "filename"
-};
-function dbPath2(decryptedDir) {
-  return join63(dirname24(decryptedDir), "wechat_privacy.db");
-}
-function openStore3(decryptedDir) {
-  const db = new DatabaseSync38(dbPath2(decryptedDir));
-  db.exec(`CREATE TABLE IF NOT EXISTS export_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    label TEXT,
-    format TEXT,
-    path TEXT NOT NULL,
-    filename TEXT,
-    size_bytes INTEGER,
-    rows INTEGER,
-    status TEXT NOT NULL,
-    error TEXT,
-    params TEXT
-  )`);
-  db.exec("CREATE INDEX IF NOT EXISTS export_history_ts ON export_history(ts)");
-  return db;
-}
-function cleanText(v) {
-  if (typeof v !== "string") return "";
-  const t = v.trim();
-  return t === "undefined" || t === "null" ? "" : t;
-}
-function recordExport(decryptedDir, input) {
-  try {
-    const filePath = cleanText(input.path);
-    if (!filePath) return null;
-    let size = input.sizeBytes ?? null;
-    if (size === null && input.status === "ok") {
-      try {
-        const st = statSync23(filePath);
-        if (st.isFile()) size = st.size;
-      } catch {
-      }
-    }
-    const db = openStore3(decryptedDir);
-    try {
-      const info = db.prepare(`INSERT INTO export_history
-        (ts, kind, label, format, path, filename, size_bytes, rows, status, error, params)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        input.ts ?? Date.now(),
-        cleanText(input.kind) || "unknown",
-        cleanText(input.label),
-        cleanText(input.format),
-        filePath,
-        cleanText(input.filename) || basename10(filePath),
-        size,
-        Number.isFinite(input.rows) ? Number(input.rows) : 0,
-        ALLOWED_STATUS.has(input.status) ? input.status : "ok",
-        cleanText(input.error),
-        input.params === void 0 ? "" : safeJson(input.params)
-      );
-      return Number(info.lastInsertRowid ?? 0) || null;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return null;
-  }
-}
-function safeJson(v) {
-  try {
-    const s = JSON.stringify(v);
-    return typeof s === "string" ? s : "";
-  } catch {
-    return "";
-  }
-}
-function buildWhere(query) {
-  const clauses = [];
-  const params = [];
-  const kinds = (query.kinds ?? []).filter((k) => typeof k === "string" && k.trim() !== "");
-  if (kinds.length > 0) {
-    clauses.push("kind IN (" + kinds.map(() => "?").join(", ") + ")");
-    params.push(...kinds);
-  }
-  if (query.status && ALLOWED_STATUS.has(query.status)) {
-    clauses.push("status = ?");
-    params.push(query.status);
-  }
-  if (typeof query.from === "number" && Number.isFinite(query.from)) {
-    clauses.push("ts >= ?");
-    params.push(query.from);
-  }
-  if (typeof query.to === "number" && Number.isFinite(query.to)) {
-    clauses.push("ts <= ?");
-    params.push(query.to);
-  }
-  const q = cleanText(query.q);
-  if (q) {
-    const like2 = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
-    clauses.push("(filename LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' OR kind LIKE ? ESCAPE '\\')");
-    params.push(like2, like2, like2, like2);
-  }
-  return { sql: clauses.length > 0 ? " WHERE " + clauses.join(" AND ") : "", params };
-}
-function rowToEntry(r) {
-  const path = cleanText(r["path"]);
-  return {
-    id: Number(r["id"] ?? 0),
-    ts: Number(r["ts"] ?? 0),
-    kind: cleanText(r["kind"]),
-    label: cleanText(r["label"]),
-    format: cleanText(r["format"]),
-    path,
-    filename: cleanText(r["filename"]) || (path ? basename10(path) : ""),
-    sizeBytes: r["size_bytes"] === null || r["size_bytes"] === void 0 ? null : Number(r["size_bytes"]),
-    rows: Number(r["rows"] ?? 0),
-    status: ALLOWED_STATUS.has(cleanText(r["status"])) ? cleanText(r["status"]) : "ok",
-    error: cleanText(r["error"]),
-    params: cleanText(r["params"]),
-    // 每次读取都重新核对 —— 用户可能在资源管理器里移走/删掉了文件，
-    // 历史列表必须显示「已不在」，否则「打开」按钮点了没反应会像 bug。
-    existsNow: path ? existsSync49(path) : false
-  };
-}
-function listExportHistory(decryptedDir, query = {}) {
-  const empty = { items: [], total: 0, statusCounts: {}, kindCounts: {}, totalBytes: 0, missingCount: 0 };
-  const { sql: where, params } = buildWhere(query);
-  const limitRaw = Number(query.limit);
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), MAX_LIMIT) : DEFAULT_LIMIT;
-  const offsetRaw = Number(query.offset);
-  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
-  const col2 = SORT_COLUMNS[String(query.sort ?? "ts")] ?? "ts";
-  const dir = query.order === "asc" ? "ASC" : "DESC";
-  try {
-    const db = openStore3(decryptedDir);
-    try {
-      const rows = db.prepare(
-        `SELECT id, ts, kind, label, format, path, filename, size_bytes, rows, status, error, params
-         FROM export_history${where} ORDER BY ${col2} ${dir}, id DESC LIMIT ? OFFSET ?`
-      ).all(...params, limit, offset);
-      const total = Number(db.prepare(`SELECT COUNT(*) AS c FROM export_history${where}`).get(...params)?.c ?? 0);
-      const statusRows = db.prepare(`SELECT status, COUNT(*) AS c FROM export_history${where} GROUP BY status`).all(...params);
-      const kindRows = db.prepare(`SELECT kind, COUNT(*) AS c FROM export_history${where} GROUP BY kind`).all(...params);
-      const statusCounts = {};
-      for (const r of statusRows) statusCounts[cleanText(r.status)] = Number(r.c ?? 0);
-      const kindCounts = {};
-      for (const r of kindRows) kindCounts[cleanText(r.kind)] = Number(r.c ?? 0);
-      const items = rows.map(rowToEntry);
-      let totalBytes = 0;
-      let missingCount = 0;
-      for (const it of items) {
-        if (it.existsNow) totalBytes += Math.max(0, it.sizeBytes ?? 0);
-        else missingCount += 1;
-      }
-      return { items, total, statusCounts, kindCounts, totalBytes, missingCount };
-    } finally {
-      db.close();
-    }
-  } catch {
-    return empty;
-  }
-}
-function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
-  const result = { removed: 0, filesDeleted: 0, fileErrors: [] };
-  const wanted = ids.map(Number).filter((n) => Number.isFinite(n) && n > 0);
-  if (wanted.length === 0) return result;
-  try {
-    const db = openStore3(decryptedDir);
-    try {
-      const sel = db.prepare(`SELECT id, path FROM export_history WHERE id IN (${wanted.map(() => "?").join(", ")})`);
-      const rows = sel.all(...wanted);
-      if (deleteFiles) {
-        const seen = /* @__PURE__ */ new Set();
-        for (const r of rows) {
-          const p = cleanText(r.path);
-          if (!p || seen.has(p)) continue;
-          seen.add(p);
-          try {
-            if (existsSync49(p)) {
-              rmSync9(p, { recursive: true, force: true });
-              result.filesDeleted += 1;
-            }
-          } catch (e) {
-            result.fileErrors.push(basename10(p) + " \u2014 " + e.message);
-          }
-        }
-      }
-      const del = db.prepare(`DELETE FROM export_history WHERE id IN (${wanted.map(() => "?").join(", ")})`);
-      const info = del.run(...wanted);
-      result.removed = Number(info.changes ?? rows.length);
-      return result;
-    } finally {
-      db.close();
-    }
-  } catch (e) {
-    result.fileErrors.push(e.message);
-    return result;
-  }
-}
-function pruneExportHistory(decryptedDir, opts = {}) {
-  const result = { removed: 0, filesDeleted: 0, fileErrors: [] };
-  const days = Number(opts.olderThanDays);
-  const keep = Number(opts.keepLatest);
-  const hasDays = Number.isFinite(days) && days > 0;
-  const hasKeep = Number.isFinite(keep) && keep > 0;
-  if (!opts.onlyMissing && !hasDays && !hasKeep) return result;
-  try {
-    const db = openStore3(decryptedDir);
-    let ids = [];
-    try {
-      if (opts.onlyMissing) {
-        const rows = db.prepare("SELECT id, path FROM export_history").all();
-        ids = rows.filter((r) => {
-          const p = cleanText(r.path);
-          return !p || !existsSync49(p);
-        }).map((r) => Number(r.id));
-      } else {
-        const clauses = [];
-        const params = [];
-        if (hasKeep) {
-          const anchor = db.prepare("SELECT ts FROM export_history ORDER BY ts DESC, id DESC LIMIT 1 OFFSET ?").get(Math.max(0, Math.floor(keep) - 1));
-          if (anchor && typeof anchor.ts === "number") {
-            clauses.push("ts < ?");
-            params.push(anchor.ts);
-          }
-        }
-        if (hasDays) {
-          clauses.push("ts < ?");
-          params.push(Date.now() - Math.floor(days) * 864e5);
-        }
-        if (clauses.length > 0) {
-          const rows = db.prepare(`SELECT id FROM export_history WHERE ${clauses.join(" AND ")}`).all(...params);
-          ids = rows.map((r) => Number(r.id));
-        }
-      }
-    } finally {
-      db.close();
-    }
-    if (ids.length === 0) return result;
-    return deleteExportHistory(decryptedDir, ids, opts.deleteFiles === true);
-  } catch (e) {
-    result.fileErrors.push(e.message);
-    return result;
-  }
 }
 
 // src/backend/wechat-data/src/query/ask-history.ts
@@ -24348,13 +24579,6 @@ function resolveDirs() {
 }
 var STREAM_JOB_CAP = 20;
 var EXPORT_PROGRESS_EVENT = "wechat-export/progress";
-var CSV_KIND_LABEL = {
-  contacts: "\u901A\u8BAF\u5F55",
-  favorites: "\u6536\u85CF",
-  records: "\u8BB0\u5F55",
-  moments: "\u670B\u53CB\u5708",
-  privacy: "\u9690\u79C1\u626B\u63CF"
-};
 var ASK_FEEDBACK_DEDUPE_MS = 1e4;
 var ASK_FEEDBACK_CAP = 200;
 var CACHED_IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif"];
@@ -24441,6 +24665,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     this._knownEntities = /* @__PURE__ */ new Map();
     this._kbRemotes = void 0;
     this._mediaRemotes = void 0;
+    this._exportRemotes = void 0;
     this._ctx = ctx;
     this._dirs = resolveDirs();
     const decrypted = this._dirs.decrypted;
@@ -24824,6 +25049,19 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
       warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey)
     });
   }
+  /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
+  exportRemotes() {
+    return this._exportRemotes ??= createExportRemotes({
+      dirs: () => this._dirs,
+      ctx: () => this._ctx,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      recordExport: (input) => this.recordExport(input),
+      streamControl: (jobId) => this.streamControl(jobId),
+      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      streamJobs: this._streamJobs,
+      normalizeJobId: (jobId) => normalizeJobId(jobId)
+    });
+  }
   getSessions(options) {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset);
   }
@@ -25049,33 +25287,7 @@ var _WechatDataGateway = class _WechatDataGateway extends (_a = TypertRemoteServ
     return this.mediaRemotes().getVideoInfo(options);
   }
   async exportSessionMessages(options) {
-    try {
-      const r = await exportSessionMessagesStreamed(this._dirs.decrypted, { ...options });
-      this.op("export", "export_session_messages", "ok", options.username, `\u5171 ${r.count} \u6761`);
-      this.recordExport({
-        kind: "session",
-        label: options.sessionName ? `\u4F1A\u8BDD \xB7 ${options.sessionName}` : `\u4F1A\u8BDD \xB7 ${options.username}`,
-        format: options.zip ? "zip" : options.format,
-        path: r.path,
-        rows: r.count,
-        status: "ok",
-        // 重跑所需的**全部**入参：少了 from/to 之类的范围条件，重新导出就会得到不同结果。
-        params: options
-      });
-      return r;
-    } catch (e) {
-      this.op("export", "export_session_messages", "fail", options.username, e.message);
-      this.recordExport({
-        kind: "session",
-        label: options.sessionName ? `\u4F1A\u8BDD \xB7 ${options.sessionName}` : `\u4F1A\u8BDD \xB7 ${options.username}`,
-        format: options.zip ? "zip" : options.format,
-        path: "",
-        status: "fail",
-        error: e.message,
-        params: options
-      });
-      throw e;
-    }
+    return this.exportRemotes().exportSessionMessages(options);
   }
   /**
    * 记一条导出历史（best-effort）。
@@ -25920,192 +26132,31 @@ ${citedIndexes.length === 0 ? " \xB7 \u4E0A\u4E00\u6B21\u7684\u56DE\u7B54**\u6CA
     }
   }
   exportAnnualReport(options) {
-    try {
-      const r = exportAnnualReport(this._dirs.decrypted, options.year, options.format, options.dir, options.filename);
-      this.op("export", "export_annual_report", "ok", String(options.year), `\u5171 ${r.count} \u6761`);
-      this.recordExport({
-        kind: "annual",
-        label: `\u5E74\u5EA6\u62A5\u544A \xB7 ${options.year} \u5E74`,
-        format: options.format,
-        path: r.path,
-        rows: r.count,
-        status: "ok",
-        params: options
-      });
-      return r;
-    } catch (e) {
-      this.op("export", "export_annual_report", "fail", String(options.year), e.message);
-      this.recordExport({
-        kind: "annual",
-        label: `\u5E74\u5EA6\u62A5\u544A \xB7 ${options.year} \u5E74`,
-        format: options.format,
-        path: "",
-        status: "fail",
-        error: e.message,
-        params: options
-      });
-      throw e;
-    }
+    return this.exportRemotes().exportAnnualReport(options);
   }
   async exportAllSessions(options) {
-    const jobId = normalizeJobId(options?.jobId);
-    try {
-      const r = await exportAllSessions(this._dirs.decrypted, {
-        ...options?.dir !== void 0 ? { dir: options.dir } : {},
-        ...options?.filename !== void 0 ? { filename: options.filename } : {},
-        ...this.streamControl(jobId)
-      });
-      this.finishStreamJob(jobId);
-      this.op("export", "export_all_sessions", "ok", "", `\u5171 ${r.count} \u6761`);
-      this.recordExport({
-        kind: "all_sessions",
-        label: "\u5168\u90E8\u4F1A\u8BDD\u5F52\u6863",
-        format: "zip",
-        path: r.path,
-        rows: r.count,
-        status: "ok",
-        params: options ?? {}
-      });
-      return r;
-    } catch (e) {
-      this.finishStreamJob(jobId, e.message);
-      this.op("export", "export_all_sessions", "fail", "", e.message);
-      const canceled = /cancel|取消|abort/i.test(e.message);
-      this.recordExport({
-        kind: "all_sessions",
-        label: "\u5168\u90E8\u4F1A\u8BDD\u5F52\u6863",
-        format: "zip",
-        path: "",
-        status: canceled ? "canceled" : "fail",
-        error: canceled ? "" : e.message,
-        params: options ?? {}
-      });
-      throw e;
-    }
+    return this.exportRemotes().exportAllSessions(options);
   }
   cancelExportJob(options) {
-    const id = normalizeJobId(options?.jobId);
-    const job = id ? this._streamJobs.get(id) : void 0;
-    if (!job) return { ok: false, error: "\u6CA1\u6709\u8BE5\u5BFC\u51FA\u4EFB\u52A1\uFF08jobId \u4E0D\u5B58\u5728\uFF0C\u6216\u8FDB\u7A0B\u5DF2\u91CD\u542F\uFF09" };
-    if (job.finished) return { ok: false, error: "\u8BE5\u5BFC\u51FA\u4EFB\u52A1\u5DF2\u7ED3\u675F" };
-    job.ctrl.abort();
-    this.op("export", "cancel_export_job", "ok", id);
-    return { ok: true };
+    return this.exportRemotes().cancelExportJob(options);
   }
   getExportProgress(options) {
-    const id = normalizeJobId(options?.jobId);
-    const job = id ? this._streamJobs.get(id) : void 0;
-    if (!job) return { found: false, phase: "", done: 0, total: 0, finished: true };
-    return {
-      found: true,
-      phase: job.progress?.phase ?? "",
-      done: job.progress?.done ?? 0,
-      total: job.progress?.total ?? 0,
-      finished: job.finished,
-      ...job.error ? { error: job.error } : {}
-    };
+    return this.exportRemotes().getExportProgress(options);
   }
   async exportMoments(options) {
-    const jobId = normalizeJobId(options?.jobId);
-    try {
-      const r = await exportMoments(this._dirs.decrypted, {
-        ...options?.format !== void 0 ? { format: options.format } : {},
-        ...options?.username !== void 0 ? { username: options.username } : {},
-        ...options?.authorName !== void 0 ? { authorName: options.authorName } : {},
-        ...options?.q !== void 0 ? { q: options.q } : {},
-        ...options?.images !== void 0 ? { images: options.images } : {},
-        ...options?.media !== void 0 ? { media: options.media } : {},
-        ...options?.month !== void 0 ? { month: options.month } : {},
-        ...options?.mine !== void 0 ? { mine: options.mine } : {},
-        ...options?.zip !== void 0 ? { zip: options.zip } : {},
-        ...options?.from !== void 0 ? { from: options.from } : {},
-        ...options?.to !== void 0 ? { to: options.to } : {},
-        ...options?.dir !== void 0 ? { dir: options.dir } : {},
-        ...options?.filename !== void 0 ? { filename: options.filename } : {},
-        ...this.streamControl(jobId)
-      });
-      this.finishStreamJob(jobId);
-      this.op("export", "export_moments", "ok", options?.username ?? "", `\u5171 ${r.count} \u6761`);
-      this.recordExport({
-        kind: "moments",
-        label: options?.username ? `\u670B\u53CB\u5708 \xB7 ${options.authorName ?? options.username}` : "\u670B\u53CB\u5708 \xB7 \u5168\u90E8",
-        format: options?.zip ? "zip" : options?.format ?? "txt",
-        path: r.path,
-        rows: r.count,
-        status: "ok",
-        params: options ?? {}
-      });
-      return r;
-    } catch (e) {
-      this.finishStreamJob(jobId, e.message);
-      this.op("export", "export_moments", "fail", options?.username ?? "", e.message);
-      const canceled = /cancel|取消|abort/i.test(e.message);
-      this.recordExport({
-        kind: "moments",
-        label: options?.username ? `\u670B\u53CB\u5708 \xB7 ${options.authorName ?? options.username}` : "\u670B\u53CB\u5708 \xB7 \u5168\u90E8",
-        format: options?.zip ? "zip" : options?.format ?? "txt",
-        path: "",
-        status: canceled ? "canceled" : "fail",
-        error: canceled ? "" : e.message,
-        params: options ?? {}
-      });
-      throw e;
-    }
+    return this.exportRemotes().exportMoments(options);
   }
   exportCsv(options) {
-    const label = CSV_KIND_LABEL[options.kind] ?? options.kind;
-    try {
-      const r = exportCsv(this._dirs.decrypted, options.kind, options.recordsKind, options.dest, options.category);
-      this.op("export", "export_csv", "ok", options.kind, `\u5171 ${r.count} \u884C`);
-      this.recordExport({
-        kind: options.kind,
-        label: options.category && options.category !== "all" ? `${label} \xB7 ${options.category}` : label,
-        format: "csv",
-        path: r.path,
-        rows: r.count,
-        status: "ok",
-        params: options
-      });
-      return r;
-    } catch (e) {
-      this.op("export", "export_csv", "fail", options.kind, e.message);
-      this.recordExport({
-        kind: options.kind,
-        label,
-        format: "csv",
-        path: "",
-        status: "fail",
-        error: e.message,
-        params: options
-      });
-      throw e;
-    }
+    return this.exportRemotes().exportCsv(options);
   }
   getExportHistory(options) {
-    return listExportHistory(this._dirs.decrypted, options ?? {});
+    return this.exportRemotes().getExportHistory(options);
   }
   deleteExportHistory(options) {
-    const ids = Array.isArray(options?.ids) ? options.ids : [];
-    const r = deleteExportHistory(this._dirs.decrypted, ids, options?.deleteFiles === true);
-    this.op(
-      "delete",
-      "delete_export_history",
-      r.removed > 0 ? "ok" : "skip",
-      String(r.removed),
-      `${r.removed} \u6761\u8BB0\u5F55${options?.deleteFiles ? `\uFF0C${r.filesDeleted} \u4E2A\u6587\u4EF6` : ""}`
-    );
-    return r;
+    return this.exportRemotes().deleteExportHistory(options);
   }
   pruneExportHistory(options) {
-    const r = pruneExportHistory(this._dirs.decrypted, options ?? {});
-    this.op(
-      "delete",
-      "prune_export_history",
-      r.removed > 0 ? "ok" : "skip",
-      String(r.removed),
-      `${r.removed} \u6761\u8BB0\u5F55${options?.deleteFiles ? `\uFF0C${r.filesDeleted} \u4E2A\u6587\u4EF6` : ""}`
-    );
-    return r;
+    return this.exportRemotes().pruneExportHistory(options);
   }
   getAskHistory(options) {
     return listAskHistory(this._dirs.decrypted, options ?? {});
