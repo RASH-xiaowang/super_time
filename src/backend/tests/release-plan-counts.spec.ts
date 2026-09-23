@@ -137,13 +137,17 @@ function rowShapes(): Array<{ id: string, line: number, cells: number, header: n
 const SHAPES = rowShapes().filter((s) => s.header > 0)
 
 /**
- * 今天的既有欠账（**只许变短**）：这几行与本表表头列数不符。
- * 列进来不是为了放行，是为了「修一行必须同时把名单改短」—— 与 M21 那个白名单同一种棘轮。
- * 每一项都记在 N38 里，需要人判断的是「证据位置到哪里为止、验收标准从哪里开始」。
+ * 条目形状欠账名单 —— **必须是空的**（N38 已收口）。
+ *
+ * 这里曾经是 23 行冻结的既有欠账（19 行缺一格、4 行多一格），口径与 M21 那个白名单一样是
+ * 「只许变短」。2026-09-24 那 23 行全部修完：19 行沿正文里本来就有的 `**已完成` / `验收：` /
+ * `**处理` 边界切成两列，3 行把正文里的竖线转义（`string \| undefined`、`a \|\| b`、
+ * `mean\|d\|=max\|d\|=0` —— 代码片段里的竖线在表格单元里照样换列），1 行把多出来的「实施结果」
+ * 并回验收列。**从这一刻起这两份名单是硬约束**：再写进一行列数不对的条目，本条立刻红，
+ * 而不是又攒一份「今天的欠账」。
  */
-const WIDE_DEBT = ['M12', 'M18', 'M19', 'N31']
-const SHORT_DEBT = ['M1', 'M8', 'M9', 'M10', 'M11', 'M13', 'M14', 'M15', 'M16', 'M17',
-  'N14', 'N15', 'N16', 'N17', 'N18', 'N19', 'N20', 'N21', 'N22']
+const WIDE_DEBT: string[] = []
+const SHORT_DEBT: string[] = []
 
 describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个问题本身要能信）', () => {
   it('阶段标题都解析到了，且条目表不是空的（解析口径坏了要红，而不是「两边都空所以相等」）', () => {
@@ -224,7 +228,7 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     expect(dupes, '同一个 ID 出现在两处').toEqual([])
   })
 
-  it('条目行的列数与本表表头一致（既有欠账按棘轮冻结，只许变短）', () => {
+  it('条目行的列数与本表表头一致（N38 收口之后，这两份名单必须一直为空）', () => {
     expect(SHAPES.length, '一条条目行都没解析到 —— 表头或行格式变了').toBeGreaterThanOrEqual(90)
     const wide = SHAPES.filter((s) => s.cells > s.header).map((s) => s.id).sort()
     const short = SHAPES.filter((s) => s.cells < s.header).map((s) => s.id).sort()
