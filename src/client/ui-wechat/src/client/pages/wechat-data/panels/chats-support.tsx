@@ -189,7 +189,7 @@ export function Avatar({ name, username, size }: { name: string; username: strin
     if (!key || cached !== undefined) return
     apiGetAvatar({ username: key })
       .then((r) => {
-        const value = r.kind === 'data' ? (r.data ?? null) : r.kind === 'url' ? (r.url ?? null) : null
+        const value = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, value, AVATAR_CACHE_MAX)
         if (!cancelled) force(v => v + 1)
       })

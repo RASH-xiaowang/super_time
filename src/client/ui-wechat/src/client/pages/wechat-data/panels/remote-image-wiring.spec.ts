@@ -3,7 +3,7 @@
  * M23 接线守卫：卡片缩略图必须**经过后端代理**，而不是把消息里的 https 地址直接交给 `<img>`。
  *
  * 为什么单独立一份（`api-remote-image.spec.ts` 已经测过攒批了）：那边测的是「api 层会不会攒批」，
- * 而这一刀真正的风险在**调用点退回去** —— 只要有人在卡片里再写一次 `<img src={cspSafeSrc(...)}>`，
+ * 而这一刀真正的风险在**调用点退回去** —— 只要有人在卡片里再写一次 `<img src={proxyableSrc(...)}>`，
  * 那张图就又变成渲染层直连：出网开关管不到、不进操作记录、没有缓存，而**全部门禁仍然是绿的**
  * （CSP 的 `https:` 通配还没拿掉，所以它连违规都不会报）。这正是本仓反复踩过的「只测下层、
  * 不测接线」的缺口，所以这里钉的是 JSX 本身。
@@ -11,7 +11,7 @@
  * 判据用 TypeScript 的 AST，只认真实 JSX 元素与 import 绑定 —— 注释里写一句 `<RemoteImg`、
  * 或字符串里出现 `getRemoteImages` 都不算数（M12 / N19 / N20 / N23 同一族教训）。
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -86,9 +86,31 @@ describe('M23：卡片缩略图走后端代理', () => {
         expect(p, `${file} 的 poster 又不是只给本机地址：poster={${p}}`).toMatch(/^localImageSrc\(/)
       }
       // 远程地址不许再原样进 poster 的兜底分支
-      expect(text).not.toMatch(/poster=\{[^}]*cspSafeSrc/)
+      expect(text).not.toMatch(/poster=\{[^}]*proxyableSrc/)
     })
   }
+
+  /**
+   * 头像这一类（M23 第四刀）的收口点在 **api 层**：`getAvatar` 会回远程地址，而它有 7 个调用点，
+   * 只要还留着 `kind === 'url'` 分支，就总有一处把远程地址直接画进 `<img>`（那两个出网开关管不到，
+   * 而 CSP 的 `https:` 通配拿掉之前连违规都不报）。`api-avatar-proxy.spec.ts` 测的是「换成了什么」，
+   * 这里测的是「没人再留那条退路」。
+   */
+  it('渲染层不留 kind === \'url\' 的分支，画头像的文件不 import 地址筛选器', () => {
+    const AVATAR_FILES = ['Contacts.tsx', 'FriendAvatarRail.tsx', 'chats-support.tsx', 'chats-media.tsx',
+      'chats-view.tsx', 'moments-support.tsx', 'overview-parts.tsx', 'settings-common.tsx', 'Graph.tsx',
+      'Annual.tsx', 'WorldMap.tsx', 'WechatDataPanel.tsx']
+    const paths = AVATAR_FILES.map((f) => join(HERE, f)).filter((p) => existsSync(p))
+      .concat([join(HERE, '..', 'WechatDataPanel.tsx'), join(HERE, '..', 'api-config.ts')].filter((p) => existsSync(p)))
+    expect(paths.length, '一个头像消费点都没找到？前提不成立').toBeGreaterThanOrEqual(AVATAR_FILES.length)
+    for (const p of paths) {
+      const text = readFileSync(p, 'utf8')
+      const name = p.split(/[\\/]/).pop() ?? p
+      expect(text, `${name} 又留了直接画远程头像地址的分支`).not.toMatch(/kind\s*===\s*'url'/)
+      // 这些文件要的已经是「可画地址」；再 import 地址筛选器就说明远程地址流回了界面这一层
+      expect(text, `${name} 还在自己筛远程地址（应该由 api 层或后端代理做）`).not.toMatch(/from '\.\.?\/?(utils\/)?url\.ts'/)
+    }
+  })
 
   it('RemoteImg 自己只在需要时才发代理请求，本地地址走同步分支', () => {
     const { src, text } = parse(REMOTE_IMG)

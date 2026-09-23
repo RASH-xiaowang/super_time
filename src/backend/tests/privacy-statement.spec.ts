@@ -128,13 +128,21 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(doc).toMatch(/头像/)
   })
 
-  it('CSP 仍允许任意 https 图片时，文档必须如实写出这条外发通道', () => {
-    const csp = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'index.html'), 'utf8')
+  it('img-src 只许画本机来源，且文档与它互相咬合（M23）', () => {
+    // 先去掉 HTML 注释、再从 meta 的 content 里取 CSP：注释里会正当出现 `https:` 与 `img-src`
+    // 这两个词（它们解释的正是「为什么不许再写回来」），按整份文件匹配会把注释当成策略本身。
+    const html = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
+    const csp = /http-equiv="Content-Security-Policy"\s+content="([^"]*)"/.exec(html)?.[1] ?? ''
+    expect(csp, 'index.html 里找不到 CSP 的 meta 标签').not.toBe('')
     const imgSrc = /img-src([^;]*)/.exec(csp)?.[1] ?? ''
-    if (/https:/.test(imgSrc)) {
-      expect(doc, 'CSP 的 img-src 是 https: 通配，文档必须说明渲染层可向任意 https 主机发图片请求')
-        .toContain('img-src https:')
-    }
+    expect(imgSrc, 'CSP 里没有 img-src 这一节').not.toBe('')
+    // 这一条就是 M23 的验收本身：远程 scheme 通配一旦回来，「关掉两个开关就不再为图片出网」
+    // 立刻变成假话（渲染层的 <img> 又能向任意主机发请求），而除了这里没人会发现。
+    expect(imgSrc, 'img-src 里又出现远程 scheme 通配了：远程图片要走后端 query/remote-image.ts ——' + imgSrc)
+      .not.toMatch(/\b(?:https?|ws|wss):/)
+    expect(doc, 'img-src 已经收紧，文档不该继续声称渲染层可向任意 https 主机发图片请求')
+      .not.toContain('img-src https:')
+    expect(doc, '文档要正面写明「图片只来自本机」').toContain('img-src 只放行本机来源')
   })
 
   it('文档声称的「会出网」代码位置确实有网络调用', () => {

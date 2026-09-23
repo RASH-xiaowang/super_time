@@ -45,7 +45,7 @@ interface OutboundEntry {
   /** 目的地主机（等宽字体，看得出是技术事实而不是形容词）。 */
   host?: string
   kind: SwitchKind
-  /** 需要额外提醒时的一行 —— 目前只有「无开关」的两条用得上。 */
+  /** 需要额外提醒时的一行 —— 目前只有「头像图片」与「地图底图」这两条用得上。 */
   note?: string
 }
 
@@ -58,9 +58,10 @@ const KIND_CHIP: Readonly<Record<SwitchKind, string>> = {
 /**
  * 出网点清单（与 `docs/PRIVACY.md` 第四节逐条对应）。
  *
- * 口径提醒：`toggle` 只表示**应用内有开关**。渲染层按消息里的地址直连加载的图片与头像
- * 不受「自动获取原图（CDN）」控制（那个开关管的是后端主动取回），所以下面另有一段 caveat 说明，
- * 不能让人把「关掉开关」读成「完全离线」。
+ * 口径提醒：`toggle` 表示**应用内有开关**。图片/头像/视频这一类自 M23 起全部由后端代取，
+ * 所以「自动获取原图（CDN）」与「禁止出网」真的管得到它们 —— 界面自己不再向任何远程主机要图
+ * （CSP 的 `img-src` 只放行本机来源）。剩下 `none` 的那几条（地图底图、语音模型下载）才是
+ * 真的没有开关，下面的 caveat 只对它们成立。
  */
 const OUTBOUND: ReadonlyArray<OutboundEntry> = [
   {
@@ -77,10 +78,10 @@ const OUTBOUND: ReadonlyArray<OutboundEntry> = [
   },
   {
     label: '头像图片',
-    text: '本地未缓存时，按微信记录的头像地址加载',
+    text: '本机未缓存时由后端按微信记录的头像地址代为取回（界面不直接请求）',
     host: 'wx.qlogo.cn、mmhead.c2c.wechat.com 等腾讯图片 CDN',
-    kind: 'none',
-    note: '不发聊天内容，但会暴露你关注了谁（实测约 82% 的联系人本机无缓存）。',
+    kind: 'toggle',
+    note: '不发聊天内容，但会暴露你关注了谁（实测约 82% 的联系人本机无缓存）。关掉「自动获取原图（CDN）」后只用本机缓存，缺的头像退成首字母。',
   },
   {
     label: '远程图片 / 视频 / 公众号封面',
@@ -167,7 +168,7 @@ export function PrivacyConsentGate({
                   唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 它发给你<b>自己配置</b>的模型接口，可以整体关掉。
                 </li>
                 <li>
-                  除此之外还有几处不涉及聊天内容的出网点，出网清单里逐条列明；其中 <b>2 条没有内置开关</b>。
+                  除此之外还有几处不涉及聊天内容的出网点，出网清单里逐条列明；其中 <b>{blocked.length} 条没有内置开关</b>。
                 </li>
               </ul>
             </section>
@@ -245,8 +246,9 @@ export function PrivacyConsentGate({
 
               <p className={css.caveat}>
                 <b>诚实说明</b>：上面 {blocked.length} 条无开关的出网点（{blocked.map((e) => e.label).join('、')}）
-                不受任何应用内设置控制；「自动获取原图（CDN）」管的也只是<b>后端主动取回</b>，
-                渲染层按消息里的地址直连加载的图片与头像不在它的管辖内。要完全离线，请配合系统防火墙或断网。
+                不受任何应用内设置控制。图片、头像与视频这一类<b>全部</b>由后端代取，
+                「自动获取原图（CDN）」与「禁止出网」关掉的正是它们 —— 界面自己不再向任何远程主机要图
+                （CSP 的 <code>img-src</code> 只放行本机来源）。要把剩下这几条也断掉，请配合系统防火墙或断网。
               </p>
             </section>
           </div>

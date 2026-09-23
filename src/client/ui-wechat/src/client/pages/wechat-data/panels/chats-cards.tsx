@@ -11,7 +11,7 @@ import { clickableKey } from '../ui/kit.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import { renderKindOf } from '../utils/message-items.ts'
 import { MessageText } from '../utils/message-text.tsx'
-import { cspSafeSrc } from '../utils/url.ts'
+import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg } from './remote-img.tsx'
 import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLocation, MessageSystem, MessageVideo, MessageVoice, quoteKindIcon } from './chats-media.tsx'
 import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, quoteTypeLabel, transferStateKey, transferStatusLabel } from './chats-support.tsx'
@@ -109,7 +109,7 @@ export function LabeledCard({ icon, label, title, desc, source, url, foot, thumb
   thumb?: string
 }): React.JSX.Element {
   const link = /^https?:\/\//i.test(url ?? '')
-  const safeThumb = cspSafeSrc(thumb)
+  const safeThumb = proxyableSrc(thumb)
   return (
     <div
       className={link ? `${css.msgAppmsgCard} ${css.msgAppmsgCardOpen}` : css.msgAppmsgCard}
@@ -147,7 +147,7 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
   onOpen?: () => void
   variant: 'channels' | 'live'
 }): React.JSX.Element {
-  const safe = cspSafeSrc(cover)
+  const safe = proxyableSrc(cover)
   const [broken, setBroken] = useState(false)
   const open = onOpen
   return (
@@ -206,7 +206,7 @@ export function mpArticlesOf(rich: MessageRich): MpArticle[] {
  * @returns the card element.
  */
 export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: string; url: string }): React.JSX.Element {
-  const cover = cspSafeSrc(rich.thumb)
+  const cover = proxyableSrc(rich.thumb)
   const [broken, setBroken] = useState(false)
   const secondaries = mpArticlesOf(rich)
   const openUrl = (u: string) => { if (/^https?:\/\//i.test(u)) openLink(u) }
@@ -235,7 +235,7 @@ export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: str
         secondaries.map((a, i) => {
           const t = a.title || ''
           const u = a.url || ''
-          const thumb = cspSafeSrc(a.cover)
+          const thumb = proxyableSrc(a.cover)
           const clickable = /^https?:\/\//i.test(u)
           return (
             <span
@@ -268,7 +268,7 @@ export function LinkCard({ rich, title, desc, url }: {
   desc: string
   url: string
 }): React.JSX.Element {
-  const safeThumb = cspSafeSrc(rich.thumb)
+  const safeThumb = proxyableSrc(rich.thumb)
   const [broken, setBroken] = useState(false)
   const clickable = /^https?:\/\//i.test(url)
   const cover = rich.linkStyle === 'cover' && safeThumb && !broken
@@ -412,7 +412,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
     case 'sticker': {
       // 自定义表情：按 md5 解码真图；有 CDN thumb 时优先用 thumb（免扫盘）。
       const md5 = rich.md5 || title || ''
-      const safeThumb = cspSafeSrc(rich.thumb)
+      const safeThumb = proxyableSrc(rich.thumb)
       if (safeThumb) {
         return (
           <div className={css.msgSticker} title={title || '表情'}>
@@ -443,7 +443,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       // 引用行比气泡还宽，它不可能是气泡的子元素。
       const quoted = desc || ''
       const refName = rich.referName || ''
-      const thumb = cspSafeSrc(rich.thumb)
+      const thumb = proxyableSrc(rich.thumb)
       const qType = quoteTypeLabel(rich.referType)
       const appType = typeof rich.referAppType === 'number' ? rich.referAppType : 0
       const kindIcon = quoteKindIcon(rich.referType, appType)
@@ -498,8 +498,8 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
     }
     case 'miniapp': {
       // 微信原生小程序卡：顶栏应用名 → 标题 → 页面封面大图 → 底栏「小程序」。
-      const cover = cspSafeSrc(rich.thumb)
-      const appIcon = cspSafeSrc(typeof rich.avatar === 'string' ? rich.avatar : '')
+      const cover = proxyableSrc(rich.thumb)
+      const appIcon = proxyableSrc(typeof rich.avatar === 'string' ? rich.avatar : '')
       const appName = rich.source || ''
       const bodyDesc = desc && !/[<>]/.test(desc) && desc !== title ? desc : ''
       return (
@@ -563,7 +563,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
         />
       )
     case 'music': {
-      const safeThumb = cspSafeSrc(rich.thumb)
+      const safeThumb = proxyableSrc(rich.thumb)
       const link = /^https?:\/\//i.test(url)
       return (
         <div className={css.msgMusicCard}

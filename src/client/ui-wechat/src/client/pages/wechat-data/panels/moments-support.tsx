@@ -90,7 +90,7 @@ export function MomentsAvatar({ username, name }: { username: string; name: stri
     if (name) opts.nickname = name
     apiGetAvatar(opts)
       .then((r) => {
-        const v = r.kind === 'data' ? (r.data ?? null) : (r.kind === 'url' ? (r.url ?? null) : null)
+        const v = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, username, v ?? '', AVATAR_CACHE_MAX)
         if (!cancelled) setSrc(v)
       })
@@ -111,7 +111,7 @@ export function MomentsMiniAvatar({ username, name }: { username: string; name: 
     if (src !== null) return
     let cancelled = false
     apiGetAvatar({ username, nickname: name }).then((r) => {
-      const v = r.kind === 'data' ? (r.data ?? null) : (r.kind === 'url' ? (r.url ?? null) : null)
+      const v = r.kind === 'data' ? (r.data ?? null) : null
       cacheBounded(avatarCache, username, v ?? '', AVATAR_CACHE_MAX)
       if (!cancelled) setSrc(v)
     }).catch(() => { cacheBounded(avatarCache, username, '', AVATAR_CACHE_MAX); if (!cancelled) setSrc(null) })

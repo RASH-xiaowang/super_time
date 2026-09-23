@@ -219,7 +219,7 @@ const remoteImageQueue = createImageLoadQueue<string, RemoteImageItem>({
  *
  * 失败（开关关掉、主机不在白名单、取回出错）一律回**空串**，由调用方按「这张没有封面」处理 ——
  * 回一个破图地址比回空串更糟：用户看不到「为什么没有」，只会看到一堆坏图标。
- * @param source - 消息里的图片地址；空串原样回空串（调用方已判过 `cspSafeSrc`）。
+ * @param source - 消息里的图片地址；空串原样回空串（调用方已判过 `proxyableSrc`）。
  * @returns 可直接给 `<img src>` 的 data URL，或空串。
  */
 export async function apiGetRemoteImageUrl(source: string): Promise<string> {

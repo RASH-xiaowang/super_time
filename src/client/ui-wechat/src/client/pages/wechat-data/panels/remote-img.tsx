@@ -1,7 +1,7 @@
 /**
  * 画一张「可能是远程地址」的图（M23）。
  *
- * 与直接写 `<img src={cspSafeSrc(url)}>` 的区别只有一条：**远程地址不再由渲染层自己去取**，
+ * 与直接写 `<img src={proxyableSrc(url)}>` 的区别只有一条：**远程地址不再由渲染层自己去取**，
  * 而是交给后端的图片代理 —— 于是「自动获取原图（CDN）」与「禁止出网」两个开关管得到它、
  * 取回动作进操作记录、字节落在本机缓存里。这件事值得多一层组件的原因：让 `<img>` 直接吃
  * https 地址，等于把「渲染层可向任意 https 主机发请求」写进产品，那两个开关都拦不到它 ——
@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react'
 import { apiGetRemoteImageUrl } from '../api.ts'
 
 /** 本地地址：能直接画，不需要代理。也用于「这个地址只在本机有效」的判断（如 `<video poster>`）。 */
-export function localImageSrc(src: string): string {
+export function localImageSrc(src: string | undefined): string {
   const s = String(src ?? '').trim()
   return /^(data:|blob:|file:)/i.test(s) ? s : ''
 }

@@ -16,7 +16,7 @@ import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
 import { fmtCommentTime, imgKey, replyTarget } from './moments-support.tsx'
 import { MomentsAvatar } from './moments-support.tsx'
-import { cspSafeSrc } from '../utils/url.ts'
+import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import css from './moments.module.css'
@@ -72,7 +72,7 @@ export function MomentsCard({
 }: MomentsCardProps): React.JSX.Element {
   const cover = m.images[0]
   const isArticle = m.contentType === 3
-  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || cspSafeSrc(cover?.thumb, cover?.url)
+  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || proxyableSrc(cover?.thumb, cover?.url)
   const textExpanded = expandedTextByCard.has(m.tid)
   const socialExpanded = expandedSocialByCard.has(m.tid)
   const commentShown = commentCounts[m.tid] ?? 5
@@ -117,7 +117,7 @@ export function MomentsCard({
                       「加载中」与「加载失败」仍然分开画 —— .imgWrap 是固定尺寸的格子，
                       塌成空白会让人以为这条动态没有图。 */}
                   <RemoteImg
-                    src={dataSrc || cspSafeSrc(im.thumb, im.url)}
+                    src={dataSrc || proxyableSrc(im.thumb, im.url)}
                     alt=""
                     loading="lazy"
                     decoding="async"
@@ -142,7 +142,7 @@ export function MomentsCard({
           <div className={css.videos}>
             {m.videos.map((v, vi) => {
               const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
-              const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
+              const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
               if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
               const src = vk ? videoSrcs[vk] : undefined
               const playing = !!src
@@ -287,9 +287,9 @@ export function MomentsCard({
                         const cdata = (img.md5 && snsImgs[img.md5]) || ''
                         const cfk = m.tid + ':c' + String(ci)
                         if (img.md5) mediaKeySpec.current.set(img.md5, { md5: img.md5, kind: 'comment' })
-                        if (cdata || cspSafeSrc(img.thumb, img.url)) return (
+                        if (cdata || proxyableSrc(img.thumb, img.url)) return (
                           <RemoteImg
-                            src={cdata || cspSafeSrc(img.thumb, img.url)}
+                            src={cdata || proxyableSrc(img.thumb, img.url)}
                             alt=""
                             loading="lazy"
                             decoding="async"

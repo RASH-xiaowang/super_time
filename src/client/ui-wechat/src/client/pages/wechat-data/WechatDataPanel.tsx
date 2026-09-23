@@ -112,7 +112,7 @@ function BrandAvatar({ online }: { online: boolean }): React.JSX.Element {
           return
         }
         const r = await apiGetAvatar({ username })
-        const value = r.kind === 'data' ? (r.data ?? null) : r.kind === 'url' ? (r.url ?? null) : null
+        const value = r.kind === 'data' ? (r.data ?? null) : null
         selfAvatarCache = { username, src: value }
         if (!cancelled) setSrc(value)
       } catch {

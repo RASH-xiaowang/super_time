@@ -29,7 +29,7 @@ export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): Rea
     void apiGetAvatar({ username: author.username })
       .then((r) => {
         if (!alive) return
-        setSrc(r.kind === 'data' ? (r.data ?? '') : r.kind === 'url' ? (r.url ?? '') : '')
+        setSrc(r.kind === 'data' ? (r.data ?? '') : '')
       })
       .catch(() => { /* keep letter fallback */ })
     return () => { alive = false }

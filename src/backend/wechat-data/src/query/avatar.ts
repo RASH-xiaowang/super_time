@@ -112,11 +112,12 @@ function contactByNickname(decryptedDir: string, nickname: string): { username: 
 /**
  * 是否可作为远端头像返回。
  *
- * 只放行 **https**：自 Electron 3.14（Chromium 起）本项目 CSP 的 `img-src` 为
- * `'self' data: blob: https: file:`，http 图片会被拦截并计入 CSP 违规
- * （第 34 轮实测朋友圈 http 图产生 500 次违规）。本机 1,994 个联系人 URL 里
- * 1,594 个是 https（wx.qlogo.cn / mmhead.c2c.wechat.com / thirdwx.qlogo.cn / wework.qpic.cn），
- * 400 个是 http —— 后者返回了也显示不出来，不如如实返回 none。
+ * 只放行 **https**：M23 之后这个地址不再由 `<img>` 直接吃，而是交给后端图片代理
+ * （`query/remote-image.ts`），而它明确拒 https 以外的协议（`fetchRemoteImage` 里那句
+ * 「图片地址不是 https」）。本机 1,994 个联系人 URL 里 1,594 个是 https
+ * （wx.qlogo.cn / mmhead.c2c.wechat.com / thirdwx.qlogo.cn / wework.qpic.cn，
+ * 后两个主机分别落在白名单的 `qlogo.cn` 与 `wechat.com`/`qpic.cn` 后缀里），
+ * 400 个是 http —— 返回了也取不回来，不如如实返回 none。
  */
 function remoteAvatarUrl(url: string | null | undefined): string | null {
   const u = (url ?? '').trim()
@@ -206,18 +207,19 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
  * 为什么必须有后两级:图谱面板一次要 250 个头像,而 `head_image.db` 只覆盖本机收过的
  * 那些 —— 真机实测「好友图」上 240 个节点只命中 131 个,另外 109 个只能画成
  * 「社区色 + 首字」,看起来就是「有些节点没有头像」。contact 表里 96% 的人有头像 URL,
- * 其中 80% 是 https(http 会被 CSP 的 `img-src https:` 拦掉,所以不返回)。
+ * 其中 80% 是 https（http 连后端图片代理都不取 —— `fetchRemoteImage` 明确只放行 https，所以不返回）。
  *
- * 第 ③ 级的取舍:远端 URL 由渲染端用 `crossOrigin='anonymous'` 加载 —— wx.qlogo.cn
- * 带 CORS 头,画进 canvas **不会**把它标记为 tainted;拿不到 CORS 头时浏览器直接
- * `onerror`,渲染端退回「社区色 + 首字」,不会出现坏图。若直接不带 crossOrigin 加载,
- * canvas 会被污染,PNG 导出在 `toDataURL()` 处抛 SecurityError。
+ * 第 ③ 级交出的只是**地址**，取回动作在渲染层的 api 层完成（M23）：`apiGetAvatarsLocal` 把
+ * 非本机的那几条交给后端 `query/remote-image.ts` 代取成 data URL，界面拿到的只剩能直接画的地址。
+ * 于是「自动获取原图（CDN）」与「禁止出网」真的管得到头像 —— 这一类此前由 `<img>` 直连，
+ * 两个开关都拦不到它。图谱把它画进 canvas 再导出 PNG 时拿到的已是 data URL，
+ * 不存在跨域污染（远程地址时代要靠 `crossOrigin='anonymous'` 才不会让 `toDataURL()` 抛 SecurityError）。
  *
  * @param decryptedDir - 解密数据根目录。
  * @param usernames - 需要头像的用户名。
  * @param opts - `wechatBaseDir`(找 temp 缓存)与 `allowRemote`(是否放行远端 URL;
  *   调用方在用户开了「出站拦截」时传 false)。
- * @returns username → data URL 或 https URL;未命中的不出现在结果中。
+ * @returns username → data URL 或 https URL（远程那一级由渲染层再换成 data URL）；未命中的不出现在结果中。
  */
 export function resolveAvatarsLocal(
   decryptedDir: string,

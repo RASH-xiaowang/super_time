@@ -8,9 +8,13 @@
        漏掉 aliyun 会把省/市/区县地图的取数打断（评审实测的回归）。
        LLM 与 embedding 的 HTTP 调用都发生在后端 worker（Node 侧），不受页面 CSP 约束。
        `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余
-       （file:// 文档下 'self' 已含整个 file: scheme），留着的代价是显式，不影响。 -->
+       （file:// 文档下 'self' 已含整个 file: scheme），留着的代价是显式，不影响。
+       img-src 已收紧成**只有本机来源**（M23）：消息里记录的远程图片/头像地址一律交给后端
+       `query/remote-image.ts` 代取成 data URL，于是「自动获取原图（CDN）」与「禁止出网」
+       两个开关真的管得到每一张图，操作记录里也留得下。**把 `https:` 加回这里，就等于把
+       那句「关掉开关就不再为图片出网」作废** —— 渲染层的 `<img>` 会重新能向任意主机发请求。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: https: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com https://geo.datav.aliyun.com" />
+    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com https://geo.datav.aliyun.com" />
   <title>Super Time</title>
 </head>
 <body>
