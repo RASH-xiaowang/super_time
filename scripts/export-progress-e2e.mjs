@@ -84,7 +84,11 @@ function makeFixture(userData) {
  */
 async function readProgress(win) {
   return win.evaluate(() => {
-    const el = document.querySelector('[role="progressbar"]')
+    // 只看**导出对话框里**那根进度条：整个文档的 `querySelector` 会先撞上别处的
+    // `[role="progressbar"]`（数据配置页的「检测账号」也有一根），于是采到的 caption
+    // 是别的面板的文字 —— CI 上那条「样本 400：检测账号扫描本机微信账号…」就是这么来的。
+    const box = document.querySelector('[role="dialog"]')
+    const el = box ? box.querySelector('[role="progressbar"]') : null
     if (!el) return { bar: null, indeterminate: false, caption: '' }
     const now = el.getAttribute('aria-valuenow')
     const next = el.nextElementSibling
