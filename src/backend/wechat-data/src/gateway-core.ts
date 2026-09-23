@@ -31,7 +31,7 @@ import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
 import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages, searchIndexMessagesCancellable } from './query/search.ts'
-import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageResourceHint } from './query/media-image.ts'
+import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
 import { deleteExportHistory, listExportHistory, pruneExportHistory, recordExport } from './query/export-history.ts'
@@ -946,11 +946,9 @@ export abstract class GatewayCore extends TypertRemoteService {
     xorKey: number,
   ): void {
     try {
-      const md5ByItem: string[] = []
-      for (const it of items) {
-        const hint = resolveImageResourceHint(decryptedDir, it.username, it.localId)
-        md5ByItem.push(hint.md5 ?? '')
-      }
+      // md5 也批量查（每个 (username, 分片) 一次 IN）—— 见 `resolveImageMd5sBatch` 的注释：
+      // 原本只有下面的路径查询合并了，md5 仍是每张开一次库，在慢机器上等于没省。
+      const md5ByItem = resolveImageMd5sBatch(decryptedDir, items)
       const wanted = md5ByItem.filter(m => m.length === 32)
       if (wanted.length === 0) return
       // 唯一一次「按 md5 找 .dat」的查询（N16 的收益点：N 张图从 N 次全表扫降到 1 次 IN）。
