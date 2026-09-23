@@ -5,13 +5,11 @@
  * 全部为**纯逻辑**，不碰数据库与网络，因此可以在任何环境稳定跑。
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { classifyIntent, refineIntentWithLlm } from '../src/query/retrieval/intent.ts'
 import { buildQueryPlan, normalizeQuestion, resolveRelativeDate, synonymExpand, toHalfWidth } from '../src/query/retrieval/rewrite.ts'

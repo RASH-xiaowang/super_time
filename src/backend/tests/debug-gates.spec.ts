@@ -32,7 +32,6 @@ import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from '../debug-gates.js'
-// @ts-expect-error —— 前端纯逻辑（不 import react），vitest 由 vite 直接转译
 import { shouldSkipGates } from '../../client/ui-app/debug-gates.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')

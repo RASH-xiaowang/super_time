@@ -1,0 +1,17 @@
+{
+  "//": "N32 后半的量尺：两个测试目录（src/backend/tests 与 src/backend/wechat-data/tests）+ tests/helpers 从来没被类型检查看过。vitest 用 esbuild 只剥类型不查类型，于是「读源码做断言」这类守卫自己的参数形状、被改名后的方法名、noUncheckedIndexedAccess 下的下标取值，全都只有跑到运行时才暴露 —— 而一条恒真的断言比没有断言更危险。本文件先量规模，收口后改名进 npm run typecheck。",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "..",
+    "types": ["node"]
+  },
+  "include": [
+    "tests/**/*.ts",
+    "wechat-data/tests/**/*.ts"
+  ]
+}
