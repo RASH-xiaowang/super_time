@@ -62,16 +62,20 @@ function commandsIn(text: string): string[] {
   const lines = text.split(/\r?\n/)
   const out: string[] = []
   for (let i = 0; i < lines.length; i += 1) {
-    const inline = /^\s*run:\s*(\S.*)$/.exec(lines[i])
-    if (inline && inline[1] !== '|' && inline[1] !== '>') {
-      out.push(inline[1].trim())
+    const cur = lines[i]
+    if (cur === undefined) continue
+    const inline = /^\s*run:\s*(\S.*)$/.exec(cur)
+    const inlineCmd = inline?.[1]
+    if (inlineCmd !== undefined && inlineCmd !== '|' && inlineCmd !== '>') {
+      out.push(inlineCmd.trim())
       continue
     }
-    if (/^\s*run:\s*[|>]\s*$/.test(lines[i])) {
-      const baseIndent = lines[i].search(/\S/)
+    if (/^\s*run:\s*[|>]\s*$/.test(cur)) {
+      const baseIndent = cur.search(/\S/)
       const block: string[] = []
       for (let j = i + 1; j < lines.length; j += 1) {
         const line = lines[j]
+        if (line === undefined) break
         if (line.trim() !== '' && line.search(/\S/) <= baseIndent) break
         block.push(line.trim())
       }
@@ -95,6 +99,7 @@ function scriptNamesIn(command: string): string[] {
   const names: string[] = []
   for (const m of command.matchAll(/\bnpm\s+(?:run\s+)?([\w:.-]+)/g)) {
     const name = m[1]
+    if (name === undefined) continue
     if (NPM_BUILTINS.has(name)) continue
     if (pkg.scripts[name]) names.push(name)
   }
@@ -149,7 +154,9 @@ describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
   it('CI 里引用的每个 npm 脚本都存在', () => {
     for (const command of ciCommands) {
       for (const m of command.matchAll(/\bnpm\s+run\s+([\w:.-]+)/g)) {
-        expect(pkg.scripts[m[1]], `CI 调用了不存在的脚本：npm run ${m[1]}`).toBeTruthy()
+        const script = m[1]
+        if (script === undefined) continue
+        expect(pkg.scripts[script], `CI 调用了不存在的脚本：npm run ${script}`).toBeTruthy()
       }
     }
   })
