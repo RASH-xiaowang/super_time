@@ -159,12 +159,24 @@ try {
     once(proc, 'exit').then(() => { exited = true }),
     sleep(15_000),
   ])
-  await win.getByRole('button', { name: '不同意并退出' }).first().click().catch((e) => {
-    check(false, '「不同意并退出」点得动', e.message)
-  })
+  // 点中「不同意并退出」**就是**让主进程退出 ⇒ 页面常常在 `click()` 还没 resolve 之前
+  // 就被拆掉，Playwright 于是抛「Target page, context or browser has been closed」。
+  // 那是**点中了**的表现，不是点不动；真判据是下面那条「进程有没有结束」。
+  // 原先这里把任何 rejection 都记成失败，于是同一份代码在 CI 上间歇性红
+  // （2026-09-23 PR #82 首跑：这一点报红，紧跟着的「主进程真的退出了」却打勾）。
+  // 所以只放过「页面被关掉」这一类；按钮真 disabled、找不到、点下去超时，仍然照报。
+  let clickReject = ''
+  try {
+    await win.getByRole('button', { name: '不同意并退出' }).first().click()
+  } catch (e) {
+    clickReject = String(e && e.message ? e.message : e)
+    if (!/has been closed|Target closed|frame.*detached/i.test(clickReject)) {
+      check(false, '「不同意并退出」点得动', clickReject)
+    }
+  }
   await exitRace
   check(exited, '点「不同意并退出」后主进程真的退出了（不是只换了个页面）',
-    `exited=${exited} killed=${proc.killed} code=${proc.exitCode}`)
+    `exited=${exited} killed=${proc.killed} code=${proc.exitCode} clickReject=${clickReject || '(点击正常返回)'}`)
   launched = null
 
   // ── ⑤ 同一份 userData 重启：没同意过，就还该问第二遍 ────────────────────
