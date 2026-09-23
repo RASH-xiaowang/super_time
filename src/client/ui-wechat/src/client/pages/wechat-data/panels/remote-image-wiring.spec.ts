@@ -26,18 +26,24 @@ function parse(file: string): { src: ts.SourceFile; text: string } {
   return { src: ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), text }
 }
 
-/** 收集 JSX 标签名（开标签与自闭合都算），以及「这个文件里某个名字是不是 import 进来的绑定」。 */
-function jsxNames(file: string): { tags: string[]; imported: string[] } {
+/** 收集 JSX 标签名（开标签与自闭合都算）、import 绑定，以及每个元素的属性名。 */
+function jsxNames(file: string): { tags: string[]; imported: string[]; elements: Array<{ tag: string; attrs: string[] }> } {
   const { src } = parse(file)
   const tags: string[] = []
   const imported: string[] = []
+  const elements: Array<{ tag: string; attrs: string[] }> = []
   // 去重遍历：这几条断言量的都是「有几颗」，同一节点被交两次就会翻倍。
   const seen = new Set<ts.Node>()
   const visit = (node: ts.Node): void => {
     if (seen.has(node)) return
     seen.add(node)
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      tags.push(node.tagName.getText(src))
+      const tag = node.tagName.getText(src)
+      tags.push(tag)
+      elements.push({
+        tag,
+        attrs: node.attributes.properties.map((p) => (ts.isJsxAttribute(p) ? p.name.getText(src) : '#spread')),
+      })
     }
     if (ts.isImportDeclaration(node) && node.importClause) {
       const named = node.importClause.namedBindings
@@ -48,7 +54,7 @@ function jsxNames(file: string): { tags: string[]; imported: string[] } {
     node.forEachChild(visit)
   }
   visit(src)
-  return { tags, imported }
+  return { tags, imported, elements }
 }
 
 describe('M23：卡片缩略图走后端代理', () => {
@@ -59,6 +65,30 @@ describe('M23：卡片缩略图走后端代理', () => {
     const used = tags.filter((t) => t === 'RemoteImg').length
     expect(used, `RemoteImg 只用了几处：${String(used)}`).toBeGreaterThanOrEqual(11)
   })
+
+  /**
+   * 朋友圈的每一张图（九宫格、封面、视频封面与 `<video poster>`、灯箱、缩略图条、评论图）。
+   *
+   * 这里之所以连 `<video>` 的 `poster` 一起管：`poster` 是一次**图片请求**，归 CSP 的
+   * `img-src` 管，不归 `media-src`。视频本体是后端给的 data URL（`media-src` 里有 `data:`），
+   * 但 poster 若继续吃 CDN 地址，收紧 `img-src` 之后就会变成「视频能放、封面不出」。
+   */
+  for (const [file, minUses] of [['moments-card.tsx', 4], ['moments-portals.tsx', 5]] as const) {
+    it(`${file}：没有直连 <img>，poster 只接受本机地址`, () => {
+      const { tags, imported } = jsxNames(join(HERE, file))
+      expect(tags.filter((t) => t === 'img'), `${file} 里又有直连 <img> 了`).toEqual([])
+      expect(imported, `${file} 没 import RemoteImg`).toContain('RemoteImg')
+      expect(tags.filter((t) => t === 'RemoteImg').length, `${file} 用了几个 RemoteImg`).toBeGreaterThanOrEqual(minUses)
+      const text = readFileSync(join(HERE, file), 'utf8')
+      const posters = [...text.matchAll(/poster=\{([^}]*)\}/g)].map((m) => m[1]?.trim() ?? '')
+      expect(posters.length, `${file} 里没有 poster 属性？前提不成立`).toBeGreaterThan(0)
+      for (const p of posters) {
+        expect(p, `${file} 的 poster 又不是只给本机地址：poster={${p}}`).toMatch(/^localImageSrc\(/)
+      }
+      // 远程地址不许再原样进 poster 的兜底分支
+      expect(text).not.toMatch(/poster=\{[^}]*cspSafeSrc/)
+    })
+  }
 
   it('RemoteImg 自己只在需要时才发代理请求，本地地址走同步分支', () => {
     const { src, text } = parse(REMOTE_IMG)
@@ -93,5 +123,25 @@ describe('M23：卡片缩略图走后端代理', () => {
     visit(src)
     expect(rpc).toContain('getRemoteImages')
     expect(rpc, '不许存在「一次一张」的代理 RPC：那会绕开攒批，一屏就是 N 次跨进程调用').not.toContain('getRemoteImage')
+  })
+
+  /**
+   * 「哪一格该去本机解码」是 IntersectionObserver 在 DOM 上认 `data-sns-key` 认出来的，
+   * 而 `RemoteImg` 在 pending / failed 两态画的是占位、**没有 `<img>`** —— 钥匙挂在它身上，
+   * 那一格就永远不会被观察到，本机解码再也不发起（迁移时真踩到过，见评论图那一处）。
+   * 这条只能由守卫钉：TypeScript 对带连字符的 JSX 属性名不做多余属性检查，
+   * `data-sns-key` 挂在任何组件上都算合法（实测 `tsc` 0 错误）。
+   */
+  it('本机解码的观察钥匙不挂在会消失的节点上', () => {
+    for (const f of [CARDS, join(HERE, 'moments-card.tsx'), join(HERE, 'moments-portals.tsx')]) {
+      const hung = jsxNames(f).elements
+        .filter((e) => e.tag === 'RemoteImg' && e.attrs.some((a) => a.startsWith('data-')))
+        .map((e) => e.attrs.filter((a) => a.startsWith('data-')))
+      expect(hung, `${f.split(/[\\/]/).pop()}：观察钥匙挂在了 RemoteImg 上，代理回话之前那一格不在 DOM 里`).toEqual([])
+    }
+    // 反向前提：这架观察机器还在，而且钥匙挂在永远在 DOM 的容器上（网格 / 视频块 / 评论行）
+    const keys = jsxNames(join(HERE, 'moments-card.tsx')).elements.filter((e) => e.attrs.includes('data-sns-key'))
+    expect(keys.length, '一处 data-sns-key 都没有：本机解码的观察机制被拆了').toBeGreaterThanOrEqual(3)
+    expect(keys.every((e) => e.tag === 'div'), '观察钥匙又挂回画图节点上了：' + keys.map((e) => e.tag).join(',')).toBe(true)
   })
 })

@@ -7,7 +7,7 @@
  * 面板侧只剩 `<MomentsCard key={m.tid} … />`（唯一的结构性改动：`key` 从根 div 挪到组件调用处，
  * 列表里的 key 语义不变）。
  *
- * 为什么不把这里的 state 一起挪进来：`expandedTextByCard` / `commentCounts` / `failedImgs` /
+ * 为什么不把这里的 state 一起挪进来：`expandedTextByCard` / `commentCounts` /
  * `videoSrcs` 等都是**按 tid 索引的整列表状态**，卡片只是读写其中一格；挪进来会变成「每张卡一份」,
  * 语义就变了（例如「展开全部」之类的跨卡操作会失效）。
  */
@@ -17,6 +17,7 @@ import { clickableKey } from '../ui/kit.tsx'
 import { fmtCommentTime, imgKey, replyTarget } from './moments-support.tsx'
 import { MomentsAvatar } from './moments-support.tsx'
 import { cspSafeSrc } from '../utils/url.ts'
+import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -35,8 +36,6 @@ export interface MomentsCardProps {
   commentSortByCard: Record<string, 'asc' | 'desc'>
   onlyMineComments: boolean
   selfUsername: string | null
-  failedImgs: Set<string>
-  setFailedImgs: React.Dispatch<React.SetStateAction<Set<string>>>
   videoSrcs: Record<string, string>
   videoMeta: Record<string, { w: number; h: number }>
   setVideoMeta: React.Dispatch<React.SetStateAction<Record<string, { w: number; h: number }>>>
@@ -62,7 +61,7 @@ export function MomentsCard({
   m, privacy, snsImgs,
   articleCovers, expandedTextByCard, expandedSocialByCard,
   commentCounts, commentSortByCard, onlyMineComments,
-  selfUsername, failedImgs, setFailedImgs,
+  selfUsername,
   videoSrcs, videoMeta, setVideoMeta,
   videoFailed, videoErr, mediaKeySpec,
   setViewer, setDetail, setAuthorFilter,
@@ -103,9 +102,7 @@ export function MomentsCard({
               const key = imgKey(im)
               const dataSrc = key ? snsImgs[key] : undefined
               const fk = m.tid + ':' + String(ii)
-              const failed = failedImgs.has(fk)
               if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img' })
-              const haveSrc = !!(dataSrc || cspSafeSrc(im.thumb, im.url))
               return (
                 <div key={fk}
                   className={css.imgWrap}
@@ -116,35 +113,26 @@ export function MomentsCard({
                   data-sns-tid={im.timelineId || undefined}
                   data-sns-mid={im.id || undefined}
                 >
-                  {haveSrc && (!failed || dataSrc) ? (
-                    <img
-                      key={dataSrc ? 'd' : 'c'}
-                      src={dataSrc || cspSafeSrc(im.thumb, im.url)}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                      className={css.img}
-                      onError={() => {
-                        // 如果当前src是CDN URL（非data URL），标记为失败
-                        // 避免反复尝试无法访问的CDN URL
-                        const currentSrc = dataSrc || cspSafeSrc(im.thumb, im.url)
-                        if (!currentSrc.startsWith('data:')) {
-                          setFailedImgs(prev => new Set(prev).add(fk))
-                        }
-                      }}
-                    />
-                  ) : (
-                    <div className={css.imgFallback}>
-                      {failed ? (
+                  {/* 本机解码结果优先；没有才把 CDN 地址交给后端代理（M23）。
+                      「加载中」与「加载失败」仍然分开画 —— .imgWrap 是固定尺寸的格子，
+                      塌成空白会让人以为这条动态没有图。 */}
+                  <RemoteImg
+                    src={dataSrc || cspSafeSrc(im.thumb, im.url)}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className={css.img}
+                    pending={<div className={css.imgFallback}>加载中</div>}
+                    failed={(
+                      <div className={css.imgFallback}>
                         <div className={css.imgFallbackContent}>
                           <span className={css.imgFallbackIcon}>🖼</span>
                           <span className={css.imgFallbackText}>图片加载失败</span>
                           <span className={css.imgFallbackHint}>本地缓存未找到</span>
                         </div>
-                      ) : '加载中'}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  />
                 </div>
               )
             })}
@@ -175,7 +163,7 @@ export function MomentsCard({
                         src={src}
                         controls
                         autoPlay
-                        poster={vCover || ''}
+                        poster={localImageSrc(vCover)}
                         onLoadedMetadata={(e) => {
                           const el = e.currentTarget
                           if (!vk || !el.videoWidth || !el.videoHeight) return
@@ -190,12 +178,8 @@ export function MomentsCard({
                     </>
                   ) : vCover ? (
                     <>
-                      <img className={css.videoCover} src={vCover} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={(e) => {
-                        // 如果当前src是CDN URL（非data URL），隐藏图片
-                        if (!vCover.startsWith('data:')) {
-                          e.currentTarget.style.display = 'none'
-                        }
-                      }} />
+                      {/* 取不到就什么都不画，下面的 ▶ 与时长照常显示（原来靠 onError 隐藏图片，效果一样） */}
+                      <RemoteImg className={css.videoCover} src={vCover} alt="" loading="lazy" decoding="async" />
                       <span className={css.videoPlayBadge}>▶</span>
                       {v.duration > 0 && <span className={css.videoDur}>{Math.round(v.duration)}s</span>}
                     </>
@@ -220,23 +204,14 @@ export function MomentsCard({
           <div className={css.linkCard}>
             {cover ? (
               <div className={css.linkCover}>
-                {failedImgs.has('cover:' + m.tid)
-                  ? <span className={css.linkCoverFallback} title="封面来自公众号 CDN，原链接已失效">🔗</span>
-                  : <img
-                    key={coverSrc.startsWith('data:') ? 'd' : 'c'}
-                    src={coverSrc}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                    onError={() => {
-                      // 原来是直接把 <img> 设成 display:none —— 但 .linkCover 是固定 60×60 的框，
-                      // 隐藏图片只会留下一个**没有意义的空格子**（实测共享文章封面里
-                      // 有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块）。
-                      // 改成标记失败并渲染占位图标，与评论图/朋友圈图的失败口径一致。
-                      if (!coverSrc.startsWith('data:')) {
-                        setFailedImgs(prev => new Set(prev).add('cover:' + m.tid))
-                      }
-                    }}
-                  />}
+                {/* .linkCover 是固定 60×60 的框：隐藏图片只会留下一个**没有意义的空格子**
+                    （实测共享文章封面里有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块），
+                    所以取不到时画 🔗 占位。与评论图/朋友圈图的失败口径一致。 */}
+                <RemoteImg
+                  src={coverSrc}
+                  alt=""
+                  failed={<span className={css.linkCoverFallback} title="封面来自公众号 CDN，原链接已失效">🔗</span>}
+                />
               </div>
             ) : null}
             <div className={css.linkBody}>
@@ -294,7 +269,13 @@ export function MomentsCard({
                 {visibleComments.map((c, ci) => {
                   const target = replyTarget(m, c)
                   return (
-                    <div key={ci} className={css.comment}>
+                    <div key={ci} className={css.comment}
+                      /* 「哪一格该去本机解码」是 IntersectionObserver 按 DOM 上的 data-sns-key 认的，
+                         所以这两个属性必须挂在一个**永远在 DOM 里**的节点上：RemoteImg 在代理回话之前
+                         画的是占位而不是 <img>，挂在它身上就等于这一格永远不会被观察到。 */
+                      data-sns-key={c.image?.md5 || undefined}
+                      data-sns-md5={c.image?.md5 || undefined}
+                    >
                       <span className={css.commentName} title={'只看 ' + (c.nickname || c.username)} {...clickableKey(() => { setAuthorFilter(c.nickname || c.username || null) }, { stopPropagation: true })}>{c.nickname || c.username || '未知'}</span>
                       {c.to_username && c.to_username !== m.username && (
                         <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>
@@ -305,30 +286,20 @@ export function MomentsCard({
                         const img = c.image
                         const cdata = (img.md5 && snsImgs[img.md5]) || ''
                         const cfk = m.tid + ':c' + String(ci)
-                        const cfailed = failedImgs.has(cfk)
                         if (img.md5) mediaKeySpec.current.set(img.md5, { md5: img.md5, kind: 'comment' })
                         if (cdata || cspSafeSrc(img.thumb, img.url)) return (
-                          <img
-                            key={cdata ? 'd' : 'c'}
+                          <RemoteImg
                             src={cdata || cspSafeSrc(img.thumb, img.url)}
                             alt=""
                             loading="lazy"
                             decoding="async"
-                            referrerPolicy="no-referrer"
                             className={css.commentImg}
-                            data-sns-key={img.md5 || undefined}
-                            data-sns-md5={img.md5 || undefined}
+                            failed={<span className={css.commentImgFallback}>[图]</span>}
                             {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })}
-                            onError={() => {
-                              // 如果当前src是CDN URL（非data URL），标记为失败
-                              const currentSrc = cdata || cspSafeSrc(img.thumb, img.url)
-                              if (!currentSrc.startsWith('data:')) {
-                                setFailedImgs(prev => new Set(prev).add(cfk))
-                              }
-                            }}
                           />
                         )
-                        return !cfailed ? <span className={css.commentImgFallback}>[图]</span> : null
+                        // 连地址都没有：留一个 [图] 记号（评论里确实存在只剩文字的图片评论）
+                        return <span className={css.commentImgFallback}>[图]</span>
                       })()}
                       {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
                     </div>

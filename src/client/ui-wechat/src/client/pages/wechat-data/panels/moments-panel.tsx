@@ -70,7 +70,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   } | null>(null)
   const [viewZoom, setViewZoom] = useState(1)
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 })
-  const [viewFailed, setViewFailed] = useState(false)
   const [viewRotate, setViewRotate] = useState(0)
   const [viewOriginal, setViewOriginal] = useState(false)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
@@ -97,7 +96,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [articleCovers, setArticleCovers] = useState<Record<string, string>>({})
   const coverAttempts = useRef<Map<string, number>>(new Map())
   const [coverTick, setCoverTick] = useState(0)
-  const [failedImgs, setFailedImgs] = useState<Set<string>>(new Set())
   const countRef = useRef(0)
   const totalRef = useRef(0)
   const [loadingAll, setLoadingAll] = useState(false)
@@ -474,11 +472,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   }, [moments.length, total, load])
   const curImg = viewer ? viewer.images[viewer.index] : undefined
 
-  // Reset lightbox transform/failed state whenever a viewer opens or its index moves.
+  // Reset lightbox transform whenever a viewer opens or its index moves.
+  // （「加载失败」不在这里复位：灯箱现在画的是 RemoteImg 的 failed 占位，状态跟着地址走。）
   useEffect(() => {
     setViewZoom(1)
     setViewPan({ x: 0, y: 0 })
-    setViewFailed(false)
     setViewRotate(0)
     setViewOriginal(false)
   }, [viewer])
@@ -513,7 +511,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       .then((r) => {
         if (r.url) {
           setSnsImgs(prev => capRecord({ ...prev, [key]: r.url as string }, SNS_IMG_CACHE_MAX))
-          setViewFailed(false)
         }
       })
       .catch(() => { /* 保留 CDN 兜底 */ })
@@ -851,8 +848,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
                     commentSortByCard={commentSortByCard}
                     onlyMineComments={onlyMineComments}
                     selfUsername={selfUsername}
-                    failedImgs={failedImgs}
-                    setFailedImgs={setFailedImgs}
                     videoSrcs={videoSrcs}
                     videoMeta={videoMeta}
                     setVideoMeta={setVideoMeta}
@@ -922,8 +917,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         setViewZoom={setViewZoom}
         viewPan={viewPan}
         setViewPan={setViewPan}
-        viewFailed={viewFailed}
-        setViewFailed={setViewFailed}
         lightboxWrapRef={lightboxWrapRef}
         pinchRef={pinchRef}
         viewZoomRef={viewZoomRef}
@@ -936,8 +929,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         setDetail={setDetail}
         setViewer={setViewer}
         setAuthorFilter={setAuthorFilter}
-        failedImgs={failedImgs}
-        setFailedImgs={setFailedImgs}
         snsImgs={snsImgs}
         videoSrcs={videoSrcs}
         videoMeta={videoMeta}

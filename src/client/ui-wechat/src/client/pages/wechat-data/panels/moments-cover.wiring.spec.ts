@@ -1,12 +1,15 @@
 /**
- * 「朋友圈」链接封面失败口径 + 审计工具两条度量口径的守卫。
+ * 「朋友圈」图片占位口径 + 审计工具两条度量口径的守卫。
  *
- * 本轮实测（真实数据）发现两件事：
+ * 实测发现的两个问题都还钉在这里，只是**机制换了**：
  *
- *  ① **封面失败会留下空框**。`.linkCover` 是固定 60×60 的框，而失败处理是
+ *  ① **封面失败会留下空框**。`.linkCover` 是固定 60×60 的框，而最初的失败处理是
  *     `e.currentTarget.style.display = 'none'` —— 图片一藏，框还在。实测 64 个链接封面里
  *     有 **60 个**没有任何可用 URL（`coverSrc` 为空串），旧代码统统变成 60 个灰色空格子。
- *     现在改成"标记失败 + 渲染 🔗 占位"，与评论图/朋友圈图的失败口径一致。
+ *     M23 之前靠面板自己维护 `failedImgs` 状态机（onError 里 add、渲染时 has）来换 🔗 占位；
+ *     远程图交给后端代理之后「取不到」有了确定信号（代理回错误），那台状态机于是整体换成
+ *     `RemoteImg` 的 `pending` / `failed` 两个占位属性。⇒ 这里钉的是**结果**：固定尺寸的图框
+ *     必须带 `failed`；而 `failedImgs` 与 `display = 'none'` 这两个旧写法**一律不许回来**。
  *
  *  ② **审计工具的两条度量在报假警**：
  *     · 「裁切」把 `overflow-y: auto/scroll`（可滚动的长列表、作者栏）与
@@ -20,6 +23,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -45,21 +49,53 @@ const moments = readdirSync(HERE)
 const momentsCss = readFileSync(join(HERE, 'moments.module.css'), 'utf8')
 const audit = readFileSync(join(ROOT, 'scripts', 'panel-audit.mjs'), 'utf8')
 
-describe('朋友圈：链接封面失败要有占位，不能留空格子', () => {
-  it('固定尺寸的图片框失败时一律给占位（链接封面 + 详情弹层），不再把 img 设成 display:none', () => {
-    // 链接封面
-    expect(moments, '封面失败没有标记状态').toMatch(/setFailedImgs\(prev => new Set\(prev\)\.add\('cover:' \+ m\.tid\)\)/)
-    expect(moments, '缺少封面失败占位渲染').toMatch(/failedImgs\.has\('cover:' \+ m\.tid\)/)
+/**
+ * 收集一个模块里的每个 `<RemoteImg>` 站点（属性名 + 整段 JSX 文本）。
+ * 走 AST 而不是全文正则：注释里写一句 `failed=` 不该被算成一处占位。
+ */
+function remoteImgSites(file: string): Array<{ attrs: string[]; text: string }> {
+  const text = readFileSync(file, 'utf8')
+  const src = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const out: Array<{ attrs: string[]; text: string }> = []
+  const seen = new Set<ts.Node>()
+  const visit = (node: ts.Node): void => {
+    if (seen.has(node)) return
+    seen.add(node)
+    if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && node.tagName.getText(src) === 'RemoteImg') {
+      out.push({
+        attrs: node.attributes.properties.map((p) => (ts.isJsxAttribute(p) ? '#' + p.name.getText(src) : '#spread')),
+        text: node.getText(src),
+      })
+    }
+    node.forEachChild(visit)
+  }
+  visit(src)
+  return out
+}
+const sites = [join(HERE, 'moments-card.tsx'), join(HERE, 'moments-portals.tsx')].flatMap(remoteImgSites)
+
+describe('朋友圈：图片失败要有占位，不能留空格子', () => {
+  it('每个固定尺寸的图框都带 failed 占位（视频封面/灯箱缩略图条除外），旧的 display:none 与 failedImgs 一律不许回来', () => {
+    expect(sites.length, '朋友圈里没有 RemoteImg？前提不成立（图没走代理）').toBeGreaterThanOrEqual(9)
+    // 两类例外与旧口径同样有理由：视频封面（.videoTile 自带背景 + ▶ 徽标）、灯箱缩略图条
+    // （取不到就收起那一格，容器本身仍有意义）—— 都不会留下"没有意义的空格子"。
+    const collapseOk = ['videoCover', 'lightboxThumb']
+    const naked = sites
+      .filter((s) => !collapseOk.some((c) => s.text.includes('css.' + c)))
+      .filter((s) => !s.attrs.includes('#failed'))
+      .map((s) => s.text.replace(/\s+/g, ' ').slice(0, 60))
+    expect(naked, '这些框失败时会塌成空格子：' + JSON.stringify(naked)).toEqual([])
+    // 九宫格与详情弹层还要带 pending：代理在取的时候先画「加载中」，而不是让格子空一下
+    const boxes = sites.filter((s) => s.text.includes('className={css.img}'))
+    expect(boxes.length, '找不到固定格子的 RemoteImg').toBeGreaterThanOrEqual(2)
+    for (const b of boxes) expect(b.attrs, '格子上没有 pending 占位').toContain('#pending')
+    // 链接封面的 🔗 占位（本轮最初修的就是它）与它的样式都还在
+    expect(sites.some((s) => s.text.includes('css.linkCoverFallback')), '链接封面没有 🔗 占位').toBe(true)
     expect(momentsCss, '缺少占位样式').toMatch(/\.linkCoverFallback\s*\{/)
-    // 详情弹层的固定纵横比图片框
-    expect(moments, '详情弹层图片失败没有标记状态').toMatch(/setFailedImgs\(prev => new Set\(prev\)\.add\(dfk\)\)/)
-    expect(moments).toMatch(/failedImgs\.has\(dfk\)/)
-    // 反例：固定尺寸框里再出现 `display = 'none'`（那正是留空格的写法）。
-    // 例外并注明：视频封面（.videoTile 自带背景 + ▶ 徽标）与灯箱缩略图条
-    // （失败即收起一格，容器本身仍有意义），这两处的隐藏不会产生"无意义空格"。
-    const hideSites = [...moments.matchAll(/([A-Za-z]+)\s*=\s*'none'/g)].length
-    const legacy = [...moments.matchAll(/e\.currentTarget\.style\.display = 'none'/g)].length
-    expect(legacy, `仍有 ${legacy} 处旧写法（应为 4 处视频/缩略图站点），hideSites=${hideSites}`).toBeLessThanOrEqual(4)
+    // 反例：`display = 'none'` 正是留空格子的写法；failedImgs 那台状态机已被代理的确定信号取代
+    expect(moments, '仍有把 img 藏掉的旧写法').not.toMatch(/style\.display = 'none'/)
+    expect(moments, 'failedImgs 已被 RemoteImg 的 pending/failed 取代').not.toMatch(/failedImgs/)
+    expect(moments, '渲染层不该再用 onError 兜远程图：失败原因现在由代理给出').not.toMatch(/onError=/)
   })
 
   it('`.linkCover` 是固定尺寸的框 —— 这正是必须给占位的原因', () => {
