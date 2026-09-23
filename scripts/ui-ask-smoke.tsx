@@ -29,6 +29,7 @@ import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-da
 import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 import { ProgressBar } from '../src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.tsx'
+import { RemoteImg } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/remote-img.tsx'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -469,6 +470,26 @@ check('总量已知时按百分比画，并且不披不定量态', () => {
 check('百分比越界要夹住（负数与超过 100 都不该画崩）', () => {
   ok(renderToStaticMarkup(h(ProgressBar, { value: -5 })).includes('width:0%'), '负值没夹到 0')
   ok(renderToStaticMarkup(h(ProgressBar, { value: 130 })).includes('aria-valuenow="100"'), '超界没夹到 100')
+})
+
+// ── M23：远程图片代理的渲染层组件 ──
+// 钉的是「同步画 vs 先不画」这条分界：本地地址必须当场就画（列表里绝大多数图是后端解出来的
+// data URL，多等一次 RPC 就是白闪一下）；远程地址在代理回话之前**一个 img 都不许有**，
+// 更不能把 https 地址原样写进 src —— 那正是 M23 要拿掉的东西。
+check('M23：RemoteImg 对本地地址同步就画，且 src 原样', () => {
+  const html = renderToStaticMarkup(h(RemoteImg, { src: 'data:image/png;base64,AAA=', className: 't' }))
+  ok(html.includes('<img'), `本地地址没画出来：${html}`)
+  ok(html.includes('src="data:image/png;base64,AAA="'), `src 不是原样那一个：${html}`)
+})
+check('M23：RemoteImg 对远程地址先什么都不画（没有破图那一帧）', () => {
+  const html = renderToStaticMarkup(h(RemoteImg, { src: 'https://mmbiz.qpic.cn/e2e/cover.jpg' }))
+  ok(html.trim() === '', `远程地址在代理回话之前就画了东西：${html}`)
+})
+check('M23：空地址不画；blob: / file: 按本地处理', () => {
+  ok(renderToStaticMarkup(h(RemoteImg, { src: '' })).trim() === '', '空 src 画出了东西')
+  ok(renderToStaticMarkup(h(RemoteImg, { src: '   ' })).trim() === '', '空白 src 画出了东西')
+  ok(renderToStaticMarkup(h(RemoteImg, { src: 'blob:dsh/abc' })).includes('src="blob:dsh/abc"'), 'blob: 没按本地地址处理')
+  ok(renderToStaticMarkup(h(RemoteImg, { src: 'file:///C:/x/y.png' })).includes('src="file'), 'file: 没按本地地址处理')
 })
 
 console.log(`\n${failed ? '❌' : '✅'} UI 冒烟：通过 ${passed} 项${failed ? `，失败 ${failed} 项` : ''}`)

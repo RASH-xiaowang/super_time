@@ -12,6 +12,7 @@ import { fmtBytes } from '../utils/format.ts'
 import { renderKindOf } from '../utils/message-items.ts'
 import { MessageText } from '../utils/message-text.tsx'
 import { cspSafeSrc } from '../utils/url.ts'
+import { RemoteImg } from './remote-img.tsx'
 import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLocation, MessageSystem, MessageVideo, MessageVoice, quoteKindIcon } from './chats-media.tsx'
 import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, quoteTypeLabel, transferStateKey, transferStatusLabel } from './chats-support.tsx'
 import css from './chats.module.css'
@@ -116,7 +117,7 @@ export function LabeledCard({ icon, label, title, desc, source, url, foot, thumb
       {...(link ? clickableKey(() => { openLink(url ?? '') }, { role: 'link', label: '打开链接' }) : {})}
     >
       {safeThumb
-        ? <img className={css.msgAppmsgThumb} src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+        ? <RemoteImg className={css.msgAppmsgThumb} src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
         : <span className={css.msgAppmsgIcon} aria-hidden="true">{icon}</span>}
       <span className={css.msgAppmsgBody}>
         <span className={css.msgAppmsgLabel}>{label}</span>
@@ -157,7 +158,7 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
     >
       <div className={css.msgMediaCover} data-empty={!safe || broken || undefined}>
         {safe && !broken
-          ? <img src={safe} alt="" loading="lazy" onError={() => { setBroken(true) }} />
+          ? <RemoteImg src={safe} alt="" loading="lazy" onError={() => { setBroken(true) }} />
           : <span className={css.msgMediaCoverFallback} aria-hidden="true">{variant === 'live' ? '📡' : '▶'}</span>}
         {badge && <span className={css.msgMediaBadge}>{badge}</span>}
         {variant === 'live' && <span className={css.msgMediaDot} aria-hidden="true" />}
@@ -219,7 +220,7 @@ export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: str
           title={mainClickable ? '点击打开文章' : undefined}
           {...(mainClickable ? clickableKey(() => { openUrl(url) }, { role: 'link', label: '打开文章' }) : {})}
         >
-          <img className={css.msgMpCoverImg} src={cover} alt="" loading="lazy" onError={() => { setBroken(true) }} />
+          <RemoteImg className={css.msgMpCoverImg} src={cover} alt="" loading="lazy" onError={() => { setBroken(true) }} />
         </span>
       )}
       {secondaries.length === 0 ? (
@@ -244,7 +245,7 @@ export function MpNewsCard({ rich, title, url }: { rich: MessageRich; title: str
               {...(clickable ? clickableKey(() => { openUrl(u) }, { role: 'link', label: '打开次条文章' }) : {})}
             >
               <span className={css.msgMpRowTitle}>{t || '[无标题]'}</span>
-              {thumb && <img className={css.msgMpRowThumb} src={thumb} alt="" loading="lazy" />}
+              {thumb && <RemoteImg className={css.msgMpRowThumb} src={thumb} alt="" loading="lazy" />}
             </span>
           )
         })
@@ -283,7 +284,7 @@ export function LinkCard({ rich, title, desc, url }: {
     >
       {cover && (
         <span className={css.msgLinkCoverWrap}>
-          <img className={css.msgLinkCoverImg} src={safeThumb} alt="" loading="lazy" onError={() => { setBroken(true) }} />
+          <RemoteImg className={css.msgLinkCoverImg} src={safeThumb} alt="" loading="lazy" onError={() => { setBroken(true) }} />
           {clickable && <span className={css.msgLinkOpen}><IconLinkOutline14 size={12} /></span>}
           <span className={css.msgLinkCoverTitle} title={title}>{title}</span>
         </span>
@@ -297,7 +298,7 @@ export function LinkCard({ rich, title, desc, url }: {
             {!safeThumb && clickable && <span className={css.msgLinkUrl} title={url}>{host || url}</span>}
           </span>
           {safeThumb && (
-            <img className={css.msgLinkThumb} src={safeThumb} alt="" loading="lazy" onError={() => { setBroken(true) }} />
+            <RemoteImg className={css.msgLinkThumb} src={safeThumb} alt="" loading="lazy" onError={() => { setBroken(true) }} />
           )}
         </span>
       )}
@@ -415,7 +416,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       if (safeThumb) {
         return (
           <div className={css.msgSticker} title={title || '表情'}>
-            <img className={css.msgStickerImg} src={safeThumb} alt={title || '表情'} loading="lazy"
+            <RemoteImg className={css.msgStickerImg} src={safeThumb} alt={title || '表情'} loading="lazy"
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
           </div>
         )
@@ -463,7 +464,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
                   className={`${css.msgQuoteThumbWrap} ${thumbOpen ? css.msgQuoteThumbOpen : ''}`}
                   {...(thumbOpen ? clickableKey(() => { openLink(thumb) }, { role: 'link', label: '查看引用缩略图' }) : {})}
                 >
-                  <img className={css.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                  <RemoteImg className={css.msgQuoteThumb} src={thumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                 </span>
               )}
             </div>
@@ -506,7 +507,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           {(appName || appIcon) && (
             <div className={css.msgMiniappApp}>
               {appIcon
-                ? <img className={css.msgMiniappAppIcon} src={appIcon} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                ? <RemoteImg className={css.msgMiniappAppIcon} src={appIcon} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                 : <span className={css.msgMiniappAppDot} aria-hidden="true" />}
               <span className={css.msgMiniappName}>{appName || '小程序'}</span>
             </div>
@@ -516,7 +517,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           <div className={css.msgMiniappCover} data-empty={!cover || undefined}>
             {cover
               ? (
-                <img
+                <RemoteImg
                   className={css.msgMiniappCoverImg}
                   src={cover}
                   alt=""
@@ -570,7 +571,7 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
           {...(link ? clickableKey(() => { openLink(url) }, { role: 'link', label: '打开音乐' }) : {})}>
           <span className={css.msgMusicCover} data-empty={!safeThumb || undefined}>
             {safeThumb
-              ? <img src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              ? <RemoteImg src={safeThumb} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
               : <span aria-hidden="true">🎵</span>}
           </span>
           <span className={css.msgMusicBody}>
