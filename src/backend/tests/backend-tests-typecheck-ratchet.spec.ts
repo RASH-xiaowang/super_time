@@ -40,10 +40,20 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * 第五步收掉 `llm-rerank.spec.ts` 的 11 处 → **106**：那份文件里 `seen[0].body.model` 一类的下标直取有 10 处，
  * 补了一个 `at(seen, n)` 访问器（没捕到就抛「这条用例的前提不成立」）。这类断言一旦拿到 `undefined`，
  * `expect(undefined?.x).toBe(...)` 会红得莫名其妙，而 `at()` 直接说出是第几次请求没捕到。
+ * 第六步清长尾：把每文件只剩 1~2 处的 21 份文件一次收干净 → **79**。
+ * 手法是把第五步那个只存在于 `llm-rerank.spec.ts` 里的 `at()` 提成 `tests/helpers/strict-index.ts`
+ * （`at()` 取元素、`grp()` 取捕获组，越界/缺组都抛「前提不成立」），于是 `bad[0].rule`、
+ * `median: sorted[k]`、`m[1].trim()` 这类一律换成访问器 —— 与其在 20 个文件里各写一遍 `?? ''`，
+ * 不如让「前提塌了」在原地就说出自己是谁。两个访问器自带自检（`strict-index.spec.ts`）：
+ * 它们是别的应用例的守卫，自己不抛的话整条链就退化成往下读 undefined。
+ * 顺带查出两处真的：`search-scope.spec.ts` 把说明文字当第二个实参传给 `.toBe()`（vitest 只认
+ * 一个，那条「被吞掉的 int64 异常」的提示从来没显示过 —— 挪到 `expect(值, 说明)` 上）；
+ * `kb-eval.spec.ts` 用 `BufferEncoding` 标注一张喂给 `TextDecoder` 的编码表，而 `gb18030`
+ * 恰恰不在 `BufferEncoding` 里（Node 的字符串编码是小集合，完整表在 TextDecoder 上），编译器直接判死。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 106
+const BASELINE = 79
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150

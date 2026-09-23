@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { at } from './helpers/strict-index.ts'
 
 const requireCjs = createRequire(import.meta.url)
 const rules = requireCjs('../../../scripts/package-content-rules.js') as {
@@ -63,7 +64,7 @@ describe('打包内容规则（N22）', () => {
     const bad = rules.srcEntryViolations(entries)
     expect(bad.map((v) => v.entry)).toEqual(entries)
     // 目录本身必须被点名（否则「整棵多余的子树」会被漏掉）。
-    expect(bad[0].rule).toBe('stray')
+    expect(at(bad, 0, 'stray 命中').rule).toBe('stray')
 
     // 真在磁盘上放一个 1MB 的残留，再走一次**真实的**工作树清单（临时目录里的等价布局）。
     const fake = join(scratch, 'src', 'client', 'ui-dist.bak')

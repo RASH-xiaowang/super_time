@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { gatewaySource } from './gateway-source.ts'
+import { grp } from './helpers/strict-index.ts'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
 const requireCjs = createRequire(import.meta.url)
@@ -53,7 +54,7 @@ type MethodScan = { name: string; seams: string[] }
 /** 方法体里出现 `this.kbRemotes().NAME(` 这类**转发**时，接缝要看被转发到的那份实现。 */
 function delegationTarget(bodyText: string): string | null {
   const m = /this\.[A-Za-z_$][\w$]*\(\)\.([A-Za-z_$][\w$]*)\(/.exec(bodyText)
-  return m ? m[1] : null
+  return m ? grp(m, 1, 'this.xxx().yyy() 委托式') : null
 }
 
 /**

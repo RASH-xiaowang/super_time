@@ -23,6 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
 import { readPrivacySettings, writePrivacySettings } from '../src/query/privacy-audit.ts'
 import { kbFilesDbPath } from '../src/query/kb-paths.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 let root = ''
 let decrypted = ''
@@ -45,7 +46,7 @@ function stubEmbed(dim = 24): EmbedStub {
       stub.calls.push(...texts)
       return texts.map(t => {
         const v = new Array<number>(dim).fill(0)
-        for (const ch of t) v[(ch.codePointAt(0) ?? 0) % dim] += 1
+        for (const ch of t) { const k = (ch.codePointAt(0) ?? 0) % dim; v[k] = (v[k] ?? 0) + 1 }
         return v
       })
     },
@@ -249,7 +250,7 @@ describe('searchKb：降级说明要说本次真话（V3）', () => {
     const q = '纪要第九附录 采购计划 预算调整'
     const r = await gw.searchKb({ kbId, query: q })
     expect(r.hits.length).toBeGreaterThan(0)
-    expect(r.hits[0].fileName).toBe('b.md')
+    expect(at(r.hits, 0, 'hits').fileName).toBe('b.md')
   })
 
   it('embedding 抛错时关键词一路照常可用，且说明如实（H7）', async () => {

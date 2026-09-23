@@ -58,7 +58,7 @@ describe.skipIf(process.env.MEASURE_M10 !== '1')('M10 建库实测', () => {
       await new Promise((r) => setTimeout(r, LATENCY))
       return texts.map((t) => {
         const v = [0, 0, 0, 0, 0, 0, 0, 0]
-        for (let i = 0; i < t.length; i += 1) v[i % 8] += t.charCodeAt(i) % 7
+        for (let i = 0; i < t.length; i += 1) { const k = i % 8; v[k] = (v[k] ?? 0) + t.charCodeAt(i) % 7 }
         return v
       })
     }

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { decideNavigation, decideWindowOpen, isInsidePath, isSafeExternalUrl } from '../navigation-policy.js'
+import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const APP_ROOT = 'D:\\super-time-wechat'
@@ -136,7 +137,7 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
   })
 
   it('防空转：main.js 里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
-    const seen = [...mainSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => m[1])
+    const seen = [...mainSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => grp(m, 1, '导航事件清单'))
     const unexpected = seen.filter((e) => !ATTACHED.includes(e))
     expect(unexpected, `未挂守卫的导航事件：${unexpected.join(', ')}`).toEqual([])
     for (const ev of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {

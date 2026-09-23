@@ -21,6 +21,7 @@ import { resolveArticleCoverDataUrl } from '../src/query/article-cover.ts'
 import { fetchEmoticonRemote } from '../src/query/media-image.ts'
 import { fetchSnsVideoDataUrl } from '../src/query/sns-video.ts'
 import { WHISPER_DOWNLOAD_FILES, whisperDownloadModel } from '../src/query/whisper.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -66,7 +67,7 @@ function scriptedFetch(steps: Array<{ status: number } | { bytes: Buffer; status
   const calls: string[] = []
   vi.stubGlobal('fetch', async (input: unknown) => {
     calls.push(String(input))
-    const step = steps[Math.min(calls.length - 1, steps.length - 1)]
+    const step = at(steps, Math.min(calls.length - 1, steps.length - 1), 'steps')
     if ('status' in step && !('bytes' in step)) return statusOnly(step.status)
     const s = step as { bytes: Buffer; status?: number }
     return okBytes(s.bytes, s.status ?? 200)

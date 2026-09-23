@@ -250,7 +250,7 @@ describe('记录：total 与 items 必须一致（不能再出现「有 total �
     d.close()
     const r = queryRecords(dec, 'finder', 20, 0)
     expect(r.total).toBe(2)
-    expect(r.items.length).toBe(2, 'total>0 却渲染 0 行 —— 就是被吞掉的 int64 异常')
+    expect(r.items.length, 'total>0 却渲染 0 行 —— 就是被吞掉的 int64 异常').toBe(2)
     const ids = r.items.map(it => String(it['finder_live_id'] ?? '')).sort()
     expect(ids).toEqual(['1214293303336576460', '2078956456102183056'])
   })

@@ -174,7 +174,11 @@ describe('N8：读取侧的结构守卫（源码级）', () => {
       }
       node.forEachChild(walk)
     }
-    walk(target as ts.Node)
+    // 上面那句 toBeTruthy 只负责报「找不到函数体」，不改变类型；所以这里显式窄化。
+    // 留着 `as ts.Node` 的话，方法一改名 target 仍是 null，walk(null) 抛的是
+    // 「Cannot read properties of null」—— 看着像守卫自己的 bug，其实是用例前提塌了。
+    if (target === null) throw new Error('没拿到函数体，walk 需要非空的 ts.Node')
+    walk(target)
 
     expect(allCalls, `构建路径里仍有 .all()（全表物化）：${allCalls.join(' | ')}`).toEqual([])
     expect(iterateCalls.length, '构建路径里没有游标读取（解析可能失效）').toBeGreaterThan(0)

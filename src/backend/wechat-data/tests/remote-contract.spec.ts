@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { gatewayClassSource } from '../../tests/gateway-source.ts'
+import { grp } from '../../tests/helpers/strict-index.ts'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..', '..')
 
@@ -28,7 +29,7 @@ const API_SRC = API_FILES.map((f2) => readFileSync(join(dirname(API), f2), 'utf8
 
 /** 后端所有 `@Remote('name')` 装饰器里的名字。 */
 function remoteNames(rawSource: string): string[] {
-  return [...stripComments(rawSource).matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map(m => m[1])
+  return [...stripComments(rawSource).matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map(m => grp(m, 1, '@Remote 名字'))
 }
 
 /**
@@ -59,7 +60,7 @@ function interfaceMembers(rawSource: string): string[] {
   }
   const block = source.slice(open, close)
   const names = new Set<string>()
-  for (const m of block.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*)\s*[(?:]/gm)) names.add(m[1])
+  for (const m of block.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*)\s*[(?:]/gm)) names.add(grp(m, 1, '方法名'))
   return [...names]
 }
 
