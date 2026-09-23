@@ -761,21 +761,21 @@ app.whenReady().then(async () => {
           sandbox: null, opened: [], navAttempt: null,
           openExternalAttempts: 0, popupWindows: 0, urlBefore, urlAfter: null, navigated: null,
         };
-        // 每个动作**单独** evaluate 并带超时：守卫一旦失效，导航会把 frame 带走，
-        // 而 `executeJavaScript` 在 frame 销毁后不再 settle —— 不设超时的话探针会
-        // 永远打不出结果，失效只能表现为「无输出 + 冒烟等到 kill 超时」（评审实测）。
+        // 每个动作单独 evaluate 带超时：守卫失效时导航会把 frame 带走，而 executeJavaScript 在 frame
+        // 销毁后不再 settle（评审实测）。一次超时有两种含义：**没观测到**（首跑排在后端 init 之后，CI
+        // 实测 4s settle 不了而日志证明守卫全生效）与**观测到不成立** —— 只重试前者，见 N35。
         const evaluate = async (js, ms = 4000) => {
-          let timer;
-          try {
-            return await Promise.race([
-              mainWindow.webContents.executeJavaScript(js),
-              new Promise((resolve) => { timer = setTimeout(() => resolve('__timeout__'), ms); }),
-            ]);
-          } catch (e) {
-            return '__error__:' + (e && e.message ? e.message : String(e));
-          } finally {
-            if (timer) clearTimeout(timer);
+          let timer; let v = '__timeout__';
+          for (let i = 0; i < 12; i += 1) {
+            try {
+              v = await Promise.race([
+                mainWindow.webContents.executeJavaScript(js),
+                new Promise((resolve) => { timer = setTimeout(() => resolve('__timeout__'), ms); }),
+              ]);
+            } catch (e) { v = '__error__:' + (e && e.message ? e.message : String(e)); }
+            clearTimeout(timer); if (v !== '__timeout__') break;
           }
+          return v;
         };
 
         // ① 沙箱是否真的生效（行为事实，不靠日志）
