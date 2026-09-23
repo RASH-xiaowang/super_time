@@ -30,10 +30,14 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  *   · `kb-parse-pdf-env.spec.ts` 直接写 `process.type`（Electron 才有这个字段，@types/node 里没有）；
  *   · `llm-profiles.spec.ts` 里 `store.profiles` 的每一行都被宿主层 JSDoc 写成 `object` ⇒ 给一个行形状别名；
  *   · `llm-retry.spec.ts` 的 `let thrown = null` / `let captured`（推成 `null`/`never`，读字段就撞墙）。
+ * 第三步再收 17 处「下标取值可能为 undefined 就直接用」→ **145**：
+ * `atomic-json.spec.ts` 四处 `backups[0]`、`ci-script-isolation.spec.ts` 的 `lines[i]` / `m[1]` / `pkg.scripts[m[1]]`。
+ * 手法统一为**先判空再往下走**（fail-closed：判不出来就直接抛「这条用例的前提不成立」），
+ * 不用 `!` 断言、也不用 `String()` 把 undefined 混成字符串 —— 那两种写法都会让一条本该红的用例继续绿。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 162
+const BASELINE = 145
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150

@@ -63,7 +63,9 @@ describe('原子写与损坏文件保留', () => {
       expect(existsSync(p)).toBe(false)
       const backups = readdirSync(root).filter((f) => f.startsWith('config.json.corrupt-'))
       expect(backups).toHaveLength(1)
-      expect(readFileSync(join(root, backups[0]), 'utf8')).toBe(broken)
+      const [firstBackup] = backups
+      if (!firstBackup) throw new Error('备份目录里没有文件 —— 这条用例的前提不成立')
+      expect(readFileSync(join(root, firstBackup), 'utf8')).toBe(broken)
     })
 
     it(`${impl.name}：目标不存在时不报错（首次运行）`, () => {
@@ -114,7 +116,9 @@ describe('原子写与损坏文件保留', () => {
     // 残缺内容留了备份，而不是被无声覆盖
     const backups = readdirSync(root).filter((f) => f.startsWith('config.json.corrupt-'))
     expect(backups).toHaveLength(1)
-    expect(readFileSync(join(root, backups[0]), 'utf8')).toBe('{ not json')
+    const [firstBackup] = backups
+    if (!firstBackup) throw new Error('备份目录里没有文件 —— 这条用例的前提不成立')
+    expect(readFileSync(join(root, firstBackup), 'utf8')).toBe('{ not json')
   })
 })
 
@@ -316,7 +320,9 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
     // 损坏原文要先留痕，不能无声覆盖
     const backups = readdirSync(root).filter((f) => f.startsWith('secrets.json.corrupt-'))
     expect(backups).toHaveLength(1)
-    expect(readFileSync(join(root, backups[0]), 'utf8')).toBe('{ broken')
+    const [firstBackup] = backups
+    if (!firstBackup) throw new Error('备份目录里没有文件 —— 这条用例的前提不成立')
+    expect(readFileSync(join(root, firstBackup), 'utf8')).toBe('{ broken')
     expect(readFileSync(join(root, 'config.json'), 'utf8')).not.toContain(key)
     expect(getConfig(decrypted)['db_enc_key']).toBe(key)
   })
@@ -361,7 +367,9 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
     expect(JSON.parse(readFileSync(secretsFile, 'utf8'))['db_enc_key']).toBe('b'.repeat(64))
     const backups = readdirSync(root).filter((f) => f.startsWith('secrets.json.corrupt-'))
     expect(backups).toHaveLength(1)
-    expect(readFileSync(join(root, backups[0]), 'utf8')).toBe('{ broken')
+    const [firstBackup] = backups
+    if (!firstBackup) throw new Error('备份目录里没有文件 —— 这条用例的前提不成立')
+    expect(readFileSync(join(root, firstBackup), 'utf8')).toBe('{ broken')
   })
 
   it('patch 里全是空串/默认值（界面未加载完就点保存）时，secrets.json 一字不动', () => {
