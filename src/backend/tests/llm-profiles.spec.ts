@@ -24,6 +24,13 @@ import {
   upsertLlmProfile,
 } from '../wechat-paths.js'
 
+/**
+ * `llm.json` 里一条 profile 的形状。宿主层（`wechat-paths.js`）的 JSDoc 只写到 `Array<object>`，
+ * 于是从 `loadLlmStore()` 取出来的每一行都是 `{}` —— 测试要按字段读就得自己把形状说清楚
+ * （而不是到处 `as any`，那等于没写）。
+ */
+type LlmProfileRow = { id: string; provider: string; label: string; model: string; apiUrl: string; apiKey: string; embeddingModel?: string; usedAt: number }
+
 const scratch: string[] = []
 afterEach(() => {
   for (const d of scratch) rmSync(d, { recursive: true, force: true })
@@ -195,7 +202,8 @@ describe('模型配置集：成套切换（核心不变量）', () => {
     saveLlmConfig(DEEPSEEK)
     upsertLlmProfile({ config: MIMO })
     const store = loadLlmStore()
-    const byProvider = new Map(store.profiles.map(p => [p.provider, p]))
+    const rows = store.profiles as LlmProfileRow[]
+    const byProvider = new Map(rows.map((p) => [p.provider, p]))
     expect(byProvider.get('deepseek')!.apiKey).toBe('sk-deepseek')
     expect(byProvider.get('mimo')!.apiKey).toBe('sk-mimo')
     expect(byProvider.get('mimo')!.apiUrl).toBe(MIMO.apiUrl)
@@ -207,8 +215,8 @@ describe('模型配置集：成套切换（核心不变量）', () => {
     const dsId = loadLlmStore().profiles[0]!.id
     const mimoId = upsertLlmProfile({ config: MIMO }).activeProfileId
     const store = loadLlmStore()
-    expect(store.profiles.find(p => p.id === mimoId)!.usedAt).toBeGreaterThan(0)
-    expect(store.profiles.find(p => p.id === dsId)!.usedAt).toBeGreaterThan(0)
+    expect((store.profiles as LlmProfileRow[]).find((p) => p.id === mimoId)!.usedAt).toBeGreaterThan(0)
+    expect((store.profiles as LlmProfileRow[]).find((p) => p.id === dsId)!.usedAt).toBeGreaterThan(0)
   })
 
   it('切到不存在的配置 → 报错（不静默停在旧配置上）', () => {
@@ -241,7 +249,7 @@ describe('模型配置集：新增与编辑', () => {
     expect(second.activeProfileId).toBe(first.activeProfileId)
     expect(second.profiles).toHaveLength(2)
     // 原来的那条没被动过
-    expect(second.profiles.find(p => p.id === first.activeProfileId)!.apiKey).toBe('sk-deepseek')
+    expect((second.profiles as LlmProfileRow[]).find((p) => p.id === first.activeProfileId)!.apiKey).toBe('sk-deepseek')
     expect(loadLlmConfig().apiKey).toBe('sk-deepseek')
   })
 
@@ -269,7 +277,7 @@ describe('模型配置集：新增与编辑', () => {
     initState()
     const s = upsertLlmProfile({ config: DEEPSEEK, label: '主力' })
     saveLlmConfig({ ...DEEPSEEK, model: 'deepseek-reasoner' })
-    const p = loadLlmStore().profiles.find(x => x.id === s.activeProfileId)!
+    const p = (loadLlmStore().profiles as LlmProfileRow[]).find((x) => x.id === s.activeProfileId)!
     expect(p.label).toBe('主力')
     expect(p.model).toBe('deepseek-reasoner')
   })

@@ -143,7 +143,7 @@ describe('fetchWithRetry 行为', () => {
     const c2 = new AbortController()
     const s2 = scriptedFetch([new Error('aborted')])
     c2.abort()
-    let thrown = null
+    let thrown: (Error & { timeoutMs?: number }) | null = null
     try {
       await fetchWithRetry(s2.fn, 'u', { signal: c2.signal }, retryAll)
     } catch (e) {
@@ -208,7 +208,7 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
       await waitForAbort(init.signal)
       throw abortError()
     }
-    let thrown = null
+    let thrown: (Error & { timeoutMs?: number }) | null = null
     try {
       await fetchWithRetry(fn, 'u', {}, { ...quiet, maxAttempts: 2, timeoutMs: 20 })
     } catch (e) {
@@ -221,7 +221,7 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
   })
 
   it("timeoutScope: 'headers' 在拿到响应头后解除计时（多 GB 的 body 不会被连接超时掐断）", async () => {
-    let captured
+    let captured: AbortSignal | undefined
     const fn = async (_url, init) => { captured = init.signal; return okResponse() }
     await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20, timeoutScope: 'headers' })
     await new Promise((r) => setTimeout(r, 60))
@@ -229,7 +229,7 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
   })
 
   it('默认档（整个请求）相反：同一时长下信号会中止，body 读取因此有上界', async () => {
-    let captured
+    let captured: AbortSignal | undefined
     const fn = async (_url, init) => { captured = init.signal; return okResponse() }
     await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20 })
     await new Promise((r) => setTimeout(r, 60))

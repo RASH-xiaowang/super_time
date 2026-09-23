@@ -39,7 +39,7 @@ describe('文件日志', () => {
 
   it('循环引用/超长内容不会炸，也不会写出一整条巨型 JSON', () => {
     const log = createDiagLog({ dir: tempDir(), now: fixedNow })
-    const cyclic = { a: 1 }
+    const cyclic: Record<string, unknown> = { a: 1 }
     cyclic.self = cyclic
     expect(() => log.write('warn', [cyclic])).not.toThrow()
     expect(() => log.write('warn', ['x'.repeat(20000)])).not.toThrow()
