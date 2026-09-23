@@ -1,5 +1,28 @@
 import { defineConfig } from 'vitest/config'
 
+import { formatBoard, type FileTiming } from './src/backend/tests/helpers/slowest-files.ts'
+
+/**
+ * 跑完把「最慢的测试文件榜」打出来（N36）。
+ *
+ * 为什么值得占报告器这个位置：CI 那条「用例全过、退出码却是 1」的假红，判据是**单个文件的耗时**
+ * 有没有逼近 vitest 硬编码的 60 秒（birpc `DEFAULT_TIMEOUT = 6e4`）。以前这个数只能去 Actions
+ * 下日志 zip、解压、去 ANSI、再人肉排序才知道 —— 于是「离线还有多远」这件事没人主动去看。
+ * 现在每次运行自己打，并且同一份日志里也有测试自己吐的 `[算料]` 行，倍率能在同一次运行里算
+ * （跨运行比出来的是机器容量，不是机制 —— 这条教训见 RELEASE-PLAN 的 N36）。
+ */
+const slowestBoardReporter = {
+  onFinished: (files: Array<{ name?: string, duration?: number, result?: { duration?: number } }> = []) => {
+    // duration 在 vitest 的不同版本里一会儿挂在 task 上、一会儿挂在 task.result 上；
+    // 读错字段的后果是「全 0 的榜看着像没有慢文件」，所以 formatBoard 会自己识破并改打警告。
+    const rows: FileTiming[] = files.map((f) => ({
+      name: f.name ?? '(无名文件)',
+      ms: Math.max(0, f.result?.duration ?? f.duration ?? 0),
+    }))
+    for (const line of formatBoard(rows, 10)) console.log(line)
+  },
+}
+
 /**
  * 单测配置（与 vite.config.js 分开）。
  *
@@ -25,6 +48,12 @@ export default defineConfig({
       'src/client/ui-app/**/*.spec.ts',
     ],
     environment: 'node',
+    /**
+     * `default` 之外再加一份「最慢文件榜」（见上面 `slowestBoardReporter` 的注释）。
+     * 报告器抛错会让整轮测试红，所以它只做纯计算与打印 —— 排序与格式化都在
+     * `tests/helpers/slowest-files.ts` 里，那边有 7 项单测钉住。
+     */
+    reporters: ['default', slowestBoardReporter],
     /**
      * spec 里会建库、写文件、跑 PBKDF2，比默认 5s 宽松些。
      *
