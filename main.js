@@ -35,6 +35,11 @@ if (app.isPackaged) {
 
 /** 交给系统浏览器打开的次数（仅供安全探针断言；正常流程里是「用户点了外链」的计数）。 */
 let openExternalAttempts = 0;
+/**
+ * 探针用：**真的被创建出来**的弹窗数（`did-create-window` 只在真建窗时触发）。
+ * 判安全不能看 `window.open` 的返回值 —— deny 时 Chromium 也可能回一个指向空窗的 WindowProxy。
+ */
+let popupWindowsCreated = 0;
 const {
   configure: configureWechatPaths,
   applyConfig,
@@ -659,6 +664,8 @@ function installWebContentsGuards(contents) {
     }
     return { action: 'deny' };
   });
+  // 判定「有没有真开出窗口」的唯一可靠依据：`did-create-window` 只在窗口真的建出来时触发。
+  contents.on('did-create-window', () => { popupWindowsCreated += 1; });
   contents.on('will-navigate', (event, url) => {
     if (decideNavigation(url, __dirname) === 'allow') return;
     event.preventDefault();
@@ -752,7 +759,7 @@ app.whenReady().then(async () => {
         const urlBefore = mainWindow.webContents.getURL();
         const probe = {
           sandbox: null, opened: [], navAttempt: null,
-          openExternalAttempts: 0, urlBefore, urlAfter: null, navigated: null,
+          openExternalAttempts: 0, popupWindows: 0, urlBefore, urlAfter: null, navigated: null,
         };
         // 每个动作**单独** evaluate 并带超时：守卫一旦失效，导航会把 frame 带走，
         // 而 `executeJavaScript` 在 frame 销毁后不再 settle —— 不设超时的话探针会
@@ -777,13 +784,17 @@ app.whenReady().then(async () => {
           + ' electronAPIKeys: Object.keys(window.electronAPI || {}).length })',
         );
         // ② 三类被禁协议的新窗口（逐条判定，避免一条挂住拖垮全部）
+        // `result` 只记录 `window.open` 的返回形态（诊断用）；**安全判定看 `windowsAfter`**：
+        // 处理器 deny 时 Chromium 照样可能回一个指向空窗的 WindowProxy（CI 上实测见过 'window'），
+        // 而「是否真的开出了窗口」只有 did-create-window 说得上话。
         for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
           const opened = await evaluate(`window.open(${JSON.stringify(u)}) === null ? 'null' : 'window'`);
-          probe.opened.push({ url: u, result: opened });
+          probe.opened.push({ url: u, result: opened, windowsAfter: popupWindowsCreated });
         }
         // ③ 外部导航
         probe.navAttempt = await evaluate("(() => { window.location.href = 'https://example.com/'; return 'attempted' })()");
         probe.openExternalAttempts = openExternalAttempts;
+        probe.popupWindows = popupWindowsCreated;
         probe.urlAfter = mainWindow.webContents.getURL();
         probe.navigated = probe.urlAfter !== probe.urlBefore;
         console.log('[security-probe] ' + JSON.stringify(probe));
