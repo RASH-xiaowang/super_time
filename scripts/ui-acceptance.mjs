@@ -4,7 +4,7 @@
  * 方案：
  *   · Playwright 的 Electron 驱动（_electron.launch）驱动**真实应用**：真实数据目录、
  *     真实 ui-dist 与后端 bundle —— 不是 mock 出来的渲染层。
- *     首启三道闸门（启动引导 / 授权 / 隐私同意）用 N2 的显式开关越过：
+ *     首启三道闸门（启动引导 / 隐私同意 / 授权）用 N2 的显式开关越过：
  *     `SUPERTIME_SKIP_ONBOARDING=1` 由**主进程**判定（仅非打包态生效）⇒ 本脚本既不需要
  *     厂商签发的真许可证，也不需要伪造「已同意隐私声明」的 localStorage 记录。
  *   · LLM 用**本地 mock**（127.0.0.1）替换：既让「问答 → 漏斗行 → 反馈」全链路可跑，
@@ -100,7 +100,7 @@ async function main() {
       ...process.env,
       SUPERTIME_CAPTURE_PATH: join(OUT, 'exported-report.png'),
       SUPERTIME_TEST_MODE: '1',
-      // N2：越过首启三道闸门（引导 / 授权 / 隐私同意）。判定在主进程，且**仅非打包态**生效；
+      // N2：越过首启三道闸门（引导 / 隐私同意 / 授权）。判定在主进程，且**仅非打包态**生效；
       // 进来后窗口顶部会出现 #debug-gates-banner（步骤 1 会断言它），一眼可辨这不是正常首启。
       SUPERTIME_SKIP_ONBOARDING: '1',
     },
@@ -171,7 +171,7 @@ async function main() {
     // N2：这条同时是「豁免真的生效了」的证据 —— 没拿到豁免的话，页面会停在启动引导
     // 或隐私同意屏上，后面所有断言都会失败，而不只是这一条。
     ok(await win.locator('#debug-gates-banner').count() > 0,
-      '闸门豁免横幅可见（已跳过启动引导 / 授权 / 隐私同意，且主进程判定为非打包态）')
+      '闸门豁免横幅可见（已跳过启动引导 / 隐私同意 / 授权，且主进程判定为非打包态）')
     await win.getByRole('button', { name: '微信问答' }).first().click()
     await win.locator('text=本机检索 · AI 综合回答').first().waitFor({ timeout: 40000 })
     const body = await win.locator('body').innerText()

@@ -6,8 +6,8 @@
  * ## 为什么需要它
  *
  * 首启有三道闸门：启动引导（`ui-app/onboarding/OnboardingShell.tsx` 的「跳过」按钮要求
- * `licenseOk`）→ 授权（`LicenseGate` / `wechat:call` 的 `authorizeCall`）→ **隐私同意**
- * （`ui-app/privacy/PrivacyConsentGate.tsx`）。UI 自动化因此必须先签发一张真许可证，
+ * `licenseOk`）→ **隐私同意**（同一个启动页的第五站；H14 起排在授权之前）→ 授权
+ * （`LicenseGate` / `wechat:call` 的 `authorizeCall`）。UI 自动化因此必须先签发一张真许可证，
  * 再往 localStorage 里伪造一份「已同意隐私声明」的记录才能进主界面 —— 前者要动签发私钥，
  * 后者等于绕过同意闸门本身。这里把「自动化要进主界面」收口成一个**显式、可审计**的开关，
  * 而不是散落在脚本里的伪造手段。

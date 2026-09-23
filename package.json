@@ -37,6 +37,7 @@
     "ui:loading-e2e": "node scripts/loading-recovery-e2e.mjs",
     "ui:longlist-e2e": "node scripts/longlist-virtualization-e2e.mjs",
     "e2e:export-progress": "node scripts/export-progress-e2e.mjs",
+    "e2e:h14-consent": "node scripts/consent-order-e2e.mjs",
     "e2e:backup-progress": "node scripts/backup-progress-e2e.mjs",
     "e2e:export-nonblocking": "node scripts/export-nonblocking-e2e.mjs",
     "package:smoke": "node scripts/packaged-smoke.js",

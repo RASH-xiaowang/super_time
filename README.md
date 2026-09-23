@@ -36,8 +36,12 @@ npm start         # 构建前端 + 后端 bundle，然后启动应用
 ### 首次启动会依次经过三道闸门
 
 1. **启动引导**：四页介绍（首页 / 功能引导 / 使用说明 / 关于），首次必须逐页看完。
-2. **授权（License）**：校验本机设备指纹与许可证签名，未导入许可证时业务方法一律被拒。
-3. **隐私同意**：首次必须显式勾选同意 [`docs/PRIVACY.md`](docs/PRIVACY.md) 所述的数据边界后才能进入主界面。
+2. **隐私同意**：必须显式勾选同意 [`docs/PRIVACY.md`](docs/PRIVACY.md) 所述的数据边界，才能继续往下走。
+3. **授权（License）**：校验本机设备指纹与许可证签名，未导入许可证时业务方法一律被拒。
+
+同意排在授权**之前**是有意的：没有取得同意，就不该先向用户要许可证 —— 反过来排会让
+「机器上没有有效许可证」等于「永远看不到同意屏」。这个顺序由 `npm run e2e:h14-consent`
+在 CI 里用真实 Electron 逐条钉住（含「不同意并退出」真的退出、同意之后才落到授权站）。
 
 ### 本地跑起来需要一份许可证
 
@@ -63,11 +67,12 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 |---|---|
 | `npm start` / `npm run dev` | 构建后启动应用 |
 | `npm test` | 单元测试（vitest；不依赖真实微信数据、不联网） |
-| `npm run typecheck` | 前后端类型检查（后端用 tsc + `lib/types`，前端只从仓库取类型） |
+| `npm run typecheck` | 前后端类型检查（后端用 tsc + `lib/types`，前端只从仓库取类型。**暂不覆盖** `src/client/ui-app/**`，见 RELEASE-PLAN N31） |
 | `npm run build:ui` / `npm run build:backend` | 分别构建前端静态资源与后端 bundle |
 | `npm run pack` / `npm run dist` | 打包目录版 / 生成 NSIS 安装器（都会前置 `build:ui`） |
 | `npm run package:smoke` | 启动**打包产物**跑断言（asar 内容、状态落点、语音解码资产、方法数…） |
 | `npm run ui:smoke` / `npm run privacy-gate:smoke` | 面板的 SSR 冒烟 / 隐私同意屏的 SSR 断言（未勾选时按钮必须禁用） |
+| `npm run e2e:export-progress` / `npm run e2e:h14-consent` | **真机 e2e**（Playwright 驱动真实 Electron）：导出进度与中止 / 隐私同意先于授权。两条都在 CI 里，都不需要许可证与签发私钥 |
 | `npm run rag:check` / `npm run check:knowledge-graph` | 检索层 / 知识图谱后端冒烟 |
 | `npm run security-guard:smoke` | 在真实渲染进程里验证开窗与外部导航被拒（打包态加 `:packaged`） |
 | `npm run check:backend-restart` | 杀掉后端 worker → 自动重建 → 功能恢复（端到端） |
