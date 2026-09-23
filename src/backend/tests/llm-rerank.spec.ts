@@ -19,7 +19,10 @@ import { at as strictAt } from './helpers/strict-index.ts'
 /** 一次被捕获的请求。 */
 type Seen = { url: string; headers: Record<string, string>; body: Record<string, unknown> }
 
-/** 取第 n 次被捕获的请求；越界 = 这条用例的前提不成立（口径见 helpers/strict-index）。 */
+/**
+ * 取第 n 次被捕获的请求；越界 = 这条用例的前提不成立。
+ * @source-ref src/backend/tests/helpers/strict-index.ts:31
+ */
 function at (seen: Seen[], n: number): Seen {
   return strictAt(seen, n, '请求')
 }

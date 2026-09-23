@@ -66,8 +66,19 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * `scores.kb` 也是 0），但它是个静默失效的坑，补上 `kb: 0` 并写明理由。
  * 两处**踩坑记录**：`at()` 的签名是 `readonly T[]`，套不到 `Float32Array` / `Uint8Array` 上 ——
  * typed array 的下标恒在范围内，那里要写 `v[0] ?? 0`，不是 `at(v, 0)`。
- * **只剩 2 处 TS7016**（`wechat-paths.js` / `update.js` 缺 `.d.ts`）；清完之后按注释里写好的收尾做：
- * 把 `tsconfig.tests.json` 串进 `npm run typecheck`（`typecheck:tests`），并把棘轮换成「0 错误」硬断言。
+ * **只剩 2 处 TS7016**（`wechat-paths.js` / `update.js` 缺 `.d.ts`）。
+ * 试过**让 tsc 从 JS 的 JSDoc 生成**这两份 `.d.ts`（`allowJs + declaration + emitDeclarationOnly`，
+ * 产物落在源文件旁边，配一份门禁比对新鲜度）—— 生成是干净的、形状也确实对得上，但**总量从 74 涨到 120**：
+ * 宿主 JSDoc 里那些 `@returns {object}`、`@param {{...}} opts` 一旦变成真声明，
+ * 消费者就从「`any`，什么都查不出」掉进「比 `any` 更窄而**且错**」——
+ * `llm-profiles.spec.ts` 立刻报 40 多处 `Property 'id' does not exist on type 'object'`，
+ * `loadConfig()['db_dir']` 这类按键索引报 TS7053，三处原本压 `@ts-expect-error TS7016` 的抑制
+ * 变成「 Unused directive」（这倒是真的：见第一步那条「恒假的抑制」）。
+ * **所以这条路只能这么走**：先把 `wechat-paths.js` 的 JSDoc 补成真的 typedef（LLM store 行形状、
+ * config 形状、settings 键），再谈生成；或者直接手写（`llm-retry.d.ts` 那条路）。
+ * **不要**为了把 2 降到 0 就把生成物提上去 —— 那会把基线从 2 顶到 48，等于用更差的数据结构换掉一个诚实的 `any`。
+ * 清零之后的收尾：把 `tsconfig.tests.json` 串进 `npm run typecheck`（`typecheck:tests`），
+ * 并把棘轮换成「0 错误」硬断言。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
