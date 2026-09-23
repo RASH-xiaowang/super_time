@@ -20,7 +20,7 @@ import {
   readRenderCache,
   writeRenderCache,
 } from '../api.ts'
-import type { SummaryRecord, SummaryTask } from '@deepseek-ai/dsh-wechat-data/types'
+import type { SummaryRecord, SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, DateField, PanelHeader, TimeField, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './daily-summary.module.css'
@@ -234,7 +234,9 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
     await withBusy('save', async () => {
       setError(null)
       try {
-        const task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } = {
+        // 入参里没有 lastStatus / lastError：保存任务的 SQL 不写这三列，运行状态只由
+        // runSummaryTask 那条路改。旧代码照着当时的类型写了两个空串，读起来像「保存会清运行状态」。
+        const task: SummaryTaskInput = {
           groupUsername: form.groupUsername.trim(),
           groupName: form.groupName.trim() || form.groupUsername.trim(),
           targetUsers: form.targetAll ? [] : form.targetUsers,
@@ -242,8 +244,6 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
           customPrompt: form.customPrompt.trim(),
           scheduleTime: form.scheduleTime,
           enabled: form.enabled,
-          lastStatus: '',
-          lastError: '',
         }
         if (form.id !== undefined) task.id = form.id
         const r = await apiSaveSummaryTask({ task })

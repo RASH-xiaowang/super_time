@@ -88,6 +88,7 @@ import type {
   StorageSnapshot,
   SummaryRecordSnapshot,
   SummaryTask,
+  SummaryTaskInput,
   SummaryTaskMutationResult,
   SummaryTaskRunResult,
   SummaryTaskSnapshot,
@@ -432,7 +433,7 @@ export interface WechatRemote {
   clearSessionDraft(options: { username: string }): Promise<RemoteResult<DraftClearResult>>
   clearAllSessionDrafts(): Promise<RemoteResult<DraftsClearResult>>
   listSummaryTasks(): Promise<RemoteResult<SummaryTaskSnapshotRead>>
-  saveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): Promise<RemoteResult<SummaryTaskMutationResult>>
+  saveSummaryTask(options: { task: SummaryTaskInput }): Promise<RemoteResult<SummaryTaskMutationResult>>
   deleteSummaryTask(options: { id: number }): Promise<RemoteResult<SummaryTaskMutationResult>>
   toggleSummaryTask(options: { id: number; enabled: boolean }): Promise<RemoteResult<SummaryTaskMutationResult>>
   runSummaryTask(options: { id: number }): Promise<RemoteResult<SummaryTaskRunResult>>

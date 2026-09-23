@@ -88,6 +88,7 @@ import type {
   StorageSnapshot,
   SummaryRecordSnapshot,
   SummaryTask,
+  SummaryTaskInput,
   SummaryTaskMutationResult,
   SummaryTaskRunResult,
   SummaryTaskSnapshot,
@@ -418,7 +419,7 @@ export async function apiListSummaryTasks(): Promise<SummaryTaskSnapshotRead> {
  * @param options - Mutation options: the task payload (with optional id for updates).
  * @returns SummaryTaskMutationResult.
  */
-export async function apiSaveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): Promise<SummaryTaskMutationResult> {
+export async function apiSaveSummaryTask(options: { task: SummaryTaskInput }): Promise<SummaryTaskMutationResult> {
   return unwrap(await remote().saveSummaryTask(options))
 }
 /**

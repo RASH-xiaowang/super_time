@@ -88,8 +88,6 @@ function summaryTask(overrides: Record<string, unknown> = {}): Parameters<typeof
     customPrompt: '',
     scheduleTime: '08:00',
     enabled: true,
-    lastStatus: '',
-    lastError: '',
     ...overrides,
   }
 }

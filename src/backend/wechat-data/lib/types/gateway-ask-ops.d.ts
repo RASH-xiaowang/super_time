@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
+import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
 import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbSearchResult, KbSummaryResult } from './types.ts';
 import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vectors.ts';
 import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts';
@@ -566,13 +566,14 @@ export declare abstract class GatewayAskOps extends GatewayRead {
     listSummaryTasks(): SummaryTaskSnapshot;
     /**
      * Save (insert/update) a daily-summary task.
+     *
+     * 入参里没有 `lastRunAt` / `lastStatus` / `lastError` —— 那是运行状态，只有 `runSummaryTask`
+     * 那条路（`updateSummaryTaskRunState`）会写。理由见 `types-calls.ts` 的 `SummaryTaskInput`。
      * @param options - task payload (id present = update, absent = insert).
      * @returns SummaryTaskMutationResult: ok + id, or error.
      */
     saveSummaryTask(options: {
-        task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & {
-            id?: number;
-        };
+        task: SummaryTaskInput;
     }): SummaryTaskMutationResult;
     /**
      * Delete a daily-summary task.
