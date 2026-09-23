@@ -58,10 +58,20 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * （`ConstructorParameters<typeof actual.DatabaseSync>` 本身就是元组，展开合法）。
  * 这是**行为敏感**的改动，所以判据不是「类型过了」：`kb-vectors` 用 `expect(probe.hashLoads).toBe(1/2)`
  * 逐次数着，转调一旦失效就会掉到 0 —— 42 项全绿加上 `MEASURE_M12=1` 实跑，才算这一步真的做了。
+ * 第十步把最后三份「大块」收干净（37 处 → **2**）：`retrieval.spec.ts` 16、`kb-extract.spec.ts` 11、
+ * `vector-build.spec.ts` 10，全是 `at()` 那一族。**又查出一处真的**：`retrieval.spec.ts` 的打分夹具
+ * 少写一个 `kb` 键 —— 打分是 `for (const k of Object.keys(weights))` 遍历**夹具自己的键**，
+ * 所以少一个键就是那条通道在这批用例里根本不参与打分，与线上跑的不是同一件事
+ * （与 N32 前半在 `rag-retrieval-check.ts` 里抓到的那条同形）。今天不改变结果（那些夹具的
+ * `scores.kb` 也是 0），但它是个静默失效的坑，补上 `kb: 0` 并写明理由。
+ * 两处**踩坑记录**：`at()` 的签名是 `readonly T[]`，套不到 `Float32Array` / `Uint8Array` 上 ——
+ * typed array 的下标恒在范围内，那里要写 `v[0] ?? 0`，不是 `at(v, 0)`。
+ * **只剩 2 处 TS7016**（`wechat-paths.js` / `update.js` 缺 `.d.ts`）；清完之后按注释里写好的收尾做：
+ * 把 `tsconfig.tests.json` 串进 `npm run typecheck`（`typecheck:tests`），并把棘轮换成「0 错误」硬断言。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 39
+const BASELINE = 2
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150

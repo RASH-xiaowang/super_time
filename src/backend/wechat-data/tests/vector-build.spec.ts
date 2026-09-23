@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createTempWorkspace, openTrackedDb } from '../../tests/helpers/temp-db.ts'
 import type { TempWorkspace } from '../../tests/helpers/temp-db.ts'
 import { buildVectorIndex, vectorIndexStatus } from '../src/query/retrieval/embedding.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 /**
  * 临时目录与数据库连接都交给 `temp-db` 助手（与 `vector-build-gate.spec.ts` 同一套写法）。
@@ -69,7 +70,7 @@ function trackingEmbed(opts: { delayMs?: number } = {}): {
   let peak = 0
   const vecOf = (t: string): number[] => {
     const v = [0, 0, 0, 0, 0, 0, 0, 0]
-    for (let i = 0; i < t.length; i += 1) v[i % 8] += t.charCodeAt(i) % 7
+    for (let i = 0; i < t.length; i += 1) { const k = i % 8; v[k] = (v[k] ?? 0) + t.charCodeAt(i) % 7 }
     return v.every((x) => x === 0) ? [1, 0, 0, 0, 0, 0, 0, 0] : v
   }
   return {
@@ -156,15 +157,15 @@ describe('M10 向量建库：同文本只请求一次、向量扇出到所有行
       try {
         const before = db.prepare('SELECT fts_rowid, vec FROM vectors ORDER BY fts_rowid').all() as Array<{ fts_rowid: number; vec: Uint8Array }>
         expect(before.length).toBe(3)
-        const row1 = before[0]
-        const row3 = before[2]
+        const row1 = at(before, 0, 'before')
+        const row3 = at(before, 2, 'before')
         // 同组（1 与 3）字节相同；不同组不同
         expect(Buffer.from(row3.vec).equals(Buffer.from(row1.vec))).toBe(true)
-        expect(Buffer.from(before[1].vec).equals(Buffer.from(row1.vec))).toBe(false)
+        expect(Buffer.from(at(before, 1, 'before').vec).equals(Buffer.from(row1.vec))).toBe(false)
 
         // 改第 3 行的向量 → 第 1 行必须原封不动
         const mutated = new Uint8Array(row3.vec)
-        mutated[0] = (mutated[0] + 1) & 0xff
+        mutated[0] = ((mutated[0] ?? 0) + 1) & 0xff
         db.prepare('UPDATE vectors SET vec = ? WHERE fts_rowid = 3').run(mutated)
         const after1 = db.prepare('SELECT vec FROM vectors WHERE fts_rowid = 1').get() as { vec: Uint8Array }
         expect(Buffer.from(after1.vec).equals(Buffer.from(row1.vec))).toBe(true)
@@ -225,8 +226,8 @@ describe('M10 向量建库：并发边界', () => {
     const stub = trackingEmbed()
     const r = await buildVectorIndex(dec, stub.embed, { ...OPTS, batchSize: 100_000, concurrency: 1 })
     expect(r.embed_calls).toBe(2)
-    expect(stub.calls[0].length).toBe(256)
-    expect(stub.calls[1].length).toBe(44)
+    expect(at(stub.calls, 0, 'embed 批次').length).toBe(256)
+    expect(at(stub.calls, 1, 'embed 批次').length).toBe(44)
     expect(r.embedded).toBe(300)
 
     for (const bad of [0, -1, Number.NaN]) {

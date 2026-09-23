@@ -19,6 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { registerKbFile } from '../src/query/kb-files.ts'
 import { kbFilesDbPath } from '../src/query/kb-paths.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import {
   ENTITY_KINDS,
   MAX_ENTITIES_PER_FILE,
@@ -69,9 +70,9 @@ describe('① 解析：宽容格式，但不猜结构', () => {
     expect(items.map(i => `${i.kind}:${i.label}`)).toEqual([
       'person:张三', 'org:某某科技有限公司', 'product:蓝鲸系统', 'topic:交付节奏',
     ])
-    expect(items[0].weight).toBe(90)
+    expect(at(items, 0, 'items').weight).toBe(90)
     // 没给重要度时按 50，而不是 0（0 会让它在图上看不见）
-    expect(items[1].weight).toBe(50)
+    expect(at(items, 1, 'items').weight).toBe(50)
   })
 
   it('kind 与 label 顺序颠倒也认（模型常犯）', () => {
@@ -127,7 +128,7 @@ describe('② 落库：重跑是替换', () => {
     expect(r.ok).toBe(true)
     const { items } = readDocEntities(decrypted, 1)
     expect(items.map(i => i.label)).toEqual(['新主题'])
-    expect(items[0].model).toBe('m2')
+    expect(at(items, 0, 'items').model).toBe('m2')
   })
 
   it('按库隔离：乙库读不到甲库的实体', () => {
@@ -209,7 +210,7 @@ describe('④ 合并成图谱节点：该合的合、不该合的别合', () => 
     const g = mergeDocEntities([row(37, '某某科技', 'org'), row(38, '某某科技', 'org')])
     expect(g.nodes).toHaveLength(1)
     expect(g.nodes[0]).toMatchObject({ key: 'org:某某科技', label: '某某科技', kind: 'org', occurrences: 2 })
-    expect(g.nodes[0].files.map(f => f.id)).toEqual([37, 38])
+    expect(at(g.nodes, 0, 'nodes').files.map(f => f.id)).toEqual([37, 38])
     expect(g.edges).toEqual([
       { source: 'file:37', target: 'ent:org:某某科技', weight: 50, kind: 'suggest' },
       { source: 'file:38', target: 'ent:org:某某科技', weight: 50, kind: 'suggest' },
@@ -219,8 +220,8 @@ describe('④ 合并成图谱节点：该合的合、不该合的别合', () => 
   it('大小写与首尾空白折叠后算同一个（不折叠就会画成两个点）', () => {
     const g = mergeDocEntities([row(37, 'DeepSeek', 'product'), row(38, ' deepseek ', 'product')])
     expect(g.nodes).toHaveLength(1)
-    expect(g.nodes[0].key).toBe('product:deepseek')
-    expect(g.nodes[0].files.map(f => f.id)).toEqual([37, 38])
+    expect(at(g.nodes, 0, 'nodes').key).toBe('product:deepseek')
+    expect(at(g.nodes, 0, 'nodes').files.map(f => f.id)).toEqual([37, 38])
     // 刻意**不**去掉词内空格：与章节层同一口径，「张 三」是不是同一个人名由语义决定，
     // 由字符串规则来判定会把两个不同的人并成一个。
     expect(mergeDocEntities([row(37, '张 三', 'person'), row(38, '张三', 'person')]).nodes).toHaveLength(2)
@@ -234,8 +235,8 @@ describe('④ 合并成图谱节点：该合的合、不该合的别合', () => 
 
   it('一个文件里重复出现的同一实体：取最高 weight，occurrences 记真实次数', () => {
     const g = mergeDocEntities([row(37, '张三', 'person', { weight: 40 }), row(37, '张三', 'person', { weight: 80 })])
-    expect(g.nodes[0].files).toEqual([{ id: 37, weight: 80 }])
-    expect(g.nodes[0].occurrences).toBe(2)
+    expect(at(g.nodes, 0, 'nodes').files).toEqual([{ id: 37, weight: 80 }])
+    expect(at(g.nodes, 0, 'nodes').occurrences).toBe(2)
     expect(g.edges).toHaveLength(1)
   })
 
@@ -245,8 +246,8 @@ describe('④ 合并成图谱节点：该合的合、不该合的别合', () => 
       row(38, '张三', 'person', { model: 'new-model', at: 5000 }),
       row(39, '张三', 'person', { model: 'oldest-model', at: 100 }),
     ])
-    expect(g.nodes[0].model).toBe('new-model')
-    expect(g.nodes[0].at).toBe(5000)
+    expect(at(g.nodes, 0, 'nodes').model).toBe('new-model')
+    expect(at(g.nodes, 0, 'nodes').at).toBe(5000)
   })
 
   it('节点按「铺得多广」降序（截断时留下的是跨文件实体，而不是碰巧排在前面的）', () => {
@@ -255,7 +256,7 @@ describe('④ 合并成图谱节点：该合的合、不该合的别合', () => 
       row(1, '宽词', 'topic'), row(2, '宽词', 'topic'), row(3, '宽词', 'topic'),
     ])
     expect(g.nodes.map(n => n.label)).toEqual(['宽词', '窄词'])
-    expect(g.nodes[0].files).toHaveLength(3)
+    expect(at(g.nodes, 0, 'nodes').files).toHaveLength(3)
   })
 
   it('空输入 ⇒ 空节点空边（没抽过的库不该造出幽灵点）', () => {

@@ -19,6 +19,7 @@ import { averagePrecision, mrr, ndcgAtK, precisionAtK, recallAtK } from '../src/
 import { __internals, buildVectorIndex, searchDense } from '../src/query/retrieval/embedding.ts'
 import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig, loadRetrievalConfig, retrievalConfigPath } from '../src/query/retrieval/config.ts'
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -146,8 +147,8 @@ describe('fusion RRF 融合与去重', () => {
       mk('sparse', [b, a]),       // a 在 sparse 排第 2
       mk('dense', [a]),           // a 在 dense 排第 1
     ], 60, 10)
-    expect(fused[0].doc.docKey).toBe('s1:1')
-    expect(Object.keys(fused[0].ranks).sort()).toEqual(['dense', 'sparse'])
+    expect(at(fused, 0, 'fused').doc.docKey).toBe('s1:1')
+    expect(Object.keys(at(fused, 0, 'fused').ranks).sort()).toEqual(['dense', 'sparse'])
   })
 
   it('去重必须叠加时间邻近：模板化的转账通知不能被当成重复', () => {
@@ -162,7 +163,9 @@ describe('fusion RRF 融合与去重', () => {
 })
 
 describe('rank 交叉特征重排', () => {
-  const weights = { sparse: 1, dense: 1, entity: 2, coverage: 1, timePref: 1, recency: 0, agreement: 0.5 }
+  // `kb` 这一项**必须有**：打分是 `for (const k of Object.keys(weights))` 遍历**夹具自己的键**，
+  // 少写一个键就等于那条通道在这些用例里根本不参与打分 —— 与线上跑的不是同一件事。
+  const weights = { sparse: 1, dense: 1, kb: 0, entity: 2, coverage: 1, timePref: 1, recency: 0, agreement: 0.5 }
 
   it('实体命中权重压过通用内容分', () => {
     const generic = doc('s1', 1, '转账', 100)
@@ -175,8 +178,8 @@ describe('rank 交叉特征重排', () => {
       fused, terms: ['转账'], termWeights: new Map([['转账', 1]]), entity: '李四',
       softFromMs: NaN, softToMs: NaN, recency: false, recencyFirst: false, weights, now: 200,
     })
-    expect(ranked[0].doc.docKey).toBe('s2:1')
-    expect(ranked[0].features.entity).toBe(1)
+    expect(at(ranked, 0, 'ranked').doc.docKey).toBe('s2:1')
+    expect(at(ranked, 0, 'ranked').features.entity).toBe(1)
   })
 
   it('recencyFirst 把命中内容词的候选按时间新→旧排', () => {
@@ -190,7 +193,7 @@ describe('rank 交叉特征重排', () => {
       fused, terms: ['转账'], termWeights: new Map([['转账', 1]]), entity: '',
       softFromMs: NaN, softToMs: NaN, recency: true, recencyFirst: true, weights, now: 6000,
     })
-    expect(ranked[0].doc.docKey).toBe('s1:2')
+    expect(at(ranked, 0, 'ranked').doc.docKey).toBe('s1:2')
   })
 })
 
@@ -220,7 +223,9 @@ describe('eval 指标', () => {
 describe('embedding SimHash 工具', () => {
   it('L2 归一化后模长为 1', () => {
     const v = __internals.l2normalize([3, 4])
-    expect(Math.hypot(v[0], v[1])).toBeCloseTo(1)
+    // 这里是 typed array（Float32Array），不是普通数组 —— `at()` 的 `readonly T[]` 套不上，
+    // 而下标对 typed array 恒在范围内，所以 `?? 0` 只是把类型收窄，不是掩盖问题。
+    expect(Math.hypot(v[0] ?? 0, v[1] ?? 0)).toBeCloseTo(1)
   })
 
   it('popcount 正确', () => {
@@ -312,7 +317,7 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
     // 记在这里是为了防止「差分测试全绿」被误解成「行为逐位一致」：
     // 这是唯一已知的分叉点，且生产不可达（pool = Math.max(candidatePool, topK)，都非负）。
     const rows = makeRows(10, 15)
-    const qh = { lo: rows[0].lo, hi: rows[0].hi }
+    const qh = { lo: at(rows, 0, 'rows').lo, hi: at(rows, 0, 'rows').hi }
     expect(reference(rows, qh, -3).length).toBe(7) // 旧行为：slice(0, -3) 去掉尾部 3 条
     expect(__internals.selectByHamming(rows, qh, -3)).toEqual([]) // 新行为：按 0 处理
   })
@@ -353,18 +358,18 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
   it('大量并列时结果稳定（两次调用完全一致，且顺序=距离升序）', () => {
     const rows = makeRows(5000, 11)
     for (const r of rows) r.hi = 0
-    const qh = { lo: rows[0].lo ^ 0b111, hi: 0 }
+    const qh = { lo: at(rows, 0, 'rows').lo ^ 0b111, hi: 0 }
     const a = __internals.selectByHamming(rows, qh, 300)
     const b = __internals.selectByHamming(rows, qh, 300)
     expect(a.map((r) => r.rowid)).toEqual(b.map((r) => r.rowid))
     const dist = (r: Row): number => __internals.popcount32((r.lo ^ qh.lo) >>> 0)
-    for (let i = 1; i < a.length; i += 1) expect(dist(a[i])).toBeGreaterThanOrEqual(dist(a[i - 1]))
+    for (let i = 1; i < a.length; i += 1) expect(dist(at(a, i, 'a'))).toBeGreaterThanOrEqual(dist(at(a, i - 1, 'a')))
   })
 
   it('返回值就是原表里的对象（不复制、不改写）', () => {
     const rows = makeRows(500, 12)
-    const got = __internals.selectByHamming(rows, { lo: rows[3].lo, hi: rows[3].hi }, 10)
-    expect(got[0]).toBe(rows[3]) // 完全相同的查询哈希 → 距离 0 且在原表首位
+    const got = __internals.selectByHamming(rows, { lo: at(rows, 3, 'rows').lo, hi: at(rows, 3, 'rows').hi }, 10)
+    expect(at(got, 0, 'got')).toBe(at(rows, 3, 'rows')) // 完全相同的查询哈希 → 距离 0 且在原表首位
     expect(rows[0]).toEqual({ rowid: 1, lo: expect.any(Number), hi: expect.any(Number), username: expect.any(String) })
   })
 
@@ -587,7 +592,7 @@ describe('真值级：稠密检索端到端（M9）', () => {
       .sort((a, b) => b.score - a.score)
       .slice(0, 5)
     expect(res.docs.map((d) => d.local_id)).toEqual(truth.map((x) => x.localId))
-    for (let i = 1; i < res.scores.length; i += 1) expect(res.scores[i]).toBeLessThanOrEqual(res.scores[i - 1])
+    for (let i = 1; i < res.scores.length; i += 1) expect(res.scores[i]).toBeLessThanOrEqual(at(res.scores, i - 1, 'scores'))
   }, 60_000)
 
   it('候选池很小时也不越界、不返回空槽，且结果都来自真实文档', async () => {
