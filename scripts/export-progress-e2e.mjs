@@ -84,7 +84,11 @@ function makeFixture(userData) {
  */
 async function readProgress(win) {
   return win.evaluate(() => {
-    const el = document.querySelector('[role="progressbar"]')
+    // 只看**导出对话框里**那根进度条：整个文档的 `querySelector` 会先撞上别处的
+    // `[role="progressbar"]`（数据配置页的「检测账号」也有一根），于是采到的 caption
+    // 是别的面板的文字 —— CI 上那条「样本 400：检测账号扫描本机微信账号…」就是这么来的。
+    const box = document.querySelector('[role="dialog"]')
+    const el = box ? box.querySelector('[role="progressbar"]') : null
     if (!el) return { bar: null, indeterminate: false, caption: '' }
     const now = el.getAttribute('aria-valuenow')
     const next = el.nextElementSibling
@@ -94,6 +98,25 @@ async function readProgress(win) {
       caption: (next?.textContent ?? '').replace(/\s+/g, ' ').trim(),
     }
   })
+}
+
+/**
+ * 「现在这个窗口到底停在哪儿」的一份快照 —— **一次 evaluate 取全**（分多次问就会在
+ * 界面自己变的中间留下没法解释的空隙）。
+ *
+ * 为什么要它：CI 上红过一次「中继事件 0 条 + 采到的 caption 是数据配置页的文字」，
+ * 然后卡在等「中止导出」的 30 秒超时上 —— 报告里只看得见一个 TimeoutError，看不出
+ * 界面是什么时候离开聊天面板的。有了这份快照，下一次红会自己说清楚。
+ */
+async function snapshot (win) {
+  const s = await win.evaluate(() => ({
+    url: String(location.href).slice(0, 120),
+    bars: document.querySelectorAll('[role="progressbar"]').length,
+    dialog: !!document.querySelector('[role="dialog"]'),
+    stopBtn: Array.from(document.querySelectorAll('button')).some((b) => b.textContent?.includes('中止导出')),
+    body: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 220),
+  }))
+  return `url=${s.url} 进度条×${s.bars} 对话框=${s.dialog ? '开' : '关'} 中止按钮=${s.stopBtn ? '在' : '不在'} 页面文字「${s.body}」`
 }
 
 let app = null
@@ -166,7 +189,10 @@ try {
   }
   knownEvents = await win.evaluate(() => window.__prog ?? [])
   const known = knownEvents
-  check(known.length > 0, '小导出也经中继推到渲染层（不止轮询那条兜底路）', `事件 ${known.length}`)
+  check(known.length > 0, '小导出也经中继推到渲染层（不止轮询那条兜底路）',
+    // 一条都没到时把界面停在哪儿一起报出来：CI 上那种「事件 0 + 采到设置页文字」的红，
+    // 光看数字分不清是桥接没通、还是窗口早就离开了聊天面板。
+    `事件 ${known.length}${known.length === 0 ? '；' + (await snapshot(win)) : ''}`)
   check(known.every((e) => /^chats-export-/.test(String(e.jobId))), '事件都挂在本轮导出的 jobId 上',
     [...new Set(known.map((e) => String(e.jobId)))].join(','))
   check(known.some((e) => Number(e.total ?? 0) > 0 && Number(e.done ?? 0) > 0 && Number(e.done ?? 0) <= Number(e.total ?? 0)),
@@ -225,41 +251,53 @@ try {
 
   // ── ③ 中止：停在终态、提示是取消而不是失败、不留半成品 ─────────────
   const stopBtn = win.getByRole('button', { name: '中止导出', exact: true })
-  // **真鼠标点击必须成功** —— 这一条本身就是断言：矮视口下弹窗溢出时必须滚得到那颗按钮
-  // （CI 上第一轮红就是它：`element is outside of the viewport`，覆盖层不可滚 ⇒ 用户也点不到）。
-  // 允许重试三次：进度事件会让那一带反复重渲染、节点短暂脱离 DOM；
-  // 而「兜底改成 JS 点击」一旦用上就把这条检查判红 —— 不能悄悄把工作绕过缺陷的那一步吞掉。
-  let domClickFallback = false
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await stopBtn.click({ timeout: 8000 })
-      break
-    } catch {
-      if (attempt === 2) {
-        domClickFallback = true
-        await stopBtn.evaluate((el) => { el.click() })
-      } else {
-        await sleep(250)
+  // 先**有界地**等它出现（最多 10 秒）：拿不到就把「中止」这一档记成一条带快照的失败并整段跳过，
+  // 而不是让 Playwright 在 30 秒超时里把整条 e2e 打死 —— 那样后面的检查一条都不会跑，
+  // 报告里只剩一个 TimeoutError（CI 上就是这么红过一次，且没人看得出界面当时停在哪儿）。
+  let stopVisible = false
+  for (let i = 0; i < 50 && !stopVisible; i += 1) {
+    stopVisible = (await stopBtn.count()) > 0
+    if (!stopVisible) await sleep(200)
+  }
+  check(stopVisible, '全量导出进行中时「中止导出」一直在（③ 这一档的前提）',
+    stopVisible ? '' : '等满 10 秒仍没有这颗按钮；' + (await snapshot(win)))
+  if (stopVisible) {
+    // **真鼠标点击必须成功** —— 这一条本身就是断言：矮视口下弹窗溢出时必须滚得到那颗按钮
+    // （CI 上第一轮红就是它：`element is outside of the viewport`，覆盖层不可滚 ⇒ 用户也点不到）。
+    // 允许重试三次：进度事件会让那一带反复重渲染、节点短暂脱离 DOM；
+    // 而「兜底改成 JS 点击」一旦用上就把这条检查判红 —— 不能悄悄把工作绕过缺陷的那一步吞掉。
+    let domClickFallback = false
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await stopBtn.click({ timeout: 8000 })
+        break
+      } catch {
+        if (attempt === 2) {
+          domClickFallback = true
+          await stopBtn.evaluate((el) => { el.click() })
+        } else {
+          await sleep(250)
+        }
       }
     }
+    check(!domClickFallback, '矮视口下「中止导出」用真鼠标就点得到（弹窗溢出必须可滚）',
+      domClickFallback ? '退到了 DOM 级 click ⇒ 按钮仍在视口外/不可达' : '')
+    let stopped = false
+    for (let i = 0; i < 100; i += 1) {
+      await sleep(150)
+      const s = await readProgress(win)
+      const again = await win.getByRole('button', { name: '导出', exact: true }).count()
+      if (s.bar === null && !s.caption && again > 0) { stopped = true; break }
+    }
+    check(stopped, '中止后进度行收掉、按钮恢复（不卡在「导出中…」）', '')
+    const header = await win.locator('body').innerText()
+    check(/已取消导出/.test(header), '提示是「已取消导出」', header.match(/[^\n]*取消[^\n]*/)?.[0] ?? '(没找到)')
+    check(!/导出失败/.test(header), '取消没有被报成失败', header.match(/导出失败[^\n]*/)?.[0] ?? '')
+    const residue = existsSync(exportsDir) ? readdirSync(exportsDir).filter((f) => f.includes('.partial-')) : []
+    check(residue.length === 0, '导出目录里没有 `.partial-*` 半成品', residue.join(', '))
+    const produced = existsSync(exportsDir) ? readdirSync(exportsDir) : []
+    check(produced.length === 1, '被取消的导出没有新增产物（只有 ① 那一个 xlsx）', produced.join(', '))
   }
-  check(!domClickFallback, '矮视口下「中止导出」用真鼠标就点得到（弹窗溢出必须可滚）',
-    domClickFallback ? '退到了 DOM 级 click ⇒ 按钮仍在视口外/不可达' : '')
-  let stopped = false
-  for (let i = 0; i < 100; i += 1) {
-    await sleep(150)
-    const s = await readProgress(win)
-    const again = await win.getByRole('button', { name: '导出', exact: true }).count()
-    if (s.bar === null && !s.caption && again > 0) { stopped = true; break }
-  }
-  check(stopped, '中止后进度行收掉、按钮恢复（不卡在「导出中…」）', '')
-  const header = await win.locator('body').innerText()
-  check(/已取消导出/.test(header), '提示是「已取消导出」', header.match(/[^\n]*取消[^\n]*/)?.[0] ?? '(没找到)')
-  check(!/导出失败/.test(header), '取消没有被报成失败', header.match(/导出失败[^\n]*/)?.[0] ?? '')
-  const residue = existsSync(exportsDir) ? readdirSync(exportsDir).filter((f) => f.includes('.partial-')) : []
-  check(residue.length === 0, '导出目录里没有 `.partial-*` 半成品', residue.join(', '))
-  const produced = existsSync(exportsDir) ? readdirSync(exportsDir) : []
-  check(produced.length === 1, '被取消的导出没有新增产物（只有 ① 那一个 xlsx）', produced.join(', '))
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))
 } catch (e) {
   console.error('测试执行异常:', e)
