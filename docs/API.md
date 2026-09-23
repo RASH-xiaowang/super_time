@@ -1605,10 +1605,10 @@ saveRetrievalConfig(options?: { patch?: unknown } | unknown): { ok: boolean; con
 ### `saveSummaryTask`
 
 ```ts
-saveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): SummaryTaskMutationResult
+saveSummaryTask(options: { task: SummaryTaskInput }): SummaryTaskMutationResult
 ```
 
-Save (insert/update) a daily-summary task.
+Save (insert/update) a daily-summary task.  入参里没有 `lastRunAt` / `lastStatus` / `lastError` —— 那是运行状态，只有 `runSummaryTask` 那条路（`updateSummaryTaskRunState`）会写。理由见 `types-calls.ts` 的 `SummaryTaskInput`。
 
 - @param options - task payload (id present = update, absent = insert).
 - @returns SummaryTaskMutationResult: ok + id, or error.

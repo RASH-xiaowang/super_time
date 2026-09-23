@@ -25,7 +25,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
-import { listSummaryRecords, listSummaryTasks, saveSummaryTask } from '../src/query/summary-tasks.ts'
+import { listSummaryRecords, listSummaryTasks, saveSummaryTask, updateSummaryTaskRunState } from '../src/query/summary-tasks.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import { listOperations } from '../src/query/operation-log.ts'
 
 let root = ''
@@ -342,7 +343,7 @@ describe('N15：到期判定', () => {
 
   it('不到点 / 已停用 / 一分钟内跑过的都不跑', async () => {
     writeMessages(GROUPS)
-    const [dueId, notDueId, disabledId, justRanId] = [addTask(GROUPS[0]), addTask(GROUPS[1]), addTask(GROUPS[2]), addTask({ username: 'wxid_g9', name: '九群', texts: ['九'] })]
+    const [dueId, notDueId, disabledId, justRanId] = [addTask(at(GROUPS, 0)), addTask(at(GROUPS, 1)), addTask(at(GROUPS, 2)), addTask({ username: 'wxid_g9', name: '九群', texts: ['九'] })]
     // 停用两个/改一个到别的点
     const db = new DatabaseSync(join(dirname(decrypted), 'daily_summary.db'))
     db.prepare('UPDATE summary_tasks SET enabled = 0 WHERE id = ?').run(disabledId)
@@ -361,5 +362,33 @@ describe('N15：到期判定', () => {
     expect(llm.calls.length, '只有「到期且一分钟内没跑过」的那一个该跑').toBe(1)
     expect(llm.calls[0]).toContain('(wxid_g1)')
     expect(listSummaryRecords(decrypted).items.length).toBe(1)
+  })
+})
+
+describe('保存任务不改运行状态（`SummaryTaskInput` 剔掉那三列的理由）', () => {
+  it('跑成功过的任务被编辑保存之后，last_run_at / last_status 仍然在原处', () => {
+    writeMessages(GROUPS)
+    const g = at(GROUPS, 0)
+    const id = addTask(g)
+    expect(updateSummaryTaskRunState(decrypted, id, 1_700_000_000_000, 'done', '').ok).toBe(true)
+
+    // 界面上「编辑并保存」走的就是这条 UPDATE
+    expect(saveSummaryTask(decrypted, {
+      id,
+      groupUsername: g.username,
+      groupName: '改了名字的一组',
+      targetUsers: [],
+      format: 'brief',
+      customPrompt: '',
+      scheduleTime: '00:00',
+      enabled: true,
+    }).ok).toBe(true)
+
+    const saved = at(listSummaryTasks(decrypted).items.filter((t) => t.id === id), 0, '保存后的任务')
+    expect(saved.groupName).toBe('改了名字的一组')
+    // 下面两行才是这条用例的重点：一旦有人把 last_* 三列「补全」进那条 UPDATE，
+    // 界面上编辑一次任务就会把它的运行记录抹掉 —— 而旧代码真的传了两个空串进来。
+    expect(saved.lastRunAt).toBe(1_700_000_000_000)
+    expect(saved.lastStatus).toBe('done')
   })
 })

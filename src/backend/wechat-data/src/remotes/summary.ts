@@ -7,7 +7,7 @@
  */
 import { collectDayMessages } from '../query/daily-summary.ts'
 import { deleteSummaryTask as delTask, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from '../query/summary-tasks.ts'
-import { OperationCategory, OperationStatus, SummaryRecord, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts'
+import { OperationCategory, OperationStatus, SummaryRecord, SummaryTask, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, GenerateOptions, createUserMessage } from '@deepseek-ai/dsh-llm'
 
@@ -25,7 +25,7 @@ export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
       return listTasks(rc.dirs().decrypted)
     },
 
-    saveSummaryTask(options: { task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number } }): SummaryTaskMutationResult {
+    saveSummaryTask(options: { task: SummaryTaskInput }): SummaryTaskMutationResult {
       const r = saveTask(rc.dirs().decrypted, options.task)
       rc.op('task', 'save_summary_task', r.ok ? 'ok' : 'fail', options.task.groupUsername, r.error ?? `id=${r.id ?? ''}`)
       return r

@@ -1,4 +1,4 @@
-import { OperationCategory, OperationStatus, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts';
+import { OperationCategory, OperationStatus, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts';
 import type { Context } from '@deepseek-ai/cordis';
 export interface createSummaryRemotesInputs {
     dirs: () => {
@@ -22,9 +22,7 @@ export interface createSummaryRemotesInputs {
 export declare function createSummaryRemotes(rc: createSummaryRemotesInputs): {
     listSummaryTasks(): SummaryTaskSnapshot;
     saveSummaryTask(options: {
-        task: Omit<SummaryTask, "id" | "createdAt" | "updatedAt"> & {
-            id?: number;
-        };
+        task: SummaryTaskInput;
     }): SummaryTaskMutationResult;
     deleteSummaryTask(options: {
         id: number;
