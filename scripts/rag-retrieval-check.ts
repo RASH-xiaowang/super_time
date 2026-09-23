@@ -65,7 +65,9 @@ check('RRF 对多通道一致命中加权', () => {
   const a = doc('s1', 1, '转账')
   const b = doc('s1', 2, '别的')
   const fused = fuseResults([mk('sparse', [b, a]), mk('dense', [a])], 60, 10)
-  assert.equal(fused[0].doc.docKey, 's1:1')
+  const top = fused[0]
+  assert.ok(top, '融合结果为空（RRF 没产出任何东西）')
+  assert.equal(top.doc.docKey, 's1:1')
 })
 check('去重叠加时间邻近（模板消息不算重复）', () => {
   const t1 = doc('s1', 1, '微信转账 收到转账3500.00元 请及时查收', 1000)
@@ -76,14 +78,18 @@ check('去重叠加时间邻近（模板消息不算重复）', () => {
 })
 
 console.log('重排')
-const weights = { sparse: 1, dense: 1, entity: 2, coverage: 1, timePref: 1, recency: 0, agreement: 0.5 }
+// 必须带上**每一个通道**的权重：`rerankDocs` 的打分循环遍历的是 weights 自己的键，
+// 少写一个 `kb` 就是「这条夹具里知识库通道不参与打分」—— 那与线上跑的不是同一件事。
+const weights = { sparse: 1, dense: 1, kb: 1, entity: 2, coverage: 1, timePref: 1, recency: 0, agreement: 0.5 }
 check('实体命中压过通用内容分', () => {
   const fused: FusedDoc[] = [
     { doc: doc('s1', 1, '转账', 100), ranks: { sparse: 1 }, scores: { sparse: 1 }, rrf: 1 },
     { doc: doc('s2', 1, '转账 李四', 100), ranks: { sparse: 2 }, scores: { sparse: 0.2 }, rrf: 0.9 },
   ]
   const ranked = rerankDocs({ fused, terms: ['转账'], termWeights: new Map([['转账', 1]]), entity: '李四', softFromMs: NaN, softToMs: NaN, recency: false, recencyFirst: false, weights, now: 200 })
-  assert.equal(ranked[0].doc.docKey, 's2:1')
+  const top = ranked[0]
+  assert.ok(top, '重排结果为空')
+  assert.equal(top.doc.docKey, 's2:1')
 })
 check('recencyFirst 时间新→旧', () => {
   const fused: FusedDoc[] = [
@@ -91,7 +97,9 @@ check('recencyFirst 时间新→旧', () => {
     { doc: doc('s1', 2, '转账', 5000), ranks: { sparse: 2 }, scores: { sparse: 0.5 }, rrf: 0.9 },
   ]
   const ranked = rerankDocs({ fused, terms: ['转账'], termWeights: new Map([['转账', 1]]), entity: '', softFromMs: NaN, softToMs: NaN, recency: true, recencyFirst: true, weights, now: 6000 })
-  assert.equal(ranked[0].doc.docKey, 's1:2')
+  const top = ranked[0]
+  assert.ok(top, '重排结果为空')
+  assert.equal(top.doc.docKey, 's1:2')
 })
 
 console.log('评估指标')

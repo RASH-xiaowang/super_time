@@ -1,0 +1,23 @@
+{
+  "//": "N32 第一步：把 CI 会跑的**门禁脚本**接进类型检查（scripts/*.ts(x) 与 vitest.config.ts）。这些脚本本身就是门禁 —— 它们自己的参数形状、被改名后的 API、noUncheckedIndexedAccess 下的下标取值，过去只有跑到运行时才暴露，而门禁「跑通了但断言恒真」比没有门禁更危险。客户端基座 + paths + css-modules 声明与 ui-wechat 那份对齐，否则 import 进来的面板会报一堆与真实构建无关的假错。",
+  "extends": "./tsconfig.base.client.json",
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictFunctionTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "types": ["node", "@deepseek-ai/cordis"],
+    "paths": {
+      "@deepseek-ai/dsh-wechat-data/types": ["./src/backend/wechat-data/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-client-ui-primitives": ["./src/client/ui-primitives-shim/src/index.ts"]
+    }
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx",
+    "vitest.config.ts",
+    "src/client/ui-wechat/src/css-modules.d.ts",
+    "src/client/ui-primitives-shim/src/css-modules.d.ts"
+  ]
+}

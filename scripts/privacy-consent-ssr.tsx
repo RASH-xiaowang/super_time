@@ -69,8 +69,9 @@ check('出网点开关口径与文档一致（图片与头像有开关、只剩�
   const kinds = html.split('data-switch="').slice(1).map((c) => c.slice(0, c.indexOf('"')))
   const ORDER = ['AI 问答与总结', 'AI embedding', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载']
   const at = ORDER.map((l) => html.indexOf(`>${l}<`))
-  ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => at[i] < 0).join('、')}`)
-  ok(at.every((v, i) => i === 0 || v > at[i - 1]), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
+  ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => (at[i] ?? -1) < 0).join('、')}`)
+  // 取不到前一项就当 NaN：任何与 NaN 的比较都是 false ⇒ 宁可判错位，不许悄悄放过
+  ok(at.every((v, i) => i === 0 || v > (at[i - 1] ?? Number.NaN)), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
   ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
   const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
   ok(kindOf['头像图片'] === 'toggle', `头像应标为可关闭（后端代取），实际 ${kindOf['头像图片']}`)
