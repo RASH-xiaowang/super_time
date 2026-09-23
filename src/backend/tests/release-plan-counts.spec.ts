@@ -47,10 +47,21 @@ type Tally = { 未开始: number, 进行中: number, 待验收: number, 已完�
 
 const empty = (): Tally => ({ 未开始: 0, 进行中: 0, 待验收: 0, 已完成: 0 })
 
+/**
+ * 拆表格行的字段：只认**没被反斜杠转义**的竖线。
+ *
+ * 为什么要专门写这个而不是 `split('|')`：条目正文里合法地会出现竖线（类型 `string | undefined`、
+ * 绝对值记法 `mean|d|`），而那些在 markdown 里必须转义成 `\|` 才不换列 —— 转义以后普通的
+ * `split('|')` 又会把它当成换列。两种错法各红一半，所以这里统一按「未转义的竖线」切。
+ */
+function cellsOf (line: string): string[] {
+  return line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
+}
+
 /** 状态取表格行最后一个字段；认不出的一律算「未开始」—— 宁可虚报未做，不可虚报已做。 */
 function statusOf(line: string): keyof Tally {
-  const cells = line.split(/\s*\|\s*/)
-  const last = at(cells, cells.length - 2, '表格字段').trim()
+  const cells = cellsOf(line)
+  const last = at(cells, cells.length - 1, '表格字段')
   if (/^已完成/.test(last)) return '已完成'
   if (/^待验收/.test(last)) return '待验收'
   if (/^进行中/.test(last)) return '进行中'
@@ -101,6 +112,38 @@ const PHASES = RANGES.map((r) => {
   }
   return { phase: r.phase, n: tally.未开始 + tally.进行中 + tally.待验收 + tally.已完成, tally, unknown, range: r }
 })
+
+/**
+ * 条目行的**列数**（形状）。
+ *
+ * 表格行的列数必须等于它所属表头的列数，否则渲染出来是错位的：少一列 ⇒ 最后那格（状态）
+ * 显示在「验收标准」那一列上；多一列 ⇒ 正文里有一根没转义的竖线（类型 `string | undefined`、
+ * 绝对值 `mean|d|` 这类），一句话被劈成两格。两种都不会让任何**内容**变错，所以肉眼读原文
+ * 看不出来，只有数得出来。
+ */
+function rowShapes(): Array<{ id: string, line: number, cells: number, header: number }> {
+  const out: Array<{ id: string, line: number, cells: number, header: number }> = []
+  let header = 0
+  for (let i = 0; i < LINES.length; i += 1) {
+    const l = at(LINES, i, '行')
+    if (/^\|\s*ID\s*\|/.test(l)) { header = cellsOf(l).length; continue }
+    const m = ID_ROW.exec(l)
+    if (!m) { if (!l.startsWith('|')) header = 0; continue }
+    out.push({ id: grp(m, 1, '条目行'), line: i + 1, cells: cellsOf(l).length, header })
+  }
+  return out
+}
+
+const SHAPES = rowShapes().filter((s) => s.header > 0)
+
+/**
+ * 今天的既有欠账（**只许变短**）：这几行与本表表头列数不符。
+ * 列进来不是为了放行，是为了「修一行必须同时把名单改短」—— 与 M21 那个白名单同一种棘轮。
+ * 每一项都记在 N38 里，需要人判断的是「证据位置到哪里为止、验收标准从哪里开始」。
+ */
+const WIDE_DEBT = ['M12', 'M18', 'M19', 'N31']
+const SHORT_DEBT = ['M1', 'M8', 'M9', 'M10', 'M11', 'M13', 'M14', 'M15', 'M16', 'M17',
+  'N14', 'N15', 'N16', 'N17', 'N18', 'N19', 'N20', 'N21', 'N22']
 
 describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个问题本身要能信）', () => {
   it('阶段标题都解析到了，且条目表不是空的（解析口径坏了要红，而不是「两边都空所以相等」）', () => {
@@ -179,5 +222,18 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
       }
     }
     expect(dupes, '同一个 ID 出现在两处').toEqual([])
+  })
+
+  it('条目行的列数与本表表头一致（既有欠账按棘轮冻结，只许变短）', () => {
+    expect(SHAPES.length, '一条条目行都没解析到 —— 表头或行格式变了').toBeGreaterThanOrEqual(90)
+    const wide = SHAPES.filter((s) => s.cells > s.header).map((s) => s.id).sort()
+    const short = SHAPES.filter((s) => s.cells < s.header).map((s) => s.id).sort()
+    expect(wide, '多列的条目行（正文里有没转义的竖线，或把「实施结果」当成了额外一列）')
+      .toEqual([...WIDE_DEBT].sort())
+    expect(short, '缺列的条目行（状态那一格因此显示在「验收标准」列上）')
+      .toEqual([...SHORT_DEBT].sort())
+    // 上面两条只比集合；万一某行从「多列」变成「缺列」互相抵消，这里兜住总量
+    expect(wide.length + short.length, '形状不符表头的条目行总数与名单对不上')
+      .toBe(WIDE_DEBT.length + SHORT_DEBT.length)
   })
 })
