@@ -23382,7 +23382,8 @@ var WECHAT_CDN_HOST_SUFFIXES = [
   "wechat.com",
   "wechatcdn.cn",
   "qpic.cn",
-  "weixin.qq.com"
+  "weixin.qq.com",
+  "qlogo.cn"
 ];
 function wechatCdnHostAllowed(url) {
   let parsed;
