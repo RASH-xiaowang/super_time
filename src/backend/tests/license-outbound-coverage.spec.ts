@@ -36,6 +36,7 @@ const NON_AI_OUTBOUND: Record<string, string> = {
   getSnsVideoDataUrl: '从微信 CDN 取回视频字节，不发内容给模型',
   getSnsVideoCoverDataUrl: '从微信 CDN 取回封面字节，不发内容给模型',
   getImageOriginal: '从微信 CDN 取回聊天图片原图字节，不发内容给模型（只走消息自带的免登录直链）',
+  getRemoteImages: '远程图片代理（M23）：按地址从微信 CDN 白名单主机取图并落盘，不发内容给模型',
 }
 
 const PRIVACY_SEAMS = new Set(['privacyBlocked', 'privacyGate'])

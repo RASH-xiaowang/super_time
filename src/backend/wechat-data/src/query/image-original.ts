@@ -30,6 +30,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import { fetchWithRetry } from '../../../llm-retry.js'
+import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { resolveImageResourceHint } from './media-image.ts'
 import { shardCatalogDirs } from './meta.ts'
@@ -42,10 +43,11 @@ const MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
 /**
  * 允许发起请求的主机后缀（腾讯系 CDN）。
  *
+ * 判定本身搬到了 `cdn-hosts.ts`（M23：远程图片代理要走同一道门，两处各写一份迟早会漏一处）。
  * 消息 XML 是可被离线改写的文件，直链又是「带上凭据参数」的完整 URL，所以这里必须是白名单，
  * 而且判定用「等于或以 `.后缀` 结尾」——`endsWith('qq.com')` 会放过 `evilqq.com`。
  */
-const ALLOWED_HOST_SUFFIXES = ['qq.com', 'wechat.com', 'wechatcdn.cn', 'qpic.cn', 'weixin.qq.com']
+const hostAllowed = wechatCdnHostAllowed
 
 /** `resolveImageOriginalLink()` 的结果：一条消息的原图直取信息。 */
 export interface ImageOriginalLink {
@@ -80,14 +82,6 @@ function cellText(v: unknown): string {
     try { out = Buffer.from(decompress(b)) } catch { /* 解不开就按原字节试 */ }
   }
   return new TextDecoder('utf-8', { fatal: false }).decode(out)
-}
-
-/** URL 主机是否落在白名单内（严格后缀匹配）。 */
-function hostAllowed(url: string): boolean {
-  let host = ''
-  try { host = new URL(url).hostname.toLowerCase() } catch { return false }
-  if (host === '') return false
-  return ALLOWED_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith('.' + suf))
 }
 
 /**

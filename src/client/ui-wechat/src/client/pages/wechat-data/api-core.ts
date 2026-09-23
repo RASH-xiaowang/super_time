@@ -199,6 +199,15 @@ export interface ImageDataUrlBatchItem {
   error?: string
 }
 
+/** 远程图片代理（M23）的一条结果：`url` 是请求时带去的那个地址，原样回当键。 */
+export interface RemoteImageItem {
+  url: string
+  dataUrl?: string
+  /** 这次是否直接从本机缓存拿到（关掉 CDN 开关时仍可能为 true）。 */
+  fromCache?: boolean
+  error?: string
+}
+
 /** 导出/备份任务的最新进度（M3）。 */
 export interface ExportProgressSnapshot {
   found: boolean
@@ -344,6 +353,7 @@ export interface WechatRemote {
   getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getImageOriginal(options: { username?: string; localId?: number }): Promise<RemoteResult<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }>>
+  getRemoteImages(options: { urls?: string[] }): Promise<RemoteResult<{ items: RemoteImageItem[] }>>
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>

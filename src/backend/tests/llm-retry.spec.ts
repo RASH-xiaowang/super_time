@@ -258,15 +258,17 @@ describe('接线：出网请求都走 fetchWithRetry', () => {
     '../wechat-host.js', // LLM chat / embedding（M7）
     '../wechat-data/src/query/article-cover.ts', // 公众号封面 ×2（N13）
     '../wechat-data/src/query/media-image.ts', // 远端表情取图（N13）
+    '../wechat-data/src/query/remote-image.ts', // 远程图片代理（M23）
     '../wechat-data/src/query/sns-video.ts', // 朋友圈视频 + 封面（N13）
     '../wechat-data/src/query/whisper.ts', // 引擎 / 模型下载（N13）
   ]
 
-  it('清单覆盖了 LLM 之外的四个出网点（清单被删空时这条会红）', () => {
+  it('清单覆盖了 LLM 之外的五个出网点（清单被删空时这条会红）', () => {
     const external = RETRY_WIRED_FILES.filter(f => f.startsWith('../wechat-data/'))
     expect(external.map(f => f.split('/').pop())).toEqual([
       'article-cover.ts',
       'media-image.ts',
+      'remote-image.ts',
       'sns-video.ts',
       'whisper.ts',
     ])

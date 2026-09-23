@@ -118,6 +118,8 @@ import {
 } from './cache.ts'
 import { createImageLoadQueue } from './image-batch.ts'
 import { ImageDataUrlBatchItem, remote, unwrap } from './api-core.ts'
+// 类型单独一行：`isolatedModules` 下 esbuild 不会替我们从混合行里删掉类型（M21 踩过，见 RELEASE-PLAN）
+import type { RemoteImageItem } from './api-core.ts'
 
 /**
  * Resolve an image message to a data URL.
@@ -156,6 +158,25 @@ export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: s
  */
 export async function apiGetImageOriginal(options: { username: string; localId: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
   return unwrap(await remote().getImageOriginal(options))
+}
+
+/**
+ * 远程图片代理（M23）：一次问一批「只在微信 CDN 上」的图片地址，拿回按 url 建键的 Map。
+ *
+ * 为什么要走后端而不是让 `<img>` 直接吃那个 https 地址：那等于把「渲染层可以向任意主机发请求」
+ * 写进产品里 —— 界面上的「自动获取原图（CDN）」与「禁止出网」两个开关管不到它，操作记录里也
+ * 查不到它，同一次滚动还会反复要同一张图。
+ *
+ * 故意**不走 `cachedGet`**：缓存已经有两处（后端 `<decoded>/remote-images/` 与渲染层的 IndexedDB
+ * 媒体缓存），这里再叠一层内存 Map 只会让「关掉开关之后到底还发不发请求」说不清。
+ * @param urls - 图片地址列表；去重与单次上限由后端负责，超出的条目带着 `error` 回来。
+ * @returns `url → 结果` 的 Map，调用方按自己那批地址逐个查。
+ */
+export async function apiGetRemoteImages(urls: string[]): Promise<Map<string, RemoteImageItem>> {
+  const r = unwrap(await remote().getRemoteImages({ urls }))
+  const byUrl = new Map<string, RemoteImageItem>()
+  for (const item of r.items ?? []) byUrl.set(item.url, item)
+  return byUrl
 }
 /**
  * Resolve a moments video cover to a data URL (offline Sns/Video jpg).

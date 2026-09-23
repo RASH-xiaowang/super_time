@@ -524,6 +524,26 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         error?: string;
     }>;
     /**
+     * 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。
+     *
+     * 存在的原因：卡片缩略图 / 朋友圈远程图 / 视频号封面此前由**渲染层直接向消息里的地址发请求**，
+     * 那条路径不受「自动获取原图（CDN）」与「禁止出网」两个开关管、不进操作记录、也没有缓存。
+     * 收到后端之后这三件事才成立，而 CSP `img-src` 的 `https:` 通配也才可能拿掉。
+     * 只代取腾讯系主机（判据见 `query/cdn-hosts.ts`）；站外图床会被拒。
+     * @param options - `urls`: 图片地址列表（去重后最多取 40 张，超出的条目回错误）。
+     * @returns `{items}`：每条 `{url, dataUrl?, fromCache?, error?}`，`url` 原样带回当键。
+     */
+    getRemoteImages(options: {
+        urls?: string[];
+    }): Promise<{
+        items: Array<{
+            url: string;
+            dataUrl?: string;
+            fromCache?: boolean;
+            error?: string;
+        }>;
+    }>;
+    /**
      * Resolve a received message file (msg/file) to a base64 data URL.
      * @param options - original file name from the message card.
      * @returns ImageDataUrlResult: data URL or error.

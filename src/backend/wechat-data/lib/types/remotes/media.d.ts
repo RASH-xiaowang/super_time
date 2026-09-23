@@ -1,3 +1,4 @@
+import type { RemoteImageResult } from '../query/remote-image.ts';
 import { AvatarResult, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
@@ -90,6 +91,25 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         bytes?: number;
         note?: string;
         error?: string;
+    }>;
+    /**
+     * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
+     *
+     * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
+     * 直接向消息 XML 里的 https 地址发请求** —— 既不受「自动获取原图（CDN）」开关管、也不受
+     * 「禁止出网」管、不进操作记录、没有缓存（同一次滚动反复要同一张）。把它收到后端之后，
+     * 那三件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
+     *
+     * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
+     * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
+     * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
+     * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
+     *   来自本机缓存。关闭出网开关时**一次请求都不发**，但本机缓存照常返回。
+     */
+    getRemoteImages(options: {
+        urls?: string[];
+    }): Promise<{
+        items: RemoteImageResult[];
     }>;
     getMessageFile(options: {
         fileName: string;
