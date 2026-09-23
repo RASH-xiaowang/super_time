@@ -347,10 +347,23 @@ flowchart TD
   1. `catch` 分支改为 `return { ok: false, error: { code: 'LICENSE_REQUIRED', ... } }`，不再调用后端
   2. 复核 `authorizeCall` 之外是否还有其他绕过路径（当前仅这一处入口，`wechat:call` 是唯一分发点，方向正确）
 - **验收标准**：
-  - [ ] 构造损坏的 `license.json` → 所有 `wechat:call` 被拒且返回可读中文提示
-  - [ ] 无许可证书时全部业务方法被拒（`license-gate-smoke.js` 覆盖）
-  - [ ] 正常许可下功能不受影响
-  - [ ] 该场景纳入 CI（`H4` 流水线含 `license-gate-smoke`）
+  - [x] 构造损坏的 `license.json` → 所有 `wechat:call` 被拒且返回可读中文提示 —— 2026-09-23 真跑出来了：
+    `scripts/license-gate-smoke.js` 新增 10 条（空文件 / 半截 JSON / 非 JSON / JSON 但不是对象 / 顶层是数组 /
+    缺 signature / signature 不是字符串 / payload 为 null / **载荷合 schema 但签名乱填** / `license.json` 被目录占位），
+    逐条断言「不得判为可用」「业务调用必须被拒」「拒绝理由含中文」「错误码必须是可信的拒绝码」。
+    实测覆盖到三条**不同分支**：`LICENSE_REQUIRED`（读不出对象）、`INVALID_PAYLOAD`（形状不合 schema）、
+    `BAD_SIGNATURE`（→「许可证签名校验失败」）。**变异自证**：把 `isUsableStatus` 改成接受 `invalid` 态
+    （真实的 fail-open 形状）→ 冒烟当场 `FAIL` 且退出码 1，按 sha256 还原。
+  - [x] 无许可证书时全部业务方法被拒（`license-gate-smoke.js` 覆盖）—— 本机 26 项断言全绿（含空 userData 落到
+    `unlicensed`、不写 `license-trial.json`、遗留试用文件也不授权）
+  - [ ] **正常许可下功能不受影响 —— 只在服务层成立，端到端没有**：`license-smoke` 证明正式证验签通过、
+    `status.licensed === true`、features 里有 `ai-ask`，`license-gate-smoke` 证明 licensed 态放行 `getSessions` 与
+    `askWechat`。但真机 e2e 走的是 `debugGates().skipGates`（拿不到厂商签发的证），所以「带着正式证跑完整条业务链路」
+    至今没有证据 —— 需要一张能装进打包态的证才能勾。
+  - [x] 该场景纳入 CI —— `ci.yml` 第 9 步 `license-smoke`、第 10 步 `license-gate-smoke`，任一步红都会挡住合并
+- **顺带纠正一处过时引用**：本条目正文写的「`main.js:497-516`」已不成立 —— 授权闸门现在在
+  **`src/backend/ipc-wechat.js:52-70`**（每次 `wechat:call` 现取 `getLicenseStatus`，不缓存；校验自身抛异常时
+  走 `catch` 明确拒绝，正是 H6 修的那个 fail-open）。`main.js` 里已经 grep 不到 `authorizeCall`。
 
 ---
 
@@ -1243,4 +1256,5 @@ flowchart TD
 
 | 2026-09-23 | 决定（用户） | M23 | **CSP `img-src` 收紧走「后端图片代理」，不走域名白名单** | 用户拍板：不让历史图片裂开，渲染层只信任本地来源，远程图片由后端取回。**这条只是决定，尚未开工**，工程量不小（取图 + 缓存 + 鉴权 + 真机复验图片渲染），已单独建任务。落地时必须一并回答：代理层是否复用现有的 `image-original` 缓存双槽位、代理路由要不要进 `WechatRemote`（进就等于开了一条新的服务端出网面，需按 M23 原始立意复审）、以及 CSP 改完之后 `ui:smoke`/真机那条「图片渲染正常」的验收怎么取证据。 |
 | 2026-09-23 | 决定（用户） | H14 | **隐私同意屏提到 License 授权闸门之前** | 用户拍板：先取得同意，再谈授权 —— 与本条目原本的风险叙述一致（未授权即不收集数据，但同意这件事不该被授权闸门挡在后面）。**改动本身接近一行**（`ui-entry.tsx` 的闸门顺序：现在是 引导 → 授权 → 同意，改成 引导 → 同意 → 授权），**但必须配真机复验**：新装态下第一屏要能看到同意屏、「不同意并退出」要真的退出、同意之后才进授权流程；另要检查有没有守卫用例把「授权在同意之前」钉成了不变量（若有，改它要在这里写清为什么）。已建任务，未开工。 |
+| 2026-09-23 | 验收+实施 | H6 | **第一条验收框补上了真证据：损坏的 license.json 现在真被跑过（此前只有「读代码看是安全的」）** | H6 的修法（catch 里拒绝而不是继续调后端）早就落地，但验收框第一条要求「构造损坏的 license.json ⇒ 所有 wechat:call 被拒 + 可读中文提示」**从没跑过** —— `license-gate-smoke.js` 当时喂的全是内存里的状态对象（licensed / expired / unlicensed / 伪造 trial），一次都没往磁盘上写真坏文件。本轮给冒烟加了 10 条（空文件、半截 JSON、非 JSON、JSON 但不是对象、顶层数组、缺 signature、signature 不是字符串、payload 为 null、载荷合 schema 但签名乱填、`license.json` 被目录占位），逐条断言「不得判为可用 / 业务调用被拒 / 拒绝理由含中文 / 错误码必须是可信拒绝码」。跑出来覆盖到三条不同分支：`LICENSE_REQUIRED`、`INVALID_PAYLOAD`、`BAD_SIGNATURE`（第三条一开始是假覆盖 —— 我编的载荷缺 `seats` 字段，被 schema 先挡下，label 写着「验签」其实没走到 `crypto.verify`；补齐字段后才真落到「许可证签名校验失败」，这也是本条目第二次犯「注释比代码先跑」的毛病）。**变异自证**：把 `isUsableStatus` 改成接受 `invalid` 态（真实 fail-open 形状）⇒ 冒烟当场 FAIL、退出码 1，按 sha256 还原。另外两件事写进条目正文：① 第三条框**故意不勾** —— licensed 态放行只在服务层成立，真机 e2e 走的是 skipGates，「带着厂商正式证跑完整条链路」至今无证据；② 闸门不在 `main.js`（grep `authorizeCall` 零命中），而在 `src/backend/ipc-wechat.js:52-70`，每次调用现取状态、异常即拒 —— 计划正文那句 `main.js:497-516` 已过时。本机：license-gate-smoke 26 项全绿、license-smoke 全绿、`npx vitest run --no-file-parallelism` 211 文件 / 2280 全绿（并行跑时本机提交限额耗尽，属环境问题，已另记）。 |
 | 2026-09-23 | 实施+自证 | H10/CI | **CI 第 13 步「安全守卫冒烟」反复假红的真因：那条断言测的是错的量** | 现象：`window.open 三次全部被拒（返回 null，没有开出窗口）` 在 #57/#59/#60/#61 里间歇性红，detail 是 `["window","window","window"]`；同一提交的另一个 verify 作业绿、本机 10 项全绿 —— 一直被当成 runner 抖动、手工重跑。读 `main.js` 的探针才看清：断言拿 `window.open(...) === null` 当判据，而探针的表达式是 `... === null ? 'null' : 'window'` —— 也就是说 **'window' 只说明返回值不是 null，并不说明开出了窗口**：处理器返回 `action:'deny'` 时，Chromium 照样可能回一个指向空窗的 WindowProxy。所以红的是**代理对象的 Presence**，不是守卫失效；这个信号随 Electron 内部时序抖动，才是「间歇性」的来源。**用重试糊它会把真 fail-open 一起糊掉**，所以改的是测量本身。 做法：主进程加 `did-create-window` 计数（只有窗口真的建出来才触发），探针逐条记 `windowsAfter`、汇总记 `popupWindows`；冒烟的安全断言改成「**计数恒为 0**」，`result` 降级为诊断信息，另加一条「返回值必须落在已知集合内」的用例 —— 探针自己坏了也要单独报红，不能和「守卫失效」混成同一条。 **变异自证（关键）**：把 `setWindowOpenHandler` 改成 `action:'allow'` ⇒ `popupWindows=3 windowsAfter=[1,2,3]`，冒烟当场 `❌（1 项）` 且退出码 1；还原后 `popupWindows=0`、10 项全绿，sha256 核对一致。顺带证明了一件事：真 fail-open 时 `result` 也是 `["window","window","window"]` —— 与 CI 上那个「假红」一模一样，旧断言根本分不开这两种情况；新断言能分。 **另记**：这不是「把断言放宽」，窗口计数比返回值更严格 —— 以前漏报的情形（建了窗但返回 null）现在也会红。 |
