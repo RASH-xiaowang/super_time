@@ -34,10 +34,13 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * `atomic-json.spec.ts` 四处 `backups[0]`、`ci-script-isolation.spec.ts` 的 `lines[i]` / `m[1]` / `pkg.scripts[m[1]]`。
  * 手法统一为**先判空再往下走**（fail-closed：判不出来就直接抛「这条用例的前提不成立」），
  * 不用 `!` 断言、也不用 `String()` 把 undefined 混成字符串 —— 那两种写法都会让一条本该红的用例继续绿。
+ * 第四步把 `llm-retry.spec.ts` 整份收干净（28 处 → 0）→ **117**：假 fetch 的脚本/URL/响应夹具、
+ * `RetryInfo[]`、`recorder` 的 `slept`、`signals`、`captured`，以及一个真实的形状不匹配 ——
+ * `RetryFetch` 的 `init` 是**可选**参数，把假 fetch 写成 `init: RequestInit`（必填）就不匹配了。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 145
+const BASELINE = 117
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150
