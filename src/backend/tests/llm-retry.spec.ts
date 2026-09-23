@@ -11,22 +11,25 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { MAX_DELAY_MS, TIMEOUT_ERROR_NAME, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../llm-retry.js'
+import type { RetryInfo } from '../llm-retry.js'
 
 /** 造一个「按脚本返回」的假 fetch；脚本项可以是 Response 形状或要抛的异常。 */
-function scriptedFetch(script) {
-  const calls = { count: 0, urls: [] }
-  const fn = async (url) => {
+function scriptedFetch(script: Array<Response | Error>) {
+  const calls = { count: 0, urls: [] as string[] }
+  const fn = async (url: string): Promise<Response> => {
     const step = script[Math.min(calls.count, script.length - 1)]
     calls.count += 1
     calls.urls.push(url)
     if (step instanceof Error) throw step
+    // 脚本空了或被用完：这是用例自己写错了，别把 undefined 当成响应交出去
+    if (step === undefined) throw new Error('假 fetch 的脚本用完了（用例前提不成立）')
     return step
   }
   return { fn, calls }
 }
 
 /** 等到信号中止（模拟「连接超时被 AbortSignal 掐断」的真实形状）。 */
-function waitForAbort(signal) {
+function waitForAbort(signal: AbortSignal | null | undefined) {
   return new Promise((resolve) => {
     if (!signal || signal.aborted) { resolve(undefined); return }
     signal.addEventListener('abort', () => { resolve(undefined) })
@@ -42,26 +45,26 @@ function abortError() {
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-const okResponse = (body = 'ok') => ({
+const okResponse = (body = 'ok'): Response => ({
   ok: true,
   status: 200,
   json: async () => ({ choices: [{ message: { content: body } }] }),
   text: async () => body,
   headers: { get: () => null },
-})
+} as unknown as Response)
 
-const statusResponse = (status, retryAfter = null) => ({
+const statusResponse = (status: number, retryAfter: string | null = null): Response => ({
   ok: false,
   status,
   json: async () => ({}),
   text: async () => 'err ' + status,
-  headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? retryAfter : null) },
-})
+  headers: { get: (k: string) => (k.toLowerCase() === 'retry-after' ? retryAfter : null) },
+} as unknown as Response)
 
 /** 记录睡了多少毫秒（不真等）。 */
 function recorder() {
-  const slept = []
-  return { slept, sleep: async (ms) => { slept.push(ms) } }
+  const slept: number[] = []
+  return { slept, sleep: async (ms: number) => { slept.push(ms) } }
 }
 
 describe('可重试性判定', () => {
@@ -106,10 +109,10 @@ describe('fetchWithRetry 行为', () => {
   it('429 会按 Retry-After 等待（而不是盲目退避）', async () => {
     const { fn } = scriptedFetch([statusResponse(429, '1'), okResponse()])
     const rec = recorder()
-    const seen = []
+    const seen: RetryInfo[] = []
     await fetchWithRetry(fn, 'u', {}, { ...retryAll, sleep: rec.sleep, onRetry: (i) => seen.push(i) })
     expect(rec.slept).toEqual([1000])
-    expect(seen[0].reason).toContain('HTTP 429')
+    expect(seen[0]?.reason).toContain('HTTP 429')
   })
 
   it('401/400 不重试（重试只会浪费时间、还可能触发风控）', async () => {
@@ -147,7 +150,7 @@ describe('fetchWithRetry 行为', () => {
     try {
       await fetchWithRetry(s2.fn, 'u', { signal: c2.signal }, retryAll)
     } catch (e) {
-      thrown = e as Error
+      thrown = e as Error & { timeoutMs?: number } as Error
     }
     expect(thrown?.name).toBe('AbortError')
     expect(s2.calls.count).toBe(0) // 已中止 → 连第一个请求都不发
@@ -173,7 +176,7 @@ describe('fetchWithRetry 行为', () => {
     const { fn } = scriptedFetch([statusResponse(503), okResponse()])
     await fetchWithRetry(fn, 'u', {}, { ...retryAll, onRetry })
     expect(onRetry).toHaveBeenCalledTimes(1)
-    expect(onRetry.mock.calls[0][0]).toMatchObject({ attempt: 1, delayMs: 500 })
+    expect(onRetry.mock.calls[0]?.[0]).toMatchObject({ attempt: 1, delayMs: 500 })
   })
 })
 
@@ -181,13 +184,13 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
   const quiet = { maxAttempts: 3, sleep: async () => {}, random: () => 0 }
 
   it('第一次超时后仍会真发第二次请求（不是拿一个已中止的信号去打第二轮）', async () => {
-    const signals = []
+    const signals: Array<AbortSignal | null | undefined> = []
     let calls = 0
-    const fn = async (_url, init) => {
+    const fn = async (_url: string, init?: RequestInit) => {
       calls += 1
-      signals.push(init.signal)
+      signals.push(init?.signal)
       if (calls === 1) {
-        await waitForAbort(init.signal) // 等重试层自己武装的信号到期
+        await waitForAbort(init?.signal) // 等重试层自己武装的信号到期
         throw abortError()
       }
       return okResponse('答案')
@@ -203,16 +206,16 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
 
   it('每次尝试都超时 → 抛 TimeoutError（不是 AbortError：调用方要区分「对端一直超时」与「用户取消」）', async () => {
     let calls = 0
-    const fn = async (_url, init) => {
+    const fn = async (_url: string, init?: RequestInit) => {
       calls += 1
-      await waitForAbort(init.signal)
+      await waitForAbort(init?.signal)
       throw abortError()
     }
     let thrown: (Error & { timeoutMs?: number }) | null = null
     try {
       await fetchWithRetry(fn, 'u', {}, { ...quiet, maxAttempts: 2, timeoutMs: 20 })
     } catch (e) {
-      thrown = e
+      thrown = e as Error & { timeoutMs?: number }
     }
     expect(calls).toBe(2)
     expect(thrown?.name).toBe(TIMEOUT_ERROR_NAME)
@@ -221,16 +224,16 @@ describe('单次尝试的超时（N13：由重试层逐次计时）', () => {
   })
 
   it("timeoutScope: 'headers' 在拿到响应头后解除计时（多 GB 的 body 不会被连接超时掐断）", async () => {
-    let captured: AbortSignal | undefined
-    const fn = async (_url, init) => { captured = init.signal; return okResponse() }
+    let captured: AbortSignal | null | undefined
+    const fn = async (_url: string, init?: RequestInit) => { captured = init?.signal; return okResponse() }
     await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20, timeoutScope: 'headers' })
     await new Promise((r) => setTimeout(r, 60))
     expect(captured?.aborted).toBe(false)
   })
 
   it('默认档（整个请求）相反：同一时长下信号会中止，body 读取因此有上界', async () => {
-    let captured: AbortSignal | undefined
-    const fn = async (_url, init) => { captured = init.signal; return okResponse() }
+    let captured: AbortSignal | null | undefined
+    const fn = async (_url: string, init?: RequestInit) => { captured = init?.signal; return okResponse() }
     await fetchWithRetry(fn, 'u', {}, { maxAttempts: 1, timeoutMs: 20 })
     await new Promise((r) => setTimeout(r, 60))
     expect(captured?.aborted).toBe(true)
