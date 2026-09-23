@@ -155,6 +155,80 @@ export function resolveImageResourceHint(
   return { md5: null, dataIndex }
 }
 
+/**
+ * 一批 `(username, localId)` 一次查完图片 md5。
+ *
+ * 为什么需要它：N16 的批量入口原本只合并了「按 md5 找 .dat」那一条查询，**md5 本身仍是每张图
+ * 各开一次分片库**（`resolveImageResourceHint` 的 `WHERE local_id = ?`）。在 GitHub 的 windows
+ * runner 上，一次只读开合实测就要 70-110 毫秒（见 RELEASE-PLAN 的 N36：30 张图 = 122 次开合
+ * / 12.9 秒），于是「批量」在真实的慢机器上几乎没省到东西。这里把 md5 也合并成
+ * **每个 (username, 分片) 一次 `local_id IN (…)`**。
+ *
+ * 与单张入口的一致性怎么保证：
+ * ① 只走分片里的 packed 列这条快路径；
+ * ② **快路径没命中的条目原样回落到 `resolveImageResourceHint`** —— `message_resource.db` 兜底、
+ *    `data_index`、以及「同一 localId 只在第一个命中的分片取值」这些细节一处都不在这里复制，
+ *    少复制一处就少一处两条路径行为漂移的机会；
+ * ③ 跨分片合并时**先命中者胜出**（与单张入口逐分片试到就 return 同构）。
+ *
+ * **它现在只服务预热阶段**：批量入口的返回值仍由单张入口产出（那里自己还会查一次 md5），所以合并
+ * 省下的是**预热段的开合**，不是整段 —— 本机实测 30 张：62 次 → 33 次，剩下 30 次就是那 30 张各走
+ * 一次单张入口。把这一条写死在这里，是因为只读函数名的话很容易以为"批量已经整段只查一次"。
+ * @param decryptedDir - 解密库目录（分片与 hardlink 的根）。
+ * @param items - 待解析的 (username, localId) 列表；返回顺序与之对齐。
+ * @returns 与 `items` 等长的 md5 数组，解析不到的是空串（调用方按长度 32 过滤）。
+ */
+export function resolveImageMd5sBatch(
+  decryptedDir: string,
+  items: ReadonlyArray<{ username: string; localId: number }>,
+): string[] {
+  const out = new Array<string>(items.length).fill('')
+  // 按会话分组：一张消息表就是一个 username，组内一次 IN 查完
+  const idsByUser = new Map<string, Set<number>>()
+  for (const it of items) {
+    let ids = idsByUser.get(it.username)
+    if (!ids) { ids = new Set<number>(); idsByUser.set(it.username, ids) }
+    ids.add(it.localId)
+  }
+  const md5ByKey = new Map<string, string>()
+  for (const [username, idSet] of idsByUser) {
+    const table = msgTableName(username)
+    for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
+      const tableMeta = shard.tables.get(table)
+      if (!tableMeta) continue
+      const packed = [...tableMeta.cols].find(c => c.toLowerCase().includes('packed'))
+      if (!packed) continue
+      const pending = [...idSet].filter(id => !md5ByKey.has(username + '#' + String(id)))
+      if (pending.length === 0) break
+      let db: DatabaseSync | null = null
+      try {
+        db = new DatabaseSync(shard.file, { readOnly: true })
+        const rows = db.prepare('SELECT local_id AS id, "' + packed + '" AS p FROM "' + table
+          + '" WHERE local_id IN (' + pending.map(() => '?').join(',')
+          + ') AND (local_type = 3 OR local_type % 4294967296 = 3)').all(...pending) as Array<{ id?: unknown; p?: unknown }>
+        for (const row of rows) {
+          const id = Number(row.id)
+          if (!Number.isFinite(id)) continue
+          const key = username + '#' + String(id)
+          if (md5ByKey.has(key)) continue
+          const md5 = extractMd5FromPacked(row.p)
+          if (md5) md5ByKey.set(key, md5)
+        }
+      } catch { /* 这个分片读不动：留给下面的单张回落 */ } finally {
+        if (db) db.close()
+      }
+    }
+  }
+  for (let i = 0; i < items.length; i += 1) {
+    const it = items[i]
+    if (!it) continue
+    const hit = md5ByKey.get(it.username + '#' + String(it.localId))
+    // 回落走的就是原来那条逐张路径，所以「库里确实没有」与「批量没查到」在这里不区分
+    out[i] = hit ?? resolveImageResourceHint(decryptedDir, it.username, it.localId).md5 ?? ''
+  }
+  return out
+}
+
 /** Normalize a MessageResourceDetail.data_index cell to a non-empty string. */
 function dataIndexOf(v: unknown): string {
   if (v === null || v === undefined) return ''

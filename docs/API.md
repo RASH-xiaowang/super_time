@@ -929,7 +929,7 @@ Decode one message image to a base64 data URL.
 getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): { items: ImageBatchItem[] }
 ```
 
-Decode a whole batch of message images to base64 data URLs (N16).  为什么需要批量入口：`getImageDataUrl` 是**一图一次 RPC**，而每张图内部的路径解析 （`WHERE lower(md5) = ?`）在 `image_hardlink_info_v4` 上是全表扫 —— 实测 20 万行 17.27ms/次，30 张图各查一次 ≈518ms。这里先用一次 `IN (...)` 把整批 md5 的 .dat 路径 查出来并预热解码缓存，之后逐张走原有单张入口时命中缓存，不再各扫一次路径表。  诚实边界：① 单张的 md5 仍要各查一次消息分片（`resolveImageResourceHint`，`WHERE local_id = ?`，不是那个全表扫）；② 拿不到原始微信目录（`wechatBaseDir` 未知）时批量 路径查不出东西，行为与逐张调用完全一致。
+Decode a whole batch of message images to base64 data URLs (N16).  为什么需要批量入口：`getImageDataUrl` 是**一图一次 RPC**，而每张图内部的路径解析 （`WHERE lower(md5) = ?`）在 `image_hardlink_info_v4` 上是全表扫 —— 实测 20 万行 17.27ms/次，30 张图各查一次 ≈518ms。这里先用一次 `IN (...)` 把整批 md5 的 .dat 路径 查出来并预热解码缓存，之后逐张走原有单张入口时命中缓存，不再各扫一次路径表。  诚实边界：① 预热阶段整批 md5 一次取完（`resolveImageMd5sBatch`：每个「会话 × 分片」一条 `local_id IN (…)`），但**预热之后每张图仍走一次单张入口**，那一步里 `resolveImageResourceHint` 还会各查一次分片（`WHERE local_id = ?`）。留着这一份复用，是因为错误语义、`data_index` 兜底 与 hevc 判定只该有一处实现；代价是每图还剩一次库开合（本机 30 张：合并前 62 次、合并后 33 次， 数字由 `gateway-image-batch.spec.ts` 的 `[算料]` 打印，理由见 RELEASE-PLAN 的 N36）。 ② 拿不到原始微信目录（`wechatBaseDir` 未知）时批量路径查不出东西，行为与逐张调用完全一致。
 
 - @param options - `items`: 一批 (username, localId)；超过 {@link IMAGE_BATCH_MAX} 的截断。
 - @returns 与传入顺序一一对应的条目（`url` 或 `error`，语义同单张入口）。

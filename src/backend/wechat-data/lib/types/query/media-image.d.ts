@@ -19,6 +19,33 @@ export declare function resolveImageResourceHint(decryptedDir: string, username:
     dataIndex: string;
 };
 /**
+ * 一批 `(username, localId)` 一次查完图片 md5。
+ *
+ * 为什么需要它：N16 的批量入口原本只合并了「按 md5 找 .dat」那一条查询，**md5 本身仍是每张图
+ * 各开一次分片库**（`resolveImageResourceHint` 的 `WHERE local_id = ?`）。在 GitHub 的 windows
+ * runner 上，一次只读开合实测就要 70-110 毫秒（见 RELEASE-PLAN 的 N36：30 张图 = 122 次开合
+ * / 12.9 秒），于是「批量」在真实的慢机器上几乎没省到东西。这里把 md5 也合并成
+ * **每个 (username, 分片) 一次 `local_id IN (…)`**。
+ *
+ * 与单张入口的一致性怎么保证：
+ * ① 只走分片里的 packed 列这条快路径；
+ * ② **快路径没命中的条目原样回落到 `resolveImageResourceHint`** —— `message_resource.db` 兜底、
+ *    `data_index`、以及「同一 localId 只在第一个命中的分片取值」这些细节一处都不在这里复制，
+ *    少复制一处就少一处两条路径行为漂移的机会；
+ * ③ 跨分片合并时**先命中者胜出**（与单张入口逐分片试到就 return 同构）。
+ *
+ * **它现在只服务预热阶段**：批量入口的返回值仍由单张入口产出（那里自己还会查一次 md5），所以合并
+ * 省下的是**预热段的开合**，不是整段 —— 本机实测 30 张：62 次 → 33 次，剩下 30 次就是那 30 张各走
+ * 一次单张入口。把这一条写死在这里，是因为只读函数名的话很容易以为"批量已经整段只查一次"。
+ * @param decryptedDir - 解密库目录（分片与 hardlink 的根）。
+ * @param items - 待解析的 (username, localId) 列表；返回顺序与之对齐。
+ * @returns 与 `items` 等长的 md5 数组，解析不到的是空串（调用方按长度 32 过滤）。
+ */
+export declare function resolveImageMd5sBatch(decryptedDir: string, items: ReadonlyArray<{
+    username: string;
+    localId: number;
+}>): string[];
+/**
  * Resolve the image MD5 for (username, local_id).
  * @param decryptedDir - decrypted data root.
  * @param username - conversation username.

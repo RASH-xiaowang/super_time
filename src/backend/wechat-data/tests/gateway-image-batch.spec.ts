@@ -98,7 +98,10 @@ function makeFixture(count: number): void {
       ins.run(md5Of(i), 'hash-' + md5Of(i), file, d1, d2, 1000 + i)
       const p = join(base, 'msg', 'attach', 'dirA', 'dirB', 'Img', file)
       mkdirSync(dirname(p), { recursive: true })
-      writeFileSync(p, PNG)
+      // 每张图带**各自不同的尾部字节**：原本 30 张写的是同一份常量，于是批量与逐张的答案 base64
+      // 天生一样，「合并时把 localId 关联错了」这类缺陷在答案层面比不出来（只能被算料守卫抓到代价）。
+      // 头部仍是 PNG 魔数（`decodeDatBytes` 靠它认格式），多出来的字节只让每张的内容互不相同。
+      writeFileSync(p, Buffer.concat([PNG, Buffer.from([i & 0xff, (i >> 8) & 0xff])]))
     }
   } finally {
     hl.close()
@@ -126,20 +129,30 @@ function gatewayFor(decodedDir: string): WechatDataGateway {
   return new WechatDataGateway(fakeCtx())
 }
 
-/** 只数「按 md5 找 .dat」那条语句的 prepare 次数。 */
-function md5QueryCounter(): () => number {
+/**
+ * 数 prepare 过的 SQL：既能数「按 md5 找 .dat」那条，也能数任意片段。
+ * 一个 spy 就够（两条判据读同一份调用记录），免得在同一个原型方法上叠两层包装。
+ */
+function sqlCounter(): { md5Queries: () => number, matching: (fragment: string) => number } {
   const spy = vi.spyOn(DatabaseSync.prototype, 'prepare')
-  return (): number => spy.mock.calls.map(([sql]) => String(sql)).filter(sql => sql.includes('lower(md5)')).length
+  const all = (): string[] => spy.mock.calls.map(([sql]) => String(sql))
+  return {
+    md5Queries: () => all().filter(sql => sql.includes('lower(md5)')).length,
+    matching: (fragment) => all().filter(sql => sql.includes(fragment)).length,
+  }
 }
 
 /**
  * 数「真正开合过几次 sqlite 句柄」。
  *
- * 为什么数 `close` 而不是构造：`resolveImageResourceHint` 每解析一张图就 `new DatabaseSync(shard, readOnly)`
- * 再在 `finally` 里关掉它 —— 一次 open 恰好配一次 close，而构造函数没法在原型上 spy。
+ * 为什么数 `close` 而不是构造：单张入口每解析一张图就 `new DatabaseSync(shard, readOnly)` 再在
+ * `finally` 里关掉它 —— 一次 open 恰好配一次 close，而构造函数没法在原型上 spy。
  * 为什么把数字**打进 stdout**：这个文件在 CI 上跑 46 秒、本机 0.3 秒（147 倍），而**算料只有本机能数、
- * 秒数只有 CI 有** —— 两边留着同一份计数，下一次看那条 41730ms 的人才有可能归因，而不是再猜一轮。
- * 上界只防回涨：谁把句柄缓存接上了，计数会掉下来，那时请把这里的常量一起改小。
+ * 秒数只有 CI 有** —— 两边留着同一份计数，下一次看那条 41730ms 的人才有可能归因，而不是再猜一轮
+ * （同一份运行里量到 106ms 与 77ms 每次开合，见 RELEASE-PLAN 的 N36）。
+ * 上界只防回涨：谁把剩下的那份单张复用也省掉，计数会掉下来，那时请把这里的常量一起改小
+ * （批量入口的 md5 已经合并成一条 IN；剩下的每图一次是**刻意保留**的单张复用，理由写在
+ * `gateway-data-ops.ts` 的「诚实边界」里）。
  */
 function openCounter(): { since: () => number, report: (label: string, n: number, ceiling: number) => void } {
   const spy = vi.spyOn(DatabaseSync.prototype, 'close')
@@ -157,14 +170,25 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
   it(`${IMAGE_COUNT} 张图只查一次路径表（逐张则是 ${IMAGE_COUNT} 次）`, () => {
     makeFixture(IMAGE_COUNT)
     const items = Array.from({ length: IMAGE_COUNT }, (_, i) => ({ username: TALKER, localId: i + 1 }))
-    const count = md5QueryCounter()
+    const sql = sqlCounter()
 
     const gw = gatewayFor(decoded)
     const h = openCounter()
-    const before = count()
+    const before = sql.md5Queries()
+    const beforeIn = sql.matching('local_id IN (')
+    const beforeEq = sql.matching('local_id = ?')
     const r = gw.getImageDataUrlsBatch({ items })
-    const batchQueries = count() - before
-    h.report(`${IMAGE_COUNT} 张走批量入口`, h.since(), 62)
+    const batchQueries = sql.md5Queries() - before
+    h.report(`${IMAGE_COUNT} 张走批量入口`, h.since(), 33)
+    const batchIn = sql.matching('local_id IN (') - beforeIn
+    const batchEq = sql.matching('local_id = ?') - beforeEq
+    console.log(`[算料] gateway-image-batch 批量段 SQL：合并查询 ${String(batchIn)} 次、逐张 local_id = ? ${String(batchEq)} 次`)
+    // 批量入口自己那趟 md5 取数必须是一条 IN（被人改回逐张时，这句会红，而 33→62 的开合数也会红）
+    expect(batchIn, '批量入口取 md5 该合并成一条 local_id IN (…) —— 没合并就等于每张图各开一次分片库').toBe(1)
+    // 剩下的 30 次是**故意保留**的：批量预热之后每张图仍走一次单张入口（错误语义、data_index
+    // 兜底、hevc 判定都从那里来，复制一份到批量路径就是多一份漂移）。见 gateway-data-ops.ts
+    // 里「诚实边界」那条注释。将来真要把这 30 次也省掉，改的是这个复用方式，不是这里的数字。
+    expect(batchEq, '批量段里逐张 local_id = ? 不该超过每张一次；掉下来说明那份复用被去掉了，请连注释与 N36 一起改').toBeLessThanOrEqual(IMAGE_COUNT)
 
     expect(r.items.length).toBe(IMAGE_COUNT)
     expect(r.items.every(it => it.url?.startsWith('data:image/png;base64,'))).toBe(true)
@@ -172,11 +196,11 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
 
     // 对照：同样的 N 张、空缓存下逐张调用 = 一张一次。
     const gwSingle = gatewayFor(join(scratch, 'decoded-single'))
-    const beforeSingle = count()
+    const beforeSingle = sql.md5Queries()
     const baseSingle = h.since()
     for (const it of items) gwSingle.getImageDataUrl(it)
     h.report(`${IMAGE_COUNT} 张走单张入口（对照）`, h.since() - baseSingle, 60)
-    expect(count() - beforeSingle, '逐张调用本该一张一次（对照失效说明夹具或实现变了）').toBe(IMAGE_COUNT)
+    expect(sql.md5Queries() - beforeSingle, '逐张调用本该一张一次（对照失效说明夹具或实现变了）').toBe(IMAGE_COUNT)
   })
 
   it('批量答案与逐张答案逐字相同（含「库里没有这张图」的报错）', () => {
@@ -186,12 +210,20 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     const t2a = h2.since()
     const batch = gatewayFor(decoded).getImageDataUrlsBatch({ items }).items
     const t2b = h2.since()
-    h2.report(`第 2 次同样 ${IMAGE_COUNT} 张走批量入口`, t2b - t2a, 64)
-    const single = gatewayFor(join(scratch, 'decoded-single')).getImageDataUrl({ username: TALKER, localId: 1 })
-    h2.report('1 张走单张入口', h2.since() - t2b, 2)
-    // 同一张图两条路径必须给同一个 data URL（批量走的是「预热缓存 + 单张入口」）
-    expect(batch[0]?.url).toBe(single.url)
-    expect(batch[0]?.format).toBe(single.format)
+    h2.report(`第 2 次同样 ${IMAGE_COUNT} 张走批量入口`, t2b - t2a, 35)
+    // 逐张入口当**参考答案**，并且**整批比对**：批量入口现在合并了 md5 的取法（一次
+    // `local_id IN (…)` 而不是每张开一次库），只抽一张会漏掉「某个 localId 落在别的分片」
+    // 「md5 大小写」「走 resource.db 兜底」这类单点差异 —— 那些恰好是最容易只错一条的形态。
+    const gwRef = gatewayFor(join(scratch, 'decoded-single'))
+    const refBase = h2.since()
+    for (let i = 0; i < IMAGE_COUNT; i += 1) {
+      const it = items[i]
+      if (!it) continue
+      const one = gwRef.getImageDataUrl(it)
+      expect(batch[i]?.url, `第 ${String(i + 1)} 张：批量与逐张必须给同一个 data URL`).toBe(one.url)
+      expect(batch[i]?.format, `第 ${String(i + 1)} 张：两条路径的格式判定必须一致`).toBe(one.format)
+    }
+    h2.report(`${IMAGE_COUNT} 张走逐张入口（第 2 次，参考答案）`, h2.since() - refBase, 60)
     // 未命中 / 无 md5 的条目仍是条目（不抛、不塌成 0 长度）
     const miss = gatewayFor(join(scratch, 'decoded-miss')).getImageDataUrlsBatch({ items: [{ username: TALKER, localId: 999 }, { username: 'wxid_other', localId: 1 }] })
     expect(miss.items.length).toBe(2)
@@ -202,11 +234,11 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
 
   it('空清单不查库、也不报错（边界不是「一次全表扫」）', () => {
     makeFixture(4)
-    const count = md5QueryCounter()
+    const sql = sqlCounter()
     const gw = gatewayFor(decoded)
-    const before = count()
+    const before = sql.md5Queries()
     const r = gw.getImageDataUrlsBatch({ items: [] })
     expect(r.items).toEqual([])
-    expect(count() - before).toBe(0)
+    expect(sql.md5Queries() - before).toBe(0)
   })
 })

@@ -17422,6 +17422,53 @@ function resolveImageResourceHint(decryptedDir, username, localId) {
   }
   return { md5: null, dataIndex };
 }
+function resolveImageMd5sBatch(decryptedDir, items) {
+  const out = new Array(items.length).fill("");
+  const idsByUser = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    let ids = idsByUser.get(it.username);
+    if (!ids) {
+      ids = /* @__PURE__ */ new Set();
+      idsByUser.set(it.username, ids);
+    }
+    ids.add(it.localId);
+  }
+  const md5ByKey = /* @__PURE__ */ new Map();
+  for (const [username, idSet] of idsByUser) {
+    const table = msgTableName8(username);
+    for (const shard of shardCatalogDirs(decryptedDir, ["message"])) {
+      const tableMeta = shard.tables.get(table);
+      if (!tableMeta) continue;
+      const packed = [...tableMeta.cols].find((c) => c.toLowerCase().includes("packed"));
+      if (!packed) continue;
+      const pending = [...idSet].filter((id) => !md5ByKey.has(username + "#" + String(id)));
+      if (pending.length === 0) break;
+      let db = null;
+      try {
+        db = new DatabaseSync48(shard.file, { readOnly: true });
+        const rows = db.prepare('SELECT local_id AS id, "' + packed + '" AS p FROM "' + table + '" WHERE local_id IN (' + pending.map(() => "?").join(",") + ") AND (local_type = 3 OR local_type % 4294967296 = 3)").all(...pending);
+        for (const row of rows) {
+          const id = Number(row.id);
+          if (!Number.isFinite(id)) continue;
+          const key = username + "#" + String(id);
+          if (md5ByKey.has(key)) continue;
+          const md5 = extractMd5FromPacked(row.p);
+          if (md5) md5ByKey.set(key, md5);
+        }
+      } catch {
+      } finally {
+        if (db) db.close();
+      }
+    }
+  }
+  for (let i = 0; i < items.length; i += 1) {
+    const it = items[i];
+    if (!it) continue;
+    const hit = md5ByKey.get(it.username + "#" + String(it.localId));
+    out[i] = hit ?? resolveImageResourceHint(decryptedDir, it.username, it.localId).md5 ?? "";
+  }
+  return out;
+}
 function dataIndexOf(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v.trim();
@@ -27083,11 +27130,7 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
    */
   warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) {
     try {
-      const md5ByItem = [];
-      for (const it of items) {
-        const hint = resolveImageResourceHint(decryptedDir, it.username, it.localId);
-        md5ByItem.push(hint.md5 ?? "");
-      }
+      const md5ByItem = resolveImageMd5sBatch(decryptedDir, items);
       const wanted = md5ByItem.filter((m) => m.length === 32);
       if (wanted.length === 0) return;
       const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted);
