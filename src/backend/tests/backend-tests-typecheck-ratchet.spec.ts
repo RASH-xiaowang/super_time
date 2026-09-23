@@ -50,10 +50,18 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * 一个，那条「被吞掉的 int64 异常」的提示从来没显示过 —— 挪到 `expect(值, 说明)` 上）；
  * `kb-eval.spec.ts` 用 `BufferEncoding` 标注一张喂给 `TextDecoder` 的编码表，而 `gb18030`
  * 恰恰不在 `BufferEncoding` 里（Node 的字符串编码是小集合，完整表在 TextDecoder 上），编译器直接判死。
+ * 第九步收掉 `vi.mock('node:sqlite')` 那一族（12 处：`kb-vectors` 6、`vector-status` 3、`dedupe.measure` 3）→ **39**。
+ * 那三份里的 `CountingDatabaseSync` 把 `prepare` 的签名写成 `(sql, ...rest: unknown[])` 再用
+ * `(super.prepare as any)(sql, ...rest)` 转调 —— 而 `node:sqlite` 的 `prepare(sql)` **只有一个入参**
+ * （绑定值发生在拿到的语句对象上），那个 `rest` 从来不存在；子类构造函数若只是原样转发就直接删掉。
+ * 于是改成 `override prepare(sql: string)` + `super.prepare(sql)`，`super(...args)` 也不再需要 `as any[]`
+ * （`ConstructorParameters<typeof actual.DatabaseSync>` 本身就是元组，展开合法）。
+ * 这是**行为敏感**的改动，所以判据不是「类型过了」：`kb-vectors` 用 `expect(probe.hashLoads).toBe(1/2)`
+ * 逐次数着，转调一旦失效就会掉到 0 —— 42 项全绿加上 `MEASURE_M12=1` 实跑，才算这一步真的做了。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 51
+const BASELINE = 39
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150

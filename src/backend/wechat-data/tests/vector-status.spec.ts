@@ -46,16 +46,15 @@ vi.mock('node:sqlite', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:sqlite')>()
   type RealDb = InstanceType<typeof actual.DatabaseSync>
   class CountingDatabaseSync extends actual.DatabaseSync {
-    constructor(...args: unknown[]) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      super(...(args as any[]))
+    constructor(...args: ConstructorParameters<typeof actual.DatabaseSync>) {
+      super(...args)
       probe.opens.push(String(args[0]))
     }
-    prepare(sql: string, ...rest: unknown[]): ReturnType<RealDb['prepare']> {
+    // `prepare(sql)` 在 `node:sqlite` 里只有一个入参，原来的 `...rest` + `as any` 转调是多余的
+    override prepare(sql: string): ReturnType<RealDb['prepare']> {
       // 只数 COUNT 族语句（改前的关键开销）；其它 SQL 不参与判据
       if (/count\s*\(/i.test(sql)) probe.counts += 1
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (super.prepare as any)(sql, ...rest)
+      return super.prepare(sql)
     }
   }
   return { ...actual, DatabaseSync: CountingDatabaseSync }
@@ -416,7 +415,10 @@ describe('N14：meta.rows 与表内容同事务落地（源码级）', () => {
       }
       node.forEachChild(walk)
     }
-    walk(target as ts.Node)
+    // 上面那句 toBeTruthy 只负责报「找不到函数体」，不改变类型；这里显式窄化，
+    // 免得改名以后 walk(null) 抛一个看不出原因的 TypeError。
+    if (target === null) throw new Error('没拿到函数体，walk 需要非空的 ts.Node')
+    walk(target)
 
     // 防空转：两条写入路径（主事务 + up-to-date 的 meta 事务）都要被扫到
     expect(begins.length, `只扫到 ${begins.length} 处 BEGIN`).toBeGreaterThanOrEqual(2)
