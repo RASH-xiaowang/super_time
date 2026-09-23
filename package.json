@@ -42,6 +42,7 @@
     "e2e:backup-progress": "node scripts/backup-progress-e2e.mjs",
     "e2e:export-nonblocking": "node scripts/export-nonblocking-e2e.mjs",
     "package:smoke": "node scripts/packaged-smoke.js",
+    "package:sns-video:smoke": "node scripts/packaged-sns-video-check.js",
     "m1-secrets:smoke": "node scripts/m1-secrets-migration-smoke.js",
     "epipe:smoke": "node scripts/epipe-smoke.js",
     "pack": "npm run build:ui && electron-builder --dir",
