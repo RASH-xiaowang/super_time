@@ -132,6 +132,27 @@ function md5QueryCounter(): () => number {
   return (): number => spy.mock.calls.map(([sql]) => String(sql)).filter(sql => sql.includes('lower(md5)')).length
 }
 
+/**
+ * 数「真正开合过几次 sqlite 句柄」。
+ *
+ * 为什么数 `close` 而不是构造：`resolveImageResourceHint` 每解析一张图就 `new DatabaseSync(shard, readOnly)`
+ * 再在 `finally` 里关掉它 —— 一次 open 恰好配一次 close，而构造函数没法在原型上 spy。
+ * 为什么把数字**打进 stdout**：这个文件在 CI 上跑 46 秒、本机 0.3 秒（147 倍），而**算料只有本机能数、
+ * 秒数只有 CI 有** —— 两边留着同一份计数，下一次看那条 41730ms 的人才有可能归因，而不是再猜一轮。
+ * 上界只防回涨：谁把句柄缓存接上了，计数会掉下来，那时请把这里的常量一起改小。
+ */
+function openCounter(): { since: () => number, report: (label: string, n: number, ceiling: number) => void } {
+  const spy = vi.spyOn(DatabaseSync.prototype, 'close')
+  const base = spy.mock.calls.length
+  return {
+    since: () => spy.mock.calls.length - base,
+    report: (label, n, ceiling) => {
+      console.log(`[算料] gateway-image-batch ${label}：句柄开合 ${String(n)} 次`)
+      expect(n, `${label}：句柄开合从 ${String(ceiling)} 涨到 ${String(n)} —— 入口的合并被改坏了？`).toBeLessThanOrEqual(ceiling)
+    },
+  }
+}
+
 describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
   it(`${IMAGE_COUNT} 张图只查一次路径表（逐张则是 ${IMAGE_COUNT} 次）`, () => {
     makeFixture(IMAGE_COUNT)
@@ -139,9 +160,11 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     const count = md5QueryCounter()
 
     const gw = gatewayFor(decoded)
+    const h = openCounter()
     const before = count()
     const r = gw.getImageDataUrlsBatch({ items })
     const batchQueries = count() - before
+    h.report(`${IMAGE_COUNT} 张走批量入口`, h.since(), 62)
 
     expect(r.items.length).toBe(IMAGE_COUNT)
     expect(r.items.every(it => it.url?.startsWith('data:image/png;base64,'))).toBe(true)
@@ -150,15 +173,22 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     // 对照：同样的 N 张、空缓存下逐张调用 = 一张一次。
     const gwSingle = gatewayFor(join(scratch, 'decoded-single'))
     const beforeSingle = count()
+    const baseSingle = h.since()
     for (const it of items) gwSingle.getImageDataUrl(it)
+    h.report(`${IMAGE_COUNT} 张走单张入口（对照）`, h.since() - baseSingle, 60)
     expect(count() - beforeSingle, '逐张调用本该一张一次（对照失效说明夹具或实现变了）').toBe(IMAGE_COUNT)
   })
 
   it('批量答案与逐张答案逐字相同（含「库里没有这张图」的报错）', () => {
     makeFixture(IMAGE_COUNT)
     const items = Array.from({ length: IMAGE_COUNT }, (_, i) => ({ username: TALKER, localId: i + 1 }))
+    const h2 = openCounter()
+    const t2a = h2.since()
     const batch = gatewayFor(decoded).getImageDataUrlsBatch({ items }).items
+    const t2b = h2.since()
+    h2.report(`第 2 次同样 ${IMAGE_COUNT} 张走批量入口`, t2b - t2a, 64)
     const single = gatewayFor(join(scratch, 'decoded-single')).getImageDataUrl({ username: TALKER, localId: 1 })
+    h2.report('1 张走单张入口', h2.since() - t2b, 2)
     // 同一张图两条路径必须给同一个 data URL（批量走的是「预热缓存 + 单张入口」）
     expect(batch[0]?.url).toBe(single.url)
     expect(batch[0]?.format).toBe(single.format)
