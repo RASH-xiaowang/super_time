@@ -32,7 +32,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import {
   DISABLE_UPDATE_CHECK_ENV, applyUpdateEvent, blankUpdateState,
   createUpdateService, describeUpdateError, normalizeProgress, normalizeReleaseNotes,

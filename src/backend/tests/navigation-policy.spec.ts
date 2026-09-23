@@ -81,7 +81,7 @@ describe('导航守卫：只允许应用自己的页面', () => {
     // 「在应用目录内」；root=undefined 更会抛 TypeError。这里把不变量钉住。
     expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', '')).toBe('deny')
     expect(decideNavigation('file:///C:/Windows/win.ini', '')).toBe('deny')
-    // @ts-expect-error —— 故意传非法类型，要求不抛且拒绝
+    // 第二个参数是可选的（`reason?: string`）：没给理由也必须拒绝，而不是抛
     expect(decideNavigation('file:///C:/Windows/win.ini', undefined)).toBe('deny')
     expect(isInsidePath('', 'C:\\anything')).toBe(false)
     expect(isInsidePath('   ', 'C:\\anything')).toBe(false)

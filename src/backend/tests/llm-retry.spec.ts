@@ -10,7 +10,6 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { MAX_DELAY_MS, TIMEOUT_ERROR_NAME, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../llm-retry.js'
 
 /** 造一个「按脚本返回」的假 fetch；脚本项可以是 Response 形状或要抛的异常。 */
