@@ -3,11 +3,12 @@
 > 来源：2026-09 全面架构与代码审查（架构分层 / 模块划分 / 依赖关系 / 核心流程 / 代码质量 / 测试覆盖 / 错误处理 / 性能 / 依赖与安全 / UI 体验 / 文档完整度）。
 > 用途：**任务计划与实施跟踪**。每个条目都有稳定的 ID、依赖关系与可执行的验收标准。
 > 结论基线（**2026-09-23 更新**）：阶段 0–4 的**高优先级项已全部闭环**（89 个条目：88 已完成 / 1 进行中），`npm test`、`typecheck`、`docs:api:check`、真机 e2e 与安全守卫都在 CI 里能阻断合并。**上面那句「当前不具备上线条件」是 2026-09-13 的状态，照抄会误判。**
-> 距离上线还差的不是代码量，是**两件需要人拍板的事**与**一批需要真实环境的事**：
-> ① M23 的 CSP `img-src` 收紧口径（走白名单 = 历史图片可能不再显示，vs 走后端图片代理 = 加一层新架构）；
-> ② H14 的「隐私同意屏 vs License 授权闸门」先后顺序（现状：无有效许可证的机器永远看不到同意屏，真人点击证据因此拿不到）；
-> ③ 需要真实微信数据 / 打包件的验收项（如「打包版朋友圈视频解密播放」）；④ M21 明示保留的两条超限 CSS（已量过：最大不可分簇 1113 / 1140 行 > 1000 行上限）。
+> 距离上线还差的不是代码量，是**一处已定但未实施的方向**与**一批需要真实环境的事**：
+> ① M23 的 CSP `img-src` 收紧（方向已由用户定为**后端图片代理**，不走域名白名单；尚未实施）；
+> ② 需要真实微信数据 / 打包件的验收项（如「打包版朋友圈视频解密播放」）；③ M21 明示保留的两条超限 CSS（已量过：最大不可分簇 1113 / 1140 行 > 1000 行上限）；
+> ④ 新登记的 **N31**：`src/client/ui-app/**` **不在 `npm run typecheck` 覆盖范围内** —— 那里装的正是打包入口、启动页、隐私同意屏与授权面板；2026-09-23 实测整目录只有 20 处错误，收口很小。
 > 另外 H1 里「轮换泄露密钥 + 重写 git 历史」是否已做，需要持有账号的人确认。
+> **上一版这里的第 ② 条（H14：同意屏排在授权之后，无许可证的机器永远看不到它）已按用户决定改掉**：顺序现在是 引导 → 隐私同意 → 授权，真人点击证据由 CI 里的 `npm run e2e:h14-consent` 提供（见台账 2026-09-23）。
 
 ---
 
@@ -255,7 +256,8 @@ flowchart TD
 
 ### `[x]` H14 · 缺少对外必备文档
 
-- **状态**：已完成（逐条验收已核；「首次启动同意」为 SSR + 逻辑 + 接线三层证据，**未做真人点击验证**）　**依赖**：无　**预估**：2d
+- **状态**：已完成。2026-09-23 补齐了此前缺的那一层：闸门顺序改为 **引导 → 隐私同意 → 授权**，
+  「真人点击」不再靠推断 —— 由 CI 里的真机 e2e `npm run e2e:h14-consent`（26 项）逐条点过。见本节第 7 条与台账。　**依赖**：无　**预估**：2d
 - **证据**：
   - 无根 `README.md`（项目入口、功能概览、构建/启动说明全部缺失）
   - 无 `LICENSE` 文件（`package.json` 声明 MIT，但仓库内无正文）
@@ -280,10 +282,28 @@ flowchart TD
      （`PRIVACY_VERSION` + 解析/判定/记录/清除；失败方向一律是「再问一次」）与
      `PrivacyConsentGate.tsx`（独立一屏，勾选框 + 「同意并继续」，另给「不同意并退出」出口）；
      接进 `ui-entry.tsx`：引导与授权都过后若未同意则**不放行**，自动进主界面的条件里也带上它。
+     （这个「授权之后才同意」的顺序已于 2026-09-23 反过来，见下面第 7 条 —— 原实现把同意屏
+     放在了一个没有许可证的用户永远到不了的位置。）
      主界面「重新查看启动页」会连同意状态一起重置（即「重新审阅并再次同意」的路径）。
   6. **Remote 接口参考自动生成**：新增 `scripts/gen-api-docs.js` → `docs/API.md`
      （132 个方法，含签名、JSDoc 说明与 `@param`/`@returns`），挂 `docs:api` / `docs:api:check`
      并进 CI；顺手修掉**启动页上过期的方法数**（写着 114，实际 132）。
+  7. **闸门顺序改为「引导 → 隐私同意 → 授权」（2026-09-23，用户拍板）**：
+     ① `OnboardingShell.tsx` 把同意做成第五站（`CONSENT_STAGE`）：未同意时点「授权验证」标签、
+     按 → 、滚轮**都落回同意站**（一个归一 effect 把 `page` 纠正回来，不靠"派生值"以免与调用方
+     翻 `requireConsent` 的时机赛跑）；这一站**不给「下一页」按钮**，唯一出口是同意屏自己的
+     「同意并继续」，滚轮也让位给它（声明比屏幕长，抢走滚轮就读不完）；「跳过」与 Ctrl+Enter
+     一并改成要求 `canEnter`（= 已同意且许可证有效），否则跳过按钮本身就是一条绕过通道。
+     ② `ui-entry.tsx` 把「缺同意」这个事实传给启动页，并**拆掉两个出口**：新增 `recordConsent`
+     （只记同意、不 `openWechat`），原先那个「同意即进主界面」的 handler 只留给回退路径 ——
+     引导与授权都已过、只是声明升版要求重新同意时，仍渲染独立一屏（不塞人重看四页介绍）。
+     ③ 同意屏嵌进启动页后会与启动页自己的 `NoticeBanner` 叠成两张一模一样的悬浮卡
+     （点掉一张还剩一张，看着像「关闭」坏了）⇒ 同意站那几帧只渲染一份。
+     ④ 全部「三道闸门顺序」的表述同步改正：`README.md`、`CHANGELOG.md`、`debug-gates.js`、
+     `debug-gates.spec.ts`、`ipc-misc.js`、`debug-gates.ts`、`ui-acceptance.mjs` 与调试横幅文案。
+     ⑤ **M21 棘轮当场拦下**：改完的 `OnboardingShell.tsx` 到 1070 行（上限 1000，白名单只许减），
+     于是把五张静态文案表（价值主张 / 快速入口 / 功能分组 / 使用步骤 / 注意事项）拆成
+     `onboarding-content.tsx`（280 行），启动页回到 799 行 —— 棘轮现在 5/5 绿。
 - **验收标准**：
   - [x] 根目录存在 `README.md`、`LICENSE`、`CHANGELOG.md`（另加 `docs/PRIVACY.md`、`docs/API.md`）
   - [x] 隐私声明的出网点与实际逐条对应 —— 由 `src/backend/tests/privacy-statement.spec.ts`
@@ -291,7 +311,15 @@ flowchart TD
         （新增 AI 功能漏写即红），文档列出的主机也必须能在源码里抽到（地图/whisper/LLM 三组）
   - [x] 首次启动必须显式同意后才能进入主界面 —— 判定的**失败方向**（无记录/形状不对/版本偏低
         都要重问）、**接线**（闸门真的渲染、自动进主界面的条件含 `consented`）与
-        **未勾选时按钮禁用**（SSR 渲染事实）三处均有用例；共 8 + 6 项
+        **未勾选时按钮禁用**（SSR 渲染事实）三处均有用例；共 8 + 6 项。
+        **真人点击已于 2026-09-23 补上**：`npm run e2e:h14-consent` 起真 Electron（不设闸门豁免、
+        不签许可证）点完全程 26 项 —— 未勾选时「同意并继续」`isDisabled()`、勾上解禁、
+        「不同意并退出」之后**主进程真的结束**（监听子进程 `exit`，不是只看页面换了）、
+        不同意则下次启动再问一遍、同意后 localStorage 写入 `version=PRIVACY_VERSION` 且跨进程重启不再问
+  - [x] 同意排在授权**之前**，没有有效许可证的机器也走得到同意屏 —— 真机实测：全新 userData 的第一屏
+        没有复选框（它是第五站），按「下一页」走到的确实是 `consent` 而不是 `license`
+        （`path=["","","","","consent"]`）；变异自证：把 `ui-entry` 的 `requireConsent` 摘掉（= 旧顺序）
+        ⇒ 同一条断言报 `stage=license` 并红；删掉同意站的归一 ⇒ 红在「点『授权验证』标签跳不过去」
   - [x] 接口参考的方法数与 `gateway.ts` 的 `@Remote` 一致 —— **132**（条目原文写 129，已按实测更正）；
         `docs/API.md` 与源码双向无差集、无重复注册，`docs:api:check` 在 CI 中
 - **验证方式（实际执行结果）**：
@@ -834,6 +862,7 @@ flowchart TD
 | M23 | CSP 过宽 | `connect-src 'self' https:` 与 `img-src ... https: file:` 允许向任意 https 主机外发 | **H10 已完成 connect-src 部分**：改为显式列出渲染进程真实消费者（jsdelivr / unpkg / geo.datav.aliyun.com）+ `'self' data: blob: file:`，并补 `object-src 'none'`/`base-uri 'self'`。**`img-src https:` 仍是通配**：收敛它需要枚举真实图片主机，而库里有大量 http/https 远程图片 URL（见 `utils/url.ts` 注释）→ 意味着「渲染层可向任意 https 主机发起图片请求」这条外发通道仍在，属已知遗留（见 H10 的遗留清单）。验收：connect-src 已收紧且地图/图片/语音/视频取数不受影响（评审实测省市区地图曾因漏 aliyun 被打断，已修） | 已完成（img-src 部分转遗留） |
 | N29 | 单聊「推荐回复」面板有三处在说谎（复制反馈 / 首帧空态 / 下拉空白） | 2026-09-20 新增的第三栏面板：① `copy()` 写的是 `void navigator.clipboard.writeText(text)` 紧跟 `setCopied(index)` —— 被拒时（窗口失焦是常态）界面照样显示「已复制」，而那条 reject 没人接（渲染进程里一条未处理拒绝）；② `loading` 初值 `false` 而挂载即发请求，于是**首帧**渲染的是「这个会话还没有可用的对话内容」（SSR 实测确认这句话真的会出现）；③ 知识库下拉把 `String(kbId)` 交给 Radix，而选项挂在 Portal 里、收起时不挂载 —— 选中值没有对应已挂载 item 时**连 placeholder 都不显示**，实测那一帧是 `<span style="pointer-events:none"></span>` 一块空白。 | **已完成（2026-09-20）**：复制改走共享助手 `utils/misc.ts` 的 `copyTextToClipboard`（它把异步 API 与 `execCommand` 兜底两条路径的失败都收敛成布尔值），只有 `ok === true` 才显示「已复制」，失败则明确说「复制失败…请手动选中后复制」，并按 `seqRef` 门控 —— 期间换过会话/库就不把标记打到新的行上；`loading` 初值改 `true`；错误呈现改用姊妹面板 `SessionAsk` 那套 `.error` + `role="alert"`；下拉在「拿不到库名」的三种状态（列表在读、读失败、当前库不在列表里）分别给 placeholder 文案并交空值，不再留一块没有说明的空白。**验收**：`ui:smoke` 新增一条 SSR 用例（首帧须是「正在生成」、那句假空态不许出现、触发器须说「读取知识库…」而不是通用的「请选择…」）—— **该面板此前在 SSR 冒烟里零覆盖**；`reply-suggest.wiring.spec.ts` 加 2 项源码守卫（复制必须走共享助手且不许 fire-and-forget、失败必须有出口）。**变异**：`loading` 初值改回 false → 红；`Select` 的 value 改回 `String(kbId)` → 红；`copy` 退回 fire-and-forget → 红；均按 sha256 还原。**未验证**：真实浏览器里 Radix 把选中项挂载一次之后库名是否显示（SSR 测不到那一帧，用例注释里已写明这条边界）；剪贴板被系统拒出的端到端观感需真窗口。 | 已完成 |
 | N30 | 首启无数据源时，面板把原始英文 SQLite 报错甩给用户 | e2e 复跑时实测：空 userData 下点开「通讯录」，`role="alert"` 里是 `unable to open database file`。这是**每个查询面板都会撞到**的首启状态，用户既看不懂也不知道下一步做什么（对照：`Ask` 面板有专门的中文空态文案）。 | **已完成（2026-09-21）**：在 `wechat-host.js` 的 `call` 错误路径集中翻译已知形态（`unable to open database file` / `SQLITE_CANTOPEN`）为「读不到本机的微信数据：请先在「数据配置」中设置数据目录并完成解密（原始错误：…）」，**其余错误原样透传** —— 不猜形态，避免把真实故障说成「未配置」（比英文原文更有害）。新增 `host-error-message.spec.ts` 6 项（翻译命中 / 等价形态 / 其余原样反例 / 非 Error 输入 / 接线守卫 / e2e 钉文案）；`ui:loading-e2e` 增加断言「数据源缺失时必须是中文可执行文案」。**变异**：翻译判定改成 `if (false)` → 2 条转红，按 sha256 还原。**未验证**：其他底层英文报错（权限拒绝、库损坏等）未翻译 —— 按「只翻译已知形态」口径，遇到再加。 | 已完成 |
+| N31 | **打包入口那一层完全不在类型检查覆盖内**（`src/client/ui-app/**`） | `npm run typecheck` 的客户端项目是 `src/client/ui-wechat/tsconfig.json`，它的 `include: ["src"]` 只覆盖 `src/client/ui-wechat/src/**`（230 个文件，`--listFilesOnly` 实测**不含**任何 `ui-app` 文件）。而被打包、被真正运行的那份入口 —— `ui-app/ui-entry.tsx`（闸门与进度中继）、`onboarding/OnboardingShell.tsx`（引导 + 同意 + 授权三站）、`privacy/PrivacyConsentGate.tsx`、`license/*` —— **一行都没有被 tsc 看过**：H11 那五档收紧（`strict` / `noUncheckedIndexedAccess` / `noImplicitOverride`…）对它全部无效，`ui:smoke` 走 tsx 转译不做类型检查，CI 因此会绿着收下类型错误。2026-09-23 临时配一份 tsconfig 量过：**整个目录只有 20 处错误**，全在 `onboarding/particles.tsx`（12）与 `onboarding/Reveal.tsx`（8），成因单一（`noUncheckedIndexedAccess` 下的数组下标与元组解构）；同一份配置下 `ui-entry.tsx` / `OnboardingShell.tsx` 为 0。另注意它顺手暴露了 `OnboardingShell` 的翻页函数 `pageOrder[i]` 可能取到 `undefined`（`setPage` 会写入 `undefined`，运行期表现为「跳回首页」）—— 已在 H14 那一刀里按「取不到就停在原地」修掉。 | 补一份 `src/client/ui-app/tsconfig.json`（沿用客户端基座 + 同一套 `paths`），把 20 处收口，挂进 `npm run typecheck`；再补一条守卫钉住「打包入口在 typecheck 覆盖内」（按 `ui-entry.tsx` 是否出现在某个 tsconfig 的 program 里判，别用路径字符串 includes —— 注释里写一遍就会误报）。验收：`npm run typecheck` 的文件清单包含 `ui-app/ui-entry.tsx`；删掉那份 tsconfig 时守卫转红 | 未开始 |
 
 ### 工作流 E · 构建与工程化（6 项）
 
@@ -1268,3 +1297,5 @@ flowchart TD
 | 2026-09-23 | 实施+自证 | H10/CI | **CI 第 13 步「安全守卫冒烟」反复假红的真因：那条断言测的是错的量** | 现象：`window.open 三次全部被拒（返回 null，没有开出窗口）` 在 #57/#59/#60/#61 里间歇性红，detail 是 `["window","window","window"]`；同一提交的另一个 verify 作业绿、本机 10 项全绿 —— 一直被当成 runner 抖动、手工重跑。读 `main.js` 的探针才看清：断言拿 `window.open(...) === null` 当判据，而探针的表达式是 `... === null ? 'null' : 'window'` —— 也就是说 **'window' 只说明返回值不是 null，并不说明开出了窗口**：处理器返回 `action:'deny'` 时，Chromium 照样可能回一个指向空窗的 WindowProxy。所以红的是**代理对象的 Presence**，不是守卫失效；这个信号随 Electron 内部时序抖动，才是「间歇性」的来源。**用重试糊它会把真 fail-open 一起糊掉**，所以改的是测量本身。 做法：主进程加 `did-create-window` 计数（只有窗口真的建出来才触发），探针逐条记 `windowsAfter`、汇总记 `popupWindows`；冒烟的安全断言改成「**计数恒为 0**」，`result` 降级为诊断信息，另加一条「返回值必须落在已知集合内」的用例 —— 探针自己坏了也要单独报红，不能和「守卫失效」混成同一条。 **变异自证（关键）**：把 `setWindowOpenHandler` 改成 `action:'allow'` ⇒ `popupWindows=3 windowsAfter=[1,2,3]`，冒烟当场 `❌（1 项）` 且退出码 1；还原后 `popupWindows=0`、10 项全绿，sha256 核对一致。顺带证明了一件事：真 fail-open 时 `result` 也是 `["window","window","window"]` —— 与 CI 上那个「假红」一模一样，旧断言根本分不开这两种情况；新断言能分。 **另记**：这不是「把断言放宽」，窗口计数比返回值更严格 —— 以前漏报的情形（建了窗但返回 null）现在也会红。 |
 
 | 2026-09-23 | 验收 | H7 | **四条验收框按证据补齐；其中一条的措辞与实现不符，改掉措辞而不是打勾** | H7 早标了「已完成」，但验收标准那四条一直空着，而**同一个条目下面另有一段「已完成」清单把这几件事逐条写清了证据** —— 文档自己跟自己打架。本轮当场重取证据后补齐：① `npm run check:backend-restart` **6/6**（杀掉后端 worker 后 PID 40856→12492、重建期间 worker 始终 ≤1、日志出现「后端已恢复」）；② `backend-rpc.spec.ts` **16 项**全绿，钉住「超时后在途数回落为 0」与「迟到的回包只 settle 一次、不产生二次 reject」；③ 长任务豁免是**双向**钉的：`LONG_CALL_METHODS` 里每个名字都必须是真实存在的 `@Remote` 方法（否则改名后那条调用会静默掉回 60s 默认窗口被误杀），同时断言长任务确实拿到 10 分钟窗口、普通查询仍走默认窗口。 **关键的一条纠正**：原措辞写「taskkill 后界面出现错误提示」，与实现不符 —— 快速自愈时刻意**不**弹错误（一次瞬断不该打扰用户），界面上出现的是「重建失败 / 连续 3 次失败」那条横幅。我没有为了勾上而把半截事实说成全对，而是把措辞改成实现真正保证的东西并注明差异。 这也是本条目第二次出现「先写结论再核对」型文本问题（上一条是安全守卫冒烟的判据），已把「验收框必须由当场证据驱动」写进核对纪律。 |
+| 2026-09-23 | 实施+真机验收 | H14 | **闸门顺序改成「引导 → 隐私同意 → 授权」，并把真人点击搬进 CI** | 按用户当天的决定动手。① 实现方式选的是**把同意做成启动页的第五站**（`OnboardingShell` 内），而不是在 `ui-entry` 里把同意屏整体提到最前 —— 后者只需两行但会把顺序变成「同意 → 引导 → 授权」，与决定文本里的「引导 → 同意 → 授权」不符；代价是启动页那台状态机多了两站要排（见 H14 节第 7 条 ①–③，含 `NoticeBanner` 叠成两张悬浮卡这个只有真跑才会发现的观感缺陷）。② 未同意时点「授权验证」标签 / 按 → / 滚轮都落回同意站（一个归一 effect），这一站**不给「下一页」按钮**，滚轮让位给同意屏自己滚动；「跳过」与 Ctrl+Enter 一并改要 `canEnter` —— 否则「跳过」本身就成了一条绕过同意的通道。③ **真人点击这次真的点到了**：`scripts/consent-order-e2e.mjs` 起 4 次真 Electron（两份全新 userData，不设 `SUPERTIME_SKIP_ONBOARDING`、**不签许可证**）跑完 26 项全绿：第一屏 0 复选框、按「下一页」撞到的是 `consent` 不是 `license`、未勾选时「同意并继续」`isDisabled()`、点授权标签跳不过、**「不同意并退出」之后子进程 `exit` 真的发生**、不同意则重启再问一遍、同意后 localStorage 写入 `version=3` 且换进程不再问。④ **这条验收能进 CI 而 M3 那些进不去**：同意屏现在排在授权之前 ⇒ 不需要 `vendor-keys/` 私钥，正好绕开 N23 那类「只有本机成立」的缺口；已挂 `e2e:h14-consent` 并放在 CI 最后一步（它红过会吞掉后面的步骤）。⑤ **两组变异自证**：把 `ui-entry` 的 `requireConsent` 摘掉（= 回到旧顺序）⇒ 红在「走到的是授权屏」，并把旧缺陷当场复现（`path=["","","","","license"]`）；把同意站的归一改成恒假 ⇒ 红在「点授权标签跳不过去」；两次都按 sha256 逐字节还原、还原后复跑 26 项仍绿。⑥ **M21 棘轮当场拦下**：改完 1070 行 > 1000，于是把五张静态文案表拆成 `onboarding-content.tsx`（280 行）而非加白名单，启动页回到 799 行。⑦ 顺带修掉一处真实缺陷：翻页的 `pageOrder[i]` 可能取到 `undefined` ⇒ `setPage` 写入 `undefined`，表现为滚一下轮跳回首页；现在「取不到就停在原地」。⑧ 全套静态门禁当场复跑：串行 `npm test` **220 文件 / 2280 通过 / 14 跳过 / 0 失败**、`typecheck` 0、`build:ui` 绿、`ui:smoke` 43、`privacy-gate:smoke` 8、`docs:api:check`、`check:shim`、`consent.spec` 8 + `debug-gates.spec` 15 + `ci-script-isolation.spec` 6 全绿。**过程中两次环境假红**：并行 vitest 与 `tsc` 都因本机 commit 耗尽而崩 （`FreeVirtualMemory` 只剩 0.9GB），串行 + `--max-old-space-size=2560` 即绿；`atomic-json.spec.ts` 的 `ino` 断言在全量跑里红过一次、单跑 33 项绿、全量复跑绿（NTFS 复用文件索引，属既有负载型假红同族）。⑨ **发现并登记 N31**：为确认「我这刀有没有被类型系统看着」才查出 `src/client/ui-app/**` 完全不在 typecheck 覆盖内（详见该条）。 |
+| 2026-09-23 | 登记 | N31 | 新增：**打包入口那一层（`src/client/ui-app/**`）从来没被 tsc 看过** | H14 改完启动页之后想确认「这类改动的类型错误 CI 拦不拦得住」，用 `--listFilesOnly` 查客户端 program 的文件清单：230 个文件里**没有任何 `ui-app` 文件** —— 客户端 tsconfig 的 `include: ["src"]` 相对的是 `src/client/ui-wechat/`，而它自己的注释就写着「打包入口是 `src/client/ui-app/ui-entry.tsx`」。临时配一份 tsconfig 量出整个目录只有 **20 处**错误（`particles.tsx` 12 + `Reveal.tsx` 8，全是 `noUncheckedIndexedAccess` 下的下标/元组解构），`ui-entry.tsx` 与 `OnboardingShell.tsx` 为 0 ⇒ 收口很便宜。**可迁移的教训**：「typecheck 0 错误」这句话必须问一句「0 是在哪个 include 范围里量的」—— 一个不在任何 program 里的目录，会把「全部通过」显示成一个永远为真的事实。 |

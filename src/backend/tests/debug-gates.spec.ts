@@ -1,8 +1,8 @@
 /**
  * N2：首启闸门的调试豁免开关，且**打包态不得豁免**（含「设了环变量也不放行」）。
  *
- * 三道闸门：启动引导（`OnboardingShell` 的「跳过」要求 `licenseOk`）→ 授权
- * （`LicenseGate` 与主进程 `wechat:call` 的 `authorizeCall`）→ 隐私同意。
+ * 三道闸门：启动引导（`OnboardingShell` 的「跳过」要求 `licenseOk`）→ 隐私同意
+ * （同一个启动页的第五站，H14 起排在授权之前）→ 授权（`LicenseGate` 与主进程 `wechat:call` 的 `authorizeCall`）。
  * 自动化要进主界面，本来得签真许可证 + 往 localStorage 伪造「已同意」记录（见 N2 原文）。
  *
  * ## 这项最重要的性质是「不能生效」

@@ -231,7 +231,7 @@ function WechatApp(): React.JSX.Element {
     if (document.getElementById(BANNER_ID)) return
     const bar = document.createElement('div')
     bar.id = BANNER_ID
-    bar.textContent = '🛠 调试模式：已跳过启动引导 / 授权 / 隐私同意（SUPERTIME_SKIP_ONBOARDING=1，仅非打包态生效）'
+    bar.textContent = '🛠 调试模式：已跳过启动引导 / 隐私同意 / 授权（SUPERTIME_SKIP_ONBOARDING=1，仅非打包态生效）'
     bar.setAttribute(
       'style',
       'flex:0 0 auto;padding:6px 12px;background:#7c3aed;color:#fff;'
@@ -254,11 +254,17 @@ function WechatApp(): React.JSX.Element {
       .then((s: LicenseStatus | undefined) => { if (s) setLic(s) })
       .catch(() => { /* 拿不到就交给 LicenseGate 那一层兜底 */ })
   }, [])
-  const handleConsentAccepted = useCallback(() => {
+  const recordConsent = useCallback(() => {
     acceptConsent()
     setConsented(true)
-    openWechat()
+    // 这里**不**调 openWechat()：同意只是三道闸门里的一道。放行由上面那个 effect 判
+    // （引导 / 同意 / 授权三项都成立才 openWechat），启动页也据此决定能不能点「进入系统」。
   }, [])
+  const handleConsentAccepted = useCallback(() => {
+    // 走到这条回调时引导与授权都已通过（见下面的闸门顺序），所以可以直接放行进主界面。
+    recordConsent()
+    openWechat()
+  }, [recordConsent])
   const handleConsentRejected = useCallback(() => {
     // 不同意就不放行：关掉窗口（自绘标题栏的关闭路径由 preload 的 windowControls 提供）。
     const api = (window as any).electronAPI?.windowControls
@@ -289,12 +295,20 @@ function WechatApp(): React.JSX.Element {
     )
   }
 
-  // 未完成启动引导，或授权不可用 → 启动页（4 个介绍页之后才是 License 验证，它同时也是进入系统的闸门）
+  // 三道闸门里有两道未过 → 启动页：4 个介绍页 → **隐私同意** → License 授权（H14 定的顺序）。
+  // 同意屏由启动页排在授权**之前**，于是「机器上没有有效许可证」不再等于「永远看不到同意屏」。
   // `!skipGates` 是 N2 的豁免口子：只有主进程判定「非打包态 + 显式开关」时才绕过
   if (!skipGates && (!onboardingDone || !isLicenseUsable(lic))) {
-    return <OnboardingShell onComplete={handleOnboardingComplete} />
+    return (
+      <OnboardingShell
+        onComplete={handleOnboardingComplete}
+        requireConsent={!consented}
+        onConsentAccepted={recordConsent}
+        onConsentExit={handleConsentRejected}
+      />
+    )
   }
-  // 引导与授权都过了，但没同意隐私声明 → 独立一屏（H14），不同意则不放行
+  // 引导与授权都已通过、只是声明升版要求重新同意 → 单独一屏（不塞回启动页，免得重看四页介绍）
   if (!skipGates && !consented) {
     return <PrivacyConsentGate onAccepted={handleConsentAccepted} onExit={handleConsentRejected} />
   }

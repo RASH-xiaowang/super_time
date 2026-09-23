@@ -24,284 +24,16 @@ import { ParticleField } from './particles.tsx'
 import { Reveal, pickAnim } from './Reveal.tsx'
 import { LicenseAuthPanel, isLicenseUsable } from '../license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from '../license/LicenseGate.tsx'
+// 隐私同意是启动页的第五站（H14）：直接复用主界面那一屏，文案与守卫都是同一份，
+// 不另写一个「精简版同意提示」（两份声明会漂，而这是给用户看的法律性文本）。
+import { PrivacyConsentGate } from '../privacy/PrivacyConsentGate.tsx'
 // 启动页（含最后一站「授权验证」）也要能看到「有新版本可装 / 许可证即将到期」——
 // 更新与到期是主进程的事，与「有没有进主界面」无关。这一屏没有设置弹窗，故不传 onOpenLicense。
 import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import css from './onboarding.module.css'
+import { FEATURE_GROUPS, HELP_STEPS, MODULE_ENTRIES, NOTICES, VALUE_PROPS } from './onboarding-content.tsx'
 
 const APP_VERSION = '1.0.7'
-
-/** 首页价值主张（贴合本地解密 + AI 分析定位）。 */
-const VALUE_PROPS = [
-  {
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
-    title: '本地优先 · 数据不出机',
-    desc: '解密库与分析均在本机完成，不上传聊天内容',
-  },
-  {
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-    title: '全量会话与社交图谱',
-    desc: '消息、群聊、联系人、朋友圈一体检索',
-  },
-  {
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" />
-      </svg>
-    ),
-    title: 'AI 问答与智能总结',
-    desc: '按账号语料提问，生成每日 / 周期 / 年度报告',
-  },
-  {
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        <path d="M9 12l2 2 4-4" />
-      </svg>
-    ),
-    title: '隐私体检与资产盘点',
-    desc: '扫描敏感信息、资金往来与文件存储占用',
-  },
-] as const
-
-/** 首页功能模块入口 → 对应侧栏主入口。 */
-const MODULE_ENTRIES: Array<{
-  id: string
-  name: string
-  desc: string
-  icon: React.ReactNode
-}> = [
-  {
-    id: 'overview',
-    name: '数据总览',
-    desc: '账号概况、消息量与关键指标一览',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="3" width="7" height="9" rx="1" />
-        <rect x="14" y="3" width="7" height="5" rx="1" />
-        <rect x="14" y="12" width="7" height="9" rx="1" />
-        <rect x="3" y="16" width="7" height="5" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    id: 'ask',
-    name: '微信问答',
-    desc: '基于本机语料的 AI 对话助手',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-      </svg>
-    ),
-  },
-  {
-    id: 'chats',
-    name: '聊天会话',
-    desc: '按会话检索消息、图片、文件与撤回内容',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-  },
-  {
-    id: 'contacts',
-    name: '通讯录',
-    desc: '好友与群成员画像、社交关系',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-      </svg>
-    ),
-  },
-  {
-    id: 'moments',
-    name: '朋友圈',
-    desc: '动态时间线与作者筛选',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <circle cx="8.5" cy="8.5" r="1.5" />
-        <polyline points="21 15 16 10 5 21" />
-      </svg>
-    ),
-  },
-  {
-    id: 'files',
-    name: '文件与存储',
-    desc: '文件资产、媒体盘点与空间分析',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-      </svg>
-    ),
-  },
-  {
-    id: 'settings',
-    name: '数据配置',
-    desc: '数据库目录、密钥与路径设置',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-      </svg>
-    ),
-  },
-]
-
-/** 功能引导页分类（对齐侧栏 nav-config 分组）。 */
-const FEATURE_GROUPS = [
-  {
-    name: '概览与问答',
-    desc: '先看全局，再用自然语言向本机语料提问。适合第一次打开时快速摸清账号规模。',
-    items: ['数据总览', '微信问答'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="3" width="7" height="9" rx="1" />
-        <rect x="14" y="3" width="7" height="5" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    name: '报告与总结',
-    desc: '把一段时间内的聊天沉淀成可读报告：每日摘要、周期总结与年度回顾。',
-    items: ['总结', '周期报告', '年度报告'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="4" width="18" height="17" rx="2" />
-        <path d="M8 2v4M16 2v4M3 9h18" />
-      </svg>
-    ),
-  },
-  {
-    name: '会话与消息',
-    desc: '按会话/群检索消息，支持公众号过滤、群聊活跃分析、通话记录与撤回消息回看。',
-    items: ['聊天会话', '群聊分析', '通话记录', '撤回消息'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-  },
-  {
-    name: '联系人与社交',
-    desc: '通讯录画像、朋友圈时间线，以及跨会话的社交关系图谱。',
-    items: ['通讯录', '朋友圈', '社交图谱'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="9" cy="7" r="4" />
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-      </svg>
-    ),
-  },
-  {
-    name: '内容资产',
-    desc: '收藏、表情包、文件与媒体附件、公众号文章统一盘点，支持空间占用分析。',
-    items: ['收藏与表情', '文件与存储', '媒体资产', '公众号文章'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-      </svg>
-    ),
-  },
-  {
-    name: '资金往来',
-    desc: '转账与红包明细，按月汇总资金流向，方便对账与回顾。',
-    items: ['资金往来', '转账红包'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="2" y="6" width="20" height="14" rx="2" />
-        <path d="M2 10h20" />
-      </svg>
-    ),
-  },
-  {
-    name: '洞察与行动',
-    desc: '朋友圈互动洞察，以及从聊天中沉淀的待办日程。',
-    items: ['朋友圈洞察', '待办日程'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M9 11l3 3L22 4" />
-        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-      </svg>
-    ),
-  },
-  {
-    name: '隐私与安全',
-    desc: '隐私体检、数据边界审计，以及本地备份恢复。',
-    items: ['隐私与信任', '隐私体检', '备份恢复'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
-  },
-  {
-    name: '维护与设置',
-    desc: '配置数据目录与密钥，查看库健康度与操作日志。',
-    items: ['数据配置', '数据健康', '操作日志'],
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82" />
-      </svg>
-    ),
-  },
-] as const
-
-const HELP_STEPS = [
-  {
-    title: '配置数据来源',
-    body: '打开侧栏「数据配置」，设置微信账号数据库目录、密钥与图片密钥。路径会写入 wechat/config.json，下次启动自动应用。',
-  },
-  {
-    title: '导入并解密',
-    body: '保存配置后，后端会在独立进程内解密消息库并建立索引。首次导入耗时取决于消息量，期间窗口仍可操作；完成后顶栏连接状态变为在线。',
-  },
-  {
-    title: '浏览与检索',
-    body: '从「数据总览」进入全局指标，或直接在「聊天会话」按人/群检索消息。顶部统一搜索支持会话、联系人、朋友圈、收藏、文件与资金记录。',
-  },
-  {
-    title: '使用 AI 能力',
-    body: '在「微信问答」用自然语言提问；在「总结」生成每日/周期报告。需先在数据配置中接入 OpenAI 兼容模型（供应商、模型名、API Key、Base URL）。',
-  },
-  {
-    title: '隐私与维护',
-    body: '定期用「隐私体检」扫描敏感信息，用「数据健康」检查库完整性，用「备份恢复」导出快照。敏感操作均有确认提示。',
-  },
-] as const
-
-const NOTICES = [
-  {
-    title: '全程本地运行',
-    body: '解密与查询在本机 SQLite 完成。只有在你主动配置并调用 AI 时，相关上下文才会发往所填模型接口。',
-  },
-  {
-    title: '妥善保管密钥',
-    body: '微信数据库密钥与图片密钥仅保存在本机配置中，请勿截图或分享配置文件。',
-  },
-  {
-    title: '建议先导出备份',
-    body: '进行批量导出、删除或覆盖式操作前，先用「备份恢复」做一份完整快照。',
-  },
-  {
-    title: '大库首次加载较慢',
-    body: '消息量很大时，首次解密/建索引可能持续数分钟；后端跑在独立进程，界面尽量保持可响应。',
-  },
-] as const
 
 /** 启动页四张阶段背景图（public/onboarding → 构建后 ui-dist/onboarding）。 */
 const STAGE_BGS = [
@@ -312,13 +44,21 @@ const STAGE_BGS = [
 ] as const
 
 /**
- * 启动页阶段 = 4 个介绍页 + 最后的「授权验证」。
+ * 启动页阶段 = 4 个介绍页 + 两道闸门（隐私同意 → 授权验证）。
  *
- * 授权阶段不是 `OnboardingPageId`：它不记录「已浏览」（visited 只统计内容页），
- * 但它是流程里的最后一站，并且是进入系统的唯一闸门。
+ * 两站都不是 `OnboardingPageId`：它们不记录「已浏览」（visited 只统计内容页），
+ * 却是流程的收尾，也是进入系统的唯一入口。
  */
 const LICENSE_STAGE = 'license' as const
-type OnboardingStage = OnboardingPageId | typeof LICENSE_STAGE
+/**
+ * 隐私同意这一站插在「介绍页」与「授权」之间（H14，2026-09-23 决定）。
+ * 先序是有意的：**没有取得同意，就不该先向用户要许可证** —— 授权是商业闸门，
+ * 而同意是合规前提，后者不能被前者挡在后面。
+ * 反过来排还造成一个可观察的缺陷：机器上没有效许可证时，应用一直停在启动页，
+ * 用户永远看不到同意屏（2026-09-23 全新 userData 实测：第一屏 0 个 checkbox）。
+ */
+const CONSENT_STAGE = 'consent' as const
+type OnboardingStage = OnboardingPageId | typeof CONSENT_STAGE | typeof LICENSE_STAGE
 
 function BrandMark({ size = 22 }: { size?: number }): React.JSX.Element {
   return (
@@ -617,15 +357,37 @@ function AboutPage({ versions }: {
 export interface OnboardingShellProps {
   /** 完成或跳过后进入主界面。 */
   onComplete: () => void
+  /**
+   * 还没取得隐私同意时为 true：此时「隐私同意」排在「授权验证」**之前**，且没同意不算完成。
+   *
+   * 同意的**记录**仍由调用方（`ui-entry`）持有，这里只把它排进流程 —— 两处各存一份会漂。
+   * 之所以排在这里而不是「授权之后再拦一道」：没有有效许可证的机器原本永远看不到同意屏
+   * （授权失败就回启动页，走不到同意），而同意是合规前提，不能被商业闸门挡在后面（H14）。
+   */
+  requireConsent?: boolean
+  /** 用户在同意的屏幕上点了「同意并继续」。不传则同意这一站不成立（见 `consentGate`）。 */
+  onConsentAccepted?: () => void
+  /** 点了「不同意并退出」。不传则屏幕上只给提示、不给退出按钮。 */
+  onConsentExit?: () => void
 }
 
-export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX.Element {
+export function OnboardingShell({
+  onComplete, requireConsent = false, onConsentAccepted, onConsentExit,
+}: OnboardingShellProps): React.JSX.Element {
+  /**
+   * 同意这一站是否成立：调用方既要求同意、又给了「同意之后做什么」的回调。
+   * 少了回调就没有任何出口，那时宁可把这一站整体撤掉，也不能把人永久关在门外。
+   * 定义在 `useState` 之前，是因为初始阶段也要按它来定（否则未接线时会停在出不去的同意站）。
+   */
+  const consentGate = requireConsent && onConsentAccepted !== undefined
   const [state, setState] = useState<OnboardingState>(() => loadOnboardingState())
   /**
    * 当前阶段。首启一律从「首页」开始 —— 先介绍是什么、有什么，最后才要许可证；
-   * 只有「启动页已完成、再次被拉回来纯粹是因为授权失效」才直接落到授权页。
+   * 只有「启动页已完成、再次被拉回来纯粹是因为闸门没过」才直接落到最后一站。
    */
-  const [page, setPage] = useState<OnboardingStage>(() => (state.completed ? LICENSE_STAGE : 'home'))
+  const [page, setPage] = useState<OnboardingStage>(() => (
+    !state.completed ? 'home' : consentGate ? CONSENT_STAGE : LICENSE_STAGE
+  ))
   const [versions, setVersions] = useState<{ electron?: string; chrome?: string; node?: string } | null>(null)
   const [theme, setTheme] = useState(() => getThemeMode())
   const [lic, setLic] = useState<LicenseStatus | null>(null)
@@ -637,17 +399,53 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
 
   const licenseOk = isLicenseUsable(lic)
   const onLicenseStage = page === LICENSE_STAGE
+  const onConsentStage = page === CONSENT_STAGE
+  /**
+   * 两处闸门都过了才谈得上「进入系统」：授权是商业闸门，同意是合规闸门，缺一不可。
+   *
+   * 这里刻意用 `requireConsent` 而不是 `consentGate`：调用方若只说「还缺同意」却没接回调，
+   * 闸门类判断的失败方向必须是**不放行**（与许可闸门同一口径），而不是悄悄当成已同意。
+   * 那种接法会让人停在介绍页出不去 —— 那是一个看得见、改得掉的接线错误；
+   * 而「未同意也放行」是看不见的合规漏洞。
+   */
+  const canEnter = licenseOk && !requireConsent
+
+  // 未同意时停在同意站：点「授权验证」标签、按 → 、滚轮，一律落回同意站（见下面的 effect）。
+  useEffect(() => {
+    if (page === LICENSE_STAGE && consentGate) setPage(CONSENT_STAGE)
+    else if (page === CONSENT_STAGE && !consentGate) setPage(LICENSE_STAGE)
+  }, [page, consentGate])
 
   const isFirstLaunch = !state.completed
-  const ready = (state.completed || allPagesVisited(state)) && licenseOk
+  // 同意是「完成」的前置条件之一（H14）：没同意，即使介绍页都看完、许可证也已有效，同样不放行。
+  const ready = (state.completed || allPagesVisited(state)) && canEnter
   const pageOrder = useMemo<OnboardingStage[]>(
-    () => [...ONBOARDING_PAGES.map((p) => p.id), LICENSE_STAGE],
-    [],
+    () => [...ONBOARDING_PAGES.map((p) => p.id), ...(consentGate ? [CONSENT_STAGE] : []), LICENSE_STAGE],
+    [consentGate],
   )
-  const pageIndex = pageOrder.indexOf(page)
-  /** 背景图只有 4 张：第 5 阶段（授权）沿用最后一张，否则背景会整块暗下去。 */
+  // `pageOrder.indexOf` 会有**一帧**取到 -1：同意刚生效/刚失效时，纠正用的 effect 要到
+  // 下一帧才跑（见上面）。按 0 兜住，否则那一帧背景整块暗掉、页码显示成 00。
+  const pageIndex = Math.max(0, pageOrder.indexOf(page))
+  /** 闸门两站（同意 / 授权）的页码按实际顺序算：插进同意站后授权会变成 06。 */
+  const stageIndex = String(pageIndex + 1).padStart(2, '0')
+  /** 背景图只有 4 张：第 5 站起（同意 / 授权）沿用最后一张，否则背景会整块暗下去。 */
   const bgIndex = Math.min(pageIndex, STAGE_BGS.length - 1)
   const visitedCount = ONBOARDING_PAGES.filter((p) => state.visited.includes(p.id)).length
+  /** 闸门两站（同意 / 授权）的进度单独算：它们问的是「过了没有」，不是「看了几页」。 */
+  const gateStage = onLicenseStage || onConsentStage
+  const gateTotal = consentGate ? 2 : 1
+  const gateDone = (consentGate ? 0 : 1) + (licenseOk ? 1 : 0)
+  const gateLabel = onConsentStage ? 'CONSENT REQUIRED'
+    : licLoading ? 'CHECKING LICENSE…'
+      : licenseOk ? 'LICENSE OK' : 'LICENSE REQUIRED'
+  /** 底栏那一句提示说的是**当前这一站还缺什么**，所以同意排在授权前面时它也先说同意。 */
+  const footerHint = requireConsent
+    ? (onConsentStage ? '请阅读后勾选，再点「同意并继续」' : '同意隐私声明后方可继续')
+    : !licenseOk
+      ? (onLicenseStage ? '完成授权后方可进入系统' : '最后一页完成授权后方可进入系统')
+      : !ready && isFirstLaunch
+        ? '浏览完四页后可进入 · ← → 翻页'
+        : '← → 翻页'
 
   // 每次进入启动页都检测 License（含过期/无效强制授权）
   useEffect(() => {
@@ -680,21 +478,36 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
     }).catch(() => { /* 版本信息非关键 */ })
   }, [])
 
-  // 进入某页即记为已浏览（首启强制覆盖全部页）；授权阶段不是内容页，不记录
+  // 进入某页即记为已浏览（首启强制覆盖全部页）；同意与授权是闸门，不是内容页，不记录
   useEffect(() => {
-    if (onLicenseStage) return
+    if (page === LICENSE_STAGE || page === CONSENT_STAGE) return
     setState((prev) => {
       const next = markPageVisited(prev, page)
       if (next === prev) return prev
       saveOnboardingState(next)
       return next
     })
-  }, [page, onLicenseStage])
+  }, [page])
 
   // 切页后回到内容区顶部
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 })
   }, [page])
+
+  /**
+   * 按 `pageOrder` 前进一步 / 后退一步。
+   *
+   * 取到 `undefined` 就**停在原地**：`page` 与 `pageOrder` 之间有一帧不一致（同意闸门刚生效
+   * 或刚失效，纠正它的 effect 要到下一帧才跑），那一帧 `indexOf` 是 -1，不加兜底的话滚一下
+   * 轮就把人弹到首页去。
+   */
+  const stepBy = useCallback((delta: 1 | -1) => {
+    setPage((cur) => {
+      const i = pageOrder.indexOf(cur)
+      const at = delta > 0 ? Math.min(pageOrder.length - 1, i + 1) : Math.max(0, i - 1)
+      return pageOrder[at] ?? cur
+    })
+  }, [pageOrder])
 
   /**
    * 滚轮翻页：内容区能滚且未到顶/底时优先滚内容；
@@ -706,6 +519,9 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
 
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) return
+      // 同意站上的滚轮归同意屏自己：那份声明比屏幕长，滚轮被抢走就读不完，
+      // 而「没读完就点同意」不叫显式同意。这一站的前进只由它自己的按钮决定。
+      if (page === CONSENT_STAGE) return
       const body = bodyRef.current
       if (!body) return
 
@@ -732,40 +548,23 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
       wheelLockRef.current = true
       window.setTimeout(() => { wheelLockRef.current = false }, 420)
 
-      if (dir > 0) {
-        setPage((cur) => {
-          const i = pageOrder.indexOf(cur)
-          return pageOrder[Math.min(pageOrder.length - 1, i + 1)]
-        })
-      } else {
-        setPage((cur) => {
-          const i = pageOrder.indexOf(cur)
-          return pageOrder[Math.max(0, i - 1)]
-        })
-      }
+      stepBy(dir > 0 ? 1 : -1)
     }
 
     shell.addEventListener('wheel', onWheel, { passive: false })
     return () => { shell.removeEventListener('wheel', onWheel) }
-  }, [pageOrder])
+  }, [page, stepBy])
 
   const goPage = useCallback((id: OnboardingStage) => {
     setPage(id)
   }, [])
 
-  const goPrev = useCallback(() => {
-    setPage((cur) => {
-      const i = pageOrder.indexOf(cur)
-      return pageOrder[Math.max(0, i - 1)]
-    })
-  }, [pageOrder])
+  /** 同意站只由它自己那两个按钮决定（滚轮已在这一站让位，见 wheel effect）。 */
+  const acceptConsentHere = useCallback(() => { onConsentAccepted?.() }, [onConsentAccepted])
 
-  const goNext = useCallback(() => {
-    setPage((cur) => {
-      const i = pageOrder.indexOf(cur)
-      return pageOrder[Math.min(pageOrder.length - 1, i + 1)]
-    })
-  }, [pageOrder])
+  const goPrev = useCallback(() => stepBy(-1), [stepBy])
+
+  const goNext = useCallback(() => stepBy(1), [stepBy])
 
   // 键盘：← → 翻页，Enter 在最后一页进入系统
   useEffect(() => {
@@ -780,7 +579,7 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
         goPrev()
       } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        if (licenseOk && (state.completed || allPagesVisited(state))) {
+        if (canEnter && (state.completed || allPagesVisited(state))) {
           const next = completeOnboarding(state)
           setState(next)
           onComplete()
@@ -789,22 +588,24 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [goNext, goPrev, state, onComplete, licenseOk])
+  }, [goNext, goPrev, state, onComplete, canEnter])
 
   const handleEnter = useCallback(() => {
-    if (!licenseOk) return
+    if (!canEnter) return
     if (isFirstLaunch && !allPagesVisited(state)) return
     const next = completeOnboarding(state)
     setState(next)
     onComplete()
-  }, [isFirstLaunch, state, onComplete, licenseOk])
+  }, [isFirstLaunch, state, onComplete, canEnter])
 
   const handleSkip = useCallback(() => {
-    if (!licenseOk) return
+    // 「跳过」跳的是介绍页，不是闸门：未同意或未授权时它必须同样 disabled
+    // （按钮的 disabled 用的就是 canEnter，见 footer）。
+    if (!canEnter) return
     const next = completeOnboarding(state)
     setState(next)
     onComplete()
-  }, [state, onComplete, licenseOk])
+  }, [state, onComplete, canEnter])
 
   const toggleTheme = useCallback(() => {
     toggleThemeMode()
@@ -819,8 +620,10 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
       style={{ ['--stage-p' as string]: String(pageIndex / Math.max(1, pageOrder.length - 1)) }}
     >
       {/* 主动提醒（右下角悬浮）：启动页上也要能看到「有新版本可装 / 许可证即将到期」。
-          位置由卡片自己 fixed 决定，放在 DOM 哪儿都不影响呈现。 */}
-      <NoticeBanner />
+          位置由卡片自己 fixed 决定，放在 DOM 哪儿都不影响呈现。
+          同意站除外 —— `PrivacyConsentGate` 自己带一份，两个 fixed 堆叠在同一角上会叠成
+          两张一样的卡（点掉一张还剩一张，看起来像「关闭」坏了）。 */}
+      {!onConsentStage ? <NoticeBanner /> : null}
 
       {/* 多张背景图：随滚轮切页交叉淡入 */}
       <div className={css.bgStack} aria-hidden="true">
@@ -877,6 +680,17 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
               </button>
             )
           })}
+          {/* 同意这一站只在还缺同意时出现；同意了就直接消失（不必留着让人回来看一份已生效的声明）。 */}
+          {consentGate ? (
+            <button
+              type="button"
+              className={`${css.tab}${onConsentStage ? ` ${css.tabActive}` : ''}`}
+              onClick={() => goPage(CONSENT_STAGE)}
+              aria-current={onConsentStage ? 'page' : undefined}
+            >
+              隐私同意
+            </button>
+          ) : null}
           {/* 授权是启动页的最后一站。已授权的老用户点它可直接跳过去，不必重看介绍页。 */}
           <button
             type="button"
@@ -901,10 +715,12 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
       <div className={css.neonRule} aria-hidden="true" />
 
       <main className={css.body} ref={bodyRef}>
-        {onLicenseStage ? (
+        {onConsentStage ? (
+          <PrivacyConsentGate onAccepted={acceptConsentHere} onExit={onConsentExit} />
+        ) : onLicenseStage ? (
           <div className={css.page}>
             <StageHead
-              index="05"
+              index={stageIndex}
               title="License 授权验证"
               lead="启动页的最后一步：导入厂商签发的许可证即可进入系统主界面。已授权可跳过本页。"
             />
@@ -930,8 +746,8 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
       <footer className={css.footer}>
         <div className={css.progress}>
           <ProgressRing
-            value={onLicenseStage ? (licenseOk ? 1 : 0) : (isFirstLaunch ? visitedCount : pageIndex + 1)}
-            total={onLicenseStage ? 1 : ONBOARDING_PAGES.length}
+            value={gateStage ? gateDone : (isFirstLaunch ? visitedCount : pageIndex + 1)}
+            total={gateStage ? gateTotal : ONBOARDING_PAGES.length}
           />
           <div className={css.dots} aria-hidden="true">
             {ONBOARDING_PAGES.map((p) => (
@@ -940,33 +756,31 @@ export function OnboardingShell({ onComplete }: OnboardingShellProps): React.JSX
                 className={`${css.dot}${state.visited.includes(p.id) ? ` ${css.dotDone}` : ''}${page === p.id ? ` ${css.dotCurrent}` : ''}`}
               />
             ))}
+            {/* 同意这一颗点只在还缺同意时存在：同意了它就整颗消失（与标签同一套逻辑）。 */}
+            {consentGate ? (
+              <span className={`${css.dot}${onConsentStage ? ` ${css.dotCurrent}` : ''}`} />
+            ) : null}
             <span className={`${css.dot}${licenseOk ? ` ${css.dotDone}` : ''}${onLicenseStage ? ` ${css.dotCurrent}` : ''}`} />
           </div>
           <span className={css.progressText}>
-            {onLicenseStage
-              ? `STAGE ${String(pageIndex + 1).padStart(2, '0')}/0${pageOrder.length} · ${licLoading ? 'CHECKING LICENSE…' : licenseOk ? 'LICENSE OK' : 'LICENSE REQUIRED'}`
-              : `STAGE ${String(pageIndex + 1).padStart(2, '0')}/0${pageOrder.length}${isFirstLaunch ? ` · 已浏览 ${visitedCount}` : ''}`}
+            {`STAGE ${stageIndex}/0${pageOrder.length}${gateStage ? ` · ${gateLabel}` : (isFirstLaunch ? ` · 已浏览 ${visitedCount}` : '')}`}
           </span>
         </div>
         <div className={css.actions}>
-          {!licenseOk ? (
-            <span className={css.hint}>
-              {onLicenseStage ? '完成授权后方可进入系统' : '最后一页完成授权后方可进入系统'}
-            </span>
-          ) : !ready && isFirstLaunch ? (
-            <span className={css.hint}>浏览完四页后可进入 · ← → 翻页</span>
-          ) : (
-            <span className={css.hint}>← → 翻页</span>
-          )}
+          <span className={css.hint}>{footerHint}</span>
           {state.completed ? (
-            <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={handleSkip} disabled={!licenseOk}>
+            <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={handleSkip} disabled={!canEnter}>
               跳过
             </button>
           ) : null}
           <button type="button" className={css.btn} onClick={goPrev} disabled={pageIndex <= 0}>
             上一页
           </button>
-          {pageIndex < pageOrder.length - 1 ? (
+          {onConsentStage ? (
+            /* 这一站不给「下一页」：能往前走的只有同意屏自己的「同意并继续」。
+               留着一颗点了没用的按钮，比不给按钮更糟（人会以为它坏了）。 */
+            null
+          ) : pageIndex < pageOrder.length - 1 ? (
             <button type="button" className={`${css.btn} ${css.btnPrimary}`} onClick={goNext}>
               下一页
             </button>

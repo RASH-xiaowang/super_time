@@ -12,7 +12,7 @@
 export interface DebugGatesFact {
   /** 主进程给的 `app.isPackaged` —— 事实，不是渲染层的猜测。 */
   packaged?: boolean
-  /** 主进程算好的「本次是否豁免首启闸门（引导 / 授权 / 隐私同意）」。 */
+  /** 主进程算好的「本次是否豁免首启闸门（引导 / 隐私同意 / 授权）」。 */
   skipGates?: boolean
 }
 

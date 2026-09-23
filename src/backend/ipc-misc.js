@@ -86,14 +86,14 @@ function registerMiscIpc(ctx) {
    * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`。
    *
    * 把 `app.isPackaged` **作为事实**回给渲染层 —— 渲染层据此决定要不要跳过
-   * 「启动引导 / 授权 / 隐私同意」三道闸门，而打包态的 `skipGates` 恒为 false：
+   * 「启动引导 / 隐私同意 / 授权」三道闸门，而打包态的 `skipGates` 恒为 false：
    * 环变量伪造不了 `app.isPackaged`，所以「打包版 + 设环变量」进不去主界面。
    * 未知的 `ipcMain` 调用者只会拿到这两个布尔值，拿不到判定权。
    */
   ipcMain.handle('app:debug-gates', () => {
     const gates = debugGates();
     if (gates.skipGates) {
-      console.warn('[debug-gates] SUPERTIME_SKIP_ONBOARDING=1：跳过启动引导 / 授权 / 隐私同意（仅非打包态生效）');
+      console.warn('[debug-gates] SUPERTIME_SKIP_ONBOARDING=1：跳过启动引导 / 隐私同意 / 授权（仅非打包态生效）');
     }
     return { packaged: gates.packaged, skipGates: gates.skipGates };
   });
