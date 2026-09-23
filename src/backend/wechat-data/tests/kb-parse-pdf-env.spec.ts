@@ -46,7 +46,9 @@ const CID_PDF = fileURLToPath(new URL('./fixtures/kb-b/中文地层报告.pdf', 
  */
 const hadType = Object.prototype.hasOwnProperty.call(process, 'type')
 const hadElectron = Object.prototype.hasOwnProperty.call(process.versions, 'electron')
-process.type = 'utility'
+/** Electron 才有 `process.type`（@types/node 里没这个字段）；这里要写的正是它。 */
+const electronProc = process as NodeJS.Process & { type?: string }
+electronProc.type = 'utility'
 ;(process.versions as Record<string, string>).electron = '39.0.0'
 
 afterAll(() => {
@@ -57,7 +59,7 @@ afterAll(() => {
 
 describe('pdfjs 在 Electron utilityProcess 下也必须能解析（真机故障回归）', () => {
   it('★ 伪装出的 utilityProcess 环境成立（否则这条守卫什么也没守）', () => {
-    expect(process.type, '本文件的前提就是 process.type === "utility"').toBe('utility')
+    expect(electronProc.type, '本文件的前提就是 process.type === "utility"').toBe('utility')
     expect((process.versions as Record<string, string>).electron).toBe('39.0.0')
   })
 
@@ -74,6 +76,6 @@ describe('pdfjs 在 Electron utilityProcess 下也必须能解析（真机故障
 
   it('★ 伪装窗口用完就还原（不许把进程的全局状态改脏）', async () => {
     // `parsePdf` 内部只在「加载 pdfjs」那一段把 process.type 写成 'browser'，import 完立刻还原。
-    expect(process.type, '窗口泄漏了：解析结束后 process.type 还是 browser').toBe('utility')
+    expect(electronProc.type, '窗口泄漏了：解析结束后 process.type 还是 browser').toBe('utility')
   })
 })

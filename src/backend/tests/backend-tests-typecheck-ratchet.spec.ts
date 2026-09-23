@@ -6,7 +6,7 @@
  * 「读源码做断言」，它们自己的参数形状、被改名后的方法名、`noUncheckedIndexedAccess` 下的
  * 下标取值，全靠跑到运行时才暴露；一条恒真的断言比没有断言更危险，因为它会让人以为那条命题有人守着。
  *
- * 一次性收口 176 处不现实，但**放任它继续长**是更糟的选择，所以这里钉一个只降不升的天花板：
+ * 一次性收口 191 处不现实，但**放任它继续长**是更糟的选择，所以这里钉一个只降不升的天花板：
  * 谁新增一个错误，CI 就红，并且报出行号；修掉一批之后把 `BASELINE` 改成新数字（改小）。
  *
  * 降到 0 之后该做什么：把这份配置串进 `npm run typecheck`（`typecheck:tests`），
@@ -23,11 +23,17 @@ const CFG = join(ROOT, 'src', 'backend', 'tsconfig.tests.json')
 const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
 
 /**
- * 收口前测得的基线（2026-09-23）：191 处 → 先修掉两类**信号最强**的（5 处 `@ts-expect-error`
- * 已经不再需要、10 处同一模块被 import 两遍）→ 176。
- * 剩下的分布：TS2532 69、TS2345 28、TS7006 20、TS18048 15、TS2339 12、TS2322 10、TS7005 4、TS7034 3、其余 15。
+ * 基线的来历（2026-09-23）：第一次量到 **191** 处；先修掉两类信号最强的 → **176**
+ * （5 处 `@ts-expect-error` 已经不再需要、`retrieval.spec.ts` 把 `node:fs`/`node:os` 各 import 两遍）；
+ * 再修掉一批「推断出来的类型太窄」的 → **162**：
+ *   · `diag-log.spec.ts` 的循环引用夹具（`{ a: 1 }` 上没有 `self`）；
+ *   · `kb-parse-pdf-env.spec.ts` 直接写 `process.type`（Electron 才有这个字段，@types/node 里没有）；
+ *   · `llm-profiles.spec.ts` 里 `store.profiles` 的每一行都被宿主层 JSDoc 写成 `object` ⇒ 给一个行形状别名；
+ *   · `llm-retry.spec.ts` 的 `let thrown = null` / `let captured`（推成 `null`/`never`，读字段就撞墙）。
+ * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
+ * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 176
+const BASELINE = 162
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150
