@@ -247,7 +247,7 @@ function spawnBackendProcess(userDataPath, onExit) {
   }
   return createWorkerChannel(child, {
     userDataPath,
-    onEvent: (name, args) => broadcastWechatEvent(name, args),
+    onEvent: (name, args) => { if (process.env.SUPERTIME_RELAY_LOG === '1') console.log('[relay:in]', name); broadcastWechatEvent(name, args); },
     onExit,
     ...(CALL_TIMEOUT_MS === undefined ? {} : { callTimeoutMs: CALL_TIMEOUT_MS }),
     ...(LONG_CALL_TIMEOUT_MS === undefined ? {} : { longTimeoutMs: LONG_CALL_TIMEOUT_MS }),

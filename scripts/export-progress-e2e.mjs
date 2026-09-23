@@ -133,11 +133,26 @@ try {
       SUPERTIME_SKIP_ONBOARDING: '1',
       SUPERTIME_TEST_MODE: '1',
       SUPERTIME_USER_DATA_DIR: userData,
+      // 让主进程把每个到达它那里的后端事件打一行 `[relay:in] <name>`（见 main.js 的 onEvent）。
+      // 这一行是 N33 的**分岔判据**：以前「渲染层 0 条事件」只能说明「没到 DOM」，分不清是
+      // 后端压根没推、还是推到了主进程却没送进渲染层。有了这一行，红的那一次自己就说清是哪条腿。
+      SUPERTIME_RELAY_LOG: '1',
       DSH_WECHAT_DATA_DIR: join(userData, 'wechat-data'),
       DSH_WECHAT_DECRYPTED_DIR: decrypted,
     },
   })
   const win = await app.firstWindow()
+  /**
+   * 主进程侧的中继到达数（N33 的分岔判据）。
+   *
+   * 数的是 `main.js` 在 `SUPERTIME_RELAY_LOG=1` 下打的 `[relay:in] wechat-export/progress` 行：
+   * 渲染层 0 条事件时，`relayIn > 0` 说明断在「主进程 → 渲染层」这条腿上，`relayIn === 0`
+   * 说明后端根本没往主进程推 —— 这两种的修法完全不同，而在此之前红日志分不出来。
+   */
+  let relayIn = 0
+  app.process().stdout.on('data', (chunk) => {
+    relayIn += (String(chunk).match(/\[relay:in\] wechat-export\/progress/g) ?? []).length
+  })
   // 故意用**矮视口**（导出对话框的内容比它高）：CI runner 就是这种尺寸，而当时「中止导出」
   // 整颗按钮在视口之外点不到 —— 那暴露的是弹窗不可滚的产品缺陷（Playwright 报
   // element is outside of the viewport）。修好之后这条仍要用矮视口跑，
@@ -146,6 +161,25 @@ try {
   win.setDefaultTimeout(30000)
   const pageErrors = []
   win.on('pageerror', (e) => { pageErrors.push(String(e.message).slice(0, 200)) })
+  /**
+   * 中继回调抛出的异常（`preload.js` 里那条 `[relay:throw]`）。
+   * 这是判别「渲染层 0 条事件」的第三条腿：事件送到了、回调却抛了 ⇒ DOM 事件不会发出，
+   * 而应用自己的轮询照跑 —— 症状与「IPC 没送到」完全一样，不打这一行就分不开。
+   */
+  const relayThrows = []
+  win.on('console', (m) => {
+    const t = String(m.text())
+    if (t.includes('[relay:throw]')) relayThrows.push(t.slice(0, 160))
+  })
+  /**
+   * 页面被重新加载了几次 —— **从「导航已就绪」那一点开始数**。
+   *
+   * 为什么不数绝对值：首帧的 `load` 事件在 CI 上发生在监听器挂上之前（实测 CI 数到 0、本机数到 1），
+   * 所以「总共加载几次」没有可比基线；这条判据要问的是**测量阶段内有没有偷偷重载**。
+   * 计数器在这里先归零（下面 setup 走完就归零），最后一条检查读的就是那之后的增量。
+   */
+  let loads = 0
+  win.on('load', () => { loads += 1 })
   await win.waitForLoadState('domcontentloaded')
   await win.waitForTimeout(2500)
   const later = win.getByRole('button', { name: '稍后再说', exact: true })
@@ -173,6 +207,9 @@ try {
     window.__prog = []
     window.addEventListener('dsh-wechat-export-progress', (e) => { window.__prog.push(e.detail) })
   })
+  // 从这一刻起才开始数重载：记录器是挂在 `window` 上的，**之前**的重载与它无关（它还不存在），
+  // 而**之后**的任何一次重载都会把它抹掉 —— 那正是「事件 0 但导出确实成功」这个形状的一个候选解释。
+  loads = 0
 
   // ── ① Excel · 100 条：总量已知 ⇒ 中继里每条进度都带 done/total ──────
   await openExportDialog()
@@ -192,7 +229,16 @@ try {
   check(known.length > 0, '小导出也经中继推到渲染层（不止轮询那条兜底路）',
     // 一条都没到时把界面停在哪儿一起报出来：CI 上那种「事件 0 + 采到设置页文字」的红，
     // 光看数字分不清是桥接没通、还是窗口早就离开了聊天面板。
-    `事件 ${known.length}${known.length === 0 ? '；' + (await snapshot(win)) : ''}`)
+    `事件 ${known.length}／主进程侧到达 ${relayIn}／回调抛错 ${relayThrows.length}／额外加载 ${loads}${known.length === 0 ? '；' + (await snapshot(win)) : ''}`)
+  // 这个计数本身也要可信：渲染层收到了事件而主进程侧一条都没数到，只能是「env 没传到主进程」
+  // 或「stdout 没接上」—— 那种坏法会让下次真红时给出**反过来**的结论（把渲染层的锅甩给后端），
+  // 所以宁可现在就红。
+  check(!(known.length > 0 && relayIn === 0), '中继到达计数本身可信（渲染层有事件 ⇒ 主进程侧一定数得到）',
+    `事件 ${known.length}／主进程侧 ${relayIn}`)
+  // 三条腿到此齐了：后端→主进程（relayIn）、主进程→渲染层回调（relayThrows）、回调→DOM 事件
+  // （__prog 的长度）。红在哪一条腿上，上面那三个数字就指着哪一条。
+  check(relayThrows.length === 0, '中继回调没有抛异常（抛了会被 preload 咽掉，只能这样数）',
+    relayThrows.slice(0, 2).join('；'))
   check(known.every((e) => /^chats-export-/.test(String(e.jobId))), '事件都挂在本轮导出的 jobId 上',
     [...new Set(known.map((e) => String(e.jobId)))].join(','))
   check(known.some((e) => Number(e.total ?? 0) > 0 && Number(e.done ?? 0) > 0 && Number(e.done ?? 0) <= Number(e.total ?? 0)),
@@ -299,6 +345,12 @@ try {
     check(produced.length === 1, '被取消的导出没有新增产物（只有 ① 那一个 xlsx）', produced.join(', '))
   }
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))
+  // 页面被重新加载过一次，上面那三个数就全部失去意义（记录器随导航没了，UI 从零开始跑）。
+  // 单独一条报在这里，是为了让「事件 0」那种红能一眼分清是**中继坏了**还是**页面中途重启了**。
+  // 判的是 0 而不是 1：计数从「记录器装好」那一点起算（见上面那次 `loads = 0`）—— 首帧 load 在 CI 上
+  // 发生在监听器挂上之前（实测 CI 数到 0、本机数到 1），绝对次数没有可比基线。
+  check(loads === 0, '记录器装上之后页面没再被加载过（重载会抹掉它，把验收读成中继坏了）',
+    `额外加载 ${loads} 次`)
 } catch (e) {
   console.error('测试执行异常:', e)
   results.push({ ok: false, label: '执行期异常', detail: String(e).slice(0, 300) })
