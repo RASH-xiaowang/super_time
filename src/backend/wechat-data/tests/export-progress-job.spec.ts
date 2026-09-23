@@ -231,7 +231,10 @@ describe('H8：单会话导出不独占后端事件循环', () => {
     await new Promise((r) => { setTimeout(r, 300) })
     clearInterval(idleTimer)
     const idleMax = idle.length ? Math.max(...idle) : 0
-    const allowed = Math.max(400, idleMax * 6)
+    // 这个上限要挡的是「一次独占整个收集段」（退回同步写法实测 2573ms），不是「这台机器今天多快」。
+    // 原先是 max(400, idleMax * 6)：2026-09-23 在 CI 共享 runner 上量到 409ms 就红过，
+    // 而同一个提交的另一个作业全绿 —— 那是在量快慢，不是在量让没让。
+    const allowed = Math.max(1200, idleMax * 20)
     // ② 用进度事件把「收集段」的终点划出来（payload 形如 {jobId, phase, done, total}）
     let collectEndsAt = Number.POSITIVE_INFINITY
     onEvent = (p: Record<string, unknown>): void => {
@@ -251,7 +254,11 @@ describe('H8：单会话导出不独占后端事件循环', () => {
     }
     const max = collectGaps.length ? Math.max(...collectGaps) : 0
     expect(r.count, '夹具没按预期收满').toBe(40_000)
-    expect(collectGaps.length, '收集段一次心跳都没抓到（探针或 phase 口径失效，用例前提不成立）').toBeGreaterThan(3)
+    // 主判据是**心跳条数**：每 8 页让出一次，收集段里探针就能按 20ms 的节奏跑到；
+    // 退回同步写法时那是一段独占，一颗心跳都挤不进来（实测 2573ms 独占）。
+    // 条数比时长鲁棒：机器慢只会让每颗心跳迟到，不会让它们消失。
+    const collectMs = Number.isFinite(collectEndsAt) ? collectEndsAt - t0 : 0
+    expect(collectGaps.length, `收集段 ${Math.round(collectMs)}ms 里只抓到 ${String(collectGaps.length)} 颗心跳（每 8 页让出一次的话约有 ${Math.round(collectMs / 20)} 颗）`).toBeGreaterThanOrEqual(Math.max(4, Math.floor(collectMs / 200)))
     expect(idleMax, '空闲基线一次都没跑到（校准前提不成立）').toBeGreaterThan(0)
     // 断言本体：收集段每 8 页让出一次。退回「一口气翻 400 页」的同步写法时，
     // 收集段就是一次独占（真机 4 万条实测 2573ms），必然超过这里的允许值。
