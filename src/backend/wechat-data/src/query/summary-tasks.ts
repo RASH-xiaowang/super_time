@@ -6,6 +6,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { SummaryTaskInput } from '../types.ts'
 
 /** Daily-summary DB path: sibling of the decrypted dir. */
 function dbPath(decryptedDir: string): string {
@@ -133,11 +134,17 @@ export function listSummaryTasks(decryptedDir: string): SummaryTaskSnapshotRead 
 
 /**
  * Save a task (insert when id=0, else update).
+ *
+ * 入参形状统一在 API 面定义一份（`../types.ts` 的 `SummaryTaskInput`）：本模块那份 `SummaryTask`
+ * 与 API 面那份是同形的历史重复（写侧/读侧各一份），但**入参**只有一份定义 ——
+ * 否则「剔掉运行状态三列」这件事就得在 4 处各自记得。
+ * 运行状态三列（`lastRunAt` / `lastStatus` / `lastError`）**不在入参里**，
+ * 要改它们用 {@link updateSummaryTaskRunState}。
  * @param decryptedDir - decrypted data root.
  * @param task - task payload (id 0 inserts, otherwise updates).
  * @returns ok plus the saved task id, or an error description.
  */
-export function saveSummaryTask(decryptedDir: string, task: Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }): { ok: boolean; id?: number; error?: string } {
+export function saveSummaryTask(decryptedDir: string, task: SummaryTaskInput): { ok: boolean; id?: number; error?: string } {
   try {
     const db = openStore(decryptedDir)
     const ts = Date.now()

@@ -120,6 +120,19 @@ export interface SummaryTask {
     createdAt: number;
     updatedAt: number;
 }
+/**
+ * `saveSummaryTask` 的入参形状 —— **全项目唯一一份**（此前在 4 处各写一遍
+ * `Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }`）。
+ *
+ * 剔掉 `lastRunAt` / `lastStatus` / `lastError` 不只是「少写三个自动列」：这三列是**运行状态**，
+ * 只有 `updateSummaryTaskRunState` 会写，保存任务的 INSERT/UPDATE 根本不包含它们。
+ * 留在入参类型里等于要求调用方交出三个会被静默丢掉的字段 —— `DailySummary.tsx` 就照着类型写了
+ * `lastStatus: ''`、`lastError: ''`，读起来像「保存会清掉上次运行状态」。今天它不成立，
+ * 而一旦有人「补全」那条 INSERT，界面上编辑一次任务就会抹掉它的运行记录。所以从类型上就不可传。
+ */
+export type SummaryTaskInput = Omit<SummaryTask, 'id' | 'createdAt' | 'updatedAt' | 'lastRunAt' | 'lastStatus' | 'lastError'> & {
+    id?: number;
+};
 /** Task list snapshot. */
 export interface SummaryTaskSnapshot {
     items: SummaryTask[];
