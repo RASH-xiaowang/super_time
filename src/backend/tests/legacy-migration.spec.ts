@@ -15,7 +15,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { configure, sanitizeMigratedConfig } from '../wechat-paths.js'
 
 const scratch: string[] = []

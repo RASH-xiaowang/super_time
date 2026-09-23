@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { preserveIfUnparseable as hostPreserve, writeFileAtomic as hostWrite } from '../wechat-paths.js'
 import { getConfig, preserveIfUnparseable as tsPreserve, saveConfig, writeFileAtomic as tsWrite } from '../wechat-data/src/query/config.ts'
 
