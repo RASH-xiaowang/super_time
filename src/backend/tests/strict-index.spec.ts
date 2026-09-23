@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import { at, grp } from './helpers/strict-index.ts'
 
+/** @source-ref src/backend/tests/helpers/strict-index.ts:31-36 */
 describe('at()', () => {
   it('范围内返回元素本身', () => {
     expect(at(['a', 'b'], 1)).toBe('b')
@@ -31,6 +32,7 @@ describe('at()', () => {
   })
 })
 
+/** @source-ref src/backend/tests/helpers/strict-index.ts:46-52 */
 describe('grp()', () => {
   it('取到捕获组', () => {
     const m = /a(b)c/.exec('abc')

@@ -25,6 +25,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
 import { readPrivacySettings, writePrivacySettings } from '../src/query/privacy-audit.ts'
 import { alreadyLinked, rankLinkCandidates, SUGGEST_POOL_MAX } from '../src/query/kb/suggest.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 let root = ''
 let decrypted = ''
@@ -37,7 +38,7 @@ describe('① 排序纯函数：候选从哪来不管，只管排序与边界', 
       stub.calls.push(texts)
       return texts.map(t => {
         const v = new Array<number>(dim).fill(0)
-        for (const ch of t) v[(ch.codePointAt(0) ?? 0) % dim] += 1
+        for (const ch of t) { const k = (ch.codePointAt(0) ?? 0) % dim; v[k] = (v[k] ?? 0) + 1 }
         return v
       })
     } }
@@ -59,8 +60,8 @@ describe('① 排序纯函数：候选从哪来不管，只管排序与边界', 
       { label: '交付节奏', kind: 'note' },
     ], e.fn, { topK: 2 })
     expect(r.ranked.length).toBeLessThanOrEqual(2)
-    expect(r.ranked[0].label).toBe('项目组')
-    expect(r.ranked[0].score).toBeGreaterThanOrEqual(r.ranked[r.ranked.length - 1].score)
+    expect(at(r.ranked, 0, 'ranked').label).toBe('项目组')
+    expect(at(r.ranked, 0, 'ranked').score).toBeGreaterThanOrEqual(at(r.ranked, r.ranked.length - 1, 'ranked').score)
     // 与正文毫不相干的那个不该混进来（阈值存在的意义）
     expect(r.ranked.map(x => x.label)).not.toContain('量子色动力学')
   })
@@ -150,7 +151,7 @@ function fakeCtx(): Context {
       s.embedCalls.push(...texts)
       return texts.map(t => {
         const v = new Array<number>(24).fill(0)
-        for (const ch of t) v[(ch.codePointAt(0) ?? 0) % 24] += 1
+        for (const ch of t) { const k = (ch.codePointAt(0) ?? 0) % 24; v[k] = (v[k] ?? 0) + 1 }
         return v
       })
     },
@@ -255,7 +256,7 @@ describe('② extractKbEntities：出网意愿与进度', () => {
     expect(r.ok, '部分成功应当算成功').toBe(true)
     expect(r.files).toBe(2)
     expect(r.failed).toHaveLength(1)
-    expect(r.failed[0].error).toContain('超时')
+    expect(at(r.failed, 0, 'failed').error).toContain('超时')
     expect(r.saved).toBeGreaterThan(0)
   })
 })

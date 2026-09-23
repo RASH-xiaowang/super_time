@@ -365,6 +365,7 @@ describe('N15：到期判定', () => {
   })
 })
 
+/** @source-ref src/backend/wechat-data/src/query/summary-tasks.ts:147-164 */
 describe('保存任务不改运行状态（`SummaryTaskInput` 剔掉那三列的理由）', () => {
   it('跑成功过的任务被编辑保存之后，last_run_at / last_status 仍然在原处', () => {
     writeMessages(GROUPS)
