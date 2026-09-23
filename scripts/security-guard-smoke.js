@@ -80,7 +80,10 @@ const done = new Promise((resolve) => {
   child.on('exit', () => resolve());
   setTimeout(() => {
     try { child.kill(); } catch { /* 已退出 */ }
-  }, 60_000);
+    // 90s：探针内部有一个 45s 的截止时间（第一次 executeJavaScript 会排在后端 init 后面，
+    // CI 上实测 4s settle 不了），再加上启动与退出。原来 60s 会让「重试到成功」这条路
+    // 反而表现为「什么都没打出来」—— 那正是探针设计要避免的失效形态。
+  }, 90_000);
 });
 
 done.then(() => {
@@ -95,6 +98,8 @@ done.then(() => {
   check(Boolean(probe), '探针产出了结果行', probeLine ? probeLine.trim().slice(0, 140) : '未找到');
   if (probe) {
     // ① 沙箱是否真的生效（行为事实：渲染层拿不到 Node 原语）
+    // 探针侧对「超时」做了有界重试（见 main.js 那段注释与 N35）：一次 settle 不了多半是首跑
+    // 排在后端 init 后面，属于**没观测到**；重试到上限仍拿不到样本，下面这条就照旧红。
     check(probe.sandbox && probe.sandbox.require === 'undefined',
       'sandbox 生效：渲染层 typeof require === undefined', JSON.stringify(probe.sandbox));
     check(probe.sandbox && probe.sandbox.process === 'undefined',
