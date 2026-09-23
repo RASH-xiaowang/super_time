@@ -10,7 +10,7 @@ import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts, apiSaveFi
 import { useWechatDataUpdated } from './hooks.tsx'
 import { cacheBounded } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
-import { cspSafeSrc } from '../utils/url.ts'
+import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Drawer, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
@@ -390,16 +390,17 @@ function ContactAvatar({ c, size }: { c: ContactRow; size: number }): React.JSX.
   useEffect(() => {
     let cancelled = false
     if (!key) return
-    // 快照里的 avatarUrl 只有**被 CSP 放行**时才能直接当 src（实测 1,994 个里 400 个是 http，
-    // 直接用会产生 CSP 违规）。为空的（http/空）**不能就此返回** —— 掉到下一行走后端解析，
-    // 那里会先给本地离线头像（head_image.db），其次才是 https 远端 URL。
-    const safe = cspSafeSrc(c.avatarUrl)
-    if (safe) { setSrc(safe); return }
+    // 快照里的 avatarUrl 只有**本机地址**才能直接当 src：远程地址不许由渲染层自己去要（M23 ——
+    // 那两个出网开关管不到 `<img>` 自己发的请求）。实测 1,994 个联系人里 1,594 个是 https、
+    // 400 个是 http，所以这里命中不了时**继续往下走** `apiGetAvatar`，那一层会把远程地址
+    // 交给后端代理（本机离线头像优先，其次代理远端图；都拿不到才算没有头像）。
+    const local = localImageSrc(c.avatarUrl)
+    if (local) { setSrc(local); return }
     const cached = avatarCache.get(key)
     if (cached !== undefined) { setSrc(cached); return }
     apiGetAvatar({ username: key })
       .then((r) => {
-        const v = r.kind === 'data' ? (r.data ?? null) : r.kind === 'url' ? (r.url ?? null) : null
+        const v = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, v, AVATAR_CACHE_MAX)
         if (!cancelled) setSrc(v)
       })

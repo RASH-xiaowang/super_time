@@ -8,7 +8,7 @@
 import { apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiOpenPath, apiTranscribeVoiceMessage } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
 import { clickableKey, useDialogFocus } from '../ui/kit.tsx'
-import { cspSafeSrc } from '../utils/url.ts'
+import { RemoteImg } from './remote-img.tsx'
 import { CardFoot } from './chats-cards.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
 import css from './chats.module.css'
@@ -245,16 +245,15 @@ export function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
   const nick = rich?.nickname || rich?.title || m.displayText || '联系人'
   const uname = rich?.username || ''
   const alias = typeof rich?.alias === 'string' ? rich.alias : ''
-  const avatar = cspSafeSrc(typeof rich?.avatar === 'string' ? rich.avatar : '')
-  const [broken, setBroken] = useState(false)
+  // 名片消息里的头像是消息 XML 带来的**原始地址**：不许由渲染层自己去要（M23），
+  // 交给后端代理，取不到就退回首字母（与「本机没有这张头像」同一形状）。
+  const avatar = typeof rich?.avatar === 'string' ? rich.avatar : ''
   const initial = (nick || uname || '?').slice(0, 1).toUpperCase()
   const isEnterprise = m.type === 66 || uname.endsWith('@openim')
   return (
     <div className={css.msgContactCard}>
       <span className={css.msgContactAvatar}>
-        {avatar && !broken
-          ? <img src={avatar} alt="" loading="lazy" onError={() => { setBroken(true) }} />
-          : initial}
+        <RemoteImg src={avatar} alt="" loading="lazy" pending={initial} failed={initial} />
       </span>
       <span className={css.msgContactBody}>
         <span className={css.msgContactNick} title={nick}>{nick}</span>

@@ -19,7 +19,7 @@ import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
 import { cacheBounded, capRecord } from '../utils/misc.ts'
-import { cspSafeSrc } from '../utils/url.ts'
+import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 import { ARTICLE_COVER_CACHE_MAX, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
@@ -538,7 +538,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   // Save the currently displayed image (data URL → download).
   const saveCurrentImage = (): void => {
-    const src = (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb)
+    const src = (curImg && snsImgs[imgKey(curImg)]) || proxyableSrc(curImg?.url, curImg?.thumb)
     if (!src) return
     let ext = 'jpg'
     const dataMatch = src.match(/^data:image\/(\w+)[;,]/)
@@ -564,7 +564,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   // Copy the currently displayed image's source (CDN url preferred, else data URL).
   const copyCurrentLink = (): void => {
-    const src = cspSafeSrc(curImg?.url, curImg?.thumb) || (curImg && snsImgs[imgKey(curImg)]) || ''
+    const src = proxyableSrc(curImg?.url, curImg?.thumb) || (curImg && snsImgs[imgKey(curImg)]) || ''
     if (!src) return
     const clip = (navigator as { clipboard?: Clipboard }).clipboard
     if (clip && typeof clip.writeText === 'function') {

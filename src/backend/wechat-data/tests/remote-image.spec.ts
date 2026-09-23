@@ -77,11 +77,14 @@ function cachedFile(url: string, fmt = 'png'): string {
 
 describe('cdn-hosts：主机白名单的判据', () => {
   it('微信系主机放行；前缀伪装与站外一律拒绝', () => {
+    // `qlogo.cn` 是头像那一批地址的主机（M23 第四刀加入，见 cdn-hosts.ts 的注释）
     for (const ok of ['https://mmbiz.qpic.cn/a', 'https://p.qpic.cn/x', 'https://wx.qq.com/y',
-      'https://mmweb.wechat.com/z', 'https://weixin.qq.com/w', 'https://www.qq.com/v']) {
+      'https://mmweb.wechat.com/z', 'https://weixin.qq.com/w', 'https://www.qq.com/v',
+      'https://wx.qlogo.cn/mmhead/x', 'https://thirdwx.qlogo.cn/mmhead/y', 'https://qlogo.cn/z']) {
       expect(wechatCdnHostAllowed(ok), ok).toBe(true)
     }
     for (const bad of ['https://evilqq.com/a', 'https://notqpic.cn/x', 'https://qq.com.evil.io/y',
+      'https://notqlogo.cn/x', 'https://qlogo.cn.evil.io/y',
       'https://example.com/z', 'not a url', 'https:///x', '']) {
       expect(wechatCdnHostAllowed(bad), bad).toBe(false)
     }

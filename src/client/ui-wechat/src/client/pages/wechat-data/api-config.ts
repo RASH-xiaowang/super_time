@@ -117,14 +117,37 @@ import {
   writeRenderCache,
 } from './cache.ts'
 import { remote, unwrap } from './api-core.ts'
+import { apiGetRemoteImageUrl } from './api-media.ts'
+
+/** 本机地址（能直接画）；与 `panels/remote-img.tsx` 的 `localImageSrc` 同一判据。 */
+const LOCAL_DRAWABLE = /^(data:|blob:|file:)/i
+
+/**
+ * 把一个「可能是远程」的头像地址换成能画进 `<img>` 的地址（M23）。
+ * @param url - 后端回的本机 data URL 或远端头像地址。
+ * @returns 可画的地址；远程地址取不到（开关关掉、主机不在白名单、CDN 404）回空串。
+ */
+async function avatarDrawable(url: string | undefined): Promise<string> {
+  const u = String(url ?? '').trim()
+  if (u === '') return ''
+  if (LOCAL_DRAWABLE.test(u)) return u
+  return apiGetRemoteImageUrl(u)
+}
 
 /**
  * Fetch the avatar for a username.
+ *
+ * 后端本机没有这张头像时会回一个**远端地址**，而渲染层不许自己去取（M23）：那既不读
+ * 「自动获取原图（CDN）」与「禁止出网」两个开关，也不进操作记录。这里就地换成代理拿回的
+ * data URL，取不到就如实回「没有头像」。
  * @param options - Query options: username.
- * @returns AvatarResult.
+ * @returns AvatarResult（`kind: 'url'` 在这一层就被收敛成 `'data'` 或 `'none'`）。
  */
 export async function apiGetAvatar(options: { username: string; nickname?: string }): Promise<AvatarResult> {
-  return unwrap(await remote().getAvatar(options))
+  const r = unwrap(await remote().getAvatar(options))
+  if (r.kind !== 'url') return r
+  const drawable = await avatarDrawable(r.url)
+  return drawable === '' ? { kind: 'none' } : { kind: 'data', data: drawable }
 }
 /**
  * 批量读取本地头像(head_image.db,单次请求,纯本地)。
@@ -132,7 +155,19 @@ export async function apiGetAvatar(options: { username: string; nickname?: strin
  * @returns username → data URL。
  */
 export async function apiGetAvatarsLocal(options: { usernames: string[] }): Promise<Record<string, string>> {
-  return unwrap(await remote().getAvatarsLocal(options))
+  const map = unwrap(await remote().getAvatarsLocal(options))
+  // 「允许出网」时后端会把远端头像地址一起放进来 —— 那些地址同样不许渲染层自己去取（M23）。
+  // 逐条走代理即可：`apiGetRemoteImageUrl` 内部会攒批（一屏合成一次 RPC）并按 URL 回填。
+  // 取不到的**保留键、值留空串**，不删键：三个调用点都是「按用户名取值再判空」
+  // （`map[u] ?? null` / `map[username] ?? ''` / `Object.entries(map)` 过滤），
+  // 删键不省任何东西，却让「这批人问过了没有」在每个调用点都要重新推理一遍。
+  const entries = Object.entries(map)
+  const remoteKeys = entries.filter(([, v]) => v !== '' && !LOCAL_DRAWABLE.test(v)).map(([k]) => k)
+  if (remoteKeys.length === 0) return map
+  const settled = await Promise.all(remoteKeys.map((k) => avatarDrawable(map[k])))
+  const out: Record<string, string> = {}
+  remoteKeys.forEach((k, i) => { out[k] = settled[i] ?? '' })
+  return { ...map, ...out }
 }
 /**
  * Fetch the full WeChat config (including keys-related settings).

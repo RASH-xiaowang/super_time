@@ -12,7 +12,7 @@ import { createPortal } from 'react-dom'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
 import { fmtCommentTime, imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
-import { cspSafeSrc } from '../utils/url.ts'
+import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -181,7 +181,7 @@ export function MomentsImageViewer({
             <div className={css.lightboxHeadActions}>
               <button type="button" className={css.btn} onClick={copyCurrentLink} disabled={!((curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || curImg?.thumb)} title="复制链接">复制</button>
               <button type="button" className={css.btn} onClick={saveCurrentImage} disabled={!((curImg && snsImgs[imgKey(curImg)]) || curImg?.url || curImg?.thumb)} title="保存到本地">保存</button>
-              <button type="button" className={css.btn} data-on={viewOriginal || undefined} onClick={() => { setViewOriginal(v => !v) }} disabled={!cspSafeSrc(curImg?.url)} title={viewOriginal ? '当前为原始链接，点按回离线解码图' : '切换为原始链接'}>原图</button>
+              <button type="button" className={css.btn} data-on={viewOriginal || undefined} onClick={() => { setViewOriginal(v => !v) }} disabled={!proxyableSrc(curImg?.url)} title={viewOriginal ? '当前为原始链接，点按回离线解码图' : '切换为原始链接'}>原图</button>
               <button type="button" className={css.btn} onClick={() => { setViewRotate(r => (r + 90) % 360) }} title="旋转90°">↻</button>
               <button type="button" className={css.btn} onClick={() => { setViewZoom(1); setViewPan({ x: 0, y: 0 }) }} disabled={viewZoom === 1} title="重置缩放">1:1</button>
               <button type="button" className={css.btn} onClick={() => { setViewer(null) }} aria-label="关闭">×</button>
@@ -224,7 +224,7 @@ export function MomentsImageViewer({
             {/* 「原图」开关决定优先要哪一个地址；两个都可能是 CDN 地址，那就交给后端代理（M23）。
                 取不到才说「加载失败」—— 在这一步之前谁也不知道是网络问题还是本机没有。 */}
             <RemoteImg
-              src={viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')}
+              src={viewOriginal ? (proxyableSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || proxyableSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || proxyableSrc(curImg?.url, curImg?.thumb) || '')}
               alt=""
               draggable={false}
               className={css.lightboxImg}
@@ -239,7 +239,7 @@ export function MomentsImageViewer({
           {viewer.images.length > 1 && (
             <div className={css.lightboxThumbs}>
               {viewer.images.map((im, i) => {
-                const t = (snsImgs[imgKey(im)] || cspSafeSrc(im.thumb, im.url))
+                const t = (snsImgs[imgKey(im)] || proxyableSrc(im.thumb, im.url))
                 return (
                   <RemoteImg
                     key={i}
@@ -306,7 +306,7 @@ export function MomentsDetail({
                   return (
                     <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: detail.m.author }) })}>
                       <RemoteImg
-                        src={dataSrc || cspSafeSrc(im.thumb, im.url)}
+                        src={dataSrc || proxyableSrc(im.thumb, im.url)}
                         alt=""
                         loading="lazy"
                         className={css.img}
@@ -322,7 +322,7 @@ export function MomentsDetail({
               <div className={css.videos}>
                 {detail.m.videos.map((v, vi) => {
                   const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
-                  const vCover = (vk ? snsImgs[vk] : undefined) || cspSafeSrc(v.thumb)
+                  const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
                   const src = vk ? videoSrcs[vk] : undefined
                   const playing = !!src
                   const meta = vk ? videoMeta[vk] : undefined
@@ -402,8 +402,8 @@ export function MomentsDetail({
                       {c.to_username && c.to_username !== detail.m.username && <span className={css.commentReply}>回复 {c.to_nickname || c.to_username}{target ? '：' : ''}</span>}
                       {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
                       <span className={css.commentText}>{c.content || ''}</span>
-                      {img && (cdata || cspSafeSrc(img.thumb, img.url)) && (
-                        <RemoteImg key={'img' + String(ci)} src={cdata || cspSafeSrc(img.thumb, img.url)} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
+                      {img && (cdata || proxyableSrc(img.thumb, img.url)) && (
+                        <RemoteImg key={'img' + String(ci)} src={cdata || proxyableSrc(img.thumb, img.url)} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
                       )}
                       {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
                     </div>

@@ -81,7 +81,7 @@ describe('批量头像的三级回退', () => {
     })
   })
 
-  it('http 远端 URL 不返回 —— CSP 的 img-src 只放行 https，返回了也显示不出来', async () => {
+  it('http 远端 URL 不返回 —— 头像的远程地址现在由后端图片代理代取，而它只取 https', async () => {
     await withTempWorkspace('avatar-local', (ws) => {
       seedContact(ws, [{ username: 'plain_http', small: 'http://wx.qlogo.cn/mmhead/ddd/0' }])
       const out = resolveAvatarsLocal(ws.dir, ['plain_http'], { allowRemote: true })

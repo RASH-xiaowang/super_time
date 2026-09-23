@@ -9,7 +9,7 @@
  */
 import kitCss from '../ui/kit.module.css'
 import { DateRangeField, Dialog, ProgressBar, SearchInput, Segmented } from '../ui/kit.tsx'
-import { cspSafeSrc } from '../utils/url.ts'
+import { RemoteImg } from './remote-img.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
 import { ImageViewer } from './chats-media.tsx'
@@ -725,19 +725,16 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 const nested = rt === 'chatHistory'
                 const link = r.link || r.url || ''
                 const nestedCount = (r.nested ?? []).length
-                // head 来自聊天记录卡片 XML 的 <sourceheadurl>，是**未校验的原始地址**。
-                // 实测 360 条内层记录里 193 条是 http，直接当 src 会被 CSP 拦（并写下违规日志）。
-                // 过滤后为空则回退到首字母头像（下面的分支本来就是这么设计的）。
-                const head = cspSafeSrc(r.head)
+                // head 来自聊天记录卡片 XML 的 <sourceheadurl>，是**未校验的原始地址**
+                // （实测 360 条内层记录里 193 条是 http）。渲染层不许自己去要它 —— 交给
+                // 后端代理（M23）：主机白名单 + 两个出网开关 + 操作记录 + 本机缓存都才成立。
+                // 取不到（含 http 地址）就回退到首字母，与「本机没有这张头像」同一形状。
+                const headFallback = <span>{(r.name || '?').slice(0, 1)}</span>
                 return (
                   <div key={idx} className={css.chatlogRow}>
                     <div className={css.chatlogAvatar}>
-                      {head ? (
-                        <img src={head} alt="" referrerPolicy="no-referrer" loading="lazy"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                      ) : (
-                        <span>{(r.name || '?').slice(0, 1)}</span>
-                      )}
+                      <RemoteImg src={r.head || ''} alt="" loading="lazy"
+                        pending={headFallback} failed={headFallback} />
                     </div>
                     <div className={css.chatlogMain}>
                       <div className={css.chatlogTop}>

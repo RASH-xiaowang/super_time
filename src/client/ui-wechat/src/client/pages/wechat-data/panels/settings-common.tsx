@@ -47,7 +47,7 @@ export function AccountAvatar({ wxid }: { wxid: string }): React.JSX.Element {
     if (cached !== undefined) { setSrc(cached); return }
     apiGetAvatar({ username: wxid })
       .then((r) => {
-        const value = r.kind === 'data' ? (r.data ?? null) : r.kind === 'url' ? (r.url ?? null) : null
+        const value = r.kind === 'data' ? (r.data ?? null) : null
         cacheAccountAvatar(wxid, value)
         if (!cancelled) setSrc(value)
       })

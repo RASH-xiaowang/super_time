@@ -5,7 +5,7 @@
  * 便于直接浏览而不需要悬停；列表按好友排列、可滚动。
  */
 import type { RegionFriend } from '@deepseek-ai/dsh-wechat-data/types'
-import { cspSafeSrc } from '../utils/url.ts'
+import { localImageSrc } from './remote-img.tsx'
 import css from './world-map.module.css'
 
 /** Options for the avatar rail component. */
@@ -36,9 +36,10 @@ export function FriendAvatarRail({ side, friends, avatars, mapId }: FriendAvatar
       aria-owns={mapId}
     >
       {friends.map((f) => {
-        // `avatars` 是本批本地解码结果（data URL）；`f.avatarUrl` 是快照里的**原始地址**，
-        // 实测 1,994 个联系人里 400 个是 http，直接当 src 会被 CSP 拦并写入违规日志。
-        const src = cspSafeSrc(avatars[f.username], f.avatarUrl)
+        // `avatars` 是 api 层交回来的**可画地址**（本机离线头像，或后端代理取回的 data URL，
+        // 拿不到的就是空串）。快照里的 `f.avatarUrl` 是原始远程地址，**不再直接用**（M23：
+        // 渲染层自己向 CDN 发图片请求的话，两个出网开关都管不到）。
+        const src = localImageSrc(avatars[f.username])
         const name = f.displayName || f.remark || f.nickName || f.username
         return (
           <div key={f.username} className={css.avatarItem} role="listitem" title={`${name}\n${f.username}`}>
