@@ -34,8 +34,15 @@ import { buildQueryPlan } from '../src/query/retrieval/rewrite.ts'
 /** 夹具目录（真文件，随仓库提交）。 */
 const FIXTURES_DIR = fileURLToPath(new URL('./fixtures/kb-eval/', import.meta.url))
 
-/** 非 UTF-8 夹具的解码口径（与 kb-parse 的探测结果一致）。 */
-const ENCODINGS: Record<string, BufferEncoding> = { '押金说明-棠樾.txt': 'gb18030' }
+/**
+ * 非 UTF-8 夹具的解码口径（与 kb-parse 的探测结果一致）。
+ *
+ * 类型写 `string` 而不是 `BufferEncoding`：这张表喂的是 `TextDecoder`（见下面的 decode夹具），
+ * 而 `BufferEncoding` 是 Node **字符串编码**那一个小集合，`gb18030` 不在里头 ——
+ * 用 `BufferEncoding` 标注等于一边说「走 TextDecoder」、一边用 TextDecoder 不接受的类型域，
+ * 编译器会直接把 gb18030 判成类型错误（这正是 N32 接上类型检查以后报出来的）。
+ */
+const ENCODINGS: Record<string, string> = { '押金说明-棠樾.txt': 'gb18030' }
 
 /** 另一个知识库（隔离断言的反向一半用）。 */
 const KB_B = 2

@@ -24,6 +24,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
 import { vectorDbPath, vectorIndexStatus } from '../src/query/retrieval/embedding.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 interface Status {
   exists: boolean
@@ -93,7 +94,7 @@ function timeAsk(fn: (dec: string) => Status, dec: string, runs: number): { medi
     all.push(Number(process.hrtime.bigint()) / 1e6 - t0)
   }
   const sorted = [...all].sort((a, b) => a - b)
-  return { median: sorted[Math.floor(sorted.length / 2)], all }
+  return { median: at(sorted, Math.floor(sorted.length / 2), '样本'), all }
 }
 
 describe.skipIf(process.env.MEASURE_N14 !== '1')('N14 向量库状态查询实测', () => {
@@ -125,7 +126,7 @@ describe.skipIf(process.env.MEASURE_N14 !== '1')('N14 向量库状态查询实�
         }
         db.close()
         const sorted = [...all].sort((a, b) => a - b)
-        return sorted[Math.floor(sorted.length / 2)]
+        return at(sorted, Math.floor(sorted.length / 2), 'COUNT 样本')
       })()
 
       const oldAsk = timeAsk(legacyStatus, dec, RUNS)

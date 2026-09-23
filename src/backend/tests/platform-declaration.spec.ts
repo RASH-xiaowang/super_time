@@ -27,6 +27,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
@@ -189,7 +190,7 @@ describe('M18：平台声明与可构建目标一致', () => {
 
     for (const file of workflowFiles) {
       const text = readFileSync(join(workflowDir, file), 'utf8')
-      const runners = [...text.matchAll(/^\s*runs-on:\s*(.+)$/gm)].map((m) => m[1].trim().replace(/^['"]|['"]$/g, ''))
+      const runners = [...text.matchAll(/^\s*runs-on:\s*(.+)$/gm)].map((m) => grp(m, 1, 'runs-on').trim().replace(/^['"]|['"]$/g, ''))
       expect(runners.length, `${file} 里没有 runs-on`).toBeGreaterThan(0)
       if (!usesToolchain(text)) continue
       for (const runner of runners) {

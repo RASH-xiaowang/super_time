@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { DatabaseSync } from 'node:sqlite'
 import { GW_DIR, gatewayClassSource, gatewaySource } from '../../tests/gateway-source.ts'
+import { at, grp } from '../../tests/helpers/strict-index.ts'
 import { WechatDataGateway } from '../src/gateway.ts'
 
 const USER = 'wxid_m3job'
@@ -103,7 +104,7 @@ describe('M3：单会话导出的进度与取消', () => {
     expect(mine.length, '一个进度事件都没推 —— jobId 又断了').toBeGreaterThanOrEqual(PAGES)
     const dones = mine.map((e) => Number(e.done))
     expect(dones[0], '第一次上报就该是已收集的一页，而不是 0').toBeGreaterThan(0)
-    for (let i = 1; i < dones.length; i += 1) expect(dones[i]).toBeGreaterThanOrEqual(dones[i - 1])
+    for (let i = 1; i < dones.length; i += 1) expect(dones[i]).toBeGreaterThanOrEqual(at(dones, i - 1, 'dones'))
     expect(dones[dones.length - 1]).toBe(TOTAL)
     expect(mine.every((e) => typeof e.phase === 'string' && e.phase !== ''), '每次上报都要带阶段名').toBe(true)
 
@@ -158,7 +159,7 @@ describe('M3：单会话导出的进度与取消', () => {
     const senders = new Set<string>()
     for (const block of client.split(/(?=export async function )/)) {
       if (!/\bjobId\?\s*:\s*string/.test(block)) continue
-      for (const m of block.matchAll(/remote\(\)\.([A-Za-z0-9_]+)\(/g)) senders.add(m[1])
+      for (const m of block.matchAll(/remote\(\)\.([A-Za-z0-9_]+)\(/g)) senders.add(grp(m, 1, 'jobId 接口名'))
     }
     expect([...senders].sort(), '客户端一个 jobId 接口都没抓到 ⇒ 抓取口径失效').toEqual(
       ['createEncryptedBackup', 'exportAllSessions', 'exportMoments', 'exportSessionMessages'])

@@ -39,6 +39,7 @@ import {
   resetRecoveryGuardForTest,
   setKbFileRagFlag,
 } from '../src/query/kb-files.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 let root = ''
 /** 数据根（库与 blob 都落在它下面）。 */
@@ -729,7 +730,7 @@ describe('读正文 · 作用域与分页', () => {
     const second = listKbFileChunks(decrypted, 1, (r.file?.id ?? 0), { limit: 1, offset: 1 })
     expect(second.items).toHaveLength(1)
     // 两页不能重叠，否则界面上的「继续加载」会把同一段贴两遍
-    expect(second.items[0].ordinal).not.toBe(first.items[0].ordinal)
+    expect(at(second.items, 0, '第二页').ordinal).not.toBe(at(first.items, 0, '第一页').ordinal)
   })
 
   it('limit 被夹在上限内：一次调用不可能把整份大文件拉进内存', () => {

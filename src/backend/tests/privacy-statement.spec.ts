@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { gatewaySource } from './gateway-source.ts'
+import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const doc = readFileSync(join(ROOT, 'docs', 'PRIVACY.md'), 'utf8')
@@ -37,7 +38,7 @@ function stripComments(src: string): string {
 /** 从一段（或几段）源码里抽全部 `host`（`https://x/y` → `x`）。 */
 function hostsIn(src: string | readonly string[]): string[] {
   const text = Array.isArray(src) ? src.join('\n') : (src as string)
-  return [...new Set([...text.matchAll(/https:\/\/([^/\s'"`)]+)/g)].map((m) => m[1]))]
+  return [...new Set([...text.matchAll(/https:\/\/([^/\s'"`)]+)/g)].map((m) => grp(m, 1, '出网地址')))]
 }
 
 describe('H14：隐私声明 ↔ 出网点', () => {

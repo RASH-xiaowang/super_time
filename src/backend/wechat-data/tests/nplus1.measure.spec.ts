@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveImageFilePath, resolveImageResourceHint } from '../src/query/media-image.ts'
 import { queryMessageByServerId } from '../src/query/messages.ts'
 import { shardCatalog } from '../src/query/meta.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 const DATA = process.env.M11_DATA_DIR
   || join(process.env.APPDATA ?? '', 'super-time-electron', 'wechat-data', 'decrypted')
@@ -33,7 +34,7 @@ function ms(fn: () => unknown, runs: number): { median: number; all: number[] } 
     all.push(Number(process.hrtime.bigint()) / 1e6 - t0)
   }
   all.sort((a, b) => a - b)
-  return { median: all[Math.floor(all.length / 2)], all }
+  return { median: at(all, Math.floor(all.length / 2), '样本'), all }
 }
 
 describe.skipIf(process.env.MEASURE_M11 !== '1')('M11 N+1 基线（真实数据）', () => {
@@ -100,7 +101,7 @@ describe.skipIf(process.env.MEASURE_M11 !== '1')('M11 N+1 基线（真实数据�
             cold.push(Number(process.hrtime.bigint()) / 1e6 - t)
           }
           cold.sort((a, b) => a - b)
-          const middle = (xs: number[]): number => xs[Math.floor(xs.length / 2)]
+          const middle = (xs: number[]): number => at(xs, Math.floor(xs.length / 2), '样本')
           console.log(`  未命中（每次换新 id，无缓存可利用）：中位 ${middle(cold).toFixed(1)}ms —— 两轮扫描，改动前的量级`)
           const hitId = String(real.s)
           const missId = '8888888888'

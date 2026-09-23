@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const SCRIPT = join(ROOT, 'scripts', 'license-smoke.js')
@@ -63,7 +64,9 @@ describe('license-smoke 不写仓库（L4）', () => {
       withTestPublicKey: <T>(pem: string, fn: () => T) => T
       PUBLIC_KEY_PATH: string
     }
-    const realPem = readFileSync(PUBLIC_KEY_PATH, 'utf8').match(/"([^"]+)"/)![1].replace(/\\n/g, '\n')
+    const pemHit = /"([^"]+)"/.exec(readFileSync(PUBLIC_KEY_PATH, 'utf8'))
+    if (!pemHit) throw new Error(`${PUBLIC_KEY_PATH} 里没有形如 "…" 的一行 —— 提取口径失效，这条用例就空转了`)
+    const realPem = grp(pemHit, 1, '公钥字面量').replace(/\\n/g, '\n')
     const fakePem = '-----BEGIN PUBLIC KEY-----\nFAKE\n-----END PUBLIC KEY-----\n'
     expect(fakePem).not.toBe(realPem)
     expect(requireCjs(PUBLIC_KEY_PATH).PUBLIC_KEY_PEM, '注入前应当是仓库里的正式公钥').toBe(realPem)

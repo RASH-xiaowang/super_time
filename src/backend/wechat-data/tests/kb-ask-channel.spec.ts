@@ -43,6 +43,7 @@ import { registerKbFile, setKbFileRagFlag } from '../src/query/kb-files.ts'
 import { getPrivacyStateSnapshot } from '../src/query/privacy-audit.ts'
 import { buildSearchIndex } from '../src/query/search.ts'
 import { WechatDataGateway } from '../src/gateway.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 let root = ''
 let decrypted = ''
@@ -539,7 +540,7 @@ describe('端到端：问答接入知识库（kbId 透传 / 依据行口径 / �
       seen.push(...texts)
       return texts.map((t) => {
         const v = new Array<number>(16).fill(0)
-        for (const ch of t) v[(ch.codePointAt(0) ?? 0) % 16] += 1
+        for (const ch of t) { const k = (ch.codePointAt(0) ?? 0) % 16; v[k] = (v[k] ?? 0) + 1 }
         return v
       })
     }

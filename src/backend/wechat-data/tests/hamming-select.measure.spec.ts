@@ -18,6 +18,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { __internals } from '../src/query/retrieval/embedding.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 interface Row { rowid: number; lo: number; hi: number; username: string }
 
@@ -56,7 +57,7 @@ function timeIt(fn: () => unknown, runs: number): { median: number; all: number[
     all.push(Number(process.hrtime.bigint()) / 1e6 - t0)
   }
   const sorted = [...all].sort((a, b) => a - b)
-  return { median: sorted[Math.floor(sorted.length / 2)], all }
+  return { median: at(sorted, Math.floor(sorted.length / 2), '样本'), all }
 }
 
 describe.skipIf(process.env.MEASURE_HAMMING !== '1')('M9 稠密粗筛实测', () => {

@@ -66,7 +66,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 /** 按文本给确定性向量（与 M10 用例一致）。 */
 function vecOf(t: string): number[] {
   const v = [0, 0, 0, 0, 0, 0, 0, 0]
-  for (let i = 0; i < t.length; i += 1) v[i % 8] += t.charCodeAt(i) % 7
+  for (let i = 0; i < t.length; i += 1) { const k = i % 8; v[k] = (v[k] ?? 0) + t.charCodeAt(i) % 7 }
   return v.every((x) => x === 0) ? [1, 0, 0, 0, 0, 0, 0, 0] : v
 }
 

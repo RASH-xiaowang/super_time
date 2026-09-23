@@ -14,15 +14,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createLlmBridge } from '../wechat-host.js'
+import { at as strictAt } from './helpers/strict-index.ts'
 
 /** 一次被捕获的请求。 */
 type Seen = { url: string; headers: Record<string, string>; body: Record<string, unknown> }
 
-/** 取第 n 次被捕获的请求；没有就直说「这条用例的前提不成立」，不拿 undefined 去读字段。 */
+/** 取第 n 次被捕获的请求；越界 = 这条用例的前提不成立（口径见 helpers/strict-index）。 */
 function at (seen: Seen[], n: number): Seen {
-  const hit = seen[n]
-  if (hit === undefined) throw new Error(`没捕到第 ${String(n + 1)} 次请求 —— 这条用例的前提不成立`)
-  return hit
+  return strictAt(seen, n, '请求')
 }
 
 /** 造一个记录请求体的假 fetch，按脚本回响应。 */

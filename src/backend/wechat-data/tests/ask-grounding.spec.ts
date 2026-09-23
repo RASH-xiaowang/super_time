@@ -19,6 +19,7 @@ import { runRetrievalPipeline } from '../src/query/retrieval/pipeline.ts'
 import { defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -70,7 +71,7 @@ describe('接地审计：金额 / 日期 / 长数字必须来自引用原文', (
     expect(auditGrounding('他的号码是 13812345678 [3]。', EVIDENCE, 3).ok).toBe(true)
     const bad = auditGrounding('他的号码是 13800000000 [3]。', EVIDENCE, 3)
     expect(bad.ok).toBe(false)
-    expect(bad.unsupported[0].kind).toBe('digits')
+    expect(at(bad.unsupported, 0, 'unsupported').kind).toBe('digits')
   })
 
   it('计数（共几笔/几条）不算编造 —— 模型可以正当数出来', () => {
