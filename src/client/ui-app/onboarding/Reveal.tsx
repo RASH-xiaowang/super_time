@@ -24,7 +24,12 @@ import css from './onboarding.module.css'
 
 export type RevealAnim = 'slide-l' | 'slide-r' | 'slide-u' | 'fade' | 'scale'
 
-const ANIM_CLASS: Record<RevealAnim, string> = {
+/**
+ * 动画类名查表。值刻意留 `string | undefined`：`css` 是 CSS Modules 的按键查表，
+ * 收紧之后取不到就是 `undefined`（改名/漏写都会这样），而唯一的使用点
+ * `[...].filter(Boolean).join(' ')` 正好容得下它 —— 在这里把类型写成 `string` 才是说谎。
+ */
+const ANIM_CLASS: Record<RevealAnim, string | undefined> = {
   'slide-l': css.animSlideL,
   'slide-r': css.animSlideR,
   'slide-u': css.animSlideU,
@@ -107,17 +112,18 @@ export function Reveal({
 /** 伪随机但稳定的动画分配（按 index 轮换，避免每次刷新跳变）。 */
 export function pickAnim(index: number, pool?: RevealAnim[]): RevealAnim {
   const list = pool ?? (['slide-l', 'slide-r', 'slide-u', 'fade', 'scale'] as RevealAnim[])
-  return list[index % list.length]
+  // 空池子时 `index % 0` 是 NaN ⇒ 取不到，回落成本组件文档里写明的默认动画
+  return list[index % list.length] ?? 'fade'
 }
 
 /** 稳定的纵向错落（仅正值，避免与上一项重叠）。 */
 export function pickOffset(index: number, span = 20): number {
   const seq = [0, 20, 8, 28, 12, 24, 4, 18, 10, 26, 6, 16]
-  return seq[index % seq.length] * (span / 20)
+  return (seq[index % seq.length] ?? 0) * (span / 20)
 }
 
 /** 稳定的水平错落（仅正值/0，配合 gap 避免压字）。 */
 export function pickShiftX(index: number, span = 16): number {
   const seq = [0, 12, 4, 18, 8, 14, 2, 16, 6, 20, 10, 8]
-  return seq[index % seq.length] * (span / 16)
+  return (seq[index % seq.length] ?? 0) * (span / 16)
 }
