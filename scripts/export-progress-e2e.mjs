@@ -74,15 +74,26 @@ function makeFixture(userData) {
   return decrypted
 }
 
-/** 读导出对话框里的进度：`{ bar: aria-valuenow | null, indeterminate, caption }`。 */
+/**
+ * 读导出对话框里的进度：`{ bar: aria-valuenow | null, indeterminate, caption }`。
+ *
+ * 一次 `evaluate` 读完整套 DOM，而不是「先 count 再 getAttribute」分两次问 —— 分两次问会在
+ * 自己中间留出一个竞态：进度行正好在那两步之间消失时，`getAttribute` 会去等一个已经不存在的
+ * 元素，30 秒后超时把整条 e2e 打死（CI 上真红过一次：`中止后进度行收掉` 那个轮询循环里）。
+ * 而「行消失了」本来就是我们要观测的**成功条件**，绝不该变成执行异常。
+ */
 async function readProgress(win) {
-  const bar = win.locator('[role="progressbar"]').first()
-  const count = await win.locator('[role="progressbar"]').count()
-  if (count === 0) return { bar: null, indeterminate: false, caption: '' }
-  const now = await bar.getAttribute('aria-valuenow')
-  const indeterminate = (await bar.getAttribute('data-indeterminate')) !== null
-  const caption = String(await bar.locator('xpath=following-sibling::*[1]').innerText().catch(() => ''))
-  return { bar: now === null ? null : Number(now), indeterminate, caption: caption.replace(/\s+/g, ' ').trim() }
+  return win.evaluate(() => {
+    const el = document.querySelector('[role="progressbar"]')
+    if (!el) return { bar: null, indeterminate: false, caption: '' }
+    const now = el.getAttribute('aria-valuenow')
+    const next = el.nextElementSibling
+    return {
+      bar: now === null ? null : Number(now),
+      indeterminate: el.hasAttribute('data-indeterminate'),
+      caption: (next?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    }
+  })
 }
 
 let app = null
