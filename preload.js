@@ -55,8 +55,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_event, payload) => {
         try {
           listener(payload);
-        } catch {
-          /* 渲染进程回调异常不传播到主进程 */
+        } catch (e) {
+          /* 渲染进程回调异常不传播到主进程 —— 但必须留一行：
+             「中继事件没进 DOM」和「回调抛了」在日志里本来长得一模一样（N33 的第三条腿）。 */
+          console.error('[relay:throw]', (payload && payload.name) || '?', (e && e.message) || String(e));
         }
       };
       ipcRenderer.on('wechat:event', handler);

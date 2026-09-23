@@ -133,11 +133,26 @@ try {
       SUPERTIME_SKIP_ONBOARDING: '1',
       SUPERTIME_TEST_MODE: '1',
       SUPERTIME_USER_DATA_DIR: userData,
+      // 让主进程把每个到达它那里的后端事件打一行 `[relay:in] <name>`（见 main.js 的 onEvent）。
+      // 这一行是 N33 的**分岔判据**：以前「渲染层 0 条事件」只能说明「没到 DOM」，分不清是
+      // 后端压根没推、还是推到了主进程却没送进渲染层。有了这一行，红的那一次自己就说清是哪条腿。
+      SUPERTIME_RELAY_LOG: '1',
       DSH_WECHAT_DATA_DIR: join(userData, 'wechat-data'),
       DSH_WECHAT_DECRYPTED_DIR: decrypted,
     },
   })
   const win = await app.firstWindow()
+  /**
+   * 主进程侧的中继到达数（N33 的分岔判据）。
+   *
+   * 数的是 `main.js` 在 `SUPERTIME_RELAY_LOG=1` 下打的 `[relay:in] wechat-export/progress` 行：
+   * 渲染层 0 条事件时，`relayIn > 0` 说明断在「主进程 → 渲染层」这条腿上，`relayIn === 0`
+   * 说明后端根本没往主进程推 —— 这两种的修法完全不同，而在此之前红日志分不出来。
+   */
+  let relayIn = 0
+  app.process().stdout.on('data', (chunk) => {
+    relayIn += (String(chunk).match(/\[relay:in\] wechat-export\/progress/g) ?? []).length
+  })
   // 故意用**矮视口**（导出对话框的内容比它高）：CI runner 就是这种尺寸，而当时「中止导出」
   // 整颗按钮在视口之外点不到 —— 那暴露的是弹窗不可滚的产品缺陷（Playwright 报
   // element is outside of the viewport）。修好之后这条仍要用矮视口跑，
@@ -146,6 +161,26 @@ try {
   win.setDefaultTimeout(30000)
   const pageErrors = []
   win.on('pageerror', (e) => { pageErrors.push(String(e.message).slice(0, 200)) })
+  /**
+   * 中继回调抛出的异常（`preload.js` 里那条 `[relay:throw]`）。
+   * 这是判别「渲染层 0 条事件」的第三条腿：事件送到了、回调却抛了 ⇒ DOM 事件不会发出，
+   * 而应用自己的轮询照跑 —— 症状与「IPC 没送到」完全一样，不打这一行就分不开。
+   */
+  const relayThrows = []
+  win.on('console', (m) => {
+    const t = String(m.text())
+    if (t.includes('[relay:throw]')) relayThrows.push(t.slice(0, 160))
+  })
+  /**
+   * 页面被加载了几次（含重新加载）。
+   *
+   * 为什么这条必须数：渲染层那个事件记录器是 `window.__prog`，**一次导航就把它抹掉**。
+   * CI 上红过的那几次正是「事件 0 + 采到的文案是启动阶段的字 + 中止按钮不出现 + 但 DOM 进度在动」
+   * —— 那个组合与「中途重新加载过一次」逐条吻合（重载以后 UI 重新开始，所以后面的采样看到的全是
+   * 启动阶段文案，而记录器已经不存在了）。没有这个计数，那种红会被读成「中继坏了」。
+   */
+  let loads = 0
+  win.on('load', () => { loads += 1 })
   await win.waitForLoadState('domcontentloaded')
   await win.waitForTimeout(2500)
   const later = win.getByRole('button', { name: '稍后再说', exact: true })
@@ -192,7 +227,16 @@ try {
   check(known.length > 0, '小导出也经中继推到渲染层（不止轮询那条兜底路）',
     // 一条都没到时把界面停在哪儿一起报出来：CI 上那种「事件 0 + 采到设置页文字」的红，
     // 光看数字分不清是桥接没通、还是窗口早就离开了聊天面板。
-    `事件 ${known.length}${known.length === 0 ? '；' + (await snapshot(win)) : ''}`)
+    `事件 ${known.length}／主进程侧到达 ${relayIn}／回调抛错 ${relayThrows.length}／页面加载 ${loads}${known.length === 0 ? '；' + (await snapshot(win)) : ''}`)
+  // 这个计数本身也要可信：渲染层收到了事件而主进程侧一条都没数到，只能是「env 没传到主进程」
+  // 或「stdout 没接上」—— 那种坏法会让下次真红时给出**反过来**的结论（把渲染层的锅甩给后端），
+  // 所以宁可现在就红。
+  check(!(known.length > 0 && relayIn === 0), '中继到达计数本身可信（渲染层有事件 ⇒ 主进程侧一定数得到）',
+    `事件 ${known.length}／主进程侧 ${relayIn}`)
+  // 三条腿到此齐了：后端→主进程（relayIn）、主进程→渲染层回调（relayThrows）、回调→DOM 事件
+  // （__prog 的长度）。红在哪一条腿上，上面那三个数字就指着哪一条。
+  check(relayThrows.length === 0, '中继回调没有抛异常（抛了会被 preload 咽掉，只能这样数）',
+    relayThrows.slice(0, 2).join('；'))
   check(known.every((e) => /^chats-export-/.test(String(e.jobId))), '事件都挂在本轮导出的 jobId 上',
     [...new Set(known.map((e) => String(e.jobId)))].join(','))
   check(known.some((e) => Number(e.total ?? 0) > 0 && Number(e.done ?? 0) > 0 && Number(e.done ?? 0) <= Number(e.total ?? 0)),
@@ -299,6 +343,10 @@ try {
     check(produced.length === 1, '被取消的导出没有新增产物（只有 ① 那一个 xlsx）', produced.join(', '))
   }
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))
+  // 页面被重新加载过一次，上面那三个数就全部失去意义（记录器随导航没了，UI 从零开始跑）。
+  // 单独一条报在这里，是为了让「事件 0」那种红能一眼分清是**中继坏了**还是**页面中途重启了**。
+  check(loads === 1, '全程页面只加载一次（中途重载会抹掉渲染层记录器，把验收读成中继坏了）',
+    `加载 ${loads} 次`)
 } catch (e) {
   console.error('测试执行异常:', e)
   results.push({ ok: false, label: '执行期异常', detail: String(e).slice(0, 300) })
