@@ -15,9 +15,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createLlmBridge } from '../wechat-host.js'
 
+/** 一次被捕获的请求。 */
+type Seen = { url: string; headers: Record<string, string>; body: Record<string, unknown> }
+
+/** 取第 n 次被捕获的请求；没有就直说「这条用例的前提不成立」，不拿 undefined 去读字段。 */
+function at (seen: Seen[], n: number): Seen {
+  const hit = seen[n]
+  if (hit === undefined) throw new Error(`没捕到第 ${String(n + 1)} 次请求 —— 这条用例的前提不成立`)
+  return hit
+}
+
 /** 造一个记录请求体的假 fetch，按脚本回响应。 */
 function captureFetch(reply: () => unknown) {
-  const seen: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = []
+  const seen: Seen[] = []
   const fn = async (url: string, init: { body?: string; headers?: Record<string, string> }) => {
     seen.push({ url, headers: init.headers ?? {}, body: JSON.parse(String(init.body ?? '{}')) })
     return {
@@ -44,9 +54,9 @@ describe('rerank 的请求拼装', () => {
     vi.stubGlobal('fetch', fn)
     const bridge = createLlmBridge({ ...BASE, rerankModel: 'my-reranker' })
     await bridge.rerank('问题', ['甲', '乙'])
-    expect(seen[0].url).toBe('https://chat.test/v1/rerank')
-    expect(seen[0].body.model).toBe('my-reranker')
-    expect(seen[0].headers.authorization).toBe('Bearer sk-chat')
+    expect(at(seen, 0).url).toBe('https://chat.test/v1/rerank')
+    expect(at(seen, 0).body.model).toBe('my-reranker')
+    expect(at(seen, 0).headers.authorization).toBe('Bearer sk-chat')
 
     const own = captureFetch(() => ({ results: [] }))
     vi.stubGlobal('fetch', own.fn)
@@ -54,8 +64,8 @@ describe('rerank 的请求拼装', () => {
       ...BASE, rerankModel: 'my-reranker', rerankApiUrl: 'https://rerank.test/v1', rerankApiKey: 'sk-rerank',
     })
     await b2.rerank('q', ['a'])
-    expect(own.seen[0].url).toBe('https://rerank.test/v1/rerank')
-    expect(own.seen[0].headers.authorization).toBe('Bearer sk-rerank')
+    expect(at(own.seen, 0).url).toBe('https://rerank.test/v1/rerank')
+    expect(at(own.seen, 0).headers.authorization).toBe('Bearer sk-rerank')
   })
 
   it('没配 rerankModel ⇒ 直接拒发，不借用 chat/embedding 的模型名', async () => {
@@ -72,9 +82,9 @@ describe('rerank 的请求拼装', () => {
     vi.stubGlobal('fetch', fn)
     const bridge = createLlmBridge({ ...BASE, rerankModel: 'r1' })
     await bridge.rerank('违约金怎么算', ['第一条', '第二条', '第三条'])
-    expect(seen[0].body.query).toBe('违约金怎么算')
-    expect(seen[0].body.documents).toEqual(['第一条', '第二条', '第三条'])
-    expect(seen[0].body.return_documents).toBe(false)
+    expect(at(seen, 0).body.query).toBe('违约金怎么算')
+    expect(at(seen, 0).body.documents).toEqual(['第一条', '第二条', '第三条'])
+    expect(at(seen, 0).body.return_documents).toBe(false)
   })
 })
 
@@ -117,7 +127,7 @@ describe('rerank 的响应对齐（错位比报错更糟）', () => {
     const bridge = createLlmBridge({ ...BASE, rerankModel: 'r1' })
     const scores = await bridge.rerank('q', ['a', 'b'])
     expect(scores).toHaveLength(2)
-    expect(scores.every(s => Number.isFinite(s))).toBe(true)
+    expect(scores.every((s: number) => Number.isFinite(s))).toBe(true)
     expect(scores).toEqual([0, 0])
   })
 
@@ -148,10 +158,10 @@ describe('rerank 的失败形状', () => {
     vi.stubGlobal('fetch', fn)
     const bridge = createLlmBridge({ ...BASE, rerankModel: 'r-global' })
     await bridge.rerank('q', ['a'])
-    expect(seen[0].body.model).toBe(bridge.rerankModelName())
+    expect(at(seen, 0).body.model).toBe(bridge.rerankModelName())
     // 调用方点名时两边都用点名的
     await bridge.rerank('q', ['a'], { model: 'r-per-lib' })
-    expect(seen[1].body.model).toBe('r-per-lib')
+    expect(at(seen, 1).body.model).toBe('r-per-lib')
     expect(bridge.rerankModelName('r-per-lib')).toBe('r-per-lib')
   })
 })
