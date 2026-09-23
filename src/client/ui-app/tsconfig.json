@@ -1,0 +1,23 @@
+{
+  "//": "N31：这是**打包入口那一层**自己的类型项目 —— Electron 壳（`ui-entry.tsx`）、启动页三站（引导 / 隐私同意 / 授权）、同意屏与授权面板都在这里。",
+  "//2": "它原先并不存在：客户端只有 `src/client/ui-wechat/tsconfig.json`，而那份的 `include: [\"src\"]` 相对的是它自己所在的目录，所以 `npm run typecheck` 从未看过 `ui-app` 的任何一行 —— 2026-09-23 用 `--listFilesOnly` 量过：那个 program 里 230 个文件，**0 个来自 ui-app**。而基座（`tsconfig.base.client.json`）里那几档严格度对它全部无效。",
+  "//3": "档位与 ui-wechat 那份**逐项对齐**（含 `noUncheckedIndexedAccess`），别让壳成为严格度的缺口。基座用的是客户端那份，不是后端 `tsconfig.base.json`。",
+  "//include": "`[\".\"]` 是按本目录的实际布局写的：`ui-entry.tsx` 直接躺在 `ui-app/` 下，没有 `src/` 子目录。两份 `css-modules.d.ts` 必须一起 include —— 这里 `import css from './x.module.css'` 的写法遍布全站，缺了 ambient 声明就会报成一堆「找不到模块」的假错。",
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictFunctionTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "paths": {
+      "@deepseek-ai/dsh-wechat-data/types": ["../../backend/wechat-data/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-client-ui-primitives": ["../ui-primitives-shim/src/index.ts"]
+    }
+  },
+  "include": [
+    ".",
+    "../ui-wechat/src/css-modules.d.ts",
+    "../ui-primitives-shim/src/css-modules.d.ts"
+  ]
+}

@@ -67,7 +67,7 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 |---|---|
 | `npm start` / `npm run dev` | 构建后启动应用 |
 | `npm test` | 单元测试（vitest；不依赖真实微信数据、不联网） |
-| `npm run typecheck` | 前后端类型检查（后端用 tsc + `lib/types`，前端只从仓库取类型。**暂不覆盖** `src/client/ui-app/**`，见 RELEASE-PLAN N31） |
+| `npm run typecheck` | 类型检查：后端 + 面板（`ui-wechat`）+ **打包入口那一层**（`ui-app`：壳、启动页三站、同意屏、授权面板）。三份串在一条脚本里，见 RELEASE-PLAN N31 |
 | `npm run build:ui` / `npm run build:backend` | 分别构建前端静态资源与后端 bundle |
 | `npm run pack` / `npm run dist` | 打包目录版 / 生成 NSIS 安装器（都会前置 `build:ui`） |
 | `npm run package:smoke` | 启动**打包产物**跑断言（asar 内容、状态落点、语音解码资产、方法数…） |

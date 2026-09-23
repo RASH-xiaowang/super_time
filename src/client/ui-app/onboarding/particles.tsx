@@ -30,6 +30,19 @@ const STAGE_RGB: Array<[string, string]> = [
   [BLUE, PURPLE],   // 3 关于
 ]
 
+/**
+ * 取某一阶段的主/辅色。
+ *
+ * 原来这三处是就地写的 `STAGE_RGB[Math.min(3, Math.max(0, stage | 0))] ?? STAGE_RGB[0]`：
+ * 上界写死成 3，而 `STAGE_RGB` 恰好四条 —— 将来加第五个阶段时粒子会静默用错颜色，
+ * 而且 `?? STAGE_RGB[0]` 在收紧之后自己又是 `undefined`（下标取表必然如此）。
+ * 这里改成按表长夹住 + 明确回落到首页那一对，三处共用一份。
+ */
+function stageRgb(stage: number): [string, string] {
+  const i = Number.isFinite(stage) ? Math.max(0, Math.min(STAGE_RGB.length - 1, stage | 0)) : 0
+  return STAGE_RGB[i] ?? [CYAN, PURPLE]
+}
+
 export function ParticleField({
   className,
   stage = 0,
@@ -120,7 +133,7 @@ export function ParticleField({
         if (p.y < -8) p.y = h + 8
         if (p.y > h + 8) p.y = -8
 
-        const [c0, c1] = STAGE_RGB[Math.min(3, Math.max(0, stageRef.current | 0))] ?? STAGE_RGB[0]
+        const [c0, c1] = stageRgb(stageRef.current)
         const rgb = p.hue ? c1 : c0
         const alpha = 0.25 + 0.35 * Math.abs(Math.sin(p.pulse)) + 0.2 * ease
         const radius = p.r * (1 + ease * 0.55)
@@ -145,15 +158,20 @@ export function ParticleField({
       const linkDist = 110 + ease * 40
       ctx.lineWidth = 0.6
       for (let i = 0; i < particles.length; i++) {
+        const a = particles[i]
+        // 下标全部由 `particles.length` 界定，这两道判断在运行期永不命中；写出来是因为
+        // `noUncheckedIndexedAccess` 下 `particles[i]` 的类型确实含 `undefined`，
+        // 而这里没有比「跳过」更诚实又更便宜的写法。
+        if (!a) continue
         for (let j = i + 1; j < particles.length; j++) {
-          const a = particles[i]
           const b = particles[j]
+          if (!b) continue
           const dx = a.x - b.x
           const dy = a.y - b.y
           const d2 = dx * dx + dy * dy
           if (d2 > linkDist * linkDist) continue
           const t = 1 - Math.sqrt(d2) / linkDist
-          const [c0, c1] = STAGE_RGB[Math.min(3, Math.max(0, stageRef.current | 0))] ?? STAGE_RGB[0]
+          const [c0, c1] = stageRgb(stageRef.current)
           const rgb = a.hue === b.hue ? (a.hue ? c1 : c0) : '120, 160, 255'
           ctx.strokeStyle = `rgba(${rgb},${(0.08 + t * 0.22) * (0.55 + ease * 0.45)})`
           ctx.beginPath()
@@ -165,7 +183,7 @@ export function ParticleField({
 
       // 汇聚核心光斑
       if (ease > 0.15) {
-        const [c0, c1] = STAGE_RGB[Math.min(3, Math.max(0, stageRef.current | 0))] ?? STAGE_RGB[0]
+        const [c0, c1] = stageRgb(stageRef.current)
         const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 90 + ease * 40)
         core.addColorStop(0, `rgba(${c0},${0.08 * ease})`)
         core.addColorStop(0.4, `rgba(${c1},${0.05 * ease})`)
