@@ -13,6 +13,7 @@ import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
 import { fmtCommentTime, imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
 import { cspSafeSrc } from '../utils/url.ts'
+import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -160,8 +161,6 @@ export interface MomentsImageViewerProps {
   setViewZoom: React.Dispatch<React.SetStateAction<number>>
   viewPan: { x: number; y: number }
   setViewPan: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
-  viewFailed: boolean
-  setViewFailed: React.Dispatch<React.SetStateAction<boolean>>
   lightboxWrapRef: React.MutableRefObject<HTMLDivElement | null>
   pinchRef: React.MutableRefObject<{ dist: number; zoom: number } | null>
   viewZoomRef: React.MutableRefObject<number>
@@ -171,7 +170,7 @@ export interface MomentsImageViewerProps {
 export function MomentsImageViewer({
   viewer, setViewer, setViewerIndex, curImg, snsImgs, copyCurrentLink, saveCurrentImage,
   viewOriginal, setViewOriginal, viewRotate, setViewRotate, viewZoom, setViewZoom,
-  viewPan, setViewPan, viewFailed, setViewFailed, lightboxWrapRef, pinchRef, viewZoomRef, dragRef,
+  viewPan, setViewPan, lightboxWrapRef, pinchRef, viewZoomRef, dragRef,
 }: MomentsImageViewerProps): React.JSX.Element | null {
   if (!viewer) return null
   return createPortal(
@@ -222,25 +221,16 @@ export function MomentsImageViewer({
             onMouseLeave={() => { dragRef.current = null }}
             style={{ cursor: viewZoom > 1 ? 'move' : 'zoom-in' }}
           >
-            {viewFailed ? (
-              <div className={css.lightboxFail}>图片加载失败</div>
-            ) : (
-              <img
-                src={viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')}
-                alt=""
-                referrerPolicy="no-referrer"
-                draggable={false}
-                className={css.lightboxImg}
-                style={{ transform: 'rotate(' + String(viewRotate) + 'deg) scale(' + String(viewZoom) + ') translate(' + String(viewPan.x) + 'px,' + String(viewPan.y) + 'px)' }}
-                onError={() => {
-                  // 如果当前src是CDN URL（非data URL），标记为失败
-                  const currentSrc = viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')
-                  if (!currentSrc.startsWith('data:')) {
-                    setViewFailed(true)
-                  }
-                }}
-              />
-            )}
+            {/* 「原图」开关决定优先要哪一个地址；两个都可能是 CDN 地址，那就交给后端代理（M23）。
+                取不到才说「加载失败」—— 在这一步之前谁也不知道是网络问题还是本机没有。 */}
+            <RemoteImg
+              src={viewOriginal ? (cspSafeSrc(curImg?.url) || (curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.thumb) || '') : ((curImg && snsImgs[imgKey(curImg)]) || cspSafeSrc(curImg?.url, curImg?.thumb) || '')}
+              alt=""
+              draggable={false}
+              className={css.lightboxImg}
+              style={{ transform: 'rotate(' + String(viewRotate) + 'deg) scale(' + String(viewZoom) + ') translate(' + String(viewPan.x) + 'px,' + String(viewPan.y) + 'px)' }}
+              failed={<div className={css.lightboxFail}>图片加载失败</div>}
+            />
           </div>
           <div className={css.lightboxNav}>
             <button type="button" className={css.btn} disabled={viewer.index <= 0} onClick={() => { setViewerIndex(viewer.index - 1) }}>‹ 上一张</button>
@@ -251,18 +241,12 @@ export function MomentsImageViewer({
               {viewer.images.map((im, i) => {
                 const t = (snsImgs[imgKey(im)] || cspSafeSrc(im.thumb, im.url))
                 return (
-                  <img
+                  <RemoteImg
                     key={i}
                     src={t || ''}
                     alt=""
                     className={[css.lightboxThumb, i === viewer.index ? css.lightboxThumbActive : ''].filter(Boolean).join(' ')}
                     {...clickableKey(() => { setViewerIndex(i) }, { label: `查看第 ${i + 1} 张图` })}
-                    onError={(e) => {
-                      // 如果当前src是CDN URL（非data URL），隐藏缩略图
-                      if (!t.startsWith('data:')) {
-                        e.currentTarget.style.display = 'none'
-                      }
-                    }}
                   />
                 )
               })}
@@ -285,8 +269,6 @@ export interface MomentsDetailProps {
   setDetail: React.Dispatch<React.SetStateAction<{ m: MomentItem } | null>>
   setViewer: (v: ViewerState | null) => void
   setAuthorFilter: React.Dispatch<React.SetStateAction<string | null>>
-  failedImgs: Set<string>
-  setFailedImgs: React.Dispatch<React.SetStateAction<Set<string>>>
   snsImgs: Record<string, string>
   videoSrcs: Record<string, string>
   videoMeta: Record<string, { w: number; h: number }>
@@ -300,7 +282,7 @@ export interface MomentsDetailProps {
 }
 
 export function MomentsDetail({
-  detail, setDetail, setViewer, setAuthorFilter, failedImgs, setFailedImgs, snsImgs,
+  detail, setDetail, setViewer, setAuthorFilter, snsImgs,
   videoSrcs, videoMeta, setVideoMeta, videoFailed, videoErr,
   loadVideo, saveVideo, fullscreenVideo, closeVideo,
 }: MomentsDetailProps): React.JSX.Element | null {
@@ -319,20 +301,18 @@ export function MomentsDetail({
                 {detail.m.images.map((im, ii) => {
                   const key = imgKey(im)
                   const dataSrc = key ? snsImgs[key] : undefined
-                  const haveSrc = !!(dataSrc || cspSafeSrc(im.thumb, im.url))
                   // 详情弹层里的图片同样是**固定纵横比的框**（.imgWrap 有 aspect-ratio），
-                  // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：标记失败 + 占位。
-                  const dfk = 'detail:' + detail.m.tid + ':' + String(ii)
+                  // 失败时隐藏图片会留下一个空方块 —— 与卡片视图同一套口径：给占位，不留空。
                   return (
                     <div key={ii} className={css.imgWrap} title="点击查看大图" {...clickableKey(() => { setViewer({ images: detail.m.images, index: ii, author: detail.m.author }) })}>
-                      {haveSrc && !failedImgs.has(dfk)
-                        ? <img src={dataSrc || cspSafeSrc(im.thumb, im.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.img} onError={() => {
-                          const currentSrc = dataSrc || cspSafeSrc(im.thumb, im.url)
-                          if (!currentSrc.startsWith('data:')) {
-                            setFailedImgs(prev => new Set(prev).add(dfk))
-                          }
-                        }} />
-                        : <div className={css.imgFallback}>{haveSrc ? '图片加载失败' : '加载中'}</div>}
+                      <RemoteImg
+                        src={dataSrc || cspSafeSrc(im.thumb, im.url)}
+                        alt=""
+                        loading="lazy"
+                        className={css.img}
+                        pending={<div className={css.imgFallback}>加载中</div>}
+                        failed={<div className={css.imgFallback}>图片加载失败</div>}
+                      />
                     </div>
                   )
                 })}
@@ -357,7 +337,7 @@ export function MomentsDetail({
                             src={src}
                             controls
                             autoPlay
-                            poster={vCover || ''}
+                            poster={localImageSrc(vCover)}
                             onLoadedMetadata={(e) => {
                               const el = e.currentTarget
                               if (!vk || !el.videoWidth || !el.videoHeight) return
@@ -371,12 +351,7 @@ export function MomentsDetail({
                           </div>
                         </>
                         : vCover
-                          ? <><img className={css.videoCover} src={vCover} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => {
-                            // 如果当前src是CDN URL（非data URL），隐藏图片
-                            if (!vCover.startsWith('data:')) {
-                              e.currentTarget.style.display = 'none'
-                            }
-                          }} /><span className={css.videoPlayBadge}>▶</span>{v.duration > 0 && (
+                          ? <><RemoteImg className={css.videoCover} src={vCover} alt="" loading="lazy" /><span className={css.videoPlayBadge}>▶</span>{v.duration > 0 && (
                             <span className={css.videoDur}>{Math.round(v.duration)}s</span>
                           )}</>
                           : <>{videoFailed.has(vk)
@@ -428,7 +403,7 @@ export function MomentsDetail({
                       {target && <span className={kitCss.textCaption}>“{target.content.slice(0, 40)}”</span>}
                       <span className={css.commentText}>{c.content || ''}</span>
                       {img && (cdata || cspSafeSrc(img.thumb, img.url)) && (
-                        <img key={'img' + String(ci)} src={cdata || cspSafeSrc(img.thumb, img.url)} alt="" loading="lazy" referrerPolicy="no-referrer" className={css.commentImg} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
+                        <RemoteImg key={'img' + String(ci)} src={cdata || cspSafeSrc(img.thumb, img.url)} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
                       )}
                       {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
                     </div>

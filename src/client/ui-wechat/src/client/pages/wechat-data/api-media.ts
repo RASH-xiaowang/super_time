@@ -183,7 +183,17 @@ export async function apiGetRemoteImages(urls: string[]): Promise<Map<string, Re
 const REMOTE_IMAGE_CHUNK = 40
 /** 进程内 `源地址 → data URL` 的上限：来回滚动不该反复 RPC + 重新 base64。 */
 const REMOTE_IMAGE_MEM_MAX = 600
+/**
+ * 「后端整个没答上」的地址在这么久内不再重试。
+ *
+ * 只兜住这一种：那种时候再问也不会有别的结果，而列表组件每次重渲染都会把同一批地址再送一遍。
+ * 后端明确回了失败原因（开关关掉 / 主机不在清单 / CDN 失败）的情况**不在这里冷却** ——
+ * 后端自己有 60 秒冷却，而开关随时可能被用户打开，客户端再拦一道就变成「重新开启开关后
+ * 一分钟图片还是不出来」。
+ */
+const REMOTE_IMAGE_FAIL_COOLDOWN_MS = 60_000
 const remoteImageUrlCache = new Map<string, string>()
+const remoteImageFailedAt = new Map<string, number>()
 
 /**
  * 攒批队列：同一 tick 里挂出来的 N 张远程图合成**一次** `getRemoteImages`。
@@ -217,20 +227,26 @@ export async function apiGetRemoteImageUrl(source: string): Promise<string> {
   if (url === '') return ''
   const hit = remoteImageUrlCache.get(url)
   if (hit !== undefined) return hit
+  const failedAt = remoteImageFailedAt.get(url)
+  if (failedAt !== undefined && Date.now() - failedAt < REMOTE_IMAGE_FAIL_COOLDOWN_MS) return ''
   let item: RemoteImageItem
   try {
     item = await remoteImageQueue.enqueue(url)
   } catch {
+    // 只对「后端整个没答上」做客户端冷却：那种情况再问也不会有别的结果，而列表每次重渲染
+    // 都会把同一批地址再送一遍。**后端明确回了失败原因**（开关关掉 / 主机不在清单 / CDN 失败）
+    // 时不在这里冷却 —— 后端自己有 60 秒冷却，而开关随时可能被用户打开，这里再拦一道
+    // 就会变成「重新开启开关后有一分钟图片还是不出来」那种莫名延迟。
+    remoteImageFailedAt.set(url, Date.now())
     return ''
   }
   const dataUrl = item.dataUrl ?? ''
-  if (dataUrl !== '') {
-    if (remoteImageUrlCache.size >= REMOTE_IMAGE_MEM_MAX) {
-      const oldest = remoteImageUrlCache.keys().next().value
-      if (oldest !== undefined) remoteImageUrlCache.delete(oldest)
-    }
-    remoteImageUrlCache.set(url, dataUrl)
+  if (dataUrl === '') return ''
+  if (remoteImageUrlCache.size >= REMOTE_IMAGE_MEM_MAX) {
+    const oldest = remoteImageUrlCache.keys().next().value
+    if (oldest !== undefined) remoteImageUrlCache.delete(oldest)
   }
+  remoteImageUrlCache.set(url, dataUrl)
   return dataUrl
 }
 /**
