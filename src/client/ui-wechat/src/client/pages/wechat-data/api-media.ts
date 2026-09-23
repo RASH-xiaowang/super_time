@@ -178,6 +178,61 @@ export async function apiGetRemoteImages(urls: string[]): Promise<Map<string, Re
   for (const item of r.items ?? []) byUrl.set(item.url, item)
   return byUrl
 }
+
+/** 一次代理请求最多带几张（与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL` 对齐；超了后端会整条回错误）。 */
+const REMOTE_IMAGE_CHUNK = 40
+/** 进程内 `源地址 → data URL` 的上限：来回滚动不该反复 RPC + 重新 base64。 */
+const REMOTE_IMAGE_MEM_MAX = 600
+const remoteImageUrlCache = new Map<string, string>()
+
+/**
+ * 攒批队列：同一 tick 里挂出来的 N 张远程图合成**一次** `getRemoteImages`。
+ *
+ * 复用 N16 那套 {@link createImageLoadQueue}（合并/分块/失败传播都已单测）。差别只有两处：
+ * 键是 URL 而不是 (会话, 消息)，且 **flush 回填按 URL 查表**而不是按下标 —— 后端会去重，
+ * 返回条数可能少于入参条数，按下标回填会把后面的条目错接到前面那张图上。
+ */
+const remoteImageQueue = createImageLoadQueue<string, RemoteImageItem>({
+  chunkSize: REMOTE_IMAGE_CHUNK,
+  onMissing: (url) => ({ url, error: '批量代理未返回该条目' }),
+  flush: async (keys) => {
+    const byUrl = await apiGetRemoteImages([...keys])
+    return keys.map((k) => byUrl.get(k) ?? { url: k, error: '批量代理未返回该条目' })
+  },
+})
+
+/**
+ * 把一张「只有远程地址」的图换成能画进 `<img>` 的地址（M23）。
+ *
+ * 为什么不让 `<img src=https://…>` 继续存在：那等于把「渲染层可以向任意 https 主机发请求」
+ * 写进产品，界面上那两个出网开关都管不到它。走后端之后：开关生效、可审计、有缓存。
+ *
+ * 失败（开关关掉、主机不在白名单、取回出错）一律回**空串**，由调用方按「这张没有封面」处理 ——
+ * 回一个破图地址比回空串更糟：用户看不到「为什么没有」，只会看到一堆坏图标。
+ * @param source - 消息里的图片地址；空串原样回空串（调用方已判过 `cspSafeSrc`）。
+ * @returns 可直接给 `<img src>` 的 data URL，或空串。
+ */
+export async function apiGetRemoteImageUrl(source: string): Promise<string> {
+  const url = String(source ?? '').trim()
+  if (url === '') return ''
+  const hit = remoteImageUrlCache.get(url)
+  if (hit !== undefined) return hit
+  let item: RemoteImageItem
+  try {
+    item = await remoteImageQueue.enqueue(url)
+  } catch {
+    return ''
+  }
+  const dataUrl = item.dataUrl ?? ''
+  if (dataUrl !== '') {
+    if (remoteImageUrlCache.size >= REMOTE_IMAGE_MEM_MAX) {
+      const oldest = remoteImageUrlCache.keys().next().value
+      if (oldest !== undefined) remoteImageUrlCache.delete(oldest)
+    }
+    remoteImageUrlCache.set(url, dataUrl)
+  }
+  return dataUrl
+}
 /**
  * Resolve a moments video cover to a data URL (offline Sns/Video jpg).
  * @param options - media md5 / timeline id / media id.
