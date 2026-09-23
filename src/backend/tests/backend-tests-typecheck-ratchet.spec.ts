@@ -77,12 +77,18 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * **所以这条路只能这么走**：先把 `wechat-paths.js` 的 JSDoc 补成真的 typedef（LLM store 行形状、
  * config 形状、settings 键），再谈生成；或者直接手写（`llm-retry.d.ts` 那条路）。
  * **不要**为了把 2 降到 0 就把生成物提上去 —— 那会把基线从 2 顶到 48，等于用更差的数据结构换掉一个诚实的 `any`。
- * 清零之后的收尾：把 `tsconfig.tests.json` 串进 `npm run typecheck`（`typecheck:tests`），
- * 并把棘轮换成「0 错误」硬断言。
+ * 第十一步（收尾）：补上 `wechat-paths.d.ts` / `update.d.ts` 两份**手写**声明 → **0**，并把这条守卫
+ * 从「不超过基线」换成「等于 0」的硬断言（`BASELINE = 0` 且另有一条断言钉住它只能是 0）。
+ * 手写而不是生成，正是因为上面那条 74 → 120 的实测；配套的守卫是
+ * `tests/host-decl-alignment.spec.ts`：对 JS 的 `module.exports` 与 `.d.ts` 的导出做**双向差集**
+ * （漏一个＝地图缺一块；多一个＝发明了运行时没有的成员 —— 类型全绿、运行时无定义）。
+ * 它顺带就抓到过一次：编辑声明时误删了 `isPackaged` 那一行，本守卫与它都不红，只有双向差集红。
+ * 同时 `src/backend/tsconfig.tests.json` 已经串进 `npm run typecheck`（`typecheck:tests`），
+ * 所以 CI 的 typecheck 步骤现在就在按行报错，不再只数总数。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 2
+const BASELINE = 0
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150
@@ -104,7 +110,7 @@ const listed = runTsc(['-p', 'src/backend/tsconfig.tests.json', '--noEmit', '--l
   .map((f) => f.replace(/\\/g, '/'))
   .filter((f) => /\.spec\.ts$/.test(f))
 
-describe('N32 后半：测试目录的类型错误只能降不能升', () => {
+describe('N32 后半：测试目录必须零类型错误（棘轮已收到底）', () => {
   it('tsconfig.tests.json 存在，且用的就是后端那份基座（不是客户端的）', () => {
     expect(existsSync(CFG), '缺少 src/backend/tsconfig.tests.json').toBe(true)
     const cfg = JSON.parse(readFileSync(CFG, 'utf8')) as { extends?: string }
@@ -116,13 +122,13 @@ describe('N32 后半：测试目录的类型错误只能降不能升', () => {
       .toBeGreaterThanOrEqual(MIN_TEST_FILES)
   })
 
-  it(`错误数不超过基线 ${String(BASELINE)}（修掉一批就把基线改小）`, () => {
-    expect(errorLines.length, '新增的类型错误：\n' + errorLines.slice(0, 12).join('\n'))
-      .toBeLessThanOrEqual(BASELINE)
+  it('错误数为 0（不再用「不超过基线」这种过渡口径）', () => {
+    expect(errorLines.length, '测试目录里出现了类型错误：\n' + errorLines.slice(0, 12).join('\n'))
+      .toBe(BASELINE)
   })
 
-  it('基线本身不许被悄悄抬高（改小可以，改大要在 PR 里说清）', () => {
-    // 这条守的是「棘轮只能降」：有人把 BASELINE 改大，就得同时在这里解释为什么。
-    expect(BASELINE, 'BASELINE 只能改小；要改大请在 RELEASE-PLAN 台账里写明理由').toBeLessThanOrEqual(191)
+  it('基线钉在 0：谁要把它抬回去，必须在台账里说清是哪一个洞', () => {
+    // 这一条以前防的是「悄悄把基线改大」。现在没有余量了，所以它防的是「把 0 改成非 0」。
+    expect(BASELINE, 'BASELINE 只能是 0；重新引入豁免请在 docs/RELEASE-PLAN.md 台账里登记理由').toBe(0)
   })
 })

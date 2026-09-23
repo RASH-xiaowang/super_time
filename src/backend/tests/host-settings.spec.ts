@@ -10,7 +10,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { configure, loadWechatSettings, mirroredSecretValues, recordWechatSettings } from '../wechat-paths.js'
 
 const scratch: string[] = []
