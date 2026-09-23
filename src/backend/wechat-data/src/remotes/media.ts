@@ -9,11 +9,14 @@
  */
 import { resolveAvatar, resolveAvatarsLocal } from '../query/avatar.ts'
 import { weixinVersion } from '../query/config.ts'
+import { wechatCdnHostAllowed } from '../query/cdn-hosts.ts'
 import { queryEmoticons } from '../query/emoticons.ts'
 import { queryFiles } from '../query/files.ts'
 import { resolveImageKeyPair } from '../query/image-key.ts'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from '../query/image-original.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
+import { fetchRemoteImages } from '../query/remote-image.ts'
+import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageResourceHint } from '../query/media-image.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
@@ -38,6 +41,14 @@ export interface MediaRemoteCtx {
 
 /** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
 const IMAGE_BATCH_MAX = 200
+
+/**
+ * 远程图片代理一次最多收多少个地址。
+ *
+ * 真正的取回上限（40 张）在 `query/remote-image.ts` 里；这一道只是**RPC 载荷护栏** ——
+ * 传进来一万个地址时，宁可在这里截断，也不要把几 MB 的字符串数组搬过进程边界。
+ */
+const REMOTE_URLS_RPC_MAX = 200
 
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
 export interface ImageBatchItem {
@@ -170,6 +181,45 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return { ok: true, format: r.format, bytes: r.bytes }
     },
 
+    /**
+     * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
+     *
+     * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
+     * 直接向消息 XML 里的 https 地址发请求** —— 既不受「自动获取原图（CDN）」开关管、也不受
+     * 「禁止出网」管、不进操作记录、没有缓存（同一次滚动反复要同一张）。把它收到后端之后，
+     * 那三件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
+     *
+     * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
+     * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
+     * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
+     * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
+     *   来自本机缓存。关闭出网开关时**一次请求都不发**，但本机缓存照常返回。
+     */
+    async getRemoteImages(options: { urls?: string[] }): Promise<{ items: RemoteImageResult[] }> {
+      const urls = Array.isArray(options?.urls) ? options.urls.slice(0, REMOTE_URLS_RPC_MAX) : []
+      if (urls.length === 0) return { items: [] }
+      // 与 `image_original_fetch` / `sns_*_fetch` 同一道闸：用户关了总闸之后这里也不许出网
+      const blocked = rc.privacyBlocked('remote_image_fetch', '从微信 CDN 取回图片')
+      if (blocked !== null) {
+        rc.op('task', 'remote_image_fetch', 'fail', `${String(urls.length)} 张`, blocked)
+        return { items: urls.map((url) => ({ url, error: blocked })) }
+      }
+      const items = await fetchRemoteImages(urls, rc.dirs().decoded, rc.cdnSwitches())
+      const net = items.filter((it) => !it.fromCache)
+      const failed = net.filter((it) => !it.dataUrl)
+      // 只在这次真的发过请求时记一条（缓存命中不该刷满操作记录）
+      if (net.length > 0) {
+        rc.op(
+          'task', 'remote_image_fetch', failed.length === 0 ? 'ok' : 'fail',
+          `${String(net.length)} 张`,
+          failed.length === 0
+            ? `从微信 CDN 取回并缓存 ${String(net.length)} 张（其余为本机缓存命中）`
+            : `取回 ${String(net.length - failed.length)} 张，失败 ${String(failed.length)} 张：${String(failed[0]?.error ?? failed[0]?.url ?? '')}`,
+        )
+      }
+      return { items }
+    },
+
     getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
       // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
       // 用于在「同名文件」里挑出属于这条消息的那一份，见 resolveMessageFileDataUrl。
@@ -185,6 +235,9 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       if (local.url) return local
       const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
       if (!remote || !/^https?:\/\//i.test(remote)) return local
+      // 地址是渲染层/消息 XML 送上来的，发请求前必须过白名单（M23）：
+      // 只判协议等于「谁给后端一个 https 地址，后端就去取谁」。
+      if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
       const blocked = rc.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
       if (blocked) return { error: `${local.error}；${blocked}` }
       const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key, ...rc.cdnSwitches() })
@@ -199,6 +252,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       if (local.url) return local
       const remote = typeof options.url === 'string' ? options.url.trim() : ''
       if (!remote || !/^https?:\/\//i.test(remote)) return local
+      // 同封面：白名单判在发请求之前（M23）
+      if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该视频'}；视频地址的主机不在微信 CDN 清单内，已拒绝请求` }
       const blocked = rc.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
       if (blocked) return { error: `${local.error}；${blocked}` }
       const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key, ...rc.cdnSwitches() })

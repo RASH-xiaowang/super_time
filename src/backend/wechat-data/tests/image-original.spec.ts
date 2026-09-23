@@ -215,9 +215,14 @@ describe('接线守卫', () => {
   })
 
   it('白名单判定是严格后缀（放行子域，拦住 notqq.com 这类）', () => {
-    const at = impl.indexOf('function hostAllowed')
-    expect(at, '找不到 hostAllowed —— 改名时请同步本用例').toBeGreaterThan(-1)
-    const body = impl.slice(at, impl.indexOf('\n}', at))
+    // 判定本身搬到了 `query/cdn-hosts.ts`（M23：远程图片代理要走同一道门，两处各写一份迟早漏一处），
+    // 所以这里先看原图这条链**确实调了它**，再到它现在的家检查判据形状。
+    expect(impl.includes('wechatCdnHostAllowed'), '原图直链不再判白名单了？').toBe(true)
+    expect(impl.includes('hostAllowed('), '白名单必须判在原图这条链上').toBe(true)
+    const hosts = readFileSync(join(import.meta.dirname, '..', 'src', 'query', 'cdn-hosts.ts'), 'utf8')
+    const at = hosts.indexOf('export function wechatCdnHostAllowed')
+    expect(at, '找不到 wechatCdnHostAllowed —— 改名时请同步本用例').toBeGreaterThan(-1)
+    const body = hosts.slice(at, hosts.indexOf('\n}', at))
     expect(body.includes('host === suf'), '主机等于后缀要放行').toBe(true)
     expect(body.includes("host.endsWith('.' + suf)"), '子域必须以「.后缀」结尾才放行').toBe(true)
     expect(body.includes('host.endsWith(suf)'), '不许出现裸 endsWith(后缀)：那会放过 notqq.com').toBe(false)
