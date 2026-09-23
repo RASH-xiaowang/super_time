@@ -102,11 +102,20 @@ done.then(() => {
     check(probe.sandbox && probe.sandbox.electronAPIKeys > 0,
       'preload 的 contextBridge 仍然可用（沙箱没把桥一起关掉）');
 
-    // ② 三类被禁协议：逐条断言（返回 null = 被 deny，而不是开出了窗口）
+    // ② 三类被禁协议：**安全判定看「有没有真开出窗口」，不看 window.open 的返回值**
+    // 返回值当判据是不可靠的：处理器 `action:'deny'` 时 Chromium 仍可能回一个指向空窗的
+    // WindowProxy（CI 上实测会看到 'window'），而守卫真的失效时才会触发 `did-create-window`。
+    // 所以这里断言的是结果（窗口数），`result` 只在 detail 里留着当诊断。
     const opened = Array.isArray(probe.opened) ? probe.opened : [];
     check(opened.length === 3, '三次 window.open 都被调用到', JSON.stringify(opened.map(o => o.url)));
-    check(opened.length === 3 && opened.every((o) => o.result === 'null'),
-      'window.open 三次全部被拒（返回 null，没有开出窗口）', JSON.stringify(opened.map(o => o.result)));
+    check(opened.length === 3 && probe.popupWindows === 0 && opened.every((o) => o.windowsAfter === 0),
+      '三次被禁开窗一个都没真开出来（did-create-window 计数恒为 0）',
+      `popupWindows=${probe.popupWindows} windowsAfter=${JSON.stringify(opened.map((o) => o.windowsAfter))} result=${JSON.stringify(opened.map((o) => o.result))}`);
+    // 探针自身的形状：返回值必须落在已知集合里（拿到 undefined / 别的字符串说明探针或序列化坏了，
+    // 那要单独报红，不能和「守卫失效」混成一条）。
+    check(opened.length === 3 && opened.every((o) => o.result === 'null' || o.result === 'window'),
+      '探针回到的开窗形态在已知集合内（null=彻底拒绝，window=回了代理但未建窗）',
+      JSON.stringify(opened.map((o) => o.result)));
 
     // ③ 外部导航被阻止
     check(probe.navigated === false, '页面未被导航到外站', `urlAfter=${probe.urlAfter}`);
