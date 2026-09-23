@@ -37,10 +37,13 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * 第四步把 `llm-retry.spec.ts` 整份收干净（28 处 → 0）→ **117**：假 fetch 的脚本/URL/响应夹具、
  * `RetryInfo[]`、`recorder` 的 `slept`、`signals`、`captured`，以及一个真实的形状不匹配 ——
  * `RetryFetch` 的 `init` 是**可选**参数，把假 fetch 写成 `init: RequestInit`（必填）就不匹配了。
+ * 第五步收掉 `llm-rerank.spec.ts` 的 11 处 → **106**：那份文件里 `seen[0].body.model` 一类的下标直取有 10 处，
+ * 补了一个 `at(seen, n)` 访问器（没捕到就抛「这条用例的前提不成立」）。这类断言一旦拿到 `undefined`，
+ * `expect(undefined?.x).toBe(...)` 会红得莫名其妙，而 `at()` 直接说出是第几次请求没捕到。
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 117
+const BASELINE = 106
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150
