@@ -40,6 +40,7 @@ import { deleteKbFile, kbFilesOnKbDelete, registerKbFile, setKbFileRagFlag } fro
 import { fuseKbHits, kbChannel } from '../src/query/retrieval/kb-channel.ts'
 import { defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
 import { runRetrievalPipeline } from '../src/query/retrieval/pipeline.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import type { KbHit } from '../src/types.ts'
 
 /**
@@ -57,14 +58,12 @@ vi.mock('node:sqlite', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:sqlite')>()
   type RealDb = InstanceType<typeof actual.DatabaseSync>
   class CountingDatabaseSync extends actual.DatabaseSync {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    constructor(...args: any[]) {
-      super(...args)
-    }
-    prepare(sql: string, ...rest: unknown[]): ReturnType<RealDb['prepare']> {
+    // `node:sqlite` 的 `prepare(sql)` 只有一个入参（绑定值发生在拿到的语句对象上）。
+    // 原来这里签名写成 `(sql, ...rest: unknown[])` 再用 `as any` 转调 —— 那个 `rest` 从来不存在，
+    // 而构造函数只是原样转发，所以一并删掉（少一处 `any`，也少一处「prepare 能带绑定值」的误解）。
+    override prepare(sql: string): ReturnType<RealDb['prepare']> {
       if (/select\s+chunk_id,\s*hash_lo,\s*hash_hi/i.test(sql)) probe.hashLoads += 1
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (super.prepare as any)(sql, ...rest)
+      return super.prepare(sql)
     }
   }
   return { ...actual, DatabaseSync: CountingDatabaseSync }
@@ -112,7 +111,7 @@ function makeEmbed(dim = 32): { fn: (texts: string[]) => Promise<number[][]>; ca
     calls.push(...texts)
     return texts.map((t) => {
       const v = new Array<number>(dim).fill(0)
-      for (const ch of t) v[(ch.codePointAt(0) ?? 0) % dim] += 1
+      for (const ch of t) { const k = (ch.codePointAt(0) ?? 0) % dim; v[k] = (v[k] ?? 0) + 1 }
       return v
     })
   }
@@ -389,7 +388,10 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
       + 'dim INTEGER NOT NULL, vec BLOB NOT NULL, hash_lo INTEGER NOT NULL, hash_hi INTEGER NOT NULL)')
     legacy.prepare('INSERT INTO ' + KB_VECTORS_TABLE + '(chunk_id, kb_id, file_id, dim, vec, hash_lo, hash_hi) VALUES(?,?,?,?,?,?,?)')
       .run(chunkId, 1, fileId, 32, new Uint8Array(128), 0, 0)
-    for (const [k, v] of [['dim', '32'], ['model', 'default'], ['rows', '1'], ['schema_version', KB_VECTOR_SCHEMA_VERSION]]) {
+    // 元组标注：不加的话 `k`/`v` 在 noUncheckedIndexedAccess 下是 string|undefined，
+    // 而 `.run(k, v)` 会挑不到重载 —— 这里要的就是「四对键值，逐对写进去」。
+    const metaPairs: Array<[string, string]> = [['dim', '32'], ['model', 'default'], ['rows', '1'], ['schema_version', KB_VECTOR_SCHEMA_VERSION]]
+    for (const [k, v] of metaPairs) {
       legacy.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(k, v)
     }
     legacy.close()
@@ -717,10 +719,10 @@ describe('F 模型精排（pipeline 的 3.5 段）', () => {
       expect(out.rerankInfo.candidates).toBeGreaterThan(1)
     }
     expect(stub.calls).toHaveLength(1)
-    expect(stub.calls[0].q).toContain('转账')
+    expect(at(stub.calls, 0, '精排请求').q).toContain('转账')
     const n = out.rerankInfo.used ? out.rerankInfo.candidates : 0
     // 长度必须等于候选数：不等就说明按下标取值会错位（把分数贴到别的文档上）
-    expect(stub.calls[0].docs).toHaveLength(n)
+    expect(at(stub.calls, 0, '精排请求').docs).toHaveLength(n)
   })
 
   it('精排真的参与了排序：把第一名压到最低分，引用顺序就变了', async () => {

@@ -20,6 +20,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { dedupeFused } from '../src/query/retrieval/fusion.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import type { FusedDoc, RetrievedDoc } from '../src/query/retrieval/types.ts'
 
 function doc(username: string, localId: number, text: string, createTime: number): RetrievedDoc {
@@ -59,7 +60,7 @@ function ms(fn: () => unknown, runs: number): { median: number } {
     all.push(Number(process.hrtime.bigint()) / 1e6 - t0)
   }
   all.sort((a, b) => a - b)
-  return { median: all[Math.floor(all.length / 2)] }
+  return { median: at(all, Math.floor(all.length / 2), '样本') }
 }
 
 describe.skipIf(process.env.MEASURE_M12 !== '1')('M12 去重实测', () => {
@@ -89,7 +90,7 @@ describe.skipIf(process.env.MEASURE_M12 !== '1')('M12 去重实测', () => {
         return out
       }
       for (let k = 0; k < 6; k += 1) {
-        const b = bodies[60 + k]
+        const b = at(bodies, 60 + k, 'bodies')
         const gb = grams(b)
         for (const s of seen) {
           const ga = grams(s)
@@ -115,7 +116,7 @@ describe.skipIf(process.env.MEASURE_M12 !== '1')('M12 去重实测', () => {
       }
       const seenG = seen.map(grams)
       for (let k = 0; k < 6; k += 1) {
-        const gb = grams(bodies[60 + k])
+        const gb = grams(at(bodies, 60 + k, 'bodies'))
         for (const ga of seenG) {
           let inter = 0
           for (const t of ga) if (gb.has(t)) inter += 1
