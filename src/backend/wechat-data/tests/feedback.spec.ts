@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { adaptWeights, listFeedback, recordFeedback } from '../src/query/retrieval/feedback.ts'
+import { at } from '../../tests/helpers/strict-index.ts'
 import type { RerankWeights } from '../src/query/retrieval/types.ts'
 import type { FeedbackRecord } from '../src/query/retrieval/types.ts'
 
@@ -56,7 +57,7 @@ describe('问答反馈：features 往返保真', () => {
   it('recordFeedback → listFeedback 不丢 features（字符串数组）', () => {
     const dir = tempDir()
     recordFeedback(dir, record())
-    const [got] = listFeedback(dir, 10)
+    const got = at(listFeedback(dir, 10), 0, 'listFeedback 读回')
     // 回归：旧实现这里读回 []（safeJson 对 'entity' 做 Number → NaN → 被滤掉）
     expect(got.features).toEqual(['entity', 'coverage'])
     // 数字数组仍要正常

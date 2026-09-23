@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createLlmBridge } from '../wechat-host.js'
+import { at } from './helpers/strict-index.ts'
 
 /** 造一个记录请求体的假 fetch，返回固定的 embedding 响应。 */
 function captureFetch(dim = 3) {
@@ -43,7 +44,7 @@ describe('嵌入模型名的单一解析', () => {
     await bridge.embed(['一段文本'])
     expect(seen).toHaveLength(1)
     // 这条是重点：记账方拿到的名字必须就是请求里那个
-    expect(seen[0].body.model).toBe(bridge.embeddingModelName())
+    expect(at(seen, 0, '请求').body.model).toBe(bridge.embeddingModelName())
   })
 
   it('没配 embeddingModel ⇒ 回退到 chat 模型，且两边同样一致', async () => {
@@ -53,7 +54,7 @@ describe('嵌入模型名的单一解析', () => {
 
     expect(bridge.embeddingModelName()).toBe('chat-only')
     await bridge.embed(['x'])
-    expect(seen[0].body.model).toBe('chat-only')
+    expect(at(seen, 0, '请求').body.model).toBe('chat-only')
   })
 
   it('调用方点名一个模型 ⇒ 两边都用点名的那个（按库绑定的通路）', async () => {
@@ -63,7 +64,7 @@ describe('嵌入模型名的单一解析', () => {
 
     expect(bridge.embeddingModelName('per-library-bge')).toBe('per-library-bge')
     await bridge.embed(['x'], { model: 'per-library-bge' })
-    expect(seen[0].body.model).toBe('per-library-bge')
+    expect(at(seen, 0, '请求').body.model).toBe('per-library-bge')
   })
 
   it('嵌入端点/Key 留空 ⇒ 回落 chat 那一对；填了就用自己的（判定用回落后的值）', async () => {
@@ -74,15 +75,15 @@ describe('嵌入模型名的单一解析', () => {
       embeddingApiUrl: 'https://embed.internal/v1', embeddingApiKey: 'sk-embed',
     })
     await bridge.embed(['x'])
-    expect(seen[0].url).toBe('https://embed.internal/v1/embeddings')
+    expect(at(seen, 0, '请求').url).toBe('https://embed.internal/v1/embeddings')
     // 用的是嵌入那对 Key，不是 chat 的 'k'
-    expect(seen[0].url).not.toContain('example.test')
+    expect(at(seen, 0, '请求').url).not.toContain('example.test')
 
     const { fn: fn2, seen: seen2 } = captureFetch()
     vi.stubGlobal('fetch', fn2)
     const shared = createLlmBridge({ ...BASE, model: 'chat-model', embeddingModel: 'embed-a', embeddingApiUrl: '', embeddingApiKey: '' })
     await shared.embed(['x'])
-    expect(seen2[0].url).toBe('https://example.test/v1/embeddings')
+    expect(at(seen2, 0, '请求').url).toBe('https://example.test/v1/embeddings')
   })
 
   it('只填了 embeddingApiKey、chat 侧什么都没有 ⇒ 不能被误判成「未配置」', async () => {
@@ -94,7 +95,7 @@ describe('嵌入模型名的单一解析', () => {
     })
     await bridge.embed(['x'])
     expect(seen).toHaveLength(1)
-    expect(seen[0].url).toBe('https://embed.internal/v1/embeddings')
+    expect(at(seen, 0, '请求').url).toBe('https://embed.internal/v1/embeddings')
   })
 
   it('什么都没配 ⇒ 名字为空串，且 embed 直接拒发（不会带着空 model 出网）', async () => {

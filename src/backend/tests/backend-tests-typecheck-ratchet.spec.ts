@@ -53,7 +53,7 @@ const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
  * 试过给这份配置开 `allowJs`（让 TS 直接读宿主 JS）—— 结果是 162 → 228：它把 JS 源文件本身拉进 program
  * 报出一批与测试无关的错，所以回退了。**别再来试这条路**，要收紧就给具体模块写 `.d.ts`（同 `llm-retry.d.ts`）。
  */
-const BASELINE = 74
+const BASELINE = 51
 
 /** program 里应当出现的测试文件数下限（防空转：把 include 改窄就能"通过"这条守卫）。 */
 const MIN_TEST_FILES = 150

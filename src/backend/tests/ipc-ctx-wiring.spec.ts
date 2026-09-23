@@ -19,6 +19,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { grp } from './helpers/strict-index.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -39,8 +40,8 @@ const GETTER_ONLY = ['wechatBackend', 'wechatBoot', 'backendStatus', 'mainWindow
 function ctxFields(src: string): string[] {
   const out: string[] = []
   for (const m of src.matchAll(/const\s*\{([^}]*)\}\s*=\s*ctx\s*;/g)) {
-    for (const part of m[1].split(',')) {
-      const name = part.split(':')[0].trim()
+    for (const part of grp(m, 1, 'ctx 解构').split(',')) {
+      const name = (part.split(':')[0] ?? '').trim()
       if (name) out.push(name)
     }
   }
@@ -50,7 +51,7 @@ function ctxFields(src: string): string[] {
 /** 模块里的注册函数名（`function registerWechatIpc(ctx) {`）。 */
 function registrar(src: string): string | null {
   const m = /function\s+(register\w*Ipc)\s*\(\s*ctx\s*\)/.exec(src)
-  return m ? m[1] : null
+  return m ? grp(m, 1, '注册函数名') : null
 }
 
 /** `fn({ … })` 实参对象字面量顶层的键（含缩写键 `app`）；没有调用点则返回 null。 */
@@ -79,7 +80,7 @@ function callKeys(src: string, fn: string): string[] | null {
     if (c === ',' && d === 0) { keys.push(seg); seg = '' } else seg += c
   }
   keys.push(seg)
-  return keys.map((s) => s.split(':')[0].trim()).filter(Boolean)
+  return keys.map((s) => (s.split(':')[0] ?? '').trim()).filter(Boolean)
 }
 
 /** 剥掉注释与字符串字面量：只留下真实代码。 */
@@ -98,7 +99,7 @@ function bareCtxUses(src: string, universe: readonly string[]): string[] {
   const destructured = new Set(ctxFields(src))
   const local = new Set<string>([
     ...code.matchAll(/\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/g),
-  ].map((m) => m[1]))
+  ].map((m) => grp(m, 1, '本地声明')))
   const bad: string[] = []
   for (const name of universe) {
     if (destructured.has(name) || local.has(name)) continue
