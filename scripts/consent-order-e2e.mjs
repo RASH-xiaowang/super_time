@@ -212,6 +212,22 @@ try {
   check(recB2?.version === PRIVACY_VERSION, '同意记录跨进程仍然在（换进程重启不再问第二次）', JSON.stringify(recB2))
   await closeApp(launched)
   launched = null
+
+  // ── ⑧ 声明升版 ⇒ 下次启动重新问（把记录版本改旧 = 等价于 PRIVACY_VERSION +1） ──
+  // `consent.spec.ts` 已在纯函数层钉过这条；这里要的是**真应用读真 localStorage** 的那一遍：
+  // 版本号写在磁盘上的记录里，判定发生在渲染层挂载时，只有真启一次才知道它有没有被接上。
+  console.log('\n[实例 B3] 把同意记录的版本改旧（模拟声明升版），重启')
+  launched = await launch(userDataB)
+  win = launched.win
+  const stale = { version: PRIVACY_VERSION - 1, acceptedAt: new Date(0).toISOString() }
+  await win.evaluate(([k, v]) => { localStorage.setItem(k, JSON.stringify(v)) }, [CONSENT_KEY, stale])
+  await win.reload()
+  await win.getByRole('button', { name: '首页' }).first().waitFor({ timeout: 60_000 })
+  const pathB3 = await walkNext(win, 6)
+  check(await stageOf(win) === 'consent', '版本偏低的同意记录不算数：同意站又回来了', JSON.stringify(pathB3))
+  check((await consentBox(win).count()) === 1, '重新问时仍是「必须显式勾选」，不是看一眼就过')
+  check((await win.locator(`text=v${String(PRIVACY_VERSION)}`).count()) > 0,
+    '同意屏上写的就是当前声明版本', `v${String(PRIVACY_VERSION)}`)
 } catch (e) {
   check(false, '脚本跑完没有抛错', `${e?.stack || e}`)
 } finally {
