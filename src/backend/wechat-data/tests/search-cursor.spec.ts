@@ -121,16 +121,71 @@ function appendMessages(decrypted: string, from: number, to: number): void {
   mdb.close()
 }
 
-/** 高熵中文串：重复字符会让 bigram 只有极少数 distinct token，FTS 插入成本被严重低估。 */
+/** 130 个高频汉字。理论上 bigram 上限是 130² ≈ 1.69 万种，**但实测到不了**（见 `assertHighEntropy` 那段）。 */
+const CJK_CHARS = '的一是了我不人在他有这个上们来到时大地为子中你说生国年着就那和要她出也得里后自以会家可下而过天去能对小多然于心学么之都好看起发当没成只如事把还用第样道想作种开美总从无情己面最女但现前些所同日手又行意动方期它头经长儿回位分爱老因很给名法间斯知世什两次使身者被高已亲其进此话常与活正感'
+
+/** 逐字符 LCG 拼一串高熵中文（重复字符会让 bigram 只剩几种，FTS 成本会被严重低估）。 */
 function variedCjk(len: number, seed: number): string {
-  const pool = '的一是了我不人在他有这个上们来到时大地为子中你说生国年着就那和要她出也得里后自以会家可下而过天去能对小多然于心学么之都好看起发当没成只如事把还用第样道想作种开美总从无情己面最女但现前些所同日手又行意动方期它头经长儿回位分爱老因很给名法间斯知世什两次使身者被高已亲其进此话常与活正感'
   let out = ''
   let s = seed % 2147483647
   for (let i = 0; i < len; i += 1) {
     s = (s * 1103515245 + 12345) % 2147483648
-    out += pool[s % pool.length]
+    out += CJK_CHARS[s % CJK_CHARS.length]
   }
   return out
+}
+
+/** 一池随机汉字；下面所有行都从它按窗口切（见 {@link cjkRows}）。 */
+const CJK_POOL = variedCjk(1 << 18, 20260924)
+
+/**
+ * 造 `count` 条长度 `len` 的高熵正文（可给每行加一个前缀，用来放关键词）。
+ *
+ * 为什么不再逐字符拼 700 次：逐字符拼 1470 万个字符**本身就是这个文件里最长的一段
+ * 不让出事件循环的同步块**（本机实测约 1.0 秒，比它要测的那段还长），而那纯粹是**造数据的开销**、
+ * 与被测命题无关。改成「一次生成一池、各行按窗口切」之后同样的字节量只剩拷贝成本。
+ * 行内 bigram 多样性才是「FTS 成本没被低估」的真正含义 —— 这条现在由 {@link assertHighEntropy}
+ * 直接断言，不再只写在注释里。
+ */
+function cjkRows(len: number, count: number, prefix?: (i: number) => string): string[] {
+  if (len > CJK_POOL.length) {
+    throw new Error(`单行要 ${String(len)} 个字符，比池子（${String(CJK_POOL.length)}）还长 —— 加大 CJK_POOL`)
+  }
+  const span = CJK_POOL.length - len
+  const out: string[] = []
+  for (let i = 0; i < count; i += 1) {
+    const body = CJK_POOL.substr((i * 4096) % span, len)
+    out.push(prefix === undefined ? body : prefix(i) + body)
+  }
+  return out
+}
+
+/** 一行里有多少种不同 bigram —— 高熵与否就看这个数。 */
+function distinctBigrams(s: string): number {
+  const seen = new Set<string>()
+  for (let i = 0; i + 1 < s.length; i += 1) seen.add(s.slice(i, i + 2))
+  return seen.size
+}
+
+/**
+ * 断言夹具正文的 bigram 多样性没有塌掉。
+ *
+ * 2026-09-24 第一次把这件事量出来（而不是写在注释里）：本生成器给出的**有效字符集只有
+ * 62~67 个**（130 字的池 + 那个 LCG 的低周期 ⇒ 一半字符永远抽不到），于是
+ * 21000 字符的行有 **1313~1368** 种 bigram、500 字符的行有 **405~406** 种；
+ * 而 `'震'.repeat(21000)` 只有 **1** 种 —— 那才是这条断言要拦的东西。
+ * 阈值取「行长的 50%」与 1000 的较小值：随机窗口以 1.3~1.6 倍余量通过，重复串差三个数量级。
+ * （想让熵更高要改的是那个 LCG，但那会**同时抬高** FTS 成本、改变本文件所有时间读数 —— 别顺手做。）
+ */
+function assertHighEntropy(row: string, label: string): void {
+  if (row.length === 0) {
+    throw new Error(`夹具正文（${label}）是空串 —— 这条断言本身就没有内容可查，别让它悄悄通过`)
+  }
+  const kinds = distinctBigrams(row)
+  const floor = Math.min(1000, Math.ceil(row.length / 2))
+  if (kinds < floor) {
+    throw new Error(`夹具正文（${label}）只有 ${String(kinds)} 种 bigram，低于 ${String(floor)} 的下限 —— FTS 成本会被低估，这条用例的结论不成立`)
+  }
 }
 
 /** 跑一次构建，返回「窗口内其它宏任务被调度的时刻」与「两次 tick 之间的最大空档(ms)」。 */
@@ -389,8 +444,10 @@ describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
     // 那次 flush 会一次性插入 1000 万+ 汉字，实测单块 550ms（叠上收尾后整块 902ms）；
     // 有了字符上界，同一夹具下循环内单块实测 32ms。
     // 正文必须高熵：`'震'.repeat(n)` 这类重复串只有极少数 distinct bigram，
-    // FTS 插入成本会低到看不出差别（会得到假绿，实测过）。
-    const bodies = Array.from({ length: 700 }, (_, i) => variedCjk(21000, i + 1))
+    // FTS 插入成本会低到看不出差别（会得到假绿，实测过）。这条性质现在由 assertHighEntropy 断住。
+    const bodies = cjkRows(21000, 700)
+    assertHighEntropy(bodies[0] ?? '', '首行')
+    assertHighEntropy(bodies[bodies.length - 1] ?? '', '末行')
     const decrypted = makeRawFixture(bodies)
     const { maxGapMs } = await buildWithTickProbe(decrypted)
     /**
@@ -410,8 +467,9 @@ describe('重建窗口内读侧不被降级', () => {
     // 夹具必须大到让写事务溢出页缓存（默认 2MB）：delete/journal 模式下写事务一旦溢出就
     // 持 EXCLUSIVE 到 COMMIT，读者整段被拒 —— 实测溢出点约 1.75MB。夹具太小时（例如
     // 8000 行 × 90 字节 ≈ 720KB）根本不溢出，这条用例会变成「WAL 有没有都绿」的假绿。
-    const bodies = Array.from({ length: 6000 }, (_, i) =>
-      (i < 5 ? `needle 第 ${i + 1} 条 ` : `普通消息 ${i + 1} `) + variedCjk(500, i + 1))
+    const bodies = cjkRows(500, 6000, (i) => (i < 5 ? `needle 第 ${i + 1} 条 ` : `普通消息 ${i + 1} `))
+    assertHighEntropy(bodies[0] ?? '', '含关键词的首行')
+    assertHighEntropy(bodies[bodies.length - 1] ?? '', '末行')
     const decrypted = makeRawFixture(bodies)
 
     // 先建好旧索引
