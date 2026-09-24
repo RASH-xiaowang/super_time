@@ -29,8 +29,12 @@ export declare const ZSTD_MAGIC: Buffer<ArrayBuffer>;
  * 把已索引的消息**重复**写一遍。升版本顺带把「老索引一律停在构建当天」这个存量
  * 问题一次性修掉（实测生产索引 built_at=2026-09-13、库内最新消息 2026-09-11，
  * 而消息分片里已经有 2026-09-18 的对话）。
+ *
+ * `5`：`message_fts` 改成 FTS5 的**无内容表**（`content=''`）。这是索引的物理布局变了 ——
+ * 老索引的内容列还在，新代码不会再往里读，但**留着它也没有任何收益**（重建走 DROP + 建表），
+ * 所以升版本让所有存量索引在下次构建时重建成小一半的库（实测同夹具 372MB → 175MB）。
  */
-export declare const INDEX_SCHEMA_VERSION = "4";
+export declare const INDEX_SCHEMA_VERSION = "5";
 /** 索引最近一次构建/同步完成的时刻（毫秒 epoch，来自 Date.now()）。 */
 export declare const REFRESHED_KEY = "refreshed_ms";
 /** 每个消息分片的增量水位线（已入索引的最大 sort_seq，毫秒）在 meta 里的键前缀。 */
