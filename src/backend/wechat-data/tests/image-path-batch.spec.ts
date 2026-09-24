@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPhaseLog } from '../../tests/helpers/phase-log.ts'
 import { resolveImageFilePath, resolveImageFilePathsByMd5 } from '../src/query/media-image.ts'
 
 const scratch: string[] = []
@@ -42,26 +43,15 @@ interface Fixture {
  * —— **219 倍**。这与 `search-cursor` 那种「本机 3.7 秒 / CI 20.5 秒（5.5 倍）」是两种不同的病：
  * 那种是真的在算东西，这种本机根本没东西可算。不猜，把每一段的墙钟打在 stdout 上，
  * CI 日志会带着它 —— 口径同本仓库的 `[算料]`：一次运行就能说出断的是哪条腿。
+ * （实现已提到 `tests/helpers/phase-log.ts` 共用 —— 口径 ② 说「越线要能自证」，
+ * 而自证不能只有一个文件有。）
  */
-function phaseLog (label: string): { mark: (name: string) => void, report: () => void } {
-  const spans: Array<[string, number]> = []
-  let last = performance.now()
-  const mark = (name: string): void => {
-    const now = performance.now()
-    spans.push([name, Math.round(now - last)])
-    last = now
-  }
-  const report = (): void => {
-    console.log(`[阶段|${label}] ` + spans.map(([n, ms]) => `${n}=${String(ms)}ms`).join(' '))
-  }
-  return { mark, report }
-}
 
 /**
  * 造一份最小 hardlink.db：`dir2id`（行号 → 目录名）与 `image_hardlink_info_v4`
  * （file_name / dir1 / dir2 / md5 / modify_time），并把 .dat 真写到候选路径上。
  * @param rows - 每行 `[md5, file_name, dir1Name, dir2Name, modifyTime]`。
- * @param phases - 可选的分段计时器（见 {@link phaseLog}）。
+ * @param phases - 可选的分段计时器（见 `tests/helpers/phase-log.ts` 的 {@link createPhaseLog}）。
  * @returns 解密根与「微信原始目录」。
  */
 function makeFixture(rows: Array<[string, string, string, string, number]>, phases?: { mark: (name: string) => void }): Fixture {
@@ -126,7 +116,7 @@ describe('N16：一次查询解析多张图', () => {
   })
 
   it('30 张图只查一次 `lower(md5) IN (...)`（逐张则是 30 次）', () => {
-    const ph = phaseLog('30 张图')
+    const ph = createPhaseLog('image-path-batch｜30 张图')
     const rows: Array<[string, string, string, string, number]> = []
     for (let i = 0; i < 30; i += 1) rows.push([md5Of(i), `f${i}.dat`, 'dirA', 'dirB', 1000 + i])
     const { root, base } = makeFixture(rows, ph)
