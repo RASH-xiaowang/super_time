@@ -198,9 +198,9 @@ function cnNumber (raw: string): number {
   return CN_DIGITS.get(raw) ?? NaN
 }
 
-/** 圈号 ①→1 … ⑳→20（`for…of` 逐码点取，所以这里收到的一定是单个字符）。 */
-function circledNumber (ch: string): number {
-  return (ch.codePointAt(0) ?? 0) - 0x245f
+/** 圈号 ①→1 … ⑳→20。收码点而不是收字符：调用点已经在按 UTF-16 单元走。 */
+function circledNumber (cp: number): number {
+  return cp - 0x245f
 }
 
 /**
@@ -210,21 +210,27 @@ function circledNumber (ch: string): number {
  * 「配合第 ⑪ 步」「（见 ⑬）」之类的 —— 数个数必然虚高（实测数出 14/28 个，而真步骤是 13 个）。
  * 反过来，子清单再怎么写也造不出比榜首更大的序号，所以「声明的步数 == 最大圈号」既严格又稳。
  */
-function stepLabelMismatches (): string[] {
+function stepLabelMismatches (lines: readonly string[] = LINES): string[] {
   const out: string[] = []
-  LINES.forEach((line, i) => {
+  lines.forEach((line, i) => {
     if (!ID_ROW.test(line)) return
     cellsOf(line).forEach((cell) => {
       const m = /已经?落地的([一二三四五六七八九十\d]+)步/.exec(cell)
       if (m === null) return
       const declared = cnNumber(grp(m, 1, '自报步数'))
       let top = 0
-      for (const ch of cell) {
-        const v = circledNumber(ch)
-        if (v >= 1 && v <= 20 && v > top) top = v
+      // 圈号都在 BMP 内（U+2460…），所以按 UTF-16 单元逐个走 + 直接切片看上下文是准的。
+      for (let k = 0; k < cell.length; k += 1) {
+        const v = circledNumber(cell.codePointAt(k) ?? -1)
+        if (!(v >= 1 && v <= 20)) continue
+        // 排掉两种「引用」形态：`第 ⑪ 步`（回指）与 `第 ⑭ 步`（**前向**引用还没做的那一步）。
+        // 前向引用正是这版守卫第一次自红的原因：本行写了「（第 ⑭ 步）」指下一步，而编号只到 ⑬。
+        if (cell.slice(Math.max(0, k - 2), k) === '第 ') continue
+        if (cell.slice(k + 1, k + 3) === ' 步') continue
+        if (v > top) top = v
       }
       if (declared !== top) {
-        out.push(`第 ${String(i + 1)} 行：写着「落地的${grp(m, 1, '自报步数')}步」（=${String(declared)}），那一格里最大的序号却是 ${String(top)}`)
+        out.push(`第 ${String(i + 1)} 行：写着「落地的${grp(m, 1, '自报步数')}步」（=${String(declared)}），那一格里最大的编号却是 ${String(top)}（比的是排除「第 X 步」引用之后的最大编号）`)
       }
     })
   })
@@ -232,9 +238,9 @@ function stepLabelMismatches (): string[] {
 }
 
 /**
- * 「结论基线」那段（第一个 `## ` 之前）不许抄的三类数。
+ * 「结论基线」那段（第一个 `## ` 之前）不许抄的四类会过期的数。
  *
- * 这三样每接一步就变：假红发生率、自报的落地步数、点名到第几步。2026-09-24 实测到的正是这个 ——
+ * 这几样每接一步、每多一次运行就变：假红发生率、自报的落地步数、点名到第几步、榜首中位读数。2026-09-24 实测到的正是这个 ——
  * 开头写着「累计 10 次 / 已经落地的九步」，而同一天条目行里已经是 12 次 / 十三步。
  * 规矩：**要引用就写「见 Nxx 条目行」**，别在开头复述。
  */
@@ -242,6 +248,9 @@ const STALE_IN_OPENING: Array<{ what: string, source: string }> = [
   { what: '假红发生率', source: '累计 \\*\\*\\d+ 次\\*\\*' },
   { what: '自报的落地步数', source: '落地的[一二三四五六七八九十\\d]+步' },
   { what: '点名的第 N 步', source: '第 \\d+ 步' },
+  // 榜历史的中位**每多一次运行就变**：2026-09-24 一个钟头里从 22.1 秒跳到 24.3 秒，
+  // 全是因为窗口里进来了两次新运行。写在开头就是埋一句明天就假的话。
+  { what: '榜首中位读数', source: '中位 [0-9.]+ ?秒' },
 ]
 
 /** 开头那段的终点：第一个二级标题所在行号（找不到就抛，不许静默返回 0 让检查变空转）。 */
@@ -365,7 +374,7 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     expect(Number(grp(m, 4, '开头计数')), '开头写的「未开始」与条目表对不上').toBe(sum('未开始'))
   })
 
-  it('开头「结论基线」那段不复述会过期的数（发生率、落到第几步只写在条目行里）', () => {
+  it('开头「结论基线」那段不复述会过期的数（发生率、步数、榜首读数只写在条目行与台账里）', () => {
     const end = openingEnd()
     const opening = LINES.slice(0, end).join('\n')
     const body = LINES.slice(end).join('\n')
@@ -382,5 +391,19 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     const labeled = LINES.filter((l) => ID_ROW.test(l) && /已经?落地的[一二三四五六七八九十\d]+步/.test(l))
     expect(labeled.length, '一条自报步数的条目行都没找到 —— 写法或正则变了，本条就成了空的').toBeGreaterThanOrEqual(1)
     expect(stepLabelMismatches().join('\n'), '自报的步数与那一格最大的 ①②… 序号对不上（要么漏标了一步，要么步数忘了改）').toBe('')
+  })
+
+  it('「第 ⑭ 步」这种前向引用不算一步，但「；⑭ 真编号」必须算（排引用的规则本身要有判别力）', () => {
+    const row = (cell: string): string => `| N99 | 标题 | 验收 | ${cell} | 已完成 |`
+    // 编号只到 ⑬：回指（第 ⑪ 步）与前向（第 ⑭ 步）都不该被当成「又多了一步」
+    const refs = row('已经落地的十三步：① 一；② 二；⑬ 三。配合第 ⑪ 步；下一步（第 ⑭ 步）见台账。')
+    expect(stepLabelMismatches([refs]).join('\n'), '「第 ⑭ 步」是引用不是编号 —— 排掉它的规则失效了').toBe('')
+    // 真的多出一步（`；⑭ ` 是编号的写法）却忘了改自报数 ⇒ 必须红
+    const real = row('已经落地的十三步：① 一；② 二；⑬ 三；⑭ **又做了一步**。')
+    expect(stepLabelMismatches([real]).join('\n'), '多出一个真编号却没改自报步数，这条判据必须红').not.toBe('')
+    // 中文数字要真解析：写「九」而编号到 ⑬ ⇒ 红
+    expect(stepLabelMismatches([row('已经落地的九步：① 一；② 二；⑬ 三。')]).join('\n')).not.toBe('')
+    // 认不出来的写法不许静默通过（解析成 NaN ⇒ 与任何编号都不等 ⇒ 红）
+    expect(stepLabelMismatches([row('已经落地的一二三步：① 一。')]).join('\n'), '「一二三」不是能解析的数，不能被当成对得上').not.toBe('')
   })
 })

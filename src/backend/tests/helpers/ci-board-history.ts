@@ -117,7 +117,12 @@ export function worstOf(boards: readonly RunBoard[]): RunBoard | null {
 export const TOP_BUDGET_MS = 15000
 
 /**
- * 榜首耗时的中位数（毫秒）—— A 类那半条口径读这个数。
+ * 榜首耗时的中位数（毫秒）—— 口径 ① 目前读这个数。
+ *
+ * **它还不是「A 类」的中位数**：`topMs` 是那一次**整张榜的第一名**，而第一名今天常常是
+ * B 类文件（`gateway-export-stream-progress.spec.ts` 本机 4 条用例 574 毫秒，CI 上摆到 23~36 秒）。
+ * A 类 ⊆ 全体 ⇒ 这个中位数只会**偏高**：读到 `≤` 预算时「满足」是可信的，
+ * 读到 `>` 预算时**还不能判「不满足」** —— 要等第 ⑭ 步（本机基线 + 整份榜）把两类分开。
  * @param boards - 有榜的那些次运行。
  * @returns 中位数；一次都没有时为 `null`（不是 0）。
  */
@@ -170,10 +175,14 @@ export function formatHistory(
   out.push([
     '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
     `${(budgetMs / 1000).toFixed(1)}s`,
-    `⇒ 实测中位 ${(median / 1000).toFixed(1)}s`,
-    okA ? '**满足**' : `**不满足**（超 ${(median / budgetMs).toFixed(2)} 倍）`,
+    `⇒ 实测「整张榜第一名」的中位 ${(median / 1000).toFixed(1)}s`,
+    okA ? '**满足**（上界都达标 ⇒ A 类必然达标）' : `**判不了**（是预算的 ${(median / budgetMs).toFixed(2)} 倍，但这只是**上界**）`,
     `（${String(boards.length)} 次有榜的运行）`,
   ].join(' '))
+  out.push('  ⚠ ① 这个中位量的是**全体榜首**，不是 A 类榜首：今天的榜首常常正是 B 类文件'
+    + '（`gateway-export-stream-progress.spec.ts` 本机 4 条用例 574 毫秒，CI 上摆到 23~36 秒），'
+    + '混进来只会把这个数**抬高** ⇒ 「判不了」不等于「不满足」，反过来「满足」是可信的。'
+    + '两类要真分开，得先有本机基线 + 整份榜（第 ⑭ 步）。')
   out.push([
     '  ② B 类越线（≥60 秒）要可自证：这批运行里越线',
     `${String(over.length)} 次`,

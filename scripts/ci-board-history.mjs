@@ -77,7 +77,7 @@ if (localLogs.length > 0) {
     process.exit(2)
   }
   const items = (list.workflow_runs ?? []).slice(0, runs)
-  console.log(`[榜历史] 看 ${String(items.length)} 次「${workflow}」已完成的运行（口径：A 类榜首中位 ≤ ${String(budgetS)} 秒；B 类越线要求「同一次日志能自证」）`)
+  console.log(`[榜历史] 看 ${String(items.length)} 次「${workflow}」已完成的运行（口径：A 类榜首中位 ≤ ${String(budgetS)} 秒 —— 今天的实现读的是**全体榜首**的中位，是一个上界；B 类越线要求「同一次日志能自证」）`)
   console.log('  注意：重跑过的运行这里只能读到**最新一次尝试**的榜（API 不暴露旧尝试），所以印出来的「最差值」是**下界** —— 可能被盖小，不会被夸大。')
   for (const r of items) {
     const runNumber = String(r.run_number ?? r.id)
