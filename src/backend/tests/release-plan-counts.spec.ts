@@ -232,9 +232,18 @@ function cnNumber (raw: string): number {
   return CN_DIGITS.get(raw) ?? NaN
 }
 
-/** 圈号 ①→1 … ⑳→20。收码点而不是收字符：调用点已经在按 UTF-16 单元走。 */
+/**
+ * 圈号 ①→1 … ⑳→20、㉑→21 … ㉟→35。收码点而不是收字符：调用点已经在按 UTF-16 单元走。
+ *
+ * 为什么要接第二段：**步骤已经写到 ⑳，下一步就是 ㉑，而 U+3251 那一段不在 `0x2460 + n` 的连号里**。
+ * 只认 1..20 的写法会让守卫从第 21 步起永远算不出更大的编号 —— 那正是这条守卫最坏的失效方式：
+ * 「声明的步数」与「最大编号」永远相等（因为编号根本不再被认出来），漂移看不见。
+ * 同时 `U+2474..` 那一段是**带括号的** ⑴⑵…，用旧公式减出来的数会混进 21..34 —— 现在显式不认。
+ */
 function circledNumber (cp: number): number {
-  return cp - 0x245f
+  if (cp >= 0x2460 && cp <= 0x2473) return cp - 0x245f
+  if (cp >= 0x3251 && cp <= 0x325F) return cp - 0x323C
+  return -1
 }
 
 /**
@@ -256,7 +265,7 @@ function stepLabelMismatches (lines: readonly string[] = LINES): string[] {
       // 圈号都在 BMP 内（U+2460…），所以按 UTF-16 单元逐个走 + 直接切片看上下文是准的。
       for (let k = 0; k < cell.length; k += 1) {
         const v = circledNumber(cell.codePointAt(k) ?? -1)
-        if (!(v >= 1 && v <= 20)) continue
+        if (!(v >= 1 && v <= 35)) continue
         // 排掉两种「引用」形态：`第 ⑪ 步`（回指）与 `第 ⑭ 步`（**前向**引用还没做的那一步）。
         // 前向引用正是这版守卫第一次自红的原因：本行写了「（第 ⑭ 步）」指下一步，而编号只到 ⑬。
         if (cell.slice(Math.max(0, k - 2), k) === '第 ') continue
@@ -458,5 +467,11 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     expect(stepLabelMismatches([row('已经落地的九步：① 一；② 二；⑬ 三。')]).join('\n')).not.toBe('')
     // 认不出来的写法不许静默通过（解析成 NaN ⇒ 与任何编号都不等 ⇒ 红）
     expect(stepLabelMismatches([row('已经落地的一二三步：① 一。')]).join('\n'), '「一二三」不是能解析的数，不能被当成对得上').not.toBe('')
+    // 第 21 步起是 ㉑…㉟（U+3251 段，不在 `0x2460 + n` 的连号里）：认不出它就等于「编号永远不超过 20」，
+    // 于是声明的步数与最大编号永远相等 —— 这条守卫最坏的失效方式。
+    expect(stepLabelMismatches([row('已经落地的二十一步：① 一；㉑ 二十一。')]).join('\n'), '㉑ 必须是 21').toBe('')
+    expect(stepLabelMismatches([row('已经落地的二十步：① 一；㉑ 二十一。')]).join('\n'), '有 ㉑ 却声明二十步 ⇒ 必须红').not.toBe('')
+    // U+2474.. 是**带括号的** ⑴⑵…，不是圈号；按旧公式减出来的数会混进 21..34 ⇒ 不许认
+    expect(stepLabelMismatches([row('已经落地的一步：① 一。⑴ 这不是编号 ⑵ 也不是')]).join('\n'), '带括号数字不许当编号').toBe('')
   })
 })
