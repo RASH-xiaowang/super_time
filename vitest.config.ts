@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config'
 
-import { collectTestTimings, fileAccounts, formatBoard, formatFileAccounts, formatTestBoard, type FileTiming, type ReportTask, type TestTiming } from './src/backend/tests/helpers/slowest-files.ts'
+import { collectTestTimings, fileAccounts, formatBaselineBoard, formatBoard, formatFileAccounts, formatTestBoard, type FileTiming, type ReportTask, type TestTiming } from './src/backend/tests/helpers/slowest-files.ts'
 
 /**
  * 跑完把「最慢的测试文件榜」+「最慢的用例榜」打出来（N36）。
@@ -30,6 +30,9 @@ const slowestBoardReporter = {
     // 第三张小表：慢文件的「文件总时长 vs 用例合计」——N36 口径 ② 要的那句「时间不在这次的代码里」
     // 从此对任何文件都拿得出来，不再只有手写过分段墙钟的那一个。
     for (const line of formatFileAccounts(fileAccounts(rows, tests))) console.log(line)
+    // 采集「本机基线」时（`npm run ci:baseline` 设这个环境变量）才把**全部**文件打出来：
+    // 平时 235 行是噪声，而口径 ① 要把 CI 的数按 A/B 分类，缺的就是这份串行的本机数。
+    if (process.env.SUPERTIME_BASELINE === '1') for (const line of formatBaselineBoard(rows)) console.log(line)
   },
 }
 
