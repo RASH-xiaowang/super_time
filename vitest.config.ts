@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config'
 
-import { collectTestTimings, formatBoard, formatTestBoard, type FileTiming, type ReportTask, type TestTiming } from './src/backend/tests/helpers/slowest-files.ts'
+import { collectTestTimings, fileAccounts, formatBoard, formatFileAccounts, formatTestBoard, type FileTiming, type ReportTask, type TestTiming } from './src/backend/tests/helpers/slowest-files.ts'
 
 /**
  * 跑完把「最慢的测试文件榜」+「最慢的用例榜」打出来（N36）。
@@ -27,6 +27,9 @@ const slowestBoardReporter = {
     for (const f of files) collectTestTimings(f.tasks ?? [], [f.name ?? '(无名文件)'], tests)
     const fileMs = new Map(rows.map((r) => [r.name, r.ms]))
     for (const line of formatTestBoard(tests, fileMs, 10)) console.log(line)
+    // 第三张小表：慢文件的「文件总时长 vs 用例合计」——N36 口径 ② 要的那句「时间不在这次的代码里」
+    // 从此对任何文件都拿得出来，不再只有手写过分段墙钟的那一个。
+    for (const line of formatFileAccounts(fileAccounts(rows, tests))) console.log(line)
   },
 }
 

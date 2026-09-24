@@ -1,14 +1,18 @@
 /**
- * `tests/helpers/slowest-files.ts` 的应用例 —— 两张榜的排序、破平、倍率/占比与空表都要判得动。
+ * `tests/helpers/slowest-files.ts` 的应用例 —— 三张表的排序、破平、倍率/占比与空表都要判得动。
+ *
+ * 三张表（文件榜、用例榜、文件内账）的排序、破平、倍率/占比与空表都要判得动。
  *
  * 这两张榜是 N36 的判据面（CI 上那条假红线是 vitest 硬编码的 60 秒），所以它们自己不能是
  * 「只能靠真跑一轮才知道对不对」的东西：这里直接喂数据，把顺序、并列、余量与占比钉死。
+ * 第三张表（文件内账）钉的是**措辞分支** —— 它对同一次运行可能给出三种完全不同的结论
+ * （时间在用例里 / 不在用例里 / 这条不作数），走错分支就是指着无辜的文件喊「不是代码的锅」。
  *
  * @module tests/slowest-files
  */
 import { describe, expect, it } from 'vitest'
 
-import { RPC_TIMEOUT_MS, collectTestTimings, formatBoard, formatRow, formatTestBoard, formatTestRow, topSlowest, topSlowestTests, type FileTiming, type ReportTask, type TestTiming } from './helpers/slowest-files.ts'
+import { RPC_TIMEOUT_MS, collectTestTimings, fileAccounts, formatBoard, formatFileAccounts, formatRow, formatTestBoard, formatTestRow, sumCasesByFile, topSlowest, topSlowestTests, type FileTiming, type ReportTask, type TestTiming } from './helpers/slowest-files.ts'
 import { at, grp } from './helpers/strict-index.ts'
 
 const f = (name: string, ms: number): FileTiming => ({ name, ms })
@@ -141,5 +145,59 @@ describe('N36 用例榜：摊平任务树、占比与自我声明', () => {
     const mixed = formatTestBoard([...zeros, t('c.spec.ts', '丙', 9)], new Map([['c.spec.ts', 9]]))
     expect(at(mixed, 0, '有数据时的表头')).toContain('最慢的前 3 名')
     expect(at(mixed, 1, '第一名')).toContain('c.spec.ts')
+  })
+})
+
+describe('N36 文件内账：时间在不在这次的用例里（口径 ② 的通用那一半）', () => {
+  const one = (lines: readonly string[], marker: string): string => {
+    const hit = lines.find((l) => l.includes(marker))
+    if (hit === undefined) throw new Error(`没有哪一行含「${marker}」，实际是：\n${lines.join('\n')}`)
+    return hit
+  }
+
+  it('大部分时间落在用例之外时，要说出具体的百分比与用例条数', () => {
+    const lines = formatFileAccounts([{ file: 'slow.spec.ts', fileMs: 60400, caseMs: 8200, cases: 12 }])
+    const row = one(lines, 'slow.spec.ts')
+    expect(row).toContain('12 条')
+    expect(row, '60.4 秒里只有 8.2 秒在用例上 ⇒ 86% 不在').toContain('86% 不在任何用例里')
+    expect(row).not.toMatch(/NaN|Infinity|-\d/)
+  })
+
+  it('时间几乎都在用例里时用另一种措辞 —— 这两种病的处置完全相反', () => {
+    const row = at(formatFileAccounts([{ file: 'busy.spec.ts', fileMs: 20000, caseMs: 19400, cases: 3 }]), 1, '数据行')
+    expect(row, '96% 落在用例上 ⇒ 是这个文件自己在做事，该减的是它的活').toContain('时间几乎都在用例里')
+    expect(row, '不许在这种形状下还写「不在任何用例里」').not.toContain('不在任何用例里')
+  })
+
+  it('一条用例都没收集到时那行不作数 —— 否则「合计 0」会被读成「全在文件壳里」', () => {
+    const row = at(formatFileAccounts([{ file: 'empty.spec.ts', fileMs: 30000, caseMs: 0, cases: 0 }]), 1, '数据行')
+    expect(row).toContain('这一行不作数')
+    expect(row).not.toContain('100% 不在任何用例里')
+  })
+
+  it('用例合计反而比文件长（并发或重复计数）时只给量级，绝不印出负的「不在用例里」', () => {
+    const row = at(formatFileAccounts([{ file: 'conc.spec.ts', fileMs: 5000, caseMs: 7400, cases: 9 }]), 1, '数据行')
+    expect(row).toContain('比文件还长')
+    expect(row, 'gap 是负数，印出来就是「-2400ms 不在用例里」这种鬼话').not.toMatch(/-\d+m?s/)
+  })
+
+  it('只算前几名、跳过低于门槛的文件；一个都没有时表头自己说「此刻是空的」', () => {
+    const files = [f('a.spec.ts', 4600), f('b.spec.ts', 3300), f('c.spec.ts', 700)]
+    const tests = [t('a.spec.ts', '甲', 4000), t('b.spec.ts', '乙', 3000), t('c.spec.ts', '丙', 600)]
+    expect(fileAccounts(files, tests, 2).map((a) => a.file), 'n=2 只取前两名').toEqual(['a.spec.ts', 'b.spec.ts'])
+    expect(fileAccounts(files, tests, 3).map((a) => a.file), 'c 只有 700ms，默认 1 秒门槛把它挡掉（榜尾几百毫秒的文件没必要打）').toEqual(['a.spec.ts', 'b.spec.ts'])
+    expect(at(fileAccounts(files, tests, 3, 500), 2, '门槛调到 500ms 时 c 该在').file).toBe('c.spec.ts')
+    const none = formatFileAccounts(fileAccounts([f('tiny.spec.ts', 40)], [t('tiny.spec.ts', '甲', 40)], 3))
+    expect(at(none, 0, '空表自我声明')).toContain('这张表此刻是空的')
+  })
+
+  it('汇总按文件分堆，且 sumCasesByFile 与 fileAccounts 口径一致（两处算不一样就会自相矛盾）', () => {
+    const tests = [t('a.spec.ts', '甲', 100), t('a.spec.ts', '乙', 250), t('b.spec.ts', '丙', 40)]
+    const sums = sumCasesByFile(tests)
+    expect(at([...sums.keys()], 0, '第一个文件')).toBe('a.spec.ts')
+    expect(sums.get('a.spec.ts')).toEqual({ ms: 350, n: 2 })
+    const acc = fileAccounts([f('a.spec.ts', 9000), f('b.spec.ts', 1200)], tests, 3)
+    expect(acc.map((x) => `${x.file}:${String(x.caseMs)}/${String(x.cases)}`))
+      .toEqual(['a.spec.ts:350/2', 'b.spec.ts:40/1'])
   })
 })
