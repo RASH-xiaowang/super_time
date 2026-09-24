@@ -1,18 +1,21 @@
 import { defineConfig } from 'vitest/config'
 
-import { formatBoard, type FileTiming } from './src/backend/tests/helpers/slowest-files.ts'
+import { collectTestTimings, formatBoard, formatTestBoard, type FileTiming, type ReportTask, type TestTiming } from './src/backend/tests/helpers/slowest-files.ts'
 
 /**
- * 跑完把「最慢的测试文件榜」打出来（N36）。
+ * 跑完把「最慢的测试文件榜」+「最慢的用例榜」打出来（N36）。
  *
  * 为什么值得占报告器这个位置：CI 那条「用例全过、退出码却是 1」的假红，判据是**单个文件的耗时**
  * 有没有逼近 vitest 硬编码的 60 秒（birpc `DEFAULT_TIMEOUT = 6e4`）。以前这个数只能去 Actions
  * 下日志 zip、解压、去 ANSI、再人肉排序才知道 —— 于是「离线还有多远」这件事没人主动去看。
  * 现在每次运行自己打，并且同一份日志里也有测试自己吐的 `[算料]` 行，倍率能在同一次运行里算
  * （跨运行比出来的是机器容量，不是机制 —— 这条教训见 RELEASE-PLAN 的 N36）。
+ *
+ * 第二张榜（用例）是被 2026-09-24 那次运行逼出来的：文件榜第一次喊出「`overview.spec.ts` 104.5 秒
+ * 已越线」，而它 3 个用例、本机整个文件 68 毫秒 —— 只知道「哪个文件」下一步依然无从下手。
  */
 const slowestBoardReporter = {
-  onFinished: (files: Array<{ name?: string, duration?: number, result?: { duration?: number } }> = []) => {
+  onFinished: (files: ReportTask[] = []) => {
     // duration 在 vitest 的不同版本里一会儿挂在 task 上、一会儿挂在 task.result 上；
     // 读错字段的后果是「全 0 的榜看着像没有慢文件」，所以 formatBoard 会自己识破并改打警告。
     const rows: FileTiming[] = files.map((f) => ({
@@ -20,6 +23,10 @@ const slowestBoardReporter = {
       ms: Math.max(0, f.result?.duration ?? f.duration ?? 0),
     }))
     for (const line of formatBoard(rows, 10)) console.log(line)
+    const tests: TestTiming[] = []
+    for (const f of files) collectTestTimings(f.tasks ?? [], [f.name ?? '(无名文件)'], tests)
+    const fileMs = new Map(rows.map((r) => [r.name, r.ms]))
+    for (const line of formatTestBoard(tests, fileMs, 10)) console.log(line)
   },
 }
 
