@@ -66,8 +66,12 @@ jobs:
       - name: 接口参考与源码一致
         run: npm run docs:api:check
 
+      # 单元测试：跑的是 `npm test`，但走一层包装 —— 只有「已归因的 vitest RPC 假红」
+      # （用例全过 + 退出码非 0 + 日志里有 `Timeout calling "onTaskUpdate"`）才允许自动重跑一次，
+      # 且必须把第一次的榜首文件与秒数写进 step summary（PR 页面可见）。
+      # 政策与三条判据见 docs/RELEASE-PLAN.md 的 N36 与 src/backend/tests/helpers/ci-unit-retry.ts。
       - name: 单元测试
-        run: npm test
+        run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs
 
       - name: 前端构建
         run: npm run build:ui
