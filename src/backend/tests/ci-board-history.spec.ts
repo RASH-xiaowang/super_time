@@ -10,12 +10,17 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  HARD_CEILING_MS,
   LINE_MS,
   MIN_FOR_BAND,
+  MIN_OBS_TO_JUDGE,
+  OVER_SHARE_MAX,
   classifyRun,
   compareWindows,
+  distVerdict,
   fileHistory,
   formatCompare,
+  formatDistVerdict,
   formatFileHistory,
   formatHistory,
   formatVerdict,
@@ -28,6 +33,7 @@ import {
   robustSigma,
   stripLogNoise,
   verdictOf,
+  wilsonInterval,
   worstOf,
   N33_FIRST_RECORD,
   n33Violations,
@@ -56,7 +62,7 @@ const LOG_CLEAN = [
   '  2.   11.8s   距线 5.08×  src/backend/wechat-data/tests/kb-vector-index.spec.ts',
 ].join('\n')
 
-const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolean, file?: string, rows?: BoardRow[], sha?: string } = {}): RunBoard => {
+const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolean, file?: string, rows?: BoardRow[], sha?: string, count?: number } = {}): RunBoard => {
   const topFile = opts.file ?? `x-${label}.spec.ts`
   return {
     label,
@@ -67,6 +73,7 @@ const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolea
     sawRpcTimeout: opts.red ?? false,
     rows: opts.rows ?? [{ rank: 1, file: topFile, ms: topMs, crossed: opts.crossed ?? false }],
     ...(opts.sha === undefined ? {} : { sha: opts.sha }),
+    ...(opts.count === undefined ? {} : { fileCount: opts.count }),
   }
 }
 
@@ -458,5 +465,123 @@ describe('N33：e2e 那一行 `[N33 计数]` 的解析与三桶判读', () => {
     expect(text).toContain('不计入前两桶')
     const empty = formatN33History([], ['483']).join('\n')
     expect(empty, '一行都没有时必须自认拿不到，而不是印一张看着像安全的空表').toContain('这张空表不代表')
+  })
+})
+
+describe('① 的分布口径（用户 2026-09-24 第二次改定：预算 15 秒不动，改量「有多少文件在线以上」）', () => {
+  /** 所有文件本机都算 3 秒 ⇒ CI 读数只要不超过 60 秒就判成 A（`B_RATIO` 倍以内）。 */
+  const local = (): number | null => 3000
+  const mkRows = (ms: number[]): BoardRow[] => ms.map((m, i) => ({ rank: i + 1, file: `f${String(i)}.spec.ts`, ms: m, crossed: false }))
+  const mkBoard = (label: string, ms: number[], count = 240): RunBoard => b(label, ms[0] ?? 0, { file: 'f0.spec.ts', rows: mkRows(ms), count })
+
+  it('榜表头那句「243 个测试文件」要能解成分母；解不出来是 undefined，不是 0', () => {
+    const withHead = parseRunLog(LOG_CLEAN, '1')
+    expect(withHead?.fileCount, '这份表头写的就是 231 个测试文件').toBe(231)
+    const noHead = parseRunLog([
+      TS + '[耗时榜]（这份是旧的，表头没写文件总数）',
+      TS + '  1.   20.8s   距线 2.88×  src/backend/wechat-data/tests/search-cursor.spec.ts',
+    ].join('\n'), '2')
+    expect(noHead?.fileCount, '读不到分母时必须自认读不到 —— 拿 0 当分母会让「占比」变成除零').toBeUndefined()
+  })
+
+  it('Wilson 区间：一次都没超预算 ≠ 铁证（k=0 也要给出一条有宽度的上界）', () => {
+    const big = wilsonInterval(0, 240)
+    expect(big.lo, 'k=0 时下界必然是 0').toBe(0)
+    expect(big.hi, '240 个文件里 0 个超预算 ⇒ 上界要收窄到 5% 以内才谈得上「满足」').toBeLessThanOrEqual(OVER_SHARE_MAX)
+    const small = wilsonInterval(0, 10)
+    expect(small.hi, '只有 10 个分母时不许判「满足」—— 正态近似在 k=0 会给出宽度 0 的区间，那是假铁证').toBeGreaterThan(OVER_SHARE_MAX)
+  })
+
+  // 三份榜：每个文件都上榜 3 次 ⇒ 够判「平时」（`MIN_OBS_TO_JUDGE`），
+  // 不然下面的「满足」会是**因为没东西可判**而满足 —— 那是这条口径最容易骗自己的方式。
+  const okBoard = (label: string, top = 12000): RunBoard =>
+    mkBoard(label, [top, 11000, 9000, 8000, 7000, 6000, 5000, 4000, 3500, 3000])
+
+  it('满足：A 类里没有一个文件平时超预算，且第十名在线下（榜外必然也在线下）', () => {
+    const v = distVerdict([okBoard('1'), okBoard('2'), okBoard('3')], local)
+    expect(v?.verdict, v?.why ?? '').toBe('满足')
+    expect(v?.slow).toEqual([])
+    expect(v?.thin, '三个样本的文件不该被当成「判不了」').toEqual([])
+    expect(v?.closed).toBe(true)
+  })
+
+  it('平时超预算的文件要被抓出来（哪怕占比还在 5% 以内 —— 名字必须印出来）', () => {
+    const v = distVerdict([okBoard('1', 20000), okBoard('2', 21000), okBoard('3', 22000)], local)
+    expect(v?.slow.map((s) => s.file), 'f0 三次都在 20 秒以上 ⇒ 它「平时」就超预算').toEqual(['f0.spec.ts'])
+    expect(v?.slow[0]?.obs).toBe(3)
+    expect(v?.verdict, `1/240 = 0.4% 还在 5% 上限内：${v?.why ?? ''}`).toBe('满足')
+    expect(v?.readings, '但读数那一半要说出来：三条读数确实在线以上').toEqual({ a: 30, over: 3, b: 0 })
+  })
+
+  it('硬顶量的是「平时」：一个文件三次都在 40 秒以上 ⇒ 不满足，占比达标抵不过', () => {
+    const v = distVerdict([okBoard('1', HARD_CEILING_MS + 1000), okBoard('2', HARD_CEILING_MS + 2000), okBoard('3', HARD_CEILING_MS + 3000)], local)
+    expect(v?.ceiling.map((c) => c.file)).toEqual(['f0.spec.ts'])
+    expect(v?.verdict).toBe('不满足')
+    expect(v?.why).toContain('平时')
+  })
+
+  it('单点越顶不算 ① 的账（那是「按最差值判」还魂），但必须印出来交给 ②', () => {
+    const v = distVerdict([okBoard('1', 45000), okBoard('2'), okBoard('3')], local)
+    expect(v?.ceiling, '只越了一次 ⇒ 不是「平时」').toEqual([])
+    expect(v?.verdict, v?.why ?? '').toBe('满足')
+    expect(v?.spikes.map((s) => `${s.file}@${s.label}`)).toEqual(['f0.spec.ts@1'])
+    const j = formatDistVerdict(v).join('\n')
+    expect(j).toContain('单点')
+    expect(j).toContain('run1')
+    expect(j, '偶发单点要指回 ②（同一次日志自证慢在哪段）').toContain('归 ②')
+  })
+
+  it('只上榜一两次的文件不许被当成「平时」—— 榜只有前十，上榜多半正因为它那次慢', () => {
+    expect(MIN_OBS_TO_JUDGE, '门槛是 3 次 ⇒ 下面这两份榜里没有任何文件够判「平时」').toBe(3)
+    const v = distVerdict([
+      mkBoard('1', [30000, 11000, 9000, 8000, 7000, 6000, 5000, 4000, 3500, 3000]),
+      mkBoard('2', [31000, 11000, 9000, 8000, 7000, 6000, 5000, 4000, 3500, 3000]),
+    ], local)
+    expect(v?.slow, '两次读数 ⇒ 判不了「平时」').toEqual([])
+    expect(v?.thin.map((t) => t.file), '但也不能悄悄丢掉').toEqual(['f0.spec.ts'])
+    expect(formatDistVerdict(v).join('\n')).toContain('看过但判不了')
+  })
+
+  it('第十名自己就在预算之外 ⇒ 判不准，不许把「榜上没别的文件超线」读成达标', () => {
+    // 整份榜都在 16 秒以上 ⇒ 第十名也超预算 ⇒ 「前十以外还有没有慢文件」这件事看不见。
+    const highBoard = (label: string): RunBoard => mkBoard(label, [20000, 19500, 19000, 18500, 18000, 17500, 17000, 16500, 16200, 16000])
+    const v = distVerdict([highBoard('1'), highBoard('2'), highBoard('3')], local)
+    expect(v?.verdict).toBe('判不准')
+    expect(v?.why, '唯一的盲点是「前十以外看不见」，闭合条件不成立就必须说出来').toContain('第十名')
+    expect(v?.closed).toBe(false)
+  })
+
+  it('榜不满十行 ⇒ 前十以外看不见，判不了而不是「满足」', () => {
+    const v = distVerdict([mkBoard('1', [9000, 8000, 7000])], local)
+    expect(v?.verdict).toBe('判不准')
+    expect(v?.why).toContain('不满十行')
+  })
+
+  it('没有分母（表头读不到）时不许给判决，也不许印成「满足」', () => {
+    const board = mkBoard('1', [12000, 11000, 9000, 8000, 7000, 6000, 5000, 4000, 3500, 3000], 0)
+    expect(distVerdict([board], local), 'fileCount 缺失时返回 null，而不是拿 0 当分母').toBeNull()
+    const j = formatDistVerdict(null).join('\n')
+    expect(j).toContain('判不了')
+    expect(j).not.toContain('**满足**')
+  })
+
+  it('B 类文件不算进「超预算的文件」—— 它慢在 runner，不在代码里', () => {
+    // f0 本机 10 毫秒、CI 上 45 秒（4500 倍）⇒ 判 B；其余文件本机 3 秒 ⇒ 判 A 且都在线下。
+    const loc = (file: string): number | null => (file === 'f0.spec.ts' ? 10 : 3000)
+    const v = distVerdict([okBoard('1', 45000), okBoard('2', 45000), okBoard('3', 45000)], loc)
+    expect(v?.slow, '把一个 B 类文件算成「超预算的文件」等于把 runner 的抖动记在代码账上 —— 那正是第一次口径被推翻的原因').toEqual([])
+    expect(v?.ceiling, '同理，「平时越硬顶」也不把 B 类算进来').toEqual([])
+    expect(v?.verdict, v?.why ?? '').toBe('满足')
+    expect(v?.spikes.length, '但它越过硬顶的那三次要留在纸上，交给 ② 去自证').toBe(3)
+    expect(v?.readings.b, '被 A/B 分类挡在外面的读数要**数出来** —— 不然「满足」可能只是分类吃掉了慢文件').toBe(3)
+    expect(formatDistVerdict(v).join('\n'), '印的时候也要带上这个数').toContain('3 条读数判成了 B')
+  })
+
+  it('报告里分布口径是判决，旧的中位口径降为参考并说明为什么被替代', () => {
+    const j = formatHistory([okBoard('1'), okBoard('2'), okBoard('3')], [], 15000, local).join('\n')
+    expect(j).toContain('① 分布口径 ⇒ **满足**')
+    expect(j).toContain('参考（旧口径 ①')
+    expect(j).toContain('第二次改定')
+    expect(j, '新口径更松 ⇒ 它必须自己说清「换口径不等于问题消失」').toContain('换口径不等于问题消失')
   })
 })

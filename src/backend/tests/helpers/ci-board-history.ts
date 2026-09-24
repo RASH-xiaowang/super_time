@@ -45,6 +45,13 @@ export interface RunBoard {
   sha?: string
   /** 这次运行的分支名（同上）。 */
   branch?: string
+  /**
+   * 榜的表头说的「多少个测试文件」（`[耗时榜] 243 个测试文件…`）。
+   *
+   * 分布口径要它当分母 —— 没有分母，「>15 秒的文件占 5%」就是一句没有基数的话。
+   * 老日志（表头换过写法）里读不到时是 `undefined`，不是 0。
+   */
+  fileCount?: number
 }
 
 /** 榜上的一行。 */
@@ -126,6 +133,7 @@ export function parseRunLog(rawLog: string, label: string, meta: { sha?: string,
   const rows = lastBoardRows(text)
   const top = rows.length > 0 ? at(rows, 0, '榜的第一行') : null
   if (top === null) return null
+  const fileCount = lastBoardFileCount(text)
   return {
     label,
     topMs: top.ms,
@@ -134,9 +142,27 @@ export function parseRunLog(rawLog: string, label: string, meta: { sha?: string,
     ratio: LINE_MS / Math.max(1, top.ms),
     sawRpcTimeout: RPC_TIMEOUT.test(text),
     rows,
+    ...(fileCount === null ? {} : { fileCount }),
     ...(meta.sha === undefined ? {} : { sha: meta.sha }),
     ...(meta.branch === undefined ? {} : { branch: meta.branch }),
   }
+}
+
+/** 榜表头：`[耗时榜] 243 个测试文件，最慢的前 10 名：`。 */
+const BOARD_HEAD = /^\s*\[耗时榜\]\s*(\d+)\s*个测试文件/
+
+/**
+ * 取**最后一张**榜的表头里的文件总数（与 {@link lastBoardRows} 同一张榜，别跨榜混分母）。
+ * @param text - 去过噪的日志全文。
+ * @returns 文件总数，或 `null`（表头写法变了 / 没有榜）。
+ */
+function lastBoardFileCount(text: string): number | null {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const m = BOARD_HEAD.exec(at(lines, i, '日志行'))
+    if (m !== null) return Number(grp(m, 1, '榜表头的文件总数'))
+  }
+  return null
 }
 
 /**
@@ -158,6 +184,9 @@ export function worstOf(boards: readonly RunBoard[]): RunBoard | null {
  * ① **(A) 类榜首 ≤15 秒**（真在算东西的那类，用**中位数**读 —— 偶发的 B 类停顿抬的是最大值）；
  * ② **B 类越线必须可自证**（同一次日志里有 `[耗时榜]`/`[用例榜]`/`[阶段|…]` 能说出「哪段都不在代码里」，
  *    并按第 ⑪ 步的政策允许一次带记录重跑）。这条工具只能数出「有几次越线」，自证与否看日志。
+ *
+ * **同日第二次改定**：① 的**预算 15 秒没动**，动的量的是统计量 —— 从「每次运行最慢那个文件的中位」
+ * 换成「分布」（超预算文件的占比 + 一条硬顶），理由与判据见 {@link OVER_SHARE_MAX} 那段。
  */
 export const TOP_BUDGET_MS = 15000
 
@@ -348,6 +377,212 @@ export function formatVerdict (v: WindowVerdict | null, budgetMs: number, topFil
  */
 export type LocalLookup = (file: string) => number | null
 
+/**
+ * 口径 ① 的**分布**版本（用户 2026-09-24 第二次改定，把「量哪个数」换掉了）。
+ *
+ * 为什么换：原口径量的是「每次运行**最慢那个文件**的中位数」，而两件事让它不是一把能靠改代码
+ * 推进的尺 ——
+ * ① 榜首每次换人（同一批 8~11 个文件轮流当第一名），`--compare` 把 #118 那次文件拆分判成
+ *    「淹在噪声里」（差 -0.7 秒 ≤ 要超过的 3.3 秒）；
+ * ② **就算把每次榜首那一整行抹掉，剩下文件的最大值中位仍是 15.9 秒** ⇒ 这条尺按构造就压不到
+ *    15 秒以下，除非把每次的前二名全压下来。
+ *
+ * 换成分布之后，**预算 15 秒一个字没动**，问的变成「有多少文件在线以上」——一刀减一个，
+ * 减得动、也看得见。它防的还是同一件事：单文件逼近 vitest 那条硬编码的 60 秒 RPC 超时。
+ */
+export const OVER_SHARE_MAX = 0.05
+
+/**
+ * 任何文件都不许越过的硬顶（毫秒）。
+ *
+ * 为什么留一条绝对上限而只看占比：5% 的账在 240 个文件下允许 12 个文件超预算，
+ * 而「有一个文件**平时**就跑 40 秒」这件事本身就该红 —— 40 秒是 60 秒的三分之二，
+ * 留的是「同一文件里两条慢用例连着跑」的余量。占比达标抵不过它。
+ *
+ * **但它量的是中位，不是单次读数**：把「有任何一次超 40 秒」当判决，等于把
+ * 2026-09-24 第一次改定刚刚推翻的东西（「按最差值判」= 把 runner 的心情挂成永久欠账）
+ * 从后门放回来。偶发的单点越线归 ②（那条要求「同一次日志能自证」）。
+ */
+export const HARD_CEILING_MS = 40000
+
+/**
+ * 一个文件的中位数要几次上榜才够判。
+ *
+ * 为什么要有这道门槛：榜只印前十，而**一个文件会上榜多半正是因为它那一次慢** ——
+ * 只出现过一两次的读数是挑出来的尾巴，拿它算中位等于拿样本里最大的那几个当中位。
+ * 不够次数的那些文件会单独印出来（「看过但判不了」），不混进判决。
+ */
+export const MIN_OBS_TO_JUDGE = 3
+
+/** 分布口径的一次判决所需的全部数。 */
+export interface DistVerdict {
+  /** 分母：榜表头说的测试文件总数（跨运行的中位）。 */
+  files: number
+  /** 判成 A 且**平时**（它自己那几次读数的中位）在预算之上的文件，按耗时降序。 */
+  slow: { file: string, medianMs: number, obs: number }[]
+  /** 看过、也在线以上，但上榜次数不够判「平时」的文件 —— 报出来，不混进判决。 */
+  thin: { file: string, medianMs: number, obs: number }[]
+  /** `slow.length / files`。 */
+  share: number
+  /** 占比的 95% 区间（Wilson）—— 样本少的时候它很宽，宽就不许下结论。 */
+  band: { lo: number, hi: number }
+  /** 各份榜第十名的中位；一个都没有时为 0。 */
+  tenthMs: number
+  /** 十行之外看不看得清：每份榜都数得着第十名，且第十名 ≤ 预算。 */
+  closed: boolean
+  /** **平时**（同样 ≥ {@link MIN_OBS_TO_JUDGE} 次）越过硬顶的文件。 */
+  ceiling: { file: string, medianMs: number, obs: number }[]
+  /** 单点读数越过硬顶的次数（不分 A/B）—— 那是 ② 的材料，不当 ① 的判决。 */
+  spikes: { label: string, file: string, ms: number }[]
+  /** A 类读数里超预算的那部分 —— 比「文件个数」敏感，是这条口径的对照组。 */
+  readings: { a: number, over: number, b: number }
+  verdict: '满足' | '不满足' | '判不准'
+  /** 为什么是这个词（一句话，印在判决后面）。 */
+  why: string
+}
+
+/**
+ * 二项比例的 Wilson 得分区间（z=1.96）。
+ *
+ * 为什么不用 `p̂ ± 1.96·√(p̂(1-p̂)/n)`：k=0 时那条正态近似给出**宽度为 0** 的区间，
+ * 于是「一次都没超预算」会被读成铁证 —— 而它其实只是样本少。
+ * @param k - 命中数。
+ * @param n - 分母。
+ * @returns `{lo, hi}`，`n ≤ 0` 时是 `{0, 0}`（调用方要自己判「没有分母」）。
+ */
+export function wilsonInterval(k: number, n: number): { lo: number, hi: number } {
+  if (n <= 0) return { lo: 0, hi: 0 }
+  const z = 1.96
+  const p = k / n
+  const d = 1 + (z * z) / n
+  const center = (p + (z * z) / (2 * n)) / d
+  const half = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d
+  return { lo: Math.max(0, center - half), hi: Math.min(1, center + half) }
+}
+
+/**
+ * 按分布判 ①。
+ * @param boards - 有榜的那些次运行。
+ * @param local - 查本机基线的函数（A/B 分类靠它；没有基线就谈不上这条口径）。
+ * @param budgetMs - 单文件预算（默认 15 秒）。
+ * @param shareMax - 超预算文件数的占比上限。
+ * @param ceilingMs - 硬顶。
+ * @returns 判决包；给不出分母或一个 A 类读数都没有时为 `null`（**不是「满足」**）。
+ */
+export function distVerdict(
+  boards: readonly RunBoard[],
+  local: LocalLookup,
+  budgetMs = TOP_BUDGET_MS,
+  shareMax = OVER_SHARE_MAX,
+  ceilingMs = HARD_CEILING_MS,
+): DistVerdict | null {
+  const files = medianOf(boards.flatMap((b) => (b.fileCount === undefined ? [] : [b.fileCount])))
+  if (files === null || files === 0) return null
+  const seen = new Map<string, number[]>()
+  const spikes: DistVerdict['spikes'] = []
+  let aReadings = 0
+  let aOver = 0
+  let bReadings = 0
+  for (const b of boards) {
+    for (const r of b.rows) {
+      // 单点越顶先记下来（不分 A/B），但它是 **② 的材料**、不是 ① 的判决：
+      // 「有任何一次 42 秒」当判决，等于把第一次改定刚推翻的「按最差值判」从后门放回来。
+      if (r.ms > ceilingMs) spikes.push({ label: b.label, file: r.file, ms: r.ms })
+      if (classifyFile(local(r.file), r.ms) !== 'A') {
+        bReadings += 1
+        continue
+      }
+      aReadings += 1
+      if (r.ms > budgetMs) aOver += 1
+      const xs = seen.get(r.file) ?? []
+      seen.set(r.file, xs)
+      xs.push(r.ms)
+    }
+  }
+  if (seen.size === 0) return null
+  const judged = [...seen.entries()]
+    .map(([file, xs]) => ({ file, medianMs: medianOf(xs) ?? 0, obs: xs.length }))
+    .sort((a, b) => b.medianMs - a.medianMs)
+  // 「这个文件平时超不超预算」要它自己上榜够多次才判得动：榜只有前十，
+  // 而上榜多半正是因为它那一次慢 —— 拿一两次读数算中位等于拿尾巴当平时。
+  const enough = judged.filter((x) => x.obs >= MIN_OBS_TO_JUDGE)
+  const slow = enough.filter((x) => x.medianMs > budgetMs)
+  const thin = judged.filter((x) => x.obs < MIN_OBS_TO_JUDGE && x.medianMs > budgetMs)
+  const ceiling = enough.filter((x) => x.medianMs > ceilingMs)
+  // 「前十以外看不见」是这条口径唯一的盲点，而它有一个**充分**的闭合条件：
+  // 每份榜都数得着第十名，且第十名本身 ≤ 预算 ⇒ 没上榜的文件必然更快。
+  const tenths = boards.flatMap((b) => (b.rows.length >= 10 ? [at(b.rows, 9, '榜上第十名').ms] : []))
+  const tenthMs = medianOf(tenths) ?? 0
+  const closed = tenths.length === boards.length && tenthMs <= budgetMs
+  const share = slow.length / files
+  const band = wilsonInterval(slow.length, files)
+  const pct = (x: number): string => (100 * x).toFixed(1)
+  const sec = (x: number): string => (x / 1000).toFixed(1)
+  let verdict: DistVerdict['verdict']
+  let why: string
+  if (tenths.length !== boards.length) {
+    verdict = '判不准'
+    why = `${String(boards.length - tenths.length)} 份榜不满十行 ⇒ 前十以外的账看不见，占比的分母也不可信`
+  } else if (!closed) {
+    verdict = '判不准'
+    why = `第十名自己有 ${sec(tenthMs)}s（预算 ${sec(budgetMs)}s）⇒ 没进前十的文件里可能还有在线上的，这一条看不见`
+  } else if (ceiling.length > 0) {
+    verdict = '不满足'
+    why = `${String(ceiling.length)} 个文件**平时**就在 ${sec(ceilingMs)}s 硬顶之上（${ceiling.map((c) => `${c.file.split('/').pop()} 中位 ${sec(c.medianMs)}s／${String(c.obs)} 次`).join('、')}）—— 那是 60 秒 RPC 的门口，占比达标抵不过它`
+  } else if (band.hi <= shareMax) {
+    verdict = '满足'
+    why = `超预算文件占 ${pct(share)}%（95% 区间上界 ${pct(band.hi)}% ≤ 上限 ${pct(shareMax)}%），第 10 名 ${sec(tenthMs)}s 在线下 ⇒ 榜外必然也在线下`
+  } else if (band.lo > shareMax) {
+    verdict = '不满足'
+    why = `占比的可判下界 ${pct(band.lo)}% > 上限 ${pct(shareMax)}%`
+  } else {
+    verdict = '判不准'
+    why = `${pct(band.lo)}% ~ ${pct(band.hi)}% 跨过上限 ${pct(shareMax)}% ⇒ 现在还没资格说达没标（拉更多次运行收窄）`
+  }
+  return { files, slow, thin, share, band, tenthMs, closed, ceiling, spikes, readings: { a: aReadings, over: aOver, b: bReadings }, verdict, why }
+}
+
+/**
+ * 分布口径的那几行输出。
+ * @param v - {@link distVerdict} 的结果；`null` 表示这条口径今天判不了（没分母 / 没 A 类读数）。
+ * @param budgetMs - 预算，只为把数印得可读。
+ * @param shareMax - 占比上限。
+ * @param ceilingMs - 硬顶。
+ * @returns 要打印的行。
+ */
+export function formatDistVerdict(
+  v: DistVerdict | null,
+  budgetMs = TOP_BUDGET_MS,
+  shareMax = OVER_SHARE_MAX,
+  ceilingMs = HARD_CEILING_MS,
+): string[] {
+  const pct = (x: number): string => (100 * x).toFixed(1)
+  const sec = (x: number): string => (x / 1000).toFixed(1)
+  if (v === null) {
+    return [`[榜历史] ① 分布口径（超 ${sec(budgetMs)}s 的文件占比 ≤ ${pct(shareMax)}%，且无文件**平时** > ${sec(ceilingMs)}s）⇒ **判不了**：`
+      + '拿不到分母（榜表头里的「N 个测试文件」）或榜上一个 A 类读数都没有 —— 这**不是**「满足」']
+  }
+  const out = [`[榜历史] ① 分布口径 ⇒ **${v.verdict}**：A 类里平时超 ${sec(budgetMs)}s 的文件 ${String(v.slow.length)} 个 / 共 ${String(v.files)} 个 = ${pct(v.share)}%（95% 区间 ${pct(v.band.lo)}~${pct(v.band.hi)}%，上限 ${pct(shareMax)}%），平时越 ${sec(ceilingMs)}s 硬顶的文件 ${String(v.ceiling.length)} 个；${v.why}`]
+  for (const x of v.slow.slice(0, 6)) out.push(`    中位 ${sec(x.medianMs).padStart(6)}s（上榜 ${String(x.obs)} 次）  ${x.file}`)
+  if (v.slow.length > 6) out.push(`    …另有 ${String(v.slow.length - 6)} 个文件平时在线上`)
+  // 这条口径比旧的那条**松**，所以每一处「看不见/不算」都要指名 —— 否则「满足」会被读成「没问题了」。
+  out.push(`    口径要说清：这条量的是**分布**（平时超线的文件有几个），不是每次运行的最慢者。`
+    + `换口径不等于问题消失 —— 同一批 A 类读数里有 ${String(v.readings.over)}/${String(v.readings.a)} 条（${pct(v.readings.a === 0 ? 0 : v.readings.over / v.readings.a)}%）还在 ${sec(budgetMs)}s 以上。`
+    + `另有 ${String(v.readings.b)} 条读数判成了 B（本机不到预算的 1/${String(B_RATIO)}）—— 它们**不进 ① 的账**，`
+    + `所以这条判决只在「A/B 分得对」的前提下成立，基线过期就要重采（\`npm run ci:baseline\`）。`)
+  if (v.thin.length > 0) {
+    out.push(`    看过但判不了（上榜 <${String(MIN_OBS_TO_JUDGE)} 次 ⇒ 拿一两次读数算中位就是拿尾巴当平时）：`
+      + v.thin.slice(0, 5).map((t) => `${t.file.split('/').pop()} 中位 ${sec(t.medianMs)}s／${String(t.obs)} 次`).join('、')
+      + (v.thin.length > 5 ? ` 等 ${String(v.thin.length)} 个` : ''))
+  }
+  if (v.spikes.length > 0) {
+    out.push(`    另有 ${String(v.spikes.length)} 次**单点**读数 > ${sec(ceilingMs)}s：`
+      + `${v.spikes.slice(0, 4).map((c) => `${c.file.split('/').pop()} ${sec(c.ms)}s@run${c.label}`).join('、')}${v.spikes.length > 4 ? ' …' : ''}`
+      + ` —— 偶发单点不算 ① 的账（那正是第一次改定推翻「按最差值判」的理由），归 ②：同一次日志要能自证慢在哪段。`)
+  }
+  return out
+}
+
 /** 一次运行按 A/B 分过之后的样子。 */
 export interface RunClasses {
   /** 那次运行的标识。 */
@@ -453,16 +688,22 @@ export function formatHistory(
   const classes = local === undefined || local === null ? [] : boards.map((b) => classifyRun(b, local))
   const a = classes.length > 0 ? medianATop(classes) : null
   const unknownRows = classes.reduce((n, r) => n + r.unknown, 0)
-  if (a !== null && a.median !== null) {
-    out.push(formatVerdict(verdictOf(a.values), budgetMs, at(classes, 0, '最近那次')?.aTop?.file ?? ''))
+  if (a !== null && a.median !== null && local !== null) {
+    for (const line of formatDistVerdict(distVerdict(boards, local, budgetMs), budgetMs)) out.push(line)
+    out.push(`  参考（旧口径 ①，2026-09-24 已被上面那条分布口径替代 —— 它量的是「每次最慢那个文件」，`
+      + `而最慢的每次换人，减不动）：` + formatVerdict(verdictOf(a.values), budgetMs, at(classes, 0, '最近那次')?.aTop?.file ?? ''))
     out.push(`  ① 这一条按**本机基线**分的类：榜首里判成 A 的最慢那个才进中位数，判成 B 的（本机几乎不花时间、`
       + `CI 慢过 ${String(B_RATIO)} 倍）不当 ① 的账。`
       + (unknownRows > 0
         ? `榜上另有 ${String(unknownRows)} 行基线里查不到（那些次要么跳过、要么只数得着已认出的部分）—— 基线过期就重跑 \`npm run ci:baseline\`。`
         : '基线覆盖了榜上每一行，没有被漏掉的候选。'))
-    out.push(`  ① 的口径（用户 2026-09-24 追加）：预算 15 秒不动，但**与预算的差要超过噪声带**才算数；`
-      + `判「这一刀有没有效」用 \`--compare\`（两半窗口的中位差要超过两边带之和）。`)
+    out.push(`  ① 的口径（用户 2026-09-24 第二次改定）：预算 15 秒不动，改量**分布** —— `
+      + `「A 类里平时超 15 秒的文件占比 ≤ ${String(100 * OVER_SHARE_MAX)}%」+「任何文件不得越过 ${(HARD_CEILING_MS / 1000).toFixed(0)} 秒硬顶」，`
+      + `两者都成立才算满足；占比的 95% 区间跨过上限就判「判不准」。`
+      + `第一次改定那条「与预算的差要超过噪声带才算数」没有作废，它搬到分布上就是这句：区间跨过上限不算数。`
+      + `判「这一刀有没有效」仍用 \`--compare\`（对比的是中位，只作趋势旁证 —— 榜首换人时它会说「淹在噪声里」）。`)
   } else {
+    for (const line of formatDistVerdict(null, budgetMs)) out.push(line)
     const okA = median <= budgetMs
     out.push([
       '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
