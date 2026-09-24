@@ -149,6 +149,37 @@ const SHAPES = rowShapes().filter((s) => s.header > 0)
 const WIDE_DEBT: string[] = []
 const SHORT_DEBT: string[] = []
 
+/** 文档开头那句「（97 个条目：94 已完成 / …）」—— 与总览表是两处独立的手写数字。 */
+const HEADER_COUNTS = /（(\d+) 个条目：(\d+) 已完成 \/ (\d+) 进行中 \/ (\d+) 未开始/
+
+/** 台账（`## 十五、变更记录`）的行以日期开头，与条目表的 `| ID |` 一眼区分。 */
+const LEDGER_ROW = /^\|\s*20\d\d-\d\d-\d\d\s*\|/
+
+/**
+ * 台账里「同一件事写了两遍」的行。
+ *
+ * 合并两个分支时，两边各写的一版同一行会**都被留下**（2026-09-24 实测：N36 第 4 步那行留了两版，
+ * 靠后那版还带着本轮已被变异实验推翻的结论 —— 读到旧的人不会知道自己读的是旧版）。判据用
+ * 「日期 + 类型 + 条目 + 摘要」四格全同：同一天的同一条目、连一句话摘要都一字不差，就是同一件事。
+ * 摘要写成占位符 `—` 的「教训」行是本项目故意的分组写法（同一天多条教训），因此排除 —— 它们本来
+ * 就靠第五格互相区分。
+ */
+function ledgerDuplicates(): string[] {
+  const seen = new Map<string, number>()
+  const out: string[] = []
+  LINES.forEach((line, i) => {
+    if (!LEDGER_ROW.test(line)) return
+    const c = cellsOf(line)
+    const summary = at(c, 3, '台账摘要')
+    if (summary === '—') return
+    const key = [at(c, 0, '台账日期'), at(c, 1, '台账类型'), at(c, 2, '台账条目'), summary].join('§')
+    const prior = seen.get(key)
+    if (prior !== undefined) out.push(`第 ${String(prior)} 行与第 ${String(i + 1)} 行：${at(c, 2, '台账条目')}`)
+    else seen.set(key, i + 1)
+  })
+  return out
+}
+
 describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个问题本身要能信）', () => {
   it('阶段标题都解析到了，且条目表不是空的（解析口径坏了要红，而不是「两边都空所以相等」）', () => {
     expect(PHASES.length, '一个阶段标题都没解析到，八成是标题格式改了').toBeGreaterThanOrEqual(7)
@@ -239,5 +270,27 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     // 上面两条只比集合；万一某行从「多列」变成「缺列」互相抵消，这里兜住总量
     expect(wide.length + short.length, '形状不符表头的条目行总数与名单对不上')
       .toBe(WIDE_DEBT.length + SHORT_DEBT.length)
+  })
+
+  it('台账里没有「同一件事写了两遍」的行（合并分支时两边各留一版）', () => {
+    const rows = LINES.filter((l) => LEDGER_ROW.test(l))
+    expect(rows.length, '一行台账都没解析到 —— 台账表的行格式或正则变了').toBeGreaterThanOrEqual(250)
+    // 比 `toEqual([])`：数组为空时 vitest 把实际值折成 `Array(1)`，读日志的人看不到撞车的是哪两行
+    expect(ledgerDuplicates().join('\n'), '同一天、同一条目、摘要一字不差的台账行（后写的那版会盖住前一版的结论）')
+      .toBe('')
+  })
+
+  it('文档开头那句手写计数与条目表相加一致（它与总览表是两处独立的手写数字）', () => {
+    const line = LINES.find((l) => HEADER_COUNTS.test(l))
+    if (line === undefined) throw new Error('找不到开头那句「（N 个条目：…）」—— 那句话被改写了，正则要跟着改')
+    const m = HEADER_COUNTS.exec(line)
+    if (m === null) throw new Error('匹配到了行却取不到捕获组 —— HEADER_COUNTS 本身要复查')
+    const sum = (k: keyof Tally) => PHASES.reduce((a, p) => a + p.tally[k], 0)
+    const total = sum('未开始') + sum('进行中') + sum('待验收') + sum('已完成')
+    expect(Number(grp(m, 1, '开头计数')), `开头写 ${grp(m, 1, '开头计数')} 个条目，条目表实际 ${String(total)} 个`)
+      .toBe(total)
+    expect(Number(grp(m, 2, '开头计数')), '开头写的「已完成」与条目表对不上').toBe(sum('已完成'))
+    expect(Number(grp(m, 3, '开头计数')), '开头写的「进行中」与条目表对不上').toBe(sum('进行中'))
+    expect(Number(grp(m, 4, '开头计数')), '开头写的「未开始」与条目表对不上').toBe(sum('未开始'))
   })
 })
