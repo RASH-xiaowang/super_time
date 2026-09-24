@@ -254,6 +254,96 @@ export function formatFileHistory(points: readonly FileHistoryPoint[], needle: s
 }
 
 /**
+ * 少于此样本数就不给噪声带 —— MAD 本身在这种规模上就是猜的，
+ * 拿一个猜出来的带去判另一个数「算不算动了」是双重冒充精确。
+ */
+export const MIN_FOR_BAND = 6
+
+/** 一个窗口的判决包：中位、噪声带（± 毫秒）、样本数。 */
+export interface WindowVerdict { median: number, band: number, n: number }
+
+/**
+ * 稳健标准差：`1.4826 × MAD`。
+ *
+ * 为什么不用样本标准差：A 榜首的分布是**长尾**的（同一份代码 12.0~20.4 秒，偶发还有 100+ 秒的停顿），
+ * 用 σ 会被那几次离群撑大，然后任何一刀都「落在噪声带里」—— 判据就成了永远不动。
+ * @param xs - 样本。
+ * @returns σ̂，或 `null`（样本太少 / 算不出）。
+ */
+export function robustSigma (xs: readonly number[]): number | null {
+  if (xs.length < MIN_FOR_BAND) return null
+  const med = medianOf(xs)
+  if (med === null) return null
+  const mad = medianOf(xs.map((x) => Math.abs(x - med)))
+  return mad === null ? null : 1.4826 * mad
+}
+
+/**
+ * 一个窗口的中位数 + 噪声带（± 95% 置信，`z × σ̂ / √n`）。
+ * @param xs - 那个窗口的 A 榜首毫秒数。
+ * @param z - 分位数（默认 1.96 ≈ 95%）。
+ * @returns 判决包，或 `null`（样本太少 ⇒ 不给带）。
+ */
+export function verdictOf (xs: readonly number[], z = 1.96): WindowVerdict | null {
+  if (xs.length < MIN_FOR_BAND) return null
+  const median = medianOf(xs)
+  const sigma = robustSigma(xs)
+  if (median === null || sigma === null) return null
+  return { median, band: z * sigma / Math.sqrt(xs.length), n: xs.length }
+}
+
+/**
+ * 两个窗口比较：差值要**超过两边噪声带之和**才算真的动了。
+ *
+ * 这是用户 2026-09-24 对 ① 的追加口径：预算仍是 15 秒不动，但「我减下来了」这句话
+ * 必须能被验证 —— 否则一次 runner 心情好就能伪造出一刀收益（第 ⑮ 步刚被这件事教育过：
+ * #105 的两次读数与改前中位差 0.2 秒）。
+ */
+export function compareWindows (now: WindowVerdict, before: WindowVerdict): { delta: number, mustExceed: number, real: boolean } {
+  const delta = now.median - before.median
+  const mustExceed = now.band + before.band
+  return { delta, mustExceed, real: Math.abs(delta) > mustExceed }
+}
+
+/**
+ * 比较两窗口的那几行输出。
+ * @param now - 最近那个窗口。
+ * @param before - 前一个窗口。
+ * @param labelNow - 最近窗口的说法（含它的 A 榜首是什么文件）。
+ * @param labelBefore - 前窗口的说法。
+ * @returns 要打印的行。
+ */
+export function formatCompare (now: WindowVerdict, before: WindowVerdict, labelNow = '最近这一半', labelBefore = '前一半'): string[] {
+  const c = compareWindows(now, before)
+  const s = (x: number): string => (x / 1000).toFixed(1)
+  return [
+    `[对比] ${labelNow}：n=${String(now.n)} 中位 ${s(now.median)}s（带 ±${s(now.band)}s）｜${labelBefore}：n=${String(before.n)} 中位 ${s(before.median)}s（带 ±${s(before.band)}s）`,
+    c.real
+      ? `[对比] 差 ${c.delta >= 0 ? '+' : '-'}${s(Math.abs(c.delta))}s > 要超过的 ${s(c.mustExceed)}s ⇒ **这一步真的动了**${c.delta < 0 ? '（变快）' : '（变慢）'}`
+      : `[对比] 差 ${c.delta >= 0 ? '+' : '-'}${s(Math.abs(c.delta))}s ≤ 要超过的 ${s(c.mustExceed)}s ⇒ **落在噪声带里，不能算效果**（要嘛再减，要嘛多跑几次把带收窄）`,
+  ]
+}
+
+/**
+ * 口径 ① 的一句话判决（带噪声带的版本）。
+ * @param v - 这个窗口的判决包（`null` = 样本太少）。
+ * @param budgetMs - 预算。
+ * @param topFile - 中位那次附近的榜首文件名（只为让读的人知道在说谁）。
+ * @returns 一行文本。
+ */
+export function formatVerdict (v: WindowVerdict | null, budgetMs: number, topFile = ''): string {
+  const s = (x: number): string => (x / 1000).toFixed(1)
+  const who = topFile === '' ? '' : `（多为 ${topFile.split('/').pop()}）`
+  if (v === null) return `[榜历史] ① A 类榜首中位 ≤ ${s(budgetMs)}s ⇒ **判不了** —— 可判的样本不足 ${String(MIN_FOR_BAND)} 个，给不出噪声带${who}`
+  const margin = v.median - budgetMs
+  if (Math.abs(margin) <= v.band) {
+    return `[榜历史] ① A 类榜首中位 ≤ ${s(budgetMs)}s ⇒ 中位 ${s(v.median)}s **判不准**：与预算只差 ${s(Math.abs(margin))}s，而噪声带是 ±${s(v.band)}s（n=${String(v.n)}）${who} —— 这句话的意思是「现在还没资格说达没标」`
+  }
+  return margin > 0
+    ? `[榜历史] ① A 类榜首中位 ≤ ${s(budgetMs)}s ⇒ 中位 ${s(v.median)}s **不满足**：超出 ${s(margin)}s，大于 ±${s(v.band)}s 的带（n=${String(v.n)}）${who}`
+    : `[榜历史] ① A 类榜首中位 ≤ ${s(budgetMs)}s ⇒ 中位 ${s(v.median)}s **满足**：低于预算 ${s(-margin)}s，大于 ±${s(v.band)}s 的带（n=${String(v.n)}）${who}`
+}
+/**
  * 某个文件在基线里的毫秒数（`null` = 没量到）。分类器的输入形状。
  */
 export type LocalLookup = (file: string) => number | null
@@ -309,13 +399,14 @@ export function classifyRun(board: RunBoard, local: LocalLookup): RunClasses {
  * 只算「不含糊、且确实有 A 读数」的那些次；含糊的那次**不参与**（把它算进去就是拿
  * 一个已知会偏低的数冒充中位数）。
  * @param runs - 各次运行的分类结果。
- * @returns 中位数与参与次数；一次都不符合时 `median` 为 `null`。
+ * @returns `median` 中位数（一次都不符合时 `null`）、`used`/`skipped` 计数，
+ *          以及 `values`（那 `used` 个原始读数 —— 算噪声带要用，别让调用方自己再捞一遍）。
  */
-export function medianATop(runs: readonly RunClasses[]): { median: number | null, used: number, skipped: number } {
+export function medianATop(runs: readonly RunClasses[]): { median: number | null, used: number, skipped: number, values: number[] } {
   const usable = runs.filter((r) => !r.ambiguous && r.aTop !== null)
   // 过滤之后 TS 不知道 `aTop` 一定在（闭包里不保留收窄），所以再判一次而不是 `!`。
-  const ms = usable.flatMap((r) => (r.aTop === null ? [] : [r.aTop.ms]))
-  return { median: medianOf(ms), used: usable.length, skipped: runs.length - usable.length }
+  const values = usable.flatMap((r) => (r.aTop === null ? [] : [r.aTop.ms]))
+  return { median: medianOf(values), used: usable.length, skipped: runs.length - usable.length, values }
 }
 
 /**
@@ -363,19 +454,14 @@ export function formatHistory(
   const a = classes.length > 0 ? medianATop(classes) : null
   const unknownRows = classes.reduce((n, r) => n + r.unknown, 0)
   if (a !== null && a.median !== null) {
-    const okA = a.median <= budgetMs
-    out.push([
-      '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
-      `${(budgetMs / 1000).toFixed(1)}s`,
-      `⇒ 实测 A 类榜首中位 ${(a.median / 1000).toFixed(1)}s`,
-      okA ? '**满足**' : `**不满足**（是预算的 ${(a.median / budgetMs).toFixed(2)} 倍）`,
-      `（${String(a.used)} 次运行给得出可判的 A 类榜首，跳过 ${String(a.skipped)} 次）`,
-    ].join(' '))
-    out.push('  ① 这一条按**本机基线**分的类：榜首里判成 A 的最慢那个才进中位数，判成 B 的（本机几乎不花时间、'
+    out.push(formatVerdict(verdictOf(a.values), budgetMs, at(classes, 0, '最近那次')?.aTop?.file ?? ''))
+    out.push(`  ① 这一条按**本机基线**分的类：榜首里判成 A 的最慢那个才进中位数，判成 B 的（本机几乎不花时间、`
       + `CI 慢过 ${String(B_RATIO)} 倍）不当 ① 的账。`
       + (unknownRows > 0
         ? `榜上另有 ${String(unknownRows)} 行基线里查不到（那些次要么跳过、要么只数得着已认出的部分）—— 基线过期就重跑 \`npm run ci:baseline\`。`
         : '基线覆盖了榜上每一行，没有被漏掉的候选。'))
+    out.push(`  ① 的口径（用户 2026-09-24 追加）：预算 15 秒不动，但**与预算的差要超过噪声带**才算数；`
+      + `判「这一刀有没有效」用 \`--compare\`（两半窗口的中位差要超过两边带之和）。`)
   } else {
     const okA = median <= budgetMs
     out.push([

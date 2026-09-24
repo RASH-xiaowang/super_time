@@ -11,15 +11,21 @@ import { describe, expect, it } from 'vitest'
 
 import {
   LINE_MS,
+  MIN_FOR_BAND,
   classifyRun,
+  compareWindows,
   fileHistory,
+  formatCompare,
   formatFileHistory,
   formatHistory,
+  formatVerdict,
   medianATop,
   medianOf,
   medianTopMs,
   parseRunLog,
+  robustSigma,
   stripLogNoise,
+  verdictOf,
   worstOf,
   type BoardRow,
   type RunBoard,
@@ -291,14 +297,21 @@ describe('按本机基线把 A/B 分开之后，① 才算得出真数', () => {
   })
 
   it('给了基线，① 就按 A 类判；不给，只能印那条上界判决 —— 两者的措辞不能混', () => {
-    const clean = rows(['a.spec.ts', 13000, 3700], ['g.spec.ts', 40000, 605])
-    const withBase = formatHistory([clean], [], 15000, look(table))
+    // 带（噪声带）要至少 MIN_FOR_BAND 个样本才给，所以这里喂 6 次，而不是以前那样一次就下结论。
+    const aTops = [13000, 13500, 12500, 13000, 12800, 13200]
+    const withBase = formatHistory(aTops.map((ms, i) => b(`r${String(i)}`, ms, {
+      file: 'other.spec.ts',
+      rows: [{ rank: 1, file: 'other.spec.ts', ms, crossed: false }],
+    })), [], 15000, () => 3700)
     const v = pick(withBase, '① A 类榜首中位')
-    expect(v, 'A 榜首 13 秒 ≤ 15 秒预算 ⇒ 满足（那台 B 类的 40 秒不算账）').toContain('**满足**')
-    expect(v).toContain('实测 A 类榜首中位 13.0s')
+    expect(v, 'A 榜首中位 13.0 秒 ≤ 15 秒预算，且差 2 秒远大于 ±0.24 秒的带 ⇒ 满足').toContain('**满足**')
+    expect(v).toContain('中位 13.0s')
+    expect(v, '判决要带上噪声带与样本数，否则读的人不知道这句话说得多硬').toMatch(/±\d+\.\d+s/)
+    expect(v).toContain('n=6')
     expect(withBase.join('\n'), '按类别判了就不该再挂那句「只是上界」').not.toContain('但这只是**上界**')
+    expect(withBase.join('\n'), '用户追加的口径也要印出来：差要超过带才算数').toContain('与预算的差要超过噪声带')
 
-    const noBase = formatHistory([clean], [], 15000)
+    const noBase = formatHistory([rows(['a.spec.ts', 40000, 3700], ['g.spec.ts', 45000, 605])], [], 15000)
     expect(pick(noBase, '① A 类榜首中位'), '没有基线时那个数是上界，判决只能是「判不了」').toContain('**判不了**')
     expect(noBase.join('\n')).toContain('只能给上界')
   })
@@ -307,5 +320,60 @@ describe('按本机基线把 A/B 分开之后，① 才算得出真数', () => {
     const lines = formatHistory([mixed], [], 15000, () => null)
     expect(pick(lines, '① A 类榜首中位'), '一次都判不出 ⇒ 只能给上界').toContain('**判不了**')
     expect(lines.join('\n')).toContain('npm run ci:baseline')
+  })
+})
+
+describe('噪声带：① 的「达没达标」与「这一刀有没有效」都要能站得住（用户 2026-09-24 追加）', () => {
+  const six = [10000, 12000, 14000, 16000, 18000, 20000]
+
+  it('σ̂ = 1.4826 × MAD，长尾样本不能被离群撑大（10..20 秒 ⇒ σ̂ = 4.45 秒）', () => {
+    // median=15000；离差 [5,3,1,1,3,5]×1000 ⇒ MAD=3000 ⇒ σ̂=1.4826×3000=4447.8
+    expect(robustSigma(six) ?? 0).toBeCloseTo(4447.8, 1)
+    // 同一个中位、但有一个 100 秒的离群：σ 会被它抬起来，MAD 几乎不动 —— 这就是选它的原因
+    const withOutlier = [...six, 100000, 110000]
+    const mad = robustSigma(withOutlier) ?? 0
+    const plain = Math.sqrt(withOutlier.reduce((a, x) => a + (x - 37500) ** 2, 0) / withOutlier.length)
+    expect(mad, 'MAD 版本必须明显小于被离群抬起来的样本标准差').toBeLessThan(plain)
+  })
+
+  it('样本不足 MIN_FOR_BAND 时不给带 —— 猜出来的带不能冒充测量', () => {
+    expect(robustSigma([1, 2, 3, 4, 5])).toBeNull()
+    expect(verdictOf([1, 2, 3, 4, 5])).toBeNull()
+    expect(verdictOf(six), '刚好够 ⇒ 给得出').toBeTruthy()
+  })
+
+  it('verdictOf 的带 = 1.96 × σ̂ / √n（n=6 的 10..20 秒 ⇒ 中位 15.0 秒、带 ±3.6 秒）', () => {
+    const v = verdictOf(six)
+    if (v === null) throw new Error('六个样本该给得出判决包')
+    expect(v.median).toBe(15000)
+    expect(v.n).toBe(6)
+    expect(v.band, '带 = 1.96 × 4447.8 / √6 = 3559ms（手算）').toBeCloseTo(3559, 0)
+  })
+
+  it('判决三种措辞不许串：满足、不满足、差在带里 ⇒「判不准」', () => {
+    expect(formatVerdict({ median: 10000, band: 500, n: 12 }, 15000)).toContain('**满足**')
+    expect(formatVerdict({ median: 20000, band: 500, n: 12 }, 15000)).toContain('**不满足**')
+    const tight = formatVerdict({ median: 15400, band: 1000, n: 12 }, 15000)
+    expect(tight, '只差 400ms 而带是 ±1s ⇒ 没资格说达没达标').toContain('**判不准**')
+    expect(tight).toContain('还没资格说')
+    // 边界取「含等号 ⇒ 判不准」：差值刚好等于带时不能算超过。
+    expect(formatVerdict({ median: 16000, band: 1000, n: 12 }, 15000)).toContain('**判不准**')
+    expect(formatVerdict({ median: 16001, band: 1000, n: 12 }, 15000)).toContain('**不满足**')
+    expect(formatVerdict(null, 15000), '样本不足要说「判不了」而不是「满足」').toContain('样本不足')
+  })
+
+  it('两窗口比较：差值要超过两边带之和才算动了', () => {
+    const before = { median: 16100, band: 2400, n: 12 }
+    const small = { median: 15000, band: 2400, n: 12 }
+    const big = { median: 10000, band: 1000, n: 12 }
+    expect(compareWindows(small, before).real, '减了 1.1 秒但两边带各 2.4 秒 ⇒ 不能算效果').toBe(false)
+    expect(compareWindows(big, before).real, '减了 6.1 秒 > 3.4 秒 ⇒ 真的动了').toBe(true)
+    // 恰好等于「两边带之和」不算超过（要严格大于）：16100-12100 = 4000 = 1600 + 2400。
+    expect(compareWindows({ median: 12100, band: 1600, n: 12 }, before).real, '差 4000 = 要超过的 4000 ⇒ 还不算').toBe(false)
+    expect(compareWindows({ median: 12099, band: 1600, n: 12 }, before).real, '再多 1ms 才算动').toBe(true)
+    const lines = formatCompare(big, before)
+    expect(at(lines, 1, '结论行')).toContain('**这一步真的动了**')
+    expect(at(lines, 1, '结论行'), '方向也要说出来').toContain('（变快）')
+    expect(at(formatCompare(small, before), 1, '结论行')).toContain('**落在噪声带里，不能算效果**')
   })
 })

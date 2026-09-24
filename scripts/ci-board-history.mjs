@@ -12,6 +12,7 @@
  * 用法：
  *   node scripts/ci-board-history.mjs                     # 最近 12 次 ci.yml 的运行
  *   node scripts/ci-board-history.mjs --runs 20 --budget 15
+ *   node scripts/ci-board-history.mjs --runs 24 --compare      # 最近一半 vs 前一半：这一刀到底动没动
  *   node scripts/ci-board-history.mjs --file kb-vector    # 再横过来看这一个文件的历次读数
  *   node scripts/ci-board-history.mjs --from-file a.log --from-file b.log   # 离线解析本地日志
  *
@@ -20,7 +21,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { fileHistory, formatFileHistory, formatHistory, parseRunLog } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { MIN_FOR_BAND, classifyRun, fileHistory, formatCompare, formatFileHistory, formatHistory, parseRunLog, verdictOf } from '../src/backend/tests/helpers/ci-board-history.ts'
 import { baselineMs, baselineProblems } from '../src/backend/tests/helpers/local-baseline.ts'
 
 const API = 'https://api.github.com'
@@ -132,4 +133,15 @@ if (localLogs.length > 0) {
 
 for (const line of formatHistory(boards, missing, budgetS * 1000, localLookup)) console.log(line)
 if (needle !== '') for (const line of formatFileHistory(fileHistory(boards, needle), needle, budgetS * 1000)) console.log(line)
+if (process.argv.includes('--compare') && localLookup !== null) {
+  // 两半窗口对比：新的一半 vs 旧的一半。带（± 秒）来自 MAD，所以每半至少要 MIN_FOR_BAND 个样本 ——
+  // 不够就什么都不印？不行：那会被读成「没有差异」。所以这里显式说一句为什么没给。
+  const half = Math.floor(boards.length / 2)
+  const aRuns = boards.slice(0, half).map((b) => classifyRun(b, localLookup))
+  const bRuns = boards.slice(half).map((b) => classifyRun(b, localLookup))
+  const av = verdictOf(aRuns.filter((r) => !r.ambiguous && r.aTop !== null).map((r) => r.aTop.ms))
+  const bv = verdictOf(bRuns.filter((r) => !r.ambiguous && r.aTop !== null).map((r) => r.aTop.ms))
+  if (av === null || bv === null) console.log(`[对比] 每一半都要至少 ${String(MIN_FOR_BAND)} 个可判样本才给噪声带 —— 这次是 ${String(aRuns.length)} / ${String(bRuns.length)}（拉更多次：--runs 24）`)
+  else for (const line of formatCompare(av, bv, `最近 ${String(half)} 次`, `之前 ${String(half)} 次`)) console.log(line)
+}
 if (failed.length > 0) console.log(`  —— 另有 ${String(failed.length)} 次运行拉取失败（不计入「没有榜」）：${failed.join(', ')}`)
