@@ -5073,7 +5073,7 @@ async function searchIndexMessagesCancellable(decryptedDir, query, limit, userna
 
 // src/backend/wechat-data/src/query/search-scaffold.ts
 var ZSTD_MAGIC4 = Buffer.from([40, 181, 47, 253]);
-var INDEX_SCHEMA_VERSION = "4";
+var INDEX_SCHEMA_VERSION = "5";
 var REFRESHED_KEY = "refreshed_ms";
 var SHARD_WM_PREFIX = "shard_wm:";
 var REFRESH_SLACK_MS = 3e3;
@@ -5532,7 +5532,7 @@ async function runBuildSearchIndex(decryptedDir, force) {
   }
   const init = () => {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61')");
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61', content='')");
     db.exec("CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)");
     ensureMetaIndexes(db);
   };
