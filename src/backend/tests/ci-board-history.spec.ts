@@ -11,9 +11,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   LINE_MS,
+  classifyRun,
   fileHistory,
   formatFileHistory,
   formatHistory,
+  medianATop,
   medianOf,
   medianTopMs,
   parseRunLog,
@@ -148,7 +150,7 @@ describe('CI 榜历史：解析、最差值与「拿不到榜」的明说', () =
     expect(badVerdict, '超预算时只能说「判不了」—— 这是上界，B 类混在里面只会抬高它').toContain('**判不了**')
     expect(badVerdict, '中位数是 22.0 秒（不是最差的那个）').toContain('整张榜第一名」的中位 22.0s')
     for (const lines of [ok, bad]) {
-      expect(pick(lines, '⚠ ①'), '两种判决都要带那句自我声明（少了它，读的人会把上界当成 A 类实测）')
+      expect(pick(lines, '只能给上界'), '两种判决都要带那句自我声明（少了它，读的人会把上界当成 A 类实测）')
         .toContain('「判不了」不等于「不满足」')
     }
     const clause2 = pick(bad, '② B 类越线')
@@ -242,5 +244,68 @@ describe('单文件跨运行历史：整份榜、没上榜不是 0、以及 run�
     expect(medianOf([]), '空集合的中位数是 null').toBeNull()
     expect(medianOf([3, 1, 2])).toBe(2)
     expect(medianOf([4, 1, 2, 3])).toBe(2.5)
+  })
+})
+
+describe('按本机基线把 A/B 分开之后，① 才算得出真数', () => {
+  const rows = (...r: Array<[string, number, number | null]>): RunBoard => ({
+    label: 'r',
+    topMs: Math.max(...r.map(([, ms]) => ms)),
+    topFile: r.find(([, ms]) => ms === Math.max(...r.map(([, x]) => x)))?.[0] ?? '',
+    crossed: false,
+    ratio: 1,
+    sawRpcTimeout: false,
+    rows: r.map(([file, ms], i) => ({ rank: i + 1, file, ms, crossed: false })),
+  })
+  /** 榜：A（本机 3.7 秒）20 秒；B（本机 605 毫秒）17.5 秒；第三条本机查不到，30 秒。 */
+  const mixed = rows(['a.spec.ts', 20000, 3700], ['g.spec.ts', 17500, 605], ['z.spec.ts', 30000, null])
+  const look = (table: Record<string, number>) => (file: string): number | null => table[file] ?? null
+  const table = { 'a.spec.ts': 3700, 'g.spec.ts': 605 }
+
+  it('A 类榜首只数判成 A 的那个；比它更慢又查不到基线的行 ⇒ 这次算含糊', () => {
+    const r = classifyRun(mixed, look(table))
+    expect(r.aTop, '只有 a.spec.ts 判成 A（g 是 ×29 的停顿，z 查不到基线）').toEqual({ file: 'a.spec.ts', ms: 20000 })
+    expect(r.bFiles).toEqual(['g.spec.ts'])
+    expect(r.unknown).toBe(1)
+    expect(r.ambiguous, 'z 排得比 A 榜首还慢，而基线认不出它 ⇒ 这次的 A 榜首可能是它，不能当真数').toBe(true)
+  })
+
+  it('认不出的行排在 A 榜首之后 ⇒ 不影响这次（它改不了最大值）', () => {
+    const ok = rows(['a.spec.ts', 20000, 3700], ['g.spec.ts', 17500, 605], ['z.spec.ts', 5000, null])
+    const r = classifyRun(ok, look(table))
+    expect(r.ambiguous, 'z 只有 5 秒，翻不了榜').toBe(false)
+    expect(r.unknown, '但"有几行查不到"仍要如实报出来').toBe(1)
+  })
+
+  it('中位数只收不含糊的那些次，并把跳过多少说清楚', () => {
+    const runs = [
+      classifyRun(mixed, look(table)),
+      classifyRun(rows(['a.spec.ts', 12000, 3700]), look(table)),
+      classifyRun(rows(['a.spec.ts', 14000, 3700]), look(table)),
+    ]
+    const r = medianATop(runs)
+    expect(r.used, '两次干净（12 秒、14 秒）⇒ 中位 13 秒').toBe(2)
+    expect(r.skipped).toBe(1)
+    expect(r.median).toBe(13000)
+    expect(medianATop([classifyRun(mixed, look(table))]).median, '全含糊时不凭空给一个中位数').toBeNull()
+  })
+
+  it('给了基线，① 就按 A 类判；不给，只能印那条上界判决 —— 两者的措辞不能混', () => {
+    const clean = rows(['a.spec.ts', 13000, 3700], ['g.spec.ts', 40000, 605])
+    const withBase = formatHistory([clean], [], 15000, look(table))
+    const v = pick(withBase, '① A 类榜首中位')
+    expect(v, 'A 榜首 13 秒 ≤ 15 秒预算 ⇒ 满足（那台 B 类的 40 秒不算账）').toContain('**满足**')
+    expect(v).toContain('实测 A 类榜首中位 13.0s')
+    expect(withBase.join('\n'), '按类别判了就不该再挂那句「只是上界」').not.toContain('但这只是**上界**')
+
+    const noBase = formatHistory([clean], [], 15000)
+    expect(pick(noBase, '① A 类榜首中位'), '没有基线时那个数是上界，判决只能是「判不了」').toContain('**判不了**')
+    expect(noBase.join('\n')).toContain('只能给上界')
+  })
+
+  it('有基线但每次都判不出 A（全含糊）⇒ 退回上界，并且说清是基线的问题', () => {
+    const lines = formatHistory([mixed], [], 15000, () => null)
+    expect(pick(lines, '① A 类榜首中位'), '一次都判不出 ⇒ 只能给上界').toContain('**判不了**')
+    expect(lines.join('\n')).toContain('npm run ci:baseline')
   })
 })

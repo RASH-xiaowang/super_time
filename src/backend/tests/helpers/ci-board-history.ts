@@ -17,6 +17,7 @@
  *
  * @module tests/helpers/ci-board-history
  */
+import { B_RATIO, classifyFile } from './local-baseline.ts'
 import { at, grp } from './strict-index.ts'
 
 /** 一次运行的榜读数。 */
@@ -253,6 +254,71 @@ export function formatFileHistory(points: readonly FileHistoryPoint[], needle: s
 }
 
 /**
+ * 某个文件在基线里的毫秒数（`null` = 没量到）。分类器的输入形状。
+ */
+export type LocalLookup = (file: string) => number | null
+
+/** 一次运行按 A/B 分过之后的样子。 */
+export interface RunClasses {
+  /** 那次运行的标识。 */
+  label: string
+  /** 判成 A 的最慢那个文件；一次 A 都没有时为 `null`。 */
+  aTop: { file: string, ms: number } | null
+  /**
+   * 榜上有没有「基线认不出、但比已判出的 A 榜首更慢」的文件。
+   *
+   * 为什么单独记这个：基线缺一条，那个文件就只能算 unknown、不会进 A 的候选集 ——
+   * 于是「A 类榜首」会被**低估**，而低估会让 ① 假绿。含糊的那一次**不参与中位数**。
+   */
+  ambiguous: boolean
+  /** 判成 B（本机几乎不花时间、CI 却慢过线）的文件。 */
+  bFiles: string[]
+  /** 榜上基线认不出的行数。 */
+  unknown: number
+}
+
+/**
+ * 把一次运行的整份榜按「本机基线」分成 A / B / 认不出。
+ * @param board - 那次运行的整份榜。
+ * @param local - 查本机毫秒的函数（通常绑到基线产物上）。
+ * @returns 分类结果。
+ */
+export function classifyRun(board: RunBoard, local: LocalLookup): RunClasses {
+  const cls = board.rows.map((r) => classifyFile(local(r.file), r.ms))
+  let aTop: RunClasses['aTop'] = null
+  const bFiles: string[] = []
+  let unknown = 0
+  // 用普通 for 而不是 `forEach`：闭包里的赋值 TS 不参与收窄，`aTop` 会一直被认为是 `null`
+  // （第一次就报在 `aTop?.ms` 上：Property 'ms' does not exist on type 'never'）。
+  for (let i = 0; i < board.rows.length; i += 1) {
+    const r = at(board.rows, i, '榜上的一行')
+    const c = at(cls, i, '对应的那一列')
+    if (c === 'A') { if (aTop === null || r.ms > aTop.ms) aTop = { file: r.file, ms: r.ms } }
+    else if (c === 'B') bFiles.push(r.file)
+    else unknown += 1
+  }
+  // 认不出的行**排得比已判出的 A 榜首还靠前** ⇒ 这次的 A 榜首数不可信（真正最慢的 A 可能是它）。
+  const best = aTop?.ms ?? 0
+  const ambiguous = board.rows.some((r, i) => cls[i] === 'unknown' && r.ms > best)
+  return { label: board.label, aTop, ambiguous, bFiles, unknown }
+}
+
+/**
+ * A 类榜首的中位数 —— 口径 ① 真正要的那个数。
+ *
+ * 只算「不含糊、且确实有 A 读数」的那些次；含糊的那次**不参与**（把它算进去就是拿
+ * 一个已知会偏低的数冒充中位数）。
+ * @param runs - 各次运行的分类结果。
+ * @returns 中位数与参与次数；一次都不符合时 `median` 为 `null`。
+ */
+export function medianATop(runs: readonly RunClasses[]): { median: number | null, used: number, skipped: number } {
+  const usable = runs.filter((r) => !r.ambiguous && r.aTop !== null)
+  // 过滤之后 TS 不知道 `aTop` 一定在（闭包里不保留收窄），所以再判一次而不是 `!`。
+  const ms = usable.flatMap((r) => (r.aTop === null ? [] : [r.aTop.ms]))
+  return { median: medianOf(ms), used: usable.length, skipped: runs.length - usable.length }
+}
+
+/**
  * 历史报告：每次运行一行 + 两条新口径的判决 + 「多少次拿不到榜」的明说。
  *
  * 拿不到榜的次数一定要印出来：否则「最近 12 次中位 12 秒」会被读成「覆盖了 12 次」，
@@ -260,12 +326,15 @@ export function formatFileHistory(points: readonly FileHistoryPoint[], needle: s
  * @param boards - 有榜的那些次。
  * @param missing - 拉到了日志但没有榜的那些次的标识。
  * @param budgetMs - A 类榜首的预算（默认 {@link TOP_BUDGET_MS}）。
+ * @param local - 查本机基线的函数（{@link baselineMs} 绑到产物上）。**给了**就按 A/B 分类判 ①，
+ *                不给就只给那条上界判决 —— 少一份输入就多一句自我声明，这是有意的。
  * @returns 要打印的行。
  */
 export function formatHistory(
   boards: readonly RunBoard[],
   missing: readonly string[] = [],
   budgetMs = TOP_BUDGET_MS,
+  local: LocalLookup | null = null,
 ): string[] {
   const out: string[] = []
   for (const b of boards) {
@@ -290,18 +359,37 @@ export function formatHistory(
   const median = medianTopMs(boards) ?? 0
   const over = boards.filter((b) => b.crossed)
   const reds = boards.filter((b) => b.sawRpcTimeout)
-  const okA = median <= budgetMs
-  out.push([
-    '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
-    `${(budgetMs / 1000).toFixed(1)}s`,
-    `⇒ 实测「整张榜第一名」的中位 ${(median / 1000).toFixed(1)}s`,
-    okA ? '**满足**（上界都达标 ⇒ A 类必然达标）' : `**判不了**（是预算的 ${(median / budgetMs).toFixed(2)} 倍，但这只是**上界**）`,
-    `（${String(boards.length)} 次有榜的运行）`,
-  ].join(' '))
-  out.push('  ⚠ ① 这个中位量的是**全体榜首**，不是 A 类榜首：今天的榜首常常正是本机只有几百毫秒的文件'
-    + '（`gateway-export-stream-progress.spec.ts` 本机串行 711 毫秒，CI 上摆到 8.6~35.8 秒），'
-    + '混进来只会把这个数**抬高** ⇒ 「判不了」不等于「不满足」，反过来「满足」是可信的。'
-    + '整份榜已经有了（`--file <关键字>` 横过来看单个文件），两类要真分开还差本机基线（第 ⑯ 步）。')
+  const classes = local === undefined || local === null ? [] : boards.map((b) => classifyRun(b, local))
+  const a = classes.length > 0 ? medianATop(classes) : null
+  const unknownRows = classes.reduce((n, r) => n + r.unknown, 0)
+  if (a !== null && a.median !== null) {
+    const okA = a.median <= budgetMs
+    out.push([
+      '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
+      `${(budgetMs / 1000).toFixed(1)}s`,
+      `⇒ 实测 A 类榜首中位 ${(a.median / 1000).toFixed(1)}s`,
+      okA ? '**满足**' : `**不满足**（是预算的 ${(a.median / budgetMs).toFixed(2)} 倍）`,
+      `（${String(a.used)} 次运行给得出可判的 A 类榜首，跳过 ${String(a.skipped)} 次）`,
+    ].join(' '))
+    out.push('  ① 这一条按**本机基线**分的类：榜首里判成 A 的最慢那个才进中位数，判成 B 的（本机几乎不花时间、'
+      + `CI 慢过 ${String(B_RATIO)} 倍）不当 ① 的账。`
+      + (unknownRows > 0
+        ? `榜上另有 ${String(unknownRows)} 行基线里查不到（那些次要么跳过、要么只数得着已认出的部分）—— 基线过期就重跑 \`npm run ci:baseline\`。`
+        : '基线覆盖了榜上每一行，没有被漏掉的候选。'))
+  } else {
+    const okA = median <= budgetMs
+    out.push([
+      '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
+      `${(budgetMs / 1000).toFixed(1)}s`,
+      `⇒ 实测「整张榜第一名」的中位 ${(median / 1000).toFixed(1)}s`,
+      okA ? '**满足**（上界都达标 ⇒ A 类必然达标）' : `**判不了**（是预算的 ${(median / budgetMs).toFixed(2)} 倍，但这只是**上界**）`,
+      `（${String(boards.length)} 次有榜的运行）`,
+    ].join(' '))
+    out.push('  ⚠ 这一条**没有本机基线**，只能给上界：中位量的是全体榜首而不是 A 类榜首，'
+      + '今天的榜首常常正是本机只有几百毫秒的文件（`gateway-export-stream-progress.spec.ts` 本机串行 605 毫秒，'
+      + 'CI 上摆到 8.6~35.8 秒），混进来只会把这个数**抬高** ⇒ 「判不了」不等于「不满足」，反过来「满足」是可信的。'
+      + (a !== null ? ` 有基线但每次的榜首都在基线之外（跳过 ${String(a.skipped)} 次）—— 重新 \`npm run ci:baseline\`。` : ' 要它变成可判：`npm run ci:baseline` 采一份基线。'))
+  }
   out.push([
     '  ② B 类越线（≥60 秒）要可自证：这批运行里越线',
     `${String(over.length)} 次`,

@@ -18,9 +18,10 @@
  * token：优先 `GITHUB_TOKEN`，否则走 `git credential fill`（只在内存里，绝不打印）。
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { fileHistory, formatFileHistory, formatHistory, parseRunLog } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { baselineMs, baselineProblems } from '../src/backend/tests/helpers/local-baseline.ts'
 
 const API = 'https://api.github.com'
 const arg = (name, dflt) => {
@@ -40,6 +41,28 @@ const runs = Number(arg('runs', '12'))
 const budgetS = Number(arg('budget', '15'))
 // 给了 `--file` 就额外横过来看这一个文件（关键词是文件名子串，大小写不敏感）。
 const needle = String(arg('file', '') ?? '').trim()
+
+/**
+ * 本机基线：只有拿到它，① 才能从「上界」变成「按 A 类判」。
+ * 读不到 / 不自洽就退回上界判决，**但一定要说出来** —— 静默少一份输入等于悄悄换了口径。
+ * `--no-baseline` 是故意留的开关：想只看 CI 侧数（或基线刚被自己改坏）时用。
+ */
+let localLookup = null
+if (!process.argv.includes('--no-baseline')) {
+  try {
+    const raw = JSON.parse(readFileSync(new URL('../src/backend/tests/fixtures/ci/local-baseline.json', import.meta.url), 'utf8'))
+    const problems = baselineProblems(raw)
+    if (problems.length > 0) {
+      console.error('[榜历史] 本机基线不可用 ⇒ ① 只能给上界。原因：')
+      for (const p of problems) console.error(`  - ${p}`)
+    } else {
+      localLookup = (file) => baselineMs(raw, file)
+      console.error(`[榜历史] 用基线：@${raw.headSha} 量于 ${raw.measuredAt}（${raw.mode}，${String(Object.keys(raw.files).length)} 个文件）`)
+    }
+  } catch (err) {
+    console.error(`[榜历史] 读不到本机基线（${String((err && err.message) ?? err).slice(0, 80)}）⇒ ① 只能给上界；要它可判：npm run ci:baseline`)
+  }
+}
 
 const tokenFromGit = () => {
   const out = execFileSync('git', ['credential', 'fill'], {
@@ -107,6 +130,6 @@ if (localLogs.length > 0) {
   }
 }
 
-for (const line of formatHistory(boards, missing, budgetS * 1000)) console.log(line)
+for (const line of formatHistory(boards, missing, budgetS * 1000, localLookup)) console.log(line)
 if (needle !== '') for (const line of formatFileHistory(fileHistory(boards, needle), needle, budgetS * 1000)) console.log(line)
 if (failed.length > 0) console.log(`  —— 另有 ${String(failed.length)} 次运行拉取失败（不计入「没有榜」）：${failed.join(', ')}`)
