@@ -39,10 +39,18 @@ const LIMIT = 1000
  * 复核后的最大不可分簇：`chats` **652 行**、`onboarding` **436 行**（上限 1000）⇒ 按簇 regroup 拆得动，
  * 代价是产物里的规则次序会变，所以每拆一份都要过 `npm run css:bundle-diff`（第 49 刀：规则集逐条一致、0 危险对）。
  * 保序连续切两份都仍然切不动（各自只有 7 个合法切点，且每一份都 >1000 行）。
+ *
+ * 2026-09-24（第 50 刀）：`onboarding.module.css`（1618 行）→ `onboarding.module.css`(892) +
+ * `onboarding-stages.module.css`(523) ⇒ **白名单清空**。这张表从此只拦「新长出来的文件」；
+ * 防空转的那几条（扫描数量下限、只许变短、达标就删条目）都留着。
  */
-const ALLOWLIST: Record<string, number> = {
-  'src/client/ui-app/onboarding/onboarding.module.css': 1618,
-}
+const ALLOWLIST: Record<string, number> = {}
+
+/**
+ * 扫描口径的防空转下限：白名单空了之后，「白名单外的文件都在上限内」这一条要是因为**扫不到文件**
+ * 而通过，整个闸门就是假的 —— 所以显式要求扫到的文件数在一个可信的量级上（实测 2026-09-24 是 500+）。
+ */
+const MIN_SCANNED = 400
 
 /** 生成物 / 随包资产：不计入行数口径（每条给出理由）。 */
 const EXCLUDED = [
@@ -98,6 +106,7 @@ describe('M21：单文件行数上限（棘轮）', () => {
   })
 
   it('白名单外的文件都在上限内', () => {
+    expect(files.length, `只扫到 ${String(files.length)} 个手写文件 —— 扫描口径坏了的话「都在上限内」是假的`).toBeGreaterThanOrEqual(MIN_SCANNED)
     const offenders = files
       .filter((rel) => !(rel in ALLOWLIST))
       .map((rel) => ({ rel, lines: lineCount(rel) }))

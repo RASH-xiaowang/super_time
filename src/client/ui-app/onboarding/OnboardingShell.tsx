@@ -31,6 +31,7 @@ import { PrivacyConsentGate } from '../privacy/PrivacyConsentGate.tsx'
 // 更新与到期是主进程的事，与「有没有进主界面」无关。这一屏没有设置弹窗，故不传 onOpenLicense。
 import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import css from './onboarding.module.css'
+import cssstages from './onboarding-stages.module.css'
 import { FEATURE_GROUPS, HELP_STEPS, MODULE_ENTRIES, NOTICES, VALUE_PROPS } from './onboarding-content.tsx'
 
 const APP_VERSION = '1.0.7'
@@ -91,7 +92,7 @@ function ProgressRing({ value, total }: { value: number; total: number }): React
   const pct = total <= 0 ? 0 : Math.min(1, value / total)
   const offset = c * (1 - pct)
   return (
-    <div className={css.progressRing} aria-hidden="true">
+    <div className={cssstages.progressRing} aria-hidden="true">
       <svg viewBox="0 0 40 40">
         <defs>
           <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -99,9 +100,9 @@ function ProgressRing({ value, total }: { value: number; total: number }): React
             <stop offset="100%" stopColor="#a855f7" />
           </linearGradient>
         </defs>
-        <circle className={css.ringTrack} cx="20" cy="20" r={r} />
+        <circle className={cssstages.ringTrack} cx="20" cy="20" r={r} />
         <circle
-          className={css.ringValue}
+          className={cssstages.ringValue}
           cx="20"
           cy="20"
           r={r}
@@ -109,7 +110,7 @@ function ProgressRing({ value, total }: { value: number; total: number }): React
           strokeDashoffset={offset}
         />
       </svg>
-      <span className={css.ringLabel}>{value}/{total}</span>
+      <span className={cssstages.ringLabel}>{value}/{total}</span>
     </div>
   )
 }
@@ -127,17 +128,17 @@ function StageHead({
   align?: 'left' | 'center'
 }): React.JSX.Element {
   return (
-    <header className={`${css.stageHead}${align === 'center' ? ` ${css.stageHeadCenter}` : ''}`}>
+    <header className={`${cssstages.stageHead}${align === 'center' ? ` ${cssstages.stageHeadCenter}` : ''}`}>
       <Reveal anim="slide-l" delayMs={20}>
-        <div className={css.stageMeta}>
+        <div className={cssstages.stageMeta}>
           <span className={css.stageIndex}>{index}</span>
-          <span className={css.stageRule} aria-hidden="true" />
-          <span className={css.stageTag}>SUPER TIME BOOT</span>
+          <span className={cssstages.stageRule} aria-hidden="true" />
+          <span className={cssstages.stageTag}>SUPER TIME BOOT</span>
         </div>
-        <h2 className={css.stageTitle}>{title}</h2>
+        <h2 className={cssstages.stageTitle}>{title}</h2>
       </Reveal>
       <Reveal anim="fade" delayMs={90}>
-        <p className={css.stageLead}>{lead}</p>
+        <p className={cssstages.stageLead}>{lead}</p>
       </Reveal>
     </header>
   )
@@ -146,34 +147,34 @@ function StageHead({
 function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
   return (
     <div className={css.page}>
-      <div className={css.homeLayout}>
-        <section className={css.homePrimary}>
+      <div className={cssstages.homeLayout}>
+        <section className={cssstages.homePrimary}>
           <Reveal anim="slide-l" delayMs={30}>
-            <div className={css.heroKicker}>
+            <div className={cssstages.heroKicker}>
               <span className={css.kickerDot} aria-hidden="true" />
               LOCAL · WECHAT · INTELLIGENCE
             </div>
-            <h1 className={css.heroTitle}>
+            <h1 className={cssstages.heroTitle}>
               把微信数据<br />
-              <span className={css.heroTitleAccent}>变成可检索的知识库</span>
+              <span className={cssstages.heroTitleAccent}>变成可检索的知识库</span>
             </h1>
           </Reveal>
           <Reveal anim="fade" delayMs={120}>
-            <p className={css.heroLead}>
+            <p className={cssstages.heroLead}>
               Super Time 在本机解密并分析你的消息库：会话、社交、资产、资金与隐私一体覆盖，
               并提供 AI 问答与周期总结。数据默认不出机。
             </p>
           </Reveal>
 
-          <div className={css.valueList}>
+          <div className={cssstages.valueList}>
             {VALUE_PROPS.map((v, i) => (
               <Reveal key={v.title} anim={pickAnim(i, ['slide-l', 'slide-u', 'fade', 'slide-r'])} delayMs={180 + i * 70}>
                 <div className={css.valueItem}>
                   <span className={css.valueIndex}>{String(i + 1).padStart(2, '0')}</span>
-                  <span className={css.valueIcon}>{v.icon}</span>
-                  <div className={css.valueCopy}>
+                  <span className={cssstages.valueIcon}>{v.icon}</span>
+                  <div>
                     <div className={css.valueTitle}>{v.title}</div>
-                    <div className={css.valueDesc}>{v.desc}</div>
+                    <div className={cssstages.valueDesc}>{v.desc}</div>
                   </div>
                 </div>
               </Reveal>
@@ -181,8 +182,8 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
           </div>
         </section>
 
-        <aside className={css.homeRail} aria-label="系统概览">
-          <div className={css.railLabel}>TELEMETRY</div>
+        <aside className={cssstages.homeRail} aria-label="系统概览">
+          <div className={cssstages.railLabel}>TELEMETRY</div>
           {[
             { k: 'MODULES', v: '16', h: '侧栏入口 · 30+ 视图' },
             // 这个数字是用户可见的契约声明，必须与 gateway.ts 的 @Remote 数量一致。
@@ -192,31 +193,31 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
             { k: 'RUNTIME', v: 'LOCAL', h: 'utilityProcess 独立后端' },
           ].map((s, i) => (
             <Reveal key={s.k} anim="slide-r" delayMs={140 + i * 90}>
-              <div className={css.railStat}>
-                <div className={css.railKey}>{s.k}</div>
-                <div className={css.railVal}>{s.v}</div>
-                <div className={css.railHint}>{s.h}</div>
+              <div className={cssstages.railStat}>
+                <div className={cssstages.railKey}>{s.k}</div>
+                <div className={cssstages.railVal}>{s.v}</div>
+                <div className={cssstages.railHint}>{s.h}</div>
               </div>
             </Reveal>
           ))}
         </aside>
       </div>
 
-      <section className={css.moduleSection}>
+      <section className={cssstages.moduleSection}>
         <Reveal anim="slide-l" delayMs={60}>
           <div className={css.sectionTitle}>
             <span>快速入口</span>
-            <span className={css.sectionSub}>进入系统后可从侧栏打开</span>
+            <span className={cssstages.sectionSub}>进入系统后可从侧栏打开</span>
           </div>
         </Reveal>
-        <div className={css.moduleStrip}>
+        <div className={cssstages.moduleStrip}>
           {MODULE_ENTRIES.map((m, i) => (
-            <Reveal key={m.id} anim={pickAnim(i, ['slide-u', 'fade', 'slide-l', 'scale'])} delayMs={i * 50} className={css.moduleCell}>
+            <Reveal key={m.id} anim={pickAnim(i, ['slide-u', 'fade', 'slide-l', 'scale'])} delayMs={i * 50} className={cssstages.moduleCell}>
               <button type="button" className={css.moduleCard} onClick={onExplore}>
-                <span className={css.moduleIdx}>{String(i + 1).padStart(2, '0')}</span>
+                <span className={cssstages.moduleIdx}>{String(i + 1).padStart(2, '0')}</span>
                 <span className={css.moduleIcon}>{m.icon}</span>
                 <span className={css.moduleName}>{m.name}</span>
-                <span className={css.moduleDesc}>{m.desc}</span>
+                <span className={cssstages.moduleDesc}>{m.desc}</span>
               </button>
             </Reveal>
           ))}
@@ -239,15 +240,15 @@ function FeaturesPage(): React.JSX.Element {
           <Reveal key={g.name} anim={pickAnim(i, ['slide-l', 'slide-r', 'fade', 'slide-u'])} delayMs={i * 55}>
             <article className={css.featureRow}>
               <div className={css.featureNo}>{String(i + 1).padStart(2, '0')}</div>
-              <div className={css.featureBody}>
-                <div className={css.featureHead}>
-                  <span className={css.featureBadge}>{g.icon}</span>
-                  <h3 className={css.featureName}>{g.name}</h3>
+              <div>
+                <div className={cssstages.featureHead}>
+                  <span className={cssstages.featureBadge}>{g.icon}</span>
+                  <h3 className={cssstages.featureName}>{g.name}</h3>
                 </div>
-                <p className={css.featureDesc}>{g.desc}</p>
-                <div className={css.chipRow}>
+                <p className={cssstages.featureDesc}>{g.desc}</p>
+                <div className={cssstages.chipRow}>
                   {g.items.map((it) => (
-                    <span key={it} className={css.chip}>{it}</span>
+                    <span key={it} className={cssstages.chip}>{it}</span>
                   ))}
                 </div>
               </div>
@@ -267,29 +268,29 @@ function HelpPage(): React.JSX.Element {
         title="使用说明"
         lead="建议按顺序完成首次配置。出错时可到「数据健康 / 操作日志」查看诊断信息。"
       />
-      <div className={css.helpLayout}>
+      <div className={cssstages.helpLayout}>
         <ol className={css.stepList}>
           {HELP_STEPS.map((s, i) => (
             <Reveal key={s.title} anim="slide-l" delayMs={i * 80}>
               <li className={css.step}>
                 <div className={css.stepNum} aria-hidden="true">{String(i + 1).padStart(2, '0')}</div>
                 <div>
-                  <div className={css.stepTitle}>{s.title}</div>
-                  <div className={css.stepBody}>{s.body}</div>
+                  <div className={cssstages.stepTitle}>{s.title}</div>
+                  <div className={cssstages.stepBody}>{s.body}</div>
                 </div>
               </li>
             </Reveal>
           ))}
         </ol>
-        <div className={css.noticeCol}>
+        <div className={cssstages.noticeCol}>
           <Reveal anim="slide-r" delayMs={40}>
             <div className={css.sectionTitle}><span>注意事项</span></div>
           </Reveal>
           {NOTICES.map((n, i) => (
             <Reveal key={n.title} anim="fade" delayMs={100 + i * 70}>
-              <div className={css.notice}>
-                <div className={css.noticeTitle}>{n.title}</div>
-                <div className={css.noticeBody}>{n.body}</div>
+              <div className={cssstages.notice}>
+                <div className={cssstages.noticeTitle}>{n.title}</div>
+                <div className={cssstages.noticeBody}>{n.body}</div>
               </div>
             </Reveal>
           ))}
@@ -309,16 +310,16 @@ function AboutPage({ versions }: {
         title="关于 Super Time"
         lead="项目定位、运行时版本与反馈渠道。"
       />
-      <div className={css.aboutLayout}>
+      <div className={cssstages.aboutLayout}>
         <Reveal anim="slide-l" delayMs={100}>
-          <section className={css.aboutBlock}>
-            <h3 className={css.aboutTitle}>项目简介</h3>
-            <p className={css.aboutText}>
+          <section className={cssstages.aboutBlock}>
+            <h3 className={cssstages.aboutTitle}>项目简介</h3>
+            <p className={cssstages.aboutText}>
               Super Time 是面向个人用户的本地微信数据分析桌面应用。
               Electron 桌面壳 + React/Vite 前端（NEON MATRIX）+ 独立 utilityProcess 后端，
               提供会话检索、社交图谱、资产盘点、隐私审计与 AI 总结。核心分析默认离线。
             </p>
-            <dl className={css.metaList}>
+            <dl className={cssstages.metaList}>
               <div className={css.metaRow}><dt>应用版本</dt><dd>{APP_VERSION}</dd></div>
               <div className={css.metaRow}><dt>Electron</dt><dd>{versions?.electron ?? '—'}</dd></div>
               <div className={css.metaRow}><dt>Chromium</dt><dd>{versions?.chrome ?? '—'}</dd></div>
@@ -328,23 +329,23 @@ function AboutPage({ versions }: {
           </section>
         </Reveal>
         <Reveal anim="slide-r" delayMs={180}>
-          <section className={css.aboutBlock}>
-            <h3 className={css.aboutTitle}>联系方式与反馈</h3>
-            <p className={css.aboutText}>
+          <section className={cssstages.aboutBlock}>
+            <h3 className={cssstages.aboutTitle}>联系方式与反馈</h3>
+            <p className={cssstages.aboutText}>
               提交问题或建议时请勿附带密钥或完整聊天内容。
             </p>
-            <ul className={css.contactList}>
+            <ul className={cssstages.contactList}>
               <li className={css.contactItem}>
-                <span className={css.contactTitle}>项目内反馈</span>
-                <span className={css.contactDesc}>导出「操作日志」诊断，连同复现步骤一并提交</span>
+                <span className={cssstages.contactTitle}>项目内反馈</span>
+                <span className={cssstages.contactDesc}>导出「操作日志」诊断，连同复现步骤一并提交</span>
               </li>
               <li className={css.contactItem}>
-                <span className={css.contactTitle}>在线文档</span>
-                <span className={css.contactDesc}>仓库 README 与 docs/compose/spec</span>
+                <span className={cssstages.contactTitle}>在线文档</span>
+                <span className={cssstages.contactDesc}>仓库 README 与 docs/compose/spec</span>
               </li>
               <li className={css.contactItem}>
-                <span className={css.contactTitle}>隐私承诺</span>
-                <span className={css.contactDesc}>默认不上传聊天数据；AI 仅在你配置的接口处理</span>
+                <span className={cssstages.contactTitle}>隐私承诺</span>
+                <span className={cssstages.contactDesc}>默认不上传聊天数据；AI 仅在你配置的接口处理</span>
               </li>
             </ul>
           </section>
@@ -626,7 +627,7 @@ export function OnboardingShell({
       {!onConsentStage ? <NoticeBanner /> : null}
 
       {/* 多张背景图：随滚轮切页交叉淡入 */}
-      <div className={css.bgStack} aria-hidden="true">
+      <div className={cssstages.bgStack} aria-hidden="true">
         {STAGE_BGS.map((src, i) => (
           <div
             key={src}
@@ -640,7 +641,7 @@ export function OnboardingShell({
       <div className={css.stageWash} aria-hidden="true" />
       {/* 背景光效层：网格 / 粒子 / 光带 / 扫描 / 几何 / HUD 角 */}
       <div className={css.bgGrid} aria-hidden="true" />
-      <ParticleField className={css.particles} stage={bgIndex} />
+      <ParticleField className={cssstages.particles} stage={bgIndex} />
       <div className={`${css.lightBand} ${css.lightBandA}`} aria-hidden="true" />
       <div className={`${css.lightBand} ${css.lightBandB}`} aria-hidden="true" />
       <div className={`${css.lightBand} ${css.lightBandC}`} aria-hidden="true" />
@@ -657,14 +658,14 @@ export function OnboardingShell({
       <div className={`${css.hudFrame} ${css.hudBr}`} aria-hidden="true"><HudCorner /></div>
 
       <header className={css.top}>
-        <div className={css.brand}>
+        <div className={cssstages.brand}>
           <span className={css.brandIcon}><BrandMark size={20} /></span>
-          <div className={css.brandText}>
-            <span className={css.brandName}>Super Time</span>
-            <span className={css.brandSub}>Onboarding · System Boot</span>
+          <div className={cssstages.brandText}>
+            <span className={cssstages.brandName}>Super Time</span>
+            <span className={cssstages.brandSub}>Onboarding · System Boot</span>
           </div>
         </div>
-        <nav className={css.tabs} aria-label="启动页导航">
+        <nav className={cssstages.tabs} aria-label="启动页导航">
           {ONBOARDING_PAGES.map((p) => {
             const done = state.visited.includes(p.id)
             return (
@@ -675,7 +676,7 @@ export function OnboardingShell({
                 onClick={() => goPage(p.id)}
                 aria-current={page === p.id ? 'page' : undefined}
               >
-                {done && page !== p.id ? <span className={css.tabDot} aria-hidden="true" /> : null}
+                {done && page !== p.id ? <span className={cssstages.tabDot} aria-hidden="true" /> : null}
                 {p.label}
               </button>
             )
@@ -698,7 +699,7 @@ export function OnboardingShell({
             onClick={() => goPage(LICENSE_STAGE)}
             aria-current={onLicenseStage ? 'page' : undefined}
           >
-            {licenseOk && !onLicenseStage ? <span className={css.tabDot} aria-hidden="true" /> : null}
+            {licenseOk && !onLicenseStage ? <span className={cssstages.tabDot} aria-hidden="true" /> : null}
             授权验证
           </button>
           <button
@@ -714,7 +715,7 @@ export function OnboardingShell({
       </header>
       <div className={css.neonRule} aria-hidden="true" />
 
-      <main className={css.body} ref={bodyRef}>
+      <main className={cssstages.body} ref={bodyRef}>
         {onConsentStage ? (
           <PrivacyConsentGate onAccepted={acceptConsentHere} onExit={onConsentExit} />
         ) : onLicenseStage ? (
@@ -744,12 +745,12 @@ export function OnboardingShell({
 
       <div className={css.neonRule} aria-hidden="true" />
       <footer className={css.footer}>
-        <div className={css.progress}>
+        <div className={cssstages.progress}>
           <ProgressRing
             value={gateStage ? gateDone : (isFirstLaunch ? visitedCount : pageIndex + 1)}
             total={gateStage ? gateTotal : ONBOARDING_PAGES.length}
           />
-          <div className={css.dots} aria-hidden="true">
+          <div className={cssstages.dots} aria-hidden="true">
             {ONBOARDING_PAGES.map((p) => (
               <span
                 key={p.id}
@@ -762,12 +763,12 @@ export function OnboardingShell({
             ) : null}
             <span className={`${css.dot}${licenseOk ? ` ${css.dotDone}` : ''}${onLicenseStage ? ` ${css.dotCurrent}` : ''}`} />
           </div>
-          <span className={css.progressText}>
+          <span className={cssstages.progressText}>
             {`STAGE ${stageIndex}/0${pageOrder.length}${gateStage ? ` · ${gateLabel}` : (isFirstLaunch ? ` · 已浏览 ${visitedCount}` : '')}`}
           </span>
         </div>
-        <div className={css.actions}>
-          <span className={css.hint}>{footerHint}</span>
+        <div className={cssstages.actions}>
+          <span className={cssstages.hint}>{footerHint}</span>
           {state.completed ? (
             <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={handleSkip} disabled={!canEnter}>
               跳过
