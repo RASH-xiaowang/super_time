@@ -24,6 +24,8 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { coOccurrencesFromSources } from '../src/client/ui-wechat/src/client/css-cascade.ts'
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ASSETS = join(ROOT, 'src', 'client', 'ui-dist', 'assets')
 
@@ -120,9 +122,16 @@ function specificity(sel) {
 }
 const hasCombinator = (sel) => /[ >+~]/.test(sel.replace(/\[[^\]]*\]/g, ''))
 
-/** 源码里的 className 共现：同一个 className 表达式里同时出现的两个 CSS Modules 局部类名。 */
+/**
+ * 源码里的 className 共现：同一个 className 表达式里同时出现的两个 CSS Modules 局部类名。
+ *
+ * 2026-09-24 改成调 `css-cascade.ts` 里那一份（**同一把尺子不许有两套实现**）：这里的旧写法用
+ * `className=\{([\s\S]{0,600}?)\}` 非贪婪取表达式，而模板串写法 `` className={`${css.a} ${css.b}`} ``
+ * 里第一个 `}` 是插值的收尾 ⇒ 表达式在 `${css.a` 就断了，只读到一个名字 ⇒ **这一类共现整批看不见**。
+ * 共现看不见就等于「没有危险对」，那是最坏的一种漏（把有风险的拆分判成安全）。同一份代码库里
+ * 两种取法的对数不同：125 对 vs 220 对（差的全是模板串/cx 拼接那批）。
+ */
 function coOccurrences(root) {
-  const out = new Set()
   const files = []
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -133,18 +142,7 @@ function coOccurrences(root) {
     }
   }
   walk(join(root, 'src', 'client'))
-  for (const f of files) {
-    const t = readFileSync(f, 'utf8')
-    for (const m of t.matchAll(/className=\{([\s\S]{0,600}?)\}/g)) {
-      const names = [...m[1].matchAll(/[A-Za-z_$][\w$]*\.([A-Za-z_][\w-]*)/g)].map((x) => x[1])
-      for (let i = 0; i < names.length; i += 1) {
-        for (let j = i + 1; j < names.length; j += 1) {
-          if (names[i] !== names[j]) out.add([names[i], names[j]].sort().join(' + '))
-        }
-      }
-    }
-  }
-  return out
+  return coOccurrencesFromSources(files.map((f) => readFileSync(f, 'utf8')))
 }
 
 /** 多重集差：`a` 里有而 `b` 里没有的条目（含重复计数）。 */
