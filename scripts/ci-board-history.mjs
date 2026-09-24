@@ -67,10 +67,20 @@ if (!process.argv.includes('--no-baseline')) {
 }
 
 const tokenFromGit = () => {
-  const out = execFileSync('git', ['credential', 'fill'], {
-    input: `protocol=https\nhost=github.com\n\n`,
-    encoding: 'utf8',
-  })
+  // 一定要带 `GIT_TERMINAL_PROMPT=0`/`GCM_INTERACTIVE=never` + 超时：凭据不在 store 里时
+  // `git credential fill` 会去等一个**没人能回答**的交互提示 —— 2026-09-24 实测挂了 13 分钟，
+  // 而且现象与"网络慢"完全一样，看不出来。宁可快速失败并把下一步说清楚。
+  let out
+  try {
+    out = execFileSync('git', ['credential', 'fill'], {
+      input: `protocol=https\nhost=github.com\n\n`,
+      encoding: 'utf8',
+      timeout: 15000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+    })
+  } catch (err) {
+    throw new Error(`拿不到 github.com 的凭据（${String((err && err.message) ?? err).slice(0, 60)}）—— 这条命令只读 REST API：设一个 GITHUB_TOKEN 环境变量即可（推送请走 SSH，不要用 HTTPS 试，那会把存储里的凭据擦掉）`)
+  }
   const m = /^password=(.*)$/m.exec(out)
   if (!m || !m[1]) throw new Error('git credential fill 没给出 password —— 先确认这台机器有 github.com 的凭据')
   return m[1]
