@@ -120,6 +120,14 @@ async function snapshot (win) {
 }
 
 let app = null
+/**
+ * N33 的四条腿 —— **绿的时候也要打出来**。
+ *
+ * 为什么：这四个数以前只在「未成立」那行里出现，于是绿的一次运行什么也不留下，
+ * 而红的那次没有对照 —— 「主进程到达 0」到底是坏了还是本来就这样，说不清（第 ⑩~⑬ 步
+ * 就卡在这上面）。把它变成每次都写的例行读数，红的那次才有基线可比。
+ */
+const n33 = { relayIn: 0, domEvents: 0, throws: 0, loads: 0, pageErrors: 0 }
 const userData = mkdtempSync(join(tmpdir(), 'super-time-m3e2e-'))
 try {
   const decrypted = makeFixture(userData)
@@ -152,6 +160,7 @@ try {
   let relayIn = 0
   app.process().stdout.on('data', (chunk) => {
     relayIn += (String(chunk).match(/\[relay:in\] wechat-export\/progress/g) ?? []).length
+    n33.relayIn = relayIn
   })
   // 故意用**矮视口**（导出对话框的内容比它高）：CI runner 就是这种尺寸，而当时「中止导出」
   // 整颗按钮在视口之外点不到 —— 那暴露的是弹窗不可滚的产品缺陷（Playwright 报
@@ -160,7 +169,7 @@ try {
   await win.setViewportSize({ width: 1280, height: 620 })
   win.setDefaultTimeout(30000)
   const pageErrors = []
-  win.on('pageerror', (e) => { pageErrors.push(String(e.message).slice(0, 200)) })
+  win.on('pageerror', (e) => { pageErrors.push(String(e.message).slice(0, 200)); n33.pageErrors = pageErrors.length })
   /**
    * 中继回调抛出的异常（`preload.js` 里那条 `[relay:throw]`）。
    * 这是判别「渲染层 0 条事件」的第三条腿：事件送到了、回调却抛了 ⇒ DOM 事件不会发出，
@@ -169,7 +178,7 @@ try {
   const relayThrows = []
   win.on('console', (m) => {
     const t = String(m.text())
-    if (t.includes('[relay:throw]')) relayThrows.push(t.slice(0, 160))
+    if (t.includes('[relay:throw]')) { relayThrows.push(t.slice(0, 160)); n33.throws = relayThrows.length }
   })
   /**
    * 页面被重新加载了几次 —— **从「导航已就绪」那一点开始数**。
@@ -179,7 +188,7 @@ try {
    * 计数器在这里先归零（下面 setup 走完就归零），最后一条检查读的就是那之后的增量。
    */
   let loads = 0
-  win.on('load', () => { loads += 1 })
+  win.on('load', () => { loads += 1; n33.loads = loads })
   await win.waitForLoadState('domcontentloaded')
   await win.waitForTimeout(2500)
   const later = win.getByRole('button', { name: '稍后再说', exact: true })
@@ -210,6 +219,7 @@ try {
   // 从这一刻起才开始数重载：记录器是挂在 `window` 上的，**之前**的重载与它无关（它还不存在），
   // 而**之后**的任何一次重载都会把它抹掉 —— 那正是「事件 0 但导出确实成功」这个形状的一个候选解释。
   loads = 0
+  n33.loads = 0
 
   // ── ① Excel · 100 条：总量已知 ⇒ 中继里每条进度都带 done/total ──────
   await openExportDialog()
@@ -226,6 +236,7 @@ try {
   }
   knownEvents = await win.evaluate(() => window.__prog ?? [])
   const known = knownEvents
+  n33.domEvents = known.length
   check(known.length > 0, '小导出也经中继推到渲染层（不止轮询那条兜底路）',
     // 一条都没到时把界面停在哪儿一起报出来：CI 上那种「事件 0 + 采到设置页文字」的红，
     // 光看数字分不清是桥接没通、还是窗口早就离开了聊天面板。
@@ -361,6 +372,8 @@ try {
   }
 }
 
+// 四条腿的例行读数：不管这次成不成立都要打 —— 没有绿时的基线，红时的数字无从判断。
+console.log(`[N33 计数] 阶段① DOM事件=${String(n33.domEvents)} 主进程到达=${String(n33.relayIn)} 回调抛错=${String(n33.throws)} 额外加载=${String(n33.loads)} 页面异常=${String(n33.pageErrors)}`)
 const bad = results.filter((r) => !r.ok)
 console.log(`\nM3 导出进度真机验收：${results.length - bad.length}/${results.length} 成立`)
 if (bad.length > 0) {
