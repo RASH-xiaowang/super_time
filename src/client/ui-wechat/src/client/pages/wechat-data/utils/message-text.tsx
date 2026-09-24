@@ -18,6 +18,8 @@ import React from 'react'
 import type { MessageAtUser } from '@deepseek-ai/dsh-wechat-data/types'
 import { parseTextWithEmoji } from './wechat-emojis.ts'
 import css from '../panels/chats.module.css'
+import csscards from '../panels/chats-cards.module.css'
+import cssshell from '../panels/chats-shell.module.css'
 
 /** 一个文本片段。 */
 export interface MsgSegment {
@@ -192,7 +194,7 @@ export function MessageText({ text, atUsers, onOpenLink }: {
           return (
             <img
               key={idx}
-              className={css.msgEmojiImg}
+              className={cssshell.msgEmojiImg}
               src={seg.emojiSrc}
               alt={seg.content}
               title={seg.content}
@@ -205,7 +207,7 @@ export function MessageText({ text, atUsers, onOpenLink }: {
           return (
             <a
               key={idx}
-              className={css.msgTextLink}
+              className={csscards.msgTextLink}
               href={seg.url}
               title={seg.url}
               rel="noopener noreferrer"
@@ -217,7 +219,7 @@ export function MessageText({ text, atUsers, onOpenLink }: {
         }
         if (seg.type === 'mention') {
           return (
-            <span key={idx} className={css.msgMention} title={seg.user?.username}>
+            <span key={idx} className={cssshell.msgMention} title={seg.user?.username}>
               {seg.content}
             </span>
           )

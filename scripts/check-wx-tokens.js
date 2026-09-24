@@ -122,12 +122,26 @@ const MUST_NOT_HAVE = [
  * （src/client/ui-app/onboarding/onboarding.module.css），于是「旧实现已清除」
  * 永远判不过。禁令的本意是「微信气泡正文字号不得回退到 14.5px」，
  * 所以按来源文件收窄就能保住原意、又不牵连别的页面。
+ *
+ * 2026-09-24（第 49 刀）改成读**整个 chats 家族**：`chats.module.css` 按簇拆成了四份，
+ * 只读主份的话，那条带着旧字号的规则一旦落在别的份里就会被安静放过 ——
+ * 一个「查不到就等于干净」的禁令比没有禁令更坏。找不到任何一份则直接红，不许静默跳过。
  */
-const CHAT_CSS_PATH = path.join(
+const PANELS_DIR = path.join(
   __dirname, '..', 'src', 'client', 'ui-wechat', 'src', 'client',
-  'pages', 'wechat-data', 'panels', 'chats.module.css',
+  'pages', 'wechat-data', 'panels',
 )
 const LEGACY_CHAT_BODY_FONT = 'font-size: 14.5px'
+
+/** 聊天面板那几份样式的原文（拼成一份来判「有没有回退」）。 */
+function chatCssSources() {
+  const names = fs.readdirSync(PANELS_DIR).filter((n) => /^chats.*\.module\.css$/.test(n)).sort()
+  if (names.length === 0) {
+    console.error(`✗ ${path.relative(path.join(__dirname, '..'), PANELS_DIR)} 里一份 chats 样式都没有 —— 这条禁令的判据源没了，不能当「干净」`)
+    process.exit(1)
+  }
+  return names.map((n) => fs.readFileSync(path.join(PANELS_DIR, n), 'utf8')).join('\n')
+}
 
 function main() {
   const { css, file } = readBuiltCss()
@@ -137,8 +151,7 @@ function main() {
   const leftover = MUST_NOT_HAVE.filter((s) => css.includes(s))
 
   // 聊天面板源样式：旧气泡正文字号不得回退（见 LEGACY_CHAT_BODY_FONT 的说明）
-  const chatCss = fs.existsSync(CHAT_CSS_PATH) ? fs.readFileSync(CHAT_CSS_PATH, 'utf8') : ''
-  const chatLegacy = chatCss.includes(LEGACY_CHAT_BODY_FONT)
+  const chatLegacy = chatCssSources().includes(LEGACY_CHAT_BODY_FONT)
 
   if (missing.length > 0) {
     console.error(`\n✗ 缺少 ${missing.length} 项预期值：`)

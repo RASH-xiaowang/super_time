@@ -1,0 +1,888 @@
+/* =========================================================================
+   Chats panel — session list + message stream.
+   NEON MATRIX 科技风重设计：深空黑底 + 霓虹青 (var(--nm-cyan)) + 紫色 (var(--nm-purple))，
+   毛玻璃卡片、渐变柱、发光悬停。类名保持与 React 表面完全一致。
+   ========================================================================= */
+.panel {
+
+  /* 深空黑底 + 顶部青色氛围光 */
+  background-color: var(--nm-bg-0);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--nm-bg-0) 0%, var(--nm-bg-1) 100%);
+
+  /* 滚动容器继承本面板的滚动条配色（见 ui-theme styles/scrollbar.css 绑定契约） */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
+  /* 头像几何：会话列表 / 消息行 / 群成员格子**共用**同一套值。
+     微信全站是方角头像，原先 .avatar 写死 50% 再在 .msgRow 里打补丁，
+     结果是群成员格子与会话列表仍是圆形（同一屏两套语言）。
+     令牌挂在 .panel 上而不是 .msgBody 上：.avatarStub 在会话列表里用，挂 .msgBody 取不到值。 */
+  --wx-avatar: 34px;
+  --wx-avatar-radius: 6px;
+  /* 未读徽标：微信两套主题同值（不随主题翻色相） */
+  --wx-unread: #fa5151;
+
+  height: 100%;
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 4px;
+  color: var(--nm-text-1);
+}
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--nm-text-2);
+  pointer-events: none;
+  display: inline-flex;
+}
+.avatar {
+  flex-shrink: 0;
+  /* 方角头像（微信官方）；圆角由 --wx-avatar-radius 统一给，不要在别处再覆盖成 50% */
+  border-radius: var(--wx-avatar-radius, 6px);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.02em;
+  corner-shape: round;
+}
+.avatarImg { display: block; object-fit: cover; border-radius: var(--wx-avatar-radius, 6px);
+  corner-shape: round;
+}
+/* ── 右侧消息区 ─────────────────────────────────────────────── */
+.messages {
+  /* 非零 basis（原为 flex: 1 → basis 0）：basis 0 在收缩分配里权重为 0，
+     于是窗口变窄时「新对话」面板成了唯一被压缩的一方；等它也触到下限，整行就溢出。
+     给出 220px 后两列按 220:384 分摊收缩；而 flex-grow 仍只有消息列有，
+     宽窗口下的最终宽度与 flex:1 完全一致（自由空间依旧全部归消息列）。 */
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border: 1px solid var(--nm-border);
+  border-radius: 14px;
+  background: var(--nm-bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  overflow: hidden;
+  /* 消息列的宽度查询容器：头部按钮/类型条按**本列**宽度收敛，
+     而不是按窗口宽度（窄窗口时三列里消息列最窄，才是真正该响应的地方）。 */
+  container-type: inline-size;
+}
+@container (max-width: 560px) {
+  .calBtn { padding: 0 8px; gap: 0; }
+}
+/* 顶栏按钮：霓虹幽灵按钮 */
+.calBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: 8px;
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.calBtn:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  color: var(--nm-text-1);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.calBtn[data-active='true'] {
+  background: var(--nm-cyan-10);
+  border-color: var(--nm-cyan);
+  color: var(--nm-cyan);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+}
+.calBtn:active { background: var(--nm-bg-active); }
+.calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.msgBody {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wx-row-gap);
+  background: var(--wx-chat-bg);
+  /* ── 微信官方消息区令牌（深色端） ─────────────────────────────
+     几何与色值都取自微信官方客户端：圆角 4px、头像 34px、气泡内边距 6/12、
+     正文 14px/1.6；自方 #3EB575 / 对方 #2E2E2E 落在 #191919 底上。
+     浅色端的精确值在下面的 :global(.theme-light) 块里覆盖。
+
+     --wx-bubble-maxw 是**刻意偏离微信官方值**的一处：官方是 384px，
+     但本项目要在桌面端读大段 AI 生成的文本，384px 会排成一根很高的窄柱。
+     改成 100% 后气泡与**时间分隔行**同宽（用户要求「宽度放到和时间齐平」）。
+     另外原先 .msgBubble 上还叠了一层 `72%`，而那个百分比是相对**已经封顶的**
+     .msgCol 解析的 → 实际只有 384×72% ≈ 276px，比 384 还窄一圈（复合封顶的 bug）。
+     现在两处共用本令牌，封顶只由 .msgCol 单点控制。 */
+  --wx-chat-bg: #191919;
+  --wx-radius: 4px;
+  --wx-gap: 10px;
+  --wx-row-gap: 16px;
+  --wx-bubble-maxw: 100%;
+  --wx-bubble-self: #3eb575;
+  --wx-bubble-other: #2e2e2e;
+  --wx-on-self: #ffffff;
+  --wx-on-other: #f5f5f5;
+  --wx-date-text: #9f9f9f;
+  --wx-dim: #9f9f9f;
+  --wx-sender-name: #b9b9b9;
+  --wx-quote-bg: #252525;
+  --wx-quote-text: #c9c9c9;
+  --wx-card-bg: #2e2e2e;
+  --wx-card-hover: #383838;
+  --wx-card-title: #f5f5f5;
+  --wx-card-preview: #c4c4c4;
+  --wx-card-divider: #3a3a3a;
+  --wx-card-footer: #a8a8a8;
+  --wx-mention: #7d90b8;
+  --wx-link: #6f9bea;
+  --wx-link-hover: #8fb4f2;
+  --wx-time-chip-bg: rgba(0, 0, 0, 0.7);
+  --wx-time-chip-text: #ffffff;
+  /* 转账：官方扁平橙色 + 退回态（本项目的 paysubtype 三桶把「无状态」与
+     「已收款」并到了 accepted，故不额外造「已收款」配色，只区分退回）。 */
+  --wx-transfer: #f79c46;
+  --wx-transfer-returned: #fde1c3;
+  --wx-transfer-returned-text: #8a6a45;
+  /* 红包：官方扁平红橙色 + 底栏文字 */
+  --wx-redpacket: #fa9d3b;
+  --wx-redpacket-footer: #faecda;
+  /* 视频号直播角标：官方红 92% */
+  --wx-live-badge: rgba(250, 81, 81, 0.92);
+}
+:global(.theme-light) .msgBody {
+  --wx-chat-bg: #ededed;
+  --wx-bubble-self: #95ec69;
+  --wx-bubble-other: #ffffff;
+  --wx-on-self: #000000;
+  --wx-on-other: #1f2937;
+  --wx-date-text: #9e9e9e;
+  --wx-dim: #9e9e9e;
+  --wx-sender-name: #6b7280;
+  --wx-quote-bg: #e1e1e1;
+  --wx-quote-text: #525252;
+  --wx-card-bg: #ffffff;
+  --wx-card-hover: #f5f5f5;
+  --wx-card-title: #161616;
+  --wx-card-preview: #6b7280;
+  --wx-card-divider: #e8e8e8;
+  --wx-card-footer: #b2b2b2;
+  --wx-mention: #576b95;
+  --wx-link: #245fbd;
+  --wx-link-hover: #174a99;
+}
+/* 系统提示 / 撤回 / 拍一拍：微信官方是**居中小字灰字、无底色无圆角**，
+   （与日期分隔同款字色与字号）。 */
+.msgRowSystem { display: flex; justify-content: center; margin: 0; }
+.msgSender {
+  font-size: 11px;
+  color: var(--wx-sender-name);
+  margin-bottom: 4px;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+}
+.msgVoicelike { font-size: 12px; color: inherit; opacity: 0.8; }
+/* 日期分隔：微信官方居中小字灰字（与系统提示同款） */
+.msgDayDivider { text-align: center; margin: 0; }
+.msgDayDivider span {
+  color: var(--wx-date-text);
+  font-size: 12px;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+/* 表情占位（自定义表情的图片本体不在本链路里时）：用正文同字号，避免比周围文字大一圈。 */
+.msgEmojiChip { font-size: 13px; line-height: 1.6; color: inherit; opacity: 0.8; }
+.msgVoiceDur {
+  font-size: 14px;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/* 注：不再需要 order 技巧 —— 顺序完全由 .msgVoiceBubble 的 flex-direction 决定：
+   对方 row → [图标][时长]；我方 row-reverse → 视觉上是 [时长][图标]。 */
+/* 「语音转文字」：微信把转写做成气泡下方的小字按钮，不用主题青色。 */
+.msgVoiceBtn {
+  border: 1px solid var(--wx-card-divider);
+  background: transparent;
+  color: var(--wx-card-preview);
+  font-size: 12px;
+  min-height: 26px;
+  padding: 4px 9px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.msgVoiceBtn:hover { background: var(--wx-card-hover); border-color: var(--wx-card-footer); }
+.msgVoiceErr {
+  font-size: 12px;
+  color: var(--nm-danger);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 转写结果：微信里是独立的一段引用式灰底。 */
+.msgVoiceText {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--wx-quote-text);
+  background: var(--wx-quote-bg);
+  border-radius: var(--wx-radius);
+  padding: 6px 10px;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 340px;
+}
+.msgSolitaireHd { display: flex; align-items: center; gap: 8px; }
+.msgSolitaireIcon { font-size: 14px; line-height: 1; }
+.msgSolitaireSubject {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--wx-card-title);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msgSolitaireCount {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--wx-card-footer);
+  font-variant-numeric: tabular-nums;
+}
+.msgSolitaireList { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.msgSolitaireItem { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.msgSolitaireIdx {
+  flex: 0 0 16px;
+  text-align: right;
+  color: var(--wx-card-footer);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.msgSolitaireText { color: var(--wx-card-title); word-break: break-word; }
+.msgAppmsgIcon { font-size: 16px; line-height: 1.2; }
+.msgAppmsgBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.msgAppmsgLabel { font-size: 12px; font-weight: 500; color: var(--wx-card-preview); }
+.msgAppmsgTitle { font-size: 13px; line-height: 1.5; color: var(--wx-card-title); word-break: break-word; }
+.msgAppmsgDesc { font-size: 12px; line-height: 1.45; color: var(--wx-card-preview); word-break: break-word; }
+.msgAppmsgSource { font-size: 11px; color: var(--wx-card-footer); }
+.msgCallBody { display: inline-flex; align-items: center; gap: 8px; }
+.msgCallDur {
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+/* ── 视频封面 + 播放角标（微信：48px 半透明圆、无描边、无模糊） ──── */
+.msgVideoWrap { position: relative; display: inline-block; }
+.msgVideoPlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: none;
+  box-shadow: none;
+  corner-shape: round;
+}
+/* ── 图片灯箱 ─────────────────────────────────────────────── */
+.viewerOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: rgba(3, 6, 14, 0.88);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.viewerBar {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--nm-bg-input);
+  border: 1px solid var(--nm-border-hover);
+  border-radius: 999px;
+  box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+  corner-shape: round;
+}
+.viewerCount {
+  color: var(--nm-text-1);
+  font-size: 12px;
+  margin: 0 8px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--nm-font-mono, monospace);
+}
+.viewerBtn {
+  border: none;
+  background: transparent;
+  color: var(--nm-text-1);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 8px;
+  line-height: 1;
+  display: inline-flex;
+  transition: var(--nm-t-ui);
+}
+.viewerBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 12%, transparent); color: var(--nm-cyan); }
+.viewerStage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.viewerImg {
+  max-width: 92vw;
+  max-height: 86vh;
+  object-fit: contain;
+  cursor: grab;
+  transition: transform 0.08s linear;
+  border-radius: 8px;
+  box-shadow: 0 0 40px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+}
+.viewerMsg { color: var(--nm-text-2); font-size: 14px; padding: 20px; }
+.msgTransferMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-self: center; }
+.msgTransferAmount {
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.msgTransferStatus { font-size: 12px; opacity: 0.95; }
+.msgRedpacketIcon { font-size: 32px; line-height: 1; flex-shrink: 0; }
+.msgRedpacketBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.msgRedpacketTitle { font-size: 14px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msgPayStatus {
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.88;
+  font-variant-numeric: tabular-nums;
+}
+.msgRedpacketAmount {
+  font-size: 14px;
+  font-weight: 500;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.msgQuoteWho { flex-shrink: 0; margin-inline-end: 4px; }
+.msgQuoteKind { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
+.msgQuoteWhat { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgFileHint {
+  font-size: 11px;
+  color: var(--wx-card-footer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msgFileTitle {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--wx-card-title);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+.msgFileMeta {
+  font-size: 12px;
+  color: var(--wx-card-footer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msgMiniappAppIcon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: block;
+  background: var(--wx-card-hover);
+}
+/* 拿不到小程序图标时的中性占位（不自造品牌绿） */
+.msgMiniappAppDot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--wx-card-hover);
+}
+.msgMiniappName {
+  font-size: 13px;
+  color: var(--wx-card-preview);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msgMiniappTitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--wx-card-title);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.msgMiniappDesc {
+  font-size: 12px;
+  color: var(--wx-card-preview);
+  line-height: 1.45;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgMiniappCover {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -12px;
+  background: var(--wx-card-hover);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.msgMiniappCover[data-empty] { min-height: 88px; }
+.msgMiniappCoverImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: top center;
+  display: block;
+}
+.msgMiniappCoverFallback {
+  color: var(--wx-card-footer);
+  display: grid;
+  place-items: center;
+}
+.msgLinkThumbWrap { display: flex; gap: 10px; align-items: flex-start; min-height: 42px; }
+.msgLinkText { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.msgLinkThumb {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 0;
+  object-fit: cover;
+  background: var(--wx-card-hover);
+  border: none;
+}
+.msgLinkTitle {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--wx-card-title);
+  line-height: 1.4;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgLinkDesc {
+  font-size: 12px;
+  color: var(--wx-card-preview);
+  line-height: 1.4;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgLinkUrl {
+  font-size: 11px;
+  color: var(--wx-card-footer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msgLinkOpen {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: inherit;
+  display: inline-flex;
+  opacity: 0.6;
+}
+.msgContactAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--wx-card-hover);
+  color: var(--wx-card-preview);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+}
+.msgContactBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.msgContactNick { font-size: 14px; font-weight: 400; color: var(--wx-card-title); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msgLocationTitle {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--wx-card-title);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgLocationDesc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--wx-card-preview);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msgChatlogMain { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; }
+.msgChatlogIcon { flex-shrink: 0; color: var(--wx-card-preview); display: inline-flex; margin-top: 2px; }
+.msgChatlogBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.msgChatlogTitle { font-size: 14px; font-weight: 400; color: var(--wx-card-title); }
+.exportChip {
+  border: 1px solid var(--nm-border);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+  corner-shape: round;
+}
+.exportChip:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+.exportChip[data-active='true'] {
+  background: var(--nm-cyan-10);
+  color: var(--nm-cyan);
+  border-color: var(--nm-cyan);
+  font-weight: 600;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+}
+.memberSearchBox {
+  position: relative;
+  margin-bottom: 10px;
+}
+.memberSearchBox input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px 0 30px;
+  border: none;
+  border-radius: 6px;
+  background: var(--wx-search-bg);
+  font-size: var(--wx-info-meta);
+  color: var(--nm-text-1);
+  box-sizing: border-box;
+  outline: none;
+  transition: var(--nm-t-ui);
+}
+.memberSearchBox input::placeholder { color: var(--wx-search-ph); }
+/* 填充式输入框靠「底色变化 + 焦点环」表达焦点，不再靠边框变色 */
+.memberSearchBox input:focus { background: color-mix(in srgb, var(--wx-search-bg) 82%, var(--nm-cyan)); }
+.memberSearchBox .searchIcon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--wx-search-ph);
+  pointer-events: none;
+  display: inline-flex;
+}
+.memberTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+  border-radius: 6px;
+  transition: var(--nm-t-ui);
+}
+.memberTile:hover { background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
+.memberTile:active { background: var(--nm-bg-active); }
+.memberName {
+  max-width: 100%;
+  overflow: hidden;
+  /* 两行：4 列布局下格子只有 63px，10.5px 单行时实测 133px 的文字要被吃掉一半以上；
+     12px + 两行能把截断降到可接受（审计 P1-3）。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.3;
+  font-size: var(--wx-info-meta);
+  color: var(--nm-text-2);
+  text-align: center;
+}
+.memberAdd {
+  width: 40px;
+  height: 40px;
+  /* 微信的「添加」是方角实线占位，不是虚线圆（虚线读作拖放目标，语义不同） */
+  border-radius: var(--wx-avatar-radius, 6px);
+  border: 1px solid var(--nm-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nm-text-2);
+  font-size: 18px;
+  transition: var(--nm-t-ui);
+  corner-shape: round;
+}
+/* 「添加」暂不支持邀请，是**死控件**：不给任何 hover 反馈，避免看起来可点 */
+.memberTile[data-disabled='true'] { cursor: not-allowed; }
+.memberTile[data-disabled='true']:hover { background: transparent; box-shadow: none; }
+.memberTile[data-disabled='true'] .memberAdd { opacity: 0.5; }
+.memberTile[data-disabled='true'] .memberName { opacity: 0.7; }
+/* 工具栏关闭按钮：醒目、可点 */
+.viewerBtnClose {
+  background: color-mix(in srgb, var(--nm-danger) 85%, transparent) !important;
+  color: #fff !important;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  corner-shape: round;
+}
+.viewerBtnClose:hover { background: var(--nm-danger) !important; color: #fff !important; }
+/* ── 系统提示行：撤回 / 置顶 / 通知 / 空内容 ───────────────────────
+   微信里这几类都是同一款居中灰字，靠文案区分；本项目保留行首小字形
+   （↩ / 📌）让「动作 vs 通知」仍可快速扫读，其余分色与胶囊底已去掉。 */
+.msgSystemIcon { font-size: 11px; line-height: 1; opacity: 0.85; }
+.msgSystemText { word-break: break-word; }
+.msgAppmsgThumb {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 0;
+  object-fit: cover;
+  background: var(--wx-card-hover);
+  border: none;
+}
+.msgMediaCoverFallback { font-size: 24px; color: var(--wx-card-footer); }
+.msgMediaDot {
+  position: absolute;
+  right: 8px;
+  top: 10px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  corner-shape: round;
+}
+.msgMediaBody { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-bottom: 6px; }
+.msgMediaTitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--wx-card-title);
+  line-height: 1.45;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgMediaFrom { font-size: 11px; color: var(--wx-card-preview); }
+.msgMediaDesc { font-size: 11px; color: var(--wx-card-preview); word-break: break-word; }
+.msgLinkCoverWrap { display: block; position: relative; }
+.msgLinkCoverImg {
+  width: 137px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: var(--wx-radius) var(--wx-radius) 0 0;
+  display: block;
+  background: var(--wx-card-hover);
+}
+.msgMpRowThumb {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: cover;
+  display: block;
+  background: var(--wx-card-hover);
+}
+/* ── 图片组网格（连拍合并）：微信用 3 列等宽方格，gap 2px、圆角 4px ── */
+.msgImageGrid {
+  display: grid;
+  gap: 2px;
+  border-radius: var(--wx-radius);
+  overflow: hidden;
+  max-width: 246px;
+}
+.msgImageGrid[data-count='1'] { grid-template-columns: 1fr; }
+.msgImageGrid[data-count='2'], .msgImageGrid[data-count='4'] { grid-template-columns: repeat(2, 1fr); }
+.msgImageGrid[data-count='3'], .msgImageGrid[data-count='5'],
+.msgImageGrid[data-count='6'], .msgImageGrid[data-count='7'],
+.msgImageGrid[data-count='8'], .msgImageGrid[data-count='9'] { grid-template-columns: repeat(3, 1fr); }
+.msgImageGridCell { position: relative; display: block; aspect-ratio: 1 / 1; overflow: hidden; border-radius: 2px; }
+.msgImageGridItem { display: block; width: 100%; height: 100%; cursor: zoom-in; border-radius: 2px; }
+.msgImageGridItem img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.msgImageGridEmpty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--wx-card-footer);
+  background: var(--wx-card-hover);
+}
+.msgImageGridEmpty[data-loading] { opacity: 0.55; }
+.msgImageGridMore {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+}
+/* 用两道渐变画「路网」示意，代替不可用的离线瓦片；不假装是真实地图。 */
+.msgLocationGrid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px);
+  background-size: 15px 15px;
+  opacity: 0.8;
+}
+.msgLocationPin { position: relative; font-size: 22px; line-height: 1; }
+.msgLocationCoord {
+  font-size: 11px;
+  color: var(--wx-card-footer);
+  font-variant-numeric: tabular-nums;
+}
+/* ── 名片卡头像填充 ─────────────────────────────────────────────── */
+.msgContactAvatar img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }
+/* 语音气泡主规则在上方「语音消息」段；此处仅保留时长角标等衍生样式。 */
+/* ── 视频时长角标：微信右下 8px、12px 白字、圆角 4px ───────────────── */
+.msgVideoDur {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+/* ── 合并转发卡：内层预览（微信 12px、单行截断） ───────────────────── */
+.msgChatlogPreview { display: flex; flex-direction: column; gap: 2px; }
+.msgChatlogLine {
+  font-size: 12px;
+  color: var(--wx-card-preview);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.msgMusicCover {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--wx-card-hover);
+  border: none;
+  font-size: 20px;
+}
+.msgMusicCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.msgMusicBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.msgMusicTitle {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--wx-card-title);
+  line-height: 1.4;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msgMusicArtist { font-size: 12px; color: var(--wx-card-preview); word-break: break-word; }
+.msgMusicFrom { font-size: 12px; color: var(--wx-card-footer); }
+/* ── 引用行末尾的缩略图（链接/图片引用的预览） ── */
+.msgQuoteThumbWrap {
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 2px;
+  border: none;
+  display: inline-flex;
+  /* 引用行改成 gap:0 后，缩略图与摘要之间要自己留间距 */
+  margin-inline-start: 6px;
+}
+.msgQuoteThumb { width: 32px; height: 32px; object-fit: cover; display: block; }
+.msgQuoteThumbOpen { cursor: zoom-in; }
+.msgQuoteThumbOpen:hover { opacity: 0.9; }
+/* ── 自定义表情大图（有封面时，不套卡片重壳） ──────────────────── */
+.msgSticker {
+  display: inline-block;
+  max-width: 130px;
+  max-height: 130px;
+  line-height: 0;
+  cursor: zoom-in;
+}
+.msgStickerImg {
+  max-width: 130px;
+  max-height: 130px;
+  object-fit: contain;
+  display: block;
+  border-radius: var(--wx-radius);
+}
+/* ── 会话级 AI 面板（「新对话」）──
+   作为 .panel 的第三栏并排；全屏态让消息流让出空间（AI 面板自身在
+   session-ask.module.css 里接管 flex:1），会话列表保持可见以便换会话。 */
+.panel[data-ai-full] .messages { display: none; }
