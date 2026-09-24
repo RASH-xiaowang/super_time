@@ -12,7 +12,7 @@
  * 另防空转：真文件的解析结果只断言结构（叶子数、关键帧数、`:global` 名字不许出现在簇符号里），
  * **不冻结**那几个簇行数 —— 它们正是这一轮要动的量。
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -338,26 +338,48 @@ describe('差分：与「反复合并」的暴力算法比簇（随机小样，�
   })
 })
 
-describe('两份超限 CSS：只做结构性防空转（簇的行数这一轮要动，不冻结）', () => {
-  const FILES = [
-    'pages/wechat-data/panels/chats.module.css',
-  ]
+describe('真文件：只做结构性防空转（簇的行数这一轮要动，不冻结）', () => {
+  /**
+   * 聊天面板那套样式在 2026-09-24（第 49 刀）按簇拆成了四份 ⇒ 这里必须按**家族**取，
+   * 不能再点名单个文件名（点了就是「拆一次文件，尺子的自检就红一次」，而且红的原因与判据无关）。
+   * 取法与本仓其它「拆完改联合读」的守卫一致：列目录 + 前缀匹配。
+   */
+  function chatsFamily (): string[] {
+    return readdirSync(join(HERE, 'pages', 'wechat-data', 'panels'))
+      .filter((f) => /^chats.*\.module\.css$/.test(f))
+      .sort()
+      .map((f) => join(HERE, 'pages', 'wechat-data', 'panels', f))
+  }
 
-  it('真文件解析出来的规模与勘测一致（解析口径坏了这里就红）', () => {
-    for (const rel of FILES) {
-      const p = parseSource(readFileSync(join(HERE, rel), 'utf8'))
-      expect(p.leaves.length, `${rel} 只解析出 ${String(p.leaves.length)} 条叶子规则 —— 解析口径坏了`).toBeGreaterThan(400)
-      expect(p.frames.length, `${rel} 的关键帧要收进来（它们也按文件打 hash）`).toBeGreaterThanOrEqual(1)
+  it('聊天面板家族解析出来的规模与勘测一致（解析口径坏了这里就红）', () => {
+    const files = chatsFamily()
+    expect(files.length, '一份 chats 样式都没找到 —— 目录或命名变了').toBeGreaterThanOrEqual(2)
+    let leaves = 0
+    let frames = 0
+    for (const f of files) {
+      const p = parseSource(readFileSync(f, 'utf8'))
+      expect(p.leaves.length, `${f} 一条规则都没解析出来`).toBeGreaterThan(0)
+      leaves += p.leaves.length
+      frames += p.frames.length
     }
+    expect(leaves, '整个家族只解析出 ' + String(leaves) + ' 条叶子规则 —— 解析口径坏了').toBeGreaterThan(400)
+    expect(frames, '关键帧要收进来（它们也按文件打 hash）').toBeGreaterThanOrEqual(1)
   })
 
   it(':global 里的类名一律不许进「必须同份」的符号表（口径分歧钉死在这一条）', () => {
-    const p = parseSource(readFileSync(join(HERE, 'pages/wechat-data/panels/chats.module.css'), 'utf8'))
-    const globals = new Set(p.leaves.flatMap((l) => l.globals))
-    expect(globals.size, '这份文件里本来就该有 :global 的类名，没有的话这条判据就是空的').toBeGreaterThan(0)
-    const weak = weakLinks(p)
-    for (const g of globals) {
-      expect(weak.owner.has('c:' + g), `:global(.${g}) 被当成局部类连进了闭包 —— 它不哈希，不构成约束`).toBe(false)
+    // HERE = src/client/ui-wechat/src/client ⇒ 退三级才到 src/client（onboarding 在 ui-app 那边，
+    // 是**另一个** vite 工程）—— 少退一级就是 ENOENT，这里点明以免下次照抄错层数。
+    const targets = [join(HERE, '..', '..', '..', 'ui-app', 'onboarding', 'onboarding.module.css'), ...chatsFamily()]
+    let sawGlobal = 0
+    for (const f of targets) {
+      const p = parseSource(readFileSync(f, 'utf8'))
+      const globals = new Set(p.leaves.flatMap((l) => l.globals))
+      sawGlobal += globals.size
+      const weak = weakLinks(p)
+      for (const g of globals) {
+        expect(weak.owner.has('c:' + g), `${f}：:global(.${g}) 被当成局部类连进了闭包 —— 它不哈希，不构成约束`).toBe(false)
+      }
     }
+    expect(sawGlobal, '这些文件里本来就该有 :global 的类名，一个都没有的话这条判据就是空的').toBeGreaterThan(0)
   })
 })

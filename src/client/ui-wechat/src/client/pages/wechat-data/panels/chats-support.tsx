@@ -10,6 +10,7 @@ import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
 import { MessageRenderItem } from '../utils/message-items.ts'
 import { cacheBounded } from '../utils/misc.ts'
 import css from './chats.module.css'
+import cssrows from './chats-rows.module.css'
 import { MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
 /** 16px calendar glyph (kept local; the primitives set has no calendar). */
@@ -202,13 +203,13 @@ export function Avatar({ name, username, size }: { name: string; username: strin
   const src = cached ?? null
   if (src) {
     return (
-      <div className={css.avatar} style={{ width: size ?? 34, height: size ?? 34, overflow: 'hidden' }}>
-        <img src={src} alt={letter} className={css.avatarImg} width={size ?? 34} height={size ?? 34} />
+      <div className={cssrows.avatar} style={{ width: size ?? 34, height: size ?? 34, overflow: 'hidden' }}>
+        <img src={src} alt={letter} className={cssrows.avatarImg} width={size ?? 34} height={size ?? 34} />
       </div>
     )
   }
   return (
-    <div className={css.avatar} style={{ width: size ?? 34, height: size ?? 34, background: av.background, color: av.color }}>
+    <div className={cssrows.avatar} style={{ width: size ?? 34, height: size ?? 34, background: av.background, color: av.color }}>
       {letter}
     </div>
   )
