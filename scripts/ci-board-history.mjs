@@ -77,7 +77,12 @@ const tokenFromGit = () => {
 }
 
 const makeFetch = (token) => async (path) => {
-  const res = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'ci-board-history' } })
+  // 必须有超时：2026-09-24 这一次抓取在 `fetch` 上挂了 13 分钟没返回，而工具自己一个字都不说 ——
+  // 挂住与「这个作业没有日志」在使用者眼里长得一模一样。
+  const res = await fetch(`${API}${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'ci-board-history' },
+    signal: AbortSignal.timeout(Number(arg('timeout-ms', '30000'))),
+  })
   if (!res.ok) throw new Error(`${path} → HTTP ${String(res.status)}`)
   return await res.text()
 }
