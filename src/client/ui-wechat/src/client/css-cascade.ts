@@ -455,6 +455,23 @@ export function orderSplits (cuts: readonly number[], lines: number, limit: numb
   return parts
 }
 
+/**
+ * 从一个消费者源码里抽出「默认导入的别名 → 它 import 的那份 CSS 文件名」。
+ *
+ * 放在尺子里而不是各 spec 里写一遍正则：两个 app（ui-wechat / ui-app）的消费者都要查，
+ * 而 import 的写法（相对路径深浅、有没有分号）两边不一样 —— 一份实现才好继续加形态。
+ * @param text - 消费者源码。
+ * @returns `[{ alias, file }]`，`file` 是说明符的 basename（不含目录）。
+ */
+export function aliasImports (text: string): Array<{ alias: string, file: string }> {
+  const out: Array<{ alias: string, file: string }> = []
+  for (const m of text.matchAll(/import\s+([A-Za-z_$][\w$]*)\s+from\s+'([^']*\.module\.css)'/g)) {
+    const spec = m[2] ?? ''
+    out.push({ alias: m[1] ?? '', file: spec.split('/').pop() ?? spec })
+  }
+  return out
+}
+
 /** 一份拆出来的 CSS（名字 + 原文）。 */
 export type SplitPart = { name: string, css: string }
 
@@ -475,15 +492,28 @@ export type SplitConsumer = { file: string, text: string, aliases: Array<{ alias
  * @param parts - 拆出来的各份（含原来那份）。
  * @param consumers - 引用它们的文件。
  * @param limit - 每份的行数上限。
+ * @param knownDeadRefs - **登记在册的既有死引用**（`文件:别名.类名`）。默认必须为空：
+ *   这一支是给「拆文件时顺手撞见的旧账」留的出口，不是把判据放宽 —— 名单里有一条真的不再出现了，
+ *   本函数也会报（旧账清完了要删条目，跟 M21 的棘轮同一套做法）。
  * @returns 缺陷清单；空数组 = 三条都成立。
  */
-export function splitInvariants (parts: readonly SplitPart[], consumers: readonly SplitConsumer[], limit: number): string[] {
+export function splitInvariants (
+  parts: readonly SplitPart[],
+  consumers: readonly SplitConsumer[],
+  limit: number,
+  knownDeadRefs: ReadonlySet<string> = new Set<string>(),
+): string[] {
   const out: string[] = []
-  const infos = parts.map((p) => ({
-    name: p.name,
-    classes: new Set(parseSource(p.css).leaves.flatMap((l) => l.classes)),
-    lines: p.css.split(/\r?\n/).length - (p.css.endsWith('\n') ? 1 : 0),
-  }))
+  const infos = parts.map((p) => {
+    const parsed = parseSource(p.css)
+    return {
+      name: p.name,
+      // CSS Modules 把**类名与 @keyframes 名一起**导出成同一个对象，所以 `css.fadeIn` 引的是关键帧也是合法引用
+      // —— 只收类名的话这条判据会误报（实测 Reveal.tsx 的 `css.revealIn` 就是这么被冤枉的）。
+      classes: new Set([...parsed.leaves.flatMap((l) => l.classes), ...parsed.frames.map((f) => f.name)]),
+      lines: p.css.split(/\r?\n/).length - (p.css.endsWith('\n') ? 1 : 0),
+    }
+  })
   for (let a = 0; a < infos.length; a += 1) {
     for (let b = a + 1; b < infos.length; b += 1) {
       const ia = infos[a]
@@ -492,6 +522,7 @@ export function splitInvariants (parts: readonly SplitPart[], consumers: readonl
       for (const c of ia.classes) if (ib.classes.has(c)) out.push(`① 同名类 ${c} 出现在 ${ia.name} 与 ${ib.name} 两份里`)
     }
   }
+  const dangling = new Set<string>()
   for (const c of consumers) {
     for (const { alias, part } of c.aliases) {
       const info = infos.find((i) => i.name === part)
@@ -499,9 +530,18 @@ export function splitInvariants (parts: readonly SplitPart[], consumers: readonl
       const re = new RegExp(`\\b${alias.replace(/[^\w$]/g, '\\$&')}\\.([A-Za-z_][\\w-]*)`, 'g')
       for (const m of c.text.matchAll(re)) {
         const cls = m[1] ?? ''
-        if (!info.classes.has(cls)) out.push(`② ${c.file}：${alias}.${cls} 不在 ${info.name} 里（引用悬空 ⇒ 运行时是 undefined）`)
+        const key = `${c.file.split('/').pop() ?? c.file}:${alias}.${cls}`
+        if (!info.classes.has(cls)) dangling.add(key)
       }
     }
+  }
+  for (const key of dangling) {
+    if (!knownDeadRefs.has(key)) out.push(`② ${key} 不在它所属的那份里（引用悬空 ⇒ 运行时是 undefined）`)
+  }
+  for (const key of knownDeadRefs) {
+    // 登记过的死引用已经不见了 ⇒ 说明账清完了，条目要删 —— 不报这一条的话，
+    // 出口会变成「一条永久有效的免检牌」，而判据早就放不到东西了也没人知道。
+    if (!dangling.has(key)) out.push(`② 登记的死引用 ${key} 现在找不到了 —— 账已清，请把条目从名单里删掉`)
   }
   for (const i of infos) {
     if (i.lines > limit) out.push(`③ ${i.name} 有 ${String(i.lines)} 行 > 上限 ${String(limit)}`)
