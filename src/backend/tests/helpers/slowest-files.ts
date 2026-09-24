@@ -238,3 +238,19 @@ export function formatFileAccounts(accounts: readonly FileAccount[]): string[] {
   })
   return [head, ...rows]
 }
+
+/**
+ * `[基线榜]` —— **全部**文件的毫秒数，一行一个，机器读的形状。
+ *
+ * 只由 `SUPERTIME_BASELINE=1` 触发（见 `vitest.config.ts`）：平时多打 235 行是噪声，
+ * 采集基线时它才是主角。用制表符而不是中文对齐是因为这一份给脚本解析；
+ * 人读的榜另有 `[耗时榜]` —— 两种需求分开，省得两边互相将就。
+ * @param files - 全部文件的耗时记录。
+ * @returns 要打印的行。
+ */
+export function formatBaselineBoard(files: readonly FileTiming[]): string[] {
+  if (files.length === 0) return ['[基线榜] 一个文件的耗时都没拿到 —— 这份基线是空的，别写进产物。']
+  if (files.every((x) => x.ms === 0)) return [`[基线榜] ${String(files.length)} 个文件全为 0 —— 读错字段了，这份基线不作数。`]
+  const rows = [...files].sort((a, b) => b.ms - a.ms).map((f) => `${String(Math.round(f.ms))}\t${f.name}`)
+  return [`[基线榜] ${String(rows.length)} 个文件（串行、本机；毫秒 \t 路径）：`, ...rows]
+}
