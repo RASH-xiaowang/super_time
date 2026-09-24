@@ -13,6 +13,8 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { closeAllTrackedDbs, openTrackedDb, removeDirWithRetry } from '../../tests/helpers/temp-db.ts'
+import { createPhaseLog } from '../../tests/helpers/phase-log.ts'
+
 import { buildSearchIndex, getSearchIndexStatus, searchIndexMessages, searchIndexPath } from '../src/query/search.ts'
 
 /**
@@ -445,11 +447,21 @@ describe('让出预算覆盖「被跳过的行」与「批量写入」', () => {
     // 有了字符上界，同一夹具下循环内单块实测 32ms。
     // 正文必须高熵：`'震'.repeat(n)` 这类重复串只有极少数 distinct bigram，
     // FTS 插入成本会低到看不出差别（会得到假绿，实测过）。这条性质现在由 assertHighEntropy 断住。
+    const ph = createPhaseLog('search-cursor｜长行批量写入')
     const bodies = cjkRows(21000, 700)
+    ph.mark('造正文')
     assertHighEntropy(bodies[0] ?? '', '首行')
     assertHighEntropy(bodies[bodies.length - 1] ?? '', '末行')
+    ph.mark('熵断言')
     const decrypted = makeRawFixture(bodies)
-    const { maxGapMs } = await buildWithTickProbe(decrypted)
+    ph.mark('落夹具')
+    const { maxGapMs, ticks } = await buildWithTickProbe(decrypted)
+    ph.mark('建索引+探针')
+    ph.report()
+    // 探针自己也在花时间：它每轮 `setImmediate` 都往数组里 push 一个数。
+    // 把这个数打出来是为了下次有人说「减点行数不就快了」时，能分清
+    // 「慢在建索引」与「慢在我们为了量它而插进去的表」。
+    console.log(`[算料|search-cursor] 正文 ${String(bodies.length)} 行 × 21000 字 = ${String(Math.round(bodies.reduce((a, r) => a + r.length, 0) / 1024 / 1024))}MB；探针 ticks=${String(ticks)}`)
     /**
      * 钉的是**契约**：「建索引不再产生秒级事件循环阻塞」（原文见 `search-cursor.spec.ts`
      * 顶部的验收口径）。本机实测循环内单块 32ms，所以原来写 300ms —— 但那是**本机的墙钟**，
