@@ -64,14 +64,37 @@ function scriptNamesIn(text: string): string[] {
   return [...out]
 }
 
+/** 单测步的包装脚本（2026-09-24 的 N36 政策：假红允许带记录地重跑一次，所以要过一层判定）。 */
+const UNIT_WRAPPER = 'scripts/ci-unit-step.mjs'
+
+/**
+ * ci.yml 里**真的会执行**的那些命令行（`run:` 开头）。
+ *
+ * 为什么不拿整份 yaml 搜命令名：注释也会被搜到。实测第一版就被这个洞骗过 ——
+ * 把单测步换成包装脚本之后，ci.yml 里还剩两条**注释**写着 `npm test`，
+ * 于是「npm test 在 CI 里跑」照样全绿（把包装脚本的默认命令改掉的变异打不出来）。
+ * 只认 `run:` 行之后，注释就不算数了；对其它命令同样是加固
+ * （注释里提一句 `license-gate:smoke` 再也不能冒充「这一步在 CI 里跑」）。
+ */
+const CI_RUN_LINES = [...CI.matchAll(/^\s*run:\s*(.*)$/gm)].map((m) => (m[1] ?? '').trim())
+
 /**
  * 某个命令是否真的在 CI 里跑。
  * @param name - script 名。
  * @returns 命中 `npm run <名>`（或 `npm test`）时为真。
  */
 function runsInCi(name: string): boolean {
-  if (name === 'test') return /npm test(\s|$)/.test(CI)
-  return new RegExp(`npm run ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(CI)
+  const isRun = (re: RegExp): boolean => CI_RUN_LINES.some((line) => re.test(line))
+  if (name === 'test') {
+    if (isRun(/^npm test(\s|$)/)) return true
+    // 走包装脚本的间接调用也认，但**必须两头都验**：ci.yml 点名了这个脚本，且脚本默认命令
+    // 真的是 `npm test`。少验任何一头，「npm test 在 CI 里跑」这句话都会变成空的 ——
+    // 而它正是本文件要机检的那类声明。
+    if (!CI.includes(UNIT_WRAPPER)) return false
+    const src = readFileSync(join(ROOT, UNIT_WRAPPER), 'utf8')
+    return /SUPERTIME_UNIT_CMD\s*\?\?\s*'npm test'/.test(src)
+  }
+  return isRun(new RegExp(`^npm run ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`))
 }
 
 /** 头部那句「都在 CI 里能阻断合并」点名的东西（按类别，不写死一条字符串）。 */
@@ -106,5 +129,16 @@ describe('上线门禁点名的命令要存在、要真的在 CI 里跑', () => 
     const guardMissing = ['security-guard:smoke', 'license-gate:smoke'].filter((n) => !runsInCi(n))
     expect([...notRun, ...guardMissing].join('\n'), '这些步骤被写成「CI 里有」，但 ci.yml 里没有')
       .toBe('')
+  })
+
+  it('单测步要么直接 `npm test`，要么经由「默认命令就是 npm test」的包装脚本 —— 两头总得有一条', () => {
+    // 2026-09-24 起走的是后者（N36 政策：已归因的假红允许带记录地重跑一次）。
+    // 两头都断言，是因为只查 ci.yml 会出现这种洞：步骤写 `node scripts/ci-unit-step.mjs`，
+    // 而那个脚本里的默认命令被改成了别的（或者干脆没跑测试）—— 文档那句「npm test 在 CI 里」就成了空话。
+    const direct = CI_RUN_LINES.some((line) => /^npm test(\s|$)/.test(line))
+    const wrapperSrc = readFileSync(join(ROOT, UNIT_WRAPPER), 'utf8')
+    const viaWrapper = CI.includes(UNIT_WRAPPER) && /SUPERTIME_UNIT_CMD\s*\?\?\s*'npm test'/.test(wrapperSrc)
+    expect(direct || viaWrapper, `ci.yml 里既没有直接的 npm test，也没走「默认命令 = npm test」的包装脚本（${UNIT_WRAPPER}）`)
+      .toBe(true)
   })
 })
