@@ -21,7 +21,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { MIN_FOR_BAND, classifyRun, fileHistory, formatCompare, formatFileHistory, formatHistory, parseRunLog, verdictOf } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { MIN_FOR_BAND, classifyRun, fileHistory, formatCompare, formatFileHistory, formatHistory, formatN33History, parseN33Counters, parseRunLog, verdictOf } from '../src/backend/tests/helpers/ci-board-history.ts'
 import { baselineMs, baselineProblems } from '../src/backend/tests/helpers/local-baseline.ts'
 
 const API = 'https://api.github.com'
@@ -84,14 +84,18 @@ const makeFetch = (token) => async (path) => {
 const boards = []
 const missing = []
 const failed = []
+/** N33：每次运行的 e2e 计数（`null` = 那份日志里没有这一行；与「拉取失败」不是一桶）。 */
+const n33rows = []
 
 const localLogs = allArgs('from-file')
 if (localLogs.length > 0) {
   for (const p of localLogs) {
     const label = p.replace(/^.*[\\/]/, '')
-    const b = parseRunLog(readFileSync(p, 'utf8'), label)
+    const raw = readFileSync(p, 'utf8')
+    const b = parseRunLog(raw, label)
     if (b) boards.push(b)
     else missing.push(label)
+    n33rows.push({ label, counters: parseN33Counters(raw) })
   }
 } else {
   const token = process.env.GITHUB_TOKEN ?? tokenFromGit()
@@ -117,12 +121,16 @@ if (localLogs.length > 0) {
       const jobs = JSON.parse(await get(`/repos/${repo}/actions/runs/${String(r.id)}/jobs?per_page=100`)).jobs ?? []
       const meta = { sha: String(r.head_sha ?? '').slice(0, 7), branch: String(r.head_branch ?? '') }
       let worst = null
+      let n33 = null
       for (const j of jobs) {
         // 用 job id 自己拼 URL：`/runs/{id}/jobs` 的返回里没有可靠的 `logs_url`（第一版就踩了这个）。
         const raw = await get(`/repos/${repo}/actions/jobs/${String(j.id)}/logs`)
         const b = parseRunLog(raw, runNumber, meta)
         if (b !== null && (worst === null || b.topMs > worst.topMs)) worst = b
+        // e2e 与单测在同一个 job 里（ci.yml 只有一个 job、几十步），所以同一份日志两处都读得到。
+        if (n33 === null) n33 = parseN33Counters(raw)
       }
+      n33rows.push({ label: runNumber, counters: n33, sha: meta.sha, conclusion: typeof r.conclusion === 'string' ? r.conclusion : undefined })
       if (worst === null) { missing.push(runNumber); continue }
       boards.push(worst)
     } catch (err) {
@@ -144,4 +152,5 @@ if (process.argv.includes('--compare') && localLookup !== null) {
   if (av === null || bv === null) console.log(`[对比] 每一半都要至少 ${String(MIN_FOR_BAND)} 个可判样本才给噪声带 —— 这次是 ${String(aRuns.length)} / ${String(bRuns.length)}（拉更多次：--runs 24）`)
   else for (const line of formatCompare(av, bv, `最近 ${String(half)} 次`, `之前 ${String(half)} 次`)) console.log(line)
 }
+for (const line of formatN33History(n33rows, failed.map((x) => String(x).split('(')[0] ?? x))) console.log(line)
 if (failed.length > 0) console.log(`  —— 另有 ${String(failed.length)} 次运行拉取失败（不计入「没有榜」）：${failed.join(', ')}`)
