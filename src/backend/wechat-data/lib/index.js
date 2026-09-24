@@ -5094,19 +5094,21 @@ function readWatermarks(db) {
   return out;
 }
 function bigramTokens(text) {
-  const out = [];
+  const parts = [];
   for (const run of String(text || "").match(/[\u4e00-\u9fff]+|[A-Za-z0-9_]+/g) || []) {
     if (/^[A-Za-z0-9_]+$/.test(run)) {
-      out.push(run.toLowerCase());
+      parts.push(run.toLowerCase());
       continue;
     }
     if (run.length === 1) {
-      out.push(run);
+      parts.push(run);
       continue;
     }
-    for (let i = 0; i + 2 <= run.length; i += 1) out.push(run.slice(i, i + 2));
+    const seg = new Array(run.length - 1);
+    for (let i = 0; i + 2 <= run.length; i += 1) seg[i] = run.slice(i, i + 2);
+    parts.push(seg.join(" "));
   }
-  return out.join(" ");
+  return parts.join(" ");
 }
 function ftsPhrase(term) {
   const toks = bigramTokens(term).split(" ").filter(Boolean);
