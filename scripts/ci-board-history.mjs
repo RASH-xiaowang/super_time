@@ -12,6 +12,7 @@
  * 用法：
  *   node scripts/ci-board-history.mjs                     # 最近 12 次 ci.yml 的运行
  *   node scripts/ci-board-history.mjs --runs 20 --budget 15
+ *   node scripts/ci-board-history.mjs --file kb-vector    # 再横过来看这一个文件的历次读数
  *   node scripts/ci-board-history.mjs --from-file a.log --from-file b.log   # 离线解析本地日志
  *
  * token：优先 `GITHUB_TOKEN`，否则走 `git credential fill`（只在内存里，绝不打印）。
@@ -19,7 +20,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
-import { formatHistory, parseRunLog } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { fileHistory, formatFileHistory, formatHistory, parseRunLog } from '../src/backend/tests/helpers/ci-board-history.ts'
 
 const API = 'https://api.github.com'
 const arg = (name, dflt) => {
@@ -37,6 +38,8 @@ const workflow = arg('workflow', 'ci.yml')
 const runs = Number(arg('runs', '12'))
 // A 类那半条的预算（秒）。2026-09-24 改定的口径，见 helpers/ci-board-history.ts 里的 TOP_BUDGET_MS。
 const budgetS = Number(arg('budget', '15'))
+// 给了 `--file` 就额外横过来看这一个文件（关键词是文件名子串，大小写不敏感）。
+const needle = String(arg('file', '') ?? '').trim()
 
 const tokenFromGit = () => {
   const out = execFileSync('git', ['credential', 'fill'], {
@@ -88,11 +91,12 @@ if (localLogs.length > 0) {
       // `/runs/{id}/jobs?attempt=N` 对 N=1、2 返回同一个 job id），所以本工具**给不出旧尝试的榜**。
       // 结论：印出来的「最差值」是**下界** —— 只可能被重跑盖小，不会被夸大。
       const jobs = JSON.parse(await get(`/repos/${repo}/actions/runs/${String(r.id)}/jobs?per_page=100`)).jobs ?? []
+      const meta = { sha: String(r.head_sha ?? '').slice(0, 7), branch: String(r.head_branch ?? '') }
       let worst = null
       for (const j of jobs) {
         // 用 job id 自己拼 URL：`/runs/{id}/jobs` 的返回里没有可靠的 `logs_url`（第一版就踩了这个）。
         const raw = await get(`/repos/${repo}/actions/jobs/${String(j.id)}/logs`)
-        const b = parseRunLog(raw, runNumber)
+        const b = parseRunLog(raw, runNumber, meta)
         if (b !== null && (worst === null || b.topMs > worst.topMs)) worst = b
       }
       if (worst === null) { missing.push(runNumber); continue }
@@ -104,4 +108,5 @@ if (localLogs.length > 0) {
 }
 
 for (const line of formatHistory(boards, missing, budgetS * 1000)) console.log(line)
+if (needle !== '') for (const line of formatFileHistory(fileHistory(boards, needle), needle, budgetS * 1000)) console.log(line)
 if (failed.length > 0) console.log(`  —— 另有 ${String(failed.length)} 次运行拉取失败（不计入「没有榜」）：${failed.join(', ')}`)
