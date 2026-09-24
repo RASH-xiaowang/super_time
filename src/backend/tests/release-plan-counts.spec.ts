@@ -179,6 +179,40 @@ function ledgerDuplicates(): string[] {
   })
   return out
 }
+/** 台账表的列数 —— 从它**自己的表头行**取，不写死：写死的话表头一改，守卫就跟着说谎。 */
+function ledgerColumns (): number {
+  const h = LINES.find((l) => /^\|\s*日期\s*\|\s*操作者\s*\|/.test(l))
+  if (h === undefined) throw new Error('找不到台账表头「| 日期 | 操作者 | … |」—— 那张表的表头改了，守卫要跟着改')
+  return cellsOf(h).length
+}
+
+const LEDGER_COLS = ledgerColumns()
+
+/**
+ * 台账行的**形状**缺陷名单：列数与表头不符、或行尾竖线缺失。
+ *
+ * 为什么单独立一条（N38 那条只管条目表）：台账是「一件事怎么走到今天」的唯一记录，行一被劈开，
+ * 后半句就显示到不存在的列上 —— 而 2026-09-24 实测到台账里恰恰有 10 行是坏的，此前**没有任何**
+ * 机检看着它。坏法两种，且第二种会骗过「只数列数」的判据：
+ *   ① 正文里有没转义的竖线（代码片段 `` `a | b` ``、绝对值记法 `mean|d|`）⇒ 多一列；
+ *   ② 行尾那根竖线整个没写 ⇒ 正文里那根裸竖线**顶替了它的位置**，列数正好等于表头、数不出来，
+ *      但最后一格的内容被截断到那一根竖线为止（实测 3 行是这一种）。
+ */
+function ledgerShapeDefects (lines: readonly string[] = LINES): string[] {
+  const out: string[] = []
+  const wholeDoc = lines === LINES
+  lines.forEach((line, i) => {
+    if (!LEDGER_ROW.test(line)) return
+    const where = wholeDoc ? `第 ${String(i + 1)} 行` : `合成第 ${String(i + 1)} 行`
+    if (!line.endsWith('|')) {
+      out.push(`${where}：行尾没有竖线 —— 正文里那根没转义的竖线会顶替它的位置，列数看着正好，最后一格却被截断`)
+    }
+    const n = cellsOf(line).length
+    if (n !== LEDGER_COLS) out.push(`${where}：${String(n)} 格，而表头是 ${String(LEDGER_COLS)} 列（正文里有没转义的竖线，或少了一格）`)
+  })
+  return out
+}
+
 /** 中文数字里能当个位的九个；`十` 单独处理，`十一`/`二十一` 走下面的乘式。 */
 const CN_DIGITS = new Map<string, number>([
   ['一', 1], ['二', 2], ['三', 3], ['四', 4], ['五', 5],
@@ -358,6 +392,25 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     // 比 `toEqual([])`：数组为空时 vitest 把实际值折成 `Array(1)`，读日志的人看不到撞车的是哪两行
     expect(ledgerDuplicates().join('\n'), '同一天、同一条目、摘要一字不差的台账行（后写的那版会盖住前一版的结论）')
       .toBe('')
+  })
+
+  it('台账**每一行**的形状与表头一致：列数对、行尾竖线不缺（N38 只看了条目表，台账是同族缺陷却没被看着）', () => {
+    const rows = LINES.filter((l) => LEDGER_ROW.test(l))
+    expect(rows.length, '一行台账都没解析到 —— 行格式或 LEDGER_ROW 变了，本条就成了空的').toBeGreaterThanOrEqual(250)
+    expect(LEDGER_COLS, '台账表头列数解析成了 ' + String(LEDGER_COLS) + ' —— 那张表不是 5 列的话守卫要跟着改').toBe(5)
+    // 比 `toEqual([])`：数组为空时 vitest 把实际值折成 `Array(1)`，读日志的人看不到坏在第几行
+    expect(ledgerShapeDefects().join('\n'), '台账里有被劈开的行：某一格会显示到不存在的列上，合并分支时留下的那两版也就读不到了').toBe('')
+  })
+
+  it('台账形状判据自己有判别力（一根裸竖线、一次缺行尾竖线、少一格都必须红）', () => {
+    const ok = '| 2026-09-24 | 实施 | N99 | 已完成 | 正文里有 `a \\| b` 与 mean\\|d\\|=max\\|d\\|=0 这种**已转义**的竖线 |'
+    expect(ledgerShapeDefects([ok]).join('\n'), '合规的行不该被报 —— 报了就是判据太宽，下一次没人愿意看它红').toBe('')
+    expect(ledgerShapeDefects(['| 2026-09-24 | 实施 | N99 | 已完成 | 正文里有 `a | b` 没转义 |']).join('\n'),
+      '一根裸竖线就该红（实测 7 行是这一种）').not.toBe('')
+    expect(ledgerShapeDefects(['| 2026-09-24 | 实施 | N99 | 已完成 | 行尾没有竖线，而正文里有 `a | b`']).join('\n'),
+      '缺行尾竖线是实测的另一种坏法：它把裸竖线顶成了列边界，只数列数看不出来').not.toBe('')
+    expect(ledgerShapeDefects(['| 2026-09-24 | 实施 | 已完成 | 少了一格 |']).join('\n'),
+      '少一格同样要红 —— 状态那一格因此显示在备注列上').not.toBe('')
   })
 
   it('文档开头那句手写计数与条目表相加一致（它与总览表是两处独立的手写数字）', () => {
