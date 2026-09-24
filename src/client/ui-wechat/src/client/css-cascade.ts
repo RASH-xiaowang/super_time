@@ -455,6 +455,60 @@ export function orderSplits (cuts: readonly number[], lines: number, limit: numb
   return parts
 }
 
+/** 一份拆出来的 CSS（名字 + 原文）。 */
+export type SplitPart = { name: string, css: string }
+
+/** 一个消费者：它的原文 + 「别名 → 哪一份」的对应表（对应表来自它的 import 行，由调用方给）。 */
+export type SplitConsumer = { file: string, text: string, aliases: Array<{ alias: string, part: string }> }
+
+/**
+ * 拆完一套 CSS Module 之后的三条不变量（第 49/50 刀共用这一份实现）。
+ *
+ * 为什么放进尺子里而不是各写一份 spec：chats 与 onboarding 是**同一套判据**，
+ * 两个 spec 各抄一遍的话，将来只有一份会修 —— 那正是本模块开头写的那件事（一把尺子两套实现）。
+ *
+ * ① **各份的局部类名两两不相交**：CSS Modules 按文件打 hash，同名类出现在两份里就是两个 token，
+ *    React 只写一次 `css.x` 的那一份**静默失效**（不报错、构建照过、测试也不红）；
+ * ② **每个 `别名.类名` 都能在它 import 的那份里找到**：引用搬家而别名没改 ⇒ 拿到 `undefined` ⇒
+ *    那个元素没有样式（`className={undefined}` 时 React 连属性都不写，所以症状是「样式凭空少了」）；
+ * ③ **每份自己不超过上限**：拆出来不是躲过棘轮的办法。
+ * @param parts - 拆出来的各份（含原来那份）。
+ * @param consumers - 引用它们的文件。
+ * @param limit - 每份的行数上限。
+ * @returns 缺陷清单；空数组 = 三条都成立。
+ */
+export function splitInvariants (parts: readonly SplitPart[], consumers: readonly SplitConsumer[], limit: number): string[] {
+  const out: string[] = []
+  const infos = parts.map((p) => ({
+    name: p.name,
+    classes: new Set(parseSource(p.css).leaves.flatMap((l) => l.classes)),
+    lines: p.css.split(/\r?\n/).length - (p.css.endsWith('\n') ? 1 : 0),
+  }))
+  for (let a = 0; a < infos.length; a += 1) {
+    for (let b = a + 1; b < infos.length; b += 1) {
+      const ia = infos[a]
+      const ib = infos[b]
+      if (ia === undefined || ib === undefined) continue
+      for (const c of ia.classes) if (ib.classes.has(c)) out.push(`① 同名类 ${c} 出现在 ${ia.name} 与 ${ib.name} 两份里`)
+    }
+  }
+  for (const c of consumers) {
+    for (const { alias, part } of c.aliases) {
+      const info = infos.find((i) => i.name === part)
+      if (info === undefined) { out.push(`② ${c.file}：别名 ${alias} 指向 ${part}，但这份不在表里`); continue }
+      const re = new RegExp(`\\b${alias.replace(/[^\w$]/g, '\\$&')}\\.([A-Za-z_][\\w-]*)`, 'g')
+      for (const m of c.text.matchAll(re)) {
+        const cls = m[1] ?? ''
+        if (!info.classes.has(cls)) out.push(`② ${c.file}：${alias}.${cls} 不在 ${info.name} 里（引用悬空 ⇒ 运行时是 undefined）`)
+      }
+    }
+  }
+  for (const i of infos) {
+    if (i.lines > limit) out.push(`③ ${i.name} 有 ${String(i.lines)} 行 > 上限 ${String(limit)}`)
+  }
+  return out
+}
+
 /** 一张表的可读摘要（脚本与单测共用，免得两处各写一遍格式化）。 */
 export function summarize (
   name: string,

@@ -106,6 +106,36 @@ const key = (r) => r.at + ' | ' + r.sel
 const line = (r) => `${key(r)} { ${r.decls} }`
 
 /**
+ * 把「选择器列表」展开成一条一个选择器 —— **比对的粒度必须是这个**。
+ *
+ * 2026-09-24 实测到的假阳性：源码里五条**相邻且声明完全相同**的规则
+ * （`:global(.theme-light) .railVal`、`.stageIndex`、`.featureNo`、`.stepNum`、`.valueIndex`，都是
+ * `color:#0e7490; text-shadow:none`）被 minifier 合并成一条五选手的规则；把其中 `.railVal` 拆到别份之后
+ * 合并组变成四选手 + 一条独立的 ⇒ 「内容层少了 1 / 多了 2」，而**每个选择器得到的声明一个字都没变**。
+ * 按合并后的字符串比，就是在拿「压缩器的分组」当语义 —— 分组会随相邻性变，而相邻性正是拆分在改的东西。
+ * 展开之后：内容层比的是「(at, 选择器, 声明) 的多元集」，次序层比的也是逐选择器的规则，两件事都更准。
+ * @param rules - parseRules 的结果。
+ * @returns 展开后的规则（其余字段原样，只换 `sel`）。
+ */
+function splitSelectorLists (rules) {
+  const out = []
+  for (const r of rules) {
+    const parts = []
+    let depth = 0
+    let cur = ''
+    for (const ch of r.sel) {
+      if (ch === '(' || ch === '[') depth += 1
+      else if (ch === ')' || ch === ']') depth -= 1
+      if (ch === ',' && depth === 0) { parts.push(cur.trim()); cur = ''; continue }
+      cur += ch
+    }
+    parts.push(cur.trim())
+    for (const sel of parts.filter(Boolean)) out.push({ ...r, sel })
+  }
+  return out
+}
+
+/**
  * 冲突分析用的三个小工具。
  *
  * 产物里 3014 条叶规则中只有 24 条带后代/组合选择器（其余是单类 + 伪类/属性），所以
@@ -210,6 +240,10 @@ function dangerousFlips(before, after, cooc) {
         const beforeRel = x1.i < x2.i
         const afterRel = after1 < after2
         if (beforeRel === afterRel) continue
+        // 两条规则的**声明完全相同** ⇒ 谁在前都不改变任何元素的最终样式 —— 不算危险。
+        // （这一条是 2026-09-24 随「逐选择器展开」一起加的：展开之后同源的同声明规则会变成独立条目，
+        //  它们之间的次序确实可能变，而把这种变化报成危险会让闸门天天红在无害的东西上。）
+        if (x1.r.decls === x2.r.decls) continue
         const comb = hasCombinator(x1.r.sel) || hasCombinator(x2.r.sel)
         const sameSpec = specificity(x1.r.sel) === specificity(x2.r.sel)
         const p2 = propsOf(x2.r.decls)
@@ -254,18 +288,23 @@ function main() {
   const seqAfter = rules.map(line)
   const identical = seqBefore.length === seqAfter.length && seqBefore.every((x, i) => x === seqAfter[i])
 
+  // **比对粒度**：先把选择器列表展开成逐选择器的规则（见 `splitSelectorLists` 的 why）。
+  // 不这么做的话，「压缩器把相邻同声明的规则合并成一条」会被当成内容变化 —— 而相邻性正是拆文件在改的东西。
+  const bR = splitSelectorLists(before)
+  const aR = splitSelectorLists(rules)
+
   // 不等价时给出分类统计。注意**必须按多重集比**：类名归一后，不同模块的同名类
   // （`._card` 在 kit 与 settings 里各有一份）会撞键 —— 用 Map 去重会把同一条规则
   // 与另一条比，自比都能报出 403 条「声明变了」（第一版就这么错的）。
-  const lostPairs = multisetDiff(seqBefore, seqAfter)
-  const addedPairs = multisetDiff(seqAfter, seqBefore)
-  const lostKeys = multisetDiff(before.map(key), rules.map(key))
-  const addedKeys = multisetDiff(rules.map(key), before.map(key))
+  const lostPairs = multisetDiff(bR.map(line), aR.map(line))
+  const addedPairs = multisetDiff(aR.map(line), bR.map(line))
+  const lostKeys = multisetDiff(bR.map(key), aR.map(key))
+  const addedKeys = multisetDiff(aR.map(key), bR.map(key))
 
   // 次序变了不等于样式变了：跨文件搬规则时，产物里模块的先后会跟着变（Vite 按 import 图发 CSS），
   // 但只要「可能落在同一个元素上的那两类」相对次序没变，就没有元素能看到不同的结果。
   const cooc = coOccurrences(ROOT)
-  const { dangerous, checked } = dangerousFlips(before, rules, cooc)
+  const { dangerous, checked } = dangerousFlips(bR, aR, cooc)
 
   if (!identical) {
     let at = 0

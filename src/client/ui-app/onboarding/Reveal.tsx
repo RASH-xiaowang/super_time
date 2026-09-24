@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from 'react'
 import css from './onboarding.module.css'
+import cssstages from './onboarding-stages.module.css'
 
 export type RevealAnim = 'slide-l' | 'slide-r' | 'slide-u' | 'fade' | 'scale'
 
@@ -30,11 +31,11 @@ export type RevealAnim = 'slide-l' | 'slide-r' | 'slide-u' | 'fade' | 'scale'
  * `[...].filter(Boolean).join(' ')` 正好容得下它 —— 在这里把类型写成 `string` 才是说谎。
  */
 const ANIM_CLASS: Record<RevealAnim, string | undefined> = {
-  'slide-l': css.animSlideL,
-  'slide-r': css.animSlideR,
-  'slide-u': css.animSlideU,
-  fade: css.animFade,
-  scale: css.animScale,
+  'slide-l': cssstages.animSlideL,
+  'slide-r': cssstages.animSlideR,
+  'slide-u': cssstages.animSlideU,
+  fade: cssstages.animFade,
+  scale: cssstages.animScale,
 }
 
 export interface RevealProps {
@@ -99,7 +100,7 @@ export function Reveal({
     <Tag
       id={id}
       ref={ref as never}
-      className={[css.reveal, ANIM_CLASS[anim], shown ? css.revealIn : '', className]
+      className={[cssstages.reveal, ANIM_CLASS[anim], shown ? css.revealIn : '', className]
         .filter(Boolean)
         .join(' ')}
       style={{ ...style, ['--reveal-delay' as string]: `${delayMs}ms` }}
