@@ -11,11 +11,15 @@ import { describe, expect, it } from 'vitest'
 
 import {
   LINE_MS,
+  fileHistory,
+  formatFileHistory,
   formatHistory,
+  medianOf,
   medianTopMs,
   parseRunLog,
   stripLogNoise,
   worstOf,
+  type BoardRow,
   type RunBoard,
 } from './helpers/ci-board-history.ts'
 import { at } from './helpers/strict-index.ts'
@@ -39,14 +43,19 @@ const LOG_CLEAN = [
   '  2.   11.8s   距线 5.08×  src/backend/wechat-data/tests/kb-vector-index.spec.ts',
 ].join('\n')
 
-const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolean, file?: string } = {}): RunBoard => ({
-  label,
-  topMs,
-  topFile: opts.file ?? `x-${label}.spec.ts`,
-  crossed: opts.crossed ?? false,
-  ratio: LINE_MS / Math.max(1, topMs),
-  sawRpcTimeout: opts.red ?? false,
-})
+const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolean, file?: string, rows?: BoardRow[], sha?: string } = {}): RunBoard => {
+  const topFile = opts.file ?? `x-${label}.spec.ts`
+  return {
+    label,
+    topMs,
+    topFile,
+    crossed: opts.crossed ?? false,
+    ratio: LINE_MS / Math.max(1, topMs),
+    sawRpcTimeout: opts.red ?? false,
+    rows: opts.rows ?? [{ rank: 1, file: topFile, ms: topMs, crossed: opts.crossed ?? false }],
+    ...(opts.sha === undefined ? {} : { sha: opts.sha }),
+  }
+}
 
 /**
  * 按内容标记取报告里的那一行 —— **不要**用「倒数第几行」这种偏移。
@@ -159,5 +168,79 @@ describe('CI 榜历史：解析、最差值与「拿不到榜」的明说', () =
     expect(at(none, none.length - 1, '全拿不到时的收尾行')).toContain('这两条口径都判不了')
     const mixed = formatHistory([b('a', 9000)], ['r1'])
     expect(pick(mixed, '另有 1 次运行拉到了日志却没有 [耗时榜]'), '覆盖数要带上「没有榜」的那几次').toContain('r1')
+  })
+})
+
+describe('单文件跨运行历史：整份榜、没上榜不是 0、以及 run→commit', () => {
+  it('解析要留下**整份**榜，不是只留榜首', () => {
+    const one = parseRunLog(LOG_RED, 'r')
+    if (one === null) throw new Error('这份真日志解不出来了')
+    expect(one.rows.map((r) => r.rank), 'LOG_RED 里有两名').toEqual([1, 2])
+    expect(at(one.rows, 1, '第二名').file).toContain('operation-log.spec.ts')
+    expect(at(one.rows, 1, '第二名').ms).toBe(45400)
+    expect(one.topFile, '榜首仍按名次取第一行').toContain('overview.spec.ts')
+  })
+
+  it('榜只读到它自己结束为止 —— 后面任何一张表的行都不许并进来', () => {
+    // 今天 CI 日志里 `[用例榜]` 的行以「› 用例名」结尾，形状上不会被 `RANKED_ROW` 抓到；
+    // 但「遇到第一根非榜行就收尾」这条守卫防的不是今天，而是**下一张表哪天印出同样形状的行**
+    // （例如用例名恰好是一个路径、或多了一张 `[某榜]` 用同一套排版）。没有这条收尾，
+    // 那张表里的 999 秒就会变成这一次的「榜首」，而这是那种会一路传到验收结论里的错。
+    const text = [
+      '[耗时榜] 2 个测试文件，最慢的前 2 名：',
+      '  1.   20.8s   距线 2.88×  src/a.spec.ts',
+      '  2.   11.8s   距线 5.08×  src/b.spec.ts',
+      '[用例榜] 2 个用例，最慢的前 2 名：',
+      '  1.  999.0s   距线 0.06×  src/z.spec.ts',
+      '  2.  888.0s   距线 0.07×  src/y.spec.ts',
+    ].join('\n')
+    const one = parseRunLog(text, 'r')
+    expect(one?.rows.length, '只能有文件榜那两行').toBe(2)
+    expect(one?.topMs, '榜首必须是 20.8 秒，不是后面那张表的 999 秒').toBe(20800)
+    expect(one?.rows.map((x) => x.file), '文件名不许被后面那张表顶掉')
+      .toEqual(['src/a.spec.ts', 'src/b.spec.ts'])
+  })
+
+  it('名次不连续、顺序打乱也要按名次排好；毫秒与秒两种单位都认', () => {
+    const text = [
+      '[耗时榜] 3 个测试文件，最慢的前 3 名：',
+      '  3.   700ms   距线 85.71×  src/c.spec.ts',
+      '  1.   20.8s   距线 2.88×  src/a.spec.ts',
+      '  2.     4.5s   距线 13.33×  src/b.spec.ts',
+    ].join('\n')
+    const rows = parseRunLog(text, 'r')?.rows ?? []
+    expect(rows.map((r) => `${String(r.rank)}:${String(r.ms)}`)).toEqual(['1:20800', '2:4500', '3:700'])
+  })
+
+  it('某个文件没上榜的那次是 null，不是 0 毫秒', () => {
+    const boards = [b('435', 26000, { file: 'kb-vector-index.spec.ts' }), b('436', 9000, { file: 'kb-vector-index.spec.ts', rows: [{ rank: 2, file: 'kb-vector-index.spec.ts', ms: 9000, crossed: false }, { rank: 3, file: 'other.spec.ts', ms: 5000, crossed: false }] })]
+    const pts = fileHistory(boards, 'kb-vector')
+    expect(pts.map((p) => p.ms)).toEqual([26000, 9000])
+    expect(at(pts, 1, '第二名').rank).toBe(2)
+    expect(fileHistory(boards, 'search-cursor').map((p) => p.ms), '两次都没上榜 ⇒ 两个 null，而不是两个 0').toEqual([null, null])
+  })
+
+  it('单文件历史要说清「几次上榜、几次没进前十」，中位只按上榜的那些次算', () => {
+    const boards = [
+      b('435', 26000, { file: 'kb-a.spec.ts', sha: 'aaa1111' }),
+      b('436', 11000, { file: 'kb-b.spec.ts', rows: [{ rank: 1, file: 'kb-b.spec.ts', ms: 11000, crossed: false }, { rank: 5, file: 'kb-a.spec.ts', ms: 12000, crossed: false }] }),
+      b('437', 8000, { file: 'kb-b.spec.ts', rows: [{ rank: 1, file: 'kb-b.spec.ts', ms: 8000, crossed: false }] }),
+    ]
+    const lines = formatFileHistory(fileHistory(boards, 'kb-a'), 'kb-a')
+    expect(at(lines, 0, '表头')).toContain('3 次运行里上榜 2 次')
+    expect(at(lines, 0, '表头'), '没上榜的次数要明说不是 0 秒').toContain('没上榜**不是 0 秒**')
+    expect(pick(lines, 'run 435'), '有 sha 的那次要把短 sha 印出来（跨运行比的是同一个提交吗，全靠它）').toContain('@aaa1111')
+    expect(pick(lines, 'run 437')).toContain('未上榜')
+    expect(pick(lines, '中位')).toContain('中位 19.0s')
+    expect(pick(lines, '中位'), '19 秒 > 15 秒预算 ⇒ 超了').toContain('**超了**')
+  })
+
+  it('一次都没上榜时不许凭空给出一个中位数', () => {
+    const lines = formatFileHistory(fileHistory([b('1', 5000, { file: 'x.spec.ts' })], 'kb'), 'kb')
+    expect(at(lines, lines.length - 1, '没有中位数时的收尾行')).toContain('没有中位数可算')
+    expect(lines.join('\n')).not.toMatch(/NaN|Infinity/)
+    expect(medianOf([]), '空集合的中位数是 null').toBeNull()
+    expect(medianOf([3, 1, 2])).toBe(2)
+    expect(medianOf([4, 1, 2, 3])).toBe(2.5)
   })
 })
