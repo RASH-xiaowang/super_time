@@ -179,6 +179,86 @@ function ledgerDuplicates(): string[] {
   })
   return out
 }
+/** 中文数字里能当个位的九个；`十` 单独处理，`十一`/`二十一` 走下面的乘式。 */
+const CN_DIGITS = new Map<string, number>([
+  ['一', 1], ['二', 2], ['三', 3], ['四', 4], ['五', 5],
+  ['六', 6], ['七', 7], ['八', 8], ['九', 9],
+])
+
+/** 「九」「十三」「二十一」以及写阿拉伯数字的「13」都翻译成数；认不出来给 NaN（NaN 参与比较恒为假 ⇒ 会红）。 */
+function cnNumber (raw: string): number {
+  if (/^\d+$/.test(raw)) return Number(raw)
+  if (raw === '十') return 10
+  const m = /^([一二三四五六七八九])?十([一二三四五六七八九])?$/.exec(raw)
+  if (m !== null) {
+    const tens = m[1] === undefined ? 1 : (CN_DIGITS.get(m[1]) ?? NaN)
+    const ones = m[2] === undefined ? 0 : (CN_DIGITS.get(m[2]) ?? NaN)
+    return tens * 10 + ones
+  }
+  return CN_DIGITS.get(raw) ?? NaN
+}
+
+/** 圈号 ①→1 … ⑳→20。收码点而不是收字符：调用点已经在按 UTF-16 单元走。 */
+function circledNumber (cp: number): number {
+  return cp - 0x245f
+}
+
+/**
+ * 条目行里「已经落地的 N 步」与**同一格**里最大的那个圈号对不对得上。
+ *
+ * 为什么只比「最大序号」而不数圈号个数：那一格里除了 ①②③… 的编号，正文里还会引用
+ * 「配合第 ⑪ 步」「（见 ⑬）」之类的 —— 数个数必然虚高（实测数出 14/28 个，而真步骤是 13 个）。
+ * 反过来，子清单再怎么写也造不出比榜首更大的序号，所以「声明的步数 == 最大圈号」既严格又稳。
+ */
+function stepLabelMismatches (lines: readonly string[] = LINES): string[] {
+  const out: string[] = []
+  lines.forEach((line, i) => {
+    if (!ID_ROW.test(line)) return
+    cellsOf(line).forEach((cell) => {
+      const m = /已经?落地的([一二三四五六七八九十\d]+)步/.exec(cell)
+      if (m === null) return
+      const declared = cnNumber(grp(m, 1, '自报步数'))
+      let top = 0
+      // 圈号都在 BMP 内（U+2460…），所以按 UTF-16 单元逐个走 + 直接切片看上下文是准的。
+      for (let k = 0; k < cell.length; k += 1) {
+        const v = circledNumber(cell.codePointAt(k) ?? -1)
+        if (!(v >= 1 && v <= 20)) continue
+        // 排掉两种「引用」形态：`第 ⑪ 步`（回指）与 `第 ⑭ 步`（**前向**引用还没做的那一步）。
+        // 前向引用正是这版守卫第一次自红的原因：本行写了「（第 ⑭ 步）」指下一步，而编号只到 ⑬。
+        if (cell.slice(Math.max(0, k - 2), k) === '第 ') continue
+        if (cell.slice(k + 1, k + 3) === ' 步') continue
+        if (v > top) top = v
+      }
+      if (declared !== top) {
+        out.push(`第 ${String(i + 1)} 行：写着「落地的${grp(m, 1, '自报步数')}步」（=${String(declared)}），那一格里最大的编号却是 ${String(top)}（比的是排除「第 X 步」引用之后的最大编号）`)
+      }
+    })
+  })
+  return out
+}
+
+/**
+ * 「结论基线」那段（第一个 `## ` 之前）不许抄的四类会过期的数。
+ *
+ * 这几样每接一步、每多一次运行就变：假红发生率、自报的落地步数、点名到第几步、榜首中位读数。2026-09-24 实测到的正是这个 ——
+ * 开头写着「累计 10 次 / 已经落地的九步」，而同一天条目行里已经是 12 次 / 十三步。
+ * 规矩：**要引用就写「见 Nxx 条目行」**，别在开头复述。
+ */
+const STALE_IN_OPENING: Array<{ what: string, source: string }> = [
+  { what: '假红发生率', source: '累计 \\*\\*\\d+ 次\\*\\*' },
+  { what: '自报的落地步数', source: '落地的[一二三四五六七八九十\\d]+步' },
+  { what: '点名的第 N 步', source: '第 \\d+ 步' },
+  // 榜历史的中位**每多一次运行就变**：2026-09-24 一个钟头里从 22.1 秒跳到 24.3 秒，
+  // 全是因为窗口里进来了两次新运行。写在开头就是埋一句明天就假的话。
+  { what: '榜首中位读数', source: '中位 [0-9.]+ ?秒' },
+]
+
+/** 开头那段的终点：第一个二级标题所在行号（找不到就抛，不许静默返回 0 让检查变空转）。 */
+function openingEnd (): number {
+  const end = LINES.findIndex((l) => /^##\s/.test(l))
+  if (end < 0) throw new Error('找不到第一个二级标题 —— 开头「结论基线」那段与正文的分界没了')
+  return end
+}
 
 describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个问题本身要能信）', () => {
   it('阶段标题都解析到了，且条目表不是空的（解析口径坏了要红，而不是「两边都空所以相等」）', () => {
@@ -292,5 +372,38 @@ describe('RELEASE-PLAN 的计数与文档内容一致（「还剩什么」这个
     expect(Number(grp(m, 2, '开头计数')), '开头写的「已完成」与条目表对不上').toBe(sum('已完成'))
     expect(Number(grp(m, 3, '开头计数')), '开头写的「进行中」与条目表对不上').toBe(sum('进行中'))
     expect(Number(grp(m, 4, '开头计数')), '开头写的「未开始」与条目表对不上').toBe(sum('未开始'))
+  })
+
+  it('开头「结论基线」那段不复述会过期的数（发生率、步数、榜首读数只写在条目行与台账里）', () => {
+    const end = openingEnd()
+    const opening = LINES.slice(0, end).join('\n')
+    const body = LINES.slice(end).join('\n')
+    const hits: string[] = []
+    for (const { what, source } of STALE_IN_OPENING) {
+      // 防空转：这类写法在正文里必须真的存在，否则「开头没有」只是正则坏了造成的假绿
+      expect(new RegExp(source).test(body), `正文里一次都没有「${what}」这种写法 —— 这条正则已失效，开头的检查是空的`).toBe(true)
+      for (const m of opening.matchAll(new RegExp(source, 'g'))) hits.push(`${what}：「${grp(m, 0, '开头复述')}」`)
+    }
+    expect(hits.join('\n'), '开头那段抄了每接一步就会变的数（改成「见对应条目行」，或把数字更新到与条目行一致）').toBe('')
+  })
+
+  it('条目行自报的「已经落地的 N 步」与那一格里最大的圈号一致（第 13 步加进去时这个数还写着九）', () => {
+    const labeled = LINES.filter((l) => ID_ROW.test(l) && /已经?落地的[一二三四五六七八九十\d]+步/.test(l))
+    expect(labeled.length, '一条自报步数的条目行都没找到 —— 写法或正则变了，本条就成了空的').toBeGreaterThanOrEqual(1)
+    expect(stepLabelMismatches().join('\n'), '自报的步数与那一格最大的 ①②… 序号对不上（要么漏标了一步，要么步数忘了改）').toBe('')
+  })
+
+  it('「第 ⑭ 步」这种前向引用不算一步，但「；⑭ 真编号」必须算（排引用的规则本身要有判别力）', () => {
+    const row = (cell: string): string => `| N99 | 标题 | 验收 | ${cell} | 已完成 |`
+    // 编号只到 ⑬：回指（第 ⑪ 步）与前向（第 ⑭ 步）都不该被当成「又多了一步」
+    const refs = row('已经落地的十三步：① 一；② 二；⑬ 三。配合第 ⑪ 步；下一步（第 ⑭ 步）见台账。')
+    expect(stepLabelMismatches([refs]).join('\n'), '「第 ⑭ 步」是引用不是编号 —— 排掉它的规则失效了').toBe('')
+    // 真的多出一步（`；⑭ ` 是编号的写法）却忘了改自报数 ⇒ 必须红
+    const real = row('已经落地的十三步：① 一；② 二；⑬ 三；⑭ **又做了一步**。')
+    expect(stepLabelMismatches([real]).join('\n'), '多出一个真编号却没改自报步数，这条判据必须红').not.toBe('')
+    // 中文数字要真解析：写「九」而编号到 ⑬ ⇒ 红
+    expect(stepLabelMismatches([row('已经落地的九步：① 一；② 二；⑬ 三。')]).join('\n')).not.toBe('')
+    // 认不出来的写法不许静默通过（解析成 NaN ⇒ 与任何编号都不等 ⇒ 红）
+    expect(stepLabelMismatches([row('已经落地的一二三步：① 一。')]).join('\n'), '「一二三」不是能解析的数，不能被当成对得上').not.toBe('')
   })
 })

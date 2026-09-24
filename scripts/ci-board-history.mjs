@@ -11,7 +11,7 @@
  *
  * 用法：
  *   node scripts/ci-board-history.mjs                     # 最近 12 次 ci.yml 的运行
- *   node scripts/ci-board-history.mjs --runs 20 --required 4
+ *   node scripts/ci-board-history.mjs --runs 20 --budget 15
  *   node scripts/ci-board-history.mjs --from-file a.log --from-file b.log   # 离线解析本地日志
  *
  * token：优先 `GITHUB_TOKEN`，否则走 `git credential fill`（只在内存里，绝不打印）。
@@ -35,7 +35,8 @@ const allArgs = (name) => {
 const repo = arg('repo', 'RASH-xiaowang/super_time')
 const workflow = arg('workflow', 'ci.yml')
 const runs = Number(arg('runs', '12'))
-const required = Number(arg('required', '4'))
+// A 类那半条的预算（秒）。2026-09-24 改定的口径，见 helpers/ci-board-history.ts 里的 TOP_BUDGET_MS。
+const budgetS = Number(arg('budget', '15'))
 
 const tokenFromGit = () => {
   const out = execFileSync('git', ['credential', 'fill'], {
@@ -76,7 +77,7 @@ if (localLogs.length > 0) {
     process.exit(2)
   }
   const items = (list.workflow_runs ?? []).slice(0, runs)
-  console.log(`[榜历史] 看 ${String(items.length)} 次「${workflow}」已完成的运行（验收要求：最慢文件距线倍数 ≥ ${String(required)}×，按最差值判）`)
+  console.log(`[榜历史] 看 ${String(items.length)} 次「${workflow}」已完成的运行（口径：A 类榜首中位 ≤ ${String(budgetS)} 秒 —— 今天的实现读的是**全体榜首**的中位，是一个上界；B 类越线要求「同一次日志能自证」）`)
   console.log('  注意：重跑过的运行这里只能读到**最新一次尝试**的榜（API 不暴露旧尝试），所以印出来的「最差值」是**下界** —— 可能被盖小，不会被夸大。')
   for (const r of items) {
     const runNumber = String(r.run_number ?? r.id)
@@ -102,5 +103,5 @@ if (localLogs.length > 0) {
   }
 }
 
-for (const line of formatHistory(boards, missing, required)) console.log(line)
+for (const line of formatHistory(boards, missing, budgetS * 1000)) console.log(line)
 if (failed.length > 0) console.log(`  —— 另有 ${String(failed.length)} 次运行拉取失败（不计入「没有榜」）：${failed.join(', ')}`)
