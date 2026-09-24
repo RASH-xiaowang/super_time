@@ -377,7 +377,15 @@ export async function runBuildSearchIndex(
     db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     // tokens 列存 bigram 切分后的文本、who 列存「会话名 + 群内发送者」，两列都进 BM25 索引；
     // 原文存在 message_meta 里（不重复索引），rowid 一一对应。
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61')")
+    //
+    // `content=''`（FTS5 的「无内容表」）：**这两列从来没人读回去** —— 取原文一律走
+    // `JOIN message_meta`，高亮是应用层自己算的（`kb-search.ts` 里同样的口径写着为什么不用
+    // `snippet()`）。既然不读，把 42MB 的 tokens 串再抄一份进 FTS 的内容表就是纯浪费：
+    // 实测同一份夹具（700 行 × 21000 汉字）插入 2268ms → 1829ms，索引文件 372MB → 175MB。
+    // 代价要说清楚，两条都是这张表的**用法约束**：① 不许 `SELECT tokens/who FROM message_fts`
+    // （拿不到，只查得到 MATCH / bm25 / rowid）；② 不许对它发 `DELETE`（重建走的是事务里的
+    // `DROP TABLE` + 重建，本来就不是 DELETE）。由 `search-fts-contentless.spec.ts` 钉住。
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61', content='')")
     db.exec('CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)')
     // 时间范围索引：纯时间问法（「今天聊了啥」）要按 create_time 直取一个日期段。
     ensureMetaIndexes(db)
