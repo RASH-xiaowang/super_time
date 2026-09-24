@@ -55,7 +55,8 @@
     "license-keygen": "node scripts/license-keygen.js",
     "license-issue": "node scripts/license-issue.js",
     "license-smoke": "node scripts/license-smoke.js",
-    "css:bundle-diff": "node scripts/css-bundle-diff.mjs"
+    "css:bundle-diff": "node scripts/css-bundle-diff.mjs",
+    "css:clusters": "node scripts/css-cluster-audit.mjs"
   },
   "keywords": [
     "electron",
