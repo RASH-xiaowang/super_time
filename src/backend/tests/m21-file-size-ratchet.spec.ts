@@ -27,12 +27,15 @@ const LIMIT = 1000
  * 当前超限文件的白名单：**只许下调，降到位就删条目**。
  * 数值是 2026-09-21 实测的行数（`wc -l` 口径）。
  *
- * 剩下这两个 CSS 不是「还没轮到」，而是**量过之后确认拆不动**（2026-09-22 第 47 轮勘测）：
- * CSS Modules 按文件给同名类 / 同名 `@keyframes` 打 hash，所以「同一条规则里的类名」必须同份；
- * 再叠上「同一元素共现且抢同一批属性的类对」（分家后谁生效取决于 import 顺序），
- * `onboarding.module.css` 的最大不可分簇 = 1113 行、`chats.module.css` = 1140 行 —— 都超过上限。
- * 要再往下必须**改层叠语义**（逐类展开 `:is()` 覆盖列表 / 把浅色覆盖搬进非 module 的全局表），
- * 那属于需要逐屏验收的设计改动，见 `docs/RELEASE-PLAN.md` 的同日勘测行。
+ * 剩下这两个 CSS 不是「还没轮到」。2026-09-22 那次勘测说「拆不到 1000」，2026-09-24 把判据做成
+ * committed 的尺子之后**复核为拆得动** —— 那次的数算多了两处（都在 `npm run css:clusters` 里能重算）：
+ *   ① CSS Modules 不给 `:global(.x)` 里的类名打 hash ⇒ 它不构成「必须同份」的约束；把它当枢纽类连进
+ *      闭包，`onboarding` 那 41 条带它的规则会被串成一团（这才是 931→1113 的来源）。
+ *   ② 「同一元素共现的类对」原先用非贪婪正则取 `className={…}`，模板串写法 `` className={`${css.a} ${css.b}`} ``
+ *      在第一个 `}` 就断 ⇒ 那批类对整批看不见（看不见就等于「没有危险对」）。改成按花括号深度配对：125 对 ⇒ 220 对。
+ * 复核后的最大不可分簇：`chats.module.css` **652 行**、`onboarding.module.css` **436 行**（上限 1000）
+ * ⇒ 按簇 regroup 拆得动（3 份 / 2 份），代价是产物里的规则次序会变，所以拆完必须过 `npm run css:bundle-diff`。
+ * 保序连续切仍然切不动（各自只有 7 个合法切点，且每一份都 >1000 行）。
  */
 const ALLOWLIST: Record<string, number> = {
   'src/client/ui-app/onboarding/onboarding.module.css': 1618,
