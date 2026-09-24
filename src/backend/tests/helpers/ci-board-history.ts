@@ -52,6 +52,15 @@ export interface RunBoard {
    * 老日志（表头换过写法）里读不到时是 `undefined`，不是 0。
    */
   fileCount?: number
+  /**
+   * 同一次运行的 `[用例榜]`（最慢的几条用例）。
+   *
+   * 为什么也存下来：② 要的那句「越线能不能自证」只有**同一份日志**里的三张表并起来才说得出口 ——
+   * 跨运行比就变成比机器容量（见台账 N36 的那条教训）。
+   */
+  cases?: CaseRow[]
+  /** 同一次运行的 `[文件内账]`（时间落在用例里还是外面）。 */
+  accounts?: FileAccountRow[]
 }
 
 /** 榜上的一行。 */
@@ -96,26 +105,93 @@ function msOf (value: number, unit: string): number {
  * @returns 按名次升序的行；一张榜都没有时为空数组。
  */
 function lastBoardRows(text: string): BoardRow[] {
-  const lines = text.split('\n')
-  let start = -1
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/^\s*\[耗时榜\]/.test(at(lines, i, '日志行'))) { start = i; break }
-  }
-  if (start === -1) return []
-  const rows: BoardRow[] = []
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = at(lines, i, '日志行')
-    if (line.trim() === '') continue
+  return lastSection(text, /^\s*\[耗时榜\]/, (line) => {
     const m = RANKED_ROW.exec(line)
-    if (m === null) break
-    rows.push({
+    if (m === null) return null
+    return {
       rank: Number(grp(m, 1, '榜行名次')),
       ms: msOf(Number(grp(m, 2, '榜行耗时')), grp(m, 3, '榜行单位')),
       crossed: grp(m, 4, '榜行余量段').includes('已越过'),
       file: grp(m, 5, '榜行文件名'),
-    })
+    }
+  }).sort((a, b) => a.rank - b.rank)
+}
+
+/**
+ * 「找最后一张表 + 逐行解析」的同一件事，三种表共用一份实现。
+ *
+ * 为什么不允许每张表各写一遍：这三张表的边界规则（最后一张、遇非行就收尾、空行跳过）
+ * 必须一致 —— 分开写的话，改了 `[耗时榜]` 的边界而 `[用例榜]` 还在吃下一张表的行，
+ * 而这种错的症状是「数字看着挺合理」。
+ * @param text - 去过噪的日志全文。
+ * @param header - 表头的匹配式（从**后往前**找到的第一张表算终值）。
+ * @param rowOf - 单行解析；返回 `null` 表示这张表到此为止。
+ * @returns 解析出来的行；没有这张表时为空数组。
+ */
+function lastSection<T>(text: string, header: RegExp, rowOf: (line: string) => T | null): T[] {
+  const lines = text.split('\n')
+  let start = -1
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (header.test(at(lines, i, '日志行'))) { start = i; break }
   }
-  return rows.sort((a, b) => a.rank - b.rank)
+  if (start === -1) return []
+  const out: T[] = []
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = at(lines, i, '日志行')
+    if (line.trim() === '') continue
+    const r = rowOf(line)
+    if (r === null) break
+    out.push(r)
+  }
+  return out
+}
+
+/** `[用例榜]` 的一行：`  1.  74.4s  占该文件 90%  路径 › 组 › 用例名`。 */
+const CASE_ROW = /^\s*(\d+)\.\s+([0-9.]+)(ms|s)\s+占该文件\s+(\d+)%\s+(\S+\.[cm]?[jt]sx?)\s+›\s+(.+)$/
+/** `[文件内账]` 的一行：`  路径  文件 82.8s  用例合计 82.8s（13 条，占 100%）  ⇒ …`。 */
+const ACCOUNT_ROW = /^\s*(\S+\.[cm]?[jt]sx?)\s+文件\s+([0-9.]+)(ms|s)\s+用例合计\s+([0-9.]+)(ms|s)（(\d+) 条，占 (\d+)%）/
+
+/** 一次运行里「最慢的几条用例」的一行。 */
+export interface CaseRow { rank: number, file: string, name: string, ms: number, sharePct: number }
+/** 一次运行里「时间落在哪」的一行。 */
+export interface FileAccountRow { file: string, fileMs: number, caseMs: number, cases: number, sharePct: number }
+
+/**
+ * `[用例榜]` —— 每条用例多少秒、占它那个文件多少。
+ * @param text - 去过噪的日志全文。
+ * @returns 按名次升序；没有这张表时为空数组。
+ */
+function lastCaseRows(text: string): CaseRow[] {
+  return lastSection(text, /^\s*\[用例榜\]/, (line) => {
+    const m = CASE_ROW.exec(line)
+    if (m === null) return null
+    return {
+      rank: Number(grp(m, 1, '用例行名次')),
+      ms: msOf(Number(grp(m, 2, '用例行耗时')), grp(m, 3, '用例行单位')),
+      sharePct: Number(grp(m, 4, '用例行占比')),
+      file: grp(m, 5, '用例行文件名'),
+      name: grp(m, 6, '用例行名字'),
+    }
+  }).sort((a, b) => a.rank - b.rank)
+}
+
+/**
+ * `[文件内账]` —— 每个慢文件的「文件总时长 vs 用例合计」。
+ * @param text - 去过噪的日志全文。
+ * @returns 与日志同序；没有这张表时为空数组。
+ */
+function lastAccountRows(text: string): FileAccountRow[] {
+  return lastSection(text, /^\s*\[文件内账\]/, (line) => {
+    const m = ACCOUNT_ROW.exec(line)
+    if (m === null) return null
+    return {
+      file: grp(m, 1, '内账行文件名'),
+      fileMs: msOf(Number(grp(m, 2, '内账行文件时长')), grp(m, 3, '内账行文件单位')),
+      caseMs: msOf(Number(grp(m, 4, '内账行用例时长')), grp(m, 5, '内账行用例单位')),
+      cases: Number(grp(m, 6, '内账行用例条数')),
+      sharePct: Number(grp(m, 7, '内账行占比')),
+    }
+  })
 }
 
 /**
@@ -142,6 +218,8 @@ export function parseRunLog(rawLog: string, label: string, meta: { sha?: string,
     ratio: LINE_MS / Math.max(1, top.ms),
     sawRpcTimeout: RPC_TIMEOUT.test(text),
     rows,
+    cases: lastCaseRows(text),
+    accounts: lastAccountRows(text),
     ...(fileCount === null ? {} : { fileCount }),
     ...(meta.sha === undefined ? {} : { sha: meta.sha }),
     ...(meta.branch === undefined ? {} : { branch: meta.branch }),
@@ -583,6 +661,108 @@ export function formatDistVerdict(
   return out
 }
 
+/** 一次「越线 / 超预算」读数的自证材料 —— 全部取自**同一份日志**，再加本机基线那一个数。 */
+export interface CrossingProof {
+  file: string
+  /** CI 上这一次多少毫秒。 */
+  ms: number
+  /** `[用例榜]` 里属于这个文件的最慢一条；没上榜时 `null`。 */
+  topCase: CaseRow | null
+  /** `[文件内账]` 里这个文件那一行；没有时 `null`。 */
+  account: FileAccountRow | null
+  /** 本机基线毫秒；查不到时 `null`（**不是 0**）。 */
+  localMs: number | null
+  /** CI / 本机的倍率；`localMs` 缺失时 `null`。 */
+  ratio: number | null
+  cls: ReturnType<typeof classifyFile>
+  /** 这一条是不是停顿（B 类）—— 决定它归 ② 还是归「回去减代码」。 */
+  isB: boolean
+  /** 证据齐不齐：不齐就不许把 `says` 当结论。 */
+  complete: boolean
+  /** 一句话结论。 */
+  says: string
+}
+
+/**
+ * 口径 ② 的「能不能自证」—— 把翻日志这件事变成一行判决。
+ *
+ * 为什么必须三份材料并起来（而不是任何单独一份）：
+ * - 只有 `[耗时榜]` ⇒ 只知道「哪个文件慢」，说不出慢在哪；
+ * - 只有 `[文件内账]` ⇒ 占比 ≈100% 会被读成「就是这个文件在做事」，**而停顿正好落在某条用例的
+ *   函数体里时，那条用例的耗时会把停顿一起吃掉、占比照样接近 1**（`slowest-files.ts` 的注释早就写明）；
+ * - 只有本机基线 ⇒ 倍率能分类，但说不出这笔时间落在哪一段。
+ * @param board - 那一次运行的读数（含三张表）。
+ * @param local - 查本机基线的函数。
+ * @param overMs - 要证明的那些读数的门槛（默认 60 秒线；分布口径的 40 秒单点也用这一个函数）。
+ * @returns 每个越线读数一条；没有越线时为空数组。
+ */
+export function proveCrossings(
+  board: RunBoard,
+  local: LocalLookup,
+  overMs = LINE_MS,
+): CrossingProof[] {
+  const sec = (x: number): string => (x / 1000).toFixed(1)
+  const cases = board.cases ?? []
+  const accounts = board.accounts ?? []
+  return board.rows
+    .filter((r) => r.crossed || r.ms >= overMs)
+    .map((r) => {
+      const localMs = local(r.file)
+      const ratio = localMs === null || localMs <= 0 ? null : r.ms / localMs
+      const cls = classifyFile(localMs, r.ms)
+      const topCase = cases.filter((c) => c.file === r.file).sort((a, b) => b.ms - a.ms)[0] ?? null
+      const account = accounts.find((a) => a.file === r.file) ?? null
+      const parts: string[] = []
+      if (localMs === null || ratio === null) {
+        parts.push(`本机基线查不到这个文件 ⇒ 只有 CI 的 ${sec(r.ms)}s，说不出它是「真活」还是「停顿」`)
+      } else if (ratio >= B_RATIO) {
+        parts.push(`本机 ${String(localMs)}ms → CI ${sec(r.ms)}s = **×${ratio.toFixed(1)}**（≥${String(B_RATIO)}）⇒ 停顿，不在代码里`)
+      } else {
+        parts.push(`本机 ${String(localMs)}ms → CI ${sec(r.ms)}s = ×${ratio.toFixed(1)}（<${String(B_RATIO)}）⇒ **真活**：这条要减代码，重跑不算自证`)
+      }
+      if (account !== null) {
+        parts.push(`[文件内账] 用例合计占 ${String(account.sharePct)}%（${String(account.cases)} 条）`
+          + (account.sharePct >= 90 && ratio !== null && ratio >= B_RATIO
+            ? ' —— 占比近 100% **不等于**「就是这个文件在做事」：停顿落在某条用例体内时会被它的耗时吃掉，是倍率把它拆穿的'
+            : ''))
+      } else parts.push('日志里没有 `[文件内账]` 这一行 ⇒ 时间落在哪一段无从谈起')
+      if (topCase !== null) parts.push(`最慢一条用例 ${sec(topCase.ms)}s = 该文件 ${String(topCase.sharePct)}%：${topCase.name.slice(0, 60)}`)
+      else parts.push('`[用例榜]` 里没有这个文件的用例 ⇒ 说不出集中在哪一条')
+      return {
+        file: r.file,
+        ms: r.ms,
+        topCase,
+        account,
+        localMs,
+        ratio,
+        cls,
+        isB: ratio !== null && ratio >= B_RATIO,
+        complete: localMs !== null && account !== null && topCase !== null,
+        says: parts.join('；'),
+      }
+    })
+}
+
+/**
+ * ② 的那几行输出：越线几次 + **每一次能不能自证**。
+ * @param proofs - {@link proveCrossings} 的结果（多次运行的可以拼在一起传）。
+ * @param boardsSeen - 拿到榜的运行次数（只为说明「零次越线」是在多少次里数的）。
+ * @returns 要打印的行。
+ */
+export function formatProofs(proofs: readonly CrossingProof[], boardsSeen = 0): string[] {
+  if (proofs.length === 0) {
+    return [`  ② B 类越线（≥${String(LINE_MS / 1000)} 秒）：这 ${String(boardsSeen)} 次运行里越线 0 次 ⇒ 这条今天没有需要自证的对象（**零次不等于永远不会**）`]
+  }
+  const out = [`  ② 越线 ${String(proofs.length)} 次，逐次自证（三份材料并起来才算，缺一样就只能说「看不出」）：`]
+  for (const p of proofs) {
+    out.push(`    ${p.file.split('/').pop()} ${(p.ms / 1000).toFixed(1)}s${p.complete ? ' ✓ 可自证' : ' ⚠ 证据不齐'} —— ${p.says}`)
+  }
+  const incomplete = proofs.filter((p) => !p.complete)
+  if (incomplete.length > 0) {
+    out.push(`    其中 ${String(incomplete.length)} 次证据不齐 —— 这些**不能**记成「已自证」，也不能反过来记成「假红没解释清楚」`)
+  }
+  return out
+}
 /** 一次运行按 A/B 分过之后的样子。 */
 export interface RunClasses {
   /** 那次运行的标识。 */
@@ -717,147 +897,19 @@ export function formatHistory(
       + 'CI 上摆到 8.6~35.8 秒），混进来只会把这个数**抬高** ⇒ 「判不了」不等于「不满足」，反过来「满足」是可信的。'
       + (a !== null ? ` 有基线但每次的榜首都在基线之外（跳过 ${String(a.skipped)} 次）—— 重新 \`npm run ci:baseline\`。` : ' 要它变成可判：`npm run ci:baseline` 采一份基线。'))
   }
-  out.push([
-    '  ② B 类越线（≥60 秒）要可自证：这批运行里越线',
-    `${String(over.length)} 次`,
-    over.length === 0 ? '（这一次覆盖内没有越线）' : `（${over.map((b) => `${b.label} ${(b.topMs / 1000).toFixed(1)}s`).join('、')}）`,
-    `，其中出现过假红的 ${String(reds.length)} 次 —— 工具只能数次数，`,
-    '「能不能自证」优先看那一次日志里的 `[文件内账]`（第 ⑭ 步起对任何文件都有），手写的分段墙钟是它的特例。',
-  ].join(' '))
+  const crossedRows = boards.flatMap((b) => (b.crossed ? [b] : []))
+  out.push(`  ② B 类越线（≥${(LINE_MS / 1000).toFixed(0)} 秒）：这批运行里越线 ${String(crossedRows.length)} 次`
+    + (crossedRows.length === 0 ? '（这一次覆盖内没有越线）' : `（${crossedRows.map((b) => `${b.label} ${(b.topMs / 1000).toFixed(1)}s`).join('、')}）`)
+    + `，其中出现过假红的 ${String(reds.length)} 次`)
+  if (local !== null) {
+    const proofs = boards.flatMap((b) => proveCrossings(b, local))
+    for (const line of formatProofs(proofs, boards.length)) out.push(line)
+  } else {
+    out.push('  ② 这一条**没有本机基线** ⇒ 只能数次数，说不出「能不能自证」；要它变成一行判决：`npm run ci:baseline`。')
+  }
   out.push(`  参考：最差的一次是 ${w.topFile} ${(w.topMs / 1000).toFixed(1)}s = 距线 ${(LINE_MS / Math.max(1, w.topMs)).toFixed(2)}×（B 类抬的是这个数，所以它不再是验收条件）`)
   out.push(reds.length === 0
     ? '  这些运行里没有一次出现 [vitest-worker] 超时。'
     : `  出现假红的运行：${reds.map((b) => b.label).join(', ')}`)
-  return out
-}
-
-/**
- * N33：e2e 结尾那一行 `[N33 计数]` 的解析与历史判读。
- *
- * 为什么这一半要单独有一套（而不是继续「等一次带数字的红」）：#112 之后每次 CI —— **绿的也算** ——
- * 都会打一行五个计数（DOM 事件 / 主进程到达 / 回调抛错 / 额外加载 / 页面异常）。
- * 但「等一次红」是把结论交给运气：它可能几个月不来，来了也可能只留一行看不懂的数。
- * N36 那条同样是「偶发」的问题是靠把日志变成一条命令查得出来的历史才收口的，这里照同一做法。
- *
- * 三件事必须分开，不然会撒谎：
- *  - **有计数**：五个数都在，可以跟基线比；
- *  - **日志里没这一行**：e2e 那步没跑到、或跑到了但那一步之前就没打 —— 这一桶**不许当成「全 0」**
- *    （「没读数」被读成「没问题」是本仓反复写过的最坏一种错，见 § ㉟）；
- *  - **拉取失败**：API 或凭据的问题，跟上面两桶都不是一回事。
- */
-export interface N33Counters {
-  domEvents: number
-  relayIn: number
-  throws: number
-  loads: number
-  pageErrors: number
-}
-
-/**
- * 「一次绿运行」实测到的第一条计数（#112，run 465 之前的一次）。
- *
- * **它不是不变量，别拿它当判据**：这条命令第一次跑真历史（2026-09-24，12 次运行）就发现
- * `主进程到达` 在绿运行里一直是 **22**，只有两次是 30 —— 也就是这个数随「导出过程中进度节拍
- * 有没有被合并」而变，而 #112 当时只看过一次运行就把它写成了基线。
- * 所以判据分成两层：**硬不变量**（下面的 `n33Violations`）与**分布**（`relayIn` 印 min/中位/max，
- * 只报不判）。把「与某一次的读数不同」当成缺陷，会让闸门天天红在无害的东西上 —— 那种红很快就会
- * 被人忽略，然后真的那条腿断了也没人看。
- */
-export const N33_FIRST_RECORD: N33Counters = { domEvents: 6, relayIn: 30, throws: 0, loads: 0, pageErrors: 0 }
-
-/** @deprecated 名字会让人误以为这是「应当等于」的基线；用 {@link N33_FIRST_RECORD} 或 `n33Violations`。 */
-export const N33_BASELINE = N33_FIRST_RECORD
-
-/**
- * 硬不变量：这几条破了才是「断在某条腿上」的信号。
- * @param c - 一次运行的五个计数。
- * @returns 破掉的条目（中文、可直接印）；全成立时为空数组。
- */
-export function n33Violations (c: N33Counters): string[] {
-  const out: string[] = []
-  if (c.throws > 0) out.push(`回调抛错 ${String(c.throws)} 次 ⇒ 断在渲染层回调里`)
-  if (c.pageErrors > 0) out.push(`页面异常 ${String(c.pageErrors)} 次 ⇒ 渲染层 JS 出错`)
-  if (c.loads > 0) out.push(`额外加载 ${String(c.loads)} 次 ⇒ 中继期间页面被重新加载过`)
-  if (c.domEvents === 0) out.push('DOM事件 0 次 ⇒ e2e 没触发到阶段①（这一条不能证明链路通）')
-  if (c.relayIn === 0) out.push('主进程到达 0 次 ⇒ 进度没中继到渲染层（链路断在主进程侧）')
-  return out
-}
-
-const N33_LINE = /\[N33 计数\][^\n]*?DOM事件=(\d+) 主进程到达=(\d+) 回调抛错=(\d+) 额外加载=(\d+) 页面异常=(\d+)/
-
-/**
- * 从一份（可能是几十 KB 的）作业日志里取**最后一次** `[N33 计数]`。
- * @param rawLog - 未经处理的作业日志原文（本函数自己去 ANSI 与时间戳）。
- * @returns 五个计数；日志里没这行/字段不全时返回 **null**（不是 0）。
- */
-export function parseN33Counters (rawLog: string): N33Counters | null {
-  const clean = stripLogNoise(rawLog)
-  let last: RegExpExecArray | null = null
-  for (const m of clean.matchAll(new RegExp(N33_LINE.source, 'g'))) last = m
-  if (last === null) return null
-  return {
-    domEvents: Number(last[1] ?? 0),
-    relayIn: Number(last[2] ?? 0),
-    throws: Number(last[3] ?? 0),
-    loads: Number(last[4] ?? 0),
-    pageErrors: Number(last[5] ?? 0),
-  }
-}
-
-/** 一行历史：某个运行 + 它的计数（`null` = 这一桶是「日志里没这行」）。 */
-export interface N33Row { label: string, counters: N33Counters | null, sha?: string, conclusion?: string }
-
-/**
- * 把若干运行摊成一张表 + 一句总结。
- * @param rows - 每次运行一行（按时间倒序传进来即可，本函数按 label 印）。
- * @param failedFetch - 拉取失败的运行编号（单独一桶，不与「没这行」混）。
- * @returns 要打印的行。
- */
-export function formatN33History (
-  rows: readonly N33Row[],
-  failedFetch: readonly string[] = [],
-): string[] {
-  const out: string[] = ['[N33 计数历史] e2e 那五个计数：DOM事件 / 主进程到达 / 回调抛错 / 额外加载 / 页面异常']
-  if (rows.length === 0) {
-    out.push(`  ⚠ 一个运行都没拿到（拉取失败 ${String(failedFetch.length)} 次）—— 这张空表不代表「没问题」`)
-    return out
-  }
-  let broken = 0
-  let noLine = 0
-  const relays: number[] = []
-  for (const r of rows) {
-    if (r.counters === null) {
-      noLine += 1
-      out.push(`  run ${r.label.padEnd(6)} （日志里没有 [N33 计数] 这一行 —— e2e 那步没跑到或没打，**不算全 0**）` +
-        `${r.conclusion === undefined ? '' : ` CI 那次结论：${r.conclusion}`}`)
-      continue
-    }
-    const c = r.counters
-    relays.push(c.relayIn)
-    const v = n33Violations(c)
-    if (v.length > 0) broken += 1
-    out.push(`  run ${r.label.padEnd(6)} ${(String(c.domEvents) + ' / ' + String(c.relayIn) + ' / ' + String(c.throws) + ' / ' + String(c.loads) + ' / ' + String(c.pageErrors)).padEnd(18)} ${r.sha ?? ''}  ${v.length === 0 ? '✓ 硬不变量全成立' : `⚠ ${v.join('；')}`}`)
-  }
-  const ok = rows.length - noLine
-  relays.sort((a, b) => a - b)
-  const mid = relays.length === 0 ? 0 : (relays[Math.floor((relays.length - 1) / 2)] ?? 0)
-  // 「这批是绿的」不能靠嘴说：conclusion 是 API 给的事实，没带进来就得承认没带 ——
-  // 否则一次失败的运行会被当成「绿运行的对照读数」，而那正是这张表唯一要防的错。
-  const green = rows.filter((r) => r.conclusion === 'success').length
-  const unknown = rows.filter((r) => r.conclusion === undefined).length
-  const notGreen = rows.length - green - unknown
-  const hist = new Map<number, number>()
-  for (const v of relays) hist.set(v, (hist.get(v) ?? 0) + 1)
-  const histText = [...hist.entries()].map(([v, n]) => `${String(v)}×${String(n)}`).join(' ')
-  out.push([
-    `  读数：${String(ok)} 次有计数、${String(noLine)} 次日志里没这行`,
-    failedFetch.length > 0 ? `、${String(failedFetch.length)} 次拉取失败（不计入前两桶：${failedFetch.join(', ')}）` : '',
-    `。破硬不变量的 ${String(broken)} 次${broken === 0
-      ? ` —— 其中 CI 判成功 ${String(green)} 次${notGreen > 0 ? `、判失败/取消 ${String(notGreen)} 次` : ''}${unknown > 0 ? `、没带结论 ${String(unknown)} 次（不当它是绿的）` : ''}，这批读数里两条腿都是通的（有 DOM 事件、也有主进程中继，且没有抛错/异常/额外加载）`
-      : ''}`,
-  ].join(''))
-  out.push(`  分布（只报不判）：主进程到达 min ${String(relays[0] ?? 0)} / 中位 ${String(mid)} / max ${String(relays[relays.length - 1] ?? 0)} ⇒ 取值 ${histText}；` +
-    `#112 首次记录是 ${String(N33_FIRST_RECORD.relayIn)} —— 这一列本来就有多个取值（进度节拍有没有被合并），所以报分布而不是报「基线」`)
-  out.push('  「什么时候算诊断出来」：抛错/页面异常 >0 ⇒ 断在渲染层回调；DOM事件>0 而主进程到达=0 ⇒ 断在中继；两个都 0 ⇒ e2e 自己没触发到阶段①（这一条要靠那次运行的其它行佐证，别只信计数）')
   return out
 }

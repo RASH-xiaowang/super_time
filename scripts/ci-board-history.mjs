@@ -21,7 +21,8 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { MIN_FOR_BAND, classifyRun, fileHistory, formatCompare, formatFileHistory, formatHistory, formatN33History, parseN33Counters, parseRunLog, verdictOf } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { MIN_FOR_BAND, classifyRun, fileHistory, formatCompare, formatFileHistory, formatHistory, parseRunLog, verdictOf } from '../src/backend/tests/helpers/ci-board-history.ts'
+import { formatN33History, parseN33Counters } from '../src/backend/tests/helpers/n33-counters.ts'
 import { baselineMs, baselineProblems } from '../src/backend/tests/helpers/local-baseline.ts'
 
 const API = 'https://api.github.com'
