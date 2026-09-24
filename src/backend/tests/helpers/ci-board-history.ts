@@ -17,6 +17,7 @@
  *
  * @module tests/helpers/ci-board-history
  */
+import { at } from './strict-index.ts'
 
 /** 一次运行的榜读数。 */
 export interface RunBoard {
@@ -104,16 +105,45 @@ export function worstOf(boards: readonly RunBoard[]): RunBoard | null {
 }
 
 /**
- * 历史报告：每次运行一行 + 最差值 + 「多少次拿不到榜」的明说。
+ * A 类榜首的预算（毫秒）。
  *
- * 拿不到榜的次数一定要印出来：否则「最近 12 次最差值 2.9×」会被读成「覆盖了 12 次」，
+ * 2026-09-24 用户改定 N36 的验收：不再写「最慢文件距线倍数 ≥4×、按最差值判」——
+ * 分段墙钟证明那些越线不在代码里（本机几十毫秒的文件能在 CI 上摆到 23~104 秒），
+ * 按最差值判等于把 runner 的心情挂成永久欠账。新的两条是：
+ * ① **(A) 类榜首 ≤15 秒**（真在算东西的那类，用**中位数**读 —— 偶发的 B 类停顿抬的是最大值）；
+ * ② **B 类越线必须可自证**（同一次日志里有 `[耗时榜]`/`[用例榜]`/`[阶段|…]` 能说出「哪段都不在代码里」，
+ *    并按第 ⑪ 步的政策允许一次带记录重跑）。这条工具只能数出「有几次越线」，自证与否看日志。
+ */
+export const TOP_BUDGET_MS = 15000
+
+/**
+ * 榜首耗时的中位数（毫秒）—— A 类那半条口径读这个数。
+ * @param boards - 有榜的那些次运行。
+ * @returns 中位数；一次都没有时为 `null`（不是 0）。
+ */
+export function medianTopMs(boards: readonly RunBoard[]): number | null {
+  if (boards.length === 0) return null
+  const ms = boards.map((b) => b.topMs).sort((a, b) => a - b)
+  const mid = Math.floor(ms.length / 2)
+  if (ms.length % 2 === 1) return at(ms, mid, '榜首耗时序列')
+  return (at(ms, mid - 1, '榜首耗时序列') + at(ms, mid, '榜首耗时序列')) / 2
+}
+
+/**
+ * 历史报告：每次运行一行 + 两条新口径的判决 + 「多少次拿不到榜」的明说。
+ *
+ * 拿不到榜的次数一定要印出来：否则「最近 12 次中位 12 秒」会被读成「覆盖了 12 次」，
  * 而实际可能只有 3 次有榜、其余都是 #97 之前的运行。
  * @param boards - 有榜的那些次。
  * @param missing - 拉到了日志但没有榜的那些次的标识。
- * @param required - 验收要求的倍数（默认 4×）。
+ * @param budgetMs - A 类榜首的预算（默认 {@link TOP_BUDGET_MS}）。
  * @returns 要打印的行。
  */
-export function formatHistory(boards: readonly RunBoard[], missing: readonly string[] = [], required = 4): string[] {
+export function formatHistory(
+  boards: readonly RunBoard[],
+  missing: readonly string[] = [],
+  budgetMs = TOP_BUDGET_MS,
+): string[] {
   const out: string[] = []
   for (const b of boards) {
     const secs = (b.topMs / 1000).toFixed(1)
@@ -130,17 +160,30 @@ export function formatHistory(boards: readonly RunBoard[], missing: readonly str
   }
   const w = worstOf(boards)
   if (w === null) {
-    out.push(`[榜历史] ${String(boards.length + missing.length)} 次运行里没有一次拿得到榜 —— 这个「最差值」不存在，别当成「都很快」。`)
+    out.push(`[榜历史] ${String(boards.length + missing.length)} 次运行里没有一次拿得到榜 —— 这两条口径都判不了，别当成「都很快」。`)
     return out
   }
-  const ratio = LINE_MS / Math.max(1, w.topMs)
-  const verdict = ratio >= required
-    ? `满足「≥${String(required)}×」`
-    : `不满足「≥${String(required)}×」（还差 ${(required / Math.max(0.01, ratio)).toFixed(2)} 倍）`
-  out.push(`[榜历史] ${String(boards.length)} 次有榜的运行里最差的一次：榜首 ${w.topFile} ${(w.topMs / 1000).toFixed(1)}s = 距线 ${ratio.toFixed(2)}× ⇒ ${verdict}`)
-  const reds = boards.filter((b) => b.sawRpcTimeout).map((b) => b.label)
+  const median = medianTopMs(boards) ?? 0
+  const over = boards.filter((b) => b.crossed)
+  const reds = boards.filter((b) => b.sawRpcTimeout)
+  const okA = median <= budgetMs
+  out.push([
+    '[榜历史] 口径（2026-09-24 改定）：① A 类榜首中位 ≤',
+    `${(budgetMs / 1000).toFixed(1)}s`,
+    `⇒ 实测中位 ${(median / 1000).toFixed(1)}s`,
+    okA ? '**满足**' : `**不满足**（超 ${(median / budgetMs).toFixed(2)} 倍）`,
+    `（${String(boards.length)} 次有榜的运行）`,
+  ].join(' '))
+  out.push([
+    '  ② B 类越线（≥60 秒）要可自证：这批运行里越线',
+    `${String(over.length)} 次`,
+    over.length === 0 ? '（这一次覆盖内没有越线）' : `（${over.map((b) => `${b.label} ${(b.topMs / 1000).toFixed(1)}s`).join('、')}）`,
+    `，其中出现过假红的 ${String(reds.length)} 次 —— 工具只能数次数，`,
+    '「能不能自证」要看那一次的日志里有没有 `[耗时榜]`/`[用例榜]`/`[阶段|…]` 说出「哪段都不在代码里」。',
+  ].join(' '))
+  out.push(`  参考：最差的一次是 ${w.topFile} ${(w.topMs / 1000).toFixed(1)}s = 距线 ${(LINE_MS / Math.max(1, w.topMs)).toFixed(2)}×（B 类抬的是这个数，所以它不再是验收条件）`)
   out.push(reds.length === 0
     ? '  这些运行里没有一次出现 [vitest-worker] 超时。'
-    : `  出现假红的运行：${reds.join(', ')}`)
+    : `  出现假红的运行：${reds.map((b) => b.label).join(', ')}`)
   return out
 }
