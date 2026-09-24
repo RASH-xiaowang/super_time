@@ -1,100 +1,4 @@
-/* =========================================================================
-   Chats panel — session list + message stream.
-   NEON MATRIX 科技风重设计：深空黑底 + 霓虹青 (var(--nm-cyan)) + 紫色 (var(--nm-purple))，
-   毛玻璃卡片、渐变柱、发光悬停。类名保持与 React 表面完全一致。
-   ========================================================================= */
-
-.panel {
-
-  /* 深空黑底 + 顶部青色氛围光 */
-  background-color: var(--nm-bg-0);
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% 0%, color-mix(in srgb, var(--nm-cyan) 4%, transparent), transparent 70%),
-    linear-gradient(180deg, var(--nm-bg-0) 0%, var(--nm-bg-1) 100%);
-
-  /* 滚动容器继承本面板的滚动条配色（见 ui-theme styles/scrollbar.css 绑定契约） */
-  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
-  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
-
-  /* 头像几何：会话列表 / 消息行 / 群成员格子**共用**同一套值。
-     微信全站是方角头像，原先 .avatar 写死 50% 再在 .msgRow 里打补丁，
-     结果是群成员格子与会话列表仍是圆形（同一屏两套语言）。
-     令牌挂在 .panel 上而不是 .msgBody 上：.avatarStub 在会话列表里用，挂 .msgBody 取不到值。 */
-  --wx-avatar: 34px;
-  --wx-avatar-radius: 6px;
-  /* 未读徽标：微信两套主题同值（不随主题翻色相） */
-  --wx-unread: #fa5151;
-
-  height: 100%;
-  display: flex;
-  gap: 16px;
-  min-height: 0;
-  box-sizing: border-box;
-  padding: 4px;
-  color: var(--nm-text-1);
-}
-
-/* ── 左侧会话列表 ─────────────────────────────────────────────── */
-.sidebar {
-  width: 304px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--nm-border);
-  border-radius: 14px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  overflow: hidden;
-}
-/* ── 会话左栏顶部这一块（搜索行 / 分类 chips / 统计行）的统一节奏 ──
-   实测前的问题：左右内边距 12/12/**14**（统计行 14，文字比上面两行右移 2px）、
-   行间垂直间距 **14 / 19**（不一致）；且 .searchBox 的 min-width:220px 在 302px 宽的
-   左栏里挤不下两个按钮 —— 「批量」整颗被顶到行外（x 382..428，越出左栏 46px）。
-   现在：侧内边距一律 12px、行间一律 14px（= 下内边距 10 + 1px 分隔线 + chips 在
-   Segmented 里自带的 3px 内缩；两处都有这 3px，所以两段间距天然相等）。 */
-.search {
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid var(--nm-border);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-/* 让搜索框随行宽收缩，而不是把同行的按钮顶出去。
-   选择器写成 `.search .searchField`（0,2,0）是为了**显式压过** kit 里
-   `.searchBox { min-width: 220px; flex: 0 1 320px }` —— 单类选择器同权重时只看
-   样式表顺序，那种赢法太脆。 */
-.search .searchField {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.searchIcon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--nm-text-2);
-  pointer-events: none;
-  display: inline-flex;
-}
-.stats {
-  display: flex;
-  gap: 12px;
-  /* 左右 12px 与上面两行同一套节奏。
-     上方 9px 是**光学补偿**：与它相邻的是分段控件（有边框的盒子），而这一行是
-     **没有底色的文字**，行盒上下各有约 3px leading —— 9 + 3 = 12，与
-     「分隔线 → 分段控件」那 12px 的观感一致。
-     下方 11px 之后是列表自己的内边距，不再与上面比。 */
-  padding: 9px 12px 11px;
-  font-size: 11px;
-  color: var(--nm-text-2);
-  border-bottom: 1px solid var(--nm-border);
-  align-items: center;
-  font-variant-numeric: tabular-nums;
-}
-.statUnread { color: var(--nm-danger); font-weight: 600; }
 .sessionTypeBadge { flex-shrink: 0; font-size: 11px; line-height: 1; }
-.list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
 .sessionItem {
   position: relative;
   display: flex;
@@ -120,22 +24,6 @@
 .sessionItem:active { background: var(--nm-bg-active); }
 .sessionItem[data-active='true'] {
   background: var(--nm-bg-active);
-}
-.avatar {
-  flex-shrink: 0;
-  /* 方角头像（微信官方）；圆角由 --wx-avatar-radius 统一给，不要在别处再覆盖成 50% */
-  border-radius: var(--wx-avatar-radius, 6px);
-  color: #fff;
-  font-weight: 700;
-  font-size: 15px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  letter-spacing: 0.02em;
-  corner-shape: round;
-}
-.avatarImg { display: block; object-fit: cover; border-radius: var(--wx-avatar-radius, 6px);
-  corner-shape: round;
 }
 .sessionInfo { flex: 1; min-width: 0; }
 .sessionTop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -183,7 +71,6 @@
   font-variant-numeric: tabular-nums;
   corner-shape: round;
 }
-
 .sessionNameWrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .hiddenBadge {
   font-size: 9.5px;
@@ -196,323 +83,6 @@
 }
 .sessionTimeGroup { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .pinMark { display: inline-flex; color: var(--nm-cyan); }
-
-/* 置顶区块 */
-.pinSection { border-bottom: 1px solid var(--nm-border); margin-bottom: 2px; }
-.pinToggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 7px 12px;
-  border: none;
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 11px;
-  cursor: pointer;
-  font-weight: 600;
-  border-radius: 8px;
-  transition: var(--nm-t-ui);
-}
-.pinToggle:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
-.pinArrow { display: inline-flex; color: var(--nm-text-2); }
-
-/* 批量导出区 */
-.batchBtn {
-  border: 1px solid var(--nm-border);
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-}
-.batchBtn:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-}
-.batchBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.batchMsg {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 企业微信徽标 */
-.entBadge {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  font-size: 9.5px;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--nm-cyan);
-  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 4px;
-  padding: 2px 5px;
-  margin-left: 4px;
-  vertical-align: middle;
-  letter-spacing: 0.02em;
-}
-.msgHeaderName .entBadge { font-size: 10.5px; padding: 3px 6px; border-radius: 6px; }
-
-/* ── 右侧消息区 ─────────────────────────────────────────────── */
-.messages {
-  /* 非零 basis（原为 flex: 1 → basis 0）：basis 0 在收缩分配里权重为 0，
-     于是窗口变窄时「新对话」面板成了唯一被压缩的一方；等它也触到下限，整行就溢出。
-     给出 220px 后两列按 220:384 分摊收缩；而 flex-grow 仍只有消息列有，
-     宽窗口下的最终宽度与 flex:1 完全一致（自由空间依旧全部归消息列）。 */
-  flex: 1 1 220px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  border: 1px solid var(--nm-border);
-  border-radius: 14px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  overflow: hidden;
-  /* 消息列的宽度查询容器：头部按钮/类型条按**本列**宽度收敛，
-     而不是按窗口宽度（窄窗口时三列里消息列最窄，才是真正该响应的地方）。 */
-  container-type: inline-size;
-}
-
-/*
- * 窄列收敛规则（审计 P0-2 / P1-9）。
- * 960px 窗口下消息列只有 222px，四个按钮并排必然放不下；
- * 与其让它换行把头部撑到 260px，不如按优先级逐级收起。
- */
-@container (max-width: 560px) {
-  .calBtnLabel { display: none; }
-  .calBtn { padding: 0 8px; gap: 0; }
-}
-@container (max-width: 420px) {
-  .msgTypeChips { display: none; }
-}
-.msgHeader {
-  position: relative;
-  /* 必须高于 .msgBody（后者也是 z-index:1 且在 DOM 里更靠后）：
-     同值 + 后者靠后 = 消息流整块盖在头部之上，于是头部「更多」的下拉
-     只有第一项露出一点点，其余被消息区吃掉（用户截图）。
-     头部内的下拉自身 z-index 更高也没用 —— 它被关在 .msgHeader 的层叠上下文里，
-     能盖到多高由本行决定。模态/抽屉走 1000+，仍在头部之上，不受影响。 */
-  z-index: 20;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--nm-border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  min-height: 52px;
-}
-.msgHeaderInfo { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.msgHeaderName {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--nm-text-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.35;
-}
-.msgHeaderUser {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
-  font-variant-numeric: tabular-nums;
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* 动作区必须能收窄：原先 flex-shrink:0 让它在窄窗口把内容顶出消息区，
-   被 overflow 裁掉后按钮直接不可达（审计 P0-2）。收窄后内部 flex-wrap 才会生效。 */
-.msgHeaderActions { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; flex-wrap: wrap; }
-/* 「更多」溢出菜单：定位上下文 + 浮动面板 */
-.msgHeaderMoreWrap { position: relative; display: inline-flex; flex-shrink: 0; }
-.msgHeaderMoreMenu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 40;
-  min-width: 190px;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-card);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-}
-.msgHeaderMoreItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 12px;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-.msgHeaderMoreItem:hover { background: var(--nm-bg-hover); }
-.msgHeaderMoreItem:active { background: var(--nm-bg-active); }
-.msgHeaderMoreItem:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* 顶栏按钮：霓虹幽灵按钮 */
-.calBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: var(--nm-t-ui);
-  white-space: nowrap;
-}
-.calBtn:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  color: var(--nm-text-1);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-.calBtn[data-active='true'] {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
-}
-.calBtn:active { background: var(--nm-bg-active); }
-.calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.msgBody {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--wx-row-gap);
-  background: var(--wx-chat-bg);
-  /* ── 微信官方消息区令牌（深色端） ─────────────────────────────
-     几何与色值都取自微信官方客户端：圆角 4px、头像 34px、气泡内边距 6/12、
-     正文 14px/1.6；自方 #3EB575 / 对方 #2E2E2E 落在 #191919 底上。
-     浅色端的精确值在下面的 :global(.theme-light) 块里覆盖。
-
-     --wx-bubble-maxw 是**刻意偏离微信官方值**的一处：官方是 384px，
-     但本项目要在桌面端读大段 AI 生成的文本，384px 会排成一根很高的窄柱。
-     改成 100% 后气泡与**时间分隔行**同宽（用户要求「宽度放到和时间齐平」）。
-     另外原先 .msgBubble 上还叠了一层 `72%`，而那个百分比是相对**已经封顶的**
-     .msgCol 解析的 → 实际只有 384×72% ≈ 276px，比 384 还窄一圈（复合封顶的 bug）。
-     现在两处共用本令牌，封顶只由 .msgCol 单点控制。 */
-  --wx-chat-bg: #191919;
-  --wx-radius: 4px;
-  --wx-gap: 10px;
-  --wx-row-gap: 16px;
-  --wx-bubble-maxw: 100%;
-  --wx-bubble-self: #3eb575;
-  --wx-bubble-other: #2e2e2e;
-  --wx-on-self: #ffffff;
-  --wx-on-other: #f5f5f5;
-  --wx-date-text: #9f9f9f;
-  --wx-dim: #9f9f9f;
-  --wx-sender-name: #b9b9b9;
-  --wx-quote-bg: #252525;
-  --wx-quote-text: #c9c9c9;
-  --wx-card-bg: #2e2e2e;
-  --wx-card-hover: #383838;
-  --wx-card-title: #f5f5f5;
-  --wx-card-preview: #c4c4c4;
-  --wx-card-divider: #3a3a3a;
-  --wx-card-footer: #a8a8a8;
-  --wx-mention: #7d90b8;
-  --wx-link: #6f9bea;
-  --wx-link-hover: #8fb4f2;
-  --wx-time-chip-bg: rgba(0, 0, 0, 0.7);
-  --wx-time-chip-text: #ffffff;
-  /* 转账：官方扁平橙色 + 退回态（本项目的 paysubtype 三桶把「无状态」与
-     「已收款」并到了 accepted，故不额外造「已收款」配色，只区分退回）。 */
-  --wx-transfer: #f79c46;
-  --wx-transfer-returned: #fde1c3;
-  --wx-transfer-returned-text: #8a6a45;
-  /* 红包：官方扁平红橙色 + 底栏文字 */
-  --wx-redpacket: #fa9d3b;
-  --wx-redpacket-footer: #faecda;
-  /* 视频号直播角标：官方红 92% */
-  --wx-live-badge: rgba(250, 81, 81, 0.92);
-}
-/* 浅色主题：微信官方精确值（CSS Modules 内用 :global 命中 theme-light） */
-:global(.theme-light) .groupInfo {
-  /* 浅色端的搜索框填充：微信是浅灰底 #f0f0f0（底色是纯白，描边式输入框在这里几乎不可见） */
-  --wx-search-bg: #f0f0f0;
-  --wx-search-ph: #8f8f8f;
-}
-:global(.theme-light) .msgBody {
-  --wx-chat-bg: #ededed;
-  --wx-bubble-self: #95ec69;
-  --wx-bubble-other: #ffffff;
-  --wx-on-self: #000000;
-  --wx-on-other: #1f2937;
-  --wx-date-text: #9e9e9e;
-  --wx-dim: #9e9e9e;
-  --wx-sender-name: #6b7280;
-  --wx-quote-bg: #e1e1e1;
-  --wx-quote-text: #525252;
-  --wx-card-bg: #ffffff;
-  --wx-card-hover: #f5f5f5;
-  --wx-card-title: #161616;
-  --wx-card-preview: #6b7280;
-  --wx-card-divider: #e8e8e8;
-  --wx-card-footer: #b2b2b2;
-  --wx-mention: #576b95;
-  --wx-link: #245fbd;
-  --wx-link-hover: #174a99;
-}
-.msgHeaderExport {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  margin-left: 8px;
-  max-width: 280px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* 类型统计条：从头部移出后的独立条（头部回到单行；窄列下整条收起，见上方 @container） */
-.msgTypeChips {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 6px 14px;
-  border-bottom: 1px solid var(--nm-border);
-}
-.msgTypeChip {
-  font-size: 10.5px;
-  color: var(--nm-text-2);
-  background: var(--nm-bg-hover);
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 3px 9px;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  font-family: var(--nm-font-mono, monospace);
-  corner-shape: round;
-}
-
 /* ── 消息流 / 气泡（对齐微信官方桌面端几何） ───────────────────── */
 .msgRow { display: flex; gap: var(--wx-gap); align-items: flex-start; }
 .msgRowSelf { flex-direction: row-reverse; }
@@ -610,9 +180,6 @@
 /* 可点放大的媒体热区 */
 .msgBubbleZoom { cursor: zoom-in; }
 .avatarStub { width: var(--wx-avatar); height: var(--wx-avatar); display: inline-block; }
-/* 系统提示 / 撤回 / 拍一拍：微信官方是**居中小字灰字、无底色无圆角**，
-   （与日期分隔同款字色与字号）。 */
-.msgRowSystem { display: flex; justify-content: center; margin: 0; }
 .msgSystem {
   display: inline-flex;
   align-items: center;
@@ -628,31 +195,6 @@
   text-align: center;
   word-break: break-word;
 }
-.msgSender {
-  font-size: 11px;
-  color: var(--wx-sender-name);
-  margin-bottom: 4px;
-  max-width: 240px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 400;
-}
-.editRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 2px;
-  border-bottom: 1px solid var(--nm-border);
-}
-.editRowInfo {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  font-variant-numeric: tabular-nums;
-  font-family: var(--nm-font-mono, monospace);
-}
-
 .msgImage {
   max-width: 240px;
   max-height: 240px;
@@ -666,99 +208,7 @@
   transition: opacity 0.15s ease;
 }
 .msgBubbleZoom:hover .msgImage { opacity: 0.9; }
-.msgVoicelike { font-size: 12px; color: inherit; opacity: 0.8; }
-/* 日期分隔：微信官方居中小字灰字（与系统提示同款） */
-.msgDayDivider { text-align: center; margin: 0; }
-.msgDayDivider span {
-  color: var(--wx-date-text);
-  font-size: 12px;
-  padding: 0 10px;
-  font-variant-numeric: tabular-nums;
-}
-.msgErr { color: var(--nm-danger); font-size: 12px; text-align: center; padding: 8px; }
-.loadMore {
-  align-self: center;
-  border: 1px solid var(--nm-border);
-  background: var(--nm-bg-card);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 6px 16px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-  corner-shape: round;
-}
-.loadMore:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-/* 文本内链接：微信官方用 #245FBD（深色端 #6F9BEA），悬停下划线加深，无发光描边。 */
-.msgTextLink {
-  color: var(--wx-link);
-  text-decoration: none;
-  cursor: pointer;
-  word-break: break-all;
-  overflow-wrap: anywhere;
-}
-.msgTextLink:hover {
-  color: var(--wx-link-hover);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 .msgEmoji { font-size: 26px; line-height: 1.3; }
-/* 表情占位（自定义表情的图片本体不在本链路里时）：用正文同字号，避免比周围文字大一圈。 */
-.msgEmojiChip { font-size: 13px; line-height: 1.6; color: inherit; opacity: 0.8; }
-
-/* 星空背景（空态装饰）。消息流背景自带 radial 氛围光。 */
-.starWrap { position: absolute; inset: 0; z-index: 0; overflow: hidden; display: flex; }
-.starWrap[data-hidden] { display: none; }
-.starfield { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.msgEmptyState {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
-  padding: 20px;
-  pointer-events: none;
-}
-.msgEmptyIcon { font-size: 30px; opacity: 0.5; filter: drop-shadow(0 0 10px color-mix(in srgb, var(--nm-cyan) 40%, transparent)); }
-.msgEmptyTitle {
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.msgEmptyText { font-size: 12px; color: var(--nm-text-2); max-width: 320px; }
-.msgEmptyAction {
-  pointer-events: auto;
-  margin-top: 6px;
-  padding: 7px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--nm-cyan);
-  background: var(--nm-cyan-10);
-  color: var(--nm-cyan);
-  font-size: 12px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-}
-.msgEmptyAction:hover {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-text-1);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
-}
-
 /* ── 语音消息（微信波纹图标 + 时长线性加宽） ───────────────────────
    宽度由 `voiceWidth()` 按秒数算（80 + 秒数×4，1–60s），气泡自身 80–200px。 */
 .msgVoice {
@@ -832,47 +282,6 @@
 }
 .msgVoiceIcon svg { display: block; }
 .msgVoiceIcon path { transition: opacity 0.15s ease; }
-.msgVoiceDur {
-  font-size: 14px;
-  color: inherit;
-  font-variant-numeric: tabular-nums;
-}
-/* 注：不再需要 order 技巧 —— 顺序完全由 .msgVoiceBubble 的 flex-direction 决定：
-   对方 row → [图标][时长]；我方 row-reverse → 视觉上是 [时长][图标]。 */
-/* 「语音转文字」：微信把转写做成气泡下方的小字按钮，不用主题青色。 */
-.msgVoiceBtn {
-  border: 1px solid var(--wx-card-divider);
-  background: transparent;
-  color: var(--wx-card-preview);
-  font-size: 12px;
-  min-height: 26px;
-  padding: 4px 9px;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.msgVoiceBtn:hover { background: var(--wx-card-hover); border-color: var(--wx-card-footer); }
-.msgVoiceErr {
-  font-size: 12px;
-  color: var(--nm-danger);
-  max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* 转写结果：微信里是独立的一段引用式灰底。 */
-.msgVoiceText {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--wx-quote-text);
-  background: var(--wx-quote-bg);
-  border-radius: var(--wx-radius);
-  padding: 6px 10px;
-  white-space: normal;
-  word-break: break-word;
-  max-width: 340px;
-}
-
 /* ── 群接龙（appmsg type 53）：事由 + 参与者名单 ───────────────────
    微信把接龙当纯文本渲染、名单根本不可见；本项目已解析出名单，故保留名单卡，
    但外形套微信卡片（232px + 底栏）。 */
@@ -889,35 +298,6 @@
   background: var(--wx-card-bg);
   box-sizing: border-box;
 }
-.msgSolitaireHd { display: flex; align-items: center; gap: 8px; }
-.msgSolitaireIcon { font-size: 14px; line-height: 1; }
-.msgSolitaireSubject {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--wx-card-title);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.msgSolitaireCount {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
-}
-.msgSolitaireList { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.msgSolitaireItem { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
-.msgSolitaireIdx {
-  flex: 0 0 16px;
-  text-align: right;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-}
-.msgSolitaireText { color: var(--wx-card-title); word-break: break-word; }
-
 /* ── 其它 appmsg 子类型：微信 232px 小卡（群公告 / 笔记 / 卡片 / 商品） ── */
 .msgAppmsgCard {
   --wx-card-pad: 12px;
@@ -933,13 +313,6 @@
   background: var(--wx-card-bg);
   box-sizing: border-box;
 }
-.msgAppmsgIcon { font-size: 16px; line-height: 1.2; }
-.msgAppmsgBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgAppmsgLabel { font-size: 12px; font-weight: 500; color: var(--wx-card-preview); }
-.msgAppmsgTitle { font-size: 13px; line-height: 1.5; color: var(--wx-card-title); word-break: break-word; }
-.msgAppmsgDesc { font-size: 12px; line-height: 1.45; color: var(--wx-card-preview); word-break: break-word; }
-.msgAppmsgSource { font-size: 11px; color: var(--wx-card-footer); }
-
 /* ── 通话消息（type 50）：走气泡色，与文字气泡同族（微信行为） ──────── */
 .msgCall {
   position: relative;
@@ -976,100 +349,9 @@
 .msgCallIcon { display: inline-flex; color: inherit; }
 /* 保留：未接/拒接用危险色标出结局 —— 微信也是靠「红」传达未接通。 */
 .msgCall[data-state='missed'] .msgCallIcon { color: var(--nm-danger); }
-.msgCallBody { display: inline-flex; align-items: center; gap: 8px; }
 .msgCallStatus { font-size: 14px; }
-.msgCallDur {
-  font-size: 12px;
-  color: inherit;
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
-}
 .msgCall[data-state='missed'] .msgCallStatus { opacity: 0.85; }
-
-/* ── 视频封面 + 播放角标（微信：48px 半透明圆、无描边、无模糊） ──── */
-.msgVideoWrap { position: relative; display: inline-block; }
-.msgVideoPlay {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  pointer-events: none;
-  border: none;
-  box-shadow: none;
-  corner-shape: round;
-}
-
-/* ── 图片灯箱 ─────────────────────────────────────────────── */
-.viewerOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483000;
-  background: rgba(3, 6, 14, 0.88);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
-}
-.viewerBar {
-  position: absolute;
-  top: 70px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 8px;
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border-hover);
-  border-radius: 999px;
-  box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
-  corner-shape: round;
-}
-.viewerCount {
-  color: var(--nm-text-1);
-  font-size: 12px;
-  margin: 0 8px;
-  font-variant-numeric: tabular-nums;
-  font-family: var(--nm-font-mono, monospace);
-}
-.viewerBtn {
-  border: none;
-  background: transparent;
-  color: var(--nm-text-1);
-  cursor: pointer;
-  padding: 5px;
-  border-radius: 8px;
-  line-height: 1;
-  display: inline-flex;
-  transition: var(--nm-t-ui);
-}
-.viewerBtn:hover { background: color-mix(in srgb, var(--nm-cyan) 12%, transparent); color: var(--nm-cyan); }
-.viewerStage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.viewerImg {
-  max-width: 92vw;
-  max-height: 86vh;
-  object-fit: contain;
-  cursor: grab;
-  transition: transform 0.08s linear;
-  border-radius: 8px;
-  box-shadow: 0 0 40px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
-}
-.viewerMsg { color: var(--nm-text-2); font-size: 14px; padding: 20px; }
-
 /* ── 微信分型消息卡片（定宽 210px + 底部类型条） ─────────────────── */
-
 /* 转账卡：微信官方**扁平**橙金 #F79C46（去掉自造渐变）+ 底栏「微信转账」。 */
 .msgTransferCard {
   --wx-card-pad: 12px;
@@ -1113,21 +395,12 @@
   justify-content: center;
   flex-shrink: 0;
 }
-.msgTransferMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-self: center; }
-.msgTransferAmount {
-  font-size: 16px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.25;
-}
-.msgTransferStatus { font-size: 12px; opacity: 0.95; }
 /* 已退回 / 已过期退回：微信用淡米色 + 深褐色 */
 .msgTransferCard[data-state='refunded'] { background: var(--wx-transfer-returned); color: var(--wx-transfer-returned-text); }
 .msgTransferCard[data-state='refunded'] .msgTransferArrow { background: rgba(138, 106, 69, 0.14); }
 .msgRow:not(.msgRowSelf) .msgTransferCard[data-state='refunded']::before { background: var(--wx-transfer-returned); }
 .msgRowSelf .msgTransferCard[data-state='refunded']::after { background: var(--wx-transfer-returned); }
 .msgRow:not(.msgRowSelf) .msgTransferCard[data-state='refunded'] .msgCardFoot { color: var(--wx-transfer-returned-text); }
-
 /* 红包卡：微信官方**扁平**红橙 #FA9D3B（去掉自造渐变）+ 底栏「微信红包」。 */
 .msgRedpacketCard {
   --wx-card-pad: 12px;
@@ -1157,29 +430,12 @@
 }
 .msgRow:not(.msgRowSelf) .msgRedpacketCard::before { left: -4px; background: var(--wx-redpacket); }
 .msgRowSelf .msgRedpacketCard::after { right: -4px; background: var(--wx-redpacket); }
-.msgRedpacketIcon { font-size: 32px; line-height: 1; flex-shrink: 0; }
-.msgRedpacketBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgRedpacketTitle { font-size: 14px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.msgPayStatus {
-  font-size: 12px;
-  color: inherit;
-  opacity: 0.88;
-  font-variant-numeric: tabular-nums;
-}
-.msgRedpacketAmount {
-  font-size: 14px;
-  font-weight: 500;
-  color: inherit;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── 引用：被引用内容在气泡**下方**的独立一行 ──────────────────────
    官方形态（用户参考图实测）：无底色、单行省略、`发送者: <类型图标> 摘要`，
    与气泡同侧对齐（我方靠右、对方靠左）。
    此前做成「气泡内的灰底块 + 类型胶囊 + 2 行截断」，与官方不符 ——
    参考图里那条引用行宽 138px 而绿色气泡只有 40px，引用行比气泡还宽，
    说明它在气泡之外，不可能挂在气泡里。
-
    竖条（本轮补上）：官方在引用行的**外侧**压一道 2px 竖线。原生像素实测
    （5 倍放大图 ÷5）：竖条 2×17px、色约 #333334（暗色端，即白 ~13% 叠在
    #1e1e1f 上），与摘要末尾空 ~9.6px，外侧端与气泡主体右边缘齐平。
@@ -1205,10 +461,6 @@
   padding-inline-start: 10px;
   border-inline-start: 2px solid var(--wx-card-divider);
 }
-.msgQuoteWho { flex-shrink: 0; margin-inline-end: 4px; }
-.msgQuoteKind { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
-.msgQuoteWhat { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 /* 文件卡片：微信 210px「主体 + 底部『微信电脑版』条」。 */
 .msgFileCard {
   --wx-card-pad: 12px;
@@ -1234,13 +486,6 @@
 .msgFileCard .msgFileExt { grid-row: 1; grid-column: 3; align-self: start; }
 /* 文件卡的底栏是 grid 子项，要独占一行 */
 .msgFileCard .msgCardFoot { grid-column: 1 / -1; }
-.msgFileHint {
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .msgFileIcon {
   width: 40px;
   height: 40px;
@@ -1266,24 +511,6 @@
 .msgFileIcon[data-kind='text'] { background: color-mix(in srgb, var(--nm-text-2) 14%, transparent); color: var(--nm-text-2); }
 .msgFileIcon[data-kind='file'] { background: color-mix(in srgb, var(--nm-text-2) 14%, transparent); color: var(--nm-text-2); }
 .msgFileBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgFileTitle {
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.4;
-  color: var(--wx-card-title);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-all;
-}
-.msgFileMeta {
-  font-size: 12px;
-  color: var(--wx-card-footer);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .msgFileExt {
   flex-shrink: 0;
   font-size: 10.5px;
@@ -1294,7 +521,6 @@
   border-radius: 0;
   padding: 0;
 }
-
 /* 小程序卡片 —— 微信原生 210×270，来源行 + 标题 + 页面预览 + 23px 底栏 */
 .msgMiniappCard {
   --wx-card-pad: 12px;
@@ -1316,74 +542,6 @@
   gap: 8px;
   min-width: 0;
 }
-.msgMiniappAppIcon {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  display: block;
-  background: var(--wx-card-hover);
-}
-/* 拿不到小程序图标时的中性占位（不自造品牌绿） */
-.msgMiniappAppDot {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--wx-card-hover);
-}
-.msgMiniappName {
-  font-size: 13px;
-  color: var(--wx-card-preview);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.msgMiniappTitle {
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--wx-card-title);
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
-.msgMiniappDesc {
-  font-size: 12px;
-  color: var(--wx-card-preview);
-  line-height: 1.45;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgMiniappCover {
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: 0 -12px;
-  background: var(--wx-card-hover);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-.msgMiniappCover[data-empty] { min-height: 88px; }
-.msgMiniappCoverImg {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  object-position: top center;
-  display: block;
-}
-.msgMiniappCoverFallback {
-  color: var(--wx-card-footer);
-  display: grid;
-  place-items: center;
-}
-
 /* 链接卡片：微信官方 210px 定宽「标题 + 摘要 + 缩略图 + 来源行」。 */
 .msgLinkCard {
   position: relative;
@@ -1403,8 +561,6 @@
 }
 .msgLinkCardOpen { cursor: pointer; }
 .msgLinkCardOpen:hover { background: var(--wx-card-hover); }
-.msgLinkThumbWrap { display: flex; gap: 10px; align-items: flex-start; min-height: 42px; }
-.msgLinkText { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 /* 来源行落到卡片底部（微信用一条内缩细线把它和摘要分开）。 */
 .msgLinkSource {
   order: 3;
@@ -1426,52 +582,6 @@
   right: 2px;
   border-top: 1px solid var(--wx-card-divider);
 }
-.msgLinkThumb {
-  width: 42px;
-  height: 42px;
-  flex-shrink: 0;
-  border-radius: 0;
-  object-fit: cover;
-  background: var(--wx-card-hover);
-  border: none;
-}
-.msgLinkTitle {
-  font-size: 14px;
-  font-weight: 400;
-  color: var(--wx-card-title);
-  line-height: 1.4;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgLinkDesc {
-  font-size: 12px;
-  color: var(--wx-card-preview);
-  line-height: 1.4;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgLinkUrl {
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.msgLinkOpen {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  color: inherit;
-  display: inline-flex;
-  opacity: 0.6;
-}
-
 /* 名片卡：微信 210px「头像 40×40 圆角 4px + 昵称 14px + 别名 11px + 28px 底栏」。 */
 .msgContactCard {
   --wx-card-pad: 12px;
@@ -1489,22 +599,6 @@
   border: none;
   color: var(--wx-card-title);
 }
-.msgContactAvatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  background: var(--wx-card-hover);
-  color: var(--wx-card-preview);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  font-weight: 600;
-}
-.msgContactBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgContactNick { font-size: 14px; font-weight: 400; color: var(--wx-card-title); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
 /* 位置卡：微信 208px「文字区在上（标题 13px/500 + 副标题 11px），地图 98px 在下」。 */
 .msgLocationCard {
   --wx-card-pad: 12px;
@@ -1526,26 +620,6 @@
 .msgLocationCard .msgLocationMap { order: 1; }
 .msgLocationCard .msgCardFoot { order: 2; }
 .msgLocationBody { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.msgLocationTitle {
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.4;
-  color: var(--wx-card-title);
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgLocationDesc {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--wx-card-preview);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* 合并转发卡：微信 210px「标题 + 预览 + 底栏『聊天记录』」。 */
 .msgChatlogCard {
   --wx-card-pad: 12px;
@@ -1568,843 +642,8 @@
   transition: background 0.15s ease;
 }
 .msgChatlogCard:hover { background: var(--wx-card-hover); }
-.msgChatlogMain { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; }
-.msgChatlogIcon { flex-shrink: 0; color: var(--wx-card-preview); display: inline-flex; margin-top: 2px; }
-.msgChatlogBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.msgChatlogTitle { font-size: 14px; font-weight: 400; color: var(--wx-card-title); }
 .msgChatlogFoot { font-size: 11px; color: var(--wx-card-footer); }
-.chatlogDialog {
-  width: 420px;
-  max-width: 94vw;
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-  display: flex;
-  flex-direction: column;
-  max-height: 70vh;
-}
-.chatlogBody { flex: 1; overflow-y: auto; padding: 4px 14px 14px; scrollbar-width: thin; }
-.chatlogNested {
-  border: 1px dashed var(--nm-border);
-  background: var(--nm-bg-hover);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  border-radius: 8px;
-  padding: 6px 10px;
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-  transition: var(--nm-t-ui);
-}
-.chatlogNested:hover { border-color: var(--nm-cyan); color: var(--nm-cyan); }
-.chatlogRow { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--nm-border); }
-.chatlogRow:last-child { border-bottom: none; }
-.chatlogAvatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  overflow: hidden;
-  flex-shrink: 0;
-  background: var(--nm-bg-hover);
-  border: 1px solid var(--nm-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  corner-shape: round;
-}
-.chatlogAvatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.chatlogMain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.chatlogTop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.chatlogName { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
-.chatlogTime {
-  font-size: 10.5px;
-  color: var(--nm-text-2);
-  flex-shrink: 0;
-  font-family: var(--nm-font-mono, monospace);
-}
-.chatlogText { font-size: 12px; color: var(--nm-text-1); line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
-
-/* ── 消息搜索动作 ─────────────────────────────────────────────── */
-.searchActionBtn {
-  flex-shrink: 0;
-  height: 32px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-  white-space: nowrap;
-}
-.searchActionBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
-.searchActionBtn[data-active='true'] {
-  background: var(--nm-cyan-10);
-  color: var(--nm-cyan);
-  border-color: var(--nm-cyan);
-  font-weight: 600;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
-}
-
-/* ── 会话类型分段切换（聊天会话内 全部/公众号/服务号/客服） ─────── */
-.typeFilter {
-  display: flex;
-  gap: 6px;
-  /* 上方 12px 是**可见的那条缝**：上一行底部的分隔线 → 分段控件自己的上边框。
-     之前这里写的是上下 0（把间距全交给相邻两行的内边距），结果分隔线**紧贴**
-     分段控件的上边框（实测间距 0px），看上去就是「按钮上方的间隙没弄好」。
-     下面不再留内边距：与统计行的间距由统计行自己的上内边距给。 */
-  padding: 12px 12px 0;
-}
-.searchIndexHint {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  color: var(--nm-text-2);
-  border-bottom: 1px solid var(--nm-border);
-}
-.searchHitCount {
-  padding: 8px 12px;
-  font-size: 11px;
-  color: var(--nm-text-2);
-  border-bottom: 1px solid var(--nm-border);
-  font-family: var(--nm-font-mono, monospace);
-}
-.searchHit {
-  display: block;
-  width: 100%;
-  padding: 9px 10px;
-  border: none;
-  background: transparent;
-  color: var(--nm-text-1);
-  text-align: left;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: var(--nm-t-ui);
-}
-.searchHit:hover { background: var(--nm-bg-hover); }
-.searchHitTop { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-.searchHitName { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.searchHitTime {
-  font-size: 10.5px;
-  color: var(--nm-text-2);
-  flex-shrink: 0;
-  font-family: var(--nm-font-mono, monospace);
-}
-.searchHitSnippet { font-size: 12px; color: var(--nm-text-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* ── 消息日历弹窗 ─────────────────────────────────────────────── */
-.calOverlay {
-  position: fixed; inset: 0; z-index: 1000;
-  display: flex; align-items: center; justify-content: center;
-  /* 窗口比弹窗矮时（小屏、系统缩放、CI runner）覆盖层必须自己可滚：原先只居中 + 子元素
-     `overflow:hidden`，「导出/中止」那颗按钮被推到视口之外且无处可滚（真机实测点不到）。
-     子元素用 `margin:auto` 而不是 align-items 居中 —— 溢出时顶部才滚得到，kit 的 Dialog 同款。 */
-  overflow: auto; overscroll-behavior: contain; padding: 16px;
-  background: rgba(3, 6, 14, 0.55);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-}
-.calOverlay > * { margin: auto; }
-.calDialog {
-  width: 420px;
-  max-width: 92vw;
-  border-radius: 16px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--nm-border);
-  overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-}
-.calHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--nm-border);
-}
-.calTitle {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.calClose {
-  border: none;
-  background: transparent;
-  color: var(--nm-text-2);
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px;
-  border-radius: 6px;
-  display: inline-flex;
-  transition: var(--nm-t-ui);
-}
-.calClose:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
-.calBody { padding: 14px 16px; }
-.calNav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 12px; }
-.calMonthTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--nm-text-1);
-  min-width: 110px;
-  text-align: center;
-  font-family: var(--nm-font-mono, monospace);
-}
-.calStats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-bottom: 12px;
-  font-size: 12px;
-  color: var(--nm-text-2);
-}
-.calStat b { color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
-.calGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-.calWd { text-align: center; font-size: 11px; color: var(--nm-text-2); padding: 2px 0; }
-.calEmpty { aspect-ratio: 1; }
-.calDay {
-  aspect-ratio: 1;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--nm-text-1);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  position: relative;
-  padding: 0;
-  transition: var(--nm-t-ui);
-}
-.calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
-.calDayNum { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
-.calDayCnt {
-  font-size: 9.5px;
-  color: var(--nm-cyan);
-  font-weight: 700;
-  line-height: 1;
-  margin-top: 1px;
-  font-family: var(--nm-font-mono, monospace);
-}
-.calHint { margin-top: 12px; font-size: 11px; color: var(--nm-text-2); text-align: center; }
-
-/* ── 消息导出弹窗 ─────────────────────────────────────────────── */
-.exportDialog {
-  width: 480px;
-  max-width: 92vw;
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 24px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-}
-.exportBody { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
-.exportField { display: flex; flex-direction: column; gap: 6px; }
-.exportInput {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-input);
-  font-size: 12px;
-  color: var(--nm-text-1);
-  outline: none;
-  box-sizing: border-box;
-  transition: var(--nm-t-ui);
-}
-.exportInput:focus { border-color: var(--nm-cyan); }
-.exportChips { display: flex; flex-wrap: wrap; gap: 6px; }
-.exportChip {
-  border: 1px solid var(--nm-border);
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-  corner-shape: round;
-}
-.exportChip:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
-.exportChip[data-active='true'] {
-  background: var(--nm-cyan-10);
-  color: var(--nm-cyan);
-  border-color: var(--nm-cyan);
-  font-weight: 600;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 14%, transparent);
-}
-.exportHint {
-  font-size: 11px;
-  color: var(--nm-text-2);
-  font-family: var(--nm-font-mono, monospace);
-}
-.exportCheckbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-1); cursor: pointer; }
-.exportActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.exportBtn,
-.exportBtnGhost,
-.exportBtnPrimary {
-  border: 1px solid var(--nm-border);
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 6px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-}
-.exportBtn:hover,
-.exportBtnGhost:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  color: var(--nm-cyan);
-}
-.exportBtnPrimary {
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  border-color: transparent;
-  color: var(--nm-on-accent);
-  font-weight: 600;
-  box-shadow: 0 0 18px color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-}
-.exportBtnPrimary:hover { box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
-.exportBtn:disabled,
-.exportBtnPrimary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
-
-/* ── 编辑消息副本对话框 ─────────────────────────────────────────
-   原先用 window.prompt 取新内容，而 Electron 渲染进程不支持 prompt，
-   右键菜单点了只会抛错（见 Chats.tsx doEdit 注释）。这里按导出弹窗同一套
-   按钮/输入框语言补一个应用内多行编辑器：正文 14px（与消息流同档）、
-   等宽断行交给 textarea 自己，失焦与聚焦用主题描边反馈。 */
-.editHint {
-  margin: 0 0 10px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--nm-text-2);
-}
-.editArea {
-  width: 100%;
-  min-height: 96px;
-  max-height: 40vh;
-  box-sizing: border-box;
-  resize: vertical;
-  padding: 10px 12px;
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-1);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1.6;
-}
-.editArea:focus {
-  outline: none;
-  border-color: var(--nm-cyan);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nm-cyan) 22%, transparent);
-}
-.editErr {
-  margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--nm-red, #f87171);
-}
-.editFoot { display: flex; justify-content: flex-end; gap: 8px; width: 100%; }
-
-/* 导出弹窗 v2（格式/类型/时间/文件名/目录） */
-.exportSection { border-top: 1px solid var(--nm-border); padding-top: 12px; }
-.exportSection:first-child { border-top: none; padding-top: 0; }
-.exportSectionHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.exportSectionTitle {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: linear-gradient(135deg, var(--nm-text-1), var(--nm-cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.exportCountBadge {
-  font-size: 11px;
-  color: var(--nm-success);
-  background: color-mix(in srgb, var(--nm-success) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nm-success) 30%, transparent);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-family: var(--nm-font-mono, monospace);
-  corner-shape: round;
-}
-.exportLabelRow { display: flex; align-items: center; justify-content: space-between; }
-.exportLinkBtn {
-  border: none;
-  background: transparent;
-  color: var(--nm-cyan);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-.exportLinkBtn:hover { text-decoration: underline; }
-.exportFormatGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.exportFormatCard {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: var(--nm-bg-input);
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 10px 12px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-  font-family: var(--nm-font-mono, monospace);
-}
-.exportFormatCard:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
-.exportFormatCard[data-active='true'] {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-cyan);
-  font-weight: 600;
-}
-.exportRadio {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 1.5px solid var(--nm-border);
-  flex-shrink: 0;
-  position: relative;
-  corner-shape: round;
-}
-.exportRadio[data-active='true'] { border-color: var(--nm-cyan); }
-.exportRadio[data-active='true']::after {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border-radius: 50%;
-  background: var(--nm-cyan);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
-  corner-shape: round;
-}
-.exportChipCheck {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--nm-border);
-  background: transparent;
-  color: var(--nm-text-1);
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: var(--nm-t-ui);
-}
-.exportChipCheck:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
-.exportChipCheck[data-active='true'] {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-cyan);
-}
-.exportCheck {
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  border: 1.5px solid var(--nm-border);
-  background: var(--nm-bg-input);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-  color: #fff;
-  font-style: normal;
-  flex-shrink: 0;
-}
-.exportCheck[data-active='true'] {
-  background: var(--nm-cyan);
-  border-color: var(--nm-cyan);
-  color: var(--nm-on-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
-}
-.exportRangeRow { display: flex; align-items: center; gap: 8px; }
-.exportDirBox {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px dashed var(--nm-border);
-  border-radius: 10px;
-  background: var(--nm-bg-input);
-  transition: var(--nm-t-ui);
-}
-.exportDirBox[data-chosen='true'] {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent);
-  background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
-}
-.exportDirIcon { font-size: 16px; }
-.exportDirInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.exportDirTitle { font-size: 12px; color: var(--nm-text-1); font-weight: 600; }
-/* 已编辑消息弹窗动作行（复用 .loadMore / .calDialog） */
-.calHeaderActions { display: inline-flex; align-items: center; gap: 4px; }
-
-/* ── 群聊信息侧栏 ─────────────────────────────────────────────── */
-.groupInfo {
-  /* 本抽屉的字号阶梯（对齐微信聊天信息；消息流正文已是 14px，这里取同一档）。
-     原先一个 300px 抽屉里挤了 13/12/11/10.5 四种字号、且标题与正文同号（审计 P1-8）。 */
-  --wx-info-title: 16px;
-  --wx-info-text: 14px;
-  --wx-info-meta: 12px;
-  /* 搜索框：微信是**填充式灰底**、无描边。此前用 --nm-bg-input，
-     而它在深浅两端的值与抽屉底色完全相同（#0f172a / #ffffff）→ 只剩一根 1px 描边，
-     看起来不像输入框（审计 P1-2）。 */
-  --wx-search-bg: #2e2e2e;
-  --wx-search-ph: var(--nm-text-2);
-
-  width: 300px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--nm-border);
-  /* 底色不透明，backdrop-filter 不会产生任何可见效果，只是一层多余的合成（审计 P2-3） */
-  background: var(--nm-bg-card);
-  overflow: hidden;
-}
-.groupInfoHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  /* 上下 8px：配 32px 的关闭按钮命中区，总高仍是 48px（原先 12px + 23px 按钮） */
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--nm-border);
-  color: var(--nm-text-1);
-}
-.groupInfoTitle {
-  /* 微信的聊天信息标题是纯色标题，没有渐变文字；渐变在浅色端还会让字色中途变蓝 */
-  font-size: var(--wx-info-title);
-  font-weight: 600;
-  color: var(--nm-text-1);
-}
-.groupInfoClose {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--nm-text-2);
-  cursor: pointer;
-  /* 命中区 ≥32×32（原先 15px 图标 + 4px 内边距 = 23×23，低于可点下限，审计 P1-7） */
-  padding: 8px;
-  min-width: 32px;
-  min-height: 32px;
-  border-radius: 8px;
-  transition: var(--nm-t-ui);
-}
-.groupInfoClose:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
-.groupInfoClose:active { background: var(--nm-bg-active); }
-.groupInfoBody { flex: 1; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; }
-.memberSearchBox {
-  position: relative;
-  margin-bottom: 10px;
-}
-.memberSearchBox input {
-  width: 100%;
-  height: 34px;
-  padding: 0 10px 0 30px;
-  border: none;
-  border-radius: 6px;
-  background: var(--wx-search-bg);
-  font-size: var(--wx-info-meta);
-  color: var(--nm-text-1);
-  box-sizing: border-box;
-  outline: none;
-  transition: var(--nm-t-ui);
-}
-.memberSearchBox input::placeholder { color: var(--wx-search-ph); }
-/* 填充式输入框靠「底色变化 + 焦点环」表达焦点，不再靠边框变色 */
-.memberSearchBox input:focus { background: color-mix(in srgb, var(--wx-search-bg) 82%, var(--nm-cyan)); }
-.memberSearchBox .searchIcon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--wx-search-ph);
-  pointer-events: none;
-  display: inline-flex;
-}
-.memberGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  /* 原先 8px(行)/6px(列) 非对称；微信成员网格是等距（审计 P3-1） */
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.memberTile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  padding: 2px 0;
-  cursor: pointer;
-  font: inherit;
-  border-radius: 6px;
-  transition: var(--nm-t-ui);
-}
-.memberTile:hover { background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent); }
-.memberTile:active { background: var(--nm-bg-active); }
-.memberName {
-  max-width: 100%;
-  overflow: hidden;
-  /* 两行：4 列布局下格子只有 63px，10.5px 单行时实测 133px 的文字要被吃掉一半以上；
-     12px + 两行能把截断降到可接受（审计 P1-3）。 */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  white-space: normal;
-  word-break: break-word;
-  line-height: 1.3;
-  font-size: var(--wx-info-meta);
-  color: var(--nm-text-2);
-  text-align: center;
-}
-.memberAdd {
-  width: 40px;
-  height: 40px;
-  /* 微信的「添加」是方角实线占位，不是虚线圆（虚线读作拖放目标，语义不同） */
-  border-radius: var(--wx-avatar-radius, 6px);
-  border: 1px solid var(--nm-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--nm-text-2);
-  font-size: 18px;
-  transition: var(--nm-t-ui);
-  corner-shape: round;
-}
-/* 「添加」暂不支持邀请，是**死控件**：不给任何 hover 反馈，避免看起来可点 */
-.memberTile[data-disabled='true'] { cursor: not-allowed; }
-.memberTile[data-disabled='true']:hover { background: transparent; box-shadow: none; }
-.memberTile[data-disabled='true'] .memberAdd { opacity: 0.5; }
-.memberTile[data-disabled='true'] .memberName { opacity: 0.7; }
-.memberMore {
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--nm-cyan);
-  font-size: var(--wx-info-meta);
-  padding: 6px 0;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: var(--nm-t-ui);
-}
-.memberMore:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
-.memberMore:active { background: var(--nm-bg-active); }
-/* 成员搜索无结果（审计 P0-3） */
-.memberEmpty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 26px 12px 30px;
-  text-align: center;
-}
-.memberEmptyIcon { color: var(--nm-text-2); opacity: 0.55; display: inline-flex; }
-.memberEmptyTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
-.memberEmptyDesc { font-size: 11px; line-height: 1.55; color: var(--nm-text-2); max-width: 24ch; }
-.memberEmptyClear {
-  margin-top: 2px;
-  border: 1px solid var(--nm-border);
-  background: transparent;
-  color: var(--nm-text-2);
-  font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-.memberEmptyClear:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
-.memberEmptyClear:active { background: var(--nm-bg-active); }
-/* ── 群聊信息：微信式列表行 ──────────────────────────────────────
-   微信的聊天信息是「标签左 / 值右 / 1px 分隔 / 行高 ~48」的列表，
-   不是「标签上 / 值下 / 上边框 / 3 行截断」的块（审计 P1-8 行结构）。 */
-.groupInfoRows { display: flex; flex-direction: column; }
-.groupInfoRow {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
-  padding: 13px 0;
-  border-top: 1px solid var(--nm-border);
-}
-.groupInfoRowStack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 13px 0;
-  border-top: 1px solid var(--nm-border);
-}
-.groupInfoRowLabel {
-  flex-shrink: 0;
-  font-size: var(--wx-info-text);
-  color: var(--nm-text-2);
-  line-height: 1.4;
-}
-.groupInfoRowValue {
-  min-width: 0;
-  font-size: var(--wx-info-text);
-  color: var(--nm-text-1);
-  line-height: 1.4;
-  text-align: right;
-  word-break: break-word;
-}
-.groupInfoAnn {
-  font-size: var(--wx-info-text);
-  color: var(--nm-text-1);
-  line-height: 1.55;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-/* 折叠态：3 行 + 显式「展开」入口。原先是静默 -webkit-line-clamp:3，没有入口（审计 P1-5） */
-.groupInfoAnn[data-clamp='true'] {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.groupInfoAnnToggle {
-  align-self: flex-start;
-  border: none;
-  background: transparent;
-  color: var(--nm-cyan);
-  font-size: var(--wx-info-meta);
-  padding: 2px 0;
-  cursor: pointer;
-  border-radius: 4px;
-}
-.groupInfoAnnToggle:hover { color: var(--nm-text-1); }
-
-/* 群成员资料悬浮卡片 */
-.memberProfilePop {
-  position: fixed;
-  z-index: 50;
-  width: 232px;
-  pointer-events: none;
-  border: 1px solid var(--nm-border);
-  border-radius: 10px;
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35), 0 0 20px color-mix(in srgb, var(--nm-cyan) 10%, transparent);
-}
-.memberProfileBody {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 20px 16px 18px;
-}
-.memberProfileName {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  text-align: center;
-  word-break: break-word;
-  max-width: 100%;
-}
-.memberProfileItem {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--nm-text-2);
-  border-top: 1px solid var(--nm-border);
-  padding-top: 10px;
-}
-.memberProfileMono {
-  font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-  color: var(--nm-text-1);
-  word-break: break-all;
-  text-align: right;
-}
-
-/* 工具栏关闭按钮：醒目、可点 */
-.viewerBtnClose {
-  background: color-mix(in srgb, var(--nm-danger) 85%, transparent) !important;
-  color: #fff !important;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  margin-left: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  corner-shape: round;
-}
-.viewerBtnClose:hover { background: var(--nm-danger) !important; color: #fff !important; }
-
-/* ══════════════════════════════════════════════════════════════════
-   消息渲染层补充样式（按 renderType 分派的新渲染器）
-   ──────────────────────────────────────────────────────────────────
-   与上面第 363 行起的「消息行 / 气泡」段配套。新增的每一条都对应
-   `Chats.tsx` 里一个具体渲染分支；命名沿用既有 `msg*` 前缀。
-   颜色一律走 `--nm-*` 令牌（`check:inline-colors` 禁止写死颜色字面量）。
-   ══════════════════════════════════════════════════════════════════ */
-
-/* ── 文本气泡内的片段：内联表情 / @提及 ─────────────────────────── */
-/* 内联表情用 1.25em 跟行高对齐（微信也是这个比例）：用 em 而不是 px，
-   这样气泡字号（13px）变化时表情跟着变，不会比文字大一圈或小一圈。 */
-.msgEmojiImg {
-  width: 1.25em;
-  height: 1.25em;
-  display: inline-block;
-  vertical-align: text-bottom;
-  margin: 0 1px;
-  object-fit: contain;
-}
-/* @提及：微信是蓝灰色 #576B95 / 500（不做跳转，避免死焦点）。 */
-.msgMention {
-  color: var(--wx-mention);
-  font-weight: 500;
-  border-radius: 3px;
-  padding: 0 1px;
-  cursor: default;
-}
-.msgMention:hover { background: color-mix(in srgb, var(--wx-mention) 14%, transparent); }
-
-/* ── 系统提示行：撤回 / 置顶 / 通知 / 空内容 ───────────────────────
-   微信里这几类都是同一款居中灰字，靠文案区分；本项目保留行首小字形
-   （↩ / 📌）让「动作 vs 通知」仍可快速扫读，其余分色与胶囊底已去掉。 */
-.msgSystemIcon { font-size: 11px; line-height: 1; opacity: 0.85; }
-.msgSystemText { word-break: break-word; }
 .msgSystem[data-kind='empty'] { opacity: 0.7; }
-
 /* ── 卡片通用：底部类型条 ────────────────────────────────────────
    微信原生卡片底部那一行（「微信转账」「微信红包」「聊天记录」「微信电脑版」）。
    定高 27px + 一条左右各内缩 13px 的细线，**不是**贴在标题行的胶囊。
@@ -2447,20 +686,9 @@
 .msgMiniappCard .msgCardFoot { height: 23px; font-size: 10px; flex-basis: auto; }
 .msgSolitaireCard .msgCardFoot { flex-basis: auto; }
 .msgMusicCard .msgCardFoot { height: 27px; }
-
 /* ── 通用小卡的跳转态与缩略图 ──────────────────────────────────── */
 .msgAppmsgCardOpen { cursor: pointer; }
 .msgAppmsgCardOpen:hover { background: var(--wx-card-hover); }
-.msgAppmsgThumb {
-  width: 42px;
-  height: 42px;
-  flex-shrink: 0;
-  border-radius: 0;
-  object-fit: cover;
-  background: var(--wx-card-hover);
-  border: none;
-}
-
 /* ── 卡片尖角 ────────────────────────────────────────────────────
    微信把「特殊卡片」（文件 / 链接 / 小程序 / 聊天记录 / 名片 / 群公告 /
    视频号 / 音乐 / 位置）都用同一款尖角：12×12 方块、top 12px、外挂 -4px。
@@ -2494,7 +722,6 @@
 /* 卡片本身是 relative 才能挂尖角（`.msgFileCard` / `.msgChatlogCard` 等已是相对定位源）。 */
 :is(.msgFileCard, .msgLinkCard, .msgMiniappCard, .msgChatlogCard, .msgContactCard,
   .msgAppmsgCard, .msgMediaCard, .msgMusicCard, .msgSolitaireCard, .msgLocationCard) { position: relative; }
-
 /* ── 视频号 / 直播卡片：微信「封面 135×185 满宽 + 标题 + 底栏」 ──────
    视频号在微信里是 135px 竖版封面卡；直播是 232px、封面 16:9。 */
 .msgMediaCard {
@@ -2530,7 +757,6 @@
 }
 .msgMediaCard[data-variant='live'] .msgMediaCover { height: auto; aspect-ratio: 16 / 9; }
 .msgMediaCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.msgMediaCoverFallback { font-size: 24px; color: var(--wx-card-footer); }
 /* 直播状态角标：微信官方红 92%，左高 18px、圆角 9px、10px 字 */
 .msgMediaBadge {
   position: absolute;
@@ -2544,31 +770,6 @@
   background: var(--wx-live-badge);
   white-space: nowrap;
 }
-.msgMediaDot {
-  position: absolute;
-  right: 8px;
-  top: 10px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #fff;
-  corner-shape: round;
-}
-.msgMediaBody { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-bottom: 6px; }
-.msgMediaTitle {
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--wx-card-title);
-  line-height: 1.45;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgMediaFrom { font-size: 11px; color: var(--wx-card-preview); }
-.msgMediaDesc { font-size: 11px; color: var(--wx-card-preview); word-break: break-word; }
-
 /* ── 链接卡：封面式（公众号大图）—— 微信 137px，封面 137×180，无尖角 ── */
 .msgLinkCover {
   display: block;
@@ -2577,15 +778,6 @@
   min-width: 137px;
   max-width: 137px;
   padding: 0;
-}
-.msgLinkCoverWrap { display: block; position: relative; }
-.msgLinkCoverImg {
-  width: 137px;
-  height: 180px;
-  object-fit: cover;
-  border-radius: var(--wx-radius) var(--wx-radius) 0 0;
-  display: block;
-  background: var(--wx-card-hover);
 }
 .msgLinkCoverTitle {
   display: -webkit-box;
@@ -2601,7 +793,6 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-
 /* ── 公众号推送卡（用户参考图里的官方形态）─────────────────────────
    结构：封面大图铺满卡宽（16:9）+ 单篇给标题 / 多篇给「次条一行一篇」。
    参考图实测（约 380px 宽的卡片）：标题 14px、行高 1.45、图下内边距 ~12px；
@@ -2656,53 +847,6 @@
   overflow: hidden;
 }
 .msgMpRow.msgMpClickable:hover .msgMpRowTitle { color: var(--wx-link-hover); }
-.msgMpRowThumb {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  border-radius: 3px;
-  object-fit: cover;
-  display: block;
-  background: var(--wx-card-hover);
-}
-
-/* ── 图片组网格（连拍合并）：微信用 3 列等宽方格，gap 2px、圆角 4px ── */
-.msgImageGrid {
-  display: grid;
-  gap: 2px;
-  border-radius: var(--wx-radius);
-  overflow: hidden;
-  max-width: 246px;
-}
-.msgImageGrid[data-count='1'] { grid-template-columns: 1fr; }
-.msgImageGrid[data-count='2'], .msgImageGrid[data-count='4'] { grid-template-columns: repeat(2, 1fr); }
-.msgImageGrid[data-count='3'], .msgImageGrid[data-count='5'],
-.msgImageGrid[data-count='6'], .msgImageGrid[data-count='7'],
-.msgImageGrid[data-count='8'], .msgImageGrid[data-count='9'] { grid-template-columns: repeat(3, 1fr); }
-.msgImageGridCell { position: relative; display: block; aspect-ratio: 1 / 1; overflow: hidden; border-radius: 2px; }
-.msgImageGridItem { display: block; width: 100%; height: 100%; cursor: zoom-in; border-radius: 2px; }
-.msgImageGridItem img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.msgImageGridEmpty {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  color: var(--wx-card-footer);
-  background: var(--wx-card-hover);
-}
-.msgImageGridEmpty[data-loading] { opacity: 0.55; }
-.msgImageGridMore {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.42);
-  pointer-events: none;
-}
-
 /* ── 位置卡：地图 98px 满宽，落在文字区下方（微信官方位置卡结构） ──── */
 .msgLocationMap {
   position: relative;
@@ -2717,53 +861,6 @@
   display: grid;
   place-items: center;
 }
-/* 用两道渐变画「路网」示意，代替不可用的离线瓦片；不假装是真实地图。 */
-.msgLocationGrid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--nm-border) 70%, transparent) 1px, transparent 1px);
-  background-size: 15px 15px;
-  opacity: 0.8;
-}
-.msgLocationPin { position: relative; font-size: 22px; line-height: 1; }
-.msgLocationCoord {
-  font-size: 11px;
-  color: var(--wx-card-footer);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ── 名片卡头像填充 ─────────────────────────────────────────────── */
-.msgContactAvatar img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }
-
-/* 语音气泡主规则在上方「语音消息」段；此处仅保留时长角标等衍生样式。 */
-
-/* ── 视频时长角标：微信右下 8px、12px 白字、圆角 4px ───────────────── */
-.msgVideoDur {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  font-size: 12px;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ── 合并转发卡：内层预览（微信 12px、单行截断） ───────────────────── */
-.msgChatlogPreview { display: flex; flex-direction: column; gap: 2px; }
-.msgChatlogLine {
-  font-size: 12px;
-  color: var(--wx-card-preview);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
-}
-
 /* ── 音乐卡：微信把音乐按链接卡渲染（210px + 底栏） ────────────────── */
 .msgMusicCard {
   --wx-card-pad: 10px;
@@ -2784,121 +881,7 @@
 }
 .msgMusicCard[role='link'] { cursor: pointer; }
 .msgMusicCard[role='link']:hover { background: var(--wx-card-hover); }
-.msgMusicCover {
-  width: 42px;
-  height: 42px;
-  flex-shrink: 0;
-  border-radius: 0;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  background: var(--wx-card-hover);
-  border: none;
-  font-size: 20px;
-}
-.msgMusicCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.msgMusicBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.msgMusicTitle {
-  font-size: 14px;
-  font-weight: 400;
-  color: var(--wx-card-title);
-  line-height: 1.4;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.msgMusicArtist { font-size: 12px; color: var(--wx-card-preview); word-break: break-word; }
-.msgMusicFrom { font-size: 12px; color: var(--wx-card-footer); }
-
-/* ── 引用行末尾的缩略图（链接/图片引用的预览） ── */
-.msgQuoteThumbWrap {
-  flex-shrink: 0;
-  overflow: hidden;
-  border-radius: 2px;
-  border: none;
-  display: inline-flex;
-  /* 引用行改成 gap:0 后，缩略图与摘要之间要自己留间距 */
-  margin-inline-start: 6px;
-}
-.msgQuoteThumb { width: 32px; height: 32px; object-fit: cover; display: block; }
-.msgQuoteThumbOpen { cursor: zoom-in; }
-.msgQuoteThumbOpen:hover { opacity: 0.9; }
-
-/* ── 自定义表情大图（有封面时，不套卡片重壳） ──────────────────── */
-.msgSticker {
-  display: inline-block;
-  max-width: 130px;
-  max-height: 130px;
-  line-height: 0;
-  cursor: zoom-in;
-}
-.msgStickerImg {
-  max-width: 130px;
-  max-height: 130px;
-  object-fit: contain;
-  display: block;
-  border-radius: var(--wx-radius);
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   消息右键菜单 —— 微信在消息上右键弹出的同款菜单。
-   覆盖层透明、只负责吃掉外部点击与滚动关闭；菜单本体是定宽卡片，
-   定位到光标处（坐标由 JS 夹到视口内）。
-   ══════════════════════════════════════════════════════════════════ */
-.msgCtxOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483000;
-}
-.msgCtxMenu {
-  /* 菜单是 portal 出去的，拿不到 .msgBody 上的令牌，故自带一套（深浅各一份） */
-  position: fixed;
-  min-width: 156px;
-  max-height: calc(100vh - 16px);
-  overflow-y: auto;
-  padding: 4px 0;
-  border: 1px solid var(--wx-ctx-border);
-  border-radius: 6px;
-  background: var(--wx-ctx-bg);
-  color: var(--wx-ctx-text);
-  box-shadow: var(--wx-ctx-shadow);
-  font-size: 14px;
-  line-height: 1.4;
-  --wx-ctx-bg: #242424;
-  --wx-ctx-border: #373737;
-  --wx-ctx-text: #f5f5f5;
-  --wx-ctx-hover: #3a3a3a;
-  --wx-ctx-shadow: 0 24px 56px rgba(0, 0, 0, 0.42);
-}
-:global(.theme-light) .msgCtxMenu {
-  --wx-ctx-bg: #ffffff;
-  --wx-ctx-border: #e7e7e7;
-  --wx-ctx-text: #191919;
-  --wx-ctx-hover: #f7f7f7;
-  --wx-ctx-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
-}
-.msgCtxItem {
-  display: block;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  padding: 8px 16px;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-.msgCtxItem:hover { background: var(--wx-ctx-hover); }
-.msgCtxItem:disabled { opacity: 0.5; cursor: not-allowed; }
 .msgCtxSep {
   margin: 4px 0;
   border-top: 1px solid var(--wx-ctx-border);
 }
-
-/* ── 会话级 AI 面板（「新对话」）──
-   作为 .panel 的第三栏并排；全屏态让消息流让出空间（AI 面板自身在
-   session-ask.module.css 里接管 flex:1），会话列表保持可见以便换会话。 */
-.panel[data-ai-full] .messages { display: none; }

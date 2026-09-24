@@ -12,6 +12,7 @@ import { RemoteImg } from './remote-img.tsx'
 import { CardFoot } from './chats-cards.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
 import css from './chats.module.css'
+import cssrows from './chats-rows.module.css'
 import { IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16, IconFullscreenOutline16, IconLinkOutline14, IconPlayOutline16, IconPlusOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { clsx } from 'clsx'
@@ -82,7 +83,7 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
   const reset = (): void => { setZoom(1); setOff({ x: 0, y: 0 }) }
 
   return createPortal(
-    <div className={css.viewerOverlay} role="dialog" data-st-dialog="chats-viewer" aria-modal="true"
+    <div className={cssrows.viewerOverlay} role="dialog" data-st-dialog="chats-viewer" aria-modal="true"
       onWheel={(e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15) }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
       onMouseMove={(e) => {
@@ -97,23 +98,23 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
       onMouseLeave={() => { setDragging(false); dragStart.current = null }}
     >
 
-      <div className={css.viewerBar}>
-        <span className={css.viewerCount}>{index + 1} / {images.length}</span>
-        <button type="button" className={css.viewerBtn} title="放大" aria-label="放大" onClick={() =>{  zoomBy(1.3) }}><IconPlusOutline16 size={15} /></button>
-        <button type="button" className={css.viewerBtn} title="缩小" aria-label="缩小" onClick={() =>{  zoomBy(1 / 1.3) }}><IconMinus /></button>
-        <button type="button" className={css.viewerBtn} title="1:1" aria-label="1:1" onClick={reset}><IconFullscreenOutline16 size={15} /></button>
-        <button type="button" className={css.viewerBtn} title="上一张" aria-label="上一张" onClick={() => { onIndexChange((index - 1 + images.length) % images.length) }}><IconChevronLeftOutline14 /></button>
-        <button type="button" className={css.viewerBtn} title="下一张" aria-label="下一张" onClick={() => { onIndexChange((index + 1) % images.length) }}><IconChevronRightOutline14 /></button>
-        <button type="button" className={clsx(css.viewerBtn, css.viewerBtnClose)} title="关闭" aria-label="关闭" onClick={(e) => { e.stopPropagation(); onClose() }}><IconCloseOutline16 size={16} /></button>
+      <div className={cssrows.viewerBar}>
+        <span className={cssrows.viewerCount}>{index + 1} / {images.length}</span>
+        <button type="button" className={cssrows.viewerBtn} title="放大" aria-label="放大" onClick={() =>{  zoomBy(1.3) }}><IconPlusOutline16 size={15} /></button>
+        <button type="button" className={cssrows.viewerBtn} title="缩小" aria-label="缩小" onClick={() =>{  zoomBy(1 / 1.3) }}><IconMinus /></button>
+        <button type="button" className={cssrows.viewerBtn} title="1:1" aria-label="1:1" onClick={reset}><IconFullscreenOutline16 size={15} /></button>
+        <button type="button" className={cssrows.viewerBtn} title="上一张" aria-label="上一张" onClick={() => { onIndexChange((index - 1 + images.length) % images.length) }}><IconChevronLeftOutline14 /></button>
+        <button type="button" className={cssrows.viewerBtn} title="下一张" aria-label="下一张" onClick={() => { onIndexChange((index + 1) % images.length) }}><IconChevronRightOutline14 /></button>
+        <button type="button" className={clsx(cssrows.viewerBtn, cssrows.viewerBtnClose)} title="关闭" aria-label="关闭" onClick={(e) => { e.stopPropagation(); onClose() }}><IconCloseOutline16 size={16} /></button>
       </div>
-      <div className={css.viewerStage}>
-        {loading && !src && !vErr && <div className={css.viewerMsg}>加载中…</div>}
-        {vErr && <div className={css.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图（需系统 HEVC 解码）' : vErr}</div>}
+      <div className={cssrows.viewerStage}>
+        {loading && !src && !vErr && <div className={cssrows.viewerMsg}>加载中…</div>}
+        {vErr && <div className={cssrows.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图（需系统 HEVC 解码）' : vErr}</div>}
         {src && (
           <img
             src={src}
             alt="图片"
-            className={css.viewerImg}
+            className={cssrows.viewerImg}
             style={{ transform: `translate(${off.x}px, ${off.y}px) scale(${zoom})` }}
             draggable={false}
             onMouseDown={(e) => {
@@ -147,12 +148,12 @@ export function MessageThumb({ username, localId, onOpen, alt = '图片' }: {
     return () => { cancelled = true }
   }, [username, localId])
   if (err) {
-    return <span className={css.msgImageGridEmpty} title={err}><IconImage /></span>
+    return <span className={cssrows.msgImageGridEmpty} title={err}><IconImage /></span>
   }
-  if (!src) return <span className={css.msgImageGridEmpty} data-loading="true" />
+  if (!src) return <span className={cssrows.msgImageGridEmpty} data-loading="true" />
   return (
     <span
-      className={css.msgImageGridItem}
+      className={cssrows.msgImageGridItem}
       {...(onOpen ? clickableKey(onOpen, { label: '查看大图' }) : {})}
     >
       <img src={src} alt={alt} loading="lazy" decoding="async" />
@@ -176,11 +177,11 @@ export function MessageImageGroup({ items, username, onOpenAt }: {
   const shown = items.slice(0, 9)
   const rest = items.length - shown.length
   return (
-    <div className={css.msgImageGrid} data-count={Math.min(shown.length, 9)}>
+    <div className={cssrows.msgImageGrid} data-count={Math.min(shown.length, 9)}>
       {shown.map((m, i) => (
-        <span key={m.localId} className={css.msgImageGridCell}>
+        <span key={m.localId} className={cssrows.msgImageGridCell}>
           <MessageThumb username={username} localId={m.localId} onOpen={() => { onOpenAt(m) }} />
-          {rest > 0 && i === shown.length - 1 && <span className={css.msgImageGridMore}>+{rest}</span>}
+          {rest > 0 && i === shown.length - 1 && <span className={cssrows.msgImageGridMore}>+{rest}</span>}
         </span>
       ))}
     </div>
@@ -199,8 +200,8 @@ export function MessageSystem({ m }: { m: WechatMessage }): React.JSX.Element {
   const icon = kind === 'revoke' ? '↩' : kind === 'top' ? '📌' : ''
   return (
     <div className={css.msgSystem} data-kind={kind}>
-      {icon && <span className={css.msgSystemIcon} aria-hidden="true">{icon}</span>}
-      <span className={css.msgSystemText}>{text}</span>
+      {icon && <span className={cssrows.msgSystemIcon} aria-hidden="true">{icon}</span>}
+      <span className={cssrows.msgSystemText}>{text}</span>
     </div>
   )
 }
@@ -223,13 +224,13 @@ export function MessageLocation({ m }: { m: WechatMessage }): React.JSX.Element 
   return (
     <div className={css.msgLocationCard}>
       <span className={css.msgLocationMap} aria-hidden="true">
-        <span className={css.msgLocationGrid} />
-        <span className={css.msgLocationPin}>📍</span>
+        <span className={cssrows.msgLocationGrid} />
+        <span className={cssrows.msgLocationPin}>📍</span>
       </span>
       <span className={css.msgLocationBody}>
-        <span className={css.msgLocationTitle} title={name}>{name}</span>
-        {addr && addr !== name && <span className={css.msgLocationDesc} title={addr}>{addr}</span>}
-        {coord && <span className={css.msgLocationCoord} title="纬度, 经度">{coord}</span>}
+        <span className={cssrows.msgLocationTitle} title={name}>{name}</span>
+        {addr && addr !== name && <span className={cssrows.msgLocationDesc} title={addr}>{addr}</span>}
+        {coord && <span className={cssrows.msgLocationCoord} title="纬度, 经度">{coord}</span>}
       </span>
       <CardFoot label="位置" />
     </div>
@@ -252,11 +253,11 @@ export function MessageContact({ m }: { m: WechatMessage }): React.JSX.Element {
   const isEnterprise = m.type === 66 || uname.endsWith('@openim')
   return (
     <div className={css.msgContactCard}>
-      <span className={css.msgContactAvatar}>
+      <span className={cssrows.msgContactAvatar}>
         <RemoteImg src={avatar} alt="" loading="lazy" pending={initial} failed={initial} />
       </span>
-      <span className={css.msgContactBody}>
-        <span className={css.msgContactNick} title={nick}>{nick}</span>
+      <span className={cssrows.msgContactBody}>
+        <span className={cssrows.msgContactNick} title={nick}>{nick}</span>
         {alias && <span className={kitCss.textCaption}>别名：{alias}</span>}
         {uname && <span className={kitCss.textCaptionTrunc} title={uname}>{uname}</span>}
       </span>
@@ -411,18 +412,18 @@ export function MessageVoice({ m, selfName }: { m: WechatMessage; selfName: stri
             对方用基础方向 —— 基础图形是「锥体朝左 + 波纹朝右」，所以对方应是 `◀))) 5″`。
             此前写成 mirror={!isSelf} 把两侧都镜像反了（用户报「对方语音图标方向错」）。 */}
         <span className={css.msgVoiceIcon}><IconVoiceWaves mirror={isSelf} /></span>
-        {sec > 0 && <span className={css.msgVoiceDur}>{sec}″</span>}
+        {sec > 0 && <span className={cssrows.msgVoiceDur}>{sec}″</span>}
       </div>
       {sec === 0 && audioOk === false && <span className={kitCss.textMeta}>语音数据不在本地</span>}
-      {loadErr && <span className={css.msgVoiceErr} title={loadErr}>{loadErr.length > 28 ? loadErr.slice(0, 28) + '…' : loadErr}</span>}
+      {loadErr && <span className={cssrows.msgVoiceErr} title={loadErr}>{loadErr.length > 28 ? loadErr.slice(0, 28) + '…' : loadErr}</span>}
       {!transcript && !transcribing && !tErr && (
-        <button type="button" className={css.msgVoiceBtn} onClick={() => { void doTranscribe() }}>语音转文字</button>
+        <button type="button" className={cssrows.msgVoiceBtn} onClick={() => { void doTranscribe() }}>语音转文字</button>
       )}
       {transcribing && <span className={kitCss.textMeta}>转写中…</span>}
       {tErr && !transcript && (
-        <span className={css.msgVoiceErr} title={tErr}>{tErr.length > 28 ? tErr.slice(0, 28) + '…' : tErr}</span>
+        <span className={cssrows.msgVoiceErr} title={tErr}>{tErr.length > 28 ? tErr.slice(0, 28) + '…' : tErr}</span>
       )}
-      {transcript && <span className={css.msgVoiceText}>【{transcript}】</span>}
+      {transcript && <span className={cssrows.msgVoiceText}>【{transcript}】</span>}
     </div>
   )
 }
@@ -461,7 +462,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   if (vErr && videoPath) {
     return (
       <div className={css.msgBubble}>
-        <span className={css.msgVoicelike} title={videoPath} {...clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' })}>
+        <span className={cssrows.msgVoicelike} title={videoPath} {...clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' })}>
           <IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}
         </span>
         <span className={kitCss.textMeta}>封面不在本地，点上方用系统播放器打开</span>
@@ -471,7 +472,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   if (vErr) {
     return (
       <div className={css.msgBubble}>
-        <span className={css.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
+        <span className={cssrows.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
         <span className={kitCss.textMeta}>（{vErr}）</span>
       </div>
     )
@@ -479,7 +480,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   if (!cover) {
     return (
       <div className={css.msgBubble}>
-        <span className={css.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
+        <span className={cssrows.msgVoicelike}><IconPlayOutline16 size={13} /> 视频{durText ? ` ${durText}` : ''}</span>
         <span className={kitCss.textMeta}>加载中…</span>
       </div>
     )
@@ -487,13 +488,13 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
   return (
     <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
       <span
-        className={css.msgVideoWrap}
+        className={cssrows.msgVideoWrap}
         title={videoPath ? `${videoPath}\n（点击用系统播放器打开）` : '视频封面'}
         {...(videoPath ? clickableKey(openVideo, { role: 'button', label: '用系统播放器打开视频' }) : {})}
       >
         <img src={cover} alt="视频封面" className={css.msgImage} loading="lazy" />
-        <span className={css.msgVideoPlay}><IconPlayOutline16 size={18} /></span>
-        {durText && <span className={css.msgVideoDur}>{durText}</span>}
+        <span className={cssrows.msgVideoPlay}><IconPlayOutline16 size={18} /></span>
+        {durText && <span className={cssrows.msgVideoDur}>{durText}</span>}
       </span>
     </div>
   )
@@ -545,14 +546,14 @@ export function MessageCall({ m }: { m: WechatMessage }): React.JSX.Element {
       <span className={css.msgCallIcon} aria-hidden="true">
         {isVideo ? <IconVideoCallOutline /> : connected ? <IconCallOutline /> : <IconCallMissedOutline />}
       </span>
-      <span className={css.msgCallBody}>
+      <span className={cssrows.msgCallBody}>
         {/*
           微信的通话气泡只有「图标 + 结局」两段：语音/视频由**图标**表达
           （话筒 / 摄像机），气泡里**不写**「语音通话 / 视频通话」这行标签。
           此前多画了一行，实测气泡比官方的宽 50px（215×38 vs 参考 165×36）。
         */}
         <span className={css.msgCallStatus}>{label || (connected ? '通话' : '未接通')}</span>
-        {durSec !== null && <span className={css.msgCallDur}>{fmtCallDuration(durSec)}</span>}
+        {durSec !== null && <span className={cssrows.msgCallDur}>{fmtCallDuration(durSec)}</span>}
       </span>
     </div>
   )
@@ -626,11 +627,11 @@ export function MessageImage({ m, selfName, onOpen }: {
       <div className={`${css.msgBubble} ${css.msgBubbleZoom}`} {...clickableKey(() => { if (onOpen) onOpen(m) }, { label: '查看大图' })}>
         <img src={src} alt="图片" className={css.msgImage} loading="lazy" />
       </div>
-      <div className={css.msgFileHint}>
+      <div className={cssrows.msgFileHint}>
         {isThumb && <span className={kitCss.textMeta}>本机只有缩略图 </span>}
         {fetching
           ? <span className={kitCss.textMeta}>正在取原图…</span>
-          : <button type="button" className={css.msgVoiceBtn} onClick={() => { void getOriginal() }}>取原图</button>}
+          : <button type="button" className={cssrows.msgVoiceBtn} onClick={() => { void getOriginal() }}>取原图</button>}
         {origNote !== null && <span className={kitCss.textMeta}> {origNote}</span>}
       </div>
     </>
@@ -664,14 +665,14 @@ export function MessageEmoticon({ md5, label, emojiUrl }: { md5: string; label?:
   }, [md5])
   if (src) {
     return (
-      <div className={css.msgSticker} title={label || '表情'}>
-        <img className={css.msgStickerImg} src={src} alt={label || '表情'} loading="lazy" decoding="async" />
+      <div className={cssrows.msgSticker} title={label || '表情'}>
+        <img className={cssrows.msgStickerImg} src={src} alt={label || '表情'} loading="lazy" decoding="async" />
       </div>
     )
   }
   return (
     <div className={css.msgBubble}>
-      <span className={css.msgEmojiChip} title={err || (md5 ? `自定义表情 · MD5 ${md5}` : '自定义表情')}>
+      <span className={cssrows.msgEmojiChip} title={err || (md5 ? `自定义表情 · MD5 ${md5}` : '自定义表情')}>
         {err ? '😊 [表情]' : '😊 表情加载中…'}
       </span>
     </div>

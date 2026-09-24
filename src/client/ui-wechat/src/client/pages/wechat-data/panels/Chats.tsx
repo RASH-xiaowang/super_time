@@ -42,6 +42,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { proxyableSrc } from '../utils/url.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './chats.module.css'
+import csscards from './chats-cards.module.css'
 import { avatarColors, fmtBytes, fmtDateTimeSec, fmtMsgClockSec, fmtSessionTimeSec } from '../utils/format.ts'
 
 
@@ -588,7 +589,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
           <span className={css.sessionNameWrap}>
             <span className={css.sessionName}>{s.displayName || s.username}</span>
             {s.hidden && <span className={css.hiddenBadge} title="该会话在微信中被隐藏">已隐藏</span>}
-            {isEnterpriseChat(s.username) && <span className={css.entBadge} title="企业微信">企微</span>}
+            {isEnterpriseChat(s.username) && <span className={csscards.entBadge} title="企业微信">企微</span>}
           </span>
           <span className={css.sessionTimeGroup}>
             <span className={css.sessionTime}>{fmtSessionTimeSec(s.lastTimestamp)}</span>

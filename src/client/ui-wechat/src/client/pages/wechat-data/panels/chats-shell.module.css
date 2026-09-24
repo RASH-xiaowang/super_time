@@ -1,0 +1,191 @@
+.statUnread { color: var(--nm-danger); font-weight: 600; }
+.list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+/* 置顶区块 */
+.pinSection { border-bottom: 1px solid var(--nm-border); margin-bottom: 2px; }
+.pinArrow { display: inline-flex; color: var(--nm-text-2); }
+.batchMsg {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+/*
+ * 窄列收敛规则（审计 P0-2 / P1-9）。
+ * 960px 窗口下消息列只有 222px，四个按钮并排必然放不下；
+ * 与其让它换行把头部撑到 260px，不如按优先级逐级收起。
+ */
+@container (max-width: 560px) {
+  .calBtnLabel { display: none; }
+}
+.msgHeaderInfo { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+/* 动作区必须能收窄：原先 flex-shrink:0 让它在窄窗口把内容顶出消息区，
+   被 overflow 裁掉后按钮直接不可达（审计 P0-2）。收窄后内部 flex-wrap 才会生效。 */
+.msgHeaderActions { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; flex-wrap: wrap; }
+/* 「更多」溢出菜单：定位上下文 + 浮动面板 */
+.msgHeaderMoreWrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.editRowInfo {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--nm-font-mono, monospace);
+}
+.msgErr { color: var(--nm-danger); font-size: 12px; text-align: center; padding: 8px; }
+/* 星空背景（空态装饰）。消息流背景自带 radial 氛围光。 */
+.starWrap { position: absolute; inset: 0; z-index: 0; overflow: hidden; display: flex; }
+.starWrap[data-hidden] { display: none; }
+.starfield { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.msgEmptyIcon { font-size: 30px; opacity: 0.5; filter: drop-shadow(0 0 10px color-mix(in srgb, var(--nm-cyan) 40%, transparent)); }
+.msgEmptyText { font-size: 12px; color: var(--nm-text-2); max-width: 320px; }
+.chatlogBody { flex: 1; overflow-y: auto; padding: 4px 14px 14px; scrollbar-width: thin; }
+.chatlogRow { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--nm-border); }
+.chatlogRow:last-child { border-bottom: none; }
+.chatlogMain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.chatlogTop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.chatlogName { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
+.chatlogTime {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  flex-shrink: 0;
+  font-family: var(--nm-font-mono, monospace);
+}
+.chatlogText { font-size: 12px; color: var(--nm-text-1); line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+.searchHitCount {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--nm-text-2);
+  border-bottom: 1px solid var(--nm-border);
+  font-family: var(--nm-font-mono, monospace);
+}
+.searchHitTop { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.searchHitName { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.searchHitTime {
+  font-size: 10.5px;
+  color: var(--nm-text-2);
+  flex-shrink: 0;
+  font-family: var(--nm-font-mono, monospace);
+}
+.searchHitSnippet { font-size: 12px; color: var(--nm-text-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--nm-border);
+}
+.calNav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 12px; }
+.calStat b { color: var(--nm-cyan); font-variant-numeric: tabular-nums; }
+.calGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calWd { text-align: center; font-size: 11px; color: var(--nm-text-2); padding: 2px 0; }
+.calEmpty { aspect-ratio: 1; }
+.calDayNum { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
+.calHint { margin-top: 12px; font-size: 11px; color: var(--nm-text-2); text-align: center; }
+.exportBody { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.exportField { display: flex; flex-direction: column; gap: 6px; }
+.exportChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.exportHint {
+  font-size: 11px;
+  color: var(--nm-text-2);
+  font-family: var(--nm-font-mono, monospace);
+}
+.exportCheckbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--nm-text-1); cursor: pointer; }
+.exportActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.editErr {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-red, #f87171);
+}
+.editFoot { display: flex; justify-content: flex-end; gap: 8px; width: 100%; }
+/* 导出弹窗 v2（格式/类型/时间/文件名/目录） */
+.exportSection { border-top: 1px solid var(--nm-border); padding-top: 12px; }
+.exportSection:first-child { border-top: none; padding-top: 0; }
+.exportSectionHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.exportLabelRow { display: flex; align-items: center; justify-content: space-between; }
+.exportFormatGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.exportRangeRow { display: flex; align-items: center; gap: 8px; }
+.exportDirIcon { font-size: 16px; }
+.exportDirInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.exportDirTitle { font-size: 12px; color: var(--nm-text-1); font-weight: 600; }
+/* 已编辑消息弹窗动作行（复用 .loadMore / .calDialog） */
+.calHeaderActions { display: inline-flex; align-items: center; gap: 4px; }
+.groupInfoTitle {
+  /* 微信的聊天信息标题是纯色标题，没有渐变文字；渐变在浅色端还会让字色中途变蓝 */
+  font-size: var(--wx-info-title);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.groupInfoBody { flex: 1; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; }
+.memberGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  /* 原先 8px(行)/6px(列) 非对称；微信成员网格是等距（审计 P3-1） */
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.memberEmptyIcon { color: var(--nm-text-2); opacity: 0.55; display: inline-flex; }
+.memberEmptyTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }
+.memberEmptyDesc { font-size: 11px; line-height: 1.55; color: var(--nm-text-2); max-width: 24ch; }
+/* ── 群聊信息：微信式列表行 ──────────────────────────────────────
+   微信的聊天信息是「标签左 / 值右 / 1px 分隔 / 行高 ~48」的列表，
+   不是「标签上 / 值下 / 上边框 / 3 行截断」的块（审计 P1-8 行结构）。 */
+.groupInfoRows { display: flex; flex-direction: column; }
+.groupInfoRowStack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 0;
+  border-top: 1px solid var(--nm-border);
+}
+.groupInfoRowLabel {
+  flex-shrink: 0;
+  font-size: var(--wx-info-text);
+  color: var(--nm-text-2);
+  line-height: 1.4;
+}
+.memberProfileBody {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 16px 18px;
+}
+.memberProfileName {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--nm-text-1);
+  text-align: center;
+  word-break: break-word;
+  max-width: 100%;
+}
+.memberProfileMono {
+  font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  color: var(--nm-text-1);
+  word-break: break-all;
+  text-align: right;
+}
+/* ══════════════════════════════════════════════════════════════════
+   消息渲染层补充样式（按 renderType 分派的新渲染器）
+   ──────────────────────────────────────────────────────────────────
+   与上面第 363 行起的「消息行 / 气泡」段配套。新增的每一条都对应
+   `Chats.tsx` 里一个具体渲染分支；命名沿用既有 `msg*` 前缀。
+   颜色一律走 `--nm-*` 令牌（`check:inline-colors` 禁止写死颜色字面量）。
+   ══════════════════════════════════════════════════════════════════ */
+/* ── 文本气泡内的片段：内联表情 / @提及 ─────────────────────────── */
+/* 内联表情用 1.25em 跟行高对齐（微信也是这个比例）：用 em 而不是 px，
+   这样气泡字号（13px）变化时表情跟着变，不会比文字大一圈或小一圈。 */
+.msgEmojiImg {
+  width: 1.25em;
+  height: 1.25em;
+  display: inline-block;
+  vertical-align: text-bottom;
+  margin: 0 1px;
+  object-fit: contain;
+}
+/* @提及：微信是蓝灰色 #576B95 / 500（不做跳转，避免死焦点）。 */
+.msgMention {
+  color: var(--wx-mention);
+  font-weight: 500;
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: default;
+}
+.msgMention:hover { background: color-mix(in srgb, var(--wx-mention) 14%, transparent); }

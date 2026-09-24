@@ -14,6 +14,7 @@ import { fmtMsgClockSec } from '../utils/format.ts'
 import { MessageRenderItem, renderKindOf } from '../utils/message-items.ts'
 import { MessageBody } from './chats-cards.tsx'
 import css from './chats.module.css'
+import cssrows from './chats-rows.module.css'
 import type { ChatTarget } from './Chats.tsx'
 import { MessageImageGroup } from './chats-media.tsx'
 import { Avatar, ChatView, POLL_HIDDEN_MS, POLL_VISIBLE_MS } from './chats-support.tsx'
@@ -108,7 +109,7 @@ const beginSession = (talker: string): number => {
  */
 function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
   if (item.kind === 'day') {
-    return <div className={css.msgDayDivider}><span>{item.label}</span></div>
+    return <div className={cssrows.msgDayDivider}><span>{item.label}</span></div>
   }
   const head = item.kind === 'group' ? item.items[0] : item.m
   if (!head || !curSession) return null
@@ -116,7 +117,7 @@ function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
   // 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。
   if (kind === 'system' || kind === 'revoke' || kind === 'pat' || kind === 'empty') {
     return (
-      <div id={`msg-${head.localId}`} className={css.msgRowSystem}>
+      <div id={`msg-${head.localId}`} className={cssrows.msgRowSystem}>
         <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />
       </div>
     )
@@ -150,7 +151,7 @@ function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
         <span className={css.msgTimeChip}>
           {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
         </span>
-        {isGroup && !isSelf && head.sender && <div className={css.msgSender}>{avName}</div>}
+        {isGroup && !isSelf && head.sender && <div className={cssrows.msgSender}>{avName}</div>}
         {item.kind === 'group' ? (
           <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
             <MessageImageGroup items={item.items} username={curSession.username} onOpenAt={openViewer} />
