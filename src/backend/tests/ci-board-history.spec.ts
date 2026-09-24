@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LINE_MS,
   formatHistory,
+  medianTopMs,
   parseRunLog,
   stripLogNoise,
   worstOf,
@@ -46,6 +47,18 @@ const b = (label: string, topMs: number, opts: { crossed?: boolean, red?: boolea
   ratio: LINE_MS / Math.max(1, topMs),
   sawRpcTimeout: opts.red ?? false,
 })
+
+/**
+ * 按内容标记取报告里的那一行 —— **不要**用「倒数第几行」这种偏移。
+ *
+ * 报告每加一行自我声明，所有偏移就整体错位（第一版就是这么写的，加一行就全红）。
+ * 找不到就直接抛：让「判决行没印出来」响成异常，而不是 `at(undefined)` 的模糊报错。
+ */
+function pick (lines: readonly string[], marker: string): string {
+  const hit = lines.find((l) => l.includes(marker))
+  if (hit === undefined) throw new Error(`报告里没有含「${marker}」的行；实际印出的是：\n${lines.join('\n')}`)
+  return hit
+}
 
 describe('CI 榜历史：解析、最差值与「拿不到榜」的明说', () => {
   it('去噪：ANSI 与行首时间戳都去掉，但行内缩进保留', () => {
@@ -116,13 +129,35 @@ describe('CI 榜历史：解析、最差值与「拿不到榜」的明说', () =
     expect(text).toContain('⚠ 越线')
   })
 
-  it('判决按倍数说「满足 / 还差几倍」，全部拿不到榜时不许说「都很快」', () => {
-    const ok = formatHistory([b('a', 10000)], [])
-    expect(at(ok, ok.length - 2, '判决行')).toContain('满足「≥4×」')
-    const bad = formatHistory([b('a', 20800)], [])
-    expect(at(bad, bad.length - 2, '判决行')).toContain('不满足「≥4×」')
-    expect(at(bad, bad.length - 2, '判决行')).toContain('还差 1.39 倍')
+  it('① 那半条按中位数判，并且自己说清「这个中位是全体榜首的、不是 A 类的」', () => {
+    const ok = formatHistory([b('a', 10000), b('b', 12000), b('c', 14000)], [])
+    const verdict = pick(ok, '① A 类榜首中位')
+    expect(verdict).toContain('整张榜第一名」的中位 12.0s')
+    expect(verdict, '12 秒 ≤ 15 秒预算 ⇒ 满足（上界都达标，A 类必然达标）').toContain('**满足**')
+    const bad = formatHistory([b('a', 20800), b('b', 22000), b('c', 90000, { crossed: true, red: true })], [])
+    const badVerdict = pick(bad, '① A 类榜首中位')
+    expect(badVerdict, '超预算时只能说「判不了」—— 这是上界，B 类混在里面只会抬高它').toContain('**判不了**')
+    expect(badVerdict, '中位数是 22.0 秒（不是最差的那个）').toContain('整张榜第一名」的中位 22.0s')
+    for (const lines of [ok, bad]) {
+      expect(pick(lines, '⚠ ①'), '两种判决都要带那句自我声明（少了它，读的人会把上界当成 A 类实测）')
+        .toContain('「判不了」不等于「不满足」')
+    }
+    const clause2 = pick(bad, '② B 类越线')
+    expect(clause2).toContain('越线 1 次')
+    expect(clause2).toContain('c 90.0s')
+    expect(clause2).toContain('出现过假红的 1 次')
+  })
+
+  it('中位数：奇数取中间、偶数取两中平均；一次都没有时是 null 而不是 0', () => {
+    expect(medianTopMs([b('a', 3000), b('b', 1000), b('c', 2000)])).toBe(2000)
+    expect(medianTopMs([b('a', 3000), b('b', 1000), b('c', 2000), b('d', 4000)])).toBe(2500)
+    expect(medianTopMs([]), '没有一次有榜时不能报 0 —— 那会被读成「榜首都是 0 秒」').toBeNull()
+  })
+
+  it('全部拿不到榜时不许说「都很快」', () => {
     const none = formatHistory([], ['r1', 'r2'])
-    expect(at(none, none.length - 1, '全拿不到时的收尾行')).toContain('这个「最差值」不存在')
+    expect(at(none, none.length - 1, '全拿不到时的收尾行')).toContain('这两条口径都判不了')
+    const mixed = formatHistory([b('a', 9000)], ['r1'])
+    expect(pick(mixed, '另有 1 次运行拉到了日志却没有 [耗时榜]'), '覆盖数要带上「没有榜」的那几次').toContain('r1')
   })
 })
