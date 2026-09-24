@@ -5578,32 +5578,35 @@ async function runBuildSearchIndex(decryptedDir, force) {
       batch = [];
       batchChars = 0;
     };
-    for (const username of usernames) {
-      const table = msgTableName3(username);
-      const sessionWho = bigramTokens(names.get(username) ?? username);
-      for (const shard of shards) {
-        let sdb = null;
-        try {
-          sdb = new DatabaseSync19(shard, { readOnly: true });
-        } catch (e) {
-          recordSkip(shard, e);
-          continue;
-        }
-        let rows;
-        try {
-          const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
-          if (!has) {
-            sdb.close();
+    for (const shard of shards) {
+      let sdb = null;
+      try {
+        sdb = new DatabaseSync19(shard, { readOnly: true });
+      } catch (e) {
+        recordSkip(shard, e);
+        continue;
+      }
+      let tableSet;
+      try {
+        tableSet = new Set(sdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name));
+      } catch (e) {
+        recordSkip(shard, e);
+        sdb.close();
+        continue;
+      }
+      try {
+        for (const username of usernames) {
+          const table = msgTableName3(username);
+          if (!tableSet.has(table)) continue;
+          const sessionWho = bigramTokens(names.get(username) ?? username);
+          let rows;
+          try {
+            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
+            rows = sdb.prepare(sql).iterate()[Symbol.iterator]();
+          } catch (e) {
+            recordSkip(shard, e);
             continue;
           }
-          const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
-          rows = sdb.prepare(sql).iterate()[Symbol.iterator]();
-        } catch (e) {
-          recordSkip(shard, e);
-          sdb.close();
-          continue;
-        }
-        try {
           for (; ; ) {
             let step;
             try {
@@ -5636,12 +5639,13 @@ async function runBuildSearchIndex(decryptedDir, force) {
               await yieldToLoop();
             }
           }
-        } finally {
-          sdb.close();
+          if (batch.length >= 500) flush();
         }
+      } finally {
+        sdb.close();
       }
-      if (batch.length >= 500) flush();
     }
+    flush();
     flush();
     total = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
     const builtAt = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");

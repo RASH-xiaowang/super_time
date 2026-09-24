@@ -442,75 +442,86 @@ export async function runBuildSearchIndex(
       batch = []
       batchChars = 0
     }
-    for (const username of usernames) {
-      const table = msgTableName(username)
-      // 会话名进 who 列：问「李四」时，与李四的会话本身就该命中，
-      // 而不是只匹配到正文里恰好写了「李四」的消息（实测旧路径找的全是合同表单里的字段值）。
-      const sessionWho = bigramTokens(names.get(username) ?? username)
-      for (const shard of shards) {
-        let sdb: DatabaseSync | null = null
-        try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch (e) { recordSkip(shard, e); continue }
-        let rows: Iterator<Record<string, unknown>>
-        try {
-          const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-          if (!has) { sdb.close(); continue }
-          // 不再只取 local_type=1：转账/链接/文件/引用等 appmsg 与系统提示
-          // 都带可读文本，且往往正是用户问题的答案。文本统一走 readableMessageText 抽取。
-          const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"'
-          // 用 iterate() 而不是 all()：全量物化会让峰值与「单会话消息数」同阶
-          // （百万级库上就是数百 MB）。边读边写 FTS，读完即释放。
-          rows = (sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>)[Symbol.iterator]()
-        } catch (e) {
-          // 建语句 / prepare 失败：跳过该分片（记录，不静默）
-          recordSkip(shard, e)
-          sdb.close()
-          continue
-        }
-        try {
-          // 只有**读取**被包进可跳过的 catch：分片损坏时跳过它是有意的容错。
-          // 索引写入（flush）必须留在外面 —— 写失败要向上抛并 ROLLBACK，否则会 COMMIT 出
-          // 一个缺行的索引却仍报 status:'ok'（读侧见 ready:true，于是永不重建）。
-          for (;;) {
-            let step: IteratorResult<Record<string, unknown>>
-            try { step = rows.next() } catch (e) { recordSkip(shard, e); break }
-            if (step.done) break
-            const r = step.value
-            // 计量必须在任何 continue **之前**：被跳过的行同样付了 zstd 解压与解码成本。
-            // 图片/系统消息这类「无可读文本」的行在真实账号里占比很高且会连续成片，
-            // 实测 30 万条这种行若不计次，单块能连续跑 1.1s 且一次都不让出。
-            rowsSinceYield += 1
-            const localId = Number(r['local_id'] ?? 0)
-            const createTime = Number(r['create_time'] ?? 0)
-            const sortSeq = Number(r['sort_seq'] ?? localId)
-            const wmPrev = shardWm.get(shard) ?? 0
-            if (sortSeq > wmPrev) shardWm.set(shard, sortSeq)
-            const raw = decodeCell(r['message_content']) || decodeCell(r['compress_content'])
-            charsSinceYield += raw.length
-            const { sender, body } = splitGroupPrefix(raw, username)
-            const text = readableMessageText(body)
-            if (text) {
-              const who = sender
-                ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
-                : sessionWho
-              batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
-              batchChars += text.length
-            }
-            // 批量写入也纳入预算：行长很大时单次 flush 自己就能跑几十秒（见 FLUSH_EVERY_CHARS）。
-            if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush()
-            // 周期性让出事件循环：同步 sqlite + bigram 切分是纯 CPU，不让出就会
-            // 让整个 worker（承载全部 130+ 个查询方法）停摆数秒。
-            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
-              rowsSinceYield = 0
-              charsSinceYield = 0
-              await yieldToLoop()
-            }
-          }
-        } finally {
-          sdb.close()
-        }
+    for (const shard of shards) {
+      let sdb: DatabaseSync | null = null
+      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch (e) { recordSkip(shard, e); continue }
+      // 一次问出「这个分片装了哪些会话表」，再按表读。旧布局是 `for username { for shard { 开这个分片 } }`，
+      // 于是**开合数 = 会话数 × 分片数**（真实库上是几百到几千次 open/close，每次都为了问一句「你有没有我的表」），
+      // 而这件事分片自己就知道 —— 增量同步 `runSyncSearchIndex` 早就是下面这个形状了，两边对齐。
+      let tableSet: Set<string>
+      try {
+        tableSet = new Set((sdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name))
+      } catch (e) {
+        recordSkip(shard, e)
+        sdb.close()
+        continue
       }
-      if (batch.length >= 500) flush()
+      try {
+        for (const username of usernames) {
+          const table = msgTableName(username)
+          if (!tableSet.has(table)) continue
+          // 会话名进 who 列：问「李四」时，与李四的会话本身就该命中，
+          // 而不是只匹配到正文里恰好写了「李四」的消息（实测旧路径找的全是合同表单里的字段值）。
+          const sessionWho = bigramTokens(names.get(username) ?? username)
+          let rows: Iterator<Record<string, unknown>>
+          try {
+            // 不再只取 local_type=1：转账/链接/文件/引用等 appmsg 与系统提示
+            // 都带可读文本，且往往正是用户问题的答案。文本统一走 readableMessageText 抽取。
+            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"'
+            // 用 iterate() 而不是 all()：全量物化会让峰值与「单会话消息数」同阶
+            // （百万级库上就是数百 MB）。边读边写 FTS，读完即释放。
+            rows = (sdb.prepare(sql).iterate() as Iterable<Record<string, unknown>>)[Symbol.iterator]()
+          } catch (e) {
+            // 建语句 / 读表头失败：跳过这个（会话, 分片）对 —— 口径与旧布局一致（旧布局的 continue
+            // 也是只跳过当前用户名在这一片上的读取），错误仍然记进 skipped。
+            recordSkip(shard, e)
+            continue
+          }
+            // 只有**读取**被包进可跳过的 catch：分片损坏时跳过它是有意的容错。
+            // 索引写入（flush）必须留在外面 —— 写失败要向上抛并 ROLLBACK，否则会 COMMIT 出
+            // 一个缺行的索引却仍报 status:'ok'（读侧见 ready:true，于是永不重建）。
+            for (;;) {
+              let step: IteratorResult<Record<string, unknown>>
+              try { step = rows.next() } catch (e) { recordSkip(shard, e); break }
+              if (step.done) break
+              const r = step.value
+              // 计量必须在任何 continue **之前**：被跳过的行同样付了 zstd 解压与解码成本。
+              // 图片/系统消息这类「无可读文本」的行在真实账号里占比很高且会连续成片，
+              // 实测 30 万条这种行若不计次，单块能连续跑 1.1s 且一次都不让出。
+              rowsSinceYield += 1
+              const localId = Number(r['local_id'] ?? 0)
+              const createTime = Number(r['create_time'] ?? 0)
+              const sortSeq = Number(r['sort_seq'] ?? localId)
+              const wmPrev = shardWm.get(shard) ?? 0
+              if (sortSeq > wmPrev) shardWm.set(shard, sortSeq)
+              const raw = decodeCell(r['message_content']) || decodeCell(r['compress_content'])
+              charsSinceYield += raw.length
+              const { sender, body } = splitGroupPrefix(raw, username)
+              const text = readableMessageText(body)
+              if (text) {
+                const who = sender
+                  ? sessionWho + ' ' + bigramTokens(names.get(sender) ?? sender)
+                  : sessionWho
+                batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId])
+                batchChars += text.length
+              }
+              // 批量写入也纳入预算：行长很大时单次 flush 自己就能跑几十秒（见 FLUSH_EVERY_CHARS）。
+              if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush()
+              // 周期性让出事件循环：同步 sqlite + bigram 切分是纯 CPU，不让出就会
+              // 让整个 worker（承载全部 130+ 个查询方法）停摆数秒。
+              if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+                rowsSinceYield = 0
+                charsSinceYield = 0
+                await yieldToLoop()
+              }
+            }
+          if (batch.length >= 500) flush()
+        }
+      } finally {
+        sdb.close()
+      }
     }
+    flush()
     flush()
     // 统计与 meta 写放在 COMMIT **之前**：这样「新索引 + built_at + schema_version」是同一次
     // 原子提交。留在 COMMIT 之后时，meta 写失败会留下「索引已换新但 meta 没写成功」的中间态
