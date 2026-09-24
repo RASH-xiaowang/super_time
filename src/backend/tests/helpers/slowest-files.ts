@@ -154,3 +154,87 @@ export function formatTestBoard(
   const rows = topSlowestTests(tests, n).map((t, i) => formatTestRow(i + 1, t, fileMs.get(t.file) ?? 0))
   return [`[用例榜] ${String(tests.length)} 个用例，最慢的前 ${String(rows.length)} 名：`, ...rows]
 }
+
+/** 一个慢文件的「内账」：文件总时长与落在用例上的时长各多少。 */
+export type FileAccount = { file: string, fileMs: number, caseMs: number, cases: number }
+
+/**
+ * 按文件汇总用例耗时。
+ * @param tests - 摊平后的用例耗时。
+ * @returns 文件名 → `{ 合计毫秒, 条数 }`。
+ */
+export function sumCasesByFile(tests: readonly TestTiming[]): Map<string, { ms: number, n: number }> {
+  const out = new Map<string, { ms: number, n: number }>()
+  for (const t of tests) {
+    const cur = out.get(t.file)
+    if (cur === undefined) out.set(t.file, { ms: t.ms, n: 1 })
+    else { cur.ms += t.ms; cur.n += 1 }
+  }
+  return out
+}
+
+/**
+ * 前 `n` 名慢文件的「文件总时长 vs 用例合计」。
+ * @param files - 全部文件的耗时记录。
+ * @param tests - 摊平后的用例耗时。
+ * @param n - 算几名（榜尾那些几百毫秒的文件没必要打）。
+ * @param floorMs - 低于这个总时长的文件跳过。
+ * @returns 按文件总时长降序的内账。
+ */
+export function fileAccounts(
+  files: readonly FileTiming[],
+  tests: readonly TestTiming[],
+  n = 3,
+  floorMs = 1000,
+): FileAccount[] {
+  const byFile = sumCasesByFile(tests)
+  return topSlowest(files, n)
+    .filter((f) => f.ms >= floorMs)
+    .map((f) => {
+      const s = byFile.get(f.name)
+      return { file: f.name, fileMs: f.ms, caseMs: s?.ms ?? 0, cases: s?.n ?? 0 }
+    })
+}
+
+/** 毫秒的展示口径：一秒以内用毫秒，否则一位小数（与 {@link formatRow} 一致）。 */
+function msText(ms: number): string {
+  return ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(1)}s`
+}
+
+/**
+ * `[文件内账]` —— 对**任意**一个慢文件都能说出的那句「时间在不在这次的代码里」。
+ *
+ * 为什么单独要这张小表：N36 的口径 ② 说「B 类越线必须能自证」，而自证以前只有一处 ——
+ * `image-path-batch.spec.ts` 里手写的「分段墙钟」（它打的是 `[阶段…]` 那几行）。别的产品文件一旦越线，日志里
+ * 没有任何东西能说明「这段时间不在用例里」。这张表是**通用**的那一半：用例合计明显小于文件
+ * 总时长 ⇒ 时间落在收集/夹具/收尾或 runner 停顿上；两者接近 ⇒ 就是这个文件自己在做事。
+ *
+ * 它不能替代本机基线（口径 ② 的另一半）：如果停顿正好落在**某条用例的函数体内部**，
+ * 那条用例的耗时会把停顿一起吃进去，比值照样接近 1 —— 那时只有「同一份代码本机多少毫秒」
+ * 能说清是机器慢还是活真多。所以两个数都要有，缺一个就只能猜。
+ * @param accounts - {@link fileAccounts} 的结果。
+ * @returns 要打印的行（一条都没有时也要说明为什么没有）。
+ */
+export function formatFileAccounts(accounts: readonly FileAccount[]): string[] {
+  if (accounts.length === 0) {
+    return ['[文件内账] 没有 ≥1 秒的慢文件（或一个文件都没拿到）—— 这张表此刻是空的。']
+  }
+  const head = `[文件内账] 时间落在哪：把「文件总时长 − 用例合计」当成「不在用例里的那段」的量级`
+  const width = Math.min(80, Math.max(...accounts.map((a) => a.file.length)) + 2)
+  const rows = accounts.map((a) => {
+    const pad = a.file.padEnd(width)
+    if (a.cases === 0) {
+      return `  ${pad} 文件 ${msText(a.fileMs).padStart(7)}  用例 0 条 —— 收集口径没拿到，这一行不作数（别读成「全在文件壳里」）`
+    }
+    const gap = a.fileMs - a.caseMs
+    if (gap < 0) {
+      return `  ${pad} 文件 ${msText(a.fileMs).padStart(7)}  用例合计 ${msText(a.caseMs)}（${String(a.cases)} 条）**比文件还长** ⇒ 有并发或重复计数，只能看量级`
+    }
+    const share = a.fileMs > 0 ? a.caseMs / a.fileMs : 0
+    const verdict = share >= 0.9
+      ? '⇒ 时间几乎都在用例里（这个文件自己的活，减夹具才有用）'
+      : `⇒ ${(100 * gap / a.fileMs).toFixed(0)}% 不在任何用例里（收集/夹具/收尾/runner 停顿）`
+    return `  ${pad} 文件 ${msText(a.fileMs).padStart(7)}  用例合计 ${msText(a.caseMs).padStart(7)}（${String(a.cases)} 条，占 ${(100 * share).toFixed(0)}%）  ${verdict}`
+  })
+  return [head, ...rows]
+}
