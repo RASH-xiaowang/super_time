@@ -22,6 +22,7 @@
     "security-guard:smoke:packaged": "node scripts/security-guard-smoke.js --packaged",
     "test": "vitest run",
     "test:watch": "vitest",
+    "ci:board-history": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-board-history.mjs",
     "check:shim": "node scripts/sync-ui-shim.js --check",
     "check:wx-tokens": "node scripts/check-wx-tokens.js",
     "rag:check": "node scripts/rag-retrieval-check.js",
