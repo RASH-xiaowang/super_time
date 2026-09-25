@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AnswerFeedback, CiteList, RetrMeta, splitMarks, type AskTurn } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx'
 import { auditAnswerGrounding, groundingWarning } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/utils/grounding.ts'
 import { SessionAsk } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SessionAsk.tsx'
-import { ReplySuggest } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/ReplySuggest.tsx'
+import { ChatRightPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/ChatRightPanel.tsx'
 import { AiModelConfig } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx'
 import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
@@ -245,24 +245,35 @@ check('全屏态带 data-full（消息流让位）', () => {
   ok(html.includes('data-full'), '全屏应带 data-full')
 })
 
-console.log('ReplySuggest（单聊「推荐回复」面板）')
+console.log('ChatRightPanel（右栏：上推荐回复 / 下分析）')
 check('首帧只说「正在生成」，且下拉不许是空白', () => {
   // SSR 渲染的就是挂载那一帧（effect 不跑），所以这里能真实复现「首帧到底说了什么」。
   // 两条判别式都做过变异验证：`loading` 初值改回 false → 第三条变红；把 `Select` 的 value
   // 改回 `String(kbId)`（Radix 在选中项未挂载时渲染空白，连 placeholder 都不给）→ 第四条变红。
   // 库名本身**不在这里断言**：Radix 要把选中项渲染过一次才拿得到文字，静态渲染测不到真实浏览器
   // 挂载后的那一帧 —— 拿 SSR 的空白当「用户看到的空白」是个假结论。
-  const html = renderToStaticMarkup(h(ReplySuggest, {
+  // 2026-09-25 二次调整：推荐回复与「分析」合并进组合层 `ChatRightPanel`
+  //（面板标题与关闭按钮随之移到组合层），所以这里渲染组合层 ——
+  // 顺带多钉两条：下半区必须有区块标题、未选中时给的是提示而不是一块空白。
+  const html = renderToStaticMarkup(h(ChatRightPanel, {
     target: { username: 'wxid_a', displayName: '李四' },
     onClose: () => {},
+    analysisTargetId: null,
+    analysisEntry: undefined,
+    onClearAnalysis: () => {},
   }))
-  ok(html.includes('推荐回复'), '缺少面板标题')
+  // 用元素内容（`>…<`）而不是裸词匹配：关闭按钮的 aria-label 里也有「推荐回复」，
+  // 裸词匹配下把标题整块删掉照样绿 —— 变异测试抓过这类假阳性。
+  ok(html.includes('>推荐回复<'), '缺少面板标题')
   ok(html.includes('正在按这段对话生成候选'), '首帧应显示「正在生成」')
   ok(!html.includes('这个会话还没有可用的对话内容'), '首帧还没有任何数据，那句「没有可用对话」在当时必然是假话')
   ok(html.includes('李四'), '「依据」一行应显示当前会话名')
   ok((html.match(/role="combobox"/g) || []).length === 1, `面板里应有且只有一个知识库下拉，实际 ${String((html.match(/role="combobox"/g) || []).length)} 个`)
   ok(html.includes('读取知识库…'), '库列表还没到位时，触发器要说明在读，而不是留一块空白')
   ok(!html.includes('请选择…'), '触发器不该停在共享组件那句通用的「请选择…」上')
+  // 合并后新钉的两条：两块同容器、下半区未选中时也不许是空白
+  ok(html.includes('>分析<'), '下半区缺少「分析」区块标题')
+  ok(html.includes('点选一条消息'), '未选中消息时分析区要给出提示，而不是一块空白')
 })
 
 console.log('AiModelConfig（数据配置里的 AI 大模型卡片）')

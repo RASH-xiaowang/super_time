@@ -1,9 +1,19 @@
-/* 「分析」面板（左侧）独有的一点样式。
+/* 「分析」区块自有的一点样式（右栏合并面板的**下半块**，2026-09-25 从左栏搬来）。
  *
- * 面板外壳（.panel / .head / .title / .iconBtn / .body）与滚动区**复用** session-ask.module.css ——
+ * 外壳（.panel / .head / .title / .iconBtn / .body）与滚动区**复用** session-ask.module.css ——
  * 与「推荐回复」「AI 问答」是同一处视觉语言，不另造一套；无边框滚动条也在那边统一声明。
- * 这里只放面板自己的内容排布。
+ * 这里只放区块自己的容器与内容排布。
  */
+
+/* 区块容器：吃掉合并面板里上半块（推荐回复）之后剩下的高度，自己内部滚动。
+   必须 `min-height: 0` —— 否则 flex 子项的默认 `min-height: auto` 会撑到内容高，
+   把滚动条顶到面板外面去（面板本身的 overflow 是 hidden，那部分内容就看不见了）。 */
+.sec {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 .meta {
   display: flex;

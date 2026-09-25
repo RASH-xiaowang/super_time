@@ -1,16 +1,20 @@
 /**
- * 聊天界面**左侧的「分析」面板** —— 显示**选中的那条消息**的本地决策分析。
+ * 右栏（推荐回复**下方**）的「分析」区块 —— 显示**选中的那条消息**的本地决策分析。
+ *
+ * 2026-09-25 从「独立面板（左栏）」改成「区块」：外壳与头部归 `ChatRightPanel`，
+ * 本文件只出内容，自己保留一行区块标题（「分析」+ 取消选中）。
+ * 为什么从左边搬下来（产品要求）：两块读的都是当前会话，分成左右两栏时
+ * 「点消息 → 看分析」的视线要跨过整个消息流；合到一块后分析就贴在手边。
  *
  * 与消息流里的内嵌卡（`InlineMessageAnalysis`）是同一内容源的两种展示：
- * 内嵌卡跟着每条消息走（滚到哪看到哪、默认收起一行摘要），本面板把**选中的那条摊开**
- * —— 窄栏单列、六项命题全部展开，方便逐项细看。两处**复用同一个 `AnswerBlock`**，
- * 避免慢慢长歪。
+ * 内嵌卡跟着每条消息走（滚到哪看到哪、默认展开），本区把**选中的那条摊开**
+ * —— 单列六项命题全列，方便逐项细看。两处**复用同一个 `AnswerBlock`**，避免慢慢长歪。
  *
- * 数据来自 `useInlineAnalysis` 的按会话缓存（按 localId 取），本面板**不自己发请求**：
+ * 数据来自 `useInlineAnalysis` 的按会话缓存（按 localId 取），本区**不自己发请求**：
  * 所以只有消息流已经算过的那条才有内容，没算过的如实说「还没轮到它」——
  * 与「模型缺失是正常路径」同一姿态，不假装有结果。
  *
- * 面板外壳与滚动区复用 `session-ask.module.css`（与「推荐回复」「AI 问答」同一处视觉语言）；
+ * 样式复用 `session-ask.module.css` 的头部与滚动区（与「推荐回复」「AI 问答」同一处视觉语言）；
  * 滚动条在那里显式声明为无边框细条，不依赖全局主题的作用域。
  */
 import type { LayaAnswer } from '@deepseek-ai/dsh-wechat-data/types'
@@ -47,7 +51,7 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
   const action = done?.answers.find((a) => a.qid === 'best_action')?.options[0]
 
   return (
-    <div className={shell.panel} aria-label="分析">
+    <div className={css.sec} aria-label="分析">
       <div className={shell.head}>
         <div className={shell.title}>分析</div>
         {targetId !== null && (

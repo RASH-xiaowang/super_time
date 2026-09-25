@@ -1,5 +1,9 @@
 /**
- * 「推荐回复」的接线守卫：按钮只在单聊、面板挂在消息流右侧、读取范围只给当前会话。
+ * 「推荐回复」的接线守卫：入口只在单聊、面板挂在消息流右侧、读取范围只给当前会话。
+ *
+ * 2026-09-25 二次调整：推荐回复不再独占一栏 —— 它与「分析」合并进 `ChatRightPanel`
+ * （上推荐回复 / 下分析）。本文件里两条「挂载点」断言随之指向组合层，其余（只对单聊、
+ * 必须有入口、读取范围、知识库下拉、复制走共享助手）语义未变。
  *
  * 起因：这是 2026-09-20 新增的单聊功能（头部按钮 → 第三栏面板 → 3 条候选回复）。
  * 它有三处「接线错了也不报错、但语义就变了」的地方，各钉一条：
@@ -31,18 +35,21 @@ describe('推荐回复的接线', () => {
     // 否则同一功能会有两个入口（一个按钮 + 一个已经常驻的面板）。
     // 守卫的语义没变：**只对单聊出现**（群聊里「回一句」不成立）+ **必须有一个入口**。
     expect(chats.includes('推荐回复：按这段对话'), '头部按钮已随需求移除，不该再加回来').toBe(false)
-    const at = chats.indexOf('<ReplySuggest')
-    expect(at, '找不到 ReplySuggest 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
+    // 2026-09-25 二次调整：推荐回复与「分析」合并成一块面板（组合层 `ChatRightPanel`），
+    // 挂载点因而从 `<ReplySuggest>` 变成组合层 —— 本条断言的**语义没变**：
+    // 只对单聊出现 + 有一个由状态控制的常驻入口。
+    const at = chats.indexOf('<ChatRightPanel')
+    expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
     const around = chats.slice(Math.max(0, at - 420), at)
-    expect(around.includes("curSession.type === 'private'"), '推荐回复面板只该对单聊挂载').toBe(true)
+    expect(around.includes("curSession.type === 'private'"), '右栏只该对单聊挂载').toBe(true)
     expect(around.includes('suggestOpen'), '常驻与否由 suggestOpen 控制（初值 true 写在 Chats.tsx）').toBe(true)
   })
 
   it('面板挂在消息流右侧（第三栏），且把当前会话传进去', () => {
-    const at = chats.indexOf('<ReplySuggest')
-    expect(at, '找不到 ReplySuggest 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
+    const at = chats.indexOf('<ChatRightPanel')
+    expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
     // 条件在标签**之前**（JSX 的 `{cond && (<Comp .../>)}`），所以两边都要看。
-    const around = chats.slice(Math.max(0, at - 300), at + 220)
+    const around = chats.slice(Math.max(0, at - 300), at + 400)
     expect(around.includes('target={curSession}'), '面板必须拿到当前会话（否则读取范围会退化成「没有范围」）').toBe(true)
     expect(around.includes("curSession.type === 'private'"), '面板同样只该对单聊挂载').toBe(true)
   })
