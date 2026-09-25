@@ -50,6 +50,7 @@ import { toggleThemeMode, useThemeMode } from './theme.ts'
 import { Dialog, Tooltip } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
+import { SEARCH_QUERY_EVENT, searchQueryFromEvent } from './panels/search-events.ts'
 import gs from './panels/global-search.module.css'
 import type {
   SearchHit,
@@ -578,6 +579,24 @@ export function WechatDataPanel(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => { window.removeEventListener('keydown', onKey) }
+  }, [])
+
+  /**
+   * 词云等分析面板 → 全局搜索（R11）：收到「查这个词」就把三步做齐——
+   * 开导航条（搜索框在里头）、种词、下一帧聚焦。与 Ctrl+K 同一套动作，
+   * 搜什么不在这里管：debounce 搜索 effect 只认 `searchQuery` 的变化，种下去它自己会跑。
+   */
+  useEffect(() => {
+    const onSearchQuery = (e: Event): void => {
+      const q = searchQueryFromEvent(e)
+      if (!q) return
+      setSearchQuery(q)
+      setNavOpen(true)
+      window.requestAnimationFrame(() => { searchInputRef.current?.focus() })
+      setSearchOpen(true)
+    }
+    window.addEventListener(SEARCH_QUERY_EVENT, onSearchQuery)
+    return () => { window.removeEventListener(SEARCH_QUERY_EVENT, onSearchQuery) }
   }, [])
 
   // 导航栏收起时搜索框被隐藏（display: none）。此时结果面板若还开着，就会拿一组

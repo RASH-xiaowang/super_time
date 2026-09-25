@@ -5,11 +5,14 @@
  * 而 flex-wrap + 权重字号的 DOM 词云零依赖、hover/点击是真实元素事件，不引 canvas 命中检测。
  *
  * 交互：hover 显示精确次数（title + 卡片内计数条）；字号六档按权重分位映射，颜色三阶
- * （cyan/blue/purple）随权重。**跨面板搜索跳转待 shell 提供 query 通道后接入**
- * （global-search 是受控组件、由顶栏 shell 管理状态，直接传 query 需要全局通道，首期不接半成品）。
+ * （cyan/blue/purple）随权重。**点击一个词 → 全局搜索该词**（R11，2026-09-25 接入）：
+ * 走 `search-events.ts` 的 window 事件（不引全局状态库）——`WechatDataPanel` 收到后开导航条、
+ * 聚焦输入框、把词种进 `searchQuery`，剩下的交给既有 debounce 搜索链路。词元素用 `<button>`
+ * 而不是带 onClick 的 span：键盘可达（Tab + Enter）在 60 个交互目标上是硬要求。
  */
 import { useEffect, useState } from 'react'
 import { apiGetWordCloud } from '../api.ts'
+import { openGlobalSearch } from './search-events.ts'
 import { Card } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './wordcloud-card.module.css'
@@ -72,14 +75,16 @@ export function WordCloudCard({ scope, username, year, title, limit }: WordCloud
             const fontStep = FONT_STEPS[Math.min(FONT_STEPS.length - 1, Math.floor(t * FONT_STEPS.length))] ?? FONT_STEPS[0]!
             const tone = TONES[Math.min(TONES.length - 1, Math.floor((1 - i / words.length) * TONES.length))] ?? TONES[0]!
             return (
-              <span
+              <button
                 key={w.text}
+                type="button"
                 className={css[tone]}
                 style={{ fontSize: `${fontStep}px` }}
-                title={`${w.text} · ${w.count} 次`}
+                title={`${w.text} · ${w.count} 次 · 点击在全局搜索中查找`}
+                onClick={() => { openGlobalSearch(w.text) }}
               >
                 {w.text}
-              </span>
+              </button>
             )
           })}
         </div>

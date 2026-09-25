@@ -9,13 +9,18 @@
   line-height: 1.5;
 }
 
-.cloud > span {
-  cursor: default;
+.cloud > button {
+  /* 词是交互目标（点击 → 全局搜索）：用真实 button 保键盘可达，这里做视觉重置 */
+  font: inherit;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
   transition: var(--nm-t-ui);
   user-select: none;
 }
 
-.cloud > span:hover {
+.cloud > button:hover {
   filter: brightness(1.25);
   text-shadow: 0 0 8px color-mix(in srgb, currentColor 35%, transparent);
 }

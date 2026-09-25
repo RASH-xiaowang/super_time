@@ -129,7 +129,7 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
             )}
 
             <div className={css.exportRow}>
-              <button type="button" className={css.exportBtn} onClick={onExport}>
+              <button type="button" className={css.exportAction} onClick={onExport}>
                 导出聊天记录
               </button>
             </div>
