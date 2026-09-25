@@ -9,7 +9,7 @@
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
   color: var(--nm-text-2);
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -65,7 +65,7 @@
   overflow: auto;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: rgba(8, 14, 32, 0.94);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -90,7 +90,7 @@
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;

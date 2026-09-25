@@ -126,76 +126,24 @@ function scan(): ScanResult {
 
 /** ── 基线（2026-09-25 实测：62 文件 / br 583 / sp 1466 / illegal 325 / pill 81 / circle 66 / odd 122）── */
 const RADIUS_BASELINE: Record<string, Record<string, number>> = {
-  'ui-wechat/src/client/pages/wechat-data/panels/ai-model.module.css': { '8px': 3, '10px': 3, '6px': 2, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/ask.module.css': { '8px': 6, '10px': 3, '14px': 2, '6px': 2, '12px': 1, '7px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats-cards.module.css': { '8px': 11, '6px': 7, '10px': 4, '4px': 3, '12px': 2, '14px': 1, '16px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': { '8px': 3, '6px': 3, '2px': 3, '4px': 2, '14px': 1, '3px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css': { '3px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': { '2px': 6, '4px': 3, '9px': 2, '10px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/daily-summary.module.css': { '14px': 4, '4px': 2, '10px': 2, 'var(--nm-fs-md)': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/global-search.module.css': { '10px': 1, '12px': 1, '8px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/graph.module.css': { '12px': 6, '2px': 5, '10px': 4, '8px': 2, '5px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/kb-model-dialog.module.css': { '8px': 2 },
-  'ui-wechat/src/client/pages/wechat-data/panels/kb-rail.module.css': { '4px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/kbfiles.module.css': { '10px': 4, '8px': 1, '4px': 1, '2px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/knowledge-base.module.css': { '4px': 2, '10px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/ledger.module.css': { '10px': 2, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/notice.module.css': { '12px': 1, '3px': 1, '6px': 1, '8px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/official-assets.module.css': { '14px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/oplog.module.css': { '6px': 1, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/overview.module.css': { '10px': 9, '4px': 5, '14px': 4, '12px': 3, '8px': 3, '2px': 1, '6px': 1, '7px': 1, '9px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/period-summary.module.css': { '14px': 3 },
-  'ui-wechat/src/client/pages/wechat-data/panels/privacy-trust.module.css': { '10px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/records.module.css': { '8px': 3, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/retrieval.module.css': { '8px': 1, '5px': 1, '4px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/session-ask.module.css': { '6px': 2, '12px': 2, '14px': 1, '10px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/settings-accounts.module.css': { '10px': 2 },
-  'ui-wechat/src/client/pages/wechat-data/panels/settings-models.module.css': { '12px': 1, '10px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/settings.module.css': { '10px': 3, '9px': 1, '12px': 1, '14px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/setup-guide.module.css': { '8px': 3, '14px': 1, '9px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/tasks.module.css': { '10px': 2, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/world-map.module.css': { '8px': 6, '12px': 6, '6px': 2, '10px': 1, '4px': 1 },
 }
 
 const ODD_SPACING_BASELINE: Record<string, number> = {
   'ui-primitives-shim/src/Button.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/ai-model.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/annual.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/ask-history.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/ask.module.css': 7,
   'ui-wechat/src/client/pages/wechat-data/panels/chats-cards.module.css': 8,
   'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': 2,
   'ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 4,
-  'ui-wechat/src/client/pages/wechat-data/panels/contacts.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/daily-summary.module.css': 4,
-  'ui-wechat/src/client/pages/wechat-data/panels/export-history.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/graph.module.css': 7,
-  'ui-wechat/src/client/pages/wechat-data/panels/kb-model-dialog.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/kb-rail.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/kbfiles.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/knowledge-base.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/list-panel.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/moments.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/note-editor.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/notice.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/overview.module.css': 5,
-  'ui-wechat/src/client/pages/wechat-data/panels/privacy-trust.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/records.module.css': 4,
-  'ui-wechat/src/client/pages/wechat-data/panels/retrieval.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/session-ask.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/settings-accounts.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/settings-models.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/settings.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/setup-guide.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/panels/world-map.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/wechat-data.module.css': 2,
 }
 
-const PILL_MAX = 77
+const PILL_MAX = 8
 const CIRCLE_MAX = 66
-const ILLEGAL_RADIUS_TOTAL_MAX = 211
-const ODD_SPACING_TOTAL_MAX = 85
+const ILLEGAL_RADIUS_TOTAL_MAX = 55
+const ODD_SPACING_TOTAL_MAX = 16
 const FILES_MIN = 61
 const BR_DECL_MIN = 500
 const SP_DECL_MIN = 1200

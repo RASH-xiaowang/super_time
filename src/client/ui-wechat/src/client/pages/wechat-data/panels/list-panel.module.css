@@ -24,7 +24,7 @@
 .catBtn {
   padding: 4px 13px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   font-size: 12px;
   color: var(--nm-text-1);
@@ -450,7 +450,7 @@
   font-size: 10.5px;
   color: var(--nm-text-2);
   background: var(--nm-bg-hover);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 2px 8px;
   cursor: default;
   corner-shape: round;
@@ -488,7 +488,7 @@
   gap: 6px;
   padding: 4px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-hover);
   font-size: 12px;
   color: var(--nm-text-1);
@@ -557,7 +557,7 @@
 .tagChip {
   display: inline-flex;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   color: var(--nm-cyan);
   font-size: 11px;
@@ -685,7 +685,7 @@
 }
 .rvLandTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
 .rvLandDesc { font-size: 12px; line-height: 1.6; color: var(--nm-text-2); }
-.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .rvLandList li { font-size: 11.5px; line-height: 1.6; color: var(--nm-text-2); }
 .rvLandList b { color: var(--nm-text-1); font-weight: 600; }
 .rvLandActions { display: flex; gap: 8px; flex-wrap: wrap; }

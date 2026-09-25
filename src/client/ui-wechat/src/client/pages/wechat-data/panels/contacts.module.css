@@ -31,7 +31,7 @@
 .catBtn {
   padding: 4px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card);
   font-size: 12px;
   color: var(--nm-text-1);
@@ -133,7 +133,7 @@
      因此整屏卡片的长宽是同一个值，不会出现「有的高有的矮」。 */
   height: 46px;
   min-width: 0;
-  display: flex; align-items: center; gap: 9px; padding: 0 8px;
+  display: flex; align-items: center; gap: 8px; padding: 0 8px;
   border-radius: var(--nm-r-sm);
   cursor: pointer;
   border: 1px solid transparent;
@@ -214,7 +214,7 @@
 .commonGroups { display: flex; flex-wrap: wrap; gap: 6px; }
 .groupChip {
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 2px 10px;
   font-size: 11px;
   color: var(--nm-text-1);

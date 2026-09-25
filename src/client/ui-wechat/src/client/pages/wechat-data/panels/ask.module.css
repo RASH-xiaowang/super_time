@@ -80,7 +80,7 @@
   font-size: 11px;
   line-height: 1;
   padding: 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   color: var(--nm-cyan-text);
   background: var(--nm-cyan-10);
   border: 1px solid var(--nm-cyan-20);
@@ -95,7 +95,7 @@
   max-width: 260px;
   padding: 0 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
   color: var(--nm-text-2);
   font-size: 12px;
@@ -129,7 +129,7 @@
   height: 24px;
   padding: 0 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-3);
   font-size: 12px;
@@ -152,7 +152,7 @@
   height: 32px;
   padding: 0 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
   color: var(--nm-text-2);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
@@ -193,7 +193,7 @@
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   flex-shrink: 0;
 }
@@ -239,7 +239,7 @@
   height: 42px;
   display: grid;
   place-items: center;
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: linear-gradient(135deg,
     color-mix(in srgb, var(--nm-cyan) 18%, transparent),
     color-mix(in srgb, var(--nm-purple) 16%, transparent));
@@ -256,13 +256,13 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px 18px;
+  gap: 6px 16px;
   margin-top: 8px;
 }
 .emptyCap {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--nm-text-2);
@@ -290,7 +290,7 @@
   min-height: 84px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   color: var(--nm-text-1);
   font-size: 13px;
@@ -311,7 +311,7 @@
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  border-radius: 7px;
+  border-radius: var(--nm-dense-r);
   background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
   color: var(--nm-cyan);
   font-size: 12px;
@@ -326,9 +326,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 10px;
+  padding: 4px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -344,9 +344,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 10px;
+  padding: 4px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -364,7 +364,7 @@
 /* 用户气泡：宽度随内容（fit-content）+ 上限 620px —— 短问题不再拉成一条长条。 */
 .chatUserBubble {
   max-width: min(78%, 620px);
-  padding: 9px 14px;
+  padding: 8px 14px;
   border-radius: 14px 14px 4px 14px;
   background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
@@ -382,10 +382,10 @@
   flex-wrap: wrap;
   gap: 4px 6px;
   max-width: 100%;
-  padding: 3px 8px 3px 5px;
+  padding: 3px 8px 3px 4px;
   margin: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-3);
   font-size: 11px;
@@ -402,7 +402,7 @@
 /* 规划器识别出的时间/人物线索：常驻显示（收起来等于没有——用户只会在答案不对时想起它） */
 .planChip {
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: var(--nm-cyan-10);
   color: var(--nm-cyan-text);
   font-size: 11px;
@@ -481,7 +481,7 @@
   color: var(--nm-cyan);
   font-size: 12px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   cursor: pointer;
   transition: background 0.15s;
   /* 展开按钮是可操作项，不能被长标题挤没；换行交给标题自己。 */
@@ -506,9 +506,9 @@
   /* 兜底：即使内部某项仍算出更宽的最小内容尺寸，也只在自己格子里裁掉，
      绝不外溢到相邻按钮上（裁剪边由 border-radius 收口）。 */
   overflow: hidden;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
   color: var(--nm-text-1);
   font-size: 12px;
@@ -592,7 +592,7 @@
   gap: 6px;
   padding: 8px 12px 6px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: color-mix(in srgb, var(--nm-text-1) 4%, transparent);
   transition: background 0.2s ease;
   flex-shrink: 0;
@@ -689,7 +689,7 @@ textarea.composerInput:focus-visible { outline: none; }
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -721,7 +721,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .optStrip {
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--nm-purple) 30%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
   flex-shrink: 0;
   max-height: 40vh;
@@ -735,7 +735,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .optApply {
   padding: 6px 14px;
   border: 1px solid var(--nm-cyan);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: var(--nm-cyan-10);
   color: var(--nm-cyan-text);
   font-size: 12px;
@@ -747,7 +747,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .optDismiss {
   padding: 6px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -814,7 +814,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .distillBtn {
   padding: 3px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 11px;

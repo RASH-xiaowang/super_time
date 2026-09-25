@@ -5,7 +5,7 @@
 .deviceSeg {
   display: inline-flex;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   overflow: hidden;
   flex-shrink: 0;
   background: var(--nm-bg-card);
@@ -15,7 +15,7 @@
 .deviceSegBtn {
   background: none;
   border: none;
-  padding: 5px 14px;
+  padding: 4px 14px;
   font-size: 12px;
   color: var(--nm-text-2);
   cursor: pointer;
@@ -43,7 +43,7 @@
   gap: 12px;
   margin: 10px 4px 2px;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 6%, transparent));
   border: 1px solid var(--nm-border);
   transition: all 0.2s;
@@ -129,10 +129,10 @@
   align-items: flex-start;
   gap: 4px;
   min-height: 74px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   padding-right: 76px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   color: var(--nm-text-1);
   cursor: pointer;
@@ -170,7 +170,7 @@
   font-weight: 600;
   color: var(--nm-on-accent);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 0 6px;
   corner-shape: round;
 }
@@ -204,14 +204,14 @@
 .modelProgressTrack {
   flex: 1;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-hover);
   overflow: hidden;
   corner-shape: round;
 }
 .modelProgressFill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 50%, transparent);
   transition: width 0.3s ease;
@@ -231,13 +231,13 @@
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   color: var(--nm-on-accent);
   border: none;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   font-size: 11px;
   font-weight: 600;
   /* 本轮该元素从 <span> 变成真 <button>（原来嵌在按钮里是无效 HTML）：
      UA 会重置字体族，这里显式继承，外观与改造前一致。 */
   font-family: inherit;
-  padding: 5px 12px;
+  padding: 4px 12px;
   cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;

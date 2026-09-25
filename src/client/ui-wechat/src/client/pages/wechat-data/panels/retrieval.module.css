@@ -12,10 +12,10 @@
 /* ───────── 回答反馈行（挂在每条 AI 回答下方）───────── */
 .fbBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fbBtn {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 24px; padding: 0 9px; font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 8px; font-size: 11px;
   color: var(--nm-text-3); background: transparent;
-  border: 0.5px solid var(--nm-border); border-radius: 999px; cursor: pointer;
+  border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-pill); cursor: pointer;
   transition: var(--nm-t-ui);
 }
 .fbBtn:hover:enabled { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
@@ -29,7 +29,7 @@
 .markPanel {
   display: flex; flex-direction: column; gap: 6px;
   margin-top: 2px; padding: 8px 10px;
-  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: var(--nm-dense-r);
 }
 .markGrid { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
 .markRow { display: flex; align-items: center; gap: 8px; }
@@ -38,9 +38,9 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .markToggle {
-  flex: 0 0 auto; height: 20px; padding: 0 7px; font-size: 11px;
+  flex: 0 0 auto; height: 20px; padding: 0 8px; font-size: 11px;
   color: var(--nm-text-3); background: transparent;
-  border: 0.5px solid var(--nm-border); border-radius: 5px; cursor: pointer;
+  border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-sm); cursor: pointer;
 }
 .markToggle[data-on="useful"] { color: var(--nm-success); border-color: color-mix(in srgb, var(--nm-success) 50%, transparent); background: color-mix(in srgb, var(--nm-success) 10%, transparent); }
 .markToggle[data-on="useless"] { color: var(--nm-danger); border-color: color-mix(in srgb, var(--nm-danger) 50%, transparent); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
@@ -51,7 +51,7 @@
   font-size: 11px; color: var(--nm-text-3);
 }
 .retrChip {
-  padding: 1px 6px; border-radius: 4px;
+  padding: 1px 6px; border-radius: var(--nm-r-xs);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
   font-variant-numeric: tabular-nums;
 }

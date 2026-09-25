@@ -31,7 +31,7 @@
   position: relative;
   pointer-events: auto;
   padding: 12px 12px 12px 16px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
   background: var(--nm-bg-card);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 16px color-mix(in srgb, var(--nm-cyan) 6%, transparent);
@@ -47,7 +47,7 @@
   top: 10px;
   bottom: 10px;
   width: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs);
   background: var(--nm-cyan);
 }
 .card[data-tone='warn'] { border-color: color-mix(in srgb, var(--nm-amber) 40%, transparent); }
@@ -88,7 +88,7 @@
   width: 20px;
   height: 20px;
   margin: -1px -1px 0 0;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   cursor: pointer;
   border: 1px solid transparent;
   background: transparent;
@@ -118,8 +118,8 @@
 }
 .btn,
 .btnPrimary {
-  padding: 5px 12px;
-  border-radius: 8px;
+  padding: 4px 12px;
+  border-radius: var(--nm-dense-r);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;

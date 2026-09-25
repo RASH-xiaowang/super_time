@@ -1,5 +1,5 @@
 /* Funds ledger — NEON MATRIX 科技风（与总览/记录面板共用令牌）。 */
-.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 
 .link {
   background: none;
@@ -17,7 +17,7 @@
 .dirBadge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   font-size: 11px;
   background: var(--nm-bg-hover);
   color: var(--nm-text-2);
@@ -35,7 +35,7 @@
   gap: 8px;
   align-items: flex-start;
   border: 1px solid rgba(255, 200, 87, 0.25);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: rgba(255, 200, 87, 0.06);
   padding: 8px 12px;
 }
@@ -55,7 +55,7 @@
   flex-wrap: wrap;
   padding: 10px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   font-size: 12px;
   color: var(--nm-text-1);

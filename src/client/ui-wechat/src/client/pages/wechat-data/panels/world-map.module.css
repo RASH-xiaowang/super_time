@@ -37,7 +37,7 @@
   color: var(--nm-text-2);
   font-size: 12px;
   padding: 3px 4px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   cursor: pointer;
   /* WCAG 2.2 SC 2.5.8：原 22px 高，补 1px 到 24px 达标（该面包屑是行内文字链，
      仅加 padding，不改变文字位置）。 */
@@ -53,7 +53,7 @@
   color: var(--nm-text-2);
   font-size: 12px;
   padding: 4px 10px;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   cursor: pointer;
 }
 .back:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
@@ -66,8 +66,8 @@
   background: var(--nm-bg-input);
   color: var(--nm-text-2);
   font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 8px;
+  padding: 4px 10px;
+  border-radius: var(--nm-dense-r);
   cursor: pointer;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -82,7 +82,7 @@
   padding: 20px;
   text-align: center;
   border: 1px solid color-mix(in srgb, var(--nm-danger) 20%, transparent);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
 }
 .loading {
@@ -107,7 +107,7 @@
   max-height: 520px;
   min-width: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   overflow: hidden;
 }
@@ -127,7 +127,7 @@
   max-height: 520px;
   min-width: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   background: var(--nm-bg-input);
 }
@@ -143,7 +143,7 @@
   max-height: 520px;
   min-width: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   cursor: grab;
   background:
@@ -222,7 +222,7 @@
   color: var(--nm-text-1);
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   padding: 1px 6px;
   white-space: nowrap;
   pointer-events: none;
@@ -237,7 +237,7 @@
   color: var(--nm-text-1);
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   padding: 1px 6px;
   white-space: nowrap;
   pointer-events: none;
@@ -249,7 +249,7 @@
   pointer-events: none;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border-hover);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   padding: 8px 10px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
   min-width: 140px;
@@ -286,8 +286,8 @@
   color: var(--nm-text-2);
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 5px 8px;
+  border-radius: var(--nm-dense-r);
+  padding: 4px 8px;
 }
 .legendTitle { color: var(--nm-text-1); font-weight: 600; }
 .legendSwatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
@@ -296,7 +296,7 @@
 .legendBar {
   width: 56px;
   height: 6px;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
 }
 .legendHint { color: var(--nm-text-2); opacity: 0.8; margin-left: 4px; }
@@ -311,8 +311,8 @@
   color: var(--nm-text-2);
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 5px 8px;
+  border-radius: var(--nm-dense-r);
+  padding: 4px 8px;
   pointer-events: none;
 }
 
@@ -346,7 +346,7 @@
   gap: 2px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, transparent);
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   color: var(--nm-text-1);
   cursor: pointer;
@@ -388,7 +388,7 @@
   flex: 0 0 228px;
   max-width: 228px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -425,7 +425,7 @@
   gap: 8px;
   padding: 8px 6px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);

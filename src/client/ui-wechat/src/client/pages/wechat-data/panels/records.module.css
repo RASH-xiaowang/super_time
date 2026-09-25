@@ -16,7 +16,7 @@
    在改用 kit `PanelHeader` 之后就没有引用了（audit:css 列出、grep 复核 `css.<类>` 零引用）。
    `.hdIcon` 仍在用，保留。 */
 .hdIcon {
-  width: 42px; height: 42px; border-radius: 12px;
+  width: 42px; height: 42px; border-radius: var(--nm-r-md);
   background: linear-gradient(135deg, var(--nm-cyan-10), color-mix(in srgb, var(--nm-purple) 14%, transparent));
   color: var(--nm-cyan);
   display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;
@@ -24,7 +24,7 @@
 }
 /* 第 91 轮删除：`.toolbar` / `.inputSearch`（改用 kit `Toolbar` + `SearchInput`）。 */
 .btn {
-  padding: 5px 14px; border: 1px solid var(--nm-border); border-radius: 8px;
+  padding: 4px 14px; border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r);
   background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1); cursor: pointer;
   transition: all 0.15s;
 }
@@ -45,7 +45,7 @@
   position: sticky; top: 0; z-index: 2; white-space: nowrap;
   text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
 }
-.table td { padding: 9px 12px; border-bottom: 1px solid var(--nm-border); color: var(--nm-text-1); }
+.table td { padding: 8px 12px; border-bottom: 1px solid var(--nm-border); color: var(--nm-text-1); }
 .table tbody tr { transition: all 0.15s; }
 .table tbody tr:hover {
   background: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 6%, transparent));
@@ -66,7 +66,7 @@
 
 /* 状态徽章。 */
 .badge {
-  display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px;
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--nm-r-pill);
   font-size: 11px; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
   corner-shape: round;
 }
@@ -78,7 +78,7 @@
 
 /* 提示条 / 空态 / 加载更多。 */
 .notice {
-  font-size: 12px; color: var(--nm-text-1); padding: 8px 12px; border-radius: 8px;
+  font-size: 12px; color: var(--nm-text-1); padding: 8px 12px; border-radius: var(--nm-dense-r);
   background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-left: 2px solid var(--nm-cyan);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
@@ -87,8 +87,8 @@
    去掉 flex 后仍然居中；这里只保留原来的 12px 纵向留白。 */
 .loadMoreWrap { padding: 12px 0; }
 .loadMore {
-  display: block; margin: 12px auto; padding: 6px 18px; border: 1px solid var(--nm-border);
-  border-radius: 999px; background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
+  display: block; margin: 12px auto; padding: 6px 16px; border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill); background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;
 }
@@ -100,7 +100,7 @@
   margin: 0 0 8px;
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--nm-amber, #f59e0b) 40%, transparent);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: color-mix(in srgb, var(--nm-amber, #f59e0b) 10%, transparent);
   color: var(--nm-text-2);
   font-size: 12px;

@@ -17,7 +17,7 @@
   max-height: calc(100vh - 120px);
   overflow-y: auto;
   padding: 14px 14px 12px;
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
   background: var(--nm-bg-card);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 18px color-mix(in srgb, var(--nm-cyan) 7%, transparent);
@@ -32,7 +32,7 @@
   gap: 8px;
   cursor: grab;
   user-select: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
 }
 .hd:focus-visible {
   outline: 2px solid var(--nm-cyan);
@@ -65,13 +65,13 @@
 .bar {
   height: 4px;
   margin-top: 8px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-text-1) 10%, transparent);
   overflow: hidden;
 }
 .barFill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   transition: width 0.25s var(--nm-ease, ease);
 }
@@ -85,9 +85,9 @@
 .step {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 6px;
-  border-radius: 9px;
+  gap: 8px;
+  padding: 8px 6px;
+  border-radius: var(--nm-r-md);
   min-width: 0;
 }
 .step:hover { background: var(--nm-bg-hover); }
@@ -133,7 +133,7 @@
 .go {
   flex: 0 0 auto;
   padding: 4px 11px;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   font-family: inherit;
   font-size: 11.5px;
   font-weight: 650;
@@ -163,8 +163,8 @@
 }
 .later {
   flex: 0 0 auto;
-  padding: 5px 12px;
-  border-radius: 8px;
+  padding: 4px 12px;
+  border-radius: var(--nm-dense-r);
   font-family: inherit;
   font-size: 11.5px;
   cursor: pointer;

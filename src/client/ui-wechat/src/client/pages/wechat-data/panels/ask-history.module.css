@@ -198,16 +198,16 @@
 .cites {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
+  gap: 4px;
 }
 @media (max-width: 760px) { .cites { grid-template-columns: minmax(0, 1fr); } }
 
 .citeBtn {
   display: flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 4px 8px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-sm);
   background: transparent;

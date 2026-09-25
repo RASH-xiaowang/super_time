@@ -11,7 +11,7 @@
 .badgeMuted {
   margin-left: 8px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   font-family: var(--nm-font-sans, inherit);
   font-size: 10.5px;
 }

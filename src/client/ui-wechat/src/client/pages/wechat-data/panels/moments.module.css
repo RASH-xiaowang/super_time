@@ -35,7 +35,7 @@
 .count {
   font-size: 12px; color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums; background: var(--nm-cyan-10);
-  border: 1px solid var(--nm-border); border-radius: 999px; padding: 1px 8px;
+  border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill); padding: 1px 8px;
   corner-shape: round;
 }
 .syncStatus { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; }
@@ -68,7 +68,7 @@
 .filterChips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .authorChip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
-  padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: 999px;
+  padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;
@@ -79,11 +79,11 @@
 .chipCount { font-size: 10.5px; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 .segTrack {
   display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--nm-border);
-  border-radius: 999px; background: var(--nm-bg-hover);
+  border-radius: var(--nm-r-pill); background: var(--nm-bg-hover);
   corner-shape: round;
 }
 .segChip {
-  padding: 4px 14px; border: 1px solid transparent; border-radius: 999px;
+  padding: 4px 14px; border: 1px solid transparent; border-radius: var(--nm-r-pill);
   background: transparent; color: var(--nm-text-1); font-size: 12px; cursor: pointer; transition: all 0.15s;
   corner-shape: round;
 }
@@ -91,7 +91,7 @@
 .segChip[data-on] {
   border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
 }
-.clearBtn {  align-self: flex-start; padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: 999px;
+.clearBtn {  align-self: flex-start; padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill);
   background: transparent; color: var(--nm-text-2); font-size: 12px; cursor: pointer; transition: all 0.15s;
   corner-shape: round;
 }
@@ -150,7 +150,7 @@
   /* 粘性标签优化 */
   contain: layout style paint; position: sticky; top: 0; z-index: 1;
   font-size: 11px; font-weight: 700; color: var(--nm-cyan); letter-spacing: 0.4px;
-  padding: 3px 10px; border-radius: 999px; background: var(--nm-cyan-10);
+  padding: 3px 10px; border-radius: var(--nm-r-pill); background: var(--nm-cyan-10);
   border: 1px solid var(--nm-border); align-self: flex-start;
   corner-shape: round;
 }
@@ -162,7 +162,7 @@
   transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 .card:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
-.selfTag { font-size: 10.5px; color: var(--nm-cyan); border: 1px solid var(--nm-cyan); border-radius: 999px; padding: 0 6px; line-height: 16px; background: var(--nm-cyan-10);
+.selfTag { font-size: 10.5px; color: var(--nm-cyan); border: 1px solid var(--nm-cyan); border-radius: var(--nm-r-pill); padding: 0 6px; line-height: 16px; background: var(--nm-cyan-10);
   corner-shape: round;
 }
 .videoDur { position: absolute; right: 4px; bottom: 4px; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: var(--nm-r-xs); padding: 0 4px; font-variant-numeric: tabular-nums; }
@@ -334,7 +334,7 @@
 
 /* 搜索覆盖提示 */
 .searchBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); background: var(--nm-cyan-10); color: var(--nm-text-1); font-size: 12px; }
-.searchBanner .btn { margin-left: auto; padding: 5px 12px; }
+.searchBanner .btn { margin-left: auto; padding: 4px 12px; }
 
 /* 可点击的作者/点赞/评论名 */
 .clickableName { cursor: pointer; }

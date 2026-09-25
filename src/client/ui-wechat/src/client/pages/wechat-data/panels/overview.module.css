@@ -27,7 +27,7 @@
 .refresh {
   padding: 6px 16px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   font-size: 12px;
   cursor: pointer;
@@ -47,7 +47,7 @@
   padding: 24px;
   text-align: center;
   border: 1px solid color-mix(in srgb, var(--nm-danger) 20%, transparent);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
 }
 /* 第 97 轮删除：旧「快捷入口」区块的遗留类（`.quickGrid` / `.quickCard` / `.quickCard:hover` /
@@ -84,14 +84,14 @@
 .catMeta { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 .bar {
   height: 8px;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   overflow: hidden;
   margin-top: 4px;
 }
 .barFill {
   height: 100%;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   transition: width 0.4s;
   box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
@@ -117,7 +117,7 @@
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   color: var(--nm-text-1);
   cursor: pointer;
@@ -143,7 +143,7 @@
   padding: 10px 12px;
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
 }
 .metricValue {
   font-size: 20px;
@@ -170,8 +170,8 @@
 .topRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .topRank { width: 18px; font-weight: 800; color: var(--nm-cyan); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
 .topName { width: 130px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
-.topTrack { flex: 1; height: 6px; border-radius: 4px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); overflow: hidden; }
-.topFill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
+.topTrack { flex: 1; height: 6px; border-radius: var(--nm-r-xs); background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); overflow: hidden; }
+.topFill { height: 100%; border-radius: var(--nm-r-xs); background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
 .topCount { width: 72px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 
 /* ── 响应式 ── */
@@ -196,7 +196,7 @@
   gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
 }
 .deltaUp { color: var(--nm-success); font-size: 11px; font-weight: 700; }
@@ -221,7 +221,7 @@
   width: 100%;
   padding: 4px 6px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   cursor: pointer;
   color: inherit;
@@ -230,7 +230,7 @@
 .topRow:hover { background: color-mix(in srgb, var(--nm-cyan) 7%, transparent); }
 .author {
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   padding: 6px 8px;
 }
@@ -269,7 +269,7 @@
   right: 0;
   height: 2px;
   z-index: 5;
-  border-radius: 2px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, transparent, var(--nm-cyan), var(--nm-purple), transparent);
   animation: ov-scan 1.4s ease-in-out infinite;
 }
@@ -312,7 +312,7 @@
   min-width: 150px;
   padding: 6px;
   border: 1px solid var(--nm-border-hover);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -326,7 +326,7 @@
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
@@ -385,7 +385,7 @@
 .skLine {
   display: block;
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background-color: var(--nm-bg-hover);
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 25%, color-mix(in srgb, var(--nm-cyan) 12%, transparent) 37%, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 63%);
   background-size: 200% 100%;
@@ -397,14 +397,14 @@
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   overflow: hidden;
 }
 .skeletonMap {
   height: 220px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   position: relative;
   overflow: hidden;
@@ -425,14 +425,14 @@
 .heatmapSkeleton i {
   display: block;
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: var(--nm-bg-hover);
   animation: ov-pulse-block 2s ease-in-out infinite;
 }
 .skBarFill {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 16%, transparent), color-mix(in srgb, var(--nm-cyan) 10%, transparent));
   background-size: 200% 100%;
   animation: ov-shimmer 1.4s ease-in-out infinite;
@@ -475,7 +475,7 @@
   min-width: 0;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   overflow: hidden;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
@@ -506,7 +506,7 @@
   align-items: center;
   justify-content: center;
   font-size: 15px;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-cyan-10);
 }
 .ovHeroStat[data-tone='purple'] .ovHeroIcon { background: var(--nm-purple-20); }
@@ -575,7 +575,7 @@
   min-width: 0;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   overflow: hidden;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
@@ -593,7 +593,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, transparent);
@@ -641,9 +641,9 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
@@ -680,7 +680,7 @@
   min-height: 76px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
@@ -753,11 +753,11 @@
 .ovSpan5 { gap: 10px; }
 
 /* 卡片：头部/正文内边距与图标收小 */
-.ovCard { border-radius: 12px; }
-.ovCardHd { gap: 8px; padding: 9px 12px; }
+.ovCard { border-radius: var(--nm-r-lg); }
+.ovCardHd { gap: 8px; padding: 8px 12px; }
 .ovCardBd { padding: 10px 12px; gap: 8px; }
 .ovTitle { font-size: 12.5px; }
-.ovIcon { width: 24px; height: 24px; border-radius: 7px; }
+.ovIcon { width: 24px; height: 24px; border-radius: var(--nm-dense-r); }
 
 /* 固定高度里的空白：交给内容决定（原 420px + 下面的 hourBars 220px 合计把这一格
    撑到约 700px，而内容只有约 250px —— 那一格下面全是空的） */
@@ -765,7 +765,7 @@
 .ovTall .hourBars { min-height: 96px; }
 
 /* 资产指标条：8 格指标收紧（一屏纵览里这一条占的是首屏黄金位置） */
-.ovHeroIcon { width: 26px; height: 26px; border-radius: 9px; font-size: 14px; }
+.ovHeroIcon { width: 26px; height: 26px; border-radius: var(--nm-r-md); font-size: 14px; }
 .ovHeroValue { font-size: 17px; }
 .ovHeroLabel { font-size: 10px; }
 .ovHeroMix { padding: 6px 12px; gap: 8px; }
@@ -778,7 +778,7 @@
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 6px 10px;
 }
-.author { padding: 6px 9px; font-size: 11.5px; }
+.author { padding: 6px 8px; font-size: 11.5px; }
 /* 头像尺寸已在上面 .authorAvatar / .authorAvatarFallback 的原始规则里改为 26px
    （在这里再覆盖一份实测不生效：CSS Modules 会把同类名的声明合并，反而看不出哪份在赢） */
 
@@ -792,7 +792,7 @@
 /* 指标网格：118px 时宽卡片会把 4 格摊得很稀；提到 150px 让每格更饱满、行数更少 */
 .metricGrid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
 /* 关系浓度 Top 8：让行均分卡片高度，而不是把 8 行堆在顶部、下面留一片白 */
-.topList { gap: 5px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
+.topList { gap: 4px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
 .assetGrid { gap: 6px; }
 .healthGrid { gap: 8px; }
 .hourBars { min-height: 78px; margin-top: 4px; }
@@ -822,7 +822,7 @@
 /* 趋势格按 5 项一行所需的最小高度收紧 */
 .ovSpan4 .trendCell {
   min-height: 78px;
-  padding: 7px;
+  padding: 8px;
 }
 .ovSpan4 .trendCell > span:first-child,
 .ovSpan4 .metricValue { font-size: 16px; }
@@ -861,7 +861,7 @@
   /* 高度固定：地图容器撑起整行高度，两栏榜单跟着等高 */
   height: 310px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
 }

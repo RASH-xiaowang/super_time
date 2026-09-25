@@ -20,7 +20,7 @@
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: var(--nm-bg-input);
   color: var(--nm-text-1);
   font-size: 12px;
@@ -34,7 +34,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 18px 0 8px;
+  margin: 16px 0 8px;
   padding-left: 10px;
   border-left: 2px solid var(--nm-cyan);
 }
@@ -67,7 +67,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-3);
   cursor: pointer;
@@ -83,9 +83,9 @@
   margin-top: 14px;
 }
 .modelPrimary {
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-cyan);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: linear-gradient(135deg,
     color-mix(in srgb, var(--nm-cyan) 24%, transparent),
     color-mix(in srgb, var(--nm-purple) 20%, transparent));
@@ -104,9 +104,9 @@
 }
 .modelPrimary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 .modelGhost {
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -118,7 +118,7 @@
 .modelMsg {
   margin-top: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   font-size: 12px;
   line-height: 1.6;
   word-break: break-word;
@@ -142,7 +142,7 @@
   flex-direction: column;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
 }
 .profileHead {
@@ -157,7 +157,7 @@
 .profileAdd {
   padding: 4px 10px;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-cyan-text);
   font-size: 12px;
@@ -179,7 +179,7 @@
   position: relative;
   display: flex;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   overflow: hidden;
   transition: border-color 0.15s, background 0.15s;
@@ -244,7 +244,7 @@
   height: 18px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-3);
   font-size: 14px;

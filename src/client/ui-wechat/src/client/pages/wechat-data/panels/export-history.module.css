@@ -203,7 +203,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 9px;
+  padding: 1px 8px;
   border-radius: var(--nm-r-pill, 999px);
   font-size: var(--nm-fs-xs);
   font-weight: 600;
@@ -245,7 +245,7 @@
   background: transparent;
   color: var(--nm-text-2);
   border-radius: var(--nm-r-xs, 4px);
-  padding: 3px 7px;
+  padding: 3px 8px;
   font-size: var(--nm-fs-xs);
   cursor: pointer;
   transition: var(--nm-t-fast, 0.15s);

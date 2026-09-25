@@ -143,8 +143,8 @@
    宽度对齐成与主题按钮相同的 30px：两者在窄轨里上下叠放，等宽才是一条竖线。 */
 .apiTagText { display: none; }
 .sidebar[data-open] .apiTagText { display: inline; }
-.navFooterRow .apiTag { padding: 5px; width: 30px; justify-content: center; }
-.sidebar[data-open] .navFooterRow .apiTag { padding: 5px 12px; width: auto; }
+.navFooterRow .apiTag { padding: 4px; width: 30px; justify-content: center; }
+.sidebar[data-open] .navFooterRow .apiTag { padding: 4px 12px; width: auto; }
 
 /* 品牌位显示当前微信账号头像时使用：铺满外框（现为导航栏的 .navBrandLogo，30×30）。
    圆角不在这里写 —— 由父级 .navBrandLogo 的 border-radius + overflow: hidden 统一裁切，
@@ -164,7 +164,7 @@
   font-weight: 700;
   color: var(--nm-cyan);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 2px 8px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -213,7 +213,7 @@
   gap: 8px;
   font-size: 11px;
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   font-family: var(--nm-font-mono, monospace);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   color: var(--nm-text-2);

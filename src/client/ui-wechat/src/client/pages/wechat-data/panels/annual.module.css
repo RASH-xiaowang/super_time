@@ -16,7 +16,7 @@
 /* 工具栏（年份 + 导出） */
 .tools { display: flex; align-items: center; gap: var(--nm-dense-g3); }
 .toolSelect, .toolBtn {
-  height: 26px; padding: 0 9px;
+  height: 26px; padding: 0 8px;
   font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2);
   background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: var(--nm-dense-r);
   cursor: pointer; transition: var(--nm-t-ui);
@@ -83,14 +83,14 @@
 .bigDay { display: flex; align-items: baseline; gap: var(--nm-dense-g2); flex-wrap: wrap; }
 .bigDayNum { font-size: 18px; font-weight: 700; color: var(--nm-text-1); font-variant-numeric: tabular-nums; line-height: 1.05; }
 .bigDayUnit { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
-.bar { margin: 3px 0; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--nm-text-1) 8%, transparent); overflow: hidden; flex: 0 0 auto; }
-.barFill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); }
+.bar { margin: 3px 0; height: 4px; border-radius: var(--nm-r-pill); background: color-mix(in srgb, var(--nm-text-1) 8%, transparent); overflow: hidden; flex: 0 0 auto; }
+.barFill { height: 100%; border-radius: var(--nm-r-pill); background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); }
 .kv { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); min-width: 0; }
 .kv + .kv { margin-top: var(--nm-dense-g1); }
 .kv > span, .kv > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kv b { color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; flex: 0 0 auto; }
 .quote {
-  margin-top: 3px; padding: var(--nm-dense-g1) 7px;
+  margin-top: 3px; padding: var(--nm-dense-g1) 8px;
   font-size: var(--nm-dense-fs-sm); line-height: 1.4; color: var(--nm-text-2);
   background: var(--nm-bg-0); border-radius: var(--nm-dense-r);
   border-left: 2px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
@@ -135,7 +135,7 @@
 .chip {
   display: inline-flex; align-items: center; gap: 3px;
   padding: 1px 8px; font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2);
-  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent); border-radius: 999px;
+  background: color-mix(in srgb, var(--nm-text-1) 6%, transparent); border-radius: var(--nm-r-pill);
 }
 .chip b { color: var(--nm-text-1); font-weight: 600; }
 

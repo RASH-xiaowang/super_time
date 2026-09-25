@@ -73,9 +73,9 @@
   color: var(--nm-text-2);
 }
 .suggestBtn {
-  padding: 3px 9px;
+  padding: 3px 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-1);
   font: inherit;
@@ -88,7 +88,7 @@
 .chip {
   padding: 2px 8px;
   border: 1px dashed var(--nm-amber);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-amber) 10%, transparent);
   color: var(--nm-text-1);
   font: inherit;
