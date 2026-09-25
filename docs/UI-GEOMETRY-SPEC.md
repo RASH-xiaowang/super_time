@@ -92,6 +92,28 @@ Human Interface Geometry 同构；按钮不搞大圆角方块，卡片不做超�
 | `9px` (37) | `8px`（dense-g4）或 `10px`（dense-g5） |
 | `18px` (18) | `16px`（s-4）或 `20px`（s-5）——18 是历史事故值 |
 
+**消息区内嵌元素的对齐契约**（2026-09-25 定，逐条分析卡实测）
+
+消息区 `.msgBody` 的行结构是 `[头像 --wx-avatar: 34px] [--wx-gap: 10px] [气泡列]`（容器 `padding: 16px`）。
+任何挂在消息下方、但**不在气泡列内部**的元素（逐条分析卡这类），必须自己把这两件事做对：
+
+- **左边缘与气泡列对齐**：`calc(var(--wx-avatar, 34px) + var(--wx-gap, 10px))`（= 44px）。
+  不要写死的 magic number —— 头像或 gap 一改就会错位。
+- **宽度必须封顶**：这类元素挂在虚拟行里（`position: absolute; width: 100%`），
+  **不加 `max-width` 就会横跨整个消息区**。实测后果：卡片宽 1000px+，里面
+  `minmax(0, 1fr)` 的概率条被拉到 ~800px、右侧留一大片空白，右对齐的按钮飘到屏幕最远角
+  （用户报的回归点）。阅读宽度上界取 **640px**。
+- 窄窗口不用特判：`max-width` 只是上界，块级元素会自己收缩到可用宽度。
+
+**多条信息并排时，按「块高」排序再进网格**：两列 `minmax(248px, 1fr)` 里，最高的那块（选项最多的
+measure）排到最后一行才能与同高的配成对，否则行内出现 ~90px 空洞。逐条分析卡的实测：
+6 条命题按 noul/score 在前、choice 在后排序后，整体高度比单列少约 1/3。
+
+守卫：`src/client/ui-wechat/src/client/pages/wechat-data/panels/inline-analysis.wiring.spec.ts`
+（① 限宽 + 与气泡列对齐 ② 展开区必须多列 ③ 短名表覆盖后端全部命题 ④ 覆盖全部选项
+⑤ 短命题在前、choice 在后 ⑥ 选项标签独占一行）。
+
+
 ## 4. R1：媒体查询降级（收敛前必读）
 
 `scifi-theme.css:404-409` 在 `≤768px` 窗口把 `--nm-r-lg: 14→10px`、`--nm-r-xl: 20→14px`。
