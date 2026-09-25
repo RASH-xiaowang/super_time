@@ -139,6 +139,10 @@
   --wx-gap: 10px;
   --wx-row-gap: 16px;
   --wx-bubble-maxw: 100%;
+  /* 引用行（气泡下方那行灰字）的宽度上界。**不能跟着 --wx-bubble-maxw 用 100%**：
+     气泡为了读大段 AI 文本刻意放宽到 100%，但引用行是「摘要」，用 100% 会在宽窗口下
+     被撑爆（实测 1694px，而同一行的气泡只有 40px）。640px = 与分析卡同一个阅读宽度。 */
+  --wx-quote-maxw: 640px;
   --wx-bubble-self: #3eb575;
   --wx-bubble-other: #2e2e2e;
   --wx-on-self: #ffffff;
@@ -417,7 +421,16 @@
 }
 .msgQuoteWho { flex-shrink: 0; margin-inline-end: 4px; }
 .msgQuoteKind { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
-.msgQuoteWhat { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 被引用摘要：参考图实测是**两行截断**，不是早先注释里写的「单行省略」——
+   图里那条引用行高 58px（2 × 19.2 行高 + 内边距），第二行末尾带省略号。
+   反过来，单行 + nowrap 会在宽窗口下把行撑到 1694px（用户截图）。 */
+.msgQuoteWhat {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 .msgFileHint {
   font-size: 11px;
   color: var(--wx-card-footer);

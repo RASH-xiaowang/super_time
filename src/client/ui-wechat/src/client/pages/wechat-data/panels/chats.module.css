@@ -447,7 +447,7 @@
   /* 图标紧贴摘要（官方参考图里 ⊙ 与「微信转账」之间不足 1px），
      所以间距不靠 gap，改由 .msgQuoteWho 的右外边距给。 */
   gap: 0;
-  max-width: 100%;
+  max-width: var(--wx-quote-maxw);
   min-width: 0;
   box-sizing: border-box;
   padding-inline-end: 10px;
