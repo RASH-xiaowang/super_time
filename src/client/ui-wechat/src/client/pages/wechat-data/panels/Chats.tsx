@@ -175,8 +175,9 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   /** 推荐回复面板（单聊）。与 AI 问答面板互斥：两者都是消息流右侧的第三栏。 */
   const [suggestOpen, setSuggestOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
-  // 本地决策分析卡（laya）：按需触发，不做每条消息自动全量（单次推理 0.4–0.7 s）。
-  const [analysisOpen, setAnalysisOpen] = useState(false)
+  // 本地决策分析卡（laya）：默认开启 —— 打开会话就对**可见的**对方消息逐条分析
+  // （可见窗口驱动 + 结果落库缓存，滚回去直接命中）。不想看时用工具区那个按钮关掉。
+  const [analysisOpen, setAnalysisOpen] = useState(true)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
   /** Logged-in account wxid (from the messages snapshot) for own avatars. */
