@@ -122,7 +122,8 @@ branch: main
 | `--wx-row-gap` | `16px` | 同 | 相邻消息间距 |
 | `--wx-bubble-self` / `-text` | `#95EC69` / `#000000` | `#3EB575` / `#FFFFFF` | 我方气泡 |
 | `--wx-bubble-other` / `-text` | `#FFFFFF` / `#1F2937` | `#2E2E2E` / `#F5F5F5` | 对方气泡 |
-| `--wx-bubble-maxw` | `384px` | 同 | 文本气泡最大宽 |
+| `--wx-read-maxw` | `640px` | 同 | 阅读宽度：文本气泡与引用摘要共用 |
+| `--wx-bubble-maxw` | `min(640px, 100% − 头像 − 间隙)` | 同 | 文本气泡最大宽（**必须扣掉同行占位**，否则长文本把头像挤出容器） |
 | `--wx-date-text` | `#9E9E9E` | `#9F9F9F` | 日期分隔/系统提示 |
 | `--wx-sender-name` | `#6B7280` | `#B9B9B9` | 群内昵称 |
 | `--wx-quote-bg` / `-text` | `#E1E1E1` / `#525252` | `#252525` / `#C9C9C9` | 引用块 |

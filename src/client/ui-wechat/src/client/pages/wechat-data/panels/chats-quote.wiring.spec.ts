@@ -39,11 +39,14 @@ describe('引用行显示', () => {
     expect(strip, '100% 等于整个消息区宽 —— 宽窗口下会把引用行撑到 1694px').not.toContain('max-width: 100%')
   })
 
-  it('①-补 --wx-quote-maxw 有定义，且是「阅读宽度」量级（≤ 720px）', () => {
-    const m = /--wx-quote-maxw:\s*(\d+)px/.exec(ROWS)
-    expect(m, '找不到 --wx-quote-maxw 的定义').not.toBeNull()
+  it('①-补 引用行与气泡共用同一个「阅读宽度」令牌，量级合理（≤ 720px）', () => {
+    // 2026-09-26：引用行原先自带 640px 字面量，与气泡的新上界重复 —— 改为共用
+    // `--wx-read-maxw`，避免两处各写一个数然后漂移。
+    expect(ROWS, '引用行要引用共用的阅读宽度').toContain('--wx-quote-maxw: var(--wx-read-maxw)')
+    const m = /--wx-read-maxw:\s*(\d+)px/.exec(ROWS)
+    expect(m, '找不到 --wx-read-maxw 的定义').not.toBeNull()
     const v = Number(m![1])
-    expect(v, '引用行宽度不该超过气泡区的阅读宽度量级').toBeLessThanOrEqual(720)
+    expect(v, '阅读宽度不该超过 720px（一行 45+ 字就读不动了）').toBeLessThanOrEqual(720)
     expect(v, '太窄会把摘要挤成一两个字一行').toBeGreaterThanOrEqual(400)
   })
 
@@ -54,7 +57,11 @@ describe('引用行显示', () => {
     expect(what, 'nowrap 会把行撑爆（用户截图就是这么来的）').not.toContain('nowrap')
   })
 
-  it('③ 气泡自身的宽度规则不受影响（别为了修引用行把气泡也收窄）', () => {
-    expect(ROWS, '气泡仍是 100%（刻意偏离官方 384px，为了读大段 AI 文本）').toContain('--wx-bubble-maxw: 100%')
+  it('③ 气泡仍比引用行宽（别为了修引用行把气泡也收窄），但有明确上界', () => {
+    // 2026-09-26 起气泡不再是裸 100%：绝对阅读宽度 + 扣掉同行占位的头像与间隙。
+    // 本用例只管「别被引用行的修复带窄」——上界的完整不变量见 chats-bubble-width.wiring.spec.ts。
+    const m = /--wx-bubble-maxw:\s*([^;]+);/.exec(ROWS)
+    expect(m, '找不到 --wx-bubble-maxw 的定义').not.toBeNull()
+    expect(m![1], '气泡上界不能退成按百分比算的窄条（引用行才是窄的那一方）').toContain('var(--wx-read-maxw)')
   })
 })

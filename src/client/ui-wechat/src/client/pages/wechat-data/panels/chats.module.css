@@ -93,6 +93,9 @@
   gap: 4px;
   align-items: flex-start;
   max-width: var(--wx-bubble-maxw);
+  /* flex 子项的默认 min-width 是 auto（不窄于内容），长 URL / 连续英文会把这一列
+     顶破到超过 max-width —— 置 0 让上面那条上界真正说了算。 */
+  min-width: 0;
   /* 悬停时间戳以本列为定位上下文 */
   position: relative;
 }
