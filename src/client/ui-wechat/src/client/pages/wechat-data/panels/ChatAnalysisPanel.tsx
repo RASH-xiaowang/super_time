@@ -6,9 +6,10 @@
  * 为什么从左边搬下来（产品要求）：两块读的都是当前会话，分成左右两栏时
  * 「点消息 → 看分析」的视线要跨过整个消息流；合到一块后分析就贴在手边。
  *
- * 与消息流里的内嵌卡（`InlineMessageAnalysis`）是同一内容源的两种展示：
- * 内嵌卡跟着每条消息走（滚到哪看到哪、默认展开），本区把**选中的那条摊开**
- * —— 单列六项命题全列，方便逐项细看。两处**复用同一个 `AnswerBlock`**，避免慢慢长歪。
+ * 与消息流**逐条推理**的关系：推理仍按可见窗口逐条跑（结果落库缓存），但**展示只在这里**
+ * —— 2026-09-26 按用户要求移除了消息流里的逐条内嵌卡（每条消息下再铺一块六命题卡，
+ * 消息流被撑得过长），改成「点哪条看哪条」：本区把选中的那条**六项命题全列**，
+ * 单列铺开方便逐项细看。块渲染复用 `AnalysisBlocks.tsx` 的 `AnswerBlock`。
  *
  * 数据来自 `useInlineAnalysis` 的按会话缓存（按 localId 取），本区**不自己发请求**：
  * 所以只有消息流已经算过的那条才有内容，没算过的如实说「还没轮到它」——
@@ -18,7 +19,7 @@
  * 滚动条在那里显式声明为无边框细条，不依赖全局主题的作用域。
  */
 import type { LayaAnswer } from '@deepseek-ai/dsh-wechat-data/types'
-import { AnswerBlock } from './InlineMessageAnalysis.tsx'
+import { AnswerBlock } from './AnalysisBlocks.tsx'
 import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
 import shell from './session-ask.module.css'
 import css from './chat-analysis-panel.module.css'
@@ -41,7 +42,7 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
   const { targetId, entry, onClear } = props
   const done = entry !== undefined && entry.state === 'done' ? entry : null
 
-  // 与内嵌卡同一套排序：短的命题（noul/score）在前、choice 在后 —— 单列里也让结论先露头
+  // 排序：短的命题（noul/score）在前、choice 在后 —— 单列里也让结论先露头
   const ordered: LayaAnswer[] = done === null ? [] : [
     ...done.answers.filter((a) => a.kind !== 'choice'),
     ...done.answers.filter((a) => a.kind === 'choice'),

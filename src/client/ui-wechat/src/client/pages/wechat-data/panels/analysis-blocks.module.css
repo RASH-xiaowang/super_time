@@ -1,0 +1,155 @@
+/* 本地分析**答案块**的样式 —— UI-GEOMETRY-SPEC 全令牌（圆角/间距零字面量）。
+ *
+ * 它渲染一条命题（noul 概率条 / score 刻度 / choice 选项条），唯一宿主是右栏「分析」
+ * 区块（`ChatAnalysisPanel.tsx`）。2026-09-26 之前它还兼着消息流里的**逐条内嵌卡**，
+ * 内嵌卡按用户要求移除后，这里只剩答案块本身，卡片外壳（`.wrap`/`.summary`/`.detail` 等）
+ * 一并删掉了 —— 留着就是死样式，而且几何守卫会逐个记账。
+ *
+ * 色系仍走 `--wx-*`（带 `--nm-*` 兜底）：这些值是跟着「卡片底 + 命题块」两层结构一起定的，
+ * 宿主换成侧栏面板后观感如有出入，再单独调这两个变量，别在这里掺进新的一套。
+ */
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  padding: var(--nm-s-2);
+  border-radius: var(--nm-r-sm);
+  background: var(--wx-card-bg, var(--nm-bg-card));
+}
+
+/* 命题句：用后端原文（不做短名替换 —— 完整问句更忠实，宽度也放得下） */
+.q {
+  font-size: var(--nm-fs-xs);
+  color: var(--wx-card-preview, var(--nm-text-2));
+  line-height: 1.5;
+}
+
+/* 结论行：数值/判断用 title 色加粗，概率用 preview 色常规 */
+.verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-s-1);
+  font-size: var(--nm-fs-xs);
+  color: var(--wx-card-preview, var(--nm-text-2));
+}
+
+.verdict b {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--wx-card-title, var(--nm-text-1));
+}
+
+.verdict em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 概率条（noul 用） */
+.track {
+  display: block;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--wx-card-divider, var(--nm-border));
+  overflow: hidden;
+}
+
+.trackFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+/* 分值刻度（score 用）：靠右推，与左侧数值拉开 */
+.gauge {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.tick,
+.tickOn {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--wx-card-divider, var(--nm-border));
+}
+
+.tickOn {
+  background: var(--nm-cyan);
+}
+
+/* ── choice：选项标签独占一行（与百分比同行），条整行铺开 ───────── */
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+}
+
+.barRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.barHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-s-2);
+}
+
+.barLabel,
+.barLabelTop {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--wx-card-preview, var(--nm-text-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barLabelTop {
+  color: var(--wx-card-title, var(--nm-text-1));
+  font-weight: 600;
+}
+
+.pct,
+.pctTop {
+  flex: none;
+  font-size: var(--nm-fs-xs);
+  color: var(--wx-card-preview, var(--nm-text-2));
+  font-variant-numeric: tabular-nums;
+}
+
+.pctTop {
+  color: var(--wx-card-title, var(--nm-text-1));
+  font-weight: 600;
+}
+
+.bar {
+  height: 3px;
+  border-radius: var(--nm-r-pill);
+  background: var(--wx-card-divider, var(--nm-border));
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--wx-card-preview, var(--nm-text-2));
+}
+
+.barRow:first-child .fill {
+  background: var(--nm-cyan);
+}
+
+/* 只展示前 4 项，剩下的合并成一行 —— 不丢信息也不占版面 */
+.barMore {
+  font-size: var(--nm-fs-xs);
+  color: var(--wx-card-preview, var(--nm-text-2));
+  opacity: 0.75;
+}

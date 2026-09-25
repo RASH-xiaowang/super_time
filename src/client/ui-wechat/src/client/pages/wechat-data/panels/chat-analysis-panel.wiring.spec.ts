@@ -79,6 +79,6 @@ describe('分析面板 / 推荐回复面板', () => {
 
   it('⑥ 分析面板不自己发请求（只读 useInlineAnalysis 的缓存）', () => {
     expect(PANEL, '面板应当是纯展示：数据从外面传进来').not.toContain('apiAnalyze')
-    expect(PANEL, '复用内嵌卡的答案块，避免两处渲染长歪').toContain("import { AnswerBlock } from './InlineMessageAnalysis.tsx'")
+    expect(PANEL, '复用答案块（AnalysisBlocks），避免渲染逻辑分叉').toContain("import { AnswerBlock } from './AnalysisBlocks.tsx'")
   })
 })

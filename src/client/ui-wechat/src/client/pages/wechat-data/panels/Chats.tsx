@@ -179,11 +179,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
    * （切换按钮已随旧实现移除，不重置就再也回不来）。
    */
   const [suggestOpen, setSuggestOpen] = useState(true)
-  /** 左侧「分析」面板在看哪条消息（localId）；`null` = 还没点选。 */
+  /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
   const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
-  // 本地决策分析卡（laya）：默认开启 —— 打开会话就对**可见的**对方消息逐条分析
-  // （可见窗口驱动 + 结果落库缓存，滚回去直接命中）。不想看时用工具区那个按钮关掉。
+  // 本地决策分析（laya）：默认开启 —— 打开会话就对**可见的**对方消息逐条推理
+  // （可见窗口驱动 + 结果落库缓存，点选消息即命中）。结果显示在右栏面板；
+  // 不想让它跑，就用工具区那个按钮关掉。
   const [analysisOpen, setAnalysisOpen] = useState(true)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')

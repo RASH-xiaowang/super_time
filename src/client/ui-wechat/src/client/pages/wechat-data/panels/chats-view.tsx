@@ -20,7 +20,6 @@ import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
-import { InlineMessageAnalysis } from './InlineMessageAnalysis.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -381,7 +380,9 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 {curSession.type !== 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={contactInfoOpen || undefined} title="聊天信息" aria-label="聊天信息" onClick={() => { setContactInfoOpen(true) }}><IconUserOutline16 size={14} /></button>
                 )}
-                {/* 本地决策分析（laya）：图标化（动作区窄，P0-2），且是按需能力不占带字位。 */}
+                {/* 本地决策分析（laya）：图标化（动作区窄，P0-2），且是按需能力不占带字位。
+                    它开关的是**推理跑不跑**（可见窗口驱动、结果落库缓存）；分析结果显示在右栏面板
+                    —— 2026-09-26 起消息流里不再挂逐条内嵌卡。 */}
                 {curSession.type !== 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={analysisOpen || undefined} title="本地决策分析：判断这条消息的意图、情绪与最该做的动作（纯本机推理，不出网）" aria-label="本地决策分析" onClick={() => { setAnalysisOpen(v => !v) }}><IconListPenOutline16 size={14} /></button>
                 )}
@@ -473,9 +474,6 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                       >
                         {renderMsgItem(item)}
-                        {item.kind === 'msg' && (
-                          <InlineMessageAnalysis entry={inlineAnalysis.get(item.m.localId)} />
-                        )}
                       </div>
                     )
                   })}
@@ -955,7 +953,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
 
       {/* 右栏（最右一栏）= 一块**合并面板**（`ChatRightPanel`），上下两块共用一个容器：
           · 上：推荐回复（单聊常驻，读取范围 = 当前会话 + 当前选中的知识库）；
-          · 下：分析（消息流里**点选**的那条对方消息，与内嵌卡同一份缓存、不自己发请求）；
+          · 下：分析（消息流里**点选**的那条对方消息，与逐条推理共用一份落库缓存、不自己发请求）；
           · 「AI 问答」打开时**整个顶替**右栏 —— 两块并排会把 960px 窗口下的消息列挤到不可用，
             所以一个位置只放一个面板。
           群聊不给推荐回复（「回一句」在群里不成立）：此时整栏不挂，分析也随之不可见 ——
