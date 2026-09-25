@@ -28400,6 +28400,93 @@ function postprocessAnswers(input) {
   return answers;
 }
 
+// src/backend/wechat-data/src/laya/store.ts
+import { DatabaseSync as DatabaseSync61 } from "node:sqlite";
+import { existsSync as existsSync73, statSync as statSync27 } from "node:fs";
+import { dirname as dirname34, join as join92 } from "node:path";
+function layaCachePath(decryptedDir) {
+  return join92(dirname34(decryptedDir), "laya_analysis.db");
+}
+function openStore9(decryptedDir) {
+  const db = new DatabaseSync61(layaCachePath(decryptedDir));
+  db.exec(`CREATE TABLE IF NOT EXISTS laya_analysis (
+    session_id TEXT NOT NULL,
+    local_id INTEGER NOT NULL,
+    model_key TEXT NOT NULL,
+    analyzed_at INTEGER NOT NULL,
+    source_text TEXT NOT NULL,
+    from_voice INTEGER NOT NULL,
+    answers_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, local_id, model_key)
+  )`);
+  return db;
+}
+function layaModelKey(modelPath) {
+  try {
+    const st = statSync27(modelPath);
+    return `${st.size}-${Math.floor(st.mtimeMs / 1e3)}`;
+  } catch {
+    return "unknown";
+  }
+}
+function readAnalysisCache(decryptedDir, sessionId, modelKey, localIds) {
+  const out = /* @__PURE__ */ new Map();
+  if (localIds.length === 0 || !existsSync73(layaCachePath(decryptedDir))) return out;
+  let db = null;
+  try {
+    db = openStore9(decryptedDir);
+    const stmt = db.prepare(
+      "SELECT local_id, analyzed_at, source_text, from_voice, answers_json FROM laya_analysis WHERE session_id = ? AND model_key = ? AND local_id = ?"
+    );
+    for (const id of localIds) {
+      const row = stmt.get(sessionId, modelKey, id);
+      if (!row) continue;
+      try {
+        const answers = JSON.parse(row.answers_json);
+        if (!Array.isArray(answers) || answers.length === 0) continue;
+        out.set(Number(row.local_id), {
+          sourceText: String(row.source_text ?? ""),
+          fromVoice: Number(row.from_voice) === 1,
+          answers,
+          analyzedAt: Number(row.analyzed_at) || 0
+        });
+      } catch {
+      }
+    }
+  } catch {
+    return /* @__PURE__ */ new Map();
+  } finally {
+    try {
+      db?.close();
+    } catch {
+    }
+  }
+  return out;
+}
+function writeAnalysisCache(decryptedDir, sessionId, modelKey, rows) {
+  if (rows.length === 0) return;
+  let db = null;
+  try {
+    db = openStore9(decryptedDir);
+    const stmt = db.prepare(
+      "INSERT INTO laya_analysis (session_id, local_id, model_key, analyzed_at, source_text, from_voice, answers_json) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, local_id, model_key) DO UPDATE SET analyzed_at = excluded.analyzed_at, source_text = excluded.source_text, from_voice = excluded.from_voice, answers_json = excluded.answers_json"
+    );
+    const now = Math.floor(Date.now() / 1e3);
+    for (const r of rows) {
+      try {
+        stmt.run(sessionId, r.localId, modelKey, now, r.sourceText, r.fromVoice ? 1 : 0, JSON.stringify(r.answers));
+      } catch {
+      }
+    }
+  } catch {
+  } finally {
+    try {
+      db?.close();
+    } catch {
+    }
+  }
+}
+
 // src/backend/wechat-data/src/laya/analysis.ts
 var DEFAULT_CONTEXT = 20;
 var MAX_CONTEXT = 60;
@@ -28486,6 +28573,142 @@ async function analyzeSession(input) {
     model: r.model
   };
 }
+var MAX_ANALYZE_BATCH = 12;
+function collectUpToTarget(decryptedDir, talker, target, limit, selfUsername) {
+  const snap = queryMessages(decryptedDir, talker, limit + 8, target.sortSeq + 1, selfUsername);
+  const idx = snap.messages.findIndex((m) => m.localId === target.localId);
+  if (idx < 0) {
+    return { messages: snap.messages.slice(-limit), found: false };
+  }
+  const start = Math.max(0, idx + 1 - limit);
+  return { messages: snap.messages.slice(start, idx + 1), found: true };
+}
+async function analyzeVisibleMessages(input) {
+  const talker = String(input.talker ?? "").trim();
+  const empty = {
+    ok: false,
+    model: { dir: "", bytes: 0 },
+    modelKey: "",
+    items: []
+  };
+  if (talker === "") return { ...empty, error: "\u7F3A\u5C11\u4F1A\u8BDD" };
+  if (input.targets.length === 0) return { ...empty, error: "\u6CA1\u6709\u8981\u5206\u6790\u7684\u6D88\u606F" };
+  const status = layaModelStatus(input.modelDir, input.decryptedDir);
+  if (!status.installed) {
+    return {
+      ...empty,
+      error: "\u672C\u5730\u51B3\u7B56\u6A21\u578B\u672A\u5C31\u7EEA",
+      model: { dir: status.dir, bytes: status.bytes }
+    };
+  }
+  const modelKey = layaModelKey(status.path);
+  const targets = input.targets.slice(0, MAX_ANALYZE_BATCH);
+  const useCache = input.useCache !== false;
+  const cached = useCache ? readAnalysisCache(input.decryptedDir, talker, modelKey, targets.map((t) => t.localId)) : /* @__PURE__ */ new Map();
+  const items = [];
+  const toWrite = [];
+  const limit = Math.max(2, Math.min(Math.trunc(input.contextLimit ?? DEFAULT_CONTEXT), MAX_CONTEXT));
+  for (const target of targets) {
+    const hit = cached.get(target.localId);
+    if (hit) {
+      items.push({
+        localId: target.localId,
+        ok: true,
+        sourceText: hit.sourceText,
+        fromVoice: hit.fromVoice,
+        answers: hit.answers,
+        inferenceMs: 0,
+        cached: true
+      });
+      continue;
+    }
+    const picked = collectUpToTarget(input.decryptedDir, talker, target, limit, input.selfUsername);
+    const msgs = picked.messages;
+    if (msgs.length === 0) {
+      items.push({ localId: target.localId, ok: false, error: "\u53D6\u4E0D\u5230\u8FD9\u6761\u6D88\u606F", sourceText: "", fromVoice: false, answers: [], inferenceMs: 0, cached: false });
+      continue;
+    }
+    const targetMsg = msgs[msgs.length - 1];
+    if (targetMsg === void 0) {
+      items.push({ localId: target.localId, ok: false, error: "\u53D6\u4E0D\u5230\u8FD9\u6761\u6D88\u606F", sourceText: "", fromVoice: false, answers: [], inferenceMs: 0, cached: false });
+      continue;
+    }
+    if (targetMsg.isSender === 1) {
+      items.push({ localId: target.localId, ok: false, error: "\u81EA\u5DF1\u53D1\u7684\u6D88\u606F\u4E0D\u505A\u5206\u6790", sourceText: "", fromVoice: false, answers: [], inferenceMs: 0, cached: false });
+      continue;
+    }
+    let fromVoice = false;
+    let text = messageText(targetMsg);
+    if (targetMsg.renderType === "voice" || targetMsg.type === 34) {
+      fromVoice = true;
+      const svrId = String(targetMsg.serverId ?? "");
+      const cachedText = svrId === "" ? "" : cachedTranscript(input.decodedDir, svrId);
+      if (cachedText !== "") {
+        text = cachedText;
+      } else if (input.transcribe) {
+        const r2 = input.transcribe(target.localId, svrId);
+        text = r2.ok ? String(r2.text ?? "").trim() : "";
+        if (text === "") {
+          items.push({
+            localId: target.localId,
+            ok: false,
+            fromVoice: true,
+            error: r2.ok ? "\u8BED\u97F3\u8F6C\u5199\u7ED3\u679C\u4E3A\u7A7A" : r2.error ?? "\u8BED\u97F3\u8F6C\u5199\u5931\u8D25",
+            sourceText: "",
+            answers: [],
+            inferenceMs: 0,
+            cached: false
+          });
+          continue;
+        }
+      } else {
+        items.push({ localId: target.localId, ok: false, fromVoice: true, error: "\u672A\u914D\u7F6E\u8BED\u97F3\u8F6C\u5199", sourceText: "", answers: [], inferenceMs: 0, cached: false });
+        continue;
+      }
+    }
+    const lines = [];
+    for (let i = 0; i < msgs.length; i += 1) {
+      const m = msgs[i];
+      if (m === void 0) continue;
+      let t = i === msgs.length - 1 ? text : messageText(m);
+      if (t === "" && (m.renderType === "voice" || m.type === 34)) {
+        const svr = String(m.serverId ?? "");
+        t = svr === "" ? "" : cachedTranscript(input.decodedDir, svr);
+      }
+      if (t === "") continue;
+      lines.push(`${m.isSender === 1 ? "\u6211" : "\u5BF9\u65B9"}\uFF1A${t}`);
+    }
+    const dialogue = lines.join("\n");
+    if (dialogue === "") {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: "\u8FD9\u6761\u6D88\u606F\u6CA1\u6709\u53EF\u5206\u6790\u7684\u6587\u672C", sourceText: text, answers: [], inferenceMs: 0, cached: false });
+      continue;
+    }
+    const r = await layaAnalyze({ state: { dialogue }, modelDir: input.modelDir, decryptedDir: input.decryptedDir });
+    if (!r.ok) {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: r.error ?? "\u63A8\u7406\u5931\u8D25", sourceText: text, answers: [], inferenceMs: 0, cached: false });
+      continue;
+    }
+    items.push({
+      localId: target.localId,
+      ok: true,
+      sourceText: text,
+      fromVoice,
+      answers: r.answers,
+      inferenceMs: r.inferenceMs,
+      cached: false
+    });
+    toWrite.push({ localId: target.localId, sourceText: text, fromVoice, answers: r.answers });
+  }
+  if (useCache && toWrite.length > 0) {
+    writeAnalysisCache(input.decryptedDir, talker, modelKey, toWrite);
+  }
+  return {
+    ok: true,
+    model: { dir: status.dir, bytes: status.bytes },
+    modelKey,
+    items
+  };
+}
 
 // src/backend/wechat-data/src/remotes/laya.ts
 var LAYA_DIR_CONFIG_KEY = "laya_models_dir";
@@ -28521,6 +28744,58 @@ function createLayaRemotes(rc) {
         r.ok ? "ok" : "fail",
         talker,
         r.ok ? `${r.answers.length} \u9879\u5224\u65AD / ${r.inferenceMs}ms / ${r.contextLines} \u6761\u4E0A\u4E0B\u6587` : r.error ?? r.note
+      );
+      return r;
+    },
+    /**
+     * 逐条分析一批消息（消息流**可见窗口**驱动）：每条 → 取该消息及之前的上下文 →
+     * （语音先转写成文本）→ 本地推理。
+     *
+     * 结果落 `<数据根>/laya_analysis.db` 缓存，同一条消息（同一模型）只算一次；
+     * 语音转写优先命中 whisper 自己的磁盘缓存，只有没转写过的才真调引擎。
+     */
+    async analyzeVisibleMessages(options) {
+      const talker = String(options.talker ?? "").trim();
+      const rawTargets = Array.isArray(options.targets) ? options.targets : [];
+      const targets = rawTargets.filter((t) => t !== null && t !== void 0 && Number.isFinite(t.localId) && Number.isFinite(t.sortSeq)).map((t) => ({ localId: Math.trunc(t.localId), sortSeq: Math.trunc(t.sortSeq) }));
+      const dir = configuredDir();
+      const cfg = getConfig(rc.dirs().decrypted);
+      const modelsDir = resolveWhisperModelsDir(
+        cfg["whisper_models_dir"],
+        rc.dirs().decrypted
+      );
+      const configBin = typeof cfg["whisper_bin"] === "string" ? cfg["whisper_bin"] : "";
+      const engine = whisperEnginePath(configBin, modelsDir);
+      const whisperModel = typeof cfg["whisper_model"] === "string" && cfg["whisper_model"] ? cfg["whisper_model"] : "medium";
+      const transcribe = engine === "" ? void 0 : (localId, _serverId) => {
+        const t = transcribeOneVoice(
+          rc.dirs().decrypted,
+          rc.dirs().decoded,
+          modelsDir,
+          whisperModel,
+          engine,
+          talker,
+          localId
+        );
+        return { ok: t.ok, text: t.text, error: t.error };
+      };
+      const r = await analyzeVisibleMessages({
+        decryptedDir: rc.dirs().decrypted,
+        decodedDir: rc.dirs().decoded,
+        talker,
+        selfUsername: rc.selfUsername(),
+        targets,
+        modelDir: dir || void 0,
+        transcribe
+      });
+      const fresh = r.items.filter((i) => i.ok && !i.cached).length;
+      const voice = r.items.filter((i) => i.ok && i.fromVoice).length;
+      rc.op(
+        "task",
+        "analyze_visible_messages",
+        r.ok ? "ok" : "fail",
+        talker,
+        r.ok ? `${r.items.length} \u6761\uFF08\u65B0\u7B97 ${fresh}\uFF0C\u8BED\u97F3 ${voice}\uFF09` : r.error ?? ""
       );
       return r;
     },
@@ -28637,8 +28912,8 @@ function createLayaRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/gateway-data-ops.ts
-var _unloadLaya_dec, _adoptLayaModel_dec, _downloadLayaModel_dec, _getLayaStatus_dec, _analyzeMessages_dec, _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
-var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _analyzeMessages_dec = [Remote3("analyzeMessages")], _getLayaStatus_dec = [Remote3("getLayaStatus")], _downloadLayaModel_dec = [Remote3("downloadLayaModel")], _adoptLayaModel_dec = [Remote3("adoptLayaModel")], _unloadLaya_dec = [Remote3("unloadLaya")], _a3) {
+var _unloadLaya_dec, _adoptLayaModel_dec, _downloadLayaModel_dec, _getLayaStatus_dec, _analyzeVisibleMessages_dec, _analyzeMessages_dec, _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
+var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _analyzeMessages_dec = [Remote3("analyzeMessages")], _analyzeVisibleMessages_dec = [Remote3("analyzeVisibleMessages")], _getLayaStatus_dec = [Remote3("getLayaStatus")], _downloadLayaModel_dec = [Remote3("downloadLayaModel")], _adoptLayaModel_dec = [Remote3("adoptLayaModel")], _unloadLaya_dec = [Remote3("unloadLaya")], _a3) {
   constructor() {
     super(...arguments);
     __runInitializers(_init3, 5, this);
@@ -28860,6 +29135,9 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
   async analyzeMessages(options) {
     return this.layaRemotes().analyzeMessages(options);
   }
+  async analyzeVisibleMessages(options) {
+    return this.layaRemotes().analyzeVisibleMessages(options);
+  }
   getLayaStatus() {
     return this.layaRemotes().getLayaStatus();
   }
@@ -28957,6 +29235,7 @@ __decorateElement(_init3, 1, "setPrivacyState", _setPrivacyState_dec, GatewayDat
 __decorateElement(_init3, 1, "setTaskStatus", _setTaskStatus_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "syncHandoffTasks", _syncHandoffTasks_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "analyzeMessages", _analyzeMessages_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "analyzeVisibleMessages", _analyzeVisibleMessages_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "getLayaStatus", _getLayaStatus_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "downloadLayaModel", _downloadLayaModel_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "adoptLayaModel", _adoptLayaModel_dec, GatewayDataOps);

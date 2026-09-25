@@ -1,3 +1,14 @@
+/**
+ * laya 本地决策分析（分析会话消息、模型状态/下载/接管/卸载） 的 @Remote 处理器。
+ *
+ * 机制照 `remotes/voicellm.ts`：类里保留 @Remote 装饰器与签名（协议层按名字枚举），
+ * 方法体一行转发；处理器体在这里，依赖由 `rc` 显式给出。
+ *
+ * **下载进度为什么不挂在 gateway 字段上**：与 whisper 不同，laya 的进度用不着跨方法共享
+ * 生命周期（`getLayaStatus` 与 `downloadLayaModel` 都在本模块里），所以放在模块级。
+ * 代价是多实例场景会共享——测试需要隔离时用 `__setLayaDownloadForTest()` 注入。
+ */
+import { type LayaVisibleAnalysisResult } from '../laya/analysis.ts';
 import type { LayaAnalysisView, LayaDownloadOutcome, LayaDownloadProgress, LayaStatus } from '../types-laya.ts';
 import type { OperationCategory, OperationStatus } from '../types.ts';
 /** 测试注入点：替换下载进度槽（生产路径不调用）。 */
@@ -20,6 +31,20 @@ export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
         talker?: string;
         contextLimit?: number;
     }): Promise<LayaAnalysisView>;
+    /**
+     * 逐条分析一批消息（消息流**可见窗口**驱动）：每条 → 取该消息及之前的上下文 →
+     * （语音先转写成文本）→ 本地推理。
+     *
+     * 结果落 `<数据根>/laya_analysis.db` 缓存，同一条消息（同一模型）只算一次；
+     * 语音转写优先命中 whisper 自己的磁盘缓存，只有没转写过的才真调引擎。
+     */
+    analyzeVisibleMessages(options: {
+        talker?: string;
+        targets?: Array<{
+            localId: number;
+            sortSeq: number;
+        }>;
+    }): Promise<LayaVisibleAnalysisResult>;
     /** 模型与运行时状态（前端轮询）。 */
     getLayaStatus(): LayaStatus;
     /**

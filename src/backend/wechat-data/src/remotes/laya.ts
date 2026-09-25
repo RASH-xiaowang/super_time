@@ -8,10 +8,12 @@
  * 生命周期（`getLayaStatus` 与 `downloadLayaModel` 都在本模块里），所以放在模块级。
  * 代价是多实例场景会共享——测试需要隔离时用 `__setLayaDownloadForTest()` 注入。
  */
-import { analyzeSession } from '../laya/analysis.ts'
+import { analyzeSession, analyzeVisibleMessages as runVisibleAnalysis, type LayaVisibleAnalysisResult } from '../laya/analysis.ts'
 import {
   formatBytes, layaAdoptModelDir, layaDownloadModel, layaModelStatus, layaModelsDir, layaTokenizerDir,
 } from '../laya/model-file.ts'
+import { resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
+import { transcribeOneVoice } from '../query/voice-transcribe.ts'
 import { layaRuntimeState, layaUnload } from '../laya/runtime.ts'
 import type { LayaAnalysisView, LayaDownloadOutcome, LayaDownloadProgress, LayaStatus } from '../types-laya.ts'
 import type { OperationCategory, OperationStatus } from '../types.ts'
@@ -63,6 +65,57 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       })
       rc.op('task', 'analyze_messages', r.ok ? 'ok' : 'fail', talker,
         r.ok ? `${r.answers.length} 项判断 / ${r.inferenceMs}ms / ${r.contextLines} 条上下文` : (r.error ?? r.note))
+      return r
+    },
+
+    /**
+     * 逐条分析一批消息（消息流**可见窗口**驱动）：每条 → 取该消息及之前的上下文 →
+     * （语音先转写成文本）→ 本地推理。
+     *
+     * 结果落 `<数据根>/laya_analysis.db` 缓存，同一条消息（同一模型）只算一次；
+     * 语音转写优先命中 whisper 自己的磁盘缓存，只有没转写过的才真调引擎。
+     */
+    async analyzeVisibleMessages(options: {
+      talker?: string
+      targets?: Array<{ localId: number; sortSeq: number }>
+    }): Promise<LayaVisibleAnalysisResult> {
+      const talker = String(options.talker ?? '').trim()
+      const rawTargets = Array.isArray(options.targets) ? options.targets : []
+      const targets = rawTargets
+        .filter((t) => t !== null && t !== undefined && Number.isFinite(t.localId) && Number.isFinite(t.sortSeq))
+        .map((t) => ({ localId: Math.trunc(t.localId), sortSeq: Math.trunc(t.sortSeq) }))
+      const dir = configuredDir()
+
+      // 语音转写器：whisper 的引擎/模型/目录都是**配置层知识**，在这里读好再注入
+      // （laya 层不该去碰 getConfig 与 whisper 的路径解析）。
+      const cfg = getConfig(rc.dirs().decrypted)
+      const modelsDir = resolveWhisperModelsDir(
+        cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)
+      const configBin = typeof cfg['whisper_bin'] === 'string' ? cfg['whisper_bin'] : ''
+      const engine = whisperEnginePath(configBin, modelsDir)
+      const whisperModel = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model']
+        ? cfg['whisper_model'] : 'medium'
+      const transcribe = engine === ''
+        ? undefined
+        : (localId: number, _serverId: string): { ok: boolean; text?: string; error?: string } => {
+          const t = transcribeOneVoice(rc.dirs().decrypted, rc.dirs().decoded, modelsDir,
+            whisperModel, engine, talker, localId)
+          return { ok: t.ok, text: t.text, error: t.error }
+        }
+
+      const r = await runVisibleAnalysis({
+        decryptedDir: rc.dirs().decrypted,
+        decodedDir: rc.dirs().decoded,
+        talker,
+        selfUsername: rc.selfUsername(),
+        targets,
+        modelDir: dir || undefined,
+        transcribe,
+      })
+      const fresh = r.items.filter((i) => i.ok && !i.cached).length
+      const voice = r.items.filter((i) => i.ok && i.fromVoice).length
+      rc.op('task', 'analyze_visible_messages', r.ok ? 'ok' : 'fail', talker,
+        r.ok ? `${r.items.length} 条（新算 ${fresh}，语音 ${voice}）` : (r.error ?? ''))
       return r
     },
 

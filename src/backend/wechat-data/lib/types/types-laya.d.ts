@@ -6,6 +6,7 @@
  */
 import type { LayaAnalysisResult } from './laya/analysis.ts';
 export type { LayaAnswer, LayaAnswerOption, LayaAnalyzeResult } from './laya/runtime.ts';
+export type { LayaMessageAnalysis, LayaTargetRef, LayaVisibleAnalysisResult } from './laya/analysis.ts';
 /**
  * 一次分析的可序列化结果。
  *

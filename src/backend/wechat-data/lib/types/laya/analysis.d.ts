@@ -78,3 +78,70 @@ export interface LayaAnalysisResult {
  * 由调用方决定怎么呈现（这是本功能的正常路径，不是异常路径）。
  */
 export declare function analyzeSession(input: LayaAnalysisInput): Promise<LayaAnalysisResult>;
+/** 逐条分析的目标：一条消息的定位信息（前端从消息对象里直接拿得到）。 */
+export interface LayaTargetRef {
+    /** 会话内唯一 id（自增，会话范围作用域）。 */
+    localId: number;
+    /** 毫秒稳定序键 —— 也是消息分页的游标键。 */
+    sortSeq: number;
+}
+/** 一条消息的分析结果。 */
+export interface LayaMessageAnalysis {
+    localId: number;
+    ok: boolean;
+    /** 单条失败原因（模型未就绪是**会话级**错误，不在这里）。 */
+    error?: string;
+    /** 被分析的文本（语音则是转写后的文本）。 */
+    sourceText: string;
+    /** 文本是否来自语音转写。 */
+    fromVoice: boolean;
+    answers: LayaAnswer[];
+    /** 本次推理耗时（命中缓存时为 0）。 */
+    inferenceMs: number;
+    /** 是否命中缓存（未重新推理）。 */
+    cached: boolean;
+}
+/**
+ * 语音转写器 —— 由调用方注入。
+ * 为什么注入而不是自己调：转写需要 whisper 的引擎路径/模型目录/模型 id，那些是配置层的知识
+ * （`getConfig` + `resolveWhisperModelsDir` + `whisperEnginePath`），不该由 laya 层去读。
+ */
+export type LayaVoiceTranscriber = (localId: number, serverId: string) => {
+    ok: boolean;
+    text?: string;
+    error?: string;
+};
+export interface LayaVisibleAnalysisInput {
+    decryptedDir: string;
+    /** 解码目录（读语音转写的磁盘缓存）。 */
+    decodedDir: string;
+    talker: string;
+    selfUsername?: string;
+    targets: readonly LayaTargetRef[];
+    contextLimit?: number;
+    modelDir?: string;
+    /** 缺省时不转写语音：那条消息会以「语音未转写」失败，而不是静默跳过。 */
+    transcribe?: LayaVoiceTranscriber;
+    /** 关掉缓存（测试用）。 */
+    useCache?: boolean;
+}
+export interface LayaVisibleAnalysisResult {
+    ok: boolean;
+    /** 会话级错误（模型未就绪 / 缺会话）——单条问题在 `items[].error`。 */
+    error?: string;
+    model: {
+        dir: string;
+        bytes: number;
+    };
+    modelKey: string;
+    items: LayaMessageAnalysis[];
+}
+/** 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。 */
+export declare const MAX_ANALYZE_BATCH = 12;
+/**
+ * 逐条分析一批消息（消息流可见窗口驱动）。
+ *
+ * 每条独立：取「该消息及之前」的上下文 → （语音先转写）→ 本地推理 → 结果落缓存。
+ * **单条失败不拖垮整批**（`items[].ok=false` 带原因），只有模型未就绪这类会话级问题才整体 `ok=false`。
+ */
+export declare function analyzeVisibleMessages(input: LayaVisibleAnalysisInput): Promise<LayaVisibleAnalysisResult>;

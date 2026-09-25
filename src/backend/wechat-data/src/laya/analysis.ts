@@ -11,8 +11,10 @@
 import { layaAnalyze, type LayaAnswer } from './runtime.ts'
 import { layaModelStatus } from './model-file.ts'
 import { defaultChatQuestions, type LayaQuestions } from './presets.ts'
+import { layaModelKey, readAnalysisCache, writeAnalysisCache, type CachedAnalysis } from './store.ts'
 import { queryMessages } from '../query/messages.ts'
 import { messageText } from '../query/reply-suggest.ts'
+import { cachedTranscript } from '../query/voice-transcribe.ts'
 
 /** 默认取多少条作为上下文（laya 的 max_len 是 1024 token，20 条中文对话通常在预算内）。 */
 const DEFAULT_CONTEXT = 20
@@ -169,5 +171,231 @@ export async function analyzeSession(input: LayaAnalysisInput): Promise<LayaAnal
     inferenceMs: r.inferenceMs,
     tokens: r.tokens,
     model: r.model,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 逐条分析：消息流里每条（对方）消息下方的分析
+// ---------------------------------------------------------------------------
+
+/** 逐条分析的目标：一条消息的定位信息（前端从消息对象里直接拿得到）。 */
+export interface LayaTargetRef {
+  /** 会话内唯一 id（自增，会话范围作用域）。 */
+  localId: number
+  /** 毫秒稳定序键 —— 也是消息分页的游标键。 */
+  sortSeq: number
+}
+
+/** 一条消息的分析结果。 */
+export interface LayaMessageAnalysis {
+  localId: number
+  ok: boolean
+  /** 单条失败原因（模型未就绪是**会话级**错误，不在这里）。 */
+  error?: string
+  /** 被分析的文本（语音则是转写后的文本）。 */
+  sourceText: string
+  /** 文本是否来自语音转写。 */
+  fromVoice: boolean
+  answers: LayaAnswer[]
+  /** 本次推理耗时（命中缓存时为 0）。 */
+  inferenceMs: number
+  /** 是否命中缓存（未重新推理）。 */
+  cached: boolean
+}
+
+/**
+ * 语音转写器 —— 由调用方注入。
+ * 为什么注入而不是自己调：转写需要 whisper 的引擎路径/模型目录/模型 id，那些是配置层的知识
+ * （`getConfig` + `resolveWhisperModelsDir` + `whisperEnginePath`），不该由 laya 层去读。
+ */
+export type LayaVoiceTranscriber = (
+  localId: number,
+  serverId: string,
+) => { ok: boolean; text?: string; error?: string }
+
+export interface LayaVisibleAnalysisInput {
+  decryptedDir: string
+  /** 解码目录（读语音转写的磁盘缓存）。 */
+  decodedDir: string
+  talker: string
+  selfUsername?: string
+  targets: readonly LayaTargetRef[]
+  contextLimit?: number
+  modelDir?: string
+  /** 缺省时不转写语音：那条消息会以「语音未转写」失败，而不是静默跳过。 */
+  transcribe?: LayaVoiceTranscriber
+  /** 关掉缓存（测试用）。 */
+  useCache?: boolean
+}
+
+export interface LayaVisibleAnalysisResult {
+  ok: boolean
+  /** 会话级错误（模型未就绪 / 缺会话）——单条问题在 `items[].error`。 */
+  error?: string
+  model: { dir: string; bytes: number }
+  modelKey: string
+  items: LayaMessageAnalysis[]
+}
+
+/** 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。 */
+export const MAX_ANALYZE_BATCH = 12
+
+/**
+ * 取「目标消息 + 它之前的 `limit - 1` 条」。
+ *
+ * 两个坑都在这里：
+ *  1. 游标语义是 `sort_seq < cursor`（**不含等于**），所以传 `sortSeq + 1` 才能把目标自己圈进来；
+ *  2. `sort_seq` 存在重复（本机实测 14 张 Msg_ 表有重复值），所以不能假设「一圈就是一条」——
+ *     结果里可能有同一毫秒的其它消息，必须按 `localId` **定位目标并截断**，
+ *     否则会把目标之后发出的消息当成上下文（那等于让模型看未来）。
+ */
+function collectUpToTarget(
+  decryptedDir: string,
+  talker: string,
+  target: LayaTargetRef,
+  limit: number,
+  selfUsername?: string,
+): { messages: readonly { localId: number; type?: number; isSender: number; displayText?: string; strContent?: string; msgContent?: string; renderType?: string; serverId?: string }[]; found: boolean } {
+  // 多取 8 条：同行（同 sort_seq）的消息数量不可预知，截断后再收敛到 limit。
+  const snap = queryMessages(decryptedDir, talker, limit + 8, target.sortSeq + 1, selfUsername)
+  const idx = snap.messages.findIndex((m) => m.localId === target.localId)
+  if (idx < 0) {
+    // 目标不在这一页（极旧的会话 / 已被清理）：退回「最近 limit 条」，并在结果里标 found=false。
+    return { messages: snap.messages.slice(-limit), found: false }
+  }
+  const start = Math.max(0, idx + 1 - limit)
+  return { messages: snap.messages.slice(start, idx + 1), found: true }
+}
+
+/**
+ * 逐条分析一批消息（消息流可见窗口驱动）。
+ *
+ * 每条独立：取「该消息及之前」的上下文 → （语音先转写）→ 本地推理 → 结果落缓存。
+ * **单条失败不拖垮整批**（`items[].ok=false` 带原因），只有模型未就绪这类会话级问题才整体 `ok=false`。
+ */
+export async function analyzeVisibleMessages(
+  input: LayaVisibleAnalysisInput,
+): Promise<LayaVisibleAnalysisResult> {
+  const talker = String(input.talker ?? '').trim()
+  const empty: LayaVisibleAnalysisResult = {
+    ok: false, model: { dir: '', bytes: 0 }, modelKey: '', items: [],
+  }
+  if (talker === '') return { ...empty, error: '缺少会话' }
+  if (input.targets.length === 0) return { ...empty, error: '没有要分析的消息' }
+
+  const status = layaModelStatus(input.modelDir, input.decryptedDir)
+  if (!status.installed) {
+    return {
+      ...empty,
+      error: '本地决策模型未就绪',
+      model: { dir: status.dir, bytes: status.bytes },
+    }
+  }
+  const modelKey = layaModelKey(status.path)
+  const targets = input.targets.slice(0, MAX_ANALYZE_BATCH)
+  const useCache = input.useCache !== false
+
+  const cached = useCache
+    ? readAnalysisCache(input.decryptedDir, talker, modelKey, targets.map((t) => t.localId))
+    : new Map<number, CachedAnalysis>()
+
+  const items: LayaMessageAnalysis[] = []
+  const toWrite: Array<{ localId: number; sourceText: string; fromVoice: boolean; answers: LayaAnswer[] }> = []
+  const limit = Math.max(2, Math.min(Math.trunc(input.contextLimit ?? DEFAULT_CONTEXT), MAX_CONTEXT))
+
+  for (const target of targets) {
+    const hit = cached.get(target.localId)
+    if (hit) {
+      items.push({
+        localId: target.localId, ok: true, sourceText: hit.sourceText, fromVoice: hit.fromVoice,
+        answers: hit.answers, inferenceMs: 0, cached: true,
+      })
+      continue
+    }
+
+    const picked = collectUpToTarget(input.decryptedDir, talker, target, limit, input.selfUsername)
+    const msgs = picked.messages
+    if (msgs.length === 0) {
+      items.push({ localId: target.localId, ok: false, error: '取不到这条消息', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    const targetMsg = msgs[msgs.length - 1]
+    if (targetMsg === undefined) {
+      items.push({ localId: target.localId, ok: false, error: '取不到这条消息', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+    if (targetMsg.isSender === 1) {
+      items.push({ localId: target.localId, ok: false, error: '自己发的消息不做分析', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    // 语音：先转写再分析（转写有自己的磁盘缓存，不重算）
+    let fromVoice = false
+    let text = messageText(targetMsg)
+    if (targetMsg.renderType === 'voice' || targetMsg.type === 34) {
+      fromVoice = true
+      const svrId = String(targetMsg.serverId ?? '')
+      const cachedText = svrId === '' ? '' : cachedTranscript(input.decodedDir, svrId)
+      if (cachedText !== '') {
+        text = cachedText
+      } else if (input.transcribe) {
+        const r = input.transcribe(target.localId, svrId)
+        text = r.ok ? String(r.text ?? '').trim() : ''
+        if (text === '') {
+          items.push({
+            localId: target.localId, ok: false, fromVoice: true,
+            error: r.ok ? '语音转写结果为空' : (r.error ?? '语音转写失败'),
+            sourceText: '', answers: [], inferenceMs: 0, cached: false,
+          })
+          continue
+        }
+      } else {
+        items.push({ localId: target.localId, ok: false, fromVoice: true, error: '未配置语音转写', sourceText: '', answers: [], inferenceMs: 0, cached: false })
+        continue
+      }
+    }
+
+    // 拼对话：双方消息都进（判断意图要看到「我」说了什么）；历史里的语音用**已有缓存**补文本，
+    // 但不为它们触发转写（那会把一次请求变成 N 次 whisper 调用）。
+    const lines: string[] = []
+    for (let i = 0; i < msgs.length; i += 1) {
+      const m = msgs[i]
+      if (m === undefined) continue
+      let t = i === msgs.length - 1 ? text : messageText(m)
+      if (t === '' && (m.renderType === 'voice' || m.type === 34)) {
+        const svr = String(m.serverId ?? '')
+        t = svr === '' ? '' : cachedTranscript(input.decodedDir, svr)
+      }
+      if (t === '') continue
+      lines.push(`${m.isSender === 1 ? '我' : '对方'}：${t}`)
+    }
+    const dialogue = lines.join('\n')
+    if (dialogue === '') {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: '这条消息没有可分析的文本', sourceText: text, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    const r = await layaAnalyze({ state: { dialogue }, modelDir: input.modelDir, decryptedDir: input.decryptedDir })
+    if (!r.ok) {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: r.error ?? '推理失败', sourceText: text, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+    items.push({
+      localId: target.localId, ok: true, sourceText: text, fromVoice,
+      answers: r.answers, inferenceMs: r.inferenceMs, cached: false,
+    })
+    toWrite.push({ localId: target.localId, sourceText: text, fromVoice, answers: r.answers })
+  }
+
+  if (useCache && toWrite.length > 0) {
+    writeAnalysisCache(input.decryptedDir, talker, modelKey, toWrite)
+  }
+
+  return {
+    ok: true,
+    model: { dir: status.dir, bytes: status.bytes },
+    modelKey,
+    items,
   }
 }

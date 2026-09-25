@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus } from './types.ts';
+import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
 import type { ImageBatchItem } from './remotes/media.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
 import { createLayaRemotes } from './remotes/laya.ts';
@@ -671,6 +671,21 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         talker: string;
         contextLimit?: number;
     }): Promise<LayaAnalysisView>;
+    /**
+     * Per-message analysis for the message stream's visible window (local model · no network).
+     * Each message is analyzed against the conversation **up to that point**; voice messages are
+     * transcribed first (whisper, disk-cached) and the transcript is what gets analyzed.
+     * Results are cached in `<data root>/laya_analysis.db` keyed by (session, message, model fingerprint).
+     * @param options - talker + targets (localId + sortSeq of each visible message).
+     * @returns LayaVisibleAnalysisResult: per-message answers; one bad message only fails its own item.
+     */
+    analyzeVisibleMessages(options: {
+        talker: string;
+        targets: Array<{
+            localId: number;
+            sortSeq: number;
+        }>;
+    }): Promise<LayaVisibleAnalysisResult>;
     /**
      * Local decision model status: required files (model graph + tokenizer), size, source,
      * active download progress and runtime state (loaded / last inference ms / last error).
