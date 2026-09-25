@@ -146,7 +146,15 @@
   border: none;
   color: var(--wx-on-other);
   box-shadow: none;
-  max-width: var(--wx-bubble-maxw);
+  /* **这里不写 max-width** —— 上界只由 .msgCol 单点给（见它上面那段说明）。
+     本元素的包含块是 .msgCol，而 .msgCol 的宽度由内容撑开 ⇒ 在这里写
+     `calc(100% - var(--wx-avatar) - var(--wx-gap))` 是**循环百分比**：
+     第一趟按 0 算 → max-width 被夹成 0 → 气泡只剩左右 padding（实测 24px，
+     文字一列一个字）；第二趟再按那个窄列重算百分比 → 2~5 字/行。
+     2026-09-26 就是这么塌的（旧值裸 `100%` 反而没事：裸百分比在循环场景按规范当 none）。
+     不溢出靠两点：① .msgCol 已被 min(640px, 100% − 44px) 封顶；
+     ② 本元素是列向 flex 子项（父级 align-items: flex-start ⇒ fit-content），
+        宽度天然 ≤ 列宽。 */
 }
 /* 微信气泡尖角：12×12 的 45° 方块，压在气泡边沿上（top 12px、外挂 -4px、圆角 2px）。
    官方四角圆角一致，尖角是独立叠上去的方块，**不**把靠近尖角的那一角收小。 */

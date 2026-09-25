@@ -123,7 +123,7 @@ branch: main
 | `--wx-bubble-self` / `-text` | `#95EC69` / `#000000` | `#3EB575` / `#FFFFFF` | 我方气泡 |
 | `--wx-bubble-other` / `-text` | `#FFFFFF` / `#1F2937` | `#2E2E2E` / `#F5F5F5` | 对方气泡 |
 | `--wx-read-maxw` | `640px` | 同 | 阅读宽度：文本气泡与引用摘要共用 |
-| `--wx-bubble-maxw` | `min(640px, 100% − 头像 − 间隙)` | 同 | 文本气泡最大宽（**必须扣掉同行占位**，否则长文本把头像挤出容器） |
+| `--wx-bubble-maxw` | `min(640px, 100% − 头像 − 间隙)` | 同 | 文本气泡最大宽（**必须扣掉同行占位**；且**只准挂在 `.msgCol` 上**，见下节契约） |
 | `--wx-date-text` | `#9E9E9E` | `#9F9F9F` | 日期分隔/系统提示 |
 | `--wx-sender-name` | `#6B7280` | `#B9B9B9` | 群内昵称 |
 | `--wx-quote-bg` / `-text` | `#E1E1E1` / `#525252` | `#252525` / `#C9C9C9` | 引用块 |
@@ -133,6 +133,43 @@ branch: main
 | `--wx-transfer` / 退回态 | `#F79C46` / `#FDE1C3` | 同 | 转账卡 |
 | `--wx-redpacket` / 底栏字 | `#FA9D3B` / `#FAECDA` | 同 | 红包卡 |
 | `--wx-mention` / `--wx-link` | `#576B95` / `#245FBD` | `#7D90B8` / `#6F9BEA` | @提及 / 文本内链接 |
+
+### 消息行布局与宽度契约（唯一控制点）
+
+一条消息行的几何（每一层都只有一个职责）：
+
+```
+.msgRow                     flex 行；gap = --wx-gap(10px)；align-items: flex-start
+├─ Avatar                   34×34；radius 6px；flex-shrink: 0（**不参与收缩**）
+└─ .msgCol                  flex 列；gap 4px；align-items: flex-start
+   │                        ★ max-width: --wx-bubble-maxw ← **唯一的宽度上界**
+   ├─ .msgTimeChip          position: absolute（悬停才显示，不影响布局）
+   ├─ .msgSender            仅群聊的对方，11px 灰字，max-width 240px 省略号
+   └─ .msgBubble            padding 6×12；radius 4px；14px/1.6；**不写任何宽度上界**
+```
+
+**自己 / 对方靠镜像区分**：`.msgRowSelf { flex-direction: row-reverse }` ⇒ 头像在右、
+气泡列右对齐（`align-items: flex-end`）；再加颜色（`--wx-bubble-self` / `-other`）与
+尖角方向（`::before` 左侧 / `::after` 右侧）共三道区分。头像的身份键：自己用登录 wxid、
+单聊对方用会话 username、群成员用消息里的 sender（都不拿昵称当键）。
+
+**宽度三档（`min(640px, 100% − 44px)` 的实际效果）**：
+
+| 消息列内容宽 | 气泡上界 | 表现 |
+|---|---|---|
+| ≥ 684px | 640px | 阅读宽度封顶，一行约 45 字（官方桌面是 384px，本项目刻意放宽以读长文） |
+| 200–684px | 列宽 − 44px | 自动让位给头像与间隙，不溢出 |
+| < 200px | 仍为正值（列宽 − 44px） | 允许变窄换行；`.messages` 的 `flex: 1 1 220px` 是常态下限 |
+
+**时间戳三条规则**（对齐官方）：① 每条消息**默认不显示**时间；② 相邻消息间隔 > 5 分钟
+或跨天 → 插入居中分隔（`message-items.ts` 的 `DIVIDER_GAP_SEC = 300` + `fmtDividerSec`）；
+③ 鼠标悬停整行 → 气泡上方浮出完整时间戳（`.msgTimeChip`）。
+
+**⚠️ 循环百分比（2026-09-26 踩过两次的坑）**：`.msgCol` 是 flex 子项、宽度由内容撑开，
+所以**它内部的元素不能写含百分比的上界**。`max-width: calc(100% − 44px)` 在这种位置会
+被算成 0（气泡塌成一列一个字），而裸 `100%` 反而安全（循环场景按规范当 `none`）。
+同文件里 `width: calc(100% + 24px)`（媒体卡满宽）没有这个问题，因为 `width` 的百分比在
+不定包含块里退化为 `auto` —— **区别在 `width` 与 `max-width`，不要在 max-width 上模仿它**。
 
 ### 逐类型呈现契约
 
