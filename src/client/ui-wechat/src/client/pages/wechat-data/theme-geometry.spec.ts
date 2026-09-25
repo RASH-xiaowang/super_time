@@ -128,7 +128,7 @@ function scan(): ScanResult {
 const RADIUS_BASELINE: Record<string, Record<string, number>> = {
   'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': { '2px': 3, '4px': 2, '6px': 1, '3px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css': { '3px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': { '2px': 6, '9px': 2, '4px': 2, '10px': 1 },
+  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': { '2px': 6, '9px': 2, '4px': 2 },
 }
 
 const ODD_SPACING_BASELINE: Record<string, number> = {
@@ -139,7 +139,7 @@ const ODD_SPACING_BASELINE: Record<string, number> = {
 
 const PILL_MAX = 3
 const CIRCLE_MAX = 66
-const ILLEGAL_RADIUS_TOTAL_MAX = 19
+const ILLEGAL_RADIUS_TOTAL_MAX = 18
 const ODD_SPACING_TOTAL_MAX = 5
 const FILES_MIN = 61
 const BR_DECL_MIN = 500
