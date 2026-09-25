@@ -69,7 +69,7 @@
   display: flex;
   align-items: flex-end;
   background: var(--nm-bg-hover);
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
 }
 .heatBar {
   width: 100%;
@@ -104,7 +104,7 @@
 .msgList::-webkit-scrollbar-track { background: transparent; }
 .msgList::-webkit-scrollbar-thumb {
   background: var(--nm-border);
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   transition: all 0.15s;
 }
 .msgList::-webkit-scrollbar-thumb:hover { background: var(--nm-border-hover); }
@@ -114,7 +114,7 @@
   align-items: baseline;
   border-bottom: 1px solid var(--nm-border);
   padding-bottom: 5px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   transition: all 0.15s;
   width: 100%;
   background: transparent;

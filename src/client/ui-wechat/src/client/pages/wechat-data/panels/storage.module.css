@@ -15,7 +15,7 @@
 }
 
 .btn {
-  padding: 5px 14px; border: 1px solid var(--nm-border); border-radius: 8px;
+  padding: 4px 14px; border: 1px solid var(--nm-border); border-radius: var(--nm-dense-r);
   background: var(--nm-bg-card); font-size: 12px; color: var(--nm-text-1); cursor: pointer;
   transition: all 0.15s;
 }
@@ -37,7 +37,7 @@
   100% { background-position: 200% 0; }
 }
 .skelBlock {
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: linear-gradient(90deg, var(--nm-bg-hover) 25%, color-mix(in srgb, var(--nm-cyan) 10%, transparent) 37%, var(--nm-bg-hover) 63%);
   background-size: 200% 100%;
   animation: wcSkel 1.4s ease-in-out infinite;
@@ -48,7 +48,7 @@
 .skelHero .skelBlock { height: 96px; }
 .skelLine { height: 14px; margin-bottom: 10px; }
 .skelLine::after {
-  content: ''; display: block; width: 60%; height: 14px; border-radius: 8px;
+  content: ''; display: block; width: 60%; height: 14px; border-radius: var(--nm-dense-r);
   background: linear-gradient(90deg, var(--nm-bg-hover) 25%, color-mix(in srgb, var(--nm-cyan) 10%, transparent) 37%, var(--nm-bg-hover) 63%);
   background-size: 200% 100%;
   animation: wcSkel 1.4s ease-in-out infinite;
@@ -57,7 +57,7 @@
 /* hero 卡片 */
 .hero {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  padding: 16px 18px; border: 1px solid var(--nm-border); border-radius: 14px;
+  padding: 16px 20px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg);
   background:
     linear-gradient(135deg, var(--nm-cyan-10), color-mix(in srgb, var(--nm-purple) 8%, transparent)),
     var(--nm-bg-card);
@@ -78,7 +78,7 @@
 .heroStats { flex: 1; min-width: 280px; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 .heroStat {
   display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
-  background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: 10px;
+  background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: var(--nm-r-md);
   transition: all 0.15s;
 }
 .heroStat:hover {
@@ -93,7 +93,7 @@
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 1200px) { .grid { grid-template-columns: 1fr 1fr; } }
 .card {
-  border: 1px solid var(--nm-border); border-radius: 14px; padding: 14px;
+  border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); padding: 14px;
   background: var(--nm-bg-card); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   transition: all 0.2s;
 }
@@ -118,16 +118,16 @@
 }
 .donutLegend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .legendRow { display: flex; align-items: center; gap: 8px; font-size: 12px; transition: all 0.15s; }
-.legendDot { width: 10px; height: 10px; border-radius: 4px; flex-shrink: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 40%, transparent); }
+.legendDot { width: 10px; height: 10px; border-radius: var(--nm-r-xs); flex-shrink: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 40%, transparent); }
 .legendLabel { width: 64px; color: var(--nm-text-1); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
 .legendMeta { flex: 1; min-width: 0; color: var(--nm-text-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
 
 /* 条形 */
 .barRow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; transition: all 0.15s; }
 .barLabel { width: 110px; color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.barTrack { flex: 1; height: 8px; border-radius: 4px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); overflow: hidden; }
+.barTrack { flex: 1; height: 8px; border-radius: var(--nm-r-xs); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); overflow: hidden; }
 .barFill {
-  height: 100%; border-radius: 4px;
+  height: 100%; border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
 }

@@ -21,8 +21,8 @@
 .monthly { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
 .monthRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .monthLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; }
-.monthTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: 6px; overflow: hidden; }
-.monthFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 6px; }
+.monthTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: var(--nm-r-sm); overflow: hidden; }
+.monthFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-sm); }
 .monthCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
 
 .todayList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
@@ -43,7 +43,7 @@
   height: auto;
   aspect-ratio: 2 / 1;
   display: block;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background:
     radial-gradient(120% 90% at 30% 20%, color-mix(in srgb, var(--nm-cyan) 8%, transparent), transparent 70%),
     var(--nm-bg-0);

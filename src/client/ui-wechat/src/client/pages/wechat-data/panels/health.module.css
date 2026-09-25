@@ -1,6 +1,6 @@
 /* Data health — NEON MATRIX 科技风（与总览共用令牌）。 */
 
-.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 

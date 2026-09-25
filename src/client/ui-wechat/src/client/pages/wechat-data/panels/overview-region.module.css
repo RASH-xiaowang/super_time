@@ -10,7 +10,7 @@
   height: 310px;
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
 }
 .regionRankHd {
@@ -49,14 +49,14 @@
 .regionBar {
   grid-column: 2 / 4;
   height: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   overflow: hidden;
 }
 .regionBarFill {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent);
 }

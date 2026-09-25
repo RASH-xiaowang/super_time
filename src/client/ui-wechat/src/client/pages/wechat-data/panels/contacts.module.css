@@ -29,7 +29,7 @@
 }
 
 .catBtn {
-  padding: 5px 12px;
+  padding: 4px 12px;
   border: 1px solid var(--nm-border);
   border-radius: 999px;
   background: var(--nm-bg-card);
@@ -64,7 +64,7 @@
 
 .indexLetter {
   pointer-events: auto; width: 18px; height: 15px; border: none; background: transparent;
-  color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: 4px;
+  color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: var(--nm-r-xs);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   transition: all 0.15s;
@@ -102,7 +102,7 @@
 .letterHd::before {
   content: ''; display: inline-block; width: 3px; height: 10px;
   margin-right: 6px; vertical-align: middle;
-  border-radius: 2px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
 }
 
@@ -178,7 +178,7 @@
   padding: 6px 12px; font-size: 12px; color: var(--nm-success);
   background: color-mix(in srgb, var(--nm-success) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-success) 20%, transparent);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
 }
 
 .profileHd { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
