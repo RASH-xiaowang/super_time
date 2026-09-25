@@ -135,7 +135,9 @@ export async function analyzeSession(input: LayaAnalysisInput): Promise<LayaAnal
     // 降级：模型没就绪时**不编造判断**，如实说明并给出可执行的下一步。
     return {
       ok: false,
-      error: `本地决策模型未就绪：${status.missing.join('；')}`,
+      // 只给一句概括：明细（缺哪个文件、期望目录）由 UI 从 `status.missing` 渲染成清单，
+      // 这里再拼一遍会在卡片上出现两段一模一样的缺失列表。
+      error: '本地决策模型未就绪',
       latestPeer: ctx.latestPeer,
       contextLines: ctx.turns.length,
       dialogue: ctx.dialogue,

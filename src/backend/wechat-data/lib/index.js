@@ -28002,7 +28002,7 @@ function layaModelStatus(configured, decryptedDir) {
       missing.push(`${a.label}\uFF08\u8BFB\u53D6\u5931\u8D25\uFF1A${e.message}\uFF09`);
       continue;
     }
-    if (a.rel === LAYA_MODEL_FILE) bytes = size;
+    bytes += size;
     if (size < a.minBytes) missing.push(`${a.label}\uFF08\u4E0D\u5B8C\u6574\uFF1A${formatBytes2(size)}\uFF09`);
   }
   return { installed: missing.length === 0, dir, path: join90(dir, LAYA_MODEL_FILE), bytes, source, missing };
@@ -28452,7 +28452,9 @@ async function analyzeSession(input) {
   if (!status.installed) {
     return {
       ok: false,
-      error: `\u672C\u5730\u51B3\u7B56\u6A21\u578B\u672A\u5C31\u7EEA\uFF1A${status.missing.join("\uFF1B")}`,
+      // 只给一句概括：明细（缺哪个文件、期望目录）由 UI 从 `status.missing` 渲染成清单，
+      // 这里再拼一遍会在卡片上出现两段一模一样的缺失列表。
+      error: "\u672C\u5730\u51B3\u7B56\u6A21\u578B\u672A\u5C31\u7EEA",
       latestPeer: ctx.latestPeer,
       contextLines: ctx.turns.length,
       dialogue: ctx.dialogue,

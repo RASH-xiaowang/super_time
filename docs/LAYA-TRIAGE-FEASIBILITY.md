@@ -243,7 +243,25 @@ laya 推理**完全本地**，不经过 `privacyGate` 的出网闸门（那是 L
 - 首次调用含模型加载 1.69 s（加载 1.23 s + 推理 0.46 s），之后单次 **0.46–0.63 s**（574–1012 tokens）；
 - `layaUnload()` 后运行时状态确实回落（`loaded=false`），常驻内存可释放。
 
-### 8.3 仍需注意的边界（未验证）
+### 8.4 本机怎么接上模型（零拷贝，与 whisper 同款）
+
+模型不进安装包，所以**刚装好时卡片显示「模型未就绪」是正常状态**，不是故障：它会如实列出缺哪几个文件、
+期望放在哪个目录。接上它只需要一个配置键（`config.json` 的 `laya_models_dir`，与既有的
+`whisper_models_dir` 完全同款——那个也指向仓库外的 D 盘目录）：
+
+1. 把导出产物摆成一个完整布局：`<dir>/laya-decision.onnx` + `<dir>/laya-decision.onnx.data`
+   + `<dir>/tokenizer/{tokenizer.json, tokenizer_config.json}`（本机是 `D:\laya\models`）；
+2. 在 `<数据根>/config.json` 里写 `"laya_models_dir": "D:\\laya\\models"`；
+3. `getConfig()` **每次读盘、无缓存**，所以**重开卡片即可生效，不必重启应用**。
+
+另外两条与 whisper 一致：`DSH_WECHAT_LAYA_DIR` 环境变量优先级高于配置（开发/测试用），
+下载缺失文件走 `downloadLayaModel`（源由 `DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 指定）。
+
+> 顺手修掉两个本地看到的小瑕疵：`layaModelStatus().bytes` 原先只算计算图（2.25 MB）→ 卡片会显示
+> 「模型 0.0 GB」，改为**累加全部必需文件**（本机实测 1 324 369 278 B ≈ 1.23 GB）；
+> 未就绪时的错误文案原先自己拼了一遍缺失清单，与卡片渲染的清单重复 → 收敛成一句概括。
+
+### 8.5 仍需注意的边界（未验证）
 
 - **打包关（P3）未做**：onnxruntime-node 的 asarUnpack、`package-content-rules.js` 的上界、
   真实打包产物里加载模型，都还没验（`build.files` 白名单与平台裁剪已按单平台 27.7 MB 配好）。

@@ -93,7 +93,9 @@ export function layaModelStatus(configured?: string, decryptedDir?: string): Lay
       missing.push(`${a.label}（读取失败：${(e as Error).message}）`)
       continue
     }
-    if (a.rel === LAYA_MODEL_FILE) bytes = size
+    // 体积**累加全部必需文件**（图 + 外置权重 + 分词器）：只算图的话卡片会显示 0.0 GB，
+    // 而用户关心的正是「这套模型占了我多少地方」。
+    bytes += size
     if (size < a.minBytes) missing.push(`${a.label}（不完整：${formatBytes(size)}）`)
   }
   return { installed: missing.length === 0, dir, path: join(dir, LAYA_MODEL_FILE), bytes, source, missing }
