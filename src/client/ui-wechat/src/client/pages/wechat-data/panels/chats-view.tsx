@@ -21,6 +21,7 @@ import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { InlineMessageAnalysis } from './InlineMessageAnalysis.tsx'
+import { ChatAnalysisPanel } from './ChatAnalysisPanel.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -39,6 +40,8 @@ export interface ChatsViewProps {
       aiEligible: boolean
       analysisOpen: boolean
       setAnalysisOpen: React.Dispatch<React.SetStateAction<boolean>>
+      analysisTarget: number | null
+      setAnalysisTarget: React.Dispatch<React.SetStateAction<number | null>>
       aiFull: boolean
       aiOpen: boolean
       aiTarget: WechatSession | null
@@ -197,7 +200,7 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisOpen, setAnalysisTarget, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
   // 逐条分析：只对**可见窗口**里的对方文本/语音消息按需推理（见 use-inline-analysis.ts）——
   // 「只算可见的」是产品决策：单次 0.5 s，全量预跑不现实。
   const inlineAnalysis = useInlineAnalysis({
@@ -322,6 +325,15 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         )}
       </div>
 
+      {/* 左侧「分析」面板：显示**选中的那条消息**的本地决策分析。
+          与消息流里的内嵌卡同一数据源（`useInlineAnalysis` 的按会话缓存），本面板不自己发请求；
+          未选中 / 还没轮到它 / 分析失败都各有明确文案，不假装有结果。 */}
+      <ChatAnalysisPanel
+        targetId={analysisTarget}
+        entry={analysisTarget === null ? undefined : inlineAnalysis.get(analysisTarget)}
+        onClear={() => { setAnalysisTarget(null) }}
+      />
+
       {/* right: message stream */}
       <div className={cssrows.messages}>
         <div className={cssshell.starWrap} data-hidden={curSession !== null || undefined}>
@@ -367,22 +379,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                     <span className={cssshell.calBtnLabel}>AI 问答</span>
                   </button>
                 )}
-                {/* 推荐回复：只给单聊（群聊里「回一句」的语义不成立）。 */}
-                {curSession.type === 'private' && (
-                  <button
-                    type="button"
-                    className={cssrows.calBtn}
-                    data-active={suggestOpen || undefined}
-                    aria-expanded={suggestOpen}
-                    title="推荐回复：按这段对话（可结合当前知识库）生成 3 条候选回复"
-                    onClick={() => { setSuggestOpen(v => !v); setAiOpen(false) }}
-                  >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 17H7a4 4 0 0 1 0-8h10a4 4 0 0 1 0 8h-2" /><path d="m12 12 3 3-3 3" />
-                    </svg>
-                    <span className={cssshell.calBtnLabel}>推荐回复</span>
-                  </button>
-                )}
+                {/* 推荐回复不再有切换按钮：它已改成右栏的常驻面板（见下方 JSX 注释）。 */}
                 <button type="button" className={cssrows.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={cssshell.calBtnLabel}>日历</span></button>
                 {curSession.type === 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} /><span className={cssshell.calBtnLabel}>群信息</span></button>
@@ -482,6 +479,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                         data-index={vi.index}
                         ref={msgVirtualizer.measureElement}
                         className={cssrows.msgVRow}
+                        onClick={item.kind === 'msg' && item.m.isSender !== 1 ? () => { setAnalysisTarget(item.m.localId) } : undefined}
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                       >
                         {renderMsgItem(item)}
@@ -965,10 +963,12 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         </div>
       )}
 
-      {/* 会话级 AI 面板（「新对话」）：.panel 的第三栏，与消息流并排。
-          仅单聊/群聊给入口；读取范围固定为当前会话，检索仍走同一条 RAG 流水线。 */}
-      {/* 推荐回复：同样是 .panel 的第三栏；读取范围=当前会话 + 当前选中的知识库。 */}
-      {suggestOpen && curSession !== null && curSession.type === 'private' && (
+      {/* 右栏（最右一栏）：
+          · 「推荐回复」是它的**默认内容**（单聊常驻，读取范围 = 当前会话 + 当前选中的知识库）；
+          · 「AI 问答」打开时**顶替**它 —— 两块并排会把 960px 窗口下的消息列挤到不可用，
+            所以一个位置只放一个面板（原先的互斥切换就是这个意思，现在默认值反过来）。
+          群聊不给推荐回复：「回一句」的语义在群里不成立。 */}
+      {suggestOpen && curSession !== null && curSession.type === 'private' && !(aiOpen && aiEligible && aiTarget) && (
         <ReplySuggest target={curSession} onClose={() => { setSuggestOpen(false) }} />
       )}
 

@@ -59,6 +59,24 @@
 /* ── 主体（唯一滚动区）── */
 .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 12px; }
 
+/* 无边框滚动条：**在这里显式声明**，不依赖 scifi-theme.css 的全局规则。
+ *
+ * 为什么显式写：全局 `::-webkit-scrollbar` 只在该主题 CSS 被加载时生效，
+ * 而这份外壳现在被三个面板共用（AI 问答 / 推荐回复 / 分析），
+ * 「内容过长时是细条、没有轨道底色、没有边框与箭头」是明确的观感要求（2026-09-25）。
+ * 轨道与 corner 一律透明；thumb 用与全局同源的令牌（带兜底），
+ * 圆角走 `--nm-r-xs` —— 6px 宽的条上它正好是圆头（不能写字面量，几何守卫会咬）。
+ * 横向条同样收成 6px：这两栏都是纵向滚动，横条只会在溢出时意外冒出来。 */
+.body::-webkit-scrollbar { width: 6px; height: 6px; }
+.body::-webkit-scrollbar-track { background: transparent; border: none; }
+.body::-webkit-scrollbar-thumb {
+  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 240, 255, 0.10));
+  border: none;
+  border-radius: var(--nm-r-xs);
+}
+.body::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 240, 255, 0.22)); }
+.body::-webkit-scrollbar-corner { background: transparent; }
+
 /* 空态 */
 .intro { display: flex; flex-direction: column; gap: 10px; padding-top: 18px; }
 .introIcon {

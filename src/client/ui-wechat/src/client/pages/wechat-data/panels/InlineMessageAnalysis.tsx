@@ -42,8 +42,13 @@ function short(key: string, fallback: string): string {
   return SHORT[key] ?? fallback
 }
 
-/** 一条命题的紧凑块：命题句（后端原文）+ 结论 + 迷你条/刻度。 */
-function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
+/**
+ * 一条命题的紧凑块：命题句（后端原文）+ 结论 + 迷你条/刻度。
+ *
+ * 导出给左侧「分析」面板复用（`ChatAnalysisPanel.tsx`）—— 那是同一个内容的另一种排布
+ * （面板窄，单列铺开），复用同一块渲染才不会让两处慢慢长歪。
+ */
+export function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
   if (a.kind === 'noul') {
     const top = a.options[0]
     const p = top?.probability ?? 0

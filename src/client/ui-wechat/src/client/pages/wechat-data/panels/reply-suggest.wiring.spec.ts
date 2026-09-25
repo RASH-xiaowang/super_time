@@ -25,12 +25,17 @@ const panel = readFileSync(join(HERE, 'ReplySuggest.tsx'), 'utf8')
 const data = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'reply-suggest.ts'), 'utf8')
 
 describe('推荐回复的接线', () => {
-  it('头部按钮只在单聊出现，且文案与入口一致', () => {
-    const at = chats.indexOf('推荐回复：按这段对话')
-    expect(at, '找不到推荐回复按钮的 title —— 改名后请同步本用例').toBeGreaterThan(-1)
-    // 按钮所在的那个条件表达式里必须限定 private
-    const around = chats.slice(Math.max(0, at - 400), at)
-    expect(around.includes("curSession.type === 'private'"), '推荐回复按钮应当只对单聊出现').toBe(true)
+  it('入口是「右栏常驻面板」而不是「头部按钮」（2026-09-25 改），且仍只对单聊出现', () => {
+    // 为什么改：推荐回复从「点头部按钮切出来的第三栏」改成了**右栏的默认内容**
+    // （产品要求「左分析、右推荐回复」两个面板并排），按钮随之移除 ——
+    // 否则同一功能会有两个入口（一个按钮 + 一个已经常驻的面板）。
+    // 守卫的语义没变：**只对单聊出现**（群聊里「回一句」不成立）+ **必须有一个入口**。
+    expect(chats.includes('推荐回复：按这段对话'), '头部按钮已随需求移除，不该再加回来').toBe(false)
+    const at = chats.indexOf('<ReplySuggest')
+    expect(at, '找不到 ReplySuggest 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
+    const around = chats.slice(Math.max(0, at - 420), at)
+    expect(around.includes("curSession.type === 'private'"), '推荐回复面板只该对单聊挂载').toBe(true)
+    expect(around.includes('suggestOpen'), '常驻与否由 suggestOpen 控制（初值 true 写在 Chats.tsx）').toBe(true)
   })
 
   it('面板挂在消息流右侧（第三栏），且把当前会话传进去', () => {

@@ -172,8 +172,15 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const messagesTalkerRef = useRef<string | null>(null)
   /** ── 会话级 AI 面板（「新对话」）──
    *  入口在聊天头部；面板作为第三栏并排。读取范围**恒为当前会话**，线程按会话隔离。 */
-  /** 推荐回复面板（单聊）。与 AI 问答面板互斥：两者都是消息流右侧的第三栏。 */
-  const [suggestOpen, setSuggestOpen] = useState(false)
+  /**
+   * 推荐回复面板（单聊）：**固定占右侧那一栏**（2026-09-25 起不再与 AI 问答互斥切换 ——
+   * 它成了右栏的默认内容，AI 问答打开时才临时顶替它）。
+   * 初值 true = 进会话就能看到候选回复；关掉后换会话会重新打开
+   * （切换按钮已随旧实现移除，不重置就再也回不来）。
+   */
+  const [suggestOpen, setSuggestOpen] = useState(true)
+  /** 左侧「分析」面板在看哪条消息（localId）；`null` = 还没点选。 */
+  const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   // 本地决策分析卡（laya）：默认开启 —— 打开会话就对**可见的**对方消息逐条分析
   // （可见窗口驱动 + 结果落库缓存，滚回去直接命中）。不想看时用工具区那个按钮关掉。
@@ -623,8 +630,15 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
+  // 换会话时清掉「分析」的选中（localId 只在会话内唯一，留着会把上个会话的分析显示过来），
+  // 并把推荐回复打开（否则被 × 关过一次之后就没有恢复入口了）。
+  useEffect(() => {
+    setAnalysisTarget(null)
+    setSuggestOpen(true)
+  }, [curSession?.username])
+
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen,
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget,
     annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
@@ -644,7 +658,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setAnalysisOpen, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
+    setAnalysisOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,
