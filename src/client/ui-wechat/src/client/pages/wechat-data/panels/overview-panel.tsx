@@ -273,8 +273,8 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
               </div>
             </OvSection>
 
-            <OvSection span={css.ovSpan4} icon="content" title="全局热词">
-              <WordCloudCard scope="global" limit={40} />
+            <OvSection span={css.ovSpan12} icon="content" title="全局热词">
+              <WordCloudCard scope="global" limit={60} />
             </OvSection>
 
             {extras && (
