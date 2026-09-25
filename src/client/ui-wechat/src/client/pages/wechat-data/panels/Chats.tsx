@@ -175,6 +175,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   /** 推荐回复面板（单聊）。与 AI 问答面板互斥：两者都是消息流右侧的第三栏。 */
   const [suggestOpen, setSuggestOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
+  // 本地决策分析卡（laya）：按需触发，不做每条消息自动全量（单次推理 0.4–0.7 s）。
+  const [analysisOpen, setAnalysisOpen] = useState(false)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
   /** Logged-in account wxid (from the messages snapshot) for own avatars. */
@@ -621,7 +623,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget,
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen,
     annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
@@ -641,7 +643,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
+    setAnalysisOpen, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,

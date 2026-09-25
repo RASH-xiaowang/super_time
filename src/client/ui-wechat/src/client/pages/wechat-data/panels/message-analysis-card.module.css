@@ -1,0 +1,304 @@
+/* 本地决策分析卡（laya）—— UI-GEOMETRY-SPEC 全令牌：圆角/间距零字面量。
+   几何守卫对**新 CSS 文件零容忍**，所以这里每个数值都必须走 --nm-* 令牌。 */
+
+.card {
+  margin: var(--nm-s-2) var(--nm-s-3) var(--nm-s-3);
+  padding: var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  margin-bottom: var(--nm-s-3);
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+.meta {
+  margin-left: auto;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--nm-text-2);
+  border-radius: var(--nm-r-sm);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.hint {
+  margin: 0;
+  padding: var(--nm-s-2) 0;
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+}
+
+.notice {
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-hover);
+}
+
+.noticeText {
+  margin: 0 0 var(--nm-s-1);
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+}
+
+.noticeHint {
+  margin: var(--nm-s-1) 0 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}
+
+.path {
+  margin: var(--nm-s-1) 0 0;
+  padding: var(--nm-s-1) var(--nm-s-2);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-card);
+  font-family: var(--nm-font-mono, monospace);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+  word-break: break-all;
+}
+
+.quote {
+  display: flex;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-2) var(--nm-s-3);
+  margin-bottom: var(--nm-s-3);
+  border-left: 3px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+}
+
+.quoteWho {
+  flex: none;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}
+
+.quoteText {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-1);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.blocks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+}
+
+.blockHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+}
+
+.blockQ {
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}
+
+.score {
+  flex: none;
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
+.scoreNum {
+  font-size: var(--nm-fs-lg);
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.scoreMax {
+  font-size: var(--nm-fs-xs);
+}
+
+.gauge {
+  display: flex;
+  gap: 2px;
+}
+
+.tick,
+.tickOn {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-border);
+}
+
+.tickOn {
+  background: var(--nm-cyan);
+}
+
+.topLevel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.binary {
+  display: inline-flex;
+  gap: var(--nm-s-1);
+}
+
+.chip,
+.chipOn {
+  padding: var(--nm-s-1) var(--nm-s-2);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.chipOn {
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+}
+
+.row,
+.rowTop {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: var(--nm-s-2);
+}
+
+.rowLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowTop .rowLabel {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.bar {
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-border);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-text-2);
+}
+
+.rowTop .fill {
+  background: var(--nm-cyan);
+}
+
+.rowPct {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowTop .rowPct {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-3);
+  padding-top: var(--nm-s-2);
+  border-top: 1px solid var(--nm-border);
+}
+
+.footMeta {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.refresh {
+  padding: var(--nm-s-1) var(--nm-s-2);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+}
+
+.refresh:hover:not(:disabled) {
+  background: var(--nm-bg-hover);
+}
+
+.refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.disclaimer {
+  margin: var(--nm-s-2) 0 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}

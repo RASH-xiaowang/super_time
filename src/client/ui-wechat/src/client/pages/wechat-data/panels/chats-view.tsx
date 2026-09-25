@@ -20,6 +20,7 @@ import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
+import { MessageAnalysisCard } from './MessageAnalysisCard.tsx'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -35,6 +36,8 @@ export interface ChatsViewProps {
       EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
       EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
       aiEligible: boolean
+      analysisOpen: boolean
+      setAnalysisOpen: React.Dispatch<React.SetStateAction<boolean>>
       aiFull: boolean
       aiOpen: boolean
       aiTarget: WechatSession | null
@@ -193,7 +196,7 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
   return (
     <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}
@@ -384,6 +387,10 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 {curSession.type !== 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={contactInfoOpen || undefined} title="聊天信息" aria-label="聊天信息" onClick={() => { setContactInfoOpen(true) }}><IconUserOutline16 size={14} /></button>
                 )}
+                {/* 本地决策分析（laya）：图标化（动作区窄，P0-2），且是按需能力不占带字位。 */}
+                {curSession.type !== 'group' && (
+                  <button type="button" className={cssrows.calBtn} data-active={analysisOpen || undefined} title="本地决策分析：判断这条消息的意图、情绪与最该做的动作（纯本机推理，不出网）" aria-label="本地决策分析" onClick={() => { setAnalysisOpen(v => !v) }}><IconListPenOutline16 size={14} /></button>
+                )}
                 {/*
                   低频动作（导出/已编辑/清空草稿）收进溢出菜单：此前它们与上面三个按钮平铺，
                   动作区内容宽 468px 且 flex-shrink:0，窗口一窄就被消息区裁掉 ——
@@ -476,6 +483,14 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 </div>
               )}
               {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
+              {/* 分析卡贴消息流末尾（msgEndRef 之前，尾部锚点仍最底）；分析的是最新一条对方消息。 */}
+              {analysisOpen && curSession && (
+                <MessageAnalysisCard
+                  talker={curSession.username}
+                  displayName={curSession.displayName}
+                  onClose={() => { setAnalysisOpen(false) }}
+                />
+              )}
               <div ref={msgEndRef} />
             </div>
           </>
