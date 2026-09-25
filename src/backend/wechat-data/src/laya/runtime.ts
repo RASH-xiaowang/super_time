@@ -2,7 +2,7 @@
  * laya 的**本地推理运行时**（onnxruntime-node + JS 分词 + 后处理）。
  *
  * 三件事都在这里：加载 → 推理 → 把原始 logits 解释成人类可读的答案。
- * 上层（`query/laya-analysis.ts`）只负责准备对话上下文，不碰张量。
+ * 上层（`laya/analysis.ts`）只负责准备对话上下文，不碰张量。
  *
  * ## 为什么是 ONNX 而不是 Python
  * 打包版是纯 Node + Electron，没有 Python。实测把 `DecisionModel.forward` 导成 ONNX 后，

@@ -4,14 +4,14 @@
  * 推理结果的形状（`LayaAnswer`）直接复用运行时那份定义——它已经是「给 UI 看」的形态
  * （概率已排序、标签已本地化），再包一层 View 只会多一次映射，没有收益。
  */
-import type { LayaAnalysisResult } from './query/laya-analysis.ts'
+import type { LayaAnalysisResult } from './laya/analysis.ts'
 
 export type { LayaAnswer, LayaAnswerOption, LayaAnalyzeResult } from './laya/runtime.ts'
 
 /**
  * 一次分析的可序列化结果。
  *
- * 取 `query/laya-analysis.ts` 的收口结果（而不是 `laya/runtime.ts` 的原始结果）：
+ * 取 `laya/analysis.ts` 的收口结果（而不是 `laya/runtime.ts` 的原始结果）：
  * 前者已经带上「被分析的那句 / 上下文条数 / 是否真的用了模型 / 降级说明」，
  * 正是 UI 需要的那一份。
  */

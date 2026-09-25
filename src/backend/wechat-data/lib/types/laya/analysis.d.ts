@@ -8,8 +8,8 @@
  * 两者互补：laya 最擅长的「现在该做什么」里就有「先搜索历史聊天记录」这一项——
  * 那正是本应用自带的 FTS 搜索能力。
  */
-import { type LayaAnswer } from '../laya/runtime.ts';
-import { type LayaQuestions } from '../laya/presets.ts';
+import { type LayaAnswer } from './runtime.ts';
+import { type LayaQuestions } from './presets.ts';
 /** 对话里的一轮。 */
 export interface LayaTurn {
     /** 是否本人发送。 */

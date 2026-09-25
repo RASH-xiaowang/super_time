@@ -8,11 +8,11 @@
  * 两者互补：laya 最擅长的「现在该做什么」里就有「先搜索历史聊天记录」这一项——
  * 那正是本应用自带的 FTS 搜索能力。
  */
-import { layaAnalyze, type LayaAnswer } from '../laya/runtime.ts'
-import { layaModelStatus } from '../laya/model-file.ts'
-import { defaultChatQuestions, type LayaQuestions } from '../laya/presets.ts'
-import { queryMessages } from './messages.ts'
-import { messageText } from './reply-suggest.ts'
+import { layaAnalyze, type LayaAnswer } from './runtime.ts'
+import { layaModelStatus } from './model-file.ts'
+import { defaultChatQuestions, type LayaQuestions } from './presets.ts'
+import { queryMessages } from '../query/messages.ts'
+import { messageText } from '../query/reply-suggest.ts'
 
 /** 默认取多少条作为上下文（laya 的 max_len 是 1024 token，20 条中文对话通常在预算内）。 */
 const DEFAULT_CONTEXT = 20

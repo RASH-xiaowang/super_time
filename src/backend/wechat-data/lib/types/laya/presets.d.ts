@@ -9,7 +9,7 @@
  * ——实测 `other` 会白吃掉一截概率质量，让真正有用的选项读数偏低。
  *
  * 命题里用反引号引用的 `dialogue` 必须与调用方 state 的键一致（laya 按这个键把文本拼进输入），
- * 见 `query/laya-analysis.ts` 的 `buildDialogueState()`。
+ * 见 `laya/analysis.ts` 的 `buildDialogueState()`。
  */
 /** 命题类型（与 laya 的三种决策原语一一对应）。 */
 export type LayaQuestionKind = 'choice' | 'score' | 'noul';

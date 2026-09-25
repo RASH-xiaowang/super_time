@@ -27949,9 +27949,9 @@ function collateItems(items, padId) {
   const markerPos = [];
   const markerMask = [];
   for (const it of items) {
-    inputIds.push(Array.from({ length: seqLen }, (_, i) => i < it.ids.length ? it.ids[i] : padId));
+    inputIds.push(Array.from({ length: seqLen }, (_, i) => it.ids[i] ?? padId));
     attentionMask.push(Array.from({ length: seqLen }, (_, i) => i < it.ids.length ? 1 : 0));
-    markerPos.push(Array.from({ length: optCols }, (_, i) => i < it.markers.length ? it.markers[i] : 0));
+    markerPos.push(Array.from({ length: optCols }, (_, i) => it.markers[i] ?? 0));
     markerMask.push(Array.from({ length: optCols }, (_, i) => i < it.markers.length));
   }
   return { inputIds, attentionMask, markerPos, markerMask, qtype: items.map((it) => it.qtype), seqLen, optCols };
@@ -27965,7 +27965,10 @@ var LAYA_MIRROR_ENV = "DSH_WECHAT_LAYA_MIRROR";
 var LAYA_REPO_ENV = "DSH_WECHAT_LAYA_REPO";
 var LAYA_DEFAULT_REPO = "super-time/super-time-models";
 var LAYA_ASSETS = [
-  { file: "laya-decision.onnx", rel: "laya-decision.onnx", minBytes: 64 * 1024 * 1024, label: "\u51B3\u7B56\u6A21\u578B" },
+  { file: "laya-decision.onnx", rel: "laya-decision.onnx", minBytes: 1024 * 1024, label: "\u51B3\u7B56\u6A21\u578B\u56FE" },
+  // dynamo 导出把权重写成外置数据，onnxruntime 会在**同目录**找它 —— 少这一个文件模型就加载不起来，
+  // 所以它和计算图一样是必需项（图只有几 MB，权重才有 1.2 GB）。
+  { file: "laya-decision.onnx.data", rel: "laya-decision.onnx.data", minBytes: 64 * 1024 * 1024, label: "\u6A21\u578B\u6743\u91CD" },
   { file: "tokenizer.json", rel: "tokenizer/tokenizer.json", minBytes: 1024 * 1024, label: "\u5206\u8BCD\u5668\u8BCD\u8868" },
   { file: "tokenizer_config.json", rel: "tokenizer/tokenizer_config.json", minBytes: 64, label: "\u5206\u8BCD\u5668\u914D\u7F6E" }
 ];
@@ -28222,10 +28225,11 @@ async function layaEnsureLoaded(modelDir, decryptedDir) {
       const tok = await AutoTokenizer.from_pretrained(tokDir, { local_files_only: true });
       const one = (t) => {
         const ids = tok.encode(t, { add_special_tokens: false });
-        if (!Array.isArray(ids) || ids.length !== 1 || !Number.isFinite(ids[0])) {
+        const first = Array.isArray(ids) ? ids[0] : void 0;
+        if (first === void 0 || !Number.isFinite(first)) {
           throw new Error(`\u5206\u8BCD\u5668\u65E0\u6CD5\u89E3\u6790\u7279\u6B8A\u6807\u8BB0 ${t}\uFF08\u5F97\u5230 ${JSON.stringify(ids)}\uFF09`);
         }
-        return ids[0];
+        return first;
       };
       const tokenizer = {
         clsId: one("<bos>"),
@@ -28267,13 +28271,13 @@ async function layaAnalyze(input) {
   const status = layaModelStatus(input.modelDir, input.decryptedDir);
   const model = { dir: l.dir, bytes: status.bytes };
   const temps = readTemperatures(l.dir);
-  const ids = Object.keys(questions);
-  if (ids.length === 0) {
+  const entries2 = Object.entries(questions);
+  if (entries2.length === 0) {
     return { ok: false, error: "\u6CA1\u6709\u53EF\u7528\u7684\u547D\u9898", model, answers: [], inferenceMs: 0, tokens: 0, reused: true };
   }
+  const ids = entries2.map(([qid]) => qid);
   const items = [];
-  const internals = ids.map((qid) => {
-    const q = questions[qid];
+  const internals = entries2.map(([qid, q]) => {
     const internal = toInternal(q);
     const seq = buildSequence(l.tokenizer, input.state, internal);
     items.push({ qid, ids: seq.ids, markers: seq.markers, qtype: QTYPES[internal.t] });
@@ -28301,7 +28305,9 @@ async function layaAnalyze(input) {
       marker_mask: new l.ort.Tensor("bool", Uint8Array.from(batch.markerMask.flat().map((v) => v ? 1 : 0)), [batch.markerMask.length, batch.optCols]),
       qtype: new l.ort.Tensor("int64", BigInt64Array.from(batch.qtype.map(BigInt)), [batch.qtype.length])
     });
-    const raw = out.logits ?? out[Object.keys(out)[0]];
+    const firstKey = Object.keys(out)[0];
+    const raw = out.logits ?? (firstKey === void 0 ? void 0 : out[firstKey]);
+    if (raw === void 0) throw new Error("\u6A21\u578B\u6CA1\u6709\u8FD4\u56DE logits \u8F93\u51FA");
     logits = raw.data;
   } catch (e) {
     lastError = e.message;
@@ -28310,26 +28316,38 @@ async function layaAnalyze(input) {
   const inferenceMs = Date.now() - t0;
   lastInferenceMs = inferenceMs;
   lastError = "";
+  const answers = postprocessAnswers({
+    logits,
+    items,
+    questions,
+    qids: ids,
+    optCols: batch.optCols,
+    temperatures: temps
+  });
+  const tokens = items.reduce((a, it) => a + it.ids.length, 0);
+  return { ok: true, model, answers, inferenceMs, tokens, reused: true };
+}
+function postprocessAnswers(input) {
   const answers = [];
-  let tokens = 0;
-  for (let r = 0; r < ids.length; r += 1) {
-    const qid = ids[r];
-    const q = questions[qid];
-    const internal = internals[r];
-    const k = items[r].markers.length;
+  for (let r = 0; r < input.items.length; r += 1) {
+    const qid = input.qids[r];
+    const it = input.items[r];
+    if (qid === void 0 || it === void 0) continue;
+    const q = input.questions[qid];
+    if (q === void 0) continue;
+    const k = it.markers.length;
     if (k === 0) continue;
-    const qt = items[r].qtype;
-    const scale = temps.byOptions[tempBucket(qt, k)] ?? temps.base[qt] ?? 1;
+    const scale = input.temperatures.byOptions[tempBucket(it.qtype, k)] ?? input.temperatures.base[it.qtype] ?? 1;
     const z = [];
-    for (let i = 0; i < k; i += 1) z.push(Number(logits[r * batch.optCols + i]) / scale);
+    for (let i = 0; i < k; i += 1) z.push(Number(input.logits[r * input.optCols + i]) / scale);
     const p = softmax(z);
     const confidence = confidenceFromProbs(p);
-    const question = internal.ins.replace(/`dialogue`/g, "\u5BF9\u8BDD").trim();
+    const question = String(q.instructions).replace(/`dialogue`/g, "\u5BF9\u8BDD").trim();
     if (q.type === "choice") {
       const keys = Object.keys(q.criteria);
       const options = keys.map((key, i) => ({
         key,
-        label: q.criteria[key],
+        label: q.criteria[key] ?? key,
         probability: Math.round((p[i] ?? 0) * 1e4) / 1e4
       })).sort((a, b) => b.probability - a.probability);
       answers.push({
@@ -28373,17 +28391,16 @@ async function layaAnalyze(input) {
         question,
         options,
         yes,
-        top: options[0].key,
-        topProbability: options[0].probability,
+        top: options[0]?.key ?? "",
+        topProbability: options[0]?.probability ?? 0,
         confidence
       });
     }
-    tokens += items[r].ids.length;
   }
-  return { ok: true, model, answers, inferenceMs, tokens, reused: true };
+  return answers;
 }
 
-// src/backend/wechat-data/src/query/laya-analysis.ts
+// src/backend/wechat-data/src/laya/analysis.ts
 var DEFAULT_CONTEXT = 20;
 var MAX_CONTEXT = 60;
 function buildDialogueState(decryptedDir, talker, selfUsername, limit = DEFAULT_CONTEXT) {
@@ -28397,7 +28414,8 @@ function buildDialogueState(decryptedDir, talker, selfUsername, limit = DEFAULT_
   }
   let lastPeer = -1;
   for (let i = turns.length - 1; i >= 0; i -= 1) {
-    if (!turns[i].self) {
+    const t = turns[i];
+    if (t !== void 0 && !t.self) {
       lastPeer = i;
       break;
     }
@@ -28406,7 +28424,7 @@ function buildDialogueState(decryptedDir, talker, selfUsername, limit = DEFAULT_
   const kept = turns.slice(0, lastPeer + 1);
   return {
     dialogue: kept.map((t) => `${t.self ? "\u6211" : "\u5BF9\u65B9"}\uFF1A${t.text}`).join("\n"),
-    latestPeer: kept[kept.length - 1].text,
+    latestPeer: kept[kept.length - 1]?.text ?? "",
     turns: kept
   };
 }

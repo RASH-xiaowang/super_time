@@ -8,7 +8,7 @@
  * 生命周期（`getLayaStatus` 与 `downloadLayaModel` 都在本模块里），所以放在模块级。
  * 代价是多实例场景会共享——测试需要隔离时用 `__setLayaDownloadForTest()` 注入。
  */
-import { analyzeSession } from '../query/laya-analysis.ts'
+import { analyzeSession } from '../laya/analysis.ts'
 import {
   formatBytes, layaAdoptModelDir, layaDownloadModel, layaModelStatus, layaModelsDir, layaTokenizerDir,
 } from '../laya/model-file.ts'
