@@ -1,5 +1,5 @@
 
-import type { WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import type { ImageUpgradeResult, WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
 /**
  * 设置面板的五张流程卡片：检测账号 / 数据库密钥 / 图片密钥 / 图片解码 / 语音转写
@@ -258,17 +258,24 @@ export interface SettingsImgDecodeSectionProps {
   imgDecryptDetail: { errors: Array<{ file: string; error: string }>; skippedDetails: Array<{ file: string; reason: string }> }
   imgDecrypting: boolean
   imgProgress: { active: boolean; done: number; total: number; failed: number; skipped: number; message: string }
+  /** 「升级为原图」的实时进度（与批量解密各持一个，互不串台）。 */
+  imgUpgradeProgress: { active: boolean; done: number; total: number; message: string }
+  /** 上一次升级的结论；null = 还没跑过。 */
+  imgUpgradeResult: ImageUpgradeResult | null
+  imgUpgrading: boolean
   setImgConcurrency: React.Dispatch<React.SetStateAction<number>>
   setImgDetailOpen: React.Dispatch<React.SetStateAction<boolean>>
   toggleCdn: (enabled: boolean) => Promise<void>
   toggleCdnLocal: (local: boolean) => Promise<void>
+  upgradeImgs: () => Promise<void>
 }
 
 export function SettingsImgDecodeSection({
   cdnEnabled, cdnLocal, cdnMsg,
   decryptImgs, imgConcurrency, imgDecryptDetail,
-  imgDecrypting, imgProgress, setImgConcurrency,
-  setImgDetailOpen, toggleCdn, toggleCdnLocal,
+  imgDecrypting, imgProgress, imgUpgradeProgress, imgUpgradeResult,
+  imgUpgrading, setImgConcurrency,
+  setImgDetailOpen, toggleCdn, toggleCdnLocal, upgradeImgs,
 }: SettingsImgDecodeSectionProps): React.JSX.Element {
   return (
       <section className={css.card} data-settings-section="img">
@@ -276,7 +283,7 @@ export function SettingsImgDecodeSection({
           <span className={css.cardIconChip}><IconGlobeOutline14 size={14} /></span>
           <div className={css.cardTitleBox}>
             <span className={css.cardTitle}>图片解码</span>
-            <span className={kitCss.textCaptionTrunc}>批量解密 .dat 到本地解码缓存</span>
+            <span className={kitCss.textCaptionTrunc}>批量解密 .dat · 升级已缓存的原图</span>
           </div>
           <span className={css.cardBadge}>
             <StateDot state={cdnEnabled ? 'done' : 'warning'} />
@@ -302,7 +309,7 @@ export function SettingsImgDecodeSection({
             <span className={css.rowName}>批量解密图片</span>
             <span className={css.rowMeta} title="解密 msg/attach 下所有 .dat 图片到解码缓存，聊天/朋友圈图片即时显示">解密 msg/attach 全部 .dat 到解码缓存</span>
             <Input className={css.inputNarrow} value={String(imgConcurrency)} onChange={(e) => { setImgConcurrency(Number(e.target.value) || 8) }} title="并行线程数" />
-            <Button size="sm" variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={imgDecrypting ? <span className={css.spin} /> : undefined} onClick={() => { void decryptImgs() }} disabled={imgDecrypting}>
+            <Button size="sm" variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={imgDecrypting ? <span className={css.spin} /> : undefined} onClick={() => { void decryptImgs() }} disabled={imgDecrypting || imgUpgrading}>
               {imgDecrypting ? '解密中…' : '立即解密'}
             </Button>
           </div>
@@ -319,7 +326,28 @@ export function SettingsImgDecodeSection({
               : undefined}
           />
           <div className={css.row}>
-            <span className={css.rowNote}>✅ 朋友圈/聊天图片离线解码已支持（本地缓存 .dat 解密）；高清原图与表情批量转码为后续本地能力。HEVC/视频格式自动跳过。</span>
+            <span className={css.rowName}>升级为原图</span>
+            <span className={css.rowMeta} title="把**已经解出来**的图按本机现存最好的一档重解（含 wxgf 原图转码）；只有严格更大的那一份才会覆盖缓存，不联网">把已缓存的图重解成本机最好的那一份</span>
+            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixed)} icon={imgUpgrading ? <span className={css.spin} /> : undefined} onClick={() => { void upgradeImgs() }} disabled={imgUpgrading || imgDecrypting}>
+              {imgUpgrading ? '升级中…' : '立即升级'}
+            </Button>
+          </div>
+          <StatusSlot
+            placeholder="点击「立即升级」开始，进度与结果实时显示在这里"
+            active={imgUpgradeProgress.active}
+            pct={imgUpgradeProgress.total > 0 ? Math.round((imgUpgradeProgress.done / imgUpgradeProgress.total) * 100) : 0}
+            text={`检查 ${imgUpgradeProgress.done}/${imgUpgradeProgress.total} · 已升级 ${imgUpgradeResult?.upgraded ?? 0}`}
+            item={imgUpgradeProgress.message}
+            doneText={imgUpgradeResult
+              ? `上次升级：检查 ${imgUpgradeResult.total} · 已升级 ${imgUpgradeResult.upgraded} · 无需升级 ${imgUpgradeResult.unchanged} · 本机无源 ${imgUpgradeResult.noSource} · 失败 ${imgUpgradeResult.failed}`
+              : ''}
+            doneKind=""
+            detail={imgUpgradeResult && (imgUpgradeResult.errors.length > 0 || (imgUpgradeResult.skippedDetails?.length ?? 0) > 0)
+              ? <button type="button" className={acctCss.slotDetailBtn} onClick={() => { setImgDetailOpen(true) }}>详情</button>
+              : undefined}
+          />
+          <div className={css.row}>
+            <span className={css.rowNote}>✅ 朋友圈/聊天图片离线解码已支持（本地缓存 .dat 解密），wxgf 原图档会调本机微信解码库转码成可渲染图片；视频格式自动跳过。</span>
           </div>
         </div>
       </section>

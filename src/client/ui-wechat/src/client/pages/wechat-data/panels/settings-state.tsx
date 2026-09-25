@@ -9,13 +9,14 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
 import { PollRegistry, createPollRegistry } from './poll-registry.ts'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import { ImageUpgradeResult, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /** 面板的入参（与 SettingsPanelProps 同形，这里单列以免与面板互相 import）。 */
@@ -70,6 +71,14 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   const [imgDetailOpen, setImgDetailOpen] = useState(false)
   const [imgDecryptDetail, setImgDecryptDetail] = useState<{ errors: Array<{ file: string; error: string }>; skippedDetails: Array<{ file: string; reason: string }> }>({ errors: [], skippedDetails: [] })
   const [imgConcurrency, setImgConcurrency] = useState(8)
+  const [imgUpgrading, setImgUpgrading] = useState(false)
+  const [imgUpgradeProgress, setImgUpgradeProgress] = useState<{ active: boolean; done: number; total: number; message: string }>({ active: false, done: 0, total: 0, message: '' })
+  const [imgUpgradeResult, setImgUpgradeResult] = useState<ImageUpgradeResult | null>(null)
+  /**
+   * 详情弹窗的标题。解密与升级共用同一个弹窗（`imgDecryptDetail` 的形状本来就一样），
+   * 但「跳过原因」在两条路径上说的不是一件事 —— 标题必须跟着变，否则用户会以为自己点错了。
+   */
+  const [imgDetailTitle, setImgDetailTitle] = useState('图片解密详情')
   const [cdnMsg, setCdnMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [dbDirMsg, setDbDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [voiceOpMsg, setVoiceOpMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -632,6 +641,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     try {
       const concurrency = Number.isFinite(imgConcurrency) && imgConcurrency >= 1 && imgConcurrency <= 32 ? imgConcurrency : 8
       const r = await apiDecryptAllImages({ concurrency })
+      setImgDetailTitle('图片解密详情')
       setImgDecryptDetail({ errors: r.errors ?? [], skippedDetails: r.skippedDetails ?? [] })
       const failedItems = r.errors.map(f => `${f.file} — ${f.error}`)
       if (r.ok) {
@@ -645,6 +655,49 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     } finally {
       stop()
       setImgDecrypting(false)
+    }
+  }
+
+  /**
+   * 升级老解码缓存：把**已经解出来**的图，按本机现存最好的一档重解一遍（不联网）。
+   *
+   * 为什么单列一个动作而不是并进「批量解密」：批量解密只处理**还没有缓存**的图
+   * （`hasCached` 命中就跳过），而这里要处理的恰恰是**已经有缓存、但那份不是最好的**——
+   * 用户「明明在微信里看过原图、这里还是糊的」就是这一批。两者同走后端的忙闲闸门，
+   * 同时点会被后端拒掉（前端由此各自持一个进度块，不会串台）。
+   */
+  const upgradeImgs = async (): Promise<void> => {
+    setImgUpgrading(true)
+    setImgUpgradeResult(null)
+    setImgUpgradeProgress({ active: true, done: 0, total: 0, message: '正在扫描解码缓存…' })
+    const stop = pollDecrypt((s) => {
+      setImgUpgradeProgress({ active: s.active, done: s.done, total: s.total, message: s.message })
+    })
+    try {
+      const r = await apiUpgradeDecodedImages()
+      setImgUpgradeResult(r)
+      setImgDetailTitle('原图升级详情')
+      setImgDecryptDetail({ errors: r.errors ?? [], skippedDetails: r.skippedDetails ?? [] })
+      const failedItems = r.errors.map(f => `${f.file} — ${f.error}`)
+      if (r.error) {
+        notify('err', r.error, failedItems)
+      } else if (r.upgraded === 0) {
+        // 「一张都没升级」有两种完全不同的原因，必须分开说：本来就够好（不用管）与
+        // 本机没有更大的源（只能回微信里点开原图）。合成一句「完成」会让人以为工具坏了。
+        notify('ok', `检查 ${r.total} 张：无需升级 ${r.unchanged}，本机无源 ${r.noSource}${r.failed > 0 ? `，失败 ${r.failed}` : ''}`, failedItems)
+      } else {
+        notify('ok', `已升级 ${r.upgraded} 张为原图（检查 ${r.total}：无需升级 ${r.unchanged}，本机无源 ${r.noSource}，失败 ${r.failed}）`, failedItems)
+      }
+      // 真的换了图才清内存缓存：`MessageImage` 首帧走的是全应用共用那一份内存 LRU，
+      // 它跨面板切换**不会失效** —— 不清的话用户看到的首帧仍是那张旧的缩略图，
+      // 「升级成功」就表现为「什么都没发生」。一张都没升级时不清，免得白跑一屏取图。
+      if (r.upgraded > 0) forgetAllImages()
+      setImgUpgradeProgress({ active: false, done: r.total, total: r.total, message: '' })
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      stop()
+      setImgUpgrading(false)
     }
   }
 
@@ -739,13 +792,13 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
-    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgGetting, imgOpMsg,
-    imgProgress, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
+    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
+    imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     message, nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath,
     pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
     saving, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
-    toggleCdn, toggleCdnLocal, useAccount, userScrolled, verifyDb, verifyImg,
+    toggleCdn, toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
     voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
     whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
   }

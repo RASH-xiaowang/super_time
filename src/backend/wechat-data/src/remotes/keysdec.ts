@@ -10,9 +10,10 @@ import { fetchImageKey, normalizeAccountDir } from '../keys/service.ts'
 import { getConfig } from '../query/config.ts'
 import { decryptAllDbs } from '../query/decrypt-all.ts'
 import { decryptAllImageDats } from '../query/decrypt-images.ts'
+import { upgradeDecodedImageCache } from '../query/image-upgrade.ts'
 import { resolveImageKeyPair } from '../query/image-key.ts'
 import { invalidateWechatMeta } from '../query/meta.ts'
-import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts'
+import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, ImageUpgradeResult, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts'
 import { existsSync } from 'node:fs'
 
 export interface createKeysDecryptRemotesInputs {
@@ -123,6 +124,50 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
         rc.decryptState.skipped = result.skipped
         rc.op('sync', 'decrypt_images', result.failed === 0 ? 'ok' : 'fail', '', `成功 ${result.okCount}/${result.total}${result.failed > 0 ? `，失败 ${result.failed}` : ''}`)
         return { ok: true, ...result }
+      } finally {
+        rc.decryptState.active = false
+        rc.decryptState.message = ''
+      }
+    },
+
+    /**
+     * 升级老缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图，
+     * 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。
+     *
+     * 为什么不能自动做：判「本机有没有更好的一份」要扫 `msg/attach`，那是每张图一次目录遍历
+     * （`decodeImageDataUrl` 只在缓存**未命中**时才付这个代价），而读图是虚拟列表里一屏几十张的
+     * 高频路径。做成显式动作后，这一次性的成本换的是**之后所有渲染**都命中升级后的缓存。
+     *
+     * 与 `decryptAllImages` 共用同一条忙闲闸门（`decryptState.active`）：两者都是
+     * 「读 attach、写 decoded 缓存」，同时跑只会互相踩槽位。
+     * @returns ImageUpgradeResult：检查/已升级/无需升级/无源/失败 计数 + 明细。
+     */
+    async upgradeDecodedImages(): Promise<ImageUpgradeResult> {
+      if (rc.decryptState.active) { rc.op('sync', 'upgrade_decoded_images', 'fail', '', '已有解密任务进行中'); return { total: 0, upgraded: 0, unchanged: 0, noSource: 0, failed: 0, errors: [], error: '已有解密任务进行中' } }
+      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
+      const rawRoot = rawWechatBase(rc.dirs().decrypted)
+      if (!rawRoot) { rc.op('sync', 'upgrade_decoded_images', 'fail', '', '未配置数据库目录，无法定位图片数据'); return { total: 0, upgraded: 0, unchanged: 0, noSource: 0, failed: 0, errors: [], error: '未配置数据库目录，无法定位图片数据' } }
+      rc.decryptState.op = 'image-upgrade'
+      rc.decryptState.active = true
+      rc.decryptState.done = 0
+      rc.decryptState.total = 0
+      rc.decryptState.failed = 0
+      rc.decryptState.skipped = 0
+      rc.decryptState.message = ''
+      try {
+        const result = await upgradeDecodedImageCache(rawRoot, rc.dirs().decoded, aesKey, xorKey,
+          (processed, total, failed, message) => {
+            rc.decryptState.done = processed
+            rc.decryptState.total = total
+            rc.decryptState.failed = failed
+            rc.decryptState.message = message
+          })
+        // 两个「跳过」口径要分开写：`unchanged`（本来就够好）不该被当成 `noSource`（本机没源）
+        // —— 界面文案与用户下一步动作完全不同（前者不用管，后者只能回微信里点开原图）。
+        rc.decryptState.skipped = result.unchanged + result.noSource
+        rc.op('sync', 'upgrade_decoded_images', result.failed === 0 ? 'ok' : 'fail', '',
+          `检查 ${result.total} 张，升级 ${result.upgraded} 张（无需升级 ${result.unchanged}，本机无源 ${result.noSource}，失败 ${result.failed}）`)
+        return result
       } finally {
         rc.decryptState.active = false
         rc.decryptState.message = ''

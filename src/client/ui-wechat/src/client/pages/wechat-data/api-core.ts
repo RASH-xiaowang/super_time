@@ -41,6 +41,7 @@ import type {
   DecryptAllResult,
   DecryptImagesResult,
   DecryptStatus,
+  ImageUpgradeResult,
   DeleteFavoriteResult,
   DraftClearResult,
   DraftsClearResult,
@@ -479,6 +480,7 @@ export interface WechatRemote {
   verifyImageKey(): Promise<RemoteResult<VerifyImageKeyResult>>
   decryptAllDatabases(): Promise<RemoteResult<DecryptAllResult>>
   decryptAllImages(options?: { concurrency?: number }): Promise<RemoteResult<DecryptImagesResult>>
+  upgradeDecodedImages(): Promise<RemoteResult<ImageUpgradeResult>>
   getDecryptStatus(): Promise<RemoteResult<DecryptStatus>>
   getWhisperStatus(): Promise<RemoteResult<WhisperStatus>>
   downloadWhisperModel(options: { model: string }): Promise<RemoteResult<WhisperDownloadResult>>

@@ -104,10 +104,26 @@ export interface DecryptImagesResult {
     }>;
     error?: string;
 }
+/**
+ * 「升级解码缓存」结果（把老缓存里由低档 `.dat` 解出的图重解成本机最好的一份）。
+ *
+ * 类型真源在 `query/image-upgrade.ts`（实现与它同处一地），这里再导出一次是为了让
+ * Remote 客户端能从 `<pkg>/types` 取到它 —— 与 `types.ts` 里
+ * `export type { ContactsPageOptions } from './query/contacts.ts'` 同款做法。
+ * 反过来（query 去 import 本文件）会踩 M24 的分层守卫：`query → glue` 只放行
+ * `dirs.ts / asar-path.ts / types.ts` 三个叶子。
+ */
+export type { ImageUpgradeResult } from './query/image-upgrade.ts';
 /** Live decryption progress snapshot (getDecryptStatus). */
 export interface DecryptStatus {
-    /** Which decryption op is (or was last) running. */
-    op: 'databases' | 'images' | null;
+    /**
+     * Which decryption op is (or was last) running.
+     *
+     * `image-upgrade` 是「升级解码缓存」（把老缓存里由低档 `.dat` 解出的图重解成本机最好的一份）：
+     * 它与 `images` 共用同一条忙闲闸门（同一时刻只许一个解密类任务在跑），但**不是**同一件事 ——
+     * 状态里如实写清是哪一个，排障时才分得清「用户点的是批量解密还是升级」。
+     */
+    op: 'databases' | 'images' | 'image-upgrade' | null;
     active: boolean;
     done: number;
     total: number;

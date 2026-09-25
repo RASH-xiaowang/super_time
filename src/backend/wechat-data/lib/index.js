@@ -11207,8 +11207,8 @@ function normalizeJobId(jobId) {
 
 // src/backend/wechat-data/src/gateway-core.ts
 import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
-import { existsSync as existsSync71, mkdirSync as mkdirSync24, readFileSync as readFileSync28, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join90 } from "node:path";
+import { existsSync as existsSync72, mkdirSync as mkdirSync24, readFileSync as readFileSync29, writeFileSync as writeFileSync19 } from "node:fs";
+import { join as join91 } from "node:path";
 
 // src/backend/wechat-data/src/query/sync.ts
 import { createDecipheriv as createDecipheriv2, pbkdf2Sync as pbkdf2Sync2 } from "node:crypto";
@@ -18306,12 +18306,14 @@ function walkDataDats(dir, out, depth) {
     else if (e.name.toLowerCase().endsWith(".dat") && MD5_PREFIX_RE.test(e.name)) out.push(p);
   }
 }
-async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurrency = 8, onProgress) {
+function collectImageDatFiles(rawRoot) {
   const files = [];
   walkDataDats(join70(rawRoot, "msg", "attach"), files, 0);
-  files.sort((a, b) => datTierRank(a) - datTierRank(b));
+  return files;
+}
+function groupImageDatsByMd5(files) {
   const groups = /* @__PURE__ */ new Map();
-  for (const file of files) {
+  for (const file of [...files].sort((a, b) => datTierRank(a) - datTierRank(b))) {
     const name = file.split(/[\\/]/).pop() ?? "";
     const md5 = (MD5_PREFIX_RE.exec(name)?.[1] ?? "").toLowerCase();
     if (!md5) continue;
@@ -18319,6 +18321,11 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
     if (bucket) bucket.push(file);
     else groups.set(md5, [file]);
   }
+  return groups;
+}
+async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurrency = 8, onProgress) {
+  const files = collectImageDatFiles(rawRoot);
+  const groups = groupImageDatsByMd5(files);
   const work = [...groups.entries()];
   const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null;
   let okCount = 0;
@@ -18402,8 +18409,268 @@ async function decryptAllImageDats(rawRoot, decodedDir, aesKey, xorKey, concurre
   return { total: files.length, okCount, failed, skipped, errors, skippedDetails };
 }
 
-// src/backend/wechat-data/src/query/image-key.ts
+// src/backend/wechat-data/src/query/image-upgrade.ts
+import { existsSync as existsSync57, readdirSync as readdirSync31, readFileSync as readFileSync19, rmSync as rmSync8, statSync as statSync19, writeFileSync as writeFileSync12 } from "node:fs";
+import { join as join72 } from "node:path";
+
+// src/backend/wechat-data/src/query/remote-image.ts
+var import_llm_retry4 = __toESM(require_llm_retry(), 1);
+import { createHash as createHash22 } from "node:crypto";
+import { existsSync as existsSync56, mkdirSync as mkdirSync17, readFileSync as readFileSync18, renameSync as renameSync6, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join71 } from "node:path";
+
+// src/backend/wechat-data/src/query/cdn-hosts.ts
+var WECHAT_CDN_HOST_SUFFIXES = [
+  "qq.com",
+  "wechat.com",
+  "wechatcdn.cn",
+  "qpic.cn",
+  "weixin.qq.com",
+  "qlogo.cn"
+];
+function wechatCdnHostAllowed(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host === "") return false;
+  return WECHAT_CDN_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith("." + suf));
+}
+
+// src/backend/wechat-data/src/query/remote-image.ts
+var MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024;
+var MAX_IMAGES_PER_CALL = 40;
+var FETCH_CONCURRENCY = 6;
+var FAIL_COOLDOWN_MS = 6e4;
+var FETCH_TIMEOUT_MS = 12e3;
+var REMOTE_IMAGE_CACHE_DIRNAME = "remote-images";
+var RENDERABLE_MIME = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp"
+};
+var CACHE_SUFFIXES = /* @__PURE__ */ new Set(["png", "jpg", "gif", "webp"]);
+var failUntil = /* @__PURE__ */ new Map();
+function cacheKey(url) {
+  return createHash22("md5").update(url, "utf8").digest("hex");
+}
+function readCache(url, decodedDir) {
+  const dir = join71(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME);
+  const key = cacheKey(url);
+  for (const fmt of ["png", "jpg", "gif", "webp"]) {
+    const file = join71(dir, `${key}.${fmt}`);
+    if (!existsSync56(file)) continue;
+    try {
+      return `data:${RENDERABLE_MIME[fmt] ?? "image/png"};base64,${readFileSync18(file).toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+function cooledDown(url) {
+  const until = failUntil.get(url);
+  return until !== void 0 && Date.now() < until;
+}
+async function fetchRemoteImage(rawUrl, decodedDir, opts = {}) {
+  const url = String(rawUrl ?? "").trim();
+  if (url === "") return { url, error: "\u56FE\u7247\u5730\u5740\u4E3A\u7A7A" };
+  const hit = readCache(url, decodedDir);
+  if (hit !== null) return { url, dataUrl: hit, fromCache: true };
+  if (!/^https:\/\//i.test(url)) return { url, error: "\u56FE\u7247\u5730\u5740\u4E0D\u662F https" };
+  if (!wechatCdnHostAllowed(url)) return { url, error: "\u56FE\u7247\u4E3B\u673A\u4E0D\u5728\u5FAE\u4FE1 CDN \u6E05\u5355\u5185\uFF0C\u5DF2\u62D2\u7EDD\u8BF7\u6C42" };
+  if (!cdnFetchAllowed(opts)) return { url, error: CDN_DISABLED_MESSAGE };
+  if (cooledDown(url)) return { url, error: "\u8FD9\u5F20\u56FE\u521A\u624D\u53D6\u5931\u8D25\u8FC7\uFF0C\u7A0D\u540E\u4F1A\u81EA\u52A8\u91CD\u8BD5" };
+  try {
+    const res = await (0, import_llm_retry4.fetchWithRetry)(fetch, url, { headers: { "User-Agent": "Mozilla/5.0" } }, { timeoutMs: FETCH_TIMEOUT_MS });
+    if (!res.ok) {
+      failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
+      return { url, error: "\u53D6\u56FE\u5931\u8D25 HTTP " + String(res.status) };
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length === 0) return { url, error: "\u53D6\u56DE\u6765\u662F\u7A7A\u6587\u4EF6" };
+    if (bytes.length > MAX_REMOTE_IMAGE_BYTES) return { url, error: "\u56FE\u7247\u8D85\u8FC7 8MB \u4E0A\u9650\uFF0C\u5DF2\u4E22\u5F03" };
+    const fmt = detectImageFormat2(bytes.subarray(0, 16));
+    const mime = RENDERABLE_MIME[fmt];
+    if (mime === void 0) return { url, error: `\u53D6\u56DE\u7684\u4E0D\u662F\u53EF\u6E32\u67D3\u7684\u56FE\u7247\u683C\u5F0F\uFF08${fmt}\uFF09` };
+    const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
+    const suffix = fmt === "jpeg" ? "jpg" : fmt;
+    if (!CACHE_SUFFIXES.has(suffix)) return { url, dataUrl, fromCache: false };
+    try {
+      const dir = join71(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME);
+      mkdirSync17(dir, { recursive: true });
+      const file = join71(dir, `${cacheKey(url)}.${suffix}`);
+      const tmp = `${file}.tmp-${String(process.pid)}`;
+      writeFileSync11(tmp, Buffer.from(bytes));
+      renameSync6(tmp, file);
+    } catch {
+    }
+    return { url, dataUrl, fromCache: false };
+  } catch (e) {
+    failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
+    return { url, error: "\u53D6\u56FE\u5931\u8D25\uFF1A" + String(e?.message ?? e) };
+  }
+}
+async function fetchRemoteImages(urls, decodedDir, opts = {}) {
+  const wanted = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of urls) {
+    const url = String(raw ?? "").trim();
+    if (url === "" || seen.has(url)) continue;
+    seen.add(url);
+    wanted.push(url);
+  }
+  const taken = wanted.slice(0, MAX_IMAGES_PER_CALL);
+  const overflow = wanted.slice(MAX_IMAGES_PER_CALL).map((url) => ({ url, error: `\u5355\u6B21\u6700\u591A ${String(MAX_IMAGES_PER_CALL)} \u5F20\uFF0C\u5176\u4F59\u8BF7\u5206\u6279\u518D\u53D6` }));
+  const out = [];
+  for (let i = 0; i < taken.length; i += FETCH_CONCURRENCY) {
+    const batch = taken.slice(i, i + FETCH_CONCURRENCY);
+    out.push(...await Promise.all(batch.map((u) => fetchRemoteImage(u, decodedDir, opts))));
+  }
+  return [...out, ...overflow];
+}
+
+// src/backend/wechat-data/src/query/image-upgrade.ts
+var CACHE_EXTS = "jpg|jpeg|png|gif|webp|bmp|tif";
+var CACHE_FILE_RE = new RegExp("^([0-9a-f]{32})(\\.t)?\\.(" + CACHE_EXTS + "|hevc)$", "i");
+function scanCachedImages(decodedDir) {
+  const out = /* @__PURE__ */ new Map();
+  const add = (dir, name) => {
+    const m = CACHE_FILE_RE.exec(name);
+    if (m === null) return;
+    const md5 = (m[1] ?? "").toLowerCase();
+    let e = out.get(md5);
+    if (e === void 0) {
+      e = { dirs: [], bestBytes: 0 };
+      out.set(md5, e);
+    }
+    if (!e.dirs.includes(dir)) e.dirs.push(dir);
+    if ((m[3] ?? "").toLowerCase() === "hevc") return;
+    try {
+      const size = statSync19(join72(dir, name)).size;
+      if (size > e.bestBytes) e.bestBytes = size;
+    } catch {
+    }
+  };
+  let rootEntries = [];
+  try {
+    rootEntries = readdirSync31(decodedDir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+  } catch {
+    return out;
+  }
+  const subDirs = [];
+  for (const e of rootEntries) {
+    if (!e.isDir) {
+      add(decodedDir, e.name);
+      continue;
+    }
+    if (e.name === REMOTE_IMAGE_CACHE_DIRNAME) continue;
+    subDirs.push(join72(decodedDir, e.name));
+  }
+  for (const dir of subDirs) {
+    let files = [];
+    try {
+      files = readdirSync31(dir, { withFileTypes: true }).filter((f) => !f.isDirectory()).map((f) => f.name);
+    } catch {
+      continue;
+    }
+    for (const name of files) add(dir, name);
+  }
+  return out;
+}
+async function upgradeDecodedImageCache(rawRoot, decodedDir, aesKey, xorKey, onProgress) {
+  const cached = scanCachedImages(decodedDir);
+  const groups = groupImageDatsByMd5(collectImageDatFiles(rawRoot));
+  const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null;
+  const total = cached.size;
+  let processed = 0;
+  let upgraded = 0;
+  let unchanged = 0;
+  let noSource = 0;
+  let failed = 0;
+  const errors = [];
+  const details = [];
+  const skippedDetails = [];
+  const work = [...cached.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+  for (const [md5, entry] of work) {
+    const candidates = groups.get(md5) ?? [];
+    let best = null;
+    let lastError2 = "";
+    for (const file of candidates) {
+      try {
+        const dec = decodeDatBytes(new Uint8Array(readFileSync19(file)), aes, xorKey);
+        if ("error" in dec) {
+          lastError2 = "\u89E3\u7801\u5931\u8D25\uFF1A" + dec.error;
+          continue;
+        }
+        if (dec.format === "hevc") {
+          lastError2 = "wxgf \u539F\u56FE\uFF1A\u8F6C\u7801\u4E0D\u53EF\u7528\u6216\u8F6C\u7801\u5931\u8D25\uFF08\u88C5\u4E0A\u5FAE\u4FE1\u89E3\u7801\u5E93\u540E\u91CD\u8BD5\uFF09";
+          continue;
+        }
+        best = dec;
+        break;
+      } catch (e) {
+        lastError2 = "\u8BFB\u53D6\u5931\u8D25\uFF1A" + e.message;
+      }
+    }
+    if (best === null) {
+      if (candidates.length === 0) {
+        noSource += 1;
+        skippedDetails.push({ file: md5, reason: "\u672C\u673A\u6CA1\u6709\u8FD9\u5F20\u56FE\u7684 .dat\uFF08\u53EF\u80FD\u53EA\u5728\u5FAE\u4FE1\u91CC\uFF0C\u672A\u843D\u76D8\uFF09\uFF0C\u65E0\u4ECE\u5347\u7EA7" });
+      } else {
+        failed += 1;
+        errors.push({ file: md5, error: lastError2 || "\u6CA1\u6709\u53EF\u89E3\u7801\u7684\u6863\u4F4D" });
+      }
+    } else if (best.bytes.length <= entry.bestBytes) {
+      unchanged += 1;
+      skippedDetails.push({ file: md5, reason: "\u7F13\u5B58\u91CC\u90A3\u4EFD\u5DF2\u4E0D\u6BD4\u672C\u673A\u4EFB\u4F55\u4E00\u6863\u5C0F\uFF0C\u65E0\u9700\u5347\u7EA7" });
+    } else {
+      const ext = best.format === "jpeg" ? "jpg" : best.format;
+      let wrote = 0;
+      for (const dir of entry.dirs) {
+        try {
+          writeFileSync12(join72(dir, md5 + "." + ext), Buffer.from(best.bytes));
+          wrote += 1;
+          try {
+            const hevc = join72(dir, md5 + ".hevc");
+            if (existsSync57(hevc)) rmSync8(hevc);
+          } catch {
+          }
+        } catch (e) {
+          errors.push({ file: md5, error: "\u5199\u5165\u5931\u8D25\uFF1A" + e.message });
+        }
+      }
+      if (wrote === 0) {
+        failed += 1;
+      } else {
+        upgraded += 1;
+        details.push({ md5, from: entry.bestBytes, to: best.bytes.length, format: best.format });
+      }
+    }
+    processed += 1;
+    onProgress?.(processed, total, failed, md5);
+  }
+  return {
+    total,
+    upgraded,
+    unchanged,
+    noSource,
+    failed,
+    errors,
+    ...details.length > 0 ? { details } : {},
+    ...skippedDetails.length > 0 ? { skippedDetails } : {}
+  };
+}
+
+// src/backend/wechat-data/src/query/image-key.ts
+import { join as join73 } from "node:path";
 var DEFAULT_IMAGE_XOR_KEY = 136;
 var AUTO_KEY_SLOT = "default";
 function isWxidLike(value) {
@@ -18421,7 +18688,7 @@ function resolveImageKeyPair(decrypted) {
   const xorKey = Number(cfg["image_xor_key"] ?? DEFAULT_IMAGE_XOR_KEY);
   const fromConfig = typeof cfg["image_aes_key"] === "string" ? cfg["image_aes_key"].trim() : "";
   if (fromConfig !== "") return { aesKey: fromConfig, xorKey };
-  const stored = getAccountKeysFromStore(AUTO_KEY_SLOT, join71(decrypted, ".."));
+  const stored = getAccountKeysFromStore(AUTO_KEY_SLOT, join73(decrypted, ".."));
   const fromStore = typeof stored.image_aes_key === "string" ? stored.image_aes_key.trim() : "";
   if (fromStore === "" || !storedKeyOwnedBySelf(stored, decrypted)) return { aesKey: void 0, xorKey };
   const storedXor = Number(stored.image_xor_key);
@@ -18432,13 +18699,13 @@ function resolveImageKeyPair(decrypted) {
 }
 
 // src/backend/wechat-data/src/remotes/keysdec.ts
-import { existsSync as existsSync56 } from "node:fs";
+import { existsSync as existsSync58 } from "node:fs";
 function createKeysDecryptRemotes(rc) {
   const rawWechatBase2 = rc.rawWechatBase;
   return {
     async autoGetImageKey(options) {
       const accountDir = normalizeAccountDir(options.accountDir ?? "");
-      if (accountDir && existsSync56(accountDir)) {
+      if (accountDir && existsSync58(accountDir)) {
         const cfg = getConfig(rc.dirs().decrypted);
         const savedAes = typeof cfg["image_aes_key"] === "string" ? cfg["image_aes_key"].trim() : "";
         if (savedAes) {
@@ -18558,14 +18825,71 @@ function createKeysDecryptRemotes(rc) {
         rc.decryptState.active = false;
         rc.decryptState.message = "";
       }
+    },
+    /**
+     * 升级老缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图，
+     * 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。
+     *
+     * 为什么不能自动做：判「本机有没有更好的一份」要扫 `msg/attach`，那是每张图一次目录遍历
+     * （`decodeImageDataUrl` 只在缓存**未命中**时才付这个代价），而读图是虚拟列表里一屏几十张的
+     * 高频路径。做成显式动作后，这一次性的成本换的是**之后所有渲染**都命中升级后的缓存。
+     *
+     * 与 `decryptAllImages` 共用同一条忙闲闸门（`decryptState.active`）：两者都是
+     * 「读 attach、写 decoded 缓存」，同时跑只会互相踩槽位。
+     * @returns ImageUpgradeResult：检查/已升级/无需升级/无源/失败 计数 + 明细。
+     */
+    async upgradeDecodedImages() {
+      if (rc.decryptState.active) {
+        rc.op("sync", "upgrade_decoded_images", "fail", "", "\u5DF2\u6709\u89E3\u5BC6\u4EFB\u52A1\u8FDB\u884C\u4E2D");
+        return { total: 0, upgraded: 0, unchanged: 0, noSource: 0, failed: 0, errors: [], error: "\u5DF2\u6709\u89E3\u5BC6\u4EFB\u52A1\u8FDB\u884C\u4E2D" };
+      }
+      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted);
+      const rawRoot = rawWechatBase2(rc.dirs().decrypted);
+      if (!rawRoot) {
+        rc.op("sync", "upgrade_decoded_images", "fail", "", "\u672A\u914D\u7F6E\u6570\u636E\u5E93\u76EE\u5F55\uFF0C\u65E0\u6CD5\u5B9A\u4F4D\u56FE\u7247\u6570\u636E");
+        return { total: 0, upgraded: 0, unchanged: 0, noSource: 0, failed: 0, errors: [], error: "\u672A\u914D\u7F6E\u6570\u636E\u5E93\u76EE\u5F55\uFF0C\u65E0\u6CD5\u5B9A\u4F4D\u56FE\u7247\u6570\u636E" };
+      }
+      rc.decryptState.op = "image-upgrade";
+      rc.decryptState.active = true;
+      rc.decryptState.done = 0;
+      rc.decryptState.total = 0;
+      rc.decryptState.failed = 0;
+      rc.decryptState.skipped = 0;
+      rc.decryptState.message = "";
+      try {
+        const result = await upgradeDecodedImageCache(
+          rawRoot,
+          rc.dirs().decoded,
+          aesKey,
+          xorKey,
+          (processed, total, failed, message) => {
+            rc.decryptState.done = processed;
+            rc.decryptState.total = total;
+            rc.decryptState.failed = failed;
+            rc.decryptState.message = message;
+          }
+        );
+        rc.decryptState.skipped = result.unchanged + result.noSource;
+        rc.op(
+          "sync",
+          "upgrade_decoded_images",
+          result.failed === 0 ? "ok" : "fail",
+          "",
+          `\u68C0\u67E5 ${result.total} \u5F20\uFF0C\u5347\u7EA7 ${result.upgraded} \u5F20\uFF08\u65E0\u9700\u5347\u7EA7 ${result.unchanged}\uFF0C\u672C\u673A\u65E0\u6E90 ${result.noSource}\uFF0C\u5931\u8D25 ${result.failed}\uFF09`
+        );
+        return result;
+      } finally {
+        rc.decryptState.active = false;
+        rc.decryptState.message = "";
+      }
     }
   };
 }
 
 // src/backend/wechat-data/src/query/kb-files-store.ts
 import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
-import { existsSync as existsSync57, mkdirSync as mkdirSync17, unlinkSync as unlinkSync3, writeFileSync as writeFileSync11 } from "node:fs";
-import { dirname as dirname26, join as join73 } from "node:path";
+import { existsSync as existsSync59, mkdirSync as mkdirSync18, unlinkSync as unlinkSync3, writeFileSync as writeFileSync13 } from "node:fs";
+import { dirname as dirname26, join as join75 } from "node:path";
 
 // src/backend/wechat-data/src/query/kb/chunk.ts
 var CHUNK_MAX_CHARS = 500;
@@ -18680,22 +19004,22 @@ function chunkBlocks(blocks, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/kb-paths.ts
-import { dirname as dirname25, join as join72 } from "node:path";
+import { dirname as dirname25, join as join74 } from "node:path";
 var KB_FILES_DB = "wechat_kb_files.db";
 var KB_BLOBS_DIR = "kb-blobs";
 var KB_VECTORS_DB = "wechat_kb_vectors.db";
 var KB_MODELS_DB = "wechat_kb_models.db";
 function kbFilesDbPath(decryptedDir) {
-  return join72(dirname25(decryptedDir), KB_FILES_DB);
+  return join74(dirname25(decryptedDir), KB_FILES_DB);
 }
 function kbBlobsDir(decryptedDir) {
-  return join72(dirname25(decryptedDir), KB_BLOBS_DIR);
+  return join74(dirname25(decryptedDir), KB_BLOBS_DIR);
 }
 function kbVectorsDbPath(decryptedDir) {
-  return join72(dirname25(decryptedDir), KB_VECTORS_DB);
+  return join74(dirname25(decryptedDir), KB_VECTORS_DB);
 }
 function kbModelsDbPath(decryptedDir) {
-  return join72(dirname25(decryptedDir), KB_MODELS_DB);
+  return join74(dirname25(decryptedDir), KB_MODELS_DB);
 }
 
 // src/backend/wechat-data/src/query/kb-files-store.ts
@@ -18739,7 +19063,7 @@ function columnNames2(db, table) {
 function openStore7(decryptedDir) {
   const file = kbFilesDbPath(decryptedDir);
   try {
-    mkdirSync17(dirname26(file), { recursive: true });
+    mkdirSync18(dirname26(file), { recursive: true });
   } catch (e) {
     console.warn("[kb-files] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText4(e));
   }
@@ -18835,16 +19159,16 @@ function rowToFileMeta(r) {
 }
 function writeBlob(decryptedDir, blobName, bytes) {
   const dir = kbBlobsDir(decryptedDir);
-  mkdirSync17(dir, { recursive: true });
-  const dest = join73(dir, blobName);
-  if (existsSync57(dest)) return;
-  writeFileSync11(dest, bytes);
+  mkdirSync18(dir, { recursive: true });
+  const dest = join75(dir, blobName);
+  if (existsSync59(dest)) return;
+  writeFileSync13(dest, bytes);
 }
 function removeBlobIfUnreferenced(db, decryptedDir, sha256, blobName) {
   if (!blobName || !sha256) return false;
   const row = db.prepare("SELECT COUNT(*) AS n FROM kb_files WHERE sha256 = ?").get(sha256);
   if (Number(row?.["n"] ?? 0) > 1) return false;
-  const dest = join73(kbBlobsDir(decryptedDir), blobName);
+  const dest = join75(kbBlobsDir(decryptedDir), blobName);
   try {
     unlinkSync3(dest);
     return true;
@@ -18873,8 +19197,8 @@ function insertChunks(db, fileId, kbId, chunks) {
 }
 
 // src/backend/wechat-data/src/query/kb-files-register.ts
-import { createHash as createHash22 } from "node:crypto";
-import { readFileSync as readFileSync19, statSync as statSync20 } from "node:fs";
+import { createHash as createHash23 } from "node:crypto";
+import { readFileSync as readFileSync21, statSync as statSync21 } from "node:fs";
 import { basename as basename8 } from "node:path";
 
 // src/backend/wechat-data/src/query/kb/container-guard.ts
@@ -19457,7 +19781,7 @@ async function parseDocx(bytes) {
 
 // src/backend/wechat-data/src/query/kb/parse-pdf.ts
 import { createRequire as createRequire3 } from "node:module";
-import { dirname as dirname27, join as join74 } from "node:path";
+import { dirname as dirname27, join as join76 } from "node:path";
 var MAX_PDF_TEXT_CHARS = MAX_CHUNKS_PER_FILE * CHUNK_MAX_CHARS;
 var PDFJS_ENTRY = "pdfjs-dist/legacy/build/pdf.mjs";
 var PDFJS_WORKER_ENTRY = "pdfjs-dist/legacy/build/pdf.worker.mjs";
@@ -19466,7 +19790,7 @@ function cmapDir() {
   if (cMapDirCache === null) {
     const require2 = createRequire3(import.meta.url);
     const pkgJson = require2.resolve("pdfjs-dist/package.json");
-    cMapDirCache = unpackedAware(join74(dirname27(pkgJson), "cmaps")) + "/";
+    cMapDirCache = unpackedAware(join76(dirname27(pkgJson), "cmaps")) + "/";
   }
   return cMapDirCache;
 }
@@ -19710,7 +20034,7 @@ async function parseFileByExtAsync(ext, bytes) {
 
 // src/backend/wechat-data/src/query/kb-vectors.ts
 import { DatabaseSync as DatabaseSync51 } from "node:sqlite";
-import { existsSync as existsSync58 } from "node:fs";
+import { existsSync as existsSync60 } from "node:fs";
 var KB_VECTORS_TABLE = "kb_vectors";
 var KB_VECTOR_SCHEMA_VERSION = "1";
 function errorText5(e) {
@@ -19774,7 +20098,7 @@ function readKbVectorStatus(decryptedDir, kbId, current) {
     built_at: null,
     ready: false
   };
-  if (!existsSync58(p)) return { ...none, staleReason: "no-index" };
+  if (!existsSync60(p)) return { ...none, staleReason: "no-index" };
   try {
     const db = new DatabaseSync51(p, { readOnly: true });
     try {
@@ -19887,7 +20211,7 @@ function buildKbVectorIndex(decryptedDir, kbId, embed, opts) {
 async function runBuildKbVectorIndex(decryptedDir, kbId, embed, opts) {
   const started = Date.now();
   const src = kbFilesDbPath(decryptedDir);
-  if (!existsSync58(src)) {
+  if (!existsSync60(src)) {
     return { status: "no-source", rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0, message: "\u77E5\u8BC6\u5E93\u8FD8\u6CA1\u6709\u4EFB\u4F55\u6587\u4EF6" };
   }
   const db = openVectorsDb(decryptedDir, false);
@@ -20117,7 +20441,7 @@ function deleteKbVectorsForFile(decryptedDir, fileId) {
   const id = Math.trunc(Number(fileId));
   if (!Number.isFinite(id) || id <= 0) return 0;
   const p = kbVectorsDbPath(decryptedDir);
-  if (!existsSync58(p)) return 0;
+  if (!existsSync60(p)) return 0;
   try {
     const db = new DatabaseSync51(p);
     try {
@@ -20137,7 +20461,7 @@ function reassignKbVectors(decryptedDir, fileId, targetKbId) {
   const kb = Math.trunc(Number(targetKbId));
   if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(kb) || kb <= 0) return 0;
   const p = kbVectorsDbPath(decryptedDir);
-  if (!existsSync58(p)) return 0;
+  if (!existsSync60(p)) return 0;
   try {
     const db = new DatabaseSync51(p);
     try {
@@ -20164,7 +20488,7 @@ function registerKbFile(decryptedDir, input) {
   const ext = extOf(name);
   let bytes;
   try {
-    const st = statSync20(srcPath);
+    const st = statSync21(srcPath);
     if (!st.isFile()) return { ok: false, code: "read-failed", error: "\u8FD9\u4E2A\u8DEF\u5F84\u4E0D\u662F\u6587\u4EF6\uFF1A" + name };
     if (!isAcceptedExt(ext)) {
       return {
@@ -20180,11 +20504,11 @@ function registerKbFile(decryptedDir, input) {
         error: "\u6587\u4EF6\u8FC7\u5927\uFF08" + formatBytes(st.size) + "\uFF09\uFF0C\u4E0A\u9650 " + formatBytes(MAX_FILE_BYTES)
       };
     }
-    bytes = readFileSync19(srcPath);
+    bytes = readFileSync21(srcPath);
   } catch (e) {
     return { ok: false, code: "read-failed", error: "\u8BFB\u4E0D\u5230\u8FD9\u4E2A\u6587\u4EF6\uFF1A" + errorText4(e) };
   }
-  const sha256 = createHash22("sha256").update(bytes).digest("hex");
+  const sha256 = createHash23("sha256").update(bytes).digest("hex");
   let db;
   try {
     db = openStore7(decryptedDir);
@@ -22880,9 +23204,9 @@ function createAskDeepRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/kb-queue.ts
-import { createHash as createHash23 } from "node:crypto";
-import { existsSync as existsSync60, readFileSync as readFileSync20 } from "node:fs";
-import { join as join76 } from "node:path";
+import { createHash as createHash24 } from "node:crypto";
+import { existsSync as existsSync62, readFileSync as readFileSync22 } from "node:fs";
+import { join as join78 } from "node:path";
 var SCAN_LIMIT = 200;
 function warn3(msg) {
   console.warn("[kb-queue] " + msg);
@@ -22941,18 +23265,18 @@ function claimNext(decryptedDir) {
 }
 function readJobBytes(decryptedDir, job) {
   if (job.blobName !== "") {
-    const blobPath = join76(kbBlobsDir(decryptedDir), job.blobName);
-    if (existsSync60(blobPath)) return new Uint8Array(readFileSync20(blobPath));
+    const blobPath = join78(kbBlobsDir(decryptedDir), job.blobName);
+    if (existsSync62(blobPath)) return new Uint8Array(readFileSync22(blobPath));
   }
   if (job.srcPath === "") throw new Error("\u5185\u5BB9\u526F\u672C\u4E0E\u539F\u59CB\u8DEF\u5F84\u90FD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u6DFB\u52A0\u8FD9\u4E2A\u6587\u4EF6");
   let raw;
   try {
-    raw = readFileSync20(job.srcPath);
+    raw = readFileSync22(job.srcPath);
   } catch (e) {
     throw new Error("\u5185\u5BB9\u526F\u672C\u4E0D\u5728\u4E86\uFF0C\u539F\u6587\u4EF6\u4E5F\u8BFB\u4E0D\u5230\uFF08\u53EF\u80FD\u5DF2\u88AB\u79FB\u52A8\u6216\u5220\u9664\uFF09\uFF1A" + errorText4(e));
   }
   if (job.sha256 !== "") {
-    const actual = createHash23("sha256").update(raw).digest("hex");
+    const actual = createHash24("sha256").update(raw).digest("hex");
     if (actual !== job.sha256) {
       throw new Error("\u5185\u5BB9\u526F\u672C\u4E0D\u5728\u4E86\uFF0C\u800C\u539F\u6587\u4EF6\u7684\u5185\u5BB9\u5DF2\u7ECF\u88AB\u6539\u52A8\u8FC7 \u2014\u2014 \u4E3A\u907F\u514D\u628A\u53E6\u4E00\u4EFD\u5185\u5BB9\u5F53\u6210\u8FD9\u4E2A\u6587\u4EF6\uFF0C\u8BF7\u91CD\u65B0\u6DFB\u52A0");
     }
@@ -23055,7 +23379,7 @@ async function drainKbQueue(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/query/kb/model-config.ts
-import { existsSync as existsSync61, mkdirSync as mkdirSync19 } from "node:fs";
+import { existsSync as existsSync63, mkdirSync as mkdirSync20 } from "node:fs";
 import { dirname as dirname29 } from "node:path";
 import { DatabaseSync as DatabaseSync53 } from "node:sqlite";
 var KB_MODELS_TABLE = "kb_models";
@@ -23078,7 +23402,7 @@ function openModelsDb(decryptedDir, readOnly = false) {
   const file = kbModelsDbPath(decryptedDir);
   if (!readOnly) {
     try {
-      mkdirSync19(dirname29(file), { recursive: true });
+      mkdirSync20(dirname29(file), { recursive: true });
     } catch (e) {
       console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
     }
@@ -23096,7 +23420,7 @@ function readKbModelSettings(decryptedDir, kbId) {
   const kb = Math.trunc(Number(kbId));
   if (!Number.isFinite(kb) || kb <= 0) return defaultSettings(0);
   const file = kbModelsDbPath(decryptedDir);
-  if (!existsSync61(file)) return defaultSettings(kb);
+  if (!existsSync63(file)) return defaultSettings(kb);
   try {
     const db = new DatabaseSync53(file, { readOnly: true });
     try {
@@ -23171,7 +23495,7 @@ function resolveModelRef(ref, globalModel) {
 function kbModelOverrideCounts(decryptedDir) {
   const out = /* @__PURE__ */ new Map();
   const file = kbModelsDbPath(decryptedDir);
-  if (!existsSync61(file)) return out;
+  if (!existsSync63(file)) return out;
   try {
     const db = new DatabaseSync53(file, { readOnly: true });
     try {
@@ -23194,7 +23518,7 @@ function kbModelOverrideCounts(decryptedDir) {
 }
 function kbModelsOnKbDelete(decryptedDir, kbId) {
   const file = kbModelsDbPath(decryptedDir);
-  if (!existsSync61(file)) return false;
+  if (!existsSync63(file)) return false;
   try {
     const db = new DatabaseSync53(file);
     try {
@@ -23648,10 +23972,10 @@ ${body}`;
 }
 
 // src/backend/wechat-data/src/query/avatar.ts
-import { createHash as createHash24 } from "node:crypto";
+import { createHash as createHash25 } from "node:crypto";
 import { DatabaseSync as DatabaseSync54 } from "node:sqlite";
-import { existsSync as existsSync62, readFileSync as readFileSync21 } from "node:fs";
-import { join as join77 } from "node:path";
+import { existsSync as existsSync64, readFileSync as readFileSync23 } from "node:fs";
+import { join as join79 } from "node:path";
 function sniffImageFormat2(data) {
   if (data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255) return "jpeg";
   if (data.length >= 4 && data[0] === 137 && data[1] === 80 && data[2] === 78 && data[3] === 71) return "png";
@@ -23666,8 +23990,8 @@ function cellStr17(v) {
   return "";
 }
 function avatarFromHeadImageDb(decryptedDir, username) {
-  const dbPath8 = join77(decryptedDir, "head_image", "head_image.db");
-  if (!existsSync62(dbPath8)) return null;
+  const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
+  if (!existsSync64(dbPath8)) return null;
   try {
     const db = new DatabaseSync54(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
@@ -23687,8 +24011,8 @@ function avatarFromHeadImageDb(decryptedDir, username) {
   }
 }
 function avatarUrlFromContact(decryptedDir, username) {
-  const dbPath8 = join77(decryptedDir, "contact", "contact.db");
-  if (!existsSync62(dbPath8)) return null;
+  const dbPath8 = join79(decryptedDir, "contact", "contact.db");
+  if (!existsSync64(dbPath8)) return null;
   try {
     const db = new DatabaseSync54(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
@@ -23713,11 +24037,11 @@ function avatarUrlFromContact(decryptedDir, username) {
 }
 function avatarFromTempHeadFile(wechatBaseDir, url) {
   if (!wechatBaseDir || !url) return null;
-  const hash = createHash24("md5").update(Buffer.from(url, "utf8")).digest("hex");
-  const f = join77(wechatBaseDir, "temp", "head_image", hash);
-  if (!existsSync62(f)) return null;
+  const hash = createHash25("md5").update(Buffer.from(url, "utf8")).digest("hex");
+  const f = join79(wechatBaseDir, "temp", "head_image", hash);
+  if (!existsSync64(f)) return null;
   try {
-    const buf = readFileSync21(f);
+    const buf = readFileSync23(f);
     if (buf.length < 16) return null;
     const fmt = sniffImageFormat2(new Uint8Array(buf));
     return "data:image/" + fmt + ";base64," + buf.toString("base64");
@@ -23727,8 +24051,8 @@ function avatarFromTempHeadFile(wechatBaseDir, url) {
 }
 function contactByNickname(decryptedDir, nickname) {
   if (!nickname) return null;
-  const dbPath8 = join77(decryptedDir, "contact", "contact.db");
-  if (!existsSync62(dbPath8)) return null;
+  const dbPath8 = join79(decryptedDir, "contact", "contact.db");
+  if (!existsSync64(dbPath8)) return null;
   try {
     const db = new DatabaseSync54(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
@@ -23786,8 +24110,8 @@ function resolveAvatar(decryptedDir, username, wechatBaseDir, nickname) {
 }
 function contactAvatarUrlMap(decryptedDir, usernames) {
   const out = /* @__PURE__ */ new Map();
-  const dbPath8 = join77(decryptedDir, "contact", "contact.db");
-  if (!existsSync62(dbPath8)) return out;
+  const dbPath8 = join79(decryptedDir, "contact", "contact.db");
+  if (!existsSync64(dbPath8)) return out;
   try {
     const db = new DatabaseSync54(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
@@ -23812,8 +24136,8 @@ function contactAvatarUrlMap(decryptedDir, usernames) {
 function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
   const out = {};
   if (usernames.length === 0) return out;
-  const dbPath8 = join77(decryptedDir, "head_image", "head_image.db");
-  if (existsSync62(dbPath8)) {
+  const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
+  if (existsSync64(dbPath8)) {
     try {
       const db = new DatabaseSync54(dbPath8, { readOnly: true });
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
@@ -23848,32 +24172,10 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
   return out;
 }
 
-// src/backend/wechat-data/src/query/cdn-hosts.ts
-var WECHAT_CDN_HOST_SUFFIXES = [
-  "qq.com",
-  "wechat.com",
-  "wechatcdn.cn",
-  "qpic.cn",
-  "weixin.qq.com",
-  "qlogo.cn"
-];
-function wechatCdnHostAllowed(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.username !== "" || parsed.password !== "") return false;
-  const host = parsed.hostname.toLowerCase();
-  if (host === "") return false;
-  return WECHAT_CDN_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith("." + suf));
-}
-
 // src/backend/wechat-data/src/query/emoticons.ts
 import { DatabaseSync as DatabaseSync55 } from "node:sqlite";
-import { existsSync as existsSync63 } from "node:fs";
-import { join as join78 } from "node:path";
+import { existsSync as existsSync65 } from "node:fs";
+import { join as join80 } from "node:path";
 function cellStr18(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
@@ -23895,13 +24197,13 @@ function col(cols, cands) {
 function queryEmoticons(decryptedDir, limit, offset = 0) {
   return cachedBySig(
     "emoticons:" + decryptedDir + ":" + String(limit ?? "") + ":" + String(offset),
-    fileSigOf(join78(decryptedDir, "emoticon", "emoticon.db")),
+    fileSigOf(join80(decryptedDir, "emoticon", "emoticon.db")),
     () => computeEmoticons(decryptedDir, limit, offset)
   );
 }
 function computeEmoticons(decryptedDir, limit, offset = 0) {
-  const path = join78(decryptedDir, "emoticon", "emoticon.db");
-  if (!existsSync63(path)) return { custom: [], static: [], packages: [], total: 0, orderedBy: "builtin" };
+  const path = join80(decryptedDir, "emoticon", "emoticon.db");
+  if (!existsSync65(path)) return { custom: [], static: [], packages: [], total: 0, orderedBy: "builtin" };
   const db = new DatabaseSync55(path, { readOnly: true });
   try {
     const custom = [];
@@ -23998,9 +24300,9 @@ function computeEmoticons(decryptedDir, limit, offset = 0) {
 
 // src/backend/wechat-data/src/query/files.ts
 import { DatabaseSync as DatabaseSync56 } from "node:sqlite";
-import { statSync as statSync21 } from "node:fs";
-import { join as join79 } from "node:path";
-import { createHash as createHash25 } from "node:crypto";
+import { statSync as statSync22 } from "node:fs";
+import { join as join81 } from "node:path";
+import { createHash as createHash26 } from "node:crypto";
 function cellStr19(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
@@ -24030,7 +24332,7 @@ function loadFileSources(decryptedDir) {
   const map = /* @__PURE__ */ new Map();
   let resDb = null;
   try {
-    resDb = new DatabaseSync56(join79(decryptedDir, "message", "message_resource.db"), { readOnly: true });
+    resDb = new DatabaseSync56(join81(decryptedDir, "message", "message_resource.db"), { readOnly: true });
   } catch {
     return map;
   }
@@ -24056,7 +24358,7 @@ var FILE_SOURCES_TTL_MS = 3e4;
 var fileSourcesCache = null;
 function fileSourcesSig(decryptedDir) {
   try {
-    const st = statSync21(join79(decryptedDir, "message", "message_resource.db"));
+    const st = statSync22(join81(decryptedDir, "message", "message_resource.db"));
     return `${st.mtimeMs}:${st.size}`;
   } catch {
     return "";
@@ -24076,7 +24378,7 @@ var dirSourceCache = null;
 function dirSourceCached(decryptedDir) {
   let sig = "";
   try {
-    const st = statSync21(join79(decryptedDir, "hardlink", "hardlink.db"));
+    const st = statSync22(join81(decryptedDir, "hardlink", "hardlink.db"));
     sig = `${st.mtimeMs}:${st.size}`;
   } catch {
   }
@@ -24086,13 +24388,13 @@ function dirSourceCached(decryptedDir) {
   const month = /* @__PURE__ */ new Map();
   const talker = /* @__PURE__ */ new Map();
   try {
-    const db = new DatabaseSync56(join79(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+    const db = new DatabaseSync56(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
     try {
       const names = contactMeta(decryptedDir).names;
       const md5ToName = /* @__PURE__ */ new Map();
       for (const [user, display] of names) {
         if (!user) continue;
-        const h = createHash25("md5").update(user, "utf8").digest("hex");
+        const h = createHash26("md5").update(user, "utf8").digest("hex");
         if (!md5ToName.has(h)) md5ToName.set(h, display || user);
       }
       const rows = db.prepare("SELECT rowid AS rid, username FROM dir2id").all();
@@ -24118,7 +24420,7 @@ function dirSourceCached(decryptedDir) {
   return dirSourceCache;
 }
 function queryFiles(decryptedDir, limit, offset = 0, category, q) {
-  const db = new DatabaseSync56(join79(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+  const db = new DatabaseSync56(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
   try {
     const want = category && category !== "all" ? category : "";
     const kw = (q ?? "").trim();
@@ -24204,11 +24506,11 @@ function queryFiles(decryptedDir, limit, offset = 0, category, q) {
 }
 
 // src/backend/wechat-data/src/query/image-original.ts
-var import_llm_retry4 = __toESM(require_llm_retry(), 1);
-import { createHash as createHash26 } from "node:crypto";
+var import_llm_retry5 = __toESM(require_llm_retry(), 1);
+import { createHash as createHash27 } from "node:crypto";
 import { DatabaseSync as DatabaseSync57 } from "node:sqlite";
-import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync13 } from "node:fs";
-import { join as join80 } from "node:path";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync15 } from "node:fs";
+import { join as join82 } from "node:path";
 import { decompress as decompress13 } from "fzstd";
 var ZSTD_MAGIC13 = Buffer.from([40, 181, 47, 253]);
 var MAX_ORIGINAL_BYTES = 64 * 1024 * 1024;
@@ -24234,7 +24536,7 @@ function resolveImageOriginalLink(decryptedDir, username, localId) {
   const hint = resolveImageResourceHint(decryptedDir, username, localId);
   const md5 = hint.md5;
   if (!md5) return null;
-  const table = "Msg_" + createHash26("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash27("md5").update(username, "utf8").digest("hex");
   for (const shard of shardCatalogDirs(decryptedDir, ["message"])) {
     const meta = shard.tables.get(table);
     if (!meta) continue;
@@ -24280,7 +24582,7 @@ async function fetchImageOriginalToCache(link, decodedDir, opts = {}) {
   if (!hostAllowed(link.url)) return { error: "\u539F\u56FE\u76F4\u94FE\u7684\u57DF\u540D\u4E0D\u5728\u5141\u8BB8\u6E05\u5355\u5185\uFF0C\u5DF2\u62D2\u7EDD\u8BF7\u6C42" };
   let res;
   try {
-    res = await (0, import_llm_retry4.fetchWithRetry)(fetch, link.url, { headers: { "User-Agent": "Mozilla/5.0" } }, { timeoutMs: 15e3 });
+    res = await (0, import_llm_retry5.fetchWithRetry)(fetch, link.url, { headers: { "User-Agent": "Mozilla/5.0" } }, { timeoutMs: 15e3 });
   } catch (e) {
     return { error: "\u539F\u56FE\u4E0B\u8F7D\u5931\u8D25: " + e.message };
   }
@@ -24291,8 +24593,8 @@ async function fetchImageOriginalToCache(link, decodedDir, opts = {}) {
   const fmt = sniffImageFormat3(bytes);
   if (fmt === null) return { error: "\u539F\u56FE\u4E0B\u8F7D\u56DE\u6765\u4E0D\u662F\u53EF\u8BC6\u522B\u7684\u56FE\u7247\u683C\u5F0F\uFF08wxgf/HEVC \u672C\u673A\u4E5F\u65E0\u6CD5\u6E32\u67D3\uFF09" };
   try {
-    mkdirSync20(decodedDir, { recursive: true });
-    writeFileSync13(join80(decodedDir, link.md5 + "." + fmt), Buffer.from(bytes));
+    mkdirSync21(decodedDir, { recursive: true });
+    writeFileSync15(join82(decodedDir, link.md5 + "." + fmt), Buffer.from(bytes));
   } catch (e) {
     return { error: "\u539F\u56FE\u5DF2\u53D6\u56DE\u4F46\u5199\u5165\u7F13\u5B58\u5931\u8D25\uFF08\u4E0B\u6B21\u4ECD\u4F1A\u91CD\u65B0\u4E0B\u8F7D\uFF09: " + e.message };
   }
@@ -24308,8 +24610,8 @@ function sniffImageFormat3(b) {
 }
 
 // src/backend/wechat-data/src/query/media-file.ts
-import { existsSync as existsSync64, readdirSync as readdirSync31, readFileSync as readFileSync22, statSync as statSync22 } from "node:fs";
-import { join as join81 } from "node:path";
+import { existsSync as existsSync66, readdirSync as readdirSync32, readFileSync as readFileSync24, statSync as statSync23 } from "node:fs";
+import { join as join83 } from "node:path";
 var fileCache = /* @__PURE__ */ new Map();
 var FILE_MIME = {
   pdf: "application/pdf",
@@ -24380,8 +24682,8 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
     const cached = fileCache.get(cacheKey2) ?? "";
     return cached ? { url: cached } : { error: "\u672C\u5730\u672A\u627E\u5230\u8BE5\u6587\u4EF6" };
   }
-  const fileRoot = join81(wechatBaseDir, "msg", "file");
-  if (!existsSync64(fileRoot)) {
+  const fileRoot = join83(wechatBaseDir, "msg", "file");
+  if (!existsSync66(fileRoot)) {
     boundedSet(fileCache, cacheKey2, "");
     return { error: "msg/file \u76EE\u5F55\u4E0D\u5B58\u5728\uFF0C\u6587\u4EF6\u5C1A\u672A\u4E0B\u8F7D" };
   }
@@ -24389,15 +24691,15 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
     const scan = (dirs) => {
       const hits2 = [];
       for (const dir of dirs) {
-        const p = join81(dir, name);
-        if (!existsSync64(p)) continue;
-        const st = statSync22(p);
+        const p = join83(dir, name);
+        if (!existsSync66(p)) continue;
+        const st = statSync23(p);
         if (!st.isFile()) continue;
         hits2.push({ path: p, mtime: st.mtimeMs, size: st.size });
       }
       return hits2;
     };
-    const allDirs = readdirSync31(fileRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join81(fileRoot, e.name));
+    const allDirs = readdirSync32(fileRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join83(fileRoot, e.name));
     const monthDirs = month ? allDirs.filter((d) => d.endsWith(month)) : [];
     let hits = monthDirs.length > 0 ? scan(monthDirs) : [];
     if (hits.length === 0) hits = scan(allDirs);
@@ -24408,7 +24710,7 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
     const sized = size > 0 ? hits.filter((h) => h.size === size) : [];
     const pool = sized.length > 0 ? sized : hits;
     const best = pool.reduce((a, b) => b.mtime > a.mtime ? b : a, pool[0]);
-    const bytes = readFileSync22(best.path);
+    const bytes = readFileSync24(best.path);
     const url = "data:" + mimeOf(name) + ";base64," + bytes.toString("base64");
     boundedSet(fileCache, cacheKey2, url);
     return { url };
@@ -24418,149 +24720,49 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
   }
 }
 
-// src/backend/wechat-data/src/query/remote-image.ts
-var import_llm_retry5 = __toESM(require_llm_retry(), 1);
-import { createHash as createHash27 } from "node:crypto";
-import { existsSync as existsSync65, mkdirSync as mkdirSync21, readFileSync as readFileSync23, renameSync as renameSync6, writeFileSync as writeFileSync14 } from "node:fs";
-import { join as join82 } from "node:path";
-var MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024;
-var MAX_IMAGES_PER_CALL = 40;
-var FETCH_CONCURRENCY = 6;
-var FAIL_COOLDOWN_MS = 6e4;
-var FETCH_TIMEOUT_MS = 12e3;
-var REMOTE_IMAGE_CACHE_DIRNAME = "remote-images";
-var RENDERABLE_MIME = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp"
-};
-var CACHE_SUFFIXES = /* @__PURE__ */ new Set(["png", "jpg", "gif", "webp"]);
-var failUntil = /* @__PURE__ */ new Map();
-function cacheKey(url) {
-  return createHash27("md5").update(url, "utf8").digest("hex");
-}
-function readCache(url, decodedDir) {
-  const dir = join82(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME);
-  const key = cacheKey(url);
-  for (const fmt of ["png", "jpg", "gif", "webp"]) {
-    const file = join82(dir, `${key}.${fmt}`);
-    if (!existsSync65(file)) continue;
-    try {
-      return `data:${RENDERABLE_MIME[fmt] ?? "image/png"};base64,${readFileSync23(file).toString("base64")}`;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-function cooledDown(url) {
-  const until = failUntil.get(url);
-  return until !== void 0 && Date.now() < until;
-}
-async function fetchRemoteImage(rawUrl, decodedDir, opts = {}) {
-  const url = String(rawUrl ?? "").trim();
-  if (url === "") return { url, error: "\u56FE\u7247\u5730\u5740\u4E3A\u7A7A" };
-  const hit = readCache(url, decodedDir);
-  if (hit !== null) return { url, dataUrl: hit, fromCache: true };
-  if (!/^https:\/\//i.test(url)) return { url, error: "\u56FE\u7247\u5730\u5740\u4E0D\u662F https" };
-  if (!wechatCdnHostAllowed(url)) return { url, error: "\u56FE\u7247\u4E3B\u673A\u4E0D\u5728\u5FAE\u4FE1 CDN \u6E05\u5355\u5185\uFF0C\u5DF2\u62D2\u7EDD\u8BF7\u6C42" };
-  if (!cdnFetchAllowed(opts)) return { url, error: CDN_DISABLED_MESSAGE };
-  if (cooledDown(url)) return { url, error: "\u8FD9\u5F20\u56FE\u521A\u624D\u53D6\u5931\u8D25\u8FC7\uFF0C\u7A0D\u540E\u4F1A\u81EA\u52A8\u91CD\u8BD5" };
-  try {
-    const res = await (0, import_llm_retry5.fetchWithRetry)(fetch, url, { headers: { "User-Agent": "Mozilla/5.0" } }, { timeoutMs: FETCH_TIMEOUT_MS });
-    if (!res.ok) {
-      failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
-      return { url, error: "\u53D6\u56FE\u5931\u8D25 HTTP " + String(res.status) };
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length === 0) return { url, error: "\u53D6\u56DE\u6765\u662F\u7A7A\u6587\u4EF6" };
-    if (bytes.length > MAX_REMOTE_IMAGE_BYTES) return { url, error: "\u56FE\u7247\u8D85\u8FC7 8MB \u4E0A\u9650\uFF0C\u5DF2\u4E22\u5F03" };
-    const fmt = detectImageFormat2(bytes.subarray(0, 16));
-    const mime = RENDERABLE_MIME[fmt];
-    if (mime === void 0) return { url, error: `\u53D6\u56DE\u7684\u4E0D\u662F\u53EF\u6E32\u67D3\u7684\u56FE\u7247\u683C\u5F0F\uFF08${fmt}\uFF09` };
-    const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
-    const suffix = fmt === "jpeg" ? "jpg" : fmt;
-    if (!CACHE_SUFFIXES.has(suffix)) return { url, dataUrl, fromCache: false };
-    try {
-      const dir = join82(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME);
-      mkdirSync21(dir, { recursive: true });
-      const file = join82(dir, `${cacheKey(url)}.${suffix}`);
-      const tmp = `${file}.tmp-${String(process.pid)}`;
-      writeFileSync14(tmp, Buffer.from(bytes));
-      renameSync6(tmp, file);
-    } catch {
-    }
-    return { url, dataUrl, fromCache: false };
-  } catch (e) {
-    failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS);
-    return { url, error: "\u53D6\u56FE\u5931\u8D25\uFF1A" + String(e?.message ?? e) };
-  }
-}
-async function fetchRemoteImages(urls, decodedDir, opts = {}) {
-  const wanted = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const raw of urls) {
-    const url = String(raw ?? "").trim();
-    if (url === "" || seen.has(url)) continue;
-    seen.add(url);
-    wanted.push(url);
-  }
-  const taken = wanted.slice(0, MAX_IMAGES_PER_CALL);
-  const overflow = wanted.slice(MAX_IMAGES_PER_CALL).map((url) => ({ url, error: `\u5355\u6B21\u6700\u591A ${String(MAX_IMAGES_PER_CALL)} \u5F20\uFF0C\u5176\u4F59\u8BF7\u5206\u6279\u518D\u53D6` }));
-  const out = [];
-  for (let i = 0; i < taken.length; i += FETCH_CONCURRENCY) {
-    const batch = taken.slice(i, i + FETCH_CONCURRENCY);
-    out.push(...await Promise.all(batch.map((u) => fetchRemoteImage(u, decodedDir, opts))));
-  }
-  return [...out, ...overflow];
-}
-
 // src/backend/wechat-data/src/query/media-video.ts
 import { DatabaseSync as DatabaseSync58 } from "node:sqlite";
-import { existsSync as existsSync66, readdirSync as readdirSync32, readFileSync as readFileSync24 } from "node:fs";
+import { existsSync as existsSync67, readdirSync as readdirSync33, readFileSync as readFileSync25 } from "node:fs";
 import { createHash as createHash28 } from "node:crypto";
-import { join as join83 } from "node:path";
+import { join as join84 } from "node:path";
 function msgTableName10(username) {
   return "Msg_" + createHash28("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles4(decryptedDir) {
-  const dir = join83(decryptedDir, "message");
-  if (!existsSync66(dir)) return [];
-  return readdirSync32(dir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("monitor_cache")).sort().map((f) => join83(dir, f));
+  const dir = join84(decryptedDir, "message");
+  if (!existsSync67(dir)) return [];
+  return readdirSync33(dir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("monitor_cache")).sort().map((f) => join84(dir, f));
 }
 function resolveVideoInfo(decryptedDir, decodedDir, username, localId, wechatBaseDir) {
   const md5 = resolveVideoMd5(decryptedDir, username, localId);
   if (!md5) return { available: false, error: "\u672A\u627E\u5230\u89C6\u9891 MD5" };
   const found = findVideoArtifacts(wechatBaseDir, md5);
   for (const ext of ["jpg", "jpeg", "png", "webp"]) {
-    const p = join83(decodedDir, md5 + "." + ext);
-    if (!existsSync66(p)) continue;
+    const p = join84(decodedDir, md5 + "." + ext);
+    if (!existsSync67(p)) continue;
     try {
-      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync24(p), ext), ...found.video ? { videoPath: found.video } : {} };
+      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync25(p), ext), ...found.video ? { videoPath: found.video } : {} };
     } catch {
     }
   }
-  const userDir = join83(decodedDir, username);
-  if (existsSync66(userDir)) {
+  const userDir = join84(decodedDir, username);
+  if (existsSync67(userDir)) {
     for (const ext of ["jpg", "jpeg", "png", "webp"]) {
-      const p = join83(userDir, md5 + "." + ext);
-      if (!existsSync66(p)) continue;
+      const p = join84(userDir, md5 + "." + ext);
+      if (!existsSync67(p)) continue;
       try {
-        return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync24(p), ext), ...found.video ? { videoPath: found.video } : {} };
+        return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync25(p), ext), ...found.video ? { videoPath: found.video } : {} };
       } catch {
       }
     }
-    if (existsSync66(join83(userDir, md5 + ".hevc"))) {
+    if (existsSync67(join84(userDir, md5 + ".hevc"))) {
       if (found.video) return { available: false, md5, videoPath: found.video, error: "hevc-unsupported" };
       return { available: false, md5, error: "hevc-unsupported" };
     }
   }
   if (found.thumb) {
     try {
-      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync24(found.thumb), "jpg"), ...found.video ? { videoPath: found.video } : {} };
+      return { available: true, md5, coverUrl: toJpegDataUrl(readFileSync25(found.thumb), "jpg"), ...found.video ? { videoPath: found.video } : {} };
     } catch {
     }
   }
@@ -24594,19 +24796,19 @@ function resolveVideoMd5(decryptedDir, username, localId) {
 }
 function findVideoArtifacts(baseDir, md5) {
   if (!baseDir) return {};
-  const root = join83(baseDir, "msg", "video");
-  if (!existsSync66(root)) return {};
+  const root = join84(baseDir, "msg", "video");
+  if (!existsSync67(root)) return {};
   let thumb;
   let video;
-  for (const month of readdirSync32(root)) {
-    const dir = join83(root, month);
+  for (const month of readdirSync33(root)) {
+    const dir = join84(root, month);
     if (!thumb) {
-      const t = join83(dir, md5 + "_thumb.jpg");
-      if (existsSync66(t)) thumb = t;
+      const t = join84(dir, md5 + "_thumb.jpg");
+      if (existsSync67(t)) thumb = t;
     }
     if (!video) {
-      const v = join83(dir, md5 + ".mp4");
-      if (existsSync66(v)) video = v;
+      const v = join84(dir, md5 + ".mp4");
+      if (existsSync67(v)) video = v;
     }
     if (thumb && video) break;
   }
@@ -24619,16 +24821,16 @@ function toJpegDataUrl(bytes, ext) {
 
 // src/backend/wechat-data/src/query/media-voice.ts
 import { DatabaseSync as DatabaseSync59 } from "node:sqlite";
-import { existsSync as existsSync67, readdirSync as readdirSync33 } from "node:fs";
+import { existsSync as existsSync68, readdirSync as readdirSync34 } from "node:fs";
 import { createHash as createHash29 } from "node:crypto";
-import { join as join84 } from "node:path";
+import { join as join85 } from "node:path";
 function msgTableName11(username) {
   return "Msg_" + createHash29("md5").update(username, "utf8").digest("hex");
 }
 function messageShardFiles5(decryptedDir) {
-  const dir = join84(decryptedDir, "message");
-  if (!existsSync67(dir)) return [];
-  return readdirSync33(dir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("media") && !f.includes("fts") && !f.includes("resource")).sort().map((f) => join84(dir, f));
+  const dir = join85(decryptedDir, "message");
+  if (!existsSync68(dir)) return [];
+  return readdirSync34(dir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("media") && !f.includes("fts") && !f.includes("resource")).sort().map((f) => join85(dir, f));
 }
 function messageServerId(decryptedDir, username, localId) {
   const table = msgTableName11(username);
@@ -24656,8 +24858,8 @@ function messageServerId(decryptedDir, username, localId) {
   return null;
 }
 function resolveVoiceInfo(decryptedDir, username, localId) {
-  const mediaDb = join84(decryptedDir, "message", "media_0.db");
-  if (!existsSync67(mediaDb)) {
+  const mediaDb = join85(decryptedDir, "message", "media_0.db");
+  if (!existsSync68(mediaDb)) {
     return { available: false, decodable: false, error: "\u8BED\u97F3\u5E93\u4E0D\u5B58\u5728 (media_0.db)" };
   }
   try {
@@ -24690,25 +24892,25 @@ function resolveVoiceInfo(decryptedDir, username, localId) {
 
 // src/backend/wechat-data/src/query/sns-image.ts
 import { createHash as createHash30 } from "node:crypto";
-import { existsSync as existsSync68, readdirSync as readdirSync34, readFileSync as readFileSync25, statSync as statSync23 } from "node:fs";
-import { join as join85 } from "node:path";
+import { existsSync as existsSync69, readdirSync as readdirSync35, readFileSync as readFileSync26, statSync as statSync24 } from "node:fs";
+import { join as join86 } from "node:path";
 var md5UrlCache = /* @__PURE__ */ new Map();
 var snsImageIndex = /* @__PURE__ */ new Map();
 function snsMonthRoots(wechatBaseDir) {
-  const cacheRoot = join85(wechatBaseDir, "cache");
+  const cacheRoot = join86(wechatBaseDir, "cache");
   const out = [];
-  if (!existsSync68(cacheRoot)) return out;
+  if (!existsSync69(cacheRoot)) return out;
   let months = [];
   try {
-    months = readdirSync34(cacheRoot);
+    months = readdirSync35(cacheRoot);
   } catch {
     return out;
   }
   for (const month of months.sort().reverse()) {
-    const root = join85(cacheRoot, month, "Sns", "Img");
-    if (!existsSync68(root)) continue;
+    const root = join86(cacheRoot, month, "Sns", "Img");
+    if (!existsSync69(root)) continue;
     try {
-      const st = statSync23(root);
+      const st = statSync24(root);
       out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size });
     } catch {
     }
@@ -24721,7 +24923,7 @@ function scanMonth(root, aesKey, xorKey) {
   walkFiles(root, files, 0);
   for (const f of files) {
     try {
-      const dec = decodeDatBytes(new Uint8Array(readFileSync25(f)), aesKey ?? null, xorKey);
+      const dec = decodeDatBytes(new Uint8Array(readFileSync26(f)), aesKey ?? null, xorKey);
       if ("error" in dec) continue;
       const key = md5Of(dec.bytes);
       if (!byMd5.has(key)) byMd5.set(key, f);
@@ -24758,15 +24960,15 @@ function md5Of(bytes) {
   return createHash30("md5").update(Buffer.from(bytes)).digest("hex");
 }
 function walkFiles(dir, out, depth) {
-  if (depth > 5 || !existsSync68(dir)) return;
+  if (depth > 5 || !existsSync69(dir)) return;
   let entries2 = [];
   try {
-    entries2 = readdirSync34(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+    entries2 = readdirSync35(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
   } catch {
     return;
   }
   for (const e of entries2) {
-    const p = join85(dir, e.name);
+    const p = join86(dir, e.name);
     if (e.isDir) walkFiles(p, out, depth + 1);
     else if (!e.name.endsWith(".db") && !e.name.includes("_shm") && !e.name.includes("_wal")) out.push(p);
   }
@@ -24777,7 +24979,7 @@ function dataUrlOf(dec) {
 }
 function decodeCachedFile(f, aesKey, xorKey) {
   try {
-    const bytes = readFileSync25(f);
+    const bytes = readFileSync26(f);
     const dec = decodeDatBytes(new Uint8Array(bytes), aesKey ?? null, xorKey);
     if ("error" in dec) return null;
     return dataUrlOf(dec);
@@ -24786,14 +24988,14 @@ function decodeCachedFile(f, aesKey, xorKey) {
   }
 }
 function snsImgRoots(wechatBaseDir) {
-  const cacheRoot = join85(wechatBaseDir, "cache");
+  const cacheRoot = join86(wechatBaseDir, "cache");
   const out = [];
-  if (!existsSync68(cacheRoot)) return out;
+  if (!existsSync69(cacheRoot)) return out;
   try {
-    for (const e of readdirSync34(cacheRoot, { withFileTypes: true })) {
+    for (const e of readdirSync35(cacheRoot, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
-      const root = join85(cacheRoot, e.name, "Sns", "Img");
-      if (existsSync68(root)) out.push(root);
+      const root = join86(cacheRoot, e.name, "Sns", "Img");
+      if (existsSync69(root)) out.push(root);
     }
   } catch {
   }
@@ -24814,8 +25016,8 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
       const sub = k.slice(0, 2);
       const rest = k.slice(2);
       for (const root of snsImgRoots(wechatBaseDir)) {
-        const p = join85(root, sub, rest);
-        if (existsSync68(p)) {
+        const p = join86(root, sub, rest);
+        if (existsSync69(p)) {
           const data = decodeCachedFile(p, aesKey, xorKey);
           if (data) {
             boundedSet(md5UrlCache, cacheKey2, data);
@@ -24843,7 +25045,7 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
     for (const root of snsImgRoots(wechatBaseDir)) walkFiles(root, files, 0);
     for (const f of files) {
       try {
-        const bytes = readFileSync25(f);
+        const bytes = readFileSync26(f);
         const dec = decodeDatBytes(new Uint8Array(bytes), aesKey ?? null, xorKey);
         if ("error" in dec) continue;
         if (key && md5Of(dec.bytes) !== key) continue;
@@ -24854,14 +25056,14 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
       }
     }
   }
-  const attachRoot = join85(wechatBaseDir, "msg", "attach");
-  if (existsSync68(attachRoot)) {
+  const attachRoot = join86(wechatBaseDir, "msg", "attach");
+  if (existsSync69(attachRoot)) {
     const attachFiles = [];
     walkFiles(attachRoot, attachFiles, 0);
     let hevcFallback = null;
     for (const f of attachFiles) {
       try {
-        const bytes = readFileSync25(f);
+        const bytes = readFileSync26(f);
         const dec = decodeDatBytes(new Uint8Array(bytes), aesKey ?? null, xorKey);
         if ("error" in dec) continue;
         const nameBase0 = f.split(/[\\/]/).pop() ?? "";
@@ -24890,12 +25092,12 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
 // src/backend/wechat-data/src/query/sns-video.ts
 var import_llm_retry6 = __toESM(require_llm_retry(), 1);
 import { createHash as createHash31 } from "node:crypto";
-import { existsSync as existsSync69, readFileSync as readFileSync27, readdirSync as readdirSync35, statSync as statSync24 } from "node:fs";
-import { join as join87 } from "node:path";
+import { existsSync as existsSync70, readFileSync as readFileSync28, readdirSync as readdirSync36, statSync as statSync25 } from "node:fs";
+import { join as join88 } from "node:path";
 
 // src/backend/wechat-data/src/query/sns-keystream.ts
-import { readFileSync as readFileSync26 } from "node:fs";
-import { dirname as dirname30, join as join86 } from "node:path";
+import { readFileSync as readFileSync27 } from "node:fs";
+import { dirname as dirname30, join as join87 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import vm from "node:vm";
 var SNS_HEAD_ENCRYPTED_BYTES = 131072;
@@ -24909,15 +25111,15 @@ function resolveAssetDir() {
     // 打包态主路径：native/** 已在 asarUnpack 里，资源落在 app.asar.unpacked 下。
     // 排在第一位是**有意的** —— 从 asar 里读要经 Electron 的 fs 补丁、每次冷启动都
     // 解压 3.8MB；unpacked 目录是真实文件，读起来才是设计意图。
-    join86(processResourcesPath(), "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64"),
-    join86(HERE, "..", "native", "weflow-isaac64"),
+    join87(processResourcesPath(), "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64"),
+    join87(HERE, "..", "native", "weflow-isaac64"),
     // 构建产物：lib/ → wechat-data/native
-    join86(HERE, "..", "..", "native", "weflow-isaac64")
+    join87(HERE, "..", "..", "native", "weflow-isaac64")
     // 源码布局：src/query/ → wechat-data/native
   ];
   for (const c of candidates) {
     try {
-      if (readFileSync26(join86(c, "wasm_video_decode.wasm")).length > 0) return c;
+      if (readFileSync27(join87(c, "wasm_video_decode.wasm")).length > 0) return c;
     } catch {
     }
   }
@@ -24928,8 +25130,8 @@ function loadRuntime() {
   if (runtimePromise) return runtimePromise;
   runtimePromise = (async () => {
     const assetDir = resolveAssetDir();
-    const wasmBinary = readFileSync26(join86(assetDir, "wasm_video_decode.wasm"));
-    const glueJs = readFileSync26(join86(assetDir, "wasm_video_decode.js"), "utf8");
+    const wasmBinary = readFileSync27(join87(assetDir, "wasm_video_decode.wasm"));
+    const glueJs = readFileSync27(join87(assetDir, "wasm_video_decode.js"), "utf8");
     let captured = null;
     let resolveInit = () => {
     };
@@ -24988,8 +25190,8 @@ function loadRuntime() {
     };
     globals.importScripts = () => {
     };
-    globals.location = { href: join86(assetDir, "wasm_video_decode.js") };
-    globals.VTS_WASM_URL = `file://${join86(assetDir, "wasm_video_decode.wasm")}`;
+    globals.location = { href: join87(assetDir, "wasm_video_decode.js") };
+    globals.VTS_WASM_URL = `file://${join87(assetDir, "wasm_video_decode.wasm")}`;
     globals.wasm_isaac_generate = (ptr, n) => {
       captured = new Uint8Array(Module.HEAPU8.buffer, ptr, n);
     };
@@ -25046,26 +25248,26 @@ var coverCache2 = /* @__PURE__ */ new Map();
 var videoUrlCache = /* @__PURE__ */ new Map();
 function md5OfFile(path) {
   try {
-    return createHash31("md5").update(readFileSync27(path)).digest("hex");
+    return createHash31("md5").update(readFileSync28(path)).digest("hex");
   } catch {
     return null;
   }
 }
 function snsVideoMonthRoots(wechatBaseDir) {
-  const cacheRoot = join87(wechatBaseDir, "cache");
+  const cacheRoot = join88(wechatBaseDir, "cache");
   const out = [];
-  if (!existsSync69(cacheRoot)) return out;
+  if (!existsSync70(cacheRoot)) return out;
   let months = [];
   try {
-    months = readdirSync35(cacheRoot);
+    months = readdirSync36(cacheRoot);
   } catch {
     return out;
   }
   for (const month of months.sort().reverse()) {
-    const root = join87(cacheRoot, month, "Sns", "Video");
-    if (!existsSync69(root)) continue;
+    const root = join88(cacheRoot, month, "Sns", "Video");
+    if (!existsSync70(root)) continue;
     try {
-      const st = statSync24(root);
+      const st = statSync25(root);
       out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size });
     } catch {
     }
@@ -25075,10 +25277,10 @@ function snsVideoMonthRoots(wechatBaseDir) {
 function scanMonth2(root) {
   const byMd5 = /* @__PURE__ */ new Map();
   for (const sub of safeReaddir(root)) {
-    const dir = join87(root, sub);
+    const dir = join88(root, sub);
     let isDir = false;
     try {
-      isDir = statSync24(dir).isDirectory();
+      isDir = statSync25(dir).isDirectory();
     } catch {
       continue;
     }
@@ -25086,7 +25288,7 @@ function scanMonth2(root) {
     for (const name of safeReaddir(dir)) {
       const low = name.toLowerCase();
       if (!MATCHABLE_EXT.some((ext) => low.endsWith(ext))) continue;
-      const full = join87(dir, name);
+      const full = join88(dir, name);
       const h = md5OfFile(full);
       if (h && !byMd5.has(h)) byMd5.set(h, full);
     }
@@ -25095,7 +25297,7 @@ function scanMonth2(root) {
 }
 function safeReaddir(dir) {
   try {
-    return readdirSync35(dir);
+    return readdirSync36(dir);
   } catch {
     return [];
   }
@@ -25158,7 +25360,7 @@ async function loadSnsVideoBytes(args) {
   const local = findLocalVideoPath(args.base, args.md5, args.timelineId, args.mediaId);
   if (local.path) {
     try {
-      return { bytes: readFileSync27(local.path), source: "local" };
+      return { bytes: readFileSync28(local.path), source: "local" };
     } catch {
     }
   }
@@ -25227,25 +25429,25 @@ function sibling(path, exts) {
   for (const ext of exts) {
     for (const variant of [ext, ext.toUpperCase()]) {
       const p = base + variant;
-      if (existsSync69(p)) return p;
+      if (existsSync70(p)) return p;
     }
   }
   return null;
 }
 function findInChatVideoCache(wechatBaseDir, names) {
-  const root = join87(wechatBaseDir, "msg", "video");
-  if (!existsSync69(root)) return null;
+  const root = join88(wechatBaseDir, "msg", "video");
+  if (!existsSync70(root)) return null;
   const dirs = [root];
   try {
-    for (const entry of readdirSync35(root, { withFileTypes: true })) {
-      if (entry.isDirectory()) dirs.push(join87(root, entry.name));
+    for (const entry of readdirSync36(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.push(join88(root, entry.name));
     }
   } catch {
   }
   for (const dir of dirs) {
     for (const name of names) {
-      const p = join87(dir, name);
-      if (existsSync69(p)) return p;
+      const p = join88(dir, name);
+      if (existsSync70(p)) return p;
     }
   }
   return null;
@@ -25262,7 +25464,7 @@ function isVideoFile(path) {
 }
 function dataUrlOfImage(path) {
   try {
-    const bytes = readFileSync27(path);
+    const bytes = readFileSync28(path);
     const low = path.toLowerCase();
     const mime = low.endsWith(".png") ? "png" : "jpeg";
     return "data:image/" + mime + ";base64," + bytes.toString("base64");
@@ -25272,7 +25474,7 @@ function dataUrlOfImage(path) {
 }
 function dataUrlOfVideo(path) {
   try {
-    const bytes = readFileSync27(path);
+    const bytes = readFileSync28(path);
     const mime = path.toLowerCase().endsWith(".mov") ? "quicktime" : "mp4";
     return "data:video/" + mime + ";base64," + bytes.toString("base64");
   } catch {
@@ -25318,7 +25520,7 @@ function findLocalVideoPath(wechatBaseDir, md5, _timelineId, _mediaId) {
 }
 
 // src/backend/wechat-data/src/remotes/media.ts
-import { writeFileSync as writeFileSync15 } from "node:fs";
+import { writeFileSync as writeFileSync16 } from "node:fs";
 var IMAGE_BATCH_MAX = 200;
 var REMOTE_URLS_RPC_MAX = 200;
 function createMediaRemotes(rc) {
@@ -25523,7 +25725,7 @@ function createMediaRemotes(rc) {
         return { ok: false, error: loaded2.error ?? "\u53D6\u4E0D\u5230\u89C6\u9891\u5B57\u8282" };
       }
       try {
-        writeFileSync15(dest, loaded2.bytes);
+        writeFileSync16(dest, loaded2.bytes);
       } catch (e) {
         const msg = e?.message ?? String(e);
         rc.op("task", "export_sns_video", "fail", options.md5?.slice(0, 8) ?? "", msg);
@@ -25537,8 +25739,8 @@ function createMediaRemotes(rc) {
 
 // src/backend/wechat-data/src/query/export-history.ts
 import { DatabaseSync as DatabaseSync60 } from "node:sqlite";
-import { existsSync as existsSync70, rmSync as rmSync8, statSync as statSync25 } from "node:fs";
-import { basename as basename9, dirname as dirname31, join as join88 } from "node:path";
+import { existsSync as existsSync71, rmSync as rmSync9, statSync as statSync26 } from "node:fs";
+import { basename as basename9, dirname as dirname31, join as join89 } from "node:path";
 var DEFAULT_LIMIT3 = 200;
 var MAX_LIMIT3 = 2e3;
 var STATUSES3 = ["ok", "fail", "canceled"];
@@ -25550,7 +25752,7 @@ var SORT_COLUMNS2 = {
   name: "filename"
 };
 function dbPath7(decryptedDir) {
-  return join88(dirname31(decryptedDir), "wechat_privacy.db");
+  return join89(dirname31(decryptedDir), "wechat_privacy.db");
 }
 function openStore8(decryptedDir) {
   const db = new DatabaseSync60(dbPath7(decryptedDir));
@@ -25583,7 +25785,7 @@ function recordExport(decryptedDir, input) {
     let size = input.sizeBytes ?? null;
     if (size === null && input.status === "ok") {
       try {
-        const st = statSync25(filePath);
+        const st = statSync26(filePath);
         if (st.isFile()) size = st.size;
       } catch {
       }
@@ -25666,7 +25868,7 @@ function rowToEntry2(r) {
     params: cleanText3(r["params"]),
     // 每次读取都重新核对 —— 用户可能在资源管理器里移走/删掉了文件，
     // 历史列表必须显示「已不在」，否则「打开」按钮点了没反应会像 bug。
-    existsNow: path ? existsSync70(path) : false
+    existsNow: path ? existsSync71(path) : false
   };
 }
 function listExportHistory(decryptedDir, query = {}) {
@@ -25723,8 +25925,8 @@ function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
           if (!p || seen.has(p)) continue;
           seen.add(p);
           try {
-            if (existsSync70(p)) {
-              rmSync8(p, { recursive: true, force: true });
+            if (existsSync71(p)) {
+              rmSync9(p, { recursive: true, force: true });
               result.filesDeleted += 1;
             }
           } catch (e) {
@@ -25759,7 +25961,7 @@ function pruneExportHistory(decryptedDir, opts = {}) {
         const rows = db.prepare("SELECT id, path FROM export_history").all();
         ids = rows.filter((r) => {
           const p = cleanText3(r.path);
-          return !p || !existsSync70(p);
+          return !p || !existsSync71(p);
         }).map((r) => Number(r.id));
       } else {
         const clauses = [];
@@ -25792,16 +25994,16 @@ function pruneExportHistory(decryptedDir, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/export-io.ts
-import { renameSync as renameSync7, rmSync as rmSync9, writeFileSync as writeFileSync16 } from "node:fs";
+import { renameSync as renameSync7, rmSync as rmSync10, writeFileSync as writeFileSync17 } from "node:fs";
 var MAX_MOMENT_MEDIA = 5e3;
 function writeFileAtomicSync(filePath, data) {
   const tmp = partialPath(filePath);
   try {
-    writeFileSync16(tmp, data);
+    writeFileSync17(tmp, data);
     renameSync7(tmp, filePath);
   } catch (e) {
     try {
-      rmSync9(tmp, { force: true });
+      rmSync10(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -25818,7 +26020,7 @@ async function writeZipAtomic(filePath, produce) {
   } catch (e) {
     if (zip) await zip.abort();
     try {
-      rmSync9(tmp, { force: true });
+      rmSync10(tmp, { force: true });
     } catch {
     }
     throw e;
@@ -26097,7 +26299,7 @@ async function writeXlsxStream(filePath, rows, ctrl, total = 0) {
 
 // src/backend/wechat-data/src/query/export-flows.ts
 import { mkdirSync as mkdirSync23 } from "node:fs";
-import { basename as basename10, dirname as dirname32, join as join89 } from "node:path";
+import { basename as basename10, dirname as dirname32, join as join90 } from "node:path";
 function collectChatlogMedia(msgs) {
   const out = [];
   for (const m of msgs) {
@@ -26150,7 +26352,7 @@ function planSessionExport(decryptedDir, username, format, count, dir, types, ri
   const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
   const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
   const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
-  const exportDir = dir && dir.trim() ? dir.trim() : join89(dirname32(decryptedDir), "exports");
+  const exportDir = dir && dir.trim() ? dir.trim() : join90(dirname32(decryptedDir), "exports");
   mkdirSync23(exportDir, { recursive: true });
   const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
   const autoBase = sanitized + "_" + now + "_" + ((count ?? 0) === 0 ? "all" : String(count));
@@ -26159,7 +26361,7 @@ function planSessionExport(decryptedDir, username, format, count, dir, types, ri
   const outExt = zip ? "zip" : ext;
   const innerName = base.toLowerCase().endsWith("." + ext) ? base : base + "." + ext;
   const filenameOut = base.toLowerCase().endsWith("." + outExt) ? base : base + "." + outExt;
-  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join89(exportDir, filenameOut), now };
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join90(exportDir, filenameOut), now };
 }
 function formatTextBody(format, msgs, username, now) {
   if (format === "csv") return formatCsv(msgs, username);
@@ -26262,7 +26464,7 @@ function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
     throw new Error("\u672A\u77E5\u5BFC\u51FA\u7C7B\u578B: " + kind);
   }
   const chosen = typeof dest === "string" && dest.trim() !== "" ? dest.trim() : "";
-  const filepath = chosen || join89(join89(dirname32(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
+  const filepath = chosen || join90(join90(dirname32(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
   mkdirSync23(dirname32(filepath), { recursive: true });
   writeFileAtomicSync(filepath, buildCsv(header, rows));
   return { path: filepath, filename: basename10(filepath), count: rows.length };
@@ -26292,7 +26494,7 @@ function topOf(arr, limit = 12) {
 function exportAnnualReport(decryptedDir, year, format, dir, filename) {
   const report = queryAnnualReport(decryptedDir, year);
   const ext = format === "html" ? "html" : format === "json" ? "json" : "md";
-  const base = dir && dir.trim() ? dir.trim() : join89(dirname32(decryptedDir), "exports");
+  const base = dir && dir.trim() ? dir.trim() : join90(dirname32(decryptedDir), "exports");
   const safeName = filename && filename.trim() ? filename.trim().replace(/\.(md|html|json)$/i, "") + "." + ext : "wechat_annual_" + String(year) + "." + ext;
   mkdirSync23(base, { recursive: true });
   let content = "";
@@ -26358,7 +26560,7 @@ function exportAnnualReport(decryptedDir, year, format, dir, filename) {
     md.push("\u672B\u53E5: " + last);
     content = md.join("\n");
   }
-  const path = join89(base, safeName);
+  const path = join90(base, safeName);
   writeFileAtomicSync(path, content);
   return { path, filename: safeName, count: total };
 }
@@ -26406,14 +26608,14 @@ async function exportMoments(decryptedDir, opts) {
     if (!q) return true;
     return m.author.toLowerCase().includes(q) || m.text.toLowerCase().includes(q) || m.location.toLowerCase().includes(q) || m.link_title.toLowerCase().includes(q) || (m.link_url ?? "").toLowerCase().includes(q) || (m.sourceNickName ?? "").toLowerCase().includes(q) || (m.publicUserName ?? "").toLowerCase().includes(q) || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q)) || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q));
   });
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join89(dirname32(decryptedDir), "exports");
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join90(dirname32(decryptedDir), "exports");
   mkdirSync23(base, { recursive: true });
   if (opts?.zip) {
     const mediaCtx2 = exportMediaCtx(decryptedDir);
     const rawName = (opts.filename ?? "").trim();
     const zipBase = rawName ? rawName.replace(/\.zip$/i, "") : "";
     const zipName = zipBase ? zipBase + ".zip" : "wechat_moments_" + String(Date.now()) + ".zip";
-    const zipPath = join89(base, zipName);
+    const zipPath = join90(base, zipName);
     let mediaCount = 0;
     await writeZipAtomic(zipPath, async (zip) => {
       await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
@@ -26517,7 +26719,7 @@ async function exportMoments(decryptedDir, opts) {
     }
     content = lines.join(NL);
   }
-  const path = join89(base, name);
+  const path = join90(base, name);
   writeFileAtomicSync(path, content);
   return { path, filename: name, count: filtered.length };
 }
@@ -26525,10 +26727,10 @@ async function exportAllSessions(decryptedDir, opts) {
   const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
   const env = querySessions(decryptedDir);
   const sessions = env.sessions.slice(0, 1e3);
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join89(dirname32(decryptedDir), "exports");
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join90(dirname32(decryptedDir), "exports");
   mkdirSync23(base, { recursive: true });
   const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
-  const path = join89(base, filename);
+  const path = join90(base, filename);
   const seen = /* @__PURE__ */ new Set();
   let total = 0;
   await writeZipAtomic(path, async (zip) => {
@@ -27572,14 +27774,14 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
         const src = md5 ? paths.get(md5.toLowerCase()) : void 0;
         if (!src) continue;
         const it = items[i];
-        const outDir = join90(decodedDir, it.username);
-        const cached = CACHED_IMAGE_EXTS.some((ext) => existsSync71(join90(decodedDir, md5 + "." + ext)) || existsSync71(join90(outDir, md5 + "." + ext)));
+        const outDir = join91(decodedDir, it.username);
+        const cached = CACHED_IMAGE_EXTS.some((ext) => existsSync72(join91(decodedDir, md5 + "." + ext)) || existsSync72(join91(outDir, md5 + "." + ext)));
         if (cached) continue;
         try {
-          const dec = decodeDatBytes(new Uint8Array(readFileSync28(src)), aesBytes, xorKey);
+          const dec = decodeDatBytes(new Uint8Array(readFileSync29(src)), aesBytes, xorKey);
           if ("error" in dec || dec.format === "hevc") continue;
           mkdirSync24(outDir, { recursive: true });
-          writeFileSync18(join90(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
+          writeFileSync19(join91(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
         } catch {
         }
       }
@@ -28065,9 +28267,9 @@ __decorateElement(_init2, 1, "generatePeriodSummary", _generatePeriodSummary_dec
 __decoratorMetadata(_init2, GatewayAskOps);
 
 // src/backend/wechat-data/src/laya/runtime.ts
-import { existsSync as existsSync73, readFileSync as readFileSync29 } from "node:fs";
+import { existsSync as existsSync74, readFileSync as readFileSync30 } from "node:fs";
 import { cpus } from "node:os";
-import { join as join92 } from "node:path";
+import { join as join93 } from "node:path";
 
 // src/backend/wechat-data/src/laya/build-sequence.ts
 var QTYPES = { choice: 0, score: 1, noul: 2 };
@@ -28152,8 +28354,8 @@ function collateItems(items, padId) {
 }
 
 // src/backend/wechat-data/src/laya/model-file.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync72, mkdirSync as mkdirSync25, renameSync as renameSync9, statSync as statSync26, unlinkSync as unlinkSync5 } from "node:fs";
-import { dirname as dirname33, join as join91, resolve as resolve3 } from "node:path";
+import { copyFileSync as copyFileSync2, existsSync as existsSync73, mkdirSync as mkdirSync25, renameSync as renameSync9, statSync as statSync27, unlinkSync as unlinkSync5 } from "node:fs";
+import { dirname as dirname33, join as join92, resolve as resolve3 } from "node:path";
 var LAYA_DIR_ENV = "DSH_WECHAT_LAYA_DIR";
 var LAYA_MIRROR_ENV = "DSH_WECHAT_LAYA_MIRROR";
 var LAYA_REPO_ENV = "DSH_WECHAT_LAYA_REPO";
@@ -28170,7 +28372,7 @@ var LAYA_MODEL_FILE = "laya-decision.onnx";
 var DOWNLOAD_CONNECT_TIMEOUT_MS2 = 3e4;
 function layaModelsDir(decryptedDir) {
   const root = decryptedDir ? dirname33(decryptedDir) : resolveWechatDataRoot();
-  return join91(root, "laya");
+  return join92(root, "laya");
 }
 function resolveLayaModelsDir(configured, decryptedDir) {
   const pinned = typeof configured === "string" ? configured.trim() : "";
@@ -28184,14 +28386,14 @@ function layaModelStatus(configured, decryptedDir) {
   const missing = [];
   let bytes = 0;
   for (const a of LAYA_ASSETS) {
-    const p = join91(dir, a.rel);
-    if (!existsSync72(p)) {
+    const p = join92(dir, a.rel);
+    if (!existsSync73(p)) {
       missing.push(`${a.label}\uFF08\u7F3A ${a.rel}\uFF09`);
       continue;
     }
     let size = 0;
     try {
-      size = statSync26(p).size;
+      size = statSync27(p).size;
     } catch (e) {
       missing.push(`${a.label}\uFF08\u8BFB\u53D6\u5931\u8D25\uFF1A${e.message}\uFF09`);
       continue;
@@ -28199,10 +28401,10 @@ function layaModelStatus(configured, decryptedDir) {
     bytes += size;
     if (size < a.minBytes) missing.push(`${a.label}\uFF08\u4E0D\u5B8C\u6574\uFF1A${formatBytes2(size)}\uFF09`);
   }
-  return { installed: missing.length === 0, dir, path: join91(dir, LAYA_MODEL_FILE), bytes, source, missing };
+  return { installed: missing.length === 0, dir, path: join92(dir, LAYA_MODEL_FILE), bytes, source, missing };
 }
 function layaTokenizerDir(dir) {
-  return join91(dir, "tokenizer");
+  return join92(dir, "tokenizer");
 }
 function formatBytes2(n) {
   if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
@@ -28230,10 +28432,10 @@ async function layaDownloadModel(dir, onProgress) {
   const done = [];
   let total = 0;
   for (const asset of LAYA_ASSETS) {
-    const target = join91(dir, asset.rel);
-    if (existsSync72(target)) {
+    const target = join92(dir, asset.rel);
+    if (existsSync73(target)) {
       try {
-        if (statSync26(target).size >= asset.minBytes) {
+        if (statSync27(target).size >= asset.minBytes) {
           done.push(asset.rel);
           continue;
         }
@@ -28274,9 +28476,9 @@ function layaAdoptModelDir(sourceDir, decryptedDir) {
   const target = layaModelsDir(decryptedDir);
   mkdirSync25(target, { recursive: true });
   for (const asset of LAYA_ASSETS) {
-    const from = join91(sourceDir, asset.rel);
-    if (!existsSync72(from)) continue;
-    const to = join91(target, asset.rel);
+    const from = join92(sourceDir, asset.rel);
+    if (!existsSync73(from)) continue;
+    const to = join92(target, asset.rel);
     if (resolve3(from) === resolve3(to)) continue;
     mkdirSync25(dirname33(to), { recursive: true });
     const tmp = `${to}.part`;
@@ -28368,10 +28570,10 @@ function layaUnload() {
 }
 function readTemperatures(dir) {
   const fallback = { base: [1, 1, 1], byOptions: {} };
-  const p = join92(dir, "rl_agent_config.json");
-  if (!existsSync73(p)) return fallback;
+  const p = join93(dir, "rl_agent_config.json");
+  if (!existsSync74(p)) return fallback;
   try {
-    const cfg = JSON.parse(readFileSync29(p, "utf8"));
+    const cfg = JSON.parse(readFileSync30(p, "utf8"));
     const clamp2 = (v) => {
       const n = Number(v);
       if (!Number.isFinite(n) || n <= 0) return 1;
@@ -28438,7 +28640,7 @@ async function layaEnsureLoaded(modelDir, decryptedDir) {
       });
       let tokenizerBytes = 0;
       try {
-        tokenizerBytes = readFileSync29(join92(tokDir, "tokenizer.json")).byteLength;
+        tokenizerBytes = readFileSync30(join93(tokDir, "tokenizer.json")).byteLength;
       } catch {
       }
       loaded = { dir: status.dir, ort, session, tokenizer, tokenizerBytes, optColsCap: 16 };
@@ -28596,10 +28798,10 @@ function postprocessAnswers(input) {
 
 // src/backend/wechat-data/src/laya/store.ts
 import { DatabaseSync as DatabaseSync61 } from "node:sqlite";
-import { existsSync as existsSync74, statSync as statSync27 } from "node:fs";
-import { dirname as dirname34, join as join93 } from "node:path";
+import { existsSync as existsSync75, statSync as statSync28 } from "node:fs";
+import { dirname as dirname34, join as join94 } from "node:path";
 function layaCachePath(decryptedDir) {
-  return join93(dirname34(decryptedDir), "laya_analysis.db");
+  return join94(dirname34(decryptedDir), "laya_analysis.db");
 }
 function openStore9(decryptedDir) {
   const db = new DatabaseSync61(layaCachePath(decryptedDir));
@@ -28617,7 +28819,7 @@ function openStore9(decryptedDir) {
 }
 function layaModelKey(modelPath) {
   try {
-    const st = statSync27(modelPath);
+    const st = statSync28(modelPath);
     return `${st.size}-${Math.floor(st.mtimeMs / 1e3)}`;
   } catch {
     return "unknown";
@@ -28625,7 +28827,7 @@ function layaModelKey(modelPath) {
 }
 function readAnalysisCache(decryptedDir, sessionId, modelKey, localIds) {
   const out = /* @__PURE__ */ new Map();
-  if (localIds.length === 0 || !existsSync74(layaCachePath(decryptedDir))) return out;
+  if (localIds.length === 0 || !existsSync75(layaCachePath(decryptedDir))) return out;
   let db = null;
   try {
     db = openStore9(decryptedDir);
@@ -29106,8 +29308,8 @@ function createLayaRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/gateway-data-ops.ts
-var _unloadLaya_dec, _adoptLayaModel_dec, _downloadLayaModel_dec, _getLayaStatus_dec, _analyzeVisibleMessages_dec, _analyzeMessages_dec, _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
-var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _analyzeMessages_dec = [Remote3("analyzeMessages")], _analyzeVisibleMessages_dec = [Remote3("analyzeVisibleMessages")], _getLayaStatus_dec = [Remote3("getLayaStatus")], _downloadLayaModel_dec = [Remote3("downloadLayaModel")], _adoptLayaModel_dec = [Remote3("adoptLayaModel")], _unloadLaya_dec = [Remote3("unloadLaya")], _a3) {
+var _unloadLaya_dec, _adoptLayaModel_dec, _downloadLayaModel_dec, _getLayaStatus_dec, _analyzeVisibleMessages_dec, _analyzeMessages_dec, _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _upgradeDecodedImages_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
+var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _upgradeDecodedImages_dec = [Remote3("upgradeDecodedImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _analyzeMessages_dec = [Remote3("analyzeMessages")], _analyzeVisibleMessages_dec = [Remote3("analyzeVisibleMessages")], _getLayaStatus_dec = [Remote3("getLayaStatus")], _downloadLayaModel_dec = [Remote3("downloadLayaModel")], _adoptLayaModel_dec = [Remote3("adoptLayaModel")], _unloadLaya_dec = [Remote3("unloadLaya")], _a3) {
   constructor() {
     super(...arguments);
     __runInitializers(_init3, 5, this);
@@ -29232,6 +29434,9 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
   }
   async decryptAllImages(options) {
     return this.keysDecryptRemotes().decryptAllImages(options);
+  }
+  async upgradeDecodedImages() {
+    return this.keysDecryptRemotes().upgradeDecodedImages();
   }
   getDecryptStatus() {
     return this.configRemotes().getDecryptStatus();
@@ -29397,6 +29602,7 @@ __decorateElement(_init3, 1, "openConfig", _openConfig_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "verifyImageKey", _verifyImageKey_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "decryptAllDatabases", _decryptAllDatabases_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "decryptAllImages", _decryptAllImages_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "upgradeDecodedImages", _upgradeDecodedImages_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "getDecryptStatus", _getDecryptStatus_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "installWhisperEngine", _installWhisperEngine_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "transcribeVoiceBatch", _transcribeVoiceBatch_dec, GatewayDataOps);

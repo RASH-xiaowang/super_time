@@ -41,6 +41,7 @@ import type {
   DecryptAllResult,
   DecryptImagesResult,
   DecryptStatus,
+  ImageUpgradeResult,
   DeleteFavoriteResult,
   DraftClearResult,
   DraftsClearResult,
@@ -406,6 +407,15 @@ export async function apiDecryptAllDatabases(): Promise<DecryptAllResult> {
  */
 export async function apiDecryptAllImages(options?: { concurrency?: number }): Promise<DecryptImagesResult> {
   return unwrap(await remote().decryptAllImages(options))
+}
+/**
+ * Upgrade the decoded-image cache: re-decode every cached image from the best
+ * .dat still on disk, replacing a cached entry only when the new bytes are
+ * strictly larger. Offline (never touches the network).
+ * @returns ImageUpgradeResult: total/upgraded/unchanged/noSource/failed + details.
+ */
+export async function apiUpgradeDecodedImages(): Promise<ImageUpgradeResult> {
+  return unwrap(await remote().upgradeDecodedImages())
 }
 /**
  * Read the live decryption progress snapshot.

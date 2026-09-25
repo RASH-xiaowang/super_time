@@ -29,6 +29,43 @@ function walkDataDats(dir: string, out: string[], depth: number): void {
   }
 }
 
+/**
+ * 收集 `msg/attach` 下全部 md5 前缀的 `.dat`（递归，深度上限 10）。
+ *
+ * 抽出来是为了**只有一个遍历实现**：「升级解码缓存」（`image-upgrade.ts`）要按 md5 反查
+ * 「本机最好的一档」，走的必须是同一个目录口径 —— 两份各写一遍，迟早出现「批量解密看得到、
+ * 升级看不见」那种只有用户能发现的偏差。
+ * @param rawRoot - 微信账号原始根目录（`msg/attach` 的父目录）。
+ * @returns `.dat` 绝对路径列表（未排序）。
+ */
+export function collectImageDatFiles(rawRoot: string): string[] {
+  const files: string[] = []
+  walkDataDats(join(rawRoot, 'msg', 'attach'), files, 0)
+  return files
+}
+
+/**
+ * 把 `.dat` 列表按 md5 归并，组内**按档位排序**（`_h` 原图在前，不认识的最后）。
+ *
+ * 分组不是省事，是正确性要求：同一个 md5 的多档必须由**同一个 worker** 顺序处理。
+ * 并发 >1 时它们会被不同 worker 同时取走，「谁先写主槽」就变成竞态 —— 实测并发 2 时
+ * `.dat`（聊天版）会盖掉 `_h`（原图），症状正是「明明点开过大图，缓存里还是糊的」。
+ * @param files - {@link collectImageDatFiles} 的结果（本函数不改动入参）。
+ * @returns md5 → 该 md5 的 `.dat` 路径（组内按档位从优到劣）。
+ */
+export function groupImageDatsByMd5(files: readonly string[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>()
+  for (const file of [...files].sort((a, b) => datTierRank(a) - datTierRank(b))) {
+    const name = file.split(/[\\/]/).pop() ?? ''
+    const md5 = (MD5_PREFIX_RE.exec(name)?.[1] ?? '').toLowerCase()
+    if (!md5) continue
+    const bucket = groups.get(md5)
+    if (bucket) bucket.push(file)
+    else groups.set(md5, [file])
+  }
+  return groups
+}
+
 /** Batch decrypt result. */
 export interface BatchDecryptResult {
   total: number
@@ -59,24 +96,11 @@ export async function decryptAllImageDats(
   concurrency = 8,
   onProgress?: (processed: number, total: number, failed: number, message: string) => void,
 ): Promise<BatchDecryptResult> {
-  const files: string[] = []
-  walkDataDats(join(rawRoot, 'msg', 'attach'), files, 0)
-  // 先按档位排序（`_h` 原图 → 主体 → `_t` 缩略），**再按 md5 分组**。
-  //
-  // 分组不是为了省事，是正确性要求：同一个 md5 的多档必须由**同一个 worker** 顺序处理。
-  // 并发 >1 时它们会被不同 worker 同时取走，「谁先写主槽」就变成竞态 —— 实测并发 2 时
-  // `.dat`（聊天版）会盖掉 `_h`（原图），症状正是「明明点开过大图，缓存里还是糊的」。
-  // 分组后档位回退（原图解不开就退聊天版、再退缩略图）在同一处按序走完。
-  files.sort((a, b) => datTierRank(a) - datTierRank(b))
-  const groups = new Map<string, string[]>()
-  for (const file of files) {
-    const name = file.split(/[\\/]/).pop() ?? ''
-    const md5 = (MD5_PREFIX_RE.exec(name)?.[1] ?? '').toLowerCase()
-    if (!md5) continue
-    const bucket = groups.get(md5)
-    if (bucket) bucket.push(file)
-    else groups.set(md5, [file])
-  }
+  const files = collectImageDatFiles(rawRoot)
+  // 档位排序与按 md5 归并都在 `groupImageDatsByMd5` 里（同一个口径也服务「升级解码缓存」）。
+  // 排序的理由：`_h` 原图先落主槽，低档位随后命中 `hasCached` 而跳过 —— 既不会覆盖，
+  // 也让 processed 计数照样走满。
+  const groups = groupImageDatsByMd5(files)
   const work = [...groups.entries()]
   const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null
 

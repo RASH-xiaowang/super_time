@@ -8,7 +8,7 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { createImageCache, imageCacheKey } from './image-cache.ts'
+import { createImageCache, forgetAllImages, imageCache, imageCacheKey, recallImage, rememberImage } from './image-cache.ts'
 
 /** 造一条指定「字节数」的假 data URL（`url.length` 就是缓存记账用的量）。 */
 function fake(size: number, thumb = false): { url: string; thumb: boolean } {
@@ -87,5 +87,14 @@ describe('图片内存缓存', () => {
     c.clear()
     expect(c.get('u', 1)).toBeUndefined()
     expect(c.stats()).toEqual({ count: 0, bytes: 0 })
+  })
+
+  it('⑨ forgetAllImages 清的是**全应用那一份**单例（「升级为原图」后界面不能还停在缩略图）', () => {
+    // 这一条必须用真单例：用 `createImageCache()` 造的局部对象永远「清得掉」，测不出接线错误。
+    rememberImage('wxid_upg', 42, fake(10, true))
+    expect(recallImage('wxid_upg', 42), '先确认写进的是同一份单例').toBeDefined()
+    forgetAllImages()
+    expect(recallImage('wxid_upg', 42)).toBeUndefined()
+    expect(imageCache.stats()).toEqual({ count: 0, bytes: 0 })
   })
 })

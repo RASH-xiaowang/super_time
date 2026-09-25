@@ -4,7 +4,7 @@
 > `@Remote('name')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。
 > CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。
 
-当前共 **169** 个 Remote 方法。
+当前共 **170** 个 Remote 方法。
 
 渲染进程通过这些方法与后端通信（`gateway.ts` 是唯一分发点）：
 渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →
@@ -183,8 +183,9 @@
 | 165 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
 | 166 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
 | 167 | `unloadLaya` | Unload the model, releasing roughly 1.2 GB of resident memory. |
-| 168 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
-| 169 | `verifyImageKey` | — |
+| 168 | `upgradeDecodedImages` | 升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。 |
+| 169 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
+| 170 | `verifyImageKey` | — |
 
 ## 明细
 
@@ -1887,6 +1888,16 @@ unloadLaya(): { ok: boolean }
 Unload the model, releasing roughly 1.2 GB of resident memory. The next analysis call loads it again.
 
 - @returns SimpleResult.
+
+### `upgradeDecodedImages`
+
+```ts
+async upgradeDecodedImages(): Promise<ImageUpgradeResult>
+```
+
+升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。  为什么要有这一条：缓存是「谁先解出来谁占坑」（见 `query/media-image.ts` 的 `cachedImage`）， 逐条读图时命中缓存就直接返回、不会回头找更好的源。所以 2026-09 那批先解了缩略图的缓存， 在用户后来于微信里点开原图、或本机装上 wxgf 解码库之后**仍然是糊的那一份**。 判据是「重解结果严格更大才覆盖」⇒ 幂等、且永远不会把 CDN 原图降级成本机的较小那份。 实时进度通过 getDecryptStatus 轮询读取（`op` = `image-upgrade`）。
+
+- @returns ImageUpgradeResult: 检查/已升级/无需升级/本机无源/失败 计数 + 明细。
 
 ### `verifyDatabaseKey`
 

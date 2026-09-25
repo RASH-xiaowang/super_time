@@ -113,3 +113,15 @@ export function recallImage(username: string, localId: number): CachedImage | un
 export function rememberImage(username: string, localId: number, value: CachedImage): void {
   imageCache.set(username, localId, value)
 }
+
+/**
+ * 丢掉**全部**内存缓存条目（清空后所有图都会重新取一次）。
+ *
+ * 给「后端把磁盘缓存换成了更好的一份」的动作使用 —— 目前是设置页的「升级为原图」。
+ * 不这么做的话：用户升级完切回会话，`MessageImage` 的首帧仍然从内存缓存里拿到**旧的那张缩略图**
+ * （这层缓存是全应用共用的，跨面板切换不会失效），于是「升级成功」在界面上表现为「什么都没发生」。
+ * 代价是之后一屏图会重新走一次取图（后端命中的是升级后的磁盘缓存），所以只在**真的换了图**时调。
+ */
+export function forgetAllImages(): void {
+  imageCache.clear()
+}

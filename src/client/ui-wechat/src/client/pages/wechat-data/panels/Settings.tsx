@@ -65,13 +65,13 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
-    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgGetting, imgOpMsg,
-    imgProgress, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
+    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
+    imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath, pickDbDir,
     pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg, saving,
     setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setImgXor,
     setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe, toggleCdn,
-    toggleCdnLocal, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
+    toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
     whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel, whisperModelsDir,
     whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
     message,
@@ -191,10 +191,14 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           imgDecryptDetail={imgDecryptDetail}
           imgDecrypting={imgDecrypting}
           imgProgress={imgProgress}
+          imgUpgradeProgress={imgUpgradeProgress}
+          imgUpgradeResult={imgUpgradeResult}
+          imgUpgrading={imgUpgrading}
           setImgConcurrency={setImgConcurrency}
           setImgDetailOpen={setImgDetailOpen}
           toggleCdn={toggleCdn}
           toggleCdnLocal={toggleCdnLocal}
+          upgradeImgs={upgradeImgs}
         />
 
         <SettingsVoiceSection
@@ -340,7 +344,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
       <Dialog
         open={imgDetailOpen}
         onClose={() => { setImgDetailOpen(false) }}
-        title="图片解密详情"
+        title={imgDetailTitle}
         footer={(
           <Button size="sm" variant="outline" onClick={() => { setImgDetailOpen(false) }}>关闭</Button>
         )}
