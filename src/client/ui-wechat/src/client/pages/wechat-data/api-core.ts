@@ -109,6 +109,7 @@ import type {
   LayaAnalysisView,
   LayaDownloadOutcome,
   LayaStatus,
+  LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
@@ -236,6 +237,7 @@ export interface WechatRemote {
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlyRow[]>>
   getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number }>>
   analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<RemoteResult<LayaAnalysisView>>
+  analyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }> }): Promise<RemoteResult<LayaVisibleAnalysisResult>>
   getLayaStatus(): Promise<RemoteResult<LayaStatus>>
   downloadLayaModel(): Promise<RemoteResult<LayaDownloadOutcome>>
   adoptLayaModel(options: { sourceDir: string }): Promise<RemoteResult<LayaStatus>>

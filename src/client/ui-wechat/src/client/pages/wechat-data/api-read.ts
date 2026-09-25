@@ -108,6 +108,7 @@ import type {
   LayaAnalysisView,
   LayaDownloadOutcome,
   LayaStatus,
+  LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
@@ -248,6 +249,20 @@ export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'm
  */
 export async function apiAnalyzeMessages(options: { talker: string; contextLimit?: number }): Promise<LayaAnalysisView> {
   return unwrap(await remote().analyzeMessages(options))
+}
+
+/**
+ * Per-message local analysis for the **visible window** of a conversation.
+ *
+ * Each message is analyzed against the conversation up to that point (both sides are in the
+ * context). Voice messages are transcribed first — transcript cache is shared with the voice
+ * panel, so an already-transcribed clip costs nothing. Results are cached on disk, so scrolling
+ * back over the same messages is instant.
+ * @param options - talker + targets (localId + sortSeq), up to a dozen per call.
+ * @returns Per-message answers; failures are per item, not for the whole batch.
+ */
+export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }> }): Promise<LayaVisibleAnalysisResult> {
+  return unwrap(await remote().analyzeVisibleMessages(options))
 }
 
 /**

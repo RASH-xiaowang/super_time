@@ -1,0 +1,179 @@
+/* 消息下方的逐条本地分析（紧凑）—— UI-GEOMETRY-SPEC 全令牌：圆角/间距零字面量。 */
+
+.wrap {
+  margin: var(--nm-s-1) var(--nm-s-3) var(--nm-s-2) var(--nm-s-5);
+  padding: var(--nm-s-1) var(--nm-s-2);
+  border-left: 2px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-hover);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-s-2);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+}
+
+.badge {
+  flex: none;
+  padding: 0 var(--nm-s-1);
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-2);
+}
+
+.item {
+  white-space: nowrap;
+}
+
+.item b {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.more {
+  margin-left: auto;
+  padding: 0 var(--nm-s-1);
+  border: none;
+  border-radius: var(--nm-r-xs);
+  background: transparent;
+  color: var(--nm-cyan);
+  font-size: var(--nm-fs-xs);
+  cursor: pointer;
+}
+
+.more:hover {
+  background: var(--nm-bg-card);
+}
+
+.muted {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.err {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger);
+}
+
+.transcript {
+  margin-top: var(--nm-s-1);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  margin-top: var(--nm-s-2);
+  padding-top: var(--nm-s-2);
+  border-top: 1px solid var(--nm-border);
+}
+
+.line {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+}
+
+.q {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+}
+
+.v {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+}
+
+.num {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
+}
+
+.gauge {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: var(--nm-s-1);
+}
+
+.tick,
+.tickOn {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-border);
+}
+
+.tickOn {
+  background: var(--nm-cyan);
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: var(--nm-s-2);
+}
+
+.barLabel,
+.barLabelTop {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barLabelTop {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+.bar {
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-border);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-text-2);
+}
+
+.barRow:first-child .fill {
+  background: var(--nm-cyan);
+}
+
+.pct,
+.pctTop {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pctTop {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}

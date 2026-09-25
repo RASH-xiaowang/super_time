@@ -20,7 +20,8 @@ import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
-import { MessageAnalysisCard } from './MessageAnalysisCard.tsx'
+import { InlineMessageAnalysis } from './InlineMessageAnalysis.tsx'
+import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -197,6 +198,12 @@ export interface ChatsViewProps {
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
   const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  // 逐条分析：只对**可见窗口**里的对方文本/语音消息按需推理（见 use-inline-analysis.ts）——
+  // 「只算可见的」是产品决策：单次 0.5 s，全量预跑不现实。
+  const inlineAnalysis = useInlineAnalysis({
+    enabled: analysisOpen, talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer,
+  })
+
   return (
     <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}
@@ -477,20 +484,15 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                       >
                         {renderMsgItem(item)}
+                        {item.kind === 'msg' && (
+                          <InlineMessageAnalysis entry={inlineAnalysis.get(item.m.localId)} />
+                        )}
                       </div>
                     )
                   })}
                 </div>
               )}
               {msgLoading && messages.length === 0 && <ListSkeleton rows={8} />}
-              {/* 分析卡贴消息流末尾（msgEndRef 之前，尾部锚点仍最底）；分析的是最新一条对方消息。 */}
-              {analysisOpen && curSession && (
-                <MessageAnalysisCard
-                  talker={curSession.username}
-                  displayName={curSession.displayName}
-                  onClose={() => { setAnalysisOpen(false) }}
-                />
-              )}
               <div ref={msgEndRef} />
             </div>
           </>
