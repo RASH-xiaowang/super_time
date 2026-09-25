@@ -7,7 +7,8 @@
   width: 100%;
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  /* 官方直列小圆角（微信 4.x 会话列表的 hover 块约 8px，不是卡片 10px）——UI-GEOMETRY-SPEC §1 dense 档 */
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   cursor: pointer;
