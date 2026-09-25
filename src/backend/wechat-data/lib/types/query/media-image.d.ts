@@ -1,3 +1,4 @@
+import { type WxgfTranscoder } from './wxam-image.ts';
 /**
  * Extract the 32-char hex image MD5 from a packed_info protobuf value.
  * Accepts a raw BLOB, or the st_control comma-separated byte-list TEXT form.
@@ -70,9 +71,12 @@ export declare function detectXorKey(data: Uint8Array): number | null;
  * @param data - raw .dat file bytes.
  * @param aesKey - V2 AES key (raw bytes), optional.
  * @param xorKey - XOR key byte for the XOR tail.
+ * @param opts - `wxgf` 覆盖 wxgf 转码器（单测注入替身用；默认调微信安装目录的解码库）。
  * @returns decrypted bytes + format, or an error description.
  */
-export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number): {
+export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number, opts?: {
+    wxgf?: WxgfTranscoder;
+}): {
     bytes: Uint8Array;
     format: string;
 } | {
@@ -158,6 +162,31 @@ export declare function fetchEmoticonRemote(url: string, decodedDir: string, md5
     format?: string;
     error?: string;
 }>;
+/**
+ * 一份 `.dat` 属于哪一档。
+ *
+ * 微信为同一张图最多存四份（本机 `msg/attach` 实测）：`<md5>_h.dat` 高清原图、
+ * `<md5>.dat` 聊天显示版、`<md5>_t.dat` 缩略图，另有 `<md5>_b.dat` 气泡图
+ * （气泡图在 `msg/<日期>/Message/<md5>/Bubble/` 下，本模块的候选路径取不到它，
+ * 但**一旦有人加了那条候选路径**，它必须排在最后 —— 所以这里显式给它 `other`，
+ * 而不是像旧实现那样「不认识就当最好的」）。
+ *
+ * **`_h` 优于 `.dat`** 是本机量出来的结论：971 个 `_h` 里 491 个同时有主体档，
+ * 抽样 28/28 都是 `_h ≥ 主体`（典型 2.95MB vs 54KB）；`_h` 只有「点开过大图」才会有。
+ * ⚠ 这条排序与 wxgf 转码是**同一条链**：`_h` 里 37%（361/971）是 wxgf，
+ * 没有转码能力时把它排到最前等于用解不开的高清挡住能渲染的聊天版。
+ */
+export type DatTier = 'original' | 'chat' | 'thumb' | 'other';
+/**
+ * 判一份 `.dat` 的档位。
+ * @param path - `.dat` 文件路径（只看文件名后缀）。
+ * @returns 档位：`original` = `_h`、`chat` = 主体、`thumb` = `_t`、`other` = 不认识（最低）。
+ */
+export declare function datTierOf(path: string): DatTier;
+/** 档位优先级（0 = 最优），供 `sort` 与读取决策共用。 */
+export declare function datTierRank(path: string): number;
+/** 该档位是否只配进「缩略兜底槽」（`_t` 与更差的 `_b` 都不该占住「本机最好的一份」）。 */
+export declare function isThumbTier(path: string): boolean;
 /**
  * **一次**查询解析多张图的 .dat 路径（N16）。
  *

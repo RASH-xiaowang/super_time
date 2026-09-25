@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 // 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
 import { fetchWithRetry } from '../../../llm-retry.js'
+import { isWxgfTranscodeAvailable, transcodeWxgf, type WxgfTranscoder } from './wxam-image.ts'
 import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { shardCatalogDirs } from './meta.ts'
 
@@ -314,12 +315,14 @@ function alignedAesBlockSize(aesSize: number): number {
  * @param data - raw .dat file bytes.
  * @param aesKey - V2 AES key (raw bytes), optional.
  * @param xorKey - XOR key byte for the XOR tail.
+ * @param opts - `wxgf` 覆盖 wxgf 转码器（单测注入替身用；默认调微信安装目录的解码库）。
  * @returns decrypted bytes + format, or an error description.
  */
 export function decodeDatBytes(
   data: Uint8Array,
   aesKey: Uint8Array | string | null,
   xorKey: number,
+  opts: { wxgf?: WxgfTranscoder } = {},
 ): { bytes: Uint8Array; format: string } | { error: string } {
   if (data.length < 6) return { error: '文件太小' }
   const sig = Array.from(data.slice(0, 6))
@@ -353,8 +356,16 @@ export function decodeDatBytes(
     if (key === null) return { error: '无法检测 XOR key' }
     decrypted = data.map(b => b ^ key)
   }
-  // wxgf -> HEVC container (needs system decoder)
+  // wxgf（微信自研封装）→ 调微信安装目录的解码库转成可渲染图片。
+  // 本机实测 5,109 张图解出来是 wxgf（主体档 4,748 + `_h` 原图档 361），原先一律报 hevc。
   if (decrypted.length >= 4 && decrypted[0] === 0x77 && decrypted[1] === 0x78 && decrypted[2] === 0x67 && decrypted[3] === 0x66) {
+    const t = (opts.wxgf ?? transcodeWxgf)(decrypted)
+    if ('bytes' in t) {
+      // 转码产物按**实际魔数**认格式（不硬编码 jpg）：DLL 换版本给出别的容器也不会被写成 .jpg。
+      const outFmt = detectImageFormat(t.bytes.length > 16 ? t.bytes.subarray(0, 16) : t.bytes)
+      if (outFmt !== 'bin') return { bytes: t.bytes, format: outFmt }
+    }
+    // 转码不可用或失败：维持改造前的降级（如实报 hevc，由界面说明「需系统解码」）。
     return { bytes: decrypted, format: 'hevc' }
   }
   const hdr = decrypted.length > 16 ? decrypted.slice(0, 16) : decrypted
@@ -455,8 +466,10 @@ export function decodeImageDataUrl(
   if (md5) {
     const hit = cachedImage(decodedDir, md5) ?? cachedImage(join(decodedDir, username), md5)
     if (hit) return hit
+    // 上一版把 wxgf 解出的字节写成 `.hevc` 占位；现在有转码能力就该回到 .dat 路径重解一次
+    // （否则老缓存会把这张图永久钉在「需系统解码」上）。
     const hevc = join(decodedDir, username, md5 + '.hevc')
-    if (existsSync(hevc)) return { error: 'hevc-unsupported' }
+    if (existsSync(hevc) && !isWxgfTranscodeAvailable()) return { error: 'hevc-unsupported' }
   }
   // 2. raw .dat decode (requires the raw WeChat base dir)
   if (wechatBaseDir && md5) {
@@ -467,15 +480,15 @@ export function decodeImageDataUrl(
       // candidate (thumbnail _t / _h), falling back to the original only when
       // it decodes to a browser-renderable format.
       const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
-      const ordered = [...dats].sort((a, b) => scoreDatPath(a) - scoreDatPath(b))
+      const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
       for (const f of ordered) {
         try {
           const bytes = readFileSync(f)
           const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
           if ('error' in dec) continue
           if (dec.format === 'hevc') continue
-          // `_t`/`_h` 解出来的是缩略/中图：必须写进 `.t.` 那个兜底槽，不能占住「最好的一份」
-          const thumb = scoreDatPath(f) > 0
+          // 只有 `_t`（与更差的 `_b`）进兜底槽；`_h` 是原图，就该占住「最好的一份」。
+          const thumb = isThumbTier(f)
           try {
             writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, thumb)
           } catch { /* cache best-effort */ }
@@ -494,7 +507,7 @@ export function decodeImageDataUrl(
         const bytes = readFileSync(hd)
         const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
         if (!('error' in dec) && dec.format !== 'hevc') {
-          const thumb = scoreDatPath(hd) > 0
+          const thumb = isThumbTier(hd)
           try {
             writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, thumb)
           } catch { /* cache best-effort */ }
@@ -595,8 +608,10 @@ export function decodeEmoticonDataUrl(
   walk(attachRoot, 0)
   if (dats.length === 0) return { error: '未找到表情文件 (MD5=' + m + ')' }
   const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
-  // Prefer thumbnails (_t) — smaller and usually already a still frame; original may be HEVC.
-  const ordered = [...dats].sort((a, b) => scoreDatPath(a) - scoreDatPath(b))
+  // 表情这条链**故意反过来**：优先缩略图（小、且通常本来就是静帧），原图放最后
+  // （表情原图多是 wxgf/动图，解码更慢）。与消息链的「原图优先」是有意的差异，不是笔误。
+  const THUMB_FIRST: Record<DatTier, number> = { thumb: 0, other: 1, chat: 2, original: 3 }
+  const ordered = [...dats].sort((a, b) => THUMB_FIRST[datTierOf(a)] - THUMB_FIRST[datTierOf(b)])
   for (const f of ordered) {
     try {
       const bytes = readFileSync(f)
@@ -657,11 +672,44 @@ export async function fetchEmoticonRemote(
   }
 }
 
-/** Prefer originals over thumbnails: 0 = .dat, 1 = _h.dat, 2 = _t.dat. */
-function scoreDatPath(p: string): number {
-  if (p.endsWith('_t.dat')) return 2
-  if (p.endsWith('_h.dat')) return 1
-  return 0
+/**
+ * 一份 `.dat` 属于哪一档。
+ *
+ * 微信为同一张图最多存四份（本机 `msg/attach` 实测）：`<md5>_h.dat` 高清原图、
+ * `<md5>.dat` 聊天显示版、`<md5>_t.dat` 缩略图，另有 `<md5>_b.dat` 气泡图
+ * （气泡图在 `msg/<日期>/Message/<md5>/Bubble/` 下，本模块的候选路径取不到它，
+ * 但**一旦有人加了那条候选路径**，它必须排在最后 —— 所以这里显式给它 `other`，
+ * 而不是像旧实现那样「不认识就当最好的」）。
+ *
+ * **`_h` 优于 `.dat`** 是本机量出来的结论：971 个 `_h` 里 491 个同时有主体档，
+ * 抽样 28/28 都是 `_h ≥ 主体`（典型 2.95MB vs 54KB）；`_h` 只有「点开过大图」才会有。
+ * ⚠ 这条排序与 wxgf 转码是**同一条链**：`_h` 里 37%（361/971）是 wxgf，
+ * 没有转码能力时把它排到最前等于用解不开的高清挡住能渲染的聊天版。
+ */
+export type DatTier = 'original' | 'chat' | 'thumb' | 'other'
+
+/**
+ * 判一份 `.dat` 的档位。
+ * @param path - `.dat` 文件路径（只看文件名后缀）。
+ * @returns 档位：`original` = `_h`、`chat` = 主体、`thumb` = `_t`、`other` = 不认识（最低）。
+ */
+export function datTierOf(path: string): DatTier {
+  const p = path.toLowerCase()
+  if (p.endsWith('_t.dat')) return 'thumb'
+  if (p.endsWith('_h.dat')) return 'original'
+  return /_[a-z]\.dat$/.test(p) ? 'other' : 'chat'
+}
+
+/** 档位优先级（0 = 最优），供 `sort` 与读取决策共用。 */
+export function datTierRank(path: string): number {
+  const tier = datTierOf(path)
+  return tier === 'original' ? 0 : tier === 'chat' ? 1 : tier === 'thumb' ? 2 : 3
+}
+
+/** 该档位是否只配进「缩略兜底槽」（`_t` 与更差的 `_b` 都不该占住「本机最好的一份」）。 */
+export function isThumbTier(path: string): boolean {
+  const tier = datTierOf(path)
+  return tier === 'thumb' || tier === 'other'
 }
 
 /**

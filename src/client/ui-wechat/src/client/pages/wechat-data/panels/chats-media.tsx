@@ -110,7 +110,7 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
       </div>
       <div className={cssrows.viewerStage}>
         {loading && !src && !vErr && <div className={cssrows.viewerMsg}>加载中…</div>}
-        {vErr && <div className={cssrows.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图（需系统 HEVC 解码）' : vErr}</div>}
+        {vErr && <div className={cssrows.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）' : vErr}</div>}
         {src && (
           <img
             src={src}

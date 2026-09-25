@@ -401,6 +401,54 @@ getImageTier({ username, localId })
 
 ---
 
+---
+
+## 附：P0 实施记录（2026-09-26，commit 见 git log）
+
+按本文 §3 的 P0 落地，**P1（档位语义）一并做了**（两者耦合，见 §7.4）。
+
+### 实际改了哪些文件
+
+| 文件 | 动作 |
+|---|---|
+| `src/backend/wechat-data/src/query/wxam-image.ts` | **新增**：DLL 定位（按版本号倒序扫，`DSH_WECHAT_VOIP_ENGINE` 可覆盖）、koffi 懒加载、`createWxgfTranscoder`（可注入替身）、`jpegDimensions`、能力探测 |
+| `src/backend/wechat-data/src/query/media-image.ts` | `decodeDatBytes` 加可注入的 `opts.wxgf` 并在 wxgf 分支调转码；`scoreDatPath` → `datTierOf`/`datTierRank`/`isThumbTier` 并导出；`.hevc` 早退受转码能力约束 |
+| `src/backend/wechat-data/src/query/decrypt-images.ts` | 删掉重复的档位实现（改用共享 API）；**按 md5 分组**；修「跳过判定只 continue 内层循环」的旧缺陷 |
+| `src/client/.../chats-media.tsx` | 降级文案改写（「需系统 HEVC 解码」不再是事实） |
+| `src/backend/wechat-data/tests/wxam-image.spec.ts` | **新增** 23 个用例（模块边界 11 + 接线 4 + 档位 3 + 批量 2 + 不变量 3） |
+
+### 三处与计划不同 / 计划没预见到的
+
+1. **并发竞态（计划没预见到）**：批量解密按档位全局排序后，同一个 md5 的 `_h` 与 `.dat` 会被**两个
+   worker 同时取走** ⇒「谁先写主槽」变成竞态，实测并发 2 时 `.dat` 盖掉了 `_h`。
+   修法：**按 md5 分组**，同一张图的档位回退链在同一个 worker 里按序走完。
+2. **顺带修掉一个旧缺陷**：批量的「缓存命中就跳过」原先只 `continue` 了**内层** for ——
+   记录写着「已存在解码缓存，无需重复解码」却照样解码，而且各档写同一个文件名、最后落盘的往往是
+   `_t`（缩略图盖进主槽）。这正是 2026-09-20 那次「明明看过原图还是糊的」的另一半原因。
+3. **不调 `wxam_dec_getWXGFInfo_5` 取尺寸**（计划里留了这条）：它的签名没验证过，调错会崩进程。
+   改为从转码产物里**自己解析 JPEG 的 SOF**（纯 JS、可单测），并配一条守卫钉住
+   「只允许绑定 `wxam_dec_wxam2pic_5` 这一个导出」。
+
+### 真机实测（同一次扫描做 A/B 对照，生产 `decodeDatBytes`）
+
+| 样本 | 改造前可渲染 | 现在可渲染 | 单张耗时（读盘+解密+转码） |
+|---|---|---|---|
+| `_h` 档抽样 60（共 971） | 36 | **60**（24 个是本次转码解开的） | 中位 32ms / max 49ms |
+| 主体档抽样 60（共 6,720） | 8 | **60**（52 个） | 中位 23ms / max 68ms |
+
+零失败。转码得到的真实尺寸与 wxhook 的记录同量级（2048×1017 / 1280×1707 / 1279×2769 …）。
+脚本：`working/e2e-wxam-prod.ts`（产物 `working/e2e-wxam-out.txt`）。
+
+### 仍未做
+
+- **P2（CDN 改档）**：仍然不建议做（§7.1/§7.2 的理由不变）。
+- **旧缓存不会自动升级**：`<decoded>/<md5>.<ext>` 里由 `.dat`（聊天版）解出的那份不会因为
+  `_h` 出现而自动替换（读取路径第 1a 步就命中并返回）。要升级需先删该条目或跑一次批量解密
+  （批量现在会优先用 `_h`，但同样尊重「已有主槽缓存」）。
+- **视频/朋友圈的 wxgf** 不在本次范围（视频封面另走 `media-video` 路径）。
+- **打包关**：`koffi` 已在 `asarUnpack` 白名单且有 `packaged-smoke` 守卫（本次未新增依赖），
+  但「打包产物里从 `app.asar` 之外加载微信 DLL」这条**未在真打包里实测过**。
+
 ## 9. 未验证 / 未知（如实标注）
 
 1. **Electron utilityProcess 内加载 20.8 MB DLL** —— 本 PoC 是在**纯 Node 22** 下跑通的
