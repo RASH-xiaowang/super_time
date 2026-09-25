@@ -21,7 +21,7 @@ import {
   type OnboardingState,
 } from './store.ts'
 import { ParticleField } from './particles.tsx'
-import { Reveal, pickAnim } from './Reveal.tsx'
+import { Reveal } from './Reveal.tsx'
 import { LicenseAuthPanel, isLicenseUsable } from '../license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from '../license/LicenseGate.tsx'
 // 隐私同意是启动页的第五站（H14）：直接复用主界面那一屏，文案与守卫都是同一份，
@@ -129,7 +129,7 @@ function StageHead({
 }): React.JSX.Element {
   return (
     <header className={`${cssstages.stageHead}${align === 'center' ? ` ${cssstages.stageHeadCenter}` : ''}`}>
-      <Reveal anim="slide-l" delayMs={20}>
+      <Reveal>
         <div className={cssstages.stageMeta}>
           <span className={css.stageIndex}>{index}</span>
           <span className={cssstages.stageRule} aria-hidden="true" />
@@ -137,7 +137,7 @@ function StageHead({
         </div>
         <h2 className={cssstages.stageTitle}>{title}</h2>
       </Reveal>
-      <Reveal anim="fade" delayMs={90}>
+      <Reveal>
         <p className={cssstages.stageLead}>{lead}</p>
       </Reveal>
     </header>
@@ -149,7 +149,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
     <div className={css.page}>
       <div className={cssstages.homeLayout}>
         <section className={cssstages.homePrimary}>
-          <Reveal anim="slide-l" delayMs={30}>
+          <Reveal>
             <div className={cssstages.heroKicker}>
               <span className={css.kickerDot} aria-hidden="true" />
               LOCAL · WECHAT · INTELLIGENCE
@@ -159,7 +159,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
               <span className={cssstages.heroTitleAccent}>变成可检索的知识库</span>
             </h1>
           </Reveal>
-          <Reveal anim="fade" delayMs={120}>
+          <Reveal>
             <p className={cssstages.heroLead}>
               Super Time 在本机解密并分析你的消息库：会话、社交、资产、资金与隐私一体覆盖，
               并提供 AI 问答与周期总结。数据默认不出机。
@@ -168,7 +168,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
 
           <div className={cssstages.valueList}>
             {VALUE_PROPS.map((v, i) => (
-              <Reveal key={v.title} anim={pickAnim(i, ['slide-l', 'slide-u', 'fade', 'slide-r'])} delayMs={180 + i * 70}>
+              <Reveal key={v.title}>
                 <div className={css.valueItem}>
                   <span className={css.valueIndex}>{String(i + 1).padStart(2, '0')}</span>
                   <span className={cssstages.valueIcon}>{v.icon}</span>
@@ -192,7 +192,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
             { k: 'REMOTE API', v: '162', h: '查询 / 导出 / 审计 / 总结' },
             { k: 'RUNTIME', v: 'LOCAL', h: 'utilityProcess 独立后端' },
           ].map((s, i) => (
-            <Reveal key={s.k} anim="slide-r" delayMs={140 + i * 90}>
+            <Reveal key={s.k}>
               <div className={cssstages.railStat}>
                 <div className={cssstages.railKey}>{s.k}</div>
                 <div className={cssstages.railVal}>{s.v}</div>
@@ -204,7 +204,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
       </div>
 
       <section className={cssstages.moduleSection}>
-        <Reveal anim="slide-l" delayMs={60}>
+        <Reveal>
           <div className={css.sectionTitle}>
             <span>快速入口</span>
             <span className={cssstages.sectionSub}>进入系统后可从侧栏打开</span>
@@ -212,7 +212,7 @@ function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
         </Reveal>
         <div className={cssstages.moduleStrip}>
           {MODULE_ENTRIES.map((m, i) => (
-            <Reveal key={m.id} anim={pickAnim(i, ['slide-u', 'fade', 'slide-l', 'scale'])} delayMs={i * 50} className={cssstages.moduleCell}>
+            <Reveal key={m.id} className={cssstages.moduleCell}>
               <button type="button" className={css.moduleCard} onClick={onExplore}>
                 <span className={cssstages.moduleIdx}>{String(i + 1).padStart(2, '0')}</span>
                 <span className={css.moduleIcon}>{m.icon}</span>
@@ -237,7 +237,7 @@ function FeaturesPage(): React.JSX.Element {
       />
       <div className={css.featureList}>
         {FEATURE_GROUPS.map((g, i) => (
-          <Reveal key={g.name} anim={pickAnim(i, ['slide-l', 'slide-r', 'fade', 'slide-u'])} delayMs={i * 55}>
+          <Reveal key={g.name}>
             <article className={css.featureRow}>
               <div className={css.featureNo}>{String(i + 1).padStart(2, '0')}</div>
               <div>
@@ -271,7 +271,7 @@ function HelpPage(): React.JSX.Element {
       <div className={cssstages.helpLayout}>
         <ol className={css.stepList}>
           {HELP_STEPS.map((s, i) => (
-            <Reveal key={s.title} anim="slide-l" delayMs={i * 80}>
+            <Reveal key={s.title}>
               <li className={css.step}>
                 <div className={css.stepNum} aria-hidden="true">{String(i + 1).padStart(2, '0')}</div>
                 <div>
@@ -283,11 +283,11 @@ function HelpPage(): React.JSX.Element {
           ))}
         </ol>
         <div className={cssstages.noticeCol}>
-          <Reveal anim="slide-r" delayMs={40}>
+          <Reveal>
             <div className={css.sectionTitle}><span>注意事项</span></div>
           </Reveal>
           {NOTICES.map((n, i) => (
-            <Reveal key={n.title} anim="fade" delayMs={100 + i * 70}>
+            <Reveal key={n.title}>
               <div className={cssstages.notice}>
                 <div className={cssstages.noticeTitle}>{n.title}</div>
                 <div className={cssstages.noticeBody}>{n.body}</div>
@@ -311,7 +311,7 @@ function AboutPage({ versions }: {
         lead="项目定位、运行时版本与反馈渠道。"
       />
       <div className={cssstages.aboutLayout}>
-        <Reveal anim="slide-l" delayMs={100}>
+        <Reveal>
           <section className={cssstages.aboutBlock}>
             <h3 className={cssstages.aboutTitle}>项目简介</h3>
             <p className={cssstages.aboutText}>
@@ -328,7 +328,7 @@ function AboutPage({ versions }: {
             </dl>
           </section>
         </Reveal>
-        <Reveal anim="slide-r" delayMs={180}>
+        <Reveal>
           <section className={cssstages.aboutBlock}>
             <h3 className={cssstages.aboutTitle}>联系方式与反馈</h3>
             <p className={cssstages.aboutText}>

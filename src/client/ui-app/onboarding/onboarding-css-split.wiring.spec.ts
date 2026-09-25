@@ -20,9 +20,12 @@ import { aliasImports, splitInvariants } from '../../ui-wechat/src/client/css-ca
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIMIT = 1000
 const PARTS = ['onboarding.module.css', 'onboarding-stages.module.css']
-const CONSUMERS = ['OnboardingShell.tsx', 'Reveal.tsx']
-
 const parts = PARTS.map((name) => ({ name, css: readFileSync(join(HERE, name), 'utf8') }))
+/**
+ * 现在还在用这套样式的文件。`Reveal.tsx` 曾经在这里 —— 2026-09-25 它退化成纯容器之后就不引
+ * CSS Modules 了，于是"每个消费者都至少 import 一份"那条把它拦下来（守卫咬得对：注册表过期了）。
+ */
+const CONSUMERS = ['OnboardingShell.tsx']
 const consumers = CONSUMERS.map((name) => {
   const text = readFileSync(join(HERE, name), 'utf8')
   return {
@@ -33,16 +36,16 @@ const consumers = CONSUMERS.map((name) => {
 })
 
 /**
- * 登记在册的死引用 —— **拆之前就已经是死的**（`git show origin/main:...onboarding.module.css` 里
- * 没有 `.revealIn` 这个类，也没有同名 `@keyframes`，所以 `css.revealIn` 一直是 `undefined`，
- * 而使用点 `[...].filter(Boolean)` 正好把它吃掉 ⇒ 渲染结果一个字都没变）。
+ * 免检名单 —— **现在是空的**。
  *
- * 为什么不顺手删掉：`shown` 只被这一个表达式读，删了它整个 `IntersectionObserver` + state 就成了
- * 死码，而「Reveal 到底该不该按可见性触发样式」是个产品问题（答案目前是从 CSS 里找不到依据）。
- * 那是另起一条工的事，不该混在拆文件里 —— 与本仓 M21 棘轮同一套做法：**名单只许变短，
- * 账清完了条目还留着就会红**（`splitInvariants` 里那一条反向检查）。
+ * 这里曾经挂着 `Reveal.tsx:css.revealIn`：那是拆文件之前就已经死的引用（`.revealIn` 这个类
+ * 全仓库从来没写过，使用点又被 `.filter(Boolean)` 吞掉 ⇒ 渲染结果一个字都没变）。
+ * 2026-09-25 按产品口径把这套死机制整条撤掉（observer / rAF / `shown` / `--reveal-delay` /
+ * 五个只在 `prefers-reduced-motion` 段里出现的动画类），账清了 ⇒ 名单收回空集。
+ *
+ * 名单只许变短这件事由 `splitInvariants` 的反向检查盯着：**条目留着而引用没了 ⇒ 红**。
  */
-const KNOWN_DEAD_REFS = new Set(['Reveal.tsx:css.revealIn'])
+const KNOWN_DEAD_REFS = new Set<string>()
 
 describe('onboarding 那套 CSS 拆成两份之后的三条不变量', () => {
   it('两份都在，且没有没登记的分片（新增要登记、改名要清引用）', () => {
@@ -50,7 +53,7 @@ describe('onboarding 那套 CSS 拆成两份之后的三条不变量', () => {
     expect(onDisk.join(', ')).toBe([...PARTS].sort().join(', '))
   })
 
-  it('两个消费者都真的 import 了至少一份（别名表不是空的）', () => {
+  it('名单里每个消费者都真的 import 了至少一份（别名表不是空的）', () => {
     for (const c of consumers) expect(c.aliases.length, `${c.file} 一个 onboarding 样式都没 import`).toBeGreaterThan(0)
   })
 
@@ -62,11 +65,18 @@ describe('onboarding 那套 CSS 拆成两份之后的三条不变量', () => {
     expect(defects.join('\n'), '同名类分家 = 两个 hash（静默失效）；引用悬空 = className 变 undefined').toBe('')
   })
 
-  it('免检名单本身是活的：不传名单时那条死引用必须被抓到（不然它就是永久出口）', () => {
-    const without = splitInvariants(parts, consumers, LIMIT)
-    expect(without.filter((d) => d.startsWith('②')).join('\n'), 'Reveal.tsx 的 css.revealIn 必须仍然被②抓到').toContain('Reveal.tsx:css.revealIn')
-    // 反向：名单里放一条根本不存在的，也要报（账清完了条目还留着 ⇒ 判据在放空炮）
-    const stale = splitInvariants(parts, consumers, LIMIT, new Set([...KNOWN_DEAD_REFS, 'Nope.tsx:css.nothere']))
+  it('② 这条判据仍然咬得住：合成一个假引用必须被抓到，名单里的旧条目必须被要求删掉', () => {
+    // 真仓库现在没有死引用了 ⇒ 判据不能靠"以前抓到过一个真的"来证明自己没空转，
+    // 所以要**造一个违规的**塞进去：抓不到就说明 ② 是空的。
+    const synthetic = {
+      file: 'Synthetic.tsx',
+      text: `import css from './onboarding.module.css'\nexport const x = <div className={css.thisClassDoesNotExistAnywhere} />`,
+      aliases: [{ alias: 'css', part: 'onboarding.module.css' }],
+    }
+    const hits = splitInvariants(parts, [...consumers, synthetic], LIMIT, KNOWN_DEAD_REFS).filter((d) => d.startsWith('②'))
+    expect(hits.join('\n'), '把不存在的类名塞进消费者，②必须点名它').toContain('Synthetic.tsx:css.thisClassDoesNotExistAnywhere')
+    // 反向：账清完了条目还留着 ⇒ 也要红（这里用的正是刚删掉的那个名字）
+    const stale = splitInvariants(parts, consumers, LIMIT, new Set(['Reveal.tsx:css.revealIn']))
     expect(stale.filter((d) => d.includes('找不到了')).length, '登记项已不成立时必须红').toBe(1)
   })
 

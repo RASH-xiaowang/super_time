@@ -509,15 +509,3 @@
   .body { padding: 16px 24px 10px; }
   .heroTitle { font-size: 26px; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .reveal,
-  .animSlideL,
-  .animSlideR,
-  .animSlideU,
-  .animFade,
-  .animScale {
-    transition: none !important;
-    opacity: 1 !important;
-    transform: none !important;
-  }
-}
