@@ -1,10 +1,25 @@
-/* 消息下方的逐条本地分析（紧凑）—— UI-GEOMETRY-SPEC 全令牌：圆角/间距零字面量。 */
+/* 消息下方的逐条本地分析 —— UI-GEOMETRY-SPEC 全令牌：圆角/间距零字面量。
+ *
+ * 2026-09-25 重设计。原版三条毛病：
+ *   ① 卡片没有限宽，挂在虚拟行里就横跨整个消息区（1000px+）；
+ *   ② 概率条是 `minmax(0, 1fr)`，卡片一宽它就被拉到 800px，右侧留一大片空白；
+ *   ③ 标签列写死 108px，9–15 字的中文选项必然被截断（「只是想把话聊下去，…」）。
+ * 现在的三条对策：
+ *   ① 与**气泡列对齐**（左边缘 = 头像 + 间隙）并收窄到 640px 阅读宽度；
+ *   ② 展开区改成**两列紧凑块**；调用方按「短命题在前、choice 在后」排序，
+ *      两列高度因此配平（最长的 choice 排在最后一行正好成对），整体高度比单列少约 1/3；
+ *   ③ 块标题与选项都用**短名**（完整文案挂在 `title` 上），choice 的选项是
+ *      「标签 + 百分比」同行、概率条整行铺在下面 —— 标签不再和条争宽度，也就不会被截断。
+ */
 
 .wrap {
-  margin: var(--nm-s-1) var(--nm-s-3) var(--nm-s-2) var(--nm-s-5);
-  padding: var(--nm-s-1) var(--nm-s-2);
-  border-left: 2px solid var(--nm-border);
-  border-radius: var(--nm-r-sm);
+  /* 与气泡列左边缘对齐，并收窄到阅读宽度（窄窗口下自动收缩，不会溢出） */
+  margin: var(--nm-s-1) 0 var(--nm-s-2) calc(var(--wx-avatar, 34px) + var(--wx-gap, 10px));
+  max-width: 640px;
+  padding: var(--nm-s-2) var(--nm-s-3);
+  /* 左侧竖线表示「这条分析挂在上面那条消息上」，故只给右侧圆角 */
+  border-left: 2px solid var(--wx-card-divider, var(--nm-border));
+  border-radius: 0 var(--nm-r-md) var(--nm-r-md) 0;
   background: var(--nm-bg-hover);
 }
 
@@ -12,18 +27,28 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--nm-s-2);
+  gap: var(--nm-s-1) var(--nm-s-2);
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
   line-height: 1.6;
 }
 
+/* 头部徽章：小圆点 + 文字（原版是块状底，在窄卡里显得笨重） */
 .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
   flex: none;
-  padding: 0 var(--nm-s-1);
-  border-radius: var(--nm-r-xs);
-  background: var(--nm-bg-card);
   color: var(--nm-text-2);
+}
+
+.badge::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
 }
 
 .item {
@@ -68,43 +93,73 @@
   word-break: break-word;
 }
 
+/* ── 展开区：两列紧凑块 ────────────────────────────────────────── */
 .detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--nm-s-1);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+  gap: var(--nm-s-2);
   margin-top: var(--nm-s-2);
   padding-top: var(--nm-s-2);
   border-top: 1px solid var(--nm-border);
 }
 
-.line {
+.block {
   display: flex;
   flex-direction: column;
   gap: var(--nm-s-1);
+  padding: var(--nm-s-2);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-card);
 }
 
+/* 块标题：短名（完整命题句在块的 title 上，悬停可见） */
 .q {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  line-height: 1.5;
+}
+
+/* 结论行：数值/判断用文本-1 加粗，概率用文本-2 常规 */
+.verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nm-s-1);
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
 }
 
-.v {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--nm-s-1);
-  font-size: var(--nm-fs-xs);
+.verdict b {
+  font-size: var(--nm-fs-sm);
+  font-weight: 600;
   color: var(--nm-text-1);
 }
 
-.num {
-  font-size: var(--nm-fs-sm);
-  font-weight: 600;
+.verdict em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 
+/* 概率条（noul 用） */
+.track {
+  display: block;
+  height: 4px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-border);
+  overflow: hidden;
+}
+
+.trackFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+/* 分值刻度（score 用）：靠右推，与左侧数值拉开 */
 .gauge {
   display: inline-flex;
   gap: 2px;
-  margin-left: var(--nm-s-1);
+  margin-left: auto;
 }
 
 .tick,
@@ -120,21 +175,29 @@
   background: var(--nm-cyan);
 }
 
+/* ── choice：选项标签独占一行（与百分比同行），条整行铺开 ───────── */
 .bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+}
+
+.barRow {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.barRow {
-  display: grid;
-  grid-template-columns: 108px minmax(0, 1fr) 40px;
-  align-items: center;
+.barHead {
+  display: flex;
+  align-items: baseline;
   gap: var(--nm-s-2);
 }
 
 .barLabel,
 .barLabelTop {
+  flex: 1;
+  min-width: 0;
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
   overflow: hidden;
@@ -147,8 +210,21 @@
   font-weight: 600;
 }
 
+.pct,
+.pctTop {
+  flex: none;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pctTop {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
 .bar {
-  height: 4px;
+  height: 3px;
   border-radius: var(--nm-r-pill);
   background: var(--nm-border);
   overflow: hidden;
@@ -156,7 +232,7 @@
 
 .fill {
   display: block;
-  height: 4px;
+  height: 100%;
   border-radius: var(--nm-r-pill);
   background: var(--nm-text-2);
 }
@@ -165,15 +241,9 @@
   background: var(--nm-cyan);
 }
 
-.pct,
-.pctTop {
+/* 只展示前 4 项，剩下的合并成一行 —— 不丢信息也不占版面 */
+.barMore {
   font-size: var(--nm-fs-xs);
   color: var(--nm-text-2);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.pctTop {
-  color: var(--nm-text-1);
-  font-weight: 600;
+  opacity: 0.75;
 }
