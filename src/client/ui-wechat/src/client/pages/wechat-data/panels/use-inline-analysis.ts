@@ -13,6 +13,13 @@
  * - **滚动中不打断**：请求前 debounce，避免快速滚动时打出一串短请求。
  * - **一次最多 12 条**（后端的批次上限），剩下的等这批回来再发 —— effect 依赖 `map`，
  *   所以「算完一批 → 自动看下一批」是自然发生的，不需要队列。
+ *
+ * ## 关于开关（2026-09-26 起不再有）
+ * 本钩子曾有个 `enabled` 参数，由会话工具区的「决策分析」按钮控制。那个按钮与「右栏面板
+ * 打不打开」互不知情 —— 实测关掉右栏后推理照跑，结果无人看（白烧 CPU，单次 0.44–0.63 s）。
+ * 分析的唯一展示位置就是右栏面板，而面板自带开关，两个开关管同一件事的两半只会让人困惑。
+ * 所以按钮与参数一并移除，**推理恒开**（用户明确选择）。缓存仍在，重复的不重算；
+ * 若将来要恢复开关，请让它跟「右栏分析区是否真的会渲染」用同一个条件，别再各管一半。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiAnalyzeVisibleMessages } from '../api.ts'
@@ -34,8 +41,6 @@ export type InlineAnalysisEntry =
   }
 
 export interface InlineAnalysisOption {
-  /** 开关（会话工具区那个按钮）。关掉时不做任何请求。 */
-  enabled: boolean
   /** 会话 username；换会话清空所有状态。 */
   talker: string
   /** 虚拟行（与列表渲染用的是同一份）。 */
@@ -70,10 +75,10 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
     setMap(new Map())
   }, [option.talker])
 
-  const { enabled, talker, items, virtualizer } = option
+  const { talker, items, virtualizer } = option
 
   useEffect(() => {
-    if (!enabled || talker === '') return
+    if (talker === '') return
 
     // 1) 收集可见区间里「该算且还没算」的目标
     const targets: Array<{ localId: number; sortSeq: number }> = []
@@ -136,7 +141,7 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
 
     return () => { window.clearTimeout(timer) }
     // map 进依赖是**有意**的：一批算完 → 重新收集 → 自动接着算下一批
-  }, [enabled, talker, items, virtualizer, map])
+  }, [talker, items, virtualizer, map])
 
   const get = useCallback((localId: number): InlineAnalysisEntry | undefined => map.get(localId), [map])
   let pending = 0

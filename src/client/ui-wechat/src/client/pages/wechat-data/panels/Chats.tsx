@@ -17,7 +17,7 @@ import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, Messag
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
   IconDataOutline16, IconDownloadOutline16, IconEllipsisOutline16,
-  IconFullscreenOutline16, IconLinkOutline14, IconListPenOutline16,
+  IconFullscreenOutline16, IconLinkOutline14,
   IconPlayOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RainWindow } from './rain-window.tsx'
@@ -182,10 +182,6 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
   const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
-  // 本地决策分析（laya）：默认开启 —— 打开会话就对**可见的**对方消息逐条推理
-  // （可见窗口驱动 + 结果落库缓存，点选消息即命中）。结果显示在右栏面板；
-  // 不想让它跑，就用工具区那个按钮关掉。
-  const [analysisOpen, setAnalysisOpen] = useState(true)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
   /** Logged-in account wxid (from the messages snapshot) for own avatars. */
@@ -639,7 +635,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [curSession?.username])
 
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget,
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisTarget,
     annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
@@ -659,7 +655,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setAnalysisOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
+    setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,

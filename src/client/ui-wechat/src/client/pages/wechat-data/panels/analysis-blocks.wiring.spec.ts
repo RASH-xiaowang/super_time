@@ -91,4 +91,18 @@ describe('本地分析 · 渲染不变量', () => {
       expect(CSS, `.${cls} 是内嵌卡外壳样式，应随组件删掉`).not.toContain(`.${cls} {`)
     }
   })
+
+  it('⑦ 工具区的决策开关已移除，推理恒开（2026-09-26 用户选择）', () => {
+    // 移除的原因：那个按钮与「右栏面板开不开」互不知情 —— 实测关掉右栏后推理照跑，
+    // 结果无人看（白烧 CPU）。分析的唯一展示位置是右栏面板，它自带开关就够了。
+    expect(VIEW, '按钮与它的文案已移除，不该再加回来').not.toContain('本地决策分析')
+    expect(VIEW, 'setter 也要一起消失，否则是个没人调用的死 state').not.toContain('setAnalysisOpen')
+    expect(VIEW, '移除的是开关、不是能力：逐条推理仍要在').toContain('useInlineAnalysis({')
+    const hook = read('use-inline-analysis.ts')
+    // 用 `\benabled\s*:` 而不是裸词：注释里为了说明历史会提到「曾有个 enabled 参数」，
+    // 裸词匹配会把注释也算进去（这条假阳性在同一轮里已经吃过一次）。
+    expect(hook, 'hook 里那个恒真的 enabled 旋钮已删 —— 留着会让人以为这里能关').not.toMatch(/\benabled\s*:/)
+    expect(hook, '也不该再有基于它的 early return').not.toContain('!enabled')
+    expect(hook, '恒开的依据要留在注释里，免得后人再加一个只管一半的开关').toContain('关于开关')
+  })
 })
