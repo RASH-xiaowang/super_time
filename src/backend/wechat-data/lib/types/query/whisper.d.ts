@@ -4,6 +4,24 @@ export declare const WHISPER_MODELS: ReadonlyArray<Pick<WhisperModelInfo, 'id' |
 /** ggml model file per model id (whisper.cpp official release artifacts). */
 export declare const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]>;
 /**
+ * 把一个 URL 流式写进 `dest`，**支持断点续传**：以 `dest` 现有长度为起点发 `Range`。
+ *
+ * 为什么要续传：模型有 1.5–3.1 GB，一次连接中断就让整份重下；而重试层只管到「响应头」，
+ * 中途断流它看不见（这正是 M7 的 N13 遗留项里那半句「另加断点续传」）。
+ * 三处刻意取舍：
+ *   · 只有服务端明确回 **206** 才追加写；回 200 说明 Range 没生效，必须从头写
+ *     （否则文件前段是旧内容，拼出来的包是坏的）；
+ *   · 续传起点取自 `statSync(dest).size` 而**不是**我们数过的字节数 —— 写缓冲可能被丢掉，
+ *     按磁盘实际长度续传永远是对的（大不了重下一小段）；
+ *   · 完成后校验长度：流提前 end（不算错误）时旧实现会把**截断的文件** rename 成正式模型。
+ * @param url - 下载地址。
+ * @param dest - 目标文件（同一个路径会被复用/续传）。
+ * @param timeoutMs - 单次尝试的**连接**超时（拿到响应头即解除）。
+ * @param onProgress - 进度回调（received 含续传已有的部分；total 未知时为 0）。
+ * @returns 最终字节数（含续传部分）。
+ */
+export declare function streamUrlToFile(url: string, dest: string, timeoutMs: number, onProgress: (received: number, total: number) => void): Promise<number>;
+/**
  * Migrate downloaded models (ggml-*.bin), the engine install (bin/), and any
  * top-level engine files (whisper-cli.exe / whisper.exe + sibling engine DLLs)
  * from one models dir to another (best-effort, keeps existing targets).

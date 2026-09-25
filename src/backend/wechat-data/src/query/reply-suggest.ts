@@ -116,7 +116,7 @@ export function buildReplyPrompt(lines: readonly string[], snippets: readonly st
 }
 
 /** 一条消息用于拼提示词的文本：优先展示文本，其次落回原始字段；过长截断。 */
-function messageText(m: { displayText?: string; strContent?: string; msgContent?: string }): string {
+export function messageText(m: { displayText?: string; strContent?: string; msgContent?: string }): string {
   const raw = String(m.displayText ?? m.strContent ?? m.msgContent ?? '').trim()
   if (raw === '') return ''
   const flat = raw.replace(/\s+/g, ' ')

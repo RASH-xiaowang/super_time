@@ -41,6 +41,12 @@ export declare function collectReplyKbSnippets(decryptedDir: string, kbId: numbe
  * @returns 提示词全文。
  */
 export declare function buildReplyPrompt(lines: readonly string[], snippets: readonly string[], want: number): string;
+/** 一条消息用于拼提示词的文本：优先展示文本，其次落回原始字段；过长截断。 */
+export declare function messageText(m: {
+    displayText?: string;
+    strContent?: string;
+    msgContent?: string;
+}): string;
 /**
  * 把模型输出解析成候选回复列表。
  *

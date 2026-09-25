@@ -124,18 +124,18 @@ var require_llm_retry = __commonJS({
     }
     async function fetchWithRetry7(doFetch, url, init, opts = {}) {
       const maxAttempts = Math.max(1, Number(opts.maxAttempts) || DEFAULT_MAX_ATTEMPTS);
-      const sleep2 = opts.sleep || ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
+      const sleep2 = opts.sleep || ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
       const random = opts.random || Math.random;
       const onRetry = opts.onRetry;
       const signal = init && init.signal;
       const timeoutMs = Math.max(0, Number(opts.timeoutMs) || 0);
       const headersOnly = opts.timeoutScope === "headers";
-      let lastError = null;
+      let lastError2 = null;
       let lastResponse = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         if (signal && signal.aborted) {
           if (lastResponse) return lastResponse;
-          if (lastError instanceof Error) throw lastError;
+          if (lastError2 instanceof Error) throw lastError2;
           const aborted = new Error("\u8BF7\u6C42\u5DF2\u4E2D\u6B62\uFF08\u5DF2\u53D6\u6D88\u6216\u6574\u4F53\u8D85\u65F6\uFF09");
           aborted.name = "AbortError";
           throw aborted;
@@ -160,14 +160,14 @@ var require_llm_retry = __commonJS({
           if (signal && signal.aborted) throw e;
           if (!ownTimeout && e && (e.name === "AbortError" || e.code === "ABORT_ERR")) throw e;
           const failure = ownTimeout ? timeoutError(timeoutMs) : e;
-          lastError = failure;
+          lastError2 = failure;
           if (isLast) break;
           const delayMs = backoffDelayMs(attempt, random);
           if (onRetry) onRetry({ attempt, delayMs, reason: failure && failure.message || String(failure) });
           await sleep2(delayMs);
         }
       }
-      throw lastError instanceof Error ? lastError : new Error("fetchWithRetry: \u8BF7\u6C42\u5931\u8D25");
+      throw lastError2 instanceof Error ? lastError2 : new Error("fetchWithRetry: \u8BF7\u6C42\u5931\u8D25");
     }
     module.exports = {
       BASE_DELAY_MS,
@@ -5054,8 +5054,8 @@ async function searchIndexMessagesCancellable(decryptedDir, query, limit, userna
         break;
       }
       if (Date.now() - lastYieldAt >= YIELD_EVERY_MS) {
-        await new Promise((resolve3) => {
-          setImmediate(resolve3);
+        await new Promise((resolve4) => {
+          setImmediate(resolve4);
         });
         lastYieldAt = Date.now();
         if (ctrl?.signal?.aborted) {
@@ -5675,8 +5675,8 @@ async function runBuildSearchIndex(decryptedDir, force) {
   }
 }
 function yieldToLoop() {
-  return new Promise((resolve3) => {
-    setImmediate(resolve3);
+  return new Promise((resolve4) => {
+    setImmediate(resolve4);
   });
 }
 
@@ -7158,9 +7158,9 @@ async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
       received += value.byteLength;
       onProgress(received, total);
     }
-    await new Promise((resolve3, reject) => {
+    await new Promise((resolve4, reject) => {
       stream.end(() => {
-        resolve3();
+        resolve4();
       });
       stream.on("error", reject);
     });
@@ -7171,11 +7171,11 @@ async function streamUrlToFile(url, dest, timeoutMs, onProgress) {
         stream.destroy();
       } catch {
       }
-      await new Promise((resolve3) => {
+      await new Promise((resolve4) => {
         stream.once("close", () => {
-          resolve3();
+          resolve4();
         });
-        setTimeout(resolve3, 500).unref();
+        setTimeout(resolve4, 500).unref();
       });
     }
   }
@@ -7468,7 +7468,7 @@ async function installWhisperEngine(modelsDir, onProgress) {
     "https://github.com/ggml-org/whisper.cpp/releases/latest/download/whisper-bin-x64.zip",
     "https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-bin-x64.zip"
   ].filter((u) => Boolean(u));
-  let lastError = "\u5F15\u64CE\u4E0B\u8F7D\u5931\u8D25";
+  let lastError2 = "\u5F15\u64CE\u4E0B\u8F7D\u5931\u8D25";
   for (const url of urls) {
     const zipPath = join30(modelsDir, "whisper-bin-x64.zip");
     try {
@@ -7489,9 +7489,9 @@ async function installWhisperEngine(modelsDir, onProgress) {
         received += value.byteLength;
         onProgress(received, total);
       }
-      await new Promise((resolve3, reject) => {
+      await new Promise((resolve4, reject) => {
         stream.end(() => {
-          resolve3();
+          resolve4();
         });
         stream.on("error", reject);
       });
@@ -7526,14 +7526,14 @@ async function installWhisperEngine(modelsDir, onProgress) {
       }
       return existsSync23(target) ? { ok: true, path: target } : { ok: false, error: "whisper-cli.exe \u5B89\u88C5\u5931\u8D25\uFF08\u62F7\u8D1D/\u79FB\u52A8\u672A\u5B8C\u6210\uFF09" };
     } catch (e) {
-      lastError = `${url} ${e.message}`;
+      lastError2 = `${url} ${e.message}`;
       try {
         unlinkSync(zipPath);
       } catch {
       }
     }
   }
-  return { ok: false, error: lastError + "\uFF08\u53EF\u8BBE\u7F6E DSH_WECHAT_WHISPER_ENGINE_URL \u6307\u5411\u53EF\u8FBE\u955C\u50CF\uFF0C\u6216 DSH_WECHAT_WHISPER_BIN \u6307\u5411\u5DF2\u5B89\u88C5\u7684 whisper-cli.exe\uFF09" };
+  return { ok: false, error: lastError2 + "\uFF08\u53EF\u8BBE\u7F6E DSH_WECHAT_WHISPER_ENGINE_URL \u6307\u5411\u53EF\u8FBE\u955C\u50CF\uFF0C\u6216 DSH_WECHAT_WHISPER_BIN \u6307\u5411\u5DF2\u5B89\u88C5\u7684 whisper-cli.exe\uFF09" };
 }
 async function extractZip(zipPath, destDir) {
   const staging = join30(destDir, ".engine-staging");
@@ -7580,7 +7580,7 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
   mkdirSync5(modelsDir, { recursive: true });
   const finalPath = join30(modelsDir, file);
   if (existsSync23(finalPath)) return { ok: true, file, bytes: 0 };
-  let lastError = "\u4E0B\u8F7D\u5931\u8D25";
+  let lastError2 = "\u4E0B\u8F7D\u5931\u8D25";
   for (const base of whisperDownloadBases()) {
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`;
     const tmp = join30(modelsDir, file + ".part");
@@ -7590,10 +7590,10 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
       reachableBase = base;
       return { ok: true, file, bytes };
     } catch (e) {
-      lastError = `${base} ${e.message}`;
+      lastError2 = `${base} ${e.message}`;
     }
   }
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError2 };
 }
 
 // src/backend/wechat-data/src/query/voice-transcribe.ts
@@ -11101,10 +11101,10 @@ function saveSummaryTask(decryptedDir, task) {
     return { ok: false, error: e.message };
   }
 }
-function updateSummaryTaskRunState(decryptedDir, id, lastRunAt, lastStatus, lastError) {
+function updateSummaryTaskRunState(decryptedDir, id, lastRunAt, lastStatus, lastError2) {
   try {
     const db = openStore2(decryptedDir);
-    db.prepare("UPDATE summary_tasks SET last_run_at = ?, last_status = ?, last_error = ?, updated_at = ? WHERE id = ?").run(lastRunAt, lastStatus, lastError, Date.now(), id);
+    db.prepare("UPDATE summary_tasks SET last_run_at = ?, last_status = ?, last_error = ?, updated_at = ? WHERE id = ?").run(lastRunAt, lastStatus, lastError2, Date.now(), id);
     db.close();
     return { ok: true };
   } catch (e) {
@@ -11302,8 +11302,8 @@ async function fullDecryptFile(dbPath8, outPath, encKey) {
         pgno += 1;
       }
       await output.write(decChunk.subarray(0, filled));
-      await new Promise((resolve3) => {
-        setImmediate(resolve3);
+      await new Promise((resolve4) => {
+        setImmediate(resolve4);
       });
     }
   } finally {
@@ -11375,8 +11375,8 @@ async function atomicReplace(temp, target) {
       return;
     } catch (e) {
       lastErr = e;
-      await new Promise((resolve3) => {
-        setTimeout(resolve3, 120);
+      await new Promise((resolve4) => {
+        setTimeout(resolve4, 120);
       });
     }
   }
@@ -13709,7 +13709,7 @@ var StreamWriter = class _StreamWriter {
    * （评审实测 24 会话×3000 条就到 close 25 / error 50，1000 会话会到千级）。
    */
   async waitDrainOrDeath() {
-    await new Promise((resolve3, reject) => {
+    await new Promise((resolve4, reject) => {
       const cleanup = () => {
         this.out.off("drain", onDrain);
         this.out.off("close", onClose);
@@ -13717,7 +13717,7 @@ var StreamWriter = class _StreamWriter {
       };
       const onDrain = () => {
         cleanup();
-        resolve3();
+        resolve4();
       };
       const onClose = () => {
         cleanup();
@@ -17515,8 +17515,8 @@ async function decryptAllDbs(rawDbDir, decryptedDir, onProgress) {
     }
     done += 1;
     onProgress?.(done, dbs.length, failed.length, rel);
-    await new Promise((resolve3) => {
-      setImmediate(resolve3);
+    await new Promise((resolve4) => {
+      setImmediate(resolve4);
     });
   }
   return { ok: failed.length === 0, total: dbs.length, okCount, failed };
@@ -22696,8 +22696,8 @@ function warn3(msg) {
 var BUSY_ATTEMPTS = 5;
 var BUSY_BACKOFF_MS = 40;
 function sleep(ms) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, ms);
+  return new Promise((resolve4) => {
+    setTimeout(resolve4, ms);
   });
 }
 async function withBusyRetry(label, fn) {
@@ -25314,7 +25314,7 @@ function createMediaRemotes(rc) {
     async exportSnsVideo(options) {
       const dest = typeof options.dest === "string" ? options.dest.trim() : "";
       if (!dest) return { ok: false, error: "\u672A\u6307\u5B9A\u4FDD\u5B58\u8DEF\u5F84" };
-      const loaded = await loadSnsVideoBytes({
+      const loaded2 = await loadSnsVideoBytes({
         base: rawWechatBase2(rc.dirs().decrypted) || void 0,
         md5: options.md5,
         timelineId: options.timelineId,
@@ -25324,19 +25324,19 @@ function createMediaRemotes(rc) {
         version: weixinVersion(),
         ...rc.cdnSwitches()
       });
-      if (loaded.error || !loaded.bytes) {
-        rc.op("task", "export_sns_video", "fail", options.md5?.slice(0, 8) ?? "", loaded.error ?? "");
-        return { ok: false, error: loaded.error ?? "\u53D6\u4E0D\u5230\u89C6\u9891\u5B57\u8282" };
+      if (loaded2.error || !loaded2.bytes) {
+        rc.op("task", "export_sns_video", "fail", options.md5?.slice(0, 8) ?? "", loaded2.error ?? "");
+        return { ok: false, error: loaded2.error ?? "\u53D6\u4E0D\u5230\u89C6\u9891\u5B57\u8282" };
       }
       try {
-        writeFileSync15(dest, loaded.bytes);
+        writeFileSync15(dest, loaded2.bytes);
       } catch (e) {
         const msg = e?.message ?? String(e);
         rc.op("task", "export_sns_video", "fail", options.md5?.slice(0, 8) ?? "", msg);
         return { ok: false, error: `\u5199\u5165\u5931\u8D25\uFF1A${msg}` };
       }
-      rc.op("task", "export_sns_video", "ok", options.md5?.slice(0, 8) ?? "", `${loaded.bytes.length} \u5B57\u8282 \xB7 ${loaded.source}`);
-      return { ok: true, bytes: loaded.bytes.length, source: loaded.source };
+      rc.op("task", "export_sns_video", "ok", options.md5?.slice(0, 8) ?? "", `${loaded2.bytes.length} \u5B57\u8282 \xB7 ${loaded2.source}`);
+      return { ok: true, bytes: loaded2.bytes.length, source: loaded2.source };
     }
   };
 }
@@ -25677,8 +25677,8 @@ function* messagePages(decryptedDir, username, target, ctrl) {
   }
 }
 function yieldToEventLoop() {
-  return new Promise((resolve3) => {
-    setImmediate(resolve3);
+  return new Promise((resolve4) => {
+    setImmediate(resolve4);
   });
 }
 var COLLECT_YIELD_EVERY_PAGES = 8;
@@ -27870,12 +27870,759 @@ __decorateElement(_init2, 1, "suggestReplies", _suggestReplies_dec, GatewayAskOp
 __decorateElement(_init2, 1, "generatePeriodSummary", _generatePeriodSummary_dec, GatewayAskOps);
 __decoratorMetadata(_init2, GatewayAskOps);
 
+// src/backend/wechat-data/src/laya/runtime.ts
+import { existsSync as existsSync72, readFileSync as readFileSync29 } from "node:fs";
+import { cpus } from "node:os";
+import { join as join91 } from "node:path";
+
+// src/backend/wechat-data/src/laya/build-sequence.ts
+var QTYPES = { choice: 0, score: 1, noul: 2 };
+var MASK_TOKEN = "<mask>";
+function toInternal(q) {
+  if (q.type === "choice") return { t: "choice", ins: q.instructions, crit: q.criteria };
+  if (q.type === "score") return { t: "score", ins: q.instructions, crit: q.criteria };
+  return { t: "noul", ins: q.instructions, crit: null };
+}
+function pythonJsonDumps(v) {
+  if (v === null || v === void 0) return "null";
+  if (typeof v === "string") return JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(pythonJsonDumps).join(", ")}]`;
+  if (typeof v === "object") {
+    const parts = Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${pythonJsonDumps(x)}`);
+    return `{${parts.join(", ")}}`;
+  }
+  return JSON.stringify(String(v));
+}
+function serializeState(state) {
+  return typeof state === "string" ? state : pythonJsonDumps(state);
+}
+function renderCriterion(value) {
+  if (typeof value === "string") return value;
+  return pythonJsonDumps(value);
+}
+function renderOptions(q) {
+  if (q.t === "choice") {
+    const crit = q.crit ?? {};
+    return Object.entries(crit).map(([k, v]) => v === null || v === "" ? k : `${k}: ${renderCriterion(v)}`);
+  }
+  if (q.t === "score") {
+    const crit = q.crit ?? [];
+    return crit.map((c, i) => `level ${i}: ${renderCriterion(c)}`);
+  }
+  return [
+    `false: ${renderCriterion("no, the statement does not hold")}`,
+    `true: ${renderCriterion("yes, the statement holds")}`
+  ];
+}
+function buildSequence(tok, state, q, maxLen = 1024, headMaxLen = 256, truncateLeft = false) {
+  const opts = renderOptions(q);
+  const ins = String(q.ins).split(MASK_TOKEN).join(" ");
+  let headIds = tok.encode(`${q.t} question: ${ins}`);
+  let optIds = opts.map((o) => [tok.maskId, ...tok.encode(` ${o.split(MASK_TOKEN).join(" ")}`).slice(0, 48)]);
+  const sum = (rows) => rows.reduce((a, r) => a + r.length, 0);
+  let optBudget = headMaxLen - sum(optIds);
+  if (optBudget < 16) {
+    const per = Math.max(4, Math.floor((headMaxLen - 16) / Math.max(1, optIds.length)));
+    optIds = optIds.map((o) => o.slice(0, per));
+    optBudget = headMaxLen - sum(optIds);
+  }
+  headIds = headIds.slice(0, Math.max(8, optBudget));
+  let ids = [tok.clsId, ...headIds, tok.sepId];
+  const markers = [];
+  for (const o of optIds) {
+    markers.push(ids.length);
+    ids = ids.concat(o);
+  }
+  ids = ids.concat([tok.sepId]);
+  const room = Math.max(0, maxLen - ids.length - 1);
+  let st = tok.encode(serializeState(state).split(MASK_TOKEN).join(" "));
+  st = truncateLeft ? st.slice(Math.max(0, st.length - room)) : st.slice(0, room);
+  ids = ids.concat(st, [tok.sepId]);
+  return { ids: ids.slice(0, maxLen), markers: markers.filter((m) => m < maxLen) };
+}
+function collateItems(items, padId) {
+  const seqLen = Math.max(...items.map((it) => it.ids.length));
+  const optCols = Math.max(...items.map((it) => it.markers.length));
+  const inputIds = [];
+  const attentionMask = [];
+  const markerPos = [];
+  const markerMask = [];
+  for (const it of items) {
+    inputIds.push(Array.from({ length: seqLen }, (_, i) => i < it.ids.length ? it.ids[i] : padId));
+    attentionMask.push(Array.from({ length: seqLen }, (_, i) => i < it.ids.length ? 1 : 0));
+    markerPos.push(Array.from({ length: optCols }, (_, i) => i < it.markers.length ? it.markers[i] : 0));
+    markerMask.push(Array.from({ length: optCols }, (_, i) => i < it.markers.length));
+  }
+  return { inputIds, attentionMask, markerPos, markerMask, qtype: items.map((it) => it.qtype), seqLen, optCols };
+}
+
+// src/backend/wechat-data/src/laya/model-file.ts
+import { copyFileSync as copyFileSync2, existsSync as existsSync71, mkdirSync as mkdirSync25, renameSync as renameSync9, statSync as statSync26, unlinkSync as unlinkSync5 } from "node:fs";
+import { dirname as dirname33, join as join90, resolve as resolve3 } from "node:path";
+var LAYA_DIR_ENV = "DSH_WECHAT_LAYA_DIR";
+var LAYA_MIRROR_ENV = "DSH_WECHAT_LAYA_MIRROR";
+var LAYA_REPO_ENV = "DSH_WECHAT_LAYA_REPO";
+var LAYA_DEFAULT_REPO = "super-time/super-time-models";
+var LAYA_ASSETS = [
+  { file: "laya-decision.onnx", rel: "laya-decision.onnx", minBytes: 64 * 1024 * 1024, label: "\u51B3\u7B56\u6A21\u578B" },
+  { file: "tokenizer.json", rel: "tokenizer/tokenizer.json", minBytes: 1024 * 1024, label: "\u5206\u8BCD\u5668\u8BCD\u8868" },
+  { file: "tokenizer_config.json", rel: "tokenizer/tokenizer_config.json", minBytes: 64, label: "\u5206\u8BCD\u5668\u914D\u7F6E" }
+];
+var LAYA_MODEL_FILE = "laya-decision.onnx";
+var DOWNLOAD_CONNECT_TIMEOUT_MS2 = 3e4;
+function layaModelsDir(decryptedDir) {
+  const root = decryptedDir ? dirname33(decryptedDir) : resolveWechatDataRoot();
+  return join90(root, "laya");
+}
+function resolveLayaModelsDir(configured, decryptedDir) {
+  const pinned = typeof configured === "string" ? configured.trim() : "";
+  if (pinned) return { dir: pinned, source: "configured" };
+  const env = (process.env[LAYA_DIR_ENV] ?? "").trim();
+  if (env) return { dir: env, source: "env" };
+  return { dir: layaModelsDir(decryptedDir), source: "data-dir" };
+}
+function layaModelStatus(configured, decryptedDir) {
+  const { dir, source } = resolveLayaModelsDir(configured, decryptedDir);
+  const missing = [];
+  let bytes = 0;
+  for (const a of LAYA_ASSETS) {
+    const p = join90(dir, a.rel);
+    if (!existsSync71(p)) {
+      missing.push(`${a.label}\uFF08\u7F3A ${a.rel}\uFF09`);
+      continue;
+    }
+    let size = 0;
+    try {
+      size = statSync26(p).size;
+    } catch (e) {
+      missing.push(`${a.label}\uFF08\u8BFB\u53D6\u5931\u8D25\uFF1A${e.message}\uFF09`);
+      continue;
+    }
+    if (a.rel === LAYA_MODEL_FILE) bytes = size;
+    if (size < a.minBytes) missing.push(`${a.label}\uFF08\u4E0D\u5B8C\u6574\uFF1A${formatBytes2(size)}\uFF09`);
+  }
+  return { installed: missing.length === 0, dir, path: join90(dir, LAYA_MODEL_FILE), bytes, source, missing };
+}
+function layaTokenizerDir(dir) {
+  return join90(dir, "tokenizer");
+}
+function formatBytes2(n) {
+  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+function layaDownloadBases() {
+  const pinned = (process.env[LAYA_MIRROR_ENV] ?? "").trim().replace(/\/$/, "");
+  const bases = pinned ? [pinned] : [];
+  bases.push("https://hf-mirror.com", "https://huggingface.co");
+  return [...new Set(bases)];
+}
+function layaDownloadRepo() {
+  const repo = (process.env[LAYA_REPO_ENV] ?? "").trim();
+  return repo || LAYA_DEFAULT_REPO;
+}
+async function layaDownloadModel(dir, onProgress) {
+  try {
+    mkdirSync25(dir, { recursive: true });
+  } catch (e) {
+    return { ok: false, error: `\u65E0\u6CD5\u521B\u5EFA\u6A21\u578B\u76EE\u5F55\uFF1A${e.message}` };
+  }
+  const repo = layaDownloadRepo();
+  const done = [];
+  let total = 0;
+  for (const asset of LAYA_ASSETS) {
+    const target = join90(dir, asset.rel);
+    if (existsSync71(target)) {
+      try {
+        if (statSync26(target).size >= asset.minBytes) {
+          done.push(asset.rel);
+          continue;
+        }
+      } catch {
+      }
+    }
+    try {
+      mkdirSync25(dirname33(target), { recursive: true });
+    } catch (e) {
+      return { ok: false, files: done, bytes: total, error: `\u65E0\u6CD5\u521B\u5EFA\u76EE\u5F55\uFF1A${e.message}` };
+    }
+    const tmp = `${target}.part`;
+    let lastError2 = "\u4E0B\u8F7D\u5931\u8D25";
+    let ok = false;
+    for (const base of layaDownloadBases()) {
+      const url = `${base}/${repo}/resolve/main/${asset.file}`;
+      try {
+        const bytes = await streamUrlToFile(
+          url,
+          tmp,
+          DOWNLOAD_CONNECT_TIMEOUT_MS2,
+          (received, t) => onProgress(received, t, asset.rel)
+        );
+        renameSync9(tmp, target);
+        total += bytes;
+        done.push(asset.rel);
+        ok = true;
+        break;
+      } catch (e) {
+        lastError2 = `${asset.rel} @ ${base}\uFF1A${e.message}`;
+      }
+    }
+    if (!ok) return { ok: false, files: done, bytes: total, error: lastError2 };
+  }
+  return { ok: true, files: done, bytes: total };
+}
+function layaAdoptModelDir(sourceDir, decryptedDir) {
+  const target = layaModelsDir(decryptedDir);
+  mkdirSync25(target, { recursive: true });
+  for (const asset of LAYA_ASSETS) {
+    const from = join90(sourceDir, asset.rel);
+    if (!existsSync71(from)) continue;
+    const to = join90(target, asset.rel);
+    if (resolve3(from) === resolve3(to)) continue;
+    mkdirSync25(dirname33(to), { recursive: true });
+    const tmp = `${to}.part`;
+    try {
+      renameSync9(from, tmp);
+    } catch {
+      copyFileSync2(from, tmp);
+      try {
+        unlinkSync5(from);
+      } catch {
+      }
+    }
+    renameSync9(tmp, to);
+  }
+  return layaModelStatus(target, decryptedDir);
+}
+
+// src/backend/wechat-data/src/laya/presets.ts
+function defaultChatQuestions() {
+  return {
+    literal_question: {
+      type: "noul",
+      instructions: "`dialogue` \u91CC\u6700\u540E\u4E00\u53E5\u8BDD\uFF0C\u662F\u5728\u5B57\u9762\u610F\u4E49\u4E0A\u771F\u7684\u5728\u63D0\u95EE\u6216\u63D0\u51FA\u8981\u6C42\u5417\uFF1F",
+      labels: { false: "\u4E0D\u662F\u5B57\u9762\u63D0\u95EE", true: "\u662F\u5B57\u9762\u63D0\u95EE" }
+    },
+    is_testing: {
+      type: "noul",
+      instructions: "`dialogue` \u91CC\u6700\u540E\u4E00\u53E5\u8BDD\uFF0C\u662F\u5728\u6D4B\u8BD5\u5BF9\u65B9\u8BB0\u6027\uFF0C\u800C\u4E0D\u662F\u771F\u7684\u60F3\u83B7\u53D6\u4FE1\u606F\u5417\uFF1F",
+      labels: { false: "\u4E0D\u662F", true: "\u662F" }
+    },
+    is_upset: {
+      type: "noul",
+      instructions: "`dialogue` \u91CC\u6700\u540E\u4E00\u53E5\u8BDD\uFF0C\u8BF4\u8BDD\u4EBA\u6B64\u523B\u4E0D\u9AD8\u5174\u5417\uFF1F",
+      labels: { false: "\u6CA1\u6709\u4E0D\u9AD8\u5174", true: "\u4E0D\u9AD8\u5174" }
+    },
+    real_intent: {
+      type: "choice",
+      instructions: "`dialogue` \u91CC\u6700\u540E\u4E00\u53E5\u8BDD\uFF0C\u8BF4\u8BDD\u4EBA\u771F\u6B63\u7684\u610F\u56FE\u662F\u4EC0\u4E48\uFF1F",
+      criteria: {
+        care_check: "\u60F3\u786E\u8BA4\u5BF9\u65B9\u5728\u4E0D\u5728\u4E4E\u81EA\u5DF1",
+        memory_test: "\u5355\u7EAF\u8003\u9A8C\u5BF9\u65B9\u7684\u8BB0\u5FC6\u529B",
+        want_fight: "\u751F\u6C14\uFF0C\u60F3\u5435\u67B6",
+        keep_talking: "\u53EA\u662F\u60F3\u628A\u8BDD\u804A\u4E0B\u53BB\uFF0C\u6CA1\u6709\u522B\u7684\u76EE\u7684"
+      }
+    },
+    tension: {
+      type: "score",
+      instructions: "`dialogue` \u6700\u540E\u4E00\u53E5\u8BDD\u4E4B\u540E\uFF0C\u6B64\u523B\u5C40\u52BF\u7684\u7D27\u5F20\u7A0B\u5EA6\u662F\u591A\u5C11\uFF1F",
+      criteria: [
+        "\u5B8C\u5168\u5E73\u9759\uFF0C\u7EAF\u7CB9\u95F2\u804A",
+        "\u975E\u5E38\u8F7B\u677E\uFF0C\u6BEB\u65E0\u5F20\u529B",
+        "\u8F7B\u677E\uFF0C\u53EA\u6709\u4E00\u70B9\u70B9\u6492\u5A07\u610F\u5473",
+        "\u504F\u5411\u8F7B\u677E\uFF0C\u4F46\u5BF9\u65B9\u5728\u7B49\u56DE\u5E94",
+        "\u4E2D\u6027\uFF0C\u770B\u4E0D\u51FA\u60C5\u7EEA",
+        "\u7565\u6709\u4E0D\u60A6\uFF0C\u9700\u8981\u8BA4\u771F\u56DE\u5E94",
+        "\u660E\u663E\u4E0D\u60A6\uFF0C\u6577\u884D\u4F1A\u51FA\u9519",
+        "\u4E0D\u9AD8\u5174\uFF0C\u9700\u8981\u5148\u5B89\u629A\u518D\u56DE\u7B54",
+        "\u6BD4\u8F83\u751F\u6C14\uFF0C\u5904\u7406\u4E0D\u5F53\u4F1A\u5347\u7EA7",
+        "\u5F88\u751F\u6C14\uFF0C\u56DE\u7B54\u9519\u4F1A\u5435\u67B6",
+        "\u6781\u5EA6\u7D27\u5F20\uFF0C\u5DF2\u7ECF\u5230\u4E34\u754C\u70B9"
+      ],
+      scale: 10
+    },
+    best_action: {
+      type: "choice",
+      instructions: "\u9762\u5BF9 `dialogue` \u91CC\u7684\u6700\u540E\u4E00\u53E5\uFF0C\u6B64\u523B\u6700\u8BE5\u505A\u7684\u52A8\u4F5C\u662F\u54EA\u4E00\u4E2A\uFF1F",
+      criteria: {
+        search_history: "\u5148\u641C\u7D22\u5386\u53F2\u804A\u5929\u8BB0\u5F55\uFF0C\u786E\u8BA4\u5BF9\u65B9\u4E4B\u524D\u8BF4\u8FC7\u4EC0\u4E48",
+        answer_directly: "\u7ACB\u523B\u76F4\u63A5\u56DE\u7B54\u5177\u4F53\u5185\u5BB9",
+        admit_and_apologize: "\u5148\u627F\u8BA4\u81EA\u5DF1\u5FD8\u4E86\u5E76\u9053\u6B49\uFF0C\u518D\u5F80\u4E0B\u8BF4",
+        ask_back: "\u53CD\u95EE\u56DE\u53BB\uFF0C\u8BA9\u5BF9\u65B9\u5148\u63D0\u793A",
+        change_topic: "\u8F6C\u79FB\u8BDD\u9898",
+        play_dumb: "\u5148\u4E0D\u56DE\uFF0C\u7B49\u5BF9\u65B9\u518D\u8BF4"
+      }
+    }
+  };
+}
+
+// src/backend/wechat-data/src/laya/runtime.ts
+var loaded = null;
+var lastInferenceMs = 0;
+var lastError = "";
+var loading = null;
+function layaRuntimeState() {
+  return { loaded: loaded !== null, dir: loaded?.dir ?? "", lastInferenceMs, lastError };
+}
+function layaUnload() {
+  loaded = null;
+}
+function readTemperatures(dir) {
+  const fallback = { base: [1, 1, 1], byOptions: {} };
+  const p = join91(dir, "rl_agent_config.json");
+  if (!existsSync72(p)) return fallback;
+  try {
+    const cfg = JSON.parse(readFileSync29(p, "utf8"));
+    const clamp2 = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return 1;
+      return Math.min(5, Math.max(0.5, n));
+    };
+    return {
+      base: Array.isArray(cfg.temperature) ? cfg.temperature.map(clamp2) : fallback.base,
+      byOptions: cfg.temperature_by_options && typeof cfg.temperature_by_options === "object" ? Object.fromEntries(Object.entries(cfg.temperature_by_options).map(([k, v]) => [k, clamp2(v)])) : {}
+    };
+  } catch {
+    return fallback;
+  }
+}
+function tempBucket(qtype, k) {
+  const size = k <= 2 ? "2" : k <= 5 ? "3-5" : k <= 10 ? "6-10" : "11+";
+  const kind = qtype === 0 ? "choice" : qtype === 1 ? "score" : "noul";
+  return `${kind}:${size}`;
+}
+function softmax(z) {
+  const m = Math.max(...z);
+  const e = z.map((v) => Math.exp(v - m));
+  const s = e.reduce((a, b) => a + b, 0);
+  return e.map((v) => v / s);
+}
+function confidenceFromProbs(p) {
+  const k = p.length;
+  if (k < 2) return 1;
+  const ent = -p.reduce((a, v) => a + (v > 0 ? v * Math.log(v) : 0), 0);
+  return Math.min(1, Math.max(0, 1 - ent / Math.log(k)));
+}
+async function layaEnsureLoaded(modelDir, decryptedDir) {
+  const status = layaModelStatus(modelDir, decryptedDir);
+  if (!status.installed) {
+    return { ok: false, error: `\u6A21\u578B\u672A\u5C31\u7EEA\uFF1A${status.missing.join("\uFF1B")}` };
+  }
+  if (loaded !== null && loaded.dir === status.dir) return { ok: true };
+  if (loading !== null) return loading;
+  loading = (async () => {
+    try {
+      const ortSpec = "onnxruntime-node";
+      const tokSpec = "@huggingface/transformers";
+      const ort = await import(ortSpec);
+      const { AutoTokenizer } = await import(tokSpec);
+      const tokDir = layaTokenizerDir(status.dir);
+      const tok = await AutoTokenizer.from_pretrained(tokDir, { local_files_only: true });
+      const one = (t) => {
+        const ids = tok.encode(t, { add_special_tokens: false });
+        if (!Array.isArray(ids) || ids.length !== 1 || !Number.isFinite(ids[0])) {
+          throw new Error(`\u5206\u8BCD\u5668\u65E0\u6CD5\u89E3\u6790\u7279\u6B8A\u6807\u8BB0 ${t}\uFF08\u5F97\u5230 ${JSON.stringify(ids)}\uFF09`);
+        }
+        return ids[0];
+      };
+      const tokenizer = {
+        clsId: one("<bos>"),
+        sepId: one("<eos>"),
+        maskId: one("<mask>"),
+        padId: one("<pad>"),
+        encode: (text) => tok.encode(text, { add_special_tokens: false })
+      };
+      const session = await ort.InferenceSession.create(status.path, {
+        intraOpNumThreads: Math.max(1, Math.min(8, cpus().length)),
+        interOpNumThreads: 1
+      });
+      let tokenizerBytes = 0;
+      try {
+        tokenizerBytes = readFileSync29(join91(tokDir, "tokenizer.json")).byteLength;
+      } catch {
+      }
+      loaded = { dir: status.dir, ort, session, tokenizer, tokenizerBytes, optColsCap: 16 };
+      lastError = "";
+      return { ok: true };
+    } catch (e) {
+      lastError = e.message;
+      loaded = null;
+      return { ok: false, error: `laya \u8FD0\u884C\u65F6\u52A0\u8F7D\u5931\u8D25\uFF1A${lastError}` };
+    } finally {
+      loading = null;
+    }
+  })();
+  return loading;
+}
+async function layaAnalyze(input) {
+  const questions = input.questions ?? defaultChatQuestions();
+  const empty = { dir: input.modelDir ?? "", bytes: 0 };
+  const ensure = await layaEnsureLoaded(input.modelDir, input.decryptedDir);
+  if (!ensure.ok || loaded === null) {
+    return { ok: false, error: ensure.error ?? "laya \u8FD0\u884C\u65F6\u672A\u5C31\u7EEA", model: empty, answers: [], inferenceMs: 0, tokens: 0, reused: false };
+  }
+  const l = loaded;
+  const status = layaModelStatus(input.modelDir, input.decryptedDir);
+  const model = { dir: l.dir, bytes: status.bytes };
+  const temps = readTemperatures(l.dir);
+  const ids = Object.keys(questions);
+  if (ids.length === 0) {
+    return { ok: false, error: "\u6CA1\u6709\u53EF\u7528\u7684\u547D\u9898", model, answers: [], inferenceMs: 0, tokens: 0, reused: true };
+  }
+  const items = [];
+  const internals = ids.map((qid) => {
+    const q = questions[qid];
+    const internal = toInternal(q);
+    const seq = buildSequence(l.tokenizer, input.state, internal);
+    items.push({ qid, ids: seq.ids, markers: seq.markers, qtype: QTYPES[internal.t] });
+    return internal;
+  });
+  const batch = collateItems(items, l.tokenizer.padId);
+  if (batch.optCols > l.optColsCap) {
+    return {
+      ok: false,
+      error: `\u9009\u9879\u6570\u8D85\u51FA\u6A21\u578B\u5934\u90E8\u4E0A\u9650\uFF08${batch.optCols} > ${l.optColsCap}\uFF09`,
+      model,
+      answers: [],
+      inferenceMs: 0,
+      tokens: 0,
+      reused: true
+    };
+  }
+  let logits;
+  const t0 = Date.now();
+  try {
+    const out = await l.session.run({
+      input_ids: new l.ort.Tensor("int64", BigInt64Array.from(batch.inputIds.flat().map(BigInt)), [batch.inputIds.length, batch.seqLen]),
+      attention_mask: new l.ort.Tensor("int64", BigInt64Array.from(batch.attentionMask.flat().map(BigInt)), [batch.attentionMask.length, batch.seqLen]),
+      marker_pos: new l.ort.Tensor("int64", BigInt64Array.from(batch.markerPos.flat().map(BigInt)), [batch.markerPos.length, batch.optCols]),
+      marker_mask: new l.ort.Tensor("bool", Uint8Array.from(batch.markerMask.flat().map((v) => v ? 1 : 0)), [batch.markerMask.length, batch.optCols]),
+      qtype: new l.ort.Tensor("int64", BigInt64Array.from(batch.qtype.map(BigInt)), [batch.qtype.length])
+    });
+    const raw = out.logits ?? out[Object.keys(out)[0]];
+    logits = raw.data;
+  } catch (e) {
+    lastError = e.message;
+    return { ok: false, error: `laya \u63A8\u7406\u5931\u8D25\uFF1A${lastError}`, model, answers: [], inferenceMs: 0, tokens: 0, reused: true };
+  }
+  const inferenceMs = Date.now() - t0;
+  lastInferenceMs = inferenceMs;
+  lastError = "";
+  const answers = [];
+  let tokens = 0;
+  for (let r = 0; r < ids.length; r += 1) {
+    const qid = ids[r];
+    const q = questions[qid];
+    const internal = internals[r];
+    const k = items[r].markers.length;
+    if (k === 0) continue;
+    const qt = items[r].qtype;
+    const scale = temps.byOptions[tempBucket(qt, k)] ?? temps.base[qt] ?? 1;
+    const z = [];
+    for (let i = 0; i < k; i += 1) z.push(Number(logits[r * batch.optCols + i]) / scale);
+    const p = softmax(z);
+    const confidence = confidenceFromProbs(p);
+    const question = internal.ins.replace(/`dialogue`/g, "\u5BF9\u8BDD").trim();
+    if (q.type === "choice") {
+      const keys = Object.keys(q.criteria);
+      const options = keys.map((key, i) => ({
+        key,
+        label: q.criteria[key],
+        probability: Math.round((p[i] ?? 0) * 1e4) / 1e4
+      })).sort((a, b) => b.probability - a.probability);
+      answers.push({
+        qid,
+        kind: "choice",
+        question,
+        options,
+        top: options[0]?.key ?? "",
+        topProbability: options[0]?.probability ?? 0,
+        confidence
+      });
+    } else if (q.type === "score") {
+      const options = q.criteria.map((label, i) => ({
+        key: String(i),
+        label,
+        probability: Math.round((p[i] ?? 0) * 1e4) / 1e4
+      }));
+      const score = Math.round(p.reduce((a, v, i) => a + i * v, 0) * 1e4) / 1e4;
+      const best = options.reduce((a, b) => a.probability >= b.probability ? a : b);
+      answers.push({
+        qid,
+        kind: "score",
+        question,
+        options,
+        top: best.key,
+        topProbability: best.probability,
+        score,
+        scale: q.scale ?? q.criteria.length - 1,
+        confidence
+      });
+    } else {
+      const yes = Math.round((p[1] ?? 0) * 1e4) / 1e4;
+      const labels = q.labels ?? { false: "\u4E0D\u662F", true: "\u662F" };
+      const options = [
+        { key: "false", label: labels.false, probability: Math.round((1 - yes) * 1e4) / 1e4 },
+        { key: "true", label: labels.true, probability: yes }
+      ].sort((a, b) => b.probability - a.probability);
+      answers.push({
+        qid,
+        kind: "noul",
+        question,
+        options,
+        yes,
+        top: options[0].key,
+        topProbability: options[0].probability,
+        confidence
+      });
+    }
+    tokens += items[r].ids.length;
+  }
+  return { ok: true, model, answers, inferenceMs, tokens, reused: true };
+}
+
+// src/backend/wechat-data/src/query/laya-analysis.ts
+var DEFAULT_CONTEXT = 20;
+var MAX_CONTEXT = 60;
+function buildDialogueState(decryptedDir, talker, selfUsername, limit = DEFAULT_CONTEXT) {
+  const cap = Math.max(1, Math.min(Math.trunc(limit) || DEFAULT_CONTEXT, MAX_CONTEXT));
+  const snapshot = queryMessages(decryptedDir, talker, cap, void 0, selfUsername);
+  const turns = [];
+  for (const m of snapshot.messages) {
+    const text = messageText(m);
+    if (text === "") continue;
+    turns.push({ self: m.isSender === 1, text });
+  }
+  let lastPeer = -1;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (!turns[i].self) {
+      lastPeer = i;
+      break;
+    }
+  }
+  if (lastPeer < 0) return { dialogue: "", latestPeer: "", turns: [] };
+  const kept = turns.slice(0, lastPeer + 1);
+  return {
+    dialogue: kept.map((t) => `${t.self ? "\u6211" : "\u5BF9\u65B9"}\uFF1A${t.text}`).join("\n"),
+    latestPeer: kept[kept.length - 1].text,
+    turns: kept
+  };
+}
+async function analyzeSession(input) {
+  const talker = String(input.talker ?? "").trim();
+  const empty = {
+    ok: false,
+    latestPeer: "",
+    contextLines: 0,
+    dialogue: "",
+    answers: [],
+    usedModel: false,
+    note: "",
+    inferenceMs: 0,
+    tokens: 0,
+    model: { dir: "", bytes: 0 }
+  };
+  if (talker === "") return { ...empty, error: "\u7F3A\u5C11\u4F1A\u8BDD" };
+  const ctx = buildDialogueState(input.decryptedDir, talker, input.selfUsername, input.contextLimit);
+  if (ctx.dialogue === "") {
+    return { ...empty, error: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u53EF\u5206\u6790\u7684\u5BF9\u65B9\u6D88\u606F" };
+  }
+  const status = layaModelStatus(input.modelDir, input.decryptedDir);
+  const questions = input.questions ?? defaultChatQuestions();
+  if (!status.installed) {
+    return {
+      ok: false,
+      error: `\u672C\u5730\u51B3\u7B56\u6A21\u578B\u672A\u5C31\u7EEA\uFF1A${status.missing.join("\uFF1B")}`,
+      latestPeer: ctx.latestPeer,
+      contextLines: ctx.turns.length,
+      dialogue: ctx.dialogue,
+      answers: [],
+      usedModel: false,
+      note: `\u6A21\u578B\u76EE\u5F55\uFF1A${status.dir}`,
+      inferenceMs: 0,
+      tokens: 0,
+      model: { dir: status.dir, bytes: status.bytes }
+    };
+  }
+  const r = await layaAnalyze({
+    state: { dialogue: ctx.dialogue },
+    questions,
+    modelDir: input.modelDir,
+    decryptedDir: input.decryptedDir
+  });
+  return {
+    ok: r.ok,
+    error: r.error,
+    latestPeer: ctx.latestPeer,
+    contextLines: ctx.turns.length,
+    dialogue: ctx.dialogue,
+    answers: r.answers,
+    usedModel: r.ok,
+    note: r.ok ? "" : "\u63A8\u7406\u5931\u8D25\uFF0C\u672A\u4EA7\u51FA\u5224\u65AD",
+    inferenceMs: r.inferenceMs,
+    tokens: r.tokens,
+    model: r.model
+  };
+}
+
+// src/backend/wechat-data/src/remotes/laya.ts
+var LAYA_DIR_CONFIG_KEY = "laya_models_dir";
+var layaDownload = null;
+function createLayaRemotes(rc) {
+  const configuredDir = () => {
+    try {
+      const v = getConfig(rc.dirs().decrypted)[LAYA_DIR_CONFIG_KEY];
+      return typeof v === "string" ? v : "";
+    } catch {
+      return "";
+    }
+  };
+  return {
+    /**
+     * 分析一个会话：取上下文 → 本地推理 → 返回逐命题的判断。
+     *
+     * 纯本地、不出网（走的是 onnxruntime，不经过 `privacyGate` 的出网闸门）。
+     */
+    async analyzeMessages(options) {
+      const talker = String(options.talker ?? "").trim();
+      const dir = configuredDir();
+      const r = await analyzeSession({
+        decryptedDir: rc.dirs().decrypted,
+        talker,
+        selfUsername: rc.selfUsername(),
+        contextLimit: options.contextLimit,
+        modelDir: dir || void 0
+      });
+      rc.op(
+        "task",
+        "analyze_messages",
+        r.ok ? "ok" : "fail",
+        talker,
+        r.ok ? `${r.answers.length} \u9879\u5224\u65AD / ${r.inferenceMs}ms / ${r.contextLines} \u6761\u4E0A\u4E0B\u6587` : r.error ?? r.note
+      );
+      return r;
+    },
+    /** 模型与运行时状态（前端轮询）。 */
+    getLayaStatus() {
+      const dir = configuredDir();
+      const st = layaModelStatus(dir || void 0, rc.dirs().decrypted);
+      const rt = layaRuntimeState();
+      return {
+        installed: st.installed,
+        dir: st.dir,
+        path: st.path,
+        bytes: st.bytes,
+        source: st.source,
+        missing: st.missing,
+        downloading: layaDownload,
+        runtime: { loaded: rt.loaded, lastInferenceMs: rt.lastInferenceMs, lastError: rt.lastError }
+      };
+    },
+    /**
+     * 下载模型（幂等；已有任务时拒绝并发，与 whisper 同款）。
+     *
+     * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
+     */
+    async downloadLayaModel() {
+      if (layaDownload !== null) {
+        rc.op("settings", "download_laya_model", "fail", "", "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D");
+        return { ok: false, error: "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D" };
+      }
+      const existing = layaModelStatus(configuredDir() || void 0, rc.dirs().decrypted);
+      if (existing.installed) {
+        rc.op("settings", "download_laya_model", "skip", "", "\u6A21\u578B\u5DF2\u5C31\u7EEA");
+        return { ok: true, files: [], bytes: 0 };
+      }
+      const dir = existing.dir;
+      const prog = { file: "", received: 0, total: 0 };
+      layaDownload = prog;
+      try {
+        const r = await layaDownloadModel(dir, (received, total, file) => {
+          prog.file = file;
+          prog.received = received;
+          prog.total = total;
+        });
+        rc.op(
+          "settings",
+          "download_laya_model",
+          r.ok ? "ok" : "fail",
+          dir,
+          r.error ?? `\u5DF2\u4E0B\u8F7D ${formatBytes2(r.bytes ?? 0)}`
+        );
+        return r;
+      } finally {
+        layaDownload = null;
+      }
+    },
+    /** 接管一份用户已下好的模型目录（避免重复下载 1.26 GB）。 */
+    adoptLayaModel(options) {
+      const src = String(options.sourceDir ?? "").trim();
+      const dir = configuredDir();
+      if (src === "") {
+        rc.op("settings", "adopt_laya_model", "fail", "", "\u672A\u7ED9\u51FA\u6E90\u76EE\u5F55");
+        const st2 = layaModelStatus(dir || void 0, rc.dirs().decrypted);
+        return {
+          installed: st2.installed,
+          dir: st2.dir,
+          path: st2.path,
+          bytes: st2.bytes,
+          source: st2.source,
+          missing: st2.missing,
+          downloading: layaDownload,
+          runtime: (() => {
+            const rt2 = layaRuntimeState();
+            return { loaded: rt2.loaded, lastInferenceMs: rt2.lastInferenceMs, lastError: rt2.lastError };
+          })()
+        };
+      }
+      const st = layaAdoptModelDir(src, rc.dirs().decrypted);
+      rc.op(
+        "settings",
+        "adopt_laya_model",
+        st.installed ? "ok" : "fail",
+        src,
+        st.installed ? `\u5DF2\u63A5\u7BA1\u5230 ${st.dir}` : st.missing.join("\uFF1B")
+      );
+      const rt = layaRuntimeState();
+      return {
+        installed: st.installed,
+        dir: st.dir,
+        path: st.path,
+        bytes: st.bytes,
+        source: st.source,
+        missing: st.missing,
+        downloading: layaDownload,
+        runtime: { loaded: rt.loaded, lastInferenceMs: rt.lastInferenceMs, lastError: rt.lastError }
+      };
+    },
+    /** 卸载模型，释放约 1.2 GB 常驻内存（下次分析会自动重新加载）。 */
+    unloadLaya() {
+      layaUnload();
+      rc.op("settings", "unload_laya", "ok", "", "\u5DF2\u5378\u8F7D\u672C\u5730\u51B3\u7B56\u6A21\u578B");
+      return { ok: true };
+    },
+    /** 期望的模型目录（UI 提示用户「把文件放这里」用）。 */
+    getLayaModelDir() {
+      const dir = configuredDir();
+      return dir || layaModelsDir(rc.dirs().decrypted);
+    },
+    /** 期望的 tokenizer 目录（排查用）。 */
+    getLayaTokenizerDir() {
+      const dir = configuredDir();
+      return layaTokenizerDir(dir || layaModelsDir(rc.dirs().decrypted));
+    }
+  };
+}
+
 // src/backend/wechat-data/src/gateway-data-ops.ts
-var _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
-var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _a3) {
+var _unloadLaya_dec, _adoptLayaModel_dec, _downloadLayaModel_dec, _getLayaStatus_dec, _analyzeMessages_dec, _syncHandoffTasks_dec, _setTaskStatus_dec, _setPrivacyState_dec, _restoreBackup_dec, _listTasks_dec, _exportSnsVideo_dec, _getSnsVideoDataUrl_dec, _getSnsVideoCoverDataUrl_dec, _getPrivacyState_dec, _getPrivacyAuditRows_dec, _getOperationLog_dec, _getHandoffReminds_dec, _getDbHealth_dec, _extractTasks_dec, _deleteTask_dec, _createEncryptedBackup_dec, _clearPrivacyAudit_dec, _clearOperationLog_dec, _addTask_dec, _getMessageFile_dec, _getRemoteImages_dec, _getImageOriginal_dec, _getEmoticonDataUrl_dec, _getFileImageDataUrl_dec, _getSnsImageDataUrl_dec, _getImageDataUrlsBatch_dec, _getImageDataUrl_dec, _getDbStatus_dec, _transcribeVoiceBatch_dec, _installWhisperEngine_dec, _getDecryptStatus_dec, _decryptAllImages_dec, _decryptAllDatabases_dec, _verifyImageKey_dec, _openConfig_dec, _autoGetImageKey_dec, _autoGetDbKey_dec, _getWechatKeysInfo_dec, _generateKeysFile_dec, _downloadWhisperModel_dec, _getWhisperStatus_dec, _saveWechatConfig_dec, _getWechatConfigFull_dec, _getAvatarsLocal_dec, _getAvatar_dec, _pruneExportHistory_dec, _deleteExportHistory_dec, _getExportHistory_dec, _exportCsv_dec, _exportMoments_dec, _getExportProgress_dec, _cancelExportJob_dec, _exportAllSessions_dec, _exportAnnualReport_dec, _listLlmModels_dec, _listLlmProviders_dec, _deleteBackup_dec, _createBackup_dec, _previewBackup_dec, _listBackups_dec, _exportSessionMessages_dec, _getVideoInfo_dec, _getVoiceDataUrl_dec, _getVoiceInfo_dec, _getFiles_dec, _deleteNote_dec, _saveNote_dec, _getNotes_dec, _getPrivacyScan_dec, _getWechatConfig_dec, _getEmoticons_dec, _a3, _init3;
+var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Remote3("getEmoticons")], _getWechatConfig_dec = [Remote3("getWechatConfig")], _getPrivacyScan_dec = [Remote3("getPrivacyScan")], _getNotes_dec = [Remote3("getNotes")], _saveNote_dec = [Remote3("saveNote")], _deleteNote_dec = [Remote3("deleteNote")], _getFiles_dec = [Remote3("getFiles")], _getVoiceInfo_dec = [Remote3("getVoiceInfo")], _getVoiceDataUrl_dec = [Remote3("getVoiceDataUrl")], _getVideoInfo_dec = [Remote3("getVideoInfo")], _exportSessionMessages_dec = [Remote3("exportSessionMessages")], _listBackups_dec = [Remote3("listBackups")], _previewBackup_dec = [Remote3("previewBackup")], _createBackup_dec = [Remote3("createBackup")], _deleteBackup_dec = [Remote3("deleteBackup")], _listLlmProviders_dec = [Remote3("listLlmProviders")], _listLlmModels_dec = [Remote3("listLlmModels")], _exportAnnualReport_dec = [Remote3("exportAnnualReport")], _exportAllSessions_dec = [Remote3("exportAllSessions")], _cancelExportJob_dec = [Remote3("cancelExportJob")], _getExportProgress_dec = [Remote3("getExportProgress")], _exportMoments_dec = [Remote3("exportMoments")], _exportCsv_dec = [Remote3("exportCsv")], _getExportHistory_dec = [Remote3("getExportHistory")], _deleteExportHistory_dec = [Remote3("deleteExportHistory")], _pruneExportHistory_dec = [Remote3("pruneExportHistory")], _getAvatar_dec = [Remote3("getAvatar")], _getAvatarsLocal_dec = [Remote3("getAvatarsLocal")], _getWechatConfigFull_dec = [Remote3("getWechatConfigFull")], _saveWechatConfig_dec = [Remote3("saveWechatConfig")], _getWhisperStatus_dec = [Remote3("getWhisperStatus")], _downloadWhisperModel_dec = [Remote3("downloadWhisperModel")], _generateKeysFile_dec = [Remote3("generateKeysFile")], _getWechatKeysInfo_dec = [Remote3("getWechatKeysInfo")], _autoGetDbKey_dec = [Remote3("autoGetDbKey")], _autoGetImageKey_dec = [Remote3("autoGetImageKey")], _openConfig_dec = [Remote3("openConfig")], _verifyImageKey_dec = [Remote3("verifyImageKey")], _decryptAllDatabases_dec = [Remote3("decryptAllDatabases")], _decryptAllImages_dec = [Remote3("decryptAllImages")], _getDecryptStatus_dec = [Remote3("getDecryptStatus")], _installWhisperEngine_dec = [Remote3("installWhisperEngine")], _transcribeVoiceBatch_dec = [Remote3("transcribeVoiceBatch")], _getDbStatus_dec = [Remote3("getDbStatus")], _getImageDataUrl_dec = [Remote3("getImageDataUrl")], _getImageDataUrlsBatch_dec = [Remote3("getImageDataUrlsBatch")], _getSnsImageDataUrl_dec = [Remote3("getSnsImageDataUrl")], _getFileImageDataUrl_dec = [Remote3("getFileImageDataUrl")], _getEmoticonDataUrl_dec = [Remote3("getEmoticonDataUrl")], _getImageOriginal_dec = [Remote3("getImageOriginal")], _getRemoteImages_dec = [Remote3("getRemoteImages")], _getMessageFile_dec = [Remote3("getMessageFile")], _addTask_dec = [Remote3("addTask")], _clearOperationLog_dec = [Remote3("clearOperationLog")], _clearPrivacyAudit_dec = [Remote3("clearPrivacyAudit")], _createEncryptedBackup_dec = [Remote3("createEncryptedBackup")], _deleteTask_dec = [Remote3("deleteTask")], _extractTasks_dec = [Remote3("extractTasks")], _getDbHealth_dec = [Remote3("getDbHealth")], _getHandoffReminds_dec = [Remote3("getHandoffReminds")], _getOperationLog_dec = [Remote3("getOperationLog")], _getPrivacyAuditRows_dec = [Remote3("getPrivacyAuditRows")], _getPrivacyState_dec = [Remote3("getPrivacyState")], _getSnsVideoCoverDataUrl_dec = [Remote3("getSnsVideoCoverDataUrl")], _getSnsVideoDataUrl_dec = [Remote3("getSnsVideoDataUrl")], _exportSnsVideo_dec = [Remote3("exportSnsVideo")], _listTasks_dec = [Remote3("listTasks")], _restoreBackup_dec = [Remote3("restoreBackup")], _setPrivacyState_dec = [Remote3("setPrivacyState")], _setTaskStatus_dec = [Remote3("setTaskStatus")], _syncHandoffTasks_dec = [Remote3("syncHandoffTasks")], _analyzeMessages_dec = [Remote3("analyzeMessages")], _getLayaStatus_dec = [Remote3("getLayaStatus")], _downloadLayaModel_dec = [Remote3("downloadLayaModel")], _adoptLayaModel_dec = [Remote3("adoptLayaModel")], _unloadLaya_dec = [Remote3("unloadLaya")], _a3) {
   constructor() {
     super(...arguments);
     __runInitializers(_init3, 5, this);
+    this._layaRemotes = void 0;
   }
   getEmoticons(options) {
     return this.mediaRemotes().getEmoticons(options);
@@ -28090,6 +28837,32 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
   syncHandoffTasks() {
     return this.tasksRemotes().syncHandoffTasks();
   }
+  async analyzeMessages(options) {
+    return this.layaRemotes().analyzeMessages(options);
+  }
+  getLayaStatus() {
+    return this.layaRemotes().getLayaStatus();
+  }
+  async downloadLayaModel() {
+    return this.layaRemotes().downloadLayaModel();
+  }
+  adoptLayaModel(options) {
+    return this.layaRemotes().adoptLayaModel(options);
+  }
+  unloadLaya() {
+    return this.layaRemotes().unloadLaya();
+  }
+  /**
+   * 本地决策模型（分析会话消息、模型状态/下载/接管/卸载） 的处理器（体在 remotes/laya.ts）；
+   * 这里只组装 ctx 与转发。组装放在本层而不是 core，是为了不让 core 越过 1000 行上限。
+   */
+  layaRemotes() {
+    return this._layaRemotes ??= createLayaRemotes({
+      dirs: () => this._dirs,
+      selfUsername: () => this.selfUsername(),
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail)
+    });
+  }
 };
 _init3 = __decoratorStart(_a3);
 __decorateElement(_init3, 1, "getEmoticons", _getEmoticons_dec, GatewayDataOps);
@@ -28163,6 +28936,11 @@ __decorateElement(_init3, 1, "restoreBackup", _restoreBackup_dec, GatewayDataOps
 __decorateElement(_init3, 1, "setPrivacyState", _setPrivacyState_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "setTaskStatus", _setTaskStatus_dec, GatewayDataOps);
 __decorateElement(_init3, 1, "syncHandoffTasks", _syncHandoffTasks_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "analyzeMessages", _analyzeMessages_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "getLayaStatus", _getLayaStatus_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "downloadLayaModel", _downloadLayaModel_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "adoptLayaModel", _adoptLayaModel_dec, GatewayDataOps);
+__decorateElement(_init3, 1, "unloadLaya", _unloadLaya_dec, GatewayDataOps);
 __decoratorMetadata(_init3, GatewayDataOps);
 
 // src/backend/wechat-data/src/gateway.ts

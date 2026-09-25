@@ -15,3 +15,4 @@ export * from './types-ops.ts';
 export * from './types-analytics.ts';
 export * from './types-calls.ts';
 export * from './types-config.ts';
+export * from './types-laya.ts';

@@ -106,6 +106,9 @@ import type {
   WechatConfigPatch,
   WhisperDownloadResult,
   WhisperStatus,
+  LayaAnalysisView,
+  LayaDownloadOutcome,
+  LayaStatus,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
@@ -232,6 +235,11 @@ export interface WechatRemote {
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlyRow[]>>
   getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number }>>
+  analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<RemoteResult<LayaAnalysisView>>
+  getLayaStatus(): Promise<RemoteResult<LayaStatus>>
+  downloadLayaModel(): Promise<RemoteResult<LayaDownloadOutcome>>
+  adoptLayaModel(options: { sourceDir: string }): Promise<RemoteResult<LayaStatus>>
+  unloadLaya(): Promise<RemoteResult<{ ok: boolean }>>
   getFavorites(options?: { limit?: number; offset?: number; q?: string }): Promise<RemoteResult<FavoritesSnapshot>>
   getAssetInsights(): Promise<RemoteResult<AssetInsightsSnapshot>>
   getOfficialAssets(): Promise<RemoteResult<OfficialAssetsSnapshot>>

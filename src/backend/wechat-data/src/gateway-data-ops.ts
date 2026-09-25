@@ -6,7 +6,7 @@
  */
 
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus } from './types.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
 import { getDbStatus } from './query/status.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
@@ -20,6 +20,7 @@ import { deleteTask, insertTask, listTasks as listWechatTasks, setTaskStatus } f
 import { createEncryptedBackup, restoreEncryptedBackup } from './query/backup.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
 import { GatewayAskOps } from './gateway-ask-ops.ts'
+import { createLayaRemotes } from './remotes/laya.ts'
 
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export abstract class GatewayDataOps extends GatewayAskOps {
@@ -783,5 +784,73 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   @Remote('syncHandoffTasks')
   syncHandoffTasks(): TaskMutationResult {
     return this.tasksRemotes().syncHandoffTasks()
+  }
+
+  /**
+   * Analyze one conversation with the **local** decision model
+   * (laya · onnxruntime-node + JS tokenizer; no network, no LLM, not gated by the
+   * outbound privacy gate). Answers are per-question probability distributions.
+   * @param options - talker (conversation username) + optional context limit (default 20, max 60).
+   * @returns LayaAnalysisView: per-question answers, or `ok:false` with the reason the
+   *   model is not ready (missing files / load failure) — an expected path, not an exception.
+   */
+  @Remote('analyzeMessages')
+  async analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<LayaAnalysisView> {
+    return this.layaRemotes().analyzeMessages(options)
+  }
+
+  /**
+   * Local decision model status: required files (model graph + tokenizer), size, source,
+   * active download progress and runtime state (loaded / last inference ms / last error).
+   * @returns LayaStatus.
+   */
+  @Remote('getLayaStatus')
+  getLayaStatus(): LayaStatus {
+    return this.layaRemotes().getLayaStatus()
+  }
+
+  /**
+   * Download the decision model assets (~1.26 GB: graph + tokenizer) into the data dir.
+   * Streamed with resume + atomic publish, mirror fallback; idempotent.
+   * @returns LayaDownloadOutcome.
+   */
+  @Remote('downloadLayaModel')
+  async downloadLayaModel(): Promise<LayaDownloadOutcome> {
+    return this.layaRemotes().downloadLayaModel()
+  }
+
+  /**
+   * Adopt an already-downloaded model directory (move it into the data dir) so the
+   * same 1.26 GB does not have to be fetched twice.
+   * @param options - sourceDir containing the model + tokenizer layout.
+   * @returns LayaStatus after the move.
+   */
+  @Remote('adoptLayaModel')
+  adoptLayaModel(options: { sourceDir: string }): LayaStatus {
+    return this.layaRemotes().adoptLayaModel(options)
+  }
+
+  /**
+   * Unload the model, releasing roughly 1.2 GB of resident memory. The next analysis
+   * call loads it again.
+   * @returns SimpleResult.
+   */
+  @Remote('unloadLaya')
+  unloadLaya(): { ok: boolean } {
+    return this.layaRemotes().unloadLaya()
+  }
+
+  protected _layaRemotes?: ReturnType<typeof createLayaRemotes>
+
+  /**
+   * 本地决策模型（分析会话消息、模型状态/下载/接管/卸载） 的处理器（体在 remotes/laya.ts）；
+   * 这里只组装 ctx 与转发。组装放在本层而不是 core，是为了不让 core 越过 1000 行上限。
+   */
+  protected layaRemotes(): ReturnType<typeof createLayaRemotes> {
+    return (this._layaRemotes ??= createLayaRemotes({
+      dirs: () => this._dirs,
+      selfUsername: () => this.selfUsername(),
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+    }))
   }
 }

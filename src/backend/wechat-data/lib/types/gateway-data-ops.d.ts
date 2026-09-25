@@ -4,9 +4,10 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult } from './types.ts';
+import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus } from './types.ts';
 import type { ImageBatchItem } from './remotes/media.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
+import { createLayaRemotes } from './remotes/laya.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export declare abstract class GatewayDataOps extends GatewayAskOps {
     /**
@@ -658,4 +659,51 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         status: 'open' | 'done';
     }): TaskMutationResult;
     syncHandoffTasks(): TaskMutationResult;
+    /**
+     * Analyze one conversation with the **local** decision model
+     * (laya · onnxruntime-node + JS tokenizer; no network, no LLM, not gated by the
+     * outbound privacy gate). Answers are per-question probability distributions.
+     * @param options - talker (conversation username) + optional context limit (default 20, max 60).
+     * @returns LayaAnalysisView: per-question answers, or `ok:false` with the reason the
+     *   model is not ready (missing files / load failure) — an expected path, not an exception.
+     */
+    analyzeMessages(options: {
+        talker: string;
+        contextLimit?: number;
+    }): Promise<LayaAnalysisView>;
+    /**
+     * Local decision model status: required files (model graph + tokenizer), size, source,
+     * active download progress and runtime state (loaded / last inference ms / last error).
+     * @returns LayaStatus.
+     */
+    getLayaStatus(): LayaStatus;
+    /**
+     * Download the decision model assets (~1.26 GB: graph + tokenizer) into the data dir.
+     * Streamed with resume + atomic publish, mirror fallback; idempotent.
+     * @returns LayaDownloadOutcome.
+     */
+    downloadLayaModel(): Promise<LayaDownloadOutcome>;
+    /**
+     * Adopt an already-downloaded model directory (move it into the data dir) so the
+     * same 1.26 GB does not have to be fetched twice.
+     * @param options - sourceDir containing the model + tokenizer layout.
+     * @returns LayaStatus after the move.
+     */
+    adoptLayaModel(options: {
+        sourceDir: string;
+    }): LayaStatus;
+    /**
+     * Unload the model, releasing roughly 1.2 GB of resident memory. The next analysis
+     * call loads it again.
+     * @returns SimpleResult.
+     */
+    unloadLaya(): {
+        ok: boolean;
+    };
+    protected _layaRemotes?: ReturnType<typeof createLayaRemotes>;
+    /**
+     * 本地决策模型（分析会话消息、模型状态/下载/接管/卸载） 的处理器（体在 remotes/laya.ts）；
+     * 这里只组装 ctx 与转发。组装放在本层而不是 core，是为了不让 core 越过 1000 行上限。
+     */
+    protected layaRemotes(): ReturnType<typeof createLayaRemotes>;
 }

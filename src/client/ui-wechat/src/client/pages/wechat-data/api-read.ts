@@ -105,6 +105,9 @@ import type {
   WechatConfigPatch,
   WhisperDownloadResult,
   WhisperStatus,
+  LayaAnalysisView,
+  LayaDownloadOutcome,
+  LayaStatus,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
@@ -232,6 +235,53 @@ export async function apiGetMomentsMonthly(options?: { author?: string; authorNa
  */
 export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<{ words: Array<{ text: string; count: number }>; scanned: number }> {
   return unwrap(await remote().getWordCloud(options))
+}
+
+/**
+ * Analyze one conversation with the local decision model (laya · onnxruntime).
+ *
+ * Runs entirely on this machine: no network call, no LLM, not routed through the
+ * outbound privacy gate. A missing model is a normal outcome, not an exception —
+ * inspect `ok` / `error` / `note`.
+ * @param options - 会话 username 与可选上下文条数（默认 20，上限 60）。
+ * @returns 逐命题的判断（概率分布 / 分值）。
+ */
+export async function apiAnalyzeMessages(options: { talker: string; contextLimit?: number }): Promise<LayaAnalysisView> {
+  return unwrap(await remote().analyzeMessages(options))
+}
+
+/**
+ * Local decision model status: required files, size, source dir, download progress
+ * and runtime state (loaded / last inference ms / last error).
+ * @returns LayaStatus.
+ */
+export async function apiGetLayaStatus(): Promise<LayaStatus> {
+  return unwrap(await remote().getLayaStatus())
+}
+
+/**
+ * Download the decision model assets (~1.26 GB) into the data dir.
+ * @returns LayaDownloadOutcome.
+ */
+export async function apiDownloadLayaModel(): Promise<LayaDownloadOutcome> {
+  return unwrap(await remote().downloadLayaModel())
+}
+
+/**
+ * Adopt an already-downloaded model directory (move into the data dir).
+ * @param options - sourceDir.
+ * @returns LayaStatus.
+ */
+export async function apiAdoptLayaModel(options: { sourceDir: string }): Promise<LayaStatus> {
+  return unwrap(await remote().adoptLayaModel(options))
+}
+
+/**
+ * Unload the model and release its resident memory.
+ * @returns { ok }.
+ */
+export async function apiUnloadLaya(): Promise<{ ok: boolean }> {
+  return unwrap(await remote().unloadLaya())
 }
 /**
  * Fetch the favorites list.

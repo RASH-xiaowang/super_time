@@ -85,7 +85,7 @@ const DOWNLOAD_MAX_ATTEMPTS = 2
  * @param onProgress - 进度回调（received 含续传已有的部分；total 未知时为 0）。
  * @returns 最终字节数（含续传部分）。
  */
-async function streamUrlToFile(
+export async function streamUrlToFile(
   url: string,
   dest: string,
   timeoutMs: number,
