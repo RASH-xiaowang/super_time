@@ -69,7 +69,7 @@
   flex-direction: column;
   position: relative;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -89,7 +89,7 @@
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: var(--nm-bg-input);
   color: var(--nm-text-2);
   font-size: 12px;
@@ -342,7 +342,7 @@
   padding: 6px 8px;
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border-hover);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   box-shadow: 0 0 24px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
   corner-shape: round;
 }
@@ -358,8 +358,8 @@
   background: transparent;
   color: var(--nm-text-1);
   cursor: pointer;
-  padding: 5px;
-  border-radius: 8px;
+  padding: 4px;
+  border-radius: var(--nm-dense-r);
   line-height: 1;
   display: inline-flex;
   transition: var(--nm-t-ui);
@@ -372,7 +372,7 @@
   object-fit: contain;
   cursor: grab;
   transition: transform 0.08s linear;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   box-shadow: 0 0 40px color-mix(in srgb, var(--nm-cyan) 18%, transparent);
 }
 .viewerMsg { color: var(--nm-text-2); font-size: 14px; padding: 20px; }
@@ -585,7 +585,7 @@
   color: var(--nm-text-1);
   font-size: 12px;
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   cursor: pointer;
   transition: var(--nm-t-ui);
   corner-shape: round;
@@ -607,7 +607,7 @@
   height: 34px;
   padding: 0 10px 0 30px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: var(--wx-search-bg);
   font-size: var(--wx-info-meta);
   color: var(--nm-text-1);
@@ -638,7 +638,7 @@
   padding: 2px 0;
   cursor: pointer;
   font: inherit;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   transition: var(--nm-t-ui);
 }
 .memberTile:hover { background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 6%, transparent); }

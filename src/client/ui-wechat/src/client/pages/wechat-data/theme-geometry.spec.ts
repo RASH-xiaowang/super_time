@@ -126,24 +126,21 @@ function scan(): ScanResult {
 
 /** ── 基线（2026-09-25 实测：62 文件 / br 583 / sp 1466 / illegal 325 / pill 81 / circle 66 / odd 122）── */
 const RADIUS_BASELINE: Record<string, Record<string, number>> = {
-  'ui-wechat/src/client/pages/wechat-data/panels/chats-cards.module.css': { '8px': 11, '6px': 7, '10px': 4, '4px': 3, '12px': 2, '14px': 1, '16px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': { '8px': 3, '6px': 3, '2px': 3, '4px': 2, '14px': 1, '3px': 1 },
+  'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': { '2px': 3, '4px': 2, '6px': 1, '3px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css': { '3px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': { '2px': 6, '4px': 3, '9px': 2, '10px': 1 },
+  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': { '2px': 6, '9px': 2, '4px': 2, '10px': 1 },
 }
 
 const ODD_SPACING_BASELINE: Record<string, number> = {
   'ui-primitives-shim/src/Button.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/chats-cards.module.css': 8,
-  'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': 2,
-  'ui-wechat/src/client/pages/wechat-data/panels/chats-shell.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 4,
+  'ui-wechat/src/client/pages/wechat-data/panels/chats-rows.module.css': 1,
+  'ui-wechat/src/client/pages/wechat-data/panels/chats.module.css': 3,
 }
 
-const PILL_MAX = 8
+const PILL_MAX = 3
 const CIRCLE_MAX = 66
-const ILLEGAL_RADIUS_TOTAL_MAX = 55
-const ODD_SPACING_TOTAL_MAX = 16
+const ILLEGAL_RADIUS_TOTAL_MAX = 19
+const ODD_SPACING_TOTAL_MAX = 5
 const FILES_MIN = 61
 const BR_DECL_MIN = 500
 const SP_DECL_MIN = 1200

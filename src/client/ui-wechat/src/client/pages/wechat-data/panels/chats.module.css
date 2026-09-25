@@ -77,8 +77,8 @@
   color: var(--nm-purple);
   background: color-mix(in srgb, var(--nm-purple) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-purple) 30%, transparent);
-  border-radius: 4px;
-  padding: 1px 5px;
+  border-radius: var(--nm-r-xs);
+  padding: 1px 4px;
   flex-shrink: 0;
 }
 .sessionTimeGroup { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }

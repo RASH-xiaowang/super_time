@@ -146,7 +146,7 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 20px 16px 18px;
+  padding: 20px 16px 20px;
 }
 .memberProfileName {
   font-size: 14px;
