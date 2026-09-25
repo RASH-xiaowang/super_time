@@ -18,7 +18,7 @@
   width: 100%;
   max-width: 440px;
   padding: 28px 28px 22px;
-  border-radius: 16px;
+  border-radius: var(--nm-r-lg, 14px);
   border: 1px solid rgba(0, 240, 255, 0.16);
   background: rgba(13, 21, 40, 0.72);
   backdrop-filter: blur(12px);
@@ -45,14 +45,14 @@
 }
 
 .lead {
-  margin: 0 0 18px;
+  margin: 0 0 16px;
   font-size: 13px;
   line-height: 1.7;
   color: var(--nm-text-2, #94a3b8);
 }
 
 .meta {
-  margin: 0 0 18px;
+  margin: 0 0 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -94,10 +94,10 @@
 .primary,
 .ghost {
   appearance: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r, 8px);
   font-size: 13px;
   font-weight: 600;
-  padding: 9px 14px;
+  padding: 8px 14px;
   cursor: pointer;
   font-family: inherit;
 }
@@ -194,7 +194,7 @@
   width: 100%;
   min-height: 88px;
   resize: vertical;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r, 8px);
   border: 1px solid rgba(0, 240, 255, 0.18);
   background: rgba(5, 10, 24, 0.55);
   color: var(--nm-text-1, #e2e8f0);

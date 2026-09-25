@@ -556,7 +556,7 @@
   color: var(--nm-text-2);
   background: transparent;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   cursor: pointer;
   transition: var(--nm-t-ui, color .15s, border-color .15s, background .15s);
 }
@@ -597,7 +597,7 @@
 .skelCard { height: 120px; }
 /* 骨架头像的圆角取 10px（真头像 `.avatar` 也是 10px）：原行内值是 9px，
    不在圆角刻度（2/4/6/8/10/12/14/16）上，搬进 CSS 会被 audit:scale 拦下 —— 正好顺手对齐真头像。 */
-.skelAvatar { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; }
+.skelAvatar { width: 34px; height: 34px; border-radius: var(--nm-r-md); flex-shrink: 0; }
 .skelLine { width: 55%; height: 12px; flex-shrink: 1; }
 .skelMeta { width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
 /* 列表哨兵：2px 占位，靠 IntersectionObserver 触发下一页。 */
@@ -641,7 +641,7 @@
   width: 18px;
   height: 18px;
   border: 1px solid var(--nm-border);
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: var(--nm-bg-input);
   display: inline-flex;
   align-items: center;
@@ -667,7 +667,7 @@
  * ──────────────────────────────────────────── */
 .error {
   border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
   color: var(--nm-danger);
   font-size: var(--nm-empty-fs);
@@ -750,7 +750,7 @@
   color: var(--nm-text-2);
   background: transparent;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }

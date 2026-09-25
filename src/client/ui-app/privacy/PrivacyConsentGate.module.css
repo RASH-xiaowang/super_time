@@ -30,7 +30,7 @@
   max-width: 1200px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
 /* ── 左右两栏，小节按序流下 ───────────────────────────────
@@ -82,7 +82,7 @@
   color: var(--nm-cyan, #00f0ff);
   background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  border-radius: 5px;
+  border-radius: var(--nm-r-sm, 6px);
   padding: 1px 6px;
 }
 
@@ -90,7 +90,7 @@
 .verdict {
   position: relative;
   padding: 16px 20px 16px 22px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg, 14px);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
   background: linear-gradient(
     135deg,
@@ -105,12 +105,12 @@
   top: 12px;
   bottom: 12px;
   width: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs, 4px);
   background: var(--nm-cyan, #00f0ff);
 }
 .verdictTag {
   display: block;
-  margin-bottom: 9px;
+  margin-bottom: 8px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -122,7 +122,7 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 .verdictList li {
   position: relative;
@@ -141,8 +141,8 @@
 
 /* ── 编号分节 ───────────────────────────────────────────── */
 .sec {
-  padding: 16px 18px;
-  border-radius: 12px;
+  padding: 16px 20px;
+  border-radius: var(--nm-r-lg, 14px);
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: var(--nm-bg-card, #0f172a);
   /* 出网点的行布局按**卡片自身宽度**适配（见文末 @container），
@@ -164,13 +164,13 @@
   line-height: 1.8;
   color: var(--nm-text-2, #94a3b8);
 }
-.p + .p { margin-top: 7px; }
+.p + .p { margin-top: 8px; }
 
 /* 关键句：本节的「圈起来」落点 */
 .keyBox {
   margin: 11px 0 0;
   padding: 11px 14px;
-  border-radius: 9px;
+  border-radius: var(--nm-r-md, 10px);
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.75;
@@ -180,11 +180,11 @@
 }
 
 /* 保证条款：逐条独立成格，便于数清「做了/没做」 */
-.pills { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 .pill {
   font-size: 12.5px;
   font-weight: 600;
-  padding: 5px 11px;
+  padding: 4px 11px;
   border-radius: 999px;
   color: var(--nm-text-1, #e2e8f0);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
@@ -204,7 +204,7 @@
   color: var(--nm-text-2, #94a3b8);
 }
 .statChip {
-  padding: 3px 9px;
+  padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
@@ -222,7 +222,7 @@
   gap: 12px;
   align-items: start;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md, 10px);
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
 }
@@ -284,7 +284,7 @@
   top: 9px;
   bottom: 9px;
   width: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs, 4px);
   background: var(--nm-amber, #f59e0b);
 }
 .rowNone .rowLabel { color: var(--nm-amber, #f59e0b); }
@@ -298,7 +298,7 @@
 .caveat {
   margin: 12px 0 0;
   padding: 11px 14px;
-  border-radius: 9px;
+  border-radius: var(--nm-r-md, 10px);
   font-size: 12.5px;
   line-height: 1.75;
   color: var(--nm-text-2, #94a3b8);
@@ -313,7 +313,7 @@
   gap: 12px;
   align-items: flex-start;
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg, 14px);
   cursor: pointer;
   border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
   background: var(--nm-bg-card, #0f172a);
@@ -339,8 +339,8 @@
 
 .actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
 .btn {
-  padding: 10px 18px;
-  border-radius: 10px;
+  padding: 10px 20px;
+  border-radius: var(--nm-r-md, 10px);
   font-family: inherit;
   font-size: 13px;
   cursor: pointer;

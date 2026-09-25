@@ -64,7 +64,7 @@
 .thBtn:focus-visible {
   outline: 2px solid var(--nm-cyan);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
 }
 
 .thInner {

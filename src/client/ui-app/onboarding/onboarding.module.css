@@ -476,7 +476,7 @@
 .brandIcon {
   width: 38px;
   height: 38px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-md, 10px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -599,7 +599,7 @@
   content: '';
   width: 3px;
   height: 12px;
-  border-radius: 2px;
+  border-radius: var(--nm-r-xs, 4px);
   background: linear-gradient(180deg, var(--nm-cyan), var(--nm-purple));
   box-shadow: 0 0 8px rgba(0, 240, 255, 0.45);
   align-self: center;
@@ -610,7 +610,7 @@
   color: inherit;
   border: 1px solid rgba(0, 240, 255, 0.1);
   background: rgba(5, 10, 24, 0.25);
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg, 14px);
   padding: 14px 14px 16px;
   cursor: pointer;
   transition: var(--nm-t-ui);
@@ -701,7 +701,7 @@
   display: grid;
   grid-template-columns: 52px 1fr;
   gap: 16px;
-  padding: 18px 0;
+  padding: 16px 0;
   border-top: 1px solid rgba(0, 240, 255, 0.1);
   position: relative;
 }
@@ -797,7 +797,7 @@
 }
 .btn {
   appearance: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r, 8px);
   font-size: 13px;
   font-weight: 600;
   padding: 8px 16px;

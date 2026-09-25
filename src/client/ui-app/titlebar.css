@@ -44,7 +44,7 @@ body {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 7px;
+  border-radius: var(--nm-r-sm, 6px);
   color: var(--dsw-alias-brand-primary, #00f0ff);
   background: rgba(0, 240, 255, 0.08);
   border: 1px solid rgba(0, 240, 255, 0.25);
