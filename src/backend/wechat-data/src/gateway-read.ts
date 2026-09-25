@@ -36,6 +36,7 @@ import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, de
 import { adaptWeights, attributeFeatures, feedbackStats, listFeedback, loadAdaptedWeights, recordFeedback, saveAdaptedWeights } from './query/retrieval/feedback.ts'
 import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'
 import { queryLedger } from './query/ledger.ts'
+import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts'
 import { queryContact360 } from './query/contact360.ts'
 import { queryGroupInsights } from './query/group-insights.ts'
 import { queryAssetInsights } from './query/asset-insights.ts'
@@ -559,6 +560,11 @@ export abstract class GatewayRead extends GatewayCore {
   @Remote('getMediaAssets')
   getMediaAssets(): MediaAssetsSnapshot {
     return queryMediaAssets(this._dirs.decrypted)
+  }
+
+  @Remote('getWordCloud')
+  getWordCloud(options?: WordCloudOptions): WordCloudResult {
+    return this.wordcloudRemotes().getWordCloud(options)
   }
 
   @Remote('getMomentsInsights')

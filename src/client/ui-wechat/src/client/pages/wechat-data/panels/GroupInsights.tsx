@@ -10,6 +10,7 @@ import kitCss from '../ui/kit.module.css'
 import css from './group-insights.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
+import { WordCloudCard } from './WordCloudCard.tsx'
 
 function fmtTs(ts?: number | null): string {
   if (!ts) return '—'
@@ -160,6 +161,8 @@ export function GroupInsightsPanel({
                 <div className={kitCss.emptyInline}>暂无群公告</div>
               )}
             </Card>
+
+            <WordCloudCard scope="chat" username={data.username} />
           </div>
         </>
       )}

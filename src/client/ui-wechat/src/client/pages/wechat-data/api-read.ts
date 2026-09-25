@@ -225,6 +225,15 @@ export async function apiGetMomentsMonthly(options?: { author?: string; authorNa
   return unwrap(await remote().getMomentsMonthly(options))
 }
 /**
+ * 词云词频（界面优化阶段 4）：scope=global（可带年份）/ chat（单会话）/ moments（朋友圈正文）。
+ * 本地 bigram 计数 + 实体保护 + 双重停用过滤；每次现算，不落库。
+ * @param options - scope / username / year / limit（默认 60）。
+ * @returns Top-N 词频与扫描条数。
+ */
+export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<{ words: Array<{ text: string; count: number }>; scanned: number }> {
+  return unwrap(await remote().getWordCloud(options))
+}
+/**
  * Fetch the favorites list.
  * @param options - Query options: limit.
  * @returns FavoritesSnapshot.

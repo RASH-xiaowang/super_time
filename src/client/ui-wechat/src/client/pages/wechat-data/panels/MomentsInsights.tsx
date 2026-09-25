@@ -10,6 +10,7 @@ import { FootprintMap } from './FootprintMap.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './moments-insights.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
+import { WordCloudCard } from './WordCloudCard.tsx'
 
 function fmtTs(ts: number): string {
   const d = new Date(ts * 1000)
@@ -92,6 +93,8 @@ export function MomentsInsightsPanel(): React.JSX.Element {
                 </div>
               )}
             </Card>
+
+            <WordCloudCard scope="moments" />
           </div>
 
           <div className={kitCss.cardGrid}>

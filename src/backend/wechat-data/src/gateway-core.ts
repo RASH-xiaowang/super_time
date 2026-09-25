@@ -18,6 +18,7 @@ import { resolveSelfUsername } from './query/config.ts'
 import { startRealtimeSync } from './query/sync.ts'
 import { createTasksRemotes } from './remotes/tasks.ts'
 import { createOpsLogRemotes } from './remotes/opslog.ts'
+import { createWordcloudRemotes } from './remotes/wordcloud.ts'
 import { createBackupRemotes } from './remotes/backup.ts'
 import { createConfigRemotes } from './remotes/config.ts'
 import { createSummaryRemotes } from './remotes/summary.ts'
@@ -612,6 +613,15 @@ export abstract class GatewayCore extends TypertRemoteService {
     return (this._opsLogRemotes ??= createOpsLogRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+    }))
+  }
+
+  protected _wordcloudRemotes?: ReturnType<typeof createWordcloudRemotes>
+
+  /** 词云词频（界面优化阶段 4） 的处理器（体在 remotes/wordcloud.ts）；这里只组装 ctx 与转发。 */
+  protected wordcloudRemotes(): ReturnType<typeof createWordcloudRemotes> {
+    return (this._wordcloudRemotes ??= createWordcloudRemotes({
+      dirs: () => this._dirs,
     }))
   }
 

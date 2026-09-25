@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { AskResult, DecryptStatus, ExportStatus, SummaryTaskRunResult, WhisperDownloadProgress, WhisperTranscribing, OperationCategory, OperationStatus } from './types.ts';
 import { createTasksRemotes } from './remotes/tasks.ts';
 import { createOpsLogRemotes } from './remotes/opslog.ts';
+import { createWordcloudRemotes } from './remotes/wordcloud.ts';
 import { createBackupRemotes } from './remotes/backup.ts';
 import { createConfigRemotes } from './remotes/config.ts';
 import { createSummaryRemotes } from './remotes/summary.ts';
@@ -301,6 +302,9 @@ export declare abstract class GatewayCore extends TypertRemoteService {
     protected _opsLogRemotes?: ReturnType<typeof createOpsLogRemotes>;
     /** 操作日志与隐私审计（含隐私开关读数） 的处理器（体在 remotes/opslog.ts）；这里只组装 ctx 与转发。 */
     protected opsLogRemotes(): ReturnType<typeof createOpsLogRemotes>;
+    protected _wordcloudRemotes?: ReturnType<typeof createWordcloudRemotes>;
+    /** 词云词频（界面优化阶段 4） 的处理器（体在 remotes/wordcloud.ts）；这里只组装 ctx 与转发。 */
+    protected wordcloudRemotes(): ReturnType<typeof createWordcloudRemotes>;
     protected _backupRemotes?: ReturnType<typeof createBackupRemotes>;
     /** 备份与恢复（含加密备份） 的处理器（体在 remotes/backup.ts）；这里只组装 ctx 与转发。 */
     protected backupRemotes(): ReturnType<typeof createBackupRemotes>;

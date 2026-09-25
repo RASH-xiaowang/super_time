@@ -1,0 +1,35 @@
+/* 词云卡片（界面优化阶段 4）——全令牌起步（UI-GEOMETRY-SPEC 样板：零字面量圆角/间距）。 */
+.cloud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--nm-s-2);
+  padding: var(--nm-s-3) 0;
+  line-height: 1.5;
+}
+
+.cloud > span {
+  cursor: default;
+  transition: var(--nm-t-ui);
+  user-select: none;
+}
+
+.cloud > span:hover {
+  filter: brightness(1.25);
+  text-shadow: 0 0 8px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+/* 权重三阶（低=次级文本、中=蓝、高=青，霓虹主题的强调梯度） */
+.low {
+  color: var(--nm-text-2);
+}
+
+.mid {
+  color: var(--nm-blue);
+}
+
+.high {
+  color: var(--nm-cyan);
+  font-weight: 600;
+}

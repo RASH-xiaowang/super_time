@@ -6,6 +6,7 @@
  */
 import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
+import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
 import { type AnnualReview } from './query/annual-review.ts';
 import { GatewayCore } from './gateway-core.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -363,6 +364,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         month?: string;
     }): LedgerSnapshot;
     getMediaAssets(): MediaAssetsSnapshot;
+    getWordCloud(options?: WordCloudOptions): WordCloudResult;
     getMomentsInsights(options?: {
         author?: string;
     }): MomentsInsightsSnapshot;

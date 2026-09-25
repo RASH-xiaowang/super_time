@@ -4,7 +4,7 @@
 > `@Remote('name')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。
 > CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。
 
-当前共 **162** 个 Remote 方法。
+当前共 **163** 个 Remote 方法。
 
 渲染进程通过这些方法与后端通信（`gateway.ts` 是唯一分发点）：
 渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →
@@ -134,50 +134,51 @@
 | 116 | `getWechatConfigFull` | Read the full WeChat config (incl. |
 | 117 | `getWechatKeysInfo` | Read all_keys.json info. |
 | 118 | `getWhisperStatus` | Whisper transcription configuration status: engine detection, CUDA presence, models dir + installed ggml bina… |
-| 119 | `installWhisperEngine` | Download + install the whisper.cpp CLI engine into the models dir (`<modelsDir>/bin/whisper-cli.exe`), persis… |
-| 120 | `listBackups` | List local WeChat backups. |
-| 121 | `listEditedMessages` | List edited messages (optionally for one session). |
-| 122 | `listLlmModels` | List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider cat… |
-| 123 | `listLlmProviders` | List the daily-summary model provider(s): the default model's provider (the one the user actually configured)… |
-| 124 | `listRetrievalFeedback` | 列出最近的问答反馈 + 汇总统计。 |
-| 125 | `listSummaryRecords` | List generated summary records. |
-| 126 | `listSummaryTasks` | List daily-summary tasks. |
-| 127 | `listTasks` | — |
-| 128 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
-| 129 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
-| 130 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
-| 131 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
-| 132 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
-| 133 | `renameKb` | Rename one knowledge base. |
-| 134 | `resetEditedMessage` | Restore a message to its original content. |
-| 135 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
-| 136 | `resolveChatHistory` | — |
-| 137 | `restoreBackup` | — |
-| 138 | `runSummaryTask` | — |
-| 139 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
-| 140 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
-| 141 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
-| 142 | `saveWechatConfig` | Save the WeChat config (merge patch). |
-| 143 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
-| 144 | `searchMembers` | Contact / group-member search. |
-| 145 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
-| 146 | `searchUnified` | — |
-| 147 | `setCdnImageEnabled` | Set CDN auto-fetch flag. |
-| 148 | `setCdnImageLocalDecrypt` | Set CDN local/service decrypt flag. |
-| 149 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
-| 150 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
-| 151 | `setPrivacyState` | — |
-| 152 | `setTaskStatus` | — |
-| 153 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
-| 154 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
-| 155 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
-| 156 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
-| 157 | `syncHandoffTasks` | — |
-| 158 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
-| 159 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
-| 160 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
-| 161 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
-| 162 | `verifyImageKey` | — |
+| 119 | `getWordCloud` | — |
+| 120 | `installWhisperEngine` | Download + install the whisper.cpp CLI engine into the models dir (`<modelsDir>/bin/whisper-cli.exe`), persis… |
+| 121 | `listBackups` | List local WeChat backups. |
+| 122 | `listEditedMessages` | List edited messages (optionally for one session). |
+| 123 | `listLlmModels` | List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider cat… |
+| 124 | `listLlmProviders` | List the daily-summary model provider(s): the default model's provider (the one the user actually configured)… |
+| 125 | `listRetrievalFeedback` | 列出最近的问答反馈 + 汇总统计。 |
+| 126 | `listSummaryRecords` | List generated summary records. |
+| 127 | `listSummaryTasks` | List daily-summary tasks. |
+| 128 | `listTasks` | — |
+| 129 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
+| 130 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
+| 131 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
+| 132 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
+| 133 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
+| 134 | `renameKb` | Rename one knowledge base. |
+| 135 | `resetEditedMessage` | Restore a message to its original content. |
+| 136 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
+| 137 | `resolveChatHistory` | — |
+| 138 | `restoreBackup` | — |
+| 139 | `runSummaryTask` | — |
+| 140 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
+| 141 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
+| 142 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
+| 143 | `saveWechatConfig` | Save the WeChat config (merge patch). |
+| 144 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
+| 145 | `searchMembers` | Contact / group-member search. |
+| 146 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
+| 147 | `searchUnified` | — |
+| 148 | `setCdnImageEnabled` | Set CDN auto-fetch flag. |
+| 149 | `setCdnImageLocalDecrypt` | Set CDN local/service decrypt flag. |
+| 150 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
+| 151 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
+| 152 | `setPrivacyState` | — |
+| 153 | `setTaskStatus` | — |
+| 154 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
+| 155 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
+| 156 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
+| 157 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
+| 158 | `syncHandoffTasks` | — |
+| 159 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
+| 160 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
+| 161 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
+| 162 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
+| 163 | `verifyImageKey` | — |
 
 ## 明细
 
@@ -1389,6 +1390,14 @@ getWhisperStatus(): WhisperStatus
 Whisper transcription configuration status: engine detection, CUDA presence, models dir + installed ggml binaries, active download progress (inference itself stays bridge-side).
 
 - @returns WhisperStatus: engine/hasCuda/models inventory.
+
+### `getWordCloud`
+
+```ts
+getWordCloud(options?: WordCloudOptions): WordCloudResult
+```
+
+_（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
 
 ### `installWhisperEngine`
 

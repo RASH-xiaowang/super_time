@@ -18,6 +18,7 @@ import {
 } from '../api.ts'
 import { LazyMount, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { CalendarHeatmap } from './CalendarHeatmap.tsx'
+import { WordCloudCard } from './WordCloudCard.tsx'
 import { RegionBoard } from './RegionBoard.tsx'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, PanelHeader, StatCard } from '../ui/kit.tsx'
@@ -270,6 +271,10 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                 </div>
                 <RegionBoard />
               </div>
+            </OvSection>
+
+            <OvSection span={css.ovSpan4} icon="content" title="全局热词">
+              <WordCloudCard scope="global" limit={40} />
             </OvSection>
 
             {extras && (

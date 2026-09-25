@@ -231,6 +231,7 @@ export interface WechatRemote {
   getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
   getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlyRow[]>>
+  getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number }>>
   getFavorites(options?: { limit?: number; offset?: number; q?: string }): Promise<RemoteResult<FavoritesSnapshot>>
   getAssetInsights(): Promise<RemoteResult<AssetInsightsSnapshot>>
   getOfficialAssets(): Promise<RemoteResult<OfficialAssetsSnapshot>>
