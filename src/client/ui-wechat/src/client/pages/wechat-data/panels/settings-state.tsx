@@ -9,14 +9,14 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
 import { PollRegistry, createPollRegistry } from './poll-registry.ts'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { ImageUpgradeResult, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /** 面板的入参（与 SettingsPanelProps 同形，这里单列以免与面板互相 import）。 */
@@ -79,6 +79,18 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
    * 但「跳过原因」在两条路径上说的不是一件事 —— 标题必须跟着变，否则用户会以为自己点错了。
    */
   const [imgDetailTitle, setImgDetailTitle] = useState('图片解密详情')
+  /**
+   * 「联网补齐原图」的四个状态。
+   *
+   * `origPlan` 是**先扫描再取回**的那份盘点：用户问得出「为什么这张没有原图」，而答案分三类
+   * （本机已有 / 可联网取 / 只有微信登录态才拿得到）。不给这个数，界面上只能给一句「取不到」。
+   */
+  const [origPlan, setOrigPlan] = useState<OriginalFetchPlan | null>(null)
+  const [origBusy, setOrigBusy] = useState<'scan' | 'fetch' | null>(null)
+  const [origProgress, setOrigProgress] = useState<{ active: boolean; done: number; total: number; failed: number; message: string }>({ active: false, done: 0, total: 0, failed: 0, message: '' })
+  const [origResult, setOrigResult] = useState<OriginalBatchResult | null>(null)
+  /** 本次最多取几张（0 = 不限）。默认 500：全量是几千张、可能几 GB，先取一批是稳妥的默认。 */
+  const [origLimit, setOrigLimit] = useState(500)
   const [cdnMsg, setCdnMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [dbDirMsg, setDbDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [voiceOpMsg, setVoiceOpMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -659,6 +671,61 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }
 
   /**
+   * 扫描「还有多少张原图能靠免登录直链补回来」——**纯本机扫描，不联网**（约 1.3 秒）。
+   */
+  const scanOriginals = async (): Promise<void> => {
+    setOrigBusy('scan')
+    setOrigResult(null)
+    try {
+      setOrigPlan(await apiPlanOriginalFetch())
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      setOrigBusy(null)
+    }
+  }
+
+  /**
+   * 批量取回原图（免登录直链）。**只有用户点这一下才会联网**，没有任何后台自动调用。
+   *
+   * 关掉「自动获取原图（CDN）」或「禁止出网」时后端**一条请求都不发**（回 `blocked` 说明原因），
+   * 这里如实把那句话显示出来，而不是假装成功。
+   */
+  const fetchOriginals = async (): Promise<void> => {
+    setOrigBusy('fetch')
+    setOrigResult(null)
+    setOrigProgress({ active: true, done: 0, total: 0, failed: 0, message: '正在扫描全库…' })
+    const stop = pollDecrypt((s) => {
+      setOrigProgress({ active: s.active, done: s.done, total: s.total, failed: s.failed, message: s.message })
+    })
+    try {
+      const r = await apiFetchOriginalImagesBatch({ limit: origLimit })
+      setOrigResult(r)
+      const mb = (r.bytes / 1024 / 1024).toFixed(1)
+      const failedItems = r.errors.map(e => `${e.username || e.md5} — ${e.error}`)
+      if (r.blocked !== undefined) {
+        notify('err', r.blocked)
+      } else {
+        notify(r.failed === 0 ? 'ok' : 'err',
+          `已取回 ${r.fetched}/${r.attempted} 张（${mb} MB）`
+          + (r.remaining > 0 ? `，还剩 ${r.remaining} 张候选，再点一次继续` : '')
+          + (r.failed > 0 ? `，失败 ${r.failed}` : ''), failedItems)
+      }
+      // 取回的原图落进的是解码缓存的主槽，而内存里那份 LRU 很可能还是旧缩略图（跨面板不失效）
+      // —— 不清的话用户切回会话看到的仍是糊的，「取回成功」看起来像没发生。
+      if (r.fetched > 0) forgetAllImages()
+      // 重新盘一次：报告里的「可补 / 已取回」必须跟着变，否则第二次点会看到一个过期数字。
+      try { setOrigPlan(await apiPlanOriginalFetch()) } catch { /* 报告刷新失败不影响已取回的图 */ }
+      setOrigProgress({ active: false, done: r.attempted, total: r.attempted, failed: r.failed, message: '' })
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      stop()
+      setOrigBusy(null)
+    }
+  }
+
+  /**
    * 升级老解码缓存：把**已经解出来**的图，按本机现存最好的一档重解一遍（不联网）。
    *
    * 为什么单列一个动作而不是并进「批量解密」：批量解密只处理**还没有缓存**的图
@@ -790,13 +857,13 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe, cdnEnabled,
     cdnLocal, cdnMsg, cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
-    dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
+    dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo, fetchOriginals,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
     imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
-    message, nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath,
+    message, nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,
     pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
-    saving, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen,
+    saving, scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
     toggleCdn, toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
     voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,

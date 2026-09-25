@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
+import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, OriginalBatchResult, OriginalFetchPlan, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
 import type { ImageBatchItem } from './remotes/media.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
 import { createLayaRemotes } from './remotes/laya.ts';
@@ -539,6 +539,29 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         note?: string;
         error?: string;
     }>;
+    /**
+     * 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。
+     *
+     * 三类答案分开报：本机已有 `_h`（离线就有）/ 有免登录直链可联网补 / 只有 `cdnbig*`
+     * （需微信登录态，本应用不取）。没有这个数，界面上只能给一句「取不到」。
+     * 与批量执行共用同一次扫描（`scanImageOriginalPlan`），所以两份数字对得上。
+     * @returns OriginalFetchPlan：条数、可补条数、需登录条数、XML 声明的预计字节数。
+     */
+    planOriginalFetch(): OriginalFetchPlan;
+    /**
+     * 批量取回原图（免登录直链）：全库那 16.6% 一次取完，**可续跑**（`<decoded>/.originals-index.json`）。
+     *
+     * 三条一致：隐私总闸在最前；「自动获取原图（CDN）」关掉时一条请求都不发（回 `blocked`）；
+     * 逐条失败不中断整批。**明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% ——
+     * 那要微信登录态凭据（边界见 `query/image-original.ts`），只能在微信里点开后用
+     * 「升级为原图」收进来。实时进度通过 getDecryptStatus 读取（`op` = `image-original-batch`）。
+     * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4，封顶 8）。
+     * @returns OriginalBatchResult：候选/尝试/成功/失败/字节/耗时/逐条失败原因。
+     */
+    fetchOriginalImagesBatch(options: {
+        limit?: number;
+        concurrency?: number;
+    }): Promise<OriginalBatchResult>;
     /**
      * 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。
      *

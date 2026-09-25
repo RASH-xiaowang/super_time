@@ -35,3 +35,26 @@ export declare const WECHAT_CDN_HOST_SUFFIXES: readonly string[];
  * @returns false 表示解析失败、无主机、带凭据或主机不在清单内 —— 调用方必须**在发请求之前**拦下。
  */
 export declare function wechatCdnHostAllowed(url: string): boolean;
+/**
+ * 企业微信（WeCom）的文件下载端点。
+ *
+ * ## 为什么需要单独一个判据
+ *
+ * 2026-09-26 实测（`working/probe-wecom-403.ts`）：本机 8,604 条带 `tphdurl`/`tpurl` 的图片消息
+ * **全部**指向 `wwfile.work.weixin.qq.com/cgi-bin/download?f=<216hex>&t=<576hex>&p=1`，
+ * 而匿名 GET **一律 403**，且与下面三件事都无关：
+ *   · **消息新旧**：距今 20 分钟的消息与 217 天的消息表现完全相同（都是 403、0 字节）；
+ *   · **请求头**：裸 UA / 加 `Referer: https://work.weixin.qq.com/` / 加图片 `Accept` 三种都 403；
+ *   · **URL 里有没有凭据参数**：它只有 `f`/`t`/`p` 三个参数，**没有** `tpauthkey` 之类的签名参数
+ *     （`t` 是 576 位十六进制的服务端令牌，必须由企业微信客户端带着会话才能用）。
+ *
+ * 结论：这一类**不是免登录预签名直链**，与本应用「不登录、不连微信服务器同步」的边界冲突
+ * （与 `cdnbigimgurl` 同一类待遇）。所以批量取原图要把它们**排除在候选之外** ——
+ * 否则一次点击会白发几千个必然 403 的请求。
+ *
+ * ⚠ 这条判据是**按主机**判的，不是按「有没有签名参数」判：个人微信的 `tpurl` 真带
+ * `tpauthkey`（那类能取），而企业微信这条链用的是服务端令牌 —— 按主机判比按参数名猜更稳。
+ * @param url - 消息 XML 里的图片地址。
+ * @returns true 表示这是企业微信的下载端点（需要企业微信登录态，我们不去取）。
+ */
+export declare function isWecomFileEndpoint(url: string): boolean;

@@ -577,6 +577,9 @@ export abstract class GatewayCore extends TypertRemoteService {
       outboundBlocked: () => this.outboundBlocked(),
       rawWechatBase: (decrypted) => rawWechatBase(decrypted),
       warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+      // 「批量取原图」是长任务，要写解密状态机的进度的**同一个对象**（同一时刻只允许一个
+      // 解密类任务：批量取原图与批量解密/升级共用 `active` 这道忙闲闸门）。
+      decryptState: this.decryptState,
     }))
   }
 

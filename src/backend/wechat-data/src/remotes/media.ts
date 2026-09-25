@@ -14,6 +14,7 @@ import { queryEmoticons } from '../query/emoticons.ts'
 import { queryFiles } from '../query/files.ts'
 import { resolveImageKeyPair } from '../query/image-key.ts'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from '../query/image-original.ts'
+import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan } from '../query/image-original-batch.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
@@ -23,7 +24,7 @@ import { resolveVoiceInfo } from '../query/media-voice.ts'
 import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrl, resolveSnsVideoDataUrl } from '../query/sns-video.ts'
 import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
 import { writeFileSync } from 'node:fs'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
@@ -35,6 +36,14 @@ export interface MediaRemoteCtx {
   outboundBlocked: () => boolean
   /** 微信原始目录（`rawWechatBase(decrypted)`；本文件与它同属宿主层，按函数传进来）。 */
   rawWechatBase: (decrypted: string) => string
+  /**
+   * 解密状态机（`getDecryptStatus` 读的那一份 `DecryptStatus`）。
+   *
+   * 为什么媒体域也要它：批量取原图是**长任务**，进展要能让设置页轮询到（`op` = `image-original-batch`），
+   * 而且它与批量解密/升级**共用 `active` 这同一道忙闲闸门** —— 三个动作都会写同一批解码缓存，
+   * 同时跑只会互相踩槽位。
+   */
+  decryptState: DecryptStatus
   warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string,
     items: ReadonlyArray<{ username: string; localId: number }>, aesKey: string | undefined, xorKey: number) => void
 }
@@ -160,32 +169,128 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         rc.op('task', 'image_original_fetch', 'fail', talker, blocked)
         return { ok: false, error: blocked }
       }
+      /**
+       * 本机兜底：丢掉这张图的缓存条目、按本机现存最好的一档重解一次。
+       *
+       * 「取不到原图」有三条互不相同的原因，其中**两条都能靠这一步救回来**：
+       *   ① 没有免登录直链（XML 里只有 CDN 文件标识）—— 但用户可能已经在微信里点开过，
+       *      attach 里就有更大的那份 `.dat`；原先那种情况下槽位被先解出来的缩略图占住，
+       *      后到的原图永远读不到（实测 106 条缓存里 35 条如此）。
+       *   ② 直链**过期**（回 403/404）—— 同理，本机那份可能反而是有的。
+       * 只有「本机确实只有缩略图」这一种才需要用户回微信里点一次。所以两条路径都先试它，
+       * 否则用户会看到「取不到原图」而实际本机就有。
+       * @returns 重解到非缩略图时的 format；否则 null（此时缓存条目会在下次读图时自动重建）。
+       */
+      const localFallback = (): { format?: string } | null => {
+        const hint = resolveImageResourceHint(rc.dirs().decrypted, talker, localId)
+        if (!hint.md5) return null
+        clearDecodedImageCache(rc.dirs().decoded, talker, hint.md5)
+        const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
+        const redone = decodeImageDataUrl(rc.dirs().decrypted, rc.dirs().decoded, talker, localId,
+          rawWechatBase(rc.dirs().decrypted) || undefined, aesKey, xorKey)
+        if (redone.url && !redone.thumb) return { format: redone.format }
+        return null
+      }
       const link = resolveImageOriginalLink(rc.dirs().decrypted, talker, localId)
       if (link === null) {
-        // 「没有免登录直链」不等于「本机没有原图」：用户可能已经在微信里点开过，attach 里就有
-        // 更大的那份 .dat。原先这里只回一句「去微信里点一下」，但那句话当时是假的 —— 解码缓存的
-        // 槽位被先解出来的缩略图占住后，后到的原图永远读不到（实测 106 条缓存里 35 条如此）。
-        // 所以这里主动丢掉这张图的缓存条目再重解一次，让「我在微信里点过了」真的能反映到界面上。
-        const hint = resolveImageResourceHint(rc.dirs().decrypted, talker, localId)
-        if (hint.md5) {
-          clearDecodedImageCache(rc.dirs().decoded, talker, hint.md5)
-          const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-          const redone = decodeImageDataUrl(rc.dirs().decrypted, rc.dirs().decoded, talker, localId,
-            rawWechatBase(rc.dirs().decrypted) || undefined, aesKey, xorKey)
-          if (redone.url && !redone.thumb) {
-            rc.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (redone.format ?? '?') + '）')
-            return { ok: true, format: redone.format, note: '本机已重解到更大的那一份，这次没有联网' }
-          }
+        const local = localFallback()
+        if (local !== null) {
+          rc.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (local.format ?? '?') + '）')
+          return { ok: true, format: local.format, note: '本机已重解到更大的那一份，这次没有联网' }
         }
         return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
       }
       const r = await fetchImageOriginalToCache(link, rc.dirs().decoded, rc.cdnSwitches())
       if (r.bytes === undefined) {
+        // 取回失败里最常见的一种是**直链过期**（预签名 URL 有有效期）—— 那时本机很可能
+        // 已经有了更大的那一份（用户点开过），所以先试本机，再如实回报两条原因。
+        const local = localFallback()
+        if (local !== null) {
+          rc.op('task', 'image_original_fetch', 'ok', talker, '直链失效，改用本机那份（' + (local.format ?? '?') + '）')
+          return { ok: true, format: local.format, note: '直链已失效（' + (r.error ?? '取回失败') + '），已改用本机那份，这次没有联网' }
+        }
         rc.op('task', 'image_original_fetch', 'fail', talker, r.error ?? '取回失败')
         return { ok: false, error: r.error ?? '原图取回失败' }
       }
+      // 记进续跑索引：批量入口据此跳过「已经取回过」的图，不会为了同一张反复联网。
+      recordFetchedOriginal(rc.dirs().decoded, link.md5)
       rc.op('task', 'image_original_fetch', 'ok', talker, String(r.bytes) + ' 字节 · ' + (r.format ?? '?'))
       return { ok: true, format: r.format, bytes: r.bytes }
+    },
+
+    /**
+     * 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。
+     *
+     * 存在的原因：用户问得出「为什么这张没有原图」，而答案分三类（本机已有 / 可联网取 /
+     * 只有登录态才拿得到）。不给这个数，界面上只能给一句「取不到」。
+     * 计划与执行的计数同源（都是 `scanImageOriginalPlan`），不会出现「报 8000 张、实际取 7000 张」。
+     * @returns 覆盖率盘点（见 `OriginalFetchPlan`）；未配置原始目录时全 0。
+     */
+    planOriginalFetch(): OriginalFetchPlan {
+      const decrypted = rc.dirs().decrypted
+      const empty: OriginalFetchPlan = {
+        messages: 0, uniqueMd5: 0, alreadyHd: 0, alreadyFetched: 0,
+        candidates: 0, declaredBytes: 0, loginRequired: 0, wecomDirectLink: 0, noPointer: 0,
+      }
+      const rawRoot = rawWechatBase(decrypted)
+      if (!rawRoot) return empty
+      return scanImageOriginalPlan(decrypted, rawRoot, rc.dirs().decoded).plan
+    },
+
+    /**
+     * 批量取回原图（免登录直链）：把全库那 16.6% 的一次取完，**可续跑**。
+     *
+     * 与单张路径的三条一致：隐私总闸在最前（`privacyBlocked`）、「自动获取原图（CDN）」开关
+     * 关掉时**一条请求都不发**（在 query 层判，返回 `blocked`）、逐条失败不中断整批。
+     * 成功的写进 `<decoded>/.originals-index.json` ⇒ 下次点一下接着走，不会重下。
+     *
+     * **明确不做的**：XML 里只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% 需要微信登录态凭据
+     * （见 `query/image-original.ts` 的边界说明），本接口不碰它们；那部分只能在微信里点开后
+     * 用「升级为原图」收进来。
+     * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4）。
+     * @returns 计数/字节/耗时/逐条失败原因；`blocked` 非空表示一张都没发请求。
+     */
+    async fetchOriginalImagesBatch(options: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult> {
+      const decrypted = rc.dirs().decrypted
+      const decoded = rc.dirs().decoded
+      const blocked = rc.privacyBlocked('image_original_fetch', '从微信 CDN 批量取回原图')
+      if (blocked !== null) {
+        rc.op('task', 'image_original_fetch', 'fail', '批量', blocked)
+        return emptyOriginalBatchResult(blocked)
+      }
+      if (rc.decryptState.active) return emptyOriginalBatchResult('已有解密任务进行中')
+      const rawRoot = rawWechatBase(decrypted)
+      if (!rawRoot) return emptyOriginalBatchResult('未配置数据库目录，无法定位微信原始数据')
+      rc.decryptState.op = 'image-original-batch'
+      rc.decryptState.active = true
+      rc.decryptState.done = 0
+      rc.decryptState.total = 0
+      rc.decryptState.failed = 0
+      rc.decryptState.skipped = 0
+      rc.decryptState.message = ''
+      try {
+        const r = await runOriginalImagesBatch(decrypted, rawRoot, decoded, {
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+          ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+          ...rc.cdnSwitches(),
+          onProgress: (done, total, fetched, failed, message) => {
+            rc.decryptState.done = done
+            rc.decryptState.total = total
+            rc.decryptState.failed = failed
+            rc.decryptState.message = message
+          },
+        })
+        rc.decryptState.skipped = Math.max(0, r.candidates - r.attempted)
+        const mb = (r.bytes / 1024 / 1024).toFixed(1)
+        rc.op('task', 'image_original_fetch', r.failed === 0 ? 'ok' : 'fail', '批量',
+          r.blocked !== undefined
+            ? r.blocked
+            : `取回 ${r.fetched}/${r.attempted} 张（${mb} MB），失败 ${r.failed}，剩余候选 ${r.remaining}`)
+        return r
+      } finally {
+        rc.decryptState.active = false
+        rc.decryptState.message = ''
+      }
     },
 
     /**

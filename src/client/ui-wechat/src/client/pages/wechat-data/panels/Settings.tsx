@@ -67,11 +67,11 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
     imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
-    nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath, pickDbDir,
+    nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath, pickDbDir,
     pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg, saving,
-    setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setImgXor,
+    scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit, setImgXor,
     setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe, toggleCdn,
-    toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
+    fetchOriginals, toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
     whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel, whisperModelsDir,
     whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
     message,
@@ -194,6 +194,14 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           imgUpgradeProgress={imgUpgradeProgress}
           imgUpgradeResult={imgUpgradeResult}
           imgUpgrading={imgUpgrading}
+          fetchOriginals={fetchOriginals}
+          origBusy={origBusy}
+          origLimit={origLimit}
+          origPlan={origPlan}
+          origProgress={origProgress}
+          origResult={origResult}
+          scanOriginals={scanOriginals}
+          setOrigLimit={setOrigLimit}
           setImgConcurrency={setImgConcurrency}
           setImgDetailOpen={setImgDetailOpen}
           toggleCdn={toggleCdn}

@@ -1,5 +1,5 @@
 
-import type { ImageUpgradeResult, WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import type { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
 /**
  * 设置面板的五张流程卡片：检测账号 / 数据库密钥 / 图片密钥 / 图片解码 / 语音转写
@@ -263,6 +263,18 @@ export interface SettingsImgDecodeSectionProps {
   /** 上一次升级的结论；null = 还没跑过。 */
   imgUpgradeResult: ImageUpgradeResult | null
   imgUpgrading: boolean
+  /** 「联网补齐原图」：扫描/取回的进行态，null = 空闲。 */
+  origBusy: 'scan' | 'fetch' | null
+  /** 本次上限（0 = 不限）。 */
+  origLimit: number
+  /** 上一次盘点（三类答案分开报）。 */
+  origPlan: OriginalFetchPlan | null
+  origProgress: { active: boolean; done: number; total: number; failed: number; message: string }
+  /** 上一次取回的结论；null = 还没跑过。 */
+  origResult: OriginalBatchResult | null
+  fetchOriginals: () => Promise<void>
+  scanOriginals: () => Promise<void>
+  setOrigLimit: React.Dispatch<React.SetStateAction<number>>
   setImgConcurrency: React.Dispatch<React.SetStateAction<number>>
   setImgDetailOpen: React.Dispatch<React.SetStateAction<boolean>>
   toggleCdn: (enabled: boolean) => Promise<void>
@@ -276,7 +288,10 @@ export function SettingsImgDecodeSection({
   imgDecrypting, imgProgress, imgUpgradeProgress, imgUpgradeResult,
   imgUpgrading, setImgConcurrency,
   setImgDetailOpen, toggleCdn, toggleCdnLocal, upgradeImgs,
+  fetchOriginals, origBusy, origLimit, origPlan, origProgress, origResult, scanOriginals, setOrigLimit,
 }: SettingsImgDecodeSectionProps): React.JSX.Element {
+  /** 盘点报告里的「预计下载量」（XML 声明的下界）。 */
+  const planMb = origPlan === null ? 0 : Math.round(origPlan.declaredBytes / 1024 / 1024)
   return (
       <section className={css.card} data-settings-section="img">
         <header className={css.cardHd}>
@@ -344,6 +359,47 @@ export function SettingsImgDecodeSection({
             doneKind=""
             detail={imgUpgradeResult && (imgUpgradeResult.errors.length > 0 || (imgUpgradeResult.skippedDetails?.length ?? 0) > 0)
               ? <button type="button" className={acctCss.slotDetailBtn} onClick={() => { setImgDetailOpen(true) }}>详情</button>
+              : undefined}
+          />
+          <div className={css.row}>
+            <span className={css.rowName}>联网补齐原图</span>
+            <span className={css.rowMeta} title="只取消息里自带的免登录预签名直链（带 tpauthkey 的那一类，个人微信账号常见；企业微信的 wwfile 端点实测需登录态，会被自动排除、不浪费请求）；先「扫描」看能补多少再决定取回。关掉上面的 CDN 开关就一张都不取，也不存在任何后台自动取">先扫描看能补多少，再决定取回</span>
+            <Input className={css.inputNarrow} value={String(origLimit)} onChange={(e) => { setOrigLimit(Number(e.target.value) || 0) }} title="本次最多取几张（0 = 不限）" />
+            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={origBusy === 'scan' ? <span className={css.spin} /> : undefined} onClick={() => { void scanOriginals() }} disabled={origBusy !== null}>
+              {origBusy === 'scan' ? '扫描中…' : '扫描'}
+            </Button>
+            <Button size="sm" variant="primary" className={clsx(css.btnFx, css.btnFixed)} icon={origBusy === 'fetch' ? <span className={css.spin} /> : undefined} onClick={() => { void fetchOriginals() }} disabled={origBusy !== null}>
+              {origBusy === 'fetch' ? '取回中…' : '开始取回'}
+            </Button>
+          </div>
+          {origPlan !== null && (
+            <div className={css.row}>
+              <span className={css.rowNote}>
+                {`带免登录直链的候选 ${String(origPlan.candidates)} 张（XML 声明合计约 ${String(planMb)} MB，实际以下载为准）`
+                  + ` · 本机已有原图 ${String(origPlan.alreadyHd)} 张`
+                  + ` · 已取回过 ${String(origPlan.alreadyFetched)} 张`
+                  + ` · 只能靠回微信点开 ${String(origPlan.loginRequired)} 张（需要登录态，本应用不取`
+                  + (origPlan.wecomDirectLink > 0
+                    ? `；其中 ${String(origPlan.wecomDirectLink)} 张虽带链接，但属企业微信下载端点，实测匿名请求一律 403`
+                    : '')
+                  + '）'}
+              </span>
+            </div>
+          )}
+          <StatusSlot
+            placeholder="点「扫描」先看能补多少；点「开始取回」后进度与结果实时显示在这里"
+            active={origProgress.active}
+            pct={origProgress.total > 0 ? Math.round((origProgress.done / origProgress.total) * 100) : 0}
+            text={`取回 ${origProgress.done}/${origProgress.total} · 失败 ${origProgress.failed}`}
+            item={origProgress.message}
+            doneText={origResult
+              ? (origResult.blocked !== undefined
+                ? `未发起任何请求：${origResult.blocked}`
+                : `上次取回：成功 ${origResult.fetched}/${origResult.attempted} 张 · ${(origResult.bytes / 1024 / 1024).toFixed(1)} MB · 失败 ${origResult.failed} · 剩余候选 ${origResult.remaining}`)
+              : ''}
+            doneKind=""
+            detail={origResult && origResult.errors.length > 0
+              ? <button type="button" className={acctCss.slotDetailBtn} onClick={() => { setImgDetailOpen(true); }}>详情</button>
               : undefined}
           />
           <div className={css.row}>

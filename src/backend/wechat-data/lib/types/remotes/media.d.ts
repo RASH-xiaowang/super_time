@@ -1,5 +1,5 @@
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -15,6 +15,14 @@ export interface MediaRemoteCtx {
     outboundBlocked: () => boolean;
     /** 微信原始目录（`rawWechatBase(decrypted)`；本文件与它同属宿主层，按函数传进来）。 */
     rawWechatBase: (decrypted: string) => string;
+    /**
+     * 解密状态机（`getDecryptStatus` 读的那一份 `DecryptStatus`）。
+     *
+     * 为什么媒体域也要它：批量取原图是**长任务**，进展要能让设置页轮询到（`op` = `image-original-batch`），
+     * 而且它与批量解密/升级**共用 `active` 这同一道忙闲闸门** —— 三个动作都会写同一批解码缓存，
+     * 同时跑只会互相踩槽位。
+     */
+    decryptState: DecryptStatus;
     warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
         username: string;
         localId: number;
@@ -99,6 +107,32 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         note?: string;
         error?: string;
     }>;
+    /**
+     * 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。
+     *
+     * 存在的原因：用户问得出「为什么这张没有原图」，而答案分三类（本机已有 / 可联网取 /
+     * 只有登录态才拿得到）。不给这个数，界面上只能给一句「取不到」。
+     * 计划与执行的计数同源（都是 `scanImageOriginalPlan`），不会出现「报 8000 张、实际取 7000 张」。
+     * @returns 覆盖率盘点（见 `OriginalFetchPlan`）；未配置原始目录时全 0。
+     */
+    planOriginalFetch(): OriginalFetchPlan;
+    /**
+     * 批量取回原图（免登录直链）：把全库那 16.6% 的一次取完，**可续跑**。
+     *
+     * 与单张路径的三条一致：隐私总闸在最前（`privacyBlocked`）、「自动获取原图（CDN）」开关
+     * 关掉时**一条请求都不发**（在 query 层判，返回 `blocked`）、逐条失败不中断整批。
+     * 成功的写进 `<decoded>/.originals-index.json` ⇒ 下次点一下接着走，不会重下。
+     *
+     * **明确不做的**：XML 里只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% 需要微信登录态凭据
+     * （见 `query/image-original.ts` 的边界说明），本接口不碰它们；那部分只能在微信里点开后
+     * 用「升级为原图」收进来。
+     * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4）。
+     * @returns 计数/字节/耗时/逐条失败原因；`blocked` 非空表示一张都没发请求。
+     */
+    fetchOriginalImagesBatch(options: {
+        limit?: number;
+        concurrency?: number;
+    }): Promise<OriginalBatchResult>;
     /**
      * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
      *

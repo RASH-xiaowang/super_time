@@ -114,6 +114,11 @@ export interface DecryptImagesResult {
  * `dirs.ts / asar-path.ts / types.ts` 三个叶子。
  */
 export type { ImageUpgradeResult } from './query/image-upgrade.ts';
+/**
+ * 「批量取原图」的盘点与结果类型（真源在 `query/image-original-batch.ts`）。
+ * 同上一行的理由：query 不能 import 本文件（M24 分层守卫），所以由这里再导出给 Remote 客户端。
+ */
+export type { ImageOriginalCandidate, OriginalBatchResult, OriginalFetchPlan } from './query/image-original-batch.ts';
 /** Live decryption progress snapshot (getDecryptStatus). */
 export interface DecryptStatus {
     /**
@@ -123,7 +128,7 @@ export interface DecryptStatus {
      * 它与 `images` 共用同一条忙闲闸门（同一时刻只许一个解密类任务在跑），但**不是**同一件事 ——
      * 状态里如实写清是哪一个，排障时才分得清「用户点的是批量解密还是升级」。
      */
-    op: 'databases' | 'images' | 'image-upgrade' | null;
+    op: 'databases' | 'images' | 'image-upgrade' | 'image-original-batch' | null;
     active: boolean;
     done: number;
     total: number;

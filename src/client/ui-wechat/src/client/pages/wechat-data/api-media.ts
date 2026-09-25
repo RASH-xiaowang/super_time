@@ -66,6 +66,8 @@ import type {
   MomentsMonthlyRow,
   MomentsSnapshot,
   OfficialAssetsSnapshot,
+  OriginalBatchResult,
+  OriginalFetchPlan,
   OverviewInsights,
   OverviewSnapshot,
   RegionMapSnapshot,
@@ -158,6 +160,32 @@ export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: s
  */
 export async function apiGetImageOriginal(options: { username: string; localId: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
   return unwrap(await remote().getImageOriginal(options))
+}
+
+/**
+ * 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**（约 1.3 秒）。
+ *
+ * 为什么要先「盘点」再「取回」：用户问得出「为什么这张没有原图」，而答案分三类
+ * —— 本机已有 / 可联网取 / 只有微信登录态才拿得到。不给这个数，界面只能给一句「取不到」。
+ * 故意**不走 `cachedGet`**：它要反映的是「此刻本机有多少张能补」，缓存它会让用户
+ * 在微信里点开过图之后仍然看到旧数字。
+ * @returns 覆盖率盘点（条数 / 可补条数 / 需登录条数 / XML 声明的预计字节数）。
+ */
+export async function apiPlanOriginalFetch(): Promise<OriginalFetchPlan> {
+  return unwrap(await remote().planOriginalFetch())
+}
+
+/**
+ * 批量取回原图（免登录直链）——**只有用户显式点「批量取原图」才会走到这里**，没有任何后台自动调用。
+ *
+ * 故意**不走 `cachedGet`**：这是一次会改变本机状态的动作（原图落进解码缓存 + 写续跑索引），
+ * 缓存返回值会让第二次点击什么都不做（与 `apiGetImageOriginal` 同一条理由）。
+ * 关掉「自动获取原图（CDN）」或「禁止出网」时，后端**一条请求都不发**并回 `blocked` 说明。
+ * @param options - `limit`（0 = 本次不限）、`concurrency`（默认 4）。
+ * @returns 计数/字节/耗时/逐条失败原因。
+ */
+export async function apiFetchOriginalImagesBatch(options?: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult> {
+  return unwrap(await remote().fetchOriginalImagesBatch(options))
 }
 
 /**

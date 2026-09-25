@@ -92,6 +92,14 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
             {intent !== undefined && <Stat label="意图" value={`${intent.label} ${(intent.probability * 100).toFixed(0)}%`} />}
             {action !== undefined && <Stat label="该做" value={`${action.label} ${(action.probability * 100).toFixed(0)}%`} />}
             {done.sourceText !== '' && <div className={css.source}>{done.sourceText}</div>}
+            {/* 极短消息（「啥」「好，」）上同一模型的选项分布接近均匀 —— 那一栏的答案随机性很大。
+                这里如实标注「判断主要来自上下文」，让用户知道该看的是上下文而不是这句话本身；
+                **不改判断结果本身**，也不隐藏它。判据在后端 `isLowConfidenceText`。 */}
+            {done.lowConfidence === true && (
+              <div className={css.source} title="这条消息本身很短，选项分布接近均匀；换个上下文可能给出别的答案">
+                信息不足，仅供参考（判断主要来自上下文）
+              </div>
+            )}
             <div className={css.blocks}>
               {ordered.map((a) => <AnswerBlock key={a.qid} a={a} />)}
             </div>

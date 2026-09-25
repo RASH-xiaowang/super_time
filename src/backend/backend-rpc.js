@@ -43,6 +43,8 @@ const LONG_CALL_METHODS = new Set([
   // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
   'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
   'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal',
+  // 批量取原图：一次要下几千张（全库 16.6% 带免登录直链），逐张 15s 超时 + 4 并发也远超 60s
+  'fetchOriginalImagesBatch',
   // 语音转写：whisper 本地推理
   'transcribeVoiceBatch', 'transcribeVoiceMessage',
   // 索引与离线评估

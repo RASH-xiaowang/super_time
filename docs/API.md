@@ -4,7 +4,7 @@
 > `@Remote('name')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。
 > CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。
 
-当前共 **170** 个 Remote 方法。
+当前共 **172** 个 Remote 方法。
 
 渲染进程通过这些方法与后端通信（`gateway.ts` 是唯一分发点）：
 渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →
@@ -62,130 +62,132 @@
 | 44 | `exportSnsVideo` | 把一条朋友圈视频（本机缓存优先，否则 CDN 取回+解密）写到用户选定路径。 |
 | 45 | `extractKbEntities` | 让模型读一遍本库的文件，抽出实体（推断层）。 |
 | 46 | `extractTasks` | — |
-| 47 | `generateDailySummary` | Generate a daily chat summary for one date via DSH LLM. |
-| 48 | `generateKeysFile` | Verify all DBs in db_dir and write all_keys.json. |
-| 49 | `generatePeriodSummary` | — |
-| 50 | `getAnnual` | Annual years. |
-| 51 | `getAnnualReport` | — |
-| 52 | `getAnnualReview` | 年度回顾（看板）：15 张卡片所需的完整年度聚合。 |
-| 53 | `getArticleCover` | Resolve a 公众号 article cover (og:image) to a base64 data URL. |
-| 54 | `getAskHistory` | 读取问答历史（供「微信问答 → 历史记录」弹窗）。 |
-| 55 | `getAssetInsights` | — |
-| 56 | `getAvatar` | Resolve a user avatar (head_image.db data or contact URL). |
-| 57 | `getAvatarsLocal` | 批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。 |
-| 58 | `getCalls` | — |
-| 59 | `getContact360` | — |
-| 60 | `getContacts` | Contact book. |
-| 61 | `getDailyCounts` | Per-day message counts for one month (chat calendar heatmap). |
-| 62 | `getDbHealth` | — |
-| 63 | `getDbStatus` | Decrypted DB status summary. |
-| 64 | `getDecryptStatus` | Live decryption progress snapshot (polled by the settings panel). |
-| 65 | `getEmoticonDataUrl` | Resolve a custom emoticon (sticker) md5 to an offline base64 data URL. |
-| 66 | `getEmoticons` | Custom emoticons. |
-| 67 | `getExportHistory` | 读取导出历史（供「导出记录」弹窗）。 |
-| 68 | `getExportProgress` | Poll one export/backup job's latest progress (M3). |
-| 69 | `getFavorites` | Favorites list. |
-| 70 | `getFileImageDataUrl` | Resolve a file-library image (hardlink md5) to an offline base64 data URL. |
-| 71 | `getFiles` | Resource files. |
-| 72 | `getGraph` | Relationship graph. |
-| 73 | `getGroupInfo` | Group chat info (群聊信息): name/remark, announcement, own alias, member grid and local settings mirror. |
-| 74 | `getGroupInsights` | — |
-| 75 | `getHandoffReminds` | 保留理由：读 `general.db` 的 `handoff_remind_v0`（微信自带待办提醒）。本机实测**这张表不存在** （22 个库里没有任何 `handoff%` 表）⇒ 界面若直接接上去只会永远显示空… |
-| 76 | `getImageDataUrl` | Decode one message image to a base64 data URL. |
-| 77 | `getImageDataUrlsBatch` | Decode a whole batch of message images to base64 data URLs (N16). |
-| 78 | `getImageOriginal` | 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。 |
-| 79 | `getKbFileChunks` | 读某个文件解析出来的正文（分页）。界面上「就地展开看内容」走这一条。 |
-| 80 | `getKbFiles` | 一个知识库里的文件列表（新上传的在前）。 |
-| 81 | `getKbModelConfig` | 某个知识库的**模型设置**（三个角色的引用 + 各自实际生效的名字）。 |
-| 82 | `getKbVectorIndex` | 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。 |
-| 83 | `getKbs` | Knowledge base list — the scope selector's data source. |
-| 84 | `getKnowledgeGraph` | Knowledge graph: note nodes, `[[…]]` edges, unresolved stubs, **plus the document entity layer** (registered … |
-| 85 | `getLayaStatus` | Local decision model status: required files (model graph + tokenizer), size, source, active download progress… |
-| 86 | `getLedger` | — |
-| 87 | `getMediaAssets` | — |
-| 88 | `getMessageFile` | Resolve a received message file (msg/file) to a base64 data URL. |
-| 89 | `getMessages` | Messages of one talker. |
-| 90 | `getMoments` | Moments page. |
-| 91 | `getMomentsAuthors` | Full-history author activity counts (ranked desc). |
-| 92 | `getMomentsInsights` | — |
-| 93 | `getMomentsMonthly` | — |
-| 94 | `getNewMessages` | Incremental messages newer than a sort_seq watermark (real-time polling). |
-| 95 | `getNotes` | Knowledge notes list of **one** knowledge base. |
-| 96 | `getOfficialAssets` | — |
-| 97 | `getOperationLog` | — |
-| 98 | `getOverview` | — |
-| 99 | `getOverviewInsights` | One-screen data overview. |
-| 100 | `getPaymentStatus` | Authoritative transfer/redpacket status by message server_id. |
-| 101 | `getPrivacyAuditRows` | — |
-| 102 | `getPrivacyScan` | Privacy scan. |
-| 103 | `getPrivacyState` | — |
-| 104 | `getRecords` | Records (revokes/transfers/redpackets/finder/miniprograms/friendverifications). |
-| 105 | `getRegionMap` | Friend-region map (世界板块地图): world → country → province → city → friends. |
-| 106 | `getRemoteImages` | 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。 |
-| 107 | `getRetrievalStatus` | RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。 |
-| 108 | `getRevoked` | Revoked messages. |
-| 109 | `getSearchIndexStatus` | Search index status. |
-| 110 | `getSelfUsername` | Return the current account's own WeChat username (user_name). |
-| 111 | `getSessions` | — |
-| 112 | `getSnsImageDataUrl` | Resolve one SNS (朋友圈) media md5 to an offline base64 data URL from the WeChat cache/<month>/Sns/Img V2-encryp… |
-| 113 | `getSnsVideoCoverDataUrl` | Resolve one SNS (朋友圈) video cover. |
-| 114 | `getSnsVideoDataUrl` | Resolve one SNS (朋友圈) video body so it can be played inline. |
-| 115 | `getStorageStats` | Storage stats. |
-| 116 | `getVideoInfo` | Look up one video message: cover thumbnail + the on-disk video path. |
-| 117 | `getVoiceDataUrl` | Resolve one voice message to an inline-playable wav data URL. |
-| 118 | `getVoiceInfo` | Look up one voice message (silk decode degrades in Node). |
-| 119 | `getVoiceTranscript` | Cached transcript for one voice message (if already transcribed). |
-| 120 | `getWechatConfig` | WeChat config summary. |
-| 121 | `getWechatConfigFull` | Read the full WeChat config (incl. |
-| 122 | `getWechatKeysInfo` | Read all_keys.json info. |
-| 123 | `getWhisperStatus` | Whisper transcription configuration status: engine detection, CUDA presence, models dir + installed ggml bina… |
-| 124 | `getWordCloud` | — |
-| 125 | `installWhisperEngine` | Download + install the whisper.cpp CLI engine into the models dir (`<modelsDir>/bin/whisper-cli.exe`), persis… |
-| 126 | `listBackups` | List local WeChat backups. |
-| 127 | `listEditedMessages` | List edited messages (optionally for one session). |
-| 128 | `listLlmModels` | List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider cat… |
-| 129 | `listLlmProviders` | List the daily-summary model provider(s): the default model's provider (the one the user actually configured)… |
-| 130 | `listRetrievalFeedback` | 列出最近的问答反馈 + 汇总统计。 |
-| 131 | `listSummaryRecords` | List generated summary records. |
-| 132 | `listSummaryTasks` | List daily-summary tasks. |
-| 133 | `listTasks` | — |
-| 134 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
-| 135 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
-| 136 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
-| 137 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
-| 138 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
-| 139 | `renameKb` | Rename one knowledge base. |
-| 140 | `resetEditedMessage` | Restore a message to its original content. |
-| 141 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
-| 142 | `resolveChatHistory` | — |
-| 143 | `restoreBackup` | — |
-| 144 | `runSummaryTask` | — |
-| 145 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
-| 146 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
-| 147 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
-| 148 | `saveWechatConfig` | Save the WeChat config (merge patch). |
-| 149 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
-| 150 | `searchMembers` | Contact / group-member search. |
-| 151 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
-| 152 | `searchUnified` | — |
-| 153 | `setCdnImageEnabled` | Set CDN auto-fetch flag. |
-| 154 | `setCdnImageLocalDecrypt` | Set CDN local/service decrypt flag. |
-| 155 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
-| 156 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
-| 157 | `setPrivacyState` | — |
-| 158 | `setTaskStatus` | — |
-| 159 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
-| 160 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
-| 161 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
-| 162 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
-| 163 | `syncHandoffTasks` | — |
-| 164 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
-| 165 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
-| 166 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
-| 167 | `unloadLaya` | Unload the model, releasing roughly 1.2 GB of resident memory. |
-| 168 | `upgradeDecodedImages` | 升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。 |
-| 169 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
-| 170 | `verifyImageKey` | — |
+| 47 | `fetchOriginalImagesBatch` | 批量取回原图（免登录直链）：全库那 16.6% 一次取完，**可续跑**（`<decoded>/.originals-index.json`）。 |
+| 48 | `generateDailySummary` | Generate a daily chat summary for one date via DSH LLM. |
+| 49 | `generateKeysFile` | Verify all DBs in db_dir and write all_keys.json. |
+| 50 | `generatePeriodSummary` | — |
+| 51 | `getAnnual` | Annual years. |
+| 52 | `getAnnualReport` | — |
+| 53 | `getAnnualReview` | 年度回顾（看板）：15 张卡片所需的完整年度聚合。 |
+| 54 | `getArticleCover` | Resolve a 公众号 article cover (og:image) to a base64 data URL. |
+| 55 | `getAskHistory` | 读取问答历史（供「微信问答 → 历史记录」弹窗）。 |
+| 56 | `getAssetInsights` | — |
+| 57 | `getAvatar` | Resolve a user avatar (head_image.db data or contact URL). |
+| 58 | `getAvatarsLocal` | 批量读取头像(head_image.db 优先,未命中再用 contact 表 URL 兜底;一次 RPC)。 |
+| 59 | `getCalls` | — |
+| 60 | `getContact360` | — |
+| 61 | `getContacts` | Contact book. |
+| 62 | `getDailyCounts` | Per-day message counts for one month (chat calendar heatmap). |
+| 63 | `getDbHealth` | — |
+| 64 | `getDbStatus` | Decrypted DB status summary. |
+| 65 | `getDecryptStatus` | Live decryption progress snapshot (polled by the settings panel). |
+| 66 | `getEmoticonDataUrl` | Resolve a custom emoticon (sticker) md5 to an offline base64 data URL. |
+| 67 | `getEmoticons` | Custom emoticons. |
+| 68 | `getExportHistory` | 读取导出历史（供「导出记录」弹窗）。 |
+| 69 | `getExportProgress` | Poll one export/backup job's latest progress (M3). |
+| 70 | `getFavorites` | Favorites list. |
+| 71 | `getFileImageDataUrl` | Resolve a file-library image (hardlink md5) to an offline base64 data URL. |
+| 72 | `getFiles` | Resource files. |
+| 73 | `getGraph` | Relationship graph. |
+| 74 | `getGroupInfo` | Group chat info (群聊信息): name/remark, announcement, own alias, member grid and local settings mirror. |
+| 75 | `getGroupInsights` | — |
+| 76 | `getHandoffReminds` | 保留理由：读 `general.db` 的 `handoff_remind_v0`（微信自带待办提醒）。本机实测**这张表不存在** （22 个库里没有任何 `handoff%` 表）⇒ 界面若直接接上去只会永远显示空… |
+| 77 | `getImageDataUrl` | Decode one message image to a base64 data URL. |
+| 78 | `getImageDataUrlsBatch` | Decode a whole batch of message images to base64 data URLs (N16). |
+| 79 | `getImageOriginal` | 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。 |
+| 80 | `getKbFileChunks` | 读某个文件解析出来的正文（分页）。界面上「就地展开看内容」走这一条。 |
+| 81 | `getKbFiles` | 一个知识库里的文件列表（新上传的在前）。 |
+| 82 | `getKbModelConfig` | 某个知识库的**模型设置**（三个角色的引用 + 各自实际生效的名字）。 |
+| 83 | `getKbVectorIndex` | 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。 |
+| 84 | `getKbs` | Knowledge base list — the scope selector's data source. |
+| 85 | `getKnowledgeGraph` | Knowledge graph: note nodes, `[[…]]` edges, unresolved stubs, **plus the document entity layer** (registered … |
+| 86 | `getLayaStatus` | Local decision model status: required files (model graph + tokenizer), size, source, active download progress… |
+| 87 | `getLedger` | — |
+| 88 | `getMediaAssets` | — |
+| 89 | `getMessageFile` | Resolve a received message file (msg/file) to a base64 data URL. |
+| 90 | `getMessages` | Messages of one talker. |
+| 91 | `getMoments` | Moments page. |
+| 92 | `getMomentsAuthors` | Full-history author activity counts (ranked desc). |
+| 93 | `getMomentsInsights` | — |
+| 94 | `getMomentsMonthly` | — |
+| 95 | `getNewMessages` | Incremental messages newer than a sort_seq watermark (real-time polling). |
+| 96 | `getNotes` | Knowledge notes list of **one** knowledge base. |
+| 97 | `getOfficialAssets` | — |
+| 98 | `getOperationLog` | — |
+| 99 | `getOverview` | — |
+| 100 | `getOverviewInsights` | One-screen data overview. |
+| 101 | `getPaymentStatus` | Authoritative transfer/redpacket status by message server_id. |
+| 102 | `getPrivacyAuditRows` | — |
+| 103 | `getPrivacyScan` | Privacy scan. |
+| 104 | `getPrivacyState` | — |
+| 105 | `getRecords` | Records (revokes/transfers/redpackets/finder/miniprograms/friendverifications). |
+| 106 | `getRegionMap` | Friend-region map (世界板块地图): world → country → province → city → friends. |
+| 107 | `getRemoteImages` | 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。 |
+| 108 | `getRetrievalStatus` | RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。 |
+| 109 | `getRevoked` | Revoked messages. |
+| 110 | `getSearchIndexStatus` | Search index status. |
+| 111 | `getSelfUsername` | Return the current account's own WeChat username (user_name). |
+| 112 | `getSessions` | — |
+| 113 | `getSnsImageDataUrl` | Resolve one SNS (朋友圈) media md5 to an offline base64 data URL from the WeChat cache/<month>/Sns/Img V2-encryp… |
+| 114 | `getSnsVideoCoverDataUrl` | Resolve one SNS (朋友圈) video cover. |
+| 115 | `getSnsVideoDataUrl` | Resolve one SNS (朋友圈) video body so it can be played inline. |
+| 116 | `getStorageStats` | Storage stats. |
+| 117 | `getVideoInfo` | Look up one video message: cover thumbnail + the on-disk video path. |
+| 118 | `getVoiceDataUrl` | Resolve one voice message to an inline-playable wav data URL. |
+| 119 | `getVoiceInfo` | Look up one voice message (silk decode degrades in Node). |
+| 120 | `getVoiceTranscript` | Cached transcript for one voice message (if already transcribed). |
+| 121 | `getWechatConfig` | WeChat config summary. |
+| 122 | `getWechatConfigFull` | Read the full WeChat config (incl. |
+| 123 | `getWechatKeysInfo` | Read all_keys.json info. |
+| 124 | `getWhisperStatus` | Whisper transcription configuration status: engine detection, CUDA presence, models dir + installed ggml bina… |
+| 125 | `getWordCloud` | — |
+| 126 | `installWhisperEngine` | Download + install the whisper.cpp CLI engine into the models dir (`<modelsDir>/bin/whisper-cli.exe`), persis… |
+| 127 | `listBackups` | List local WeChat backups. |
+| 128 | `listEditedMessages` | List edited messages (optionally for one session). |
+| 129 | `listLlmModels` | List the provider's configured models (from the "设置 → 模型" settings section), falling back to the provider cat… |
+| 130 | `listLlmProviders` | List the daily-summary model provider(s): the default model's provider (the one the user actually configured)… |
+| 131 | `listRetrievalFeedback` | 列出最近的问答反馈 + 汇总统计。 |
+| 132 | `listSummaryRecords` | List generated summary records. |
+| 133 | `listSummaryTasks` | List daily-summary tasks. |
+| 134 | `listTasks` | — |
+| 135 | `openConfig` | 保留理由：与「数据配置」面板现有那条路径等价 —— 界面用 `getWechatPathConfig()` 拿到路径后 再 `openPath()` 打开（Settings.tsx）。这里保留一份「直接打开 confi… |
+| 136 | `openPath` | Open an owned path (config/output dir/file) with the system default. |
+| 137 | `optimizeAskQuestion` | 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。 |
+| 138 | `planOriginalFetch` | 盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。 |
+| 139 | `previewBackup` | Preview a backup's contents (bounded file list) before restore. |
+| 140 | `pruneExportHistory` | 按策略清理导出历史（按天数 / 保留最近 N 条 / 只清失效记录）。 |
+| 141 | `renameKb` | Rename one knowledge base. |
+| 142 | `resetEditedMessage` | Restore a message to its original content. |
+| 143 | `resetRetrievalWeights` | 重置调参权重回默认值（丢弃反馈带来的偏移；反馈记录本身保留）。 |
+| 144 | `resolveChatHistory` | — |
+| 145 | `restoreBackup` | — |
+| 146 | `runSummaryTask` | — |
+| 147 | `saveNote` | Create (no `id`) or update (`id` given) one knowledge note. |
+| 148 | `saveRetrievalConfig` | 保存检索参数（阈值/权重/容量）。 |
+| 149 | `saveSummaryTask` | Save (insert/update) a daily-summary task. |
+| 150 | `saveWechatConfig` | Save the WeChat config (merge patch). |
+| 151 | `searchKb` | 在某个知识库里做检索 —— 稀疏（FTS5 bm25）+ 稠密（向量余弦）两路，RRF 名次融合。 |
+| 152 | `searchMembers` | Contact / group-member search. |
+| 153 | `searchMessages` | Full-text search over text messages (index first, scan fallback). |
+| 154 | `searchUnified` | — |
+| 155 | `setCdnImageEnabled` | Set CDN auto-fetch flag. |
+| 156 | `setCdnImageLocalDecrypt` | Set CDN local/service decrypt flag. |
+| 157 | `setKbFileRag` | 切换一个文件是否参与向量化（出网）。 |
+| 158 | `setKbModelConfig` | 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。 |
+| 159 | `setPrivacyState` | — |
+| 160 | `setTaskStatus` | — |
+| 161 | `submitAskFeedback` | 提交问答反馈（目标 5 的闭环入口）。 |
+| 162 | `suggestKbLinks` | 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。 |
+| 163 | `suggestReplies` | 「推荐回复」：按**当前会话**的上下文（+ 用户选中的知识库）给出候选回复。 |
+| 164 | `summarizeKbFile` | 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。 |
+| 165 | `syncHandoffTasks` | — |
+| 166 | `toggleSummaryTask` | Toggle a daily-summary task enabled state. |
+| 167 | `transcribeVoiceBatch` | Batch-transcribe the most recent voice messages: silk → WAV (bundled wx_silk) → whisper-cli with the selected… |
+| 168 | `transcribeVoiceMessage` | Transcribe one voice message on demand (chat bubble 语音转文字). |
+| 169 | `unloadLaya` | Unload the model, releasing roughly 1.2 GB of resident memory. |
+| 170 | `upgradeDecodedImages` | 升级老解码缓存：把 `<decoded>/<md5>.<ext>` 里由低档 `.dat`（聊天版 / 缩略图）解出来的图， 用本机现存最好的一档（`_h` 原图，含 wxgf 转码）重解一遍。**不联网**。 |
+| 171 | `verifyDatabaseKey` | Verify a database key (SQLCipher PBKDF2 + AES + HMAC). |
+| 172 | `verifyImageKey` | — |
 
 ## 明细
 
@@ -671,6 +673,17 @@ extractTasks(options?: { days?: number }): TaskMutationResult
 ```
 
 _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
+
+### `fetchOriginalImagesBatch`
+
+```ts
+async fetchOriginalImagesBatch(options: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult>
+```
+
+批量取回原图（免登录直链）：全库那 16.6% 一次取完，**可续跑**（`<decoded>/.originals-index.json`）。  三条一致：隐私总闸在最前；「自动获取原图（CDN）」关掉时一条请求都不发（回 `blocked`）； 逐条失败不中断整批。**明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% —— 那要微信登录态凭据（边界见 `query/image-original.ts`），只能在微信里点开后用 「升级为原图」收进来。实时进度通过 getDecryptStatus 读取（`op` = `image-original-batch`）。
+
+- @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4，封顶 8）。
+- @returns OriginalBatchResult：候选/尝试/成功/失败/字节/耗时/逐条失败原因。
 
 ### `generateDailySummary`
 
@@ -1571,6 +1584,16 @@ async optimizeAskQuestion(options: { question: string username?: string from?: s
 
 - @param options - question（必填）+ 可选 scope/history 作上下文。
 - @returns AskOptimizeResult: optimized + suggestions。
+
+### `planOriginalFetch`
+
+```ts
+planOriginalFetch(): OriginalFetchPlan
+```
+
+盘点「每条图片消息的原图能不能拿到」——**纯本机扫描，不联网**。  三类答案分开报：本机已有 `_h`（离线就有）/ 有免登录直链可联网补 / 只有 `cdnbig*` （需微信登录态，本应用不取）。没有这个数，界面上只能给一句「取不到」。 与批量执行共用同一次扫描（`scanImageOriginalPlan`），所以两份数字对得上。
+
+- @returns OriginalFetchPlan：条数、可补条数、需登录条数、XML 声明的预计字节数。
 
 ### `previewBackup`
 

@@ -38,6 +38,11 @@ export type InlineAnalysisEntry =
     fromVoice: boolean
     inferenceMs: number
     cached: boolean
+    /**
+     * 「信息不足」标注：源文本太短、判断主要来自上下文（后端 `isLowConfidenceText` 判定）。
+     * 界面据此补一句「仅供参考」——**不改判断本身**，只是不让人把随机结果当成确定结论。
+     */
+    lowConfidence?: boolean
   }
 
 export interface InlineAnalysisOption {
@@ -118,6 +123,7 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
                 next.set(it.localId, {
                   state: 'done', answers: it.answers, sourceText: it.sourceText,
                   fromVoice: it.fromVoice, inferenceMs: it.inferenceMs, cached: it.cached,
+                  lowConfidence: it.lowConfidence === true,
                 })
               } else {
                 next.set(it.localId, { state: 'error', error: it.error ?? '分析失败' })
