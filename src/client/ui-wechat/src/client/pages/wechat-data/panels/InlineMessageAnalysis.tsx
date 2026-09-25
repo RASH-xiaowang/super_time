@@ -1,14 +1,14 @@
 /**
- * 消息下方的**逐条分析**（紧凑版）。
+ * 消息下方的**逐条分析**。
  *
- * 形态约束：它挂在**每一条**对方消息下面，所以默认只占一行 ——
- * 摘要给「紧张度 + 意图 Top1 + 最该做的动作」，点「详情」才展开全部命题。
- *
- * 2026-09-25 重做展示层（原版横跨整个消息区、标签被截断）：
- * - 宽度与气泡列对齐并收窄到 640px（见 inline-analysis.module.css）；
- * - 展开区是两列紧凑块，**按「块高」排序**（短命题在前、choice 在后）让两列配平；
- * - 标题与选项走 `SHORT` 短名表，完整文案挂在 `title` 上（悬停可见）——
- *   9–15 字的中文选项在窄块里会折行/被截断，短名才让「问题 + 结论」一眼看完。
+ * 形态（2026-09-25 按用户给的参考图定稿）：
+ * - **默认展开** —— 用户要的是「每条消息下都直接看得到全部分析」，不是先给一行摘要；
+ *   仍留「收起」给不想看的时候用（收起态只占一行）。
+ * - **与气泡头对齐** —— 左边缘 = 头像 + 间隙，padding 与气泡同为 12px（见 module.css）。
+ * - **命题句用后端原文**（图里就是完整问句「她真的在问"你记不记得"吗？」）：
+ *   早先为了在 108px 窄标签列里不截断而引入的「短名标题」已撤掉 ——
+ *   现在两列块每列 300px，完整问句折两行也读得顺。
+ *   `SHORT` 保留给**选项与摘要行**用（那里是真的窄）。
  */
 import { useState } from 'react'
 import type { LayaAnswer } from '@deepseek-ai/dsh-wechat-data/types'
@@ -16,19 +16,13 @@ import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
 import css from './inline-analysis.module.css'
 
 /**
- * 短名表：命题（`qid`）与选项（criteria key）共用一张表。
+ * 选项短名表：只覆盖 `criteria` 的键（后端 `laya/presets.ts`）。
  *
- * 键取自后端 `laya/presets.ts`；两套键目前不重名。**后端改命题/选项时查不到就回落到原文案**，
- * 所以漂移只会表现为「标签变长」，不会崩、也不会显示错的东西。
+ * 用在两处窄版面：摘要行的「意图 / 该做」与两列块里的选项标签 ——
+ * 「先搜索历史聊天记录，确认对方之前说过什么」有 20 字，在这些位置必然被截断。
+ * **查不到就回落到后端原文**：后端改选项时不会崩，只是标签变长（守卫会提醒同步）。
  */
 const SHORT: Record<string, string> = {
-  // 命题
-  literal_question: '字面提问',
-  is_testing: '考验记性',
-  is_upset: '对方不高兴',
-  real_intent: '真实意图',
-  tension: '紧张程度',
-  best_action: '该做什么',
   // 真实意图的选项
   care_check: '求关注',
   memory_test: '考验记性',
@@ -48,14 +42,14 @@ function short(key: string, fallback: string): string {
   return SHORT[key] ?? fallback
 }
 
-/** 一条命题的紧凑块：标题（短名）+ 结论 + 迷你条/刻度。 */
+/** 一条命题的紧凑块：命题句（后端原文）+ 结论 + 迷你条/刻度。 */
 function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
   if (a.kind === 'noul') {
     const top = a.options[0]
     const p = top?.probability ?? 0
     return (
-      <div className={css.block} title={a.question}>
-        <span className={css.q}>{short(a.qid, a.question)}</span>
+      <div className={css.block}>
+        <span className={css.q}>{a.question}</span>
         <span className={css.verdict}>
           <b>{top?.label ?? ''}</b>
           <em>{(p * 100).toFixed(0)}%</em>
@@ -72,8 +66,8 @@ function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
     const v = a.score ?? 0
     const filled = Math.round((v / max) * 10)
     return (
-      <div className={css.block} title={a.question}>
-        <span className={css.q}>{short(a.qid, a.question)}</span>
+      <div className={css.block}>
+        <span className={css.q}>{a.question}</span>
         <span className={css.verdict}>
           <b>{v.toFixed(1)}</b>
           <em>/ {max}</em>
@@ -85,12 +79,12 @@ function AnswerBlock({ a }: { a: LayaAnswer }): React.JSX.Element {
     )
   }
 
-  // choice：条目较多且最高，排到最后一行正好成对（见 detail 的两列网格）
+  // choice：条目最多也最高，排到最后一行正好与同高的成对（见 detail 的两列网格）
   const shown = a.options.slice(0, 4)
   const rest = a.options.slice(4).reduce((sum, o) => sum + o.probability, 0)
   return (
-    <div className={css.block} title={a.question}>
-      <span className={css.q}>{short(a.qid, a.question)}</span>
+    <div className={css.block}>
+      <span className={css.q}>{a.question}</span>
       <span className={css.bars}>
         {shown.map((o, i) => (
           <span key={o.key} className={css.barRow}>
@@ -117,7 +111,8 @@ export interface InlineMessageAnalysisProps {
 }
 
 export function InlineMessageAnalysis({ entry }: InlineMessageAnalysisProps): React.JSX.Element | null {
-  const [open, setOpen] = useState(false)
+  // **默认展开**（产品决策：挂在每条对方消息下的分析，直接看得到才有意义）
+  const [open, setOpen] = useState(true)
   if (entry === undefined) return null
 
   if (entry.state === 'pending') {
@@ -156,7 +151,7 @@ export function InlineMessageAnalysis({ entry }: InlineMessageAnalysisProps): Re
           <span className={css.item}>该做 {short(aTop.key, aTop.label)} <b>{(aTop.probability * 100).toFixed(0)}%</b></span>
         )}
         <button type="button" className={css.more} onClick={() => { setOpen((v) => !v) }}>
-          {open ? '收起' : '详情'}
+          {open ? '收起' : '展开'}
         </button>
       </div>
       {entry.fromVoice && entry.sourceText !== '' && (

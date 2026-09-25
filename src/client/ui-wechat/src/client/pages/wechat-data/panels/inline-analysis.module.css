@@ -1,26 +1,27 @@
 /* 消息下方的逐条本地分析 —— UI-GEOMETRY-SPEC 全令牌：圆角/间距零字面量。
  *
- * 2026-09-25 重设计。原版三条毛病：
- *   ① 卡片没有限宽，挂在虚拟行里就横跨整个消息区（1000px+）；
- *   ② 概率条是 `minmax(0, 1fr)`，卡片一宽它就被拉到 800px，右侧留一大片空白；
- *   ③ 标签列写死 108px，9–15 字的中文选项必然被截断（「只是想把话聊下去，…」）。
- * 现在的三条对策：
- *   ① 与**气泡列对齐**（左边缘 = 头像 + 间隙）并收窄到 640px 阅读宽度；
- *   ② 展开区改成**两列紧凑块**；调用方按「短命题在前、choice 在后」排序，
- *      两列高度因此配平（最长的 choice 排在最后一行正好成对），整体高度比单列少约 1/3；
- *   ③ 块标题与选项都用**短名**（完整文案挂在 `title` 上），choice 的选项是
- *      「标签 + 百分比」同行、概率条整行铺在下面 —— 标签不再和条争宽度，也就不会被截断。
+ * 2026-09-25 定稿（按用户给的参考图改了两处形态）：
+ *   ① **左边缘与气泡的「头部」对齐**：`margin-left = 头像 + 间隙`（44px），
+ *      且 **padding-left 与气泡同为 `--nm-s-3`（12px）** ⇒ 文字起点与气泡文字起点严格对齐。
+ *      所以**不要加左侧竖线/边框**（会把文字推偏 2px，破坏这条对齐）。
+ *   ② **整块底 + 内部分组块**：外层用 `--wx-card-hover`（浅 #f5f5f5 / 深 #383838，
+ *      即图里那种「比气泡深一档」的灰底），内层命题块用 `--wx-card-bg` 做分层。
+ *      用消息区自己的 `--wx-*` 色系（不是 `--nm-*`），这样浅色/深色两套都自动跟随。
+ *
+ * 前一轮（8aecb42）解决的宽度问题继续成立：
+ *   卡片挂在虚拟行里（宽度 = 整个消息滚动容器），**不加 max-width 就会横跨消息区**，
+ *   里面 `minmax(0,1fr)` 的概率条会被拉到 ~800px、右侧留一大片空白 ⇒ 封顶 640px。
+ *   展开区两列 `minmax(248px, 1fr)`（容器 <508px 自动回落单列），调用方按「块高」排序
+ *   让两列配平；选项标签独占一行，不再被 108px 的固定标签列截断。
  */
 
 .wrap {
-  /* 与气泡列左边缘对齐，并收窄到阅读宽度（窄窗口下自动收缩，不会溢出） */
+  /* 与气泡头对齐：左边缘 = 头像 + 间隙；padding 与气泡一致（12px） */
   margin: var(--nm-s-1) 0 var(--nm-s-2) calc(var(--wx-avatar, 34px) + var(--wx-gap, 10px));
   max-width: 640px;
   padding: var(--nm-s-2) var(--nm-s-3);
-  /* 左侧竖线表示「这条分析挂在上面那条消息上」，故只给右侧圆角 */
-  border-left: 2px solid var(--wx-card-divider, var(--nm-border));
-  border-radius: 0 var(--nm-r-md) var(--nm-r-md) 0;
-  background: var(--nm-bg-hover);
+  border-radius: var(--nm-r-md);
+  background: var(--wx-card-hover, var(--nm-bg-hover));
 }
 
 .summary {
@@ -29,17 +30,17 @@
   align-items: center;
   gap: var(--nm-s-1) var(--nm-s-2);
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   line-height: 1.6;
 }
 
-/* 头部徽章：小圆点 + 文字（原版是块状底，在窄卡里显得笨重） */
+/* 头部徽章：小圆点 + 文字 */
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--nm-s-1);
   flex: none;
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
 }
 
 .badge::before {
@@ -56,7 +57,7 @@
 }
 
 .item b {
-  color: var(--nm-text-1);
+  color: var(--wx-card-title, var(--nm-text-1));
   font-weight: 600;
 }
 
@@ -72,12 +73,12 @@
 }
 
 .more:hover {
-  background: var(--nm-bg-card);
+  background: var(--wx-card-bg, var(--nm-bg-card));
 }
 
 .muted {
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
 }
 
 .err {
@@ -88,19 +89,19 @@
 .transcript {
   margin-top: var(--nm-s-1);
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   line-height: 1.6;
   word-break: break-word;
 }
 
-/* ── 展开区：两列紧凑块 ────────────────────────────────────────── */
+/* ── 展开区：两列紧凑块（窄容器自动回落单列） ─────────────────── */
 .detail {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
   gap: var(--nm-s-2);
   margin-top: var(--nm-s-2);
   padding-top: var(--nm-s-2);
-  border-top: 1px solid var(--nm-border);
+  border-top: 1px solid var(--wx-card-divider, var(--nm-border));
 }
 
 .block {
@@ -109,29 +110,29 @@
   gap: var(--nm-s-1);
   padding: var(--nm-s-2);
   border-radius: var(--nm-r-sm);
-  background: var(--nm-bg-card);
+  background: var(--wx-card-bg, var(--nm-bg-card));
 }
 
-/* 块标题：短名（完整命题句在块的 title 上，悬停可见） */
+/* 命题句：用后端原文（图里就是完整问句，不做短名替换） */
 .q {
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   line-height: 1.5;
 }
 
-/* 结论行：数值/判断用文本-1 加粗，概率用文本-2 常规 */
+/* 结论行：数值/判断用 title 色加粗，概率用 preview 色常规 */
 .verdict {
   display: flex;
   align-items: baseline;
   gap: var(--nm-s-1);
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
 }
 
 .verdict b {
   font-size: var(--nm-fs-sm);
   font-weight: 600;
-  color: var(--nm-text-1);
+  color: var(--wx-card-title, var(--nm-text-1));
 }
 
 .verdict em {
@@ -144,7 +145,7 @@
   display: block;
   height: 4px;
   border-radius: var(--nm-r-pill);
-  background: var(--nm-border);
+  background: var(--wx-card-divider, var(--nm-border));
   overflow: hidden;
 }
 
@@ -168,7 +169,7 @@
   width: 6px;
   height: 6px;
   border-radius: var(--nm-r-pill);
-  background: var(--nm-border);
+  background: var(--wx-card-divider, var(--nm-border));
 }
 
 .tickOn {
@@ -199,14 +200,14 @@
   flex: 1;
   min-width: 0;
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .barLabelTop {
-  color: var(--nm-text-1);
+  color: var(--wx-card-title, var(--nm-text-1));
   font-weight: 600;
 }
 
@@ -214,19 +215,19 @@
 .pctTop {
   flex: none;
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   font-variant-numeric: tabular-nums;
 }
 
 .pctTop {
-  color: var(--nm-text-1);
+  color: var(--wx-card-title, var(--nm-text-1));
   font-weight: 600;
 }
 
 .bar {
   height: 3px;
   border-radius: var(--nm-r-pill);
-  background: var(--nm-border);
+  background: var(--wx-card-divider, var(--nm-border));
   overflow: hidden;
 }
 
@@ -234,7 +235,7 @@
   display: block;
   height: 100%;
   border-radius: var(--nm-r-pill);
-  background: var(--nm-text-2);
+  background: var(--wx-card-preview, var(--nm-text-2));
 }
 
 .barRow:first-child .fill {
@@ -244,6 +245,6 @@
 /* 只展示前 4 项，剩下的合并成一行 —— 不丢信息也不占版面 */
 .barMore {
   font-size: var(--nm-fs-xs);
-  color: var(--nm-text-2);
+  color: var(--wx-card-preview, var(--nm-text-2));
   opacity: 0.75;
 }
