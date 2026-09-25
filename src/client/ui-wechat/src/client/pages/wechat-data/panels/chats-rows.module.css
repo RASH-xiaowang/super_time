@@ -191,6 +191,22 @@
   --wx-link: #245fbd;
   --wx-link-hover: #174a99;
 }
+/* 虚拟行之间的间距（N18 虚拟化之后才有这个类）。
+ *
+ * 为什么不能靠 `.msgBody` 的 `gap`：行是 `position: absolute` + `translateY()` 定位的，
+ * **flex gap 对绝对定位子元素无效** —— 这正是「相邻消息贴在一起、且间隔忽大忽小」的根因
+ * （2026-09-25 用户截图实测：气泡→昵称行 7px、昵称行→气泡 3px，全由行内元素凑出来）。
+ *
+ * 只能用**每行自己的 padding**，而且必须是 padding、不能是 margin：
+ * `measureElement` 量的是元素的 border-box（不含 margin），用 margin 的话
+ * 这段高度不会进 `translateY` 的累加，间距照样看不见（还会让相邻行重叠）。
+ *
+ * 值取 `--wx-row-gap`（16px，从微信官方量的那枚）⇒ 全行类型统一：
+ * 普通消息、群昵称行、系统提示、日期分隔都用同一个间距，不再因内容长短变化。
+ * （`.msgBody` 上的 `gap` 保留：它管的是骨架 / 「加载更多」按钮 / 滚动容器这些正常流子项。）
+ */
+.msgVRow { padding-bottom: var(--wx-row-gap); }
+
 /* 系统提示 / 撤回 / 拍一拍：微信官方是**居中小字灰字、无底色无圆角**，
    （与日期分隔同款字色与字号）。 */
 .msgRowSystem { display: flex; justify-content: center; margin: 0; }

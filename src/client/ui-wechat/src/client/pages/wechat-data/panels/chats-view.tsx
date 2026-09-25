@@ -481,6 +481,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                         key={vi.key}
                         data-index={vi.index}
                         ref={msgVirtualizer.measureElement}
+                        className={cssrows.msgVRow}
                         style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
                       >
                         {renderMsgItem(item)}
