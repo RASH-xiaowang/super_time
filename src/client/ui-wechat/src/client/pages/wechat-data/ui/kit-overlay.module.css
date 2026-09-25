@@ -19,7 +19,7 @@
 }
 
 .tabTrigger {
-  padding: 5px 14px;
+  padding: 4px 14px;
   font-size: var(--nm-fs-md);
   color: var(--nm-text-2);
   background: transparent;

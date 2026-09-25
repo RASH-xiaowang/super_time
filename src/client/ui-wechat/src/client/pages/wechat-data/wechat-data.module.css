@@ -69,7 +69,7 @@
     radial-gradient(120% 120% at 25% 20%, color-mix(in srgb, var(--nm-cyan) 18%, transparent), transparent 60%),
     linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   /* 已配置微信账号时这里换成账号头像，按外框圆角裁掉溢出像素 */
   overflow: hidden;
@@ -100,7 +100,7 @@
 /* 展开态：与 .navItem 同一套左对齐节奏（图标在左、文字在右） */
 .sidebar[data-open] .navBrand {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
   padding: 2px 6px 8px;
 }
 .sidebar[data-open] .navBrandText {
@@ -165,7 +165,7 @@
   color: var(--nm-cyan);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 2px 8px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
@@ -210,9 +210,9 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 11px;
-  padding: 5px 12px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-family: var(--nm-font-mono, monospace);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
@@ -302,7 +302,7 @@
   margin-bottom: 6px;
   padding: 8px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12.5px;
@@ -312,7 +312,7 @@
 }
 .sidebar[data-open] .navToggle {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
 }
 .navToggle:hover {
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
@@ -445,7 +445,7 @@
   gap: 0;
   padding: 8px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12.5px;
@@ -459,7 +459,7 @@
 /* 展开态：回到左对齐 + 图标与文字间距 */
 .sidebar[data-open] .navItem {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
 }
 .navItem:hover {
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);

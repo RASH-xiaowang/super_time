@@ -146,7 +146,6 @@ const RADIUS_BASELINE: Record<string, Record<string, number>> = {
   'ui-wechat/src/client/pages/wechat-data/panels/kbfiles.module.css': { '10px': 4, '8px': 1, '4px': 1, '2px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/knowledge-base.module.css': { '4px': 2, '10px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/ledger.module.css': { '10px': 2, '12px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/panels/list-panel.module.css': { '10px': 11, '12px': 6, '8px': 4, '14px': 3, '6px': 2, '4px': 2, '16px': 1, '2px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/moments-insights.module.css': { '6px': 2, '8px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/moments.module.css': { '8px': 6, '6px': 6, '10px': 4, '12px': 3, '14px': 3, '4px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/monitor.module.css': { '4px': 2, '6px': 1 },
@@ -167,7 +166,6 @@ const RADIUS_BASELINE: Record<string, Record<string, number>> = {
   'ui-wechat/src/client/pages/wechat-data/panels/storage.module.css': { '4px': 3, '8px': 2, '10px': 2, '14px': 2 },
   'ui-wechat/src/client/pages/wechat-data/panels/tasks.module.css': { '10px': 2, '12px': 1 },
   'ui-wechat/src/client/pages/wechat-data/panels/world-map.module.css': { '8px': 6, '12px': 6, '6px': 2, '10px': 1, '4px': 1 },
-  'ui-wechat/src/client/pages/wechat-data/wechat-data.module.css': { '10px': 3 },
 }
 
 const ODD_SPACING_BASELINE: Record<string, number> = {
@@ -189,7 +187,7 @@ const ODD_SPACING_BASELINE: Record<string, number> = {
   'ui-wechat/src/client/pages/wechat-data/panels/kb-rail.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/kbfiles.module.css': 2,
   'ui-wechat/src/client/pages/wechat-data/panels/knowledge-base.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/panels/list-panel.module.css': 7,
+  'ui-wechat/src/client/pages/wechat-data/panels/list-panel.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/moments.module.css': 4,
   'ui-wechat/src/client/pages/wechat-data/panels/note-editor.module.css': 1,
   'ui-wechat/src/client/pages/wechat-data/panels/notice.module.css': 1,
@@ -204,15 +202,13 @@ const ODD_SPACING_BASELINE: Record<string, number> = {
   'ui-wechat/src/client/pages/wechat-data/panels/setup-guide.module.css': 3,
   'ui-wechat/src/client/pages/wechat-data/panels/storage.module.css': 2,
   'ui-wechat/src/client/pages/wechat-data/panels/world-map.module.css': 3,
-  'ui-wechat/src/client/pages/wechat-data/ui/kit-overlay.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/ui/kit.module.css': 1,
-  'ui-wechat/src/client/pages/wechat-data/wechat-data.module.css': 8,
+  'ui-wechat/src/client/pages/wechat-data/wechat-data.module.css': 2,
 }
 
 const PILL_MAX = 78
 const CIRCLE_MAX = 66
-const ILLEGAL_RADIUS_TOTAL_MAX = 299
-const ODD_SPACING_TOTAL_MAX = 108
+const ILLEGAL_RADIUS_TOTAL_MAX = 266
+const ODD_SPACING_TOTAL_MAX = 94
 const FILES_MIN = 61
 const BR_DECL_MIN = 500
 const SP_DECL_MIN = 1200
