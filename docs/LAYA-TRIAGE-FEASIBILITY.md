@@ -211,3 +211,43 @@ laya 推理**完全本地**，不经过 `privacyGate` 的出网闸门（那是 L
 - Node 侧：onnxruntime-node 1.30.0 + `@huggingface/transformers` 4.3.0（PoC 期间临时装入项目
   `node_modules`，已还原 `package.json` / `package-lock.json`，未污染依赖）
 - HF snapshot 缓存损坏 → 模型走本地目录加载（`D:\laya\models\laya-multilingual`），详见记忆中的绕行方案
+
+## 8. 实施记录（2026-09-25 落地）
+
+三期都已实现并通过验证：
+
+| 期 | 交付 | 关键文件 |
+|---|---|---|
+| P0 | 导出脚本 / 中文命题预设 / `build_sequence` 的 JS 复刻 / fixture + 逐 token 守卫 | `tools/laya/*`、`src/backend/wechat-data/src/laya/{presets,build-sequence}.ts`、`tests/laya-sequence.spec.ts` |
+| P1 | 模型分发（复用 whisper 的流式下载器）/ 本地推理运行时 / 5 个 `@Remote` | `laya/{model-file,runtime}.ts`、`remotes/laya.ts`、`query/laya-analysis.ts`、`types-laya.ts` |
+| P2 | 会话工具区按钮 + 消息旁分析卡 | `panels/MessageAnalysisCard.tsx` + `message-analysis-card.module.css`（全令牌） |
+
+### 8.1 导出环节的三个新坑（PoC 阶段没暴露）
+
+1. **必须用 `dynamo=True` 导出。** 旧的 TorchScript 导出器（`dynamo=False`）会把**序列维固化成常量**：
+   导出的图里出现 `Reshape{100,36,64}`（100 = 导出时 dummy 的长度），只有喂进那个长度才跑得通，
+   其它长度一律 `input_shape_size == requested_shape_size was false`。切 eager attention 也救不了
+   ——问题在导出器的常量传播，不在注意力实现。改用 `dynamo=True`（需 `onnxscript`、opset ≥ 18）后，
+   实测两个不同长度（65 / 145）都通过、偏差 1e-06 级。
+2. **自检必须用多个不同长度。** PoC 只用同一形状自检，所以第 1 条整整藏了一轮 ——
+   直到端到端跑真实会话才暴露。`tools/laya/export-onnx.py` 现在把「两个长度都要过」写成硬自检，
+   不过就不许分发。
+3. **产物的权重是外置的**：`laya-decision.onnx`（图，2.2 MB）+ `laya-decision.onnx.data`（1228 MB），
+   两者必须一起分发（onnxruntime 会在同目录找 `.data`）——`LAYA_ASSETS` 已把它列为必需项。
+
+### 8.2 端到端实测（项目生产代码 + 真实模型）
+
+`working/e2e-laya.mjs`（把 `laya/runtime.ts` 打包成 ESM 后直接调用）在 3 段真实对话 × 6 命题上：
+
+- **18/18 项与 Python `laya.predict()` 一致**（choice 概率最大偏差 `0.0e+0`、score 精确相同）；
+- 首次调用含模型加载 1.69 s（加载 1.23 s + 推理 0.46 s），之后单次 **0.46–0.63 s**（574–1012 tokens）；
+- `layaUnload()` 后运行时状态确实回落（`loaded=false`），常驻内存可释放。
+
+### 8.3 仍需注意的边界（未验证）
+
+- **打包关（P3）未做**：onnxruntime-node 的 asarUnpack、`package-content-rules.js` 的上界、
+  真实打包产物里加载模型，都还没验（`build.files` 白名单与平台裁剪已按单平台 27.7 MB 配好）。
+- 模型下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖默认仓库）。
+- 「点某条消息分析」未做：当前分析的是**最新一条对方消息**（按需触发，不做全量），
+  逐条内嵌需要改消息渲染循环与虚拟化列表，留给后续。
+- 模型 fp32（1.23 GB）。若要压到 fp16/int8，**必须重跑 `export-onnx.py` 的多长度自检**。
