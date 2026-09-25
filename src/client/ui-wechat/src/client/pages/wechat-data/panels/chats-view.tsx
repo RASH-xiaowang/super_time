@@ -19,6 +19,7 @@ import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
+import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -128,6 +129,8 @@ export interface ChatsViewProps {
       openCalendar: () => Promise<void>
       openEdits: () => Promise<void>
       openGroupInfo: () => void
+      contactInfoOpen: boolean
+      setContactInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
       openNestedChatlog: (rec: ChatlogRecord) => Promise<void>
       openSession: (s: WechatSession) => Promise<void>
       openSessionAndLocate: (username: string, localId?: number, dayStart?: number) => Promise<void>
@@ -190,7 +193,7 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
   return (
     <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
       {/* left: session list */}
@@ -373,6 +376,13 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 <button type="button" className={cssrows.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={cssshell.calBtnLabel}>日历</span></button>
                 {curSession.type === 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} /><span className={cssshell.calBtnLabel}>群信息</span></button>
+                )}
+                {/*
+                  单聊「聊天信息」（P2-6）：图标化无文字标签——动作区在 960px 已拥挤（P0-2 审计），
+                  群信息按钮（图标+文字）之外再放一个带字的按钮就会把「日历」挤出去。
+                */}
+                {curSession.type !== 'group' && (
+                  <button type="button" className={cssrows.calBtn} data-active={contactInfoOpen || undefined} title="聊天信息" aria-label="聊天信息" onClick={() => { setContactInfoOpen(true) }}><IconUserOutline16 size={14} /></button>
                 )}
                 {/*
                   低频动作（导出/已编辑/清空草稿）收进溢出菜单：此前它们与上面三个按钮平铺，
@@ -583,6 +593,14 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
           </div>
         </div>
       )}
+
+      {/* 单聊「聊天信息」抽屉（P2-6）：组件自带 private-only 守卫与数据获取。 */}
+      <ChatsContactInfoView
+        open={contactInfoOpen}
+        session={curSession}
+        onClose={() => { setContactInfoOpen(false) }}
+        onExport={() => { setContactInfoOpen(false); setExportOpen(true) }}
+      />
 
       {/* message export dialog (格式/类型/时间范围/文件名/目录) */}
       {exportOpen && (

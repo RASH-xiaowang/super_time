@@ -130,6 +130,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [error, setError] = useState<string | null>(null)
 
   const [curSession, setCurSession] = useState<WechatSession | null>(null)
+  /** 单聊「聊天信息」抽屉（P2-6）：与 groupInfoOpen 对称的 private-only 状态。 */
+  const [contactInfoOpen, setContactInfoOpen] = useState(false)
   const [messages, setMessages] = useState<readonly WechatMessage[]>([])
   const [msgLoading, setMsgLoading] = useState(false)
   const [msgError, setMsgError] = useState<string | null>(null)
@@ -624,7 +626,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
     calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir,
-    clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef,
+    clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef,
     editBusy, editErr, editTarget, editText, editedOpen, editing,
     edits, error, expCount, expDir, expFilename, expFormat,
     expFrom, expTo, expTypes, expZip, exportBatch, exportMsg,
@@ -639,7 +641,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount,
+    setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,
