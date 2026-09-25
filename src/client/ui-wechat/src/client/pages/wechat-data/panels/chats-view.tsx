@@ -21,6 +21,7 @@ import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
+import { useImagePreload } from './use-image-preload.ts'
 import { RainWindow } from './rain-window.tsx'
 import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
@@ -204,6 +205,9 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
   const inlineAnalysis = useInlineAnalysis({
     talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer,
   })
+  // 图片预取：可见窗口上下若干行的图片**提前低优先批量取回**并写内存缓存，
+  // 于是滚到它们时 `MessageImage` 首帧就命中缓存 —— 不闪占位（2026-09-26）。
+  useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
 
   return (
     <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>

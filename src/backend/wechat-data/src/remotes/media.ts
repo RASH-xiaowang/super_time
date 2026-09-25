@@ -56,6 +56,13 @@ export interface ImageBatchItem {
   localId: number
   url?: string
   format?: string
+  /**
+   * true = 这一份是缩略/中图（本机还没有更大的）——与单张入口的 `ImageDataUrlResult.thumb` 同义。
+   * 声明它是因为**运行期一直就有**：下面 `items.map` 里展开的正是 `decodeImageDataUrl(...)`
+   * 的返回值。前端预取要把结果写进内存缓存，缓存里少了这个标记，「本机只有缩略图」那句
+   * 提示就会在命中缓存时凭空消失。
+   */
+  thumb?: boolean
   error?: string
 }
 

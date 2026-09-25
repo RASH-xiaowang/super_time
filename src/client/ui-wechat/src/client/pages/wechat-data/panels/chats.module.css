@@ -211,6 +211,30 @@
   background: var(--wx-card-hover);
   transition: opacity 0.15s ease;
 }
+
+/* 图片骨架：等解码时的定尺寸占位。
+   为什么是骨架而不是「图标 + 图片加载中…」：文字占位每张图都要闪一次，图片密集的会话里
+   整屏都是那句话（用户报的就是这个）。尺寸取 `.msgImage` 区间（96–240）里的常见值，
+   尽量少跳；呼吸动画负责表达「在取」，所以不需要文字。 */
+.msgImageSkeleton {
+  width: 160px;
+  height: 120px;
+  border-radius: var(--wx-radius);
+  background: var(--wx-card-bg);
+  animation: wxImgPulse 1.4s ease-in-out infinite;
+}
+@keyframes wxImgPulse {
+  0%,
+  100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+
+/* 图片就绪后淡入：抹平「骨架 → 图片」的突变（150ms 足够，长了对滚动是负担）。 */
+.msgImage[data-loaded] { animation: wxImgIn 150ms ease-out; }
+@keyframes wxImgIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .msgBubbleZoom:hover .msgImage { opacity: 0.9; }
 .msgEmoji { font-size: 26px; line-height: 1.3; }
 /* ── 语音消息（微信波纹图标 + 时长线性加宽） ───────────────────────

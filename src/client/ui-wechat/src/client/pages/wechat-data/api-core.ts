@@ -201,6 +201,8 @@ export interface ImageDataUrlBatchItem {
   localId: number
   url?: string
   format?: string
+  /** true = 缩略/中图（与单张入口的 `ImageDataUrlResult.thumb` 同义）。预取写缓存要用它。 */
+  thumb?: boolean
   error?: string
 }
 
