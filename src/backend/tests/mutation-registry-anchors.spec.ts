@@ -84,8 +84,35 @@ describe('变异登记表的锚点不许腐烂', () => {
     expect(dup, '这些变异 id 重复了').toEqual([])
   })
 
-  it('每条的字段都是非空字符串（形状与 `mutations-registry.d.mts` 那份声明对得上）', () => {
+  /**
+   * 登记表三份文件的每个字段值都写成**一行双引号串** ⇒ 值里出现裸 `"` 就把字符串提前闭合，
+   * 整张表加载失败，报出来的是 `Unexpected identifier` 这种看不出根因的错（本仓已撞三次，
+   * 每次都是新加一条变异时把中文引号打成 ASCII 引号）。这里按文本扫，是为了让下一次得到
+   * 「哪份文件第几行」的精确红，而不是全表 26 条用例一起崩。要在值里引用一段话，用「」。
+   */
+  it('登记表文本里没有会提前闭合字符串的裸引号', () => {
+    const files = [
+      'scripts/mutations-registry.mjs',
+      'scripts/mutations-registry.batch3.mjs',
+      'scripts/mutations-registry.batch3b.mjs',
+    ]
+    const FIELD_LINE = /^(\s*)(id|why|file|from|to|spec): "/
+    const CLEAN_LINE = /^\s*(?:id|why|file|from|to|spec): "(?:[^"\\]|\\.)*",?$/
     const bad: string[] = []
+    let scanned = 0
+    for (const f of files) {
+      const lines = readFileSync(join(ROOT, f), 'utf8').split('\n')
+      lines.forEach((line, i) => {
+        if (!FIELD_LINE.test(line)) return
+        scanned += 1
+        if (!CLEAN_LINE.test(line)) bad.push(`${f}:${String(i + 1)}`)
+      })
+    }
+    expect(scanned, '一个字段行都没扫到 ⇒ 路径或写法判错，这条是恒真').toBeGreaterThan(100)
+    expect(bad, `这些行的值里有裸引号（改用「」引用）：\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('每条的字段都是非空字符串（形状与 `mutations-registry.d.mts` 那份声明对得上）', () => {    const bad: string[] = []
     for (const m of rows) {
       for (const f of FIELDS) {
         const v = m[f]

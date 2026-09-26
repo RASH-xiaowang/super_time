@@ -147,7 +147,8 @@ describe('模型实体层：图例 / 统计 / 详情 / 头像挡位', () => {
 
   it('统计条有「模型实体」这一格，读的是 summary.entityCount', () => {
     expect(panelCode).toContain('模型实体')
-    expect(panelCode).toMatch(/summary\.entityCount \?\? graph\.nodes\.filter\(n => n\.kind === 'entity'\)\.length/)
+    // P3-14 之后这一格的回退不再是"每渲染一遍扫一次节点数组"，而是图上那份计数
+    expect(panelCode).toMatch(/summary\.entityCount \?\? \(graph\.kindCounts\.entity \?\? 0\)/)
   })
 
   it('详情行给 entity 单独一支，且取的是自报身份的那句 excerpt', () => {

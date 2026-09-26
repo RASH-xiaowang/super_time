@@ -515,6 +515,7 @@ function toWechatMessages(
  */
 export function queryNewMessages(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   after: number,
   limit?: number,
@@ -609,6 +610,7 @@ function messageStats(decryptedDir: string, table: string, shards: MsgShard[]): 
  */
 export function queryMessages(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   limit?: number,
   cursor?: number,

@@ -33,11 +33,13 @@ export interface LayaDialogue {
  *
  * @returns 该会话没有对方文本消息时，`dialogue` 与 `latestPeer` 均为空串。
  */
-export declare function buildDialogueState(decryptedDir: string, talker: string, selfUsername?: string, limit?: number): LayaDialogue;
+export declare function buildDialogueState(decryptedDir: string, 
+/** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+talker: string, selfUsername?: string, limit?: number): LayaDialogue;
 /** 一次分析请求。 */
 export interface LayaAnalysisInput {
     decryptedDir: string;
-    /** 会话 username。 */
+    /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
     talker: string;
     selfUsername?: string;
     /** 上下文条数（默认 20，上限 60）。 */
@@ -139,6 +141,7 @@ export interface LayaVisibleAnalysisInput {
     decryptedDir: string;
     /** 解码目录（读语音转写的磁盘缓存）。 */
     decodedDir: string;
+    /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
     talker: string;
     selfUsername?: string;
     targets: readonly LayaTargetRef[];

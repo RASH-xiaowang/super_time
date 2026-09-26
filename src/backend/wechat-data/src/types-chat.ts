@@ -14,6 +14,13 @@
 
 /** One WeChat session (conversation). */
 export interface WechatSession {
+  /**
+   * 会话对方的微信 ID（`wxid_…` / `gh_…` / 群 `…@chatroom`）—— **本仓这个概念的正名**。
+   * 同一个值在问答链里叫 `talker`（`query/messages.ts`、`laya/analysis.ts`，沿用 SQLite 里更早的列名），
+   * 在朋友圈的按人过滤参数上叫 `authorUsername`（`query/moments.ts`）。
+   * 注意 `MomentEntry.author` **不是**这第三个名字：它是「备注 → 昵称 → ID」逐级回退出来的**显示名**，
+   * 拿它当 ID 去查会话是查不到的（审计 P3-6 把三者并列，实测只有前两者同概念）。
+   */
   username: string
   displayName: string
   type: 'group' | 'private'

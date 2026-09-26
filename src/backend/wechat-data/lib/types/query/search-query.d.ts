@@ -60,7 +60,9 @@ export declare const YIELD_EVERY_MS = 25;
  * @param names - username → 显示名。
  * @returns SearchHit 或 null。
  */
-export declare function hitFromRow(row: Record<string, unknown>, talker: string, qLower: string, names: Map<string, string>): SearchHit | null;
+export declare function hitFromRow(row: Record<string, unknown>, 
+/** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+talker: string, qLower: string, names: Map<string, string>): SearchHit | null;
 /**
  * 索引与内置 FTS 两条快路径。都没命中时返回 null —— 由调用方决定要不要走兜底扫描。
  * @param decryptedDir - decrypted data root.

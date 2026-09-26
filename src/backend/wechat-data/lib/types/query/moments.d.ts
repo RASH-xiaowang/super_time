@@ -46,6 +46,7 @@ export interface MomentComment {
 export interface MomentEntry {
     tid: string;
     username: string;
+    /** **显示名**（备注 → 昵称 → ID 逐级回退），不是发帖人的微信 ID —— 别拿它去 join 会话（P3-6 实测澄清）。 */
     author: string;
     text: string;
     ts: number;
@@ -120,7 +121,9 @@ export declare function parseSnsLikesComments(xml: string): {
  * @param authorUsername - optional author filter.
  * @returns the moments snapshot.
  */
-export declare function queryMoments(decryptedDir: string, offset?: number, limit?: number, authorUsername?: string, selfUsername?: string): {
+export declare function queryMoments(decryptedDir: string, offset?: number, limit?: number, 
+/** 按发帖人过滤，传的是会话微信 ID —— 正名见 `WechatSession.username`（P3-6）。 */
+authorUsername?: string, selfUsername?: string): {
     moments: MomentEntry[];
     total: number;
 };

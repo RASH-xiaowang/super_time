@@ -48,6 +48,7 @@ export interface LayaDialogue {
  */
 export function buildDialogueState(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   selfUsername?: string,
   limit = DEFAULT_CONTEXT,
@@ -78,7 +79,7 @@ export function buildDialogueState(
 /** 一次分析请求。 */
 export interface LayaAnalysisInput {
   decryptedDir: string
-  /** 会话 username。 */
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string
   selfUsername?: string
   /** 上下文条数（默认 20，上限 60）。 */
@@ -246,6 +247,7 @@ export interface LayaVisibleAnalysisInput {
   decryptedDir: string
   /** 解码目录（读语音转写的磁盘缓存）。 */
   decodedDir: string
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string
   selfUsername?: string
   targets: readonly LayaTargetRef[]
@@ -280,6 +282,7 @@ export const MAX_ANALYZE_BATCH = 12
  */
 function collectUpToTarget(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   target: LayaTargetRef,
   limit: number,

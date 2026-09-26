@@ -55,9 +55,9 @@ export function normSel (s: string): string {
 }
 
 /** 归一声明串：逐条压空白、去空项。 */
-export function normDecl (d: string): string {
-  return d.split(';')
-    .map((x) => x.trim().replace(/\s*:\s*/, ':').replace(/\s*,\s*/g, ',').replace(/\s+/g, ' '))
+export function normDecl (decls: string): string {
+  return decls.split(';')
+    .map((one) => one.trim().replace(/\s*:\s*/, ':').replace(/\s*,\s*/g, ',').replace(/\s+/g, ' '))
     .filter(Boolean)
     .join(';')
 }
@@ -86,9 +86,9 @@ export function blankComments (css: string): string {
 
 /** 一个偏移量 → 0 基行号。 */
 export function lineOf (text: string, offset: number): number {
-  let n = 0
-  for (let i = 0; i < offset && i < text.length; i += 1) if (text[i] === '\n') n += 1
-  return n
+  let lineNo = 0
+  for (let at = 0; at < offset && at < text.length; at += 1) if (text[at] === '\n') lineNo += 1
+  return lineNo
 }
 
 /**
@@ -150,23 +150,23 @@ export function commentLines (css: string): boolean[] {
   const out: boolean[] = []
   let inComment = false
   for (let i = 0; i < lines.length; i += 1) {
-    const l = lines[i] ?? ''
+    const line = lines[i] ?? ''
     let seenCode = false
-    let j = 0
-    for (; j < l.length;) {
+    let col = 0
+    for (; col < line.length;) {
       if (inComment) {
-        const end = l.indexOf('*/', j)
-        if (end < 0) { j = l.length } else { inComment = false; j = end + 2 }
+        const end = line.indexOf('*/', col)
+        if (end < 0) { col = line.length } else { inComment = false; col = end + 2 }
         continue
       }
-      const start = l.indexOf('/*', j)
-      const cut = start < 0 ? l.length : start
-      if (l.slice(j, cut).trim() !== '') seenCode = true
-      if (start < 0) { j = l.length; continue }
+      const start = line.indexOf('/*', col)
+      const cut = start < 0 ? line.length : start
+      if (line.slice(col, cut).trim() !== '') seenCode = true
+      if (start < 0) { col = line.length; continue }
       inComment = true
-      j = start + 2
+      col = start + 2
     }
-    out.push(!seenCode && l.trim() !== '')
+    out.push(!seenCode && line.trim() !== '')
   }
   return out
 }
@@ -190,9 +190,9 @@ export function parseSource (css: string): SourceCss {
   const startLine = (from: number, to: number): number => {
     let off = from
     while (off < to && /\s/.test(text[off] ?? ' ')) off += 1
-    let a = lineOf(text, off)
-    while (a > 0 && comments[a - 1] === true) a -= 1
-    return a
+    let lineNo = lineOf(text, off)
+    while (lineNo > 0 && comments[lineNo - 1] === true) lineNo -= 1
+    return lineNo
   }
 
   /**
@@ -200,27 +200,27 @@ export function parseSource (css: string): SourceCss {
    * @param at - 外层 at-rule 链。
    */
   const walk = (from: number, to: number, at: string): void => {
-    let i = from
+    let cursor = from
     for (;;) {
-      const brace = text.indexOf('{', i)
+      const brace = text.indexOf('{', cursor)
       if (brace < 0 || brace >= to) break
-      const head = text.slice(i, brace).trim()
+      const head = text.slice(cursor, brace).trim()
       const close = matching(text, brace)
       const bodyStart = brace + 1
       const bodyEnd = Math.min(close, to)
-      const a = startLine(i, brace)
-      const b = lineOf(text, bodyEnd) + 1
+      const fromLine = startLine(cursor, brace)
+      const toLine = lineOf(text, bodyEnd) + 1
       if (head.startsWith('@keyframes') || head.startsWith('@-webkit-keyframes')) {
         const name = head.replace(/@(-webkit-)?keyframes/, '').trim()
-        if (name !== '') frames.push({ name, a, b })
+        if (name !== '') frames.push({ name, a: fromLine, b: toLine })
       } else if (head.startsWith('@')) {
         const nextAt = at === '' ? normSel(head) : at + ' >> ' + normSel(head)
         walk(bodyStart, bodyEnd, nextAt)
       } else if (head !== '') {
         const { locals, globals } = sourceClasses(head)
-        leaves.push({ at, sel: normSel(head), decls: normDecl(text.slice(bodyStart, bodyEnd)), a, b, classes: locals, globals })
+        leaves.push({ at, sel: normSel(head), decls: normDecl(text.slice(bodyStart, bodyEnd)), a: fromLine, b: toLine, classes: locals, globals })
       }
-      i = bodyEnd + 1
+      cursor = bodyEnd + 1
     }
   }
   walk(0, text.length, '')
@@ -228,24 +228,24 @@ export function parseSource (css: string): SourceCss {
 }
 
 /** 并查集：返回 `find`（自带路径压缩）。 */
-export function makeFind (): { union: (a: string, b: string) => void, find: (x: string) => string } {
+export function makeFind (): { union: (first: string, second: string) => void, find: (node: string) => string } {
   const parent = new Map<string, string>()
-  const find = (x: string): string => {
-    let r = x
-    while (parent.get(r) !== undefined && parent.get(r) !== r) r = parent.get(r) ?? r
-    if (!parent.has(r)) parent.set(r, r)
-    let cur = x
-    while (parent.get(cur) !== r) {
-      const nxt = parent.get(cur) ?? r
-      parent.set(cur, r)
+  const find = (node: string): string => {
+    let root = node
+    while (parent.get(root) !== undefined && parent.get(root) !== root) root = parent.get(root) ?? root
+    if (!parent.has(root)) parent.set(root, root)
+    let cur = node
+    while (parent.get(cur) !== root) {
+      const nxt = parent.get(cur) ?? root
+      parent.set(cur, root)
       cur = nxt
     }
-    return r
+    return root
   }
-  const union = (a: string, b: string): void => {
-    const ra = find(a)
-    const rb = find(b)
-    if (ra !== rb) parent.set(rb, ra)
+  const union = (first: string, second: string): void => {
+    const rootOfFirst = find(first)
+    const rootOfSecond = find(second)
+    if (rootOfFirst !== rootOfSecond) parent.set(rootOfSecond, rootOfFirst)
   }
   return { union, find }
 }
@@ -283,15 +283,15 @@ export function clustersOf (
   leaves: readonly Leaf[],
 ): Cluster[] {
   const { union, find } = makeFind()
-  for (const [x, y] of links) union(x, y)
+  for (const [first, second] of links) union(first, second)
   // 没有任何连接的符号也要成簇（否则「孤立规则能随便搬」这件事看不见）
   for (const key of owner.keys()) find(key)
   const byRoot = new Map<string, Cluster>()
-  const bucket = (r: string): Cluster => {
-    const cur = byRoot.get(r)
+  const bucket = (rootKey: string): Cluster => {
+    const cur = byRoot.get(rootKey)
     if (cur !== undefined) return cur
-    const fresh: Cluster = { root: r, symbols: new Set<string>(), rules: 0, lines: 0 }
-    byRoot.set(r, fresh)
+    const fresh: Cluster = { root: rootKey, symbols: new Set<string>(), rules: 0, lines: 0 }
+    byRoot.set(rootKey, fresh)
     return fresh
   }
   const counted = new Set<Leaf>()

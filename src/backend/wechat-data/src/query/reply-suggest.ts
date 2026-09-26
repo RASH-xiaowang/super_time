@@ -35,6 +35,7 @@ export interface ReplyContext {
  */
 export function collectReplyContext(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   selfUsername?: string,
   limit = 20,

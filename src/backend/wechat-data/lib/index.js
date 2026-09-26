@@ -7730,6 +7730,9 @@ async function installWhisperEngine(modelsDir, onProgress) {
   }
   return { ok: false, error: lastError2 + "\uFF08\u53EF\u8BBE\u7F6E DSH_WECHAT_WHISPER_ENGINE_URL \u6307\u5411\u53EF\u8FBE\u955C\u50CF\uFF0C\u6216 DSH_WECHAT_WHISPER_BIN \u6307\u5411\u5DF2\u5B89\u88C5\u7684 whisper-cli.exe\uFF09" };
 }
+function powershellLiteral(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
 async function extractZip(zipPath, destDir) {
   const staging = join30(destDir, ".engine-staging");
   try {
@@ -7739,7 +7742,7 @@ async function extractZip(zipPath, destDir) {
   mkdirSync5(staging, { recursive: true });
   const tar = spawnSync("tar.exe", ["-xf", zipPath, "-C", staging], { windowsHide: true });
   if (tar.status === 0) return staging;
-  const ps = spawnSync("powershell.exe", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${staging}' -Force`], { windowsHide: true });
+  const ps = spawnSync("powershell.exe", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath ${powershellLiteral(zipPath)} -DestinationPath ${powershellLiteral(staging)} -Force`], { windowsHide: true });
   if (ps.status === 0) return staging;
   try {
     const nodeRequire = createRequire(import.meta.url);

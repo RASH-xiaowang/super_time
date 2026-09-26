@@ -35,7 +35,7 @@ function chainGraph(count: number, prefix = 'n'): BuiltGraph {
   const nodes = Array.from({ length: count }, (_, i) => node(`${prefix}${i}`))
   const edges = Array.from({ length: Math.max(0, count - 1) }, (_, i) =>
     edge(`${prefix}${i}`, `${prefix}${i + 1}`, 1 + (i % 3)))
-  return { nodes, edges, communityCount: 0 }
+  return { nodes, edges, communityCount: 0, kindCounts: {} }
 }
 
 /** 设置：默认值 + 覆盖。 */
@@ -332,7 +332,7 @@ describe('runLayout（不碰 localStorage 与 Worker）', () => {
   })
 
   it('空图不炸：返回空坐标表', async () => {
-    const result = await runLayout({ graph: { nodes: [], edges: [], communityCount: 0 }, settings: s() })
+    const result = await runLayout({ graph: { nodes: [], edges: [], communityCount: 0, kindCounts: {} }, settings: s() })
     expect(result.positions.size).toBe(0)
     expect(result.engine).toBe('main')
   })
@@ -426,7 +426,7 @@ describe('runLayout：无边节点被单独安置，且主簇不再被它们撑�
       edge('self', 'a', 5), edge('self', 'b', 4), edge('self', 'c', 3), edge('self', 'd', 2),
       edge('a', 'b', 3), edge('b', 'c', 2), edge('c', 'd', 1), edge('a', 'd', 1),
     ]
-    return { nodes, edges, communityCount: 0 }
+    return { nodes, edges, communityCount: 0, kindCounts: {} }
   }
 
   it('覆盖全部节点：无边节点也要有坐标（否则画不出、点不中）', async () => {
@@ -477,7 +477,7 @@ describe('runLayout：无边节点被单独安置，且主簇不再被它们撑�
   })
 
   it('全是无边节点也不炸：全部进单独展示区', async () => {
-    const g: BuiltGraph = { nodes: [node('x'), node('y')], edges: [], communityCount: 0 }
+    const g: BuiltGraph = { nodes: [node('x'), node('y')], edges: [], communityCount: 0, kindCounts: {} }
     const r = await runLayout({ graph: g, settings: s(), fresh: true })
     expect(r.positions.size).toBe(2)
     expect(Number.isFinite(r.positions.get('x')?.y)).toBe(true)

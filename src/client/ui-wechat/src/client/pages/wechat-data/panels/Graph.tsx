@@ -467,17 +467,17 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
         <div className={css.statBox}><span className={css.statNum}>{graph.communityCount}</span><span className={kitCss.textCaption}>圈子</span></div>
         {isKnowledgeMode ? (
           <>
-            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.noteCount ?? graph.nodes.filter(n => n.kind === 'note').length}</span><span className={kitCss.textCaption}>笔记</span></div>
-            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.stubCount ?? graph.nodes.filter(n => n.kind === 'stub').length}</span><span className={kitCss.textCaption}>待补笔记</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.noteCount ?? (graph.kindCounts.note ?? 0)}</span><span className={kitCss.textCaption}>笔记</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.stubCount ?? (graph.kindCounts.stub ?? 0)}</span><span className={kitCss.textCaption}>待补笔记</span></div>
             {/* 文档实体层：读不到快照时退回数图上的节点，与上面两格同一口径 */}
-            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.fileCount ?? graph.nodes.filter(n => n.kind === 'file').length}</span><span className={kitCss.textCaption}>文件</span></div>
-            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.sectionCount ?? graph.nodes.filter(n => n.kind === 'section').length}</span><span className={kitCss.textCaption}>章节</span></div>
-            <div className={css.statBox} title="模型从文件里抽出的实体（推断层，不是文档里写着的）"><span className={css.statNum}>{knowledge?.summary.entityCount ?? graph.nodes.filter(n => n.kind === 'entity').length}</span><span className={kitCss.textCaption}>模型实体</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.fileCount ?? (graph.kindCounts.file ?? 0)}</span><span className={kitCss.textCaption}>文件</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{knowledge?.summary.sectionCount ?? (graph.kindCounts.section ?? 0)}</span><span className={kitCss.textCaption}>章节</span></div>
+            <div className={css.statBox} title="模型从文件里抽出的实体（推断层，不是文档里写着的）"><span className={css.statNum}>{knowledge?.summary.entityCount ?? (graph.kindCounts.entity ?? 0)}</span><span className={kitCss.textCaption}>模型实体</span></div>
           </>
         ) : (
           <>
-            <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'person').length}</span><span className={kitCss.textCaption}>联系人</span></div>
-            <div className={css.statBox}><span className={css.statNum}>{graph.nodes.filter(n => n.kind === 'group').length}</span><span className={kitCss.textCaption}>群聊</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{(graph.kindCounts.person ?? 0)}</span><span className={kitCss.textCaption}>联系人</span></div>
+            <div className={css.statBox}><span className={css.statNum}>{(graph.kindCounts.group ?? 0)}</span><span className={kitCss.textCaption}>群聊</span></div>
           </>
         )}
       </div>

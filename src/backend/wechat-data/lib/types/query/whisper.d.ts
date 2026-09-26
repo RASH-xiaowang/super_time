@@ -104,6 +104,23 @@ export declare function installWhisperEngine(modelsDir: string, onProgress: (rec
     error?: string;
 }>;
 /**
+ * PowerShell 的单引号字面量：唯一规则是把内部的 `'` 翻倍（口径与 vendored
+ * `dsh-native-command` 里的同名 helper 一致）。
+ *
+ * 为什么需要它：`-Command` 拿到的是**一整段脚本文本**，不是 argv —— 路径里一个撇号
+ * （真实用户名就有，如 `C:\Users\O'Brien\…`）就会提前终结那个字面量，后面的内容变成
+ * **要执行的代码**。`tar.exe` 那一路走的是参数数组，不过 shell，所以没有这个问题；
+ * 只有拼字符串的这一路需要转义（审计 P3-11）。
+ */
+export declare function powershellLiteral(value: string): string;
+/**
+ * 解压 zip 到暂存目录（顶层目录名忽略）。导出只为让"拼出来的那条命令"能被用例钉住。
+ * @param zipPath - 待解压的 zip 路径。
+ * @param destDir - 目标根目录。
+ * @returns 暂存目录（真正的内容在其下一层）。
+ */
+export declare function extractZip(zipPath: string, destDir: string): Promise<string>;
+/**
  * Stream one official ggml model file into the models dir (atomic .part →
  * rename), reporting received/total bytes.
  * @param modelId - model id from the catalog.

@@ -556,15 +556,33 @@ export async function installWhisperEngine(
   return { ok: false, error: lastError + '（可设置 DSH_WECHAT_WHISPER_ENGINE_URL 指向可达镜像，或 DSH_WECHAT_WHISPER_BIN 指向已安装的 whisper-cli.exe）' }
 }
 
-/** Extract a zip into a staging dir; top folder name is ignored. */
-async function extractZip(zipPath: string, destDir: string): Promise<string> {
+/**
+ * PowerShell 的单引号字面量：唯一规则是把内部的 `'` 翻倍（口径与 vendored
+ * `dsh-native-command` 里的同名 helper 一致）。
+ *
+ * 为什么需要它：`-Command` 拿到的是**一整段脚本文本**，不是 argv —— 路径里一个撇号
+ * （真实用户名就有，如 `C:\Users\O'Brien\…`）就会提前终结那个字面量，后面的内容变成
+ * **要执行的代码**。`tar.exe` 那一路走的是参数数组，不过 shell，所以没有这个问题；
+ * 只有拼字符串的这一路需要转义（审计 P3-11）。
+ */
+export function powershellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+/**
+ * 解压 zip 到暂存目录（顶层目录名忽略）。导出只为让"拼出来的那条命令"能被用例钉住。
+ * @param zipPath - 待解压的 zip 路径。
+ * @param destDir - 目标根目录。
+ * @returns 暂存目录（真正的内容在其下一层）。
+ */
+export async function extractZip(zipPath: string, destDir: string): Promise<string> {
   const staging = join(destDir, '.engine-staging')
   try { rmSync(staging, { recursive: true, force: true }) } catch { /* best effort */ }
   mkdirSync(staging, { recursive: true })
   const tar = spawnSync('tar.exe', ['-xf', zipPath, '-C', staging], { windowsHide: true })
   if (tar.status === 0) return staging
   // Fallback: PowerShell Expand-Archive.
-  const ps = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${staging}' -Force`], { windowsHide: true })
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath ${powershellLiteral(zipPath)} -DestinationPath ${powershellLiteral(staging)} -Force`], { windowsHide: true })
   if (ps.status === 0) return staging
   // 最终兜底：纯 JS unzipper（不依赖系统 tar/PowerShell）。
   try {

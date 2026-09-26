@@ -81,6 +81,7 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
      * 语音转写优先命中 whisper 自己的磁盘缓存，只有没转写过的才真调引擎。
      */
     async analyzeVisibleMessages(options: {
+      /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
       talker?: string
       targets?: Array<{ localId: number; sortSeq: number }>
     }): Promise<LayaVisibleAnalysisResult> {
