@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**305 文件 / 3103 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异 122 条全咬红、逐字节还原，登记到 M125）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**307 文件 / 3127 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 130 条全咬红、逐字节还原，登记到 M133）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -45,6 +45,9 @@
 
 | 第三批 #18 拆 `moments-panel.tsx` | 🟡 **第一步做完**（其余三族未完），并**修掉一个真缺陷** | 本次提交 | 报告说「单函数 917 行」，实测 `MomentsPanel` 占 929 行（文件 960 行）：JSX 早在 M21 竖切时就分给了 `moments-card/portals/sidebar`，剩下整块是**容器逻辑**（状态 + 副作用 + 回调），所以这一项的正解是抽自定义钩子而不是再切组件。第一刀切的是**筛选与派生**：原先连着七个 `useMemo`、每个依赖上一个的数组身份 —— **这形状已经真出过事故**：`scoped` 函数体读 `dateScoped`，依赖数组却写 `[monthFiltered, sortOrder]` ⇒ **只改日期范围时列表不动**，而侧栏那个日期选择器是用户点得到的（`moments-panel.tsx:371`，改前）。**改前没有任何用例覆盖日期筛选**，本仓又没装 eslint（#24 那条正是「装 eslint 才能自动拦」），所以「依赖数组漏一项」在这里连静态防线都没有。① 新增 `panels/moments-scope.ts`：筛选是**纯函数**（`scopeMoments`/`insightCounts`/`topAuthorRows`/`monthlyRows`/`monthKeyOfSec`），`useMomentsScope` 是全层**唯一**写依赖数组的地方；月份键刻意不叫 `fmt*`/`format*` —— 那前缀 + 单位换算会被 `format-single-source` 判成第二份实现（同名的 `fmtMonthKey` 会当场给自己登记一条棘轮）。② **判据** `moments-scope.spec.ts` 26 条分三层：纯函数表（八条件逐个正反例、搜索的九个入口、日期闭区间两端各验一次、并列时间戳的稳定序、不改入参，连 `nickname \|\| username` 那条短路口径也钉住）、**jsdom 真渲染**（只改 `dateFrom` 必须换结果 —— 正面打在那个缺陷上；反向钉「值没变、只是 criteria 换了对象身份」不许重算，否则「干脆不 memo」也能骗过第一条）、**AST 契约**（`MomentsCriteria` 每加一个字段，那次 `useMemo` 的依赖里就必须出现 `criteria.<字段>`，配形状哨兵：读不到字段清单或找不到 memo 就红，不许恒真）。③ 接线判据两条（面板必须走这层 + 面板里 criteria 八字段一个不能少），其中「痕迹清单」第一版写错被自己的空转哨兵抓住：`T00:00:00` 在面板里**合法存在**（导出日期范围要用它），拿它当筛选痕迹会误报 —— 痕迹清单只留筛选独有的三条。面板 929 → 837 行。④ 变异 M122–M125：抹掉 `criteria.dateFrom` 依赖（正是原缺陷形状，纯函数表全绿、只有真渲染与契约红）、结束日改 00:00:01、AST 契约认的钩子名改掉、月度分布回退时忽略作者。**剩下的三族仍未拆**（媒体懒解密 / 视频 / 灯箱 / 导出），别把这一条当整项结项 —— 报告估 1.5d，本轮做的是其中最大也最有害的一段。**读码时差点误报一条**：`mediaKeySpec` 在面板里只见读不见写，看着像「懒解密整条链是死的」，实为**卡片在 render 里登记 spec**（`moments-card.tsx:105/146/289`），那次 grep 被 `\| head -20` 截断才只见面板的十几行 ⇒ 否定式结论必须用不限流的搜索（已写进工具记忆 53）。 |
 
+| 第三批 #18 第二步：媒体层 | ✅ 完成（#18 仍未完，剩灯箱/导出/视频三族） | `308f152` | `MomentsPanel` 里最大的一块是**离线媒体**：五个位置散着同一族状态（`snsImgs`/`snsFetched`/`articleCovers`/`coverAttempts`/`coverTick`/`mediaKeySpec`/`mediaQueue`/`mediaFetching`/`mediaObserved`），约 147 行，收进 `panels/moments-media.ts#useMomentsMedia`，面板 929 → **694 行**。这一族的危险性在于它是**三方约定**凑成的、断掉任何一条都不报错：卡片在 render 期间把 `{md5, timelineId…}` 登记进 `mediaKeySpec`、把同一个键挂到 DOM 的 `data-sns-key`，面板的观察器按 DOM 上的键反查那张表 —— 对不上时表现只是「图片永远停在缩略图」，而**这张表改前没有任何用例碰过**。**判据** `moments-media.spec.ts` 16 条全部数 RPC（不读源码形状）：兜底支（jsdom 没有 `IntersectionObserver` ⇒ 走整页解密那一支）逐个解登记过的键且不重复、先问 IndexedDB 命中就不许再调解密 RPC、一批 8 个之外的必须排空（`while` 不是一次 `splice`）、视频走视频封那个 RPC、IDB 捞过的键之后不再走单张 RPC、封面兜底**最多试 3 次**（否则一个永久失败的链接会一直出网）、灯箱缺图只解一次。两条接线判据：面板不许再自己持有那三份状态（`setSnsImgs`/`coverTick`/`drainMedia` 回填就红，且反向钉「这些痕迹在本层里确实找得到」，免得判据比的是编出来的字符串）；卡片的 `mediaKeySpec.current.set` **不许被挪进 `useEffect`**（挪进去就错过挂载时那一次兜底）—— 这条按 AST 认「这个调用表达式本身」，因为外层 `useEffect(...)` 的整段文本也含那段，按 substring 会自己骗过自己。**顺手收成一份出处**：视频键 `v:<md5>` / `v:<timelineId>:<id>` 原先在 `moments-card.tsx` 与 `moments-portals.tsx` 各写一遍（加上本层共三份），现统一走 `videoCoverKey`；`MediaKeySpec` 类型也从卡片挪进媒体层。**判据自己撞出来的两条口径纠正**：① 第一版把「spec 登记 vs 观察器读取」写成「卡片里 `set` 的行号 < 第一个 `useEffect` 的行号」，而卡片根本没有 `useEffect`（⇒ `indexOf` 得 -1，比出的「先后」是假的）；② 「DOM 契约」测试夹具把视频键按 `kind: 'img'` 登记，于是断的是错的那条 RPC。**变异 M126–M130**（`while`→`if`、忽略 IDB 命中、视频走图片 RPC、视频键丢掉 md5 优先、重试上界 3→4），另加一条工具事实：登记表涨到 1036 行撞上 `m21-file-size-ratchet` 的 1000 行硬闸门 ⇒ 按该文件头部早就写好的处置**切批次**（新增 `mutations-registry.batch3.mjs` 装 M118 起，主表停在 M117，末尾聚合成同一个 `MUTATIONS`），**没有放宽闸门**——这是「登记变异这个动作本身撞闸门」第二次发生（第一次见上面的工具修复条目） |
+| 第四批（部分）剪贴板收成唯一出口 + 一条真缺陷 | ✅ 完成 | `8b4343c` | `utils/misc.ts#copyTextToClipboard` 本来就是本仓唯一的复制出口（异步 API 被拒收敛成 `false`，还会试 `execCommand('copy')` 退路），但 **`git grep` 实测有 8 个面板里的 10 处**各自手写 `navigator.clipboard.writeText` + `catch`（别名写法 `clip.writeText` 也算 —— 只搜 `writeText` 会漏掉 `moments-panel` 那两处，第一版就漏了、报成 9 处）：那些站点**没有退路**，窗口失焦/权限被挡这类常态下本可以复制成功却被报成失败；`moments-panel` 更把 `.catch(() => {})` 写成静默，用户看到的下一步建立在「什么都没发生」上。`ReplySuggest.tsx` 早就修对了这件事，但它的判据**只管自己那个文件**（`reply-suggest.wiring.spec.ts`）—— 正是「规则没有全仓化」的下场：修了一处，其余原地不动。本轮升成零容忍闸门。**顺带修一条真缺陷**：`execCommand` **抛异常**时（受限上下文里真会抛）改前会跳过 `document.body.removeChild(ta)`，外层 catch 只回 `false` ⇒ 每失败一次在 body 上留一个 `opacity:0`、且 `select()` 抢过焦点的隐藏 textarea；摘节点挪进 `finally`。这条是**新写的行为用例第一次跑就抓出来的**（P0-1「catch 分支漏 close」那一族的 DOM 版）。**判据** `utils/clipboard-single-source.spec.ts` 8 条：零容忍扫描走 AST 取成员访问（`ReplySuggest.tsx` 注释里就写着 `navigator.clipboard.writeText`，按文本匹配会误报 ⇒ 与 P2-3 那条同一个理由），实测全仓只剩唯一出处的 2 处命中；结构哨兵**不猜文件数下界**（195 是实测值，换机器就漂），改钉「`ui-wechat` 与 `ui-app` 两棵子树都在扫描面里」——第一版拿 `package.json` 当仓库根标记，结果停在 `ui-wechat` 子包上、只扫了半个仓，正是这条把它抓住的；助手行为四条（成功不碰退路 / 被拒走退路并如实回结果 / 两边都坏才 false / 没有 `navigator.clipboard` 也不炸）+ 退路抛异常时不泄漏节点，其中 jsdom **不实现** `document.execCommand`（`vi.spyOn` 直接报 does not exist），退路必须自己装假。**一条被既有守卫接住的返工**：`moments-panel` 第一版写成 `hold(ok ? '已复制' : '复制失败')`，`transient-notice.wiring.spec.ts` 当场红两条 —— 它按**调用点数**钉「提示功能没被顺手删」（Moments 族 9→7），并按**字面量**钉「失败类提示走 hold 不走 flash」。改回 `if (ok) hold('已复制'); else hold('复制失败')` 后两条都过：在这种源码级判据前，合并调用点不是简化。**变异 M131–M133**（回到「不摘节点」的改前形状 / 扫描判据恒不命中 ⇒「0 违规」立刻达成但判据瞎了 / 让 `Emoticons` 退回手写 ⇒ 真回归点上必须报出来） |
+
 ### 剩余（按 §七 的批次，未在本轮）
 
 - 第一批：**已全部做完**（#1–#8）。
@@ -67,6 +70,8 @@
 - 第三批 #18–#20、#22–#25（拆巨型组件、`GatewayCore` 职责拆分、长列表虚拟化、统一失效契约、
   DB 纪律 ESLint 固化、四份新文档 + README 索引）。#21（解循环依赖）已完成，见上表。
 - 第四批其余 P3（`isMd5` 10 处、`normalizeAesKey` 6 处、图片解码三兄弟、同概念三名、地图开关镜像…）；
+  **剪贴板那一处已做完**（8 个面板 10 处收进唯一出口，见上表 `8b4343c`），同概念多处的清单又长出两条：
+  视频键（已并成 `videoCoverKey`）与「面板自己 `setTimeout` 弹提示」（已有 `useTransientNotice` 守着）。
   `KNOWN_SECOND_TIME` 里剩下的 7 份日期函数（各有显示形状，要逐个改文案再核对既有用例）。
 - 本轮新发现的候选守卫（还没写）：「注释里引用的脚本/用例/文档路径必须真的存在」——见 ⑤。
 - 本轮新发现（不在本报告内）：
@@ -149,6 +154,24 @@
      SQLite 头部的样子；以前的判据太松，假夹具一直过得去。已抽公共
      `src/backend/tests/helpers/sqlite-page1.ts`（写规范常数；页大小或缓冲长度不合法就直接抛），
      下一个加密类夹具不必再猜要填哪几个字节。
+  ⑮ **拆组件这件事本身抓出了一条用户可点到的缺陷**（第三批 #18，不在本报告内）：
+     `moments-panel.tsx` 里 `scoped` 那个 memo 的函数体读 `dateScoped`，依赖数组却写
+     `[monthFiltered, sortOrder]` ⇒ **在侧栏选日期范围，列表不动**（要等到别的条件变了才一次性补上）。
+     两个条件让它活到今天：**没有任何用例覆盖日期筛选**，而本仓没装 eslint
+     （§七 #24 那条「用 ESLint 固化 DB 纪律」正是同一件事的另一半 —— 没有静态检查时，
+     「依赖数组漏一项」这类缺陷没有任何自动防线）。修法是「七段链收成纯函数 + 唯一一处 memo」，
+     并加一条 **AST 契约**：`MomentsCriteria` 每加一个字段，那次 `useMemo` 的依赖里就必须出现
+     `criteria.<字段>`（漏了当场红，不等人眼读）。
+  ⑯ **共享助手存在，却被绕过**（P3「第二份实现」同族，不在本报告内）：
+     `utils/misc.ts#copyTextToClipboard` 是唯一的复制出口（异步 API 被拒会转成 `false`，
+     还会试 `execCommand('copy')` 退路），而 `git grep` 实测有 **8 个面板里的 10 处**各自手写
+     `navigator.clipboard.writeText` —— 那些站点没有退路，窗口失焦/权限被挡时本可以复制成功却报成失败，
+     `moments-panel` 更把 `.catch(() => {})` 写成静默。更值得记的是**为什么没人发现**：
+     `ReplySuggest.tsx` 早就修对了，还留了一条判据，但那条判据**只管它自己那个文件** ——
+     「规则没有全仓化」就等于没有规则。本轮把它升成零容忍扫描（AST 取成员访问，注释里的字样不算，
+     `ReplySuggest.tsx` 的注释里恰好就写着那句），并顺手修掉一条真缺陷：`execCommand` **抛异常**时
+     改前会跳过 `document.body.removeChild(ta)` ⇒ 每失败一次就在 body 上留一个抢过焦点的隐藏 textarea
+     （P0-1「catch 分支漏 close」那一族的 DOM 版；这条是新写的行为用例第一次跑就抓出来的）。
 
 
 
