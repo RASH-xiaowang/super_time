@@ -361,7 +361,10 @@ export async function apiGetRecords(options: { kind: string; limit?: number; off
  * @returns LedgerSnapshot.
  */
 export async function apiGetLedger(options?: { month?: string }): Promise<LedgerSnapshot> {
-  return unwrap(await remote().getLedger(options))
+  // 账本是一条**跨全年聚合**的重查询（本机几百毫秒），而总览面板把它挂在数据事件上 ——
+  // 实时同步活跃期约每 10 秒一次。以前这里是 api 层唯一一个**完全没有缓存**的重读，
+  // 于是每次事件都整条重算（P2-4 记的那笔账）。`cachedGet` 的键按月分：切月份不互相污染。
+  return cachedGet('ledger:' + (options?.month ?? 'all'), async () => unwrap(await remote().getLedger(options)))
 }
 /**
  * Fetch the call (type 50) inventory snapshot.

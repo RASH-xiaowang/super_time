@@ -18,6 +18,22 @@
 const SNAPSHOT_TTL_MS = 30_000
 const _snapshotCache = new Map<string, { value: unknown; ts: number }>()
 const _snapshotListeners = new Map<string, Set<() => void>>()
+/**
+ * 「数据变了」的世代戳（毫秒；0 = 从未失效）。
+ *
+ * P2-4 / 第一批 #4：旧实现收到一次实时同步事件就把**整张表清掉** ——
+ * 数据确实都旧了，这个判断没错，错在表达方式：清表 ⇒ 下一次读全部回源，
+ * 而实时同步活跃期这个事件约**每 10 秒来一次**，于是「所有面板每 10 秒全体重新取数」，
+ * 其中 `ledger` / `storage-stats` 这类是几百毫秒的重查询（`overview-panel` 还在每次事件里
+ * 重算它们）。审查记过的那笔「世界板块自身 13ms 被排到 17,008ms」就是同一台单队列的账。
+ *
+ * 现在改成**标记为陈旧**：旧值仍然立刻可用（SWR 的 stale），读它的人顺带触发一次后台刷新，
+ * 刷新成功才写回 + 通知。为了不靠这个机制无限供旧数，超过 {@link STALE_SERVE_CEILING_MS}
+ * 的条目直接丢掉 —— 宁可变冷启动也不画一小时前的数据。
+ */
+let staleBeforeMs = 0
+/** 陈旧值最多还肯画多久（超过就真的丢掉）。 */
+const STALE_SERVE_CEILING_MS = 5 * 60_000
 
 /** Read a fresh-enough cached snapshot, or undefined when absent/stale. */
 export function snapshotHit(key: string): unknown {
@@ -47,15 +63,43 @@ export function snapshotSet(key: string, value: unknown): void {
   _snapshotCache.set(key, { value, ts: Date.now() })
 }
 
-/** Fetch-through cache: returns the cached value immediately when fresh, else fetches and caches. */
+/**
+ * Fetch-through cache，带**陈旧可读**（P2-4）：
+ *   · 新鲜命中 ⇒ 直接回；
+ *   · 有值但过期或被数据变更作废 ⇒ 先回旧值（界面立刻有东西画），同时后台复验、写回并通知；
+ *   · 什么都没有 ⇒ 回源并写入。
+ * 后台复验失败时保留旧值（与 `cachedFetch` 同一降级口径），但陈旧太久的值在读的时候就已经被丢掉了。
+ * 去重集合与 `cachedFetch` 共用同一个 `_revalidating`：两层的键不相交，共用只会更少打请求。
+ */
 export function cachedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-  const hit = snapshotHit(key)
-  if (hit !== undefined) return Promise.resolve(hit as T)
+  const hit = _snapshotCache.get(key)
+  if (hit !== undefined) {
+    const ageMs = Date.now() - hit.ts
+    if (ageMs > STALE_SERVE_CEILING_MS) {
+      // 旧到不该再画的值：当作没有（下一次读会真的回源），顺带把它从内存里丢掉
+      _snapshotCache.delete(key)
+    } else if (ageMs < SNAPSHOT_TTL_MS && hit.ts > staleBeforeMs) {
+      return Promise.resolve(hit.value as T)
+    } else {
+      revalidateSnapshot(key, fetcher)
+      return Promise.resolve(hit.value as T)
+    }
+  }
   return fetcher().then((value) => {
     snapshotSet(key, value)
-    for (const fn of _snapshotListeners.get(key) ?? []) { try { fn() } catch { /* ignore */ } }
+    notifySnapshotRefreshed(key)
     return value
   })
+}
+
+/** 后台复验一个已缓存的键：成功才写回并通知；同键并发只跑一次。 */
+function revalidateSnapshot<T>(key: string, fetcher: () => Promise<T>): void {
+  if (_revalidating.has(key)) return
+  _revalidating.add(key)
+  void Promise.resolve().then(fetcher).then(
+    (value) => { snapshotSet(key, value); notifySnapshotRefreshed(key) },
+    () => { /* 复验失败：留着旧值，下一次读再试（面板自己也订阅着数据事件） */ },
+  ).finally(() => { _revalidating.delete(key) })
 }
 
 /** Subscribe to cache writes for one key (drives re-render after a background refresh). */
@@ -72,9 +116,19 @@ export function subscribeSnapshot(key: string, fn: () => void): () => void {
   }
 }
 
-/** Invalidate the whole snapshot cache (realtime update / manual refresh). */
+/**
+ * 「数据变了」：把全部快照**标记为陈旧**（不是清掉），并通知订阅者。
+ *
+ * 与旧写法的差别只在「旧值还在不在」：旧值仍然能在下一次读时立刻画出来，
+ * 真正的取数改到后台做 —— 于是每 10 秒一次的同步事件不再等于「全体面板同时回源」。
+ * 超过 `STALE_SERVE_CEILING_MS` 的条目在读的时候会被丢掉，不会一直画旧数。
+ */
 export function invalidateSnapshotCache(): void {
-  _snapshotCache.clear()
+  staleBeforeMs = Date.now()
+  const now = Date.now()
+  for (const [k, v] of [..._snapshotCache.entries()]) {
+    if (now - v.ts > STALE_SERVE_CEILING_MS) _snapshotCache.delete(k)
+  }
   for (const set of _snapshotListeners.values()) for (const fn of set) { try { fn() } catch { /* ignore */ } }
 }
 

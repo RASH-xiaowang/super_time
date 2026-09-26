@@ -564,6 +564,22 @@ const MUTATIONS = [
     to: "    return { files: [] }",
     spec: "src/backend/wechat-data/tests/read-error-contract.spec.ts",
   },
+  {
+    id: "M69-stale-read-not-revalidated",
+    why: "陈旧命中只回旧值、不再后台复验（P2-4 的另一半被删）—— 界面会永久停在旧数据上，比转圈更糟",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/cache.ts",
+    from: "      revalidateSnapshot(key, fetcher)\n      return Promise.resolve(hit.value as T)",
+    to: "      return Promise.resolve(hit.value as T)",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/cache-invalidate-stale.spec.ts",
+  },
+  {
+    id: "M70-stale-serve-ceiling-off",
+    why: "去掉「旧到超过上限就当没有」那道闸 —— 陈旧可读会退化成长期画旧数（宁可冷启动也不画五小时前的数据）",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/cache.ts",
+    from: "    if (ageMs > STALE_SERVE_CEILING_MS) {",
+    to: "    if (false) {",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/cache-invalidate-stale.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)
