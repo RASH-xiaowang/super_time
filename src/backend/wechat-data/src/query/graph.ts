@@ -5,11 +5,12 @@
  * group_codes (people: contact↔contact by common groups; groups: group↔group
  * by common members), like the source GraphModel.
  */
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { contactMeta, shardCatalog } from './meta.ts'
+import { cachedBySig, contactMeta, fileSigOf, shardCatalog, shardCatalogSig } from './meta.ts'
+import { withDb } from './db-open.ts'
 import { parseChatRoomExtBuffer } from './group-info.ts'
 import type { GraphSnapshot } from '../types.ts'
 
@@ -90,17 +91,22 @@ function loadMessageCounts(decryptedDir: string, usernames: string[]): Map<strin
   const tableToUser = new Map<string, string>()
   for (const u of usernames) tableToUser.set('Msg_' + createHash('md5').update(u, 'utf8').digest('hex'), u)
   for (const sh of shardCatalog(decryptedDir)) {
-    for (const t of sh.tables.keys()) {
-      const u = tableToUser.get(t)
-      if (!u || counts.has(u)) continue
-      let db: DatabaseSync | null = null
-      try { db = new DatabaseSync(sh.file, { readOnly: true }) } catch { continue }
-      try {
-        counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)
-      } catch { /* next table */ } finally {
-        db.close()
-      }
-    }
+    // 先把这个分片里要的表挑出来，然后**一个分片只开一次库**。
+    // 原先是「每张表开合一次」：本机 290 会话 / 304 张 Msg_* 表 ⇒ 对同一批文件开合数百次，
+    // 而 Windows 的 SQLite 打开是带文件锁的进程级操作 —— 这就是 queryGraph 冷跑 866ms 的大头。
+    const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ''))
+    if (wanted.length === 0) continue
+    try {
+      withDb(sh.file, (db) => {
+        for (const t of wanted) {
+          const u = tableToUser.get(t)
+          if (!u || counts.has(u)) continue
+          try {
+            counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)
+          } catch { /* 这张表读不到就算 0，下一张 */ }
+        }
+      })
+    } catch { /* 整个分片开不了：跳过 */ }
   }
   return counts
 }
@@ -111,9 +117,9 @@ function loadContactMeta(decryptedDir: string): Map<string, { isFriend: boolean;
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return meta
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
+    withDb(p, (db) => {
     const cols = tableColumns(db, 'contact')
-    if (!cols.has('username')) { db.close(); return meta }
+    if (!cols.has('username')) return
     const sel = (c: string, dft: string): string => (cols.has(c) ? c : dft)
     // 备注列名有 remark / Remark 两种历史写法（与 meta.ts 同口径）
     const remarkSel = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : "''"
@@ -124,7 +130,7 @@ function loadContactMeta(decryptedDir: string): Map<string, { isFriend: boolean;
       const avatar = cellString(r.b).trim() || cellString(r.s).trim()
       meta.set(u, { isFriend: r.lt === 1 && r.df === 0, avatar, remark: cellString(r.rm).trim() })
     }
-    db.close()
+    })
   } catch { /* contact db unavailable */ }
   return meta
 }
@@ -144,7 +150,7 @@ function loadRoomData(decryptedDir: string): RoomMemberData {
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return out
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
+    withDb(p, (db) => {
     const cols = tableColumns(db, 'contact')
     const cid = cols.has('id') ? 'id' : 'rowid'
     const idToUser = new Map<number, string>()
@@ -202,7 +208,7 @@ function loadRoomData(decryptedDir: string): RoomMemberData {
       }
     }
     for (const [u, members] of out.roomMembers) out.roomCounts.set(u, members.size)
-    db.close()
+    })
   } catch { /* room data unavailable */ }
   return out
 }
@@ -213,7 +219,28 @@ function loadRoomData(decryptedDir: string): RoomMemberData {
  * @param selfUsername - logged-in account wxid (excluded from persons).
  * @returns nodes + summary (edges derived client-side from group_codes).
  */
+/**
+ * 关系图谱快照（节点 + 群/班级元数据）。
+ *
+ * 后端加签名缓存（P1-3 的第②半）：`cachedBySig` 的键由「会话库 + 通讯录库 + 消息分片目录」
+ * 三处签名拼成，**没变就是 0ms**；实时同步写过这些文件后签名自然变化 ⇒ 不需要显式失效，
+ * 也不会像「整体清空缓存」那样把没变的条目一起丢掉（M8 那场风暴）。
+ * 前端 `apiGetGraph` 那层 30s 的 `cachedGet` 管的是「同一会话里切回来」，
+ * 这一层管的是「换了进程 / 超了 30 秒 / 首次打开」—— 那正是原先必须完整等 866ms 的三种情形。
+ * @param decryptedDir - decrypted data root.
+ * @param selfUsername - 当前账号（用于把自己从人物节点里剔除）。
+ * @returns 图谱快照。
+ */
 export function queryGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot {
+  const sig = [
+    fileSigOf(join(decryptedDir, 'session', 'session.db')),
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    shardCatalogSig(decryptedDir, ['message']),
+  ].join('|')
+  return cachedBySig('graph:' + decryptedDir + '|' + (selfUsername ?? ''), sig, () => computeGraph(decryptedDir, selfUsername))
+}
+
+function computeGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot {
   const nodes: GraphSnapshot['nodes'] = []
   const sessionPath = join(decryptedDir, 'session', 'session.db')
 
@@ -221,16 +248,15 @@ export function queryGraph(decryptedDir: string, selfUsername?: string): GraphSn
   const talkers: string[] = []
   if (existsSync(sessionPath)) {
     try {
-      const db = new DatabaseSync(sessionPath, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
-      if (has) {
+      withDb(sessionPath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
+        if (!has) return
         const rows = db.prepare('SELECT username FROM SessionTable').all() as Array<{ username: string }>
         for (const r of rows) {
           const u = cellString(r.username)
           if (u && u !== 'self') talkers.push(u)
         }
-      }
-      db.close()
+      })
     } catch { /* no sessions */ }
   }
 

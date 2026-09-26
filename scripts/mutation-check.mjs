@@ -508,6 +508,30 @@ const MUTATIONS = [
     to: '      contextIsolation: false,',
     spec: 'src/backend/tests/electron-security-baseline.spec.ts',
   },
+  {
+    id: "M62-privacy-regex-per-row",
+    why: "把类别正则改回「每行 × 每个不敏感类别都 new RegExp」（P1-4 修掉的那半）—— 隐私体检又要热跑 1 秒",
+    file: "src/backend/wechat-data/src/query/privacy.ts",
+    from: "                const re = SCAN_RES[ci]",
+    to: "                const re = spec.insensitive ? new RegExp(spec.re.source, 'gi') : spec.re",
+    spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
+  },
+  {
+    id: "M63-graph-cache-removed",
+    why: "拿掉 queryGraph 的后端签名缓存（P1-3 的第②半）—— 审查基线里那句「热跑 795ms」就回来了",
+    file: "src/backend/wechat-data/src/query/graph.ts",
+    from: "  return cachedBySig('graph:' + decryptedDir + '|' + (selfUsername ?? ''), sig, () => computeGraph(decryptedDir, selfUsername))",
+    to: "  void sig\n  return computeGraph(decryptedDir, selfUsername)",
+    spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
+  },
+  {
+    id: "M64-graph-open-per-table",
+    why: "把「每个分片只开一次库」改回「每张表把所在分片再开一遍」（P1-3 的第①半）—— 开合数重新随会话数增长",
+    file: "src/backend/wechat-data/src/query/graph.ts",
+    from: "  for (const sh of shardCatalog(decryptedDir)) {\n    // 先把这个分片里要的表挑出来，然后**一个分片只开一次库**。\n    // 原先是「每张表开合一次」：本机 290 会话 / 304 张 Msg_* 表 ⇒ 对同一批文件开合数百次，\n    // 而 Windows 的 SQLite 打开是带文件锁的进程级操作 —— 这就是 queryGraph 冷跑 866ms 的大头。\n    const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ''))\n    if (wanted.length === 0) continue\n    try {\n      withDb(sh.file, (db) => {\n        for (const t of wanted) {\n          const u = tableToUser.get(t)\n          if (!u || counts.has(u)) continue\n          try {\n            counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)\n          } catch { /* 这张表读不到就算 0，下一张 */ }\n        }\n      })\n    } catch { /* 整个分片开不了：跳过 */ }\n  }\n",
+    to: "  for (const sh of shardCatalog(decryptedDir)) {\n    for (const t of sh.tables.keys()) {\n      const u = tableToUser.get(t)\n      if (!u || counts.has(u)) continue\n      let db: DatabaseSync | null = null\n      try { db = new DatabaseSync(sh.file, { readOnly: true }) } catch { continue }\n      try {\n        counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)\n      } catch { /* next table */ } finally {\n        db.close()\n      }\n    }\n  }\n",
+    spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)

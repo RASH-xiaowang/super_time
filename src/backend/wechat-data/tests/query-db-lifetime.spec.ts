@@ -41,6 +41,8 @@ const AUDIT_FIXED = [
   'query/unified-search.ts',
   'query/voice.ts',
   'query/search-scaffold.ts',
+  'query/graph.ts',
+  'query/privacy.ts',
 ]
 
 /**
@@ -56,7 +58,6 @@ const KNOWN_UNFIXED: Record<string, number> = {
   'query/daily-summary.ts': 1,
   'query/edit.ts': 3,
   'query/favorites.ts': 1,
-  'query/graph.ts': 3,
   'query/group-info.ts': 1,
   'query/group-insights.ts': 2,
   'query/handoff.ts': 1,
@@ -68,7 +69,6 @@ const KNOWN_UNFIXED: Record<string, number> = {
   'query/official-assets.ts': 2,
   'query/overview-insights.ts': 1,
   'query/overview.ts': 3,
-  'query/privacy.ts': 2,
   'query/records.ts': 1,
   'query/retrieval/embedding.ts': 1,
   'query/search-build.ts': 1,
@@ -343,7 +343,8 @@ describe('query 层的连接纪律（棘轮）', () => {
 
   it('扫描真的看到了足够多的打开点（防空转）', () => {
     expect(files.length).toBeGreaterThan(50)
-    expect(opens).toBeGreaterThan(100)
+    // 下界只用来防「扫描器坏了 ⇒ 集合为空 ⇒ 全部断言恒真」，不代表目标值：改造在推进，这个数只会往下走。
+    expect(opens).toBeGreaterThanOrEqual(90)
   })
 
   it('待改造站点与清单逐个对齐（只能变小，不能变大）', () => {
