@@ -4153,19 +4153,911 @@ function queryRevoked(decryptedDir, limit, offset = 0, q) {
 }
 
 // src/backend/wechat-data/src/query/storage.ts
+import { createHash as createHash3 } from "node:crypto";
+import { DatabaseSync as DatabaseSync14 } from "node:sqlite";
+import { existsSync as existsSync9, readdirSync as readdirSync4, statSync as statSync5 } from "node:fs";
+import { join as join15 } from "node:path";
+import { decompress as decompress3 } from "fzstd";
+
+// src/backend/wechat-data/src/query/search-build.ts
+import { DatabaseSync as DatabaseSync13 } from "node:sqlite";
+import { basename as basename3 } from "node:path";
+
+// src/backend/wechat-data/src/query/search-scaffold.ts
 import { createHash as createHash2 } from "node:crypto";
-import { DatabaseSync as DatabaseSync12 } from "node:sqlite";
-import { existsSync as existsSync7, readdirSync as readdirSync4, statSync as statSync3 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync8, statSync as statSync4 } from "node:fs";
+import { dirname as dirname3, join as join13 } from "node:path";
 import { decompress as decompress2 } from "fzstd";
+
+// src/backend/wechat-data/src/query/search-query.ts
+import { DatabaseSync as DatabaseSync12 } from "node:sqlite";
+import { existsSync as existsSync7 } from "node:fs";
+import { join as join12 } from "node:path";
+function splitGroupPrefix(text, username) {
+  if (!username.endsWith("@chatroom")) return { sender: "", body: text };
+  const m = text.match(/^[A-Za-z0-9_@.\-]{3,64}:\n/);
+  return m ? { sender: m[0].slice(0, -2), body: text.slice(m[0].length) } : { sender: "", body: text };
+}
+function senderLabel(sender, names) {
+  if (!sender) return "";
+  return names.get(sender) ?? sender;
+}
+function readableMessageText(raw) {
+  const t = String(raw || "").trim();
+  if (!t) return "";
+  if (!t.startsWith("<")) return t;
+  const parts = [];
+  for (const tag of ["title", "des", "content", "nickname", "username"]) {
+    let from = 0;
+    while (parts.length < 8) {
+      const si = t.indexOf("<" + tag, from);
+      if (si < 0) break;
+      const gt = t.indexOf(">", si);
+      if (gt < 0) break;
+      const ei = t.indexOf("</" + tag, gt);
+      if (ei < 0) break;
+      let v = t.slice(gt + 1, ei).trim();
+      const cdata = v.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+      if (cdata) v = cdata[1] ?? v;
+      v = v.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+      if (v) parts.push(v);
+      from = ei + 1;
+    }
+    if (parts.length >= 8) break;
+  }
+  return parts.join("  ").trim();
+}
+function formatFullTime(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+var windowTableCache = /* @__PURE__ */ new Map();
+function loadMessageWindow(decryptedDir, username, centerMs, spanMs, limit = 14) {
+  if (!username || !Number.isFinite(centerMs) || centerMs <= 0) return [];
+  const table = msgTableName2(username);
+  const lo = Math.max(0, Math.floor(centerMs - spanMs));
+  const hi = Math.floor(centerMs + spanMs);
+  const out = [];
+  for (const shard of messageShardFiles(decryptedDir)) {
+    const key = shard + "|" + table;
+    let has = windowTableCache.get(key);
+    if (has === void 0) {
+      let probe = null;
+      try {
+        probe = new DatabaseSync12(shard, { readOnly: true });
+        has = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
+      } catch {
+        has = false;
+      } finally {
+        try {
+          probe?.close();
+        } catch {
+        }
+      }
+      windowTableCache.set(key, has);
+    }
+    if (!has) continue;
+    let sdb = null;
+    try {
+      sdb = new DatabaseSync12(shard, { readOnly: true });
+      const rows = sdb.prepare(
+        'SELECT local_id, sort_seq, create_time, message_content FROM "' + table + '" WHERE local_type=1 AND sort_seq BETWEEN ? AND ? ORDER BY sort_seq LIMIT ?'
+      ).all(lo, hi, limit);
+      for (const r of rows) {
+        const raw = decodeCell(r["message_content"]).trim();
+        if (!raw || raw.startsWith("<")) continue;
+        const { sender, body } = splitGroupPrefix(raw, username);
+        const text = body.replace(/\s+/g, " ").trim();
+        if (!text) continue;
+        out.push({
+          local_id: Number(r["local_id"] ?? 0),
+          sort_seq: Number(r["sort_seq"] ?? 0),
+          create_time: Number(r["create_time"] ?? 0),
+          text,
+          sender
+        });
+      }
+      if (out.length > 0) break;
+    } catch {
+    } finally {
+      try {
+        sdb?.close();
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+function searchWechatFts(decryptedDir, q, cap, names, scopeUsername) {
+  const p = join12(decryptedDir, "message", "message_fts.db");
+  if (!existsSync7(p)) return { hits: [] };
+  try {
+    const db = new DatabaseSync12(p, { readOnly: true });
+    const sessions = /* @__PURE__ */ new Map();
+    try {
+      const rows = db.prepare("SELECT rowid AS id, username AS u FROM name2id").all();
+      for (const r of rows) sessions.set(r.id, decodeCell(r.u));
+    } catch {
+    }
+    const out = [];
+    const like2 = "%" + q.replace(/[%_]/g, " ") + "%";
+    for (const [content, aux] of [
+      ["message_fts_v4_0_content", "message_fts_v4_aux_0"],
+      ["message_fts_v4_1_content", "message_fts_v4_aux_1"],
+      ["message_fts_v4_2_content", "message_fts_v4_aux_2"],
+      ["message_fts_v4_3_content", "message_fts_v4_aux_3"]
+    ]) {
+      try {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(content) !== void 0;
+        if (!exists) continue;
+        const sql = 'SELECT c.c0 AS c, a.message_local_id AS lid, a.sort_seq AS ss, a.session_id AS sid FROM "' + content + '" c LEFT JOIN "' + aux + '" a ON a.rowid = c.id WHERE c.c0 LIKE ? ORDER BY c.id DESC LIMIT ?';
+        const rows = db.prepare(sql).all(like2, cap);
+        for (const r of rows) {
+          const username = sessions.get(Number(r["sid"])) ?? "";
+          if (scopeUsername && username !== scopeUsername) continue;
+          const text = decodeCell(r["c"]);
+          const { sender, body: display } = splitGroupPrefix(text, username);
+          const ssMs = Number(r["ss"] ?? 0);
+          const createTime = ssMs > 1e12 ? Math.floor(ssMs / 1e3) : ssMs > 1e9 ? Math.floor(ssMs) : 0;
+          out.push({
+            text,
+            username,
+            create_time: createTime,
+            local_id: Number(r["lid"] ?? 0),
+            name: names.get(username) ?? username,
+            time: createTime ? formatFullTime(createTime) : "",
+            snippet: display.slice(0, 120),
+            sender: senderLabel(sender, names)
+          });
+          if (out.length >= cap) break;
+        }
+      } catch {
+      }
+      if (out.length >= cap) break;
+    }
+    db.close();
+    return { hits: out };
+  } catch {
+    return { hits: [] };
+  }
+}
+var ABORT_CHECK_EVERY_ROWS = 128;
+var YIELD_EVERY_MS = 25;
+function* scanFallbackRows(decryptedDir, username) {
+  let budget = 8e5;
+  const shards = messageShardFiles(decryptedDir);
+  const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800);
+  for (const talker of scopeUsernames) {
+    if (budget <= 0) return;
+    const table = msgTableName2(talker);
+    for (const shard of shards) {
+      if (budget <= 0) return;
+      let sdb = null;
+      try {
+        sdb = new DatabaseSync12(shard, { readOnly: true });
+      } catch {
+        continue;
+      }
+      const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
+      if (!has) {
+        sdb.close();
+        continue;
+      }
+      try {
+        const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1';
+        for (const row of sdb.prepare(sql).iterate()) {
+          budget -= 1;
+          if (budget <= 0) return;
+          yield { talker, row };
+        }
+      } catch {
+      } finally {
+        sdb.close();
+      }
+    }
+  }
+}
+function hitFromRow(row, talker, qLower, names) {
+  const text = decodeCell(row["message_content"]).replace(/\n/g, " ").trim();
+  if (!text || !text.toLowerCase().includes(qLower)) return null;
+  const localId = Number(row["local_id"] ?? 0);
+  const ts2 = Number(row["create_time"] ?? 0);
+  const { sender, body: display } = splitGroupPrefix(text, talker);
+  const dIdx = display.toLowerCase().indexOf(qLower);
+  const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20);
+  const snippet = (dStart > 0 ? "\u2026" : "") + display.slice(dStart, dStart + 100);
+  return {
+    text,
+    username: talker,
+    create_time: ts2,
+    local_id: localId,
+    name: names.get(talker) ?? talker,
+    time: formatFullTime(ts2),
+    snippet,
+    sender: senderLabel(sender, names)
+  };
+}
+function probeIndexedSources(decryptedDir, q, cap, names, username) {
+  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : void 0);
+  if (indexed.ranked && indexed.hits.length > 0) {
+    return { hits: indexed.hits, total: indexed.hits.length, indexed: true };
+  }
+  const builtin = searchWechatFts(decryptedDir, q, cap, names, username);
+  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false };
+  return null;
+}
+function searchIndexMessages(decryptedDir, query, limit, username) {
+  const q = (query || "").trim();
+  if (!q) return { hits: [], total: 0, indexed: false };
+  const cap = Math.min(limit ?? 100, 300);
+  const names = loadDisplayNames(decryptedDir);
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
+  if (early) return early;
+  const hits = [];
+  const qLower = q.toLowerCase();
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    const hit = hitFromRow(row, talker, qLower, names);
+    if (hit) hits.push(hit);
+    if (hits.length >= cap) break;
+  }
+  return { hits, total: hits.length, indexed: false };
+}
+async function searchIndexMessagesCancellable(decryptedDir, query, limit, username, ctrl) {
+  const q = (query || "").trim();
+  if (!q) return { hits: [], total: 0, indexed: false };
+  const cap = Math.min(limit ?? 100, 300);
+  const names = loadDisplayNames(decryptedDir);
+  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
+  if (early) return early;
+  if (ctrl?.signal?.aborted) return { hits: [], total: 0, indexed: false, cancelled: true };
+  const hits = [];
+  const qLower = q.toLowerCase();
+  let rowsSeen = 0;
+  let lastYieldAt = Date.now();
+  let cancelled = false;
+  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
+    rowsSeen += 1;
+    if ((rowsSeen & ABORT_CHECK_EVERY_ROWS - 1) === 0) {
+      if (ctrl?.signal?.aborted) {
+        cancelled = true;
+        break;
+      }
+      if (Date.now() - lastYieldAt >= YIELD_EVERY_MS) {
+        await new Promise((resolve5) => {
+          setImmediate(resolve5);
+        });
+        lastYieldAt = Date.now();
+        if (ctrl?.signal?.aborted) {
+          cancelled = true;
+          break;
+        }
+      }
+    }
+    const hit = hitFromRow(row, talker, qLower, names);
+    if (hit) hits.push(hit);
+    if (hits.length >= cap) break;
+  }
+  return cancelled ? { hits, total: hits.length, indexed: false, cancelled: true } : { hits, total: hits.length, indexed: false };
+}
+
+// src/backend/wechat-data/src/query/search-scaffold.ts
 var ZSTD_MAGIC2 = Buffer.from([40, 181, 47, 253]);
+var INDEX_SCHEMA_VERSION = "5";
+var REFRESHED_KEY = "refreshed_ms";
+var SHARD_WM_PREFIX = "shard_wm:";
+var REFRESH_SLACK_MS = 3e3;
+function ensureMetaIndexes(db) {
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_message_meta_ct_all ON message_meta(create_time)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_message_meta_ct_user ON message_meta(username, create_time)");
+  } catch {
+  }
+}
+function readWatermarks(db) {
+  const out = /* @__PURE__ */ new Map();
+  try {
+    const rows = db.prepare("SELECT key, value FROM meta WHERE key LIKE ?").all(SHARD_WM_PREFIX + "%");
+    for (const r of rows) out.set(r.key.slice(SHARD_WM_PREFIX.length), Number(r.value) || 0);
+  } catch {
+  }
+  return out;
+}
+function bigramTokens(text) {
+  const parts = [];
+  for (const run of String(text || "").match(/[\u4e00-\u9fff]+|[A-Za-z0-9_]+/g) || []) {
+    if (/^[A-Za-z0-9_]+$/.test(run)) {
+      parts.push(run.toLowerCase());
+      continue;
+    }
+    if (run.length === 1) {
+      parts.push(run);
+      continue;
+    }
+    const seg = new Array(run.length - 1);
+    for (let i = 0; i + 2 <= run.length; i += 1) seg[i] = run.slice(i, i + 2);
+    parts.push(seg.join(" "));
+  }
+  return parts.join(" ");
+}
+function ftsPhrase(term) {
+  const toks = bigramTokens(term).split(" ").filter(Boolean);
+  if (toks.length === 0) return "";
+  if (toks.length === 1) return '"' + (toks[0] ?? "").replace(/"/g, "") + '"';
+  return '"' + toks.join(" ") + '"';
+}
+function indexReady(decryptedDir) {
+  const p = searchIndexPath(decryptedDir);
+  if (!existsSync8(p)) return false;
+  try {
+    return withDb(p, (db) => {
+      const rows = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
+      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
+      return rows > 0 && ver?.value === INDEX_SCHEMA_VERSION;
+    });
+  } catch {
+    return false;
+  }
+}
+function countIndexMatches(decryptedDir, term) {
+  if (!indexReady(decryptedDir)) return -1;
+  const phrase = ftsPhrase(term);
+  if (!phrase) return 0;
+  try {
+    return withDb(searchIndexPath(decryptedDir), (db) => {
+      const row = db.prepare("SELECT COUNT(*) AS c FROM message_fts WHERE message_fts MATCH ?").get(phrase);
+      return Number(row?.c ?? 0);
+    });
+  } catch {
+    return -1;
+  }
+}
+function searchIndexBatch(decryptedDir, terms, limit = 400, opts) {
+  if (!indexReady(decryptedDir)) return { hits: [], ranked: false };
+  const parts = terms.map(ftsPhrase).filter(Boolean);
+  if (opts?.person) {
+    const who = ftsPhrase(opts.person);
+    if (who) parts.push("who:" + who);
+  }
+  if (parts.length === 0) return { hits: [], ranked: false };
+  const match = parts.join(" OR ");
+  try {
+    return withDb(searchIndexPath(decryptedDir), (db) => {
+      const sql = "SELECT m.text, m.username, m.create_time, m.local_id, bm25(message_fts) AS score FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid WHERE message_fts MATCH ?" + (opts?.username ? " AND m.username = ?" : "") + " ORDER BY rank LIMIT ?";
+      const args = opts?.username ? [match, opts.username, limit] : [match, limit];
+      const rows = db.prepare(sql).all(...args);
+      const names = loadDisplayNames(decryptedDir);
+      const hits = rows.map((r) => {
+        const text = decodeCell(r["text"]);
+        const username = decodeCell(r["username"]);
+        const createTime = Number(r["create_time"] ?? 0);
+        const { sender, body: display } = splitGroupPrefix(text, username);
+        return {
+          text,
+          username,
+          create_time: createTime,
+          local_id: Number(r["local_id"] ?? 0),
+          name: names.get(username) ?? username,
+          time: formatFullTime(createTime),
+          snippet: display.slice(0, 120),
+          sender: senderLabel(sender, names),
+          // bm25() 越小越相关，取负号变成「越大越相关」
+          score: -Number(r["score"] ?? 0)
+        };
+      });
+      return { hits, ranked: true };
+    });
+  } catch {
+    return { hits: [], ranked: false };
+  }
+}
+function tryDecompress2(data) {
+  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC2)) {
+    try {
+      return Buffer.from(decompress2(data));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+function searchIndexPath(decryptedDir) {
+  return join13(dirname3(decryptedDir), "wechat_search.db");
+}
+function msgTableName2(username) {
+  return "Msg_" + createHash2("md5").update(username, "utf8").digest("hex");
+}
+function decodeCell(v) {
+  if (v === null || v === void 0) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
+  const raw = Buffer.from(v instanceof Uint8Array ? v : []);
+  const decompressed = tryDecompress2(raw);
+  const bytes = decompressed ?? raw;
+  try {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("gbk", { fatal: false }).decode(bytes);
+  }
+}
+function messageShardFiles(decryptedDir) {
+  return shardCatalog(decryptedDir).map((s) => s.file);
+}
+function loadSessionUsernames(decryptedDir) {
+  const dbPath8 = join13(decryptedDir, "session", "session.db");
+  if (!existsSync8(dbPath8)) return [];
+  const out = [];
+  try {
+    withDb(dbPath8, (db) => {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+      const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all();
+        for (const r of rows) {
+          const u = decodeCell(r["username"]).trim();
+          if (u) out.push(u);
+        }
+      }
+    });
+  } catch {
+  }
+  return out;
+}
+function loadDisplayNames(decryptedDir) {
+  const names = /* @__PURE__ */ new Map();
+  for (const [u, n] of contactMeta(decryptedDir).names) names.set(u, n);
+  const sessionDb = join13(decryptedDir, "session", "session.db");
+  if (existsSync8(sessionDb)) {
+    try {
+      withDb(sessionDb, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionNoContactInfoTable'").get() !== void 0;
+        if (has) {
+          const rows = db.prepare("SELECT username, session_title FROM SessionNoContactInfoTable").all();
+          for (const r of rows) {
+            const u = decodeCell(r["username"]);
+            const t = decodeCell(r["session_title"]).trim();
+            if (u && t && !names.has(u)) names.set(u, t);
+          }
+        }
+      });
+    } catch {
+    }
+  }
+  return names;
+}
+function knownEntityNames(decryptedDir, limit = 500) {
+  const out = /* @__PURE__ */ new Set();
+  for (const n of loadDisplayNames(decryptedDir).values()) {
+    const v = String(n || "").trim();
+    if (v.length < 2 || v.length > 24) continue;
+    out.add(v);
+    if (out.size >= limit) break;
+  }
+  return [...out];
+}
+function getSearchIndexStatus(decryptedDir) {
+  const p = searchIndexPath(decryptedDir);
+  if (!existsSync8(p)) return { exists: false, rows: 0, built_at: null, ready: false };
+  try {
+    return withDb(p, (db) => {
+      const rows = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
+      const built = db.prepare("SELECT value FROM meta WHERE key='built_at'").get();
+      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
+      return { exists: true, rows, built_at: built?.value ?? null, ready: rows > 0 && ver?.value === INDEX_SCHEMA_VERSION };
+    });
+  } catch {
+    return { exists: true, rows: 0, built_at: null, ready: false };
+  }
+}
+function getSearchIndexFreshness(decryptedDir) {
+  let refreshedMs = 0;
+  let latestIndexedTime = 0;
+  const p = searchIndexPath(decryptedDir);
+  if (existsSync8(p)) {
+    try {
+      withDb(p, (db) => {
+        const r = db.prepare("SELECT value FROM meta WHERE key = ?").get(REFRESHED_KEY);
+        refreshedMs = Number(r?.value ?? 0) || 0;
+        const m = db.prepare("SELECT MAX(create_time) AS m FROM message_meta").get().m;
+        latestIndexedTime = Number(m ?? 0);
+      });
+    } catch {
+    }
+  }
+  let staleShards = 0;
+  for (const shard of messageShardFiles(decryptedDir)) {
+    try {
+      if (statSync4(shard).mtimeMs > refreshedMs + REFRESH_SLACK_MS) staleShards += 1;
+    } catch {
+      staleShards += 1;
+    }
+  }
+  return { refreshedMs, stale: staleShards > 0, staleShards, latestIndexedTime };
+}
+
+// src/backend/wechat-data/src/query/search-build.ts
+async function ensureSearchIndex(decryptedDir) {
+  const st = getSearchIndexStatus(decryptedDir);
+  if (!st.ready) {
+    const built = await buildSearchIndex(decryptedDir, false);
+    return {
+      action: "build",
+      elapsed_ms: built.elapsed_ms ?? 0,
+      ...built.rows !== void 0 ? { rows: built.rows } : {},
+      ...built.message ? { message: built.message } : {}
+    };
+  }
+  if (!getSearchIndexFreshness(decryptedDir).stale) return { action: "none", elapsed_ms: 0 };
+  const synced = await syncSearchIndex(decryptedDir);
+  return {
+    action: synced.status === "ok" ? "sync" : "none",
+    added: synced.added,
+    elapsed_ms: synced.elapsed_ms,
+    ...synced.message ? { message: synced.message } : {}
+  };
+}
+var inflightIndexSyncs = /* @__PURE__ */ new Map();
+function syncSearchIndex(decryptedDir) {
+  const key = searchIndexPath(decryptedDir);
+  const slot = inflightIndexSyncs.get(key);
+  if (slot) return slot;
+  const promise = runSyncSearchIndex(decryptedDir);
+  inflightIndexSyncs.set(key, promise);
+  const release = () => {
+    if (inflightIndexSyncs.get(key) === promise) inflightIndexSyncs.delete(key);
+  };
+  promise.then(release, release);
+  return promise;
+}
+async function runSyncSearchIndex(decryptedDir) {
+  const started = Date.now();
+  const building = inflightIndexBuilds.get(searchIndexPath(decryptedDir));
+  if (building) {
+    try {
+      await building.promise;
+    } catch {
+    }
+  }
+  const skip = (message) => ({ status: "skipped", added: 0, shards: 0, elapsed_ms: Date.now() - started, message });
+  if (!indexReady(decryptedDir)) return skip("\u7D22\u5F15\u7F3A\u5931\u6216\u7248\u672C\u4E0D\u7B26\uFF0C\u9700\u8981\u5168\u91CF\u6784\u5EFA");
+  const shards = messageShardFiles(decryptedDir);
+  if (shards.length === 0) return skip("\u6D88\u606F\u5206\u7247\u6E05\u5355\u4E3A\u7A7A\uFF08message \u76EE\u5F55\u4E0D\u53EF\u8BFB\uFF1F\uFF09");
+  const usernames = loadSessionUsernames(decryptedDir);
+  if (usernames.length === 0) return skip("\u4F1A\u8BDD\u6E05\u5355\u4E3A\u7A7A");
+  const names = loadDisplayNames(decryptedDir);
+  let db = null;
+  try {
+    db = new DatabaseSync13(searchIndexPath(decryptedDir));
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+    } catch {
+    }
+    try {
+      db.exec("PRAGMA synchronous = NORMAL");
+    } catch {
+    }
+    ensureMetaIndexes(db);
+    const wm = readWatermarks(db);
+    const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
+    const insFts = db.prepare("INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)");
+    const insKv = db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)");
+    let added = 0;
+    let handled = 0;
+    let rowsSinceYield = 0;
+    let charsSinceYield = 0;
+    const nextWm = /* @__PURE__ */ new Map();
+    db.exec("BEGIN");
+    for (const shard of shards) {
+      const shardName = basename3(shard);
+      const since = wm.get(shardName) ?? 0;
+      let sdb = null;
+      try {
+        sdb = new DatabaseSync13(shard, { readOnly: true });
+      } catch {
+        continue;
+      }
+      try {
+        const tableSet = new Set(
+          sdb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name)
+        );
+        let tail = since;
+        handled += 1;
+        for (const username of usernames) {
+          const table = msgTableName2(username);
+          if (!tableSet.has(table)) continue;
+          let rows;
+          try {
+            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '" WHERE sort_seq > ?';
+            rows = sdb.prepare(sql).iterate(since)[Symbol.iterator]();
+          } catch {
+            continue;
+          }
+          const sessionWho = bigramTokens(names.get(username) ?? username);
+          for (; ; ) {
+            let step;
+            try {
+              step = rows.next();
+            } catch {
+              break;
+            }
+            if (step.done) break;
+            const r = step.value;
+            rowsSinceYield += 1;
+            const seq = Number(r["sort_seq"] ?? 0);
+            if (seq > tail) tail = seq;
+            const raw = decodeCell(r["message_content"]) || decodeCell(r["compress_content"]);
+            charsSinceYield += raw.length;
+            const { sender, body } = splitGroupPrefix(raw, username);
+            const text = readableMessageText(body);
+            if (text) {
+              const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
+              const res = insMeta.run(text, username, Number(r["create_time"] ?? 0), seq, Number(r["local_id"] ?? 0));
+              insFts.run(Number(res.lastInsertRowid), bigramTokens(text), who);
+              added += 1;
+            }
+            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              rowsSinceYield = 0;
+              charsSinceYield = 0;
+              await yieldToLoop();
+            }
+          }
+        }
+        if (tail > since) nextWm.set(shardName, tail);
+      } finally {
+        try {
+          sdb.close();
+        } catch {
+        }
+      }
+    }
+    for (const [shardName, seq] of nextWm) insKv.run(SHARD_WM_PREFIX + shardName, String(seq));
+    insKv.run(REFRESHED_KEY, String(Date.now()));
+    db.exec("COMMIT");
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+    }
+    return { status: "ok", added, shards: handled, elapsed_ms: Date.now() - started };
+  } catch (e) {
+    try {
+      db?.exec("ROLLBACK");
+    } catch {
+    }
+    return { status: "error", added: 0, shards: 0, elapsed_ms: Date.now() - started, message: e.message };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+    }
+  }
+}
+function listMessagesInRange(decryptedDir, fromSec, toSec, limit, username) {
+  if (!indexReady(decryptedDir)) return { hits: [], ready: false };
+  const lo = Math.floor(Math.min(fromSec, toSec));
+  const hi = Math.ceil(Math.max(fromSec, toSec));
+  if (!(lo > 0) || !(hi >= lo)) return { hits: [], ready: false };
+  const cap = Math.min(Math.max(limit ?? 120, 1), 600);
+  try {
+    const db = new DatabaseSync13(searchIndexPath(decryptedDir), { readOnly: true });
+    const sql = "SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?" + (username ? " AND username = ?" : "") + " ORDER BY create_time DESC LIMIT ?";
+    const args = username ? [lo, hi, username, cap] : [lo, hi, cap];
+    const rows = db.prepare(sql).all(...args);
+    db.close();
+    const names = loadDisplayNames(decryptedDir);
+    const hits = rows.map((r) => {
+      const text = decodeCell(r["text"]);
+      const uname = decodeCell(r["username"]);
+      const ts2 = Number(r["create_time"] ?? 0);
+      const { sender, body } = splitGroupPrefix(text, uname);
+      return {
+        text,
+        username: uname,
+        create_time: ts2,
+        local_id: Number(r["local_id"] ?? 0),
+        name: names.get(uname) ?? uname,
+        time: formatFullTime(ts2),
+        snippet: body.replace(/\s+/g, " ").slice(0, 120),
+        sender: senderLabel(sender, names)
+      };
+    });
+    return { hits, ready: true };
+  } catch {
+    return { hits: [], ready: false };
+  }
+}
+var YIELD_EVERY_ROWS = 2e3;
+var YIELD_EVERY_CHARS = 1 << 17;
+var FLUSH_EVERY_CHARS = 1 << 16;
+var inflightIndexBuilds = /* @__PURE__ */ new Map();
+function buildSearchIndex(decryptedDir, force) {
+  const key = searchIndexPath(decryptedDir);
+  const slot = inflightIndexBuilds.get(key);
+  if (slot && (slot.force || !force)) return slot.promise;
+  const base = slot ? slot.promise.catch(() => void 0) : Promise.resolve();
+  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force));
+  const entry = { promise, force: Boolean(force) };
+  inflightIndexBuilds.set(key, entry);
+  const release = () => {
+    if (inflightIndexBuilds.get(key) === entry) inflightIndexBuilds.delete(key);
+  };
+  promise.then(release, release);
+  return promise;
+}
+function withIndexWrite(decryptedDir, fn) {
+  if (inflightIndexBuilds.has(searchIndexPath(decryptedDir))) return { ok: false };
+  return { ok: true, value: fn() };
+}
+async function runBuildSearchIndex(decryptedDir, force) {
+  const p = searchIndexPath(decryptedDir);
+  const db = new DatabaseSync13(p);
+  try {
+    db.exec("PRAGMA journal_mode = WAL");
+  } catch {
+  }
+  try {
+    db.exec("PRAGMA synchronous = NORMAL");
+  } catch {
+  }
+  const init = () => {
+    db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61', content='')");
+    db.exec("CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)");
+    ensureMetaIndexes(db);
+  };
+  try {
+    init();
+    const existing = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
+    const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
+    if (!force && existing > 0 && ver?.value === INDEX_SCHEMA_VERSION) {
+      return { status: "exists", rows: existing, message: "\u7D22\u5F15\u5DF2\u5B58\u5728\uFF0C\u4F7F\u7528 force=true \u53EF\u91CD\u5EFA" };
+    }
+    const started = Date.now();
+    const names = loadDisplayNames(decryptedDir);
+    const usernames = loadSessionUsernames(decryptedDir);
+    const shards = messageShardFiles(decryptedDir);
+    if (shards.length === 0 && existing > 0) {
+      throw new Error(`\u6D88\u606F\u5206\u7247\u6E05\u5355\u4E3A\u7A7A\uFF08message \u76EE\u5F55\u4E0D\u53EF\u8BFB\uFF1F\uFF09\uFF0C\u5DF2\u4E2D\u6B62\u91CD\u5EFA\u4EE5\u514D\u6E05\u7A7A\u73B0\u6709 ${existing} \u884C\u7D22\u5F15`);
+    }
+    db.exec("BEGIN");
+    db.exec("DROP TABLE IF EXISTS message_fts");
+    db.exec("DROP TABLE IF EXISTS message_meta");
+    init();
+    db.exec("DELETE FROM meta WHERE key='built_at'");
+    let total = 0;
+    let rowsSinceYield = 0;
+    let charsSinceYield = 0;
+    let batch = [];
+    let batchChars = 0;
+    const shardWm = /* @__PURE__ */ new Map();
+    let skippedCount = 0;
+    const skipped = [];
+    const recordSkip = (shard, e) => {
+      skippedCount += 1;
+      const detail = basename3(shard) + ": " + e.message;
+      if (skipped.length < 5) skipped.push(detail);
+      console.warn("[search] \u8DF3\u8FC7\u4E0D\u53EF\u8BFB\u5206\u7247 " + detail);
+    };
+    const flush = () => {
+      if (batch.length === 0) return;
+      const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
+      const insFts = db.prepare("INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)");
+      for (const [text, tokens, who, username, createTime, sortSeq, localId] of batch) {
+        const r = insMeta.run(text, username, createTime, sortSeq, localId);
+        insFts.run(Number(r.lastInsertRowid), tokens, who);
+      }
+      batch = [];
+      batchChars = 0;
+    };
+    for (const shard of shards) {
+      let sdb = null;
+      try {
+        sdb = new DatabaseSync13(shard, { readOnly: true });
+      } catch (e) {
+        recordSkip(shard, e);
+        continue;
+      }
+      let tableSet;
+      try {
+        tableSet = new Set(sdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name));
+      } catch (e) {
+        recordSkip(shard, e);
+        sdb.close();
+        continue;
+      }
+      try {
+        for (const username of usernames) {
+          const table = msgTableName2(username);
+          if (!tableSet.has(table)) continue;
+          const sessionWho = bigramTokens(names.get(username) ?? username);
+          let rows;
+          try {
+            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
+            rows = sdb.prepare(sql).iterate()[Symbol.iterator]();
+          } catch (e) {
+            recordSkip(shard, e);
+            continue;
+          }
+          for (; ; ) {
+            let step;
+            try {
+              step = rows.next();
+            } catch (e) {
+              recordSkip(shard, e);
+              break;
+            }
+            if (step.done) break;
+            const r = step.value;
+            rowsSinceYield += 1;
+            const localId = Number(r["local_id"] ?? 0);
+            const createTime = Number(r["create_time"] ?? 0);
+            const sortSeq = Number(r["sort_seq"] ?? localId);
+            const wmPrev = shardWm.get(shard) ?? 0;
+            if (sortSeq > wmPrev) shardWm.set(shard, sortSeq);
+            const raw = decodeCell(r["message_content"]) || decodeCell(r["compress_content"]);
+            charsSinceYield += raw.length;
+            const { sender, body } = splitGroupPrefix(raw, username);
+            const text = readableMessageText(body);
+            if (text) {
+              const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
+              batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
+              batchChars += text.length;
+            }
+            if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush();
+            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              rowsSinceYield = 0;
+              charsSinceYield = 0;
+              await yieldToLoop();
+            }
+          }
+          if (batch.length >= 500) flush();
+        }
+      } finally {
+        sdb.close();
+      }
+    }
+    flush();
+    flush();
+    total = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
+    const builtAt = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
+    db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt);
+    db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION);
+    const insKv = db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)");
+    for (const [shardPath, seq] of shardWm) insKv.run(SHARD_WM_PREFIX + basename3(shardPath), String(seq));
+    insKv.run(REFRESHED_KEY, String(Date.now()));
+    db.exec("COMMIT");
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+    }
+    const result = { status: "ok", rows: total, built_at: builtAt, elapsed_ms: Date.now() - started };
+    if (skippedCount > 0) result.message = `\u5DF2\u8DF3\u8FC7 ${skippedCount} \u4E2A\u4E0D\u53EF\u8BFB\u5206\u7247\uFF1A${skipped.join("; ")}`;
+    return result;
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+    }
+    throw new Error("\u6784\u5EFA\u641C\u7D22\u7D22\u5F15\u5931\u8D25: " + e.message);
+  } finally {
+    db.close();
+  }
+}
+function yieldToLoop() {
+  return new Promise((resolve5) => {
+    setImmediate(resolve5);
+  });
+}
+
+// src/backend/wechat-data/src/query/storage.ts
+var ZSTD_MAGIC3 = Buffer.from([40, 181, 47, 253]);
 function decodeMsgText(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
   const raw = Buffer.from(v instanceof Uint8Array ? v : []);
-  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC2) ? (() => {
+  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC3) ? (() => {
     try {
-      return Buffer.from(decompress2(raw));
+      return Buffer.from(decompress3(raw));
     } catch {
       return raw;
     }
@@ -4181,7 +5073,7 @@ function xmlTitle(xml) {
   return m ? (m[1] ?? "").trim() : "";
 }
 function findMsgShard(dec, username) {
-  const table = "Msg_" + createHash2("md5").update(username, "utf8").digest("hex");
+  const table = "Msg_" + createHash3("md5").update(username, "utf8").digest("hex");
   for (const sh of shardCatalogDirs(dec, ["message", "bizchat"])) {
     if (sh.tables.has(table)) return { db: sh.file, table };
   }
@@ -4192,7 +5084,7 @@ function resolveFileTitle(dec, username, svr) {
   const sh = findMsgShard(dec, username);
   if (!sh) return "";
   try {
-    const db = new DatabaseSync12(sh.db, { readOnly: true });
+    const db = new DatabaseSync14(sh.db, { readOnly: true });
     try {
       const cols = new Set(db.prepare("PRAGMA table_info(" + sh.table + ")").all().map((r) => r.name));
       if (!cols.has("server_id")) return "";
@@ -4224,27 +5116,28 @@ function fileNamesSig(root) {
   try {
     for (const e of readdirSync4(root, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
-      parts.push(`${e.name}:${fileSigOf(join12(root, e.name))}`);
+      parts.push(`${e.name}:${fileSigOf(join15(root, e.name))}`);
     }
   } catch {
   }
   return parts.join("|");
 }
-function loadFileNamesBySize(wechatBaseDir) {
+async function loadFileNamesBySize(wechatBaseDir) {
   if (!wechatBaseDir) return /* @__PURE__ */ new Map();
-  const root = join12(wechatBaseDir, "msg", "file");
-  if (!existsSync7(root)) return /* @__PURE__ */ new Map();
-  return cachedBySig("storage-file-names:" + root, fileNamesSig(root), () => {
+  const root = join15(wechatBaseDir, "msg", "file");
+  if (!existsSync9(root)) return /* @__PURE__ */ new Map();
+  return cachedBySigAsync("storage-file-names:" + root, fileNamesSig(root), async () => {
     const map = /* @__PURE__ */ new Map();
     try {
       for (const e of readdirSync4(root, { withFileTypes: true })) {
         if (!e.isDirectory()) continue;
-        const sub = join12(root, e.name);
+        await yieldToLoop();
+        const sub = join15(root, e.name);
         for (const f of readdirSync4(sub, { withFileTypes: true })) {
           if (f.isDirectory()) continue;
-          const p = join12(sub, f.name);
+          const p = join15(sub, f.name);
           try {
-            const st = statSync3(p);
+            const st = statSync5(p);
             if (st.isFile()) map.set(st.size, f.name);
           } catch {
           }
@@ -4255,10 +5148,10 @@ function loadFileNamesBySize(wechatBaseDir) {
     return map;
   }, 1e4);
 }
-function queryStorageStats(decryptedDir, wechatBaseDir) {
-  const path = join12(decryptedDir, "message", "message_resource.db");
-  if (!existsSync7(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] };
-  const db = new DatabaseSync12(path, { readOnly: true });
+async function queryStorageStats(decryptedDir, wechatBaseDir) {
+  const path = join15(decryptedDir, "message", "message_resource.db");
+  if (!existsSync9(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] };
+  const db = new DatabaseSync14(path, { readOnly: true });
   try {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0;
     if (!has) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] };
@@ -4296,8 +5189,10 @@ function queryStorageStats(decryptedDir, wechatBaseDir) {
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       ORDER BY d.size DESC LIMIT 100`).all();
-    const sizeToName = loadFileNamesBySize(wechatBaseDir);
-    const large_files = bigRows.map((r) => {
+    const sizeToName = await loadFileNamesBySize(wechatBaseDir);
+    const large_files = [];
+    for (const r of bigRows) {
+      await yieldToLoop();
       const packedName = parsePackedName(r.p ?? null);
       const cat = classifyType(r.ty, packedName);
       let name = packedName || sizeToName.get(r.s) || resolveFileTitle(decryptedDir, r.u, r.svr) || "";
@@ -4306,8 +5201,8 @@ function queryStorageStats(decryptedDir, wechatBaseDir) {
         else if (r.di && r.di !== "0") name = r.di + ".dat";
         else name = "(\u672A\u77E5\u6587\u4EF6\u540D)";
       }
-      return { name, username: r.u, sessionName: names.get(r.u) ?? "", create_time: r.ct, size: r.s };
-    });
+      large_files.push({ name, username: r.u, sessionName: names.get(r.u) ?? "", create_time: r.ct, size: r.s });
+    }
     return { total_size: agg.s, total_count: agg.n, categories, chats, senders, large_files };
   } finally {
     db.close();
@@ -4315,21 +5210,21 @@ function queryStorageStats(decryptedDir, wechatBaseDir) {
 }
 
 // src/backend/wechat-data/src/query/annual.ts
-import { DatabaseSync as DatabaseSync13 } from "node:sqlite";
-import { existsSync as existsSync8, readdirSync as readdirSync5 } from "node:fs";
-import { join as join13 } from "node:path";
+import { DatabaseSync as DatabaseSync15 } from "node:sqlite";
+import { existsSync as existsSync10, readdirSync as readdirSync5 } from "node:fs";
+import { join as join16 } from "node:path";
 function queryAnnual(decryptedDir) {
   return cachedBySig("annual:" + decryptedDir, shardCatalogSig(decryptedDir, ["message"]), () => computeAnnual(decryptedDir), 3e4);
 }
 function computeAnnual(decryptedDir) {
-  const msgDir = join13(decryptedDir, "message");
-  if (!existsSync8(msgDir)) return { years: [] };
+  const msgDir = join16(decryptedDir, "message");
+  if (!existsSync10(msgDir)) return { years: [] };
   const years = /* @__PURE__ */ new Set();
   const files = readdirSync5(msgDir).filter((f) => f.endsWith(".db") && !f.includes("_shm") && !f.includes("_wal") && !f.includes("monitor_cache") && !f.includes("fts"));
   for (const file of files) {
     let db = null;
     try {
-      db = new DatabaseSync13(join13(msgDir, file), { readOnly: true });
+      db = new DatabaseSync15(join16(msgDir, file), { readOnly: true });
     } catch {
       continue;
     }
@@ -4359,7 +5254,7 @@ import { join as join94 } from "node:path";
 import { openNativePath as openNativePath2 } from "@deepseek-ai/dsh-native-command";
 
 // src/backend/wechat-data/src/query/path-policy.ts
-import { basename, extname, resolve, sep } from "node:path";
+import { basename as basename4, extname, resolve, sep } from "node:path";
 var EXECUTABLE_EXTS = /* @__PURE__ */ new Set([
   ".exe",
   ".com",
@@ -4417,7 +5312,7 @@ function openDenialReason(target, dataRoot) {
   const raw = String(target ?? "").trim();
   if (raw === "") return "\u6CA1\u6709\u7ED9\u51FA\u8981\u6253\u5F00\u7684\u8DEF\u5F84";
   const abs = resolve(raw);
-  const ext = extname(basename(abs)).toLowerCase();
+  const ext = extname(basename4(abs)).toLowerCase();
   if (ext !== "" && EXECUTABLE_EXTS.has(ext)) {
     return `\u51FA\u4E8E\u5B89\u5168\u4E0D\u6253\u5F00\u53EF\u6267\u884C\u6587\u4EF6\uFF08${ext}\uFF09\uFF1A\u8BF7\u53EA\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u91CC\u5B9A\u4F4D\u6570\u636E\u6587\u4EF6`;
   }
@@ -4432,21 +5327,21 @@ function writeDenialReason(target, dataRoot) {
   const raw = String(target ?? "").trim();
   if (raw === "") return "\u6CA1\u6709\u7ED9\u51FA\u4FDD\u5B58\u8DEF\u5F84";
   const abs = resolve(raw);
-  const ext = extname(basename(abs)).toLowerCase();
+  const ext = extname(basename4(abs)).toLowerCase();
   if (ext !== "" && EXECUTABLE_EXTS.has(ext)) return `\u4E0D\u80FD\u628A\u5BFC\u51FA\u6587\u4EF6\u5199\u6210\u53EF\u6267\u884C\u683C\u5F0F\uFF08${ext}\uFF09`;
   const probe = (process.platform === "win32" ? abs.toLowerCase() : abs).replace(/\\/g, "/");
   for (const bad of FORBIDDEN_WRITE_PREFIXES) {
-    if (probe.includes(bad.replace(/\\/g, "/"))) return `\u4E0D\u80FD\u5199\u5165\u7CFB\u7EDF\u5173\u952E\u76EE\u5F55\uFF1A${basename(abs)}`;
+    if (probe.includes(bad.replace(/\\/g, "/"))) return `\u4E0D\u80FD\u5199\u5165\u7CFB\u7EDF\u5173\u952E\u76EE\u5F55\uFF1A${basename4(abs)}`;
   }
   return null;
 }
 
 // src/backend/wechat-data/src/query/calls.ts
-import { createHash as createHash3 } from "node:crypto";
-import { DatabaseSync as DatabaseSync14 } from "node:sqlite";
-import { decompress as decompress3 } from "fzstd";
-import { join as join14 } from "node:path";
-var ZSTD_MAGIC3 = Buffer.from([40, 181, 47, 253]);
+import { createHash as createHash4 } from "node:crypto";
+import { DatabaseSync as DatabaseSync16 } from "node:sqlite";
+import { decompress as decompress4 } from "fzstd";
+import { join as join17 } from "node:path";
+var ZSTD_MAGIC4 = Buffer.from([40, 181, 47, 253]);
 var ANSWERED_ELSEWHERE = /已在其它设备接听/;
 function decodeContent(v) {
   let raw;
@@ -4455,9 +5350,9 @@ function decodeContent(v) {
     raw = /^\d+(,\d+)*$/.test(v.trim()) ? Buffer.from(v.split(",").map(Number)) : Buffer.from(v, "utf8");
   } else return "";
   if (raw.length === 0) return "";
-  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC3) ? (() => {
+  const bytes = raw.length >= 4 && raw.subarray(0, 4).equals(ZSTD_MAGIC4) ? (() => {
     try {
-      return Buffer.from(decompress3(raw));
+      return Buffer.from(decompress4(raw));
     } catch {
       return raw;
     }
@@ -4490,7 +5385,7 @@ function parseDuration(text) {
 function md5Index(decryptedDir) {
   const names = contactMeta(decryptedDir).names;
   const map = /* @__PURE__ */ new Map();
-  for (const u of names.keys()) map.set(createHash3("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of names.keys()) map.set(createHash4("md5").update(u, "utf8").digest("hex"), u);
   return map;
 }
 function scanCalls(decryptedDir, selfUsername) {
@@ -4502,7 +5397,7 @@ function scanCalls(decryptedDir, selfUsername) {
     if (tables.length === 0) continue;
     let db;
     try {
-      db = new DatabaseSync14(shard.file, { readOnly: true });
+      db = new DatabaseSync16(shard.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -4633,7 +5528,7 @@ function buildSnapshot(raw, names, topPeers, recentLimit) {
 }
 function queryCalls(decryptedDir, selfUsername, topPeers = 20, recentLimit = 50) {
   const self = selfUsername ?? "";
-  const sig = shardCatalogSig(decryptedDir, ["message"]) + "|" + self + "|" + fileSigOf(join14(decryptedDir, "contact", "contact.db"));
+  const sig = shardCatalogSig(decryptedDir, ["message"]) + "|" + self + "|" + fileSigOf(join17(decryptedDir, "contact", "contact.db"));
   const names = contactMeta(decryptedDir).names;
   return cachedBySig("calls:" + decryptedDir, sig, () => {
     const raw = scanCalls(decryptedDir, self);
@@ -4642,9 +5537,9 @@ function queryCalls(decryptedDir, selfUsername, topPeers = 20, recentLimit = 50)
 }
 
 // src/backend/wechat-data/src/query/graph.ts
-import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync9 } from "node:fs";
-import { join as join15 } from "node:path";
+import { createHash as createHash5 } from "node:crypto";
+import { existsSync as existsSync11 } from "node:fs";
+import { join as join18 } from "node:path";
 function cellString4(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
@@ -4681,7 +5576,7 @@ function remarkClassKey(remark) {
 function loadMessageCounts(decryptedDir, usernames) {
   const counts = /* @__PURE__ */ new Map();
   const tableToUser = /* @__PURE__ */ new Map();
-  for (const u of usernames) tableToUser.set("Msg_" + createHash4("md5").update(u, "utf8").digest("hex"), u);
+  for (const u of usernames) tableToUser.set("Msg_" + createHash5("md5").update(u, "utf8").digest("hex"), u);
   for (const sh of shardCatalog(decryptedDir)) {
     const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ""));
     if (wanted.length === 0) continue;
@@ -4703,8 +5598,8 @@ function loadMessageCounts(decryptedDir, usernames) {
 }
 function loadContactMeta(decryptedDir) {
   const meta = /* @__PURE__ */ new Map();
-  const p = join15(decryptedDir, "contact", "contact.db");
-  if (!existsSync9(p)) return meta;
+  const p = join18(decryptedDir, "contact", "contact.db");
+  if (!existsSync11(p)) return meta;
   try {
     withDb(p, (db) => {
       const cols = tableColumns4(db, "contact");
@@ -4725,8 +5620,8 @@ function loadContactMeta(decryptedDir) {
 }
 function loadRoomData(decryptedDir) {
   const out = { memberGroups: /* @__PURE__ */ new Map(), roomMembers: /* @__PURE__ */ new Map(), roomCounts: /* @__PURE__ */ new Map() };
-  const p = join15(decryptedDir, "contact", "contact.db");
-  if (!existsSync9(p)) return out;
+  const p = join18(decryptedDir, "contact", "contact.db");
+  if (!existsSync11(p)) return out;
   try {
     withDb(p, (db) => {
       const cols = tableColumns4(db, "contact");
@@ -4800,17 +5695,17 @@ function loadRoomData(decryptedDir) {
 }
 function queryGraph(decryptedDir, selfUsername) {
   const sig = [
-    fileSigOf(join15(decryptedDir, "session", "session.db")),
-    fileSigOf(join15(decryptedDir, "contact", "contact.db")),
+    fileSigOf(join18(decryptedDir, "session", "session.db")),
+    fileSigOf(join18(decryptedDir, "contact", "contact.db")),
     shardCatalogSig(decryptedDir, ["message"])
   ].join("|");
   return cachedBySig("graph:" + decryptedDir + "|" + (selfUsername ?? ""), sig, () => computeGraph(decryptedDir, selfUsername));
 }
 function computeGraph(decryptedDir, selfUsername) {
   const nodes = [];
-  const sessionPath = join15(decryptedDir, "session", "session.db");
+  const sessionPath = join18(decryptedDir, "session", "session.db");
   const talkers = [];
-  if (existsSync9(sessionPath)) {
+  if (existsSync11(sessionPath)) {
     try {
       withDb(sessionPath, (db) => {
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== void 0;
@@ -4927,11 +5822,11 @@ function computeGraph(decryptedDir, selfUsername) {
 }
 
 // src/backend/wechat-data/src/query/calendar.ts
-import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync10, readdirSync as readdirSync6 } from "node:fs";
-import { join as join16 } from "node:path";
-function msgTableName2(username) {
-  return "Msg_" + createHash5("md5").update(username, "utf8").digest("hex");
+import { createHash as createHash6 } from "node:crypto";
+import { existsSync as existsSync12, readdirSync as readdirSync6 } from "node:fs";
+import { join as join19 } from "node:path";
+function msgTableName3(username) {
+  return "Msg_" + createHash6("md5").update(username, "utf8").digest("hex");
 }
 function getDailyCounts(decryptedDir, username, year, month) {
   if (month < 1 || month > 12) throw new Error("\u65E0\u6548\u6708\u4EFD");
@@ -4940,15 +5835,15 @@ function getDailyCounts(decryptedDir, username, year, month) {
   const startTs = Math.floor(start.getTime() / 1e3);
   const endTs = Math.floor(end.getTime() / 1e3);
   const counts = {};
-  const msgDir = join16(decryptedDir, "message");
-  if (!existsSync10(msgDir)) return { counts, year, month };
+  const msgDir = join19(decryptedDir, "message");
+  if (!existsSync12(msgDir)) return { counts, year, month };
   const files = readdirSync6(msgDir).filter(
     (f) => f.endsWith(".db") && f.startsWith("message_") && !f.includes("fts") && !f.includes("resource") && !f.includes("media")
   ).sort();
-  const table = msgTableName2(username);
+  const table = msgTableName3(username);
   for (const f of files) {
     try {
-      withDb(join16(msgDir, f), (db) => {
+      withDb(join19(msgDir, f), (db) => {
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
         if (!has) return;
         const sql = `SELECT strftime('%d', create_time, 'unixepoch', 'localtime') AS d, COUNT(*) AS c FROM "` + table + '" WHERE create_time >= ? AND create_time < ? GROUP BY d';
@@ -4962,894 +5857,6 @@ function getDailyCounts(decryptedDir, username, year, month) {
     }
   }
   return { counts, year, month };
-}
-
-// src/backend/wechat-data/src/query/search-scaffold.ts
-import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync12, statSync as statSync5 } from "node:fs";
-import { dirname as dirname3, join as join18 } from "node:path";
-import { decompress as decompress4 } from "fzstd";
-
-// src/backend/wechat-data/src/query/search-query.ts
-import { DatabaseSync as DatabaseSync15 } from "node:sqlite";
-import { existsSync as existsSync11 } from "node:fs";
-import { join as join17 } from "node:path";
-function splitGroupPrefix(text, username) {
-  if (!username.endsWith("@chatroom")) return { sender: "", body: text };
-  const m = text.match(/^[A-Za-z0-9_@.\-]{3,64}:\n/);
-  return m ? { sender: m[0].slice(0, -2), body: text.slice(m[0].length) } : { sender: "", body: text };
-}
-function senderLabel(sender, names) {
-  if (!sender) return "";
-  return names.get(sender) ?? sender;
-}
-function readableMessageText(raw) {
-  const t = String(raw || "").trim();
-  if (!t) return "";
-  if (!t.startsWith("<")) return t;
-  const parts = [];
-  for (const tag of ["title", "des", "content", "nickname", "username"]) {
-    let from = 0;
-    while (parts.length < 8) {
-      const si = t.indexOf("<" + tag, from);
-      if (si < 0) break;
-      const gt = t.indexOf(">", si);
-      if (gt < 0) break;
-      const ei = t.indexOf("</" + tag, gt);
-      if (ei < 0) break;
-      let v = t.slice(gt + 1, ei).trim();
-      const cdata = v.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
-      if (cdata) v = cdata[1] ?? v;
-      v = v.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-      if (v) parts.push(v);
-      from = ei + 1;
-    }
-    if (parts.length >= 8) break;
-  }
-  return parts.join("  ").trim();
-}
-function formatFullTime(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-var windowTableCache = /* @__PURE__ */ new Map();
-function loadMessageWindow(decryptedDir, username, centerMs, spanMs, limit = 14) {
-  if (!username || !Number.isFinite(centerMs) || centerMs <= 0) return [];
-  const table = msgTableName3(username);
-  const lo = Math.max(0, Math.floor(centerMs - spanMs));
-  const hi = Math.floor(centerMs + spanMs);
-  const out = [];
-  for (const shard of messageShardFiles(decryptedDir)) {
-    const key = shard + "|" + table;
-    let has = windowTableCache.get(key);
-    if (has === void 0) {
-      let probe = null;
-      try {
-        probe = new DatabaseSync15(shard, { readOnly: true });
-        has = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
-      } catch {
-        has = false;
-      } finally {
-        try {
-          probe?.close();
-        } catch {
-        }
-      }
-      windowTableCache.set(key, has);
-    }
-    if (!has) continue;
-    let sdb = null;
-    try {
-      sdb = new DatabaseSync15(shard, { readOnly: true });
-      const rows = sdb.prepare(
-        'SELECT local_id, sort_seq, create_time, message_content FROM "' + table + '" WHERE local_type=1 AND sort_seq BETWEEN ? AND ? ORDER BY sort_seq LIMIT ?'
-      ).all(lo, hi, limit);
-      for (const r of rows) {
-        const raw = decodeCell(r["message_content"]).trim();
-        if (!raw || raw.startsWith("<")) continue;
-        const { sender, body } = splitGroupPrefix(raw, username);
-        const text = body.replace(/\s+/g, " ").trim();
-        if (!text) continue;
-        out.push({
-          local_id: Number(r["local_id"] ?? 0),
-          sort_seq: Number(r["sort_seq"] ?? 0),
-          create_time: Number(r["create_time"] ?? 0),
-          text,
-          sender
-        });
-      }
-      if (out.length > 0) break;
-    } catch {
-    } finally {
-      try {
-        sdb?.close();
-      } catch {
-      }
-    }
-  }
-  return out;
-}
-function searchWechatFts(decryptedDir, q, cap, names, scopeUsername) {
-  const p = join17(decryptedDir, "message", "message_fts.db");
-  if (!existsSync11(p)) return { hits: [] };
-  try {
-    const db = new DatabaseSync15(p, { readOnly: true });
-    const sessions = /* @__PURE__ */ new Map();
-    try {
-      const rows = db.prepare("SELECT rowid AS id, username AS u FROM name2id").all();
-      for (const r of rows) sessions.set(r.id, decodeCell(r.u));
-    } catch {
-    }
-    const out = [];
-    const like2 = "%" + q.replace(/[%_]/g, " ") + "%";
-    for (const [content, aux] of [
-      ["message_fts_v4_0_content", "message_fts_v4_aux_0"],
-      ["message_fts_v4_1_content", "message_fts_v4_aux_1"],
-      ["message_fts_v4_2_content", "message_fts_v4_aux_2"],
-      ["message_fts_v4_3_content", "message_fts_v4_aux_3"]
-    ]) {
-      try {
-        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(content) !== void 0;
-        if (!exists) continue;
-        const sql = 'SELECT c.c0 AS c, a.message_local_id AS lid, a.sort_seq AS ss, a.session_id AS sid FROM "' + content + '" c LEFT JOIN "' + aux + '" a ON a.rowid = c.id WHERE c.c0 LIKE ? ORDER BY c.id DESC LIMIT ?';
-        const rows = db.prepare(sql).all(like2, cap);
-        for (const r of rows) {
-          const username = sessions.get(Number(r["sid"])) ?? "";
-          if (scopeUsername && username !== scopeUsername) continue;
-          const text = decodeCell(r["c"]);
-          const { sender, body: display } = splitGroupPrefix(text, username);
-          const ssMs = Number(r["ss"] ?? 0);
-          const createTime = ssMs > 1e12 ? Math.floor(ssMs / 1e3) : ssMs > 1e9 ? Math.floor(ssMs) : 0;
-          out.push({
-            text,
-            username,
-            create_time: createTime,
-            local_id: Number(r["lid"] ?? 0),
-            name: names.get(username) ?? username,
-            time: createTime ? formatFullTime(createTime) : "",
-            snippet: display.slice(0, 120),
-            sender: senderLabel(sender, names)
-          });
-          if (out.length >= cap) break;
-        }
-      } catch {
-      }
-      if (out.length >= cap) break;
-    }
-    db.close();
-    return { hits: out };
-  } catch {
-    return { hits: [] };
-  }
-}
-var ABORT_CHECK_EVERY_ROWS = 128;
-var YIELD_EVERY_MS = 25;
-function* scanFallbackRows(decryptedDir, username) {
-  let budget = 8e5;
-  const shards = messageShardFiles(decryptedDir);
-  const scopeUsernames = username ? [username] : loadSessionUsernames(decryptedDir).slice(0, 800);
-  for (const talker of scopeUsernames) {
-    if (budget <= 0) return;
-    const table = msgTableName3(talker);
-    for (const shard of shards) {
-      if (budget <= 0) return;
-      let sdb = null;
-      try {
-        sdb = new DatabaseSync15(shard, { readOnly: true });
-      } catch {
-        continue;
-      }
-      const has = sdb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
-      if (!has) {
-        sdb.close();
-        continue;
-      }
-      try {
-        const sql = 'SELECT local_id, create_time, message_content FROM "' + table + '" WHERE local_type=1';
-        for (const row of sdb.prepare(sql).iterate()) {
-          budget -= 1;
-          if (budget <= 0) return;
-          yield { talker, row };
-        }
-      } catch {
-      } finally {
-        sdb.close();
-      }
-    }
-  }
-}
-function hitFromRow(row, talker, qLower, names) {
-  const text = decodeCell(row["message_content"]).replace(/\n/g, " ").trim();
-  if (!text || !text.toLowerCase().includes(qLower)) return null;
-  const localId = Number(row["local_id"] ?? 0);
-  const ts2 = Number(row["create_time"] ?? 0);
-  const { sender, body: display } = splitGroupPrefix(text, talker);
-  const dIdx = display.toLowerCase().indexOf(qLower);
-  const dStart = Math.max(0, dIdx < 0 ? 0 : dIdx - 20);
-  const snippet = (dStart > 0 ? "\u2026" : "") + display.slice(dStart, dStart + 100);
-  return {
-    text,
-    username: talker,
-    create_time: ts2,
-    local_id: localId,
-    name: names.get(talker) ?? talker,
-    time: formatFullTime(ts2),
-    snippet,
-    sender: senderLabel(sender, names)
-  };
-}
-function probeIndexedSources(decryptedDir, q, cap, names, username) {
-  const indexed = searchIndexBatch(decryptedDir, [q], cap, username ? { username } : void 0);
-  if (indexed.ranked && indexed.hits.length > 0) {
-    return { hits: indexed.hits, total: indexed.hits.length, indexed: true };
-  }
-  const builtin = searchWechatFts(decryptedDir, q, cap, names, username);
-  if (builtin.hits.length > 0) return { hits: builtin.hits, total: builtin.hits.length, indexed: false };
-  return null;
-}
-function searchIndexMessages(decryptedDir, query, limit, username) {
-  const q = (query || "").trim();
-  if (!q) return { hits: [], total: 0, indexed: false };
-  const cap = Math.min(limit ?? 100, 300);
-  const names = loadDisplayNames(decryptedDir);
-  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
-  if (early) return early;
-  const hits = [];
-  const qLower = q.toLowerCase();
-  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
-    const hit = hitFromRow(row, talker, qLower, names);
-    if (hit) hits.push(hit);
-    if (hits.length >= cap) break;
-  }
-  return { hits, total: hits.length, indexed: false };
-}
-async function searchIndexMessagesCancellable(decryptedDir, query, limit, username, ctrl) {
-  const q = (query || "").trim();
-  if (!q) return { hits: [], total: 0, indexed: false };
-  const cap = Math.min(limit ?? 100, 300);
-  const names = loadDisplayNames(decryptedDir);
-  const early = probeIndexedSources(decryptedDir, q, cap, names, username);
-  if (early) return early;
-  if (ctrl?.signal?.aborted) return { hits: [], total: 0, indexed: false, cancelled: true };
-  const hits = [];
-  const qLower = q.toLowerCase();
-  let rowsSeen = 0;
-  let lastYieldAt = Date.now();
-  let cancelled = false;
-  for (const { talker, row } of scanFallbackRows(decryptedDir, username)) {
-    rowsSeen += 1;
-    if ((rowsSeen & ABORT_CHECK_EVERY_ROWS - 1) === 0) {
-      if (ctrl?.signal?.aborted) {
-        cancelled = true;
-        break;
-      }
-      if (Date.now() - lastYieldAt >= YIELD_EVERY_MS) {
-        await new Promise((resolve5) => {
-          setImmediate(resolve5);
-        });
-        lastYieldAt = Date.now();
-        if (ctrl?.signal?.aborted) {
-          cancelled = true;
-          break;
-        }
-      }
-    }
-    const hit = hitFromRow(row, talker, qLower, names);
-    if (hit) hits.push(hit);
-    if (hits.length >= cap) break;
-  }
-  return cancelled ? { hits, total: hits.length, indexed: false, cancelled: true } : { hits, total: hits.length, indexed: false };
-}
-
-// src/backend/wechat-data/src/query/search-scaffold.ts
-var ZSTD_MAGIC4 = Buffer.from([40, 181, 47, 253]);
-var INDEX_SCHEMA_VERSION = "5";
-var REFRESHED_KEY = "refreshed_ms";
-var SHARD_WM_PREFIX = "shard_wm:";
-var REFRESH_SLACK_MS = 3e3;
-function ensureMetaIndexes(db) {
-  try {
-    db.exec("CREATE INDEX IF NOT EXISTS idx_message_meta_ct_all ON message_meta(create_time)");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_message_meta_ct_user ON message_meta(username, create_time)");
-  } catch {
-  }
-}
-function readWatermarks(db) {
-  const out = /* @__PURE__ */ new Map();
-  try {
-    const rows = db.prepare("SELECT key, value FROM meta WHERE key LIKE ?").all(SHARD_WM_PREFIX + "%");
-    for (const r of rows) out.set(r.key.slice(SHARD_WM_PREFIX.length), Number(r.value) || 0);
-  } catch {
-  }
-  return out;
-}
-function bigramTokens(text) {
-  const parts = [];
-  for (const run of String(text || "").match(/[\u4e00-\u9fff]+|[A-Za-z0-9_]+/g) || []) {
-    if (/^[A-Za-z0-9_]+$/.test(run)) {
-      parts.push(run.toLowerCase());
-      continue;
-    }
-    if (run.length === 1) {
-      parts.push(run);
-      continue;
-    }
-    const seg = new Array(run.length - 1);
-    for (let i = 0; i + 2 <= run.length; i += 1) seg[i] = run.slice(i, i + 2);
-    parts.push(seg.join(" "));
-  }
-  return parts.join(" ");
-}
-function ftsPhrase(term) {
-  const toks = bigramTokens(term).split(" ").filter(Boolean);
-  if (toks.length === 0) return "";
-  if (toks.length === 1) return '"' + (toks[0] ?? "").replace(/"/g, "") + '"';
-  return '"' + toks.join(" ") + '"';
-}
-function indexReady(decryptedDir) {
-  const p = searchIndexPath(decryptedDir);
-  if (!existsSync12(p)) return false;
-  try {
-    return withDb(p, (db) => {
-      const rows = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
-      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
-      return rows > 0 && ver?.value === INDEX_SCHEMA_VERSION;
-    });
-  } catch {
-    return false;
-  }
-}
-function countIndexMatches(decryptedDir, term) {
-  if (!indexReady(decryptedDir)) return -1;
-  const phrase = ftsPhrase(term);
-  if (!phrase) return 0;
-  try {
-    return withDb(searchIndexPath(decryptedDir), (db) => {
-      const row = db.prepare("SELECT COUNT(*) AS c FROM message_fts WHERE message_fts MATCH ?").get(phrase);
-      return Number(row?.c ?? 0);
-    });
-  } catch {
-    return -1;
-  }
-}
-function searchIndexBatch(decryptedDir, terms, limit = 400, opts) {
-  if (!indexReady(decryptedDir)) return { hits: [], ranked: false };
-  const parts = terms.map(ftsPhrase).filter(Boolean);
-  if (opts?.person) {
-    const who = ftsPhrase(opts.person);
-    if (who) parts.push("who:" + who);
-  }
-  if (parts.length === 0) return { hits: [], ranked: false };
-  const match = parts.join(" OR ");
-  try {
-    return withDb(searchIndexPath(decryptedDir), (db) => {
-      const sql = "SELECT m.text, m.username, m.create_time, m.local_id, bm25(message_fts) AS score FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid WHERE message_fts MATCH ?" + (opts?.username ? " AND m.username = ?" : "") + " ORDER BY rank LIMIT ?";
-      const args = opts?.username ? [match, opts.username, limit] : [match, limit];
-      const rows = db.prepare(sql).all(...args);
-      const names = loadDisplayNames(decryptedDir);
-      const hits = rows.map((r) => {
-        const text = decodeCell(r["text"]);
-        const username = decodeCell(r["username"]);
-        const createTime = Number(r["create_time"] ?? 0);
-        const { sender, body: display } = splitGroupPrefix(text, username);
-        return {
-          text,
-          username,
-          create_time: createTime,
-          local_id: Number(r["local_id"] ?? 0),
-          name: names.get(username) ?? username,
-          time: formatFullTime(createTime),
-          snippet: display.slice(0, 120),
-          sender: senderLabel(sender, names),
-          // bm25() 越小越相关，取负号变成「越大越相关」
-          score: -Number(r["score"] ?? 0)
-        };
-      });
-      return { hits, ranked: true };
-    });
-  } catch {
-    return { hits: [], ranked: false };
-  }
-}
-function tryDecompress2(data) {
-  if (data.length >= 4 && data.subarray(0, 4).equals(ZSTD_MAGIC4)) {
-    try {
-      return Buffer.from(decompress4(data));
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-function searchIndexPath(decryptedDir) {
-  return join18(dirname3(decryptedDir), "wechat_search.db");
-}
-function msgTableName3(username) {
-  return "Msg_" + createHash6("md5").update(username, "utf8").digest("hex");
-}
-function decodeCell(v) {
-  if (v === null || v === void 0) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
-  const raw = Buffer.from(v instanceof Uint8Array ? v : []);
-  const decompressed = tryDecompress2(raw);
-  const bytes = decompressed ?? raw;
-  try {
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  } catch {
-    return new TextDecoder("gbk", { fatal: false }).decode(bytes);
-  }
-}
-function messageShardFiles(decryptedDir) {
-  return shardCatalog(decryptedDir).map((s) => s.file);
-}
-function loadSessionUsernames(decryptedDir) {
-  const dbPath8 = join18(decryptedDir, "session", "session.db");
-  if (!existsSync12(dbPath8)) return [];
-  const out = [];
-  try {
-    withDb(dbPath8, (db) => {
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-      const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
-      if (table) {
-        const rows = db.prepare('SELECT username FROM "' + table + '"').all();
-        for (const r of rows) {
-          const u = decodeCell(r["username"]).trim();
-          if (u) out.push(u);
-        }
-      }
-    });
-  } catch {
-  }
-  return out;
-}
-function loadDisplayNames(decryptedDir) {
-  const names = /* @__PURE__ */ new Map();
-  for (const [u, n] of contactMeta(decryptedDir).names) names.set(u, n);
-  const sessionDb = join18(decryptedDir, "session", "session.db");
-  if (existsSync12(sessionDb)) {
-    try {
-      withDb(sessionDb, (db) => {
-        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionNoContactInfoTable'").get() !== void 0;
-        if (has) {
-          const rows = db.prepare("SELECT username, session_title FROM SessionNoContactInfoTable").all();
-          for (const r of rows) {
-            const u = decodeCell(r["username"]);
-            const t = decodeCell(r["session_title"]).trim();
-            if (u && t && !names.has(u)) names.set(u, t);
-          }
-        }
-      });
-    } catch {
-    }
-  }
-  return names;
-}
-function knownEntityNames(decryptedDir, limit = 500) {
-  const out = /* @__PURE__ */ new Set();
-  for (const n of loadDisplayNames(decryptedDir).values()) {
-    const v = String(n || "").trim();
-    if (v.length < 2 || v.length > 24) continue;
-    out.add(v);
-    if (out.size >= limit) break;
-  }
-  return [...out];
-}
-function getSearchIndexStatus(decryptedDir) {
-  const p = searchIndexPath(decryptedDir);
-  if (!existsSync12(p)) return { exists: false, rows: 0, built_at: null, ready: false };
-  try {
-    return withDb(p, (db) => {
-      const rows = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
-      const built = db.prepare("SELECT value FROM meta WHERE key='built_at'").get();
-      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
-      return { exists: true, rows, built_at: built?.value ?? null, ready: rows > 0 && ver?.value === INDEX_SCHEMA_VERSION };
-    });
-  } catch {
-    return { exists: true, rows: 0, built_at: null, ready: false };
-  }
-}
-function getSearchIndexFreshness(decryptedDir) {
-  let refreshedMs = 0;
-  let latestIndexedTime = 0;
-  const p = searchIndexPath(decryptedDir);
-  if (existsSync12(p)) {
-    try {
-      withDb(p, (db) => {
-        const r = db.prepare("SELECT value FROM meta WHERE key = ?").get(REFRESHED_KEY);
-        refreshedMs = Number(r?.value ?? 0) || 0;
-        const m = db.prepare("SELECT MAX(create_time) AS m FROM message_meta").get().m;
-        latestIndexedTime = Number(m ?? 0);
-      });
-    } catch {
-    }
-  }
-  let staleShards = 0;
-  for (const shard of messageShardFiles(decryptedDir)) {
-    try {
-      if (statSync5(shard).mtimeMs > refreshedMs + REFRESH_SLACK_MS) staleShards += 1;
-    } catch {
-      staleShards += 1;
-    }
-  }
-  return { refreshedMs, stale: staleShards > 0, staleShards, latestIndexedTime };
-}
-
-// src/backend/wechat-data/src/query/search-build.ts
-import { DatabaseSync as DatabaseSync16 } from "node:sqlite";
-import { basename as basename4 } from "node:path";
-async function ensureSearchIndex(decryptedDir) {
-  const st = getSearchIndexStatus(decryptedDir);
-  if (!st.ready) {
-    const built = await buildSearchIndex(decryptedDir, false);
-    return {
-      action: "build",
-      elapsed_ms: built.elapsed_ms ?? 0,
-      ...built.rows !== void 0 ? { rows: built.rows } : {},
-      ...built.message ? { message: built.message } : {}
-    };
-  }
-  if (!getSearchIndexFreshness(decryptedDir).stale) return { action: "none", elapsed_ms: 0 };
-  const synced = await syncSearchIndex(decryptedDir);
-  return {
-    action: synced.status === "ok" ? "sync" : "none",
-    added: synced.added,
-    elapsed_ms: synced.elapsed_ms,
-    ...synced.message ? { message: synced.message } : {}
-  };
-}
-var inflightIndexSyncs = /* @__PURE__ */ new Map();
-function syncSearchIndex(decryptedDir) {
-  const key = searchIndexPath(decryptedDir);
-  const slot = inflightIndexSyncs.get(key);
-  if (slot) return slot;
-  const promise = runSyncSearchIndex(decryptedDir);
-  inflightIndexSyncs.set(key, promise);
-  const release = () => {
-    if (inflightIndexSyncs.get(key) === promise) inflightIndexSyncs.delete(key);
-  };
-  promise.then(release, release);
-  return promise;
-}
-async function runSyncSearchIndex(decryptedDir) {
-  const started = Date.now();
-  const building = inflightIndexBuilds.get(searchIndexPath(decryptedDir));
-  if (building) {
-    try {
-      await building.promise;
-    } catch {
-    }
-  }
-  const skip = (message) => ({ status: "skipped", added: 0, shards: 0, elapsed_ms: Date.now() - started, message });
-  if (!indexReady(decryptedDir)) return skip("\u7D22\u5F15\u7F3A\u5931\u6216\u7248\u672C\u4E0D\u7B26\uFF0C\u9700\u8981\u5168\u91CF\u6784\u5EFA");
-  const shards = messageShardFiles(decryptedDir);
-  if (shards.length === 0) return skip("\u6D88\u606F\u5206\u7247\u6E05\u5355\u4E3A\u7A7A\uFF08message \u76EE\u5F55\u4E0D\u53EF\u8BFB\uFF1F\uFF09");
-  const usernames = loadSessionUsernames(decryptedDir);
-  if (usernames.length === 0) return skip("\u4F1A\u8BDD\u6E05\u5355\u4E3A\u7A7A");
-  const names = loadDisplayNames(decryptedDir);
-  let db = null;
-  try {
-    db = new DatabaseSync16(searchIndexPath(decryptedDir));
-    try {
-      db.exec("PRAGMA journal_mode = WAL");
-    } catch {
-    }
-    try {
-      db.exec("PRAGMA synchronous = NORMAL");
-    } catch {
-    }
-    ensureMetaIndexes(db);
-    const wm = readWatermarks(db);
-    const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
-    const insFts = db.prepare("INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)");
-    const insKv = db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)");
-    let added = 0;
-    let handled = 0;
-    let rowsSinceYield = 0;
-    let charsSinceYield = 0;
-    const nextWm = /* @__PURE__ */ new Map();
-    db.exec("BEGIN");
-    for (const shard of shards) {
-      const shardName = basename4(shard);
-      const since = wm.get(shardName) ?? 0;
-      let sdb = null;
-      try {
-        sdb = new DatabaseSync16(shard, { readOnly: true });
-      } catch {
-        continue;
-      }
-      try {
-        const tableSet = new Set(
-          sdb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name)
-        );
-        let tail = since;
-        handled += 1;
-        for (const username of usernames) {
-          const table = msgTableName3(username);
-          if (!tableSet.has(table)) continue;
-          let rows;
-          try {
-            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '" WHERE sort_seq > ?';
-            rows = sdb.prepare(sql).iterate(since)[Symbol.iterator]();
-          } catch {
-            continue;
-          }
-          const sessionWho = bigramTokens(names.get(username) ?? username);
-          for (; ; ) {
-            let step;
-            try {
-              step = rows.next();
-            } catch {
-              break;
-            }
-            if (step.done) break;
-            const r = step.value;
-            rowsSinceYield += 1;
-            const seq = Number(r["sort_seq"] ?? 0);
-            if (seq > tail) tail = seq;
-            const raw = decodeCell(r["message_content"]) || decodeCell(r["compress_content"]);
-            charsSinceYield += raw.length;
-            const { sender, body } = splitGroupPrefix(raw, username);
-            const text = readableMessageText(body);
-            if (text) {
-              const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
-              const res = insMeta.run(text, username, Number(r["create_time"] ?? 0), seq, Number(r["local_id"] ?? 0));
-              insFts.run(Number(res.lastInsertRowid), bigramTokens(text), who);
-              added += 1;
-            }
-            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
-              rowsSinceYield = 0;
-              charsSinceYield = 0;
-              await yieldToLoop();
-            }
-          }
-        }
-        if (tail > since) nextWm.set(shardName, tail);
-      } finally {
-        try {
-          sdb.close();
-        } catch {
-        }
-      }
-    }
-    for (const [shardName, seq] of nextWm) insKv.run(SHARD_WM_PREFIX + shardName, String(seq));
-    insKv.run(REFRESHED_KEY, String(Date.now()));
-    db.exec("COMMIT");
-    try {
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-    }
-    return { status: "ok", added, shards: handled, elapsed_ms: Date.now() - started };
-  } catch (e) {
-    try {
-      db?.exec("ROLLBACK");
-    } catch {
-    }
-    return { status: "error", added: 0, shards: 0, elapsed_ms: Date.now() - started, message: e.message };
-  } finally {
-    try {
-      db?.close();
-    } catch {
-    }
-  }
-}
-function listMessagesInRange(decryptedDir, fromSec, toSec, limit, username) {
-  if (!indexReady(decryptedDir)) return { hits: [], ready: false };
-  const lo = Math.floor(Math.min(fromSec, toSec));
-  const hi = Math.ceil(Math.max(fromSec, toSec));
-  if (!(lo > 0) || !(hi >= lo)) return { hits: [], ready: false };
-  const cap = Math.min(Math.max(limit ?? 120, 1), 600);
-  try {
-    const db = new DatabaseSync16(searchIndexPath(decryptedDir), { readOnly: true });
-    const sql = "SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?" + (username ? " AND username = ?" : "") + " ORDER BY create_time DESC LIMIT ?";
-    const args = username ? [lo, hi, username, cap] : [lo, hi, cap];
-    const rows = db.prepare(sql).all(...args);
-    db.close();
-    const names = loadDisplayNames(decryptedDir);
-    const hits = rows.map((r) => {
-      const text = decodeCell(r["text"]);
-      const uname = decodeCell(r["username"]);
-      const ts2 = Number(r["create_time"] ?? 0);
-      const { sender, body } = splitGroupPrefix(text, uname);
-      return {
-        text,
-        username: uname,
-        create_time: ts2,
-        local_id: Number(r["local_id"] ?? 0),
-        name: names.get(uname) ?? uname,
-        time: formatFullTime(ts2),
-        snippet: body.replace(/\s+/g, " ").slice(0, 120),
-        sender: senderLabel(sender, names)
-      };
-    });
-    return { hits, ready: true };
-  } catch {
-    return { hits: [], ready: false };
-  }
-}
-var YIELD_EVERY_ROWS = 2e3;
-var YIELD_EVERY_CHARS = 1 << 17;
-var FLUSH_EVERY_CHARS = 1 << 16;
-var inflightIndexBuilds = /* @__PURE__ */ new Map();
-function buildSearchIndex(decryptedDir, force) {
-  const key = searchIndexPath(decryptedDir);
-  const slot = inflightIndexBuilds.get(key);
-  if (slot && (slot.force || !force)) return slot.promise;
-  const base = slot ? slot.promise.catch(() => void 0) : Promise.resolve();
-  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force));
-  const entry = { promise, force: Boolean(force) };
-  inflightIndexBuilds.set(key, entry);
-  const release = () => {
-    if (inflightIndexBuilds.get(key) === entry) inflightIndexBuilds.delete(key);
-  };
-  promise.then(release, release);
-  return promise;
-}
-function withIndexWrite(decryptedDir, fn) {
-  if (inflightIndexBuilds.has(searchIndexPath(decryptedDir))) return { ok: false };
-  return { ok: true, value: fn() };
-}
-async function runBuildSearchIndex(decryptedDir, force) {
-  const p = searchIndexPath(decryptedDir);
-  const db = new DatabaseSync16(p);
-  try {
-    db.exec("PRAGMA journal_mode = WAL");
-  } catch {
-  }
-  try {
-    db.exec("PRAGMA synchronous = NORMAL");
-  } catch {
-  }
-  const init = () => {
-    db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(tokens, who, tokenize='unicode61', content='')");
-    db.exec("CREATE TABLE IF NOT EXISTS message_meta (rowid INTEGER PRIMARY KEY, text TEXT NOT NULL, username TEXT NOT NULL, create_time INTEGER NOT NULL DEFAULT 0, sort_seq INTEGER NOT NULL DEFAULT 0, local_id INTEGER NOT NULL DEFAULT 0)");
-    ensureMetaIndexes(db);
-  };
-  try {
-    init();
-    const existing = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
-    const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
-    if (!force && existing > 0 && ver?.value === INDEX_SCHEMA_VERSION) {
-      return { status: "exists", rows: existing, message: "\u7D22\u5F15\u5DF2\u5B58\u5728\uFF0C\u4F7F\u7528 force=true \u53EF\u91CD\u5EFA" };
-    }
-    const started = Date.now();
-    const names = loadDisplayNames(decryptedDir);
-    const usernames = loadSessionUsernames(decryptedDir);
-    const shards = messageShardFiles(decryptedDir);
-    if (shards.length === 0 && existing > 0) {
-      throw new Error(`\u6D88\u606F\u5206\u7247\u6E05\u5355\u4E3A\u7A7A\uFF08message \u76EE\u5F55\u4E0D\u53EF\u8BFB\uFF1F\uFF09\uFF0C\u5DF2\u4E2D\u6B62\u91CD\u5EFA\u4EE5\u514D\u6E05\u7A7A\u73B0\u6709 ${existing} \u884C\u7D22\u5F15`);
-    }
-    db.exec("BEGIN");
-    db.exec("DROP TABLE IF EXISTS message_fts");
-    db.exec("DROP TABLE IF EXISTS message_meta");
-    init();
-    db.exec("DELETE FROM meta WHERE key='built_at'");
-    let total = 0;
-    let rowsSinceYield = 0;
-    let charsSinceYield = 0;
-    let batch = [];
-    let batchChars = 0;
-    const shardWm = /* @__PURE__ */ new Map();
-    let skippedCount = 0;
-    const skipped = [];
-    const recordSkip = (shard, e) => {
-      skippedCount += 1;
-      const detail = basename4(shard) + ": " + e.message;
-      if (skipped.length < 5) skipped.push(detail);
-      console.warn("[search] \u8DF3\u8FC7\u4E0D\u53EF\u8BFB\u5206\u7247 " + detail);
-    };
-    const flush = () => {
-      if (batch.length === 0) return;
-      const insMeta = db.prepare("INSERT INTO message_meta(text, username, create_time, sort_seq, local_id) VALUES(?, ?, ?, ?, ?)");
-      const insFts = db.prepare("INSERT INTO message_fts(rowid, tokens, who) VALUES(?, ?, ?)");
-      for (const [text, tokens, who, username, createTime, sortSeq, localId] of batch) {
-        const r = insMeta.run(text, username, createTime, sortSeq, localId);
-        insFts.run(Number(r.lastInsertRowid), tokens, who);
-      }
-      batch = [];
-      batchChars = 0;
-    };
-    for (const shard of shards) {
-      let sdb = null;
-      try {
-        sdb = new DatabaseSync16(shard, { readOnly: true });
-      } catch (e) {
-        recordSkip(shard, e);
-        continue;
-      }
-      let tableSet;
-      try {
-        tableSet = new Set(sdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name));
-      } catch (e) {
-        recordSkip(shard, e);
-        sdb.close();
-        continue;
-      }
-      try {
-        for (const username of usernames) {
-          const table = msgTableName3(username);
-          if (!tableSet.has(table)) continue;
-          const sessionWho = bigramTokens(names.get(username) ?? username);
-          let rows;
-          try {
-            const sql = 'SELECT local_id, create_time, sort_seq, message_content, compress_content FROM "' + table + '"';
-            rows = sdb.prepare(sql).iterate()[Symbol.iterator]();
-          } catch (e) {
-            recordSkip(shard, e);
-            continue;
-          }
-          for (; ; ) {
-            let step;
-            try {
-              step = rows.next();
-            } catch (e) {
-              recordSkip(shard, e);
-              break;
-            }
-            if (step.done) break;
-            const r = step.value;
-            rowsSinceYield += 1;
-            const localId = Number(r["local_id"] ?? 0);
-            const createTime = Number(r["create_time"] ?? 0);
-            const sortSeq = Number(r["sort_seq"] ?? localId);
-            const wmPrev = shardWm.get(shard) ?? 0;
-            if (sortSeq > wmPrev) shardWm.set(shard, sortSeq);
-            const raw = decodeCell(r["message_content"]) || decodeCell(r["compress_content"]);
-            charsSinceYield += raw.length;
-            const { sender, body } = splitGroupPrefix(raw, username);
-            const text = readableMessageText(body);
-            if (text) {
-              const who = sender ? sessionWho + " " + bigramTokens(names.get(sender) ?? sender) : sessionWho;
-              batch.push([text, bigramTokens(text), who, username, createTime, sortSeq, localId]);
-              batchChars += text.length;
-            }
-            if (batch.length >= 500 || batchChars >= FLUSH_EVERY_CHARS) flush();
-            if (rowsSinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
-              rowsSinceYield = 0;
-              charsSinceYield = 0;
-              await yieldToLoop();
-            }
-          }
-          if (batch.length >= 500) flush();
-        }
-      } finally {
-        sdb.close();
-      }
-    }
-    flush();
-    flush();
-    total = db.prepare("SELECT COUNT(*) AS c FROM message_meta").get().c;
-    const builtAt = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
-    db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('built_at', ?)").run(builtAt);
-    db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)").run(INDEX_SCHEMA_VERSION);
-    const insKv = db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)");
-    for (const [shardPath, seq] of shardWm) insKv.run(SHARD_WM_PREFIX + basename4(shardPath), String(seq));
-    insKv.run(REFRESHED_KEY, String(Date.now()));
-    db.exec("COMMIT");
-    try {
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-    }
-    const result = { status: "ok", rows: total, built_at: builtAt, elapsed_ms: Date.now() - started };
-    if (skippedCount > 0) result.message = `\u5DF2\u8DF3\u8FC7 ${skippedCount} \u4E2A\u4E0D\u53EF\u8BFB\u5206\u7247\uFF1A${skipped.join("; ")}`;
-    return result;
-  } catch (e) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-    }
-    throw new Error("\u6784\u5EFA\u641C\u7D22\u7D22\u5F15\u5931\u8D25: " + e.message);
-  } finally {
-    db.close();
-  }
-}
-function yieldToLoop() {
-  return new Promise((resolve5) => {
-    setImmediate(resolve5);
-  });
 }
 
 // src/backend/wechat-data/src/query/members.ts
@@ -28568,7 +28575,7 @@ var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("g
   getRevoked(options) {
     return queryRevoked(this._dirs.decrypted, options?.limit, options?.offset, options?.q);
   }
-  getStorageStats() {
+  async getStorageStats() {
     return queryStorageStats(this._dirs.decrypted, rawWechatBase(this._dirs.decrypted) || void 0);
   }
   getAnnual() {

@@ -81,7 +81,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      * Storage stats.
      * @returns StorageSnapshot: per-category storage usage stats.
      */
-    getStorageStats(): StorageSnapshot;
+    getStorageStats(): Promise<StorageSnapshot>;
     /**
      * Annual years.
      * @returns AnnualSnapshot: available yearly overview data.

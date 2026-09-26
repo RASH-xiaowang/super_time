@@ -898,4 +898,20 @@ export const MUTATIONS = [
     to: "              if (false) await yieldToLoop()",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
+  {
+    id: "M114-storage-stops-yielding-per-month-dir",
+    why: "存储统计的 msg/file 整树 stat 不再按月份让出：上百个文件一次性 stat 完（这一页最重的一段）",
+    file: "src/backend/wechat-data/src/query/storage.ts",
+    from: "        await yieldToLoop()",
+    to: "        // 不让出",
+    spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
+  },
+  {
+    id: "M115-storage-stops-yielding-per-large-file",
+    why: "每条大文件的让出关掉：resolveFileTitle 会逐个消息分片开库找消息，100 条 × 全部分片就是几百次同步开库",
+    file: "src/backend/wechat-data/src/query/storage.ts",
+    from: "      await yieldToLoop()\n      const packedName = parsePackedName(r.p ?? null)",
+    to: "      const packedName = parsePackedName(r.p ?? null)",
+    spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
+  },
 ]

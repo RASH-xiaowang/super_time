@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { withDb, withDbAsync } from '../src/query/db-open.ts'
 import { cachedBySigAsync } from '../src/query/meta.ts'
 import { queryPrivacyScan, PRIVACY_YIELD_EVERY_ROWS } from '../src/query/privacy.ts'
+import { queryStorageStats } from '../src/query/storage.ts'
 import { queryOverviewInsights, SNS_YIELD_EVERY_ROWS } from '../src/query/overview-insights.ts'
 
 const scratch: string[] = []
@@ -251,14 +252,56 @@ describe('隐私体检也要让出（同一族：60 万行量级的整表扫）'
   })
 })
 
+describe('存储统计也要让出（msg/file 整树 stat + 每条大文件都可能翻遍分片）', () => {
+  /** 造 `wechatBaseDir/msg/file/<月份>/…` + 一个能读出三条大文件的 message_resource.db。 */
+  function makeStorageTree(): { base: string; dec: string; largeRows: number } {
+    const dir = mkdtempSync(join(tmpdir(), 'yield-stor-'))
+    scratch.push(dir)
+    const base = join(dir, 'raw')
+    const dec = join(dir, 'decrypted')
+    for (const month of ['2026-08', '2026-09']) {
+      mkdirSync(join(base, 'msg', 'file', month), { recursive: true })
+      writeFileSync(join(base, 'msg', 'file', month, '报告.pdf'), 'x'.repeat(4000 + month.length), 'utf8')
+    }
+    mkdirSync(join(dec, 'message'), { recursive: true })
+    const db = new DatabaseSync(join(dec, 'message', 'message_resource.db'))
+    db.exec(`
+      CREATE TABLE MessageResourceDetail (message_id INTEGER, type INTEGER, size INTEGER, packed_info BLOB, data_index TEXT, create_time INTEGER);
+      CREATE TABLE MessageResourceInfo (message_id INTEGER, chat_id INTEGER, sender_id INTEGER, message_svr_id INTEGER);
+      CREATE TABLE ChatName2Id (user_name TEXT);
+      CREATE TABLE SenderName2Id (user_name TEXT);`)
+    const insD = db.prepare('INSERT INTO MessageResourceDetail VALUES (?,?,?,?,?,?)')
+    const insI = db.prepare('INSERT INTO MessageResourceInfo VALUES (?,?,?,?)')
+    db.prepare('INSERT INTO ChatName2Id VALUES (?)').run('wxid_a')
+    db.prepare('INSERT INTO SenderName2Id VALUES (?)').run('wxid_a')
+    for (let i = 1; i <= 3; i += 1) {
+      insD.run(i, 1, 4000 + i, null, String(i), 1_700_000_000 + i)
+      insI.run(i, 1, 1, 9000 + i)
+    }
+    db.close()
+    return { base, dec, largeRows: 3 }
+  }
+
+  it('月份目录之间 + 每条大文件之间都让出', async () => {
+    const { base, dec, largeRows } = makeStorageTree()
+    const stop = tickProbe()
+    const r = await queryStorageStats(dec, base)
+    const ticks = stop()
+    expect(r.large_files.length, '夹具没真的产出大文件 ⇒ 下面的让出判断是空转').toBe(largeRows)
+    console.log(`[算料|yield] 存储统计 2 个月份目录 + ${String(largeRows)} 条大文件：探针 ticks=${String(ticks)}`)
+    // 让出点 = 2（月份）+ 3（每条大文件）= 5 ⇒ 下界 6。
+    expect(ticks, '两处让出点（月份目录 / 每条大文件）少任何一处都会掉到 6 以下')
+      .toBeGreaterThanOrEqual(6)
+  })
+})
+
 /**
- * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览与隐私体检两个。
+ * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览、隐私体检与存储统计三个。
  * 写成判据而不是备忘：这五个里谁先加了让出，就必须从这里删一条 —— 只能变小。
  */
 const STILL_SYNC_ONLY = [
   'query/graph.ts',
   'query/ledger.ts',
-  'query/storage.ts',
 ]
 
 describe('P1-2 剩余站点（棘轮：只能变小）', () => {

@@ -1373,7 +1373,7 @@ Resolve one SNS (朋友圈) video body so it can be played inline.  两级来源
 ### `getStorageStats`
 
 ```ts
-getStorageStats(): StorageSnapshot
+async getStorageStats(): Promise<StorageSnapshot>
 ```
 
 Storage stats.

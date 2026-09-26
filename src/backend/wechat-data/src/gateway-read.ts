@@ -136,7 +136,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns StorageSnapshot: per-category storage usage stats.
    */
   @Remote('getStorageStats')
-  getStorageStats(): StorageSnapshot {
+  async getStorageStats(): Promise<StorageSnapshot> {
     return queryStorageStats(this._dirs.decrypted, rawWechatBase(this._dirs.decrypted) || undefined)
   }
 
