@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**303 文件 / 3073 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异 114 条全咬红、逐字节还原，登记到 M117）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**305 文件 / 3103 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 122 条全咬红、逐字节还原，登记到 M125）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -41,6 +41,10 @@
 
 | 第二批 #11 P1-2 让出 | ✅ **让出 5/5 完成**；🟡 取消仍等生成链 | `3928dca` + `d2d4f0a` + `8b1ba12` + `32ce84a` + `5b69d61` | 上面那两条实施前提 ① 已开工：先补两块基建 —— `withDbAsync`（连接要跨过 await 才关得掉；把 `await` 塞进同步 `withDb` 的回调里，连接会在**第一次让出时**就被关掉，表现是「小库恒绿、大库偶发 database is not open」，判据里有一正一反两条对照用例钉住这件事）与 `cachedBySigAsync`（异步版签名缓存 + **同键合流**：让出之后并发冷算真会撞在一起，不合流等于把 54 秒跑两遍；只有「仍在飞的那一份」才写回，防旧签名盖掉新数据）。改造的模块选 **`overview-insights`**（P1-2 里唯一有实测数字的那个：`analyzeVisibleMessages` 54,103ms）：消息分片之间各让一次、朋友圈整表扫每 2000 行让一次，`getOverviewInsights` 随之变 async（客户端一直是 `await` 的，无需改面板）。**按行数而不是按时钟**：CI 机器慢 20 倍，任何「跑够 25ms」的断言都会假红。**判据** `query-yield-discipline.spec.ts` 9 条用 `setImmediate` 探针与查询并发跑，量「探针拿到几个 tick」（同步实现一个都拿不到 ⇒ 必咬），`[算料]` 2 分片 ticks=3、1 分片 + 2001 条 ticks=4；`cachedBySigAsync` 的命中/合流/失败三态各一条。**剩下四个模块（`privacy`/`graph`/`ledger`/`storage`）钉成 `STILL_SYNC_ONLY` 棘轮**（只能变小，谁先改完谁删条目）—— 别让「做了一件」在台账里看起来像「做完了」。顺手两处：`contact.db` 的 open/close 收进 `withDb`（PRAGMA/SELECT 抛错时原本漏句柄，外面还是 `catch { ignore }`）、总览的 shell 探针改为 `await`（不 await 的话**每一个**异步端点都会被误判成「快照没形状」）。变异 M107–M110。**第二块收的是 `privacy`**（`d2d4f0a`）：探测阶段每分片一次 + 扫描阶段每表一次 + 每 5000 行一次的让出，整条链（`queryPrivacyScan` / `remotes+gateway.getPrivacyScan` / `exportCsv` 的 privacy 分支）随之 async。**顺手修的是判据本身**：原来「探针拿到几个 tick」的下界是**估**的，于是 M113（把行级让出关掉）照样全绿 —— 判据看着有、实际不咬。实测确认 `ticks == 让出次数 + 1` 是**结构性**的（探针每轮只排一个 `setImmediate`，队列里最多压着它一个回调，与机器快慢无关），所以下界直接取「让出次数 + 1」：三条用例的下界改成 3 / 4 / 6 之后，M107/M108/M111/M112/M113 逐条复跑全咬。**第三块是 `storage`**（`8b1ba12`）：`msg/file` 整树 stat 按月份目录让出 + 大文件列表逐条让出（后者不是凑数 —— `resolveFileTitle` 找不到名字时会**逐个消息分片开库**去找那条消息，100 条 × 全部分片就是几百次同步开库，那一页真正的长尾在这里）。判据加第三条用例（2 个月份目录 + 3 条大文件 ⇒ ticks=6，下界同样取「让出次数 + 1」），变异 M114/M115。**第四块是 `ledger`**（`32ce84a`）：最贵的一段是 `resolveMessagesByServerIds` —— 把 general.db 的转账/红包行还原成消息时，两趟扫描（整型等值走索引 + 文本 CAST 兜底）**每趟都把所有消息分片各开一遍库**，现在分片之间各让一次。探针同时收成公共零件 `helpers/tick-probe.ts`（账本那条用例挂在 `ledger.spec.ts` 里复用已有的 64 位/文本 id 夹具：1 分片 × 2 趟 ⇒ 让出 2 次 ⇒ 下界 3，实测 ticks=3 正好贴线），`STILL_SYNC_ONLY` 只剩 `graph`。变异 M116。**第五块是 `graph`**（`5b69d61`）：`loadMessageCounts` 每开一个分片库之前让一次（放在 `wanted` 判空之后 ⇒ 让出次数 == 实际开库次数），`queryGraph` / `getGraph` 随之 async；探针用例的下界写成 2 而不是 `opens + 1`，理由记在用例注释里（`countOpens` 数的是所有 `close`，里面含会话库/通讯录库这些**不该让出**的开合，拿它当让出次数会虚高）。**收完五个模块之后，那张剩余清单升级成零容忍清单**（`P1_2_MODULES` 逐个断言含 `yieldToLoop` + 「清单不许被清空」的长度哨兵）—— 棘轮走到 0 就该变成闸门，不然它悄悄退化成恒真。变异 M117。**顺带撞出一条工具事实**：这次改动让两条**旧**变异（M63/M64，第一批 #5 的 P1-3 判据）锚点失配 —— `cachedBySig`→`cachedBySigAsync` 改了函数名、循环里插了让出点。它是被 `--only` 复跑抓出来的，不是人眼看到的；M64 的 `from` 已改成**从源码里现截**（脚本取整段循环再 `JSON.stringify`），以后再动这个文件就不会再失配。**「取消」那一半仍按上面的 ② 等生成链**（P1-5 已结项，下一步是给 `@Remote` 的取消元数据接上可复现的生成） |
 
+| 第三批 #21 P2-3 解循环依赖 | ✅ 完成（**超出清单，并纠正报告一处误报**） | `cf0840a` | 报告 §P2-3 点了 6 对双向边，AST 实测是 **5 个强连通分量**：`chats-thread.tsx ↔ Chats.tsx` 那一对**是误报**（互相提到的只是类型，编译期就擦掉，不构成运行期依赖）⇒ 守卫里专门留一条用例钉「口径不过宽」，防止清单混进假环后「只能变小」失去意义。真环逐个解开：① `export-format.ts:16` 的死 import（进来的成员全仓没用到）；② `api-core` → `api-config`/`api-status` 改 `import type`；③ `graph-canvas-theme` 的死 `bubbleText` + geometry 的三个类型改 `import type`；④ `chats-media` ↔ `chats-cards` ↔ `Chats` 把 `CardFoot` 拆成 `panels/chats-card-foot.tsx`；⑤ `search-build`/`search-query`/`search-scaffold` 三节点环，把五把纯展示帮手拆成 `query/search-display.ts` 叶子（它们不碰库、不碰索引，天然在最下面一层，拆完方向重新单向）。**守卫** `src/backend/tests/module-cycle-guard.spec.ts`：走 `ts.createSourceFile` 只取 `ImportDeclaration`/`export * from` 的**模块说明符字面量** —— 报告自己警告过本仓注释里大量 `from './x.ts'` 字样会让正则分析误报，实测确实如此（注释里的字样在语法树里根本不是节点）；Tarjan 迭代版求 SCC（递归版会爆栈）、`import type` 与全 `type` 成员不建边、只扫后端 + 渲染层两棵产物树。**清单清空之后改闸门**：`KNOWN_RINGS` 删掉，「值 import 环 == 0」变零容忍，而这条不是恒真 —— 由「临时造一个三方环，判据必须报出来」的反例自证 + 变异 M118（SCC 恒不 push）撑住；M119（把 type-only 当边 ⇒ 多报假环）、M120（只扫后端树 ⇒ 渲染层的环悄悄不查）、**M121（把 `search-scaffold.ts` 那条死 import 原样加回来 ⇒ 真回归点上必须在真文件上变红，而不是只在合成夹具上）**。终态 `[算料|cycles]`：节点 371 / 值 import 边 990 / **环 0 个**。**顺带撞出的第二条**：搬叶子时 `format-single-source` 的「清单不许腐烂」判据先报了路径漂移，回读发现 `formatFullTime` 与 `src/format.ts#fmtDateTimeSec` 输出**逐字节相同**（10 组对照含 0 / NaN / null / undefined / 负数）⇒ 删掉第二份实现、三处调用改指唯一出处，而不是只把登记路径挪一下，`KNOWN_SECOND_TIME` 7 → 6（这条同时是「棘轮清单被搬文件蒙混过去」的反例：路径变了也要红） |
+
+| 第三批 #18 拆 `moments-panel.tsx` | 🟡 **第一步做完**（其余三族未完），并**修掉一个真缺陷** | 本次提交 | 报告说「单函数 917 行」，实测 `MomentsPanel` 占 929 行（文件 960 行）：JSX 早在 M21 竖切时就分给了 `moments-card/portals/sidebar`，剩下整块是**容器逻辑**（状态 + 副作用 + 回调），所以这一项的正解是抽自定义钩子而不是再切组件。第一刀切的是**筛选与派生**：原先连着七个 `useMemo`、每个依赖上一个的数组身份 —— **这形状已经真出过事故**：`scoped` 函数体读 `dateScoped`，依赖数组却写 `[monthFiltered, sortOrder]` ⇒ **只改日期范围时列表不动**，而侧栏那个日期选择器是用户点得到的（`moments-panel.tsx:371`，改前）。**改前没有任何用例覆盖日期筛选**，本仓又没装 eslint（#24 那条正是「装 eslint 才能自动拦」），所以「依赖数组漏一项」在这里连静态防线都没有。① 新增 `panels/moments-scope.ts`：筛选是**纯函数**（`scopeMoments`/`insightCounts`/`topAuthorRows`/`monthlyRows`/`monthKeyOfSec`），`useMomentsScope` 是全层**唯一**写依赖数组的地方；月份键刻意不叫 `fmt*`/`format*` —— 那前缀 + 单位换算会被 `format-single-source` 判成第二份实现（同名的 `fmtMonthKey` 会当场给自己登记一条棘轮）。② **判据** `moments-scope.spec.ts` 26 条分三层：纯函数表（八条件逐个正反例、搜索的九个入口、日期闭区间两端各验一次、并列时间戳的稳定序、不改入参，连 `nickname \|\| username` 那条短路口径也钉住）、**jsdom 真渲染**（只改 `dateFrom` 必须换结果 —— 正面打在那个缺陷上；反向钉「值没变、只是 criteria 换了对象身份」不许重算，否则「干脆不 memo」也能骗过第一条）、**AST 契约**（`MomentsCriteria` 每加一个字段，那次 `useMemo` 的依赖里就必须出现 `criteria.<字段>`，配形状哨兵：读不到字段清单或找不到 memo 就红，不许恒真）。③ 接线判据两条（面板必须走这层 + 面板里 criteria 八字段一个不能少），其中「痕迹清单」第一版写错被自己的空转哨兵抓住：`T00:00:00` 在面板里**合法存在**（导出日期范围要用它），拿它当筛选痕迹会误报 —— 痕迹清单只留筛选独有的三条。面板 929 → 837 行。④ 变异 M122–M125：抹掉 `criteria.dateFrom` 依赖（正是原缺陷形状，纯函数表全绿、只有真渲染与契约红）、结束日改 00:00:01、AST 契约认的钩子名改掉、月度分布回退时忽略作者。**剩下的三族仍未拆**（媒体懒解密 / 视频 / 灯箱 / 导出），别把这一条当整项结项 —— 报告估 1.5d，本轮做的是其中最大也最有害的一段。**读码时差点误报一条**：`mediaKeySpec` 在面板里只见读不见写，看着像「懒解密整条链是死的」，实为**卡片在 render 里登记 spec**（`moments-card.tsx:105/146/289`），那次 grep 被 `\| head -20` 截断才只见面板的十几行 ⇒ 否定式结论必须用不限流的搜索（已写进工具记忆 53）。 |
+
 ### 剩余（按 §七 的批次，未在本轮）
 
 - 第一批：**已全部做完**（#1–#8）。
@@ -60,8 +64,8 @@
 
 - 第二批 #13 的**后半**：`ENFORCED_SCHEMA_METHODS` 目前是空集 —— ② 档（按 schema 硬拒）要等
   `info().argGuard.mismatched` 在真实使用里稳定为空才升级，这是刻意留下的证据门槛，不是漏做。
-- 第三批 #18–#25（拆巨型组件、`GatewayCore` 职责拆分、解循环依赖、长列表虚拟化、统一失效契约、
-  DB 纪律 ESLint 固化、四份新文档 + README 索引）。
+- 第三批 #18–#20、#22–#25（拆巨型组件、`GatewayCore` 职责拆分、长列表虚拟化、统一失效契约、
+  DB 纪律 ESLint 固化、四份新文档 + README 索引）。#21（解循环依赖）已完成，见上表。
 - 第四批其余 P3（`isMd5` 10 处、`normalizeAesKey` 6 处、图片解码三兄弟、同概念三名、地图开关镜像…）；
   `KNOWN_SECOND_TIME` 里剩下的 7 份日期函数（各有显示形状，要逐个改文案再核对既有用例）。
 - 本轮新发现的候选守卫（还没写）：「注释里引用的脚本/用例/文档路径必须真的存在」——见 ⑤。
@@ -347,6 +351,11 @@ if (hit !== null && !isEmptySnapshot(hit)) {
 | `graph-canvas-theme.ts:12` ↔ `graph-canvas-render.ts:12`；`chats-media.tsx:13` ↔ `chats-cards.tsx:16`；`chats-thread.tsx:18` ↔ `Chats.tsx:25` | 组件互引 |
 
 ⚠️ **注意**：本仓文档注释里大量出现 `from './xxx.ts'` 字样（如 `export-io.ts:5`、`api-core.ts:153`），会让任何正则静态分析**误报假环** ⇒ 写检测脚本时**必须先 `stripComments`**（`panels/wiring-kit.ts` 已有该 helper）。
+
+> **2026-09-26 复核（第三批 #21 已闭合）**：上表 6 对里 `chats-thread.tsx ↔ Chats.tsx` 是**误报** ——
+> 两侧互相引用的只是类型（`import type` 编译期擦除，不构成运行期依赖），所以 AST 口径下实测是
+> **5 个强连通分量**而不是 6 个。其余 5 个已全部解开，守卫按 `ts.createSourceFile` 取边
+> （比 `stripComments` 更彻底：注释在语法树里根本不是节点），落点与判据见顶部状态表。
 
 **优化方向**：`api-core` 的 `remote/unwrap` 下沉为叶子 `api-runtime.ts`，类型抽 `api-types.ts`；`export`/`search` 家族明确单向依赖方向。
 

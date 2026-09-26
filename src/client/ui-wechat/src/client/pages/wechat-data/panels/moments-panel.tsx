@@ -23,6 +23,7 @@ import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 import { ARTICLE_COVER_CACHE_MAX, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
+import { useMomentsScope } from './moments-scope.ts'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -305,116 +306,25 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     }
   }, [moments, snsImgs, articleCovers, coverTick])
 
-  // Search scope is intentionally broader than the legacy author/text/location set:
-  // it also matches link title/url, 公众号 source, liker nicknames and comment text.
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase()
-    if (!q) return moments
-    return moments.filter(m =>
-      m.author.toLowerCase().includes(q)
-      || m.text.toLowerCase().includes(q)
-      || m.location.toLowerCase().includes(q)
-      || m.link_title.toLowerCase().includes(q)
-      || (m.link_url ?? '').toLowerCase().includes(q)
-      || (m.sourceNickName ?? '').toLowerCase().includes(q)
-      || (m.publicUserName ?? '').toLowerCase().includes(q)
-      || m.likes.some(l => (l.nickname || l.username).toLowerCase().includes(q))
-      || m.comments.some(c => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q)))
-  }, [moments, deferredSearch])
-
-  const mediaFiltered = useMemo(() => {
-    if (mediaFilter === 'all') return filtered
-    return filtered.filter((m) => {
-      switch (mediaFilter) {
-        case 'image': return m.images.length > 0
-        case 'video': return m.videos.length > 0
-        case 'link': return !!m.link_title || m.contentType === 3 || m.contentType === 28
-        case 'location': return !!m.location
-        case 'text': return m.images.length === 0 && m.videos.length === 0 && !m.link_title
-        default: return true
-      }
-    })
-  }, [filtered, mediaFilter])
-
-  // 独立作者筛选（作者 chips）：按显示名精确匹配，不污染搜索框。
-  const authorScoped = useMemo(() => {
-    if (!authorFilter) return mediaFiltered
-    return mediaFiltered.filter(m => m.author === authorFilter)
-  }, [mediaFiltered, authorFilter])
-
-  // 只看我 / 只看他人 scope.
-  const mineFiltered = useMemo(() => {
-    if (mineFilter === 'all') return authorScoped
-    return authorScoped.filter(m => (mineFilter === 'mine' ? m.is_self : !m.is_self))
-  }, [authorScoped, mineFilter])
-
-  // 月度时间导航：选中某个月时只看该月（基于 ts 的 YYYY-MM 键）。
-  const monthFiltered = useMemo(() => {
-    if (monthFilter === null) return mineFiltered
-    return mineFiltered.filter((m) => {
-      if (!m.ts) return false
-      const d = new Date(m.ts * 1000)
-      const k = String(d.getFullYear()) + '-' + String(d.getMonth() + 1).padStart(2, '0')
-      return k === monthFilter
-    })
-  }, [mineFiltered, monthFilter])
-
-  // 自由日期范围筛选（YYYY-MM-DD）。
-  const dateScoped = useMemo(() => {
-    const from = dateFrom ? Math.floor(new Date(dateFrom + 'T00:00:00').getTime() / 1000) : 0
-    const to = dateTo ? Math.floor(new Date(dateTo + 'T23:59:59').getTime() / 1000) : 0
-    if (!from && !to) return monthFiltered
-    return monthFiltered.filter(m => (from <= 0 || m.ts >= from) && (to <= 0 || m.ts <= to))
-  }, [monthFiltered, dateFrom, dateTo])
-
-  // 时间排序（默认最新在前）；用了拷贝，避免原地改动 memos 返回的数组。
-  const scoped = useMemo(() => {
-    const arr = [...dateScoped]
-    if (sortOrder === 'asc') arr.sort((a, b) => (a.ts || 0) - (b.ts || 0))
-    else arr.sort((a, b) => (b.ts || 0) - (a.ts || 0))
-    return arr
-  }, [monthFiltered, sortOrder])
-
-  const insight = useMemo(() => {
-    const count = (p: (m: MomentItem) => boolean): number => moments.filter(p).length
-    return {
-      withImages: count(m => m.images.length > 0),
-      withVideos: count(m => m.videos.length > 0),
-      withLocation: count(m => !!m.location),
-      withLink: count(m => !!m.link_title),
-    }
-  }, [moments])
-
-  const topAuthors = useMemo<Array<[string, number]>>(() => {
-    // 优先用全量作者条数（SQL 聚合，真实反映全量排名）；查询失败则回退到已加载子集统计。
-    if (fullAuthors && fullAuthors.length > 0) return fullAuthors.slice(0, 20).map(a => [a.name, a.count])
-    const map = new Map<string, number>()
-    for (const m of moments) map.set(m.author, (map.get(m.author) ?? 0) + 1)
-    return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
-  }, [fullAuthors, moments])
-
-  /** 当前生效的那份月度快照（选中作者时换成作者版）。 */
-  const monthlySnapActive = authorFilter ? monthlySnapForAuthor : monthlySnap
-  const monthlyReadError = monthlySnapActive.readError ?? ''
-
-  const monthly = useMemo(() => {
-    // 选中作者时使用该作者的全量月度分布；否则用全量（或 prop 作者）的月度分布。
-    const raw = monthlySnapActive.months
-    if (raw.length > 0) {
-      return [...raw].sort((a, b) => a.month.localeCompare(b.month)).map(m => ({ key: m.month, label: m.month, count: m.count }))
-    }
-    // Fallback: aggregate the currently-loaded page (e.g. monthly fetch failed).
-    const map = new Map<string, number>()
-    const scope = authorFilter ? moments.filter(m => m.author === authorFilter) : moments
-    for (const m of scope) {
-      if (!m.ts) continue
-      const d = new Date(m.ts * 1000)
-      const k = String(d.getFullYear()) + '-' + String(d.getMonth() + 1).padStart(2, '0')
-      map.set(k, (map.get(k) ?? 0) + 1)
-    }
-    return [...map.keys()].sort().map(k => ({ key: k, label: k, count: map.get(k) ?? 0 }))
-  }, [monthlySnapActive, authorFilter, moments])
-  const monthMax = Math.max(1, ...monthly.map(m => m.count))
+  // 八个条件全部交给 `moments-scope.ts`：筛选是纯函数，依赖数组只写在那一个地方，
+  // 并由 `moments-scope.spec.ts` 的 AST 判据钉住「criteria 每个字段都必须进依赖」——
+  // 这里原先连着七个 memo、每个依赖上一个的数组身份，已经因此漏掉过一次日期筛选。
+  const { scoped, insight, topAuthors, monthly, monthMax, monthlyReadError } = useMomentsScope({
+    moments,
+    criteria: {
+      search: deferredSearch,
+      media: mediaFilter,
+      author: authorFilter,
+      mine: mineFilter,
+      month: monthFilter,
+      dateFrom,
+      dateTo,
+      order: sortOrder,
+    },
+    fullAuthors,
+    monthlySnap,
+    monthlySnapForAuthor,
+  })
 
   const groups = useMemo(() => groupByDate(scoped), [scoped])
   const { count: grpCount, sentinelRef: grpSentinel } = useProgressiveList(groups.length, 25)
