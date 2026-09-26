@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { SNAPSHOT_REFRESHED_EVENT, apiGetGroupInfo, apiGetMessages, apiGetNewMessages, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiGetGroupInfo, apiGetMessages, readRenderCache, writeRenderCache } from '../api.ts'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { fmtMsgClockSec } from '../utils/format.ts'
 import { MessageRenderItem, renderKindOf } from '../utils/message-items.ts'
@@ -17,8 +17,9 @@ import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import type { ChatTarget } from './Chats.tsx'
 import { MessageImageGroup } from './chats-media.tsx'
-import { Avatar, ChatView, POLL_HIDDEN_MS, POLL_VISIBLE_MS } from './chats-support.tsx'
+import { Avatar, ChatView } from './chats-support.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
+import { useChatsPolling } from './chats-polling.ts'
 import type { ChatlogRecord, GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsThreadInputs {
@@ -81,6 +82,11 @@ export interface useChatsThreadInputs {
 
 export function useChatsThread(inputs: useChatsThreadInputs) {
   const { annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgEndRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef } = inputs
+/**
+ * 开始一个会话：令牌自增（作废所有在途请求）并声明 `messages` 将归属该 talker。
+ * @param talker - 会话 username。
+ * @returns 本次令牌，供后续 `sessionAlive` 校验。
+ */
 const beginSession = (talker: string): number => {
   sessionEpochRef.current += 1
   messagesTalkerRef.current = talker
@@ -90,22 +96,17 @@ const beginSession = (talker: string): number => {
 }
 
 /**
- * 在途结果是否仍属于本次会话。
- * @param epoch - 发起请求时拿到的令牌。
- * @param talker - 发起请求时的会话 username。
- * @returns 令牌未变且 talker 未被切走时为 true。
+ * 在途结果是否仍属于本次会话 —— 定义在**面板**里（会话/消息两半都要用它，放外面才不产生钩子环），
+ * 这里当输入用；其语义见 `Chats.tsx#sessionAlive`。
  */
-// 注：`sessionAlive` 定义在**面板**里（会话/消息两半都要用它，放外面才不产生钩子环），这里当输入用。
 
 /**
- * 关闭当前会话并把归属令牌作废。
+ * 渲染一个「消息渲染项」（日期分隔 / 系统行 / 普通气泡 / 图片组）。
  *
- * 用于切换分类视图（公众号/服务号/客服）时：那三个类目互斥，
- * 列表换类目后右侧绝不能留着上一类目的会话 —— 否则会在「客服」视图里
- * 看到某个公众号的聊天，就是「别人的信息出现在这个界面」。
- *
- * 只清理本函数之前声明的 state；依赖于会话的浮层（聊天记录弹窗、右键菜单）
- * 由调用方 changeView 一并收起。
+ * 虚拟化后每项要单独套一层定位容器，而**行内结构必须保持原样**
+ * （`id="msg-<localId>"`、头像身份键、悬停时间戳这些都被守卫与深链依赖）。
+ * @param item - `buildMessageItems` 的产物。
+ * @returns 行元素（日期分隔没有 id）。
  */
 function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
   if (item.kind === 'day') {
@@ -190,109 +191,9 @@ useLayoutEffect(() => {
   requestAnimationFrame(() => { apply(); requestAnimationFrame(apply) })
 }, [messages.length])
 
-/**
- * 当前 `messages` 是否确实属于正在显示的会话。
- *
- * `curSession` 与 `messages` 是两份 state，中间必然有一段不一致的窗口。
- * 与其只在各个异步回调里保证顺序，这里再加一道**结构性**断言：归属不符时
- * 一律不渲染消息列表（显示骨架），从根上杜绝「把上一个人的消息画在这个
- * 会话的标题下面」。`messagesTalkerRef` 与两份 state 在同一批次里更新，
- * 因此渲染时读到的值一定是自洽的。
- */
-const pollNew = useCallback(async (): Promise<void> => {
-  if (!curSession || inFlightRef.current) return
-  const talker = curSession.username
-  const epoch = sessionEpochRef.current
-  const after = watermarkRef.current
-  if (!after) return
-  inFlightRef.current = true
-  try {
-    const env = await apiGetNewMessages({ talker, after, limit: 200 })
-    // 切走之后到达的响应必须丢弃：否则会把上一个会话的新消息追加进当前会话，
-    // 并且写进**上一个会话**的渲染缓存（缓存被污染后重开也还是错的）。
-    if (!sessionAlive(epoch, talker)) return
-    const fresh = env.messages
-    setPollStatus(`✓ ${new Date().toLocaleTimeString()} · ${fresh.length} 条新消息`)
-    if (fresh.length === 0) return
-    setMessages((prev) => {
-      if (!sessionAlive(epoch, talker)) return prev
-      const key = (m: WechatMessage): string => `${m.localId}:${m.sortSeq ?? 0}`
-      const seen = new Set(prev.map(m => key(m)))
-      const add = fresh.filter(m => !seen.has(key(m)))
-      if (add.length === 0) return prev
-      setWatermarkFrom(add)
-      // Keep the render cache current so a session reopen paints the same
-      // newest messages before the authoritative fetch returns.
-      const merged = [...prev, ...add]
-      writeRenderCache('chat-msgs:v2:' + talker, merged)
-      return merged
-    })
-    // follow to the bottom only when the user is already near it
-    requestAnimationFrame(() => {
-      if (!sessionAlive(epoch, talker)) return
-      const el = msgEndRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const vh = window.innerHeight || document.documentElement.clientHeight
-      if (rect.top < vh && rect.bottom >= 0) el.scrollIntoView({ block: 'end' })
-    })
-  } catch (e) {
-    if (sessionAlive(epoch, talker)) setPollStatus('✗ ' + ((e as Error).message || '轮询失败').slice(0, 60))
-  } finally {
-    inFlightRef.current = false
-  }
-}, [curSession])
 
-/** 与快照最近窗口对账：撤回(10002)/删除等就地修改保留原 sort_seq，
- *  增量轮询按 sort_seq 水位看不到它们；宿主推送后拉一次最近 50 条，
- *  按 localId 用新行替换发生变化的行，界面与库保持一致（有界查询）。 */
-const reconcileRef = useRef(false)
-const reconcileRecent = useCallback(async (): Promise<void> => {
-  if (!curSession || reconcileRef.current) return
-  const talker = curSession.username
-  const epoch = sessionEpochRef.current
-  reconcileRef.current = true
-  try {
-    const env = await apiGetMessages({ talker, limit: 50 })
-    // 对账按 localId 匹配，而 local_id 只在会话内唯一 —— 切走后拿另一个会话的
-    // 行去替换当前会话的行，等于按编号把别人的消息安到这个会话上，必须丢弃。
-    if (!sessionAlive(epoch, talker)) return
-    const byId = new Map<number, WechatMessage>()
-    for (const m of env.messages) byId.set(m.localId, m)
-    if (byId.size === 0) return
-    setMessages((prev) => {
-      if (!sessionAlive(epoch, talker)) return prev
-      const next = prev.map((m) => {
-        const cur = byId.get(m.localId)
-        if (cur && (cur.type !== m.type || (cur.sortSeq ?? 0) !== (m.sortSeq ?? 0))) return cur
-        return m
-      })
-      const changed = next.some((m, i) => m !== prev[i])
-      if (!changed) return prev
-      writeRenderCache('chat-msgs:v2:' + talker, next)
-      return next
-    })
-  } catch { /* 保持当前视图，等待下一次推送对账 */ } finally {
-    reconcileRef.current = false
-  }
-}, [curSession])
+useChatsPolling({ curSession, inFlightRef, msgEndRef, sessionAlive, sessionEpochRef, setMessages, setPollStatus, setWatermarkFrom, watermarkRef })
 
-useEffect(() => {
-  if (!curSession) return
-  let timer: ReturnType<typeof setInterval> | null = null
-  const start = (): void => {
-    if (timer !== null) clearInterval(timer)
-    const ms = document.visibilityState === 'visible' ? POLL_VISIBLE_MS : POLL_HIDDEN_MS
-    timer = setInterval(() => { void pollNew() }, ms)
-  }
-  start()
-  const onVis = (): void => { void pollNew(); start() }
-  document.addEventListener('visibilitychange', onVis)
-  return () => {
-    document.removeEventListener('visibilitychange', onVis)
-    if (timer !== null) clearInterval(timer)
-  }
-}, [curSession, pollNew])
 
 // Close the group-info drawer and drop the in-chat search scope on session switch.
 useEffect(() => {
@@ -335,26 +236,7 @@ useEffect(() => {
   return () => { document.removeEventListener('mousedown', onDown) }
 }, [moreOpen])
 
-// Host push: a WAL increment was decrypted into the snapshot — refresh the
-// open chat immediately, reconcile in-place edits (revoke/delete), and
-// coalesce the session-list refresh.
-useEffect(() => {
-  const onUpdated = (): void => {
-    void pollNew()
-    void reconcileRecent()
-    // 会话列表**不在这里刷**：`usePagedList` 内部已订阅同一事件并做非破坏性 refresh，
-    // 这里再刷一次只会重复取数；而原先这里走的是 `reset()`，每约 10 秒把列表清空重画，
-    // 表现就是「有新消息时会话列表跳动一次」。
-  }
-  window.addEventListener('dsh-wechat-data-updated', onUpdated)
-  // SWR 的另一半（P0-3）：`apiGetMessages` 命中缓存时先画旧快照、后台才刷新，
-  // 新值落地后按接口族广播 —— 不订阅它，界面就会一直停在「上一次打开时的那份」。
-  window.addEventListener(`${SNAPSHOT_REFRESHED_EVENT}:messages`, onUpdated)
-  return () => {
-    window.removeEventListener('dsh-wechat-data-updated', onUpdated)
-    window.removeEventListener(`${SNAPSHOT_REFRESHED_EVENT}:messages`, onUpdated)
-  }
-}, [pollNew, reconcileRecent])
+
 
 const openGroupInfo = (): void => {
   if (!curSession) return

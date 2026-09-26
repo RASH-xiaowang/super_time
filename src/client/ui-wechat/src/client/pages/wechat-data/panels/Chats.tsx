@@ -213,9 +213,9 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   )
 
   /**
-   * 开始一个会话：令牌自增（作废所有在途请求）并声明 `messages` 将归属该 talker。
-   * @param talker - 会话 username。
-   * @returns 本次令牌，供后续 `sessionAlive` 校验。
+   * 关闭当前会话并把归属令牌作废。用于切换分类视图（公众号/服务号/客服）：那三个类目互斥，
+   * 列表换类目后右侧绝不能留着上一类目的会话 —— 否则会在「客服」视图里看到某个公众号的聊天，
+   * 就是「别人的信息出现在这个界面」。依赖会话的浮层由调用方 `changeView` 一并收起。
    */
   const closeCurrentSession = useCallback((): void => {
     sessionEpochRef.current += 1
@@ -492,17 +492,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setTimeout(() => { document.getElementById('msg-' + String(localId))?.scrollIntoView({ block: 'center' }) }, 80)
   }, [msgItems, msgVirtualizer])
   /**
-   * 渲染一个「消息渲染项」（日期分隔 / 系统行 / 普通气泡 / 图片组）。
-   *
-   * 从原来的内联循环里抽出来：虚拟化后每项要单独套一层定位容器，
-   * 而**行内结构必须保持原样**（`id="msg-<localId>"`、头像身份键、悬停时间戳这些
-   * 都被守卫与深链依赖）。
-   * @param item - `buildMessageItems` 的产物。
-   * @returns 行元素（日期分隔没有 id）。
+   * 当前 `messages` 是否确实属于正在显示的会话：`curSession` 与 `messages` 是两份 state，
+   * 中间必然有一段不一致的窗口 —— 归属不符时一律不渲染消息列表（显示骨架），
+   * 从根上杜绝「把上一个人的消息画在这个会话的标题下面」。
    */
   const messagesMatchSession = curSession !== null && messagesTalkerRef.current === curSession.username
 
-  /** Incremental poll: fetch messages newer than the watermark and append. */
   const copyMsgText = useCallback((t: string): void => {
     void copyTextToClipboard(t).then((ok) => { window.alert(ok ? '文本已复制' : '复制失败') })
   }, [])
