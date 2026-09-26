@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
-import { computeHasMore } from './paged-list.ts'
+import { REFRESH_MIN_INTERVAL_MS, computeHasMore, refreshGate, refreshPagesFor } from './paged-list.ts'
 import { collectPageRange } from './load-page-range.ts'
 import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
 
@@ -260,11 +260,14 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
  * 调用方每次渲染传新函数也不会触发重复加载。
  */
 /**
- * `refresh()` 单轮最多发多少个请求（每个上限 `pageSize`）。
- * 16 × 200 = 3200 条，足够覆盖真实账号的通讯录量级（实测全量约 2150）；
- * 设上界是为了让「后台刷新」绝不退化成无界拉取。
+ * `refresh()` 的上界与节流口径都在 `paged-list.ts`（纯逻辑才可测）：
+ *   · {@link refreshPagesFor} —— 一轮最多 `REFRESH_MAX_PAGES` 页；**装不下就整轮跳过**，
+ *     绝不发前 N 页然后把列表截短（截短会塌高度、把用户弹回顶部 —— 那正是 `refresh`
+ *     存在的理由被推翻）；
+ *   · {@link refreshGate} —— 两轮之间至少隔 `REFRESH_MIN_INTERVAL_MS`，期间到达的
+ *     事件合并成一次尾部刷新（合并 ≠ 丢弃），页面不可见时一个请求都不发。
+ * 旧写法是「每约 10 秒、最多 16 个重读请求全部压进后端那一条队列」。
  */
-const MAX_REFRESH_PAGES = 16
 
 export function usePagedList<T>(options: {
   pageSize: number
@@ -357,6 +360,13 @@ export function usePagedList<T>(options: {
   const refresh = useCallback((): void => {
     const want = offsetRef.current
     if (want <= 0) { void load(false, true, true); return }
+    const plan = refreshPagesFor(want, pageSize)
+    if (!plan.feasible) {
+      // 已加载的条数超出一轮的上界：这一轮**不刷**。发前 N 页会把列表缩到 N 页，
+      // 用户看到的不是「数据旧了一点」而是「列表被截断 + 被弹回顶部」。
+      return
+    }
+    lastRefreshAtRef.current = Date.now()
     const seq = ++seqRef.current
     busyRef.current = true
     void (async () => {
@@ -364,7 +374,7 @@ export function usePagedList<T>(options: {
         const r = await collectPageRange<T>({
           want,
           pageSize,
-          maxPages: MAX_REFRESH_PAGES,
+          maxPages: plan.pages,
           fetchPage: (offset, limit) => fetchPageRef.current(offset, limit),
           // 返回 false = 这一轮已作废（期间发生了切换分类/搜索），丢弃已收集内容。
           onPage: (info) => {
@@ -401,8 +411,45 @@ export function usePagedList<T>(options: {
   // 而 `reset()` 会**同步清空 items** ⇒ 列表被骨架屏替换 ⇒ 容器高度塌陷 ⇒
   // 浏览器把 scrollTop 钳到 0 —— 用户往下翻之后会被反复**弹回顶部**。
   // `refresh()` 保留当前列表并按已加载条数重取，滚动位置不受影响。
+  /** 上一轮真正开始的时刻 / 已排队的尾部刷新。 */
+  const lastRefreshAtRef = useRef(0)
+  const trailingRef = useRef<number | undefined>(undefined)
+
+  /**
+   * 事件驱动的后台刷新：先过节流门，不可见就不发，被合并掉的那一次排成**尾部刷新**。
+   *
+   * 「丢弃」与「合并」的差别是要害：只丢掉事件的话，面板会一直停在旧数据上
+   * （再也没有人触发刷新）—— 那不是省请求，那是把省请求换成了看不见的过期。
+   */
+  const maybeBackgroundRefresh = useCallback((): void => {
+    const gate = refreshGate({
+      now: Date.now(),
+      lastStartedAt: lastRefreshAtRef.current,
+      hidden: typeof document !== 'undefined' && document.hidden === true,
+      minIntervalMs: REFRESH_MIN_INTERVAL_MS,
+    })
+    if (gate.go) { refresh(); return }
+    if (gate.waitMs <= 0 || trailingRef.current !== undefined) return
+    trailingRef.current = window.setTimeout(() => {
+      trailingRef.current = undefined
+      refresh()
+    }, gate.waitMs)
+  }, [refresh])
+
+  // 窗口从后台切回前台时补一次：期间攒下的变更在这里落地（而不是每 10 秒打一轮）。
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const onVisible = (): void => { if (document.hidden !== true) refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { document.removeEventListener('visibilitychange', onVisible) }
+  }, [refresh])
+
+  useEffect(() => () => {
+    if (trailingRef.current !== undefined) window.clearTimeout(trailingRef.current)
+  }, [])
+
   useWechatDataUpdated(() => {
-    refresh()
+    maybeBackgroundRefresh()
   })
 
   return {

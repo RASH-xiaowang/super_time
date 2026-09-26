@@ -580,6 +580,22 @@ const MUTATIONS = [
     to: "    if (false) {",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/cache-invalidate-stale.spec.ts",
   },
+  {
+    id: "M71-refresh-throttle-off",
+    why: "后台刷新的节流判定改成「永远放行」（P2-8）—— 同步活跃期又回到每 10 秒一整轮重读压进单队列",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list.ts",
+    from: "  if (elapsed < 0 || elapsed >= min) return { go: true, waitMs: 0 }",
+    to: "  return { go: true, waitMs: 0 }",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list-refresh-gate.spec.ts",
+  },
+  {
+    id: "M72-refresh-cap-truncates-list",
+    why: "一轮装不下时改判「可行」⇒ 只发前 N 页并把已加载列表截短（refresh 的「非破坏性」被推翻：高度塌陷、用户被弹回顶部）",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list.ts",
+    from: "  if (pages > maxPages) return { pages: maxPages, feasible: false }",
+    to: "  if (pages > maxPages) return { pages: maxPages, feasible: true }",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list-refresh-gate.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)
