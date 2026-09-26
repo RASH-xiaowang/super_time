@@ -395,6 +395,28 @@ function fileSigOf(path) {
 function cachedBySig(key, sig, loader, maxAgeMs = MAX_AGE_MS) {
   return get(key, sig, loader, maxAgeMs);
 }
+async function cachedBySigAsync(key, sig, loader, maxAgeMs = MAX_AGE_MS) {
+  const hit = entries.get(key);
+  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) return hit.value;
+  const running = inFlight.get(key);
+  if (running) return running.value;
+  const rec = { value: null };
+  rec.value = (async () => {
+    const value = await loader();
+    if (inFlight.get(key) === rec) {
+      entries.set(key, { at: Date.now(), sig, value });
+      enforceKeyFamilyLimit(key);
+    }
+    return value;
+  })();
+  inFlight.set(key, rec);
+  try {
+    return await rec.value;
+  } finally {
+    if (inFlight.get(key) === rec) inFlight.delete(key);
+  }
+}
+var inFlight = /* @__PURE__ */ new Map();
 function boundedSet(map, key, value, cap = 300) {
   if (!map.has(key) && map.size >= cap) {
     const first = map.keys().next();
@@ -2632,6 +2654,17 @@ function withDb(file, fn) {
   const db = new DatabaseSync5(file, { readOnly: true });
   try {
     return fn(db);
+  } finally {
+    try {
+      if (db.isOpen) db.close();
+    } catch {
+    }
+  }
+}
+async function withDbAsync(file, fn) {
+  const db = new DatabaseSync5(file, { readOnly: true });
+  try {
+    return await fn(db);
   } finally {
     try {
       if (db.isOpen) db.close();
@@ -6295,6 +6328,7 @@ function computeOverviewExtras(dec) {
 }
 
 // src/backend/wechat-data/src/query/overview-insights.ts
+var SNS_YIELD_EVERY_ROWS = 2e3;
 function cellStr4(v) {
   if (typeof v === "string") return v;
   if (v === null || v === void 0) return "";
@@ -6327,7 +6361,7 @@ function typeBucket(t) {
   if (m === 10002) return "revoked";
   return "other";
 }
-function queryOverviewInsights(decryptedDir, selfUsername) {
+async function queryOverviewInsights(decryptedDir, selfUsername) {
   const dec = decryptedDir;
   const self = (selfUsername ?? "").trim();
   const sns = existsSync16(join23(dec, "sns", "db_sns", "sns.db")) ? join23(dec, "sns", "db_sns", "sns.db") : join23(dec, "sns", "sns.db");
@@ -6341,9 +6375,9 @@ function queryOverviewInsights(decryptedDir, selfUsername) {
     fileSigOf(join23(dec, "hardlink", "hardlink.db")),
     fileSigOf(join23(dec, "message", "message_resource.db"))
   ].join("|");
-  return cachedBySig("overview-insights:" + dec + ":" + self, sig, () => computeOverviewInsights(decryptedDir, self));
+  return cachedBySigAsync("overview-insights:" + dec + ":" + self, sig, () => computeOverviewInsights(decryptedDir, self));
 }
-function computeOverviewInsights(decryptedDir, self = "") {
+async function computeOverviewInsights(decryptedDir, self = "") {
   const dec = decryptedDir;
   const names = contactMeta(dec).names;
   const md5ToUser = /* @__PURE__ */ new Map();
@@ -6373,6 +6407,7 @@ function computeOverviewInsights(decryptedDir, self = "") {
   let maxDay = -1;
   let lastActive = 0;
   for (const sh of shardCatalogDirs(dec, ["message", "bizchat"])) {
+    await yieldToLoop();
     try {
       const db = new DatabaseSync19(sh.file, { readOnly: true });
       try {
@@ -6438,9 +6473,9 @@ function computeOverviewInsights(decryptedDir, self = "") {
   const cp = join23(dec, "contact", "contact.db");
   if (existsSync16(cp)) {
     try {
-      const db = new DatabaseSync19(cp, { readOnly: true });
-      const cols = new Set(db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name));
-      if (cols.has("username")) {
+      withDb(cp, (db) => {
+        const cols = new Set(db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name));
+        if (!cols.has("username")) return;
         const lt = cols.has("local_type") ? "local_type" : "0";
         const df = cols.has("delete_flag") ? "delete_flag" : "0";
         const rows = db.prepare(`SELECT username, ${lt} AS lt, ${df} AS df FROM contact WHERE (${df} = 0 OR ${df} IS NULL)`).all();
@@ -6450,8 +6485,7 @@ function computeOverviewInsights(decryptedDir, self = "") {
           if (u.startsWith("@")) continue;
           contactRows.push({ username: u, isGroup: u.includes("@chatroom"), isGh: u.startsWith("gh_") });
         }
-      }
-      db.close();
+      });
     } catch {
     }
   }
@@ -6470,9 +6504,10 @@ function computeOverviewInsights(decryptedDir, self = "") {
   const sp2 = existsSync16(join23(dec, "sns", "db_sns", "sns.db")) ? join23(dec, "sns", "db_sns", "sns.db") : join23(dec, "sns", "sns.db");
   if (existsSync16(sp2)) {
     try {
-      const db = new DatabaseSync19(sp2, { readOnly: true });
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
-      if (has) {
+      await withDbAsync(sp2, async (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
+        if (!has) return;
+        let scanned = 0;
         for (const r of db.prepare("SELECT content AS c FROM SnsTimeLine").iterate()) {
           const xml = cellStr4(r.c);
           moments.total += 1;
@@ -6486,9 +6521,10 @@ function computeOverviewInsights(decryptedDir, self = "") {
             moments.likes += likes;
             moments.comments += Math.max(0, parts - likes);
           }
+          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop();
         }
-      }
-      db.close();
+        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop();
+      });
     } catch {
     }
   }
@@ -28510,7 +28546,7 @@ var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("g
   getContacts(options) {
     return queryContacts(this._dirs.decrypted, options);
   }
-  getOverviewInsights() {
+  async getOverviewInsights() {
     return queryOverviewInsights(this._dirs.decrypted, this.selfUsername());
   }
   getOverview() {

@@ -40,3 +40,30 @@ export function withDb<T>(file: string, fn: (db: DatabaseSync) => T): T {
     } catch { /* 连接已失效：交给 isOpen 兜底，不掩盖原始错误 */ }
   }
 }
+
+/**
+ * 异步版：连接必须**跨过 await** 才关得掉（P1-2 的让出型查询必需）。
+ *
+ * ## 为什么不能把 `await` 写进 {@link withDb} 的回调里
+ *
+ * `withDb` 的 `finally` 在 `fn` **同步返回**的那一刻就跑了。回调里只要有 `await`，
+ * 它返回的是一个还没 settle 的 Promise ⇒ 连接在第一次让出时就被关掉，
+ * 游标(`iterate()`)随后接着读一个已关闭的连接 —— 表现是「偶发的 database is not open」，
+ * 而且只在数据大到真的让出过一次的时候才出现（小库上恒绿，是最难查的那一类）。
+ *
+ * 所以让出型查询一律走这一版：打开 → 等回调真的算完 → 无论成败都关。
+ * @param file - 数据库文件绝对路径（必须已存在，只读打开不会创建）。
+ * @param fn - 收到连接的异步回调；它 resolve 的值即本函数 resolve 的值。
+ * @returns `fn` resolve 出来的值。
+ * @throws 打开失败或 `fn` reject 的原因原样抛出（连接已在 finally 里关掉）。
+ */
+export async function withDbAsync<T>(file: string, fn: (db: DatabaseSync) => Promise<T>): Promise<T> {
+  const db = new DatabaseSync(file, { readOnly: true })
+  try {
+    return await fn(db)
+  } finally {
+    try {
+      if (db.isOpen) db.close()
+    } catch { /* 同上：不掩盖原始错误 */ }
+  }
+}

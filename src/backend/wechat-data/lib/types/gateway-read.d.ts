@@ -33,7 +33,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      * One-screen data overview.
      * @returns OverviewSnapshot: aggregate counts for the overview screen.
      */
-    getOverviewInsights(): OverviewInsights;
+    getOverviewInsights(): Promise<OverviewInsights>;
     getOverview(): OverviewSnapshot;
     /**
      * Friend-region map (世界板块地图): world → country → province → city → friends.

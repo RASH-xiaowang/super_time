@@ -1212,7 +1212,7 @@ _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
 ### `getOverviewInsights`
 
 ```ts
-getOverviewInsights(): OverviewInsights
+async getOverviewInsights(): Promise<OverviewInsights>
 ```
 
 One-screen data overview.

@@ -328,6 +328,63 @@ export function cachedBySig<T>(key: string, sig: string, loader: () => T, maxAge
   return get(key, sig, loader, maxAgeMs)
 }
 
+/**
+ * 异步版的签名缓存（P1-2：让出型查询的必经入口）。
+ *
+ * ## 为什么不能直接 `await cachedBySig(k, s, async () => …)`
+ *
+ * 同步的 `get` 会把 loader 的返回值（一个 Promise）原样塞进 `entries`，
+ * 于是第二次命中拿到的是**同一个已 settle 的 Promise** —— 看着能跑，实际把
+ * 「数据变了」这一维整个丢掉：签名重算是同步的，值却永远是第一次那份。
+ *
+ * ## 合流（同键并发只跑一份）
+ *
+ * 让出之后两次冷算真的可以同时在跑（面板切来切去、事件重放）。没有合流的话，
+ * 54 秒的概览会被并发跑成两份，事件循环反而更堵。所以同键的后来者**等同一份** Promise。
+ *
+ * 但「等同一份」有个前提要处理：后来者可能带着**更新的签名**。处理办法是
+ * 「只由最新那份写回」—— 完成时若自己已经不是在飞的那一份，就把结果丢掉
+ * （让新的 loader 去写），避免出现「旧签名后完成、把新数据盖掉」。
+ * @param key - 缓存键（含数据根与参数）。
+ * @param sig - 数据签名；变了就必须重算。
+ * @param loader - 异步装载器。
+ * @param maxAgeMs - 保质期。
+ * @returns 计算好的值（或复用同键正在跑的那一份）。
+ */
+export async function cachedBySigAsync<T>(
+  key: string,
+  sig: string,
+  loader: () => Promise<T>,
+  maxAgeMs = MAX_AGE_MS,
+): Promise<T> {
+  const hit = entries.get(key)
+  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) return hit.value as T
+  const running = inFlight.get(key)
+  if (running) return running.value as Promise<T>
+  // 用一个小盒子存 Promise，靠**盒子本身的身份**判断「我还是不是最新的那一份」——
+  // 直接写 `const mine = (async () => … mine …)()` 会让 TS 报「赋值前使用」（闭包里读到
+  // 的是还没完成赋值的变量），而这个判断恰恰不能靠 `!` 咽掉。
+  const rec: { value: Promise<unknown> } = { value: null as unknown as Promise<unknown> }
+  rec.value = (async () => {
+    const value = await loader()
+    // 只有「仍然是在飞的那一份」才写回：避免被更新的签名算完后又被旧的盖一次。
+    if (inFlight.get(key) === rec) {
+      entries.set(key, { at: Date.now(), sig, value })
+      enforceKeyFamilyLimit(key)
+    }
+    return value
+  })()
+  inFlight.set(key, rec)
+  try {
+    return await (rec.value as Promise<T>)
+  } finally {
+    if (inFlight.get(key) === rec) inFlight.delete(key)
+  }
+}
+
+/** 在飞的异步冷算：同键只允许有一份（见 {@link cachedBySigAsync}）。 */
+const inFlight = new Map<string, { value: Promise<unknown> }>()
+
 /** Insert with a simple FIFO capacity bound (evicts the oldest key). */
 export function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap = 300): void {
   if (!map.has(key) && map.size >= cap) {

@@ -6,9 +6,18 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySig } from './meta.ts'
+import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySigAsync } from './meta.ts'
+import { withDb, withDbAsync } from './db-open.ts'
+import { yieldToLoop } from './search-build.ts'
 import type { OverviewExtras } from '../types.ts'
 import { queryOverviewExtras } from './overview-extras.ts'
+
+/**
+ * 朋友圈整表扫每多少行让出一次。
+ * 导出是给守卫用例**按这个数造数据**用的 —— 判据不该依赖墙上时钟（CI 机器比本机慢 20 倍，
+ * 任何「跑够 25ms」的断言在那边都会假红）。
+ */
+export const SNS_YIELD_EVERY_ROWS = 2000
 
 export interface OverviewInsights {
   messages: {
@@ -86,7 +95,7 @@ function typeBucket(t: number): string {
  * @param selfUsername - logged-in account wxid, used to split 发出/收到.
  * @returns the insights snapshot.
  */
-export function queryOverviewInsights(decryptedDir: string, selfUsername?: string): OverviewInsights {
+export async function queryOverviewInsights(decryptedDir: string, selfUsername?: string): Promise<OverviewInsights> {
   const dec = decryptedDir
   const self = (selfUsername ?? '').trim()
   const sns = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
@@ -100,10 +109,10 @@ export function queryOverviewInsights(decryptedDir: string, selfUsername?: strin
     fileSigOf(join(dec, 'hardlink', 'hardlink.db')),
     fileSigOf(join(dec, 'message', 'message_resource.db')),
   ].join('|')
-  return cachedBySig('overview-insights:' + dec + ':' + self, sig, () => computeOverviewInsights(decryptedDir, self))
+  return cachedBySigAsync('overview-insights:' + dec + ':' + self, sig, () => computeOverviewInsights(decryptedDir, self))
 }
 
-function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsights {
+async function computeOverviewInsights(decryptedDir: string, self = ''): Promise<OverviewInsights> {
   const dec = decryptedDir
   const names = contactMeta(dec).names
 
@@ -138,6 +147,11 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
   let lastActive = 0
 
   for (const sh of shardCatalogDirs(dec, ['message', 'bizchat'])) {
+    // P1-2：每个分片要对它的全部 Msg_ 表各跑一次 GROUP BY 扫描（实测机器上 239 张表）。
+    // 分片之间让出一次，排在这个查询后面的请求才有插进来的机会 ——
+    // 不透明地"跑完再说"就是「某块一直转圈」的那笔账（docs/PERF-BASELINE.md：
+    // 世界板块自身 13ms，排在 15 秒的词云后面等到 17,008ms）。
+    await yieldToLoop()
     try {
       const db = new DatabaseSync(sh.file, { readOnly: true })
       try {
@@ -205,9 +219,11 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
   const cp = join(dec, 'contact', 'contact.db')
   if (existsSync(cp)) {
     try {
-      const db = new DatabaseSync(cp, { readOnly: true })
-      const cols = new Set((db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name))
-      if (cols.has('username')) {
+      // withDb：原来 `new DatabaseSync` 与 `db.close()` 之间任何一句抛错（PRAGMA 读坏页、
+      // SELECT 撞 SQLITE_BUSY）都会跳过 close，而外面的 catch 把它咽成「ignore」。
+      withDb(cp, (db) => {
+        const cols = new Set((db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name))
+        if (!cols.has('username')) return
         const lt = cols.has('local_type') ? 'local_type' : '0'
         const df = cols.has('delete_flag') ? 'delete_flag' : '0'
         // 联系人量级（N8 评估）：随后面要建的 per-contact 统计一起用，取回后要遍历两遍
@@ -218,8 +234,7 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
           if (u.startsWith('@')) continue
           contactRows.push({ username: u, isGroup: u.includes('@chatroom'), isGh: u.startsWith('gh_') })
         }
-      }
-      db.close()
+      })
     } catch { /* ignore */ }
   }
   const friendRows = contactRows.filter(r => !r.isGroup && !r.isGh)
@@ -243,11 +258,15 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
   const moments = { total: 0, images: 0, videos: 0, likes: 0, comments: 0 }
   const sp2 = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
   if (existsSync(sp2)) {
+    // withDbAsync 而不是「open … close」写在同一个 try 里：这里任何一句抛错
+    // （半写的 sns.db、SQLITE_BUSY）都会跳过那句 `db.close()`，而 Windows 上
+    // 一条泄漏的连接等于这个目录再也换不掉。游标跨 await 也必须用异步版（见 db-open 的说明）。
     try {
-      const db = new DatabaseSync(sp2, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-      if (has) {
+      await withDbAsync(sp2, async (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return
         // 游标读（N8）：随朋友圈条数增长的整表扫，逐条累加即可，不需要先物化数组
+        let scanned = 0
         for (const r of db.prepare('SELECT content AS c FROM SnsTimeLine').iterate() as Iterable<{ c?: unknown }>) {
           const xml = cellStr(r.c)
           moments.total += 1
@@ -261,10 +280,13 @@ function computeOverviewInsights(decryptedDir: string, self = ''): OverviewInsig
             moments.likes += likes
             moments.comments += Math.max(0, parts - likes)
           }
+          // 每 2000 条让出一次：这条循环是**单库内**最长的一段（朋友圈多的人有几万条），
+          // 只在分片边界让出还不够。行数而不是时间，是为了让判据可复现（见 spec）。
+          if (++scanned % SNS_YIELD_EVERY_ROWS === 0) await yieldToLoop()
         }
-      }
-      db.close()
-    } catch { /* ignore */ }
+        if (scanned % SNS_YIELD_EVERY_ROWS !== 0) await yieldToLoop()
+      })
+    } catch { /* 读不到朋友圈计数：总览那格留空，不影响其它统计 */ }
   }
 
   // 资产

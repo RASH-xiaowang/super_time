@@ -98,7 +98,7 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
 })
 
 describe('N8：queryOverviewInsights 的朋友圈统计（游标读取的行为等价）', () => {
-  it('媒体/视频/点赞/评论计数与逐行解析结果一致', () => {
+  it('媒体/视频/点赞/评论计数与逐行解析结果一致', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [])
     const sdb = new DatabaseSync(join(dec, 'sns', 'db_sns', 'sns.db'))
@@ -109,7 +109,7 @@ describe('N8：queryOverviewInsights 的朋友圈统计（游标读取的行为�
     ins.run('wxid_c', '<media >x</media ><LocalExtraInfo><type>1</type><user_comment>a</user_comment><user_comment>b</user_comment></LocalExtraInfo>')
     sdb.close()
 
-    const r = queryOverviewInsights(dec)
+    const r = await queryOverviewInsights(dec)
     expect(r.moments.total, '三行都要被读到').toBe(3)
     expect(r.moments.images, '第 1 行 1 张 + 第 3 行 1 张').toBe(2)
     expect(r.moments.videos).toBe(1)

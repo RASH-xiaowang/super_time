@@ -77,6 +77,30 @@ export declare function shardCatalogSig(decryptedDir: string, dirs: ReadonlyArra
 export declare function fileSigOf(path: string): string;
 /** Generic mtime/fingerprint-bounded process cache (see {@link get}). */
 export declare function cachedBySig<T>(key: string, sig: string, loader: () => T, maxAgeMs?: number): T;
+/**
+ * 异步版的签名缓存（P1-2：让出型查询的必经入口）。
+ *
+ * ## 为什么不能直接 `await cachedBySig(k, s, async () => …)`
+ *
+ * 同步的 `get` 会把 loader 的返回值（一个 Promise）原样塞进 `entries`，
+ * 于是第二次命中拿到的是**同一个已 settle 的 Promise** —— 看着能跑，实际把
+ * 「数据变了」这一维整个丢掉：签名重算是同步的，值却永远是第一次那份。
+ *
+ * ## 合流（同键并发只跑一份）
+ *
+ * 让出之后两次冷算真的可以同时在跑（面板切来切去、事件重放）。没有合流的话，
+ * 54 秒的概览会被并发跑成两份，事件循环反而更堵。所以同键的后来者**等同一份** Promise。
+ *
+ * 但「等同一份」有个前提要处理：后来者可能带着**更新的签名**。处理办法是
+ * 「只由最新那份写回」—— 完成时若自己已经不是在飞的那一份，就把结果丢掉
+ * （让新的 loader 去写），避免出现「旧签名后完成、把新数据盖掉」。
+ * @param key - 缓存键（含数据根与参数）。
+ * @param sig - 数据签名；变了就必须重算。
+ * @param loader - 异步装载器。
+ * @param maxAgeMs - 保质期。
+ * @returns 计算好的值（或复用同键正在跑的那一份）。
+ */
+export declare function cachedBySigAsync<T>(key: string, sig: string, loader: () => Promise<T>, maxAgeMs?: number): Promise<T>;
 /** Insert with a simple FIFO capacity bound (evicts the oldest key). */
 export declare function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap?: number): void;
 /**

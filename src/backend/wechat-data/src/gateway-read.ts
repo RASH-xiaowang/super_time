@@ -80,7 +80,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns OverviewSnapshot: aggregate counts for the overview screen.
    */
   @Remote('getOverviewInsights')
-  getOverviewInsights(): OverviewInsights {
+  async getOverviewInsights(): Promise<OverviewInsights> {
     return queryOverviewInsights(this._dirs.decrypted, this.selfUsername())
   }
 

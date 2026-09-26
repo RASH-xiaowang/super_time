@@ -789,7 +789,7 @@ describe('只读契约', () => {
     expect(after.length).toBe(before.length)
   })
 
-  it('没有快照时：不抛就给出声明的形状，绝不让 undefined 流到渲染层', () => {
+  it('没有快照时：不抛就给出声明的形状，绝不让 undefined 流到渲染层', async () => {
     const t = makeEmptyTree('nosnapshot')
     const gw = gateway(t)
     const probes: Array<{ name: string; call: () => unknown }> = [
@@ -804,7 +804,9 @@ describe('只读契约', () => {
     const threw: string[] = []
     for (const p of probes) {
       try {
-        const r: unknown = p.call()
+        // 必须 await：`@Remote` 允许是 async 方法（P1-2 之后总览分析就是），
+        // 而 Promise 是个「零键对象」—— 不 await 的话每个异步端点都会被误判成「快照没形状」。
+        const r: unknown = await p.call()
         if (r === undefined || r === null) leaks.push(`${p.name} 返回 ${String(r)}`)
         else if (typeof r !== 'object') leaks.push(`${p.name} 返回了裸标量 ${typeof r}`)
         else if (!Array.isArray(r) && Object.keys(r).length === 0) shapeless.push(p.name)
