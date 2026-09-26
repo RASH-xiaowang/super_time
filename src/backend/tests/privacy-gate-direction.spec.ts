@@ -16,13 +16,26 @@
  * @vitest-environment node
  */
 import ts from 'typescript'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 // M21 结构刀：三处接缝都住在网关的「核」里 ⇒ 读组成这个类的两个文件（**不**含 remotes/ ——
 // 判据要的就是「接缝在网关类里」，实现模块里的同名调用不算）。
 import { gatewayClassSource } from './gateway-source.ts'
+// #20 把判断本身搬进了 `gateway-privacy.ts`（包装方法留在类里、catch 跟着判断走），
+// 所以这里读的是「类 + 那个协作者」。注意方向：这是**扩大**覆盖面（两处都查），
+// 不是把判据搬到新文件了事 —— 类里那些 `protected` 包装仍然必须存在，接缝名不能丢。
+const PRIVACY_MODULE = join(dirname(fileURLToPath(import.meta.url)), '..', 'wechat-data', 'src', 'gateway-privacy.ts')
 
 /** 三处接缝：失败时必须拦下，不许在 catch 里编一个「没开拦截」。 */
 const SEAMS = ['outboundBlocked', 'privacyBlocked', 'privacyGate']
+
+/** 方法名或搬到协作者后的 `<接缝>At` 函数名，都算同一处接缝。 */
+const seamOf = (name: string): string | null => {
+  const base = name.endsWith('At') ? name.slice(0, -2) : name
+  return SEAMS.includes(base) ? base : null
+}
 
 type SeamScan = { found: boolean; catches: number; permissiveReturn: string | null }
 
@@ -30,42 +43,59 @@ function scan(src: string): Map<string, SeamScan> {
   const sf = ts.createSourceFile('gateway.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const out = new Map<string, SeamScan>(SEAMS.map((n) => [n, { found: false, catches: 0, permissiveReturn: null }]))
 
-  const visit = (node: ts.Node): void => {
-    if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
-      const name = node.name.text
-      const hit = out.get(name)
-      if (hit) {
-        hit.found = true
-        const walk = (n: ts.Node): void => {
-          if (ts.isCatchClause(n)) {
-            hit.catches++
-            // catch 体内出现 `return false` / `return null` 就是放行。
-            const inner = (m: ts.Node): void => {
-              if (ts.isReturnStatement(m) && m.expression) {
-                const e = m.expression
-                const permissive =
-                  e.kind === ts.SyntaxKind.FalseKeyword ||
-                  e.kind === ts.SyntaxKind.NullKeyword ||
-                  (ts.isIdentifier(e) && e.text === 'undefined')
-                if (permissive) hit.permissiveReturn = e.getText()
-              }
-              m.forEachChild(inner)
-            }
-            if (n.block) inner(n.block)
+  const bump = (node: ts.Node): void => {
+    const hit = ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)
+      ? seamOf(node.name && ts.isIdentifier(node.name) ? node.name.text : '') ?? null
+      : null
+    if (!hit) return
+    const seam = out.get(hit)!
+    seam.found = true
+    const walk = (n: ts.Node): void => {
+      if (ts.isCatchClause(n)) {
+        seam.catches++
+        // catch 体内出现 `return false` / `return null` 就是放行。
+        const inner = (m: ts.Node): void => {
+          if (ts.isReturnStatement(m) && m.expression) {
+            const e = m.expression
+            const permissive =
+              e.kind === ts.SyntaxKind.FalseKeyword ||
+              e.kind === ts.SyntaxKind.NullKeyword ||
+              (ts.isIdentifier(e) && e.text === 'undefined')
+            if (permissive) seam.permissiveReturn = e.getText()
           }
-          n.forEachChild(walk)
+          m.forEachChild(inner)
         }
-        walk(node)
+        if (n.block) inner(n.block)
       }
+      n.forEachChild(walk)
     }
+    walk(node)
+  }
+  const visit = (node: ts.Node): void => {
+    bump(node)
     node.forEachChild(visit)
   }
   visit(sf)
   return out
 }
 
+/** 把两份源码合起来扫（同一处接缝在两处都有声明时，catches 与违例累加即可）。 */
+function merge(a: Map<string, SeamScan>, b: Map<string, SeamScan>): Map<string, SeamScan> {
+  const out = new Map<string, SeamScan>()
+  for (const name of SEAMS) {
+    const x = a.get(name)!
+    const y = b.get(name)!
+    out.set(name, {
+      found: x.found || y.found,
+      catches: x.catches + y.catches,
+      permissiveReturn: x.permissiveReturn ?? y.permissiveReturn,
+    })
+  }
+  return out
+}
+
 describe('隐私闸门的失败方向', () => {
-  const scans = scan(gatewayClassSource())
+  const scans = merge(scan(gatewayClassSource()), scan(readFileSync(PRIVACY_MODULE, 'utf8')))
 
   it('三个接缝都还在（防空转）：找不到方法名说明守卫已失效', () => {
     for (const name of SEAMS) {

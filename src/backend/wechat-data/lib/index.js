@@ -27770,6 +27770,41 @@ function createExportRemotes(rc) {
 
 // src/backend/wechat-data/src/gateway-core.ts
 import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
+
+// src/backend/wechat-data/src/gateway-privacy.ts
+var DEFAULT_OUTBOUND_DETAIL = "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B";
+function outboundBlockedAt(decryptedDir) {
+  try {
+    return readPrivacySettings(decryptedDir).blockOutbound;
+  } catch {
+    return true;
+  }
+}
+function privacyBlockedAt(decryptedDir, feature, detail = DEFAULT_OUTBOUND_DETAIL) {
+  let blocked;
+  try {
+    blocked = readPrivacySettings(decryptedDir).blockOutbound;
+  } catch {
+    return privacyStoreUnreadable(feature, detail);
+  }
+  return blocked ? `\u9690\u79C1\u8BBE\u7F6E\u5DF2\u5F00\u542F\u300C\u51FA\u7AD9\u62E6\u622A\u300D\uFF0C\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}` : null;
+}
+function privacyGateAt(decryptedDir, feature, stats, texts) {
+  const blocked = privacyBlockedAt(decryptedDir, feature);
+  if (blocked !== null) return { ok: false, error: blocked };
+  let settings;
+  try {
+    settings = readPrivacySettings(decryptedDir);
+  } catch {
+    return { ok: false, error: privacyStoreUnreadable(feature, DEFAULT_OUTBOUND_DETAIL) };
+  }
+  const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts;
+  const chars = out.reduce((a, t) => a + t.length, 0);
+  recordPrivacyAudit(decryptedDir, feature, chars, stats.sessions, stats.messages);
+  return { ok: true, texts: out };
+}
+
+// src/backend/wechat-data/src/gateway-core.ts
 var GatewayCore = class _GatewayCore extends TypertRemoteService {
   constructor(ctx) {
     super(ctx, "wechatData");
@@ -27951,80 +27986,41 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     recordOperation(this._dirs.decrypted, { category, action, target, status, detail });
   }
   /**
-   * 「出站拦截」当前是否开启。
-   *
-   * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
-   * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
-   * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
-   * @returns 是否禁止出站。
-   */
+  * 「出站拦截」当前是否开启 —— 判断本身在 `gateway-privacy.ts#outboundBlockedAt`
+  * （#20 第一个协作者：安全判断从 986 行的装配类里搬出去，才谈得上被单独测）。
+  * @returns 是否禁止出站；读不到设置时按「禁止」处理。
+  */
   outboundBlocked() {
-    try {
-      return readPrivacySettings(this._dirs.decrypted).blockOutbound;
-    } catch {
-      return true;
-    }
+    return outboundBlockedAt(this._dirs.decrypted);
   }
   /**
-   * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
-   *
-   * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
-   * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
-   * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
-   * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
-   *
-   * P3-7：这段文档原先挂在 `outboundBlocked` 头上（那份声明自己另有文档），
-   * 于是连续两份 JSDoc 贴着放 —— 前一份**没有任何宿主**，读代码的人只能猜。
+   * 「出站拦截」已开启时返回给用户看的说明，否则 null。
    * @param feature - 功能名，出现在提示文案里。
-   * @param detail - 这条出网在做什么（默认「把数据发送给模型」）。
+   * @param detail - 这条出网在做什么。
    * @returns 被拦截时的文案，未拦截时 null。
    */
-  privacyBlocked(feature, detail = "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B") {
-    let blocked;
-    try {
-      blocked = readPrivacySettings(this._dirs.decrypted).blockOutbound;
-    } catch {
-      return privacyStoreUnreadable(feature, detail);
-    }
-    return blocked ? `\u9690\u79C1\u8BBE\u7F6E\u5DF2\u5F00\u542F\u300C\u51FA\u7AD9\u62E6\u622A\u300D\uFF0C\u5DF2\u963B\u6B62\u300C${feature}\u300D${detail}` : null;
+  privacyBlocked(feature, detail = DEFAULT_OUTBOUND_DETAIL) {
+    return privacyBlockedAt(this._dirs.decrypted, feature, detail);
   }
   /**
-   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
-   *
-   * 背景：`readPrivacySettings` / `recordPrivacyAudit` 这两个能力原本**谁都没调用** ——
-   * 「出站拦截」「敏感字段脱敏」两个开关只写进 sqlite 就没人读，`privacy_audit` 表
-   * 实测 0 行（运行期 bundle 里连 INSERT 都没有）。把闸门收敛成一个私有方法，四处
-   * 出站调用（问答／每日总结／群总结任务／周期总结）统一走它，避免「以后加了新 AI
-   * 功能又忘了过隐私」这类漏网。
-   *
-   * @param feature - 审计里的功能名（ask_wechat / daily_summary / summary_task / period_summary）。
-   * @param stats - 本次出站涉及的数据量（会话数、消息数），写进审计。
+   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（实现见 `gateway-privacy.ts`）。
+   * @param feature - 审计里的功能名。
+   * @param stats - 本次出站涉及的数据量（会话数、消息数）。
    * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
    * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
    */
   privacyGate(feature, stats, texts) {
-    const blocked = this.privacyBlocked(feature);
-    if (blocked !== null) return { ok: false, error: blocked };
-    let settings;
-    try {
-      settings = readPrivacySettings(this._dirs.decrypted);
-    } catch {
-      return { ok: false, error: privacyStoreUnreadable(feature, "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B") };
-    }
-    const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts;
-    const chars = out.reduce((a, t) => a + t.length, 0);
-    recordPrivacyAudit(this._dirs.decrypted, feature, chars, stats.sessions, stats.messages);
-    return { ok: true, texts: out };
+    return privacyGateAt(this._dirs.decrypted, feature, stats, texts);
   }
   /**
-   * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
-   *
-   * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
-   * 漏掉（或整段规划失败），此时检索就退化成纯 bigram 词法匹配，「问某人的事」很容易
-   * 捞回一堆同名同姓/无关会话。把真实名单交给检索层（`classifyIntent` / `buildQueryPlan`
-   * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
-   * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
-   */
+     * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
+     *
+     * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
+     * 漏掉（或整段规划失败），此时检索就退化成纯 bigram 词法匹配，「问某人的事」很容易
+     * 捞回一堆同名同姓/无关会话。把真实名单交给检索层（`classifyIntent` / `buildQueryPlan`
+     * / 实体通道），点名识别就变成**确定性**的，不依赖模型这一跳。
+     * @returns 已知实体名（读取失败时返回空数组，问答照常可用）。
+     */
   askKnownEntities() {
     const key = this._dirs.decrypted;
     const hit = this._knownEntities.get(key);

@@ -9,11 +9,10 @@
  */
 
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import { bootstrapWechatData, resolveDecodedDir, resolveDecryptedDir } from './dirs.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
+import type { AskResult, DecryptStatus, ExportStatus, SummaryTaskRunResult, WhisperDownloadProgress, WhisperTranscribing, OperationCategory, OperationStatus } from './types.ts'
 import { resolveSelfUsername } from './query/config.ts'
 import { normalizeAesKey } from './keys/image-key.ts'
 import { startRealtimeSync } from './query/sync.ts'
@@ -32,14 +31,14 @@ import { createAskDeepRemotes } from './remotes/askdeep.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
-import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages, searchIndexMessagesCancellable } from './query/search.ts'
-import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './query/media-image.ts'
+import { knownEntityNames } from './query/search.ts'
+import { decodeDatBytes, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
-import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
-import { deleteExportHistory, listExportHistory, pruneExportHistory, recordExport } from './query/export-history.ts'
-import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from './query/ask-history.ts'
-import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
-import { buildVectorIndex, vectorIndexStatus, vectorIndexSummary, type EmbedFn } from './query/retrieval/embedding.ts'
+import { getConfig } from './query/config.ts'
+import { recordExport } from './query/export-history.ts'
+import { recordAsk } from './query/ask-history.ts'
+import { loadRetrievalConfig } from './query/retrieval/config.ts'
+import { type EmbedFn } from './query/retrieval/embedding.ts'
 import {
   kbModelOverrideCounts,
   kbModelsOnKbDelete,
@@ -48,18 +47,18 @@ import {
   touchKbEntitiesAt,
   writeKbModelSettings,
 } from './query/kb/model-config.ts'
-import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts'
-import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'
-import { clearOperationLog, listOperations, recordOperation } from './query/operation-log.ts'
-import { clearPrivacyAudit, getPrivacyStateSnapshot, listPrivacyAudit, readPrivacySettings, recordPrivacyAudit, redactSensitiveText, writePrivacySettings } from './query/privacy-audit.ts'
-import { deleteTask, insertTask, listTasks as listWechatTasks, setTaskStatus } from './query/wechat-tasks.ts'
-import { bumpDataGeneration, boundedSet, invalidateWechatMeta } from './query/meta.ts'
-import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, recoverInterrupted, registerKbFile, setKbFileRagFlag, setKbFileSummary } from './query/kb-files.ts'
+import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
+import type { IntentKind, RerankWeights } from './query/retrieval/types.ts'
+import { recordOperation } from './query/operation-log.ts'
+import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
+import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
-import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
+import { listSummaryTasks as listTasks, updateSummaryTaskRunState } from './query/summary-tasks.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, STREAM_JOB_CAP, StreamJob, normalizeJobId, privacyStoreUnreadable, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, STREAM_JOB_CAP, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import type { PrivacyGateResult } from './gateway-privacy.ts'
+import { DEFAULT_OUTBOUND_DETAIL, outboundBlockedAt, privacyBlockedAt, privacyGateAt } from './gateway-privacy.ts'
 
 /** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export abstract class GatewayCore extends TypertRemoteService {
@@ -272,60 +271,29 @@ export abstract class GatewayCore extends TypertRemoteService {
     recordOperation(this._dirs.decrypted, { category, action, target, status, detail })
   }
 
-  /**
-   * 「出站拦截」当前是否开启。
-   *
-   * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
-   * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
-   * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
-   * @returns 是否禁止出站。
+    /**
+   * 「出站拦截」当前是否开启 —— 判断本身在 `gateway-privacy.ts#outboundBlockedAt`
+   * （#20 第一个协作者：安全判断从 986 行的装配类里搬出去，才谈得上被单独测）。
+   * @returns 是否禁止出站；读不到设置时按「禁止」处理。
    */
   protected outboundBlocked(): boolean {
-    try {
-      return readPrivacySettings(this._dirs.decrypted).blockOutbound
-    } catch {
-      // 读不到就按「禁止出站」处理。这是权限判断，失败方向只能是**拦下**：
-      // 用户开了「出站拦截」而库损坏/被锁的那一刻，静默放行是最糟的结果。
-      // 与 `privacyBlocked` 的文案分支同一取向（那边会告诉用户为什么被拦）。
-      return true
-    }
+    return outboundBlockedAt(this._dirs.decrypted)
   }
 
   /**
-   * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
-   *
-   * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
-   * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
-   * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
-   * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
-   *
-   * P3-7：这段文档原先挂在 `outboundBlocked` 头上（那份声明自己另有文档），
-   * 于是连续两份 JSDoc 贴着放 —— 前一份**没有任何宿主**，读代码的人只能猜。
+   * 「出站拦截」已开启时返回给用户看的说明，否则 null。
    * @param feature - 功能名，出现在提示文案里。
-   * @param detail - 这条出网在做什么（默认「把数据发送给模型」）。
+   * @param detail - 这条出网在做什么。
    * @returns 被拦截时的文案，未拦截时 null。
    */
-  protected privacyBlocked(feature: string, detail = '把数据发送给模型'): string | null {
-    let blocked: boolean
-    try {
-      blocked = readPrivacySettings(this._dirs.decrypted).blockOutbound
-    } catch {
-      return privacyStoreUnreadable(feature, detail)
-    }
-    return blocked ? `隐私设置已开启「出站拦截」，已阻止「${feature}」${detail}` : null
+  protected privacyBlocked(feature: string, detail = DEFAULT_OUTBOUND_DETAIL): string | null {
+    return privacyBlockedAt(this._dirs.decrypted, feature, detail)
   }
 
   /**
-   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
-   *
-   * 背景：`readPrivacySettings` / `recordPrivacyAudit` 这两个能力原本**谁都没调用** ——
-   * 「出站拦截」「敏感字段脱敏」两个开关只写进 sqlite 就没人读，`privacy_audit` 表
-   * 实测 0 行（运行期 bundle 里连 INSERT 都没有）。把闸门收敛成一个私有方法，四处
-   * 出站调用（问答／每日总结／群总结任务／周期总结）统一走它，避免「以后加了新 AI
-   * 功能又忘了过隐私」这类漏网。
-   *
-   * @param feature - 审计里的功能名（ask_wechat / daily_summary / summary_task / period_summary）。
-   * @param stats - 本次出站涉及的数据量（会话数、消息数），写进审计。
+   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（实现见 `gateway-privacy.ts`）。
+   * @param feature - 审计里的功能名。
+   * @param stats - 本次出站涉及的数据量（会话数、消息数）。
    * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
    * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
    */
@@ -333,25 +301,11 @@ export abstract class GatewayCore extends TypertRemoteService {
     feature: string,
     stats: { sessions: number; messages: number },
     texts: string[],
-  ): { ok: true; texts: string[] } | { ok: false; error: string } {
-    const blocked = this.privacyBlocked(feature)
-    if (blocked !== null) return { ok: false, error: blocked }
-    let settings: { redactSensitive: boolean; blockOutbound: boolean }
-    try {
-      settings = readPrivacySettings(this._dirs.decrypted)
-    } catch {
-      // 竞态兜底：`privacyBlocked` 那次读成功了、这一次失败（库刚被锁上或删掉）。
-      // 方向同上 —— 判断不了就拦下，不能带着「默认不脱敏」把原文发出去。
-      return { ok: false, error: privacyStoreUnreadable(feature, '把数据发送给模型') }
-    }
-    const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts
-    const chars = out.reduce((a, t) => a + t.length, 0)
-    // 审计是 best-effort：recordPrivacyAudit 内部已是 try/catch，失败不影响功能本身
-    recordPrivacyAudit(this._dirs.decrypted, feature, chars, stats.sessions, stats.messages)
-    return { ok: true, texts: out }
+  ): PrivacyGateResult {
+    return privacyGateAt(this._dirs.decrypted, feature, stats, texts)
   }
 
-  /**
+/**
    * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
    *
    * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
