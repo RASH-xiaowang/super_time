@@ -1,69 +1,108 @@
 
 /**
- * 世界层必须**先出地图、数据随后叠加**（2026-09-26 用户要求）。
+ * 世界地图：**地理 SVG 已移除**，世界层改走 ECharts 且不等数据（2026-09-26 用户要求）。
  *
- * 起因：用户看「世界板块」时那块长时间不出东西。查下来 `WorldMap.tsx` 的**每一个**地图分支
- * 都以 `map &&` 为前置（`map` = `apiGetRegionMap()` 的结果），而世界层的底图
- * （经纬网格 `graticule` + 大陆轮廓 `backdropPaths`）**是模块级静态常量、不依赖任何数据**。
- * 于是数据到位之前整块区域是空的 —— 明明可以立刻画出来的东西在等数据。
+ * 前一版（同一天更早）：世界层在 GeoJSON 未就绪时先渲染一张自绘 SVG 底图。
+ * 用户随后要求删掉那张 SVG —— 于是本文件的不变量整体换了一批：
  *
- * 改法：世界层 SVG 分支去掉 `map &&`（`located` 为空时自然只有底图），并把两处
- * 「必须有数据才成立」的判断补齐：
- *  ① `showWorldEcharts` 连带要求 `map !== null` —— 否则 GeoJSON 比数据先到时会切到 ECharts
- *     而 ECharts 那支又被 `map &&` 挡住 ⇒ **两边都不画，比改之前更空**；
- *  ② `located` 空提示必须要求 `map !== null` —— 否则「还在加载」会被说成「没有可定位的地区
- *     数据」（本仓对这类「把读不到渲染成没有」有明确纪律）。
- *
- * 下钻层级（ECharts 世界 / 中国 / 省 / 市）**仍然保留** `map &&`：那些视图渲染的就是数据本身，
- * 没有数据确实无从画起。本文件把这条边界也钉住，免得有人顺手删干净。
+ *  ① **SVG 视图不再存在**：`showWorldSvg` / `showGeoMap` / `showWorldSvg` 的按钮组、
+ *     `mapSvg`/`grat`/`land`/`mapMarker` 这套类、以及 `world-geo.ts` 里只服务它的
+ *     静态轮廓数据（`CHINA_OUTLINE` / `CHINA_BBOX` / `projectBBox` / `countryCenter` /
+ *     `provinceCenter`）都已删除。**别再让它们回来。**
+ *     注意 `CONTINENTS` / `smoothClosedPath` / `MAP_W` / `MAP_H` / `project` **不能删** ——
+ *     足迹地图（`FootprintMap.tsx`）还在用同一套。
+ *  ② **世界层不等数据**：GeoJSON 一到就先画真地图底图，好友着色随后叠加
+ *     （`node` 回退到 `EMPTY_WORLD` 空节点）。这条取代了上一版的「先渲染 SVG」。
+ *  ③ **底图拉不到要给明确说明**（未联网 / 用户开了 `blockMapTiles`），不留一片空白。
+ *  ④ **中国层 ECharts 起不来落到 treemap** —— SVG 走后，它接管了原来的兜底位置
+ *     （省 / 市两层本来就是这条降级路径）。
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, readStripped, sliceBetween } from './wiring-kit.ts'
+import { atLeast, readStripped, readText, sliceBetween } from './wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const MAP = readStripped(join(HERE, 'WorldMap.tsx'))
+const GEO = readStripped(join(HERE, 'world-geo.ts'))
+const CSS = readText(join(HERE, 'world-map.module.css'))
 
-describe('世界层：底图不等数据', () => {
-  it('世界层 SVG 分支不再以 `map` 为前提', () => {
-    expect(MAP, '世界层 SVG 分支丢了').toContain('{showGeoMap && (')
-    // 反例：退回「等数据才画」——那正是用户报的现象
-    expect(MAP.includes('{map && showGeoMap && ('), '世界层不许再等 map').toBe(false)
-  })
+/** SVG 视图的标识串（任何一条回来都说明 SVG 复活了）。 */
+const SVG_MARKERS = ['showWorldSvg', 'showGeoMap', 'css.mapSvg', 'css.grat', 'css.land', 'wmGradLand0']
 
-  it('底图确实是静态的（这是「能先画」的前提，别把数据塞进来）', () => {
-    expect(MAP, 'graticule 必须仍然是模块级常量').toMatch(/const graticule\s*(:|=)/)
-    // 世界层那段 SVG 里不许出现**读数据**的写法（`map?.xxx` / `map.xxx`）。
-    // 它只该用 graticule / backdropPaths / view 这些与数据无关的东西。
-    const svgBranch = sliceBetween(MAP, '{showGeoMap && (', '      {map && showWorldEcharts && (', '世界层 SVG 分支')
-    expect(/\bmap\s*\??\.[A-Za-z_]/.test(svgBranch), '底图分支不许读数据').toBe(false)
-    expect(svgBranch.includes('graticule.map'), '底图要用静态经纬网').toBe(true)
-    expect(svgBranch.includes('backdropPaths.map'), '底图要用静态大陆轮廓').toBe(true)
-    atLeast(svgBranch.length, 1500, '世界层 SVG 分支的源码长度')
-  })
-
-  it('showWorldEcharts 必须连 data 一起要求（否则 GeoJSON 先到反而两边都不画）', () => {
-    expect(MAP, '缺 map !== null 保护').toMatch(/const showWorldEcharts = worldEchartsReady && map !== null/)
-  })
-
-  it('「没有可定位的地区数据」只在数据真的到了之后才说', () => {
-    expect(MAP).toMatch(/\{map !== null && located\.length === 0 && \(/)
-    expect(MAP.includes('{located.length === 0 && ('), '不许把「加载中」说成「没有」').toBe(false)
-  })
-
-  it('加载态提示还在（先出底图 ≠ 不告诉用户数据在加载）', () => {
-    expect(MAP).toMatch(/\{!map && !error && <div className=\{css\.loading\}>正在解析好友地区…/)
-  })
-})
-
-describe('边界：下钻层级仍然要有数据', () => {
-  it('ECharts 世界 / 中国 / 省 三个分支保留 map 前置', () => {
-    for (const keep of ['{map && showWorldEcharts && (', '{map && showChinaEcharts && (', '{map && showProvinceMap &&']) {
-      expect(MAP, `下钻分支的前置被删了：${keep}`).toContain(keep)
+describe('① 地理 SVG 已移除，且不许复活', () => {
+  it('WorldMap 里没有任何 SVG 视图的标识串', () => {
+    for (const m of SVG_MARKERS) {
+      expect(MAP.includes(m), `SVG 标识串回来了：${m}`).toBe(false)
     }
   })
 
-  it('防空转：真读到了文件', () => {
-    atLeast(MAP.length, 8000, 'WorldMap.tsx 源码')
+  it('SVG 专用的事件/派生也没了（平移缩放、涟漪、经纬网、底图路径）', () => {
+    for (const m of ['clampView', 'setHoverRegion', 'dragRef', 'geoRipple', 'graticule', 'backdropPaths', 'projectView']) {
+      expect(MAP.includes(m), `SVG 时代的东西还在：${m}`).toBe(false)
+    }
+  })
+
+  it('CSS 里没有 SVG 专用类残留', () => {
+    for (const cls of ['mapSvg', 'grat', 'land', 'mapGlow', 'mapMarker', 'mapRipple', 'mapLegend', 'viewCtrls']) {
+      expect(CSS.includes(`.${cls} {`) || CSS.includes(`.${cls}:`) || CSS.includes(`.${cls},`),
+        `死样式还在：.${cls}`).toBe(false)
+    }
+  })
+
+  it('world-geo 只服务 SVG 的导出已删；足迹地图要用的那几个**必须留着**', () => {
+    for (const dead of ['CHINA_OUTLINE', 'CHINA_BBOX', 'projectBBox', 'countryCenter', 'provinceCenter']) {
+      expect(GEO.includes(`export `) && new RegExp(`export (const|function) ${dead}\\b`).test(GEO),
+        `${dead} 只服务已删的 SVG，应该删掉`).toBe(false)
+    }
+    // 反例：这几个被 FootprintMap 共用，删了会把它一起弄坏
+    for (const keep of ['CONTINENTS', 'smoothClosedPath', 'MAP_W', 'MAP_H', 'project']) {
+      expect(new RegExp(`export (const|function) ${keep}\\b`).test(GEO), `${keep} 被足迹地图共用，不能删`).toBe(true)
+    }
+    expect(new RegExp('export function provinceAdcode\\b').test(GEO), 'ChinaMap 还要用它').toBe(true)
+  })
+})
+
+describe('② 世界层：ECharts 不等数据', () => {
+  it('showWorldEcharts 不再要求 map', () => {
+    expect(MAP, '又退回「等数据才画」了').toMatch(/const showWorldEcharts = worldEchartsReady\s*$/m)
+    expect(MAP.includes('worldEchartsReady && map !== null'), '不该再要求 map').toBe(false)
+  })
+
+  it('ECharts 分支不带 map 前置，且 node 有空节点兜底', () => {
+    expect(MAP).toContain('{showWorldEcharts && (')
+    expect(MAP.includes('{map && showWorldEcharts && ('), '不该再等数据').toBe(false)
+    expect(MAP, '缺空世界节点').toMatch(/const EMPTY_WORLD: RegionNode = \{ key: 'world'/)
+    expect(MAP, 'node 没做空值回退').toContain('node={map?.world ?? EMPTY_WORLD}')
+  })
+
+  it('childByKey 也要防空（否则数据没到时直接崩）', () => {
+    expect(MAP).toContain('worldChildByName(map?.world.children ?? [], key)')
+  })
+})
+
+describe('③ 底图拉不到时给明确说明，不留空白', () => {
+  it('有 blocked 判据与提示文案', () => {
+    expect(MAP, '缺少「底图不可用」判据').toMatch(/const geoTilesBlocked = onWorldMap && worldGeo\?\.ok === false/)
+    expect(MAP, '缺少提示块').toContain('{geoTilesBlocked && (')
+    const tip = sliceBetween(MAP, '{geoTilesBlocked && (', ')}', '底图不可用提示')
+    expect(tip, '提示要说清原因（未联网 / 隐私开关）').toContain('禁止地图底图出网')
+    expect(tip, '要指个去处，否则用户以为数据丢了').toContain('省份 / 城市榜单')
+  })
+})
+
+describe('④ 中国层 ECharts 起不来 → treemap', () => {
+  it('showTreemap 把 chinaFallback 也算进去', () => {
+    expect(MAP).toMatch(/const showTreemap = !onWorldMap && \(!chinaMode \|\| chinaFallback\) && !showProvinceMap && !showCityMap/)
+  })
+
+  it('fallbackWorldEcharts 仍在（ECharts 失败时标记底图不可用）', () => {
+    expect(MAP).toContain('const fallbackWorldEcharts = (): void => {')
+    expect(MAP).toContain('onFallback={fallbackWorldEcharts}')
+  })
+
+  it('防空转：真读到了三个文件', () => {
+    atLeast(MAP.length, 5000, 'WorldMap.tsx 源码')
+    atLeast(GEO.length, 3000, 'world-geo.ts 源码')
+    atLeast(CSS.length, 4000, 'world-map.module.css 源码')
   })
 })

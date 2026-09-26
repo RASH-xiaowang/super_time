@@ -2,10 +2,6 @@
 
 /* 两个径向渐变的 stop（第 94 轮从 WorldMap.tsx 的行内样式搬来）。
    颜色用主题令牌 ⇒ 浅色主题下同样跟随；透明度用 stop-opacity。 */
-.wmGradLand0 { stop-color: var(--nm-cyan); stop-opacity: 0.2; }
-.wmGradLand1 { stop-color: var(--nm-cyan); stop-opacity: 0.05; }
-.wmGradGlow0 { stop-color: var(--nm-cyan); stop-opacity: 0.18; }
-.wmGradGlow1 { stop-color: var(--nm-cyan); stop-opacity: 0; }
 
 .wrap {
   display: flex;
@@ -47,16 +43,6 @@
 .crumb:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .crumbSeg { display: inline-flex; align-items: center; gap: 2px; }
 .crumbSep { color: var(--nm-text-2); opacity: 0.6; }
-.back {
-  border: 1px solid var(--nm-border);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-2);
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: var(--nm-dense-r);
-  cursor: pointer;
-}
-.back:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
 .backOverlay {
   position: absolute;
   top: 10px;
@@ -73,7 +59,6 @@
   -webkit-backdrop-filter: blur(6px);
 }
 .backOverlay:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
-.viewCtrls { display: inline-flex; align-items: center; gap: 6px; }
 .meta { color: var(--nm-text-2); font-size: 11px; margin-left: auto; }
 
 .error {
@@ -135,171 +120,17 @@
   .china3d { width: 100%; height: 360px; max-height: 360px; }
 }
 
-.map {
-  position: relative;
-  flex: 1 1 auto;
-  width: 100%;
-  height: 520px;
-  max-height: 520px;
-  min-width: 0;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  overflow: hidden;
-  cursor: grab;
-  background:
-    radial-gradient(120% 120% at 28% 22%, color-mix(in srgb, var(--nm-cyan) 14%, transparent), rgba(0, 0, 0, 0) 52%),
-    radial-gradient(100% 140% at 50% 100%, color-mix(in srgb, var(--nm-purple) 12%, transparent), rgba(0, 0, 0, 0) 60%),
-    var(--nm-bg-input);
-  box-shadow:
-    inset 0 0 40px rgba(0, 0, 0, 0.55),
-    inset 0 -18px 40px color-mix(in srgb, var(--nm-purple) 10%, transparent),
-    0 0 22px color-mix(in srgb, var(--nm-cyan) 8%, transparent);}
-.map:active { cursor: grabbing; }
 
-.mapSvg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-.grat { stroke: color-mix(in srgb, var(--nm-cyan) 10%, transparent); stroke-width: 1; }
-.land {
-  stroke: color-mix(in srgb, var(--nm-cyan) 18%, transparent);
-  stroke-width: 1;
-  filter: drop-shadow(0 1px 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent));
-}
-.mapGlow { pointer-events: none; }
 
-.mapMarker {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  z-index: 5;
-}
-.mapDot {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.55), var(--dot-color, color-mix(in srgb, var(--nm-cyan) 70%, transparent)) 58%);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 35%, transparent), inset -2px -3px 6px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s, box-shadow 0.15s;
-  corner-shape: round;
-}
-.mapMarker:hover .mapDot {
-  transform: scale(1.18);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
-}
-.mapRipple {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent);
-  animation: map-ripple 2.4s ease-out infinite;
-  pointer-events: none;
-  corner-shape: round;
-}
 @keyframes map-ripple {
   0% { transform: scale(1); opacity: 0.9; }
   100% { transform: scale(2.6); opacity: 0; }
 }
-.mapCount {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translate(-50%, -130%);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  padding: 1px 6px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.mapName {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translate(-50%, 2px);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  padding: 1px 6px;
-  white-space: nowrap;
-  pointer-events: none;
-}
 
-.mapTip {
-  position: absolute;
-  z-index: 10;
-  pointer-events: none;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border-hover);
-  border-radius: var(--nm-r-md);
-  padding: 8px 10px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-  min-width: 140px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-.mapTipHd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  margin-bottom: 6px;
-}
-.mapTipHd span { font-size: 11px; color: var(--nm-cyan); font-weight: 600; }
-.mapTipBody { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--nm-text-2); }
 /* 悬浮提示里的一行：地区名 + 数量。
    此前 WorldMap.tsx 引用了 css.mapTipRow，但本模块没有该类 —— undefined 的
    className 让"名称 数量"挤成一句纯文本。这里用两端对齐，数量右对齐更易读。 */
-.mapTipRow { display: flex; justify-content: space-between; gap: 8px; }
-.mapTipHint { margin-top: 6px; font-size: 10.5px; color: var(--nm-text-2); opacity: 0.8; }
 
-.mapLegend {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--nm-text-2);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  padding: 4px 8px;
-}
-.legendTitle { color: var(--nm-text-1); font-weight: 600; }
-.legendSwatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-  corner-shape: round;
-}
-.legendBar {
-  width: 56px;
-  height: 6px;
-  border-radius: var(--nm-r-xs);
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-}
-.legendHint { color: var(--nm-text-2); opacity: 0.8; margin-left: 4px; }
 
 .mapHint {
   position: absolute;
