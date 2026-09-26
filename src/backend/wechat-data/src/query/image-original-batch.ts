@@ -51,6 +51,7 @@ import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { isWecomFileEndpoint } from './cdn-hosts.ts'
 import { fetchImageOriginalToCache, type ImageOriginalLink } from './image-original.ts'
 import { extractMd5FromPacked } from './media-image.ts'
+import { isMd5 } from '../md5.ts'
 
 /** zstd magic（4.x 的 `message_content` 是压缩的）。 */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
@@ -217,7 +218,7 @@ export function readFetchedOriginals(decodedDir: string): Set<string> {
  * @param md5s - 本次成功取回的 md5（非 32 位十六进制的会被忽略）。
  */
 export function recordFetchedOriginals(decodedDir: string, md5s: readonly string[]): void {
-  const valid = md5s.map(m => m.toLowerCase()).filter(m => /^[0-9a-f]{32}$/.test(m))
+  const valid = md5s.map(m => m.toLowerCase()).filter(m => isMd5(m))
   if (valid.length === 0) return
   const p = join(decodedDir, INDEX_FILE)
   let fetched: Record<string, number> = {}

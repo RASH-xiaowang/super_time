@@ -7,7 +7,8 @@
  * @module parse-rich
  */
 
-import { extractXmlTextNodes, stripCdata, stripXmlTags, unescapeXmlEntities, xmlAttr, xmlTagBlocks, xmlTagOrAttr, xmlTagText } from './parse-xml.ts'
+import { cachedRe, extractXmlTextNodes, stripCdata, stripXmlTags, unescapeXmlEntities, xmlAttr, xmlTagBlocks, xmlTagOrAttr, xmlTagText } from './parse-xml.ts'
+import { MD5_SEGMENT } from '../md5.ts'
 import type { ChatlogRecord, MessageRich as RichMedia, MpArticle, SolitaireMember } from '../types.ts'
 
 /**
@@ -330,7 +331,7 @@ export function quotedThumbUrl(raw: string): string {
  * 非图片组（连拍退化成 6 张散图）。所以两种形态都接受 —— 再加上 `count ≥ 2`，
  * 依然足以排除偶发同名节点造成的误判。
  */
-export const IMAGE_GROUP_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i
+export const IMAGE_GROUP_ID = cachedRe('image-group-id', () => new RegExp('^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|' + MD5_SEGMENT + ')$', 'i'))
 
 /**
  * 解析 `<img>` 里的 `<groupinfo>`，得到「这组图共几张」。

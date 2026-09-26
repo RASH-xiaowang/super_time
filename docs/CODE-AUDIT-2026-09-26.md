@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**299 文件 / 3023 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异 91 条全咬红、逐字节还原，登记到 M94）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**300 文件 / 3034 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 93 条全咬红、逐字节还原，登记到 M96）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -28,8 +28,10 @@
 | 第二批 #16 P2-5 readRenderCache | ✅ 完成 | `285c9ac` | 24 小时保质期 + 单条 1.5 MB 上限 + 写失败从静默变成「说一次并丢干净」（超大与配额两种原因分开记账，不互相静音）；判据 `render-cache-ttl.spec.ts`，变异 M73/M74 |
 | 第二批 #17 P2-8 usePagedList 自动刷新 | ✅ 完成 | `aee1e6f` | 节流（30 秒内不重复起）+ 同键合并 + 页面不可见不发 + 上界装不下就**整轮跳过**（不再静默截断成前 8 页，那会把「已刷新」画成假话）；判据 `paged-list-refresh-gate.spec.ts`，变异 M71/M72 |
 | 第二批 #13 P2-7 `wechat:call` 入参校验 | 🟡 ① 档硬拒已上线，② 档是**有证据要求的影子** | `92d37ca` | 新增宿主层 `wechat-args-guard.js`（+ `.d.ts`，按 H11 口径不给 `any`）：① **结构与体积**总是拒（参数个数/嵌套深度/数组项数/单串与累计体积/环/function/symbol/bigint/NaN/非纯对象），二进制按 `byteLength` 记账**不逐元素遍历**；接线在 `wechat-host.js` 的 `call()` 里、排在 `fn.apply` 之前，且归一化后的 `callArgs` 才是缓存键用的那份。② **形状**（生成的 114 份 zod schema）默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒 —— 因为这份生成物**从未被执行过**，没有证据就硬拒的结果是某个面板当场坏掉；`unrecognized_keys`（面板多发一个后端还不认的键）永远不算失败，保住向前兼容。**判据**：`wechat-args-guard.spec.ts` 12 条，含「被拒的调用一次都不许碰到 gateway」（把实现换成计数器来量，不靠读日志）、边界成对（防上界被悄悄调成无限）、8MB buffer 遍历耗时 <100ms、接线级判据、以及**覆盖账本 `[算料]`**：172 个 `@Remote` 里 schema 只覆盖 114，未覆盖 **58** 已钉成只能变小的棘轮（新加方法不生成 schema 就红）。变异 M82–M85 |
-| 第二批 #14 P1-7 六个零 spec 模块 | ✅ 完成（并当场揪出 6 个真缺陷） | `本次` | 补 6 份 spec：`decrypt-all-tree`(13) / `payments-status`(8) / `drafts-clear`(8) / `calendar-daily-counts`(7) / `media-file-resolve`(9) / `gateway-read-shell`(26，覆盖 53 个 `@Remote` 壳的接线面)。**补测不是走形式**，撞出来的 6 条（详见「本轮新发现」⑨–⑫）：① `looksDecrypted` 那道解密有效性闸门**恒真**（10 处）⇒ 错密钥把乱码发布成快照；② drafts 早退分支双重 `close` ⇒ 人话错误被 `ERR_INVALID_STATE` 顶替；③ calendar 的存在性检查写在 try 之外 ⇒ 一个半写分片毁掉整个月 + 漏一条句柄（**P0-1 的 AST 判据抓不到这种形状**，因为 finally 里确实有一次 close）；④ media-file 负缓存**永久** ⇒ 「先点开、后下载」的文件不重启就永远打不开；⑤ media-file 缓存键不含数据根 ⇒ 换账号后同名同体积的文件读回**上一个账号**的字节；⑥ records 的 `combineWhere` 把 ` WHERE ` 的前导空格 trim 掉 ⇒ 拼成 `tableWHERE`，query 侧 catch 咽掉语法错误，用户侧表现是「记录页一搜就空」。变异 M86–M94 |
-| 第二批 #14 顺带新增的全仓守卫 | ✅ 完成 | `本次` | `source-text-integrity.spec.ts`：源码里有字面 NUL/退格/ESC 就让 `grep` 把整个文件当二进制跳过 ⇒ **所有文本/AST 类判据对那个文件静默失效**（只让守卫变绿，不会变红）。扫 849 个文件，判据自带反例自证；变异 M89 |
+| 第二批 #14 P1-7 六个零 spec 模块 | ✅ 完成（并当场揪出 6 个真缺陷） | `fdd1f36` | 补 6 份 spec：`decrypt-all-tree`(13) / `payments-status`(8) / `drafts-clear`(8) / `calendar-daily-counts`(7) / `media-file-resolve`(9) / `gateway-read-shell`(26，覆盖 53 个 `@Remote` 壳的接线面)。**补测不是走形式**，撞出来的 6 条（详见「本轮新发现」⑨–⑫）：① `looksDecrypted` 那道解密有效性闸门**恒真**（10 处）⇒ 错密钥把乱码发布成快照；② drafts 早退分支双重 `close` ⇒ 人话错误被 `ERR_INVALID_STATE` 顶替；③ calendar 的存在性检查写在 try 之外 ⇒ 一个半写分片毁掉整个月 + 漏一条句柄（**P0-1 的 AST 判据抓不到这种形状**，因为 finally 里确实有一次 close）；④ media-file 负缓存**永久** ⇒ 「先点开、后下载」的文件不重启就永远打不开；⑤ media-file 缓存键不含数据根 ⇒ 换账号后同名同体积的文件读回**上一个账号**的字节；⑥ records 的 `combineWhere` 把 ` WHERE ` 的前导空格 trim 掉 ⇒ 拼成 `tableWHERE`，query 侧 catch 咽掉语法错误，用户侧表现是「记录页一搜就空」。变异 M86–M94 |
+| 第二批 #14 顺带新增的全仓守卫 | ✅ 完成 | `fdd1f36` | `source-text-integrity.spec.ts`：源码里有字面 NUL/退格/ESC 就让 `grep` 把整个文件当二进制跳过 ⇒ **所有文本/AST 类判据对那个文件静默失效**（只让守卫变绿，不会变红）。扫 849 个文件，判据自带反例自证；变异 M89 |
+| 第四批（部分）P3-3 / P3-4 两个「字面量散在多处」 | ✅ 完成 | `本次` | MD5 的 10 处 `[0-9a-f]{32}` 收进 `src/md5.ts`（`isMd5` 严格小写 / `isMd5Loose` 大小写都认 / `MD5_SEGMENT` 供拼进更大的模式 —— **两种口径刻意都留着**，差别写在名字里而不是散在十个字面量里）；AES 密钥字节化的 6 处收进 `keys/image-key.ts#normalizeAesKey`（4 处带 `length>0`、2 处不带的分歧并成一条：空串/全空白/空字节一律 `null` = 「没有密钥」，交给各调用方原本的退化分支）。守卫 `md5-image-key.spec.ts` 11 条：行为逐值钉 + **零容忍扫描**（全仓不许再出现这两个字面量的第三种写法）+ 反例自证 + 「共享正则实例不许带 `g` 标」这一条（十几个站点共用一个实例之后，`g` 会让 `lastIndex` 跨调用漂）。变异 M95/M96 |
+| 工具修复：`check:mutation` 自己改坏了注入内容 | ✅ 完成 | `本次` | `String.replace(from, m.to)` 里替换串的 `$&` / `$'` / `` $` `` **是特殊序列** —— 一条 `to` 写成 `new RegExp('^' + X + '$', 'i')` 时，`$'` 被展开成「匹配之后的全部文本」，文件被写成垃圾后报「语法假咬」，看着像这条变异没意义，其实是工具自己变了形（M95 第一次就是这么红的）。改成**函数替换** + 让注入文本跟着锚点走行尾（CRLF 文件里不再塞进裸 LF）。自检 `--self-test` 三条判定路径仍成立，全表 93 条重跑全咬红、逐字节还原 |
 | 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
 | 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `上一提交` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
 

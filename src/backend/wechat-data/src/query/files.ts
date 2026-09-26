@@ -7,6 +7,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
+import { MD5_FIND_RE, isMd5Loose } from '../md5.ts'
 import { createHash } from 'node:crypto'
 import { contactMeta } from './meta.ts'
 
@@ -61,7 +62,7 @@ function packedBytes(v: unknown): Uint8Array {
 /** Extract a 32-char lowercase hex file key from packed_info. */
 function fileKeyFromPacked(packed: unknown): string | null {
   const latin = Buffer.from(packedBytes(packed)).toString('latin1')
-  const m = /[0-9a-f]{32}/.exec(latin)
+  const m = MD5_FIND_RE.exec(latin)
   return m ? m[0] : null
 }
 
@@ -162,7 +163,7 @@ function dirSourceCached(decryptedDir: string): { month: Map<number, string>; ta
         const v = cellStr(r.username)
         if (!rid || !v) continue
         if (/^\d{4}-\d{2}$/.test(v)) { month.set(rid, v); continue }
-        if (/^[0-9a-f]{32}$/i.test(v)) {
+        if (isMd5Loose(v)) {
           // 与既有 sessionName 口径一致：没有显示名时退回 username 本身
           const name = md5ToName.get(v.toLowerCase())
           if (name) talker.set(rid, name)

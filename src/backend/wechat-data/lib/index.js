@@ -506,6 +506,18 @@ function parseVoipKind(roomType) {
   return "";
 }
 
+// src/backend/wechat-data/src/md5.ts
+var MD5_SEGMENT = "[0-9a-f]{32}";
+var MD5_RE = new RegExp("^" + MD5_SEGMENT + "$");
+var MD5_RE_LOOSE = new RegExp("^" + MD5_SEGMENT + "$", "i");
+var MD5_FIND_RE = new RegExp(MD5_SEGMENT);
+function isMd5(v) {
+  return MD5_RE.test(v);
+}
+function isMd5Loose(v) {
+  return MD5_RE_LOOSE.test(v);
+}
+
 // src/backend/wechat-data/src/query/parse-rich.ts
 function cleanRichText(s) {
   const v = (s ?? "").trim();
@@ -741,7 +753,7 @@ function quotedThumbUrl(raw) {
   }
   return "";
 }
-var IMAGE_GROUP_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
+var IMAGE_GROUP_ID = cachedRe("image-group-id", () => new RegExp("^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|" + MD5_SEGMENT + ")$", "i"));
 function parseImageGroup(xml) {
   if (!xml || !xml.includes("<groupinfo")) return null;
   const start = xml.indexOf("<groupinfo");
@@ -11320,6 +11332,17 @@ import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { existsSync as existsSync73, mkdirSync as mkdirSync24, readFileSync as readFileSync30, writeFileSync as writeFileSync20 } from "node:fs";
 import { join as join92 } from "node:path";
 
+// src/backend/wechat-data/src/keys/image-key.ts
+function normalizeAesKey(aesKey) {
+  if (aesKey === null || aesKey === void 0) return null;
+  if (typeof aesKey === "string") {
+    if (aesKey.trim().length === 0) return null;
+    return Buffer.from(aesKey, "ascii");
+  }
+  if (aesKey.length === 0) return null;
+  return Buffer.isBuffer(aesKey) ? aesKey : Buffer.from(aesKey);
+}
+
 // src/backend/wechat-data/src/query/sync.ts
 import { createDecipheriv as createDecipheriv2, pbkdf2Sync as pbkdf2Sync2 } from "node:crypto";
 import {
@@ -14945,11 +14968,11 @@ function deriveImageKeys(code, wxid) {
 function decryptAesBlock(aesKey, ciphertext) {
   let keyBytes;
   try {
-    keyBytes = typeof aesKey === "string" ? Buffer.from(aesKey, "ascii") : Buffer.from(aesKey);
+    keyBytes = normalizeAesKey(aesKey);
   } catch {
     return null;
   }
-  if (keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null;
+  if (keyBytes === null || keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null;
   try {
     const decipher = createDecipheriv4("aes-128-ecb", keyBytes.subarray(0, AES_BLOCK_SIZE), null);
     decipher.setAutoPadding(false);
@@ -17793,12 +17816,12 @@ import { existsSync as existsSync55, readdirSync as readdirSync30 } from "node:f
 import { join as join70 } from "node:path";
 
 // src/backend/wechat-data/src/query/media-image.ts
-var import_llm_retry3 = __toESM(require_llm_retry(), 1);
 import { createDecipheriv as createDecipheriv5 } from "node:crypto";
 import { DatabaseSync as DatabaseSync43 } from "node:sqlite";
 import { existsSync as existsSync54, mkdirSync as mkdirSync16, readdirSync as readdirSync29, readFileSync as readFileSync17, rmSync as rmSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { createHash as createHash21 } from "node:crypto";
 import { join as join69 } from "node:path";
+var import_llm_retry3 = __toESM(require_llm_retry(), 1);
 
 // src/backend/wechat-data/src/query/wxam-image.ts
 import { existsSync as existsSync53, readdirSync as readdirSync28 } from "node:fs";
@@ -17980,7 +18003,7 @@ function extractMd5FromPacked(value) {
     if (value.includes(",")) {
       bytes = commaBytesToBytes(value);
     } else {
-      const m = value.match(/[0-9a-f]{32}/);
+      const m = value.match(MD5_FIND_RE);
       return m ? m[0] : null;
     }
   }
@@ -17990,13 +18013,13 @@ function extractMd5FromPacked(value) {
   for (let i = 0; i + marker.length + 32 <= buf.length; i += 1) {
     if (marker.every((b, j) => buf[i + j] === b)) {
       const s2 = String.fromCharCode(...buf.slice(i + marker.length, i + marker.length + 32));
-      if (/^[0-9a-f]{32}$/.test(s2)) return s2;
+      if (isMd5(s2)) return s2;
     }
   }
   for (let i = 0; i + 34 <= buf.length; i += 1) {
     if (buf[i] === 34 && buf[i + 1] === 32) {
       const s2 = String.fromCharCode(...buf.slice(i + 2, i + 34));
-      if (/^[0-9a-f]{32}$/.test(s2)) return s2;
+      if (isMd5(s2)) return s2;
     }
   }
   let s = "";
@@ -18173,8 +18196,8 @@ function decodeDatBytes(data, aesKey, xorKey, opts = {}) {
   const isV1 = sig.every((b, i) => b === V1_MAGIC_FULL[i]);
   let decrypted;
   if (isV2 || isV1) {
-    const rawKey = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : aesKey;
-    const key = isV1 ? V1_AES_KEY : rawKey instanceof Uint8Array ? rawKey : null;
+    const rawKey = normalizeAesKey(aesKey);
+    const key = isV1 ? V1_AES_KEY : rawKey;
     if (!key) return { error: "V2 \u683C\u5F0F\u9700\u8981 AES key" };
     if (key.length < 16) return { error: "AES key \u957F\u5EA6\u4E0D\u8DB3 16 \u5B57\u8282" };
     if (data.length < 15) return { error: "V2 \u6587\u4EF6\u5934\u4E0D\u5B8C\u6574" };
@@ -18266,7 +18289,7 @@ function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatB
     const attach = join69(wechatBaseDir, "msg", "attach", msgTableName9(username).replace(/^Msg_/, ""));
     const dats = findDatFiles(attach, md5);
     if (dats.length > 0) {
-      const aesBytes = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : aesKey ?? null;
+      const aesBytes = normalizeAesKey(aesKey);
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b));
       for (const f of ordered) {
         try {
@@ -18289,7 +18312,7 @@ function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatB
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? "", hint.dataIndex);
     if (hd) {
-      const aesBytes = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : aesKey ?? null;
+      const aesBytes = normalizeAesKey(aesKey);
       try {
         const bytes = readFileSync17(hd);
         const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 255);
@@ -18309,7 +18332,7 @@ function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatB
 }
 function decodeFileImageDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aesKey, xorKey = 255) {
   const m = (md5 ?? "").trim().toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: "\u7F3A\u5C11\u56FE\u7247 MD5" };
+  if (!isMd5(m)) return { error: "\u7F3A\u5C11\u56FE\u7247 MD5" };
   for (const ext of ["jpg"]) {
     const p = join69(decodedDir, m + "." + ext);
     if (existsSync54(p)) {
@@ -18325,7 +18348,7 @@ function decodeFileImageDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, ae
 }
 function decodeEmoticonDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aesKey, xorKey = 255) {
   const m = (md5 ?? "").trim().toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: "\u7F3A\u5C11\u8868\u60C5 MD5" };
+  if (!isMd5(m)) return { error: "\u7F3A\u5C11\u8868\u60C5 MD5" };
   for (const ext of RENDERABLE_EXTS) {
     const p = join69(decodedDir, m + "." + ext);
     if (existsSync54(p)) {
@@ -18361,7 +18384,7 @@ function decodeEmoticonDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aes
   };
   walk(attachRoot, 0);
   if (dats.length === 0) return { error: "\u672A\u627E\u5230\u8868\u60C5\u6587\u4EF6 (MD5=" + m + ")" };
-  const aesBytes = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : aesKey ?? null;
+  const aesBytes = normalizeAesKey(aesKey);
   const THUMB_FIRST = { thumb: 0, other: 1, chat: 2, original: 3 };
   const ordered = [...dats].sort((a, b) => THUMB_FIRST[datTierOf(a)] - THUMB_FIRST[datTierOf(b)]);
   for (const f of ordered) {
@@ -18555,7 +18578,7 @@ function resolveImageFilePath(decryptedDir, wechatBaseDir, md5, dataIndex) {
 }
 
 // src/backend/wechat-data/src/query/decrypt-images.ts
-var MD5_PREFIX_RE = /^([0-9a-f]{32})/i;
+var MD5_PREFIX_RE = new RegExp("^(" + MD5_SEGMENT + ")", "i");
 var WRITE_EXTS = /* @__PURE__ */ new Set(["jpg", "png", "gif", "webp"]);
 function walkDataDats(dir, out, depth) {
   if (depth > 10 || !existsSync55(dir)) return;
@@ -18814,7 +18837,7 @@ async function fetchRemoteImages(urls, decodedDir, opts = {}) {
 
 // src/backend/wechat-data/src/query/image-upgrade.ts
 var CACHE_EXTS = "jpg|jpeg|png|gif|webp|bmp|tif";
-var CACHE_FILE_RE = new RegExp("^([0-9a-f]{32})(\\.t)?\\.(" + CACHE_EXTS + "|hevc)$", "i");
+var CACHE_FILE_RE = new RegExp("^(" + MD5_SEGMENT + ")(\\.t)?\\.(" + CACHE_EXTS + "|hevc)$", "i");
 function scanCachedImages(decodedDir) {
   const out = /* @__PURE__ */ new Map();
   const add = (dir, name) => {
@@ -24606,7 +24629,7 @@ function packedBytes(v) {
 }
 function fileKeyFromPacked(packed) {
   const latin = Buffer.from(packedBytes(packed)).toString("latin1");
-  const m = /[0-9a-f]{32}/.exec(latin);
+  const m = MD5_FIND_RE.exec(latin);
   return m ? m[0] : null;
 }
 function loadFileSources(decryptedDir) {
@@ -24687,7 +24710,7 @@ function dirSourceCached(decryptedDir) {
           month.set(rid, v);
           continue;
         }
-        if (/^[0-9a-f]{32}$/i.test(v)) {
+        if (isMd5Loose(v)) {
           const name = md5ToName.get(v.toLowerCase());
           if (name) talker.set(rid, name);
         }
@@ -24971,7 +24994,7 @@ function readFetchedOriginals(decodedDir) {
   }
 }
 function recordFetchedOriginals(decodedDir, md5s) {
-  const valid = md5s.map((m) => m.toLowerCase()).filter((m) => /^[0-9a-f]{32}$/.test(m));
+  const valid = md5s.map((m) => m.toLowerCase()).filter((m) => isMd5(m));
   if (valid.length === 0) return;
   const p = join83(decodedDir, INDEX_FILE);
   let fetched = {};
@@ -28433,7 +28456,7 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       if (wanted.length === 0) return;
       const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted);
       if (paths.size === 0) return;
-      const aesBytes = typeof aesKey === "string" && aesKey.length > 0 ? Buffer.from(aesKey, "ascii") : null;
+      const aesBytes = normalizeAesKey(aesKey);
       for (let i = 0; i < items.length; i += 1) {
         const md5 = md5ByItem[i] ?? "";
         const src = md5 ? paths.get(md5.toLowerCase()) : void 0;

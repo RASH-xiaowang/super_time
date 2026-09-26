@@ -8,9 +8,10 @@ import { promises as fs } from 'node:fs'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { datTierOf, datTierRank, decodeDatBytes, isThumbTier, type DatTier } from './media-image.ts'
+import { MD5_SEGMENT } from '../md5.ts'
 
 /** Image-dat file names start with the content md5: `<md5>[_t|_h].dat`. */
-const MD5_PREFIX_RE = /^([0-9a-f]{32})/i
+const MD5_PREFIX_RE = new RegExp('^(' + MD5_SEGMENT + ')', 'i')
 
 /** Browser-renderable output extensions (hevc/wxgf skipped, counted). */
 const WRITE_EXTS = new Set(['jpg', 'png', 'gif', 'webp'])

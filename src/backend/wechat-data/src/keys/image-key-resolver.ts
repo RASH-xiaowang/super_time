@@ -7,6 +7,7 @@
 import { createDecipheriv, createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { normalizeAesKey } from './image-key.ts'
 
 /** V2 image magic. */
 export const V2_MAGIC = Buffer.from([0x07, 0x08, 0x56, 0x32, 0x08, 0x07])
@@ -108,13 +109,13 @@ export function deriveImageKeys(code: number, wxid: string): DerivedImageKeys {
 
 /** Decrypt one AES-ECB block. */
 function decryptAesBlock(aesKey: string | Buffer, ciphertext: Buffer): Buffer | null {
-  let keyBytes: Buffer
+  let keyBytes: Buffer | null
   try {
-    keyBytes = typeof aesKey === 'string' ? Buffer.from(aesKey, 'ascii') : Buffer.from(aesKey)
+    keyBytes = normalizeAesKey(aesKey)
   } catch {
     return null
   }
-  if (keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null
+  if (keyBytes === null || keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null
   try {
     const decipher = createDecipheriv('aes-128-ecb', keyBytes.subarray(0, AES_BLOCK_SIZE), null)
     decipher.setAutoPadding(false)

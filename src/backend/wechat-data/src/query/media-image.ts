@@ -11,6 +11,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { MD5_FIND_RE, isMd5 } from '../md5.ts'
+import { normalizeAesKey } from '../keys/image-key.ts'
 // 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
 import { fetchWithRetry } from '../../../llm-retry.js'
 import { isWxgfTranscodeAvailable, transcodeWxgf, type WxgfTranscoder } from './wxam-image.ts'
@@ -56,7 +58,7 @@ export function extractMd5FromPacked(value: unknown): string | null {
       bytes = commaBytesToBytes(value)
     } else {
       // plain text (rare): try hex string or raw ascii
-      const m = value.match(/[0-9a-f]{32}/)
+      const m = value.match(MD5_FIND_RE)
       return m ? m[0] : null
     }
   }
@@ -67,14 +69,14 @@ export function extractMd5FromPacked(value: unknown): string | null {
   for (let i = 0; i + marker.length + 32 <= buf.length; i += 1) {
     if (marker.every((b, j) => buf[i + j] === b)) {
       const s = String.fromCharCode(...buf.slice(i + marker.length, i + marker.length + 32))
-      if (/^[0-9a-f]{32}$/.test(s)) return s
+      if (isMd5(s)) return s
     }
   }
   // generic: 0x22 0x20 then 32 hex (protobuf field 4, length 32)
   for (let i = 0; i + 34 <= buf.length; i += 1) {
     if (buf[i] === 0x22 && buf[i + 1] === 32) {
       const s = String.fromCharCode(...buf.slice(i + 2, i + 34))
-      if (/^[0-9a-f]{32}$/.test(s)) return s
+      if (isMd5(s)) return s
     }
   }
   // last resort: any 32 consecutive ascii hex digits
@@ -330,8 +332,8 @@ export function decodeDatBytes(
   const isV1 = sig.every((b, i) => b === V1_MAGIC_FULL[i])
   let decrypted: Uint8Array
   if (isV2 || isV1) {
-    const rawKey = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : aesKey
-    const key: Uint8Array | null = isV1 ? V1_AES_KEY : (rawKey instanceof Uint8Array ? rawKey : null)
+    const rawKey = normalizeAesKey(aesKey)
+    const key: Uint8Array | null = isV1 ? V1_AES_KEY : rawKey
     if (!key) return { error: 'V2 格式需要 AES key' }
     if (key.length < 16) return { error: 'AES key 长度不足 16 字节' }
     if (data.length < 15) return { error: 'V2 文件头不完整' }
@@ -479,7 +481,7 @@ export function decodeImageDataUrl(
       // The original is often wxgf/HEVC in wechat 4.x; prefer a renderable
       // candidate (thumbnail _t / _h), falling back to the original only when
       // it decodes to a browser-renderable format.
-      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
+      const aesBytes = normalizeAesKey(aesKey)
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
       for (const f of ordered) {
         try {
@@ -502,7 +504,7 @@ export function decodeImageDataUrl(
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? '', hint.dataIndex)
     if (hd) {
-      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
+      const aesBytes = normalizeAesKey(aesKey)
       try {
         const bytes = readFileSync(hd)
         const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
@@ -533,7 +535,7 @@ export function decodeFileImageDataUrl(
   xorKey = 0xff,
 ): { url?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: '缺少图片 MD5' }
+  if (!isMd5(m)) return { error: '缺少图片 MD5' }
   for (const ext of ['jpg']) {
     const p = join(decodedDir, m + '.' + ext)
     if (existsSync(p)) {
@@ -573,7 +575,7 @@ export function decodeEmoticonDataUrl(
   xorKey = 0xff,
 ): { url?: string; format?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: '缺少表情 MD5' }
+  if (!isMd5(m)) return { error: '缺少表情 MD5' }
   for (const ext of RENDERABLE_EXTS) {
     const p = join(decodedDir, m + '.' + ext)
     if (existsSync(p)) {
@@ -607,7 +609,7 @@ export function decodeEmoticonDataUrl(
   }
   walk(attachRoot, 0)
   if (dats.length === 0) return { error: '未找到表情文件 (MD5=' + m + ')' }
-  const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
+  const aesBytes = normalizeAesKey(aesKey)
   // 表情这条链**故意反过来**：优先缩略图（小、且通常本来就是静帧），原图放最后
   // （表情原图多是 wxgf/动图，解码更慢）。与消息链的「原图优先」是有意的差异，不是笔误。
   const THUMB_FIRST: Record<DatTier, number> = { thumb: 0, other: 1, chat: 2, original: 3 }

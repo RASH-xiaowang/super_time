@@ -772,6 +772,22 @@ const MUTATIONS = [
     to: "    } catch { throw new Error('no such table: chat_room_info_detail') }",
     spec: "src/backend/wechat-data/tests/gateway-read-shell.spec.ts",
   },
+  {
+    id: "M95-md5-case-loosened",
+    why: "给严格档 isMd5 偷偷加上 i（P3-3 收口的正是「十处口径不完全同义」）—— 大写的串会被当成合法缓存文件名",
+    file: "src/backend/wechat-data/src/md5.ts",
+    from: "  return MD5_RE.test(v)",
+    to: "  return MD5_RE_LOOSE.test(v)",
+    spec: "src/backend/wechat-data/tests/md5-image-key.spec.ts",
+  },
+  {
+    id: "M96-aes-key-empty-becomes-zero-length",
+    why: "退回「空串也 Buffer.from」—— 得到长度为 0 的 key，解密层抛 Invalid key length，界面变成「这张图取不出来」",
+    file: "src/backend/wechat-data/src/keys/image-key.ts",
+    from: "    if (aesKey.trim().length === 0) return null",
+    to: "    if (false) return null",
+    spec: "src/backend/wechat-data/tests/md5-image-key.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)
@@ -855,11 +871,17 @@ function execute(m) {
   if (hits !== 1) {
     return { id: m.id, verdict: '锚点失效', detail: `锚点命中 ${hits} 次（必须恰好 1 次）：${m.from.slice(0, 60)}` }
   }
+  // 注入文本要跟着锚点走：CRLF 文件里塞进裸 LF 会变成混合行尾（编辑器与 git 都会抖）。
+  const crlfNeedle = needle.indexOf(String.fromCharCode(13) + String.fromCharCode(10)) >= 0
+  const inject = crlfNeedle ? m.to.split(String.fromCharCode(10)).join(String.fromCharCode(13) + String.fromCharCode(10)) : m.to
 
   let verdict = ''
   let detail = ''
   try {
-    writeFileSync(abs, text.replace(needle, m.to), 'utf8')
+    // 用**函数**做替换：`String.replace` 的替换串里 `$&` / `$'` / `` $` `` 是特殊序列，
+    // 直接传 m.to 会把「带引号的正则」这类锚点展开成别的内容 —— 表现是文件被写坏后报
+    // 「语法假咬」，看着像变异没意义，其实是工具自己把内容改了形。
+    writeFileSync(abs, text.replace(needle, () => inject), 'utf8')
     const r = runSpec(m.spec)
     if (r.rc === 0) {
       verdict = '没咬住'

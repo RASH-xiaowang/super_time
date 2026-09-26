@@ -38,6 +38,7 @@ import { join } from 'node:path'
 import { collectImageDatFiles, groupImageDatsByMd5 } from './decrypt-images.ts'
 import { decodeDatBytes } from './media-image.ts'
 import { REMOTE_IMAGE_CACHE_DIRNAME } from './remote-image.ts'
+import { MD5_SEGMENT } from '../md5.ts'
 
 /** 可渲染的缓存扩展名（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合，外加 `.hevc` 占位）。 */
 const CACHE_EXTS = 'jpg|jpeg|png|gif|webp|bmp|tif'
@@ -48,7 +49,7 @@ const CACHE_EXTS = 'jpg|jpeg|png|gif|webp|bmp|tif'
  * `.hevc` 也算进来：它是「上一版 wxgf 解不开」的**失败标记**，本身不可渲染，但
  * `decodeImageDataUrl` 在转码能力不可用时会因它直接早退 —— 所以要能找到它并在升级成功时清掉。
  */
-const CACHE_FILE_RE = new RegExp('^([0-9a-f]{32})(\\.t)?\\.(' + CACHE_EXTS + '|hevc)$', 'i')
+const CACHE_FILE_RE = new RegExp('^(' + MD5_SEGMENT + ')(\\.t)?\\.(' + CACHE_EXTS + '|hevc)$', 'i')
 
 /** 一个 md5 在解码缓存里的现状。 */
 interface CachedEntry {

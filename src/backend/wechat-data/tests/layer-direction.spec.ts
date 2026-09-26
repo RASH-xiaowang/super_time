@@ -43,7 +43,7 @@ type Layer = 'base' | 'config' | 'keys' | 'query' | 'glue'
  * 现在它们自成一层的下界，并由下面那条「base 不许依赖包内任何模块」硬守：
  * 往 `BASE_LEAVES` 里加一个反向依赖上层的文件，红的是那条用例，而不是方向守卫失明。
  */
-const BASE_LEAVES = new Set(['dirs.ts', 'asar-path.ts', 'format.ts'])
+const BASE_LEAVES = new Set(['dirs.ts', 'asar-path.ts', 'format.ts', 'md5.ts'])
 
 /**
  * 只允许这些「层 → 层」的依赖方向（同层内部依赖天然允许）。
