@@ -14,19 +14,20 @@ import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
 import { ImageViewer } from './chats-media.tsx'
-import { Avatar, ChatView, IconCalendar, IconPin, buildMsgMenu, isEnterpriseChat, openLink } from './chats-support.tsx'
+import { Avatar, ChatView, IconPin, buildMsgMenu, isEnterpriseChat, openLink } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
-import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
+import { ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { ChatsExportDialog } from './chats-export-dialog.tsx'
+import { ChatsGroupInfoView } from './chats-group-info-view.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
 import { RainWindow } from './rain-window.tsx'
-import { IconCloseOutline16, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import type { ViewerImage } from './chats-media.tsx'
@@ -447,117 +448,16 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         )}
       </div>
 
-      {groupInfoOpen && curSession?.type === 'group' && (
-        <div
-          className={csscards.groupInfo}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={groupInfoTitleId}
-          data-st-dialog="chats-groupinfo"
-        >
-          <div className={csscards.groupInfoHeader}>
-            <span className={cssshell.groupInfoTitle} id={groupInfoTitleId}>群聊信息</span>
-            <button type="button" className={csscards.groupInfoClose} title="关闭" aria-label="关闭" onClick={() => { setGroupInfoOpen(false); setProfileMember(null) }}><IconCloseOutline16 size={15} /></button>
-          </div>
-          <div className={cssshell.groupInfoBody}>
-            {groupInfoLoading && <div className={kitCss.emptyInline}>加载中…</div>}
-            {groupInfoErr && <div className={kitCss.emptyInline}>{groupInfoErr}</div>}
-            {!groupInfoLoading && groupInfo && (
-              <>
-                <div className={cssrows.memberSearchBox}>
-                  <div className={cssrows.searchIcon}><IconSearchOutline16 size={13} /></div>
-                  <input
-                    type="text"
-                    placeholder="搜索群成员"
-                    value={memberSearch}
-                    onChange={(e) => { setMemberSearch(e.target.value) }}
-                  />
-                </div>
-                {memberQuery && filteredMembers.length === 0 ? (
-                  /* 搜索无结果必须给空态：此前网格直接渲染成 0 高度，界面只剩一片空白（审计 P0-3） */
-                  <div className={csscards.memberEmpty}>
-                    <div className={cssshell.memberEmptyIcon}><IconSearchOutline16 size={22} /></div>
-                    <div className={cssshell.memberEmptyTitle}>未找到相关成员</div>
-                    <div className={cssshell.memberEmptyDesc}>
-                      群里共 {memberTotal} 位成员，试试昵称或微信号的其它片段
-                    </div>
-                    <button type="button" className={csscards.memberEmptyClear} onClick={() => { setMemberSearch('') }}>
-                      清空搜索
-                    </button>
-                  </div>
-                ) : (
-                  <div className={cssshell.memberGrid}>
-                    {shownMembers.map(m => (
-                      <button
-                        type="button"
-                        key={m.username}
-                        className={cssrows.memberTile}
-                        title={m.name}
-                        onMouseEnter={(e) => { showMemberProfile(m, e.currentTarget) }}
-                        onMouseLeave={hideMemberProfile}
-                      >
-                        {/* 与会话列表同一套懒挂载：展开到 200 人时不再一次性发起 200 个头像请求（审计 P2-4） */}
-                        <LazyMount placeholder={<span className={css.avatarStub} style={{ width: 40, height: 40 }} />} rootMargin="300px 0px">
-                          <Avatar name={m.name} username={m.username} size={40} />
-                        </LazyMount>
-                        <span className={cssrows.memberName}>{m.name}</span>
-                      </button>
-                    ))}
-                    {/*
-                      故意的死控件（L13）：微信「聊天信息」页的成员网格末尾就是这个「＋ 添加」方块，
-                      而本应用只**读**本机聊天库，没有可用的邀请/入群通道（往群里加人要么走微信协议、
-                      要么直接改对方数据库，两者都不该做）。保留它的理由是布局保真 —— 去掉会让
-                      成员网格与官方形态不一致（视觉审计 P1-8 行结构）。
-                      因此它刻意不可交互：不是 <button>（键盘/焦点不进来）、不挂 onClick、
-                      aria-disabled + title 说明原因，并且不给任何 hover 反馈让外观也不像可点
-                      （见 chats-rows.module.css 的 `.memberTile[data-disabled='true']` 规则）。
-                      若将来真要做邀请，这里应换成打开确认对话框的按钮，而不是给它挂 onClick。
-                    */}
-                    {!memberQuery && (
-                      <div className={cssrows.memberTile} data-disabled="true" title="暂不支持邀请" aria-disabled="true">
-                        <div className={cssrows.memberAdd}><span>＋</span></div>
-                        <span className={cssrows.memberName}>添加</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {/* 有查询词时不再用「256 人」这个与过滤结果无关的数字（审计 P1-4） */}
-                {memberQuery ? (
-                  filteredMembers.length > memberLimit && (
-                    <button type="button" className={csscards.memberMore} onClick={() => { setMemberExpanded(v => !v) }}>
-                      {memberExpanded ? '收起' : `展开更多匹配（共 ${filteredMembers.length} 位）`}
-                    </button>
-                  )
-                ) : memberTotal > 24 && (
-                  <button type="button" className={csscards.memberMore} onClick={() => { setMemberExpanded(v => !v) }}>
-                    {memberExpanded ? '收起' : `查看更多（${memberTotal} 人）`}
-                  </button>
-                )}
-                {/* 微信的聊天信息是「标签左 / 值右」的列表行，不是「标签上 / 值下」的块（审计 P1-8 行结构） */}
-                <div className={cssshell.groupInfoRows}>
-                  <div className={csscards.groupInfoRow}>
-                    <span className={cssshell.groupInfoRowLabel}>群聊名称</span>
-                    <span className={csscards.groupInfoRowValue}>{groupInfo.name}</span>
-                  </div>
-                  {groupInfo.announcement && (
-                    <div className={cssshell.groupInfoRowStack}>
-                      <span className={cssshell.groupInfoRowLabel}>群公告</span>
-                      <div ref={annRef} className={csscards.groupInfoAnn} data-clamp={!annExpanded || undefined}>
-                        {groupInfo.announcement}
-                      </div>
-                      {annCanExpand && (
-                        <button type="button" className={csscards.groupInfoAnnToggle} onClick={() => { setAnnExpanded(v => !v) }}>
-                          {annExpanded ? '收起' : '展开'}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      <ChatsGroupInfoView
+        annCanExpand={annCanExpand} annExpanded={annExpanded} annRef={annRef} filteredMembers={filteredMembers}
+        groupInfo={groupInfo} groupInfoErr={groupInfoErr} groupInfoLoading={groupInfoLoading}
+        groupInfoTitleId={groupInfoTitleId} hideMemberProfile={hideMemberProfile}
+        isGroup={curSession?.type === 'group'} memberExpanded={memberExpanded} memberQuery={memberQuery}
+        memberSearch={memberSearch} memberTotal={memberTotal} open={groupInfoOpen}
+        setAnnExpanded={setAnnExpanded} setGroupInfoOpen={setGroupInfoOpen} setMemberExpanded={setMemberExpanded}
+        setMemberSearch={setMemberSearch} setProfileMember={setProfileMember} showMemberProfile={showMemberProfile}
+        shownMembers={shownMembers}
+      />
 
       {/* 单聊「聊天信息」抽屉（P2-6）：组件自带 private-only 守卫与数据获取。 */}
       <ChatsContactInfoView

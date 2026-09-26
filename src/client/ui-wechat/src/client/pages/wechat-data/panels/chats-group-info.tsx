@@ -9,6 +9,7 @@
 
 import { useId, useRef, useState } from 'react'
 import type { ChatlogRecord, GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
+import { filterMembers, memberLimitOf, memberQueryOf, profileAnchor } from './chats-member-view.ts'
 
 export interface useChatsGroupInfoInputs {
 }
@@ -37,10 +38,7 @@ const showMemberProfile = (m: GroupMember, el: HTMLElement): void => {
   if (profileHideTimer.current) clearTimeout(profileHideTimer.current)
   setProfileMember(m)
   const rect = el.getBoundingClientRect()
-  const width = 232
-  const left = rect.left - width - 10 >= 8 ? rect.left - width - 10 : rect.right + 10
-  const top = Math.max(8, Math.min(rect.top, window.innerHeight - 170))
-  setProfilePos({ left, top })
+  setProfilePos(profileAnchor({ left: rect.left, right: rect.right, top: rect.top }, window.innerHeight))
 }
 
 const hideMemberProfile = (): void => {
@@ -50,15 +48,10 @@ const hideMemberProfile = (): void => {
     setProfilePos(null)
   }, 150)
 }
-const memberQuery = memberSearch.trim().toLowerCase()
+const memberQuery = memberQueryOf(memberSearch)
 const memberTotal = groupInfo ? groupInfo.members.length : 0
-const filteredMembers = ((): GroupMember[] => {
-  if (!groupInfo) return []
-  if (!memberQuery) return groupInfo.members
-  return groupInfo.members.filter((m) =>
-    m.name.toLowerCase().includes(memberQuery) || m.username.toLowerCase().includes(memberQuery))
-})()
-const memberLimit = memberExpanded ? 200 : 24
+const filteredMembers = groupInfo ? filterMembers(groupInfo.members, memberQuery) : []
+const memberLimit = memberLimitOf(memberExpanded)
 const shownMembers = filteredMembers.slice(0, memberLimit)
 
   return { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers }

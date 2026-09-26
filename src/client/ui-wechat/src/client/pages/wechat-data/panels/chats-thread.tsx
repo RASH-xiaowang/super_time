@@ -175,7 +175,7 @@ const openGroupInfo = (): void => {
       const g = r.group
       setGroupInfo(g)
     })
-    .catch((e: unknown) => { setGroupInfoErr((e as Error).message) })
+    .catch((e: unknown) => { setGroupInfoErr((e as Error).message); setGroupInfo(null) }) // 失败也要清快照：留着就是「B 群的抽屉里挂着 A 群的人」
     .finally(() => { setGroupInfoLoading(false) })
 }
 
