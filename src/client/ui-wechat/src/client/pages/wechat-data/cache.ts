@@ -152,23 +152,80 @@ if (typeof window !== 'undefined') {
 }
 
 const RENDER_CACHE_PREFIX = 'wxdata-render-cache:'
+/**
+ * 渲染缓存的保质期（P2-5）。这一层是给「二次打开秒出图」用的，
+ * 不是给「离线可用」用的 —— 超过一天就宁可重新取一次，也不画昨天的会话列表。
+ */
+const RENDER_CACHE_TTL_MS = 24 * 60 * 60_000
+/** 单条上限：超过就不写（全量消息/朋友圈的快照动辄几 MB，而配额只有 5–10 MB）。 */
+const RENDER_CACHE_MAX_BYTES = 1_500_000
+/** 两种失败各播报一次（**分开**记：合成一条会把另一种也消音，测试就抓不到「配额满」那句）。 */
+let renderCacheOversizeNoted = false
+let renderCacheQuotaNoted = false
 
-/** Read the last successfully rendered snapshot for a panel (sync, instant paint). */
+/** 渲染缓存的信封：`at` 用于 TTL；旧版是裸值（没有信封）⇒ 判为过期，见下。 */
+interface RenderEnvelope { at: number; v: unknown }
+
+/**
+ * Read the last successfully rendered snapshot for a panel (sync, instant paint).
+ *
+ * P2-5 之前这里没有 TTL、也没有大小上限，而写失败是**静默**的：
+ * 一份大对象挤爆配额之后，症状是「某些面板的首屏加速莫名消失」，谁也查不到原因。
+ * 现在：过保质期就删掉当没有；旧版裸值（无法知道多旧）同样判过期；单条过大不写；
+ * 写失败时清掉本层的全部条目并 `console.info` 一次（本层的定位就是「可随时丢弃」，
+ * 与其零散留下半套旧数据，不如一次丢干净并说清楚）。
+ */
 export function readRenderCache<T>(key: string, ..._rest: T[]): T | null {
   if (typeof localStorage === 'undefined') return null
   try {
     const raw = localStorage.getItem(RENDER_CACHE_PREFIX + key)
-    return raw ? JSON.parse(raw) as T : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    const env = parsed as RenderEnvelope
+    if (env === null || typeof env !== 'object' || typeof env.at !== 'number' || !('v' in env)) {
+      // 旧格式（裸值）：没有写时间，无法判旧不旧 ⇒ 当过期丢掉，下一次写就是新格式
+      localStorage.removeItem(RENDER_CACHE_PREFIX + key)
+      return null
+    }
+    if (Date.now() - env.at > RENDER_CACHE_TTL_MS) {
+      localStorage.removeItem(RENDER_CACHE_PREFIX + key)
+      return null
+    }
+    return env.v as T
   } catch { /* 无缓存或损坏:走正常加载 */ }
   return null
 }
 
-/** Save a snapshot after a successful render (quota-safe: drops silently when full). */
+/** Save a snapshot after a successful render (quota-safe, with the failure made visible). */
 export function writeRenderCache(key: string, data: unknown): void {
   if (typeof localStorage === 'undefined') return
+  let payload = ''
   try {
-    localStorage.setItem(RENDER_CACHE_PREFIX + key, JSON.stringify(data))
-  } catch { /* 容量超限:放弃缓存,不影响主流程 */ }
+    payload = JSON.stringify({ at: Date.now(), v: data } satisfies RenderEnvelope)
+  } catch {
+    return /* 循环引用/BigInt 之类：这份数据本来就没法画第二次 */
+  }
+  if (payload.length > RENDER_CACHE_MAX_BYTES) {
+    if (!renderCacheOversizeNoted) {
+      renderCacheOversizeNoted = true
+      console.info(`[wxdata] 渲染缓存单条过大（${String(Math.round(payload.length / 1024))}KB > 上界），首屏加速对它关闭`)
+    }
+    return
+  }
+  try {
+    localStorage.setItem(RENDER_CACHE_PREFIX + key, payload)
+  } catch {
+    // 配额满：把这一层整个丢干净（它随时可丢），并说一次为什么首屏变慢了。
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith(RENDER_CACHE_PREFIX)) localStorage.removeItem(k)
+      }
+    } catch { /* 丢不掉也不能影响主流程 */ }
+    if (!renderCacheQuotaNoted) {
+      renderCacheQuotaNoted = true
+      console.info('[wxdata] localStorage 配额已满，已清空渲染缓存：面板首屏会慢一次')
+    }
+  }
 }
 
 // ── 本地缓存层：先渲染缓存，后台刷新后再写回，加速资源预加载 ──

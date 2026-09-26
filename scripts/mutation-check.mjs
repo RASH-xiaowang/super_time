@@ -596,6 +596,22 @@ const MUTATIONS = [
     to: "  if (pages > maxPages) return { pages: maxPages, feasible: true }",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/paged-list-refresh-gate.spec.ts",
   },
+  {
+    id: "M73-render-cache-ttl-off",
+    why: "去掉渲染缓存的 24 小时保质期（P2-5）—— 首屏秒出图会一直画昨天的数据，且过期条目永久占配额",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/cache.ts",
+    from: "    if (Date.now() - env.at > RENDER_CACHE_TTL_MS) {",
+    to: "    if (false) {",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/render-cache-ttl.spec.ts",
+  },
+  {
+    id: "M74-render-cache-size-cap-off",
+    why: "去掉单条大小上限（P2-5）—— 一份几 MB 的快照挤爆配额后，「某些面板首屏加速莫名消失」又变成查不到原因",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/cache.ts",
+    from: "  if (payload.length > RENDER_CACHE_MAX_BYTES) {",
+    to: "  if (false) {",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/render-cache-ttl.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)
