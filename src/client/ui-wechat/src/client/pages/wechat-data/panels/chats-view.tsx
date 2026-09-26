@@ -4,11 +4,11 @@
  *
  * 面板侧只剩 `const { … } = …`? 不 —— 面板仍然持有状态与副作用，这里只把**渲染**搬走：
  * 道具名与面板作用域里的名字完全相同 ⇒ JSX 逐行搬、面板侧一个对象字面量传进去。
- * 这样做的收益不是「少写几行」，而是：面板剩 ~1600 行时，**状态与老逻辑与渲染彻底分开**，
- * 下一步把逻辑搬进钩子时不必再动这棵树。
+ * 这样做的收益不是「少写几行」，而是：状态与老逻辑与渲染彻底分开之后，
+ * 每一屏（日历、消息行、导出弹窗…）能单独搬出去配行为用例，搬的时候不必再动这棵树。
  */
 import kitCss from '../ui/kit.module.css'
-import { DateRangeField, Dialog, ProgressBar, SearchInput, Segmented } from '../ui/kit.tsx'
+import { Dialog, SearchInput, Segmented } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
@@ -21,6 +21,8 @@ import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { LazyMount, ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
+import { ChatsExportDialog } from './chats-export-dialog.tsx'
+import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
 import { RainWindow } from './rain-window.tsx'
@@ -33,10 +35,10 @@ import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
 export interface ChatsViewProps {
-  /** 面板作用域里那批状态/回调（收成一个对象：调用点是 155 行道具字面量，太长）。 */
+  /** 面板作用域里那批状态/回调（收成一个对象：摊到调用点就是一百多行道具字面量）。 */
   state: {
       EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
-      EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
+      EXPO_TYPES: ReadonlyArray<ExpoType>
       aiEligible: boolean
       analysisPaneOpen: boolean
       setAnalysisPaneOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -86,7 +88,7 @@ export interface ChatsViewProps {
       expCount: number
       expDir: string
       expFilename: string
-      expFormat: 'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'
+      expFormat: ExpFormat
       expFrom: string
       expTo: string
       expTypes: readonly string[]
@@ -170,7 +172,7 @@ export interface ChatsViewProps {
       setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
       setExpCount: React.Dispatch<React.SetStateAction<number>>
       setExpFilename: React.Dispatch<React.SetStateAction<string>>
-      setExpFormat: React.Dispatch<React.SetStateAction<'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'>>
+      setExpFormat: React.Dispatch<React.SetStateAction<ExpFormat>>
       setExpFrom: React.Dispatch<React.SetStateAction<string>>
       setExpTo: React.Dispatch<React.SetStateAction<string>>
       setExpTypes: React.Dispatch<React.SetStateAction<readonly string[]>>
@@ -565,128 +567,15 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         onExport={() => { setContactInfoOpen(false); setExportOpen(true) }}
       />
 
-      {/* message export dialog (格式/类型/时间范围/文件名/目录) */}
-      {exportOpen && (
-        <div className={csscards.calOverlay} data-st-dialog="chats-export" onClick={(e) => { if (e.target === e.currentTarget) setExportOpen(false) }} role="dialog" aria-modal="true">
-          <div className={csscards.exportDialog}>
-            <div className={cssshell.calHeader}>
-              <span className={csscards.calTitle}>导出消息</span>
-              <button type="button" className={csscards.calClose} onClick={() => { setExportOpen(false) }}><IconCloseOutline16 size={15} /></button>
-            </div>
-            <div className={cssshell.exportBody}>
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>格式与内容</span>
-                  <span className={csscards.exportCountBadge}>{expTypes.length === 0 ? '全部消息' : `${expTypes.length} 类消息`}</span>
-                </div>
-                <div className={cssshell.exportField}>
-                  <span className={kitCss.textMeta}>文件格式</span>
-                  <div className={cssshell.exportFormatGrid}>
-                    {EXPO_FORMATS.map(f => (
-                      <button key={f.value} type="button" className={csscards.exportFormatCard}
-                        data-active={expFormat === f.value || undefined}
-                        onClick={() => { setExpFormat(f.value as typeof expFormat) }}>
-                        <span>{f.label}</span>
-                        <i className={csscards.exportRadio} data-active={expFormat === f.value || undefined} />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className={cssshell.exportField}>
-                  <span className={kitCss.textMeta}>导出条数</span>
-                  <div className={cssshell.exportChips}>
-                    {[10, 50, 100, 0].map(n => (
-                      <button key={String(n)} type="button" className={cssrows.exportChip} data-active={(expCount === n) || undefined}
-                        onClick={() => { setExpCount(n) }}>{n === 0 ? '全部' : String(n) + ' 条'}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className={cssshell.exportField}>
-                  <div className={cssshell.exportLabelRow}>
-                    <span className={kitCss.textMeta}>消息类型</span>
-                    <button type="button" className={csscards.exportLinkBtn}
-                      onClick={() => { setExpTypes(prev => prev.length > 0 ? [] : EXPO_TYPES.map(c => c.key)) }}>
-                      {expTypes.length > 0 ? '取消全选' : '全选'}
-                    </button>
-                  </div>
-                  <div className={cssshell.exportChips}>
-                    {EXPO_TYPES.map(c => (
-                      <button key={c.key} type="button" className={csscards.exportChipCheck}
-                        data-active={expTypes.includes(c.key) || undefined}
-                        onClick={() => { setExpTypes(prev => prev.includes(c.key) ? prev.filter(k => k !== c.key) : [...prev, c.key]) }}>
-                        <i className={csscards.exportCheck} data-active={expTypes.includes(c.key) || undefined}>{expTypes.includes(c.key) ? '✓' : ''}</i>
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>时间范围</span>
-                  <button type="button" className={csscards.exportLinkBtn} onClick={() => { setExpFrom(''); setExpTo('') }}>全部时间</button>
-                </div>
-                <div className={cssshell.exportRangeRow}>
-                  <DateRangeField
-                    from={expFrom}
-                    to={expTo}
-                    onFrom={setExpFrom}
-                    onTo={setExpTo}
-                    presets={['today', 'week', 'month', 'last-7', 'last-30']}
-                    ariaLabel="导出时间范围"
-                  />
-                </div>
-              </div>
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>导出文件名</span>
-                  <span className={cssshell.exportHint}>可选，留空时自动生成</span>
-                </div>
-                <input type="text" className={csscards.exportInput} placeholder="例如：微信聊天记录_2026-07-11"
-                  value={expFilename} onChange={(e) => { setExpFilename(e.target.value) }} />
-                <label className={cssshell.exportCheckbox}>
-                  <input type="checkbox" checked={expZip} onChange={(e) => { setExpZip(e.target.checked) }} />
-                  打包为 ZIP（含导出文件与 record_media.json）
-                </label>
-              </div>
-              <div className={cssshell.exportSection}>
-                <div className={cssshell.exportSectionHead}>
-                  <span className={csscards.exportSectionTitle}>保存目录</span>
-                </div>
-                <div className={csscards.exportDirBox} data-chosen={(!!expDir.trim()) || undefined}>
-                  <span className={cssshell.exportDirIcon}>📁</span>
-                  <div className={cssshell.exportDirInfo}>
-                    <span className={cssshell.exportDirTitle}>{expDir.trim() ? '已选择保存目录' : '尚未选择保存目录'}</span>
-                    <span className={kitCss.textCaptionTrunc}>{expDir.trim() ? expDir.trim() : '留空时导出到默认目录 ~/.dsh/wechat-data/exports'}</span>
-                  </div>
-                  <button type="button" className={csscards.exportBtn} onClick={() => { void chooseExportDir() }} disabled={pickingDir}>
-                    {'＋ ' + (pickingDir ? '选择中…' : '选择目录')}
-                  </button>
-                </div>
-              </div>
-              {/* 实时进度（M3）：后端按 jobId 推 `wechat-export/progress`，
-                  没有这一段时用户只有一个「导出中…」的按钮可以看，取消也无从下手。 */}
-              {exportProgress ? (
-                <div className={cssshell.exportField}>
-                  <ProgressBar value={exportProgress.total > 0 ? Math.min(100, (exportProgress.done / exportProgress.total) * 100) : 0} indeterminate={exportProgress.total <= 0} />
-                  <span className={kitCss.textCaptionTrunc}>
-                    {(exportProgress.phase || '导出中') + ' · ' + exportProgress.done + (exportProgress.total ? ' / ' + exportProgress.total : '')}
-                  </span>
-                </div>
-              ) : null}
-              <div className={cssshell.exportActions}>
-                <button type="button" className={csscards.exportBtnGhost} onClick={() => { setExportOpen(false) }}>取消</button>
-                {exporting ? (
-                  <button type="button" className={csscards.exportBtnGhost} onClick={cancelExport}>中止导出</button>
-                ) : null}
-                <button type="button" className={csscards.exportBtnPrimary} onClick={() => { void exportSession() }} disabled={exporting}>
-                  {exporting ? '导出中…' : '导出'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 导出消息弹窗：JSX 在 chats-export-dialog.tsx（同一屏的规则在那里逐条被用例钉住） */}
+      <ChatsExportDialog
+        EXPO_FORMATS={EXPO_FORMATS} EXPO_TYPES={EXPO_TYPES} cancelExport={cancelExport} chooseExportDir={chooseExportDir}
+        expCount={expCount} expDir={expDir} expFilename={expFilename} expFormat={expFormat} expFrom={expFrom} expTo={expTo}
+        expTypes={expTypes} expZip={expZip} exportOpen={exportOpen} exportProgress={exportProgress}
+        exportSession={exportSession} exporting={exporting} pickingDir={pickingDir}
+        setExpCount={setExpCount} setExpFilename={setExpFilename} setExpFormat={setExpFormat}
+        setExpFrom={setExpFrom} setExpTo={setExpTo} setExpTypes={setExpTypes} setExpZip={setExpZip} setExportOpen={setExportOpen}
+      />
 
       {/* merged chat log viewer (聊天记录, 支持嵌套) */}
       {chatlogOpen && (

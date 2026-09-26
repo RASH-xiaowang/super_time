@@ -11,8 +11,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiCancelExportJob, apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
 import type { ChatlogRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
+/**
+ * 导出的目标格式。
+ *
+ * 这个联合此前被**三处各写一遍**（这里的 state、`chats-view.tsx` 的道具类型两处），
+ * 加一种格式就得记住改三处 —— 与本仓「同一属性必须有同一个主人」同一条规矩。
+ */
+export type ExpFormat = 'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'
+
+/** 导出弹窗里「消息类型」那一张表的列定义（`EXPO_TYPES`）。 */
+export type ExpoType = { key: string; label: string; types?: readonly number[]; rich?: readonly string[] }
+
 export interface useChatsExportInputs {
-  EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
+  EXPO_TYPES: ReadonlyArray<ExpoType>
   chatlogResolving: boolean
   curSession: WechatSession | null
   setChatlogResolving: React.Dispatch<React.SetStateAction<boolean>>
@@ -94,7 +105,7 @@ const [exporting, setExporting] = useState(false)
 const [exportMsg, setExportMsg] = useState<string | null>(null)
 // export dialog state
 const [exportOpen, setExportOpen] = useState(false)
-const [expFormat, setExpFormat] = useState<'txt' | 'html' | 'md' | 'excel' | 'csv' | 'sql' | 'json'>('txt')
+const [expFormat, setExpFormat] = useState<ExpFormat>('txt')
 const [expCount, setExpCount] = useState(0)
 const [expDir, setExpDir] = useState('')
 const [expTypes, setExpTypes] = useState<readonly string[]>([])

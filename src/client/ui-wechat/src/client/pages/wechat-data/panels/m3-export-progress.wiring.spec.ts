@@ -58,8 +58,15 @@ describe('M3：导出进度与取消的接线', () => {
     expect(at, '导出对话框里没有进度条分支').toBeGreaterThan(-1)
     const blk = chats.slice(at, at + 500)
     expect(blk).toContain('<ProgressBar value=')
-    expect(blk).toMatch(/exportProgress\.total > 0/)
-    expect(blk).toContain('exportProgress.done / exportProgress.total')
+    expect(blk).toMatch(/exportProgress\.total <= 0/)
+    // 比值算式住在哪一行不重要（#19 第四刀把它收进了 `pctOf`），重要的是它仍是
+    // 「同一个进度的 done / total」并且封顶 100 —— 换成常量或假动画都不会有编译错误。
+    const pctAt = chats.indexOf('function pctOf')
+    expect(pctAt, '进度百分比的算法整个不见了').toBeGreaterThan(-1)
+    const body = chats.slice(pctAt, pctAt + 300)
+    expect(body).toContain('progress.total > 0')
+    expect(body).toContain('progress.done / progress.total')
+    expect(body).toContain('Math.min(100,')
   })
 
   /**
@@ -68,8 +75,9 @@ describe('M3：导出进度与取消的接线', () => {
    * 一根钉在 0 的空条在用户眼里就是卡死。两侧口径都要钉住。
    */
   it('总量未知时走不定量态，而不是钉在 0%', () => {
-    const view = readFileSync(join(HERE, 'chats-view.tsx'), 'utf8')
-    expect(view).toContain('indeterminate={exportProgress.total <= 0}')
+    // 读联合而不是 `chats-view.tsx`：这一段 JSX 已被 #19 第四刀搬进 `chats-export-dialog.tsx`，
+    // 按文件名死读会让这条守卫静默失去靶子（`chats-source.ts` 的注释记着这个坑）。
+    expect(chats).toContain('indeterminate={exportProgress.total <= 0}')
     const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
     expect(backup).toContain('indeterminate={encProgress.total <= 0}')
     const fields = readFileSync(join(HERE, '..', 'ui', 'kit-fields.tsx'), 'utf8')
