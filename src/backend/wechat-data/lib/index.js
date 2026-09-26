@@ -5868,6 +5868,8 @@ import { DatabaseSync as DatabaseSync17 } from "node:sqlite";
 import { existsSync as existsSync13 } from "node:fs";
 import { join as join20 } from "node:path";
 var CONTACT_FTS_META = "contact_rows";
+var CONTACT_FTS_SCHEMA = 2;
+var CONTACT_FTS_SCHEMA_META = "contact_fts_schema";
 function cellText2(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
@@ -5905,7 +5907,9 @@ function hitsFromRows(rows, roomName) {
 function contactFtsReady(db) {
   if (!tableExists(db, "meta") || !tableExists(db, "contact_fts")) return false;
   const row = db.prepare("SELECT value FROM meta WHERE key=?").get(CONTACT_FTS_META);
-  return row !== void 0 && Number(row.value ?? 0) > 0;
+  if (row === void 0 || Number(row.value ?? 0) <= 0) return false;
+  const v = db.prepare("SELECT value FROM meta WHERE key=?").get(CONTACT_FTS_SCHEMA_META);
+  return Number(v?.value ?? 0) === CONTACT_FTS_SCHEMA;
 }
 function buildContactFts(db, decryptedDir) {
   const contactPath = join20(decryptedDir, "contact", "contact.db");
@@ -5927,7 +5931,10 @@ function buildContactFts(db, decryptedDir) {
   }
   try {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias UNINDEXED, quanpin UNINDEXED, local_type UNINDEXED, tokenize='unicode61')");
+    if (tableExists(db, "contact_fts") && !contactFtsReady(db)) {
+      db.exec("DROP TABLE contact_fts");
+    }
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias, quanpin, local_type UNINDEXED, tokenize='unicode61')");
     db.exec("BEGIN");
     try {
       const ins = db.prepare("INSERT INTO contact_fts(name, username, remark, alias, quanpin, local_type) VALUES(?, ?, ?, ?, ?, 0)");
@@ -5945,6 +5952,7 @@ function buildContactFts(db, decryptedDir) {
       throw e;
     }
     db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run(CONTACT_FTS_META, String(rows.length));
+    db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run(CONTACT_FTS_SCHEMA_META, String(CONTACT_FTS_SCHEMA));
     return "ready";
   } catch (e) {
     console.warn("[members] contact_fts \u6784\u5EFA\u5931\u8D25\uFF0C\u672C\u6B21\u6210\u5458\u641C\u7D22\u56DE\u9000 LIKE\uFF1A" + e.message);
@@ -5969,8 +5977,9 @@ function searchGlobalMembers(decryptedDir, term, cap) {
         return searchGlobalLike(decryptedDir, term, cap);
       }
       if (state === "ready") {
-        const escaped = '"' + term.replace(/"/g, '""') + '"';
-        const rows = db.prepare("SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?").all(escaped, cap * 4);
+        const phrase = '"' + term.replace(/"/g, '""') + '"';
+        const match = `name:${phrase} OR alias:${phrase} OR quanpin:${phrase}`;
+        const rows = db.prepare("SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?").all(match, cap * 4);
         if (rows.length > 0) {
           const items = [];
           const cdbPath = join20(decryptedDir, "contact", "contact.db");

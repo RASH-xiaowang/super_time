@@ -59,8 +59,9 @@ export declare abstract class GatewayRead extends GatewayCore {
      * @param options - search term, optional limit and room scope.
      * @returns MemberSearchSnapshot: matching members (items + total + source).
      * 保留理由：界面暂无入口（全局搜索走 searchUnified），保留给宿主/后续的群成员选择器。
-     *   第 96 轮补上了群内路径漏掉的 `quan_pin`/`alias`（此前「按备注全拼在群里搜人」永远搜不到），
-     *   由 `scripts/check-members-search.js` 对着真实库把关。
+     *   第 96 轮补上了群内路径漏掉的 `quan_pin`/`alias`（此前「按备注全拼在群里搜人」永远搜不到）；
+     *   第 97 轮才发现 FTS 那条路径同样漏着（`contact_fts` 只有 `name` 可检索），且它才是默认路径。
+     *   把关：`wechat-data/tests/members-search-columns.spec.ts`。
      */
     searchMembers(options: {
         q: string;

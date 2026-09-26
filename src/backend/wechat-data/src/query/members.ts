@@ -14,6 +14,18 @@ import { searchIndexPath, withIndexWrite } from './search.ts'
 import type { MemberSearchHit, MemberSearchSnapshot } from '../types.ts'
 
 const CONTACT_FTS_META = 'contact_rows'
+/**
+ * `contact_fts` 的** schema 版本**。
+ *
+ * v1 只有 `name` 是可检索列（`username/remark/alias/quanpin` 全 UNINDEXED），
+ * 而 `name` 装的是 `remark ‖ nick_name ‖ username` —— 于是「按备注全拼 / 别名搜人」在
+ * **索引健康时永远搜不到**，只有降级走 LIKE 才搜得到（第 96 轮那次修复只补到了 LIKE 那两条 SQL，
+ * FTS 这条一直没补上）。同一句查询因索引在不在给出不同结果，比"两边都搜不到"更坏。
+ * v2 把 `alias` 与 `quanpin` 也建成可检索列，并在查询里显式点名这三列。
+ * 版本变了就把旧的派生表丢掉重建（索引库任何时候都可从 contact.db 重算，无需保留）。
+ */
+const CONTACT_FTS_SCHEMA = 2
+const CONTACT_FTS_SCHEMA_META = 'contact_fts_schema'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
 function cellText(v: unknown): string {
@@ -64,14 +76,18 @@ function hitsFromRows(rows: Array<Record<string, unknown>>, roomName?: string): 
 type ContactFtsState = 'ready' | 'busy' | 'unavailable'
 
 /**
- * contact_fts 是否已建好 —— **只读**判断（不建表、不写 meta）。
+ * contact_fts 是否已建好且**是当前 schema** —— 只读判断（不建表、不写 meta）。
  * @param db - 索引库连接。
- * @returns 索引存在且行数记录 > 0 时为 true。
+ * @returns 索引存在、行数记录 > 0 且 schema 版本对得上时为 true。
  */
 function contactFtsReady(db: DatabaseSync): boolean {
   if (!tableExists(db, 'meta') || !tableExists(db, 'contact_fts')) return false
   const row = db.prepare('SELECT value FROM meta WHERE key=?').get(CONTACT_FTS_META) as { value?: unknown } | undefined
-  return row !== undefined && Number(row.value ?? 0) > 0
+  if (row === undefined || Number(row.value ?? 0) <= 0) return false
+  // 旧 schema 的索引不算 ready：不这样判的话 v1 留下的表会一直被复用，
+  // 「按全拼搜人」仍旧只在降级路径里成立。
+  const v = db.prepare('SELECT value FROM meta WHERE key=?').get(CONTACT_FTS_SCHEMA_META) as { value?: unknown } | undefined
+  return Number(v?.value ?? 0) === CONTACT_FTS_SCHEMA
 }
 
 /** 在闸内建 contact_fts（DDL + 插入 + COMMIT）。@returns ready / unavailable。 */
@@ -92,7 +108,11 @@ function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'una
   }
   try {
     db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias UNINDEXED, quanpin UNINDEXED, local_type UNINDEXED, tokenize='unicode61')")
+    if (tableExists(db, 'contact_fts') && !contactFtsReady(db)) {
+      // 旧 schema 的表是派生数据，丢掉重建比「留着但搜不到」诚实。
+      db.exec('DROP TABLE contact_fts')
+    }
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS contact_fts USING fts5(name, username UNINDEXED, remark UNINDEXED, alias, quanpin, local_type UNINDEXED, tokenize='unicode61')")
     db.exec('BEGIN')
     try {
       const ins = db.prepare('INSERT INTO contact_fts(name, username, remark, alias, quanpin, local_type) VALUES(?, ?, ?, ?, ?, 0)')
@@ -107,6 +127,7 @@ function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'una
       throw e
     }
     db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(CONTACT_FTS_META, String(rows.length))
+    db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(CONTACT_FTS_SCHEMA_META, String(CONTACT_FTS_SCHEMA))
     return 'ready'
   } catch (e) {
     // 写失败（例如跨进程写锁）不再静默：留痕 + 由调用方回退 LIKE。
@@ -157,8 +178,13 @@ function searchGlobalMembers(decryptedDir: string, term: string, cap: number): M
         return searchGlobalLike(decryptedDir, term, cap)
       }
       if (state === 'ready') {
-        const escaped = '"' + term.replace(/"/g, '""') + '"'
-        const rows = db.prepare('SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?').all(escaped, cap * 4) as Array<Record<string, unknown>>
+        // 三列分别点名：`name`（备注‖昵称‖username）、`alias`（别名）、`quanpin`（备注全拼）。
+        // 只写 `"词"` 会退化成"只搜 name"，那正是 v1 搜不到全拼/别名的原因。
+        const phrase = '"' + term.replace(/"/g, '""') + '"'
+        const match = `name:${phrase} OR alias:${phrase} OR quanpin:${phrase}`
+        const rows = db.prepare('SELECT name, username, remark, alias FROM contact_fts WHERE contact_fts MATCH ? ORDER BY rank LIMIT ?').all(match, cap * 4) as Array<Record<string, unknown>>
+        // 空命中**不**直接返回空：FTS5 是整词匹配，半截全拼（"wangxiaomi"）在索引里天然命中不了，
+        // 得让 LIKE 兜一层，否则"装了索引"反而比没装搜得更少。代价是每次空命中多扫一遍 contact.db。
         if (rows.length > 0) {
           const items: MemberSearchHit[] = []
           const cdbPath = join(decryptedDir, 'contact', 'contact.db')
@@ -232,7 +258,11 @@ function searchRoomMembers(decryptedDir: string, roomUsername: string, term: str
       // 第 96 轮：这里原先只有 remark / nick_name / username，**漏了备注全拼 `quan_pin` 与别名 `alias`**，
       // 而全库那条路径（searchGlobalLike）两者都有 —— 结果是「按备注全拼在群里搜人」永远搜不到，
       // 全库搜却能搜到（同一类字段误用，藏在没人调用的路径里）。
-      // 由 scripts/check-members-search.js 对着真实库把关。
+      // 把关：`tests/members-search-columns.spec.ts`（三种列各自命中 + FTS 与 LIKE 结果一致 +
+      // 旧 schema 索引被识别并重建）。注：此处原先指向 `scripts/` 下一个**从未存在过**的检查脚本，
+      // 而它声称守着的 FTS 路径当时也确实没被任何用例碰过。
+      // 群内这条**只有 LIKE、没有 FTS 分支**，所以上面那处 v1「可检索列」缺陷与它无关 ——
+      // 别照着全库那条给这里"补索引"，这里要补的一向只是列清单。
       const sql = 'SELECT c.username, c.remark, c.nick_name, c.small_head_url, c.big_head_url, cr.username AS room FROM chatroom_member m JOIN contact c ON c.id=m.member_id JOIN chat_room cr ON cr.id=m.room_id WHERE m.room_id=? AND (c.remark LIKE ? OR c.nick_name LIKE ? OR c.username LIKE ? OR c.alias LIKE ? OR c.quan_pin LIKE ?) ORDER BY c.remark, c.nick_name LIMIT ?'
       const rows = db.prepare(sql).all(room.id, like, like, like, like, like, cap) as Array<Record<string, unknown>>
       return { items: hitsFromRows(rows, roomName), total: rows.length, source: 'like' }
