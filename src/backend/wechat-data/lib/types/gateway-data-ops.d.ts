@@ -28,7 +28,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * Privacy scan.
      * @returns PrivacySnapshot: privacy scan result.
      */
-    getPrivacyScan(): PrivacySnapshot;
+    getPrivacyScan(): Promise<PrivacySnapshot>;
     /**
      * Knowledge notes list of **one** knowledge base.
      *
@@ -277,7 +277,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         recordsKind?: string;
         dest?: string;
         category?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     /**
      * 读取导出历史（供「导出记录」弹窗）。
      * @param options - 搜索 / 种类筛选 / 状态筛选 / 时间范围 / 排序 / 分页。

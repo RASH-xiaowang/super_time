@@ -81,17 +81,18 @@ function makeFixture(tag: string, sessionCount: number): string {
 }
 
 /** 在一次调用期间数 sqlite 句柄的开合。 */
-function countOpens<T>(fn: () => T): { out: T; opens: number } {
+async function countOpens<T>(fn: () => T | Promise<T>): Promise<{ out: T; opens: number }> {
   const spy = vi.spyOn(DatabaseSync.prototype, 'close')
   const before = spy.mock.calls.length
-  const out = fn()
+  // 让出型查询要在 await 期间也算数，所以夹具自己也得是 async 的。
+  const out = await fn()
   return { out, opens: spy.mock.calls.length - before }
 }
 
 describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => {
-  it('开合数不随会话数增长（旧布局是「每张表把所在分片再开一遍」）', () => {
-    const few = countOpens(() => queryGraph(makeFixture('graph-few', 3), 'wxid_self'))
-    const many = countOpens(() => queryGraph(makeFixture('graph-many', 9), 'wxid_self'))
+  it('开合数不随会话数增长（旧布局是「每张表把所在分片再开一遍」）', async () => {
+    const few = await countOpens(() => queryGraph(makeFixture('graph-few', 3), 'wxid_self'))
+    const many = await countOpens(() => queryGraph(makeFixture('graph-many', 9), 'wxid_self'))
     console.log(`[算料] 3 会话 × 2 分片：开合 ${String(few.opens)} 次；9 会话 × 2 分片：开合 ${String(many.opens)} 次`)
     expect(many.opens, `会话从 3 涨到 9，句柄开合从 ${String(few.opens)} 涨到 ${String(many.opens)} ⇒ 又退回逐表开库`)
       .toBe(few.opens)
@@ -104,17 +105,17 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
       .toBe(9 * 5)
   })
 
-  it('第二次调用一次库都不开（签名没变 ⇒  cachedBySig 直接回同一份）', () => {
+  it('第二次调用一次库都不开（签名没变 ⇒  cachedBySig 直接回同一份）', async () => {
     const decrypted = makeFixture('graph-cached', 4)
-    const first = countOpens(() => queryGraph(decrypted, 'wxid_self'))
+    const first = await countOpens(() => queryGraph(decrypted, 'wxid_self'))
     expect(first.opens, '冷跑本该真的读库（0 说明夹具或计数坏了）').toBeGreaterThan(0)
-    const second = countOpens(() => queryGraph(decrypted, 'wxid_self'))
+    const second = await countOpens(() => queryGraph(decrypted, 'wxid_self'))
     expect(second.opens, '同样的数据第二次还要开库 ⇒ 后端缓存没生效（审查基线：热跑 795ms）')
       .toBe(0)
     expect(second.out.nodes).toEqual(first.out.nodes)
   })
 
-  it('数据变了签名就变：不许出现「缓存挡住了新消息」', () => {
+  it('数据变了签名就变：不许出现「缓存挡住了新消息」', async () => {
     const decrypted = makeFixture('graph-fresh', 2)
     expect(queryGraph(decrypted, 'wxid_self').nodes.reduce((a, n) => a + (n.msg_count ?? 0), 0)).toBe(2 * 5)
     // 往**第一个**分片给其中一个会话追加 3 行（file-first 计数的就是这片；大小与 mtime 都会变）
@@ -131,7 +132,7 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
 
 describe('queryPrivacyScan：正则外提 + 后端签名缓存', () => {
   /** 把 `RegExp` 构造换成计数器（正则**字面量**不走构造器，所以量到的就是运行期重编译）。 */
-  function regexBuildsWhile<T>(fn: () => T): { out: T; built: number } {
+  async function regexBuildsWhile<T>(fn: () => T | Promise<T>): Promise<{ out: T; built: number }> {
     const Real = RegExp
     let built = 0
     class Counting extends Real {
@@ -141,33 +142,33 @@ describe('queryPrivacyScan：正则外提 + 后端签名缓存', () => {
       }
     }
     vi.stubGlobal('RegExp', Counting as unknown as RegExpConstructor)
-    const out = fn()
+    const out = await fn()
     vi.unstubAllGlobals()
     return { out, built }
   }
 
-  it('扫描期间不再逐行编译正则（旧写法是「每行 × 每个不敏感类别」一次）', () => {
+  it('扫描期间不再逐行编译正则（旧写法是「每行 × 每个不敏感类别」一次）', async () => {
     const decrypted = makeFixture('privacy-regex', 3)
-    const r = regexBuildsWhile(() => queryPrivacyScan(decrypted, 100000))
+    const r = await regexBuildsWhile(async () => queryPrivacyScan(decrypted, 100000))
     // 3 会话 × 2 片 × 5 行 = 30 行；旧写法在这里会编译 30 × 2（email+password）= 60 次
     expect(r.out.categories.find(c => c.key === 'email')?.count, '夹具本身必须真的命中邮箱（否则这条判据是空的）')
       .toBeGreaterThan(0)
     expect(r.built, `扫描过程中编译了 ${String(r.built)} 个正则 ⇒ 又回到每行 new RegExp`).toBe(0)
   })
 
-  it('第二次调用一次库都不开（热跑从 ~1000ms 到 0ms）', () => {
+  it('第二次调用一次库都不开（热跑从 ~1000ms 到 0ms）', async () => {
     const decrypted = makeFixture('privacy-cached', 3)
-    const first = countOpens(() => queryPrivacyScan(decrypted, 100000))
+    const first = await countOpens(async () => queryPrivacyScan(decrypted, 100000))
     expect(first.opens, '冷跑本该真的读库').toBeGreaterThan(0)
-    const second = countOpens(() => queryPrivacyScan(decrypted, 100000))
+    const second = await countOpens(async () => queryPrivacyScan(decrypted, 100000))
     expect(second.opens, '同样的数据第二次还开库 ⇒ 后端没缓存（审查基线：热跑 ~1000ms）').toBe(0)
     expect(second.out.total_hits).toBe(first.out.total_hits)
   })
 
-  it('rowBudget 进键：不同预算不互相污染', () => {
+  it('rowBudget 进键：不同预算不互相污染', async () => {
     const decrypted = makeFixture('privacy-budget', 3)
-    const small = queryPrivacyScan(decrypted, 1)
-    const big = queryPrivacyScan(decrypted, 100000)
+    const small = await queryPrivacyScan(decrypted, 1)
+    const big = await queryPrivacyScan(decrypted, 100000)
     expect(small.total_hits, '预算 1 行的命中数该远小于不限').toBeLessThan(big.total_hits)
     expect(big.involved_sessions).toBeGreaterThan(0)
   })

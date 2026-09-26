@@ -53,7 +53,7 @@ export function createOpsLogRemotes(rc: createOpsLogRemotesInputs) {
       }
     },
 
-    getPrivacyScan(): PrivacySnapshot {
+    async getPrivacyScan(): Promise<PrivacySnapshot> {
       return queryPrivacyScan(rc.dirs().decrypted)
     },
 

@@ -276,13 +276,13 @@ export async function exportSessionMessagesStreamed(
  * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export function exportCsv(
+export async function exportCsv(
   decryptedDir: string,
   kind: string,
   recordsKind?: string,
   dest?: string,
   category?: string,
-): { path: string; filename: string; count: number } {
+): Promise<{ path: string; filename: string; count: number }> {
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/[-:]/g, '')
   const stamp = now.slice(0, 8) + '_' + now.slice(9)
   let header: string[] = []
@@ -330,7 +330,7 @@ export function exportCsv(
     }
   } else if (kind === 'privacy') {
     header = ['类别', '会话', '联系人', '时间', '片段']
-    const env = queryPrivacyScan(decryptedDir)
+    const env = await queryPrivacyScan(decryptedDir)
     for (const c of env.categories) {
       for (const s of c.samples) {
         rows.push([c.label, s.username, s.name, s.time, s.snippet])

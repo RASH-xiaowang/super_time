@@ -7,8 +7,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySig, fileSigOf, shardCatalogSig } from './meta.ts'
-import { withDb } from './db-open.ts'
+import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { withDb, withDbAsync } from './db-open.ts'
+import { yieldToLoop } from './search-build.ts'
 
 interface PrivacyCategory { key: string; label: string; count: number; icon: string; samples: PrivacySample[] }
 interface PrivacySample { username: string; name: string; local_id: number; ts: number; time: string; snippet: string }
@@ -119,7 +120,7 @@ function decodeCell(v: unknown): string {
  * @param rowBudget - max scanned rows (default 600000, source budget).
  * @returns categories with samples + rankings.
  */
-export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): PrivacyScanResult {
+export async function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): Promise<PrivacyScanResult> {
   // 签名 = 消息分片目录 + 会话库 + 通讯录库（`rowBudget` 进键，不同预算不互相污染）。
   // 这一层是「热跑也要 1 秒」的直接解药：扫描本身是 60 万行的量级，
   // 界面每次打开隐私体检都重跑一遍毫无意义 —— 数据没变就拿同一份结果。
@@ -128,10 +129,16 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): Priv
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
   ].join('|')
-  return cachedBySig('privacy-scan:' + decryptedDir + '|' + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget))
+  return cachedBySigAsync('privacy-scan:' + decryptedDir + '|' + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget))
 }
 
-function computePrivacyScan(decryptedDir: string, rowBudget: number): PrivacyScanResult {
+/**
+ * 隐私扫描每多少行让出一次（P1-2）。
+ * 导出给守卫用例**按这个数造数据**：判据量的是「让出次数」，不能依赖墙上时钟。
+ */
+export const PRIVACY_YIELD_EVERY_ROWS = 5000
+
+async function computePrivacyScan(decryptedDir: string, rowBudget: number): Promise<PrivacyScanResult> {
   const msgDir = join(decryptedDir, 'message')
   const categories: PrivacyCategory[] = CATEGORIES.map(c => ({ key: c.key, label: c.label, count: 0, icon: c.icon, samples: [] }))
   const hitsByKey = new Map<string, PrivacySample[]>()
@@ -149,6 +156,8 @@ function computePrivacyScan(decryptedDir: string, rowBudget: number): PrivacySca
     for (const username of targetUsernames) tableToUser.set('Msg_' + createHash('md5').update(username, 'utf8').digest('hex'), username)
     const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
     for (const file of shards) {
+      // P1-2：探测阶段每个分片开一次库，也要在分片之间让出（实测机器上 80+ 个分片）。
+      await yieldToLoop()
       try {
         withDb(join(msgDir, file), (probe) => {
           const names = (probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all() as Array<{ name: string }>).map(r => r.name)
@@ -164,9 +173,11 @@ function computePrivacyScan(decryptedDir: string, rowBudget: number): PrivacySca
     for (const fi of fileInfos) {
       if (scanned >= rowBudget) break
       try {
-        withDb(fi.path, (db) => {
+        await withDbAsync(fi.path, async (db) => {
         for (const [tableName, username] of fi.tables) {
           if (scanned >= rowBudget) break
+          // 每张 Msg_ 表一次游标扫描 —— 表之间先让一次（几百张表 ⇒ 几百次让出）。
+          await yieldToLoop()
           try {
             const cols = new Set((db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map(r => r.name))
             if (!cols.has('local_id') || !cols.has('create_time') || !cols.has('message_content')) continue
@@ -177,6 +188,8 @@ function computePrivacyScan(decryptedDir: string, rowBudget: number): PrivacySca
             const sql = `SELECT local_id, create_time, message_content FROM ${tableName} WHERE ${typeCol}=1`
             for (const r of db.prepare(sql).iterate() as Iterable<{ local_id?: number; create_time?: number; message_content?: unknown }>) {
               scanned += 1
+              // 行级让出：单张大表（几十万人聊天的一年记录）光靠表边界是不够的。
+              if (scanned % PRIVACY_YIELD_EVERY_ROWS === 0) await yieldToLoop()
               if (scanned >= rowBudget) break
               const text = decodeCell(r.message_content)
               if (!text || text.startsWith('<')) continue

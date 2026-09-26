@@ -91,7 +91,7 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         recordsKind?: string;
         dest?: string;
         category?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot;
     deleteExportHistory(options: {
         ids: number[];

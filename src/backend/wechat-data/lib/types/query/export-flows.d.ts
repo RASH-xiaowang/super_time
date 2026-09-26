@@ -99,11 +99,11 @@ export declare function exportSessionMessagesStreamed(decryptedDir: string, opti
  * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string, dest?: string, category?: string): {
+export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string, dest?: string, category?: string): Promise<{
     path: string;
     filename: string;
     count: number;
-};
+}>;
 /** 安全字符串化。 */
 export declare function strOf(v: unknown): string;
 /** 百分比字符串。 */

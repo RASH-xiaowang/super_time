@@ -874,4 +874,28 @@ export const MUTATIONS = [
     to: "      if (false) db.close()\n    } catch { /* 同上：不掩盖原始错误 */ }",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
+  {
+    id: "M111-privacy-stops-yielding-between-shards",
+    why: "隐私体检的探测阶段（每分片开一次库）不再让出：80+ 个分片连开就是几十秒的独占",
+    file: "src/backend/wechat-data/src/query/privacy.ts",
+    from: "      await yieldToLoop()\n      try {\n        withDb(join(msgDir, file)",
+    to: "      try {\n        withDb(join(msgDir, file)",
+    spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
+  },
+  {
+    id: "M112-privacy-stops-yielding-between-tables",
+    why: "扫描阶段每表一次的让出被删：一个分片里几百张 Msg_ 表又变回一口气扫完",
+    file: "src/backend/wechat-data/src/query/privacy.ts",
+    from: "          await yieldToLoop()",
+    to: "          // 不让出",
+    spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
+  },
+  {
+    id: "M113-privacy-stops-yielding-per-rows",
+    why: "行级让出关掉：单张几十万行的表仍然把循环钉死（分片/表边界救不了它）",
+    file: "src/backend/wechat-data/src/query/privacy.ts",
+    from: "              if (scanned % PRIVACY_YIELD_EVERY_ROWS === 0) await yieldToLoop()",
+    to: "              if (false) await yieldToLoop()",
+    spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
+  },
 ]

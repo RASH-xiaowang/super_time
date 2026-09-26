@@ -614,7 +614,7 @@ _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
 ### `exportCsv`
 
 ```ts
-exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult
+async exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<ExportResult>
 ```
 
 Export a CSV table. when kind=records; `dest` = the full target path the user picked in the save dialog (falls back to `<dataRoot>/exports/` when omitted); `category` narrows kind=contacts to one category so the file matches what the panel is showing.
@@ -1241,7 +1241,7 @@ _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
 ### `getPrivacyScan`
 
 ```ts
-getPrivacyScan(): PrivacySnapshot
+async getPrivacyScan(): Promise<PrivacySnapshot>
 ```
 
 Privacy scan.

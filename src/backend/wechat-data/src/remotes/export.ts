@@ -262,10 +262,10 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       }
     },
 
-    exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
+    async exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<ExportResult> {
       const label = CSV_KIND_LABEL[options.kind] ?? options.kind
       try {
-        const r = exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category)
+        const r = await exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category)
         rc.op('export', 'export_csv', 'ok', options.kind, `共 ${r.count} 行`)
         rc.recordExport({
           kind: options.kind,

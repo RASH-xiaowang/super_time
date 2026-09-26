@@ -48,7 +48,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns PrivacySnapshot: privacy scan result.
    */
   @Remote('getPrivacyScan')
-  getPrivacyScan(): PrivacySnapshot {
+  async getPrivacyScan(): Promise<PrivacySnapshot> {
     return this.opsLogRemotes().getPrivacyScan()
   }
 
@@ -321,7 +321,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns ExportResult (path + filename + row count).
    */
   @Remote('exportCsv')
-  exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
+  async exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<ExportResult> {
   return this.exportRemotes().exportCsv(options)
   }
 

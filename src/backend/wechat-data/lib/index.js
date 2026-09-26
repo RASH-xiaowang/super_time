@@ -13315,15 +13315,16 @@ function decodeCell9(v) {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" || typeof v === "symbol") return String(v);
   return "";
 }
-function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
+async function queryPrivacyScan(decryptedDir, rowBudget = 6e5) {
   const sig = [
     shardCatalogSig(decryptedDir, ["message"]),
     fileSigOf(join56(decryptedDir, "session", "session.db")),
     fileSigOf(join56(decryptedDir, "contact", "contact.db"))
   ].join("|");
-  return cachedBySig("privacy-scan:" + decryptedDir + "|" + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget));
+  return cachedBySigAsync("privacy-scan:" + decryptedDir + "|" + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget));
 }
-function computePrivacyScan(decryptedDir, rowBudget) {
+var PRIVACY_YIELD_EVERY_ROWS = 5e3;
+async function computePrivacyScan(decryptedDir, rowBudget) {
   const msgDir = join56(decryptedDir, "message");
   const categories = CATEGORIES2.map((c) => ({ key: c.key, label: c.label, count: 0, icon: c.icon, samples: [] }));
   const hitsByKey = /* @__PURE__ */ new Map();
@@ -13339,6 +13340,7 @@ function computePrivacyScan(decryptedDir, rowBudget) {
     for (const username of targetUsernames) tableToUser.set("Msg_" + createHash18("md5").update(username, "utf8").digest("hex"), username);
     const fileInfos = [];
     for (const file of shards) {
+      await yieldToLoop();
       try {
         withDb(join56(msgDir, file), (probe) => {
           const names2 = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all().map((r) => r.name);
@@ -13355,9 +13357,10 @@ function computePrivacyScan(decryptedDir, rowBudget) {
     for (const fi of fileInfos) {
       if (scanned >= rowBudget) break;
       try {
-        withDb(fi.path, (db) => {
+        await withDbAsync(fi.path, async (db) => {
           for (const [tableName, username] of fi.tables) {
             if (scanned >= rowBudget) break;
+            await yieldToLoop();
             try {
               const cols = new Set(db.prepare(`PRAGMA table_info(${tableName})`).all().map((r) => r.name));
               if (!cols.has("local_id") || !cols.has("create_time") || !cols.has("message_content")) continue;
@@ -13365,6 +13368,7 @@ function computePrivacyScan(decryptedDir, rowBudget) {
               const sql = `SELECT local_id, create_time, message_content FROM ${tableName} WHERE ${typeCol}=1`;
               for (const r of db.prepare(sql).iterate()) {
                 scanned += 1;
+                if (scanned % PRIVACY_YIELD_EVERY_ROWS === 0) await yieldToLoop();
                 if (scanned >= rowBudget) break;
                 const text = decodeCell9(r.message_content);
                 if (!text || text.startsWith("<")) continue;
@@ -13448,7 +13452,7 @@ function createOpsLogRemotes(rc) {
         throw e;
       }
     },
-    getPrivacyScan() {
+    async getPrivacyScan() {
       return queryPrivacyScan(rc.dirs().decrypted);
     }
   };
@@ -27153,7 +27157,7 @@ async function exportSessionMessagesStreamed(decryptedDir, options) {
   }
   return { path: plan.outPath, filename: plan.filenameOut, count: msgs.length };
 }
-function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
+async function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
   const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ").replace(/[-:]/g, "");
   const stamp = now.slice(0, 8) + "_" + now.slice(9);
   let header = [];
@@ -27196,7 +27200,7 @@ function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
     }
   } else if (kind === "privacy") {
     header = ["\u7C7B\u522B", "\u4F1A\u8BDD", "\u8054\u7CFB\u4EBA", "\u65F6\u95F4", "\u7247\u6BB5"];
-    const env = queryPrivacyScan(decryptedDir);
+    const env = await queryPrivacyScan(decryptedDir);
     for (const c of env.categories) {
       for (const s of c.samples) {
         rows.push([c.label, s.username, s.name, s.time, s.snippet]);
@@ -27685,10 +27689,10 @@ function createExportRemotes(rc) {
         throw e;
       }
     },
-    exportCsv(options) {
+    async exportCsv(options) {
       const label = CSV_KIND_LABEL[options.kind] ?? options.kind;
       try {
-        const r = exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category);
+        const r = await exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category);
         rc.op("export", "export_csv", "ok", options.kind, `\u5171 ${r.count} \u884C`);
         rc.recordExport({
           kind: options.kind,
@@ -30074,7 +30078,7 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
   getWechatConfig() {
     return this.configRemotes().getWechatConfig();
   }
-  getPrivacyScan() {
+  async getPrivacyScan() {
     return this.opsLogRemotes().getPrivacyScan();
   }
   getNotes(kbId, options) {
@@ -30134,7 +30138,7 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
   async exportMoments(options) {
     return this.exportRemotes().exportMoments(options);
   }
-  exportCsv(options) {
+  async exportCsv(options) {
     return this.exportRemotes().exportCsv(options);
   }
   getExportHistory(options) {

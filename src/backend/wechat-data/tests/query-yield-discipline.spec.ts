@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { withDb, withDbAsync } from '../src/query/db-open.ts'
 import { cachedBySigAsync } from '../src/query/meta.ts'
+import { queryPrivacyScan, PRIVACY_YIELD_EVERY_ROWS } from '../src/query/privacy.ts'
 import { queryOverviewInsights, SNS_YIELD_EVERY_ROWS } from '../src/query/overview-insights.ts'
 
 const scratch: string[] = []
@@ -44,7 +45,15 @@ afterEach(() => {
 
 const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex')
 
-/** 与查询并发跑的 setImmediate 探针；`stop()` 返回它拿到的 tick 数。 */
+/**
+ * 与查询并发跑的 `setImmediate` 探针；`stop()` 返回它拿到的 tick 数。
+ *
+ * **为什么这个数是结构性的、不是掐表**：探针每轮排一个 `setImmediate`，
+ * 而让出点用的也是 `setImmediate` ⇒ 队列里最多排着探针的**一个**回调；
+ * 于是「一次让出 = 一个 tick」，再加开始时的一个 ⇒ `ticks == 让出次数 + 1`（实测如此）。
+ * 所以断言的下界就取「让出次数 + 1」：**少任何一处让出都会直接掉下界**，
+ * 不需要（也不应该）依赖墙上时钟或机器快慢。
+ */
 function tickProbe(): () => number {
   let ticks = 0
   let stop = false
@@ -85,8 +94,8 @@ describe('总览分析必须让出事件循环', () => {
     const ticks = stop()
     expect(r.messages.total, '夹具没真的跑出统计 ⇒ 下面的让出判断是空转').toBeGreaterThan(0)
     console.log(`[算料|yield] 2 分片 × 2000 行：探针 ticks=${String(ticks)}`)
-    expect(ticks, '一次都没让出 = 这条查询把事件循环从头钉到尾（排队放大器的本体）')
-      .toBeGreaterThanOrEqual(2)
+    // 让出点 = 2 个分片边界 ⇒ 下界 3。少一处就掉到 2。
+    expect(ticks, '一次都没让出 = 这条查询把事件循环从头钉到尾（排队放大器的本体）').toBeGreaterThanOrEqual(3)
   })
 
   it('单分片但朋友圈行数超过一档 ⇒ 行级让出也真的发生', async () => {
@@ -104,9 +113,9 @@ describe('总览分析必须让出事件循环', () => {
     const ticks = stop()
     expect(r.moments.total, `朋友圈夹具没读到 ${String(SNS_YIELD_EVERY_ROWS + 1)} 行`).toBe(SNS_YIELD_EVERY_ROWS + 1)
     console.log(`[算料|yield] 1 分片 + ${String(SNS_YIELD_EVERY_ROWS + 1)} 条朋友圈：探针 ticks=${String(ticks)}`)
-    // 分片 1 次 + 行级至少 2 次（满一档 + 收尾那次），所以 3 是下界。
+    // 让出点 = 1 个分片边界 + 满一档 1 次 + 收尾 1 次 = 3 ⇒ 下界 4。
     expect(ticks, '只有分片边界让出、整表扫一口气跑完 ⇒ 大账号仍然会钉住循环')
-      .toBeGreaterThanOrEqual(3)
+      .toBeGreaterThanOrEqual(4)
   })
 
   it('坏掉的朋友圈库：让出之后照样关得掉（读过的文件删得掉 = 没漏句柄）', async () => {
@@ -202,20 +211,58 @@ describe('cachedBySigAsync：命中、合流与失败', () => {
   })
 })
 
+describe('隐私体检也要让出（同一族：60 万行量级的整表扫）', () => {
+  /**
+   * 造一个「两个消息分片 + 一个会话」的数据根。
+   * 表名必须是 `Msg_<md5(username)>`（隐私扫描按会话用户名反查表名），
+   * 否则 `fileInfos` 是空的 —— 那样只剩分片边界的让出，行级判据就成空转了。
+   */
+  function makePrivacyTree(rowsByShard: number[]): string {
+    const dir = mkdtempSync(join(tmpdir(), 'yield-priv-'))
+    scratch.push(dir)
+    const dec = join(dir, 'decrypted')
+    mkdirSync(join(dec, 'message'), { recursive: true })
+    mkdirSync(join(dec, 'session'), { recursive: true })
+    const table = 'Msg_' + md5('wxid_a')
+    const sdb = new DatabaseSync(join(dec, 'session', 'session.db'))
+    sdb.exec('CREATE TABLE SessionTable (username TEXT)')
+    sdb.prepare('INSERT INTO SessionTable VALUES (?)').run('wxid_a')
+    sdb.close()
+    rowsByShard.forEach((rows, i) => {
+      const db = new DatabaseSync(join(dec, 'message', `message_${String(i)}.db`))
+      db.exec(`CREATE TABLE ${table} (local_id INTEGER, create_time INTEGER, local_type INTEGER, message_content TEXT)`)
+      const ins = db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?)`)
+      for (let k = 0; k < rows; k += 1) ins.run(k + 1, 1_700_000_000 + k, 1, '邮箱 a1@ex.com')
+      db.close()
+    })
+    return dec
+  }
+
+  it('分片之间 + 每张表 + 每 5000 行，三类让出都真的发生', async () => {
+    const dec = makePrivacyTree([PRIVACY_YIELD_EVERY_ROWS + 1, 5])
+    const stop = tickProbe()
+    const r = await queryPrivacyScan(dec, 1_000_000)
+    const ticks = stop()
+    expect(r.total_hits, '夹具没真的扫到命中 ⇒ 下面的让出判断是空转').toBeGreaterThan(0)
+    console.log(`[算料|yield] 隐私体检 2 分片（${String(PRIVACY_YIELD_EVERY_ROWS + 1)} + 5 行）：探针 ticks=${String(ticks)}`)
+    // 让出点 = 探测 2 次（每分片）+ 扫描 2 次（每表）+ 行级 1 次（5001 行满一档）= 5 ⇒ 下界 6。
+    expect(ticks, '三类让出点（分片 / 每表 / 每 5000 行）少任何一处都会掉到 6 以下')
+      .toBeGreaterThanOrEqual(6)
+  })
+})
+
 /**
- * #11 的**剩余清单**：P1-2 点名五个模块，本轮只收了总览这一个（它有实测的 54 秒）。
+ * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览与隐私体检两个。
  * 写成判据而不是备忘：这五个里谁先加了让出，就必须从这里删一条 —— 只能变小。
  */
 const STILL_SYNC_ONLY = [
-  'query/privacy.ts',
   'query/graph.ts',
   'query/ledger.ts',
   'query/storage.ts',
 ]
 
 describe('P1-2 剩余站点（棘轮：只能变小）', () => {
-  it('未让出的模块确实还没有 yieldToLoop；清单外的模块不许偷偷加回来', () => {
-    const src = join(import.meta.dirname, '..', 'src', 'query')
+  it('未让出的模块确实还没有 yieldToLoop；清单外的模块不许偷偷加回来', () => {    const src = join(import.meta.dirname, '..', 'src', 'query')
     const still = STILL_SYNC_ONLY.filter((rel) => !readFileSync(join(src, rel.split('/').pop() as string), 'utf8').includes('yieldToLoop'))
     console.log(`[算料|yield] P1-2 还没让出的模块：${String(still.length)} / ${String(STILL_SYNC_ONLY.length)} —— ${still.join(', ') || '（无）'}`)
     expect(still, '有模块已经改成让出了 ⇒ 把它从 STILL_SYNC_ONLY 里删掉（清单只许变小）').toEqual(STILL_SYNC_ONLY)

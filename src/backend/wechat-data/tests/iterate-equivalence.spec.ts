@@ -60,7 +60,7 @@ function seedMessages(dec: string, rows: Array<{ text: string; type?: number; ts
 }
 
 describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）', () => {
-  it('逐行计数正确：命中数 / 涉及会话数 / 联系人排名', () => {
+  it('逐行计数正确：命中数 / 涉及会话数 / 联系人排名', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [
       { text: '手机 13800138000' },
@@ -72,7 +72,7 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
       { text: '这是 local_type=47 的行，不该被扫', type: 47 },
     ], [USER, 'wxid_b'])
 
-    const r = queryPrivacyScan(dec)
+    const r = await queryPrivacyScan(dec)
     const byKey = new Map(r.categories.map((c) => [c.key, c.count]))
     expect(byKey.get('phone'), '三行手机号 → 3 次（同一行两个号码只算一次）').toBe(3)
     expect(byKey.get('email')).toBe(1)
@@ -83,7 +83,7 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
     expect(r.top_contacts[0]).toMatchObject({ username: USER, count: 4 })
   })
 
-  it('rowBudget 真正成为**读取**上界（改前是「先物化全表再 break」）', () => {
+  it('rowBudget 真正成为**读取**上界（改前是「先物化全表再 break」）', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [
       { text: '手机 13800138000' },
@@ -91,9 +91,9 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
       { text: '手机 13700137000' },
     ])
     // 步进语义：scanned 先自增再判断，所以 budget=1 → 一行都不处理
-    expect(queryPrivacyScan(dec, 1).total_hits).toBe(0)
-    expect(queryPrivacyScan(dec, 2).total_hits).toBe(1)
-    expect(queryPrivacyScan(dec, 100).total_hits).toBe(3)
+    expect((await queryPrivacyScan(dec, 1)).total_hits).toBe(0)
+    expect((await queryPrivacyScan(dec, 2)).total_hits).toBe(1)
+    expect((await queryPrivacyScan(dec, 100)).total_hits).toBe(3)
   })
 })
 
