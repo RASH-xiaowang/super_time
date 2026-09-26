@@ -532,6 +532,22 @@ const MUTATIONS = [
     to: "  for (const sh of shardCatalog(decryptedDir)) {\n    for (const t of sh.tables.keys()) {\n      const u = tableToUser.get(t)\n      if (!u || counts.has(u)) continue\n      let db: DatabaseSync | null = null\n      try { db = new DatabaseSync(sh.file, { readOnly: true }) } catch { continue }\n      try {\n        counts.set(u, (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n)\n      } catch { /* next table */ } finally {\n        db.close()\n      }\n    }\n  }\n",
     spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
   },
+  {
+    id: "M65-exec-ext-check-removed",
+    why: "去掉「可执行/脚本扩展名一律不打开」这一条（P2-6）—— 根内的 .exe 又能被 Invoke-Item 直接执行",
+    file: "src/backend/wechat-data/src/query/path-policy.ts",
+    from: "  if (ext !== '' && EXECUTABLE_EXTS.has(ext)) {\n    return `出于安全不打开可执行文件（${ext}）：请只在资源管理器里定位数据文件`\n  }",
+    to: "  // 变异：去掉可执行扩展名的拦截",
+    spec: "src/backend/wechat-data/tests/path-policy.spec.ts",
+  },
+  {
+    id: "M66-openpath-policy-not-applied",
+    why: "让网关的 openPath 不再走路径政策（政策函数还在、没人调用）—— 就是审查那条「限根只写在文档里」的形状",
+    file: "src/backend/wechat-data/src/gateway-read.ts",
+    from: "    const denial = openDenialReason(p, dataRoot)",
+    to: "    const denial: string | null = null\n    void openDenialReason\n    void dataRoot",
+    spec: "src/backend/wechat-data/tests/path-policy.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)

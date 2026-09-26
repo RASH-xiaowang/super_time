@@ -13,6 +13,7 @@ import { getDbStatus } from '../query/status.ts'
 import { migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
 import { AutoDbKeyResult, ConfigSnapshot, DbHealthSnapshot, DbStatusSnapshot, DecryptStatus, GenerateKeysResult, KeysInfoResult, OperationCategory, OperationStatus, SimpleResult, WechatConfigFull, WechatConfigPatch } from '../types.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
+import { openDenialReason } from '../query/path-policy.ts'
 import { join } from 'node:path'
 
 export interface createConfigRemotesInputs {
@@ -85,13 +86,19 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
       return res
     },
 
-    async openConfig(signal: AbortSignal): Promise<{ ok: boolean; path: string }> {
-      const p = join(rc.dirs().decrypted, '..', 'config.json')
+    async openConfig(signal: AbortSignal): Promise<{ ok: boolean; path: string; error?: string }> {
+      const dataRoot = join(rc.dirs().decrypted, '..')
+      const p = join(dataRoot, 'config.json')
+      // 这个路径是**算出来的**（数据根下的 config.json），不是渲染层给的字符串，
+      // 所以政策检查在这里近乎恒过 —— 留着它是因为 `openNativePath` 的语义是「执行」，
+      // 一旦哪天这里的 p 变成来自入参，守卫必须已经在这条路上。
+      const denial = openDenialReason(p, dataRoot)
+      if (denial !== null) return { ok: false, path: p, error: denial }
       try {
         await openNativePath(p, signal)
         return { ok: true, path: p }
       } catch {
-        return { ok: false, path: p }
+        return { ok: false, path: p, error: '系统没能打开配置文件' }
       }
     },
 

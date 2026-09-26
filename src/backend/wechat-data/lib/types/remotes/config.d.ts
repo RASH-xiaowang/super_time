@@ -17,6 +17,7 @@ export declare function createConfigRemotes(rc: createConfigRemotesInputs): {
     openConfig(signal: AbortSignal): Promise<{
         ok: boolean;
         path: string;
+        error?: string;
     }>;
     getWechatKeysInfo(): KeysInfoResult;
     generateKeysFile(options: {

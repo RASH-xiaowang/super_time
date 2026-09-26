@@ -19,6 +19,7 @@ import { queryMoments } from './moments.ts'
 import { resolveSnsImageDataUrl } from './sns-image.ts'
 import { resolveSnsVideoDataUrl } from './sns-video.ts'
 import { queryPrivacyScan } from './privacy.ts'
+import { grantRoot, writeDenialReason } from './path-policy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
 import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
@@ -140,8 +141,12 @@ export function planSessionExport(
         : format === 'md' ? 'md'
           : format === 'sql' ? 'sql'
             : format === 'json' ? 'json' : 'txt'
-  const exportDir = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
+  const chosenDir = (dir && dir.trim()) ? dir.trim() : ''
+  const exportDir = chosenDir || join(dirname(decryptedDir), 'exports')
   mkdirSync(exportDir, { recursive: true })
+  // P2-6：用户用原生对话框挑过这个目录 ⇒ 授予它（之后「在资源管理器里显示」才打得开）。
+  // 导出目录本身不白名单化：它本来就是「用户选的」，白名单会把唯一合法的用法打死。
+  if (chosenDir) grantRoot(chosenDir)
   const sanitized = username.replace(/@chatroom$/, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_').slice(0, 24)
   const autoBase = sanitized + '_' + now + '_' + ((count ?? 0) === 0 ? 'all' : String(count))
   const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : ''
@@ -149,7 +154,10 @@ export function planSessionExport(
   const outExt = zip ? 'zip' : ext
   const innerName = (base.toLowerCase().endsWith('.' + ext) ? base : base + '.' + ext)
   const filenameOut = (base.toLowerCase().endsWith('.' + outExt) ? base : base + '.' + outExt)
-  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join(exportDir, filenameOut), now }
+  const outPath = join(exportDir, filenameOut)
+  const denial = writeDenialReason(outPath, decryptedDir)
+  if (denial !== null) throw new Error(denial)
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath, now }
 }
 
 /** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
@@ -334,6 +342,9 @@ export function exportCsv(
   // 目标路径：用户选定优先；否则回退到数据根下的 exports/（保持旧行为可用）。
   const chosen = typeof dest === 'string' && dest.trim() !== '' ? dest.trim() : ''
   const filepath = chosen || join(join(dirname(decryptedDir), 'exports'), kind + '_' + stamp + '.csv')
+  const csvDenial = writeDenialReason(filepath, decryptedDir)
+  if (csvDenial !== null) throw new Error(csvDenial)
+  if (chosen) grantRoot(dirname(filepath))
   mkdirSync(dirname(filepath), { recursive: true })
   // buildCsv 会带 UTF-8 BOM（Excel 认 UTF-8 的唯一可靠信号，见其说明）。
   writeFileAtomicSync(filepath, buildCsv(header, rows))

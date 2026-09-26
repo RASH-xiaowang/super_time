@@ -1569,10 +1569,14 @@ async openConfig(signal: AbortSignal): Promise<{ ok: boolean; path: string }>
 ### `openPath`
 
 ```ts
-async openPath(options: { path: string }, signal: AbortSignal): Promise<{ ok: boolean; path: string }>
+async openPath(options: { path: string }, signal: AbortSignal): Promise<{ ok: boolean; path: string; error?: string }>
 ```
 
-Open an owned path (config/output dir/file) with the system default. @returns the opened path.
+Open an owned path (config/output dir/file) with the system default.  P2-6：这条路在 vendored 依赖里最终走到 `powershell.exe … Invoke-Item`， 而对 `.exe` 那就是**直接执行** —— 渲染层被控时就成了 RCE 原语。 现在只允许打开数据根之内、或应用确实往里写过产出的目录（导出对话框选过的位置）， 且可执行/脚本扩展名一律拒。被拒不等于静默失败：理由要回给界面， 否则用户看到的又是「点了没反应」（P1-1 那一族的反面）。
+
+- @param options - 要打开的路径。
+- @param signal - 调用取消信号。
+- @returns 打开结果与被拒理由。
 
 ### `optimizeAskQuestion`
 
