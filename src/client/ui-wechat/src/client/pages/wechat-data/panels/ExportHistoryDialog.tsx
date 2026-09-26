@@ -105,6 +105,8 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set())
   const [busy, setBusy] = useState(false)
+  /** 后端读不动记录库时带回来的原因（P1-1/#9）：空列表与「读不到」是两件事。 */
+  const [readError, setReadError] = useState('')
   const { notice, flash, hold } = useTransientNotice(4000)
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
@@ -142,6 +144,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
     fetchPage: async (offset, limit) => {
       const snap = await apiGetExportHistory(buildQuery(offset, limit))
       // 聚合计数每次都用**当前筛选**的结果刷新（后端按未分页的命中集合算）
+      setReadError(snap.readError ?? '')
       setCounts({
         total: snap.total,
         bytes: snap.totalBytes,
@@ -538,10 +541,12 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
           getRowId={r => String(r.id)}
           loading={pager.loading}
           skeletonRows={6}
-          emptyTitle={pager.loading ? '正在读取…' : (onlyMissing ? '没有失效记录' : '还没有导出记录')}
-          emptyDesc={onlyMissing
-            ? '所有记录的导出文件都还在原位置。'
-            : '在通讯录、聊天、朋友圈等面板点「导出」后，这里会出现记录，可打开文件、复制路径或按原参数重新导出。'}
+          emptyTitle={pager.loading ? '正在读取…' : readError !== '' ? '导出记录读不出来' : (onlyMissing ? '没有失效记录' : '还没有导出记录')}
+          emptyDesc={readError !== ''
+            ? readError + '—— 记录并没有丢，是这一页没读到；修好数据根之后重新打开本窗口即可。'
+            : onlyMissing
+              ? '所有记录的导出文件都还在原位置。'
+              : '在通讯录、聊天、朋友圈等面板点「导出」后，这里会出现记录，可打开文件、复制路径或按原参数重新导出。'}
         />
         {!pager.loading && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>

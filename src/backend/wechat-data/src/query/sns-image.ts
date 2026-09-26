@@ -4,10 +4,12 @@
  * key and matches the plaintext MD5 against the media md5 from the moments XML.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { decodeDatBytes } from './media-image.ts'
 import { boundedSet } from './meta.ts'
+import { missWithScanNotes, noteScan, snsLeafRoots, snsMonthRoots } from './sns-scan.ts'
+import type { ScanNotes } from './sns-scan.ts'
 
 const md5UrlCache = new Map<string, string>()
 
@@ -40,29 +42,18 @@ interface SnsImageIndex {
 }
 const snsImageIndex = new Map<string, SnsImageIndex>()
 
-/** 列出 `cache/<月>/Sns/Img` 根目录及其签名，按月份由新到旧排序。 */
-function snsMonthRoots(wechatBaseDir: string): Array<{ month: string; root: string; mtimeMs: number; size: number }> {
-  const cacheRoot = join(wechatBaseDir, 'cache')
-  const out: Array<{ month: string; root: string; mtimeMs: number; size: number }> = []
-  if (!existsSync(cacheRoot)) return out
-  let months: string[] = []
-  try { months = readdirSync(cacheRoot) } catch { return out }
-  for (const month of months.sort().reverse()) {
-    const root = join(cacheRoot, month, 'Sns', 'Img')
-    if (!existsSync(root)) continue
-    try {
-      const st = statSync(root)
-      out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size })
-    } catch { /* skip */ }
-  }
-  return out
-}
-
-/** 扫描一个月份目录，得到「明文 md5 → 文件路径」。 */
-function scanMonth(root: string, aesKey: string | undefined, xorKey: number): Map<string, string> {
+/**
+ * 扫描一个月份目录，得到「明文 md5 → 文件路径」。
+ * @param root - 某个月的媒体根目录。
+ * @param aesKey - 图片 AES 密钥（hex 串）。
+ * @param xorKey - V1 异或键。
+ * @param notes - 扫描注记收集器（调用方据此判断「这月扫全了没有」）。
+ * @returns 明文 md5 → 文件路径。
+ */
+function scanMonth(root: string, aesKey: string | undefined, xorKey: number, notes: ScanNotes): Map<string, string> {
   const byMd5 = new Map<string, string>()
   const files: string[] = []
-  walkFiles(root, files, 0)
+  walkFiles(root, files, 0, notes)
   for (const f of files) {
     try {
       const dec = decodeDatBytes(new Uint8Array(readFileSync(f)), aesKey ?? null, xorKey)
@@ -85,8 +76,9 @@ function snsResolveByIndex(
   aesKey: string | undefined,
   xorKey: number,
   wantMd5: string,
+  notes: ScanNotes,
 ): { file?: string; complete: boolean } {
-  const roots = snsMonthRoots(wechatBaseDir)
+  const roots = snsMonthRoots(wechatBaseDir, 'Img', notes)
   let idx = snsImageIndex.get(wechatBaseDir)
   if (!idx) { idx = { months: new Map(), misses: new Set() }; snsImageIndex.set(wechatBaseDir, idx) }
   // 月份目录集合变化时，丢弃已不存在的月份缓存
@@ -101,30 +93,40 @@ function snsResolveByIndex(
       continue
     }
     // 该月份没扫过 / 签名变了 → 只重扫这一个月
-    const byMd5 = scanMonth(root, aesKey, xorKey)
+    const before = notes.length
+    const byMd5 = scanMonth(root, aesKey, xorKey, notes)
+    if (notes.length !== before) {
+      // 没扫全的月份**不进索引**：残缺索引配上「签名没变」会让这月里剩下的图片永远查不到。
+      idx.months.delete(month)
+      idx.misses.clear()
+      continue
+    }
     idx.months.set(month, { mtimeMs, size, byMd5 })
     idx.misses.clear() // 树变了，之前的「未命中」结论失效
     const hit = byMd5.get(wantMd5)
     if (hit) return { file: hit, complete: false }
   }
-  return { complete: true }
+  // P1-1/#9：「扫完了确实没有」只有在**没有任何一处读不动**时才成立。
+  return { complete: notes.length === 0 }
 }
 
 function md5Of(bytes: Uint8Array): string {
   return createHash('md5').update(Buffer.from(bytes)).digest('hex')
 }
 
-function walkFiles(dir: string, out: string[], depth: number): void {
+function walkFiles(dir: string, out: string[], depth: number, notes?: ScanNotes): void {
   if (depth > 5 || !existsSync(dir)) return
   let entries: Array<{ name: string; isDir: boolean }> = []
   try {
     entries = readdirSync(dir, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory() }))
-  } catch {
+  } catch (e) {
+    // 「这个子目录没读到」必须留下记录：否则索引残缺会被当成「本机就是没有这张图」。
+    noteScan(notes, dir, e)
     return
   }
   for (const e of entries) {
     const p = join(dir, e.name)
-    if (e.isDir) walkFiles(p, out, depth + 1)
+    if (e.isDir) walkFiles(p, out, depth + 1, notes)
     else if (!e.name.endsWith('.db') && !e.name.includes('_shm') && !e.name.includes('_wal')) out.push(p)
   }
 }
@@ -154,23 +156,6 @@ function decodeCachedFile(f: string, aesKey: string | undefined, xorKey: number)
   }
 }
 
-/** Gather cache/<month>/Sns/Img roots. */
-function snsImgRoots(wechatBaseDir: string): string[] {
-  const cacheRoot = join(wechatBaseDir, 'cache')
-  const out: string[] = []
-  if (!existsSync(cacheRoot)) return out
-  try {
-    for (const e of readdirSync(cacheRoot, { withFileTypes: true })) {
-      if (!e.isDirectory()) continue
-      const root = join(cacheRoot, e.name, 'Sns', 'Img')
-      if (existsSync(root)) out.push(root)
-    }
-  } catch {
-    // ignore
-  }
-  return out
-}
-
 export function resolveSnsImageDataUrl(
   wechatBaseDir: string | undefined,
   aesKey: string | undefined,
@@ -189,13 +174,16 @@ export function resolveSnsImageDataUrl(
     if (cached) return { url: cached }
   }
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法离线解码' }
+  // 扫描注记：记下每一处「读不动」的目录。没有它，「cache 目录扫不动」会被说成
+  // 「未找到匹配的本地图片」—— 用户会去翻微信，而病因在文件系统那边（P1-1/#9）。
+  const notes: ScanNotes = []
   // 优先：tid_mediaid_type 缓存键路径（WDA 同款算法，兼容 _2/_1/_0/无后缀）
   if (timelineId && mediaId) {
     for (const suffix of ['_2', '_1', '_0', '']) {
       const k = createHash('md5').update(timelineId + '_' + mediaId + suffix, 'utf8').digest('hex')
       const sub = k.slice(0, 2)
       const rest = k.slice(2)
-      for (const root of snsImgRoots(wechatBaseDir)) {
+      for (const root of snsLeafRoots(wechatBaseDir, 'Img', notes)) {
         const p = join(root, sub, rest)
         if (existsSync(p)) {
           const data = decodeCachedFile(p, aesKey, xorKey)
@@ -213,7 +201,7 @@ export function resolveSnsImageDataUrl(
   }
   // 索引优先：**按月增量、命中即停**（见 snsResolveByIndex 注释）。
   // 旧实现在索引未命中后还会在下面把同一批文件再全量扫一遍 —— 等于双倍开销，已删除。
-  const idxRes = snsResolveByIndex(wechatBaseDir, aesKey, xorKey, key)
+  const idxRes = snsResolveByIndex(wechatBaseDir, aesKey, xorKey, key, notes)
   let indexDead = false
   if (idxRes.file) {
     const data = decodeCachedFile(idxRes.file, aesKey, xorKey)
@@ -226,7 +214,7 @@ export function resolveSnsImageDataUrl(
   // 兜底：按解密后 MD5 全量扫描（仅当索引已按当前签名扫完所有月份，却仍指向一个解不开的文件）
   if (indexDead || !idxRes.complete) {
   const files: string[] = []
-  for (const root of snsImgRoots(wechatBaseDir)) walkFiles(root, files, 0)
+  for (const root of snsLeafRoots(wechatBaseDir, 'Img', notes)) walkFiles(root, files, 0, notes)
   for (const f of files) {
     try {
       const bytes = readFileSync(f)
@@ -245,7 +233,7 @@ export function resolveSnsImageDataUrl(
   const attachRoot = join(wechatBaseDir, 'msg', 'attach')
   if (existsSync(attachRoot)) {
     const attachFiles: string[] = []
-    walkFiles(attachRoot, attachFiles, 0)
+    walkFiles(attachRoot, attachFiles, 0, notes)
     // 先找缩略图（_t/_h/_b，通常为 jpg，浏览器可直接显示）；HEVC/HEIC 大图回退到最后
     let hevcFallback: { data: string } | null = null
     for (const f of attachFiles) {
@@ -279,5 +267,6 @@ export function resolveSnsImageDataUrl(
       return { url: hevcFallback.data }
     }
   }
-  return { error: '未找到匹配的本地图片' }
+  // 扫不全都说到：这句如果是「目录读不动」，就不该只留下「没有这张图」。
+  return { error: missWithScanNotes('未找到匹配的本地图片', notes) }
 }

@@ -66,7 +66,7 @@ import type {
   MemberSearchSnapshot,
   MessagesSnapshot,
   MomentsInsightsSnapshot,
-  MomentsMonthlyRow,
+  MomentsMonthlyRow, MomentsMonthlySnapshot,
   MomentsSnapshot,
   OfficialAssetsSnapshot,
   OverviewInsights,
@@ -241,7 +241,7 @@ export interface WechatRemote {
   getSelfUsername(): Promise<RemoteResult<{ username: string }>>
   getMomentsAuthors(): Promise<RemoteResult<Array<{ name: string; count: number }>>>
   getMomentsInsights(options?: { author?: string }): Promise<RemoteResult<MomentsInsightsSnapshot>>
-  getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlyRow[]>>
+  getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<RemoteResult<MomentsMonthlySnapshot>>
   getWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<RemoteResult<{ words: Array<{ text: string; count: number }>; scanned: number }>>
   analyzeMessages(options: { talker: string; contextLimit?: number }): Promise<RemoteResult<LayaAnalysisView>>
   analyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }> }): Promise<RemoteResult<LayaVisibleAnalysisResult>>

@@ -71,7 +71,6 @@ const KNOWN_UNFIXED: Record<string, number> = {
   'query/media-voice.ts': 1,
   'query/messages.ts': 1,
   'query/moments-insights.ts': 1,
-  'query/moments-monthly.ts': 1,
   'query/official-assets.ts': 2,
   'query/overview-insights.ts': 1,
   'query/overview.ts': 3,

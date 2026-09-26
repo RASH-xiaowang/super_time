@@ -1157,7 +1157,7 @@ _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_
 ### `getMomentsMonthly`
 
 ```ts
-getMomentsMonthly(options?: { author?: string; authorName?: string }): MomentsMonthlyRow[]
+getMomentsMonthly(options?: { author?: string; authorName?: string }): MomentsMonthlySnapshot
 ```
 
 _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_

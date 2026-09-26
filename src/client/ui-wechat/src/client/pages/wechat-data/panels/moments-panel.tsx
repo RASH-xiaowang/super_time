@@ -13,7 +13,7 @@ import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } fr
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
-import type { MomentItem, MomentsMonthlyRow } from '@deepseek-ai/dsh-wechat-data/types'
+import type { MomentItem, MomentsMonthlySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
@@ -38,7 +38,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
-  const [monthlyData, setMonthlyData] = useState<ReadonlyArray<MomentsMonthlyRow>>([])
+  const [monthlySnap, setMonthlySnap] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [privacy, setPrivacy] = useState(false)
   const [expandedTextByCard, setExpandedTextByCard] = useState<Set<string>>(new Set())
   const [expandedSocialByCard, setExpandedSocialByCard] = useState<Set<string>>(new Set())
@@ -46,7 +46,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [commentSortByCard, setCommentSortByCard] = useState<Record<string, 'asc' | 'desc'>>({})
   const [selfUsername, setSelfUsername] = useState<string | null>(null)
   const [fullAuthors, setFullAuthors] = useState<Array<{ name: string; count: number }> | null>(null)
-  const [monthlyDataForAuthor, setMonthlyDataForAuthor] = useState<ReadonlyArray<MomentsMonthlyRow>>([])
+  const [monthlySnapForAuthor, setMonthlySnapForAuthor] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [onlyMineComments, setOnlyMineComments] = useState(false)
   const [videoSrcs, setVideoSrcs] = useState<Record<string, string>>({})
   const [videoFailed, setVideoFailed] = useState<Set<string>>(new Set())
@@ -129,8 +129,8 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       // Full-history monthly distribution only on (re)load — not per page.
       if (reset) {
         void apiGetMomentsMonthly(author ? { author } : undefined)
-          .then((rows) => { setMonthlyData(rows) })
-          .catch(() => { /* fall back to frontend month aggregation */ })
+          .then((snap) => { setMonthlySnap(snap) })
+          .catch(() => { setMonthlySnap({ months: [], readError: '月度分布请求失败（已退回按已加载部分统计）' }) })
       }
     } catch (e) {
       setError((e as Error).message)
@@ -153,12 +153,13 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   // 选中某作者（作者牌）时，按该作者重算「全部月份动态」；清除后回退到全量月度数据。
   useEffect(() => {
-    if (!authorFilter) { setMonthlyDataForAuthor([]); return }
+    if (!authorFilter) { setMonthlySnapForAuthor({ months: [] }); return }
     let cancelled = false
-    setMonthlyDataForAuthor([]) // 先清空，避免显示上一个作者的数据
+    setMonthlySnapForAuthor({ months: [] }) // 先清空，避免显示上一个作者的数据
     void apiGetMomentsMonthly({ authorName: authorFilter })
-      .then((rows) => { if (!cancelled) setMonthlyDataForAuthor(rows) })
-      .catch(() => { if (!cancelled) setMonthlyDataForAuthor([]) }) // 失败时也清空，触发 fallback 聚合
+      .then((snap) => { if (!cancelled) setMonthlySnapForAuthor(snap) })
+      // 失败时也要留一句原因：空数组会被读成「这个作者一条都没有」，而那通常不是事实。
+      .catch(() => { if (!cancelled) setMonthlySnapForAuthor({ months: [], readError: '该作者的月度分布请求失败（已退回按已加载部分统计）' }) })
     return () => { cancelled = true }
   }, [authorFilter])
 
@@ -392,9 +393,13 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
   }, [fullAuthors, moments])
 
+  /** 当前生效的那份月度快照（选中作者时换成作者版）。 */
+  const monthlySnapActive = authorFilter ? monthlySnapForAuthor : monthlySnap
+  const monthlyReadError = monthlySnapActive.readError ?? ''
+
   const monthly = useMemo(() => {
     // 选中作者时使用该作者的全量月度分布；否则用全量（或 prop 作者）的月度分布。
-    const raw = authorFilter ? monthlyDataForAuthor : monthlyData
+    const raw = monthlySnapActive.months
     if (raw.length > 0) {
       return [...raw].sort((a, b) => a.month.localeCompare(b.month)).map(m => ({ key: m.month, label: m.month, count: m.count }))
     }
@@ -408,7 +413,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       map.set(k, (map.get(k) ?? 0) + 1)
     }
     return [...map.keys()].sort().map(k => ({ key: k, label: k, count: map.get(k) ?? 0 }))
-  }, [monthlyData, monthlyDataForAuthor, authorFilter, moments])
+  }, [monthlySnapActive, authorFilter, moments])
   const monthMax = Math.max(1, ...monthly.map(m => m.count))
 
   const groups = useMemo(() => groupByDate(scoped), [scoped])
@@ -778,6 +783,12 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
           </>
         )}
       />
+
+      {/* 读失败必须与「没有动态」分开说（P1-1/#9）：月度直方图空着的时候，用户看到的
+          一直是「我这个月没发过朋友圈」，而真实原因可能是快照损坏或库被占用。 */}
+      {monthlyReadError !== '' && (
+        <div className={css.insightNote} role="status">{monthlyReadError}</div>
+      )}
 
       <div className={css.layout}>
         <MomentsSidebar

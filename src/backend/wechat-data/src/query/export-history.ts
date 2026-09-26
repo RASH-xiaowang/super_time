@@ -235,8 +235,12 @@ export function listExportHistory(decryptedDir: string, query: ExportHistoryQuer
     } finally {
       db.close()
     }
-  } catch {
-    return empty
+  } catch (e) {
+    // P1-1/#9：读不动要说读不动。回 `empty` 的话界面就是「还没有导出记录」，
+    // 而真实原因可能是隐私库被占用 / 损坏 —— 用户会以为记录丢了。
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[export-history] 读取失败：' + msg)
+    return { ...empty, readError: '导出历史读取失败：' + msg }
   }
 }
 

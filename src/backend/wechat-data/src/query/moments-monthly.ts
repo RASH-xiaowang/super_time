@@ -3,10 +3,10 @@
  * The "all months" histogram counts every timeline row by create-time month, so
  * it reflects the whole feed rather than only the initially loaded page.
  */
-import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { MomentsMonthlyRow } from '../types.ts'
+import type { MomentsMonthlySnapshot } from '../types.ts'
+import { withDb } from './db-open.ts'
 import { parseSnsXml } from './moments.ts'
 import { cachedBySig, contactMeta, fileSigOf } from './meta.ts'
 
@@ -32,9 +32,9 @@ function snsDb(decryptedDir: string): string | null {
  * @param author - optional author username filter (all authors when omitted).
  * @param authorName - optional author display-name filter, matching the author
  *   chips (all authors when omitted). Takes precedence over `author` when set.
- * @returns monthly rows sorted ascending by month.
+ * @returns 月度快照：只有**确认读到过**才回空的 `months`；读失败时 `readError` 非空。
  */
-export function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlyRow[] {
+export function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlySnapshot {
   const dbPath = snsDb(decryptedDir)
   // 签名覆盖 sns.db 与 contact.db（`authorName` 那条路径会用 contactMeta 解析昵称）。
   // 原先只签 sns.db，靠「事件后整表清空」兜住 —— M8 去掉那层兜底后补齐。
@@ -45,43 +45,51 @@ export function queryMomentsMonthly(decryptedDir: string, author?: string, autho
   return cachedBySig('moments-monthly:' + decryptedDir + ':' + (author ?? '') + ':' + (authorName ?? ''), sig, () => computeMomentsMonthly(decryptedDir, author, authorName))
 }
 
-function computeMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlyRow[] {
+function computeMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlySnapshot {
   const dbPath = snsDb(decryptedDir)
-  if (dbPath === null) return []
+  // 压根没有 sns.db = 这台机器从没拉过朋友圈：**确认空**，不是读失败（别拿它吓用户）。
+  if (dbPath === null) return { months: [] }
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-    if (!has) { db.close(); return [] }
-    const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
-    const userCol = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
-    const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
-    if (!userCol || !contentCol) { db.close(); return [] }
-    // Username filter is applied in SQL (sns db is indexed by user); display-name
-    // filtering needs the name map, so fetch rows and resolve per-row in JS.
-    const where = author && !authorName ? ` WHERE ${userCol} = ?` : ''
-    const rows = db.prepare(`SELECT ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...(author && !authorName ? [author] : [])) as Array<{ u: unknown; c: unknown }>
-    db.close()
-    // Resolve display names only when needed so the unfiltered path stays cheap.
-    const names = authorName ? contactMeta(decryptedDir).names : null
-    const monthly = new Map<string, number>()
-    for (const r of rows) {
-      if (authorName) {
-        const u = cellString(r.u)
-        if ((names?.get(u) || u || '未知') !== authorName) continue
+    // withDb 负责关闭：原先 `new DatabaseSync` 之后有任何一句抛错（PRAGMA 读坏页、
+    // SELECT 撞 SQLITE_BUSY），那条连接就留在进程里了 —— 而 catch 只回一个空数组。
+    return withDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+      if (!has) return { months: [] }
+      const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
+      const userCol = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
+      const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
+      if (!userCol || !contentCol) return { months: [] }
+      // Username filter is applied in SQL (sns db is indexed by user); display-name
+      // filtering needs the name map, so fetch rows and resolve per-row in JS.
+      const where = author && !authorName ? ` WHERE ${userCol} = ?` : ''
+      const rows = db.prepare(`SELECT ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...(author && !authorName ? [author] : [])) as Array<{ u: unknown; c: unknown }>
+      // Resolve display names only when needed so the unfiltered path stays cheap.
+      const names = authorName ? contactMeta(decryptedDir).names : null
+      const monthly = new Map<string, number>()
+      for (const r of rows) {
+        if (authorName) {
+          const u = cellString(r.u)
+          if ((names?.get(u) || u || '未知') !== authorName) continue
+        }
+        const xml = cellString(r.c)
+        if (!xml) continue
+        const createTime = parseSnsXml(xml).createTime
+        if (createTime <= 0) continue
+        const d = new Date(createTime * 1000)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        monthly.set(key, (monthly.get(key) ?? 0) + 1)
       }
-      const xml = cellString(r.c)
-      if (!xml) continue
-      const createTime = parseSnsXml(xml).createTime
-      if (createTime <= 0) continue
-      const d = new Date(createTime * 1000)
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      monthly.set(key, (monthly.get(key) ?? 0) + 1)
-    }
-    return Array.from(monthly.entries())
-      .map(([month, count]) => ({ month, count }))
-      .sort((a, b) => a.month.localeCompare(b.month))
-  } catch {
-    // Keep the histogram empty rather than crashing the panel on a bad DB.
-    return []
+      return {
+        months: Array.from(monthly.entries())
+          .map(([month, count]: [string, number]) => ({ month, count }))
+          .sort((a, b) => a.month.localeCompare(b.month)),
+      }
+    })
+  } catch (e) {
+    // P1-1/#9：这里以前只回空数组 —— 面板于是画成「这个月一条都没有」，而真实原因是
+    // 快照损坏 / 库被占用。空直方图与「读不到」必须是两件事。
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[moments-monthly] 读取失败：' + dbPath + ': ' + msg)
+    return { months: [], readError: '朋友圈月度分布读取失败：' + msg }
   }
 }

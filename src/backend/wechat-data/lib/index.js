@@ -4322,7 +4322,7 @@ function computeAnnual(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/gateway-read.ts
-import { join as join93 } from "node:path";
+import { join as join94 } from "node:path";
 import { openNativePath as openNativePath2 } from "@deepseek-ai/dsh-native-command";
 
 // src/backend/wechat-data/src/query/path-policy.ts
@@ -9578,7 +9578,6 @@ function computeMomentsInsights(decryptedDir, author) {
 }
 
 // src/backend/wechat-data/src/query/moments-monthly.ts
-import { DatabaseSync as DatabaseSync28 } from "node:sqlite";
 import { existsSync as existsSync34 } from "node:fs";
 import { join as join42 } from "node:path";
 function cellString7(v) {
@@ -9604,48 +9603,46 @@ function queryMomentsMonthly(decryptedDir, author, authorName) {
 }
 function computeMomentsMonthly(decryptedDir, author, authorName) {
   const dbPath8 = snsDb3(decryptedDir);
-  if (dbPath8 === null) return [];
+  if (dbPath8 === null) return { months: [] };
   try {
-    const db = new DatabaseSync28(dbPath8, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return [];
-    }
-    const cols = new Set(db.prepare("PRAGMA table_info(SnsTimeLine)").all().map((r) => r.name));
-    const userCol = cols.has("user_name") ? "user_name" : cols.has("userName") ? "userName" : "";
-    const contentCol = cols.has("content") ? "content" : cols.has("Content") ? "Content" : "";
-    if (!userCol || !contentCol) {
-      db.close();
-      return [];
-    }
-    const where = author && !authorName ? ` WHERE ${userCol} = ?` : "";
-    const rows = db.prepare(`SELECT ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...author && !authorName ? [author] : []);
-    db.close();
-    const names = authorName ? contactMeta(decryptedDir).names : null;
-    const monthly = /* @__PURE__ */ new Map();
-    for (const r of rows) {
-      if (authorName) {
-        const u = cellString7(r.u);
-        if ((names?.get(u) || u || "\u672A\u77E5") !== authorName) continue;
+    return withDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
+      if (!has) return { months: [] };
+      const cols = new Set(db.prepare("PRAGMA table_info(SnsTimeLine)").all().map((r) => r.name));
+      const userCol = cols.has("user_name") ? "user_name" : cols.has("userName") ? "userName" : "";
+      const contentCol = cols.has("content") ? "content" : cols.has("Content") ? "Content" : "";
+      if (!userCol || !contentCol) return { months: [] };
+      const where = author && !authorName ? ` WHERE ${userCol} = ?` : "";
+      const rows = db.prepare(`SELECT ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...author && !authorName ? [author] : []);
+      const names = authorName ? contactMeta(decryptedDir).names : null;
+      const monthly = /* @__PURE__ */ new Map();
+      for (const r of rows) {
+        if (authorName) {
+          const u = cellString7(r.u);
+          if ((names?.get(u) || u || "\u672A\u77E5") !== authorName) continue;
+        }
+        const xml = cellString7(r.c);
+        if (!xml) continue;
+        const createTime = parseSnsXml(xml).createTime;
+        if (createTime <= 0) continue;
+        const d = new Date(createTime * 1e3);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        monthly.set(key, (monthly.get(key) ?? 0) + 1);
       }
-      const xml = cellString7(r.c);
-      if (!xml) continue;
-      const createTime = parseSnsXml(xml).createTime;
-      if (createTime <= 0) continue;
-      const d = new Date(createTime * 1e3);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      monthly.set(key, (monthly.get(key) ?? 0) + 1);
-    }
-    return Array.from(monthly.entries()).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month));
-  } catch {
-    return [];
+      return {
+        months: Array.from(monthly.entries()).map(([month, count]) => ({ month, count })).sort((a, b) => a.month.localeCompare(b.month))
+      };
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[moments-monthly] \u8BFB\u53D6\u5931\u8D25\uFF1A" + dbPath8 + ": " + msg);
+    return { months: [], readError: "\u670B\u53CB\u5708\u6708\u5EA6\u5206\u5E03\u8BFB\u53D6\u5931\u8D25\uFF1A" + msg };
   }
 }
 
 // src/backend/wechat-data/src/query/official-assets.ts
 import { createHash as createHash13 } from "node:crypto";
-import { DatabaseSync as DatabaseSync29 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync28 } from "node:sqlite";
 import { existsSync as existsSync35, readdirSync as readdirSync16 } from "node:fs";
 import { join as join43 } from "node:path";
 import { decompress as decompress8 } from "fzstd";
@@ -9677,7 +9674,7 @@ function loadOfficialUsernames(decryptedDir) {
   const out = [];
   if (!existsSync35(p)) return out;
   try {
-    const db = new DatabaseSync29(p, { readOnly: true });
+    const db = new DatabaseSync28(p, { readOnly: true });
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
     const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
     if (table) {
@@ -9697,7 +9694,7 @@ function loadNames(decryptedDir) {
   const p = join43(decryptedDir, "contact", "contact.db");
   if (!existsSync35(p)) return map;
   try {
-    const db = new DatabaseSync29(p, { readOnly: true });
+    const db = new DatabaseSync28(p, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
     if (has) {
       const cols = tableColumns9(db, "contact");
@@ -9735,7 +9732,7 @@ function computeOfficialAssets(decryptedDir) {
       if (!/^(biz_)?message_\d+\.db$/.test(f)) continue;
       let db;
       try {
-        db = new DatabaseSync29(join43(dir, f), { readOnly: true });
+        db = new DatabaseSync28(join43(dir, f), { readOnly: true });
       } catch {
         continue;
       }
@@ -9969,7 +9966,7 @@ function searchUnified(decryptedDir, query, limit) {
 }
 
 // src/backend/wechat-data/src/query/annual-report.ts
-import { DatabaseSync as DatabaseSync30 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync29 } from "node:sqlite";
 import { decompress as decompress9 } from "fzstd";
 import { existsSync as existsSync37, readdirSync as readdirSync17 } from "node:fs";
 import { createHash as createHash14 } from "node:crypto";
@@ -10071,7 +10068,7 @@ function queryAnnualReport(decryptedDir, year) {
   for (const file of files) {
     let probe = null;
     try {
-      probe = new DatabaseSync30(join45(msgDir, file), { readOnly: true });
+      probe = new DatabaseSync29(join45(msgDir, file), { readOnly: true });
     } catch {
       continue;
     }
@@ -10091,7 +10088,7 @@ function queryAnnualReport(decryptedDir, year) {
   for (const fi of fileInfos) {
     let db = null;
     try {
-      db = new DatabaseSync30(fi.path, { readOnly: true });
+      db = new DatabaseSync29(fi.path, { readOnly: true });
     } catch {
       continue;
     }
@@ -10193,7 +10190,7 @@ function loadUsernames(decryptedDir) {
   if (!existsSync37(p)) return [];
   const out = [];
   try {
-    const db = new DatabaseSync30(p, { readOnly: true });
+    const db = new DatabaseSync29(p, { readOnly: true });
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
     const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
     if (table) {
@@ -10222,7 +10219,7 @@ function typeLabel(t) {
 }
 
 // src/backend/wechat-data/src/query/annual-review.ts
-import { DatabaseSync as DatabaseSync31 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync30 } from "node:sqlite";
 import { decompress as decompress10 } from "fzstd";
 import { createHash as createHash15 } from "node:crypto";
 var ZSTD_MAGIC10 = Buffer.from([40, 181, 47, 253]);
@@ -10453,7 +10450,7 @@ function queryAnnualReview(decryptedDir, year, selfUsername = "") {
     }
     let db = null;
     try {
-      db = new DatabaseSync31(sh.file, { readOnly: true });
+      db = new DatabaseSync30(sh.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -10928,7 +10925,7 @@ function assemble(b) {
 }
 
 // src/backend/wechat-data/src/query/edit.ts
-import { DatabaseSync as DatabaseSync32 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync31 } from "node:sqlite";
 import { existsSync as existsSync38, readdirSync as readdirSync18 } from "node:fs";
 import { createHash as createHash16 } from "node:crypto";
 import { dirname as dirname13, join as join46 } from "node:path";
@@ -10944,7 +10941,7 @@ function editDbPath(decryptedDir) {
   return join46(dirname13(decryptedDir), "message_edits.db");
 }
 function openEditStore(decryptedDir) {
-  const db = new DatabaseSync32(editDbPath(decryptedDir));
+  const db = new DatabaseSync31(editDbPath(decryptedDir));
   db.exec("CREATE TABLE IF NOT EXISTS message_edits (account TEXT NOT NULL, session_id TEXT NOT NULL, db TEXT NOT NULL, table_name TEXT NOT NULL, local_id INTEGER NOT NULL, first_edited_at INTEGER NOT NULL, last_edited_at INTEGER NOT NULL, edit_count INTEGER NOT NULL, original_msg_json TEXT NOT NULL, edited_cols_json TEXT, PRIMARY KEY (account, session_id, db, table_name, local_id))");
   return db;
 }
@@ -10968,7 +10965,7 @@ function listEditedMessages(decryptedDir, sessionId) {
   const p = editDbPath(decryptedDir);
   if (!existsSync38(p)) return { items: [], total: 0 };
   try {
-    const db = new DatabaseSync32(p, { readOnly: true });
+    const db = new DatabaseSync31(p, { readOnly: true });
     let rows;
     if (sessionId) {
       rows = db.prepare("SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC").all(sessionId);
@@ -10994,7 +10991,7 @@ function findShard(decryptedDir, table, localId) {
   let fallback = null;
   for (const f of messageShardFiles2(decryptedDir)) {
     try {
-      const db = new DatabaseSync32(f);
+      const db = new DatabaseSync31(f);
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
       if (!has) {
         db.close();
@@ -11050,7 +11047,7 @@ function resetEditedMessage(decryptedDir, username, localId) {
   const p = editDbPath(decryptedDir);
   if (!existsSync38(p)) return { ok: false, error: "\u7F16\u8F91\u8BB0\u5F55\u5E93\u4E0D\u5B58\u5728" };
   try {
-    const store = new DatabaseSync32(p);
+    const store = new DatabaseSync31(p);
     const rec = store.prepare("SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?").get(username, localId);
     if (!rec) {
       store.close();
@@ -11071,7 +11068,7 @@ function resetEditedMessage(decryptedDir, username, localId) {
         if (!cols.includes(col2)) continue;
         db.prepare('UPDATE "' + table + '" SET "' + col2 + '" = ? WHERE local_id = ?').run(decodeOriginalCell(val), localId);
       }
-      const store2 = new DatabaseSync32(p);
+      const store2 = new DatabaseSync31(p);
       store2.prepare("DELETE FROM message_edits WHERE session_id = ? AND local_id = ?").run(username, localId);
       store2.close();
       return { ok: true };
@@ -11084,14 +11081,14 @@ function resetEditedMessage(decryptedDir, username, localId) {
 }
 
 // src/backend/wechat-data/src/query/drafts.ts
-import { DatabaseSync as DatabaseSync33 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync32 } from "node:sqlite";
 import { existsSync as existsSync39 } from "node:fs";
 import { join as join47 } from "node:path";
 function openSessionDb(decryptedDir) {
   const p = join47(decryptedDir, "session", "session.db");
   if (!existsSync39(p)) return null;
   try {
-    return new DatabaseSync33(p);
+    return new DatabaseSync32(p);
   } catch {
     return null;
   }
@@ -11141,7 +11138,7 @@ function clearAllSessionDrafts(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/query/summary-tasks.ts
-import { DatabaseSync as DatabaseSync34 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync33 } from "node:sqlite";
 import { mkdirSync as mkdirSync10 } from "node:fs";
 import { dirname as dirname14, join as join48 } from "node:path";
 function dbPath2(decryptedDir) {
@@ -11158,7 +11155,7 @@ function openStore2(decryptedDir) {
   } catch (e) {
     console.warn("[summary-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText(e));
   }
-  const db = new DatabaseSync34(file);
+  const db = new DatabaseSync33(file);
   db.exec("CREATE TABLE IF NOT EXISTS summary_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', custom_prompt TEXT NOT NULL DEFAULT '', schedule_time TEXT NOT NULL DEFAULT '08:00', enabled INTEGER NOT NULL DEFAULT 1, last_run_at INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   db.exec("CREATE TABLE IF NOT EXISTS summary_records (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, group_username TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '', target_users TEXT NOT NULL DEFAULT '[]', summary_date TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT 'brief', summary TEXT NOT NULL DEFAULT '', char_count INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'done', error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)");
   return db;
@@ -11329,8 +11326,8 @@ function normalizeJobId(jobId) {
 
 // src/backend/wechat-data/src/gateway-core.ts
 import { TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
-import { existsSync as existsSync73, mkdirSync as mkdirSync24, readFileSync as readFileSync30, writeFileSync as writeFileSync20 } from "node:fs";
-import { join as join92 } from "node:path";
+import { existsSync as existsSync74, mkdirSync as mkdirSync24, readFileSync as readFileSync30, writeFileSync as writeFileSync20 } from "node:fs";
+import { join as join93 } from "node:path";
 
 // src/backend/wechat-data/src/keys/image-key.ts
 function normalizeAesKey(aesKey) {
@@ -11495,8 +11492,11 @@ function plausibleSqliteHeader(head) {
   if (head.length < 24) return false;
   if (!head.subarray(0, 15).equals(SQLITE_HDR2.subarray(0, 15))) return false;
   const pageSize = head.readUInt16BE(16);
-  if (pageSize === 1) return true;
-  return pageSize >= 512 && pageSize <= 65536 && (pageSize & pageSize - 1) === 0;
+  const sizeOk = pageSize === 1 || pageSize >= 512 && pageSize <= 65536 && (pageSize & pageSize - 1) === 0;
+  if (!sizeOk) return false;
+  if (head[18] !== 1 && head[18] !== 2) return false;
+  if (head[19] !== 1 && head[19] !== 2) return false;
+  return head[21] === 64 && head[22] === 32 && head[23] === 32;
 }
 function looksDecrypted(dbPath8) {
   try {
@@ -12020,7 +12020,7 @@ function startRealtimeSync(rawDbDir, decryptedDir, onSync) {
 }
 
 // src/backend/wechat-data/src/query/daily-summary.ts
-import { DatabaseSync as DatabaseSync35 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync34 } from "node:sqlite";
 import { decompress as decompress11 } from "fzstd";
 import { existsSync as existsSync41, readdirSync as readdirSync20 } from "node:fs";
 import { createHash as createHash17 } from "node:crypto";
@@ -12038,7 +12038,7 @@ function loadSessionUsernames2(decryptedDir) {
   if (!existsSync41(dbPath8)) return [];
   const out = [];
   try {
-    const db = new DatabaseSync35(dbPath8, { readOnly: true });
+    const db = new DatabaseSync34(dbPath8, { readOnly: true });
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
     const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
     if (table) {
@@ -12146,7 +12146,7 @@ function collectRange(decryptedDir, start, end, cap, groupUsername, collectSourc
   for (const shard of messageShardFiles3(decryptedDir)) {
     let probe = null;
     try {
-      probe = new DatabaseSync35(shard, { readOnly: true });
+      probe = new DatabaseSync34(shard, { readOnly: true });
     } catch {
       continue;
     }
@@ -12166,7 +12166,7 @@ function collectRange(decryptedDir, start, end, cap, groupUsername, collectSourc
   for (const fi of fileInfos) {
     let db = null;
     try {
-      db = new DatabaseSync35(fi.path, { readOnly: true });
+      db = new DatabaseSync34(fi.path, { readOnly: true });
     } catch {
       continue;
     }
@@ -12248,12 +12248,12 @@ function collectPeriodMessages(decryptedDir, from, to, maxPerSession, groupUsern
 }
 
 // src/backend/wechat-data/src/query/handoff.ts
-import { DatabaseSync as DatabaseSync37 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync36 } from "node:sqlite";
 import { existsSync as existsSync42 } from "node:fs";
 import { join as join52 } from "node:path";
 
 // src/backend/wechat-data/src/query/wechat-tasks.ts
-import { DatabaseSync as DatabaseSync36 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync35 } from "node:sqlite";
 import { mkdirSync as mkdirSync11 } from "node:fs";
 import { dirname as dirname16, join as join51 } from "node:path";
 function dbPath3(decryptedDir) {
@@ -12266,7 +12266,7 @@ function openStore3(decryptedDir) {
   } catch (e) {
     console.warn("[wechat-tasks] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText2(e));
   }
-  const db = new DatabaseSync36(file);
+  const db = new DatabaseSync35(file);
   db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', due_at INTEGER, source_username TEXT NOT NULL DEFAULT '', source_local_id INTEGER, message_time INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
   return db;
 }
@@ -12375,7 +12375,7 @@ function listHandoffReminds(decryptedDir) {
   const p = join52(decryptedDir, "general", "general.db");
   if (!existsSync42(p)) return { items: [], total: 0 };
   try {
-    const db = new DatabaseSync37(p, { readOnly: true });
+    const db = new DatabaseSync36(p, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='handoff_remind_v0'").get() !== void 0;
     if (!has) {
       db.close();
@@ -12410,7 +12410,7 @@ function importHandoffTasks(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/query/notes.ts
-import { DatabaseSync as DatabaseSync38 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync37 } from "node:sqlite";
 import { mkdirSync as mkdirSync12 } from "node:fs";
 import { dirname as dirname17, join as join53 } from "node:path";
 var DEFAULT_KB_ID = 1;
@@ -12443,7 +12443,7 @@ function openStore4(decryptedDir) {
   } catch (e) {
     console.warn("[notes] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText3(e));
   }
-  const db = new DatabaseSync38(file);
+  const db = new DatabaseSync37(file);
   migrate(db);
   return db;
 }
@@ -12530,7 +12530,7 @@ function parseTags(raw) {
 }
 function rowToNote(r) {
   const body = cellStr12(r["body"] ?? "");
-  const note = {
+  const note2 = {
     id: Number(r["id"] ?? 0),
     kbId: Number(r["kb_id"] ?? DEFAULT_KB_ID),
     title: cellStr12(r["title"] ?? ""),
@@ -12542,10 +12542,10 @@ function rowToNote(r) {
     updatedAt: Number(r["updated_at"] ?? 0)
   };
   const username = cellStr12(r["source_username"] ?? "");
-  if (username) note.sourceUsername = username;
+  if (username) note2.sourceUsername = username;
   const question = cellStr12(r["source_question"] ?? "");
-  if (question) note.sourceQuestion = question;
-  return note;
+  if (question) note2.sourceQuestion = question;
+  return note2;
 }
 function findIdByTitleKey(db, kbId, key) {
   if (!key) return void 0;
@@ -12984,7 +12984,7 @@ function createTasksRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/operation-log.ts
-import { DatabaseSync as DatabaseSync39 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync38 } from "node:sqlite";
 import { dirname as dirname18, join as join54 } from "node:path";
 var CATEGORIES = ["settings", "keys", "sync", "export", "delete", "backup", "edit", "task", "error"];
 var ALLOWED_CATEGORIES = new Set(CATEGORIES);
@@ -12995,7 +12995,7 @@ function dbPath5(decryptedDir) {
   return join54(dirname18(decryptedDir), "wechat_privacy.db");
 }
 function openStore5(decryptedDir) {
-  const db = new DatabaseSync39(dbPath5(decryptedDir));
+  const db = new DatabaseSync38(dbPath5(decryptedDir));
   db.exec("CREATE TABLE IF NOT EXISTS operation_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, category TEXT NOT NULL, action TEXT, target TEXT, status TEXT NOT NULL, detail TEXT)");
   db.exec("CREATE INDEX IF NOT EXISTS operation_log_ts ON operation_log(ts)");
   return db;
@@ -13086,13 +13086,13 @@ function clearOperationLog(decryptedDir) {
 }
 
 // src/backend/wechat-data/src/query/privacy-audit.ts
-import { DatabaseSync as DatabaseSync40 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync39 } from "node:sqlite";
 import { dirname as dirname19, join as join55 } from "node:path";
 function dbPath6(decryptedDir) {
   return join55(dirname19(decryptedDir), "wechat_privacy.db");
 }
 function openStore6(decryptedDir) {
-  const db = new DatabaseSync40(dbPath6(decryptedDir));
+  const db = new DatabaseSync39(dbPath6(decryptedDir));
   db.exec("CREATE TABLE IF NOT EXISTS privacy_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   db.exec("CREATE TABLE IF NOT EXISTS privacy_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, feature TEXT NOT NULL, ts INTEGER NOT NULL, chars INTEGER NOT NULL DEFAULT 0, sessions INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0)");
   return db;
@@ -13419,7 +13419,7 @@ function createOpsLogRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/wordcloud.ts
-import { DatabaseSync as DatabaseSync41 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync40 } from "node:sqlite";
 import { decompress as decompress12 } from "fzstd";
 import { existsSync as existsSync44, readdirSync as readdirSync22 } from "node:fs";
 import { createHash as createHash19 } from "node:crypto";
@@ -13682,7 +13682,7 @@ function scanMessages(decryptedDir, opts, counts, matcher) {
     const path = join57(msgDir, file);
     let db = null;
     try {
-      db = new DatabaseSync41(path, { readOnly: true });
+      db = new DatabaseSync40(path, { readOnly: true });
     } catch {
       continue;
     }
@@ -13722,7 +13722,7 @@ function scanMoments(decryptedDir, counts, matcher) {
     if (!existsSync44(p)) continue;
     let db = null;
     try {
-      db = new DatabaseSync41(p, { readOnly: true });
+      db = new DatabaseSync40(p, { readOnly: true });
     } catch {
       continue;
     }
@@ -15881,7 +15881,7 @@ function createSummaryRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/retrieval/embedding.ts
-import { DatabaseSync as DatabaseSync42 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync41 } from "node:sqlite";
 import { existsSync as existsSync51 } from "node:fs";
 import { join as join66 } from "node:path";
 
@@ -16022,7 +16022,7 @@ function writeMeta(db, key, value) {
   db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run(key, value);
 }
 function openVectorDb(decryptedDir, readOnly = false) {
-  const db = new DatabaseSync42(vectorDbPath(decryptedDir), readOnly ? { readOnly: true } : {});
+  const db = new DatabaseSync41(vectorDbPath(decryptedDir), readOnly ? { readOnly: true } : {});
   if (!readOnly) {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     db.exec("CREATE TABLE IF NOT EXISTS vectors (fts_rowid INTEGER PRIMARY KEY, doc_key TEXT NOT NULL, username TEXT NOT NULL, local_id INTEGER NOT NULL, create_time INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, hash_lo INTEGER NOT NULL, hash_hi INTEGER NOT NULL)");
@@ -16037,7 +16037,7 @@ function invalidateVectorStatusCache(p) {
 function readVectorIndexStatus(p) {
   if (!existsSync51(p)) return { exists: false, rows: 0, dim: 0, model: "", built_at: null, ready: false };
   try {
-    const db = new DatabaseSync42(p, { readOnly: true });
+    const db = new DatabaseSync41(p, { readOnly: true });
     try {
       const meta = /* @__PURE__ */ new Map();
       try {
@@ -16129,7 +16129,7 @@ async function runBuildVectorIndex(decryptedDir, embed, opts) {
     const groups = /* @__PURE__ */ new Map();
     const cap = Number.isFinite(opts.maxDocsPerBuild) && opts.maxDocsPerBuild > 0 ? Math.floor(opts.maxDocsPerBuild) : 0;
     let pendingCount = 0;
-    const sdb = new DatabaseSync42(src, { readOnly: true });
+    const sdb = new DatabaseSync41(src, { readOnly: true });
     try {
       const sql = "SELECT m.rowid AS rid, m.text AS text, m.username AS username, m.local_id AS local_id, m.create_time AS create_time FROM message_meta m ORDER BY m.rowid";
       for (const r of sdb.prepare(sql).iterate()) {
@@ -16262,7 +16262,7 @@ function loadHashRows(decryptedDir) {
   const sig = String(statSig(p));
   const hit = HASH_CACHE.get(p);
   if (hit && hit.sig === sig) return hit.rows;
-  const db = new DatabaseSync42(p, { readOnly: true });
+  const db = new DatabaseSync41(p, { readOnly: true });
   const rows = db.prepare("SELECT fts_rowid, hash_lo, hash_hi, username FROM vectors").all().map((r) => ({
     rowid: Number(r["fts_rowid"]),
     lo: Number(r["hash_lo"]) >>> 0,
@@ -16294,7 +16294,7 @@ async function searchDense(decryptedDir, queryText, embed, opts) {
   if (filtered.length === 0) return { docs: [], scores: [], note: "\u7C97\u7B5B\u540E\u65E0\u5019\u9009" };
   const db = openVectorDb(decryptedDir, true);
   const src = searchIndexPath(decryptedDir);
-  const sdb = new DatabaseSync42(src, { readOnly: true });
+  const sdb = new DatabaseSync41(src, { readOnly: true });
   const out = [];
   try {
     const getVec = db.prepare("SELECT vec, dim FROM vectors WHERE fts_rowid=?");
@@ -17817,7 +17817,7 @@ import { join as join70 } from "node:path";
 
 // src/backend/wechat-data/src/query/media-image.ts
 import { createDecipheriv as createDecipheriv5 } from "node:crypto";
-import { DatabaseSync as DatabaseSync43 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync42 } from "node:sqlite";
 import { existsSync as existsSync54, mkdirSync as mkdirSync16, readdirSync as readdirSync29, readFileSync as readFileSync17, rmSync as rmSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { createHash as createHash21 } from "node:crypto";
 import { join as join69 } from "node:path";
@@ -18041,7 +18041,7 @@ function resolveImageResourceHint(decryptedDir, username, localId) {
     if (!tableMeta) continue;
     let db = null;
     try {
-      db = new DatabaseSync43(shard.file, { readOnly: true });
+      db = new DatabaseSync42(shard.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -18065,7 +18065,7 @@ function resolveImageResourceHint(decryptedDir, username, localId) {
   const resDb = join69(decryptedDir, "message", "message_resource.db");
   if (existsSync54(resDb)) {
     try {
-      const db = new DatabaseSync43(resDb, { readOnly: true });
+      const db = new DatabaseSync42(resDb, { readOnly: true });
       const chat = db.prepare("SELECT rowid FROM ChatName2Id WHERE user_name = ?").get(username);
       if (chat) {
         const info = db.prepare("SELECT message_id, packed_info AS p FROM MessageResourceInfo WHERE chat_id = ? AND message_local_id = ? AND (message_local_type = 3 OR message_local_type % 4294967296 = 3) ORDER BY message_create_time DESC LIMIT 1").get(chat.rowid, localId);
@@ -18118,7 +18118,7 @@ function resolveImageMd5sBatch(decryptedDir, items) {
       if (pending.length === 0) break;
       let db = null;
       try {
-        db = new DatabaseSync43(shard.file, { readOnly: true });
+        db = new DatabaseSync42(shard.file, { readOnly: true });
         const rows = db.prepare('SELECT local_id AS id, "' + packed + '" AS p FROM "' + table + '" WHERE local_id IN (' + pending.map(() => "?").join(",") + ") AND (local_type = 3 OR local_type % 4294967296 = 3)").all(...pending);
         for (const row of rows) {
           const id = Number(row.id);
@@ -18513,7 +18513,7 @@ function resolveImageFilePathsByMd5(decryptedDir, wechatBaseDir, md5s) {
   if (!existsSync54(dbPath8)) return out;
   let db = null;
   try {
-    db = new DatabaseSync43(dbPath8, { readOnly: true });
+    db = new DatabaseSync42(dbPath8, { readOnly: true });
   } catch {
     return out;
   }
@@ -18559,7 +18559,7 @@ function resolveImageFilePath(decryptedDir, wechatBaseDir, md5, dataIndex) {
   if (!existsSync54(dbPath8)) return null;
   let db = null;
   try {
-    db = new DatabaseSync43(dbPath8, { readOnly: true });
+    db = new DatabaseSync42(dbPath8, { readOnly: true });
   } catch {
     return null;
   }
@@ -19185,7 +19185,7 @@ function createKeysDecryptRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/kb-files-store.ts
-import { DatabaseSync as DatabaseSync44 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync43 } from "node:sqlite";
 import { existsSync as existsSync59, mkdirSync as mkdirSync18, unlinkSync as unlinkSync3, writeFileSync as writeFileSync13 } from "node:fs";
 import { dirname as dirname26, join as join75 } from "node:path";
 
@@ -19365,7 +19365,7 @@ function openStore7(decryptedDir) {
   } catch (e) {
     console.warn("[kb-files] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText4(e));
   }
-  const db = new DatabaseSync44(file);
+  const db = new DatabaseSync43(file);
   migrate2(db);
   return db;
 }
@@ -19471,9 +19471,9 @@ function removeBlobIfUnreferenced(db, decryptedDir, sha256, blobName) {
     return false;
   }
 }
-function composeParseNote(note, truncated) {
+function composeParseNote(note2, truncated) {
   const parts = [];
-  if (note) parts.push(note);
+  if (note2) parts.push(note2);
   if (truncated) parts.push("\u5DF2\u622A\u65AD\u81F3 " + MAX_CHUNKS_PER_FILE + " \u5757\uFF0C\u5176\u4F59\u5185\u5BB9\u4E0D\u53C2\u4E0E\u68C0\u7D22");
   return parts.join("\uFF1B");
 }
@@ -19973,32 +19973,32 @@ function parseFileByExt(ext, bytes) {
   const suffixes = [];
   if (decoded.encoding !== "utf-8") suffixes.push(`\u6309 ${decoded.encoding} \u89E3\u7801`);
   if (truncated) suffixes.push("\u8D85\u51FA\u5927\u5C0F\u4E0A\u9650\uFF0C\u53EA\u89E3\u6790\u4E86\u524D\u4E00\u90E8\u5206");
-  const note = suffixes.join("\uFF1B");
+  const note2 = suffixes.join("\uFF1B");
   if (HTML_SET.has(ext)) {
-    return { state: "ready", parser: "html", blocks: parseHtml(decoded.text), note };
+    return { state: "ready", parser: "html", blocks: parseHtml(decoded.text), note: note2 };
   }
   const delimiter = DELIMITER_BY_EXT[ext];
   if (delimiter !== void 0) {
     const body = tableText(normalizeTable(decoded.text), delimiter);
     const blocks = body === "" ? [] : [{ text: body, page: 0, heading: "", kind: "table" }];
-    return { state: "ready", parser: delimiter === "	" ? "tsv" : "csv", blocks, note };
+    return { state: "ready", parser: delimiter === "	" ? "tsv" : "csv", blocks, note: note2 };
   }
   if (JSON_LINES_SET.has(ext)) {
-    return { state: "ready", parser: "plain", blocks: parsePlainText(decoded.text), note };
+    return { state: "ready", parser: "plain", blocks: parsePlainText(decoded.text), note: note2 };
   }
   if (ext === "json") {
     try {
       const pretty = JSON.stringify(JSON.parse(decoded.text), null, 2);
       if (typeof pretty === "string" && pretty !== "") {
-        return { state: "ready", parser: "json", blocks: parsePlainText(pretty), note };
+        return { state: "ready", parser: "json", blocks: parsePlainText(pretty), note: note2 };
       }
     } catch {
     }
   }
   if (MARKDOWN_SET.has(ext)) {
-    return { state: "ready", parser: "markdown", blocks: parseMarkdown(decoded.text), note };
+    return { state: "ready", parser: "markdown", blocks: parseMarkdown(decoded.text), note: note2 };
   }
-  return { state: "ready", parser: "plain", blocks: parsePlainText(decoded.text), note };
+  return { state: "ready", parser: "plain", blocks: parsePlainText(decoded.text), note: note2 };
 }
 
 // src/backend/wechat-data/src/query/kb/parse-docx.ts
@@ -20327,7 +20327,7 @@ async function parseFileByExtAsync(ext, bytes) {
 }
 
 // src/backend/wechat-data/src/query/kb-vectors.ts
-import { DatabaseSync as DatabaseSync45 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync44 } from "node:sqlite";
 import { existsSync as existsSync60 } from "node:fs";
 var KB_VECTORS_TABLE = "kb_vectors";
 var KB_VECTOR_SCHEMA_VERSION = "1";
@@ -20347,7 +20347,7 @@ function writeMeta2(db, key, value) {
   db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)").run(key, value);
 }
 function openVectorsDb(decryptedDir, readOnly = false) {
-  const db = new DatabaseSync45(kbVectorsDbPath(decryptedDir), readOnly ? { readOnly: true } : {});
+  const db = new DatabaseSync44(kbVectorsDbPath(decryptedDir), readOnly ? { readOnly: true } : {});
   if (!readOnly) {
     db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     db.exec("CREATE TABLE IF NOT EXISTS " + KB_VECTORS_TABLE + " (chunk_id INTEGER PRIMARY KEY, kb_id INTEGER NOT NULL, file_id INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, hash_lo INTEGER NOT NULL, hash_hi INTEGER NOT NULL, model TEXT NOT NULL DEFAULT '')");
@@ -20394,7 +20394,7 @@ function readKbVectorStatus(decryptedDir, kbId, current) {
   };
   if (!existsSync60(p)) return { ...none, staleReason: "no-index" };
   try {
-    const db = new DatabaseSync45(p, { readOnly: true });
+    const db = new DatabaseSync44(p, { readOnly: true });
     try {
       if (!hasTable(db)) return { ...none, exists: true };
       const meta = /* @__PURE__ */ new Map();
@@ -20453,7 +20453,7 @@ function loadKbHashRows(decryptedDir, kbId) {
   const key = p + "#" + kbId;
   const hit = KB_HASH_CACHE.get(key);
   if (hit && hit.sig === sig) return hit.rows;
-  const db = new DatabaseSync45(p, { readOnly: true });
+  const db = new DatabaseSync44(p, { readOnly: true });
   let rows = [];
   try {
     rows = db.prepare("SELECT chunk_id, hash_lo, hash_hi FROM " + KB_VECTORS_TABLE + " WHERE kb_id = ?").all(kbId).map((r) => ({
@@ -20532,7 +20532,7 @@ async function runBuildKbVectorIndex(decryptedDir, kbId, embed, opts) {
     const cap = clampInt(opts.maxDocsPerBuild, 0, 0, Number.MAX_SAFE_INTEGER);
     const groups = /* @__PURE__ */ new Map();
     let pendingCount = 0;
-    const sdb = new DatabaseSync45(src, { readOnly: true });
+    const sdb = new DatabaseSync44(src, { readOnly: true });
     try {
       const sql = "SELECT c.id AS chunk_id, c.file_id AS file_id, c.text AS text FROM kb_chunks c JOIN kb_files f ON f.id = c.file_id WHERE c.kb_id = ? AND f.include_in_rag = 1 ORDER BY c.id";
       for (const r of sdb.prepare(sql).iterate(kbId)) {
@@ -20684,7 +20684,7 @@ async function searchKbDense(decryptedDir, kbId, queryText, embed, opts) {
   if (scored.length === 0) return { hits: [], note: "\u7C97\u7B5B\u540E\u65E0\u5019\u9009" };
   const ids = scored.map((r) => r.rowid);
   const vdb = openVectorsDb(decryptedDir, true);
-  const fdb = new DatabaseSync45(kbFilesDbPath(decryptedDir), { readOnly: true });
+  const fdb = new DatabaseSync44(kbFilesDbPath(decryptedDir), { readOnly: true });
   const out = [];
   try {
     const getVec = vdb.prepare("SELECT vec, dim FROM " + KB_VECTORS_TABLE + " WHERE chunk_id=?");
@@ -20737,7 +20737,7 @@ function deleteKbVectorsForFile(decryptedDir, fileId) {
   const p = kbVectorsDbPath(decryptedDir);
   if (!existsSync60(p)) return 0;
   try {
-    const db = new DatabaseSync45(p);
+    const db = new DatabaseSync44(p);
     try {
       if (!hasTable(db)) return 0;
       const res = db.prepare("DELETE FROM " + KB_VECTORS_TABLE + " WHERE file_id = ?").run(id);
@@ -20757,7 +20757,7 @@ function reassignKbVectors(decryptedDir, fileId, targetKbId) {
   const p = kbVectorsDbPath(decryptedDir);
   if (!existsSync60(p)) return 0;
   try {
-    const db = new DatabaseSync45(p);
+    const db = new DatabaseSync44(p);
     try {
       if (!hasTable(db)) return 0;
       const res = db.prepare("UPDATE " + KB_VECTORS_TABLE + " SET kb_id = ? WHERE file_id = ?").run(kb, id);
@@ -21288,7 +21288,7 @@ function findFilesMentioning(db, kbId, phrase, limit = DEFAULT_MENTION_FILE_LIMI
 }
 
 // src/backend/wechat-data/src/query/kb/extract.ts
-import { DatabaseSync as DatabaseSync46 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync45 } from "node:sqlite";
 var KB_ENTITIES_TABLE = "kb_doc_entities";
 var ENTITY_KINDS = ["person", "org", "product", "place", "topic"];
 function errorText6(e) {
@@ -21396,7 +21396,7 @@ function readDigestForExtract(db, kbId, fileId, budget) {
 function saveDocEntities(decryptedDir, kbId, fileId, items, model) {
   const at = Date.now();
   try {
-    const db = new DatabaseSync46(kbFilesDbPath(decryptedDir));
+    const db = new DatabaseSync45(kbFilesDbPath(decryptedDir));
     try {
       ensureEntitiesTable(db);
       db.exec("BEGIN");
@@ -21421,7 +21421,7 @@ function saveDocEntities(decryptedDir, kbId, fileId, items, model) {
   }
 }
 async function extractFileEntities(decryptedDir, kbId, fileId, ask, model, budget = 8e3) {
-  const db = new DatabaseSync46(kbFilesDbPath(decryptedDir));
+  const db = new DatabaseSync45(kbFilesDbPath(decryptedDir));
   let digest;
   let name = "";
   try {
@@ -21447,7 +21447,7 @@ async function extractFileEntities(decryptedDir, kbId, fileId, ask, model, budge
 }
 function readDocEntities2(decryptedDir, kbId) {
   try {
-    const db = new DatabaseSync46(kbFilesDbPath(decryptedDir), { readOnly: true });
+    const db = new DatabaseSync45(kbFilesDbPath(decryptedDir), { readOnly: true });
     let rows = [];
     try {
       ensureEntitiesTableReadOnly(db);
@@ -21483,7 +21483,7 @@ function kbEntitySummary(decryptedDir, kbId) {
   const kb = Math.trunc(Number(kbId));
   if (!Number.isFinite(kb) || kb <= 0) return empty;
   try {
-    const db = new DatabaseSync46(kbFilesDbPath(decryptedDir), { readOnly: true });
+    const db = new DatabaseSync45(kbFilesDbPath(decryptedDir), { readOnly: true });
     try {
       const ragFiles = Number(db.prepare("SELECT COUNT(*) AS c FROM kb_files WHERE kb_id = ? AND include_in_rag = 1").get(kb).c ?? 0);
       let entities = 0;
@@ -23587,12 +23587,12 @@ function readJobBytes(decryptedDir, job) {
   }
   return new Uint8Array(raw);
 }
-function markStateOnce(decryptedDir, id, state, parser, note, chunkCount, charCount) {
+function markStateOnce(decryptedDir, id, state, parser, note2, chunkCount, charCount) {
   const db = openStore7(decryptedDir);
   try {
     db.prepare(
       "UPDATE kb_files SET parse_state = ?, parser = ?, parse_error = ?, chunk_count = ?, char_count = ?, updated_at = ? WHERE id = ?"
-    ).run(state, parser, note, chunkCount, charCount, Date.now(), id);
+    ).run(state, parser, note2, chunkCount, charCount, Date.now(), id);
   } finally {
     try {
       db.close();
@@ -23600,17 +23600,17 @@ function markStateOnce(decryptedDir, id, state, parser, note, chunkCount, charCo
     }
   }
 }
-async function markState(decryptedDir, id, state, parser, note, chunkCount, charCount) {
+async function markState(decryptedDir, id, state, parser, note2, chunkCount, charCount) {
   try {
     await withBusyRetry(
       "\u72B6\u6001\u5199\u56DE\uFF08id=" + String(id) + " \u2192 " + state + "\uFF09",
-      () => markStateOnce(decryptedDir, id, state, parser, note, chunkCount, charCount)
+      () => markStateOnce(decryptedDir, id, state, parser, note2, chunkCount, charCount)
     );
   } catch (e) {
     warn3("\u72B6\u6001\u5199\u56DE\u5931\u8D25\uFF08id=" + id + " \u2192 " + state + "\uFF09\uFF1A" + errorText4(e));
   }
 }
-function commitReady(decryptedDir, job, parser, note, truncated, blocks) {
+function commitReady(decryptedDir, job, parser, note2, truncated, blocks) {
   const chunked = chunkBlocks(blocks);
   const db = openStore7(decryptedDir);
   try {
@@ -23618,7 +23618,7 @@ function commitReady(decryptedDir, job, parser, note, truncated, blocks) {
       insertChunks(db, job.id, job.kbId, chunked.chunks);
       db.prepare(
         "UPDATE kb_files SET parse_state = ?, parser = ?, parse_error = ?, chunk_count = ?, char_count = ?, updated_at = ? WHERE id = ?"
-      ).run("ready", parser, composeParseNote(note, truncated), chunked.chunkCount, chunked.charCount, Date.now(), job.id);
+      ).run("ready", parser, composeParseNote(note2, truncated), chunked.chunkCount, chunked.charCount, Date.now(), job.id);
     });
   } finally {
     try {
@@ -23685,7 +23685,7 @@ async function drainKbQueue(decryptedDir) {
 // src/backend/wechat-data/src/query/kb/model-config.ts
 import { existsSync as existsSync63, mkdirSync as mkdirSync20 } from "node:fs";
 import { dirname as dirname29 } from "node:path";
-import { DatabaseSync as DatabaseSync47 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync46 } from "node:sqlite";
 var KB_MODELS_TABLE = "kb_models";
 var INLINE_PREFIX = "m:";
 function errorText10(e) {
@@ -23711,7 +23711,7 @@ function openModelsDb(decryptedDir, readOnly = false) {
       console.warn("[kb-models] \u6570\u636E\u6839\u76EE\u5F55\u521B\u5EFA\u5931\u8D25\uFF0C\u7EE7\u7EED\u5C1D\u8BD5\u6253\u5F00\u5E93\uFF1A" + errorText10(e));
     }
   }
-  const db = new DatabaseSync47(file, readOnly ? { readOnly: true } : {});
+  const db = new DatabaseSync46(file, readOnly ? { readOnly: true } : {});
   if (!readOnly) {
     db.exec("CREATE TABLE IF NOT EXISTS " + KB_MODELS_TABLE + " (kb_id INTEGER PRIMARY KEY, chat_ref TEXT NOT NULL DEFAULT '', embed_ref TEXT NOT NULL DEFAULT '', rerank_ref TEXT NOT NULL DEFAULT '', entities_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)");
   }
@@ -23726,7 +23726,7 @@ function readKbModelSettings(decryptedDir, kbId) {
   const file = kbModelsDbPath(decryptedDir);
   if (!existsSync63(file)) return defaultSettings(kb);
   try {
-    const db = new DatabaseSync47(file, { readOnly: true });
+    const db = new DatabaseSync46(file, { readOnly: true });
     try {
       const row = db.prepare("SELECT chat_ref, embed_ref, rerank_ref, entities_at, updated_at FROM " + KB_MODELS_TABLE + " WHERE kb_id = ?").get(kb);
       if (!row) return defaultSettings(kb);
@@ -23801,7 +23801,7 @@ function kbModelOverrideCounts(decryptedDir) {
   const file = kbModelsDbPath(decryptedDir);
   if (!existsSync63(file)) return out;
   try {
-    const db = new DatabaseSync47(file, { readOnly: true });
+    const db = new DatabaseSync46(file, { readOnly: true });
     try {
       const rows = db.prepare("SELECT kb_id, chat_ref, embed_ref, rerank_ref FROM " + KB_MODELS_TABLE).all();
       for (const r of rows) {
@@ -23824,7 +23824,7 @@ function kbModelsOnKbDelete(decryptedDir, kbId) {
   const file = kbModelsDbPath(decryptedDir);
   if (!existsSync63(file)) return false;
   try {
-    const db = new DatabaseSync47(file);
+    const db = new DatabaseSync46(file);
     try {
       return db.prepare("DELETE FROM " + KB_MODELS_TABLE + " WHERE kb_id = ?").run(Math.trunc(kbId)).changes > 0;
     } finally {
@@ -24277,7 +24277,7 @@ ${body}`;
 
 // src/backend/wechat-data/src/query/avatar.ts
 import { createHash as createHash25 } from "node:crypto";
-import { DatabaseSync as DatabaseSync48 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync47 } from "node:sqlite";
 import { existsSync as existsSync64, readFileSync as readFileSync23 } from "node:fs";
 import { join as join79 } from "node:path";
 function sniffImageFormat2(data) {
@@ -24297,7 +24297,7 @@ function avatarFromHeadImageDb(decryptedDir, username) {
   const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync48(dbPath8, { readOnly: true });
+    const db = new DatabaseSync47(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
     if (!has) {
       db.close();
@@ -24318,7 +24318,7 @@ function avatarUrlFromContact(decryptedDir, username) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync48(dbPath8, { readOnly: true });
+    const db = new DatabaseSync47(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
     if (!has) {
       db.close();
@@ -24358,7 +24358,7 @@ function contactByNickname(decryptedDir, nickname) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync48(dbPath8, { readOnly: true });
+    const db = new DatabaseSync47(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
     if (!has) {
       db.close();
@@ -24417,7 +24417,7 @@ function contactAvatarUrlMap(decryptedDir, usernames) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return out;
   try {
-    const db = new DatabaseSync48(dbPath8, { readOnly: true });
+    const db = new DatabaseSync47(dbPath8, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
     if (has) {
       const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
@@ -24443,7 +24443,7 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
   const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
   if (existsSync64(dbPath8)) {
     try {
-      const db = new DatabaseSync48(dbPath8, { readOnly: true });
+      const db = new DatabaseSync47(dbPath8, { readOnly: true });
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
       if (has) {
         const stmt = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1");
@@ -24477,7 +24477,7 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/emoticons.ts
-import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync48 } from "node:sqlite";
 import { existsSync as existsSync65 } from "node:fs";
 import { join as join80 } from "node:path";
 function cellStr18(v) {
@@ -24508,7 +24508,7 @@ function queryEmoticons(decryptedDir, limit, offset = 0) {
 function computeEmoticons(decryptedDir, limit, offset = 0) {
   const path = join80(decryptedDir, "emoticon", "emoticon.db");
   if (!existsSync65(path)) return { custom: [], static: [], packages: [], total: 0, orderedBy: "builtin" };
-  const db = new DatabaseSync49(path, { readOnly: true });
+  const db = new DatabaseSync48(path, { readOnly: true });
   try {
     const custom = [];
     let customOrderedBy = "builtin";
@@ -24603,7 +24603,7 @@ function computeEmoticons(decryptedDir, limit, offset = 0) {
 }
 
 // src/backend/wechat-data/src/query/files.ts
-import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
 import { statSync as statSync22 } from "node:fs";
 import { join as join81 } from "node:path";
 import { createHash as createHash26 } from "node:crypto";
@@ -24636,7 +24636,7 @@ function loadFileSources(decryptedDir) {
   const map = /* @__PURE__ */ new Map();
   let resDb = null;
   try {
-    resDb = new DatabaseSync50(join81(decryptedDir, "message", "message_resource.db"), { readOnly: true });
+    resDb = new DatabaseSync49(join81(decryptedDir, "message", "message_resource.db"), { readOnly: true });
   } catch {
     return map;
   }
@@ -24692,7 +24692,7 @@ function dirSourceCached(decryptedDir) {
   const month = /* @__PURE__ */ new Map();
   const talker = /* @__PURE__ */ new Map();
   try {
-    const db = new DatabaseSync50(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+    const db = new DatabaseSync49(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
     try {
       const names = contactMeta(decryptedDir).names;
       const md5ToName = /* @__PURE__ */ new Map();
@@ -24724,7 +24724,7 @@ function dirSourceCached(decryptedDir) {
   return dirSourceCache;
 }
 function queryFiles(decryptedDir, limit, offset = 0, category, q) {
-  const db = new DatabaseSync50(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+  const db = new DatabaseSync49(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
   try {
     const want = category && category !== "all" ? category : "";
     const kw = (q ?? "").trim();
@@ -24812,7 +24812,7 @@ function queryFiles(decryptedDir, limit, offset = 0, category, q) {
 // src/backend/wechat-data/src/query/image-original.ts
 var import_llm_retry5 = __toESM(require_llm_retry(), 1);
 import { createHash as createHash27 } from "node:crypto";
-import { DatabaseSync as DatabaseSync51 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
 import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync15 } from "node:fs";
 import { join as join82 } from "node:path";
 import { decompress as decompress13 } from "fzstd";
@@ -24848,7 +24848,7 @@ function resolveImageOriginalLink(decryptedDir, username, localId) {
     if (!contentCol) continue;
     let db = null;
     try {
-      db = new DatabaseSync51(shard.file, { readOnly: true });
+      db = new DatabaseSync50(shard.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -24916,7 +24916,7 @@ function sniffImageFormat3(b) {
 // src/backend/wechat-data/src/query/image-original-batch.ts
 import { existsSync as existsSync66, readFileSync as readFileSync24, readdirSync as readdirSync32, writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join83 } from "node:path";
-import { DatabaseSync as DatabaseSync52 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync51 } from "node:sqlite";
 import { createHash as createHash28 } from "node:crypto";
 import { decompress as decompress14 } from "fzstd";
 var ZSTD_MAGIC14 = Buffer.from([40, 181, 47, 253]);
@@ -24957,7 +24957,7 @@ function talkerByTableHash(decryptedDir) {
   if (!existsSync66(dbPath8)) return out;
   let db = null;
   try {
-    db = new DatabaseSync52(dbPath8, { readOnly: true });
+    db = new DatabaseSync51(dbPath8, { readOnly: true });
   } catch {
     return out;
   }
@@ -25028,7 +25028,7 @@ function scanImageOriginalPlan(decryptedDir, rawRoot, decodedDir) {
   for (const file of messageDbFiles(join83(decryptedDir, "message"))) {
     let db = null;
     try {
-      db = new DatabaseSync52(file, { readOnly: true });
+      db = new DatabaseSync51(file, { readOnly: true });
     } catch {
       continue;
     }
@@ -25310,7 +25310,7 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/media-video.ts
-import { DatabaseSync as DatabaseSync53 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync52 } from "node:sqlite";
 import { existsSync as existsSync68, readdirSync as readdirSync34, readFileSync as readFileSync26 } from "node:fs";
 import { createHash as createHash29 } from "node:crypto";
 import { join as join85 } from "node:path";
@@ -25363,7 +25363,7 @@ function resolveVideoMd5(decryptedDir, username, localId) {
   for (const shard of messageShardFiles4(decryptedDir)) {
     let db = null;
     try {
-      db = new DatabaseSync53(shard, { readOnly: true });
+      db = new DatabaseSync52(shard, { readOnly: true });
     } catch {
       continue;
     }
@@ -25409,7 +25409,7 @@ function toJpegDataUrl(bytes, ext) {
 }
 
 // src/backend/wechat-data/src/query/media-voice.ts
-import { DatabaseSync as DatabaseSync54 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync53 } from "node:sqlite";
 import { existsSync as existsSync69, readdirSync as readdirSync35 } from "node:fs";
 import { createHash as createHash30 } from "node:crypto";
 import { join as join86 } from "node:path";
@@ -25426,7 +25426,7 @@ function messageServerId(decryptedDir, username, localId) {
   for (const shard of messageShardFiles5(decryptedDir)) {
     let db = null;
     try {
-      db = new DatabaseSync54(shard, { readOnly: true });
+      db = new DatabaseSync53(shard, { readOnly: true });
     } catch {
       continue;
     }
@@ -25452,7 +25452,7 @@ function resolveVoiceInfo(decryptedDir, username, localId) {
     return { available: false, decodable: false, error: "\u8BED\u97F3\u5E93\u4E0D\u5B58\u5728 (media_0.db)" };
   }
   try {
-    const db = new DatabaseSync54(mediaDb, { readOnly: true });
+    const db = new DatabaseSync53(mediaDb, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='VoiceInfo'").get() !== void 0;
     if (!has) {
       db.close();
@@ -25481,35 +25481,78 @@ function resolveVoiceInfo(decryptedDir, username, localId) {
 
 // src/backend/wechat-data/src/query/sns-image.ts
 import { createHash as createHash31 } from "node:crypto";
-import { existsSync as existsSync70, readdirSync as readdirSync36, readFileSync as readFileSync27, statSync as statSync24 } from "node:fs";
+import { existsSync as existsSync71, readdirSync as readdirSync37, readFileSync as readFileSync27 } from "node:fs";
+import { join as join88 } from "node:path";
+
+// src/backend/wechat-data/src/query/sns-scan.ts
+import { existsSync as existsSync70, readdirSync as readdirSync36, statSync as statSync24 } from "node:fs";
 import { join as join87 } from "node:path";
-var md5UrlCache = /* @__PURE__ */ new Map();
-var snsImageIndex = /* @__PURE__ */ new Map();
-function snsMonthRoots(wechatBaseDir) {
+function noteScan(notes, dir, e) {
+  if (!notes) return;
+  const msg = e instanceof Error ? e.message : String(e);
+  notes.push(`${dir}\uFF1A${msg}`);
+}
+var note = noteScan;
+function snsMonthRoots(wechatBaseDir, kind, notes) {
   const cacheRoot = join87(wechatBaseDir, "cache");
   const out = [];
   if (!existsSync70(cacheRoot)) return out;
-  let months = [];
+  let months;
   try {
     months = readdirSync36(cacheRoot);
-  } catch {
+  } catch (e) {
+    note(notes, cacheRoot, e);
     return out;
   }
   for (const month of months.sort().reverse()) {
-    const root = join87(cacheRoot, month, "Sns", "Img");
+    const root = join87(cacheRoot, month, "Sns", kind);
     if (!existsSync70(root)) continue;
     try {
       const st = statSync24(root);
       out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size });
-    } catch {
+    } catch (e) {
+      note(notes, root, e);
     }
   }
   return out;
 }
-function scanMonth(root, aesKey, xorKey) {
+function snsLeafRoots(wechatBaseDir, kind, notes) {
+  const cacheRoot = join87(wechatBaseDir, "cache");
+  const out = [];
+  if (!existsSync70(cacheRoot)) return out;
+  let months;
+  try {
+    months = readdirSync36(cacheRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (e) {
+    note(notes, cacheRoot, e);
+    return out;
+  }
+  for (const name of months) {
+    const root = join87(cacheRoot, name, "Sns", kind);
+    if (existsSync70(root)) out.push(root);
+  }
+  return out;
+}
+function safeReaddir(dir, notes) {
+  try {
+    return readdirSync36(dir);
+  } catch (e) {
+    note(notes, dir, e);
+    return [];
+  }
+}
+function missWithScanNotes(msg, notes) {
+  if (notes.length === 0) return msg;
+  return `${msg}\uFF08\u5A92\u4F53\u7F13\u5B58\u76EE\u5F55\u6CA1\u626B\u5168\uFF1A${notes.slice(0, 3).join("\uFF1B")}${notes.length > 3 ? "\u2026" : ""}\uFF09`;
+}
+
+// src/backend/wechat-data/src/query/sns-image.ts
+var md5UrlCache = /* @__PURE__ */ new Map();
+var snsImageIndex = /* @__PURE__ */ new Map();
+function scanMonth(root, aesKey, xorKey, notes) {
   const byMd5 = /* @__PURE__ */ new Map();
   const files = [];
-  walkFiles(root, files, 0);
+  walkFiles(root, files, 0, notes);
   for (const f of files) {
     try {
       const dec = decodeDatBytes(new Uint8Array(readFileSync27(f)), aesKey ?? null, xorKey);
@@ -25521,8 +25564,8 @@ function scanMonth(root, aesKey, xorKey) {
   }
   return byMd5;
 }
-function snsResolveByIndex(wechatBaseDir, aesKey, xorKey, wantMd5) {
-  const roots = snsMonthRoots(wechatBaseDir);
+function snsResolveByIndex(wechatBaseDir, aesKey, xorKey, wantMd5, notes) {
+  const roots = snsMonthRoots(wechatBaseDir, "Img", notes);
   let idx = snsImageIndex.get(wechatBaseDir);
   if (!idx) {
     idx = { months: /* @__PURE__ */ new Map(), misses: /* @__PURE__ */ new Set() };
@@ -25537,28 +25580,35 @@ function snsResolveByIndex(wechatBaseDir, aesKey, xorKey, wantMd5) {
       if (hit2) return { file: hit2, complete: false };
       continue;
     }
-    const byMd5 = scanMonth(root, aesKey, xorKey);
+    const before = notes.length;
+    const byMd5 = scanMonth(root, aesKey, xorKey, notes);
+    if (notes.length !== before) {
+      idx.months.delete(month);
+      idx.misses.clear();
+      continue;
+    }
     idx.months.set(month, { mtimeMs, size, byMd5 });
     idx.misses.clear();
     const hit = byMd5.get(wantMd5);
     if (hit) return { file: hit, complete: false };
   }
-  return { complete: true };
+  return { complete: notes.length === 0 };
 }
 function md5Of(bytes) {
   return createHash31("md5").update(Buffer.from(bytes)).digest("hex");
 }
-function walkFiles(dir, out, depth) {
-  if (depth > 5 || !existsSync70(dir)) return;
+function walkFiles(dir, out, depth, notes) {
+  if (depth > 5 || !existsSync71(dir)) return;
   let entries2 = [];
   try {
-    entries2 = readdirSync36(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
-  } catch {
+    entries2 = readdirSync37(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+  } catch (e) {
+    noteScan(notes, dir, e);
     return;
   }
   for (const e of entries2) {
-    const p = join87(dir, e.name);
-    if (e.isDir) walkFiles(p, out, depth + 1);
+    const p = join88(dir, e.name);
+    if (e.isDir) walkFiles(p, out, depth + 1, notes);
     else if (!e.name.endsWith(".db") && !e.name.includes("_shm") && !e.name.includes("_wal")) out.push(p);
   }
 }
@@ -25576,20 +25626,6 @@ function decodeCachedFile(f, aesKey, xorKey) {
     return null;
   }
 }
-function snsImgRoots(wechatBaseDir) {
-  const cacheRoot = join87(wechatBaseDir, "cache");
-  const out = [];
-  if (!existsSync70(cacheRoot)) return out;
-  try {
-    for (const e of readdirSync36(cacheRoot, { withFileTypes: true })) {
-      if (!e.isDirectory()) continue;
-      const root = join87(cacheRoot, e.name, "Sns", "Img");
-      if (existsSync70(root)) out.push(root);
-    }
-  } catch {
-  }
-  return out;
-}
 function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, mediaId) {
   const key = (md5 || "").trim().toLowerCase();
   const cacheKey2 = timelineId && mediaId ? createHash31("md5").update(timelineId + "_" + mediaId + "_2", "utf8").digest("hex") : key;
@@ -25599,14 +25635,15 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
     if (cached) return { url: cached };
   }
   if (!wechatBaseDir) return { error: "\u672A\u914D\u7F6E\u5FAE\u4FE1\u539F\u59CB\u76EE\u5F55\uFF0C\u65E0\u6CD5\u79BB\u7EBF\u89E3\u7801" };
+  const notes = [];
   if (timelineId && mediaId) {
     for (const suffix of ["_2", "_1", "_0", ""]) {
       const k = createHash31("md5").update(timelineId + "_" + mediaId + suffix, "utf8").digest("hex");
       const sub = k.slice(0, 2);
       const rest = k.slice(2);
-      for (const root of snsImgRoots(wechatBaseDir)) {
-        const p = join87(root, sub, rest);
-        if (existsSync70(p)) {
+      for (const root of snsLeafRoots(wechatBaseDir, "Img", notes)) {
+        const p = join88(root, sub, rest);
+        if (existsSync71(p)) {
           const data = decodeCachedFile(p, aesKey, xorKey);
           if (data) {
             boundedSet(md5UrlCache, cacheKey2, data);
@@ -25619,7 +25656,7 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
   if (!key) {
     return { error: "\u672A\u627E\u5230\u5339\u914D\u7684\u672C\u5730 SNS \u56FE\u7247" };
   }
-  const idxRes = snsResolveByIndex(wechatBaseDir, aesKey, xorKey, key);
+  const idxRes = snsResolveByIndex(wechatBaseDir, aesKey, xorKey, key, notes);
   let indexDead = false;
   if (idxRes.file) {
     const data = decodeCachedFile(idxRes.file, aesKey, xorKey);
@@ -25631,7 +25668,7 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
   }
   if (indexDead || !idxRes.complete) {
     const files = [];
-    for (const root of snsImgRoots(wechatBaseDir)) walkFiles(root, files, 0);
+    for (const root of snsLeafRoots(wechatBaseDir, "Img", notes)) walkFiles(root, files, 0, notes);
     for (const f of files) {
       try {
         const bytes = readFileSync27(f);
@@ -25645,10 +25682,10 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
       }
     }
   }
-  const attachRoot = join87(wechatBaseDir, "msg", "attach");
-  if (existsSync70(attachRoot)) {
+  const attachRoot = join88(wechatBaseDir, "msg", "attach");
+  if (existsSync71(attachRoot)) {
     const attachFiles = [];
-    walkFiles(attachRoot, attachFiles, 0);
+    walkFiles(attachRoot, attachFiles, 0, notes);
     let hevcFallback = null;
     for (const f of attachFiles) {
       try {
@@ -25675,18 +25712,18 @@ function resolveSnsImageDataUrl(wechatBaseDir, aesKey, xorKey, md5, timelineId, 
       return { url: hevcFallback.data };
     }
   }
-  return { error: "\u672A\u627E\u5230\u5339\u914D\u7684\u672C\u5730\u56FE\u7247" };
+  return { error: missWithScanNotes("\u672A\u627E\u5230\u5339\u914D\u7684\u672C\u5730\u56FE\u7247", notes) };
 }
 
 // src/backend/wechat-data/src/query/sns-video.ts
 var import_llm_retry6 = __toESM(require_llm_retry(), 1);
 import { createHash as createHash32 } from "node:crypto";
-import { existsSync as existsSync71, readFileSync as readFileSync29, readdirSync as readdirSync37, statSync as statSync25 } from "node:fs";
-import { join as join89 } from "node:path";
+import { existsSync as existsSync72, readFileSync as readFileSync29, readdirSync as readdirSync38, statSync as statSync25 } from "node:fs";
+import { join as join90 } from "node:path";
 
 // src/backend/wechat-data/src/query/sns-keystream.ts
 import { readFileSync as readFileSync28 } from "node:fs";
-import { dirname as dirname30, join as join88 } from "node:path";
+import { dirname as dirname30, join as join89 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import vm from "node:vm";
 var SNS_HEAD_ENCRYPTED_BYTES = 131072;
@@ -25700,15 +25737,15 @@ function resolveAssetDir() {
     // 打包态主路径：native/** 已在 asarUnpack 里，资源落在 app.asar.unpacked 下。
     // 排在第一位是**有意的** —— 从 asar 里读要经 Electron 的 fs 补丁、每次冷启动都
     // 解压 3.8MB；unpacked 目录是真实文件，读起来才是设计意图。
-    join88(processResourcesPath(), "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64"),
-    join88(HERE, "..", "native", "weflow-isaac64"),
+    join89(processResourcesPath(), "app.asar.unpacked", "src", "backend", "wechat-data", "native", "weflow-isaac64"),
+    join89(HERE, "..", "native", "weflow-isaac64"),
     // 构建产物：lib/ → wechat-data/native
-    join88(HERE, "..", "..", "native", "weflow-isaac64")
+    join89(HERE, "..", "..", "native", "weflow-isaac64")
     // 源码布局：src/query/ → wechat-data/native
   ];
   for (const c of candidates) {
     try {
-      if (readFileSync28(join88(c, "wasm_video_decode.wasm")).length > 0) return c;
+      if (readFileSync28(join89(c, "wasm_video_decode.wasm")).length > 0) return c;
     } catch {
     }
   }
@@ -25719,8 +25756,8 @@ function loadRuntime() {
   if (runtimePromise) return runtimePromise;
   runtimePromise = (async () => {
     const assetDir = resolveAssetDir();
-    const wasmBinary = readFileSync28(join88(assetDir, "wasm_video_decode.wasm"));
-    const glueJs = readFileSync28(join88(assetDir, "wasm_video_decode.js"), "utf8");
+    const wasmBinary = readFileSync28(join89(assetDir, "wasm_video_decode.wasm"));
+    const glueJs = readFileSync28(join89(assetDir, "wasm_video_decode.js"), "utf8");
     let captured = null;
     let resolveInit = () => {
     };
@@ -25779,8 +25816,8 @@ function loadRuntime() {
     };
     globals.importScripts = () => {
     };
-    globals.location = { href: join88(assetDir, "wasm_video_decode.js") };
-    globals.VTS_WASM_URL = `file://${join88(assetDir, "wasm_video_decode.wasm")}`;
+    globals.location = { href: join89(assetDir, "wasm_video_decode.js") };
+    globals.VTS_WASM_URL = `file://${join89(assetDir, "wasm_video_decode.wasm")}`;
     globals.wasm_isaac_generate = (ptr, n) => {
       captured = new Uint8Array(Module.HEAPU8.buffer, ptr, n);
     };
@@ -25842,31 +25879,10 @@ function md5OfFile(path) {
     return null;
   }
 }
-function snsVideoMonthRoots(wechatBaseDir) {
-  const cacheRoot = join89(wechatBaseDir, "cache");
-  const out = [];
-  if (!existsSync71(cacheRoot)) return out;
-  let months = [];
-  try {
-    months = readdirSync37(cacheRoot);
-  } catch {
-    return out;
-  }
-  for (const month of months.sort().reverse()) {
-    const root = join89(cacheRoot, month, "Sns", "Video");
-    if (!existsSync71(root)) continue;
-    try {
-      const st = statSync25(root);
-      out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size });
-    } catch {
-    }
-  }
-  return out;
-}
-function scanMonth2(root) {
+function scanMonth2(root, notes) {
   const byMd5 = /* @__PURE__ */ new Map();
-  for (const sub of safeReaddir(root)) {
-    const dir = join89(root, sub);
+  for (const sub of safeReaddir(root, notes)) {
+    const dir = join90(root, sub);
     let isDir = false;
     try {
       isDir = statSync25(dir).isDirectory();
@@ -25874,25 +25890,18 @@ function scanMonth2(root) {
       continue;
     }
     if (!isDir) continue;
-    for (const name of safeReaddir(dir)) {
+    for (const name of safeReaddir(dir, notes)) {
       const low = name.toLowerCase();
       if (!MATCHABLE_EXT.some((ext) => low.endsWith(ext))) continue;
-      const full = join89(dir, name);
+      const full = join90(dir, name);
       const h = md5OfFile(full);
       if (h && !byMd5.has(h)) byMd5.set(h, full);
     }
   }
   return byMd5;
 }
-function safeReaddir(dir) {
-  try {
-    return readdirSync37(dir);
-  } catch {
-    return [];
-  }
-}
-function findByContentMd5(wechatBaseDir, wantMd5) {
-  const roots = snsVideoMonthRoots(wechatBaseDir);
+function findByContentMd5(wechatBaseDir, wantMd5, notes) {
+  const roots = snsMonthRoots(wechatBaseDir, "Video", notes);
   let idx = snsVideoIndex.get(wechatBaseDir);
   if (!idx) {
     idx = { months: /* @__PURE__ */ new Map(), misses: /* @__PURE__ */ new Set() };
@@ -25908,13 +25917,19 @@ function findByContentMd5(wechatBaseDir, wantMd5) {
       if (hit2) return hit2;
       continue;
     }
-    const byMd5 = scanMonth2(root);
+    const before = notes.length;
+    const byMd5 = scanMonth2(root, notes);
+    if (notes.length !== before) {
+      idx.months.delete(month);
+      idx.misses.clear();
+      continue;
+    }
     idx.months.set(month, { mtimeMs, size, byMd5 });
     idx.misses.clear();
     const hit = byMd5.get(wantMd5);
     if (hit) return hit;
   }
-  idx.misses.add(wantMd5);
+  if (notes.length === 0) idx.misses.add(wantMd5);
   return void 0;
 }
 async function fetchSnsVideoDataUrl(remoteUrl, expectMd5, opts = {}) {
@@ -26018,25 +26033,25 @@ function sibling(path, exts) {
   for (const ext of exts) {
     for (const variant of [ext, ext.toUpperCase()]) {
       const p = base + variant;
-      if (existsSync71(p)) return p;
+      if (existsSync72(p)) return p;
     }
   }
   return null;
 }
 function findInChatVideoCache(wechatBaseDir, names) {
-  const root = join89(wechatBaseDir, "msg", "video");
-  if (!existsSync71(root)) return null;
+  const root = join90(wechatBaseDir, "msg", "video");
+  if (!existsSync72(root)) return null;
   const dirs = [root];
   try {
-    for (const entry of readdirSync37(root, { withFileTypes: true })) {
-      if (entry.isDirectory()) dirs.push(join89(root, entry.name));
+    for (const entry of readdirSync38(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.push(join90(root, entry.name));
     }
   } catch {
   }
   for (const dir of dirs) {
     for (const name of names) {
-      const p = join89(dir, name);
-      if (existsSync71(p)) return p;
+      const p = join90(dir, name);
+      if (existsSync72(p)) return p;
     }
   }
   return null;
@@ -26076,8 +26091,9 @@ function resolveSnsVideoCoverDataUrl(wechatBaseDir, md5, _timelineId, _mediaId) 
   const cached = coverCache2.get(want);
   if (cached) return { url: cached };
   if (!wechatBaseDir) return { error: "\u672A\u914D\u7F6E\u5FAE\u4FE1\u539F\u59CB\u76EE\u5F55\uFF0C\u65E0\u6CD5\u79BB\u7EBF\u89E3\u7801" };
-  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want);
-  if (!found) return { error: "\u672C\u673A\u7F13\u5B58\u91CC\u6CA1\u6709\u8FD9\u6761\u89C6\u9891\uFF08\u5728\u5FAE\u4FE1\u91CC\u64AD\u653E\u4E00\u6B21\u540E\u5373\u53EF\u79BB\u7EBF\u89C2\u770B\uFF09" };
+  const notes = [];
+  const found = findByContentMd5(wechatBaseDir, want, notes) ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want);
+  if (!found) return { error: missWithScanNotes("\u672C\u673A\u7F13\u5B58\u91CC\u6CA1\u6709\u8FD9\u6761\u89C6\u9891\uFF08\u5728\u5FAE\u4FE1\u91CC\u64AD\u653E\u4E00\u6B21\u540E\u5373\u53EF\u79BB\u7EBF\u89C2\u770B\uFF09", notes) };
   const imagePath = isVideoFile(found) ? sibling(found, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want) : found;
   if (!imagePath) return { error: "\u627E\u5230\u89C6\u9891\u4F46\u7F3A\u5C11\u540C\u540D\u5C01\u9762" };
   const data = dataUrlOfImage(imagePath);
@@ -26101,8 +26117,9 @@ function findLocalVideoPath(wechatBaseDir, md5, _timelineId, _mediaId) {
   const want = (md5 || "").trim().toLowerCase();
   if (!want) return { error: "\u7F3A\u5C11\u89C6\u9891\u6807\u8BC6\uFF08XML \u672A\u7ED9\u51FA md5\uFF09" };
   if (!wechatBaseDir) return { error: "\u672A\u914D\u7F6E\u5FAE\u4FE1\u539F\u59CB\u76EE\u5F55\uFF0C\u65E0\u6CD5\u79BB\u7EBF\u89E3\u7801" };
-  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, VIDEO_EXT);
-  if (!found) return { error: "\u672C\u673A\u7F13\u5B58\u91CC\u6CA1\u6709\u8FD9\u6761\u89C6\u9891\uFF08\u5728\u5FAE\u4FE1\u91CC\u64AD\u653E\u4E00\u6B21\u540E\u5373\u53EF\u79BB\u7EBF\u89C2\u770B\uFF09" };
+  const notes = [];
+  const found = findByContentMd5(wechatBaseDir, want, notes) ?? chatCachePath(wechatBaseDir, want, VIDEO_EXT);
+  if (!found) return { error: missWithScanNotes("\u672C\u673A\u7F13\u5B58\u91CC\u6CA1\u6709\u8FD9\u6761\u89C6\u9891\uFF08\u5728\u5FAE\u4FE1\u91CC\u64AD\u653E\u4E00\u6B21\u540E\u5373\u53EF\u79BB\u7EBF\u89C2\u770B\uFF09", notes) };
   const videoPath = isVideoFile(found) ? found : sibling(found, VIDEO_EXT);
   if (!videoPath) return { error: "\u672C\u673A\u53EA\u7F13\u5B58\u4E86\u5C01\u9762\uFF0C\u6CA1\u6709\u89C6\u9891\u672C\u4F53" };
   return { path: videoPath };
@@ -26420,9 +26437,9 @@ function createMediaRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/export-history.ts
-import { DatabaseSync as DatabaseSync55 } from "node:sqlite";
-import { existsSync as existsSync72, rmSync as rmSync9, statSync as statSync26 } from "node:fs";
-import { basename as basename10, dirname as dirname31, join as join90 } from "node:path";
+import { DatabaseSync as DatabaseSync54 } from "node:sqlite";
+import { existsSync as existsSync73, rmSync as rmSync9, statSync as statSync26 } from "node:fs";
+import { basename as basename10, dirname as dirname31, join as join91 } from "node:path";
 var DEFAULT_LIMIT3 = 200;
 var MAX_LIMIT3 = 2e3;
 var STATUSES3 = ["ok", "fail", "canceled"];
@@ -26434,10 +26451,10 @@ var SORT_COLUMNS2 = {
   name: "filename"
 };
 function dbPath7(decryptedDir) {
-  return join90(dirname31(decryptedDir), "wechat_privacy.db");
+  return join91(dirname31(decryptedDir), "wechat_privacy.db");
 }
 function openStore8(decryptedDir) {
-  const db = new DatabaseSync55(dbPath7(decryptedDir));
+  const db = new DatabaseSync54(dbPath7(decryptedDir));
   db.exec(`CREATE TABLE IF NOT EXISTS export_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL,
@@ -26550,7 +26567,7 @@ function rowToEntry2(r) {
     params: cleanText3(r["params"]),
     // 每次读取都重新核对 —— 用户可能在资源管理器里移走/删掉了文件，
     // 历史列表必须显示「已不在」，否则「打开」按钮点了没反应会像 bug。
-    existsNow: path ? existsSync72(path) : false
+    existsNow: path ? existsSync73(path) : false
   };
 }
 function listExportHistory(decryptedDir, query = {}) {
@@ -26587,8 +26604,10 @@ function listExportHistory(decryptedDir, query = {}) {
     } finally {
       db.close();
     }
-  } catch {
-    return empty;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[export-history] \u8BFB\u53D6\u5931\u8D25\uFF1A" + msg);
+    return { ...empty, readError: "\u5BFC\u51FA\u5386\u53F2\u8BFB\u53D6\u5931\u8D25\uFF1A" + msg };
   }
 }
 function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
@@ -26607,7 +26626,7 @@ function deleteExportHistory(decryptedDir, ids, deleteFiles = false) {
           if (!p || seen.has(p)) continue;
           seen.add(p);
           try {
-            if (existsSync72(p)) {
+            if (existsSync73(p)) {
               rmSync9(p, { recursive: true, force: true });
               result.filesDeleted += 1;
             }
@@ -26643,7 +26662,7 @@ function pruneExportHistory(decryptedDir, opts = {}) {
         const rows = db.prepare("SELECT id, path FROM export_history").all();
         ids = rows.filter((r) => {
           const p = cleanText3(r.path);
-          return !p || !existsSync72(p);
+          return !p || !existsSync73(p);
         }).map((r) => Number(r.id));
       } else {
         const clauses = [];
@@ -26981,7 +27000,7 @@ async function writeXlsxStream(filePath, rows, ctrl, total = 0) {
 
 // src/backend/wechat-data/src/query/export-flows.ts
 import { mkdirSync as mkdirSync23 } from "node:fs";
-import { basename as basename11, dirname as dirname32, join as join91 } from "node:path";
+import { basename as basename11, dirname as dirname32, join as join92 } from "node:path";
 function collectChatlogMedia(msgs) {
   const out = [];
   for (const m of msgs) {
@@ -27035,7 +27054,7 @@ function planSessionExport(decryptedDir, username, format, count, dir, types, ri
   const isXlsx = format === "excel" || format === "xls" || format === "xlsx";
   const ext = isXlsx ? "xlsx" : format === "html" ? "html" : format === "csv" ? "csv" : format === "md" ? "md" : format === "sql" ? "sql" : format === "json" ? "json" : "txt";
   const chosenDir = dir && dir.trim() ? dir.trim() : "";
-  const exportDir = chosenDir || join91(dirname32(decryptedDir), "exports");
+  const exportDir = chosenDir || join92(dirname32(decryptedDir), "exports");
   mkdirSync23(exportDir, { recursive: true });
   if (chosenDir) grantRoot(chosenDir);
   const sanitized = username.replace(/@chatroom$/, "").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 24);
@@ -27045,7 +27064,7 @@ function planSessionExport(decryptedDir, username, format, count, dir, types, ri
   const outExt = zip ? "zip" : ext;
   const innerName = base.toLowerCase().endsWith("." + ext) ? base : base + "." + ext;
   const filenameOut = base.toLowerCase().endsWith("." + outExt) ? base : base + "." + outExt;
-  const outPath = join91(exportDir, filenameOut);
+  const outPath = join92(exportDir, filenameOut);
   const denial = writeDenialReason(outPath, decryptedDir);
   if (denial !== null) throw new Error(denial);
   return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath, now };
@@ -27151,7 +27170,7 @@ function exportCsv(decryptedDir, kind, recordsKind, dest, category) {
     throw new Error("\u672A\u77E5\u5BFC\u51FA\u7C7B\u578B: " + kind);
   }
   const chosen = typeof dest === "string" && dest.trim() !== "" ? dest.trim() : "";
-  const filepath = chosen || join91(join91(dirname32(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
+  const filepath = chosen || join92(join92(dirname32(decryptedDir), "exports"), kind + "_" + stamp + ".csv");
   const csvDenial = writeDenialReason(filepath, decryptedDir);
   if (csvDenial !== null) throw new Error(csvDenial);
   if (chosen) grantRoot(dirname32(filepath));
@@ -27184,7 +27203,7 @@ function topOf(arr, limit = 12) {
 function exportAnnualReport(decryptedDir, year, format, dir, filename) {
   const report = queryAnnualReport(decryptedDir, year);
   const ext = format === "html" ? "html" : format === "json" ? "json" : "md";
-  const base = dir && dir.trim() ? dir.trim() : join91(dirname32(decryptedDir), "exports");
+  const base = dir && dir.trim() ? dir.trim() : join92(dirname32(decryptedDir), "exports");
   const safeName = filename && filename.trim() ? filename.trim().replace(/\.(md|html|json)$/i, "") + "." + ext : "wechat_annual_" + String(year) + "." + ext;
   mkdirSync23(base, { recursive: true });
   let content = "";
@@ -27250,7 +27269,7 @@ function exportAnnualReport(decryptedDir, year, format, dir, filename) {
     md.push("\u672B\u53E5: " + last);
     content = md.join("\n");
   }
-  const path = join91(base, safeName);
+  const path = join92(base, safeName);
   writeFileAtomicSync(path, content);
   return { path, filename: safeName, count: total };
 }
@@ -27298,14 +27317,14 @@ async function exportMoments(decryptedDir, opts) {
     if (!q) return true;
     return m.author.toLowerCase().includes(q) || m.text.toLowerCase().includes(q) || m.location.toLowerCase().includes(q) || m.link_title.toLowerCase().includes(q) || (m.link_url ?? "").toLowerCase().includes(q) || (m.sourceNickName ?? "").toLowerCase().includes(q) || (m.publicUserName ?? "").toLowerCase().includes(q) || m.likes.some((l) => (l.nickname || l.username).toLowerCase().includes(q)) || m.comments.some((c) => (c.nickname || c.username).toLowerCase().includes(q) || c.content.toLowerCase().includes(q));
   });
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join91(dirname32(decryptedDir), "exports");
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join92(dirname32(decryptedDir), "exports");
   mkdirSync23(base, { recursive: true });
   if (opts?.zip) {
     const mediaCtx2 = exportMediaCtx(decryptedDir);
     const rawName = (opts.filename ?? "").trim();
     const zipBase = rawName ? rawName.replace(/\.zip$/i, "") : "";
     const zipName = zipBase ? zipBase + ".zip" : "wechat_moments_" + String(Date.now()) + ".zip";
-    const zipPath = join91(base, zipName);
+    const zipPath = join92(base, zipName);
     let mediaCount = 0;
     await writeZipAtomic(zipPath, async (zip) => {
       await zip.addFile("moments.json", JSON.stringify(filtered, null, 2));
@@ -27409,7 +27428,7 @@ async function exportMoments(decryptedDir, opts) {
     }
     content = lines.join(NL);
   }
-  const path = join91(base, name);
+  const path = join92(base, name);
   writeFileAtomicSync(path, content);
   return { path, filename: name, count: filtered.length };
 }
@@ -27417,10 +27436,10 @@ async function exportAllSessions(decryptedDir, opts) {
   const ctrl = { onProgress: opts?.onProgress, signal: opts?.signal };
   const env = querySessions(decryptedDir);
   const sessions = env.sessions.slice(0, 1e3);
-  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join91(dirname32(decryptedDir), "exports");
+  const base = opts?.dir && opts.dir.trim() ? opts.dir.trim() : join92(dirname32(decryptedDir), "exports");
   mkdirSync23(base, { recursive: true });
   const filename = opts?.filename && opts.filename.trim() ? opts.filename.trim().endsWith(".zip") ? opts.filename.trim() : opts.filename.trim() + ".zip" : "wechat_all_sessions_" + String(Date.now()) + ".zip";
-  const path = join91(base, filename);
+  const path = join92(base, filename);
   const seen = /* @__PURE__ */ new Set();
   let total = 0;
   await writeZipAtomic(path, async (zip) => {
@@ -28462,14 +28481,14 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
         const src = md5 ? paths.get(md5.toLowerCase()) : void 0;
         if (!src) continue;
         const it = items[i];
-        const outDir = join92(decodedDir, it.username);
-        const cached = CACHED_IMAGE_EXTS.some((ext) => existsSync73(join92(decodedDir, md5 + "." + ext)) || existsSync73(join92(outDir, md5 + "." + ext)));
+        const outDir = join93(decodedDir, it.username);
+        const cached = CACHED_IMAGE_EXTS.some((ext) => existsSync74(join93(decodedDir, md5 + "." + ext)) || existsSync74(join93(outDir, md5 + "." + ext)));
         if (cached) continue;
         try {
           const dec = decodeDatBytes(new Uint8Array(readFileSync30(src)), aesBytes, xorKey);
           if ("error" in dec || dec.format === "hevc") continue;
           mkdirSync24(outDir, { recursive: true });
-          writeFileSync20(join92(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
+          writeFileSync20(join93(outDir, md5 + "." + dec.format), Buffer.from(dec.bytes));
         } catch {
         }
       }
@@ -28622,7 +28641,7 @@ var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("g
   }
   async openPath(options, signal) {
     const p = options.path;
-    const dataRoot = join93(this._dirs.decrypted, "..");
+    const dataRoot = join94(this._dirs.decrypted, "..");
     const denial = openDenialReason(p, dataRoot);
     if (denial !== null) return { ok: false, path: p, error: denial };
     try {
@@ -28958,9 +28977,9 @@ __decorateElement(_init2, 1, "generatePeriodSummary", _generatePeriodSummary_dec
 __decoratorMetadata(_init2, GatewayAskOps);
 
 // src/backend/wechat-data/src/laya/runtime.ts
-import { existsSync as existsSync75, readFileSync as readFileSync31 } from "node:fs";
+import { existsSync as existsSync76, readFileSync as readFileSync31 } from "node:fs";
 import { cpus } from "node:os";
-import { join as join95 } from "node:path";
+import { join as join96 } from "node:path";
 
 // src/backend/wechat-data/src/laya/build-sequence.ts
 var QTYPES = { choice: 0, score: 1, noul: 2 };
@@ -29045,8 +29064,8 @@ function collateItems(items, padId) {
 }
 
 // src/backend/wechat-data/src/laya/model-file.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync74, mkdirSync as mkdirSync25, renameSync as renameSync8, statSync as statSync27, unlinkSync as unlinkSync5 } from "node:fs";
-import { dirname as dirname33, join as join94, resolve as resolve4 } from "node:path";
+import { copyFileSync as copyFileSync2, existsSync as existsSync75, mkdirSync as mkdirSync25, renameSync as renameSync8, statSync as statSync27, unlinkSync as unlinkSync5 } from "node:fs";
+import { dirname as dirname33, join as join95, resolve as resolve4 } from "node:path";
 var LAYA_DIR_ENV = "DSH_WECHAT_LAYA_DIR";
 var LAYA_MIRROR_ENV = "DSH_WECHAT_LAYA_MIRROR";
 var LAYA_REPO_ENV = "DSH_WECHAT_LAYA_REPO";
@@ -29063,7 +29082,7 @@ var LAYA_MODEL_FILE = "laya-decision.onnx";
 var DOWNLOAD_CONNECT_TIMEOUT_MS2 = 3e4;
 function layaModelsDir(decryptedDir) {
   const root = decryptedDir ? dirname33(decryptedDir) : resolveWechatDataRoot();
-  return join94(root, "laya");
+  return join95(root, "laya");
 }
 function resolveLayaModelsDir(configured, decryptedDir) {
   const pinned = typeof configured === "string" ? configured.trim() : "";
@@ -29077,8 +29096,8 @@ function layaModelStatus(configured, decryptedDir) {
   const missing = [];
   let bytes = 0;
   for (const a of LAYA_ASSETS) {
-    const p = join94(dir, a.rel);
-    if (!existsSync74(p)) {
+    const p = join95(dir, a.rel);
+    if (!existsSync75(p)) {
       missing.push(`${a.label}\uFF08\u7F3A ${a.rel}\uFF09`);
       continue;
     }
@@ -29092,10 +29111,10 @@ function layaModelStatus(configured, decryptedDir) {
     bytes += size;
     if (size < a.minBytes) missing.push(`${a.label}\uFF08\u4E0D\u5B8C\u6574\uFF1A${formatBytes2(size)}\uFF09`);
   }
-  return { installed: missing.length === 0, dir, path: join94(dir, LAYA_MODEL_FILE), bytes, source, missing };
+  return { installed: missing.length === 0, dir, path: join95(dir, LAYA_MODEL_FILE), bytes, source, missing };
 }
 function layaTokenizerDir(dir) {
-  return join94(dir, "tokenizer");
+  return join95(dir, "tokenizer");
 }
 var formatBytes2 = fmtBytes;
 function layaDownloadBases() {
@@ -29118,8 +29137,8 @@ async function layaDownloadModel(dir, onProgress) {
   const done = [];
   let total = 0;
   for (const asset of LAYA_ASSETS) {
-    const target = join94(dir, asset.rel);
-    if (existsSync74(target)) {
+    const target = join95(dir, asset.rel);
+    if (existsSync75(target)) {
       try {
         if (statSync27(target).size >= asset.minBytes) {
           done.push(asset.rel);
@@ -29162,9 +29181,9 @@ function layaAdoptModelDir(sourceDir, decryptedDir) {
   const target = layaModelsDir(decryptedDir);
   mkdirSync25(target, { recursive: true });
   for (const asset of LAYA_ASSETS) {
-    const from = join94(sourceDir, asset.rel);
-    if (!existsSync74(from)) continue;
-    const to = join94(target, asset.rel);
+    const from = join95(sourceDir, asset.rel);
+    if (!existsSync75(from)) continue;
+    const to = join95(target, asset.rel);
     if (resolve4(from) === resolve4(to)) continue;
     mkdirSync25(dirname33(to), { recursive: true });
     const tmp = `${to}.part`;
@@ -29256,8 +29275,8 @@ function layaUnload() {
 }
 function readTemperatures(dir) {
   const fallback = { base: [1, 1, 1], byOptions: {} };
-  const p = join95(dir, "rl_agent_config.json");
-  if (!existsSync75(p)) return fallback;
+  const p = join96(dir, "rl_agent_config.json");
+  if (!existsSync76(p)) return fallback;
   try {
     const cfg = JSON.parse(readFileSync31(p, "utf8"));
     const clamp2 = (v) => {
@@ -29326,7 +29345,7 @@ async function layaEnsureLoaded(modelDir, decryptedDir) {
       });
       let tokenizerBytes = 0;
       try {
-        tokenizerBytes = readFileSync31(join95(tokDir, "tokenizer.json")).byteLength;
+        tokenizerBytes = readFileSync31(join96(tokDir, "tokenizer.json")).byteLength;
       } catch {
       }
       loaded = { dir: status.dir, ort, session, tokenizer, tokenizerBytes, optColsCap: 16 };
@@ -29483,14 +29502,14 @@ function postprocessAnswers(input) {
 }
 
 // src/backend/wechat-data/src/laya/store.ts
-import { DatabaseSync as DatabaseSync56 } from "node:sqlite";
-import { existsSync as existsSync76, statSync as statSync28 } from "node:fs";
-import { dirname as dirname34, join as join96 } from "node:path";
+import { DatabaseSync as DatabaseSync55 } from "node:sqlite";
+import { existsSync as existsSync77, statSync as statSync28 } from "node:fs";
+import { dirname as dirname34, join as join97 } from "node:path";
 function layaCachePath(decryptedDir) {
-  return join96(dirname34(decryptedDir), "laya_analysis.db");
+  return join97(dirname34(decryptedDir), "laya_analysis.db");
 }
 function openStore9(decryptedDir) {
-  const db = new DatabaseSync56(layaCachePath(decryptedDir));
+  const db = new DatabaseSync55(layaCachePath(decryptedDir));
   db.exec(`CREATE TABLE IF NOT EXISTS laya_analysis (
     session_id TEXT NOT NULL,
     local_id INTEGER NOT NULL,
@@ -29513,7 +29532,7 @@ function layaModelKey(modelPath) {
 }
 function readAnalysisCache(decryptedDir, sessionId, modelKey, localIds) {
   const out = /* @__PURE__ */ new Map();
-  if (localIds.length === 0 || !existsSync76(layaCachePath(decryptedDir))) return out;
+  if (localIds.length === 0 || !existsSync77(layaCachePath(decryptedDir))) return out;
   let db = null;
   try {
     db = openStore9(decryptedDir);

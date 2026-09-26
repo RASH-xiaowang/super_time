@@ -217,7 +217,14 @@ interface ShardSig { main: number; wal: number }
  * 密钥错也永远为真，于是「解密结果无效」这道闸门（本文件 9 处 + 全量解密 1 处）形同虚设：
  * 错密钥会把一坨乱码发布成快照，面板读到的是「库打不开/查无数据」，而日志一片绿。
  * 真正的证据是加密区里的头部字段：偏移 16-17 的页大小必须是 `[512, 65536]` 内的 2 的幂
- * （SQLite 的硬规定，`65536` 编码成 1），随机明文撞上它的概率约 16/65536 ≈ 0.02%。
+ * （`65536` 编码成 1），随机明文撞上它的概率约 16/65536 ≈ 0.02%。
+ *
+ * 为什么还要再看 18/19/21/22/23：**0.02% 不是抽象风险** —— 全量解密一次要判几百个库，
+ * 每轮同步都在判，跑得够久就一定撞得上一次，而撞上的表现是「一个错密钥的乱码库被发布成
+ * 快照」（正是这条判据要防的事）。SQLite 规范写死这三个字段：读/写格式只能是 1 或 2，
+ * 三个 payload fraction 必须是 64/32/32。加上它们，随机撞过的概率降到约 10⁻¹²。
+ * 刻意**不**校验偏移 20 的 reserved（微信那类库这里是 80，不是 0）与偏移 40 的 encoding
+ * （要为此多读文件头，收益一样、风险更大）。
  * @param head - 解密产物的前若干字节（至少 24 个）。
  * @returns 是否像一个真库。
  */
@@ -225,8 +232,13 @@ export function plausibleSqliteHeader(head: Buffer): boolean {
   if (head.length < 24) return false
   if (!head.subarray(0, 15).equals(SQLITE_HDR.subarray(0, 15))) return false
   const pageSize = head.readUInt16BE(16)
-  if (pageSize === 1) return true // 65536 在头部里写成 1
-  return pageSize >= 512 && pageSize <= 65536 && (pageSize & (pageSize - 1)) === 0
+  const sizeOk = pageSize === 1 || (pageSize >= 512 && pageSize <= 65536 && (pageSize & (pageSize - 1)) === 0)
+  if (!sizeOk) return false
+  // 读/写格式：SQLite 只认 1（回滚日志）与 2（WAL / 增量 vacuum）。
+  if (head[18] !== 1 && head[18] !== 2) return false
+  if (head[19] !== 1 && head[19] !== 2) return false
+  // 三个 payload fraction 是规范里写死的常数（任何真库都是 64/32/32）。
+  return head[21] === 64 && head[22] === 32 && head[23] === 32
 }
 
 /**

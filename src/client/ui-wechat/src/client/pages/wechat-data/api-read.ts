@@ -63,7 +63,7 @@ import type {
   MemberSearchSnapshot,
   MessagesSnapshot,
   MomentsInsightsSnapshot,
-  MomentsMonthlyRow,
+  MomentsMonthlyRow, MomentsMonthlySnapshot,
   MomentsSnapshot,
   OfficialAssetsSnapshot,
   OverviewInsights,
@@ -226,7 +226,7 @@ export async function apiGetMomentsInsights(options?: { author?: string }): Prom
  *   (`authorName`) filter (all when omitted).
  * @returns monthly rows sorted ascending by month.
  */
-export async function apiGetMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<MomentsMonthlyRow[]> {
+export async function apiGetMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<MomentsMonthlySnapshot> {
   return unwrap(await remote().getMomentsMonthly(options))
 }
 /**

@@ -87,6 +87,11 @@ export interface ExportHistorySnapshot {
     totalBytes: number;
     /** 命中条目里文件已不在磁盘上的条数（供「清理失效记录」提示）。 */
     missingCount: number;
+    /**
+     * 非空 = 这一页**没读到**（隐私库打不开 / 被占用 / 表损坏），`items` 因此是空的。
+     * P1-1/#9：没有这个字段时，界面画的是「还没有导出记录」，而真实原因是记录库读不动。
+     */
+    readError?: string;
 }
 /** 删除导出历史的结果。 */
 export interface ExportHistoryDeleteResult {

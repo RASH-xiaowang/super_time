@@ -24,6 +24,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { decryptAllDbs } from '../src/query/decrypt-all.ts'
 import { looksDecrypted, plausibleSqliteHeader } from '../src/query/sync.ts'
+import { writeSqlitePage1Header } from '../../tests/helpers/sqlite-page1.ts'
 
 const PAGE_SZ = 4096
 const RESERVE_SZ = 80
@@ -70,9 +71,10 @@ function makeEncryptedDb(rawDir: string, rel: string, rawKeyHex = RAW_KEY, marke
   const salt = Buffer.from('a'.repeat(16) + rel.length.toString(16).padStart(2, '0')).subarray(0, 16)
   const encKey = derive(rawKeyHex, salt)
   const plain1 = Buffer.alloc(PAGE_SZ, marker)
-  // 页 1 头部里「不能被合成」的那个字段：偏移 16-17 = 页大小。真库一定是 2 的幂，
-  // 而 `decryptPage` 只合成前 16 字节的魔数 —— 所以这个字段才是「解对了」的证据。
-  plain1.writeUInt16BE(PAGE_SZ, 16)
+  // 页 1 头部要写得**像一个真库**：偏移 16-17 的页大小、18/19 的读写格式、
+  // 21/22/23 的三个 payload fraction（SQLite 规范写死 64/32/32）。`plausibleSqliteHeader`
+  // 现在这几维都看，夹具只填页大小的话，解出来的东西会被自己的判据拒掉。
+  writeSqlitePage1Header(plain1, PAGE_SZ)
   const plain2 = Buffer.alloc(PAGE_SZ, marker + 1)
   writeFileSync(file, Buffer.concat([
     encryptPage(plain1, 1, encKey, salt),
@@ -229,11 +231,21 @@ describe('decryptAllDbs：配置不合法时给的是「下一步做什么」', 
 })
 
 describe('「解对了没有」的判据（sync 与全量解密共用同一个主人）', () => {
-  /** 造一个页 1 头部：前 16 字节是合成魔数，16-17 是页大小。 */
+  /**
+   * 造一个页 1 头部：前 16 字节是合成魔数，16-17 是页大小，其余按 SQLite 规范填常数。
+   * @param pageSizeField - 偏移 16-17 的页大小编码（`1` 表示 65536）。
+   * @param fill - 其余字节的填充值（真库里 18/19/21/22/23 会被逐个覆盖成合法值）。
+   * @returns 24 字节的头部缓冲。
+   */
   const page1 = (pageSizeField: number, fill = 0x5a): Buffer => {
     const b = Buffer.alloc(24, fill)
     Buffer.from('SQLite format 3\x00', 'utf8').copy(b, 0)
     b.writeUInt16BE(pageSizeField, 16)
+    b[18] = 1   // read version
+    b[19] = 1   // write version
+    b[21] = 64  // max embedded payload fraction（规范写死）
+    b[22] = 32  // min embedded payload fraction
+    b[23] = 32  // leaf embedded payload fraction
     return b
   }
 
@@ -249,14 +261,35 @@ describe('「解对了没有」的判据（sync 与全量解密共用同一个�
     expect(plausibleSqliteHeader(Buffer.alloc(16)), '长度不够时必须先拒（readUInt16BE 会越界）').toBe(false)
   })
 
+  /**
+   * 页大小那一维单独只有约 0.02% 的撞中率 —— 一次全量解密要判几百个库、每轮同步都在判，
+   * 跑得够久就撞得上一次。下面这几条把「规范写死的常数」也变成判据（合起来约 10⁻¹²）。
+   */
+  it('页大小对、但其余头部是乱码 ⇒ 仍然要判无效（0.02% 不是可以赌的余量）', () => {
+    const badFormat = page1(PAGE_SZ)
+    badFormat[18] = 7
+    expect(plausibleSqliteHeader(badFormat), '读格式不是 1/2 也放行了').toBe(false)
+    const badWrite = page1(PAGE_SZ)
+    badWrite[19] = 0
+    expect(plausibleSqliteHeader(badWrite), '写格式不是 1/2 也放行了').toBe(false)
+    for (const [at, name] of [[21, 'max payload'], [22, 'min payload'], [23, 'leaf payload']] as const) {
+      const bad = page1(PAGE_SZ)
+      bad[at] = 0x5a
+      expect(plausibleSqliteHeader(bad), `${name} 是规范常数，改错也必须判无效`).toBe(false)
+    }
+    // 反向哨兵：reserved（偏移 20）在微信那类库里是 80，不是 0 —— 不许拿它当判据。
+    const withReserve = page1(PAGE_SZ)
+    withReserve[20] = 80
+    expect(plausibleSqliteHeader(withReserve), '把 reserved 当常数校验 ⇒ 真库会被整批判成无效').toBe(true)
+  })
+
   it('looksDecrypted 读的是文件头 24 字节，且对不存在的文件回 false 而不是抛', () => {
     const root = mkdtempSync(join(tmpdir(), 'hdr-'))
     scratch.push(root)
     const good = join(root, 'good.db')
     const bytes = Buffer.alloc(PAGE_SZ, 0x33)
     plausibleSqliteHeader(Buffer.alloc(0)) // 只为让上面那条的口径在这里可见
-    Buffer.from('SQLite format 3\x00', 'utf8').copy(bytes, 0)
-    bytes.writeUInt16BE(PAGE_SZ, 16)
+    page1(PAGE_SZ).copy(bytes, 0)
     writeFileSync(good, bytes)
     expect(looksDecrypted(good)).toBe(true)
     writeFileSync(join(root, 'junk.db'), Buffer.alloc(PAGE_SZ, 0x7f))

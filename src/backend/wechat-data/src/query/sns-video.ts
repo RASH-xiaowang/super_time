@@ -28,6 +28,8 @@ import { join } from 'node:path'
 import { TIMEOUT_ERROR_NAME, fetchWithRetry } from '../../../llm-retry.js'
 import { CDN_DISABLED_MESSAGE, LOCAL_DECRYPT_DISABLED_MESSAGE, cdnFetchAllowed, localDecryptEnabled } from './cdn-policy.ts'
 import { decryptSnsHead } from './sns-keystream.ts'
+import { missWithScanNotes, safeReaddir, snsMonthRoots } from './sns-scan.ts'
+import type { ScanNotes } from './sns-scan.ts'
 
 const VIDEO_EXT = ['.mp4', '.mov']
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png']
@@ -58,33 +60,22 @@ function md5OfFile(path: string): string | null {
   }
 }
 
-/** 列出 `cache/<月>/Sns/Video` 根目录及签名，月份由新到旧。 */
-function snsVideoMonthRoots(wechatBaseDir: string): Array<{ month: string; root: string; mtimeMs: number; size: number }> {
-  const cacheRoot = join(wechatBaseDir, 'cache')
-  const out: Array<{ month: string; root: string; mtimeMs: number; size: number }> = []
-  if (!existsSync(cacheRoot)) return out
-  let months: string[] = []
-  try { months = readdirSync(cacheRoot) } catch { return out }
-  for (const month of months.sort().reverse()) {
-    const root = join(cacheRoot, month, 'Sns', 'Video')
-    if (!existsSync(root)) continue
-    try {
-      const st = statSync(root)
-      out.push({ month, root, mtimeMs: st.mtimeMs, size: st.size })
-    } catch { /* skip */ }
-  }
-  return out
-}
-
-/** 扫描一个月份目录，得到「内容 md5 → 文件路径」。 */
-function scanMonth(root: string): Map<string, string> {
+/**
+ * 扫描一个月份目录，得到「内容 md5 → 文件路径」。
+ * @param root - 某个月的媒体根目录（`cache/<月>/Sns/Video`）。
+ * @param notes - 扫描注记收集器：调用方比对它有没有变长，就知道这月**扫全了没有**。
+ * @returns md5 → 路径的索引。
+ */
+function scanMonth(root: string, notes: ScanNotes): Map<string, string> {
   const byMd5 = new Map<string, string>()
-  for (const sub of safeReaddir(root)) {
+  for (const sub of safeReaddir(root, notes)) {
     const dir = join(root, sub)
     let isDir = false
+    // 单个条目 stat 不动（微信正在改写、链接断了）不算「没扫全」：那是那一个文件的问题，
+    // 把它记进 notes 会让整月索引失效，代价远大于收益。
     try { isDir = statSync(dir).isDirectory() } catch { continue }
     if (!isDir) continue
-    for (const name of safeReaddir(dir)) {
+    for (const name of safeReaddir(dir, notes)) {
       const low = name.toLowerCase()
       if (!MATCHABLE_EXT.some(ext => low.endsWith(ext))) continue
       const full = join(dir, name)
@@ -96,16 +87,15 @@ function scanMonth(root: string): Map<string, string> {
   return byMd5
 }
 
-function safeReaddir(dir: string): string[] {
-  try { return readdirSync(dir) } catch { return [] }
-}
-
 /**
  * 按月增量查找 wantMd5（内容 md5），命中即停。
+ * @param wechatBaseDir - 微信账号根目录。
+ * @param wantMd5 - 要找的内容 md5。
+ * @param notes - 扫描注记收集器（调用方用它区分「真没有」与「没扫到」）。
  * @returns 命中的文件路径；`undefined` 表示「当前签名下已扫完全部月份仍没有」。
  */
-function findByContentMd5(wechatBaseDir: string, wantMd5: string): string | undefined {
-  const roots = snsVideoMonthRoots(wechatBaseDir)
+function findByContentMd5(wechatBaseDir: string, wantMd5: string, notes: ScanNotes): string | undefined {
+  const roots = snsMonthRoots(wechatBaseDir, 'Video', notes)
   let idx = snsVideoIndex.get(wechatBaseDir)
   if (!idx) { idx = { months: new Map(), misses: new Set() }; snsVideoIndex.set(wechatBaseDir, idx) }
   const live = new Set(roots.map(r => r.month))
@@ -119,13 +109,23 @@ function findByContentMd5(wechatBaseDir: string, wantMd5: string): string | unde
       if (hit) return hit
       continue
     }
-    const byMd5 = scanMonth(root)
+    const before = notes.length
+    const byMd5 = scanMonth(root, notes)
+    if (notes.length !== before) {
+      // 这个月**没扫全**：不写进索引 —— 否则残缺的索引会带着「mtime/size 没变」的理由
+      // 被后面每一次查询复用，那个月里的视频从此永远查不到。也不许记「没有」。
+      idx.months.delete(month)
+      idx.misses.clear()
+      continue
+    }
     idx.months.set(month, { mtimeMs, size, byMd5 })
     idx.misses.clear() // 树变了，之前的「没有」结论失效
     const hit = byMd5.get(wantMd5)
     if (hit) return hit
   }
-  idx.misses.add(wantMd5)
+  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。
+  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。
+  if (notes.length === 0) idx.misses.add(wantMd5)
   return undefined
 }
 
@@ -408,10 +408,12 @@ export function resolveSnsVideoCoverDataUrl(
   // 三级兜底：内容 md5 索引 → 聊天缓存里的同名图片/视频 → 聊天缓存的 `_thumb` 封面。
   // 最后一级不能省：只转发过、没在朋友圈播放过的视频，朋友圈缓存里没有它，
   // 但聊天缓存会留下 <md5>_thumb.jpg，这时直接拿它当封面。
-  const found = findByContentMd5(wechatBaseDir, want)
+  const notes: ScanNotes = []
+  const found = findByContentMd5(wechatBaseDir, want, notes)
     ?? chatCachePath(wechatBaseDir, want, IMAGE_EXT)
     ?? chatCacheThumb(wechatBaseDir, want)
-  if (!found) return { error: '本机缓存里没有这条视频（在微信里播放一次后即可离线观看）' }
+  // 「本机没有」只有在扫得全时才成立；扫不全就照实说（P1-1/#9）。
+  if (!found) return { error: missWithScanNotes('本机缓存里没有这条视频（在微信里播放一次后即可离线观看）', notes) }
   const imagePath = isVideoFile(found)
     ? (sibling(found, IMAGE_EXT) ?? chatCacheThumb(wechatBaseDir, want))
     : found
@@ -461,8 +463,9 @@ export function findLocalVideoPath(
   const want = (md5 || '').trim().toLowerCase()
   if (!want) return { error: '缺少视频标识（XML 未给出 md5）' }
   if (!wechatBaseDir) return { error: '未配置微信原始目录，无法离线解码' }
-  const found = findByContentMd5(wechatBaseDir, want) ?? chatCachePath(wechatBaseDir, want, VIDEO_EXT)
-  if (!found) return { error: '本机缓存里没有这条视频（在微信里播放一次后即可离线观看）' }
+  const notes: ScanNotes = []
+  const found = findByContentMd5(wechatBaseDir, want, notes) ?? chatCachePath(wechatBaseDir, want, VIDEO_EXT)
+  if (!found) return { error: missWithScanNotes('本机缓存里没有这条视频（在微信里播放一次后即可离线观看）', notes) }
   // 命中的可能是封面（XML 的 md5 是封面图时），此时按同名兄弟文件找视频本体。
   const videoPath = isVideoFile(found) ? found : sibling(found, VIDEO_EXT)
   if (!videoPath) return { error: '本机只缓存了封面，没有视频本体' }

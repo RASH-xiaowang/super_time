@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlySnapshot, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
 import { type AnnualReview } from './query/annual-review.ts';
@@ -383,7 +383,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     getMomentsMonthly(options?: {
         author?: string;
         authorName?: string;
-    }): MomentsMonthlyRow[];
+    }): MomentsMonthlySnapshot;
     getOfficialAssets(): OfficialAssetsSnapshot;
     searchUnified(options: {
         query: string;

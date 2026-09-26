@@ -585,7 +585,12 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
       .toMatchObject({ found: false })
     expect(gw.resolveChatHistory({ serverId: '-1' })).toMatchObject({ found: false })
     expect(gw.getMomentsAuthors().reduce((a, x) => a + x.count, 0)).toBe(5)
-    expect(Array.isArray(gw.getMomentsMonthly())).toBe(true)
+    // 月度分布回的是**快照**（`months` + 可选 `readError`），不是裸数组：
+    // 「库读不动」与「一条朋友圈都没有」从此是两件事（P1-1/#9）。夹具的 content 里
+    // 没有 create_time ⇒ 月份为空，但「读得动」所以 readError 必须缺席。
+    const monthlySnap = gw.getMomentsMonthly()
+    expect(Array.isArray(monthlySnap.months)).toBe(true)
+    expect(monthlySnap.readError, `夹具里的 sns.db 是好的，不该报 readError：${String(monthlySnap.readError)}`).toBeUndefined()
   })
 })
 
