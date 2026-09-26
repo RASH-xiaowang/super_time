@@ -340,6 +340,30 @@ const MUTATIONS = [
     to: 'const suggestVisible = suggestOpen && curSession !== null',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/reply-suggest.wiring.spec.ts',
   },
+  {
+    id: 'M38-worldmap-waits-for-data',
+    why: '世界层退回「等数据才画地图」—— 底图明明是静态的，却让整块区域空着等（用户报的现象）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
+    from: '      {showGeoMap && (',
+    to: '      {map && showGeoMap && (',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
+  },
+  {
+    id: 'M39-echarts-before-data',
+    why: 'showWorldEcharts 不再要求数据就绪 —— GeoJSON 先到时会切 ECharts，而那一支被 map 挡住 ⇒ 两边都不画',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
+    from: '  const showWorldEcharts = worldEchartsReady && map !== null',
+    to: '  const showWorldEcharts = worldEchartsReady',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
+  },
+  {
+    id: 'M40-loading-shown-as-empty',
+    why: '「还在加载」被说成「没有可定位的地区数据」—— 本仓对「把读不到渲染成没有」有明确纪律',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx',
+    from: '            {map !== null && located.length === 0 && (',
+    to: '            {located.length === 0 && (',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

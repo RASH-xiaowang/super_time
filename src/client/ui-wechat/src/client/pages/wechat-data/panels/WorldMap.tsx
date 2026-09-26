@@ -134,7 +134,10 @@ export function WorldMapPanel(): React.JSX.Element {
   const cityMode = cityProvinceAd !== null
   const showCityMap = cityMode && !cityFallback
   const worldEchartsReady = onWorldMap && worldGeo?.ok === true
-  const showWorldEcharts = worldEchartsReady
+  // ECharts 那条路要有**地区数据**才有意义（它渲染的是 `map.world` 的着色）。若 GeoJSON 比
+  // 数据先到就切过去，而 `map` 那一路又被挡住 ⇒ **两边都不画**，整块反而更空。所以这里连带
+  // 要求数据已就绪：数据没到就一律先走 SVG 底图。
+  const showWorldEcharts = worldEchartsReady && map !== null
   const showWorldSvg = onWorldMap && !showWorldEcharts
   // A geographic SVG map is rendered for the world level before the ECharts map
   // is ready or when it fails; it is never offered as a manual view toggle.
@@ -425,7 +428,14 @@ export function WorldMapPanel(): React.JSX.Element {
       {error && <div className={css.error}>{error}</div>}
       {!map && !error && <div className={css.loading}>正在解析好友地区…</div>}
 
-      {map && showGeoMap && (
+      {/*
+         * **故意不要求 `map`**（2026-09-26 用户要求「先渲染世界地图，数据随后添加上」）：
+         * 这里画的经纬网格与大陆轮廓（`graticule` / `backdropPaths`）是模块级静态常量，
+         * **不依赖任何数据**。原先写成 `map && …`，于是数据到位前整块区域是空的 ——
+         * 用户看到的就是「世界板块一直不出东西」。现在先出地图，`located`（地区标记）
+         * 为空时自然只有底图，数据一到就叠上去。
+         */}
+      {showGeoMap && (
         <div className={css.stage}>
           <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
           <div
@@ -507,7 +517,8 @@ export function WorldMapPanel(): React.JSX.Element {
               </div>
             )}
 
-            {located.length === 0 && (
+            {/* 只有数据真的到了才能说「没有」；`map === null` 是「还在加载」，不是「没有」 */}
+            {map !== null && located.length === 0 && (
               <div className={css.mapEmpty}>没有可定位的地区数据</div>
             )}
 
