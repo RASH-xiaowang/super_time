@@ -24,8 +24,12 @@ import css from './chat-right-panel.module.css'
 export interface ChatRightPanelProps {
   /** 目标会话（推荐回复的读取范围就是它）。 */
   target: ReplyTarget
-  /** 关闭整个右栏面板。 */
+  /** 关闭整个右栏面板（两块一起收起）。 */
   onClose: () => void
+  /** 上区「推荐回复」是否显示（只有单聊才可能为 true —— 群聊里「回一句」不成立）。 */
+  showSuggest: boolean
+  /** 下区「分析」是否显示（群聊也能单独开）。 */
+  showAnalysis: boolean
   /** 分析区：选中消息的 `localId`（`null` = 还没选）。 */
   analysisTargetId: number | null
   /** 分析区：该消息的分析条目（来自消息流那份 `useInlineAnalysis` 缓存）。 */
@@ -40,14 +44,17 @@ export interface ChatRightPanelProps {
  * @returns panel element tree.
  */
 export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
-  const { target, onClose, analysisTargetId, analysisEntry, onClearAnalysis } = props
+  const { target, onClose, showSuggest, showAnalysis, analysisTargetId, analysisEntry, onClearAnalysis } = props
+
+  // 标题跟着**实际显示的内容**走：只开了分析还写「推荐回复」，会让人以为上区被吃掉了。
+  const title = showSuggest && showAnalysis ? '推荐回复与分析' : showSuggest ? '推荐回复' : '分析'
 
   return (
-    <div className={shell.panel} aria-label="推荐回复与分析">
+    <div className={shell.panel} aria-label={title}>
       <div className={shell.head}>
-        <div className={shell.title}>推荐回复</div>
+        <div className={shell.title}>{title}</div>
         <div className={shell.headActions}>
-          <button type="button" className={shell.iconBtn} title="关闭推荐回复" aria-label="关闭推荐回复" onClick={onClose}>
+          <button type="button" className={shell.iconBtn} title="收起整个右栏" aria-label="收起整个右栏" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 6 6 18" /><path d="m6 6 12 12" />
             </svg>
@@ -55,17 +62,23 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
         </div>
       </div>
 
-      <div className={css.top}>
-        <ReplySuggest target={target} />
-      </div>
+      {/* 两块各自条件渲染（2026-09-26 起可在消息头部的按钮排里独立折叠）。
+          只剩一块时不再画分隔线 —— 单块面板里一条孤零零的横线只会让人以为下面还有内容。 */}
+      {showSuggest && (
+        <div className={css.top}>
+          <ReplySuggest target={target} />
+        </div>
+      )}
 
-      <div className={css.divider} />
+      {showSuggest && showAnalysis && <div className={css.divider} />}
 
-      <ChatAnalysisPanel
-        targetId={analysisTargetId}
-        entry={analysisEntry}
-        onClear={onClearAnalysis}
-      />
+      {showAnalysis && (
+        <ChatAnalysisPanel
+          targetId={analysisTargetId}
+          entry={analysisEntry}
+          onClear={onClearAnalysis}
+        />
+      )}
     </div>
   )
 }

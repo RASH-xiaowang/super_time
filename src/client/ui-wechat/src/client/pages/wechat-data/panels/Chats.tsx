@@ -179,6 +179,12 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
    * （切换按钮已随旧实现移除，不重置就再也回不来）。
    */
   const [suggestOpen, setSuggestOpen] = useState(true)
+  /**
+   * 右栏「分析」区块的展开/折叠（2026-09-26）。与推荐回复**各自独立**：
+   * 单聊可以只要分析、不要推荐回复（反之亦然）。
+   * 初值 true = 进会话两块都在，与加按钮之前完全一致。
+   */
+  const [analysisOpen, setAnalysisOpen] = useState(true)
   /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
   const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
@@ -632,10 +638,11 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   useEffect(() => {
     setAnalysisTarget(null)
     setSuggestOpen(true)
+    setAnalysisOpen(true)
   }, [curSession?.username])
 
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisTarget,
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget,
     annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
@@ -655,7 +662,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
+    setAnalysisOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,

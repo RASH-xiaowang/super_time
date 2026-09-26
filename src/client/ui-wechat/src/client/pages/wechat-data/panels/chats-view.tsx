@@ -37,6 +37,8 @@ export interface ChatsViewProps {
       EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
       EXPO_TYPES: ReadonlyArray<{ key: string; label: string; types?: readonly number[]; rich?: readonly string[] }>
       aiEligible: boolean
+      analysisOpen: boolean
+      setAnalysisOpen: React.Dispatch<React.SetStateAction<boolean>>
       analysisTarget: number | null
       setAnalysisTarget: React.Dispatch<React.SetStateAction<number | null>>
       aiFull: boolean
@@ -197,7 +199,11 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisTarget, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisOpen, setAnalysisTarget, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+
+  // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
+  // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
+  const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
   // 逐条分析：只对**可见窗口**里的对方文本/语音消息按需推理（见 use-inline-analysis.ts）——
   // 「只算可见的」是产品决策：单次 0.5 s，全量预跑不现实。
   // 没有开关参数（2026-09-26 起恒开）：曾经那个工具区按钮与「右栏面板开不开」互不知情，
@@ -372,7 +378,48 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                     <span className={cssshell.calBtnLabel}>AI 问答</span>
                   </button>
                 )}
-                {/* 推荐回复不再有切换按钮：它已改成右栏的常驻面板（见下方 JSX 注释）。 */}
+                {/*
+                  右栏两块的展开/折叠（2026-09-26 按用户要求加在这排）。
+
+                  为什么这次不再算「重复入口」：2026-09-25 移除切换按钮的理由是
+                  **推荐回复成了右栏的常驻内容**（按钮 + 常驻面板 = 两个入口）；
+                  现在两块都能独立收起，按钮就是它们**唯一**的入口了。
+
+                  为什么是纯图标（不带文字）：动作区宽度是实测瓶颈（P0-2 审计：
+                  960px 时连「群信息」都点不到），已有先例 —— 单聊的「聊天信息」就是纯图标。
+                  title + aria-label 保证可发现性与无障碍。
+                  推荐回复只对单聊出现（「回一句」在群里不成立）。
+                */}
+                {curSession.type === 'private' && (
+                  <button
+                    type="button"
+                    className={cssrows.calBtn}
+                    data-active={suggestOpen || undefined}
+                    aria-expanded={suggestOpen}
+                    title="推荐回复：显示 / 收起本会话的候选回复"
+                    aria-label="推荐回复"
+                    onClick={() => { setSuggestOpen(v => !v) }}
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4 19.5l1.4-4.2A7.5 7.5 0 1 1 20 11.5Z" />
+                      <path d="M8.6 10.4h6.8M8.6 13.4h4" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={cssrows.calBtn}
+                  data-active={analysisOpen || undefined}
+                  aria-expanded={analysisOpen}
+                  title="分析：显示 / 收起消息分析面板（在消息流里点选一条对方消息看结论）"
+                  aria-label="分析"
+                  onClick={() => { setAnalysisOpen(v => !v) }}
+                >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M4 20h16" />
+                      <path d="M7.5 20v-5.5M12 20V6M16.5 20v-8.5" />
+                    </svg>
+                </button>
                 <button type="button" className={cssrows.calBtn} title="消息日历（每日消息数热力图）" onClick={() => { void openCalendar() }}><IconCalendar /> <span className={cssshell.calBtnLabel}>日历</span></button>
                 {curSession.type === 'group' && (
                   <button type="button" className={cssrows.calBtn} data-active={groupInfoOpen || undefined} title="群聊信息" onClick={openGroupInfo}><IconUserOutline16 size={14} /><span className={cssshell.calBtnLabel}>群信息</span></button>
@@ -956,10 +1003,12 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
             所以一个位置只放一个面板。
           群聊不给推荐回复（「回一句」在群里不成立）：此时整栏不挂，分析也随之不可见 ——
           分析读的是当前会话，单聊之外它也没有落脚点。 */}
-      {suggestOpen && curSession !== null && curSession.type === 'private' && !(aiOpen && aiEligible && aiTarget) && (
+      {curSession !== null && (suggestVisible || analysisOpen) && !(aiOpen && aiEligible && aiTarget) && (
         <ChatRightPanel
           target={curSession}
-          onClose={() => { setSuggestOpen(false) }}
+          onClose={() => { setSuggestOpen(false); setAnalysisOpen(false) }}
+          showSuggest={suggestVisible}
+          showAnalysis={analysisOpen}
           analysisTargetId={analysisTarget}
           analysisEntry={analysisTarget === null ? undefined : inlineAnalysis.get(analysisTarget)}
           onClearAnalysis={() => { setAnalysisTarget(null) }}

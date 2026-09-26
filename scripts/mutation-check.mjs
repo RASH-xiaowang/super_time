@@ -252,6 +252,30 @@ const MUTATIONS = [
     to: '',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/s07-outbound-switches.wiring.spec.ts',
   },
+  {
+    id: 'M27-analysis-toggle-not-wired',
+    why: '「分析」按钮的 onClick 变成空操作 —— 按钮在、点了没反应，必须发现',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx',
+    from: 'onClick={() => { setAnalysisOpen(v => !v) }}',
+    to: 'onClick={() => { setAnalysisOpen(false) }}',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
+  },
+  {
+    id: 'M28-analysis-block-always-rendered',
+    why: '组合层去掉分析块的条件渲染 —— 折叠按钮点了分析区还在，等于按钮是摆设',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/ChatRightPanel.tsx',
+    from: '      {showAnalysis && (\n        <ChatAnalysisPanel',
+    to: '      {(true) && (\n        <ChatAnalysisPanel',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
+  },
+  {
+    id: 'M29-right-panel-private-only',
+    why: '右栏挂载条件退回「只有单聊才挂」—— 群聊将无法单独打开分析（本轮刚修掉的那个副作用）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx',
+    from: '{curSession !== null && (suggestVisible || analysisOpen) && !(aiOpen && aiEligible && aiTarget) && (',
+    to: "{suggestOpen && curSession !== null && curSession.type === 'private' && !(aiOpen && aiEligible && aiTarget) && (",
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-analysis-panel.wiring.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

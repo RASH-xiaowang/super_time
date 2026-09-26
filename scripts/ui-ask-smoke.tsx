@@ -258,13 +258,18 @@ check('首帧只说「正在生成」，且下拉不许是空白', () => {
   const html = renderToStaticMarkup(h(ChatRightPanel, {
     target: { username: 'wxid_a', displayName: '李四' },
     onClose: () => {},
+    // 2026-09-26：两块各自可折叠（消息头部按钮排里那两个图标按钮），
+    // 所以组合层多了两个可见性开关。这个调用点渲染的是「两块都开」的默认形态。
+    showSuggest: true,
+    showAnalysis: true,
     analysisTargetId: null,
     analysisEntry: undefined,
     onClearAnalysis: () => {},
   }))
   // 用元素内容（`>…<`）而不是裸词匹配：关闭按钮的 aria-label 里也有「推荐回复」，
   // 裸词匹配下把标题整块删掉照样绿 —— 变异测试抓过这类假阳性。
-  ok(html.includes('>推荐回复<'), '缺少面板标题')
+  // 两块都开时标题是合并文案（只开一块时会跟着变，见下一个 check）。
+  ok(html.includes('>推荐回复与分析<'), '缺少面板标题')
   ok(html.includes('正在按这段对话生成候选'), '首帧应显示「正在生成」')
   ok(!html.includes('这个会话还没有可用的对话内容'), '首帧还没有任何数据，那句「没有可用对话」在当时必然是假话')
   ok(html.includes('李四'), '「依据」一行应显示当前会话名')
@@ -274,6 +279,23 @@ check('首帧只说「正在生成」，且下拉不许是空白', () => {
   // 合并后新钉的两条：两块同容器、下半区未选中时也不许是空白
   ok(html.includes('>分析<'), '下半区缺少「分析」区块标题')
   ok(html.includes('点选一条消息'), '未选中消息时分析区要给出提示，而不是一块空白')
+})
+
+check('只开分析时：标题跟着内容走，且推荐回复块真的不渲染', () => {
+  const html = renderToStaticMarkup(h(ChatRightPanel, {
+    target: { username: 'wxid_a', displayName: '李四' },
+    onClose: () => {},
+    showSuggest: false,
+    showAnalysis: true,
+    analysisTargetId: null,
+    analysisEntry: undefined,
+    onClearAnalysis: () => {},
+  }))
+  // 标题还写「推荐回复」会让人以为上半区被吃掉了 —— 它必须跟着实际内容走。
+  ok(html.includes('>分析<'), '只开分析时标题应是「分析」')
+  // 「折叠」必须是**真的不渲染**，否则 DOM 里还在，那块照样在背后取数/跑 effect。
+  ok(!html.includes('推荐回复'), '推荐回复块没被真正折叠（DOM 里还在）')
+  ok(html.includes('点选一条消息'), '分析区仍要给出提示')
 })
 
 console.log('AiModelConfig（数据配置里的 AI 大模型卡片）')
