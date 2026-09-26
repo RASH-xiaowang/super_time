@@ -468,6 +468,30 @@ const MUTATIONS = [
     to: '  if (true === true) {\n    const done = fn(db)\n    try { if (db.isOpen) db.close() } catch { /* 变异：只有成功路径 close */ }\n    return done\n  } else try {\n    return fn(db)\n  } finally {',
     spec: 'src/backend/wechat-data/tests/query-db-lifetime.spec.ts',
   },
+  {
+    id: 'M57-whisper-engine-gate-removed',
+    why: '把 installWhisperEngine 的 blockOutbound 判闸删掉（P0-2 补的那道）—— 开关打开也能动 GitHub',
+    file: 'src/backend/wechat-data/src/remotes/voicellm.ts',
+    from: "      const blocked = rc.privacyBlocked('whisper_engine_install', '从 GitHub 下载 whisper.cpp 引擎文件')\n",
+    to: '',
+    spec: 'src/backend/wechat-data/tests/outbound-gates.spec.ts',
+  },
+  {
+    id: 'M58-laya-model-gate-removed',
+    why: '把 downloadLayaModel 的 blockOutbound 判闸删掉（P0-2 补的那道）—— 1.26 GB 的下载又能绕过「禁止 AI 出网」',
+    file: 'src/backend/wechat-data/src/remotes/laya.ts',
+    from: "      const blocked = rc.privacyBlocked('laya_model_download', '从 HuggingFace 下载本地决策分析模型文件')\n",
+    to: '',
+    spec: 'src/backend/wechat-data/tests/outbound-gates.spec.ts',
+  },
+  {
+    id: 'M59-llm-models-host-gate-removed',
+    why: '让主进程的 wechat:llm-models 不再读隐私开关（把判定写死成「未拦截」）—— 带着 API Key 的请求又能发给任意主机',
+    file: 'src/backend/ipc-wechat.js',
+    from: "if (st && st.ok !== false && st.value) outboundBlocked = st.value.blockOutbound === true;",
+    to: 'if (st && st.ok !== false && st.value) outboundBlocked = false;',
+    spec: 'src/backend/tests/ipc-wechat.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

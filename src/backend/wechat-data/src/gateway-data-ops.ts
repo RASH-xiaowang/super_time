@@ -908,6 +908,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
       dirs: () => this._dirs,
       selfUsername: () => this.selfUsername(),
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
     }))
   }
 }

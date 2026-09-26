@@ -218,12 +218,33 @@
 |---|---|
 | 触发 | 你在设置里点击「下载 whisper 引擎 / 模型」（默认不下载） |
 | 目的地 | `huggingface.co`、`hf-mirror.com`、`github.com` releases |
-| 开关 | ✅ **「禁止 AI 出网」**（`blockOutbound`）：开启后下载直接返回错误，操作记录写 `download_whisper_model`，隐私审计功能名 `voice_model_download`；<br/>不点「下载」按钮同样不会发生。已下载的引擎与模型留在本机 |
-| 代码 | `query/whisper.ts` |
+| 开关 | ✅ **「禁止 AI 出网」**（`blockOutbound`）：引擎与模型**两个按钮都过同一个总闸**——<br/>下载模型：操作记录写 `download_whisper_model`，审计功能名 `voice_model_download`；<br/>下载引擎：操作记录写 `install_whisper_engine`，审计功能名 `whisper_engine_install`。<br/>开启后两者都直接返回错误，不发出任何请求；不点按钮同样不会发生。已下载的引擎与模型留在本机 |
+| 代码 | `query/whisper.ts`（请求）· `remotes/voicellm.ts`（判闸） |
+
+### F2. 本地决策分析模型下载（laya，只在你要用时）
+
+| 项 | 说明 |
+|---|---|
+| 触发 | 你在设置里点击「下载决策分析模型」（约 1.26 GB，默认不下载） |
+| 目的地 | `huggingface.co`、`hf-mirror.com`（可用 `DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 改） |
+| 开关 | ✅ **「禁止 AI 出网」**（`blockOutbound`）：审计功能名 `laya_model_download`，操作记录写 `download_laya_model`；<br/>开启后直接返回错误。也可以用「接管已下载目录」完全不出网 |
+| 代码 | `laya/model-file.ts`（请求）· `remotes/laya.ts`（判闸） |
+
+> 分析本身**不出网**：模型下载完之后跑在本机 onnxruntime 上，聊天内容不离开这台机器。
+
+### F3. 拉取模型列表（设置 → 模型 → 「获取模型列表」）
+
+| 项 | 说明 |
+|---|---|
+| 触发 | 你在设置里点「获取模型列表」，向你自己填的 `base_url` 发一次 `GET /models` |
+| 目的地 | **你配置的那个地址**（DeepSeek / 通义 / 自建端点…） |
+| 发送内容 | 只有这个 HTTP 请求本身与 `Authorization: Bearer <你的 API Key>` —— **不含聊天数据**，但 Key 会发给该主机 |
+| 开关 | ✅ **「禁止 AI 出网」**（`blockOutbound`）：审计功能名 `llm_model_catalog`；开启后不发请求，命中内置清单时直接用清单，否则回一句「已被隐私开关拦截」 |
+| 代码 | `src/backend/ipc-wechat.js`（`wechat:llm-models`，在主进程执行，故不经后端的 `@Remote` 方法面） |
 
 ### G. 不会出网的
 
-- **模型列表**（设置 → 模型）来自本机设置与内置目录，不发请求；
+- 模型列表在**没点「获取模型列表」时**只读本机设置与内置目录（点一下就变成上面 F3 那条）；
 - 搜索、统计、导出、图谱、账本、备份、隐私体检、待办提取（本地关键词匹配）全部纯本地。
 
 ## 五、如何关闭出网

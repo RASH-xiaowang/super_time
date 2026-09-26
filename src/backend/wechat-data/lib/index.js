@@ -21965,6 +21965,11 @@ function createVoiceLlmRemotes(rc) {
       }
     },
     async installWhisperEngine() {
+      const blocked = rc.privacyBlocked("whisper_engine_install", "\u4ECE GitHub \u4E0B\u8F7D whisper.cpp \u5F15\u64CE\u6587\u4EF6");
+      if (blocked !== null) {
+        rc.op("settings", "install_whisper_engine", "fail", "", blocked);
+        return { ok: false, error: blocked };
+      }
       if (rc.getWhisperDownload() !== null) {
         rc.op("settings", "install_whisper_engine", "fail", "", "\u5DF2\u6709\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D");
         return { ok: false, error: "\u5DF2\u6709\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D" };
@@ -29749,6 +29754,11 @@ function createLayaRemotes(rc) {
      * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
      */
     async downloadLayaModel() {
+      const blocked = rc.privacyBlocked("laya_model_download", "\u4ECE HuggingFace \u4E0B\u8F7D\u672C\u5730\u51B3\u7B56\u5206\u6790\u6A21\u578B\u6587\u4EF6");
+      if (blocked !== null) {
+        rc.op("settings", "download_laya_model", "fail", "", blocked);
+        return { ok: false, error: blocked };
+      }
       if (layaDownload !== null) {
         rc.op("settings", "download_laya_model", "fail", "", "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D");
         return { ok: false, error: "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D" };
@@ -30095,7 +30105,8 @@ var GatewayDataOps = class extends (_a3 = GatewayAskOps, _getEmoticons_dec = [Re
     return this._layaRemotes ??= createLayaRemotes({
       dirs: () => this._dirs,
       selfUsername: () => this.selfUsername(),
-      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail)
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail)
     });
   }
 };

@@ -34,6 +34,11 @@ export interface createLayaRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   selfUsername: () => string
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
+  /**
+   * 出网闸门（`blockOutbound`）。模型文件 1.26 GB 从 HuggingFace 拉 —— 下的是文件、
+   * 不发聊天内容，但**仍是出网**，所以与 whisper 模型下载共用同一个总闸（P0-2）。
+   */
+  privacyBlocked: (feature: string, detail?: string) => string | null
 }
 
 export function createLayaRemotes(rc: createLayaRemotesInputs) {
@@ -142,6 +147,13 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
      * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
      */
     async downloadLayaModel(): Promise<LayaDownloadOutcome> {
+      // 1.26 GB 的模型文件从 HuggingFace / 镜像拉 —— 判在**任何出网与并发检查之前**，
+      // 与 `downloadWhisperModel` / `installWhisperEngine` 同一口径（P0-2）。
+      const blocked = rc.privacyBlocked('laya_model_download', '从 HuggingFace 下载本地决策分析模型文件')
+      if (blocked !== null) {
+        rc.op('settings', 'download_laya_model', 'fail', '', blocked)
+        return { ok: false, error: blocked }
+      }
       if (layaDownload !== null) {
         rc.op('settings', 'download_laya_model', 'fail', '', '已有模型下载任务进行中')
         return { ok: false, error: '已有模型下载任务进行中' }

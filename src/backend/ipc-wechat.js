@@ -160,6 +160,35 @@ function registerWechatIpc(ctx) {
         if (!hit) return null;
         return { ok: true, value: { models: hit.models, source: 'catalog', vendor: hit.vendor, note } };
       };
+      /**
+       * 出站拦截总闸（P0-2 / CODE-AUDIT-2026-09-26）。
+       *
+       * 这个频道在**主进程**里 fetch，不经过后端 gateway 的 `@Remote` 方法面，所以既不在
+       * `privacyBlocked` 的覆盖范围内、也不在 license `METHOD_FEATURE` 清单里 —— 「按 privacy
+       * 接缝扫描」的守卫天然看不见它。它还会把用户填的 API Key 作为 Bearer 头发出去，
+       * 是三个漏网出网点里唯一带凭据的那个。
+       * 取不到真值时按「已拦截」处理：这是权限判断，失败方向只能是拦下（与 `outboundBlocked` 同向）。
+       */
+      let outboundBlocked = true;
+      try {
+        const ready = await awaitBackendReady(BACKEND_CALL_READY_WAIT_MS);
+        if (ready && getWechatBackend()) {
+          const st = await getWechatBackend().call('getPrivacyState');
+          if (st && st.ok !== false && st.value) outboundBlocked = st.value.blockOutbound === true;
+        }
+      } catch { /* 读不到隐私开关 ⇒ 保持 fail-closed */ }
+      if (outboundBlocked) {
+        const note = '隐私设置已开启「禁止 AI 出网」，未向该地址请求模型列表';
+        const fb = catalogFallback(note);
+        if (fb) return fb;
+        return {
+          ok: false,
+          error: {
+            message: `${note}（内置清单里没有这个地址，可在「模型」一栏手动填写模型名，或关闭该开关）`,
+            code: 'PRIVACY_BLOCKED',
+          },
+        };
+      }
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 30_000);
       let res;
