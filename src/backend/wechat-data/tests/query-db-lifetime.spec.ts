@@ -21,6 +21,7 @@
  * AST 而不是正则：注释里也写着 `from './xxx.ts'`、`db.close()` 这类字样，本仓有过误报前例。
  * @vitest-environment node
  */
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
@@ -31,7 +32,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { getSearchIndexFreshness, getSearchIndexStatus, indexReady } from '../src/query/search-scaffold.ts'
 import { searchUnified } from '../src/query/unified-search.ts'
 import { usernameByChatId } from '../src/query/voice.ts'
-import { withDb } from '../src/query/db-open.ts'
+import { withDb, withWritableDb } from '../src/query/db-open.ts'
+import { listEditedMessages, resetEditedMessage } from '../src/query/edit.ts'
 import { resolveAvatar, resolveAvatarsLocal } from '../src/query/avatar.ts'
 import { queryContact360 } from '../src/query/contact360.ts'
 import { queryOverview } from '../src/query/overview.ts'
@@ -55,6 +57,20 @@ const AUDIT_FIXED = [
 ]
 
 /**
+ * 第四批 #11（2026-09-26 合批）清账的文件：清单里不该再有它们。
+ *
+ * 它们**不参加**「withDb 是唯一打开方式」那条：`edit.ts` 的 
+`openEditStore` / `findShard` 是把连接**交给调用方**的工厂（谁拿到谁关，是另一种形状，
+ * 不该被这条误伤）。所以这份名单只参加「不许回到清单」那一条。
+ */
+const BATCH4_FIXED = [
+  'query/avatar.ts',
+  'query/contact360.ts',
+  'query/edit.ts',
+  'query/overview.ts',
+]
+
+/**
  * 已知仍待改造的站点（按文件计）—— 棘轮：**只能变小**。
  * 口径：`new DatabaseSync` 之后 close 只出现在成功路径上（catch / finally 里没有）。
  * 这些点同一份 AST 判据会稳定报出来，红的时候把 file:line 一起打印。
@@ -62,9 +78,7 @@ const AUDIT_FIXED = [
 const KNOWN_UNFIXED: Record<string, number> = {
   'query/annual-report.ts': 1,
   'query/asset-insights.ts': 2,
-  'query/contact360.ts': 1,
   'query/daily-summary.ts': 1,
-  'query/edit.ts': 3,
   'query/favorites.ts': 1,
   'query/group-info.ts': 1,
   'query/group-insights.ts': 2,
@@ -75,7 +89,6 @@ const KNOWN_UNFIXED: Record<string, number> = {
   'query/moments-insights.ts': 1,
   'query/official-assets.ts': 2,
   'query/overview-insights.ts': 1,
-  'query/overview.ts': 2,
   'query/records.ts': 1,
   'query/retrieval/embedding.ts': 1,
   'query/search-build.ts': 1,
@@ -301,6 +314,90 @@ describe('头像 / 360° / 总览的读路径不留句柄', () => {
   })
 })
 
+describe('withWritableDb：写路径也要无论成败都关', () => {
+  function emptyDb(tag: string): string {
+    const dir = tempRoot(tag)
+    const file = join(dir, 'w.db')
+    mkdirSync(dirname(file), { recursive: true })
+    // 这一颗是"可写"的用例，建库也得可写（withDb 是只读的，写不进 schema）
+    const db = new DatabaseSync(file)
+    try { db.exec('CREATE TABLE t (a TEXT)') } finally { db.close() }
+    return file
+  }
+
+  it('写得进去（这正是它与 withDb 的分别 —— 混用会当场抛，不会被静默降级）', () => {
+    const file = emptyDb('w-ok')
+    withWritableDb(file, (db) => { db.prepare(`INSERT INTO t VALUES ('x')`).run() })
+    const got = withDb(file, (db) => (db.prepare(`SELECT a FROM t`).get() as { a: string }).a)
+    expect(got).toBe('x')
+    expect(leakedFiles(dirname(file))).toEqual([])
+  })
+
+  it('回调抛错也把连接关掉（写一半失败是之前漏得最多的一种）', () => {
+    const file = emptyDb('w-throw')
+    expect(() => { withWritableDb(file, () => { throw new Error('写失败') }) }).toThrow('写失败')
+    expect(leakedFiles(dirname(file))).toEqual([])
+  })
+
+  it('withDb 写不进去：只读那颗 helper 覆盖不到写路径，所以必须有第二颗', () => {
+    const file = emptyDb('w-ro')
+    expect(() => { withDb(file, (db) => { db.prepare(`INSERT INTO t VALUES ('nope')`).run() }) }).toThrow()
+    expect(leakedFiles(dirname(file))).toEqual([])
+  })
+})
+
+/**
+ * `edit.ts` 那三处（读列表、读原快照、删记录）是全仓唯一混了写路径的一组：
+ * 前两条走只读的 `withDb`，删除那条走 `withWritableDb`。两头都验：
+ * 坏库上如实降级且不留句柄；好库上真的改回原文、删掉记录，并且也不留句柄。
+ */
+describe('编辑副本那三条读/写路径不留句柄', () => {
+  it('listEditedMessages：编辑记录库表不在 ⇒ 空列表且不留句柄', () => {
+    const { root, dec } = brokenEdits('edit-list')
+    expect(listEditedMessages(dec, 'wxid_a')).toEqual({ items: [], total: 0 })
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('resetEditedMessage：读不到原快照时如实报错，不留句柄', () => {
+    const { root, dec } = brokenEdits('edit-reset')
+    const r = resetEditedMessage(dec, 'wxid_a', 1)
+    expect(r.ok).toBe(false)
+    expect(r.error).toBeTruthy()
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('resetEditedMessage：好库上真把原文改回去、删掉记录，且不留句柄', () => {
+    const root = tempRoot('edit-reset-good')
+    const dec = join(root, 'decrypted')
+    const table = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
+    makeDb(join(dec, 'message', 'media_0.db'), (db) => {
+      db.exec(`CREATE TABLE "${table}" (local_id INTEGER PRIMARY KEY, message_content TEXT)`)
+      db.prepare(`INSERT INTO "${table}" VALUES (1, '改过的内容')`).run()
+    })
+    makeDb(join(root, 'message_edits.db'), (db) => {
+      db.exec('CREATE TABLE message_edits (account TEXT, session_id TEXT, db TEXT, table_name TEXT, local_id INTEGER, first_edited_at INTEGER, last_edited_at INTEGER, edit_count INTEGER, original_msg_json TEXT, edited_cols_json TEXT)')
+      db.prepare('INSERT INTO message_edits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+        'wxid_a', 'wxid_a', 'message', table, 1, 0, 1, 1, JSON.stringify({ message_content: '原文' }), `['${table}']`,
+      )
+    })
+    expect(resetEditedMessage(dec, 'wxid_a', 1)).toEqual({ ok: true })
+    const back = withDb(join(dec, 'message', 'media_0.db'), (db) =>
+      (db.prepare(`SELECT message_content AS c FROM "${table}" WHERE local_id = 1`).get() as { c: string }).c)
+    expect(back).toBe('原文')
+    const left = withDb(join(root, 'message_edits.db'), (db) => (db.prepare('SELECT COUNT(*) AS n FROM message_edits').get() as { n: number }).n)
+    expect(Number(left)).toBe(0)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /** 编辑记录库与解密目录是同级（editDbPath 的口径），所以探针要覆盖到 root 整棵树。 */
+  function brokenEdits(tag: string): { root: string; dec: string } {
+    const root = tempRoot(tag)
+    const dec = join(root, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+    makeDb(join(root, 'message_edits.db'), (db) => { db.exec('CREATE TABLE unrelated (a TEXT)') })
+    return { root, dec }
+  }
+})
 // ---------------------------------------------------------------- 棘轮层
 
 interface Suspect { file: string; line: number; name: string; shape: string }
@@ -422,8 +519,8 @@ describe('query 层的连接纪律（棘轮）', () => {
     expect(actual, `新增/变多的泄漏点要修，不要往清单里加。当前实测：\n${detail}`).toEqual(KNOWN_UNFIXED)
   })
 
-  it('审查报告点名的 6 个文件已经改完，不许回到清单', () => {
-    for (const f of AUDIT_FIXED) {
+  it('审查报告点名的文件与第四批清账的文件都不许回到清单', () => {
+    for (const f of [...AUDIT_FIXED, ...BATCH4_FIXED]) {
       expect(KNOWN_UNFIXED[f], `${f} 不该再有待改造站点`).toBeUndefined()
       expect(byFile.get(f) ?? 0, `${f} 实测仍有泄漏形状`).toBe(0)
     }

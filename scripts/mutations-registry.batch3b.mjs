@@ -283,8 +283,8 @@ export const MUTATIONS_BATCH3B = [
     id: "M256-handle-ratchet-list-blinded",
     why: "把清单里某一行的计数改成 0（等于宣布「这个文件已经改完了」）⇒ 棘轮必须红：这张清单是按文件记账的，改小数字不等于改代码，靠它才拦得住「在已清账的文件里又加一个裸 open」这种回潮",
     file: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
-    from: "  'query/contact360.ts': 1,",
-    to: "  'query/contact360.ts': 0,",
+    from: "  'query/favorites.ts': 1,",
+    to: "  'query/favorites.ts': 0,",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
   {
@@ -293,6 +293,22 @@ export const MUTATIONS_BATCH3B = [
     file: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
     from: "        if (code === 'EBUSY' || code === 'EPERM')",
     to: "        if (false)",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
+  {
+    id: "M258-writable-db-no-close",
+    why: "withWritableDb 的 finally 不再关连接（只关读路径那颗是 P0-1 的老形状，写路径这颗一样会漏）⇒ 写一半失败的库从此删不掉",
+    file: "src/backend/wechat-data/src/query/db-open.ts",
+    from: "export function withWritableDb<T>(file: string, fn: (db: DatabaseSync) => T): T {\n  const db = new DatabaseSync(file)\n  try {\n    return fn(db)\n  } finally {\n    try {\n      if (db.isOpen) db.close()",
+    to: "export function withWritableDb<T>(file: string, fn: (db: DatabaseSync) => T): T {\n  const db = new DatabaseSync(file)\n  try {\n    return fn(db)\n  } finally {\n    try {\n      if (false) db.close()",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
+  {
+    id: "M259-edit-delete-uses-readonly-helper",
+    why: "删编辑记录那一步错用只读的 withDb ⇒ DELETE 抛「readonly database」，恢复原文整条动作失败。两颗 helper 的分别不是洁癖：用错就是行为错，这条用例兜的就是它",
+    file: "src/backend/wechat-data/src/query/edit.ts",
+    from: "withWritableDb(p, (store2) =>",
+    to: "withDb(p, (store2) =>",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
 ]

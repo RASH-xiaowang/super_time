@@ -2661,6 +2661,17 @@ function withDb(file, fn) {
     }
   }
 }
+function withWritableDb(file, fn) {
+  const db = new DatabaseSync5(file);
+  try {
+    return fn(db);
+  } finally {
+    try {
+      if (db.isOpen) db.close();
+    } catch {
+    }
+  }
+}
 async function withDbAsync(file, fn) {
   const db = new DatabaseSync5(file, { readOnly: true });
   try {
@@ -3826,9 +3837,9 @@ function computeOverview(dec) {
   const resourcePath = join10(dec, "message", "message_resource.db");
   if (existsSync5(resourcePath)) {
     try {
-      const db = new DatabaseSync10(resourcePath, { readOnly: true });
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0;
-      if (has) {
+      withDb(resourcePath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== void 0;
+        if (!has) return;
         const agg = db.prepare("SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail").get();
         total_size = agg.s;
         total_count = agg.n;
@@ -3843,8 +3854,7 @@ function computeOverview(dec) {
           catMap.set(label, cur);
         }
         for (const c of catMap.values()) categories.push(c);
-      }
-      db.close();
+      });
     } catch {
     }
   }
@@ -3852,9 +3862,9 @@ function computeOverview(dec) {
   const snsPath = existsSync5(join10(dec, "sns", "db_sns", "sns.db")) ? join10(dec, "sns", "db_sns", "sns.db") : join10(dec, "sns", "sns.db");
   if (existsSync5(snsPath)) {
     try {
-      const db = new DatabaseSync10(snsPath, { readOnly: true });
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
-      if (has) {
+      withDb(snsPath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
+        if (!has) return;
         const cols = new Set(db.prepare("PRAGMA table_info(SnsTimeLine)").all().map((r) => r.name));
         const uname = cols.has("user_name") ? "user_name" : "userName";
         const cname = cols.has("content") ? "content" : "Content";
@@ -3870,8 +3880,7 @@ function computeOverview(dec) {
         }
         const sorted = Array.from(authorMap.entries()).map(([username, v]) => ({ username, name: v.name, posts: v.posts })).sort((a, b) => b.posts - a.posts).slice(0, 20);
         for (const a of sorted) moments_authors.push(a);
-      }
-      db.close();
+      });
     } catch {
     }
   }
@@ -8996,52 +9005,40 @@ function commonGroups(decryptedDir, username) {
   const p = join37(decryptedDir, "contact", "contact.db");
   if (!existsSync29(p)) return [];
   try {
-    const db = new DatabaseSync23(p, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return [];
-    }
-    const cols = tableColumns5(db, "contact");
-    const userCol = cols.has("username") ? "username" : cols.has("UserName") ? "UserName" : "";
-    if (!userCol) {
-      db.close();
-      return [];
-    }
-    const contactNames = contactMeta(decryptedDir).names;
-    const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username);
-    if (!me) {
-      db.close();
-      return [];
-    }
-    const meId = me.id;
-    if (meId === void 0) {
-      db.close();
-      return [];
-    }
-    const memberId = meId;
-    const rooms = [];
-    try {
-      const cmCols = tableColumns5(db, "chatroom_member");
-      if (cmCols.has("room_id") && cmCols.has("member_id")) {
-        const rows = db.prepare("SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id").all(memberId);
-        const crCols = tableColumns5(db, "chat_room");
-        const crUser = crCols.has("username") ? "username" : crCols.has("UserName") ? "UserName" : "";
-        if (crUser) {
-          for (const r of rows) {
-            const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id);
-            if (!room) continue;
-            const ru = cellString5(room.u);
-            if (!ru) continue;
-            rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n });
-            if (rooms.length >= 10) break;
+    return withDb(p, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
+      if (!has) return [];
+      const cols = tableColumns5(db, "contact");
+      const userCol = cols.has("username") ? "username" : cols.has("UserName") ? "UserName" : "";
+      if (!userCol) return [];
+      const contactNames = contactMeta(decryptedDir).names;
+      const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username);
+      if (!me) return [];
+      const meId = me.id;
+      if (meId === void 0) return [];
+      const memberId = meId;
+      const rooms = [];
+      try {
+        const cmCols = tableColumns5(db, "chatroom_member");
+        if (cmCols.has("room_id") && cmCols.has("member_id")) {
+          const rows = db.prepare("SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id").all(memberId);
+          const crCols = tableColumns5(db, "chat_room");
+          const crUser = crCols.has("username") ? "username" : crCols.has("UserName") ? "UserName" : "";
+          if (crUser) {
+            for (const r of rows) {
+              const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id);
+              if (!room) continue;
+              const ru = cellString5(room.u);
+              if (!ru) continue;
+              rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n });
+              if (rooms.length >= 10) break;
+            }
           }
         }
+      } catch {
       }
-    } catch {
-    }
-    db.close();
-    return rooms;
+      return rooms;
+    });
   } catch {
     return [];
   }
@@ -11017,14 +11014,7 @@ function listEditedMessages(decryptedDir, sessionId) {
   const p = editDbPath(decryptedDir);
   if (!existsSync38(p)) return { items: [], total: 0 };
   try {
-    const db = new DatabaseSync31(p, { readOnly: true });
-    let rows;
-    if (sessionId) {
-      rows = db.prepare("SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC").all(sessionId);
-    } else {
-      rows = db.prepare("SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits ORDER BY last_edited_at DESC LIMIT 500").all();
-    }
-    db.close();
+    const rows = withDb(p, (db) => sessionId ? db.prepare("SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC").all(sessionId) : db.prepare("SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits ORDER BY last_edited_at DESC LIMIT 500").all());
     const items = rows.map((r) => ({
       sessionId: cellStr6(r["session_id"] ?? ""),
       db: cellStr6(r["db"] ?? ""),
@@ -11099,18 +11089,13 @@ function resetEditedMessage(decryptedDir, username, localId) {
   const p = editDbPath(decryptedDir);
   if (!existsSync38(p)) return { ok: false, error: "\u7F16\u8F91\u8BB0\u5F55\u5E93\u4E0D\u5B58\u5728" };
   try {
-    const store = new DatabaseSync31(p);
-    const rec = store.prepare("SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?").get(username, localId);
-    if (!rec) {
-      store.close();
-      return { ok: false, error: "\u65E0\u7F16\u8F91\u8BB0\u5F55" };
-    }
+    const rec = withDb(p, (store) => store.prepare("SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?").get(username, localId));
+    if (!rec) return { ok: false, error: "\u65E0\u7F16\u8F91\u8BB0\u5F55" };
     let original = {};
     try {
       original = JSON.parse(rec.original_msg_json ?? "{}");
     } catch {
     }
-    store.close();
     const table = rec.table_name ?? msgTableName6(username);
     const db = findShard(decryptedDir, table, localId);
     if (!db) return { ok: false, error: "\u672A\u627E\u5230\u6D88\u606F\u5206\u5E93" };
@@ -11120,9 +11105,9 @@ function resetEditedMessage(decryptedDir, username, localId) {
         if (!cols.includes(col2)) continue;
         db.prepare('UPDATE "' + table + '" SET "' + col2 + '" = ? WHERE local_id = ?').run(decodeOriginalCell(val), localId);
       }
-      const store2 = new DatabaseSync31(p);
-      store2.prepare("DELETE FROM message_edits WHERE session_id = ? AND local_id = ?").run(username, localId);
-      store2.close();
+      withWritableDb(p, (store2) => {
+        store2.prepare("DELETE FROM message_edits WHERE session_id = ? AND local_id = ?").run(username, localId);
+      });
       return { ok: true };
     } finally {
       db.close();

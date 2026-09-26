@@ -114,39 +114,39 @@ function commonGroups(decryptedDir: string, username: string): Contact360Group[]
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return []
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (!has) { db.close(); return [] }
-    const cols = tableColumns(db, 'contact')
-    const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-    if (!userCol) { db.close(); return [] }
-    const contactNames = contactMeta(decryptedDir).names
-    const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
-    if (!me) { db.close(); return [] }
-    const meId = me.id
-    if (meId === undefined) { db.close(); return [] }
-    const memberId = meId
-    const rooms: Contact360Group[] = []
-    try {
-      const cmCols = tableColumns(db, 'chatroom_member')
-      if (cmCols.has('room_id') && cmCols.has('member_id')) {
-        const rows = db.prepare('SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id').all(memberId) as Array<{ room_id: number; n: number }>
-        const crCols = tableColumns(db, 'chat_room')
-        const crUser = crCols.has('username') ? 'username' : crCols.has('UserName') ? 'UserName' : ''
-        if (crUser) {
-          for (const r of rows) {
-            const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id) as { u?: unknown } | undefined
-            if (!room) continue
-            const ru = cellString(room.u)
-            if (!ru) continue
-            rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n })
-            if (rooms.length >= 10) break
+    return withDb(p, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (!has) return []
+      const cols = tableColumns(db, 'contact')
+      const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
+      if (!userCol) return []
+      const contactNames = contactMeta(decryptedDir).names
+      const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
+      if (!me) return []
+      const meId = me.id
+      if (meId === undefined) return []
+      const memberId = meId
+      const rooms: Contact360Group[] = []
+      try {
+        const cmCols = tableColumns(db, 'chatroom_member')
+        if (cmCols.has('room_id') && cmCols.has('member_id')) {
+          const rows = db.prepare('SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id').all(memberId) as Array<{ room_id: number; n: number }>
+          const crCols = tableColumns(db, 'chat_room')
+          const crUser = crCols.has('username') ? 'username' : crCols.has('UserName') ? 'UserName' : ''
+          if (crUser) {
+            for (const r of rows) {
+              const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id) as { u?: unknown } | undefined
+              if (!room) continue
+              const ru = cellString(room.u)
+              if (!ru) continue
+              rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n })
+              if (rooms.length >= 10) break
+            }
           }
         }
-      }
-    } catch { /* group tables unavailable */ }
-    db.close()
-    return rooms
+      } catch { /* group tables unavailable */ }
+      return rooms
+    })
   } catch {
     return []
   }

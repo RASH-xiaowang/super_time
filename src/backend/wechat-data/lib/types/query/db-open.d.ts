@@ -30,6 +30,19 @@ import { DatabaseSync } from 'node:sqlite';
  */
 export declare function withDb<T>(file: string, fn: (db: DatabaseSync) => T): T;
 /**
+ * 以**可写**方式打开一个库，跑完 `fn` 后无条件关闭。
+ *
+ * 与 `withDb` 分开的理由只有一条：那颗 helper 刻意只覆盖读路径（P0-1 的口径），
+ * 而"能不能写"是行为差别，不该靠调用点传参去记。写路径同样会漏 —— 表现是 UPDATE / DELETE
+ * 抛错之后连接留在进程里（Windows 上那个库从此换不掉、也删不掉），所以形状与读路径一致：
+ * 无论成败都关，错误原样上抛。
+ * @param file - 数据库文件路径（不存在时由 SQLite 创建；调用点若要求"必须已存在"要先自己判）。
+ * @param fn - 收到连接的回调；它的返回值即本函数的返回值。
+ * @returns `fn` 的返回值。
+ * @throws 打开失败或 `fn` 抛出的异常原样抛出（连接已在 finally 里关掉）。
+ */
+export declare function withWritableDb<T>(file: string, fn: (db: DatabaseSync) => T): T;
+/**
  * 异步版：连接必须**跨过 await** 才关得掉（P1-2 的让出型查询必需）。
  *
  * ## 为什么不能把 `await` 写进 {@link withDb} 的回调里

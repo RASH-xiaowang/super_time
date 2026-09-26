@@ -123,9 +123,9 @@ function computeOverview(dec: string): OverviewResult {
   const resourcePath = join(dec, 'message', 'message_resource.db')
   if (existsSync(resourcePath)) {
     try {
-      const db = new DatabaseSync(resourcePath, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined
-      if (has) {
+      withDb(resourcePath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='MessageResourceDetail'").get() !== undefined
+        if (!has) return
         const agg = db.prepare('SELECT COALESCE(SUM(size), 0) AS s, COUNT(*) AS n FROM MessageResourceDetail').get() as { s: number; n: number }
         total_size = agg.s
         total_count = agg.n
@@ -141,8 +141,7 @@ function computeOverview(dec: string): OverviewResult {
           catMap.set(label, cur)
         }
         for (const c of catMap.values()) categories.push(c)
-      }
-      db.close()
+      })
     } catch { /* resource db unavailable */ }
   }
 
@@ -151,9 +150,9 @@ function computeOverview(dec: string): OverviewResult {
   const snsPath = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
   if (existsSync(snsPath)) {
     try {
-      const db = new DatabaseSync(snsPath, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-      if (has) {
+      withDb(snsPath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return
         const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
         const uname = cols.has('user_name') ? 'user_name' : 'userName'
         const cname = cols.has('content') ? 'content' : 'Content'
@@ -174,8 +173,7 @@ function computeOverview(dec: string): OverviewResult {
           .sort((a, b) => b.posts - a.posts)
           .slice(0, 20)
         for (const a of sorted) moments_authors.push(a)
-      }
-      db.close()
+      })
     } catch { /* no sns */ }
   }
 

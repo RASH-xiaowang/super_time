@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { withDb, withWritableDb } from './db-open.ts'
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
@@ -84,14 +85,9 @@ export function listEditedMessages(decryptedDir: string, sessionId?: string): { 
   const p = editDbPath(decryptedDir)
   if (!existsSync(p)) return { items: [], total: 0 }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    let rows: Array<Record<string, unknown>>
-    if (sessionId) {
-      rows = db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC').all(sessionId)
-    } else {
-      rows = db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits ORDER BY last_edited_at DESC LIMIT 500').all()
-    }
-    db.close()
+    const rows = withDb(p, (db) => sessionId
+      ? db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits WHERE session_id = ? ORDER BY last_edited_at DESC').all(sessionId)
+      : db.prepare('SELECT session_id, db, table_name, local_id, last_edited_at, edit_count, original_msg_json FROM message_edits ORDER BY last_edited_at DESC LIMIT 500').all()) as Array<Record<string, unknown>>
     const items = rows.map(r => ({
       sessionId: cellStr(r['session_id'] ?? ''),
       db: cellStr(r['db'] ?? ''),
@@ -203,12 +199,10 @@ export function resetEditedMessage(decryptedDir: string, username: string, local
   const p = editDbPath(decryptedDir)
   if (!existsSync(p)) return { ok: false, error: '编辑记录库不存在' }
   try {
-    const store = new DatabaseSync(p)
-    const rec = store.prepare('SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId) as { db?: string; table_name?: string; original_msg_json?: string } | undefined
-    if (!rec) { store.close(); return { ok: false, error: '无编辑记录' } }
+    const rec = withDb(p, (store) => store.prepare('SELECT db, table_name, original_msg_json FROM message_edits WHERE session_id = ? AND local_id = ?').get(username, localId) as { db?: string; table_name?: string; original_msg_json?: string } | undefined)
+    if (!rec) return { ok: false, error: '无编辑记录' }
     let original: Record<string, unknown> = {}
     try { original = JSON.parse(rec.original_msg_json ?? '{}') as Record<string, unknown> } catch { /* keep empty */ }
-    store.close()
     const table = rec.table_name ?? msgTableName(username)
     const db = findShard(decryptedDir, table, localId)
     if (!db) return { ok: false, error: '未找到消息分库' }
@@ -219,9 +213,7 @@ export function resetEditedMessage(decryptedDir: string, username: string, local
         db.prepare('UPDATE "' + table + '" SET "' + col + '" = ? WHERE local_id = ?').run(decodeOriginalCell(val), localId)
       }
       // remove the edit record
-      const store2 = new DatabaseSync(p)
-      store2.prepare('DELETE FROM message_edits WHERE session_id = ? AND local_id = ?').run(username, localId)
-      store2.close()
+      withWritableDb(p, (store2) => { store2.prepare('DELETE FROM message_edits WHERE session_id = ? AND local_id = ?').run(username, localId) })
       return { ok: true }
     } finally {
       db.close()
