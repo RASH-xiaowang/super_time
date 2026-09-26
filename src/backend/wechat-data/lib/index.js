@@ -3754,16 +3754,13 @@ function classifyPacked(type, blob) {
 function countRows(path, table, where = "") {
   if (!existsSync5(path)) return 0;
   try {
-    const db = new DatabaseSync10(path, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
-    if (!has) {
-      db.close();
-      return 0;
-    }
-    const sql = `SELECT COUNT(*) AS n FROM ${table}${where ? " WHERE " + where : ""}`;
-    const r = db.prepare(sql).get();
-    db.close();
-    return r.n;
+    return withDb(path, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== void 0;
+      if (!has) return 0;
+      const sql = `SELECT COUNT(*) AS n FROM ${table}${where ? " WHERE " + where : ""}`;
+      const r = db.prepare(sql).get();
+      return r.n;
+    });
   } catch {
     return 0;
   }
@@ -8951,21 +8948,16 @@ function momentsCount(decryptedDir, username) {
   for (const p of [join37(decryptedDir, "sns", "db_sns", "sns.db"), join37(decryptedDir, "sns", "sns.db")]) {
     if (!existsSync29(p)) continue;
     try {
-      const db = new DatabaseSync23(p, { readOnly: true });
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
-      if (!has) {
-        db.close();
-        continue;
-      }
-      const cols = tableColumns5(db, "SnsTimeLine");
-      const uname = cols.has("user_name") ? "user_name" : cols.has("userName") ? "userName" : "";
-      if (!uname) {
-        db.close();
-        continue;
-      }
-      const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username);
-      db.close();
-      return row?.n ?? 0;
+      const got = withDb(p, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== void 0;
+        if (!has) return null;
+        const cols = tableColumns5(db, "SnsTimeLine");
+        const uname = cols.has("user_name") ? "user_name" : cols.has("userName") ? "userName" : "";
+        if (!uname) return null;
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username);
+        return row?.n ?? 0;
+      });
+      if (got !== null) return got;
     } catch {
     }
   }
@@ -8975,27 +8967,27 @@ function fundsCount(decryptedDir, username) {
   const p = join37(decryptedDir, "general", "general.db");
   if (!existsSync29(p)) return { transfers: 0, redpackets: 0 };
   try {
-    const db = new DatabaseSync23(p, { readOnly: true });
-    let transfers = 0;
-    let redpackets = 0;
-    try {
-      const cols = tableColumns5(db, "transferTable");
-      if (cols.has("session_name")) {
-        const row = db.prepare("SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?").get(username);
-        transfers = row?.n ?? 0;
+    return withDb(p, (db) => {
+      let transfers = 0;
+      let redpackets = 0;
+      try {
+        const cols = tableColumns5(db, "transferTable");
+        if (cols.has("session_name")) {
+          const row = db.prepare("SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?").get(username);
+          transfers = row?.n ?? 0;
+        }
+      } catch {
       }
-    } catch {
-    }
-    try {
-      const cols = tableColumns5(db, "redEnvelopeTable");
-      if (cols.has("session_name")) {
-        const row = db.prepare("SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?").get(username);
-        redpackets = row?.n ?? 0;
+      try {
+        const cols = tableColumns5(db, "redEnvelopeTable");
+        if (cols.has("session_name")) {
+          const row = db.prepare("SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?").get(username);
+          redpackets = row?.n ?? 0;
+        }
+      } catch {
       }
-    } catch {
-    }
-    db.close();
-    return { transfers, redpackets };
+      return { transfers, redpackets };
+    });
   } catch {
     return { transfers: 0, redpackets: 0 };
   }
@@ -24341,7 +24333,6 @@ ${body}`;
 
 // src/backend/wechat-data/src/query/avatar.ts
 import { createHash as createHash25 } from "node:crypto";
-import { DatabaseSync as DatabaseSync47 } from "node:sqlite";
 import { existsSync as existsSync64, readFileSync as readFileSync23 } from "node:fs";
 import { join as join79 } from "node:path";
 function sniffImageFormat2(data) {
@@ -24361,19 +24352,16 @@ function avatarFromHeadImageDb(decryptedDir, username) {
   const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync47(dbPath8, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return null;
-    }
-    const row = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1").get(username);
-    db.close();
-    if (!row) return null;
-    const buf = row.b instanceof Uint8Array ? row.b : null;
-    if (!buf || buf.length < 16) return null;
-    const fmt = sniffImageFormat2(buf);
-    return "data:image/" + fmt + ";base64," + Buffer.from(buf).toString("base64");
+    return withDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
+      if (!has) return null;
+      const row = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1").get(username);
+      if (!row) return null;
+      const buf = row.b instanceof Uint8Array ? row.b : null;
+      if (!buf || buf.length < 16) return null;
+      const fmt = sniffImageFormat2(buf);
+      return "data:image/" + fmt + ";base64," + Buffer.from(buf).toString("base64");
+    });
   } catch {
     return null;
   }
@@ -24382,23 +24370,17 @@ function avatarUrlFromContact(decryptedDir, username) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync47(dbPath8, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return null;
-    }
-    const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
-    if (!cols.includes("username")) {
-      db.close();
-      return null;
-    }
-    const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
-    const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
-    const row = db.prepare("SELECT COALESCE(NULLIF(" + small + ", ''), " + big + ") AS u FROM contact WHERE username = ? LIMIT 1").get(username);
-    db.close();
-    const url = row?.u ? cellStr17(row.u) : "";
-    return url ? url : null;
+    return withDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
+      if (!has) return null;
+      const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
+      if (!cols.includes("username")) return null;
+      const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
+      const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
+      const row = db.prepare("SELECT COALESCE(NULLIF(" + small + ", ''), " + big + ") AS u FROM contact WHERE username = ? LIMIT 1").get(username);
+      const url = row?.u ? cellStr17(row.u) : "";
+      return url ? url : null;
+    });
   } catch {
     return null;
   }
@@ -24422,27 +24404,21 @@ function contactByNickname(decryptedDir, nickname) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return null;
   try {
-    const db = new DatabaseSync47(dbPath8, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return null;
-    }
-    const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
-    if (!cols.includes("username") || !cols.includes("nick_name")) {
-      db.close();
-      return null;
-    }
-    const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
-    const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
-    const md = cols.includes("head_img_md5") ? "head_img_md5" : "NULL";
-    const sql = `SELECT username, COALESCE(NULLIF(${small}, ''), ${big}) AS u, ${md} AS m FROM contact WHERE nick_name = ? AND COALESCE(NULLIF(${small}, ''), ${big}) != '' LIMIT 1`;
-    const row = db.prepare(sql).get(nickname);
-    db.close();
-    if (!row) return null;
-    const username = cellStr17(row.username);
-    const url = cellStr17(row.u);
-    return username && url ? { username, url, md5: cellStr17(row.m) } : null;
+    return withDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
+      if (!has) return null;
+      const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
+      if (!cols.includes("username") || !cols.includes("nick_name")) return null;
+      const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
+      const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
+      const md = cols.includes("head_img_md5") ? "head_img_md5" : "NULL";
+      const sql = `SELECT username, COALESCE(NULLIF(${small}, ''), ${big}) AS u, ${md} AS m FROM contact WHERE nick_name = ? AND COALESCE(NULLIF(${small}, ''), ${big}) != '' LIMIT 1`;
+      const row = db.prepare(sql).get(nickname);
+      if (!row) return null;
+      const username = cellStr17(row.username);
+      const url = cellStr17(row.u);
+      return username && url ? { username, url, md5: cellStr17(row.m) } : null;
+    });
   } catch {
     return null;
   }
@@ -24481,22 +24457,20 @@ function contactAvatarUrlMap(decryptedDir, usernames) {
   const dbPath8 = join79(decryptedDir, "contact", "contact.db");
   if (!existsSync64(dbPath8)) return out;
   try {
-    const db = new DatabaseSync47(dbPath8, { readOnly: true });
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
-    if (has) {
+    withDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== void 0;
+      if (!has) return;
       const cols = db.prepare("PRAGMA table_info(contact)").all().map((r) => r.name);
-      if (cols.includes("username")) {
-        const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
-        const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
-        const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`);
-        for (const username of usernames) {
-          const row = stmt.get(username);
-          const url = row?.u ? cellStr17(row.u) : "";
-          if (url) out.set(username, url);
-        }
+      if (!cols.includes("username")) return;
+      const small = cols.includes("small_head_url") ? "small_head_url" : "NULL";
+      const big = cols.includes("big_head_url") ? "big_head_url" : "NULL";
+      const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`);
+      for (const username of usernames) {
+        const row = stmt.get(username);
+        const url = row?.u ? cellStr17(row.u) : "";
+        if (url) out.set(username, url);
       }
-    }
-    db.close();
+    });
   } catch {
   }
   return out;
@@ -24507,9 +24481,9 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
   const dbPath8 = join79(decryptedDir, "head_image", "head_image.db");
   if (existsSync64(dbPath8)) {
     try {
-      const db = new DatabaseSync47(dbPath8, { readOnly: true });
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
-      if (has) {
+      withDb(dbPath8, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== void 0;
+        if (!has) return;
         const stmt = db.prepare("SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1");
         for (const username of usernames) {
           const row = stmt.get(username);
@@ -24519,8 +24493,7 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
           const fmt = sniffImageFormat2(buf);
           out[username] = "data:image/" + fmt + ";base64," + Buffer.from(buf).toString("base64");
         }
-      }
-      db.close();
+      });
     } catch {
     }
   }
@@ -24541,7 +24514,7 @@ function resolveAvatarsLocal(decryptedDir, usernames, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/emoticons.ts
-import { DatabaseSync as DatabaseSync48 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync47 } from "node:sqlite";
 import { existsSync as existsSync65 } from "node:fs";
 import { join as join80 } from "node:path";
 function cellStr18(v) {
@@ -24572,7 +24545,7 @@ function queryEmoticons(decryptedDir, limit, offset = 0) {
 function computeEmoticons(decryptedDir, limit, offset = 0) {
   const path = join80(decryptedDir, "emoticon", "emoticon.db");
   if (!existsSync65(path)) return { custom: [], static: [], packages: [], total: 0, orderedBy: "builtin" };
-  const db = new DatabaseSync48(path, { readOnly: true });
+  const db = new DatabaseSync47(path, { readOnly: true });
   try {
     const custom = [];
     let customOrderedBy = "builtin";
@@ -24667,7 +24640,7 @@ function computeEmoticons(decryptedDir, limit, offset = 0) {
 }
 
 // src/backend/wechat-data/src/query/files.ts
-import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync48 } from "node:sqlite";
 import { statSync as statSync22 } from "node:fs";
 import { join as join81 } from "node:path";
 import { createHash as createHash26 } from "node:crypto";
@@ -24700,7 +24673,7 @@ function loadFileSources(decryptedDir) {
   const map = /* @__PURE__ */ new Map();
   let resDb = null;
   try {
-    resDb = new DatabaseSync49(join81(decryptedDir, "message", "message_resource.db"), { readOnly: true });
+    resDb = new DatabaseSync48(join81(decryptedDir, "message", "message_resource.db"), { readOnly: true });
   } catch {
     return map;
   }
@@ -24756,7 +24729,7 @@ function dirSourceCached(decryptedDir) {
   const month = /* @__PURE__ */ new Map();
   const talker = /* @__PURE__ */ new Map();
   try {
-    const db = new DatabaseSync49(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+    const db = new DatabaseSync48(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
     try {
       const names = contactMeta(decryptedDir).names;
       const md5ToName = /* @__PURE__ */ new Map();
@@ -24788,7 +24761,7 @@ function dirSourceCached(decryptedDir) {
   return dirSourceCache;
 }
 function queryFiles(decryptedDir, limit, offset = 0, category, q) {
-  const db = new DatabaseSync49(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
+  const db = new DatabaseSync48(join81(decryptedDir, "hardlink", "hardlink.db"), { readOnly: true });
   try {
     const want = category && category !== "all" ? category : "";
     const kw = (q ?? "").trim();
@@ -24876,7 +24849,7 @@ function queryFiles(decryptedDir, limit, offset = 0, category, q) {
 // src/backend/wechat-data/src/query/image-original.ts
 var import_llm_retry5 = __toESM(require_llm_retry(), 1);
 import { createHash as createHash27 } from "node:crypto";
-import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync49 } from "node:sqlite";
 import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync15 } from "node:fs";
 import { join as join82 } from "node:path";
 import { decompress as decompress13 } from "fzstd";
@@ -24912,7 +24885,7 @@ function resolveImageOriginalLink(decryptedDir, username, localId) {
     if (!contentCol) continue;
     let db = null;
     try {
-      db = new DatabaseSync50(shard.file, { readOnly: true });
+      db = new DatabaseSync49(shard.file, { readOnly: true });
     } catch {
       continue;
     }
@@ -24980,7 +24953,7 @@ function sniffImageFormat3(b) {
 // src/backend/wechat-data/src/query/image-original-batch.ts
 import { existsSync as existsSync66, readFileSync as readFileSync24, readdirSync as readdirSync32, writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join83 } from "node:path";
-import { DatabaseSync as DatabaseSync51 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync50 } from "node:sqlite";
 import { createHash as createHash28 } from "node:crypto";
 import { decompress as decompress14 } from "fzstd";
 var ZSTD_MAGIC14 = Buffer.from([40, 181, 47, 253]);
@@ -25021,7 +24994,7 @@ function talkerByTableHash(decryptedDir) {
   if (!existsSync66(dbPath8)) return out;
   let db = null;
   try {
-    db = new DatabaseSync51(dbPath8, { readOnly: true });
+    db = new DatabaseSync50(dbPath8, { readOnly: true });
   } catch {
     return out;
   }
@@ -25092,7 +25065,7 @@ function scanImageOriginalPlan(decryptedDir, rawRoot, decodedDir) {
   for (const file of messageDbFiles(join83(decryptedDir, "message"))) {
     let db = null;
     try {
-      db = new DatabaseSync51(file, { readOnly: true });
+      db = new DatabaseSync50(file, { readOnly: true });
     } catch {
       continue;
     }
@@ -25374,7 +25347,7 @@ function resolveMessageFileDataUrl(wechatBaseDir, fileName, opts = {}) {
 }
 
 // src/backend/wechat-data/src/query/media-video.ts
-import { DatabaseSync as DatabaseSync52 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync51 } from "node:sqlite";
 import { existsSync as existsSync68, readdirSync as readdirSync34, readFileSync as readFileSync26 } from "node:fs";
 import { createHash as createHash29 } from "node:crypto";
 import { join as join85 } from "node:path";
@@ -25427,7 +25400,7 @@ function resolveVideoMd5(decryptedDir, username, localId) {
   for (const shard of messageShardFiles4(decryptedDir)) {
     let db = null;
     try {
-      db = new DatabaseSync52(shard, { readOnly: true });
+      db = new DatabaseSync51(shard, { readOnly: true });
     } catch {
       continue;
     }
@@ -25473,7 +25446,7 @@ function toJpegDataUrl(bytes, ext) {
 }
 
 // src/backend/wechat-data/src/query/media-voice.ts
-import { DatabaseSync as DatabaseSync53 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync52 } from "node:sqlite";
 import { existsSync as existsSync69, readdirSync as readdirSync35 } from "node:fs";
 import { createHash as createHash30 } from "node:crypto";
 import { join as join86 } from "node:path";
@@ -25490,7 +25463,7 @@ function messageServerId(decryptedDir, username, localId) {
   for (const shard of messageShardFiles5(decryptedDir)) {
     let db = null;
     try {
-      db = new DatabaseSync53(shard, { readOnly: true });
+      db = new DatabaseSync52(shard, { readOnly: true });
     } catch {
       continue;
     }
@@ -25516,7 +25489,7 @@ function resolveVoiceInfo(decryptedDir, username, localId) {
     return { available: false, decodable: false, error: "\u8BED\u97F3\u5E93\u4E0D\u5B58\u5728 (media_0.db)" };
   }
   try {
-    const db = new DatabaseSync53(mediaDb, { readOnly: true });
+    const db = new DatabaseSync52(mediaDb, { readOnly: true });
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='VoiceInfo'").get() !== void 0;
     if (!has) {
       db.close();
@@ -26501,7 +26474,7 @@ function createMediaRemotes(rc) {
 }
 
 // src/backend/wechat-data/src/query/export-history.ts
-import { DatabaseSync as DatabaseSync54 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync53 } from "node:sqlite";
 import { existsSync as existsSync73, rmSync as rmSync9, statSync as statSync26 } from "node:fs";
 import { basename as basename10, dirname as dirname31, join as join91 } from "node:path";
 var DEFAULT_LIMIT3 = 200;
@@ -26518,7 +26491,7 @@ function dbPath7(decryptedDir) {
   return join91(dirname31(decryptedDir), "wechat_privacy.db");
 }
 function openStore8(decryptedDir) {
-  const db = new DatabaseSync54(dbPath7(decryptedDir));
+  const db = new DatabaseSync53(dbPath7(decryptedDir));
   db.exec(`CREATE TABLE IF NOT EXISTS export_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL,
@@ -29575,14 +29548,14 @@ function postprocessAnswers(input) {
 }
 
 // src/backend/wechat-data/src/laya/store.ts
-import { DatabaseSync as DatabaseSync55 } from "node:sqlite";
+import { DatabaseSync as DatabaseSync54 } from "node:sqlite";
 import { existsSync as existsSync77, statSync as statSync28 } from "node:fs";
 import { dirname as dirname34, join as join97 } from "node:path";
 function layaCachePath(decryptedDir) {
   return join97(dirname34(decryptedDir), "laya_analysis.db");
 }
 function openStore9(decryptedDir) {
-  const db = new DatabaseSync55(layaCachePath(decryptedDir));
+  const db = new DatabaseSync54(layaCachePath(decryptedDir));
   db.exec(`CREATE TABLE IF NOT EXISTS laya_analysis (
     session_id TEXT NOT NULL,
     local_id INTEGER NOT NULL,

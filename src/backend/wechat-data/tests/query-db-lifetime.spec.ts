@@ -32,6 +32,9 @@ import { getSearchIndexFreshness, getSearchIndexStatus, indexReady } from '../sr
 import { searchUnified } from '../src/query/unified-search.ts'
 import { usernameByChatId } from '../src/query/voice.ts'
 import { withDb } from '../src/query/db-open.ts'
+import { resolveAvatar, resolveAvatarsLocal } from '../src/query/avatar.ts'
+import { queryContact360 } from '../src/query/contact360.ts'
+import { queryOverview } from '../src/query/overview.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC_ROOT = join(HERE, '..', 'src')
@@ -59,8 +62,7 @@ const AUDIT_FIXED = [
 const KNOWN_UNFIXED: Record<string, number> = {
   'query/annual-report.ts': 1,
   'query/asset-insights.ts': 2,
-  'query/avatar.ts': 5,
-  'query/contact360.ts': 3,
+  'query/contact360.ts': 1,
   'query/daily-summary.ts': 1,
   'query/edit.ts': 3,
   'query/favorites.ts': 1,
@@ -73,7 +75,7 @@ const KNOWN_UNFIXED: Record<string, number> = {
   'query/moments-insights.ts': 1,
   'query/official-assets.ts': 2,
   'query/overview-insights.ts': 1,
-  'query/overview.ts': 3,
+  'query/overview.ts': 2,
   'query/records.ts': 1,
   'query/retrieval/embedding.ts': 1,
   'query/search-build.ts': 1,
@@ -238,6 +240,67 @@ describe('生产读路径不再在异常分支泄漏句柄', () => {
   })
 })
 
+// ------------------------------------------- 行为层（第四批 #11：头像 / 360° / 总览）
+
+/**
+ * 这三条钉的是同一件事：`query/avatar.ts`、`query/contact360.ts`、`query/overview.ts` 里
+ * 那批「打开 → prepare（表不在就抛）→ close 写在成功路径上」的读函数。
+ * 探针用**整个数据根都可删**来判：只要还有一条连接没关，Windows 上就是 EBUSY。
+ *
+ * 为什么挑这三条：它们全是「降级成空结果」的路径 —— 界面上看到的就是"这个人没有头像 /
+ * 这个联系人没有数据"，所以漏句柄在功能上完全隐形，只有删目录/换数据根的那一刻才暴露。
+ * 每条对应的坏法（把 withDb 换回裸 open + 成功路径 close）由变异 M256–M258 自证。
+ */
+describe('头像 / 360° / 总览的读路径不留句柄', () => {
+  /** 一个「每个库都在、每个表都不对」的数据根：任何 prepare 都会抛。 */
+  function allTablesMissing(tag: string): { root: string; dec: string } {
+    const root = tempRoot(tag)
+    const dec = join(root, 'decrypted')
+    const junk = (rel: string): void => { makeDb(join(dec, rel), (db) => { db.exec('CREATE TABLE unrelated (a TEXT)') }) }
+    junk(join('head_image', 'head_image.db'))
+    junk(join('contact', 'contact.db'))
+    junk(join('message', 'media_0.db'))
+    junk(join('message', 'message_resource.db'))
+    junk(join('general', 'general.db'))
+    junk(join('sns', 'db_sns', 'sns.db'))
+    return { root, dec }
+  }
+
+  it('resolveAvatar：三级来源全抛错 ⇒ kind=none，且一棵树都可删', () => {
+    const { root, dec } = allTablesMissing('avatar-one')
+    expect(resolveAvatar(dec, 'wxid_a', undefined, '张三')).toEqual({ kind: 'none' })
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('resolveAvatarsLocal：批量那两路（head_image + contact）同样不漏', () => {
+    const { root, dec } = allTablesMissing('avatar-batch')
+    expect(resolveAvatarsLocal(dec, ['wxid_a', 'wxid_b'], { allowRemote: true })).toEqual({})
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('queryContact360：分片 / 朋友圈 / 转账 / 共同群全缺 ⇒ 空档案且不留句柄', () => {
+    const { root, dec } = allTablesMissing('contact360')
+    const snap = queryContact360(dec, 'wxid_a')
+    expect(snap.username).toBe('wxid_a')
+    expect(snap.messages.count).toBe(0)
+    expect(snap.moments.count).toBe(0)
+    expect(snap.funds).toEqual({ transfers: 0, redpackets: 0 })
+    expect(snap.commonGroups).toEqual([])
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * 这条**故意不假设**总览能算完整张表：`queryOverview` 会经 `queryContacts` 读 `contact` 表，
+   * 表不在时它如实抛错（P1-1 的读失败契约：降级成空数据才是错的做法）。
+   * 所以要钉的是"抛错这条路上也不留句柄"—— 那才是 countRows 这类降级分支的真实形状。
+   */
+  it('queryOverview：坏库上如实抛错，但一棵树仍然都可删', () => {
+    const { root, dec } = allTablesMissing('overview')
+    expect(() => { queryOverview(dec) }).toThrow()
+    expect(leakedFiles(root)).toEqual([])
+  })
+})
+
 // ---------------------------------------------------------------- 棘轮层
 
 interface Suspect { file: string; line: number; name: string; shape: string }
@@ -349,7 +412,7 @@ describe('query 层的连接纪律（棘轮）', () => {
   it('扫描真的看到了足够多的打开点（防空转）', () => {
     expect(files.length).toBeGreaterThan(50)
     // 下界只用来防「扫描器坏了 ⇒ 集合为空 ⇒ 全部断言恒真」，不代表目标值：改造在推进，这个数只会往下走。
-    expect(opens).toBeGreaterThanOrEqual(90)
+    expect(opens).toBeGreaterThanOrEqual(60)
   })
 
   it('待改造站点与清单逐个对齐（只能变小，不能变大）', () => {

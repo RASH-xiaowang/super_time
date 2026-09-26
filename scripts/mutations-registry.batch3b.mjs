@@ -279,4 +279,20 @@ export const MUTATIONS_BATCH3B = [
     to: "edges: [...observed, ...inferred], communityCount, kindCounts: {} }",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model-kind-counts.spec.ts",
   },
+  {
+    id: "M256-handle-ratchet-list-blinded",
+    why: "把清单里某一行的计数改成 0（等于宣布「这个文件已经改完了」）⇒ 棘轮必须红：这张清单是按文件记账的，改小数字不等于改代码，靠它才拦得住「在已清账的文件里又加一个裸 open」这种回潮",
+    file: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+    from: "  'query/contact360.ts': 1,",
+    to: "  'query/contact360.ts': 0,",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
+  {
+    id: "M257-leak-probe-cannot-see-leaks",
+    why: "泄漏探针不再把 EBUSY/EPERM 认成没关的连接（Windows 上这正是句柄没关的唯一可见信号）⇒ 所有「跑完不留句柄」的用例集体变恒真，只有那条反例哨兵该红",
+    file: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+    from: "        if (code === 'EBUSY' || code === 'EPERM')",
+    to: "        if (false)",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
 ]

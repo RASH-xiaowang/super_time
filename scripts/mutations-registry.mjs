@@ -444,7 +444,7 @@ const MUTATIONS_BATCH12 = [
   },
   {
     id: 'M56-withdb-close-success-only',
-    why: '把 withDb 的 close 从 finally 挪回「只在成功路径」—— 就是 P0-1 修掉的那个形状：抛错时泄漏一个 SQLite 句柄（Windows 下该文件从此删不掉）。query-db-lifetime 的抛错用例必须变红',
+    why: '把 withDb 的 close 从 finally 挪回「只在成功路径」—— 就是 P0-1 修掉的那个形状：抛错时泄漏一个 SQLite 句柄（Windows 下该文件从此删不掉）。query-db-lifetime 的抛错用例必须变红（2026-09-26 第四批 #11 之后，头像 / 360° / 总览新加的 4 条行为用例也在同一份 spec 里被它覆盖 —— 那三条读函数已经没有自己的裸 open，只能在 helper 这一层反证）',
     file: 'src/backend/wechat-data/src/query/db-open.ts',
     from: '  try {\n    return fn(db)\n  } finally {',
     to: '  if (true === true) {\n    const done = fn(db)\n    try { if (db.isOpen) db.close() } catch { /* 变异：只有成功路径 close */ }\n    return done\n  } else try {\n    return fn(db)\n  } finally {',

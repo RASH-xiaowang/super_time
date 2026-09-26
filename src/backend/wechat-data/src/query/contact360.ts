@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Contact360Group, Contact360Snapshot } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
+import { withDb } from './db-open.ts'
 
 /** Stringify a DB cell. */
 function cellString(v: unknown): string {
@@ -64,15 +65,16 @@ function momentsCount(decryptedDir: string, username: string): number {
   for (const p of [join(decryptedDir, 'sns', 'db_sns', 'sns.db'), join(decryptedDir, 'sns', 'sns.db')]) {
     if (!existsSync(p)) continue
     try {
-      const db = new DatabaseSync(p, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-      if (!has) { db.close(); continue }
-      const cols = tableColumns(db, 'SnsTimeLine')
-      const uname = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
-      if (!uname) { db.close(); continue }
-      const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username) as { n: number } | undefined
-      db.close()
-      return row?.n ?? 0
+      const got = withDb(p, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return null
+        const cols = tableColumns(db, 'SnsTimeLine')
+        const uname = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
+        if (!uname) return null
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username) as { n: number } | undefined
+        return row?.n ?? 0
+      })
+      if (got !== null) return got
     } catch { /* try next path */ }
   }
   return 0
@@ -83,25 +85,25 @@ function fundsCount(decryptedDir: string, username: string): { transfers: number
   const p = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(p)) return { transfers: 0, redpackets: 0 }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    let transfers = 0
-    let redpackets = 0
-    try {
-      const cols = tableColumns(db, 'transferTable')
-      if (cols.has('session_name')) {
-        const row = db.prepare('SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?').get(username) as { n: number } | undefined
-        transfers = row?.n ?? 0
-      }
-    } catch { /* transfer table unavailable */ }
-    try {
-      const cols = tableColumns(db, 'redEnvelopeTable')
-      if (cols.has('session_name')) {
-        const row = db.prepare('SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?').get(username) as { n: number } | undefined
-        redpackets = row?.n ?? 0
-      }
-    } catch { /* red envelope table unavailable */ }
-    db.close()
-    return { transfers, redpackets }
+    return withDb(p, (db) => {
+      let transfers = 0
+      let redpackets = 0
+      try {
+        const cols = tableColumns(db, 'transferTable')
+        if (cols.has('session_name')) {
+          const row = db.prepare('SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?').get(username) as { n: number } | undefined
+          transfers = row?.n ?? 0
+        }
+      } catch { /* transfer table unavailable */ }
+      try {
+        const cols = tableColumns(db, 'redEnvelopeTable')
+        if (cols.has('session_name')) {
+          const row = db.prepare('SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?').get(username) as { n: number } | undefined
+          redpackets = row?.n ?? 0
+        }
+      } catch { /* red envelope table unavailable */ }
+      return { transfers, redpackets }
+    })
   } catch {
     return { transfers: 0, redpackets: 0 }
   }

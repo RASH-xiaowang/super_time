@@ -7,6 +7,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { cachedBySig, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
 import { classifyPacked } from './resource-classify.ts'
+import { withDb } from './db-open.ts'
 import { queryContacts } from './contacts.ts'
 
 interface StorageCategory { label: string; count: number; size: number }
@@ -29,13 +30,13 @@ export interface OverviewResult {
 function countRows(path: string, table: string, where = ''): number {
   if (!existsSync(path)) return 0
   try {
-    const db = new DatabaseSync(path, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-    if (!has) { db.close(); return 0 }
-    const sql = `SELECT COUNT(*) AS n FROM ${table}${where ? ' WHERE ' + where : ''}`
-    const r = db.prepare(sql).get() as { n: number }
-    db.close()
-    return r.n
+    return withDb(path, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+      if (!has) return 0
+      const sql = `SELECT COUNT(*) AS n FROM ${table}${where ? ' WHERE ' + where : ''}`
+      const r = db.prepare(sql).get() as { n: number }
+      return r.n
+    })
   } catch {
     return 0
   }
