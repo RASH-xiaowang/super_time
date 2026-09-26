@@ -27768,6 +27768,38 @@ function createExportRemotes(rc) {
   };
 }
 
+// src/backend/wechat-data/src/gateway-jobs.ts
+function streamControlFor(jobs, emit, jobId) {
+  const id = normalizeJobId(jobId);
+  if (!id) return {};
+  if (!jobs.has(id) && jobs.size >= STREAM_JOB_CAP) {
+    const first = jobs.keys().next();
+    if (!first.done && first.value !== void 0) jobs.delete(first.value);
+  }
+  const job = jobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false };
+  job.ctrl = new AbortController();
+  job.progress = null;
+  job.finished = false;
+  delete job.error;
+  jobs.set(id, job);
+  return {
+    signal: job.ctrl.signal,
+    onProgress: (p) => {
+      job.progress = { phase: p.phase, done: p.done, total: p.total };
+      try {
+        emit({ jobId: id, phase: p.phase, done: p.done, total: p.total });
+      } catch {
+      }
+    }
+  };
+}
+function finishStreamJobIn(jobs, jobId, error) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+  job.finished = true;
+  if (error) job.error = error;
+}
+
 // src/backend/wechat-data/src/gateway-models.ts
 function embedModelNameOf(bridge, override = "") {
   const llm = bridge;
@@ -28008,38 +28040,16 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     return this._selfUsername;
   }
   /**
-   * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
-   *
-   * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
-   * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
-   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
-   *   旧调用方的行为完全不变）。
+   * 取（或新建）一个长任务的控制槽 —— 槽位管理在 `gateway-jobs.ts#streamControlFor`
+   * （#20 第四个协作者：令牌复用 / 终态残留 / 上限淘汰这三条规则只有单独测才钉得住）。
+   * 那张槽表仍由本类持有，并原样交给 remotes（避免出现第二个"进度视图"）。
+   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
    * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
    */
   streamControl(jobId) {
-    const id = normalizeJobId(jobId);
-    if (!id) return {};
-    if (!this._streamJobs.has(id) && this._streamJobs.size >= STREAM_JOB_CAP) {
-      const first = this._streamJobs.keys().next();
-      if (!first.done && first.value !== void 0) this._streamJobs.delete(first.value);
-    }
-    const job = this._streamJobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false };
-    job.ctrl = new AbortController();
-    job.progress = null;
-    job.finished = false;
-    delete job.error;
-    this._streamJobs.set(id, job);
-    const ctx = this._ctx;
-    return {
-      signal: job.ctrl.signal,
-      onProgress: (p) => {
-        job.progress = { phase: p.phase, done: p.done, total: p.total };
-        try {
-          ctx.emit(EXPORT_PROGRESS_EVENT, { jobId: id, phase: p.phase, done: p.done, total: p.total });
-        } catch {
-        }
-      }
-    };
+    return streamControlFor(this._streamJobs, (detail) => {
+      this._ctx.emit(EXPORT_PROGRESS_EVENT, detail);
+    }, jobId);
   }
   /**
    * 收尾一个长任务：标记结束（槽位留着，让迟到的 `getExportProgress` 能读到终态与错误）。
@@ -28047,10 +28057,7 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
    * @param error - 失败/取消原因；成功时省略。
    */
   finishStreamJob(jobId, error) {
-    const job = this._streamJobs.get(jobId);
-    if (!job) return;
-    job.finished = true;
-    if (error) job.error = error;
+    finishStreamJobIn(this._streamJobs, jobId, error);
   }
   /**
    * Append one operation-log row. Metadata only — never message bodies or

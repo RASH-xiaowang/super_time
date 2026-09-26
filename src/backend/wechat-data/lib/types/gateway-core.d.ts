@@ -120,12 +120,10 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      */
     protected selfUsername(): string;
     /**
-     * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
-     *
-     * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
-     * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
-     * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
-     *   旧调用方的行为完全不变）。
+     * 取（或新建）一个长任务的控制槽 —— 槽位管理在 `gateway-jobs.ts#streamControlFor`
+     * （#20 第四个协作者：令牌复用 / 终态残留 / 上限淘汰这三条规则只有单独测才钉得住）。
+     * 那张槽表仍由本类持有，并原样交给 remotes（避免出现第二个"进度视图"）。
+     * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
      * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
      */
     protected streamControl(jobId?: string): StreamControl;

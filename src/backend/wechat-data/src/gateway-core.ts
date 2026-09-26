@@ -51,7 +51,8 @@ import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
 import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
 import { listSummaryTasks as listTasks, updateSummaryTaskRunState } from './query/summary-tasks.ts'
-import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, STREAM_JOB_CAP, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import { finishStreamJobIn, streamControlFor } from './gateway-jobs.ts'
 import type { PrivacyGateResult } from './gateway-privacy.ts'
 import { embedModelNameOf, globalModelNameOf, kbModelOf } from './gateway-models.ts'
 import type { EmbedFeature, LlmFactoryDeps } from './gateway-llm-factory.ts'
@@ -156,36 +157,14 @@ export abstract class GatewayCore extends TypertRemoteService {
   }
 
   /**
-   * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
-   *
-   * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
-   * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
-   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
-   *   旧调用方的行为完全不变）。
+   * 取（或新建）一个长任务的控制槽 —— 槽位管理在 `gateway-jobs.ts#streamControlFor`
+   * （#20 第四个协作者：令牌复用 / 终态残留 / 上限淘汰这三条规则只有单独测才钉得住）。
+   * 那张槽表仍由本类持有，并原样交给 remotes（避免出现第二个"进度视图"）。
+   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
    * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
    */
   protected streamControl(jobId?: string): StreamControl {
-    const id = normalizeJobId(jobId)
-    if (!id) return {}
-    if (!this._streamJobs.has(id) && this._streamJobs.size >= STREAM_JOB_CAP) {
-      const first = this._streamJobs.keys().next()
-      if (!first.done && first.value !== undefined) this._streamJobs.delete(first.value)
-    }
-    const job: StreamJob = this._streamJobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false }
-    job.ctrl = new AbortController()
-    job.progress = null
-    job.finished = false
-    delete job.error
-    this._streamJobs.set(id, job)
-    const ctx = this._ctx
-    return {
-      signal: job.ctrl.signal,
-      onProgress: (p) => {
-        job.progress = { phase: p.phase, done: p.done, total: p.total }
-        // 事件尽力而为：进度推不出去不该让导出失败（与 wechat-ask/delta 同策略）。
-        try { ctx.emit(EXPORT_PROGRESS_EVENT, { jobId: id, phase: p.phase, done: p.done, total: p.total }) } catch { /* ignore */ }
-      },
-    }
+    return streamControlFor(this._streamJobs, (detail) => { this._ctx.emit(EXPORT_PROGRESS_EVENT, detail) }, jobId)
   }
 
   /**
@@ -194,10 +173,7 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @param error - 失败/取消原因；成功时省略。
    */
   protected finishStreamJob(jobId: string, error?: string): void {
-    const job = this._streamJobs.get(jobId)
-    if (!job) return
-    job.finished = true
-    if (error) job.error = error
+    finishStreamJobIn(this._streamJobs, jobId, error)
   }
 
   constructor(ctx: Context) {
