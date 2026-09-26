@@ -8,6 +8,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
@@ -121,51 +122,51 @@ export function searchWechatFts(
   const p = join(decryptedDir, 'message', 'message_fts.db')
   if (!existsSync(p)) return { hits: [] }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const sessions = new Map<number, string>()
-    try {
-      const rows = db.prepare('SELECT rowid AS id, username AS u FROM name2id').all() as Array<{ id: number; u: unknown }>
-      for (const r of rows) sessions.set(r.id, decodeCell(r.u))
-    } catch { /* no name2id */ }
-    const out: SearchHit[] = []
-    const like = '%' + q.replace(/[%_]/g, ' ') + '%'
-    for (const [content, aux] of [
-      ['message_fts_v4_0_content', 'message_fts_v4_aux_0'],
-      ['message_fts_v4_1_content', 'message_fts_v4_aux_1'],
-      ['message_fts_v4_2_content', 'message_fts_v4_aux_2'],
-      ['message_fts_v4_3_content', 'message_fts_v4_aux_3'],
-    ] as const) {
+    return { hits: withDb(p, (db) => {
+      const sessions = new Map<number, string>()
       try {
-        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(content) !== undefined
-        if (!exists) continue
-        const sql = 'SELECT c.c0 AS c, a.message_local_id AS lid, a.sort_seq AS ss, a.session_id AS sid FROM "' + content + '" c LEFT JOIN "' + aux + '" a ON a.rowid = c.id WHERE c.c0 LIKE ? ORDER BY c.id DESC LIMIT ?'
-        const rows = db.prepare(sql).all(like, cap) as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const username = sessions.get(Number(r['sid'])) ?? ''
-          // 会话范围必须真的过滤（此前兜底路径忽略 scope，选了会话仍混入其他会话）
-          if (scopeUsername && username !== scopeUsername) continue
-          const text = decodeCell(r['c'])
-          const { sender, body: display } = splitGroupPrefix(text, username)
-          // sort_seq 是毫秒时间戳：恢复 create_time，时间筛选与显示才可用（此前恒为 0，时间范围会把命中全部滤掉）
-          const ssMs = Number(r['ss'] ?? 0)
-          const createTime = ssMs > 1e12 ? Math.floor(ssMs / 1e3) : ssMs > 1e9 ? Math.floor(ssMs) : 0
-          out.push({
-            text,
-            username,
-            create_time: createTime,
-            local_id: Number(r['lid'] ?? 0),
-            name: names.get(username) ?? username,
-            time: createTime ? fmtDateTimeSec(createTime) : '',
-            snippet: display.slice(0, 120),
-            sender: senderLabel(sender, names),
-          })
-          if (out.length >= cap) break
-        }
-      } catch { /* shard unavailable */ }
-      if (out.length >= cap) break
-    }
-    db.close()
-    return { hits: out }
+        const rows = db.prepare('SELECT rowid AS id, username AS u FROM name2id').all() as Array<{ id: number; u: unknown }>
+        for (const r of rows) sessions.set(r.id, decodeCell(r.u))
+      } catch { /* no name2id */ }
+      const out: SearchHit[] = []
+      const like = '%' + q.replace(/[%_]/g, ' ') + '%'
+      for (const [content, aux] of [
+        ['message_fts_v4_0_content', 'message_fts_v4_aux_0'],
+        ['message_fts_v4_1_content', 'message_fts_v4_aux_1'],
+        ['message_fts_v4_2_content', 'message_fts_v4_aux_2'],
+        ['message_fts_v4_3_content', 'message_fts_v4_aux_3'],
+      ] as const) {
+        try {
+          const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(content) !== undefined
+          if (!exists) continue
+          const sql = 'SELECT c.c0 AS c, a.message_local_id AS lid, a.sort_seq AS ss, a.session_id AS sid FROM "' + content + '" c LEFT JOIN "' + aux + '" a ON a.rowid = c.id WHERE c.c0 LIKE ? ORDER BY c.id DESC LIMIT ?'
+          const rows = db.prepare(sql).all(like, cap) as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const username = sessions.get(Number(r['sid'])) ?? ''
+            // 会话范围必须真的过滤（此前兜底路径忽略 scope，选了会话仍混入其他会话）
+            if (scopeUsername && username !== scopeUsername) continue
+            const text = decodeCell(r['c'])
+            const { sender, body: display } = splitGroupPrefix(text, username)
+            // sort_seq 是毫秒时间戳：恢复 create_time，时间筛选与显示才可用（此前恒为 0，时间范围会把命中全部滤掉）
+            const ssMs = Number(r['ss'] ?? 0)
+            const createTime = ssMs > 1e12 ? Math.floor(ssMs / 1e3) : ssMs > 1e9 ? Math.floor(ssMs) : 0
+            out.push({
+              text,
+              username,
+              create_time: createTime,
+              local_id: Number(r['lid'] ?? 0),
+              name: names.get(username) ?? username,
+              time: createTime ? fmtDateTimeSec(createTime) : '',
+              snippet: display.slice(0, 120),
+              sender: senderLabel(sender, names),
+            })
+            if (out.length >= cap) break
+          }
+        } catch { /* shard unavailable */ }
+        if (out.length >= cap) break
+      }
+      return out
+    }) }
   } catch {
     return { hits: [] }
   }

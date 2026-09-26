@@ -3,6 +3,7 @@
  * top likers and commenters, monthly distribution, and "on this day" items.
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MomentsGeo, MomentsGeoPoint, MomentsInsightsSnapshot, MomentsInteractorRow, MomentsTopItems } from '../types.ts'
@@ -198,22 +199,25 @@ function computeMomentsInsights(decryptedDir: string, author?: string): MomentsI
   const today: Array<{ tid: string; text: string; ts: number; author: string }> = []
   let topItems: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
   let geo: MomentsGeo = { points: 0, cities: [], countries: [], places: [], pointList: [] }
+  let early: MomentsInsightsSnapshot | null = null
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
-    const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
-    // 提醒列表与「按作者过滤」无关：它永远是**我的**提醒清单，所以无条件计算。
-    topItems = computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
-    geo = computeGeo(db)
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-    if (!has) { db.close(); return { ...empty, topItems } }
-    const userCol = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
-    const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
-    if (!tidCol || !userCol || !contentCol) { db.close(); return { ...empty, topItems } }
-    const where = author ? ` WHERE ${userCol} = ?` : ''
-    const rows = db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t, ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...(author ? [author] : [])) as Array<{ t: unknown; u: unknown; c: unknown }>
-    db.close()
-    for (const r of rows) {
+    const rows = withDb(dbPath, (db) => {
+      const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
+      const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
+      // 提醒列表与「按作者过滤」无关：它永远是**我的**提醒清单，所以无条件计算。
+      topItems = computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
+      geo = computeGeo(db)
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+      if (!has) return null
+      const userCol = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
+      const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
+      if (!tidCol || !userCol || !contentCol) return null
+      const where = author ? ` WHERE ${userCol} = ?` : ''
+      return db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t, ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...(author ? [author] : [])) as Array<{ t: unknown; u: unknown; c: unknown }>
+    })
+    // `null` = 表或关键列不在：与改造前一样直接交出「只有提醒清单」的空洞察
+    if (rows === null) early = { ...empty, topItems }
+    else for (const r of rows) {
       posts += 1
       const xml = cellString(r.c)
       const parsed = parseSnsXml(xml)
@@ -237,6 +241,7 @@ function computeMomentsInsights(decryptedDir: string, author?: string): MomentsI
     //   未 CAST 时 node:sqlite 物化行会抛 ERR_OUT_OF_RANGE）。
     console.warn('[moments-insights] 查询失败，返回空结果:', (e as Error)?.message ?? e)
   }
+  if (early) return early
   const monthlyArr = Array.from(monthly.entries())
     .map(([month, count]) => ({ month, count }))
     .sort((a, b) => a.month.localeCompare(b.month))

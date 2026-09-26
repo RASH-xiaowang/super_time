@@ -19,6 +19,7 @@
  *    SimHash 由固定种子随机超平面生成，索引与查询两侧一致，无需额外依赖。
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from '../db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RetrievedDoc } from './types.ts'
@@ -525,22 +526,22 @@ function loadHashRows(decryptedDir: string): HashRow[] {
   const sig = String(statSig(p))
   const hit = HASH_CACHE.get(p)
   if (hit && hit.sig === sig) return hit.rows
-  const db = new DatabaseSync(p, { readOnly: true })
-  /**
-   * 这里**有意**一次性取回（N8 评估后的保留项）：它要的产物就是这个数组本身
-   * —— 粗筛表按 (距离, 原顺序) 做计数选择，需要随机访问全部行，不是「边读边丢」的扫描。
-   * 代价被两点约束住：① 按文件指纹缓存（`HASH_CACHE`，只在进程内首次/重建后付一次，
-   * 实测加载 ≈250ms）；② 它只为稠密通道服务，且稠密通道本身可关闭。
-   * 真要把它压下去得改成 mmap/分块，属结构性改动，不在本轮范围。
-   */
-  const rows = (db.prepare('SELECT fts_rowid, hash_lo, hash_hi, username FROM vectors').all() as Array<Record<string, unknown>>)
-    .map(r => ({
-      rowid: Number(r['fts_rowid']),
-      lo: Number(r['hash_lo']) >>> 0,
-      hi: Number(r['hash_hi']) >>> 0,
-      username: String(r['username'] ?? ''),
-    }))
-  db.close()
+  const rows = withDb(p, (db) => {
+    /**
+     * 这里**有意**一次性取回（N8 评估后的保留项）：它要的产物就是这个数组本身
+     * —— 粗筛表按 (距离, 原顺序) 做计数选择，需要随机访问全部行，不是「边读边丢」的扫描。
+     * 代价被两点约束住：① 按文件指纹缓存（`HASH_CACHE`，只在进程内首次/重建后付一次，
+     * 实测加载 ≈250ms）；② 它只为稠密通道服务，且稠密通道本身可关闭。
+     * 真要把它压下去得改成 mmap/分块，属结构性改动，不在本轮范围。
+     */
+    return (db.prepare('SELECT fts_rowid, hash_lo, hash_hi, username FROM vectors').all() as Array<Record<string, unknown>>)
+      .map(r => ({
+        rowid: Number(r['fts_rowid']),
+        lo: Number(r['hash_lo']) >>> 0,
+        hi: Number(r['hash_hi']) >>> 0,
+        username: String(r['username'] ?? ''),
+      }))
+  })
   HASH_CACHE.set(p, { sig, rows })
   return rows
 }
@@ -619,5 +620,9 @@ export function vectorIndexSummary(decryptedDir: string): { rows: number; dim: n
   return { rows: s.rows, dim: s.dim, model: s.model }
 }
 
-/** 便于测试：导出内部哈希工具。 */
-export const __internals = { simhash, popcount32, getPlanes, l2normalize, docKeyOf, selectByHamming, MAX_HAMMING }
+/**
+ * 便于测试：导出内部哈希工具。
+ * `loadHashRows` 也在这里 —— 稠密通道的真实入口要先跑 embedding（联网/本地模型），
+ * 单测拿不到，而**它那条款连接的生命周期**必须能被量到（`query-db-lifetime.spec.ts`）。
+ */
+export const __internals = { simhash, popcount32, getPlanes, l2normalize, docKeyOf, selectByHamming, MAX_HAMMING, loadHashRows }

@@ -3,6 +3,7 @@
  * plus import into the plugin task store with title dedupe.
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HandoffRemindsSnapshot, TaskMutationResult } from '../types.ts'
@@ -37,14 +38,15 @@ export function listHandoffReminds(decryptedDir: string): HandoffRemindsSnapshot
   const p = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(p)) return { items: [], total: 0 }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='handoff_remind_v0'").get() !== undefined
-    if (!has) { db.close(); return { items: [], total: 0 } }
-    const cols = tableColumns(db, 'handoff_remind_v0')
-    const { id, title, time } = resolveColumns(cols)
-    if (!id || !title) { db.close(); return { items: [], total: 0 } }
-    const rows = db.prepare(`SELECT ${id} AS i, ${title} AS t, ${time || '0'} AS tm FROM handoff_remind_v0 LIMIT 500`).all() as Array<{ i: unknown; t: unknown; tm?: unknown }>
-    db.close()
+    const rows = withDb(p, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='handoff_remind_v0'").get() !== undefined
+      if (!has) return null
+      const cols = tableColumns(db, 'handoff_remind_v0')
+      const { id, title, time } = resolveColumns(cols)
+      if (!id || !title) return null
+      return db.prepare(`SELECT ${id} AS i, ${title} AS t, ${time || '0'} AS tm FROM handoff_remind_v0 LIMIT 500`).all() as Array<{ i: unknown; t: unknown; tm?: unknown }>
+    })
+    if (!rows) return { items: [], total: 0 }
     const items = rows
       .map(r => ({ id: Number(r.i ?? 0), title: cellStr(r.t).trim(), time: Number(r.tm ?? 0) || null }))
       .filter(r => r.title)

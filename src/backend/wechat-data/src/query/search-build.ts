@@ -8,6 +8,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
 import { EnsureIndexResult, INDEX_SCHEMA_VERSION, REFRESHED_KEY, SHARD_WM_PREFIX, bigramTokens, decodeCell, ensureMetaIndexes, getSearchIndexFreshness, getSearchIndexStatus, indexReady, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, readWatermarks, searchIndexBatch, searchIndexPath } from './search-scaffold.ts'
@@ -226,13 +227,13 @@ export function listMessagesInRange(
   if (!(lo > 0) || !(hi >= lo)) return { hits: [], ready: false }
   const cap = Math.min(Math.max(limit ?? 120, 1), 600)
   try {
-    const db = new DatabaseSync(searchIndexPath(decryptedDir), { readOnly: true })
-    const sql = 'SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?'
-      + (username ? ' AND username = ?' : '')
-      + ' ORDER BY create_time DESC LIMIT ?'
-    const args: Array<string | number> = username ? [lo, hi, username, cap] : [lo, hi, cap]
-    const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
-    db.close()
+    const rows = withDb(searchIndexPath(decryptedDir), (db) => {
+      const sql = 'SELECT text, username, create_time, local_id FROM message_meta WHERE create_time BETWEEN ? AND ?'
+        + (username ? ' AND username = ?' : '')
+        + ' ORDER BY create_time DESC LIMIT ?'
+      const args: Array<string | number> = username ? [lo, hi, username, cap] : [lo, hi, cap]
+      return db.prepare(sql).all(...args) as Array<Record<string, unknown>>
+    })
     const names = loadDisplayNames(decryptedDir)
     const hits = rows.map((r) => {
       const text = decodeCell(r['text'])

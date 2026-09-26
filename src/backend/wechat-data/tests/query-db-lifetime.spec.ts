@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
-import { getSearchIndexFreshness, getSearchIndexStatus, indexReady } from '../src/query/search-scaffold.ts'
+import { getSearchIndexFreshness, getSearchIndexStatus, indexReady, INDEX_SCHEMA_VERSION, searchIndexPath } from '../src/query/search-scaffold.ts'
 import { searchUnified } from '../src/query/unified-search.ts'
 import { usernameByChatId } from '../src/query/voice.ts'
 import { withDb, withWritableDb } from '../src/query/db-open.ts'
@@ -38,6 +38,18 @@ import { deleteFavoriteItems } from '../src/query/favorites.ts'
 import { resolveAvatar, resolveAvatarsLocal } from '../src/query/avatar.ts'
 import { queryContact360 } from '../src/query/contact360.ts'
 import { queryOverview } from '../src/query/overview.ts'
+import { queryGroupInsights } from '../src/query/group-insights.ts'
+import { listHandoffReminds } from '../src/query/handoff.ts'
+import { queryMediaAssets } from '../src/query/media-assets.ts'
+import { resolveVoiceInfo } from '../src/query/media-voice.ts'
+import { queryOfficialAssets } from '../src/query/official-assets.ts'
+import { searchWechatFts } from '../src/query/search-query.ts'
+import { queryRevoked } from '../src/query/records.ts'
+import { queryMomentsInsights } from '../src/query/moments-insights.ts'
+import { queryOverviewInsights } from '../src/query/overview-insights.ts'
+import { listMessagesInRange } from '../src/query/search-build.ts'
+import { msgCreateTimeByServerId } from '../src/query/messages.ts'
+import { vectorDbPath, __internals as embeddingInternals } from '../src/query/retrieval/embedding.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC_ROOT = join(HERE, '..', 'src')
@@ -60,9 +72,9 @@ const AUDIT_FIXED = [
 /**
  * 第四批 #11（2026-09-26 合批）清账的文件：清单里不该再有它们。
  *
- * 它们**不参加**「withDb 是唯一打开方式」那条：`edit.ts` 的 
-`openEditStore` / `findShard` 是把连接**交给调用方**的工厂（谁拿到谁关，是另一种形状，
- * 不该被这条误伤）。所以这份名单只参加「不许回到清单」那一条。
+ * 它们**不参加**「withDb 是唯一打开方式」那条：`edit.ts` 的 `openEditStore` / `findShard`
+ * 是把连接**交给调用方**的工厂（谁拿到谁关，是另一种形状，不该被这条误伤）。
+ * 所以这份名单只参加「不许回到清单」那一条。
  */
 const BATCH4_FIXED = [
   'query/avatar.ts',
@@ -74,26 +86,45 @@ const BATCH4_FIXED = [
   'query/daily-summary.ts',
   'query/favorites.ts',
   'query/group-info.ts',
+  // 第五刀（同日合批）：洞察 / 提醒 / 媒体 / 撤回 / 全文检索 / 构建 / 向量粗筛
+  'query/group-insights.ts',
+  'query/handoff.ts',
+  'query/media-assets.ts',
+  'query/media-voice.ts',
+  'query/official-assets.ts',
+  'query/records.ts',
+  'query/search-query.ts',
+  'query/moments-insights.ts',
+  'query/overview-insights.ts',
+  'query/search-build.ts',
+  'query/retrieval/embedding.ts',
+]
+
+/**
+ * 已经**一个裸 open 都不剩**的文件：连接只能经 withDb/withWritableDb 拿。
+ *
+ * 与 `BATCH4_FIXED` 的区别：那批里多数还留着「逐分片扫」的循环（open 在 try 外、
+ * close 在 `finally` 里），形状本身安全，只是「谁拥有连接」有第二个答案；
+ * 这两份连那种残留都清掉了，所以可以按最严的口径钉死 —— 再写一句 `new DatabaseSync(` 就红。
+ */
+const NO_RAW_OPEN = [
+  'query/handoff.ts',
+  'query/media-assets.ts',
 ]
 
 /**
  * 已知仍待改造的站点（按文件计）—— 棘轮：**只能变小**。
  * 口径：`new DatabaseSync` 之后 close 只出现在成功路径上（catch / finally 里没有）。
- * 这些点同一份 AST 判据会稳定报出来，红的时候把 file:line 一起打印。
+ *
+ * 只剩这一处，而且是**有意留着**的：`messages.ts:findShards` 打开一批分片后
+ * 把连接装进 `MsgShard[]` 交给调用方（判据认的是 `return db`，认不出 `out.push({ db })`）。
+ * 三个取用方逐个核对过：`queryNewMessages` / `queryMessages` 在 `finally` 里全关，
+ * `msgCreateTimeByServerId` 原先是「轮到哪条关哪条 + 命中就 return」—— 第五刀实测这就是漏
+ * （多分片会话命中第一条时，后面几条连接没人关），已改成"取全部、finally 全关"，
+ * 由 M268 钉住。留着这一行 = 逼下一个改这条路径的人重新核对取用方，而不是让清单悄悄变空。
  */
 const KNOWN_UNFIXED: Record<string, number> = {
-  'query/group-insights.ts': 2,
-  'query/handoff.ts': 1,
-  'query/media-assets.ts': 1,
-  'query/media-voice.ts': 1,
   'query/messages.ts': 1,
-  'query/moments-insights.ts': 1,
-  'query/official-assets.ts': 2,
-  'query/overview-insights.ts': 1,
-  'query/records.ts': 1,
-  'query/retrieval/embedding.ts': 1,
-  'query/search-build.ts': 1,
-  'query/search-query.ts': 1,
 }
 
 // ---------------------------------------------------------------- 行为层夹具
@@ -432,6 +463,187 @@ describe('删除收藏那两条路径不留句柄', () => {
   })
 })
 
+/**
+ * 第五刀（#11 同日合批）改造的九处站点，跑在同一个「每个库都在、每个表都不对」的数据根上。
+ *
+ * 挑这些入口的理由和上一刀一样：它们走的都是**降级成空结果**的路径 —— 界面上看到的就是
+ * 「没有提醒 / 没有群洞察 / 没有媒体统计」，漏句柄在功能上完全隐形，只有在换数据根或
+ * 备份那一刻才暴露。每条对应的坏法（把 withDb 换回裸 open + 成功路径 close）由 M262–M270 自证。
+ */
+describe('洞察 / 提醒 / 媒体 / 撤回 / 检索的读路径不留句柄（第五刀）', () => {
+  /** 每个库都在、每个表都不对的数据根。 */
+  function junkRoot(tag: string): { root: string; dec: string } {
+    const root = tempRoot(tag)
+    const dec = join(root, 'decrypted')
+    const junk = (rel: string): void => { makeDb(join(dec, rel), (db) => { db.exec('CREATE TABLE unrelated (a TEXT)') }) }
+    junk(join('contact', 'contact.db'))
+    junk(join('general', 'general.db'))
+    junk(join('head_image', 'head_image.db'))
+    junk(join('hardlink', 'hardlink.db'))
+    junk(join('session', 'session.db'))
+    junk(join('message', 'media_0.db'))
+    junk(join('message', 'message_1.db'))
+    junk(join('message', 'message_fts.db'))
+    junk(join('sns', 'db_sns', 'sns.db'))
+    return { root, dec }
+  }
+
+  it('queryGroupInsights：成员数/公告都探不到 ⇒ 全 0 且一棵树都可删（两处早退）', () => {
+    const { root, dec } = junkRoot('gi-junk')
+    const snap = queryGroupInsights(dec, 'room@chatroom')
+    expect(snap.memberCount).toBe(0)
+    expect(snap.total).toBe(0)
+    expect(snap.announcement).toBe('')
+    expect(snap.topMembers).toEqual([])
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('listHandoffReminds：handoff_remind_v0 不在 ⇒ 空清单且不留句柄', () => {
+    const { root, dec } = junkRoot('handoff-junk')
+    expect(listHandoffReminds(dec)).toEqual({ items: [], total: 0 })
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('queryMediaAssets：三类 hardlink 表都不在 ⇒ 全 0 且不留句柄', () => {
+    const { root, dec } = junkRoot('media-assets-junk')
+    const snap = queryMediaAssets(dec)
+    expect(snap.categories).toEqual([])
+    expect(snap.totalFiles).toBe(0)
+    expect(snap.duplicates).toEqual([])
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('resolveVoiceInfo：VoiceInfo 表不在 ⇒ 如实报「表不存在」，且那条连接已关', () => {
+    const { root, dec } = junkRoot('voice-junk')
+    const r = resolveVoiceInfo(dec, 'wxid_a', 1)
+    expect(r.available).toBe(false)
+    expect(r.error).toBe('VoiceInfo 表不存在')
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('queryOfficialAssets：session/contact 两路都探空 ⇒ rows 为空且一棵树都可删', () => {
+    const { root, dec } = junkRoot('official-junk')
+    const snap = queryOfficialAssets(dec)
+    expect(snap.rows).toEqual([])
+    expect(snap.total).toBe(0)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('searchWechatFts：四个 FTS 表都不在 ⇒ 空命中且不留句柄', () => {
+    const { root, dec } = junkRoot('fts-junk')
+    expect(searchWechatFts(dec, '关键词', 10, new Map())).toEqual({ hits: [] })
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('queryMomentsInsights：SnsTimeLine 表不在 ⇒ 交出空洞察（早退那条也不留句柄）', () => {
+    const { root, dec } = junkRoot('moments-junk')
+    const snap = queryMomentsInsights(dec)
+    expect(snap.posts).toBe(0)
+    // topItems 在类型上是可选的（noUncheckedIndexedAccess 会拦 `!.rows`）：
+    // 缺字段时按 -1 处理，免得「根本没算出来」被当成「算出来是 0」放过去。
+    expect(snap.topItems?.rows ?? -1).toBe(0)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('queryRevoked：撤回缓存表不在 ⇒ 空结果；表在时真查得出来，两条连接都不留', () => {
+    const miss = junkRoot('revoked-miss')
+    expect(queryRevoked(miss.dec)).toEqual({ items: [], total: 0 })
+    expect(leakedFiles(miss.root)).toEqual([])
+
+    const root = tempRoot('revoked-hit')
+    const dec = join(root, 'decrypted')
+    makeDb(join(dec, 'message', 'message_1.db'), (db) => {
+      db.exec('CREATE TABLE x_weflow_anti_revoke_deleted_cache (local_type INTEGER, real_sender_id INTEGER, create_time INTEGER, message_content TEXT)')
+      db.prepare('INSERT INTO x_weflow_anti_revoke_deleted_cache VALUES (1, 7, 1700000000, ?)').run('wxid_a:\n你好')
+    })
+    const r = queryRevoked(dec)
+    expect(r.total).toBe(1)
+    expect(r.items[0]?.sender).toBe('wxid_a')
+    expect(r.items[0]?.content).toBe('你好')
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * 这一条量的不是句柄，而是「命中即 return」那个早退：`findShards` 会把**所有**含该表的
+   * 分片一次性全开，旧写法轮到哪条关哪条 ⇒ 第二个分片之后再命中，第一个之后的连接没人关。
+   * 两个分片各有一条同 server_id 的消息，命中落在第一片 ⇒ 第二片必须还能删。
+   */
+  it('msgCreateTimeByServerId：命中就 return 时，其余分片的连接也已关掉', () => {
+    const root = tempRoot('msg-shards')
+    const dec = join(root, 'decrypted')
+    const table = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
+    for (const n of [1, 2]) {
+      makeDb(join(dec, 'message', `message_${n}.db`), (db) => {
+        db.exec(`CREATE TABLE "${table}" (server_id INTEGER, create_time INTEGER)`)
+        db.prepare(`INSERT INTO "${table}" VALUES (?, ?)`).run(12345, 1700000000 + n)
+      })
+    }
+    expect(msgCreateTimeByServerId(dec, 'wxid_a', '12345')).toBe(1700000001)
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * `queryOverviewInsights` 内部用 `countRows` 逐库数行数，而 `countRows` 的形状正是
+   * 「表不在 ⇒ 早退 0」—— 改造前那条早退没人关连接。这里不校验洞察的每个数字
+   * （它依赖十几张表），只钉两件事：**跑完了**，且整棵树可删。
+   */
+  it('queryOverviewInsights：满库都是错表 ⇒ 算得出降级快照且不留句柄', async () => {
+    const { root, dec } = junkRoot('overview-insights')
+    const snap = await queryOverviewInsights(dec)
+    expect(snap.messages.total).toBe(0)
+    expect(snap.relations.top).toEqual([])
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * 这一条要**索引就绪但表结构不对**：`indexReady` 只看 `message_meta` 有没有行 +
+   * `meta.schema_version`，所以建一张只有无关列的 `message_meta` 就能让探测通过、
+   * 让真正的 `SELECT text, username, ...` 抛错 —— 那正是"开库成功、查询炸掉"的形状。
+   */
+  it('listMessagesInRange：索引假装就绪、列不全 ⇒ ready=false 且不留句柄', () => {
+    const root = tempRoot('list-range')
+    const dec = join(root, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+    // searchIndexPath 落在数据根的**上一层**，所以库建在 root 而不是 root/decrypted 里
+    makeDb(searchIndexPath(dec), (db) => {
+      db.exec('CREATE TABLE message_meta (junk TEXT)')
+      db.exec('CREATE TABLE meta (key TEXT, value TEXT)')
+      db.prepare('INSERT INTO message_meta VALUES (?)').run('x')
+      db.prepare('INSERT INTO meta VALUES (?, ?)').run('schema_version', INDEX_SCHEMA_VERSION)
+    })
+    // 先把夹具自证：indexReady 真的认这个库（否则下面那条断言是恒真）
+    expect(indexReady(dec)).toBe(true)
+    expect(listMessagesInRange(dec, 1, 2)).toEqual({ hits: [], ready: false })
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  /**
+   * SimHash 粗筛表：改造前那一条**根本没有 try**，`SELECT ... FROM vectors` 一抛
+   * 就把连接留在进程里（向量库越大越容易撞）。这里两面都钉：表不在要如实抛，
+   * 表在要读得出行，且两种结局之后库文件都可删。
+   */
+  it('loadHashRows：vectors 表不在 ⇒ 如实抛错且不留句柄；表在 ⇒ 读得出行', () => {
+    const miss = tempRoot('hash-miss')
+    const missDec = join(miss, 'decrypted')
+    mkdirSync(join(missDec), { recursive: true })
+    makeDb(vectorDbPath(missDec), (db) => { db.exec('CREATE TABLE unrelated (a TEXT)') })
+    expect(() => { embeddingInternals.loadHashRows(missDec) }).toThrow()
+    expect(leakedFiles(miss)).toEqual([])
+
+    const hit = tempRoot('hash-hit')
+    const hitDec = join(hit, 'decrypted')
+    mkdirSync(join(hitDec), { recursive: true })
+    makeDb(vectorDbPath(hitDec), (db) => {
+      db.exec('CREATE TABLE vectors (fts_rowid INTEGER, hash_lo INTEGER, hash_hi INTEGER, username TEXT)')
+      db.prepare('INSERT INTO vectors VALUES (?,?,?,?)').run(1, 2, 3, 'wxid_a')
+      db.prepare('INSERT INTO vectors VALUES (?,?,?,?)').run(2, 4, 5, 'wxid_b')
+    })
+    const rows = embeddingInternals.loadHashRows(hitDec)
+    expect(rows.map(r => r.rowid)).toEqual([1, 2])
+    expect(leakedFiles(hit)).toEqual([])
+  })
+})
+
 // ---------------------------------------------------------------- 棘轮层
 
 interface Suspect { file: string; line: number; name: string; shape: string }
@@ -561,7 +773,7 @@ describe('query 层的连接纪律（棘轮）', () => {
   })
 
   it('withDb 是这些文件唯一的打开方式（不许绕过去手写 close）', () => {
-    for (const f of AUDIT_FIXED) {
+    for (const f of [...AUDIT_FIXED, ...NO_RAW_OPEN]) {
       const src = readFileSync(join(SRC_ROOT, f), 'utf8')
       // 允许带泛型实参的写法（`withDb<PaymentStatus>(...)`）：只认字面 `withDb(` 会把
       // 「显式标注返回值」这种**更好**的写法判成绕过。

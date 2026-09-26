@@ -365,11 +365,10 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
 function countRows(path: string, table: string): number {
   if (!existsSync(path)) return 0
   try {
-    const db = new DatabaseSync(path, { readOnly: true })
-    const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== undefined
-    if (!has) { db.close(); return 0 }
-    const r = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
-    db.close()
-    return r.n
+    return withDb(path, (db) => {
+      const has = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).get() !== undefined
+      if (!has) return 0
+      return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+    })
   } catch { return 0 }
 }

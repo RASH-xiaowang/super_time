@@ -4,6 +4,7 @@
  * in message shards (handlers/data/revoked.rs mirror).
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RecordItem } from '../types.ts'
@@ -64,21 +65,27 @@ function timeRangeSql(timeCol: string, from: number, to: number): string {
   return parts.length > 0 ? parts.join(' AND') : ''
 }
 
-/** Locate the revoke cache table across message shards. */
-function findRevokeTable(decryptedDir: string): { db: DatabaseSync | null; table: string } {
+/**
+ * Locate the revoke cache table across message shards.
+ * 交出的是**位置**（文件 + 表名）而不是连接：原先 `if (hit) return { db, ... }` 之外
+ * 还有 `catch { /* next *\/ }` —— 分片能打开但探测查询抛错时（损坏 / SQLITE_BUSY），
+ * 那条连接没人关就跳去下一片，正是 P0-1 那一类漏法。
+ */
+function findRevokeTable(decryptedDir: string): { file: string; table: string } {
   const msgDir = join(decryptedDir, 'message')
-  if (!existsSync(msgDir)) return { db: null, table: '' }
+  if (!existsSync(msgDir)) return { file: '', table: '' }
   for (const file of readdirSync(msgDir)) {
     if (!file.endsWith('.db') || file.includes('_shm') || file.includes('_wal')) continue
+    const p = join(msgDir, file)
     try {
-      const db = new DatabaseSync(join(msgDir, file), { readOnly: true })
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => String(r.name))
-      const hit = tables.find(t => t.includes('_weflow_anti_revoke_deleted_cache'))
-      if (hit) return { db, table: hit }
-      db.close()
+      const table = withDb(p, (db) => {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => String(r.name))
+        return tables.find(t => t.includes('_weflow_anti_revoke_deleted_cache')) ?? ''
+      })
+      if (table) return { file: p, table }
     } catch { /* next */ }
   }
-  return { db: null, table: '' }
+  return { file: '', table: '' }
 }
 
 /** 为记录追加「人类可读」展示字段（显示名）。 */
@@ -285,11 +292,11 @@ export function queryRevoked(
   /** 关键词：匹配撤回内容 / 发送者 id。放在服务端，避免只搜到已加载那一页。 */
   q?: string,
 ): { items: Array<{ sender: string; type_label: string; content: string; create_time: number }>; total: number } {
-  const { db, table } = findRevokeTable(decryptedDir)
-  if (db === null || !table) return { items: [], total: 0 }
-  try {
+  const loc = findRevokeTable(decryptedDir)
+  if (!loc.table) return { items: [], total: 0 }
+  return withDb(loc.file, (db) => {
     const cap = Math.min(limit ?? 200, 500)
-    const cols = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(r => r.name))
+    const cols = new Set((db.prepare(`PRAGMA table_info(${loc.table})`).all() as Array<{ name: string }>).map(r => r.name))
     const sel = (cand: string, dft: string): string => (cols.has(cand) ? cand : dft)
     const kw = (q ?? '').trim()
     const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
@@ -297,7 +304,7 @@ export function queryRevoked(
       ? ` WHERE (${sel('message_content', "''")} LIKE ? ESCAPE '\\' OR CAST(${sel('real_sender_id', '0')} AS TEXT) LIKE ? ESCAPE '\\')`
       : ''
     const kwParams: string[] = kw ? [like, like] : []
-    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${table}${whereSql} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(...kwParams, cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
+    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${loc.table}${whereSql} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(...kwParams, cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
     const items = rows.map((r) => {
       const t = r.lt ?? 0
       const realId = r.rid ?? 0
@@ -305,9 +312,7 @@ export function queryRevoked(
       const { sender, content } = parseRevokeContent(cellString(r.mc), fallback)
       return { sender, type_label: revokeTypeLabel(t), content, create_time: r.ct ?? 0 }
     })
-    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}${whereSql}`).get(...kwParams) as { n: number } | undefined)?.n ?? items.length
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${loc.table}${whereSql}`).get(...kwParams) as { n: number } | undefined)?.n ?? items.length
     return { items, total }
-  } finally {
-    db.close()
-  }
+  })
 }

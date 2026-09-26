@@ -4,6 +4,7 @@
  */
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
@@ -30,47 +31,49 @@ function tableColumns(db: DatabaseSync, table: string): Set<string> {
 
 function loadOfficialUsernames(decryptedDir: string): string[] {
   const p = join(decryptedDir, 'session', 'session.db')
-  const out: string[] = []
-  if (!existsSync(p)) return out
+  if (!existsSync(p)) return []
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-    const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-    if (table) {
-      const rows = db.prepare(`SELECT username FROM "${table}"`).all() as Array<Record<string, unknown>>
-      for (const r of rows) {
-        const u = decodeCell(r['username']).trim()
-        if (u.startsWith('gh_')) out.push(u)
+    return withDb(p, (db) => {
+      const out: string[] = []
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
+      if (table) {
+        const rows = db.prepare(`SELECT username FROM "${table}"`).all() as Array<Record<string, unknown>>
+        for (const r of rows) {
+          const u = decodeCell(r['username']).trim()
+          if (u.startsWith('gh_')) out.push(u)
+        }
       }
-    }
-    db.close()
+      return out
+    })
   } catch { /* ignore */ }
-  return out
+  return []
 }
 
 function loadNames(decryptedDir: string): Map<string, string> {
-  const map = new Map<string, string>()
   const p = join(decryptedDir, 'contact', 'contact.db')
-  if (!existsSync(p)) return map
+  if (!existsSync(p)) return new Map()
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (has) {
-      const cols = tableColumns(db, 'contact')
-      if (cols.has('username')) {
-        const remark = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : 'NULL'
-        const nick = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'NULL'
-        const rows = db.prepare(`SELECT username, COALESCE(NULLIF(${remark}, ''), ${nick}) AS n FROM contact`).all() as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const u = decodeCell(r['username']).trim()
-          const n = decodeCell(r['n']).trim()
-          if (u && n) map.set(u, n)
+    return withDb(p, (db) => {
+      const map = new Map<string, string>()
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (has) {
+        const cols = tableColumns(db, 'contact')
+        if (cols.has('username')) {
+          const remark = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : 'NULL'
+          const nick = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'NULL'
+          const rows = db.prepare(`SELECT username, COALESCE(NULLIF(${remark}, ''), ${nick}) AS n FROM contact`).all() as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const u = decodeCell(r['username']).trim()
+            const n = decodeCell(r['n']).trim()
+            if (u && n) map.set(u, n)
+          }
         }
       }
-    }
-    db.close()
+      return map
+    })
   } catch { /* ignore */ }
-  return map
+  return new Map()
 }
 
 /**

@@ -6,6 +6,7 @@
  */
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
@@ -42,16 +43,16 @@ function memberCount(decryptedDir: string, username: string): number {
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return 0
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const cols = tableColumns(db, 'contact')
-    if (!cols.has('username')) { db.close(); return 0 }
-    const me = db.prepare('SELECT id FROM contact WHERE username = ?').get(username) as { id?: number } | undefined
-    if (!me || me.id === undefined) { db.close(); return 0 }
-    const cm = tableColumns(db, 'chatroom_member')
-    if (!cm.has('room_id') || !cm.has('member_id')) { db.close(); return 0 }
-    const row = db.prepare('SELECT COUNT(*) AS n FROM chatroom_member WHERE room_id = ?').get(me.id) as { n: number } | undefined
-    db.close()
-    return row?.n ?? 0
+    return withDb(p, (db) => {
+      const cols = tableColumns(db, 'contact')
+      if (!cols.has('username')) return 0
+      const me = db.prepare('SELECT id FROM contact WHERE username = ?').get(username) as { id?: number } | undefined
+      if (!me || me.id === undefined) return 0
+      const cm = tableColumns(db, 'chatroom_member')
+      if (!cm.has('room_id') || !cm.has('member_id')) return 0
+      const row = db.prepare('SELECT COUNT(*) AS n FROM chatroom_member WHERE room_id = ?').get(me.id) as { n: number } | undefined
+      return row?.n ?? 0
+    })
   } catch {
     return 0
   }
@@ -60,27 +61,28 @@ function memberCount(decryptedDir: string, username: string): number {
 function announcement(decryptedDir: string, username: string): { text: string; time: number | null } {
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return { text: '', time: null }
+  const empty = { text: '', time: null }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const cols = tableColumns(db, 'contact')
-    const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-    if (!userCol) { db.close(); return { text: '', time: null } }
-    const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-    const detail = tables.find(t => t.includes('chat_room_info_detail'))
-    const roomId = me?.id
-    if (roomId === undefined || !detail) { db.close(); return { text: '', time: null } }
-    const dc = tableColumns(db, detail)
-    const annCol = dc.has('announcement_') ? 'announcement_' : dc.has('announcement') ? 'announcement' : ''
-    const timeCol = dc.has('announcement_publish_time_') ? 'announcement_publish_time_' : dc.has('announcement_publish_time') ? 'announcement_publish_time' : ''
-    const whereCol = dc.has('room_id_') ? 'room_id_' : dc.has('username_') ? 'username_' : ''
-    if (!annCol || !whereCol) { db.close(); return { text: '', time: null } }
-    const row = db.prepare(`SELECT ${annCol} AS a, ${timeCol || '0'} AS t FROM ${detail} WHERE ${whereCol} = ?`).get(roomId) as { a: unknown; t?: unknown } | undefined
-    db.close()
-    if (!row) return { text: '', time: null }
+    const row = withDb(p, (db) => {
+      const cols = tableColumns(db, 'contact')
+      const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
+      if (!userCol) return null
+      const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+      const detail = tables.find(t => t.includes('chat_room_info_detail'))
+      const roomId = me?.id
+      if (roomId === undefined || !detail) return null
+      const dc = tableColumns(db, detail)
+      const annCol = dc.has('announcement_') ? 'announcement_' : dc.has('announcement') ? 'announcement' : ''
+      const timeCol = dc.has('announcement_publish_time_') ? 'announcement_publish_time_' : dc.has('announcement_publish_time') ? 'announcement_publish_time' : ''
+      const whereCol = dc.has('room_id_') ? 'room_id_' : dc.has('username_') ? 'username_' : ''
+      if (!annCol || !whereCol) return null
+      return db.prepare(`SELECT ${annCol} AS a, ${timeCol || '0'} AS t FROM ${detail} WHERE ${whereCol} = ?`).get(roomId) as { a: unknown; t?: unknown } | undefined
+    })
+    if (!row) return empty
     return { text: decodeCell(row.a).trim() || '', time: Number(row.t ?? 0) || null }
   } catch {
-    return { text: '', time: null }
+    return empty
   }
 }
 

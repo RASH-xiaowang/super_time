@@ -294,18 +294,26 @@ interface MsgShard {
 export function msgCreateTimeByServerId(decryptedDir: string, talker: string, serverId: string): number | null {
   if (!talker || !serverId || serverId === '0') return null
   const table = msgTableName(talker)
-  for (const shard of findShards(decryptedDir, table)) {
-    try {
-      const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
-      const n = Number(row?.ct ?? 0)
-      if (n > 0) return n
-    } catch {
-      // 该分片读失败就试下一个
-    } finally {
-      shard.db.close()
+  // `findShards` 一次把**所有**含该表的分片都打开。原先的写法是「轮到哪条关哪条，命中就 return」
+  // ⇒ 后面那些还没轮到的连接留在进程里（Windows 上从此删不掉解密目录），
+  // 而多分片的会话恰恰是消息最多的那些。改成"先取全部、finally 里全关"。
+  const shards = findShards(decryptedDir, table)
+  try {
+    for (const shard of shards) {
+      try {
+        const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
+        const n = Number(row?.ct ?? 0)
+        if (n > 0) return n
+      } catch {
+        // 该分片读失败就试下一个
+      }
+    }
+    return null
+  } finally {
+    for (const shard of shards) {
+      try { shard.db.close() } catch { /* already closed */ }
     }
   }
-  return null
 }
 
 /** Locate every shard DB containing the talker's Msg table (catalog-backed). */

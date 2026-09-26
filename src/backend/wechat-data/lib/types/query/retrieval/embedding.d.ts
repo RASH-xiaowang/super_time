@@ -1,5 +1,5 @@
 import type { RetrievedDoc } from './types.ts';
-import { getPlanes, l2normalize, popcount32, selectByHamming, simhash, type EmbedFn } from '../vector-math.ts';
+import { getPlanes, l2normalize, popcount32, selectByHamming, simhash, type EmbedFn, type HashRow } from '../vector-math.ts';
 export type { EmbedFn, HashRow } from '../vector-math.ts';
 /** 向量库状态。 */
 export interface VectorIndexStatus {
@@ -64,6 +64,7 @@ export declare function buildVectorIndex(decryptedDir: string, embed: EmbedFn, o
     onProgress?: (done: number, total: number) => void;
     force?: boolean;
 }): Promise<VectorBuildResult>;
+declare function loadHashRows(decryptedDir: string): HashRow[];
 /**
  * 稠密召回：SimHash 粗筛 → 精确余弦 → topK。
  * @param decryptedDir - 解密数据根。
@@ -85,7 +86,11 @@ export declare function vectorIndexSummary(decryptedDir: string): {
     dim: number;
     model: string;
 };
-/** 便于测试：导出内部哈希工具。 */
+/**
+ * 便于测试：导出内部哈希工具。
+ * `loadHashRows` 也在这里 —— 稠密通道的真实入口要先跑 embedding（联网/本地模型），
+ * 单测拿不到，而**它那条款连接的生命周期**必须能被量到（`query-db-lifetime.spec.ts`）。
+ */
 export declare const __internals: {
     simhash: typeof simhash;
     popcount32: typeof popcount32;
@@ -94,4 +99,5 @@ export declare const __internals: {
     docKeyOf: typeof docKeyOf;
     selectByHamming: typeof selectByHamming;
     MAX_HAMMING: number;
+    loadHashRows: typeof loadHashRows;
 };
