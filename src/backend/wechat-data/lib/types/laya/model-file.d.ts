@@ -1,3 +1,17 @@
+/**
+ * laya 模型的**落点解析与分发**（纯文件层，不碰推理）。
+ *
+ * 与 whisper 的分工完全对应（`query/whisper.ts` 是这里的模板）：
+ *   · 目录约定：`<数据根>/laya`（whisper 是 `<数据根>/whisper`）
+ *   · 下载：**复用 whisper 的流式下载器**（`streamUrlToFile`：Range 续传 + `.part` 原子发布 +
+ *     完成后长度校验），不重造一套
+ *   · 进度：调方把进度写进 gateway 单例字段，前端 500ms 轮询（与 whisper 同款）
+ *
+ * **为什么是「两个文件」**：ONNX 计算图只是一半，另一半是 tokenizer——模型按 token 序列工作，
+ * 没有 tokenizer 就无法把中文变成输入。两者都**不进安装包**（合计约 1.26 GB），
+ * 由用户手动放置或首启下载；下载源用 `DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 覆盖。
+ */
+import { fmtBytes } from '../format.ts';
 /** 显式指定模型目录（优先级最高；开发机/测试用）。指向含 `laya-decision.onnx` 的目录。 */
 export declare const LAYA_DIR_ENV = "DSH_WECHAT_LAYA_DIR";
 /** 下载镜像基址（与 whisper 的 `DSH_WECHAT_WHISPER_MIRROR` 同款）。 */
@@ -41,8 +55,13 @@ export declare function resolveLayaModelsDir(configured?: string, decryptedDir?:
 export declare function layaModelStatus(configured?: string, decryptedDir?: string): LayaModelStatus;
 /** tokenizer 目录（`@huggingface/transformers` 从这里加载）。 */
 export declare function layaTokenizerDir(dir: string): string;
-/** 人类可读体积。 */
-export declare function formatBytes(n: number): string;
+/**
+ * 人类可读体积（P3-2：口径统一到 `src/format.ts`）。
+ *
+ * 旧实现 KB 取 0 位小数、其余取 1/2 位 —— 与界面其它各处不一样，
+ * 同一个文件在「设置 → 模型」里是 `1428.6 KB`、在知识库里是 `1.4 MB`。
+ */
+export declare const formatBytes: typeof fmtBytes;
 /** 下载源基址候选（env 钉的 → 国内镜像 → 官方；与 whisper 的轮换顺序一致）。 */
 export declare function layaDownloadBases(): string[];
 /** 下载仓库路径。 */

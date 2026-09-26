@@ -172,7 +172,7 @@ function splitPlain(chunk: string, base: number, full: string, atUsers?: readonl
 /**
  * 文本气泡渲染：表情走图片、链接可点、提及高亮。
  *
- * 交互约定（与 `check-ui-consistency` / `audit-a11y-clickable` 一致）：
+ * 交互约定（由 `message-text-clickable.spec.ts` 把守）：
  * 只有链接是真的可点，用真正的 `<a href>`（读屏能播报「链接」、右键可复制地址）；
  * 提及是**展示性**强调，不加 role/tabIndex，避免在 Tab 序列里塞进一堆死焦点。
  * @param props.text - the bubble text.

@@ -28,6 +28,7 @@ import { citeTarget } from './cite-target.ts'
 import { Badge, Dialog, EmptyState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './ask-history.module.css'
+import { fmtTodayOrLocaleMs } from '../utils/format.ts'
 
 /** 状态 → 中文标签 + 色调 + 一句话解释（回看历史时最需要知道的就是「这条当时答上了没有」）。 */
 const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'amber' | 'purple' | 'red'; hint: string }> = {
@@ -57,16 +58,6 @@ const SRC_TABS: ReadonlyArray<{ value: string; label: string }> = [
 const CLEAR_CONFIRM_THRESHOLD = 100
 /** 逐字确认要输入的文本。 */
 const CLEAR_CONFIRM_TEXT = '清空'
-
-/** 时间显示：今天只给时钟（更易读），其余给完整本地时间。 */
-function fmtTime(ts: number): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  const now = new Date()
-  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
-  const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  return sameDay ? `今天 ${clock}` : d.toLocaleString('zh-CN', { hour12: false })
-}
 
 /** 展开区的元信息行：模型 / 意图 / 检索词 / 耗时。 */
 function metaOf(it: AskHistoryEntry): string {
@@ -271,7 +262,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
             return (
               <div key={it.id} className={css.item} data-open={expanded || undefined}>
                 <div className={css.itemTop}>
-                  <span className={css.time}>{fmtTime(it.ts)}</span>
+                  <span className={css.time}>{fmtTodayOrLocaleMs(it.ts)}</span>
                   <Badge tone={meta.tone} title={meta.hint}>{meta.label}</Badge>
                   <span className={css.srcTag} data-src={it.source}>{SRC_LABEL[it.source] ?? it.source}</span>
                   {it.usernameName && <span className={css.scopeTag}>范围：{it.usernameName}</span>}

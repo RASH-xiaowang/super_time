@@ -10,31 +10,36 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：273 文件 / 2863 用例全绿，5 套 typecheck 全绿）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**291 文件 / 2933 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异登记到 M81）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
 | 第一批 #1 P0-1 DB 句柄泄漏 | ✅ 完成（超出清单） | `75f5057` | 报告列 9 处，AST 复查后同一批文件实为 16 处；新增 `query/db-open.ts#withDb` + `query-db-lifetime.spec.ts`（用「跑完之后库文件可删」量泄漏，含故意不 close 的反例哨兵）+ 变异 M56。**报告未列出的同类站点**：AST 全仓扫出 69 处候选 → 逐条回读后 **35 处**是真漏（分布在 22 个文件），已建成**只能变小的棘轮清单**（`KNOWN_UNFIXED`），后续每修一处必须删条目 |
 | 第一批 #2 P0-2 三处出网漏闸 | ✅ 完成 | `dd837d3` | 三个点各补 `privacyBlocked`/`blockOutbound`；**判据已按第 3 条换掉**：新增 `outbound-site-coverage.spec.ts` 枚举全仓 15 个 `fetch`/`fetchWithRetry` 调用点成台账（新出网点不登记就红）；行为验收 `outbound-gates.spec.ts`（开关打开 ⇒ 一次请求都不发 + 反例）+ `ipc-wechat.spec.ts`（`wechat:llm-models` 被拦时不漏 Key、拿不到开关时 fail-closed）；变异 M26（既有，复跑仍咬）/M57/M58/M59 |
 | 第一批 #3 P0-3 cachedFetch 真 SWR | ✅ 完成 | `8638199` | 命中即回 + 后台刷新；**两个收敛条件**（同键并发只发一次、值没变不写不广播，否则订阅者自转成环）；判据取「永不 resolve 的 fetcher」不量时间；`chats-thread` 订阅 `:messages` 族事件把「通知」补齐成闭环；变异 M60 |
-| 第一批 #4 P2-4 ledger 缓存 + 收窄失效 | ⛔ 未做（按报告要求先打点） | — | 报告自己写着「撤销条 #1（先真机打点确认）」；本轮未做打点，不动这条 |
+| 第一批 #4 P2-4 ledger 缓存 + 收窄失效 | ✅ 完成（**打法与报告不同**） | `9ca21b2` | ① `apiGetLedger` 加 `cachedGet`（按月分键）＝报告原方案；② **没有**把 `invalidateSnapshotCache()` 改成按前缀收窄 —— 数据事件的语义就是「全部快照都旧了」，收窄会漏刷该刷的键，真正的代价在「清表 ⇒ 下次全部回源」，所以改成**标记陈旧**（旧值立刻可画、复验进后台、成功才写回并通知、超 5 分钟的旧值丢弃）；判据 `cache-invalidate-stale.spec.ts` 8 条 + 接线两条，变异 M69/M70。**如实标注**：报告要求的「先真机打点」没做，每 10 秒重算这条账是读代码得出的因果链，不是实测数 —— 若日后打点发现账本重算不在这 10 秒里，这条要回头改 |
 | 第一批 #5 P1-3 queryGraph | ✅ 完成 | `1b49ad4` | 分片只开一次库 + `cachedBySig`；验收是**开合数**（`[算料]` 3 会话 11 次 = 9 会话 11 次；旧形状是 6 vs 18 的形态）+「第二次一次库都不开」+ 反向「数据变了签名必须变」；变异 M63/M64 |
 | 第一批 #6 P1-4 privacy 正则 + 缓存 | ✅ 完成 | `1b49ad4` | `SCAN_RES` 外提 + `cachedBySig`（`rowBudget` 进键）；验收是「扫描期间 `RegExp` 构造次数 == 0」；变异 M62 |
 | 第一批 #7 P0-4 main.js 1000 行 | ✅ 完成 | `2c1c258` | 999 → **821 行**（余量 179）。窗口本体与守卫外提成 `src/backend/main-window.js`；**真机验收**：`ui-e2e-smoke` 改前改后都全绿、`security-guard:smoke` 10 项全绿（含 `did-create-window` 计数恒 0）；顺手补了 §五 那道空档——安全基线此前**只被人眼看过一次**，新增 `electron-security-baseline.spec.ts` + 变异 M61 |
-| 第一批 #8 P3-1/P3-2 fmtTime/fmtBytes | ⛔ 未做 | — | 见下方「剩余」 |
-| 第二批 #13 之外的安全项 P2-6 路径限根 | ✅ 完成 | `本次` | `query/path-policy.ts`：`openPath` 只放行数据根之内或**应用自己写过产出的目录** + 可执行扩展名一律拒；导出两处落盘前过 `writeDenialReason`。被拒回理由（`error?` 新字段，`docs/API.md` 已重生成）。判据含「`openNativePath` 探针一次都没被调用」；变异 M65/M66 |
-| 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `上一提交` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
+| 第一批 #8 P3-1/P3-2 fmtTime/fmtBytes | ✅ 完成 | `本次` | 4 份 `fmtTime` **全部删除**（单位写进名字：`fmtLocaleSec` / `fmtLocaleMs` / `fmtTodayOrLocaleMs`），5 份字节格式化收敛到两份唯一出处（渲染层 `utils/format.ts`、后端 `src/format.ts`，口径逐字一致）。守卫 `format-single-source.spec.ts` 按 AST 判「函数体里有没有单位换算本身」⇒ 薄适配器不误报；`NEVER_TWICE` 是零容忍档，`KNOWN_SECOND_TIME` 是**只能变小**的棘轮（还剩 7 份形状各异的日期函数）；判据本身有自证用例。行为守卫两份（`utils/format.spec.ts` 钉「单位喂错**必须**渲染成别的东西」——这是命名唯一的防线；`wechat-data/tests/format.spec.ts` 钉同一张字节表）；变异 M75/M76/M77 |
+| 第二批 #13 之外的安全项 P2-6 路径限根 | ✅ 完成 | `348a70a` | `query/path-policy.ts`：`openPath` 只放行数据根之内或**应用自己写过产出的目录** + 可执行扩展名一律拒；导出两处落盘前过 `writeDenialReason`。被拒回理由（`error?` 新字段，`docs/API.md` 已重生成）。判据含「`openNativePath` 探针一次都没被调用」；变异 M65/M66 |
+| 第二批（清单未列，同批做掉）P1-1 读失败契约 | ✅ 完成 | `e6f4b76` | 后端把「库打不开/读失败」与「确实没有条目」分成两件事（`DirListing.error` / 全域搜索的 `readError`），面板必须区分显示；守卫 `read-error-visibility.spec.ts` 从**类型**推「哪些快照带 `readError` ⇒ api 层哪些包装 ⇒ 调用它们的面板必须自己提到 `readError`」，新接口忘读就红；变异 M67/M68 |
+| 第二批 #16 P2-5 readRenderCache | ✅ 完成 | `285c9ac` | 24 小时保质期 + 单条 1.5 MB 上限 + 写失败从静默变成「说一次并丢干净」（超大与配额两种原因分开记账，不互相静音）；判据 `render-cache-ttl.spec.ts`，变异 M73/M74 |
+| 第二批 #17 P2-8 usePagedList 自动刷新 | ✅ 完成 | `aee1e6f` | 节流（30 秒内不重复起）+ 同键合并 + 页面不可见不发 + 上界装不下就**整轮跳过**（不再静默截断成前 8 页，那会把「已刷新」画成假话）；判据 `paged-list-refresh-gate.spec.ts`，变异 M71/M72 |
+| 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
 | 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `上一提交` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
 
 ### 剩余（按 §七 的批次，未在本轮）
 
-- 第一批 #4（需先真机打点）、#8（`fmtTime` 4 份单位不一致 / 字节格式化 5 份口径不一）。
+- 第一批：**已全部做完**（#1–#8）。
 - 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、#11 重读查询注入 `AbortSignal`、
-  #13 `wechat:call` 接 zod `safeParse`、#14 六个零 spec 模块补测、#15 `file:` 依赖溯源表、
-  #16 `readRenderCache` TTL、#17 `usePagedList` 刷新节流。
+  #13 `wechat:call` 接 zod `safeParse`、#14 六个零 spec 模块补测、#15 `file:` 依赖溯源表。
 - 第三批 #18–#25（拆巨型组件、`GatewayCore` 职责拆分、解循环依赖、长列表虚拟化、统一失效契约、
   DB 纪律 ESLint 固化、四份新文档 + README 索引）。
-- 第四批其余 P3（`isMd5` 10 处、`normalizeAesKey` 6 处、图片解码三兄弟、同概念三名、地图开关镜像…）。
+- 第四批其余 P3（`isMd5` 10 处、`normalizeAesKey` 6 处、图片解码三兄弟、同概念三名、地图开关镜像…）；
+  `KNOWN_SECOND_TIME` 里剩下的 7 份日期函数（各有显示形状，要逐个改文案再核对既有用例）。
+- 本轮新发现的候选守卫（还没写）：「注释里引用的脚本/用例/文档路径必须真的存在」——见 ⑤。
 - 本轮新发现（不在本报告内）：
   ① `query/**` 里同类「catch 分支漏 close」比报告列出的多 4 倍（已进棘轮清单，只能变小）；
   ② `defaultWhisperModelsDir` 在数据根里还没有 whisper 目录时**退回随包资产目录**，
@@ -42,6 +47,21 @@
      测试夹具已改为钉住模型目录并留了「用例不许往仓库写」的哨兵，产品侧的回退路径待单独处置；
   ③ 出网台账实测 15 个调用点，其中 `wechat-host.js` 的 4 个 LLM 出口此前没有任何清单登记过。
   ④ §五 那些「✅ 未发现问题」里，Electron 安全基线一项**没有任何用例守着**（本轮已补 `electron-security-baseline.spec.ts`）。
+  ⑤ **「注释里写着有守卫，而守卫不在仓库里」是复现的**：`utils/format.ts` 与 `message-text.tsx` 都写着
+     「这条由 `scripts/check-ui-consistency.js` / `audit-a11y-clickable` 把关」，而**两个脚本都不存在**
+     （`scripts/` 里没有，`package.json` 里没有，全仓没有同名文件）。本轮把两处约定都补成了真用例
+     （`format-single-source.spec.ts`、`message-text-clickable.spec.ts`）；
+     **仍未做**：一条「注释里引用的脚本/用例路径必须真的存在」的全仓守卫 —— 这正是本条能被反复踩的原因。
+  ⑥ **第二类假绿：用例文件扩展名不在 runner 的 include 里**。根 `vitest.config.ts` 只收 `.spec.ts`，
+     而含 JSX 的用例天然会被写成 `.spec.tsx` —— 那种文件在 `npm test` 里**安静地不存在**（只有手工
+     指名时才报 `No test files found`）。本轮写守卫时当场踩到。已补 `spec-file-discoverability.spec.ts`
+     （从配置读 include 再逐个匹配，含 `.ts`/`.tsx` 反例与「`**/` 接受零层目录」自证）+ 变异 M80；
+     顺带把 `ci-script-isolation` 的 spec 扫描从 `endsWith('.spec.ts')` 放宽到全扩展名。
+  ⑦ M24 分层守卫的白名单**理由没被守着**：`dirs.ts`/`asar-path.ts` 之所以能进 `query`/`keys` 的放行清单，
+     注释说的是「它们不 import 包内任何模块」，而这句话没有任何用例验证 —— 往清单里加一个反向依赖
+     上层的文件，守卫不会有任何反应。本轮新增后端唯一格式化出处 `src/format.ts` 时正要走这条路，
+     于是把它连同那两个文件一起升成 **`base` 层**并加硬判据「base 不许依赖包内任何模块」+ 变异 M81
+     （清单从「靠注释解释的例外」变成「有牙齿的下界」）。
 
 
 

@@ -6,6 +6,7 @@
  *
  * @module kb-files-store
  */
+import { fmtBytes } from '../format.ts';
 import { DatabaseSync } from 'node:sqlite';
 import type { KbFileMeta, KbFileParseState } from '../types.ts';
 export { kbBlobsDir, kbFilesDbPath } from './kb-paths.ts';
@@ -111,7 +112,7 @@ export declare function normalizePositive(value: unknown): number | undefined;
  * 从没解析成功的文件显示成「可检索」，而那种错误没有任何症状。
  */
 export declare function asParseState(s: string): KbFileParseState;
-export declare function formatBytes(n: number): string;
+export declare const formatBytes: typeof fmtBytes;
 /** blob 副本的文件名：`<sha256>.<ext>`；无扩展名时只有指纹。 */
 export declare function blobFileName(sha256: string, ext: string): string;
 export declare function rowToFileMeta(r: Record<string, unknown>): KbFileMeta;

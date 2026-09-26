@@ -33,6 +33,7 @@ import { useConfirm } from '../ui/confirm.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import css from './export-history.module.css'
 import kitCss from '../ui/kit.module.css'
+import { fmtBytes, fmtLocaleMs } from '../utils/format.ts'
 
 /** 导出种类 → 中文名。未知种类原样显示（后端可能先于前端新增种类）。 */
 const KIND_LABEL: Record<string, string> = {
@@ -64,19 +65,8 @@ const SORT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'name:asc', label: '文件名 A→Z' },
 ]
 
-function fmtTime(ts: number): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
-}
-
-/** 字节数 → 人类可读。null 表示目录型导出或文件已不存在。 */
-function fmtSize(n: number | null): string {
-  if (n === null) return '—'
-  if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB'
-  return (n / 1073741824).toFixed(2) + ' GB'
-}
+/** 字节数 → 人类可读（口径统一到 `fmtBytes`）。null 表示目录型导出或文件已不存在。 */
+const fmtSize = (n: number | null): string => (n === null ? '—' : fmtBytes(n))
 
 // 返回 `string | undefined`：CSS Modules 的按键取值在类型上就是可选的，而唯一调用点把它交给
 // `clsx(...)` —— clsx 与 React 的 className 本来就接受 undefined。
@@ -389,7 +379,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'time',
       header: '时间',
       className: css.tdTime,
-      cell: r => <span className={css.tdTime}>{fmtTime(r.ts)}</span>,
+      cell: r => <span className={css.tdTime}>{fmtLocaleMs(r.ts)}</span>,
       sortValue: r => r.ts,
     },
     {

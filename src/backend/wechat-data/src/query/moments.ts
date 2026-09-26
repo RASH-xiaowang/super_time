@@ -4,6 +4,7 @@
  * XML is parsed into text/media/location/link fields mirroring the Rust
  * modules/moments.rs parse_sns_xml. Author names resolve via contact.db.
  */
+import { fmtRelativeDaySec } from '../format.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -381,19 +382,7 @@ export function parseSnsLikesComments(xml: string): { likes: MomentLike[]; comme
   }
   return { likes, comments }
 }
-/** Format a unix timestamp as a moments time label (relative days). */
-function fmtTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const now = new Date()
-  const startOfDay = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
-  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000)
-  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  if (dayDiff <= 0) return `今天 ${hhmm}`
-  if (dayDiff === 1) return `昨天 ${hhmm}`
-  if (dayDiff < 365) return `${dayDiff}天前`
-  return `${Math.floor(dayDiff / 30)}个月前`
-}
+
 
 /**
  * Read moments page (XML parsed; likes/comments resolved from SnsMessage_tmp3).
@@ -439,7 +428,7 @@ export function queryMoments(
         author,
         text: parsed.text,
         ts: parsed.createTime,
-        time: fmtTime(parsed.createTime),
+        time: fmtRelativeDaySec(parsed.createTime),
         media_count: parsed.mediaCount,
         media_desc: parsed.mediaDesc,
         images: parsed.images,

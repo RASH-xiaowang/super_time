@@ -136,7 +136,9 @@ function allSpecs(dir: string = join(ROOT, 'src')): string[] {
     if (entry.name === 'node_modules') continue
     const abs = join(dir, entry.name)
     if (entry.isDirectory()) out.push(...allSpecs(abs))
-    else if (entry.name.endsWith('.spec.ts')) out.push(relative(ROOT, abs).replace(/\\/g, '/'))
+    // 宽口径匹配扩展名：只认 `.spec.ts` 的话，将来任何 `.spec.tsx`（含 JSX 的用例）都会
+    // 悄悄逃出这道扫描 —— 那个坑由 `spec-file-discoverability.spec.ts` 守着，这里不依赖它。
+    else if (/\.spec\.[cm]?[jt]sx?$/.test(entry.name)) out.push(relative(ROOT, abs).replace(/\\/g, '/'))
   }
   return out
 }

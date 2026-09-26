@@ -16,6 +16,7 @@ import type { CallsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Card, EmptyState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './calls.module.css'
+import { fmtLocaleSec } from '../utils/format.ts'
 
 /** Cache key for the render cache (survives panel remounts). */
 const CACHE_KEY = 'calls'
@@ -45,11 +46,6 @@ function fmtClock(sec: number): string {
 function fmtMonth(month: string): string {
   const m = /^(\d{4})-(\d{2})$/.exec(month)
   return m ? `${m[1]} 年 ${Number(m[2])} 月` : month
-}
-
-function fmtTime(sec: number): string {
-  if (!sec) return '—'
-  return new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
 /**
@@ -92,7 +88,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       <PanelHeader
         title="通话记录"
         desc={snap
-          ? `${snap.total} 通 · 覆盖 ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)} · 快照 ${fmtTime(snap.updatedAt)}`
+          ? `${snap.total} 通 · 覆盖 ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)} · 快照 ${fmtLocaleSec(snap.updatedAt)}`
           : '语音/视频通话统计（来自消息库 type-50 的 voip XML）'}
         actions={(
           <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>
@@ -220,7 +216,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                     <span className={css.recentDir} data-out={r.outgoing ? '1' : '0'}>{r.outgoing ? '呼出' : '呼入'}</span>
                     <span className={css.recentName}>{r.name}</span>
                     <span className={css.recentStatus}>{r.status}</span>
-                    <span className={css.recentTime}>{fmtTime(r.createTime)}</span>
+                    <span className={css.recentTime}>{fmtLocaleSec(r.createTime)}</span>
                   </button>
                 ))}
               </div>

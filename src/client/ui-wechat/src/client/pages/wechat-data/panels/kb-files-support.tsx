@@ -17,6 +17,7 @@ import { KB_ACCEPTED_EXTS } from '../types.ts'
 import { Badge, Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
 import css from './kbfiles.module.css'
+import { fmtBytes } from '../utils/format.ts'
 
 /** 首帧渲染缓存：上次成功读到的那份文件列表（冷启动先出内容，再由请求结果校正）。 */
 export interface KbFilesCache {
@@ -189,22 +190,13 @@ export function reasonText(r: KbFileRegisterResult): string {
 }
 
 /**
- * 把字节数格式化成人看的单位。
+ * 字节数 → 人类可读（P3-2：口径统一到 `utils/format.ts#fmtBytes`，本文件只做名字转发）。
  *
- * 就地声明而不是放进 `kb-model.ts`：那里是**笔记正文**的纯函数集（分块 / 分标签 /
- * 链接解析），文件大小是这一屏独有的展示需求，混进去会让那个模块的名字越来越不成立。
- * @param n - 字节数（负数 / 非有限值一律显示 0 B）。
- * @returns 如 `1.4 MB`。
+ * 原先这里写着「就地声明而不是放进 kb-model.ts」，理由是**那个模块名不成立** ——
+ * 但真正的答案是有没有一个全局唯一出处：同一个 1.5GB 在别的面板显示成 `1536.0 MB`，
+ * 在这一屏显示成 `1.50 GB`。放进 `utils/format.ts` 之后，两个理由都满足了。
  */
-export function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
-  // 小数点后位数跟着量级走：`1.4 MB` 有意义，`768.0 B` 没有。
-  return `${i === 0 ? Math.round(v) : v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`
-}
+export const formatBytes = fmtBytes
 
 /**
  * 从绝对路径取文件名（跨平台）。

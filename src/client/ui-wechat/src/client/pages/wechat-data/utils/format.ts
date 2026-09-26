@@ -8,9 +8,11 @@
  *    类型都是 number，传错也不报错 —— 整片时间会错到 1970 年且无人察觉。
  *    现在单位在函数名里，读代码即可发现不匹配。
  *
- * 2. **同类格式化只允许一个实现**。这条由 `scripts/check-ui-consistency.js`
- *    把关：历史上曾出现 9 个面板各写一份 fmtBytes（口径互不相同，12 GB
- *    在有的面板显示成 "12288.0 MB"）、6 份 fmtTime、多份 pct。
+ * 2. **同类格式化只允许一个实现**。这条由 `src/backend/tests/format-single-source.spec.ts`
+ *    把关（原先注释指向的 `scripts/check-ui-consistency.js` **在仓库里并不存在** ——
+ *    写着「有守卫」而守卫没提交，等于没有守卫：2026-09-26 的审查就是在数到
+ *    4 份 fmtTime（2 份按秒、2 份按毫秒）+ 5 份字节格式化之后发现这一点的）。
+ *    后端那一半的唯一出处是 `src/backend/wechat-data/src/format.ts`，口径与这里逐字一致。
  *
  * 已删除的零引用导出：formatDividerTime / avatarLetter / fmtDur / favIcon
  * （全域 279 个文件核查确认无人引用）。iconSvg 与 ICON_PATHS 仅被本文件的
@@ -126,18 +128,6 @@ export function fmtClockMs(ts: number | null | undefined, placeholder = '—'): 
   const d = new Date(n)
   if (Number.isNaN(d.getTime())) return placeholder
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
-
-/**
- * **毫秒级**时间戳 → 本地完整日期时间（zh-CN，24 小时制）。
- * @param ts - 毫秒时间戳。
- */
-export function fmtLocaleMs(ts: number | null | undefined): string {
-  const n = Number(ts ?? 0)
-  if (!n) return ''
-  const d = new Date(n)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 /**
@@ -278,4 +268,40 @@ export function fileIcon(ext: string): string {
   if (['pdf'].includes(e)) return iconSvg(ICON_PATHS.file)
   if (['apk', 'exe', 'msi'].includes(e)) return iconSvg(ICON_PATHS.gear)
   return iconSvg(ICON_PATHS.file)
+}
+
+/** `zh-CN` 的完整本地时间（表格里那些「什么时候导出」的悬停值）。 */
+function localeFull(d: Date): string {
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * **毫秒**时间戳 → 完整本地时间。
+ * 单位写进名字是刻意的：这几份实现曾经收秒/收毫秒各半，
+ * 而 number 传错不会报错，只会把时间画到 1970 年（审查 P3-1）。
+ */
+export function fmtLocaleMs(ts: number | null | undefined, placeholder = '—'): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n)
+  return Number.isNaN(d.getTime()) ? placeholder : localeFull(d)
+}
+
+/** **秒级**时间戳 → 完整本地时间（与 `fmtLocaleMs` 只差单位）。 */
+export function fmtLocaleSec(sec: number | null | undefined, placeholder = '—'): string {
+  const n = Number(sec ?? 0)
+  if (!n) return placeholder
+  return fmtLocaleMs(n * 1000, placeholder)
+}
+
+/** 毫秒时间戳：当天显示 `今天 HH:mm`，其余显示完整本地时间。 */
+export function fmtTodayOrLocaleMs(ts: number | null | undefined, placeholder = '—'): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n)
+  if (Number.isNaN(d.getTime())) return placeholder
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  if (!sameDay) return localeFull(d)
+  return `今天 ${p2(d.getHours())}:${p2(d.getMinutes())}`
 }

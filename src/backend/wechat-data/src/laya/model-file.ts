@@ -11,6 +11,7 @@
  * 没有 tokenizer 就无法把中文变成输入。两者都**不进安装包**（合计约 1.26 GB），
  * 由用户手动放置或首启下载；下载源用 `DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 覆盖。
  */
+import { fmtBytes } from '../format.ts'
 import { copyFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { resolveWechatDataRoot } from '../dirs.ts'
@@ -106,13 +107,13 @@ export function layaTokenizerDir(dir: string): string {
   return join(dir, 'tokenizer')
 }
 
-/** 人类可读体积。 */
-export function formatBytes(n: number): string {
-  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${n} B`
-}
+/**
+ * 人类可读体积（P3-2：口径统一到 `src/format.ts`）。
+ *
+ * 旧实现 KB 取 0 位小数、其余取 1/2 位 —— 与界面其它各处不一样，
+ * 同一个文件在「设置 → 模型」里是 `1428.6 KB`、在知识库里是 `1.4 MB`。
+ */
+export const formatBytes = fmtBytes
 
 /** 下载源基址候选（env 钉的 → 国内镜像 → 官方；与 whisper 的轮换顺序一致）。 */
 export function layaDownloadBases(): string[] {

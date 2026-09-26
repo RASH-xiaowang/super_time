@@ -2992,6 +2992,32 @@ function toBuffer(v) {
   return Buffer.alloc(0);
 }
 
+// src/backend/wechat-data/src/format.ts
+function fmtBytes(n) {
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v) || v <= 0) return "0 B";
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 ** 2) return `${(v / 1024).toFixed(1)} KB`;
+  if (v < 1024 ** 3) return `${(v / 1024 ** 2).toFixed(1)} MB`;
+  if (v < 1024 ** 4) return `${(v / 1024 ** 3).toFixed(2)} GB`;
+  return `${(v / 1024 ** 4).toFixed(2)} TB`;
+}
+function p2(x) {
+  return String(x).padStart(2, "0");
+}
+function fmtRelativeDaySec(ts2) {
+  if (!ts2) return "";
+  const d = new Date(ts2 * 1e3);
+  const now = /* @__PURE__ */ new Date();
+  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 864e5);
+  const hhmm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  if (dayDiff <= 0) return `\u4ECA\u5929 ${hhmm}`;
+  if (dayDiff === 1) return `\u6628\u5929 ${hhmm}`;
+  if (dayDiff < 365) return `${dayDiff}\u5929\u524D`;
+  return `${Math.floor(dayDiff / 30)}\u4E2A\u6708\u524D`;
+}
+
 // src/backend/wechat-data/src/query/moments.ts
 import { DatabaseSync as DatabaseSync8 } from "node:sqlite";
 import { existsSync as existsSync3 } from "node:fs";
@@ -3204,18 +3230,6 @@ function parseSnsLikesComments(xml) {
   }
   return { likes, comments };
 }
-function fmtTime(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const now = /* @__PURE__ */ new Date();
-  const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 864e5);
-  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (dayDiff <= 0) return `\u4ECA\u5929 ${hhmm}`;
-  if (dayDiff === 1) return `\u6628\u5929 ${hhmm}`;
-  if (dayDiff < 365) return `${dayDiff}\u5929\u524D`;
-  return `${Math.floor(dayDiff / 30)}\u4E2A\u6708\u524D`;
-}
 function queryMoments(decryptedDir, offset, limit, authorUsername, selfUsername) {
   const dbPath8 = snsDb(decryptedDir);
   if (dbPath8 === null) return { moments: [], total: 0 };
@@ -3246,7 +3260,7 @@ function queryMoments(decryptedDir, offset, limit, authorUsername, selfUsername)
         author,
         text: parsed.text,
         ts: parsed.createTime,
-        time: fmtTime(parsed.createTime),
+        time: fmtRelativeDaySec(parsed.createTime),
         media_count: parsed.mediaCount,
         media_desc: parsed.mediaDesc,
         images: parsed.images,
@@ -19378,11 +19392,7 @@ function asParseState(s) {
   ];
   return all.includes(s) ? s : "queued";
 }
-function formatBytes(n) {
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1024 / 1024).toFixed(1) + " MB";
-}
+var formatBytes = fmtBytes;
 function blobFileName(sha256, ext) {
   return ext ? sha256 + "." + ext : sha256;
 }
@@ -19509,10 +19519,10 @@ function inspectZip(bytes) {
   }
   let eocd = -1;
   const lowest = Math.max(0, len - EOCD_BYTES - MAX_ZIP_COMMENT);
-  for (let p2 = len - EOCD_BYTES; p2 >= lowest; p2 -= 1) {
-    if (!hasMagic(bytes, p2, SIG_EOCD)) continue;
-    if (p2 + EOCD_BYTES + u162(bytes, p2 + 20) <= len) {
-      eocd = p2;
+  for (let p3 = len - EOCD_BYTES; p3 >= lowest; p3 -= 1) {
+    if (!hasMagic(bytes, p3, SIG_EOCD)) continue;
+    if (p3 + EOCD_BYTES + u162(bytes, p3 + 20) <= len) {
+      eocd = p3;
       break;
     }
   }
@@ -29057,12 +29067,7 @@ function layaModelStatus(configured, decryptedDir) {
 function layaTokenizerDir(dir) {
   return join94(dir, "tokenizer");
 }
-function formatBytes2(n) {
-  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${n} B`;
-}
+var formatBytes2 = fmtBytes;
 function layaDownloadBases() {
   const pinned = (process.env[LAYA_MIRROR_ENV] ?? "").trim().replace(/\/$/, "");
   const bases = pinned ? [pinned] : [];
