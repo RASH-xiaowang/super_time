@@ -134,15 +134,19 @@ describe('⑤ 底图闸门不许把首帧堵在后端队列上', () => {
     const mirrorAt = GATE.indexOf('readMapTilesFlag()')
     expect(mirrorAt, '没有读本地镜像').toBeGreaterThan(-1)
     expect(GATE.slice(0, mirrorAt).includes('await'), '读镜像前就 await 了').toBe(false)
-    expect(GATE, '镜像命中要直接返回判断结果').toMatch(/if \(mirrored !== null\) return mirrored/)
+    // P3-9：快路留着，但**只对新鲜的镜像**开 —— 值与新一起判，缺一样都回去问后端。
+    expect(GATE, '镜像采信要同时看值与新鲜期').toMatch(/if \(mirrored !== null && ageMs !== null && ageMs <= FLAG_FRESH_MS\) return mirrored/)
+    expect(GATE, '没读镜像的写入时间（等于无法判新旧）').toContain('readMapTilesFlagAgeMs()')
   })
 
-  it('只有镜像缺失才问后端，且有界等待；超时按「读不到」放行', () => {
+  it('镜像过期或缺失才问后端，且有界等待；拿不到真值时旧副本顶着、否则放行', () => {
     expect(GATE.indexOf('apiGetPrivacyState') > GATE.indexOf('readMapTilesFlag()'),
       '问后端必须在读镜像之后').toBe(true)
     expect(GATE, '问后端没有超时上限').toContain('Promise.race')
     expect(DATA, '等待上限要写成具名常量，不要散魔法数').toMatch(/const FLAG_WAIT_MS = \d+/)
-    expect(GATE, '超时分支应放行（false），不是拦截').toMatch(/if \(hit === null\) return false/)
+    // P3-9 把"新鲜期"也收成具名常量：散成字面量就没人知道这条 TTL 是刻意的
+    expect(DATA, '镜像新鲜期要写成具名常量').toMatch(/const FLAG_FRESH_MS = \d+/)
+    expect(GATE, '超时分支应放行（false），不是拦截').toMatch(/if \(hit === null\) return mirrored \?\? false/)
   })
 
   it('镜像只在**拿到后端真值**时写入；读不到要返回 null 而不是猜一个 false', () => {

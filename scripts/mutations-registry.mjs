@@ -374,7 +374,7 @@ const MUTATIONS_BATCH12 = [
     id: 'M52-mapflag-asks-queue-every-time',
     why: '底图开关退回「每次都问后端」—— 后端同步串行，排在 54 秒的长任务后面时底图连"开始拉"都还没轮到（用户报的"一直在加载中"）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts',
-    from: '  const mirrored = readMapTilesFlag()\n  if (mirrored !== null) return mirrored\n',
+    from: '  const mirrored = readMapTilesFlag()\n  const ageMs = readMapTilesFlagAgeMs()\n  if (mirrored !== null && ageMs !== null && ageMs <= FLAG_FRESH_MS) return mirrored\n',
     to: '',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },

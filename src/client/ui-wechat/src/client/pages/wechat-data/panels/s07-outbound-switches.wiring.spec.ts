@@ -77,7 +77,10 @@ describe('S07 · 地图底图开关（blockMapTiles）贯穿全链', () => {
     expect(src, '读到了却没判').toMatch(/\.blockMapTiles === true/)
     // 与后端隐私闸「读不到就拦」方向相反，是刻意的：那边拦的是用户内容，
     // 这边只是一份公开的行政区划 GeoJSON —— 读不到状态宁可出网也不要整张地图空白。
-    expect(src, '读不到状态时的兜底方向变了（应放行）').toMatch(/catch \{\s*return false/)
+    // P3-9 之后这条兜底多了半句：有**过期**镜像时先拿旧副本顶着（那是后端真值的副本，
+    // 比"什么都没有"更接近真相），真正什么都没有才放行。判据收成 `mirrored ?? false`，
+    // 谁把它写成无条件 `false`（旧副本丢了）或无条件 `true`（兜底方向翻掉）都该红。
+    expect(src, '读不到真值时的兜底方向变了（应"旧副本顶着，否则放行"）').toMatch(/catch \{\s*return mirrored \?\? false/)
   })
 })
 
