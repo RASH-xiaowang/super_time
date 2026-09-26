@@ -12951,7 +12951,9 @@ function readPrivacySettings(decryptedDir) {
   const db = openStore6(decryptedDir);
   const out = {
     redactSensitive: getSetting(db, "redactSensitive", false),
-    blockOutbound: getSetting(db, "blockOutbound", false)
+    blockOutbound: getSetting(db, "blockOutbound", false),
+    // 默认 false：地图底图原本就在出网，不能因为新增开关反而把老用户的地图关掉。
+    blockMapTiles: getSetting(db, "blockMapTiles", false)
   };
   db.close();
   return out;
@@ -12961,7 +12963,8 @@ function writePrivacySettings(decryptedDir, patch) {
   try {
     const entries2 = [
       ["redactSensitive", patch.redactSensitive],
-      ["blockOutbound", patch.blockOutbound]
+      ["blockOutbound", patch.blockOutbound],
+      ["blockMapTiles", patch.blockMapTiles]
     ];
     for (const [key, value] of entries2) {
       if (value === void 0) continue;
@@ -12969,7 +12972,8 @@ function writePrivacySettings(decryptedDir, patch) {
     }
     const out = {
       redactSensitive: getSetting(db, "redactSensitive", false),
-      blockOutbound: getSetting(db, "blockOutbound", false)
+      blockOutbound: getSetting(db, "blockOutbound", false),
+      blockMapTiles: getSetting(db, "blockMapTiles", false)
     };
     return out;
   } finally {
@@ -12995,6 +12999,7 @@ function getPrivacyStateSnapshot(decryptedDir) {
     return {
       redactSensitive: settings.redactSensitive,
       blockOutbound: settings.blockOutbound,
+      blockMapTiles: settings.blockMapTiles,
       audit: {
         total: totalRow?.n ?? 0,
         byFeature: featureRows.map((r) => ({ feature: r.feature, count: r.n, chars: r.c })),
@@ -13006,6 +13011,7 @@ function getPrivacyStateSnapshot(decryptedDir) {
     return {
       redactSensitive: settings.redactSensitive,
       blockOutbound: settings.blockOutbound,
+      blockMapTiles: settings.blockMapTiles,
       audit: { total: 0, byFeature: [], last: null, updatedAt: Math.floor(Date.now() / 1e3) }
     };
   }
@@ -13256,7 +13262,7 @@ function createOpsLogRemotes(rc) {
       try {
         writePrivacySettings(rc.dirs().decrypted, options);
         const snapshot = getPrivacyStateSnapshot(rc.dirs().decrypted);
-        rc.op("settings", "set_privacy_state", "ok", "", `\u8131\u654F=${options.redactSensitive ?? "\u4E0D\u53D8"}\uFF0C\u51FA\u7AD9\u62E6\u622A=${options.blockOutbound ?? "\u4E0D\u53D8"}`);
+        rc.op("settings", "set_privacy_state", "ok", "", `\u8131\u654F=${options.redactSensitive ?? "\u4E0D\u53D8"}\uFF0C\u51FA\u7AD9\u62E6\u622A=${options.blockOutbound ?? "\u4E0D\u53D8"}\uFF0C\u5730\u56FE\u5E95\u56FE=${options.blockMapTiles ?? "\u4E0D\u53D8"}`);
         return snapshot;
       } catch (e) {
         rc.op("settings", "set_privacy_state", "fail", "", e.message);
@@ -21867,6 +21873,11 @@ function createVoiceLlmRemotes(rc) {
       }
     },
     async downloadWhisperModel(options) {
+      const blocked = rc.privacyBlocked("voice_model_download", "\u4E0B\u8F7D\u8BED\u97F3\u8BC6\u522B\u6A21\u578B\u6587\u4EF6");
+      if (blocked !== null) {
+        rc.op("settings", "download_whisper_model", "fail", options.model, blocked);
+        return { ok: false, error: blocked };
+      }
       if (rc.getWhisperDownload() !== null) {
         rc.op("settings", "download_whisper_model", "fail", options.model, "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D");
         return { ok: false, error: "\u5DF2\u6709\u6A21\u578B\u4E0B\u8F7D\u4EFB\u52A1\u8FDB\u884C\u4E2D" };
@@ -27954,6 +27965,7 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     return this._voiceLlmRemotes ??= createVoiceLlmRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       ctx: () => this._ctx,
       getWhisperDownload: () => this.whisperDownload,
       setWhisperDownload: (v) => {

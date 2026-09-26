@@ -418,7 +418,7 @@ export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
  * @param options - partial settings patch.
  * @returns the updated privacy state snapshot.
  */
-export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): Promise<PrivacyStateSnapshot> {
+export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<PrivacyStateSnapshot> {
   const r = await remote().setPrivacyState(options)
   invalidateWechatCache('privacy')
   return unwrap(r)

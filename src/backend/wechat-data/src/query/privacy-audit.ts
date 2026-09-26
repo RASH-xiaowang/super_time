@@ -31,11 +31,13 @@ function getSetting(db: DatabaseSync, key: string, dft: boolean): boolean {
  * `gateway.ts` 的 `privacyBlocked` / `outboundBlocked` / `privacyGate`（一律拦下）。
  * 全新库（无行）仍走默认值，不抛。
  */
-export function readPrivacySettings(decryptedDir: string): { redactSensitive: boolean; blockOutbound: boolean } {
+export function readPrivacySettings(decryptedDir: string): { redactSensitive: boolean; blockOutbound: boolean; blockMapTiles: boolean } {
   const db = openStore(decryptedDir)
   const out = {
     redactSensitive: getSetting(db, 'redactSensitive', false),
     blockOutbound: getSetting(db, 'blockOutbound', false),
+    // 默认 false：地图底图原本就在出网，不能因为新增开关反而把老用户的地图关掉。
+    blockMapTiles: getSetting(db, 'blockMapTiles', false),
   }
   db.close()
   return out
@@ -44,13 +46,14 @@ export function readPrivacySettings(decryptedDir: string): { redactSensitive: bo
 /** Persist privacy settings (partial update). */
 export function writePrivacySettings(
   decryptedDir: string,
-  patch: { redactSensitive?: boolean; blockOutbound?: boolean },
-): { redactSensitive: boolean; blockOutbound: boolean } {
+  patch: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean },
+): { redactSensitive: boolean; blockOutbound: boolean; blockMapTiles: boolean } {
   const db = openStore(decryptedDir)
   try {
     const entries: Array<[string, boolean | undefined]> = [
       ['redactSensitive', patch.redactSensitive],
       ['blockOutbound', patch.blockOutbound],
+      ['blockMapTiles', patch.blockMapTiles],
     ]
     for (const [key, value] of entries) {
       if (value === undefined) continue
@@ -59,6 +62,7 @@ export function writePrivacySettings(
     const out = {
       redactSensitive: getSetting(db, 'redactSensitive', false),
       blockOutbound: getSetting(db, 'blockOutbound', false),
+      blockMapTiles: getSetting(db, 'blockMapTiles', false),
     }
     return out
   } finally {
@@ -87,6 +91,7 @@ export function getPrivacyStateSnapshot(decryptedDir: string): PrivacyStateSnaps
     return {
       redactSensitive: settings.redactSensitive,
       blockOutbound: settings.blockOutbound,
+      blockMapTiles: settings.blockMapTiles,
       audit: {
         total: totalRow?.n ?? 0,
         byFeature: featureRows.map(r => ({ feature: r.feature, count: r.n, chars: r.c })),
@@ -98,6 +103,7 @@ export function getPrivacyStateSnapshot(decryptedDir: string): PrivacyStateSnaps
     return {
       redactSensitive: settings.redactSensitive,
       blockOutbound: settings.blockOutbound,
+      blockMapTiles: settings.blockMapTiles,
       audit: { total: 0, byFeature: [], last: null, updatedAt: Math.floor(Date.now() / 1000) },
     }
   }

@@ -41,11 +41,11 @@ export function createOpsLogRemotes(rc: createOpsLogRemotesInputs) {
       return getPrivacyStateSnapshot(rc.dirs().decrypted)
     },
 
-    setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): PrivacyStateSnapshot {
+    setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): PrivacyStateSnapshot {
       try {
         writePrivacySettings(rc.dirs().decrypted, options)
         const snapshot = getPrivacyStateSnapshot(rc.dirs().decrypted)
-        rc.op('settings', 'set_privacy_state', 'ok', '', `脱敏=${options.redactSensitive ?? '不变'}，出站拦截=${options.blockOutbound ?? '不变'}`)
+        rc.op('settings', 'set_privacy_state', 'ok', '', `脱敏=${options.redactSensitive ?? '不变'}，出站拦截=${options.blockOutbound ?? '不变'}，地图底图=${options.blockMapTiles ?? '不变'}`)
         return snapshot
       } catch (e) {
         rc.op('settings', 'set_privacy_state', 'fail', '', (e as Error).message)

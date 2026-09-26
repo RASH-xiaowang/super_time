@@ -725,6 +725,7 @@ export abstract class GatewayCore extends TypertRemoteService {
     return (this._voiceLlmRemotes ??= createVoiceLlmRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       ctx: () => this._ctx,
       getWhisperDownload: () => this.whisperDownload,
       setWhisperDownload: (v) => { this.whisperDownload = v },

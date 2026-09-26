@@ -1804,7 +1804,7 @@ setKbModelConfig(options: { kbId: number; chatRef?: string; embedRef?: string; r
 ### `setPrivacyState`
 
 ```ts
-setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): PrivacyStateSnapshot
+setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): PrivacyStateSnapshot
 ```
 
 _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_

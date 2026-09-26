@@ -228,6 +228,30 @@ const MUTATIONS = [
     to: '暂无数据',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/consistency-r7.wiring.spec.ts',
   },
+  {
+    id: 'M24-map-tiles-gate-removed',
+    why: '删掉地图 GeoJSON 拉取点的出网闸 —— 「禁止地图底图出网」会变成一个没接线的摆设',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts',
+    from: '  if (await mapTilesBlocked()) {\n',
+    to: '',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/s07-outbound-switches.wiring.spec.ts',
+  },
+  {
+    id: 'M25-map-tiles-setting-not-read',
+    why: 'readPrivacySettings 不再读 blockMapTiles —— 开关点了写进去却读不出来',
+    file: 'src/backend/wechat-data/src/query/privacy-audit.ts',
+    from: "    blockMapTiles: getSetting(db, 'blockMapTiles', false),\n  }\n  db.close()\n  return out\n}",
+    to: '  }\n  db.close()\n  return out\n}',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/s07-outbound-switches.wiring.spec.ts',
+  },
+  {
+    id: 'M26-voice-download-gate-removed',
+    why: '语音模型下载不再过 blockOutbound 总闸 —— 文档里那句「开关真的管到它了」会变成假话',
+    file: 'src/backend/wechat-data/src/remotes/voicellm.ts',
+    from: "      const blocked = rc.privacyBlocked('voice_model_download', '下载语音识别模型文件')\n",
+    to: '',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/s07-outbound-switches.wiring.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

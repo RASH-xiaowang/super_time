@@ -10,14 +10,17 @@ import type { PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot } f
 export declare function readPrivacySettings(decryptedDir: string): {
     redactSensitive: boolean;
     blockOutbound: boolean;
+    blockMapTiles: boolean;
 };
 /** Persist privacy settings (partial update). */
 export declare function writePrivacySettings(decryptedDir: string, patch: {
     redactSensitive?: boolean;
     blockOutbound?: boolean;
+    blockMapTiles?: boolean;
 }): {
     redactSensitive: boolean;
     blockOutbound: boolean;
+    blockMapTiles: boolean;
 };
 /** Record one AI feature call in the audit log. */
 export declare function recordPrivacyAudit(decryptedDir: string, feature: string, chars: number, sessions: number, messages: number): void;

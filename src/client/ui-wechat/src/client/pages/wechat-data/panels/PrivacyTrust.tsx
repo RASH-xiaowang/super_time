@@ -100,7 +100,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
   useWechatDataUpdated(() => { if (!state) void load() })
 
-  const toggle = useCallback(async (key: 'redactSensitive' | 'blockOutbound', value: boolean): Promise<void> => {
+  const toggle = useCallback(async (key: 'redactSensitive' | 'blockOutbound' | 'blockMapTiles', value: boolean): Promise<void> => {
     try {
       setState(await apiSetPrivacyState({ [key]: value }))
     } catch (e) {
@@ -146,7 +146,16 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
               敏感字段打码（手机号/身份证/银行卡/邮箱/口令） · {state.redactSensitive ? '开' : '关'}
             </button>
             <button type="button" className={css.toggle} data-active={state.blockOutbound} onClick={() => { void toggle('blockOutbound', !state.blockOutbound) }}>
-              禁止 AI 出网（问答 / 每日总结 / 周期总结 / 群总结任务 一律不调用模型） · {state.blockOutbound ? '开' : '关'}
+              禁止 AI 出网（问答 / 每日总结 / 周期总结 / 群总结任务 一律不调用模型，语音模型下载也不再发起） · {state.blockOutbound ? '开' : '关'}
+            </button>
+            {/*
+              地图底图是**渲染层直连**（jsDelivr / unpkg / 阿里 DataV 拉 GeoJSON），
+              走后端闸门管不到它，所以单独一个开关；关闭后地图退化成离线 SVG 视图，
+              功能不减（这是它敢默认开着的原因）。拉取点只有一处：
+              `panels/world-map-data.ts#fetchFirstJson`。
+            */}
+            <button type="button" className={css.toggle} data-active={state.blockMapTiles} onClick={() => { void toggle('blockMapTiles', !state.blockMapTiles) }}>
+              禁止地图底图出网（世界/中国地图不从 CDN 拉 GeoJSON，改用离线视图） · {state.blockMapTiles ? '开' : '关'}
             </button>
           </div>
         ) : (

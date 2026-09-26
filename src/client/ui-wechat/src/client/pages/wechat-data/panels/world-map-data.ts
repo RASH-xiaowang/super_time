@@ -9,6 +9,28 @@
  */
 import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 
+/**
+ * 地图底图出网闸（2026-09-26）。
+ *
+ * 为什么闸门在这里：本模块的 `fetchFirstJson` 是**全部**地图 GeoJSON 的唯一
+ * 拉取点（世界层、中国层、省级下钻都走它），所以一处关闭就全关 —— 不必去每个
+ * 地图组件里各写一遍，也就不会漏掉将来新增的那个。
+ *
+ * 读不到隐私状态时**放行**（宁可出网也不要整张地图空白）：这与后端隐私闸
+ * 「读不到就拦」的方向相反，是刻意的不对称 —— 那边拦下的是用户内容，这边只是
+ * 一份公开的行政区划 GeoJSON。
+ * @returns true 表示已禁止拉取底图。
+ */
+async function mapTilesBlocked(): Promise<boolean> {
+  try {
+    // 动态 import：避免与 api.ts 形成顶层循环依赖（api 桶会引到面板层）。
+    const { apiGetPrivacyState } = await import('../api.ts')
+    return (await apiGetPrivacyState()).blockMapTiles === true
+  } catch {
+    return false
+  }
+}
+
 /** World GeoJSON fetch candidates, pinned to an immutable version. */
 export const WORLD_GEO_URLS = [
   'https://cdn.jsdelivr.net/npm/@surbowl/world-geo-json-zh@2.1.5/world.zh.json',
@@ -104,6 +126,9 @@ export function worldUnmatchedChildren(children: readonly RegionNode[], features
  * @throws when every candidate fails (network, non-2xx or parse error).
  */
 export async function fetchFirstJson(urls: readonly string[]): Promise<unknown> {
+  if (await mapTilesBlocked()) {
+    throw new Error('地图底图出网已在「数据边界与出网 → 禁止地图底图出网」里关闭')
+  }
   let lastError: Error | null = null
   for (const url of urls) {
     try {

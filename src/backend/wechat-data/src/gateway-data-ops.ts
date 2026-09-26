@@ -816,7 +816,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   @Remote('setPrivacyState')
-  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): PrivacyStateSnapshot {
+  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): PrivacyStateSnapshot {
     return this.opsLogRemotes().setPrivacyState(options)
   }
 

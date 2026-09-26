@@ -46,6 +46,8 @@ export interface PrivacyAuditClearResult {
 export interface PrivacyStateSnapshot {
   redactSensitive: boolean
   blockOutbound: boolean
+  /** 地图底图出网（渲染层直连 jsDelivr / unpkg / 阿里 DataV，不经后端闸门，故单独一位）。 */
+  blockMapTiles: boolean
   audit: {
     total: number
     byFeature: PrivacyAuditFeature[]

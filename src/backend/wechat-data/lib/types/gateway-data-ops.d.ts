@@ -688,6 +688,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
     setPrivacyState(options: {
         redactSensitive?: boolean;
         blockOutbound?: boolean;
+        blockMapTiles?: boolean;
     }): PrivacyStateSnapshot;
     setTaskStatus(options: {
         id: number;

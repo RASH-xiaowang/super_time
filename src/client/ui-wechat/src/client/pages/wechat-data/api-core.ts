@@ -265,7 +265,7 @@ export interface WechatRemote {
   getWechatConfig(): Promise<RemoteResult<ConfigSnapshot>>
   getPrivacyScan(): Promise<RemoteResult<PrivacySnapshot>>
   getPrivacyState(): Promise<RemoteResult<PrivacyStateSnapshot>>
-  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): Promise<RemoteResult<PrivacyStateSnapshot>>
+  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<RemoteResult<PrivacyStateSnapshot>>
   getPrivacyAuditRows(): Promise<RemoteResult<PrivacyAuditRow[]>>
   clearPrivacyAudit(): Promise<RemoteResult<PrivacyAuditClearResult>>
   getOperationLog(options?: OperationLogQuery): Promise<RemoteResult<OperationLogSnapshot>>
