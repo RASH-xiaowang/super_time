@@ -24,11 +24,12 @@ import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { ChatsExportDialog } from './chats-export-dialog.tsx'
 import { ChatsGroupInfoView } from './chats-group-info-view.tsx'
 import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
+import { ChatsCalendarDialog } from './chats-calendar-dialog.tsx'
+import { ChatsEditedDialog } from './chats-edited-dialog.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
 import { RainWindow } from './rain-window.tsx'
-import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import type { ViewerImage } from './chats-media.tsx'
@@ -567,81 +568,18 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         </div>
       )}
 
-      {/* message calendar dialog (A8) */}
-      {calOpen && (
-        <div className={csscards.calOverlay} data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">
-          <div className={csscards.calDialog}>
-            <div className={cssshell.calHeader}>
-              <span className={csscards.calTitle}>消息日历</span>
-              <button type="button" className={csscards.calClose} onClick={() =>{  setCalOpen(false) }}><IconCloseOutline16 size={15} /></button>
-            </div>
-            <div className={csscards.calBody}>
-              <div className={cssshell.calNav}>
-                <button type="button" className={csscards.loadMore} onClick={() => { void switchCalMonth(-1) }} aria-label="上一月">‹</button>
-                <span className={csscards.calMonthTitle}>{calYear} 年 {calMonth} 月</span>
-                <button type="button" className={csscards.loadMore} onClick={() => { void switchCalMonth(1) }} aria-label="下一月">›</button>
-              </div>
-              {calLoading ? (
-                <div className={kitCss.emptyInline}>加载中…</div>
-              ) : (
-                <>
-                  <div className={csscards.calStats}>
-                    <span className={cssshell.calStat}>本月共 <b>{calTotal}</b> 条消息</span>
-                    <span className={cssshell.calStat}>活跃 <b>{calActiveDays}</b> 天</span>
-                    <span className={cssshell.calStat}>日均 <b>{calAvg}</b> 条</span>
-                    {calTop && <span className={cssshell.calStat}>最活跃：{calMonth}月{calTop.day}日（{calTop.count} 条）</span>}
-                  </div>
-                  <div className={cssshell.calGrid}>
-                    {['一', '二', '三', '四', '五', '六', '日'].map(wd => (
-                      <div key={wd} className={cssshell.calWd}>{wd}</div>
-                    ))}
-                    {Array.from({ length: calFirstDow }).map((_, i) => <div key={`e${i}`} className={cssshell.calEmpty} />)}
-                    {Array.from({ length: calDays }).map((_, i) => {
-                      const day = i + 1
-                      const cnt = calCounts[String(day)] ?? 0
-                      return (
-                        <button key={day} type="button" className={csscards.calDay} style={{ background: calHeat(cnt) }}
-                          title={cnt ? `${calMonth}月${day}日：${cnt} 条消息` : `${calMonth}月${day}日：无消息`}
-                          onClick={() =>{  jumpToDay(day) }}>
-                          <span className={cssshell.calDayNum}>{day}</span>
-                          {cnt > 0 && <span className={csscards.calDayCnt}>{cnt}</span>}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <p className={cssshell.calHint}>点击日期跳转到当天消息（色块深浅表示消息量）</p>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 消息日历（A8）：JSX 在 chats-calendar-dialog.tsx，那一族的算术在 chats-calendar.ts */}
+      <ChatsCalendarDialog
+        calActiveDays={calActiveDays} calAvg={calAvg} calCounts={calCounts} calDays={calDays}
+        calFirstDow={calFirstDow} calHeat={calHeat} calLoading={calLoading} calMonth={calMonth}
+        calOpen={calOpen} calTop={calTop} calTotal={calTotal} calYear={calYear}
+        jumpToDay={jumpToDay} setCalOpen={setCalOpen} switchCalMonth={switchCalMonth}
+      />
 
-      {/* edited-messages popup */}
-      {editedOpen && (
-        <div className={csscards.calOverlay} data-st-dialog="chats-edited" onClick={() =>{  setEditedOpen(false) }} role="dialog" aria-modal="true">
-          <div className={csscards.calDialog}>
-            <div className={cssshell.calHeader}>
-              <span className={csscards.calTitle}>本会话已编辑消息</span>
-              <button type="button" className={csscards.calClose} onClick={() =>{  setEditedOpen(false) }} aria-label="关闭">×</button>
-            </div>
-            <div className={csscards.calBody}>
-              {edits.length === 0 ? (
-                <div className={kitCss.emptyInline}>暂无编辑记录（修改仅写入本地解密副本）</div>
-              ) : (
-                edits.map(rec => (
-                  <div key={`${rec.sessionId}:${rec.localId}`} className={csscards.editRow}>
-                    <span className={cssshell.editRowInfo}>
-                      #{rec.localId} · 编辑 {rec.editCount} 次 · {new Date(rec.lastEditedAt).toLocaleString()}
-                    </span>
-                    <button type="button" className={csscards.loadMore} onClick={() => { void doReset(rec) }} disabled={editing}>恢复原文</button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 已编辑消息浮层：JSX 在 chats-edited-dialog.tsx（遮罩那一判在那里） */}
+      <ChatsEditedDialog
+        doReset={doReset} editedOpen={editedOpen} editing={editing} edits={edits} setEditedOpen={setEditedOpen}
+      />
 
       {/* 右栏（最右一栏）= 一块**合并面板**（`ChatRightPanel`），上下两块共用一个容器：
           · 上：推荐回复（单聊常驻，读取范围 = 当前会话 + 当前选中的知识库）；
