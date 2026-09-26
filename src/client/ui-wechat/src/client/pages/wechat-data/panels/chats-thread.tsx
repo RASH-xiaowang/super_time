@@ -10,19 +10,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { apiGetGroupInfo, apiGetMessages, readRenderCache, writeRenderCache } from '../api.ts'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
-import { fmtMsgClockSec } from '../utils/format.ts'
-import { MessageRenderItem, renderKindOf } from '../utils/message-items.ts'
-import { MessageBody } from './chats-cards.tsx'
-import css from './chats.module.css'
-import cssrows from './chats-rows.module.css'
 import type { ChatTarget } from './Chats.tsx'
-import { MessageImageGroup } from './chats-media.tsx'
-import { Avatar, ChatView } from './chats-support.tsx'
+import { ChatView } from './chats-support.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useChatsPolling } from './chats-polling.ts'
+import { makeMsgRow } from './chats-msg-row.tsx'
 import type { ChatlogRecord, GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsThreadInputs {
+  /**
+   * 在途结果是否仍属于本次会话 —— 定义在**面板**里（会话/消息两半都要用它，放外面才不产生钩子环），
+   * 这里当输入用；其语义见 `Chats.tsx#sessionAlive`。
+   */
   sessionAlive: (epoch: number, talker: string) => boolean
   annExpanded: boolean
   annRef: React.MutableRefObject<HTMLDivElement | null>
@@ -95,80 +94,6 @@ const beginSession = (talker: string): number => {
   return sessionEpochRef.current
 }
 
-/**
- * 在途结果是否仍属于本次会话 —— 定义在**面板**里（会话/消息两半都要用它，放外面才不产生钩子环），
- * 这里当输入用；其语义见 `Chats.tsx#sessionAlive`。
- */
-
-/**
- * 渲染一个「消息渲染项」（日期分隔 / 系统行 / 普通气泡 / 图片组）。
- *
- * 虚拟化后每项要单独套一层定位容器，而**行内结构必须保持原样**
- * （`id="msg-<localId>"`、头像身份键、悬停时间戳这些都被守卫与深链依赖）。
- * @param item - `buildMessageItems` 的产物。
- * @returns 行元素（日期分隔没有 id）。
- */
-function renderMsgItem(item: MessageRenderItem): React.JSX.Element | null {
-  if (item.kind === 'day') {
-    return <div className={cssrows.msgDayDivider}><span>{item.label}</span></div>
-  }
-  const head = item.kind === 'group' ? item.items[0] : item.m
-  if (!head || !curSession) return null
-  const kind = renderKindOf(head)
-  // 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。
-  if (kind === 'system' || kind === 'revoke' || kind === 'pat' || kind === 'empty') {
-    return (
-      <div id={`msg-${head.localId}`} className={cssrows.msgRowSystem}>
-        <MessageBody m={head} selfName={curSession.username} onOpenImage={openViewer} />
-      </div>
-    )
-  }
-  const isSelf = head.isSender === 1
-  const isGroup = curSession.type === 'group'
-  /*
-   * 头像的身份键必须是真实 wxid，拿不到就留空（只渲染首字母占位）。
-   *
-   *  - 自己：用登录账号的 wxid。以前 fallback 到 `curSession.username`，
-   *    那会把「我」键成**对方**的 username，于是自己和对方显示同一个头像；
-   *    账号 wxid 未知时宁可不取头像，也不要取错。
-   *  - 群成员：用消息里的 sender wxid；解析不出来时留空，
-   *    绝不用昵称当键（群里同名成员会互相顶掉头像）。
-   *  - 私聊对方：就是会话 username 本身。
-   */
-  const avUsername = isSelf
-    ? selfWxid
-    : (isGroup ? (head.sender ?? '') : curSession.username)
-  const avName = isSelf ? '我' : (isGroup ? (head.senderName || head.sender || '') : curSession.displayName)
-  const isEdited = editedIds.has(head.localId)
-  return (
-    <div
-      id={`msg-${head.localId}`}
-      className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
-      onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
-    >
-      <Avatar name={avName} username={avUsername} size={34} />
-      <div className={css.msgCol}>
-        {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
-        <span className={css.msgTimeChip}>
-          {fmtMsgClockSec(head.createTime)}{isEdited ? ' · 已编辑' : ''}
-        </span>
-        {isGroup && !isSelf && head.sender && <div className={cssrows.msgSender}>{avName}</div>}
-        {item.kind === 'group' ? (
-          <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
-            <MessageImageGroup items={item.items} username={curSession.username} onOpenAt={openViewer} />
-          </div>
-        ) : (
-          <MessageBody
-            m={item.m}
-            selfName={curSession.username}
-            onOpenImage={openViewer}
-            onOpenChatlog={openChatlog}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
 /**
  * 「加载更多」不跳位（N18）：插入后把 scrollTop 补上「新增内容的高度」，
  * 让视口里那条消息留在原地。
@@ -416,6 +341,10 @@ useEffect(() => { if (initialView) changeViewRef.current(initialView) }, [initia
 const openChatlog = useCallback((rich: MessageRich): void => {
   setChatlogStack([{ title: rich.title || '群聊的聊天记录', records: Array.isArray(rich.records) ? rich.records : [] }])
 }, [])
+
+// 行渲染器**必须造在 `openChatlog` 之后**：拆前它是函数声明，声明提升让「晚定义的回调」
+// 在调用时才解析；换成工厂就是把依赖当参数传进去，写在这里会直接踩 TDZ（typecheck 报的）。
+const renderMsgItem = makeMsgRow({ curSession, editedIds, openChatlog, openMsgMenu, openViewer, selfWxid })
 
   return { changeView, loadMore, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem }
 }
