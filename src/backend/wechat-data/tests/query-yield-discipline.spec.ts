@@ -282,18 +282,26 @@ describe('存储统计也要让出（msg/file 整树 stat + 每条大文件都�
 })
 
 /**
- * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览、隐私体检、存储统计与账本四个
- * （账本那条用例在 `ledger.spec.ts` 里，共用 `helpers/tick-probe.ts` 的探针口径）。
- * 写成判据而不是备忘：这五个里谁先加了让出，就必须从这里删一条 —— 只能变小。
+ * P1-2 点名的五个模块。**全部收完之后**这张表从「只能变小的棘轮」升级成零容忍清单：
+ * 少任何一个让出点就红；再加新的同步重查询也要一并进这张表（`[算料]` 会把名单打出来，
+ * 空清单会被下面那条长度哨兵判红，所以它不会悄悄退化成恒真）。
  */
-const STILL_SYNC_ONLY = [
-  'query/graph.ts',
+const P1_2_MODULES = [
+  'overview-insights.ts',
+  'privacy.ts',
+  'storage.ts',
+  'ledger.ts',
+  'graph.ts',
 ]
 
-describe('P1-2 剩余站点（棘轮：只能变小）', () => {
-  it('未让出的模块确实还没有 yieldToLoop；清单外的模块不许偷偷加回来', () => {    const src = join(import.meta.dirname, '..', 'src', 'query')
-    const still = STILL_SYNC_ONLY.filter((rel) => !readFileSync(join(src, rel.split('/').pop() as string), 'utf8').includes('yieldToLoop'))
-    console.log(`[算料|yield] P1-2 还没让出的模块：${String(still.length)} / ${String(STILL_SYNC_ONLY.length)} —— ${still.join(', ') || '（无）'}`)
-    expect(still, '有模块已经改成让出了 ⇒ 把它从 STILL_SYNC_ONLY 里删掉（清单只许变小）').toEqual(STILL_SYNC_ONLY)
+describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
+  it('五个模块逐个含 yieldToLoop，且清单本身不被清空', () => {
+    const src = join(import.meta.dirname, '..', 'src', 'query')
+    expect(P1_2_MODULES.length, '清单被清空 ⇒ 这条判据就是空转').toBeGreaterThanOrEqual(5)
+    const missing = P1_2_MODULES.filter(
+      (name) => !readFileSync(join(src, name), 'utf8').includes('yieldToLoop'),
+    )
+    console.log(`[算料|yield] P1-2 清单 ${String(P1_2_MODULES.length)} 个模块，还没有让出点的：${missing.length === 0 ? '（无）' : missing.join(', ')}`)
+    expect(missing, '这些模块又回到「从头钉到尾」的同步形状').toEqual([])
   })
 })

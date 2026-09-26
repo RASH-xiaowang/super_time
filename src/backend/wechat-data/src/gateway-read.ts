@@ -154,7 +154,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns GraphSnapshot: chat relationship graph data.
    */
   @Remote('getGraph')
-  getGraph(): GraphSnapshot {
+  async getGraph(): Promise<GraphSnapshot> {
     return queryGraph(this._dirs.decrypted, this.selfUsername())
   }
 

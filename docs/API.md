@@ -942,7 +942,7 @@ Resource files.
 ### `getGraph`
 
 ```ts
-getGraph(): GraphSnapshot
+async getGraph(): Promise<GraphSnapshot>
 ```
 
 Relationship graph.

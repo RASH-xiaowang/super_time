@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { startTickProbe } from '../../tests/helpers/tick-probe.ts'
 import { queryGraph } from '../src/query/graph.ts'
 import { queryPrivacyScan } from '../src/query/privacy.ts'
 
@@ -105,6 +106,25 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
       .toBe(9 * 5)
   })
 
+  /**
+   * P1-2：图谱按**消息分片**让出（`loadMessageCounts` 里每开一个分片库之前一次）。
+   *
+   * 下界为什么写成分片数 + 1 而不是 `opens + 1`：`countOpens` 数的是 `DatabaseSync.close`
+   * 的调用次数，里面还包含会话库 / 通讯录库这些**不让出**的开合（它们各只一次，不是长循环），
+   * 拿它当让出次数会虚高。探针口径见 `helpers/tick-probe.ts`：`ticks == 让出次数 + 1`。
+   * 夹具的 3 个会话都落在第一个分片里（file-first 语义下第二个分片的 `wanted` 是空的，
+   * 本来就不该为它让出）⇒ 实际让出 1 次 ⇒ 下界 2；删掉唯一的让出点就只剩起始那个 tick。
+   */
+  it('消息计数按分片让出（图谱不再把事件循环从头钉到尾）', async () => {
+    const decrypted = makeFixture('graph-yield', 3)
+    const stopProbe = startTickProbe()
+    const { opens } = await countOpens(() => queryGraph(decrypted, 'wxid_self'))
+    const ticks = stopProbe()
+    console.log(`[算料|yield] 图谱 ${String(opens)} 次开合（含会话/通讯录库）：探针 ticks=${String(ticks)}`)
+    expect(opens, '夹具没真的开过库 ⇒ 这条判据是空转').toBeGreaterThan(0)
+    expect(ticks, '一次都不让出 ⇒ 冷跑的图谱把承载全部查询的那条循环钉到底').toBeGreaterThanOrEqual(2)
+  })
+
   it('第二次调用一次库都不开（签名没变 ⇒  cachedBySig 直接回同一份）', async () => {
     const decrypted = makeFixture('graph-cached', 4)
     const first = await countOpens(() => queryGraph(decrypted, 'wxid_self'))
@@ -117,14 +137,14 @@ describe('queryGraph：每个分片只开一次库 + 后端签名缓存', () => 
 
   it('数据变了签名就变：不许出现「缓存挡住了新消息」', async () => {
     const decrypted = makeFixture('graph-fresh', 2)
-    expect(queryGraph(decrypted, 'wxid_self').nodes.reduce((a, n) => a + (n.msg_count ?? 0), 0)).toBe(2 * 5)
+    expect((await queryGraph(decrypted, 'wxid_self')).nodes.reduce((a, n) => a + (n.msg_count ?? 0), 0)).toBe(2 * 5)
     // 往**第一个**分片给其中一个会话追加 3 行（file-first 计数的就是这片；大小与 mtime 都会变）
     const db = new DatabaseSync(join(decrypted, 'message', SHARDS[0] ?? ''), { readOnly: false })
     const t = tableOf('wxid_0')
     const ins = db.prepare(`INSERT INTO "${t}" VALUES (?,?,?,?,?,?,?,?,?)`)
     for (let i = 10; i < 13; i += 1) ins.run(i, i, 1, 0, 1700000100 + i, 1, '新消息', i, '')
     db.close()
-    const after = queryGraph(decrypted, 'wxid_self')
+    const after = await queryGraph(decrypted, 'wxid_self')
     expect(after.nodes.reduce((a, n) => a + (n.msg_count ?? 0), 0), '数据变了还拿旧快照 ⇒ 签名太宽松（这条是缓存最经典的错法）')
       .toBe(2 * 5 + 3)
   })

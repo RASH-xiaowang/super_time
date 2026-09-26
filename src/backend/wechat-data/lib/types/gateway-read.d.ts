@@ -91,7 +91,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      * Relationship graph.
      * @returns GraphSnapshot: chat relationship graph data.
      */
-    getGraph(): GraphSnapshot;
+    getGraph(): Promise<GraphSnapshot>;
     /**
      * Moments page.
      * @param options - Pagination (offset/limit) and optional author filter.

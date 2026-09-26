@@ -33,4 +33,4 @@ export declare function remarkClassKey(remark: string | undefined | null): strin
  * @param selfUsername - 当前账号（用于把自己从人物节点里剔除）。
  * @returns 图谱快照。
  */
-export declare function queryGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot;
+export declare function queryGraph(decryptedDir: string, selfUsername?: string): Promise<GraphSnapshot>;

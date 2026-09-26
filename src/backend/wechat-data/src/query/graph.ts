@@ -9,7 +9,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySig, contactMeta, fileSigOf, shardCatalog, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalog, shardCatalogSig } from './meta.ts'
+import { yieldToLoop } from './search-build.ts'
 import { withDb } from './db-open.ts'
 import { parseChatRoomExtBuffer } from './group-info.ts'
 import type { GraphSnapshot } from '../types.ts'
@@ -86,7 +87,7 @@ export function remarkClassKey(remark: string | undefined | null): string {
 }
 
 /** Per-taker message counts (Msg_<md5> tables across shards, file-first). */
-function loadMessageCounts(decryptedDir: string, usernames: string[]): Map<string, number> {
+async function loadMessageCounts(decryptedDir: string, usernames: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const tableToUser = new Map<string, string>()
   for (const u of usernames) tableToUser.set('Msg_' + createHash('md5').update(u, 'utf8').digest('hex'), u)
@@ -96,6 +97,9 @@ function loadMessageCounts(decryptedDir: string, usernames: string[]): Map<strin
     // 而 Windows 的 SQLite 打开是带文件锁的进程级操作 —— 这就是 queryGraph 冷跑 866ms 的大头。
     const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ''))
     if (wanted.length === 0) continue
+    // P1-2：真正要开库的分片之间各让一次（放在 wanted 判空之后，
+    // 这样「让出次数 == 实际开库次数」，判据的下界才算得出来）。
+    await yieldToLoop()
     try {
       withDb(sh.file, (db) => {
         for (const t of wanted) {
@@ -231,16 +235,16 @@ function loadRoomData(decryptedDir: string): RoomMemberData {
  * @param selfUsername - 当前账号（用于把自己从人物节点里剔除）。
  * @returns 图谱快照。
  */
-export function queryGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot {
+export async function queryGraph(decryptedDir: string, selfUsername?: string): Promise<GraphSnapshot> {
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
     shardCatalogSig(decryptedDir, ['message']),
   ].join('|')
-  return cachedBySig('graph:' + decryptedDir + '|' + (selfUsername ?? ''), sig, () => computeGraph(decryptedDir, selfUsername))
+  return cachedBySigAsync('graph:' + decryptedDir + '|' + (selfUsername ?? ''), sig, () => computeGraph(decryptedDir, selfUsername))
 }
 
-function computeGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot {
+async function computeGraph(decryptedDir: string, selfUsername?: string): Promise<GraphSnapshot> {
   const nodes: GraphSnapshot['nodes'] = []
   const sessionPath = join(decryptedDir, 'session', 'session.db')
 
@@ -261,7 +265,7 @@ function computeGraph(decryptedDir: string, selfUsername?: string): GraphSnapsho
   }
 
   const names = contactMeta(decryptedDir).names
-  const counts = loadMessageCounts(decryptedDir, talkers)
+  const counts = await loadMessageCounts(decryptedDir, talkers)
   const meta = loadContactMeta(decryptedDir)
   const roomData = loadRoomData(decryptedDir)
   const selfWxid = selfUsername ? cleanWxid(selfUsername) : ''

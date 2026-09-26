@@ -5573,13 +5573,14 @@ function remarkClassKey(remark) {
   if (prefix.replace(PUNCT_RE, "").length < REMARK_KEY_MIN_PREFIX) return "";
   return prefix + digits;
 }
-function loadMessageCounts(decryptedDir, usernames) {
+async function loadMessageCounts(decryptedDir, usernames) {
   const counts = /* @__PURE__ */ new Map();
   const tableToUser = /* @__PURE__ */ new Map();
   for (const u of usernames) tableToUser.set("Msg_" + createHash5("md5").update(u, "utf8").digest("hex"), u);
   for (const sh of shardCatalog(decryptedDir)) {
     const wanted = [...sh.tables.keys()].filter((t) => tableToUser.has(t) && !counts.has(tableToUser.get(t) ?? ""));
     if (wanted.length === 0) continue;
+    await yieldToLoop();
     try {
       withDb(sh.file, (db) => {
         for (const t of wanted) {
@@ -5693,15 +5694,15 @@ function loadRoomData(decryptedDir) {
   }
   return out;
 }
-function queryGraph(decryptedDir, selfUsername) {
+async function queryGraph(decryptedDir, selfUsername) {
   const sig = [
     fileSigOf(join18(decryptedDir, "session", "session.db")),
     fileSigOf(join18(decryptedDir, "contact", "contact.db")),
     shardCatalogSig(decryptedDir, ["message"])
   ].join("|");
-  return cachedBySig("graph:" + decryptedDir + "|" + (selfUsername ?? ""), sig, () => computeGraph(decryptedDir, selfUsername));
+  return cachedBySigAsync("graph:" + decryptedDir + "|" + (selfUsername ?? ""), sig, () => computeGraph(decryptedDir, selfUsername));
 }
-function computeGraph(decryptedDir, selfUsername) {
+async function computeGraph(decryptedDir, selfUsername) {
   const nodes = [];
   const sessionPath = join18(decryptedDir, "session", "session.db");
   const talkers = [];
@@ -5720,7 +5721,7 @@ function computeGraph(decryptedDir, selfUsername) {
     }
   }
   const names = contactMeta(decryptedDir).names;
-  const counts = loadMessageCounts(decryptedDir, talkers);
+  const counts = await loadMessageCounts(decryptedDir, talkers);
   const meta = loadContactMeta(decryptedDir);
   const roomData = loadRoomData(decryptedDir);
   const selfWxid = selfUsername ? cleanWxid2(selfUsername) : "";
@@ -28582,7 +28583,7 @@ var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("g
   getAnnual() {
     return queryAnnual(this._dirs.decrypted);
   }
-  getGraph() {
+  async getGraph() {
     return queryGraph(this._dirs.decrypted, this.selfUsername());
   }
   getMoments(options) {
