@@ -12,7 +12,7 @@ import { SessionAsk } from './SessionAsk.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { apiBuildSearchIndex, apiCancelSearch, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiBuildSearchIndex, apiCancelSearch, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
@@ -26,6 +26,7 @@ import { useChatsThread } from './chats-thread.tsx'
 import { useChatsMsgSearch } from './chats-msg-search.tsx'
 import { useChatsGroupInfo } from './chats-group-info.tsx'
 import { useChatsEdit } from './chats-edit.tsx'
+import { useChatsCalendar } from './chats-calendar.ts'
 import { useChatsExport } from './chats-export.tsx'
 // 类型与值要分开转发：`ChatView`/`ViewerImage` 是 type，Rollup 找不到运行期导出会直接构建失败
 export type { ChatView } from './chats-support.tsx'
@@ -296,75 +297,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
   const { activeSearchJobRef, buildIndex, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen } = useChatsMsgSearch({ cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen })
   const chatlogOpen = chatlogStack.at(-1) ?? null
-  const [calYear, setCalYear] = useState(new Date().getFullYear())
-  const [calMonth, setCalMonth] = useState(new Date().getMonth() + 1)
-  const [calCounts, setCalCounts] = useState<Record<string, number>>({})
-  const [calLoading, setCalLoading] = useState(false)
-
-  const calTotal = useMemo(() => Object.values(calCounts).reduce((a, b) => a + b, 0), [calCounts])
-  const calActiveDays = useMemo(() => Object.values(calCounts).filter(n => n > 0).length, [calCounts])
-  const calAvg = useMemo(() => (calActiveDays > 0 ? Math.round(calTotal / calActiveDays) : 0), [calTotal, calActiveDays])
-  const calTop = useMemo(() => {
-    let best = 0
-    let bestDay = 0
-    for (const [k, v] of Object.entries(calCounts)) {
-      const d = Number(k)
-      if (Number.isFinite(d) && v > best) { best = v; bestDay = d }
-    }
-    return best > 0 ? { day: bestDay, count: best } : null
-  }, [calCounts])
-  const calFirstDow = useMemo(() => {
-    const dow = new Date(calYear, calMonth - 1, 1).getDay()
-    return dow === 0 ? 6 : dow - 1
-  }, [calYear, calMonth])
-  const calDays = useMemo(() => new Date(calYear, calMonth, 0).getDate(), [calYear, calMonth])
-  const calHeat = (cnt: number): string => {
-    if (cnt <= 0) return 'transparent'
-    const alpha = Math.min(0.15 + cnt / 200, 0.85)
-    return 'rgba(34, 211, 238, ' + alpha.toFixed(3) + ')'
-  }
-
-  const openCalendar = useCallback(async (): Promise<void> => {
-    if (!curSession) return
-    setCalOpen(true)
-    setCalLoading(true)
-    setCalCounts({})
-    try {
-      const r = await apiGetDailyCounts({ username: curSession.username, year: calYear, month: calMonth })
-      setCalCounts(r.counts)
-    } catch (e) {
-      setMsgError((e as Error).message)
-    } finally {
-      setCalLoading(false)
-    }
-  }, [curSession, calYear, calMonth])
-
-  const switchCalMonth = useCallback(async (delta: number): Promise<void> => {
-    let m = calMonth + delta
-    let y = calYear
-    if (m < 1) { m = 12; y -= 1 }
-    if (m > 12) { m = 1; y += 1 }
-    setCalMonth(m)
-    setCalYear(y)
-    if (!curSession) return
-    setCalLoading(true)
-    setCalCounts({})
-    try {
-      const r = await apiGetDailyCounts({ username: curSession.username, year: y, month: m })
-      setCalCounts(r.counts)
-    } catch (e) {
-      setMsgError((e as Error).message)
-    } finally {
-      setCalLoading(false)
-    }
-  }, [curSession, calMonth, calYear])
-
-  const jumpToDay = useCallback((day: number): void => {
-    const startTs = Math.floor(new Date(calYear, calMonth - 1, day, 0, 0, 0, 0).getTime() / 1000)
-    setCalOpen(false)
-    if (curSession) void openSessionAndLocate(curSession.username, undefined, startTs)
-  }, [calYear, calMonth, curSession, calOpen])
-
+  
   const sessionSearch = searchMode === 'session' ? search : ''
   const sessionSearching = sessionSearch.trim() !== ''
   // 普通会话列表：分页逐页加载；会话搜索时一次性拉满 500 条（用户主动操作），保证搜索结果完整。
@@ -535,6 +468,10 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   /** 菜单项分发：把「声明式条目」落到具体的面板动作上。 */
   const { changeView, loadMore, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgEndRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef })
+const {
+    calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calTop, calTotal, calYear,
+    jumpToDay, openCalendar, switchCalMonth,
+  } = useChatsCalendar({ curSession, openSessionAndLocate, setCalOpen, setMsgError })
   const runMenuAction = useCallback((item: MsgMenuItem, m: WechatMessage): void => {
     switch (item.action) {
       case 'copyText': copyMsgText(item.arg ?? ''); break
