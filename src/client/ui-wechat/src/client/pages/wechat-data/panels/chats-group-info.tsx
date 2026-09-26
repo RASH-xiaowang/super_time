@@ -7,8 +7,9 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useId, useRef, useState } from 'react'
-import type { ChatlogRecord, GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { filterMembers, memberLimitOf, memberQueryOf, profileAnchor } from './chats-member-view.ts'
 
 export interface useChatsGroupInfoInputs {
@@ -31,7 +32,7 @@ const [annExpanded, setAnnExpanded] = useState(false)
 const groupInfoTitleId = useId()
 const [profileMember, setProfileMember] = useState<GroupMember | null>(null)
 const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
-const [chatlogStack, setChatlogStack] = useState<Array<{ title: string; records: ChatlogRecord[] }>>([])
+const [chatlogStack, setChatlogStack] = useState<ChatlogFrame[]>([])
 const profileHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 const showMemberProfile = (m: GroupMember, el: HTMLElement): void => {

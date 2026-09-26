@@ -7,6 +7,7 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiCancelExportJob, apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
 import type { ChatlogRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -27,7 +28,7 @@ export interface useChatsExportInputs {
   chatlogResolving: boolean
   curSession: WechatSession | null
   setChatlogResolving: React.Dispatch<React.SetStateAction<boolean>>
-  setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
+  setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
   setPinnedCollapsed: React.Dispatch<React.SetStateAction<boolean>>
 }
 

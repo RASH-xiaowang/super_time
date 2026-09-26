@@ -7,14 +7,14 @@
  * 这样做的收益不是「少写几行」，而是：状态与老逻辑与渲染彻底分开之后，
  * 每一屏（日历、消息行、导出弹窗…）能单独搬出去配行为用例，搬的时候不必再动这棵树。
  */
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
 import { Dialog, SearchInput, Segmented } from '../ui/kit.tsx'
-import { RemoteImg } from './remote-img.tsx'
 import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
 import { ImageViewer } from './chats-media.tsx'
-import { Avatar, ChatView, IconPin, buildMsgMenu, isEnterpriseChat, openLink } from './chats-support.tsx'
+import { Avatar, ChatView, IconPin, buildMsgMenu, isEnterpriseChat } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
@@ -23,6 +23,7 @@ import { ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
 import { ChatsExportDialog } from './chats-export-dialog.tsx'
 import { ChatsGroupInfoView } from './chats-group-info-view.tsx'
+import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
@@ -68,9 +69,9 @@ export interface ChatsViewProps {
       calTotal: number
       calYear: number
       changeView: (next: ChatView) => void
-      chatlogOpen: { title: string; records: ChatlogRecord[] } | null
+      chatlogOpen: ChatlogFrame | null
       chatlogResolving: boolean
-      chatlogStack: Array<{ title: string; records: ChatlogRecord[] }>
+      chatlogStack: ChatlogFrame[]
       chooseExportDir: () => Promise<void>
       clearAllDrafts: () => Promise<void>
       clearDraft: () => Promise<void>
@@ -168,7 +169,7 @@ export interface ChatsViewProps {
       setAnnExpanded: React.Dispatch<React.SetStateAction<boolean>>
       setBatchMode: React.Dispatch<React.SetStateAction<boolean>>
       setCalOpen: React.Dispatch<React.SetStateAction<boolean>>
-      setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
+      setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
       setEditText: React.Dispatch<React.SetStateAction<string>>
       setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
       setExpCount: React.Dispatch<React.SetStateAction<number>>
@@ -477,70 +478,13 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         setExpFrom={setExpFrom} setExpTo={setExpTo} setExpTypes={setExpTypes} setExpZip={setExpZip} setExportOpen={setExportOpen}
       />
 
-      {/* merged chat log viewer (聊天记录, 支持嵌套) */}
-      {chatlogOpen && (
-        <div className={csscards.calOverlay} data-st-dialog="chats-chatlog" onClick={(e) => { if (e.target === e.currentTarget) setChatlogStack([]) }} role="dialog" aria-modal="true">
-          <div className={csscards.chatlogDialog}>
-            <div className={cssshell.calHeader}>
-              <span className={csscards.calTitle}>{chatlogOpen.title}</span>
-              <span className={cssshell.calHeaderActions}>
-                {chatlogStack.length > 1 && (
-                  <button type="button" className={csscards.calClose} title="返回上一级" onClick={() => { setChatlogStack(prev => prev.slice(0, -1)) }} aria-label="返回上一级">‹</button>
-                )}
-                <button type="button" className={csscards.calClose} title="关闭" aria-label="关闭" onClick={() => { setChatlogStack([]) }}><IconCloseOutline16 size={15} /></button>
-              </span>
-            </div>
-            <div className={cssshell.chatlogBody}>
-              {chatlogResolving && <div className={kitCss.emptyInline}>解析聊天记录…</div>}
-              {chatlogOpen.records.length === 0 && !chatlogResolving && <div className={kitCss.emptyInline}>暂无内层消息</div>}
-              {chatlogOpen.records.map((r, idx) => {
-                const rt = r.renderType || (r.isImage ? 'image' : 'text')
-                const nested = rt === 'chatHistory'
-                const link = r.link || r.url || ''
-                const nestedCount = (r.nested ?? []).length
-                // head 来自聊天记录卡片 XML 的 <sourceheadurl>，是**未校验的原始地址**
-                // （实测 360 条内层记录里 193 条是 http）。渲染层不许自己去要它 —— 交给
-                // 后端代理（M23）：主机白名单 + 两个出网开关 + 操作记录 + 本机缓存都才成立。
-                // 取不到（含 http 地址）就回退到首字母，与「本机没有这张头像」同一形状。
-                const headFallback = <span>{(r.name || '?').slice(0, 1)}</span>
-                return (
-                  <div key={idx} className={cssshell.chatlogRow}>
-                    <div className={csscards.chatlogAvatar}>
-                      <RemoteImg src={r.head || ''} alt="" loading="lazy"
-                        pending={headFallback} failed={headFallback} />
-                    </div>
-                    <div className={cssshell.chatlogMain}>
-                      <div className={cssshell.chatlogTop}>
-                        <span className={cssshell.chatlogName}>{r.name}</span>
-                        <span className={cssshell.chatlogTime}>{r.time}</span>
-                      </div>
-                      {nested && (
-                        <button type="button" className={csscards.chatlogNested} onClick={() => { void openNestedChatlog(r) }}>
-                          <span>📋 {r.text || '聊天记录'}（{nestedCount > 0 ? String(nestedCount) + ' 条' : '点击查看'}）</span>
-                        </button>
-                      )}
-                      {rt === 'link' && link ? (
-                        <div className={cssshell.chatlogText}><a href={link} target="_blank" rel="noopener noreferrer"
-                          onClick={(e) => { e.preventDefault(); openLink(link) }} className={csscards.msgTextLink}>{r.text || link}</a></div>
-                      ) : rt === 'voice' ? (
-                        <div className={cssshell.chatlogText}>🎤 {r.text || '[语音]'}{r.duration ? String(Math.round(Number(r.duration) / 20)) + '"' : ''}</div>
-                      ) : rt === 'video' ? (
-                        <div className={cssshell.chatlogText}>🎬 {r.text || '[视频]'}{r.duration ? String(Math.round(Number(r.duration) / 1000)) + 's' : ''}</div>
-                      ) : rt === 'emoji' ? (
-                        <div className={cssshell.chatlogText}>😀 {r.text || '[表情]'}</div>
-                      ) : rt === 'image' ? (
-                        <div className={cssshell.chatlogText}>🖼️ [图片]{r.datasize ? ' (' + r.datasize + ' 字节)' : ''}</div>
-                      ) : (
-                        <div className={cssshell.chatlogText}>{r.text || ''}</div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 聊天记录查看器（嵌套、栈式）：JSX 在 chats-chatlog-dialog.tsx，一条记录怎么读成一行在 chats-chatlog.ts */}
+      <ChatsChatlogView
+        depth={chatlogStack.length} frame={chatlogOpen} resolving={chatlogResolving}
+        onCloseAll={() => { setChatlogStack([]) }}
+        onBack={() => { setChatlogStack(prev => prev.slice(0, -1)) }}
+        openNestedChatlog={openNestedChatlog}
+      />
 
       {/* 编辑消息副本：写入本地解密副本，原文在 message_edits.db 里留底，可用「恢复原文」回退 */}
       <Dialog

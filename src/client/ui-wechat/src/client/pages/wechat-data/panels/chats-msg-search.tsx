@@ -7,17 +7,18 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiBuildSearchIndex, apiGetSearchIndexStatus, apiSearchMessages } from '../api.ts'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
-import type { ChatlogRecord, SearchHit } from '@deepseek-ai/dsh-wechat-data/types'
+import type { SearchHit } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsMsgSearchInputs {
   cancelActiveSearch: () => void
-  chatlogStack: ReadonlyArray<{ title: string; records: ChatlogRecord[] }>
+  chatlogStack: ReadonlyArray<ChatlogFrame>
   editedOpen: boolean
   exportOpen: boolean
-  setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
+  setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
   setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
   setExportOpen: React.Dispatch<React.SetStateAction<boolean>>
 }

@@ -7,6 +7,7 @@
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
  */
 
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { apiGetGroupInfo, apiGetMessages, readRenderCache, writeRenderCache } from '../api.ts'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
@@ -15,7 +16,7 @@ import { ChatView } from './chats-support.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useChatsPolling } from './chats-polling.ts'
 import { makeMsgRow } from './chats-msg-row.tsx'
-import type { ChatlogRecord, GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsThreadInputs {
   /**
@@ -53,7 +54,7 @@ export interface useChatsThreadInputs {
   sessions: readonly WechatSession[]
   setAnnCanExpand: React.Dispatch<React.SetStateAction<boolean>>
   setAnnExpanded: React.Dispatch<React.SetStateAction<boolean>>
-  setChatlogStack: React.Dispatch<React.SetStateAction<Array<{ title: string; records: ChatlogRecord[] }>>>
+  setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
   setCurSession: React.Dispatch<React.SetStateAction<WechatSession | null>>
   setCursor: React.Dispatch<React.SetStateAction<number>>
   setCursorLocalId: React.Dispatch<React.SetStateAction<number | undefined>>
