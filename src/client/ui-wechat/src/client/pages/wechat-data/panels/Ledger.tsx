@@ -2,8 +2,8 @@
  * 资金账本面板 — 转账/红包按月汇总：收入/支出/净额、联系人排行、红包手气、
  * 异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { useCallback, useEffect, useState } from 'react'
+import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Card, CellPrimary, DataTable, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
@@ -50,12 +50,9 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
   const [data, setData] = useState<LedgerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 统计耗时（秒）：给"正在统计"一个可见的进度感。
-  // 后端单次 getLedger 实测 400–550ms，但它是**同步 SQLite**，会排在其它重查询后面 ——
-  // 刚打开总览时（getOverviewInsights 要扫 21 万条消息）本页可能要等十几秒，
-  // 只写一句"正在统计资金账本…"用户无从判断是卡了还是在跑。
-  const [elapsed, setElapsed] = useState(0)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // 首次统计的走秒（`loading && !data` 才计时：有缓存的后台静默刷新不该白闪）。
+  // 2026-09-26 抽成 hooks.tsx 的 useElapsedSeconds，媒体资产/存储/群聊分析共用同一套。
+  const elapsed = useElapsedSeconds(loading && data === null)
   // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice()
 
@@ -79,18 +76,6 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
 
   useEffect(() => { void load(month) }, [month, load])
 
-  // 统计计时：加载开始走秒，结束清零
-  useEffect(() => {
-    if (loading) {
-      const t0 = Date.now()
-      setElapsed(0)
-      timerRef.current = setInterval(() => { setElapsed(Math.round((Date.now() - t0) / 1000)) }, 1000)
-    } else if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
-    return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null } }
-  }, [loading])
 
   const exportCsv = useCallback((): void => {
     if (!data) return

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, writeRenderCache } from '../api.ts'
 import type { AnnualReviewShape } from '../api.ts'
 import { ListSkeleton } from './hooks.tsx'
-import { PanelHeader } from '../ui/kit.tsx'
+import { EmptyState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './annual.module.css'
 import { avatarColors } from '../utils/format.ts'
@@ -562,7 +562,15 @@ export function AnnualPanel(): React.JSX.Element {
         {exportMsg && <div className={css.hint}>{exportMsg}</div>}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {!data && loading && <ListSkeleton rows={6} />}
-        {!data && !loading && !error && <div className={css.empty}>这一年还没有可统计的消息。</div>}
+        {!data && !loading && !error && (
+          <div className={css.empty}>
+            <EmptyState
+              icon="📅"
+              title={`${year ?? ''} 年没有可统计的消息`}
+              desc="年度回顾只统计本机已解密的聊天库。换一个年份看看，或先在「软件设置 → 数据库密钥」完成解密。"
+            />
+          </div>
+        )}
         {data && (
           /* 固定 12 列网格：5 行内容 + 1 行页脚，总高恒等于容器高 → 一屏无滚动。             窄窗/矮窗由 CSS 媒体查询退回「瀑布流 + 滚动」。 */
           <div className={css.wrap} data-loading={loading || undefined} data-compact={compact || undefined}>

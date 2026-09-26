@@ -154,6 +154,14 @@
 /* ── 单元格排版 ─────────────────────────────────────── */
 .tdPick { text-align: center; }
 
+/* 下面三个类存在的唯一理由是让 `[class*='tdX']` 列宽规则能命中：
+   类名必须在这份文件里**被定义过**才会进 CSS Modules 对象，否则
+   `className={css.tdX}` 是 undefined，`<th>` 上根本没这个类（2026-09-26 查出）。
+   声明本身是表头该有的 nowrap，不是凑数。 */
+.tdKind { white-space: nowrap; }
+.tdSize { white-space: nowrap; }
+.tdRows { white-space: nowrap; }
+
 .tdTime {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

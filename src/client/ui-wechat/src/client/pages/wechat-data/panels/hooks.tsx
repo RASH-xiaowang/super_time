@@ -166,6 +166,39 @@ export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wecha
  * @param durationMs - 默认存活时长；只在挂载时取一次，逐次微调请用 `flash(value, ms)`。
  * @returns `notice` 当前提示；`flash` 写入并自动消失；`hold` 写入且常驻；`clear` 立即清空。
  */
+/**
+ * 慢查询的「走了几秒」计时器。
+ *
+ * ── 为什么每个慢面板都需要它 ──────────────────────────────────────────────
+ * 后端是**同步 SQLite**，单次查询会排在别的重查询后面 —— 资金账本在「数据总览」的
+ * 全量统计（扫 21 万条消息）跑完前可能要等十几秒。只给一行「正在统计…」，
+ * 用户无从区分"在跑"还是"卡死"（R3 实测：802px 的内容区里留了 608px 连续空白）。
+ * 有了秒数，等待就有了可读的进度感，而且不需要后端配合。
+ *
+ * ── 语义 ─────────────────────────────────────────────────────────────────
+ * `active` 转 true 时清零并开始每秒 +1；转 false 时停表并**保留**最后一次读数
+ * （面板紧接着就渲染数据了，"闪回 0s"没有意义）；再次转 true 会重新清零。
+ *
+ * ⚠️ 传进来的 `active` 应当是**首屏加载**（`loading && data === null`），
+ * 不要直接传 `loading` —— 有渲染缓存时的后台静默刷新会白闪一次走秒。
+ * @param active - 是否处于首屏加载。
+ * @returns 已用整秒数。
+ */
+export function useElapsedSeconds(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    if (!active) return
+    const t0 = Date.now()
+    setElapsed(0)
+    timerRef.current = setInterval(() => { setElapsed(Math.round((Date.now() - t0) / 1000)) }, 1000)
+    return () => {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+    }
+  }, [active])
+  return elapsed
+}
+
 export function useTransientNotice<T = string>(durationMs: number = DEFAULT_NOTICE_MS): {
   notice: T | null
   flash: (value: T, ms?: number) => void

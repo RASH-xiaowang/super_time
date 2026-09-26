@@ -3,7 +3,7 @@
  * 清单。空间治理的可执行动作（去重/清理）为后续项。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ListSentinel, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetMediaAssets, readRenderCache, writeRenderCache } from '../api.ts'
 import type { MediaAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
@@ -44,13 +44,24 @@ export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) =>
   useWechatDataUpdated(() => { void load() })
 
   const { count: dupCount, sentinelRef } = useProgressiveList(data?.duplicates.length ?? 0, 100)
+  // 首次盘点走秒（口径见 hooks.tsx#useElapsedSeconds）
+  const elapsed = useElapsedSeconds(loading && data === null)
 
   return (
     <div className={kitCss.panelShell}>
       <PanelHeader title="媒体资产馆" desc="图片/文件/视频规模 · 重复资产清单 · 本地盘点" />
 
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !data && <div className={kitCss.emptyInline}>统计中…</div>}
+      {/* 首次盘点：走秒 + 与真实布局同形的骨架（原来是干等一行「统计中…」）。 */}
+      {loading && !data && (
+        <>
+          <div className={kitCss.emptyInline}>
+            {`正在盘点本机媒体资产…已用 ${elapsed}s · 首次盘点要汇总本机文件索引，若刚启动后台可能仍在同步，请稍候`}
+          </div>
+          <ListSkeleton rows={6} grid minCol={180} />
+          <ListSkeleton rows={4} />
+        </>
+      )}
 
       {data && !loading && (
         <>

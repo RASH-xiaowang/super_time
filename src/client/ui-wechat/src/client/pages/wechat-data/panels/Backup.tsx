@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ListSkeleton } from './hooks.tsx'
 import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup, readRenderCache, writeRenderCache } from '../api.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { Dialog, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { Dialog, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
@@ -203,7 +203,11 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
         {loading && <ListSkeleton rows={4} />}
         {!loading && items.length === 0 && (
           <div className={css.empty}>
-            暂无备份 · 点上方「创建备份」生成第一个本地快照（目录拷贝），或「加密备份」生成 AES-256 加密包
+            <EmptyState
+              icon="💾"
+              title="暂无备份"
+              desc="「创建备份」生成目录快照（原样拷贝，可增量）；「加密备份」生成 AES-256 加密包（适合存到外部盘）。两者都只写本机，不会上传。"
+            />
           </div>
         )}
         {!loading && items.map(b => (

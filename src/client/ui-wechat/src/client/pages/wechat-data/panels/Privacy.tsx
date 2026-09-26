@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiExportCsv, apiGetPrivacyScan, readRenderCache, writeRenderCache } from '../api.ts'
 import type { PrivacySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, clickableKey, PanelHeader } from '../ui/kit.tsx'
+import { Card, clickableKey, EmptyState, PanelHeader } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -253,7 +253,15 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
               ))}
             </Card>
           )}
-          {totalHits === 0 && <div className={css.empty}>无命中 · 本地消息中未发现敏感信息</div>}
+          {totalHits === 0 && (
+            <div className={css.empty}>
+              <EmptyState
+                icon="✅"
+                title="没有命中"
+                desc="按上面 6 类规则在本地消息里逐条比对，没有发现敏感信息。这个结论只覆盖本机已解密的消息库，不代表对外发送过什么。"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

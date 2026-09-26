@@ -10,7 +10,7 @@ import { Card, CellPrimary, clickableKey, DataTable, Mono, PanelHeader } from '.
 import type { DataColumn } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import { fmtBytes, fmtSharePct } from '../utils/format.ts'
-import { useWechatDataUpdated } from './hooks.tsx'
+import { useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
 
 type StorageStats = StorageSnapshot
 
@@ -25,6 +25,8 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
   const [stats, setStats] = useState<StorageStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 首次统计走秒（口径见 hooks.tsx#useElapsedSeconds）
+  const elapsed = useElapsedSeconds(loading && stats === null)
 
   const load = async (): Promise<void> => {
     setError(null)
@@ -125,6 +127,9 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
 
       {loading && stats === null && (
         <div className={css.skeletonWrap}>
+          <div className={kitCss.emptyInline}>
+            {`正在统计存储占用…已用 ${elapsed}s · 首次统计要汇总 message_resource 全表，若刚启动可能偏慢，请稍候`}
+          </div>
           <div className={css.skelHero}><div className={css.skelBlock} /><div className={css.skelBlock} /></div>
           <div className={css.grid}>
             <section className={css.card}>

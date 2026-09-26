@@ -101,7 +101,12 @@
 - `DSH_WECHAT_DECRYPTED_DIR` / `DSH_WECHAT_DECODED_DIR` — 旧版显式固定路径（设置后绕过数据根，不再自举）
 - `DSH_WECHAT_BASE_DIR` — 原始微信目录（可选，`.dat` 回退用）
 
-## Remote 方法（gateway.ts）
+## Remote 方法
+
+> **完整清单以自动生成的 `docs/API.md` 为准（当前 172 个）** —— 下面只是分组概览，
+> 历史上一度在这里手抄全表，结果漏了一大半还不断过期。改接口请跑 `npm run docs:api`，
+> 不要再往这里加方法名。
+
 
 | 分组 | 方法 |
 |---|---|
@@ -118,21 +123,22 @@
 
 ## 前端
 
-浏览器端在 `packages/client/ui-pages/src/client/pages/wechat-data/`：
+浏览器端在 `src/client/ui-wechat/src/client/pages/wechat-data/`：
 
 - `api.ts` — Remote 客户端（`setWechatRemote` 注入，无 HTTP 依赖）
-- `WechatDataPanel.tsx` — 32 页签主容器
+- `WechatDataPanel.tsx` — 37 页签主容器（`nav-config.ts` 是导航真源）
 - `panels/` — 各面板 + 图片查看器/日历/搜索
 - `utils/format.ts` — 迁移的格式化/图标工具
 
 ## 构建
 
 ```sh
-npx tsc -b packages/host/wechat-data/tsconfig.json   # 类型检查
-npx tsdown --env.DSH_BUILD_FACE host                 # 构建 lib + typert 生成
-pnpm --filter @deepseek-ai/dsh-client-ui-pages run bundle
-pnpm --filter @deepseek-ai/dsh-api-remotes run bundle
+npm run build:backend   # esbuild 打包 → src/backend/wechat-data/lib/index.js（入仓）
+npm run build:types     # 生成 lib/types/**（入仓，与源必须同步）
+npm run build:ui        # 前端产物
 ```
+
+> 上面三条都是**仓库根**的 npm scripts；旧的 `packages/*` pnpm workspace 路径已废弃。
 
 ## 降级项
 

@@ -120,7 +120,7 @@ rerank 的 `texts` 天然是 `query + N 个候选文档` ⇒ **必须一次过 g
 新增 @Remote 方法要同步：`api.ts` 的 `interface WechatRemote`（`src/backend/wechat-data/tests/remote-contract.spec.ts:62-71` 双向无差集）、
 `docs/API.md`（生成）、`src/client/ui-app/onboarding/OnboardingShell.tsx:451` 的 `'152'`、
 `src/backend/tests/api-docs.spec.ts:34-36` 与 `:80-95`、
-`src/client/README.md:18`（**这行还写着过期的「150 个 Remote 方法」**）。长调用还要进 `src/backend/backend-rpc.js:31-55` 的 `LONG_CALL_METHODS`。
+`src/client/README.md:18` 的那一版计数（2026-09-26 已从 158 改准为 172）。长调用还要进 `src/backend/backend-rpc.js` 的 `LONG_CALL_METHODS`。
 
 ### C7 · 缓存键必须带库 id，且只清该清的那一层
 

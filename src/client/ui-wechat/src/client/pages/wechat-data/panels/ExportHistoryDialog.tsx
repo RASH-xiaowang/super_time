@@ -419,7 +419,9 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'size',
       header: '大小',
       align: 'right',
-      className: css.tdNum,
+      // 两列共用 `.tdNum` 的排版，但列宽各不相同 ⇒ 各自再挂一个专属类，
+      // 供 `[class*='tdSize']` / `[class*='tdRows']` 定位到 `<th>`。
+      className: clsx(css.tdNum, css.tdSize),
       cell: r => <span className={css.tdNum}>{fmtSize(r.sizeBytes)}</span>,
       sortValue: r => r.sizeBytes ?? -1,
     },
@@ -427,7 +429,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'rows',
       header: '条数',
       align: 'right',
-      className: css.tdNum,
+      className: clsx(css.tdNum, css.tdRows),
       cell: r => <span className={css.tdNum}>{r.rows > 0 ? r.rows.toLocaleString() : '—'}</span>,
       sortValue: r => r.rows,
     },

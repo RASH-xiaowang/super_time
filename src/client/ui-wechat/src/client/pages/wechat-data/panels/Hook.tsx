@@ -3,7 +3,7 @@
  * 高清原图获取走本地缓存与解码，不依赖任何原生注入或桥接。
  */
 import { useEffect, useState } from 'react'
-import { LazyMount } from './hooks.tsx'
+import { LazyMount, ListSkeleton } from './hooks.tsx'
 import { apiGetDbHealth, apiGetStorageStats, apiGetWechatConfig, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ConfigSnapshot, DbHealthSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
@@ -130,7 +130,7 @@ export function HookPanel({ onNavigate, embedded = false }: {
           </div>
         )}
 
-        {loading && !error && <div className={css.empty}>正在读取配置…</div>}
+        {loading && !error && <ListSkeleton rows={3} />}
         {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
         {cfg && cfg.db_dir && (
           <Card title="当前图片能力">

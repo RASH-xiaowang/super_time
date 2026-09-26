@@ -1,8 +1,13 @@
 /**
- * 微信数据面板 — 主容器，分组导航（概览 / 会话与消息 / 联系人 / 内容资产 /
- * 财务与存储 / 洞察与行动 / 隐私与安全 / 维护与设置，共 32 页签），配置见
- * navigation 模块。数据经 DSH 后端 Remote（node:sqlite 读自有解密库），
- * 顶部显示连接状态与数据库状态弹窗。
+ * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
+ * **9 组**（概览与问答 / 报告与总结 / 会话与消息 / 联系人与社交 / 内容资产 /
+ * 资金 / 洞察与行动 / 隐私与安全 / 维护与设置），侧栏可见 **16** 项 +
+ * 底栏独立渲染的 `settings`，可路由页签共 **37**（其余 20 项 `hidden`，
+ * 靠「详情 →」或合并组段条进入）。
+ *
+ * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
+ * 分组名**只认 `nav-config.ts`** —— 改导航后请回来核对本注释，别再手写清单。
+ * 数据经 DSH 后端 Remote（node:sqlite 读自有解密库），顶部显示连接状态与数据库状态弹窗。
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, subscribeApiStatus } from './api.ts'

@@ -9,7 +9,7 @@ import { Button, Card, PanelHeader, Select, StatCard, StatGrid } from '../ui/kit
 import kitCss from '../ui/kit.module.css'
 import css from './group-insights.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
-import { useWechatDataUpdated } from './hooks.tsx'
+import { ListSkeleton, useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 
 function fmtTs(ts?: number | null): string {
@@ -33,6 +33,8 @@ export function GroupInsightsPanel({
   const [data, setData] = useState<GroupInsightsSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 首次统计走秒（口径见 hooks.tsx#useElapsedSeconds）
+  const elapsed = useElapsedSeconds(loading && data === null)
 
   const loadGroups = useCallback(async (): Promise<void> => {
     try {
@@ -102,7 +104,16 @@ export function GroupInsightsPanel({
       />
 
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && <div className={kitCss.emptyInline}>统计中…</div>}
+      {/* 首次统计：走秒 + 骨架（原来是干等一行「统计中…」）。 */}
+      {loading && (
+        <>
+          <div className={kitCss.emptyInline}>
+            {`正在统计群聊洞察…已用 ${elapsed}s · 首次统计要逐条扫这个群的消息与公告，请稍候`}
+          </div>
+          <ListSkeleton rows={6} grid minCol={200} />
+          <ListSkeleton rows={4} />
+        </>
+      )}
       {!loading && !data && !error && !username && <div className={kitCss.emptyInline}>请选择上方群聊后查看洞察</div>}
 
       {data && !loading && (

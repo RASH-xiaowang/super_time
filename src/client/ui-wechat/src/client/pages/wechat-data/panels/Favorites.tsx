@@ -8,7 +8,7 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressi
 import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { clickableKey, Dialog, EmptyState, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
@@ -375,7 +375,17 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
       <div className={css.scroll} ref={scrollRef}>
         {loading && <ListSkeleton rows={8} />}
         {error && <div className={kitCss.error} role="alert">⚠️ 收藏数据接口尚未就绪（{error}）</div>}
-        {!loading && !error && filtered.length === 0 && <div className={css.empty}>{search || type !== 'all' ? '无匹配收藏' : '暂无收藏'}</div>}
+        {!loading && !error && filtered.length === 0 && (
+          <div className={css.empty}>
+            <EmptyState
+              icon="⭐"
+              title={search || type !== 'all' ? '没有匹配的收藏' : '暂无收藏'}
+              desc={search || type !== 'all'
+                ? '换个关键词，或把类型筛选切回「全部」再试。'
+                : '这里读的是微信本机的收藏夹；在微信里收藏过的图文会自动出现在这里。若刚启动，后台可能仍在同步。'}
+            />
+          </div>
+        )}
         {!loading && !error && filtered.slice(0, favCount).map((f) => {
           const info = parseFavItem(f)
           const preview = info.items.length > 0 ? info.items.filter(p => p.kind === 'text').map(p => p.text || '').join('\n') : info.desc

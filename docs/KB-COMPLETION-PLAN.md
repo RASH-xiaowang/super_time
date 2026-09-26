@@ -104,7 +104,7 @@
 
 ### C7 · 计数与产物契约
 
-- 侧栏入口 **16** / 可路由 **37** / Remote **150** —— 新增 `@Remote` 要**同步三处** + 重生成 `docs/API.md`（`docs:api:check` 会守）。
+- 侧栏入口 **16** / 可路由 **37** / Remote **172** —— 新增 `@Remote` 要**同步三处** + 重生成 `docs/API.md`（`docs:api:check` 会守）。
 - 产物真源在 `src/backend/wechat-data/lib/`（不是仓库根的 `lib/`）。
 - 校验**必须含 `build:ui`**：CSS Modules 语法错只在 postcss 暴露，`ui:smoke` 对 CSS 无感。
 

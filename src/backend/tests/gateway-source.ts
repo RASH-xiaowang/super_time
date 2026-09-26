@@ -2,7 +2,7 @@
  * 「同一个类、两个文件」的联合读法（M21 结构刀）。
  *
  * `WechatDataGateway` 原先是 `gateway.ts` 里的一整个类；现在拆成继承链：
- * 方法面（161 个 `@Remote` 壳）留在 `gateway.ts`，状态 / 构造 / 共享私有辅助 /
+ * 方法面（172 个 `@Remote` 壳）留在 `gateway.ts`，状态 / 构造 / 共享私有辅助 /
  * 各域处理器的 ctx 装配在 `gateway-core.ts` 的 `GatewayCore` 里。
  *
  * 于是**按路径读源码的守卫**只读 `gateway.ts` 就会看不到接线（构造器里的实时同步、

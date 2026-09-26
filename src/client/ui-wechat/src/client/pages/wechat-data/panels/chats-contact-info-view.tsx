@@ -14,6 +14,9 @@ import { useEffect, useId, useState } from 'react'
 import { apiGetContact360 } from '../api.ts'
 import type { Contact360Snapshot, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { EmptyState } from '../ui/kit.tsx'
+import kitCss from '../ui/kit.module.css'
+import { ListSkeleton } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
 import css from './chats-contact-info.module.css'
 
@@ -73,8 +76,8 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         <button type="button" className={css.close} title="关闭" aria-label="关闭" onClick={onClose}><IconCloseOutline16 size={15} /></button>
       </div>
       <div className={css.body}>
-        {loading && <div className={css.empty}>加载中…</div>}
-        {err && <div className={css.empty}>{err}</div>}
+        {loading && <ListSkeleton rows={4} />}
+        {err && <div className={kitCss.error} role="alert">⚠️ {err}</div>}
         {!loading && !err && data && (
           <>
             <div className={css.profile}>
@@ -135,7 +138,15 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
             </div>
           </>
         )}
-        {!loading && !err && !data && <div className={css.empty}>暂无数据</div>}
+        {!loading && !err && !data && (
+          <div className={css.empty}>
+            <EmptyState
+              icon="🧑"
+              title="读不到这个联系人的信息"
+              desc="可能是该会话已不在本机库里，或它没有任何可比对的聊天记录。关掉这个抽屉、重新选中会话再试一次。"
+            />
+          </div>
+        )}
       </div>
     </div>
   )
