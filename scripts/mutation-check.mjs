@@ -492,6 +492,14 @@ const MUTATIONS = [
     to: 'if (st && st.ok !== false && st.value) outboundBlocked = false;',
     spec: 'src/backend/tests/ipc-wechat.spec.ts',
   },
+  {
+    id: 'M60-cachedfetch-await-on-hit',
+    why: '把 cachedFetch 的后台刷新改回「命中也先 await 完整请求」（P0-3 修掉的形状）—— 二次打开面板又要转圈，SWR 变成带兜底的 fetch-through',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/cache.ts',
+    from: '      void timedFetch(key, fetcher).then(',
+    to: '      await timedFetch(key, fetcher).then(',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/cache-swr.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

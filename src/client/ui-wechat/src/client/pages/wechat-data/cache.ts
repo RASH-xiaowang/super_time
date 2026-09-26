@@ -172,16 +172,71 @@ export async function timedFetch<T>(key: string, fetcher: () => Promise<T>): Pro
   }
 }
 
+/**
+ * 后台刷新完成后广播的 DOM 事件前缀。
+ *
+ * 真 SWR 的另一半：命中缓存时界面先画旧快照，随后后台拿到新值 —— 新值只写进缓存的话，
+ * 界面会一直停在旧数据上（用户看到的永远是「上一次打开时的那份」）。所以刷新完成要广播一条
+ * **按接口族**的事件，让在用这个接口的面板自己重读一次。
+ * 分族（`messages` / `sessions` / `moments`…）而不是复用宿主的 `dsh-wechat-data-updated`：
+ * 后者会让所有面板一起重拉（P2-4 记着的那场风暴）。
+ */
+export const SNAPSHOT_REFRESHED_EVENT = 'dsh-snapshot-refreshed'
+
+/** 同一键的后台刷新去重（否则一次事件风暴会把同一个接口打若干遍）。 */
+const _revalidating = new Set<string>()
+
+/** 通知这个键的订阅者 + 广播该接口族（两者都是 best-effort）。 */
+function notifySnapshotRefreshed(key: string): void {
+  for (const fn of _snapshotListeners.get(key) ?? []) { try { fn() } catch { /* 一个订阅者不许挡住别人 */ } }
+  if (typeof window === 'undefined') return
+  const family = key.split(':')[0] ?? key
+  try {
+    window.dispatchEvent(new CustomEvent(`${SNAPSHOT_REFRESHED_EVENT}:${family}`, { detail: { key } }))
+  } catch { /* 没有 CustomEvent 的环境里事件广播只是优化，不是正确性 */ }
+}
+
+/**
+ * 写回缓存，**仅当值真的变了**；返回是否写了。
+ *
+ * 为什么不能无条件写 + 广播：订阅者被通知后会重读一次同一个接口 ⇒ 又是一次后台刷新
+ * ⇒ 又是一条广播 —— 数据一个字没变也能自转成环。按「变了才播」收敛，
+ * 这跟 P2-4 抱怨的「每约 10 秒把整棵缓存清掉」是同一类问题的两面。
+ * 比较用序列化结果（本就要 `JSON.stringify` 一次），不引入额外的模块级状态。
+ */
+function cacheSetIfChanged(key: string, value: unknown): boolean {
+  const vJson = JSON.stringify(value)
+  try {
+    const prev = localStorage.getItem(CACHE_PREFIX + key)
+    if (prev !== null) {
+      const env = JSON.parse(prev) as CacheEnvelope
+      if (JSON.stringify(env.v) === vJson) return false
+    }
+    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ at: Date.now(), v: value } satisfies CacheEnvelope))
+    return true
+  } catch {
+    /* localStorage 满 / 序列化失败：退回无条件写一次 */
+    try { cacheSet(key, value) } catch { /* 放弃缓存 */ }
+    return true
+  }
+}
+
 export async function cachedFetch<T>(key: string, fetcher: () => Promise<T>, ttlMs = CACHE_TTL_DEFAULT): Promise<T> {
   const hit = cacheGet(key, ttlMs) as T | null
   if (hit !== null && !isEmptySnapshot(hit)) {
-    try {
-      const fresh = await timedFetch(key, fetcher)
-      cacheSet(key, fresh)
-      return fresh
-    } catch {
-      return hit
+    // 真 SWR（P0-3）：**命中就立刻回**，后台再刷新并广播。
+    // 之前的写法是「命中也 await 完整请求，只有失败才用缓存」—— 那叫 fetch-through 带兜底，
+    // 不叫 stale-while-revalidate，而注释一直写着后者（实现与注释不符）。代价是可看见的：
+    // `sessions`(30s) / `messages`(5s) / `moments` / `records` / `privacy` / `group` / `pay` /
+    // `daily` / `kb-model` 九个接口二次打开都要等完整后端 —— 就是「切回面板还在转圈」。
+    if (!_revalidating.has(key)) {
+      _revalidating.add(key)
+      void timedFetch(key, fetcher).then(
+        (fresh) => { if (cacheSetIfChanged(key, fresh)) notifySnapshotRefreshed(key) },
+        () => { /* 后台刷新失败：留着旧快照，下次再试（与旧写法同样的降级） */ },
+      ).finally(() => { _revalidating.delete(key) })
     }
+    return hit
   }
   const fresh = await timedFetch(key, fetcher)
   cacheSet(key, fresh)

@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { apiGetGroupInfo, apiGetMessages, apiGetNewMessages, readRenderCache, writeRenderCache } from '../api.ts'
+import { SNAPSHOT_REFRESHED_EVENT, apiGetGroupInfo, apiGetMessages, apiGetNewMessages, readRenderCache, writeRenderCache } from '../api.ts'
 import { useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { fmtMsgClockSec } from '../utils/format.ts'
 import { MessageRenderItem, renderKindOf } from '../utils/message-items.ts'
@@ -347,7 +347,13 @@ useEffect(() => {
     // 表现就是「有新消息时会话列表跳动一次」。
   }
   window.addEventListener('dsh-wechat-data-updated', onUpdated)
-  return () => { window.removeEventListener('dsh-wechat-data-updated', onUpdated) }
+  // SWR 的另一半（P0-3）：`apiGetMessages` 命中缓存时先画旧快照、后台才刷新，
+  // 新值落地后按接口族广播 —— 不订阅它，界面就会一直停在「上一次打开时的那份」。
+  window.addEventListener(`${SNAPSHOT_REFRESHED_EVENT}:messages`, onUpdated)
+  return () => {
+    window.removeEventListener('dsh-wechat-data-updated', onUpdated)
+    window.removeEventListener(`${SNAPSHOT_REFRESHED_EVENT}:messages`, onUpdated)
+  }
 }, [pollNew, reconcileRecent])
 
 const openGroupInfo = (): void => {

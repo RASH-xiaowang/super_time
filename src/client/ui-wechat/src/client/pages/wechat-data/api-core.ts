@@ -115,6 +115,7 @@ import type {
   LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
+  SNAPSHOT_REFRESHED_EVENT,
   cachedFetch,
   cachedGet,
   invalidateSnapshotCache,
@@ -154,6 +155,7 @@ import { AnnualReviewShape } from './api-status.ts'
 // 注意：`export … from` **不会**把名字带进本模块作用域，而下面这些函数在 api.ts 内部
 // 也会被调用（各种失效/写缓存路径），所以既要 import（供内部用）又要 export from（供外部用）。
 export {
+  SNAPSHOT_REFRESHED_EVENT,
   invalidateSnapshotCache,
   invalidateWechatCache,
   readRenderCache,
