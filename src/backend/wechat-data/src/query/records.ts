@@ -193,8 +193,12 @@ export function queryRecords(
       const b = base.trim()
       const t = time.trim()
       if (!b) return t ? ' WHERE ' + t : ''
-      if (!t) return b
+      // 这里以前是 `if (!t) return b`：`b` 是被 trim 过的，**开头那个空格就是被 trim 掉的**，
+      // 于是拼出来的 SQL 是 `FROM transferTableWHERE (…)` —— prepare 语法错误，
+      // 上层把它当「没有结果」，用户看到的是「搜关键词就清空」（不带关键词反而正常）。
+      // 两个分支现在都保证以 ` WHERE ` 开头。
       const inner = b.replace(/^WHERE\s+/i, '')
+      if (!t) return ' WHERE ' + inner
       return ' WHERE (' + inner + ') AND ' + t
     }
     const timeSql = (timeCol: string): string => timeRangeSql(timeCol, from, to)

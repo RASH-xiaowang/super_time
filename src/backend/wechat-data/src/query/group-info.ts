@@ -177,11 +177,14 @@ export function queryGroupInfo(
     const flag = Number(row['flag'] ?? 0)
 
     const cr = db.prepare('SELECT owner FROM chat_room WHERE username=?').get(username) as { owner?: unknown } | undefined
-    const info = db.prepare('SELECT announcement_, announcement_editor_, announcement_publish_time_ FROM chat_room_info_detail WHERE username_=?').get(username) as {
-      announcement_?: unknown
-      announcement_editor_?: unknown
-      announcement_publish_time_?: unknown
-    } | undefined
+    // 公告表是**可选**的（老快照里没有 `chat_room_info_detail`）：缺表就当没有公告，
+    // 不许让整条 `getGroupInfo` 抛出 `no such table` —— 群资料面板会直接报错，
+    // 而群名、成员这些它本来拿得到的东西也一起看不到了。
+    let info: { announcement_?: unknown; announcement_editor_?: unknown; announcement_publish_time_?: unknown } | undefined
+    try {
+      info = db.prepare('SELECT announcement_, announcement_editor_, announcement_publish_time_ FROM chat_room_info_detail WHERE username_=?').get(username) as
+        { announcement_?: unknown; announcement_editor_?: unknown; announcement_publish_time_?: unknown } | undefined
+    } catch { info = undefined }
 
     const members: GroupMember[] = []
     let totalMembers = 0

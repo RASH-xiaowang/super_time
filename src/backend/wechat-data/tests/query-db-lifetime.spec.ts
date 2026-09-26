@@ -43,6 +43,12 @@ const AUDIT_FIXED = [
   'query/search-scaffold.ts',
   'query/graph.ts',
   'query/privacy.ts',
+  // P1-7 补测时收口的两份：payments 本来就是「finally 里关一次」的正确形状，改成 withDb 是为了
+  // 让「谁拥有连接」只有一个答案；calendar 是**真漏**——存在性检查写在 try 之外，
+  // 坏分片既漏句柄又把异常抛给整月（`calendar-daily-counts.spec.ts` 钉住），
+  // 而它的 AST 判据抓不到（finally 里确实有一次 close），是「判据形状覆盖不到的一种漏法」。
+  'query/payments.ts',
+  'query/calendar.ts',
 ]
 
 /**
@@ -364,7 +370,9 @@ describe('query 层的连接纪律（棘轮）', () => {
   it('withDb 是这些文件唯一的打开方式（不许绕过去手写 close）', () => {
     for (const f of AUDIT_FIXED) {
       const src = readFileSync(join(SRC_ROOT, f), 'utf8')
-      expect(src, `${f} 必须经 withDb 拿连接`).toContain('withDb(')
+      // 允许带泛型实参的写法（`withDb<PaymentStatus>(...)`）：只认字面 `withDb(` 会把
+      // 「显式标注返回值」这种**更好**的写法判成绕过。
+      expect(src, `${f} 必须经 withDb 拿连接`).toMatch(/\bwithDb[<(]/)
       expect(src, `${f} 又出现了裸 new DatabaseSync(`).not.toContain('new DatabaseSync(')
     }
   })

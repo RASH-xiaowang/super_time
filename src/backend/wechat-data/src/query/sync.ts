@@ -209,11 +209,33 @@ export async function walFramesPatchable(walPath: string): Promise<boolean> {
 /** Per-shard state: raw mtimes of the main db and its wal. */
 interface ShardSig { main: number; wal: number }
 
-/** True when the target exists and its data (not mtime) is usable. */
-function looksDecrypted(dbPath: string): boolean {
+/**
+ * 「这页解对了没有」的判据 —— 只看 SQLite 页 1 头部里**不能被合成**的字段。
+ *
+ * 为什么必须有：`decryptPage` 给页 1 无条件贴上 `SQLite format 3\0`（磁盘上那 16 字节是
+ * salt，明文里本来就该有魔数），所以**魔数不构成证据** —— 旧实现拿前 15 字节比对魔数，
+ * 密钥错也永远为真，于是「解密结果无效」这道闸门（本文件 9 处 + 全量解密 1 处）形同虚设：
+ * 错密钥会把一坨乱码发布成快照，面板读到的是「库打不开/查无数据」，而日志一片绿。
+ * 真正的证据是加密区里的头部字段：偏移 16-17 的页大小必须是 `[512, 65536]` 内的 2 的幂
+ * （SQLite 的硬规定，`65536` 编码成 1），随机明文撞上它的概率约 16/65536 ≈ 0.02%。
+ * @param head - 解密产物的前若干字节（至少 24 个）。
+ * @returns 是否像一个真库。
+ */
+export function plausibleSqliteHeader(head: Buffer): boolean {
+  if (head.length < 24) return false
+  if (!head.subarray(0, 15).equals(SQLITE_HDR.subarray(0, 15))) return false
+  const pageSize = head.readUInt16BE(16)
+  if (pageSize === 1) return true // 65536 在头部里写成 1
+  return pageSize >= 512 && pageSize <= 65536 && (pageSize & (pageSize - 1)) === 0
+}
+
+/**
+ * True when the target exists and its data (not mtime) is usable.
+ * 导出是为了让「全量解密」与「实时同步」共用同一个判据（两处各写一份就等于没写）。
+ */
+export function looksDecrypted(dbPath: string): boolean {
   try {
-    const head = readPrefix(dbPath, 16)
-    return head.length === 16 && head.subarray(0, 15).equals(SQLITE_HDR.subarray(0, 15))
+    return plausibleSqliteHeader(readPrefix(dbPath, 24))
   } catch { return false }
 }
 

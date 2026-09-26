@@ -7,10 +7,10 @@
  */
 import { pbkdf2Sync } from 'node:crypto'
 import {
-  closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
+  closeSync, existsSync, mkdirSync, openSync, readSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
-import { fullDecryptFile } from './sync.ts'
+import { atomicReplace, fullDecryptFile, looksDecrypted } from './sync.ts'
 import { getConfig, scanDbFiles } from './config.ts'
 
 const PBKDF2_ITERS = 256000
@@ -100,10 +100,14 @@ export async function decryptAllDbs(
       if (keyHex.length !== 64) throw new Error('db_enc_key 缺失')
       const encKey = deriveEncKey(Buffer.from(keyHex, 'hex'), salt, keyFormat)
       await fullDecryptFile(db, staged, encKey)
-      const head = readPrefix(staged, 15)
-      if (!head.equals(SQLITE_HDR.subarray(0, 15))) throw new Error('解密结果校验失败（密钥不匹配？）')
-      try { unlinkSync(target) } catch { /* not yet present */ }
-      renameSync(staged, target)
+      // 判据与实时同步共用同一个主人 `sync.ts#looksDecrypted`：`decryptPage` 给页 1 无条件
+      // 贴上魔数，所以「比对魔数」等于没比，必须看头部里不能被合成的字段（页大小）。
+      if (!looksDecrypted(staged)) throw new Error('解密结果校验失败（密钥不匹配？）')
+      // 发布走 `sync.ts` 的 `atomicReplace`，**不要**改回「先 unlink 再 rename」：
+      // 那会在「删掉」与「改名」之间留出一个「目标不存在」的窗口，并发只读查询正好落在
+      // 里面就是 ENOENT；而 Windows 上目标被 SQLite 打开时 unlink 直接 EBUSY，整库解密被记成失败。
+      // 这条不变量在 `sync.ts#atomicReplace` 里有同名注释，实时同步与全量解密必须是同一份实现。
+      await atomicReplace(staged, target)
       okCount += 1
     } catch (e) {
       try { unlinkSync(staged) } catch { /* best effort cleanup */ }

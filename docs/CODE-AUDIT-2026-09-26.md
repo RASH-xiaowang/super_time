@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**292 文件 / 2945 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异 82 条、登记到 M85）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**299 文件 / 3023 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 91 条全咬红、逐字节还原，登记到 M94）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -22,12 +22,14 @@
 | 第一批 #5 P1-3 queryGraph | ✅ 完成 | `1b49ad4` | 分片只开一次库 + `cachedBySig`；验收是**开合数**（`[算料]` 3 会话 11 次 = 9 会话 11 次；旧形状是 6 vs 18 的形态）+「第二次一次库都不开」+ 反向「数据变了签名必须变」；变异 M63/M64 |
 | 第一批 #6 P1-4 privacy 正则 + 缓存 | ✅ 完成 | `1b49ad4` | `SCAN_RES` 外提 + `cachedBySig`（`rowBudget` 进键）；验收是「扫描期间 `RegExp` 构造次数 == 0」；变异 M62 |
 | 第一批 #7 P0-4 main.js 1000 行 | ✅ 完成 | `2c1c258` | 999 → **821 行**（余量 179）。窗口本体与守卫外提成 `src/backend/main-window.js`；**真机验收**：`ui-e2e-smoke` 改前改后都全绿、`security-guard:smoke` 10 项全绿（含 `did-create-window` 计数恒 0）；顺手补了 §五 那道空档——安全基线此前**只被人眼看过一次**，新增 `electron-security-baseline.spec.ts` + 变异 M61 |
-| 第一批 #8 P3-1/P3-2 fmtTime/fmtBytes | ✅ 完成 | `本次` | 4 份 `fmtTime` **全部删除**（单位写进名字：`fmtLocaleSec` / `fmtLocaleMs` / `fmtTodayOrLocaleMs`），5 份字节格式化收敛到两份唯一出处（渲染层 `utils/format.ts`、后端 `src/format.ts`，口径逐字一致）。守卫 `format-single-source.spec.ts` 按 AST 判「函数体里有没有单位换算本身」⇒ 薄适配器不误报；`NEVER_TWICE` 是零容忍档，`KNOWN_SECOND_TIME` 是**只能变小**的棘轮（还剩 7 份形状各异的日期函数）；判据本身有自证用例。行为守卫两份（`utils/format.spec.ts` 钉「单位喂错**必须**渲染成别的东西」——这是命名唯一的防线；`wechat-data/tests/format.spec.ts` 钉同一张字节表）；变异 M75/M76/M77 |
+| 第一批 #8 P3-1/P3-2 fmtTime/fmtBytes | ✅ 完成 | `275dbd4` | 4 份 `fmtTime` **全部删除**（单位写进名字：`fmtLocaleSec` / `fmtLocaleMs` / `fmtTodayOrLocaleMs`），5 份字节格式化收敛到两份唯一出处（渲染层 `utils/format.ts`、后端 `src/format.ts`，口径逐字一致）。守卫 `format-single-source.spec.ts` 按 AST 判「函数体里有没有单位换算本身」⇒ 薄适配器不误报；`NEVER_TWICE` 是零容忍档，`KNOWN_SECOND_TIME` 是**只能变小**的棘轮（还剩 7 份形状各异的日期函数）；判据本身有自证用例。行为守卫两份（`utils/format.spec.ts` 钉「单位喂错**必须**渲染成别的东西」——这是命名唯一的防线；`wechat-data/tests/format.spec.ts` 钉同一张字节表）；变异 M75/M76/M77 |
 | 第二批 #13 之外的安全项 P2-6 路径限根 | ✅ 完成 | `348a70a` | `query/path-policy.ts`：`openPath` 只放行数据根之内或**应用自己写过产出的目录** + 可执行扩展名一律拒；导出两处落盘前过 `writeDenialReason`。被拒回理由（`error?` 新字段，`docs/API.md` 已重生成）。判据含「`openNativePath` 探针一次都没被调用」；变异 M65/M66 |
 | 第二批（清单未列，同批做掉）P1-1 读失败契约 | ✅ 完成 | `e6f4b76` | 后端把「库打不开/读失败」与「确实没有条目」分成两件事（`DirListing.error` / 全域搜索的 `readError`），面板必须区分显示；守卫 `read-error-visibility.spec.ts` 从**类型**推「哪些快照带 `readError` ⇒ api 层哪些包装 ⇒ 调用它们的面板必须自己提到 `readError`」，新接口忘读就红；变异 M67/M68 |
 | 第二批 #16 P2-5 readRenderCache | ✅ 完成 | `285c9ac` | 24 小时保质期 + 单条 1.5 MB 上限 + 写失败从静默变成「说一次并丢干净」（超大与配额两种原因分开记账，不互相静音）；判据 `render-cache-ttl.spec.ts`，变异 M73/M74 |
 | 第二批 #17 P2-8 usePagedList 自动刷新 | ✅ 完成 | `aee1e6f` | 节流（30 秒内不重复起）+ 同键合并 + 页面不可见不发 + 上界装不下就**整轮跳过**（不再静默截断成前 8 页，那会把「已刷新」画成假话）；判据 `paged-list-refresh-gate.spec.ts`，变异 M71/M72 |
-| 第二批 #13 P2-7 `wechat:call` 入参校验 | 🟡 ① 档硬拒已上线，② 档是**有证据要求的影子** | `本次` | 新增宿主层 `wechat-args-guard.js`（+ `.d.ts`，按 H11 口径不给 `any`）：① **结构与体积**总是拒（参数个数/嵌套深度/数组项数/单串与累计体积/环/function/symbol/bigint/NaN/非纯对象），二进制按 `byteLength` 记账**不逐元素遍历**；接线在 `wechat-host.js` 的 `call()` 里、排在 `fn.apply` 之前，且归一化后的 `callArgs` 才是缓存键用的那份。② **形状**（生成的 114 份 zod schema）默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒 —— 因为这份生成物**从未被执行过**，没有证据就硬拒的结果是某个面板当场坏掉；`unrecognized_keys`（面板多发一个后端还不认的键）永远不算失败，保住向前兼容。**判据**：`wechat-args-guard.spec.ts` 12 条，含「被拒的调用一次都不许碰到 gateway」（把实现换成计数器来量，不靠读日志）、边界成对（防上界被悄悄调成无限）、8MB buffer 遍历耗时 <100ms、接线级判据、以及**覆盖账本 `[算料]`**：172 个 `@Remote` 里 schema 只覆盖 114，未覆盖 **58** 已钉成只能变小的棘轮（新加方法不生成 schema 就红）。变异 M82–M85 |
+| 第二批 #13 P2-7 `wechat:call` 入参校验 | 🟡 ① 档硬拒已上线，② 档是**有证据要求的影子** | `92d37ca` | 新增宿主层 `wechat-args-guard.js`（+ `.d.ts`，按 H11 口径不给 `any`）：① **结构与体积**总是拒（参数个数/嵌套深度/数组项数/单串与累计体积/环/function/symbol/bigint/NaN/非纯对象），二进制按 `byteLength` 记账**不逐元素遍历**；接线在 `wechat-host.js` 的 `call()` 里、排在 `fn.apply` 之前，且归一化后的 `callArgs` 才是缓存键用的那份。② **形状**（生成的 114 份 zod schema）默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒 —— 因为这份生成物**从未被执行过**，没有证据就硬拒的结果是某个面板当场坏掉；`unrecognized_keys`（面板多发一个后端还不认的键）永远不算失败，保住向前兼容。**判据**：`wechat-args-guard.spec.ts` 12 条，含「被拒的调用一次都不许碰到 gateway」（把实现换成计数器来量，不靠读日志）、边界成对（防上界被悄悄调成无限）、8MB buffer 遍历耗时 <100ms、接线级判据、以及**覆盖账本 `[算料]`**：172 个 `@Remote` 里 schema 只覆盖 114，未覆盖 **58** 已钉成只能变小的棘轮（新加方法不生成 schema 就红）。变异 M82–M85 |
+| 第二批 #14 P1-7 六个零 spec 模块 | ✅ 完成（并当场揪出 6 个真缺陷） | `本次` | 补 6 份 spec：`decrypt-all-tree`(13) / `payments-status`(8) / `drafts-clear`(8) / `calendar-daily-counts`(7) / `media-file-resolve`(9) / `gateway-read-shell`(26，覆盖 53 个 `@Remote` 壳的接线面)。**补测不是走形式**，撞出来的 6 条（详见「本轮新发现」⑨–⑫）：① `looksDecrypted` 那道解密有效性闸门**恒真**（10 处）⇒ 错密钥把乱码发布成快照；② drafts 早退分支双重 `close` ⇒ 人话错误被 `ERR_INVALID_STATE` 顶替；③ calendar 的存在性检查写在 try 之外 ⇒ 一个半写分片毁掉整个月 + 漏一条句柄（**P0-1 的 AST 判据抓不到这种形状**，因为 finally 里确实有一次 close）；④ media-file 负缓存**永久** ⇒ 「先点开、后下载」的文件不重启就永远打不开；⑤ media-file 缓存键不含数据根 ⇒ 换账号后同名同体积的文件读回**上一个账号**的字节；⑥ records 的 `combineWhere` 把 ` WHERE ` 的前导空格 trim 掉 ⇒ 拼成 `tableWHERE`，query 侧 catch 咽掉语法错误，用户侧表现是「记录页一搜就空」。变异 M86–M94 |
+| 第二批 #14 顺带新增的全仓守卫 | ✅ 完成 | `本次` | `source-text-integrity.spec.ts`：源码里有字面 NUL/退格/ESC 就让 `grep` 把整个文件当二进制跳过 ⇒ **所有文本/AST 类判据对那个文件静默失效**（只让守卫变绿，不会变红）。扫 849 个文件，判据自带反例自证；变异 M89 |
 | 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
 | 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `上一提交` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
 
@@ -35,7 +37,7 @@
 
 - 第一批：**已全部做完**（#1–#8）。
 - 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、#11 重读查询注入 `AbortSignal`、
-  #14 六个零 spec 模块补测、#15 `file:` 依赖溯源表。
+  #15 `file:` 依赖溯源表。
 - 第二批 #13 的**后半**：`ENFORCED_SCHEMA_METHODS` 目前是空集 —— ② 档（按 schema 硬拒）要等
   `info().argGuard.mismatched` 在真实使用里稳定为空才升级，这是刻意留下的证据门槛，不是漏做。
 - 第三批 #18–#25（拆巨型组件、`GatewayCore` 职责拆分、解循环依赖、长列表虚拟化、统一失效契约、
@@ -69,6 +71,28 @@
      `wechat-args-guard.spec.ts` 里，已钉成只能变小的棘轮）。这份差集同时是 P1-5 的实锤：
      `wechat-data/lib/typert.host.js` 的 `sourceLocation` 写着 `packages/host/wechat-data/src/gateway.ts` ——
      **不是本仓库的路径**，也就是说这份生成物是从另一棵树里签出来的，没有任何脚本能在这里重现它。
+  ⑨ **「解密结果有效」这道闸门从来没拒过任何东西**（补 P1-7 第一条 decrypt-all 用例时撞出来的）。
+     `sync.ts#looksDecrypted` 只比对新产物的前 15 字节是不是 `SQLite format 3`，而 `decryptPage`
+     给页 1 是**无条件**贴上这段魔数的（磁盘上那 16 字节是 salt）⇒ 判据恒真：
+     密钥错也照样「解密成功」，乱码被发布成快照，面板表现为「读不到数据」而日志一片绿。
+     受影响的闸门有 10 处（实时同步 message/session/contact/媒体 9 处 + 全量解密 1 处）。
+     修法：判据改看页 1 头部里**不能被合成**的字段 —— 偏移 16-17 的页大小必须是 `[512,65536]`
+     内的 2 的幂（`65536` 在头部里编码成 1），随机明文撞上约 0.02%；并把两份副本收成一个主人
+     `sync.ts#plausibleSqliteHeader`（导出，`decrypt-all.ts` 改为引用它）。
+  ⑩ `query/drafts.ts` 两个导出函数的「表不存在」早退分支**在 `finally` 之外又 close 一次** ⇒
+     `node:sqlite` 抛 `ERR_INVALID_STATE`，把函数准备返回的人话错误（`SessionTable 不存在`）
+     顶替成「database is not open」，而面板把 `error.message` 原样渲染进 `role="alert"`。
+     同样是补测时撞出来的（P1-7 说这几个模块「无回归保护」，代价就是这两条）。
+  ⑪ **一个新发现的「守卫失明」机制**：源码文件里只要混进一个**字面 NUL**，`grep` 就把它当二进制
+     文件（打印 `Binary file matches` 并跳过逐行输出），于是本仓所有基于文本/AST 的扫描对那个文件
+     **静默失效** —— 不是报错，是「查无此类」。本轮我自己制造过一次（写注释时把 `\0` 写成了真字节），
+     靠 `git show HEAD:<path> > <path>` 逐字节复原。**已补**：`source-text-integrity.spec.ts`
+     （扫 849 个源码文件：不许出现 NUL/退格/ESC 等会让 `grep` 判二进制的字节、不许 BOM、
+     UTF-8 必须往返一致）+ 变异 M89。判据自己带反例自证（喂它一段带 NUL 的内容必须报出位置）。
+  ⑫ `light-theme.css` 的注释里有 8 个 U+FFFD（历史上某次编码转换把「）」「、」这类全角标点
+     弄坏了）。**内容问题，不是二进制问题** —— 上面那条守卫特意用「UTF-8 往返一致」而不是
+     「不许出现替换字符」做判据，就是为了让这类既有乱码不伪装成「文件坏了」。留给界面文案的
+     一轮一起清（改注释会动 CSS 分块，要过 `css:bundle-diff`，不该塞进整改提交里）。
 
 
 
