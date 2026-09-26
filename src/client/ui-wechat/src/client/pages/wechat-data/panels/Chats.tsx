@@ -36,7 +36,7 @@ import { AVATAR_CACHE_MAX, Avatar, FILE_STYLE, IconCalendar, IconCallMissedOutli
 import { IconQuoteCard, IconVideoCallOutline, IconVoiceWaves, ImageViewer, MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageImageGroup, MessageLocation, MessageSystem, MessageThumb, MessageVideo, MessageVoice, ViewerImage, currentVoiceAudio, fmtCallDuration, quoteKindIcon, voiceWidth } from './chats-media.tsx'
 import { CARD_KINDS, LabeledCard, LinkCard, MediaCoverCard, MessageBody, MpArticle, MpNewsCard, OpenFileCard, PayStatusLine, RichCard, mpArticlesOf } from './chats-cards.tsx'
 import { CardFoot } from './chats-card-foot.tsx'
-import { cacheBounded } from '../utils/misc.ts'
+import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { MessageText } from '../utils/message-text.tsx'
 import { buildMessageItems, renderKindOf, type MessageRenderItem } from '../utils/message-items.ts'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -504,7 +504,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   /** Incremental poll: fetch messages newer than the watermark and append. */
   const copyMsgText = useCallback((t: string): void => {
-    void navigator.clipboard.writeText(t).then(() => { window.alert('文本已复制') }).catch(() => { window.alert('复制失败') })
+    void copyTextToClipboard(t).then((ok) => { window.alert(ok ? '文本已复制' : '复制失败') })
   }, [])
 
   /**

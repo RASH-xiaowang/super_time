@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts, apiSaveFileDialog } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { cacheBounded } from '../utils/misc.ts'
+import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
@@ -213,10 +213,10 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   }
 
   const copyUsername = async (c: ContactRow): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(c.username)
-      notify('已复制用户名 ' + c.username)
-    } catch { notify('复制失败') }
+    // 走共享助手：异步 API 被拒（窗口失焦、权限被挡）时它还会试 `execCommand` 那条退路，
+    // 而 `ok===false` 才真的是「没复制上」—— 直接 catch `writeText` 会把退路丢掉。
+    const ok = await copyTextToClipboard(c.username)
+    notify(ok ? '已复制用户名 ' + c.username : '复制失败')
   }
 
   const sendMessage = (c: ContactRow): void => {

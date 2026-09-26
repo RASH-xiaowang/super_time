@@ -18,7 +18,7 @@ import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClos
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
-import { cacheBounded, capRecord } from '../utils/misc.ts'
+import { cacheBounded, capRecord, copyTextToClipboard } from '../utils/misc.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -338,12 +338,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const copyCurrentLink = (): void => {
     const src = proxyableSrc(curImg?.url, curImg?.thumb) || (curImg && snsImgs[imgKey(curImg)]) || ''
     if (!src) return
-    const clip = (navigator as { clipboard?: Clipboard }).clipboard
-    if (clip && typeof clip.writeText === 'function') {
-      void clip.writeText(src).then(() => { hold('已复制图片链接') }).catch(() => { /* clipboard denied */ })
-    } else {
-      hold('当前环境不支持复制')
-    }
+    void copyTextToClipboard(src).then((ok) => { if (ok) hold('已复制图片链接'); else hold('复制失败') })
   }
 
   const openExport = (): void => { setExportOpen(true) }
@@ -351,12 +346,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   // Copy arbitrary text to the clipboard.
   const copyText = (text: string): void => {
     if (!text) return
-    const clip = (navigator as { clipboard?: Clipboard }).clipboard
-    if (clip && typeof clip.writeText === 'function') {
-      void clip.writeText(text).then(() => { hold('已复制') }).catch(() => { /* clipboard denied */ })
-    } else {
-      hold('当前环境不支持复制')
-    }
+    // 成功与失败各一条 `hold`（而不是 `hold(ok ? … : …)`）：失败提示不许带定时器自动消失，
+    // 而 `transient-notice.wiring.spec.ts` 正是按调用点数盯这件事的。
+    void copyTextToClipboard(text).then((ok) => { if (ok) hold('已复制'); else hold('复制失败') })
   }
 
   // 手动重新同步：触发宿主重解密并派发更新事件（面板随后刷新）。

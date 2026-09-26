@@ -5,6 +5,7 @@
  * 每个按钮都提供结果反馈：全局 toast（成功/失败/提示）+ 逐动作 loading 态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import {
   apiDeleteSummaryRecord,
   apiDeleteSummaryTask,
@@ -118,7 +119,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
   }, [])
   const copyResult = useCallback((): void => {
     if (!result) { notify('info', '暂无可复制的总结内容'); return }
-    void navigator.clipboard.writeText(result).then(() =>{  notify('ok', '已复制总结到剪贴板') }).catch(() =>{  notify('err', '复制失败') })
+    void copyTextToClipboard(result).then((ok) => { notify(ok ? 'ok' : 'err', ok ? '已复制总结到剪贴板' : '复制失败') })
   }, [result, notify])
 
   const loadTasks = useCallback(async (): Promise<void> => {
@@ -276,10 +277,8 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
 
   const copyRecord = async (r: SummaryRecord): Promise<void> => {
     await withBusy(`copy:${r.id}`, async () => {
-      try {
-        await navigator.clipboard.writeText(r.summary || '')
-        notify('ok', '已复制总结到剪贴板')
-      } catch { notify('err', '复制失败') }
+      const ok = await copyTextToClipboard(r.summary || '')
+      notify(ok ? 'ok' : 'err', ok ? '已复制总结到剪贴板' : '复制失败')
     })
   }
 

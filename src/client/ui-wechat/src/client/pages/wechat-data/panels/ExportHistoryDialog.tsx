@@ -12,6 +12,7 @@
  *   ② 「重新导出」会先弹保存对话框让用户选路径，**不覆盖原文件**。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import clsx from 'clsx'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { ListSentinel, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
@@ -217,12 +218,9 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   }, [hold])
 
   const copyPath = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(r.path)
-      flash('已复制路径')
-    } catch {
-      hold('复制失败')
-    }
+    const ok = await copyTextToClipboard(r.path)
+    if (ok) flash('已复制路径')
+    else hold('复制失败')
   }, [flash, hold])
 
   /**

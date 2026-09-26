@@ -4,6 +4,7 @@
  * （getEmoticons），无 HTTP 依赖。
  */
 import { useEffect, useMemo, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetEmoticonDataUrl, apiGetEmoticons } from '../api.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -150,7 +151,7 @@ export function EmoticonsPanel(): React.JSX.Element {
   const { count: pkgCount, sentinelRef: pkgSentinel } = useProgressiveList(tab === 'packages' ? filteredPackages.length : 0, 150)
 
   const copyMd5 = (md5: string): void => {
-    void navigator.clipboard.writeText(md5).then(() =>{  notify('已复制 MD5: ' + md5.slice(0, 8) + '…') }).catch(() =>{  notify('复制失败') })
+    void copyTextToClipboard(md5).then((ok) => { notify(ok ? '已复制 MD5: ' + md5.slice(0, 8) + '…' : '复制失败') })
   }
 
   return (

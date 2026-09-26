@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import type { useConfirm } from '../ui/confirm.tsx'
 import { apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
 import { messagesMatchTalker } from './msg-scope.ts'
@@ -170,7 +171,7 @@ const copyMsgJson = useCallback((m: WechatMessage): void => {
       sender: m.sender ?? undefined,
       rich: m.rich ?? undefined,
     }, null, 2)
-    void navigator.clipboard.writeText(json).then(() => { window.alert('消息 JSON 已复制') }).catch(() => { window.alert('复制失败') })
+    void copyTextToClipboard(json).then((ok) => { window.alert(ok ? '消息 JSON 已复制' : '复制失败') })
   } catch { window.alert('复制失败') }
 }, [])
 

@@ -118,4 +118,28 @@ export const MUTATIONS_BATCH3 = [
     to: "    if (attempt >= 4) continue",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.spec.ts",
   },
+  {
+    id: "M131-clipboard-leaks-textarea-on-fallback-throw",
+    why: "回到改前的形状：`execCommand` 一抛就跳过摘节点（外层 catch 只回 false）⇒ 每次失败在 body 上留一个抢过焦点的隐藏 textarea",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/utils/misc.ts",
+    from: "      document.body.removeChild(ta)",
+    to: "      // 不摘（改前就是这样：抛异常时这行根本跑不到）",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/utils/clipboard-single-source.spec.ts",
+  },
+  {
+    id: "M132-clipboard-scan-recognises-nothing",
+    why: "零容忍扫描的成员访问判据改成恒不命中 ⇒ 全仓「0 处违规」立刻达成，但那是因为判据瞎了（结构哨兵必须抓住这种）",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/utils/clipboard-single-source.spec.ts",
+    from: "      if (text === 'navigator.clipboard' || text === 'document.execCommand') hits.add(text)",
+    to: "      if (false) hits.add(text)",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/utils/clipboard-single-source.spec.ts",
+  },
+  {
+    id: "M133-clipboard-panel-goes-rogue",
+    why: "真实回归点：让 Emoticons 退回手写 `navigator.clipboard.writeText`（没有 execCommand 退路，被拒就等于没复制）⇒ 全仓扫描必须在真文件上报出这个越权点",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/Emoticons.tsx",
+    from: "    void copyTextToClipboard(md5).then((ok) => { notify(ok ? '已复制 MD5: ' + md5.slice(0, 8) + '…' : '复制失败') })",
+    to: "    void navigator.clipboard.writeText(md5).then(() => { notify('已复制 MD5: ' + md5.slice(0, 8) + '…') }).catch(() => { notify('复制失败') })",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/utils/clipboard-single-source.spec.ts",
+  },
 ]
