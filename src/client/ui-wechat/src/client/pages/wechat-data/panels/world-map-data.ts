@@ -5,9 +5,14 @@
  * The chosen data set (@surbowl/world-geo-json-zh, deprecated but stable) ships
  * a world GeoJSON whose feature names are already Chinese, so no ISO-code table
  * is needed on the client. URLs are tried in order at runtime; when none is
- * reachable the panel falls back to the offline SVG map.
+ * reachable the world layer says so explicitly —— 2026-09-26 地理 SVG 已按用户要求移除，
+ * 不再有离线底图可回退（这句原来写的是 “falls back to the offline SVG map”）。
  */
 import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
+import { readMapTilesFlag, writeMapTilesFlag } from '../map-tiles-flag.ts'
+
+/** 镜像缺失时等后端开关的上限：超过就按「读不到」放行（理由见下）。 */
+const FLAG_WAIT_MS = 2000
 
 /**
  * 地图底图出网闸（2026-09-26）。
@@ -16,16 +21,35 @@ import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
  * 拉取点（世界层、中国层、省级下钻都走它），所以一处关闭就全关 —— 不必去每个
  * 地图组件里各写一遍，也就不会漏掉将来新增的那个。
  *
+ * **判断顺序（2026-09-26 改成"先镜像、后有界等待"，起因是用户报「世界地图一直
+ * 在加载中」）**：先读渲染层本地镜像（`../map-tiles-flag.ts`，一次 localStorage 读，
+ * 0ms、不进队列），镜像没有才问后端，且问的时候**有界等待** `FLAG_WAIT_MS`。
+ *
+ * 为什么不能直接 await 后端：后端是**同步串行**的。用户会话日志实测
+ * `analyzeVisibleMessages` 单次 54,103ms、`getRemoteImages` 八个各 45,000~51,000ms、
+ * `getWordCloud` 2,6xx ms 反复重跑 —— 排在这些后面的 RPC 要等几十秒，于是底图
+ * **连"开始拉"都还没轮到**，世界层只剩一句静止的「正在解析好友地区…」，看上去像卡死。
+ *
  * 读不到隐私状态时**放行**（宁可出网也不要整张地图空白）：这与后端隐私闸
  * 「读不到就拦」的方向相反，是刻意的不对称 —— 那边拦下的是用户内容，这边只是
- * 一份公开的行政区划 GeoJSON。
+ * 一份公开的行政区划 GeoJSON。异常与超时同属「读不到」，走同一条兜底。
  * @returns true 表示已禁止拉取底图。
  */
 async function mapTilesBlocked(): Promise<boolean> {
+  // ① 本地镜像：开关的唯一写入口是 apiSetPrivacyState，任何一次读到真值都会刷新它。
+  const mirrored = readMapTilesFlag()
+  if (mirrored !== null) return mirrored
+  // ② 镜像还没有（首次运行）才问后端，且**不许无限等**：超时按"读不到"处理。
   try {
     // 动态 import：避免与 api.ts 形成顶层循环依赖（api 桶会引到面板层）。
     const { apiGetPrivacyState } = await import('../api.ts')
-    return (await apiGetPrivacyState()).blockMapTiles === true
+    const hit = await Promise.race([
+      apiGetPrivacyState().then(s => s.blockMapTiles === true).catch(() => null),
+      new Promise<null>(resolve => { setTimeout(() => resolve(null), FLAG_WAIT_MS) }),
+    ])
+    if (hit === null) return false
+    writeMapTilesFlag(hit)
+    return hit
   } catch {
     return false
   }

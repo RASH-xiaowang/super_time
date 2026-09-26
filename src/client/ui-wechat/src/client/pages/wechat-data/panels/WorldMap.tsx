@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiGetAvatarsLocal, apiGetRegionMap } from '../api.ts'
-import { useWechatDataUpdated } from './hooks.tsx'
+import { useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
 import type { RegionFriend, RegionMapSnapshot, RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import { squarify } from './treemap.ts'
 import { ChinaMap } from './ChinaMap.tsx'
@@ -225,6 +225,12 @@ export function WorldMapPanel(): React.JSX.Element {
     setWorldGeo({ ok: false })
   }
 
+  // 首屏加载走秒（U2 约定，口径见 hooks.tsx#useElapsedSeconds）。后端是同步队列：
+  // 排在长任务后面时这块地区数据可能要等几十秒，一句静止的「正在解析…」会被当成卡死
+  // （2026-09-26 用户实测反馈的原话就是「世界地图还是这样，一直在加载中」）。
+  const regionLoading = map === null && error === null
+  const regionElapsed = useElapsedSeconds(regionLoading)
+
   /** Drill from a province map into a city and immediately show its friends. */
   const openCity = (node: RegionNode): void => {
     setPath(p => [...p, node])
@@ -248,7 +254,11 @@ export function WorldMapPanel(): React.JSX.Element {
       </div>
 
       {error && <div className={css.error}>{error}</div>}
-      {!map && !error && <div className={css.loading}>正在解析好友地区…</div>}
+      {regionLoading && (
+        <div className={css.loading}>
+          {`正在解析好友地区…已用 ${regionElapsed}s · 后端按顺序处理请求，若有长任务在跑这一块要排在它后面，请稍候`}
+        </div>
+      )}
 
       {showWorldEcharts && (
         <div className={css.stage}>

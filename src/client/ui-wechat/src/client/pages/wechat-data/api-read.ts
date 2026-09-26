@@ -144,6 +144,7 @@ import type {
 } from './types.ts'
 import { KB_LIST_CACHE_KEY, kbCacheKey } from './kb-scope-keys.ts'
 import { KnowledgeSnapshotRead, remote, unwrap } from './api-core.ts'
+import { writeMapTilesFlag } from './map-tiles-flag.ts'
 
 // ── sessions / contacts / messages (Remote) ──
 /**
@@ -411,7 +412,11 @@ export async function apiGetPrivacyScan(): Promise<PrivacySnapshot> {
  * @returns PrivacyStateSnapshot.
  */
 export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
-  return unwrap(await remote().getPrivacyState())
+  const s = unwrap(await remote().getPrivacyState())
+  // 顺手刷新底图开关的本地镜像（见 map-tiles-flag.ts）：世界地图因此不必为了
+  // 问一个开关而排进后端队列（实测长任务后面要等几十秒）。
+  writeMapTilesFlag(s.blockMapTiles === true)
+  return s
 }
 /**
  * Update privacy settings.
@@ -421,7 +426,9 @@ export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
 export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<PrivacyStateSnapshot> {
   const r = await remote().setPrivacyState(options)
   invalidateWechatCache('privacy')
-  return unwrap(r)
+  const s = unwrap(r)
+  writeMapTilesFlag(s.blockMapTiles === true)
+  return s
 }
 /**
  * Fetch recent raw privacy audit rows.

@@ -20,7 +20,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, findRoot, readStripped, readText } from './wiring-kit.ts'
+import { atLeast, findRoot, readStripped, readText, sliceBetween } from './wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)
@@ -34,7 +34,12 @@ describe('S07 · 地图底图开关（blockMapTiles）贯穿全链', () => {
     expect(types, 'PrivacyStateSnapshot 没有 blockMapTiles').toMatch(/interface PrivacyStateSnapshot \{[^}]*blockMapTiles: boolean/)
 
     const store = r(...BW, 'query', 'privacy-audit.ts')
-    expect(store, 'readPrivacySettings 没读它').toMatch(/blockMapTiles: getSetting\(db, 'blockMapTiles', false\)/)
+    // ⚠️ 必须**切片到 `readPrivacySettings` 体内**再断言（2026-09-26 实录）：
+    // `blockMapTiles: getSetting(...)` 在 `writePrivacySettings` 里还有一份（它返回更新后的
+    // 快照），只对全文匹配的话，把"读"这一处删掉正则照样能匹配上 —— 变异 M25 就是这么
+    // "没咬住"的（工具报 [没咬住] 才发现）。
+    const readFn = sliceBetween(store, 'export function readPrivacySettings', '\n}', 'readPrivacySettings')
+    expect(readFn, 'readPrivacySettings 没读它').toMatch(/blockMapTiles: getSetting\(db, 'blockMapTiles', false\)/)
     // 读写各一次 + 快照两处（成功分支与 catch 分支）
     atLeast([...store.matchAll(/blockMapTiles/g)].length, 4, 'privacy-audit 里 blockMapTiles 的出现次数')
 
