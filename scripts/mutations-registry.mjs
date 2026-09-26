@@ -387,8 +387,8 @@ const MUTATIONS_BATCH12 = [
     id: 'M54-mapflag-not-refreshed-on-save',
     why: '保存「禁止地图底图出网」后不刷新镜像 —— 关掉再打开地图仍按旧值走，等于开关时灵时不灵',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/api-read.ts',
-    from: "  invalidateWechatCache('privacy')\n  const s = unwrap(r)\n  writeMapTilesFlag(s.blockMapTiles === true)\n  return s\n",
-    to: "  invalidateWechatCache('privacy')\n  return unwrap(r)\n",
+    from: "  invalidateAndNotify('privacy')\n  const s = unwrap(r)\n  writeMapTilesFlag(s.blockMapTiles === true)\n  return s\n",
+    to: "  invalidateAndNotify('privacy')\n  return unwrap(r)\n",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
