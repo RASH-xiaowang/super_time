@@ -79,10 +79,18 @@ function apiWrappersReturning(names: string[]): Array<{ fn: string; type: string
   return hits.sort((a, b) => a.fn.localeCompare(b.fn))
 }
 
-/** ③ 要守的界面文件：`panels/*.tsx` + 面板根目录那层（排除用例）。 */
+/**
+ * ③ 要守的界面文件：`panels/*`（`.ts` 与 `.tsx` 都算）+ 面板根目录那层的 `.tsx` 组件。
+ *
+ * `panels/` 为什么也要收 `.ts`：#18 把取数搬进了 `moments-data.ts` 这类钩子模块，
+ * 只扫 `.tsx` 的话「谁调了这个接口」直接查无此人（实测红过一次）。
+ * 根目录那层为什么**不**收 `.ts`：那里住的是 `api-*.ts` 传输层，
+ * 函数定义行 `export async function apiGetMomentsMonthly(` 会被「调用」的正则认成调用点，
+ * 于是判据开始投诉「声明处没读 readError」——那是另一件事（②已经在管类型口径了）。
+ */
 function uiFiles(): string[] {
   const inPanels = readdirSync(PANELS)
-    .filter((f) => f.endsWith('.tsx') && !f.includes('.spec.'))
+    .filter((f) => /\.(ts|tsx)$/.test(f) && !f.includes('.spec.') && !f.endsWith('.d.ts'))
     .map(f => join(PANELS, f))
   const atRoot = readdirSync(HERE)
     .filter((f) => f.endsWith('.tsx') && !f.includes('.spec.'))
@@ -97,6 +105,14 @@ describe('N1：带 readError 的快照必须在面板里被区分显示', () => 
   it('后端确实有带 readError 的快照类型，且 api 层有对应包装（防止判据空转）', () => {
     expect(types.length).toBeGreaterThan(0)
     expect(wrappers.length, 'api 层没有返回这些类型的函数 —— ② 的解析口径需要更新').toBeGreaterThan(0)
+  })
+
+  it('放宽到 panels 里的 .ts 这一格真的被走到（否则 #18 之后判据只守着半个界面层）', () => {
+    const all = uiFiles()
+    const tsCallers = all.filter((p) => p.endsWith('.ts')
+      && wrappers.some((w) => new RegExp(`(?<![\\w$.])${w.fn}\\s*\\(`).test(read(p))))
+    console.log(`[算料|readError] 界面文件 ${String(all.length)} 个，其中调过快照接口的钩子模块 ${String(tsCallers.length)} 个`)
+    expect(tsCallers.length, 'panels 里的 .ts 一个调用方都没扫到 ⇒ 这次放宽没起作用').toBeGreaterThan(0)
   })
 
   it('② 不再跨函数串味（回归哨兵）', () => {
@@ -115,8 +131,10 @@ describe('N1：带 readError 的快照必须在面板里被区分显示', () => 
       // 面板是从 api 层**具名导入后裸调**（`apiGetKbFiles(...)`），不是 `remote.getKbFiles(...)`
       const callers = uiFiles().filter((p) => new RegExp(`(?<![\\w$.])${fn}\\s*\\(`).test(read(p)))
       expect(callers.length, `没有任何界面文件调用 ${fn}()；要么判据该更新，要么接口已死`).toBeGreaterThan(0)
+      // 口径：**谁调谁就得读**。分层之后 `moments-data.ts` 自己就在失败分支里写 `readError`，
+      // 所以这一条不需要为钩子开例外（开过，实测那一支是死代码，删了）。
       const blind = callers.filter((p) => !read(p).includes('readError'))
-      expect(blind, `这些面板调了 ${fn}() 却没读 readError（读失败会被显示成空数据）：${blind.join(', ')}`).toEqual([])
+      expect(blind, `这些界面调了 ${fn}() 却没读 readError（读失败会被显示成空数据）：${blind.map((p) => p.replace(/\\/g, '/')).join(', ')}`).toEqual([])
     })
   }
 })

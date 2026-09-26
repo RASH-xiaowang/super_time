@@ -7,13 +7,11 @@
  * @module moments-panelx
  */
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
-import { readRenderCache, writeRenderCache } from '../api.ts'
-import { useWechatDataUpdated } from './hooks.tsx'
-import { apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiOpenPath } from '../api.ts'
-import type { MomentItem, MomentsMonthlySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import { apiOpenPath } from '../api.ts'
+import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
@@ -28,6 +26,7 @@ import { useMomentsMedia } from './moments-media.ts'
 import { useMomentsExport } from './moments-export.ts'
 import { useMomentsVideos } from './moments-videos.ts'
 import { imageExtOf, useMomentsViewer } from './moments-viewer.ts'
+import { useMomentsData } from './moments-data.ts'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -36,22 +35,14 @@ import { imageExtOf, useMomentsViewer } from './moments-viewer.ts'
  * @returns the moments element tree.
  */
 export function MomentsPanel({ author, onClearAuthor }: { author?: string | null; onClearAuthor?: () => void }): React.JSX.Element {
-  const [moments, setMoments] = useState<readonly MomentItem[]>([])
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [mediaFilter, setMediaFilter] = useState<MediaFilter>('all')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [total, setTotal] = useState(0)
-  const [monthlySnap, setMonthlySnap] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [privacy, setPrivacy] = useState(false)
   const [expandedTextByCard, setExpandedTextByCard] = useState<Set<string>>(new Set())
   const [expandedSocialByCard, setExpandedSocialByCard] = useState<Set<string>>(new Set())
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({})
   const [commentSortByCard, setCommentSortByCard] = useState<Record<string, 'asc' | 'desc'>>({})
-  const [selfUsername, setSelfUsername] = useState<string | null>(null)
-  const [fullAuthors, setFullAuthors] = useState<Array<{ name: string; count: number }> | null>(null)
-  const [monthlySnapForAuthor, setMonthlySnapForAuthor] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [onlyMineComments, setOnlyMineComments] = useState(false)
   const [monthFilter, setMonthFilter] = useState<string | null>(null)
   const [mineFilter, setMineFilter] = useState<'all' | 'mine' | 'others'>('all')
@@ -69,116 +60,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
   // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold, clear } = useTransientNotice(6000)
-  const countRef = useRef(0)
-  const totalRef = useRef(0)
-  const [loadingAll, setLoadingAll] = useState(false)
 
-  const load = useCallback(async (reset = true): Promise<void> => {
-    setError(null)
-    // 渲染缓存按“全量/该作者”上下文分开存储，避免刷新后串用上次过滤视图的缓存。
-    const cacheKey = 'moments:' + (author || 'all')
-    if (reset) {
-      // 先用上次渲染的列表秒开,后台同步最新分页
-      const cached = readRenderCache<readonly MomentItem[]>(cacheKey)
-      if (cached && cached.length > 0) {
-        setMoments(cached)
-        countRef.current = cached.length
-        setTotal(cached.length)
-        setLoading(false)
-      } else {
-        setLoading(true)
-      }
-    }
-    try {
-      const opts: { limit: number; offset?: number; author?: string } = { limit: 500 }
-      if (!reset) opts.offset = countRef.current
-      if (author) opts.author = author
-      const env = await apiGetMoments(opts)
-      setMoments(prev => (reset ? env.moments : [...prev, ...env.moments]))
-      countRef.current = reset ? env.moments.length : countRef.current + env.moments.length
-      setTotal(env.total)
-      totalRef.current = env.total
-      if (reset) writeRenderCache(cacheKey, env.moments.slice(0, 200))
-      // Full-history monthly distribution only on (re)load — not per page.
-      if (reset) {
-        void apiGetMomentsMonthly(author ? { author } : undefined)
-          .then((snap) => { setMonthlySnap(snap) })
-          .catch(() => { setMonthlySnap({ months: [], readError: '月度分布请求失败（已退回按已加载部分统计）' }) })
-      }
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [author])
-
-  useEffect(() => { void load() }, [load])
-
-  // 拉取当前账号自己的 username，用于「仅看我的回复」。
-  useEffect(() => {
-    void apiGetSelfUsername().then((u) => { setSelfUsername(u || null) }).catch(() => { /* ignore */ })
-  }, [])
-
-  // 拉取全量作者条数（反映全量排名）。
-  useEffect(() => {
-    void apiGetMomentsAuthors().then((list) => { setFullAuthors(list) }).catch(() => { /* 回退已加载统计 */ })
-  }, [])
-
-  // 选中某作者（作者牌）时，按该作者重算「全部月份动态」；清除后回退到全量月度数据。
-  useEffect(() => {
-    if (!authorFilter) { setMonthlySnapForAuthor({ months: [] }); return }
-    let cancelled = false
-    setMonthlySnapForAuthor({ months: [] }) // 先清空，避免显示上一个作者的数据
-    void apiGetMomentsMonthly({ authorName: authorFilter })
-      .then((snap) => { if (!cancelled) setMonthlySnapForAuthor(snap) })
-      // 失败时也要留一句原因：空数组会被读成「这个作者一条都没有」，而那通常不是事实。
-      .catch(() => { if (!cancelled) setMonthlySnapForAuthor({ months: [], readError: '该作者的月度分布请求失败（已退回按已加载部分统计）' }) })
-    return () => { cancelled = true }
-  }, [authorFilter])
-
-  /** 一次性拉取剩余全部朋友圈（每页 500 串行，避免压垮后端 XML 解析）。 */
-  const loadAll = useCallback(async (): Promise<void> => {
-    if (loadingAll) return
-    setLoadingAll(true)
-    setError(null)
-    moreInFlight.current = true
-    try {
-      while (countRef.current < totalRef.current) {
-        const opts: { limit: number; offset: number; author?: string } = { limit: 500, offset: countRef.current }
-        if (author) opts.author = author
-        const env = await apiGetMoments(opts)
-        if (env.moments.length === 0) break
-        setMoments(prev => [...prev, ...env.moments])
-        countRef.current += env.moments.length
-        totalRef.current = env.total
-        setTotal(env.total)
-      }
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      moreInFlight.current = false
-      setLoadingAll(false)
-    }
-  }, [author, loadingAll])
-
-  // 数据落地后安静刷新：空列表时全量加载；已加载时做「增量刷新」——拉取最新一页，
-  // 只把尚未出现过的新动态前插，不折叠已有列表（避免滚动大跳动）。
-  useWechatDataUpdated(() => {
-    if (moments.length === 0) { void load(); return }
-    void (async () => {
-      try {
-        const env = await apiGetMoments({ limit: 200, author: author || undefined })
-        const existing = new Set(moments.map(m => m.tid))
-        const fresh = env.moments.filter(m => !existing.has(m.tid))
-        if (fresh.length > 0) {
-          setMoments(prev => [...fresh, ...prev])
-          writeRenderCache('moments:' + (author || 'all'), [...fresh, ...moments].slice(0, 200))
-        }
-        setTotal(env.total)
-        totalRef.current = env.total
-      } catch { /* 增量刷新失败时静默，保持当前列表 */ }
-    })()
-  })
+  // 取数（分页 / 渲染缓存秒开 / 全量 / 静默增量刷新 + 三份侧栏附赠数据）交给 moments-data.ts。
+  const { moments, loading, loadingAll, error, total, monthlySnap, monthlySnapForAuthor,
+    selfUsername, fullAuthors, countRef, totalRef, moreInFlight, load, loadAll } =
+    useMomentsData({ author, authorFilter })
 
   // 八个条件全部交给 `moments-scope.ts`：筛选是纯函数，依赖数组只写在那一个地方，
   // 并由 `moments-scope.spec.ts` 的 AST 判据钉住「criteria 每个字段都必须进依赖」——
@@ -232,7 +118,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const { videoSrcs, videoFailed, videoErr, videoMeta, setVideoMeta, loadVideo, closeVideo,
     fullscreenVideo, saveVideo } = useMomentsVideos({ notify: { flash, hold, clear }, onSavedPath: setExportedPath })
   const moreRef = useRef<HTMLDivElement | null>(null)
-  const moreInFlight = useRef(false)
 
   // 滚动到底部附近时自动加载下一页朋友圈（懒加载分页）。
   useEffect(() => {
