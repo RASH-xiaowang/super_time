@@ -364,6 +364,46 @@ const MUTATIONS = [
     to: '            {located.length === 0 && (',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
+  {
+    id: 'M41-calls-rank-unbounded',
+    why: '排行列表去掉限高 —— 长列表会重新把同一行的矮卡片顶出一大片空白（用户报的留白）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
+    from: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; max-height: 330px; overflow-y: auto; }',
+    to: '.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; overflow-y: auto; }',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
+  },
+  {
+    id: 'M42-calls-recent-fixed-height',
+    why: '最近通话把 max-height 写成固定 height —— 条目少时会拖出一条空滚动区（「内容不足时不影响布局」被破坏）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
+    from: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; max-height: 400px; overflow-y: auto; }',
+    to: '.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; height: 400px; overflow-y: auto; }',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
+  },
+  {
+    id: 'M43-calls-scrollbar-not-declared',
+    why: '滚动条宽度改回 0 —— 依赖全局规则（它只在主题 CSS 加载时才生效），列表看起来无法滚动',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',
+    from: '.rankList::-webkit-scrollbar, .monthList::-webkit-scrollbar, .recentList::-webkit-scrollbar { width: 6px; height: 6px; }',
+    to: '.rankList::-webkit-scrollbar, .monthList::-webkit-scrollbar, .recentList::-webkit-scrollbar { width: 0px; height: 0px; }',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
+  },
+  {
+    id: 'M44-calls-recent-limit-restored',
+    why: '最近通话取数上限改回 60 —— 页面又被 60 条撑长（「精简显示条目数量」被撤销）',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Calls.tsx',
+    from: 'apiGetCalls({ topPeers: 12, recentLimit: 30 })',
+    to: 'apiGetCalls({ topPeers: 12, recentLimit: 60 })',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
+  },
+  {
+    id: 'M45-calls-recent-back-into-grid',
+    why: '「最近通话」缩回两列网格内 —— 长列表与矮卡片配对，行剩余空间又变成空白',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Calls.tsx',
+    from: '</div>\n\n          <Card title="最近通话"',
+    to: '</div>\n            <Card title="最近通话"',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

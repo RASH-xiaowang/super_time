@@ -1,7 +1,16 @@
 /* 通话记录 —— NEON MATRIX 科技风（沿用 --nm-* 令牌，与总览/账本/洞察面板同一套）。 */
 
 /* ── 通话对象排行 ─────────────────────────────────────────── */
-.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+/* 长列表一律「限高 + 内层滚动」（2026-09-26 重新设计）。
+ *
+ * 为什么：这些列表的长度由数据决定（排行 20 人 / 逐月 16 个月 / 最近通话 60 条），
+ * 而 `kit.cardGrid` 是**等宽两列**、行高取两块的 max ⇒ 长列表会把同一行里那块矮的
+ * 顶出一大片行剩余空间（实测「最近通话」60 条约 1800px，左侧「未接通原因」只 6 行，
+ * 于是左下半张卡片是空的）。
+ *
+ * 用 `max-height` 而**不是** `height`：条目少时列表保持自然高度，不会拖出一条空滚动区
+ * —— 「内容不足时不影响布局」是明确要求。 */
+.rankList { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; max-height: 330px; overflow-y: auto; }
 .rankRow {
   display: flex;
   align-items: center;
@@ -62,7 +71,7 @@
 .rankMissed { color: var(--nm-warning); }
 
 /* ── 逐月通话 ─────────────────────────────────────────────── */
-.monthList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.monthList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; max-height: 300px; overflow-y: auto; }
 .monthRow { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .monthLabel { flex: 0 0 86px; color: var(--nm-text-2); }
 .monthBarWrap {
@@ -126,7 +135,7 @@
 }
 
 /* ── 最近通话 ─────────────────────────────────────────────── */
-.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
+.recentList { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; max-height: 400px; overflow-y: auto; }
 .recentRow {
   display: flex;
   align-items: center;
@@ -170,3 +179,19 @@
   font-size: 11px;
   color: var(--nm-text-2);
 }
+
+/* 上面三个列表的滚动条：**在这里显式声明**，不依赖 scifi-theme.css 的全局规则
+ * （`session-ask.module.css` 已记过理由：全局 `::-webkit-scrollbar` 只在该主题 CSS
+ * 被加载时才生效）。观感：6px 宽、轨道与 corner 透明、thumb 无边框、圆角走 `--nm-r-xs`
+ * —— 6px 宽的条上它正好是圆头；写死像素会被几何守卫咬（那个令牌是唯一合法的取法）。 */
+.rankList::-webkit-scrollbar, .monthList::-webkit-scrollbar, .recentList::-webkit-scrollbar { width: 6px; height: 6px; }
+.rankList::-webkit-scrollbar-track, .monthList::-webkit-scrollbar-track, .recentList::-webkit-scrollbar-track { background: transparent; border: none; }
+.rankList::-webkit-scrollbar-thumb, .monthList::-webkit-scrollbar-thumb, .recentList::-webkit-scrollbar-thumb {
+  background: var(--dsw-alias-scrollbar-bg-l2, rgba(0, 240, 255, 0.10));
+  border: none;
+  border-radius: var(--nm-r-xs);
+}
+.rankList::-webkit-scrollbar-thumb:hover, .monthList::-webkit-scrollbar-thumb:hover, .recentList::-webkit-scrollbar-thumb:hover {
+  background: var(--dsw-alias-scrollbar-hover-l2, rgba(0, 240, 255, 0.22));
+}
+.rankList::-webkit-scrollbar-corner, .monthList::-webkit-scrollbar-corner, .recentList::-webkit-scrollbar-corner { background: transparent; }
