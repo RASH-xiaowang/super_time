@@ -12,19 +12,21 @@ import { createPortal } from 'react-dom'
 import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { apiDecryptAllDatabases, apiExportMoments, apiExportSnsVideo, apiGetArticleCover, apiGetAvatar, apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiGetSnsImageDataUrl, apiGetSnsVideoCoverDataUrl, apiGetSnsVideoDataUrl, apiOpenPath, apiSaveFileDialog, pickDirectory, snsMediaCacheGet, snsMediaCacheGetMany, snsMediaCacheSet } from '../api.ts'
+import { apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiOpenPath } from '../api.ts'
 import type { MomentItem, MomentsMonthlySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
-import { cacheBounded, capRecord, copyTextToClipboard } from '../utils/misc.ts'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
-import { ARTICLE_COVER_CACHE_MAX, MediaFilter, SNS_IMG_CACHE_MAX, VIDEO_SRC_CACHE_MAX, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
+import { MediaFilter, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
 import { useMomentsScope } from './moments-scope.ts'
 import { useMomentsMedia } from './moments-media.ts'
+import { useMomentsExport } from './moments-export.ts'
+import { useMomentsVideos } from './moments-videos.ts'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -50,13 +52,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [fullAuthors, setFullAuthors] = useState<Array<{ name: string; count: number }> | null>(null)
   const [monthlySnapForAuthor, setMonthlySnapForAuthor] = useState<MomentsMonthlySnapshot>({ months: [] })
   const [onlyMineComments, setOnlyMineComments] = useState(false)
-  const [videoSrcs, setVideoSrcs] = useState<Record<string, string>>({})
-  const [videoFailed, setVideoFailed] = useState<Set<string>>(new Set())
-  /** 每个取视频失败的原因（悬停提示用），来自后端：未缓存 / CDN 加密流 / 出站被拦等。 */
-  const [videoErr, setVideoErr] = useState<Map<string, string>>(new Map())
-  /** 已播放视频的真实宽高比（`onLoadedMetadata` 填），播放器按它定尺寸以消除黑边。 */
-  const [videoMeta, setVideoMeta] = useState<Record<string, { w: number; h: number }>>({})
-  const videoFetching = useRef<Set<string>>(new Set())
   const [monthFilter, setMonthFilter] = useState<string | null>(null)
   const [mineFilter, setMineFilter] = useState<'all' | 'mine' | 'others'>('all')
   const [authorFilter, setAuthorFilter] = useState<string | null>(null)
@@ -78,21 +73,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null)
   const lightboxWrapRef = useRef<HTMLDivElement | null>(null)
   const viewZoomRef = useRef(1)
-  const [exportOpen, setExportOpen] = useState(false)
-  const [expFormat, setExpFormat] = useState('html')
-  const [expFrom, setExpFrom] = useState('')
-  const [expTo, setExpTo] = useState('')
-  const [expDir, setExpDir] = useState('')
-  const [expImages, setExpImages] = useState(false)
-  const [expZip, setExpZip] = useState(false)
-  const [syncing, setSyncing] = useState(false)
-  const [lastSync, setLastSync] = useState(0)
-  const [pickingDir, setPickingDir] = useState(false)
-  const [exporting, setExporting] = useState(false)
   // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
   // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold, clear } = useTransientNotice(6000)
-  const [exportedPath, setExportedPath] = useState<string | null>(null)
   const countRef = useRef(0)
   const totalRef = useRef(0)
   const [loadingAll, setLoadingAll] = useState(false)
@@ -204,7 +187,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     })()
   })
 
-
   // 八个条件全部交给 `moments-scope.ts`：筛选是纯函数，依赖数组只写在那一个地方，
   // 并由 `moments-scope.spec.ts` 的 AST 判据钉住「criteria 每个字段都必须进依赖」——
   // 这里原先连着七个 memo、每个依赖上一个的数组身份，已经因此漏掉过一次日期筛选。
@@ -235,12 +217,29 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     groups,
     groupCount: grpCount,
   })
+
+  // 导出弹窗 + 手动重同步整个交给 moments-export.ts。
+  const exp = useMomentsExport({
+    scope: {
+      username: author,
+      authorName: authorFilter,
+      search,
+      media: mediaFilter,
+      month: monthFilter,
+      mine: mineFilter,
+    },
+    reload: () => load(),
+    notify: { flash, hold, clear },
+  })
+  const { exportOpen, setExportOpen, expFormat, setExpFormat, expFrom, setExpFrom, expTo, setExpTo,
+    expDir, setExpDir, expImages, setExpImages, expZip, setExpZip, syncing, lastSync, pickingDir,
+    exporting, exportedPath, setExportedPath, openExport, doSync, pickDir, doExport } = exp
+
+  // 视频本体交给 moments-videos.ts（保存成功的落盘路径仍要记回面板那一行）。
+  const { videoSrcs, videoFailed, videoErr, videoMeta, setVideoMeta, loadVideo, closeVideo,
+    fullscreenVideo, saveVideo } = useMomentsVideos({ notify: { flash, hold, clear }, onSavedPath: setExportedPath })
   const moreRef = useRef<HTMLDivElement | null>(null)
   const moreInFlight = useRef(false)
-
-
-
-
 
   // 滚动到底部附近时自动加载下一页朋友圈（懒加载分页）。
   useEffect(() => {
@@ -286,7 +285,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => { el.removeEventListener('wheel', onWheel) }
   }, [viewer])
-
 
   // Keyboard control while the lightbox is open: arrows switch image（Esc 交给共享 hook）。
   useEffect(() => {
@@ -341,161 +339,12 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     void copyTextToClipboard(src).then((ok) => { if (ok) hold('已复制图片链接'); else hold('复制失败') })
   }
 
-  const openExport = (): void => { setExportOpen(true) }
-
   // Copy arbitrary text to the clipboard.
   const copyText = (text: string): void => {
     if (!text) return
     // 成功与失败各一条 `hold`（而不是 `hold(ok ? … : …)`）：失败提示不许带定时器自动消失，
     // 而 `transient-notice.wiring.spec.ts` 正是按调用点数盯这件事的。
     void copyTextToClipboard(text).then((ok) => { if (ok) hold('已复制'); else hold('复制失败') })
-  }
-
-  // 手动重新同步：触发宿主重解密并派发更新事件（面板随后刷新）。
-  const doSync = async (): Promise<void> => {
-    if (syncing) return
-    setSyncing(true)
-    clear()
-    try {
-      await apiDecryptAllDatabases()
-      setLastSync(Date.now())
-      window.dispatchEvent(new Event('dsh-wechat-data-updated'))
-      void load()
-      flash('已重新同步解密数据')
-    } catch (e) {
-      hold('同步失败: ' + (e as Error).message)
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  const pickDir = async (): Promise<void> => {
-    if (pickingDir) return
-    setPickingDir(true)
-    try {
-      const dir = await pickDirectory()
-      if (dir) setExpDir(dir)
-    } finally {
-      setPickingDir(false)
-    }
-  }
-
-  const doExport = async (): Promise<void> => {
-    setExporting(true)
-    clear()
-    try {
-      const opts: {
-        format: string
-        username?: string
-        authorName?: string
-        q?: string
-        images?: boolean
-        media?: string
-        month?: string
-        mine?: string
-        zip?: boolean
-        from?: number
-        to?: number
-        dir?: string
-      } = { format: expFormat }
-      // username = 微信用户名（user_name，深链“TA 的朋友圈”）；authorName = 作者显示名（作者牌）。
-      if (author) opts.username = author
-      if (authorFilter) opts.authorName = authorFilter
-      const term = search.trim()
-      if (term) opts.q = term
-      // 导出与列表当前筛选一致（媒体类型/月份/范围）。
-      if (mediaFilter !== 'all') opts.media = mediaFilter
-      if (monthFilter) opts.month = monthFilter
-      if (mineFilter !== 'all') opts.mine = mineFilter
-      if (expImages) opts.images = true
-      if (expZip) opts.zip = true
-      if (expFrom) opts.from = Math.floor(new Date(expFrom + 'T00:00:00').getTime() / 1000)
-      if (expTo) opts.to = Math.floor(new Date(expTo + 'T23:59:59').getTime() / 1000)
-      if (expDir) opts.dir = expDir
-      const r = await apiExportMoments(opts)
-      flash('已导出 ' + String(r.count) + ' 条动态 → ' + r.path)
-      setExportedPath(r.path)
-      setExportOpen(false)
-    } catch (e) {
-      hold('导出失败: ' + (e as Error).message)
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  // 视频本体：本地缓存优先（离线、最快）；没有缓存时后端会按朋友圈 XML 里的
-  // <url> 从微信 CDN 按需取回，并校验取回的字节真的是 MP4 —— 实测 CDN 返回的是
-  // 微信客户端加密流，所以不能把原始 URL 直接当 src（CSP 会拦，且那是密文）。
-  const loadVideo = useCallback((vk: string, v: { md5?: string; timelineId?: string; id?: string; url?: string; key?: string }): void => {
-    if (!vk || videoSrcs[vk] || videoFetching.current.has(vk)) return
-    videoFetching.current.add(vk)
-    void (async () => {
-      try {
-        const r = await apiGetSnsVideoDataUrl({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id, url: v.url, key: v.key })
-        if (r.url) {
-          setVideoSrcs(prev => capRecord({ ...prev, [vk]: r.url as string }, VIDEO_SRC_CACHE_MAX))
-        } else {
-          setVideoFailed(prev => new Set(prev).add(vk))
-          if (r.error) setVideoErr(prev => { const n = new Map(prev); n.set(vk, r.error as string); return n })
-        }
-      } catch (e) {
-        setVideoFailed(prev => new Set(prev).add(vk))
-        setVideoErr(prev => { const n = new Map(prev); n.set(vk, (e as Error).message); return n })
-      } finally {
-        videoFetching.current.delete(vk)
-      }
-    })()
-  }, [videoSrcs])
-
-  // 播放器按视频真实宽高比定尺寸：容器与画面同比例，`object-fit: contain` 就没有黑边
-  // （早先是固定 280×180 的横框，竖屏视频左右两条黑边）。
-  const fullscreenVideo = (tile: Element | null): void => {
-    const v = tile?.querySelector('video')
-    if (!v) return
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* 忽略 */ })
-    else if (typeof v.requestFullscreen === 'function') void v.requestFullscreen().catch(() => { /* 被拒则保持内联 */ })
-  }
-
-  /** 收起播放器，回到封面（清掉已解析的 src 与失败标记）。 */
-  const closeVideo = (vk: string): void => {
-    setVideoSrcs((prev) => { const n = { ...prev }; delete n[vk]; return n })
-    setVideoFailed((prev) => { const n = new Set(prev); n.delete(vk); return n })
-    setVideoErr((prev) => { const n = new Map(prev); n.delete(vk); return n })
-    setVideoMeta((prev) => { const n = { ...prev }; delete n[vk]; return n })
-  }
-
-  // Esc 退出全屏：Chromium 对「元素全屏」的默认 Esc 处理在本应用里不生效（实测按了没反应），
-  // 页面层自己接一次，避免用户点进全屏后出不来。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || !document.fullscreenElement) return
-      e.preventDefault()
-      void document.exitFullscreen().catch(() => { /* 忽略 */ })
-    }
-    window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey) }
-  }, [])
-
-  // 保存视频：先在主进程弹保存对话框选路径，再由**后端**取字节写盘。
-  // 渲染端的 `<a download>` 在这个 Electron 里落不了盘（实测点了没反应）；
-  // 把几十 MB 的 base64 经 IPC 传回主进程也不合适，所以写盘放在后端做。
-  const saveVideo = (v: { md5?: string; timelineId?: string; id?: string; url?: string; key?: string }): void => {
-    void (async () => {
-      const picked = await apiSaveFileDialog({
-        defaultName: `朋友圈视频-${(v.md5 || 'export').slice(0, 8)}.mp4`,
-        title: '保存视频',
-        filters: [{ name: 'MP4 视频', extensions: ['mp4'] }],
-      })
-      if (picked.canceled || !picked.path) return
-      try {
-        const r = await apiExportSnsVideo({ md5: v.md5, timelineId: v.timelineId, mediaId: v.id, url: v.url, key: v.key, dest: picked.path })
-        if (!r.ok) { hold('保存失败: ' + (r.error || '未知错误')); return }
-        flash(`已保存视频（${Math.round((r.bytes ?? 0) / 1048576)} MB）`)
-        setExportedPath(picked.path)
-      } catch (e) {
-        hold('保存失败: ' + (e as Error).message)
-      }
-    })()
   }
 
   const toggleText = (tid: string): void => {

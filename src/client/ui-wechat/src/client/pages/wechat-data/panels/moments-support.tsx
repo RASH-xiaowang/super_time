@@ -28,6 +28,20 @@ export const ARTICLE_COVER_CACHE_MAX = 100
 
 /** Media-type filter id + user-facing label kept in lockstep with the UI chips. */
 export type MediaFilter = 'all' | 'image' | 'video' | 'link' | 'location' | 'text'
+/**
+ * 提示语出口（`useTransientNotice` 那三条动作的形状）。
+ *
+ * 为什么不写 `Pick<ReturnType<typeof useTransientNotice>, …>`：那是个**泛型函数**，
+ * `ReturnType` 会把类型参数按 `unknown` 实例化，于是面板里 `T = string` 的 `flash`
+ * 反而塞不进来（实测报「`(value: string, ms?) => void` 不能赋给 `(value: unknown, ms?) => void`」）。
+ * 钩子只需要「能把字符串播出去」这一件事，所以按需要声明，不跟着泛型跑。
+ */
+export interface MomentsNoticeSink {
+  flash: (value: string, ms?: number) => void
+  hold: (value: string) => void
+  clear: () => void
+}
+
 export const MEDIA_LABELS: Record<MediaFilter, string> = {
   all: '全部',
   image: '图片',
