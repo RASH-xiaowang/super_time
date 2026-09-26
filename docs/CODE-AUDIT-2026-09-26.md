@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**300 文件 / 3034 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异 93 条全咬红、逐字节还原，登记到 M96）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**301 文件 / 3047 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 96 条全咬红、逐字节还原，登记到 M99）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -30,16 +30,17 @@
 | 第二批 #13 P2-7 `wechat:call` 入参校验 | 🟡 ① 档硬拒已上线，② 档是**有证据要求的影子** | `92d37ca` | 新增宿主层 `wechat-args-guard.js`（+ `.d.ts`，按 H11 口径不给 `any`）：① **结构与体积**总是拒（参数个数/嵌套深度/数组项数/单串与累计体积/环/function/symbol/bigint/NaN/非纯对象），二进制按 `byteLength` 记账**不逐元素遍历**；接线在 `wechat-host.js` 的 `call()` 里、排在 `fn.apply` 之前，且归一化后的 `callArgs` 才是缓存键用的那份。② **形状**（生成的 114 份 zod schema）默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒 —— 因为这份生成物**从未被执行过**，没有证据就硬拒的结果是某个面板当场坏掉；`unrecognized_keys`（面板多发一个后端还不认的键）永远不算失败，保住向前兼容。**判据**：`wechat-args-guard.spec.ts` 12 条，含「被拒的调用一次都不许碰到 gateway」（把实现换成计数器来量，不靠读日志）、边界成对（防上界被悄悄调成无限）、8MB buffer 遍历耗时 <100ms、接线级判据、以及**覆盖账本 `[算料]`**：172 个 `@Remote` 里 schema 只覆盖 114，未覆盖 **58** 已钉成只能变小的棘轮（新加方法不生成 schema 就红）。变异 M82–M85 |
 | 第二批 #14 P1-7 六个零 spec 模块 | ✅ 完成（并当场揪出 6 个真缺陷） | `fdd1f36` | 补 6 份 spec：`decrypt-all-tree`(13) / `payments-status`(8) / `drafts-clear`(8) / `calendar-daily-counts`(7) / `media-file-resolve`(9) / `gateway-read-shell`(26，覆盖 53 个 `@Remote` 壳的接线面)。**补测不是走形式**，撞出来的 6 条（详见「本轮新发现」⑨–⑫）：① `looksDecrypted` 那道解密有效性闸门**恒真**（10 处）⇒ 错密钥把乱码发布成快照；② drafts 早退分支双重 `close` ⇒ 人话错误被 `ERR_INVALID_STATE` 顶替；③ calendar 的存在性检查写在 try 之外 ⇒ 一个半写分片毁掉整个月 + 漏一条句柄（**P0-1 的 AST 判据抓不到这种形状**，因为 finally 里确实有一次 close）；④ media-file 负缓存**永久** ⇒ 「先点开、后下载」的文件不重启就永远打不开；⑤ media-file 缓存键不含数据根 ⇒ 换账号后同名同体积的文件读回**上一个账号**的字节；⑥ records 的 `combineWhere` 把 ` WHERE ` 的前导空格 trim 掉 ⇒ 拼成 `tableWHERE`，query 侧 catch 咽掉语法错误，用户侧表现是「记录页一搜就空」。变异 M86–M94 |
 | 第二批 #14 顺带新增的全仓守卫 | ✅ 完成 | `fdd1f36` | `source-text-integrity.spec.ts`：源码里有字面 NUL/退格/ESC 就让 `grep` 把整个文件当二进制跳过 ⇒ **所有文本/AST 类判据对那个文件静默失效**（只让守卫变绿，不会变红）。扫 849 个文件，判据自带反例自证；变异 M89 |
-| 第四批（部分）P3-3 / P3-4 两个「字面量散在多处」 | ✅ 完成 | `本次` | MD5 的 10 处 `[0-9a-f]{32}` 收进 `src/md5.ts`（`isMd5` 严格小写 / `isMd5Loose` 大小写都认 / `MD5_SEGMENT` 供拼进更大的模式 —— **两种口径刻意都留着**，差别写在名字里而不是散在十个字面量里）；AES 密钥字节化的 6 处收进 `keys/image-key.ts#normalizeAesKey`（4 处带 `length>0`、2 处不带的分歧并成一条：空串/全空白/空字节一律 `null` = 「没有密钥」，交给各调用方原本的退化分支）。守卫 `md5-image-key.spec.ts` 11 条：行为逐值钉 + **零容忍扫描**（全仓不许再出现这两个字面量的第三种写法）+ 反例自证 + 「共享正则实例不许带 `g` 标」这一条（十几个站点共用一个实例之后，`g` 会让 `lastIndex` 跨调用漂）。变异 M95/M96 |
-| 工具修复：`check:mutation` 自己改坏了注入内容 | ✅ 完成 | `本次` | `String.replace(from, m.to)` 里替换串的 `$&` / `$'` / `` $` `` **是特殊序列** —— 一条 `to` 写成 `new RegExp('^' + X + '$', 'i')` 时，`$'` 被展开成「匹配之后的全部文本」，文件被写成垃圾后报「语法假咬」，看着像这条变异没意义，其实是工具自己变了形（M95 第一次就是这么红的）。改成**函数替换** + 让注入文本跟着锚点走行尾（CRLF 文件里不再塞进裸 LF）。自检 `--self-test` 三条判定路径仍成立，全表 93 条重跑全咬红、逐字节还原 |
+| 第四批（部分）P3-3 / P3-4 两个「字面量散在多处」 | ✅ 完成 | `8a83972` | MD5 的 10 处 `[0-9a-f]{32}` 收进 `src/md5.ts`（`isMd5` 严格小写 / `isMd5Loose` 大小写都认 / `MD5_SEGMENT` 供拼进更大的模式 —— **两种口径刻意都留着**，差别写在名字里而不是散在十个字面量里）；AES 密钥字节化的 6 处收进 `keys/image-key.ts#normalizeAesKey`（4 处带 `length>0`、2 处不带的分歧并成一条：空串/全空白/空字节一律 `null` = 「没有密钥」，交给各调用方原本的退化分支）。守卫 `md5-image-key.spec.ts` 11 条：行为逐值钉 + **零容忍扫描**（全仓不许再出现这两个字面量的第三种写法）+ 反例自证 + 「共享正则实例不许带 `g` 标」这一条（十几个站点共用一个实例之后，`g` 会让 `lastIndex` 跨调用漂）。变异 M95/M96 |
+| 工具修复：`check:mutation` 自己改坏了注入内容 | ✅ 完成 | `8a83972` | `String.replace(from, m.to)` 里替换串的 `$&` / `$'` / `` $` `` **是特殊序列** —— 一条 `to` 写成 `new RegExp('^' + X + '$', 'i')` 时，`$'` 被展开成「匹配之后的全部文本」，文件被写成垃圾后报「语法假咬」，看着像这条变异没意义，其实是工具自己变了形（M95 第一次就是这么红的）。改成**函数替换** + 让注入文本跟着锚点走行尾（CRLF 文件里不再塞进裸 LF）。自检 `--self-test` 三条判定路径仍成立，全表 93 条重跑全咬红、逐字节还原 |
 | 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
-| 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `上一提交` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
+| 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `2570230` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
+| 第二批 #15 P1-5 `file:` 依赖溯源 | ✅ 完成（**打法与报告不同**） | `382d66a` | 新增 `scripts/deps-provenance.mjs`（+ `.d.mts`，按 H11 口径不给 `any`；**`.mjs` 的宿主脚本必须配 `.d.mts`**，配 `.d.ts` 时 TS 根本不认，报的还是 TS7016）：`--write` 生成 `src/backend/deps/PROVENANCE.json`（19 行：`kind`/`path`/`declared`/`version`/`repository` + **整棵目录的内容 sha256** + 文件数 + 字节数），`--check` 复算比对并**以退出码 1 报出**，`--import <包名> <上游目录>` 拷入上游一份并顺手记下那一刻的 commit sha 与日期。报告点名的 `sync-deps.mjs` **没有单独成文件**：「同步」里能自动的只有拷贝，而「该不该拷」必须是人的判断，拆成两个脚本只会得到一个假装自动的拷贝器。人手维护的 `upstream`/`upstreamCommit`/`importedAt`/`upstreamWorkspace`/`note` 在 `--write` 时原样带过（现存 16 条 note、13 条来源工作区标记）；in-repo 的两个包**只登记不指纹** —— 它们本仓演进、`lib/` 每次构建重生成并由 CI 逐字节比对，再叠一层内容指纹是噪声不是溯源。**判据** `deps-provenance.spec.ts` 13 条：package.json ↔ 表**双向**对齐（漏一行、留一行已删的依赖都是问题）、四类漂移分开报（version / repository / 内容指纹 / 文件数 / kind）、**指纹口径与 mtime 和文件顺序无关**（否则换台机器就假红）、`node_modules`/`.git`/`*.tsbuildinfo` 不进指纹也不进拷贝清单、以及**起子进程**测 CLI 退出码（现状=0、漂移=1、表整个缺失=1、坏表拒绝覆盖=1）—— 纯函数全绿而门禁退 0 是两种不同的坏法，所以两头都要量。`npm run check:deps-provenance` 已进 package.json（现状复算 82ms，成本可以忽略）。变异 M97/M98/M99；另有一条 M97b **注定存活并已删除**，见 ⑬ |
 
 ### 剩余（按 §七 的批次，未在本轮）
 
 - 第一批：**已全部做完**（#1–#8）。
-- 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、#11 重读查询注入 `AbortSignal`、
-  #15 `file:` 依赖溯源表。
+- 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、
+  #11 重读查询注入 `AbortSignal`。
 - **关于 #11（P1-2）的两条实施前提**（本轮读代码 + 读生成物确认，别再当「加个 signal 参数」那么小）：
   ① 这五个查询（`privacy` / `graph` / `ledger` / `storage` / `overview-insights`）现在全是**同步函数**，
      要按行让出就必须改成 `async`，连带 `cachedBySig`（同步签名缓存）要加 async 版 + 同键并发合流、
@@ -107,6 +108,22 @@
      弄坏了）。**内容问题，不是二进制问题** —— 上面那条守卫特意用「UTF-8 往返一致」而不是
      「不许出现替换字符」做判据，就是为了让这类既有乱码不伪装成「文件坏了」。留给界面文案的
      一轮一起清（改注释会动 CSS 分块，要过 `css:bundle-diff`，不该塞进整改提交里）。
+  ⑬ 落地 P1-5（溯源表）时撞出的三条，都不在报告里：
+     **① `--write` 会把人手写的来源说明冲成零。** `readTable()` 对「JSON 语法坏了」和
+     「根本没有表」回的是同一个 `null`，而 `--write` 原本把 `null` 当「首次 bootstrap」
+     ⇒ 谁手抖打坏一个逗号，下一次刷新就把 16 条 `note`/`upstreamCommit` 全丢掉 —— 而这 16 条
+     恰好是整张表里**唯一不可再生**的部分（17 个包的指纹能从磁盘重算，上游 commit sha 不能）。
+     已修：表存在却读不出 `packages` 时**拒绝覆盖并退出 1**，原文件一字不动；「表压根不存在」
+     仍然放行（那是合法的首次生成）。变异 M99。
+     **② `files` 那一维不是独立判据。** 单独把它的比对关掉，13 条用例全绿（增删文件必然改变
+     `treeSha256`）。这条变异（M97b）已删而不是留着：登记表的前提是「每条都必须咬红」，
+     塞一条注定存活的进去，以后真出现「某条不知为何不咬了」时就分不清了。结论记在这里：
+     `files` 只是让人看懂差异的数字，别把它当成第二道闸。
+     **③ 变异登记表自己撞了 1000 行闸门。** 第 96 条把 `scripts/mutation-check.mjs` 顶到
+     1012 行 ⇒ `m21-file-size-ratchet.spec.ts` 红（白名单只许变短，所以不能靠加例外解决）。
+     已把**表**搬进 `scripts/mutations-registry.mjs`（数据 789 行 / 跑手 237 行）：这条债本来就在，
+     只是「登记一条变异」这个动作从来没想过会让**登记本身**失败。表再涨到上限时按批次切开聚合，
+     不要放宽闸门。
 
 
 
@@ -150,7 +167,7 @@
    内部 `try { return fn(db) } finally { db.close() }`，句柄登记册直接照搬 `tests/helpers/temp-db.ts:20-26` 已验证的模式。
 2. 用带「恰好 N 次」断言的批量替换脚本（见 §七 工具纪律）逐处改造上表 6 个文件；**不要用多个 Edit 改同一文件**。
 3. 加守卫 `panels/`… 实为 backend spec：`query-db-lifetime.spec.ts`，断言 `query/**` 下 `new DatabaseSync(` 的出现次数 == `withDb(` 调用次数（或白名单化已知安全的少数几处）。
-4. 变异条目（`scripts/mutation-check.mjs` 的 `MUTATIONS`）：把 `withDb` 的 `finally` 改成「只在成功路径 close」，**必须变红**。
+4. 变异条目（`scripts/mutations-registry.mjs` 的 `MUTATIONS`，跑手是 `mutation-check.mjs`）：把 `withDb` 的 `finally` 改成「只在成功路径 close」，**必须变红**。
 
 ---
 
@@ -473,7 +490,7 @@ P3-1 ~ P3-20 逐条清理（多数 0.2-0.5d/条），建议**与相邻功能改�
 1. **锚点**：定位到**目标函数体内**，不要全文匹配——`privacy-audit.ts` 的孪生行曾让 M25 变异「没咬住」。
 2. **契约**：spec 断言切片到分支（`sliceBetween`），跨花括号用 `[^}]`、**禁 `[\s\S]*?`**；每条配**反例 + 防空转哨兵**（`atLeast`）；注释里的字样不算代码（先 `stripComments`）。
 3. **守卫**：新 spec 归位（`query/**` 归 `wechat-data/tests/`，`panels/` 归 `ui-wechat/**`）；**纯上色的 CSS 类不许声明 `display`**（改 UI 时）。
-4. **变异**：条目加进 `scripts/mutation-check.mjs` 的 `MUTATIONS`（`from` 必须唯一），跑 `npm run check:mutation` 确认**必须变红**且**逐字节还原**。
+4. **变异**：条目加进 `scripts/mutations-registry.mjs` 的 `MUTATIONS`（`from` 必须唯一；表与跑手分文件是 2026-09-26 起的，见「本轮新发现」⑬③），跑 `npm run check:mutation` 确认**必须变红**且**逐字节还原**。
 
 收口链：`typecheck`（5 套）→ 目标 spec → `build:ui`（**必跑**，CSS Modules 错只在 postcss 暴露）→ `build:backend` + `build:types` → 全量 `vitest run`（基线 = 12 failed 全为环境类，口径"不新增失败"）。
 
