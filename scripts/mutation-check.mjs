@@ -381,6 +381,14 @@ const MUTATIONS = [
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
   },
   {
+    id: 'M51-privacy-promise-drift',
+    why: '隐私文档又写回「功能不减」—— 那张离线视图已随地理 SVG 删除，这句会让用户以为关掉开关没有代价',
+    file: 'docs/PRIVACY.md',
+    from: '不再画底图',
+    to: '回退到内置的简化边界视图（功能不减）',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-first-paint.wiring.spec.ts',
+  },
+  {
     id: 'M41-calls-rank-unbounded',
     why: '排行列表去掉限高 —— 长列表会重新把同一行的矮卡片顶出一大片空白（用户报的留白）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls.module.css',

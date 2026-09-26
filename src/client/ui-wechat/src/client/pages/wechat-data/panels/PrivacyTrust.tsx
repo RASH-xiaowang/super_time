@@ -155,7 +155,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
               `panels/world-map-data.ts#fetchFirstJson`。
             */}
             <button type="button" className={css.toggle} data-active={state.blockMapTiles} onClick={() => { void toggle('blockMapTiles', !state.blockMapTiles) }}>
-              禁止地图底图出网（世界/中国地图不从 CDN 拉 GeoJSON，改用离线视图） · {state.blockMapTiles ? '开' : '关'}
+              禁止地图底图出网（世界/中国地图不从 CDN 拉 GeoJSON —— 世界地图将只显示省份/城市榜单，不画底图） · {state.blockMapTiles ? '开' : '关'}
             </button>
           </div>
         ) : (

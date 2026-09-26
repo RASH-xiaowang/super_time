@@ -209,7 +209,7 @@
 |---|---|
 | 触发 | 打开「世界地图 / 中国地图 / 省市地图」时拉取行政区划 GeoJSON |
 | 目的地 | `cdn.jsdelivr.net`、`unpkg.com`、`geo.datav.aliyun.com` |
-| 开关 | ✅ **「禁止地图底图出网」**（`blockMapTiles`，见第五节）：开启后**一个字节都不发**，直接回退到内置的简化边界视图（功能不减） |
+| 开关 | ✅ **「禁止地图底图出网」**（`blockMapTiles`，见第五节）：开启后**一个字节都不发**。代价如实写：世界 / 中国 / 省市地图**不再画底图** —— 世界层显示「底图不可用」说明，中国层与省市层退到矩形树图，地区分布仍可从下方的**省份 / 城市榜单**读到。原先那句「回退到内置的简化边界视图（功能不减）」指的是那张自绘地理 SVG，它已于 2026-09-26 按用户要求移除 |
 | 代码 | `panels/world-map-data.ts`、`ChinaMap.tsx`、`province-map-data.ts`、`city-map-data.ts`；CSP 白名单在 `src/client/ui-app/index.html` |
 
 ### F. 语音模型下载（只在你要用时）

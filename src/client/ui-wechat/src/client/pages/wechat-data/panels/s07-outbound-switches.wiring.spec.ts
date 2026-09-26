@@ -39,7 +39,7 @@ describe('S07 · 地图底图开关（blockMapTiles）贯穿全链', () => {
     atLeast([...store.matchAll(/blockMapTiles/g)].length, 4, 'privacy-audit 里 blockMapTiles 的出现次数')
 
     // 默认必须是 false：新增开关不能把老用户原本就在用的地图关掉
-    expect(store, '默认值不是 false（会让老用户的地图突然变离线视图）').toMatch(/getSetting\(db, 'blockMapTiles', false\)/)
+    expect(store, '默认值不是 false（会让老用户原本能看的世界地图突然没有底图）').toMatch(/getSetting\(db, 'blockMapTiles', false\)/)
   })
 
   it('前端：镜像接口 → 包装 → 开关按钮，三处都有', () => {

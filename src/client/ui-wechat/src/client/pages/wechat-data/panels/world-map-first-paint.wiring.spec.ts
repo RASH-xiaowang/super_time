@@ -19,7 +19,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, readStripped, readText, sliceBetween } from './wiring-kit.ts'
+import { atLeast, findRoot, readStripped, readText, sliceBetween } from './wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const MAP = readStripped(join(HERE, 'WorldMap.tsx'))
@@ -87,6 +87,16 @@ describe('③ 底图拉不到时给明确说明，不留空白', () => {
     const tip = sliceBetween(MAP, '{geoTilesBlocked && (', ')}', '底图不可用提示')
     expect(tip, '提示要说清原因（未联网 / 隐私开关）').toContain('禁止地图底图出网')
     expect(tip, '要指个去处，否则用户以为数据丢了').toContain('省份 / 城市榜单')
+  })
+
+  it('隐私开关的文案与文档**都不许再承诺「改用离线视图」**（那个视图已被删）', () => {
+    const privacy = readStripped(join(HERE, 'PrivacyTrust.tsx'))
+    expect(privacy.includes('离线视图'), 'SVG 已删，界面不能再承诺离线视图').toBe(false)
+    // 文档侧守「必须如实写出代价」而不是「不许出现某个词」—— 后者会把
+    // 「说明历史时引用旧承诺」也判成违规（这条断言的第一版就撞了这个坑）。
+    const doc = readText(join(findRoot(HERE), 'docs', 'PRIVACY.md'))
+    expect(doc, 'PRIVACY.md 必须如实写出代价：不再画底图').toContain('不再画底图')
+    expect(doc, '并点明旧承诺指的是被删的那张 SVG').toContain('已于 2026-09-26 按用户要求移除')
   })
 })
 
