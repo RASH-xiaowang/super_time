@@ -668,6 +668,38 @@ const MUTATIONS = [
     to: "import { getConfig } from './query/config.ts'\nvoid getConfig\nexport function fmtBytes(n: number | null | undefined): string {",
     spec: "src/backend/wechat-data/tests/layer-direction.spec.ts",
   },
+  {
+    id: "M82-args-guard-not-enforced",
+    why: "把 ① 档闸门接到执行之后/直接放行（P2-7 原本的样子）—— 越界参数会一路走到 gateway",
+    file: "src/backend/wechat-host.js",
+    from: "      if (!guard.ok) {",
+    to: "      if (false) {",
+    spec: "src/backend/tests/wechat-args-guard.spec.ts",
+  },
+  {
+    id: "M83-args-nan-allowed",
+    why: "放行 NaN/Infinity —— 结果缓存的 JSON.stringify 会把它静默写成 null，等于闸门替调用方改了数据",
+    file: "src/backend/wechat-args-guard.js",
+    from: "    if (!Number.isFinite(value)) {",
+    to: "    if (false) {",
+    spec: "src/backend/tests/wechat-args-guard.spec.ts",
+  },
+  {
+    id: "M84-args-cycle-allowed",
+    why: "放行循环引用 —— 深查会自己转不完，而下游每次序列化都炸",
+    file: "src/backend/wechat-args-guard.js",
+    from: "  if (seen.has(value)) return { code: 'ARGS_CYCLE', message: '参数里有循环引用' };",
+    to: "  if (false) return { code: 'ARGS_CYCLE', message: '参数里有循环引用' };",
+    spec: "src/backend/tests/wechat-args-guard.spec.ts",
+  },
+  {
+    id: "M85-schema-enforcement-dead",
+    why: "让 ② 档即使进了名单也只记账（影子永远升级不成硬拒）—— 那条「升级路径」就成了装饰",
+    file: "src/backend/wechat-args-guard.js",
+    from: "    return enforced.has(implName)",
+    to: "    return false && enforced.has(implName)",
+    spec: "src/backend/tests/wechat-args-guard.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)

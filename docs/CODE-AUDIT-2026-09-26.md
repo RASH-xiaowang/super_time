@@ -10,8 +10,8 @@
 ## 先读这里：本轮整改状态（2026-09-26 同日，逐条对到 §七）
 
 口径：**每条都是「修复 + 行为守卫 + 棘轮/接线守卫 + 变异自证」四件套齐全才记完成**；
-`check:mutation` 与全量 `vitest` 当场跑过（终态：**291 文件 / 2933 用例**全绿（其中 9 文件/14 用例按环境跳过），
-5 套 typecheck 全绿，变异登记到 M81）。
+`check:mutation` 与全量 `vitest` 当场跑过（终态：**292 文件 / 2945 用例**全绿（其中 9 文件/14 用例按环境跳过），
+5 套 typecheck 全绿，变异 82 条、登记到 M85）。
 
 | 清单项 | 状态 | 落点（提交） | 备注 |
 |---|---|---|---|
@@ -27,6 +27,7 @@
 | 第二批（清单未列，同批做掉）P1-1 读失败契约 | ✅ 完成 | `e6f4b76` | 后端把「库打不开/读失败」与「确实没有条目」分成两件事（`DirListing.error` / 全域搜索的 `readError`），面板必须区分显示；守卫 `read-error-visibility.spec.ts` 从**类型**推「哪些快照带 `readError` ⇒ api 层哪些包装 ⇒ 调用它们的面板必须自己提到 `readError`」，新接口忘读就红；变异 M67/M68 |
 | 第二批 #16 P2-5 readRenderCache | ✅ 完成 | `285c9ac` | 24 小时保质期 + 单条 1.5 MB 上限 + 写失败从静默变成「说一次并丢干净」（超大与配额两种原因分开记账，不互相静音）；判据 `render-cache-ttl.spec.ts`，变异 M73/M74 |
 | 第二批 #17 P2-8 usePagedList 自动刷新 | ✅ 完成 | `aee1e6f` | 节流（30 秒内不重复起）+ 同键合并 + 页面不可见不发 + 上界装不下就**整轮跳过**（不再静默截断成前 8 页，那会把「已刷新」画成假话）；判据 `paged-list-refresh-gate.spec.ts`，变异 M71/M72 |
+| 第二批 #13 P2-7 `wechat:call` 入参校验 | 🟡 ① 档硬拒已上线，② 档是**有证据要求的影子** | `本次` | 新增宿主层 `wechat-args-guard.js`（+ `.d.ts`，按 H11 口径不给 `any`）：① **结构与体积**总是拒（参数个数/嵌套深度/数组项数/单串与累计体积/环/function/symbol/bigint/NaN/非纯对象），二进制按 `byteLength` 记账**不逐元素遍历**；接线在 `wechat-host.js` 的 `call()` 里、排在 `fn.apply` 之前，且归一化后的 `callArgs` 才是缓存键用的那份。② **形状**（生成的 114 份 zod schema）默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒 —— 因为这份生成物**从未被执行过**，没有证据就硬拒的结果是某个面板当场坏掉；`unrecognized_keys`（面板多发一个后端还不认的键）永远不算失败，保住向前兼容。**判据**：`wechat-args-guard.spec.ts` 12 条，含「被拒的调用一次都不许碰到 gateway」（把实现换成计数器来量，不靠读日志）、边界成对（防上界被悄悄调成无限）、8MB buffer 遍历耗时 <100ms、接线级判据、以及**覆盖账本 `[算料]`**：172 个 `@Remote` 里 schema 只覆盖 114，未覆盖 **58** 已钉成只能变小的棘轮（新加方法不生成 schema 就红）。变异 M82–M85 |
 | 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
 | 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `上一提交` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
 
@@ -34,7 +35,9 @@
 
 - 第一批：**已全部做完**（#1–#8）。
 - 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、#11 重读查询注入 `AbortSignal`、
-  #13 `wechat:call` 接 zod `safeParse`、#14 六个零 spec 模块补测、#15 `file:` 依赖溯源表。
+  #14 六个零 spec 模块补测、#15 `file:` 依赖溯源表。
+- 第二批 #13 的**后半**：`ENFORCED_SCHEMA_METHODS` 目前是空集 —— ② 档（按 schema 硬拒）要等
+  `info().argGuard.mismatched` 在真实使用里稳定为空才升级，这是刻意留下的证据门槛，不是漏做。
 - 第三批 #18–#25（拆巨型组件、`GatewayCore` 职责拆分、解循环依赖、长列表虚拟化、统一失效契约、
   DB 纪律 ESLint 固化、四份新文档 + README 索引）。
 - 第四批其余 P3（`isMd5` 10 处、`normalizeAesKey` 6 处、图片解码三兄弟、同概念三名、地图开关镜像…）；
@@ -62,6 +65,10 @@
      上层的文件，守卫不会有任何反应。本轮新增后端唯一格式化出处 `src/format.ts` 时正要走这条路，
      于是把它连同那两个文件一起升成 **`base` 层**并加硬判据「base 不许依赖包内任何模块」+ 变异 M81
      （清单从「靠注释解释的例外」变成「有牙齿的下界」）。
+  ⑧ **`@Remote` 方法 172 个，生成的 schema 只覆盖 114 个**（差集 58，`[算料]` 打在
+     `wechat-args-guard.spec.ts` 里，已钉成只能变小的棘轮）。这份差集同时是 P1-5 的实锤：
+     `wechat-data/lib/typert.host.js` 的 `sourceLocation` 写着 `packages/host/wechat-data/src/gateway.ts` ——
+     **不是本仓库的路径**，也就是说这份生成物是从另一棵树里签出来的，没有任何脚本能在这里重现它。
 
 
 

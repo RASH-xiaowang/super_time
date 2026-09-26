@@ -16,6 +16,20 @@ const os = require('node:os');
 const { statSync } = require('node:fs');
 const wechatPaths = require('./wechat-paths');
 const { fetchWithRetry } = require('./llm-retry');
+const argsGuard = require('./wechat-args-guard');
+
+/**
+ * 已经用**真实流量**证明过「生成的 schema 与面板实际传来的形状对得上」的方法。
+ *
+ * 空集起步不是偷懒：`wechat-data/lib/typert.host.js` 里那 114 份 zod schema 从来没被执行过
+ * （P2-7），也就是说「它们对不对今天的代码」这件事没有任何证据。拿没有证据的东西去拒绝
+ * 真实调用，结果是某个面板当场开始报错，而不是更安全。
+ * 所以这里把 zod 判定先当**影子**记账（见 `info().argGuard`），promotion 到硬拒的条件是
+ * 那条方法在真实使用中 `mismatched` 里再也没有出现过 —— 加一个名字就要在下面的注释里写明
+ * 是哪条证据。结构/体积那一道闸门（`wechat-args-guard.js` 的 ① 档）不受这份名单影响，
+ * 它**总是**拒绝。
+ */
+const ENFORCED_SCHEMA_METHODS = new Set();
 
 /** 每次重试打一条日志：重试过程不上界面（成功的重试应当无感），但诊断日志里要留痕。 */
 function logRetry(what) {
@@ -589,6 +603,21 @@ async function createWechatBackend(options = {}) {
 
   const mod = await import('./wechat-data/lib/index.js');
   const protocol = await import('@deepseek-ai/dsh-typert-protocol');
+  /**
+   * 生成的 zod schema 表（② 档的影子校验）。
+   *
+   * 加载失败**不许**把后端拖到起不来：影子少一份账只是少一条诊断信息，
+   * 而 ① 档（结构/体积）与它无关、照常拒绝。拿不到表时 `checkSchema` 回 `unloaded`，
+   * `info().argGuard.covered` 会是 0 —— 那本身就是「schema 表没跟上来」的可见信号。
+   */
+  let argSchemas = null;
+  try {
+    const typert = await import('./wechat-data/lib/typert.host.js');
+    argSchemas = argsGuard.buildSchemaMap(typert?.TYPERT?.invocations ?? []);
+    if (argSchemas.size === 0) console.warn('[wechat] typert schema 表是空的，入参形状校验无覆盖');
+  } catch (e) {
+    console.warn('[wechat] typert schema 表没加载到（形状校验关闭）:', e?.message ?? e);
+  }
   const context = createMiniContext(options);
   const gateway = new mod.WechatDataGateway(context);
 
@@ -637,6 +666,13 @@ async function createWechatBackend(options = {}) {
         pathConfig: wechatPaths.configPath(),
         methods: [...methodMap.keys()].sort(),
         llmConfigured: context.llm?.configured ?? false,
+        /**
+         * 入参守卫的影子账本（P2-7 的 ② 档靠它拿证据）：
+         * `covered/total` 是「生成的 schema 覆盖了几个 `@Remote` 方法」，
+         * `mismatched` 是「真实调用里哪些方法与自己的 schema 对不上」，
+         * `largest` 是每条方法的历史最大参数体积 —— 收 ① 档上界要看的正是这个。
+         */
+        argGuard: argsGuard.snapshot(argSchemas ? argSchemas.size : 0, methodMap.size),
       };
     },
     async call(method, args = []) {
@@ -645,7 +681,25 @@ async function createWechatBackend(options = {}) {
         return { ok: false, error: { message: `未知的 Super Time 后台方法: ${method}` } };
       }
       const fn = gateway[implName];
-      const callArgs = Array.isArray(args) ? args : [args];
+      // ① 结构与体积：这一档**总是**拒绝（渲染进程不是可信调用方）。
+      const guard = argsGuard.guardCallArgs(args);
+      if (!guard.ok) {
+        console.warn('[wechat] 入参被拒 %s：%s', method, guard.message);
+        return { ok: false, error: { message: guard.message, code: guard.code, details: { method } } };
+      }
+      const callArgs = guard.value;
+      argsGuard.observe(method, guard.bytes);
+      // ② 形状（生成的 zod schema）：默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒。
+      const verdict = argsGuard.checkSchema(argSchemas, implName, callArgs, ENFORCED_SCHEMA_METHODS);
+      if (verdict.verdict === 'mismatch') {
+        argsGuard.noteSchema(implName, verdict.message ?? 'schema 判定不通过');
+        if (verdict.code) {
+          console.warn('[wechat] 入参形状被拒 %s：%s', method, verdict.message);
+          return { ok: false, error: { message: verdict.message, code: verdict.code, details: { method } } };
+        }
+      } else if (verdict.verdict === 'ok') {
+        argsGuard.noteSchema(implName, null);
+      }
       const cacheKey = resultCacheKey(method, callArgs, decodeInputSig());
       if (cacheKey) {
         const cached = readResultCache(cacheKey);
