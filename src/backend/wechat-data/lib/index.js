@@ -9753,7 +9753,11 @@ function tableColumns10(db, table) {
 function like(q) {
   return "%" + q + "%";
 }
-function searchContacts(decryptedDir, q, cap) {
+function noteFailure(sink, domain, err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  sink.push({ domain, reason: msg.slice(0, 160) });
+}
+function searchContacts(sink, decryptedDir, q, cap) {
   const p = join44(decryptedDir, "contact", "contact.db");
   if (!existsSync36(p)) return [];
   try {
@@ -9779,11 +9783,12 @@ function searchContacts(decryptedDir, q, cap) {
         category: cellString8(r.u).endsWith("@chatroom") ? "group" : cellString8(r.u).startsWith("gh_") ? "official" : "contact"
       }));
     });
-  } catch {
+  } catch (e) {
+    noteFailure(sink, "\u8054\u7CFB\u4EBA", e);
     return [];
   }
 }
-function searchMoments(decryptedDir, q, cap) {
+function searchMoments(sink, decryptedDir, q, cap) {
   const dbPathCandidates = [join44(decryptedDir, "sns", "db_sns", "sns.db"), join44(decryptedDir, "sns", "sns.db")];
   for (const p of dbPathCandidates) {
     if (!existsSync36(p)) continue;
@@ -9807,12 +9812,13 @@ function searchMoments(decryptedDir, q, cap) {
         });
       });
       if (hits) return hits;
-    } catch {
+    } catch (e) {
+      noteFailure(sink, "\u670B\u53CB\u5708", e);
     }
   }
   return [];
 }
-function searchFavorites(decryptedDir, q, cap) {
+function searchFavorites(sink, decryptedDir, q, cap) {
   const p = join44(decryptedDir, "favorite", "favorite.db");
   if (!existsSync36(p)) return [];
   try {
@@ -9831,11 +9837,12 @@ function searchFavorites(decryptedDir, q, cap) {
       const rows = db.prepare(`SELECT ${idCol} AS id, ${contentCol} AS c FROM fav_db_item WHERE ${contentCol} LIKE ?${extraSql} LIMIT ?`).all(like(q), ...extraParams, cap);
       return rows.map((r) => ({ id: Number(r.id ?? 0), snippet: cellString8(r.c).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) }));
     });
-  } catch {
+  } catch (e) {
+    noteFailure(sink, "\u6536\u85CF", e);
     return [];
   }
 }
-function searchFiles(decryptedDir, q, cap) {
+function searchFiles(sink, decryptedDir, q, cap) {
   const p = join44(decryptedDir, "hardlink", "hardlink.db");
   if (!existsSync36(p)) return [];
   try {
@@ -9860,11 +9867,12 @@ function searchFiles(decryptedDir, q, cap) {
       }
       return out;
     });
-  } catch {
+  } catch (e) {
+    noteFailure(sink, "\u6587\u4EF6", e);
     return [];
   }
 }
-function searchRecords(decryptedDir, q, cap) {
+function searchRecords(sink, decryptedDir, q, cap) {
   const p = join44(decryptedDir, "general", "general.db");
   if (!existsSync36(p)) return [];
   try {
@@ -9890,23 +9898,36 @@ function searchRecords(decryptedDir, q, cap) {
       }
       return out;
     });
-  } catch {
+  } catch (e) {
+    noteFailure(sink, "\u8F6C\u8D26\u7EA2\u5305", e);
     return [];
   }
 }
 function searchUnified(decryptedDir, query, limit) {
   const q = (query || "").trim();
   const cap = Math.min(limit ?? 6, 12);
+  const failures = [];
   const messages = q ? searchIndexMessages(decryptedDir, q, cap).hits : [];
-  return {
+  const snapshot = {
     query: q,
     messages,
-    contacts: q ? searchContacts(decryptedDir, q, cap) : [],
-    moments: q ? searchMoments(decryptedDir, q, cap) : [],
-    favorites: q ? searchFavorites(decryptedDir, q, cap) : [],
-    files: q ? searchFiles(decryptedDir, q, cap) : [],
-    records: q ? searchRecords(decryptedDir, q, cap) : []
+    contacts: q ? searchContacts(failures, decryptedDir, q, cap) : [],
+    moments: q ? searchMoments(failures, decryptedDir, q, cap) : [],
+    favorites: q ? searchFavorites(failures, decryptedDir, q, cap) : [],
+    files: q ? searchFiles(failures, decryptedDir, q, cap) : [],
+    records: q ? searchRecords(failures, decryptedDir, q, cap) : []
   };
+  if (failures.length > 0) {
+    const seen = /* @__PURE__ */ new Set();
+    const parts = [];
+    for (const f of failures) {
+      if (seen.has(f.domain)) continue;
+      seen.add(f.domain);
+      parts.push(f.domain);
+    }
+    snapshot.readError = `${parts.join("\u3001")}\u8BFB\u53D6\u5931\u8D25\uFF08${failures[0]?.reason ?? "\u5E93\u6253\u4E0D\u5F00"}\uFF09\u2014\u2014 \u8FD9\u4E0D\u662F\u300C\u6CA1\u6709\u7ED3\u679C\u300D`;
+  }
+  return snapshot;
 }
 
 // src/backend/wechat-data/src/query/annual-report.ts
@@ -11308,12 +11329,12 @@ function cachedDirEntries(dir) {
     const st = statSync13(dir);
     const sig = `${st.mtimeMs}:${st.size}`;
     const hit = dirEntryCache.get(dir);
-    if (hit && hit.sig === sig) return hit.files;
+    if (hit && hit.sig === sig) return { files: hit.files };
     const files = readdirSync19(dir);
     dirEntryCache.set(dir, { sig, files });
-    return files;
-  } catch {
-    return [];
+    return { files };
+  } catch (e) {
+    return { files: [], error: `\u76EE\u5F55\u4E0D\u53EF\u8BFB ${dir}\uFF1A${e instanceof Error ? e.message : String(e)}` };
   }
 }
 function readPrefix(file, n) {
@@ -11574,12 +11595,15 @@ async function syncMessageShard(rawMsgDir, decMsgDir, file, rawKeyHex, keyFormat
 async function syncChangedShards(rawDbDir, decryptedDir, lastState) {
   const msgDir = join49(rawDbDir, "message");
   const decMsgDir = join49(decryptedDir, "message");
-  if (!existsSync40(msgDir)) return [];
+  if (!existsSync40(msgDir)) return { synced: [], errors: [] };
   const cfg = getConfig(decryptedDir);
   const keyFormat = typeof cfg["key_format"] === "string" ? cfg["key_format"] : "wx_key_v4.1";
   const fallbackKey = typeof cfg["db_enc_key"] === "string" ? cfg["db_enc_key"] : "";
   const synced = [];
-  for (const f of cachedDirEntries(msgDir)) {
+  const errors = [];
+  const listing = cachedDirEntries(msgDir);
+  if (listing.error !== void 0) errors.push(listing.error);
+  for (const f of listing.files) {
     if (!/^(biz_)?message_\d+\.db$/.test(f)) continue;
     const sig = shardSig(msgDir, f);
     const prev = lastState.get(f);
@@ -11597,9 +11621,10 @@ async function syncChangedShards(rawDbDir, decryptedDir, lastState) {
     } catch (e) {
       lastState.delete(f);
       console.error("[wechat-sync]", f, e.message);
+      errors.push(`${f}\u540C\u6B65\u5931\u8D25\uFF1A${e.message}`);
     }
   }
-  return synced;
+  return { synced, errors };
 }
 function sessionSig(sessionDir) {
   const sig = { main: 0, wal: 0 };
@@ -11859,6 +11884,7 @@ function startRealtimeSync(rawDbDir, decryptedDir, onSync) {
   let timer = null;
   let running = false;
   let unavailableWarned = false;
+  let dirFailureWarned = false;
   let unconfiguredNoted = false;
   let failureLogged = false;
   let cleaned = false;
@@ -11899,7 +11925,17 @@ function startRealtimeSync(rawDbDir, decryptedDir, onSync) {
       const cfg = getConfig(dec);
       const keyFormat = typeof cfg["key_format"] === "string" ? cfg["key_format"] : "wx_key_v4.1";
       const fallbackKey = typeof cfg["db_enc_key"] === "string" ? cfg["db_enc_key"] : "";
-      const synced = await syncChangedShards(raw, dec, lastState);
+      const shardRes = await syncChangedShards(raw, dec, lastState);
+      const synced = shardRes.synced;
+      if (shardRes.errors.length > 0) {
+        if (!dirFailureWarned) {
+          dirFailureWarned = true;
+          console.warn("[wechat-sync] \u540C\u6B65\u53EF\u80FD\u6709\u7F3A\u53E3\uFF1A" + shardRes.errors.join(" | "));
+        }
+      } else if (dirFailureWarned) {
+        dirFailureWarned = false;
+        console.log("[wechat-sync] \u539F\u59CB\u76EE\u5F55\u8BFB\u53D6\u6062\u590D\u6B63\u5E38");
+      }
       synced.push(...await syncSessionDb(raw, dec, lastState, fallbackKey, keyFormat));
       synced.push(...await syncContactDb(raw, dec, lastState, fallbackKey, keyFormat));
       for (const [sub, dbName, label] of [

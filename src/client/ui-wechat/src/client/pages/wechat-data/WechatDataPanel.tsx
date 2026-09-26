@@ -60,6 +60,7 @@ import gs from './panels/global-search.module.css'
 import type {
   SearchHit,
   UnifiedSearchContact,
+  UnifiedSearchSnapshot,
   UnifiedSearchFavorite,
   UnifiedSearchFile,
   UnifiedSearchMoment,
@@ -478,6 +479,8 @@ export function WechatDataPanel(): React.JSX.Element {
     favorites: UnifiedSearchFavorite[]
     files: UnifiedSearchFile[]
     records: UnifiedSearchRecord[]
+    /** 某个域读失败时的说明（P1-1）：界面上必须与「未找到相关结果」分开显示。 */
+    readError?: string
   }>({ sessions: [], hits: [], contacts: [], moments: [], favorites: [], files: [], records: [] })
 
   /** 当前搜索词（渲染作用域）：命中跳转时要把同一个词带进目标面板。 */
@@ -549,8 +552,10 @@ export function WechatDataPanel(): React.JSX.Element {
     const t = window.setTimeout(() => {
       void Promise.all([
         apiGetSessions({ keyword: q, limit: 8 }).catch((): { sessions: never[]; total: number } => ({ sessions: [], total: 0 })),
-        apiSearchUnified({ query: q, limit: 8 }).catch((): { query: string; messages: never[]; contacts: never[]; moments: never[]; favorites: never[]; files: never[]; records: never[] } => ({
+        apiSearchUnified({ query: q, limit: 8 }).catch((e): UnifiedSearchSnapshot => ({
+          // 整个请求失败：这同样是「读不到」，不许悄悄画成「没有结果」。
           query: q, messages: [], contacts: [], moments: [], favorites: [], files: [], records: [],
+          readError: `搜索请求失败（${(e as Error).message}）—— 这不是「没有结果」`,
         })),
       ]).then(([sessionRes, un]) => {
         if (seq !== searchSeqRef.current) return
@@ -562,6 +567,7 @@ export function WechatDataPanel(): React.JSX.Element {
           favorites: un.favorites,
           files: un.files,
           records: un.records,
+          readError: un.readError,
         })
         setSearchLoading(false)
       })
@@ -672,7 +678,8 @@ export function WechatDataPanel(): React.JSX.Element {
               inputRef={searchInputRef}
             >
               {searchLoading && <div className={gs.empty}>搜索中…</div>}
-              {noSearchResults && <div className={gs.empty}>未找到相关结果</div>}
+              {searchResults.readError && <div className={gs.empty} role="alert">{searchResults.readError}</div>}
+              {noSearchResults && !searchResults.readError && <div className={gs.empty}>未找到相关结果</div>}
               {searchResults.sessions.length > 0 && (
                 <>
                   <div className={gs.group}>会话</div>

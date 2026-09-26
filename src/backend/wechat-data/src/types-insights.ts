@@ -104,6 +104,15 @@ export interface UnifiedSearchRecord {
 
 /** Unified search snapshot over several local data domains. */
 export interface UnifiedSearchSnapshot {
+  /**
+   * 某个域**读失败**（库打不开 / 损坏 / 缺表）时的说明。
+   *
+   * P1-1：这条链此前把「读失败」和「确实没有结果」压成同一个形状（catch 里 return []），
+   * 用户看到的是「未找到相关结果」，而真实原因是数据根损坏。本仓已有 `readError` 这个
+   * 约定（知识库/媒体那几条快照都在用，且 `read-error-visibility.spec.ts` 会从类型反查
+   * 「面板有没有真的读它」），所以这里跟着同一个约定，不再发明第二种形状。
+   */
+  readError?: string
   query: string
   messages: SearchHit[]
   contacts: UnifiedSearchContact[]

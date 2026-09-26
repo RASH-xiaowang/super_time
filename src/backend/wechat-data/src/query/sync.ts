@@ -33,19 +33,27 @@ const WAL_FRAME_HEADER_SZ = 24
 const SYNC_INTERVAL_MS = 10_000
 const FULL_DECRYPT_COOLDOWN_MS = 6_000
 
-/** Cached raw-dir entries; refreshed when the directory signature changes. */
+/**
+ * Cached raw-dir entries; refreshed when the directory signature changes.
+ *
+ * P1-1：这里原先 `catch { return [] }` —— 目录读不动（被占用 / 权限 / 网络盘断了 / 它是
+ * 个文件）与「目录真的是空的」压成同一个值。后果不是少几行日志：`syncChangedShards`
+ * 拿到空列表就是「所有分片都没变」，于是**实时同步静默停摆**，界面上的表现是
+ * 「新消息永远不出现」，而原因完全查不到（第 47 轮那条「读失败不许当没有数据」的同族）。
+ */
+export interface DirListing { files: string[]; error?: string }
 const dirEntryCache = new Map<string, { sig: string; files: string[] }>()
-function cachedDirEntries(dir: string): string[] {
+function cachedDirEntries(dir: string): DirListing {
   try {
     const st = statSync(dir)
     const sig = `${st.mtimeMs}:${st.size}`
     const hit = dirEntryCache.get(dir)
-    if (hit && hit.sig === sig) return hit.files
+    if (hit && hit.sig === sig) return { files: hit.files }
     const files = readdirSync(dir)
     dirEntryCache.set(dir, { sig, files })
-    return files
-  } catch {
-    return []
+    return { files }
+  } catch (e) {
+    return { files: [], error: `目录不可读 ${dir}：${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
@@ -421,19 +429,22 @@ export async function syncMessageShard(
  * @param rawDbDir - raw db_storage root.
  * @param decryptedDir - decrypted snapshot root.
  * @param lastState - per-shard signature state (mutated).
- * @returns descriptions of what was synced (file + mode + pages).
+ * @returns `synced` = 同步了什么；`errors` = 哪些读取失败了（**空数组才是「真的没变化」**）。
  */
 export async function syncChangedShards(
   rawDbDir: string, decryptedDir: string, lastState: Map<string, ShardSig>,
-): Promise<string[]> {
+): Promise<{ synced: string[]; errors: string[] }> {
   const msgDir = join(rawDbDir, 'message')
   const decMsgDir = join(decryptedDir, 'message')
-  if (!existsSync(msgDir)) return []
+  if (!existsSync(msgDir)) return { synced: [], errors: [] }
   const cfg = getConfig(decryptedDir)
   const keyFormat = typeof cfg['key_format'] === 'string' ? cfg['key_format'] : 'wx_key_v4.1'
   const fallbackKey = typeof cfg['db_enc_key'] === 'string' ? cfg['db_enc_key'] : ''
   const synced: string[] = []
-  for (const f of cachedDirEntries(msgDir)) {
+  const errors: string[] = []
+  const listing = cachedDirEntries(msgDir)
+  if (listing.error !== undefined) errors.push(listing.error)
+  for (const f of listing.files) {
     if (!/^(biz_)?message_\d+\.db$/.test(f)) continue
     const sig = shardSig(msgDir, f)
     const prev = lastState.get(f)
@@ -454,9 +465,10 @@ export async function syncChangedShards(
     } catch (e) {
       lastState.delete(f) // retry next round
       console.error('[wechat-sync]', f, (e as Error).message)
+      errors.push(`${f}同步失败：${(e as Error).message}`)
     }
   }
-  return synced
+  return { synced, errors }
 }
 
 /** Session-db signature (main + wal). */
@@ -760,6 +772,7 @@ export function startRealtimeSync(
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
   let unavailableWarned = false
+  let dirFailureWarned = false
   let unconfiguredNoted = false
   let failureLogged = false
   let cleaned = false
@@ -803,7 +816,18 @@ export function startRealtimeSync(
       const cfg = getConfig(dec)
       const keyFormat = typeof cfg['key_format'] === 'string' ? cfg['key_format'] : 'wx_key_v4.1'
       const fallbackKey = typeof cfg['db_enc_key'] === 'string' ? cfg['db_enc_key'] : ''
-      const synced = await syncChangedShards(raw, dec, lastState)
+      const shardRes = await syncChangedShards(raw, dec, lastState)
+      const synced = shardRes.synced
+      // 一次故障只报一次、恢复时报一句：与上面 `unavailableWarned` 同一口径。
+      if (shardRes.errors.length > 0) {
+        if (!dirFailureWarned) {
+          dirFailureWarned = true
+          console.warn('[wechat-sync] 同步可能有缺口：' + shardRes.errors.join(' | '))
+        }
+      } else if (dirFailureWarned) {
+        dirFailureWarned = false
+        console.log('[wechat-sync] 原始目录读取恢复正常')
+      }
       synced.push(...await syncSessionDb(raw, dec, lastState, fallbackKey, keyFormat))
       synced.push(...await syncContactDb(raw, dec, lastState, fallbackKey, keyFormat))
       for (const [sub, dbName, label] of [

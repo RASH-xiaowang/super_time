@@ -40,8 +40,20 @@ function like(q: string): string {
   return '%' + q + '%'
 }
 
+/**
+ * 一个域读失败时记一笔（域名 + 原因）。
+ *
+ * 域名用中文是刻意的：这个字符串会原样出现在全局搜索的下拉里，
+ * 用户看得懂的「联系人读不到」才有用，`contacts` 只是给日志看的。
+ */
+interface DomainFailure { domain: string; reason: string }
+function noteFailure(sink: DomainFailure[], domain: string, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err)
+  sink.push({ domain, reason: msg.slice(0, 160) })
+}
+
 /** Contact names: remark > nick > username, plus category label. */
-function searchContacts(decryptedDir: string, q: string, cap: number): UnifiedSearchContact[] {
+function searchContacts(sink: DomainFailure[], decryptedDir: string, q: string, cap: number): UnifiedSearchContact[] {
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return []
   try {
@@ -70,13 +82,14 @@ function searchContacts(decryptedDir: string, q: string, cap: number): UnifiedSe
         category: cellString(r.u).endsWith('@chatroom') ? 'group' : cellString(r.u).startsWith('gh_') ? 'official' : 'contact',
       }))
     })
-  } catch {
+  } catch (e) {
+    noteFailure(sink, '联系人', e)
     return []
   }
 }
 
 /** Moments by author + content LIKE. */
-function searchMoments(decryptedDir: string, q: string, cap: number): UnifiedSearchMoment[] {
+function searchMoments(sink: DomainFailure[], decryptedDir: string, q: string, cap: number): UnifiedSearchMoment[] {
   const dbPathCandidates = [join(decryptedDir, 'sns', 'db_sns', 'sns.db'), join(decryptedDir, 'sns', 'sns.db')]
   for (const p of dbPathCandidates) {
     if (!existsSync(p)) continue
@@ -108,13 +121,14 @@ function searchMoments(decryptedDir: string, q: string, cap: number): UnifiedSea
         })
       })
       if (hits) return hits
-    } catch { /* try next path */ }
+    } catch (e) { /* 两个候选路径都读不到才算这个域失败（中间那次成功会先 return） */
+      noteFailure(sink, '朋友圈', e) }
   }
   return []
 }
 
 /** Favorites by content LIKE (fav_db_item in favorite.db). */
-function searchFavorites(decryptedDir: string, q: string, cap: number): UnifiedSearchFavorite[] {
+function searchFavorites(sink: DomainFailure[], decryptedDir: string, q: string, cap: number): UnifiedSearchFavorite[] {
   const p = join(decryptedDir, 'favorite', 'favorite.db')
   if (!existsSync(p)) return []
   try {
@@ -136,13 +150,14 @@ function searchFavorites(decryptedDir: string, q: string, cap: number): UnifiedS
         .all(like(q), ...extraParams, cap) as Array<{ id: unknown; c: unknown }>
       return rows.map(r => ({ id: Number(r.id ?? 0), snippet: cellString(r.c).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) }))
     })
-  } catch {
+  } catch (e) {
+    noteFailure(sink, '收藏', e)
     return []
   }
 }
 
 /** Files by file_name LIKE across hardlink tables. */
-function searchFiles(decryptedDir: string, q: string, cap: number): UnifiedSearchFile[] {
+function searchFiles(sink: DomainFailure[], decryptedDir: string, q: string, cap: number): UnifiedSearchFile[] {
   const p = join(decryptedDir, 'hardlink', 'hardlink.db')
   if (!existsSync(p)) return []
   try {
@@ -170,13 +185,14 @@ function searchFiles(decryptedDir: string, q: string, cap: number): UnifiedSearc
       }
       return out
     })
-  } catch {
+  } catch (e) {
+    noteFailure(sink, '文件', e)
     return []
   }
 }
 
 /** Transfers/red packets whose session matches the query. */
-function searchRecords(decryptedDir: string, q: string, cap: number): UnifiedSearchRecord[] {
+function searchRecords(sink: DomainFailure[], decryptedDir: string, q: string, cap: number): UnifiedSearchRecord[] {
   const p = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(p)) return []
   try {
@@ -206,7 +222,8 @@ function searchRecords(decryptedDir: string, q: string, cap: number): UnifiedSea
       }
       return out
     })
-  } catch {
+  } catch (e) {
+    noteFailure(sink, '转账红包', e)
     return []
   }
 }
@@ -221,14 +238,27 @@ function searchRecords(decryptedDir: string, q: string, cap: number): UnifiedSea
 export function searchUnified(decryptedDir: string, query: string, limit?: number): UnifiedSearchSnapshot {
   const q = (query || '').trim()
   const cap = Math.min(limit ?? 6, 12)
+  const failures: DomainFailure[] = []
   const messages = q ? searchIndexMessages(decryptedDir, q, cap).hits : []
-  return {
+  const snapshot: UnifiedSearchSnapshot = {
     query: q,
     messages,
-    contacts: q ? searchContacts(decryptedDir, q, cap) : [],
-    moments: q ? searchMoments(decryptedDir, q, cap) : [],
-    favorites: q ? searchFavorites(decryptedDir, q, cap) : [],
-    files: q ? searchFiles(decryptedDir, q, cap) : [],
-    records: q ? searchRecords(decryptedDir, q, cap) : [],
+    contacts: q ? searchContacts(failures, decryptedDir, q, cap) : [],
+    moments: q ? searchMoments(failures, decryptedDir, q, cap) : [],
+    favorites: q ? searchFavorites(failures, decryptedDir, q, cap) : [],
+    files: q ? searchFiles(failures, decryptedDir, q, cap) : [],
+    records: q ? searchRecords(failures, decryptedDir, q, cap) : [],
   }
+  if (failures.length > 0) {
+    // 去重保序：朋友圈那条会连着试两个候选路径，一次失败可能记两笔。
+    const seen = new Set<string>()
+    const parts: string[] = []
+    for (const f of failures) {
+      if (seen.has(f.domain)) continue
+      seen.add(f.domain)
+      parts.push(f.domain)
+    }
+    snapshot.readError = `${parts.join('、')}读取失败（${failures[0]?.reason ?? '库打不开'}）—— 这不是「没有结果」`
+  }
+  return snapshot
 }

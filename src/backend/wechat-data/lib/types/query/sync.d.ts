@@ -1,3 +1,15 @@
+/**
+ * Cached raw-dir entries; refreshed when the directory signature changes.
+ *
+ * P1-1：这里原先 `catch { return [] }` —— 目录读不动（被占用 / 权限 / 网络盘断了 / 它是
+ * 个文件）与「目录真的是空的」压成同一个值。后果不是少几行日志：`syncChangedShards`
+ * 拿到空列表就是「所有分片都没变」，于是**实时同步静默停摆**，界面上的表现是
+ * 「新消息永远不出现」，而原因完全查不到（第 47 轮那条「读失败不许当没有数据」的同族）。
+ */
+export interface DirListing {
+    files: string[];
+    error?: string;
+}
 export declare function fullDecryptFile(dbPath: string, outPath: string, encKey: Buffer): Promise<number>;
 /**
  * Patch a decrypted DB file with valid frames from an encrypted WAL.
@@ -74,9 +86,12 @@ export declare function syncMessageShard(rawMsgDir: string, decMsgDir: string, f
  * @param rawDbDir - raw db_storage root.
  * @param decryptedDir - decrypted snapshot root.
  * @param lastState - per-shard signature state (mutated).
- * @returns descriptions of what was synced (file + mode + pages).
+ * @returns `synced` = 同步了什么；`errors` = 哪些读取失败了（**空数组才是「真的没变化」**）。
  */
-export declare function syncChangedShards(rawDbDir: string, decryptedDir: string, lastState: Map<string, ShardSig>): Promise<string[]>;
+export declare function syncChangedShards(rawDbDir: string, decryptedDir: string, lastState: Map<string, ShardSig>): Promise<{
+    synced: string[];
+    errors: string[];
+}>;
 /**
  * Sync session.db (the conversation list state) from the raw tree into the
  * decrypted snapshot — full re-decrypt when the main file changed, WAL frame

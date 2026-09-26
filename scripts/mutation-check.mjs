@@ -548,6 +548,22 @@ const MUTATIONS = [
     to: "    const denial: string | null = null\n    void openDenialReason\n    void dataRoot",
     spec: "src/backend/wechat-data/tests/path-policy.spec.ts",
   },
+  {
+    id: "M67-unified-search-readerror-dropped",
+    why: "全局搜索不再上报域读失败（P1-1 修的那半）—— 库损坏时下拉又变成「未找到相关结果」",
+    file: "src/backend/wechat-data/src/query/unified-search.ts",
+    from: "  if (failures.length > 0) {",
+    to: "  if (false) {",
+    spec: "src/backend/wechat-data/tests/read-error-contract.spec.ts",
+  },
+  {
+    id: "M68-sync-dir-error-silenced",
+    why: "实时同步的目录读取失败不再上报（回到 catch { return [] }）—— 「新消息永远不出现」且无任何线索",
+    file: "src/backend/wechat-data/src/query/sync.ts",
+    from: "    return { files: [], error: `目录不可读 ${dir}：${e instanceof Error ? e.message : String(e)}` }",
+    to: "    return { files: [] }",
+    spec: "src/backend/wechat-data/tests/read-error-contract.spec.ts",
+  },
 ]
 
 const argv = process.argv.slice(2)
