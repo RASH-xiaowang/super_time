@@ -486,8 +486,22 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
  * 这里补上真正的实现：令牌底色 + 一条扫过去的微光，并尊重 prefers-reduced-motion。
  * 查找手段：`check:ui` 现在会校验「TSX 里的全局 className 字面量必须在某个 CSS 里定义」。
  */
+/* ⚠️ 这里**故意不写 `display`**（2026-09-26 修）。
+ *
+ * 原先是 `display: block`，用意是让 `<span class="nm-skel">` 这类行内元素能拿到高度。
+ * 但它同时把一个**布局职责**塞进了一个纯"上色"的类里 —— 于是与形状类打起了"顺序战"：
+ * `ListSkeleton` 的行是 `<div class="nm-skel _skelRow_xxx">`，`.skelRow` 要的是
+ * `display: flex`（头像/文字/时间并排一行），而两条规则**特异性相同**，
+ * 谁赢取决于两个 CSS 文件在产物里的先后 —— 实测这里赢了，于是那一行的三个占位块
+ * **竖着堆成 34+12+10 = 56px**，塞进固定 46px 高的行里，被自身 `overflow: hidden`
+ * 裁掉 10px（审计报的「备份恢复/数据库健康/原图链路自检 各裁切 ×4」就是它）。
+ *
+ * 修法是把 display 交还给各自的形状类（`.skelAvatar` / `.skelLine` / `.skelMeta`
+ * 在自己那份 CSS 里声明 `display: block`，它们确实是 span；`.skelRow` 声明 flex）。
+ * 这样任何文件顺序下结果都一样 —— 本仓库已经有一类"跨份引用静默失效"的坑，别再添一类。
+ * 由 `panels/panel-clip.wiring.spec.ts` 钉住「这个类不许再声明 display」。
+ */
 .nm-skel {
-  display: block;
   position: relative;
   overflow: hidden;
   border-radius: 6px;

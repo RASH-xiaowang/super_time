@@ -341,7 +341,10 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
 
       {notice && <div className={css.notice}>{notice}</div>}
 
-      <Card flush>
+      {/* `recordsCard` 只做一件事：`flex-shrink: 0`。面板是滚动 flex 列，
+          卡片作为 flex 子项默认会被压缩，再被自己的 `overflow: hidden` 切掉一截表格
+          （实测切 85px、且没有滚动条）。见 records.module.css 里那段说明。 */}
+      <Card flush className={css.recordsCard}>
         {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
         {loading && items.length === 0 && <ListSkeleton rows={10} />}
         {!loading && !error && items.length === 0 && <div className={kitCss.emptyInline}>暂无{meta.label}记录</div>}

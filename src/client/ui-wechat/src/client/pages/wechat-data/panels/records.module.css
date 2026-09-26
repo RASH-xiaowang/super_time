@@ -35,6 +35,20 @@
 
 /* 表格卡片 —— 毛玻璃容器。 */
 /* 第 91 轮删除：`.tableCard`（改用 kit `Card flush`）。 */
+/* 卡片**不许被压缩**（2026-09-26 修）。
+ *
+ * 机制：`.panel` 是 `display: flex; flex-direction: column; overflow-y: auto`，
+ * 而卡片是 flex 子项、默认 `flex: 0 1 auto` ⇒ 当内容总高超过面板高度时，
+ * **flex 会先压子项**（而不是让容器溢出滚动）。卡片被从内容所需的 540px 压到 457px，
+ * 它自带的 `overflow: hidden` 再把超出的 85px 吃掉 —— 用户看到的是表格被从中间切断、
+ * 而且没有滚动条（审计报的「转账红包 裁切 ×1」就是它，实测被切掉 85px）。
+ *
+ * `flex-shrink: 0` 之后卡片保持自然高度，超出部分交给 `.panel` 自己滚 ——
+ * 这正是 U4 的口径：**要么滚、要么全显，不能切一半**。
+ * `.tableScroll` 的 `max-height: 60vh` 内部滚动保持不变（长表仍在自己那一格里滚）。
+ */
+.recordsCard { flex-shrink: 0; }
+
 .tableScroll { max-height: 60vh; overflow-y: auto; }
 
 /* 数据表格 —— mono 数字、粘性表头、行悬停霓虹发光。 */

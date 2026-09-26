@@ -593,13 +593,18 @@
    原先这些尺寸写成行内样式，现在搬到这里；网格容器的列数仍是动态的（列表/网格两态），
    那一项留在行内。 */
 .skelGrid { display: grid; gap: 10px; padding: 10px; width: 100%; box-sizing: border-box; }
+/* 行是 flex 容器（头像 / 文字 / 时间并排一行）。
+   ⚠️ 全局 `.nm-skel` 现在**不再声明 display** —— 它原先写 `display: block`，
+   与本条特异性相同、胜负由文件顺序决定，实测它赢了，于是三个占位块竖着堆成 56px，
+   被行的固定高度 46px + `overflow: hidden` 裁掉 10px。别再让配色类决定布局。 */
 .skelRow { height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 10px; }
 .skelCard { height: 120px; }
 /* 骨架头像的圆角取 10px（真头像 `.avatar` 也是 10px）：原行内值是 9px，
    不在圆角刻度（2/4/6/8/10/12/14/16）上，搬进 CSS 会被 audit:scale 拦下 —— 正好顺手对齐真头像。 */
-.skelAvatar { width: 34px; height: 34px; border-radius: var(--nm-r-md); flex-shrink: 0; }
-.skelLine { width: 55%; height: 12px; flex-shrink: 1; }
-.skelMeta { width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
+/* 这三个都是 `<span>`：必须自己声明 display，否则没有高度（全局 `.nm-skel` 已不管这件事）。 */
+.skelAvatar { display: block; width: 34px; height: 34px; border-radius: var(--nm-r-md); flex-shrink: 0; }
+.skelLine { display: block; width: 55%; height: 12px; flex-shrink: 1; }
+.skelMeta { display: block; width: 60px; height: 10px; flex-shrink: 0; margin-left: auto; }
 /* 列表哨兵：2px 占位，靠 IntersectionObserver 触发下一页。 */
 .sentinel { height: 2px; flex-shrink: 0; }
 

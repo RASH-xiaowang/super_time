@@ -268,7 +268,11 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
         ))}
       </div>
       <div className={css.scroll} ref={scrollRef}>
-        {loading && <ListSkeleton rows={12} />}
+        {/* 骨架必须与真实栅格同形（U3）：真实内容是 `.list` 的多列网格
+            （`repeat(auto-fill, minmax(240px, 1fr))`，实测排 3–5 列），
+            而单列行模式会让骨架先铺一列、数据到了再散成多列 —— 看起来像"布局跳了一下"。
+            列宽下限与 `.list` 逐字对齐，`consistency-r7.wiring.spec.ts` 钉着这个等式。 */}
+        {loading && <ListSkeleton rows={12} grid minCol={240} />}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {!loading && !error && grouped.length === 0 && <div className={kitCss.emptyInline}>暂无联系人</div>}
         {!loading && !error && grouped.map(([letter, list]) => (

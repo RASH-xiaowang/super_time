@@ -87,7 +87,14 @@ const MEASURE = () => {
   //   · `-webkit-line-clamp` 的元素是**有意**截断（朋友圈的链接标题就是 2 行截断，
   //     而且都带 title 全文入口，仓库第 60 轮的截断巡检也是这个口径）。
   // 之前两条都不排除，于是「朋友圈」被记成"裁切 ×11"，实际全是设计如此。
-  const clipped = [...sc.querySelectorAll('*')]
+  //
+  // 2026-09-26 再补第三条：**`content-visibility: auto` 的元素不算**。
+  // 设置弹窗的 `.card` 带 `content-visibility: auto` + `contain-intrinsic-size: auto 320px` ——
+  // 视口外的卡片浏览器**根本不渲染**，先按 320px 占位，滚到了才量真实高度。
+  // 于是出现 `clientHeight=320 / scrollHeight=880` 这种读数，看着像"卡片切掉 560px"，
+  // 其实用户滚过去就能看到全部（`auto` 关键字还会记住首次渲染后的真实尺寸）。
+  // 四个弹窗节各报「裁切 ×4」全是它 —— 与「转账红包 ×1」（那是真的被 flex 压掉 85px）性质完全不同。
+  const clippedEls = [...sc.querySelectorAll('*')]
     .filter((el) => {
       if (el.clientHeight <= 24) return false
       if (el.scrollHeight <= el.clientHeight + 4) return false
@@ -95,9 +102,17 @@ const MEASURE = () => {
       if (cs.overflowY === 'visible' || cs.overflowY === 'auto' || cs.overflowY === 'scroll') return false
       if (cs.webkitLineClamp && cs.webkitLineClamp !== 'none') return false
       if (cs.textOverflow === 'ellipsis' && cs.whiteSpace === 'nowrap') return false
+      if (cs.contentVisibility === 'auto') return false
       return true
     })
-    .length
+  // 记下**被裁的是谁**。只报数量的话，修的时候只能靠猜 —— 实测「转账红包 裁切×1」
+  // 与「四个弹窗节 裁切×4」看着是同一类，其实一个是卡片被 flex 压缩、另一个是骨架行，
+  // 修法完全不同。这里是"定点诊断"要用的最小信息：标签 + 类名 + 尺寸 + 文本开头。
+  const clipDetail = clippedEls.slice(0, 6).map((el) => {
+    const cls = String(el.className).split(' ').filter(Boolean).slice(0, 2).join('.')
+    const t = (el.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 16)
+    return `${el.tagName.toLowerCase()}.${cls}[h=${el.clientHeight} sh=${el.scrollHeight}]${t === '' ? '' : ' 「' + t + '」'}`
+  })
   return {
     contentH: H,
     maxGap,
@@ -105,7 +120,8 @@ const MEASURE = () => {
     blank,
     blankPct: Math.round((blank / H) * 100),
     contentEls,
-    clipped,
+    clipped: clippedEls.length,
+    clipDetail,
     emptyHints,
     textLen: txt.length,
     // 面板正文开头（用于人工判断"这一屏到底是什么状态"）
@@ -116,11 +132,18 @@ const MEASURE = () => {
 let app = null
 const rows = []
 try {
+  // ⚠️ 必须先把 `ELECTRON_RUN_AS_NODE` 摘掉再传给 Electron：本机把它注入了环境，
+  // Electron 继承它就会**退化成纯 node**（没有窗口/渲染层），playwright 只报一句
+  // 没有下文的 `Process failed to launch!`。此前一直靠 `working/run.py` 里的
+  // `env.pop()` 兜着 —— 也就是说**直接 `node scripts/panel-audit.mjs` 是跑不起来的**
+  // （2026-09-26 实测）。在这里再拦一道，脚本才能独立运行。
+  const launchEnv = { ...process.env }
+  delete launchEnv.ELECTRON_RUN_AS_NODE
   app = await _electron.launch({
     executablePath: EXE,
     args: [ROOT],
     cwd: ROOT,
-    env: { ...process.env, SUPERTIME_USER_DATA_DIR: userData, SUPERTIME_SKIP_ONBOARDING: '1', SUPERTIME_TEST_MODE: '1' },
+    env: { ...launchEnv, SUPERTIME_USER_DATA_DIR: userData, SUPERTIME_SKIP_ONBOARDING: '1', SUPERTIME_TEST_MODE: '1' },
   })
   const win = await app.firstWindow()
   win.setDefaultTimeout(45000)
@@ -305,6 +328,8 @@ for (const r of rows) {
   if (r.clipped > 0) flags.push('裁切×' + r.clipped)
   if (r.textLen < 80) flags.push('几乎无文字')
   console.log(`${pad(r.label, 16)}${num(r.contentH, 7)}${num(r.maxGap + 'px', 9)}${num(r.blankPct + '%', 9)}${num(r.clipped, 5)}${num(r.textLen, 7)}  ${flags.join(' ')}`)
+  // 被裁元素的身份另起一行，缩进在它所属的那一行下面（修的时候用它定位，别猜）
+  if (r.clipDetail?.length) console.log(`${' '.repeat(18)}└─ ${r.clipDetail.join(' | ')}`)
 }
 
 // 按"最大空白"排序给出优先级建议（附正文开头，避免把"空状态"误判成"没渲染"）

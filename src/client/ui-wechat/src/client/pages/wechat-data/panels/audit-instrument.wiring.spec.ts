@@ -70,6 +70,21 @@ describe('审计工具：裁切与错误分类', () => {
     expect(audit).toMatch(/cs\.textOverflow === 'ellipsis' && cs\.whiteSpace === 'nowrap'/)
   })
 
+  it('裁切还要排除 `content-visibility: auto`（那是"还没渲染"的占位，不是被裁）', () => {
+    // 设置弹窗的 `.card` 带 `content-visibility: auto` + `contain-intrinsic-size: auto 320px`：
+    // 视口外的卡片浏览器不渲染，先按 320px 占位 ⇒ 读出 `clientHeight=320 / scrollHeight=880`，
+    // 看着像"切掉 560px"。四个弹窗节各报「裁切 ×4」全是它。
+    expect(audit, '没有排除 content-visibility: auto').toMatch(/cs\.contentVisibility === 'auto'/)
+  })
+
+  it('裁切必须报出**被裁的是谁**（只报数量就只能靠猜，而两类裁切的修法完全不同）', () => {
+    expect(audit, '没有记录被裁元素的身份').toMatch(/clipDetail/)
+    expect(audit, 'clipDetail 没进结果对象').toMatch(/clipDetail,\s*\n/)
+    expect(audit, '结果表没把身份打出来').toMatch(/r\.clipDetail\?\.length/)
+    // 身份里至少要能看出标签、类名与尺寸差
+    expect(audit).toMatch(/h=\$\{el\.clientHeight\} sh=\$\{el\.scrollHeight\}/)
+  })
+
   it('外部资源失败与 JS 错误分开：console×N 只表示我们代码的错误', () => {
     // 精确到"console 处理器里把资源失败排除掉"这一步，而不是只要求文件里出现过这句话
     expect(audit).toMatch(/m\.type\(\) === 'error' && !\/Failed to load resource\/i\.test\(m\.text\(\)\)/)
