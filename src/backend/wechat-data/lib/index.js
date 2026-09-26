@@ -8614,7 +8614,7 @@ function decodeCell2(v) {
     return new TextDecoder("gbk", { fatal: false }).decode(decompressed);
   }
 }
-function resolveMessagesByServerIds(decryptedDir, serverIds) {
+async function resolveMessagesByServerIds(decryptedDir, serverIds) {
   const out = /* @__PURE__ */ new Map();
   if (serverIds.length === 0) return out;
   const pending = [...new Set(serverIds)].filter(Boolean);
@@ -8628,9 +8628,10 @@ function resolveMessagesByServerIds(decryptedDir, serverIds) {
     }
   }
   const shards = shardCatalogDirs(decryptedDir, ["message"]);
-  const scan = (serverExpr, params) => {
+  const scan = async (serverExpr, params) => {
     const placeholders = params.map(() => "?").join(",");
     for (const shard of shards) {
+      await yieldToLoop();
       let db;
       try {
         db = new DatabaseSync22(shard.file, { readOnly: true, readBigInts: true });
@@ -8668,13 +8669,13 @@ function resolveMessagesByServerIds(decryptedDir, serverIds) {
   const numericIds = [...numeric.values()];
   if (numericIds.length > 0) {
     for (let i = 0; i < numericIds.length; i += 400) {
-      scan("server_id", numericIds.slice(i, i + 400));
+      await scan("server_id", numericIds.slice(i, i + 400));
     }
   }
   const leftover = pending.filter((id) => !out.has(id));
   if (leftover.length > 0) {
     for (let i = 0; i < leftover.length; i += 400) {
-      scan("CAST(server_id AS TEXT)", leftover.slice(i, i + 400));
+      await scan("CAST(server_id AS TEXT)", leftover.slice(i, i + 400));
     }
   }
   return out;
@@ -8702,7 +8703,7 @@ function monthRange(month) {
   const to = Math.floor(new Date(y, m, 1).getTime() / 1e3) - 1;
   return { from, to };
 }
-function queryLedger(decryptedDir, month, selfUsername) {
+async function queryLedger(decryptedDir, month, selfUsername) {
   const names = contactMeta(decryptedDir).names;
   const self = (selfUsername ?? "").trim();
   const { from, to } = monthRange(month);
@@ -8772,7 +8773,7 @@ function queryLedger(decryptedDir, month, selfUsername) {
       db.close();
     }
   }
-  const resolved = resolveMessagesByServerIds(decryptedDir, [...serverIds]);
+  const resolved = await resolveMessagesByServerIds(decryptedDir, [...serverIds]);
   const byMsg = /* @__PURE__ */ new Map();
   for (const [sid, info] of resolved) {
     const pay = paymentFromContent(info.content);
@@ -28778,7 +28779,7 @@ var GatewayRead = class extends (_a = GatewayCore, _getSessions_dec = [Remote("g
   getGroupInsights(options) {
     return queryGroupInsights(this._dirs.decrypted, options.username);
   }
-  getLedger(options) {
+  async getLedger(options) {
     return queryLedger(this._dirs.decrypted, options?.month, this.selfUsername());
   }
   getMediaAssets() {

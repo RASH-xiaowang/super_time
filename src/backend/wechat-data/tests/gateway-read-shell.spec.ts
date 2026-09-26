@@ -503,7 +503,7 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(() => gw.getDailyCounts({ username: 'wxid_a', year: 2023, month: 0 })).toThrow(/无效月份/)
   })
 
-  it('getSelfUsername / getCalls / getLedger：无 options 也给出声明的形状', () => {
+  it('getSelfUsername / getCalls / getLedger：无 options 也给出声明的形状', async () => {
     const gw = gateway(fullTree())
     expect(gw.getSelfUsername()).toEqual({ username: 'wxid_self' })
     const calls = gw.getCalls()
@@ -511,14 +511,14 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(Array.isArray(calls.recent)).toBe(true)
     expect(calls.total).toBe(0)
     expect(gw.getCalls({ topPeers: 1, recentLimit: 1 }).peers.length).toBeLessThanOrEqual(1)
-    const ledger = gw.getLedger()
+    const ledger = await gw.getLedger()
     expect(ledger.month, '不给 month 时快照要如实说「全量」').toBeNull()
     expect(ledger.summary.transfers).toBe(3)
-    const feb = gw.getLedger({ month: '2023-02' })
+    const feb = await gw.getLedger({ month: '2023-02' })
     expect(feb.month).toBe('2023-02')
     expect(feb.summary.transfers, '转账的 begin_transfer_time 都在 1970 年，2023-02 该一条不剩')
       .toBe(0)
-    expect(gw.getLedger({ month: '不像月份' }).summary.transfers).toBe(3)
+    expect((await gw.getLedger({ month: '不像月份' })).summary.transfers).toBe(3)
   })
 
   it('cancelSearch：jobId 归一化与在飞槽位对齐（空白/非字符串/超长/未知都返回 ok:false）', () => {

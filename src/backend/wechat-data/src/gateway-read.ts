@@ -569,7 +569,7 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('getLedger')
-  getLedger(options?: { month?: string }): LedgerSnapshot {
+  async getLedger(options?: { month?: string }): Promise<LedgerSnapshot> {
     return queryLedger(this._dirs.decrypted, options?.month, this.selfUsername())
   }
 

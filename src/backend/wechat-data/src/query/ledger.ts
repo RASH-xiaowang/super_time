@@ -10,6 +10,7 @@ import { decompress } from 'fzstd'
 import type { LedgerContactRow, LedgerSnapshot, LedgerWarning } from '../types.ts'
 import { parseMessageContent } from './parse.ts'
 import { contactMeta, shardCatalogDirs } from './meta.ts'
+import { yieldToLoop } from './search-build.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -31,10 +32,10 @@ function decodeCell(v: unknown): string {
 
 
 /** Resolve server ids to raw message rows (amount via XML, create_time). */
-function resolveMessagesByServerIds(
+async function resolveMessagesByServerIds(
   decryptedDir: string,
   serverIds: string[],
-): Map<string, { createTime: number; content: string }> {
+): Promise<Map<string, { createTime: number; content: string }>> {
   const out = new Map<string, { createTime: number; content: string }>()
   if (serverIds.length === 0) return out
   const pending = [...new Set(serverIds)].filter(Boolean)
@@ -47,9 +48,12 @@ function resolveMessagesByServerIds(
     }
   }
   const shards = shardCatalogDirs(decryptedDir, ['message'])
-  const scan = (serverExpr: string, params: Array<string | bigint>): void => {
+  const scan = async (serverExpr: string, params: Array<string | bigint>): Promise<void> => {
     const placeholders = params.map(() => '?').join(',')
     for (const shard of shards) {
+      // P1-2：这两趟扫描是「账本打开就卡住别的面板」的正主 —— 每个 id 批次都要把**所有分片**
+      // 各开一遍库（Pass 1 整型等值 + Pass 2 文本 CAST 兜底）。分片之间必须让出。
+      await yieldToLoop()
       let db: DatabaseSync
       // readBigInts: 64 位 server_id 以 BigInt 原样读回，避免 double 精度损失。
       try { db = new DatabaseSync(shard.file, { readOnly: true, readBigInts: true }) } catch { continue }
@@ -84,14 +88,14 @@ function resolveMessagesByServerIds(
   const numericIds = [...numeric.values()]
   if (numericIds.length > 0) {
     for (let i = 0; i < numericIds.length; i += 400) {
-      scan('server_id', numericIds.slice(i, i + 400))
+      await scan('server_id', numericIds.slice(i, i + 400))
     }
   }
   // Pass 2: text CAST fallback for ids still missing (text-stored or non-numeric).
   const leftover = pending.filter(id => !out.has(id))
   if (leftover.length > 0) {
     for (let i = 0; i < leftover.length; i += 400) {
-      scan('CAST(server_id AS TEXT)', leftover.slice(i, i + 400))
+      await scan('CAST(server_id AS TEXT)', leftover.slice(i, i + 400))
     }
   }
   return out
@@ -151,7 +155,7 @@ interface RedpacketRow {
  * @param selfUsername - logged-in account wxid (direction labels).
  * @returns the ledger snapshot.
  */
-export function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): LedgerSnapshot {
+export async function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): Promise<LedgerSnapshot> {
   const names = contactMeta(decryptedDir).names
   const self = (selfUsername ?? '').trim()
   const { from, to } = monthRange(month)
@@ -222,7 +226,7 @@ export function queryLedger(decryptedDir: string, month?: string, selfUsername?:
   }
 
   // Resolve amounts + times for all referenced server ids in one shard pass.
-  const resolved = resolveMessagesByServerIds(decryptedDir, [...serverIds])
+  const resolved = await resolveMessagesByServerIds(decryptedDir, [...serverIds])
   const byMsg = new Map<string, { amount: number; time: number }>()
   for (const [sid, info] of resolved) {
     const pay = paymentFromContent(info.content)

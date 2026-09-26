@@ -1090,7 +1090,7 @@ Local decision model status: required files (model graph + tokenizer), size, sou
 ### `getLedger`
 
 ```ts
-getLedger(options?: { month?: string }): LedgerSnapshot
+async getLedger(options?: { month?: string }): Promise<LedgerSnapshot>
 ```
 
 _（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_

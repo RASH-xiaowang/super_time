@@ -914,4 +914,12 @@ export const MUTATIONS = [
     to: "      const packedName = parsePackedName(r.p ?? null)",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
+  {
+    id: "M116-ledger-stops-yielding-per-shard",
+    why: "账本的消息回查不再按分片让出：两趟扫描（整型等值 + CAST 兜底）每趟都要把所有分片各开一遍，这正是「打开账本页卡住别的面板」的正主",
+    file: "src/backend/wechat-data/src/query/ledger.ts",
+    from: "      await yieldToLoop()",
+    to: "      // 不让出",
+    spec: "src/backend/wechat-data/tests/ledger.spec.ts",
+  },
 ]

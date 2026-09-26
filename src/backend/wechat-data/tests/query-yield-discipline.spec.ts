@@ -29,6 +29,8 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { startTickProbe } from '../../tests/helpers/tick-probe.ts'
+
 import { withDb, withDbAsync } from '../src/query/db-open.ts'
 import { cachedBySigAsync } from '../src/query/meta.ts'
 import { queryPrivacyScan, PRIVACY_YIELD_EVERY_ROWS } from '../src/query/privacy.ts'
@@ -47,26 +49,10 @@ afterEach(() => {
 const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex')
 
 /**
- * 与查询并发跑的 `setImmediate` 探针；`stop()` 返回它拿到的 tick 数。
- *
- * **为什么这个数是结构性的、不是掐表**：探针每轮排一个 `setImmediate`，
- * 而让出点用的也是 `setImmediate` ⇒ 队列里最多排着探针的**一个**回调；
- * 于是「一次让出 = 一个 tick」，再加开始时的一个 ⇒ `ticks == 让出次数 + 1`（实测如此）。
- * 所以断言的下界就取「让出次数 + 1」：**少任何一处让出都会直接掉下界**，
- * 不需要（也不应该）依赖墙上时钟或机器快慢。
+ * 探针本身在 `src/backend/tests/helpers/tick-probe.ts`（账本那条用例共用同一份实现，
+ * 免得两处各写一个「一次让出 = 一个 tick」的计数口径）。
  */
-function tickProbe(): () => number {
-  let ticks = 0
-  let stop = false
-  const loop = async (): Promise<void> => {
-    while (!stop) {
-      ticks += 1
-      await new Promise<void>((r) => { setImmediate(r) })
-    }
-  }
-  void loop()
-  return () => { stop = true; return ticks }
-}
+const tickProbe = startTickProbe
 
 /**
  * 造一个「有几个消息分片、每片一张 Msg_ 表」的数据根。
@@ -296,12 +282,12 @@ describe('存储统计也要让出（msg/file 整树 stat + 每条大文件都�
 })
 
 /**
- * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览、隐私体检与存储统计三个。
+ * #11 的**剩余清单**：P1-2 点名五个模块，本轮收了总览、隐私体检、存储统计与账本四个
+ * （账本那条用例在 `ledger.spec.ts` 里，共用 `helpers/tick-probe.ts` 的探针口径）。
  * 写成判据而不是备忘：这五个里谁先加了让出，就必须从这里删一条 —— 只能变小。
  */
 const STILL_SYNC_ONLY = [
   'query/graph.ts',
-  'query/ledger.ts',
 ]
 
 describe('P1-2 剩余站点（棘轮：只能变小）', () => {

@@ -374,7 +374,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     }): GroupInsightsSnapshot;
     getLedger(options?: {
         month?: string;
-    }): LedgerSnapshot;
+    }): Promise<LedgerSnapshot>;
     getMediaAssets(): MediaAssetsSnapshot;
     getWordCloud(options?: WordCloudOptions): WordCloudResult;
     getMomentsInsights(options?: {

@@ -6,4 +6,4 @@ import type { LedgerSnapshot } from '../types.ts';
  * @param selfUsername - logged-in account wxid (direction labels).
  * @returns the ledger snapshot.
  */
-export declare function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): LedgerSnapshot;
+export declare function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): Promise<LedgerSnapshot>;
