@@ -214,9 +214,15 @@ try {
       //   实测「文件与存储」加载中头部写的是「共 0 项 …（0）」，文字稳定、没有"加载中"字样，
       //   于是被量成"651px 空白 + 0 项"，而真实数据是 4305 个文件（3–6 秒后才到）。
       const queueMs = await waitQueueIdle()
+      // ⚠️ **必须先等落定、再量**（2026-09-26 修）。原先这里是「先 MEASURE、再 settle，
+      // 把 settle 的结果只当作一个 flag」，于是**量的是加载帧**：
+      // 实测「群聊分析」被量成 `624px 空白 / 84% / 只有 60 字`，而同一帧的正文里
+      // 就明写着「统计中…」—— 那是加载态，不是布局缺陷。settle 之后才拿到真数据。
+      // 顺序错了的话，下面所有"空白带/空白占比"结论都不可信（本项目第 N 次被量具骗）。
+      const stillLoading = await settle()
       m = await win.evaluate(MEASURE)
       m.queueMs = queueMs
-      m.stillLoading = await settle()
+      m.stillLoading = stillLoading
       const slug = label.replace(/[^\w\u4e00-\u9fa5]+/g, '_')
       await win.screenshot({ path: join(OUT, `${slug}.png`) })
     } catch (e) {
@@ -265,10 +271,12 @@ try {
           await sleep(500)
         }
         const queueMs = await waitQueueIdle()
+        // 冷启动：面板自己会写"正在统计/正在加载"，这时一律按加载中处理。
+        // 与可见页签那一遍同理：**先等落定、再量**（量加载帧会得到虚高的空白带）。
+        const stillLoading = await settle({ minMs: 12000, maxPolls: 100, phraseAlwaysLoading: true })
         const m = await win.evaluate(MEASURE)
         m.queueMs = queueMs
-        // 冷启动：面板自己会写"正在统计/正在加载"，这时一律按加载中处理，等到真正落定再量
-        m.stillLoading = await settle({ minMs: 12000, maxPolls: 100, phraseAlwaysLoading: true })
+        m.stillLoading = stillLoading
         await win.screenshot({ path: join(OUT, `hidden-${h.tab}.png`) })
         rows.push({ label: h.label, hidden: true, ...m, errs: errs.slice(before), assetFails: assetFails.slice(assetBefore) })
       } catch (e) {

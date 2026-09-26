@@ -9,28 +9,17 @@
  *   ③ 升级期间要同时禁用「批量解密」与「立即升级」两个按钮：后端是**同一条忙闲闸门**，
  *      两个都能点就会有人点了第二下拿到「已有解密任务进行中」，看起来像功能出错。
  */
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readStripped, sliceBetween } from './wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-const read = (rel: string): string => strip(readFileSync(join(HERE, rel), 'utf8')).replace(/\r\n/g, '\n')
+const HERE = import.meta.dirname
+const read = (rel: string): string => readStripped(join(HERE, rel))
 
 const state = read('./settings-state.tsx')
 const steps = read('./settings-steps.tsx')
 const settings = read('./Settings.tsx')
 const api = read('../api-config.ts')
-
-/** 从 `from` 锚点切到 `to` 锚点之间的片段（两端锚点都必须存在且唯一）。 */
-function sliceBetween(text: string, from: string, to: string, label: string): string {
-  const a = text.indexOf(from)
-  expect(a, `${label}：找不到起点锚点（改名时请同步本用例）`).toBeGreaterThan(-1)
-  const b = text.indexOf(to, a)
-  expect(b, `${label}：找不到终点锚点`).toBeGreaterThan(a)
-  return text.slice(a, b)
-}
 
 describe('升级为原图 · 客户端接线', () => {
   const fn = sliceBetween(state, 'const upgradeImgs = ', '\n  const toggleCdn', 'upgradeImgs 回调体')

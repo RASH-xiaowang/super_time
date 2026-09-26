@@ -14,23 +14,15 @@
  *    （2 × 19.2 行高 + 内边距），第二行末尾带省略号 —— 早先注释写的「单行省略」是错的，
  *    而且单行 + `nowrap` 正是把行撑爆的直接原因。
  */
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { classBlock, readText } from './wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
+const HERE = import.meta.dirname
+const read = (p: string): string => readText(join(HERE, p))
 
 const ROWS = read('chats-rows.module.css')
 const MSG = read('chats.module.css')
-
-/** 取某个 class 的声明块（只到第一个 `}`）。 */
-function classBlock(css: string, name: string): string {
-  const start = css.indexOf(`.${name} {`)
-  expect(start, `CSS 里找不到 .${name}`).toBeGreaterThanOrEqual(0)
-  return css.slice(start, css.indexOf('}', start))
-}
 
 describe('引用行显示', () => {
   it('① 引用行限宽走 --wx-quote-maxw，不得用 100%', () => {

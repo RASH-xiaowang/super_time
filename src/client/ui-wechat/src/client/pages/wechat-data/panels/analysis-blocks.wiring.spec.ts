@@ -20,13 +20,13 @@
  * ④ **内嵌卡的外壳样式必须随组件一起删**：`.wrap`/`.summary`/`.detail` 等只为卡片存在，
  *    留着就是死样式，几何守卫还会继续为它们记账。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { classBlock, readText } from './wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const read = (...p: string[]): string => readFileSync(join(HERE, ...p), 'utf8')
+const HERE = import.meta.dirname
+const read = (...p: string[]): string => readText(join(HERE, ...p))
 
 const TSX = read('AnalysisBlocks.tsx')
 const CSS = read('analysis-blocks.module.css')
@@ -34,13 +34,6 @@ const PANEL = read('ChatAnalysisPanel.tsx')
 const VIEW = read('chats-view.tsx')
 /** panels → wechat-data → pages → client → src(ui-wechat) → ui-wechat → client(src) → src(项目) */
 const PRESETS = read('..', '..', '..', '..', '..', '..', '..', 'backend', 'wechat-data', 'src', 'laya', 'presets.ts')
-
-/** 取某个 class 的声明块（只到第一个 `}`，本文件的类都是扁平的）。 */
-function classBlock(css: string, name: string): string {
-  const start = css.indexOf(`.${name} {`)
-  expect(start, `CSS 里找不到 .${name}`).toBeGreaterThanOrEqual(0)
-  return css.slice(start, css.indexOf('}', start))
-}
 
 describe('本地分析 · 渲染不变量', () => {
   it('⓪ 消息流里不再挂内嵌分析卡（用户要求：聊天框内不要有分析面板）', () => {
