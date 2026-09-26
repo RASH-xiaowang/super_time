@@ -184,7 +184,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
    * 单聊可以只要分析、不要推荐回复（反之亦然）。
    * 初值 true = 进会话两块都在，与加按钮之前完全一致。
    */
-  const [analysisOpen, setAnalysisOpen] = useState(true)
+  const [analysisPaneOpen, setAnalysisPaneOpen] = useState(true)
   /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
   const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
@@ -638,11 +638,11 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   useEffect(() => {
     setAnalysisTarget(null)
     setSuggestOpen(true)
-    setAnalysisOpen(true)
+    setAnalysisPaneOpen(true)
   }, [curSession?.username])
 
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisOpen, analysisTarget,
+    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget,
     annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
     buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
     calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
@@ -662,7 +662,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
     search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
     sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setAnalysisOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
+    setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
     setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
     setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
     setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,

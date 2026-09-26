@@ -11,7 +11,7 @@
  * 而不是带 onClick 的 span：键盘可达（Tab + Enter）在 60 个交互目标上是硬要求。
  */
 import { useEffect, useState } from 'react'
-import { apiGetWordCloud } from '../api.ts'
+import { apiGetWordCloud, readRenderCache, writeRenderCache } from '../api.ts'
 import { openGlobalSearch } from './search-events.ts'
 import { Card } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
@@ -40,24 +40,47 @@ const TONES = ['low', 'mid', 'high'] as const
  * @param props - 范围与展示参数。
  * @returns 卡片元素。
  */
+/** 一次词云结果（词表 + 统计到的正文条数）。 */
+interface WordCloudSnapshot {
+  words: Array<{ text: string; count: number }>
+  scanned: number
+}
+
+/** 无缓存时的初值（同一引用，避免每次渲染新建对象）。 */
+const EMPTY_SNAPSHOT: WordCloudSnapshot = { words: [], scanned: 0 }
+
 export function WordCloudCard({ scope, username, year, title, limit }: WordCloudCardProps): React.JSX.Element {
-  const [words, setWords] = useState<Array<{ text: string; count: number }>>([])
-  const [scanned, setScanned] = useState(0)
+  // 首屏瞬时渲染：上次成功渲染过的词表从 localStorage 取回。全库统计首跑要 ~3 秒
+  // （优化前 15 秒），没有它每次切回本页都要再等一遍。
+  const cacheKey = `wordcloud:${scope}:${username ?? ''}:${year ?? 'all'}:${Math.min(Math.max(1, limit ?? 60), 200)}`
+  const [snap, setSnap] = useState<WordCloudSnapshot>(() => readRenderCache<WordCloudSnapshot>(cacheKey) ?? EMPTY_SNAPSHOT)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (scope === 'chat' && !username) return
     let alive = true
+    setSnap(readRenderCache<WordCloudSnapshot>(cacheKey) ?? EMPTY_SNAPSHOT)
     setLoading(true)
     setError(null)
-    void apiGetWordCloud({ scope, username, year, limit })
-      .then((r) => { if (alive) { setWords(r.words); setScanned(r.scanned) } })
-      .catch((e: unknown) => { if (alive) setError((e as Error).message) })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [scope, username, year, limit])
+    // **延后一拍再发**：后端是同步 RPC，谁先入队谁先跑。热词首跑要扫全库，若与同屏其它块
+    // 同时发起，会把它们一并推迟几秒 —— 实测「世界板块」自身只要 13ms，排在热词后面却等到
+    // 17,008ms（`working/probe-queue-out.txt`）。延后一拍让小块先出，热词随后补上。
+    const timer = setTimeout(() => {
+      void apiGetWordCloud({ scope, username, year, limit })
+        .then((r) => {
+          if (!alive) return
+          setSnap({ words: r.words, scanned: r.scanned })
+          writeRenderCache(cacheKey, { words: r.words, scanned: r.scanned })
+        })
+        .catch((e: unknown) => { if (alive) setError((e as Error).message) })
+        .finally(() => { if (alive) setLoading(false) })
+    }, 0)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [scope, username, year, limit, cacheKey])
 
+  const words = snap.words
+  const scanned = snap.scanned
   const max = words.length > 0 ? words[0]!.count : 1
   const min = words.length > 0 ? words[words.length - 1]!.count : 1
   const span = Math.max(1, max - min)
@@ -65,10 +88,11 @@ export function WordCloudCard({ scope, username, year, title, limit }: WordCloud
 
   return (
     <Card title={heading} extra={words.length > 0 ? <span className={kitCss.textCaption}>{scanned.toLocaleString()} 条正文</span> : undefined}>
-      {loading && <div className={kitCss.emptyInline}>统计中…</div>}
+      {/* 有旧快照时不要用「统计中」盖住它 —— 首屏缓存的意义就是立刻有内容可看 */}
+      {loading && words.length === 0 && <div className={kitCss.emptyInline}>统计中…</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
       {!loading && !error && words.length === 0 && <div className={kitCss.emptyInline}>暂无足够文本（每个词至少出现 2 次）</div>}
-      {!loading && words.length > 0 && (
+      {words.length > 0 && (
         <div className={css.cloud} aria-label={`${heading}词云`}>
           {words.map((w, i) => {
             const t = (w.count - min) / span

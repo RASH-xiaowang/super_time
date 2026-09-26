@@ -13281,6 +13281,8 @@ import { decompress as decompress12 } from "fzstd";
 import { existsSync as existsSync44, readdirSync as readdirSync22 } from "node:fs";
 import { createHash as createHash19 } from "node:crypto";
 import { join as join57 } from "node:path";
+
+// src/backend/wechat-data/src/query/word-match.ts
 var STOP_CHARS = new Set("\u7684\u4E86\u662F\u6709\u5728\u4E0D\u6211\u6CA1\u5F88\u592A\u8FD9\u90A3\u4E2A\u4EEC\u5C31\u4E5F\u8FD8\u53C8\u518D\u548C\u4E0E\u6216\u4F46\u800C\u4E3A\u88AB\u628A\u8BA9\u7ED9\u8DDF\u4ECE\u5230\u53BB\u6765\u4E0A\u4E2D\u4E0B\u91CC\u4E48\u4EC0\u8C01\u54EA\u600E\u662F\u5426\u5427\u554A\u54E6\u55EF\u5440\u54C8\u563F\u561B\u5457\u5566\u54AF\u5462\u5417\u8BF4\u6211\u4F60\u4ED6\u5979\u5B83".split(""));
 var STOP_WORDS = /* @__PURE__ */ new Set([
   "\u65F6\u5019",
@@ -13354,6 +13356,156 @@ var STOP_WORDS = /* @__PURE__ */ new Set([
   "\u80AF\u5B9A",
   "\u539F\u6765"
 ]);
+var STOP_CHAR_BITS = (() => {
+  const bits = new Uint8Array(65536);
+  for (const c of STOP_CHARS) bits[c.charCodeAt(0)] = 1;
+  return bits;
+})();
+var STOP_WORD_KEYS = (() => {
+  const keys = /* @__PURE__ */ new Set();
+  for (const w of STOP_WORDS) if (w.length === 2) keys.add(w.charCodeAt(0) * 65536 + w.charCodeAt(1));
+  return keys;
+})();
+function entityNamesOf(decryptedDir) {
+  const words = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const n of contactMeta(decryptedDir).names.values()) {
+    const t = n.trim();
+    if (t.length < 2 || t.length > 8 || /^[0-9]+$/.test(t)) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    words.push(t);
+  }
+  return words;
+}
+function buildEntityMatcher(words) {
+  const list = [...words].sort((a, b) => b.length - a.length);
+  const children = [/* @__PURE__ */ new Map()];
+  const fail = [0];
+  const out = [[]];
+  for (let w = 0; w < list.length; w += 1) {
+    const word = list[w];
+    let node = 0;
+    for (let i = 0; i < word.length; i += 1) {
+      const c = word.charCodeAt(i);
+      let next = children[node].get(c);
+      if (next === void 0) {
+        next = children.length;
+        children.push(/* @__PURE__ */ new Map());
+        fail.push(0);
+        out.push([]);
+        children[node].set(c, next);
+      }
+      node = next;
+    }
+    out[node].push(w);
+  }
+  const queue = [];
+  for (const [, next] of children[0]) {
+    fail[next] = 0;
+    queue.push(next);
+  }
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const node = queue[qi];
+    const f = fail[node];
+    if (f !== 0) for (const w of out[f]) out[node].push(w);
+    for (const [c, next] of children[node]) {
+      let f2 = f;
+      while (f2 !== 0 && !children[f2].has(c)) f2 = fail[f2];
+      const g = children[f2].get(c);
+      fail[next] = g !== void 0 && g !== next ? g : 0;
+      queue.push(next);
+    }
+  }
+  return {
+    words: list,
+    children,
+    fail,
+    out,
+    hits: list.map(() => []),
+    touched: [],
+    covered: new Uint8Array(0),
+    bigram: /* @__PURE__ */ new Map()
+  };
+}
+function countText(text, counts, m) {
+  if (!text) return;
+  const n = text.length;
+  const touched = m.touched;
+  touched.length = 0;
+  let node = 0;
+  for (let i = 0; i < n; i += 1) {
+    const c = text.charCodeAt(i);
+    let g = m.children[node].get(c);
+    while (node !== 0 && g === void 0) {
+      node = m.fail[node];
+      g = m.children[node].get(c);
+    }
+    node = g === void 0 ? 0 : g;
+    const outs = m.out[node];
+    for (let k = 0; k < outs.length; k += 1) {
+      const w = outs[k];
+      const h = m.hits[w];
+      if (h.length === 0) touched.push(w);
+      h.push(i - m.words[w].length + 1);
+    }
+  }
+  let hasCover = false;
+  if (touched.length > 0) {
+    if (touched.length > 1) touched.sort((a, b) => m.words[b].length - m.words[a].length);
+    if (m.covered.length < n) m.covered = new Uint8Array(n);
+    const covered2 = m.covered;
+    covered2.fill(0, 0, n);
+    hasCover = true;
+    for (let t = 0; t < touched.length; t += 1) {
+      const w = touched[t];
+      const word = m.words[w];
+      const len = word.length;
+      const ps = m.hits[w];
+      let alive = false;
+      for (let k = 0; k < ps.length && !alive; k += 1) {
+        const s = ps[k];
+        let overlap = false;
+        for (let d = 0; d < len; d += 1) {
+          if (covered2[s + d] === 1) {
+            overlap = true;
+            break;
+          }
+        }
+        if (!overlap) alive = true;
+      }
+      if (alive) {
+        counts.set(word, (counts.get(word) ?? 0) + 1);
+        for (let k = 0; k < ps.length; k += 1) {
+          const s = ps[k];
+          covered2.fill(1, s, s + len);
+        }
+      }
+      ps.length = 0;
+    }
+  }
+  const bigram = m.bigram;
+  bigram.clear();
+  const covered = m.covered;
+  for (let i = 0; i + 2 <= n; i += 1) {
+    const c0 = text.charCodeAt(i);
+    if (c0 < 19968 || c0 > 40959) continue;
+    if (hasCover && covered[i] === 1) continue;
+    const c1 = text.charCodeAt(i + 1);
+    if (c1 < 19968 || c1 > 40959) continue;
+    if (hasCover && covered[i + 1] === 1) continue;
+    if (STOP_CHAR_BITS[c0] === 1 || STOP_CHAR_BITS[c1] === 1) continue;
+    const key = c0 * 65536 + c1;
+    if (STOP_WORD_KEYS.has(key)) continue;
+    bigram.set(key, (bigram.get(key) ?? 0) + 1);
+  }
+  for (const [key, v] of bigram) {
+    const w = String.fromCharCode(Math.floor(key / 65536)) + String.fromCharCode(key % 65536);
+    counts.set(w, (counts.get(w) ?? 0) + v);
+  }
+}
+
+// src/backend/wechat-data/src/query/wordcloud.ts
 function msgTableName8(username) {
   return "Msg_" + createHash19("md5").update(username, "utf8").digest("hex");
 }
@@ -13375,32 +13527,7 @@ function decodeCell10(v) {
 function stripXml3(x) {
   return x.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
-function entityNames(decryptedDir) {
-  const names = /* @__PURE__ */ new Set();
-  for (const n of contactMeta(decryptedDir).names.values()) {
-    const t = n.trim();
-    if (t.length >= 2 && t.length <= 8 && !/^[0-9]+$/.test(t)) names.add(t);
-  }
-  return Array.from(names).sort((a, b) => b.length - a.length);
-}
-function countText(text, counts, entities) {
-  if (!text) return;
-  let rest = text;
-  for (const e of entities) {
-    if (rest.includes(e)) {
-      counts.set(e, (counts.get(e) ?? 0) + 1);
-      rest = rest.split(e).join(" ");
-    }
-  }
-  for (let i = 0; i + 2 <= rest.length; i += 1) {
-    const bi = rest.slice(i, i + 2);
-    if (!/[\u4e00-\u9fff]{2}/.test(bi)) continue;
-    if (STOP_WORDS.has(bi)) continue;
-    if (STOP_CHARS.has(bi[0]) || STOP_CHARS.has(bi[1])) continue;
-    counts.set(bi, (counts.get(bi) ?? 0) + 1);
-  }
-}
-function scanMessages(decryptedDir, opts, counts, entities) {
+function scanMessages(decryptedDir, opts, counts, matcher) {
   const msgDir = join57(decryptedDir, "message");
   if (!existsSync44(msgDir)) return 0;
   const start = opts.year ? Math.floor(new Date(opts.year, 0, 1).getTime() / 1e3) : 0;
@@ -13434,7 +13561,7 @@ function scanMessages(decryptedDir, opts, counts, entities) {
             const text = stripXml3(decodeCell10(r["message_content"]));
             if (!text || /^[0-9,]+$/.test(text.slice(0, 80))) continue;
             scanned += 1;
-            countText(text, counts, entities);
+            countText(text, counts, matcher);
           }
         } catch {
         }
@@ -13445,8 +13572,10 @@ function scanMessages(decryptedDir, opts, counts, entities) {
   }
   return scanned;
 }
-function scanMoments(decryptedDir, counts, entities) {
-  for (const p of [join57(decryptedDir, "sns", "db_sns", "sns.db"), join57(decryptedDir, "sns", "sns.db")]) {
+var MOMENTS_DB_PATHS = ["sns/db_sns/sns.db", "sns/sns.db"];
+function scanMoments(decryptedDir, counts, matcher) {
+  for (const rel of MOMENTS_DB_PATHS) {
+    const p = join57(decryptedDir, ...rel.split("/"));
     if (!existsSync44(p)) continue;
     let db = null;
     try {
@@ -13464,7 +13593,7 @@ function scanMoments(decryptedDir, counts, entities) {
         const text = stripXml3(decodeCell10(r.c));
         if (!text) continue;
         scanned += 1;
-        countText(text, counts, entities);
+        countText(text, counts, matcher);
       }
       return scanned;
     } finally {
@@ -13473,22 +13602,35 @@ function scanMoments(decryptedDir, counts, entities) {
   }
   return 0;
 }
+var MAX_CACHED_WORDS = 2e3;
+function computeWordCloud(decryptedDir, scope, username, year) {
+  const counts = /* @__PURE__ */ new Map();
+  const matcher = buildEntityMatcher(entityNamesOf(decryptedDir));
+  let scanned = 0;
+  if (scope === "moments") {
+    scanned = scanMoments(decryptedDir, counts, matcher);
+  } else {
+    scanned = scanMessages(decryptedDir, { username: username || void 0, year }, counts, matcher);
+  }
+  const words = Array.from(counts.entries()).filter(([, n]) => n >= 2).map(([text, count]) => ({ text, count })).sort((a, b) => b.count - a.count).slice(0, MAX_CACHED_WORDS);
+  return { words, scanned };
+}
 function queryWordCloud(decryptedDir, options) {
   const scope = options?.scope ?? "global";
   const limit = Math.max(1, Math.min(200, Math.floor(options?.limit ?? 60)));
-  if (scope === "chat" && !(options?.username ?? "").trim()) {
+  const username = (options?.username ?? "").trim();
+  if (scope === "chat" && username === "") {
     throw new Error("scope=chat \u9700\u8981 username\uFF08\u4F1A\u8BDD\u7684 talker\uFF09");
   }
-  const counts = /* @__PURE__ */ new Map();
-  const entities = entityNames(decryptedDir);
-  let scanned = 0;
-  if (scope === "moments") {
-    scanned = scanMoments(decryptedDir, counts, entities);
-  } else {
-    scanned = scanMessages(decryptedDir, { username: options?.username, year: options?.year }, counts, entities);
-  }
-  const words = Array.from(counts.entries()).filter(([, n]) => n >= 2).map(([text, count]) => ({ text, count })).sort((a, b) => b.count - a.count).slice(0, limit);
-  return { words, scanned };
+  const year = options?.year;
+  const sig = scope === "moments" ? MOMENTS_DB_PATHS.map((rel) => rel + ":" + fileSigOf(join57(decryptedDir, ...rel.split("/")))).join("|") : shardCatalogSig(decryptedDir, ["message"]);
+  const full = cachedBySig(
+    `wordcloud:${scope}:${username}:${year ?? "all"}:${decryptedDir}`,
+    sig,
+    () => computeWordCloud(decryptedDir, scope, username, year),
+    3e4
+  );
+  return { words: full.words.slice(0, limit), scanned: full.scanned };
 }
 
 // src/backend/wechat-data/src/remotes/wordcloud.ts

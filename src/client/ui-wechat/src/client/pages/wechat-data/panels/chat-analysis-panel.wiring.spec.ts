@@ -22,12 +22,20 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { readChatsSource } from './chats-source.ts'
 import { sliceBetween } from './wiring-kit.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
 
-const VIEW = read('chats-view.tsx')
+/**
+ * 会话那块功能的**联合源码**（`Chats.tsx` + `chats-*.tsx`）。
+ *
+ * 用联合而不是单文件：2026-09-26 把头部动作区拆进 `chats-head-actions.tsx` 之后，
+ * 「按钮接对线」这类断言问的是「会话这一块功能」，不该关心那段代码住在哪个文件里
+ * —— 这正是 `chats-source.ts` 存在的理由（它的注释就写着「下次再拆一刀不必回来补名字」）。
+ */
+const VIEW = readChatsSource()
 const CHATS = read('Chats.tsx')
 const SHELL = read('session-ask.module.css')
 const PANEL = read('ChatAnalysisPanel.tsx')
@@ -62,16 +70,16 @@ describe('分析面板 / 推荐回复面板', () => {
   it('② 右栏两块默认都开，AI 问答打开时顶替它', () => {
     expect(CHATS, '推荐回复常驻：初值必须是 true').toContain('const [suggestOpen, setSuggestOpen] = useState(true)')
     expect(CHATS, '分析区初值也必须是 true（默认两块都可见，与加按钮之前一致）')
-      .toContain('const [analysisOpen, setAnalysisOpen] = useState(true)')
+      .toContain('const [analysisPaneOpen, setAnalysisPaneOpen] = useState(true)')
     // **精确切到挂载条件那一段**：原先用「锚点往后 120 字符」的窗口写法，
     // 会把邻近的无关代码圈进来 —— 本仓为这种写法吃过假阳性的亏。
-    const mount = sliceBetween(VIEW, '{curSession !== null && (suggestVisible || analysisOpen)',
+    const mount = sliceBetween(VIEW, '{curSession !== null && (suggestVisible || analysisPaneOpen)',
       '<ChatRightPanel', '右栏挂载条件')
     expect(mount, 'AI 问答打开时不该同时挂右栏（两块并排会挤爆消息列）').toContain('!(aiOpen && aiEligible && aiTarget)')
     expect(mount, '右栏不该再写死「只有单聊才挂」—— 群聊也要能单独看分析')
       .not.toContain("curSession.type === 'private'")
     expect(CHATS, '换会话要重置（否则收起后再也没有恢复入口）').toContain('setSuggestOpen(true)')
-    expect(CHATS, '分析区同理，换会话也要重置').toContain('setAnalysisOpen(true)')
+    expect(CHATS, '分析区同理，换会话也要重置').toContain('setAnalysisPaneOpen(true)')
   })
 
   it('③ 两块各有自己的展开/折叠按钮，且真的接上了状态', () => {
@@ -85,9 +93,9 @@ describe('分析面板 / 推荐回复面板', () => {
     expect(btns, '推荐回复按钮的 active 状态没跟着走').toMatch(/data-active=\{suggestOpen/)
     expect(btns, '推荐回复按钮缺少 aria-expanded（无障碍）').toMatch(/aria-expanded=\{suggestOpen\}/)
 
-    expect(btns, '分析按钮没接线').toContain('setAnalysisOpen(v => !v)')
-    expect(btns, '分析按钮的 active 状态没跟着走').toMatch(/data-active=\{analysisOpen/)
-    expect(btns, '分析按钮缺少 aria-expanded（无障碍）').toMatch(/aria-expanded=\{analysisOpen\}/)
+    expect(btns, '分析按钮没接线').toContain('setAnalysisPaneOpen(v => !v)')
+    expect(btns, '分析按钮的 active 状态没跟着走').toMatch(/data-active=\{analysisPaneOpen/)
+    expect(btns, '分析按钮缺少 aria-expanded（无障碍）').toMatch(/aria-expanded=\{analysisPaneOpen\}/)
 
     // 群聊没有推荐回复（「回一句」在群里不成立）⇒ 那个按钮也不该出现
     expect(btns, '推荐回复按钮没有限定在单聊').toMatch(/\{curSession\.type === 'private' && \(\s*\n\s*<button/)

@@ -249,6 +249,92 @@ keyset（`messages.ts:374-385` 的 `WHERE sort_seq < ? OR (sort_seq = ? AND loca
 python working/run-probe.py probe-perf.ts    # 各模块冷/热耗时（29 个接口）
 python working/run-probe.py probe-perf2.ts   # 并行有效性 + OFFSET 深翻页 + 缓存收益
 python working/run-probe.py probe-perf3.ts   # 并行 vs 顺序的公平对比
+python working/run-probe.py probe-wc.ts      # 词云 / 世界板块耗时 + 规模归因
+python working/run-probe.py probe-queue.ts   # 同步 RPC 的排队效应（15 秒请求拖累同屏）
+python working/run-probe.py probe-bench.ts   # countText 逐阶段分解
+python working/run-probe.py probe-bench2.ts  # Aho-Corasick 原型 + 词表逐项对拍
 ```
 
-输出落在 `working/probe-perf*.txt`。
+输出落在 `working/probe-*.txt`。
+
+---
+
+## 八、已修复 · 「世界板块 + 全部热词」加载慢（2026-09-26）
+
+> 用户报「世界板块，全部热词加载很慢」。实测后发现**这两者是同一个根因**。
+> 而这一项恰好是第二节当初**明确跳过没测**的（`getWordCloud` 单次太慢，怕把整轮拖到十几分钟）——
+> 所以这份补测也顺便证明了「跳过的代价是会漏掉最慢的那一个」。
+
+### 8.1 实测（`working/probe-wc-out.txt` / `probe-queue-out.txt`）
+
+| 接口 | 修复前 | 修复后 |
+|---|---|---|
+| `getWordCloud(scope='global')` 冷跑 | **15,312ms** | **3,013ms** |
+| 同上，第二次（进程内缓存） | 15,876ms | **0ms** |
+| `getWordCloud(scope='moments')` | 1,023ms | **183ms** |
+| `getRegionMap`（世界板块自己） | 12ms | 12ms |
+
+**「世界板块慢」的真身是排队，不是它自己慢**：它自身只要 13ms，但后端是同步 RPC，
+排在热词后面时实测被推迟到 **17,008ms** 才拿到数据：
+
+```
+A. 热词在前  热词 开始 @0ms     → 完成 @16974ms
+             世界板块 开始 @16974ms → 完成 @17008ms
+B. 顺序反转  世界板块 完成 @13ms  ；热词 完成 @18018ms
+```
+
+### 8.2 瓶颈分解（`probe-bench.ts`）
+
+15 秒里 **91%** 花在「每条正文 × 全部实体名做 `includes`」：
+
+| 阶段 | 4000 条样本 | 外推全量 163,650 条 |
+|---|---|---|
+| 实体遮罩（旧） | 417ms | **~11.9s** |
+| bigram 循环 | 42ms | ~1.7s |
+| 合计 | 460ms | **~18.8s** |
+
+量级：**163,650 条正文 × 1,979 个实体名 ≈ 3.2 亿次子串匹配**，
+而且每次命中还带一次 `rest.split(e).join(' ')`（重建整个字符串）。
+
+### 8.3 修法
+
+| # | 修法 | 效果 |
+|---|---|---|
+| 1 | 实体遮罩改 **Aho-Corasick**（新模块 `query/word-match.ts`）：一遍 O(n) 扫描取代逐名 `includes` | 15.3s → **3.0s** |
+| 2 | `queryWordCloud` 加 **`cachedBySig` 缓存**（签名 = 消息分片 mtime+size；朋友圈 = `sns.db`） | 二次 **0ms** |
+| 3 | 前端 `WordCloudCard` 加**首屏渲染缓存**（`readRenderCache` / `writeRenderCache`） | 切回总览**立刻有词表** |
+| 4 | 前端请求**延后一拍入队**（`setTimeout(…, 0)`） | 不再把同屏其它块堵在身后 |
+
+**为什么第 4 条是必需的**：后端同步 ⇒ 谁先入队谁先跑。热词若与同屏其它块同时发起，
+它就跑在别人前面。延后一拍让它**最后入队** —— 按上面 B 场景的实测，小块 13ms 就能出。
+
+### 8.4 等价性（换了算法最该问的问题）
+
+把**旧实现原样复刻成 oracle**，在同一样本上逐词对拍
+（常驻用例 `tests/word-match.spec.ts` + 真实全量 `working/probe-bench2.ts`）：
+
+- 真实全量：2,891 个词 **逐项完全一致** ✅
+- 单元对拍：13 组边界形态（重叠、前缀关系、相邻人名、句首句尾、空文本、随机语料）全部一致
+
+**唯一已知差异**（刻意，且已被 spec 钉死）：旧实现用 `split(e).join(' ')`，
+而 `split` 是**不重叠**匹配、且把命中压成**一个空格** —— 于是同一名字重叠出现时
+（如 `王五王五王五`）**残余的 `王五` 会漏进 bigram**。新实现按匹配区间整段遮罩，
+残余不再上榜。名字的任何部分都不该作为独立词条，这才是实体保护的本意；
+真实数据里该形态极罕见（全量对拍零差异）。
+
+### 8.5 还没做的（如实登记）
+
+- 剩下 3 秒里约 **1.4s** 是 SQL 读 + zstd 解压 + 剥 XML，约 **1.6s** 是 AC 扫描 + bigram。
+  再往下要动的是「把词频落库做增量」，但那会改口径（"全部"要不要含历史新增）并要做失效管理，本轮未做。
+- 缓存是**进程内**的：**重启应用后第一次仍是 3 秒**（要跨重启就得落盘缓存）。
+- `queryRegionMap` 只有 12ms，**故意没加缓存** —— 加缓存会引入「数据不刷新」的风险，收益不成比例。
+
+### 8.6 守卫与反证
+
+- `panels/wordcloud-perf.wiring.spec.ts`（16 例）：AC 三件套、禁用逐名 `includes`、
+  out 必须继承 fail 链、命中按长度降序、按正文计数而非出现次数、bigram 热循环不许 `slice`+正则、
+  后端必须走 `cachedBySig`、前端首屏缓存 + 延后一拍 + 加载态不许盖住缓存。
+- `tests/word-match.spec.ts`（21 例）：13 组等价性对拍 + 8 条结构契约（纯函数、不就地改入参、
+  空名单降级、跨条复用不串味）。
+- 变异 **M30–M36** 共 7 条全部咬红、逐字节还原：退回逐名全遍历 / 去掉缓存 / out 不继承 fail 链 /
+  不排序 / 按出现次数累加 / 不延后请求 / 加载态盖住缓存。

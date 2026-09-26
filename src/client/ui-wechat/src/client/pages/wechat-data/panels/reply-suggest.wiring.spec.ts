@@ -41,8 +41,13 @@ describe('推荐回复的接线', () => {
     const at = chats.indexOf('<ChatRightPanel')
     expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
     const around = chats.slice(Math.max(0, at - 420), at)
-    expect(around.includes("curSession.type === 'private'"), '右栏只该对单聊挂载').toBe(true)
-    expect(around.includes('suggestOpen'), '常驻与否由 suggestOpen 控制（初值 true 写在 Chats.tsx）').toBe(true)
+    // 2026-09-26：右栏挂载条件从「只有单聊」改成「两块各自判定」—— 群聊不给推荐回复
+    // （「回一句」不成立），但仍可**单独打开分析**（分析读当前会话，群聊同样是会话）。
+    // 所以「只对单聊」这条不变量从**挂载条件**移到了 `suggestVisible` 的**定义处**，
+    // 语义没变：本用例仍然钉着它，只是锚点跟着代码搬了家。
+    expect(around.includes('suggestVisible'), '右栏挂载由 suggestVisible 参与决定').toBe(true)
+    expect(chats.includes("const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'"),
+      '推荐回复仍只对单聊出现（「回一句」在群里不成立）').toBe(true)
   })
 
   it('面板挂在消息流右侧（第三栏），且把当前会话传进去', () => {
@@ -51,7 +56,8 @@ describe('推荐回复的接线', () => {
     // 条件在标签**之前**（JSX 的 `{cond && (<Comp .../>)}`），所以两边都要看。
     const around = chats.slice(Math.max(0, at - 300), at + 400)
     expect(around.includes('target={curSession}'), '面板必须拿到当前会话（否则读取范围会退化成「没有范围」）').toBe(true)
-    expect(around.includes("curSession.type === 'private'"), '面板同样只该对单聊挂载').toBe(true)
+    // 「只对单聊」不再写在挂载条件里（群聊要能单独看分析）⇒ 改钉组合层的渲染条件。
+    expect(around.includes('showSuggest={suggestVisible}'), '推荐回复块仍只对单聊渲染').toBe(true)
   })
 
   it('数据层按 talker 取上下文（跨会话隔离靠它）', () => {
