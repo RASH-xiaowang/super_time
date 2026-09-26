@@ -179,9 +179,13 @@ describe('H14：隐私声明 ↔ 出网点', () => {
    */
   it('精排：候选文档必须与查询一起过闸，且拦截判在出网之前', () => {
     const code = stripComments(gateway)
-    const from = code.search(/\n  (?:private|protected) makeRerankFn/)
-    expect(from, 'gateway 里没有 makeRerankFn（精排接线被删了？）').toBeGreaterThan(0)
-    const body = code.slice(from, from + 1600)
+    // #20 之后实现住在 `gateway-llm-factory.ts#makeRerankFnOf`，类里只剩一个委托 ——
+    // 这份联合是"实现搬到哪儿都算"的口径，所以这里**两处都找**，认那一段真过闸的实现；
+    // 找不到就红（委托本身不再被当成"接线还在"的证据，那正是这条判据要防的静默失效）。
+    const starts = [...code.matchAll(/\n(?:export function makeRerankFnOf| {2}(?:private|protected) makeRerankFn\()/g)]
+    const bodies = starts.map((m) => code.slice(m.index, m.index + 1600))
+    const body = bodies.find((b) => b.includes("privacyGate('ask_rerank'")) ?? ''
+    expect(body, '找不到精排的过闸实现（makeRerankFn / makeRerankFnOf 里都没有那一步？）').not.toBe('')
     // ① gate 的入参必须同时含 query 与全部 documents。只 gate query 等于把 N 条正文
     //    裸发出去，而审计表还会记成「已脱敏」—— 那是**假的安全感**，比没有更糟。
     expect(body).toMatch(/privacyGate\(\s*'ask_rerank'[\s\S]{0,160}\[query, \.\.\.documents\]/)

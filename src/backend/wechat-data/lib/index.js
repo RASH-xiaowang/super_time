@@ -27768,9 +27768,6 @@ function createExportRemotes(rc) {
   };
 }
 
-// src/backend/wechat-data/src/gateway-core.ts
-import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
-
 // src/backend/wechat-data/src/gateway-models.ts
 function embedModelNameOf(bridge, override = "") {
   const llm = bridge;
@@ -27792,6 +27789,61 @@ function kbModelOf(source, kbId, role) {
   const s = readKbModelSettings(source.decryptedDir, kbId);
   const ref = role === "chat" ? s.chatRef : role === "embed" ? s.embedRef : s.rerankRef;
   return resolveModelRef(ref, globalModelNameOf(source, role));
+}
+
+// src/backend/wechat-data/src/gateway-llm-factory.ts
+import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
+var EXTRACT_SYSTEM = "\u4F60\u662F\u4E00\u540D\u4E25\u683C\u7684\u4FE1\u606F\u62BD\u53D6\u5668\u3002\u53EA\u8F93\u51FA\u8981\u6C42\u7684\u884C\u683C\u5F0F\uFF0C\u4E0D\u89E3\u91CA\u3001\u4E0D\u5BD2\u6684\u3001\u4E0D\u8865\u5168\u6587\u6863\u91CC\u6CA1\u6709\u7684\u540D\u5B57\u3002";
+function makeEmbedFnOf(deps, model, feature = "ask_embed") {
+  const bridge = deps.llm;
+  if (typeof bridge?.embed !== "function") return void 0;
+  return async (texts) => {
+    const gate = deps.privacyGate(feature, { sessions: 0, messages: texts.length }, texts);
+    if (!gate.ok) throw new Error(gate.error);
+    return bridge.embed(gate.texts, model ? { model } : void 0);
+  };
+}
+function makeChatAskerOf(deps, kbId, feature) {
+  const bridge = deps.llm;
+  const stream = bridge?.stream;
+  if (typeof stream !== "function") return void 0;
+  const model = deps.kbModel(kbId, "chat").model;
+  const host = deps.host;
+  const sel = host?.agentDefaultModel?.currentSelection?.();
+  const provider = String(sel?.provider ?? "");
+  return async (prompt) => {
+    const blocked = deps.privacyBlocked(feature);
+    if (blocked !== null) throw new Error(blocked);
+    const gate = deps.privacyGate(feature, { sessions: 0, messages: 0 }, [prompt]);
+    if (!gate.ok) throw new Error(gate.error);
+    const assembler = new BlockAssembler5();
+    const opts = {
+      provider,
+      model,
+      messages: [createUserMessage5({
+        content: [{ type: "text", text: gate.texts[0] ?? prompt }],
+        source: { kind: "plugin", plugin: "dsh-wechat-data" }
+      })],
+      system: EXTRACT_SYSTEM,
+      maxTokens: 500
+    };
+    for await (const c of stream(opts)) assembler.push(c);
+    return assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
+  };
+}
+function makeRerankFnOf(deps, kbId) {
+  const bridge = deps.llm;
+  if (typeof bridge?.rerank !== "function") return void 0;
+  const model = deps.kbModel(kbId, "rerank").model;
+  if (model === "") return void 0;
+  return async (query, documents) => {
+    const blocked = deps.privacyBlocked("ask_rerank");
+    if (blocked !== null) throw new Error(blocked);
+    const gate = deps.privacyGate("ask_rerank", { sessions: 0, messages: documents.length }, [query, ...documents]);
+    if (!gate.ok) throw new Error(gate.error);
+    const [q, ...rest] = gate.texts;
+    return bridge.rerank(q ?? query, rest, { model });
+  };
 }
 
 // src/backend/wechat-data/src/gateway-privacy.ts
@@ -28058,36 +28110,21 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     return names;
   }
   /**
-   * 构造「过隐私闸门」的 embedding 函数。
-   *
-   * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
-   * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
-   *
-   * ⚠ `feature` 为什么是**参数**而不是写死 `ask_embed`：审计表按功能名分列，而这几处
-   * embedding 的**数据范围完全不同** —— 消息侧（`ask_embed`）只发检索到的聊天片段，
-   * 知识库侧（`kb_embed`）发的是用户选进知识库的**文件正文**，链接建议（`kb_link_suggest`）
-   * 发的是**用户正在写的笔记正文**加本库候选标题。写死同一个名字，
-   * 「我到底把哪一类东西发出去了」在审计里就分不开 —— 而用户完全可能只对其中一类给过同意。
-   * @param model - 向量模型名（空则回退 chat model）。
-   * @param feature - 审计里的功能名（`ask_embed` 聊天片段 / `kb_embed` 知识库文件正文 /
-   *   `kb_link_suggest` 笔记正文与候选标题）。
-   * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
-   */
+  * 构造「过隐私闸门」的 embedding 函数 —— 工厂在 `gateway-llm-factory.ts`
+  * （#20 第三个协作者，文件头写着那三条出站纪律）。
+  * @param model - 向量模型名（空则不带 model 选项）。
+  * @param feature - 审计里的功能名（三种数据范围必须分得开）。
+  * @returns embedding 函数；桥未提供 embed 时 undefined。
+  */
   makeEmbedFn(model, feature = "ask_embed") {
-    const llmAny = this._ctx.llm;
-    if (typeof llmAny?.embed !== "function") return void 0;
-    return async (texts) => {
-      const gate = this.privacyGate(feature, { sessions: 0, messages: texts.length }, texts);
-      if (!gate.ok) throw new Error(gate.error);
-      return llmAny.embed(gate.texts, model ? { model } : void 0);
-    };
+    return makeEmbedFnOf(this.llmFactoryDeps(), model, feature);
   }
   /**
-  * 「这次 embedding 实际用的模型名」—— 解析在 `gateway-models.ts#embedModelNameOf`
-  * （#20 第二个协作者）。记账名必须由发送方给出，见那份模块里 §7 F1 那段。
-  * @param override - 显式指定的模型名（可空）。
-  * @returns 生效模型名；未配置时为空串。
-  */
+   * 「这次 embedding 实际用的模型名」—— 解析在 `gateway-models.ts#embedModelNameOf`
+   * （#20 第二个协作者）。记账名必须由发送方给出，见那份模块里 §7 F1 那段。
+   * @param override - 显式指定的模型名（可空）。
+   * @returns 生效模型名；未配置时为空串。
+   */
   embedModelName(override = "") {
     return embedModelNameOf(this._ctx.llm, override);
   }
@@ -28109,80 +28146,48 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     return kbModelOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, kbId, role);
   }
   /**
-   * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）。
-   *
-   * 与 `summarizeKbFile` 同一套纪律：`privacyGate` 过闸 + `BlockAssembler` 收流 +
-   * 失败抛出。为什么不复用摘要那条路径：那些地方各自要拼自己的 prompt 与 system，
-   * 抽出来只共享「过闸 → 发 → 收文本」这三步，比造一个带一堆选项的大泛型函数诚实。
-   * @param kbId - 当前库（取语言模型的库级覆盖）。
-   * @param feature - 审计里登记的功能名。
-   * @returns 调用函数；桥不支持流式时 undefined（调用方据此报「模型通道不可用」）。
-   */
+  * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）；
+  * 实现见 `gateway-llm-factory.ts#makeChatAskerOf`。
+  * @param kbId - 当前库（取语言模型的库级覆盖）。
+  * @param feature - 审计里登记的功能名。
+  * @returns 调用函数；桥不支持流式时 undefined（调用方据此报「模型通道不可用」）。
+  */
   makeChatAsker(kbId, feature) {
-    const ctx = this._ctx;
-    const llmAny = ctx.llm;
-    if (typeof llmAny?.stream !== "function") return void 0;
-    const model = this.kbModel(kbId, "chat").model;
-    const sel = ctx.agentDefaultModel?.currentSelection();
-    const provider = String(sel?.provider ?? "");
-    return async (prompt) => {
-      const blocked = this.privacyBlocked(feature);
-      if (blocked !== null) throw new Error(blocked);
-      const gate = this.privacyGate(feature, { sessions: 0, messages: 0 }, [prompt]);
-      if (!gate.ok) throw new Error(gate.error);
-      const assembler = new BlockAssembler5();
-      const opts = {
-        provider,
-        model,
-        messages: [createUserMessage5({
-          content: [{ type: "text", text: gate.texts[0] ?? prompt }],
-          source: { kind: "plugin", plugin: "dsh-wechat-data" }
-        })],
-        system: "\u4F60\u662F\u4E00\u540D\u4E25\u683C\u7684\u4FE1\u606F\u62BD\u53D6\u5668\u3002\u53EA\u8F93\u51FA\u8981\u6C42\u7684\u884C\u683C\u5F0F\uFF0C\u4E0D\u89E3\u91CA\u3001\u4E0D\u5BD2\u6684\u3001\u4E0D\u8865\u5168\u6587\u6863\u91CC\u6CA1\u6709\u7684\u540D\u5B57\u3002",
-        maxTokens: 500
-      };
-      for await (const c of ctx.llm.stream(opts)) assembler.push(c);
-      return assembler.blocks().map((b) => b.type === "text" ? b.text : "").join("").trim();
-    };
+    return makeChatAskerOf(this.llmFactoryDeps(), kbId, feature);
   }
   /**
-   * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）。
-   *
-   * 三条纪律，少一条都是实质性的漏洞：
-   *   ① `privacyBlocked` 判在**任何出网之前**（早于「没配模型」那类早退 —— 顺序错了
-   *      用户看到的会是「AI 不可用」，把「拦截生效了」这件事盖掉）；
-   *   ② `privacyGate` 必须一次过 `[query, ...documents]`。rerank 的入参天然是一批文档，
-   *      只 gate 查询词等于把 N 条正文**裸发出去**，而审计表还会记成「已脱敏」；
-   *   ③ 失败一律抛出而不是吞掉：调用方（pipeline）负责退回本地加权，并在 `rerankInfo`
-   *      里说清这次为什么没精排。
-   * 功能名叫 `ask_rerank` 而不是 `kb_rerank`：这一阶段跑在整个问答检索管道上，
-   * 候选既可能来自聊天记录也可能来自知识库文件 —— 按知识库命名会让审计里那一列
-   * 看起来只与文件有关，而它实际覆盖的是全部候选。
-   * @param kbId - 当前库（用于取库级覆盖；0 = 没有库上下文）。
-   * @returns 精排函数；没配模型或桥不支持时返回 undefined（管道据此跳过这一段）。
-   */
+  * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）；
+  * 实现见 `gateway-llm-factory.ts#makeRerankFnOf`（含「整批过一次闸」那条纪律）。
+  * @param kbId - 当前库（用于取库级覆盖；0 = 没有库上下文）。
+  * @returns 精排函数；没配模型或桥不支持时 undefined（管道据此跳过这一段）。
+  */
   makeRerankFn(kbId) {
-    const llmAny = this._ctx.llm;
-    if (typeof llmAny?.rerank !== "function") return void 0;
-    const model = this.kbModel(kbId, "rerank").model;
-    if (model === "") return void 0;
-    return async (query, documents) => {
-      const blocked = this.privacyBlocked("ask_rerank");
-      if (blocked !== null) throw new Error(blocked);
-      const gate = this.privacyGate("ask_rerank", { sessions: 0, messages: documents.length }, [query, ...documents]);
-      if (!gate.ok) throw new Error(gate.error);
-      const [q, ...rest] = gate.texts;
-      return llmAny.rerank(q ?? query, rest, { model });
+    return makeRerankFnOf(this.llmFactoryDeps(), kbId);
+  }
+  /**
+  * 三个 LLM 工厂共用的依赖袋。
+  *
+  * 每次调用现凑：`_dirs.decrypted` 会在换数据根时变，缓存这份对象就会让隐私闸
+  * 指向**上一个**数据根的库（读到旧设置 = 用旧同意范围发新数据）。
+  * @returns 桥、宿主上下文与两个前置协作者的入口。
+  */
+  llmFactoryDeps() {
+    return {
+      llm: this._ctx.llm,
+      host: this._ctx,
+      kbModel: (kbId, role) => this.kbModel(kbId, role),
+      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts)
     };
   }
   /**
-   * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
-   *
-   * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
-   * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
-   * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
-   * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
-   */
+     * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
+     *
+     * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
+     * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
+     * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
+     * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
+     */
   cdnSwitches() {
     try {
       const cfg = getConfig(this._dirs.decrypted);

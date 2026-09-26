@@ -28,10 +28,23 @@ export function gatewayClassSource(): string {
   return GATEWAY_CLASS_FILES.map((f) => readFileSync(join(GW_DIR, f), 'utf8')).join('\n')
 }
 
+/**
+ * 类 + `remotes/**` + **全部 `gateway-*` 协作者模块**（#20 拆出来的隐私闸 / 模型解析 / LLM 工厂）。
+ *
+ * 后缀清单用 readdir 而不是手写数组：搬出一族就少一个文件，手写清单必然漏 ——
+ * 而漏掉的后果不是报错，是读这份联合的守卫**静默失去靶子**（本仓已经踩过一次：
+ * `chats-source.ts` 只扫 `.tsx`，把逻辑搬进 `.ts` 之后一条"实时处理器不许刷列表"的判据
+ * 差点变成恒真，那次靠「找不到 onUpdated」的哨兵才报出来）。
+ * 因此联合的覆盖面由 `gateway-collaborators.spec.ts` 里的哨兵兜着：那几个模块名必须出现。
+ */
 export function gatewaySource(): string {
   const remotes = readdirSync(join(GW_DIR, 'remotes'))
     .filter((f) => f.endsWith('.ts'))
     .sort()
     .map((f) => join(GW_DIR, 'remotes', f))
-  return [gatewayClassSource(), ...remotes.map((f) => readFileSync(f, 'utf8'))].join('\n')
+  const collaborators = readdirSync(GW_DIR)
+    .filter((f) => /^gateway-.+\.ts$/.test(f) && !GATEWAY_CLASS_FILES.includes(f))
+    .sort()
+    .map((f) => readFileSync(join(GW_DIR, f), 'utf8'))
+  return [gatewayClassSource(), ...collaborators, ...remotes.map((f) => readFileSync(f, 'utf8'))].join('\n')
 }
