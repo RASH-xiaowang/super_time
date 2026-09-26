@@ -40,6 +40,18 @@
 - 第一批：**已全部做完**（#1–#8）。
 - 第二批 #9 后端 `Result<T>` 契约（`sync.ts:47` 优先）、#10 xlsx 换源（需授权）、#11 重读查询注入 `AbortSignal`、
   #15 `file:` 依赖溯源表。
+- **关于 #11（P1-2）的两条实施前提**（本轮读代码 + 读生成物确认，别再当「加个 signal 参数」那么小）：
+  ① 这五个查询（`privacy` / `graph` / `ledger` / `storage` / `overview-insights`）现在全是**同步函数**，
+     要按行让出就必须改成 `async`，连带 `cachedBySig`（同步签名缓存）要加 async 版 + 同键并发合流、
+     `withDb` 要加 `withDbAsync`（连接要跨过 await 才能关），两个调用方（`remotes/opslog.ts`、
+     `query/export-flows.ts`）跟着改 —— 是一个 5 模块 + 2 处的整体改造，不该顺手塞在别的提交里。
+  ② **「取消」这一半被 P1-5 卡住**：`@Remote` 的取消是生成物里的元数据
+     （`lib/typert.host.js` 中 `cancellation: { parameter: 'signal' }`，`openPath` 就是这么拿到 signal 的），
+     而那份生成物**不是本仓能重生成的**（`sourceLocation` 指向另一棵树，见上面 ⑧）。
+     只在壳上声明 `signal: AbortSignal` 而生成物不知道，运行期拿到的是 `undefined` —— 那是假接线。
+     所以顺序只能是：先做 ① 的让出（它不依赖任何生成物，直接解掉「排队放大器」），
+     取消等 P1-5 把生成链接回来之后再开。
+
 - 第二批 #13 的**后半**：`ENFORCED_SCHEMA_METHODS` 目前是空集 —— ② 档（按 schema 硬拒）要等
   `info().argGuard.mismatched` 在真实使用里稳定为空才升级，这是刻意留下的证据门槛，不是漏做。
 - 第三批 #18–#25（拆巨型组件、`GatewayCore` 职责拆分、解循环依赖、长列表虚拟化、统一失效契约、
