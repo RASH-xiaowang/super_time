@@ -2,13 +2,16 @@
  * WeChat voice-message source helpers: media_0.db VoiceInfo rows (silk v3
  * voice_data), Name2Id username mapping, and the wx_silk decoder process
  * (pure-Rust SILK v3 → WAV, bundled under resources/win32/x64).
+ *
+ * 全部连接经 `withDb` 打开（P0-1）：本文件原先同时存在「finally 关」和「catch 不关」两种写法，
+ * 后者在 `prepare` 抛错时泄漏句柄。
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { onDiskPath } from '../asar-path.ts'
+import { withDb } from './db-open.ts'
 
 /** One VoiceInfo row with its chat username. */
 export interface VoiceSource {
@@ -25,9 +28,7 @@ function mediaDbPath(decryptedDir: string): string {
 /** Map a chat_name_id (Name2Id rowid) to its user_name. */
 export function usernameByChatId(decryptedDir: string, chatId: string): string {
   try {
-    const db = new DatabaseSync(mediaDbPath(decryptedDir), { readOnly: true })
-    const row = db.prepare('SELECT user_name FROM Name2Id WHERE rowid = CAST(? AS INTEGER) LIMIT 1').get(chatId) as { user_name?: unknown } | undefined
-    db.close()
+    const row = withDb(mediaDbPath(decryptedDir), (db) => db.prepare('SELECT user_name FROM Name2Id WHERE rowid = CAST(? AS INTEGER) LIMIT 1').get(chatId) as { user_name?: unknown } | undefined)
     if (row && typeof row.user_name === 'string') return row.user_name
   } catch { /* db unavailable */ }
   return ''
@@ -37,8 +38,7 @@ export function usernameByChatId(decryptedDir: string, chatId: string): string {
 export function recentVoiceMessages(decryptedDir: string, limit: number): VoiceSource[] {
   const dbPath = mediaDbPath(decryptedDir)
   if (!existsSync(dbPath)) return []
-  const db = new DatabaseSync(dbPath, { readOnly: true })
-  try {
+  return withDb(dbPath, (db) => {
     const rows = db.prepare(
       `SELECT CAST(chat_name_id AS TEXT) AS c, CAST(local_id AS TEXT) AS l, CAST(svr_id AS TEXT) AS s
        FROM VoiceInfo ORDER BY create_time DESC LIMIT ?`,
@@ -49,23 +49,18 @@ export function recentVoiceMessages(decryptedDir: string, limit: number): VoiceS
       const localId = r.l ?? ''
       return { chatId, localId, svrId, username: usernameByChatId(decryptedDir, chatId) }
     })
-  } finally {
-    db.close()
-  }
+  })
 }
 
 /** The raw silk voice_data bytes for a svr_id. */
 export function voiceDataBySvr(decryptedDir: string, svrId: string): Buffer | null {
   const dbPath = mediaDbPath(decryptedDir)
   if (!existsSync(dbPath)) return null
-  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    const row = db.prepare('SELECT voice_data FROM VoiceInfo WHERE svr_id = CAST(? AS INTEGER) LIMIT 1').get(svrId) as { voice_data?: unknown } | undefined
-    db.close()
+    const row = withDb(dbPath, (db) => db.prepare('SELECT voice_data FROM VoiceInfo WHERE svr_id = CAST(? AS INTEGER) LIMIT 1').get(svrId) as { voice_data?: unknown } | undefined)
     if (row?.voice_data instanceof Uint8Array) return Buffer.from(row.voice_data)
     return null
   } catch {
-    db.close()
     return null
   }
 }
@@ -74,18 +69,16 @@ export function voiceDataBySvr(decryptedDir: string, svrId: string): Buffer | nu
 export function svrIdByChatLocal(decryptedDir: string, username: string, localId: number): string {
   const dbPath = mediaDbPath(decryptedDir)
   if (!existsSync(dbPath)) return ''
-  const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1').get(username) as { rowid?: number | bigint } | undefined
-    db.close()
-    if (!chat || typeof chat.rowid !== 'number') return ''
-    const db2 = new DatabaseSync(dbPath, { readOnly: true })
-    try {
-      const row = db2.prepare('SELECT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chat.rowid, localId) as { s?: string | null } | undefined
+    const chatRowId = withDb(dbPath, (db) => {
+      const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1').get(username) as { rowid?: number | bigint } | undefined
+      return chat && typeof chat.rowid === 'number' ? chat.rowid : null
+    })
+    if (chatRowId === null) return ''
+    return withDb(dbPath, (db) => {
+      const row = db.prepare('SELECT CAST(svr_id AS TEXT) AS s FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chatRowId, localId) as { s?: string | null } | undefined
       return row?.s ?? ''
-    } finally {
-      db2.close()
-    }
+    })
   } catch {
     return ''
   }

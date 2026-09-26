@@ -460,6 +460,14 @@ const MUTATIONS = [
     to: '</div>\n            <Card title="最近通话"',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/calls-layout.wiring.spec.ts',
   },
+  {
+    id: 'M56-withdb-close-success-only',
+    why: '把 withDb 的 close 从 finally 挪回「只在成功路径」—— 就是 P0-1 修掉的那个形状：抛错时泄漏一个 SQLite 句柄（Windows 下该文件从此删不掉）。query-db-lifetime 的抛错用例必须变红',
+    file: 'src/backend/wechat-data/src/query/db-open.ts',
+    from: '  try {\n    return fn(db)\n  } finally {',
+    to: '  if (true === true) {\n    const done = fn(db)\n    try { if (db.isOpen) db.close() } catch { /* 变异：只有成功路径 close */ }\n    return done\n  } else try {\n    return fn(db)\n  } finally {',
+    spec: 'src/backend/wechat-data/tests/query-db-lifetime.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

@@ -6,7 +6,7 @@
  *
  * @module search-scaffold
  */
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import type { SearchHit } from '../types.ts';
 /**
  * WeChat full-text message search index (FTS5), rewritten from st_control
