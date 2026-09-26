@@ -281,10 +281,10 @@ export const MUTATIONS_BATCH3B = [
   },
   {
     id: "M256-handle-ratchet-list-blinded",
-    why: "把清单里某一行的计数改成 0（等于宣布「这个文件已经改完了」）⇒ 棘轮必须红：这张清单是按文件记账的，改小数字不等于改代码，靠它才拦得住「在已清账的文件里又加一个裸 open」这种回潮",
+    why: "把清单整体变成空对象（等于「所有文件都已清账」）⇒ 棘轮必须红：这张表是按文件记账的，改小清单不等于改代码，靠它才拦得住「在已清账的文件里又加一个裸 open」这种回潮。锚点挑声明行而不是某一行的数据 —— 数据行会被清账一轮就删掉一条（本仓一周内撞过两次）",
     file: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
-    from: "  'query/favorites.ts': 1,",
-    to: "  'query/favorites.ts': 0,",
+    from: "const KNOWN_UNFIXED: Record<string, number> = {",
+    to: "const KNOWN_UNFIXED: Record<string, number> = Object.create(null) as Record<string, number> || {",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
   {
@@ -309,6 +309,22 @@ export const MUTATIONS_BATCH3B = [
     file: "src/backend/wechat-data/src/query/edit.ts",
     from: "withWritableDb(p, (store2) =>",
     to: "withDb(p, (store2) =>",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
+  {
+    id: "M260-favorite-delete-uses-readonly-helper",
+    why: "删收藏错用只读的 withDb ⇒ DELETE 抛「readonly database」，用户点删除却看到「什么都没删」；两颗 helper 的分别由这条用例兜着",
+    file: "src/backend/wechat-data/src/query/favorites.ts",
+    from: "return withWritableDb(dbPath, (db) => {",
+    to: "return withDb(dbPath, (db) => {",
+    spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
+  },
+  {
+    id: "M261-favorite-delete-raw-open-leaks",
+    why: "换回裸 open + 只在成功路径 close（改之前的形状）⇒ 表不在那条分支抛错时漏一个句柄，Windows 上那份收藏库从此删不掉",
+    file: "src/backend/wechat-data/src/query/favorites.ts",
+    from: "    return withWritableDb(dbPath, (db) => {\n      const has = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'\").get() !== undefined\n      if (!has) return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' }\n      const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')\n      let deleted = 0\n      for (const id of ids) { deleted += Number(stmt.run(id).changes) }\n      return { ok: true, deleted }\n    })",
+    to: "    const db = new DatabaseSync(dbPath)\n    const has = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'\").get() !== undefined\n    if (!has) { db.close(); return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' } }\n    const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')\n    let deleted = 0\n    for (const id of ids) { deleted += Number(stmt.run(id).changes) }\n    db.close()\n    return { ok: true, deleted }",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
 ]

@@ -3,6 +3,7 @@
  * and store emoticon counts, and top-used emoticon md5s from message shards.
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
@@ -36,9 +37,9 @@ function favoriteStats(decryptedDir: string): AssetInsightsSnapshot['favorites']
   const p = join(decryptedDir, 'favorite', 'favorite.db')
   if (!existsSync(p)) return { total: 0, byType: [], byYear: [] }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
+    return withDb(p, (db) => {
     const has = tableExists(db, 'fav_db_item')
-    if (!has) { db.close(); return { total: 0, byType: [], byYear: [] } }
+    if (!has) return { total: 0, byType: [], byYear: [] }
     const cols = tableColumns(db, 'fav_db_item')
     const typeCol = cols.has('type') ? 'type' : cols.has('Type') ? 'Type' : ''
     const timeCol = cols.has('update_time') ? 'update_time' : cols.has('UpdateTime') ? 'UpdateTime' : ''
@@ -49,7 +50,6 @@ function favoriteStats(decryptedDir: string): AssetInsightsSnapshot['favorites']
       ? db.prepare(`SELECT CAST(strftime('%Y', datetime(${timeCol}, 'unixepoch')) AS INTEGER) AS y, COUNT(*) AS n FROM fav_db_item GROUP BY y ORDER BY y DESC`).all() as Array<{ y: number; n: number }>
       : []
     const totalRow = db.prepare('SELECT COUNT(*) AS n FROM fav_db_item').get() as { n: number } | undefined
-    db.close()
     return {
       total: totalRow?.n ?? 0,
       byType: typeRows
@@ -57,6 +57,7 @@ function favoriteStats(decryptedDir: string): AssetInsightsSnapshot['favorites']
         .sort((a, b) => b.count - a.count),
       byYear: yearRows.map(r => ({ year: r.y, count: r.n })),
     }
+    })
   } catch {
     return { total: 0, byType: [], byYear: [] }
   }
@@ -69,11 +70,11 @@ function emoticonStats(decryptedDir: string, topUsages: Array<{ md5: string; cou
   let captions = 0
   if (existsSync(p)) {
     try {
-      const db = new DatabaseSync(p, { readOnly: true })
-      if (tableExists(db, 'kNonStoreEmoticonTable')) customCount = (db.prepare('SELECT COUNT(*) AS n FROM kNonStoreEmoticonTable').get() as { n: number }).n
-      if (tableExists(db, 'kStoreEmoticonPackageTable')) storePackages = (db.prepare('SELECT COUNT(*) AS n FROM kStoreEmoticonPackageTable').get() as { n: number }).n
-      if (tableExists(db, 'kStoreEmoticonCaptionsTable')) captions = (db.prepare('SELECT COUNT(*) AS n FROM kStoreEmoticonCaptionsTable').get() as { n: number }).n
-      db.close()
+      withDb(p, (db) => {
+        if (tableExists(db, 'kNonStoreEmoticonTable')) customCount = (db.prepare('SELECT COUNT(*) AS n FROM kNonStoreEmoticonTable').get() as { n: number }).n
+        if (tableExists(db, 'kStoreEmoticonPackageTable')) storePackages = (db.prepare('SELECT COUNT(*) AS n FROM kStoreEmoticonPackageTable').get() as { n: number }).n
+        if (tableExists(db, 'kStoreEmoticonCaptionsTable')) captions = (db.prepare('SELECT COUNT(*) AS n FROM kStoreEmoticonCaptionsTable').get() as { n: number }).n
+      })
     } catch { /* keep zeros */ }
   }
   return { customCount, storePackages, captions, topUsed: topUsages }

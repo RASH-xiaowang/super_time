@@ -5,6 +5,7 @@
  * top contacts/groups, and first/last sentences.
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -263,14 +264,14 @@ function loadUsernames(decryptedDir: string): string[] {
   if (!existsSync(p)) return []
   const out: string[] = []
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-    const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-      for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
-    }
-    db.close()
+    withDb(p, (db) => {
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
+        for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
+      }
+    })
   } catch { /* skip */ }
   return out
 }

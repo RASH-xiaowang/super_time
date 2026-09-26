@@ -34,6 +34,7 @@ import { searchUnified } from '../src/query/unified-search.ts'
 import { usernameByChatId } from '../src/query/voice.ts'
 import { withDb, withWritableDb } from '../src/query/db-open.ts'
 import { listEditedMessages, resetEditedMessage } from '../src/query/edit.ts'
+import { deleteFavoriteItems } from '../src/query/favorites.ts'
 import { resolveAvatar, resolveAvatarsLocal } from '../src/query/avatar.ts'
 import { queryContact360 } from '../src/query/contact360.ts'
 import { queryOverview } from '../src/query/overview.ts'
@@ -68,6 +69,11 @@ const BATCH4_FIXED = [
   'query/contact360.ts',
   'query/edit.ts',
   'query/overview.ts',
+  'query/annual-report.ts',
+  'query/asset-insights.ts',
+  'query/daily-summary.ts',
+  'query/favorites.ts',
+  'query/group-info.ts',
 ]
 
 /**
@@ -76,11 +82,6 @@ const BATCH4_FIXED = [
  * 这些点同一份 AST 判据会稳定报出来，红的时候把 file:line 一起打印。
  */
 const KNOWN_UNFIXED: Record<string, number> = {
-  'query/annual-report.ts': 1,
-  'query/asset-insights.ts': 2,
-  'query/daily-summary.ts': 1,
-  'query/favorites.ts': 1,
-  'query/group-info.ts': 1,
   'query/group-insights.ts': 2,
   'query/handoff.ts': 1,
   'query/media-assets.ts': 1,
@@ -398,6 +399,39 @@ describe('编辑副本那三条读/写路径不留句柄', () => {
     return { root, dec }
   }
 })
+describe('删除收藏那两条路径不留句柄', () => {
+  const favDb = (dir: string): string => {
+    const p = join(dir, 'favorite', 'favorite.db')
+    mkdirSync(join(dir, 'favorite'), { recursive: true })
+    return p
+  }
+
+  it('fav_db_item 表不在 ⇒ 如实报错，且连接已关（Windows 上库文件仍可删）', () => {
+    const root = tempRoot('fav-no-table')
+    const dec = join(root, 'decrypted')
+    makeDb(favDb(dec), (db) => { db.exec('CREATE TABLE unrelated (a TEXT)') })
+    const r = deleteFavoriteItems(dec, [1])
+    expect(r.ok).toBe(false)
+    expect(r.error).toBe('fav_db_item 表不存在')
+    expect(leakedFiles(root)).toEqual([])
+  })
+
+  it('真删掉两条：结果、库里剩下的行数、以及句柄都检查', () => {
+    const root = tempRoot('fav-delete-ok')
+    const dec = join(root, 'decrypted')
+    const file = favDb(dec)
+    makeDb(file, (db) => {
+      db.exec('CREATE TABLE fav_db_item (local_id INTEGER PRIMARY KEY, title TEXT)')
+      for (const id of [1, 2, 3]) db.prepare('INSERT INTO fav_db_item VALUES (?, ?)').run(id, 'x')
+    })
+    // 只读那颗 helper 写不进去，所以这一步必须走 withWritableDb —— 用错就是"报错但什么都没删"
+    expect(deleteFavoriteItems(dec, [1, 3])).toEqual({ ok: true, deleted: 2 })
+    const left = withDb(file, (db) => (db.prepare('SELECT COUNT(*) AS n FROM fav_db_item').get() as { n: number }).n)
+    expect(Number(left)).toBe(1)
+    expect(leakedFiles(root)).toEqual([])
+  })
+})
+
 // ---------------------------------------------------------------- 棘轮层
 
 interface Suspect { file: string; line: number; name: string; shape: string }

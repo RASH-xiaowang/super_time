@@ -4,6 +4,7 @@
  * resolves sources via contact names, mirroring st_control modules/favorites.rs.
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withWritableDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
@@ -346,14 +347,14 @@ export function deleteFavoriteItems(decryptedDir: string, ids: number[]): { ok: 
   const dbPath = join(decryptedDir, 'favorite', 'favorite.db')
   if (!existsSync(dbPath)) return { ok: false, deleted: 0, error: '收藏库不存在' }
   try {
-    const db = new DatabaseSync(dbPath)
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== undefined
-    if (!has) { db.close(); return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' } }
-    const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')
-    let deleted = 0
-    for (const id of ids) { deleted += Number(stmt.run(id).changes) }
-    db.close()
-    return { ok: true, deleted }
+    return withWritableDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== undefined
+      if (!has) return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' }
+      const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')
+      let deleted = 0
+      for (const id of ids) { deleted += Number(stmt.run(id).changes) }
+      return { ok: true, deleted }
+    })
   } catch (e) {
     return { ok: false, deleted: 0, error: (e as Error).message }
   }

@@ -4,6 +4,7 @@
  * member grid (chatroom_member joined to contact for names/avatars).
  */
 import { DatabaseSync } from 'node:sqlite'
+import { withDb } from './db-open.ts'
 import { join } from 'node:path'
 import type { GroupInfo, GroupInfoSnapshot, GroupMember } from '../types.ts'
 import { buildRegion, cellText, parseContactExtra, readVarint } from './region.ts'
@@ -96,16 +97,16 @@ function openimNames(decryptedDir: string): Map<string, string> {
   if (_openimNames && _openimNames.dir === decryptedDir) return _openimNames.map
   const map = new Map<string, string>()
   try {
-    const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
-    try {
-      const rows = db.prepare('SELECT wording_id AS id, wording AS w FROM openim_wording').all() as Array<{ id: unknown; w: unknown }>
-      for (const r of rows) {
-        const id = cellText(r.id).trim()
-        const w = cellText(r.w).trim()
-        if (id && w) map.set(id, w)
-      }
-    } catch { /* table absent */ }
-    db.close()
+    withDb(join(decryptedDir, 'contact', 'contact.db'), (db) => {
+      try {
+        const rows = db.prepare('SELECT wording_id AS id, wording AS w FROM openim_wording').all() as Array<{ id: unknown; w: unknown }>
+        for (const r of rows) {
+          const id = cellText(r.id).trim()
+          const w = cellText(r.w).trim()
+          if (id && w) map.set(id, w)
+        }
+      } catch { /* table absent */ }
+    })
   } catch { /* contact db unavailable */ }
   _openimNames = { dir: decryptedDir, map }
   return map

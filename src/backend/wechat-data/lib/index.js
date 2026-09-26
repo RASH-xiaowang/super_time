@@ -2111,7 +2111,45 @@ function computeSessions(decryptedDir, keyword, limit, offset = 0) {
 }
 
 // src/backend/wechat-data/src/query/group-info.ts
+import { DatabaseSync as DatabaseSync5 } from "node:sqlite";
+
+// src/backend/wechat-data/src/query/db-open.ts
 import { DatabaseSync as DatabaseSync4 } from "node:sqlite";
+function withDb(file, fn) {
+  const db = new DatabaseSync4(file, { readOnly: true });
+  try {
+    return fn(db);
+  } finally {
+    try {
+      if (db.isOpen) db.close();
+    } catch {
+    }
+  }
+}
+function withWritableDb(file, fn) {
+  const db = new DatabaseSync4(file);
+  try {
+    return fn(db);
+  } finally {
+    try {
+      if (db.isOpen) db.close();
+    } catch {
+    }
+  }
+}
+async function withDbAsync(file, fn) {
+  const db = new DatabaseSync4(file, { readOnly: true });
+  try {
+    return await fn(db);
+  } finally {
+    try {
+      if (db.isOpen) db.close();
+    } catch {
+    }
+  }
+}
+
+// src/backend/wechat-data/src/query/group-info.ts
 import { join as join4 } from "node:path";
 
 // src/backend/wechat-data/src/query/region.ts
@@ -2468,17 +2506,17 @@ function openimNames(decryptedDir) {
   if (_openimNames && _openimNames.dir === decryptedDir) return _openimNames.map;
   const map = /* @__PURE__ */ new Map();
   try {
-    const db = new DatabaseSync4(join4(decryptedDir, "contact", "contact.db"), { readOnly: true });
-    try {
-      const rows = db.prepare("SELECT wording_id AS id, wording AS w FROM openim_wording").all();
-      for (const r of rows) {
-        const id = cellText(r.id).trim();
-        const w = cellText(r.w).trim();
-        if (id && w) map.set(id, w);
+    withDb(join4(decryptedDir, "contact", "contact.db"), (db) => {
+      try {
+        const rows = db.prepare("SELECT wording_id AS id, wording AS w FROM openim_wording").all();
+        for (const r of rows) {
+          const id = cellText(r.id).trim();
+          const w = cellText(r.w).trim();
+          if (id && w) map.set(id, w);
+        }
+      } catch {
       }
-    } catch {
-    }
-    db.close();
+    });
   } catch {
   }
   _openimNames = { dir: decryptedDir, map };
@@ -2524,7 +2562,7 @@ function queryGroupInfo(decryptedDir, username, selfUsername) {
   const dbPath8 = join4(decryptedDir, "contact", "contact.db");
   let db = null;
   try {
-    db = new DatabaseSync4(dbPath8, { readOnly: true });
+    db = new DatabaseSync5(dbPath8, { readOnly: true });
     const row = db.prepare("SELECT username, nick_name, remark, chat_room_notify, flag FROM contact WHERE username=?").get(username);
     if (!row) return { group: null };
     const name = cellText(row["nick_name"]).trim() || username;
@@ -2647,44 +2685,6 @@ function queryGroupInfo(decryptedDir, username, selfUsername) {
 // src/backend/wechat-data/src/query/payments.ts
 import { existsSync as existsSync2 } from "node:fs";
 import { join as join5 } from "node:path";
-
-// src/backend/wechat-data/src/query/db-open.ts
-import { DatabaseSync as DatabaseSync5 } from "node:sqlite";
-function withDb(file, fn) {
-  const db = new DatabaseSync5(file, { readOnly: true });
-  try {
-    return fn(db);
-  } finally {
-    try {
-      if (db.isOpen) db.close();
-    } catch {
-    }
-  }
-}
-function withWritableDb(file, fn) {
-  const db = new DatabaseSync5(file);
-  try {
-    return fn(db);
-  } finally {
-    try {
-      if (db.isOpen) db.close();
-    } catch {
-    }
-  }
-}
-async function withDbAsync(file, fn) {
-  const db = new DatabaseSync5(file, { readOnly: true });
-  try {
-    return await fn(db);
-  } finally {
-    try {
-      if (db.isOpen) db.close();
-    } catch {
-    }
-  }
-}
-
-// src/backend/wechat-data/src/query/payments.ts
 function readText(v) {
   if (v === null || v === void 0) return "";
   if (typeof v === "string") return v;
@@ -3665,19 +3665,16 @@ function deleteFavoriteItems(decryptedDir, ids) {
   const dbPath8 = join9(decryptedDir, "favorite", "favorite.db");
   if (!existsSync4(dbPath8)) return { ok: false, deleted: 0, error: "\u6536\u85CF\u5E93\u4E0D\u5B58\u5728" };
   try {
-    const db = new DatabaseSync9(dbPath8);
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== void 0;
-    if (!has) {
-      db.close();
-      return { ok: false, deleted: 0, error: "fav_db_item \u8868\u4E0D\u5B58\u5728" };
-    }
-    const stmt = db.prepare("DELETE FROM fav_db_item WHERE local_id = ?");
-    let deleted = 0;
-    for (const id of ids) {
-      deleted += Number(stmt.run(id).changes);
-    }
-    db.close();
-    return { ok: true, deleted };
+    return withWritableDb(dbPath8, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== void 0;
+      if (!has) return { ok: false, deleted: 0, error: "fav_db_item \u8868\u4E0D\u5B58\u5728" };
+      const stmt = db.prepare("DELETE FROM fav_db_item WHERE local_id = ?");
+      let deleted = 0;
+      for (const id of ids) {
+        deleted += Number(stmt.run(id).changes);
+      }
+      return { ok: true, deleted };
+    });
   } catch (e) {
     return { ok: false, deleted: 0, error: e.message };
   }
@@ -9252,24 +9249,21 @@ function favoriteStats(decryptedDir) {
   const p = join39(decryptedDir, "favorite", "favorite.db");
   if (!existsSync31(p)) return { total: 0, byType: [], byYear: [] };
   try {
-    const db = new DatabaseSync25(p, { readOnly: true });
-    const has = tableExists2(db, "fav_db_item");
-    if (!has) {
-      db.close();
-      return { total: 0, byType: [], byYear: [] };
-    }
-    const cols = tableColumns7(db, "fav_db_item");
-    const typeCol = cols.has("type") ? "type" : cols.has("Type") ? "Type" : "";
-    const timeCol = cols.has("update_time") ? "update_time" : cols.has("UpdateTime") ? "UpdateTime" : "";
-    const typeRows = typeCol ? db.prepare(`SELECT ${typeCol} AS t, COUNT(*) AS n FROM fav_db_item GROUP BY ${typeCol}`).all() : [];
-    const yearRows = timeCol ? db.prepare(`SELECT CAST(strftime('%Y', datetime(${timeCol}, 'unixepoch')) AS INTEGER) AS y, COUNT(*) AS n FROM fav_db_item GROUP BY y ORDER BY y DESC`).all() : [];
-    const totalRow = db.prepare("SELECT COUNT(*) AS n FROM fav_db_item").get();
-    db.close();
-    return {
-      total: totalRow?.n ?? 0,
-      byType: typeRows.map((r) => ({ type: r.t, label: favTypeLabel(r.t), count: r.n })).sort((a, b) => b.count - a.count),
-      byYear: yearRows.map((r) => ({ year: r.y, count: r.n }))
-    };
+    return withDb(p, (db) => {
+      const has = tableExists2(db, "fav_db_item");
+      if (!has) return { total: 0, byType: [], byYear: [] };
+      const cols = tableColumns7(db, "fav_db_item");
+      const typeCol = cols.has("type") ? "type" : cols.has("Type") ? "Type" : "";
+      const timeCol = cols.has("update_time") ? "update_time" : cols.has("UpdateTime") ? "UpdateTime" : "";
+      const typeRows = typeCol ? db.prepare(`SELECT ${typeCol} AS t, COUNT(*) AS n FROM fav_db_item GROUP BY ${typeCol}`).all() : [];
+      const yearRows = timeCol ? db.prepare(`SELECT CAST(strftime('%Y', datetime(${timeCol}, 'unixepoch')) AS INTEGER) AS y, COUNT(*) AS n FROM fav_db_item GROUP BY y ORDER BY y DESC`).all() : [];
+      const totalRow = db.prepare("SELECT COUNT(*) AS n FROM fav_db_item").get();
+      return {
+        total: totalRow?.n ?? 0,
+        byType: typeRows.map((r) => ({ type: r.t, label: favTypeLabel(r.t), count: r.n })).sort((a, b) => b.count - a.count),
+        byYear: yearRows.map((r) => ({ year: r.y, count: r.n }))
+      };
+    });
   } catch {
     return { total: 0, byType: [], byYear: [] };
   }
@@ -9281,11 +9275,11 @@ function emoticonStats(decryptedDir, topUsages) {
   let captions = 0;
   if (existsSync31(p)) {
     try {
-      const db = new DatabaseSync25(p, { readOnly: true });
-      if (tableExists2(db, "kNonStoreEmoticonTable")) customCount = db.prepare("SELECT COUNT(*) AS n FROM kNonStoreEmoticonTable").get().n;
-      if (tableExists2(db, "kStoreEmoticonPackageTable")) storePackages = db.prepare("SELECT COUNT(*) AS n FROM kStoreEmoticonPackageTable").get().n;
-      if (tableExists2(db, "kStoreEmoticonCaptionsTable")) captions = db.prepare("SELECT COUNT(*) AS n FROM kStoreEmoticonCaptionsTable").get().n;
-      db.close();
+      withDb(p, (db) => {
+        if (tableExists2(db, "kNonStoreEmoticonTable")) customCount = db.prepare("SELECT COUNT(*) AS n FROM kNonStoreEmoticonTable").get().n;
+        if (tableExists2(db, "kStoreEmoticonPackageTable")) storePackages = db.prepare("SELECT COUNT(*) AS n FROM kStoreEmoticonPackageTable").get().n;
+        if (tableExists2(db, "kStoreEmoticonCaptionsTable")) captions = db.prepare("SELECT COUNT(*) AS n FROM kStoreEmoticonCaptionsTable").get().n;
+      });
     } catch {
     }
   }
@@ -10239,17 +10233,17 @@ function loadUsernames(decryptedDir) {
   if (!existsSync37(p)) return [];
   const out = [];
   try {
-    const db = new DatabaseSync29(p, { readOnly: true });
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-    const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all();
-      for (const r of rows) {
-        const u = cellStr5(r["username"] ?? "").trim();
-        if (u) out.push(u);
+    withDb(p, (db) => {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+      const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all();
+        for (const r of rows) {
+          const u = cellStr5(r["username"] ?? "").trim();
+          if (u) out.push(u);
+        }
       }
-    }
-    db.close();
+    });
   } catch {
   }
   return out;
@@ -12075,17 +12069,17 @@ function loadSessionUsernames2(decryptedDir) {
   if (!existsSync41(dbPath8)) return [];
   const out = [];
   try {
-    const db = new DatabaseSync34(dbPath8, { readOnly: true });
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-    const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all();
-      for (const r of rows) {
-        const u = cellStr9(r["username"] ?? "").trim();
-        if (u) out.push(u);
+    withDb(dbPath8, (db) => {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+      const table = tables.includes("SessionTable") ? "SessionTable" : tables.includes("Session") ? "Session" : "";
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all();
+        for (const r of rows) {
+          const u = cellStr9(r["username"] ?? "").trim();
+          if (u) out.push(u);
+        }
       }
-    }
-    db.close();
+    });
   } catch {
   }
   return out;
