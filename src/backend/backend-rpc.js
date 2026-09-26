@@ -43,6 +43,10 @@ const LONG_CALL_METHODS = new Set([
   // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
   'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
   'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal',
+  // 批量取图（P3-12）：一次最多 200 张，每张都可能退化成「读文件 + 解密 + 哈希」——
+  // 单张 `getImageDataUrl` 早就在宽窗口里了，批版却是 60 秒的默认档，
+  // 于是一次正常的批量取图被 RPC 误杀成「调用超时」，界面看到的是整批失败。
+  'getImageDataUrlsBatch',
   // 批量取原图：一次要下几千张（全库 16.6% 带免登录直链），逐张 15s 超时 + 4 并发也远超 60s
   'fetchOriginalImagesBatch',
   // 语音转写：whisper 本地推理

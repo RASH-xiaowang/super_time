@@ -141,16 +141,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      */
     protected op(category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string): void;
     /**
-     * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
-     *
-     * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
-     * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
-     * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
-     * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
-     * @param feature - 功能名，出现在提示文案里。
-     * @returns 提示文案，或 null。
-     */
-    /**
      * 「出站拦截」当前是否开启。
      *
      * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
@@ -159,6 +149,20 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @returns 是否禁止出站。
      */
     protected outboundBlocked(): boolean;
+    /**
+     * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
+     *
+     * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
+     * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
+     * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
+     * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
+     *
+     * P3-7：这段文档原先挂在 `outboundBlocked` 头上（那份声明自己另有文档），
+     * 于是连续两份 JSDoc 贴着放 —— 前一份**没有任何宿主**，读代码的人只能猜。
+     * @param feature - 功能名，出现在提示文案里。
+     * @param detail - 这条出网在做什么（默认「把数据发送给模型」）。
+     * @returns 被拦截时的文案，未拦截时 null。
+     */
     protected privacyBlocked(feature: string, detail?: string): string | null;
     /**
      * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
@@ -184,11 +188,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         ok: false;
         error: string;
     };
-    /**
-     * Session list (search/filter/limit).
-     * @param options - Filter options: keyword fuzzy search, limit max rows.
-     * @returns SessionsSnapshot: sessions list (items + total).
-     */
     /**
      * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
      *
@@ -391,11 +390,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         source?: string;
         usernameName?: string;
     }, result: AskResult, elapsedMs: number, model: string): void;
-    /**
-     * Run a summary task: collect the group previous-day messages + LLM summary + record.
-     * @param options - id of the task to run.
-     * @returns SummaryTaskRunResult: ok + summary + message count, or error.
-     */
     /**
      * 同一分钟到期的摘要任务并发上限（N15）。
      *

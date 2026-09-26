@@ -108,7 +108,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           语音解码器 wx_silk.exe（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导、授权界面
-src/client/ui-wechat/    数据面板（约 40 个视图）
+src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）
 src/license/             授权：指纹、签名校验、许可证解析
 tools/license-studio/    许可签发图形工具
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本

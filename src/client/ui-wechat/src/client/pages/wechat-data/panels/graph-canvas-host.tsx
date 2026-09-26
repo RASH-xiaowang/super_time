@@ -51,6 +51,7 @@ import {
 import { buildPoster, posterToDataUrl, type PosterCommunity, type PosterInput, type PosterRatio, type PosterRelation, type PosterStatItem, type PosterStyle } from './graph-poster.ts'
 import css from './graph.module.css'
 import { DragSimState, DragState, EMPTY_SET, EXPORT_BG, EXPORT_SIZES, GraphCanvasHandle, GraphCanvasProps, MiniTransform, PERSIST_SETTLE_MS, POSITION_CACHE_MAX, RELAYOUT_SETTLE_MS, REST_STEP, SETTLE_MS, avatarAssets, forceKeyOf, styleIsDark } from './graph-canvas-support.ts'
+import { disposeLayoutWorker } from './graph-layout.ts'
 
 /**
  * 渲染图谱画布。
@@ -428,7 +429,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
     layoutTimerRef.current.restart()
   }, [graph, forceKey, relayoutNow])
-  useEffect(() => () => { layoutTimerRef.current?.dispose() }, [])
+  // 卸载要做两件事：① 清掉**这一张图**的排程；② 关掉**共享的**布局 worker。
+  // P3-13：`disposeLayoutWorker()` 早就定义了，但全仓没有一处调用 ——
+  // 于是每开一次图谱就多一个活着的 worker（模块级实例 + 线程），关掉页签也不释放。
+  useEffect(() => () => {
+    layoutTimerRef.current?.dispose()
+    disposeLayoutWorker()
+  }, [])
 
   // 坐标落盘：走静默期合并；卸载时兜住最后一笔（布局落定/拖拽结束后立刻切走的情形）。
   useEffect(() => {
