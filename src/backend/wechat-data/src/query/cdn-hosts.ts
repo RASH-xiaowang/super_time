@@ -61,7 +61,7 @@ export function wechatCdnHostAllowed(url: string): boolean {
  *
  * ## 为什么需要单独一个判据
  *
- * 2026-09-26 实测（`working/probe-wecom-403.ts`）：本机 8,604 条带 `tphdurl`/`tpurl` 的图片消息
+ * 2026-09-26 实测（一次性探针，脚本不入库）：本机 8,604 条带 `tphdurl`/`tpurl` 的图片消息
  * **全部**指向 `wwfile.work.weixin.qq.com/cgi-bin/download?f=<216hex>&t=<576hex>&p=1`，
  * 而匿名 GET **一律 403**，且与下面三件事都无关：
  *   · **消息新旧**：距今 20 分钟的消息与 217 天的消息表现完全相同（都是 403、0 字节）；

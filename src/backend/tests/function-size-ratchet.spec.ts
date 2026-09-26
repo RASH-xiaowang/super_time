@@ -38,7 +38,7 @@ const LIMIT = 250
 
 /**
  * 清单：`文件  函数名  登记时的行数`。**只许变小。**
- * 2026-09-26 由 `scripts/tmp-measure-functions.mjs` 实测生成（不是估的）。
+ * 2026-09-26 由一次性脚本 AST 实测灌进来（不是估的；脚本用完即删，复现方法见下面的判据本身）。
  */
 const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  840',

@@ -23,7 +23,7 @@
  * 字节数 → 人类可读体积。**全局唯一实现**，所有面板都必须用它。
  *
  * 统一口径：B 不省略；KB/MB 取 1 位小数，GB/TB 取 2 位；逐级进位到 TB。
- * （统一前 9 个实现的差异见 docs/ui-audit.md：Health/Hook/MediaAssets 封顶在 MB，
+ * （统一前 9 个实现的差异登记在 src/backend/tests/format-single-source.spec.ts 那张台账里：Health/Hook/MediaAssets 封顶在 MB，
  * Settings 无 B 单位，Overview 的 KB 取 0 位小数。）
  *
  * @param n - 字节数（null/undefined/NaN/负数一律视作 0）。

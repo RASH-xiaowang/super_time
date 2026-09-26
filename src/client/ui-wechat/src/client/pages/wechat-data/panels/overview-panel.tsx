@@ -240,7 +240,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
             {/*
               收发构成：这条口径来自 getOverviewInsights（用 real_sender_id 经分片 Name2Id 解析方向）。
               以前它只出现在「导出 Markdown 报告」里，而报告里写的是「发出 0」——
-              界面上没人看得见，所以坏了很久没人发现（见 docs/wechat-schema.md §B.19）。
+              界面上没人看得见，所以坏了很久没人发现（同一批真机 schema 勘查的一条，结论抄在这里）。
               现在把三个数字直接显示出来：界面上看得见，回归就没法藏。
             */}
             {ins && (

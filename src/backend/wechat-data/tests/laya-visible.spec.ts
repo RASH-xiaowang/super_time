@@ -5,7 +5,8 @@
  * 清缓存清错会话，界面上看不出来（只是分析结果永远是旧的）。这里把语义钉住。
  *
  * 真机链路（真实 Msg_ 库 → 取上下文 → 推理 → 落缓存）不在单测里跑（要 1.2 GB 模型），
- * 由 `working/e2e-visible.mjs` 承担；本文件只守**不需要模型**就能判定的部分。
+ * 由一次性真机 e2e 承担（那脚本没入库，所以那一半不可复跑 —— 写在这里是为了别把它算进本文件的覆盖面）；
+ * 本文件只守**不需要模型**就能判定的部分。
  * @vitest-environment node
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'

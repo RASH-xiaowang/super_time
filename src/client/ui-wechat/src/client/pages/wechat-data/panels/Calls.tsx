@@ -4,7 +4,7 @@
  * 数据全部来自 `getCalls`（后端 `query/calls.ts`）：它扫描每个 message 分片里
  * `local_type = 50` 的行，把 zstd 压着的 `<voipmsg>` XML 解出来。
  *
- * 三条实测口径（详见 docs/wechat-schema.md §B.16）：
+ * 三条实测口径（真机 schema 勘查所得，原文就抄在下面，不再指向那份没入库的勘查笔记）：
  *  - **时长**只能从 `<msg>` 文本里解析（「通话时长 00:21」），XML 的 `<duration>` 恒为 0；
  *  - **接通**= 有本机时长 **或** 「已在其它设备接听」（后者没有时长）；
  *  - **方向**由 `real_sender_id` 经分片 `Name2Id` 解析：等于自己的 wxid 即呼出。

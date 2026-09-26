@@ -17,7 +17,7 @@
  *      有了它，近处跟着走、远处必然反向补偿，这正是「整张图被扯住」的观感来源。
  *
  * 数值方案：半隐式欧拉（先积分速度再积分位置）+ 每步速度衰减 + 速度上限。
- * 半隐式欧拉对弹簧系统是条件稳定的，`springK` 与 `damping` 的取值由 `physics.spec.ts`
+ * 半隐式欧拉对弹簧系统是条件稳定的，`springK` 与 `damping` 的取值由 `graph-physics.spec.ts`
  * 的阶跃响应用例锁定（见那里的目标：约 0.5s 走完八成、轻微过冲、1.5s 内收敛）。
  */
 import type { BuiltGraph } from './graph-model.ts'

@@ -8,7 +8,7 @@
  *   · **必须显式同意**才放行（勾选框 + 按钮），没有「跳过」；
  *   · 不做成模态弹窗：它是独立一屏，与启动引导同一套观感，用户读完再进来；
  *   · 文案与 `docs/PRIVACY.md` 逐条对应（出网点清单），并被
- *     `src/backend/tests/privacy-consent-ssr.tsx` 的 SSR 冒烟与
+ *     `src/client/ui-app/privacy/consent.spec.ts`（含「ui-entry 真的渲染本组件」那条接线判据）与
  *     `src/backend/tests/privacy-statement.spec.ts` 守着不许漂。
  *
  * 排版取向（2026-09 改版）：把它当**数据流合约**排，而不是一屏宣传语 ——

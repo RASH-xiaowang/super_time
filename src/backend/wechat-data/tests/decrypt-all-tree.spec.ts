@@ -10,7 +10,7 @@
  *      里面就是 ENOENT；而 Windows 上目标被 SQLite 打开时 `unlink` 直接 EBUSY ⇒ 一整库被
  *      记成失败。`sync.ts#atomicReplace` 早就修过这件事并写了同名注释 —— **同一个属性必须有
  *      同一个主人**，所以这里钉的是「decrypt-all 走的是那份实现」，而「替换期间目标始终存在」
- *      由 `sync-publish.spec.ts`/`atomicReplace` 自己的用例守（见下面那条接线判据）。
+ *      由 `sync-wal.spec.ts`「快照替换期间目标必须始终存在」那一组守（见下面那条接线判据）。
  *   ② 单个库解密失败**不许**中断整棵树（用户要的是「其余照常」），也不许留下半截 `.decrypt_tmp`；
  *   ③ 每库独立密钥（`all_keys.json`）优先于配置里的兜底密钥 —— 多账号机器上读错就是全库乱码。
  *

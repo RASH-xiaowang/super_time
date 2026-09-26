@@ -142,9 +142,10 @@ export declare function decodeEmoticonDataUrl(decryptedDir: string, decodedDir: 
  *
  * 为什么需要：微信把表情图放在 `business/emoticon/*` 与 `cache/<月>/Emoticon/*`，
  * 那些文件是**加密**的（16 字节对齐；单字节 XOR、配置里的 image_aes_key、
- * 消息里的 aeskey 都试过解不开，见 `output/probe-sticker-crypt*.mjs`）。
+ * 消息里的 aeskey 都试过解不开 —— 为这件事写过一批一次性解密探针，脚本用完即删，
+ * 所以这里只留结论，不指一个已经不在的探针文件）。
  * 而消息 XML 里的 `cdnurl` 提供的是**未加密**的那一份：实测
- * （`output/probe-sticker-cdn2.mjs`）去掉 `&amp;` 转义后 6/6 返回 200 与明文
+ * （同一批一次性探针）去掉 `&amp;` 转义后 6/6 返回 200 与明文
  * GIF/PNG/JPEG，体积与消息里的 `len` 逐字节一致。
  *
  * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
