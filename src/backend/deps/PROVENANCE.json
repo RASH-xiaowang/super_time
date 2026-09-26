@@ -1,0 +1,219 @@
+{
+  "schema": 1,
+  "generatedBy": "scripts/deps-provenance.mjs",
+  "packages": {
+    "@deepseek-ai/cordis": {
+      "kind": "vendored",
+      "path": "src/backend/deps/cordis",
+      "declared": "file:src/backend/deps/cordis",
+      "version": "4.0.2",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "5afa00a3b459954132e80abd578ca767a962bbf76f8d8ae8002750928a1ca1ac",
+      "files": 51,
+      "bytes": 383927,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的构建产物：src/*.ts 只是参考，运行时加载的是 lib/*.js。改 src/ 不会改到 lib/，也不会报错 —— 升级只能整包 --import。"
+    },
+    "@deepseek-ai/cosmokit": {
+      "kind": "vendored",
+      "path": "src/backend/deps/cosmokit",
+      "declared": "file:src/backend/deps/cosmokit",
+      "version": "1.8.3",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "6da675f07b0a5869d8dbcc4ae07434b90a4709c0ec758f8c7ffc15f32ab6a766",
+      "files": 35,
+      "bytes": 85932,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-brand": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-brand",
+      "declared": "file:src/backend/deps/dsh-brand",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "e2f53597e5806f837a1cb39ef206b88b9c476573450ae304f77f5a11b0f6a454",
+      "files": 12,
+      "bytes": 16937,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
+      "kind": "in-repo",
+      "path": "src/client/ui-primitives-shim",
+      "declared": "file:src/client/ui-primitives-shim",
+      "version": "0.1.3-alpha.1",
+      "repository": null
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-home-paths",
+      "declared": "file:src/backend/deps/dsh-home-paths",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "64b03d5f8a9a1b5c63626b470b21fd5100f84224c13e54cdbcfc0d2aff7a7623",
+      "files": 12,
+      "bytes": 35314,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-invariants": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-invariants",
+      "declared": "file:src/backend/deps/dsh-invariants",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "eae4a0832d2a06f7b80795c40cc2923ae7ea3542b443ccc40a91cd9430cd7444",
+      "files": 12,
+      "bytes": 64022,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-llm": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-llm",
+      "declared": "file:src/backend/deps/dsh-llm",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "47bcfe85b44a71dc3578b2945bef3f0268ed67cf93810d7bd4eb2733d7058f76",
+      "files": 95,
+      "bytes": 732748,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-native-command": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-native-command",
+      "declared": "file:src/backend/deps/dsh-native-command",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "6ab57c7890ab7bab2117fde3993f5b2378e1ad6f906a0656d1bfc1b602df89ef",
+      "files": 35,
+      "bytes": 83446,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-timeout": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-timeout",
+      "declared": "file:src/backend/deps/dsh-timeout",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "18c65293da20c02499ca54c185769f9dff64c5eff8484c76f4dc61bad0a45f13",
+      "files": 12,
+      "bytes": 57254,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-typert-protocol": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-typert-protocol",
+      "declared": "file:src/backend/deps/dsh-typert-protocol",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "facc17fd4ad01eb87cec604b2374c6ce3819912a98c68d995a943d46da8b949b",
+      "files": 23,
+      "bytes": 142895,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-util-crypto": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-util-crypto",
+      "declared": "file:src/backend/deps/dsh-util-crypto",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "9a9fdd40ea22b3b062a1ace6eaf75d24b3fca15fb7fcfd1cbd070fb0a920d458",
+      "files": 12,
+      "bytes": 15020,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-util-values": {
+      "kind": "vendored",
+      "path": "src/backend/deps/dsh-util-values",
+      "declared": "file:src/backend/deps/dsh-util-values",
+      "version": "0.1.3-alpha.1",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "36fcc10396f6b0e43241a67db9d4904e8b777e63ce7122443664db6a53312f1f",
+      "files": 11,
+      "bytes": 47577,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@deepseek-ai/dsh-wechat-data": {
+      "kind": "in-repo",
+      "path": "src/backend/wechat-data",
+      "declared": "file:src/backend/wechat-data",
+      "version": "0.1.1-rc.2",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "in-repo 包，但 lib/typert.host.js 与 lib/typert.remote-client.js 是外部 codegen 的产物：里面的 sourceLocation 指向 packages/host/wechat-data/src/gateway.ts，本仓库没有这棵树，也没有任何脚本能重现它。实测后果：172 个 @Remote 方法里只有 114 个有生成的 zod schema（P2-7 记的账），而取消所需的元数据 cancellation:{parameter:\"signal\"} 也只活在这份生成物里 —— 所以「给重读查询加 AbortSignal」必须等生成链回到本仓（CODE-AUDIT-2026-09-26 的 P1-5 / P1-2）。"
+    },
+    "@deepseek-ai/schemastery": {
+      "kind": "vendored",
+      "path": "src/backend/deps/schemastery",
+      "declared": "file:src/backend/deps/schemastery",
+      "version": "3.18.2",
+      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "treeSha256": "3f1f0ff4311790860e7f03c68c0862802be547cb022f64c199328806754c63f6",
+      "files": 12,
+      "bytes": 165559,
+      "upstreamWorkspace": "deepseek-harness",
+      "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
+    },
+    "@koromix/koffi-win32-x64": {
+      "kind": "vendored",
+      "path": "src/backend/deps/@koromix/koffi-win32-x64",
+      "declared": "file:src/backend/deps/@koromix/koffi-win32-x64",
+      "version": "3.1.1",
+      "repository": "https://github.com/Koromix/koffi",
+      "treeSha256": "30cfb54ac660a563cef01fe8de21b88ba7fdd393a979bab5984d07e40a5c1b87",
+      "files": 5,
+      "bytes": 1045696,
+      "note": "koffi 的平台包（optionalDependencies 里按 win32-x64 指进来），与上一行来自同一份上游发布。"
+    },
+    "@standard-schema/spec": {
+      "kind": "vendored",
+      "path": "src/backend/deps/@standard-schema/spec",
+      "declared": "file:src/backend/deps/@standard-schema/spec",
+      "version": "1.1.0",
+      "repository": "https://github.com/standard-schema/standard-schema",
+      "treeSha256": "f5f11f4ccb51b8a0041f1e640f87a36ad8be3143788f4a25b178f78b26a3b600",
+      "files": 3,
+      "bytes": 9478
+    },
+    "fzstd": {
+      "kind": "vendored",
+      "path": "src/backend/deps/fzstd",
+      "declared": "file:src/backend/deps/fzstd",
+      "version": "0.1.1",
+      "repository": "git+https://github.com/101arrowz/fzstd.git",
+      "treeSha256": "ca62246d0131a0d29f1ae8917d3dc1f8d365d588d2da4f304380438f98e9da76",
+      "files": 8,
+      "bytes": 64795
+    },
+    "koffi": {
+      "kind": "vendored",
+      "path": "src/backend/deps/koffi",
+      "declared": "file:src/backend/deps/koffi",
+      "version": "3.1.1",
+      "repository": "https://github.com/Koromix/koffi",
+      "treeSha256": "44029382e3ff6ea118101dcc708b3dec58835c8ce222dbd4c439652cd164525b",
+      "files": 81,
+      "bytes": 1784362,
+      "note": "含平台原生二进制（win32-x64）；换平台要重新取，不能只拷 JS。"
+    },
+    "zod": {
+      "kind": "vendored",
+      "path": "src/backend/deps/zod",
+      "declared": "file:src/backend/deps/zod",
+      "version": "4.4.3",
+      "repository": "git+https://github.com/colinhacks/zod.git",
+      "treeSha256": "f060250fc5fc47c7404a882f4f35a434c00365337817c0e462f8c34d7888c09b",
+      "files": 718,
+      "bytes": 4557773,
+      "note": "上游 npm 包原样拷入（index.js / locales / mini / src 都在），不是只取某个子目录。"
+    }
+  }
+}

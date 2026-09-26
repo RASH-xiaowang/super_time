@@ -50,7 +50,14 @@
 
 1. **依赖不依赖 pnpm workspace**：上游的 `@deepseek-ai/*` peer 依赖被按原样「vendor」
    到 `src/backend/deps/`，并通过 `package.json` 的 `file:` 依赖在 `npm install` 时
-   安装到 `node_modules`。
+   安装到 `node_modules`。**每一份是谁的哪一版**记在
+   [`deps/PROVENANCE.json`](deps/PROVENANCE.json)（版本 + 整棵目录的内容 sha256 + 文件数 +
+   人手维护的 `upstream`/`upstreamCommit`/`importedAt`/`note`）：
+   `npm run check:deps-provenance` 复算比对（CI 里由 `npm test` 的
+   `deps-provenance.spec.ts` 同一份逻辑守住），`--write`（`npm run deps-provenance:write`）
+   刷新、`--import <包名> <上游目录>`（`npm run deps-provenance:import -- ...`）拷入上游新份。
+   vendor 的包 `src/*.ts` 与 `lib/*.js` 并存，**运行期加载的是 `lib/`** —— 只改 `src/` 不报错
+   也不生效，这道表就是把那种静默漂移变成可复算的事实（`in-repo` 的两个包不指纹，见文件头注释）。
 2. **Cordis Context 最小化**：新增 `src/backend/wechat-host.js`，实现
    `reflect.provide` / `effect` / `emit` / `settings` / `llm` 等网关
    `WechatDataGateway` 实际使用到的 Context 面；不加载完整 Cordis 插件系统。
