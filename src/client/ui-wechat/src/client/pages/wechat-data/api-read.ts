@@ -114,7 +114,7 @@ import {
   cachedFetch,
   cachedGet,
   invalidateSnapshotCache,
-  invalidateWechatCache,
+  invalidateAndNotify,
   readRenderCache,
   snapshotDelete,
   subscribeSnapshot,
@@ -428,7 +428,7 @@ export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
  */
 export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<PrivacyStateSnapshot> {
   const r = await remote().setPrivacyState(options)
-  invalidateWechatCache('privacy')
+  invalidateAndNotify('privacy')
   const s = unwrap(r)
   writeMapTilesFlag(s.blockMapTiles === true)
   return s

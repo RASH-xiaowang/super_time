@@ -270,8 +270,50 @@ export function invalidateWechatCache(prefix: string): void {
   } catch { /* quota/security errors are best-effort */ }
 }
 
-/** 读快照：命中缓存时先返回缓存作早显，随后前台等待新鲜值并写回；
- *  后台刷新失败降级返回缓存。无缓存时直接请求并写回。 */
+/** 键是否落在这些前缀之内（'' 表示全部）。 */
+function inScope(key: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((p) => p === '' || key.startsWith(p))
+}
+
+/**
+ * **统一的失效契约**（P2-4 ③ / 第三批 #23）：写入侧只调这一个函数。
+ *
+ * 为什么要收成一个：缓存有**两层**，而它们的通知能力不一样 ——
+ *  · `localStorage`（`cacheGet/cacheSet`，`cachedFetch` 用它）：`invalidateWechatCache(前缀)` 会清，
+ *    但**不通知任何人**；
+ *  · 内存快照（`_snapshotCache` + `_snapshotListeners`，`cachedGet` 用它）：
+ *    `invalidateSnapshotCache()`/`snapshotDelete()` 会**连着订阅者一起通知**。
+ * 于是「我清过缓存了」这句话有两种含义：清了持久层、但正在看这一页的面板手里还留着旧快照，
+ * 要等到 TTL 自然过期或宿主那条全局数据事件才更新。实测这样的写入点有 **11 处、跨 7 个改数据的接口**
+ * （改消息 / 重置改回原文 / 清草稿 ×2 / 删收藏 / 改隐私开关 / 恢复备份），
+ * 其中 `apiRestoreBackup` 最典型：整库被换掉了，界面上还是恢复前的样子。
+ *
+ * 参数用**键前缀**，因为两层的键本来就是同一套词汇（`sessions:` / `messages:` / `favorites:` …
+ * —— 见 `api-read.ts` 里那些 `cachedFetch('sessions:' + …)`）；传 '' 表示全量。
+ * @param prefix - 一个或几个键前缀；'' = 整个缓存。
+ */
+export function invalidateAndNotify(prefix: string | readonly string[]): void {
+  const prefixes = typeof prefix === 'string' ? [prefix] : [...prefix]
+  // ① 持久层：两种 localStorage 缓存（值 + 渲染）都按前缀清。
+  for (const p of prefixes) invalidateWechatCache(p)
+  if (prefixes.includes('')) {
+    // 全量走既有的「标记陈旧 + 通知所有人」：旧值还能立刻画、复验进后台，
+    // 不至于把八个面板同时打回冷启动（P2-4 记着的那场风暴）。
+    invalidateSnapshotCache()
+    return
+  }
+  // ② 内存快照层：命中前缀的条目丢掉（下次读回源）。
+  for (const k of [..._snapshotCache.keys()]) {
+    if (inScope(k, prefixes)) _snapshotCache.delete(k)
+  }
+  // ③ 通知：订阅者按**键**注册，所以要看的是监听表而不是快照表 ——
+  //    有的键只存在于持久层（`cachedFetch` 那一族），面板照样订阅着它。
+  for (const [k, set] of [..._snapshotListeners.entries()]) {
+    if (!inScope(k, prefixes)) continue
+    for (const fn of set) { try { fn() } catch { /* ignore */ } }
+  }
+}
+
 /** 记录一次 panel 数据取数的耗时（超过阈值才打印，便于观察“及时响应”与回归）。 */
 export async function timedFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const t0 = performance.now()

@@ -111,7 +111,7 @@ import {
   cachedFetch,
   cachedGet,
   invalidateSnapshotCache,
-  invalidateWechatCache,
+  invalidateAndNotify,
   readRenderCache,
   snapshotDelete,
   subscribeSnapshot,
@@ -239,7 +239,9 @@ export async function apiCreateEncryptedBackup(options: { password: string; jobI
  */
 export async function apiRestoreBackup(options: { name: string; password: string }): Promise<BackupRestoreResult> {
   const r = await remote().restoreBackup(options)
-  invalidateWechatCache('')
+  // 恢复备份 = 整个数据根换掉了。原来只 `invalidateWechatCache('')`（清持久层、不通知），
+  // 于是所有已挂载面板继续画恢复前的快照，直到用户自己切页。
+  invalidateAndNotify('')
   return unwrap(r)
 }
 /**
@@ -301,9 +303,7 @@ export async function apiListEditedMessages(options?: { sessionId?: string }): P
  */
 export async function apiEditChatMessage(options: { username: string; localId: number; content: string }): Promise<EditMutationResult> {
   const r = await remote().editChatMessage(options)
-  invalidateWechatCache('messages:')
-  invalidateWechatCache('chat-msgs:')
-  invalidateWechatCache('sessions:')
+  invalidateAndNotify(['messages:', 'chat-msgs:', 'sessions:'])
   return unwrap(r)
 }
 /**
@@ -313,9 +313,7 @@ export async function apiEditChatMessage(options: { username: string; localId: n
  */
 export async function apiResetEditedMessage(options: { username: string; localId: number }): Promise<EditMutationResult> {
   const r = await remote().resetEditedMessage(options)
-  invalidateWechatCache('messages:')
-  invalidateWechatCache('chat-msgs:')
-  invalidateWechatCache('sessions:')
+  invalidateAndNotify(['messages:', 'chat-msgs:', 'sessions:'])
   return unwrap(r)
 }
 /**
@@ -400,7 +398,7 @@ export async function apiClearAskHistory(): Promise<AskHistoryClearResult> {
  */
 export async function apiClearSessionDraft(options: { username: string }): Promise<DraftClearResult> {
   const r = await remote().clearSessionDraft(options)
-  invalidateWechatCache('sessions:')
+  invalidateAndNotify('sessions:')
   return unwrap(r)
 }
 /**
@@ -409,7 +407,7 @@ export async function apiClearSessionDraft(options: { username: string }): Promi
  */
 export async function apiClearAllSessionDrafts(): Promise<DraftsClearResult> {
   const r = await remote().clearAllSessionDrafts()
-  invalidateWechatCache('sessions:')
+  invalidateAndNotify('sessions:')
   return unwrap(r)
 }
 /**

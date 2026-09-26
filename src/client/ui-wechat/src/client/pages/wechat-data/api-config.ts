@@ -111,7 +111,7 @@ import {
   cachedFetch,
   cachedGet,
   invalidateSnapshotCache,
-  invalidateWechatCache,
+  invalidateAndNotify,
   readRenderCache,
   snapshotDelete,
   subscribeSnapshot,
@@ -493,6 +493,6 @@ export async function apiSetCdnImageLocalDecrypt(options: { localDecrypt: boolea
  */
 export async function apiDeleteFavoriteItems(options: { ids: number[] }): Promise<DeleteFavoriteResult> {
   const r = await remote().deleteFavoriteItems(options)
-  invalidateWechatCache('favorites')
+  invalidateAndNotify('favorites')
   return unwrap(r)
 }
