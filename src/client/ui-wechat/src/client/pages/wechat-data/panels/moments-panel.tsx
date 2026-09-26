@@ -14,7 +14,7 @@ import { readRenderCache, writeRenderCache } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { apiGetMoments, apiGetMomentsAuthors, apiGetMomentsMonthly, apiGetSelfUsername, apiOpenPath } from '../api.ts'
 import type { MomentItem, MomentsMonthlySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
@@ -27,6 +27,7 @@ import { useMomentsScope } from './moments-scope.ts'
 import { useMomentsMedia } from './moments-media.ts'
 import { useMomentsExport } from './moments-export.ts'
 import { useMomentsVideos } from './moments-videos.ts'
+import { imageExtOf, useMomentsViewer } from './moments-viewer.ts'
 
 /**
  * Render the moments (朋友圈) panel.
@@ -60,19 +61,11 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [detail, setDetail] = useState<{ m: MomentItem } | null>(null)
-  const [viewer, setViewer] = useState<{
-    images: Array<{ thumb?: string; url?: string; md5?: string; timelineId?: string; id?: string }>
-    index: number
-    author: string
-  } | null>(null)
-  const [viewZoom, setViewZoom] = useState(1)
-  const [viewPan, setViewPan] = useState({ x: 0, y: 0 })
-  const [viewRotate, setViewRotate] = useState(0)
-  const [viewOriginal, setViewOriginal] = useState(false)
-  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
-  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null)
-  const lightboxWrapRef = useRef<HTMLDivElement | null>(null)
-  const viewZoomRef = useRef(1)
+  // 灯箱状态 + 缩放/平移/旋转/原图 + 方向键切图，交给 moments-viewer.ts。
+  // 位置有约束：必须在 useMomentsMedia 之前（媒体层要按 viewer 决定给哪一张做离线解码）。
+  const { viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate,
+    viewOriginal, setViewOriginal, dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex } =
+    useMomentsViewer()
   // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
   // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold, clear } = useTransientNotice(6000)
@@ -256,47 +249,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     ob.observe(el)
     return () => { ob.disconnect() }
   }, [moments.length, total, load])
-  const curImg = viewer ? viewer.images[viewer.index] : undefined
-
-  // Reset lightbox transform whenever a viewer opens or its index moves.
-  // （「加载失败」不在这里复位：灯箱现在画的是 RemoteImg 的 failed 占位，状态跟着地址走。）
-  useEffect(() => {
-    setViewZoom(1)
-    setViewPan({ x: 0, y: 0 })
-    setViewRotate(0)
-    setViewOriginal(false)
-  }, [viewer])
-
-  // Keep a ref mirror of the zoom for the native wheel listener (attached once per open).
-  useEffect(() => { viewZoomRef.current = viewZoom }, [viewZoom])
-
-  // Native non-passive wheel listener: React's onWheel is passive, so preventDefault
-  // would be ignored letting the page scroll behind the lightbox; this suppresses it.
-  useEffect(() => {
-    const el = lightboxWrapRef.current
-    if (!el || !viewer) return
-    const onWheel = (e: WheelEvent): void => {
-      e.preventDefault()
-      const cur = viewZoomRef.current
-      const n = Math.min(5, Math.max(1, cur * (e.deltaY < 0 ? 1.1 : 0.9)))
-      setViewZoom(n)
-      if (n === 1) setViewPan({ x: 0, y: 0 })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => { el.removeEventListener('wheel', onWheel) }
-  }, [viewer])
-
-  // Keyboard control while the lightbox is open: arrows switch image（Esc 交给共享 hook）。
-  useEffect(() => {
-    if (!viewer) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'ArrowLeft') setViewer(v => (v ? { ...v, index: Math.max(0, v.index - 1) } : v))
-      if (e.key === 'ArrowRight') setViewer(v => (v ? { ...v, index: Math.min(v.images.length - 1, v.index + 1) } : v))
-    }
-    window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('keydown', onKey) }
-  }, [viewer])
-
   // Esc 关闭走 kit 的共享栈：灯箱与详情同时打开时，一次 Esc 只关最上层（原来两个监听会一起关）
   useEscapeToClose(viewer !== null, () => { setViewer(null) })
   useEscapeToClose(detail !== null, () => { setDetail(null) })
@@ -310,26 +262,13 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   const saveCurrentImage = (): void => {
     const src = (curImg && snsImgs[imgKey(curImg)]) || proxyableSrc(curImg?.url, curImg?.thumb)
     if (!src) return
-    let ext = 'jpg'
-    const dataMatch = src.match(/^data:image\/(\w+)[;,]/)
-    if (dataMatch) ext = dataMatch[1] === 'jpeg' ? 'jpg' : (dataMatch[1] ?? 'jpg')
-    else {
-      try {
-        const path = new URL(src, location.href).pathname
-        const seg = path.split('.').pop()?.toLowerCase() ?? ''
-        if (/^[a-z0-9]{2,5}$/.test(seg)) ext = seg
-      } catch { /* keep jpg */ }
-    }
+    const ext = imageExtOf(src)
     const a = document.createElement('a')
     a.href = src
     a.download = 'moments-' + String(viewer?.index ?? 0) + '.' + ext
     document.body.appendChild(a)
     a.click()
     a.remove()
-  }
-
-  const setViewerIndex = (index: number): void => {
-    setViewer(v => (v ? { ...v, index: Math.max(0, Math.min(v.images.length - 1, index)) } : v))
   }
 
   // Copy the currently displayed image's source (CDN url preferred, else data URL).
