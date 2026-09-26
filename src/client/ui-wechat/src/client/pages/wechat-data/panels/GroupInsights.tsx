@@ -169,7 +169,10 @@ export function GroupInsightsPanel({
               {data.announcement ? (
                 <div className={css.announcement}>{data.announcement}</div>
               ) : (
-                <div className={kitCss.emptyInline}>暂无群公告</div>
+                <div className={kitCss.emptyInline}>
+                  暂无群公告 · 公告来自微信的群资料，本机实测约六分之一的群有公告，多数群从没发过；
+                  也可能是你入群之前的公告没有同步到本机
+                </div>
               )}
             </Card>
 

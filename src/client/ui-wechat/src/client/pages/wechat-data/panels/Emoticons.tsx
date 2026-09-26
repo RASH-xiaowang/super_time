@@ -197,7 +197,12 @@ export function EmoticonsPanel(): React.JSX.Element {
         {!loading && !error && tab !== 'packages' && shownCustom.length > emoCount && <ListSentinel refFn={emoSentinel} />}
         {!loading && !error && tab !== 'packages' && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
         {!loading && !error && tab === 'packages' && filteredPackages.length === 0 && (
-          <EmptyMaybeSyncing text={q ? '未找到相关表情包' : '暂无表情包'} />
+          <EmptyMaybeSyncing
+            text={q ? '未找到相关表情包' : '暂无表情包'}
+            note={q
+              ? '换个关键词再试；表情包按名称与 MD5 匹配。'
+              : '表情包来自微信「表情商店」的本地缓存：没下载/收藏过表情包，或刚启动后台仍在同步（首次约 1–2 分钟）时都会是空的。'}
+          />
         )}
         {!loading && !error && tab === 'packages' && filteredPackages.slice(0, pkgCount).map(p => (
           <div key={p.name} className={css.fileCell} title={p.name}>

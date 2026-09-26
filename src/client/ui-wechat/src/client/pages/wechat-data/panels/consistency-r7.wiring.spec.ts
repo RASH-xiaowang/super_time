@@ -121,6 +121,22 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
     expect(shell).toContain('<RevokedPanel onOpenSettings={onOpenSettings} />')
     expect(shell).toContain('<PeriodSummaryPanel onOpenSettings={onOpenSettings} />')
   })
+
+  it('群聊公告：空态要说明"为什么可能为空"（公告本来就不是每个群都有）', () => {
+    const src = read('GroupInsights.tsx')
+    expect(src).toContain('暂无群公告')
+    // 只写「暂无群公告」会让人以为是数据丢了 —— 实测本机 53 个群里只有 8 个有公告
+    expect(src, '没有说明覆盖率').toContain('六分之一')
+    expect(src, '没有给出另一种可能（入群前的公告未同步）').toContain('入群之前')
+    // ⚠️ JSX 文本里不能出现 markdown 强调符，否则会原样渲染成星号
+    expect(src, 'JSX 文案里混进了 markdown 星号').not.toContain('**六分之一**')
+  })
+
+  it('表情包：空态要给出归因，而不是只写「暂无表情包」', () => {
+    const src = read('Emoticons.tsx')
+    expect(src, '没有说明数据来自哪里').toContain('表情商店')
+    expect(src, '没有区分"筛选无匹配"与"确实没有"').toMatch(/q\s*\?\s*'换个关键词/)
+  })
 })
 
 describe('年度报告 · 海报装不下时要真的退回瀑布流', () => {

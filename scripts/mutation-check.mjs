@@ -196,6 +196,38 @@ const MUTATIONS = [
     to: '可路由页签共 **32**（其余 20 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
+  {
+    id: 'M20-merged-section-key-typo',
+    why: '把某个合并组的分段 key 拼错（ledger → ledgr）—— 深链 #ledger 会静默落回第一段，必须发现',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
+    from: "{ key: 'ledger', label: '月度汇总'",
+    to: "{ key: 'ledgr', label: '月度汇总'",
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
+  },
+  {
+    id: 'M21-merged-group-count-drift',
+    why: '把合并组的组数注释改回旧的「共 6 组」—— 组数注释与代码必须一致',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
+    from: '共 8 组**合并视图',
+    to: '共 6 组**合并视图',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
+  },
+  {
+    id: 'M22-group-announcement-coverage-removed',
+    why: '删掉群公告空态里的覆盖率说明 —— 只写「暂无群公告」会让人以为数据丢了',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/GroupInsights.tsx',
+    from: '本机实测约六分之一的群有公告',
+    to: '多数群没有公告',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/consistency-r7.wiring.spec.ts',
+  },
+  {
+    id: 'M23-emoticon-attribution-removed',
+    why: '把表情包空态的归因换回一句「暂无数据」—— 空态必须说明数据来自哪里',
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/Emoticons.tsx',
+    from: '表情包来自微信「表情商店」的本地缓存',
+    to: '暂无数据',
+    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/consistency-r7.wiring.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

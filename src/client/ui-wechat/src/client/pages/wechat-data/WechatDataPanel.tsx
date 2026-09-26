@@ -249,8 +249,10 @@ function renderTab(
       />
     )
     // 通讯录与社交图谱是**同一批人的两种看法**（联系人列表 / 关系图）：2026-09-17 起
-    // 收进同一个导航项，由面板顶部段条切换 —— 与「收藏与表情」「文件与存储」「资金往来」
-    // 「群聊分析」「总结与报告」「消息视图」六组走同一个外壳（MergedSections）。
+    // 收进同一个导航项，由面板顶部段条切换。目前**共 8 组**合并视图走同一个外壳
+    // （MergedSections：本文件 7 处 + KbShell.tsx 1 处 = 8）。
+    // ⚠️ 组数以 `grep -c "<MergedSections"` 为准 —— 这里曾写「六组」，与实际差两组；
+    // 由 panels/merged-sections.wiring.spec.ts 守着，改组数会在这里转红。
     // 两个 tab 必须都列全：深链 #contacts / #graph 要落到正确分段，
     // MergedSections 内部也是靠 `initial={tab}` 的变化来同步（它的 useState 只在首次生效）。
     // 图谱面板内部零改动（Graph.tsx 的 PanelHeader / 统计条 / 画布 / 右侧控制栏 /
@@ -269,8 +271,8 @@ function renderTab(
     // 知识图谱与知识库是**同一批笔记的两种看法**（同一个 `wechat_notes.db` 的 notes 表）：
     // 图谱把笔记当「网」看（力导向画布 / [[链接]] 边 / 待补节点），知识库把它当「文档」看
     // （列表 / 详情 / 新建编辑 / 标签 / 关键词搜索）。2026-09-18 起收进同一个导航项，
-    // 由面板顶部段条切换 —— 与「通讯录/社交图谱」「收藏与表情」「文件与存储」等七组
-    // 走同一个外壳（MergedSections）。
+    // 由面板顶部段条切换 —— 与「通讯录/社交图谱」「收藏与表情」「文件与存储」等其余 7 组
+    // 走同一个外壳（MergedSections，合计 8 组）。
     // 三个 tab 必须都列全：深链 #kb / #knowledge / #kbfiles 要落到正确分段，
     // MergedSections 内部也是靠 `initial={tab}` 的变化来同步（它的 useState 只在首次生效）。
     // 2026-09-19：分段与库切换一起搬进 `KbShell`（三栏：库 rail + 分段 + 面板体），
