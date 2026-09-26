@@ -272,15 +272,20 @@ export async function apiGeneratePeriodSummary(options: {
   return unwrap(await remote().generatePeriodSummary(options))
 }
 
-/** List available LLM providers for the daily-summary model selector. */
-export async function apiListLlmProviders(): Promise<{ providers: Array<{ id: string; name: string }> }> {
-  return unwrap(await remote().listLlmProviders())
-}
+/**
+ * 已删除两个前端包装（2026-09-26，B5 死代码清理）：`apiListLlmProviders` / `apiListLlmModels`。
+ *
+ * 为什么删而不是给它们接界面：界面其实**早就有更好的那一个** ——
+ * `AiModelConfig.tsx` 用的是 `apiFetchLlmModels({ apiUrl, apiKey })`，按用户**自己的**
+ * 端点和 Key 实时拉真实可用模型；而这两个包装返回的是「设置里配过的模型 + 厂商目录兜底」，
+ * 对用户价值低得多（他真正要知道的是"我这个 Key 能用哪些模型"）。
+ * 留着的唯一后果是下一个人以为有两套机制、不知道该接哪个。
+ *
+ * 后端两个 Remote（`listLlmProviders` / `listLlmModels`）**保留**：协议面按名字枚举，
+ * 删了会动 Remote 计数与 `docs/API.md`，而它们本身无害（不联网、只读本机设置）。
+ * 结论登记在 `docs/UI-PANELS-PLAN.md` 的「界面无入口的 Remote」一节。
+ */
 
-/** List models for one LLM provider. */
-export async function apiListLlmModels(options: { provider: string }): Promise<{ models: Array<{ id: string; name: string }> }> {
-  return unwrap(await remote().listLlmModels(options))
-}
 /**
  * List edited-message records (optionally filtered by session).
  * @param options - Query options: optional sessionId filter.
