@@ -36,6 +36,8 @@ const IMPL_MARKS = /\b1024\b|toLocaleString|padStart|getMonth\(\)/
 /**
  * 已知的「第二份时间格式化」（审查报告数到 4 份 fmtTime，本守卫按名字宽口径扫到更多）。
  * **棘轮：只能变小。** 本次已消灭的是全部字节格式化副本（5 份）与四份 `fmtTime`；
+ * 第三条也消灭了一条：`search-query.ts` 那份 `formatFullTime` 与 `fmtDateTimeSec` 输出逐字节相同
+ * （含 0/NaN/null/负数八组对照），第三批 #21 搬叶子模块时顺手删掉、改指唯一出处。
  * 剩下的这些各有自己的显示形状（带秒、只到日、按评论时间缩写…），
  * 统一它们要逐个改界面文案并逐条核对既有用例，属于「另一轮」的工作 ——
  * 但不能因此让守卫失明，所以按 `文件  名字` 登记在这里。
@@ -43,7 +45,6 @@ const IMPL_MARKS = /\b1024\b|toLocaleString|padStart|getMonth\(\)/
  */
 const KNOWN_SECOND_TIME: ReadonlyArray<string> = [
   'src/backend/wechat-data/src/query/favorites.ts  fmtDateTime',
-  'src/backend/wechat-data/src/query/search-query.ts  formatFullTime',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-contact-info-view.tsx  fmtDate',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-model.ts  formatDate',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-support.tsx  fmtCommentTime',

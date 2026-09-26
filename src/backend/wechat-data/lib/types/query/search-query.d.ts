@@ -7,29 +7,7 @@
  * @module search-query
  */
 import type { SearchHit } from '../types.ts';
-/** Split the group-message sender prefix (`wxid_xxx:\n`) into sender id + body. */
-export declare function splitGroupPrefix(text: string, username: string): {
-    sender: string;
-    body: string;
-};
-/** Strip the group-message sender prefix (wxid_xxx:\n) from display text. */
-export declare function stripGroupPrefix(text: string, username: string): string;
-/** 群内发送者的显示名（联系人表里有就用名字，否则退回 wxid）。 */
-export declare function senderLabel(sender: string, names: Map<string, string>): string;
-/**
- * 从 appmsg / 系统消息的 XML 里抽出可读文本。
- *
- * 微信把「转账、链接、文件、引用、系统提示」这类消息存成
- * `<msg><appmsg><title><![CDATA[微信转账]]></title><des>收到转账1500.00元…</des>…`
- * —— **不是**纯文本。旧索引只收 `local_type=1`，于是「微信转账收到转账1500元」
- * 这类消息完全不在索引里，而它恰恰是「最近一次转账给我的是谁」的唯一答案（实测）。
- * 这里按字段名抽取（title/des/content…），并剥掉标签与 CDATA。
- * @param raw - 原始消息内容（可能是 XML 也可能是纯文本）。
- * @returns 可读文本（无可读内容时返回空串）。
- */
-export declare function readableMessageText(raw: string): string;
-/** Format a unix timestamp as YYYY-MM-DD HH:MM. */
-export declare function formatFullTime(ts: number): string;
+export { readableMessageText, senderLabel, splitGroupPrefix, stripGroupPrefix } from './search-display.ts';
 /** 一条会话窗口内的消息（用于 chunk 级上下文：单条微信消息几乎不构成检索单元）。 */
 export interface WindowMessage {
     local_id: number;

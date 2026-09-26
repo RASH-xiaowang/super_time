@@ -13,69 +13,12 @@ import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
 import { decodeCell, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, searchIndexBatch } from './search-scaffold.ts'
 
-/** Split the group-message sender prefix (`wxid_xxx:\n`) into sender id + body. */
-export function splitGroupPrefix(text: string, username: string): { sender: string; body: string } {
-  if (!username.endsWith('@chatroom')) return { sender: '', body: text }
-  const m = text.match(/^[A-Za-z0-9_@.\-]{3,64}:\n/)
-  return m ? { sender: m[0].slice(0, -2), body: text.slice(m[0].length) } : { sender: '', body: text }
-}
-
-/** Strip the group-message sender prefix (wxid_xxx:\n) from display text. */
-export function stripGroupPrefix(text: string, username: string): string {
-  return splitGroupPrefix(text, username).body
-}
-
-/** 群内发送者的显示名（联系人表里有就用名字，否则退回 wxid）。 */
-export function senderLabel(sender: string, names: Map<string, string>): string {
-  if (!sender) return ''
-  return names.get(sender) ?? sender
-}
-
-/**
- * 从 appmsg / 系统消息的 XML 里抽出可读文本。
- *
- * 微信把「转账、链接、文件、引用、系统提示」这类消息存成
- * `<msg><appmsg><title><![CDATA[微信转账]]></title><des>收到转账1500.00元…</des>…`
- * —— **不是**纯文本。旧索引只收 `local_type=1`，于是「微信转账收到转账1500元」
- * 这类消息完全不在索引里，而它恰恰是「最近一次转账给我的是谁」的唯一答案（实测）。
- * 这里按字段名抽取（title/des/content…），并剥掉标签与 CDATA。
- * @param raw - 原始消息内容（可能是 XML 也可能是纯文本）。
- * @returns 可读文本（无可读内容时返回空串）。
- */
-export function readableMessageText(raw: string): string {
-  const t = String(raw || '').trim()
-  if (!t) return ''
-  if (!t.startsWith('<')) return t
-  const parts: string[] = []
-  for (const tag of ['title', 'des', 'content', 'nickname', 'username']) {
-    let from = 0
-    while (parts.length < 8) {
-      const si = t.indexOf('<' + tag, from)
-      if (si < 0) break
-      const gt = t.indexOf('>', si)
-      if (gt < 0) break
-      const ei = t.indexOf('</' + tag, gt)
-      if (ei < 0) break
-      let v = t.slice(gt + 1, ei).trim()
-      // 匹配成功就一定有捕获组 1；兜回 `v` 本身而不是空串 —— 万一没有，宁可留着原文也不静默丢内容。
-      const cdata = v.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/)
-      if (cdata) v = cdata[1] ?? v
-      v = v.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
-      if (v) parts.push(v)
-      from = ei + 1
-    }
-    if (parts.length >= 8) break
-  }
-  return parts.join('  ').trim()
-}
-
-/** Format a unix timestamp as YYYY-MM-DD HH:MM. */
-export function formatFullTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
+// 这五个「展示形状」的纯函数搬到了 `search-display.ts`（为了断掉 scaffold ↔ query 的环，
+// 理由写在那份文件的头里）。这里继续 re-export：`search.ts` 是 `export *` 转发，
+// 外面几十个 `from './search.ts'` 的导入因此一行都不用改。
+export { readableMessageText, senderLabel, splitGroupPrefix, stripGroupPrefix } from './search-display.ts'
+import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /** 一条会话窗口内的消息（用于 chunk 级上下文：单条微信消息几乎不构成检索单元）。 */
 export interface WindowMessage {
@@ -212,7 +155,7 @@ export function searchWechatFts(
             create_time: createTime,
             local_id: Number(r['lid'] ?? 0),
             name: names.get(username) ?? username,
-            time: createTime ? formatFullTime(createTime) : '',
+            time: createTime ? fmtDateTimeSec(createTime) : '',
             snippet: display.slice(0, 120),
             sender: senderLabel(sender, names),
           })
@@ -316,7 +259,7 @@ export function hitFromRow(
     create_time: ts,
     local_id: localId,
     name: names.get(talker) ?? talker,
-    time: formatFullTime(ts),
+    time: fmtDateTimeSec(ts),
     snippet,
     sender: senderLabel(sender, names),
   }

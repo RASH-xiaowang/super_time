@@ -11,7 +11,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
 import { EnsureIndexResult, INDEX_SCHEMA_VERSION, REFRESHED_KEY, SHARD_WM_PREFIX, bigramTokens, decodeCell, ensureMetaIndexes, getSearchIndexFreshness, getSearchIndexStatus, indexReady, loadDisplayNames, loadSessionUsernames, messageShardFiles, msgTableName, readWatermarks, searchIndexBatch, searchIndexPath } from './search-scaffold.ts'
-import { formatFullTime, readableMessageText, searchIndexMessages, senderLabel, splitGroupPrefix } from './search-query.ts'
+import { searchIndexMessages } from './search-query.ts'
+import { readableMessageText, senderLabel, splitGroupPrefix } from './search-display.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /**
  * 保证索引**存在且包含最新的消息**（提问路径的唯一入口）。
@@ -243,7 +245,7 @@ export function listMessagesInRange(
         create_time: ts,
         local_id: Number(r['local_id'] ?? 0),
         name: names.get(uname) ?? uname,
-        time: formatFullTime(ts),
+        time: fmtDateTimeSec(ts),
         snippet: body.replace(/\s+/g, ' ').slice(0, 120),
         sender: senderLabel(sender, names),
       }

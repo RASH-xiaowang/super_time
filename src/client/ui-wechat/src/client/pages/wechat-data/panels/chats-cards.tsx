@@ -17,6 +17,7 @@ import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLoca
 import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, quoteTypeLabel, transferStateKey, transferStatusLabel } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
+import { CardFoot } from './chats-card-foot.tsx'
 import { IconDataOutline16, IconLinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
@@ -78,17 +79,6 @@ export function OpenFileCard({ title, size, createTime }: { title: string; size:
       <CardFoot label="微信电脑版" />
     </div>
   )
-}
-/**
- * 卡片底部的**类型条**（微信原生卡片底部那一行「微信转账 / 微信红包 / 聊天记录」）。
- *
- * 有了它，同一张卡片在不同位置（气泡内 / 合并转发弹窗内）都能被一眼认出来源；
- * 也因此**不再**把类型名塞进标题 —— 那会让标题被截断。
- * @param props.label - 类型名。
- * @returns the footer element.
- */
-export function CardFoot({ label }: { label: string }): React.JSX.Element {
-  return <span className={css.msgCardFoot}>{label}</span>
 }
 /**
  * 通用「带标签的小卡」：群公告 / 笔记 / 卡片 / 商品 / 表情 / 版本不支持。

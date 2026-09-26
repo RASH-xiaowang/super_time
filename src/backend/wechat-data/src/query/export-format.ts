@@ -13,7 +13,6 @@ import type { StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryMessages } from './messages.ts'
 import { writeZipAtomic } from './export-io.ts'
-import { exportCsv } from './export-flows.ts'
 
 /** Format a unix timestamp as YYYY-MM-DD HH:MM. */
 export function fmtFull(ts: number): string {

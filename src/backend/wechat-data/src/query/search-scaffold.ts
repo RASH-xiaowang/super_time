@@ -15,8 +15,8 @@ import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
 import { withDb } from './db-open.ts'
-import { ensureSearchIndex, listMessagesInRange } from './search-build.ts'
-import { formatFullTime, senderLabel, splitGroupPrefix } from './search-query.ts'
+import { senderLabel, splitGroupPrefix } from './search-display.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /**
  * WeChat full-text message search index (FTS5), rewritten from st_control
@@ -231,7 +231,7 @@ export function searchIndexBatch(
           create_time: createTime,
           local_id: Number(r['local_id'] ?? 0),
           name: names.get(username) ?? username,
-          time: formatFullTime(createTime),
+          time: fmtDateTimeSec(createTime),
           snippet: display.slice(0, 120),
           sender: senderLabel(sender, names),
           // bm25() 越小越相关，取负号变成「越大越相关」

@@ -147,8 +147,11 @@ import type {
   NoteMutationResult,
   NotesSnapshot,
 } from './types.ts'
-import { RetrievalConfigShape, RetrievalEvalResult, RetrievalFeedbackItem, RetrievalStatus, VectorBuildResult } from './api-config.ts'
-import { AnnualReviewShape } from './api-status.ts'
+// 这两个方向**只是类型**：写成 `import type` 之后编译期就擦掉，不再构成运行期依赖
+// （`api-config`/`api-status` 反过来要 `remote`/`unwrap` 是真值边，方向是单向的）。
+// 不标的话 `module-cycle-guard.spec.ts` 会把整组 api-* 读成一个 4 文件环。
+import type { RetrievalConfigShape, RetrievalEvalResult, RetrievalFeedbackItem, RetrievalStatus, VectorBuildResult } from './api-config.ts'
+import type { AnnualReviewShape } from './api-status.ts'
 
 // M21：缓存层已拆到 ./cache.ts 与 ./media-cache.ts（纯搬移）。这里继续转发，
 // 使 40 多个面板的 `from './api.ts'` 一行都不用改。

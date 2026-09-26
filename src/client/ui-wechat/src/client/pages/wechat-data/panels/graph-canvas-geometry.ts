@@ -9,7 +9,7 @@
 
 import { DEFAULT_GRAPH_SETTINGS, communityColor, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import { edgeBudget } from './graph-budget.ts'
-import { Camera, Point, ViewSize } from './graph-canvas-theme.ts'
+import type { Camera, Point, ViewSize } from './graph-canvas-theme.ts'
 
 /**
  * 连通性骨架：每个「有边的节点」保留它最强的那一条关联边。
