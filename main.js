@@ -33,13 +33,13 @@ if (app.isPackaged) {
   }
 }
 
-/** 交给系统浏览器打开的次数（仅供安全探针断言；正常流程里是「用户点了外链」的计数）。 */
-let openExternalAttempts = 0;
 /**
- * 探针用：**真的被创建出来**的弹窗数（`did-create-window` 只在真建窗时触发）。
- * 判安全不能看 `window.open` 的返回值 —— deny 时 Chromium 也可能回一个指向空窗的 WindowProxy。
+ * 安全探针的两个计数。P0-4 起由 `src/backend/main-window.js` 里的守卫递增 ——
+ * 传下去的是**同一个对象**（值语义会丢掉递增，探针就恒为 0 了）。
+ * 判「有没有被绕过」不能看 `window.open` 的返回值：deny 时 Chromium 也可能回一个
+ * 指向空窗的 WindowProxy，所以弹窗只能数 `did-create-window`。
  */
-let popupWindowsCreated = 0;
+const securityCounters = { openExternalAttempts: 0, popupWindowsCreated: 0 };
 const {
   configure: configureWechatPaths,
   applyConfig,
@@ -63,6 +63,11 @@ const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = requ
 const { createUpdateService } = require('./src/backend/update');
 const { registerMiscIpc } = require('./src/backend/ipc-misc');
 const { registerWechatIpc } = require('./src/backend/ipc-wechat');
+const {
+  createMainWindow,
+  installWebContentsGuards: installWindowGuards,
+  broadcastToWindows,
+} = require('./src/backend/main-window');
 
 /**
  * 首启闸门豁免状态（N2）。
@@ -458,37 +463,17 @@ function scheduleBackendRestart(reason) {
   if (backendRestartTimer.unref) backendRestartTimer.unref();
 }
 
-/** Super Time 前端构建产物（npm run build:ui 生成）；缺失时回退到演示页。 */
-function uiEntryHtml() {
-  const built = path.join(__dirname, 'src', 'client', 'ui-dist', 'index.html');
-  if (fs.existsSync(built)) return built;
-  return path.join(__dirname, 'src', 'index.html');
-}
+/** 建窗口与装守卫需要的上下文（本体在 `src/backend/main-window.js`，行为逐字未改）。 */
+const windowCtx = { app, BrowserWindow, screen, fs, path, rootDir: __dirname, env: process.env };
+const guardsCtx = { shell, rootDir: __dirname, decideNavigation, decideWindowOpen, counters: securityCounters };
 
+/** 向所有窗口转发后端事件（本体已外提，这里只保留 main.js 内的调用点形状）。 */
 function broadcastWechatEvent(name, args) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      win.webContents.send('wechat:event', { name, args });
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
-  }
+  broadcastToWindows(windowCtx, 'wechat:event', { name, args });
 }
 
-/**
- * 更新状态广播（`update:event`）。
- *
- * 与 `wechat:event` 同一套做法：主进程是唯一的事实来源，渲染层只是投影。
- * 进度类事件在 update.js 里已按 1% 阶梯节流，这里不再二次过滤。
- */
 function broadcastUpdateState(state) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      win.webContents.send('update:event', state);
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
-  }
+  broadcastToWindows(windowCtx, 'update:event', state);
 }
 
 /**
@@ -523,175 +508,11 @@ function createUpdateServiceSafe() {
 }
 
 function createWindow() {
-  /**
-   * 窗口图标。**打包态这个路径不存在**（`build/` 是 electron-builder 的 buildResources，
-   * 不在 `files` 白名单里），于是 `icon` 为 undefined，Windows 会退回用 exe 内嵌的图标 ——
-   * 而那个图标就是同一份 `build/icon.ico`（`win.icon` 会在打包时烘进 exe；实测取出两者
-   * 的 32×32 帧是同一张图）。即 dev 与打包态的窗口/任务栏图标一致，**不存在「打包版没图标」**。
-   *
-   * 所以别把 `build/` 加进 `files`：那会白带一份 83KB，并把图标改成走
-   * `nativeImage.createFromPath` 读 asar 内的 .ico（打包态未验证的路径），收益为零。
-   * 相关取证见 docs/RELEASE-PLAN.md 的 M19。
-   */
-  const appIcon = path.join(__dirname, 'build', 'icon.ico');
-  // 启动尺寸取固定基准 1440×900，再按主屏工作区收敛：写死一个较大的尺寸时
-  // （历史上是 1664×1066），1366×768 或 1080p@125% 的机器上窗口会比屏幕还大
-  // （审计 P0-2）。窗口本身始终可缩放，下限取实测能容下
-  // 「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
-  const MIN_W = 960;
-  const MIN_H = 640;
-  const BASE_W = 1440;
-  const BASE_H = 900;
-  const work = screen.getPrimaryDisplay().workAreaSize;
-  const initialWidth = Math.max(MIN_W, Math.min(BASE_W, work.width));
-  const initialHeight = Math.max(MIN_H, Math.min(BASE_H, work.height));
-  mainWindow = new BrowserWindow({
-    width: initialWidth,
-    height: initialHeight,
-    minWidth: MIN_W,
-    minHeight: MIN_H,
-    useContentSize: true,
-    resizable: true,
-    // 标题栏是自绘的（frame:false），最大化/全屏都由自绘按钮触发，所以这里要放开，
-    // 否则那两个按钮点了没反应。
-    maximizable: true,
-    fullscreenable: true,
-    show: false,
-    frame: false,
-    backgroundColor: '#0f172a',
-    title: 'Super Time',
-    icon: fs.existsSync(appIcon) ? appIcon : undefined,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // sandbox: true —— 渲染进程只经 preload 暴露的 contextBridge 说话，
-      // 而 preload.js 只 require('electron')（沙箱下允许），因此可以直接开。
-      // 开着的意义：渲染进程即使是 XSS 也在 OS 级沙箱里，拿不到 Node 原语。
-      // 回归由 scripts/packaged-smoke.js 兜（它会真的启动打包产物断言后端就绪+出图）。
-      sandbox: true,
-      spellcheck: false,
-      backgroundThrottling: true
-    }
-  });
-
-  // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）
-  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', true));
-  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', false));
-
-  // 调试：SUPERTIME_SKELETON=1 时加载 ?skeleton=1，Overview 强制展示骨架屏。
-  const loadQuery = process.env.SUPERTIME_SKELETON === '1' ? { query: { skeleton: '1' } } : undefined;
-  mainWindow.loadFile(uiEntryHtml(), loadQuery);
-
-  // DevTools 按需开启：实测打开 DevTools 会额外拉起一个 renderer 进程并常驻
-  // 约 200MB（独立窗口 + 自己的 V8 堆），因此不再默认打开。
-  // 需要调试时设 SUPERTIME_DEVTOOLS=1。
-  if (!app.isPackaged && process.env.SUPERTIME_DEVTOOLS === '1') {
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
-  }
-
-  // 渲染进程日志转发（默认关闭，用 SUPERTIME_RENDERER_LOG=1 打开）。
-  //
-  // 之前是无条件转发，而「朋友圈」面板会为大量被 CSP 拦下的 http 图片各打一条
-  // console 消息，一次访问就是成百上千行 —— 每条都要跨 IPC 到主进程再写 stdout，
-  // 在 stdout 未被及时消费时会堆在 Node 的写缓冲里。这里改成按需开启，
-  // 并对单条消息截断、对总量设上限。
-  if (process.env.SUPERTIME_RENDERER_LOG === '1') {
-    const MAX_RELAYED = 500;
-    let relayed = 0;
-    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-      if (relayed >= MAX_RELAYED) return;
-      relayed += 1;
-      if (relayed === MAX_RELAYED) {
-        console.log(`[renderer] 已达转发上限 ${MAX_RELAYED} 行，后续渲染进程日志不再转发`);
-      }
-      console.log(`[renderer:${level}]`, String(message).slice(0, 500), `(${sourceId}:${line})`);
-    });
-  }
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[render-process-gone]', JSON.stringify(details));
-  });
-  mainWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
-    console.error('[did-fail-load]', code, desc, url);
-  });
-
-  // 事件循环阻塞诊断（SUPERTIME_ELD=1）。主进程里所有 Remote 方法都用同步的
-  // node:sqlite，一旦某个查询跑得久，窗口消息泵就被卡住 —— 这正是
-  // 「应用未响应」的来源。这里按 5 秒窗口统计事件循环延迟的最大值。
-  if (process.env.SUPERTIME_ELD === '1') {
-    const { monitorEventLoopDelay } = require('node:perf_hooks');
-    const histogram = monitorEventLoopDelay({ resolution: 20 });
-    histogram.enable();
-    const timer = setInterval(() => {
-      const max = histogram.max / 1e6;
-      const p99 = histogram.percentile(99) / 1e6;
-      if (max > 200) {
-        console.log(`[eld] 主进程事件循环阻塞 ${max.toFixed(0)}ms (p99=${p99.toFixed(0)}ms) @ ${new Date().toISOString()}`);
-      }
-      histogram.reset();
-    }, 5000);
-    if (timer.unref) timer.unref();
-  }
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
+  mainWindow = createMainWindow(windowCtx);
 }
 
-/**
- * 给每个 webContents 装导航 / 开窗守卫。
- *
- * 渲染的是**聊天与朋友圈内容**，即不可信输入 —— 所以这里默认拒绝：
- *   · 新窗口一律不开（`action:'deny'`），只有 http(s) 才交给系统浏览器
- *     （`file:` 能直接拉起本地可执行文件，`smb:`/UNC 会带着凭据外连）；
- *   · 页面导航只允许应用自己的 `file:` 页面（本应用是单页，正常不会导航）；
- *   · 不允许挂 `<webview>`（本应用不用它）。
- * 用 `app.on('web-contents-created')` 统一安装，而不是只在主窗口上挂一遍 ——
- * 否则将来任何新建的 webContents（预览窗、开发者工具）都绕过了守卫。
- * 判定逻辑在 `src/backend/navigation-policy.js`，有单测覆盖（含默认拒绝）。
- * @param {Electron.WebContents} contents - 新建的 webContents。
- */
 function installWebContentsGuards(contents) {
-  contents.setWindowOpenHandler(({ url }) => {
-    if (decideWindowOpen(url) === 'external') {
-      openExternalAttempts += 1;
-      // 系统没有对应处理程序时 openExternal 会 reject —— 不接住就是未处理拒绝。
-      shell.openExternal(url).catch((e) => {
-        console.warn('[security] 交给系统打开失败：' + String(e && e.message ? e.message : e));
-      });
-    } else {
-      console.warn('[security] 已拒绝打开外部链接：' + String(url));
-    }
-    return { action: 'deny' };
-  });
-  // 判定「有没有真开出窗口」的唯一可靠依据：`did-create-window` 只在窗口真的建出来时触发。
-  contents.on('did-create-window', () => { popupWindowsCreated += 1; });
-  contents.on('will-navigate', (event, url) => {
-    if (decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止页面导航：' + String(url));
-  });
-  // will-redirect 是**独立事件**：主框架的 HTTP 重定向只走它（实测 will-navigate 拦下
-  // 第一步后它就不会触发，所以当前只是「单点依赖」—— 一旦 decideNavigation 放宽，
-  // 重定向立刻成为绕过路径）。判定函数是现成的，这里补上零成本。
-  contents.on('will-redirect', (event, url) => {
-    if (decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止重定向：' + String(url));
-  });
-  contents.on('will-attach-webview', (event) => {
-    event.preventDefault();
-    console.warn('[security] 已阻止挂载 webview');
-  });
-  // will-frame-navigate 与 will-navigate 不是一对：它还覆盖**子框架**的导航。
-  // 本应用不渲染任何 iframe（源码里 0 处 <iframe>），所以这条正常永远不该放行；
-  // 但一旦有人将来加了 iframe，缺了这条守卫就等于给「子框架里加载任意外部页」开门。
-  contents.on('will-frame-navigate', (event, details) => {
-    const url = typeof details === 'string' ? details : (details && details.url);
-    if (typeof url === 'string' && decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止框架导航：' + String(url));
-  });
+  installWindowGuards(contents, guardsCtx);
 }
 
 app.whenReady().then(async () => {
@@ -789,12 +610,12 @@ app.whenReady().then(async () => {
         // 而「是否真的开出了窗口」只有 did-create-window 说得上话。
         for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
           const opened = await evaluate(`window.open(${JSON.stringify(u)}) === null ? 'null' : 'window'`);
-          probe.opened.push({ url: u, result: opened, windowsAfter: popupWindowsCreated });
+          probe.opened.push({ url: u, result: opened, windowsAfter: securityCounters.popupWindowsCreated });
         }
         // ③ 外部导航
         probe.navAttempt = await evaluate("(() => { window.location.href = 'https://example.com/'; return 'attempted' })()");
-        probe.openExternalAttempts = openExternalAttempts;
-        probe.popupWindows = popupWindowsCreated;
+        probe.openExternalAttempts = securityCounters.openExternalAttempts;
+        probe.popupWindows = securityCounters.popupWindowsCreated;
         probe.urlAfter = mainWindow.webContents.getURL();
         probe.navigated = probe.urlAfter !== probe.urlBefore;
         console.log('[security-probe] ' + JSON.stringify(probe));

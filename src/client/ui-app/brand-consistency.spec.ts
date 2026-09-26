@@ -75,8 +75,10 @@ describe('品牌统一为 Super Time', () => {
   })
 
   it('窗口标题与页面标题都是 Super Time（两边是不同来源，都会覆盖 OS 标题栏）', () => {
-    // main.js 的 BrowserWindow.title 会被页面 <title> 覆盖，所以两处都得对
-    expect(read('main.js')).toContain("title: 'Super Time'")
+    // BrowserWindow.title 会被页面 <title> 覆盖，所以两处都得对。
+    // P0-4：建窗口那段从 main.js 搬进了 src/backend/main-window.js —— 跟着搬判据，
+    // 但**不放宽成「宿主里任意处」**：只有真正传给 BrowserWindow 的那份标题才算数。
+    expect(read('src/backend/main-window.js')).toContain("title: 'Super Time'")
     expect(read('src/client/ui-app/index.html')).toContain('<title>Super Time</title>')
   })
 

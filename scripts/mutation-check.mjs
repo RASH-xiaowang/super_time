@@ -500,6 +500,14 @@ const MUTATIONS = [
     to: '      await timedFetch(key, fetcher).then(',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/cache-swr.spec.ts',
   },
+  {
+    id: 'M61-context-isolation-off',
+    why: '把 contextIsolation 翻成 false（渲染进程重新拿到 Node 原语）—— 审查 §五 那条「✅ 安全基线全为安全值」此前只被人眼看过一次，没有用例守着',
+    file: 'src/backend/main-window.js',
+    from: '      contextIsolation: true,',
+    to: '      contextIsolation: false,',
+    spec: 'src/backend/tests/electron-security-baseline.spec.ts',
+  },
 ]
 
 const argv = process.argv.slice(2)

@@ -115,7 +115,13 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
    * 每个都走同一个 `decideNavigation`/`preventDefault`、以及**新出现的导航类事件必须进清单**。
    */
   const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
-  const guards = mainSrc.slice(mainSrc.indexOf('function installWebContentsGuards'))
+  // P0-4：守卫本体搬进了 `src/backend/main-window.js`。这里读**两份合起来的那一份**，
+  // 并且另钉一条「main.js 真的把它接上了」—— 搬家的风险从来不是判据写错，而是没人调用。
+  const windowSrc = readFileSync(join(ROOT, 'src', 'backend', 'main-window.js'), 'utf8')
+  const hostSrc = mainSrc + '\n' + windowSrc
+  const guards = windowSrc.slice(windowSrc.indexOf('function installWebContentsGuards'))
+  expect(windowSrc.indexOf('function installWebContentsGuards'), 'main-window.js 里找不到守卫本体').toBeGreaterThan(-1)
+  expect(guards.length, '守卫本体短到不可能还挂着五个入口').toBeGreaterThan(800)
   const ATTACHED = ['setWindowOpenHandler', 'will-navigate', 'will-redirect', 'will-frame-navigate', 'will-attach-webview']
 
   for (const ev of ATTACHED) {
@@ -136,12 +142,28 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
     }
   })
 
-  it('防空转：main.js 里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
-    const seen = [...mainSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => grp(m, 1, '导航事件清单'))
+  it('防空转：宿主里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
+    const seen = [...hostSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => grp(m, 1, '导航事件清单'))
     const unexpected = seen.filter((e) => !ATTACHED.includes(e))
     expect(unexpected, `未挂守卫的导航事件：${unexpected.join(', ')}`).toEqual([])
     for (const ev of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {
-      expect(seen, `main.js 不再监听 ${ev} —— 守卫被删了？`).toContain(ev)
+      expect(seen, `宿主不再监听 ${ev} —— 守卫被删了？`).toContain(ev)
     }
+  })
+
+  it('守卫的接线链完整：main.js → ipc-misc.js → main-window.js（搬家后最怕的是没人调用）', () => {
+    const miscSrc = readFileSync(join(ROOT, 'src', 'backend', 'ipc-misc.js'), 'utf8')
+    // ① main.js 拿到模块里的实现，并带着共享计数器包一层
+    expect(mainSrc).toContain("require('./src/backend/main-window')")
+    expect(mainSrc).toContain('installWindowGuards(contents, guardsCtx)')
+    expect(mainSrc).toContain('counters: securityCounters')
+    // ② 统一装在 `web-contents-created` 上（只给主窗口挂一遍会漏掉预览窗/DevTools）
+    const at = miscSrc.indexOf("app.on('web-contents-created'")
+    expect(at, 'ipc-misc.js 不再用 web-contents-created 统一装守卫').toBeGreaterThan(-1)
+    expect(miscSrc.slice(at, at + 200)).toContain('installWebContentsGuards(contents)')
+    // ③ main.js 把这个入口交给 ipc-misc
+    expect(miscSrc).toContain('installWebContentsGuards')
+    expect(mainSrc.slice(mainSrc.indexOf('registerMiscIpc'), mainSrc.indexOf('registerMiscIpc') + 1500))
+      .toContain('installWebContentsGuards')
   })
 })
