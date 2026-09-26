@@ -51,8 +51,6 @@ export declare function isServiceBizType(t: number | undefined): boolean;
  * @returns contact names (remark > nick > username), pinned set, biz types.
  */
 export declare function contactMeta(decryptedDir: string): ContactMeta;
-/** SenderName2Id fallback (message_resource.db rowid -> wxid). */
-export declare function senderNameMap(decryptedDir: string): Map<number, string>;
 /** One cached shard entry: which file holds a table and its columns/name map. */
 export interface ShardMeta {
     file: string;

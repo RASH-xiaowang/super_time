@@ -551,4 +551,39 @@ export const MUTATIONS_BATCH3B = [
     to: "const FLAG_FRESH_MS = 3_153_600_000",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
   },
+
+  // ── P3-8：零引用导出的处置结果（`p3-8-export-discipline.spec.ts` 的四条判据各配一条）──
+  // `to` 一律收成**单行**（两条声明挨着写是合法 TS），免得在 CRLF 文件里插进裸 LF。
+  {
+    id: "M289-dead-export-resurrected",
+    why: "把已确认零引用并删掉的 resolveImageMd5 再导出一次（单条版又长在批条旁边）⇒ 「全仓不许再导出这四条」那条判据必须红；它是 P3-8 的主判据，红不了就等于清单是空的",
+    file: "src/backend/wechat-data/src/query/media-image.ts",
+    from: "export function detectImageFormat(header: Uint8Array): string {",
+    to: "export function resolveImageMd5(decryptedDir: string, username: string, localId: number): string | null { return resolveImageResourceHint(decryptedDir, username, localId).md5 }export function detectImageFormat(header: Uint8Array): string {",
+    spec: "src/backend/wechat-data/tests/p3-8-export-discipline.spec.ts",
+  },
+  {
+    id: "M290-key-types-second-source-of-number",
+    why: "在 keys/types.ts 里重新长出「共享常量」PAGE_SIZE ⇒ 同一个数字又有两处出处而只有一处承重（db-key-v4 用的还是它自己那份），这条正是 P3-8 报的那件事",
+    file: "src/backend/wechat-data/src/keys/types.ts",
+    from: "/** A recovered database key result. */",
+    to: "export const PAGE_SIZE = 4096/** A recovered database key result. */",
+    spec: "src/backend/wechat-data/tests/p3-8-export-discipline.spec.ts",
+  },
+  {
+    id: "M291-hamming-wiring-reverted-to-inline",
+    why: "把 selectByHamming 的取用点改回逐字内联的两次 popcount 异或相加 ⇒ 导出面还在、行为一字不差，但那条导出又变成「没人用的装饰」，公式重新有了第二处出处 —— 只有「必须有调用点」那条判据抓得到这种形状",
+    file: "src/backend/wechat-data/src/query/vector-math.ts",
+    from: "const d = hammingDistance(r, qh)",
+    to: "const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0)",
+    spec: "src/backend/wechat-data/tests/p3-8-export-discipline.spec.ts",
+  },
+  {
+    id: "M292-dead-name-smuggled-through-named-reexport",
+    why: "用 `export { 真名 as 死名 }` 把删掉的名字换根 barrel 走私回来 ⇒ 只认 `export function` 那种形状的判据会静默放行（本仓的 search.ts 就整份是具名再导出）；反例自证那一节就是为这条写的",
+    file: "src/backend/wechat-data/src/keys/db-key-verify.ts",
+    from: "/** Read only the first database page (verification needs just the header page). */",
+    to: "export { verifyDbKey as senderNameMap }/** Read only the first database page (verification needs just the header page). */",
+    spec: "src/backend/wechat-data/tests/p3-8-export-discipline.spec.ts",
+  },
 ]

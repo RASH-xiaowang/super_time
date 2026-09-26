@@ -161,11 +161,6 @@ export function resetQueueGuardForTest(): void {
   drains.clear()
 }
 
-/** 该数据根当下是否有执行器在跑（诊断与用例用）。 */
-export function isQueueRunning(decryptedDir: string): boolean {
-  return drains.has(kbFilesDbPath(decryptedDir))
-}
-
 /**
  * 认领下一个待解析的文件：把它从 `queued` 推进到 `parsing` 并返回它的元数据。
  *

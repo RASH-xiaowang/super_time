@@ -608,12 +608,6 @@ export async function searchDense(
   return { docs: top.map(x => x.doc), scores: top.map(x => x.score) }
 }
 
-/** 计算一条查询文本的向量（供测试与消融实验复用）。 */
-export async function embedOne(text: string, embed: EmbedFn): Promise<Float32Array> {
-  const v = await embed([text])
-  return l2normalize(v[0] ?? [])
-}
-
 /** 向量库摘要（前端「数据健康」用）。 */
 export function vectorIndexSummary(decryptedDir: string): { rows: number; dim: number; model: string } {
   const s = vectorIndexStatus(decryptedDir)

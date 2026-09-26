@@ -187,29 +187,6 @@ export function contactMeta(decryptedDir: string): ContactMeta {
   })
 }
 
-/** SenderName2Id fallback (message_resource.db rowid -> wxid). */
-export function senderNameMap(decryptedDir: string): Map<number, string> {
-  const p = join(decryptedDir, 'message', 'message_resource.db')
-  const sig = fileSig(p)
-  return get<Map<number, string>>('sender-names:' + decryptedDir, sig, () => {
-    const map = new Map<number, string>()
-    if (!sig) return map
-    try {
-      const db = new DatabaseSync(p, { readOnly: true })
-      try {
-        const rows = db.prepare('SELECT rowid AS id, user_name AS u FROM SenderName2Id').all() as Array<{ id: number; u: unknown }>
-        for (const row of rows) {
-          const u = decode(row.u).trim()
-          if (u) map.set(row.id, u)
-        }
-      } catch { /* table absent */ } finally {
-        db.close()
-      }
-    } catch { /* resource db unavailable */ }
-    return map
-  })
-}
-
 /** One cached shard entry: which file holds a table and its columns/name map. */
 export interface ShardMeta {
   file: string

@@ -78,8 +78,6 @@ export declare function searchDense(decryptedDir: string, queryText: string, emb
     scores: number[];
     note?: string;
 }>;
-/** 计算一条查询文本的向量（供测试与消融实验复用）。 */
-export declare function embedOne(text: string, embed: EmbedFn): Promise<Float32Array>;
 /** 向量库摘要（前端「数据健康」用）。 */
 export declare function vectorIndexSummary(decryptedDir: string): {
     rows: number;

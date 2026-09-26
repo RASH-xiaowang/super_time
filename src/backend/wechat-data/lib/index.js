@@ -15985,7 +15985,7 @@ function selectByHamming(rows, qh, pool) {
   for (let i = 0; i < n; i += 1) {
     const r = rows[i];
     if (!r) continue;
-    const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0);
+    const d = hammingDistance(r, qh);
     dist[i] = d;
     hist[d] = (hist[d] ?? 0) + 1;
   }
@@ -16015,6 +16015,9 @@ function selectByHamming(rows, qh, pool) {
     if (at < take) out[at] = r;
   }
   return out;
+}
+function hammingDistance(a, b) {
+  return popcount32((a.lo ^ b.lo) >>> 0) + popcount32((a.hi ^ b.hi) >>> 0);
 }
 
 // src/backend/wechat-data/src/query/retrieval/embedding.ts

@@ -182,7 +182,7 @@ export function selectByHamming(rows: readonly HashRow[], qh: { lo: number; hi: 
   for (let i = 0; i < n; i += 1) {
     const r = rows[i]
     if (!r) continue
-    const d = popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0)
+    const d = hammingDistance(r, qh)
     dist[i] = d
     // 直方图格子读不到只可能是下标越界（`d` 由两次 32 位 popcount 相加 ⇒ 恒在 [0,64]），
     // 而 `?? 0` 与原来的 `hist[d] += 1` 在越界时同样是什么都不做，没有行为分歧。

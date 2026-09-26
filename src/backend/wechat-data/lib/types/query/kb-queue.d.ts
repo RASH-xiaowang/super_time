@@ -69,8 +69,6 @@ export interface KbQueueReport {
 }
 /** 仅供用例清掉「正在跑」的进程内记忆。 */
 export declare function resetQueueGuardForTest(): void;
-/** 该数据根当下是否有执行器在跑（诊断与用例用）。 */
-export declare function isQueueRunning(decryptedDir: string): boolean;
 /**
  * 把队列里所有 `queued` 的文件解完。
  *

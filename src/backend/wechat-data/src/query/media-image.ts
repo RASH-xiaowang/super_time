@@ -242,17 +242,6 @@ function dataIndexOf(v: unknown): string {
 }
 
 /**
- * Resolve the image MD5 for (username, local_id).
- * @param decryptedDir - decrypted data root.
- * @param username - conversation username.
- * @param localId - message local id.
- * @returns the 32-char hex image MD5, or null when not found.
- */
-export function resolveImageMd5(decryptedDir: string, username: string, localId: number): string | null {
-  return resolveImageResourceHint(decryptedDir, username, localId).md5
-}
-
-/**
  * Detect an image format from a decrypted header.
  * @param header - leading bytes of the (decrypted) image.
  * @returns the format name ('png' / 'jpg' / 'gif' / ...), or 'bin' when unknown.
