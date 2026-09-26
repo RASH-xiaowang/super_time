@@ -13,6 +13,7 @@ import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
 import { fmtCommentTime, imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
 import { proxyableSrc } from '../utils/url.ts'
+import { videoCoverKey } from './moments-media.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -321,7 +322,7 @@ export function MomentsDetail({
             {detail.m.videos.length > 0 && (
               <div className={css.videos}>
                 {detail.m.videos.map((v, vi) => {
-                  const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
+                  const vk = videoCoverKey(v)
                   const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
                   const src = vk ? videoSrcs[vk] : undefined
                   const playing = !!src

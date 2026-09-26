@@ -19,11 +19,12 @@ import { MomentsAvatar } from './moments-support.tsx'
 import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
+import { videoCoverKey } from './moments-media.ts'
+import type { MediaKeySpec } from './moments-media.ts'
 import css from './moments.module.css'
 import kitCss from '../ui/kit.module.css'
 
-/** 图片/视频的离线解码请求描述（与面板里 `mediaKeySpec` 的 Map 值同构）。 */
-export interface MediaKeySpec { md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }
+/** 图片/视频的离线解码请求描述定义在媒体层（`moments-media.ts`），卡片只是往那张表里登记。 */
 
 export interface MomentsCardProps {
   m: MomentItem
@@ -141,7 +142,7 @@ export function MomentsCard({
         {m.videos.length > 0 && (
           <div className={css.videos}>
             {m.videos.map((v, vi) => {
-              const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
+              const vk = videoCoverKey(v)
               const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
               if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
               const src = vk ? videoSrcs[vk] : undefined

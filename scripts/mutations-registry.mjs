@@ -7,17 +7,22 @@
  * 二百多行，只有表会涨；表再涨到上限时按批次切成 `mutations-registry.<批次>.mjs` 由这里聚合，
  * 不要靠放宽闸门解决。
  *
+ * **已经照此切过一次**（2026-09-26 第三批）：`mutations-registry.batch3.mjs` 装 M118 起的条目，
+ * 主表停在 M117。加新条目的落点 = 你这一条属于哪个批次；第四批再涨就再切一个 `batch4`。
+ *
  * ── 加新条目 ──────────────────────────────────────────────────────────────
  * `file` 是**相对仓库根**的路径，`from`/`to` 是逐字文本，`spec` 是必须变红的用例文件。
  * `from` 必须在该文件里**唯一**（命中 0 次或多处都判「锚点失效」，不算通过）。
+ * 锚点别照 Read 的输出手敲（前导空格是内容的一部分），从文件里现取。
  * 写完先跑 `node scripts/mutation-check.mjs --only <id>` 自证。
  */
+import { MUTATIONS_BATCH3 } from './mutations-registry.batch3.mjs'
 
 /**
- * 变异清单。
+ * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
  * @type {ReadonlyArray<{ id: string, why: string, file: string, from: string, to: string, spec: string }>}
  */
-export const MUTATIONS = [
+const MUTATIONS_BATCH12 = [
   {
     id: 'M1-grid-gap',
     why: '宽档栅格间距被改小 1px —— layout-tokens.spec 必须发现基准与真源已漂移',
@@ -930,68 +935,7 @@ export const MUTATIONS = [
     to: "    // 不让出",
     spec: "src/backend/wechat-data/tests/graph-privacy-fanout.spec.ts",
   },
-  {
-    id: "M118-cycles-scc-never-reports",
-    why: "SCC 只在一半以上才认环 —— 恒不 push ⇒ 「环 0 个」永远成立，整张守卫变装饰。咬住它的必须是「临时造一个三方环」那条反例自证",
-    file: "src/backend/tests/module-cycle-guard.spec.ts",
-    from: "        if (comp.length > 1) out.push(comp.sort())",
-    to: "        if (false) out.push(comp.sort())",
-    spec: "src/backend/tests/module-cycle-guard.spec.ts",
-  },
-  {
-    id: "M119-cycles-counts-type-only-imports",
-    why: "把 `import type` 也当成依赖边：编译期会被擦掉的东西算进运行期图 ⇒ 多报一个假环（chats-thread ↔ Chats），零容忍闸门从此拦不住真事",
-    file: "src/backend/tests/module-cycle-guard.spec.ts",
-    from: "      if (!typeOnly && !namedTypeOnlyOnly && ts.isStringLiteral(spec)) specs.push(spec.text)",
-    to: "      if (ts.isStringLiteral(spec)) specs.push(spec.text)",
-    spec: "src/backend/tests/module-cycle-guard.spec.ts",
-  },
-  {
-    id: "M120-cycles-drops-renderer-tree",
-    why: "扫描根只剩后端树：渲染层的环悄悄不查（而且看起来仍然全绿）。口径靠「两个文件都不在图里 ⇒ 上面那条是空转」这条断言咬住",
-    file: "src/backend/tests/module-cycle-guard.spec.ts",
-    from: "  join(ROOT, 'src', 'backend', 'wechat-data', 'src'),\n  join(ROOT, 'src', 'client', 'ui-wechat', 'src'),",
-    to: "  join(ROOT, 'src', 'backend', 'wechat-data', 'src'),",
-    spec: "src/backend/tests/module-cycle-guard.spec.ts",
-  },
-  {
-    id: "M121-cycles-reintroduce-search-ring",
-    why: "在真实回归点上咬：把 `search-scaffold.ts` 里那条**死 import**（第三批 #21 为解环删掉的 `ensureSearchIndex`）加回来，scaffold→build→query→scaffold 就重新成环。守卫必须在真文件上变红，而不是只在合成夹具上",
-    file: "src/backend/wechat-data/src/query/search-scaffold.ts",
-    from: "import { withDb } from './db-open.ts'",
-    to: "import { withDb } from './db-open.ts'\nimport { ensureSearchIndex } from './search-build.ts'",
-    spec: "src/backend/tests/module-cycle-guard.spec.ts",
-  },
-  {
-    id: "M122-moments-scope-drops-dateFrom-dep",
-    why: "把 `criteria.dateFrom` 从 scopeMoments 那次 useMemo 的依赖里抹掉 —— 这就是改前那个缺陷的形状（函数体读日期、依赖里却没有）。纯函数表全绿，只有 jsdom 真渲染那条与 AST 契约该红",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.ts",
-    from: "      criteria.dateFrom, criteria.dateTo, criteria.order],",
-    to: "      criteria.dateTo, criteria.order],",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.spec.ts",
-  },
-  {
-    id: "M123-moments-scope-date-upper-bound-exclusive",
-    why: "结束日按当天 00:00 算而不是 23:59:59 ⇒ 选「到 9-03」会把 9-03 那天的动态全部丢掉（闭区间变成开区间）",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.ts",
-    from: "  return date ? Math.floor(new Date(date + 'T23:59:59').getTime() / 1000) : 0",
-    to: "  return date ? Math.floor(new Date(date + 'T00:00:01').getTime() / 1000) : 0",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.spec.ts",
-  },
-  {
-    id: "M124-moments-scope-contract-anchor-moves",
-    why: "AST 契约里认的钩子从 `useMemo` 改成 `useCallback` ⇒ 再也找不到那次 memo，`deps` 恒 null，「逐字段对齐」退化成比空表（判据自己失明时必须有形状哨兵来报）",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.spec.ts",
-    from: "node.expression.text === 'useMemo'",
-    to: "node.expression.text === 'useCallback'",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.spec.ts",
-  },
-  {
-    id: "M125-moments-scope-monthly-fallback-ignores-author",
-    why: "月度分布退回本地统计时不再按选中的作者收窄 ⇒ 柱子和列表说的不是同一件事（后端快照正常时看不出，快照失败那天才露馅）",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.ts",
-    from: "  const scope = author ? moments.filter((m) => m.author === author) : moments",
-    to: "  const scope = moments",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-scope.spec.ts",
-  },
 ]
+
+/** 全表：一、二批在前，第三批由旁边那个文件拼进来（跑手只看这一个名字）。 */
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3]
