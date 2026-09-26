@@ -37,7 +37,6 @@ import type { StreamControl } from './query/zip.ts'
 import { getConfig } from './query/config.ts'
 import { recordExport } from './query/export-history.ts'
 import { recordAsk } from './query/ask-history.ts'
-import { loadRetrievalConfig } from './query/retrieval/config.ts'
 import { type EmbedFn } from './query/retrieval/embedding.ts'
 import {
   kbModelOverrideCounts,
@@ -58,6 +57,7 @@ import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, STREAM_JOB_CAP, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
 import type { PrivacyGateResult } from './gateway-privacy.ts'
+import { embedModelNameOf, globalModelNameOf, kbModelOf } from './gateway-models.ts'
 import { DEFAULT_OUTBOUND_DETAIL, outboundBlockedAt, privacyBlockedAt, privacyGateAt } from './gateway-privacy.ts'
 
 /** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
@@ -354,57 +354,33 @@ export abstract class GatewayCore extends TypertRemoteService {
     }
   }
 
-  /**
-   * 「这次 embedding 实际用的模型名」—— 由 LLM 桥回答，与它自己发请求时用的是**同一个解析**。
-   *
-   * 为什么不在这里自己拼一遍优先级：那等于第二次实现宿主侧的 `override || embeddingModel || model`
-   * 规则，而两处规则一旦漂移，向量库里记的模型名就成了一个没人用得上的字符串 ——
-   * 「换没换嵌入模型」的判定恰恰读的就是它（`§7 F1`：此前这边记 `'default'`、那边发 llm.json 的值，
-   * 于是换模型永远不触发重建，旧向量被当成新模型的用）。所以记账名**必须**由发送方给出。
-   * 桥未提供该方法时（测试桩）退回 override 本身。
+    /**
+   * 「这次 embedding 实际用的模型名」—— 解析在 `gateway-models.ts#embedModelNameOf`
+   * （#20 第二个协作者）。记账名必须由发送方给出，见那份模块里 §7 F1 那段。
    * @param override - 显式指定的模型名（可空）。
    * @returns 生效模型名；未配置时为空串。
    */
   protected embedModelName(override = ''): string {
-    const llmAny = this._ctx.llm as unknown as { embeddingModelName?: (o?: string) => string }
-    if (typeof llmAny?.embeddingModelName !== 'function') return override
-    return String(llmAny.embeddingModelName(override) ?? '')
+    return embedModelNameOf(this._ctx.llm, override)
   }
 
   /**
-   * 某个角色的**全局**生效模型名（还没叠库级覆盖）。
-   *
-   * 三个角色都从宿主桥取值：桥是唯一知道「实际会发出去什么」的地方，
-   * 网关自己再拼一遍优先级就会重新制造 §7 F1 那种两条链各算一次的局面。
+   * 某个角色的**全局**生效模型名（还没叠库级覆盖）；实现见 `gateway-models.ts`。
    * @param role - 语言 / 嵌入 / 重排序。
    * @returns 模型名；空串 = 这个角色没配。
    */
   protected globalModelName(role: KbModelRole): string {
-    if (role === 'embed') return this.embedModelName(loadRetrievalConfig(this._dirs.decrypted).embedding.model)
-    const llmAny = this._ctx.llm as unknown as { rerankModelName?: () => string; config?: { model?: string; rerankModel?: string } }
-    if (role === 'rerank') {
-      if (typeof llmAny?.rerankModelName === 'function') return String(llmAny.rerankModelName() ?? '')
-      return String(llmAny?.config?.rerankModel ?? '')
-    }
-    const sel = (this._ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { model?: string } }
-    }).agentDefaultModel?.currentSelection?.()
-    return String(sel?.model ?? llmAny?.config?.model ?? '')
+    return globalModelNameOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, role)
   }
 
   /**
-   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）。
-   *
-   * 每次调用都重读设置：`llm.json` 那条链就是「改完下一次生效、不必重启」的语义，
-   * 这里缓存住就会让库级覆盖比全局配置更难改。一次 SQLite 主键查是微秒级，不心疼。
+   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）；实现见 `gateway-models.ts`。
    * @param kbId - 知识库 id（非法时等价于「没有库级覆盖」）。
    * @param role - 哪个角色。
    * @returns 解析结果（含来源，界面与审计都要用它说话）。
    */
   protected kbModel(kbId: number, role: KbModelRole): ResolvedModel {
-    const s = readKbModelSettings(this._dirs.decrypted, kbId)
-    const ref = role === 'chat' ? s.chatRef : role === 'embed' ? s.embedRef : s.rerankRef
-    return resolveModelRef(ref, this.globalModelName(role))
+    return kbModelOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, kbId, role)
   }
 
   /**

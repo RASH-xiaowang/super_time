@@ -27771,6 +27771,29 @@ function createExportRemotes(rc) {
 // src/backend/wechat-data/src/gateway-core.ts
 import { BlockAssembler as BlockAssembler5, createUserMessage as createUserMessage5 } from "@deepseek-ai/dsh-llm";
 
+// src/backend/wechat-data/src/gateway-models.ts
+function embedModelNameOf(bridge, override = "") {
+  const llm = bridge;
+  if (typeof llm?.embeddingModelName !== "function") return override;
+  return String(llm.embeddingModelName(override) ?? "");
+}
+function globalModelNameOf(source, role) {
+  const llm = source.bridge;
+  const host = source.host;
+  if (role === "embed") return embedModelNameOf(llm, loadRetrievalConfig(source.decryptedDir).embedding.model);
+  if (role === "rerank") {
+    if (typeof llm?.rerankModelName === "function") return String(llm.rerankModelName() ?? "");
+    return String(llm?.config?.rerankModel ?? "");
+  }
+  const sel = host?.agentDefaultModel?.currentSelection?.();
+  return String(sel?.model ?? llm?.config?.model ?? "");
+}
+function kbModelOf(source, kbId, role) {
+  const s = readKbModelSettings(source.decryptedDir, kbId);
+  const ref = role === "chat" ? s.chatRef : role === "embed" ? s.embedRef : s.rerankRef;
+  return resolveModelRef(ref, globalModelNameOf(source, role));
+}
+
 // src/backend/wechat-data/src/gateway-privacy.ts
 var DEFAULT_OUTBOUND_DETAIL = "\u628A\u6570\u636E\u53D1\u9001\u7ED9\u6A21\u578B";
 function outboundBlockedAt(decryptedDir) {
@@ -28060,52 +28083,30 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
     };
   }
   /**
-   * 「这次 embedding 实际用的模型名」—— 由 LLM 桥回答，与它自己发请求时用的是**同一个解析**。
-   *
-   * 为什么不在这里自己拼一遍优先级：那等于第二次实现宿主侧的 `override || embeddingModel || model`
-   * 规则，而两处规则一旦漂移，向量库里记的模型名就成了一个没人用得上的字符串 ——
-   * 「换没换嵌入模型」的判定恰恰读的就是它（`§7 F1`：此前这边记 `'default'`、那边发 llm.json 的值，
-   * 于是换模型永远不触发重建，旧向量被当成新模型的用）。所以记账名**必须**由发送方给出。
-   * 桥未提供该方法时（测试桩）退回 override 本身。
-   * @param override - 显式指定的模型名（可空）。
-   * @returns 生效模型名；未配置时为空串。
-   */
+  * 「这次 embedding 实际用的模型名」—— 解析在 `gateway-models.ts#embedModelNameOf`
+  * （#20 第二个协作者）。记账名必须由发送方给出，见那份模块里 §7 F1 那段。
+  * @param override - 显式指定的模型名（可空）。
+  * @returns 生效模型名；未配置时为空串。
+  */
   embedModelName(override = "") {
-    const llmAny = this._ctx.llm;
-    if (typeof llmAny?.embeddingModelName !== "function") return override;
-    return String(llmAny.embeddingModelName(override) ?? "");
+    return embedModelNameOf(this._ctx.llm, override);
   }
   /**
-   * 某个角色的**全局**生效模型名（还没叠库级覆盖）。
-   *
-   * 三个角色都从宿主桥取值：桥是唯一知道「实际会发出去什么」的地方，
-   * 网关自己再拼一遍优先级就会重新制造 §7 F1 那种两条链各算一次的局面。
+   * 某个角色的**全局**生效模型名（还没叠库级覆盖）；实现见 `gateway-models.ts`。
    * @param role - 语言 / 嵌入 / 重排序。
    * @returns 模型名；空串 = 这个角色没配。
    */
   globalModelName(role) {
-    if (role === "embed") return this.embedModelName(loadRetrievalConfig(this._dirs.decrypted).embedding.model);
-    const llmAny = this._ctx.llm;
-    if (role === "rerank") {
-      if (typeof llmAny?.rerankModelName === "function") return String(llmAny.rerankModelName() ?? "");
-      return String(llmAny?.config?.rerankModel ?? "");
-    }
-    const sel = this._ctx.agentDefaultModel?.currentSelection?.();
-    return String(sel?.model ?? llmAny?.config?.model ?? "");
+    return globalModelNameOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, role);
   }
   /**
-   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）。
-   *
-   * 每次调用都重读设置：`llm.json` 那条链就是「改完下一次生效、不必重启」的语义，
-   * 这里缓存住就会让库级覆盖比全局配置更难改。一次 SQLite 主键查是微秒级，不心疼。
+   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）；实现见 `gateway-models.ts`。
    * @param kbId - 知识库 id（非法时等价于「没有库级覆盖」）。
    * @param role - 哪个角色。
    * @returns 解析结果（含来源，界面与审计都要用它说话）。
    */
   kbModel(kbId, role) {
-    const s = readKbModelSettings(this._dirs.decrypted, kbId);
-    const ref = role === "chat" ? s.chatRef : role === "embed" ? s.embedRef : s.rerankRef;
-    return resolveModelRef(ref, this.globalModelName(role));
+    return kbModelOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, kbId, role);
   }
   /**
    * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）。
