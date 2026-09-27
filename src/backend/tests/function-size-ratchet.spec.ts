@@ -70,7 +70,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  285',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  282',
   'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  270',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  259',
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  265',
 ]

@@ -28,8 +28,12 @@ const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 
 /** 合成消息总数（条目验收口径就是「1 万条」）。 */
 const TOTAL = 10_000
+/** 收藏夹具条数（#22 推广的第二处：面板分页 120 条一页，2400 条 = 20 页，够把"无界增长"逼出来）。 */
+const FAV_TOTAL = 2400
 /** DOM 节点硬上界：虚拟化后只渲染视口附近（含 overscan），300 已很宽松。 */
 const MAX_DOM_NODES = 300
+/** 收藏卡片的上界（卡片比消息行高，一屏十几张；200 已经宽松到能容纳 overscan + 测高抖动）。 */
+const MAX_FAV_DOM_NODES = 200
 const USER = 'wxid_n18'
 const SESSION_NAME = 'N18 长列表夹具'
 
@@ -79,6 +83,20 @@ function makeFixture(userData) {
   }
   mdb.exec('COMMIT')
   mdb.close()
+
+  // 收藏夹具（#22 推广的第二处长列表）：`favorite/favorite.db` 的 `fav_db_item`，
+  // 后端按 `update_time DESC` 出，所以 local_id 最大的那条排在列表**最前**。
+  mkdirSync(join(decrypted, 'favorite'), { recursive: true })
+  const fdb = new DatabaseSync(join(decrypted, 'favorite', 'favorite.db'))
+  fdb.exec('CREATE TABLE fav_db_item (local_id INTEGER, type INTEGER, update_time INTEGER, content TEXT, fromusr TEXT, realchatname TEXT)')
+  const fins = fdb.prepare('INSERT INTO fav_db_item VALUES (?,?,?,?,?,?)')
+  fdb.exec('BEGIN')
+  for (let i = 1; i <= FAV_TOTAL; i += 1) {
+    const desc = i % 7 === 0 ? '摘要：' + '这一段故意写得长一些，让卡片高度真的不一样。'.repeat(4) : `收藏条目 ${i}`
+    fins.run(i, 1, 1700000000 + i, `<fav><title>收藏 ${i}</title><desc>${desc}</desc><fromusr>wxid_fav_owner</fromusr></fav>`, 'wxid_fav_owner', '')
+  }
+  fdb.exec('COMMIT')
+  fdb.close()
   return decrypted
 }
 
@@ -209,6 +227,61 @@ try {
   await win.waitForTimeout(600)
   const lastVisible = await win.locator(`#msg-${TOTAL}`).count()
   check(lastVisible > 0, `滚到底能看到最后一条（#msg-${TOTAL}）`, '')
+
+  /*
+   * —— 第二处：收藏面板（#22「推广」那半条）——
+   * 收藏原先也是渐进窗口（首屏 120、滚到底再增、只增不减）。这里把同一把尺子套上去：
+   * 分页翻到底 ⇒ 记 DOM 里卡片数（必须与已加载条数解耦），再看两端是否各自可达。
+   * 卡片选择器用 `data-fav-id`（后端按 update_time DESC 出，所以最大 id 在最前、最小 id 在最后）。
+   */
+  const favBtn = win.getByRole('button', { name: '收藏与表情', exact: true })
+  await favBtn.waitFor({ state: 'visible', timeout: 20000 })
+  await favBtn.click()
+  await win.waitForSelector('[data-fav-id]', { timeout: 20000 })
+
+  // 找到卡片所在的滚动容器（CSS Modules 类名是哈希的，按"能滚的祖先"找）
+  const favBox = await win.locator('[data-fav-id]').first().evaluateHandle((el) => {
+    let p = el.parentElement
+    while (p && p.scrollHeight <= p.clientHeight + 4) p = p.parentElement
+    return p
+  })
+  // 反复滚到底把分页翻完（哨兵在容器底部，靠 IntersectionObserver 触发下一页）
+  let favLoaded = 0
+  for (let i = 0; i < 120; i += 1) {
+    await favBox.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await win.waitForTimeout(260)
+    const n = Number(((await win.locator('body').innerText()).match(/全部 \((\d+)\)/) || [])[1] ?? '0')
+    if (n >= FAV_TOTAL) { favLoaded = n; break }
+    if (i > 4 && n === favLoaded) {
+      // 连续两轮没长大 ⇒ 分页已经停了（没有下一页可翻），别再空转
+      await win.waitForTimeout(600)
+      if (n === favLoaded) break
+    }
+    favLoaded = n
+  }
+  check(favLoaded >= FAV_TOTAL, `收藏分页能翻到全部（实测「全部 (${favLoaded})」，夹具 ${FAV_TOTAL} 条）`, '')
+
+  await win.waitForTimeout(400)
+  // 滚到底要**反复滚**：最后几页是刚追加的，`measureElement` 会在这期间把估高换成真实高度，
+  // 于是 scrollHeight 自己会长 —— 一次 `scrollTop = scrollHeight` 会差几行没到底
+  // （消息流那侧没有分页，一次就够；这里必须循环，否则测的是"没滚到位"而不是"到不了底"）。
+  let atFavBottom = false
+  for (let i = 0; i < 15 && !atFavBottom; i += 1) {
+    await favBox.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await win.waitForTimeout(250)
+    atFavBottom = await win.locator('[data-fav-id="1"]').count() > 0
+  }
+  const favNodesAtBottom = await win.locator('[data-fav-id]').count()
+  check(atFavBottom, '滚到底能看到最旧一条（data-fav-id=1）', '')
+  check(favNodesAtBottom <= MAX_FAV_DOM_NODES,
+    `收藏 DOM 卡片数有硬上界（底部实测 ${favNodesAtBottom} ≤ ${MAX_FAV_DOM_NODES}，已加载 ${favLoaded} 条）`, `nodes=${favNodesAtBottom}`)
+
+  await favBox.evaluate((el) => { el.scrollTop = 0 })
+  await win.waitForTimeout(600)
+  const favNodesAtTop = await win.locator('[data-fav-id]').count()
+  check(await win.locator(`[data-fav-id="${FAV_TOTAL}"]`).count() > 0, `滚到顶能看到最新一条（data-fav-id=${FAV_TOTAL}）`, '')
+  check(favNodesAtTop <= MAX_FAV_DOM_NODES,
+    `回到顶部后 DOM 卡片数仍有上界（实测 ${favNodesAtTop} ≤ ${MAX_FAV_DOM_NODES}）—— 渐进窗口的形状在这里必红`, `nodes=${favNodesAtTop}`)
 
   await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n18-longlist.png') }).catch(() => {})
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))
