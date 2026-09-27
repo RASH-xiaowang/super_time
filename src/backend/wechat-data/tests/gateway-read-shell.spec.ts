@@ -263,6 +263,17 @@ function readProbes(gw: WechatDataGateway): Array<{ name: string; call: () => un
 }
 
 /** 目录树的稳定指纹：相对路径 + 大小 + mtime（读操作一旦落盘就必然动其中某项）。 */
+/**
+ * 仓库树的指纹：**路径 + 大小**，不记 `mtime`。
+ *
+ * 为什么不记 mtime（2026-09-27 实测踩到）：这条判据量的是「读接口有没有往仓库里**写**」，
+ * 而 mtime 会被**任何**并发动作改动 —— 同一轮 `npm test` 里只要有别的 spec 在 `src/` / `wechat/`
+ * 下创建/删除一个临时目录（本仓确实有：whisper 那一族会 `mkdirSync`/`rmdirSync` 仓库里的
+ * 随包目录），这份 before/after 快照就会按索引错位，报出「读接口动了仓库里的文件」的假红。
+ * 那是"单机恒绿、CI 偶发红"的典型形状（与工具记忆里"跨进程/采样类判据不许依赖时序"同族）。
+ * 路径与大小已经覆盖这条判据要防的真实事故（whisper/bin 那类**创建路径**），
+ * 而"读接口把某个文件原地重写成同样大小"不在它的射程里 —— 那由内容级判据去管。
+ */
 function fingerprint(dir: string): string[] {
   const out: string[] = []
   const walk = (d: string): void => {
@@ -274,7 +285,7 @@ function fingerprint(dir: string): string[] {
         continue
       }
       const st = statSync(abs)
-      out.push(`${abs}|${String(st.size)}|${String(st.mtimeMs)}`)
+      out.push(`${abs}|${String(st.size)}`)
     }
   }
   out.push(`${dir}|root`)

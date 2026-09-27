@@ -72,12 +72,21 @@ function planNumbers(section: string): number[] {
   return [...out].sort((a, b) => a - b)
 }
 
-/** 台账里提到过的序号（`#12` 这种写法，包括「M365–M369」式正文里的 `#19`）。 */
+/**
+ * 台账里提到过的序号 —— **只认每行首列**（「清单项」那一格）。
+ *
+ * 为什么收窄到首列：2026-09-27 实测踩到自喂 —— 我在某一行**备注里**写了「#12 其实早做完了」，
+ * 于是把那行的 `#12` 标记删掉之后判据仍然全绿（那个序号在备注里还有）。备注是解释，
+ * 不是"这一行认领了哪一条"；认领关系必须写在首列，这也是人翻表时的读法。
+ */
 function ledgerNumbers(section: string): Set<number> {
   const out = new Set<number>()
-  for (const m of section.matchAll(/#(\d{1,3})/g)) {
-    const n = Number.parseInt(m[1] ?? '', 10)
-    if (Number.isFinite(n)) out.add(n)
+  for (const line of section.split('\n')) {
+    const first = line.startsWith('|') ? (line.split('|')[1] ?? '') : ''
+    for (const m of first.matchAll(/#(\d{1,3})/g)) {
+      const n = Number.parseInt(m[1] ?? '', 10)
+      if (Number.isFinite(n)) out.add(n)
+    }
   }
   return out
 }

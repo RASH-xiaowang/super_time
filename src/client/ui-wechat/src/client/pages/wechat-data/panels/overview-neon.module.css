@@ -284,6 +284,47 @@
   opacity: 1;
 }
 .cardHd.cardHd { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+
+/* 「折叠 —」：设计稿每张卡右上角那一枚。
+   它排在 `action`（「详情 →」）之后，字号更小、颜色更淡 —— 视觉上不跟"详情"抢。 */
+.cardToggle {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.cardToggle:hover {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.cardToggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent); outline-offset: 2px; }
+
+/* 折起来的卡片：只留卡头，卡头下沿那条分隔线也就没必要了。
+   ⚠️ 这一条**必须自己写一遍**，而且不能用 `:global`（本仓 `overview-layout.spec.ts` 明令禁止：
+   `:global()` 只会发出裸类名 / 裸选择器，跨模块那点事只能用「本地类 + 属性或子串选择器」）：
+   `hidden` 属性靠 UA 样式表的 `display: none` 生效，
+   而 `.ovCardBd` 自己写着 `display: flex`（作者样式压过 UA 样式）—— 不显式压回去，
+   折起来的卡片会**看上去没折**（内容还在），而 DOM 上 `hidden` 是真的（判据反而全绿）。
+   本仓踩过同一族的坑：`display` 这类"UA 与作者都声明"的属性，属性选择器必须自己写一遍。 */
+.cardBd[hidden] { display: none; }
+
+/* 板面上的英文副标（设计稿里牌面写的是英文，这里保留中文主标、英文做副标） */
+.plateEn {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--nm-text-3) 88%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .cardIcon.cardIcon {
   color: #d9f3ff;
   background: linear-gradient(150deg, color-mix(in srgb, var(--nm-cyan) 30%, transparent), color-mix(in srgb, var(--nm-purple) 28%, transparent));

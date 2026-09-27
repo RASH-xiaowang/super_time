@@ -217,6 +217,7 @@ export function NeonHero({ data, ins, onGo }: {
                 <span className={neon.plateIcon}>{card.icon}</span>
                 <span className={neon.plateValue}>{value}</span>
                 <span className={neon.plateLabel}>{card.label}{sub && <em className={neon.plateSub}> · {sub}</em>}</span>
+                <span className={neon.plateEn}>{card.en}</span>
               </span>
             </button>
           )

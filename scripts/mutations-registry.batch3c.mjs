@@ -545,4 +545,20 @@ export const MUTATIONS_BATCH3C = [
     to: "const loaded = !!body.querySelector('[class*=ovHero]')",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-hero-hook.wiring.spec.ts",
   },
+  {
+    id: "M377-section-collapse-not-honoured",
+    why: "把折叠状态的接收端掐掉（`hidden={collapsed}` → `hidden={false}`）⇒ 按钮还照点、`aria-expanded` 还照翻、localStorage 还照记，**只有内容不折**：DOM 上一切都对，用户看到的却什么都没发生。行为判据（真渲染 + 点一下）量的就是这一下",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-parts.tsx",
+    from: "<div className={css.ovCardBd + ' ' + neon.cardBd} hidden={collapsed}>{children}</div>",
+    to: "<div className={css.ovCardBd + ' ' + neon.cardBd} hidden={false}>{children}</div>",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-section-collapse.spec.ts",
+  },
+  {
+    id: "M378-collapse-css-rule-dropped",
+    why: "删掉 `.cardBd[hidden] { display: none; }` 那一条 ⇒ `hidden` 属性还在、DOM 判据全绿，但 `.ovCardBd` 自己声明的 `display: flex`（作者样式）压过 UA 的 `[hidden]` 规则 ⇒ **折起来的卡片看上去没折**。这条只有「样式那半」的源码断言抓得到，是这一族里最容易漏的一刀",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-neon.module.css",
+    from: ".cardBd[hidden] { display: none; }\n",
+    to: "",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-section-collapse.spec.ts",
+  },
 ]
