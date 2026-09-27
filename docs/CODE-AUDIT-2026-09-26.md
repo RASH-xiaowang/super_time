@@ -34,6 +34,7 @@
 | 工具修复：`check:mutation` 自己改坏了注入内容 | ✅ 完成 | `8a83972` | `String.replace(from, m.to)` 里替换串的 `$&` / `$'` / `` $` `` **是特殊序列** —— 一条 `to` 写成 `new RegExp('^' + X + '$', 'i')` 时，`$'` 被展开成「匹配之后的全部文本」，文件被写成垃圾后报「语法假咬」，看着像这条变异没意义，其实是工具自己变了形（M95 第一次就是这么红的）。改成**函数替换** + 让注入文本跟着锚点走行尾（CRLF 文件里不再塞进裸 LF）。自检 `--self-test` 三条判定路径仍成立，全表 93 条重跑全咬红、逐字节还原 |
 | 第四批（部分）P3-7 / P3-12 / P3-13 / P3-19 | ✅ 完成 | `2570230` | 三处孤立 JSDoc 归位/删除；`getImageDataUrlsBatch` 进 `LONG_CALL_METHODS`（此前批量取图被 60s 误杀成整批失败）；`disposeLayoutWorker` 挂到图谱页签卸载；README 视图数 40 → 实测 90 |
 | 第二批 #10 P1-6 xlsx | 🟡 改判据不动依赖 | `2570230` | 换 SheetJS CDN 源是**依赖面变更**（要联网重装 + 重验知识库链），本轮不擅自做；先把「这个项目会不会被那条路径打到」变成可执行判据：`xlsx-parse-hardening.spec.ts` 钉住每处 `sheet_to_json` 都是 `header: 1`（用户单元格永远当值不当键 ⇒ CVE-2023-30533 的键名入口是关着的）+ 真解析两份夹具前后对比 `Object.prototype` |
+| 第二批 #10 P1-6 xlsx（续）：**换源已做** | ✅ 完成（2026-09-27 用户授权之后） | 本次提交 | `package.json` 的 `xlsx` 从 `^0.18.5` 换成 **`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`** —— npm 那一版永久停在带 CVE-2023-30533 / CVE-2024-22363 的 0.18.5（SheetJS 不再向 npm 发布），挂在版本区间上等不到修复。**链路重验**：`kb-b-endtoend` 13 条（真解析 `设备台账.xlsx` + FTS 命中）、`kb-parse-b`、`xlsx-parse-hardening`、`check:shim` / `check:deps-provenance` / `docs:api:check`（172 个方法）全过；`build:backend` 重跑后 `lib/index.js` **一字不变**（`packages: 'external'`，xlsx 从来不打进 bundle，运行期就是那颗 `await import('xlsx')`）。**新增两条判据**（都在 `xlsx-parse-hardening.spec.ts`）：① **判三 读依赖面** —— 声明必须是指向 CDN 的精确 tarball（且 URL 里两段版本号一致）、装出来的 ≥ 0.20.2、**零传递依赖**（不只是洁癖：白名单只列了 `node_modules/xlsx/**/*`，上游再冒传递依赖就是「开发机能跑、装完的软件读不了 Excel」，与 D6 同一条病因）、lockfile 的 `resolved` 与声明同源且带 `sha512` 摘要（只钉地址不钉内容等于没钉）。② **判四 换源前后逐格等价** —— 金标准 `fixtures/kb-b/xlsx-0.18.5.aoa.golden.json` 是**换依赖之前**用 0.18.5 对同批夹具跑出的二维数组（采集脚本与来源都写在文件里的 `_readme`），新版必须逐格相同。判一/判二只保证「还是数组模式、没污染原型」，保证不了 `raw: false` 那套「用户在 Excel 里看到的那串字」的语义 —— 那正是换库最容易悄悄变掉的一环；所以判一随之从「只看 header」升级成「整组选项一字不差」（否则金标准比一组、生产用另一组，等价结论覆盖不到真实路径），并补一条**反例自证**：把金标准里随便一个格子改掉，比较必须报出差异。**打包白名单**：CDN 版把过去 7 个包内联成单文件，于是新增 5 条裁剪（`dist/xlsx.*` 的四份构建 + 映射、`cpexcel.full.mjs`、`shim.min.js`、`bin/**`、`types/**`）⇒ 包内只剩 8 份文件 / 约 2.4MB，**少装 5.5MB**；而 `dist/cpexcel.js` **不能裁**（CJS 入口 `xlsx.js` 会 `require` 它，老式 `.xls` 的代码页靠它），这条判据**不写死文件名**、改成从装上的库的入口里现读 require 清单 ⇒ 上游改名或多带部件都会红。`kb-package-deps` 产物层的传递依赖清单里 `codepage` 随旧版一起删（实测现在自动带的是 `jszip` / `underscore` / `bluebird`），6 条 → 7 条。**产物层实证**（本轮真跑了一次 `npm run pack`）：asar 里 xlsx 8 份文件、旧传递依赖一个不剩；再用**真 Electron** 从 `.asar` 里把两条入口各走一遍（`require('xlsx')` 与 `await import('xlsx')`），读同一份夹具得到与金标准一致的 sheet 名单与首行数据、`error = null`。这次实证顺带钉死一个换源暗坑：**新包带 `exports` 映射而 0.18.5 没有** ⇒ ESM 条件解析到 `xlsx.mjs`、CJS 到 `xlsx.js`（旧版两条都落 `xlsx.js`），两条入口都在包里才谈得上「打包后也能跑」。**如实记一条没复现的**：在 0.18.5 上把表头写成 `__proto__` 再跑默认对象模式，它把键名改成 `__proto___NaN` 而**没有**污染 `Object.prototype` ⇒ 判一是「把门关上」的纪律，不是「挡住过真实攻击」的证据，别当后者引用（已写进该文件头注）。变异 **M365–M369**（声明退回 npm 区间 / 锁里 resolved 换域 / 把 cpexcel 也裁掉 / 把那条裁剪删掉 / `raw:false → true`）逐条咬红、逐字节还原，`REGISTRY_MIN` 360 → 366。全量 **358 文件 / 3720 用例** 绿（9 文件 / 14 用例按环境跳过）、typecheck 5 棵树 0。**为体积记了一条本轮没做的发现**（打包产物 196.65MB、其中 135MB 是没人列进白名单却被自动带上的 `onnxruntime-web`），见「本轮新发现」⑰ |
 | 第二批 #15 P1-5 `file:` 依赖溯源 | ✅ 完成（**打法与报告不同**） | `382d66a` | 新增 `scripts/deps-provenance.mjs`（+ `.d.mts`，按 H11 口径不给 `any`；**`.mjs` 的宿主脚本必须配 `.d.mts`**，配 `.d.ts` 时 TS 根本不认，报的还是 TS7016）：`--write` 生成 `src/backend/deps/PROVENANCE.json`（19 行：`kind`/`path`/`declared`/`version`/`repository` + **整棵目录的内容 sha256** + 文件数 + 字节数），`--check` 复算比对并**以退出码 1 报出**，`--import <包名> <上游目录>` 拷入上游一份并顺手记下那一刻的 commit sha 与日期。报告点名的 `sync-deps.mjs` **没有单独成文件**：「同步」里能自动的只有拷贝，而「该不该拷」必须是人的判断，拆成两个脚本只会得到一个假装自动的拷贝器。人手维护的 `upstream`/`upstreamCommit`/`importedAt`/`upstreamWorkspace`/`note` 在 `--write` 时原样带过（现存 16 条 note、13 条来源工作区标记）；in-repo 的两个包**只登记不指纹** —— 它们本仓演进、`lib/` 每次构建重生成并由 CI 逐字节比对，再叠一层内容指纹是噪声不是溯源。**判据** `deps-provenance.spec.ts` 13 条：package.json ↔ 表**双向**对齐（漏一行、留一行已删的依赖都是问题）、四类漂移分开报（version / repository / 内容指纹 / 文件数 / kind）、**指纹口径与 mtime 和文件顺序无关**（否则换台机器就假红）、`node_modules`/`.git`/`*.tsbuildinfo` 不进指纹也不进拷贝清单、以及**起子进程**测 CLI 退出码（现状=0、漂移=1、表整个缺失=1、坏表拒绝覆盖=1）—— 纯函数全绿而门禁退 0 是两种不同的坏法，所以两头都要量。`npm run check:deps-provenance` 已进 package.json（现状复算 82ms，成本可以忽略）。变异 M97/M98/M99；另有一条 M97b **注定存活并已删除**，见 ⑬ |
 
 | 第二批 #9 P1-1 后端读失败契约 | ✅ 完成（**打法与报告不同**） | `c07a13a` | 报告写的形状是「下沉成 `{ ok:false, error }`」，但本项目**已经有**一条同语义的契约：`readError`（`DirListing`、kb 那一族快照，加上从类型推判据的 `read-error-visibility.spec.ts`）——再造一个 `ok:boolean` 信封等于同一件事有两种形状。所以沿既有约定把**剩下的整面板级读失败点**补齐：① `getMomentsMonthly` 从裸数组改成具名快照 `MomentsMonthlySnapshot{months, readError?}`（"具名"不是洁癖：返回类型写成 `X[]` 时那道**类型驱动**的守卫根本看不见，面板漏读 `readError` 就不会红）；② `listExportHistory` 的 catch 不再回 `empty` 而是带原因（记录没丢，是那一页没读到，界面从「还没有导出记录」改成「导出记录读不出来 + 为什么」）；③ 朋友圈图片/视频：两份各自咽掉 `readdir` 失败的扫描口收进 `query/sns-scan.ts`，**没扫全就不许说「本机没有」**，也不许把这条结论记进 `misses`（旧形状会把一次临时的目录读不动**永久缓存**成「这条视频本机没有」，只有重启才恢复 —— 与 ⑨ 的负缓存同族）；④ 顺手把 moments 的 `new DatabaseSync` 收进 `withDb`（P0-1 棘轮清单少一条）。**复核实为正确降级、本轮没动的**（免得下一个人以为漏做）：`voice-transcribe.cachedTranscript`（单条转录缺失）、`queryStorageStats`（网关壳不 catch，读不动照实抛成 RPC 错误）、`region` 资源表（退回原始拼音是标签退化，不是空数据）、`recordExport`（best-effort，文件头注释已写明）。**判据** `read-failure-contract.spec.ts` 11 条：坏库/坏目录都是**真的造出来**（`sns.db` 写垃圾字节、把 `cache` 造成一个普通文件 —— Windows 上唯一可移植的「目录读不动」造法），正反两头都量（「确认空」那几条要求 `readError` **缺席**，否则「一律报读失败」也能全绿）；另有两条源级判据钉「扫描口只有一份实现」与「返回的是具名快照」。变异 M100–M104 |
@@ -115,7 +116,8 @@
 ### 剩余（按 §七 的批次，未在本轮）
 
 - 第一批：**已全部做完**（#1–#8）。
-- 第二批 #10 xlsx 换源（需授权）、#11 剩下的「取消」：`@Remote` 的取消元数据只活在不可复现的
+- ~~第二批 #10 xlsx 换源（需授权）~~ **已做**（2026-09-27 授权后换到 SheetJS CDN 的 0.20.3，见上表那一行）；
+  #11 剩下的「取消」：`@Remote` 的取消元数据只活在不可复现的
   生成物里（见上面 ②），要先接上生成链才能给这五个查询注入 `AbortSignal`；让出一半已完成。
 - **关于 #11（P1-2）的两条实施前提**（本轮读代码 + 读生成物确认，别再当「加个 signal 参数」那么小）：
   ① 这五个查询（`privacy` / `graph` / `ledger` / `storage` / `overview-insights`）现在全是**同步函数**，
@@ -262,6 +264,20 @@
      `ReplySuggest.tsx` 的注释里恰好就写着那句），并顺手修掉一条真缺陷：`execCommand` **抛异常**时
      改前会跳过 `document.body.removeChild(ta)` ⇒ 每失败一次就在 body 上留一个抢过焦点的隐藏 textarea
      （P0-1「catch 分支漏 close」那一族的 DOM 版；这条是新写的行为用例第一次跑就抓出来的）。
+  ⑰ **体积预算那条守卫，条件写得让它永远不会跑**（2026-09-27 为 P1-6 换源而真打包一次才看见）：
+     `packaging-content.spec.ts` 的产物层断言（含 `size-ceiling` 上界 64MB、基线 56.5MB）**只在本地有
+     `dist/win-unpacked/resources/app.asar` 时才跑**，而日常开发没有人打包 —— 于是它自 语音/向量那一批
+     依赖进仓以来就没执行过。这一次 `npm run pack` 量到的是 **asar 196.65 MB**，构成（按包内字节聚合）：
+     `node_modules/onnxruntime-web/dist` **135.15 MB**（七份 wasm/js 构建形态，**没有一条正向规则列出它**，
+     是 `@huggingface/transformers` 的传递依赖被 electron-builder 自动带上的）、`wechat/whisper/ggml-tiny.bin`
+     74.09 MB（这个是刻意随包的）、`onnxruntime-node/bin` 27.71 MB（darwin/linux/arm64 已裁）、
+     `@img/sharp-win32-x64` 18.50 MB（同样是自动带的传递依赖）。
+     这与 §P2 里那条「`@napi-rs/canvas` 独占 36.54MB，排除掉」是**同一族**，只是量级大 4 倍且从未被看见。
+     **本轮没有动它**：`onnxruntime-web` / `sharp` 到底有没有被运行期加载，需要的是「换一台干净机器把
+     转录与向量链路跑一遍」的证据，不是读 import 猜 —— 上一轮已经因为"读代码猜"错过一次（P2-4 的打点）。
+     要做的是：① 加一条与 `@napi-rs` 同形的排除并确证没有正向规则捞回，② 让产物层守卫有一个**不依赖本地
+     产物**的替身（`npm run pack` 进 CI 的一次性 job，或按 `files` 白名单离线算一遍体积），否则这条
+     闸门永远是"看着有、实际不跑"。
 
 
 

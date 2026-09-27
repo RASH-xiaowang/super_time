@@ -147,6 +147,42 @@ describe('B 档三个解析依赖必须在打包白名单里（D6 / R1：漏了�
     }
   })
 
+  it('xlsx（SheetJS 自有 CDN 版）：入口真正 require 的部件留着，四份 min 构建与 map 裁掉', () => {
+    // 2026-09-27 P1-6 换源：npm 那一版停在 0.18.5（两条 CVE 都没修），修复版只在
+    // `cdn.sheetjs.com` 发。CDN 版把过去 7 个传递依赖**内联**进了单一构建，
+    // 于是 `node_modules/xlsx/**/*` 一条就够 —— 但也因为它是「一整包塞满构建形态」，
+    // 不裁就要白装 5.5MB：`dist/` 里躺着 full / core / mini / zahl 四份构建加各自源码映射，
+    // 运行时一份都用不到。
+    // 反过来，裁剪的红线也只有一条：CJS 入口 `xlsx.js` 会 `require('./dist/cpexcel.js')`
+    // （老式 .xls 的非 UTF-8 代码页靠它）。这条**不写死**在这里 —— 从装上的库里现读，
+    // 所以哪天上游把部件改名、或多加一个部件，缺了它用例就会红，而不是等到用户装完软件。
+    const need = new Set<string>(['xlsx.js', 'xlsx.mjs'])
+    for (const entry of ['xlsx.js', 'xlsx.mjs']) {
+      const p = join(ROOT, 'node_modules', 'xlsx', entry)
+      expect(existsSync(p), `没装 xlsx（${entry} 不在）—— 判据失去靶子`).toBe(true)
+      const src = readFileSync(p, 'utf8')
+      for (const m of src.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
+        const rel = m[1]
+        if (rel !== undefined && rel !== '') need.add(rel)
+      }
+    }
+    const shipX = (rel: string): string => `node_modules/xlsx/${rel}`
+    // 防空转：至少要有两个入口 + 一个 `./dist/…` 部件，否则上面的正则没吃到东西。
+    expect(need.size, `只读到 ${String(need.size)} 个部件，正则大概漂了`).toBeGreaterThanOrEqual(3)
+    expect([...need].some((r) => r.startsWith('dist/')), 'xlsx.js 里没有 require 任何 ./dist/ 部件').toBe(true)
+    for (const rel of need) {
+      expect(coveredBy(files, shipX(rel)), `${rel} 没被白名单覆盖 —— 装完的软件里会「找不到模块」`).toBe(true)
+      expect(excludedBy(files, shipX(rel)), `${rel} 被排除规则踢掉了（它是入口真正要 load 的）`).toBe(false)
+    }
+    for (const dead of [
+      'dist/xlsx.full.min.js', 'dist/xlsx.core.min.js', 'dist/xlsx.mini.min.js',
+      'dist/xlsx.zahl.js', 'dist/cpexcel.full.mjs', 'dist/shim.min.js',
+      'bin/xlsx.njs', 'types/index.d.ts',
+    ]) {
+      expect(excludedBy(files, shipX(dead)), `${dead} 没被裁掉（白装了）`).toBe(true)
+    }
+  })
+
   it('本机打包产物（若存在）里三个库真在包内、@napi-rs 真不在', () => {
     const entries = asarEntries()
     if (entries === null) return // 没打包过就跳过；产物层的把关在 packaged-smoke 里
@@ -157,8 +193,15 @@ describe('B 档三个解析依赖必须在打包白名单里（D6 / R1：漏了�
     const entry = 'node_modules/pdfjs-dist/legacy/build/pdf.mjs'
     expect(entries.some((p) => p === `/${entry}`), `${entry} 不在包内`).toBe(true)
     expect(entries.some((p) => p.includes('@napi-rs')), '@napi-rs 出现在包里（36.5MB）').toBe(false)
+    // xlsx 的裁剪在产物层再确证一次：白名单只是意图，产物才是事实。
+    expect(entries.some((p) => p === '/node_modules/xlsx/dist/cpexcel.js'),
+      'cpexcel.js 不在包内 —— 老式 .xls 的代码页解码会在用户机器上炸').toBe(true)
+    expect(entries.some((p) => p.startsWith('/node_modules/xlsx/dist/xlsx.full.min')),
+      'xlsx.full.min.js 进了包（900KB 死重）').toBe(false)
     // 传递依赖：它们**没有**列进 files，靠 electron-builder 自动带。产物层是唯一能验的地方。
-    for (const transitive of ['codepage', 'jszip', 'underscore']) {
+    // 名单里没有 `codepage` / `cfb` / `ssf` 了 —— 那 7 个是 npm 版 xlsx 的传递依赖，
+    // CDN 版把它们内联进了单一构建（判据：装出来的 xlsx 的 dependencies 是空的）。
+    for (const transitive of ['jszip', 'underscore']) {
       expect(entries.some((p) => p.startsWith(`/node_modules/${transitive}/`)),
         `${transitive} 不在包内 —— 说明「自动带传递依赖」这条前提不成立了`).toBe(true)
     }

@@ -590,6 +590,7 @@ id 14 / 15 / 16），全部 `parse_state=ready`、`include_in_rag=1`、`kb_id=1`
 | 排除 | `!node_modules/@napi-rs/**` —— pdfjs 的 optional `@napi-rs/canvas-win32-x64-msvc` 独占 **36.54 MB**，本用途只 `getTextContent()`、从不 `render()` |
 | 裁剪 pdfjs | 只留 `legacy/build/` + `cmaps/`（**无 ToUnicode 的中文 PDF 靠它做字节→字符映射，裁了中文乱码**）+ `standard_fonts/` + `wasm/`；裁掉 `*.map` / 非 legacy `build/` / `web/` / `types/` / `legacy/web/` ⇒ **33.17 MB → 9.42 MB** |
 | 传递依赖 | **不列**（electron-builder 自动带入：实测 `codepage` / `jszip` / `underscore` 未列却在包内） |
+| 2026-09-27 更正（P1-6 换源） | `xlsx` 已换成 SheetJS **自有 CDN** 的 0.20.3 —— npm 上那版永远停在带 CVE-2023-30533 / CVE-2024-22363 的 0.18.5。CDN 版是自包含的，所以上一行实测的 `codepage` 随旧版一起没了（现在自动带的是 `jszip` / `underscore` / `bluebird`）；同时新增 5 条 xlsx 裁剪（`dist/xlsx.*` 等）⇒ **少装 5.5 MB**，而 `dist/cpexcel.js` **必须留**：CJS 入口 `xlsx.js` 会 `require` 它（老式 `.xls` 的代码页靠它）。守卫随之 6 条 → 7 条，产物层再确证「cpexcel 在、`xlsx.full.min.js` 不在」 |
 
 守卫 `src/backend/tests/kb-package-deps.spec.ts`（**6 passed**）：三库是生产依赖 / `files` 显式列出 /
 `@napi-rs` 被排除且无正向规则捞回 / pdfjs 入口（从源码正则取 `PDFJS_ENTRY`）与 worker 被覆盖且不被排除 /

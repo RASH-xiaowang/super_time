@@ -94,7 +94,7 @@
     "onnxruntime-node": "^1.30.0",
     "pdfjs-dist": "^6.3.289",
     "unzipper": "^0.12.5",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "file:src/backend/deps/zod"
   },
   "optionalDependencies": {
@@ -175,6 +175,11 @@
       "!node_modules/@napi-rs/**",
       "node_modules/unzipper/**/*",
       "node_modules/xlsx/**/*",
+      "!node_modules/xlsx/dist/xlsx.*",
+      "!node_modules/xlsx/dist/cpexcel.full.mjs",
+      "!node_modules/xlsx/dist/shim.min.js",
+      "!node_modules/xlsx/bin/**",
+      "!node_modules/xlsx/types/**",
       "node_modules/zod/**/*",
       "package.json"
     ],
