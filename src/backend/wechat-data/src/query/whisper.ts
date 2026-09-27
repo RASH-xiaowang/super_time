@@ -18,6 +18,7 @@ import { fetchWithRetry } from '../../../llm-retry.js'
 import type { WhisperModelInfo } from '../types.ts'
 import { resolveWechatDataRoot } from '../dirs.ts'
 import { unpackedAware } from '../asar-path.ts'
+import { isInsideRoot, writeDenialReason } from './path-policy.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
 
 /** Whisper model catalog (id/name/size labels). */
@@ -212,6 +213,9 @@ export function migrateWhisperModels(fromDir: string, toDir: string): { ok: bool
   if (!fromDir || !toDir) return { ok: false, moved: 0, error: '目录为空' }
   if (fromDir.toLowerCase() === toDir.toLowerCase()) return { ok: true, moved: 0 }
   if (!existsSync(fromDir)) return { ok: true, moved: 0 }
+  // 迁移的目的就是「从只读/旧位置搬到可写位置」，所以目标侧这道闸永远不该放行只读目录
+  const refusal = whisperWriteRefusal(toDir)
+  if (refusal) return { ok: false, moved: 0, error: refusal }
   try {
     mkdirSync(toDir, { recursive: true })
     let moved = 0
@@ -248,6 +252,9 @@ export function migrateWhisperModels(fromDir: string, toDir: string): { ok: bool
  */
 export function migrateWhisperEngineDir(binPath: string, fromDir: string, toDir: string): string {
   if (!binPath || !fromDir || !toDir) return ''
+  // 目标不可写 ⇒ 什么都不搬，返回 ''（调用方按「引擎在外部、原样保留」处理同一个值）：
+  // `saveWechatConfig` 里这两步是顺序调用的，第二步不看第一步的结果，所以闸门必须自己问一遍
+  if (whisperWriteRefusal(toDir)) return ''
   const from = fromDir.replace(/[\\/]+$/, '')
   const norm = binPath.replace(/[\\/]+$/, '')
   const f = from.toLowerCase().replaceAll('\\', '/')
@@ -392,6 +399,29 @@ export function bundledWhisperAssetsDir(): string {
   return unpackedAware(resolve(here, '..', '..', '..', '..', 'wechat', 'whisper'))
 }
 
+/**
+ * 「这个目录能不能当**可写**的模型目录」（P2-6 那把尺子在 whisper 上的分册）。返回 null = 可以写。
+ *
+ * 为什么要单独一格：{@link defaultWhisperModelsDir} 在数据根下那个可写目录还没建好
+ * （或镜像失败）时**会退回随包资产目录**。退回本身是对的 —— 读预置的 tiny 模型不需要写权限；
+ * 错的是把这份「只读兜底」再交给写入侧：`installWhisperEngine` / `whisperDownloadModel`
+ * 原本直接 `mkdirSync` + 落文件，装到 Program Files 时报的是 EACCES/ENOENT 这类看不懂的错，
+ * 开发态那个目录就是仓库里的 `src/wechat/whisper` —— 一次模型下载能往仓库写进 1.5 GB。
+ * 所以三个写入入口（引擎安装、模型下载、旧目录迁移）一律先问这一格，理由说人话。
+ * @param modelsDir - 准备写入的目录。
+ * @param bundled - 随包资产目录（默认取真实那份；单测给一个临时目录当替身）。
+ * @returns 拒绝理由，或 null。
+ */
+export function whisperWriteRefusal(modelsDir: string, bundled: string = bundledWhisperAssetsDir()): string | null {
+  const raw = String(modelsDir ?? '').trim()
+  if (raw === '') return '没有给出模型目录'
+  const abs = resolve(raw)
+  if (isInsideRoot(abs, bundled)) {
+    return '模型目录落在随包分发的只读位置（装到 Program Files 时写不进去）：请先在设置里指定一个可写的目录'
+  }
+  return writeDenialReason(abs, resolveWechatDataRoot() ?? abs)
+}
+
 /** 已做过资产镜像的目录（同进程内只做一次）。 */
 const seededWhisperDirs = new Set<string>()
 
@@ -414,7 +444,8 @@ function mirrorWhisperItem(src: string, dst: string): void {
  */
 function seedBundledWhisper(modelsDir: string): void {
   const bundled = bundledWhisperAssetsDir()
-  if (!bundled || bundled === modelsDir) return
+  // 镜像的目标必须是可写目录，且不能落在随包目录里面（原来只比了「相等」）
+  if (!bundled || whisperWriteRefusal(modelsDir, bundled)) return
   let names: string[] = []
   try { names = readdirSync(bundled) } catch { return }
   const items = names.filter(n => n === 'bin' || n.toLowerCase().endsWith('.bin'))
@@ -492,6 +523,9 @@ export async function installWhisperEngine(
   const binDir = join(modelsDir, 'bin')
   const target = join(binDir, 'whisper-cli.exe')
   if (existsSync(target)) return { ok: true, path: target }
+  // 预置引擎在只读目录里仍然能用（上面那条快路径），但「再下一份」必须落到可写位置
+  const refusal = whisperWriteRefusal(modelsDir)
+  if (refusal) return { ok: false, error: refusal }
   mkdirSync(binDir, { recursive: true })
 
   const urls = [
@@ -633,9 +667,12 @@ export async function whisperDownloadModel(
   const entry = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)
   if (!entry) return { ok: false, error: '未知模型: ' + modelId }
   const file = entry[1]
-  mkdirSync(modelsDir, { recursive: true })
   const finalPath = join(modelsDir, file)
   if (existsSync(finalPath)) return { ok: true, file, bytes: 0 }
+  // 「已经下过」是一条读，落在只读目录也算命中；只有真要落盘时才需要可写
+  const refusal = whisperWriteRefusal(modelsDir)
+  if (refusal) return { ok: false, error: refusal }
+  mkdirSync(modelsDir, { recursive: true })
 
   let lastError = '下载失败'
   for (const base of whisperDownloadBases()) {

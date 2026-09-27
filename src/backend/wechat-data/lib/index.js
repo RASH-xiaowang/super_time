@@ -7428,6 +7428,8 @@ function migrateWhisperModels(fromDir, toDir) {
   if (!fromDir || !toDir) return { ok: false, moved: 0, error: "\u76EE\u5F55\u4E3A\u7A7A" };
   if (fromDir.toLowerCase() === toDir.toLowerCase()) return { ok: true, moved: 0 };
   if (!existsSync23(fromDir)) return { ok: true, moved: 0 };
+  const refusal = whisperWriteRefusal(toDir);
+  if (refusal) return { ok: false, moved: 0, error: refusal };
   try {
     mkdirSync5(toDir, { recursive: true });
     let moved = 0;
@@ -7461,6 +7463,7 @@ function migrateWhisperModels(fromDir, toDir) {
 }
 function migrateWhisperEngineDir(binPath, fromDir, toDir) {
   if (!binPath || !fromDir || !toDir) return "";
+  if (whisperWriteRefusal(toDir)) return "";
   const from = fromDir.replace(/[\\/]+$/, "");
   const norm2 = binPath.replace(/[\\/]+$/, "");
   const f = from.toLowerCase().replaceAll("\\", "/");
@@ -7561,6 +7564,15 @@ function bundledWhisperAssetsDir() {
   const here = fileURLToPath2(new URL(".", import.meta.url));
   return unpackedAware(resolve3(here, "..", "..", "..", "..", "wechat", "whisper"));
 }
+function whisperWriteRefusal(modelsDir, bundled = bundledWhisperAssetsDir()) {
+  const raw = String(modelsDir ?? "").trim();
+  if (raw === "") return "\u6CA1\u6709\u7ED9\u51FA\u6A21\u578B\u76EE\u5F55";
+  const abs = resolve3(raw);
+  if (isInsideRoot(abs, bundled)) {
+    return "\u6A21\u578B\u76EE\u5F55\u843D\u5728\u968F\u5305\u5206\u53D1\u7684\u53EA\u8BFB\u4F4D\u7F6E\uFF08\u88C5\u5230 Program Files \u65F6\u5199\u4E0D\u8FDB\u53BB\uFF09\uFF1A\u8BF7\u5148\u5728\u8BBE\u7F6E\u91CC\u6307\u5B9A\u4E00\u4E2A\u53EF\u5199\u7684\u76EE\u5F55";
+  }
+  return writeDenialReason(abs, resolveWechatDataRoot() ?? abs);
+}
 var seededWhisperDirs = /* @__PURE__ */ new Set();
 function mirrorWhisperItem(src, dst) {
   let size = -1;
@@ -7585,7 +7597,7 @@ function mirrorWhisperItem(src, dst) {
 }
 function seedBundledWhisper(modelsDir) {
   const bundled = bundledWhisperAssetsDir();
-  if (!bundled || bundled === modelsDir) return;
+  if (!bundled || whisperWriteRefusal(modelsDir, bundled)) return;
   let names = [];
   try {
     names = readdirSync13(bundled);
@@ -7657,6 +7669,8 @@ async function installWhisperEngine(modelsDir, onProgress) {
   const binDir = join30(modelsDir, "bin");
   const target = join30(binDir, "whisper-cli.exe");
   if (existsSync23(target)) return { ok: true, path: target };
+  const refusal = whisperWriteRefusal(modelsDir);
+  if (refusal) return { ok: false, error: refusal };
   mkdirSync5(binDir, { recursive: true });
   const urls = [
     process.env.DSH_WECHAT_WHISPER_ENGINE_URL?.trim().replace(/\/$/, ""),
@@ -7775,9 +7789,11 @@ async function whisperDownloadModel(modelId, modelsDir, onProgress) {
   const entry = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId);
   if (!entry) return { ok: false, error: "\u672A\u77E5\u6A21\u578B: " + modelId };
   const file = entry[1];
-  mkdirSync5(modelsDir, { recursive: true });
   const finalPath = join30(modelsDir, file);
   if (existsSync23(finalPath)) return { ok: true, file, bytes: 0 };
+  const refusal = whisperWriteRefusal(modelsDir);
+  if (refusal) return { ok: false, error: refusal };
+  mkdirSync5(modelsDir, { recursive: true });
   let lastError2 = "\u4E0B\u8F7D\u5931\u8D25";
   for (const base of whisperDownloadBases()) {
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`;

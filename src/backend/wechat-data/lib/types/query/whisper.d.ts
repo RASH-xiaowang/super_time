@@ -72,6 +72,20 @@ export declare function whisperModelsStatus(modelsDir: string): WhisperModelInfo
 /** 随包分发的 whisper 资产目录（安装目录，只读）：引擎 `bin/` 与预置 `ggml-*.bin`。 */
 export declare function bundledWhisperAssetsDir(): string;
 /**
+ * 「这个目录能不能当**可写**的模型目录」（P2-6 那把尺子在 whisper 上的分册）。返回 null = 可以写。
+ *
+ * 为什么要单独一格：{@link defaultWhisperModelsDir} 在数据根下那个可写目录还没建好
+ * （或镜像失败）时**会退回随包资产目录**。退回本身是对的 —— 读预置的 tiny 模型不需要写权限；
+ * 错的是把这份「只读兜底」再交给写入侧：`installWhisperEngine` / `whisperDownloadModel`
+ * 原本直接 `mkdirSync` + 落文件，装到 Program Files 时报的是 EACCES/ENOENT 这类看不懂的错，
+ * 开发态那个目录就是仓库里的 `src/wechat/whisper` —— 一次模型下载能往仓库写进 1.5 GB。
+ * 所以三个写入入口（引擎安装、模型下载、旧目录迁移）一律先问这一格，理由说人话。
+ * @param modelsDir - 准备写入的目录。
+ * @param bundled - 随包资产目录（默认取真实那份；单测给一个临时目录当替身）。
+ * @returns 拒绝理由，或 null。
+ */
+export declare function whisperWriteRefusal(modelsDir: string, bundled?: string): string | null;
+/**
  * 默认模型/引擎目录：**数据根下的可写目录**（`<数据根>/whisper`），首次使用时把随包
  * 分发的引擎与模型镜像进来。
  *
