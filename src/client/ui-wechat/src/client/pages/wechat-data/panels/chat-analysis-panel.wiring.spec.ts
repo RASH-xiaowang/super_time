@@ -22,8 +22,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { readChatsSource } from './chats-source.ts'
-import { sliceBetween } from './wiring-kit.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
+import { sliceBetween } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')

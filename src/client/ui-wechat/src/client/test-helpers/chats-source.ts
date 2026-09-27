@@ -14,11 +14,18 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+/**
+ * 被扫的那一侧目录（P3-16 之后本助手住在 `src/client/test-helpers/`，
+ * 而它要联合的是 **面板目录** —— 目录必须写死在这里，不能再用「我自己所在的目录」：
+ * 用 HERE 的话搬家之后扫到的是 test-helpers/，联合源码会静默变成只剩 `Chats.tsx`
+ * 一支都读不到 ⇒ 所有读这份联合的守卫集体失去靶子。
+ */
+const PANELS = join(HERE, '..', 'pages', 'wechat-data', 'panels')
 
 export function readChatsSource(): string {
-  const here = HERE
+  const here = PANELS
   const mods = readdirSync(here)
-    .filter((f) => /^chats-[a-z-]+\.(tsx|ts)$/.test(f) && f !== 'chats-source.ts')
+    .filter((f) => /^chats-[a-z-]+\.(tsx|ts)$/.test(f))
     .sort()
   return ['Chats.tsx', ...mods].map((f) => readFileSync(join(here, f), 'utf8')).join('\n')
 }

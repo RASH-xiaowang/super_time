@@ -15,7 +15,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { assertSettledContract, findRoot, readText } from './wiring-kit.ts'
+import { assertSettledContract, findRoot, readText } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)

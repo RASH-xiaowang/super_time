@@ -15,7 +15,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, classBlock, readStripped, readText } from './wiring-kit.ts'
+import { atLeast, classBlock, readStripped, readText } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const TSX = readStripped(join(HERE, 'Calls.tsx'))

@@ -12,8 +12,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+/** 被扫的面板目录（理由同 `chats-source.ts`：搬家之后 HERE 不再是面板那一侧）。 */
+const PANELS = join(HERE, '..', 'pages', 'wechat-data', 'panels')
 
 export function readSettingsSource(): string {
-  const mods = readdirSync(HERE).filter((f) => /^settings-[a-z-]+\.tsx?$/.test(f)).sort()
-  return ['Settings.tsx', ...mods].map((f) => readFileSync(join(HERE, f), 'utf8')).join('\n')
+  const mods = readdirSync(PANELS).filter((f) => /^settings-[a-z-]+\.tsx?$/.test(f)).sort()
+  return ['Settings.tsx', ...mods].map((f) => readFileSync(join(PANELS, f), 'utf8')).join('\n')
 }

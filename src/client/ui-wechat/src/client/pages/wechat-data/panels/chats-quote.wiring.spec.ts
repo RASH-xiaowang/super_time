@@ -16,7 +16,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { classBlock, readText } from './wiring-kit.ts'
+import { classBlock, readText } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const read = (p: string): string => readText(join(HERE, p))

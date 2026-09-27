@@ -9,7 +9,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStripped } from './wiring-kit.ts'
+import { readStripped } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 

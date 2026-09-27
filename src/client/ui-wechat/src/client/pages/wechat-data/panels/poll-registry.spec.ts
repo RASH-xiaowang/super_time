@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPollRegistry } from './poll-registry.ts'
-import { readSettingsSource } from './settings-source.ts'
+import { readSettingsSource } from '../../../test-helpers/settings-source.ts'
 
 afterEach(() => { vi.useRealTimers() })
 

@@ -14,7 +14,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, findRoot, readText } from './wiring-kit.ts'
+import { atLeast, findRoot, readText } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)

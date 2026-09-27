@@ -27,6 +27,8 @@ import {
 } from './wiring-kit.ts'
 
 const HERE = import.meta.dirname
+/** 面板那一侧（本 spec 搬进 test-helpers/ 之后，联合扫描的目标必须写死在这里）。 */
+const PANELS = join(HERE, '..', 'pages', 'wechat-data', 'panels')
 const ROOT = findRoot(HERE)
 
 describe('stripComments：归一 + 剥注释', () => {
@@ -64,8 +66,8 @@ describe('readText / readStripped / readUnion', () => {
   })
 
   it('readUnion 把入口与「按前缀扫到的拆分模块」合成一份，且比单独读入口长得多', () => {
-    const union = readUnion(HERE, /^settings-[a-z-]+\.tsx?$/, ['Settings.tsx'])
-    const entryOnly = readText(join(HERE, 'Settings.tsx'))
+    const union = readUnion(PANELS, /^settings-[a-z-]+\.tsx?$/, ['Settings.tsx'])
+    const entryOnly = readText(join(PANELS, 'Settings.tsx'))
     expect(union).toContain('useSettingsState')
     expect(union.length, '没扫到 settings-*.tsx 拆分模块').toBeGreaterThan(entryOnly.length * 2)
   })

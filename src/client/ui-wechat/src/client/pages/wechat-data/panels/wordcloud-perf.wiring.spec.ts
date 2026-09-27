@@ -19,7 +19,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, findRoot, readStripped, sliceBetween } from './wiring-kit.ts'
+import { atLeast, findRoot, readStripped, sliceBetween } from '../../../test-helpers/wiring-kit.ts'
 
 /** panels → 仓库根 → 后端的 query 目录。 */
 const HERE = import.meta.dirname

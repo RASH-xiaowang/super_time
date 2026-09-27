@@ -12,7 +12,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { allClassBlocks, classBlock, readText } from './wiring-kit.ts'
+import { allClassBlocks, classBlock, readText } from '../../../test-helpers/wiring-kit.ts'
 import {
   CARD_BODY_GAP_PX,
   CARD_BODY_PAD_X,

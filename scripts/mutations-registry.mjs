@@ -53,10 +53,10 @@ const MUTATIONS_BATCH12 = [
   {
     id: 'M4-kit-anchor-loose',
     why: '把 wiring-kit 的「终点锚点找不到就红」放宽 —— 切片会静默返回怪片段，后续 not.toContain 全绿',
-    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.ts',
+    file: 'src/client/ui-wechat/src/client/test-helpers/wiring-kit.ts',
     from: '  expect(b, `${label}：找不到终点锚点「${to}」`).toBeGreaterThan(a)',
     to: '  expect(b, `${label}：找不到终点锚点「${to}」`).toBeGreaterThanOrEqual(-1)',
-    spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.spec.ts',
+    spec: 'src/client/ui-wechat/src/client/test-helpers/wiring-kit.spec.ts',
   },
   {
     id: 'M5-upgrade-not-strict',

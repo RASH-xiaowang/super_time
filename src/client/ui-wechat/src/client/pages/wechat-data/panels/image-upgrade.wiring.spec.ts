@@ -11,7 +11,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStripped, sliceBetween } from './wiring-kit.ts'
+import { readStripped, sliceBetween } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const read = (rel: string): string => readStripped(join(HERE, rel))

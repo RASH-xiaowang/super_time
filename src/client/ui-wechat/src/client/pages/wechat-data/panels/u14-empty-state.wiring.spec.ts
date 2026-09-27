@@ -21,7 +21,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { atLeast, readStripped, readText, stripComments } from './wiring-kit.ts'
+import { atLeast, readStripped, readText, stripComments } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 const read = (f: string): string => readText(join(HERE, f))

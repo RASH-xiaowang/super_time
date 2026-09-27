@@ -586,4 +586,40 @@ export const MUTATIONS_BATCH3B = [
     to: "export { verifyDbKey as senderNameMap }/** Read only the first database page (verification needs just the header page). */",
     spec: "src/backend/wechat-data/tests/p3-8-export-discipline.spec.ts",
   },
+
+  // ── P3-16：测试辅助从 panels/ 搬进 src/client/ui-wechat/src/client/test-helpers/ ──
+  // 这一族的要害不是"搬"，而是"搬完扫描目标还在不在"：两份联合读取器原先扫的是自己所在的目录，
+  // 一旦忘记把目录写死，它们会去数 test-helpers/ 里的文件 ⇒ 联合退化、几百条守卫静默失靶。
+  {
+    id: "M293-chats-union-scans-its-own-dir",
+    why: "把联合读取器的扫描目录改回「我自己所在的目录」（搬家当天最容易漏的那一步）⇒ 扫到的是 test-helpers/，一支 chats-* 都没有，读这份联合的守卫全部失去靶子却仍然全绿；只有「联合里必须有拆分模块的字样」那条抓得住",
+    file: "src/client/ui-wechat/src/client/test-helpers/chats-source.ts",
+    from: "  const here = PANELS",
+    to: "  const here = HERE",
+    spec: "src/client/ui-wechat/src/client/test-helpers/placement.spec.ts",
+  },
+  {
+    id: "M294-settings-union-scans-its-own-dir",
+    why: "同上，作用在设置那一侧：扫描目录退回 HERE ⇒ settings-* 一支都读不到，而「长度 > 0」式的断言照样通过",
+    file: "src/client/ui-wechat/src/client/test-helpers/settings-source.ts",
+    from: "readdirSync(PANELS)",
+    to: "readdirSync(HERE)",
+    spec: "src/client/ui-wechat/src/client/test-helpers/placement.spec.ts",
+  },
+  {
+    id: "M295-node-fs-smuggled-back-into-pages",
+    why: "把读盘能力塞回面板那一侧（本轮要治的形状本身）⇒ 「pages/** 的非 spec 文件不许 import node 内建」必须红；顺带验证判据真的在扫那些文件，而不是清单为空",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-calendar-dialog.tsx",
+    from: "import csscards from './chats-cards.module.css'",
+    to: "import csscards from './chats-cards.module.css'\nimport { existsSync } from 'node:fs'",
+    spec: "src/client/ui-wechat/src/client/test-helpers/placement.spec.ts",
+  },
+  {
+    id: "M296-placement-guard-ignores-dynamic-import",
+    why: "判据不再看 `await import('node:fs')` 这种动态形状 ⇒ 用动态 import 就能把读盘偷回生产侧，静态 import 那条判据形同只锁前门（反例自证里那条合成动态用例就是为它写的）",
+    file: "src/client/ui-wechat/src/client/test-helpers/placement.spec.ts",
+    from: "    else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword",
+    to: "    else if (false && ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword",
+    spec: "src/client/ui-wechat/src/client/test-helpers/placement.spec.ts",
+  },
 ]
