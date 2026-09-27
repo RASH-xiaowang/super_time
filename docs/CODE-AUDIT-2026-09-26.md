@@ -115,6 +115,8 @@
 
 | 第三批 #24 DB 纪律 ESLint 固化 | ✅ 完成（**修法与报告不同**：`no-restricted-syntax` 表达不了 P0-1 那条，改成两条「语法判得准 + 今天零命中 + spec 没覆盖」的形状闸门） | 本次提交 | 装了 `eslint@9.39` + `@typescript-eslint/parser@8.70`（devDeps），新增根文件 `eslint.config.mjs`（**只装一条纪律**，作用域只有 `src/backend/wechat-data/src/**/*.ts`）与 `npm run lint:db`（1.7 秒）。**报告那句话做不到的实测**：按直觉写成 `TryStatement > BlockStatement NewExpression[callee.name="DatabaseSync"]` 命中 **68 处**，收窄成「try 块里直接声明」仍有 **32 处** —— 而那 32 处大多是本项目**推荐**的形状 `try { const db = new …; try { …干活… } finally { db.close() } } catch { … }`（外层管「打开失败就别进来」、内层管「进来了就一定关」）。真装上，第一件事是把 32 份正确代码判成缺陷，然后被 `--no-verify` 掉；根因是 P0-1 要回答「这条句柄在 catch / finally 里够不够得着」= **作用域与数据流**，而 `no-restricted-syntax` 只有语法树这一根轴。**所以这里挑的是另外两条**：R1 `withDb(...)` 回调里再 `new DatabaseSync(...)`（同一次读两个所有者，多开的那条没人关）、R2 把 `async` 回调交给**同步版** `withDb` / `withWritableDb`（一 await 就把控制流交回事件循环，`finally` 不等它 ⇒「小库恒绿、大库偶发 database is not open」；**TypeScript 拦不住**，`T` 会顺推成 `Promise<…>`，签名照样成立）。两条实测真实生产树 **0 命中** ⇒ 零容忍、不需要任何例外名单（哪天要往这里加白名单，就说明它被用错了地方，该回 spec 那边记账）。**判据** `eslint-db-discipline.spec.ts` 6 条：① 配置被 ESLint 自己加载得动 + 覆盖 ≥100 个生产文件（防 glob 漂成「零文件 ⇒ 下面全是恒真」）+ 生产树零违规；② 两条正面（坏写法各报 1 条），其中 function 表达式那半边**是实测漏过的**（只写 `ArrowFunctionExpression[async=true]` 会漏，所以用了 `:matches`）；③ 推荐形状零误伤（那份夹具就是照上面 32 处写的）；④ 同一份坏写法在测试树里必须零报错 ⇒ 证明 `files` 那条 glob 在做事，另配 selector 数量哨兵 2；⑤ 「AST 棘轮那份 spec 还在守清单」的接线断言，防有人以为 ESLint 顶掉了它。CI **不另开一步**：`npm test` 里这份 spec 已经把同一份配置跑在真实树上，单开一步只会多装一次解析器；`docs/CONTRIBUTING.md` 的收口链加了 `npm run lint:db` 与这段分工。**变异 M370–M373** 逐条咬红、逐字节还原（`REGISTRY_MIN` 366 → 370），其中 M372（把 `withDbAsync` 也管进 R2）当场让**生产树**出现违规 ⇒ 实证 `withDbAsync` + async 回调是正在用的合法形状，「把两个名单统一掉」会堵死提示里给出的那条出路。**留着没做的一件**（不是漏做）：本仓从此有了 ESLint，#18 记的那个「`useMemo` 依赖数组漏一项」缺陷（真出过事故、用户点得到、当时连静态防线都没有）归 `react-hooks/exhaustive-deps` 管；要装它得先量存量违规有多少 —— 没量过就开一条红一整片的闸门，那不叫收口。全量 **359 文件 / 3726 用例** 绿（9 文件 / 14 用例按环境跳过）、typecheck 5 棵树 0；后端 `src` 一字未改 ⇒ `build:backend` / `build:types` / `docs:api:check` 都不涉及（新方法面为零）。
 
+| 工具修复：`--self-test` 的靶子被搬走而**全表照样绿** | ✅ 完成（本轮为 #24 手工跑自检时撞见） | 本次提交 | 现象：`node scripts/mutation-check.mjs --self-test` 的 S3/S4 一起报「锚点失效」—— 根因是 `wiring-kit` 早在拆分那批里从 `panels/` 搬进 `test-helpers/`，而跑手里的 `SELF_FILE` / `SELF_SPEC` 还指着旧路径。**为什么一直没人知道**：全量表逐条 spawn 的是各条目自己的 `spec`，**从不读**那三个常量，`npm test` 也不跑 `--self-test` ⇒ 坏的是「验证守卫的守卫」，而它坏了不影响任何一条现有判据变红。**修法四件**：① 重指两个常量（锚点 `export function atLeast(` 在新位置仍恰好命中一次，逐字节核对过）；② 新增判据 `selfTargetDefects()` —— 三个常量**从跑手源码里现读**（判据里重抄一遍路径 = 判据自己也会跟着漂），钉「两个靶子存在 + 锚点命中 1 次」，配两个反例（把路径改没 / 把锚点改坏）；③ 顺手补一条「`REGISTRY_MIN` 不许比实测松过 8 条」—— 同一次改动里就**真发生了一次**「注释里的条数抬到 370、常量还是 366 而全绿」，这说明"抬数"这件事本身也需要闸门，不只是需要一句注释；④ 变异 **M374**（把靶子路径改回搬家前的旧位置 = 重演那次事故）咬红、逐字节还原。`REGISTRY_MIN` 366 → **371**（实测 371 条、号段到 M374）。**没做的一件**：没在 `npm test` 里嵌套跑 `--self-test`（要在 vitest 里再起一层 vitest，慢且互抢 worker），这里守的是它成立的前提；三条判定路径本身靠手工跑，本轮跑过 **5/5 通过**。全量 **359 文件 / 3727 用例** 绿（9 文件 / 14 用例按环境跳过）、typecheck 5 棵树 0。
+
 ### 剩余（按 §七 的批次，未在本轮）
 - 第一批：**已全部做完**（#1–#8）。
 - ~~第二批 #10 xlsx 换源（需授权）~~ **已做**（2026-09-27 授权后换到 SheetJS CDN 的 0.20.3，见上表那一行）；
@@ -153,8 +155,11 @@
   **#18（拆 `moments-panel.tsx`）、#21（解循环依赖）、#22（四处长列表全部虚拟化并在真实窗口里量过：
   消息流 / 收藏 / 文件网格 / 朋友圈）、#23（统一失效契约）、#25（四份新文档 + README 索引
   + `docs-index.spec.ts`）已完成**，见上表。
-- 第四批 P3 到本轮**只剩两处**（这一条以前列着一堆已做完的，2026-09-27 按上表逐条核对后重写）：
-  ① P3-10 许可证私钥迁出仓库目录（要授权：动的是签发机与开发机的隔离方式）；
+- 第四批 P3 到本轮**只剩一处**（这一条以前列着一堆已做完的，2026-09-27 按上表逐条核对后重写；
+  同日再核一次：原来的 ① P3-10 已做完，于是只剩 ②）：
+  ~~① P3-10 许可证私钥迁出仓库目录（要授权：动的是签发机与开发机的隔离方式）~~ **已做** ——
+  私钥搬到 `~/.supertime/`，位置由 `scripts/license-key-path.js` 一处解析、
+  `src/backend/tests/license-key-location.spec.ts` 六条钉住（放在仓库里一律拒，不给回退），见上表；
   ② P3-18「状态机制五种并存」在 #23 统一失效契约之后判定为"方案数量本身可接受"，不动。
   ~~`KNOWN_SECOND_TIME` 那六份日期函数~~ **已在本轮清零**（六份形状搬进唯一出处、那一档升级成零容忍闸门，
   见上表最后一行；报告点名的四类 `fmtTime` / `fmtBytes` / `formatBytes` / `fmtSize` 早就是零容忍，

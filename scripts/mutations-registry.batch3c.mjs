@@ -521,4 +521,12 @@ export const MUTATIONS_BATCH3C = [
     to: "    name: 'supertime/db-handle-ownership',",
     spec: "src/backend/wechat-data/tests/eslint-db-discipline.spec.ts",
   },
+  {
+    id: "M374-selftest-target-moved",
+    why: "把跑手自检的靶子路径挪走一格（正是 2026-09-27 真实发生过的那件事：`wiring-kit` 从 `panels/` 搬进 `test-helpers/`）⇒ `--self-test` 的 S3/S4 一起报「锚点失效」，也就是**验证守卫的守卫坏了**，而全量表逐条 spawn 的是各条目自己的 spec、从不读这两个常量 ⇒ `npm test` 与 `check:mutation` 一声不吭地绿。新增的那条判据只钉「两个靶子还在 + 锚点仍恰好命中一次」，所以这一刀必须红",
+    file: "scripts/mutation-check.mjs",
+    from: "const SELF_FILE = 'src/client/ui-wechat/src/client/test-helpers/wiring-kit.ts'",
+    to: "const SELF_FILE = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.ts'",
+    spec: "src/backend/tests/mutation-registry-anchors.spec.ts",
+  },
 ]

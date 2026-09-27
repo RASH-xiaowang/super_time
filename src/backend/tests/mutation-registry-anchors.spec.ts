@@ -30,17 +30,21 @@ const rows: readonly Mutation[] = MUTATIONS
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 /**
- * 登记表条数下限（**只许涨**）。2026-09-27 实测 370 条（同日 344 → 361：#19/#20 收尾 +7、
+ * 登记表条数下限（**只许涨**）。2026-09-27 实测 371 条（同日 344 → 361：#19/#20 收尾 +7、
  * P3-1 收尾 M349–M355、whisper 只读目录闸门 M356–M362、签发私钥搬家 M363–M364、
- * P1-6 xlsx 换 SheetJS CDN 源 M365–M369、#24 的 ESLint DB 闸门 M370–M373），这个数**贴着实测条数**——下面那条反例判据
- * 只保证「丢 38 条必红」，留余量就是给这条下限 itself 打折扣。
+ * P1-6 xlsx 换 SheetJS CDN 源 M365–M369、#24 的 ESLint DB 闸门 M370–M373、跑手自检靶子 M374），
+ * 这个数**贴着实测条数**——下面那条反例判据
+ * 只保证「丢 38 条必红」，留余量等于给这条下限打折。
  *
  * 为什么要有这个数：表按闸门容量切成多份之后，"新的一份忘了聚合进来"不报任何错 ——
  * 那天切完 `batch3c` 就漏接过一次，`MUTATIONS` 从 344 悄悄掉到 306，
  * 而当时唯一的数量判据是「>150」，全绿。号段连续性也拦不住（缺号才 4 个）。
  * 加一条变异就把这个数抬上去；掉下来就是有人把某份表弄丢了。
+ * **抬数这件事自己也会漏**（2026-09-27 实测：只改了注释里的条数、`REGISTRY_MIN` 那行忘了改，
+ * 于是它比实测松 4 条而全绿）—— 所以下面那条「松太多」的反例判据看的是**这个常量**与实测的差，
+ * 不是注释。
  */
-const REGISTRY_MIN = 366
+const REGISTRY_MIN = 371
 
 /**
  * 表里除 `to` 之外的五个字段都必须是非空字符串（缺一个字段，跑手就会报成"锚点失效"这种误导性结论）。
@@ -89,6 +93,11 @@ describe('变异登记表的锚点不许腐烂', () => {
     expect(rows.length, `登记表只剩 ${String(rows.length)} 条（下限 ${String(REGISTRY_MIN)}）—— 多半是某一份表没被聚合进 MUTATIONS`).toBeGreaterThanOrEqual(REGISTRY_MIN)
     // 反例自证：丢 38 条（那天真实漏接的量）必须被这个数拦住，否则它只是个装饰。
     expect(rows.length - 38 >= REGISTRY_MIN, `少 38 条仍然过 ⇒ 下限 ${String(REGISTRY_MIN)} 比实测 ${String(rows.length)} 松太多`).toBe(false)
+    // 「只许涨」的另一半：它**也不许比实测松**。加了几条就得抬几行，否则这道闸门在守一份
+    // 越来越空的清单 —— 2026-09-27 真漏过一次（注释里的条数抬到 370，常量还是 366，全绿）。
+    // 8 条是"一批"的余量：一次收口通常加 3~7 条，再多就该在提交前先把数对齐。
+    expect(rows.length - REGISTRY_MIN,
+      `下限比实测松 ${String(rows.length - REGISTRY_MIN)} 条（>8）—— 把 REGISTRY_MIN 抬到实测值`).toBeLessThanOrEqual(8)
     const nums = rows.map((m) => Number(/^M(\d+)-/.exec(m.id)?.[1] ?? 0)).filter((n) => n > 0)
     expect(new Set(nums).size, '有重号（两份表装了同一条）').toBe(nums.length)
     expect(Math.max(...nums), '读不到号段').toBeGreaterThan(300)
@@ -174,5 +183,55 @@ describe('变异登记表的锚点不许腐烂', () => {
     // ⑤ 目标文件不存在
     const missing: Mutation = { ...good, id: 'R-missing', file: 'src/backend/这个文件不存在.ts' }
     expect(anchorDefects([missing])[0] ?? '').toContain('目标文件不存在')
+  })
+
+  /**
+   * 跑手自己的自检靶子（`--self-test` 用的那两个文件与那把锚点）。
+   *
+   * 为什么单独守：2026-09-27 实测漂过一整次 —— `wiring-kit` 从 `panels/` 搬进 `test-helpers/` 之后，
+   * 自检的 S3/S4 一起报「锚点失效」，而**没有任何一条判据会发现这件事**：全量表逐条 spawn 的是
+   * 各条目自己的 `spec`，从不读那三个常量，于是「验证守卫的守卫」坏了而 `npm test` 与
+   * `check:mutation` 都照样绿。这里不重跑自检（那要在 vitest 里嵌套一层 vitest，慢且会互抢 worker），
+   * 只钉住自检成立的前提；三个常量都从跑手源码里现读，不在这里重抄一遍（重抄就会二次漂）。
+   */
+  function selfTargetDefects(toolText: string): string[] {
+    const pick = (name: string): string => {
+      const m = new RegExp(`^const ${name} = '([^']*)'$`, 'm').exec(toolText)
+      return m?.[1] ?? ''
+    }
+    const bad: string[] = []
+    const file = pick('SELF_FILE')
+    const spec = pick('SELF_SPEC')
+    const anchor = pick('SELF_ANCHOR')
+    if (file === '' || spec === '' || anchor === '') {
+      bad.push(`读不到自检常量（跑手改了写法？现在：SELF_FILE='${file}' SELF_SPEC='${spec}'）`)
+      return bad
+    }
+    for (const [label, p] of [['SELF_FILE', file], ['SELF_SPEC', spec]] as const) {
+      if (!existsSync(join(ROOT, p))) bad.push(`${label} 指向的文件不在了（多半是被搬走或改名）：${p}`)
+    }
+    if (existsSync(join(ROOT, file))) {
+      const hits = countHits(readFileSync(join(ROOT, file), 'utf8'), anchor)
+      if (hits !== 1) bad.push(`自检锚点在 ${file} 里命中 ${String(hits)} 次（必须恰好 1 次）：${anchor}`)
+    }
+    return bad
+  }
+
+  it('跑手自己的自检靶子还在（它坏了的时候，全量表可以一声不吭地绿）', () => {
+    const toolPath = join(ROOT, 'scripts', 'mutation-check.mjs')
+    expect(existsSync(toolPath), 'scripts/mutation-check.mjs 不在了').toBe(true)
+    const tool = readFileSync(toolPath, 'utf8').replace(/\r\n/g, '\n')
+    expect(selfTargetDefects(tool), '自检靶子的现状').toEqual([])
+    // 反例①：路径漂了（就是 2026-09-27 真实发生过的那件事）
+    const realFile = /const SELF_FILE = '([^']*)'/.exec(tool)?.[1] ?? ''
+    expect(realFile, '上面那条已经读不到常量了，反例无从构造').not.toBe('')
+    const ghost = selfTargetDefects(tool.replace(`const SELF_FILE = '${realFile}'`, "const SELF_FILE = 'src/client/__不存在的目录__/wiring-kit.ts'"))
+    expect(ghost.join(' | '), '把靶子路径改没，判据必须报').not.toEqual([])
+    // 反例②：锚点改成永远命不中（等价于「自检静默失效」的另一半）
+    const mangled = selfTargetDefects(tool.replace(/^const SELF_ANCHOR = '(.*)'$/m, "const SELF_ANCHOR = 'export function __atLeastNotAnymore__('"))
+    expect(mangled.join(' | '), '把自检锚点改坏，判据必须报').not.toEqual([])
+    // 反例自证自己也得可信：这两个反例都该指向**同一个**跑手文件，否则说明 replace 打空了
+    expect(tool.includes("const SELF_FILE = '"), 'replace 的锚点形状与跑手源码不符 ⇒ 两个反例都是假的').toBe(true)
+    expect(tool.includes('const SELF_ANCHOR = '), 'replace 的锚点形状与跑手源码不符 ⇒ 第二个反例是假的').toBe(true)
   })
 })

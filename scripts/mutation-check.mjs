@@ -160,8 +160,17 @@ function execute(m) {
   return { id: m.id, verdict, detail, identical: true }
 }
 
-const SELF_FILE = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.ts'
-const SELF_SPEC = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.spec.ts'
+/**
+ * 自检的两个靶子与锚点。
+ *
+ * ⚠️ 这两条路径**曾经漂过而无人知晓**：wiring-kit 从 `panels/` 搬进 `test-helpers/` 之后，
+ * 自检的 S3/S4 一起报「锚点失效」（2026-09-27 手工跑 `--self-test` 才发现 —— 全量表是逐条
+ * spawn `spec`，从不读这两个常量，所以 `npm test` 与 `check:mutation` 都照样绿）。
+ * 兜它的是 `src/backend/tests/mutation-registry-anchors.spec.ts` 里那条「自检靶子必须还在、
+ * 锚点必须仍命中一次」的判据：它只读文本与文件存在性，不在 `npm test` 里嵌套跑 vitest。
+ */
+const SELF_FILE = 'src/client/ui-wechat/src/client/test-helpers/wiring-kit.ts'
+const SELF_SPEC = 'src/client/ui-wechat/src/client/test-helpers/wiring-kit.spec.ts'
 /** 自检用的锚点：`atLeast` 的声明行开头，改成 `@@@` 后必然编不过。 */
 const SELF_ANCHOR = 'export function atLeast('
 
