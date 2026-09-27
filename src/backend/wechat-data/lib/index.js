@@ -3608,12 +3608,6 @@ function parseFavParts(xml) {
   }
   return out;
 }
-function fmtDateTime(ts2) {
-  if (!ts2) return "";
-  const d = new Date(ts2 * 1e3);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 function queryFavorites(decryptedDir, limit, offset = 0, q) {
   const db = new DatabaseSync9(join9(decryptedDir, "favorite", "favorite.db"), { readOnly: true });
   try {
@@ -3655,7 +3649,7 @@ function queryFavorites(decryptedDir, limit, offset = 0, q) {
         desc: parsed.desc,
         url: parsed.url,
         updateTime,
-        time: fmtDateTime(updateTime),
+        time: fmtDateTimeSec(updateTime),
         content: xml,
         fromUsr,
         chatName,

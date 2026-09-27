@@ -11,6 +11,7 @@
  *   · `[[目标]]` 命中已有标题即成为一条边，命中不到是**待补笔记**（不是错误、
  *     也不该被隐藏）：「先把链接写下来、之后再补那篇」正是这套知识库的用法。
  */
+import { fmtDateMs } from '../utils/format.ts'
 
 /** 正文切分后的一段：纯文本，或一条 `[[…]]` 链接。 */
 export interface WikiSegment {
@@ -161,16 +162,8 @@ export function linkRefs(body: string, byTitle: Map<string, { id: number }>): Li
   return out
 }
 
-/** `YYYY-MM-DD`（本地时区）。 */
-export function formatDate(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
 /**
- * 相对时间（「更新于 …」）。`now` 显式传入，便于单测。
- * 超过 30 天直接给日期 —— 「97 天前」不如 `2026-06-12` 有用。
+ * 相对时间（「更新于 …」。超过 30 天回落到 `fmtDateMs` 的日期形状）。`now` 显式传入，便于单测。
  * @param ts - 毫秒时间戳。
  * @param now - 当前毫秒时间戳。
  * @returns 人类可读的相对/绝对时间；`ts` 非法时返回 `'—'`。
@@ -186,7 +179,7 @@ export function formatRelative(ts: number, now: number): string {
   if (hr < 24) return `${hr} 小时前`
   const day = Math.floor(hr / 24)
   if (day < 30) return `${day} 天前`
-  return formatDate(ts)
+  return fmtDateMs(ts)
 }
 
 /**

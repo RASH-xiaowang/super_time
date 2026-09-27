@@ -22,7 +22,8 @@ import { imageDownloadName, pickImageSrc, toggleInSet } from './moments-actions.
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
-import { MediaFilter, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
+import { MediaFilter, groupByDate, imgKey } from './moments-support.tsx'
+import { fmtHourMinuteMs } from '../utils/format.ts'
 import { useMomentsScope } from './moments-scope.ts'
 
 /** 一行的估计高度：日期标签一行、卡片按"头像 + 正文两行"量级（真实高度由 `measureElement` 回灌）。 */
@@ -227,7 +228,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             <button type="button" className={css.btn} data-on={privacy || undefined} onClick={() => { setPrivacy(v => !v) }} title="隐私模式：模糊头像与内容，悬停查看">🔒 隐私</button>
             <button type="button" className={css.btn} onClick={() => { void load() }} disabled={loading}>刷新</button>
             <button type="button" className={css.btn} data-on={syncing || undefined} onClick={() => { void doSync() }} disabled={syncing}>{syncing ? '同步中…' : '↻ 同步'}</button>
-            {lastSync > 0 && <span className={css.syncStatus} title="最近一次手动重同步时间">最近同步 {fmtSyncTime(lastSync)}</span>}
+            {lastSync > 0 && <span className={css.syncStatus} title="最近一次手动重同步时间">最近同步 {fmtHourMinuteMs(lastSync)}</span>}
             <button type="button" className={css.btn} onClick={openExport}>导出</button>
           </>
         )}

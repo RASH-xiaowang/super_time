@@ -11,7 +11,6 @@ import {
   RANGE_PRESETS,
   addDaysISO,
   describeRange,
-  formatLocalDate,
   isValidISODate,
   normalizeRange,
   parseISODate,
@@ -19,16 +18,17 @@ import {
   resolveRangePreset,
   todayISO,
 } from './date-range.ts'
+import { fmtLocalDate } from './format.ts'
 
 /** 固定基准：2026-09-16（周三）本地零点。 */
 const WED = new Date(2026, 8, 16)
 
 describe('本地时区（不是 UTC）', () => {
-  it('formatLocalDate 输出 YYYY-MM-DD，分量与本机日历一致', () => {
-    expect(formatLocalDate(WED)).toBe('2026-09-16')
+  it('日期格式化改用唯一出处：输出 YYYY-MM-DD，分量与本机日历一致', () => {
+    expect(fmtLocalDate(WED)).toBe('2026-09-16')
     // 月末/跨年边界：用真实 Date 构造而不是字符串截断
-    expect(formatLocalDate(new Date(2026, 11, 31))).toBe('2026-12-31')
-    expect(formatLocalDate(new Date(2027, 0, 1))).toBe('2027-01-01')
+    expect(fmtLocalDate(new Date(2026, 11, 31))).toBe('2026-12-31')
+    expect(fmtLocalDate(new Date(2027, 0, 1))).toBe('2027-01-01')
   })
 
   it('parseISODate 得到的是本地零点 —— 不能用 new Date(string)（那是 UTC 午夜，会退回前一天）', () => {
@@ -38,12 +38,12 @@ describe('本地时区（不是 UTC）', () => {
     expect(d.getDate()).toBe(16)
     expect(d.getHours()).toBe(0)
     // 关键回归：UTC 午夜在 UTC+8 会变成 09-15 08:00，getDate()=15
-    expect(formatLocalDate(d)).toBe('2026-09-16')
+    expect(fmtLocalDate(d)).toBe('2026-09-16')
   })
 
   it('todayISO 与本机今天一致（不是 UTC 今天）', () => {
     const now = new Date()
-    expect(todayISO()).toBe(formatLocalDate(now))
+    expect(todayISO()).toBe(fmtLocalDate(now))
   })
 
   it('isValidISODate 只认合法的本地日历日期', () => {

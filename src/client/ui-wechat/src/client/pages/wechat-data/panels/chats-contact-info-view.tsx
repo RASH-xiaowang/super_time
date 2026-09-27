@@ -18,14 +18,8 @@ import { EmptyState } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import { ListSkeleton } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
+import { fmtDateSec } from '../utils/format.ts'
 import css from './chats-contact-info.module.css'
-
-function fmtDate(ts: number | null): string {
-  if (!ts) return '—'
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 
 export interface ChatsContactInfoViewProps {
   /** 抽屉是否打开。 */
@@ -95,11 +89,11 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
               </div>
               <div className={css.row}>
                 <span className={css.rowLabel}>首次联系</span>
-                <span className={css.rowValue}>{fmtDate(data.messages.firstTime)}</span>
+                <span className={css.rowValue}>{fmtDateSec(data.messages.firstTime)}</span>
               </div>
               <div className={css.row}>
                 <span className={css.rowLabel}>最近联系</span>
-                <span className={css.rowValue}>{fmtDate(data.messages.lastTime)}</span>
+                <span className={css.rowValue}>{fmtDateSec(data.messages.lastTime)}</span>
               </div>
               <div className={css.row}>
                 <span className={css.rowLabel}>朋友圈</span>

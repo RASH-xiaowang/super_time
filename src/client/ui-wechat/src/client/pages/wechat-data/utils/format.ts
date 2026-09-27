@@ -143,6 +143,75 @@ export function fmtMonthDaySec(ts: number | null | undefined): string {
 }
 
 /**
+ * `Date` 对象 → `YYYY-MM-DD`（本地时区）。**所有「只到日」的形状都从这一份拼。**
+ *
+ * 为什么收在这里：`utils/date-range.ts` 的 `formatLocalDate`、`panels/kb-model.ts` 的
+ * `formatDate`、单聊资料页的 `fmtDate` 各写过同一段 `padStart` 拼接（审查 P3-1 剩下的那三条）。
+ * 走本地时区而不是 `toISOString().slice(0, 10)` —— 后者取 UTC 日期，UTC+8 的夜里会把「今天」写成昨天。
+ * @param d - 已经算好的本地 `Date`。
+ */
+export function fmtLocalDate(d: Date): string {
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+}
+
+/**
+ * **秒级**时间戳 → `YYYY-MM-DD`。
+ * @param ts - unix 秒（不是毫秒！）。
+ * @param placeholder - 空值或非法值时返回的占位符。
+ */
+export function fmtDateSec(ts: number | null | undefined, placeholder = '—'): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n * 1000)
+  return Number.isNaN(d.getTime()) ? placeholder : fmtLocalDate(d)
+}
+
+/**
+ * **毫秒级**时间戳 → `YYYY-MM-DD`（与 `fmtDateSec` 只差单位）。
+ * @param ts - 毫秒时间戳（不是秒！）。
+ * @param placeholder - 空值或非法值时返回的占位符。
+ */
+export function fmtDateMs(ts: number | null | undefined, placeholder = '—'): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n)
+  return Number.isNaN(d.getTime()) ? placeholder : fmtLocalDate(d)
+}
+
+/**
+ * **毫秒级**时间戳 → `HH:mm`（状态行那种「最近同步 14:05」）。
+ * @param ts - 毫秒时间戳（不是秒！）。
+ * @param placeholder - 空值或非法值时返回的占位符。
+ */
+export function fmtHourMinuteMs(ts: number | null | undefined, placeholder = ''): string {
+  const n = Number(ts ?? 0)
+  if (!n) return placeholder
+  const d = new Date(n)
+  if (Number.isNaN(d.getTime())) return placeholder
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}`
+}
+
+/**
+ * **秒级**时间戳 → 评论/点赞角上的极简相对时间。
+ *
+ * 与 `fmtDividerSec` 不是一把尺子：那条是微信分隔标签口径（要显示「星期X」「M月D日」），
+ * 这条只有一行窄位置放得下，所以 24 小时内走「刚刚 / N分钟前 / N小时前」，昨天显示「昨天」，
+ * 再往前退回 `M-D`（无年份 —— 评论区不需要跨年对照）。
+ * @param ts - unix 秒（不是毫秒！）。
+ * @param now - 参照「现在」的毫秒时刻（默认取当前时间，便于单测注入）。
+ */
+export function fmtCommentTimeSec(ts: number | null | undefined, now: number = Date.now()): string {
+  const n = Number(ts ?? 0)
+  if (!n) return ''
+  const diff = now - n * 1000
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
+  if (diff < 172800000) return '昨天'
+  return fmtMonthDaySec(n)
+}
+
+/**
  * 0..1 的比例 → `NN%`（整数百分比）。
  * @param ratio - 比例（0.42 → '42%'）。
  */

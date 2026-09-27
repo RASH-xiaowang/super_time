@@ -35,22 +35,21 @@ const IMPL_MARKS = /\b1024\b|toLocaleString|padStart|getMonth\(\)/
 
 /**
  * 已知的「第二份时间格式化」（审查报告数到 4 份 fmtTime，本守卫按名字宽口径扫到更多）。
- * **棘轮：只能变小。** 本次已消灭的是全部字节格式化副本（5 份）与四份 `fmtTime`；
- * 第三条也消灭了一条：`search-query.ts` 那份 `formatFullTime` 与 `fmtDateTimeSec` 输出逐字节相同
- * （含 0/NaN/null/负数八组对照），第三批 #21 搬叶子模块时顺手删掉、改指唯一出处。
- * 剩下的这些各有自己的显示形状（带秒、只到日、按评论时间缩写…），
- * 统一它们要逐个改界面文案并逐条核对既有用例，属于「另一轮」的工作 ——
- * 但不能因此让守卫失明，所以按 `文件  名字` 登记在这里。
- * 新增一条 = 红；修好一条 = 必须从这份清单里删掉。
+ * **这张清单 2026-09-26 清空了 ⇒ 这一档从此是零容忍闸门，不再登记豁免。**
+ *
+ * 头几份（`fmtTime` 四份、`search-query.ts` 的 `formatFullTime`）在第一批 #8 / 第三批 #21 就没了。
+ * 剩下的六条当时被判成「形状各不相同 ⇒ 统一就得改界面文案，属于另一轮」：
+ * `query/favorites.ts` 的 `fmtDateTime`、单聊资料页的 `fmtDate`、知识库的 `formatDate`、
+ * 朋友圈评论角的 `fmtCommentTime`、同步状态行的 `fmtSyncTime`、区间层的 `formatLocalDate`。
+ * 这轮看清的是：**守卫要的是「一处实现」，不是「一种输出」** —— 把形状本身搬进唯一出处、
+ * 并按约定把单位写进名字（`fmtLocalDate` / `fmtDateSec` / `fmtDateMs` / `fmtHourMinuteMs` /
+ * `fmtCommentTimeSec`），界面文案一个字都不用动。唯一改动的显示是空值那一档：
+ * `formatDate(0)` 原先画成 `1970-01-01`，现在回占位符 —— 那正是 P3-1 点名的病，不是顺手改文案。
+ *
+ * 所以：**再长出第二份实现 = 红**。真觉得共享出处装不下那个形状，先把「为什么装不下」写进
+ * 唯一出处的注释，而不是往这里加一行。
  */
-const KNOWN_SECOND_TIME: ReadonlyArray<string> = [
-  'src/backend/wechat-data/src/query/favorites.ts  fmtDateTime',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-contact-info-view.tsx  fmtDate',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-model.ts  formatDate',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-support.tsx  fmtCommentTime',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-support.tsx  fmtSyncTime',
-  'src/client/ui-wechat/src/client/pages/wechat-data/utils/date-range.ts  formatLocalDate',
-]
+const KNOWN_SECOND_TIME: ReadonlyArray<string> = []
 
 /** 这些名字**一个都不许有第二份**（审查点名的那四类：单位歧义与字节口径的直接来源）。 */
 const NEVER_TWICE = /^(fmtTime|fmtBytes|formatBytes|fmtSize)$/
@@ -136,12 +135,15 @@ describe('格式化函数只有一个实现处', () => {
     for (const k of KNOWN_SECOND_TIME) {
       expect(dupes, `清单里的这条已经不存在了（删掉它）：${k}`).toContain(k)
     }
+    // ④ 这一档已经是零容忍闸门：往回登记条目就等于恢复「登记豁免」的老规矩，先拦在这里
+    expect(KNOWN_SECOND_TIME, '第二份时间格式化又登记回清单了 —— 该搬进唯一出处，不是登记豁免').toEqual([])
   })
 
   it('两个唯一出处各自真的定义了共享实现（防空转）', () => {
     const front = readFileSync(join(ROOT, FRONT_OWNER), 'utf8')
     const back = readFileSync(join(ROOT, BACK_OWNER), 'utf8')
-    for (const name of ['fmtBytes', 'fmtLocaleMs', 'fmtLocaleSec', 'fmtTodayOrLocaleMs']) {
+    for (const name of ['fmtBytes', 'fmtLocaleMs', 'fmtLocaleSec', 'fmtTodayOrLocaleMs',
+      'fmtLocalDate', 'fmtDateSec', 'fmtDateMs', 'fmtHourMinuteMs', 'fmtCommentTimeSec']) {
       expect(front, `${FRONT_OWNER} 不再导出 ${name}`).toContain(`export function ${name}`)
     }
     for (const name of ['fmtBytes', 'fmtDateTimeSec', 'fmtRelativeDaySec']) {
@@ -155,6 +157,51 @@ describe('格式化函数只有一个实现处', () => {
       expect(code, `${owner} 又出现了不带单位的 fmtTime`).not.toMatch(/export function fmtTime\s*\(/)
       expect(code).toMatch(/fmt\w*(Sec|Ms)\b/)
     }
+  })
+
+  /**
+   * 「实现搬进了唯一出处」与「调用方真的用上了」是两件事。
+   *
+   * 上面那条扫的是**实现**（本地不许再留一份带换算的副本），但把 import 那行删掉只剩调用点、
+   * 或者留个 import 却仍调本地那一份，扫描都看不见 —— 所以这里逐个调用点钉三件事：
+   * ① 这份文件**从唯一出处 import 了**那个名字（不是「文件里出现过这个名字」）；
+   * ② 真的有一个 `名字(` 的调用点；③ 不带单位的老名字不再出现（老名字还在就是没搬干净）。
+   */
+  const REPOINTED: ReadonlyArray<{ file: string; name: string; oldName: string }> = [
+    { file: 'src/backend/wechat-data/src/query/favorites.ts', name: 'fmtDateTimeSec', oldName: 'fmtDateTime' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-contact-info-view.tsx', name: 'fmtDateSec', oldName: 'fmtDate' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-model.ts', name: 'fmtDateMs', oldName: 'formatDate' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx', name: 'fmtDateMs', oldName: 'formatDate' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx', name: 'fmtCommentTimeSec', oldName: 'fmtCommentTime' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-portals.tsx', name: 'fmtCommentTimeSec', oldName: 'fmtCommentTime' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx', name: 'fmtHourMinuteMs', oldName: 'fmtSyncTime' },
+    { file: 'src/client/ui-wechat/src/client/pages/wechat-data/utils/date-range.ts', name: 'fmtLocalDate', oldName: 'formatLocalDate' },
+  ]
+
+  const readSrc = (file: string): string => readFileSync(join(ROOT, file), 'utf8').replace(/\r\n/g, '\n')
+  /** 「从哪一份 format.ts import 了这个名字」——出处只认文件名，不写死相对深度。 */
+  const importReOf = (name: string): RegExp =>
+    new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from '[^']*format\\.ts'`)
+
+  it('八处调用点：import 自唯一出处、真的有调用点、老名字不再出现', () => {
+    expect(REPOINTED.length, '调用点清单是空的 ⇒ 这条会静默恒真').toBe(8)
+    for (const r of REPOINTED) {
+      const code = readSrc(r.file)
+      expect(importReOf(r.name).test(code), `${r.file} 不再从唯一出处 import ${r.name}（只剩本地副本或干脆没接）`).toBe(true)
+      expect(code, `${r.file} 里没有 ${r.name} 的调用点`).toMatch(new RegExp(`\\b${r.name}\\(`))
+      expect(code, `${r.file} 还在用老名字 ${r.oldName} —— 没搬干净`).not.toMatch(new RegExp(`\\b${r.oldName}\\b`))
+    }
+  })
+
+  it('反例自证：抽掉 import 那一行 / 把调用换回老名字，上面那条必须分辨得出来', () => {
+    const target = REPOINTED.find((r) => r.file.endsWith('favorites.ts'))
+    if (!target) throw new Error('调用点清单里找不到 favorites.ts ⇒ 自证没有靶子')
+    const code = readSrc(target.file)
+    const re = importReOf(target.name)
+    expect(re.test(code), '现仓本来就没有那行 import ⇒ 接线那条是假绿').toBe(true)
+    expect(re.test(code.replace(re, '')), '抽掉 import 之后仍像接着的 ⇒ 判据只看得到名字，看不到出处').toBe(false)
+    const backToOld = code.replace(new RegExp(`\\b${target.name}\\(`), `${target.oldName}(`)
+    expect(new RegExp(`\\b${target.oldName}\\b`).test(backToOld), '换回老名字没被 ③ 那面看到').toBe(true)
   })
 
   it('判据自证：喂它一段本地实现，它必须报出来（否则上面几条是恒真）', () => {
@@ -172,5 +219,10 @@ describe('格式化函数只有一个实现处', () => {
     expect(implementations('adapter.ts', adapter)).toEqual([])
     const alias = 'export const formatBytes = fmtBytes\n'
     expect(implementations('alias.ts', alias)).toEqual([])
+    // 本轮搬进唯一出处的形状，本地再长一份仍然不能失明
+    const dateDup = "function fmtDateOnly(ts: number): string {\n  const d = new Date(ts)\n  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`\n}\n"
+    expect(implementations('date-dup.ts', dateDup).length, '日期形状的本地副本没被抓到 ⇒ 归零的那张清单是假清').toBe(1)
+    const clockDup = "function fmtShortTime(ts: number): string {\n  const d = new Date(ts)\n  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`\n}\n"
+    expect(implementations('clock-dup.ts', clockDup).length, '钟点形状的本地副本没被抓到').toBe(1)
   })
 })

@@ -11,7 +11,8 @@ import { Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, DateRangeField } from '../ui/kit.tsx'
-import { fmtCommentTime, imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
+import { imgKey, MEDIA_LABELS, type MediaFilter, MomentsMiniAvatar, replyTarget } from './moments-support.tsx'
+import { fmtCommentTimeSec } from '../utils/format.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import { videoCoverKey } from './moments-media.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
@@ -406,7 +407,7 @@ export function MomentsDetail({
                       {img && (cdata || proxyableSrc(img.thumb, img.url)) && (
                         <RemoteImg key={'img' + String(ci)} src={cdata || proxyableSrc(img.thumb, img.url)} alt="" loading="lazy" className={css.commentImg} failed={<span className={css.commentImgFallback}>[图]</span>} {...clickableKey(() => { setViewer({ images: [{ thumb: img.thumb, url: img.url, md5: img.md5 }], index: 0, author: (c.nickname || c.username || '') }) }, { label: '查看大图' })} />
                       )}
-                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
+                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTimeSec(c.ts)}</span>}
                     </div>
                   )
                 })}

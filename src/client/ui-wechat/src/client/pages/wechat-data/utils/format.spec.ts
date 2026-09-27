@@ -15,7 +15,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  fmtBytes, fmtDateTimeSec, fmtLocaleMs, fmtLocaleSec, fmtTodayOrLocaleMs,
+  fmtBytes, fmtCommentTimeSec, fmtDateMs, fmtDateSec, fmtDateTimeSec, fmtDividerSec, fmtHourMinuteMs,
+  fmtLocaleMs, fmtLocaleSec, fmtLocalDate, fmtMonthDaySec, fmtTodayOrLocaleMs,
 } from './format.ts'
 
 /** 本地 2026-09-26 18:00 —— 用「本地」构造，断言就不依赖运行时区。 */
@@ -96,5 +97,73 @@ describe('fmtTodayOrLocaleMs（历史对话列表：今天只看时钟，其余�
   it('跨年也不许被当成「今天」', () => {
     const lastNYear = new Date(2025, 11, 31, 15, 30).getTime()
     expect(fmtTodayOrLocaleMs(lastNYear)).not.toContain('今天')
+  })
+})
+
+/**
+ * 这四份形状原先各有一个本地副本（审查 P3-1 剩下的那六条里的五条：单聊资料页的 `fmtDate`、
+ * 知识库的 `formatDate`、朋友圈评论角的 `fmtCommentTime`、同步状态行的 `fmtSyncTime`、
+ * 区间层的 `formatLocalDate`）。搬进来时**输出逐个对齐**，所以这里钉的是「形状没变」，
+ * 不是「形状对」—— 唯一有意改变的是空值那一档，见下面第二条用例。
+ */
+describe('日期与时钟形状（P3-1 收尾：四份本地副本的落点）', () => {
+  const LOCAL_DATE = new Date(2026, 8, 7, 12, 0, 0)
+  const LOCAL_MS = LOCAL_DATE.getTime()
+  const LOCAL_SEC = Math.floor(LOCAL_MS / 1000)
+
+  it('fmtLocalDate 用本地分量补零，月末与跨年都不借 UTC', () => {
+    expect(fmtLocalDate(LOCAL_DATE)).toBe('2026-09-07')
+    expect(fmtLocalDate(new Date(2026, 11, 31))).toBe('2026-12-31')
+    expect(fmtLocalDate(new Date(2027, 0, 1))).toBe('2027-01-01')
+    // 区间层（todayISO / addDaysISO / isValidISODate 的回填校验）依赖这一点：
+    // 拿 new Date('2026-09-16') 再 toISOString 会是另一种形状。
+    expect(fmtLocalDate(new Date(2026, 8, 16, 0, 0, 0))).toBe('2026-09-16')
+  })
+
+  it('同一瞬间走 Sec/Ms 两条路必须一致；喂错单位必然画成别的日子', () => {
+    expect(fmtDateSec(LOCAL_SEC)).toBe(fmtDateMs(LOCAL_MS))
+    expect(fmtDateSec(LOCAL_SEC)).toBe('2026-09-07')
+    expect(fmtDateMs(LOCAL_SEC)).toContain('1970')
+    expect(fmtDateSec(LOCAL_MS)).not.toBe('2026-09-07')
+  })
+
+  it('空值/非法回占位 —— 这是搬动唯一改变的一处显示：0 不再画成 1970-01-01', () => {
+    // 知识库的 `formatDate` 与资料页的 `fmtDate` 原先都没有空值闸：`createdAt` 为 0 的笔记
+    // 显示「创建于 1970-01-01」。这正是审查 P3-1 点名的病（单位/空值错了不报错，只安静画错）。
+    for (const v of [0, null, undefined, Number.NaN]) {
+      expect(fmtDateSec(v as number)).toBe('—')
+      expect(fmtDateMs(v as number)).toBe('—')
+    }
+    expect(fmtDateSec(0, '')).toBe('')
+  })
+
+  it('fmtHourMinuteMs：状态行那种「最近同步 09:05」，只要钟点', () => {
+    expect(fmtHourMinuteMs(new Date(2026, 8, 26, 9, 5).getTime())).toBe('09:05')
+    expect(fmtHourMinuteMs(0)).toBe('')
+    expect(fmtHourMinuteMs(Number.NaN)).toBe('')
+    expect(fmtHourMinuteMs(new Date(2026, 8, 26, 9, 5).getTime() / 1000)).not.toBe('09:05')
+  })
+
+  it('fmtCommentTimeSec 的档位边界（now 注入，不依赖跑测试的时刻）', () => {
+    const at = (secAgo: number): string => fmtCommentTimeSec(LOCAL_SEC - secAgo, LOCAL_MS)
+    expect(at(0)).toBe('刚刚')
+    expect(at(59)).toBe('刚刚')
+    expect(at(60)).toBe('1分钟前')
+    expect(at(3599)).toBe('59分钟前')
+    expect(at(3600)).toBe('1小时前')
+    expect(at(86399)).toBe('23小时前')
+    expect(at(86400)).toBe('昨天')
+    expect(at(172799)).toBe('昨天')
+    // 48 小时之外退回 `M-D`，与文件列表那把尺子同源
+    expect(at(172800)).toBe(fmtMonthDaySec(LOCAL_SEC - 172800))
+    expect(at(4_000_000)).toBe(fmtMonthDaySec(LOCAL_SEC - 4_000_000))
+    expect(at(-3600), '时钟回拨（未来时间）不许显示成负数').toBe('刚刚')
+    expect(fmtCommentTimeSec(0, LOCAL_MS)).toBe('')
+  })
+
+  it('评论角与日期分隔标签不是一把尺子（防有人顺手合并成一份）', () => {
+    const ts = Math.floor(new Date(2026, 8, 25, 15, 30).getTime() / 1000)
+    expect(fmtCommentTimeSec(ts, NOW_LOCAL.getTime())).toBe('昨天')
+    expect(fmtDividerSec(ts, NOW_LOCAL)).toBe('昨天 15:30')
   })
 })

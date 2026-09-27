@@ -14,7 +14,8 @@
 import { Fragment } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
-import { fmtCommentTime, imgKey, replyTarget } from './moments-support.tsx'
+import { imgKey, replyTarget } from './moments-support.tsx'
+import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar } from './moments-support.tsx'
 import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
@@ -302,7 +303,7 @@ export function MomentsCard({
                         // 连地址都没有：留一个 [图] 记号（评论里确实存在只剩文字的图片评论）
                         return <span className={css.commentImgFallback}>[图]</span>
                       })()}
-                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
+                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTimeSec(c.ts)}</span>}
                     </div>
                   )
                 })}

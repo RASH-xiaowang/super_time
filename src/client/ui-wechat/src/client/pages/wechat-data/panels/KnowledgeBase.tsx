@@ -24,8 +24,9 @@ import { NOTES_UPDATED_EVENT } from '../notes-events.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { ListSkeleton, useTransientNotice } from './hooks.tsx'
-import { collectTags, countText, excerptOf, filterByTag, formatDate, formatRelative, indexByTitle, linkRefs, normalizeTitleKey, segmentBody } from './kb-model.ts'
+import { collectTags, countText, excerptOf, filterByTag, formatRelative, indexByTitle, linkRefs, normalizeTitleKey, segmentBody } from './kb-model.ts'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
+import { fmtDateMs } from '../utils/format.ts'
 import css from './knowledge-base.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -380,7 +381,7 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
 
                 <div className={css.detailMeta}>
                   <span>更新于 {formatRelative(selected.updatedAt, now)}</span>
-                  <span>创建于 {formatDate(selected.createdAt)}</span>
+                  <span>创建于 {fmtDateMs(selected.createdAt)}</span>
                   <span>{selected.body.length} 字</span>
                   {links.length > 0 ? <span>{links.length} 条链接</span> : null}
                   {selected.sourceKind === 'ask' ? (

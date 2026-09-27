@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseSnsXml } from '../src/query/moments.ts'
 import { queryFavorites } from '../src/query/favorites.ts'
+import { fmtDateTimeSec } from '../src/format.ts'
 
 /** 仓库根：tests → wechat-data → backend → src → 根（4 层）。 */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
@@ -70,6 +71,19 @@ describe('queryFavorites 剥 CDATA（整条链，含 SQLite）', () => {
     expect(first?.url).toBe('https://x/a?u=1&v=2')
     // `content` 是**原样保留**的 XML（详情抽屉要展示原文），所以只检查解析出来的那几格
     expect([first?.title, first?.desc, first?.url].join('|')).not.toContain('CDATA')
+  })
+
+  /**
+   * 那一列时间原先是本文件同一份源码里手写的第二份 `fmtDateTime`（审查 P3-1 剩下六条之一）。
+   * 搬进唯一出处之后，这里钉的是**接线**：值必须由 `src/format.ts#fmtDateTimeSec` 产出。
+   * 断形状不断具体值 —— 具体值取决于运行机器的时区，而「谁产的这个串」才是这条要拦的。
+   */
+  it('收藏的时间那一格出自唯一出处（本地那份 fmtDateTime 不许长回来）', () => {
+    const first = queryFavorites(dir).favorites[0]
+    expect(first?.time).toBe(fmtDateTimeSec(1700000000))
+    expect(first?.time).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+    // 单位喂错（把秒当毫秒传进去）必然掉进 1970 或跑到五位数年份
+    expect(first?.time).not.toMatch(/^1970-/)
   })
 })
 

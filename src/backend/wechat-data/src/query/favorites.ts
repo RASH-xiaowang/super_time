@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
 import { stripCdata } from './parse-xml.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -248,14 +249,6 @@ function parseFavParts(xml: string): FavRawPart[] {
   return out
 }
 
-/** Format a unix timestamp as `YYYY-MM-DD HH:mm`. */
-function fmtDateTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 interface FavorItem {
   localId: number
   type: number
@@ -328,7 +321,7 @@ export function queryFavorites(
         desc: parsed.desc,
         url: parsed.url,
         updateTime,
-        time: fmtDateTime(updateTime),
+        time: fmtDateTimeSec(updateTime),
         content: xml,
         fromUsr,
         chatName,
