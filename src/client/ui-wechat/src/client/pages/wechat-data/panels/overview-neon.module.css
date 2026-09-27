@@ -129,10 +129,14 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
-  padding: 26px 12px 12px;
+  min-height: 146px;
+  /* 左右 20px 是为了躲开六边形的上下斜边（顶带里左边界最多内缩 18%W）：
+     12px 的旧内边距会让图标左上角压在斜边上（2026-09-27 真机截图抓到的），
+     而 18px 会撞 theme-geometry 的奇数间距闸门（5/7/9/18px 新文件零容忍）。 */
+  padding: 16px 20px 16px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -167,8 +171,8 @@
 /* 厚度：把板面往下错开 4px 的同一形状，暗一档 —— 等距的"侧面"。 */
 .plateDepth {
   position: absolute;
-  inset: 14px 8px 8px;
-  clip-path: polygon(24% 0, 76% 0, 100% 26%, 100% 74%, 76% 100%, 24% 100%, 0 74%, 0 26%);
+  inset: 12px 6px 6px;
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
   transform: translateY(6px);
   background: linear-gradient(160deg, rgba(8, 14, 30, 0.95), rgba(4, 8, 18, 0.95));
   opacity: 0.9;
@@ -176,15 +180,15 @@
 /* 板面：一层渐变当"边"，内嵌 1.4px 的玻璃面 —— `clip-path` 下没法用 border，只能这么叠。 */
 .plateFace {
   position: absolute;
-  inset: 14px 8px 8px;
-  clip-path: polygon(24% 0, 76% 0, 100% 26%, 100% 74%, 76% 100%, 24% 100%, 0 74%, 0 26%);
+  inset: 12px 6px 6px;
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
   background: linear-gradient(160deg, color-mix(in srgb, var(--nm-cyan) 96%, transparent), color-mix(in srgb, var(--nm-purple) 92%, transparent) 60%, color-mix(in srgb, var(--nm-purple) 62%, transparent));
 }
 .plateFace::after {
   content: '';
   position: absolute;
   inset: 2px;
-  clip-path: polygon(24% 0, 76% 0, 100% 26%, 100% 74%, 76% 100%, 24% 100%, 0 74%, 0 26%);
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
   background:
     radial-gradient(130% 78% at 16% 4%, rgba(255, 255, 255, 0.18), transparent 56%),
     linear-gradient(158deg, color-mix(in srgb, var(--nm-cyan) 30%, transparent), color-mix(in srgb, var(--nm-purple) 34%, transparent) 58%, transparent),
@@ -207,9 +211,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  font-size: 14px;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
   border-radius: var(--nm-r-sm);
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
@@ -222,7 +226,7 @@
 
 .plateValue {
   font-family: var(--nm-font-mono, monospace);
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.15;

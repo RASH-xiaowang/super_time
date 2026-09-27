@@ -52,7 +52,9 @@ describe('总览留白审计的就绪钩子（容器侧 + 脚本侧）', () => {
     expect(renamed.split('\n').some((l) => l.includes(HOOK)), '改名后仍然命中 ⇒ 反例是自欺').toBe(false)
     const script = readCode(SCRIPT)
     expect(script.includes(`[${HOOK}]`), '脚本侧本来就不引用它 ⇒ 第二条是假绿').toBe(true)
-    expect(script.replace(`[${HOOK}]`, '[]').includes(`[${HOOK}]`),
-      '把查询换成 [] 之后仍然命中 ⇒ 第二条反例没打到靶子').toBe(false)
+    // 用 split/join **换掉全部**出现：2026-09-27 加第二条查询（指标牌几何检查）时，
+    // 只换第一处的写法当场失效 —— 那正是"脚本里到底还有没有这个钩子"这个问题的正确问法。
+    expect(script.split(`[${HOOK}]`).join('[]').includes(`[${HOOK}]`),
+      '把查询全换成 [] 之后仍然命中 ⇒ 第二条反例没打到靶子').toBe(false)
   })
 })

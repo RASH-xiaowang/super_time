@@ -145,6 +145,53 @@ try {
     sumEmpty += c.empty
     console.log(`${c.title.padEnd(26)} ${String(c.y).padStart(5)} ${String(c.h).padStart(5)} ${String(c.empty).padStart(8)}   ${c.clipped.join(' | ')}`)
   }
+  // 等距指标牌：内容必须落在**板面（六边形）**的安全区里，且 8 张一模一样高。
+  //
+  // 为什么量的是"板面"而不是"按钮盒子"：第一版拿 `plateBody` 比 button 的 rect，它**永远通过** ——
+  // button 是 flex 容器，内容多高它就多高（`min-height` 只是下限）。而真正的坏法是内容压到
+  // **板面**上：板面是 `clip-path` 切出来的六边形（`inset: 12px 6px 6px` + 上下各 18% 高的斜带），
+  // 内容比它的"中间带"高时，字就压在斜边上；而"裁切"那一条也抓不到（牌子不是滚动容器）。
+  // 2026-09-27 就是这么做过去的：实测把牌子改矮到 92px，判据照样全绿 —— 于是改成按板面几何判。
+  const plate = await win.evaluate(() => {
+    const hero = document.querySelector('[data-st-ov-hero]')
+    if (!hero) return { n: 0, out: [], hs: [], margins: [] }
+    const plates = [...hero.querySelectorAll('button')]
+    const out = []
+    const margins = []
+    for (const b of plates) {
+      const faceEl = b.querySelector('[class*=plateFace]')
+      const name = (b.getAttribute('title') ?? '').replace('查看', '')
+      if (!faceEl) { out.push(`${name} 找不到板面元素`); continue }
+      const f = faceEl.getBoundingClientRect()
+      const body = b.querySelector('[class*=plateBody]') || b
+      const c = body.getBoundingClientRect()
+      // ① 内容整体要在板面的锚框内（留 4px 余量）
+      const margin = Math.round(Math.min(c.left - f.left, f.right - c.right, c.top - f.top, f.bottom - c.bottom))
+      margins.push(`${name} ${margin}px`)
+      if (margin < 4) { out.push(`${name} 内容越出板面锚框（最小余量 ${margin}px）`); continue }
+      // ② 斜带：板面上下各 18% 高度是**线性收窄**的（最窄处平边只占 18%–82%）。
+      //    判据按斜边的真实方程算：在离顶 t 的位置，平边起点 = 18% × (1 − t/cap) × 面宽。
+      //    （第一版拿"最窄处"当常数比，太严：内容刚进斜带一点点就被判红，那是判据错不是设计错。）
+      const capH = f.height * 0.18
+      const flat = (edge) => f.left + f.width * 0.18 * (1 - Math.min(1, Math.max(0, edge / capH)))
+      if (c.top < f.top + capH) {
+        const flatL = flat(c.top - f.top)
+        if (c.left < flatL) out.push(`${name} 顶行压在上斜带里（内容 left ${Math.round(c.left)} < 该高度平边 ${Math.round(flatL)}）`)
+      }
+      if (c.bottom > f.bottom - capH) {
+        const flatL = flat(f.bottom - c.bottom)
+        if (c.left < flatL) out.push(`${name} 末行压在下斜带里（内容 left ${Math.round(c.left)} < 该高度平边 ${Math.round(flatL)}）`)
+      }
+    }
+    return { n: plates.length, out, hs: plates.map((b) => Math.round(b.getBoundingClientRect().height)), margins }
+  })
+  check(plate.n === 8, `指标牌数量应为 8，实测 ${plate.n}`)
+  check(plate.out.length === 0, `指标牌内容越出板面安全区：${plate.out.join(' | ')}`)
+  if (plate.hs.length > 0) {
+    check(Math.max(...plate.hs) - Math.min(...plate.hs) <= 2, `8 张指标牌高度不齐：${plate.hs.join('/')}`)
+    console.log(`指标牌：${plate.hs.length} 张，高 ${plate.hs.join('/')}；内容距板面最小余量：${plate.margins.join(' / ')}`)
+  }
+
   console.log(`\n卡内空白合计: ${sumEmpty}px`)
   console.log(`网格空洞: ${rep.holes.length === 0 ? '无' : ''}`)
   for (const h of rep.holes) console.log('  ✗ ' + h)
