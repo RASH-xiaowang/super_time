@@ -430,6 +430,70 @@ export function clearDecodedImageCache(decodedDir: string, username: string, md5
 }
 
 /**
+ * 读「已解码缓存」里的一份：按给定扩展名顺序找 `<md5>.<ext>`，读到就转 data URL。
+ *
+ * 为什么抽出来（P3-5）：`decodeFileImageDataUrl` 与 `decodeEmoticonDataUrl` 各自抄了一遍
+ * 「拼路径 → existsSync → readFileSync → toDataUrl → 读失败返回错误串」，只有扩展名表与
+ * 错误前缀不同。抄两遍的实际代价是**失败语义会走样**：一处把读失败当成"未命中就继续找下一张"，
+ * 另一处当成"直接报错" —— 界面上都像"图没显示"，只有日志分得清。
+ * @param dir - decoded 缓存根目录。
+ * @param md5 - 图片/表情 md5（已归一小写）。
+ * @param exts - 扩展名顺序（第一个就是"最好的一份"）。
+ * @param failNote - 读失败时的错误前缀（调用方各自的措辞留在这里，不改口径）。
+ * @returns 命中 `{ hit }`；读失败 `{ error }`；一张都没有 `null`（"未找到"怎么说由调用方定）。
+ */
+function probeDecodedCache(
+  dir: string, md5: string, exts: readonly string[], failNote: string,
+): { hit: { url: string; format: string } } | { error: string } | null {
+  for (const ext of exts) {
+    const p = join(dir, md5 + '.' + ext)
+    if (!existsSync(p)) continue
+    try {
+      const bytes = readFileSync(p)
+      const format = ext === 'jpeg' ? 'jpg' : ext
+      return { hit: { url: toDataUrl(format, new Uint8Array(bytes)), format } }
+    } catch (e) {
+      return { error: failNote + ': ' + (e as Error).message }
+    }
+  }
+  return null
+}
+
+/**
+ * 依次解码候选 `.dat`，第一个能解成浏览器可渲染格式的就收工。
+ *
+ * 与上面同理（P3-5 的另一半）：消息图与表情图两条链都是
+ * 「readFileSync → decodeDatBytes → 跳过 error / hevc → 写缓存（尽力而为）→ toDataUrl」，
+ * 而**有意**的差异只有两处，都留在调用方：
+ *   · 排序方向 —— 消息链原图优先（`datTierRank`），表情链缩略优先（`THUMB_FIRST`）；
+ *   · 缓存写法 —— 消息链走 `writeDecodedCache`（分全局槽与按用户名槽），表情链直接写 `<md5>.<ext>`。
+ * @param files - 已排好顺序的候选路径。
+ * @param aesBytes - 归一后的 V2 AES key（可为 null，判法交给 `decodeDatBytes`）。
+ * @param xorKey - XOR key 字节。
+ * @param onDecoded - 解码成功后的缓存写入；它抛错不影响本次返回（缓存是 best-effort）。
+ * @returns 命中的 data URL / 格式 / 来自哪个文件（调用方据此再判 `thumb`）；全都没解出来时 `null`。
+ */
+function decodeDatToResult(
+  files: readonly string[], aesBytes: Uint8Array | null, xorKey: number,
+  onDecoded: (file: string, dec: { format: string; bytes: Uint8Array }) => void,
+): { url: string; format: string; file: string } | null {
+  for (const f of files) {
+    try {
+      const bytes = readFileSync(f)
+      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey)
+      if ('error' in dec) continue
+      // hevc（wxgf 的转码产物）这一份解不出可渲染格式：换下一个候选，而不是当场失败
+      if (dec.format === 'hevc') continue
+      try {
+        onDecoded(f, dec)
+      } catch { /* cache best-effort */ }
+      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, file: f }
+    } catch { /* try next candidate */ }
+  }
+  return null
+}
+
+/**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root (data/wechat/decoded_images).
@@ -472,20 +536,11 @@ export function decodeImageDataUrl(
       // it decodes to a browser-renderable format.
       const aesBytes = normalizeAesKey(aesKey)
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
-      for (const f of ordered) {
-        try {
-          const bytes = readFileSync(f)
-          const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
-          if ('error' in dec) continue
-          if (dec.format === 'hevc') continue
-          // 只有 `_t`（与更差的 `_b`）进兜底槽；`_h` 是原图，就该占住「最好的一份」。
-          const thumb = isThumbTier(f)
-          try {
-            writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, thumb)
-          } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
-        } catch { /* try next candidate */ }
-      }
+      const r = decodeDatToResult(ordered, aesBytes, xorKey ?? 0xff, (f, dec) => {
+        // 只有 `_t`（与更差的 `_b`）进兜底槽；`_h` 是原图，就该占住「最好的一份」。
+        writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, isThumbTier(f))
+      })
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
       return { error: 'hevc-unsupported' }
     }
   }
@@ -493,18 +548,10 @@ export function decodeImageDataUrl(
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? '', hint.dataIndex)
     if (hd) {
-      const aesBytes = normalizeAesKey(aesKey)
-      try {
-        const bytes = readFileSync(hd)
-        const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
-        if (!('error' in dec) && dec.format !== 'hevc') {
-          const thumb = isThumbTier(hd)
-          try {
-            writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, thumb)
-          } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
-        }
-      } catch { /* unreadable dat fall through */ }
+      const r = decodeDatToResult([hd], normalizeAesKey(aesKey), xorKey ?? 0xff, (f, dec) => {
+        writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, isThumbTier(f))
+      })
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
     }
   }
   return { error: md5 ? '找不到 .dat 文件 (MD5=' + md5 + ')' : '无法定位图片文件 (data_index=' + hint.dataIndex + ')' }
@@ -525,17 +572,9 @@ export function decodeFileImageDataUrl(
 ): { url?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
   if (!isMd5(m)) return { error: '缺少图片 MD5' }
-  for (const ext of ['jpg']) {
-    const p = join(decodedDir, m + '.' + ext)
-    if (existsSync(p)) {
-      try {
-        const bytes = readFileSync(p)
-        return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)) }
-      } catch (e) {
-        return { error: '读取已解码图片失败: ' + (e as Error).message }
-      }
-    }
-  }
+  const probed = probeDecodedCache(decodedDir, m, ['jpg'], '读取已解码图片失败')
+  if (probed && 'error' in probed) return { error: probed.error }
+  if (probed) return { url: probed.hit.url }
   return { error: '未找到已解密图片（decoded_images/' + m + '.jpg 不存在）' }
 }
 
@@ -565,17 +604,9 @@ export function decodeEmoticonDataUrl(
 ): { url?: string; format?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
   if (!isMd5(m)) return { error: '缺少表情 MD5' }
-  for (const ext of RENDERABLE_EXTS) {
-    const p = join(decodedDir, m + '.' + ext)
-    if (existsSync(p)) {
-      try {
-        const bytes = readFileSync(p)
-        return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)), format: ext === 'jpeg' ? 'jpg' : ext }
-      } catch (e) {
-        return { error: '读取已解码表情失败: ' + (e as Error).message }
-      }
-    }
-  }
+  const probed = probeDecodedCache(decodedDir, m, RENDERABLE_EXTS, '读取已解码表情失败')
+  if (probed && 'error' in probed) return { error: probed.error }
+  if (probed) return { url: probed.hit.url, format: probed.hit.format }
   if (!wechatBaseDir) return { error: '表情未缓存且缺少原始微信目录' }
   const attachRoot = join(wechatBaseDir, 'msg', 'attach')
   if (!existsSync(attachRoot)) return { error: '表情未缓存且找不到 msg/attach' }
@@ -603,18 +634,10 @@ export function decodeEmoticonDataUrl(
   // （表情原图多是 wxgf/动图，解码更慢）。与消息链的「原图优先」是有意的差异，不是笔误。
   const THUMB_FIRST: Record<DatTier, number> = { thumb: 0, other: 1, chat: 2, original: 3 }
   const ordered = [...dats].sort((a, b) => THUMB_FIRST[datTierOf(a)] - THUMB_FIRST[datTierOf(b)])
-  for (const f of ordered) {
-    try {
-      const bytes = readFileSync(f)
-      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey)
-      if ('error' in dec) continue
-      if (dec.format === 'hevc') continue
-      try {
-        writeFileSync(join(decodedDir, m + '.' + dec.format), Buffer.from(dec.bytes))
-      } catch { /* cache best-effort */ }
-      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format }
-    } catch { /* try next */ }
-  }
+  const r = decodeDatToResult(ordered, aesBytes, xorKey, (f, dec) => {
+    writeFileSync(join(decodedDir, m + '.' + dec.format), Buffer.from(dec.bytes))
+  })
+  if (r) return { url: r.url, format: r.format }
   return { error: '表情文件无法解码为浏览器可渲染格式' }
 }
 

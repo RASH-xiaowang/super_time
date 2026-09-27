@@ -194,7 +194,11 @@ describe('接线守卫', () => {
     const at = mi.indexOf('function writeDecodedCache')
     expect(at, '找不到 writeDecodedCache —— 改名时请同步本用例').toBeGreaterThan(-1)
     expect(mi.slice(at, mi.indexOf('\n}', at)).includes("thumb ? '.t.' : '.'"), '写入端必须按 thumb 分槽').toBe(true)
-    expect((mi.match(/writeDecodedCache\([^)]*, thumb\)/g) ?? []).length, '两处 .dat 分支都要把 thumb 传下去').toBe(2)
+    // P3-5 之后 thumb 是就地算的（`isThumbTier(f)` 直接当参数传），不再是先存进 `thumb` 变量
+    // 再传 —— 守的事实没变：**两处 .dat 分支都要把 thumb 传下去**（写盘分槽 + 出图结果标缩略），
+    // 所以判据跟着换形状，但一条都没放宽。
+    expect((mi.match(/writeDecodedCache\([^)]*isThumbTier\(/g) ?? []).length, '两处 .dat 分支都要把 thumb 传给写入端').toBe(2)
+    expect((mi.match(/\.\.\.\(isThumbTier\(r\.file\) \? \{ thumb: true \} : \{\}\)/g) ?? []).length, '两处 .dat 分支都要把 thumb 标进出图结果').toBe(2)
   })
 
   it('getImageOriginal 过两道闸：隐私出网闸门 + CDN 开关', () => {

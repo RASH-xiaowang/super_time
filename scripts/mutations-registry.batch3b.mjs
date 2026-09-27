@@ -666,4 +666,38 @@ export const MUTATIONS_BATCH3B = [
     to: "import { __internals } from '../src/backend/wechat-data/src/query/retrieval/embedding.ts'",
     spec: "src/backend/tests/layer-direction.spec.ts",
   },
+
+  // ── P3-5：图片解码三兄弟收成两份公共体之后，守住"抽取没把语义抹平" ──
+  {
+    id: "M302-decoded-cache-read-error-becomes-miss",
+    why: "把 probeDecodedCache 的「读失败」当「未命中」往下走 ⇒ 两条链各自的「读取已解码图片/表情失败」措辞全丢，界面上「没图」而日志里再分不清是没缓存还是读不出来（结构复制最容易走样的正是这个）",
+    file: "src/backend/wechat-data/src/query/media-image.ts",
+    from: "      return { error: failNote + ': ' + (e as Error).message }",
+    to: "      void e",
+    spec: "src/backend/wechat-data/tests/media-image-decode-shared.spec.ts",
+  },
+  {
+    id: "M303-hevc-skip-disabled",
+    why: "关掉公共体里那句 hevc 跳过 ⇒ wxgf 转码不可用时把不可渲染的字节当成功交出去，表情链的「无法解码为可渲染格式」这条如实降级没了；同时反重复判据（hevc 只许一份）也跟着红 —— 规则集中在一份里才能一处改全局生效",
+    file: "src/backend/wechat-data/src/query/media-image.ts",
+    from: "      if (dec.format === 'hevc') continue",
+    to: "      if (false && dec.format === 'hevc') continue",
+    spec: "src/backend/wechat-data/tests/media-image-decode-shared.spec.ts",
+  },
+  {
+    id: "M304-cache-write-callback-dropped",
+    why: "解码成功不再调用 onDecoded（缓存写入丢一次）⇒ 表情每次显示都要重扫 msg/attach 全树，且「第二次直接命中同一份」那条断言红；缓存是 best-effort 不等于可以不做",
+    file: "src/backend/wechat-data/src/query/media-image.ts",
+    from: "        onDecoded(f, dec)",
+    to: "        void onDecoded",
+    spec: "src/backend/wechat-data/tests/media-image-decode-shared.spec.ts",
+  },
+  {
+    id: "M305-two-chains-share-one-wording",
+    why: "把文件库那条的错误前缀改成表情那条的措辞 ⇒ 「两条链各自的措辞」判据红。看似文案小事：两处共用一句时，日志里就分不清是文件库缺图还是表情缺图，而那正是用户报「某一边不出图」时唯一能分叉的证据",
+    file: "src/backend/wechat-data/src/query/media-image.ts",
+    from: "probeDecodedCache(decodedDir, m, ['jpg'], '读取已解码图片失败')",
+    to: "probeDecodedCache(decodedDir, m, ['jpg'], '读取已解码表情失败')",
+    spec: "src/backend/wechat-data/tests/media-image-decode-shared.spec.ts",
+  },
 ]

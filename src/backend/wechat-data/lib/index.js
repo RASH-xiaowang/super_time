@@ -18290,6 +18290,37 @@ function clearDecodedImageCache(decodedDir, username, md5) {
   }
   return removed;
 }
+function probeDecodedCache(dir, md5, exts, failNote) {
+  for (const ext of exts) {
+    const p = join69(dir, md5 + "." + ext);
+    if (!existsSync54(p)) continue;
+    try {
+      const bytes = readFileSync17(p);
+      const format = ext === "jpeg" ? "jpg" : ext;
+      return { hit: { url: toDataUrl(format, new Uint8Array(bytes)), format } };
+    } catch (e) {
+      return { error: failNote + ": " + e.message };
+    }
+  }
+  return null;
+}
+function decodeDatToResult(files, aesBytes, xorKey, onDecoded) {
+  for (const f of files) {
+    try {
+      const bytes = readFileSync17(f);
+      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey);
+      if ("error" in dec) continue;
+      if (dec.format === "hevc") continue;
+      try {
+        onDecoded(f, dec);
+      } catch {
+      }
+      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, file: f };
+    } catch {
+    }
+  }
+  return null;
+}
 function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatBaseDir, aesKey, xorKey) {
   const hint = resolveImageResourceHint(decryptedDir, username, localId);
   const md5 = hint.md5;
@@ -18306,41 +18337,20 @@ function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatB
     if (dats.length > 0) {
       const aesBytes = normalizeAesKey(aesKey);
       const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b));
-      for (const f of ordered) {
-        try {
-          const bytes = readFileSync17(f);
-          const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 255);
-          if ("error" in dec) continue;
-          if (dec.format === "hevc") continue;
-          const thumb = isThumbTier(f);
-          try {
-            writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, thumb);
-          } catch {
-          }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...thumb ? { thumb: true } : {} };
-        } catch {
-        }
-      }
+      const r = decodeDatToResult(ordered, aesBytes, xorKey ?? 255, (f, dec) => {
+        writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, isThumbTier(f));
+      });
+      if (r) return { url: r.url, format: r.format, ...isThumbTier(r.file) ? { thumb: true } : {} };
       return { error: "hevc-unsupported" };
     }
   }
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? "", hint.dataIndex);
     if (hd) {
-      const aesBytes = normalizeAesKey(aesKey);
-      try {
-        const bytes = readFileSync17(hd);
-        const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 255);
-        if (!("error" in dec) && dec.format !== "hevc") {
-          const thumb = isThumbTier(hd);
-          try {
-            writeDecodedCache(decodedDir, username, md5 || "data-" + hint.dataIndex, dec.format, dec.bytes, thumb);
-          } catch {
-          }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...thumb ? { thumb: true } : {} };
-        }
-      } catch {
-      }
+      const r = decodeDatToResult([hd], normalizeAesKey(aesKey), xorKey ?? 255, (f, dec) => {
+        writeDecodedCache(decodedDir, username, md5 || "data-" + hint.dataIndex, dec.format, dec.bytes, isThumbTier(f));
+      });
+      if (r) return { url: r.url, format: r.format, ...isThumbTier(r.file) ? { thumb: true } : {} };
     }
   }
   return { error: md5 ? "\u627E\u4E0D\u5230 .dat \u6587\u4EF6 (MD5=" + md5 + ")" : "\u65E0\u6CD5\u5B9A\u4F4D\u56FE\u7247\u6587\u4EF6 (data_index=" + hint.dataIndex + ")" };
@@ -18348,33 +18358,17 @@ function decodeImageDataUrl(decryptedDir, decodedDir, username, localId, wechatB
 function decodeFileImageDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aesKey, xorKey = 255) {
   const m = (md5 ?? "").trim().toLowerCase();
   if (!isMd5(m)) return { error: "\u7F3A\u5C11\u56FE\u7247 MD5" };
-  for (const ext of ["jpg"]) {
-    const p = join69(decodedDir, m + "." + ext);
-    if (existsSync54(p)) {
-      try {
-        const bytes = readFileSync17(p);
-        return { url: toDataUrl(ext === "jpeg" ? "jpg" : ext, new Uint8Array(bytes)) };
-      } catch (e) {
-        return { error: "\u8BFB\u53D6\u5DF2\u89E3\u7801\u56FE\u7247\u5931\u8D25: " + e.message };
-      }
-    }
-  }
+  const probed = probeDecodedCache(decodedDir, m, ["jpg"], "\u8BFB\u53D6\u5DF2\u89E3\u7801\u56FE\u7247\u5931\u8D25");
+  if (probed && "error" in probed) return { error: probed.error };
+  if (probed) return { url: probed.hit.url };
   return { error: "\u672A\u627E\u5230\u5DF2\u89E3\u5BC6\u56FE\u7247\uFF08decoded_images/" + m + ".jpg \u4E0D\u5B58\u5728\uFF09" };
 }
 function decodeEmoticonDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aesKey, xorKey = 255) {
   const m = (md5 ?? "").trim().toLowerCase();
   if (!isMd5(m)) return { error: "\u7F3A\u5C11\u8868\u60C5 MD5" };
-  for (const ext of RENDERABLE_EXTS) {
-    const p = join69(decodedDir, m + "." + ext);
-    if (existsSync54(p)) {
-      try {
-        const bytes = readFileSync17(p);
-        return { url: toDataUrl(ext === "jpeg" ? "jpg" : ext, new Uint8Array(bytes)), format: ext === "jpeg" ? "jpg" : ext };
-      } catch (e) {
-        return { error: "\u8BFB\u53D6\u5DF2\u89E3\u7801\u8868\u60C5\u5931\u8D25: " + e.message };
-      }
-    }
-  }
+  const probed = probeDecodedCache(decodedDir, m, RENDERABLE_EXTS, "\u8BFB\u53D6\u5DF2\u89E3\u7801\u8868\u60C5\u5931\u8D25");
+  if (probed && "error" in probed) return { error: probed.error };
+  if (probed) return { url: probed.hit.url, format: probed.hit.format };
   if (!wechatBaseDir) return { error: "\u8868\u60C5\u672A\u7F13\u5B58\u4E14\u7F3A\u5C11\u539F\u59CB\u5FAE\u4FE1\u76EE\u5F55" };
   const attachRoot = join69(wechatBaseDir, "msg", "attach");
   if (!existsSync54(attachRoot)) return { error: "\u8868\u60C5\u672A\u7F13\u5B58\u4E14\u627E\u4E0D\u5230 msg/attach" };
@@ -18402,20 +18396,10 @@ function decodeEmoticonDataUrl(decryptedDir, decodedDir, wechatBaseDir, md5, aes
   const aesBytes = normalizeAesKey(aesKey);
   const THUMB_FIRST = { thumb: 0, other: 1, chat: 2, original: 3 };
   const ordered = [...dats].sort((a, b) => THUMB_FIRST[datTierOf(a)] - THUMB_FIRST[datTierOf(b)]);
-  for (const f of ordered) {
-    try {
-      const bytes = readFileSync17(f);
-      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey);
-      if ("error" in dec) continue;
-      if (dec.format === "hevc") continue;
-      try {
-        writeFileSync10(join69(decodedDir, m + "." + dec.format), Buffer.from(dec.bytes));
-      } catch {
-      }
-      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format };
-    } catch {
-    }
-  }
+  const r = decodeDatToResult(ordered, aesBytes, xorKey, (f, dec) => {
+    writeFileSync10(join69(decodedDir, m + "." + dec.format), Buffer.from(dec.bytes));
+  });
+  if (r) return { url: r.url, format: r.format };
   return { error: "\u8868\u60C5\u6587\u4EF6\u65E0\u6CD5\u89E3\u7801\u4E3A\u6D4F\u89C8\u5668\u53EF\u6E32\u67D3\u683C\u5F0F" };
 }
 async function fetchEmoticonRemote(url, decodedDir, md5, opts = {}) {
