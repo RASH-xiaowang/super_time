@@ -1,5 +1,5 @@
 import type { RetrievedDoc } from './types.ts';
-import { getPlanes, l2normalize, popcount32, selectByHamming, simhash, type EmbedFn, type HashRow } from '../vector-math.ts';
+import { type EmbedFn, type HashRow } from '../vector-math.ts';
 export type { EmbedFn, HashRow } from '../vector-math.ts';
 /** 向量库状态。 */
 export interface VectorIndexStatus {
@@ -30,8 +30,6 @@ export declare function vectorDbPath(decryptedDir: string): string;
  * @returns 状态快照。
  */
 export declare function vectorIndexStatus(decryptedDir: string): VectorIndexStatus;
-/** docKey = `username:local_id`（与稀疏通道一致的去重键）。 */
-declare function docKeyOf(username: string, localId: number): string;
 /** 构建结果。 */
 export interface VectorBuildResult {
     status: string;
@@ -85,17 +83,17 @@ export declare function vectorIndexSummary(decryptedDir: string): {
     model: string;
 };
 /**
- * 便于测试：导出内部哈希工具。
- * `loadHashRows` 也在这里 —— 稠密通道的真实入口要先跑 embedding（联网/本地模型），
- * 单测拿不到，而**它那条款连接的生命周期**必须能被量到（`query-db-lifetime.spec.ts`）。
+ * 测试接缝：**只**放"真实入口拿不到"的东西。
+ *
+ * `loadHashRows` 是 SimHash 粗筛表的读取 —— 它唯一的公开入口是稠密通道那一条，
+ * 而那条要先跑 embedding（联网或本地模型），单测量不到它；偏偏**那条连接的生命周期**
+ * 必须可测（`query-db-lifetime.spec.ts`：Windows 上没关的句柄 = 数据根再也换不掉）。
+ *
+ * 原先这里还挂着 `simhash` / `popcount32` / `getPlanes` / `l2normalize` /
+ * `selectByHamming` / `MAX_HAMMING` —— 那些的出处其实是 `query/vector-math.ts`，
+ * 已经各自 named export（P3-17：测试与门禁脚本改直连 vector-math，
+ * 别再绕这层接缝 —— 接缝一旦变成"拿纯函数的后门"，改名与重构的信号就会绕过真正的 API）。
  */
 export declare const __internals: {
-    simhash: typeof simhash;
-    popcount32: typeof popcount32;
-    getPlanes: typeof getPlanes;
-    l2normalize: typeof l2normalize;
-    docKeyOf: typeof docKeyOf;
-    selectByHamming: typeof selectByHamming;
-    MAX_HAMMING: number;
     loadHashRows: typeof loadHashRows;
 };

@@ -16,7 +16,10 @@ import { buildQueryPlan, normalizeQuestion, resolveRelativeDate, synonymExpand, 
 import { dedupeFused, fuseResults } from '../src/query/retrieval/fusion.ts'
 import { rerankDocs } from '../src/query/retrieval/rank.ts'
 import { averagePrecision, mrr, ndcgAtK, precisionAtK, recallAtK } from '../src/query/retrieval/eval.ts'
-import { __internals, buildVectorIndex, searchDense } from '../src/query/retrieval/embedding.ts'
+import { buildVectorIndex, searchDense } from '../src/query/retrieval/embedding.ts'
+// P3-17：这几件纯数学的出处是 query/vector-math.ts（原先绕道 embedding 的 __internals 测试接缝，
+// 接缝只该给"真实入口拿不到"的东西用，见 embedding.ts 里 __internals 的注释）。
+import { getPlanes, l2normalize, MAX_HAMMING, popcount32, selectByHamming, simhash } from '../src/query/vector-math.ts'
 import { defaultPolicyFor, effectiveParams, defaultRetrievalConfig, loadRetrievalConfig, retrievalConfigPath } from '../src/query/retrieval/config.ts'
 import { SYNTHETIC_CASES, runSyntheticEval, syntheticIntentAccuracy } from '../src/query/retrieval/eval-dataset.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
@@ -222,28 +225,28 @@ describe('eval 指标', () => {
 
 describe('embedding SimHash 工具', () => {
   it('L2 归一化后模长为 1', () => {
-    const v = __internals.l2normalize([3, 4])
+    const v = l2normalize([3, 4])
     // 这里是 typed array（Float32Array），不是普通数组 —— `at()` 的 `readonly T[]` 套不上，
     // 而下标对 typed array 恒在范围内，所以 `?? 0` 只是把类型收窄，不是掩盖问题。
     expect(Math.hypot(v[0] ?? 0, v[1] ?? 0)).toBeCloseTo(1)
   })
 
   it('popcount 正确', () => {
-    expect(__internals.popcount32(0)).toBe(0)
-    expect(__internals.popcount32(0b1011)).toBe(3)
+    expect(popcount32(0)).toBe(0)
+    expect(popcount32(0b1011)).toBe(3)
   })
 
   it('同一向量 SimHash 稳定，相似向量汉明距离近', () => {
-    const planes = __internals.getPlanes(8)
-    const a = __internals.l2normalize([1, 1, 1, 1, 0, 0, 0, 0])
-    const b = __internals.l2normalize([1, 1, 1, 0.9, 0, 0, 0, 0])
-    const c = __internals.l2normalize([0, 0, 0, 0, 1, 1, 1, 1])
-    const ha = __internals.simhash(a, planes)
-    const hb = __internals.simhash(b, planes)
-    const hc = __internals.simhash(c, planes)
-    expect(__internals.simhash(a, planes)).toEqual(ha) // 确定性
+    const planes = getPlanes(8)
+    const a = l2normalize([1, 1, 1, 1, 0, 0, 0, 0])
+    const b = l2normalize([1, 1, 1, 0.9, 0, 0, 0, 0])
+    const c = l2normalize([0, 0, 0, 0, 1, 1, 1, 1])
+    const ha = simhash(a, planes)
+    const hb = simhash(b, planes)
+    const hc = simhash(c, planes)
+    expect(simhash(a, planes)).toEqual(ha) // 确定性
     const d = (x: { lo: number; hi: number }, y: { lo: number; hi: number }): number =>
-      __internals.popcount32((x.lo ^ y.lo) >>> 0) + __internals.popcount32((x.hi ^ y.hi) >>> 0)
+      popcount32((x.lo ^ y.lo) >>> 0) + popcount32((x.hi ^ y.hi) >>> 0)
     expect(d(ha, hb)).toBeLessThan(d(ha, hc))
   })
 })
@@ -277,7 +280,7 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
    */
   function reference(rows: readonly Row[], qh: { lo: number; hi: number }, pool: number): Row[] {
     return rows
-      .map((r) => ({ r, d: __internals.popcount32((r.lo ^ qh.lo) >>> 0) + __internals.popcount32((r.hi ^ qh.hi) >>> 0) }))
+      .map((r) => ({ r, d: popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, pool)
       .map((x) => x.r)
@@ -305,7 +308,7 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
       // 最后一条用例故意构造并列：把 hi 全设成 0，距离由 lo 决定，容易出现同距离
       if (c.note.includes('并列')) for (const r of rows) r.hi = 0
       const qh = { lo: rng(c.seed + 999)(), hi: c.note.includes('并列') ? 0 : rng(c.seed + 998)() }
-      const got = __internals.selectByHamming(rows, qh, c.pool)
+      const got = selectByHamming(rows, qh, c.pool)
       // oracle 直接用旧实现的 `slice(0, pool)`：它对非整数会截断、对 NaN 得空数组 ——
       // 这两种容错正是新实现必须保持一致的地方（`new Array(非整数)` 会抛 RangeError）。
       const want = reference(rows, qh, c.pool)
@@ -319,14 +322,14 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
     const rows = makeRows(10, 15)
     const qh = { lo: at(rows, 0, 'rows').lo, hi: at(rows, 0, 'rows').hi }
     expect(reference(rows, qh, -3).length).toBe(7) // 旧行为：slice(0, -3) 去掉尾部 3 条
-    expect(__internals.selectByHamming(rows, qh, -3)).toEqual([]) // 新行为：按 0 处理
+    expect(selectByHamming(rows, qh, -3)).toEqual([]) // 新行为：按 0 处理
   })
 
   it('距离全相同时按原表顺序取前 pool', () => {
     const rows = makeRows(64, 14)
     for (const r of rows) { r.lo = 0; r.hi = 0 }
     const qh = { lo: 0, hi: 0 } // 与每一行的距离都是 0
-    const got = __internals.selectByHamming(rows, qh, 10)
+    const got = selectByHamming(rows, qh, 10)
     expect(got.map((r) => r.rowid)).toEqual(rows.slice(0, 10).map((r) => r.rowid))
   })
 
@@ -337,21 +340,21 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
     const near: Row = { rowid: 1, lo: 0, hi: 0, username: 'wxid_a' }
     const far: Row = { rowid: 2, lo: 0xffffffff, hi: 0xffffffff, username: 'wxid_a' }
     const qh = { lo: 0, hi: 0 }
-    expect(__internals.popcount32(0xffffffff)).toBe(32)
-    const got = __internals.selectByHamming([far, near], qh, 2)
+    expect(popcount32(0xffffffff)).toBe(32)
+    const got = selectByHamming([far, near], qh, 2)
     expect(got.map((r) => r.rowid)).toEqual([1, 2]) // 近的在前，64 的仍然在
     expect(got.length).toBe(2)
   })
 
   it('popcount32 与朴素实现一致（差分测试的 oracle 依赖它）', () => {    // 差分测试两侧都用 popcount32，所以「popcount 本身对不对」是独立命题，必须单独验。
     const naive = (x: number): number => (x >>> 0).toString(2).split('').filter((c) => c === '1').length
-    expect(__internals.popcount32(0)).toBe(0)
-    expect(__internals.popcount32(0xffffffff)).toBe(32)
-    for (let b = 0; b < 32; b += 1) expect(__internals.popcount32(1 << b)).toBe(1)
+    expect(popcount32(0)).toBe(0)
+    expect(popcount32(0xffffffff)).toBe(32)
+    for (let b = 0; b < 32; b += 1) expect(popcount32(1 << b)).toBe(1)
     const r = rng(4242)
     for (let i = 0; i < 10_000; i += 1) {
       const x = r()
-      expect(__internals.popcount32(x)).toBe(naive(x))
+      expect(popcount32(x)).toBe(naive(x))
     }
   })
 
@@ -359,27 +362,27 @@ describe('稠密粗筛：按汉明距离取前 pool（M9）', () => {
     const rows = makeRows(5000, 11)
     for (const r of rows) r.hi = 0
     const qh = { lo: at(rows, 0, 'rows').lo ^ 0b111, hi: 0 }
-    const a = __internals.selectByHamming(rows, qh, 300)
-    const b = __internals.selectByHamming(rows, qh, 300)
+    const a = selectByHamming(rows, qh, 300)
+    const b = selectByHamming(rows, qh, 300)
     expect(a.map((r) => r.rowid)).toEqual(b.map((r) => r.rowid))
-    const dist = (r: Row): number => __internals.popcount32((r.lo ^ qh.lo) >>> 0)
+    const dist = (r: Row): number => popcount32((r.lo ^ qh.lo) >>> 0)
     for (let i = 1; i < a.length; i += 1) expect(dist(at(a, i, 'a'))).toBeGreaterThanOrEqual(dist(at(a, i - 1, 'a')))
   })
 
   it('返回值就是原表里的对象（不复制、不改写）', () => {
     const rows = makeRows(500, 12)
-    const got = __internals.selectByHamming(rows, { lo: at(rows, 3, 'rows').lo, hi: at(rows, 3, 'rows').hi }, 10)
+    const got = selectByHamming(rows, { lo: at(rows, 3, 'rows').lo, hi: at(rows, 3, 'rows').hi }, 10)
     expect(at(got, 0, 'got')).toBe(at(rows, 3, 'rows')) // 完全相同的查询哈希 → 距离 0 且在原表首位
     expect(rows[0]).toEqual({ rowid: 1, lo: expect.any(Number), hi: expect.any(Number), username: expect.any(String) })
   })
 
   it('dist 一律落在 [0, MAX_HAMMING]（Uint8Array 的容量前提）', () => {
-    expect(__internals.MAX_HAMMING).toBe(64)
+    expect(MAX_HAMMING).toBe(64)
     const rows = makeRows(2000, 13)
     const qh = { lo: 0xffffffff, hi: 0 }
-    const picked = __internals.selectByHamming(rows, qh, 100)
+    const picked = selectByHamming(rows, qh, 100)
     expect(picked.length).toBe(100)
-    const worst = __internals.popcount32(0xffffffff)
+    const worst = popcount32(0xffffffff)
     expect(worst).toBe(32)
   })
 })

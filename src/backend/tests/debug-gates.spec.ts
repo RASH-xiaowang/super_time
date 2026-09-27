@@ -32,7 +32,11 @@ import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from '../debug-gates.js'
-import { shouldSkipGates } from '../../client/ui-app/debug-gates.ts'
+// P3-17：渲染层那个纯函数（`shouldSkipGates`）的行为判据搬到了它自己那一层
+// —— `src/client/ui-app/debug-gates.spec.ts`。宿主层的 spec 直接 import 前端源码是**反向依赖**
+// （后端构建产物不该认识前端模块）。本文件继续守**接线**：读 `ui-entry.tsx` 的源码文本，
+// 断言它真的调用了一次 `shouldSkipGates`、实参是主进程给的 IPC 事实、三道闸门都由同一个豁免变量守着。
+// 「读文本做断言」与「import 值」是两回事：前者是源码级守卫的常规手段，后者才是跨层耦合。
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 // M21 第二十刀：misc IPC 频道搬去了 `src/backend/ipc-misc.js` ⇒ 读取面改**联合**
@@ -127,18 +131,6 @@ describe('N2：豁免判定的纯函数（打包态一律不豁免）', () => {
     }
     // 连 opts 都不传
     expect(resolveDebugGates().skipGates).toBe(false)
-  })
-})
-
-describe('N2：渲染层判定的纯函数（第二道校验）', () => {
-  it('只有 packaged === false 且 skipGates === true 才豁免', () => {
-    expect(shouldSkipGates({ packaged: false, skipGates: true })).toBe(true)
-    // 主进程以后改了返回值形状 / 字段名拼错 / 老主进程不带 packaged ⇒ 一律不放行
-    for (const fact of [null, undefined, {}, { skipGates: true }, { packaged: true, skipGates: true },
-      { packaged: false }, { packaged: 'false', skipGates: true }, { packaged: false, skipGates: 'true' },
-      { skipOnboarding: true }]) {
-      expect(shouldSkipGates(fact), `fact=${JSON.stringify(fact)} 不应放行`).toBe(false)
-    }
   })
 })
 

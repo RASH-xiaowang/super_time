@@ -648,4 +648,22 @@ export const MUTATIONS_BATCH3B = [
     to: '      fs.renameSync(tmp, tmp + String.fromCharCode(46) + ' + '"parked"' + ');',
     spec: "src/backend/tests/atomic-json.spec.ts",
   },
+
+  // ── P3-17：层间方向（后端不许 import 前端）与「门禁脚本不许走测试接缝」──
+  {
+    id: "M300-backend-imports-client-source",
+    why: "把 P3-17 刚拆掉的那条反向依赖长回来（后端 spec 直接 import 渲染层的 shouldSkipGates）⇒ layer-direction 判据必须红。这条变异就是判据存在的理由本身：没有它，下一次「顺手从后端测一下前端纯函数」没有任何东西拦得住",
+    file: "src/backend/tests/debug-gates.spec.ts",
+    from: "import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from '../debug-gates.js'",
+    to: "import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from '../debug-gates.js'\nimport { shouldSkipGates } from '../../client/ui-app/debug-gates.ts'",
+    spec: "src/backend/tests/layer-direction.spec.ts",
+  },
+  {
+    id: "M301-gate-script-uses-test-seam",
+    why: "门禁脚本 rag-retrieval-check 改回从 embedding 的 __internals 接缝拿纯数学（本轮已按出处直连 vector-math）⇒ 「scripts/** 不许引用 __internals」必须红。红之外还有层含义：真 API 改名时这类脚本会静默漏过门禁，而它正是「没有 vitest 也能验」的那道保险",
+    file: "scripts/rag-retrieval-check.ts",
+    from: "import { getPlanes, hammingDistance, l2normalize, simhash } from '../src/backend/wechat-data/src/query/vector-math.ts'",
+    to: "import { __internals } from '../src/backend/wechat-data/src/query/retrieval/embedding.ts'",
+    spec: "src/backend/tests/layer-direction.spec.ts",
+  },
 ]
