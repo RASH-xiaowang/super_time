@@ -154,35 +154,53 @@ describe('原子性的真实判别（跨进程观察中间态）', () => {
     child.stderr.on('data', (d) => { childErr += String(d) })
 
     let torn = 0
-    // 先确定性地采一次「旧内容」：否则子进程可能在第一次轮询前就写完了，
-    // 断言会退化成「一次样本都没有」的空转（实测确实抖过）。
     let sawOld = 0
+    let sawFull = 0
     // 「写入确实经过同目录临时文件」的探针。为什么必须有它：`torn` 与「文件 ID 变化」
     // 都挡不住一类**语义上非原子**的实现 —— 先把目标改名挪走、再原地写一份新的
     // （目标会瞬时消失、新内容可能被读到一半），它的文件 ID 必然变化、也不会被采样到
     // 中间尺寸，但**永远不会出现 `.tmp-` 文件**。复审实测这类实现下原先两条判据 10 跑 0 红。
     let sawTmp = 0
-    if (statSync(target).size === old) sawOld += 1
-    while (child.exitCode === null) {
+    /**
+     * 采样**不许依赖事件循环**。原先写法是 `while (child.exitCode === null) { …; await setImmediate }`，
+     * 于是用例成立与否取决于两件事的相对速度：子进程写完这 8MB 要几毫秒，
+     * 而父进程的 `setImmediate` 在整库并发（一次跑 68 个文件）时可能几十毫秒才轮到一次 ——
+     * 实测负载下 `sawTmp` 会偶发 0，红因写着「原子写没经过临时文件」，真相是采样被饿死。
+     * 这是"判据依赖调度而不是依赖被守的事实"那一类：单机跑恒绿，并发跑抖。
+     *
+     * 改成同步自旋：每圈真的 `statSync` + `readdirSync` 一次（约几十微秒），
+     * 直到看见目标尺寸等于完整新内容、或撞上 deadline。写完 8MB 的窗口是毫秒级，
+     * 所以这期间能采到成百上千个样本，`.tmp-` 的存在不再可能因为"没轮到"而看不见。
+     */
+    const deadline = Date.now() + 15_000
+    while (sawFull === 0 && Date.now() < deadline) {
       try {
         const n = statSync(target).size
         if (n === old) sawOld += 1
         // 只把「存在但既不是旧内容也不是完整新内容」算作写了一半（含被截断成 0）。
         // **目标短暂不可见不计**：rename 替换目标时名字可能瞬间消失，那是另一种性质；
         // 把它算进去会让这条用例在负载下抖（复审实测未变异代码 10 跑 4 红）。
-        else if (n !== full) torn += 1
+        else if (n === full) sawFull += 1
+        else torn += 1
       } catch { /* 目标瞬时不可见：不计 */ }
       try {
         if (readdirSync(dir).some((f) => f.includes('.tmp-'))) sawTmp += 1
       } catch { /* 列目录失败不影响主判据 */ }
-      await new Promise<void>((resolve) => { setImmediate(resolve) })
     }
+    // 自旋不推进事件循环，所以子进程的退出要在这里等回来（带超时，别把用例挂在这）
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(() => { resolve() }, 8000)
+      child.once('close', () => { clearTimeout(t); resolve() })
+    })
 
     // 子进程必须真的写成功：否则下面的断言会以「内容还是旧值」的形式失败，红因误导。
     expect(child.exitCode, '子进程退出码（stderr: ' + childErr.slice(0, 300) + '）').toBe(0)
+    // 三条"样本必须真的存在"的判据各管一件事：
+    //   · sawFull > 0 —— 自旋真的看见了写完（否则下面的 torn === 0 是"一次都没采到"的假绿）
+    //   · torn === 0  —— 读者视角看不到中间态（这是主判据）
+    //   · sawOld > 0  —— 写之前目标还是旧内容（证明我们观察的是同一次替换）
+    expect(sawFull, '一次都没采到「完整新内容」⇒ 自旋没覆盖到写完那一刻，下面的 torn 是空转').toBeGreaterThan(0)
     expect(torn).toBe(0)
-    // 防止「一次样本都没采到」的空转：`sawOld` 在循环前被确定性地置过一次（见上面的预采样）。
-    // 不要写 `expect(sawFull + 1).toBeGreaterThan(0)` 这种恒真式 —— 复审指出它起不到守卫作用。
     expect(sawOld).toBeGreaterThan(0)
     expect(sawTmp, '写入必须出现同目录临时文件（tmp+rename 的判别）').toBeGreaterThan(0)
     expect(readFileSync(target, 'utf8')).toHaveLength(full)
