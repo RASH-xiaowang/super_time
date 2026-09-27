@@ -209,6 +209,39 @@ describe('文档索引与文档里的引用', () => {
     }
   })
 
+  /**
+   * P3-19 的两半：**会烂在文档里的数字与清单**。
+   *
+   * 报告原话是"16 个未索引文档 + README 视图数过时（写约 40 个，实测 94）"；实测是
+   * 顶层 21 份文档里索引了 8 份（差 13 份），视图数写的是 90（实测 102）。补完之后由这两条守住：
+   * 只补不守 = 下次照样烂 —— 而这正是本仓对其他"数字"的一贯口径（见 CONTRIBUTING 的棘轮一节）。
+   */
+  it('README 的文档索引覆盖 docs/ 顶层每一份文档（新增一份就得同时补索引）', () => {
+    const top = readdirSync(join(ROOT, 'docs'), { withFileTypes: true })
+      .filter((e) => e.isFile() && /\.(md|html)$/.test(e.name))
+      .map((e) => `docs/${e.name}`)
+    expect(top.length, '顶层文档数少得太离谱 ⇒ 扫描目标没读到，下面那条"全覆盖"是恒真').toBeGreaterThanOrEqual(20)
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
+    const at = readme.indexOf('## 文档索引')
+    const next = readme.indexOf('\n## ', at + 5)
+    const rows = readme.slice(at, next < 0 ? readme.length : next).split('\n').filter((l) => l.startsWith('|') && !l.includes('---'))
+    const targets = rows.flatMap((r) => relativeLinks(r))
+    const missing = top.filter((d) => !targets.includes(d))
+    expect(missing, `这些文档在 docs/ 顶层躺着、README 索引里没有：${missing.join(', ')}`).toEqual([])
+    // 反例自证：凭空多出一份文档，必须被同一条判据点出来
+    expect([...top, 'docs/BRAND-NEW-NOT-INDEXED.md'].filter((d) => !targets.includes(d)),
+      '合成违例没被抓住 ⇒ 这份覆盖判据是空的').toContain('docs/BRAND-NEW-NOT-INDEXED.md')
+  })
+
+  it('README 里那句「panels/ 下 N 个 .tsx 视图」的 N 与实测一致', () => {
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
+    const m = /panels\/ 下 (\d+) 个 \.tsx 视图/.exec(readme)
+    expect(m, '找不到 README 里那句视图数 ⇒ 改了写法要连这条判据一起改').not.toBeNull()
+    const panels = readdirSync(join(ROOT, 'src/client/ui-wechat/src/client/pages/wechat-data/panels'))
+      .filter((f) => f.endsWith('.tsx')).length
+    expect(Number(m![1]), `README 写 ${m![1]} 个，实测 ${panels} 个 —— 数字要么改对，要么别写`).toBe(panels)
+  })
+
   it('文档里的每条相对链接都指向仓库里真实存在的文件或目录', () => {
     const bad: string[] = []
     for (const doc of CORPUS) {

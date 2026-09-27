@@ -108,7 +108,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           语音解码器 wx_silk.exe（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 102 个 .tsx 视图）
 src/license/             授权：指纹、签名校验、许可证解析
 tools/license-studio/    许可签发图形工具
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本
@@ -128,6 +128,19 @@ docs/                    隐私声明、接口参考、RAG 架构、实施计划
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
 | [`docs/rag/RAG-ARCHITECTURE.md`](docs/rag/RAG-ARCHITECTURE.md) | 检索与问答链路：混合召回、重排权重、上下文压缩、评估与反馈闭环 |
 | [`docs/CODE-AUDIT-2026-09-26.md`](docs/CODE-AUDIT-2026-09-26.md) | 全面代码审计与整改台账（逐条状态记在「先读这里」） |
+| [`docs/KB-RAG-REDESIGN.html`](docs/KB-RAG-REDESIGN.html) | 知识库重设计方案（多库 · 文件解析 · RAG 检索） |
+| [`docs/KB-RAG-PLAN.md`](docs/KB-RAG-PLAN.md) | 上面那份设计的分阶段实施计划（阶段任务表与验收） |
+| [`docs/KB-COMPLETION-PLAN.md`](docs/KB-COMPLETION-PLAN.md) | 知识库收口计划：目标、范围、逐阶段做什么 |
+| [`docs/KB-MULTI-REDESIGN.html`](docs/KB-MULTI-REDESIGN.html) | 多知识库形态设计图（一个入口、多个库、一库一图） |
+| [`docs/KB-MODEL-CONFIG.md`](docs/KB-MODEL-CONFIG.md) | 三类模型（向量 / 重排 / 生成）分别配置的方案与调用场景 |
+| [`docs/KB-EVAL-BASELINE.md`](docs/KB-EVAL-BASELINE.md) | 检索基线报告：夹具集、怎么跑、改动前后要对哪些数字 |
+| [`docs/KB-WEKNORA-GAP.md`](docs/KB-WEKNORA-GAP.md) | 与 WeKnora 的能力差异清单（结论先行 + 按类别归纳） |
+| [`docs/GRAPH-KNOWLEDGE-REDESIGN.html`](docs/GRAPH-KNOWLEDGE-REDESIGN.html) | 知识图谱重设计方案（借鉴社交图谱的布局与分层） |
+| [`docs/LAYA-TRIAGE-FEASIBILITY.md`](docs/LAYA-TRIAGE-FEASIBILITY.md) | laya 决策引擎接入可行性：目标形态对应 + 三重 PoC 实测 |
+| [`docs/WXHOOK-ORIGINAL-IMAGE-EMBED.md`](docs/WXHOOK-ORIGINAL-IMAGE-EMBED.md) | wxhook「获取原图」拆解，以及嵌入本项目的方案与代价 |
+| [`docs/PERF-BASELINE.md`](docs/PERF-BASELINE.md) | 加载性能基线：冷跑实测数据、瓶颈定位与优化方案 |
+| [`docs/UI-PANELS-PLAN.md`](docs/UI-PANELS-PLAN.md) | 功能界面完善计划（17 个主导航页签的审计结果与逐轮任务） |
+| [`docs/UI-GEOMETRY-SPEC.md`](docs/UI-GEOMETRY-SPEC.md) | UI 几何规范：圆角 / 间距 / 布局刻度（令牌值口径，2026-09-25 基线） |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
 | [`wechat/README.md`](wechat/README.md) | 配置模板（`config.example.json` / `llm.example.json`） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |

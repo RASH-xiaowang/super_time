@@ -46,7 +46,9 @@ CI 会重跑同一套并把"重建后 `git diff` 必须为空"当门禁 —— *
 npm run check:mutation -- --only M5   # 前缀匹配；--only 省略则跑全表
 ```
 
-登记表在 [`../scripts/mutations-registry.mjs`](../scripts/mutations-registry.mjs)（按 1000 行闸门切了 batch3 / batch3b）。
+登记表在 [`../scripts/mutations-registry.mjs`](../scripts/mutations-registry.mjs)（按 1000 行闸门切了 batch3 / batch3b / batch3c）。
+切一份就要在 `MUTATIONS` 里聚合一份 —— **忘了聚合不报任何错**，只会让那批条目悄悄消失；
+兜它的是 `mutation-registry-anchors.spec.ts` 里那个只许涨的 `REGISTRY_MIN`，所以**每登记一条就把那个数抬上去**。
 写变异条目的四条硬规矩（都被实际踩过）：
 
 - 锚点在目标文件里**恰好命中一次**，且指定的判据文件还在（[`../src/backend/tests/mutation-registry-anchors.spec.ts`](../src/backend/tests/mutation-registry-anchors.spec.ts) 机检）；

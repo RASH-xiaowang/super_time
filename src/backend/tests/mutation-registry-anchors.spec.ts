@@ -30,6 +30,16 @@ const rows: readonly Mutation[] = MUTATIONS
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 /**
+ * 登记表条数下限（**只许涨**）。2026-09-27 实测 344 条，留 4 条退号的余量。
+ *
+ * 为什么要有这个数：表按闸门容量切成多份之后，"新的一份忘了聚合进来"不报任何错 ——
+ * 那天切完 `batch3c` 就漏接过一次，`MUTATIONS` 从 344 悄悄掉到 306，
+ * 而当时唯一的数量判据是「>150」，全绿。号段连续性也拦不住（缺号才 4 个）。
+ * 加一条变异就把这个数抬上去；掉下来就是有人把某份表弄丢了。
+ */
+const REGISTRY_MIN = 340
+
+/**
  * 表里除 `to` 之外的五个字段都必须是非空字符串（缺一个字段，跑手就会报成"锚点失效"这种误导性结论）。
  * `to` 允许为空：那是「把这段删掉」型变异（实测有七条这么写）。
  */
@@ -67,6 +77,18 @@ function anchorDefects(list: readonly Mutation[]): string[] {
 describe('变异登记表的锚点不许腐烂', () => {
   it('表不是空的，也不是半张表（聚合出问题的话判据会退化成恒真）', () => {
     expect(rows.length, '一条变异都没登记到 —— 聚合是不是坏了').toBeGreaterThan(150)
+    /**
+     * 条目数下限 = 实测条数。由来：把表按容量切成多份之后，"新份忘了聚合进来"是
+     * **一条错都不报**的 —— 实测切完 `batch3c` 就漏接过一次，表从 344 悄悄掉到 306，
+     * 上面那条 >150 与号段连续性都拦不住（缺口才 4 个号）。所以这里放一个**只许涨**的数：
+     * 每登记一条就把 `REGISTRY_MIN` 抬上去；掉下来说明有整份表没接进来或被删了。
+     */
+    expect(rows.length, `登记表只剩 ${String(rows.length)} 条（下限 ${String(REGISTRY_MIN)}）—— 多半是某一份表没被聚合进 MUTATIONS`).toBeGreaterThanOrEqual(REGISTRY_MIN)
+    // 反例自证：丢 38 条（那天真实漏接的量）必须被这个数拦住，否则它只是个装饰。
+    expect(rows.length - 38 >= REGISTRY_MIN, `少 38 条仍然过 ⇒ 下限 ${String(REGISTRY_MIN)} 比实测 ${String(rows.length)} 松太多`).toBe(false)
+    const nums = rows.map((m) => Number(/^M(\d+)-/.exec(m.id)?.[1] ?? 0)).filter((n) => n > 0)
+    expect(new Set(nums).size, '有重号（两份表装了同一条）').toBe(nums.length)
+    expect(Math.max(...nums), '读不到号段').toBeGreaterThan(300)
     // 打的那一刀可以在源码、脚本或文档里（`scripts/panel-audit.mjs`、`docs/PRIVACY.md` 都有），
     // 但**判据**必须在测试树里 —— 不然「这条守卫会不会咬」就没有可跑的东西。
     const offSpec = rows.filter((m) => !m.spec.startsWith('src/')).map((m) => m.id)
@@ -95,6 +117,7 @@ describe('变异登记表的锚点不许腐烂', () => {
       'scripts/mutations-registry.mjs',
       'scripts/mutations-registry.batch3.mjs',
       'scripts/mutations-registry.batch3b.mjs',
+      'scripts/mutations-registry.batch3c.mjs',
     ]
     const FIELD_LINE = /^(\s*)(id|why|file|from|to|spec): "/
     const CLEAN_LINE = /^\s*(?:id|why|file|from|to|spec): "(?:[^"\\]|\\.)*",?$/

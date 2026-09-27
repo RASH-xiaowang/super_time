@@ -7,10 +7,17 @@
  * 二百多行，只有表会涨；表再涨到上限时按批次切成 `mutations-registry.<批次>.mjs` 由这里聚合，
  * 不要靠放宽闸门解决。
  *
- * **已经照此切过两次**：`mutations-registry.batch3.mjs` 装 M118 起的条目（主表停在 M117）；
- * 2026-09-26 #19 第四刀之后 `batch3` 自己涨到 1073 行又撞闸门，于是 M222 起再切一份
- * `mutations-registry.batch3b.mjs`。**分界点是闸门容量决定的，不是批次决定的** ——
- * M222 之后仍属报告里的第三批，批次语义在每条 id 与 `why` 里。加新条目：看哪份文件还有余量。
+ * **已经照此切过三次**： 装 M118 起的条目（主表停在 M117）；
+ * 2026-09-26 #19 第四刀之后  自己涨到 1073 行又撞闸门，于是 M222 起再切一份
+ * ；2026-09-27 #22（四处长列表虚拟化）与 #20（GatewayCore 连着五刀）
+ * 把它顶到 **1015 行** —— 同一把尺子第三次拦下「登记变异这件事本身」，于是 M310 起再切一份
+ * （停在 M344）。**分界点是闸门容量决定的、不是批次决定的** ——
+ * M222 / M310 之后仍属报告里的第三批与第四批，批次语义在每条 id 与  里。加新条目：看哪份文件还有余量。
+ *
+ * ⚠️ 切文件带来的新失败模式：**忘了把新一份聚合进 MUTATIONS，一条错都不报**
+ * （2026-09-27 就漏接过一次：表从 344 悄悄掉到 306，全绿）。兜它的是
+ * { is a shell keyword 里的 （只许涨的条数下限）——
+ * 每登记一条就把那个数抬上去；掉下来说明有整份表没接进来。
  *
  * ── 加新条目 ──────────────────────────────────────────────────────────────
  * `file` 是**相对仓库根**的路径，`from`/`to` 是逐字文本，`spec` 是必须变红的用例文件。
@@ -20,6 +27,7 @@
  */
 import { MUTATIONS_BATCH3 } from './mutations-registry.batch3.mjs'
 import { MUTATIONS_BATCH3B } from './mutations-registry.batch3b.mjs'
+import { MUTATIONS_BATCH3C } from './mutations-registry.batch3c.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -941,4 +949,4 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C]
