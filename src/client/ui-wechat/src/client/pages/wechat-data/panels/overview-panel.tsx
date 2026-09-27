@@ -21,12 +21,14 @@ import { CalendarHeatmap } from './CalendarHeatmap.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { RegionBoard } from './RegionBoard.tsx'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, PanelHeader, StatCard } from '../ui/kit.tsx'
+import { PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
+import neon from './overview-neon.module.css'
 import { fmtBytes, fmtClockMs } from '../utils/format.ts'
 import { WorldMapPanel, buildOverviewReport, deltaArrow, downloadText, exportElementImage } from './overview-export.ts'
-import { AuthorAvatar, CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, CARDS, MSG_BUCKETS, OvSection, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
+import { AuthorAvatar, CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, MSG_BUCKETS, OvSection, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
+import { NeonBackdrop, NeonHero } from './overview-neon.tsx'
 
 /**
  * Render the WeChat data overview panel (space-capsule cockpit).
@@ -160,7 +162,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const warnCount = ledger?.warnings.length ?? 0
 
   return (
-    <div ref={rootRef} className={refreshing ? `${css.root} ${css.updating}` : css.root}>
+    <div ref={rootRef} className={neon.root + ' ' + css.root + (refreshing ? ' ' + css.updating : '')}>
+      {/* 背景层（极光 / 等距网格 / 粒子流）：绝对定位 + z-index:-1，见 overview-neon.module.css 的头部说明 */}
+      <NeonBackdrop />
       {refreshing && <div className={css.scanbar} />}
       {/* 机舱头部 */}
       <PanelHeader
@@ -210,51 +214,10 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
       {!debugSkeleton && data !== null && (
         <>
-          {/*
-            核心指标 + 消息构成：合并为一块「资产指标条」面板。
-            第一行 8 格指标（色调图标块 + 大数字 + 标签，格间 1px 分隔线）；
-            第二行消息收发构成。整块约 95px，取代原先 2×4 大卡（204px）+
-            独立收发条（40px）—— 这样「世界板块 · 好友地区」才能在首屏完整可见。
-          */}
-          <div className={css.ovHero}>
-            <div className={css.ovHeroStats}>
-              {CARDS.map((card) => {
-                const value = card.key === 'storage'
-                  ? fmtBytes(data.storage.total_size)
-                  : (data[card.key as keyof OverviewSnapshot] as number).toLocaleString()
-                const sub = card.key === 'storage' ? `${data.storage.total_count.toLocaleString()} 项` : undefined
-                const tone = card.key === 'moments' ? 'purple'
-                  : card.key === 'official' ? 'blue'
-                    : card.key === 'storage' ? 'green' : 'cyan'
-                return (
-                  <button key={card.key} type="button" className={css.ovHeroStat} data-tone={tone} onClick={() => { go(card.tab) }} title={`查看${card.label}`}>
-                    <span className={css.ovHeroIcon}>{card.icon}</span>
-                    <span className={css.ovHeroText}>
-                      <span className={css.ovHeroValue}>{value}</span>
-                      <span className={css.ovHeroLabel}>{card.label}{sub && <em className={css.ovHeroSub}> · {sub}</em>}</span>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-            {/*
-              收发构成：这条口径来自 getOverviewInsights（用 real_sender_id 经分片 Name2Id 解析方向）。
-              以前它只出现在「导出 Markdown 报告」里，而报告里写的是「发出 0」——
-              界面上没人看得见，所以坏了很久没人发现（同一批真机 schema 勘查的一条，结论抄在这里）。
-              现在把三个数字直接显示出来：界面上看得见，回归就没法藏。
-            */}
-            {ins && (
-              <div className={css.ovHeroMix}>
-                <span className={css.ovHeroMixIcon}>✉️</span>
-                <span className={css.ovHeroMixTitle}>
-                  消息 {ins.messages.total.toLocaleString()} 条 · 发出 <b>{ins.messages.sent.toLocaleString()}</b> / 收到 <b>{ins.messages.received.toLocaleString()}</b>
-                </span>
-                <span className={css.ovHeroMixSub}>
-                  文本 {ins.messages.text.toLocaleString()} · 图片 {ins.messages.image.toLocaleString()} · 视频 {ins.messages.video.toLocaleString()} · 链接卡片 {ins.messages.rich.toLocaleString()} · 系统 {ins.messages.system.toLocaleString()}
-                </span>
-              </div>
-            )}
-          </div>
+          {/* 核心指标 + 消息构成：8 张等距霓虹牌 + 一条收发构成带（见 overview-neon.tsx）。
+              旧版是「一行八格 + 1px 分隔线」的扁平指标条，被设计稿那套等距玻璃牌取代；
+              数值/标签/跳转/「项」副标这些口径一字未改，只换皮。 */}
+          <NeonHero data={data} ins={ins} onGo={go} />
 
           <div className={css.ovGrid}>
             <OvSection span={css.ovSpan12} icon="world" title="世界板块 · 好友地区">
@@ -262,7 +225,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                   240px 的头像栏，但 228 位好友几乎都在同一个国家 —— 除了一小块紫色，
                   整块卡片都是空的。榜单把这半张卡片的面积换成真实数据（同源树，不新增查询）。 */}
               <div className={css.worldBoard}>
-                <div className={css.worldMapBox}>
+                <div className={css.worldMapBox + ' ' + neon.worldMapBox}>
                   <LazyMount placeholder={<div className={kitCss.emptyInline}>地图进入可视区后加载…</div>}>
                     <Suspense fallback={<div className={kitCss.emptyInline}>地图资源加载中…</div>}>
                       <WorldMapPanel />
@@ -306,7 +269,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                     .map(c => (
                     <div key={c.label} className={css.cat}>
                       <div className={css.catRow}><span className={css.catLabel}>{c.label}</span><span className={css.catMeta}>{c.count.toLocaleString()} 项 · {fmtBytes(c.size)}</span></div>
-                      <div className={css.bar}><div className={css.barFill} style={{ width: `${(c.size / Math.max(1, data.storage.categories[0]?.size ?? 1)) * 100}%` }} /></div>
+                      <div className={css.bar + ' ' + neon.barTrack}><div className={css.barFill + ' ' + neon.barFill} style={{ width: `${(c.size / Math.max(1, data.storage.categories[0]?.size ?? 1)) * 100}%` }} /></div>
                     </div>
                   ))}</div>}
             </OvSection>
@@ -324,7 +287,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                 <span className={kitCss.textMeta}>条被撤回消息的元数据痕迹（发送者/时间/类型可查）</span>
                 <p className={css.revokeNote}>微信 4.x 防撤回机制在本地保留的删除缓存，可用于回顾"谁撤回了什么"。</p>
               </div>
-              <div className={css.metricGrid}>
+              <div className={css.metricGrid + ' ' + neon.gridCells}>
                 <div className={css.metric}><span className={css.metricValue}>{data.revoked.toLocaleString()}</span><span className={kitCss.textCaption}>撤回消息（可回溯）</span></div>
                 <div className={css.metric}><span className={css.metricValue}>{warnCount}</span><span className={kitCss.textCaption}>转账/红包异常</span></div>
               </div>
@@ -332,7 +295,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
             </OvSection>
 
             <OvSection span={css.ovSpan6} icon="storage" title="存储清理建议" action={<button type="button" className={css.panelGo} onClick={() => { go('storage') }}>详情 →</button>}>
-              <div className={css.metricGrid}>
+              <div className={css.metricGrid + ' ' + neon.gridCells}>
                 <div className={css.metric}><span className={css.metricValue}>{fmtBytes(stor?.total_size ?? 0)}</span><span className={kitCss.textCaption}>媒体占用</span></div>
                 <div className={css.metric}><span className={css.metricValue}>{(stor?.total_count ?? 0).toLocaleString()}</span><span className={kitCss.textCaption}>媒体项</span></div>
                 <div className={css.metric}><span className={css.metricValue}>{largeFiles.length}</span><span className={kitCss.textCaption}>超大文件</span></div>
@@ -341,7 +304,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
             <OvSection span={css.ovSpan6} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { go('ledger') }}>详情 →</button>}>
               {ls ? (
-                <div className={css.metricGrid} data-st-ledger-money="1">
+                <div className={css.metricGrid + ' ' + neon.gridCells} data-st-ledger-money="1">
                   <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
                   <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>支出</span></div>
                   <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>
@@ -353,7 +316,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
             {ins && (
               <>
                 <OvSection span={css.ovSpan6} className={css.ovTall} icon="insight" title="交互画像 · 基于消息时间与类型">
-                  <div className={css.metricGrid}>
+                  <div className={css.metricGrid + ' ' + neon.gridCells}>
                     <div className={css.metric}><span className={css.metricValue}>{ins.messages.total.toLocaleString()}</span><span className={kitCss.textCaption}>消息总数</span></div>
                     <div className={css.metric}><span className={css.metricValue}>{ins.time.activeDays}</span><span className={kitCss.textCaption}>活跃天数</span></div>
                     <div className={css.metric}><span className={css.metricValue}>{ins.time.spanDays}</span><span className={kitCss.textCaption}>时间跨度(天)</span></div>
@@ -364,12 +327,12 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                   <div className={css.hourBars}>
                     {ins.time.hourDist.map((n, h) => {
                       const max = Math.max(1, ...ins.time.hourDist)
-                      return <div key={h} className={css.hourCol} title={`${h}:00 · ${n} 条`}><div className={css.hourFill} style={{ height: `${Math.max(4, (n / max) * 100)}%` }} data-hot={n === ins.time.busyCount || undefined} /><span className={css.hourLabel}>{h}</span></div>
+                      return <div key={h} className={css.hourCol} title={`${h}:00 · ${n} 条`}><div className={css.hourFill + ' ' + neon.hourFill} style={{ height: `${Math.max(4, (n / max) * 100)}%` }} data-hot={n === ins.time.busyCount || undefined} /><span className={css.hourLabel}>{h}</span></div>
                     })}
                   </div>
                 </OvSection>
                 <OvSection span={css.ovSpan6} className={css.ovTall} icon="relation" title="关系浓度 · 好友活跃与对话 Top">
-                  <div className={css.metricGrid}>
+                  <div className={css.metricGrid + ' ' + neon.gridCells}>
                     <div className={css.metric}><span className={css.metricValue}>{ins.relations.total}</span><span className={kitCss.textCaption}>好友总数</span></div>
                     <div className={css.metric}><span className={css.metricValue}>{ins.relations.active}</span><span className={kitCss.textCaption}>有消息往来</span></div>
                     <div className={css.metric}><span className={css.metricValue}>{ins.relations.silent}</span><span className={kitCss.textCaption}>沉默好友(无消息)</span></div>
@@ -381,7 +344,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                         <button key={t.username} type="button" className={css.topRow} onClick={() => { openChat(t.username) }} title={`与「${t.name}」的对话`}>
                           <span className={css.topRank}>{i + 1}</span>
                           <span className={css.topName}>{t.name}</span>
-                          <div className={css.topTrack}><div className={css.topFill} style={{ width: `${(t.count / Math.max(1, ins.relations.top[0]?.count ?? 1)) * 100}%` }} /></div>
+                          <div className={css.topTrack}><div className={css.topFill + ' ' + neon.topFill} style={{ width: `${(t.count / Math.max(1, ins.relations.top[0]?.count ?? 1)) * 100}%` }} /></div>
                           <span className={css.topCount}>{t.count} 条</span>
                         </button>
                       ))}
@@ -416,10 +379,10 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                   {MSG_BUCKETS.map((x) => {
                     const n = ins.messages[x.key]
                     const max = Math.max(1, ins.messages.text)
-                    return <div key={x.label} className={css.cat}><div className={css.catRow}><span className={css.catLabel}>{x.label}</span><span className={css.catMeta}>{n.toLocaleString()} 条</span></div><div className={css.bar}><div className={css.barFill} style={{ width: `${(n / max) * 100}%` }} /></div></div>
+                    return <div key={x.label} className={css.cat}><div className={css.catRow}><span className={css.catLabel}>{x.label}</span><span className={css.catMeta}>{n.toLocaleString()} 条</span></div><div className={css.bar + ' ' + neon.barTrack}><div className={css.barFill + ' ' + neon.barFill} style={{ width: `${(n / max) * 100}%` }} /></div></div>
                   })}
                 </div>
-                <div className={css.assetGrid}>
+                <div className={css.assetGrid + ' ' + neon.gridCells}>
                   <div className={css.assetItem}>
                     <span className={css.assetLabel}>朋友圈</span>
                     <span className={css.assetValue}>{ins.moments.total}</span>
@@ -445,7 +408,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
             )}
             {ins && (
               <OvSection span={css.ovSpan6} icon="health" title="数据健康">
-                <div className={css.healthGrid}>
+                <div className={css.healthGrid + ' ' + neon.gridCells}>
                   <div className={css.healthItem}><span className={css.healthValue}>{ins.health.dbFiles}</span><span className={kitCss.textCaption}>数据库文件</span></div>
                   <div className={css.healthItem}><span className={css.healthValue}>{fmtBytes(ins.health.dbBytes)}</span><span className={kitCss.textCaption}>解密数据体积</span></div>
                   <div className={css.healthItem}><span className={css.healthValue}>{ins.health.ok ? '正常' : '异常'}</span><span className={kitCss.textCaption}>数据可读性</span></div>

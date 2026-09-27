@@ -20,6 +20,7 @@ import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewS
 import { Card, PanelHeader, StatCard } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
+import neon from './overview-neon.module.css'
 
 /** 朋友圈活跃作者头像：组件挂载（进入可视区）后才请求头像，避免批量预取。 */
 export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): React.JSX.Element {
@@ -319,10 +320,11 @@ export function OvSection({ icon, title, action, children, span, className }: {
 }): React.JSX.Element {
   return (
     // 用 filter+join 而不是模板串：模板串会把 undefined 拼成一个字面量 "undefined" 类名。
-    <section className={[css.ovCard, span, className].filter(Boolean).join(' ')}>
-      <header className={css.ovCardHd}>
-        <span className={css.ovIcon}><OvIcon name={icon} /></span>
-        <h3 className={css.ovTitle}>{title}</h3>
+    // `neon.card*` 是 2026-09-27 的玻璃拟态皮肤（另一份 CSS 模块，骨架仍由 css.ovCard* 决定）。
+    <section className={[css.ovCard, neon.card, span, className].filter(Boolean).join(' ')}>
+      <header className={css.ovCardHd + ' ' + neon.cardHd}>
+        <span className={css.ovIcon + ' ' + neon.cardIcon}><OvIcon name={icon} /></span>
+        <h3 className={css.ovTitle + ' ' + neon.cardTitle}>{title}</h3>
         {action && <div className={css.ovAction}>{action}</div>}
       </header>
       <div className={css.ovCardBd}>{children}</div>

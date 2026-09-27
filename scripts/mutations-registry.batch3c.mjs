@@ -277,7 +277,7 @@ export const MUTATIONS_BATCH3C = [
     id: "M343-readme-panel-count-rotted",
     why: "README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 102 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 103 个 .tsx 视图）",
     to: "src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },
@@ -536,5 +536,13 @@ export const MUTATIONS_BATCH3C = [
     from: "| 第二批 #12（P2-6 路径限根",
     to: "| 第二批（P2-6 路径限根",
     spec: "src/backend/tests/audit-ledger-coverage.spec.ts",
+  },
+  {
+    id: "M376-audit-readiness-back-to-classname",
+    why: "把留白审计的就绪判据改回按类名找（`[class*=ovHero]`）⇒ 这正是 2026-09-27 换霓虹皮肤时真实发生的那件事：指标条的 `.ovHero*` 类被删掉之后，脚本把「没找到」读成「首启空库」并**以 0 退出**，于是留白 / 网格空洞 / 内容裁切三项验收一起静默失效。判据 `overview-hero-hook.wiring.spec.ts` 就是为它写的，这一刀必须红",
+    file: "scripts/overview-layout-audit.mjs",
+    from: "const loaded = !!body.querySelector('[data-st-ov-hero]')",
+    to: "const loaded = !!body.querySelector('[class*=ovHero]')",
+    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-hero-hook.wiring.spec.ts",
   },
 ]

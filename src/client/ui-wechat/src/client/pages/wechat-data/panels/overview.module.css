@@ -283,12 +283,12 @@
    原先写作 .updating .card / .panel / .pod —— 这三个类来自已被取代的旧卡片设计，
    在 Overview.tsx 中零使用（实测全文件没有 css.card/css.panel/css.pod），
    因此刷新时动画永远不生效，用户得不到任何反馈。现改为真实存活的三个承载块：
-   .ovCard（OvSection 卡片）、.metric（英雄区指标）、.ovHeroStat（英雄区指标卡）。
-   第 97 轮：第三项原为 `.quickCard` —— 快捷入口区块被 `.ovHeroStat` 取代后它又成了死选择器
-   （刷新动画在英雄区失效，同一个缺陷被迁移重新引入一次），此处重新对准当前类名。 */
+   `.ovCard`（OvSection 卡片）、`.metric`（指标格）。
+   第 98 轮：原先还列了 `.ovHeroStat` —— 指标条换成霓虹牌之后它也成了死选择器，
+   于是刷新动画在首屏那一块又失效一次（**同一个缺陷第三次被"换皮"引进**：改视觉时
+   忘了同步这份"存活类名"清单）。现在只留真活着的两个，并在下方补了一条判据性的注释。 */
 .updating .ovCard,
-.updating .metric,
-.updating .ovHeroStat {
+.updating .metric {
   animation: ov-update 1.8s ease-in-out infinite;
 }
 @keyframes ov-update {
@@ -297,8 +297,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .updating .ovCard,
-  .updating .metric,
-  .updating .ovHeroStat { animation: none; }
+  .updating .metric { animation: none; }
 }
 
 /* ── 导出下拉 ── */
@@ -463,96 +462,10 @@
 }
 
 /* 新版总览：统一大小卡片式 dashboard */
-/* ── 资产指标条（核心指标 + 消息构成合并为一块面板） ──
- * 设计目标：把原先 2×4 大统计卡（约 204px）+ 独立收发条（约 40px）压缩到 ~95px，
- * 让「世界板块 · 好友地区」在首屏完整可见。
- * 结构：一行 8 格指标（格间 1px 分隔线）+ 底部收发构成条；
- * data-tone 沿用 kit.statCard 的色调约定（cyan 为默认、不上色，
- * 只有 purple / blue / green 给图标块与数值上色）。 */
-.ovHero {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  overflow: hidden;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
-}
-.ovHeroStats {
-  display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-}
-.ovHeroStat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px 14px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.ovHeroStat + .ovHeroStat { border-left: 1px solid var(--nm-border); }
-.ovHeroStat:hover { background: color-mix(in srgb, var(--nm-cyan) 5%, transparent); }
-.ovHeroIcon {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  border-radius: var(--nm-r-md);
-  background: var(--nm-cyan-10);
-}
-.ovHeroStat[data-tone='purple'] .ovHeroIcon { background: var(--nm-purple-20); }
-.ovHeroStat[data-tone='blue'] .ovHeroIcon { background: var(--nm-info-15); }
-.ovHeroStat[data-tone='green'] .ovHeroIcon { background: var(--nm-success-15); }
-.ovHeroText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ovHeroValue {
-  font-size: 18px;
-  font-weight: 800;
-  font-family: var(--nm-font-mono, monospace);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-.ovHeroStat[data-tone='purple'] .ovHeroValue { color: var(--nm-purple-text, var(--nm-purple)); }
-.ovHeroStat[data-tone='blue'] .ovHeroValue { color: var(--nm-info-text, var(--nm-info)); }
-.ovHeroStat[data-tone='green'] .ovHeroValue { color: var(--nm-success-text, var(--nm-success)); }
-.ovHeroLabel {
-  font-size: 10.5px;
-  color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ovHeroSub { font-style: normal; opacity: 0.75; }
-/* 底部消息收发条：左为总量与收发方向（加粗数字沿用旧 mailMix 的青色口径），
- * 右为类型分布（右对齐，窄窗口下先省略号截断它、保住左侧主信息）。 */
-.ovHeroMix {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--nm-border);
-  font-size: 12px;
-  min-width: 0;
-}
-.ovHeroMixIcon { font-size: 14px; line-height: 1; }
-.ovHeroMixTitle { color: var(--nm-text-1); white-space: nowrap; }
-.ovHeroMixTitle b { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--nm-cyan); }
-.ovHeroMixSub {
-  margin-left: auto;
-  color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* 第 98 轮删除：「资产指标条」整套 `.ovHero*`（约 90 行）—— 那条指标条已由
+   `overview-neon.module.css` 的等距霓虹牌（`.hero* / .plate*`）接管，全仓零引用。
+   删它不只是洁癖：这份文件贴着 1000 行硬闸门（只剩 30 行余量），留两套指标条样式
+   只会让下一个人不知道该改哪一套。 */
 .ovGrid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -720,10 +633,6 @@
    而 `.ovTrend` / `.ovHeat` 两个类当时还没接上 JSX，等于白写。 */
 
 @media (max-width: 1100px) {
-  .ovHeroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  /* 4 列模式下重画分隔线：每行第 1 格无左线，第 2 行整体加上边线 */
-  .ovHeroStat:nth-child(4n+1) { border-left: none; }
-  .ovHeroStat:nth-child(n+5) { border-top: 1px solid var(--nm-border); }
   .ovSpan12, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
 }
 
@@ -764,11 +673,8 @@
 .ovTall { min-height: 0; }
 .ovTall .hourBars { min-height: 96px; }
 
-/* 资产指标条：8 格指标收紧（一屏纵览里这一条占的是首屏黄金位置） */
-.ovHeroIcon { width: 26px; height: 26px; border-radius: var(--nm-r-md); font-size: 14px; }
-.ovHeroValue { font-size: 17px; }
-.ovHeroLabel { font-size: 10px; }
-.ovHeroMix { padding: 6px 12px; gap: 8px; }
+/* 第 98 轮：紧档下的「指标条收紧」四条（.ovHeroIcon/.ovHeroValue/.ovHeroLabel/.ovHeroMix）
+   随霓虹牌一起删 —— 牌面的紧档规则现在写在 overview-neon.module.css 自己的媒体查询里。 */
 
 /* 朋友圈活跃作者：单列 → 两列（10 条从 10 行压到 5 行） */
 /* 朋友圈活跃作者：占满整行宽度（卡片 span 12），所以列数要跟着宽度走。

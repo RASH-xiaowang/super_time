@@ -94,7 +94,10 @@ try {
 
   const rep = await win.evaluate(() => {
     const body = document.querySelector('main [class*=panelBody]') || document.querySelector('main')
-    const loaded = !!body.querySelector('[class*=ovHero]')
+    // 就绪判据用**专属属性**而不是类名/文案：2026-09-27 换霓虹皮肤时，旧判据查的是
+    // `[class*=ovHero]` —— 那一套类名被删掉之后，本脚本把"没找到"读成"首启空库"并**静默跳过**
+    // （退出码还是 0）。真窗口判据的靶子必须是"只有那一块才有"的钩子，改皮不换钩子。
+    const loaded = !!body.querySelector('[data-st-ov-hero]')
     if (!loaded) return { loaded: false }
     const cls = (el) => Array.from(el.classList).join(' ').slice(0, 50)
     const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } }
