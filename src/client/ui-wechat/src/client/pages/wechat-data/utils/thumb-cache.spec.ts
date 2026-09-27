@@ -1,5 +1,5 @@
 /**
- * 收藏缩略图有界缓存的行为判据（#22 虚拟化的配套）。
+ * 缩略图有界缓存（收藏与文件两处共用）的行为判据（#22 虚拟化的配套）。
  *
  * 核心只有一件事：**淘汰一条缩略图时，"这个 md5 已经请求过"的标记必须一起清掉**。
  * 少清一半的表现不是报错，而是「把列表滚远再滚回来，那几张图永远是个占位图标」——
@@ -8,12 +8,12 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { FAV_THUMB_LIMIT, rememberThumb, type FavThumbState } from './favorites-thumbs.ts'
+import { THUMB_CACHE_LIMIT, rememberThumb, type ThumbCache } from './thumb-cache.ts'
 
-const empty = (): FavThumbState => ({ thumbs: {}, order: [], fetched: new Set<string>() })
+const empty = (): ThumbCache => ({ thumbs: {}, order: [], fetched: new Set<string>() })
 const url = (md5: string): string => 'data:image/png;base64,' + md5
 /** 走一遍面板那边的真实顺序：先登记"已请求"，异步回来再写值。 */
-const add = (s: FavThumbState, md5: string): FavThumbState => rememberThumb({ ...s, fetched: new Set([...s.fetched, md5]) }, md5, url(md5))
+const add = (s: ThumbCache, md5: string): ThumbCache => rememberThumb({ ...s, fetched: new Set([...s.fetched, md5]) }, md5, url(md5))
 
 describe('rememberThumb', () => {
   it('写一条：值进 thumbs、顺序进 order 末尾、已请求标记保留', () => {
@@ -57,12 +57,12 @@ describe('rememberThumb', () => {
   })
 
   it('默认上界够一屏来回滚不闪图（太小会边滚边丢）', () => {
-    expect(FAV_THUMB_LIMIT).toBeGreaterThanOrEqual(20)
+    expect(THUMB_CACHE_LIMIT).toBeGreaterThanOrEqual(20)
   })
 
   it('反例自证：只清值不清标记的退化实现会让"滚回来重新请求"这条路断掉', () => {
     // 这就是把 rememberThumb 改坏一半之后的形状（`delete thumbs[old]` 留着、`fetched.delete(old)` 去掉）。
-    const broken = (s: FavThumbState, md5: string, limit: number): FavThumbState => {
+    const broken = (s: ThumbCache, md5: string, limit: number): ThumbCache => {
       const thumbs = { ...s.thumbs, [md5]: url(md5) }
       const order = [...s.order.filter((k) => k !== md5), md5]
       const fetched = new Set(s.fetched)

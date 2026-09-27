@@ -74,23 +74,46 @@ export function ListSentinel({ refFn }: { refFn: (el: HTMLDivElement | null) => 
 /**
  * 分页哨兵：滚动到可视区附近时回调一次（用于「加载更多」而非仅渐进 DOM 渲染）。
  * 传入的 onVisible 保存在 ref 中，避免每次渲染重建观察器。
+ *
+ * `watch` 是这一族**停滞**问题的补丁：IntersectionObserver 只在"状态变了"的那一刻给回调。
+ * 哨兵一直待在视口里（内容比视口矮，或上一次回调正好撞上"这一页还在加载中"被丢掉）时，
+ * 不会有第二次回调，于是翻页永远停在当前页 —— 实测在 600 条附件、格子墙视口 625px 高的机器上，
+ * 翻到第 2 页就再也不动，界面上看不到任何错误，也只有把列表滚到底才发现"下面还有几百条没出来"。
+ * 数据每追加一批就用 `watch` 重新问一次"哨兵还在里面吗"，把"该加载但没被通知"这条路补上。
+ * @param onVisible - 哨兵进入视口时调用一次（调用方自己带 `hasMore && !loadingMore` 的闸）。
+ * @param rootMargin - 提前量，默认 600px。
+ * @param root - 滚动容器（不传就是视口）。
+ * @param watch - 变了就重查一次的值，通常传**已加载条数**。
+ * @returns 给哨兵元素用的 ref 回调。
  */
-export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px', root?: () => Element | null): (el: HTMLDivElement | null) => void {
+export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px', root?: () => Element | null, watch?: unknown): (el: HTMLDivElement | null) => void {
   const cbRef = useRef(onVisible)
   cbRef.current = onVisible
   const rootRef = useRef(root)
   rootRef.current = root
   const ioRef = useRef<IntersectionObserver | null>(null)
-  return useCallback((el: HTMLDivElement | null) => {
+  /** 哨兵此刻在不在视口里（IO 只在变化时报，所以自己记住最后一次的状态）。 */
+  const hitRef = useRef(false)
+  /** 第一次跑 `watch` 那个 effect 要跳过（挂载时 IO 已经报过一遍了）。 */
+  const firstWatchRef = useRef(true)
+  const attach = useCallback((el: HTMLDivElement | null) => {
     if (ioRef.current) { ioRef.current.disconnect(); ioRef.current = null }
     if (!el || typeof IntersectionObserver === 'undefined') return
     const rootEl = rootRef.current?.() ?? null
     const ob = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) cbRef.current()
+      const hit = !!entries[0]?.isIntersecting
+      hitRef.current = hit
+      if (hit) cbRef.current()
     }, { root: rootEl, rootMargin })
     ob.observe(el)
     ioRef.current = ob
   }, [rootMargin])
+  useEffect(() => {
+    // 挂载那一轮不补查：IO 在 `observe()` 时本来就会报一次初始状态，再 call 一遍就是白敲。
+    if (firstWatchRef.current) { firstWatchRef.current = false; return }
+    if (hitRef.current) cbRef.current()
+  }, [watch])
+  return attach
 }
 
 /**

@@ -165,7 +165,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, kind, status, sortKey])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '400px 0px')
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '400px 0px', undefined, pager.items.length)
 
   /** 只看失效记录：这是**客户端**筛选（文件在不在磁盘上只有本地知道），
    *  所以只在已加载的页里过滤，并在界面上说明「仅当前已加载」。 */

@@ -15,7 +15,7 @@ import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
 import { favTypeLabel, parseFavItem } from './favorites-parse.ts'
 import { FavCard } from './favorites-card.tsx'
-import { rememberThumb } from './favorites-thumbs.ts'
+import { rememberThumb } from '../utils/thumb-cache.ts'
 
 /** 卡片高度的初值（真实高度由 `measureElement` 回灌）：摘要最多三行，88 是"标题 + 一行摘要 + 落款"的量级。 */
 const FAV_CARD_ESTIMATE_PX = 88
@@ -30,7 +30,7 @@ const FAV_CARD_ESTIMATE_PX = 88
  *
  * **缩略图为什么改成"挂载即解码"**：原来是给整段列表挂 IntersectionObserver、观察 `data-media-key`。
  * 虚拟化之后行会不断挂载/卸载，观察器每帧都要重挂一遍元素，反而更贵、也更容易漏；而"这一行挂上了"
- * 本来就等价于"它接近视口"。淘汰那半边收在 `favorites-thumbs.ts#rememberThumb` 里（写值、记顺序、
+ * 本来就等价于"它接近视口"。淘汰那半边收在 `../utils/thumb-cache.ts#rememberThumb` 里（写值、记顺序、
  * 淘汰时连"已请求过"的标记一起清 —— 少清一半就是「滚远再滚回来，图永远是个占位」那种不报错的坏法）。
  * 解码回调要跨异步读最新状态，所以缓存与顺序用 ref 兜着、`useCallback(…, [])` 保持稳定，
  * 不然每次渲染都会重新发起一轮请求。
@@ -115,7 +115,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
     setError(pager.error)
   }, [pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current, pager.items.length)
 
   /** 缓存的当前快照（异步回调要读最新值，见文件头注释）；渲染用的是 `favImgs` 那份 state。 */
   const favThumbsRef = useRef<Record<string, string>>({})

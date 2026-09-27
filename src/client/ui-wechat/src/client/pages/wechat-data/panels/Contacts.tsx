@@ -143,7 +143,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
     setError(pager.error)
   }, [searching, pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current, pager.items.length)
 
   // 数据落地后安静刷新（有渲染缓存时不闪整页），使新联系/群名及时可见。
   // 用 `pager.refresh()`（非破坏性，会按**已加载条数**重取）而不是 `reset()`：

@@ -127,7 +127,7 @@ export function EmoticonsPanel(): React.JSX.Element {
     setError(pager.error)
   }, [searching, pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() })
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, undefined, undefined, pager.items.length)
 
   const notify = (text: string): void => {
     flash(text)

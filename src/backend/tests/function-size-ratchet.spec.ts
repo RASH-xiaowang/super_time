@@ -56,7 +56,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  451',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-panel.tsx  OverviewPanel  442',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  389',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  372',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  368',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  356',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  351',
   'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  334',

@@ -105,7 +105,7 @@ export function OperationLogPanel(): React.JSX.Element {
     if (pager.error) setOpMsg({ kind: 'err', text: '✗ 读取操作日志失败：' + pager.error })
   }, [pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => opScrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => opScrollRef.current, pager.items.length)
 
   const refresh = useCallback((): void => {
     setOpMsg(null)

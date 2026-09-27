@@ -326,7 +326,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setError(sessionsPager.error)
   }, [sessionSearching, sessionsPager.items, sessionsPager.loading, sessionsPager.error])
 
-  const sessionsLoadMoreRef = useLazySentinel(() => { if (sessionsPager.hasMore && !sessionsPager.loadingMore) sessionsPager.loadMore() }, '600px 0px', () => sessionListRef.current)
+  const sessionsLoadMoreRef = useLazySentinel(() => { if (sessionsPager.hasMore && !sessionsPager.loadingMore) sessionsPager.loadMore() }, '600px 0px', () => sessionListRef.current, sessionsPager.items.length)
 
   // 搜索索引状态只在用户切到「消息搜索」时检查，进入页签不再触发。
   useEffect(() => { if (searchMode === 'message') void checkIndexStatus() }, [searchMode, checkIndexStatus])

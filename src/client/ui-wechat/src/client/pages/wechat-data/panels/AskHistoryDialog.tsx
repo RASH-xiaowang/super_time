@@ -136,7 +136,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, q, status, source])
 
-  const loadMoreRef = useLazySentinel(() => { if (hasMore && !loadingMore) loadMore() }, '400px 0px')
+  const loadMoreRef = useLazySentinel(() => { if (hasMore && !loadingMore) loadMore() }, '400px 0px', undefined, items.length)
 
   const toggleOpen = useCallback((id: number): void => {
     setOpenId(cur => (cur === id ? null : id))

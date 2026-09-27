@@ -1,73 +1,32 @@
 /**
  * 文件面板 — React 版：图片/视频/文件分类 + 网格预览（图片本地解码缩略图 + 点击放大）
  * + 大小/时间/会话 + 刷新 + 导出。
+ *
+ * 网格是**虚拟化**的（#22 第三处）：一行 = 横向排开的若干格，列数现测（`auto-fill` 随宽度变），
+ * 所以只挂载视口附近那些格。口径与理由写在下面 `fileVirtualizer` 那一格附近。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList } from './hooks.tsx'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useWechatDataUpdated } from './hooks.tsx'
+import { useGridColumns } from './use-grid-columns.ts'
+import { FileCell } from './files-cell.tsx'
+import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.ts'
+import { gridRowCount, gridRowRange } from './files-grid.ts'
+import { rememberThumb } from '../utils/thumb-cache.ts'
 import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } from '../api.ts'
-import { useWechatDataUpdated } from './hooks.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
-import { fileIcon, fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
+import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 
-const CAT_LABEL: Record<string, string> = { image: '图片', video: '视频', file: '文件' }
-
-/** 缓存文件名 → 解析键（去掉 .dat / _t/_h/_b 后缀）。 */
-function fileKey(f: FileItem): string {
-  const base = f.fileName || f.md5
-  return base.replace(/\.dat$/i, '').replace(/_(t|h|b|thumb.*)$/i, '')
-}
-
-/** Detects a hash-like (unreadable) file name: hex/base32 without a real extension. */
-function isHashLike(f: FileItem): boolean {
-  const n = (f.fileName || f.md5).replace(/\.dat$/i, '')
-  if (/^[0-9a-f]{16,64}$/i.test(n)) return true
-  return !n.includes('.') && /^[0-9a-z]{16,}$/i.test(n)
-}
-
-/**
- * 来源口径（第 84 轮）：会话名优先用 message_resource 口径（`sessionName`），
- * 缺失时用附件目录口径（`sourceTalker`，由 `dir2id` 的 `md5(username)` 反查得到）；
- * 月份来自 `dir1`/`dir2` → `dir2id`，三个类目 100% 有值。
- * @param f - file item.
- * @returns 形如「黑龙江沃融-燎引擎 · 2026-09」的来源串（可能只有月份，或为空）。
- */
-function fileSource(f: FileItem): string {
-  const who = f.sessionName || f.sourceTalker || ''
-  const month = f.sourceMonth || ''
-  return [who, month].filter(Boolean).join(' · ')
-}
-
-/** Readable label: uses the original name when readable, else category + date. */
-function fileDisplayName(f: FileItem | undefined): string {
-  if (!f) return '(未知)'
-  if (!isHashLike(f)) return f.fileName || f.md5 || ''
-  const label = CAT_LABEL[f.category] || f.category || '文件'
-  const src = f.sessionName ? `来自 ${f.sessionName} · ` : ''
-  return `${label} · ${src}${fmtMonthDaySec(f.modifyTime)}`
-}
-
-/**
- * Hover tooltip for a file cell: full display label plus the raw file name when
- * they differ. 卡片里的可见文本会被 CSS 省略号截断（实测文件名最长 207px 而格位 124px），
- * 所以 title 必须给出**完整**文本，而不是只给原始文件名。
- * 第 84 轮补：来源（会话 / 月份）也写进 title —— 视频与文件没有预览，
- * tooltip 与「详情」抽屉是它们唯一能看到来源的地方。
- * @param f - file item.
- * @returns the tooltip text.
- */
-function fileTitle(f: FileItem): string {
-  const label = fileDisplayName(f)
-  const raw = f.fileName || ''
-  const src = fileSource(f)
-  const lines = [label]
-  if (src) lines.push(`来源：${src}`)
-  if (raw && raw !== label) lines.push(raw)
-  return lines.join('\n')
-}
+/** 格位最小宽度，与 `.fileGrid` 的 `minmax(200px, 1fr)` 保持一致（改一处不改另一处就会列数算错）。 */
+const FILE_MIN_COL_PX = 200
+/** 一行格子的水平间距，与 `.grid` 的 `gap: 10px` 同值。 */
+const FILE_GRID_GAP_PX = 10
+/** 一格的估计高度（图 + 文件名 + 落款）；真实高度由 `measureElement` 回灌。 */
+const FILE_ROW_ESTIMATE_PX = 176
 
 /**
  * Render the files panel.
@@ -136,7 +95,7 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
     setError(pager.error)
   }, [pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => gridRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => gridRef.current, pager.items.length)
 
   const refresh = useCallback((): void => {
     setError(null)
@@ -174,60 +133,51 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
   const countOf = (c: string): number => counts[c] ?? 0
   const countAll = countOf('image') + countOf('file') + countOf('video')
 
-  const { count: fileCount, sentinelRef: fileSentinel } = useProgressiveList(visible.length, 30)
-
-  // 图片资源懒加载：仅当图片格子接近视口时才离线解码（IntersectionObserver），
-  // 避免一次性解码数百张图片导致卡顿；进入视口的才请求数据，已取到的用 fileImgs 缓存。
-  useEffect(() => {
-    const root = gridRef.current
-    const list = files
-    if (!root || list.length === 0) return
-    const md5ByKey = new Map<string, string>()
-    for (const f of list) {
-      if (f.category !== 'image') continue
-      const key = fileKey(f)
-      if (key) md5ByKey.set(key, key)
-    }
-    const applyImage = (key: string, url: string): void => {
-      setFileImgs(prev => {
-        const next = { ...prev, [key]: url }
-        if (!imgOrder.current.includes(key)) imgOrder.current.push(key)
-        // 只保留最近 60 张解码图片，避免长时间滚动内存无限增长。
-        while (imgOrder.current.length > 60) {
-          const old = imgOrder.current.shift()
-          if (old !== undefined && old !== key) {
-            delete next[old]
-            imgFetched.current.delete(old)
-          }
-        }
-        return next
+  /**
+   * 网格虚拟化（#22 第三处）。列数**现测**（`repeat(auto-fill, minmax(200px,1fr))` 随容器宽度变，
+   * 写死就会"最后一行被截掉"或"格子重叠"），而虚拟器数的是**行**；一行用内联
+   * `repeat(cols, 1fr)` 复原网格排布，间距与外层 `.grid` 的 `gap: 10px` 同值。
+   * 为什么原来的不够：渐进窗口是首屏 30 格、滚到底再加、**只增不减** —— 文件面板的量级是
+   * 上万格（一格三层元素 + 一段文本），滚一遍整张格子墙就常驻 DOM。
+   */
+  const fileCols = useGridColumns(gridRef, FILE_MIN_COL_PX)
+  const fileVirtualizer = useVirtualizer({
+    count: gridRowCount(visible.length, fileCols),
+    getScrollElement: () => gridRef.current,
+    estimateSize: () => FILE_ROW_ESTIMATE_PX,
+    overscan: 3,
+  })
+  /** 缩略图缓存的当前快照（异步回调要读最新值）；渲染用的是 `fileImgs` 那份 state。 */
+  const fileThumbsRef = useRef<Record<string, string>>({})
+  /**
+   * 一格挂载 ⇒ 解码它那张图（原来是给整段格子墙挂 IntersectionObserver 观察 `data-media-key`）。
+   * 口径与搬出前一致：**拿 `fileKey` 当 md5**（微信附件名本来就是 32 位哈希；非哈希名按设计跳过、
+   * 留扩展名图标占位），淘汰走 `rememberThumb`（写值 / 记顺序 / 淘汰时连请求标记一起清）。
+   */
+  const decodeThumb = useCallback((key: string): void => {
+    if (!key || imgFetched.current.has(key) || !/^[0-9a-f]{32}$/i.test(key)) return
+    imgFetched.current.add(key)
+    void apiGetFileImageDataUrl({ md5: key })
+      .then((r) => {
+        const url = r.url as string | undefined
+        if (!url) return
+        const next = rememberThumb(
+          { thumbs: fileThumbsRef.current, order: imgOrder.current, fetched: imgFetched.current },
+          key,
+          url,
+        )
+        fileThumbsRef.current = next.thumbs
+        imgOrder.current = next.order
+        imgFetched.current = next.fetched
+        setFileImgs(next.thumbs)
       })
-    }
-    const decode = (key: string, md5: string): void => {
-      // 异常/缺失 md5 的图片直接跳过加载，保持占位图标。
-      if (!key || !/^[0-9a-f]{32}$/i.test(md5) || imgFetched.current.has(key)) return
-      imgFetched.current.add(key)
-      void apiGetFileImageDataUrl({ md5 })
-        .then((r) => { if (r.url) applyImage(key, r.url as string) })
-        .catch(() => { /* 失败后不再重试，保留图标兜底 */ })
-    }
-    if (typeof IntersectionObserver === 'undefined') {
-      // 无 IO 支持时兜底全部解码，保证图片可见。
-      for (const [key, md5] of md5ByKey) decode(key, md5)
-      return
-    }
-    const ob = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue
-        const key = (e.target as HTMLElement).dataset.mediaKey || ''
-        const md5 = md5ByKey.get(key)
-        if (key && md5) decode(key, md5)
-      }
-    }, { root, rootMargin: '500px 0px' })
-    // 观察当前已渲染的图片格子；随渐进渲染增加时本 effect 会随 fileCount 重跑。
-    root.querySelectorAll<HTMLElement>('[data-media-key]').forEach((el) => { ob.observe(el) })
-    return () => { ob.disconnect() }
-  }, [files, fileCount])
+      .catch(() => { /* 失败后不再重试，保留图标兜底 */ })
+  }, [])
+  /** 图片开灯箱；视频/文件开**详情抽屉**（没有预览，但要看名称/来源/月份/md5）。 */
+  const openFileCell = useCallback((f: FileItem): void => {
+    if (f.category === 'image') setPreview(f)
+    else setDetail(f)
+  }, [])
 
   // 服务端的重复组只给 md5 / 份数 / 字节；文件名用**已加载**的文件补齐，
   // 没加载到的就显示 md5 前 12 位（不影响分组与统计的准确性）。
@@ -308,36 +258,41 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
             note="文件索引来自本机解密库的 hardlink 记录（图片 / 视频 / 文件三类）。若刚换过数据源，请先在「设置 → 数据配置」完成解密与保存配置，再回到本页刷新。"
           />
         )}
-        {!loading && !error && visible.slice(0, fileCount).map((f, i) => {
-          const fk = fileKey(f)
-          const imgSrc = f.category === 'image' ? fileImgs[fk] || '' : ''
-          const iconHtml = fileIcon(((f.fileName || '').split('.').pop() ?? '').slice(0, 8))
-          // 图片开灯箱；视频/文件开**详情抽屉**（没有预览，但要看名称/来源/月份/md5）。
-          // 第 83 轮曾把视频/文件做成不可点，第 84 轮改成「可点且有真实动作」——
-          // 死控件与假控件都不该存在，二者取「给它一个有意义的目标」。
-          const canPreview = f.category === 'image'
-          return (
-            <div
-              key={`${i}:${f.category}:${f.md5}`}
-              className={css.fileCell}
-              title={fileTitle(f)}
-              data-media-key={canPreview ? fileKey(f) : undefined}
-              {...clickableKey(() => { if (canPreview) setPreview(f); else setDetail(f) })}
-            >
-              {imgSrc ? (
-                <img className={css.fileThumb} src={imgSrc} alt="" loading="lazy" referrerPolicy="no-referrer" />
-              ) : (
-                <span className={css.fileIcon} dangerouslySetInnerHTML={{ __html: iconHtml }} />
-              )}
-              {/* 不在这里 slice：让 CSS 省略号负责视觉截断，title 里始终有全文 */}
-              <span className={css.fileName}>{fileDisplayName(f)}</span>
-              <span className={css.fileMeta}>
-                {CAT_LABEL[f.category] || f.category} · {fmtBytes(f.fileSize || 0)} · {fmtMonthDaySec(f.modifyTime)}
-              </span>
-            </div>
-          )
-        })}
-        {!loading && !error && visible.length > fileCount && <ListSentinel refFn={fileSentinel} />}
+        {!loading && !error && visible.length > 0 && (
+          /*
+           * 外层这一格用 `gridColumn: 1 / -1` 横跨整个网格容器（容器仍是 `.grid`，
+           * 所以骨架与空态的排布一个字没动），行在里面按测到的列数排。
+           */
+          <div style={{ gridColumn: '1 / -1', position: 'relative', height: fileVirtualizer.getTotalSize() }}>
+            {fileVirtualizer.getVirtualItems().map((vi) => {
+              const { start, end } = gridRowRange(vi.index, visible.length, fileCols)
+              return (
+                <div
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={fileVirtualizer.measureElement}
+                  style={{
+                    position: 'absolute', top: 0, left: 0, width: '100%',
+                    transform: `translateY(${vi.start}px)`,
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${fileCols}, 1fr)`,
+                    gap: FILE_GRID_GAP_PX,
+                  }}
+                >
+                  {visible.slice(start, end).map((f) => (
+                    <FileCell
+                      key={`${f.category}:${f.md5}:${start}` + String(f.fileName ?? '')}
+                      f={f}
+                      imgSrc={f.category === 'image' ? fileImgs[fileKey(f)] || '' : ''}
+                      onOpen={openFileCell}
+                      onMounted={decodeThumb}
+                    />
+                  ))}
+                </div>
+              )
+            })}
+          </div>
+        )}
         {!loading && !error && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
       <Drawer open={dupOpen} onClose={() => { setDupOpen(false) }} title="重复文件预览">

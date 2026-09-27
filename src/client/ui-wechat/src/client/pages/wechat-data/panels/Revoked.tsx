@@ -79,7 +79,7 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   }, [typeFilter, kwOpt.q, pager.reset])
 
   const revokedScrollRef = useRef<HTMLDivElement | null>(null)
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => revokedScrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => revokedScrollRef.current, pager.items.length)
 
   const typeCounts = useMemo(() => {
     const m = new Map<string, number>()

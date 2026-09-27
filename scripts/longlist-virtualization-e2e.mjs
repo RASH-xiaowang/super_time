@@ -30,10 +30,16 @@ const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const TOTAL = 10_000
 /** 收藏夹具条数（#22 推广的第二处：面板分页 120 条一页，2400 条 = 20 页，够把"无界增长"逼出来）。 */
 const FAV_TOTAL = 2400
+/** 文件夹具条数（面板分页 30 条一页 ⇒ 20 页；网格一行 4~6 格，够把"格子墙常驻 DOM"逼出来）。 */
+const FILE_TOTAL = 600
 /** DOM 节点硬上界：虚拟化后只渲染视口附近（含 overscan），300 已很宽松。 */
 const MAX_DOM_NODES = 300
 /** 收藏卡片的上界（卡片比消息行高，一屏十几张；200 已经宽松到能容纳 overscan + 测高抖动）。 */
 const MAX_FAV_DOM_NODES = 200
+/** 格子的上界（一屏 4~6 列 × 3~4 行 + overscan，200 同样宽松；渐进窗口在 600 条时必然是 600）。 */
+const MAX_FILE_DOM_NODES = 200
+/** 第 i 条附件的 md5（夹具与断言共用同一个算式，两端可达才谈得上"逐字对上")。 */
+const fileMd5 = (i) => createHash('md5').update('supertime-file-' + i, 'utf8').digest('hex')
 const USER = 'wxid_n18'
 const SESSION_NAME = 'N18 长列表夹具'
 
@@ -97,6 +103,21 @@ function makeFixture(userData) {
   }
   fdb.exec('COMMIT')
   fdb.close()
+
+  // 文件夹具（#22 第三处：网格虚拟化）：`hardlink/hardlink.db` 的 `image_hardlink_info_v4`。
+  // 名字取「md5 + .dat」—— 与真机一致（微信附件名本来就是哈希），前端 `fileKey` 会剥回 md5，
+  // 于是 `data-file-key` 就是这一格该不该解码的键，两端可达可以逐字对上夹具。
+  mkdirSync(join(decrypted, 'hardlink'), { recursive: true })
+  const hdb = new DatabaseSync(join(decrypted, 'hardlink', 'hardlink.db'))
+  hdb.exec('CREATE TABLE image_hardlink_info_v4 (md5 TEXT, file_name TEXT, file_size INTEGER, modify_time INTEGER, dir1 INTEGER, dir2 INTEGER)')
+  const hins = hdb.prepare('INSERT INTO image_hardlink_info_v4 VALUES (?,?,?,?,?,?)')
+  hdb.exec('BEGIN')
+  for (let i = 1; i <= FILE_TOTAL; i += 1) {
+    const m = fileMd5(i)
+    hins.run(m, m + '.dat', 1024 * i, 1700000000 + i, 1, 1)
+  }
+  hdb.exec('COMMIT')
+  hdb.close()
   return decrypted
 }
 
@@ -282,6 +303,65 @@ try {
   check(await win.locator(`[data-fav-id="${FAV_TOTAL}"]`).count() > 0, `滚到顶能看到最新一条（data-fav-id=${FAV_TOTAL}）`, '')
   check(favNodesAtTop <= MAX_FAV_DOM_NODES,
     `回到顶部后 DOM 卡片数仍有上界（实测 ${favNodesAtTop} ≤ ${MAX_FAV_DOM_NODES}）—— 渐进窗口的形状在这里必红`, `nodes=${favNodesAtTop}`)
+
+  /*
+   * —— 第三处：文件面板的网格（#22「推广」的最后一处长列表）——
+   * 网格比列表多两件事：列数随容器宽度变（虚拟化数的是"行"），以及格子是异步解码的缩略图。
+   * 这里量的还是同一个性质：**已加载的量与 DOM 格子数解耦**，两端各自可达。
+   * 附件按 `modify_time DESC` 出 ⇒ 最新（i=FILE_TOTAL）在最前、最旧（i=1）在最后。
+   */
+  const filesBtn = win.getByRole('button', { name: '文件与存储', exact: true })
+  await filesBtn.waitFor({ state: 'visible', timeout: 20000 })
+  await filesBtn.click()
+  await win.waitForSelector('[data-file-key]', { timeout: 20000 })
+  /*
+   * 滚动容器**每轮重新找**：这里曾经固定拿一次元素再反复滚，结果卡在第 2 页 ——
+   * 首屏内容比容器还矮时，"能滚的祖先"这一判据会把指针交到外层页滚动容器上，
+   * 于是内层那张格子墙（真正的 IO root）从头到尾没滚过，底部哨兵再也没进过视口。
+   * 现在按 computed `overflow-y` 认（`auto`/`scroll` 才算），不依赖"此刻滚得动吗"。
+   */
+  const scrollFilesToBottom = () => win.evaluate(() => {
+    const first = document.querySelector('[data-file-key]')
+    let p = first ? first.parentElement : null
+    while (p) {
+      const oy = getComputedStyle(p).overflowY
+      if (oy === 'auto' || oy === 'scroll') break
+      p = p.parentElement
+    }
+    if (!p) return null
+    p.scrollTop = p.scrollHeight
+    return { scrollHeight: p.scrollHeight, clientHeight: p.clientHeight, scrollTop: p.scrollTop }
+  })
+  let oldestSeen = false
+  let fileBox = null
+  for (let i = 0; i < 90 && !oldestSeen; i += 1) {
+    fileBox = await scrollFilesToBottom()
+    await win.waitForTimeout(220)
+    oldestSeen = await win.locator(`[data-file-key="${fileMd5(1)}"]`).count() > 0
+  }
+  const fileScrollH = fileBox ? fileBox.scrollHeight : 0
+  await scrollFilesToBottom()
+  const fileNodesAtBottom = await win.locator('[data-file-key]').count()
+  check(oldestSeen, `滚到底能看到最旧一格（data-file-key=${fileMd5(1).slice(0, 8)}…）`, `scrollHeight=${fileScrollH}`)
+  check(fileScrollH > 3000, `滚动条长度证明远不止一屏已加载（scrollHeight ${fileScrollH}px）`, '')
+  check(fileNodesAtBottom <= MAX_FILE_DOM_NODES,
+    `底部 DOM 格子数有上界（实测 ${fileNodesAtBottom} ≤ ${MAX_FILE_DOM_NODES}）—— 渐进窗口在 600 条时必然是 600`, `nodes=${fileNodesAtBottom}`)
+
+  await win.evaluate(() => {
+    const first = document.querySelector('[data-file-key]')
+    let p = first ? first.parentElement : null
+    while (p) {
+      const oy = getComputedStyle(p).overflowY
+      if (oy === 'auto' || oy === 'scroll') break
+      p = p.parentElement
+    }
+    if (p) p.scrollTop = 0
+  })
+  await win.waitForTimeout(500)
+  const fileNodesAtTop = await win.locator('[data-file-key]').count()
+  check(await win.locator(`[data-file-key="${fileMd5(FILE_TOTAL)}"]`).count() > 0, `滚到顶能看到最新一格（i=${FILE_TOTAL}）`, '')
+  check(fileNodesAtTop <= MAX_FILE_DOM_NODES, `回到顶部后 DOM 格子数仍有上界（实测 ${fileNodesAtTop}）`, `nodes=${fileNodesAtTop}`)
+  await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n22-files-grid.png') }).catch(() => {})
 
   await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n18-longlist.png') }).catch(() => {})
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))
