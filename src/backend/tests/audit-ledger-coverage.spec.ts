@@ -18,6 +18,13 @@
  *   章节一旦改名，返回空集会变成「零缺失 ⇒ 全绿」，那正是这条判据要防的那种假绿。
  * - 序号只在 §七 内部的表格首列里找（`| 12 | …`）；报告正文里的 `P0-1` / `P2-6` 这些
  *   条目号不参与 —— 它们各有自己的行，硬拉进同一把尺会误报。
+ *
+ * ## 第二条尺：过程账不许看着像"还挂着"
+ *
+ * 这张表是按时间往下长的，同一个条目常常有五行「第 N 刀」，而**第一行永远写着 🟡** ——
+ * 扫状态列的人会以为 #18 / #19 / #20 至今没做完（其实早就收口了）。所以：**每一行 🟡 的序号，
+ * 要么被后面某一行续上，要么在「剩余」小节里点名**，否则就是断头账。
+ * 这与报告 §五 那条 N37（"条目表把未关闭的调查项藏掉"）是同一族的另一面。
  * @vitest-environment node
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -82,6 +89,34 @@ function unaccounted(doc: string): number[] {
   return plan.filter((n) => !ledger.has(n))
 }
 
+/** 台账区里的表格行（跳过表头与分隔行）。 */
+function ledgerRows(ledger: string): string[] {
+  return ledger.split('\n').filter(l => /^\|(?:[^|\n]*\|){3}/.test(l) && !/^\|\s*[-:]+\s*\|/.test(l) && !l.includes('清单项'))
+}
+
+/**
+ * 过程账（🟡）的续尾检查：一条只做了部分的账，必须**要么被后面某一行续上、要么在「剩余」里点名**。
+ * 为什么单独管：这张表是按时间往下长的，同一个条目常常有五行「第 N 刀」，
+ * 第一行永远写着 🟡 —— 扫状态列的人会以为 #18/#19/#20 还挂着，而它们其实早就收口了。
+ * 这不是格式洁癖：报告 §五 那条 N37 记的就是"条目表把状态藏错"这一族。
+ */
+function unclosedProgress(ledger: string, leftoverSection: string): string[] {
+  const rows = ledgerRows(ledger)
+  const bad: string[] = []
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i] ?? ''
+    if (!row.includes('🟡')) continue
+    const nums = [...row.matchAll(/#(\d{1,3})/g)].map(m => m[1] ?? '')
+    if (nums.length === 0) continue // 没对到 §七 序号的行（如「机检：…」）不归这条管
+    const pickedUpLater = rows.slice(i + 1).some(later => nums.some(n => later.includes(`#${n}`)))
+    const namedInLeftover = nums.some(n => leftoverSection.includes(`#${n}`))
+    if (!pickedUpLater && !namedInLeftover) {
+      bad.push(`第 ${String(i + 1)} 行标着 🟡，但后面既没有续上的行、「剩余」里也没点名：${row.slice(0, 60)}…`)
+    }
+  }
+  return bad
+}
+
 describe('整改台账必须覆盖 §七 的每一条序号（漏一条没人会发现）', () => {
   const doc = existsSync(DOC) ? readFileSync(DOC, 'utf8').replace(/\r\n/g, '\n') : ''
 
@@ -113,5 +148,28 @@ describe('整改台账必须覆盖 §七 的每一条序号（漏一条没人会
     const stripped = doc.replace(led, () => led.replace(/#12/g, '#??'))
     expect(stripped, '反向对照没改掉文档 ⇒ replace 的锚点形状变了').not.toBe(doc)
     expect(unaccounted(stripped)).toContain(12)
+  })
+
+  it('过程账（🟡）都有下文：要么被后面一行续上，要么在「剩余」里点名', () => {
+    const ledger = ledgerSection(doc)
+    const from = ledger.indexOf('### 剩余')
+    expect(from, '台账区里找不到「### 剩余」小节 ⇒ 这条判据的两个出口都断了').toBeGreaterThan(-1)
+    const rest = ledger.slice(from + 1)
+    const nextHeading = rest.search(/\n(?:## |### )/)
+    const leftover = nextHeading === -1 ? rest : rest.slice(0, nextHeading)
+    const bad = unclosedProgress(ledger, leftover)
+    expect(bad.join('\n'),
+      '这些 🟡 行读起来像"还挂着"，而后面既没有续账也没在剩余里点名 —— 扫状态列的人会被误导：\n').toBe('')
+    // 反例自证：造一条孤立的 🟡 行（后面没有任何续账、剩余里也不点名），判据必须报。
+    const synthetic = [
+      '| 清单项 | 状态 | 落点 | 备注 |',
+      '|---|---|---|---|',
+      '| 第三批 #99 第一步：拆个东西 | 🟡 第一刀做完 | `abc1234` | 举例用的一行 |',
+    ].join('\n')
+    // （注意：这里当"剩余清单"的字符串**不能含 `#99`** —— 含了就是把这条路自己填上，反例变成假的。）
+    expect(unclosedProgress(synthetic, '这一段点名的都是别的条目')).toHaveLength(1)
+    // 反向对照：同一个序号被后面一行续上，就不该报。
+    expect(unclosedProgress(`${synthetic}\n| 第三批 #99 第二步：拆完 | ✅ 完成 | ` + '`def5678` | 收了尾 |', '这一段点名的都是别的条目'))
+      .toEqual([])
   })
 })
