@@ -26,7 +26,14 @@ npm run build:backend      # 改了后端 src 就必须重建 bundle
 npm run build:types        # 改了后端导出就必须重生成 lib/types
 npm run docs:api:check     # 方法面变了要先跑 npm run docs:api 再检
 npm run check:shim         # 前端 shim 与源码逐字节一致
+npm run lint:db            # 唯一一条 ESLint 闸门：连接的所有权（1.7 秒）
 ```
+
+`lint:db` 只管**语法判得准、且今天零命中**的那两种形状（`withDb` 回调里再开一条、把 `async` 回调交给同步版 `withDb`）。
+它不接管"close 放在哪条路径上"那本账 —— 那是作用域分析，`no-restricted-syntax` 表达不了，
+账本仍在 [`../src/backend/wechat-data/tests/query-db-lifetime.spec.ts`](../src/backend/wechat-data/tests/query-db-lifetime.spec.ts)
+（为什么这么分工、以及按直觉写会误伤哪 32 处推荐写法，都记在 [`../eslint.config.mjs`](../eslint.config.mjs) 的头注里）。
+CI 不另开这一步：`npm test` 里的 `eslint-db-discipline.spec.ts` 会用 ESLint 的 API 把同一份配置跑在真实生产树上。
 
 CI 会重跑同一套并把"重建后 `git diff` 必须为空"当门禁 —— **改后端 `src` 就要把 `lib/`（和 `docs/API.md`）一起提交**，
 否则门禁红。
