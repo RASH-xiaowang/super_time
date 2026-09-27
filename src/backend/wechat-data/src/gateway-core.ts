@@ -48,7 +48,7 @@ import { recordOperation } from './query/operation-log.ts'
 import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
 import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
-import { listSummaryTasks as listTasks, updateSummaryTaskRunState } from './query/summary-tasks.ts'
+import { createSummaryScheduler, type SummaryScheduler } from './gateway-scheduler.ts'
 import { EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
 import { finishStreamJobIn, streamControlFor } from './gateway-jobs.ts'
 import type { PrivacyGateResult } from './gateway-privacy.ts'
@@ -77,7 +77,19 @@ export abstract class GatewayCore extends TypertRemoteService {
    */
   protected _selfUsername = ''
   protected _selfUsernameKey = ''
-  protected _schedBusy = false
+  /**
+   * 摘要任务的定时器调度（#20 第七刀拆出去的协作者）。
+   *
+   * 走 `slot()` 装配：构造期间 `setInterval` 那一颗就已经会调它，而 `_dirs` 是构造里
+   * 晚一步才赋的 —— 装配放进惰性槽里，第一次真正用到时才读 `_dirs`。
+   */
+  protected summaryScheduler(): SummaryScheduler {
+    return this.slot('summaryScheduler', () => createSummaryScheduler({
+      decryptedDir: () => this._dirs.decrypted,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      runTask: (options) => this.runSummaryTask(options),
+    }))
+  }
   /**
    * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
    * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
@@ -556,8 +568,8 @@ export abstract class GatewayCore extends TypertRemoteService {
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       runSummaryTask: (options) => this.runSummaryTask(options),
       selfUsername: () => this.selfUsername(),
-      getSchedBusy: () => this._schedBusy,
-      setSchedBusy: (v) => { this._schedBusy = v },
+      getSchedBusy: () => this.summaryScheduler().busy(),
+      setSchedBusy: (v) => { this.summaryScheduler().setBusy(v) },
     }))
   }
 
@@ -703,69 +715,9 @@ export abstract class GatewayCore extends TypertRemoteService {
     }
   }
 
-  /**
-   * 同一分钟到期的摘要任务并发上限（N15）。
-   *
-   * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
-   * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
-   * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
-   */
-  protected static readonly DUE_SUMMARY_CONCURRENCY = 2
-
   /** Run any enabled daily-summary task whose schedule time matches the current minute. */
   protected async maybeRunDueTasks(): Promise<void> {
-    if (this._schedBusy) return
-    this._schedBusy = true
-    try {
-      const now = new Date()
-      const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-      const tasks = listTasks(this._dirs.decrypted).items
-      const due: number[] = []
-      for (const t of tasks) {
-        if (!t.enabled) continue
-        const sched = (t.scheduleTime || '08:00').slice(0, 5)
-        // 「一分钟内没跑过」：`Number(t.lastRunAt)` 对从未跑过的任务是 NaN，`NaN > 60000` 恒 false
-        // ⇒ 新任务永远等不到第一次调度（last_run_at 只在跑过一次之后才被写）。缺值按 0 处理。
-        const lastRun = Number(t.lastRunAt ?? 0)
-        if (sched === hhmm && now.getTime() - lastRun > 60_000) due.push(t.id)
-      }
-      /**
-       * 有界并发 + 失败不连坐（N15，worker 池形态照搬 M10）。
-       *
-       * 改前是 `for (const t of tasks) await this.runSummaryTask(...)`：N 次**串行**的完整流式
-       * 往返，而且前一个任务失败会中断后面所有任务 —— 那正是「失败半写」在摘要任务上的形态：
-       * 同一分钟到期的一批只落地一部分，且没有任何地方会补跑剩下的。
-       * 现在 worker 原子认领下一个到期任务；单个任务抛错只记下原因，不影响其它任务跑完，
-       * 全部结束后再把首个错误抛给外层 catch（保留原来的 summary_scheduler_error 日志）。
-       *
-       * 并发本身不会引入写冲突：这批唯一的共享资源是 `daily_summary.db`，而 node:sqlite 是同步 API、
-       * `saveSummaryRecord` / `updateSummaryTaskRunState` 都是**单语句 autocommit** —— 从加锁到提交
-       * 不让出事件循环，两次调用在 JS 层不可能交错（实测 500 次交叉单语句写 0 次 SQLITE_BUSY；
-       * 只有把事务开着跨 await 才会撞锁，那是 N10 的病）。
-       */
-      let next = 0
-      let failure: unknown = null
-      const worker = async (): Promise<void> => {
-        for (;;) {
-          const i = next
-          next += 1
-          // `due` 是稠密的 number 数组 ⇒ 「取不到」与「下标越界」是同一件事，正好就是「没有到期任务了」。
-          const id = i >= due.length ? undefined : due[i]
-          if (id === undefined) return
-          try {
-            await this.runSummaryTask({ id })
-          } catch (e) {
-            failure = failure ?? e
-          }
-        }
-      }
-      await Promise.all(
-        Array.from({ length: Math.min(GatewayCore.DUE_SUMMARY_CONCURRENCY, due.length) }, () => worker()),
-      )
-      if (failure) throw failure
-    } catch (e) {
-      this.op('error', 'summary_scheduler_error', 'fail', '', (e as Error).message)
-    } finally { this._schedBusy = false }
+    await this.summaryScheduler().runDue()
   }
 
 }

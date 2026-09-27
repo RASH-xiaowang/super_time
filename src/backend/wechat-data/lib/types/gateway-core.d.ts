@@ -29,6 +29,7 @@ import type { StreamControl } from './query/zip.ts';
 import { type EmbedFn } from './query/retrieval/embedding.ts';
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts';
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts';
+import { type SummaryScheduler } from './gateway-scheduler.ts';
 import { ResolvedDirs, StreamJob } from './gateway-support.ts';
 import type { PrivacyGateResult } from './gateway-privacy.ts';
 import type { EmbedFeature } from './gateway-llm-factory.ts';
@@ -53,7 +54,13 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      */
     protected _selfUsername: string;
     protected _selfUsernameKey: string;
-    protected _schedBusy: boolean;
+    /**
+     * 摘要任务的定时器调度（#20 第七刀拆出去的协作者）。
+     *
+     * 走 `slot()` 装配：构造期间 `setInterval` 那一颗就已经会调它，而 `_dirs` 是构造里
+     * 晚一步才赋的 —— 装配放进惰性槽里，第一次真正用到时才读 `_dirs`。
+     */
+    protected summaryScheduler(): SummaryScheduler;
     /**
      * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
      * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
@@ -335,14 +342,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         source?: string;
         usernameName?: string;
     }, result: AskResult, elapsedMs: number, model: string): void;
-    /**
-     * 同一分钟到期的摘要任务并发上限（N15）。
-     *
-     * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
-     * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
-     * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
-     */
-    protected static readonly DUE_SUMMARY_CONCURRENCY = 2;
     /** Run any enabled daily-summary task whose schedule time matches the current minute. */
     protected maybeRunDueTasks(): Promise<void>;
 }

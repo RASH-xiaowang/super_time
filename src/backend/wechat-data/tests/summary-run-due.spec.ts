@@ -349,7 +349,10 @@ describe('N15：到期判定', () => {
     db.prepare('UPDATE summary_tasks SET enabled = 0 WHERE id = ?').run(disabledId)
     db.prepare('UPDATE summary_tasks SET schedule_time = ? WHERE id = ?').run('23:59', notDueId)
     db.close()
-    makeDueNow([dueId, justRanId])
+    // 三个都改成"这一分钟到点"，只有 `dueId` 该被跑：
+    // `disabledId` 必须**也**改成到点 —— 不然把它排除掉的是时间而不是 `enabled`，
+    // 名字里的"已停用"就只是说说（实测：去掉 `if (!t.enabled) continue` 变异照样全绿）。
+    makeDueNow([dueId, disabledId, justRanId])
     // 「一分钟内跑过」：justRanId 刚刚跑过
     const db2 = new DatabaseSync(join(dirname(decrypted), 'daily_summary.db'))
     db2.prepare('UPDATE summary_tasks SET last_run_at = ? WHERE id = ?').run(Date.now() - 30_000, justRanId)

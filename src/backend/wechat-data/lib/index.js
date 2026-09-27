@@ -27713,6 +27713,60 @@ function createExportRemotes(rc) {
   };
 }
 
+// src/backend/wechat-data/src/gateway-scheduler.ts
+var DUE_SUMMARY_CONCURRENCY = 2;
+function dueSummaryTaskIds(tasks, now) {
+  const hhmm = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+  const due = [];
+  for (const t of tasks) {
+    if (!t.enabled) continue;
+    const sched = (t.scheduleTime || "08:00").slice(0, 5);
+    const lastRun = Number(t.lastRunAt ?? 0);
+    if (sched === hhmm && now.getTime() - lastRun > 6e4) due.push(t.id);
+  }
+  return due;
+}
+function createSummaryScheduler(deps) {
+  let busy = false;
+  return {
+    busy: () => busy,
+    setBusy: (v) => {
+      busy = v;
+    },
+    async runDue() {
+      if (busy) return;
+      busy = true;
+      try {
+        const now = (deps.now ?? (() => /* @__PURE__ */ new Date()))();
+        const due = dueSummaryTaskIds(listSummaryTasks(deps.decryptedDir()).items, now);
+        let next = 0;
+        let failure = null;
+        const worker = async () => {
+          for (; ; ) {
+            const i = next;
+            next += 1;
+            const id = i >= due.length ? void 0 : due[i];
+            if (id === void 0) return;
+            try {
+              await deps.runTask({ id });
+            } catch (e) {
+              failure = failure ?? e;
+            }
+          }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(DUE_SUMMARY_CONCURRENCY, due.length) }, () => worker())
+        );
+        if (failure) throw failure;
+      } catch (e) {
+        deps.op("error", "summary_scheduler_error", "fail", "", e.message);
+      } finally {
+        busy = false;
+      }
+    }
+  };
+}
+
 // src/backend/wechat-data/src/gateway-jobs.ts
 function streamControlFor(jobs, emit, jobId) {
   const id = normalizeJobId(jobId);
@@ -27857,7 +27911,7 @@ function privacyGateAt(decryptedDir, feature, stats, texts) {
 }
 
 // src/backend/wechat-data/src/gateway-core.ts
-var GatewayCore = class _GatewayCore extends TypertRemoteService {
+var GatewayCore = class extends TypertRemoteService {
   constructor(ctx) {
     super(ctx, "wechatData");
     /**
@@ -27871,7 +27925,6 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
      */
     this._selfUsername = "";
     this._selfUsernameKey = "";
-    this._schedBusy = false;
     /**
      * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
      * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
@@ -27968,6 +28021,19 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
   static {
     /** Services this gateway depends on at runtime (LLM + default model). */
     this.inject = ["llm", "agentDefaultModel"];
+  }
+  /**
+   * 摘要任务的定时器调度（#20 第七刀拆出去的协作者）。
+   *
+   * 走 `slot()` 装配：构造期间 `setInterval` 那一颗就已经会调它，而 `_dirs` 是构造里
+   * 晚一步才赋的 —— 装配放进惰性槽里，第一次真正用到时才读 `_dirs`。
+   */
+  summaryScheduler() {
+    return this.slot("summaryScheduler", () => createSummaryScheduler({
+      decryptedDir: () => this._dirs.decrypted,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      runTask: (options) => this.runSummaryTask(options)
+    }));
   }
   /**
    * 当前登录账号的 wxid（消息 `isSender` 判定的基准）。
@@ -28294,9 +28360,9 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       runSummaryTask: (options) => this.runSummaryTask(options),
       selfUsername: () => this.selfUsername(),
-      getSchedBusy: () => this._schedBusy,
+      getSchedBusy: () => this.summaryScheduler().busy(),
       setSchedBusy: (v) => {
-        this._schedBusy = v;
+        this.summaryScheduler().setBusy(v);
       }
     }));
   }
@@ -28431,55 +28497,9 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       this.op("task", "ask_history", "fail", "", e.message);
     }
   }
-  static {
-    /**
-     * 同一分钟到期的摘要任务并发上限（N15）。
-     *
-     * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
-     * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
-     * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
-     */
-    this.DUE_SUMMARY_CONCURRENCY = 2;
-  }
   /** Run any enabled daily-summary task whose schedule time matches the current minute. */
   async maybeRunDueTasks() {
-    if (this._schedBusy) return;
-    this._schedBusy = true;
-    try {
-      const now = /* @__PURE__ */ new Date();
-      const hhmm = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
-      const tasks = listSummaryTasks(this._dirs.decrypted).items;
-      const due = [];
-      for (const t of tasks) {
-        if (!t.enabled) continue;
-        const sched = (t.scheduleTime || "08:00").slice(0, 5);
-        const lastRun = Number(t.lastRunAt ?? 0);
-        if (sched === hhmm && now.getTime() - lastRun > 6e4) due.push(t.id);
-      }
-      let next = 0;
-      let failure = null;
-      const worker = async () => {
-        for (; ; ) {
-          const i = next;
-          next += 1;
-          const id = i >= due.length ? void 0 : due[i];
-          if (id === void 0) return;
-          try {
-            await this.runSummaryTask({ id });
-          } catch (e) {
-            failure = failure ?? e;
-          }
-        }
-      };
-      await Promise.all(
-        Array.from({ length: Math.min(_GatewayCore.DUE_SUMMARY_CONCURRENCY, due.length) }, () => worker())
-      );
-      if (failure) throw failure;
-    } catch (e) {
-      this.op("error", "summary_scheduler_error", "fail", "", e.message);
-    } finally {
-      this._schedBusy = false;
-    }
+    await this.summaryScheduler().runDue();
   }
 };
 

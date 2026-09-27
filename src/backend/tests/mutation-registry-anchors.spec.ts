@@ -37,7 +37,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
  * 而当时唯一的数量判据是「>150」，全绿。号段连续性也拦不住（缺号才 4 个）。
  * 加一条变异就把这个数抬上去；掉下来就是有人把某份表弄丢了。
  */
-const REGISTRY_MIN = 340
+const REGISTRY_MIN = 344
 
 /**
  * 表里除 `to` 之外的五个字段都必须是非空字符串（缺一个字段，跑手就会报成"锚点失效"这种误导性结论）。

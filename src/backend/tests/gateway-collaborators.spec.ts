@@ -24,7 +24,7 @@ const DELEGATES = [
   'outboundBlockedAt(', 'privacyBlockedAt(', 'privacyGateAt(',
   'embedModelNameOf(', 'globalModelNameOf(', 'kbModelOf(',
   'makeEmbedFnOf(', 'makeChatAskerOf(', 'makeRerankFnOf(',
-  'streamControlFor(', 'finishStreamJobIn(',
+  'streamControlFor(', 'finishStreamJobIn(', 'summaryScheduler().runDue()',
 ] as const
 
 /**
@@ -38,7 +38,17 @@ const IMPLEMENTATION_MARKS = [
   'new BlockAssembler()', 'maxTokens: 500', 'readPrivacySettings(', 'recordPrivacyAudit(',
   'loadRetrievalConfig(', 'resolveModelRef(', '.llm.stream(',
   'keys().next()', 'this._streamJobs.set(', 'delete job.error',
+  // 第七刀：摘要调度的三件实现细节（拼时刻、记错误日志、并发上限），只该住在 `gateway-scheduler.ts` 里
+  "padStart(2, '0')", 'summary_scheduler_error', 'DUE_SUMMARY_CONCURRENCY',
 ] as const
+
+/** 不在「域 accessor ↔ 槽键」一一映射里的合法槽键（新增要写理由）。 */
+const EXTRA_SLOTS: readonly string[] = ['summaryScheduler']
+
+/** 防空转哨兵：清单空了 ⇒ 后面的"逐颗对齐"会一条都不跑。 */
+function atLeast(actual: number, min: number): void {
+  expect(actual, `实际 ${String(actual)}，下限 ${String(min)}（低于下限说明样本没扫到，这条守卫是空的）`).toBeGreaterThanOrEqual(min)
+}
 
 /**
  * 文件系统 token：`GatewayCore` 一个都不许碰（报告 §P2-2 第 2 条）。
@@ -58,6 +68,7 @@ const EXPORTS: ReadonlyArray<[string, readonly string[]]> = [
   ['gateway-models.ts', ['embedModelNameOf', 'globalModelNameOf', 'kbModelOf']],
   ['gateway-llm-factory.ts', ['makeEmbedFnOf', 'makeChatAskerOf', 'makeRerankFnOf']],
   ['gateway-jobs.ts', ['streamControlFor', 'finishStreamJobIn']],
+  ['gateway-scheduler.ts', ['createSummaryScheduler', 'dueSummaryTaskIds']],
   ['query/image-warm.ts', ['warmDecodedImages']],
 ]
 
@@ -128,26 +139,38 @@ describe('#20 的装配面', () => {
    *    十五个「下划线字段 + `??=`」正是十五格与装配同质的状态；
    * ② **键不许撞**：换成字符串键之后，两域同键不会再有编译错误（`as T` 把类型吞了），
    *    拿到的是**另一个域**的处理器 —— 症状是某些 RPC 报"没有这个成员"，或者静默返回错的东西。
-   * 键名按 `<域>Remotes` 的域段算，与 accessor 名字一对一对齐（不对齐时读的人只能猜）。
+   * 键名按 `<域>Remotes` 的域段算，与 accessor 名字一对一对齐；不在名单里的额外键要写进 `EXTRA_SLOTS`。
+   * （这条不是抽象担心：#20 第七刀把调度器拆出来时，我给它起的键就是 `'summary'`，
+   * 与 `summaryRemotes` 撞了 —— 编译一片绿，运行期 `runSummaryTask is not a function`，
+   * 三个到期判据当场红。那时守在那里的正是这条"slot 数与 accessor 数要相等"，
+   * 换成下面的集合式判据之后，同样的撞法会红得更直白：既报重复、也报"这个键不在名单里"。）
    */
   it('十五个装配槽：不许有字段态的 memo，键名一对一对齐且不重复', () => {
     const accessors = [...core.matchAll(/^ {2}protected ([a-zA-Z]+)Remotes\(\): /gm)].map((m) => m[1])
-    expect(accessors.length, '装配 accessor 少于十五颗 ⇒ 下面的逐颗对齐会少守几域').toBeGreaterThanOrEqual(15)
+    atLeast(accessors.length, 15)
     const slots = [...core.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
-    expect(slots.length, `每颗 accessor 都该走槽：accessor ${String(accessors.length)} 颗 / slot ${String(slots.length)} 处`).toBe(accessors.length)
-    for (const [i, name] of accessors.entries()) {
-      expect(slots[i], `第 ${String(i + 1)} 颗 ${name}Remotes 的键不是 "${name}" —— 键与名字对不上`).toBe(name)
-    }
-    expect(new Set(slots).size, `装配键有重复（两域同键时后装配那颗会拿到前一颗的处理器）：${slots.join(',')}`).toBe(slots.length)
+    const dupes = [...new Set(slots.filter((k, i) => slots.indexOf(k) !== i))]
+    expect(dupes, `装配键重复（两域同键时后装配那颗会拿到前一颗的产物）：${dupes.join(',')}`).toEqual([])
+    const missing = accessors.filter((n) => !slots.includes(n))
+    expect(missing, `这些域没走装配槽：${missing.join(',')}`).toEqual([])
+    const extra = slots.filter((k) => !accessors.includes(k))
+    expect(extra, `这些槽键不属于任何一颗域 accessor，也不是登记过的额外协作者：${extra.join(',')}`).toEqual([...EXTRA_SLOTS])
     expect(core, '类里又出现了字段态的装配 memo —— 那件事归 `slot()` 一处做').not.toMatch(/^ {2}protected _\w+Remotes\?:/m)
   })
 
   it('反例自证：两域撞同一个键必须被上面那条分辨出来', () => {
     const fake = core.replace("this.slot('kb'", "this.slot('media'")
     const keys = [...fake.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
-    expect(new Set(keys).size < keys.length, '合成"两域同键"没被分辨出来 ⇒ 唯一性那条是空的').toBe(true)
+    expect(keys.filter((k, i) => keys.indexOf(k) !== i).length, '合成"两域同键"没被分辨出来 ⇒ 重复那条是空的').toBeGreaterThan(0)
     const real = [...core.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
-    expect(new Set(real).size, '现仓本来就有重复键 ⇒ 上面那条唯一性是假绿').toBe(real.length)
+    expect(real.filter((k, i) => real.indexOf(k) !== i), '现仓本来就有重复键 ⇒ 上面那条是假绿').toEqual([])
+    // 撞法二：一个不在名单里的新键（第七刀真实犯过的那一种 —— 当时给调度器起的键
+    // 与 `summaryRemotes` 重了，所以这里用一颗不存在的域名，专打"额外键要登记"这半条）
+    const rogue = core.replace("this.slot('voiceLlm'", "this.slot('scheduler'")
+    const rogueKeys = [...rogue.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1] ?? '')
+    const rogueAccessors = [...rogue.matchAll(/^ {2}protected ([a-zA-Z]+)Remotes\(\): /gm)].map((m) => m[1] ?? '')
+    expect(rogueKeys.filter((k) => !rogueAccessors.includes(k) && !EXTRA_SLOTS.includes(k)),
+      '凭空多一个槽键没被抓住 ⇒ "额外键要登记"那半是空的').toContain('scheduler')
   })
 
   /**
