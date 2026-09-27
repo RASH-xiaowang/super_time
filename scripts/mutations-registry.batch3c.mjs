@@ -529,4 +529,12 @@ export const MUTATIONS_BATCH3C = [
     to: "const SELF_FILE = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wiring-kit.ts'",
     spec: "src/backend/tests/mutation-registry-anchors.spec.ts",
   },
+  {
+    id: "M375-ledger-row-loses-its-number",
+    why: "把台账那一行的 `#12` 标记去掉（回到只写「#13 之外的安全项」的旧样子）⇒ 这一行做的事还在、报告那条 P2-6 也还在，但 §七 清单里的序号 12 在台账区里**一个字的提及都不剩**：读的人翻遍那张密密麻麻的表也不会知道它其实早做完了。这正是「25 条对 25 行、靠人眼数」的唯一失效方式，所以把它交给判据去数",
+    file: "docs/CODE-AUDIT-2026-09-26.md",
+    from: "| 第二批 #12（P2-6 路径限根",
+    to: "| 第二批（P2-6 路径限根",
+    spec: "src/backend/tests/audit-ledger-coverage.spec.ts",
+  },
 ]
