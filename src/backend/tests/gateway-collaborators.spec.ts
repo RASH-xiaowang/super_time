@@ -40,12 +40,25 @@ const IMPLEMENTATION_MARKS = [
   'keys().next()', 'this._streamJobs.set(', 'delete job.error',
 ] as const
 
+/**
+ * 文件系统 token：`GatewayCore` 一个都不许碰（报告 §P2-2 第 2 条）。
+ *
+ * 2026-09-27 第五刀把最后一颗（`warmDecodedImages`，全类唯一直接读写文件的地方）下沉到
+ * `query/image-warm.ts` 之后，core 里连 `node:fs` 的 import 都不剩 —— 于是这一族变成**零容忍**：
+ * 类只管装配与编排，读写都在 query 层。为什么连 import 都要钉：留着壳、搬走肉是这类搬迁最常见的半截改法。
+ */
+const FS_TOKENS = [
+  'readFileSync', 'writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync',
+  'readdirSync', 'existsSync', 'statSync', 'openSync', 'node:fs',
+] as const
+
 /** 每个协作者必须导出的入口（按声明文本查；改名会同时撞坏该模块自己的判据）。 */
 const EXPORTS: ReadonlyArray<[string, readonly string[]]> = [
   ['gateway-privacy.ts', ['outboundBlockedAt', 'privacyBlockedAt', 'privacyGateAt']],
   ['gateway-models.ts', ['embedModelNameOf', 'globalModelNameOf', 'kbModelOf']],
   ['gateway-llm-factory.ts', ['makeEmbedFnOf', 'makeChatAskerOf', 'makeRerankFnOf']],
   ['gateway-jobs.ts', ['streamControlFor', 'finishStreamJobIn']],
+  ['query/image-warm.ts', ['warmDecodedImages']],
 ]
 
 function strip(src: string): string {
@@ -57,9 +70,11 @@ describe('#20 的装配面', () => {
 
   it('哨兵：真读到了网关那份文件（读空 ⇒ 下面两组判据全恒真）', () => {
     expect(core.length, 'gateway-core.ts 读不到或剥没了').toBeGreaterThan(8000)
+    expect(FS_TOKENS.length, 'fs 清单被清空 ⇒ 那条零容忍判据就成了装饰').toBeGreaterThanOrEqual(10)
+    expect(EXPORTS.length, '协作者清单').toBeGreaterThanOrEqual(5)
   })
 
-  it('三个协作者模块存在，且各自声明了约定的入口', () => {
+  it('每个协作者模块存在，且各自声明了约定的入口', () => {
     for (const [f, names] of EXPORTS) {
       const abs = join(SRC, f)
       expect(existsSync(abs), `少了 ${f}`).toBe(true)
@@ -82,6 +97,17 @@ describe('#20 的装配面', () => {
     }
   })
 
+  /**
+   * 报告 §P2-2 第 2 条的验收：类**一次文件系统调用都不许有**（原先最后一颗是 `warmDecodedImages`）。
+   * 这条之所以值得写成零容忍：搬完之后剩下的不是"少量残留"，而是"根本没有" ——
+   * 一旦有人图省事在类里再写一次 `existsSync`，这格立刻红，而他要么下沉、要么写明为什么留。
+   */
+  it('GatewayCore 不碰文件系统（读写一律在 query 层）', () => {
+    for (const t of FS_TOKENS) {
+      expect(core, `gateway-core.ts 里又出现了 ${t} —— fs 能力要待在 query 层，类里只做编排`).not.toContain(t)
+    }
+  })
+
   it('反例自证：合成一份「把实现长回类里」的源码必须被同一个判据抓住', () => {
     const fake = core + '\n    const assembler = new BlockAssembler()\n'
     const bites = IMPLEMENTATION_MARKS.filter((m) => fake.includes(m))
@@ -89,14 +115,39 @@ describe('#20 的装配面', () => {
     for (const mark of IMPLEMENTATION_MARKS) {
       expect(core, `现仓的类里本来就命中 ${mark} ⇒ 上面那条"不含实现"是假绿（清单要按实际形状改）`).not.toContain(mark)
     }
+    const fakeFs = core + '\n    if (existsSync(p)) writeFileSync(p, buf)\n'
+    expect(FS_TOKENS.filter((t) => fakeFs.includes(t)).length, 'fs 那条的合成违例没命中 ⇒ 清单是空的').toBeGreaterThan(0)
+    for (const t of FS_TOKENS) {
+      expect(core, `现仓的类里本来就命中 ${t} ⇒ 那条零容忍是假绿`).not.toContain(t)
+    }
   })
 
-  it('联合读法 `gatewaySource()` 真的把四个协作者收进来了（否则"实现搬到哪儿都算"的守卫静默失去靶子）', async () => {
+  /**
+   * 联合只收 `gateway-*` 那一层协作者；带 `/` 的那几条（如 `query/image-warm.ts`）住在实现层，
+   * 不扩这份联合（扩了「实现搬到哪儿都算」就没有边界了）。它们改由下面那条「接线」判据兜住。
+   */
+  it('联合读法 `gatewaySource()` 真的把网关层的协作者收进来了（否则"实现搬到哪儿都算"的守卫静默失去靶子）', async () => {
     const { gatewaySource } = await import('./gateway-source.ts')
     const union = gatewaySource()
-    for (const [, names] of EXPORTS) {
+    for (const [f, names] of EXPORTS) {
+      if (f.includes('/')) continue
       for (const n of names) {
         expect(union, `读这份联合的守卫看不见 ${n} —— 它现在住在协作者里`).toContain(`export function ${n}(`)
+      }
+    }
+  })
+
+  /**
+   * query 层那一条的接线判据：类必须**从那颗叶子 import**，并把它交给域处理器。
+   * 为什么不能只靠 typecheck：漏 import 会红在编译上，但"import 了却忘了传进 deps"
+   * 是完全合法的代码 —— 而它的症状是"批量取图慢回去"（预热静默不跑）。
+   */
+  it('下沉到 query 层的那颗仍然被类接上（import + 交给域处理器，两步都要在）', () => {
+    for (const [f, names] of EXPORTS) {
+      if (!f.includes('/')) continue
+      for (const n of names) {
+        expect(core, `gateway-core.ts 没有 import ${n}（它住在 ${f}）`).toContain(`import { ${n} } from './${f}'`)
+        expect(core, `gateway-core.ts import 了 ${n} 但没交给任何域处理器`).toContain(`${n},`)
       }
     }
   })

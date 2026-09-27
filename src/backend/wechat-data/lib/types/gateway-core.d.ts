@@ -351,25 +351,4 @@ export declare abstract class GatewayCore extends TypertRemoteService {
     protected static readonly DUE_SUMMARY_CONCURRENCY = 2;
     /** Run any enabled daily-summary task whose schedule time matches the current minute. */
     protected maybeRunDueTasks(): Promise<void>;
-    /**
-     * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
-     *
-     * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
-     * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
-     * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
-     * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
-     *
-     * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
-     * 命中已有缓存的文件不重写。
-     * @param decryptedDir - 解密库目录（hardlink.db 所在）。
-     * @param decodedDir - 解码缓存根。
-     * @param baseDir - 微信原始目录（候选路径的根）。
-     * @param items - 待预热的 (username, localId) 列表。
-     * @param aesKey - V2 AES key。
-     * @param xorKey - XOR key 字节。
-     */
-    protected warmDecodedImages(decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
-        username: string;
-        localId: number;
-    }>, aesKey: string | undefined, xorKey: number): void;
 }

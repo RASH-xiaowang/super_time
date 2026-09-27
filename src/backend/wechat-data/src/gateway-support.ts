@@ -82,7 +82,6 @@ export const EXPORT_PROGRESS_EVENT = 'wechat-export/progress'
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
  * 只用来判「这张图已经有解码产物了吗」——有就别再解一遍。
  */
-export const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
 
 
 /**

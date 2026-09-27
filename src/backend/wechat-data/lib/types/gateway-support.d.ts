@@ -52,7 +52,6 @@ export declare const EXPORT_PROGRESS_EVENT = "wechat-export/progress";
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
  * 只用来判「这张图已经有解码产物了吗」——有就别再解一遍。
  */
-export declare const CACHED_IMAGE_EXTS: string[];
 /**
  * 规整渲染层传来的 jobId：只当**不透明标识**用（不落盘、不回显），所以限长截断即可。
  * @param jobId - 原始值（可能缺省/非字符串）。

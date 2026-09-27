@@ -14,7 +14,7 @@
  *      那不是 N16 指的那条全表扫，也没有批量入口可用（`media-image.ts` 不在本轮写集内）；
  *   ② 这里造的是「解码缓存为空」的最坏情形：真实机器上多半直接命中 `decoded_images/`。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -22,6 +22,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
+import { warmDecodedImages } from '../src/query/image-warm.ts'
+import { rawWechatBase } from '../src/gateway-support.ts'
 
 const TALKER = 'wxid_n16_talker'
 /** 一屏图片的数量（与 RELEASE-PLAN 里 30 张的实测口径一致）。 */
@@ -240,5 +242,55 @@ describe('N16：批量取图 RPC 的查询次数与答案一致性', () => {
     const r = gw.getImageDataUrlsBatch({ items: [] })
     expect(r.items).toEqual([])
     expect(sql.md5Queries() - before).toBe(0)
+  })
+
+  /**
+   * 批量预热这一族（`query/image-warm.ts`）。**只钉得住直接调用**：
+   * 走 RPC 时 `getImageDataUrlsBatch` 的前置是 `if (base)`，而 `base` 来自
+   * `rawWechatBase(decrypted)`（读的是解密目录里那份微信自己写的配置），夹具里没有那份文件 ⇒
+   * **批量入口在这套夹具下根本不会去预热**（实测跑一遍批量，`decoded` 里只留下单张入口自己写的那一份）。
+   * 所以"预热坏掉"这件事，在原来那三条判据里一点都不显形 —— 它们量的是合并查询与答案一致性。
+   */
+  describe('批量预热（image-warm）：产出在磁盘上', () => {
+    const itemsOf = (n: number): Array<{ username: string; localId: number }> =>
+      Array.from({ length: n }, (_, i) => ({ username: TALKER, localId: i + 1 }))
+    const cachedOf = (md5s: string[]): string[] => md5s.filter(md5 => existsSync(join(decoded, TALKER, md5 + '.png')))
+
+    it('六张一次预热：六份解码文件都落进按用户分目录的缓存', () => {
+      makeFixture(6)
+      warmDecodedImages(decrypted, decoded, base, itemsOf(6), undefined, 0)
+      expect(cachedOf(Array.from({ length: 6 }, (_, i) => md5Of(i))).length, '预热写进缓存的张数').toBe(6)
+    })
+
+    it('库里没有对应 .dat 的那两张：不写、也不要把整批带崩', () => {
+      makeFixture(6)
+      for (const i of [1, 4]) rmSync(join(base, 'msg', 'attach', 'dirA', 'dirB', 'Img', `img_${i}.dat`), { force: true })
+      expect(() => warmDecodedImages(decrypted, decoded, base, itemsOf(6), undefined, 0)).not.toThrow()
+      expect(cachedOf([1, 4].map(md5Of)).length, '路径查不到的那两张不该有解码文件').toBe(0)
+      expect(cachedOf([0, 2, 3, 5].map(md5Of)).length, '其余每张仍要写出来（一颗失败不该带走一批）').toBe(4)
+    })
+
+    it('已有缓存的那张不重写（预热是省掉解码，不是刷新缓存）', () => {
+      makeFixture(2)
+      const outDir = join(decoded, TALKER)
+      mkdirSync(outDir, { recursive: true })
+      const target = join(outDir, md5Of(0) + '.png')
+      const sentinel = Buffer.from('已经在这里了')
+      writeFileSync(target, sentinel)
+      warmDecodedImages(decrypted, decoded, base, itemsOf(2), undefined, 0)
+      expect(readFileSync(target).equals(sentinel), '缓存里已有的那张被预热覆盖了').toBe(true)
+      // 另一张（原先没缓存的）必须写出来 —— 否则「全都跳过」也能骗过上一条
+      expect(existsSync(join(outDir, md5Of(1) + '.png')), '没缓存的那张反倒没写').toBe(true)
+    })
+
+    it('预热跑过之后，单张入口不再查路径表（这一族存在的意义就在这条）', () => {
+      makeFixture(3)
+      warmDecodedImages(decrypted, decoded, base, itemsOf(3), undefined, 0)
+      const sql = sqlCounter()
+      const before = sql.md5Queries()
+      const gw = gatewayFor(decoded)
+      for (const it of itemsOf(3)) expect(gw.getImageDataUrl(it).url, '缓存里的图应当还能解出来').toContain('data:image/png;base64,')
+      expect(sql.md5Queries() - before, '预热过之后单张入口还在按 md5 查路径表 ⇒ 预热写出的东西没被当成缓存').toBe(0)
+    })
   })
 })

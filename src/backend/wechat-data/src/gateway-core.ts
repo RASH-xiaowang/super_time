@@ -10,11 +10,10 @@
 
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AskResult, DecryptStatus, ExportStatus, SummaryTaskRunResult, WhisperDownloadProgress, WhisperTranscribing, OperationCategory, OperationStatus } from './types.ts'
 import { resolveSelfUsername } from './query/config.ts'
-import { normalizeAesKey } from './keys/image-key.ts'
+import { warmDecodedImages } from './query/image-warm.ts'
 import { startRealtimeSync } from './query/sync.ts'
 import { createTasksRemotes } from './remotes/tasks.ts'
 import { createOpsLogRemotes } from './remotes/opslog.ts'
@@ -32,7 +31,6 @@ import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
 import { knownEntityNames } from './query/search.ts'
-import { decodeDatBytes, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './query/media-image.ts'
 import type { StreamControl } from './query/zip.ts'
 import { getConfig } from './query/config.ts'
 import { recordExport } from './query/export-history.ts'
@@ -51,7 +49,7 @@ import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
 import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
 import { listSummaryTasks as listTasks, updateSummaryTaskRunState } from './query/summary-tasks.ts'
-import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import { EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
 import { finishStreamJobIn, streamControlFor } from './gateway-jobs.ts'
 import type { PrivacyGateResult } from './gateway-privacy.ts'
 import { embedModelNameOf, globalModelNameOf, kbModelOf } from './gateway-models.ts'
@@ -430,7 +428,8 @@ export abstract class GatewayCore extends TypertRemoteService {
       cdnSwitches: () => this.cdnSwitches(),
       outboundBlocked: () => this.outboundBlocked(),
       rawWechatBase: (decrypted) => rawWechatBase(decrypted),
-      warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+      // fs 读写都在 query 层那颗里（#20 第五刀下沉的），这里只是把它交给处理器。
+      warmDecodedImages,
       // 「批量取原图」是长任务，要写解密状态机的进度的**同一个对象**（同一时刻只允许一个
       // 解密类任务：批量取原图与批量解密/升级共用 `active` 这道忙闲闸门）。
       decryptState: this.decryptState,
@@ -783,58 +782,4 @@ export abstract class GatewayCore extends TypertRemoteService {
     } finally { this._schedBusy = false }
   }
 
-  /**
-   * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
-   *
-   * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
-   * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
-   * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
-   * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
-   *
-   * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
-   * 命中已有缓存的文件不重写。
-   * @param decryptedDir - 解密库目录（hardlink.db 所在）。
-   * @param decodedDir - 解码缓存根。
-   * @param baseDir - 微信原始目录（候选路径的根）。
-   * @param items - 待预热的 (username, localId) 列表。
-   * @param aesKey - V2 AES key。
-   * @param xorKey - XOR key 字节。
-   */
-  protected warmDecodedImages(
-    decryptedDir: string,
-    decodedDir: string,
-    baseDir: string,
-    items: ReadonlyArray<{ username: string; localId: number }>,
-    aesKey: string | undefined,
-    xorKey: number,
-  ): void {
-    try {
-      // md5 也批量查（每个 (username, 分片) 一次 IN）—— 见 `resolveImageMd5sBatch` 的注释：
-      // 原本只有下面的路径查询合并了，md5 仍是每张开一次库，在慢机器上等于没省。
-      const md5ByItem = resolveImageMd5sBatch(decryptedDir, items)
-      const wanted = md5ByItem.filter(m => m.length === 32)
-      if (wanted.length === 0) return
-      // 唯一一次「按 md5 找 .dat」的查询（N16 的收益点：N 张图从 N 次全表扫降到 1 次 IN）。
-      const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted)
-      if (paths.size === 0) return
-      const aesBytes = normalizeAesKey(aesKey)
-      for (let i = 0; i < items.length; i += 1) {
-        const md5 = md5ByItem[i] ?? ''
-        // 批量结果是按小写键存的（`resolveImageFilePathsByMd5` 会归一化），这里也归一化，
-        // 免得「消息里存的是大写 md5」那一条悄悄退回逐张查询。
-        const src = md5 ? paths.get(md5.toLowerCase()) : undefined
-        if (!src) continue
-        const it = items[i]!
-        const outDir = join(decodedDir, it.username)
-        const cached = CACHED_IMAGE_EXTS.some(ext => existsSync(join(decodedDir, md5 + '.' + ext)) || existsSync(join(outDir, md5 + '.' + ext)))
-        if (cached) continue
-        try {
-          const dec = decodeDatBytes(new Uint8Array(readFileSync(src)), aesBytes, xorKey)
-          if ('error' in dec || dec.format === 'hevc') continue
-          mkdirSync(outDir, { recursive: true })
-          writeFileSync(join(outDir, md5 + '.' + dec.format), Buffer.from(dec.bytes))
-        } catch { /* 单张解码失败：回退到单张入口的原路径 */ }
-      }
-    } catch { /* 预热是优化，失败不影响正确性 */ }
-  }
 }
