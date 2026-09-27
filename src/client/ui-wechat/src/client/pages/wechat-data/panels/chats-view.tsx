@@ -14,7 +14,7 @@ import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
 import { ImageViewer } from './chats-media.tsx'
-import { Avatar, ChatView, IconPin, buildMsgMenu, isEnterpriseChat } from './chats-support.tsx'
+import { ChatView, IconPin, buildMsgMenu, isEnterpriseChat } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
@@ -26,6 +26,8 @@ import { ChatsGroupInfoView } from './chats-group-info-view.tsx'
 import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
 import { ChatsCalendarDialog } from './chats-calendar-dialog.tsx'
 import { ChatsEditedDialog } from './chats-edited-dialog.tsx'
+import { ChatsMsgMenu } from './chats-msg-menu.tsx'
+import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import { useInlineAnalysis } from './use-inline-analysis.ts'
 import { useImagePreload } from './use-image-preload.ts'
@@ -521,52 +523,16 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         {editErr && <p className={cssshell.editErr} role="alert">保存失败：{editErr}</p>}
       </Dialog>
 
-      {/* 消息右键菜单（微信同款）：点空白处 / Esc / 滚动都会关掉 */}
-      {msgMenu && (
-        <div className={csscards.msgCtxOverlay} onMouseDown={() => { setMsgMenu(null) }}>
-          <div
-            className={csscards.msgCtxMenu}
-            style={{ left: msgMenu.x, top: msgMenu.y }}
-            role="menu"
-            onMouseDown={(e) => { e.stopPropagation() }}
-          >
-            {buildMsgMenu(msgMenu.m, msgMenu.kind).map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                role="menuitem"
-                className={csscards.msgCtxItem}
-                onClick={() => { const m = msgMenu.m; setMsgMenu(null); runMenuAction(item, m) }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* 消息右键菜单（微信同款）：JSX 在 chats-msg-menu.tsx，「先关菜单再执行动作」那一判在那里被钉住 */}
+      <ChatsMsgMenu
+        msgMenu={msgMenu}
+        items={msgMenu ? buildMsgMenu(msgMenu.m, msgMenu.kind) : []}
+        onClose={() => { setMsgMenu(null) }}
+        onPick={runMenuAction}
+      />
 
-      {/* member profile popover (群成员资料，悬浮于头像旁) */}
-      {profileMember && profilePos && (
-        <div className={csscards.memberProfilePop} style={{ left: profilePos.left, top: profilePos.top }}>
-          <div className={cssshell.memberProfileBody}>
-            <Avatar name={profileMember.name} username={profileMember.username} size={56} />
-            <div className={cssshell.memberProfileName}>{profileMember.name}</div>
-            <div className={csscards.memberProfileItem}>
-              <span>微信号</span><span className={cssshell.memberProfileMono}>{profileMember.username}</span>
-            </div>
-            {profileMember.region && (
-              <div className={csscards.memberProfileItem}>
-                <span>地区</span><span className={cssshell.memberProfileMono}>{profileMember.region}</span>
-              </div>
-            )}
-            {profileMember.signature && (
-              <div className={csscards.memberProfileItem}>
-                <span>签名</span><span className={cssshell.memberProfileMono}>{profileMember.signature}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* 群成员资料浮层：JSX 在 chats-member-profile.tsx（「没有的字段整行不画」那一判在那里） */}
+      <ChatsMemberProfile member={profileMember} pos={profilePos} />
 
       {/* 消息日历（A8）：JSX 在 chats-calendar-dialog.tsx，那一族的算术在 chats-calendar.ts */}
       <ChatsCalendarDialog
