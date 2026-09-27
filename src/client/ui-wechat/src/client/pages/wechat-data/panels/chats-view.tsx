@@ -6,6 +6,11 @@
  * 道具名与面板作用域里的名字完全相同 ⇒ JSX 逐行搬、面板侧一个对象字面量传进去。
  * 这样做的收益不是「少写几行」，而是：状态与老逻辑与渲染彻底分开之后，
  * 每一屏（日历、消息行、导出弹窗…）能单独搬出去配行为用例，搬的时候不必再动这棵树。
+ *
+ * 第九刀把那个道具袋按**消费方**分了几组：只有一个消费方的那 65 件收进四组，
+ * 组的类型直接写成弹窗自己的 props（`calendar: ChatsCalendarDialogProps`）——
+ * 原先这些名字在「袋的类型 / 调用点 / 面板的字面量」里各抄一遍，加一件道具要记着改三处，
+ * 漏一处不会报错，只会让那一屏少读一个值。现在只有 props 那一份是出处。
  */
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
@@ -21,11 +26,11 @@ import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
 import { ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
-import { ChatsExportDialog } from './chats-export-dialog.tsx'
-import { ChatsGroupInfoView } from './chats-group-info-view.tsx'
+import { ChatsExportDialog, type ChatsExportDialogProps } from './chats-export-dialog.tsx'
+import { ChatsGroupInfoView, type ChatsGroupInfoViewProps } from './chats-group-info-view.tsx'
 import { ChatsChatlogView } from './chats-chatlog-dialog.tsx'
-import { ChatsCalendarDialog } from './chats-calendar-dialog.tsx'
-import { ChatsEditedDialog } from './chats-edited-dialog.tsx'
+import { ChatsCalendarDialog, type ChatsCalendarDialogProps } from './chats-calendar-dialog.tsx'
+import { ChatsEditedDialog, type ChatsEditedDialogProps } from './chats-edited-dialog.tsx'
 import { ChatsMsgMenu } from './chats-msg-menu.tsx'
 import { ChatsMemberProfile } from './chats-member-profile.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
@@ -40,10 +45,16 @@ import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
 export interface ChatsViewProps {
-  /** 面板作用域里那批状态/回调（收成一个对象：摊到调用点就是一百多行道具字面量）。 */
+  /**
+   * 面板作用域里那批状态/回调，收成一个对象（摊到调用点就是一百多行道具字面量）。
+   * 前四件是**按消费方分的组**：类型直接写弹窗自己的 props，加一件道具就必须两处同时供得上，
+   * 不必再记着「袋里、调用点、面板字面量」三处各抄一遍。剩下的平铺字段都有多个读处。
+   */
   state: {
-      EXPO_FORMATS: ReadonlyArray<{ value: string; label: string }>
-      EXPO_TYPES: ReadonlyArray<ExpoType>
+      calendar: ChatsCalendarDialogProps
+      edited: ChatsEditedDialogProps
+      exportDialog: ChatsExportDialogProps
+      groupInfo: Omit<ChatsGroupInfoViewProps, 'isGroup' | 'open'>
       aiEligible: boolean
       analysisPaneOpen: boolean
       setAnalysisPaneOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -52,77 +63,33 @@ export interface ChatsViewProps {
       aiFull: boolean
       aiOpen: boolean
       aiTarget: WechatSession | null
-      annCanExpand: boolean
-      annExpanded: boolean
-      annRef: React.MutableRefObject<HTMLDivElement | null>
       batchExporting: boolean
       batchMode: boolean
       batchMsg: string | null
       buildIndex: (silent?: boolean) => Promise<void>
-      calActiveDays: number
-      calAvg: number
-      calCounts: Record<string, number>
-      calDays: number
-      calFirstDow: number
-      calHeat: (cnt: number) => string
-      calLoading: boolean
-      calMonth: number
-      calOpen: boolean
-      calTop: { day: number; count: number } | null
-      calTotal: number
-      calYear: number
       changeView: (next: ChatView) => void
       chatlogOpen: ChatlogFrame | null
       chatlogResolving: boolean
       chatlogStack: ChatlogFrame[]
-      chooseExportDir: () => Promise<void>
       clearAllDrafts: () => Promise<void>
       clearDraft: () => Promise<void>
       closeEdit: () => void
       curSession: WechatSession | null
-      doReset: (rec: EditedMessageRecord) => Promise<void>
       editAreaRef: React.MutableRefObject<HTMLTextAreaElement | null>
       editBusy: boolean
       editErr: string | null
       editTarget: WechatMessage | null
       editText: string
-      editedOpen: boolean
-      editing: boolean
-      edits: readonly EditedMessageRecord[]
       error: string | null
-      expCount: number
-      expDir: string
-      expFilename: string
-      expFormat: ExpFormat
-      expFrom: string
-      expTo: string
-      expTypes: readonly string[]
-      expZip: boolean
-      cancelExport: () => void
-      exportProgress: { phase: string; done: number; total: number } | null
       exportBatch: () => Promise<void>
       exportMsg: string | null
-      exportOpen: boolean
-      exportSession: () => Promise<void>
-      exporting: boolean
       filtered: readonly WechatSession[]
-      filteredMembers: GroupMember[]
-      groupInfo: GroupInfo | null
-      groupInfoErr: string | null
-      groupInfoLoading: boolean
       groupInfoOpen: boolean
-      groupInfoTitleId: string
       hasMore: boolean
-      hideMemberProfile: () => void
       indexBuilding: boolean
-      jumpToDay: (day: number) => void
       loadMore: () => Promise<void>
       loading: boolean
-      memberExpanded: boolean
       memberLimit: number
-      memberQuery: string
-      memberSearch: string
-      memberTotal: number
       messages: readonly WechatMessage[]
       messagesMatchSession: boolean
       moreOpen: boolean
@@ -148,7 +115,6 @@ export interface ChatsViewProps {
       openNestedChatlog: (rec: ChatlogRecord) => Promise<void>
       openSession: (s: WechatSession) => Promise<void>
       openSessionAndLocate: (username: string, localId?: number, dayStart?: number) => Promise<void>
-      pickingDir: boolean
       pinnedCollapsed: boolean
       pinnedList: readonly WechatSession[]
       pollStatus: string
@@ -169,36 +135,18 @@ export interface ChatsViewProps {
       sessionsPager: ReturnType<typeof usePagedList<WechatSession>>
       setAiFull: React.Dispatch<React.SetStateAction<boolean>>
       setAiOpen: React.Dispatch<React.SetStateAction<boolean>>
-      setAnnExpanded: React.Dispatch<React.SetStateAction<boolean>>
       setBatchMode: React.Dispatch<React.SetStateAction<boolean>>
-      setCalOpen: React.Dispatch<React.SetStateAction<boolean>>
       setChatlogStack: React.Dispatch<React.SetStateAction<ChatlogFrame[]>>
       setEditText: React.Dispatch<React.SetStateAction<string>>
-      setEditedOpen: React.Dispatch<React.SetStateAction<boolean>>
-      setExpCount: React.Dispatch<React.SetStateAction<number>>
-      setExpFilename: React.Dispatch<React.SetStateAction<string>>
-      setExpFormat: React.Dispatch<React.SetStateAction<ExpFormat>>
-      setExpFrom: React.Dispatch<React.SetStateAction<string>>
-      setExpTo: React.Dispatch<React.SetStateAction<string>>
-      setExpTypes: React.Dispatch<React.SetStateAction<readonly string[]>>
-      setExpZip: React.Dispatch<React.SetStateAction<boolean>>
-      setExportOpen: React.Dispatch<React.SetStateAction<boolean>>
-      setGroupInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
-      setMemberExpanded: React.Dispatch<React.SetStateAction<boolean>>
-      setMemberSearch: React.Dispatch<React.SetStateAction<string>>
       setMoreOpen: React.Dispatch<React.SetStateAction<boolean>>
       setMsgMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; m: WechatMessage; kind: RenderKind } | null>>
-      setProfileMember: React.Dispatch<React.SetStateAction<GroupMember | null>>
       setSearch: React.Dispatch<React.SetStateAction<string>>
       setSearchMode: React.Dispatch<React.SetStateAction<'session' | 'message'>>
       setSelected: React.Dispatch<React.SetStateAction<Set<string>>>
       setSuggestOpen: React.Dispatch<React.SetStateAction<boolean>>
       setViewer: React.Dispatch<React.SetStateAction<{ images: ViewerImage[]; index: number } | null>>
-      showMemberProfile: (m: GroupMember, el: HTMLElement) => void
-      shownMembers: GroupMember[]
       stats: { friends: number; groups: number; unread: number }
       suggestOpen: boolean
-      switchCalMonth: (delta: number) => Promise<void>
       togglePinned: () => void
       typeStats: readonly { type: number; label: string; count: number }[]
       view: ChatView
@@ -207,7 +155,7 @@ export interface ChatsViewProps {
 }
 
 export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg, buildIndex, cancelExport, calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedOpen, editing, edits, error, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile, indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setAnnExpanded, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu, setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned, typeStats, view, viewer } = state
+  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
 
   // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
   // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
@@ -385,10 +333,10 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 setContactInfoOpen={setContactInfoOpen}
                 moreOpen={moreOpen}
                 setMoreOpen={setMoreOpen}
-                exporting={exporting}
-                editing={editing}
-                edits={edits}
-                setExportOpen={setExportOpen}
+                exporting={exportDialog.exporting}
+                editing={edited.editing}
+                edits={edited.edits}
+                setExportOpen={exportDialog.setExportOpen}
                 openEdits={openEdits}
                 clearAllDrafts={clearAllDrafts}
                 clearDraft={clearDraft}
@@ -452,34 +400,18 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
         )}
       </div>
 
-      <ChatsGroupInfoView
-        annCanExpand={annCanExpand} annExpanded={annExpanded} annRef={annRef} filteredMembers={filteredMembers}
-        groupInfo={groupInfo} groupInfoErr={groupInfoErr} groupInfoLoading={groupInfoLoading}
-        groupInfoTitleId={groupInfoTitleId} hideMemberProfile={hideMemberProfile}
-        isGroup={curSession?.type === 'group'} memberExpanded={memberExpanded} memberQuery={memberQuery}
-        memberSearch={memberSearch} memberTotal={memberTotal} open={groupInfoOpen}
-        setAnnExpanded={setAnnExpanded} setGroupInfoOpen={setGroupInfoOpen} setMemberExpanded={setMemberExpanded}
-        setMemberSearch={setMemberSearch} setProfileMember={setProfileMember} showMemberProfile={showMemberProfile}
-        shownMembers={shownMembers}
-      />
+      <ChatsGroupInfoView {...groupInfo} isGroup={curSession?.type === 'group'} open={groupInfoOpen} />
 
       {/* 单聊「聊天信息」抽屉（P2-6）：组件自带 private-only 守卫与数据获取。 */}
       <ChatsContactInfoView
         open={contactInfoOpen}
         session={curSession}
         onClose={() => { setContactInfoOpen(false) }}
-        onExport={() => { setContactInfoOpen(false); setExportOpen(true) }}
+        onExport={() => { setContactInfoOpen(false); exportDialog.setExportOpen(true) }}
       />
 
       {/* 导出消息弹窗：JSX 在 chats-export-dialog.tsx（同一屏的规则在那里逐条被用例钉住） */}
-      <ChatsExportDialog
-        EXPO_FORMATS={EXPO_FORMATS} EXPO_TYPES={EXPO_TYPES} cancelExport={cancelExport} chooseExportDir={chooseExportDir}
-        expCount={expCount} expDir={expDir} expFilename={expFilename} expFormat={expFormat} expFrom={expFrom} expTo={expTo}
-        expTypes={expTypes} expZip={expZip} exportOpen={exportOpen} exportProgress={exportProgress}
-        exportSession={exportSession} exporting={exporting} pickingDir={pickingDir}
-        setExpCount={setExpCount} setExpFilename={setExpFilename} setExpFormat={setExpFormat}
-        setExpFrom={setExpFrom} setExpTo={setExpTo} setExpTypes={setExpTypes} setExpZip={setExpZip} setExportOpen={setExportOpen}
-      />
+      <ChatsExportDialog {...exportDialog} />
 
       {/* 聊天记录查看器（嵌套、栈式）：JSX 在 chats-chatlog-dialog.tsx，一条记录怎么读成一行在 chats-chatlog.ts */}
       <ChatsChatlogView
@@ -535,17 +467,10 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
       <ChatsMemberProfile member={profileMember} pos={profilePos} />
 
       {/* 消息日历（A8）：JSX 在 chats-calendar-dialog.tsx，那一族的算术在 chats-calendar.ts */}
-      <ChatsCalendarDialog
-        calActiveDays={calActiveDays} calAvg={calAvg} calCounts={calCounts} calDays={calDays}
-        calFirstDow={calFirstDow} calHeat={calHeat} calLoading={calLoading} calMonth={calMonth}
-        calOpen={calOpen} calTop={calTop} calTotal={calTotal} calYear={calYear}
-        jumpToDay={jumpToDay} setCalOpen={setCalOpen} switchCalMonth={switchCalMonth}
-      />
+      <ChatsCalendarDialog {...calendar} />
 
       {/* 已编辑消息浮层：JSX 在 chats-edited-dialog.tsx（遮罩那一判在那里） */}
-      <ChatsEditedDialog
-        doReset={doReset} editedOpen={editedOpen} editing={editing} edits={edits} setEditedOpen={setEditedOpen}
-      />
+      <ChatsEditedDialog {...edited} />
 
       {/* 右栏（最右一栏）= 一块**合并面板**（`ChatRightPanel`），上下两块共用一个容器：
           · 上：推荐回复（单聊常驻，读取范围 = 当前会话 + 当前选中的知识库）；

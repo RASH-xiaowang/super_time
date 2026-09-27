@@ -575,32 +575,11 @@ const {
   }, [curSession?.username])
 
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget,
-    annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
-    buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
-    calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
-    calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir,
-    clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, doReset, editAreaRef,
-    editBusy, editErr, editTarget, editText, editedOpen, editing,
-    edits, error, expCount, expDir, expFilename, expFormat,
-    expFrom, expTo, expTypes, expZip, exportBatch, exportMsg,
-    cancelExport, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo,
-    groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile,
-    indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit,
-    memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen,
-    msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading,
-    msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer,
-    normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog,
-    openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus,
-    profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
-    search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
-    sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setCalOpen, setChatlogStack, setContactInfoOpen, setEditText, setEditedOpen, setExpCount,
-    setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
-    setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
-    setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,
-    showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned,
-    typeStats, view, viewer,
+    calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, setCalOpen, switchCalMonth },
+    edited: { doReset, editedOpen, editing, edits, setEditedOpen },
+    exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportProgress, exportSession, exporting, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
+    groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
   }
 
   return (

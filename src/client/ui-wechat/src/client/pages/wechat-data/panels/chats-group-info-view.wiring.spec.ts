@@ -8,7 +8,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStripped } from '../../../test-helpers/wiring-kit.ts'
+import { jsxCall, readStripped } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 
@@ -63,11 +63,17 @@ describe('群聊信息抽屉的接线', () => {
     expect(thread.length, 'chats-thread.tsx 没读到').toBeGreaterThan(3000)
   })
 
+  /**
+   * 第九刀之后这一屏改成整袋展开：`isGroup` / `open` 两个**派生**道具仍写在调用点
+   * （它们不住在袋里 —— 面板没有同名状态）。找调用点必须用 `jsxCall`：
+   * `indexOf('<ChatsGroupInfoView')` 会先撞上袋里那行 `Omit<ChatsGroupInfoViewProps, …>`。
+   */
   it('渲染树真的挂上 <ChatsGroupInfoView，并把"是不是群聊"交出去', () => {
-    expect(view).toContain('<ChatsGroupInfoView')
     expect(view).toContain("from './chats-group-info-view.tsx'")
-    const at = view.indexOf('<ChatsGroupInfoView')
-    expect(view.slice(at, at + 1200)).toContain("isGroup={curSession?.type === 'group'}")
+    const call = jsxCall(view, 'ChatsGroupInfoView', '群信息调用点')
+    expect(call).toContain('{...groupInfo}')
+    expect(call).toContain("isGroup={curSession?.type === 'group'}")
+    expect(call).toContain('open={groupInfoOpen}')
   })
 
   it('抽屉的 JSX 不许再长在渲染树里', () => {

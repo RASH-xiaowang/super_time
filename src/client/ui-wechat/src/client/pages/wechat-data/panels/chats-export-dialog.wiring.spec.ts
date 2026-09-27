@@ -8,7 +8,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStripped } from '../../../test-helpers/wiring-kit.ts'
+import { jsxCall, readStripped } from '../../../test-helpers/wiring-kit.ts'
 import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 
 const HERE = import.meta.dirname
@@ -38,6 +38,8 @@ const MOD_MARKS = [
 describe('导出弹窗的接线', () => {
   const view = readStripped(join(HERE, 'chats-view.tsx'))
   const mod = readStripped(join(HERE, 'chats-export-dialog.tsx'))
+  // 第九刀：「这一袋面板真的供上了」要问到 Chats.tsx 那头
+  const panel = readStripped(join(HERE, 'Chats.tsx'))
 
   it('两张清单不是空的（清单被清空 ⇒ 下面两组判据全变恒真）', () => {
     expect(VIEW_FINGERPRINTS.length).toBeGreaterThanOrEqual(6)
@@ -71,12 +73,18 @@ describe('导出弹窗的接线', () => {
    * 少传一个 prop 会被 TS 拦住，但**把某个 setter 悄悄换成常量**不会 —— 所以钉住
    * 弹窗调用点确实从 `state` 上取那三个最容易写错的（时间两端与类型表）。
    */
-  it('调用点仍从 state 袋取时间/类型/进度', () => {
-    const at = view.indexOf('<ChatsExportDialog')
-    expect(at).toBeGreaterThan(-1)
-    const blk = view.slice(at, at + 1400)
-    for (const p of ['expFrom={', 'expTo={', 'expTypes={', 'exportProgress={', 'setExpTypes={', 'EXPO_TYPES={']) {
-      expect(blk, `弹窗调用点少了 ${p}`).toContain(p)
+  /**
+   * 第九刀：导出这一袋 25 件道具，原先在三份文件里各抄一遍名字（袋的类型、调用点、
+   * 面板的 `viewState` 字面量）。现在只有弹窗自己的 props 那一份是出处，其余两处都是引用 ——
+   * 所以这条判据问的是「引用有没有接上」，而不是「二十五个名字齐不齐」。
+   */
+  it('导出袋：类型即 props、调用点整袋展开、面板真的供上这一袋', () => {
+    expect(jsxCall(view, 'ChatsExportDialog', '导出调用点')).toBe('<ChatsExportDialog {...exportDialog} />')
+    expect(view).toContain('exportDialog: ChatsExportDialogProps')
+    expect(panel).toContain('exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir,')
+    // 逐件传参不许长回来：长回来就是第二份清单，下次加格式必漏一处
+    for (const back of ['expFrom={', 'exportProgress={', 'EXPO_TYPES={']) {
+      expect(view, `导出调用点又出现逐件写法 ${back}`).not.toContain(back)
     }
   })
 

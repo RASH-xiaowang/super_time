@@ -172,6 +172,32 @@ export function findRoot(startDir: string): string {
 }
 
 /**
+ * 取某个 JSX 元素的**调用点文本**（从 `<Name` 到它自己的 `/>`）。
+ *
+ * 为什么不直接用 `src.indexOf('<Name')`：类型里常常同时出现 `Omit<NameProps, …>`
+ * 这类字样，`<Name` 会先撞上**那一行**（实录：把 state 袋按消费方分组之后，
+ * 三条读调用点的守卫全部读到类型块里去了）。这里要求标签名后面紧跟空白或 `/`，
+ * 于是 `<ChatsGroupInfoView …>` 命中、`<ChatsGroupInfoViewProps` 不命中。
+ *
+ * 与 {@link sliceBetween} 同一条纪律：**找不到就变红**，不返回空串（空串会让
+ * 后续的 `toContain`/`not.toContain` 全部假绿）。
+ *
+ * @param text - 待切文本（应已剥注释）。
+ * @param name - 组件名（不含尖括号）。
+ * @param label - 出错时的用例说明。
+ * @returns 从 `<Name` 起、含收尾 `/>` 的那一段。
+ */
+export function jsxCall(text: string, name: string, label = name): string {
+  const re = new RegExp(`<(?:${name})[\\s/]`)
+  const m = re.exec(text)
+  expect(m, `${label}：源码里找不到 <${name} …> 这个调用点（改名时请同步本用例）`).not.toBeNull()
+  const start = m!.index
+  const end = text.indexOf('/>', start)
+  expect(end, `${label}：<${name} 没有收尾的 />（那一屏是不是没写完就交了？）`).toBeGreaterThan(start)
+  return text.slice(start, end + 2)
+}
+
+/**
  * 防空转哨兵：断言「样本量足够」，避免因为扫描目标为空而**一条断言都没真的跑**。
  *
  * 例：读不到任何 `*.spec.ts` 时，`for (const f of files) expect(...)` 会循环 0 次、

@@ -9,7 +9,7 @@
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStripped } from '../../../test-helpers/wiring-kit.ts'
+import { jsxCall, readStripped } from '../../../test-helpers/wiring-kit.ts'
 
 const HERE = import.meta.dirname
 
@@ -45,6 +45,8 @@ describe('第七刀两块浮层的接线', () => {
   const view = readStripped(join(HERE, 'chats-view.tsx'))
   const cal = readStripped(join(HERE, 'chats-calendar-dialog.tsx'))
   const edited = readStripped(join(HERE, 'chats-edited-dialog.tsx'))
+  // 第九刀之后「谁供这一袋」要问到面板那头
+  const panel = readStripped(join(HERE, 'Chats.tsx'))
 
   it('四张清单不是空的（清单被清空 ⇒ 下面几组判据全变恒真）', () => {
     expect(OLD_SHAPES.length).toBeGreaterThanOrEqual(4)
@@ -54,6 +56,7 @@ describe('第七刀两块浮层的接线', () => {
     expect(view.length, 'chats-view.tsx 没读到').toBeGreaterThan(5000)
     expect(cal.length, 'chats-calendar-dialog.tsx 没读到').toBeGreaterThan(1500)
     expect(edited.length, 'chats-edited-dialog.tsx 没读到').toBeGreaterThan(800)
+    expect(panel.length, 'Chats.tsx 没读到').toBeGreaterThan(5000)
   })
 
   it('渲染树里不许再留这两块浮层的 JSX', () => {
@@ -69,15 +72,21 @@ describe('第七刀两块浮层的接线', () => {
     expect(view).toContain("from './chats-edited-dialog.tsx'")
   })
 
-  it('调用点把开合位与动作都交出去（漏一个就是点了没反应）', () => {
-    const call = view.slice(view.indexOf('<ChatsCalendarDialog'), view.indexOf('/>', view.indexOf('<ChatsCalendarDialog')))
-    for (const prop of ['calOpen={calOpen}', 'switchCalMonth={switchCalMonth}', 'jumpToDay={jumpToDay}', 'setCalOpen={setCalOpen}', 'calHeat={calHeat}']) {
-      expect(call, `日历调用点少了 ${prop}`).toContain(prop)
-    }
-    const call2 = view.slice(view.indexOf('<ChatsEditedDialog'), view.indexOf('/>', view.indexOf('<ChatsEditedDialog')))
-    for (const prop of ['editedOpen={editedOpen}', 'edits={edits}', 'editing={editing}', 'doReset={doReset}', 'setEditedOpen={setEditedOpen}']) {
-      expect(call2, `已编辑浮层调用点少了 ${prop}`).toContain(prop)
-    }
+  /**
+   * 第九刀之后，「每一样道具都交出去了」这件事由**三处**共同成立：袋的类型就是弹窗自己的
+   * props（写平铺清单就等于把契约抄第二遍）、调用点整袋展开、面板那头真的供上这一袋。
+   * 单看调用点已经断不出什么了 —— 所以这里三处都断，缺任何一处都红。
+   */
+  it('日历袋与已编辑袋：类型即 props、整袋交出、面板真的供上', () => {
+    expect(jsxCall(view, 'ChatsCalendarDialog', '日历调用点')).toBe('<ChatsCalendarDialog {...calendar} />')
+    expect(jsxCall(view, 'ChatsEditedDialog', '已编辑调用点')).toBe('<ChatsEditedDialog {...edited} />')
+    expect(view).toContain('calendar: ChatsCalendarDialogProps')
+    expect(view).toContain('edited: ChatsEditedDialogProps')
+    expect(panel).toContain('calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, setCalOpen, switchCalMonth }')
+    expect(panel).toContain('edited: { doReset, editedOpen, editing, edits, setEditedOpen }')
+    // 旧的逐件写法不许长回来（长回来就是两处真相：袋里一份、弹窗 props 一份）
+    expect(view, '日历调用点又退回逐件传参 ⇒ 袋与 props 两份清单要开始漂移了').not.toContain('calOpen={calOpen}')
+    expect(view).not.toContain('editedOpen={editedOpen}')
   })
 
   it('两块模块各自齐全（少一件就是搬漏了一支）', () => {
