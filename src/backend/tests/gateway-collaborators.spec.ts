@@ -123,6 +123,34 @@ describe('#20 的装配面', () => {
   })
 
   /**
+   * #20 第六刀：十五个域的装配产物统一走一颗 `slot(key, build)`。两条各钉一面 ——
+   * ① **实例状态清零**：报告 §P2-2 第 1 条要 core 只剩 `_ctx` / `_dirs` 与装配，
+   *    十五个「下划线字段 + `??=`」正是十五格与装配同质的状态；
+   * ② **键不许撞**：换成字符串键之后，两域同键不会再有编译错误（`as T` 把类型吞了），
+   *    拿到的是**另一个域**的处理器 —— 症状是某些 RPC 报"没有这个成员"，或者静默返回错的东西。
+   * 键名按 `<域>Remotes` 的域段算，与 accessor 名字一对一对齐（不对齐时读的人只能猜）。
+   */
+  it('十五个装配槽：不许有字段态的 memo，键名一对一对齐且不重复', () => {
+    const accessors = [...core.matchAll(/^ {2}protected ([a-zA-Z]+)Remotes\(\): /gm)].map((m) => m[1])
+    expect(accessors.length, '装配 accessor 少于十五颗 ⇒ 下面的逐颗对齐会少守几域').toBeGreaterThanOrEqual(15)
+    const slots = [...core.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
+    expect(slots.length, `每颗 accessor 都该走槽：accessor ${String(accessors.length)} 颗 / slot ${String(slots.length)} 处`).toBe(accessors.length)
+    for (const [i, name] of accessors.entries()) {
+      expect(slots[i], `第 ${String(i + 1)} 颗 ${name}Remotes 的键不是 "${name}" —— 键与名字对不上`).toBe(name)
+    }
+    expect(new Set(slots).size, `装配键有重复（两域同键时后装配那颗会拿到前一颗的处理器）：${slots.join(',')}`).toBe(slots.length)
+    expect(core, '类里又出现了字段态的装配 memo —— 那件事归 `slot()` 一处做').not.toMatch(/^ {2}protected _\w+Remotes\?:/m)
+  })
+
+  it('反例自证：两域撞同一个键必须被上面那条分辨出来', () => {
+    const fake = core.replace("this.slot('kb'", "this.slot('media'")
+    const keys = [...fake.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
+    expect(new Set(keys).size < keys.length, '合成"两域同键"没被分辨出来 ⇒ 唯一性那条是空的').toBe(true)
+    const real = [...core.matchAll(/this\.slot\('([a-zA-Z]+)'/g)].map((m) => m[1])
+    expect(new Set(real).size, '现仓本来就有重复键 ⇒ 上面那条唯一性是假绿').toBe(real.length)
+  })
+
+  /**
    * 联合只收 `gateway-*` 那一层协作者；带 `/` 的那几条（如 `query/image-warm.ts`）住在实现层，
    * 不扩这份联合（扩了「实现搬到哪儿都算」就没有边界了）。它们改由下面那条「接线」判据兜住。
    */

@@ -980,4 +980,20 @@ export const MUTATIONS_BATCH3B = [
     to: "      // warmDecodedImages,",
     spec: "src/backend/tests/gateway-collaborators.spec.ts",
   },
+  {
+    id: "M341-gateway-slot-not-memoized",
+    why: "装配槽不再复用（每次都 build）⇒ 每一颗域处理器都变成\"新的一份\"，`gateway-read-shell.spec.ts` 那份 spy 立刻打不到：壳转发的对象与测试拿到的是两件。真实症状更难查 —— 域处理器内部持有的缓存在每次 RPC 之间被丢掉，且\"我给这件装了状态、它却认不得\"这类改法不会有编译错误",
+    file: "src/backend/wechat-data/src/gateway-core.ts",
+    from: "    if (this._remoteSlots.has(key)) return this._remoteSlots.get(key) as T",
+    to: "    if (false && this._remoteSlots.has(key)) return this._remoteSlots.get(key) as T",
+    spec: "src/backend/wechat-data/tests/gateway-read-shell.spec.ts",
+  },
+  {
+    id: "M342-gateway-slot-key-collision",
+    why: "两域撞同一个装配键（把 kb 的键写成 media）⇒ `as T` 把类型吞了，编译一片绿，运行期 KB 域拿到媒体域的处理器。报告 §P2-2 第三条本来就想把这十五颗换成注册表 —— 这一格钉的是\"换成键控装配之后新引入的那个失败模式\"必须有人守",
+    file: "src/backend/wechat-data/src/gateway-core.ts",
+    from: "    return this.slot('kb', () => createKbRemotes({",
+    to: "    return this.slot('media', () => createKbRemotes({",
+    spec: "src/backend/tests/gateway-collaborators.spec.ts",
+  },
 ]

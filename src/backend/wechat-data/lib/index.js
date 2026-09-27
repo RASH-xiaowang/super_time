@@ -27925,6 +27925,13 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
      * 名单在会话存续期内变化极小，记一次就够。换数据目录（换账号）时按 key 自然失效。
      */
     this._knownEntities = /* @__PURE__ */ new Map();
+    /**
+     * 装配槽：同一个域的处理器**只装配一次**（`WechatDataGateway` 的壳每次调用都转发到同一份对象，
+     * 那份"壳转给的就是这件"的判据见 `gateway-read-shell.spec.ts` 里的 spy 用例）。
+     * #20 第六刀之前这里是十五个「下划线字段 + `??=`」各写一遍 —— 报告 §P2-2 第 1 条要 core 只保留
+     * `_ctx` / `_dirs` 与装配，于是把"复用装配产物"这一件事收成一处，实例状态一次少十五格。
+     */
+    this._remoteSlots = /* @__PURE__ */ new Map();
     this._ctx = ctx;
     this._dirs = resolveDirs();
     const decrypted = this._dirs.decrypted;
@@ -28151,9 +28158,16 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       return { cdnEnabled: true, localDecrypt: true };
     }
   }
+  /** 取（或第一次装配）某个键对应的处理器。 */
+  slot(key, build) {
+    if (this._remoteSlots.has(key)) return this._remoteSlots.get(key);
+    const made = build();
+    this._remoteSlots.set(key, made);
+    return made;
+  }
   /** KB 域的处理器（体在 remotes/kb.ts）；这里只组装 ctx 与转发。 */
   kbRemotes() {
-    return this._kbRemotes ??= createKbRemotes({
+    return this.slot("kb", () => createKbRemotes({
       dirs: () => this._dirs,
       ctx: this._ctx,
       kbIndexJobs: this._kbIndexJobs,
@@ -28164,11 +28178,11 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       globalModelName: (role) => this.globalModelName(role),
       kbModel: (kbId, role) => this.kbModel(kbId, role),
       makeChatAsker: (kbId, feature) => this.makeChatAsker(kbId, feature)
-    });
+    }));
   }
   /** 媒体域的处理器（体在 remotes/media.ts）；这里只组装 ctx 与转发。 */
   mediaRemotes() {
-    return this._mediaRemotes ??= createMediaRemotes({
+    return this.slot("media", () => createMediaRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
@@ -28180,11 +28194,11 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       // 「批量取原图」是长任务，要写解密状态机的进度的**同一个对象**（同一时刻只允许一个
       // 解密类任务：批量取原图与批量解密/升级共用 `active` 这道忙闲闸门）。
       decryptState: this.decryptState
-    });
+    }));
   }
   /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
   exportRemotes() {
-    return this._exportRemotes ??= createExportRemotes({
+    return this.slot("export", () => createExportRemotes({
       dirs: () => this._dirs,
       ctx: () => this._ctx,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
@@ -28193,86 +28207,86 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
       normalizeJobId: (jobId) => normalizeJobId(jobId),
       streamJobs: this._streamJobs
-    });
+    }));
   }
   /** 任务与笔记（待办 / 笔记 / 交接提醒） 的处理器（体在 remotes/tasks.ts）；这里只组装 ctx 与转发。 */
   tasksRemotes() {
-    return this._tasksRemotes ??= createTasksRemotes({
+    return this.slot("tasks", () => createTasksRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail)
-    });
+    }));
   }
   /** 操作日志与隐私审计（含隐私开关读数） 的处理器（体在 remotes/opslog.ts）；这里只组装 ctx 与转发。 */
   opsLogRemotes() {
-    return this._opsLogRemotes ??= createOpsLogRemotes({
+    return this.slot("opsLog", () => createOpsLogRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail)
-    });
+    }));
   }
   /** 词云词频（界面优化阶段 4） 的处理器（体在 remotes/wordcloud.ts）；这里只组装 ctx 与转发。 */
   wordcloudRemotes() {
-    return this._wordcloudRemotes ??= createWordcloudRemotes({
+    return this.slot("wordcloud", () => createWordcloudRemotes({
       dirs: () => this._dirs
-    });
+    }));
   }
   /** 备份与恢复（含加密备份） 的处理器（体在 remotes/backup.ts）；这里只组装 ctx 与转发。 */
   backupRemotes() {
-    return this._backupRemotes ??= createBackupRemotes({
+    return this.slot("backup", () => createBackupRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       streamControl: (jobId) => this.streamControl(jobId),
       finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
       normalizeJobId: (jobId) => normalizeJobId(jobId)
-    });
+    }));
   }
   /** 数据配置与密钥状态（含解密/数据库状态） 的处理器（体在 remotes/config.ts）；这里只组装 ctx 与转发。 */
   configRemotes() {
-    return this._configRemotes ??= createConfigRemotes({
+    return this.slot("config", () => createConfigRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       decryptState: this.decryptState
-    });
+    }));
   }
   /** 总结任务（每日/周期总结的排程与运行） 的处理器（体在 remotes/summary.ts）；这里只组装 ctx 与转发。 */
   summaryRemotes() {
-    return this._summaryRemotes ??= createSummaryRemotes({
+    return this.slot("summary", () => createSummaryRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
       privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts)
-    });
+    }));
   }
   /** 问答反馈与检索配置（画像表 / 反馈表 / 配置） 的处理器（体在 remotes/ask.ts）；这里只组装 ctx 与转发。 */
   askRemotes() {
-    return this._askRemotes ??= createAskRemotes({
+    return this.slot("ask", () => createAskRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       askFeedbackSeen: this._askFeedbackSeen,
       askTrace: this._askTrace
-    });
+    }));
   }
   /** 密钥获取与全库/全图解密（图片密钥自动获取、验证、解密状态） 的处理器（体在 remotes/keysdec.ts）；这里只组装 ctx 与转发。 */
   keysDecryptRemotes() {
-    return this._keysDecryptRemotes ??= createKeysDecryptRemotes({
+    return this.slot("keysDecrypt", () => createKeysDecryptRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       decryptState: this.decryptState,
       rawWechatBase: (decrypted) => rawWechatBase(decrypted)
-    });
+    }));
   }
   /** 知识图谱、消息检索与索引（含编辑历史复位） 的处理器（体在 remotes/graphsearch.ts）；这里只组装 ctx 与转发。 */
   graphSearchRemotes() {
-    return this._graphSearchRemotes ??= createGraphSearchRemotes({
+    return this.slot("graphSearch", () => createGraphSearchRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       searchJobs: this._searchJobs,
       searchSignal: (jobId) => this.searchSignal(jobId)
-    });
+    }));
   }
   /** 总结记录（每日/周期总结生成、记录删除、推荐回复） 的处理器（体在 remotes/summaryrec.ts）；这里只组装 ctx 与转发。 */
   summaryRecordRemotes() {
-    return this._summaryRecordRemotes ??= createSummaryRecordRemotes({
+    return this.slot("summaryRecord", () => createSummaryRecordRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
@@ -28284,11 +28298,11 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       setSchedBusy: (v) => {
         this._schedBusy = v;
       }
-    });
+    }));
   }
   /** 语音转写与模型清单（whisper 安装/下载/状态、可用模型与提供方） 的处理器（体在 remotes/voicellm.ts）；这里只组装 ctx 与转发。 */
   voiceLlmRemotes() {
-    return this._voiceLlmRemotes ??= createVoiceLlmRemotes({
+    return this.slot("voiceLlm", () => createVoiceLlmRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
@@ -28301,11 +28315,11 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       setWhisperTranscribing: (v) => {
         this.whisperTranscribing = v;
       }
-    });
+    }));
   }
   /** 问答主链路（提问检索生成、问题优化、向量索引重建） 的处理器（体在 remotes/askdeep.ts）；这里只组装 ctx 与转发。 */
   askDeepRemotes() {
-    return this._askDeepRemotes ??= createAskDeepRemotes({
+    return this.slot("askDeep", () => createAskDeepRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
@@ -28319,7 +28333,7 @@ var GatewayCore = class _GatewayCore extends TypertRemoteService {
       kbModel: (kbId, role) => this.kbModel(kbId, role),
       askKnownEntities: () => this.askKnownEntities(),
       saveAskHistory: (options, result, elapsedMs, model) => this.saveAskHistory(options, result, elapsedMs, model)
-    });
+    }));
   }
   /**
    * 取一个搜索任务的取消信号（N9）。
