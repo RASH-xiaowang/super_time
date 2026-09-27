@@ -8,6 +8,7 @@ import { withWritableDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
+import { stripCdata } from './parse-xml.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -34,7 +35,12 @@ function decodeFavText(s: string): string {
     .replace(/&#9;/g, '\t')
 }
 
-/** Extract text between <tag ...> and </tag> (first occurrence). */
+/**
+ * Extract text between <tag ...> and </tag> (first occurrence).
+ *
+ * 与 `moments.ts` 同一条规则：收藏 content 里的 title/desc/url 也是 CDATA 包的，
+ * 不剥就把 `<![CDATA[…]]>` 显示到卡片上（共享原语 parse-xml.ts 一直有剥，本地副本是漏的那几处）。
+ */
 function xmlTagText(xml: string, tag: string): string | null {
   const openExact = '<' + tag + '>'
   const openAttr = '<' + tag + ' '
@@ -43,7 +49,7 @@ function xmlTagText(xml: string, tag: string): string | null {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
-  return xml.slice(contentStart, close)
+  return stripCdata(xml.slice(contentStart, close))
 }
 
 /** Extract an attribute value from a tag open (first occurrence). */

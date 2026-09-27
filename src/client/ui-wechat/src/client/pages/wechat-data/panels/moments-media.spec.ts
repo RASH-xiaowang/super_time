@@ -141,7 +141,7 @@ function Harness(props: {
   viewer: Parameters<typeof useMomentsMedia>[0]['viewer']
   specs: Array<[string, { md5: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }]>
 }): React.JSX.Element {
-  media = useMomentsMedia({ moments: props.moments, viewer: props.viewer, groups: [1], groupCount: 1 })
+  media = useMomentsMedia({ moments: props.moments, viewer: props.viewer, scrollRef: { current: null }, groups: [1], renderKey: '0-0' })
   return createElement('div', null, createElement(Register, { specs: props.specs }),
     createElement('span', { 'data-imgs': Object.keys(media.snsImgs).sort().join(',') }))
 }

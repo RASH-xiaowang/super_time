@@ -38,6 +38,12 @@ const MAX_DOM_NODES = 300
 const MAX_FAV_DOM_NODES = 200
 /** 格子的上界（一屏 4~6 列 × 3~4 行 + overscan，200 同样宽松；渐进窗口在 600 条时必然是 600）。 */
 const MAX_FILE_DOM_NODES = 200
+/** 朋友圈夹具条数与每天几条（摊成 120 天，日期标签行也要跟着窗口走）。 */
+const MOMENT_TOTAL = 1200
+const MOMENTS_PER_DAY = 10
+const MOMENT_USER = 'wxid_moments_owner'
+/** 时间线行的上界（一屏 4~6 张卡片 + overscan 4 ⇒ 十几行；渐进窗口在 1200 条时必然是 1320 行）。 */
+const MAX_MOMENT_DOM_ROWS = 80
 /** 第 i 条附件的 md5（夹具与断言共用同一个算式，两端可达才谈得上"逐字对上")。 */
 const fileMd5 = (i) => createHash('md5').update('supertime-file-' + i, 'utf8').digest('hex')
 const USER = 'wxid_n18'
@@ -118,6 +124,24 @@ function makeFixture(userData) {
   }
   hdb.exec('COMMIT')
   hdb.close()
+
+  // 朋友圈夹具（#22 最后一处）：`sns/sns.db` 的 `SnsTimeLine`，按 `tid DESC` 出。
+  // 1200 条摊到 120 天（每天 10 条）⇒ 时间线里既有动态行也有日期标签行，两样都要跟着窗口走。
+  mkdirSync(join(decrypted, 'sns'), { recursive: true })
+  const snadb = new DatabaseSync(join(decrypted, 'sns', 'sns.db'))
+  snadb.exec('CREATE TABLE SnsTimeLine (tid INTEGER PRIMARY KEY, user_name TEXT, content TEXT)')
+  const snains = snadb.prepare('INSERT INTO SnsTimeLine VALUES (?,?,?)')
+  snadb.exec('BEGIN')
+  for (let i = 1; i <= MOMENT_TOTAL; i += 1) {
+    const day = Math.floor((i - 1) / MOMENTS_PER_DAY)
+    const ts = 1700000000 + day * 86400 + i
+    const text = i % 5 === 0 ? '第 ' + i + ' 条：' + '这条动态的正文故意写得长一些，卡片高度因此不同。'.repeat(4) : '第 ' + i + ' 条动态'
+    const xml = '<msg><id><![CDATA[local_' + i + ']]></id><username><![CDATA[' + MOMENT_USER + ']]></username>'
+      + '<createTime>' + String(ts) + '</createTime><contentDesc><![CDATA[' + text + ']]></contentDesc></msg>'
+    snains.run(i, MOMENT_USER, xml)
+  }
+  snadb.exec('COMMIT')
+  snadb.close()
   return decrypted
 }
 
@@ -362,6 +386,77 @@ try {
   check(await win.locator(`[data-file-key="${fileMd5(FILE_TOTAL)}"]`).count() > 0, `滚到顶能看到最新一格（i=${FILE_TOTAL}）`, '')
   check(fileNodesAtTop <= MAX_FILE_DOM_NODES, `回到顶部后 DOM 格子数仍有上界（实测 ${fileNodesAtTop}）`, `nodes=${fileNodesAtTop}`)
   await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n22-files-grid.png') }).catch(() => {})
+
+  /*
+   * —— 第四处：朋友圈时间线（#22 的最后一处）——
+   * 这一处还多一条只有它有的线：媒体层的懒解密原先靠"渐进窗口渲染到第几组"重挂观察器，
+   * 虚拟化之后渲染的是一个区间 ⇒ 面板把窗口指纹喂给媒体层。滚一遍看图片占位会不会卡死，
+   * 是这条线唯一能被发现的方式（界面上不报错、后端也没收到请求）。
+   */
+  const momentsBtn = win.getByRole('button', { name: '朋友圈', exact: true })
+  await momentsBtn.waitFor({ state: 'visible', timeout: 20000 })
+  await momentsBtn.click()
+  await win.waitForSelector('[data-moment-row]', { timeout: 20000 })
+  const scrollMoments = (toTop) => win.evaluate((top) => {
+    const first = document.querySelector('[data-moment-row]')
+    let p = first ? first.parentElement : null
+    while (p) {
+      const oy = getComputedStyle(p).overflowY
+      if (oy === 'auto' || oy === 'scroll') break
+      p = p.parentElement
+    }
+    if (!p) return null
+    p.scrollTop = top ? 0 : p.scrollHeight
+    return { scrollHeight: p.scrollHeight, clientHeight: p.clientHeight, scrollTop: Math.round(p.scrollTop) }
+  }, toTop)
+  // 「加载全部」是按钮驱动的（每页 500 条），点到位之后再量 DOM
+  for (let i = 0; i < 6; i += 1) {
+    const btn = win.getByRole('button', { name: /^加载全部/, exact: false })
+    if (await btn.count() === 0) break
+    await btn.first().click({ timeout: 4000 }).catch(() => {})
+    await win.waitForTimeout(900)
+  }
+  let momentBox = null
+  let momentRowsTotal = 0
+  for (let i = 0; i < 25; i += 1) {
+    momentBox = await scrollMoments(false)
+    await win.waitForTimeout(220)
+    momentRowsTotal = Number(await win.evaluate(() => {
+      const el = document.querySelector('[data-moment-rows]')
+      return el ? (el.dataset.momentRows ?? '0') : '0'
+    }))
+    if (momentRowsTotal > 0) break
+  }
+  const mountedRows = await win.locator('[data-moment-row]').evaluateAll((els) => els.map((e) => ({
+    row: e.dataset.momentRow || '', idx: Number(e.dataset.index ?? '-1'),
+  })))
+  const maxIndex = mountedRows.reduce((a, b) => Math.max(a, b.idx), -1)
+  const momentNodesAtBottom = mountedRows.length
+  check(momentRowsTotal >= 100, `时间线确实是一张长列表（行 ${momentRowsTotal} = 动态 + 日期标签）`, `rows=${momentRowsTotal}`)
+  // 「滚到底」的正确判据是"列表最后一行被挂上了"，而不是"tid=1 在不在"——
+  // 面板能加载多少条受分页与作用域影响（那是另一件事），虚拟化要保证的是：窗口能走到行的末尾。
+  check(maxIndex === momentRowsTotal - 1, `滚到底挂到了列表末尾那一行（末行下标 ${maxIndex} = 总行数 ${momentRowsTotal} − 1）`, `mounted=${momentNodesAtBottom}`)
+  check(momentNodesAtBottom <= MAX_MOMENT_DOM_ROWS,
+    `底部时间线 DOM 行有上界（实测 ${momentNodesAtBottom} ≤ ${MAX_MOMENT_DOM_ROWS}，总行数 ${momentRowsTotal}）—— 渐进窗口必然是 ${momentRowsTotal}`, `nodes=${momentNodesAtBottom}`)
+  // 底部：那一天的标签行已滚出窗口，此刻必须由悬浮日期头补上"现在在哪一天"
+  const floatAtBottom = await win.evaluate(() => document.querySelector('[data-moment-float-day]')?.dataset.momentFloatDay ?? '')
+  // 滚回顶端：窗口要能走回去，并在那里量"顶端第一行是不是那一天的标签行"
+  await scrollMoments(true)
+  await win.waitForTimeout(500)
+  const momentNodesAtTop = await win.locator('[data-moment-row]').count()
+  const topRows = await win.locator('[data-moment-row]').evaluateAll((els) => els.map((e) => e.dataset.momentRow || ''))
+  const floatAtTop = await win.evaluate(() => document.querySelector('[data-moment-float-day]')?.dataset.momentFloatDay ?? '')
+  check(await win.locator(`[data-moment-row="${MOMENT_TOTAL}"]`).count() > 0, `滚到顶能看到最新一条（data-moment-row=${MOMENT_TOTAL}）`, '')
+  check(momentNodesAtTop <= MAX_MOMENT_DOM_ROWS, `回到顶部后 DOM 行仍有上界（实测 ${momentNodesAtTop}）`, `nodes=${momentNodesAtTop}`)
+  // 日期标签也算一行：顶端第一行就是最新那一天的标签行（标签与动态共用同一套下标）
+  check(/^\d{4}-\d{2}-\d{2}$/.test(topRows[0] ?? ''), '日期标签也算一行：顶端第一行就是那一天的标签行', `rows=${topRows.slice(0, 3).join('|')}`)
+  // 悬浮日期头：虚拟化让分组内 sticky 失效，换成按窗口顶端算 —— 顶端行本身就是标签时不重复出，
+  // 而滚到底（那一天的标签行已滚出窗口）时必须由它补上"当前是哪一天"。
+  check(floatAtTop === '' || floatAtTop === (topRows[0] ?? ''),
+    `顶端不重复出日期头（悬浮头 ${floatAtTop || '不显示'}，行首 ${topRows[0] ?? ''}）`, '')
+  check(floatAtBottom !== '' && floatAtBottom !== (topRows[0] ?? ''),
+    `滚到底时悬浮日期头补上当前那一天（底部 ${floatAtBottom || '空'}，最新那天 ${topRows[0] ?? ''}）`, '')
+  await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n22-moments.png') }).catch(() => {})
 
   await win.screenshot({ path: join(ROOT, '.tmp-e2e', 'n18-longlist.png') }).catch(() => {})
   check(pageErrors.length === 0, '全程无渲染层异常', pageErrors.join(' | ').slice(0, 200))

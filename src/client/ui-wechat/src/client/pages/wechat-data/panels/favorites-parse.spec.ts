@@ -54,6 +54,12 @@ describe('parseFavItem：后端字段优先', () => {
 })
 
 describe('parseFavXml：兜底解析与实体解码', () => {
+  it('CDATA 外壳必须剥掉（微信收藏 content 里 title/desc 都是 CDATA 包的）', () => {
+    expect(parseFavXml('<fav><title><![CDATA[链接 &amp; 标题]]></title><desc><![CDATA[一段 描述]]></desc></fav>').title).toBe('链接 & 标题')
+    expect(parseFavXml('<fav><desc><![CDATA[纯内容]]></desc></fav>').desc).toBe('纯内容')
+    expect(parseFavXml('<fav><datasrcname><![CDATA[群名]]></datasrcname></fav>').srcName).toBe('群名')
+  })
+
   it('非 XML 的纯文本 content 直接当描述（不吞字、也不返回空）', () => {
     expect(parseFavXml('就是一段普通文本')).toEqual({ title: '', desc: '就是一段普通文本', fromUsr: '', srcName: '' })
     expect(parseFavXml('')).toMatchObject({ desc: '' })

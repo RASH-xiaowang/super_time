@@ -114,23 +114,34 @@ export function pendingCovers(
 export interface MomentsMediaInput {
   moments: readonly MomentItem[]
   viewer: ViewerState | null
-  /** 当前渲染的分组（新分组挂载后要重新观察其中的媒体占位块）。 */
+  /**
+   * 滚动容器。由面板持有并注入：虚拟化要在**建虚拟器之前**拿到它（`getScrollElement`），
+   * 而媒体层的窗口补查又依赖虚拟窗口 —— 让 hook 自己造这个 ref 就会绕成环。
+   */
+  scrollRef: React.MutableRefObject<HTMLDivElement | null>
+  /**
+   * 当前渲染的分组（虚拟化之后是"视口附近那几组"）。
+   */
   groups: readonly unknown[]
-  groupCount: number
+  /**
+   * 渲染窗口的指纹（虚拟化：窗口一动就重新观察一遍新挂载的占位块）。
+   * 原先这里传的是"渐进窗口已渲染到第几组"，虚拟化之后渲染的是一个**区间**，
+   * 所以改成一个只要变化就能代表"DOM 换了一批元素"的键（面板传 `首下标-尾下标`）。
+   */
+  renderKey: string
 }
 
 /**
  * 朋友圈媒体层钩子：滚动懒解密 + 封面兜底 + IDB 恢复 + 灯箱按需解析。
  * @param input - 见 {@link MomentsMediaInput}。
- * @returns 面板与卡片要用的三份状态与两个引用。
+ * @returns 面板与卡片要用的两份状态与一个引用。
  */
 export function useMomentsMedia(input: MomentsMediaInput): {
-  scrollRef: React.MutableRefObject<HTMLDivElement | null>
   snsImgs: Record<string, string>
   articleCovers: Record<string, string>
   mediaKeySpec: React.MutableRefObject<Map<string, MediaKeySpec>>
 } {
-  const { moments, viewer, groups, groupCount } = input
+  const { moments, viewer, scrollRef, groups, renderKey } = input
   const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
   /** 已经取过（或已经决定不再取）的键 —— 去重靠它，别改成 state（每次 render 都换身份会让效果重跑）。 */
   const snsFetched = useRef(new Set<string>())
@@ -138,7 +149,6 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const coverAttempts = useRef<Map<string, number>>(new Map())
   const [coverTick, setCoverTick] = useState(0)
 
-  const scrollRef = useRef<HTMLDivElement | null>(null)
   const mediaKeySpec = useRef(new Map<string, MediaKeySpec>())
   const mediaQueue = useRef<Array<{ key: string } & MediaKeySpec>>([])
   const mediaFetching = useRef(false)
@@ -223,15 +233,21 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     }
   }, [moments, snsImgs, articleCovers, coverTick])
 
-  // 新渲染/新分组挂载后再观察对应的媒体占位块。
+  /**
+   * 渲染窗口换了一批元素 ⇒ 重新观察一遍当前 DOM 里的媒体占位块。
+   * 虚拟化之后每一行会反复挂载/卸载，所以这里**先 disconnect 再整批 observe**：
+   * 观察器留着已卸载元素没有意义（它们永远不会再相交），而 `observe()` 对当前相交的
+   * 元素会立刻补一次回调 —— 正好把"新挂载的这一批该解码"这条路走通。
+   * 重复请求由 `snsFetched` 挡住，所以整批重观察不会把后端敲第二遍。
+   */
   useEffect(() => {
     const root = scrollRef.current
     const ob = mediaObserved.current
     if (!root || !ob) return
-    root.querySelectorAll<HTMLElement>('[data-sns-key]').forEach((el) => {
-      if (!el.dataset.snsObs) { el.dataset.snsObs = '1'; ob.observe(el) }
-    })
-  }, [groups, groupCount])
+    const cells = Array.from(root.querySelectorAll<HTMLElement>('[data-sns-key]'))
+    ob.disconnect()
+    for (const el of cells) ob.observe(el)
+  }, [groups, renderKey])
 
   // 进入面板时从 IndexedDB 恢复已解密媒体：命中即秒显，不再并发解密。
   useEffect(() => {
@@ -262,5 +278,5 @@ export function useMomentsMedia(input: MomentsMediaInput): {
       .catch(() => { /* 保留 CDN 兜底 */ })
   }, [viewer, snsImgs])
 
-  return { scrollRef, snsImgs, articleCovers, mediaKeySpec }
+  return { snsImgs, articleCovers, mediaKeySpec }
 }

@@ -111,6 +111,10 @@ src/client/**                      前端（ESM + React）
   渲染树切成 `*-dialog.tsx` / `*-view.tsx`，两半各自有用例。
 - 测试辅助（读盘的那三份）住在 [`../src/client/ui-wechat/src/client/test-helpers/`](../src/client/ui-wechat/src/client/test-helpers/)，
   **不在** `panels/` 里 —— 判据同上（layer-direction），另有一条"不许把 node 内建 import 回 pages/**"。
+- **长列表一律虚拟化**（#22）：消息流、收藏、文件网格、朋友圈时间线四处都只挂载视口附近的行，
+  DOM 节点数与已加载条数解耦。这不是风格选择 —— 原先的"渐进窗口"只增不减，滚一遍历史就把整段留在页面上。
+  量它的地方是 [`../scripts/longlist-virtualization-e2e.mjs`](../scripts/longlist-virtualization-e2e.mjs)
+  （真实 Electron + 合成夹具，26 项断言：节点上界、两端可达、日期标签与悬浮头、文本里没有 CDATA 外壳）。
 
 ## 7. 构建与产物
 

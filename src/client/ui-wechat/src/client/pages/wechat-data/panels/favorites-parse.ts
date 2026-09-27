@@ -41,7 +41,12 @@ export function decodeFavText(s: string): string {
     .replace(/&#10;/g, '\n')
 }
 
-/** Extract text between <tag ...> and </tag> (first occurrence). */
+/**
+ * Extract text between <tag ...> and </tag> (first occurrence).
+ *
+ * CDATA 必须剥：微信收藏的 content 里 title/desc 就是 `<![CDATA[…]]>` 写法，
+ * 不剥就把整串标记显示到卡片上。后端 `parse-xml.ts` 那份一直有剥，客户端这份兜底解析原先漏了。
+ */
 export function xmlTagText(xml: string, tag: string): string | null {
   const openExact = '<' + tag + '>'
   const openAttr = '<' + tag + ' '
@@ -50,7 +55,14 @@ export function xmlTagText(xml: string, tag: string): string | null {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
-  return xml.slice(contentStart, close)
+  return stripCdata(xml.slice(contentStart, close))
+}
+
+/** 解开 `<![CDATA[…]]>` 外壳（两端都可能有空白；不是 CDATA 就原样返回）。 */
+function stripCdata(value: string): string {
+  const t = value.trim()
+  const m = /^<!\[CDATA\[([\s\S]*?)\]\]>$/.exec(t)
+  return m ? (m[1] ?? '') : value
 }
 
 /** Extract an attribute value from a tag open (first occurrence). */
@@ -72,13 +84,21 @@ export function xmlTagAttr(xml: string, tag: string, attr: string): string | nul
 /** 客户端兜底解析收藏 XML 的标题/描述/来源。 */
 export function parseFavXml(content: string): { title: string; desc: string; fromUsr: string; srcName: string } {
   if (!content || !content.includes('<')) return { title: '', desc: content || '', fromUsr: '', srcName: '' }
-  const title = (content.match(/<title>([^<]*)<\/title>/) || [])[1] || ''
+  // 四条捕获都要用 `([\s\S]*?)` 而不是 `([^<]*)`：微信收藏 content 里这些字段是 CDATA 包的，
+  // 而 `<![CDATA[…]]>` 本身以 `<` 开头 —— 旧的 `[^<]*` 连一个字符都匹配不上，
+  // 于是"有 CDATA 的收藏"标题/来源直接变空（不只是难看，是那一格信息没了）。
+  const title = (content.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''
   const raw = (content.match(/<desc>([\s\S]*?)<\/desc>/) || [])[1] || ''
-  const fromUsr = (content.match(/<fromusr>([^<]*)<\/fromusr>/) || [])[1] || ''
-  const srcName = (content.match(/<datasrcname>([^<]*)<\/datasrcname>/) || [])[1] || ''
+  const fromUsr = (content.match(/<fromusr>([\s\S]*?)<\/fromusr>/) || [])[1] || ''
+  const srcName = (content.match(/<datasrcname>([\s\S]*?)<\/datasrcname>/) || [])[1] || ''
   // 三条文本都要过实体解码：只解 `desc` 的话，标题里带 `&amp;` 的收藏会在卡片上显示成
   // 「A&amp;B」这串字面量（写这份测试时才发现，微信收藏的标题里 `&` 很常见）。
-  return { title: decodeFavText(title), desc: decodeFavText(raw), fromUsr, srcName: decodeFavText(srcName) }
+  return {
+    title: decodeFavText(stripCdata(title)),
+    desc: decodeFavText(stripCdata(raw)),
+    fromUsr: stripCdata(fromUsr),
+    srcName: decodeFavText(stripCdata(srcName)),
+  }
 }
 
 /** 客户端兜底解析 `<datalist><dataitem>` 资源条目。 */

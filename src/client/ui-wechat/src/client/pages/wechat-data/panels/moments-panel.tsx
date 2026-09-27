@@ -8,20 +8,26 @@
  */
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { ListSentinel, ListSkeleton, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useTransientNotice } from './hooks.tsx'
 import { apiOpenPath } from '../api.ts'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
+import { buildMomentRows, momentsEmptyText } from './moments-rows.ts'
+import { MomentsTimeline } from './moments-timeline.tsx'
+import { imageDownloadName, pickImageSrc, toggleInSet } from './moments-actions.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import { proxyableSrc } from '../utils/url.ts'
 import css from './moments.module.css'
-import kitCss from '../ui/kit.module.css'
 import { MediaFilter, fmtSyncTime, groupByDate, imgKey } from './moments-support.tsx'
 import { useMomentsScope } from './moments-scope.ts'
+
+/** 一行的估计高度：日期标签一行、卡片按"头像 + 正文两行"量级（真实高度由 `measureElement` 回灌）。 */
+const MOMENT_DAY_ROW_PX = 30
+const MOMENT_CARD_PX = 220
 import { useMomentsMedia } from './moments-media.ts'
 import { useMomentsExport } from './moments-export.ts'
 import { useMomentsVideos } from './moments-videos.ts'
@@ -87,14 +93,34 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   })
 
   const groups = useMemo(() => groupByDate(scoped), [scoped])
-  const { count: grpCount, sentinelRef: grpSentinel } = useProgressiveList(groups.length, 25)
+  /** 时间线的滚动容器（媒体层的观察器与虚拟器共用它；由面板持有，见 `moments-media.ts` 那条注释）。 */
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * 时间线虚拟化（#22 最后一处长列表）。行 = 日期标签 + 该天每条动态各一行
+   * （摊平在 `moments-rows.ts`，两套下标只会长出"最后一天的标签不见了"那种错）。
+   * 卡片高度差得厉害（纯文字 vs 九宫格 vs 视频），所以 `estimateSize` 只是起点，
+   * 真实高度靠 `measureElement` 回灌。
+   */
+  const momentRows = useMemo(() => buildMomentRows(groups), [groups])
+  const momentVirtualizer = useVirtualizer({
+    count: momentRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (momentRows[i]?.kind === 'day' ? MOMENT_DAY_ROW_PX : MOMENT_CARD_PX),
+    overscan: 4,
+  })
+  const momentWindowItems = momentVirtualizer.getVirtualItems()
+  /** 渲染窗口指纹：窗口一动，媒体层就重新观察一遍新挂载的占位块（见 `moments-media.ts`）。 */
+  const momentRenderKey = momentWindowItems.length > 0
+    ? String(momentWindowItems[0]?.index ?? 0) + '-' + String(momentWindowItems[momentWindowItems.length - 1]?.index ?? 0)
+    : 'none'
 
   // 离线媒体层（滚动懒解密 / 封面兜底 / IDB 恢复 / 灯箱按需解析）整个交给 moments-media.ts。
-  const { scrollRef, snsImgs, articleCovers, mediaKeySpec } = useMomentsMedia({
+  const { snsImgs, articleCovers, mediaKeySpec } = useMomentsMedia({
     moments,
     viewer,
+    scrollRef,
     groups,
-    groupCount: grpCount,
+    renderKey: momentRenderKey,
   })
 
   // 导出弹窗 + 手动重同步整个交给 moments-export.ts。
@@ -143,14 +169,17 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   useDialogFocus(detail !== null, '[data-st-dialog="moments-detail"]')
   useDialogFocus(exportOpen, '[data-st-dialog="moments-export"]')
 
+  /** 灯箱当前那张图的两个源；两个动作各取一个当首选（口径与理由见 `moments-actions.ts`）。 */
+  const viewerLocalSrc = (): string => (curImg ? snsImgs[imgKey(curImg)] || '' : '')
+  const viewerRemoteSrc = (): string => proxyableSrc(curImg?.url, curImg?.thumb) || ''
+
   // Save the currently displayed image (data URL → download).
   const saveCurrentImage = (): void => {
-    const src = (curImg && snsImgs[imgKey(curImg)]) || proxyableSrc(curImg?.url, curImg?.thumb)
+    const src = pickImageSrc(viewerLocalSrc(), viewerRemoteSrc(), 'local')
     if (!src) return
-    const ext = imageExtOf(src)
     const a = document.createElement('a')
     a.href = src
-    a.download = 'moments-' + String(viewer?.index ?? 0) + '.' + ext
+    a.download = imageDownloadName(viewer?.index ?? 0, imageExtOf(src))
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -158,7 +187,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
 
   // Copy the currently displayed image's source (CDN url preferred, else data URL).
   const copyCurrentLink = (): void => {
-    const src = proxyableSrc(curImg?.url, curImg?.thumb) || (curImg && snsImgs[imgKey(curImg)]) || ''
+    const src = pickImageSrc(viewerLocalSrc(), viewerRemoteSrc(), 'remote')
     if (!src) return
     void copyTextToClipboard(src).then((ok) => { if (ok) hold('已复制图片链接'); else hold('复制失败') })
   }
@@ -171,21 +200,9 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     void copyTextToClipboard(text).then((ok) => { if (ok) hold('已复制'); else hold('复制失败') })
   }
 
-  const toggleText = (tid: string): void => {
-    setExpandedTextByCard((prev) => {
-      const next = new Set(prev)
-      if (next.has(tid)) next.delete(tid); else next.add(tid)
-      return next
-    })
-  }
+  const toggleText = (tid: string): void => { setExpandedTextByCard(prev => toggleInSet(prev, tid)) }
 
-  const toggleSocial = (tid: string): void => {
-    setExpandedSocialByCard((prev) => {
-      const next = new Set(prev)
-      if (next.has(tid)) next.delete(tid); else next.add(tid)
-      return next
-    })
-  }
+  const toggleSocial = (tid: string): void => { setExpandedSocialByCard(prev => toggleInSet(prev, tid)) }
 
   const clearFilters = (): void => { setSearch(''); setMediaFilter('all'); setMonthFilter(null); setMineFilter('all'); setAuthorFilter(null); setDateFrom(''); setDateTo('') }
 
@@ -250,90 +267,52 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
           insight={insight}
         />
 
-        <div className={css.main}>
-          <div ref={scrollRef} className={css.scroll}>
-            {moments.length < total && <div className={css.insightNote}>统计中的图片/视频/位置/链接为已加载部分；全量 {total} 条。</div>}
-
-            {search && moments.length < total && !loading && !error && (
-              <div className={css.searchBanner}>
-                <span>搜索仅覆盖已加载 {moments.length} / {total} 条</span>
-                <button type="button" className={css.btn} onClick={() => { void loadAll() }} disabled={loadingAll}>{loadingAll ? '加载中…' : '加载全部以覆盖全量'}</button>
-              </div>
-            )}
-
-            {loading && moments.length === 0 && <ListSkeleton rows={10} />}
-            {error && <div className={kitCss.error} role="alert">⚠️ 朋友圈数据加载失败（{error}）</div>}
-            {!loading && !error && groups.length === 0 && (
-              <div className={kitCss.emptyInline}>
-                {(() => {
-                  if (search && mediaFilter === 'all' && monthFilter === null && mineFilter === 'all' && authorFilter === null) {
-                    return moments.length < total ? '已加载范围无匹配（共 ' + String(total) + ' 条，当前只加载了 ' + String(moments.length) + ' 条）' : '无匹配动态'
-                  }
-                  if (search) return '无匹配动态'
-                  if (mediaFilter !== 'all' || monthFilter !== null || mineFilter !== 'all' || authorFilter !== null || dateFrom || dateTo) return '当前筛选无匹配动态'
-                  return '暂无朋友圈动态'
-                })()}
-              </div>
-            )}
-            {!loading && !error && groups.slice(0, grpCount).map(g => (
-              <div key={g.day} className={css.dayGroup}>
-                <div className={css.dayLabel}>{g.day}</div>
-                {g.items.map((m) => (
-                  <MomentsCard
-                    key={m.tid}
-                    m={m}
-                    privacy={privacy}
-                    snsImgs={snsImgs}
-                    articleCovers={articleCovers}
-                    expandedTextByCard={expandedTextByCard}
-                    expandedSocialByCard={expandedSocialByCard}
-                    commentCounts={commentCounts}
-                    commentSortByCard={commentSortByCard}
-                    onlyMineComments={onlyMineComments}
-                    selfUsername={selfUsername}
-                    videoSrcs={videoSrcs}
-                    videoMeta={videoMeta}
-                    setVideoMeta={setVideoMeta}
-                    videoFailed={videoFailed}
-                    videoErr={videoErr}
-                    mediaKeySpec={mediaKeySpec}
-                    setViewer={setViewer}
-                    setDetail={setDetail}
-                    setAuthorFilter={setAuthorFilter}
-                    setOnlyMineComments={setOnlyMineComments}
-                    setCommentCounts={setCommentCounts}
-                    setCommentSortByCard={setCommentSortByCard}
-                    toggleText={toggleText}
-                    toggleSocial={toggleSocial}
-                    copyText={copyText}
-                    loadVideo={loadVideo}
-                    saveVideo={saveVideo}
-                    fullscreenVideo={fullscreenVideo}
-                    closeVideo={closeVideo}
-                  />
-                ))}
-              </div>
-            ))}
-            {!loading && !error && moments.length > 0 && moments.length < total && (
-              <div className={css.moreRow}>
-                <button type="button" className={css.moreBtn} onClick={() => { void loadAll() }} disabled={loadingAll}>
-                  {loadingAll ? '加载中…' : `加载全部（剩余 ${total - moments.length} 条）`}
-                </button>
-              </div>
-            )}
-            {!loading && !error && groups.length > grpCount && <ListSentinel refFn={grpSentinel} />}
-          </div>
-          {typeof document !== 'undefined' && createPortal(
-            <button
-              type="button"
-              className={css.backTop}
-              onClick={() => { scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-              title="回到顶部"
-              aria-label="回到顶部"
-            >↑</button>,
-            document.body,
+        <MomentsTimeline
+          rows={momentRows}
+          virtualizer={momentVirtualizer}
+          scrollRef={scrollRef}
+          loading={loading}
+          error={error}
+          loaded={moments.length}
+          total={total}
+          searching={!!search}
+          loadingAll={loadingAll}
+          onLoadAll={() => { void loadAll() }}
+          emptyText={momentsEmptyText({ search, mediaFilter, monthFilter, mineFilter, authorFilter, dateFrom, dateTo, loaded: moments.length, total })}
+          renderCard={(m) => (
+            <MomentsCard
+              m={m}
+              privacy={privacy}
+              snsImgs={snsImgs}
+              articleCovers={articleCovers}
+              expandedTextByCard={expandedTextByCard}
+              expandedSocialByCard={expandedSocialByCard}
+              commentCounts={commentCounts}
+              commentSortByCard={commentSortByCard}
+              onlyMineComments={onlyMineComments}
+              selfUsername={selfUsername}
+              videoSrcs={videoSrcs}
+              videoMeta={videoMeta}
+              setVideoMeta={setVideoMeta}
+              videoFailed={videoFailed}
+              videoErr={videoErr}
+              mediaKeySpec={mediaKeySpec}
+              setViewer={setViewer}
+              setDetail={setDetail}
+              setAuthorFilter={setAuthorFilter}
+              setOnlyMineComments={setOnlyMineComments}
+              setCommentCounts={setCommentCounts}
+              setCommentSortByCard={setCommentSortByCard}
+              toggleText={toggleText}
+              toggleSocial={toggleSocial}
+              copyText={copyText}
+              loadVideo={loadVideo}
+              saveVideo={saveVideo}
+              fullscreenVideo={fullscreenVideo}
+              closeVideo={closeVideo}
+            />
           )}
-        </div>
+        />
       </div>
       {notice && <div className={css.hint}>{notice}</div>}
       {exportedPath && (

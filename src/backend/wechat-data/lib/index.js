@@ -3155,7 +3155,7 @@ function xmlTagText2(xml, tag) {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : xml.indexOf(">", start) + 1;
   const close = xml.indexOf("</" + tag + ">", contentStart);
   if (close < 0) return null;
-  return xml.slice(contentStart, close);
+  return stripCdata(xml.slice(contentStart, close));
 }
 function xmlTagAttr(xml, tag, attr) {
   const openExact = "<" + tag + ">";
@@ -3436,7 +3436,7 @@ function xmlTagText3(xml, tag) {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : xml.indexOf(">", start) + 1;
   const close = xml.indexOf("</" + tag + ">", contentStart);
   if (close < 0) return null;
-  return xml.slice(contentStart, close);
+  return stripCdata(xml.slice(contentStart, close));
 }
 function xmlTagAttr2(xml, tag, attr) {
   const openExact = "<" + tag + ">";

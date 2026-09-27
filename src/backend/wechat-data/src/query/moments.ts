@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
+import { stripCdata } from './parse-xml.ts'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
 function cellString(v: unknown): string {
@@ -112,7 +113,14 @@ function unescapeXml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'")
 }
 
-/** Extract text between <tag ...> and </tag>, tolerating attributes on the open tag. */
+/**
+ * Extract text between <tag ...> and </tag>, tolerating attributes on the open tag.
+ *
+ * 必须过 `stripCdata`：微信的 SnsTimeLine content 里正文/昵称/链接标题都是
+ * `<contentDesc><![CDATA[…]]></contentDesc>` 这种写法（与消息 XML 同一个生产者），
+ * 不剥就会把 `<![CDATA[…]]>` 整串当正文显示到卡片上。
+ * 共享原语 `parse-xml.ts#xmlTagText` 一直有剥，这份本地版本是漏的那一处。
+ */
 function xmlTagText(xml: string, tag: string): string | null {
   const openExact = '<' + tag + '>'
   const openAttr = '<' + tag + ' '
@@ -121,7 +129,7 @@ function xmlTagText(xml: string, tag: string): string | null {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
-  return xml.slice(contentStart, close)
+  return stripCdata(xml.slice(contentStart, close))
 }
 
 /** Extract an attribute value from a tag open (first occurrence). */
