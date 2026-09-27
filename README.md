@@ -119,10 +119,15 @@ docs/                    隐私声明、接口参考、RAG 架构、实施计划
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构总览：三个进程、依赖方向、一次调用的完整路径、哪些不变量有机检 |
+| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | 改这个仓库的规矩：收口链顺序、四件套、棘轮只许变小、判据怎么写 |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署与发布：构建、打包、许可证签发、装完之后怎么验 |
+| [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway.ts` 的 `@Remote` 自动生成） |
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
-| [`docs/rag/RAG-ARCHITECTURE.md`](docs/rag/RAG-ARCHITECTURE.md) | 检索与问答链路 |
+| [`docs/rag/RAG-ARCHITECTURE.md`](docs/rag/RAG-ARCHITECTURE.md) | 检索与问答链路：混合召回、重排权重、上下文压缩、评估与反馈闭环 |
+| [`docs/CODE-AUDIT-2026-09-26.md`](docs/CODE-AUDIT-2026-09-26.md) | 全面代码审计与整改台账（逐条状态记在「先读这里」） |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
 | [`wechat/README.md`](wechat/README.md) | 配置模板（`config.example.json` / `llm.example.json`） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |
