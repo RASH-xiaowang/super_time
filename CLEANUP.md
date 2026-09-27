@@ -46,7 +46,7 @@
 **保留**：`build/icon.ico`（`package.json:169` 唯一被消费的图标）、`icon-512.png`、`icon-1024.png`
 （仅这两个分辨率是 `.ico` 里没有的源图，删了就再也回不去）。
 
-**未删（都不是冗余）**：`wechat/config.json`、`wechat/llm.json`、`vendor-keys/`（运行态与签发材料，
+**未删（都不是冗余）**：`wechat/config.json`、`wechat/llm.json`、`vendor-keys/`（运行态与**公钥**；签发私钥自 2026-09-27 起在 `~/.supertime/`，见 P3-10，
 已 gitignore；明文密钥仍在 git 历史，见 `docs/RELEASE-PLAN.md` H1）、`.workbuddy/`（本机助手记忆）、
 `src/index.html` + `renderer.js` + `styles.css`（`main.js:452` 的兜底路径，且已进打包白名单）、
 `src/backend/deps/**` 的 91 个 `.map`（488 KB；deps 内 `lib/*.js` 无一处 `sourceMappingURL`，

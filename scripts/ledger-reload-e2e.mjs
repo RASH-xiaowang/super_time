@@ -20,7 +20,9 @@
  *
  *  ① 骨架屏：`?skeleton=1` 是产品自己的调试开关（`overview-panel.tsx` 认它），打开就必须看得见
  *     骨架节点 —— 看不见说明选择器/钩子是坏的，后面所有"没闪骨架"的结论都不作数；
- *  ② 资金标记：离开总览之后屏上必须**没有**那个词 —— 不然"二次进入首帧就有"是同义反复。
+ *  ② 资金那一格：产品留了专属钩子（overview-panel 里的 data-st-ledger-money），离开总览之后它必须
+ *     不在屏上 —— 不然"二次进入首帧就有"是同义反复。（第一版用文案匹配，在"聊天会话"页签上也匹配得到，
+ *     因为聊天记录正文里就有「收入」二字 —— 文本判据在这种页面上根本不成立。）
  *
  * 页签切换必须**点导航按钮**：`WechatDataPanel` 只在挂载时读一次 `location.hash`（没有
  * `hashchange` 订阅），写 hash 不会换页 —— 第一版因此"切"了个寂寞，二次进入那条变成同义反复。
@@ -54,7 +56,6 @@ const REDPACKET_XML = '<msg><appmsg><type>2001</type><wcpayinfo><feedesc>￥8.88
 /** 页面里两个信号的判据串（骨架：通用 `nm-skel` 与总览面板那套 CSS Module 哈希后的 `skeleton`）。 */
 const IN_PAGE = {
   skelSel: '.nm-skel, [class*="skeleton"]',
-  moneyMark: '资金快照',
 }
 
 let _electron
@@ -142,11 +143,16 @@ try {
   /** 装页面探针（骨架新增计数 + 「这一格真的画在屏上吗」）。页面重新加载之后必须再装一次。 */
   const installProbe = () => win.evaluate((cfg) => {
     window.__skel = 0
-    // 页签是保活的（切走不卸载），所以"屏上有没有"必须问**可见性**，不能只查 innerText ——
-    // 只查文本的话，藏在折叠页签里的同一句标题会让"离开之后应该没有"永远为假。
-    window.__money = () => [...document.querySelectorAll('h1, h2, h3, h4, div, span, p, section')]
-      .filter((el) => el.childElementCount === 0 && (el.textContent ?? '').includes(cfg.moneyMark))
-      .some((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null))
+    // 「这一格在不在屏上」问的是产品留的专属钩子（`data-st-ledger-money`）+ 几何可见性。
+    // 文案匹配不可靠：「收入」「资金快照」这些词在别的页签的正文里也会出现（实测在「聊天会话」
+    // 页签上照样匹配得到），而页签是保活的 —— 用文本会把"离开之后应当没有"送成永远为真。
+    window.__money = () => {
+      const el = document.querySelector('[data-st-ledger-money]')
+      if (!el) return false
+      const r = el.getBoundingClientRect()
+      const vis = typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null
+      return vis && r.width > 0 && r.height > 0
+    }
     const obs = new MutationObserver((muts) => {
       for (const m of muts) for (const n of m.addedNodes) {
         if (n instanceof HTMLElement && (n.matches(cfg.skelSel) || n.querySelector(cfg.skelSel))) window.__skel += 1

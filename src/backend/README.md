@@ -127,13 +127,18 @@ npm test               # 后端包 + 宿主层 + 前端纯逻辑的全部单测�
 
 ## 许可证与签发私钥（L12）
 
-- **签发私钥 `vendor-keys/license-private.pem` 只应存在于「签发机」**：物理隔离到一台专门的
-  机器上，那台机器上有一份仓库检出、`vendor-keys/` 只在那里生成与保存。它已被 `.gitignore`
-  忽略、也不在 `package.json` 的 `files` 白名单与 `asarUnpack` 里（实测 asar 条目里
-  `vendor-keys` 命中数为 0），所以它既不会入库也不会随包分发。
+- **签发私钥不住在仓库里**（P3-10，2026-09-27）：默认位置是**用户目录**下的
+  `~/.supertime/license-private.pem`，要放别处用 `SUPERTIME_LICENSE_PRIVATE_KEY` 或 `--key <path>` 显式指路。
+  位置解析只有一处（`scripts/license-key-path.js`），**指向仓库内的路径一律拒、不给"退回工作树那一份"的退路**。
+  为什么不止步于 gitignore：`vendor-keys/` 一直被忽略、也不在 `build.files`/`asarUnpack` 里，
+  「不入库不随包分发」这层是关着的；但私钥躺在仓库目录里时，`git add -f` 一次、把工作树整个备份走
+  （网盘 / 移动盘 / CI 缓存归档）或直接把目录发给别人，签名能力就跟着出去了 —— 拿着它能给任意设备签发许可证。
+  现在这件事有机检：`src/backend/tests/license-key-location.spec.ts`（规则、三个消费者、
+  以及"工作树里不存在任何私钥 pem"，各带反例自证）。
 - **开发机不需要它**。依赖它的只有签发侧工具：`npm run license-keygen`（生成密钥对）、
   `npm run license-issue`（用私钥签许可证）、`npm run license-studio`（签发 GUI）——
-  它们都从工作树的 `vendor-keys/` 读私钥，因此只能在签发机上跑。
+  它们都经 `scripts/license-key-path.js` 读仓库外的私钥，因此只能在**存着私钥的那台机器**上跑
+  （签发机；换机先备份私钥）。公钥 `vendor-keys/license-public.pem` 仍留在仓库侧，公钥不是秘密。
   **没有任何 CI 步骤与冒烟脚本依赖它**（`check:backend-restart` 曾读它，已改为不需要许可证；
   `src/backend/tests/ci-script-isolation.spec.ts` 守着这条不变量）。
 - 仓库里只带**公钥**（`src/license/public-key.js`，随包分发，用于本地验签），

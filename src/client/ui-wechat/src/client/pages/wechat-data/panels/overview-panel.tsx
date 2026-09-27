@@ -341,7 +341,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
             <OvSection span={css.ovSpan6} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { go('ledger') }}>详情 →</button>}>
               {ls ? (
-                <div className={css.metricGrid}>
+                <div className={css.metricGrid} data-st-ledger-money="1">
                   <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
                   <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>支出</span></div>
                   <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>

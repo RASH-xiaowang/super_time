@@ -433,4 +433,20 @@ export const MUTATIONS_BATCH3C = [
     to: "  mkdirSync(modelsDir, { recursive: true })\n  const refusal = whisperWriteRefusal(modelsDir)\n  if (refusal) return { ok: false, error: refusal }",
     spec: "src/backend/wechat-data/tests/whisper.spec.ts",
   },
+  {
+    id: "M363-key-path-inside-repo-accepted",
+    why: "把\"位置在仓库里就拒\"这一判去掉 ⇒ 显式路径与默认路径都可以指回工作树，P3-10 只剩\"约定\"没有闸门：`git add -f` 一次、或把工作树整个备份走，签名私钥就跟着出去了（它能给任意设备签发许可证，代价与泄漏一个 API Key 不是一个量级）",
+    file: "scripts/license-key-path.js",
+    from: "  if (isInside(chosen.path, repoRoot)) {",
+    to: "  if (false && isInside(chosen.path, repoRoot)) {",
+    spec: "src/backend/tests/license-key-location.spec.ts",
+  },
+  {
+    id: "M364-key-default-follows-cwd",
+    why: "默认位置从 `os.homedir()` 改成按当前工作目录算 ⇒ 在仓库根里跑就是 `<仓库>/.supertime/…`，正好落在要防的那个目录里；而调用方看不出来（文件确实存在、签名也照常能签），只有位置判据会红",
+    file: "scripts/license-key-path.js",
+    from: "  return path.join(home, '.supertime', KEY_FILE)",
+    to: "  return path.join(process.cwd(), '.supertime', KEY_FILE)",
+    spec: "src/backend/tests/license-key-location.spec.ts",
+  },
 ]

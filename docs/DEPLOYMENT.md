@@ -9,7 +9,7 @@
 |---|---|
 | 构建机 | Windows 10/11 x64 + Node 22（与 CI 同版） |
 | 依赖 | `npm ci`（含 `file:` 内联依赖，不能用 `npm install`） |
-| 签发私钥 | 只在签发机上需要（`vendor-keys/`，已 gitignore，**不入库也不进包**） |
+| 签发私钥 | 只在签发机上需要，且**不在仓库里**：默认 `~/.supertime/license-private.pem`（`SUPERTIME_LICENSE_PRIVATE_KEY` 可指路；指向仓库内会被拒）。`vendor-keys/` 只留公钥 |
 | Electron 二进制 | 跑冒烟需要真窗口；CI 里由「准备 Electron 二进制」一步预热 |
 
 ## 2. 构建
@@ -53,7 +53,8 @@ npm run license-issue -- --from-request ./activation-request.json \
 
 - 用户在启动页「导出激活请求」拿到 `activation-request.json`（内含设备指纹）；
 - 也支持按指纹直签：`--fingerprint <指纹>`；参数见 [`../scripts/license-issue.js`](../scripts/license-issue.js)；
-- 私钥必须与开发机隔离（`vendor-keys/` 只在本机，未进 `build.files`）。
+- 私钥必须与开发机隔离：位置解析在 `scripts/license-key-path.js`，**默认落在用户目录、指向仓库内的路径一律拒**
+  （不只是 gitignore —— 仓库目录会被备份/归档整个带走）；`build.files` 里也没有它。
 
 冒烟：`npm run license-smoke`（签发 → 导入 → 校验）与 `npm run license-gate:smoke`
 （无证/过期/伪造/`license.json` 损坏一律拒，且拒绝理由是可读中文）。

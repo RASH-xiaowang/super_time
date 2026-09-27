@@ -45,10 +45,11 @@ npm start         # 构建前端 + 后端 bundle，然后启动应用
 
 ### 本地跑起来需要一份许可证
 
-仓库**不含**签发私钥（`vendor-keys/` 已 gitignore）。首次在开发机运行：
+仓库**不含**签发私钥：私钥默认在 `~/.supertime/license-private.pem`（仓库之外，指到仓库内的路径会被直接拒），
+`vendor-keys/` 里只留公钥。首次在开发机运行：
 
 ```bash
-# 1) 生成签发密钥对：写入 vendor-keys/（勿提交），并把公钥同步进 src/license/public-key.js
+# 1) 生成签发密钥对：私钥写到 ~/.supertime/（仓库之外），公钥同步进 src/license/public-key.js 与 vendor-keys/
 npm run license-keygen
 
 # 2) 从启动页「导出激活请求」拿到的 activation-request.json 签发
