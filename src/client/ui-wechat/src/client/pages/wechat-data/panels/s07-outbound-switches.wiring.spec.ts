@@ -59,8 +59,10 @@ describe('S07 · 地图底图开关（blockMapTiles）贯穿全链', () => {
   })
 
   it('拉取点唯一：地图族里只有 world-map-data.ts 发 fetch（所以一处关就全关）', () => {
-    const mapFiles = readdirSync(HERE).filter((f) => /(world-map-data|ChinaMap|WorldMap|GeoEchartsMap|province-map-data|city-map-data)\.tsx?$/.test(f))
-    atLeast(mapFiles.length, 5, '地图族的文件数')
+    // 2026-09-27：世界层换成自绘等距立体（WorldIsoMap + world-iso），扫描面必须跟着扩 ——
+    // 新文件同样要过"只有 world-map-data.ts 发 fetch"这条不变量（否则它绕过去也查不到）。
+    const mapFiles = readdirSync(HERE).filter((f) => /(world-map-data|ChinaMap|WorldMap|WorldIsoMap|world-iso-draw|world-iso|GeoEchartsMap|province-map-data|city-map-data)\.tsx?$/.test(f))
+    atLeast(mapFiles.length, 7, '地图族的文件数（2026-09-27 加了 WorldIsoMap + world-iso + world-iso-draw）')
     const fetchers: string[] = []
     for (const f of mapFiles) {
       // 剥注释：注释里举例写着 `fetch(...)` 不算调用点

@@ -16,7 +16,7 @@ import { squarify } from './treemap.ts'
 import { ChinaMap } from './ChinaMap.tsx'
 import { CityMap } from './CityMap.tsx'
 import { FriendAvatarRail } from './FriendAvatarRail.tsx'
-import { GeoEchartsMap } from './GeoEchartsMap.tsx'
+import { WorldIsoMap } from './WorldIsoMap.tsx'
 import { ProvinceMap } from './ProvinceMap.tsx'
 import { WORLD_GEO_URLS, fetchFirstJson, worldChildByName, worldFeatureName } from './world-map-data.ts'
 import { collectSubtreeFriends } from './region-friends.ts'
@@ -263,9 +263,8 @@ export function WorldMapPanel(): React.JSX.Element {
       {showWorldEcharts && (
         <div className={css.stage}>
           <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
-          <GeoEchartsMap
+          <WorldIsoMap
             node={map?.world ?? EMPTY_WORLD}
-            mapName="world"
             urls={WORLD_GEO_URLS}
             geo={worldGeo.data}
             featureName={worldFeatureName}
