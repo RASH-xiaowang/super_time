@@ -127,6 +127,14 @@
 
 - 第二批 #13 的**后半**：`ENFORCED_SCHEMA_METHODS` 目前是空集 —— ② 档（按 schema 硬拒）要等
   `info().argGuard.mismatched` 在真实使用里稳定为空才升级，这是刻意留下的证据门槛，不是漏做。
+  **但 2026-09-27 复核这条时发现门槛本身是虚设的**：`wechat:info` 回的是
+  `wechat-worker.js` 在 `case 'init'` 里抓的那一次 `backend.info()`（`main.js` 存成 `wechatBoot`），
+  也就是说 **`argGuard` 只有启动瞬间那一份快照**，之后 `observe()` / `noteSchema()` 记的账谁也读不到
+  ——「等它在真实使用里稳定为空」这个条件目前**没有任何可观测的时候**。
+  要真做 ② 档，第一步不是攒证据而是给 worker 补一条 `info` 请求（`backend-rpc.js` 的
+  `request('info')` + `wechat:info` 改问活值、取不到时退回快照并标 `stale`）；
+  本轮**没有**顺手铺这条管道 —— 眼下没有任何消费者，为了一个还要等真实流量的晋升条件先造一条没人读的通道，
+  正是本仓反复在防的"为测量而动产品面"。下次真要晋升时再连消费者一起做。
 - 第三批 **#19 已按报告口径做完**（九个口径：三个巨函数 `useChatsThread` 458→149、`ChatsPanel` 555→465、
   `ChatsView` 752→359，加上那个 161 字段的 `state` 袋按消费方分成四袋 + 96 件平铺），见上表最后两行；
   剩 #20 两件：调度里剩下的**忙闲标志**（`_schedBusy` / `active` 那一族，见上表第六步的口径），
