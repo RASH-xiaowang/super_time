@@ -833,4 +833,37 @@ MUTATIONS_BATCH3C.push(
     to: "    const keys = collectMediaKeys(moments)",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
+  // ── 2026-10-08 阶段 0：渲染层 console 进诊断日志 M413–M416 ──
+  {
+    id: "M413-renderer-console-capture-never-wired",
+    why: "把 installWebContentsGuards 里对转发函数的调用删掉 ⇒ 函数与测试都还在、导出也还在，但**一条渲染层日志都进不了 app.log**。这一层最典型的退化形态就是「写好了没人调用」的死代码，而症状与修复前**完全一样**（用户机器上取不到任何前端证据），所以只能靠接线断言拦",
+    file: "main.js",
+    from: "  installRendererConsoleCapture(contents, diagLog, rendererConsoleLevels());",
+    to: "  // 转发被拆掉",
+    spec: "src/backend/tests/renderer-console-capture-guard.spec.ts",
+  },
+  {
+    id: "M414-renderer-console-levels-arg-ignored",
+    why: "忽略传入的 levels、硬编码只收 warn+error ⇒ SUPERTIME_RENDERER_LOG_LEVELS 这个开关**看起来存在但完全无效**：现场排查想看全量时设了也没反应，于是「加日志」这件事白做一轮",
+    file: "src/backend/diag-log.js",
+    from: "  const wanted = new Set(levels);",
+    to: "  const wanted = new Set(['warn', 'error']);",
+    spec: "src/backend/tests/diag-log.spec.ts",
+  },
+  {
+    id: "M415-renderer-console-level-tag-lost",
+    why: "把日志级别标签从 renderer 改掉 ⇒ 渲染层的行与主进程/后端的行混在同一标签下，日志里再也分不清一行是谁写的 —— 而「分不清来源」正是这次排查缺的东西本身（后端那侧靠 [backend!] 标记才认得出来）",
+    file: "src/backend/diag-log.js",
+    from: "      log.write('renderer', [",
+    to: "      log.write('main', [",
+    spec: "src/backend/tests/renderer-console-capture-guard.spec.ts",
+  },
+  {
+    id: "M416-renderer-console-default-levels-widened",
+    why: "把默认档位从 warn+error 悄悄放宽成全收 ⇒ 渲染层 info/log 的量会把 2 MB × 3 份轮转迅速冲掉，真正需要查的那几行被挤掉。等于用「有日志」换掉了「日志有用」，而且不会有任何报错",
+    file: "src/backend/diag-log.js",
+    from: "const DEFAULT_RENDERER_LEVELS = ['warn', 'error']",
+    to: "const DEFAULT_RENDERER_LEVELS = ['verbose', 'info', 'warn', 'error']",
+    spec: "src/backend/tests/renderer-console-capture-guard.spec.ts",
+  },
 )

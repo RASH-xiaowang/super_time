@@ -54,6 +54,7 @@
     "check:mutation": "node scripts/mutation-check.mjs",
     "e2e:export-progress": "node scripts/export-progress-e2e.mjs",
     "e2e:h14-consent": "node scripts/consent-order-e2e.mjs",
+    "renderer-console:e2e": "node scripts/renderer-console-capture-e2e.mjs",
     "e2e:backup-progress": "node scripts/backup-progress-e2e.mjs",
     "e2e:export-nonblocking": "node scripts/export-nonblocking-e2e.mjs",
     "package:smoke": "node scripts/packaged-smoke.js",

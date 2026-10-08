@@ -81,7 +81,7 @@ const {
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
 const licenseService = require('./src/license/service');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
-const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
+const { buildDiagnosticReport, createDiagLog, installConsoleCapture, installRendererConsoleCapture, rendererConsoleLevels } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
 const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = require('./src/backend/debug-gates');
 const { createUpdateService } = require('./src/backend/update');
@@ -537,6 +537,11 @@ function createWindow() {
 
 function installWebContentsGuards(contents) {
   installWindowGuards(contents, guardsCtx);
+  // 渲染层 console → 诊断日志（2026-10-08 补）。修复前渲染层的 warn/error 一行都进不了
+  // app.log，用户机器上「卡片只显示默认文案」这类问题取不到任何证据。
+  // 默认只收 warn/error（渲染层 info/log 量太大，会把轮转冲掉）；要更全就设
+  // SUPERTIME_RENDERER_LOG_LEVELS=verbose,info,warn,error。
+  installRendererConsoleCapture(contents, diagLog, rendererConsoleLevels());
 }
 
 app.whenReady().then(async () => {

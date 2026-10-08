@@ -21,6 +21,27 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **渲染层的告警终于能进诊断日志**（可观测性缺口，排查朋友圈问题时实测发现）。
+  - **症状**：修复前 `app.log` 里 `moments-media` / `renderer` / `取图失败` 各 **0 行** ——
+    渲染层的 `console.warn/error` 根本不进诊断日志。于是「卡片只显示默认文案」这类问题
+    **在用户机器上取不到任何证据**，只能靠「零 RPC + failed 分支」这类间接现象反推；
+    那次排查因此连续判错了三次（以为是跑旧代码、以为是键为空、以为是尾块导致渲染失败）。
+  - **做法**：`diag-log.js` 新增 `installRendererConsoleCapture`，经 `web-contents-created`
+    对**每个** webContents 生效（不只主窗口），把 `console-message` 按级别转发进日志器，
+    并带上**来源文件与行号** —— 渲染层的报错没有栈，来源是唯一线索。
+    脱敏仍由 `createDiagLog` 的 `redact` 负责，这里不另拼字符串（那等于开一个绕过脱敏的口子）。
+  - **默认只收 warn 与 error**：渲染层 `info/log` 的量很大，全收会把 2 MB × 3 份的轮转冲掉，
+    真正要查的那几行反而被挤掉 —— 那等于用「有日志」换掉了「日志有用」。
+    需要更全时设 `SUPERTIME_RENDERER_LOG_LEVELS=verbose,info,warn,error`。
+  - **验证**：转发行为 12 条（含级别映射、未知档位不炸、日志器抛异常不影响渲染层、还原函数、
+    转发文本仍脱敏）；接线守卫 7 条（含「`installWebContentsGuards` 里**真的调用了**它」
+    —— 这一层最典型的退化就是写好了没人调用，而症状与修复前完全一样）；
+    变异 M413–M416 全部咬红；**真机 e2e 7/7 全绿**（`npm run renderer-console:e2e`，
+    独立 userData 起真 Electron，不影响正在运行的实例）。
+    全量 4219 通过 0 失败。
+
 ### 变更
 
 - **朋友圈取图口径改成「先网后本」**：**有网直接取高清原图显示**（并把原图下载到本地），
