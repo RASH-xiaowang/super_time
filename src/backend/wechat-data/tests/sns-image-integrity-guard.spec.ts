@@ -124,3 +124,75 @@ describe('朋友圈图片：真机测量与回归覆盖不许消失', () => {
     expect(code(spec)).toMatch(/decryptSnsAll:\s*vi\.fn/)
   })
 })
+
+/* ───────────────────── 高清原图：取图顺序与落盘纪律 ───────────────────── */
+
+const mediaRemotes = code(read('src/remotes/media.ts'))
+const mediaCache = code(read('../../client/ui-wechat/src/client/pages/wechat-data/media-cache.ts'))
+const momentsMedia = code(read('../../client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts'))
+
+describe('高清原图：四路的顺序不许被调换', () => {
+  it('落盘原图 → 本机原图 → CDN → 本机缩略图', () => {
+    const iStore = mediaRemotes.indexOf('lookupOriginal(')
+    const iLocalOriginal = mediaRemotes.indexOf('options.mediaId, false)')
+    const iCdn = mediaRemotes.indexOf('fetchSnsCdnImage(')
+    const iLocalThumb = mediaRemotes.indexOf('options.mediaId, true)')
+    for (const [name, i] of [['落盘原图', iStore], ['本机原图', iLocalOriginal], ['CDN', iCdn], ['本机缩略图', iLocalThumb]] as Array<[string, number]>) {
+      expect(i, name + ' 那一步不见了').toBeGreaterThan(-1)
+    }
+    // 顺序即产品语义：落盘原图最前（本机没有也该秒显），缩略图最后
+    expect(iStore).toBeLessThan(iLocalOriginal)
+    expect(iLocalOriginal).toBeLessThan(iCdn)
+    expect(iCdn).toBeLessThan(iLocalThumb)
+  })
+
+  it('本机那两档必须传 allowThumb 显式区分（漏传就退回旧行为：缩略图赢过原图）', () => {
+    // 不许出现「不传 allowThumb」的第三处调用 —— 那等价于 allowThumb=true
+    const calls = [...mediaRemotes.matchAll(/resolveSnsImageDataUrl\([^)]*\)/g)].map((m) => m[0])
+    expect(calls.length).toBe(2)
+    for (const c of calls) {
+      expect(c, '两档都必须显式传 allowThumb').toMatch(/,\s*(true|false)\)$/)
+    }
+  })
+})
+
+describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
+  it('后端：缩略图那一档**不**写穿落盘缓存，且必须标 thumb', () => {
+    const iThumb = mediaRemotes.indexOf('本机缩略图兜底')
+    expect(iThumb).toBeGreaterThan(-1)
+    const tail = mediaRemotes.slice(iThumb)
+    // 缩略图分支里不许出现写盘调用
+    const branch = tail.slice(0, tail.indexOf('}'))
+    expect(branch).not.toContain('saveOriginalFromDataUrl')
+    expect(branch).toContain('thumb: true')
+  })
+
+  it('后端：只有原图那两路写穿落盘', () => {
+    const writes = [...mediaRemotes.matchAll(/saveOriginalFromDataUrl\(/g)].length
+    // 加上函数自身的定义那一处，正好 3（定义 + 本机原图 + CDN）
+    expect(writes).toBe(3)
+  })
+
+  it('前端：进面板恢复与单张查询都要「只要原图」，否则缩略图会永久遮住原图', () => {
+    expect(momentsMedia).toMatch(/snsMediaCacheGet\(it\.key, true\)/)
+    expect(momentsMedia).toMatch(/snsMediaCacheGetMany\(keys, true\)/)
+  })
+
+  it('前端：写回时把 thumb 标记一起存下去', () => {
+    expect(momentsMedia).toMatch(/snsMediaCacheSet\(it\.key, r\.url, r\.thumb === true\)/)
+    expect(mediaCache).toMatch(/thumb\?: boolean/)
+    // wantOriginal 为真时缩略图条目必须当未命中
+    expect(mediaCache).toMatch(/wantOriginal && r\.thumb === true/)
+  })
+
+  it('前端：淘汰按字节而不是条数（4000 条 × 大图 = 配额爆掉，而写入失败是静默的）', () => {
+    expect(mediaCache).toContain('MEDIA_MAX_BYTES')
+    expect(mediaCache).not.toContain('MEDIA_MAX_ENTRIES')
+    // 必须盯住**那道提前返回的闸门本身**，不能只盯「出现过这个常量」——
+    // 循环里还有一处 `total <= MEDIA_MAX_BYTES`，只查常量的话把闸门改成 `if (true)`
+    // 照样能过（M406 就是这么漏过去的）。
+    expect(mediaCache).toMatch(/if \(total <= MEDIA_MAX_BYTES \|\| rows\.length === 0\)/)
+    // 每条记录必须带 size，否则算不出真实占用（base64 串长度就是它的大小）
+    expect(mediaCache).toMatch(/size\?: number/)
+  })
+})

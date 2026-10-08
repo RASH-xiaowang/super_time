@@ -98,7 +98,7 @@ export declare function findSnsMediaDataUrlByIndex(wechatBaseDir: string, aesKey
  * @returns 任一账号下已建过索引时为真。
  */
 export declare function hasSnsMediaIndexEntries(): boolean;
-export declare function resolveSnsImageDataUrl(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, md5: string, timelineId?: string, mediaId?: string): {
+export declare function resolveSnsImageDataUrl(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, md5: string, timelineId?: string, mediaId?: string, allowThumb?: boolean): {
     url?: string;
     error?: string;
 };

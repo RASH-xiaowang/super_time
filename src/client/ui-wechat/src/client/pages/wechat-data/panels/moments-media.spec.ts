@@ -188,11 +188,11 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
   })
 
-  it('先问 IndexedDB：命中就不许调解密 RPC', async () => {
+  it('先问 IndexedDB：命中就不许调解密 RPC（且明确要「原图」，缩略图条目当未命中）', async () => {
     mocks.snsMediaCacheGet.mockResolvedValueOnce('data:from-idb')
     render({ specs: [img('k1'), img('k2')] })
     await flush()
-    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1')
+    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1', true)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k1')).toHaveLength(0)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k2')).toHaveLength(1)
     expect(imgs()).toEqual(expect.arrayContaining(['k1', 'k2']))
@@ -214,10 +214,18 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
   })
 
-  it('解出来要写回 IndexedDB，供下次进面板秒显', async () => {
+  it('解出来要写回 IndexedDB，供下次进面板秒显（并记下「这是不是缩略图」）', async () => {
     render({ specs: [img('k1')] })
     await flush()
-    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:k1')
+    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:k1', false)
+  })
+
+  it('后端降级给了缩略图 ⇒ 写回时标成 thumb，好让下一轮去换原图', async () => {
+    mocks.apiGetSnsImageDataUrl.mockResolvedValueOnce({ url: 'data:thumb', thumb: true })
+    render({ specs: [img('k1')] })
+    await flush()
+    // thumb=true 必须被记下来 —— 否则这份缩略图会永久遮住后来的原图
+    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:thumb', true)
   })
 
   it('视频键走视频封那个 RPC，而不是图片那个', async () => {
@@ -235,7 +243,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     // 先只给列表、不给 spec：这就是「卡片还没渲染到那一格」时 IDB 恢复要独立起作用的形状
     render({ moments: [m] })
     await flush()
-    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'])
+    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'], true)
     expect(imgs()).toContain('cached')
     // 已经被 IDB 命中的键，兜底路径不该再去解一遍（这一步同时证明去重集合跨渲染活着）
     render({ moments: [m], specs: [img('cached')] })

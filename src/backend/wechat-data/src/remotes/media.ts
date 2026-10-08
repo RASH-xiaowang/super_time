@@ -16,6 +16,7 @@ import { resolveImageKeyPair } from '../query/image-key.ts'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from '../query/image-original.ts'
 import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan, scanImageOriginalPlanAsync } from '../query/image-original-batch.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
+import { lookupOriginal, originalAsDataUrl, saveOriginal } from '../query/sns-media-store.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
@@ -417,6 +418,29 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
 }
 
 
+/**
+ * 把一份 data URL 写进落盘原图缓存（best-effort）。
+ *
+ * 为什么单独一个小助手而不是让调用方传字节：两条产出路（本机解密、CDN 解密）给的都是
+ * `data:` URL，拆 base64 的逻辑只该有一份 —— 拆错了会**静默存进一份坏原图**，
+ * 而坏原图比没有原图更坏：它会被永久缓存，此后每次进入都返回它且永不重抓。
+ * 所以 `saveOriginal` 会再嗅一次魔数，认不出就拒绝落盘。
+ *
+ * @param decodedDir - `decoded_images` 目录。
+ * @param md5 - 32 位媒体 md5。
+ * @param dataUrl - `data:image/...;base64,...`；形态不对就静默跳过。
+ */
+function saveOriginalFromDataUrl(decodedDir: string, md5: string, dataUrl: string | undefined): void {
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) return
+  try {
+    saveOriginal(decodedDir, md5, Buffer.from(dataUrl.slice(comma + 1), 'base64'))
+  } catch {
+    // 落盘失败不影响本次展示（磁盘满 / 只读目录 / 权限不足）
+  }
+}
+
 /** `getSnsImageDataUrl` 的入参：`md5` 等为旧口径，`url`/`token`/`seed` 为 CDN 通路（可选）。 */
 interface SnsImageOptions {
   md5: string
@@ -443,7 +467,7 @@ interface SnsImageOptions {
  * @returns 图片 data URL；两条路都失败时把原因合并，便于区分「本地没有」与「CDN 失败」。
  */
 async function snsImageWithCdnFirst(
-  rc: { dirs: () => { decrypted: string }; rawWechatBase: (decrypted: string) => string },
+  rc: { dirs: () => { decrypted: string; decoded: string }; rawWechatBase: (decrypted: string) => string },
   options: SnsImageOptions,
   keys: { aesKey: string | undefined; xorKey: number },
 ): Promise<ImageDataUrlResult> {
@@ -453,17 +477,30 @@ async function snsImageWithCdnFirst(
   const url = String(options.url ?? '')
   const token = String(options.token ?? '')
   const seed = String(options.seed ?? '')
+  const decoded = dirs.decoded
   // 追踪：卡片只显示默认文案时，唯一能取证的地方就是这里（应用日志 app.log）
   const tag = '[sns-image] md5=' + options.md5.slice(0, 8)
-  const local = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
-  if (local.url) {
-    console.error(tag + ' 本机路命中（长度 ' + String(local.url.length) + '）')
-    return local
+
+  // ① 落盘原图缓存 —— 「每次进入自动用高清原图覆盖缩略图」就落在这里。
+  //    它在最前面，因为它一定是原图（写入时只收确认是原图的字节），而且是纯读盘。
+  const stored = lookupOriginal(decoded, options.md5)
+  if (stored !== null) {
+    console.error(tag + ' 原图缓存命中（长度 ' + String(stored.bytes.length) + '）')
+    return { url: originalAsDataUrl(stored) }
   }
-  // 本机没有才试 CDN。
+
+  // ② 本机**原图**（Sns/Img + msg/attach 的非缩略图那份）。拿到就写穿落盘缓存。
+  const localOriginal = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, false)
+  if (localOriginal.url) {
+    console.error(tag + ' 本机原图命中（长度 ' + String(localOriginal.url.length) + '）')
+    saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url)
+    return localOriginal
+  }
+
+  // ③ CDN `/0` —— 也是原图（`snsCdnUrl` 把尺寸段归一到 /0）。拿到同样写穿。
   //
-  // ⚠️ 这段注释原本断言「整份 XOR 用我们这份 WxIsaac64 构建做不到，参考项目另有一份 WASM
-  // 才能一次生成全量密钥流」。**那句话是错的**，别再照它去换二进制 ——
+  // ⚠️ 这里原先紧跟着一句断言「整份 XOR 用我们这份 WxIsaac64 构建做不到，参考项目另有一份
+  // WASM 才能一次生成全量密钥流」。**那句话是错的**，别再照它去换二进制 ——
   // 2026-10-08 用 `tests/sns-image-tail-probe.manual.spec.ts`（真库/真网/真 WASM）测过：
   //   1. 两份 WASM **完全同一份**（SHA-1 均为 DCA796BACEC37D8522C7，同为 3696.8 KB）；
   //   2. 参考项目自己的 keystream CLI 生成 131072/262144/400000 三档都返回**全量**；
@@ -471,15 +508,28 @@ async function snsImageWithCdnFirst(
   //   4. 整份解密后 **9/9 张**都得到合法 JPEG（头 `ff d8 ff e0`）。
   // 真正的病因是 `sns-cdn-image.ts` 的**结尾判据过严**：微信 CDN 在 EOI 之后恒定挂一段
   // 24 字节签名块，旧判据要求「最后两字节必须是 ff d9」，于是把好图全判成失败。
-  // 那批图现在能取回来了（同一探针的生产通路用例断言 9/9 成图）。
-  if (url === '' || token === '' || seed === '') {
-    return local
+  if (url !== '' && token !== '' && seed !== '') {
+    const cdn = await fetchSnsCdnImage(url, token, seed)
+    if (cdn.dataUrl) {
+      console.error(tag + ' CDN 原图命中（长度 ' + String(cdn.dataUrl.length) + '）')
+      saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl)
+      return { url: cdn.dataUrl }
+    }
+    console.error(tag + ' CDN 失败：' + String(cdn.error))
   }
-  const cdn = await fetchSnsCdnImage(url, token, seed)
-  if (cdn.dataUrl) {
-    console.error(tag + ' CDN 命中（长度 ' + String(cdn.dataUrl.length) + '）')
-    return { url: cdn.dataUrl }
+
+  // ④ 本机**缩略图**兜底 —— 顺序上刻意放在最后。过去它排在 CDN 之前，于是本机只要有
+  //    一张 `_t` 缩略图，CDN 的原图就永远轮不到（「高清」拿不到就是这么来的）。
+  const localThumb = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, true)
+  if (localThumb.url) {
+    console.error(tag + ' 本机缩略图兜底（长度 ' + String(localThumb.url.length) + '）')
+    // ⚠️ 刻意**不**写穿：缩略图进了落盘缓存就会变成永久的「高清」，正好毁掉这次的目的。
+    // `thumb: true` 让前端**不把它当高清缓存**，于是原图下次取到时能覆盖它。
+    return { url: localThumb.url, thumb: true }
   }
-  console.error(tag + ' 两条都失败：本机=' + String(local.error) + ' / CDN=' + String(cdn.error))
-  return { error: (local.error ?? '本地解码失败') + '；CDN：' + (cdn.error ?? '取图失败') }
+
+  console.error(tag + ' 各路都失败：本机原图=' + String(localOriginal.error)
+    + ' / CDN=' + String(url !== '' && token !== '' && seed !== '' ? '见上' : '未配置')
+    + ' / 本机缩略图=' + String(localThumb.error))
+  return { error: (localOriginal.error ?? '本地解码失败') + '；CDN：' + (url === '' || token === '' || seed === '' ? '缺少 CDN 三件套' : '取图失败') }
 }

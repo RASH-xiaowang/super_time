@@ -13,7 +13,15 @@
 //    避免下次进入朋友圈再次并发解密。localStorage 容量不足以存 base64 大图。 ──
 const MEDIA_DB_NAME = 'dsh-wechat-media'
 const MEDIA_STORE = 'sns-images'
-const MEDIA_MAX_ENTRIES = 4000
+/**
+ * 容量上限（字节），默认 512 MB。
+ *
+ * 2026-10-08 从「条数」改成「字节」：原先按 4000 条淘汰，但朋友圈原图普遍 200–800 KB、
+ * base64 之后还要再胀 4/3 ⇒ 4000 条就是几个 GB，而 IndexedDB 的配额远没那么富裕 ——
+ * 配额一到，写入会**静默失败**（`tx.onerror` 里就 `resolve()` 了），于是「缓存」形同虚设，
+ * 症状是每次进入都在重解。按字节算才与真实占用对上。
+ */
+const MEDIA_MAX_BYTES = 512 * 1024 * 1024
 let mediaDb: Promise<IDBDatabase> | null = null
 
 export function openMediaDb(): Promise<IDBDatabase> {
@@ -33,7 +41,28 @@ export function openMediaDb(): Promise<IDBDatabase> {
   return mediaDb
 }
 
-/** 删除超出容量上限的最旧条目（按写入时间 at 升序）。 */
+/** 一条缓存记录。`thumb` 记的是「这不是原图」，用来让原图能覆盖它（见 {@link snsMediaCacheGet}）。 */
+interface MediaEntry {
+  url: string
+  at: number
+  /** 取这条时后端给的 `thumb`；缺省/false 视为原图。 */
+  thumb?: boolean
+  /** 该条的字节占用（base64 串长度 ≈ 内存字节数）。旧记录没有这个字段 ⇒ 退化为按 url 长度估算。 */
+  size?: number
+}
+
+/** 记录占用的字节数。旧记录没有 `size`，按 url 长度估算（base64 字符串的字符数就是它的大小）。 */
+function entrySize(e: MediaEntry | undefined): number {
+  if (!e) return 0
+  return typeof e.size === 'number' && e.size > 0 ? e.size : e.url.length
+}
+
+/**
+ * 删除超出容量上限的**最旧**条目（按写入时间 `at` 升序），直到总量落到预算内。
+ *
+ * 为什么按字节而不是条数：见 {@link MEDIA_MAX_BYTES}。按条数会让大图把配额吃光而写入
+ * 静默失败，按字节才能保证「攒下来的东西真的还在」。
+ */
 export async function trimMediaCache(db: IDBDatabase): Promise<void> {
   try {
     await new Promise<void>((resolve) => {
@@ -42,16 +71,20 @@ export async function trimMediaCache(db: IDBDatabase): Promise<void> {
       const keysReq = store.getAllKeys()
       const valsReq = store.getAll()
       let keys: IDBValidKey[] = []
-      let vals: Array<{ url: string; at: number }> = []
+      let vals: MediaEntry[] = []
       keysReq.onsuccess = () => { keys = keysReq.result }
-      valsReq.onsuccess = () => { vals = valsReq.result as Array<{ url: string; at: number }> }
+      valsReq.onsuccess = () => { vals = valsReq.result as MediaEntry[] }
       tx.oncomplete = () => {
-        if (keys.length <= MEDIA_MAX_ENTRIES) { resolve(); return }
-        const rows = keys.map((key, i) => ({ key, at: vals[i]?.at ?? 0 })).sort((a, b) => a.at - b.at)
-        const drop = rows.slice(0, keys.length - MEDIA_MAX_ENTRIES)
-        if (drop.length === 0) { resolve(); return }
+        const rows = keys.map((key, i) => ({ key, at: vals[i]?.at ?? 0, size: entrySize(vals[i]) }))
+        let total = rows.reduce((n, r) => n + r.size, 0)
+        if (total <= MEDIA_MAX_BYTES || rows.length === 0) { resolve(); return }
+        rows.sort((a, b) => a.at - b.at)
         const dtx = db.transaction(MEDIA_STORE, 'readwrite')
-        for (const d of drop) dtx.objectStore(MEDIA_STORE).delete(d.key)
+        for (const r of rows) {
+          if (total <= MEDIA_MAX_BYTES) break
+          dtx.objectStore(MEDIA_STORE).delete(r.key)
+          total -= r.size
+        }
         dtx.oncomplete = () => { resolve() }
         dtx.onerror = () => { resolve() }
       }
@@ -60,23 +93,38 @@ export async function trimMediaCache(db: IDBDatabase): Promise<void> {
   } catch { /* best-effort */ }
 }
 
-/** Read one cached decrypted media data URL by key, or null. */
-export async function snsMediaCacheGet(key: string): Promise<string | null> {
+/**
+ * Read one cached decrypted media data URL by key, or null.
+ *
+ * @param key - 媒体键。
+ * @param wantOriginal - 传 `true` 时，**缩略图条目当作未命中**。
+ *   这是「每次进入自动用高清原图覆盖缩略图」在前端这一半的落点：老版本存下来的条目
+ *   只有 `{url, at}`，里面可能就是缩略图，而且会**永久遮住**后来才取到的高清图。
+ *   当成未命中 ⇒ 这一轮重新去后端要原图，取到后覆盖写回去。
+ */
+export async function snsMediaCacheGet(key: string, wantOriginal = false): Promise<string | null> {
   try {
     const db = await openMediaDb()
     return await new Promise<string | null>((resolve) => {
       const req = db.transaction(MEDIA_STORE, 'readonly').objectStore(MEDIA_STORE).get(key)
       req.onsuccess = () => {
-        const r = req.result as { url?: string } | undefined
-        resolve(typeof r?.url === 'string' ? r.url : null)
+        const r = req.result as MediaEntry | undefined
+        if (typeof r?.url !== 'string') { resolve(null); return }
+        if (wantOriginal && r.thumb === true) { resolve(null); return }
+        resolve(r.url)
       }
       req.onerror = () => { resolve(null) }
     })
   } catch { return null }
 }
 
-/** Batch-read cached media data URLs for the given keys. */
-export async function snsMediaCacheGetMany(keys: readonly string[]): Promise<Record<string, string>> {
+/**
+ * Batch-read cached media data URLs for the given keys.
+ *
+ * @param keys - 媒体键列表。
+ * @param wantOriginal - 同 {@link snsMediaCacheGet}：为真时跳过缩略图条目。
+ */
+export async function snsMediaCacheGetMany(keys: readonly string[], wantOriginal = false): Promise<Record<string, string>> {
   const out: Record<string, string> = {}
   if (keys.length === 0) return out
   try {
@@ -87,8 +135,10 @@ export async function snsMediaCacheGetMany(keys: readonly string[]): Promise<Rec
       for (const k of keys) {
         const req = store.get(k)
         req.onsuccess = () => {
-          const r = req.result as { url?: string } | undefined
-          if (typeof r?.url === 'string') out[k] = r.url
+          const r = req.result as MediaEntry | undefined
+          if (typeof r?.url !== 'string') return
+          if (wantOriginal && r.thumb === true) return
+          out[k] = r.url
         }
       }
       tx.oncomplete = () => { resolve() }
@@ -98,13 +148,19 @@ export async function snsMediaCacheGetMany(keys: readonly string[]): Promise<Rec
   return out
 }
 
-/** Persist one decrypted media data URL. */
-export async function snsMediaCacheSet(key: string, url: string): Promise<void> {
+/**
+ * Persist one decrypted media data URL.
+ *
+ * @param key - 媒体键。
+ * @param url - data URL。
+ * @param thumb - 后端标注的「这次给的是缩略图」。落进记录里，好让下一轮要原图时跳过它。
+ */
+export async function snsMediaCacheSet(key: string, url: string, thumb = false): Promise<void> {
   try {
     const db = await openMediaDb()
     await new Promise<void>((resolve) => {
       const tx = db.transaction(MEDIA_STORE, 'readwrite')
-      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now() }, key)
+      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now(), thumb, size: url.length } satisfies MediaEntry, key)
       tx.oncomplete = () => { resolve() }
       tx.onerror = () => { resolve() }
     })

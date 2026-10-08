@@ -210,14 +210,19 @@ export function useMomentsMedia(input: MomentsMediaInput): {
           if (it.seed) opts.key = it.seed
           if (it.thumb) opts.thumb = it.thumb
           try {
-            const cached = await snsMediaCacheGet(it.key)
+            // `wantOriginal = true`：缓存里若是缩略图就当未命中，重新去后端要原图。
+            // 这是「每次进入自动用高清原图覆盖缩略图」在前端这一半的落点 —— 不这么做的话，
+            // 老版本存下来的缩略图会永久遮住后来才拿得到的高清图。
+            const cached = await snsMediaCacheGet(it.key, true)
             if (cached) { updates[it.key] = cached; return }
             const r = it.kind === 'video'
               ? await apiGetSnsVideoCoverDataUrl(opts)
               : await apiGetSnsImageDataUrl(opts)
             if (r.url) {
               updates[it.key] = r.url
-              void snsMediaCacheSet(it.key, r.url)
+              // 把「这次是不是缩略图」一起存下去：后端降级给缩略图时标上，
+              // 下一轮就能跳过它去换原图（而不是把缩略图当成最终结果永久缓存）。
+              void snsMediaCacheSet(it.key, r.url, r.thumb === true)
               mediaRetryCount.delete(it.key)
             } else {
               // 后端**给了原因**（`{ url?, error? }`），原实现把它丢掉了 ⇒ 这里带上原因再抛
@@ -372,11 +377,16 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   }, [groups, renderKey])
 
   // 进入面板时从 IndexedDB 恢复已解密媒体：命中即秒显，不再并发解密。
+  //
+  // ⚠️ 这里必须传 `wantOriginal = true`：缩略图条目会被过滤掉，于是它**不会**被标进
+  // `snsFetched` ⇒ 视口内的那几张随后仍会走去后端要原图 ⇒ 取到后覆盖写回缓存。
+  // 这正是「每次进入自动用高清原图覆盖缩略图」的完整闭环：恢复时跳过缩略图，
+  // 原图取到后写进同一条记录，下一次进入就直接是高清。
   useEffect(() => {
     const keys = collectMediaKeys(moments)
       .filter((k) => !snsFetched.current.has(k))
     if (keys.length === 0) return
-    void snsMediaCacheGetMany(keys).then((cached) => {
+    void snsMediaCacheGetMany(keys, true).then((cached) => {
       const found = Object.keys(cached)
       if (found.length === 0) return
       for (const k of found) snsFetched.current.add(k)

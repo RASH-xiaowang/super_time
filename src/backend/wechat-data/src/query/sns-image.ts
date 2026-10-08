@@ -614,12 +614,16 @@ export function resolveSnsImageDataUrl(
   md5: string,
   timelineId?: string,
   mediaId?: string,
+  allowThumb = true,
 ): { url?: string; error?: string } {
   const key = (md5 || '').trim().toLowerCase()
-  const cacheKey = (timelineId && mediaId)
+  const baseCacheKey = (timelineId && mediaId)
     ? createHash('md5').update(timelineId + '_' + mediaId + '_2', 'utf8').digest('hex')
     : key
-  if (!cacheKey) return { error: '缺少图片标识' }
+  // 两条档位必须**分开的缓存键**：否则一次 `allowThumb: true` 存进去的缩略图，
+  // 会被后面的 `allowThumb: false` 当成原图读出来 —— 恰好是这次要修的那件事。
+  const cacheKey = baseCacheKey + (allowThumb ? '' : '#o')
+  if (!baseCacheKey) return { error: '缺少图片标识' }
   if (md5UrlCache.has(cacheKey)) {
     const cached = md5UrlCache.get(cacheKey) ?? ''
     if (cached) return { url: cached }
@@ -768,7 +772,11 @@ export function resolveSnsImageDataUrl(
       drainAttach(idx, aesKey, xorKey, ATTACH_BUDGET_FILES, ATTACH_BUDGET_MS)
     }
     mark('attach-drain')
-    // 先找缩略图（_t/_h/_b，通常为 jpg，浏览器可直接显示）；HEVC/HEIC 大图回退到最后
+    // 先找缩略图（_t/_h/_b，通常为 jpg，浏览器可直接显示）；HEVC/HEIC 大图回退到最后。
+    //
+    // ⚠️ `allowThumb: false` 时缩略图**直接跳过**（不是「降级到最后」）：调用方要的是
+    // 「只要原图」，它自己会把缩略图那一档留到最后兜底。这条顺序过去是反的 ——
+    // 缩略图赢了 CDN 的原图，于是「高清」永远拿不到。
     let hevcFallback: { data: string } | null = null
     for (const f of idx.entries) {
       const nameBase = f.nameBase
@@ -793,6 +801,7 @@ export function resolveSnsImageDataUrl(
         if (md5Of(dec.bytes) !== key && !nameMatch) continue
         const data = dataUrlOf(dec)
         if (f.isThumb) {
+          if (!allowThumb) continue
           boundedSet(md5UrlCache, cacheKey, data)
           return { url: data }
         }
