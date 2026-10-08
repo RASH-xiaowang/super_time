@@ -643,15 +643,27 @@ export function resolveSnsImageDataUrl(
   // 扫描注记：记下每一处「读不动」的目录。没有它，「cache 目录扫不动」会被说成
   // 「未找到匹配的本地图片」—— 用户会去翻微信，而病因在文件系统那边（P1-1/#9）。
   const notes: ScanNotes = []
+  // 分路诊断：记下「试过哪几条路、每条为什么没成」，最后并进那句 error。
+  //
+  // 为什么必须分开报：以前「未找到匹配的本地图片」把两种完全不同的情况混成一句 ——
+  //   · 本机确实没有这张图（微信清过缓存 / 从别的设备看的 / 没下载过）；
+  //   · 我们查错了（缓存键算不出来、索引没扫完、预算用尽）。
+  // 混在一起时用户会去翻微信，而病因可能在我们这边 —— 排查方向一开始就错了。
+  const routes: string[] = []
   // 优先：tid_mediaid_type 缓存键路径（WDA 同款算法，兼容 _2/_1/_0/无后缀）
   if (timelineId && mediaId) {
+    let rootsTried = 0
+    let sawButUndecodable = 0
     for (const suffix of ['_2', '_1', '_0', '']) {
       const k = createHash('md5').update(timelineId + '_' + mediaId + suffix, 'utf8').digest('hex')
       const sub = k.slice(0, 2)
       const rest = k.slice(2)
-      for (const root of snsLeafRoots(wechatBaseDir, 'Img', notes)) {
+      const roots = snsLeafRoots(wechatBaseDir, 'Img', notes)
+      rootsTried = roots.length
+      for (const root of roots) {
         const p = join(root, sub, rest)
         if (existsSync(p)) {
+          sawButUndecodable += 1
           const data = decodeCachedFile(p, aesKey, xorKey)
           if (data) {
             boundedSet(md5UrlCache, cacheKey, data)
@@ -662,12 +674,17 @@ export function resolveSnsImageDataUrl(
         }
       }
     }
+    routes.push(sawButUndecodable > 0
+      ? '缓存键路径找到了文件但解不开 ×' + String(sawButUndecodable) + '（已损坏或被清理）'
+      : '缓存键路径未命中（4 种后缀 × ' + String(rootsTried) + ' 个月根目录都没有该文件）')
+  } else {
+    routes.push('没有 timelineId/mediaId ⇒ 缓存键路径未尝试')
   }
   mark('tid')
   // 无 MD5 时不能全量（会误匹配任意图片），直接失败
   if (!key) {
     flushTrace()
-    return { error: '未找到匹配的本地 SNS 图片' }
+    return { error: missWithScanNotes('未找到匹配的本地图片（' + routes.join('；') + '；且没有 md5，无法按内容匹配）', notes) }
   }
   // 索引优先：**按月增量、命中即停**（见 snsResolveByIndex 注释）。
   // 旧实现在索引未命中后还会在下面把同一批文件再全量扫一遍 —— 等于双倍开销，已删除。
@@ -682,6 +699,9 @@ export function resolveSnsImageDataUrl(
     }
     indexDead = true // 索引指向的文件解不开（损坏/被清理）→ 仍值得兜底扫一遍
   }
+  routes.push(idxRes.file
+    ? '按 md5 的索引命中了文件但解不开（已损坏或被清理）'
+    : '按 md5 的索引未命中' + (idxRes.complete ? '' : '（索引尚未扫完，下次调用继续推进）'))
   // 兜底：索引说"这个文件解不开"时才值得再全量确认一遍。
   //
   // ⚠️ 2026-09-29 实测修正：这里原先的条件是 `indexDead || !idxRes.complete`，
@@ -691,6 +711,7 @@ export function resolveSnsImageDataUrl(
   // 索引本身已经是"按月增量 + 单次有预算"的，再暴力扫一遍同一棵树是纯重复劳动；
   // 「还没扫完」应当由索引继续增量推进（下次调用接着扫），而不是退化成全量。
   if (indexDead) {
+    routes.push('索引判定损坏 ⇒ 已额外做一次全量确认')
     const files: string[] = []
     for (const root of snsLeafRoots(wechatBaseDir, 'Img', notes)) walkFiles(root, files, 0, notes)
     for (const f of files) {
@@ -715,6 +736,9 @@ export function resolveSnsImageDataUrl(
   // 只有 `_t/_h/_b` 后缀差异）⇒ **名字对不上目标 md5 的文件，其明文 md5 不可能等于目标**，
   // 根本不必解密。于是先按文件名筛掉绝大多数，只解真正可能命中的那几个。
   const attachRoot = join(wechatBaseDir, 'msg', 'attach')
+  if (!existsSync(attachRoot)) {
+    routes.push('本机没有 msg/attach 目录（这条兜底未尝试）')
+  }
   if (existsSync(attachRoot)) {
     let idx = attachIndex.get(wechatBaseDir)
     if (!idx) {
@@ -782,8 +806,9 @@ export function resolveSnsImageDataUrl(
       return { url: hevcFallback.data }
     }
     mark('attach-scan')
+    routes.push('msg/attach 按 md5 前缀未命中')
   }
   // 扫不全都说到：这句如果是「目录读不动」，就不该只留下「没有这张图」。
   flushTrace()
-  return { error: missWithScanNotes('未找到匹配的本地图片', notes) }
+  return { error: missWithScanNotes('未找到匹配的本地图片（' + routes.join('；') + '）', notes) }
 }

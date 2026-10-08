@@ -673,4 +673,65 @@ MUTATIONS_BATCH3C.push(
     to: "    if (false) dropped.push({ key: c.key, v: c.v })",
     spec: "src/backend/wechat-data/tests/word-fragment-prune.spec.ts",
   },
+  // ── 2026-10-08 朋友圈图片「一屏 9 张全挂」的修复（M394–M400） ──
+  //
+  // 这批锚点围的是**同一个真因**：微信 CDN 在 JPEG 的 EOI 之后恒定挂一段 24 字节签名块，
+  // 而旧判据要求「最后两字节必须是 ff d9」⇒ 真机上 9/9 张好图全被判成失败。
+  // 危害不在于判据本身，而在于它把用户挡在一句「未找到 / 不完整」之外，看不到真实成因。
+  {
+    id: "M394-sns-image-trailer-not-trimmed",
+    why: "解出完整图片后不裁掉 EOI 之后那段 24 字节签名块 ⇒ 交付的字节里多带一段签名内容。界面照样能显示（浏览器忽略 EOI 之后的字节），所以这条判据只有字节级断言能咬住 —— 正因如此它才危险：人眼看不出区别",
+    file: "src/backend/wechat-data/src/query/sns-cdn-image.ts",
+    from: "  return after === b.length ? b : b.subarray(0, after)",
+    to: "  return b",
+    spec: "src/backend/wechat-data/tests/sns-cdn-image.spec.ts",
+  },
+  {
+    id: "M395-sns-image-tail-scan-window-unbounded",
+    why: "把尾部搜索窗口从 256 放大到无界 ⇒ 「图被截断」也会被判成通过（结束标记在几 KB 之外照样找得到），判据等于取消，坏图会被当好图塞进 <img>",
+    file: "src/backend/wechat-data/src/query/sns-cdn-image.ts",
+    from: "const END_SCAN_WINDOW = 256",
+    to: "const END_SCAN_WINDOW = 1073741824",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M396-sns-keystream-length-guard-removed",
+    why: "拆掉「密钥流长度必须正好等于请求长度」这道闸门 ⇒ 密钥流一旦偏短，decryptSnsAll 的循环就在 i < ks.length 处停下，尾部原封不动（仍是密文），而调用方只看到「解密成功」。少这一道，「头对尾错」会一路静默走到用户屏幕上",
+    file: "src/backend/wechat-data/src/query/sns-keystream.ts",
+    from: "  if (bytes.length !== n) {\n    throw new Error('密钥流长度不符：需要 ' + String(n) + ' 字节，实得 ' + String(bytes.length) + ' 字节')\n  }",
+    to: "  // 闸门被拆掉",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M397-sns-image-xenc-gate-removed",
+    why: "不看 x-enc 响应头、无条件走解密 ⇒ 部分端点本来就返回已解码的图片（参考项目靠这个头避开），对它再 XOR 一次会把好图弄成乱码",
+    file: "src/backend/wechat-data/src/query/sns-cdn-image.ts",
+    from: "  if (rawType === null || xEncSaysEncrypted) {",
+    to: "  if (rawType === null || xEncSaysEncrypted || true) {",
+    spec: "src/backend/wechat-data/tests/sns-cdn-image.spec.ts",
+  },
+  {
+    id: "M398-sns-image-raw-fallback-removed",
+    why: "解密抛异常时不再回落到原始字节 ⇒ 原始本来就是图片的那种情况（好图在手）也会被判成失败，一张都交不出去",
+    file: "src/backend/wechat-data/src/query/sns-cdn-image.ts",
+    from: "      if (rawType === null) return { error: 'WxIsaac64 解密失败：' + (e as Error).message }",
+    to: "      if (true) return { error: 'WxIsaac64 解密失败：' + (e as Error).message }",
+    spec: "src/backend/wechat-data/tests/sns-cdn-image.spec.ts",
+  },
+  {
+    id: "M399-sns-image-avif-magic-removed",
+    why: "去掉 AVIF 的魔数识别 ⇒ 微信真给过 avif/heic 的那批图会被一律判成「解密后仍不是图片」。这是「只认 JPEG/PNG」的老毛病，参考项目的识别表里本来就有这些格式",
+    file: "src/backend/wechat-data/src/query/sns-cdn-image.ts",
+    from: "    if (brand === 'avif') return 'image/avif'",
+    to: "    if (brand === 'avif-nope') return 'image/avif'",
+    spec: "src/backend/wechat-data/tests/sns-cdn-image.spec.ts",
+  },
+  {
+    id: "M400-sns-image-route-diagnostic-removed",
+    why: "分路诊断里去掉「没有 timelineId/mediaId ⇒ 缓存键路径未尝试」这一条 ⇒ 「本机确实没有这张图」与「我们查错了（键根本没算出来）」又被混成同一句，用户会去翻微信，而病因在我们这边",
+    file: "src/backend/wechat-data/src/query/sns-image.ts",
+    from: "    routes.push('没有 timelineId/mediaId ⇒ 缓存键路径未尝试')",
+    to: "    // 诊断被拆掉",
+    spec: "src/backend/wechat-data/tests/read-failure-contract.spec.ts",
+  },
 )

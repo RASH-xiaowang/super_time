@@ -462,10 +462,16 @@ async function snsImageWithCdnFirst(
   }
   // 本机没有才试 CDN。
   //
-  // 2026-10-08 现场实测（`tests/sns-live-verify.manual.spec.ts`，真库/真网/真 WASM）：
-  // 9/9 图片取回 HTTP 200、**头 128 KB 解密正确（JPEG 魔数对上）但尾部仍是密文** ⇒
-  // 整份 XOR 用我们这份 WxIsaac64 构建做不到（参考项目另有一份 WASM 构建才能一次生成全量）。
-  // 所以 CDN 只当兜底：小图（≤128 KB）能成，大图会被结尾判据拦下并回落。
+  // ⚠️ 这段注释原本断言「整份 XOR 用我们这份 WxIsaac64 构建做不到，参考项目另有一份 WASM
+  // 才能一次生成全量密钥流」。**那句话是错的**，别再照它去换二进制 ——
+  // 2026-10-08 用 `tests/sns-image-tail-probe.manual.spec.ts`（真库/真网/真 WASM）测过：
+  //   1. 两份 WASM **完全同一份**（SHA-1 均为 DCA796BACEC37D8522C7，同为 3696.8 KB）；
+  //   2. 参考项目自己的 keystream CLI 生成 131072/262144/400000 三档都返回**全量**；
+  //   3. 分块生成与一次性生成**逐字节相同**（所以 `sns-keystream.ts` 里那句「分块等价」是对的）；
+  //   4. 整份解密后 **9/9 张**都得到合法 JPEG（头 `ff d8 ff e0`）。
+  // 真正的病因是 `sns-cdn-image.ts` 的**结尾判据过严**：微信 CDN 在 EOI 之后恒定挂一段
+  // 24 字节签名块，旧判据要求「最后两字节必须是 ff d9」，于是把好图全判成失败。
+  // 那批图现在能取回来了（同一探针的生产通路用例断言 9/9 成图）。
   if (url === '' || token === '' || seed === '') {
     return local
   }

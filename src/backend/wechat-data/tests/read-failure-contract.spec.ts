@@ -151,6 +151,38 @@ describe('媒体目录扫描：「没扫全」不许说成「本机没有」', (
   })
 
   /**
+   * 分路诊断：「未找到匹配的本地图片」必须能区分两种完全不同的情况 ——
+   * 本机确实没有这张图 vs. 我们查错了（键算不出来 / 索引没扫完 / 兜底没跑）。
+   * 混成一句时用户会去翻微信，而病因可能在我们这边。
+   */
+  it('图片解析：没给 timelineId/mediaId ⇒ 诊断里要点名「缓存键路径未尝试」', () => {
+    const w = ws('img-routes-nokeys')
+    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32))
+    expect(r.url).toBeUndefined()
+    expect(String(r.error), '要点名哪条路没走').toContain('缓存键路径未尝试')
+    // 走过的路要成列，而���是一句「没有」
+    expect(String(r.error).match(/；/g)?.length ?? 0, '至少列了 2 条路').toBeGreaterThanOrEqual(1)
+  })
+
+  it('图片解析：给了 timelineId/mediaId 但文件不在 ⇒ 诊断要说清「未命中」并带上月根目录数', () => {
+    const w = ws('img-routes-miss')
+    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32), 'tid-1', 'mid-1')
+    expect(r.url).toBeUndefined()
+    const msg = String(r.error)
+    expect(msg).toContain('缓存键路径未命中')
+    expect(msg).toMatch(/4 种后缀 × \d+ 个月根目录/)
+    // 索引那一步也要报到，否则「索引没扫完」这类原因会被吞掉
+    expect(msg).toContain('按 md5 的索引未命中')
+  })
+
+  it('图片解析：没有 md5 时，诊断要额外说明「无法按内容匹配」', () => {
+    const w = ws('img-routes-nomd5')
+    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, '', 'tid-1', 'mid-1')
+    expect(r.url).toBeUndefined()
+    expect(String(r.error)).toContain('无法按内容匹配')
+  })
+
+  /**
    * 这条是本轮改出来的**真缺陷**回归：旧实现把「扫不到」无条件记进 `idx.misses`，
    * 而目录读不动时 `roots` 是空的 ⇒ 签名也不会变 ⇒ 这条 md5 从此永远查不到，
    * 直到重启后端。修复后「只有扫全了才配记 miss」。
