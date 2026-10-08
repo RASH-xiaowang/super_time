@@ -39,7 +39,6 @@ import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import { fetchWithRetry } from '../../../llm-retry.js'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
-import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { resolveImageResourceHint } from './media-image.ts'
 import { shardCatalogDirs } from './meta.ts'
 
@@ -145,9 +144,7 @@ export function resolveImageOriginalLink(
 export async function fetchImageOriginalToCache(
   link: ImageOriginalLink,
   decodedDir: string,
-  opts: { cdnEnabled?: boolean } = {},
 ): Promise<{ format?: string; bytes?: number; error?: string }> {
-  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   if (!hostAllowed(link.url)) return { error: '原图直链的域名不在允许清单内，已拒绝请求' }
   let res
   try {

@@ -38,6 +38,19 @@ describe('顶栏已取消：四件事全部迁入导航栏', () => {
     expect(aside.length).toBeGreaterThan(500)
   })
 
+  /**
+   * 侧栏**默认展开**（2026-09-30 用户要求「主界面的导航栏默认为展开」）。
+   *
+   * 为什么值得一条离线判据：这是**初值**，改回 false 不会有任何类型/构建错误，
+   * 症状只是「新用户进来只看到一排图标」。真机几何由 `scripts/nav-shell-e2e.mjs` 验收
+   * （默认 176px → 点一下 58px → 再展开），这里守的是「初值没被改回去 + 没有偷偷加持久化」。
+   */
+  it('navOpen 初值是展开（true），且不做持久化（交给 e2e 量几何）', () => {
+    expect(panel, 'navOpen 的初值又被改回收起态了').toMatch(/useState\(true\)[\s\S]{0,40}?navOpen|navOpen[\s\S]{0,40}?useState\(true\)/)
+    expect(panel, 'navOpen 不该被持久化：没有记忆就不会「上次收起、这次还收起」')
+      .not.toMatch(/localStorage[\s\S]{0,80}navOpen|navOpen[\s\S]{0,80}localStorage/)
+  })
+
   it('品牌在导航栏内，且用的是导航栏版类名（不是顶栏遗留）', () => {
     expect(aside).toContain('css.navBrand')
     expect(aside).toContain('css.navBrandLogo')
@@ -71,13 +84,21 @@ describe('顶栏已取消：四件事全部迁入导航栏', () => {
     expect(gsCss).not.toMatch(/\.overlay\s*\{[^}]*inset:\s*0/)
   })
 
+  /**
+   * 2026-09-30：底部固定区（设置 / 模型余额 / 主题与数据状态）拆成了 `SidebarFooter`。
+   * 判据跟着搬，**但强度不变**：aside 里必须**渲染**这个组件，而组件体里必须真的有
+   * 主题按钮与状态标签（只查 `<SidebarFooter` 会让"组件里其实没画"悄悄过关）。
+   */
   it('主题切换与数据状态都落在 `</aside>` 之内（落在外面就说明写错了层）', () => {
-    expect(aside).toContain('css.navFooterRow')
-    expect(aside).toContain('css.themeToggle')
-    expect(aside).toContain('css.apiTag')
-    expect(aside).toContain('data-theme-toggle')
+    expect(aside, 'aside 里没渲染底部固定区组件').toContain('<SidebarFooter')
+    const footerFn = panel.slice(panel.indexOf('function SidebarFooter('), panel.indexOf('export function WechatDataPanel'))
+    expect(footerFn.length, '切不出 SidebarFooter 的函数体 ⇒ 下面的断言会空转').toBeGreaterThan(300)
+    expect(footerFn).toContain('css.navFooterRow')
+    expect(footerFn).toContain('css.themeToggle')
+    expect(footerFn).toContain('css.apiTag')
+    expect(footerFn).toContain('data-theme-toggle')
     // 两个都在底部固定区这一个容器里
-    const footer = aside.match(/css\.navFooterRow[\s\S]*?<\/div>/)?.[0] ?? ''
+    const footer = footerFn.match(/css\.navFooterRow[\s\S]*?<\/div>/)?.[0] ?? ''
     expect(footer).toContain('css.themeToggle')
     expect(footer).toContain('css.apiTag')
   })

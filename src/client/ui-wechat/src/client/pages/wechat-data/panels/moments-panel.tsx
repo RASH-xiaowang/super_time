@@ -116,7 +116,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     : 'none'
 
   // 离线媒体层（滚动懒解密 / 封面兜底 / IDB 恢复 / 灯箱按需解析）整个交给 moments-media.ts。
-  const { snsImgs, articleCovers, mediaKeySpec } = useMomentsMedia({
+  const { snsImgs, snsErrs, articleCovers, mediaKeySpec } = useMomentsMedia({
     moments,
     viewer,
     scrollRef,
@@ -224,7 +224,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         desc={`本机朋友圈动态 · 图片/视频/链接/评论互动，共 ${total} 条；统计范围只含已解密的部分`}
         actions={(
           <>
-            <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" />
+            <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索作者 / 内容 / 位置 / 评论" ariaLabel="搜索朋友圈" className={css.hdSearch} />
             <button type="button" className={css.btn} data-on={privacy || undefined} onClick={() => { setPrivacy(v => !v) }} title="隐私模式：模糊头像与内容，悬停查看">🔒 隐私</button>
             <button type="button" className={css.btn} onClick={() => { void load() }} disabled={loading}>刷新</button>
             <button type="button" className={css.btn} data-on={syncing || undefined} onClick={() => { void doSync() }} disabled={syncing}>{syncing ? '同步中…' : '↻ 同步'}</button>
@@ -284,7 +284,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             <MomentsCard
               m={m}
               privacy={privacy}
-              snsImgs={snsImgs}
+              snsImgs={snsImgs} snsErrs={snsErrs}
               articleCovers={articleCovers}
               expandedTextByCard={expandedTextByCard}
               expandedSocialByCard={expandedSocialByCard}

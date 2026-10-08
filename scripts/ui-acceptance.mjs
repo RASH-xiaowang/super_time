@@ -100,6 +100,11 @@ async function main() {
       ...process.env,
       SUPERTIME_CAPTURE_PATH: join(OUT, 'exported-report.png'),
       SUPERTIME_TEST_MODE: '1',
+      // 本脚本是**唯一**会把 llm.json 指向本地 mock 的那一个（见 ui-acceptance-lib.mjs）。
+      // 单独用这个变量告诉界面"这次真的是 mock 回答"，横幅才会这么写 ——
+      // 其它真机脚本只设 SUPERTIME_TEST_MODE，用的是真实配置与真实数据
+      // （2026-09-29 用户报障：原来的横幅把两者混为一谈，让人以为验收都在用假数据）。
+      SUPERTIME_LLM_MOCK: '1',
       // N2：越过首启三道闸门（引导 / 隐私同意 / 授权）。判定在主进程，且**仅非打包态**生效；
       // 进来后窗口顶部会出现 #debug-gates-banner（步骤 1 会断言它），一眼可辨这不是正常首启。
       SUPERTIME_SKIP_ONBOARDING: '1',
@@ -612,21 +617,29 @@ async function main() {
       const br = pane.getBoundingClientRect()
       const rr = scope.getBoundingClientRect()
       const text = (scope.textContent || '').replace(/\s+/g, ' ')
-      const toggle = Array.from(scope.querySelectorAll('button'))
-        .find(b => (b.textContent || '').includes('一律不调用模型'))
+      // 2026-09-30：出网开关全部移除，这一节只剩「敏感字段打码」一个开关。
+      // 过滤器只认这两个名字，避免把「导出审计 CSV / 清空审计」这类动作按钮算成开关。
+      const switches = Array.from(scope.querySelectorAll('button'))
+        .filter(b => /敏感字段打码|禁止 AI 出网|禁止地图底图出网/.test(b.textContent || ''))
       return {
         inView: rr.bottom > br.top + 4 && rr.top < br.bottom - 4,
         current: (cur?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 12),
         hasLead: text.includes('检索统计、导出、图谱、备份等均为纯本地操作'),
         hasAvatarNote: text.includes('头像图片是唯一例外'),
         hasAudit: text.includes('AI 出站审计'),
-        toggleH: toggle ? toggle.clientHeight : 0,
+        switchCount: switches.length,
+        switchH: switches.length > 0 ? switches[0].clientHeight : 0,
+        hasRedact: text.includes('敏感字段打码'),
+        hasRemovedSwitch: /禁止 AI 出网|禁止地图底图出网/.test(text),
       }
     })
     ok(boundary.inView && boundary.current.includes('数据边界'), '点导航把「数据边界与出网」滚进可视区',
       boundary.current)
     ok(boundary.hasLead && boundary.hasAvatarNote, '两段边界说明都在（第二段原来被裁掉）')
-    ok(boundary.toggleH > 0, '「禁止 AI 出网」开关在（原来被裁掉）', String(boundary.toggleH))
+    ok(boundary.switchH > 0 && boundary.hasRedact, '「敏感字段打码」开关渲染出来了', String(boundary.switchH))
+    ok(boundary.switchCount === 1,
+      '出网开关已全部移除：这一节应当只剩「敏感字段打码」一个开关', `实际 ${String(boundary.switchCount)} 个`)
+    ok(!boundary.hasRemovedSwitch, '不该再出现已删的「禁止 AI 出网 / 禁止地图底图出网」开关')
     ok(boundary.hasAudit, '含「AI 出站审计」')
     const bClip = await clipIn('boundary')
     ok(bClip.clipped.length === 0, '该节内没有「内容溢出但 overflow:hidden」的元素', bClip.clipped.slice(0, 4).join(' '))

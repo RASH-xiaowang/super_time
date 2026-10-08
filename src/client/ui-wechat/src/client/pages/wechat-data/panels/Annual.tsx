@@ -10,21 +10,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, writeRenderCache } from '../api.ts'
 import type { AnnualReviewShape } from '../api.ts'
 import { ListSkeleton } from './hooks.tsx'
+import { annualReviewCacheKey, normalizeReview, type NormalizedReview } from './annual-normalize.ts'
+import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
+import { MasonryGrid } from './annual-masonry.tsx'
+import { WordCloudCard } from './WordCloudCard.tsx'
+import {
+  AssetsCard, CatchphraseTopCard, ExtremesCard, GroupsCard, MediaCallCard, MomentsCard,
+  MoneyCard, MonthlyTrendCard, RevokeCard, YearPortrait,
+} from './annual-more-cards.tsx'
 import { EmptyState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './annual.module.css'
-import { avatarColors } from '../utils/format.ts'
+import { avatarColors, fmtBytes } from '../utils/format.ts'
 
-/** 千分位。 */
-const fmt = (n: number): string => (Number.isFinite(n) ? n.toLocaleString('zh-CN') : '0')
-/** 秒 → 可读时长。 */
-function dur(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) return '—'
-  if (sec < 60) return `${Math.round(sec)}秒`
-  if (sec < 3600) return `${Math.round(sec / 60)}分钟`
-  if (sec < 86400) return `${(sec / 3600).toFixed(1)}小时`
-  return `${Math.round(sec / 86400)}天`
-}
+
 /** 周一为首的行标签。 */
 const DOW = ['一', '二', '三', '四', '五', '六', '日']
 /** 数字 → 热力等级（0 不显示底色）。 */
@@ -46,15 +45,6 @@ function adaptiveTiers(max: number): [number, number, number, number] {
   return [Math.max(1, Math.round(m * 0.1)), Math.round(m * 0.3), Math.round(m * 0.55), Math.round(m * 0.8)]
 }
 
-/** 圆形头像（拿不到真头像时用首字 + 稳定色）。 */
-function Avatar({ username, name, size = 32, src }: { username: string; name: string; size?: number; src?: string }): React.JSX.Element {
-  const c = avatarColors(username || name || '?')
-  return (
-    <span className={css.av} style={{ width: size, height: size, background: c.background, color: c.color, fontSize: Math.round(size * 0.42) }}>
-      {src ? <img src={src} alt="" /> : (name || username || '?').slice(0, 1)}
-    </span>
-  )
-}
 
 /** 卡片外壳。`span` 是 12 列网格里的占列数（退化布局下忽略）。 */
 function Card({ title, extra, span = 3, children }: {
@@ -184,13 +174,22 @@ function BuddyCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
   return (
     <Card title="年度搭子" extra="今年话最多的一对">
       <div className={css.row}>
-        <Avatar username={b.username} name={b.name} size={32} src={av.get(b.username) ?? undefined} />
+        <Avatar username={b.username} name={b.name} size={AVATAR_SIZE} src={av.get(b.username) ?? undefined} />
         <div className={css.rowMain}>
           <div className={css.name}>{b.name}</div>
           <div className={css.sub}>{fmt(b.total)} 条 · 你发 {b.mine} / TA 发 {b.theirs}</div>
         </div>
       </div>
-      <div className={css.bar}><div className={css.barFill} style={{ width: `${(b.mine / total) * 100}%` }} /></div>
+      {/* 互动比例：单色进度条看不出"不对等"，改成**双段对比条 + 两侧百分比** ——
+          123 : 1920 这种一边倒的比例要一眼跳出来（用户点名说这是个有趣的槽点）。 */}
+      <div className={css.ratio} title={`你 ${fmt(b.mine)} 条 · TA ${fmt(b.theirs)} 条`}>
+        <div className={css.ratioMine} style={{ width: `${(b.mine / total) * 100}%` }} />
+        <div className={css.ratioTheirs} />
+      </div>
+      <div className={css.ratioLegend}>
+        <span>你 {fmt(b.mine)} 条 · {((b.mine / total) * 100).toFixed(0)}%</span>
+        <span>TA {fmt(b.theirs)} 条 · {((b.theirs / total) * 100).toFixed(0)}%</span>
+      </div>
       <div className={css.kv}><span>连续 / 常在</span><b>{b.streakDays} 天 · {String(b.commonHour).padStart(2, '0')}:00</b></div>
       <div className={css.kv}><span>接话</span><b>{fmt(b.replyBacks)} 次</b></div>
       <div className={css.kv}><span>最快 {dur(b.fastestSec)} 回 · 最慢等了 {dur(b.slowestSec)}</span></div>
@@ -216,7 +215,7 @@ function MonthlyStarCard({ r, av }: { r: AnnualReviewShape; av: Map<string, stri
             <div key={m} className={`${css.starCell} ${m === hot ? css.starHot : ''}`}>
               <span className={css.starM}>{m}月</span>
               {s
-                ? <Avatar username={s.username} name={s.name} size={30} src={av.get(s.username) ?? undefined} />
+                ? <Avatar username={s.username} name={s.name} size={AVATAR_SIZE} src={av.get(s.username) ?? undefined} />
                 : <span className={css.av} style={{ width: 30, height: 30, background: 'transparent', color: 'var(--nm-text-3)', fontSize: 14 }}>—</span>}
               <span className={css.sub} title={s?.name}>{s ? s.name : '—'}</span>
             </div>
@@ -236,7 +235,7 @@ function NightCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string | n
   return (
     <Card title="深夜" span={3} extra={`陪你完成 ${(n.share * 100).toFixed(1)}% 的深夜`}>
       <div className={css.nightTop}>
-        <Avatar username={n.topName} name={n.topName} size={34} />
+        <Avatar username={n.topName} name={n.topName} size={AVATAR_SIZE} />
         <div className={css.rowMain}>
           <div className={css.name}>{n.topName || '—'}</div>
           <div className={css.sub}>0-6 点共 {fmt(n.topCount)} 条</div>
@@ -261,7 +260,8 @@ function RhythmCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
     >
       <div>
         {DOW.map((d, w) => (
-          <div key={d} className={css.rhythmRow}>
+          /* 周末两行（周日/周六）打上标记：热力图上高亮，方便区分工作日与休息日。 */
+          <div key={d} className={css.rhythmRow} data-weekend={(w === 0 || w === 6) || undefined}>
             <span className={css.rhythmDow}>{d}</span>
             <div className={css.rhythmGrid}>
               {Array.from({ length: 24 }, (_, h) => {
@@ -278,8 +278,15 @@ function RhythmCard({ r }: { r: AnnualReviewShape }): React.JSX.Element {
           </div>
         </div>
       </div>
+      {/* 热力图不能只有色块：给一句**结论**，否则用户得自己数格子（原话："缺少图例和结论"）。 */}
+      <div className={css.rhythmConclusion}>
+        你的活跃巅峰是<b>周{DOW[r.rhythm.brightestDow]} {String(r.rhythm.brightestHour).padStart(2, '0')}:00</b>，
+        那一格收发 <b>{fmt(r.rhythm.brightestCount)}</b> 条；
+        {r.rhythm.workWeekendRatio >= 1 ? '周末比工作日更忙。' : '工作日比周末更忙。'}
+      </div>
+      {/* 图例：色阶从「少」到「多」（`adaptiveTiers` 按本年峰值自适应，所以要写清是相对的）。 */}
       <div className={css.calFoot}>
-        <span className={css.calLegend}>最常亮 周{DOW[r.rhythm.brightestDow]} {String(r.rhythm.brightestHour).padStart(2, '0')}:00</span>
+        <span className={css.calLegend}>色深 = 该时段条数（按全年峰值自适应）</span>
         <span className={css.calLegend}>最安静 {String(r.rhythm.quietestHour).padStart(2, '0')}:00 · 仅 {r.rhythm.quietestCount} 条</span>
         <span className={css.calLegend}>深夜指数 {(r.rhythm.nightShare * 100).toFixed(1)}% · 工作日:周末 {r.rhythm.workWeekendRatio}:1</span>
       </div>
@@ -368,7 +375,7 @@ function RankingCard({ r, av }: { r: AnnualReviewShape; av: Map<string, string |
       {r.ranking.slice(0, 5).map((row, i) => (
         <div key={row.username} className={css.rankRow}>
           <span className={css.rankNo}>{i + 1}</span>
-          <Avatar username={row.username} name={row.name} size={24} src={av.get(row.username) ?? undefined} />
+          <Avatar username={row.username} name={row.name} size={AVATAR_SIZE} src={av.get(row.username) ?? undefined} />
           <div className={css.rowMain}><div className={css.name}>{row.name}</div></div>
           <span className={css.rankVal} title={`你发 ${row.mine} / TA 发 ${row.theirs}`}>{fmt(row.total)}</span>
         </div>
@@ -398,11 +405,14 @@ function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, strin
   if (r.highlights.length === 0) return null
   return (
     <Card title="还有这些人" span={8}>
-      {/* 单行 7 格、横向小卡（头像 + 说明列）：一屏内放得下，不用横向滚动 */}
-      <div className={css.moreRow}>
+      {/* 横向小卡（头像 + 说明列）：**放不下就换行**。
+          原先这里复用 `.moreRow`（"标签 ←→ 数值"的不换行容器），而芯片类名
+          （moreCell / moreInfo / moreLabel / moreVal）在当前样式里是缺失的 ⇒
+          窄卡下 7 张芯片挤在一起、互相压住（用户 2026-09-30 报「该换行换行」）。 */}
+      <div className={css.hlRow}>
         {r.highlights.map((h, i) => (
           <div key={`${h.label}-${i}`} className={css.moreCell}>
-            <Avatar username={h.username} name={h.name} size={26} src={av.get(h.username) ?? undefined} />
+            <Avatar username={h.username} name={h.name} size={AVATAR_SIZE} src={av.get(h.username) ?? undefined} />
             <div className={css.moreInfo}>
               <span className={css.moreLabel}>{h.label}</span>
               <span className={css.name} title={h.name}>{h.name}</span>
@@ -422,7 +432,7 @@ function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, strin
 export function AnnualPanel(): React.JSX.Element {
   const [years, setYears] = useState<readonly number[]>([])
   const [year, setYear] = useState<number | null>(null)
-  const [data, setData] = useState<AnnualReviewShape | null>(null)
+  const [data, setData] = useState<NormalizedReview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [av, setAv] = useState<Map<string, string | null>>(new Map())
@@ -430,34 +440,12 @@ export function AnnualPanel(): React.JSX.Element {
   const [exportMsg, setExportMsg] = useState('')
   /** 面板根节点：导出时量它的矩形做截图（含标题栏/工具栏/页脚，不含左侧导航与顶部栏）。 */
   const shellRef = useRef<HTMLDivElement | null>(null)
-  /** 海报区（放 12 列网格的容器）：用它判断"一屏海报"到底装不装得下。 */
-  const bodyRef = useRef<HTMLDivElement | null>(null)
   /**
-   * 是否退化成「瀑布流 + 滚动」。
-   *
-   * 为什么需要这个状态位：CSS 里的回退条件是 `@media (max-width:1200px), (max-height:779px)`，
-   * 而 media query 看的是**视口**高度（本机 900px），真正被压缩的是**面板**高度
-   * （1440×900 下只剩约 700px）—— 于是海报模式照常启用，9 张卡片各自
-   * `overflow:hidden` 把 20–30% 文字切掉（实测「全年发出」128px 装 160px 的内容）。
-   * 这里改成按**卡片是否真的被切**来判定：宁可多一次布局，也不要把内容藏起来。
+   * 2026-09-30 删掉了「一屏海报」那套自适应：`bodyRef` + `compact` 状态 + 被切检测 +
+   * 那套被切标记属性 全没了。理由是用户要求「将下段卡片全部迁移到上段卡片中」——
+   * 整页现在**只有一张密排网格**（`MasonryGrid`），卡片按内容取高、随页面滚动，
+   * 自然不存在"装不下被切"的问题，那套兜底逻辑失去前提（留着就是死代码）。
    */
-  const [compact, setCompact] = useState(false)
-  useEffect(() => {
-    const el = bodyRef.current
-    if (!el || !data) return
-    const check = (): void => {
-      const wrap = el.querySelector('[class*=wrap]')
-      if (!wrap) return
-      const clipped = [...wrap.querySelectorAll('[class*=card]')]
-        .some((c) => c.scrollHeight > c.clientHeight + 8)
-      // 进入条件：有卡片被切；退出条件：容器已经高到按设计能一屏装下（留 hysteresis 防抖）
-      setCompact((prev) => (clipped ? true : (prev && el.clientHeight < 900)))
-    }
-    check()
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => { ro.disconnect() }
-  }, [data])
 
   const loadYears = useCallback(async (): Promise<void> => {
     try {
@@ -476,13 +464,15 @@ export function AnnualPanel(): React.JSX.Element {
   const load = useCallback(async (y: number): Promise<void> => {
     setLoading(true)
     setError(null)
-    // 先出缓存秒开（首次扫描要逐条读一年消息，较慢）
-    const cached = readRenderCache<AnnualReviewShape>('annual-review:' + y)
-    if (cached) setData(cached)
+    // 先出缓存秒开（首次扫描要逐条读一年消息，较慢）。
+    // ⚠️ 缓存必须过 `normalizeReview`：旧版本写下的缓存没有底部五个新字段，
+    // 直接喂给卡片会在渲染期抛 TypeError（`undefined.count`）⇒ 整窗黑屏。见 `annual-normalize.ts`。
+    const cached = readRenderCache<AnnualReviewShape>(annualReviewCacheKey(y))
+    if (cached) setData(normalizeReview(cached))
     try {
       const r = await apiGetAnnualReview(y)
-      setData(r)
-      writeRenderCache('annual-review:' + y, r)
+      setData(normalizeReview(r as AnnualReviewShape))
+      writeRenderCache(annualReviewCacheKey(y), r)
     } catch (e) {
       if (!cached) setError((e as Error).message)
     } finally {
@@ -558,7 +548,7 @@ export function AnnualPanel(): React.JSX.Element {
           </div>
         )}
       />
-      <div ref={bodyRef} className={`${kitCss.panelBody} ${css.scrollBody}`}>
+      <div className={`${kitCss.panelBody} ${css.scrollBody}`}>
         {exportMsg && <div className={css.hint}>{exportMsg}</div>}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
         {!data && loading && <ListSkeleton rows={6} />}
@@ -572,28 +562,45 @@ export function AnnualPanel(): React.JSX.Element {
           </div>
         )}
         {data && (
-          /* 固定 12 列网格：5 行内容 + 1 行页脚，总高恒等于容器高 → 一屏无滚动。             窄窗/矮窗由 CSS 媒体查询退回「瀑布流 + 滚动」。 */
-          <div className={css.wrap} data-loading={loading || undefined} data-compact={compact || undefined}>
+          <>
+          {/* **整页一张网格**（2026-09-30 用户："将下段卡片全部迁移到上段卡片中"）。
+              改前是"上段一屏海报（12 列固定网格）+ 下段密排"两套结构；现在海报卡与「更多」卡
+              全部是**同一张**最短列优先网格里的格子 —— 一种间隙、一套卡片语言、一个连续版面。
+              代价（用户明确选择）：放弃"一屏海报"不变式，首屏不再是装好的一屏，而是随页面滚动。 */}
+          <MasonryGrid>
             <HeroCard r={data} />
-            <CalendarCard r={data} />
+            <YearPortrait r={data} />
             <BusiestCard r={data} />
+            <CalendarCard r={data} />
+            <MonthlyTrendCard r={data} />
             <BuddyCard r={data} av={av} />
             <MonthlyStarCard r={data} av={av} />
             <NightCard r={data} av={av} />
             <RhythmCard r={data} />
+            <ExtremesCard r={data} />
             <WordsCard r={data} />
             <CatchphraseCard r={data} />
+            <GroupsCard r={data} av={av} />
+            <MediaCallCard r={data} />
+            <RevokeCard r={data} />
+            <MomentsCard r={data} />
+            <div className={css.span6}><WordCloudCard scope="global" year={data.year} title={`${String(data.year)} 年度热词`} limit={56} height={120} /></div>
+            <div className={css.span6}><WordCloudCard scope="moments" year={data.year} title={`${String(data.year)} 朋友圈热词`} limit={56} height={120} /></div>
+            <CatchphraseTopCard r={data} />
             <ReplyCard r={data} />
             <OpenerCard r={data} />
             <RankingCard r={data} av={av} />
             <EmojiCard r={data} />
+            <MoneyCard r={data} />
             <HighlightsCard r={data} av={av} />
+            <AssetsCard r={data} />
             <div className={css.footer}>
               <span>第一条 · {data.firstAt || '—'}</span>
               <span className={css.footerMid}>好好再说。没有哪种聊法是错的。</span>
               <span>最后一条 · {data.lastAt || '—'}</span>
             </div>
-          </div>
+          </MasonryGrid>
+          </>
         )}
       </div>
     </div>

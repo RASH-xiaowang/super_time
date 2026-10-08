@@ -262,15 +262,6 @@
 .linkList { display: flex; flex-wrap: wrap; gap: var(--nm-dense-g2); }
 
 /* 来源（问答沉淀）那一行里的跳转按钮 */
-.linkBtn {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--nm-cyan);
-  font-size: var(--nm-dense-fs-sm);
-  cursor: pointer;
-}
-.linkBtn:hover { text-decoration: underline; }
 
 /* ── 窄容器：两栏改纵向堆叠 ───────────────────────────────────
    阈值 720px ≈ 左栏 240 + gap 10 + 详情 470：再窄下去详情里的正文

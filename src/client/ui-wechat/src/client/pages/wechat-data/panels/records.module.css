@@ -71,11 +71,6 @@
   font-variant-numeric: tabular-nums;
 }
 .muted { color: var(--nm-text-2); white-space: nowrap; }
-.link {
-  background: none; border: none; padding: 0; color: var(--nm-cyan);
-  cursor: pointer; font-weight: 600; font-size: 12px; transition: all 0.15s;
-}
-.link:hover { text-decoration: underline; text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
 .ellipsis { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 状态徽章。 */
@@ -101,7 +96,7 @@
    去掉 flex 后仍然居中；这里只保留原来的 12px 纵向留白。 */
 .loadMoreWrap { padding: 12px 0; }
 .loadMore {
-  display: block; margin: 12px auto; padding: 6px 16px; border: 1px solid var(--nm-border);
+  display: block; margin: 12px auto; padding: 6px 14px; border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill); background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;

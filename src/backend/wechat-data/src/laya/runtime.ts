@@ -14,11 +14,20 @@
  * 但保留缩放通道：换 checkpoint 时把 `rl_agent_config.json` 放到模型目录即可生效。
  *
  * ## 依赖是 external 的
- * `onnxruntime-node` / `@huggingface/transformers` 是原生/大体积包，**不进后端 bundle**
+ * `onnxruntime-node` / `@huggingface/tokenizers` 是外部包，**不进后端 bundle**
  * （`scripts/build-wechat-bundle.js` 的 `packages: 'external'`），运行时从 node_modules 解析
  * —— 与 koffi 的加载方式一致（`keys/win32-memory.ts` 是同一先例）。
  * 这里刻意用**变量说明符**做动态 import：让 tsc 不去静态解析这两个包的类型声明，
  * 避免把它们的类型面拖进后端编译。
+ *
+ * ## 分词器为什么不用 `@huggingface/transformers`（2026-09-28）
+ * 那个包在**模块顶层无保护地** `require("sharp")` / `require("onnxruntime-common")`，
+ * 而两者都不在打包白名单里 ⇒ 打包版一 import 就 `Cannot find module`，laya 直接起不来。
+ * 补进包也不划算：`sharp` 会连带 `@img/sharp-win32-x64` 的 `libvips-42.dll`（18.6 MB），
+ * 再加它自己的传递依赖 `onnxruntime-web`（135 MB），远超 asar 的余量。
+ * 换成 `@huggingface/tokenizers`（**纯 JS、零依赖**、1 MB —— 正是 transformers 内部用的那份
+ * 实现），只需要它自己。等价性用 fixture 的 `tokenTable` 逐 token 证过：**32/32 一致**
+ * （复现：`node tools/laya/bench-tokenizer-swap.mjs`）。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { cpus } from 'node:os'
@@ -26,6 +35,27 @@ import { join } from 'node:path'
 import { collateItems, toInternal, buildSequence, QTYPES, type LayaItem, type LayaTokenizer } from './build-sequence.ts'
 import { layaModelStatus, layaTokenizerDir, formatBytes } from './model-file.ts'
 import { defaultChatQuestions, type LayaQuestions, type LayaQuestionKind } from './presets.ts'
+
+/** 显式指定 onnxruntime 的 intra-op 线程数（调优 / 复现实验用）。默认见 {@link layaThreadCount}。 */
+export const LAYA_THREADS_ENV = 'DSH_WECHAT_LAYA_THREADS'
+/** 线程数硬上限：超过物理核数后 ORT 只会互相抢缓存，这里挡住明显的误配置。 */
+const LAYA_THREADS_CAP = 32
+
+/**
+ * onnxruntime 的 intra-op 线程数，**默认 `min(8, 逻辑核数)`**。
+ *
+ * 这个 8 **不是**「没想过调大」，是按实测定的：本机 i7-14700K（28 逻辑核）上对同一份输入扫描，
+ *   4→10,884ms ／ **8→8,172ms** ／ 12→8,845ms ／ 16→8,928ms ／ 20→8,826ms ／ 28→9,251ms
+ * ⇒ 8 之后单调变差，只是让 E-core 互相抢缓存。（4 那一档两次跑差异很大 —— 28 核上只给 4 线程
+ * 基本被调度噪声主导；8 以上两跑都一致，所以结论稳。）
+ * 留这个环境变量是为了「换一台机器后能重新量一遍」（复现：`node tools/laya/bench-inference.mjs`），
+ * 不是在暗示默认值该调大。与 whisper 的 `whisper_threads` 是同一个约定。
+ */
+export function layaThreadCount(): number {
+  const raw = Number((process.env[LAYA_THREADS_ENV] ?? '').trim())
+  const wanted = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : Math.min(8, cpus().length)
+  return Math.max(1, Math.min(LAYA_THREADS_CAP, wanted))
+}
 
 /** onnxruntime-node 的最小类型面（只为让本文件可编译；实现细节交给运行时）。 */
 interface OrtTensorCtor {
@@ -39,11 +69,15 @@ interface OrtModule {
   Tensor: OrtTensorCtor
   InferenceSession: { create(path: string, options?: Record<string, unknown>): Promise<OrtSession> }
 }
-interface TransformersTokenizer {
-  encode(text: string, options: { add_special_tokens: boolean }): number[]
+/** `@huggingface/tokenizers` 的最小类型面（纯 JS 实现，零依赖）。 */
+interface TokenizersEncoding {
+  ids: number[]
 }
-interface TransformersModule {
-  AutoTokenizer: { from_pretrained(path: string, options?: Record<string, unknown>): Promise<TransformersTokenizer> }
+interface TokenizersTokenizer {
+  encode(text: string, options: { add_special_tokens: boolean }): TokenizersEncoding
+}
+interface TokenizersModule {
+  Tokenizer: new (tokenizer: unknown, config: unknown) => TokenizersTokenizer
 }
 
 /** 命题在 UI 层的一种呈现（概率已排序、标签已本地化）。 */
@@ -197,30 +231,40 @@ export async function layaEnsureLoaded(
     try {
       // 变量说明符：让 tsc 不静态解析这两个外部包（见文件头注释）。
       const ortSpec = 'onnxruntime-node'
-      const tokSpec = '@huggingface/transformers'
+      const tokSpec = '@huggingface/tokenizers'
       const ort = (await import(ortSpec)) as unknown as OrtModule
-      const { AutoTokenizer } = (await import(tokSpec)) as unknown as TransformersModule
+      const { Tokenizer } = (await import(tokSpec)) as unknown as TokenizersModule
 
       const tokDir = layaTokenizerDir(status.dir)
-      const tok = await AutoTokenizer.from_pretrained(tokDir, { local_files_only: true })
-      const one = (t: string): number => {
-        const ids = tok.encode(t, { add_special_tokens: false })
-        const first = Array.isArray(ids) ? ids[0] : undefined
-        if (first === undefined || !Number.isFinite(first)) {
-          throw new Error(`分词器无法解析特殊标记 ${t}（得到 ${JSON.stringify(ids)}）`)
-        }
-        return first
+      // 自己读两个 JSON 交给构造器：`@huggingface/tokenizers` 不做下载/缓存管理，
+      // 它要的就是「tokenizer.json 的内容 + tokenizer_config.json 的内容」这两个对象。
+      const tokJson = JSON.parse(readFileSync(join(tokDir, 'tokenizer.json'), 'utf8')) as {
+        added_tokens?: Array<{ content?: unknown; id?: unknown }>
+      }
+      const tokConfig = JSON.parse(readFileSync(join(tokDir, 'tokenizer_config.json'), 'utf8')) as unknown
+      const tok = new Tokenizer(tokJson, tokConfig)
+      // 特殊标记 id 直接查 `added_tokens` 表，**不靠「编码字面量再取第一个 id」**：
+      // 后者隐含「分词器会把 `<bos>` 切成单个 token」这个前提，换实现/换 checkpoint 都可能
+      // 悄悄变味（变成切碎了 → 取到的第一个 id 是别的东西，而模型照样跑得起来、只是全错）。
+      const added = new Map<string, number>()
+      for (const a of tokJson.added_tokens ?? []) {
+        if (typeof a.content === 'string' && Number.isFinite(a.id)) added.set(a.content, Number(a.id))
+      }
+      const special = (atomic: string): number => {
+        const id = added.get(atomic)
+        if (id === undefined) throw new Error(`分词器缺少特殊标记 ${atomic}`)
+        return id
       }
       const tokenizer: LayaTokenizer = {
-        clsId: one('<bos>'),
-        sepId: one('<eos>'),
-        maskId: one('<mask>'),
-        padId: one('<pad>'),
-        encode: (text: string) => tok.encode(text, { add_special_tokens: false }),
+        clsId: special('<bos>'),
+        sepId: special('<eos>'),
+        maskId: special('<mask>'),
+        padId: special('<pad>'),
+        encode: (text: string) => tok.encode(text, { add_special_tokens: false }).ids,
       }
 
       const session = await ort.InferenceSession.create(status.path, {
-        intraOpNumThreads: Math.max(1, Math.min(8, cpus().length)),
+        intraOpNumThreads: layaThreadCount(),
         interOpNumThreads: 1,
       })
 

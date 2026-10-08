@@ -95,7 +95,7 @@ describe('导航：知识库是「联系人与社交」组下的可见条目', (
 
   it('挂在「联系人与社交」组里（这是需求指定的位置）', () => {
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'kb'))
-    expect(group?.label).toBe('联系人与社交')
+    expect(group?.label, '2026-09-30 IA 合并：知识库归到概览组').toBe('概览 · 问答 · 总结')
   })
 
   it('TAB_LABELS 有 kb —— 深链 #kb 能落到这一页', () => {
@@ -460,8 +460,8 @@ describe('多知识库：作用域（看哪个库）接进两个面板与编辑�
     expect(panelCode, '笔记库首帧读的不是本库缓存').toContain("readRenderCache<KbCache>(kbCacheKey('kb-list', kbId))")
     expect(panelCode, '笔记库写的不是本库缓存键').toMatch(/writeRenderCache\(kbCacheKey\('kb-list', kbId\)/)
     expect(code(graphSrc), '知识图谱首帧读的不是本库缓存').toContain(
-      "readRenderCache<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId))")
-    expect(code(graphSrc), '知识图谱写的不是本库缓存键').toMatch(/writeRenderCache\(kbCacheKey\('kb-graph', kbId\)/)
+      "useFreshData<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId)")
+    expect(code(graphSrc), '知识图谱写的不是本库缓存键').toMatch(/useFreshData<KnowledgeSnapshot>\(kbCacheKey\('kb-graph', kbId\)/)
   })
 
   it('切库时清掉视图状态：图谱清选中/固定/聚焦，笔记库清选中/关键词/标签', () => {
@@ -675,7 +675,12 @@ describe('2026-09-19 三栏重排：吸顶骨架、按钮层级与库 rail', () 
 
   it('编辑器：弹层骨架交给 kit Dialog，按钮交给 kit Button', () => {
     const ed = code(editor)
-    expect(ed).toContain("import { Button, Dialog, Select } from '../ui/kit.tsx'")
+    // 钉「这几个名字都从 kit 导入」而不是整串精确匹配 —— 整串会在**任何**其他 import
+    // 增减（如 R4 加 ErrorState）时无辜变红，而它要表达的是「Button/Dialog/Select 来自 kit」。
+    const kitImport = /import \{([^}]*)\} from '\.\.\/ui\/kit\.tsx'/.exec(ed)?.[1] ?? ''
+    for (const name of ['Button', 'Dialog', 'Select']) {
+      expect(kitImport, `编辑器没用 kit 的 ${name}`).toMatch(new RegExp(`(?:^|,)\\s*${name}\\s*(?:,|$)`))
+    }
     expect(ed).toMatch(/<Dialog\b/)
     expect(ed, '编辑器退回手写覆盖层（只支持点遮罩关闭，键盘用户会被困住）').not.toMatch(/role="dialog"/)
     expect(ed, '编辑器又用回自制的 miniBtn 了').not.toContain('miniBtn')

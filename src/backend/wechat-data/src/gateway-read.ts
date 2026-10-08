@@ -6,7 +6,7 @@
  */
 
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, MomentsMonthlySnapshot, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ArticleCoversResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, MomentsMonthlySnapshot, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
 import { querySessions } from './query/sessions.ts'
 import { queryGroupInfo } from './query/group-info.ts'
 import { queryPaymentStatus } from './query/payments.ts'
@@ -27,7 +27,11 @@ import { queryGraph } from './query/graph.ts'
 import { getDailyCounts } from './query/calendar.ts'
 import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages, searchIndexMessagesCancellable } from './query/search.ts'
 import { searchMembers } from './query/members.ts'
-import { resolveArticleCoverDataUrl } from './query/article-cover.ts'
+import { resolveArticleCoverDataUrl, resolveArticleCoversDataUrls } from './query/article-cover.ts'
+import type { LocalCoverProbe } from './query/article-cover.ts'
+import { findSnsMediaDataUrlByIndex, hasSnsMediaIndexEntries } from './query/sns-image.ts'
+import { resolveImageKeyPair } from './query/image-key.ts'
+import { createHash } from 'node:crypto'
 import { queryOverviewInsights } from './query/overview-insights.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
 import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
@@ -58,7 +62,7 @@ import { GatewayCore } from './gateway-core.ts'
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export abstract class GatewayRead extends GatewayCore {
   @Remote('getSessions')
-  getSessions(options?: { keyword?: string; limit?: number; offset?: number }): SessionsSnapshot {
+  async getSessions(options?: { keyword?: string; limit?: number; offset?: number }): Promise<SessionsSnapshot> {
     return querySessions(this._dirs.decrypted, options?.keyword, options?.limit, options?.offset)
   }
 
@@ -85,7 +89,7 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('getOverview')
-  getOverview(): OverviewSnapshot {
+  async getOverview(): Promise<OverviewSnapshot> {
     return queryOverview(this._dirs.decrypted)
   }
 
@@ -146,7 +150,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns AnnualSnapshot: available yearly overview data.
    */
   @Remote('getAnnual')
-  getAnnual(): AnnualSnapshot {
+  async getAnnual(): Promise<AnnualSnapshot> {
     return queryAnnual(this._dirs.decrypted)
   }
 
@@ -271,7 +275,7 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('resolveChatHistory')
-  resolveChatHistory(options: { serverId: string }): ChatHistoryResolveResult {
+  async resolveChatHistory(options: { serverId: string }): Promise<ChatHistoryResolveResult> {
     return queryMessageByServerId(this._dirs.decrypted, options.serverId)
   }
 
@@ -472,30 +476,6 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   /**
-   * Set CDN auto-fetch flag.
-   * @param options - enabled: whether CDN auto-fetch is on.
-   * @returns SimpleResult: ok, or error on failure.
-   */
-  @Remote('setCdnImageEnabled')
-  setCdnImageEnabled(options: { enabled: boolean }): SimpleResult {
-    const r = saveConfig(this._dirs.decrypted, { cdn_enabled: options.enabled })
-    this.op('settings', 'set_cdn_image_enabled', r.ok ? 'ok' : 'fail', '', r.error ?? (options.enabled ? '开启' : '关闭'))
-    return r
-  }
-
-  /**
-   * Set CDN local/service decrypt flag.
-   * @param options - localDecrypt: whether decryption runs locally.
-   * @returns SimpleResult: ok, or error on failure.
-   */
-  @Remote('setCdnImageLocalDecrypt')
-  setCdnImageLocalDecrypt(options: { localDecrypt: boolean }): SimpleResult {
-    const r = saveConfig(this._dirs.decrypted, { cdn_local_decrypt: options.localDecrypt })
-    this.op('settings', 'set_cdn_image_local_decrypt', r.ok ? 'ok' : 'fail', '', r.error ?? (options.localDecrypt ? '本地解密' : '服务端解密'))
-    return r
-  }
-
-  /**
    * Delete favorite items by local_id.
    * @param options - ids of the favorite items to delete.
    * @returns DeleteFavoriteResult: ok + deleted count, or error.
@@ -515,9 +495,10 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns AnnualReview: 完整看板数据。
    */
   @Remote('getAnnualReview')
-  getAnnualReview(options: { year: number }): AnnualReview {
+  async getAnnualReview(options: { year: number }): Promise<AnnualReview> {
     try {
-      const r = queryAnnualReview(this._dirs.decrypted, options.year, this.selfUsername())
+      // 2026-09-28：`queryAnnualReview` 改 async —— 实测本方法冷跑 **2150ms 且一次都不让出**。
+      const r = await queryAnnualReview(this._dirs.decrypted, options.year, this.selfUsername())
       this.op('task', 'annual_review', 'ok', String(options.year),
         `发出 ${r.sent} · 全部 ${r.ranking.reduce((a, x) => a + x.total, 0)} · 活跃 ${r.activeDaysMine} 天`)
       return r
@@ -528,9 +509,11 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('getAnnualReport')
-  getAnnualReport(options: { year: number }): AnnualReport {
+  async getAnnualReport(options: { year: number }): Promise<AnnualReport> {
     try {
-      const r = queryAnnualReport(this._dirs.decrypted, options.year) as unknown as AnnualReport
+      // 2026-09-28：`queryAnnualReport` 改 async —— 真实 @Remote 探针实测本方法
+      // 冷跑 **2254ms 且一次都不让出**（`working/probe-remote.txt`）。
+      const r = await queryAnnualReport(this._dirs.decrypted, options.year) as unknown as AnnualReport
       this.op('task', 'generate_annual_report', 'ok', String(options.year), `共 ${r.total} 条`)
       return r
     } catch (e) {
@@ -541,16 +524,39 @@ export abstract class GatewayRead extends GatewayCore {
 
   /**
    * Resolve a 公众号 article cover (og:image) to a base64 data URL.
+   *
+   * A4（2026-09-28）：先用朋友圈媒体索引确认本机有没有这张图 —— **索引命中才截流**，
+   * 没命中一律照旧出网（见 `article-cover.ts` 的 `LocalCoverProbe`）。
    * @param options - mp.weixin.qq.com article URL.
    * @returns ImageDataUrlResult: base64 data URL or error.
    */
   @Remote('getArticleCover')
   async getArticleCover(options: { contentUrl: string }): Promise<ImageDataUrlResult> {
-    return resolveArticleCoverDataUrl(options.contentUrl, this._dirs.decoded, this.cdnSwitches())
+    return resolveArticleCoverDataUrl(
+      options.contentUrl, this._dirs.decoded, buildCoverLocalProbe(this._dirs),
+    )
+  }
+
+  /**
+   * 批量解析公众号文章封面（A1，2026-09-28 性能修复）。
+   *
+   * 现场日志里 `getArticleCover` 是最频繁的慢调用（1221 次 / 均 1.9s），根因是前端逐张发 RPC。
+   * 这个批量壳把一屏的封面收成一个 RPC，后端按 `COVER_CONCURRENCY` 分批并发。
+   * A4 之后本机已有封面的那些**连网络都不出**（同一个探测函数）。
+   * @param options - `urls` 为一屏待解析的文章链接（自动去重、忽略空串）。
+   * @returns 逐条结果（键 = 请求的 url），顺序与去重后的入参一致。
+   */
+  @Remote('getArticleCovers')
+  async getArticleCovers(options: { urls: readonly string[] }): Promise<ArticleCoversResult> {
+    return {
+      items: await resolveArticleCoversDataUrls(
+        options.urls, this._dirs.decoded, buildCoverLocalProbe(this._dirs),
+      ),
+    }
   }
 
   @Remote('getAssetInsights')
-  getAssetInsights(): AssetInsightsSnapshot {
+  async getAssetInsights(): Promise<AssetInsightsSnapshot> {
     return queryAssetInsights(this._dirs.decrypted)
   }
 
@@ -560,7 +566,7 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('getCalls')
-  getCalls(options?: { topPeers?: number; recentLimit?: number }): CallsSnapshot {
+  async getCalls(options?: { topPeers?: number; recentLimit?: number }): Promise<CallsSnapshot> {
     return queryCalls(this._dirs.decrypted, this.selfUsername(), options?.topPeers, options?.recentLimit)
   }
 
@@ -580,27 +586,55 @@ export abstract class GatewayRead extends GatewayCore {
   }
 
   @Remote('getWordCloud')
-  getWordCloud(options?: WordCloudOptions): WordCloudResult {
+  async getWordCloud(options?: WordCloudOptions): Promise<WordCloudResult> {
     return this.wordcloudRemotes().getWordCloud(options)
   }
 
   @Remote('getMomentsInsights')
-  getMomentsInsights(options?: { author?: string }): MomentsInsightsSnapshot {
+  async getMomentsInsights(options?: { author?: string }): Promise<MomentsInsightsSnapshot> {
     return queryMomentsInsights(this._dirs.decrypted, options?.author)
   }
 
   @Remote('getMomentsMonthly')
-  getMomentsMonthly(options?: { author?: string; authorName?: string }): MomentsMonthlySnapshot {
+  async getMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<MomentsMonthlySnapshot> {
     return queryMomentsMonthly(this._dirs.decrypted, options?.author, options?.authorName)
   }
 
   @Remote('getOfficialAssets')
-  getOfficialAssets(): OfficialAssetsSnapshot {
+  async getOfficialAssets(): Promise<OfficialAssetsSnapshot> {
     return queryOfficialAssets(this._dirs.decrypted)
   }
 
   @Remote('searchUnified')
   searchUnified(options: { query: string; limit?: number }): UnifiedSearchSnapshot {
     return searchUnified(this._dirs.decrypted, options.query, options.limit)
+  }
+}
+
+/**
+ * 构造 A4 的「本机有没有这张封面」探测函数。
+ *
+ * 为什么要包一层而不是直接传 `findSnsMediaFileByIndex`：
+ *   ① 微信原始目录只在这里解析（`rawWechatBase`），且可能为 undefined（没配）；
+ *   ② 这里还要拿到 AES/XOR 密钥（`resolveImageKeyPair`）—— 索引要按解密后的 md5 比对；
+ *   ③ 探测必须交回**可渲染的 data URL** 才叫「本机有这份封面」，解不开就返回
+ *      undefined（让调用方照旧出网），绝不把坏文件当成命中。
+ * 任一环节出问题都返回一个恒 undefined 的探测 ⇒ 行为退回 A4 之前。
+ *
+ * ⚠ 这是**模块级函数**，不是 `GatewayRead` 的私有方法：`gateway-read-shell.spec.ts`
+ * 的守卫要求 `GatewayRead.prototype` 上每个方法都必须带 `@Remote`（防漏装饰器），
+ * 私有辅助方法挂 prototype 会稳定违反它（实测红过一次）。
+ */
+function buildCoverLocalProbe(dirs: { decrypted: string }): LocalCoverProbe | undefined {
+  const base = rawWechatBase(dirs.decrypted)
+  if (!base) return undefined
+  // 成本闸门：本会话还没建过任何朋友圈索引 ⇒ 不建探测函数。
+  // 这样「用户没进过朋友圈」时 A4 的成本为零（否则会为他多扫一个月的图片目录）。
+  if (!hasSnsMediaIndexEntries()) return undefined
+  const { aesKey, xorKey } = resolveImageKeyPair(dirs.decrypted)
+  return (contentUrl: string) => {
+    // 公众号封面在 SNS 媒体库里以 `md5(contentUrl)` 作为查表键（与 `sns-image.ts` 同一算法）。
+    const key = createHash('md5').update(contentUrl, 'utf8').digest('hex')
+    return findSnsMediaDataUrlByIndex(base, aesKey, xorKey, key)
   }
 }

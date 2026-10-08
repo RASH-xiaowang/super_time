@@ -31,7 +31,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol'
 import { WechatDataGateway } from '../src/gateway.ts'
 import { GatewayRead } from '../src/gateway-read.ts'
-import { getConfig } from '../src/query/config.ts'
 import { listOperations } from '../src/query/operation-log.ts'
 import { recordAsk } from '../src/query/ask-history.ts'
 import { defaultRetrievalConfig } from '../src/query/retrieval/config.ts'
@@ -333,32 +332,34 @@ describe('方法面：gateway-read.ts 声明的每个 @Remote 都在实例上', 
 })
 
 describe('参数搬运：分页与归一化（不给 options vs 给 options 成对钉）', () => {
-  it('getSessions：limit/offset/keyword 缺省与边界', () => {
+  it('getSessions：limit/offset/keyword 缺省与边界', async () => {
     const gw = gateway(fullTree())
-    const all = gw.getSessions()
+    // 2026-09-28：`getSessions` 改成 async（逐会话解析「未读最早时间」那一圈要让出，
+    // 实测 78ms 且一次不让出）⇒ 壳的断言跟着 await。
+    const all = await gw.getSessions()
     expect(all.sessions.map((s) => s.username), '不给 options 应当按 sort_timestamp DESC 全量出')
       .toEqual(['wxid_a', 'wxid_b', 'wxid_c', 'room1@chatroom'])
     expect(all.total).toBe(4)
 
-    expect(gw.getSessions({ limit: 1 }).sessions.map((s) => s.username)).toEqual(['wxid_a'])
-    expect(gw.getSessions({ limit: 1, offset: 1 }).sessions.map((s) => s.username)).toEqual(['wxid_b'])
+    expect((await gw.getSessions({ limit: 1 })).sessions.map((s) => s.username)).toEqual(['wxid_a'])
+    expect((await gw.getSessions({ limit: 1, offset: 1 })).sessions.map((s) => s.username)).toEqual(['wxid_b'])
     // limit=0 是「显式空页」而不是「回到全量」：`limit === undefined` 与 `limit === 0` 必须不同。
-    const zero = gw.getSessions({ limit: 0 })
+    const zero = await gw.getSessions({ limit: 0 })
     expect(zero.sessions).toEqual([])
     expect(zero.total, 'total 是全量口径，分页不许把它一起清零').toBe(4)
 
     // 关键词：空串与全空格都等于「不过滤」（`q.trim()` 之后为假值）。
-    expect(gw.getSessions({ keyword: '  ' }).total).toBe(4)
-    expect(gw.getSessions({ keyword: 'undefined' }).total).toBe(0)
-    expect(gw.getSessions({ keyword: 'room' }).sessions.map((s) => s.username)).toEqual(['room1@chatroom'])
+    expect((await gw.getSessions({ keyword: '  ' })).total).toBe(4)
+    expect((await gw.getSessions({ keyword: 'undefined' })).total).toBe(0)
+    expect((await gw.getSessions({ keyword: 'room' })).sessions.map((s) => s.username)).toEqual(['room1@chatroom'])
     // 命中显示名（Alice 来自 contact.db）而不是 summary —— 关键字是在名字解析之后才比的。
-    expect(gw.getSessions({ keyword: 'ali' }).sessions.map((s) => s.username)).toEqual(['wxid_a'])
+    expect((await gw.getSessions({ keyword: 'ali' })).sessions.map((s) => s.username)).toEqual(['wxid_a'])
 
     // 疑点（只记录不改产品码）：`offset` 在没给 `limit` 时被**整个忽略**
     // （querySessions 里 `limit === undefined ? sessions : slice(offset, offset + limit)`），
     // 而壳的签名把 offset 与 limit 并列声明成两个独立可选项。渲染层若只做「翻页时先给 offset」
     // 就会每页拿到同一份全量。此处钉的是**当前行为**，不是它合理。
-    expect(gw.getSessions({ offset: 2 }).total, '当前实现：无 limit ⇒ offset 不生效').toBe(4)
+    expect((await gw.getSessions({ offset: 2 })).total, '当前实现：无 limit ⇒ offset 不生效').toBe(4)
   })
 
   it('getContacts：category 在分页之前生效，all/空串/缺省三者同义', () => {
@@ -517,11 +518,13 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
   it('getSelfUsername / getCalls / getLedger：无 options 也给出声明的形状', async () => {
     const gw = gateway(fullTree())
     expect(gw.getSelfUsername()).toEqual({ username: 'wxid_self' })
-    const calls = gw.getCalls()
+    // 2026-09-28：`getCalls` 改成 async（逐张分片的 type-50 扫描要让出事件循环，
+    // 实测冷跑 87ms 且一次不让出）⇒ 壳的断言跟着 await。吞掉返回值照样会红。
+    const calls = await gw.getCalls()
     expect(Array.isArray(calls.peers), JSON.stringify(Object.keys(calls))).toBe(true)
     expect(Array.isArray(calls.recent)).toBe(true)
     expect(calls.total).toBe(0)
-    expect(gw.getCalls({ topPeers: 1, recentLimit: 1 }).peers.length).toBeLessThanOrEqual(1)
+    expect((await gw.getCalls({ topPeers: 1, recentLimit: 1 })).peers.length).toBeLessThanOrEqual(1)
     const ledger = await gw.getLedger()
     expect(ledger.month, '不给 month 时快照要如实说「全量」').toBeNull()
     expect(ledger.summary.transfers).toBe(3)
@@ -559,22 +562,24 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(gw.cancelSearch({ jobId: 'job-trim' })).toEqual({ ok: false })
   })
 
-  it('getWordCloud：壳只是转发，options 按**同一个引用**交给 wordcloud 域处理器', () => {
+  it('getWordCloud：壳只是转发，options 按**同一个引用**交给 wordcloud 域处理器', async () => {
     const gw = gateway(fullTree())
     const handler = (gw as unknown as {
-      wordcloudRemotes: () => { getWordCloud: (o?: WordCloudOptions) => WordCloudResult }
+      wordcloudRemotes: () => { getWordCloud: (o?: WordCloudOptions) => Promise<WordCloudResult> }
     }).wordcloudRemotes()
     const sentinel = { words: [{ text: 'sentinel', count: 9 }], scanned: 3 } as WordCloudResult
-    const spy = vi.spyOn(handler, 'getWordCloud').mockReturnValue(sentinel)
+    const spy = vi.spyOn(handler, 'getWordCloud').mockResolvedValue(sentinel)
     const opts: WordCloudOptions = { scope: 'chat', username: 'wxid_a', limit: 3 }
-    expect(gw.getWordCloud(opts), '返回值不是域处理器给的那份 ⇒ 壳自己吞了').toBe(sentinel)
+    // 2026-09-28：`getWordCloud` 改成 async（为在分片/行级让出事件循环）⇒ 壳的断言也从
+    // 「同一个引用」升级为「await 之后仍是同一份对象引用」——吞掉返回值照样会红。
+    expect(await gw.getWordCloud(opts), '返回值不是域处理器给的那份 ⇒ 壳自己吞了').toBe(sentinel)
     expect(spy.mock.calls.length).toBe(1)
     expect(spy.mock.calls[0]?.[0]).toBe(opts)
-    expect(gw.getWordCloud()).toBe(sentinel)
+    expect(await gw.getWordCloud()).toBe(sentinel)
     expect(spy.mock.calls[1]?.[0], '不传 options 时应原样给 undefined，而不是塞一个空对象').toBeUndefined()
   })
 
-  it('listEditedMessages / listSummaryRecords / getGroupInfo / getPaymentStatus：可选与必选参数的形状', () => {
+  it('listEditedMessages / listSummaryRecords / getGroupInfo / getPaymentStatus：可选与必选参数的形状', async () => {
     const gw = gateway(fullTree())
     expect(gw.listEditedMessages()).toEqual({ items: [], total: 0 })
     expect(gw.listEditedMessages({ sessionId: 'wxid_a' })).toEqual({ items: [], total: 0 })
@@ -583,51 +588,32 @@ describe('参数搬运：分页与归一化（不给 options vs 给 options 成�
     expect(gw.getGroupInfo({ username: '不存在@chatroom' })).toEqual({ group: null })
     const group = gw.getGroupInfo({ username: 'room1@chatroom' })
     expect(group.group?.name, '群名读不到 ⇒ contact.db 那条转发的 username 传丢了').toBe('RoomOne')
-    expect(gw.getPaymentStatus({ serverId: '9001' })).toMatchObject({
+    expect(await gw.getPaymentStatus({ serverId: '9001' })).toMatchObject({
       found: true, kind: 'transfer', serverId: '9001',
       transfer: { transferId: 'T1', beginTime: 100 },
     })
-    expect(gw.getPaymentStatus({ serverId: '不可能存在的id' })).toEqual({ found: false })
+    expect(await gw.getPaymentStatus({ serverId: '不可能存在的id' })).toEqual({ found: false })
     // 只有合并转发（local_type 49）能按 server_id 解析回来 —— 这是 query 侧的口径，
     // 壳这里要钉的是「serverId 字符串原样传下去」（数字/文本两种存法都别在壳上转成 number）。
-    expect(gw.resolveChatHistory({ serverId: '2001' })).toMatchObject({ found: true })
-    expect(gw.resolveChatHistory({ serverId: '2001' }).message?.localId).toBe(1)
-    expect(gw.resolveChatHistory({ serverId: '1003' }), '普通文本消息按 server_id 查不到（口径如此）')
+    // 2026-09-28：`queryMessageByServerId` 改 async（逐分片扫描要让出）⇒ 加 await。
+    expect(await gw.resolveChatHistory({ serverId: '2001' })).toMatchObject({ found: true })
+    expect((await gw.resolveChatHistory({ serverId: '2001' })).message?.localId).toBe(1)
+    expect(await gw.resolveChatHistory({ serverId: '1003' }), '普通文本消息按 server_id 查不到（口径如此）')
       .toMatchObject({ found: false })
-    expect(gw.resolveChatHistory({ serverId: '-1' })).toMatchObject({ found: false })
+    expect(await gw.resolveChatHistory({ serverId: '-1' })).toMatchObject({ found: false })
     expect(gw.getMomentsAuthors().reduce((a, x) => a + x.count, 0)).toBe(5)
     // 月度分布回的是**快照**（`months` + 可选 `readError`），不是裸数组：
     // 「库读不动」与「一条朋友圈都没有」从此是两件事（P1-1/#9）。夹具的 content 里
     // 没有 create_time ⇒ 月份为空，但「读得动」所以 readError 必须缺席。
-    const monthlySnap = gw.getMomentsMonthly()
+    // 2026-09-28：`getMomentsMonthly` 改 async（`SnsTimeLine` 游标要逐行 `parseSnsXml`，
+    // 实测冷跑 165ms 且一次不让出）⇒ 壳的断言跟着 await。
+    const monthlySnap = await gw.getMomentsMonthly()
     expect(Array.isArray(monthlySnap.months)).toBe(true)
     expect(monthlySnap.readError, `夹具里的 sns.db 是好的，不该报 readError：${String(monthlySnap.readError)}`).toBeUndefined()
   })
 })
 
 describe('写类壳的默认值与操作日志（同一层里唯一会落盘的那几条）', () => {
-  it('setCdnImageEnabled / setCdnImageLocalDecrypt：键名写进 config.json，日志给的是人话', () => {
-    const t = makeTree('cdn')
-    const gw = gateway(t)
-    expect(gw.setCdnImageEnabled({ enabled: false })).toEqual({ ok: true })
-    expect(gw.setCdnImageLocalDecrypt({ localDecrypt: false })).toEqual({ ok: true })
-    const cfg = getConfig(t.decrypted)
-    // 断言的是**落盘的键名**：写成别的键就永远读不回来，界面表现是「开关拨了不生效」。
-    expect(cfg['cdn_enabled']).toBe(false)
-    expect(cfg['cdn_local_decrypt']).toBe(false)
-    expect(gw.setCdnImageEnabled({ enabled: true }).ok).toBe(true)
-    expect(getConfig(t.decrypted)['cdn_enabled']).toBe(true)
-    const rows = listOperations(t.decrypted).items
-    expect(rows.map((r) => r.action)).toContain('set_cdn_image_enabled')
-    const local = rows.filter((r) => r.action === 'set_cdn_image_local_decrypt')
-    expect(local.length).toBe(1)
-    expect(local[0]?.status).toBe('ok')
-    expect(local[0]?.detail).toBe('服务端解密')
-    // 日志按 id DESC 回来：两次的理由都要在（拨上去是「开启」、拨下来是「关闭」，不是恒真的一句）。
-    expect(new Set(rows.filter((r) => r.action === 'set_cdn_image_enabled').map((r) => r.detail)))
-      .toEqual(new Set(['关闭', '开启']))
-  })
-
   it('deleteAskHistory：ids 不是数组时按空集处理（Array.isArray 那道闸），并留下 skip 行', () => {
     const t = makeTree('askhistory')
     const gw = gateway(t)
@@ -670,13 +656,14 @@ describe('写类壳的默认值与操作日志（同一层里唯一会落盘的�
     expect({ category: row?.category, status: row?.status }).toEqual({ category: 'settings', status: 'ok' })
   })
 
-  it('clearSessionDraft / clearAllSessionDrafts：更新数与「已清除 N 条草稿」的日志同口径', () => {
+  it('clearSessionDraft / clearAllSessionDrafts：更新数与「已清除 N 条草稿」的日志同口径', async () => {
     const t = fullTree()
     const gw = gateway(t)
-    expect(gw.getSessions({ keyword: 'wxid_a' }).sessions[0]?.draft).toBe('一条草稿')
+    // 2026-09-28：`getSessions` 改 async ⇒ 这两处读草稿的断言跟着 await。
+    expect((await gw.getSessions({ keyword: 'wxid_a' })).sessions[0]?.draft).toBe('一条草稿')
     const r = gw.clearSessionDraft({ username: 'wxid_a' })
     expect({ ok: r.ok, updated: r.updated }).toEqual({ ok: true, updated: 1 })
-    expect(gw.getSessions({ keyword: 'wxid_a' }).sessions[0]?.draft).toBe('')
+    expect((await gw.getSessions({ keyword: 'wxid_a' })).sessions[0]?.draft).toBe('')
     expect(gw.clearSessionDraft({ username: '根本没有这个会话' })).toMatchObject({ ok: true, updated: 0 })
     expect(gw.clearAllSessionDrafts()).toMatchObject({ ok: true, count: 0 })
     const rows = listOperations(t.decrypted).items.filter((x) => x.action === 'clear_session_draft')
@@ -754,7 +741,7 @@ describe('写类壳的默认值与操作日志（同一层里唯一会落盘的�
 })
 
 describe('只读契约', () => {
-  it('跑完整条只读面之后，解密树一字不动；数据根里只有操作日志被允许写', () => {
+  it('跑完整条只读面之后，解密树一字不动；数据根里只有操作日志被允许写', async () => {
     const t = fullTree()
     const gw = gateway(t)
     const probes = readProbes(gw)
@@ -762,7 +749,11 @@ describe('只读契约', () => {
     const thrown: string[] = []
     for (const p of probes) {
       try {
-        expect(p.call(), p.name + ' 返回 undefined').toBeDefined()
+        // 2026-09-28：`await` 是**必须**的。读面里有几个壳改成了 async
+        // （年报那几条要让出），不 await 的话它们的 `this.op(...)` 还没执行，
+        // 下面那条"操作日志里应当恰好有 annual_review / generate_annual_report"
+        // 就会看到空表而误报（本用例实测就是这么红的：expected [] to deeply equal [...]）。
+        expect(await p.call(), p.name + ' 返回 undefined').toBeDefined()
       } catch (e) {
         thrown.push(`${p.name}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -847,10 +838,15 @@ describe('只读契约', () => {
     expect(gw.clearSessionDraft({ username: 'wxid_a' })).toEqual({ ok: false, updated: 0, error: '解密 session.db 不存在' })
     // 会话/通讯录/收藏那条路径是**直接开库**：库不存在时 node:sqlite 抛错。壳没兜，所以渲染层
     // 会拿到异常 —— 这正是本用例要钉住的现状：抛的必须是「打不开库文件」，不能是 undefined。
+    //
+    // 2026-09-28：`getSessions` 改成 async 之后，这三条里它有**两种**失败形态 ——
+    // 同步调用时抛错不再发生，而是返回一个**rejected promise**。`try { gw.getSessions() }`
+    // 抓不到它（await 才会），于是本用例会误报"静默返回了"。所以这里同时收「同步抛出」
+    // 与「异步拒绝」，判据仍是**一个都不许静默返回 undefined**。
     const openFail: string[] = []
     for (const name of ['getSessions', 'getContacts', 'getFavorites'] as const) {
       try {
-        void (gw as unknown as Record<string, () => unknown>)[name]?.()
+        await (gw as unknown as Record<string, () => unknown>)[name]?.()
       } catch (e) {
         openFail.push(name + ' => ' + (e instanceof Error ? e.message : String(e)))
       }

@@ -8,6 +8,8 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './titlebar.css'
+// 全局隐藏滚动条（各界面一视同仁；滚动行为不受影响，理由见该文件头部注释）
+import './scrollbars.css'
 import { setDirectoryPicker, setWechatRemote } from '../ui-wechat/src/client/pages/wechat-data/api.ts'
 import { WechatDataPanel } from '../ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx'
 import { getOpen, openWechat, subscribeOpen } from '../ui-wechat/src/client/wechat-state.ts'
@@ -77,20 +79,36 @@ function initTitlebar(): void {
 initTitlebar()
 
 /**
- * 验收测试模式的醒目横幅。
+ * 自动化窗口的横幅（2026-09-29 改写：把"自动化"与"mock 模型"分开说）。
  *
- * 验收脚本用本地 mock LLM 替换真模型，回答是固定文本（内容与真实数据无关）。
- * 这曾两次被误认成「应用在编造答案」，所以在窗口顶部挂一条红条，一眼可辨。
+ * ## 为什么改
+ *
+ * 原文字是「⚠ 验收测试模式：本窗口的回答来自本地 mock 模型，不是真实数据」。但
+ * `SUPERTIME_TEST_MODE=1` **只表示"这个窗口是自动化脚本起的"** —— 只有 `npm run ui:accept`
+ * 才会真的把 `llm.json` 指向本地 mock（并同时设 `SUPERTIME_LLM_MOCK=1`）。
+ * 主题审计 / 面板审计 / 性能测量这些真机脚本**从不装 mock**，用的还是**真实数据根 + 真实配置**。
+ * 原文字让实机截图里的人以为"整份验收都在用假数据"（用户 2026-09-29 就是这么报障的）。
+ *
+ * 现在横幅分两句：**永远先说是自动化窗口 + 数据根是哪一份**；只有真装了 mock 才补一句
+ * 「回答来自本地 mock 模型」。这样"这次验收用没用真实数据"一眼可查。
  */
 void (async (): Promise<void> => {
   try {
     const api = (window as any).electronAPI
-    const isTest = await api?.isTestMode?.()
+    const mode = await (api?.runMode?.() ?? api?.isTestMode?.())
+    // 兼容两种形状：新接口给对象，老接口给布尔。
+    const isTest = typeof mode === 'object' && mode !== null ? mode.test === true : mode === true
     if (!isTest) return
     if (document.getElementById('test-mode-banner')) return
+    const llmMock = typeof mode === 'object' && mode !== null ? mode.llmMock === true : false
+    const dataRoot = typeof mode === 'object' && mode !== null ? String(mode.dataRoot ?? '') : ''
+    const where = dataRoot !== '' ? `数据根：${dataRoot}` : '数据根：未记录'
+    const llm = llmMock
+      ? '回答来自**本地 mock 模型**（内容与真实数据无关）'
+      : '使用真实配置（含 llm.json），答案来自你配置的模型'
     const bar = document.createElement('div')
     bar.id = 'test-mode-banner'
-    bar.textContent = '⚠ 验收测试模式：本窗口的回答来自本地 mock 模型，不是真实数据'
+    bar.textContent = `⚠ 自动化验收窗口（SUPERTIME_TEST_MODE=1）· ${where} · ${llm}`
     bar.setAttribute(
       'style',
       'flex:0 0 auto;padding:6px 12px;background:#b91c1c;color:#fff;'
@@ -283,12 +301,16 @@ function WechatApp(): React.JSX.Element {
     return () => window.removeEventListener('super-time:show-onboarding', onShow)
   }, [])
 
-  // 闸门事实还没到 → 不渲染任何一屏（否则会先闪一下启动页/同意屏再跳走）
+  // 闸门事实还没到 → 不渲染任何一屏（否则会先闪一下启动页/同意屏再跳走）。
+  // 背景与文字用 CSS 变量：`--nm-*` 由 `:root.theme-light` 翻转，而 `theme.ts`
+  // 在模块加载时就已把 class 写到 <html> 上（见 theme.ts:120-133），所以这一屏
+  // 不需要自己判断主题 —— 之前写死 `#050a18 / #00f0ff`，浅色主题下这里是一块黑屏。
   if (!licReady || gates === null) {
     return (
       <div style={{
         height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#050a18', color: '#00f0ff', fontFamily: 'sans-serif', fontSize: 13,
+        background: 'var(--nm-bg-0, #050a18)', color: 'var(--nm-cyan, #00f0ff)',
+        fontFamily: 'var(--nm-font-sans, sans-serif)', fontSize: 13,
       }}>
         正在校验授权…
       </div>

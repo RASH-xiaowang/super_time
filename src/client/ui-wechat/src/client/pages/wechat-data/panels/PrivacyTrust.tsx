@@ -3,9 +3,10 @@
  * 高风险联系人/群）。审计开关与打码自动化为后续项。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { apiClearPrivacyAudit, apiGetPrivacyAuditRows, apiGetPrivacyState, apiSetPrivacyState, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiClearPrivacyAudit, apiGetPrivacyAuditRows, apiGetPrivacyState, apiSetPrivacyState, readRenderCache } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { PrivacyAuditRow, PrivacySnapshot, PrivacyStateSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, PanelHeader } from '../ui/kit.tsx'
+import { Button, Card, ErrorState, LoadingState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './privacy-trust.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
@@ -61,48 +62,33 @@ const AVATAR_NOTE = '头像图片是唯一例外：本地未缓存时（实测�
  */
 export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   const [scan, setScan] = useState<PrivacySnapshot | null>(() => readRenderCache<PrivacySnapshot>('privacy-scan'))
-  const [state, setState] = useState<PrivacyStateSnapshot | null>(() => readRenderCache<PrivacyStateSnapshot>('privacy-state'))
-  const [rows, setRows] = useState<readonly PrivacyAuditRow[]>(() => readRenderCache<readonly PrivacyAuditRow[]>('privacy-audit-rows') ?? [])
+  /* 2026-10-03 推广：state / rows 改用共用 useFreshData —— 打开即查最新（不再预填缓存）；
+     查询失败才回退缓存并由 hook 标注「以下为本地缓存（可能不是最新）」。
+     三处本地写（切换开关 / 清空审计）改用 hook 的 `override` 写入 —— data 由 hook 拥有。
+     ⚠️ `scan` **刻意保持缓存读**：源码说明「扫描是重活，结果沿用渲染缓存，
+     要最新去『隐私体检』页手动扫」——挂上取数 hook 会让打开本页触发全库敏感扫描。 */
+  const fetchState = useCallback(() => apiGetPrivacyState(), [])
+  const { data: state, reload: reloadState, override: overrideState } = useFreshData<PrivacyStateSnapshot>('privacy-state', fetchState)
+  const fetchRows = useCallback(() => apiGetPrivacyAuditRows().catch((): never[] => []), [])
+  const { data: rowsData, reload: reloadRows, override: overrideRows } = useFreshData<readonly PrivacyAuditRow[]>('privacy-audit-rows', fetchRows)
+  /** 原 state 形态就是数组（`?? []`）⇒ 保持一致，避免调用点到处判空。 */
+  const rows = rowsData ?? []
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  /** 合并重查（既有调用点原样可用）。 */
   const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    try {
-      const cachedScan = readRenderCache<PrivacySnapshot>('privacy-scan')
-      const cachedState = readRenderCache<PrivacyStateSnapshot>('privacy-state')
-      const cachedRows = readRenderCache<readonly PrivacyAuditRow[]>('privacy-audit-rows')
-      if (cachedScan) setScan(cachedScan)
-      if (cachedState) setState(cachedState)
-      if (cachedRows) setRows(cachedRows)
-      // 全库敏感信息扫描较重：本页只读取设置与审计记录，扫描结果沿用渲染缓存；
-      // 需要最新结果时前往「隐私体检」页点击扫描。
-      const [st, rws] = await Promise.all([
-        apiGetPrivacyState(),
-        apiGetPrivacyAuditRows().catch((): never[] => []),
-      ])
-      setState(st)
-      setRows(rws)
-      writeRenderCache('privacy-state', st)
-      writeRenderCache('privacy-audit-rows', rws)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+    await Promise.all([reloadState(), reloadRows()])
+  }, [reloadState, reloadRows])
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
   useWechatDataUpdated(() => { if (!state) void load() })
 
-  const toggle = useCallback(async (key: 'redactSensitive' | 'blockOutbound' | 'blockMapTiles', value: boolean): Promise<void> => {
+  const toggle = useCallback(async (key: 'redactSensitive', value: boolean): Promise<void> => {
     try {
-      setState(await apiSetPrivacyState({ [key]: value }))
+      overrideState(await apiSetPrivacyState({ [key]: value }))
     } catch (e) {
       setError((e as Error).message)
     }
@@ -123,8 +109,8 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
   const clearAudit = useCallback(async (): Promise<void> => {
     try {
       await apiClearPrivacyAudit()
-      setRows([])
-      setState(await apiGetPrivacyState())
+      overrideRows([])
+      overrideState(await apiGetPrivacyState())
     } catch (e) {
       setError((e as Error).message)
     }
@@ -145,21 +131,9 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
             <button type="button" className={css.toggle} data-active={state.redactSensitive} onClick={() => { void toggle('redactSensitive', !state.redactSensitive) }}>
               敏感字段打码（手机号/身份证/银行卡/邮箱/口令） · {state.redactSensitive ? '开' : '关'}
             </button>
-            <button type="button" className={css.toggle} data-active={state.blockOutbound} onClick={() => { void toggle('blockOutbound', !state.blockOutbound) }}>
-              禁止 AI 出网（问答 / 每日总结 / 周期总结 / 群总结任务 一律不调用模型，语音模型下载也不再发起） · {state.blockOutbound ? '开' : '关'}
-            </button>
-            {/*
-              地图底图是**渲染层直连**（jsDelivr / unpkg / 阿里 DataV 拉 GeoJSON），
-              走后端闸门管不到它，所以单独一个开关；关闭后地图退化成离线 SVG 视图，
-              功能不减（这是它敢默认开着的原因）。拉取点只有一处：
-              `panels/world-map-data.ts#fetchFirstJson`。
-            */}
-            <button type="button" className={css.toggle} data-active={state.blockMapTiles} onClick={() => { void toggle('blockMapTiles', !state.blockMapTiles) }}>
-              禁止地图底图出网（世界/中国地图不从 CDN 拉 GeoJSON —— 世界地图将只显示省份/城市榜单，不画底图） · {state.blockMapTiles ? '开' : '关'}
-            </button>
           </div>
         ) : (
-          <div className={kitCss.emptyInline}>设置加载中…</div>
+          <LoadingState variant="compact" label="设置加载中…" />
         )}
       </Card>
 
@@ -184,7 +158,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
 
       <Card title="AI 出站审计" extra={<span className={kitCss.textCaption}>每次放行的功能、次数与字符数</span>}>
         {!state ? (
-          <div className={kitCss.emptyInline}>设置加载中…</div>
+          <LoadingState variant="compact" label="设置加载中…" />
         ) : (
           <div className={css.audit}>
             <div className={css.auditRow}>
@@ -208,43 +182,23 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
         </div>
       </Card>
 
+      {/* 2026-09-30 精简：这一块原来把「隐私体检」的**完整结果**（分类明细 + 高风险联系人芯片）
+          又抄了一遍，而侧栏「隐私体检」页本来就展示同一份数据。现在只留一行摘要，
+          详情回那一页看 —— 这正是「内容重复」在这次精简里被砍掉的第一处。 */}
       <Card title="隐私体检（敏感信息扫描）">
-        {loading && !scan && <div className={kitCss.emptyInline}>扫描结果加载中…</div>}
-        {!loading && !scan && !error && <div className={kitCss.emptyInline}>最新扫描结果请前往「隐私体检」页点击扫描后展示</div>}
-        {error && <div className={css.error}>{error}</div>}
+        {loading && !scan && <LoadingState variant="compact" label="扫描结果加载中…" />}
+        {!loading && !scan && !error && <div className={kitCss.emptyInline}>尚无扫描结果 —— 侧栏「隐私体检」页点一次扫描即可</div>}
+        {error && <ErrorState message={error} />}
         {scan && (
-          <>
-            <div className={css.scanSummary}>
-              {/* 此处原写作 css.stat，但 privacy-trust.module.css 从未定义 .stat
-                  （undefined 的 className 等于没有类）。样式实际由 .scanSummary
-                  与 .scanSummary b 提供，故去掉这个无效引用即可，行为不变。 */}
-              <span><b>{scan.total_hits}</b> 命中</span>
-              <span><b>{scan.involved_sessions}</b> 会话</span>
-            </div>
-            <div className={css.catList}>
-              {scan.categories.map(c => (
-                <div key={c.key} className={css.catRow}>
-                  <span className={css.catIcon}>{c.icon}</span>
-                  <span className={css.catLabel}>{c.label}</span>
-                  <span className={css.catCount}>{c.count}</span>
-                </div>
-              ))}
-            </div>
-            {scan.top_contacts.length > 0 && (
-              <div className={css.risk}>
-                <div className={css.riskTitle}>高风险联系人</div>
-                <div className={css.chipGrid}>
-                  {scan.top_contacts.slice(0, 8).map(t => (
-                    <span key={t.username} className={css.riskChip}>{t.name} · {t.count}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+          <div className={css.scanSummary}>
+            <span><b>{scan.total_hits}</b> 命中</span>
+            <span><b>{scan.involved_sessions}</b> 会话</span>
+            <span className={kitCss.textCaption}>分类明细与高风险联系人见侧栏「隐私体检」</span>
+          </div>
         )}
       </Card>
 
-      <p className={css.footnote}>说明：敏感字段打码、禁止出网与 AI 调用审计均为本机即时生效；本地模型优先切换为后续项。审计记录的是**被放行去出站**的调用次数与字符数（含随后因密钥/网络被模型方拒绝的），被「禁止出网」拦下的调用不计入。</p>
+      <p className={css.footnote}>说明：敏感字段打码与 AI 调用审计均为本机即时生效；本地模型优先切换为后续项。应用内已没有任何出网开关（2026-09-30 起全部移除）。审计记录的是**被放行去出站**的调用次数与字符数（含随后因密钥/网络被模型方拒绝的）。</p>
     </div>
   )
 }

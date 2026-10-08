@@ -28,8 +28,8 @@ export interface MomentItem {
   time: string
   media_count: number
   media_desc: string
-  images: Array<{ thumb: string; url: string; key: string; md5: string; id?: string; timelineId?: string }>
-  videos: Array<{ url: string; thumb: string; key: string; md5: string; duration: number; id?: string; timelineId?: string }>
+  images: Array<{ thumb: string; url: string; key: string; md5: string; token?: string; id?: string; timelineId?: string }>
+  videos: Array<{ url: string; thumb: string; key: string; md5: string; token?: string; duration: number; id?: string; timelineId?: string }>
   location: string
   /** 位置的城市名（`<location city="南宁市">`）。 */
   city?: string
@@ -90,6 +90,8 @@ export interface FavorItem {
 
 /** One resource file entry. */
 export interface FileItem {
+  /** 媒体标签上的 `token`：CDN 取图必需（实测 `token+idx=1` 才 200）。 */
+  token?: string
   md5: string
   fileName: string
   fileSize: number

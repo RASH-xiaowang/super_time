@@ -14,6 +14,7 @@
  * `chats-member-view.ts#hasMoreMembers`。
  */
 import kitCss from '../ui/kit.module.css'
+import { ErrorState, LoadingState } from '../ui/kit.tsx'
 import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { LazyMount } from './hooks.tsx'
@@ -75,8 +76,8 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
         <button type="button" className={csscards.groupInfoClose} title="关闭" aria-label="关闭" onClick={() => { setGroupInfoOpen(false); setProfileMember(null) }}><IconCloseOutline16 size={15} /></button>
       </div>
       <div className={cssshell.groupInfoBody}>
-        {groupInfoLoading && <div className={kitCss.emptyInline}>加载中…</div>}
-        {groupInfoErr && <div className={kitCss.emptyInline}>{groupInfoErr}</div>}
+        {groupInfoLoading && <LoadingState variant="compact" label="加载中…" />}
+        {groupInfoErr && <ErrorState message={groupInfoErr} />}
         {/* 报错时**不画**成员网格：`groupInfo` 是上一次成功打开那个群的快照，
             把它留在错误下面，等于在 B 群的抽屉里显示 A 群的人（与消息流「归属不符只给骨架」同一条规矩）。 */}
         {!groupInfoLoading && !groupInfoErr && groupInfo && (

@@ -35,9 +35,10 @@
 
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { collectImageDatFiles, groupImageDatsByMd5 } from './decrypt-images.ts'
+import { collectImageDatFiles, collectImageDatFilesAsync, groupImageDatsByMd5 } from './decrypt-images.ts'
 import { decodeDatBytes } from './media-image.ts'
 import { REMOTE_IMAGE_CACHE_DIRNAME } from './remote-image.ts'
+import { yieldToLoop } from './search-build.ts'
 import { MD5_SEGMENT } from '../md5.ts'
 
 /** 可渲染的缓存扩展名（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合，外加 `.hevc` 占位）。 */
@@ -102,8 +103,52 @@ function scanCachedImages(decodedDir: string): Map<string, CachedEntry> {
   return out
 }
 
-/** 升级结果（类型在 `types-config.ts` 里再导出给 Remote 客户端）。 */
-export interface ImageUpgradeResult {
+/**
+ * {@link scanCachedImages} 的**可让出版**：每扫完一个子目录让出一次事件循环。
+ *
+ * 与同步版共用同一套判定（`CACHE_FILE_RE` + `add` 的语义逐条照搬），只把"扫子目录"的循环
+ * 变成会让出。为什么要单独写而不是把同步版改成 async：同步版还被别处调用，
+ * 那些路径（如逐条读图时的单槽位查询）不需要让出，改了会平白引入 await。
+ * @param decodedDir - 解码缓存根（`data/wechat/decoded_images`）。
+ * @param everyDirs - 每扫多少个目录让出一次（默认 40）。
+ * @returns md5 → 目录列表与现存最大字节数。
+ */
+async function scanCachedImagesAsync(decodedDir: string, everyDirs = 40): Promise<Map<string, CachedEntry>> {
+  const out = new Map<string, CachedEntry>()
+  const add = (dir: string, name: string): void => {
+    const m = CACHE_FILE_RE.exec(name)
+    if (m === null) return
+    const md5 = (m[1] ?? '').toLowerCase()
+    let e = out.get(md5)
+    if (e === undefined) { e = { dirs: [], bestBytes: 0 }; out.set(md5, e) }
+    if (!e.dirs.includes(dir)) e.dirs.push(dir)
+    if ((m[3] ?? '').toLowerCase() === 'hevc') return
+    try {
+      const size = statSync(join(dir, name)).size
+      if (size > e.bestBytes) e.bestBytes = size
+    } catch { /* 读不到大小就当 0：它不构成升级门槛 */ }
+  }
+  let rootEntries: Array<{ name: string; isDir: boolean }> = []
+  try {
+    rootEntries = readdirSync(decodedDir, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory() }))
+  } catch { return out }
+  const subDirs: string[] = []
+  for (const e of rootEntries) {
+    if (!e.isDir) { add(decodedDir, e.name); continue }
+    if (e.name === REMOTE_IMAGE_CACHE_DIRNAME) continue
+    subDirs.push(join(decodedDir, e.name))
+  }
+  let n = 0
+  for (const dir of subDirs) {
+    let files: string[] = []
+    try { files = readdirSync(dir, { withFileTypes: true }).filter(f => !f.isDirectory()).map(f => f.name) } catch { continue }
+    for (const name of files) add(dir, name)
+    if (++n % everyDirs === 0) await yieldToLoop()
+  }
+  return out
+}
+
+/** 升级结果（类型在 `types-config.ts` 里再导出给 Remote 客户端）。 */export interface ImageUpgradeResult {
   /** 检查过的缓存条目数（按 md5 去重）。 */
   total: number
   /** 真的被换成更大一份的 md5 数。 */
@@ -142,8 +187,13 @@ export async function upgradeDecodedImageCache(
   xorKey: number,
   onProgress?: (processed: number, total: number, failed: number, message: string) => void,
 ): Promise<ImageUpgradeResult> {
-  const cached = scanCachedImages(decodedDir)
-  const groups = groupImageDatsByMd5(collectImageDatFiles(rawRoot))
+  // 两处目录遍历都改成**可让出**的：本机实测这个接口整段独占事件循环 **186ms 且一次不让出**
+  // （`probe-remote.ts` 的"让出 0 且冷跑 >50ms"清单）。它内部是两棵同步 BFS
+  // （`scanCachedImages` 读 decoded 缓存、`collectImageDatFiles` 读 attach 树），
+  // 量大时正是第 12 轮在 `scanV2Templates` 上遇到过的同一类问题。
+  // 串行 worker 上 186ms 意味着这期间**别人的请求全部排队**。
+  const cached = await scanCachedImagesAsync(decodedDir)
+  const groups = groupImageDatsByMd5(await collectImageDatFilesAsync(rawRoot))
   const aes = aesKey && aesKey.trim().length > 0 ? aesKey.trim() : null
   const total = cached.size
 

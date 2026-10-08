@@ -92,7 +92,7 @@
   white-space: nowrap;
 }
 .navBrandSub {
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-3);
   line-height: 1.2;
   white-space: nowrap;
@@ -160,7 +160,7 @@
 /* 通用小徽标（其它面板在用，非顶栏专属） */
 .badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   color: var(--nm-cyan);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
@@ -415,7 +415,7 @@
   gap: 2px;
 }
 .navGroupLabel {
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.14em;
   color: var(--nm-text-2);

@@ -14,8 +14,6 @@ import type { Context } from '@deepseek-ai/cordis'
 export interface createVoiceLlmRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  /** 出网闸门（`blockOutbound`）—— 语音模型要从 HuggingFace 镜像下**文件**，属出网。 */
-  privacyBlocked: (feature: string, detail?: string) => string | null
   ctx: () => Context
   getWhisperDownload: () => WhisperDownloadProgress | null
   setWhisperDownload: (v: WhisperDownloadProgress | null) => void
@@ -61,14 +59,6 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
     },
 
     async installWhisperEngine(): Promise<WhisperDownloadResult> {
-      // 引擎 zip 与语音模型是同一件事的两半：都从 GitHub / HF 下**文件**，都不把聊天内容发出去。
-      // 2026-09-26 之前只有模型那一半过闸（下面 `downloadWhisperModel`），引擎这一半漏了 ——
-      // 「禁止 AI 出网」开着也能让 GitHub 收到一次请求，正是 PRIVACY.md 承诺的反面。
-      const blocked = rc.privacyBlocked('whisper_engine_install', '从 GitHub 下载 whisper.cpp 引擎文件')
-      if (blocked !== null) {
-        rc.op('settings', 'install_whisper_engine', 'fail', '', blocked)
-        return { ok: false, error: blocked }
-      }
       if (rc.getWhisperDownload() !== null) { rc.op('settings', 'install_whisper_engine', 'fail', '', '已有下载任务进行中'); return { ok: false, error: '已有下载任务进行中' } }
       const cfg = getConfig(rc.dirs().decrypted)
       const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)
@@ -92,13 +82,6 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
     },
 
     async downloadWhisperModel(options: { model: string }): Promise<WhisperDownloadResult> {
-      // 下的是模型**文件**（不把聊天内容交给模型），但仍是出网 ⇒ 与 AI 调用同一个总闸。
-      // PRIVACY.md 曾写「F 靠不点避免」—— 从 2026-09-26 起那句话不成立：开关真的管到它了。
-      const blocked = rc.privacyBlocked('voice_model_download', '下载语音识别模型文件')
-      if (blocked !== null) {
-        rc.op('settings', 'download_whisper_model', 'fail', options.model, blocked)
-        return { ok: false, error: blocked }
-      }
       if (rc.getWhisperDownload() !== null) { rc.op('settings', 'download_whisper_model', 'fail', options.model, '已有模型下载任务进行中'); return { ok: false, error: '已有模型下载任务进行中' } }
       const cfg = getConfig(rc.dirs().decrypted)
       const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)

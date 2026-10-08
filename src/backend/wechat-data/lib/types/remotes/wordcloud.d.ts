@@ -12,5 +12,5 @@ export interface createWordcloudRemotesInputs {
     };
 }
 export declare function createWordcloudRemotes(rc: createWordcloudRemotesInputs): {
-    getWordCloud(options?: WordCloudOptions): WordCloudResult;
+    getWordCloud(options?: WordCloudOptions): Promise<WordCloudResult>;
 };

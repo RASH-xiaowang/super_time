@@ -42,7 +42,7 @@
 .chatlogTop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .chatlogName { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
 .chatlogTime {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   flex-shrink: 0;
   font-family: var(--nm-font-mono, monospace);
@@ -58,7 +58,7 @@
 .searchHitTop { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .searchHitName { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .searchHitTime {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   flex-shrink: 0;
   font-family: var(--nm-font-mono, monospace);

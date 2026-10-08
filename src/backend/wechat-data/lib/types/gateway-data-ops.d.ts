@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, OriginalBatchResult, OriginalFetchPlan, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
+import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, OriginalBatchResult, OriginalFetchPlan, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
 import type { ImageBatchItem } from './remotes/media.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
 import { createLayaRemotes } from './remotes/laya.ts';
@@ -156,7 +156,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * Create a local backup snapshot.
      * @returns BackupMutationResult: ok + backup name, or error.
      */
-    createBackup(): BackupMutationResult;
+    createBackup(): Promise<BackupMutationResult>;
     /**
      * Delete one backup by name.
      * @param options - name of the backup to delete.
@@ -199,7 +199,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         format: string;
         dir?: string;
         filename?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     /**
      * Export ALL sessions as a single txt ZIP archive (账号归档).
      * @param options - optional dir/filename（+ 可选的 jobId：订阅 `wechat-export/progress` 进度并允许取消）.
@@ -393,7 +393,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         ok: boolean;
         path: string;
     }>;
-    verifyImageKey(): VerifyImageKeyResult;
+    verifyImageKey(): Promise<VerifyImageKeyResult>;
     /**
      * Full SQLCipher decryption: every .db under db_storage is re-decrypted
      * into the decrypted snapshot (逐库原子发布,单库失败不中断)。实时进度
@@ -492,7 +492,13 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         md5: string;
         timelineId?: string;
         mediaId?: string;
-    }): ImageDataUrlResult;
+        /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路（见 `sns-cdn-image.ts`）。 */
+        url?: string;
+        /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
+        token?: string;
+        /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
+        seed?: string;
+    }): Promise<ImageDataUrlResult>;
     /**
      * Resolve a file-library image (hardlink md5) to an offline base64 data URL.
      * 优先读已解密缓存，否则通过 hardlink.db 定位 .dat 原图解密。
@@ -514,6 +520,21 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         md5: string;
         emojiUrl?: string;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 批量取表情（E1，2026-09-28 性能修复）。
+     *
+     * 现场日志里 `getEmoticonDataUrl` 均 27.2s、峰值 71.9s。这个批量壳把一屏的表情收成
+     * 一个 RPC；后端先做一趟纯本地解码，再对剩下的按 {@link EMOTICON_FETCH_CONCURRENCY}
+     * 并发出网 —— 于是「N 条表情 = N 次网络往返」变成「1 次 RPC + ceil(N/8) 批」。
+     * @param options - `items` 为一屏待取的表情（自动去重、忽略空 md5）。
+     * @returns 逐条结果（键 = md5），顺序与去重后的入参一致。
+     */
+    getEmoticonDataUrls(options: {
+        items: Array<{
+            md5: string;
+            emojiUrl?: string;
+        }>;
+    }): Promise<EmoticonDataUrlsResult>;
     /**
      * 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。
      *
@@ -547,12 +568,12 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * 与批量执行共用同一次扫描（`scanImageOriginalPlan`），所以两份数字对得上。
      * @returns OriginalFetchPlan：条数、可补条数、需登录条数、XML 声明的预计字节数。
      */
-    planOriginalFetch(): OriginalFetchPlan;
+    planOriginalFetch(): Promise<OriginalFetchPlan>;
     /**
      * 批量取回原图（免登录直链）：全库那 16.6% 一次取完，**可续跑**（`<decoded>/.originals-index.json`）。
      *
-     * 三条一致：隐私总闸在最前；「自动获取原图（CDN）」关掉时一条请求都不发（回 `blocked`）；
-     * 逐条失败不中断整批。**明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% ——
+     * 边界：已有解密类任务在跑时一条请求都不发（回 `blocked`）；逐条失败不中断整批。
+     * **明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% ——
      * 那要微信登录态凭据（边界见 `query/image-original.ts`），只能在微信里点开后用
      * 「升级为原图」收进来。实时进度通过 getDecryptStatus 读取（`op` = `image-original-batch`）。
      * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4，封顶 8）。
@@ -566,7 +587,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。
      *
      * 存在的原因：卡片缩略图 / 朋友圈远程图 / 视频号封面此前由**渲染层直接向消息里的地址发请求**，
-     * 那条路径不受「自动获取原图（CDN）」与「禁止出网」两个开关管、不进操作记录、也没有缓存。
+     * 那条路径不进操作记录、没有缓存、也不受主机白名单约束。
      * 收到后端之后这三件事才成立，而 CSP `img-src` 的 `https:` 通配也才可能拿掉。
      * 只代取腾讯系主机（判据见 `query/cdn-hosts.ts`）；站外图床会被拒。
      * @param options - `urls`: 图片地址列表（去重后最多取 40 张，超出的条目回错误）。
@@ -612,7 +633,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
     }): TaskMutationResult;
     extractTasks(options?: {
         days?: number;
-    }): TaskMutationResult;
+    }): Promise<TaskMutationResult>;
     getDbHealth(): DbHealthSnapshot;
     /**
      * 保留理由：读 `general.db` 的 `handoff_remind_v0`（微信自带待办提醒）。本机实测**这张表不存在**
@@ -687,8 +708,6 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
     }): BackupRestoreResult;
     setPrivacyState(options: {
         redactSensitive?: boolean;
-        blockOutbound?: boolean;
-        blockMapTiles?: boolean;
     }): PrivacyStateSnapshot;
     setTaskStatus(options: {
         id: number;

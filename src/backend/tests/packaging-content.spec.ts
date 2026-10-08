@@ -31,6 +31,10 @@ const rules = requireCjs('../../../scripts/package-content-rules.js') as {
   srcEntryViolations: (e: string[]) => Array<{ entry: string; rule: string; hint: string }>
   asarSizeViolations: (bytes: unknown) => Array<{ rule: string; detail: string }>
   collectDiskEntries: (dir: string, prefix: string) => string[]
+  FORBIDDEN_IN_DEPS: Array<{ name: string; why: string }>
+  REQUIRED_IN_DEPS: Array<{ name: string; why: string }>
+  productionDepClosure: (rootDir: string, rootPkg: unknown) => { names: Set<string>; missing: string[] }
+  depClosureViolations: (names: Set<string>) => Array<{ rule: string; name: string; hint: string }>
 }
 
 const repoRoot = resolve(import.meta.dirname ?? __dirname, '..', '..', '..')
@@ -141,6 +145,63 @@ describe('打包内容规则（N22）', () => {
     // 注释不算：要求是**调用**形式（名字后紧跟左括号），注释掉调用点会让这两条转红。
     for (const fn of ['srcEntryViolations(', 'asarSizeViolations(', 'collectDiskEntries(']) {
       expect(src.includes(fn), `packaged-smoke.js 里没有调用 ${fn}`).toBe(true)
+    }
+  })
+})
+
+
+describe('生产依赖闭包（审计 §P2-6 ⑰ 的 TODO ②：不需要先打包的闸门）', () => {
+  // 背景：electron-builder 会把**生产依赖树**自动带进包 —— `files` 白名单管得住 `src/**`，
+  // 管不住「某个依赖顺路带进来一个 135 MB 的兄弟包」。实测 asar 曾涨到 196.65 MB，其中
+  // `onnxruntime-web/dist` 135.15 MB 与 `@img/sharp-win32-x64` 18.50 MB 都是
+  // `@huggingface/transformers` 的传递依赖，而**没有一条正向规则列出过它们**。
+  // 原来的体积断言只在本地存在 `dist/win-unpacked/.../app.asar` 时才跑 ⇒ 长年不执行。
+  const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as unknown
+
+  it('仓库现状：禁用包一个都没有，必需包一个都不缺', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    // 防空转：前缀/解析写错会让闭包只剩几个包，那样下面两条断言都恒真。
+    expect(names.size, '闭包太小 ⇒ 扫描没生效').toBeGreaterThan(30)
+    expect(rules.depClosureViolations(names)).toEqual([])
+  })
+
+  it('反例自证①：闭包里出现 onnxruntime-web 必须报 dep-forbidden', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    const bad = new Set(names)
+    bad.add('onnxruntime-web')
+    const v = rules.depClosureViolations(bad)
+    expect(v.map((x) => x.name)).toContain('onnxruntime-web')
+    expect(v.find((x) => x.name === 'onnxruntime-web')?.rule).toBe('dep-forbidden')
+  })
+
+  it('反例自证②：必需包（onnxruntime-common）缺了必须报 dep-required', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    const bad = new Set(names)
+    bad.delete('onnxruntime-common')
+    const v = rules.depClosureViolations(bad)
+    expect(v.map((x) => x.name)).toContain('onnxruntime-common')
+    expect(v.some((x) => x.rule === 'dep-required')).toBe(true)
+  })
+
+  it('闭包跟着**传递依赖**走，且能吃下嵌套 node_modules（这正是抓 135MB 的机制）', () => {
+    const root = join(scratch, 'closure')
+    const mk = (rel: string, pkg: unknown) => {
+      mkdirSync(join(root, rel), { recursive: true })
+      writeFileSync(join(root, rel, 'package.json'), JSON.stringify(pkg), 'utf8')
+    }
+    mk('', { name: 'root' })
+    mk('node_modules/a', { name: 'a', dependencies: { b: '1' } })
+    // b 只存在于 a 自己的 node_modules 下（嵌套而非提升）—— 解析必须能下沉找到
+    mk('node_modules/a/node_modules/b', { name: 'b' })
+    const got = rules.productionDepClosure(root, { dependencies: { a: '1' } })
+    expect([...got.names].sort()).toEqual(['a', 'b'])
+  })
+
+  it('禁用/必需两张名单都不是空的，且每条都写明了理由（否则就是无声的名单）', () => {
+    expect(rules.FORBIDDEN_IN_DEPS.length).toBeGreaterThanOrEqual(3)
+    expect(rules.REQUIRED_IN_DEPS.length).toBeGreaterThanOrEqual(8)
+    for (const e of [...rules.FORBIDDEN_IN_DEPS, ...rules.REQUIRED_IN_DEPS]) {
+      expect(e.why.length, `${e.name} 的理由太短（形同没写）`).toBeGreaterThanOrEqual(5)
     }
   })
 })

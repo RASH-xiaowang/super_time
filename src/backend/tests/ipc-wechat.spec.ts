@@ -9,7 +9,12 @@
  * 2026-09-26（P0-2）加了 `wechat:llm-models` 的**出网行为**用例：这个频道在主进程里 fetch，
  * 还带着用户的 `Authorization: Bearer <API Key>`，而它既不经过后端的 `@Remote` 方法面、
  * 也不在 license 的 `METHOD_FEATURE` 清单里 ⇒ 「按 privacy 接缝扫描」的守卫天生看不见它。
- * 只有真的调一次 handler、并数 `fetch` 被调了几次，才量得到「开关到底管不管它」。
+ * 只有真的调一次 handler、并数 `fetch` 被调了几次，才量得到它到底发了什么。
+ *
+ * 2026-09-30：出网开关**全部移除**，这个频道不再读任何隐私闸门、也不再被拦 ——
+ * 它照常按用户填的 `base_url` 请求 `/models`。下面这批用例随之从「开关管不管它」
+ * 改成「请求本身对不对」（URL / 请求头 / 错误映射 / 内置清单回退），并留一条
+ * 「不再读隐私开关」的防回归判据。
  * @vitest-environment node
  */
 import { createRequire } from 'node:module'
@@ -24,6 +29,7 @@ const { registerWechatIpc } = require(join(HERE, '..', 'ipc-wechat.js'))
 const CHANNELS = [
   'wechat:list-methods', 'wechat:info', 'wechat:call', 'wechat:backend-state',
   'wechat:llm-get', 'wechat:llm-save', 'wechat:llm-profiles', 'wechat:llm-models',
+  'wechat:llm-test', 'wechat:llm-balance',
 ]
 
 /** 后端 `call()` 的回包（成功时是 `{ ok: true, value }`，见 wechat-host.js）。 */
@@ -56,28 +62,40 @@ function makeCtx(backend: BackendStub = null) {
   return { ctx, handled }
 }
 
-/** 假的 `getPrivacyState` 后端：只回答总闸是开还是关。 */
-function backendWithOutboundBlock(blocked: boolean): { stub: BackendStub; called: string[] } {
+/** 记账用的假后端：证明 `wechat:llm-models` 不再读任何隐私开关。 */
+function backendProbe(): { stub: BackendStub; called: string[] } {
   const called: string[] = []
   return {
     called,
     stub: {
       call: async (method: string) => {
         called.push(method)
-        return { ok: true, value: { redactSensitive: false, blockOutbound: blocked, blockMapTiles: false } }
+        return { ok: true, value: { redactSensitive: false } }
       },
     },
   }
 }
 
-/** 把 `globalThis.fetch` 换成探针；404 不在重试清单里 ⇒ 立刻返回。 */
-function fetchProbe(): { called: Array<{ url: string; auth: string }> } {
-  const called: Array<{ url: string; auth: string }> = []
+/** 把 `globalThis.fetch` 换成探针：记录 URL 与请求头，并按给定响应作答。 */
+function fetchProbe(reply: {
+  ok?: boolean
+  status?: number
+  statusText?: string
+  json?: unknown
+  text?: string
+  fail?: Error
+} = {}): { called: Array<{ url: string; headers: Record<string, string> }> } {
+  const called: Array<{ url: string; headers: Record<string, string> }> = []
   vi.stubGlobal('fetch', async (url: unknown, init: { headers?: Record<string, string> } = {}) => {
-    called.push({ url: String(url), auth: String(init?.headers?.authorization ?? '') })
+    called.push({ url: String(url), headers: init?.headers ?? {} })
+    if (reply.fail) throw reply.fail
     return {
-      ok: false, status: 404, statusText: 'Not Found',
-      headers: { get: () => null }, text: async () => '', json: async () => ({}),
+      ok: reply.ok ?? true,
+      status: reply.status ?? 200,
+      statusText: reply.statusText ?? 'OK',
+      headers: { get: () => null },
+      text: async () => reply.text ?? '',
+      json: async () => reply.json ?? { data: [{ id: 'deepseek-chat' }] },
     }
   })
   return { called }
@@ -85,7 +103,7 @@ function fetchProbe(): { called: Array<{ url: string; auth: string }> } {
 
 afterEach(() => { vi.unstubAllGlobals() })
 
-describe('ipc-wechat：8 个频道都要注册上，且 handler 体内引用的东西真的能取到', () => {
+describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西真的能取到', () => {
   it('注册全部频道且不重复', () => {
     const { ctx, handled } = makeCtx()
     registerWechatIpc(ctx)
@@ -103,7 +121,84 @@ describe('ipc-wechat：8 个频道都要注册上，且 handler 体内引用的�
   })
 })
 
-describe('wechat:llm-models 受「禁止 AI 出网」总闸管（P0-2）', () => {
+/**
+ * 「连接测试 / 余额查询」两条新频道（2026-09-30）。
+ *
+ * 为什么在这里测而不是只测 `llm-balance.js`：**包装层也有它自己的错法** ——
+ * 参数名对不上（`baseUrl` vs `apiUrl`）、错误没有包成 `{ok:false,error}`、
+ * 或者忘了 register。这些在纯函数用例里全绿。
+ */
+describe('wechat:llm-test / wechat:llm-balance：包装层与出网行为', () => {
+  const run = async (channel: string, opts: unknown) => {
+    const { ctx, handled } = makeCtx()
+    registerWechatIpc(ctx)
+    const fn = handled.get(channel)
+    expect(fn, `${channel} 没注册`).toBeTruthy()
+    return (fn as (e: unknown, o: unknown) => Promise<{ ok: boolean; value?: any; error?: { message: string } }>)({}, opts)
+  }
+
+  it('llm-test：请求 {base}/models，返回耗时与可见模型数；参数名是 baseUrl', async () => {
+    const probe = fetchProbe({ json: { data: [{ id: 'a' }, { id: 'b' }] } })
+    const r = await run('wechat:llm-test', { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    expect(probe.called.map(c => c.url)).toEqual(['https://api.deepseek.com/v1/models'])
+    expect(probe.called[0]?.headers.authorization).toBe('Bearer sk-x')
+    expect(r.ok).toBe(true)
+    expect(r.value.models).toBe(2)
+    expect(typeof r.value.ms).toBe('number')
+  })
+
+  it('llm-test：kind/path/model 要透传到端点（向量与精排是另外两套地址·路径）', async () => {
+    const calls: Array<{ url: string; method: string; body: string }> = []
+    vi.stubGlobal('fetch', async (url: unknown, init: { method?: string; body?: string } = {}) => {
+      calls.push({ url: String(url), method: init?.method ?? 'GET', body: String(init?.body ?? '') })
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({ data: [{ embedding: [1, 2] }] }), text: async () => '' }
+    })
+    const r = await run('wechat:llm-test', {
+      baseUrl: 'https://api.siliconflow.cn/v1', apiKey: 'sk-vec', kind: 'embed', path: '/embeddings', model: 'Qwen/Qwen3-Embedding',
+    })
+    expect(calls[0]?.url, 'kind/path 没透传 ⇒ 会打到 /models 上').toBe('https://api.siliconflow.cn/v1/embeddings')
+    expect(calls[0]?.method).toBe('POST')
+    expect(JSON.parse(calls[0]!.body).model).toBe('Qwen/Qwen3-Embedding')
+    expect(r.ok).toBe(true)
+    expect(r.value.detail).toBe('向量维度 2')
+  })
+
+  it('llm-test：失败也包成 {ok:false,error.message}（渲染端只认这个形状）', async () => {
+    fetchProbe({ ok: false, status: 401, statusText: 'Unauthorized' })
+    const r = await run('wechat:llm-test', { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-bad' })
+    expect(r.ok).toBe(false)
+    expect(r.error?.message).toMatch(/无效或无权限/)
+  })
+
+  it('llm-balance：DeepSeek 走 origin 的 /user/balance（**不带 /v1**）并返回归一化余额', async () => {
+    const probe = fetchProbe({ json: { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '8.80' }] } })
+    const r = await run('wechat:llm-balance', { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    expect(probe.called.map(c => c.url)).toEqual(['https://api.deepseek.com/user/balance'])
+    expect(r.ok).toBe(true)
+    expect(r.value.total).toBe(8.8)
+    expect(r.value.currency).toBe('CNY')
+  })
+
+  it('llm-balance：没有 Key 直接给出可照做的错误（不白跑一趟网络）', async () => {
+    const probe = fetchProbe({ json: {} })
+    const r = await run('wechat:llm-balance', { baseUrl: 'https://api.deepseek.com/v1', apiKey: '' })
+    expect(r.ok).toBe(false)
+    expect(r.error?.message).toMatch(/API Key/)
+    expect(probe.called.length, '没 Key 就不该发请求').toBe(0)
+  })
+
+  it('不读任何隐私开关（与 llm-models 同一口径：出网开关已于 2026-09-30 全部移除）', async () => {
+    const { stub, called } = backendProbe()
+    const { ctx, handled } = makeCtx(stub)
+    registerWechatIpc(ctx)
+    fetchProbe({ json: { data: [{ id: 'a' }], balance_infos: [{ currency: 'CNY', total_balance: '1' }] } })
+    await handled.get('wechat:llm-test')?.({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    await handled.get('wechat:llm-balance')?.({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    expect(called).not.toContain('getPrivacyState')
+  })
+})
+
+describe('wechat:llm-models：按 base_url 请求 /models（应用内已无出网开关）', () => {
   const handler = (ctx: unknown, handled: Map<string, (...a: unknown[]) => unknown>) => {
     registerWechatIpc(ctx as { ipcMain: unknown })
     const fn = handled.get('wechat:llm-models')
@@ -111,46 +206,79 @@ describe('wechat:llm-models 受「禁止 AI 出网」总闸管（P0-2）', () =>
     return fn as (e: unknown, o: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { message: string; code?: string } }>
   }
 
-  it('开关打开 ⇒ 不发请求、不把 API Key 交给远端', async () => {
-    const { stub, called } = backendWithOutboundBlock(true)
-    const { ctx, handled } = makeCtx(stub)
-    const probe = fetchProbe()
+  it('正常请求 {base_url}/models，并带上用户填的 API Key', async () => {
+    const { ctx, handled } = makeCtx()
+    const probe = fetchProbe({ json: { data: [{ id: 'deepseek-chat' }] } })
     const run = handler(ctx, handled)
-    const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-SECRET-DO-NOT-SEND' })
-    expect(called, '没去后端读过隐私开关 ⇒ 那个「闸门」是假的').toContain('getPrivacyState')
-    expect(probe.called, `开关打开仍然发了请求：${JSON.stringify(probe.called)}`).toEqual([])
+    const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1/', apiKey: 'sk-real' })
+    expect(probe.called.map(c => c.url), '请求地址不是 base_url + /models（尾斜杠应被去掉）')
+      .toEqual(['https://api.deepseek.com/v1/models'])
+    expect(probe.called[0]?.headers.authorization).toBe('Bearer sk-real')
+    expect(probe.called[0]?.headers.accept).toBe('application/json')
+    expect(r.ok).toBe(true)
+    expect(JSON.stringify(r.value)).toContain('deepseek-chat')
+    expect(JSON.stringify(r.value)).toContain('live')
+  })
+
+  it('没填 Key 时不发 Authorization 头（别把空凭据送出去）', async () => {
+    const { ctx, handled } = makeCtx()
+    const probe = fetchProbe({ json: { data: [{ id: 'qwen-plus' }] } })
+    const run = handler(ctx, handled)
+    const r = await run({}, { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: '' })
+    expect(probe.called).toHaveLength(1)
+    expect('authorization' in (probe.called[0]?.headers ?? {}), '没填 Key 却带了 Authorization').toBe(false)
+    expect(r.ok).toBe(true)
+  })
+
+  it('网络失败时把底层错误码翻成能照做的中文提示', async () => {
+    const { ctx, handled } = makeCtx()
+    const probe = fetchProbe({ fail: Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }) })
+    const run = handler(ctx, handled)
+    const r = await run({}, { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-x' })
+    expect(probe.called).toHaveLength(1)
     expect(r.ok).toBe(false)
-    expect(r.error?.message).toContain('禁止 AI 出网')
-    expect(r.error?.code).toBe('PRIVACY_BLOCKED')
+    expect(r.error?.message).toContain('域名解析失败')
   })
 
-  it('开关关闭 ⇒ 同一条路真的发请求并带上 Key（反例：证明上一条不是恒真）', async () => {
-    const { stub } = backendWithOutboundBlock(false)
-    const { ctx, handled } = makeCtx(stub)
-    const probe = fetchProbe()
-    const run = handler(ctx, handled)
-    await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-real' })
-    expect(probe.called.map(c => c.url), '开关关闭时也没有发出请求').toEqual(['https://api.deepseek.com/v1/models'])
-    expect(probe.called[0]?.auth).toBe('Bearer sk-real')
-  })
-
-  it('拿不到隐私开关 ⇒ fail-closed（宁可拦错也不放行凭据）', async () => {
-    const { ctx, handled } = makeCtx(null)
-    const probe = fetchProbe()
-    const run = handler(ctx, handled)
-    const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
-    expect(probe.called, '后端不可用时仍然向远端发了请求').toEqual([])
-    expect(r.ok).toBe(false)
-  })
-
-  it('被拦时命中内置清单就直接用清单（用户仍然拿得到模型名）', async () => {
-    const { stub } = backendWithOutboundBlock(true)
-    const { ctx, handled } = makeCtx(stub)
-    const probe = fetchProbe()
+  it('未填 Key 且命中内置清单 ⇒ 直接用清单（用户仍然拿得到模型名）', async () => {
+    const { ctx, handled } = makeCtx()
+    const probe = fetchProbe({ fail: Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }) })
     const run = handler(ctx, handled)
     const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: '' })
-    expect(probe.called).toEqual([])
+    expect(probe.called).toHaveLength(1)
     expect(r.ok).toBe(true)
     expect(JSON.stringify(r.value)).toContain('catalog')
+    expect(JSON.stringify(r.value)).toContain('deepseek-chat')
+  })
+
+  it('404 ⇒ 提示可能缺 /v1 后缀（错误映射没被开关移除顺手删掉）', async () => {
+    const { ctx, handled } = makeCtx()
+    fetchProbe({ ok: false, status: 404, statusText: 'Not Found' })
+    const run = handler(ctx, handled)
+    const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    expect(r.ok).toBe(false)
+    expect(r.error?.message).toContain('404')
+    expect(r.error?.message).toContain('/v1')
+  })
+
+  it('401 且填了 Key ⇒ 直说 Key 无效，而不是回退清单', async () => {
+    const { ctx, handled } = makeCtx()
+    fetchProbe({ ok: false, status: 401, statusText: 'Unauthorized' })
+    const run = handler(ctx, handled)
+    const r = await run({}, { baseUrl: 'https://api.deepseek.com', apiKey: 'sk-bad' })
+    expect(r.ok).toBe(false)
+    expect(r.error?.message).toContain('API Key')
+    expect(JSON.stringify(r.value ?? null)).not.toContain('catalog')
+  })
+
+  it('不再读任何隐私开关（防回归：llm-models 不依赖后端 getPrivacyState）', async () => {
+    const { stub, called } = backendProbe()
+    const { ctx, handled } = makeCtx(stub)
+    const probe = fetchProbe({ json: { data: [{ id: 'deepseek-chat' }] } })
+    const run = handler(ctx, handled)
+    const r = await run({}, { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x' })
+    expect(called, 'llm-models 又去读隐私开关了 —— 出网开关已于 2026-09-30 全部移除').not.toContain('getPrivacyState')
+    expect(probe.called, '照常出网，不该被任何闸门拦下').toHaveLength(1)
+    expect(r.ok).toBe(true)
   })
 })

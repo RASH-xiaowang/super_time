@@ -152,8 +152,7 @@ export interface KbFileMeta {
     chunkCount: number;
     charCount: number;
     /**
-     * 是否参与向量化（出网）。默认 `true`，但它**不是**出网闸门本身：
-     * 全局「禁止 AI 出网」仍然一起拦下。给文件级开关是为了让含敏感内容的文件
+     * 是否参与向量化（出网）。默认 `true`：给文件级开关是为了让含敏感内容的文件
      * 完全不出网、却仍能被关键词搜到（设计稿 §9.2）。
      */
     includeInRag: boolean;

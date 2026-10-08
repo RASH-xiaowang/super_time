@@ -31,7 +31,7 @@ worker → 主进程（backend-rpc）→  throw 被包成 msg.error.message，�
 | `EXPIRED` / `DEVICE_MISMATCH` / `NOT_BEFORE` | [`../src/license/schema.js`](../src/license/schema.js) | 有效期外 / 设备指纹不符 / 尚未生效 | 重新签发对应设备与日期的许可证 |
 | `BAD_SIGNATURE` / `INVALID_PAYLOAD` | [`../src/license/service.js`](../src/license/service.js) | 签名校验失败 / 载荷不合 schema | 许可证被改动过；重发一份 |
 | `FEATURE_DENIED` | 同上 | 许可证的功能位不含这个方法所属功能（`details.feature` 说明是哪个） | 升级到含该功能的版本 |
-| `PRIVACY_BLOCKED` | [`../src/backend/ipc-wechat.js`](../src/backend/ipc-wechat.js) | 用户开了「禁止 AI 出网」，而目标地址不在内置模型清单里 | 手动填模型名，或关闭该开关；读不到开关时按 fail-closed 处理 |
+| ~~`PRIVACY_BLOCKED`~~ | — | **已于 2026-09-30 随出网开关一起移除**：`wechat:llm-models` 不再做隐私拦截，因此不再产生这个码 | — |
 | 调用超时 | [`../src/backend/backend-rpc.js`](../src/backend/backend-rpc.js) | 文本形如 `调用超时（60 秒未返回）：method`；窗口按方法分级 | 不是失败宣告：worker 仍在跑。要区分"慢"和"死"，看随后有没有 `Super Time 后端进程已退出` |
 | worker 死亡 | 同上 | `Super Time 后端进程已退出 (code=N)`，在途请求一并摘除 | 主进程会重建；反复出现就抓 `logs/` 与退出码 |
 
@@ -67,7 +67,7 @@ worker → 主进程（backend-rpc）→  throw 被包成 msg.error.message，�
 | 找不到数据 | `未找到消息分库`、`未找到语音消息`、`语音库不存在 (media_0.db)`、`SessionTable 不存在`、`解密 session.db 不存在` | 分库缺失或版本形状不同；界面对应"该会话没有数据 / 语音不可用" |
 | 密钥不对 | `解密校验失败（数据损坏或密码错误）`、`解密后无法识别图片格式 (可能是密钥错误)`、`AES key 长度不足 16 字节`、`V2 文件头不完整` | 内存扫描拿到的 key 不对或过期 ⇒ 让用户重启微信后重新取钥 |
 | 图片不可渲染 | `hevc-unsupported`、`表情文件无法解码为浏览器可渲染格式`、`微信 CDN 返回的是加密流，但该动态没有 <enc key>，无法解密` | 不是失败而是"需要系统解码/原图取不到"；界面按占位处理，日志保留原因 |
-| 出网被闸 | `这张图刚才取失败过，稍后会自动重试`、`表情链接不是 http(s)`、`文章或封面获取失败` | 后端图片代理的负缓存与协议限制（`http` 一律不取），见 `PRIVACY.md` |
+| 图片取不到 | `这张图刚才取失败过，稍后会自动重试`、`表情链接不是 http(s)`、`文章或封面获取失败` | 后端图片代理的负缓存与协议/白名单限制（`http` 一律不取；主机不在腾讯系清单内一律拒），见 `PRIVACY.md` |
 | 任务占用 | `已有解密任务进行中`、`已有模型下载任务进行中`、`该导出任务已结束` | 单实例任务的正常拒绝；UI 应显示"进行中"而不是错误 |
 | 知识库 | `知识库标识无效`、`没有指定知识库`、`该文件已在当前库中（按内容判定）：`、`这个文件还没有可用的正文块（解析未成功或还在排队），无法摘要。` | `kbId` 必须是正整数；后者是"解析还没跑完"的正常中间态 |
 | 模型 | `未知模型: `、`模型通道不可用`、`未找到 whisper.cpp 引擎: `、`转写结果为空` | 模型名没在目录里 / 引擎资产缺失 |

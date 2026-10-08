@@ -228,13 +228,7 @@
   box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
 }
 .fileName { font-size: 12px; color: var(--nm-text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
-/* toast / 错误 / 加载 */
-.errBanner {
-  padding: var(--nm-dense-pad-y) var(--nm-dense-pad-x); border-radius: var(--nm-dense-r);
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 40%, transparent); background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
-  color: var(--nm-danger); font-size: 12px;
-  font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums;
-}
+/* toast / 加载 */
 .toasts { position: fixed; bottom: 20px; right: 20px; z-index: 1200; display: flex; flex-direction: column; gap: var(--nm-dense-g3); max-width: 360px; pointer-events: none; }
 .toast {
   display: flex; align-items: flex-start; gap: var(--nm-dense-g3); padding: var(--nm-dense-g4) var(--nm-dense-pad-x); border-radius: var(--nm-r-md);

@@ -200,7 +200,7 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
  * 三级取值来源(优先级从高到低):
  *   ① `head_image.db` 的 image_buffer → data URL(纯本地,不联网)
  *   ② `temp/head_image` 缓存文件(文件名 = md5(头像 URL))→ data URL(同上)
- *   ③ contact 表的 **https** URL(仅 `allowRemote` 时返回)
+ *   ③ contact 表的 **https** URL
  *
  * 为什么必须有后两级:图谱面板一次要 250 个头像,而 `head_image.db` 只覆盖本机收过的
  * 那些 —— 真机实测「好友图」上 240 个节点只命中 131 个,另外 109 个只能画成
@@ -209,20 +209,18 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
  *
  * 第 ③ 级交出的只是**地址**，取回动作在渲染层的 api 层完成（M23）：`apiGetAvatarsLocal` 把
  * 非本机的那几条交给后端 `query/remote-image.ts` 代取成 data URL，界面拿到的只剩能直接画的地址。
- * 于是「自动获取原图（CDN）」与「禁止出网」真的管得到头像 —— 这一类此前由 `<img>` 直连，
- * 两个开关都拦不到它。图谱把它画进 canvas 再导出 PNG 时拿到的已是 data URL，
+ * 图谱把它画进 canvas 再导出 PNG 时拿到的已是 data URL，
  * 不存在跨域污染（远程地址时代要靠 `crossOrigin='anonymous'` 才不会让 `toDataURL()` 抛 SecurityError）。
  *
  * @param decryptedDir - 解密数据根目录。
  * @param usernames - 需要头像的用户名。
- * @param opts - `wechatBaseDir`(找 temp 缓存)与 `allowRemote`(是否放行远端 URL;
- *   调用方在用户开了「出站拦截」时传 false)。
+ * @param opts - `wechatBaseDir`（找 temp 缓存）。
  * @returns username → data URL 或 https URL（远程那一级由渲染层再换成 data URL）；未命中的不出现在结果中。
  */
 export function resolveAvatarsLocal(
   decryptedDir: string,
   usernames: string[],
-  opts: { wechatBaseDir?: string | undefined; allowRemote?: boolean } = {},
+  opts: { wechatBaseDir?: string | undefined } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
   if (usernames.length === 0) return out
@@ -249,10 +247,8 @@ export function resolveAvatarsLocal(
   for (const [username, url] of contactAvatarUrlMap(decryptedDir, rest)) {
     const temp = avatarFromTempHeadFile(opts.wechatBaseDir, url)
     if (temp) { out[username] = temp; continue }
-    if (opts.allowRemote) {
-      const remote = remoteAvatarUrl(url)
-      if (remote) out[username] = remote
-    }
+    const remote = remoteAvatarUrl(url)
+    if (remote) out[username] = remote
   }
   return out
 }

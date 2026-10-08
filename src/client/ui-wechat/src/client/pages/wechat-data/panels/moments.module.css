@@ -69,14 +69,14 @@
 .authorChip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
   padding: 4px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-pill);
-  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: 12px; cursor: pointer;
+  background: var(--nm-bg-card); color: var(--nm-text-1); font-size: var(--nm-fs-sm); cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;
 }
 .authorChip:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
 .authorChip[data-on] { border-color: var(--nm-cyan); color: var(--nm-cyan); background: var(--nm-cyan-10); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
 .chipName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
-.chipCount { font-size: 10.5px; color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
+.chipCount { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); font-variant-numeric: tabular-nums; }
 .segTrack {
   display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill); background: var(--nm-bg-hover);
@@ -84,7 +84,7 @@
 }
 .segChip {
   padding: 4px 14px; border: 1px solid transparent; border-radius: var(--nm-r-pill);
-  background: transparent; color: var(--nm-text-1); font-size: 12px; cursor: pointer; transition: all 0.15s;
+  background: transparent; color: var(--nm-text-1); font-size: var(--nm-fs-sm); cursor: pointer; transition: all 0.15s;
   corner-shape: round;
 }
 .segChip:hover { background: var(--nm-bg-hover); }
@@ -113,7 +113,7 @@
    padding 用横向 2px 把外框撑到 24px，柱子仍是 100% 内容宽（20px），视觉宽度不变。 */
 .monthCol { flex: 0 0 auto; min-width: 24px; min-height: 24px; padding: 0 2px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; cursor: pointer; box-sizing: border-box; }
 .monthColActive .monthLabel { color: var(--nm-cyan); font-weight: 700; opacity: 1; }
-.monthValue { font-size: 9.5px; color: var(--nm-text-2); min-height: 10px; font-variant-numeric: tabular-nums; }
+.monthValue { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); min-height: 10px; font-variant-numeric: tabular-nums; }
 .monthFill {
   width: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   border-radius: 4px 4px 0 0; min-height: 2px; transition: all 0.15s; cursor: pointer;
@@ -121,7 +121,7 @@
 .monthFill[data-peak] { background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 55%, transparent); }
 .monthFill[data-on] { box-shadow: 0 0 16px color-mix(in srgb, var(--nm-cyan) 70%, transparent); border: 1px solid var(--nm-cyan); }
 .monthFill:hover { box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
-.monthLabel { font-size: 9.5px; color: var(--nm-text-2); white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
+.monthLabel { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
 .monthCol:hover .monthLabel { opacity: 1; }
 
 /* 洞察统计 */
@@ -162,10 +162,10 @@
   transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 .card:hover { border-color: var(--nm-border-hover); background: var(--nm-bg-hover); box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
-.selfTag { font-size: 10.5px; color: var(--nm-cyan); border: 1px solid var(--nm-cyan); border-radius: var(--nm-r-pill); padding: 0 6px; line-height: 16px; background: var(--nm-cyan-10);
+.selfTag { font-size: var(--nm-fs-xs, 11px); color: var(--nm-cyan); border: 1px solid var(--nm-cyan); border-radius: var(--nm-r-pill); padding: 0 6px; line-height: 16px; background: var(--nm-cyan-10);
   corner-shape: round;
 }
-.videoDur { position: absolute; right: 4px; bottom: 4px; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: var(--nm-r-xs); padding: 0 4px; font-variant-numeric: tabular-nums; }
+.videoDur { position: absolute; right: 4px; bottom: 4px; font-size: var(--nm-fs-xs, 11px); color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: var(--nm-r-xs); padding: 0 4px; font-variant-numeric: tabular-nums; }
 .avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple)); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
   corner-shape: round;
 }
@@ -177,7 +177,7 @@
 .miniAvatar { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; display: inline-block; vertical-align: -3px; margin-right: 4px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border);
   corner-shape: round;
 }
-.miniAvatarFallback { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 9.5px; color: #fff; background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple)); vertical-align: -3px; margin-right: 4px;
+.miniAvatarFallback { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: var(--nm-fs-xs, 11px); color: #fff; background: linear-gradient(135deg, var(--nm-cyan), var(--nm-purple)); vertical-align: -3px; margin-right: 4px;
   corner-shape: round;
 }
 .linkCard { display: flex; gap: 12px; align-items: center; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); padding: 10px 12px; max-width: 480px; transition: all 0.2s; }
@@ -203,7 +203,7 @@
 .imgFallbackContent { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; text-align: center; }
 .imgFallbackIcon { font-size: 24px; opacity: 0.6; }
 .imgFallbackText { font-size: 11px; color: var(--nm-text-2); font-weight: 500; }
-.imgFallbackHint { font-size: 10.5px; color: var(--nm-text-2); opacity: 0.7; }
+.imgFallbackHint { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); opacity: 0.7; }
 .videos { display: flex; gap: 8px; }
 .videoTile { width: 120px; height: 80px; border-radius: var(--nm-r-sm); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; transition: all 0.15s; }
 .videoCover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -215,7 +215,7 @@
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 2px; font-size: 11px; color: var(--nm-text-2); text-align: center; padding: 0 6px; line-height: 1.25;
 }
-.videoMissing em { font-style: normal; font-size: 9.5px; color: var(--nm-text-3); }
+.videoMissing em { font-style: normal; font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); }
 .tags { display: flex; gap: 8px; flex-wrap: wrap; }
 .social { display: flex; flex-direction: column; gap: 6px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); padding: 10px 12px; }
 .comments { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--nm-text-1); }
@@ -356,5 +356,70 @@
 .lightboxThumb { width: 52px; height: 52px; border-radius: var(--nm-r-sm); object-fit: cover; cursor: pointer; border: 2px solid transparent; opacity: 0.7; transition: all 0.15s; }
 .lightboxThumb:hover { opacity: 1; }
 .lightboxThumbActive { border-color: var(--nm-cyan); opacity: 1; box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
+
+/* ── 页头操作行：一行放下（2026-09-29「朋友圈中这块位置放在一行」）─────────────
+ *
+ * 现象：搜索框 + 🔒隐私 + 刷新 + ↻同步 + 导出 被挤成两行（第一行到"刷新"，第二行"同步/导出"）。
+ *
+ * 为什么用 `:has(> .btn)` 而不是直接点名：这几个控件挂在**共享组件** `PanelHeader` 的
+ * `actions` 行里，那一行的类名属于 kit 模块、不在本文件；而 `.btn` 是**本模块**的类。
+ * 用"本模块的 .btn"作为判据，就等于"只作用于朋友圈的页头操作行"（`:has()` 内的本地类
+ * 在本构建链里会被正确哈希，已实测）。
+ *
+ * 两个取舍：
+ *  ① 搜索框 `flex: 1 1 140px` —— 让它**吸收剩余宽度**而不是死宽 220px，这是一行放得下的关键；
+ *  ② 只在 >1024px 生效 —— 更窄的窗口本来就不该硬挤一行（那会横向溢出），
+ *     窄窗继续按原样换行，与我在文件尾追加的响应式块一致。
+ */
+@media (min-width: 1025px) {
+  /* 见 .hdSearch：宽度策略交给调用方（kit 的 SearchInput 默认 min-width: 220px，缩不动） */
+  .panel :has(> .btn) { min-width: 0; }
+}
+
+/**
+ * 页头搜索框的宽度策略（2026-09-29「朋友圈布局」重设计）。
+ *
+ * 为什么必须由调用方接管：`kit-shell.tsx` 的 `SearchInput` 默认是
+ * `flex: 0 1 320px; min-width: 220px` —— **最小 220px 就缩不动了**。而页头右侧除了它
+ * 还有 🔒隐私/刷新/↻同步/导出 四个按钮，于是这一竖列总宽超过一行的可用宽度，
+ * 被挤成三行、又因顶部对齐看起来"飘在标题上方"（用户截图里的观感）。
+ *
+ * 收窄到 130–200px 后：搜索框 + 4 个按钮 ≈ 580px ⇒ 页头一行放得下；
+ * 同时**保留换行能力**（不写 nowrap），窗口再窄就整体换行，绝不横向溢出。
+ */
+.hdSearch { flex: 0 1 200px; min-width: 130px; max-width: 200px; }
+
+
+/* ═══ 响应式适配（2026-09-29 重设计）════════════════════════════════════════
+ *
+ * 现状问题：全表 360 行**一条 `@media` 都没有**，而 `.insight` 写死五列、
+ * `.images` 写死三列、`.videoTile` 写死 120×80 —— 窗口一窄只能把每格压扁，
+ * 出现文字挤压 / 图片变小 / 横向溢出。
+ *
+ * 做法：**只追加、不改既有行**（既有五列/三列/固定尺寸保持原样）。两点考虑：
+ *   ① 宽窗观感与现在**逐像素一致** ⇒ 零回归风险；
+ *   ② 这些规则有"按源码文本匹配"的守卫（moments-*.wiring.spec.ts），改动既有行容易踩雷。
+ * 断点取 1280 / 1024 / 760：分别对应"侧栏还在"、"侧栏挤"、"应当单列"三种可用宽度。
+ */
+
+/* ① ≤1280：洞察统计 5 列 → 3 列，避免每格窄到文字折行 */
+@media (max-width: 1280px) {
+  .insight { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ② ≤1024：九宫格 3 列 → 2 列；视频缩略图跟着列宽走（不再写死 120×80） */
+@media (max-width: 1024px) {
+  .insight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .images { grid-template-columns: repeat(2, 1fr); max-width: 100%; }
+  .videoTile { width: 100%; height: auto; aspect-ratio: 3 / 2; }
+}
+
+/* ③ ≤760：单列，并放开"写死的最小宽度"（否则表单/大图在窄屏横向溢出） */
+@media (max-width: 760px) {
+  .images { grid-template-columns: 1fr; max-width: 100%; }
+  .exportForm { min-width: 0; }
+  .monthBars { max-height: 220px; }
+  .videoTileDetail { height: auto; aspect-ratio: 16 / 9; }
+}
 
 

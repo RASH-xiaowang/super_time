@@ -106,21 +106,38 @@ describe('载入', () => {
     render()
     await flush()
     expect(mocks.apiGetMoments).toHaveBeenCalledWith({ limit: 500, author: 'wxid_zhang' })
-    expect(mocks.readRenderCache).toHaveBeenCalledWith('moments:wxid_zhang')
     expect(mocks.writeRenderCache.mock.calls[0]?.[0]).toBe('moments:wxid_zhang')
+    // 2026-10-03 起：打开时不再预填缓存，缓存**只在查询失败时**读 ⇒ 让查询失败一次再断言键
+    // （同一作者再挂载不会重建 load，所以这里显式触发一次重载）
+    mocks.apiGetMoments.mockRejectedValueOnce(new Error('后端不可用'))
+    await act(async () => { await data?.load(true) })
+    await flush()
+    expect(mocks.readRenderCache).toHaveBeenCalledWith('moments:wxid_zhang')
+    mocks.apiGetMoments.mockRejectedValueOnce(new Error('后端不可用'))
     lastProps = { author: null, authorFilter: null }
     render()
     await flush()
     expect(mocks.readRenderCache).toHaveBeenCalledWith('moments:all')
   })
 
-  it('有渲染缓存就先画缓存（秒开），后台仍去取新的', async () => {
+  it('在线时**不读缓存**，直接查最新（2026-10-03 用户要求"每次打开都直接请求获取"）', async () => {
+    Object.defineProperty(window.navigator, 'onLine', { value: true, configurable: true })
     mocks.readRenderCache.mockReturnValue([mk('cached')])
     render()
-    expect(attr('data-tids')).toBe('cached')
+    // 在线：不能先画出旧缓存（否则"看到的旧数据会被当成最新"）
+    expect(attr('data-tids')).not.toBe('cached')
     await flush()
     expect(mocks.apiGetMoments).toHaveBeenCalled()
     expect(attr('data-tids')).toBe('a,b')
+  })
+
+  it('查询失败时才回退缓存，并**明确标注**那不是最新', async () => {
+    mocks.readRenderCache.mockReturnValue([mk('cached')])
+    mocks.apiGetMoments.mockRejectedValueOnce(new Error('后端不可用'))
+    render()
+    await flush()
+    expect(attr('data-tids'), '失败后应回退缓存撑住版面').toBe('cached')
+    expect(attr('data-error'), '必须标注这是缓存数据').toContain('本地缓存')
   })
 
   it('全量月度分布只在重载入时取一次；翻页不许再取', async () => {

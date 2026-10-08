@@ -111,9 +111,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     searchMembers: (options: { q: string; limit?: number; roomUsername?: string; }) => Promise<RemoteResult<MemberSearchSnapshot>>
     searchMessages: (options: { query: string; limit?: number; username?: string; }) => Promise<RemoteResult<SearchSnapshot>>
     searchUnified: (options: { query: string; limit?: number; }) => Promise<RemoteResult<UnifiedSearchSnapshot>>
-    setCdnImageEnabled: (options: { enabled: boolean; }) => Promise<RemoteResult<SimpleResult>>
-    setCdnImageLocalDecrypt: (options: { localDecrypt: boolean; }) => Promise<RemoteResult<SimpleResult>>
-    setPrivacyState: (options: { redactSensitive?: boolean; blockOutbound?: boolean; }) => Promise<RemoteResult<PrivacyStateSnapshot>>
+    setPrivacyState: (options: { redactSensitive?: boolean; }) => Promise<RemoteResult<PrivacyStateSnapshot>>
     setTaskStatus: (options: { id: number; status: 'open' | 'done'; }) => Promise<RemoteResult<TaskMutationResult>>
     syncHandoffTasks: () => Promise<RemoteResult<TaskMutationResult>>
     toggleSummaryTask: (options: { id: number; enabled: boolean; }) => Promise<RemoteResult<SummaryTaskMutationResult>>
@@ -227,9 +225,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'wechatData/searchMembers': (options: { q: string; limit?: number; roomUsername?: string; }) => Promise<RemoteResult<MemberSearchSnapshot>>
     'wechatData/searchMessages': (options: { query: string; limit?: number; username?: string; }) => Promise<RemoteResult<SearchSnapshot>>
     'wechatData/searchUnified': (options: { query: string; limit?: number; }) => Promise<RemoteResult<UnifiedSearchSnapshot>>
-    'wechatData/setCdnImageEnabled': (options: { enabled: boolean; }) => Promise<RemoteResult<SimpleResult>>
-    'wechatData/setCdnImageLocalDecrypt': (options: { localDecrypt: boolean; }) => Promise<RemoteResult<SimpleResult>>
-    'wechatData/setPrivacyState': (options: { redactSensitive?: boolean; blockOutbound?: boolean; }) => Promise<RemoteResult<PrivacyStateSnapshot>>
+    'wechatData/setPrivacyState': (options: { redactSensitive?: boolean; }) => Promise<RemoteResult<PrivacyStateSnapshot>>
     'wechatData/setTaskStatus': (options: { id: number; status: 'open' | 'done'; }) => Promise<RemoteResult<TaskMutationResult>>
     'wechatData/syncHandoffTasks': () => Promise<RemoteResult<TaskMutationResult>>
     'wechatData/toggleSummaryTask': (options: { id: number; enabled: boolean; }) => Promise<RemoteResult<SummaryTaskMutationResult>>
@@ -245,4 +241,3 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 
 export declare const TYPERT_REMOTE: TypertRemoteContribution
 export default TYPERT_REMOTE
-//# sourceMappingURL=typert.remote-client.d.ts.map

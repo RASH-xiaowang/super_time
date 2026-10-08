@@ -31,13 +31,4 @@
 .taskTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); word-break: break-word; }
 .taskRow[data-status='done'] .taskTitle { text-decoration: line-through; }
 .taskMeta { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--nm-text-2); }
-.linkBtn {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--nm-cyan);
-  font-size: 11px;
-  cursor: pointer;
-}
-.linkBtn:hover { text-decoration: underline; }
 .taskActions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

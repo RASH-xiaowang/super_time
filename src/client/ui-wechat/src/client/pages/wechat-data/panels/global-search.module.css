@@ -76,7 +76,7 @@
    经 `globalSearchCss` 导出给调用方复用（避免两处样式漂移）。 */
 .group {
   padding: 6px 8px 3px;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;

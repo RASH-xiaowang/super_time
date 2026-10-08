@@ -3,8 +3,12 @@
  *
  * 为什么需要这条用例：隐私声明最容易变成一份「写的时候对、后来慢慢不对」的文档 ——
  * 新增一个 AI 功能、换一个出网点、加一个 CDN 主机，文档没人动，而读者会照它判断
- * 「关掉开关就安全了」。这里把文档与源码**双向**绑住：清单里的每一条都要在代码里找得到，
+ * 「数据会不会出去」。这里把文档与源码**双向**绑住：清单里的每一条都要在代码里找得到，
  * 而代码里的每个出网点都要在文档里出现。
+ *
+ * **2026-09-30**：应用内的出网开关已全部移除，于是这份声明少了一整节「如何关闭出网」的
+ * 开关说明，改成如实写明「应用内没有任何出网开关，要断网只能靠系统防火墙 / 断网」。
+ * 这条口径本身也被下面的用例钉住（文档里不许再出现被移除开关的名字）。
  *
  * 覆盖的是「有没有写」与「名字对不对」；**不覆盖**「文案描述是否准确」——
  * 那只能靠人工审阅（同理见 M18：README 的因果解释文字守不住）。
@@ -66,9 +70,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
       // 2026-09-20：抽取/建议这两类把功能名传给 `makeChatAsker`，而 gate 在它内部
       // 用变量调用 —— 上面两条正则都抓不到。**只抓得到一半的守卫等于没有守卫**：
       // 下一次新增 AI 功能如果走的也是这条路，文档漏写会静默通过。
-      // `privacyBlocked(` 那一支同时能抓到「早退前先判拦截」的调用点。
       ...[...code.matchAll(/makeChatAsker\([^)]*?'([^']+)'/g)].map((m) => m[1]),
-      ...[...code.matchAll(/privacyBlocked\(\s*'([^']+)'/g)].map((m) => m[1]),
     ])].filter((f): f is string => Boolean(f))
     // 防空转：解析失效时这条用例不能靠空集合通过
     expect(features.length).toBeGreaterThanOrEqual(4)
@@ -89,16 +91,19 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(code, 'makeEmbedFn 的默认功能名不再是 ask_embed').toMatch(/=\s*'ask_embed'/)
   })
 
-  it('AI 出网闸门与审计（应用内开关）在文档里有对应说明', () => {
+  it('隐私面板只剩「敏感字段打码」一个开关，文档与它对齐（出网开关已移除）', () => {
     const panel = readFileSync(
       join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'PrivacyTrust.tsx'),
       'utf8',
     )
     // 文档要指向真实存在的机制，而不是一个想象出来的开关
-    expect(panel).toContain('blockOutbound')
     expect(panel).toContain('redactSensitive')
-    expect(doc).toMatch(/禁止 AI 出网/)
+    // 2026-09-30：出网开关已全部移除 ⇒ 面板里不许再出现它们（双保险，与
+    // `outbound-site-coverage.spec.ts` 的产品代码扫描同向）。
+    expect(panel, '面板里又出现了已移除的出网开关').not.toContain('blockOutbound')
+    expect(panel, '面板里又出现了已移除的出网开关').not.toContain('blockMapTiles')
     expect(doc).toMatch(/敏感字段打码/)
+    expect(doc, '文档要明写「应用内已没有任何出网开关」').toMatch(/没有任何出网开关|已无出网开关|出网开关已(全部)?移除/)
   })
 
   it('文档列出的每一类出网主机都能在代码里找到', () => {
@@ -156,18 +161,18 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     }
   })
 
-  it('文档如实写明 AI 之外的出网点现在也有内置开关，并说清"断网才是彻底方案"', () => {
-    // 2026-09-26 反转方向：地图底图（E）与语音模型下载（F）补齐开关后，
-    // 这条从「必须承认缺口」变成「**不许再宣称缺口**」。两个方向都要守 ——
-    // 否则文档会往两边骗人：缺了开关却说有（用户以为安全），
-    // 或者明明有了还叫用户去配防火墙（用户白折腾）。
-    expect(doc, '地图底图开关没在文档里点名').toContain('blockMapTiles')
+  it('文档如实写明应用内已没有任何出网开关，并说清"断网才是彻底方案"', () => {
+    // 2026-09-30：这条从「开关都齐了」反转成「开关全没了」。两个方向都要守 ——
+    // 否则文档会往两边骗人：明明没有开关却说有（用户以为关掉就安全），
+    // 或者明明删了还留着过期说法（用户去找一个不存在的按钮）。
     expect(doc, '语音模型下载的审计功能名没在文档里点名').toContain('voice_model_download')
-    expect(doc, '地图底图开关必须在文档里可读地写出（不然用户找不到它）').toMatch(/地图底图/)
-    expect(doc, '仍要说清"断网才是最彻底的方案"（出网开关只管本应用自己的请求）').toMatch(/防火墙|断网/)
-    // 反向：过期说法不许留着 —— 它们会让读者以为开关不存在
-    expect(doc, '文档里还留着"没有内置开关"这类过期说法').not.toMatch(/没有内置开关|无内置开关/)
-    expect(doc, '文档里还留着"靠不点来避免"这类过期说法').not.toContain('靠「不点」')
+    expect(doc, '地图底图仍要在文档里可读地写出').toMatch(/地图底图/)
+    expect(doc, '仍要说清"断网/防火墙才是最彻底的方案"').toMatch(/防火墙|断网/)
+    // 反向：被移除的开关的名字不许再出现在文档里（否则读者会去找它们）
+    for (const stale of ['blockOutbound', 'blockMapTiles', 'cdn_enabled', 'cdn_local_decrypt',
+      '禁止 AI 出网', '禁止地图底图出网', '自动获取原图（CDN）', '原图解密方式']) {
+      expect(doc, `文档里还留着一个已被移除的开关：${stale}`).not.toContain(stale)
+    }
   })
 
   /**
@@ -177,7 +182,7 @@ describe('H14：隐私声明 ↔ 出网点', () => {
    * 而那需要一套带搜索索引的夹具（成本高且脆）。这两条恰恰是**形状级**的约束
    * ——「gate 的 texts 里有没有候选文档」看源码一眼可判，看行为要跑一整轮。
    */
-  it('精排：候选文档必须与查询一起过闸，且拦截判在出网之前', () => {
+  it('精排：候选文档必须与查询一起过闸', () => {
     const code = stripComments(gateway)
     // #20 之后实现住在 `gateway-llm-factory.ts#makeRerankFnOf`，类里只剩一个委托 ——
     // 这份联合是"实现搬到哪儿都算"的口径，所以这里**两处都找**，认那一段真过闸的实现；
@@ -188,14 +193,9 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     expect(body, '找不到精排的过闸实现（makeRerankFn / makeRerankFnOf 里都没有那一步？）').not.toBe('')
     // ① gate 的入参必须同时含 query 与全部 documents。只 gate query 等于把 N 条正文
     //    裸发出去，而审计表还会记成「已脱敏」—— 那是**假的安全感**，比没有更糟。
+    //    （2026-09-30 起闸门只做脱敏与审计，这一条的价值反而更高：它成了精排唯一的接缝。）
     expect(body).toMatch(/privacyGate\(\s*'ask_rerank'[\s\S]{0,160}\[query, \.\.\.documents\]/)
-    // ② 出站拦截判在最前：早于「没配模型」那类早退（顺序错了，用户看到的是「AI 不可用」，
-    //    把「拦截真的生效了」这件事盖掉 —— 第 59 轮实测过的同类误导）。
-    const blockedAt = body.indexOf('privacyBlocked(\'ask_rerank\')')
-    const gateAt = body.indexOf('privacyGate(\'ask_rerank\'')
-    expect(blockedAt, '精排没判出站拦截').toBeGreaterThan(-1)
-    expect(blockedAt, '出站拦截必须判在过闸之前').toBeLessThan(gateAt)
-    // ③ 功能名与文档对齐（上面那条通用断言已覆盖「文档含此名」，这里钉的是「用的就是这个名字」，
+    // ② 功能名与文档对齐（上面那条通用断言已覆盖「文档含此名」，这里钉的是「用的就是这个名字」，
     //    防止改成 `kb_rerank` 之后文档与审计各说各话）。
     expect(doc).toContain('ask_rerank')
   })
@@ -219,20 +219,13 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     return end > 0 ? rest.slice(0, end) : rest.slice(0, 2600)
   }
 
-  it('实体抽取与链接建议：拦截判在早退前、功能名各自独立、建议**不写**任何数据', () => {
+  it('实体抽取与链接建议：功能名各自独立、建议**不写**任何数据', () => {
     const code = stripComments(gateway)
     for (const [method, feature] of [['extractKbEntities', 'kb_extract'], ['suggestKbLinks', 'kb_link_suggest']] as const) {
       const body = implBody(code, method)
       expect(body.length, `gateway/remotes 里没有 ${method}（接线被删了？）`).toBeGreaterThan(0)
-      const blockedAt = body.indexOf(`privacyBlocked('${feature}'`)
-      expect(blockedAt, `${method} 没判出站拦截`).toBeGreaterThan(-1)
-      // 「没配模型」这类早退必须在拦截**之后**：顺序错了，被拦下的那次会显示成
-      // 「AI 不可用」，用户会去翻配置而不是想「是不是我自己关掉的」。
-      const modelAt = body.indexOf(`=== ''`)
-      expect(modelAt, `${method} 里没有「未配置模型」的早退（那正是这条守卫要判的顺序）`).toBeGreaterThan(-1)
-      expect(blockedAt, '出站拦截必须判在未配置早退之前').toBeLessThan(modelAt)
       expect(doc, `隐私声明没列出 ${feature}`).toContain(feature)
-      // 功能名必须真的流到审计里（gate/asker 的入参），只在 privacyBlocked 里出现一次不算过闸
+      // 功能名必须真的流到审计里（gate/asker 的入参），只在别处出现一次不算过闸
       expect(body).toMatch(new RegExp(`makeChatAsker\\([^)]*'${feature}'|makeEmbedFn\\([^)]*'${feature}'`))
     }
     // 建议走的是 embedding 通道，但审计名**不许**蹭 `kb_embed`：那个名字在文档里指的是

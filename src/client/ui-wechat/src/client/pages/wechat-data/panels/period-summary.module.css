@@ -108,7 +108,7 @@
   height: 15px;
   margin-right: var(--nm-dense-g2);
   border-radius: 50%;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);

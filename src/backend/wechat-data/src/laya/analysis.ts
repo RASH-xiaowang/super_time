@@ -14,6 +14,7 @@ import { defaultChatQuestions, type LayaQuestions } from './presets.ts'
 import { layaModelKey, readAnalysisCache, writeAnalysisCache, type CachedAnalysis } from './store.ts'
 import { queryMessages } from '../query/messages.ts'
 import { messageText } from '../query/reply-suggest.ts'
+import { yieldToLoop } from '../query/search-build.ts'
 import { cachedTranscript } from '../query/voice-transcribe.ts'
 
 /** 默认取多少条作为上下文（laya 的 max_len 是 1024 token，20 条中文对话通常在预算内）。 */
@@ -70,15 +71,61 @@ export function buildDialogueState(
   if (lastPeer < 0) return { dialogue: '', latestPeer: '', turns: [] }
   const kept = turns.slice(0, lastPeer + 1)
   return {
-    dialogue: kept.map((t) => `${t.self ? '我' : '对方'}：${t.text}`).join('\n'),
+    dialogue: budgetDialogue(kept.map((t) => `${t.self ? '我' : '对方'}：${t.text}`)),
     latestPeer: kept[kept.length - 1]?.text ?? '',
     turns: kept,
   }
 }
 
+/**
+ * 对话上下文的**字数预算**（2026-09-29 实测后加）。
+ *
+ * ## 为什么用字数而不是"条数"
+ *
+ * 真机上量到的延迟曲线（`layaAnalyze` 单次，模型自报 `inferenceMs` 与之相差 <10ms）：
+ *
+ * | 上下文字数 | 单次推理 |
+ * |---|---|
+ * | 120 | 1,610 ms |
+ * | 240 | 2,428 ms |
+ * | 480 | 4,598 ms |
+ * | 720 | 7,228 ms |
+ *
+ * ⇒ **≈10 ms/字，基本线性**。而 `DEFAULT_CONTEXT` 是 **20 条**消息 —— 一条 60 字的会话
+ * 就是 1,200 字上下文 ≈ 12 s/条，用户在日志里看到的 `analyzeVisibleMessages 7–24s`
+ * 就是这么来的。按"条数"限根本框不住：条数一样，长短消息能差 10 倍。
+ *
+ * 240 字 ≈ 2.4 s/条：既留住"最近几轮对话"这个判断意图真正需要的信息，又把单条延迟
+ * 压到原来的 1/4 左右。这是**明确的取舍**（更少的背景 ⇒ 更快的响应），改这个常量
+ * 就等于在速度与上下文之间挪一档。
+ */
+export const MAX_CONTEXT_CHARS = 240
+
+/**
+ * 按字数预算裁剪对话：**从最旧的整行开始丢**，保留尾部。
+ *
+ * 为什么丢头不丢尾：命题问的是「最后一句话」（语义焦点在尾部，见 {@link buildDialogueState}
+ * 关于"截断到最近一条对方消息"的说明），前文只是背景；从头部裁不会改变"最后一句话"是谁说的。
+ * 最后一行（正在分析的那条消息本身）**永远保留**，即便它自己就超预算。
+ * @param lines - 已按时间正序排好的对话行（形如 `对方：…` / `我：…`）。
+ * @param budget - 字数预算（含换行）。
+ * @returns 裁剪后的对话文本（单行超预算时仍返回该行）。
+ */
+export function budgetDialogue(lines: readonly string[], budget: number = MAX_CONTEXT_CHARS): string {
+  if (lines.length === 0) return ''
+  let total = 0
+  let start = lines.length
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const cost = (lines[i] ?? '').length + 1
+    if (i < lines.length - 1 && total + cost > budget) break
+    total += cost
+    start = i
+  }
+  return lines.slice(start).join('\n')
+}
+
 /** 一次分析请求。 */
-export interface LayaAnalysisInput {
-  decryptedDir: string
+export interface LayaAnalysisInput {  decryptedDir: string
   /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string
   selfUsername?: string
@@ -268,7 +315,13 @@ export interface LayaVisibleAnalysisResult {
   items: LayaMessageAnalysis[]
 }
 
-/** 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。 */
+/**
+ * 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。
+ *
+ * 2026-09-28 复核：**曾尝试靠「合批」降低这一批的耗时，实测反而慢了 41.8%**
+ * （成本 ≈ 行数 × 序列长度，`session.run` 每次调用的固定开销实测为 0 ⇒ 没有可摊薄的东西，
+ * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见 docs/PERF-AUDIT 第七节。
+ */
 export const MAX_ANALYZE_BATCH = 12
 
 /**
@@ -336,6 +389,13 @@ export async function analyzeVisibleMessages(
   const limit = Math.max(2, Math.min(Math.trunc(input.contextLimit ?? DEFAULT_CONTEXT), MAX_CONTEXT))
 
   for (const target of targets) {
+    // B2（2026-09-28 性能修复）：每条之间让出事件循环。这一整批在日志里是 **均 36s / 峰值 110s**
+    // ——`layaAnalyze` 内部是一次完整的 ONNX forward（同步），而本模块此前**不在** `yieldToLoop`
+    // 覆盖的 8 个模块内 ⇒ 整个推理期间独占事件循环，同进程的其它请求（本该 1ms）全被拖住
+    // （旧文档实测：世界板块自身 13ms 被排在长任务后面等到 17,008ms）。让出不改推理成本，
+    // 但把「独占」变成「交替」，是这件事里成本最低、感知最强的一步。
+    // 注意：命中的缓存条目走的是 `continue`，不会到这里 —— 只有真的要开算的才让出。
+    await yieldToLoop()
     const hit = cached.get(target.localId)
     if (hit) {
       items.push({
@@ -402,7 +462,7 @@ export async function analyzeVisibleMessages(
       if (t === '') continue
       lines.push(`${m.isSender === 1 ? '我' : '对方'}：${t}`)
     }
-    const dialogue = lines.join('\n')
+    const dialogue = budgetDialogue(lines)
     if (dialogue === '') {
       items.push({ localId: target.localId, ok: false, fromVoice, error: '这条消息没有可分析的文本', sourceText: text, answers: [], inferenceMs: 0, cached: false })
       continue

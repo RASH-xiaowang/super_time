@@ -62,6 +62,111 @@ export function ProgressBar({ value, tone = 'cyan', indeterminate = false }: {
   )
 }
 
+/**
+ * 统一错误态（R4）。
+ *
+ * ── 为什么必须有它 ──────────────────────────────────────────────
+ * R4 勘察：仓库里渲染错误的地方有 **48 处、横跨 31 个面板**，但形态四分五裂：
+ *   · 7 个面板各自定义了一份 `.error` / `.errBanner`（daily-summary / note-editor /
+ *     overview / privacy-trust / session-ask / world-map / monitor），加上 kit 共 8 份同语义样式；
+ *   · 6 处渲染错误时**漏了 `role="alert"`**（AskHistoryDialog / DailySummary /
+ *     KnowledgeNoteEditor / Monitor / PrivacyTrust / WorldMap）—— 读屏软件完全不播报；
+ *   · 前缀不统一（有的 `⚠️ {error}`、有的裸 `{error}`）；
+ *   · 最坏的一类（PrivacyTrust）自定义 `.error` 只有 padding + color + font-size，
+ *     **没有红框红底** ⇒ 出错与「没数据」视觉几乎无差。
+ *
+ * 这里把「红框 + 红底 + `role="alert"`」三件事绑成一个组件，调用方**没有机会漏掉**
+ * 无障碍属性。`onRetry` 给「可重试的失败」一条出路（此前只能靠用户手动切页刷新）。
+ *
+ * 样式复用 `kit.module.css` 的 `.error`（**不新造类**，避免踩 `kit-css-split.wiring.spec.ts`
+ * 的跨份引用坑）；`detail` 用 `<details>` 折叠——长堆栈/原始报文不再撑破版面。
+ * @param props.message - 主文案（一句话说清「什么失败了」）。
+ * @param props.detail - 可选的原始错误 / 堆栈，折叠展示。
+ * @param props.onRetry - 传入则渲染「重试」按钮。
+ */
+export function ErrorState({ message, detail, onRetry }: {
+  message: React.ReactNode
+  detail?: React.ReactNode
+  onRetry?: () => void
+}): React.JSX.Element {
+  return (
+    <div className={css.error} role="alert" data-st-error="1">
+      <div className={css.errorMain}>{message}</div>
+      {detail && (
+        <details className={css.errorDetail}>
+          <summary>详情</summary>
+          <pre className={css.errorPre}>{detail}</pre>
+        </details>
+      )}
+      {onRetry && (
+        <button type="button" className={css.errorRetry} onClick={onRetry}>重试</button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 统一加载态（R4）。
+ *
+ * ── 为什么必须有它 ──────────────────────────────────────────────
+ * R4 勘察：同一句「加载中」在仓库里有三种形态 ——
+ *   · `Graph.tsx` 有脉动骨架 + 两行文案（最好的一档）；
+ *   · `CityMap.tsx:61` 是一行裸字 `正在加载城市地图…`；
+ *   · `PrivacyTrust.tsx:162/187` 更糟：加载中和空态**共用 `.emptyInline`** ——
+ *     两个语义完全不同的分支同一套视觉，用户分不清「在跑」和「没有」。
+ *
+ * 三档形态，按场景挑：
+ *   · `skeleton` —— 列表/网格类，复用 `ListSkeleton` 的微光骨架（形状贴近真实行）；
+ *   · `compact`  —— 放不进骨架的窄区（图表面板、弹窗），一行紧凑；
+ *   · `timed`    —— 慢查询（后端是同步 SQLite，单队列会排队十几秒），带上「已等 Ns」，
+ *                  让等待有进度感（此前 `useElapsedSeconds` 只接了 6 处、其余手写）。
+ *
+ * **不变量**：任何一档都**不得**复用空态视觉（`.empty` / `.emptyInline`）——
+ * 否则又回到「加载 = 没数据」的老毛病。由 `state-components.wiring.spec.ts` 钉住。
+ * @param props.label - 主文案。
+ * @param props.variant - 三档之一，默认 `skeleton`。
+ * @param props.rows - skeleton 档的行数。
+ * @param props.grid - skeleton 档是否网格（卡片格子）。
+ * @param props.since - timed 档的已用秒数（调用方传 `useElapsedSeconds(x)`）。
+ * @param props.hint - 可选的补充说明（如「首次同步约 1–2 分钟」）。
+ */
+export function LoadingState({ label = '加载中…', variant = 'skeleton', rows, grid, since, hint }: {
+  label?: React.ReactNode
+  variant?: 'skeleton' | 'compact' | 'timed'
+  rows?: number
+  grid?: boolean
+  since?: number
+  hint?: React.ReactNode
+}): React.JSX.Element {
+  if (variant === 'skeleton') {
+    // 直接复用 kit 自己的骨架类（`ListSkeleton` 用的也是这几个）——不 import `panels/hooks.tsx`，
+    // 否则 `ui/ → panels/ → ui/` 成环。骨架形状与 `ListSkeleton` 完全一致。
+    return (
+      <div className={css.skelGrid} data-st-loading="skeleton" aria-hidden="true"
+        style={{ gridTemplateColumns: grid ? 'repeat(auto-fill, minmax(120px, 1fr))' : '1fr' }}>
+        {Array.from({ length: rows ?? 8 }).map((_, i) => (
+          <div key={i} className={`nm-skel ${grid ? css.skelCard : css.skelRow}`}>
+            {!grid && (
+              <>
+                <span className={`nm-skel ${css.skelAvatar}`} />
+                <span className={`nm-skel ${css.skelLine}`} />
+                <span className={`nm-skel ${css.skelMeta}`} />
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
+  const suffix = variant === 'timed' && since !== undefined ? `（已等待 ${since}s）` : ''
+  return (
+    <div className={css.loadingState} data-st-loading={variant}>
+      <div className={css.loadingLabel} role="status">{label}{suffix}</div>
+      {hint && <div className={css.loadingHint}>{hint}</div>}
+    </div>
+  )
+}
+
 /** 空态占位。 */
 export function EmptyState({ icon = '🗂️', title = '暂无数据', desc, action }: {
   icon?: React.ReactNode
@@ -100,6 +205,34 @@ export function EmptyMaybeSyncing({ text, note }: { text: React.ReactNode; note?
         {note ?? '若这是刚启动，后台可能仍在同步微信数据（首次同步约 1–2 分钟）；同步完成后会自动刷新。'}
       </div>
     </div>
+  )
+}
+
+/**
+ * 文字链按钮（族 C，P3 收敛，2026-09-28）。
+ *
+ * 「长得像链接的原生 `<button>`」——无内边距、无边框、无背景、青色字、hover 下划线。
+ * 六个面板原来各写一份该类（`exportLinkBtn` / `linkBtn`×4 / `link`），样式几乎相同
+ * 但 hover 与字号各有出入；现在统一由 `css.link` 提供。
+ *
+ * **为什么不复用 `Button`**：`Button`（外部包 `dsh-client-ui-primitives`）的 6 个 variant
+ * 全都带内边距与固定高（`ghost` 36px / `sm` 28px）。族 C 用在**表格单元格**与
+ * 「说明 + 操作」行里，多出来的高度会撑开行、顶掉滚动位置 —— `padding: 0` 是语义，不是遗漏。
+ *
+ * `type="button"` 由组件内置（裸 `<button>` 在 `<form>` 内默认 `type="submit"`，
+ * 六个调用点都没显式写，收敛顺带堵掉这个隐患）；其余原生属性（`title` / `disabled` /
+ * `aria-*` / 事件）一律透传。
+ *
+ * @param props.children - 链接文字。
+ */
+export function LinkButton({ className, children, ...rest }: {
+  className?: string | undefined
+  children?: React.ReactNode
+} & React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
+  return (
+    <button type="button" className={clsx(css.link, className)} {...rest}>
+      {children}
+    </button>
   )
 }
 

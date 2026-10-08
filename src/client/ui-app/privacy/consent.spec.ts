@@ -172,3 +172,29 @@ describe('H14：同意闸门的接线', () => {
     expect(entrySrc).toMatch(/if \([^)]*!consented\b[^)]*\)\s*\{/)
   })
 })
+
+/**
+ * 同意区的**排版口径**：它必须是文档流里的一段，不是悬浮条。
+ *
+ * 为什么值得一条守卫：这一块的形态被改过两次（2026-09-29 改成吸底 → 2026-09-30 用户要求
+ * 改回流内）。CSS 改错了没有任何构建或类型检查会报，症状是「勾选框与两个按钮变成压在正文上的
+ * 浮条」——只有对着那一屏才看得见。这里直接把 `.consentBar` 的声明块切出来看，不看别的规则。
+ */
+describe('H14：同意区不许再做成悬浮 / 吸底', () => {
+  const css = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.module.css'), 'utf8')
+
+  /** 取 `.consentBar { … }` 这一段（到第一个右花括号）。 */
+  function consentBarBlock(): string {
+    const at = css.indexOf('.consentBar {')
+    expect(at, 'CSS 里找不到 .consentBar 规则').toBeGreaterThan(-1)
+    const end = css.indexOf('}', at)
+    return css.slice(at, end + 1)
+  }
+
+  it('`.consentBar` 不带 position: sticky / fixed，也不带遮挡用的 z-index 与不透明底色', () => {
+    const block = consentBarBlock()
+    expect(block, '.consentBar 又变成吸底 / 悬浮条了').not.toMatch(/position:\s*(sticky|fixed)/)
+    expect(block, '.consentBar 带上了 z-index ⇒ 它会盖住正文').not.toMatch(/z-index/)
+    expect(block, '.consentBar 又铺了不透明底色 ⇒ 那是悬浮层的样子').not.toMatch(/background(?!-color):/)
+  })
+})

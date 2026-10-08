@@ -20,11 +20,6 @@ export interface createLayaRemotesInputs {
     };
     selfUsername: () => string;
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
-    /**
-     * 出网闸门（`blockOutbound`）。模型文件 1.26 GB 从 HuggingFace 拉 —— 下的是文件、
-     * 不发聊天内容，但**仍是出网**，所以与 whisper 模型下载共用同一个总闸（P0-2）。
-     */
-    privacyBlocked: (feature: string, detail?: string) => string | null;
 }
 export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
     /**

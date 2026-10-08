@@ -6,7 +6,7 @@
  */
 
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, OriginalBatchResult, OriginalFetchPlan, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts'
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, OriginalBatchResult, OriginalFetchPlan, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts'
 import type { ImageBatchItem } from './remotes/media.ts'
 import { getDbStatus } from './query/status.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
@@ -199,7 +199,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns BackupMutationResult: ok + backup name, or error.
    */
   @Remote('createBackup')
-  createBackup(): BackupMutationResult {
+  async createBackup(): Promise<BackupMutationResult> {
     return this.backupRemotes().createBackup()
   }
 
@@ -239,8 +239,8 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   @Remote('exportAnnualReport')
-  exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): ExportResult {
-  return this.exportRemotes().exportAnnualReport(options)
+  async exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): Promise<ExportResult> {
+    return this.exportRemotes().exportAnnualReport(options)
   }
 
   /**
@@ -471,7 +471,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   @Remote('verifyImageKey')
-  verifyImageKey(): VerifyImageKeyResult {
+  async verifyImageKey(): Promise<VerifyImageKeyResult> {
     return this.keysDecryptRemotes().verifyImageKey()
   }
 
@@ -592,7 +592,17 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns ImageDataUrlResult: base64 data URL or error.
    */
   @Remote('getSnsImageDataUrl')
-  getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
+  async getSnsImageDataUrl(options: {
+    md5: string
+    timelineId?: string
+    mediaId?: string
+    /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路（见 `sns-cdn-image.ts`）。 */
+    url?: string
+    /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
+    token?: string
+    /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
+    seed?: string
+  }): Promise<ImageDataUrlResult> {
   return this.mediaRemotes().getSnsImageDataUrl(options)
   }
 
@@ -618,6 +628,20 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   @Remote('getEmoticonDataUrl')
   async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
   return this.mediaRemotes().getEmoticonDataUrl(options)
+  }
+
+  /**
+   * 批量取表情（E1，2026-09-28 性能修复）。
+   *
+   * 现场日志里 `getEmoticonDataUrl` 均 27.2s、峰值 71.9s。这个批量壳把一屏的表情收成
+   * 一个 RPC；后端先做一趟纯本地解码，再对剩下的按 {@link EMOTICON_FETCH_CONCURRENCY}
+   * 并发出网 —— 于是「N 条表情 = N 次网络往返」变成「1 次 RPC + ceil(N/8) 批」。
+   * @param options - `items` 为一屏待取的表情（自动去重、忽略空 md5）。
+   * @returns 逐条结果（键 = md5），顺序与去重后的入参一致。
+   */
+  @Remote('getEmoticonDataUrls')
+  async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<EmoticonDataUrlsResult> {
+  return this.mediaRemotes().getEmoticonDataUrls(options)
   }
 
   /**
@@ -649,15 +673,15 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns OriginalFetchPlan：条数、可补条数、需登录条数、XML 声明的预计字节数。
    */
   @Remote('planOriginalFetch')
-  planOriginalFetch(): OriginalFetchPlan {
+  async planOriginalFetch(): Promise<OriginalFetchPlan> {
     return this.mediaRemotes().planOriginalFetch()
   }
 
   /**
    * 批量取回原图（免登录直链）：全库那 16.6% 一次取完，**可续跑**（`<decoded>/.originals-index.json`）。
    *
-   * 三条一致：隐私总闸在最前；「自动获取原图（CDN）」关掉时一条请求都不发（回 `blocked`）；
-   * 逐条失败不中断整批。**明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% ——
+   * 边界：已有解密类任务在跑时一条请求都不发（回 `blocked`）；逐条失败不中断整批。
+   * **明确不碰**只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% ——
    * 那要微信登录态凭据（边界见 `query/image-original.ts`），只能在微信里点开后用
    * 「升级为原图」收进来。实时进度通过 getDecryptStatus 读取（`op` = `image-original-batch`）。
    * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4，封顶 8）。
@@ -672,7 +696,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * 远程图片代理（M23）：一批 https 图片地址 → 后端取回并缓存 → data URL。
    *
    * 存在的原因：卡片缩略图 / 朋友圈远程图 / 视频号封面此前由**渲染层直接向消息里的地址发请求**，
-   * 那条路径不受「自动获取原图（CDN）」与「禁止出网」两个开关管、不进操作记录、也没有缓存。
+   * 那条路径不进操作记录、没有缓存、也不受主机白名单约束。
    * 收到后端之后这三件事才成立，而 CSP `img-src` 的 `https:` 通配也才可能拿掉。
    * 只代取腾讯系主机（判据见 `query/cdn-hosts.ts`）；站外图床会被拒。
    * @param options - `urls`: 图片地址列表（去重后最多取 40 张，超出的条目回错误）。
@@ -724,7 +748,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   @Remote('extractTasks')
-  extractTasks(options?: { days?: number }): TaskMutationResult {
+  async extractTasks(options?: { days?: number }): Promise<TaskMutationResult> {
     return this.tasksRemotes().extractTasks(options)
   }
 
@@ -816,7 +840,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   @Remote('setPrivacyState')
-  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): PrivacyStateSnapshot {
+  setPrivacyState(options: { redactSensitive?: boolean }): PrivacyStateSnapshot {
     return this.opsLogRemotes().setPrivacyState(options)
   }
 
@@ -908,7 +932,6 @@ export abstract class GatewayDataOps extends GatewayAskOps {
       dirs: () => this._dirs,
       selfUsername: () => this.selfUsername(),
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
     }))
   }
 }

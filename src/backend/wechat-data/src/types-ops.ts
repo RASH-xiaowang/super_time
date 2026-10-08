@@ -45,9 +45,6 @@ export interface PrivacyAuditClearResult {
 /** Privacy settings + audit snapshot. */
 export interface PrivacyStateSnapshot {
   redactSensitive: boolean
-  blockOutbound: boolean
-  /** 地图底图出网（渲染层直连 jsDelivr / unpkg / 阿里 DataV，不经后端闸门，故单独一位）。 */
-  blockMapTiles: boolean
   audit: {
     total: number
     byFeature: PrivacyAuditFeature[]
@@ -80,6 +77,20 @@ export interface OperationLogEntry {
   target: string
   status: OperationStatus
   detail: string
+  /**
+   * 这条操作花了多少毫秒（H2，2026-09-28 性能修复）。
+   *
+   * 为什么要有它：`docs/PERF-AUDIT-172` 那张「哪个接口最慢」的分布表**是拿临时探针
+   * 从宿主日志里数出来的** —— 每查一次性能就得重写一个 probe 脚本，而探针只能测
+   * 「本机能跑的那些接口」。把耗时落进审计表之后，用户现场的那台机器就是唯一的数据源：
+   * 直接按 `duration_ms DESC` 查，不必再让用户跑脚本。
+   *
+   * 口径：**超过 {@link SLOW_OPERATION_MS} 才记**（默认 1000ms，与宿主 `wechat-host.js`
+   * 那条 `if (cost > 1000)` 同阈值）。理由有二：① 绝大多数操作是 1~5ms 的配置读写，
+   * 全记会让这张审计表在几天内涨到几十万行；② 审计表是给人看的，混进几万条 0ms
+   * 反而让「哪条慢」看不出来。**未记录 ≠ 没耗时** —— 它意味着「这次不到 1 秒」。
+   */
+  durationMs?: number
 }
 
 /**
@@ -101,6 +112,14 @@ export interface OperationLogQuery {
   q?: string
   limit?: number
   offset?: number
+  /**
+   * 只看「至少这么慢」的记录（毫秒，H2）。
+   *
+   * 审计表里绝大多数行不带 `durationMs`（那次不到 1 秒）—— 想找瓶颈时先过一层
+   * `minDurationMs`，比在几万行里翻要直接得多。带这个过滤时**同时排除没有耗时字段的行**：
+   * 「不知道多快」不能算「够慢」。
+   */
+  minDurationMs?: number
 }
 
 /** Operation-log page: matching entries (newest first) + full match count. */

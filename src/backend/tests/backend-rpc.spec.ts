@@ -46,6 +46,41 @@ function makeChannel(timeoutMs = 30, extra: Record<string, unknown> = {}) {
   return { child, channel }
 }
 
+/**
+ * 【长任务台账】`LONG_CALL_METHODS` 的**逐条分类**，用来补上原先缺失的那个方向。
+ *
+ * 原守卫只查一个方向：名单里的名字必须是真 `@Remote`（防写错名字后静默退化）。
+ * 反过来「一个真该进名单的重方法**漏登记**了」**没有任何东西会报错** —— 它悄悄退回
+ * 60s 默认窗口，直到线上某次大请求被误杀成「调用超时」才暴露，而那时界面看到的是
+ * 「整批失败」，很难联想到是超时窗口的问题。
+ *
+ * laya 就是这样漏掉的：模型装好了、`configuredDir()` 也对，但
+ * `analyzeVisibleMessages` 实测**单次 54,103ms** 对着 60s 窗口只有 1.1 倍余量
+ * （PERF-AUDIT 日志口径：均 36s / 峰值 110s）⇒ 稍大的可见窗口必被误杀。
+ *
+ * 因此这里拿它当**全量台账**：名单必须与下表**完全相等**，增删都得先分类。
+ * 只断言 `size >= N` 是形同虚设的下限（实际值远高于 N，塌陷也越不过）——
+ * 所以每一条都点出**具体方法名**，并写清「为什么它算重活」。
+ */
+const HEAVY_LEDGER: ReadonlyArray<{ why: string; methods: readonly string[] }> = [
+  { why: '导出：大量写盘 + 压缩', methods: ['exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions', 'exportMoments', 'exportSnsVideo'] },
+  { why: '备份与恢复：整库拷贝', methods: ['createBackup', 'createEncryptedBackup', 'restoreBackup', 'previewBackup', 'deleteBackup'] },
+  { why: '解密：全量读 + 写', methods: ['decryptAllDatabases', 'decryptAllImages', 'autoGetDbKey', 'autoGetImageKey'] },
+  { why: '升级解码缓存：扫 msg/attach（数万文件）+ 逐条重解', methods: ['upgradeDecodedImages'] },
+  { why: '媒体取数：命中不了缓存时退化成全量「读文件 + 解密 + 哈希」（实测 12–21s）', methods: ['getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl', 'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal'] },
+  { why: '批量封面（A1）：N 张 × 两次 20s 超时串在一个窗口里', methods: ['getArticleCovers'] },
+  { why: '批量取图（P3-12）：一次 200 张，每张都可能退化成读+解密+哈希', methods: ['getImageDataUrlsBatch'] },
+  { why: '批量取原图：几千张 × 15s 超时 + 4 并发，远超 60s', methods: ['fetchOriginalImagesBatch'] },
+  { why: '语音转写：whisper 本地推理', methods: ['transcribeVoiceBatch', 'transcribeVoiceMessage'] },
+  { why: 'laya 本地决策推理：实测单次 54,103ms / 峰值 110s（2026-09-28 补登记）', methods: ['analyzeMessages', 'analyzeVisibleMessages'] },
+  { why: 'laya 模型分发：1.26 GB 流式下载 / 1.23 GB 跨盘接管（2026-09-28 补登记）', methods: ['downloadLayaModel', 'adoptLayaModel'] },
+  { why: '索引与离线评估', methods: ['buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval'] },
+  { why: 'LLM 长任务：仓库自身 LLM 超时 120s，RPC 窗口必须明显宽于它', methods: ['askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary', 'summarizeKbFile'] },
+  { why: '实体抽取/链接建议：最多 20 个文件串行 LLM / 80 条 embedding', methods: ['extractKbEntities', 'suggestKbLinks'] },
+  { why: '年度报告/回顾：跨全年聚合，且可能触发 LLM', methods: ['getAnnual', 'getAnnualReport', 'getAnnualReview'] },
+  { why: '任务同步与抽取', methods: ['syncHandoffTasks', 'extractTasks'] },
+]
+
 describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
   // 直接从源码抽 @Remote 名单。写错方法名不会报任何错、只会让该方法静默退回 60s 窗口，
   // 而 60s 对导出/解密/LLM 这类任务明显不够 —— 必须由测试挡住。
@@ -61,6 +96,24 @@ describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
   it('长任务名单里每个名字都是真实存在的 @Remote 方法', () => {
     const bogus = [...LONG_CALL_METHODS].filter((m) => !remoteNames.has(m))
     expect(bogus).toEqual([])
+  })
+
+  it('【反向】台账必须与 LONG_CALL_METHODS 完全相等 —— 漏登记一个重方法不会有任何其它报错', () => {
+    const ledger = HEAVY_LEDGER.flatMap((g) => [...g.methods])
+    // 下限只是「防止台账被清空后这条断言变成空转」；真正的判据是下面两个差集。
+    expect(ledger.length, '台账被清空了？').toBeGreaterThanOrEqual(45)
+    expect(new Set(ledger).size, '台账里有重复条目').toBe(ledger.length)
+
+    const missing = ledger.filter((m) => !LONG_CALL_METHODS.has(m)).sort()
+    expect(missing, '这些重方法会静默退回 60s 窗口，线上被 RPC 误杀成「调用超时」').toEqual([])
+
+    const unclassified = [...LONG_CALL_METHODS].filter((m) => !ledger.includes(m)).sort()
+    expect(unclassified, '新增的长任务没有写进台账分类（说明它为什么算重活）').toEqual([])
+  })
+
+  it('【反向】台账点名的方法都必须是真实存在的 @Remote（防点名打错字变成空转）', () => {
+    const ledger = HEAVY_LEDGER.flatMap((g) => [...g.methods])
+    expect(ledger.filter((m) => !remoteNames.has(m))).toEqual([])
   })
 
   it('LLM 长任务拿到宽窗口，普通查询拿到默认窗口', () => {

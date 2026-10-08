@@ -125,7 +125,7 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'kbfiles'))
-    expect(group?.label, 'kbfiles 被挪到别的分组了').toBe('联系人与社交')
+    expect(group?.label, 'kbfiles 被挪到别的分组了').toBe('概览 · 问答 · 总结')
     expect(group?.items.some(it => it.tab === 'kb'), 'kb 与 kbfiles 不在同一组').toBe(true)
   })
 
@@ -320,8 +320,10 @@ describe('移除与出网开关：都带 kbId 守卫，都不碰用户的原文�
     expect(panelCode).toContain('includeInRag')
     // 关掉 ≠ 踢出知识库 —— 不说清这句，用户会以为关掉就等于把文件删了
     expect(panel, '出网开关没说明「关掉后仍可被关键词搜到」').toContain('都仍然能被关键词搜到')
-    // 也不许承诺「打开就一定出网」：全局「禁止 AI 出网」是同一道闸门
-    expect(panel).toContain('禁止 AI 出网')
+    // 全局「禁止 AI 出网」已随开关一起移除：这里的边界必须落在**这一个文件**上，
+    // 而且界面不许再提那个不存在的全局闸门（提了就是让用户以为还有别的开关可关）。
+    expect(panel, '没有说清关掉这个开关的范围').toContain('关掉它就完全不出网')
+    expect(panel, '全局出网开关已移除，界面不该再提它').not.toContain('禁止 AI 出网')
   })
 
   it('开关成功后只改这一行，并同步渲染缓存（不是整表重取）', () => {

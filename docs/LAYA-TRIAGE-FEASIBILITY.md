@@ -108,7 +108,7 @@ checkpoint 的 `temperature` 全为 1.0，无需实现温度缩放）。
 | `onnxruntime-node` 包 | 287.3 MB（**含全平台** linux/darwin/win32 × x64/arm64） | 必须按平台裁剪，`build.files` 白名单只放当前平台 |
 | — win32/x64 推理必需 | **27.7 MB**（`onnxruntime.dll` 27.4 + binding 0.3） | 进 asarUnpack（与 koffi 同款机制） |
 | — win32/x64 可裁 | 36.4 MB（`DirectML.dll` 17.7 + `dxcompiler.dll` 17.2 + `dxil.dll` 1.5，均为 GPU 用） | 排除 |
-| `@huggingface/transformers` | 9.4 MB（含 wasm 等） | 可只保留 tokenizer 路径；或改用更轻的 tokenizer 方案（见 §6） |
+| `@huggingface/tokenizers` | **1 MB**（纯 JS、**零依赖** —— 就是 transformers 内部用的那份实现） | **已换装**（§8.8）：原 `@huggingface/transformers` 会连带 `sharp`+`@img`(18.6 MB)+`onnxruntime-web`(135 MB) |
 | 模型 | 1228.6 MB（fp32 ONNX） | 走首启下载，不进安装包；可量化到 fp16（约 614 MB） |
 
 对比 v1 里被否掉的「捆绑 Python runtime（+100 MB）」：ONNX 路线的打包代价是 **约 28 MB 外挂**（+ 模型首启下载），
@@ -302,9 +302,101 @@ laya 推理**完全本地**，不经过 `privacyGate` 的出网闸门（那是 L
 
 ### 8.6 仍需注意的边界（未验证）
 
-- **打包关（P3）未做**：onnxruntime-node 的 asarUnpack、`package-content-rules.js` 的上界、
-  真实打包产物里加载模型，都还没验（`build.files` 白名单与平台裁剪已按单平台 27.7 MB 配好）。
+- **打包关（P3）已做**（2026-09-28，§8.8）：真实打包 + 包内容断言 + **从打包布局跑出真实推理**，
+  三者全通；过程中抓出并修掉一个会让 laya 在安装包里**完全起不来**的缺陷。
 - 模型下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖默认仓库）。
-- 「点某条消息分析」未做：当前分析的是**最新一条对方消息**（按需触发，不做全量），
-  逐条内嵌需要改消息渲染循环与虚拟化列表，留给后续。
+- 「点某条消息分析」**已被 §8.5 的可见窗口驱动取代**：现在每一条可见的对方消息都会自动出卡，
+  不需要逐条点击。仍然不做的是「对窗口之外的任意消息按需分析」（要改虚拟化列表的取数范围），
+  但那与「点一条算一条」不是同一个需求。
 - 模型 fp32（1.23 GB）。若要压到 fp16/int8，**必须重跑 `export-onnx.py` 的多长度自检**。
+
+### 8.7 模型装上之后：把「能用」变成「真的能用」（2026-09-28）
+
+前置事实：模型已经落在 `D:\laya\models`（图 2.2 MB + 外置权重 1.23 GB + tokenizer 34 MB，
+`config.json` 的 `laya_models_dir` 指向它，`laya_analysis.db` 也在写）。
+**但「模型可用」不等于「功能可用」** —— 本轮找到并修掉了一个会让它在真实使用中直接失败的缺陷。
+
+#### 8.7.1 真缺陷：四个 laya 方法没登记成「长任务」
+
+| 项 | 内容 |
+|---|---|
+| 症状 | 一批 12 条的逐条分析要 **26–54 s**，却拿 **RPC 默认窗口 60,000 ms**（长任务窗口 600,000 ms）。余量 1.1 倍 ⇒ 稍大的可见窗口被判**「调用超时」**，界面看到**整批失败**，而推理还在后台跑完。 |
+| 证据 | 现场日志 80 条：均 36 s / 峰值 110 s；代码里三处引用的 **54,103 ms**；本轮真机复测 12 条一批冷 **32,037 ms** / 热 **28,151 ms**。 |
+| 处置 | `analyzeMessages` / `analyzeVisibleMessages` / `downloadLayaModel`（1.26 GB 下载）/ `adoptLayaModel`（跨盘拷 1.23 GB）登记进 `LONG_CALL_METHODS`；并把 `backend-rpc.spec.ts` 的判据从「单向」改成 `HEAVY_LEDGER` 台账**双向完全相等**（原来漏登记不会有任何报错）。 |
+
+细节与变异自证见 `docs/PERF-AUDIT-172-2026-09-28.md` §10.11。
+
+#### 8.7.2 两个被实测否掉的优化（**不要重做**）
+
+| 优化 | 实测 | 机制 |
+|---|---|---|
+| 逐条 forward → **合批一次 forward** | 同一份 12 条：逐条 **29,560 ms** vs 合批 **41,926 ms** ⇒ **慢 41.8%** | ① `session.run` 的**固定开销实测为 0**（线性拟合截距 −15.2 ms / 260 ms 每行）⇒ 没有可摊薄的东西；② 单位 token 成本**随序列长度上升** ⇒ pad 到批内最长等于让短行按最长那档买单。 |
+| intra-op 线程 **8 → 28** | 4→10,884 ／ **8→8,172** ／ 12→8,845 ／ 16→8,928 ／ 20→8,826 ／ 28→9,251 ms | 超过 8 只是让 E-core 互相抢缓存。 |
+
+复现：`node tools/laya/bench-inference.mjs`（自足脚本，需要真实模型）。
+
+#### 8.7.3 这两个「未做」后来都清掉了
+
+- **打包关（P3）**：本轮验完了，并且**抓出一个真缺陷**（打包版里 laya 根本起不来）—— 见 §8.8。
+- **质量侧的观察**（§8.5 末的「极短消息紧张度恒在 5 附近」）：**其实早已处理** ——
+  `isLowConfidenceText()` 把它标成 `lowConfidence`，`ChatAnalysisPanel` 渲染
+  「信息不足，仅供参考（判断主要来自上下文）」。原句是**过期的**，本轮更正。
+  （仍然不做的是「改善极短消息本身的判断质量」—— 那要换模型，不是改代码能解决的。）
+
+
+### 8.8 打包关（P3）：验完了，而且抓出一个会让 laya 完全起不来的缺陷
+
+P3 原先的措辞是「未验」—— 本轮把它跑完，结果**不是"验过了没问题"，而是验出了一个真缺陷**。
+
+#### 8.8.1 缺陷：打包版里 `import('@huggingface/transformers')` 必然抛错
+
+| 项 | 内容 |
+|---|---|
+| 症状 | 安装包里 laya **完全起不来**（不是慢、不是降级，是 `Cannot find module`）。 |
+| 根因 | `transformers.node.cjs` 在**模块顶层无保护地** `require("sharp")` 与 `require("onnxruntime-common")`（`var import_sharp = __toESM(require("sharp"))`，没有 try/catch、不在任何环境分支里）。而这两个包**都不在 `files` 白名单**里。 |
+| 为什么以前没发现 | 它只在**打包版**暴露；开发态 `node_modules` 里什么都有。而 `packaged-smoke.js` 对 onnxruntime **一条断言都没有**（`grep -c onnxruntime` = 0）—— 这条依赖是在「语音/向量」之后才进 `files` 的，加进来时没有配套的打包断言。 |
+| 为什么不选择「把它们补进包」 | `sharp` 要连带 `@img/sharp-win32-x64` 的 `libvips-42.dll`（**18.6 MB**，不可裁），`transformers` 还顺路带 `onnxruntime-web`（**135 MB**）。而 asar 上界 64 MiB、当时基线已 196.65 MB ⇒ 塞不下，也背离预算。 |
+
+#### 8.8.2 处置：把分词器换成 `@huggingface/tokenizers`
+
+它就是 transformers 内部用的那份实现，**纯 JS、零依赖、1 MB**，组件（BPE / Metaspace / Replace /
+ByteFallback / Fuse / AddedToken / TemplateProcessing）与我们的 `tokenizer.json` 一一对上。
+换掉之后不再需要 `sharp` / `@img` / `onnxruntime-web` / `onnxruntime-common` 之外的任何东西。
+
+**等价性是逐 token 证的**（这一条的判据必须硬）：
+
+| 验证 | 结果 |
+|---|---|
+| 分词：fixture 的 `tokenTable`（32 条 Python 侧真实分词结果） | **32/32 逐 token 一致**（`tools/laya/bench-tokenizer-swap.mjs`） |
+| 特殊 id（cls/sep/mask/pad） | 与 Python 完全相同（2 / 1 / 4 / 0），且改为**直接查 `added_tokens` 表**，不再靠"编码字面量取首个 id" |
+| 端到端：3 段真实对话 × 6 命题 vs Python `laya.predict()` | **18/18 全等**，最大偏差 `0.0e+0`；token 数也一样（574 / 706 / 1012） |
+
+#### 8.8.3 结果：`app.asar` 196.65 MB → **44.92 MB**
+
+顺带把审计 §P2-6 ⑰ 的两个 TODO 一起做掉了：
+
+| TODO | 做法 |
+|---|---|
+| ① 加同形排除并确证没有正向规则捞回 | `files` 加三条防御性排除（`!onnxruntime-web/**`、`!sharp/**`、`!@img/**`），并补 `node_modules/onnxruntime-common/**/*`（它是 onnxruntime-node 的**兄弟包**，两个 dist 都无保护 require 它）。packaged-smoke 断言这四处**在真实 asar 里确实不存在**。 |
+| ② 让闸门有一个不依赖本地产物的替身 | 新增 `productionDepClosure()` + `depClosureViolations()`：按 node_modules 真实布局解析**生产依赖闭包**，对「禁用包 / 必需包」两张名单判定。它**不读任何打包产物**，在单测里就跑（`packaging-content.spec.ts` 5 例，含两条反例自证）。判据用**名单**而不是「按 glob 离线算体积」—— 后者要重实现 electron-builder 的 glob 语义，一旦有出入就会重现「离线说 OK、真打包 196 MB」这个原始失败模式。 |
+
+#### 8.8.4 P3 的验收：三项全过
+
+```
+node node_modules/electron-builder/out/cli/cli.js --dir      # 真打包
+node scripts/packaged-smoke.js --content-only                # 包内容断言（含本轮新增的 14 条）
+node tools/laya/verify-packaged-onnx.mjs                     # 从打包布局跑真实推理
+```
+
+| 项 | 结果 |
+|---|---|
+| 包内容断言 | ✅ 全绿：`onnxruntime.dll` / `onnxruntime_binding.node` 在 `app.asar.unpacked`；darwin / linux / win32-arm64 **0 条目**；`DirectML.dll` / `dxcompiler.dll` / `dxil.dll` 已排除；`@huggingface/tokenizers` 与 `onnxruntime-common` 在 asar 内；`transformers` / `onnxruntime-web` / `sharp` / `@img` **彻底消失** |
+| asar 体积 | **44.92 MB / 上界 64 MB**（N22 那条**第一次真的执行**） |
+| 从打包布局跑真实推理 | ✅ **6/6 项**：asar 头部把原生文件标为 `unpacked`；解包+覆盖后 `onnxruntime.dll` 是真实文件、`onnxruntime-common` 在；**在该布局里跑出一次真实推理**（6 命题 / 436ms / 574 tokens），紧张度 **2.9893** —— 与仓库内直跑**同值** |
+
+#### 8.8.5 如实标注的边界
+
+- `verify-packaged-onnx.mjs` 复现的是**打包后的目录形态**（解包 asar + 覆盖 `app.asar.unpacked`），
+  **不覆盖 Electron 的 asar fs 补丁那一层**。那一层由「头部 `unpacked` 标记」（本脚本断言）+
+  packaged-smoke 的存在性断言共同兜底。**真实 GUI 启动仍未被验证**（沙箱拦 Electron GUI）。
+- `wechat/whisper/ggml-tiny.bin`（74 MB）仍随包 —— 那是**刻意**的（离线可用），不在预算问题之列。

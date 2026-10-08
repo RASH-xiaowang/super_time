@@ -36,6 +36,40 @@ export interface LayaDialogue {
 export declare function buildDialogueState(decryptedDir: string, 
 /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
 talker: string, selfUsername?: string, limit?: number): LayaDialogue;
+/**
+ * 对话上下文的**字数预算**（2026-09-29 实测后加）。
+ *
+ * ## 为什么用字数而不是"条数"
+ *
+ * 真机上量到的延迟曲线（`layaAnalyze` 单次，模型自报 `inferenceMs` 与之相差 <10ms）：
+ *
+ * | 上下文字数 | 单次推理 |
+ * |---|---|
+ * | 120 | 1,610 ms |
+ * | 240 | 2,428 ms |
+ * | 480 | 4,598 ms |
+ * | 720 | 7,228 ms |
+ *
+ * ⇒ **≈10 ms/字，基本线性**。而 `DEFAULT_CONTEXT` 是 **20 条**消息 —— 一条 60 字的会话
+ * 就是 1,200 字上下文 ≈ 12 s/条，用户在日志里看到的 `analyzeVisibleMessages 7–24s`
+ * 就是这么来的。按"条数"限根本框不住：条数一样，长短消息能差 10 倍。
+ *
+ * 240 字 ≈ 2.4 s/条：既留住"最近几轮对话"这个判断意图真正需要的信息，又把单条延迟
+ * 压到原来的 1/4 左右。这是**明确的取舍**（更少的背景 ⇒ 更快的响应），改这个常量
+ * 就等于在速度与上下文之间挪一档。
+ */
+export declare const MAX_CONTEXT_CHARS = 240;
+/**
+ * 按字数预算裁剪对话：**从最旧的整行开始丢**，保留尾部。
+ *
+ * 为什么丢头不丢尾：命题问的是「最后一句话」（语义焦点在尾部，见 {@link buildDialogueState}
+ * 关于"截断到最近一条对方消息"的说明），前文只是背景；从头部裁不会改变"最后一句话"是谁说的。
+ * 最后一行（正在分析的那条消息本身）**永远保留**，即便它自己就超预算。
+ * @param lines - 已按时间正序排好的对话行（形如 `对方：…` / `我：…`）。
+ * @param budget - 字数预算（含换行）。
+ * @returns 裁剪后的对话文本（单行超预算时仍返回该行）。
+ */
+export declare function budgetDialogue(lines: readonly string[], budget?: number): string;
 /** 一次分析请求。 */
 export interface LayaAnalysisInput {
     decryptedDir: string;
@@ -163,7 +197,13 @@ export interface LayaVisibleAnalysisResult {
     modelKey: string;
     items: LayaMessageAnalysis[];
 }
-/** 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。 */
+/**
+ * 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。
+ *
+ * 2026-09-28 复核：**曾尝试靠「合批」降低这一批的耗时，实测反而慢了 41.8%**
+ * （成本 ≈ 行数 × 序列长度，`session.run` 每次调用的固定开销实测为 0 ⇒ 没有可摊薄的东西，
+ * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见 docs/PERF-AUDIT 第七节。
+ */
 export declare const MAX_ANALYZE_BATCH = 12;
 /**
  * 逐条分析一批消息（消息流可见窗口驱动）。

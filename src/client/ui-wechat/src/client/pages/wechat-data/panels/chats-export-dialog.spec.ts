@@ -92,6 +92,17 @@ const COUNT_CHIPS = 'button[class*="exportChip"]:not([class*="exportChipCheck"])
 /** 「选择目录」那枚按钮：`exportBtn` 是 `exportBtnGhost`/`exportBtnPrimary` 的前缀，必须排掉。 */
 const DIR_BTN = 'button[class*="exportBtn"]:not([class*="exportBtnGhost"]):not([class*="exportBtnPrimary"])'
 /**
+ * 文字链按钮（「全选」/「取消全选」/「全部时间」）。
+ *
+ * 2026-09-28（P3）：这三枚由面板自己的 `.exportLinkBtn` 改成了 kit 的 `LinkButton`
+ * ⇒ 原来那个 `[class*="exportLinkBtn"]` 选择器**命中 0**（类名已不存在）。
+ * 不再按类名找：**类名是实现细节，这次收敛正好把它换掉了**。改按**可见文本**定位
+ * （这三处文案本来就是用例关心的事实），并限定是 `<button>` —— 收敛顺带把它们的
+ * `type` 也钉成了 `button`。
+ */
+const linkBtnByText = (text: string): Element | null =>
+  qa('button').find((b) => b.textContent === text) ?? null
+/**
  * 改受控 `<input>` 的值：React 在节点上挂了 value tracker，直接写 `el.value` 再派发
  * `input` 会被判定为"值没变"而吞掉事件 —— 必须走原型 setter 绕开 tracker 的取值。
  */
@@ -186,16 +197,16 @@ describe('格式与内容', () => {
 
   it('「全选」在空与非空间互为反向：空 ⇒ 交回全部 key，非空 ⇒ 交回空表', () => {
     show({ expTypes: [] })
-    expect(textOf('[class*="exportLinkBtn"]')).toBe('全选')
-    click(qa('[class*="exportLinkBtn"]')[0])
+    expect(linkBtnByText('全选')?.textContent ?? '', '空选择时这枚必须是「全选」').toBe('全选')
+    click(linkBtnByText('全选'))
     const updater = sink.setExpTypes.mock.calls[0]?.[0] as (prev: readonly string[]) => readonly string[]
     expect(updater(TYPES.map((t) => t.key))).toEqual([])
     expect(updater([])).toEqual(['text', 'image'])
 
     sink.setExpTypes.mockClear()
     show({ expTypes: ['text'] })
-    expect(textOf('[class*="exportLinkBtn"]')).toBe('取消全选')
-    click(qa('[class*="exportLinkBtn"]')[0])
+    expect(linkBtnByText('取消全选')?.textContent ?? '', '已有选择时这枚必须变「取消全选」').toBe('取消全选')
+    click(linkBtnByText('取消全选'))
     const u2 = sink.setExpTypes.mock.calls[0]?.[0] as (prev: readonly string[]) => readonly string[]
     expect(u2(['text', 'image'])).toEqual([])
   })
@@ -217,7 +228,7 @@ describe('格式与内容', () => {
 describe('时间范围、文件名与目录', () => {
   it('「全部时间」把两端都清空（只清一端会留下半截区间）', () => {
     show({ expFrom: '2026-09-01', expTo: '2026-09-20' })
-    const btn = qa('[class*="exportLinkBtn"]').find((b) => b.textContent === '全部时间')
+    const btn = linkBtnByText('全部时间')
     click(btn ?? null)
     expect(sink.setExpFrom).toHaveBeenCalledWith('')
     expect(sink.setExpTo).toHaveBeenCalledWith('')

@@ -1,6 +1,6 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
- * **9 组**（概览与问答 / 报告与总结 / 会话与消息 / 联系人与社交 / 内容资产 /
+ * **5 组**（概览与问答 / 报告与总结 / 会话与消息 / 联系人与社交 / 内容资产 /
  * 资金 / 洞察与行动 / 隐私与安全 / 维护与设置），侧栏可见 **16** 项 +
  * 底栏独立渲染的 `settings`，可路由页签共 **37**（其余 20 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
@@ -8,9 +8,16 @@
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
  * 分组名**只认 `nav-config.ts`** —— 改导航后请回来核对本注释，别再手写清单。
  * 数据经 DSH 后端 Remote（node:sqlite 读自有解密库），顶部显示连接状态与数据库状态弹窗。
+ *
+ * ── 侧栏默认展开（2026-09-30 用户要求）──────────────────────────────────────
+ * `navOpen` 的初值是 **true**（176px 展开态），此前是 false（58px 窄轨）。
+ * 理由：首次进来的人只看得到一排图标，要点一次才知道有哪些入口 —— 这是个默认值问题，
+ * 不是功能问题。**刻意不做持久化**：没有记忆就不会出现「上次收起了，这次打开还是收起」。
+ * 窗口很窄时仍可点「收起导航」让出宽度；该状态机在下面 `WechatDataPanel` 里，
+ * 真机几何由 `scripts/nav-shell-e2e.mjs` 按「默认展开 → 点一下收起 → 再展开」的顺序验收。
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, subscribeApiStatus } from './api.ts'
+import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, subscribeApiStatus, type ApiStatus } from './api.ts'
 import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 
 // 面板统一静态导入；客户端插件加载器按单文件 factory 加载，不能分包。
@@ -43,6 +50,7 @@ import { DailySummaryPanel } from './panels/DailySummary.tsx'
 import { PeriodSummaryPanel } from './panels/PeriodSummary.tsx'
 import { GraphPanel } from './panels/Graph.tsx'
 import { SettingsPanel } from './panels/Settings.tsx'
+import { SidebarBalance } from './panels/SidebarBalance.tsx'
 import { MergedSections } from './panels/MergedSections.tsx'
 import { KbShell } from './panels/KbShell.tsx'
 import { setActiveKb } from './panels/kb-scope.ts'
@@ -51,7 +59,7 @@ import kitCss from './ui/kit.module.css'
 import './scifi-theme.css'
 import './light-theme.css'
 import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
-import { toggleThemeMode, useThemeMode } from './theme.ts'
+import { toggleThemeMode, useThemeMode, type ThemeMode } from './theme.ts'
 import { Dialog, Tooltip } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
 import { GlobalSearch } from './panels/global-search.tsx'
@@ -396,6 +404,74 @@ const DIALOG_SECTION_OF: Readonly<Record<string, string>> = {
 }
 
 /**
+ * 侧栏底部固定区：**设置**按钮 → **模型余额** → 主题切换与数据状态。
+ *
+ * 为什么拆成独立组件（2026-09-30）：本文件的主组件有行数棘轮（只能变小），
+ * 而「模型余额」是新加的一行。把这一整块（设置按钮 + 余额 + 主题/状态）提出来，
+ * 主组件反而比原来少 30 行；顺带让「底部固定区」有了一个明确的名字。
+ * @param props - 侧栏展开态、设置弹窗状态与两个全局动作。
+ * @returns 底部固定区元素。
+ */
+function SidebarFooter({
+  navOpen,
+  settingsOpen,
+  onOpenSettings,
+  themeMode,
+  apiStatus,
+}: {
+  navOpen: boolean
+  settingsOpen: boolean
+  onOpenSettings: () => void
+  themeMode: ThemeMode
+  apiStatus: ApiStatus
+}): React.JSX.Element {
+  const themeHint = themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'
+  return (
+    <>
+      {/* 底部固定区域：设置始终可见（点击弹出弹窗，不切换主内容区） */}
+      <div className={css.sidebarFooter}>
+        <button
+          type="button"
+          className={css.navItem}
+          data-active={settingsOpen || undefined}
+          onClick={onOpenSettings}
+          title="设置"
+          aria-haspopup="dialog"
+          aria-expanded={settingsOpen}
+        >
+          <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <g dangerouslySetInnerHTML={{ __html: NAV_GROUPS.flatMap(g => g.items).find(it => it.tab === 'settings')?.icon ?? '' }} />
+          </svg>
+          <span className={css.navLabel}>设置</span>
+        </button>
+        {/* 模型余额（2026-09-30 用户要求：主界面左下角、设置按钮下方）。
+            它自己读配置、自己按 5 分钟刷；未配置模型时返回 null（不留空行）。 */}
+        <SidebarBalance collapsed={!navOpen} />
+      </div>
+      {/* 主题切换与数据状态（原顶栏右侧）：与「设置」同属全局动作，放底部固定区 */}
+      <div className={css.navFooterRow}>
+        <Tooltip content={themeHint}>
+          <button
+            type="button"
+            data-theme-toggle
+            className={css.themeToggle}
+            onClick={toggleThemeMode}
+            title={themeHint}
+            aria-label={themeHint}
+          >
+            {themeMode === 'light' ? <IconMoon /> : <IconSun />}
+          </button>
+        </Tooltip>
+        <span className={css.apiTag} data-status={apiStatus} title="本地解密数据的可读状态">
+          <StatusDot />
+          <span className={css.apiTagText}>{apiStatus === 'online' ? '数据就绪' : apiStatus === 'offline' ? '数据不可用' : '检测中…'}</span>
+        </span>
+      </div>
+    </>
+  )
+}
+
+/**
  * Render the WeChat data panel shell.
  * @returns the data panel element tree.
  */
@@ -415,8 +491,8 @@ export function WechatDataPanel(): React.JSX.Element {
   }, [])
   const apiStatus = useSyncExternalStore(subscribeApiStatus, getApiStatus)
   const themeMode = useThemeMode()
-  /** 导航栏展开态：由导航顶部的开关按钮点击切换（此前是鼠标悬停展开）。 */
-  const [navOpen, setNavOpen] = useState(false)
+  /** 导航栏展开态：开关按钮切换，**默认展开**（2026-09-30 起；理由见文件头，无持久化）。 */
+  const [navOpen, setNavOpen] = useState(true)
   /** 导航轨滚动感知：滚动条已隐藏（scrollbar-width:none），改用「边缘渐隐 + 箭头」
    *  告诉用户上/下方向还有条目。top=true 表示上方有被滚出的内容。 */
   const navRef = useRef<HTMLElement | null>(null)
@@ -821,42 +897,14 @@ export function WechatDataPanel(): React.JSX.Element {
               </span>
             )}
           </div>
-          {/* 底部固定区域：数据配置始终可见（点击弹出弹窗，不切换主内容区） */}
-          <div className={css.sidebarFooter}>
-            <button
-              type="button"
-              className={css.navItem}
-              data-active={settingsOpen || undefined}
-              onClick={() => { openSettings() }}
-              title="设置"
-              aria-haspopup="dialog"
-              aria-expanded={settingsOpen}
-            >
-              <svg className={css.navIcon} viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <g dangerouslySetInnerHTML={{ __html: NAV_GROUPS.flatMap(g => g.items).find(it => it.tab === 'settings')?.icon ?? '' }} />
-              </svg>
-              <span className={css.navLabel}>设置</span>
-            </button>
-          </div>
-          {/* 主题切换与数据状态（原顶栏右侧）：与「设置」同属全局动作，放底部固定区 */}
-          <div className={css.navFooterRow}>
-            <Tooltip content={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}>
-              <button
-                type="button"
-                data-theme-toggle
-                className={css.themeToggle}
-                onClick={toggleThemeMode}
-                title={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}
-                aria-label={themeMode === 'light' ? '切换到深色主题' : '切换到浅色主题'}
-              >
-                {themeMode === 'light' ? <IconMoon /> : <IconSun />}
-              </button>
-            </Tooltip>
-            <span className={css.apiTag} data-status={apiStatus} title="本地解密数据的可读状态">
-              <StatusDot />
-              <span className={css.apiTagText}>{apiStatus === 'online' ? '数据就绪' : apiStatus === 'offline' ? '数据不可用' : '检测中…'}</span>
-            </span>
-          </div>
+          {/* 底部固定区（设置 / 模型余额 / 主题与数据状态）：见 `SidebarFooter`。 */}
+          <SidebarFooter
+            navOpen={navOpen}
+            settingsOpen={settingsOpen}
+            onOpenSettings={openSettings}
+            themeMode={themeMode}
+            apiStatus={apiStatus}
+          />
         </aside>
         <main className={css.content}>
           <Suspense fallback={<div className={css.loadingFallback}>正在加载面板…</div>}>

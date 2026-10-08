@@ -10,6 +10,7 @@
 
 import { DatabaseSync } from 'node:sqlite'
 import { readdirSync, statSync } from 'node:fs'
+import { sqliteChangeCounter } from './file-sig.ts'
 import { join } from 'node:path'
 
 const MAX_AGE_MS = 5_000
@@ -76,10 +77,43 @@ function decode(v: unknown): string {
   return ''
 }
 
+/**
+ * 文件签名 = **mtimeNs : size**（2026-09-29 由 `mtimeMs` 改）。
+ *
+ * ## 为什么必须用纳秒
+ *
+ * `mtimeMs` 只有毫秒精度，而 SQLite 写入**常常只改内容、不改大小**（文件页对齐）——
+ * 同一毫秒内发生的写入会让签名**看起来没变**，缓存于是心安理得地继续回旧值。
+ * 真机上这以"数据变了却回旧值"的形式在本仓三处各咬过一次：
+ * `wordcloud` 分片签名、`kb-vectors` 粗筛表指纹、`storage-stats` 文件签名。
+ * `statSync(path, { bigint: true }).mtimeNs` 给的是 **NTFS 的 100ns 精度**，
+ * 实测开销与普通 `statSync` **无差别**（各 2 万次：**8.30µs vs 8.35µs**，约 0.6%），
+ * 所以在热路径上用它没有代价。
+ */
 function fileSig(path: string): string {
   try {
-    const st = statSync(path)
-    return `${st.mtimeMs}:${st.size}`
+    const st = statSync(path, { bigint: true })
+    return `${st.mtimeNs}:${st.size}${sqliteChangeCounter(path)}${walSig(path)}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * SQLite 的 **WAL 尾巴**（`<库>-wal`）也要进签名（2026-09-29 加）。
+ *
+ * 为什么：SQLite 默认 WAL 模式下，**写入先进 `-wal`**，主库文件的 mtime/size 可能**一直不变**
+ * （直到 checkpoint）。于是只看主库的签名会漏掉"刚写进去的那条"——
+ * 表现就是那条断言偶发 `expected 12006 not to be 12006`：数据确实变了，签名却"没变"
+ * （与 mtimeMs→mtimeNs 那次是**同一类问题的两个面**：前者是精度不够，后者是**看错了文件**）。
+ * 没有 `-wal` 时（已 checkpoint / 非 WAL）回落成空串，行为与之前一致。
+ * @param path - 主库路径。
+ * @returns 形如 `:<mtimeNs>:<size>` 的尾巴；没有 WAL 时为空串。
+ */
+function walSig(path: string): string {
+  try {
+    const w = statSync(path + '-wal', { bigint: true })
+    return `:${w.mtimeNs}:${w.size}`
   } catch {
     return ''
   }
@@ -87,8 +121,8 @@ function fileSig(path: string): string {
 
 function dirSig(dir: string): string {
   try {
-    const st = statSync(dir)
-    return `${st.mtimeMs}:${st.size}`
+    const st = statSync(dir, { bigint: true })
+    return `${st.mtimeNs}:${st.size}`
   } catch {
     return ''
   }
@@ -335,8 +369,23 @@ export async function cachedBySigAsync<T>(
   maxAgeMs = MAX_AGE_MS,
 ): Promise<T> {
   const hit = entries.get(key)
-  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) return hit.value as T
-  const running = inFlight.get(key)
+  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) {
+    if (process.env.SUPERTIME_CACHE_TRACE === '1') console.log(`[cache-trace] hit  ${key} sig=${sig}`)
+    return hit.value as T
+  }
+  if (process.env.SUPERTIME_CACHE_TRACE === '1') console.log(`[cache-trace] miss ${key} sig=${sig}${hit ? `（旧 sig=${hit.sig}）` : '（无旧值）'}`)
+  /**
+   * ⚠️ **在飞表按 `key + 签名` 去重**（2026-09-29 由只用 `key` 改）。
+   *
+   * 只用 `key` 时有一个真实的错值通道：数据变了（签名 B）之后新调用进来，
+   * 若此时**旧签名 A 的那一次计算还没跑完**，新调用会 `return running.value` ——
+   * 直接拿到 **A 的结果**，也就是"刚变过的数据，返回的却是旧值"。
+   * 这与之前几轮踩的签名口径是**另一条独立的错值通道**（前几轮修的是"变化看不见"，
+   * 这条是"看见了变化却被在飞的旧计算顶掉"）。
+   * 按签名分桶后：同签名共享一次计算（原有的省重复价值不变），签名不同则各算各的。
+   */
+  const flightKey = key + '\u0000' + sig
+  const running = inFlight.get(flightKey)
   if (running) return running.value as Promise<T>
   // 用一个小盒子存 Promise，靠**盒子本身的身份**判断「我还是不是最新的那一份」——
   // 直接写 `const mine = (async () => … mine …)()` 会让 TS 报「赋值前使用」（闭包里读到
@@ -345,17 +394,17 @@ export async function cachedBySigAsync<T>(
   rec.value = (async () => {
     const value = await loader()
     // 只有「仍然是在飞的那一份」才写回：避免被更新的签名算完后又被旧的盖一次。
-    if (inFlight.get(key) === rec) {
+    if (inFlight.get(flightKey) === rec) {
       entries.set(key, { at: Date.now(), sig, value })
       enforceKeyFamilyLimit(key)
     }
     return value
   })()
-  inFlight.set(key, rec)
+  inFlight.set(flightKey, rec)
   try {
     return await (rec.value as Promise<T>)
   } finally {
-    if (inFlight.get(key) === rec) inFlight.delete(key)
+    if (inFlight.get(flightKey) === rec) inFlight.delete(flightKey)
   }
 }
 

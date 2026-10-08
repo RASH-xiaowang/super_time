@@ -4,17 +4,20 @@
  * 为什么要有这一层：设置弹窗左导航的 `stepStates`（Settings.tsx）已经算过一次这些状态，
  * 但那套计算写在组件内部、依赖它自己的加载流程。向导要在主界面独立判断「配完没有」，
  * 两边各写一套的话迟早会出现「向导说没配好、设置里却是绿的」这种自相矛盾。
- * 所以口径收敛到这里：**四项必做（检测账号 / 数据库密钥 / 图片密钥 / 图片解码）**，
+ * 所以口径收敛到这里：**三项必做（检测账号 / 数据库密钥 / 图片密钥）**，
  * 语音转写列为可选（引擎没就绪不阻塞「完成」）。
+ *
+ * 2026-09-30：原来的第四步「图片解码」判的是「自动获取原图（CDN）开关是否开启」。
+ * 该开关（连同「禁止出网」）已被彻底移除，这一步不再有可配置的内容 —— 设置里那一节
+ * 只剩「批量解密 / 升级为原图 / 批量取原图」这些**动作**，不是必做配置，故从向导里去掉。
  *
  * 判定逐条对齐 Settings.tsx 的 stepStates：
  *   detect: 已检测到账号，或已填数据库目录
  *   dbkey : 密钥文件已加载且含密钥，或已手填密钥
  *   imgkey: 已填图片 AES 密钥
- *   img   : 「自动获取原图（CDN）」为开启
  */
 
-export type SetupStepKey = 'detect' | 'dbkey' | 'imgkey' | 'img'
+export type SetupStepKey = 'detect' | 'dbkey' | 'imgkey'
 
 /** 主界面能拿到的配置事实（由 api 层组装，见 SetupGuide 的取数）。 */
 export interface SetupFacts {
@@ -30,8 +33,6 @@ export interface SetupFacts {
   dbKey: string
   /** 图片 AES 密钥。 */
   imgAes: string
-  /** 「自动获取原图（CDN）」开关。 */
-  cdnEnabled: boolean
   /** whisper 引擎是否就绪（可选项）。 */
   voiceReady: boolean
 }
@@ -45,14 +46,13 @@ export interface SetupStep {
   done: string
 }
 
-/** 必做的四步，顺序与设置里的「配置向导」分组一致。 */
+/** 必做的三步，顺序与设置里的「配置向导」分组一致。 */
 /** 非空元组类型：`firstPendingStep` 的兜底要取「第一步」，声明成 `readonly SetupStep[]`
  *  就得靠断言或硬写一个 key（改了顺序就悄悄不一致）。元组让「至少有一步」成为类型事实。 */
 export const SETUP_STEPS: readonly [SetupStep, ...SetupStep[]] = [
   { key: 'detect', label: '检测账号', todo: '扫描本机微信账号与安装目录', done: '已检测到微信账号' },
   { key: 'dbkey', label: '数据库密钥', todo: '获取 64 位数据库密钥以解密聊天记录', done: '密钥已就绪' },
   { key: 'imgkey', label: '图片密钥', todo: '填写图片 AES 密钥与 XOR 偏移量', done: '图片密钥已就绪' },
-  { key: 'img', label: '图片解码', todo: '开启「自动获取原图（CDN）」', done: '图片解码已启用' },
 ]
 
 /** 可选一步：不阻塞「配置完成」，单独列一行。 */
@@ -67,7 +67,7 @@ export const SETUP_OPTIONAL_STEP = {
 export function emptyFacts(): SetupFacts {
   return {
     accounts: 0, dbDir: '', keysLoaded: false, keyCount: 0,
-    dbKey: '', imgAes: '', cdnEnabled: false, voiceReady: false,
+    dbKey: '', imgAes: '', voiceReady: false,
   }
 }
 
@@ -82,7 +82,6 @@ export function stepDone(key: SetupStepKey, facts: SetupFacts): boolean {
     case 'detect': return facts.accounts > 0 || facts.dbDir.trim() !== ''
     case 'dbkey': return (facts.keysLoaded && facts.keyCount > 0) || facts.dbKey.trim() !== ''
     case 'imgkey': return facts.imgAes.trim() !== ''
-    case 'img': return facts.cdnEnabled
     default: return false
   }
 }

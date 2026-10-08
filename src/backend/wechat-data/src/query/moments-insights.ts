@@ -3,12 +3,34 @@
  * top likers and commenters, monthly distribution, and "on this day" items.
  */
 import { DatabaseSync } from 'node:sqlite'
-import { withDb } from './db-open.ts'
+import { withDb, withDbAsync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MomentsGeo, MomentsGeoPoint, MomentsInsightsSnapshot, MomentsInteractorRow, MomentsTopItems } from '../types.ts'
 import { parseSnsLikesComments, parseSnsXml } from './moments.ts'
-import { cachedBySig, contactMeta, fileSigOf } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf } from './meta.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+
+/**
+ * 朋友圈表的**字符级**让出阈值（本模块专用；`search-build.ts` 那个 `YIELD_EVERY_CHARS` 更小，不适用）。
+ *
+ * ## 为什么只按行数不够
+ *
+ * `YIELD_EVERY_ROWS = 2000`，而本机真实数据里 `SnsTimeLine` 只有 **2341 行**，
+ * 本模块却要**扫它三遍**（提醒清单存活集合、定位点、帖子/互动）⇒ 每遍只让出一次，
+ * 实测片段上界卡在 **57ms**（`working/probe-stall.txt`）。
+ *
+ * ## 为什么也不能直接套 `YIELD_EVERY_CHARS`（131072）
+ *
+ * 直接套会**过度让出**：三遍合计让出 **171 次**，片段上界掉到 1ms ——
+ * 那已不是"给别人机会跑"，而是把 CPU 花在 `setImmediate` 来回切换上。
+ *
+ * ## 取值
+ *
+ * 1 MiB ⇒ 量级上每段几十毫秒，与仓库其它模块的片段同档（词云 14ms / 通话 22ms / 资产 39ms），
+ * 让出次数回到两位数。数字取自真实数据实测，不是拍脑袋。
+ */
+const MOMENTS_YIELD_EVERY_CHARS = 1 << 20
 
 function cellString(v: unknown): string {
   if (typeof v === 'string') return v
@@ -53,7 +75,7 @@ function sortedTop(map: Map<string, { username: string; nickname: string; count:
  * 与「发布量」的区别：同一作者在 SnsTimeLine 里可能有 158 条，但只进过 14 次提醒 ——
  * 提醒列表是**推送窗口**，不是发布总量。
  */
-function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, string>): MomentsTopItems {
+async function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, string>): Promise<MomentsTopItems> {
   const empty: MomentsTopItems = { rows: 0, users: 0, unread: 0, vanished: 0, top: [] }
   try {
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTopItem_1'").get() === undefined) return empty
@@ -66,9 +88,14 @@ function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, st
     // 提醒过的 tid 是否还在时间线上（不在 = 帖子已不可见）
     const alive = new Set<string>()
     try {
-      // 这一条**随朋友圈条数增长**：游标直接灌进 Set，不先物化成数组（N8）
+      // 这一条**随朋友圈条数增长**：游标直接灌进 Set，不先物化成数组（N8）。
+      // 2026-09-28：这里曾是本模块**唯一的 228ms 独占来源**（行数无让出），
+      // 现在按 `YIELD_EVERY_ROWS` 让出 —— 口径与 `wordcloud.ts` / `privacy.ts` 一致。
+      let sinceYield = 0
       for (const r of db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t FROM SnsTimeLine`).iterate() as Iterable<{ t: unknown }>) {
         alive.add(cellString(r.t))
+        sinceYield += 1
+        if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
       }
     } catch { /* 时间线不可读时全部按「未知」处理，下面按 vanished=0 计 */ }
     const byUser = new Map<string, { count: number; unread: number; vanished: number; lastRead: number }>()
@@ -108,7 +135,7 @@ function computeTopItems(db: DatabaseSync, tidCol: string, names: Map<string, st
  * 本机 490 条里 **485 条 latitude > 90** —— 纬度不可能超过 90，所以按「纬度=longitude 属性」用。
  * 这里输出的 `lat/lng` 已经是**修正后**的值，可直接画地图。
  */
-function computeGeo(db: DatabaseSync): MomentsGeo {
+async function computeGeo(db: DatabaseSync): Promise<MomentsGeo> {
   const empty: MomentsGeo = { points: 0, cities: [], countries: [], places: [], pointList: [] }
   try {
     const cityCount = new Map<string, number>()
@@ -119,8 +146,20 @@ function computeGeo(db: DatabaseSync): MomentsGeo {
     const pointList: MomentsGeoPoint[] = []
     // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，而这里只是逐条解析后累加，
     // 不需要先把整表物化成数组。
+    //
+    // 2026-09-28：**这一圈也要让出** —— 它把整张 `SnsTimeLine` 又扫一遍（本机 2341 行，
+    // 每行都要 `indexOf('<location')` + 4 次 `new RegExp` 解析属性），是本模块里最重的一段。
+    let sinceYield = 0
+    let charsSinceYield = 0
     for (const r of db.prepare('SELECT user_name AS u, content AS c FROM SnsTimeLine').iterate() as Iterable<{ u: unknown; c: unknown }>) {
       const xml = cellString(r.c)
+      sinceYield += 1
+      charsSinceYield += xml.length
+      if (sinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= MOMENTS_YIELD_EVERY_CHARS) {
+        sinceYield = 0
+        charsSinceYield = 0
+        await yieldToLoop()
+      }
       const li = xml.indexOf('<location')
       if (li < 0) continue
       const gt = xml.indexOf('>', li)
@@ -169,7 +208,7 @@ function computeGeo(db: DatabaseSync): MomentsGeo {
  * @param author - author username (default: all).
  * @returns the insights snapshot.
  */
-export function queryMomentsInsights(decryptedDir: string, author?: string): MomentsInsightsSnapshot {
+export async function queryMomentsInsights(decryptedDir: string, author?: string): Promise<MomentsInsightsSnapshot> {
   const dbPath = snsDb(decryptedDir)
   // 签名覆盖 sns.db 与 contact.db：互动人昵称来自后者。原先只签 sns.db，靠「事件后整表
   // 清空」兜住 —— M8 去掉那层兜底后必须补上真正读了的东西。
@@ -177,10 +216,12 @@ export function queryMomentsInsights(decryptedDir: string, author?: string): Mom
     dbPath === null ? '' : fileSigOf(dbPath),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
   ].join('|')
-  return cachedBySig('moments-insights:' + decryptedDir + ':' + (author ?? ''), sig, () => computeMomentsInsights(decryptedDir, author))
+  // 2026-09-28：同步 `cachedBySig` → async 版。冷算实测 228ms 且**一次都不让出**
+  // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
+  return cachedBySigAsync('moments-insights:' + decryptedDir + ':' + (author ?? ''), sig, () => computeMomentsInsights(decryptedDir, author))
 }
 
-function computeMomentsInsights(decryptedDir: string, author?: string): MomentsInsightsSnapshot {
+async function computeMomentsInsights(decryptedDir: string, author?: string): Promise<MomentsInsightsSnapshot> {
   const empty: MomentsInsightsSnapshot = {
     author: author ?? '', posts: 0, likes: 0, comments: 0, likedBy: [], commenters: [], monthly: [], today: [],
     topItems: { rows: 0, users: 0, unread: 0, vanished: 0, top: [] },
@@ -201,40 +242,60 @@ function computeMomentsInsights(decryptedDir: string, author?: string): MomentsI
   let geo: MomentsGeo = { points: 0, cities: [], countries: [], places: [], pointList: [] }
   let early: MomentsInsightsSnapshot | null = null
   try {
-    const rows = withDb(dbPath, (db) => {
+    // `withDbAsync`（不是 `withDb`）：下面循环里要 `await yieldToLoop()`，
+    // 而同步版 `withDb` 的 `finally` 会在**第一次让出**时就把连接关掉
+    // （见 `db-open.ts:70-83` 与 `query-yield-discipline.spec.ts` 里那条反例用例）。
+    const rowCount = await withDbAsync(dbPath, async (db) => {
       const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
       const tidCol = cols.has('tid') ? 'tid' : cols.has('Id') ? 'Id' : ''
       // 提醒列表与「按作者过滤」无关：它永远是**我的**提醒清单，所以无条件计算。
-      topItems = computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
-      geo = computeGeo(db)
+      topItems = await computeTopItems(db, tidCol, contactMeta(decryptedDir).names)
+      geo = await computeGeo(db)
       const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
       if (!has) return null
       const userCol = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
       const contentCol = cols.has('content') ? 'content' : cols.has('Content') ? 'Content' : ''
       if (!tidCol || !userCol || !contentCol) return null
       const where = author ? ` WHERE ${userCol} = ?` : ''
-      return db.prepare(`SELECT CAST(${tidCol} AS TEXT) AS t, ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`).all(...(author ? [author] : [])) as Array<{ t: unknown; u: unknown; c: unknown }>
-    })
-    // `null` = 表或关键列不在：与改造前一样直接交出「只有提醒清单」的空洞察
-    if (rows === null) early = { ...empty, topItems }
-    else for (const r of rows) {
-      posts += 1
-      const xml = cellString(r.c)
-      const parsed = parseSnsXml(xml)
-      const social = parseSnsLikesComments(xml)
-      likes += social.likes.length
-      comments += social.comments.length
-      for (const like of social.likes) addInteractor(likers, like.username, like.nickname)
-      for (const cm of social.comments) addInteractor(commenters, cm.username, cm.nickname)
-      if (parsed.createTime > 0) {
-        const d = new Date(parsed.createTime * 1000)
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-        monthly.set(key, (monthly.get(key) ?? 0) + 1)
-        if (d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
-          today.push({ tid: cellString(r.t), text: parsed.text, ts: parsed.createTime, author: cellString(r.u) })
+      // 游标 + 双阈值让出（2026-09-28）：原先是 `.all()` 一次性物化整张时间线，
+      // 实测**冷跑 228ms 且一次都不让出** —— 它排在串行 worker 上时，
+      // 后面所有 RPC（含同屏的世界板块）都要等满这 228ms。
+      const cur = db.prepare(
+        `SELECT CAST(${tidCol} AS TEXT) AS t, ${userCol} AS u, ${contentCol} AS c FROM SnsTimeLine${where}`,
+      ).iterate(...(author ? [author] : [])) as Iterable<{ t: unknown; u: unknown; c: unknown }>
+      let seen = 0
+      let sinceYield = 0
+      let charsSinceYield = 0
+      for (const r of cur) {
+        seen += 1
+        posts += 1
+        const xml = cellString(r.c)
+        charsSinceYield += xml.length
+        const parsed = parseSnsXml(xml)
+        const social = parseSnsLikesComments(xml)
+        likes += social.likes.length
+        comments += social.comments.length
+        for (const like of social.likes) addInteractor(likers, like.username, like.nickname)
+        for (const cm of social.comments) addInteractor(commenters, cm.username, cm.nickname)
+        if (parsed.createTime > 0) {
+          const d = new Date(parsed.createTime * 1000)
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+          monthly.set(key, (monthly.get(key) ?? 0) + 1)
+          if (d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+            today.push({ tid: cellString(r.t), text: parsed.text, ts: parsed.createTime, author: cellString(r.u) })
+          }
+        }
+        sinceYield += 1
+        if (sinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= MOMENTS_YIELD_EVERY_CHARS) {
+          sinceYield = 0
+          charsSinceYield = 0
+          await yieldToLoop()
         }
       }
-    }
+      return seen
+    })
+    // `null` = 表或关键列不在：与改造前一样直接交出「只有提醒清单」的空洞察
+    if (rowCount === null) early = { ...empty, topItems }
   } catch (e) {
     // 不再静默吞错：曾因此让「朋友圈洞察」长期显示全 0 而无人察觉
     // （SnsTimeLine.tid 在本机 2335 行里 100% 超出 JS 安全整数范围，

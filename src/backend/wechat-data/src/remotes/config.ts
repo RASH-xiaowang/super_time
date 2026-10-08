@@ -51,8 +51,6 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         api_enabled: Boolean(cfg['api_enabled'] ?? true),
         api_port: Number(cfg['api_port'] ?? 5032),
         api_token: cellStr(cfg['api_token'] ?? ''),
-        cdn_enabled: Boolean(cfg['cdn_enabled'] ?? true),
-        cdn_local_decrypt: Boolean(cfg['cdn_local_decrypt'] ?? true),
         whisper_device: cfg['whisper_device'] === 'gpu' ? 'gpu' : 'cpu',
         whisper_model: cellStr(cfg['whisper_model'] ?? 'medium'),
         whisper_threads: Number(cfg['whisper_threads'] ?? 0),

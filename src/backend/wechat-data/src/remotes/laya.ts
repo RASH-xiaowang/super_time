@@ -34,11 +34,6 @@ export interface createLayaRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   selfUsername: () => string
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  /**
-   * 出网闸门（`blockOutbound`）。模型文件 1.26 GB 从 HuggingFace 拉 —— 下的是文件、
-   * 不发聊天内容，但**仍是出网**，所以与 whisper 模型下载共用同一个总闸（P0-2）。
-   */
-  privacyBlocked: (feature: string, detail?: string) => string | null
 }
 
 export function createLayaRemotes(rc: createLayaRemotesInputs) {
@@ -120,8 +115,11 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       })
       const fresh = r.items.filter((i) => i.ok && !i.cached).length
       const voice = r.items.filter((i) => i.ok && i.fromVoice).length
+      // 顺带记一笔「这一批推理一共花了多久」：每条的 `inferenceMs` 不含取上下文的时间，
+      // 求和正好还原纯推理的墙钟（命中缓存的条目是 0）。性能排查时这条比条数有用。
+      const inferMs = r.items.reduce((a, i) => a + (i.inferenceMs || 0), 0)
       rc.op('task', 'analyze_visible_messages', r.ok ? 'ok' : 'fail', talker,
-        r.ok ? `${r.items.length} 条（新算 ${fresh}，语音 ${voice}）` : (r.error ?? ''))
+        r.ok ? `${r.items.length} 条（新算 ${fresh}，语音 ${voice}，推理合计 ${inferMs}ms）` : (r.error ?? ''))
       return r
     },
 
@@ -148,13 +146,6 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
      * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
      */
     async downloadLayaModel(): Promise<LayaDownloadOutcome> {
-      // 1.26 GB 的模型文件从 HuggingFace / 镜像拉 —— 判在**任何出网与并发检查之前**，
-      // 与 `downloadWhisperModel` / `installWhisperEngine` 同一口径（P0-2）。
-      const blocked = rc.privacyBlocked('laya_model_download', '从 HuggingFace 下载本地决策分析模型文件')
-      if (blocked !== null) {
-        rc.op('settings', 'download_laya_model', 'fail', '', blocked)
-        return { ok: false, error: blocked }
-      }
       if (layaDownload !== null) {
         rc.op('settings', 'download_laya_model', 'fail', '', '已有模型下载任务进行中')
         return { ok: false, error: '已有模型下载任务进行中' }

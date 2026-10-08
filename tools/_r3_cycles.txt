@@ -1,0 +1,50 @@
+R3 安全检查：var() 引用图
+============================================================
+
+— 深色侧链式环 —
+（无）
+
+— 浅色侧链式环 —
+（无）
+
+— 自引用 fallback（`var(--x, var(--x))`）—
+（无）
+
+— R3 新增 dsw -> nm 边（确认没有 nm -> dsw -> nm 环）—
+--dsw-alias-bg-base -> --nm-bg-0   (nm 侧回指: 无)
+--dsw-alias-bg-layer-0 -> --nm-bg-0   (nm 侧回指: 无)
+--dsw-alias-bg-layer-1 -> --nm-bg-1   (nm 侧回指: 无)
+--dsw-alias-bg-layer-2 -> --nm-bg-2   (nm 侧回指: 无)
+--dsw-alias-border-l1 -> --nm-cyan-8   (nm 侧回指: 无)
+--dsw-alias-border-l2 -> --nm-cyan-12   (nm 侧回指: 无)
+--dsw-alias-border-l3 -> --nm-cyan-25   (nm 侧回指: 无)
+--dsw-alias-border-l4 -> --nm-cyan-40   (nm 侧回指: 无)
+--dsw-alias-brand-primary -> --nm-brand   (nm 侧回指: 无)
+--dsw-alias-button-contrast-fill -> --nm-on-accent   (nm 侧回指: 无)
+--dsw-alias-button-ghost-active-border -> --nm-cyan-45   (nm 侧回指: 无)
+--dsw-alias-button-ghost-active-fill -> --nm-cyan-12   (nm 侧回指: 无)
+--dsw-alias-button-primary-hover -> --nm-sky   (nm 侧回指: 无)
+--dsw-alias-button-tool-bar-fill -> --nm-cyan-8   (nm 侧回指: 无)
+--dsw-alias-button-tool-bar-hover -> --nm-cyan-14   (nm 侧回指: 无)
+--dsw-alias-interactive-bg-active -> --nm-cyan-10   (nm 侧回指: 无)
+--dsw-alias-interactive-bg-hover -> --nm-cyan-6   (nm 侧回指: 无)
+--dsw-alias-label-caption -> --nm-text-2   (nm 侧回指: 无)
+--dsw-alias-label-dimmed -> --nm-text-3   (nm 侧回指: 无)
+--dsw-alias-label-primary -> --nm-text-1   (nm 侧回指: 无)
+--dsw-alias-label-primary-foreground -> --nm-on-accent   (nm 侧回指: 无)
+--dsw-alias-label-primary-inverted -> --nm-text-1   (nm 侧回指: 无)
+--dsw-alias-label-secondary -> --nm-text-2   (nm 侧回指: 无)
+--dsw-alias-label-tertiary -> --nm-text-3   (nm 侧回指: 无)
+--dsw-alias-link -> --nm-sky   (nm 侧回指: 无)
+--dsw-alias-scrollbar-hover-l2 -> --nm-cyan-25   (nm 侧回指: 无)
+--dsw-alias-state-business-primary -> --nm-blue   (nm 侧回指: 无)
+--dsw-alias-state-error-primary -> --nm-red   (nm 侧回指: 无)
+--dsw-alias-state-success-primary -> --nm-green   (nm 侧回指: 无)
+--dsw-alias-state-success-tertiary -> --nm-success-15   (nm 侧回指: 无)
+--dsw-alias-state-warn-label -> --nm-amber   (nm 侧回指: 无)
+--dsw-alias-state-warn-primary -> --nm-amber   (nm 侧回指: 无)
+--dsw-alias-state-warn-tertiary -> --nm-warning-15   (nm 侧回指: 无)
+--dsw-elevation-prominent -> --nm-shadow-popup   (nm 侧回指: 无)
+--dsw-font-family -> --nm-font-sans   (nm 侧回指: 无)
+--dsw-font-markdown-code-font-family -> --nm-font-mono   (nm 侧回指: 无)
+--dsw-font-xs-13 -> --nm-fs-md   (nm 侧回指: 无)

@@ -13,7 +13,7 @@ export declare function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInp
         accountDir?: string;
         pid?: number;
     }): Promise<AutoImageKeyResult>;
-    verifyImageKey(): VerifyImageKeyResult;
+    verifyImageKey(): Promise<VerifyImageKeyResult>;
     decryptAllDatabases(): Promise<DecryptAllResult>;
     decryptAllImages(options: {
         concurrency?: number;

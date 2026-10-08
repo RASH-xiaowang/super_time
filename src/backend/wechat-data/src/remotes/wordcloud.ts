@@ -13,7 +13,9 @@ export interface createWordcloudRemotesInputs {
 
 export function createWordcloudRemotes(rc: createWordcloudRemotesInputs) {
   return {
-    getWordCloud(options?: WordCloudOptions): WordCloudResult {
+    // `queryWordCloud` 改成 async 是为了在分片/行级让出事件循环（见该函数头注）：
+    // 它一次冷算仍要 ~2 秒，同步返回会把整个后端 RPC 队列堵住。
+    getWordCloud(options?: WordCloudOptions): Promise<WordCloudResult> {
       return queryWordCloud(rc.dirs().decrypted, options)
     },
   }

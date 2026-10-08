@@ -160,3 +160,105 @@ export async function apiFetchLlmModels(options: { apiUrl: string; apiKey: strin
     note: typeof res.value?.note === 'string' ? res.value.note : undefined,
   }
 }
+
+/** 连接测试的结果（2026-09-30）。 */
+export interface LlmConnectionProbe {
+  /** 往返耗时（毫秒）。 */
+  ms: number
+  /** 一句话结论（`该接口可见 12 个模型` / `向量维度 1024` / `相关度 0.8312`）。 */
+  detail: string
+  /** chat 端点可见的模型数（其它端点无意义，为 0）。 */
+  models: number
+  /** 实际请求的地址。 */
+  url: string
+}
+
+/** 连接测试要测哪一类端点（三套地址/Key/路径各不相同，见 `WechatLlmConfig`）。 */
+export type LlmProbeKind = 'chat' | 'embed' | 'rerank'
+
+/**
+ * 连接测试：按**端点类型**各测各的。
+ *
+ * `chat` 打 `GET {base}/models`（不产生费用）；`embed` / `rerank` 各发一条**最小请求**
+ * （固定测试串，约 3 / 6 个 token）—— 因为它们的地址、Key、路径都可能与主模型不同。
+ * @param options - 该端点的地址/凭据/路径/模型（草稿值即可）。
+ * @returns 耗时、一句话结论、可见模型数与实际地址。
+ */
+export async function apiTestLlmConnection(options: {
+  apiUrl: string
+  apiKey: string
+  kind?: LlmProbeKind
+  path?: string
+  model?: string
+}): Promise<LlmConnectionProbe> {
+  const api = (window as any)?.electronAPI?.wechat
+  if (!api?.testLlmConnection) throw new Error('连接测试接口不可用')
+  const res = await api.testLlmConnection({
+    baseUrl: options.apiUrl,
+    apiKey: options.apiKey,
+    kind: options.kind ?? 'chat',
+    path: options.path,
+    model: options.model,
+  })
+  if (!res?.ok) throw new Error(res?.error?.message || '连接测试失败')
+  return {
+    ms: typeof res.value?.ms === 'number' ? res.value.ms : 0,
+    detail: typeof res.value?.detail === 'string' ? res.value.detail : '',
+    models: typeof res.value?.models === 'number' ? res.value.models : 0,
+    url: typeof res.value?.url === 'string' ? res.value.url : '',
+  }
+}
+
+/** 余额查询的结果（2026-09-30）。 */
+export interface LlmBalance {
+  /** 币种（`CNY` / `USD` / 空）。 */
+  currency: string
+  /** 可用总额（含赠送）。 */
+  total: number
+  /** 未过期的赠送额度（认不出为 null）。 */
+  granted: number | null
+  /** 充值额度（认不出为 null）。 */
+  toppedUp: number | null
+  /** 余额是否够用（认不出为 null）。 */
+  isAvailable: boolean | null
+  /** 实际请求的地址。 */
+  url: string
+  /** 取回时间（毫秒时间戳）。 */
+  fetchedAt: number
+}
+
+/**
+ * 余额查询：按厂商惯例探 `/user/balance`（DeepSeek）或 `/user/info`（SiliconFlow 等）。
+ *
+ * 各家的字段名不统一（有的返回字符串金额、有的挂在 `data` 下），主进程侧按优先级尽力识别，
+ * 认不出来会抛错并说明是哪个地址 —— **不猜数字**。
+ * @param options - 地址与凭据（余额接口一律要 Key）。
+ * @returns 归一化后的余额。
+ */
+export async function apiGetLlmBalance(options: { apiUrl: string; apiKey: string }): Promise<LlmBalance> {
+  const api = (window as any)?.electronAPI?.wechat
+  if (!api?.getLlmBalance) throw new Error('余额查询接口不可用')
+  const res = await api.getLlmBalance({ baseUrl: options.apiUrl, apiKey: options.apiKey })
+  if (!res?.ok) throw new Error(res?.error?.message || '余额查询失败')
+  const v = res.value ?? {}
+  return {
+    currency: typeof v.currency === 'string' ? v.currency : '',
+    total: typeof v.total === 'number' ? v.total : 0,
+    granted: typeof v.granted === 'number' ? v.granted : null,
+    toppedUp: typeof v.toppedUp === 'number' ? v.toppedUp : null,
+    isAvailable: typeof v.isAvailable === 'boolean' ? v.isAvailable : null,
+    url: typeof v.url === 'string' ? v.url : '',
+    fetchedAt: typeof v.fetchedAt === 'number' ? v.fetchedAt : Date.now(),
+  }
+}
+
+/**
+ * 把余额渲染成一行短文本（主界面左下角与设置页共用同一口径）。
+ * @param b - 余额（或 null）。
+ * @returns 例如 `¥12.34`。
+ */
+export function formatBalance(b: Pick<LlmBalance, 'currency' | 'total'> | null | undefined): string {
+  if (!b) return '—'
+  const symbol = b.currency === 'USD' ? '$' : b.currency === 'CNY' || b.currency === '' ? '¥' : `${b.currency} `
+  return `${symbol}${b.total.toFixed(2)}`
+}

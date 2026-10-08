@@ -77,10 +77,34 @@ function registerMiscIpc(ctx) {
   /**
    * 是否处于验收/自动化测试模式（`SUPERTIME_TEST_MODE=1`）。
    *
-   * 验收脚本会用**本地 mock LLM** 替换模型，回答是固定文本而不是真实数据 ——
-   * 曾经两次被误认成「应用在编造答案」。前端据此在窗口顶部挂一条醒目横幅。
+   * ⚠️ 2026-09-29 更正：这个开关**只表示"这个窗口是自动化验收起的"**，
+   * 它**不等于**"回答来自 mock 模型" —— 真正替换模型的只有 `npm run ui:accept`
+   * （`scripts/ui-acceptance.mjs` 才会把 `llm.json` 指向本地 mock，并同时设
+   * `SUPERTIME_LLM_MOCK=1`）。此前横幅把两者混为一谈，实机截图里的人看到
+   * "回答来自本地 mock 模型" 就以为整份验收都在用假数据 —— 而大多数真机脚本
+   * （主题审计、面板审计、性能测量）用的是**真实数据根 + 真实配置**。
+   * 想一次拿全，用 {@link app:run-mode}。
    */
   ipcMain.handle('app:test-mode', () => process.env.SUPERTIME_TEST_MODE === '1');
+
+  /**
+   * 当前运行模式的**事实**（给界面挂横幅用）：是不是自动化窗口、有没有装 mock 模型、
+   * 以及**数据根到底在哪** —— 后者是"验收有没有用真实数据"最直接的证据。
+   * @returns `{ test, llmMock, dataRoot }`。
+   */
+  ipcMain.handle('app:run-mode', () => {
+    let dataRoot = '';
+    try {
+      // 状态目录里的 `wechat/config.json`（main.js 启动时记录路径配置的那一份）。
+      const cfg = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'config.json'), 'utf8'));
+      dataRoot = String(cfg?.resolved?.dataRoot ?? cfg?.dataRoot ?? '');
+    } catch { /* 没写过就留空 */ }
+    return {
+      test: process.env.SUPERTIME_TEST_MODE === '1',
+      llmMock: process.env.SUPERTIME_LLM_MOCK === '1',
+      dataRoot,
+    };
+  });
 
   /**
    * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`。

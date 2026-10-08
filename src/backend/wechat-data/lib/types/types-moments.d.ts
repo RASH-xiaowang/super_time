@@ -37,6 +37,7 @@ export interface MomentItem {
         url: string;
         key: string;
         md5: string;
+        token?: string;
         id?: string;
         timelineId?: string;
     }>;
@@ -45,6 +46,7 @@ export interface MomentItem {
         thumb: string;
         key: string;
         md5: string;
+        token?: string;
         duration: number;
         id?: string;
         timelineId?: string;
@@ -109,6 +111,8 @@ export interface FavorItem {
 }
 /** One resource file entry. */
 export interface FileItem {
+    /** 媒体标签上的 `token`：CDN 取图必需（实测 `token+idx=1` 才 200）。 */
+    token?: string;
     md5: string;
     fileName: string;
     fileSize: number;

@@ -22,7 +22,7 @@ import {
   writeRenderCache,
 } from '../api.ts'
 import type { SummaryRecord, SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, DateField, PanelHeader, TimeField, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
+import { Badge, DateField, ErrorState, PanelHeader, TimeField, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './daily-summary.module.css'
 import { fmtLocaleMs } from '../utils/format.ts'
@@ -336,7 +336,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
           </>
         )}
       />
-      {error && <div className={css.errBanner}>⚠️ {error}</div>}
+      {error && <ErrorState message={`⚠️ ${error}`} />}
       {toasts.length > 0 && (
         <div className={css.toasts}>
           {toasts.map(t => (

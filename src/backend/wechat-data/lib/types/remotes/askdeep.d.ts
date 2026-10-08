@@ -3,6 +3,7 @@ import { EmbedFn } from '../query/retrieval/embedding.ts';
 import { IntentKind, RerankWeights } from '../query/retrieval/types.ts';
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts';
 import type { Context } from '@deepseek-ai/cordis';
+import type { PrivacyGateFn } from '../gateway-privacy.ts';
 export interface createAskDeepRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -17,17 +18,7 @@ export interface createAskDeepRemotesInputs {
         answer: string;
         intent: IntentKind;
     }>;
-    privacyBlocked: (feature: string, detail?: string) => string | null;
-    privacyGate: (feature: string, stats: {
-        sessions: number;
-        messages: number;
-    }, texts: string[]) => {
-        ok: true;
-        texts: string[];
-    } | {
-        ok: false;
-        error: string;
-    };
+    privacyGate: PrivacyGateFn;
     embedModelName: (override?: string) => string;
     makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined;
     makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined;

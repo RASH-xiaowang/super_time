@@ -14,26 +14,26 @@ import { queryEmoticons } from '../query/emoticons.ts'
 import { queryFiles } from '../query/files.ts'
 import { resolveImageKeyPair } from '../query/image-key.ts'
 import { fetchImageOriginalToCache, resolveImageOriginalLink } from '../query/image-original.ts'
-import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan } from '../query/image-original-batch.ts'
+import { emptyOriginalBatchResult, fetchOriginalImagesBatch as runOriginalImagesBatch, recordFetchedOriginal, scanImageOriginalPlan, scanImageOriginalPlanAsync } from '../query/image-original-batch.ts'
 import { resolveMessageFileDataUrl } from '../query/media-file.ts'
 import { fetchRemoteImages } from '../query/remote-image.ts'
+import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageResourceHint } from '../query/media-image.ts'
+import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
 import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
+import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
 import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrl, resolveSnsVideoDataUrl } from '../query/sns-video.ts'
 import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
 import { writeFileSync } from 'node:fs'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  privacyBlocked: (feature: string, detail?: string) => string | null
-  cdnSwitches: () => { cdnEnabled: boolean; localDecrypt: boolean }
-  outboundBlocked: () => boolean
   /** 微信原始目录（`rawWechatBase(decrypted)`；本文件与它同属宿主层，按函数传进来）。 */
   rawWechatBase: (decrypted: string) => string
   /**
@@ -51,6 +51,14 @@ export interface MediaRemoteCtx {
 /** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
 const IMAGE_BATCH_MAX = 200
 
+/**
+ * 批量取表情时的**出网并发上限**（E1，2026-09-28）。
+ *
+ * 为什么是 8：与封面的 `COVER_CONCURRENCY`（`article-cover.ts`）取同一个数 ——
+ * 两条链的出网特性一样（都是向 CDN 取一张小图、失败可忽略），同一个数便于统一调参。
+ * 表情图比封面小得多，理论上可以更高，但**不为了跑分调高**：并发上去了对端更容易限流，
+ * 而这条链失败一次的代价是用户看到占位芯片。
+ */
 /**
  * 远程图片代理一次最多收多少个地址。
  *
@@ -109,7 +117,6 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     getAvatarsLocal(options: { usernames: string[] }): Record<string, string> {
       return resolveAvatarsLocal(rc.dirs().decrypted, options.usernames, {
         wechatBaseDir: rawWechatBase(rc.dirs().decrypted) || undefined,
-        allowRemote: !rc.outboundBlocked(),
       })
     },
 
@@ -135,10 +142,10 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       }
     },
 
-    getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): ImageDataUrlResult {
-      const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
+    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
+    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult> {
+      const pair = resolveImageKeyPair(rc.dirs().decrypted)
+      return snsImageWithCdnFirst(rc, options, pair)
     },
 
     getFileImageDataUrl(options: { md5: string }): ImageDataUrlResult {
@@ -153,22 +160,42 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       const local = decodeEmoticonDataUrl(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
       if (local.url) return local
       if (!options.emojiUrl) return local
-      const remote = await fetchEmoticonRemote(options.emojiUrl, rc.dirs().decoded, options.md5.toLowerCase(), rc.cdnSwitches())
+      const remote = await fetchEmoticonRemote(options.emojiUrl, rc.dirs().decoded, options.md5.toLowerCase(),
+        base ? { wechatBaseDir: base } : {})
       // 远端也失败时把两条原因都带上，便于区分「没走远端」与「远端失败」
       return remote.url ? remote : { error: (local.error ?? '本地解码失败') + '；' + (remote.error ?? '远端取图失败') }
+    },
+
+    /**
+     * 批量取表情（E1，2026-09-28 性能修复）。
+     *
+     * 现场日志里 `getEmoticonDataUrl` 13 次、**均 27,253ms、峰值 71,909ms** ——
+     * 两个原因叠在一起：① 前端逐张发 RPC（与封面的 A1 同病）；② 后端每次未命中都
+     * 递归扫整棵 `msg/attach`（E2 已改成查索引）。这里解决 ①。
+     *
+     * ## 为什么顺序是「先本地全过一遍，再对剩下的并发取远端」
+     *
+     * 不能「逐条走完整链」—— 那样每条都要等一次网络往返，N 条就是 N 个往返的时间。
+     * 拆成两趟之后：第一趟纯本地（查索引 + 解码，无网络，很快），把命中的直接定下来；
+     * 第二趟只对剩下的并发出网，并按 `emoticon-batch.ts` 里的并发上限限流。
+     * 算法整体搬在 `query/emoticon-batch.ts`（本函数只留签名 + 一行转发）。
+     *
+     * @param options - `items` 为屏上待取的表情（自动去重、忽略空 md5）。
+     * @returns 逐条结果，`md5` 回信；顺序 = 去重后的入参顺序。
+     */
+    async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<EmoticonDataUrlsResult> {
+      return fetchEmoticonDataUrlsBatch(
+        rc.dirs().decrypted,
+        rc.dirs().decoded,
+        rawWechatBase(rc.dirs().decrypted) || undefined,
+        options?.items,
+      )
     },
 
     async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
       const talker = String(options.username ?? '').trim()
       const localId = Math.trunc(Number(options.localId))
       if (talker === '' || !Number.isFinite(localId)) return { ok: false, error: '缺少会话或消息 id' }
-      // 「禁止出网」也拦这一条 —— 与朋友圈封面/视频同一口径（PRIVACY 第四节 B/C 段），
-      // 否则用户关掉总闸后这里仍然会向微信 CDN 发请求，那句承诺就成了假的。
-      const blocked = rc.privacyBlocked('image_original_fetch', '从微信 CDN 取回原图')
-      if (blocked !== null) {
-        rc.op('task', 'image_original_fetch', 'fail', talker, blocked)
-        return { ok: false, error: blocked }
-      }
       /**
        * 本机兜底：丢掉这张图的缓存条目、按本机现存最好的一档重解一次。
        *
@@ -200,7 +227,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         }
         return { ok: false, error: '这条消息没有免登录的原图直链（XML 里只有 CDN 文件标识），本机也只有缩略图。请在微信里打开这张图并点「查看原图」，然后回来再点一次。' }
       }
-      const r = await fetchImageOriginalToCache(link, rc.dirs().decoded, rc.cdnSwitches())
+      const r = await fetchImageOriginalToCache(link, rc.dirs().decoded)
       if (r.bytes === undefined) {
         // 取回失败里最常见的一种是**直链过期**（预签名 URL 有有效期）—— 那时本机很可能
         // 已经有了更大的那一份（用户点开过），所以先试本机，再如实回报两条原因。
@@ -226,7 +253,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
      * 计划与执行的计数同源（都是 `scanImageOriginalPlan`），不会出现「报 8000 张、实际取 7000 张」。
      * @returns 覆盖率盘点（见 `OriginalFetchPlan`）；未配置原始目录时全 0。
      */
-    planOriginalFetch(): OriginalFetchPlan {
+    async planOriginalFetch(): Promise<OriginalFetchPlan> {
       const decrypted = rc.dirs().decrypted
       const empty: OriginalFetchPlan = {
         messages: 0, uniqueMd5: 0, alreadyHd: 0, alreadyFetched: 0,
@@ -234,14 +261,13 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       }
       const rawRoot = rawWechatBase(decrypted)
       if (!rawRoot) return empty
-      return scanImageOriginalPlan(decrypted, rawRoot, rc.dirs().decoded).plan
+      return (await scanImageOriginalPlanAsync(decrypted, rawRoot, rc.dirs().decoded, yieldToLoop)).plan
     },
 
     /**
      * 批量取回原图（免登录直链）：把全库那 16.6% 的一次取完，**可续跑**。
      *
-     * 与单张路径的三条一致：隐私总闸在最前（`privacyBlocked`）、「自动获取原图（CDN）」开关
-     * 关掉时**一条请求都不发**（在 query 层判，返回 `blocked`）、逐条失败不中断整批。
+     * 与单张路径一致：已有解密类任务在跑时不并发（回 `blocked`）、逐条失败不中断整批。
      * 成功的写进 `<decoded>/.originals-index.json` ⇒ 下次点一下接着走，不会重下。
      *
      * **明确不做的**：XML 里只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% 需要微信登录态凭据
@@ -253,11 +279,6 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     async fetchOriginalImagesBatch(options: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult> {
       const decrypted = rc.dirs().decrypted
       const decoded = rc.dirs().decoded
-      const blocked = rc.privacyBlocked('image_original_fetch', '从微信 CDN 批量取回原图')
-      if (blocked !== null) {
-        rc.op('task', 'image_original_fetch', 'fail', '批量', blocked)
-        return emptyOriginalBatchResult(blocked)
-      }
       if (rc.decryptState.active) return emptyOriginalBatchResult('已有解密任务进行中')
       const rawRoot = rawWechatBase(decrypted)
       if (!rawRoot) return emptyOriginalBatchResult('未配置数据库目录，无法定位微信原始数据')
@@ -272,7 +293,6 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         const r = await runOriginalImagesBatch(decrypted, rawRoot, decoded, {
           ...(options.limit !== undefined ? { limit: options.limit } : {}),
           ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
-          ...rc.cdnSwitches(),
           onProgress: (done, total, fetched, failed, message) => {
             rc.decryptState.done = done
             rc.decryptState.total = total
@@ -283,9 +303,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         rc.decryptState.skipped = Math.max(0, r.candidates - r.attempted)
         const mb = (r.bytes / 1024 / 1024).toFixed(1)
         rc.op('task', 'image_original_fetch', r.failed === 0 ? 'ok' : 'fail', '批量',
-          r.blocked !== undefined
-            ? r.blocked
-            : `取回 ${r.fetched}/${r.attempted} 张（${mb} MB），失败 ${r.failed}，剩余候选 ${r.remaining}`)
+          `取回 ${r.fetched}/${r.attempted} 张（${mb} MB），失败 ${r.failed}，剩余候选 ${r.remaining}`)
         return r
       } finally {
         rc.decryptState.active = false
@@ -297,26 +315,19 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
      * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
      *
      * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
-     * 直接向消息 XML 里的 https 地址发请求** —— 既不受「自动获取原图（CDN）」开关管、也不受
-     * 「禁止出网」管、不进操作记录、没有缓存（同一次滚动反复要同一张）。把它收到后端之后，
-     * 那三件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
+     * 直接向消息 XML 里的 https 地址发请求** —— 不进操作记录、没有缓存（同一次滚动反复要同一张）。
+     * 把它收到后端之后那两件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
      *
      * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
      * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
      * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
      * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
-     *   来自本机缓存。关闭出网开关时**一次请求都不发**，但本机缓存照常返回。
+     *   来自本机缓存。
      */
     async getRemoteImages(options: { urls?: string[] }): Promise<{ items: RemoteImageResult[] }> {
       const urls = Array.isArray(options?.urls) ? options.urls.slice(0, REMOTE_URLS_RPC_MAX) : []
       if (urls.length === 0) return { items: [] }
-      // 与 `image_original_fetch` / `sns_*_fetch` 同一道闸：用户关了总闸之后这里也不许出网
-      const blocked = rc.privacyBlocked('remote_image_fetch', '从微信 CDN 取回图片')
-      if (blocked !== null) {
-        rc.op('task', 'remote_image_fetch', 'fail', `${String(urls.length)} 张`, blocked)
-        return { items: urls.map((url) => ({ url, error: blocked })) }
-      }
-      const items = await fetchRemoteImages(urls, rc.dirs().decoded, rc.cdnSwitches())
+      const items = await fetchRemoteImages(urls, rc.dirs().decoded)
       const net = items.filter((it) => !it.fromCache)
       const failed = net.filter((it) => !it.dataUrl)
       // 只在这次真的发过请求时记一条（缓存命中不该刷满操作记录）
@@ -350,9 +361,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       // 地址是渲染层/消息 XML 送上来的，发请求前必须过白名单（M23）：
       // 只判协议等于「谁给后端一个 https 地址，后端就去取谁」。
       if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
-      const blocked = rc.privacyBlocked('sns_cover_fetch', '从微信 CDN 取回封面')
-      if (blocked) return { error: `${local.error}；${blocked}` }
-      const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key, ...rc.cdnSwitches() })
+      const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key })
       if (fetched.url) return fetched
       rc.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
       return { error: fetched.error }
@@ -366,9 +375,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       if (!remote || !/^https?:\/\//i.test(remote)) return local
       // 同封面：白名单判在发请求之前（M23）
       if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该视频'}；视频地址的主机不在微信 CDN 清单内，已拒绝请求` }
-      const blocked = rc.privacyBlocked('sns_video_fetch', '从微信 CDN 取回视频')
-      if (blocked) return { error: `${local.error}；${blocked}` }
-      const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key, ...rc.cdnSwitches() })
+      const fetched = await fetchSnsVideoDataUrl(remote, options.md5, { version: weixinVersion(), seed: options.key })
       if (fetched.url) {
         rc.op('task', 'sns_video_fetch', 'ok', '', `从 CDN 取回并解密朋友圈视频（${options.md5?.slice(0, 8) ?? '?'}…）`)
         return fetched
@@ -390,7 +397,6 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
         url: options.url,
         seed: options.key,
         version: weixinVersion(),
-        ...rc.cdnSwitches(),
       })
       if (loaded.error || !loaded.bytes) {
         rc.op('task', 'export_sns_video', 'fail', options.md5?.slice(0, 8) ?? '', loaded.error ?? '')
@@ -408,4 +414,66 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
   }
+}
+
+
+/** `getSnsImageDataUrl` 的入参：`md5` 等为旧口径，`url`/`token`/`seed` 为 CDN 通路（可选）。 */
+interface SnsImageOptions {
+  md5: string
+  timelineId?: string
+  mediaId?: string
+  /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路。 */
+  url?: string
+  /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
+  token?: string
+  /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
+  seed?: string
+}
+
+/**
+ * 朋友圈取图：**CDN 优先**（实测 ~200ms），失败回落本机解密。
+ *
+ * 为什么先 CDN：本机那条在缓存未命中时会走「读文件 + 解密 + 哈希」全量兜底
+ * （实测 12–21s，最坏 130s，见 `sns-image.ts` 顶部日志）；而 CDN 通路实测 200、
+ * 响应经 `WxIsaac64` 解密后就是 JPEG（见 `sns-cdn-image.ts`）。
+ * 三样（url/token/seed）缺一就保持旧行为（纯本机）—— 向后兼容，既有调用点不受影响。
+ *
+ * @param rc - 运行上下文（只用到 `dirs()`）。
+ * @param options - 见 `SnsImageOptions`。
+ * @returns 图片 data URL；两条路都失败时把原因合并，便于区分「本地没有」与「CDN 失败」。
+ */
+async function snsImageWithCdnFirst(
+  rc: { dirs: () => { decrypted: string }; rawWechatBase: (decrypted: string) => string },
+  options: SnsImageOptions,
+  keys: { aesKey: string | undefined; xorKey: number },
+): Promise<ImageDataUrlResult> {
+  const dirs = rc.dirs()
+  const base = rc.rawWechatBase(dirs.decrypted) || undefined
+  const { aesKey, xorKey } = keys
+  const url = String(options.url ?? '')
+  const token = String(options.token ?? '')
+  const seed = String(options.seed ?? '')
+  // 追踪：卡片只显示默认文案时，唯一能取证的地方就是这里（应用日志 app.log）
+  const tag = '[sns-image] md5=' + options.md5.slice(0, 8)
+  const local = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId)
+  if (local.url) {
+    console.error(tag + ' 本机路命中（长度 ' + String(local.url.length) + '）')
+    return local
+  }
+  // 本机没有才试 CDN。
+  //
+  // 2026-10-08 现场实测（`tests/sns-live-verify.manual.spec.ts`，真库/真网/真 WASM）：
+  // 9/9 图片取回 HTTP 200、**头 128 KB 解密正确（JPEG 魔数对上）但尾部仍是密文** ⇒
+  // 整份 XOR 用我们这份 WxIsaac64 构建做不到（参考项目另有一份 WASM 构建才能一次生成全量）。
+  // 所以 CDN 只当兜底：小图（≤128 KB）能成，大图会被结尾判据拦下并回落。
+  if (url === '' || token === '' || seed === '') {
+    return local
+  }
+  const cdn = await fetchSnsCdnImage(url, token, seed)
+  if (cdn.dataUrl) {
+    console.error(tag + ' CDN 命中（长度 ' + String(cdn.dataUrl.length) + '）')
+    return { url: cdn.dataUrl }
+  }
+  console.error(tag + ' 两条都失败：本机=' + String(local.error) + ' / CDN=' + String(cdn.error))
+  return { error: (local.error ?? '本地解码失败') + '；CDN：' + (cdn.error ?? '取图失败') }
 }

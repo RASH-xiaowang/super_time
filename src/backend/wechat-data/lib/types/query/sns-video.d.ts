@@ -9,16 +9,13 @@
  * @param remoteUrl - XML 里的 `<url>`。
  * @param expectMd5 - XML 里 `<url md5>`，取回后用来验证。
  * @param opts - `version` 本机微信版本（UA 必须带 `WeChat/<版本>`，否则 CDN 直接 400）；
- *   `seed` 即 `<enc key>`，用于解密加密头；`timeoutMs` 超时；
- *   `cdnEnabled` / `localDecrypt` 对应界面上的「自动获取原图（CDN）」与「原图解密方式」（N24）。
+ *   `seed` 即 `<enc key>`，用于解密加密头；`timeoutMs` 超时。
  * @returns data URL，或带具体原因的 error。
  */
 export declare function fetchSnsVideoDataUrl(remoteUrl: string, expectMd5?: string, opts?: {
     version?: string;
     timeoutMs?: number;
     seed?: string;
-    cdnEnabled?: boolean;
-    localDecrypt?: boolean;
 }): Promise<{
     url?: string;
     error?: string;
@@ -27,15 +24,13 @@ export declare function fetchSnsVideoDataUrl(remoteUrl: string, expectMd5?: stri
  * 取回并解密视频本体字节（不做 base64，供「保存到文件」这类需要原始字节的调用方用）。
  * @param remoteUrl - CDN 地址。
  * @param expectMd5 - XML 里的 `<url md5>`，用于校验。
- * @param opts - UA 版本 / 超时 / `<enc key>` 种子 / `cdnEnabled` / `localDecrypt`（见 query/cdn-policy.ts）。
+ * @param opts - UA 版本 / 超时 / `<enc key>` 种子。
  * @returns 字节，或错误说明。
  */
 export declare function fetchAndDecodeVideo(remoteUrl: string, expectMd5?: string, opts?: {
     version?: string;
     timeoutMs?: number;
     seed?: string;
-    cdnEnabled?: boolean;
-    localDecrypt?: boolean;
 }): Promise<{
     bytes?: Buffer;
     error?: string;
@@ -43,6 +38,9 @@ export declare function fetchAndDecodeVideo(remoteUrl: string, expectMd5?: strin
 /**
  * 取到视频本体字节：**本机缓存优先**（明文、离线），没有缓存再 CDN 取回并解密。
  * 供播放（转 data URL）与「保存到文件」共用，避免两条路各自实现一遍。
+ *
+ * **主机白名单**：远端那一级只允许腾讯系主机（`query/cdn-hosts.ts`，唯一出处），
+ * 判在**本机缓存之后、发请求之前** —— 本机已有的照常导出，站外地址一个字节都不发。
  * @param args - 缓存键（base+trace ids）与远端信息（url/seed/version）。
  * @returns 字节 + 来源，或错误说明。
  */
@@ -54,8 +52,6 @@ export declare function loadSnsVideoBytes(args: {
     url?: string;
     seed?: string;
     version?: string;
-    cdnEnabled?: boolean;
-    localDecrypt?: boolean;
 }): Promise<{
     bytes?: Buffer;
     source?: 'local' | 'remote';
@@ -71,8 +67,6 @@ export declare function fetchSnsCoverDataUrl(remoteUrl: string, opts?: {
     version?: string;
     timeoutMs?: number;
     seed?: string;
-    cdnEnabled?: boolean;
-    localDecrypt?: boolean;
 }): Promise<{
     url?: string;
     error?: string;

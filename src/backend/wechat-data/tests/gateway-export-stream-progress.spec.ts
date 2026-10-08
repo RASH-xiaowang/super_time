@@ -184,10 +184,11 @@ describe('M3：导出/备份的进度与取消（gateway 接线）', () => {
     expect(events.every(e => e.jobId === 'backup-1')).toBe(true)
   })
 
-  it('createBackup 的「部分失败」被 gateway 转成 {ok:false,error}（不再报假成功）', () => {
+  it('createBackup 的「部分失败」被 gateway 转成 {ok:false,error}（不再报假成功）', async () => {
     makeRoot(true)
     const gw = gateway()
-    const r = gw.createBackup()
+    // 2026-09-28：`createBackup` 改 async（逐子目录 `cpSync` 要让出，实测独占 206ms）⇒ 加 await。
+    const r = await gw.createBackup()
     expect(r.ok).toBe(false)
     expect(r.error ?? '').toContain('备份不完整')
     expect(r.error ?? '').toContain('boom')

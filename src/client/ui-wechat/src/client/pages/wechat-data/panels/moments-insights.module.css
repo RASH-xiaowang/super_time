@@ -13,7 +13,7 @@
   padding: 1px 6px;
   border-radius: var(--nm-r-pill);
   font-family: var(--nm-font-sans, inherit);
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
 }
 .badgeWarn { color: var(--nm-warning); background: color-mix(in srgb, var(--nm-warning) 12%, transparent); }
 .badgeMuted { color: var(--nm-text-2); background: var(--nm-bg-hover); }

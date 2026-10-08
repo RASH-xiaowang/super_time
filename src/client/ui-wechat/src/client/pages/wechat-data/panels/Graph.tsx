@@ -7,7 +7,8 @@
  * 与「笔记库」同属知识库入口，由 WechatDataPanel 的 MergedSections 分段切换。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiDeleteNote, apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph, apiGetNotes, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiDeleteNote, apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph, apiGetNotes } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
 import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
@@ -97,10 +98,15 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     const name = kbs.find(k => k.id === kbId)?.name
     return name ? `「${name}」` : ''
   }, [kbs, kbId])
-  const [data, setData] = useState<GraphSnapshot | null>(() => readRenderCache<GraphSnapshot>('graph'))
+  /* 2026-10-03 推广：社交图谱与知识图谱**各用一个 useFreshData**，刻意分开 ——
+     知识侧失败只静默保持旧值，不能把社交面板带进错误态（源码原有设计）。
+     打开（或换库）即查最新，查询失败才回退缓存并由 hook 标注「以下为本地缓存（可能不是最新）」。 */
+  const fetchGraph = useCallback(() => apiGetGraph(), [])
+  const { data, loading: graphLoading, error: graphError, reload: reloadGraph } = useFreshData<GraphSnapshot>('graph', fetchGraph)
   /** 知识图谱快照（笔记 / stub / wiki 边）。与社交图谱分开加载：它是叠加维度，
    *  取不到时社交侧必须照常可用，所以单独 try/catch、不共用 error 状态。 */
-  const [knowledge, setKnowledge] = useState<KnowledgeSnapshot | null>(() => readRenderCache<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId)))
+  const fetchKnowledge = useCallback(() => apiGetKnowledgeGraph(kbId), [kbId])
+  const { data: knowledge, reload: reloadKnowledge } = useFreshData<KnowledgeSnapshot>(kbCacheKey('kb-graph', kbId), fetchKnowledge)
   /** 笔记编辑器：open + 待编辑内容（id 为空表示新建）。 */
   const [noteEditor, setNoteEditor] = useState<{ open: boolean; id?: number; title?: string; body?: string }>({ open: false })
   const [settings, setSettings] = useState<GraphSettings>(() => ({
@@ -155,35 +161,27 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     setSelectedId(null)
   }
 
-  const load = useCallback(async (): Promise<void> => {
-    setError(null)
-    if (dataRef.current === null) setLoading(true)
-    try {
-      const env = await apiGetGraph()
-      dataRef.current = env
-      setData(env)
-      writeRenderCache('graph', env)
-      // 性能:若用户未自定义「节点上限」,按候选节点数动态封顶(≤250),大图也流畅;
-      // 一旦用户改过(非默认档),后续刷新不再覆盖。
-      setSettings(prev => prev.nodeLimit === DEFAULT_GRAPH_SETTINGS.nodeLimit
-        ? { ...prev, nodeLimit: Math.min(DEFAULT_GRAPH_SETTINGS.nodeLimit, Math.max(1, env.nodes.filter(n => n.kind !== 'group' && n.kind !== 'self').length)) }
-        : prev)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  /** `dataRef` 与 hook 的 data 同步（原用途：防「load 依赖 data」造成无限重拉）。 */
+  useEffect(() => { dataRef.current = data }, [data])
+  /** 面板自身 loading/error 对齐（本面板别处也在写它们）。 */
+  useEffect(() => {
+    if (!graphLoading) setLoading(false)
+    if (graphError !== null) setError(graphError)
+  }, [graphLoading, graphError])
+  /** 载入后按候选节点数动态封顶「节点上限」（用户改过非默认档则不再覆盖）。 */
+  useEffect(() => {
+    setSettings(prev => prev.nodeLimit === DEFAULT_GRAPH_SETTINGS.nodeLimit
+      ? { ...prev, nodeLimit: Math.min(DEFAULT_GRAPH_SETTINGS.nodeLimit, Math.max(1, (data?.nodes ?? []).filter(n => n.kind !== 'group' && n.kind !== 'self').length)) }
+      : prev)
+  }, [data])
+
+  /** 既有调用点（重查）原样可用。 */
+  const load = reloadGraph
 
   /** 知识图谱单独加载：失败只静默保持旧值（或空），不把社交图谱面板带进错误态。
    *  `kbId` 是依赖：换库就是换图，必须重取；缓存键也带库 id，两者一起才不串库。 */
-  const loadKnowledge = useCallback(async (): Promise<void> => {
-    try {
-      const kb = await apiGetKnowledgeGraph(kbId)
-      setKnowledge(kb)
-      writeRenderCache(kbCacheKey('kb-graph', kbId), kb)
-    } catch { /* 知识维度不可用不应影响社交图谱 */ }
-  }, [kbId])
+  /** 既有调用点原样可用（换库时 hook 的 key 变化会自动重取）。 */
+  const loadKnowledge = reloadKnowledge
 
   // 两个加载器分成两个 effect：`load`（通讯录图谱）与库无关，并在一起的话每次切库
   // 都会白拉一次社交图谱（那是几百毫秒级的大快照）。

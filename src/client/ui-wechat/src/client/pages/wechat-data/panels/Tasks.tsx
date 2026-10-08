@@ -2,10 +2,11 @@
  * 待办提取面板 — 从最近聊天中提取待办/提醒（DSH LLM 生成 JSON），本地持久化到
  * wechat_tasks.db；支持手动添加、完成/重开、删除、跳转来源会话。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { apiAddTask, apiDeleteTask, apiExtractTasks, apiListTasks, apiSetTaskStatus, apiSyncHandoffTasks, readRenderCache, writeRenderCache } from '../api.ts'
+import { useCallback, useState } from 'react'
+import { apiAddTask, apiDeleteTask, apiExtractTasks, apiListTasks, apiSetTaskStatus, apiSyncHandoffTasks } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { WechatTask } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Badge, Card, EmptyState, PanelHeader, Toolbar } from '../ui/kit.tsx'
+import { Badge, Button, Card, EmptyState, LinkButton, LoadingState, PanelHeader, Toolbar } from '../ui/kit.tsx'
 import { useTransientNotice } from './hooks.tsx'
 import css from './tasks.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -23,7 +24,15 @@ function fmtDue(ts?: number): string {
  * @returns the tasks element tree.
  */
 export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
-  const [tasks, setTasks] = useState<readonly WechatTask[]>(() => readRenderCache<readonly WechatTask[]>('tasks') ?? [])
+  /* 2026-10-03 推广批次 2：改用共用 useFreshData —— 打开即查最新（不再预填缓存）；
+     `shouldCache` 保证**读失败的结果不进缓存**（N1：把"读不到"的空列表写进缓存，
+     下次打开会先渲染「暂无待办」，而缓存看不出是读失败还是确实没有）。 */
+  const fetchTasks = useCallback(() => apiListTasks(), [])
+  const { data: taskData, reload } = useFreshData<Awaited<ReturnType<typeof apiListTasks>>>('tasks', fetchTasks, { shouldCache: (d) => !d.readError })
+  const tasks = taskData?.items ?? []
+  const readError = taskData?.readError ?? null
+  /** 原 `load` 的调用点（新增/提取/同步/删除后重查）全部保留语义：它就是 hook 的 reload。 */
+  const load = reload
   /**
    * 「待办库读不到」的原因（N1）。
    *
@@ -31,7 +40,6 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
    * 没有它，「库被占用/损坏」与「确实一条待办都没有」在界面上完全一样 ——
    * 用户会照「暂无待办」去排查，方向全错（那正是 N1 要修的那件事）。
    */
-  const [readError, setReadError] = useState<string | null>(null)
   const [manualTitle, setManualTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [extracting, setExtracting] = useState(false)
@@ -40,24 +48,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
   // 提示语自动消失（L20）：原手写的 `window.setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice()
 
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    try {
-      const r = await apiListTasks()
-      setTasks(r.items)
-      setReadError(r.readError ?? null)
-      // 读失败时**不写**渲染缓存：把「读不到」的那份空列表写进去，下次打开会先渲染
-      // 「暂无待办」，而缓存本身看不出来源 —— 正好复现 N1 要消除的那个假象。
-      if (!r.readError) writeRenderCache('tasks', r.items)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
 
-  useEffect(() => { void load() }, [load])
 
   const notify = (text: string): void => {
     flash(text)
@@ -165,7 +156,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
           待办库读取失败（不是「暂无待办」）：{readError}
         </div>
       )}
-      {loading && <div className={kitCss.emptyInline}>加载中…</div>}
+      {loading && <LoadingState variant="compact" label="加载中…" />}
 
       {!loading && tasks.length === 0 && !error && !readError && <EmptyState icon="✅" title="暂无待办" desc="点击右上角「提取最近 7 天待办」自动生成" />}
 
@@ -178,7 +169,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                 <div className={css.taskMeta}>
                   {fmtDue(t.dueAt) ? `到期 ${fmtDue(t.dueAt)}` : '未设置到期'}
                   {t.sourceUsername ? (
-                    <button type="button" className={css.linkBtn} onClick={() => { onOpenChat?.(t.sourceUsername ?? '', t.sourceLocalId) }}>来源会话</button>
+                    <LinkButton onClick={() => { onOpenChat?.(t.sourceUsername ?? '', t.sourceLocalId) }}>来源会话</LinkButton>
                   ) : null}
                 </div>
               </div>

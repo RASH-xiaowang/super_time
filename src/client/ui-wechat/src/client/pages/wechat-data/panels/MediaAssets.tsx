@@ -2,9 +2,10 @@
  * 媒体资产馆（v1 盘点）— hardlink 图片/文件/视频规模、总占用与重复 md5
  * 清单。空间治理的可执行动作（去重/清理）为后续项。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
-import { apiGetMediaAssets, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiGetMediaAssets } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { MediaAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import css from './media-assets.module.css'
@@ -17,28 +18,9 @@ import kitCss from '../ui/kit.module.css'
  * @returns the media assets element tree.
  */
 export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) => void } = {}): React.JSX.Element {
-  const [data, setData] = useState<MediaAssetsSnapshot | null>(() => readRenderCache<MediaAssetsSnapshot>('media-assets'))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    // 安静 SWR：有渲染缓存时先展示缓存（不闪整页），后台再刷新。
-    const cached = readRenderCache<MediaAssetsSnapshot>('media-assets')
-    if (cached) setLoading(false)
-    else setLoading(true)
-    setError(null)
-    try {
-      const fresh = await apiGetMediaAssets()
-      setData(fresh)
-      writeRenderCache('media-assets', fresh)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+  /* 2026-10-03 推广批次 1：改用共用 useFreshData —— 打开即查最新（不再预填缓存），成功写回缓存；失败才回退缓存并由 hook 标注「以下为本地缓存（可能不是最新）」。 */
+  const load = useCallback((): Promise<MediaAssetsSnapshot> => apiGetMediaAssets(), [])
+  const { data, loading, error } = useFreshData<MediaAssetsSnapshot>('media-assets', load)
 
   // 新媒体随真实同步落地后安静刷新。
   useWechatDataUpdated(() => { void load() })

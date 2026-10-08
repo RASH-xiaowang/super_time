@@ -268,6 +268,31 @@ export interface ImageDataUrlResult {
     thumb?: boolean;
     error?: string;
 }
+/** 一篇文章封面的批量结果（A1，2026-09-28 性能修复：把 N 个单张 RPC 收成 1 个）。 */
+export interface ArticleCoversResult {
+    items: Array<{
+        url: string;
+        dataUrl?: string;
+        error?: string;
+    }>;
+}
+/**
+ * 批量表情取图的结果（E1，2026-09-28 性能修复）。
+ *
+ * 与 {@link ArticleCoversResult} 同一形状：`md5` 是**回信用**的键（调用方按它匹配
+ * 到自己的那张卡片），`dataUrl`/`error` 二者必有其一。
+ *
+ * 为什么 `md5` 要回来而不是靠顺序对齐：入参允许重复与空串（调用方通常直接映射一屏
+ * 消息），去重之后顺序就与入参不再一一对应。用键回信，调用方才不会错位贴图。
+ */
+export interface EmoticonDataUrlsResult {
+    items: Array<{
+        md5: string;
+        dataUrl?: string;
+        format?: string;
+        error?: string;
+    }>;
+}
 /** Decrypted DB status summary lines. */
 export interface DbStatusSnapshot {
     lines: string[];

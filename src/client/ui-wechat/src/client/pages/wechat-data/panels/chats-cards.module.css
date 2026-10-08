@@ -84,7 +84,7 @@
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   line-height: 1;
   color: var(--nm-cyan);
@@ -96,7 +96,7 @@
   vertical-align: middle;
   letter-spacing: 0.02em;
 }
-.msgHeaderName .entBadge { font-size: 10.5px; padding: 3px 6px; border-radius: var(--nm-r-sm); }
+.msgHeaderName .entBadge { font-size: var(--nm-fs-xs, 11px); padding: 3px 6px; border-radius: var(--nm-r-sm); }
 @container (max-width: 420px) {
   .msgTypeChips { display: none; }
 }
@@ -192,7 +192,7 @@
   border-bottom: 1px solid var(--nm-border);
 }
 .msgTypeChip {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   background: var(--nm-bg-hover);
   border: 1px solid transparent;
@@ -217,7 +217,7 @@
   background: var(--nm-bg-card);
   color: var(--nm-text-1);
   font-size: 12px;
-  padding: 6px 16px;
+  padding: 6px 14px;
   border-radius: var(--nm-r-pill);
   cursor: pointer;
   transition: var(--nm-t-ui);
@@ -462,7 +462,7 @@
 }
 .calDay:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .calDayCnt {
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-cyan);
   font-weight: 700;
   line-height: 1;
@@ -573,15 +573,6 @@
   font-family: var(--nm-font-mono, monospace);
   corner-shape: round;
 }
-.exportLinkBtn {
-  border: none;
-  background: transparent;
-  color: var(--nm-cyan);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-.exportLinkBtn:hover { text-decoration: underline; }
 .exportFormatCard {
   display: flex;
   align-items: center;

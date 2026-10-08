@@ -1,6 +1,6 @@
 
 /**
- * 操作日志与隐私审计（含隐私开关读数） 的 @Remote 处理器（M21 自 `gateway.ts` 搬出）。
+ * 操作日志与隐私审计（含脱敏开关读数） 的 @Remote 处理器（M21 自 `gateway.ts` 搬出）。
  *
  * 机制：类里保留 @Remote 装饰器与签名（协议层按名字枚举），方法体一行转发；
  * 处理器体在这里，依赖由 `rc` 显式给出。
@@ -41,11 +41,11 @@ export function createOpsLogRemotes(rc: createOpsLogRemotesInputs) {
       return getPrivacyStateSnapshot(rc.dirs().decrypted)
     },
 
-    setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): PrivacyStateSnapshot {
+    setPrivacyState(options: { redactSensitive?: boolean }): PrivacyStateSnapshot {
       try {
         writePrivacySettings(rc.dirs().decrypted, options)
         const snapshot = getPrivacyStateSnapshot(rc.dirs().decrypted)
-        rc.op('settings', 'set_privacy_state', 'ok', '', `脱敏=${options.redactSensitive ?? '不变'}，出站拦截=${options.blockOutbound ?? '不变'}，地图底图=${options.blockMapTiles ?? '不变'}`)
+        rc.op('settings', 'set_privacy_state', 'ok', '', `脱敏=${options.redactSensitive ?? '不变'}`)
         return snapshot
       } catch (e) {
         rc.op('settings', 'set_privacy_state', 'fail', '', (e as Error).message)

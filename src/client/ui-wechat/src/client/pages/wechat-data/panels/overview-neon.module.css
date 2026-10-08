@@ -243,7 +243,7 @@
 }
 .plate[data-tone='purple'] .plateValue { background: linear-gradient(96deg, #f0dcff 0%, #c79dff 45%, #7fd6ff 100%); -webkit-background-clip: text; background-clip: text; }
 .plateLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -321,7 +321,7 @@
 
 /* 板面上的英文副标（设计稿里牌面写的是英文，这里保留中文主标、英文做副标） */
 .plateEn {
-  font-size: 9px;
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--nm-text-3) 88%, transparent);
@@ -384,6 +384,132 @@
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 14%, transparent),
     0 0 42px -22px color-mix(in srgb, var(--nm-cyan) 95%, transparent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 浅色主题覆盖（2026-09-28 首版 / 2026-09-29 修好选择器）
+ *
+ * ## 为什么必须在这里单独写一段
+ *
+ * 本文件是这一族里**唯一整份用裸色**的皮肤（深海军蓝玻璃 + 白字 + 霓虹渐变文字），
+ * 而 `light-theme.css` 的覆盖层选择器是 `:root.theme-light`（权重 0,1,1），
+ * 打不过这里的 `.root.root` / `.hero` / `.card.card` 等**类选择器**。
+ * 后果：切到浅色主题时，这一页仍是一块深色皮肤，而里面的文字 / 边框却跟着
+ * `--nm-*` 换成了浅色主题的值 —— 深底配浅字，可读性直接失效。
+ *
+ * 这正是 `docs/UI-REDESIGN-2026-09-28.md` 记的 V1 / V4 / V6（三套视觉语言并行、
+ * 裸色集中在少数文件）在总览页上的具体表现。
+ *
+ * ## ⚠️ 选择器必须写成 `:root[class~='theme-light']`，不能写 `:root.theme-light`
+ *
+ * 本文件是 **CSS Modules**：裸写的 `theme-light` 会被当成**本地类名**一并哈希 ——
+ * 构建产物里变成 `:root._theme-light_18lio_395 ._card_18lio_272…`，
+ * 而 `<html>` 上的类名是原样的 `theme-light` ⇒ 选择器**永不匹配**，
+ * **整段覆盖全是死规则**。2026-09-29 的报障就是这样来的：
+ * 「浅色模式下数据总览界面的背景颜色不对」—— 卡片 / 指标条 / 牌面在浅色下仍是深海军蓝。
+ *
+ * 这里用**属性子串/词匹配选择器**而不是 `:global(.theme-light)`：后者在本目录已被
+ * `overview-layout.spec.ts` 明令禁止（`:global(.局部类名)` 只会发出裸类名，
+ * 用来跨模块覆盖别人的哈希类名永远匹配不到）—— `theme-light` 虽然是真全局类，
+ * 但同一个总览家族里已有属性选择器这套写法（`[class*='stage']` 等），保持一致。
+ * 属性选择器的**字符串值不参与 CSS Modules 哈希**，所以能命中 `<html class="theme-light">`；
+ * 权重 (0,1,0)+(0,1,0)+(0,2,0) = (0,4,0)，照样压过原声明。
+ * 常驻判据：`light-theme-coverage.wiring.spec.ts` 第 6/8 条（含反例自证）。
+ *
+ * ## 口径
+ *
+ * 保留「等距立体牌 + 渐变数字」这套**形态**（那是本皮肤的身份），只把底与字换掉：
+ *   · 深海军蓝玻璃 → 白色 / 浅石板玻璃；外投影由纯黑改为中性蓝灰（浅底上纯黑很脏）；
+ *   · 发丝高光 `rgba(255,255,255,α)` → 更实的白（浅底上白描边本来就不显眼，不改成深色以免变"边框"）；
+ *   · 霓虹渐变文字（浅青 / 浅紫）→ 深青 / 深紫，保证浅底可读。
+ * ══════════════════════════════════════════════════════════════════════ */
+:root[class~='theme-light'] .root.root {
+  background:
+    radial-gradient(ellipse 90% 42% at 50% -6%, color-mix(in srgb, var(--nm-cyan) 10%, transparent), transparent 68%),
+    radial-gradient(ellipse 70% 40% at 8% 12%, color-mix(in srgb, var(--nm-purple) 8%, transparent), transparent 70%),
+    linear-gradient(180deg, #eef2f7 0%, #e9eef6 45%, #e6ecf5 100%);
+}
+
+/* 等距网格：深底上是"发光刻线"，浅底上改用淡青/淡紫刻线，层次感等价。 */
+:root[class~='theme-light'] .isoGrid {
+  background:
+    repeating-linear-gradient(60deg, rgba(8, 145, 178, 0.10) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(-60deg, rgba(124, 58, 237, 0.09) 0 1px, transparent 1px 46px);
+}
+
+/* 指标条外壳：深玻璃 → 白玻璃。 */
+:root[class~='theme-light'] .hero {
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 250, 0.86));
+  box-shadow:
+    0 24px 48px -30px rgba(15, 23, 42, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 0 32px -20px color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+}
+
+/* 牌面 / 高光层 / 投影 */
+:root[class~='theme-light'] .plateFace { background: linear-gradient(160deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 252, 0.98)); }
+/**
+ * 牌面内嵌的"玻璃面"（`.plateFace::after`）**必须单独覆盖**。
+ *
+ * 深色端它是一层深玻璃（`linear-gradient(160deg, rgba(20,34,66,.86), …)`），
+ * 而 `.plateFace` 自己的白底被它**整个盖住** —— 只改 `.plateFace` 不改 `::after`，
+ * 浅色下这排牌子依然是一块深海军蓝（2026-09-29 报障的第二层原因；
+ * 只量 `.plateFace` 的 computed style 会以为"已经跟主题走了"）。
+ */
+:root[class~='theme-light'] .plateFace::after {
+  background:
+    radial-gradient(140% 80% at 16% 4%, rgba(255, 255, 255, 0.95), transparent 58%),
+    linear-gradient(158deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 12%, transparent) 58%, transparent),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(246, 249, 253, 0.94) 58%, rgba(244, 240, 253, 0.94));
+}
+/* 牌面色调：深色端是饱和色玻璃，浅色端换成同色系的**淡**玻璃（保住"每个指标一个色"的识别度）。 */
+:root[class~='theme-light'] .plate[data-tone='purple'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-purple) 22%, transparent), color-mix(in srgb, var(--nm-cyan) 12%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 6%, transparent)); }
+:root[class~='theme-light'] .plate[data-tone='blue'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-info) 22%, transparent), color-mix(in srgb, var(--nm-purple) 12%, transparent) 62%, color-mix(in srgb, var(--nm-purple) 6%, transparent)); }
+:root[class~='theme-light'] .plate[data-tone='green'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-success) 22%, transparent), color-mix(in srgb, var(--nm-cyan) 12%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 6%, transparent)); }
+:root[class~='theme-light'] .plateDepth {
+  background:
+    radial-gradient(130% 78% at 16% 4%, rgba(255, 255, 255, 0.95), transparent 58%),
+    linear-gradient(160deg, rgba(236, 242, 250, 0.96), rgba(255, 255, 255, 0.94) 58%, rgba(238, 233, 250, 0.94));
+}
+:root[class~='theme-light'] .plate { filter: drop-shadow(0 8px 16px rgba(37, 99, 235, 0.16)); }
+:root[class~='theme-light'] .plate:hover { filter: brightness(1.03) drop-shadow(0 10px 20px rgba(37, 99, 235, 0.24)); }
+
+/* 霓虹渐变数字：保留渐变形态，两端压暗到浅底可读。
+ *
+ * ⚠️ `background-clip: text` **必须跟着一起重写**：`background` 是简写，
+ * 它会把所有 background 子属性重置为初始值 —— 包括 `background-clip: border-box`。
+ * 于是渐变铺满整个盒子，而 `-webkit-text-fill-color: transparent` 仍从深色规则生效
+ * ⇒ **数字彻底看不见，只剩一条渐变条**（2026-09-29 报障的第一层原因）。
+ * （深色规则里那两行 `-webkit-background-clip/background-clip: text` 是被这条简写顶掉的，
+ * 不是"没写"。） */
+:root[class~='theme-light'] .plateValue {
+  color: #0f2a44;
+  background: linear-gradient(96deg, #075985 0%, #0e7490 38%, #6d28d9 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+:root[class~='theme-light'] .plate[data-tone='purple'] .plateValue {
+  background: linear-gradient(96deg, #6d28d9 0%, #7c3aed 45%, #0e7490 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 玻璃卡片 / 条形槽 / 格子 / 热力柱：同一族的"深玻璃 → 白玻璃"。 */
+:root[class~='theme-light'] .card.card {
+  background: linear-gradient(158deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 252, 0.84));
+  box-shadow:
+    0 20px 44px -32px rgba(15, 23, 42, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[class~='theme-light'] .barTrack.barTrack { background: color-mix(in srgb, #e2e8f0 92%, transparent); }
+:root[class~='theme-light'] .gridCells > div {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.9), rgba(240, 245, 251, 0.84));
+}
+:root[class~='theme-light'] .gridCells > div:hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9); }
+:root[class~='theme-light'] .hourFill.hourFill {
+  background: linear-gradient(180deg, #0e7490 0%, #2563eb 45%, #6d28d9 100%);
 }
 
 /* ── ⑤ 降级 ───────────────────────────────────────────────── */

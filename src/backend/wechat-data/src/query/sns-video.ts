@@ -26,7 +26,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 // 宿主层的 CommonJS 重试封装（无类型声明：这两个按 any 用）
 import { TIMEOUT_ERROR_NAME, fetchWithRetry } from '../../../llm-retry.js'
-import { CDN_DISABLED_MESSAGE, LOCAL_DECRYPT_DISABLED_MESSAGE, cdnFetchAllowed, localDecryptEnabled } from './cdn-policy.ts'
+import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { decryptSnsHead } from './sns-keystream.ts'
 import { missWithScanNotes, safeReaddir, snsMonthRoots } from './sns-scan.ts'
 import type { ScanNotes } from './sns-scan.ts'
@@ -140,14 +140,13 @@ function findByContentMd5(wechatBaseDir: string, wantMd5: string, notes: ScanNot
  * @param remoteUrl - XML 里的 `<url>`。
  * @param expectMd5 - XML 里 `<url md5>`，取回后用来验证。
  * @param opts - `version` 本机微信版本（UA 必须带 `WeChat/<版本>`，否则 CDN 直接 400）；
- *   `seed` 即 `<enc key>`，用于解密加密头；`timeoutMs` 超时；
- *   `cdnEnabled` / `localDecrypt` 对应界面上的「自动获取原图（CDN）」与「原图解密方式」（N24）。
+ *   `seed` 即 `<enc key>`，用于解密加密头；`timeoutMs` 超时。
  * @returns data URL，或带具体原因的 error。
  */
 export async function fetchSnsVideoDataUrl(
   remoteUrl: string,
   expectMd5?: string,
-  opts: { version?: string; timeoutMs?: number; seed?: string; cdnEnabled?: boolean; localDecrypt?: boolean } = {},
+  opts: { version?: string; timeoutMs?: number; seed?: string } = {},
 ): Promise<{ url?: string; error?: string }> {
   const got = await fetchAndDecodeVideo(remoteUrl, expectMd5, opts)
   if (got.error || !got.bytes) return { error: got.error }
@@ -159,22 +158,19 @@ export async function fetchSnsVideoDataUrl(
  * 取回并解密视频本体字节（不做 base64，供「保存到文件」这类需要原始字节的调用方用）。
  * @param remoteUrl - CDN 地址。
  * @param expectMd5 - XML 里的 `<url md5>`，用于校验。
- * @param opts - UA 版本 / 超时 / `<enc key>` 种子 / `cdnEnabled` / `localDecrypt`（见 query/cdn-policy.ts）。
+ * @param opts - UA 版本 / 超时 / `<enc key>` 种子。
  * @returns 字节，或错误说明。
  */
 export async function fetchAndDecodeVideo(
   remoteUrl: string,
   expectMd5?: string,
-  opts: { version?: string; timeoutMs?: number; seed?: string; cdnEnabled?: boolean; localDecrypt?: boolean } = {},
+  opts: { version?: string; timeoutMs?: number; seed?: string } = {},
 ): Promise<{ bytes?: Buffer; error?: string }> {
   const got = await fetchSnsMediaBytes(remoteUrl, opts)
   if (got.error || !got.bytes) return { error: got.error }
   let bytes = got.bytes
   // 不是 MP4 容器 → 是加密流，按 <enc key> 解密前 128KB 再验
   if (!isMp4Container(bytes)) {
-    // 用户选了「服务端解密」：不本地解密，直接用远端字节。这里必须**区分两种失败**，
-    // 否则「开关关掉了」会显示成「解密失败/取回的字节不符」，用户找不到病因（N24）。
-    if (!localDecryptEnabled(opts)) return { error: LOCAL_DECRYPT_DISABLED_MESSAGE }
     const seed = (opts.seed || '').trim()
     if (!seed) return { error: '微信 CDN 返回的是加密流，但该动态没有 <enc key>，无法解密' }
     try {
@@ -195,6 +191,9 @@ export async function fetchAndDecodeVideo(
 /**
  * 取到视频本体字节：**本机缓存优先**（明文、离线），没有缓存再 CDN 取回并解密。
  * 供播放（转 data URL）与「保存到文件」共用，避免两条路各自实现一遍。
+ *
+ * **主机白名单**：远端那一级只允许腾讯系主机（`query/cdn-hosts.ts`，唯一出处），
+ * 判在**本机缓存之后、发请求之前** —— 本机已有的照常导出，站外地址一个字节都不发。
  * @param args - 缓存键（base+trace ids）与远端信息（url/seed/version）。
  * @returns 字节 + 来源，或错误说明。
  */
@@ -206,8 +205,6 @@ export async function loadSnsVideoBytes(args: {
   url?: string
   seed?: string
   version?: string
-  cdnEnabled?: boolean
-  localDecrypt?: boolean
 }): Promise<{ bytes?: Buffer; source?: 'local' | 'remote'; error?: string }> {
   const local = findLocalVideoPath(args.base, args.md5, args.timelineId, args.mediaId)
   if (local.path) {
@@ -217,11 +214,13 @@ export async function loadSnsVideoBytes(args: {
   }
   const remote = (args.url || '').trim()
   if (!/^https?:\/\//i.test(remote)) return { error: local.error ?? '缺少视频地址' }
+  // 2026-09-30 补：导出这条路此前**没有**过主机白名单（播放与封面两条在 remotes/media.ts 判），
+  // 等于「导出时后端会去取消息里写的任意主机」。判在发请求之前，且**在本机缓存之后** ——
+  // 本机已有那份照常导出，不受影响。消息 XML 是可被离线改写的文件，不能让它的地址决定去哪。
+  if (!wechatCdnHostAllowed(remote)) return { error: '视频地址的主机不在微信 CDN 清单内，已拒绝请求' }
   const got = await fetchAndDecodeVideo(remote, args.md5, {
     version: args.version,
     seed: args.seed,
-    cdnEnabled: args.cdnEnabled,
-    localDecrypt: args.localDecrypt,
   })
   if (got.error || !got.bytes) return { error: got.error }
   return { bytes: got.bytes, source: 'remote' }
@@ -247,15 +246,13 @@ function imageMimeOf(buf: Buffer): 'jpeg' | 'png' | null {
  */
 export async function fetchSnsCoverDataUrl(
   remoteUrl: string,
-  opts: { version?: string; timeoutMs?: number; seed?: string; cdnEnabled?: boolean; localDecrypt?: boolean } = {},
+  opts: { version?: string; timeoutMs?: number; seed?: string } = {},
 ): Promise<{ url?: string; error?: string }> {
   const got = await fetchSnsMediaBytes(remoteUrl, opts)
   if (got.error || !got.bytes) return { error: got.error }
   let bytes = got.bytes
   let mime = imageMimeOf(bytes)
   if (!mime) {
-    // 同上：区分「开关关掉了」与「真的解不开」
-    if (!localDecryptEnabled(opts)) return { error: LOCAL_DECRYPT_DISABLED_MESSAGE }
     const seed = (opts.seed || '').trim()
     if (!seed) return { error: '微信 CDN 返回的是加密流，但该动态没有 <enc key>，无法解密' }
     try {
@@ -282,11 +279,8 @@ export async function fetchSnsCoverDataUrl(
  */
 async function fetchSnsMediaBytes(
   remoteUrl: string,
-  opts: { version?: string; timeoutMs?: number; cdnEnabled?: boolean },
+  opts: { version?: string; timeoutMs?: number },
 ): Promise<{ bytes?: Buffer; error?: string }> {
-  // N24：开关关闭时连请求都不发（见 query/cdn-policy.ts）——这句必须在重试包装**之前**，
-  // 否则「没出网」的承诺会被一次重试绕过。
-  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   const timeoutMs = opts.timeoutMs ?? 60_000
   const version = (opts.version || '').trim() || '4.1.13'
   try {

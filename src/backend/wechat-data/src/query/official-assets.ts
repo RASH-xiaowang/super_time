@@ -8,7 +8,8 @@ import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
-import { cachedBySig, fileSigOf, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { OfficialAssetsSnapshot, OfficialAssetRow } from '../types.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -81,16 +82,18 @@ function loadNames(decryptedDir: string): Map<string, string> {
  * @param decryptedDir - decrypted data root.
  * @returns the official-assets snapshot.
  */
-export function queryOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot {
+export async function queryOfficialAssets(decryptedDir: string): Promise<OfficialAssetsSnapshot> {
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
     shardCatalogSig(decryptedDir, ['message']),
   ].join('|')
-  return cachedBySig('official-assets:' + decryptedDir, sig, () => computeOfficialAssets(decryptedDir), 30_000)
+  // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 39ms 且**一次都不让出**
+  // （真实数据 `working/probe-stall.txt`）。
+  return cachedBySigAsync('official-assets:' + decryptedDir, sig, () => computeOfficialAssets(decryptedDir), 30_000)
 }
 
-function computeOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot {
+async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAssetsSnapshot> {
   const usernames = loadOfficialUsernames(decryptedDir)
   const names = loadNames(decryptedDir)
   const per = new Map<string, { messages: number; articles: number; lastArticleTime: number | null }>()
@@ -108,10 +111,16 @@ function computeOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot {
           const cols = tableColumns(db, table)
           if (!cols.has('create_time') || !cols.has('local_type')) continue
           try {
-            const rows = db.prepare(`SELECT create_time, local_type FROM "${table}"`).all() as Array<Record<string, unknown>>
+            // 2026-09-28：`.all()` → 游标 + 行级让出。
+            // 本机真实数据实测 `queryOfficialAssets` 冷跑 **39ms 且一次都不让出**
+            // （`working/probe-stall.txt`，是清零后**受测集里唯一剩下的独占项**）：
+            // 它要逐张消息分片把公众号会话的整张 `Msg_*` 拉出来数条数（每行都要判定
+            // `local_type === 49`），不打散就是几十毫秒按住整条串行队列。
+            const cur = db.prepare(`SELECT create_time, local_type FROM "${table}"`).iterate() as Iterable<Record<string, unknown>>
             let acc = per.get(username)
             if (!acc) { acc = { messages: 0, articles: 0, lastArticleTime: null }; per.set(username, acc) }
-            for (const r of rows) {
+            let sinceYield = 0
+            for (const r of cur) {
               acc.messages += 1
               const lt = Number(r['local_type'] ?? 0) & 4294967295
               if (lt === 49) {
@@ -119,10 +128,14 @@ function computeOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot {
                 const t = Number(r['create_time'] ?? 0)
                 if (t > 0 && (acc.lastArticleTime == null || t > acc.lastArticleTime)) acc.lastArticleTime = t
               }
+              sinceYield += 1
+              if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
             }
           } catch { /* skip */ }
         }
       } finally { db.close() }
+      // 分片级让出：一张分片可以有十几万行。
+      await yieldToLoop()
     }
   }
   const rows: OfficialAssetRow[] = Array.from(per.entries())

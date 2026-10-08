@@ -105,7 +105,7 @@ export interface OriginalBatchResult {
         username: string;
         error: string;
     }>;
-    /** 因「总闸/开关」一张都没发请求时的说明（此时 `fetched`/`failed` 都是 0）。 */
+    /** 因「已有解密任务在跑 / 未配置数据库目录」一张都没发请求时的说明（此时 `fetched`/`failed` 都是 0）。 */
     blocked?: string;
     /** 还有多少候选没取（`limit` 截断后的剩余，下次点一下继续）。 */
     remaining: number;
@@ -141,14 +141,41 @@ export declare function recordFetchedOriginal(decodedDir: string, md5: string): 
  * @param decodedDir - 解码缓存根（读续跑索引）。
  * @returns 盘点结果 + 候选清单。
  */
+export declare function scanImageOriginalPlanSteps(decryptedDir: string, rawRoot: string, decodedDir: string): Generator<void, {
+    plan: OriginalFetchPlan;
+    candidates: ImageOriginalCandidate[];
+}, void>;
+/**
+ * 盘点扫描（**同步版**，行为与改造前逐字段相同）：给同步调用点用。
+ *
+ * 让出原语住在查询层（`query/search-build.ts`），所以异步版把"怎么让"交给调用方
+ * （见 {@link scanImageOriginalPlanAsync}）—— 与 `keys/image-key-resolver.ts`
+ * 的 `scanV2TemplatesSteps` 同一做法：**生成器 + 两个驱动**，同步调用点零改动。
+ * @param decryptedDir - 解密数据根。
+ * @param rawRoot - 微信账号原始根。
+ * @param decodedDir - 解码缓存根。
+ * @returns 盘点结果 + 候选清单。
+ */
 export declare function scanImageOriginalPlan(decryptedDir: string, rawRoot: string, decodedDir: string): {
     plan: OriginalFetchPlan;
     candidates: ImageOriginalCandidate[];
 };
 /**
+ * 盘点扫描（**可让出版**）：给网关 `@Remote` 路径用，每 N 个分片让出一次。
+ * @param decryptedDir - 解密数据根。
+ * @param rawRoot - 微信账号原始根。
+ * @param decodedDir - 解码缓存根。
+ * @param onStep - 每个分片检查点调用一次（网关传 `yieldToLoop`）。
+ * @returns 盘点结果 + 候选清单。
+ */
+export declare function scanImageOriginalPlanAsync(decryptedDir: string, rawRoot: string, decodedDir: string, onStep: () => Promise<void>): Promise<{
+    plan: OriginalFetchPlan;
+    candidates: ImageOriginalCandidate[];
+}>;
+/**
  * 造一个「一条都没发请求」的结果。
  *
- * 供**闸门在更上层**时复用（隐私总闸 / 已有解密任务在跑）：那两处不该为了造一个空结果
+ * 供**闸门在更上层**时复用（已有解密任务在跑 / 未配置数据库目录）：那两处不该为了造一个空结果
  * 去 import 本模块的内部形状，也不该各自手抄一份字段（少一个字段就是界面上一处 `undefined`）。
  * @param reason - 直接显示给用户的原因。
  * @returns `fetched`/`failed` 全 0、`blocked` 为传入原因的结果。
@@ -157,19 +184,17 @@ export declare function emptyOriginalBatchResult(reason: string): OriginalBatchR
 /**
  * 批量取回原图（免登录直链）。
  *
- * 边界与开关：**关掉「自动获取原图（CDN）」时一条请求都不发**（与单张路径同一口径，见
- * `query/cdn-policy.ts`），并回 {@link CDN_DISABLED_MESSAGE}；真正发请求前还会过一次
- * 腾讯系主机白名单（在 `fetchImageOriginalToCache` 里，消息 XML 是可被离线改写的文件）。
- * 逐条失败**不中断**整批（列出原因），成功的写进续跑索引 ⇒ 下次点一下就接着走。
+ * 边界：真正发请求前会过一次腾讯系主机白名单（在 `fetchImageOriginalToCache` 里，
+ * 消息 XML 是可被离线改写的文件）。逐条失败**不中断**整批（列出原因），
+ * 成功的写进续跑索引 ⇒ 下次点一下就接着走。
  * @param decryptedDir - 解密数据根。
  * @param rawRoot - 微信账号原始根。
  * @param decodedDir - 解码缓存根（原图落这里 + 写续跑索引）。
- * @param opts - `limit`（0/不传 = 不限）、`concurrency`（默认 4，封顶 8）、`cdnEnabled`、`onProgress`。
+ * @param opts - `limit`（0/不传 = 不限）、`concurrency`（默认 4，封顶 8）、`onProgress`。
  * @returns 计数、字节数、耗时与逐条失败原因。
  */
 export declare function fetchOriginalImagesBatch(decryptedDir: string, rawRoot: string, decodedDir: string, opts?: {
     limit?: number;
     concurrency?: number;
-    cdnEnabled?: boolean;
     onProgress?: (done: number, total: number, fetched: number, failed: number, message: string) => void;
 }): Promise<OriginalBatchResult>;

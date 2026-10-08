@@ -47,7 +47,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { decompress } from 'fzstd'
 import { collectImageDatFiles } from './decrypt-images.ts'
-import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { isWecomFileEndpoint } from './cdn-hosts.ts'
 import { fetchImageOriginalToCache, type ImageOriginalLink } from './image-original.ts'
 import { extractMd5FromPacked } from './media-image.ts'
@@ -125,7 +124,7 @@ export interface OriginalBatchResult {
   bytes: number
   ms: number
   errors: Array<{ md5: string; username: string; error: string }>
-  /** 因「总闸/开关」一张都没发请求时的说明（此时 `fetched`/`failed` 都是 0）。 */
+  /** 因「已有解密任务在跑 / 未配置数据库目录」一张都没发请求时的说明（此时 `fetched`/`failed` 都是 0）。 */
   blocked?: string
   /** 还有多少候选没取（`limit` 截断后的剩余，下次点一下继续）。 */
   remaining: number
@@ -252,11 +251,11 @@ export function recordFetchedOriginal(decodedDir: string, md5: string): void {
  * @param decodedDir - 解码缓存根（读续跑索引）。
  * @returns 盘点结果 + 候选清单。
  */
-export function scanImageOriginalPlan(
+export function* scanImageOriginalPlanSteps(
   decryptedDir: string,
   rawRoot: string,
   decodedDir: string,
-): { plan: OriginalFetchPlan; candidates: ImageOriginalCandidate[] } {
+): Generator<void, { plan: OriginalFetchPlan; candidates: ImageOriginalCandidate[] }, void> {
   const hasHd = localOriginalMd5s(rawRoot)
   const fetched = readFetchedOriginals(decodedDir)
   const names = talkerByTableHash(decryptedDir)
@@ -271,6 +270,10 @@ export function scanImageOriginalPlan(
   const candidates: ImageOriginalCandidate[] = []
 
   for (const file of messageDbFiles(join(decryptedDir, 'message'))) {
+    // 2026-09-28：分片级让出。真实 @Remote 探针实测 `planOriginalFetch` 冷跑
+    // **1719ms 且一次都不让出**（`working/probe-remote.txt`），是当时唯一剩下的秒级独占项
+    // （`query/**` 取数层与年报系列都已修完）。整段独占期间串行 worker 上别的请求进不来。
+    yield
     let db: DatabaseSync | null = null
     try { db = new DatabaseSync(file, { readOnly: true }) } catch { continue }
     try {
@@ -357,9 +360,54 @@ export function scanImageOriginalPlan(
 }
 
 /**
+ * 盘点扫描（**同步版**，行为与改造前逐字段相同）：给同步调用点用。
+ *
+ * 让出原语住在查询层（`query/search-build.ts`），所以异步版把"怎么让"交给调用方
+ * （见 {@link scanImageOriginalPlanAsync}）—— 与 `keys/image-key-resolver.ts`
+ * 的 `scanV2TemplatesSteps` 同一做法：**生成器 + 两个驱动**，同步调用点零改动。
+ * @param decryptedDir - 解密数据根。
+ * @param rawRoot - 微信账号原始根。
+ * @param decodedDir - 解码缓存根。
+ * @returns 盘点结果 + 候选清单。
+ */
+export function scanImageOriginalPlan(
+  decryptedDir: string,
+  rawRoot: string,
+  decodedDir: string,
+): { plan: OriginalFetchPlan; candidates: ImageOriginalCandidate[] } {
+  const it = scanImageOriginalPlanSteps(decryptedDir, rawRoot, decodedDir)
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+  }
+}
+
+/**
+ * 盘点扫描（**可让出版**）：给网关 `@Remote` 路径用，每 N 个分片让出一次。
+ * @param decryptedDir - 解密数据根。
+ * @param rawRoot - 微信账号原始根。
+ * @param decodedDir - 解码缓存根。
+ * @param onStep - 每个分片检查点调用一次（网关传 `yieldToLoop`）。
+ * @returns 盘点结果 + 候选清单。
+ */
+export async function scanImageOriginalPlanAsync(
+  decryptedDir: string,
+  rawRoot: string,
+  decodedDir: string,
+  onStep: () => Promise<void>,
+): Promise<{ plan: OriginalFetchPlan; candidates: ImageOriginalCandidate[] }> {
+  const it = scanImageOriginalPlanSteps(decryptedDir, rawRoot, decodedDir)
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+    await onStep()
+  }
+}
+
+/**
  * 造一个「一条都没发请求」的结果。
  *
- * 供**闸门在更上层**时复用（隐私总闸 / 已有解密任务在跑）：那两处不该为了造一个空结果
+ * 供**闸门在更上层**时复用（已有解密任务在跑 / 未配置数据库目录）：那两处不该为了造一个空结果
  * 去 import 本模块的内部形状，也不该各自手抄一份字段（少一个字段就是界面上一处 `undefined`）。
  * @param reason - 直接显示给用户的原因。
  * @returns `fetched`/`failed` 全 0、`blocked` 为传入原因的结果。
@@ -374,14 +422,13 @@ export function emptyOriginalBatchResult(reason: string): OriginalBatchResult {
 /**
  * 批量取回原图（免登录直链）。
  *
- * 边界与开关：**关掉「自动获取原图（CDN）」时一条请求都不发**（与单张路径同一口径，见
- * `query/cdn-policy.ts`），并回 {@link CDN_DISABLED_MESSAGE}；真正发请求前还会过一次
- * 腾讯系主机白名单（在 `fetchImageOriginalToCache` 里，消息 XML 是可被离线改写的文件）。
- * 逐条失败**不中断**整批（列出原因），成功的写进续跑索引 ⇒ 下次点一下就接着走。
+ * 边界：真正发请求前会过一次腾讯系主机白名单（在 `fetchImageOriginalToCache` 里，
+ * 消息 XML 是可被离线改写的文件）。逐条失败**不中断**整批（列出原因），
+ * 成功的写进续跑索引 ⇒ 下次点一下就接着走。
  * @param decryptedDir - 解密数据根。
  * @param rawRoot - 微信账号原始根。
  * @param decodedDir - 解码缓存根（原图落这里 + 写续跑索引）。
- * @param opts - `limit`（0/不传 = 不限）、`concurrency`（默认 4，封顶 8）、`cdnEnabled`、`onProgress`。
+ * @param opts - `limit`（0/不传 = 不限）、`concurrency`（默认 4，封顶 8）、`onProgress`。
  * @returns 计数、字节数、耗时与逐条失败原因。
  */
 export async function fetchOriginalImagesBatch(
@@ -391,16 +438,10 @@ export async function fetchOriginalImagesBatch(
   opts: {
     limit?: number
     concurrency?: number
-    cdnEnabled?: boolean
     onProgress?: (done: number, total: number, fetched: number, failed: number, message: string) => void
   } = {},
 ): Promise<OriginalBatchResult> {
   const t0 = Date.now()
-  const blank = { candidates: 0, attempted: 0, fetched: 0, failed: 0, bytes: 0, errors: [], remaining: 0 }
-  // 开关判在**扫描之前**：关掉时连「本机有哪些图」都不必算，用户看到的就是那句开关说明。
-  if (!cdnFetchAllowed(opts)) {
-    return { ok: false, ...blank, ms: Date.now() - t0, indexed: readFetchedOriginals(decodedDir).size, blocked: CDN_DISABLED_MESSAGE }
-  }
 
   const { plan, candidates } = scanImageOriginalPlan(decryptedDir, rawRoot, decodedDir)
   const limit = Number.isFinite(opts.limit) && (opts.limit ?? 0) > 0 ? Math.floor(opts.limit as number) : candidates.length
@@ -428,7 +469,7 @@ export async function fetchOriginalImagesBatch(
       const c = work[idx]
       if (c === undefined) return
       const link: ImageOriginalLink = { md5: c.md5, url: c.url, hasHd: c.hasHdLink, declaredBytes: c.declaredBytes }
-      const r = await fetchImageOriginalToCache(link, decodedDir, opts)
+      const r = await fetchImageOriginalToCache(link, decodedDir)
       if (r.bytes === undefined) {
         failed += 1
         errors.push({ md5: c.md5, username: c.username, error: r.error ?? '取回失败' })

@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { datTierOf, datTierRank, decodeDatBytes, isThumbTier, type DatTier } from './media-image.ts'
+import { yieldToLoop } from './search-build.ts'
 import { MD5_SEGMENT } from '../md5.ts'
 
 /** Image-dat file names start with the content md5: `<md5>[_t|_h].dat`. */
@@ -16,8 +17,21 @@ const MD5_PREFIX_RE = new RegExp('^(' + MD5_SEGMENT + ')', 'i')
 /** Browser-renderable output extensions (hevc/wxgf skipped, counted). */
 const WRITE_EXTS = new Set(['jpg', 'png', 'gif', 'webp'])
 
-/** Recursively collect md5-prefixed .dat files under msg/attach. */
-function walkDataDats(dir: string, out: string[], depth: number): void {
+/**
+ * 递归收集 md5 前缀 `.dat` 的**生成器版**：每遍历完一个目录让出一次控制权。
+ *
+ * 为什么要有生成器版（2026-09-29）：`walkDataDats` 是同步递归 BFS，深树 + 大目录时会独自占住
+ * 事件循环。实测「升级解码缓存」`upgradeDecodedImages` 整段独占 **186ms 且一次不让出**，
+ * 而这棵树（`msg/attach`，深度上限 10）是它的一段主要开销。
+ *
+ * 写法沿用第 12 轮在 `scanV2Templates` 上用过的**生成器 + 两个驱动器**：
+ * **只有一份遍历实现**，同步调用方仍走原来的同步驱动器，行为不变。
+ * @param dir - 起始目录。
+ * @param out - 收集结果（与同步版共用同一出口，保证两个驱动器口径一致）。
+ * @param depth - 当前深度（递归用）。
+ * @yields 每遍历完一个目录一次（异步驱动器据此让出）。
+ */
+function * walkDataDatsSteps(dir: string, out: string[], depth: number): Generator<void, void, void> {
   if (depth > 10 || !existsSync(dir)) return
   let entries: Array<{ name: string; isDir: boolean }>
   try {
@@ -25,9 +39,15 @@ function walkDataDats(dir: string, out: string[], depth: number): void {
   } catch { return }
   for (const e of entries) {
     const p = join(dir, e.name)
-    if (e.isDir) walkDataDats(p, out, depth + 1)
+    if (e.isDir) yield * walkDataDatsSteps(p, out, depth + 1)
     else if (e.name.toLowerCase().endsWith('.dat') && MD5_PREFIX_RE.test(e.name)) out.push(p)
   }
+  yield
+}
+
+/** 同步驱动器：把生成器一次跑完（行为与旧的递归实现一致）。 */
+function walkDataDats(dir: string, out: string[], depth: number): void {
+  for (const _ of walkDataDatsSteps(dir, out, depth)) { /* 同步版一路跑到底，不关心让出点 */ }
 }
 
 /**
@@ -42,6 +62,24 @@ function walkDataDats(dir: string, out: string[], depth: number): void {
 export function collectImageDatFiles(rawRoot: string): string[] {
   const files: string[] = []
   walkDataDats(join(rawRoot, 'msg', 'attach'), files, 0)
+  return files
+}
+
+/**
+ * {@link collectImageDatFiles} 的**可让出版**：遍历途中定期让出事件循环。
+ *
+ * 与同步版**共用同一个生成器**（`walkDataDatsSteps`），所以目录口径不可能分叉 ——
+ * 这正是把遍历抽出来的原因。
+ * @param rawRoot - 微信账号原始根目录（`msg/attach` 的父目录）。
+ * @param everyDirs - 每遍历多少个目录让出一次（默认 60）。
+ * @returns `.dat` 绝对路径列表（未排序）。
+ */
+export async function collectImageDatFilesAsync(rawRoot: string, everyDirs = 60): Promise<string[]> {
+  const files: string[] = []
+  let dirs = 0
+  for (const _ of walkDataDatsSteps(join(rawRoot, 'msg', 'attach'), files, 0)) {
+    if (++dirs % everyDirs === 0) await yieldToLoop()
+  }
   return files
 }
 

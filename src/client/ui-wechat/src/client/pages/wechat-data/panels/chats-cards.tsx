@@ -673,5 +673,44 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
     const url = urlMatch ? urlMatch[0].replace(/[。，；、！？）)】…]+$/, '') : ''
     return <LinkCard rich={{ type: 'link', title: text }} title={text || '链接'} desc="" url={url} />
   }
-  return <div className={css.msgBubble}><span className={kitCss.textMeta}>{text || `[类型 ${m.type}]`}</span></div>
+  return (
+    <div className={css.msgBubble}>
+      <span className={kitCss.textMeta}>{describeFallbackText(text, m.type)}</span>
+    </div>
+  )
+}
+
+/**
+ * 兜底预览文案：**任何情况下都不把原始 XML 铺给用户**（2026-09-29 修"各种类型消息预览坏了"）。
+ *
+ * 为什么需要：上面的分派已覆盖 text / image / voice / video / location / contactCard /
+ * voip / emoji / link，以及"有 `rich` 的卡片型"。剩下两类会落到最后那行兜底：
+ *   ① 未识别的 `kind`；
+ *   ② 旧渲染缓存里 **`rich` 缺失**的卡片（`<appmsg>` 之类）。
+ * 这两类的 `text` 往往就是**整段 `<msg>…</msg>` XML** ⇒ 原先直接把尖括号渲染出来，
+ * 于是同一屏里文本消息好好的、旁边那条卡片消息却是一堆标记。
+ *
+ * 做法：按 XML 根标签映射成中文标签；认不出退回"类型 N"；非 XML 则清控制字符并限长。
+ * **只改展示**，不碰解析与数据。
+ * @param text - 兜底可用的文本（可能是 XML 片段）。
+ * @param type - 消息数值类型（认不出标签时用来提示）。
+ * @returns 一行可读文案。
+ */
+function describeFallbackText (text: string, type: number): string {
+  const raw = (text ?? '').trim()
+  if (raw === '') return `[类型 ${String(type)}]`
+  if (raw.startsWith('<')) {
+    const flat = raw.replace(/\s+/g, ' ')
+    const byTag: ReadonlyArray<readonly [RegExp, string]> = [
+      [/<img\b/i, '图片'], [/<emoji\b/i, '表情'], [/<voicemsg\b/i, '语音'], [/<videomsg\b/i, '视频'],
+      [/<location\b/i, '位置'], [/<transfer\b/i, '转账'], [/<wcpayinfo\b/i, '微信支付'],
+      [/<redpacket|<hongbao/i, '红包'], [/<music\b/i, '音乐'], [/<chathistory|<recorditem/i, '聊天记录'],
+      [/finderusernamecard|<findernamecard/i, '视频号'], [/<card\b|<wcscard/i, '名片'],
+      [/<refermsg\b/i, '引用（卡片）'], [/<appmsg\b/i, '链接 / 文件'], [/<sysmsg\b/i, '系统消息'],
+    ]
+    for (const [re, label] of byTag) if (re.test(flat)) return `[${label}]（原文为 XML，已折叠）`
+    return `[${type > 0 ? '类型 ' + String(type) : '未知内容'}]（原文为 XML，已折叠）`
+  }
+  const clean = raw.replace(/[\u0000-\u0008\u000b-\u001f]/g, '').replace(/\s+/g, ' ').trim()
+  return clean.length > 200 ? clean.slice(0, 200) + '…' : clean
 }

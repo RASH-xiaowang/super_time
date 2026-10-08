@@ -4,19 +4,32 @@
  * 世界层有两种视图：联网时优先用 ECharts 渲染真实世界地理地图（中文国名 GeoJSON，
  * 按好友数分级填色、悬停提示、点击国家下钻）；GeoJSON 不可达或用户切换后回退到
  * 自绘的等距圆柱 SVG 世界地图（粗略大陆剪影 + 涟漪标记）。下钻到「中国」时按省份
- * 渲染 ECharts 中国地图（对应 3D 中国地图下钻示例的交互），省份点击后再落到省/市的
+ * 渲染 ECharts 中国地图（与同类下钻示例一致的交互），省份点击后再落到省/市的
  * 方块图。其它国家/城市的下钻仍用空间叙利化的方块图（treemap），悬停城市块在旁展示
  * 好友头像与标签。支持鼠标滚轮缩放、拖拽平移，以及「聚焦中国」／「重置视图」。
+ *
+ * 2026-09-28：世界层**固定为 2D 平面视图**（用户要求移除全部 3D / 倾斜 / 透视交互）。
+ * 曾经的等距立体渲染器（WorldIsoMap + world-iso 系列）已整套删除，源码里不许再出现。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiGetAvatarsLocal, apiGetRegionMap } from '../api.ts'
+import { ErrorState } from '../ui/kit.tsx'
+import { apiGetAvatarsLocal } from '../api.ts'
 import { useElapsedSeconds, useWechatDataUpdated } from './hooks.tsx'
+import {
+  REGION_MAP_TIMEOUT_TEXT,
+  fetchRegionMapBounded,
+  hasCachedRegionMap,
+  initialRegionMap,
+  rememberRegionMap,
+} from './world-map-region-load.ts'
 import type { RegionFriend, RegionMapSnapshot, RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import { squarify } from './treemap.ts'
 import { ChinaMap } from './ChinaMap.tsx'
 import { CityMap } from './CityMap.tsx'
 import { FriendAvatarRail } from './FriendAvatarRail.tsx'
-import { WorldIsoMap } from './WorldIsoMap.tsx'
+import { MapStage } from './MapStage.tsx'
+import { TreemapStage } from './TreemapStage.tsx'
+import { GeoEchartsMap } from './GeoEchartsMap.tsx'
 import { ProvinceMap } from './ProvinceMap.tsx'
 import { WORLD_GEO_URLS, fetchFirstJson, worldChildByName, worldFeatureName } from './world-map-data.ts'
 import { collectSubtreeFriends } from './region-friends.ts'
@@ -28,6 +41,28 @@ import css from './world-map.module.css'
 /** Pick the display name for a friend. */
 function friendName(f: RegionFriend): string {
   return f.displayName || f.remark || f.nickName
+}
+
+/**
+ * 地区数据加载态（外提，2026-09-28）。
+ *
+ * 两个理由：① `WorldMapPanel` 的函数体已被 `function-size-ratchet.spec.ts` 登记
+ * （棘轮只许变小），这块 UI 放回去会顶破它；② 加载态自己带一个"走秒 → 出现重试"
+ * 的小状态机，独立出来才讲得清。
+ *
+ * 为什么要重试按钮：后端同步串行，这一次 RPC 可能排在长任务后面几十秒。
+ * 文案让用户"点重试"，就必须真有东西可点（见 `world-map-region-load.ts` 的说明）。
+ * @param props.elapsed - 已等待秒数（U2 约定：加载态要能自证在动）。
+ * @param props.onRetry - 手动重取一次。
+ * @returns 加载态元素。
+ */
+function RegionLoading({ elapsed, onRetry }: { elapsed: number; onRetry: () => void }): React.JSX.Element {
+  return (
+    <div className={css.loading}>
+      {`正在解析好友地区…已用 ${elapsed}s · 后端按顺序处理请求，若有长任务在跑这一块要排在它后面，请稍候`}
+      {elapsed >= 3 && <button type="button" className={css.retry} onClick={onRetry}>重试</button>}
+    </div>
+  )
 }
 
 /** One layout slot (item + rect) owned by the component. */
@@ -50,7 +85,10 @@ const EMPTY_WORLD: RegionNode = { key: 'world', name: '世界', count: 0, childr
  * @returns the world-map element tree.
  */
 export function WorldMapPanel(): React.JSX.Element {
-  const [map, setMap] = useState<RegionMapSnapshot | null>(null)
+  // 首屏渲染缓存（P2-5）：上次成功渲染过的地区快照**同步**取回 ⇒ 再进这一页立刻就有数据，
+  // 不必再排一次后端队列。取数策略（有界等待 / 缓存键 / 超时文案）都在
+  // `world-map-region-load.ts` —— 外提是为了不再撑大本组件的函数体（见该文件头注）。
+  const [map, setMap] = useState<RegionMapSnapshot | null>(initialRegionMap)
   const [error, setError] = useState<string | null>(null)
   // Drill path: [] = world map; [country]; [country, province].
   const [path, setPath] = useState<RegionNode[]>([])
@@ -67,12 +105,11 @@ export function WorldMapPanel(): React.JSX.Element {
 
   const load = useCallback(async (): Promise<void> => {
     setError(null)
-    try {
-      const m = await apiGetRegionMap()
-      setMap(m)
-    } catch (e) {
-      setError((e as Error).message)
-    }
+    const r = await fetchRegionMapBounded()
+    if (r.kind === 'ok') { setMap(r.map); rememberRegionMap(r.map); return }
+    if (r.kind === 'error') { setError(r.message); return }
+    // 超时：已经有旧快照时不要用错误盖掉它 —— 那是可用的数据，不是失败。
+    if (!hasCachedRegionMap()) setError(REGION_MAP_TIMEOUT_TEXT)
   }, [])
 
   useEffect(() => { void load() }, [load])
@@ -98,13 +135,14 @@ export function WorldMapPanel(): React.JSX.Element {
   // 原先这里要求 `map !== null`，是为了绕开「切到 ECharts 但 `map` 那一路被挡住 ⇒ 两边都不画」；
   // 现在空节点由 `GeoEchartsMap` 自己吃得下，那个约束连同 SVG 回退一起撤掉了。
   const showWorldEcharts = worldEchartsReady
-  // 底图拉不到（未联网 / 用户开了 `blockMapTiles`）时给一句明确说明，而不是留一片空白。
+  // 底图拉不到（未联网 / 镜像源不可达）时给一句明确说明，而不是留一片空白。
   const geoTilesBlocked = onWorldMap && worldGeo?.ok === false
   // The ECharts map is the default China view; it falls back to the SVG map when offline.
   const showChinaEcharts = chinaMode && !chinaFallback
-  // Everything else (non-China countries, cities, unknown provinces) uses the squarified treemap.
-  // 中国层若 ECharts 起不来（`chinaFallback`）也落到 treemap —— 地理 SVG 已于 2026-09-26 移除，
-  // 这里接管它原来的那个兜底位置（省/市两层本来就是走这条路降级的）。
+  // 2026-09-28：世界层回到 **2D 平面 ECharts 地图**（用户要求移除 3D 与倾斜/透视）。
+  // 非中国的国家层仍走 treemap 承接 —— 2D 地图上没有"推近动画"，留在地图上没有意义，
+  // 而方块图能直接把该国的城市好友摊开看（下方榜单也同一口径）。
+  // Everything else (cities, unknown provinces, China-fallback) uses the squarified treemap.
   const showTreemap = !onWorldMap && (!chinaMode || chinaFallback) && !showProvinceMap && !showCityMap
 
   const children = focused?.children ?? []
@@ -117,8 +155,9 @@ export function WorldMapPanel(): React.JSX.Element {
   const rightFriends = levelFriends.slice(halfFriends)
 
   // Probe the world GeoJSON once per session visit (kept in a ref so a fetch
-  // failure does not retry in a loop); the SVG map stays visible until ready.
+  // failure does not retry in a loop); the map shows an empty base until ready.
   useEffect(() => {
+    // 只有世界层要底图；下钻后由中国/省/市各自的取数口负责。
     if (!onWorldMap) return
     const cached = worldGeoRef.current
     if (cached) {
@@ -253,18 +292,21 @@ export function WorldMapPanel(): React.JSX.Element {
         <span className={css.meta}>共 {map?.total ?? 0} 位好友有地区{map && map.unknown > 0 ? ` · ${map.unknown} 位未填地区` : ''}</span>
       </div>
 
-      {error && <div className={css.error}>{error}</div>}
-      {regionLoading && (
-        <div className={css.loading}>
-          {`正在解析好友地区…已用 ${regionElapsed}s · 后端按顺序处理请求，若有长任务在跑这一块要排在它后面，请稍候`}
-        </div>
-      )}
+      {error && <ErrorState message={error} />}
+      {/* 加载态只在**还没有任何数据**时出现：有首屏缓存时 map 非 null，
+          这时安静地后台刷新即可，不该再对用户喊「正在解析…」。 */}
+      {regionLoading && <RegionLoading elapsed={regionElapsed} onRetry={() => { void load() }} />}
 
       {showWorldEcharts && (
-        <div className={css.stage}>
-          <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
-          <WorldIsoMap
+        <MapStage
+          leftFriends={leftFriends}
+          rightFriends={rightFriends}
+          avatars={avatars}
+          hint="滚轮缩放 · 拖拽平移 · 点击国家下钻"
+        >
+          <GeoEchartsMap
             node={map?.world ?? EMPTY_WORLD}
+            mapName="world"
             urls={WORLD_GEO_URLS}
             geo={worldGeo.data}
             featureName={worldFeatureName}
@@ -273,23 +315,20 @@ export function WorldMapPanel(): React.JSX.Element {
             onDrill={zoomInto}
             onFallback={fallbackWorldEcharts}
           />
-          <div className={css.mapHint}>滚轮缩放 · 拖拽平移 · 点击国家下钻</div>
-          <FriendAvatarRail side="right" friends={rightFriends} avatars={avatars} />
-        </div>
+        </MapStage>
       )}
 
       {geoTilesBlocked && (
         <div className={css.stage}>
           <div className={css.mapEmpty}>
-            地图底图不可用：未联网，或已在「隐私与安全 · 数据边界与出网」里禁止地图底图出网。
+            地图底图不可用：当前无法从镜像源取到行政区划数据（应用内已无底图开关）。
             好友地区数据仍可通过下方的省份 / 城市榜单查看。
           </div>
         </div>
       )}
 
       {map && showChinaEcharts && (
-        <div className={css.stage}>
-          <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
+        <MapStage leftFriends={leftFriends} rightFriends={rightFriends} avatars={avatars}>
           <ChinaMap
             node={focused}
             onDrill={zoomInto}
@@ -298,13 +337,16 @@ export function WorldMapPanel(): React.JSX.Element {
               <button type="button" className={css.backOverlay} onClick={goUp}>← 上一级</button>
             ) : null}
           />
-          <FriendAvatarRail side="right" friends={rightFriends} avatars={avatars} />
-        </div>
+        </MapStage>
       )}
 
       {map && showProvinceMap && provinceNode && provinceAd && (
-        <div className={css.stage}>
-          <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
+        <MapStage
+          leftFriends={leftFriends}
+          rightFriends={rightFriends}
+          avatars={avatars}
+          hint="滚轮缩放 · 拖拽平移 · 点击城市查看好友"
+        >
           <ProvinceMap
             node={provinceNode}
             adcode={provinceAd}
@@ -314,14 +356,16 @@ export function WorldMapPanel(): React.JSX.Element {
               <button type="button" className={css.backOverlay} onClick={goUp}>← 上一级</button>
             ) : null}
           />
-          <div className={css.mapHint}>滚轮缩放 · 拖拽平移 · 点击城市查看好友</div>
-          <FriendAvatarRail side="right" friends={rightFriends} avatars={avatars} />
-        </div>
+        </MapStage>
       )}
 
       {map && showCityMap && cityNode && cityProvinceAd && (
-        <div className={css.stage}>
-          <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
+        <MapStage
+          leftFriends={leftFriends}
+          rightFriends={rightFriends}
+          avatars={avatars}
+          hint="滚轮缩放 · 拖拽平移 · 点击区县查看好友"
+        >
           <CityMap
             node={cityNode}
             provinceAdcode={cityProvinceAd}
@@ -330,71 +374,25 @@ export function WorldMapPanel(): React.JSX.Element {
               <button type="button" className={css.backOverlay} onClick={goUp}>← 上一级</button>
             ) : null}
           />
-          <div className={css.mapHint}>滚轮缩放 · 拖拽平移 · 点击区县查看好友</div>
-          <FriendAvatarRail side="right" friends={rightFriends} avatars={avatars} />
-        </div>
+        </MapStage>
       )}
 
       {map && showTreemap && (
-        <div className={css.stage}>
-          <FriendAvatarRail side="left" friends={leftFriends} avatars={avatars} />
-          {children.length > 0 && (
-            <div ref={canvasRef} className={css.canvas}>
-              {slots.map((s) => {
-                const isLeaf = s.node.children.length === 0
-                const isHovered = hoverCity?.key === s.node.key
-                return (
-                  <button
-                    key={s.node.key}
-                    type="button"
-                    className={css.cell}
-                    data-leaf={isLeaf || undefined}
-                    data-hovered={isHovered || undefined}
-                    style={{ left: s.x, top: s.y, width: s.w, height: s.h }}
-                    onMouseEnter={() => { if (isLeaf) setHoverCity(s.node) }}
-                    onClick={() => { if (!isLeaf) zoomInto(s.node) }}
-                    title={`${s.node.name} · ${s.node.count} 位好友`}
-                  >
-                    <span className={css.cellName}>{s.node.name}</span>
-                    <span className={css.cellCount}>{s.node.count}</span>
-                  </button>
-                )
-              })}
-              {slots.length === 0 && box.w > 0 && <div className={css.empty}>没有子板块</div>}
-              {path.length > 0 && (
-                <button type="button" className={css.backOverlay} onClick={goUp}>← 上一级</button>
-              )}
-            </div>
-          )}
-          {children.length === 0 && !hoverCity && <div className={css.empty}>没有子板块</div>}
-
-          {hoverCity && hoverCity.friends.length > 0 && (
-            <div className={css.friends}>
-              <div className={css.friendsHd}>
-                <span>{hoverCity.name}</span>
-                <span className={css.friendsCount}>{hoverCity.friends.length} 位好友</span>
-              </div>
-              <div className={css.friendGrid}>
-                {hoverCity.friends.map(f => (
-                  <div key={f.username} className={css.friend} title={`${friendName(f)}\n${f.username}`}>
-                    <span className={css.avatarWrap}>
-                      {avatars[f.username] ? (
-                        <img className={css.avatar} src={avatars[f.username]} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                      ) : (
-                        <span className={css.avatarFallback}>{friendName(f).slice(0, 1)}</span>
-                      )}
-                    </span>
-                    <span className={css.friendLabel}>{friendName(f)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {children.length === 0 && path.length > 0 && (
-            <button type="button" className={css.backOverlay} onClick={goUp}>← 上一级</button>
-          )}
-          <FriendAvatarRail side="right" friends={rightFriends} avatars={avatars} />
-        </div>
+        <TreemapStage
+          canvasRef={canvasRef}
+          children={children}
+          slots={slots}
+          measured={box.w > 0}
+          hoverCity={hoverCity}
+          canGoUp={path.length > 0}
+          onDrill={zoomInto}
+          onHover={setHoverCity}
+          onGoUp={goUp}
+          leftFriends={leftFriends}
+          rightFriends={rightFriends}
+          avatars={avatars}
+          nameOf={friendName}
+        />
       )}
     </div>
   )

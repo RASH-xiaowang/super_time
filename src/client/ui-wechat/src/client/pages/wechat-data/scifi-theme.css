@@ -17,23 +17,65 @@
  * ──────────────────────────────────────────── */
 :root {
   /* 基础色板 */
-  --nm-black:         var(--dsw-alias-bg-layer-0, var(--nm-bg-0));
-  --nm-bg-0:          var(--dsw-alias-bg-base, var(--nm-bg-0));
-  --nm-bg-1:          var(--dsw-alias-bg-layer-1, var(--nm-bg-1));
-  --nm-bg-2:          var(--dsw-alias-bg-layer-2, var(--nm-bg-card));
+  --nm-black:         #050a18;
+  --nm-bg-0:          #050a18;
+  --nm-bg-1:          #0b1220;
+  --nm-bg-2:          #0f172a;
   --nm-bg-glass:      var(--dsw-alias-bg-overlay, rgba(12, 20, 48, 0.55));
   --nm-bg-hover:      var(--dsw-alias-interactive-bg-hover, rgba(0, 240, 255, 0.06));
   --nm-bg-active:     var(--dsw-alias-interactive-bg-active, rgba(0, 240, 255, 0.10));
-  --nm-bg-input:      var(--dsw-alias-bg-layer-2, var(--nm-bg-input));
-  --nm-bg-card:       var(--dsw-alias-bg-layer-2, var(--nm-bg-card));
+  --nm-bg-input:      #0f172a;
+  --nm-bg-card:       #0f172a;
+
+  /* 面 / 罩 / 中性 hover（R2）：首见表面（标题栏 / 授权 / 引导）专用 */
+  --nm-panel-solid:    rgba(13, 21, 40, 0.72);
+  --nm-veil-55:        rgba(5, 10, 24, 0.55);
+  --nm-hover-neutral:  rgba(127, 127, 127, 0.16);
+  --nm-paper-85:        rgba(255, 255, 255, 0.85);
+  --nm-paper-55:        rgba(255, 255, 255, 0.55);
+  --nm-paper-35:        rgba(255, 255, 255, 0.35);
+  --nm-ink-8:           rgba(15, 23, 42, 0.08);
+  --nm-ink-10:          rgba(15, 23, 42, 0.10);
+  --nm-paperfill-82:    rgba(247, 249, 252, 0.82);
+  --nm-paperfill-45:    rgba(247, 249, 252, 0.45);
+  --nm-paperfill-88:    rgba(247, 249, 252, 0.88);
+  --nm-paperfill-50:    rgba(247, 249, 252, 0.50);
+  --nm-veil-25:         rgba(5, 10, 24, 0.25);
+
+  /* 罩 / 天空 / 琥珀（R2 第二批） */
+  --nm-scrim-50:       rgba(5, 10, 24, 0.50);
+  --nm-sky:            #38bdf8;
+  --nm-amber-45:       rgba(245, 158, 11, 0.45);
 
   /* 霓虹色（浅色主题在 light-theme.css 中压暗，保证可读性与对比度） */
   --nm-cyan:          #00f0ff;
   --nm-cyan-50:       rgba(0, 240, 255, 0.50);
   --nm-cyan-20:       rgba(0, 240, 255, 0.20);
   --nm-cyan-10:       rgba(0, 240, 255, 0.10);
+  --nm-cyan-4:        rgba(0, 240, 255, 0.04);
+  --nm-cyan-6:        rgba(0, 240, 255, 0.06);
+  --nm-cyan-8:        rgba(0, 240, 255, 0.08);
+  --nm-cyan-14:       rgba(0, 240, 255, 0.14);
+  --nm-cyan-35:       rgba(0, 240, 255, 0.35);
+  --nm-cyan-12:        rgba(0, 240, 255, 0.12);
+  --nm-cyan-16:        rgba(0, 240, 255, 0.16);
+  --nm-cyan-18:        rgba(0, 240, 255, 0.18);
+  --nm-cyan-25:        rgba(0, 240, 255, 0.25);
+  --nm-cyan-42:        rgba(0, 240, 255, 0.42);
+  --nm-cyan-45:        rgba(0, 240, 255, 0.45);
+  --nm-cyan-40:        rgba(0, 240, 255, 0.40);
+  --nm-cyan-60:        rgba(0, 240, 255, 0.60);
+  --nm-cyan-70:        rgba(0, 240, 255, 0.70);
   --nm-purple:        #a855f7;
   --nm-purple-20:     rgba(168, 85, 247, 0.20);
+  --nm-purple-8:       rgba(168, 85, 247, 0.08);
+  --nm-purple-10:      rgba(168, 85, 247, 0.10);
+  --nm-purple-14:      rgba(168, 85, 247, 0.14);
+  --nm-purple-18:      rgba(168, 85, 247, 0.18);
+  --nm-purple-50:      rgba(168, 85, 247, 0.50);
+  --nm-purple-30:      rgba(168, 85, 247, 0.30);
+  --nm-purple-40:      rgba(168, 85, 247, 0.40);
+  --nm-purple-70:      rgba(168, 85, 247, 0.70);
   --nm-blue:          #3b82f6;
   --nm-blue-20:       rgba(59, 130, 246, 0.20);
   --nm-pink:          #ec4899;
@@ -43,11 +85,14 @@
   --nm-amber:         #f59e0b;
 
   /* 文字色阶 */
-  --nm-text-1:        var(--dsw-alias-label-primary, var(--nm-text-1));
-  --nm-text-2:        var(--dsw-alias-label-secondary, var(--nm-text-2));
-  --nm-text-3:        var(--dsw-alias-label-tertiary, #4a5575);
+  --nm-text-1:        #e2e8f0;
+  --nm-text-2:        #94a3b8;
+  --nm-text-3:        #64748b;
+  --nm-text-4:        #4a5575;   /* 占位 / 禁用（第四档中性色） */
   /* 品牌色填充上的文字色：深色下品牌色为霓虹亮色，配近黑字 */
   --nm-on-accent: #050a18;
+  /* 品牌身份色（R1）：与 --nm-cyan 同值起步；语义收窄为「交互态专用」在使用层做 */
+  --nm-brand:         #00f0ff;
 
   /* 边框 */
   --nm-border:        var(--dsw-alias-border-l2, rgba(0, 240, 255, 0.10));
@@ -415,7 +460,7 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   color-scheme: dark;
 
   --dsw-font-family: var(--nm-font-sans, 'Segoe UI', 'Microsoft YaHei', sans-serif);
-  --dsw-font-xs-13: 13px;
+  --dsw-font-xs-13: var(--nm-fs-md, 13px);
   --dsw-font-markdown-base: 13px/1.7 var(--nm-font-sans, sans-serif);
   --dsw-font-markdown-base-strong: 13px/1.7 var(--nm-font-sans, sans-serif);
   --dsw-font-markdown-code: 12px/1.6 var(--nm-font-mono, monospace);
@@ -428,52 +473,52 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
   --dsw-font-markdown-table: 12px/1.6 var(--nm-font-sans, sans-serif);
   --dsw-font-markdown-table-head: 12px/1.6 var(--nm-font-sans, sans-serif);
 
-  --dsw-alias-bg-base: #050a18;
-  --dsw-alias-bg-layer-0: #050a18;
-  --dsw-alias-bg-layer-1: #0b1220;
-  --dsw-alias-bg-layer-2: #0f172a;
+  --dsw-alias-bg-base: var(--nm-bg-0, #050a18);
+  --dsw-alias-bg-layer-0: var(--nm-bg-0, #050a18);
+  --dsw-alias-bg-layer-1: var(--nm-bg-1, #0b1220);
+  --dsw-alias-bg-layer-2: var(--nm-bg-2, #0f172a);
   --dsw-alias-bg-mask-1: rgba(0, 0, 0, 0.55);
   --dsw-alias-bg-overlay: rgba(12, 20, 48, 0.72);
-  --dsw-alias-border-l1: rgba(0, 240, 255, 0.08);
-  --dsw-alias-border-l2: rgba(0, 240, 255, 0.12);
-  --dsw-alias-border-l3: rgba(0, 240, 255, 0.25);
-  --dsw-alias-border-l4: rgba(0, 240, 255, 0.40);
-  --dsw-alias-brand-primary: #00f0ff;
-  --dsw-alias-button-contrast-fill: #050a18;
-  --dsw-alias-button-ghost-active-border: rgba(0, 240, 255, 0.45);
-  --dsw-alias-button-ghost-active-fill: rgba(0, 240, 255, 0.12);
+  --dsw-alias-border-l1: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
+  --dsw-alias-border-l2: var(--nm-cyan-12, rgba(0, 240, 255, 0.12));
+  --dsw-alias-border-l3: var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
+  --dsw-alias-border-l4: var(--nm-cyan-40, rgba(0, 240, 255, 0.40));
+  --dsw-alias-brand-primary: var(--nm-brand, #00f0ff);
+  --dsw-alias-button-contrast-fill: var(--nm-on-accent, #050a18);
+  --dsw-alias-button-ghost-active-border: var(--nm-cyan-45, rgba(0, 240, 255, 0.45));
+  --dsw-alias-button-ghost-active-fill: var(--nm-cyan-12, rgba(0, 240, 255, 0.12));
   --dsw-alias-button-primary-fill: #00c2d4;
-  --dsw-alias-button-primary-hover: #38bdf8;
-  --dsw-alias-button-tool-bar-fill: rgba(0, 240, 255, 0.08);
-  --dsw-alias-button-tool-bar-hover: rgba(0, 240, 255, 0.14);
-  --dsw-alias-interactive-bg-active: rgba(0, 240, 255, 0.10);
-  --dsw-alias-interactive-bg-hover: rgba(0, 240, 255, 0.06);
+  --dsw-alias-button-primary-hover: var(--nm-sky, #38bdf8);
+  --dsw-alias-button-tool-bar-fill: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
+  --dsw-alias-button-tool-bar-hover: var(--nm-cyan-14, rgba(0, 240, 255, 0.14));
+  --dsw-alias-interactive-bg-active: var(--nm-cyan-10, rgba(0, 240, 255, 0.10));
+  --dsw-alias-interactive-bg-hover: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
   --dsw-alias-interactive-bg-hover-danger: rgba(255, 59, 92, 0.12);
-  --dsw-alias-label-caption: #94a3b8;
-  --dsw-alias-label-dimmed: #64748b;
-  --dsw-alias-label-primary: #e2e8f0;
-  --dsw-alias-label-primary-foreground: #050a18;
-  --dsw-alias-label-primary-inverted: #e2e8f0;
-  --dsw-alias-label-secondary: #94a3b8;
-  --dsw-alias-label-tertiary: #64748b;
-  --dsw-alias-link: #38bdf8;
+  --dsw-alias-label-caption: var(--nm-text-2, #94a3b8);
+  --dsw-alias-label-dimmed: var(--nm-text-3, #64748b);
+  --dsw-alias-label-primary: var(--nm-text-1, #e2e8f0);
+  --dsw-alias-label-primary-foreground: var(--nm-on-accent, #050a18);
+  --dsw-alias-label-primary-inverted: var(--nm-text-1, #e2e8f0);
+  --dsw-alias-label-secondary: var(--nm-text-2, #94a3b8);
+  --dsw-alias-label-tertiary: var(--nm-text-3, #64748b);
+  --dsw-alias-link: var(--nm-sky, #38bdf8);
   --dsw-alias-markdown-code-block: #0b1220;
   --dsw-alias-markdown-code-block-banner: #132033;
   --dsw-alias-markdown-inline-code: #16213a;
   --dsw-alias-scrollbar-bg-l2: rgba(0, 240, 255, 0.15);
-  --dsw-alias-scrollbar-hover-l2: rgba(0, 240, 255, 0.25);
-  --dsw-alias-state-business-primary: #3b82f6;
-  --dsw-alias-state-error-primary: #ff3b5c;
-  --dsw-alias-state-success-primary: #00ff88;
-  --dsw-alias-state-success-tertiary: rgba(0, 255, 136, 0.15);
-  --dsw-alias-state-warn-label: #f59e0b;
-  --dsw-alias-state-warn-primary: #f59e0b;
-  --dsw-alias-state-warn-tertiary: rgba(245, 158, 11, 0.15);
+  --dsw-alias-scrollbar-hover-l2: var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
+  --dsw-alias-state-business-primary: var(--nm-blue, #3b82f6);
+  --dsw-alias-state-error-primary: var(--nm-red, #ff3b5c);
+  --dsw-alias-state-success-primary: var(--nm-green, #00ff88);
+  --dsw-alias-state-success-tertiary: var(--nm-success-15, rgba(0, 255, 136, 0.15));
+  --dsw-alias-state-warn-label: var(--nm-amber, #f59e0b);
+  --dsw-alias-state-warn-primary: var(--nm-amber, #f59e0b);
+  --dsw-alias-state-warn-tertiary: var(--nm-warning-15, rgba(245, 158, 11, 0.15));
   --dsw-alias-tooltip-bg: #132033;
   --dsw-hovercard-bg: rgba(15, 26, 54, 0.95);
   --dsw-mask-blur: blur(6px);
   --dsw-shadow-lv3: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --dsw-elevation-prominent: 0 16px 48px rgba(0, 0, 0, 0.60);
+  --dsw-elevation-prominent: var(--nm-shadow-popup, 0 16px 48px rgba(0, 0, 0, 0.60));
   --dsw-specific-menu: rgba(15, 26, 54, 0.98);
   --dsw-static-deepseek-450: #1e293b;
   --dsw-static-neutral-bluish-00: #e2e8f0;
@@ -637,6 +682,22 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 @property --nm-border-hover { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
 @property --nm-cyan { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
 @property --nm-cyan-10 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.10); }
+@property --nm-cyan-4 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.04); }
+@property --nm-cyan-6 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.06); }
+@property --nm-cyan-8 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.08); }
+@property --nm-cyan-14 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.14); }
+@property --nm-cyan-35 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.35); }
+@property --nm-cyan-12 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.12); }
+@property --nm-cyan-16 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.16); }
+@property --nm-cyan-18 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.18); }
+@property --nm-cyan-25 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.25); }
+@property --nm-cyan-42 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.42); }
+@property --nm-cyan-40 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.40); }
+@property --nm-cyan-60 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.60); }
+@property --nm-cyan-70 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.70); }
+@property --nm-cyan-45 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.45); }
+@property --nm-text-4 { syntax: '<color>'; inherits: true; initial-value: #4a5575; }
+@property --nm-brand { syntax: '<color>'; inherits: true; initial-value: #00f0ff; }
 @property --nm-cyan-20 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.20); }
 @property --nm-cyan-50 { syntax: '<color>'; inherits: true; initial-value: rgba(0, 240, 255, 0.50); }
 @property --nm-cyan-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #00f0ff 70%, #e2e8f0); }
@@ -653,6 +714,30 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
 @property --nm-pink { syntax: '<color>'; inherits: true; initial-value: #ec4899; }
 @property --nm-purple { syntax: '<color>'; inherits: true; initial-value: #a855f7; }
 @property --nm-purple-20 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.20); }
+@property --nm-purple-8 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.08); }
+@property --nm-purple-10 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.10); }
+@property --nm-purple-14 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.14); }
+@property --nm-purple-18 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.18); }
+@property --nm-purple-50 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.50); }
+@property --nm-purple-30 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.30); }
+@property --nm-purple-40 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.40); }
+@property --nm-purple-70 { syntax: '<color>'; inherits: true; initial-value: rgba(168, 85, 247, 0.70); }
+@property --nm-panel-solid { syntax: '<color>'; inherits: true; initial-value: rgba(13, 21, 40, 0.72); }
+@property --nm-veil-55 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.55); }
+@property --nm-hover-neutral { syntax: '<color>'; inherits: true; initial-value: rgba(127, 127, 127, 0.16); }
+@property --nm-paper-85 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.85); }
+@property --nm-paper-55 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.55); }
+@property --nm-paper-35 { syntax: '<color>'; inherits: true; initial-value: rgba(255, 255, 255, 0.35); }
+@property --nm-ink-8 { syntax: '<color>'; inherits: true; initial-value: rgba(15, 23, 42, 0.08); }
+@property --nm-ink-10 { syntax: '<color>'; inherits: true; initial-value: rgba(15, 23, 42, 0.10); }
+@property --nm-paperfill-82 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.82); }
+@property --nm-paperfill-45 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.45); }
+@property --nm-paperfill-88 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.88); }
+@property --nm-paperfill-50 { syntax: '<color>'; inherits: true; initial-value: rgba(247, 249, 252, 0.50); }
+@property --nm-veil-25 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.25); }
+@property --nm-scrim-50 { syntax: '<color>'; inherits: true; initial-value: rgba(5, 10, 24, 0.50); }
+@property --nm-sky { syntax: '<color>'; inherits: true; initial-value: #38bdf8; }
+@property --nm-amber-45 { syntax: '<color>'; inherits: true; initial-value: rgba(245, 158, 11, 0.45); }
 @property --nm-purple-text { syntax: '<color>'; inherits: true; initial-value: color-mix(in srgb, #a855f7 70%, #e2e8f0); }
 @property --nm-red { syntax: '<color>'; inherits: true; initial-value: #ff3b5c; }
 @property --nm-success { syntax: '<color>'; inherits: true; initial-value: #00ff88; }
@@ -683,6 +768,46 @@ input[type='datetime-local']:focus-visible::-webkit-calendar-picker-indicator {
     --nm-bg-active, --nm-bg-card, --nm-bg-glass, --nm-bg-hover, --nm-bg-input,
     --nm-black, --nm-blue, --nm-blue-20, --nm-border, --nm-border-active,
     --nm-border-hover, --nm-cyan, --nm-cyan-10, --nm-cyan-20, --nm-cyan-50,
+    --nm-cyan-4,
+    --nm-cyan-6,
+    --nm-cyan-8,
+    --nm-cyan-14,
+    --nm-cyan-35,
+    --nm-cyan-12,
+    --nm-cyan-16,
+    --nm-cyan-18,
+    --nm-cyan-25,
+    --nm-cyan-42,
+    --nm-cyan-45,
+    --nm-cyan-40,
+    --nm-cyan-60,
+    --nm-cyan-70,
+    --nm-purple-8,
+    --nm-purple-10,
+    --nm-purple-14,
+    --nm-purple-18,
+    --nm-purple-50,
+    --nm-purple-30,
+    --nm-purple-40,
+    --nm-purple-70,
+    --nm-panel-solid,
+    --nm-veil-55,
+    --nm-hover-neutral,
+    --nm-paper-85,
+    --nm-paper-55,
+    --nm-paper-35,
+    --nm-ink-8,
+    --nm-ink-10,
+    --nm-paperfill-82,
+    --nm-paperfill-45,
+    --nm-paperfill-88,
+    --nm-paperfill-50,
+    --nm-veil-25,
+    --nm-scrim-50,
+    --nm-sky,
+    --nm-amber-45,
+    --nm-text-4,
+    --nm-brand,
     --nm-cyan-text, --nm-danger, --nm-danger-15, --nm-danger-text, --nm-green,
     --nm-green-20, --nm-info, --nm-info-15, --nm-info-text, --nm-map-land,
     --nm-on-accent, --nm-pink, --nm-purple, --nm-purple-20, --nm-purple-text,

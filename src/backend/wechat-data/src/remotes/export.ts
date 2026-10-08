@@ -96,9 +96,9 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       }
     },
 
-    exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): ExportResult {
+    async exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): Promise<ExportResult> {
       try {
-        const r = exportAnnualReport(rc.dirs().decrypted, options.year, options.format, options.dir, options.filename)
+        const r = await exportAnnualReport(rc.dirs().decrypted, options.year, options.format, options.dir, options.filename)
         rc.op('export', 'export_annual_report', 'ok', String(options.year), `共 ${r.count} 条`)
         rc.recordExport({
           kind: 'annual',

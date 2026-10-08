@@ -4,7 +4,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ListSkeleton } from './hooks.tsx'
-import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiCancelExportJob, apiCreateBackup, apiCreateEncryptedBackup, apiDeleteBackup, apiListBackups, apiPreviewBackup, apiRestoreBackup } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { BackupEntry, BackupPreviewItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { Dialog, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
@@ -20,7 +21,13 @@ import kitCss from '../ui/kit.module.css'
 export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   /** 应用内确认框（替代原生 window.confirm —— 系统白框不跟主题）。 */
   const confirm = useConfirm()
-  const [items, setItems] = useState<readonly BackupEntry[]>(() => readRenderCache<readonly BackupEntry[]>('backups') ?? [])
+  /* 2026-10-03 推广批次 3：items 改用共用 useFreshData —— 打开即查最新（不再预填缓存），
+     成功写回缓存；失败才回退缓存并由 hook 标注「以下为本地缓存（可能不是最新）」。
+     `refresh` 仍是**可调用函数**（多处操作后重查），它就是 hook 的 reload。 */
+  const fetchBackups = useCallback(() => apiListBackups(), [])
+  const { data: backupData, loading: backupsLoading, error: backupsError, reload: refresh } =
+    useFreshData<Awaited<ReturnType<typeof apiListBackups>>>('backups', fetchBackups)
+  const items = backupData?.items ?? []
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -64,21 +71,11 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
     }
   }
 
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      const env = await apiListBackups()
-      setItems(env.items)
-      writeRenderCache('backups', env.items)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { void refresh() }, [refresh])
+  // hook 负责取数与缓存；本面板的 loading/error 仍归自己（加密备份等流程也在写它们），这条只做对齐。
+  useEffect(() => {
+    if (!backupsLoading) setLoading(false)
+    if (backupsError !== null) setError(backupsError)
+  }, [backupsLoading, backupsError])
 
   /**
    * 失败之后**不能**再调 `refresh()`：它开头就 `setError(null)`，会把刚报出来的错误抹掉。
@@ -211,7 +208,7 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
           </div>
         )}
         {!loading && items.map(b => (
-          <div key={b.name} className={css.fileCell} title={b.path}>
+          <div key={b.name} className={`${css.fileCell} ${css.bkCell}`} title={b.path}>
             <span className={css.fileName}>{b.name}</span>
             <span className={css.fileMeta}>{fmtBytes(b.size)} · {b.summary || (b.kind === 'enc' ? '加密' : '目录')} · {fmtDateTimeSec(b.modified)}{b.ok !== undefined ? (b.ok ? ' · ✓ 完整' : ' · ⚠️ 校验异常') : ''}</span>
             <button type="button" className={css.catBtn} onClick={() => { void openPreview(b.name) }} disabled={previewLoading}>预览</button>

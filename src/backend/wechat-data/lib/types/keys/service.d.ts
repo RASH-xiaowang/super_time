@@ -13,6 +13,10 @@ export declare function findWechatPid(): number | null;
 export declare function scanDllInternalKey(wechatInstallDir?: string): Buffer | null;
 /**
  * Recover the V4 database key for the running WeChat process.
+ *
+ * 顺序很重要：**先试已经知道的密钥，再扫内存**（见 `findSavedDbKey` 的注释）。
+ * 这也顺带修好了"微信没开时无法确认密钥"的老形状 —— 只要已存的密钥能通过页 1 校验，
+ * 微信开没开都不影响这一步。
  * @param opts - optional db probe path and install dir.
  * @returns the recovered key result.
  */

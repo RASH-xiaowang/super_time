@@ -180,7 +180,6 @@ export function SetupGuide({
           keyCount: k.keyCount ?? 0,
           dbKey: c.db_enc_key ?? '',
           imgAes: c.image_aes_key ?? '',
-          cdnEnabled: c.cdn_enabled === true,
           voiceReady: Boolean(w?.engine),
         })
       } catch {

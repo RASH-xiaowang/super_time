@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, CellPrimary, DataTable, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, CellPrimary, DataTable, LinkButton, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
@@ -101,7 +101,7 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
       id: 'name',
       header: '联系人',
       cell: r => (r.username
-        ? <button type="button" className={css.link} onClick={() => { onOpenChat?.(r.username) }} title={r.username}>{r.name}</button>
+        ? <LinkButton onClick={() => { onOpenChat?.(r.username) }} title={r.username}>{r.name}</LinkButton>
         : <CellPrimary>{r.name}</CellPrimary>),
       sortValue: r => r.name,
     },

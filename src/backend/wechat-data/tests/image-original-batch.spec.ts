@@ -1,14 +1,14 @@
 /**
  * 批量取原图（免登录直链）的行为与接线守卫。
  *
- * 这条链上最容易坏、又坏得静默的五件事：
- *   ① **关掉开关还发请求**：`cdn_enabled=false` 的承诺是「一次请求都不发」，不是「发了再失败」
- *      —— 这一条由 stub 的调用计数钉死；
- *   ② **断点续跑失效**：取回的原图与本机解码出的原图**写同一个槽位**（`<md5>.<ext>`），
+ * 这条链上最容易坏、又坏得静默的四件事：
+ *   ① **断点续跑失效**：取回的原图与本机解码出的原图**写同一个槽位**（`<md5>.<ext>`），
  *      没有索引就分不清「取回过没有」，第二次点会重下几千张；
- *   ③ **一条失败带走整批**：直链过期是常态（预签名 URL 有有效期），必须逐条记错继续；
- *   ④ **白名单绕过**：消息 XML 是可被离线改写的文件，直链又带完整凭据参数 ⇒ 打请求前必须过主机白名单；
- *   ⑤ **计数口径对不上**：界面上的「可补 N 张」与批量实际尝试的条数必须来自**同一次扫描**。
+ *   ② **一条失败带走整批**：直链过期是常态（预签名 URL 有有效期），必须逐条记错继续；
+ *   ③ **白名单绕过**：消息 XML 是可被离线改写的文件，直链又带完整凭据参数 ⇒ 打请求前必须过主机白名单；
+ *   ④ **计数口径对不上**：界面上的「可补 N 张」与批量实际尝试的条数必须来自**同一次扫描**。
+ *
+ * 2026-09-30：「自动获取原图（CDN）」开关已删除，这里不再有「关掉就一次请求都不发」的判据。
  *
  * 用例全在临时目录里造，绝不往仓库写东西。
  * @vitest-environment node
@@ -186,18 +186,7 @@ describe('盘点：三种途径分开报（这是界面那句「为什么没有�
   })
 })
 
-describe('批量取回：开关、续跑、失败隔离', () => {
-  it('⑥ 关掉「自动获取原图（CDN）」⇒ 一次请求都不发、不落盘、回 blocked', async () => {
-    const f = fixture([{ localId: 1, xml: imgXml(MD5_A, { hd: `https://${HOST}/hd` }), md5: MD5_A }])
-    const calls = stubFetch(() => ok())
-    const r = await fetchOriginalImagesBatch(f.decrypted, f.rawRoot, f.decoded, { cdnEnabled: false })
-    expect(calls(), '开关关掉时连一次请求都不许发').toBe(0)
-    expect(r.blocked, '要说清为什么没取').toContain('自动获取原图')
-    expect(r.fetched).toBe(0)
-    expect(existsSync(join(f.decoded, MD5_A + '.png'))).toBe(false)
-    expect(readFetchedOriginals(f.decoded).size, '没取到就不该写索引').toBe(0)
-  })
-
+describe('批量取回：续跑、失败隔离', () => {
   it('⑦ 成功取回落进解码缓存根、并写进续跑索引；第二次跑一张都不再下', async () => {
     const f = fixture([
       { localId: 1, xml: imgXml(MD5_A, { hd: `https://${HOST}/hd` }), md5: MD5_A },

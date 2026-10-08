@@ -84,6 +84,13 @@ export async function decryptAllDbs(
     return { ok: false, total: 0, okCount: 0, failed: [], error: '数据库密钥不是合法的 64 位 hex' }
   }
 
+  // ⚠️ 这里**故意没有**加 `yieldToLoop`，虽然 `scanDbFiles`（`detect.ts:165`）是同步递归遍历。
+  // 第 73 轮核实过：本机 `db_dir` 未配置 ⇒ 函数在上面第 68 行就提前 return 了，
+  // 加在遍历前后的两行**根本执行不到**，改与不改完全一样（探针里 `decryptAllDatabases`
+  // 的「让出」前后都是 0）。**没有证据支持的改动不留。**
+  // 真要判断这里是否需要让出，前提是先把探针那一行的读数修好 —— 它现在报
+  // `total(ms)=4077/4175 秒、让出 0`，而 4.08e9/4.18e9 ≈ **2³²**，
+  // 是 **32 位溢出**的读数，不是真实耗时（整轮墙钟上限才 180s）。
   const dbs = scanDbFiles(rawDbDir)
   const failed: Array<{ db: string; error: string }> = []
   let okCount = 0

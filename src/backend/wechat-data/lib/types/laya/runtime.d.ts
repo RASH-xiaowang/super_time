@@ -1,5 +1,18 @@
 import { type LayaItem } from './build-sequence.ts';
 import { type LayaQuestions, type LayaQuestionKind } from './presets.ts';
+/** 显式指定 onnxruntime 的 intra-op 线程数（调优 / 复现实验用）。默认见 {@link layaThreadCount}。 */
+export declare const LAYA_THREADS_ENV = "DSH_WECHAT_LAYA_THREADS";
+/**
+ * onnxruntime 的 intra-op 线程数，**默认 `min(8, 逻辑核数)`**。
+ *
+ * 这个 8 **不是**「没想过调大」，是按实测定的：本机 i7-14700K（28 逻辑核）上对同一份输入扫描，
+ *   4→10,884ms ／ **8→8,172ms** ／ 12→8,845ms ／ 16→8,928ms ／ 20→8,826ms ／ 28→9,251ms
+ * ⇒ 8 之后单调变差，只是让 E-core 互相抢缓存。（4 那一档两次跑差异很大 —— 28 核上只给 4 线程
+ * 基本被调度噪声主导；8 以上两跑都一致，所以结论稳。）
+ * 留这个环境变量是为了「换一台机器后能重新量一遍」（复现：`node tools/laya/bench-inference.mjs`），
+ * 不是在暗示默认值该调大。与 whisper 的 `whisper_threads` 是同一个约定。
+ */
+export declare function layaThreadCount(): number;
 /** 命题在 UI 层的一种呈现（概率已排序、标签已本地化）。 */
 export interface LayaAnswerOption {
     key: string;

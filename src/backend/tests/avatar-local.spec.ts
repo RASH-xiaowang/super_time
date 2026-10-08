@@ -59,7 +59,6 @@ describe('批量头像的三级回退', () => {
 
       const out = resolveAvatarsLocal(ws.dir, ['in_db', 'in_temp', 'remote_only', 'nowhere'], {
         wechatBaseDir: ws.dir,
-        allowRemote: true,
       })
 
       // ① 库里有字节 → data URL（本地，不联网）
@@ -76,7 +75,7 @@ describe('批量头像的三级回退', () => {
   it('big_head_url 在小图 URL 缺失时顶上', async () => {
     await withTempWorkspace('avatar-local', (ws) => {
       seedContact(ws, [{ username: 'a', big: 'https://wx.qlogo.cn/mmhead/big/0' }])
-      const out = resolveAvatarsLocal(ws.dir, ['a'], { allowRemote: true })
+      const out = resolveAvatarsLocal(ws.dir, ['a'], {})
       expect(out.a).toBe('https://wx.qlogo.cn/mmhead/big/0')
     })
   })
@@ -84,26 +83,8 @@ describe('批量头像的三级回退', () => {
   it('http 远端 URL 不返回 —— 头像的远程地址现在由后端图片代理代取，而它只取 https', async () => {
     await withTempWorkspace('avatar-local', (ws) => {
       seedContact(ws, [{ username: 'plain_http', small: 'http://wx.qlogo.cn/mmhead/ddd/0' }])
-      const out = resolveAvatarsLocal(ws.dir, ['plain_http'], { allowRemote: true })
+      const out = resolveAvatarsLocal(ws.dir, ['plain_http'], {})
       expect(out.plain_http).toBeUndefined()
-    })
-  })
-
-  it('用户开了「出站拦截」时不下发远端 URL，但本地那两级照常给', async () => {
-    await withTempWorkspace('avatar-local', (ws) => {
-      const tempUrl = 'https://wx.qlogo.cn/mmhead/eee/0'
-      seedContact(ws, [
-        { username: 'remote_only', small: 'https://wx.qlogo.cn/mmhead/fff/0' },
-        { username: 'in_temp', small: tempUrl },
-      ])
-      seedTempHead(ws, tempUrl)
-
-      const out = resolveAvatarsLocal(ws.dir, ['remote_only', 'in_temp'], {
-        wechatBaseDir: ws.dir,
-        allowRemote: false,
-      })
-      expect(out.remote_only).toBeUndefined()
-      expect(out.in_temp).toMatch(/^data:image\/jpeg;base64,/)
     })
   })
 
@@ -111,7 +92,7 @@ describe('批量头像的三级回退', () => {
     await withTempWorkspace('avatar-local', (ws) => {
       seedContact(ws, [{ username: 'a', small: 'https://wx.qlogo.cn/mmhead/ggg/0' }])
       // 故意不建 head_image.db
-      const out = resolveAvatarsLocal(ws.dir, ['a'], { allowRemote: true })
+      const out = resolveAvatarsLocal(ws.dir, ['a'], {})
       expect(out.a).toBe('https://wx.qlogo.cn/mmhead/ggg/0')
       // 空输入直接返回空（别为了空集合去开库）
       expect(resolveAvatarsLocal(ws.dir, [])).toEqual({})

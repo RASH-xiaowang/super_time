@@ -74,7 +74,7 @@
 }
 .sessionNameWrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .hiddenBadge {
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-purple);
   background: color-mix(in srgb, var(--nm-purple) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-purple) 30%, transparent);
@@ -105,7 +105,7 @@
   position: absolute;
   bottom: calc(100% + 6px);
   z-index: 3;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   line-height: 1.4;
   padding: 4px 8px;
   border-radius: 4px;
@@ -549,7 +549,7 @@
 .msgFileBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .msgFileExt {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   color: var(--wx-card-footer);
   background: transparent;
@@ -719,7 +719,7 @@
 .msgAppmsgCard .msgCardFoot { height: 26px; }
 .msgMediaCard .msgCardFoot { height: 26px; flex-basis: auto; }
 .msgContactCard .msgCardFoot { height: 28px; }
-.msgMiniappCard .msgCardFoot { height: 23px; font-size: 10px; flex-basis: auto; }
+.msgMiniappCard .msgCardFoot { height: 23px; font-size: var(--nm-fs-xs, 11px); flex-basis: auto; }
 .msgSolitaireCard .msgCardFoot { flex-basis: auto; }
 .msgMusicCard .msgCardFoot { height: 27px; }
 /* ── 通用小卡的跳转态与缩略图 ──────────────────────────────────── */
@@ -798,7 +798,7 @@
   position: absolute;
   left: 8px;
   top: 8px;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   line-height: 16px;
   padding: 1px 6px;
   border-radius: 9px;

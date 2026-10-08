@@ -5,13 +5,66 @@
  * 机制：类里保留 @Remote 装饰器与签名（协议层按名字枚举），方法体一行转发；
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
-import { collectDayMessages, collectPeriodMessages } from '../query/daily-summary.ts'
+import { collectDayMessagesAsync, collectPeriodMessages, collectPeriodMessagesAsync } from '../query/daily-summary.ts'
+import { yieldToLoop } from '../query/search-build.ts'
 import { buildReplyPrompt, collectReplyContext, collectReplyKbSnippets, parseReplyCandidates } from '../query/reply-suggest.ts'
 import { deleteSummaryRecord as delRec } from '../query/summary-tasks.ts'
 import { DailySummaryResult, OperationCategory, OperationStatus, PeriodSummaryResult, ReplySuggestResult, SummaryTaskMutationResult, SummaryTaskRunResult } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+
+/**
+ * 首 token 超时（D1，2026-09-28 性能修复）。
+ *
+ * 现场日志 `suggestReplies` 69 次 / 均 8.2s / **p99 89s**：均值的量级合理（远端 LLM 就该这个数），
+ * 但 p99 到 89 秒说明**有请求整个卡死**——`llm.stream` 只受仓库默认的 120s 总超时约束，
+ * 若 provider 连第一个 token 都没吐，用户就要瞪着「思考中」等到两分钟。15 秒足够覆盖
+ * 正常 provider 的排队+首 token（远小于总生成耗时），又能在真卡住时快速失败。
+ */
+const FIRST_TOKEN_TIMEOUT_MS = 15_000
+
+/**
+ * 给异步迭代器套一个「首块到期」看门狗（D1）。
+ *
+ * 语义刻意是**首 token** 而非整体：远端 LLM 正常生成 8~20 秒是家常便饭，
+ * 按总时长设限会把正常请求误杀。只有当**第一个 chunk 都没来**时才判为卡死并中止。
+ * 拿到首块后撤掉定时器，之后的迭代完全交还给原迭代器（`finally` 里也会清）。
+ * @param src - 上游流（`llm.stream(...)`）。
+ * @param firstChunkMs - 首块到期毫秒数。
+ * @returns 与 `src` 等价的异步可迭代对象（超时则抛错）。
+ */
+async function* streamWithDeadline<T>(src: AsyncIterable<T>, firstChunkMs: number): AsyncGenerator<T> {
+  const it = src[Symbol.asyncIterator]()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
+  try {
+    // 「还没出首块」时只有定时器在跑；一旦拿到第一块就 clearTimeout，后续不受它影响。
+    const first = await Promise.race([
+      it.next(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true
+          reject(new Error(`模型 ${Math.round(firstChunkMs / 1000)} 秒内没有响应，请稍后重试`))
+        }, firstChunkMs)
+      }),
+    ])
+    if (timer !== undefined) clearTimeout(timer)
+    if (first.done === true) return
+    yield first.value
+    // 首块之后：正常把控制权交回上游（不再受看门狗约束）
+    while (true) {
+      const n = await it.next()
+      if (n.done === true) return
+      yield n.value
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    // 超时后主动关掉上游，免得 provider 那边还挂着一条流。
+    if (timedOut && typeof it.return === 'function') { try { await it.return() } catch { /* 忽略 */ } }
+  }
+}
 
 /** Compact, readable daily digest for the no-LLM fallback (short per-message previews). */
 function compactDailyDigest(lines: string[]): string {
@@ -33,8 +86,7 @@ export interface createSummaryRecordRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   ctx: () => Context
-  privacyBlocked: (feature: string, detail?: string) => string | null
-  privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => { ok: true; texts: string[] } | { ok: false; error: string }
+  privacyGate: PrivacyGateFn
   runSummaryTask: (options: { id: number }) => Promise<SummaryTaskRunResult>
   selfUsername: () => string
   getSchedBusy: () => boolean
@@ -44,16 +96,9 @@ export interface createSummaryRecordRemotesInputs {
 export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs) {
   return {
     async generateDailySummary(options: { date: string; provider?: string; model?: string }): Promise<DailySummaryResult> {
-      const { lines, count, sessions, total, types, hourly, topSessions } = collectDayMessages(rc.dirs().decrypted, options.date)
-      // 出站拦截要在这里判：再往下就是「未配置默认模型」的早退分支，它会盖掉拦截提示
-      const blockedDay = rc.privacyBlocked('daily_summary')
-      if (blockedDay !== null) {
-        rc.op('task', 'generate_daily_summary', 'skip', options.date, blockedDay)
-        return {
-          summary: '⛔ ' + blockedDay + '\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）'),
-          date: options.date, sessions, messages: count, total, types, hourly, topSessions,
-        }
-      }
+      // 2026-09-28：改用可让出版收集 —— 真实 @Remote 探针实测本方法冷跑 **230ms 且一次
+      // 都不让出**（`working/probe-remote.txt`），成本全在这一步（模型调用在下面）。
+      const { lines, count, sessions, total, types, hourly, topSessions } = await collectDayMessagesAsync(rc.dirs().decrypted, options.date, undefined, yieldToLoop)
       const ctx = rc.ctx()
       const defaultModel = (ctx as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
@@ -79,16 +124,9 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         return { summary: fallback, date: options.date, sessions, messages: count, total, types, hourly, topSessions }
       }
       const prompt = '请总结 ' + options.date + ' 当天的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
-      const gate = rc.privacyGate('daily_summary', { sessions, messages: count }, [prompt])
-      if (!gate.ok) {
-        rc.op('task', 'generate_daily_summary', 'skip', options.date, gate.error)
-        return {
-          summary: '⛔ ' + gate.error + '\n\n当日统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || '\n（当天无文本消息）'),
-          date: options.date, sessions, messages: count, total, types, hourly, topSessions,
-        }
-      }
+      const [gated] = rc.privacyGate('daily_summary', { sessions, messages: count }, [prompt])
       const userMsg = createUserMessage({
-        content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+        content: [{ type: 'text', text: gated ?? prompt }],
         source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
       })
       const assembler = new BlockAssembler()
@@ -122,17 +160,10 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
     },
 
     async generatePeriodSummary(options: { from: string; to: string; provider?: string; model?: string }): Promise<PeriodSummaryResult> {
-      const collected = collectPeriodMessages(rc.dirs().decrypted, options.from, options.to)
+      // 2026-09-28：改用可让出版收集 —— 实测本方法冷跑 **448ms 且一次都不让出**
+      // （`working/probe-remote.txt`，当时最长的一个独占项）。
+      const collected = await collectPeriodMessagesAsync(rc.dirs().decrypted, options.from, options.to, undefined, yieldToLoop)
       const { lines, count, sessions, total, types, hourly, topSessions } = collected
-      // 同每日总结：拦截要在「未配置默认模型」早退之前判
-      const blockedPeriod = rc.privacyBlocked('period_summary')
-      if (blockedPeriod !== null) {
-        rc.op('task', 'generate_period_summary', 'skip', `${options.from}~${options.to}`, blockedPeriod)
-        return {
-          summary: '⛔ ' + blockedPeriod + '\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || ''),
-          from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions,
-        }
-      }
       const ctx = rc.ctx()
       const defaultModel = (ctx as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
@@ -157,15 +188,8 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         return { summary: fallback, from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions }
       }
       const prompt = '请总结 ' + options.from + ' 至 ' + options.to + ' 的微信聊天内容，输出简洁的中文要点：\n\n' + lines.join('\n')
-      const gate = rc.privacyGate('period_summary', { sessions, messages: count }, [prompt])
-      if (!gate.ok) {
-        rc.op('task', 'generate_period_summary', 'skip', `${options.from}~${options.to}`, gate.error)
-        return {
-          summary: '⛔ ' + gate.error + '\n\n周期统计：共 ' + String(total) + ' 条消息 / ' + String(sessions) + ' 个活跃会话。' + (compactDailyDigest(lines) || ''),
-          from: options.from, to: options.to, sessions, messages: count, total, types, hourly, topSessions,
-        }
-      }
-      const userMsg = createUserMessage({ content: [{ type: 'text', text: gate.texts[0] ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
+      const [gated] = rc.privacyGate('period_summary', { sessions, messages: count }, [prompt])
+      const userMsg = createUserMessage({ content: [{ type: 'text', text: gated ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
       const assembler = new BlockAssembler()
       const opts: GenerateOptions = { provider: useProvider, model: useModel, messages: [userMsg], system: '你是微信周期总结助手，用中文输出简洁的要点总结。', maxTokens: 1024 }
       let summary = ''
@@ -186,8 +210,6 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       const snippets = kbId > 0
         ? collectReplyKbSnippets(rc.dirs().decrypted, kbId, latestPeer || lines[lines.length - 1] || '', 3)
         : []
-      const blocked = rc.privacyBlocked('suggest_reply')
-      if (blocked !== null) return { ok: false, error: blocked }
       const llm = rc.ctx().llm
       const defaultModel = (rc.ctx() as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
@@ -195,10 +217,9 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
       const sel = defaultModel?.currentSelection()
       if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
       const prompt = buildReplyPrompt(lines, snippets, want)
-      const gate = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
-      if (!gate.ok) return { ok: false, error: gate.error }
+      const [gated] = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
       const userMsg = createUserMessage({
-        content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+        content: [{ type: 'text', text: gated ?? prompt }],
         source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
       })
       const assembler = new BlockAssembler()
@@ -207,7 +228,7 @@ export function createSummaryRecordRemotes(rc: createSummaryRecordRemotesInputs)
         system: '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。',
       }
       try {
-        for await (const chunk of llm.stream(opts)) assembler.push(chunk)
+        for await (const chunk of streamWithDeadline(llm.stream(opts), FIRST_TOKEN_TIMEOUT_MS)) assembler.push(chunk)
       } catch (e) {
         rc.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
         return { ok: false, error: (e as Error).message }

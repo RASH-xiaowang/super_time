@@ -6,8 +6,6 @@ export interface createVoiceLlmRemotesInputs {
         decoded: string;
     };
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
-    /** 出网闸门（`blockOutbound`）—— 语音模型要从 HuggingFace 镜像下**文件**，属出网。 */
-    privacyBlocked: (feature: string, detail?: string) => string | null;
     ctx: () => Context;
     getWhisperDownload: () => WhisperDownloadProgress | null;
     setWhisperDownload: (v: WhisperDownloadProgress | null) => void;

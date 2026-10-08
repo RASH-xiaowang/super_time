@@ -6,7 +6,7 @@
  * 各域处理器的 ctx 装配在 `gateway-core.ts` 的 `GatewayCore` 里。
  *
  * 于是**按路径读源码的守卫**只读 `gateway.ts` 就会看不到接线（构造器里的实时同步、
- * `privacyGate`、`cdnSwitches`、`saveAskHistory`…都在核里），把「搬家」误报成「回归」。
+ * `privacyGate`、`saveAskHistory`…都在核里），把「搬家」误报成「回归」。
  * 本模块给出两种口径，由调用方按**意图**选：
  * - `gatewayClassSource()` —— 只看这个类自己（两个文件），用于「接线必须在网关里、
  *   不许散进实现模块」这类判据；

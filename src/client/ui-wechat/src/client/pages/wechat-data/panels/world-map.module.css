@@ -61,21 +61,30 @@
 .backOverlay:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
 .meta { color: var(--nm-text-2); font-size: 11px; margin-left: auto; }
 
-.error {
-  font-size: 12px;
-  color: var(--nm-danger);
-  padding: 20px;
-  text-align: center;
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 20%, transparent);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
-}
 .loading {
   padding: 32px;
   text-align: center;
   color: var(--nm-text-2);
   font-size: 12px;
 }
+
+/* 加载态里的手动重试（超时文案让用户「点重试」，就得真有这个按钮）。
+   视觉与 kit 的次级按钮同口径，不引新令牌。 */
+.retry {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 4px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.retry:hover { border-color: var(--nm-border-hover); }
+.retry:focus-visible { outline: 2px solid var(--nm-brand); outline-offset: 2px; }
 
 .stage {
   display: flex;
@@ -243,7 +252,7 @@
   max-width: 100%;
 }
 .cellCount {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
   font-family: var(--nm-font-mono, monospace);
@@ -306,7 +315,7 @@
 }
 .avatarRailLeft .friendLabel,
 .avatarRailRight .friendLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
 }
 .avatarItem {
   display: flex;
@@ -363,7 +372,7 @@
   color: var(--nm-cyan);
 }
 .friendLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   line-height: 1.3;
   color: var(--nm-text-1);
   text-align: center;

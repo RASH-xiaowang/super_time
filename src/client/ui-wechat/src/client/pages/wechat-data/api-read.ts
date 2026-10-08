@@ -144,7 +144,6 @@ import type {
 } from './types.ts'
 import { KB_LIST_CACHE_KEY, kbCacheKey } from './kb-scope-keys.ts'
 import { KnowledgeSnapshotRead, remote, unwrap } from './api-core.ts'
-import { writeMapTilesFlag } from './map-tiles-flag.ts'
 
 // ── sessions / contacts / messages (Remote) ──
 /**
@@ -415,23 +414,17 @@ export async function apiGetPrivacyScan(): Promise<PrivacySnapshot> {
  * @returns PrivacyStateSnapshot.
  */
 export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
-  const s = unwrap(await remote().getPrivacyState())
-  // 顺手刷新底图开关的本地镜像（见 map-tiles-flag.ts）：世界地图因此不必为了
-  // 问一个开关而排进后端队列（实测长任务后面要等几十秒）。
-  writeMapTilesFlag(s.blockMapTiles === true)
-  return s
+  return unwrap(await remote().getPrivacyState())
 }
 /**
  * Update privacy settings.
  * @param options - partial settings patch.
  * @returns the updated privacy state snapshot.
  */
-export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<PrivacyStateSnapshot> {
+export async function apiSetPrivacyState(options: { redactSensitive?: boolean }): Promise<PrivacyStateSnapshot> {
   const r = await remote().setPrivacyState(options)
   invalidateAndNotify('privacy')
-  const s = unwrap(r)
-  writeMapTilesFlag(s.blockMapTiles === true)
-  return s
+  return unwrap(r)
 }
 /**
  * Fetch recent raw privacy audit rows.

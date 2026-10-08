@@ -1,5 +1,44 @@
 /* 通话记录 —— NEON MATRIX 科技风（沿用 --nm-* 令牌，与总览/账本/洞察面板同一套）。 */
 
+/* ── 让"行内矮卡"吃掉剩余高度，而不是在下方留白（2026-09-29 用户："这个界面留白太多了"）──
+ *
+ * 根因：四个卡片被排成两个双列栅格，每行都是"高卡配矮卡"，而 `kit.cardGrid` 是
+ * `align-items: start`（卡片按内容高、不互相拉伸）⇒ **矮卡下方那块行剩余空间永远空着**。
+ * 截图里的两片空白就是它（逐月通话约 300px vs 时段分布约 200px；排行约 380px vs 未接通约 215px）。
+ *
+ * 为什么不是改配对：`calls-layout.wiring.spec.ts` 有契约要求"排行与未接通原因配对"
+ * （上一轮同样的留白投诉立的）。所以这里**不动结构与 TSX**，改为让矮卡**填满行高**：
+ * 卡片拉伸 → 内容区 flex:1 → 图表变高 / 列表行距拉开，把空白变成内容（也符合"可读优先"）。
+ *
+ * ⚠️ 为什么用 `:has()` 而不是给栅格加类：那条 wiring 契约**按源码文本**匹配
+ * `className={kitCss.cardGrid}`，在同一行追加第二个类会让它匹配不上（实测打红）。
+ * 所以改为在 CSS 里用 `:has(.rankList)` / `:has(.monthList)` **只命中本面板**——
+ * `panelShell` 是所有面板共用的类，不能拿它做作用域，而这两个列表只有通话记录有。
+ */
+[class*='panelBody']:has(.rankList) [class*='cardGrid'],
+[class*='panelBody']:has(.monthList) [class*='cardGrid'] {
+  align-items: stretch;
+}
+
+/* 卡片（kit 的 `.card` 已是 display:flex/column）与它的内容区都要能"吃满"，
+   否则拉伸只把卡片外框撑高，内容仍贴顶部、下方照样空着。 */
+[class*='panelBody']:has(.rankList) [class*='cardGrid'] > *,
+[class*='panelBody']:has(.monthList) [class*='cardGrid'] > * {
+  min-height: 0;
+}
+
+[class*='panelBody']:has(.rankList) [class*='cardGrid'] > * > *,
+[class*='panelBody']:has(.monthList) [class*='cardGrid'] > * > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 图表：占满卡片内容区（柱高按最大值归一化 ⇒ 卡片变高 = 柱子变高，更好读） */
+.hourGrid { flex: 1 1 auto; }
+
+/* 未接通原因：条目在可用高度里均匀铺开，而不是挤在顶部留一片空 */
+.reasonList { flex: 1 1 auto; justify-content: space-between; }
+
 /* ── 通话对象排行 ─────────────────────────────────────────── */
 /* 长列表一律「限高 + 内层滚动」（2026-09-26 重新设计）。
  *

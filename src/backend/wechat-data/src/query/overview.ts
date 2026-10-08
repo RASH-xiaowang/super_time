@@ -5,9 +5,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySig, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import { classifyPacked } from './resource-classify.ts'
-import { withDb } from './db-open.ts'
+import { withDb, withDbAsync } from './db-open.ts'
 import { queryContacts } from './contacts.ts'
 
 interface StorageCategory { label: string; count: number; size: number }
@@ -63,7 +64,7 @@ function xmlNickname(xml: string): string {
  * @param dec - decrypted data root.
  * @returns the total row count across all shards.
  */
-function countRevokedAcrossShards(dec: string): number {
+async function countRevokedAcrossShards(dec: string): Promise<number> {
   const msgDir = join(dec, 'message')
   if (!existsSync(msgDir)) return 0
   let total = 0
@@ -79,6 +80,10 @@ function countRevokedAcrossShards(dec: string): number {
         db.close()
       }
     } catch { /* skip unreadable shard */ }
+    // 2026-09-28：分片级让出。本机真实数据实测 `queryOverview` 冷跑 **78ms 且一次都不让出**
+    // （`working/probe-stall.txt`，是最后一个"整段独占"接口），这一段要逐张打开全部
+    // 消息分片（146MB + 46MB + …）找反撤回表 —— 不打散就是几十毫秒按住整条队列。
+    await yieldToLoop()
   }
   return total
 }
@@ -88,7 +93,7 @@ function countRevokedAcrossShards(dec: string): number {
  * @param decryptedDir - decrypted data root.
  * @returns the overview result.
  */
-export function queryOverview(decryptedDir: string): OverviewResult {
+export async function queryOverview(decryptedDir: string): Promise<OverviewResult> {
   const dec = decryptedDir
   // Fingerprint the databases the aggregate reads; the 5s max-age bounds
   // recomputation while the realtime sync keeps the files fresh.
@@ -102,10 +107,10 @@ export function queryOverview(decryptedDir: string): OverviewResult {
     fileSigOf(join(dec, 'message', 'message_resource.db')),
     shardCatalogSig(dec, ['message']),
   ].join('|')
-  return cachedBySig('overview:' + dec, sig, () => computeOverview(dec), 30_000)
+  return cachedBySigAsync('overview:' + dec, sig, () => computeOverview(dec), 30_000)
 }
 
-function computeOverview(dec: string): OverviewResult {
+async function computeOverview(dec: string): Promise<OverviewResult> {
   const cstats = queryContacts(dec).stats
   const sessions = countRows(join(dec, 'session', 'session.db'), 'SessionTable')
   const groups = cstats.group ?? 0
@@ -114,7 +119,7 @@ function computeOverview(dec: string): OverviewResult {
   const moments = countRows(join(dec, 'sns', 'sns.db'), 'SnsTimeLine')
   const favorites = countRows(join(dec, 'favorite', 'favorite.db'), 'fav_db_item')
   const emoticons = countRows(join(dec, 'emoticon', 'emoticon.db'), 'kNonStoreEmoticonTable')
-  const revoked = countRevokedAcrossShards(dec)
+  const revoked = await countRevokedAcrossShards(dec)
 
   // storage
   let total_size = 0
@@ -150,7 +155,9 @@ function computeOverview(dec: string): OverviewResult {
   const snsPath = existsSync(join(dec, 'sns', 'db_sns', 'sns.db')) ? join(dec, 'sns', 'db_sns', 'sns.db') : join(dec, 'sns', 'sns.db')
   if (existsSync(snsPath)) {
     try {
-      withDb(snsPath, (db) => {
+      // `withDbAsync`（不是 `withDb`）：下面游标要 `await yieldToLoop()`，而同步版的
+      // `finally` 会在第一次让出时就把连接关掉（见 `db-open.ts:70-83`）。
+      await withDbAsync(snsPath, async (db) => {
         const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
         if (!has) return
         const cols = new Set(db.prepare('PRAGMA table_info(SnsTimeLine)').all().map(r => r.name))
@@ -161,12 +168,16 @@ function computeOverview(dec: string): OverviewResult {
         // 游标读（N8）：`SnsTimeLine` 随朋友圈条数增长，`.all()` 会把整表先物化成数组，
         // 而这里只是逐条累加一个 Map —— 读完即释放。
         const sql = `SELECT ${uname} AS u, ${cname} AS c FROM SnsTimeLine`
+        let sinceYield = 0
         for (const r of db.prepare(sql).iterate() as Iterable<{ u: string; c?: unknown }>) {
           const u = cellStr(r.u)
           if (!u) continue
           const cur = authorMap.get(u)
           if (cur) cur.posts += 1
           else authorMap.set(u, { name: names.get(u) || xmlNickname(cellStr(r.c)) || u, posts: 1 })
+          // 2026-09-28：行级让出（同 `wordcloud.ts` 的双阈值口径）。
+          sinceYield += 1
+          if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
         }
         const sorted = Array.from(authorMap.entries())
           .map(([username, v]) => ({ username, name: v.name, posts: v.posts }))

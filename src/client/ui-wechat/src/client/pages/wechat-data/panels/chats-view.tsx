@@ -14,7 +14,7 @@
  */
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
-import { Dialog, SearchInput, Segmented } from '../ui/kit.tsx'
+import { Dialog, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
 import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
@@ -267,8 +267,8 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 </button>
               </div>
             )}
-            {msgSearchLoading && <div className={kitCss.emptyInline}>搜索中…</div>}
-            {msgSearchError && <div className={kitCss.emptyInline}>{msgSearchError}</div>}
+            {msgSearchLoading && <LoadingState variant="compact" label="搜索中…" />}
+            {msgSearchError && <ErrorState message={msgSearchError} />}
             {!msgSearchLoading && msgSearched && msgHits.length === 0 && !msgSearchError && <div className={kitCss.emptyInline}>未找到相关消息</div>}
             {!msgSearchLoading && msgHits.length > 0 && (
               <>
@@ -366,7 +366,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                   {msgLoading ? '加载中…' : '加载更多'}
                 </button>
               )}
-              {messagesMatchSession && msgError && <div className={cssshell.msgErr}>{msgError}</div>}
+              {messagesMatchSession && msgError && <ErrorState message={msgError} />}
               {messagesMatchSession && (
                 /*
                  * 虚拟化（N18）：外层按总高度撑开滚动条，行按各自偏移绝对定位。

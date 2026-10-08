@@ -7,13 +7,12 @@
  * 于是"起半个网关才能测一条出站纪律"；抽成显式依赖之后，纪律本身可以用假桥逐条钉。
  *
  * 三条纪律（少一条都是实质性的漏洞，注释里那三条来自第 59 轮）：
- *   ① `privacyBlocked` 判在**任何出网之前** —— 早于「没配模型」那类早退，
- *      顺序错了用户看到的是「AI 不可用」，把「拦截生效了」这件事盖掉；
+ *   ① 出站前**必须先过隐私闸**（2026-09-30 起闸门只做脱敏与审计，不再有拦截分支）；
  *   ② 一次要发一批的（rerank）必须**整批过闸** —— 只 gate 查询词等于把 N 条正文
  *      裸发出去，而审计表还会记成「已脱敏」；
  *   ③ 失败一律抛出而不是吞掉 —— 由调用方决定降级成什么，并在界面上说清为什么。
  */
-import type { PrivacyGateResult } from './gateway-privacy.ts';
+import type { PrivacyGateFn } from './gateway-privacy.ts';
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts';
 import type { EmbedFn } from './query/retrieval/embedding.ts';
 /** 工厂要的依赖：桥、宿主上下文，以及前两个协作者的入口。 */
@@ -23,11 +22,7 @@ export interface LlmFactoryDeps {
     /** `ctx`：默认模型选择器（`agentDefaultModel`）挂在它上面。 */
     host: unknown;
     kbModel: (kbId: number, role: KbModelRole) => ResolvedModel;
-    privacyBlocked: (feature: string, detail?: string) => string | null;
-    privacyGate: (feature: string, stats: {
-        sessions: number;
-        messages: number;
-    }, texts: string[]) => PrivacyGateResult;
+    privacyGate: PrivacyGateFn;
 }
 /** 审计里能分得开的三种 embedding 功能名（数据范围完全不同，不许写死成一个）。 */
 export type EmbedFeature = 'ask_embed' | 'kb_embed' | 'kb_link_suggest';
@@ -36,8 +31,8 @@ export declare const EXTRACT_SYSTEM = "\u4F60\u662F\u4E00\u540D\u4E25\u683C\u768
 /**
  * 构造「过隐私闸门」的 embedding 函数。
  *
- * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
- * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
+ * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「敏感字段脱敏」时发送脱敏后的
+ * 文本，并写审计。
  * @param deps - 桥 + 前两个协作者的入口。
  * @param model - 向量模型名（空则不带 `model` 选项，由桥按默认发）。
  * @param feature - 审计里的功能名（消息片段 / 知识库文件正文 / 笔记正文与候选标题）。

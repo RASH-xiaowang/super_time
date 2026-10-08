@@ -162,7 +162,7 @@
 | 消息侧 RAG | `query/retrieval/*` | 4 通道（sparse/dense/structured/time）+ 意图 + RRF 融合 + 重排 + 压缩 + 反馈 + 评估 | ✅ 早于本计划 |
 | 问答 | `query/ask.ts` | `askWechat` 主流程；**全文 0 处引用知识库** | ⚠️ 见 G-01 |
 | 界面 | `panels/KbFiles.tsx` + `KbSwitcher.tsx` + `KnowledgeBase.tsx` + `Graph.tsx` | 合并外壳三段：笔记库 / 知识图谱 / 文件 | ✅ T2 |
-| 隐私 | `query/privacy-audit.ts` + `gateway.privacyGate` | 全局「禁止 AI 出网」闸门 + 敏感信息脱敏 + 审计行 | ✅ 早于本计划 |
+| 隐私 | `query/privacy-audit.ts` + `gateway.privacyGate` | 敏感信息脱敏 + 审计行（2026-09-30 起全局出网闸门已随开关移除） | ✅ 早于本计划 |
 
 ### 2.2 已实现能力矩阵（对照 WeKnora 同类）
 

@@ -24,9 +24,8 @@
  *
  * `qlogo.cn` 是 2026-09-23 随头像迁移（M23 第四刀）加进来的，**不是新增目的地**：
  * 实测 1,994 个联系人里 1,594 个的头像地址就是 `wx.qlogo.cn` / `thirdwx.qlogo.cn`，
- * 而在此之前这些地址一直由渲染层的 `<img>` 直接向它发请求 —— 既不读那两个出网开关、
- * 也不进操作记录、更没有缓存。加进来之后它反而被管住了：只有白名单判定通过、
- * 且「自动获取原图（CDN）」开着，后端才会去取。
+ * 而在此之前这些地址一直由渲染层的 `<img>` 直接向它发请求 —— 不进操作记录、也没有缓存。
+ * 加进来之后它反而被管住了：只有白名单判定通过，后端才会去取。
  * （同一批数据里的 `mmhead.c2c.wechat.com` 与 `wework.qpic.cn` 早就被下面两条覆盖了。）
  */
 export const WECHAT_CDN_HOST_SUFFIXES: readonly string[] = [
@@ -54,6 +53,22 @@ export function wechatCdnHostAllowed(url: string): boolean {
   const host = parsed.hostname.toLowerCase()
   if (host === '') return false
   return WECHAT_CDN_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith('.' + suf))
+}
+
+/**
+ * 取一个 URL 的主机名（小写），解析不出来时回空串。
+ *
+ * 为什么单独给一个：拒绝请求的文案里要**写明是哪个主机** —— 「主机不在清单内」这句
+ * 如果不带主机名，用户（和排查的人）无法判断是「清单少了一条」还是「这条地址真有问题」。
+ * @param url - 待解析的地址。
+ * @returns 小写主机名；解析失败或没有主机时为空串。
+ */
+export function cdnHostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
 }
 
 /**

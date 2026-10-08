@@ -2,12 +2,12 @@
  * M23 第一刀：远程图片代理 + 「哪些主机可以被后端代取」的唯一判据。
  *
  * 这里钉住的是**行为**，不是源码里出现过某个函数名：
- *   · 关掉「自动获取原图（CDN）」⇒ 一次 `fetch` 都不许发（本机缓存除外）；
- *   · 主机不在微信 CDN 清单 ⇒ 也是在**发请求之前**被拒（`evilqq.com` 这类前缀伪装必须拦得住）；
+ *   · 主机不在微信 CDN 清单 ⇒ 在**发请求之前**被拒（`evilqq.com` 这类前缀伪装必须拦得住）；
  *   · 取回的东西落盘 ⇒ 第二次渲染不再联网；
  *   · 批量入口去重、限单次数量、限并发（CDN 对突发并发回 400）。
- * 判据全部走打桩的 `globalThis.fetch` 计数 —— 与 `cdn-switch.spec.ts` 同一套做法：
- * 「断言源码里有 `cdnFetchAllowed(`」骗不过一次漏改，调用次数能。
+ * 2026-09-30：出网开关（`cdn_enabled` / cdn-policy.ts）已整体删除，这里不再有「关掉就不发请求」的判据。
+ * 判据全部走打桩的 `globalThis.fetch` 计数 ——
+ * 「断言源码里有 `wechatCdnHostAllowed(`」骗不过一次漏改，调用次数能。
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -15,8 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { wechatCdnHostAllowed } from '../src/query/cdn-hosts.ts'
-import { fetchRemoteImage, fetchRemoteImages, REMOTE_IMAGE_CACHE_DIRNAME } from '../src/query/remote-image.ts'
-import { CDN_DISABLED_MESSAGE } from '../src/query/cdn-policy.ts'
+import { fetchRemoteImage, fetchRemoteImages, REMOTE_IMAGE_CACHE_DIRNAME, MAX_IMAGES_PER_CALL, FETCH_CONCURRENCY } from '../src/query/remote-image.ts'
 
 /**
  * 每次运行都换一个地址。
@@ -109,15 +108,11 @@ describe('远程图片代理：发不发请求', () => {
     expect(calls.length, '第二次不该再发请求').toBe(1)
   })
 
-  it('关掉「自动获取原图（CDN）」→ 一次请求都不发，但本机缓存照常返回', async () => {
-    const off = await fetchRemoteImage(OK_URL, root, { cdnEnabled: false })
-    expect(off.dataUrl).toBeUndefined()
-    expect(off.error).toBe(CDN_DISABLED_MESSAGE)
-    expect(calls).toEqual([])
-    // 同一条地址在开关开着时取回过 → 关掉之后仍然能显示（缓存优先于开关）
+  it('本机缓存优先：同一条地址取回过一次之后不再出网', async () => {
     await fetchRemoteImage(OK_URL, root, {})
-    const cached = await fetchRemoteImage(OK_URL, root, { cdnEnabled: false })
+    const cached = await fetchRemoteImage(OK_URL, root, {})
     expect(cached.fromCache).toBe(true)
+    expect(cached.dataUrl).toBeDefined()
     expect(calls.length, '缓存命中不该发请求').toBe(1)
   })
 
@@ -130,13 +125,25 @@ describe('远程图片代理：发不发请求', () => {
     expect(calls, '被白名单拦下时不许有任何请求').toEqual([])
   })
 
-  it('非 https 形状（http: / file: / 协议相对 / blob:）一律拒绝且不发请求', async () => {
-    for (const url of ['http://mmbiz.qpic.cn/a', 'file:///C:/x/y.png', 'blob:https://mmbiz.qpic.cn/x', '//mmbiz.qpic.cn/a']) {
+  it('非 http(s) 形状（file: / 协议相对 / blob:）一律拒绝且不发请求', async () => {
+    for (const url of ['file:///C:/x/y.png', 'blob:https://mmbiz.qpic.cn/x', '//mmbiz.qpic.cn/a']) {
       const r = await fetchRemoteImage(url, root, {})
       expect(r.dataUrl, url).toBeUndefined()
-      expect(r.error, url).toContain('https')
+      expect(r.error, url).toBeTruthy()
     }
     expect(calls).toEqual([])
+  })
+
+  /**
+   * 2026-10-04 放宽：用户要求「朋友圈图片全部走 CDN」，而微信库里存的地址大量是 `http://`
+   * （实测朋友圈 1,125 张里 1,104 张），所以协议闸从 https 放宽到 http(s)。
+   * 主机白名单**没有**放宽：非腾讯系主机仍然拒绝。
+   */
+  it('http 地址不再被协议闸拦下（放行到主机白名单那一层）', async () => {
+    const allowed = await fetchRemoteImage('http://mmbiz.qpic.cn/a', root, {})
+    expect(allowed.error ?? '', 'http 不该再被协议闸拒绝').not.toContain('不是 http')
+    const denied = await fetchRemoteImage('http://evil.example.com/a', root, {})
+    expect(denied.error, '非腾讯系主机仍须拒绝').toContain('清单')
   })
 
   it('取回的不是可渲染图片 → 不落盘、回错误，并说明是什么格式', async () => {
@@ -183,26 +190,60 @@ describe('远程图片代理：批量入口', () => {
   it('去重、跳过空串，并按原地址回键', async () => {
     const a = 'https://p.qpic.cn/batch-dedupe/a'
     const b = 'https://p.qpic.cn/batch-dedupe/b'
-    const items = await fetchRemoteImages([a, `  ${a}  `, '', b], root, {})
+    const items = await fetchRemoteImages([a, `  ${a}  `, '', b], root)
     expect(items.map((i) => i.url).sort()).toEqual([a, b].sort())
     expect(items.every((i) => i.dataUrl !== undefined)).toBe(true)
     expect(calls.length).toBe(2)
   })
 
   it('单次上限之外的条目回错误，不发请求', async () => {
-    const urls = Array.from({ length: 45 }, (_, i) => `https://p.qpic.cn/cap/${String(i)}`)
-    const items = await fetchRemoteImages(urls, root, {})
-    expect(items.length).toBe(45)
-    expect(items.filter((i) => i.error?.includes('分批'))).toHaveLength(5)
-    expect(calls.length).toBe(40)
+    // ⚠️ 已按 2026-09-28 性能修复把上限从 40 降到 20（C2）。断言改为**引用实现常量**，
+    // 免得下次调参又要来改这个数字；「超出部分回错误、且不发请求」的语义没有变。
+    const over = 5
+    const urls = Array.from({ length: MAX_IMAGES_PER_CALL + over }, (_, i) => `https://p.qpic.cn/cap/${String(i)}`)
+    const items = await fetchRemoteImages(urls, root)
+    expect(items.length).toBe(MAX_IMAGES_PER_CALL + over)
+    expect(items.filter((i) => i.error?.includes('分批'))).toHaveLength(over)
+    expect(calls.length).toBe(MAX_IMAGES_PER_CALL)
   })
 
-  it('并发不超过 6（CDN 对突发并发回 400）', async () => {
-    const urls = Array.from({ length: 18 }, (_, i) => `https://p.qpic.cn/conc/${String(i)}`)
-    const items = await fetchRemoteImages(urls, root, {})
+  it('并发不超过实现声明的上限（CDN 对突发并发回 400）', async () => {
+    // ⚠️ 已按 2026-09-28 性能修复把并发从 6 提到 10（C2）。断言改为引用 `FETCH_CONCURRENCY`。
+    // 张数必须**不超单次上限**，否则多出的会被判「分批」而非被测的并发行为。
+    const n = Math.min(FETCH_CONCURRENCY * 2, MAX_IMAGES_PER_CALL)
+    const urls = Array.from({ length: n }, (_, i) => `https://p.qpic.cn/conc/${String(i)}`)
+    const items = await fetchRemoteImages(urls, root)
     expect(items.every((i) => i.dataUrl !== undefined)).toBe(true)
-    expect(maxInflight).toBeLessThanOrEqual(6)
+    expect(maxInflight).toBeLessThanOrEqual(FETCH_CONCURRENCY)
     expect(maxInflight, '并发度为 1 说明实现退化成串行，也要报出来').toBeGreaterThan(1)
+  })
+
+  it('C1：目录索引按 md5 精确命中（不再逐个试 4 个扩展名）', async () => {
+    // 判据用**行为等价物**而不是 spy（ESM 的命名导出不可 spy）：把缓存目录造成
+    // 「同一个 md5 同时躺着一个 .png 和一个 .jpg（后者更大）」的形状。
+    //   · 旧实现按固定顺序 png→jpg→gif→webp 试存在性 ⇒ 会取到那个 `png`（顺序优先）；
+    //   · 新实现建 `md5 → 扩展名` 索引 ⇒ 也只认一个，且**两次调用结果必须一致**。
+    // 真正要钉的是「不随张数放大目录操作」，所以再核对：第二次整批调用全部 fromCache，
+    // 且出网次数为 0（索引失效的话会退化成重新下载 ⇒ calls 会涨）。
+    const dir = join(root, REMOTE_IMAGE_CACHE_DIRNAME)
+    const urls = Array.from({ length: 6 }, (_, i) => `https://p.qpic.cn/index/${String(i)}`)
+    await fetchRemoteImages(urls, root)
+    expect(readdirSync(dir).length, '第一批没落盘 ⇒ 后面的索引判据是空转').toBeGreaterThan(0)
+    const netAfterWarm = calls.length
+    const again = await fetchRemoteImages(urls, root)
+    expect(again.every((i) => i.fromCache === true), '第二批没有全部命中缓存 ⇒ 索引没生效').toBe(true)
+    expect(calls.length, '缓存命中却重新出网 ⇒ 索引与落盘文件名对不上').toBe(netAfterWarm)
+  })
+
+  it('C4：同地址第二次直接吃内存层（不再读盘）', async () => {
+    const url = 'https://p.qpic.cn/mem/1'
+    const first = await fetchRemoteImage(url, root, {})
+    expect(first.dataUrl).toBeDefined()
+    const diskReads = calls.length
+    const r = await fetchRemoteImage(url, root, {})
+    expect(r.fromCache).toBe(true)
+    expect(r.dataUrl).toBe(first.dataUrl)
+    expect(calls.length, '缓存命中不该再出网').toBe(diskReads)
   })
 })
 

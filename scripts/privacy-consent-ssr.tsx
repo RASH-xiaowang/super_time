@@ -52,20 +52,19 @@ check('四个必读小节都在（数据本机处理 / 内存扫描 / 出网清�
 })
 
 check('出网清单里点明了「没有开关」的那些出网点', () => {
-  // 只说「可关闭 AI 出网」会让人以为关掉它就等于完全离线 —— 这里要求页面本身说清楚
+  // 只说「可关闭 AI 出网」会让人以为关掉它就等于完全离线 —— 这里要求页面本身说清楚。
   ok(html.includes('无开关'), '没有点明「无开关」的出网点')
+  ok(html.includes('仅点击时下载'), '没有点明「仅点击时下载」的那一条')
   ok(html.includes('AI 问答与总结'), '没有说明 AI 出网')
   ok(html.includes('腾讯图片 CDN') || html.includes('头像'), '没有说明头像出网')
 })
 
-check('出网点开关口径与文档一致（图片与头像有开关、只剩地图底图没有）', () => {
-  // 这一条守的是一个**犯过的错**：本屏曾把「远程图片/视频/公众号封面」也标成「无开关」，
-  // 而 docs/PRIVACY.md 的 D 条与设置里的「自动获取原图（CDN）」都表明它**有**开关。
-  // M23 之后「有开关」的范围扩大了：图片、视频与**头像**全部由后端代取，两个开关真的管得到；
-  // 反过来，把头像重新标成「无开关」也是错 —— 那会让人以为断网之外还得做点什么。
+check('出网点开关口径与文档一致（应用内已无任何出网开关：5 条无开关 + 1 条仅点击时下载）', () => {
+  // 2026-09-30：出网开关全部移除。除「语音模型下载」属于显式点击才发生（manual），
+  // 其余五个出网点一律没有应用内开关 —— 要断网只能靠系统防火墙或断网。
   //
   // 注意不能用「按 data-switch 切块、再看块里含哪个标签」来配：下面的诚实说明里也点了
-  // 那两个标签名，会被算进最后一块。改成按**渲染顺序**对齐（顺序不一致就直接判错位）。
+  // 那些标签名，会被算进最后一块。改成按**渲染顺序**对齐（顺序不一致就直接判错位）。
   const kinds = html.split('data-switch="').slice(1).map((c) => c.slice(0, c.indexOf('"')))
   const ORDER = ['AI 问答与总结', 'AI embedding', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载']
   const at = ORDER.map((l) => html.indexOf(`>${l}<`))
@@ -74,19 +73,27 @@ check('出网点开关口径与文档一致（图片与头像有开关、只剩�
   ok(at.every((v, i) => i === 0 || v > (at[i - 1] ?? Number.NaN)), '出网点渲染顺序与清单不一致，下面的口径断言会错位')
   ok(kinds.length === ORDER.length, `应为 ${ORDER.length} 个出网点，实际 ${kinds.length} 个`)
   const kindOf = Object.fromEntries(ORDER.map((l, i) => [l, kinds[i]]))
-  ok(kindOf['头像图片'] === 'toggle', `头像应标为可关闭（后端代取），实际 ${kindOf['头像图片']}`)
-  ok(kindOf['地图底图'] === 'none', `地图底图应为无开关，实际 ${kindOf['地图底图']}`)
-  ok(kindOf['远程图片 / 视频 / 公众号封面'] === 'toggle', `远程取图应标为可关闭，实际 ${kindOf['远程图片 / 视频 / 公众号封面']}`)
-  ok(kindOf['AI 问答与总结'] === 'toggle', `AI 问答与总结应标为可关闭，实际 ${kindOf['AI 问答与总结']}`)
-  ok(kinds.filter((k) => k === 'none').length === 1, '无开关的应当且仅当是地图底图这一条')
+  ok(kindOf['语音模型下载'] === 'manual', `语音模型下载应标为「仅点击时下载」，实际 ${kindOf['语音模型下载']}`)
+  for (const l of ORDER.slice(0, 5)) ok(kindOf[l] === 'none', `${l} 应为「无开关」，实际 ${kindOf[l]}`)
+  ok(kinds.filter((k) => k === 'none').length === 5, '无开关的应当且仅当 5 条（语音模型下载除外）')
+  ok(kinds.filter((k) => k === 'manual').length === 1, '「仅点击时下载」的应当且仅当 1 条')
+  // 标记文字与 data-switch 同源，这里再按渲染结果数一遍（防「值对但标签写错」）。
+  ok((html.match(/>无开关</g) ?? []).length === 5, '渲染出的「无开关」标记不是 5 个')
+  ok((html.match(/>仅点击时下载</g) ?? []).length === 1, '渲染出的「仅点击时下载」标记不是 1 个')
 })
 
-check('重点被单独框出：一句话结论 + 关不掉的那一条 + 完全离线的诚实说明', () => {
+check('重点被单独框出：一句话结论 + 那句「没有任何出网开关」+ 完全离线的诚实说明', () => {
   ok(html.includes('一句话结论'), '缺少顶部结论块')
-  // 结论里那个「几条没有内置开关」是界面自己算出来的（blocked.length），这里核对的是**它算得对**：
+  // 结论块自己说「应用内已没有任何出网开关」——这是全页最容易被误读的一点。
+  ok(html.includes('没有任何出网开关'), '结论块没点明「应用内已没有任何出网开关」')
+  // 统计行里的条数是界面自己算出来的（blocked.length），这里核对的是**它算得对**：
   // 与清单里 data-switch="none" 的颗数一致。写死数字的守则会自己过期（它曾经就是硬写着 2）。
   const noneCount = html.split('data-switch="').slice(1).filter((c) => c.startsWith('none')).length
-  ok(html.includes(`${String(noneCount)} 条没有内置开关`), `结论里的「无开关」条数应与清单一致（${String(noneCount)} 条）`)
+  ok(/共[\s\S]{0,40}?6[\s\S]{0,40}?个出网点/.test(html), '统计行没写「共 6 个出网点」')
+  ok(new RegExp(`${String(noneCount)}[\\s\\S]{0,20}?条无开关`).test(html),
+    `统计行里的「无开关」条数应与清单一致（${String(noneCount)} 条）`)
+  ok(new RegExp(`${String(6 - noneCount)}[\\s\\S]{0,30}?条只在你要用时发生`).test(html),
+    '统计行里的「只在你要用时发生」条数应为 1')
   ok(html.includes('诚实说明'), '缺少「别把关开关读成完全离线」的说明')
   ok(html.includes('系统防火墙') || html.includes('断网'), '没有给出完全离线的办法')
 })

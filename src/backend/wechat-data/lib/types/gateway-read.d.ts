@@ -4,7 +4,7 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlySnapshot, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ArticleCoversResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlySnapshot, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
 import { type AnnualReview } from './query/annual-review.ts';
@@ -15,7 +15,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         keyword?: string;
         limit?: number;
         offset?: number;
-    }): SessionsSnapshot;
+    }): Promise<SessionsSnapshot>;
     /**
      * Contact book.
      * @param options - Optional page size + offset for incremental loading, plus a
@@ -34,7 +34,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      * @returns OverviewSnapshot: aggregate counts for the overview screen.
      */
     getOverviewInsights(): Promise<OverviewInsights>;
-    getOverview(): OverviewSnapshot;
+    getOverview(): Promise<OverviewSnapshot>;
     /**
      * Friend-region map (世界板块地图): world → country → province → city → friends.
      * @returns RegionMapSnapshot.
@@ -87,7 +87,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      * Annual years.
      * @returns AnnualSnapshot: available yearly overview data.
      */
-    getAnnual(): AnnualSnapshot;
+    getAnnual(): Promise<AnnualSnapshot>;
     /**
      * Relationship graph.
      * @returns GraphSnapshot: chat relationship graph data.
@@ -188,7 +188,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     }): PaymentStatus;
     resolveChatHistory(options: {
         serverId: string;
-    }): ChatHistoryResolveResult;
+    }): Promise<ChatHistoryResolveResult>;
     /**
      * Per-day message counts for one month (chat calendar heatmap).
      * @param options - username, year and month to aggregate.
@@ -318,22 +318,6 @@ export declare abstract class GatewayRead extends GatewayCore {
         localId: number;
     }): VoiceTranscribeOneResult;
     /**
-     * Set CDN auto-fetch flag.
-     * @param options - enabled: whether CDN auto-fetch is on.
-     * @returns SimpleResult: ok, or error on failure.
-     */
-    setCdnImageEnabled(options: {
-        enabled: boolean;
-    }): SimpleResult;
-    /**
-     * Set CDN local/service decrypt flag.
-     * @param options - localDecrypt: whether decryption runs locally.
-     * @returns SimpleResult: ok, or error on failure.
-     */
-    setCdnImageLocalDecrypt(options: {
-        localDecrypt: boolean;
-    }): SimpleResult;
-    /**
      * Delete favorite items by local_id.
      * @param options - ids of the favorite items to delete.
      * @returns DeleteFavoriteResult: ok + deleted count, or error.
@@ -350,26 +334,41 @@ export declare abstract class GatewayRead extends GatewayCore {
      */
     getAnnualReview(options: {
         year: number;
-    }): AnnualReview;
+    }): Promise<AnnualReview>;
     getAnnualReport(options: {
         year: number;
-    }): AnnualReport;
+    }): Promise<AnnualReport>;
     /**
      * Resolve a 公众号 article cover (og:image) to a base64 data URL.
+     *
+     * A4（2026-09-28）：先用朋友圈媒体索引确认本机有没有这张图 —— **索引命中才截流**，
+     * 没命中一律照旧出网（见 `article-cover.ts` 的 `LocalCoverProbe`）。
      * @param options - mp.weixin.qq.com article URL.
      * @returns ImageDataUrlResult: base64 data URL or error.
      */
     getArticleCover(options: {
         contentUrl: string;
     }): Promise<ImageDataUrlResult>;
-    getAssetInsights(): AssetInsightsSnapshot;
+    /**
+     * 批量解析公众号文章封面（A1，2026-09-28 性能修复）。
+     *
+     * 现场日志里 `getArticleCover` 是最频繁的慢调用（1221 次 / 均 1.9s），根因是前端逐张发 RPC。
+     * 这个批量壳把一屏的封面收成一个 RPC，后端按 `COVER_CONCURRENCY` 分批并发。
+     * A4 之后本机已有封面的那些**连网络都不出**（同一个探测函数）。
+     * @param options - `urls` 为一屏待解析的文章链接（自动去重、忽略空串）。
+     * @returns 逐条结果（键 = 请求的 url），顺序与去重后的入参一致。
+     */
+    getArticleCovers(options: {
+        urls: readonly string[];
+    }): Promise<ArticleCoversResult>;
+    getAssetInsights(): Promise<AssetInsightsSnapshot>;
     getContact360(options: {
         username: string;
     }): Contact360Snapshot;
     getCalls(options?: {
         topPeers?: number;
         recentLimit?: number;
-    }): CallsSnapshot;
+    }): Promise<CallsSnapshot>;
     getGroupInsights(options: {
         username: string;
     }): GroupInsightsSnapshot;
@@ -377,15 +376,15 @@ export declare abstract class GatewayRead extends GatewayCore {
         month?: string;
     }): Promise<LedgerSnapshot>;
     getMediaAssets(): MediaAssetsSnapshot;
-    getWordCloud(options?: WordCloudOptions): WordCloudResult;
+    getWordCloud(options?: WordCloudOptions): Promise<WordCloudResult>;
     getMomentsInsights(options?: {
         author?: string;
-    }): MomentsInsightsSnapshot;
+    }): Promise<MomentsInsightsSnapshot>;
     getMomentsMonthly(options?: {
         author?: string;
         authorName?: string;
-    }): MomentsMonthlySnapshot;
-    getOfficialAssets(): OfficialAssetsSnapshot;
+    }): Promise<MomentsMonthlySnapshot>;
+    getOfficialAssets(): Promise<OfficialAssetsSnapshot>;
     searchUnified(options: {
         query: string;
         limit?: number;

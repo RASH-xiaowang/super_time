@@ -140,14 +140,6 @@
 }
 @keyframes sa-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
-/* ── 错误 ── */
-.error {
-  margin: 0 12px 8px; padding: 8px 8px;
-  font-size: 12px; line-height: 1.5; color: var(--nm-danger);
-  background: color-mix(in srgb, var(--nm-danger) 10%, transparent);
-  border-radius: var(--nm-r-sm); flex-shrink: 0;
-  overflow-wrap: anywhere;
-}
 
 /* ── 输入区 ──
    与「微信问答」主面板同一套观感：容器自带淡底，聚焦时只轻微提亮底色，

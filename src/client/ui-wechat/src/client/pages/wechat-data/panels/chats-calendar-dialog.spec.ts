@@ -132,7 +132,8 @@ describe('日历的开合与两种点击', () => {
 describe('加载中不画旧格子', () => {
   it('calLoading ⇒ 只有文案，一个格子都没有', () => {
     show({ calLoading: true, calCounts: { '5': 12 }, calDays: 31 })
-    expect(textOf('[class*="emptyInline"]')).toBe('加载中…')
+    // R4：加载态从 `.emptyInline` 改为 `<LoadingState variant="compact">`（带 data-st-loading）。
+    expect(textOf('[data-st-loading="compact"]')).toBe('加载中…')
     expect(qa('button[class*="calDay"]').length, '加载中还在画格子 ⇒ 用上月的数画这月').toBe(0)
     expect(stats().length).toBe(0)
   })

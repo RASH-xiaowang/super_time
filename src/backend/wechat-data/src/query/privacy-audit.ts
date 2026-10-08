@@ -1,7 +1,10 @@
 /**
- * Privacy state store for WeChat AI features: outbound block, sensitive-field
- * redaction, and per-feature audit counts. Persisted in
- * <data-root>/wechat_privacy.db; enforcement lives in the gateway's LLM paths.
+ * Privacy state store for WeChat AI features: sensitive-field redaction and
+ * per-feature audit counts. Persisted in <data-root>/wechat_privacy.db;
+ * enforcement lives in the gateway's LLM paths.
+ *
+ * 2026-09-30：出网拦截（`blockOutbound` / `blockMapTiles`）已随开关一起删除，
+ * 这里只剩「敏感字段打码」一个设置位；历史上写过的那两行旧值不再被读取。
  */
 import { DatabaseSync } from 'node:sqlite'
 import { dirname, join } from 'node:path'
@@ -24,20 +27,15 @@ function getSetting(db: DatabaseSync, key: string, dft: boolean): boolean {
 }
 
 /**
- * Read the current privacy settings. Defaults: redaction off, outbound allowed.
+ * Read the current privacy settings. Defaults: redaction off.
  *
- * 读失败**不在这里兜底**：这是个权限判断，把「读不到」翻译成「默认放行」等于
- * 用户开了「出站拦截」而库损坏时静默出网。调用方各自的失败方向见
- * `gateway.ts` 的 `privacyBlocked` / `outboundBlocked` / `privacyGate`（一律拦下）。
- * 全新库（无行）仍走默认值，不抛。
+ * 这里已不是权限判断（出网拦截已删除）：调用方是脱敏与审计，读失败按默认值继续，
+ * 见 `gateway-privacy.ts#privacyGateAt`。全新库（无行）走默认值，不抛。
  */
-export function readPrivacySettings(decryptedDir: string): { redactSensitive: boolean; blockOutbound: boolean; blockMapTiles: boolean } {
+export function readPrivacySettings(decryptedDir: string): { redactSensitive: boolean } {
   const db = openStore(decryptedDir)
   const out = {
     redactSensitive: getSetting(db, 'redactSensitive', false),
-    blockOutbound: getSetting(db, 'blockOutbound', false),
-    // 默认 false：地图底图原本就在出网，不能因为新增开关反而把老用户的地图关掉。
-    blockMapTiles: getSetting(db, 'blockMapTiles', false),
   }
   db.close()
   return out
@@ -46,14 +44,12 @@ export function readPrivacySettings(decryptedDir: string): { redactSensitive: bo
 /** Persist privacy settings (partial update). */
 export function writePrivacySettings(
   decryptedDir: string,
-  patch: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean },
-): { redactSensitive: boolean; blockOutbound: boolean; blockMapTiles: boolean } {
+  patch: { redactSensitive?: boolean },
+): { redactSensitive: boolean } {
   const db = openStore(decryptedDir)
   try {
     const entries: Array<[string, boolean | undefined]> = [
       ['redactSensitive', patch.redactSensitive],
-      ['blockOutbound', patch.blockOutbound],
-      ['blockMapTiles', patch.blockMapTiles],
     ]
     for (const [key, value] of entries) {
       if (value === undefined) continue
@@ -61,8 +57,6 @@ export function writePrivacySettings(
     }
     const out = {
       redactSensitive: getSetting(db, 'redactSensitive', false),
-      blockOutbound: getSetting(db, 'blockOutbound', false),
-      blockMapTiles: getSetting(db, 'blockMapTiles', false),
     }
     return out
   } finally {
@@ -90,8 +84,6 @@ export function getPrivacyStateSnapshot(decryptedDir: string): PrivacyStateSnaps
     db.close()
     return {
       redactSensitive: settings.redactSensitive,
-      blockOutbound: settings.blockOutbound,
-      blockMapTiles: settings.blockMapTiles,
       audit: {
         total: totalRow?.n ?? 0,
         byFeature: featureRows.map(r => ({ feature: r.feature, count: r.n, chars: r.c })),
@@ -102,8 +94,6 @@ export function getPrivacyStateSnapshot(decryptedDir: string): PrivacyStateSnaps
   } catch {
     return {
       redactSensitive: settings.redactSensitive,
-      blockOutbound: settings.blockOutbound,
-      blockMapTiles: settings.blockMapTiles,
       audit: { total: 0, byFeature: [], last: null, updatedAt: Math.floor(Date.now() / 1000) },
     }
   }

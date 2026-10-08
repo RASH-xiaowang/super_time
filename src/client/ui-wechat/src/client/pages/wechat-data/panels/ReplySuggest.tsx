@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiSuggestReplies } from '../api.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
-import { Select } from '../ui/kit.tsx'
+import { ErrorState, Select } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
 import css from './session-ask.module.css'
 
@@ -168,13 +168,13 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
       <div className={css.body}>
         {loading && <div className={css.introSub}>正在按这段对话生成候选…</div>}
         {!loading && error !== null && (
-          // 与姊妹面板 `SessionAsk` 同一套错误呈现（.error + role="alert"）：
-          // 读失败 ≠ 没有条目，所以失败要显式说，而不是落到下面那句「还没有可用的对话内容」。
-          <div className={css.error} role="alert">
-            {error}
-            <br />
-            <span className={css.scopeLabel}>（被隐私设置拦下时，去「数据边界与出网」里关掉「禁止 AI 出网」）</span>
-          </div>
+          // R4：改用 kit 的 ErrorState。原先手写 `css.error` 指向 `session-ask.module.css`，
+          // 而 R4 收编时删掉了那份 `.error` 定义 ⇒ 这里会变成悬空类名（样式静默失效）。
+          // `u14-empty-state.wiring.spec.ts` 的悬空类名守卫当场抓到，才有了这次修正。
+          <ErrorState
+            message={error}
+            detail="模型不可用或密钥未配置时，去「数据配置 → AI 大模型」检查"
+          />
         )}
         {!loading && error === null && replies.length > 0 && (
           <>
@@ -190,7 +190,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
               ))}
             </div>
             {copyFailed && (
-              <div className={css.error} role="alert">复制失败：剪贴板没有被写入，请手动选中文字后复制</div>
+              <ErrorState message="复制失败：剪贴板没有被写入，请手动选中文字后复制" />
             )}
             <div className={css.introSub}>
               {basis?.degraded ? `${basis.degraded}。` : ''}

@@ -18,7 +18,7 @@ import clsx from 'clsx'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiDeleteNote, apiGetNotes, readRenderCache, writeRenderCache } from '../api.ts'
 import type { KnowledgeNote } from '../types.ts'
-import { Badge, Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { Badge, Button, Card, EmptyState, LinkButton, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { NOTES_UPDATED_EVENT } from '../notes-events.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
@@ -389,13 +389,11 @@ export function KnowledgeBasePanel({ onOpenChat }: { onOpenChat?: (username: str
                       来自问答沉淀
                       {selected.sourceUsername && onOpenChat
                         ? (
-                          <button
-                            type="button"
-                            className={css.linkBtn}
+                          <LinkButton
                             onClick={() => { onOpenChat(selected.sourceUsername ?? '') }}
                           >
                             · 查看来源会话
-                          </button>
+                          </LinkButton>
                         )
                         : null}
                     </span>

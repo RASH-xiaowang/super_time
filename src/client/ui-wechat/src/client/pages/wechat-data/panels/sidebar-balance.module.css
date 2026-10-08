@@ -1,0 +1,71 @@
+/* 侧栏左下角的模型余额（2026-09-30）。
+ *
+ * 位置：`aside.sidebar` 的底部固定区里、「设置」按钮的正下方。
+ * 收起态（`data-collapsed`）只留钱包图标 —— 与导航标签同款处理，不另发明一套。
+ * 颜色一律走主题令牌：`ok` 用次级文本、`error` 用琥珀（弱提醒，不是报错红 —— 余额查不到
+ * 不影响任何功能，别让它看着比「数据不可用」还严重）。
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  /* 间距只用偶数值（几何规范守卫：奇数间距新文件零容忍） */
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--nm-r-md, 8px);
+  background: none;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--nm-t-fast, 0.15s), background var(--nm-t-fast, 0.15s), border-color var(--nm-t-fast, 0.15s);
+}
+
+.row:hover {
+  color: var(--nm-text-1);
+  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
+
+.row[data-status='ok'] .label {
+  color: var(--nm-cyan);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.row[data-status='error'] .label {
+  color: var(--nm-amber);
+}
+
+.row[data-status='loading'] .label {
+  color: var(--nm-text-3);
+}
+
+.icon {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 收起态：侧栏只有 58px，文字一定放不下 —— 只留图标（`title` 里仍有完整数字）。 */
+.row[data-collapsed] {
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.row[data-collapsed] .label {
+  display: none;
+}

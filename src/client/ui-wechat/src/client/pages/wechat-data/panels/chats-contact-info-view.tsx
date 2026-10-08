@@ -14,7 +14,7 @@ import { useEffect, useId, useState } from 'react'
 import { apiGetContact360 } from '../api.ts'
 import type { Contact360Snapshot, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { EmptyState } from '../ui/kit.tsx'
+import { EmptyState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import { ListSkeleton } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
@@ -41,6 +41,18 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const titleId = useId()
+
+  /*
+   * Esc 关闭 + 焦点陷阱（R7 补齐，审计 P1-7 的同族缺口）。
+   *
+   * 这是手写覆盖层，Radix 的 Dialog 那套白送行为一概没有。此前只做了「点遮罩关闭」，
+   * 键盘用户按 Esc 没反应、Tab 会跑到抽屉背后的会话列表上（`chats-thread.tsx` 的
+   * 群抽屉记录过同一事故）。两条 hook 放在**组件内部**：本组件刻意保持自包含
+   * （见文件头注：`chats-view.tsx` 已近 M21 上限，接线面必须最小），
+   * 所以不给父级加状态，用已有的 `open` 属性直接驱动。
+   */
+  useEscapeToClose(open, onClose)
+  useDialogFocus(open, '[data-st-dialog="chats-contactinfo"]')
 
   useEffect(() => {
     if (!open || !session) return

@@ -398,24 +398,26 @@ console.log('SetupGuideCard（首次进入系统的配置向导卡）')
 const guideHtml = (facts: Partial<SetupFacts>) =>
   renderToStaticMarkup(h(SetupGuideCard, { facts: { ...emptyFacts(), ...facts }, onOpenStep: () => {}, onLater: () => {} }))
 
-check('全未配置：四项都在、四项都有「去配置」、进度 0/4', () => {
+check('全未配置：三项都在、三项都有「去配置」、进度 0/3', () => {
   const html = guideHtml({})
   ok(html.includes('首次配置向导'), '缺少标题')
-  ok(html.includes('已完成 0/4'), `进度不对：${html.slice(0, 120)}`)
-  for (const t of ['检测账号', '数据库密钥', '图片密钥', '图片解码']) ok(html.includes(t), `缺少步骤：${t}`)
-  ok((html.match(/去配置/g) ?? []).length === 5, '四个必做 + 一个可选，都该有「去配置」')
+  ok(html.includes('已完成 0/3'), `进度不对：${html.slice(0, 120)}`)
+  for (const t of ['检测账号', '数据库密钥', '图片密钥']) ok(html.includes(t), `缺少步骤：${t}`)
+  // 原第四步「图片解码」判的是已删除的 CDN 开关，随「移除全部出网开关」一起从向导里去掉。
+  ok(!html.includes('图片解码'), '「图片解码」步骤不该再出现（它判的开关已删）')
+  ok((html.match(/去配置/g) ?? []).length === 4, '三个必做 + 一个可选，都该有「去配置」')
 })
 
-check('配好两项：进度 2/4，已完成的项不再给「去配置」', () => {
+check('配好两项：进度 2/3，已完成的项不再给「去配置」', () => {
   const html = guideHtml({ accounts: 2, keysLoaded: true, keyCount: 22 })
-  ok(html.includes('已完成 2/4'), `进度不对：${html.slice(0, 120)}`)
+  ok(html.includes('已完成 2/3'), `进度不对：${html.slice(0, 120)}`)
   ok((html.match(/data-done="true"/g) ?? []).length === 2, '应有两项标为已完成')
-  ok((html.match(/去配置/g) ?? []).length === 3, '剩下两项必做 + 可选一项')
+  ok((html.match(/去配置/g) ?? []).length === 2, '剩下一项必做 + 可选一项')
 })
 
 check('语音转写是可选：没就绪不影响「完成」的计数口径', () => {
-  const html = guideHtml({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', cdnEnabled: true, voiceReady: false })
-  ok(html.includes('已完成 4/4'), '四项必做齐了就该是 4/4（语音不计入）')
+  const html = guideHtml({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', voiceReady: false })
+  ok(html.includes('已完成 3/3'), '三项必做齐了就该是 3/3（语音不计入）')
   ok(html.includes('语音转文字（可选）'), '可选行仍在，标为可选')
   ok(!html.includes('data-step="voice" data-done'), '语音没就绪时不该显示为已完成')
 })

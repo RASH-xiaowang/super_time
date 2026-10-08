@@ -35,11 +35,17 @@ const MUST_EMPTYSTATE: ReadonlyArray<{ panel: string; tsx: string; anchor: strin
   { panel: '聊天信息抽屉', tsx: 'chats-contact-info-view.tsx', anchor: '!loading && !err && !data && (' },
 ]
 
-/** 显式**不换**的行内提示：这里写成清单，防止被"顺手统一"成整屏空态。 */
-const KEEP_INLINE: ReadonlyArray<{ tsx: string; text: string; why: string }> = [
+/**
+ * 显式**不换**的行内提示：这里写成清单，防止被"顺手统一"成整屏空态。
+ *
+ * `tsx` 是**现在**承载该提示的文件 —— 方块图那段 JSX 后来整块搬去了
+ * `TreemapStage.tsx`（为了让 `WorldMapPanel` 不再顶穿单函数行数棘轮），
+ * 所以这条登记也一起搬了家。搬家本身要能自查：见下面那条「旧家不再有」的断言。
+ */
+const KEEP_INLINE: ReadonlyArray<{ tsx: string; text: string; why: string; movedFrom?: string }> = [
   { tsx: 'Revoked.tsx', text: '无匹配记录', why: '筛选后的次级提示（有数据，只是被筛掉）' },
   { tsx: 'Files.tsx', text: '未发现重复文件', why: '重复扫描卡片内的结果态，一行字足够' },
-  { tsx: 'WorldMap.tsx', text: '没有子板块', why: '地图画布内的局部提示（承载元素尺寸为 0 时才出现）' },
+  { tsx: 'TreemapStage.tsx', text: '没有子板块', why: '地图画布内的局部提示（承载元素尺寸为 0 时才出现）', movedFrom: 'WorldMap.tsx' },
 ]
 
 describe('U14 · 整屏空态统一走 EmptyState（图标 + 为什么空 + 下一步）', () => {
@@ -58,6 +64,15 @@ describe('U14 · 整屏空态统一走 EmptyState（图标 + 为什么空 + 下�
   it('显式登记的行内提示仍然是行内（不是漏改）', () => {
     for (const { tsx, text, why } of KEEP_INLINE) {
       expect(read(tsx), `${tsx} 的「${text}」被改掉了？它是刻意保留的行内提示：${why}`).toContain(text)
+    }
+  })
+
+  it('搬过家的行内提示：旧文件里不再有（否则是复制不是搬家，两处会各自漂移）', () => {
+    const moved = KEEP_INLINE.filter((e) => e.movedFrom !== undefined)
+    // 反例自证：清单里确实有搬家记录，否则下面那个循环是空转（恒真）。
+    atLeast(moved.length, 1, '带 movedFrom 的登记条数')
+    for (const e of moved) {
+      expect(read(e.movedFrom ?? ''), `${e.movedFrom ?? ''} 里还留着「${e.text}」—— 搬家要搬干净，留一份副本会各改各的`).not.toContain(e.text)
     }
   })
 })

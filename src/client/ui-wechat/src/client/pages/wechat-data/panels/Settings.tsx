@@ -13,7 +13,7 @@ import { useTransientNotice } from './hooks.tsx'
 import {
   IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
@@ -60,8 +60,8 @@ export interface SettingsPanelProps {
  */
 export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe, cdnEnabled,
-    cdnLocal, cdnMsg, cfg, cfgLoading, clear, current,
+    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
@@ -70,8 +70,8 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
     nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath, pickDbDir,
     pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg, saving,
     scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit, setImgXor,
-    setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe, toggleCdn,
-    fetchOriginals, toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
+    setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
+    fetchOriginals, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
     whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel, whisperModelsDir,
     whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
     message,
@@ -183,9 +183,6 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
         />
 
         <SettingsImgDecodeSection
-          cdnEnabled={cdnEnabled}
-          cdnLocal={cdnLocal}
-          cdnMsg={cdnMsg}
           decryptImgs={decryptImgs}
           imgConcurrency={imgConcurrency}
           imgDecryptDetail={imgDecryptDetail}
@@ -204,8 +201,6 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           setOrigLimit={setOrigLimit}
           setImgConcurrency={setImgConcurrency}
           setImgDetailOpen={setImgDetailOpen}
-          toggleCdn={toggleCdn}
-          toggleCdnLocal={toggleCdnLocal}
           upgradeImgs={upgradeImgs}
         />
 
@@ -257,7 +252,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
 
         {/* ── 数据库健康 / 原图链路自检（原外层「数据健康」的两个分段） ── */}
         <div className={css.embedPane} data-settings-section="health">
-          <HealthPanel embedded onNavigate={innerNavigate} />
+          <HealthPanel embedded />
         </div>
         <div className={css.embedPane} data-settings-section="hook">
           <HookPanel embedded onNavigate={innerNavigate} />

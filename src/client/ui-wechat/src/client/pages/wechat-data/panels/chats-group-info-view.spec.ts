@@ -146,13 +146,15 @@ describe('什么时候才该有这个抽屉', () => {
 describe('三种数据形态互斥', () => {
   it('加载中 ⇒ 只有「加载中…」，不画网格也不画空态', () => {
     show({ groupInfoLoading: true })
-    expect(textOf('[class*="emptyInline"]')).toBe('加载中…')
+    // R4：加载态从 `.emptyInline` 改为 `<LoadingState variant="compact">`（带 data-st-loading）。
+    expect(textOf('[data-st-loading="compact"]')).toBe('加载中…')
     expect(qa(TILE)).toHaveLength(0)
   })
 
   it('失败 ⇒ 报错误文案，且不画"上一次成功"那份快照（B 群的抽屉里不能出现 A 群的人）', () => {
     show({ groupInfoLoading: false, groupInfoErr: '群信息读取失败' })
-    expect(textOf('[class*="emptyInline"]')).toBe('群信息读取失败')
+    // R4：错误态从 `.emptyInline`（灰字，读起来像「没数据」）改为 `<ErrorState>`（红框 + role="alert"）。
+    expect(textOf('[data-st-error="1"]')).toContain('群信息读取失败')
     expect(qa(TILE), '错误下面还挂着一张别处的成员网格').toHaveLength(0)
     expect(q('input[type="text"]'), '读不到数据却还留着搜索框').toBeNull()
   })

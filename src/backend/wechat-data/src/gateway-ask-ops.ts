@@ -48,11 +48,10 @@ export abstract class GatewayAskOps extends GatewayRead {
   /**
    * 让模型读一遍本库的文件，抽出实体（推断层）。
    *
-   * 三条纪律：
-   *   ① `privacyBlocked('kb_extract')` 判在任何模型调用之前；
-   *   ② 只处理 `include_in_rag = 1` 的文件 —— 关掉出网开关的文件连一次抽取都不该被发出去
+   * 两条纪律：
+   *   ① 只处理 `include_in_rag = 1` 的文件 —— 关掉那个开关的文件连一次抽取都不该被发出去
    *      （条件在 SQL 里，见 `extract.ts` 的 `readDigestForExtract`）；
-   *   ③ 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
+   *   ② 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
    * @param options - `kbId`；`fileIds` 限定范围（默认整库）；`limit` 单次最多几个文件。
    * @returns 逐文件结果 + 汇总（失败的逐个带原因，不因一个失败就整批失败）。
    */
@@ -71,12 +70,10 @@ export abstract class GatewayAskOps extends GatewayRead {
   /**
    * 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。
    *
-   * 三条纪律（V6 的全部内容）：
-   *   ① `privacyBlocked('kb_link_suggest')` 判在所有早退之前 —— 「没配嵌入模型」不能
-   *      盖掉「用户明确说过不要出网」，否则审计里看不到那次被拦下的尝试；
-   *   ② 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
+   * 两条纪律（V6 的全部内容）：
+   *   ① 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
    *      （`makeEmbedFn` 内部对整批文本过一次闸，漏一半就等于漏的那半没脱敏）；
-   *   ③ 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
+   *   ② 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
    *      `parseWikiLinks` 从正文里派生 —— 模型判断错的代价因此是「没人点」，
    *      而不是「图谱里多了一条用户没写过的边」。
    * @param options - `kbId`、正在编辑的 `text`、可选 `topK` 与自身标题 `excludeTitle`。
@@ -214,7 +211,6 @@ export abstract class GatewayAskOps extends GatewayRead {
    *
    * 关掉之后该文件**完全不出网**，但仍然留在 FTS 索引里可被关键词搜到 ——
    * 这正是「库里有合同，但我还想搜到它」的实现方式（设计稿 §9.2）。
-   * 全局「禁止 AI 出网」仍然是同一道闸门，一起拦下。
    * @param options - `kbId`、文件 id、是否参与。
    * @returns KbFileMutationResult.
    */
@@ -227,12 +223,9 @@ export abstract class GatewayAskOps extends GatewayRead {
    * 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。
    *
    * 顺序是硬性的（照 `optimizeAskQuestion` 的口径，理由写在它头上）：
-   *   ① `privacyBlocked` 判在**最前面**，早于「未配置模型」那类早退 ——
-   *      否则用户开了「禁止 AI 出网」又没配模型时，看到的是「未配置模型」，
-   *      把「拦截真的生效了」这件事盖掉了。
-   *   ② `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
+   *   ① `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
    *      给它做摘要等于推翻用户已经做过的决定，不是「再确认一下」能补的。
-   *   ③ 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
+   *   ② 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
    *
    * ⚠ 只喂得下前若干字：一份文件最多两万块、约一千万字，一次请求装不进去。
    *   所以按 `SUMMARY_INPUT_CHARS` 截断，并把**实际覆盖的字符数**一起返回并落库 ——
@@ -324,10 +317,9 @@ export abstract class GatewayAskOps extends GatewayRead {
   /**
    * 为**某个库**构建 / 增量更新向量索引（面板上那个「语义索引」按钮）。
    *
-   * 三条纪律：
-   *   ① 出站拦截判在**任何 embedding 之前**（`privacyBlocked` 先于「未配置模型」那类早退）；
-   *   ② 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
-   *   ③ 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
+   * 两条纪律：
+   *   ① 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
+   *   ② 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
    * @param options - `kbId`；`force` 时清空本库重算。
    * @returns 构建结果（`ok` 为假时带 `error`）。
    */
@@ -600,10 +592,9 @@ export abstract class GatewayAskOps extends GatewayRead {
    * 显式选了库时才取。会话级功能不该把别处的聊天悄悄端上来 —— 这正是「单聊里冒出别人
    * 消息」那类报障的教训。
    *
-   * 出站顺序与当日总结一致：**拦截优先于「模型不可用」**，否则用户开了「禁止 AI 出网」
-   * 却只看到一句「模型不可用」，会以为是配置问题而不是隐私设置生效。
+   * 出站顺序与当日总结一致：模型不可用时如实说明原因。
    * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
-   * @returns 候选回复；被拦下或模型不可用时 `ok=false` 且 `error` 说明原因。
+   * @returns 候选回复；模型不可用时 `ok=false` 且 `error` 说明原因。
    */
   @Remote('suggestReplies')
   async suggestReplies(options: { username?: string; kbId?: number; count?: number }): Promise<ReplySuggestResult> {

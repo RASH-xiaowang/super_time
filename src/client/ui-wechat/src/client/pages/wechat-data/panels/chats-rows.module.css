@@ -631,7 +631,7 @@
   border: 1px solid var(--nm-border);
   background: transparent;
   color: var(--nm-text-1);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   padding: 4px 12px;
   border-radius: var(--nm-r-pill);
   cursor: pointer;

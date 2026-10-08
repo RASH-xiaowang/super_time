@@ -12,7 +12,7 @@ import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Drawer, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { clickableKey, Drawer, LinkButton, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -313,7 +313,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
             {profile.groupName && (
               <div className={css.profileRow}>
                 <span>所在群</span>
-                <button type="button" className={css.linkBtn} onClick={() => { setProfile(null); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</button>
+                <LinkButton onClick={() => { setProfile(null); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</LinkButton>
               </div>
             )}
             {profile360Loading && <div className={css.profileRow}><span>画像</span><span>统计中…</span></div>}

@@ -1,30 +1,27 @@
 /**
  * 出网点台账：**枚举调用点**，而不是「找 privacy 接缝」。
  *
- * ## 为什么要换判据（CODE-AUDIT-2026-09-26 P0-2）
+ * ## 2026-09-30 改判据：从「每个点都要有闸门」改成「每个点都要有着落」
  *
- * `license-outbound-coverage.spec.ts` 的判据是「按 `@Remote` 方法体扫 privacy 接缝」——
- * 它只能发现「已经过闸门的方法有没有登记功能位」，**看不见从未过闸门的地方**。
- * 三处漏网点就是这么静默存在的：
- *   · `remotes/voicellm.ts#installWhisperEngine`（向 GitHub 拉引擎 zip）——
- *     紧邻的 `downloadWhisperModel` 有闸，注释还写着「开关真的管到它了」，同族漏了一个；
- *   · `remotes/laya.ts#downloadLayaModel`（向 HuggingFace 拉 1.26 GB）—— 连依赖都没注入；
- *   · `src/backend/ipc-wechat.js` 的 `wechat:llm-models` —— 在**主进程**里 fetch，
- *     还带着用户的 `Authorization: Bearer <API Key>`，既不经过 `@Remote` 方法面，
- *     也不在 `METHOD_FEATURE` 清单里。
+ * 应用内的出网开关**已全部移除**（`blockOutbound` / `blockMapTiles` / `cdn_enabled` /
+ * `cdn_local_decrypt`），所以「每个出网点都必须被某个开关管着」这个前提不成立了。
+ * 但这份台账的真正价值从来不是开关，而是**枚举本身**：产品代码里每一个真正发请求的地方
+ * 都必须有人写清楚「它在发什么、现在凭什么可以发」。于是登记项从 `gate`（开关）改成
+ * `control`（现在的约束：主机白名单 / 授权档位 / 只有你点击才会发生 / 公开数据 / 无闸门），
+ * 并且：
+ *   · 有锚点的（白名单、CSP、审计接缝）仍要求那个字面量**在代码里真实存在**；
+ *   · 没有锚点的必须**明写**「无应用内闸门」——这条不许含糊，它是「数据会不会出去」的答案。
  *
- * ## 新判据
+ * ## 为什么还留着它（而不是连台账一起删）
  *
- * 1. AST 枚举产品代码里**每一个**出网调用点（`fetch` / `fetchWithRetry` / `http(s).request`），
- *    键成 `文件#所在函数`（不依赖行号）；
- * 2. 每个点必须在下面的台账里有一条登记，登记里写明：管它的是哪个开关 / 审计功能名、
- *    以及**代码里真的存在那个闸门的标记**；
- * 3. 台账与实测集合 `toEqual` ⇒ 新增一个出网点、或把闸门删掉，都会当场变红；
- *    登记项陈了（代码里已无该点）同样变红。
+ * 上一版抓到的三类静默失效（P0-2：引擎下载、laya 模型下载、主进程模型列表）都不是
+ * 「闸门写错了」，而是**根本没人知道那里有一个出网点**。枚举这件事与开关无关。
  *
- * 「闸门标记存在」只证明闸在那里，不证明它管得到这个点 —— 那半由行为用例守：
- * `src/backend/wechat-data/tests/outbound-gates.spec.ts`（开关打开时**一个请求都不发**）
- * 与 `src/backend/tests/ipc-wechat.spec.ts`（`wechat:llm-models` 被拦时不 fetch）。
+ * 扫描范围与判据：
+ *   1. AST 枚举产品代码里每一个出网调用点（`fetch` / `fetchWithRetry` / `http(s).request`），
+ *      键成 `文件#所在函数`（不依赖行号）；
+ *   2. 每个点必须在这里有一条登记；
+ *   3. 台账与实测集合 `toEqual` ⇒ 新增一个出网点、或删掉一个，都会当场变红。
  * @vitest-environment node
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -35,15 +32,15 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
-/** 一条登记：出网点 → 管它的开关 + 代码里必须存在的闸门标记 + 为什么。 */
+/** 一条登记：出网点 → 现在约束它的是什么 + 代码锚点（没有则明写「无」）+ 为什么。 */
 interface LedgerEntry {
   /** `文件相对路径#函数名` —— 台账的主键。 */
   site: string
-  /** 闸门类型（人类可读，便于扫）。 */
-  gate: string
-  /** 在哪个文件里能找到闸门（`ANY` = 产品代码任意处）。 */
-  gateIn: string
-  /** 闸门标记（剥注释后必须出现的那个字面量）。 */
+  /** 控制类型（人类可读，便于扫）。 */
+  control: string
+  /** 锚点所在文件（`ANY` = 产品代码任意处）；没有锚点时写 `NONE`。 */
+  anchor: string
+  /** 必须真实存在的锚点字面量（剥注释后）。**没有锚点时为 `''`**。 */
   marker: string
   /** 这个点在发什么、为什么可以接受。 */
   why: string
@@ -52,83 +49,115 @@ interface LedgerEntry {
 const LEDGER: LedgerEntry[] = [
   {
     site: 'src/backend/wechat-data/src/query/article-cover.ts#fetchText',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('sns_cover_fetch'",
-    why: '读公众号文章的 og:image 所在的 HTML —— 由「从微信 CDN 取回封面」这个功能位管着',
+    control: '无应用内闸门（只取消息里给出的文章地址）',
+    anchor: 'NONE', marker: '',
+    why: '读公众号文章的 og:image 所在的 HTML。地址来自消息 XML；应用内已无开关，'
+      + '域名收敛要另做（现只在 `article-cover.ts` 里把 http 升级为 https）。',
   },
   {
     site: 'src/backend/wechat-data/src/query/article-cover.ts#fetchBytes',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('sns_cover_fetch'",
-    why: '同上：真正把封面字节取回来的是这一条',
+    control: '无应用内闸门（同上）',
+    anchor: 'NONE', marker: '',
+    why: '同上：真正把封面字节取回来的是这一条，结果落盘缓存后下次不再联网。',
   },
   {
     site: 'src/backend/wechat-data/src/query/image-original.ts#fetchImageOriginalToCache',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('image_original_fetch'",
-    why: '按消息自带的免登录直链从微信 CDN 取聊天图片原图，不发聊天内容',
+    control: '腾讯系主机白名单', anchor: 'ANY', marker: 'wechatCdnHostAllowed',
+    why: '按消息自带的免登录直链取聊天图片原图，不发聊天内容；主机不在白名单内一个字节都不发。',
   },
   {
     site: 'src/backend/wechat-data/src/query/media-image.ts#fetchEmoticonRemote',
-    gate: '「自动获取原图（CDN）」开关', gateIn: 'src/backend/wechat-data/src/query/media-image.ts', marker: 'cdnFetchAllowed(opts)',
-    why: '表情图片走微信 CDN；开关关掉时连请求都不发（不是「发了再失败」）。判据见 cdn-policy.ts',
+    control: '腾讯系主机白名单 + 仅 http(s)（2026-09-30 补齐）',
+    anchor: 'src/backend/wechat-data/src/query/media-image.ts', marker: 'wechatCdnHostAllowed(',
+    why: '表情图走消息 XML 里的 `cdnurl`。取到后落 `<decoded>/<md5>.<ext>`，之后（含离线）只走本地。'
+      + '此前这条链只判协议、等于「XML 写哪个主机就去取哪个」，现已与聊天原图/远程图片同一把尺子。',
   },
   {
     site: 'src/backend/wechat-data/src/query/remote-image.ts#fetchRemoteImage',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('remote_image_fetch'",
-    why: 'M23 的远程图片代取：只允许白名单主机，落盘后渲染层不再直接出网',
+    control: '腾讯系主机白名单 + 仅 https', anchor: 'ANY', marker: 'wechatCdnHostAllowed',
+    why: 'M23 的远程图片代取：只允许白名单主机，落盘后渲染层不再直接出网。',
   },
   {
     site: 'src/backend/wechat-data/src/query/sns-video.ts#fetchSnsMediaBytes',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('sns_video_fetch'",
-    why: '朋友圈视频/封面字节从微信 CDN 取回，取回后按 `<enc key>` 本机解密',
+    control: '腾讯系主机白名单（播放/封面在 remotes/media.ts 判，导出在 loadSnsVideoBytes 判）',
+    anchor: 'src/backend/wechat-data/src/query/sns-video.ts', marker: 'wechatCdnHostAllowed(',
+    why: '朋友圈视频/封面字节从微信 CDN 取回，取回后按 `<enc key>` 本机解密。'
+      + '三条入口（播放 / 封面 / 导出）现在都过白名单，且都判在发请求之前。',
   },
   {
     site: 'src/backend/wechat-data/src/query/whisper.ts#installWhisperEngine',
-    gate: 'blockOutbound / privacyBlocked', gateIn: 'ANY', marker: "privacyBlocked('whisper_engine_install'",
-    why: 'P0-2 补：whisper.cpp 引擎 zip 从 GitHub releases 拉 —— 下的是文件，但仍是出网',
+    control: '无应用内闸门（只有你点击「下载引擎」才会发生）', anchor: 'NONE', marker: '',
+    why: 'whisper.cpp 引擎 zip 从 GitHub releases 拉 —— 下的是文件，不是你聊天内容。',
   },
   {
     site: 'src/backend/wechat-data/src/query/whisper.ts#streamUrlToFile',
-    gate: 'blockOutbound / privacyBlocked（两个调用方各自判闸）',
-    gateIn: 'ANY', marker: "privacyBlocked('voice_model_download'",
-    why: '这条原语被 whisper 模型下载与 laya 模型下载共用 ⇒ 两个入口都必须先判闸：'
-      + '`voice_model_download`（whisper）与 `laya_model_download`（P0-2 补）',
+    control: '无应用内闸门（只有你点击「下载模型」/「下载本地决策模型」才会发生）', anchor: 'NONE', marker: '',
+    why: 'whisper 模型（HF / hf-mirror）与 laya 模型（约 1.26 GB）共用这条流式下载原语。',
   },
   {
     site: 'src/backend/wechat-host.js#fetchCompletion',
-    gate: 'privacyGate（所有 LLM 出口）', gateIn: 'ANY', marker: 'privacyGate(',
-    why: '对话补全：发的是**内容**，必须先过 `privacyGate`（含敏感字段打码与审计）',
+    control: '脱敏 + 审计接缝（`privacyGate`）', anchor: 'ANY', marker: 'privacyGate(',
+    why: '对话补全：发的是**内容**，出站前过一次 `privacyGate`（敏感字段打码 + 写审计）。',
   },
   {
     site: 'src/backend/wechat-host.js#stream',
-    gate: 'privacyGate（所有 LLM 出口）', gateIn: 'ANY', marker: 'privacyGate(',
-    why: '流式对话补全：同上一条，只是走 SSE',
+    control: '脱敏 + 审计接缝（`privacyGate`）', anchor: 'ANY', marker: 'privacyGate(',
+    why: '流式对话补全：同上一条，只是走 SSE。',
   },
   {
     site: 'src/backend/wechat-host.js#embed',
-    gate: 'privacyGate + 功能名 ask_embed / kb_embed', gateIn: 'ANY', marker: "makeEmbedFn(",
-    why: '向量化的输入是消息正文或文件正文 ⇒ 审计里必须分得开是哪一类（ask_embed / kb_embed）',
+    control: '脱敏 + 审计接缝（`privacyGate`，功能名 ask_embed / kb_embed）',
+    anchor: 'ANY', marker: 'makeEmbedFn(',
+    why: '向量化的输入是消息正文或文件正文 ⇒ 审计里必须分得开是哪一类。',
   },
   {
     site: 'src/backend/wechat-host.js#rerank',
-    gate: 'privacyBlocked(ask_rerank)', gateIn: 'ANY', marker: "privacyBlocked('ask_rerank'",
-    why: '精排把候选文档与查询一起发给重排序模型（B2 段）',
+    control: "脱敏 + 审计接缝（privacyGate('ask_rerank')，整批一起过）",
+    anchor: 'ANY', marker: "privacyGate('ask_rerank'",
+    why: '精排把候选文档与查询一起发给重排序模型。',
   },
   {
     site: 'src/backend/ipc-wechat.js#wechat:llm-models',
-    gate: 'blockOutbound（主进程侧读后端真值）', gateIn: 'src/backend/ipc-wechat.js', marker: "call('getPrivacyState')",
-    why: 'P0-2 补：`wechat:llm-models` 向用户填的 base_url 发 GET /models，带 `Bearer <API Key>`；'
-      + '读不到隐私开关时 fail-closed（按已拦截处理）',
+    control: '无应用内闸门（只有你点击「获取模型列表」才会发生）', anchor: 'NONE', marker: '',
+    why: '向用户自己填的 base_url 发 GET /models，带 `Bearer <API Key>`；不发聊天内容。'
+      + '2026-09-30 前这里有一次 fail-closed 的出网拦截，随开关一起移除。',
+  },
+  {
+    site: 'src/backend/llm-balance.js#getJson',
+    // 这一处与上面那条不同：它**不只是**点击触发 —— 左下角余额条每 5 分钟也会调一次
+    // （用户要求「余额实时显示」）。台账口径：有真实锚点时 `control` 里**不能**出现
+    // 「无应用内闸门」这个词（那条短语是留给 anchor:'NONE' 的），所以这里写清实际约束。
+    control: '地址须为 http(s)、余额查询须有 API Key（渲染侧没 Key 直接不调用）——没有出网开关，'
+      + '左下角那条是 5 分钟的定时请求',
+    anchor: 'src/backend/llm-balance.js', marker: 'async function getJson(',
+    why: '只向**用户自己配置的** apiUrl 发请求，只带 `Bearer <API Key>`：'
+      + '连接测试打 `{base}/models`，余额查询按厂商惯例打 `{origin}/user/balance`（DeepSeek）'
+      + '或 `{base}/user/info`（SiliconFlow 等）。'
+      + '**不发任何聊天内容**；清空 API Key 后调用方直接不出网（渲染侧 `SidebarBalance` 会自己隐藏）。'
+      + '厂商不提供余额接口时（如 OpenAI）明确报错并显示「余额 —」，不猜数字。'
+      + '逐条口径见 docs/PRIVACY.md 的 A2 节。',
+  },
+  {
+    site: 'src/backend/llm-balance.js#postJson',
+    // 与上面那条同属「模型端点探针」，但这一处发的是 **POST 最小请求**：
+    // 向量与精排没有"只看不花钱"的探测接口，所以各发一条固定测试串。
+    control: '地址须为 http(s)、该端点须填了模型名（渲染侧没模型名按钮就是禁用的）——没有出网开关',
+    anchor: 'src/backend/llm-balance.js', marker: 'async function postJson(',
+    why: '只向**用户自己配置的**向量 / 精排端点发一条**固定测试串**（`连接测试`，约 3 / 6 个 token），'
+      + 'body 里只有 model + 这句测试串：不含聊天内容、不含查询词、不含文件名。'
+      + '带的是对应端点的 `Bearer <Key>`（`embeddingApiKey` / `rerankApiKey`，留空回落 `apiKey`）。'
+      + '逐条口径见 docs/PRIVACY.md 的 A2 节。',
   },
   {
     site: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts#fetchFirstJson',
-    gate: 'blockMapTiles（地图底图独立开关）', gateIn: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts',
-    marker: 'mapTilesBlocked()',
-    why: '公开 GeoJSON（不含你的数据）；开关在 `mapTilesBlocked()` 里判，且拉之前先问后端真值',
+    control: '公开的行政区划数据（固定镜像源）', anchor: 'ANY', marker: 'WORLD_GEO_URLS',
+    why: '不含你的数据；URL 是代码里的常量清单，不由消息内容或用户输入决定。',
   },
   {
     site: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-export.ts#imageToDataUrl',
-    gate: '渲染层 CSP connect-src', gateIn: 'src/client/ui-app/index.html', marker: "connect-src 'self' data: blob: file:",
-    why: '把面板里已有的图转成 data URL 供导出用：`src` 是本机/`data:` 地址，'
-      + '而 connect-src 只放行 ' + "'self' data: blob: file:" + ' 加三个地图主机 ⇒ 渲染层无法向任意主机发请求',
+    control: '渲染层 CSP `connect-src`', anchor: 'src/client/ui-app/index.html',
+    marker: "connect-src 'self' data: blob: file:",
+    why: '把面板里已有的图转成 data URL 供导出用：`src` 是本机/`data:` 地址。',
   },
 ]
 
@@ -153,8 +182,6 @@ function sources(): string[] {
   out.push('main.js')
   return [...new Set(out.map((p) => relative(ROOT, join(ROOT, p)).split(sep).join('/')))]
 }
-
-const NET_CALLS = new Set(['fetch', 'fetchWithRetry', 'XMLHttpRequest', 'request', 'get', 'http', 'https'])
 
 /** 找出一个文件里的出网调用点，返回 `函数名` 列表。 */
 function sitesIn(file: string): string[] {
@@ -223,12 +250,12 @@ function scannedSites(): string[] {
 }
 
 function codeOf(file: string): string {
-  // 剥注释：注释里写的 `privacyBlocked('x')` 不算闸门（本仓有过一次差点被它骗到）。
+  // 剥注释：注释里写的 `privacyGate('x')` 不算接缝（本仓有过一次差点被它骗到）。
   const src = readFileSync(join(ROOT, file), 'utf8').replace(/\r\n/g, '\n')
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
 }
 
-describe('出网点台账：每个 fetch/http 调用点都必须登记，且登记指向真实存在的闸门', () => {
+describe('出网点台账：每个 fetch/http 调用点都必须登记，并写清它凭什么可以发', () => {
   const sites = scannedSites()
 
   it('扫描真的抓到了出网点（防空转：解析失效时这条先红）', () => {
@@ -246,33 +273,51 @@ describe('出网点台账：每个 fetch/http 调用点都必须登记，且登�
     expect([...sites].sort()).toEqual([...LEDGER.map((l) => l.site)].sort())
   })
 
-  it('每条登记的闸门标记在代码里真实存在（不许登记一个不存在的开关）', () => {
-    const haystack = (gateIn: string): string => (gateIn === 'ANY'
+  it('每条登记的锚点在代码里真实存在（没有锚点的必须明写「无应用内闸门」）', () => {
+    const haystack = (anchor: string): string => (anchor === 'ANY'
       ? scannedFiles().map((f) => codeOf(f)).join('\n')
-      : codeOf(gateIn))
+      : codeOf(anchor))
     for (const l of LEDGER) {
-      expect(l.marker, `${l.site} 的登记没有闸门标记`).not.toBe('')
       expect(l.why.length, `${l.site} 没写清楚这个点在发什么`).toBeGreaterThan(8)
-      expect(haystack(l.gateIn), `${l.site} 登记的闸门「${l.marker}」在 ${l.gateIn} 里找不到`).toContain(l.marker)
+      const noGate = l.anchor === 'NONE'
+      expect(l.control.includes('无应用内闸门'), `${l.site} 没有锚点就必须明写「无应用内闸门」，现在是「${l.control}」`)
+        .toBe(noGate)
+      if (noGate) {
+        expect(l.marker, `${l.site} 声明没有闸门，却又写了锚点`).toBe('')
+        continue
+      }
+      expect(l.marker, `${l.site} 的登记没有锚点字面量`).not.toBe('')
+      expect(haystack(l.anchor), `${l.site} 登记的锚点「${l.marker}」在 ${l.anchor} 里找不到`).toContain(l.marker)
     }
   })
 
-  it('P0-2 的三个漏网点已经各有一个自己的功能名（不许退回「同族漏一个」）', () => {
-    const feats = LEDGER.filter((l) => l.marker.startsWith("privacyBlocked('"))
-      .map((l) => /privacyBlocked\('([^']+)'/.exec(l.marker)?.[1] ?? '')
-    for (const f of ['whisper_engine_install', 'laya_model_download', 'voice_model_download']) {
-      // `laya_model_download` 的闸在 remotes/laya.ts，它管的调用点是共用的 streamUrlToFile ⇒
-      // 这里按「代码里真的有这个判闸」查，而不是按台账里有没有这一行查。
-      const all = scannedFiles().map((f2) => codeOf(f2)).join('\n')
-      expect(all, `审计功能名 ${f} 的 privacyBlocked 判闸不见了`).toContain(`privacyBlocked('${f}'`)
-    }
-    expect(feats.length).toBeGreaterThanOrEqual(4)
-  })
-
-  it('台账里每条 `gateIn` 指向的文件确实存在（改名/搬文件要一起改台账）', () => {
+  it('台账里每条 `anchor` 指向的文件确实存在（改名/搬文件要一起改台账）', () => {
     for (const l of LEDGER) {
-      if (l.gateIn === 'ANY') continue
-      expect(existsSync(join(ROOT, l.gateIn)), `登记的闸门文件不存在：${l.gateIn}`).toBe(true)
+      if (l.anchor === 'ANY' || l.anchor === 'NONE') continue
+      expect(existsSync(join(ROOT, l.anchor)), `登记的锚点文件不存在：${l.anchor}`).toBe(true)
     }
+  })
+
+  /**
+   * 与「移除全部出网开关」配套的一条防回归：产品代码里不许再出现那两个开关的判定/字段。
+   *
+   * 剥注释后再查 —— 注释里正当会写「`blockOutbound` 已随开关一起删除」（本仓刻意保留
+   * 这段历史说明），所以只有**活代码**里出现才算回归。
+   */
+  it('出网开关不许回来（剥注释后的产品代码里不许再出现它们的名字）', () => {
+    const tokens = ['blockOutbound', 'blockMapTiles', 'cdn_enabled', 'cdn_local_decrypt',
+      'cdnFetchAllowed', 'localDecryptEnabled', 'privacyBlocked', 'outboundBlocked']
+    const offenders: string[] = []
+    for (const f of scannedFiles()) {
+      const code = codeOf(f)
+      for (const t of tokens) {
+        if (code.includes(t)) offenders.push(`${f}: ${t}`)
+      }
+    }
+    expect(offenders, '移除掉的出网开关又出现在产品代码里了').toEqual([])
+    expect(existsSync(join(ROOT, 'src/backend/wechat-data/src/query/cdn-policy.ts')),
+      'CDN 开关的判定模块又回来了').toBe(false)
+    expect(existsSync(join(ROOT, 'src/client/ui-wechat/src/client/pages/wechat-data/map-tiles-flag.ts')),
+      '地图底图开关的渲染层镜像又回来了').toBe(false)
   })
 })

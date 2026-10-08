@@ -35,7 +35,7 @@ import '../../ui-wechat/src/client/pages/wechat-data/light-theme.css'
 import css from './PrivacyConsentGate.module.css'
 
 /** 出网点的开关性质：决定它拿到哪种标记、以及是否被琥珀色框圈起来。 */
-type SwitchKind = 'toggle' | 'none' | 'manual'
+type SwitchKind = 'none' | 'manual'
 
 interface OutboundEntry {
   /** 左栏标签。 */
@@ -50,48 +50,48 @@ interface OutboundEntry {
 }
 
 const KIND_CHIP: Readonly<Record<SwitchKind, string>> = {
-  toggle: '可关闭',
   none: '无开关',
-  manual: '默认不下载',
+  manual: '仅点击时下载',
 }
 
 /**
  * 出网点清单（与 `docs/PRIVACY.md` 第四节逐条对应）。
  *
- * 口径提醒：`toggle` 表示**应用内有开关**。图片/头像/视频这一类自 M23 起全部由后端代取，
- * 所以「自动获取原图（CDN）」与「禁止出网」真的管得到它们 —— 界面自己不再向任何远程主机要图
- * （CSP 的 `img-src` 只放行本机来源）。剩下 `none` 的那几条（地图底图、语音模型下载）才是
- * 真的没有开关，下面的 caveat 只对它们成立。
+ * 口径提醒（2026-09-30）：应用内的出网开关**已全部移除**（原来的「禁止 AI 出网」
+ * 「禁止地图底图出网」与「自动获取原图（CDN）」），所以这里不再有 `可关闭` 这一档 ——
+ * 每条都是「无开关」或「仅在你点击时才发生」。要断网只能靠系统防火墙或断网。
+ * 图片/头像/视频这一类自 M23 起全部由后端代取，界面自己不再向任何远程主机要图
+ * （CSP 的 `img-src` 只放行本机来源）。
  */
 const OUTBOUND: ReadonlyArray<OutboundEntry> = [
   {
     label: 'AI 问答与总结',
-    text: '把检索到的聊天片段发给你自己配置的模型接口',
+    text: '把检索到的聊天片段发给你自己配置的模型接口；「测试连接 / 测试向量 / 测试精排」只发一条固定测试串，「余额查询」（左下角每 5 分钟一次）只带 Key —— 都不发你的内容',
     host: '默认 api.openai.com（以你配置的 apiUrl 为准）',
-    kind: 'toggle',
+    kind: 'none',
   },
   {
     label: 'AI embedding',
-    text: '同上，用于向量检索（与 AI 问答共用同一道闸门）',
+    text: '同上，用于向量检索（与 AI 问答共用同一道接缝）',
     host: '同上',
-    kind: 'toggle',
+    kind: 'none',
   },
   {
     label: '头像图片',
     text: '本机未缓存时由后端按微信记录的头像地址代为取回（界面不直接请求）',
     host: 'wx.qlogo.cn、mmhead.c2c.wechat.com 等腾讯图片 CDN',
-    kind: 'toggle',
-    note: '不发聊天内容，但会暴露你关注了谁（实测约 82% 的联系人本机无缓存）。关掉「自动获取原图（CDN）」后只用本机缓存，缺的头像退成首字母。',
+    kind: 'none',
+    note: '不发聊天内容，但会暴露你关注了谁（实测约 82% 的联系人本机无缓存）。本机没有的就退成首字母。',
   },
   {
     label: '远程图片 / 视频 / 公众号封面',
     text: '本机没有缓存时从微信 CDN 取回',
     host: 'mp.weixin.qq.com 等微信 CDN',
-    kind: 'toggle',
+    kind: 'none',
   },
   {
     label: '地图底图',
-    text: '拉取行政区划 GeoJSON（离线时回退到内置的简化边界）',
+    text: '拉取行政区划 GeoJSON',
     host: 'cdn.jsdelivr.net、unpkg.com、geo.datav.aliyun.com',
     kind: 'none',
     note: '不含你的数据。',
@@ -108,11 +108,11 @@ const OUTBOUND: ReadonlyArray<OutboundEntry> = [
 const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   {
     label: '数据边界与出网',
-    text: '数据配置 → 数据边界与出网：禁止 AI 出网、敏感字段打码、查看与导出出站审计。',
+    text: '数据配置 → 数据边界与出网：敏感字段打码、查看与导出出站审计。',
   },
   {
-    label: '图片解码',
-    text: '数据配置 → 设置 → 图片解码：关闭「自动获取原图（CDN）」，或切换原图解密方式。',
+    label: '模型配置',
+    text: '数据配置 → AI 大模型：换模型 / 换服务商，或把 apiUrl 指向你自己的内网或本机模型。',
   },
   {
     label: '重新审阅本声明',
@@ -124,7 +124,7 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   },
   {
     label: '完全离线',
-    text: '不配置模型 + 关闭 CDN 取图 + 断网（或在防火墙里禁止 Super Time 出站）。',
+    text: '断网，或在系统防火墙里禁止 Super Time 出站；再把自己的模型端点换成内网 / 本机服务，内容就完全不出你的网络。',
   },
 ]
 
@@ -152,8 +152,8 @@ export function PrivacyConsentGate({
           <span className={css.kicker}>首次启动 · 需要你确认</span>
           <h1 className={css.title}>隐私与数据边界</h1>
           <p className={css.sub}>
-            在开始之前，请确认你了解本应用会读取什么、会往哪里发东西。
-            完整声明见仓库里的 <code className={css.code}>docs/PRIVACY.md</code>（声明版本 v{PRIVACY_VERSION}）。
+            开始之前，请确认你了解它会读什么、会往哪里发。
+            完整声明见 <code className={css.code}>docs/PRIVACY.md</code>（声明版本 v{PRIVACY_VERSION}）。
           </p>
         </header>
 
@@ -163,16 +163,19 @@ export function PrivacyConsentGate({
             <section className={css.verdict} aria-label="一句话结论">
               <span className={css.verdictTag}>一句话结论</span>
               <ul className={css.verdictList}>
-                <li>数据不出本机：解析、分析、检索、导出全部在你自己的电脑上完成。</li>
+                <li>数据不出本机：解析、检索、统计、导出全部在你自己的电脑上完成。</li>
                 <li>
-                  唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 它发给你<b>自己配置</b>的模型接口，可以整体关掉。
+                  唯一会把你<b>内容</b>发出去的是 AI 问答与总结 —— 发给你<b>自己配置</b>的模型接口。
                 </li>
                 <li>
-                  除此之外还有几处不涉及聊天内容的出网点，出网清单里逐条列明；其中 <b>{blocked.length} 条没有内置开关</b>。
+                  其余出网点都不涉及聊天内容，已在右边逐条列明；应用内已<b>没有任何出网开关</b>，
+                  要完全断网请配合系统防火墙或断网。
                 </li>
               </ul>
             </section>
 
+            {/* 三节说明**全部常显**（2026-09-29 用户要求移除折叠）：
+                折叠会让"知情"变成"需要点开才知情"，直接展开更稳妥。 */}
             <section className={css.sec}>
               <div className={css.secHd}>
                 <h2 className={css.secTitle}>数据在本机处理</h2>
@@ -222,10 +225,9 @@ export function PrivacyConsentGate({
                 <h2 className={css.secTitle}>会出网的地方（逐条）</h2>
               </div>
               <div className={css.stat}>
-                <span className={css.statChip}>共 6 个出网点</span>
-                <span className={css.statChip}>3 类可关闭</span>
-                <span className={css.statChipWarn}>2 条无内置开关</span>
-                <span className={css.statChip}>1 条只在你要用时发生</span>
+                <span className={css.statChip}>共 {OUTBOUND.length} 个出网点</span>
+                <span className={css.statChipWarn}>{blocked.length} 条无开关</span>
+                <span className={css.statChip}>{OUTBOUND.length - blocked.length} 条只在你要用时发生</span>
               </div>
 
               <div className={css.rows}>
@@ -237,7 +239,7 @@ export function PrivacyConsentGate({
                       {e.host && <span className={css.rowHost}>{e.host}</span>}
                       {e.note && <span className={css.rowNote}>{e.note}</span>}
                     </span>
-                    <span className={e.kind === 'none' ? `${css.chip} ${css.chipNone}` : e.kind === 'toggle' ? `${css.chip} ${css.chipToggle}` : `${css.chip} ${css.chipManual}`}>
+                    <span className={e.kind === 'none' ? `${css.chip} ${css.chipNone}` : `${css.chip} ${css.chipManual}`}>
                       {KIND_CHIP[e.kind]}
                     </span>
                   </div>
@@ -245,42 +247,46 @@ export function PrivacyConsentGate({
               </div>
 
               <p className={css.caveat}>
-                <b>诚实说明</b>：上面 {blocked.length} 条无开关的出网点（{blocked.map((e) => e.label).join('、')}）
-                不受任何应用内设置控制。图片、头像与视频这一类<b>全部</b>由后端代取，
-                「自动获取原图（CDN）」与「禁止出网」关掉的正是它们 —— 界面自己不再向任何远程主机要图
-                （CSP 的 <code>img-src</code> 只放行本机来源）。要把剩下这几条也断掉，请配合系统防火墙或断网。
+                <b>诚实说明</b>：上面 {blocked.length} 条出网点（{blocked.map((e) => e.label).join('、')}）
+                <b>不受任何应用内设置控制</b> —— 应用里已经没有任何出网开关。图片、头像与视频这一类
+                全部由后端代取，界面自己不向任何远程主机要图。要断掉这些请求，只能靠系统防火墙或断网。
               </p>
             </section>
           </div>
         </div>
 
-        <label className={css.consent} data-on={checked || undefined}>
-          <input
-            type="checkbox"
-            className={css.consentBox}
-            checked={checked}
-            onChange={(e) => setChecked(e.target.checked)}
-          />
-          <span className={css.consentText}>
-            我已阅读并理解上述数据处理方式，同意本应用读取本机微信数据、只读扫描微信进程内存以获取解密密钥，
-            并按上述方式使用网络。
-          </span>
-        </label>
+        {/* 同意区（勾选 + 两个按钮）**在文档流内**（2026-09-30 用户要求：不要悬浮式）。
+            它曾在 2026-09-29 被做成吸底条；悬浮条会盖住正文最后一行，也让人误以为它是
+            浮层而不是文档的一部分。现在它作为最后一段随流排下，滚到底勾选即可。 */}
+        <div className={css.consentBar}>
+          <label className={css.consent} data-on={checked || undefined}>
+            <input
+              type="checkbox"
+              className={css.consentBox}
+              checked={checked}
+              onChange={(e) => { setChecked(e.target.checked) }}
+            />
+            <span className={css.consentText}>
+              我已阅读并理解上述数据处理方式，同意本应用读取本机微信数据、只读扫描微信进程内存以获取解密密钥，
+              并按上述方式使用网络。
+            </span>
+          </label>
 
-        <div className={css.actions}>
-          {onExit && (
-            <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={onExit}>
-              不同意并退出
+          <div className={css.actions}>
+            {onExit && (
+              <button type="button" className={`${css.btn} ${css.btnGhost}`} onClick={onExit}>
+                不同意并退出
+              </button>
+            )}
+            <button
+              type="button"
+              className={`${css.btn} ${css.btnPrimary}`}
+              disabled={!checked}
+              onClick={onAccepted}
+            >
+              同意并继续
             </button>
-          )}
-          <button
-            type="button"
-            className={`${css.btn} ${css.btnPrimary}`}
-            disabled={!checked}
-            onClick={onAccepted}
-          >
-            同意并继续
-          </button>
+          </div>
         </div>
       </div>
     </div>

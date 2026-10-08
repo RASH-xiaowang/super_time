@@ -215,7 +215,7 @@ describe('收藏 / 撤回：关键词下推到 SQL', () => {
 
 // ── ④ 会话 ───────────────────────────────────────────────────────────────
 describe('会话搜索：keyword 必须包含 summary', () => {
-  it('只在最后一条消息里出现的词也能搜到该会话', () => {
+  it('只在最后一条消息里出现的词也能搜到该会话', async () => {
     const dec = makeRoot()
     const d = db(dec, join('session', 'session.db'))
     d.exec(`CREATE TABLE SessionTable (
@@ -227,11 +227,12 @@ describe('会话搜索：keyword 必须包含 summary', () => {
     ins.run('wxid_aaa', Buffer.from('2026 年的计划', 'utf-8'), 30, 30, 0, 0, 1, 0, '', '', '')
     ins.run('wxid_bbb', Buffer.from('别的消息', 'utf-8'), 20, 20, 0, 0, 1, 0, '', '', '')
     d.close()
-    const hit = querySessions(dec, '2026', 500, 0)
+    // 2026-09-28：`querySessions` 改 async（逐会话未读时间解析要让出）⇒ 跟着 await。
+    const hit = await querySessions(dec, '2026', 500, 0)
     expect(hit.sessions.length).toBe(1)
     expect(hit.sessions[0]?.username).toBe('wxid_aaa')
     // 名字匹配仍然有效（不能为了 summary 把原有口径弄丢）
-    expect(querySessions(dec, 'wxid_bbb', 500, 0).sessions.length).toBe(1)
+    expect((await querySessions(dec, 'wxid_bbb', 500, 0)).sessions.length).toBe(1)
   })
 })
 

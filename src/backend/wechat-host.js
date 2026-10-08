@@ -604,6 +604,28 @@ async function createWechatBackend(options = {}) {
   const mod = await import('./wechat-data/lib/index.js');
   const protocol = await import('@deepseek-ai/dsh-typert-protocol');
   /**
+   * H2：慢调用的耗时写进审计表（`wechat_privacy.db#operation_log.duration_ms`）。
+   *
+   * 与上面那行 `console.warn` 的关系不是「二选一」而是「同一件事的两个去处」：
+   * 日志给开发者在现场捞，审计表给**用户在界面上查**（`getOperationLog` 已经存在）。
+   * `docs/PERF-AUDIT-172` 那张「哪个接口最慢」的表本来是拿临时探针数出来的，
+   * 落库之后就不用再让用户跑脚本了 —— 按 `minDurationMs` 一筛就是慢调用榜。
+   *
+   * 失败或加载不到都只降级成「不记账」：观测设施不许把后端拖垮。
+   */
+  const recordSlowCall = typeof mod.recordOperation === 'function' ? mod.recordOperation : null;
+  const SLOW_CALL_MS = typeof mod.SLOW_OPERATION_MS === 'number' ? mod.SLOW_OPERATION_MS : 1000;
+  /**
+   * **日志**里那条 `慢调用` 的阈值，默认 1000ms（历史口径，见下面原注释）。
+   *
+   * 可被 `SUPERTIME_SLOW_CALL_MS` 覆盖：这是**诊断用的旋钮**，不是产品行为 ——
+   * 把它调到 50ms 就能拿到"每个面板到底调了哪些接口、各花多久"的完整时间线，
+   * 而 1s 阈值只能看见最慢的那几个（`working/measure-real-load.mjs` 的
+   * "逐面板 RPC 时间线"就是靠它）。落审计表的那条阈值仍走 `SLOW_CALL_MS`，不受影响。
+   */
+  const slowLogOverride = Number(process.env.SUPERTIME_SLOW_CALL_MS);
+  const SLOW_LOG_MS = Number.isFinite(slowLogOverride) && slowLogOverride > 0 ? slowLogOverride : 1000;
+  /**
    * 生成的 zod schema 表（② 档的影子校验）。
    *
    * 加载失败**不许**把后端拖到起不来：影子少一份账只是少一条诊断信息，
@@ -710,8 +732,34 @@ async function createWechatBackend(options = {}) {
         const value = await fn.apply(gateway, callArgs);
         // 慢调用打点：这些方法都在后端进程里同步跑，偏慢的要能看见。
         const cost = Date.now() - startedAt;
-        if (cost > 1000) {
+        if (cost > SLOW_LOG_MS) {
           console.warn(`[wechat] 慢调用 ${method} 耗时 ${cost}ms`);
+          /**
+           * H2：同一笔慢调用也落进审计表。
+           *
+           * 为什么阈值用 `>` 而不是把 `cost > 1000` 抽成一个常量在上面共用：
+           * 这条 `console.warn` 是**已经上线并被日志复盘过的口径**（PERF-AUDIT 那 1658 条
+           * 就是它打的），改成常量引用会让「日志里的历史数据」和「今天写进库的数据」
+           * 失去可比性。两处都写 1000 是**故意的**，改一处就要同时改另一处并在报告里说明。
+           *
+           * 只记 `status: 'ok'` 的慢调用吗？不 —— 失败的慢调用同样是瓶颈证据
+           * （超时重试就是这一类），所以这里不区分成败，只在 `category` 上用 `error`
+           * 把它和成功那批分开，界面上可以直接筛。
+           */
+          if (recordSlowCall) {
+            try {
+              recordSlowCall(gateway._dirs.decrypted, {
+                category: 'error',
+                action: 'slow_call',
+                status: 'ok',
+                target: method,
+                detail: `Remote 调用耗时 ${cost}ms`,
+                durationMs: cost,
+              });
+            } catch (e) {
+              console.warn('[wechat] 记慢调用进审计表失败:', e?.message ?? e);
+            }
+          }
         }
         // 数据配置保存成功后，把「非密钥」设置镜像到 wechat/config.json 供用户查看与手工编辑。
         // 密钥类字段由 wechat-paths.js 的 SECRET_SETTING_KEYS 过滤掉 —— 它们有单独的、

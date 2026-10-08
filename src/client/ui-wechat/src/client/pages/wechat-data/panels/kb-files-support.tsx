@@ -98,7 +98,7 @@ export const PARSE_LOOK: Record<KbFileParseState, ParseLook> = {
     label: '仅关键词',
     tone: 'amber',
     // 这一档**不是失败态**：没有向量只影响语义检索，关键词检索照旧命中。
-    hint: '正文已解析，但没有做成向量（没有可用的模型 Key、断网、或「禁止 AI 出网」被打开）。这类文件仍能被关键词搜到。',
+    hint: '正文已解析，但没有做成向量（没有可用的模型 Key，或当时网络不通）。这类文件仍能被关键词搜到。',
     attention: false,
     pending: false,
   },

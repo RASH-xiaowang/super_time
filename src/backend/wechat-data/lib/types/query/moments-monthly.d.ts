@@ -7,4 +7,4 @@ import type { MomentsMonthlySnapshot } from '../types.ts';
  *   chips (all authors when omitted). Takes precedence over `author` when set.
  * @returns 月度快照：只有**确认读到过**才回空的 `months`；读失败时 `readError` 非空。
  */
-export declare function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): MomentsMonthlySnapshot;
+export declare function queryMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): Promise<MomentsMonthlySnapshot>;

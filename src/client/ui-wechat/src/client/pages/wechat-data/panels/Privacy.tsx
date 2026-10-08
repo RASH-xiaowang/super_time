@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiExportCsv, apiGetPrivacyScan, readRenderCache, writeRenderCache } from '../api.ts'
 import type { PrivacySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, clickableKey, EmptyState, PanelHeader } from '../ui/kit.tsx'
+import { Card, clickableKey, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { useElapsedSeconds } from './hooks.tsx'
 import css from './list-panel.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -50,13 +51,22 @@ function readScope(): { sessions: number | null; messages: number | null } {
  *   ① 会扫描什么（范围，带真实规模数字）  ② 结果能做什么
  *   ③ 六个体检项（各自在找什么）          ④ 隐私边界（全程本机）
  */
-function PrivacyLanding({ scanning }: { scanning: boolean }): React.JSX.Element {
+function PrivacyLanding({ scanning, elapsed = 0 }: { scanning: boolean; elapsed?: number }): React.JSX.Element {
   const { sessions, messages } = readScope()
   const scope = sessions !== null || messages !== null
     ? `本机解密库的全部消息${sessions !== null ? ` · ${sessions.toLocaleString()} 个会话` : ''}${messages !== null ? ` · ${messages.toLocaleString()} 条消息` : ''}`
     : '本机解密库的全部消息'
   return (
     <div className={css.pvLand}>
+      {/* 扫描进度（R4）：全库敏感信息扫描实测 >1s（冷启更久），此前只有「正在扫描…」四个字，
+          用户无从判断是在跑还是卡死。后端不报总量 ⇒ 用 indeterminate 短条 + 已等待秒数，
+          这是最诚实的表达（不编造百分比）。 */}
+      {scanning && (
+        <div className={css.pvProgress} data-st-scan-progress="1">
+          <ProgressBar value={0} indeterminate />
+          <span className={css.pvProgressText} role="status">正在扫描全库敏感信息…（已等待 {elapsed}s）</span>
+        </div>
+      )}
       <div className={css.pvLandGrid}>
         <div className={css.pvLandCard}>
           <h4 className={css.pvLandTitle}>{scanning ? '正在扫描…' : '会扫描什么'}</h4>
@@ -117,6 +127,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
 }): React.JSX.Element {
   const [data, setData] = useState<PrivacySnapshot | null>(() => readRenderCache<PrivacySnapshot>('privacy-scan'))
   const [loading, setLoading] = useState(false)
+  const scanElapsed = useElapsedSeconds(loading)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [showMore, setShowMore] = useState<ReadonlySet<string>>(new Set())
@@ -191,7 +202,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
       {/* 落地态与扫描中共用同一套结构：扫描期间把范围/体检项留着，
           用户知道"在扫什么、还要等什么"，而不是盯着一个词加满屏空白。 */}
-      {!error && !data && <PrivacyLanding scanning={loading} />}
+      {!error && !data && <PrivacyLanding scanning={loading} elapsed={scanElapsed} />}
       {!error && data && (
         <div className={css.scroll}>
           {data.categories.map((c) => {

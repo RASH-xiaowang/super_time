@@ -79,24 +79,30 @@ export function cachedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T>
       // 旧到不该再画的值：当作没有（下一次读会真的回源），顺带把它从内存里丢掉
       _snapshotCache.delete(key)
     } else if (ageMs < SNAPSHOT_TTL_MS && hit.ts > staleBeforeMs) {
-      return Promise.resolve(hit.value as T)
+      // H3：命中路径也过 timedFetch —— 这条**刻意**量的是「取快照」而不是「取数」：
+      // 它应当接近 0ms，一旦打印出来就说明主线程被别的东西占着（同步 SQLite / 长任务），
+      // 正是 PERF-AUDIT 里「命中也要等」那类现象的判据。少了这一条，命中路径的耗时无从观察。
+      return timedFetch(key + ':hit', () => Promise.resolve(hit.value as T))
     } else {
       revalidateSnapshot(key, fetcher)
-      return Promise.resolve(hit.value as T)
+      return timedFetch(key + ':hit', () => Promise.resolve(hit.value as T))
     }
   }
-  return fetcher().then((value) => {
+  // 回源：走的是真实后端往返，这是最该被量到的一条。
+  return timedFetch(key, () => fetcher().then((value) => {
     snapshotSet(key, value)
     notifySnapshotRefreshed(key)
     return value
-  })
+  }))
 }
 
 /** 后台复验一个已缓存的键：成功才写回并通知；同键并发只跑一次。 */
 function revalidateSnapshot<T>(key: string, fetcher: () => Promise<T>): void {
   if (_revalidating.has(key)) return
   _revalidating.add(key)
-  void Promise.resolve().then(fetcher).then(
+  // 后台复验同样计时（键带 `:bg` 与前台回源区分开）：这是「切回面板先看到旧值、
+  // 过一会儿数据变了」那条路径的真实耗时，旧写法完全看不见它。
+  void timedFetch(key + ':bg', fetcher).then(
     (value) => { snapshotSet(key, value); notifySnapshotRefreshed(key) },
     () => { /* 复验失败：留着旧值，下一次读再试（面板自己也订阅着数据事件） */ },
   ).finally(() => { _revalidating.delete(key) })
@@ -314,16 +320,47 @@ export function invalidateAndNotify(prefix: string | readonly string[]): void {
   }
 }
 
-/** 记录一次 panel 数据取数的耗时（超过阈值才打印，便于观察“及时响应”与回归）。 */
+/**
+ * 记录一次 panel 数据取数的耗时（超过阈值才打印，便于观察"及时响应"与回归）。
+ *
+ * ## H3（2026-09-28）：从「只覆盖 cachedFetch 那一路」扩到「所有取数」
+ *
+ * 改前这函数只在 `cachedFetch` 的两处分支里被调用，而 `cachedGet` 那条**热门快照通道**
+ * 一次都没经过它 —— 于是「前端侧耗时」这件事只看得见一部分接口，而看不见的那部分
+ * 恰恰包含 `ledger` / `storage` 这类重查询（面板切回来时走的正是 `cachedGet` 快照命中）。
+ * 现在四类读取路径全部经过这里：
+ *
+ * | 路径 | 量到的是什么 |
+ * |---|---|
+ * | `cachedFetch` 冷（回源） | 真实后端往返 |
+ * | `cachedFetch` 热（SWR 后台复验） | 后台刷新的真实耗时 |
+ * | `cachedGet` 冷（回源） | 真实后端往返 |
+ * | `cachedGet` 热（快照命中 / 陈旧回源） | **命中耗时**（应当 ≈0；不是 0 就是卡在主线程） |
+ *
+ * 最后一行是这次扩面的主要收获：旧写法下「切回面板卡了一下」无法区分
+ * 「后端慢」与「快照命中却也慢」，量到命中路径才分得开。
+ *
+ * @param key - 缓存键（会原样出现在日志里，形如 `ledger:wxid_x:50`）。
+ * @param fetcher - 真正取数的那段。
+ * @returns fetcher 的结果（本函数只观测，不改语义、不吞异常）。
+ */
 export async function timedFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const t0 = performance.now()
   try {
     return await fetcher()
   } finally {
     const ms = performance.now() - t0
-    if (ms > 250) console.info(`[wxdata] ${key} ${ms.toFixed(0)}ms`)
+    if (ms > TIMED_FETCH_THRESHOLD_MS) console.info(`[wxdata] ${key} ${ms.toFixed(0)}ms`)
   }
 }
+
+/**
+ * 埋点阈值（毫秒）。250ms 是「用户还能觉得是瞬时的」上界 —— 超过它就该有记录。
+ *
+ * 为什么导出：阈值是**判据的一部分**，测试要能按它构造边界用例而不抄一个数字。
+ * 抄数字的后果是改阈值时守卫照旧绿（判据与实现脱钩，典型的假守卫）。
+ */
+export const TIMED_FETCH_THRESHOLD_MS = 250
 
 /**
  * 后台刷新完成后广播的 DOM 事件前缀。

@@ -57,18 +57,20 @@ function makeSnsDb(w: TempWorkspace, rows: Array<{ tid: number; user: string; xm
 }
 
 describe('朋友圈月度分布：读失败与「没有动态」分开', () => {
-  it('压根没有 sns.db ⇒ 确认空：months 空，且 readError 必须缺席', () => {
+  // 2026-09-28：`queryMomentsMonthly` 改 async（`SnsTimeLine` 游标要逐行 `parseSnsXml`，
+  // 实测冷跑 165ms 且一次都不让出）⇒ 本组三条跟着 await。
+  it('压根没有 sns.db ⇒ 确认空：months 空，且 readError 必须缺席', async () => {
     const w = ws('mom-empty')
-    const snap = queryMomentsMonthly(w.dir)
+    const snap = await queryMomentsMonthly(w.dir)
     expect(snap.months).toEqual([])
     expect(snap.readError, `没有库是「从没拉过朋友圈」，不该算读失败：${String(snap.readError)}`).toBeUndefined()
   })
 
-  it('sns.db 是坏文件 ⇒ readError 说清原因，且句柄没漏（坏文件也删得掉）', () => {
+  it('sns.db 是坏文件 ⇒ readError 说清原因，且句柄没漏（坏文件也删得掉）', async () => {
     const w = ws('mom-bad')
     mkdirSync(join(w.dir, 'sns', 'db_sns'), { recursive: true })
     writeFileSync(w.path(join('sns', 'db_sns', 'sns.db')), '这不是 SQLite 文件', 'utf8')
-    const snap = queryMomentsMonthly(w.dir)
+    const snap = await queryMomentsMonthly(w.dir)
     expect(snap.months, '读失败时不许夹带条目').toEqual([])
     expect(typeof snap.readError, '读失败必须带原因').toBe('string')
     expect(String(snap.readError)).toContain('朋友圈月度分布读取失败')
@@ -76,7 +78,7 @@ describe('朋友圈月度分布：读失败与「没有动态」分开', () => {
     rmSync(w.path(join('sns', 'db_sns', 'sns.db')), { force: true })
   })
 
-  it('正常库 ⇒ 按月聚对，且不带 readError（反向哨兵：不许一见空列表就报读失败）', () => {
+  it('正常库 ⇒ 按月聚对，且不带 readError（反向哨兵：不许一见空列表就报读失败）', async () => {
     const w = ws('mom-ok')
     makeSnsDb(w, [
       { tid: 1, user: 'wxid_a', xml: '<timeline><createTime>1700000000</createTime></timeline>' },
@@ -84,7 +86,7 @@ describe('朋友圈月度分布：读失败与「没有动态」分开', () => {
       { tid: 3, user: 'wxid_b', xml: '<timeline><createTime>1704000000</createTime></timeline>' },
       { tid: 4, user: 'wxid_b', xml: '<desc>没有 create_time 的一条</desc>' },
     ])
-    const snap = queryMomentsMonthly(w.dir)
+    const snap = await queryMomentsMonthly(w.dir)
     expect(snap.readError).toBeUndefined()
     const total = snap.months.reduce((a, m) => a + m.count, 0)
     expect(total, '三条有时间的应全部计入').toBe(3)
@@ -191,8 +193,10 @@ describe('契约形状（客户端那道类型驱动守卫看得见的部分）'
 
   it('月度分布回的是**具名快照**，不是裸数组（否则 read-error 守卫从类型上看不见）', () => {
     const gw = readFileSync(join(SRC, 'gateway-read.ts'), 'utf8')
+    // 2026-09-28：`getMomentsMonthly` 改成 async（游标要逐行 `parseSnsXml`，实测 165ms 独占）
+    // ⇒ 这条钉的仍是「回具名快照而不是裸数组」，但签名形态跟着变成 `Promise<...>`。
     expect(gw, 'getMomentsMonthly 又返回数组 ⇒ readError 无处安放').toMatch(
-      /getMomentsMonthly\([^)]*\): MomentsMonthlySnapshot/)
+      /async getMomentsMonthly\([^)]*\): Promise<MomentsMonthlySnapshot>/)
     const api = readFileSync(join(UI, 'api-core.ts'), 'utf8')
     expect(api, '远端接口声明与后端不一致').toMatch(/Promise<RemoteResult<MomentsMonthlySnapshot>>/)
   })

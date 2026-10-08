@@ -1,0 +1,41 @@
+/**
+ * 全局隐藏滚动条（2026-09-29 用户要求：所有界面都不要显示滚动条，但滚动功能照常）。
+ *
+ * ## 为什么不去逐个删面板里的滚动条样式
+ *
+ * 本仓的滚动条是一套**契约**：主题侧在 `pages/wechat-data/scifi-theme.css` 里声明了全局
+ * `::-webkit-scrollbar` 基础样式，各面板再各自声明 6px 细条（例：`panels/calls.module.css`、
+ * `panels/session-ask.module.css`、`panels/monitor.module.css`），而且有 wiring 用例
+ * **断言这些声明存在**（`panels/calls-layout.wiring.spec.ts`、
+ * `panels/chat-analysis-panel.wiring.spec.ts`）。逐处删除既会打红那些守卫，
+ * 也挡不住以后新面板再声明一条。所以这里在**最外一层全局**统一压掉"绘制"，
+ * 面板里的声明原样保留（只是被覆盖、不再可见）。
+ *
+ * ## 为什么"看不见"不等于"不能滚"
+ *
+ * `scrollbar-width` / `-ms-overflow-style` / `::-webkit-scrollbar` 只影响**滚动条的绘制**，
+ * 与 `overflow` 和滚动行为无关：滚轮、触摸板、键盘（PageUp/PageDown、Home/End、方向键）、
+ * 拖拽、`scrollIntoView`、`scrollTo` 全部照常可用。
+ * 面板里已有的 `scrollbar-gutter: stable` 继续预留宽度 —— 那是为了**布局稳定**
+ * （避免"出现/消失滚动条"导致内容宽度跳动），与隐藏绘制不冲突，故保留。
+ *
+ * ## 覆盖范围
+ *
+ * 本文件由渲染进程入口 `ui-entry.tsx` 引入 ⇒ 主界面、各面板、弹窗、引导页、授权页、
+ * 隐私同意页**一并生效**；两条规则都不含颜色，因此**深浅主题同样生效**。
+ */
+
+/* 标准属性：Firefox / Chromium 121+；旧 Edge 的私有属性一并写上，成本可忽略。 */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Chromium / Electron：宽度归零 + 不绘制。
+ * `!important` 是必需的 —— 面板里的 `.xxx::-webkit-scrollbar { width: 6px }` 在优先级上赢过
+ * `*::-webkit-scrollbar`，只有 important 才能让"全局隐藏"真正覆盖到每一处。 */
+*::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
-import { Badge, Card, DateRangeField, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, DateRangeField, LinkButton, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -218,7 +218,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   const meta = KIND_META[kind]
   const td = (children: React.ReactNode, key: string, cls = ''): React.JSX.Element => (<td key={key} className={cls}>{children}</td>)
   const linkTd = (username: string | number | boolean | null | undefined, localId?: string | number | boolean | null, key = 's', label?: string | number | boolean | null): React.JSX.Element => (
-    <td key={key}>{username ? <button type="button" className={css.link} onClick={() => { open(username, localId) }} title={String(username)}>{shortUser(label || username)}</button> : <span className={css.muted}>—</span>}</td>
+    <td key={key}>{username ? <LinkButton onClick={() => { open(username, localId) }} title={String(username)}>{shortUser(label || username)}</LinkButton> : <span className={css.muted}>—</span>}</td>
   )
   const mono = (v: string | number | boolean | null | undefined, key = 'm'): React.JSX.Element => <td key={key} className={css.mono}>{v == null ? '—' : String(v)}</td>
   // 行数据来自未类型化的 DB 行，秒级时间戳可能是 number 也可能是字符串 → 统一数值化。
@@ -288,29 +288,20 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         actions={<Badge tone="cyan">共 {total.toLocaleString()} 条</Badge>}
       />
 
-      <Toolbar
-        left={(
-          <Segmented
-            options={KINDS.map(k => ({
-              value: k,
-              label: `${KIND_META[k].icon} ${KIND_META[k].label}${totals[k] != null && totals[k] > 0 ? ` (${totals[k]})` : ''}`,
-            }))}
-            value={kind}
-            onChange={(v) => { switchKind(v as Kind) }}
-            ariaLabel="记录分类"
-          />
-        )}
-      />
-
-      {stopwordHit && (
-        <div className={css.stopwordHint} role="note">
-          「{keyword.trim()}」是本类目的名称，不是记录内容 —— 已按原样列出全部记录。想筛内容请换一个词（如对方昵称）。
-        </div>
-      )}
-
+      {/* 合并成一个 Toolbar（2026-09-29：原来两个 Toolbar 各占一行 ⇒ 四行稀疏、行间大片空白）。
+          左 = 分类 + 搜索 + 时间筛选，右 = 排序 + 搜索 + 导出；Toolbar 自带 flex-wrap，窄窗自动折行。 */}
       <Toolbar
         left={(
           <>
+            <Segmented
+              options={KINDS.map(k => ({
+                value: k,
+                label: `${KIND_META[k].icon} ${KIND_META[k].label}${totals[k] != null && totals[k] > 0 ? ` (${totals[k]})` : ''}`,
+              }))}
+              value={kind}
+              onChange={(v) => { switchKind(v as Kind) }}
+              ariaLabel="记录分类"
+            />
             <SearchInput value={keyword} onChange={(v) => { setKeyword(v) }} onEnter={() => { void load(true) }} placeholder="搜索会话 / 用户 / ID…" ariaLabel="搜索记录" />
             {TIME_KINDS[kind] && (
               <DateRangeField
@@ -338,6 +329,12 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
           </>
         )}
       />
+
+      {stopwordHit && (
+        <div className={css.stopwordHint} role="note">
+          「{keyword.trim()}」是本类目的名称，不是记录内容 —— 已按原样列出全部记录。想筛内容请换一个词（如对方昵称）。
+        </div>
+      )}
 
       {notice && <div className={css.notice}>{notice}</div>}
 

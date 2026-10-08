@@ -23,7 +23,6 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
-import { readPrivacySettings, writePrivacySettings } from '../src/query/privacy-audit.ts'
 import { alreadyLinked, rankLinkCandidates, SUGGEST_POOL_MAX } from '../src/query/kb/suggest.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 
@@ -202,18 +201,7 @@ afterEach(() => {
 })
 
 describe('② extractKbEntities：出网意愿与进度', () => {
-  it('既开了出站拦截、又没配模型时，说的是拦截（顺序不能反）', async () => {
-    writePrivacySettings(decrypted, { ...readPrivacySettings(decrypted), blockOutbound: true })
-    stub.chatModelOff = true
-    addFile('plan.md', '项目背景与交付节奏说明。'.repeat(6))
-    const r = await gw.extractKbEntities({ kbId })
-    expect(r.ok).toBe(false)
-    expect(r.error ?? '').toContain('拦截')
-    expect(r.error ?? '').not.toContain('未配置')
-    expect(stub.chatCalls.length, '被拦下了还发请求').toBe(0)
-  })
-
-  it('没配语言模型时的说法是「未配置」，且同样一次都不发', async () => {
+  it('没配语言模型时的说法是「未配置」，且一次都不发', async () => {
     stub.chatModelOff = true
     addFile('plan.md', '项目背景与交付节奏说明。'.repeat(6))
     const r = await gw.extractKbEntities({ kbId })
@@ -282,15 +270,6 @@ describe('③ suggestKbLinks：只出建议，不写正文', () => {
     expect(JSON.stringify(gw.getNotes(kbId, { limit: 100 }))).toBe(notesBefore)
     // 建议用的是嵌入通道，不该顺手把正文发给语言模型（那会是第二次出网、另一个功能名）
     expect(stub.chatCalls.length).toBe(0)
-  })
-
-  it('被拦截时一次 embed 都不发，且说的是拦截', async () => {
-    gw.saveNote(kbId, { title: '交付节奏', body: '每周三对齐一次。' })
-    writePrivacySettings(decrypted, { ...readPrivacySettings(decrypted), blockOutbound: true })
-    const r = await gw.suggestKbLinks({ kbId, text: '交付节奏还要不要提前' })
-    expect(r.ok).toBe(false)
-    expect(r.error ?? '').toContain('拦截')
-    expect(stub.embedCalls.length, '被拦下了还发请求').toBe(0)
   })
 
   it('正文太短 / 没配嵌入模型：各自一句实话，不混为一谈', async () => {

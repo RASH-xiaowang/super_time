@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const {
   MAX_ASAR_BYTES, asarSizeViolations, srcEntryViolations, collectDiskEntries,
+  productionDepClosure, depClosureViolations,
 } = require('./package-content-rules.js');
 
 const root = path.resolve(__dirname, '..');
@@ -98,6 +99,21 @@ check(!fs.existsSync(path.join(unpackedWechat, 'llm.json')),
     check(true, 'src/ 下全部条目都在白名单内（N22：通配打包的兜底）', `${diskEntries.length} 条目`);
   }
 }
+// ── 依赖闭包（也是「打包之前」那一半，且**不需要任何产物**）──
+// 为什么单独一条腿：`files` 白名单管得住 `src/**`，管不住「某个生产依赖顺路带进来一个
+// 大块头」。审计 §P2-6 ⑰ 实测 asar 196.65 MB，其中 `onnxruntime-web/dist` 135.15 MB 与
+// `@img/sharp-win32-x64` 18.50 MB 都是 `@huggingface/transformers` 的传递依赖，
+// 而**没有一条正向规则列出过它们** —— 当时只能靠真打包撞见。
+{
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const { names } = productionDepClosure(root, rootPkg);
+  check(names.size > 30, '生产依赖闭包扫得动（防空转：解得只剩几个包就等于没查）', `${names.size} 个包`);
+  const bad = depClosureViolations(names);
+  for (const v of bad.slice(0, 5)) check(false, `依赖闭包违规：${v.name}`, `[${v.rule}] ${v.hint}`);
+  if (bad.length > 5) check(false, `依赖闭包违规还有 ${bad.length - 5} 条未逐条列出`);
+  if (bad.length === 0) check(true, '生产依赖闭包里没有禁用包、必需包也都在', `${names.size} 个包`);
+}
+
 try {
   const { listPackage, getRawHeader } = require('@electron/asar');
   const asarPath = path.join(resourcesDir, 'app.asar');
@@ -169,6 +185,43 @@ try {
     'koffi JS 加载器在 app.asar.unpacked（await import("koffi") 的 ESM 入口）');
   check(fs.existsSync(path.join(unpackedRoot, 'node_modules', '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')),
     'koffi 原生模块在 app.asar.unpacked（排除 deps 树后的回归守卫）');
+
+  // ── laya 的本地推理运行时与分词器（2026-09-28 补）──────────────────────────────
+  // 为什么必须补：这两样是在「语音/向量」之后才进 `files` 的，而本脚本当时对它**一条断言都没有**
+  // ⇒「装进包里没有、能不能从 app.asar.unpacked 真加载」从来没被验过。
+  // 它们同属 koffi 那一类：原生模块只能从**真实文件**加载（asar 内的读补丁对 .node/.dll 不生效）。
+  const ortBin = path.join(unpackedRoot, 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6', 'win32', 'x64');
+  check(fs.existsSync(path.join(ortBin, 'onnxruntime.dll')),
+    'onnxruntime.dll 在 app.asar.unpacked（laya 推理的原生库；asar 内加载不了）');
+  check(fs.existsSync(path.join(ortBin, 'onnxruntime_binding.node')),
+    'onnxruntime_binding.node 在 app.asar.unpacked（同上）');
+  // 平台裁剪：只要 win32/x64。多带一个平台就是几十 MB 白给。
+  for (const dead of ['darwin', 'linux', 'win32/arm64']) {
+    const prefix = `/node_modules/onnxruntime-node/bin/napi-v6/${dead}/`;
+    const hit = entries.filter((f) => f.startsWith(prefix));
+    check(hit.length === 0, `asar 不含 onnxruntime 的 ${dead} 构建`, `${hit.length} 条目`);
+  }
+  // GPU 用的三个 DLL 不参与本用途（CPU 推理），排除后不该以任何形态回到包里。
+  for (const dll of ['DirectML.dll', 'dxcompiler.dll', 'dxil.dll']) {
+    const inEntries = entries.some((f) => f.endsWith(`/onnxruntime-node/bin/napi-v6/win32/x64/${dll}`));
+    const onDisk = fs.existsSync(path.join(ortBin, dll));
+    check(!inEntries && !onDisk, `onnxruntime 的 ${dll} 已排除（CPU 推理用不到）`,
+      `asar=${inEntries} unpacked=${onDisk}`);
+  }
+  // 分词器与它的兄弟包：都必须在 asar 里（纯 JS，不需要解包）。
+  for (const rel of [
+    '/node_modules/@huggingface/tokenizers/package.json',
+    '/node_modules/@huggingface/tokenizers/dist/tokenizers.cjs',
+    '/node_modules/onnxruntime-common/package.json',   // onnxruntime-node 的两个 dist 都无保护 require 它
+  ]) {
+    check(entries.includes(rel), `asar 含 ${rel.slice(1)}`);
+  }
+  // 反向：被换掉的那套（连同它 135 MB + 18.5 MB 的传递依赖）不许再回到包里。
+  for (const gone of ['/node_modules/@huggingface/transformers/', '/node_modules/onnxruntime-web/',
+    '/node_modules/sharp/', '/node_modules/@img/']) {
+    const hit = entries.filter((f) => f.startsWith(gone));
+    check(hit.length === 0, `asar 不含 ${gone.slice(1)}（换掉 transformers 后应彻底消失）`, `${hit.length} 条目`);
+  }
 
   // ── N22（打包之后那一半）：体积上界 + `src/**` 白名单 ──
   // 上面 M19 那三条是黑名单：只验证「已知的冗余不在」，验证不了「不该在的不在」。

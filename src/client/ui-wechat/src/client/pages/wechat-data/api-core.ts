@@ -270,7 +270,7 @@ export interface WechatRemote {
   getWechatConfig(): Promise<RemoteResult<ConfigSnapshot>>
   getPrivacyScan(): Promise<RemoteResult<PrivacySnapshot>>
   getPrivacyState(): Promise<RemoteResult<PrivacyStateSnapshot>>
-  setPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean; blockMapTiles?: boolean }): Promise<RemoteResult<PrivacyStateSnapshot>>
+  setPrivacyState(options: { redactSensitive?: boolean }): Promise<RemoteResult<PrivacyStateSnapshot>>
   getPrivacyAuditRows(): Promise<RemoteResult<PrivacyAuditRow[]>>
   clearPrivacyAudit(): Promise<RemoteResult<PrivacyAuditClearResult>>
   getOperationLog(options?: OperationLogQuery): Promise<RemoteResult<OperationLogSnapshot>>
@@ -374,12 +374,23 @@ export interface WechatRemote {
   /** 文件消息里的图片（聊天记录里的原图）：与 getImageDataUrl 不同，它按文件 md5 定位。 */
   getFileImageDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getEmoticonDataUrl(options: { md5: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  /**
+   * 批量取表情（E1，2026-09-28 性能修复）。
+   * 一屏 N 张从 N 个 RPC 收成 1 个；后端先本地解码、再对剩余的 8 并发出网。
+   * 返回项带 `md5` 回信（入参去重后顺序不再一一对应，调用方按 md5 匹配）。
+   */
+  getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<RemoteResult<{ items: Array<{ md5: string; dataUrl?: string; format?: string; error?: string }> }>>
   getImageOriginal(options: { username?: string; localId?: number }): Promise<RemoteResult<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }>>
   getRemoteImages(options: { urls?: string[] }): Promise<RemoteResult<{ items: RemoteImageItem[] }>>
   getSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string }): Promise<RemoteResult<ImageDataUrlResult>>
   getArticleCover(options: { contentUrl: string }): Promise<RemoteResult<ImageDataUrlResult>>
+  /**
+   * 批量解析文章封面（A1，2026-09-28 性能修复）。
+   * 一屏 N 篇从 N 个 RPC 收成 1 个；后端按 8 并发分批，返回顺序 = 去重后的入参顺序。
+   */
+  getArticleCovers(options: { urls: readonly string[] }): Promise<RemoteResult<{ items: Array<{ url: string; dataUrl?: string; error?: string }> }>>
   getMessageFile(options: { fileName: string; size?: number; createTime?: number }): Promise<RemoteResult<ImageDataUrlResult>>
   getDbStatus(): Promise<RemoteResult<DbStatusSnapshot>>
   getDbHealth(): Promise<RemoteResult<DbHealthSnapshot>>
@@ -497,8 +508,6 @@ export interface WechatRemote {
   transcribeVoiceBatch(options?: { limit?: number }): Promise<RemoteResult<VoiceTranscribeResult>>
   getVoiceTranscript(options: { username: string; localId: number }): Promise<RemoteResult<VoiceTranscriptResult>>
   transcribeVoiceMessage(options: { username: string; localId: number }): Promise<RemoteResult<VoiceTranscribeOneResult>>
-  setCdnImageEnabled(options: { enabled: boolean }): Promise<RemoteResult<SimpleResult>>
-  setCdnImageLocalDecrypt(options: { localDecrypt: boolean }): Promise<RemoteResult<SimpleResult>>
   deleteFavoriteItems(options: { ids: number[] }): Promise<RemoteResult<DeleteFavoriteResult>>
   getAnnualReport(options: { year: number }): Promise<RemoteResult<AnnualReport>>
   getAnnualReview(options: { year: number }): Promise<RemoteResult<AnnualReviewShape>>

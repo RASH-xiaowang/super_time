@@ -149,6 +149,32 @@ export async function queryStorageStats(
   large_files: LargeFile[]
 }> {
   const path = join(decryptedDir, 'message', 'message_resource.db')
+  // 整体签名缓存（F1，2026-09-28 性能修复）：此前只有 `loadFileNamesBySize` 的文件名扫描有缓存，
+  // 而下面三段重查询每次都要跑 —— `GROUP BY type` 全表聚合 + 两个
+  // `JOIN … GROUP BY … ORDER BY SUM(size) LIMIT 50` 排行 + `ORDER BY size DESC LIMIT 100`
+  // 大文件表（后者逐条 `resolveFileTitle` 会开分片库）。实测冷跑 92~106ms 且**冷热同值**
+  // ⇒ 无缓存。签名覆盖三处变更来源：resource 库本身、`msg/file` 目录树（文件名还原）、
+  // contacts 库（`contactMeta` 的昵称）。
+  const sig = [
+    fileSigOf(path),
+    fileNamesSig(wechatBaseDir ? join(wechatBaseDir, 'msg', 'file') : ''),
+  ].join('|')
+  return cachedBySigAsync('storage-stats:' + decryptedDir, sig, () => computeStorageStats(decryptedDir, wechatBaseDir))
+}
+
+/** `queryStorageStats` 的实际计算体（签名缓存包一层；为了装配/测试可直接单测它）。 */
+async function computeStorageStats(
+  decryptedDir: string,
+  wechatBaseDir?: string,
+): Promise<{
+  total_size: number
+  total_count: number
+  categories: StorageCategory[]
+  chats: StorageRank[]
+  senders: StorageRank[]
+  large_files: LargeFile[]
+}> {
+  const path = join(decryptedDir, 'message', 'message_resource.db')
   if (!existsSync(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] }
   const db = new DatabaseSync(path, { readOnly: true })
   try {

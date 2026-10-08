@@ -33,7 +33,7 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
@@ -64,7 +64,7 @@
 
 .indexLetter {
   pointer-events: auto; width: 18px; height: 15px; border: none; background: transparent;
-  color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: var(--nm-r-xs);
+  color: var(--nm-text-2); font-size: var(--nm-fs-xs, 11px); line-height: 1; cursor: pointer; border-radius: var(--nm-r-xs);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   transition: all 0.15s;
@@ -166,7 +166,7 @@
 }
 
 .contactMeta {
-  font-size: 10.5px; color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -227,12 +227,6 @@
 
 .profileActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
-.linkBtn {
-  background: none; border: none; padding: 0; color: var(--nm-cyan); cursor: pointer;
-  font-size: 12px; font-weight: 600; text-align: left; word-break: break-all;
-  transition: all 0.15s;
-}
-.linkBtn:hover { text-decoration: underline; color: var(--nm-purple); text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
 
 .avatarImg {  display: block; object-fit: cover;
   border-radius: var(--nm-r-md);

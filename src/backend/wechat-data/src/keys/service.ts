@@ -7,15 +7,17 @@
  * DSH-owned key store.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { extractXorKeysFromDll } from './dll-key-scan.ts'
 import { recoverDbKeyV4 } from './db-key-v4.ts'
+import { verifyDatabaseKey } from './db-key-verify.ts'
 import { scanImageKeyOnce } from './image-key-memory-scan.ts'
 import { resolveLocalImageKey, scanV2Templates, trustedXorForVerifiedAesKey } from './image-key-resolver.ts'
 import { getAccountKeysFromStore, upsertAccountKeysInStore } from './key-store.ts'
 import type { DbKeyResult, ImageKeyResult } from './types.ts'
 import { detectWechatAccounts } from '../config/detect.ts'
+import { getConfig } from '../config/index.ts'
 import { resolveDecryptedDir } from '../dirs.ts'
 
 /** WeChat main executable names. */
@@ -104,16 +106,84 @@ function pickProbeDb(decrypted: string, explicit?: string): string | null {
 }
 
 /**
+ * 试**已经知道**的密钥是否仍然可用。
+ *
+ * ## 为什么必须有这一步（2026-09-29 真机实测）
+ *
+ * `fetchDbKey` 原先**无条件**走 33 秒的进程内存扫描。而密钥经常根本没变 ——
+ * 本机实测：`all_keys.json` 里 10 个库写着同一把 `valid: true` 的密钥、实时同步正用它解库，
+ * 点一次「一键获取数据库密钥」却仍然扫 33 秒，并且**可能失败**：界面回一句
+ * `✗ 候选密钥均未通过 SQLCipher 校验`，用户会以为密钥坏了，而同一时刻
+ * `[wechat-sync] updated: … full(…)` 正在刷 —— 同步其实一切正常。
+ *
+ * `fetchImageKey` 早就有这类"先用已经知道的"快路径（kvcomm 缓存优先于内存扫描），
+ * 数据库密钥这一侧此前缺了这一步。
+ *
+ * ## 候选来源与顺序
+ *
+ * ① 配置里的 `db_enc_key`（用户显式填过/存过的那把）→ ② 密钥库（自动获取成功时写进去的那把）
+ * → ③ `all_keys.json` 里逐库的密钥。逐个拿去**真校验页 1**，第一个通过的即返回 ——
+ * 顺序只影响 `source` 的措辞，不影响正确性。
+ * @param probe - 用于校验的加密库路径。
+ * @param decrypted - 解密库根（`all_keys.json` 在它的上一级）。
+ * @returns 命中的密钥与来源；都不过校验时返回 null（调用方继续走内存扫描）。
+ */
+function findSavedDbKey (probe: string, decrypted: string): { key: string; source: string } | null {
+  const candidates: Array<{ key: string; source: string }> = []
+  try {
+    const cfgKey = getConfig(decrypted)['db_enc_key']
+    if (typeof cfgKey === 'string' && cfgKey.length > 0) candidates.push({ key: cfgKey, source: 'saved_config' })
+  } catch { /* 配置读不到就换下一个来源 */ }
+  try {
+    const stored = getAccountKeysFromStore('default') as { db_key?: unknown } | null
+    if (typeof stored?.db_key === 'string' && stored.db_key.length > 0) {
+      candidates.push({ key: stored.db_key, source: 'saved_store' })
+    }
+  } catch { /* 同上 */ }
+  try {
+    const raw = JSON.parse(readFileSync(join(decrypted, '..', 'all_keys.json'), 'utf8')) as Record<string, unknown>
+    for (const [rel, v] of Object.entries(raw)) {
+      if (rel.startsWith('_')) continue // `_key_format` / `_db_dir` 之类的元数据
+      const k = (v as { key?: unknown } | null)?.key
+      if (typeof k === 'string' && k.length > 0) candidates.push({ key: k, source: 'saved_all_keys' })
+    }
+  } catch { /* 没有这个文件是正常状态（还没生成过密钥映射） */ }
+
+  const seen = new Set<string>()
+  for (const c of candidates) {
+    const hex = c.key.trim().toLowerCase()
+    if (hex.length !== 64 || seen.has(hex)) continue
+    seen.add(hex)
+    if (verifyDatabaseKey(probe, hex).valid) return { key: hex, source: c.source }
+  }
+  return null
+}
+
+/**
  * Recover the V4 database key for the running WeChat process.
+ *
+ * 顺序很重要：**先试已经知道的密钥，再扫内存**（见 `findSavedDbKey` 的注释）。
+ * 这也顺带修好了"微信没开时无法确认密钥"的老形状 —— 只要已存的密钥能通过页 1 校验，
+ * 微信开没开都不影响这一步。
  * @param opts - optional db probe path and install dir.
  * @returns the recovered key result.
  */
 export async function fetchDbKey(opts: { dbPath?: string; wechatInstallDir?: string } = {}): Promise<DbKeyResult> {
+  const decrypted = resolveDecryptedDir()
+  const probe = pickProbeDb(decrypted, opts.dbPath)
+  if (probe === null) return { ok: false, error: '找不到可用于校验的 V4 加密数据库' }
+
+  const saved = findSavedDbKey(probe, decrypted)
+  if (saved !== null) {
+    upsertAccountKeysInStore('default', {
+      db_key: saved.key,
+      db_key_source_db_storage_path: dirname(probe),
+    })
+    return { ok: true, key: saved.key, source: saved.source }
+  }
+
   const pid = findWechatPid()
   if (pid === null) return { ok: false, error: '未检测到运行中的微信进程（Weixin.exe/WeChat.exe）' }
-
-  const probe = pickProbeDb(resolveDecryptedDir(), opts.dbPath)
-  if (probe === null) return { ok: false, error: '找不到可用于校验的 V4 加密数据库' }
 
   const internal = scanDllInternalKey(opts.wechatInstallDir)
   const result = await recoverDbKeyV4(pid, probe, internal)

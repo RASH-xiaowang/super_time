@@ -22,7 +22,7 @@ const settings = read('./Settings.tsx')
 const api = read('../api-config.ts')
 
 describe('升级为原图 · 客户端接线', () => {
-  const fn = sliceBetween(state, 'const upgradeImgs = ', '\n  const toggleCdn', 'upgradeImgs 回调体')
+  const fn = sliceBetween(state, 'const upgradeImgs = ', '\n  const keyOk', 'upgradeImgs 回调体')
 
   it('① 回调走后端升级入口，并把详情弹窗标题改成升级', () => {
     expect(fn.includes('apiUpgradeDecodedImages('), '必须调后端升级入口').toBe(true)

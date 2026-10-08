@@ -4,6 +4,13 @@ export interface MomentMedia {
     url: string;
     key: string;
     md5: string;
+    /**
+     * 媒体标签上的 `token`（`<url token="…">`）。
+     *
+     * 为什么必须带着：2026-10-08 真机实测，CDN 地址只有 `?token=…` 仍是 400，
+     * **必须 `?token=…&idx=1`** 且尺寸段为 `/0`、协议为 https 才返回 200（见 `sns-cdn-url.ts`）。
+     */
+    token?: string;
     /** Media <id> (cache-key input, together with timelineId). */
     id?: string;
     /** Timeline <id> (SnsDataItem/TimelineObject id). */

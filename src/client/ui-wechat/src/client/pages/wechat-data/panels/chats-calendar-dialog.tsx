@@ -12,6 +12,7 @@
  *    差一位，换算在 `deriveCalendar` 里做，这里只按它铺格子）。
  */
 import kitCss from '../ui/kit.module.css'
+import { LoadingState } from '../ui/kit.tsx'
 import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { DailyCounts } from './chats-calendar.ts'
 import csscards from './chats-cards.module.css'
@@ -57,7 +58,7 @@ export function ChatsCalendarDialog(props: ChatsCalendarDialogProps): React.JSX.
             <button type="button" className={csscards.loadMore} onClick={() => { void switchCalMonth(1) }} aria-label="下一月">›</button>
           </div>
           {calLoading ? (
-            <div className={kitCss.emptyInline}>加载中…</div>
+            <LoadingState variant="compact" label="加载中…" />
           ) : (
             <>
               <div className={csscards.calStats}>

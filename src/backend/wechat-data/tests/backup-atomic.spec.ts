@@ -57,14 +57,19 @@ function backupsDir(dec: string): string {
 }
 
 describe('createBackup：部分失败必须上报并清理', () => {
-  it('子目录复制失败 → 抛错（含失败目录名），且不留半成品备份', () => {
+  // 2026-09-28：`createBackup` 改 async（逐子目录 `cpSync` 要让出，实测独占 206ms）。
+  // 失败形态随之从"同步抛出"变成"rejected promise"——因此断言必须用 `rejects`，
+  // 否则 `try { createBackup(dec) } catch` 抓不到（那条会恒真地"通过"，反而掩盖回归）。
+  it('子目录复制失败 → 抛错（含失败目录名），且不留半成品备份', async () => {
     const dec = makeRoot(true)
     let err: unknown = null
     try {
-      createBackup(dec)
+      await createBackup(dec)
     } catch (e) {
       err = e
     }
+    // 用 try/catch 而不是 `rejects.toThrow`：下面还要**逐项**检查错误文案里
+    // 是否带上了失败目录名（`boom`）——只匹配 /备份不完整/ 会丢掉那半边判据。
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).message).toContain('备份不完整')
     expect((err as Error).message).toContain('boom')
@@ -76,9 +81,9 @@ describe('createBackup：部分失败必须上报并清理', () => {
     expect(readdirSync(backupsDir(dec)).some(n => n.startsWith('wechat_backup_'))).toBe(false)
   })
 
-  it('全部成功时按最终名字落地，不留临时目录', () => {
+  it('全部成功时按最终名字落地，不留临时目录', async () => {
     const dec = makeRoot(false)
-    const entry = createBackup(dec)
+    const entry = await createBackup(dec)
     expect(entry.kind).toBe('dir')
     expect(existsSync(join(entry.path, 'session', 'session.db'))).toBe(true)
     expect(existsSync(join(entry.path, 'message', 'message_0.db'))).toBe(true)

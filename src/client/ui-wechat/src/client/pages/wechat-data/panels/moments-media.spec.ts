@@ -30,7 +30,7 @@ import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 const mocks = vi.hoisted(() => ({
   apiGetSnsImageDataUrl: vi.fn(),
   apiGetSnsVideoCoverDataUrl: vi.fn(),
-  apiGetArticleCover: vi.fn(),
+  apiGetArticleCovers: vi.fn(),
   snsMediaCacheGet: vi.fn(),
   snsMediaCacheGetMany: vi.fn(),
   snsMediaCacheSet: vi.fn(),
@@ -70,7 +70,10 @@ beforeEach(() => {
   mocks.snsMediaCacheSet.mockResolvedValue(undefined)
   mocks.apiGetSnsImageDataUrl.mockImplementation(async ({ md5 }: { md5: string }) => ({ url: md5 ? 'data:' + md5 : '' }))
   mocks.apiGetSnsVideoCoverDataUrl.mockImplementation(async ({ md5 }: { md5: string }) => ({ url: md5 ? 'data:' + md5 : '' }))
-  mocks.apiGetArticleCover.mockResolvedValue({ url: '' })
+  // 批量封面：默认「全部失败」（逐条 error），与改前的 `{ url: '' }` 等价；需要命中的用例再 mockResolvedValueOnce。
+  mocks.apiGetArticleCovers.mockImplementation(async ({ urls }: { urls: readonly string[] }) => ({
+    items: urls.map((url) => ({ url, error: 'no cover' })),
+  }))
 })
 
 describe('键规则：DOM 契约只能有一份实现', () => {
@@ -243,14 +246,37 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
 
   it('封面兜底：只有文章且本机没有时才抓，且抓过就记进 state', async () => {
     const a = mk({ tid: 'a', contentType: 3, link_url: 'https://x/1' })
-    mocks.apiGetArticleCover.mockResolvedValueOnce({ url: 'data:cover1' })
+    mocks.apiGetArticleCovers.mockResolvedValueOnce({ items: [{ url: 'https://x/1', dataUrl: 'data:cover1' }] })
     render({ moments: [a] })
     await flush()
-    expect(mocks.apiGetArticleCover).toHaveBeenCalledTimes(1)
-    expect(mocks.apiGetArticleCover).toHaveBeenCalledWith({ contentUrl: 'https://x/1' })
+    expect(mocks.apiGetArticleCovers).toHaveBeenCalledTimes(1)
+    expect(mocks.apiGetArticleCovers).toHaveBeenCalledWith({ urls: ['https://x/1'] })
     render({ moments: [a] })
     await flush()
-    expect(mocks.apiGetArticleCover, '同一篇文章被抓了两次').toHaveBeenCalledTimes(1)
+    expect(mocks.apiGetArticleCovers, '同一篇文章被抓了两次').toHaveBeenCalledTimes(1)
+  })
+
+  it('A1：一屏多篇文章只发**一个**批量 RPC（改前是每篇一个 RPC）', async () => {
+    const arts = ['https://x/1', 'https://x/2', 'https://x/3'].map((u, i) =>
+      mk({ tid: 'a' + String(i), contentType: 3, link_url: u }))
+    mocks.apiGetArticleCovers.mockImplementation(async ({ urls }: { urls: readonly string[] }) => ({
+      items: urls.map((url) => ({ url, dataUrl: 'data:' + url })),
+    }))
+    render({ moments: arts })
+    await flush()
+    expect(mocks.apiGetArticleCovers, '一屏 3 篇必须合成 1 个 RPC').toHaveBeenCalledTimes(1)
+    expect(mocks.apiGetArticleCovers.mock.calls[0]?.[0]).toEqual({ urls: ['https://x/1', 'https://x/2', 'https://x/3'] })
+  })
+
+  it('A2：超过一批（8 条）时分批发出，不会一次全打出去', async () => {
+    const arts = Array.from({ length: 10 }, (_, i) => mk({ tid: 'b' + String(i), contentType: 3, link_url: 'https://y/' + String(i) }))
+    mocks.apiGetArticleCovers.mockImplementation(async ({ urls }: { urls: readonly string[] }) => ({
+      items: urls.map((url) => ({ url, dataUrl: 'data:' + url })),
+    }))
+    render({ moments: arts })
+    await flush()
+    const sizes = mocks.apiGetArticleCovers.mock.calls.map((c) => (c[0] as { urls: readonly string[] }).urls.length)
+    expect(sizes, '10 篇应当 8 + 2 两批，而不是一次 10').toEqual([8, 2])
   })
 
   it('灯箱缺图按需解析只发生一次', async () => {

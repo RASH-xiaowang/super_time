@@ -319,7 +319,7 @@ describe('头像 / 360° / 总览的读路径不留句柄', () => {
 
   it('resolveAvatarsLocal：批量那两路（head_image + contact）同样不漏', () => {
     const { root, dec } = allTablesMissing('avatar-batch')
-    expect(resolveAvatarsLocal(dec, ['wxid_a', 'wxid_b'], { allowRemote: true })).toEqual({})
+    expect(resolveAvatarsLocal(dec, ['wxid_a', 'wxid_b'], {})).toEqual({})
     expect(leakedFiles(root)).toEqual([])
   })
 
@@ -339,9 +339,11 @@ describe('头像 / 360° / 总览的读路径不留句柄', () => {
    * 表不在时它如实抛错（P1-1 的读失败契约：降级成空数据才是错的做法）。
    * 所以要钉的是"抛错这条路上也不留句柄"—— 那才是 countRows 这类降级分支的真实形状。
    */
-  it('queryOverview：坏库上如实抛错，但一棵树仍然都可删', () => {
+  it('queryOverview：坏库上如实抛错，但一棵树仍然都可删', async () => {
     const { root, dec } = allTablesMissing('overview')
-    expect(() => { queryOverview(dec) }).toThrow()
+    // 2026-09-28：`queryOverview` 改 async 之后失败形态是 **rejected promise** ——
+    // `expect(() => fn()).toThrow()` 抓不到它（那条会恒真地"通过"，反而掩盖回归）。
+    await expect(queryOverview(dec)).rejects.toThrow()
     expect(leakedFiles(root)).toEqual([])
   })
 })
@@ -521,9 +523,10 @@ describe('洞察 / 提醒 / 媒体 / 撤回 / 检索的读路径不留句柄（�
     expect(leakedFiles(root)).toEqual([])
   })
 
-  it('queryOfficialAssets：session/contact 两路都探空 ⇒ rows 为空且一棵树都可删', () => {
+  // 2026-09-28：`queryOfficialAssets` 改 async（逐张消息分片数条数要让出）⇒ 跟着 await。
+  it('queryOfficialAssets：session/contact 两路都探空 ⇒ rows 为空且一棵树都可删', async () => {
     const { root, dec } = junkRoot('official-junk')
-    const snap = queryOfficialAssets(dec)
+    const snap = await queryOfficialAssets(dec)
     expect(snap.rows).toEqual([])
     expect(snap.total).toBe(0)
     expect(leakedFiles(root)).toEqual([])
@@ -535,9 +538,10 @@ describe('洞察 / 提醒 / 媒体 / 撤回 / 检索的读路径不留句柄（�
     expect(leakedFiles(root)).toEqual([])
   })
 
-  it('queryMomentsInsights：SnsTimeLine 表不在 ⇒ 交出空洞察（早退那条也不留句柄）', () => {
+  it('queryMomentsInsights：SnsTimeLine 表不在 ⇒ 交出空洞察（早退那条也不留句柄）', async () => {
     const { root, dec } = junkRoot('moments-junk')
-    const snap = queryMomentsInsights(dec)
+    // 2026-09-28：`queryMomentsInsights` 改 async（游标让出需要），这里跟着 await。
+    const snap = await queryMomentsInsights(dec)
     expect(snap.posts).toBe(0)
     // topItems 在类型上是可选的（noUncheckedIndexedAccess 会拦 `!.rows`）：
     // 缺字段时按 -1 处理，免得「根本没算出来」被当成「算出来是 0」放过去。

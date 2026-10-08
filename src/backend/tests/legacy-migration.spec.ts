@@ -47,8 +47,6 @@ function legacyConfig() {
       api_token: API_TOKEN,
       api_enabled: true,
       api_port: 5033,
-      cdn_enabled: false,
-      cdn_local_decrypt: true,
       whisper_device: 'cuda',
       whisper_model: 'large-v3',
       whisper_models_dir: 'D:\\old-machine\\whisper',

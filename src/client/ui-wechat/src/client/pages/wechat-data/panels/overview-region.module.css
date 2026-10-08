@@ -34,6 +34,16 @@
   min-height: 0;
   overflow: hidden;
 }
+/* R4：rows 为空时的占位（此前是空 div，整块塌成 0 高度，像渲染失败）。 */
+.regionEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  color: var(--nm-text-3);
+  font-size: var(--nm-empty-fs);
+  padding: var(--nm-s-3) 0;
+}
 .regionRow {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;
@@ -43,7 +53,7 @@
   font-size: 11px;
   line-height: 1.15;
 }
-.regionRankNo { color: var(--nm-cyan); font-weight: 800; font-family: var(--nm-font-mono, monospace); font-size: 10px; }
+.regionRankNo { color: var(--nm-cyan); font-weight: 800; font-family: var(--nm-font-mono, monospace); font-size: var(--nm-fs-xs, 11px); }
 .regionName { color: var(--nm-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .regionCount { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 .regionBar {

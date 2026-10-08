@@ -19,14 +19,14 @@
  * 退出码：0 = 通过或跳过；1 = 有断言不成立；2 = 前置缺失。
  */
 import { join } from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { _electron } from 'playwright'
+import { seedRealProfile } from './real-profile.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const OUT = join(ROOT, '.tmp-e2e')
-const DATA = join(process.env.APPDATA ?? '', 'super-time-electron', 'wechat-data')
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
 
 if (!existsSync(EXE)) {
@@ -36,20 +36,15 @@ if (!existsSync(EXE)) {
 mkdirSync(OUT, { recursive: true })
 
 /**
- * 单独起一个 profile：用户的正式实例此刻可能正开着（单实例锁按 userData 区分），
- * 而 state 里的 config.json 显式写明 dataRoot/decryptedDir 指向真实解密库，
- * 这样既不打扰用户实例，又能读到真实数据。不写 db_dir/密钥 → 不会触发重新解密。
+ * 单独起一个 profile：用户的正式实例此刻可能正开着（单实例锁按 userData 区分）。
+ * 配置从**真实 profile** 带过来（含 llm.json），数据根问应用自己写在
+ * `resolved.dataRoot` 里的那个 —— 见 `real-profile.mjs` 的注释（"量的是同一个盘子"）。
  */
 const userData = mkdtempSync(join(tmpdir(), 'st-ova-'))
-mkdirSync(join(userData, 'wechat'), { recursive: true })
-writeFileSync(join(userData, 'wechat', 'config.json'), JSON.stringify({
-  dataRoot: DATA,
-  decryptedDir: join(DATA, 'decrypted'),
-  decodedImagesDir: join(DATA, 'decoded_images'),
-  sourceDir: '', baseDir: '', selfWxid: '', silkBinary: '', resolved: {},
-  wechatSettings: { api_enabled: true, api_port: 5032, cdn_enabled: true, cdn_local_decrypt: false },
-  wechatSettingsMeta: { savedAt: new Date().toISOString(), source: 'overview-audit' },
-}, null, 2) + '\n')
+const seeded = seedRealProfile(userData)
+const DATA = seeded.dataRoot
+console.log(`真实 profile：${seeded.source}（带入 ${seeded.copied.join('、') || '（无额外配置）'}）`)
+console.log(`真实数据根：${DATA}`)
 
 let app = null
 const fails = []

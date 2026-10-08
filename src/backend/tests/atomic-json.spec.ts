@@ -403,7 +403,7 @@ describe('M1 复审后的边界：不固化默认值、不静默清空、损坏�
 
     const res = saveConfig(decrypted, {
       db_dir: '', db_enc_key: '', image_aes_key: '', image_xor_key: 136, api_enabled: true,
-      api_token: '', api_port: 5032, cdn_enabled: true, cdn_local_decrypt: true,
+      api_token: '', api_port: 5032,
       whisper_device: 'cpu', whisper_model: 'medium', whisper_threads: 0, whisper_models_dir: '',
     })
     expect(res.ok).toBe(true)

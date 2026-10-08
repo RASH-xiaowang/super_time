@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBuildSearchIndex, apiGetDbHealth, apiGetDbStatus, readRenderCache, writeRenderCache } from '../api.ts'
 import type { DbHealthSnapshot, DbStatusSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './health.module.css'
 import { fmtBytes } from '../utils/format.ts'
@@ -13,12 +13,10 @@ import { useTransientNotice } from './hooks.tsx'
 
 /**
  * Render the data health panel.
- * @param props - optional tab navigation callback for quick jumps;
- *   `embedded`：作为「设置」弹窗里的一节渲染（不自建 height:100% 与内边距）。
+ * @param props - `embedded`：作为「设置」弹窗里的一节渲染（不自建 height:100% 与内边距）。
  * @returns the health element tree.
  */
-export function HealthPanel({ onNavigate, embedded = false }: {
-  onNavigate?: (tab: string) => void
+export function HealthPanel({ embedded = false }: {
   embedded?: boolean
 } = {}): React.JSX.Element {
   const [snap, setSnap] = useState<DbHealthSnapshot | null>(() => readRenderCache<{ snap: DbHealthSnapshot | null; status: DbStatusSnapshot | null }>('health')?.snap ?? null)
@@ -83,7 +81,7 @@ export function HealthPanel({ onNavigate, embedded = false }: {
 
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !snap && <div className={kitCss.emptyInline}>检查中…</div>}
+      {loading && !snap && <LoadingState variant="compact" label="检查中…" />}
       {!loading && !snap && !error && <div className={kitCss.emptyInline}>点击「重新检查」生成数据健康报告</div>}
 
       {snap && (
@@ -97,15 +95,9 @@ export function HealthPanel({ onNavigate, embedded = false }: {
             <StatCard icon="🧮" value={fmtBytes(snap.decodedImagesBytes)} label="缓存大小" />
           </StatGrid>
 
-          {onNavigate && (
-            <Card title="快捷入口">
-              <div className={css.actions}>
-                <Button variant="outline" size="sm" onClick={() => { onNavigate('settings') }}>前往系统设置</Button>
-                <Button variant="outline" size="sm" onClick={() => { onNavigate('privacytrust') }}>数据边界与出网</Button>
-                <Button variant="outline" size="sm" onClick={() => { onNavigate('files') }}>文件资产</Button>
-              </div>
-            </Card>
-          )}
+          {/* 2026-09-30 删掉「快捷入口」卡片：三个按钮全是**重复导航**
+              （侧栏已有「文件与存储」「数据边界与出网」），其中「前往系统设置」更是
+              在设置弹窗里点它回到设置 —— 用户要求精简时就该先删这种。 */}
 
           <div className={kitCss.cardGrid}>
             <Card title="插件存储文件">

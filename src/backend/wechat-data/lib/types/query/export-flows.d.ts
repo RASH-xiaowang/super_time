@@ -123,11 +123,11 @@ export declare function topOf(arr: unknown, limit?: number): Array<{
  * @param filename - optional file name (without extension).
  * @returns written file path + filename + message count.
  */
-export declare function exportAnnualReport(decryptedDir: string, year: number, format: string, dir?: string, filename?: string): {
+export declare function exportAnnualReport(decryptedDir: string, year: number, format: string, dir?: string, filename?: string): Promise<{
     path: string;
     filename: string;
     count: number;
-};
+}>;
 /**
  * Export moments (朋友圈) as txt / html / json / csv with optional
  * author + time-range filters.

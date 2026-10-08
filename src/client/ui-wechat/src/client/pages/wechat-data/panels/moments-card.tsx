@@ -17,7 +17,7 @@ import { clickableKey } from '../ui/kit.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar } from './moments-support.tsx'
-import { proxyableSrc } from '../utils/url.ts'
+import { proxyableSrc, proxyableSrcAllowHttp } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
@@ -31,6 +31,8 @@ export interface MomentsCardProps {
   m: MomentItem
   privacy: boolean
   snsImgs: Record<string, string>
+  /** 取图失败的原因（key → 后端原因）；缺省时退回原来的固定文案。 */
+  snsErrs?: Record<string, string>
   articleCovers: Record<string, string>
   expandedTextByCard: Set<string>
   expandedSocialByCard: Set<string>
@@ -59,8 +61,34 @@ export interface MomentsCardProps {
   closeVideo: (vk: string) => void
 }
 
+/**
+ * 「这一格没有可显示的图」的占位。
+ *
+ * 为什么单独做：微信库里存的媒体地址**大量是 `http://`**（实测朋友圈 1,125 张里 1,104 张），
+ * 而代理只取 https（按设计丢弃 http），这时 `src` 会是空串；若本机也没解出这张图，
+ * RemoteImg 就停在 `empty` 并返回 null ⇒ 用户看到一个**没有任何文字的空框**，无从判断。
+ * 这里把原因写出来。定义在组件外，避免卡片函数变长（函数行数棘轮只许变小）。
+ *
+ * 2026-10-08 用户选定 **C：两条都试** —— `src` 先给本机解密结果（`dataSrc`，命中即显示、不需联网），没有才试 CDN（http 已放行，4 秒超时）；`fallbackSrc` 仍是本机解密结果。
+ * 为什么不接 `token`：已实测 9 种用法（原样 / `?token` / `?token&key` / thumb / https / 匿名参数 / 路径段 / Referer+UA / Cookie）**全部 HTTP 400**（用**最新**动态测的），接上不改变结果。因此当地址是 http（代理按设计只取 https）或代理取不到时，这一格会显示上面的说明，而**不会**用本机解密结果顶替。
+ */
+function MomentNoSource({ hint, detail }: { hint: string; detail?: string }): React.JSX.Element {
+  return (
+    <div className={css.imgFallback}>
+      <div className={css.imgFallbackContent}>
+        <span className={css.imgFallbackIcon}>🖼</span>
+        <span className={css.imgFallbackText}>本机没有这张图</span>
+        <span className={css.imgFallbackHint} title={detail}>
+          {hint}
+          {detail ? '（' + detail + '）' : ''}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function MomentsCard({
-  m, privacy, snsImgs,
+  m, privacy, snsImgs, snsErrs,
   articleCovers, expandedTextByCard, expandedSocialByCard,
   commentCounts, commentSortByCard, onlyMineComments,
   selfUsername,
@@ -104,7 +132,7 @@ export function MomentsCard({
               const key = imgKey(im)
               const dataSrc = key ? snsImgs[key] : undefined
               const fk = m.tid + ':' + String(ii)
-              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img' })
+              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img', url: im.url, token: im.token, seed: im.key })
               return (
                 <div key={fk}
                   className={css.imgWrap}
@@ -115,11 +143,11 @@ export function MomentsCard({
                   data-sns-tid={im.timelineId || undefined}
                   data-sns-mid={im.id || undefined}
                 >
-                  {/* 本机解码结果优先；没有才把 CDN 地址交给后端代理（M23）。
-                      「加载中」与「加载失败」仍然分开画 —— .imgWrap 是固定尺寸的格子，
-                      塌成空白会让人以为这条动态没有图。 */}
+                  {/* 本机解码优先、CDN 兜底：实测朋友圈的 CDN 地址两个协议都 400（8/8 样本，已失效），
+                      故本机解码（含后台预热）才是正路；`fallbackSrc` 保证 CDN 失败也不塌成空格子。 */}
                   <RemoteImg
-                    src={dataSrc || proxyableSrc(im.thumb, im.url)}
+                    src={dataSrc || proxyableSrcAllowHttp(im.thumb, im.url) || ''}
+                    fallbackSrc={dataSrc} empty={<MomentNoSource hint={(key && snsErrs?.[key]) || '本机缓存没有这张图，CDN 也取不到'} detail={key ? ('md5=' + (im.md5 || '无') + ' id=' + String(im.id ?? '无')) : '这条媒体没有 md5/id，无法定位'} />}
                     alt=""
                     loading="lazy"
                     decoding="async"
@@ -130,7 +158,7 @@ export function MomentsCard({
                         <div className={css.imgFallbackContent}>
                           <span className={css.imgFallbackIcon}>🖼</span>
                           <span className={css.imgFallbackText}>图片加载失败</span>
-                          <span className={css.imgFallbackHint}>本地缓存未找到</span>
+                          <span className={css.imgFallbackHint}>{(key && snsErrs?.[key]) || '本地缓存未找到'}</span>
                         </div>
                       </div>
                     )}

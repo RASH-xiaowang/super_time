@@ -26,9 +26,16 @@ export declare function decryptWalPatch(walPath: string, outPath: string, encKey
  * triggers a clean full decrypt instead. */
 export declare function walFramesPatchable(walPath: string): Promise<boolean>;
 /** Per-shard state: raw mtimes of the main db and its wal. */
+/**
+ * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
+ * 缓存侧早已是 `mtimeNs + size`（`meta.ts` 的 `fileSig`，见 docs/CACHE-INVALIDATION.md 通道①），
+ * 而这里一直只比 `mtimeMs` —— 同毫秒内的写入它**看不见**，`mode` 会误判成 `wal`，
+ * 于是那个分片的改动要等下一次变得更多才会被同步到。
+ * 现在改成纳秒 + 大小（NTFS 100ns 精度，实测 `statSync(...,{bigint:true})` 与普通 stat 开销无差别）。
+ */
 interface ShardSig {
-    main: number;
-    wal: number;
+    main: string;
+    wal: string;
 }
 /**
  * 「这页解对了没有」的判据 —— 只看 SQLite 页 1 头部里**不能被合成**的字段。
@@ -68,6 +75,15 @@ export declare function looksDecrypted(dbPath: string): boolean;
  * @param target - 目标快照文件。
  */
 export declare function atomicReplace(temp: string, target: string): Promise<void>;
+/**
+ * 只清空 full-decrypt 冷却（测试用）。
+ *
+ * 为什么要与上面的退避分开：`syncPlainDatabase` 这类路径上"没有重试"可能来自**两个**原因
+ * （退避，或 6 秒的 full-decrypt 冷却）。测试要能**分别**把这两个原因钉住 ——
+ * 只清冷却、保留退避，若仍然没有重试，那就是退避在起作用（见
+ * `tests/sync-failure-backoff.spec.ts` 的集成用例）。
+ */
+export declare function forgetFullDecryptCooldown(): void;
 /**
  * 64-hex raw key for a shard (all_keys.json per-file first, then config).
  * @param decryptedDir - decrypted data root (all_keys.json sits beside it).

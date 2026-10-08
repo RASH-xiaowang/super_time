@@ -31,7 +31,6 @@ import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts';
 import type { IntentKind, RerankWeights } from './query/retrieval/types.ts';
 import { type SummaryScheduler } from './gateway-scheduler.ts';
 import { ResolvedDirs, StreamJob } from './gateway-support.ts';
-import type { PrivacyGateResult } from './gateway-privacy.ts';
 import type { EmbedFeature } from './gateway-llm-factory.ts';
 /** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export declare abstract class GatewayCore extends TypertRemoteService {
@@ -145,32 +144,26 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * Append one operation-log row. Metadata only — never message bodies or
      * image/file contents — so an export stays safe to share. Best-effort: a
      * logging failure never affects the operation it records.
+     *
+     * @param durationMs - 本次操作耗时（H2）。**不传就是不记**（`undefined`），
+     *   与传 `0` 是两回事：`0` 会被 `storedDuration` 当成「不到阈值」丢掉，
+     *   而「没量过」与「量出来很快」在审计表里都落 NULL。绝大多数 `op()` 调用点
+     *   记录的是「开始做某件事」而不是「做完」，本来就没有耗时可言 —— 不要为了
+     *   填满这一列去给每个调用点掐表。
      */
-    protected op(category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string): void;
-    /**
-   * 「出站拦截」当前是否开启 —— 判断本身在 `gateway-privacy.ts#outboundBlockedAt`
-   * （#20 第一个协作者：安全判断从 986 行的装配类里搬出去，才谈得上被单独测）。
-   * @returns 是否禁止出站；读不到设置时按「禁止」处理。
-   */
-    protected outboundBlocked(): boolean;
-    /**
-     * 「出站拦截」已开启时返回给用户看的说明，否则 null。
-     * @param feature - 功能名，出现在提示文案里。
-     * @param detail - 这条出网在做什么。
-     * @returns 被拦截时的文案，未拦截时 null。
-     */
-    protected privacyBlocked(feature: string, detail?: string): string | null;
+    protected op(category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string, durationMs?: number): void;
     /**
      * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（实现见 `gateway-privacy.ts`）。
+     * 它只做脱敏与审计 —— 2026-09-30 起不再有任何拦截逻辑。
      * @param feature - 审计里的功能名。
      * @param stats - 本次出站涉及的数据量（会话数、消息数）。
      * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
-     * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
+     * @returns 可以直接发出去的文本。
      */
     protected privacyGate(feature: string, stats: {
         sessions: number;
         messages: number;
-    }, texts: string[]): PrivacyGateResult;
+    }, texts: string[]): string[];
     /**
        * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
        *
@@ -232,18 +225,6 @@ export declare abstract class GatewayCore extends TypertRemoteService {
    * @returns 桥、宿主上下文与两个前置协作者的入口。
    */
     private llmFactoryDeps;
-    /**
-       * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
-       *
-       * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
-       * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
-       * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
-       * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
-       */
-    protected cdnSwitches(): {
-        cdnEnabled: boolean;
-        localDecrypt: boolean;
-    };
     /**
      * 装配槽：同一个域的处理器**只装配一次**（`WechatDataGateway` 的壳每次调用都转发到同一份对象，
      * 那份"壳转给的就是这件"的判据见 `gateway-read-shell.spec.ts` 里的 spy 用例）。

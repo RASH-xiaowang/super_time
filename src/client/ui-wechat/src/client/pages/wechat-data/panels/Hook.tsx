@@ -2,9 +2,10 @@
  * 原图能力自检面板 — 图片链路本地化说明与自检（密钥/数据库路径/解密能力），
  * 高清原图获取走本地缓存与解码，不依赖任何原生注入或桥接。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { LazyMount, ListSkeleton } from './hooks.tsx'
-import { apiGetDbHealth, apiGetStorageStats, apiGetWechatConfig, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiGetDbHealth, apiGetStorageStats, apiGetWechatConfig } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { ConfigSnapshot, DbHealthSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
@@ -21,21 +22,21 @@ export function HookPanel({ onNavigate, embedded = false }: {
   onNavigate?: (tab: string) => void
   embedded?: boolean
 } = {}): React.JSX.Element {
-  const [cfg, setCfg] = useState<ConfigSnapshot | null>(() => readRenderCache<ConfigSnapshot>('hook-config'))
+  /* 2026-10-03 推广批次 3：cfg 改用共用 useFreshData —— 打开即查最新（不再预填缓存），
+     成功写回缓存；失败才回退缓存并由 hook 在 error 里标注「以下为本地缓存（可能不是最新）」。 */
+  const fetchCfg = useCallback(() => apiGetWechatConfig(), [])
+  const { data: cfg, loading: cfgLoading, error: cfgError } = useFreshData<ConfigSnapshot>('hook-config', fetchCfg)
   const [health, setHealth] = useState<DbHealthSnapshot | null>(null)
   const [storage, setStorage] = useState<StorageSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [statsVisible, setStatsVisible] = useState(false)
 
+  // hook 负责取数与缓存；页面自己的 loading/error 仍由本面板掌握（下面这条只做对齐）。
   useEffect(() => {
-    const cached = readRenderCache<ConfigSnapshot>('hook-config')
-    if (cached) setCfg(cached)
-    apiGetWechatConfig()
-      .then((c) => { setCfg(c); writeRenderCache('hook-config', c) })
-      .catch((e: unknown) => { setError((e as Error).message) })
-      .finally(() => { setLoading(false) })
-  }, [])
+    if (!cfgLoading) setLoading(false)
+    if (cfgError !== null) setError(cfgError)
+  }, [cfgLoading, cfgError])
 
   // 健康/存储统计较重：滚动到统计区块附近时才计算，不阻塞页签首屏。
   useEffect(() => {
@@ -52,30 +53,12 @@ export function HookPanel({ onNavigate, embedded = false }: {
     <div className={embedded ? css.panelEmbedded : css.panel}>
       <PanelHeader title="原图能力自检" desc="本地解码 · 无注入 / 无桥接" />
       <div className={css.scroll}>
+        {/* 2026-09-30 精简：原来这里是「图片如何本地解码？」整段科普 + 三步流程图，
+            用户要求砍掉科普类内容 —— 压成一行结论，链路细节留在 docs/ 与代码注释里。 */}
         <Card title="图片如何本地解码？">
           <div className={css.hookIntro}>
-            微信 4.x 的消息图片通过「已解码缓存 → .dat 解密 → hardlink 定位」链路在本地完成读取与解码
-            （DSH 图片接口，密钥来自本机自动扫描或手动配置）。高清原图依赖本机缓存与系统解码器
-            （wxgf/HEVC 支持）；本页不进行任何进程注入。
-          </div>
-          <div className={css.hookFlow}>
-            <div className={css.hookFlowItem}>
-              <span className={css.hookFlowIcon}>📥</span>
-              <b className={css.hookFlowTitle}>已解码缓存</b>
-              <small className={css.hookFlowSub}>优先读取，零解密</small>
-            </div>
-            <span className={css.hookFlowArrow}>→</span>
-            <div className={css.hookFlowItem}>
-              <span className={css.hookFlowIcon}>🔓</span>
-              <b className={css.hookFlowTitle}>.dat 解密</b>
-              <small className={css.hookFlowSub}>图片密钥本地解密</small>
-            </div>
-            <span className={css.hookFlowArrow}>→</span>
-            <div className={css.hookFlowItem}>
-              <span className={css.hookFlowIcon}>🗺️</span>
-              <b className={css.hookFlowTitle}>hardlink 定位</b>
-              <small className={css.hookFlowSub}>原始文件定位</small>
-            </div>
+            已解码缓存 → .dat 解密 → hardlink 定位，全部在本机完成；不注入进程、不桥接。
+            高清原图依赖系统解码器（wxgf/HEVC）。
           </div>
         </Card>
 
@@ -122,25 +105,16 @@ export function HookPanel({ onNavigate, embedded = false }: {
           </div>
         </LazyMount>
 
-        {(onNavigate || health || storage) && (
+        {/* 2026-09-30 精简：只剩「查看文件资产」一个跳转。
+            删掉的两个：`前往设置`（在设置里点它回到设置）、`查看存储占用`（侧栏「文件与存储」里已有）。 */}
+        {onNavigate && (
           <div className={css.hookActions}>
-            {onNavigate && <button type="button" className={css.catBtn} onClick={() => { onNavigate('files') }}>查看文件资产</button>}
-            {onNavigate && <button type="button" className={css.catBtn} onClick={() => { onNavigate('storage') }}>查看存储占用</button>}
-            {onNavigate && <button type="button" className={css.catBtn} onClick={() => { onNavigate('settings') }}>前往设置</button>}
+            <button type="button" className={css.catBtn} onClick={() => { onNavigate('files') }}>查看文件资产</button>
           </div>
         )}
 
         {loading && !error && <ListSkeleton rows={3} />}
         {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
-        {cfg && cfg.db_dir && (
-          <Card title="当前图片能力">
-            <div className={css.hookEntryList}>
-              <div className={css.hookEntryItem}>· 已配置图片密钥时，消息图片可按 MD5 走「已解码缓存 → .dat 解密 → hardlink 定位」链路（DSH 图片接口）。</div>
-              <div className={css.hookEntryItem}>· 未配置密钥时，仅能展示 CDN 缩略图；建议在「设置」中配置图片 AES 密钥与 XOR 值。</div>
-              <div className={css.hookEntryItem}>· 原图（wxgf/HEVC）需系统解码器；可用缩略图 _t/_h 兜底。</div>
-            </div>
-          </Card>
-        )}
       </div>
     </div>
   )

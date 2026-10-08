@@ -6,7 +6,7 @@ import type { WechatSession } from '../types.ts';
  * @param limit - max rows.
  * @returns the session snapshot.
  */
-export declare function querySessions(decryptedDir: string, keyword?: string, limit?: number, offset?: number): {
+export declare function querySessions(decryptedDir: string, keyword?: string, limit?: number, offset?: number): Promise<{
     sessions: WechatSession[];
     total: number;
-};
+}>;

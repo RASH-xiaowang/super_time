@@ -149,12 +149,23 @@ export async function wxIsaac64Keystream(seed: string, size: number): Promise<Bu
 
   const rt = await loadRuntime()
   const isaac = new rt.module.WxIsaac64!(key)
-  isaac.generate(Math.ceil(n / 8) * 8)
+  // 分块生成（2026-10-08 修）：WASM 侧一次只填充一块，超过块长的部分**不会被写入**。
+  // 不分块时图片尾部保持密文 —— 现象是「头是 JPEG、尾坏」，浏览器渲染失败，
+  // 而卡片只能显示默认文案（排查时毫无线索）。同一个实例连续 `generate` 会推进
+  // 密钥流状态，所以分块拼接与一次生成等价。
+  const parts: Buffer[] = []
+  let left = n
+  while (left > 0) {
+    const chunk = Math.min(SNS_HEAD_ENCRYPTED_BYTES, left)
+    isaac.generate(Math.ceil(chunk / 8) * 8)
+    const rawChunk = rt.readCaptured()
+    if (!rawChunk) throw new Error('未能取到密钥流输出')
+    // 参考实现：整段倒序后再截断（WASM 写回的顺序与使用顺序相反）
+    parts.push(Buffer.from(rawChunk).reverse().subarray(0, chunk))
+    left -= chunk
+  }
   if (isaac.delete) isaac.delete()
-  const raw = rt.readCaptured()
-  if (!raw) throw new Error('未能取到密钥流输出')
-  // 参考实现：整段倒序后再截断（WASM 写回的顺序与使用顺序相反）
-  const bytes = Buffer.from(raw).reverse().subarray(0, n)
+  const bytes = Buffer.concat(parts)
   if (keystreamCache.size > 64) keystreamCache.clear()
   keystreamCache.set(cacheKey, bytes)
   return bytes
@@ -174,4 +185,24 @@ export async function decryptSnsHead(buf: Buffer, seed: string): Promise<{ bytes
   const out = Buffer.from(buf)
   for (let i = 0; i < size && i < ks.length; i += 1) out[i] = (out[i] ?? 0) ^ (ks[i] ?? 0)
   return { bytes: out, decrypted: size }
+}
+
+/**
+ * 解密 SNS 媒体的**整份**字节。
+ *
+ * 与 `decryptSnsHead` 的区别（2026-10-08 修）：视频只有前 128 KB 加密，图片是**整文件**加密。
+ * 用只解头的版本处理图片会得到「头是 JPEG、尾是密文」的坏文件 —— RPC 成功返回 data URL，
+ * 但浏览器渲染失败（实测表现：一屏 9 张全挂，且卡片只能显示默认文案）。
+ *
+ * @param buf - CDN 取回的原始字节。
+ * @param seed - `<enc key>` 十进制字符串。
+ * @returns 解密后的字节与实际解密的长度。
+ */
+export async function decryptSnsAll(buf: Buffer, seed: string): Promise<{ bytes: Buffer; decrypted: number }> {
+  const key = String(seed ?? '').trim()
+  if (!key || buf.length === 0) return { bytes: buf, decrypted: 0 }
+  const ks = await wxIsaac64Keystream(key, buf.length)
+  const out = Buffer.from(buf)
+  for (let i = 0; i < out.length && i < ks.length; i += 1) out[i] = (out[i] ?? 0) ^ (ks[i] ?? 0)
+  return { bytes: out, decrypted: out.length }
 }

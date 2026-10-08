@@ -4,4 +4,4 @@ import type { OfficialAssetsSnapshot } from '../types.ts';
  * @param decryptedDir - decrypted data root.
  * @returns the official-assets snapshot.
  */
-export declare function queryOfficialAssets(decryptedDir: string): OfficialAssetsSnapshot;
+export declare function queryOfficialAssets(decryptedDir: string): Promise<OfficialAssetsSnapshot>;

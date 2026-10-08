@@ -28,25 +28,129 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .modelInput:focus { border-color: var(--nm-cyan); }
-/* 角色分组标题：一行标题 + 一行说明，把「语言 / 嵌入 / 重排序」三块分开。
-   左边一道竖条是刻意的 —— 它让分组在小屏单列时仍然分得开（那时没有列可依赖）。 */
-.roleHead {
+/* ── 三块模型面板（2026-09-30 重做）──────────────────────────────────────────
+ * 对话 / 嵌入 / 重排序各是一张可折叠卡：标题栏整条是真按钮（键盘可达），
+ * 右侧一个状态徽标 + 一个会旋转的折叠箭头。收起时**不渲染**内容（由 TSX 决定，不是 CSS 隐藏）。
+ * 间距一律用偶数值（几何规范守卫：奇数间距在文件级棘轮里只许减）。 */
+.panelCard {
+  margin-top: 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-panel-solid, #0f172a) 55%, transparent);
+  overflow: hidden;
+}
+
+.panelCard[data-open] {
+  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panelHead:hover {
+  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+}
+
+.panelHead:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: -2px;
+}
+
+.panelHeadText {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 16px 0 8px;
-  padding-left: 10px;
-  border-left: 2px solid var(--nm-cyan);
+  flex: 1;
+  min-width: 0;
 }
-.roleTitle {
+
+.panelTitle {
   font-size: var(--nm-dense-fs);
-  font-weight: 600;
+  font-weight: 700;
   color: var(--nm-text-1);
 }
-.roleNote {
+
+.panelSub {
+  font-size: var(--nm-dense-fs-xs);
+  line-height: 1.5;
+  color: var(--nm-text-3);
+}
+
+.panelStatus {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 2px 8px;
+  border-radius: var(--nm-r-pill, 999px);
+  border: 1px solid var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  font-size: var(--nm-dense-fs-xs);
+  color: var(--nm-cyan);
+}
+
+.panelStatus[data-tone='idle'] {
+  border-color: var(--nm-border);
+  color: var(--nm-text-3);
+}
+
+.panelStatus[data-tone='warn'] {
+  border-color: var(--nm-amber-45, rgba(245, 158, 11, 0.45));
+  color: var(--nm-amber);
+}
+
+.panelCaret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--nm-text-3);
+}
+
+.panelCaret svg {
+  transition: transform var(--nm-t-fast, 0.15s) ease;
+}
+
+.panelCaret[data-open] svg {
+  transform: rotate(180deg);
+}
+
+.panelBody {
+  padding: 2px 12px 12px;
+  border-top: 1px solid var(--nm-border);
+}
+
+/* 探针行：一条测试按钮独占一行（结果行贴在它下面，就在那一块的输入框下方）。 */
+.probeRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* 面板里的口径提示（换模型要重建向量 / 精排失败不影响问答）。 */
+.roleTip {
+  margin: 12px 0 0;
   font-size: var(--nm-dense-fs-xs);
   line-height: 1.6;
   color: var(--nm-text-3);
+}
+
+/* 余额行：账户级信息，不属于任何一块模型面板。 */
+.balanceRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
 }
 /* API Key 输入 + 小眼睛（显示/隐藏明文）。
    按钮绝对定位在输入框右侧 —— 不占流内空间，切换时输入框宽度不变。 */
@@ -75,6 +179,9 @@
 }
 .keyEye:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
 .keyEye[data-on] { color: var(--nm-cyan); }
+/* 探针区（2026-09-30）：连接测试 / 余额查询 —— 两个**只读**动作，与「获取 / 保存」分行。
+   混在一行会让人以为它们也会改配置。与 .modelActions 同为等宽两列，上边距一致。 */
+/* 探针行改成 .probeRow（每块面板一条按钮），旧的 .modelProbes 两列网格已不再使用。 */
 /* 操作区：获取（次要）| 保存（主要），等宽两列；消息整行独立 */
 .modelActions {
   display: grid;
@@ -102,7 +209,7 @@
     color-mix(in srgb, var(--nm-purple) 30%, transparent));
   box-shadow: var(--nm-glow-sm);
 }
-.modelPrimary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.modelPrimary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 .modelGhost {
   padding: 8px 10px;
   border: 1px solid var(--nm-border);

@@ -1,4 +1,5 @@
 import { type WxgfTranscoder } from './wxam-image.ts';
+export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts';
 /**
  * Extract the 32-char hex image MD5 from a packed_info protobuf value.
  * Accepts a raw BLOB, or the st_control comma-separated byte-list TEXT form.
@@ -142,14 +143,19 @@ export declare function decodeEmoticonDataUrl(decryptedDir: string, decodedDir: 
  *
  * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
  * 网络只花一次。失败一律返回 error，界面退回占位芯片。
+ *
+ * **主机白名单（2026-09-30 补）**：这条链此前只判了协议，等于「消息 XML 里写哪个主机
+ * 就去取哪个」（XML 是可被离线改写的文件）。现在与聊天原图 / 远程图片 / 朋友圈封面
+ * 走同一把尺子 {@link wechatCdnHostAllowed}，判在发请求之前；主机不在清单内时
+ * **把主机名写进错误文案**，这样万一有没覆盖到的表情主机，界面上一眼能看出是哪个。
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
- * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
+ * @param opts - `wechatBaseDir`：原始微信目录；给了它才允许「索引里确认本机没有」成为出网前提。
  * @returns a data URL + format, or an error message.
  */
 export declare function fetchEmoticonRemote(url: string, decodedDir: string, md5: string, opts?: {
-    cdnEnabled?: boolean;
+    wechatBaseDir?: string;
 }): Promise<{
     url?: string;
     format?: string;

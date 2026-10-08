@@ -21,6 +21,13 @@ import {
 import { copyFile, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getConfig } from './config.ts'
+import {
+  SYNC_INTERVAL_MS,
+  failingTargets,
+  noteSyncFailure,
+  noteSyncSuccess,
+  syncFailureBackoffActive,
+} from './sync-pacing.ts'
 
 const PAGE_SZ = 4096
 const SALT_SZ = 16
@@ -30,7 +37,6 @@ const PBKDF2_ITERS = 256000
 const SQLITE_HDR = Buffer.from('SQLite format 3\x00')
 const WAL_HEADER_SZ = 32
 const WAL_FRAME_HEADER_SZ = 24
-const SYNC_INTERVAL_MS = 10_000
 const FULL_DECRYPT_COOLDOWN_MS = 6_000
 
 /**
@@ -207,7 +213,14 @@ export async function walFramesPatchable(walPath: string): Promise<boolean> {
 }
 
 /** Per-shard state: raw mtimes of the main db and its wal. */
-interface ShardSig { main: number; wal: number }
+/**
+ * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
+ * 缓存侧早已是 `mtimeNs + size`（`meta.ts` 的 `fileSig`，见 docs/CACHE-INVALIDATION.md 通道①），
+ * 而这里一直只比 `mtimeMs` —— 同毫秒内的写入它**看不见**，`mode` 会误判成 `wal`，
+ * 于是那个分片的改动要等下一次变得更多才会被同步到。
+ * 现在改成纳秒 + 大小（NTFS 100ns 精度，实测 `statSync(...,{bigint:true})` 与普通 stat 开销无差别）。
+ */
+interface ShardSig { main: string; wal: string }
 
 /**
  * 「这页解对了没有」的判据 —— 只看 SQLite 页 1 头部里**不能被合成**的字段。
@@ -294,6 +307,28 @@ function fullDecryptDue(key: string): boolean {
   return true
 }
 
+/**
+ * **失败退避 + 日志节流**见 `./sync-pacing.ts`（2026-09-29 从本文件外提：本文件已贴着
+ * 单文件 1000 行的硬上限，而那套状态与注释有 100 多行）。这里只留两件事：
+ *   ① `sigKeyOf`：把签名压成一行字符串喂给日志（便于对照"是不是同一份数据"）；
+ *   ② `forgetFullDecryptCooldown`：测试要能把"退避"与"6 秒 full-decrypt 冷却"分开证伪。
+ */
+function sigKeyOf(sig: ShardSig): string {
+  return `${String(sig.main)}:${String(sig.wal)}`
+}
+
+/**
+ * 只清空 full-decrypt 冷却（测试用）。
+ *
+ * 为什么要与上面的退避分开：`syncPlainDatabase` 这类路径上"没有重试"可能来自**两个**原因
+ * （退避，或 6 秒的 full-decrypt 冷却）。测试要能**分别**把这两个原因钉住 ——
+ * 只清冷却、保留退避，若仍然没有重试，那就是退避在起作用（见
+ * `tests/sync-failure-backoff.spec.ts` 的集成用例）。
+ */
+export function forgetFullDecryptCooldown(): void {
+  lastFullAt.clear()
+}
+
 function readAllKeysCached(decryptedDir: string): Record<string, unknown> | null {
   const keysPath = join(decryptedDir, '..', 'all_keys.json')
   let sig = ''
@@ -369,11 +404,20 @@ function shardEncKey(
 }
 
 /** Per-shard mtime signature (main db + its wal). */
+/** 源库签名片段：纳秒 + 大小（与缓存层 meta.ts 的 fileSig 同口径，见 docs/CACHE-INVALIDATION.md 通道①）。 */
+function statSigStr (path: string): string {
+  try {
+    const st = statSync(path, { bigint: true })
+    return String(st.mtimeNs) + ':' + String(st.size)
+  } catch {
+    return ''
+  }
+}
 function shardSig(msgDir: string, file: string): ShardSig {
-  const sig: ShardSig = { main: 0, wal: 0 }
+  const sig: ShardSig = { main: '', wal: '' }
   for (const f of [file, file + '-wal']) {
     try {
-      const ms = statSync(join(msgDir, f)).mtimeMs
+      const ms = statSigStr(join(msgDir, f))
       if (f === file) sig.main = ms
       else sig.wal = ms
     } catch { /* skip */ }
@@ -484,8 +528,16 @@ export async function syncChangedShards(
     const prev = lastState.get(f)
     const target = join(decMsgDir, f)
     if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) continue
+    if (syncFailureBackoffActive(f)) continue
     lastState.set(f, sig)
     const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
+    // 诊断（2026-09-29 第 45 轮）：`full` 会整库重解密（message_1 一次 ≈147MB），
+    // 而它每 6 秒冷却一过就可能重来一次。这里把**到底哪个条件**触发了 full 打出来，
+    // 免得继续靠推断（前两轮已经推错过一次：源库其实在长）。
+    if (mode === 'full' && process.env.SUPERTIME_SYNC_TRACE === '1') {
+      const why = prev === undefined ? 'prev=undefined(首次)' : prev.main !== sig.main ? 'main变了' : '产物不存在'
+      console.log(`[sync-trace] ${f} → full 原因=${why} prev.main=${prev === undefined ? '-' : String(prev.main)} sig.main=${String(sig.main)} 产物存在=${String(existsSync(target))}`)
+    }
     if (mode === 'full' && !fullDecryptDue(f)) {
       // Rate-limit full re-decrypts: a checkpoint can grow the main DB on every
       // message. Defer (do not record the signature) so it retries after the
@@ -495,10 +547,11 @@ export async function syncChangedShards(
     }
     try {
       const r = await syncMessageShard(msgDir, decMsgDir, f, fallbackKey, keyFormat, mode)
+      noteSyncSuccess(f)
       if (mode === 'full' || r.walPages > 0) synced.push(`${f}:${mode}(${r.fullPages}p/w${r.walPages})`)
     } catch (e) {
-      lastState.delete(f) // retry next round
-      console.error('[wechat-sync]', f, (e as Error).message)
+      // 保留已记录的签名 + 退避：不再"下一轮立刻重解密整库"（见 noteSyncFailure 的注释）。
+      noteSyncFailure(f, sigKeyOf(sig), (e as Error).message)
       errors.push(`${f}同步失败：${(e as Error).message}`)
     }
   }
@@ -507,10 +560,10 @@ export async function syncChangedShards(
 
 /** Session-db signature (main + wal). */
 function sessionSig(sessionDir: string): ShardSig {
-  const sig: ShardSig = { main: 0, wal: 0 }
+  const sig: ShardSig = { main: '', wal: '' }
   for (const f of ['session.db', 'session.db-wal']) {
     try {
-      const ms = statSync(join(sessionDir, f)).mtimeMs
+      const ms = statSigStr(join(sessionDir, f))
       if (f === 'session.db') sig.main = ms
       else sig.wal = ms
     } catch { /* skip */ }
@@ -542,6 +595,7 @@ export async function syncSessionDb(
   const prev = lastState.get('session.db')
   const target = join(decSess, 'session.db')
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
+  if (syncFailureBackoffActive('session.db')) return []
   lastState.set('session.db', sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue('session.db')) {
@@ -565,6 +619,7 @@ export async function syncSessionDb(
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
         if (!looksDecrypted(stagingDb)) throw new Error('session wal patch invalid')
         await atomicReplace(stagingDb, target)
+        noteSyncSuccess('session.db')
         if (walPages > 0) return [`session.db:wal(w${walPages})`]
         return []
       } finally {
@@ -578,23 +633,23 @@ export async function syncSessionDb(
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error('session decrypt invalid')
       await atomicReplace(temp, target)
+      noteSyncSuccess('session.db')
       return [`session.db:full(${fullPages}p/w${walPages})`]
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
     }
   } catch (e) {
-    lastState.delete('session.db')
-    console.error('[wechat-sync] session.db', (e as Error).message)
+    noteSyncFailure('session.db', sigKeyOf(sig), (e as Error).message)
     return []
   }
 }
 
 /** Contact-db signature (main + wal). */
 function contactSig(contactDir: string): ShardSig {
-  const sig: ShardSig = { main: 0, wal: 0 }
+  const sig: ShardSig = { main: '', wal: '' }
   for (const f of ['contact.db', 'contact.db-wal']) {
     try {
-      const ms = statSync(join(contactDir, f)).mtimeMs
+      const ms = statSigStr(join(contactDir, f))
       if (f === 'contact.db') sig.main = ms
       else sig.wal = ms
     } catch { /* skip */ }
@@ -626,6 +681,7 @@ export async function syncContactDb(
   const prev = lastState.get('contact.db')
   const target = join(decContact, 'contact.db')
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
+  if (syncFailureBackoffActive('contact.db')) return []
   lastState.set('contact.db', sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue('contact.db')) {
@@ -649,6 +705,7 @@ export async function syncContactDb(
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
         if (!looksDecrypted(stagingDb)) throw new Error('contact wal patch invalid')
         await atomicReplace(stagingDb, target)
+        noteSyncSuccess('contact.db')
         if (walPages > 0) return [`contact.db:wal(w${walPages})`]
         return []
       } finally {
@@ -664,13 +721,13 @@ export async function syncContactDb(
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error('contact decrypt invalid')
       await atomicReplace(temp, target)
+      noteSyncSuccess('contact.db')
       return [`contact.db:full(${fullPages}p/w${walPages})`]
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
     }
   } catch (e) {
-    lastState.delete('contact.db')
-    console.error('[wechat-sync] contact.db', (e as Error).message)
+    noteSyncFailure('contact.db', sigKeyOf(sig), (e as Error).message)
     return []
   }
 }
@@ -678,10 +735,10 @@ export async function syncContactDb(
 
 /** Signature of a plain db dir (main + wal by dbName). */
 function plainDbSig(dir: string, dbName: string): ShardSig {
-  const sig: ShardSig = { main: 0, wal: 0 }
+  const sig: ShardSig = { main: '', wal: '' }
   for (const f of [dbName, dbName + '-wal']) {
     try {
-      const ms = statSync(join(dir, f)).mtimeMs
+      const ms = statSigStr(join(dir, f))
       if (f === dbName) sig.main = ms
       else sig.wal = ms
     } catch { /* skip */ }
@@ -713,6 +770,7 @@ export async function syncPlainDatabase(
   const prev = lastState.get(label)
   const target = join(decDir, dbName)
   if (prev !== undefined && prev.main === sig.main && prev.wal === sig.wal && existsSync(target)) return []
+  if (syncFailureBackoffActive(label)) return []
   lastState.set(label, sig)
   const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
   if (mode === 'full' && !fullDecryptDue(label)) {
@@ -736,6 +794,7 @@ export async function syncPlainDatabase(
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
         if (!looksDecrypted(stagingDb)) throw new Error(label + ' wal patch invalid')
         await atomicReplace(stagingDb, target)
+        noteSyncSuccess(label)
         if (walPages > 0) return [label + ':wal(w' + String(walPages) + ')']
         return []
       } finally {
@@ -749,13 +808,13 @@ export async function syncPlainDatabase(
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
       if (!looksDecrypted(temp)) throw new Error(label + ' decrypt invalid')
       await atomicReplace(temp, target)
+      noteSyncSuccess(label)
       return [label + ':full(' + String(fullPages) + 'p/w' + String(walPages) + ')']
     } finally {
       for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
     }
   } catch (e) {
-    lastState.delete(label)
-    console.error('[wechat-sync]', label, (e as Error).message)
+    noteSyncFailure(label, sigKeyOf(sig), (e as Error).message)
     return []
   }
 }
@@ -802,6 +861,10 @@ export function startRealtimeSync(
   rawDbDir: () => string, decryptedDir: () => string,
   onSync?: (shards: string[]) => void,
 ): () => void {
+  // 测量开关（2026-09-29 第 49 轮）：置 1 时**完全不启动**实时同步。
+  // 默认不设 ⇒ 行为与现在**完全一致**；用途是 A/B 量"启动瞬间的整库解密占了多少启动延迟"
+  //（第 48 轮发现首 tick 的 ~374ms 全量解密正好与"窗口 → 导航壳"那 476ms 重叠）。
+  if (process.env.SUPERTIME_SYNC_OFF === '1') return () => { /* 未启动 */ }
   const lastState = new Map<string, ShardSig>()
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
@@ -852,16 +915,6 @@ export function startRealtimeSync(
       const fallbackKey = typeof cfg['db_enc_key'] === 'string' ? cfg['db_enc_key'] : ''
       const shardRes = await syncChangedShards(raw, dec, lastState)
       const synced = shardRes.synced
-      // 一次故障只报一次、恢复时报一句：与上面 `unavailableWarned` 同一口径。
-      if (shardRes.errors.length > 0) {
-        if (!dirFailureWarned) {
-          dirFailureWarned = true
-          console.warn('[wechat-sync] 同步可能有缺口：' + shardRes.errors.join(' | '))
-        }
-      } else if (dirFailureWarned) {
-        dirFailureWarned = false
-        console.log('[wechat-sync] 原始目录读取恢复正常')
-      }
       synced.push(...await syncSessionDb(raw, dec, lastState, fallbackKey, keyFormat))
       synced.push(...await syncContactDb(raw, dec, lastState, fallbackKey, keyFormat))
       for (const [sub, dbName, label] of [
@@ -872,6 +925,34 @@ export function startRealtimeSync(
         ['chatbot', 'chatbot_message.db', 'chatbot_message.db'],
       ] as const) {
         synced.push(...await syncPlainDatabase(raw, dec, sub, dbName, label, fallbackKey, keyFormat, lastState))
+      }
+      /**
+       * 失败的**成因判读放在这里**，而不是写在单个目标那一行里。
+       *
+       * 为什么：`decrypt invalid` 至少对应两种完全不同的原因 ——
+       *   ① **密钥问题**（这个数据根没有密钥文件 / 密钥映射过期）：**所有**目标都解不开；
+       *   ② **读到撕裂副本**（微信正独占或正在写那几个大库）：**只有被写的那几个**解不开，
+       *      同一轮里别的目标照样成功。
+       * 只有把"本轮成功了几项"和"还在失败哪些目标"放在一起看，才分得出是①还是② ——
+       * 而这决定了要不要让用户去「设置 → 密钥」重新获取一次。
+       * （2026-09-29 实测两次都撞上了：一次是数据根里根本没有密钥文件 ⇒ ①，
+       *   修好之后 message 分片仍失败、而 7 个小库同一轮成功 ⇒ ②。）
+       */
+      const failing = failingTargets()
+      if (failing.length > 0) {
+        if (!dirFailureWarned) {
+          dirFailureWarned = true
+          console.warn('[wechat-sync] 同步可能有缺口：' + String(failing.length) + ' 个目标解不开（'
+            + failing.join('、') + '）'
+            + (synced.length > 0
+              ? '；**同一轮里另有 ' + String(synced.length) + ' 项正常取到** ⇒ 更像「微信正独占/正在写这些库」'
+                + '（读到撕裂副本），不是密钥问题，等它写完会自愈'
+              : '；**本轮没有任何目标取到** ⇒ 更像密钥或密钥映射的问题，'
+                + '到「设置 → 密钥」点一次「一键获取数据库密钥」'))
+        }
+      } else if (dirFailureWarned) {
+        dirFailureWarned = false
+        console.log('[wechat-sync] 同步已恢复正常（本轮没有解不开的目标）')
       }
       if (synced.length > 0) onSync?.(synced)
       failureLogged = false

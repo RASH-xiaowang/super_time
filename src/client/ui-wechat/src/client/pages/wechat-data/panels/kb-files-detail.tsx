@@ -155,7 +155,6 @@ export function KbFileDetailPane({
               <span className={css.switchDesc}>
                 打开后，这个文件的文本块可能被发到模型服务做向量；关掉它就完全不出网。
                 两种情况下都仍然能被关键词搜到，只是关掉后不再参与「意思相近」的检索。
-                设置里的「禁止 AI 出网」是同一道闸门，开着时这里即使打开也不会出网。
               </span>
             </label>
           </div>

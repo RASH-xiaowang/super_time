@@ -186,8 +186,6 @@ export interface WechatConfigFull {
     api_enabled: boolean;
     api_port: number;
     api_token: string;
-    cdn_enabled: boolean;
-    cdn_local_decrypt: boolean;
     whisper_device: 'cpu' | 'gpu';
     whisper_model: string;
     whisper_threads: number;

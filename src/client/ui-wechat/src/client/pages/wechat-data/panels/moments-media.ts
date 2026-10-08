@@ -20,7 +20,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import {
-  apiGetArticleCover,
+  apiGetArticleCovers,
   apiGetSnsImageDataUrl,
   apiGetSnsVideoCoverDataUrl,
   snsMediaCacheGet,
@@ -29,6 +29,23 @@ import {
 } from '../api.ts'
 import { capRecord } from '../utils/misc.ts'
 import { ARTICLE_COVER_CACHE_MAX, SNS_IMG_CACHE_MAX, imgKey } from './moments-support.tsx'
+
+/**
+ * 取图失败的重试状态（2026-09-29 修「有的图片加载不出来」）。
+ *
+ * 依据（真机自检）：**解码缓存 154 张 / 43.5MB**，而媒体资源 **175,963 项 / 16.8GB**
+ * ⇒ 绝大多数朋友圈图不在缓存里，必须走"按需 `.dat` 解密 + hardlink 定位"这条慢路径
+ * （`backend-rpc.spec.ts` 记录：缓存未命中时实测 12–21s）。缓存与解密的**首次失败往往是暂时性的**
+ * （文件正在被写、hardlink 还没建好、这一次超时），而原实现把 catch 分支留成空注释
+ * 、直接吞掉：不重试、不记录、不告诉用户。
+ *
+ * 这里做两件事：① 失败的键**自动重试**（最多 2 次，间隔 1.5s，不忙等）；
+ * ② 超过重试上限才 `console.warn` 出**具体原因**（后端 `resolveSnsImageDataUrl` 会给出
+ * 「缺少图片标识」「未配置微信原始目录，无法离线解码」这类文本，原实现直接丢掉了）。
+ */
+const MEDIA_RETRY_MAX = 2
+const MEDIA_RETRY_DELAY_MS = 1500
+const mediaRetryCount = new Map<string, number>()
 import type { ViewerState } from './moments-portals.tsx'
 
 /**
@@ -36,6 +53,10 @@ import type { ViewerState } from './moments-portals.tsx'
  * 定义在这里（而不是卡片里）：面板的钩子与卡片的 props 共用同一个形状，只有一份出处。
  */
 export interface MediaKeySpec {
+  /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路（见后端 `sns-cdn-image.ts`）。 */
+  url?: string
+  /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
+  token?: string
   md5: string
   timelineId?: string
   mediaId?: string
@@ -49,6 +70,19 @@ type ViewerImage = { thumb?: string; url?: string; md5?: string; timelineId?: st
 
 /** 一批出队解码的条数：太大一顿卡，太小把并发用不满。 */
 const MEDIA_BATCH = 8
+
+/**
+ * 一批发出的封面请求条数（A2，2026-09-28 性能修复）。
+ *
+ * 改前是「`todo` 里有多少就一次全发」—— 一屏 30 篇 = 30 个并发 RPC 打向后端
+ * （日志里 `getArticleCover` 1221 次 / 均 1.9s 就是这么来的）。分批是为了不形成尖峰。
+ *
+ * ⚠️ 别再"把这里提到后端并发上限（16）"当成优化：2026-09-29 试过，真机逐接口时间线里
+ * `getArticleCovers` 的**调用次数没有变化**（仍是 3 次）—— 说明**约束在"每趟待办有多少条"**
+ * （`pendingCovers` 的返回），不是这里的批大小。要再动它，先量出每趟到底带了几条
+ * （后端日志不记入参，得先补一条带着条数的打点）。
+ */
+const COVER_BATCH = 8
 
 /**
  * 视频（及其封面）的缓存键。
@@ -140,6 +174,8 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   snsImgs: Record<string, string>
   articleCovers: Record<string, string>
   mediaKeySpec: React.MutableRefObject<Map<string, MediaKeySpec>>
+  /** 取图**失败**的原因（key → 后端给的原因）。空对象 = 没有失败。 */
+  snsErrs: Record<string, string>
 } {
   const { moments, viewer, scrollRef, groups, renderKey } = input
   const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
@@ -162,7 +198,13 @@ export function useMomentsMedia(input: MomentsMediaInput): {
         const batch = mediaQueue.current.splice(0, MEDIA_BATCH)
         const updates: Record<string, string> = {}
         await Promise.all(batch.map(async (it) => {
-          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string } = { md5: it.md5 }
+          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string } = {
+    md5: it.md5,
+    // 只给图片带 CDN 三件套（视频走另一个 RPC）；有才传 ⇒ 缺省时调用形状逐字不变
+    ...(it.kind === 'img' && it.url ? { url: it.url } : {}),
+    ...(it.kind === 'img' && it.token ? { token: it.token } : {}),
+    ...(it.kind === 'img' && it.seed ? { seed: it.seed } : {}),
+  }
           if (it.timelineId) opts.timelineId = it.timelineId
           if (it.mediaId) opts.mediaId = it.mediaId
           if (it.seed) opts.key = it.seed
@@ -173,10 +215,40 @@ export function useMomentsMedia(input: MomentsMediaInput): {
             const r = it.kind === 'video'
               ? await apiGetSnsVideoCoverDataUrl(opts)
               : await apiGetSnsImageDataUrl(opts)
-            if (r.url) { updates[it.key] = r.url; void snsMediaCacheSet(it.key, r.url) }
-          } catch { /* 保留缩略图/CDN 兜底 */ }
+            if (r.url) {
+              updates[it.key] = r.url
+              void snsMediaCacheSet(it.key, r.url)
+              mediaRetryCount.delete(it.key)
+            } else {
+              // 后端**给了原因**（`{ url?, error? }`），原实现把它丢掉了 ⇒ 这里带上原因再抛
+              throw new Error(r.error ?? '后端未返回图片地址')
+            }
+          } catch (e) {
+            /**
+             * 不再静默：暂时性失败（文件正在写 / 刚建 hardlink / 这一次超时）**放回队列再试**，
+             * 最多 `MEDIA_RETRY_MAX` 次；超限才记录**具体原因**。
+             * 用户看到的不该是"无解释的空白"。
+             */
+            const n = (mediaRetryCount.get(it.key) ?? 0) + 1
+            mediaRetryCount.set(it.key, n)
+            if (n <= MEDIA_RETRY_MAX) {
+              mediaQueue.current.push(it) // 放回队列 ⇒ 同一轮内再试（最多 2 次，不会死循环）
+            } else {
+              const reason = (e as Error).message
+              console.warn('[moments-media] 取图失败（已重试 ' + String(MEDIA_RETRY_MAX) + ' 次，放弃）:', it.key, reason)
+              setSnsErrs(prev => ({ ...prev, [it.key]: reason }))
+            }
+          }
         }))
-        if (Object.keys(updates).length > 0) setSnsImgs(prev => capRecord({ ...prev, ...updates }, SNS_IMG_CACHE_MAX))
+        if (Object.keys(updates).length > 0) {
+          setSnsImgs(prev => capRecord({ ...prev, ...updates }, SNS_IMG_CACHE_MAX))
+          // 同一格后来成功了 ⇒ 清掉旧错误，避免"已经出图了还挂着失败提示"
+          setSnsErrs(prev => {
+            const next = { ...prev }
+            for (const k of Object.keys(updates)) delete next[k]
+            return next
+          })
+        }
       }
     } finally {
       mediaFetching.current = false
@@ -214,23 +286,73 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     return () => { ob.disconnect(); mediaObserved.current = null }
   }, [])
 
-  // 公众号文章封面兜底：本地 SNS 缓存没有时，抓取文章页 og:image 转 data URL；
-  // 失败后自动重试（最多 3 次），避免首次加载失败只能靠刷新才能显示。
+  /**
+   * 观察新出现的格子（2026-10-08 修）。
+   *
+   * 现象：往下滚动时**新出现的朋友圈图片一直不出来**（旧的一屏正常）。
+   * 原因：上面那个 effect 建好 IO 后**从未 `.observe()` 任何元素** —— 只有挂载那一刻已在 DOM 里的
+   * 占位格会被观察，滚动进来（列表变长/虚拟化重建）的格子永远不入队、也就永远不解码。
+   *
+   * 依赖 `moments`：列表一变就在容器里补观察尚未取到的 `[data-sns-key]`（已取过的跳过，不重复观察）。
+   */
+  useEffect(() => {
+    const ob = mediaObserved.current
+    const root = scrollRef.current
+    if (!ob || !root) return
+    const nodes = root.querySelectorAll<HTMLElement>('[data-sns-key]')
+    for (const el of Array.from(nodes)) {
+      const key = el.dataset.snsKey || ''
+      if (key !== '' && !snsFetched.current.has(key)) ob.observe(el)
+    }
+  }, [moments])
+
+  /**
+   * 公众号文章封面兜底：本地 SNS 缓存没有时，抓取文章页 og:image 转 data URL；
+   * 失败后自动重试（最多 3 次），避免首次加载失败只能靠刷新才能显示。
+   *
+   * ## A1+A2（2026-09-28 性能修复）
+   *
+   * 改前是 `for (const url of todo) { void apiGetArticleCover({ contentUrl: url }) }`
+   * —— **每个链接一个 RPC、且全部立刻发出**。现场日志据此得到「`getArticleCover` 1221 次
+   * （占全部慢调用 73.6%）、均 1920ms」：一屏 30 篇就是 30 个并发 RPC，每个还要 2 次网络往返。
+   *
+   * 现在：① 走批量接口 `apiGetArticleCovers`（一次一屏）；② 分批发出，每批
+   * {@link COVER_BATCH} 条，与前一条的 `drainMedia`/`MEDIA_BATCH` 同一范式 ——
+   * 这样即使一次 refresh 命中很多链接，也不会形成瞬时并发尖峰。
+   */
   useEffect(() => {
     const todo = pendingCovers(moments, snsImgs, articleCovers, coverAttempts.current)
-    for (const url of todo) {
-      void apiGetArticleCover({ contentUrl: url })
-        .then((r) => {
-          if (r.url) {
-            setArticleCovers(prev => capRecord({ ...prev, [url]: r.url as string }, ARTICLE_COVER_CACHE_MAX))
-          } else {
-            setTimeout(() => { setCoverTick(t => t + 1) }, 2500)
-          }
-        })
-        .catch(() => {
-          setTimeout(() => { setCoverTick(t => t + 1) }, 2500)
-        })
+    if (todo.length === 0) return
+    let cancelled = false
+    const retry = (): void => {
+      // 组件已卸载（或 effect 已换轮）就别再排重试，否则会在后台无限自激。
+      if (cancelled) return
+      setTimeout(() => { if (!cancelled) setCoverTick(t => t + 1) }, 2500)
     }
+    const run = async (): Promise<void> => {
+      for (let i = 0; i < todo.length; i += COVER_BATCH) {
+        if (cancelled) return
+        const batch = todo.slice(i, i + COVER_BATCH)
+        try {
+          const r = await apiGetArticleCovers({ urls: batch })
+          if (cancelled) return
+          const found: Record<string, string> = {}
+          let missed = false
+          for (const it of r.items ?? []) {
+            if (it.dataUrl) found[it.url] = it.dataUrl
+            else missed = true
+          }
+          if (Object.keys(found).length > 0) {
+            setArticleCovers(prev => capRecord({ ...prev, ...found }, ARTICLE_COVER_CACHE_MAX))
+          }
+          if (missed) retry()
+        } catch {
+          retry()
+        }
+      }
+    }
+    void run()
+    return () => { cancelled = true }
   }, [moments, snsImgs, articleCovers, coverTick])
 
   /**
@@ -278,5 +400,9 @@ export function useMomentsMedia(input: MomentsMediaInput): {
       .catch(() => { /* 保留 CDN 兜底 */ })
   }, [viewer, snsImgs])
 
-  return { snsImgs, articleCovers, mediaKeySpec }
+  /* 取图失败的原因（key → 后端给的原因）。**可加性**输出：调用方暂时可以不理会，
+     下一条改动会在占位上把它显示出来（用户："朋友圈图片加载不出来" —— 不该只看到空白）。 */
+  const [snsErrs, setSnsErrs] = useState<Record<string, string>>({})
+
+  return { snsImgs, articleCovers, mediaKeySpec, snsErrs }
 }

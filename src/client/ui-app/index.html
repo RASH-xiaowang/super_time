@@ -3,18 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- connect-src 不再用 `https:` 通配，改为显式列出渲染进程真实会取的外网主机：
-       world 地图 GeoJSON（jsdelivr / unpkg）+ 省/市/区县 GeoJSON（geo.datav.aliyun.com）。
-       漏掉 aliyun 会把省/市/区县地图的取数打断（评审实测的回归）。
+  <!-- connect-src 于 2026-09-29 按用户要求放宽为 `https:` 通配：渲染层（fetch/XHR）可访问任意 https 主机。
+       历史上这里曾显式列出 world 地图 GeoJSON（jsdelivr / unpkg）+ 省/市/区县 GeoJSON（geo.datav.aliyun.com），
+       漏掉 aliyun 会打断省/市/区县地图的取数（评审实测的回归）—— 放宽为 `https:` 后这些主机自然也在放行范围内。
        LLM 与 embedding 的 HTTP 调用都发生在后端 worker（Node 侧），不受页面 CSP 约束。
-       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余
-       （file:// 文档下 'self' 已含整个 file: scheme），留着的代价是显式，不影响。
-       img-src 已收紧成**只有本机来源**（M23）：消息里记录的远程图片/头像地址一律交给后端
-       `query/remote-image.ts` 代取成 data URL，于是「自动获取原图（CDN）」与「禁止出网」
-       两个开关真的管得到每一张图，操作记录里也留得下。**把 `https:` 加回这里，就等于把
-       那句「关掉开关就不再为图片出网」作废** —— 渲染层的 `<img>` 会重新能向任意主机发请求。 -->
+       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。
+       img-src 仍收紧成**只有本机来源**（M23）：消息里记录的远程图片/头像地址一律交给后端 query/remote-image.ts
+       代取成 data URL，并受腾讯系主机白名单约束，操作记录里也留得下（应用内已无出网开关，2026-09-30）。
+       本次改动属材料性变更，已同步提升 PRIVACY_VERSION 与 docs/PRIVACY.md。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com https://geo.datav.aliyun.com" />
+    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https:" />
   <title>Super Time</title>
 </head>
 <body>

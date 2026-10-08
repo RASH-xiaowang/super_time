@@ -166,7 +166,7 @@
   white-space: nowrap;
 }
 .modelTag {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   color: var(--nm-on-accent);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));

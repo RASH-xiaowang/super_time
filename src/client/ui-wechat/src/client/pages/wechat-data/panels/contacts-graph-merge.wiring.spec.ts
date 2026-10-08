@@ -115,7 +115,8 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     expect(item('knowledge')?.hidden, 'knowledge 应标 hidden：已并入知识库').toBe(true)
     expect(item('knowledge')?.label).toBe('知识图谱')
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'knowledge'))
-    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('联系人与社交')
+    // 2026-09-30 IA 合并：知识库/文件/知识图谱随「概览 · 问答 · 总结」组（用户要求移出社交组）
+    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('概览 · 问答 · 总结')
     expect(mergedBranch(), "knowledge 被并进了通讯录分段").not.toContain("case 'knowledge'")
   })
 })

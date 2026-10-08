@@ -10,6 +10,7 @@
  * 切换到别的会话时面板自然跟着换（每个会话各留一份对话上下文，按 username 分线程）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ErrorState } from '../ui/kit.tsx'
 import type { WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { BasisLine, CiteList } from './Ask.tsx'
 import { useAskSession } from './use-ask.ts'
@@ -193,7 +194,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
         )}
       </div>
 
-      {error && <div className={css.error} role="alert">{error}</div>}
+      {error && <ErrorState message={error} />}
 
       <div className={css.composer}>
         <textarea

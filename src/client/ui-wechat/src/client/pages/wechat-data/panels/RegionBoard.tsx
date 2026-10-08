@@ -68,6 +68,9 @@ function RankColumn({ title, hint, rows, max }: {
         <span className={regionCss.regionRankHint}>{hint}</span>
       </div>
       <div className={regionCss.regionRows}>
+        {/* R4：此前 rows 为空时这里是空 div，整块塌成 0 高度（「省份 Top 10」只剩标题，
+            下面凭空少一块，看着像渲染失败）。补一行占位。 */}
+        {rows.length === 0 && <div className={regionCss.regionEmpty}>暂无数据</div>}
         {rows.map((r, i) => (
           <div key={r.key} className={regionCss.regionRow} title={`${r.name} · ${r.count} 位好友`}>
             <span className={regionCss.regionRankNo}>{i + 1}</span>

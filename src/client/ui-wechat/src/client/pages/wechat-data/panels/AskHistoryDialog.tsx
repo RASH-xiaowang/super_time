@@ -25,7 +25,7 @@ import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransient
 import { apiClearAskHistory, apiDeleteAskHistory, apiGetAskHistory } from '../api.ts'
 import type { AskHistoryEntry, AskHistoryQuery, AskHistoryStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { citeTarget } from './cite-target.ts'
-import { Badge, Dialog, EmptyState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
+import { Badge, Dialog, EmptyState, ErrorState, SearchInput, Segmented, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './ask-history.module.css'
 import { fmtTodayOrLocaleMs } from '../utils/format.ts'
@@ -236,7 +236,7 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onAskAgain }: 
           </button>
         </div>
         {notice && <div className={css.notice} data-error={notice.error ? '' : undefined}>{notice.text}</div>}
-        {error && <div className={css.notice} data-error="">读取失败：{error}</div>}
+        {error && <ErrorState message={`读取失败：${error}`} />}
       </div>
 
       {loading && items.length === 0 ? (

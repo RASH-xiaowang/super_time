@@ -20,7 +20,7 @@
 
 /* 命题句：用后端原文（不做短名替换 —— 完整问句更忠实，宽度也放得下） */
 .q {
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--wx-card-preview, var(--nm-text-2));
   line-height: 1.5;
 }
@@ -30,7 +30,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--nm-s-1);
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--wx-card-preview, var(--nm-text-2));
 }
 
@@ -104,7 +104,7 @@
 .barLabelTop {
   flex: 1;
   min-width: 0;
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--wx-card-preview, var(--nm-text-2));
   overflow: hidden;
   text-overflow: ellipsis;
@@ -119,7 +119,7 @@
 .pct,
 .pctTop {
   flex: none;
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--wx-card-preview, var(--nm-text-2));
   font-variant-numeric: tabular-nums;
 }
@@ -149,7 +149,7 @@
 
 /* 只展示前 4 项，剩下的合并成一行 —— 不丢信息也不占版面 */
 .barMore {
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--wx-card-preview, var(--nm-text-2));
   opacity: 0.75;
 }

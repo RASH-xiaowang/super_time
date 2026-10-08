@@ -24,11 +24,6 @@
   box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
-.linkBtn {
-  background: none; border: none; padding: 0; color: var(--nm-cyan);
-  cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.15s;
-}
-.linkBtn:hover { text-decoration: underline; color: var(--nm-purple); }
 
 /* 骨架屏 */
 .skeletonWrap { display: flex; flex-direction: column; gap: 12px; }
@@ -92,6 +87,24 @@
 /* 分析卡片网格 */
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 1200px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+/* 存储分析：真实布局用的是共享 `kit.cardGrid`（两列、`align-items: start`）。
+ *
+ * 三张卡 + 两列 ⇒ 排成"2 + 1"：第三张「发送者排行」独占第二行左半、**右半整块空**
+ * （用户截图里右下那片空白；审计的"最大空白带"量不到它，因为同一行的左列有内容挡着）。
+ *
+ * 这里用 `:has(.donut)` 把作用域限定在**本面板**（甜甜圈图只有"分类分布"有），
+ * 让最后一张卡通栏：第二行被一条完整排名占满，栅格条也拿到整行宽度 ⇒ 更好读。
+ * ⚠️ 与上面骨架屏那条要一起存在：骨架与真实布局保持一致，否则加载前后会跳一下。
+ */
+[class*='cardGrid']:has(.donut) > :last-child {
+  grid-column: 1 / -1;
+}
+/* 骨架屏那套 `.grid`（三列；内容区 ≤1200px 时两列）里，第三张同样通栏 ——
+ * 骨架与真实布局保持一致，否则加载完成前后会跳一下。 */
+@media (max-width: 1200px) {
+  .grid > :last-child { grid-column: 1 / -1; }
+}
 .card {
   border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); padding: 14px;
   background: var(--nm-bg-card); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);

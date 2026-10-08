@@ -39,10 +39,12 @@ describe('N1：待办面板区分「读取失败」与「确无数据」', () =>
   const code = readCode('Tasks.tsx')
 
   it('把 readError 收进状态，并且只在**没读错**时写渲染缓存', () => {
-    expect(code).toContain('setReadError(r.readError ?? null)')
-    expect(code).toMatch(/if \(!r\.readError\) writeRenderCache\('tasks', r\.items\)/)
+    // 2026-10-03 起 Tasks 改用共用 `useFreshData`：readError 由快照**派生**（仍是状态化的展示路径），
+    // 而"只在没读错时写缓存"改由 hook 的 `shouldCache` 表达 —— 契约不变，写法变了。
+    expect(code, 'readError 必须仍进 UI 状态路径').toContain('const readError = taskData?.readError ?? null')
+    expect(code, '缓存写入必须按 readError 把关').toMatch(/shouldCache:\s*\(d\)\s*=>\s*!d\.readError/)
     // 旧写法：无条件写缓存 —— 会把「读不到」的空列表存成下次的首帧「暂无待办」
-    expect(code).not.toMatch(/^\s*writeRenderCache\('tasks', r\.items\)$/m)
+    expect(code).not.toMatch(/^\s*writeRenderCache\('tasks'/m)
   })
 
   it('读取失败有独立提示，空列表文案不会在失败时出现', () => {

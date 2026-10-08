@@ -23,7 +23,7 @@
  * @vitest-environment node
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -32,10 +32,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { startTickProbe } from '../../tests/helpers/tick-probe.ts'
 
 import { withDb, withDbAsync } from '../src/query/db-open.ts'
-import { cachedBySigAsync } from '../src/query/meta.ts'
+import { cachedBySigAsync, fileSigOf } from '../src/query/meta.ts'
 import { queryPrivacyScan, PRIVACY_YIELD_EVERY_ROWS } from '../src/query/privacy.ts'
 import { queryStorageStats } from '../src/query/storage.ts'
 import { queryOverviewInsights, SNS_YIELD_EVERY_ROWS } from '../src/query/overview-insights.ts'
+import { queryWordCloud } from '../src/query/wordcloud.ts'
+import { YIELD_EVERY_CHARS, YIELD_EVERY_ROWS } from '../src/query/search-build.ts'
 
 const scratch: string[] = []
 const roots: string[] = []
@@ -279,12 +281,123 @@ describe('存储统计也要让出（msg/file 整树 stat + 每条大文件都�
     expect(ticks, '两处让出点（月份目录 / 每条大文件）少任何一处都会掉到 6 以下')
       .toBeGreaterThanOrEqual(6)
   })
+
+  it('F1：同签名二次查询走缓存（让出点数掉到基线），改数据后签名变了必须重算', async () => {
+    const { base, dec } = makeStorageTree()
+    // 冷跑基线：探针口径是 `ticks == 让出次数 + 1`，所以「零让出」= 1。
+    const baselineStop = tickProbe()
+    const baseline = baselineStop()
+    expect(baseline, '探针基线应当恰好是 1（见 tick-probe 的口径说明）').toBe(1)
+    const cold = tickProbe()
+    const first = await queryStorageStats(dec, base)
+    const coldTicks = cold()
+    expect(coldTicks, '冷跑居然没有让出 ⇒ 夹具或让出点有问题').toBeGreaterThan(baseline)
+    // 第二次：同签名 ⇒ 直接吃缓存，不该再有让出（这就是 F1 的收益：92ms → ~0ms）。
+    const warm = tickProbe()
+    const second = await queryStorageStats(dec, base)
+    const warmTicks = warm()
+    console.log(`[算料|yield] 存储统计冷=${String(coldTicks)} tick / 热=${String(warmTicks)} tick（基线 1 = 零让出）`)
+    /**
+     * ⚠️ 判据以**对象同一性**为主（2026-09-29 改）：tick 探针数的是事件循环转数，
+     * 全量并行时定时器会被饿着/抖动，"热跑 tick 恰好等于基线""热跑 tick < 冷跑 tick"
+     * 两种写法都**偶发**失败（实测：同一条用例先后以这两种口径各红一次）。
+     * 而 `cachedBySigAsync` 命中时返回的是**缓存里那一份同一个对象** ⇒ `toBe` 是
+     * 与负载无关的硬证据：返回了新对象就一定重算过。tick 只留一个宽松上界做旁证。
+     */
+    expect(warmTicks, '热跑的让出点数应当接近基线（允许负载带来的额外转圈）').toBeLessThanOrEqual(baseline + 4)
+    expect(second, '热跑没走缓存 ⇒ 返回的不是同一份对象（cachedBySigAsync 没包住整个查询）').toBe(first)
+    // 改库（signature 变）⇒ 必须重算，不能把旧值端上来。
+    const db = new DatabaseSync(join(dec, 'message', 'message_resource.db'))
+    const sigBefore = fileSigOf(join(dec, 'message', 'message_resource.db'))
+    db.prepare('INSERT INTO MessageResourceDetail VALUES (?,?,?,?,?,?)').run(4, 1, 99999, null, '4', 1_700_000_100)
+    db.prepare('INSERT INTO MessageResourceInfo VALUES (?,?,?,?)').run(4, 1, 1, 9004)
+    db.close()
+    /**
+     * ⚠️ 这里**不再需要** `utimesSync` 推 mtime（2026-09-29 第 20 轮）。
+     *
+     * 曾经的失败输出是决定性的（`SUPERTIME_CACHE_TRACE=1`）：
+     * ```
+     * [算料|sig] 插入前=…4940830600:20480  插入后=…4940830600:20480   ← mtime 一个数字都没变
+     * [cache-trace] hit storage-stats:… sig=…4940830600:20480…        ← 于是命中旧值
+     * ```
+     * 即 **NTFS 对最后写入时间懒刷新**，stat 类签名有固有陈旧窗口（文档：docs/CACHE-INVALIDATION.md 通道④）。
+     * 现在签名里加了 **SQLite 的文件变更计数器**（头部偏移 24，每次修改/checkpoint 自增，
+     * 与文件时间无关）⇒ 插入后签名**必然**变化，这条断言不再依赖 mtime，也就回到了
+     * "真的写了一条数据 ⇒ 必须重算"这个原始契约。
+     */
+    console.log(`[算料|sig] 插入前=${sigBefore} 插入后=${fileSigOf(join(dec, 'message', 'message_resource.db'))}`)
+    const third = await queryStorageStats(dec, base)
+    expect(third.total_size, '文件签名变了仍回旧值 ⇒ 缓存把「数据变了」这一维丢了').not.toBe(first.total_size)
+  })
+})
+
+describe('词云也要让出（2026-09-28 补：上一轮漏登记的模块）', () => {
+  it('多个消息分片 ⇒ 分片之间真的让出过（探针拿得到 tick）', async () => {
+    const dec = makeMsgTree(2_000)
+    const stop = tickProbe()
+    const r = await queryWordCloud(dec, { scope: 'global' })
+    const ticks = stop()
+    // 防空转：夹具必须真的产出词，否则下面的 tick 判断量的是「没跑」而不是「让出了」。
+    expect(r.scanned, '夹具没扫到正文 ⇒ 下面的让出判断是空转').toBeGreaterThan(0)
+    console.log(`[算料|yield] 词云 2 分片 × 2000 行：探针 ticks=${String(ticks)}`)
+    // 让出点 = 进入扫描前 1 次 + 2 个分片边界 ⇒ 下界 3。少一处就掉回 2。
+    expect(ticks, '词云又变回「从头钉到尾」的同步扫（同屏其它请求会被它堵住）').toBeGreaterThanOrEqual(3)
+  })
+
+  it('单分片但正文行数超过一档 ⇒ 行级让出也真的发生', async () => {
+    const dec = makeMsgTree(YIELD_EVERY_ROWS + 1, ['message_0.db'])
+    const stop = tickProbe()
+    const r = await queryWordCloud(dec, { scope: 'global' })
+    const ticks = stop()
+    expect(r.scanned, `夹具没读到 ${String(YIELD_EVERY_ROWS + 1)} 行正文`).toBe(YIELD_EVERY_ROWS + 1)
+    console.log(`[算料|yield] 词云 1 分片 × ${String(YIELD_EVERY_ROWS + 1)} 行：探针 ticks=${String(ticks)}`)
+    // 让出点 = 进入前 1 + 行级满一档 1 + 分片边界 1 ⇒ 下界 3。
+    expect(ticks, '只有分片边界让出、整表扫一口气跑完 ⇒ 大账号仍然会钉住循环').toBeGreaterThanOrEqual(3)
+  })
+
+  /**
+   * **字符级**阈值必须真的生效（2026-09-28 实测后补的判据）。
+   *
+   * 为什么单独立一条：上面那条用 2000 行**短**正文触发的是**行数**阈值，
+   * 对"行少但每行很长"的形状完全无感 —— 而朋友圈正是后者。
+   * 本机真实数据实测（`working/probe-wordcloud.txt`）：只有行阈值时
+   * `wordcloud(moments)` 的**最长独占 111ms**；加上 `YIELD_EVERY_CHARS`
+   * 之后降到 **13ms**。真实数据进不了单测，所以这里用"少行 × 超长正文"
+   * 把同一个形状搬进夹具 —— 把字符阈值摘掉，这条必红。
+   */
+  it('行数远不够一档、但正文累计超过字符档 ⇒ 字符级让出也真的发生', async () => {
+    const PER_ROW = 2000
+    const ROWS = Math.ceil((YIELD_EVERY_CHARS * 2) / PER_ROW)
+    expect(ROWS < YIELD_EVERY_ROWS, '夹具行数本身就够一档 ⇒ 这条测不到字符阈值').toBe(true)
+    const long = '项目'.repeat(PER_ROW / 2)
+    const root = mkdtempSync(join(tmpdir(), 'yield-'))
+    scratch.push(root)
+    const msgDir = join(root, 'message')
+    mkdirSync(msgDir, { recursive: true })
+    const table = 'Msg_wxid_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const db = new DatabaseSync(join(msgDir, 'message_0.db'))
+    db.exec(`CREATE TABLE "${table}" (create_time INTEGER, local_type INTEGER, message_content TEXT)`)
+    const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?)`)
+    for (let i = 0; i < ROWS; i += 1) ins.run(1_700_000_000 + i, 1, long)
+    db.close()
+
+    const stop = tickProbe()
+    const r = await queryWordCloud(root, { scope: 'global' })
+    const ticks = stop()
+    expect(r.scanned, '夹具没读到正文 ⇒ 下面的让出判断是空转').toBe(ROWS)
+    console.log(`[算料|yield] 词云 ${String(ROWS)} 行 × ${String(long.length)} 字符（行数不足一档）：探针 ticks=${String(ticks)}`)
+    // 让出点 = 进入前 1 + 字符级至少 1 + 分片边界 1 ⇒ 下界 3。
+    // 摘掉 `YIELD_EVERY_CHARS` 会掉到 2（只剩进入前与分片边界）。
+    expect(ticks, '长正文没按字符让出 ⇒ 行少但很长的朋友圈仍会独占事件循环（实测 111ms）')
+      .toBeGreaterThanOrEqual(3)
+  })
 })
 
 /**
- * P1-2 点名的五个模块。**全部收完之后**这张表从「只能变小的棘轮」升级成零容忍清单：
- * 少任何一个让出点就红；再加新的同步重查询也要一并进这张表（`[算料]` 会把名单打出来，
- * 空清单会被下面那条长度哨兵判红，所以它不会悄悄退化成恒真）。
+ * P1-2 点名的五个模块 + 2026-09-28 性能修复补的四个（`analyzeVisibleMessages` 均 36s /
+ * `getRemoteImages` 峰值 86.5s / 封面与媒体取数）。**全部收完之后**这张表从「只能变小的棘轮」
+ * 升级成零容忍清单：少任何一个让出点就红；再加新的同步重查询也要一并进这张表
+ * （`[算料]` 会把名单打出来，空清单会被下面那条长度哨兵判红，所以它不会悄悄退化成恒真）。
  */
 const P1_2_MODULES = [
   'overview-insights.ts',
@@ -292,16 +405,132 @@ const P1_2_MODULES = [
   'storage.ts',
   'ledger.ts',
   'graph.ts',
+  // 2026-09-28 性能修复（PERF-AUDIT-172）：日志里三个最慢的非本地取数模块。
+  // 路径不同（`laya/` 与 `query/`），下面按模块名在**两个目录**里找。
+  'analysis.ts',
+  'remote-image.ts',
+  'article-cover.ts',
+  // 2026-09-28（本轮补）：`wordcloud.ts` 是上一轮**漏登记**的一个 —— 它的遮罩换成
+  // Aho-Corasick 后单次冷算已压到 ~2 秒，但那 2 秒仍是**同步**占满 worker
+  // （`wordcloud-perf.wiring.spec.ts` 头注记着实测：同屏「世界板块」自身 13ms
+  // 被推迟到 17,008ms）。日志口径 `getWordCloud` 24 次 / 均 7.06s / 峰值 13.9s。
+  'wordcloud.ts',
+  // 2026-09-28（本轮补，真实数据探针 `working/probe-stall.txt`）：
+  // `moments-insights.ts` 冷跑 **228ms 且一次都不让出** —— 是本次实测里
+  // 「让出 0 且 >50ms」中最长的一个。根因是整张 SnsTimeLine 被 `.all()` 物化
+  // 且提醒清单里又全表 `iterate()` 了一遍。
+  'moments-insights.ts',
+  // 2026-09-28（同一轮补）：`asset-insights.ts` 冷跑 **155ms 且一次都不让出** ——
+  // 它要逐张打开全部消息分片（本机 146MB + 46MB + …）扫 `local_type=47`。
+  'asset-insights.ts',
+  // 2026-09-28（同一轮补）：`annual.ts` 冷跑 **117ms 且一次都不让出** ——
+  // 逐张 `Msg_*` 表跑 `DISTINCT strftime(...)`（本机 351 张表）。
+  'annual.ts',
+  // 2026-09-28（本轮补）：`calls.ts` 冷跑 **87ms 且一次都不让出** ——
+  // 逐张分片把 type-50 行 `.all()` 出来、再对每行做 XML 解析。
+  'calls.ts',
+  // 2026-09-28（本轮补）：`sessions.ts` 冷跑 **78ms 且一次都不让出** ——
+  // 诊断（`working/diag-sessions.ts`）显示 `SessionTable` 读取只要 1ms，
+  // 78ms 几乎全在「逐会话解析未读最早时间」那一圈（41 次 ×约 1.4ms）。
+  'sessions.ts',
+  // 2026-09-28（本轮补）：`overview.ts` 冷跑 **78ms 且一次都不让出** ——
+  // 最后一个"整段独占"接口。两处热点：逐张分片找反撤回表（`countRevokedAcrossShards`）、
+  // 以及 `SnsTimeLine` 全表的作者统计游标。
+  'overview.ts',
+  // 2026-09-28（本轮补）：`official-assets.ts` 冷跑 **39ms 且一次都不让出** ——
+  // 受测集里最后一个独占项：逐张消息分片把公众号会话的整张 `Msg_*` 拉出来数条数。
+  'official-assets.ts',
+  // 注：`keys/image-key-resolver.ts` 的模板扫描（最多 500 个目录的 BFS）本轮也改成了
+  // 可让出，但它**不在本清单里**：让出原语 `yieldToLoop` 属于查询层，`keys/` 不该反向依赖，
+  // 所以让它做成生成器（`scanV2TemplatesSteps`）+ 由调用方 `remotes/keysdec.ts`
+  // 传入让出节流（`templateScanYield`，每 8 个目录一次）。
+  // 这条链路的证据在 `working/probe-remote.txt`：`verifyImageKey` 由 1603ms/0 让出
+  // 降到片段上界 108ms、43 次让出。
+  //
+  // 2026-09-28（本轮补，真实 @Remote 探针播种真实 year 后才测到）：
+  // 三个年报接口共用同一类"整年消息逐条 CPU 重活"的扫描，占用量级都是秒：
+  //   · `getAnnualReport`  2254ms / 0 让出 → 片段上界 3ms、992 次让出
+  //   · `getAnnualReview`  2150ms / 0 让出 → 36ms、66 次
+  //   · `exportAnnualReport` 4048ms / 0 让出 → 5ms、842 次
+  'annual-report.ts',
+  'annual-review.ts',
+  // 2026-09-28（本轮补）：`image-original-batch.ts` 的盘点扫描（逐张消息分片读
+  // `local_type=3` 的行 + 逐条解析 img XML）。真实 @Remote 探针实测
+  // `planOriginalFetch` 冷跑 **1719ms 且一次都不让出** —— 用户点一下「盘点原图覆盖率」
+  // 整个后端停摆 1.7 秒。现在走生成器 + `scanImageOriginalPlanAsync`（分片级让出）。
+  'image-original-batch.ts',
+  // 2026-09-28（同一轮补）：`daily-summary.ts` 的 `collectRange` 要逐张分片枚举 `Msg_*`
+  // 表再读行。真实 @Remote 探针实测 `generatePeriodSummary` 冷跑 **448ms / 0 让出**
+  // （当时最长独占项）、`generateDailySummary` **230ms / 0 让出**、`extractTasks`
+  // **372ms / 0 让出**（`remotes/tasks.ts` 也走这条）。现在走 `collectRangeSteps` 生成器
+  // + `collectRangeAsync`（每 2 张分片让出一次 —— 步长必须小于分片数，否则本机 6 张分片
+  // 只会让出 1 次、片段仍剩 220ms）。
+  'daily-summary.ts',
+  // 2026-09-28（本轮补）：`export-flows.ts` 的 `exportMoments` 逐页调 `queryMoments`
+  // 取完整个朋友圈。实测冷跑 **273ms / 0 让出**；现在逐页让出（转到 129ms / 3 让出）。
+  'export-flows.ts',
+  // 2026-09-28（本轮补）：`backup.ts` 的 `createBackup` 用 `cpSync` **同步**整树复制
+  // 每个子目录。实测冷跑 **206ms / 0 让出**（当时最长独占项）；现在每个子目录复制前让出
+  // ⇒ **14ms / 14 让出**（本会话单点改善最大的一处）。
+  'backup.ts',
+  // 2026-09-28（本轮补）：`messages.ts` 的 `queryMessageByServerId` 要做两次
+  // 「全分片 × 全表」等值查找。实测 `resolveChatHistory` 冷跑 **84ms / 0 让出**
+  // （当时最后一个独占项）；现在逐分片让出 ⇒ **9ms / 8 让出**。
+  'messages.ts',
+  // 2026-09-29（守卫覆盖对账补的漏登）：这两处**直接调 `yieldToLoop`**，
+  // 却是靠一份"账本 vs 清单"的对账脚本才发现的 —— 修过但没人管，等于随时能退回去。
+  // 来源：`remotes/tasks.ts` 委派 `collectPeriodMessagesAsync`、`remotes/export.ts` 委派
+  // `export-flows.ts`（后两者本身不含 `yieldToLoop`，所以**不入本清单**，见文件末注释）。
+  'moments-monthly.ts',
+  'keysdec.ts',
+  // 2026-09-29（第 70 轮补）：`upgradeDecodedImages` 实测 **186ms / 0 让出** ——
+  // 两棵同步目录树（`scanCachedImages` 扫 decoded 缓存、`collectImageDatFiles` 扫 msg/attach）。
+  // 改成生成器 + 可让出驱动器后 **198ms / 15 让出 ⇒ 片段上界 12ms**（186 → 12，15.5×）。
+  // 注意：**这个文件原先不在任何清单里**，是靠把探针超时从 4s 放到 180s 才第一次量到的
+  // —— 4s 超时下它被记成 `TIMEOUT`，于是"只有让出次数、没有完整耗时"，谁也没看出它不让出。
+  'image-upgrade.ts',
+  'decrypt-images.ts',
 ]
 
 describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
-  it('五个模块逐个含 yieldToLoop，且清单本身不被清空', () => {
-    const src = join(import.meta.dirname, '..', 'src', 'query')
+  it('清单里每个模块都含 yieldToLoop，且清单本身不被清空', () => {
+    // ⚠️ 搜索面必须覆盖**清单里模块实际所在的目录**：原先只扫 `query/` 与 `laya/`，
+    // 于是把 `remotes/keysdec.ts` 这类写进清单也永远"找不到文件" ⇒ 判为缺失。
+    // 2026-09-29 做"账本 vs 清单"对账时发现并补上 `remotes/`。
+    const srcDirs = [
+      join(import.meta.dirname, '..', 'src', 'query'),
+      join(import.meta.dirname, '..', 'src', 'laya'),
+      join(import.meta.dirname, '..', 'src', 'remotes'),
+    ]
     expect(P1_2_MODULES.length, '清单被清空 ⇒ 这条判据就是空转').toBeGreaterThanOrEqual(5)
-    const missing = P1_2_MODULES.filter(
-      (name) => !readFileSync(join(src, name), 'utf8').includes('yieldToLoop'),
-    )
+    const missing = P1_2_MODULES.filter((name) => {
+      const hit = srcDirs.map((d) => join(d, name)).find((p) => existsSync(p))
+      // 找不到文件也算缺失：模块被改名/搬走时必须来更新这张表，而不是静默变绿。
+      return hit === undefined || !readFileSync(hit, 'utf8').includes('yieldToLoop')
+    })
     console.log(`[算料|yield] P1-2 清单 ${String(P1_2_MODULES.length)} 个模块，还没有让出点的：${missing.length === 0 ? '（无）' : missing.join(', ')}`)
     expect(missing, '这些模块又回到「从头钉到尾」的同步形状').toEqual([])
+  })
+
+  it('补过的模块里，让出是**调用点**而不是 import 行（改回同步循环必须被发现）', () => {
+    // `includes('yieldToLoop')` 会被 `import { yieldToLoop }` 那一行命中 ⇒ 删掉调用点照样绿
+    // （R7 的 `useEscapeToClose` 就是这么被变异测试抓出来的）。这里钉调用点。
+    const CALL = /(?:^|[^A-Za-z0-9_$.])yieldToLoop\s*\(/
+    const roots = join(import.meta.dirname, '..', 'src')
+    const targets = [
+      join(roots, 'laya', 'analysis.ts'),
+      join(roots, 'query', 'remote-image.ts'),
+      join(roots, 'query', 'article-cover.ts'),
+    ]
+    const stripped = targets.map((f) => {
+      const text = readFileSync(f, 'utf8')
+      // 剥注释：注释里写 `yieldToLoop()` 是文档，不是让出。
+      const noComment = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+      // 去掉 import 行后再找调用点。
+      const noImport = noComment.replace(/^[ \t]*import[^\n]*\n/gm, '')
+      return { f, hit: CALL.test(noImport) }
+    })
+    const noCall = stripped.filter((s) => !s.hit).map((s) => s.f.split(/[\\/]/).slice(-2).join('/'))
+    expect(noCall, '只剩 import、没有真正的让出调用点 ⇒ 又变回独占事件循环').toEqual([])
   })
 })

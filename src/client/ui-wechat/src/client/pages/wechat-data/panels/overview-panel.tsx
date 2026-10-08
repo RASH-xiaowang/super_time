@@ -21,7 +21,7 @@ import { CalendarHeatmap } from './CalendarHeatmap.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { RegionBoard } from './RegionBoard.tsx'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { PanelHeader } from '../ui/kit.tsx'
+import { ErrorState, LoadingState, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
 import neon from './overview-neon.module.css'
@@ -208,8 +208,8 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
 
       {/* 正文独立滚动：页头（含导出菜单）保持可见（见 kit.module.css 的 .panelBody） */}
       <div className={kitCss.panelBody}>
-      {notice && <div className={css.error}>{notice}</div>}
-      {!debugSkeleton && error && data !== null && <div className={css.error}>后台刷新失败（正在展示缓存数据）</div>}
+      {notice && <div className={kitCss.emptyInline}>{notice}</div>}
+      {!debugSkeleton && error && data !== null && <ErrorState message="后台刷新失败（正在展示缓存数据）" />}
       {data === null || debugSkeleton ? <SkeletonOverview /> : null}
 
       {!debugSkeleton && data !== null && (
@@ -227,7 +227,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
               <div className={css.worldBoard}>
                 <div className={css.worldMapBox + ' ' + neon.worldMapBox}>
                   <LazyMount placeholder={<div className={kitCss.emptyInline}>地图进入可视区后加载…</div>}>
-                    <Suspense fallback={<div className={kitCss.emptyInline}>地图资源加载中…</div>}>
+                    <Suspense fallback={<LoadingState variant="compact" label="地图资源加载中…" />}>
                       <WorldMapPanel />
                     </Suspense>
                   </LazyMount>

@@ -5,6 +5,8 @@
  */
 import { useEffect, useRef } from 'react'
 
+import { useThemeMode } from '../theme.ts'
+
 const VERT_SRC = `#version 300 es
 // Fullscreen triangle. No attributes, no buffers — gl_VertexID does the work.
 void main() {
@@ -246,17 +248,29 @@ function blurCopyFrom(sharp: HTMLCanvasElement, px: number): HTMLCanvasElement {
   return c2
 }
 
-function makeScene(w: number, h: number): { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement } {
+/**
+ * 雨幕天空的四段渐变色 + 兜底径向渐变。
+ *
+ * 深浅两套（2026-09-28）：这段渐变是**画在 canvas 位图里**的，不吃 CSS 令牌 ——
+ * 浅色主题下如果还用深空蓝，整块画布会是一块黑底，与周围浅色面板直接断层。
+ * 浅色档保留同一色相（暖橙雨点仍在），只把天空换成晨雾蓝。
+ */
+const RAIN_SKY = {
+  dark: { stops: ['#050a14', '#0a1526', '#13233a', '#0a1120'], fallback: 'radial-gradient(120% 90% at 50% 20%, #0a1526 0%, #0a1120 60%, #050a14 100%)' },
+  light: { stops: ['#eef4fb', '#e3ebf7', '#d8e4f4', '#e8eef8'], fallback: 'radial-gradient(120% 90% at 50% 20%, #e3ebf7 0%, #e8eef8 60%, #eef4fb 100%)' },
+} as const
+
+function makeScene(w: number, h: number, sky: (typeof RAIN_SKY)['dark'] | (typeof RAIN_SKY)['light']): { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement } {
   const sharp = document.createElement('canvas')
   sharp.width = w
   sharp.height = h
   const x = get2d(sharp)
   if (x) {
     const grad = x.createLinearGradient(0, 0, 0, h)
-    grad.addColorStop(0, '#050a14')
-    grad.addColorStop(0.42, '#0a1526')
-    grad.addColorStop(0.72, '#13233a')
-    grad.addColorStop(1, '#0a1120')
+    grad.addColorStop(0, sky.stops[0])
+    grad.addColorStop(0.42, sky.stops[1])
+    grad.addColorStop(0.72, sky.stops[2])
+    grad.addColorStop(1, sky.stops[3])
     x.fillStyle = grad
     x.fillRect(0, 0, w, h)
     const palette = ['rgba(255,176,92,', 'rgba(255,214,150,', 'rgba(120,200,255,', 'rgba(255,120,110,', 'rgba(176,150,255,', 'rgba(140,255,214,']
@@ -326,10 +340,11 @@ function compileShader(gl: WebGL2RenderingContext, type: number, src: string): W
   return s
 }
 
-let sceneCache: { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement } | null = null
-function getScene() {
-  if (!sceneCache) sceneCache = makeScene(900, 840)
-  return sceneCache
+/** 按主题分别缓存一套离屏场景（切主题时不能复用另一套天空色的位图）。 */
+const sceneCache: { dark?: { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement }; light?: { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement } } = {}
+function getScene(mode: 'dark' | 'light') {
+  if (!sceneCache[mode]) sceneCache[mode] = makeScene(900, 840, RAIN_SKY[mode])
+  return sceneCache[mode] as { sharp: HTMLCanvasElement; soft: HTMLCanvasElement; heavy: HTMLCanvasElement }
 }
 
 export function RainWindow({ className, label = '选择左侧会话查看消息', active = true }: RainWindowProps): React.JSX.Element {
@@ -337,12 +352,16 @@ export function RainWindow({ className, label = '选择左侧会话查看消息'
   const apiRef = useRef<{ start: () => void; stop: () => void } | null>(null)
   const labelRef = useRef(label)
   labelRef.current = label
+  // 主题是画布天空色的输入之一：切主题必须重建场景并重画背景，
+  // 否则位图里仍是上一套天空色（canvas 不吃 CSS 令牌，不会自己跟着变）。
+  const theme = useThemeMode()
 
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
+    const sky = RAIN_SKY[theme]
     const fallback = (): void => {
-      canvas.style.background = 'radial-gradient(120% 90% at 50% 20%, #0a1526 0%, #0a1120 60%, #050a14 100%)'
+      canvas.style.background = sky.fallback
     }
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' })
     if (!gl) {
@@ -404,7 +423,7 @@ export function RainWindow({ className, label = '选择左侧会话查看消息'
     gl.uniform1i(glGetUniform(gl, program, 'uBg2'), 2)
     gl.uniform1i(glGetUniform(gl, program, 'uText'), 3)
 
-    const scene = getScene()
+    const scene = getScene(theme)
     makeTexture(scene.sharp, 0)
     makeTexture(scene.soft, 1)
     makeTexture(scene.heavy, 2)
@@ -478,7 +497,9 @@ export function RainWindow({ className, label = '选择左侧会话查看消息'
       // 只等 GC 会让反复开关聊天页时累积的上下文长期占着显存/内存。
       try { gl.getExtension('WEBGL_lose_context')?.loseContext() } catch { /* 尽力而为 */ }
     }
-  }, [])
+    // `theme` 必须在依赖里：天空色是画进位图/纹理的，切主题要重建场景与纹理，
+    // 否则浅色主题下仍显示深色夜景（canvas/WebGL 不吃 CSS 令牌）。
+  }, [theme])
 
   // 聊天界面可见时播放，隐藏时暂停（避免反复重建/空转）
   useEffect(() => {

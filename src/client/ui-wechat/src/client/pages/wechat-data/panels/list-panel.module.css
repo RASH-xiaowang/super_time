@@ -26,7 +26,7 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
   transition: all 0.15s;
@@ -111,7 +111,7 @@
 .emoPh { font-size: 30px; }
 /* 表情格里的真图：固定 72px 见方、只做 contain（动图自己会动，别加 transition） */
 .emoImg { width: 72px; height: 72px; object-fit: contain; display: block; }
-.emoMd5 { font-size: 10.5px; color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
+.emoMd5 { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
 /* 第 94 轮：点击复制提示的强调色（原来写在 Emoticons.tsx 的行内 style 里）。 */
 .emoMd5Cyan { color: var(--nm-cyan); }
 .emoName { font-size: 11px; font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
@@ -124,6 +124,28 @@
   background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
   transition: all 0.15s;
 }
+/* 备份条目：**横向排布**（2026-09-29 用户截图指出："修复这个，文本内容横向排布"）。
+ *
+ * 原先备份条目直接复用共享的 `.fileCell` —— 那是"卡片格"形态
+ * （`flex-direction: column; align-items: center`），适合表情网格那种"一格一个图标"；
+ * 但备份条目里是"名称 + 一长串元信息 + 预览/恢复/删除"三类内容，
+ * 竖排居中会让每行各自居中、按钮还竖着叠起来（正是截图里的样子）。
+ *
+ * 这里**不动共享类**（表情网格等仍保持竖排居中），只给备份这一处加 `.bkCell` 覆盖成一行：
+ * 名称 · 元信息（吃掉剩余宽度）· 按钮组贴右端；窄窗下允许换行而不是撑破。
+ */
+.bkCell {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px 12px;
+  text-align: left;
+}
+.bkCell > .fileName { flex: 0 1 auto; font-size: var(--nm-fs-sm); font-weight: 600; }
+/* 元信息吃掉中间剩余宽度 ⇒ 后面的按钮自然被推到右端 */
+.bkCell > .fileMeta { flex: 1 1 320px; min-width: 0; margin-left: 0; margin-right: 0; }
+
 .fileCell:hover {
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   border-color: var(--nm-border-hover);
@@ -344,7 +366,7 @@
   white-space: nowrap;
 }
 .fileName { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.fileMeta { font-size: 10.5px; color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
+.fileMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
 .empty { padding: var(--nm-empty-pad); text-align: center; color: var(--nm-text-2); font-size: var(--nm-empty-fs); grid-column: 1 / -1; }
 
 /* ── 隐私体检：落地态 / 扫描中（U1）────────────────────────────────────
@@ -357,6 +379,22 @@
   /* 不写固定高度：内容撑到多少就是多少，多余空间由 .pvItems 的弹性吸收 */
   flex: 1 1 auto;
   min-height: 0;
+}
+/* 扫描进度（R4）：全库敏感信息扫描实测 >1s（冷启更久），加一条不确定进度条 + 已等待秒数。
+   后端不报总量 ⇒ 用 indeterminate（不编百分比）。 */
+.pvProgress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+}
+.pvProgressText {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
 }
 .pvLandGrid {
   display: grid;
@@ -392,8 +430,15 @@
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   grid-auto-rows: minmax(58px, auto);
   gap: 8px;
-  flex: 1 1 auto;
-  align-content: space-evenly;
+  /* 重新设计（2026-09-29 用户："这个界面也重新设计"，此前审计量到最大空白 163px、占比 69%）：
+   *
+   * 原来这里是 `flex: 1 1 auto` + `align-content: space-evenly` —— 意思是"吃掉面板剩余高度，
+   * 再把行均匀摊开"。可 6 张检测器卡两行总共只有约 124px 高，却被摊在 600+px 的高度里，
+   * 于是两道约 110–120px 的巨空档就出现在卡片行之间（截图里那两片空白正是它）。
+   *
+   * 现在不再吸收剩余高度、行距按 `gap` 走 ⇒ 卡片紧贴排列，空出来的空间只在面板底部集中一块。 */
+  flex: 0 0 auto;
+  align-content: start;
 }
 .pvItem {
   display: flex;
@@ -447,7 +492,7 @@
   border: 1px solid var(--nm-border);
 }
 .cite {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   background: var(--nm-bg-hover);
   border-radius: var(--nm-r-pill);
@@ -626,7 +671,7 @@
 }
 .hookFlowIcon { font-size: 16px; }
 .hookFlowTitle { font-size: 12px; color: var(--nm-text-1); }
-.hookFlowSub { font-size: 10.5px; color: var(--nm-text-2); }
+.hookFlowSub { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
 .hookFlowArrow { align-self: center; color: var(--nm-cyan); font-size: 14px; }
 .hookGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .hookStat {
@@ -660,7 +705,7 @@
 .hookStat[data-tone='amber'] .hookStatValue { color: var(--nm-warning-text); }
 .hookStat[data-tone='purple'] .hookStatValue { color: var(--nm-purple-text); }
 .hookStat[data-tone='blue'] .hookStatValue { color: var(--nm-info-text); }
-.hookStatHint { font-size: 10.5px; color: var(--nm-text-2); opacity: 0.75; }
+.hookStatHint { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); opacity: 0.75; }
 .hookActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .hookEntryList { display: flex; flex-direction: column; gap: 6px; }
 .hookEntryItem { font-size: 12px; color: var(--nm-text-2); line-height: 1.7; }

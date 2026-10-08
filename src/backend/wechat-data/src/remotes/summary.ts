@@ -9,14 +9,14 @@ import { collectDayMessages } from '../query/daily-summary.ts'
 import { deleteSummaryTask as delTask, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from '../query/summary-tasks.ts'
 import { OperationCategory, OperationStatus, SummaryRecord, SummaryTask, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, GenerateOptions, createUserMessage } from '@deepseek-ai/dsh-llm'
 
 export interface createSummaryRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   ctx: () => Context
-  privacyBlocked: (feature: string, detail?: string) => string | null
-  privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => { ok: true; texts: string[] } | { ok: false; error: string }
+  privacyGate: PrivacyGateFn
 }
 
 export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
@@ -60,12 +60,8 @@ export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
       let summary = ''
       let status = 'done'
       let errMsg = ''
-      // 拦截优先于「模型不可用」：否则用户开了「禁止 AI 出网」却只看到「LLM/模型不可用」
-      const blockedTask = rc.privacyBlocked('summary_task')
-      if (blockedTask !== null) {
-        status = 'error'
-        errMsg = blockedTask
-      } else if (!sel || !sel.provider || !sel.model) {
+      // 出网拦截已随开关移除（2026-09-30）：这里只剩「模型不可用」这一条早退。
+      if (!sel || !sel.provider || !sel.model) {
         status = 'error'
         errMsg = 'LLM/模型不可用'
       } else {
@@ -80,22 +76,16 @@ export function createSummaryRemotes(rc: createSummaryRemotesInputs) {
         }
         const fmtPrompt = formats[task.format || 'brief'] || formats['brief'] || ''
         const prompt = '群聊【' + task.groupName + '】(' + task.groupUsername + ') ' + date + ' 的聊天记录如下：\n\n' + lines.join('\n') + '\n\n' + fmtPrompt
-        const gate = rc.privacyGate('summary_task', { sessions: 1, messages: count }, [prompt])
-        if (!gate.ok) {
-          // 群总结任务不抛错：状态写进任务运行状态与记录里，界面能看到「被隐私设置拦下」
+        const [gated] = rc.privacyGate('summary_task', { sessions: 1, messages: count }, [prompt])
+        const userMsg = createUserMessage({ content: [{ type: 'text', text: gated ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
+        const assembler = new BlockAssembler()
+        const opts: GenerateOptions = { provider: sel.provider, model: sel.model, messages: [userMsg], system: '你是微信每日总结助手，按要求的格式输出总结。', maxTokens: 1024 }
+        try {
+          for await (const chunk of llm.stream(opts)) assembler.push(chunk)
+          summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+        } catch (e) {
           status = 'error'
-          errMsg = gate.error
-        } else {
-          const userMsg = createUserMessage({ content: [{ type: 'text', text: gate.texts[0] ?? prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })
-          const assembler = new BlockAssembler()
-          const opts: GenerateOptions = { provider: sel.provider, model: sel.model, messages: [userMsg], system: '你是微信每日总结助手，按要求的格式输出总结。', maxTokens: 1024 }
-          try {
-            for await (const chunk of llm.stream(opts)) assembler.push(chunk)
-            summary = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-          } catch (e) {
-            status = 'error'
-            errMsg = (e as Error).message
-          }
+          errMsg = (e as Error).message
         }
       }
       const rec: SummaryRecord = {

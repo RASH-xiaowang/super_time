@@ -23,14 +23,16 @@
 }
 .toolSelect:hover, .toolBtn:hover:enabled { color: var(--nm-text-1); border-color: var(--nm-border-hover); }
 .toolBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.scrollBody { overflow: hidden; }
+.scrollBody { overflow-y: auto; }
 .hint { margin-bottom: var(--nm-dense-g3); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); }
 .empty { padding: 24px 0; text-align: center; font-size: var(--nm-dense-fs); color: var(--nm-text-3); }
 
 /* ── 卡片（网格单元）── */
 .card {
+  container-type: inline-size;   /* 内部按卡片宽度适配（见文件末尾 @container 规则） */
   min-height: 0; min-width: 0;
   overflow: hidden;            /* 内容略多时裁掉，而不是把网格撑破、逼出滚动条 */
+  overflow-wrap: anywhere;     /* 长串在任意位置断行 */
   display: flex; flex-direction: column;
   padding: 6px 8px;
   background: var(--nm-bg-card);
@@ -43,7 +45,7 @@
 }
 .cardTitle { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-2); white-space: nowrap; }
 .cardExtra { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cardBody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+.cardBody { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: space-between; }
 
 /* ── ① 全年发出 ── */
 .heroNum { font-size: 20px; font-weight: 700; line-height: 1.05; color: var(--nm-text-1); font-variant-numeric: tabular-nums; }
@@ -201,4 +203,160 @@
   .card { break-inside: avoid; margin: 0 0 10px; }
   .scrollBody { overflow-y: auto; }
   .footer { display: flex; }
+}
+
+/* ── 密排容器（2026-09-30 定稿：CSS 多列平衡，零 JS 测量）───────────────────
+   曾用"JS 测高 + 最短列优先"：测量一旦拿不到高度就退化成按索引轮流放，
+   左列早早结束、右列越堆越长 ⇒ 左下角一大片空白（用户 2026-09-30 报）。
+   现在交给浏览器：`column-width` + `column-fill: balance`，列底自动齐平。
+   ⚠️ `column-width` 只接受长度，**不能**写 `min(100%, 620px)`（非法值会让整条声明被丢弃）。
+   海报卡与「更多」卡都在这一张容器里（用户："将下段卡片全部迁移到上段卡片中"）。
+   注：上面那套 `.wrap` / 紧凑回退规则已无人引用，**保留不删**（删除动作本身风险更大）。 */
+.board {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--nm-dense-g5);
+  grid-auto-flow: dense;
+  align-items: stretch;
+}
+/* 卡片不许被拆到两列（拆开就成"半张卡"）。 */
+/* 跨列：宽内容（词云/画像）占半行；页脚整行。 */
+.span6 { grid-column: span 6; }
+.footer { grid-column: span 12; }
+.zoneTag {
+  flex: 0 0 auto;
+  padding: 0 var(--nm-dense-g1);
+  font-size: var(--nm-dense-fs-sm);
+  color: var(--nm-text-3);
+  text-align: right;
+  white-space: nowrap;
+}
+.moreCard {
+  container-type: inline-size;
+  grid-column: span 4;          /* 默认 1/3 宽；宽内容卡由 .span6 / .portrait 覆盖成半行 */
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  display: flex; flex-direction: column;
+  /* 间距交给网格 gap（g5=10px）—— 这里再给 margin 会和 gap 叠加成 20px（用户反馈"上下间隙太大"）。 */
+  padding: var(--nm-dense-g3) var(--nm-dense-g4);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+}
+.moreCard:last-child { margin-bottom: 0; }
+.moreCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); margin-bottom: var(--nm-dense-g2); min-width: 0; flex-wrap: wrap; }
+.moreCardTitle { font-size: var(--nm-dense-fs); font-weight: 600; color: var(--nm-text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moreCardExtra { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-3); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moreNum { font-size: 20px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--nm-text-1); }
+.moreRow { display: flex; align-items: baseline; justify-content: space-between; gap: var(--nm-dense-g3); font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); min-width: 0; }
+.moreRow > span { min-width: 0; }
+.moreRow > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moreRow > span:last-child { text-align: right; overflow-wrap: anywhere; }
+.moreRowName { display: inline-flex; align-items: center; gap: var(--nm-dense-g2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moreList { display: flex; flex-direction: column; gap: var(--nm-dense-g1); margin-top: var(--nm-dense-g2); min-width: 0; }
+.moreSub { margin-top: var(--nm-dense-g2); font-size: var(--nm-dense-fs-xs); line-height: 1.5; color: var(--nm-text-2); overflow-wrap: anywhere; }
+.moreEmpty { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); overflow-wrap: anywhere; }
+.moreBars { display: flex; align-items: flex-end; gap: var(--nm-dense-g2); height: 64px; margin-top: var(--nm-dense-g2); min-width: 0; }
+.moreBarCol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: var(--nm-dense-g2); height: 100%; justify-content: flex-end; }
+.moreBarFill { width: 100%; min-height: 2px; border-radius: var(--nm-dense-r) var(--nm-dense-r) 0 0; background: var(--nm-cyan-45, rgba(0, 240, 255, 0.45)); }
+.moreBarFill[data-peak] { background: var(--nm-cyan); }
+.moreBarLabel { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); white-space: nowrap; }
+.portrait { grid-column: span 6; border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2)); }
+.portraitText { margin: 0; font-size: var(--nm-dense-fs); line-height: 1.7; color: var(--nm-text-1); }
+.ratio { display: flex; height: 6px; margin-top: var(--nm-dense-g2); border-radius: var(--nm-dense-r); overflow: hidden; background: var(--nm-purple-20, rgba(168, 85, 247, 0.2)); }
+.ratioMine { background: var(--nm-cyan); }
+.ratioTheirs { flex: 1 1 auto; background: var(--nm-purple, #a855f7); }
+.ratioLegend { display: flex; justify-content: space-between; gap: var(--nm-dense-g3); margin-top: var(--nm-dense-g1); font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); }
+.rhythmRow[data-weekend] { background: var(--nm-purple-8, rgba(168, 85, 247, 0.08)); border-radius: var(--nm-r-xs, 4px); }
+.rhythmRow[data-weekend] .rhythmDow { color: var(--nm-purple-text, var(--nm-purple)); font-weight: 700; }
+.rhythmConclusion { margin-top: var(--nm-dense-g2); font-size: var(--nm-dense-fs-sm); line-height: 1.5; color: var(--nm-text-2); }
+.rhythmConclusion b { color: var(--nm-text-1); font-weight: 700; }
+
+/* ── 宽度自适应（2026-09-30 用户："宽度也要自适应"）─────────────────────────
+   12 列在窄面板上会把每列压到几十像素，卡片里的「标签 ←→ 数值」会挤成一团。
+   这里按可用宽度**退列**，并等比例改卡片跨度：
+     · ≥1400px：12 列（原样）
+     · 900–1400px：6 列，跨度减半（卡 2 列、宽内容 3 列、页脚整行）
+     · <900px：整页单列
+   ⚠️ 必须用 `!important`：卡片的跨度是 `Card` 组件写在 **inline style** 里的（`gridColumn: span N`），
+   媒体查询里的类选择器优先级低于 inline style，不加 `!important` 覆盖不掉。 */
+@media (max-width: 1400px) {
+  .board { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .board > .card, .board > .moreCard { grid-column: span 2 !important; }
+  .board > .span6, .board > .portrait { grid-column: span 3 !important; }
+  .board > .footer { grid-column: span 6 !important; }
+}
+@media (max-width: 900px) {
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .board > * { grid-column: 1 / -1 !important; }
+}
+
+/* ── 卡片内部适配（2026-09-30 用户："请好好修复每个卡片里面的组件，请做好适配"）──────────
+   密排/退列之后，同一张卡片的宽度会在 1/3 行 ~ 整行之间变化（12 列 → 6 列 → 1 列），
+   而卡片内部有几处是**按固定列数**画出来的（365 天热力 12 列、作息 24 格、hero 3 格、
+   主演 12 格）。窗口宽度不变时卡片一样会变窄，所以用 **容器查询**（按卡片宽度）而不是媒体查询。
+
+   三档：
+     · ≤620px：把"并排的键值对"允许换行，避免「标签 ←→ 数值」被挤成一团；
+     · ≤520px：hero 3 格改 2 格、主演 12 格改 6 格（热力图仍是 24/12 格，但格间距与字号收一档）；
+     · ≤380px：hero 单列、头像行与 kv 行改为上下两行（窄到极限时横向排必挤爆）。 */
+@container (max-width: 620px) {
+  .kv { flex-wrap: wrap; }
+  .calFoot { flex-wrap: wrap; }
+  .heroGrid { gap: var(--nm-dense-g1); }
+}
+
+@container (max-width: 520px) {
+  .heroGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .starGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .rhythmGrid, .rhythmHourTicks { gap: 1px; }
+  .cardTitle, .moreCardTitle { white-space: normal; }   /* 窄卡里标题允许折行，不再被省略号吃掉 */
+}
+
+@container (max-width: 380px) {
+  .heroGrid { grid-template-columns: minmax(0, 1fr); }
+  .kv { flex-direction: column; align-items: flex-start; gap: 0; }
+  .moreRow { flex-direction: column; align-items: flex-start; gap: 0; }
+  .moreRow > span:last-child { text-align: left; }
+  .row { flex-wrap: wrap; }
+}
+
+/* ── 「还有这些人」的一排小卡（头像 + 说明列）──────────────────────────────
+   2026-09-30 补：这几个类原先**在样式里缺失**（容器又复用了不换行的 `.moreRow`），
+   窄卡下 7 张芯片挤在一起互相压住。这里补齐并让它**放不下就换行**。 */
+.hlRow {
+  display: flex;
+  flex-wrap: wrap;                       /* 该换行就换行（用户要求） */
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+}
+.moreCell {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-dense-g2);
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px var(--nm-dense-g2);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-0);
+}
+.moreInfo { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.moreLabel { font-size: var(--nm-dense-fs-xs); color: var(--nm-text-2); white-space: nowrap; }
+.moreVal { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-1); white-space: nowrap; }
+/* 芯片里的名字：长了就省略号，不许把芯片顶宽 */
+.moreCell .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* ── 窄卡统一换行（2026-09-30 用户："其他卡片中的内容也是一样，该换行换行"）──────────
+   卡片宽度跟着内容/退列变化后，这些"标签 ←→ 数值"式的**横向行**在窄卡里会挤成一团。
+   统一在容器查询里允许换行（按**卡片**宽度生效，与窗口宽度无关）：
+     · ≤620px：所有横向行允许换行；换行后数值不再靠右顶，改为左对齐；
+     · ≤380px：直接改成上下两行（原有的那一档，负责极端窄卡）。
+   新增横向行类时请一并加进来 —— 判据会检查这些类是否都出现在换行规则里。 */
+@container (max-width: 620px) {
+  .kv, .row, .rankRow, .nightTop, .calFoot, .moreRow, .ratioLegend { flex-wrap: wrap; }
+  .moreRow > span:last-child { text-align: left; }
+  .kv > b, .moreRow > span:last-child { overflow-wrap: anywhere; }
 }

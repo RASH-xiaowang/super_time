@@ -5,7 +5,24 @@
  * 机制：类里保留 @Remote 装饰器与签名（协议层按名字枚举），方法体一行转发；
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
-import { scanV2Templates, trustedXorForVerifiedAesKey } from '../keys/image-key-resolver.ts'
+import { scanV2TemplatesAsync, trustedXorForVerifiedAesKey } from '../keys/image-key-resolver.ts'
+import { yieldToLoop } from '../query/search-build.ts'
+
+/**
+ * 模板扫描的让出节流：每 8 个目录检查点让出一次。
+ *
+ * 为什么不是每个检查点都让出：检查点粒度是「一个目录的 `readdir` + `stat` 排序」，
+ * 本机约几毫秒；逐个让出会把 CPU 花在 `setImmediate` 上来回切上（本轮
+ * `moments-insights` 上量过这个反例：过度让出 171 次、片段掉到 1ms，纯属浪费）。
+ * 8 个 ⇒ 量级十几毫秒，与仓库其它模块的片段同档。
+ */
+let scanSinceYield = 0
+async function templateScanYield(): Promise<void> {
+  scanSinceYield += 1
+  if (scanSinceYield < 8) return
+  scanSinceYield = 0
+  await yieldToLoop()
+}
 import { fetchImageKey, normalizeAccountDir } from '../keys/service.ts'
 import { getConfig } from '../query/config.ts'
 import { decryptAllDbs } from '../query/decrypt-all.ts'
@@ -32,7 +49,9 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
         const cfg = getConfig(rc.dirs().decrypted)
         const savedAes = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'].trim() : ''
         if (savedAes) {
-          const scan = scanV2Templates(accountDir)
+          // 2026-09-28：改用可让出版扫描 —— 真实 @Remote 探针（`working/probe-remote.txt`）
+          // 实测这条路径上的目录 BFS 会独占事件循环 1.6 秒（`verifyImageKey` 1603ms/0 让出）。
+          const scan = await scanV2TemplatesAsync(accountDir, templateScanYield)
           if (scan.templates.length > 0) {
             const xor = trustedXorForVerifiedAesKey(savedAes, scan)
             if (xor !== null) {
@@ -52,13 +71,16 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
       return r
     },
 
-    verifyImageKey(): VerifyImageKeyResult {
+    async verifyImageKey(): Promise<VerifyImageKeyResult> {
       const cfg = getConfig(rc.dirs().decrypted)
       const aesKey = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'].trim() : ''
       if (!aesKey) { rc.op('keys', 'verify_image_key', 'fail', '', '尚未配置图片 AES 密钥'); return { verified: false, error: '尚未配置图片 AES 密钥' } }
       const rawRoot = rawWechatBase(rc.dirs().decrypted)
       if (!rawRoot) { rc.op('keys', 'verify_image_key', 'fail', '', '未配置数据库目录，无法定位账号数据'); return { verified: false, error: '未配置数据库目录，无法定位账号数据' } }
-      const scan = scanV2Templates(rawRoot)
+      // 2026-09-28：`scanV2Templates` → 可让出版。真实 @Remote 探针实测本方法冷跑
+      // **1603ms 且一次都不让出**（`working/probe-remote.txt`），是用户点一下
+      // 「验证图片密钥」就让整个串行后端停摆 1.6 秒的直接原因。
+      const scan = await scanV2TemplatesAsync(rawRoot, templateScanYield)
       if (scan.templates.length === 0) { rc.op('keys', 'verify_image_key', 'fail', '', '未找到 V2 图片模板（_t.dat）'); return { verified: false, error: '未找到 V2 图片模板（_t.dat）' } }
       const xor = trustedXorForVerifiedAesKey(aesKey, scan)
       const result: VerifyImageKeyResult = {

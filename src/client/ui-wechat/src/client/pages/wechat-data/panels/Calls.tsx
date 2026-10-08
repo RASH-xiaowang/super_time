@@ -10,10 +10,11 @@
  *  - **方向**由 `real_sender_id` 经分片 `Name2Id` 解析：等于自己的 wxid 即呼出。
  * 语音/视频刻意不分类：`room_type` 的语义在本机数据里判不了，界面不据此下结论。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { apiGetCalls, readRenderCache, writeRenderCache } from '../api.ts'
+import { useCallback } from 'react'
+import { useFreshData } from './use-fresh-data.ts'
+import { apiGetCalls } from '../api.ts'
 import type { CallsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, EmptyState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, EmptyState, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './calls.module.css'
 import { fmtLocaleSec } from '../utils/format.ts'
@@ -54,30 +55,11 @@ function fmtMonth(month: string): string {
  * @returns the calls element tree.
  */
 export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
-  const [snap, setSnap] = useState<CallsSnapshot | null>(() => readRenderCache<CallsSnapshot>(CACHE_KEY))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      const v = await apiGetCalls({ topPeers: 12, recentLimit: 30 })
-      setSnap(v)
-      writeRenderCache(CACHE_KEY, v)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  // 快照扫描一遍全部分片（实测 ~60ms，但仍先展示渲染缓存，避免切页签时白屏）。
-  useEffect(() => {
-    const cached = readRenderCache<CallsSnapshot>(CACHE_KEY)
-    if (cached) setSnap(cached)
-    void load()
-  }, [load])
+  /* 2026-10-03 推广批次 1：改用共用 `useFreshData` ——
+     打开即查最新（**不再预填渲染缓存**），成功写回缓存、失败才回退缓存并在 error 里
+     标注"以下为本地缓存（可能不是最新）"（标注由 hook 写在 error 文本里，面板照常显示 error 即可）。 */
+  const load = useCallback((): Promise<CallsSnapshot> => apiGetCalls({ topPeers: 12, recentLimit: 30 }), [])
+  const { data: snap, loading, error } = useFreshData<CallsSnapshot>(CACHE_KEY, load)
 
   const monthMax = snap ? Math.max(1, ...snap.months.map((m) => m.calls)) : 1
   const hourMax = snap ? Math.max(1, ...snap.byHour) : 1
@@ -100,7 +82,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       {/* 正文独立滚动：页头（含「刷新」按钮）保持可见（见 kit.module.css 的 .panelBody） */}
       <div className={kitCss.panelBody}>
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !snap && <div className={kitCss.emptyInline}>正在扫描消息库…</div>}
+      {loading && !snap && <LoadingState variant="compact" label="正在扫描消息库…" />}
 
       {snap && snap.total === 0 && (
         <EmptyState icon="📞" title="没有通话记录" desc="本机消息库里没有 type-50 的通话消息。" />

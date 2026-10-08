@@ -20,6 +20,7 @@ import { fuseKbHits } from '../query/retrieval/kb-channel.ts'
 import { KbDeleteAction, KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbFileRegisterResult, KbListSnapshot, KbMutationResult, KbSearchResult, KbSummaryResult, OperationCategory, OperationStatus } from '../types.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, GenerateOptions, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { PrivacyGateFn } from '../gateway-privacy.ts'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface KbRemoteCtx {
@@ -27,8 +28,7 @@ export interface KbRemoteCtx {
   ctx: Context
   kbIndexJobs: Map<number, { done: number; total: number; startedAt: number; error: string }>
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
-  privacyBlocked: (feature: string, detail?: string) => string | null
-  privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => { ok: true; texts: string[] } | { ok: false; error: string }
+  privacyGate: PrivacyGateFn
   makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined
   globalModelName: (role: KbModelRole) => string
   kbModel: (kbId: number, role: KbModelRole) => ResolvedModel
@@ -162,12 +162,6 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const kbId = Number(options?.kbId)
       const id = Number(options?.id)
 
-      const blocked = rc.privacyBlocked('kb_file_summary')
-      if (blocked !== null) {
-        rc.op('task', 'kb_file_summary', 'skip', '', blocked)
-        return { ok: false, error: blocked }
-      }
-
       const file = getKbFile(rc.dirs().decrypted, kbId, id)
       if (file === null) return { ok: false, error: '文件不存在，或不属于当前知识库' }
       if (!file.includeInRag) {
@@ -217,18 +211,14 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       // 截断与否要写进 prompt：模型若不知道正文被切过，会理直气壮地概括出一个「全文要点」。
       const scope = covered < file.charCount ? `前 ${covered} 字（全文 ${file.charCount} 字，已截断）` : `全文 ${file.charCount} 字`
       const prompt = `文件名：${file.name}\n\n正文（${scope}）：\n${body}`
-      const gate = rc.privacyGate('kb_file_summary', { sessions: 0, messages: 0 }, [prompt])
-      if (!gate.ok) {
-        rc.op('task', 'kb_file_summary', 'skip', `id=${id}`, gate.error)
-        return { ok: false, error: gate.error }
-      }
+      const [summaryGated] = rc.privacyGate('kb_file_summary', { sessions: 0, messages: 0 }, [prompt])
 
       const assembler = new BlockAssembler()
       const opts: GenerateOptions = {
         provider: sel.provider,
         model: chatModel,
         messages: [createUserMessage({
-          content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+          content: [{ type: 'text', text: summaryGated ?? prompt }],
           source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
         })],
         system: '你是文档摘要器。用中文把给定正文概括成不超过 5 条要点，每条一行、以「· 」开头，'
@@ -371,11 +361,6 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const dir = rc.dirs().decrypted
       const kbId = Number(options?.kbId)
       if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', status: 'bad-kb', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
-      const blocked = rc.privacyBlocked('kb_embed', '把文件正文发送给向量模型')
-      if (blocked !== null) {
-        rc.op('task', 'kb_embed', 'skip', `kb=${kbId}`, blocked)
-        return { ok: false, error: blocked, status: 'blocked', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
-      }
       const cfg = loadRetrievalConfig(dir)
       // 按库解析：这个按钮建的**就是这个库**的索引，模型名也要跟着这个库的覆盖走。
       const model = rc.kbModel(kbId, 'embed').model
@@ -421,11 +406,6 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const dir = rc.dirs().decrypted
       const kbId = Number(options?.kbId)
       if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', files: 0, saved: 0, failed: [], model: '' }
-      const blocked = rc.privacyBlocked('kb_extract', '把文件正文发送给模型抽取实体')
-      if (blocked !== null) {
-        rc.op('task', 'kb_extract', 'skip', `kb=${kbId}`, blocked)
-        return { ok: false, error: blocked, files: 0, saved: 0, failed: [], model: '' }
-      }
       const model = rc.kbModel(kbId, 'chat').model
       if (model === '') {
         const msg = '未配置默认模型（agentDefaultModel），无法抽取实体'
@@ -465,14 +445,8 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const kbId = Number(options?.kbId)
       const text = String(options?.text ?? '')
       const bad = kbId > 0 ? null : '没有指定知识库'
-      // 拦截判在最前：早退顺序错了会让「被拦」在界面上显示成「没配模型」（同 §6.1 C3）
-      const blocked = rc.privacyBlocked('kb_link_suggest', '把笔记正文与候选标题发送给模型')
       const model = rc.kbModel(kbId, 'embed').model
       if (bad !== null) return { ok: false, error: bad, candidates: [], pool: 0, model }
-      if (blocked !== null) {
-        rc.op('task', 'kb_link_suggest', 'skip', `kb=${kbId}`, blocked)
-        return { ok: false, error: blocked, candidates: [], pool: 0, model }
-      }
       if (text.trim().length < 8) return { ok: false, error: '正文太短，先写几句再要建议', candidates: [], pool: 0, model }
       if (model === '') return { ok: false, error: '未配置嵌入模型（本库或全局），无法给语义建议', candidates: [], pool: 0, model }
       const embed = rc.makeEmbedFn(model, 'kb_link_suggest')

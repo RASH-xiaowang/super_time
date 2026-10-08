@@ -2,10 +2,11 @@
  * 朋友圈洞察面板 — 我的朋友圈：发布/获赞/评论统计、互动 Top、月度分布、
  * 那年今天。全部基于本机 sns.db 离线计算。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { apiGetMomentsInsights, readRenderCache, writeRenderCache } from '../api.ts'
+import { useCallback } from 'react'
+import { apiGetMomentsInsights } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { MomentsInsightsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Card, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import { FootprintMap } from './FootprintMap.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './moments-insights.module.css'
@@ -23,30 +24,15 @@ function fmtTs(ts: number): string {
  * @returns the insights element tree.
  */
 export function MomentsInsightsPanel(): React.JSX.Element {
-  const [data, setData] = useState<MomentsInsightsSnapshot | null>(() => readRenderCache<MomentsInsightsSnapshot>('moments-insights'))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    try {
-      const fresh = await apiGetMomentsInsights()
-      setData(fresh)
-      writeRenderCache('moments-insights', fresh)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+  /* 2026-10-03 推广批次 2：改用共用 useFreshData —— 打开即查最新（不再预填缓存），
+     成功写回缓存；失败才回退缓存并由 hook 在 error 里标注「以下为本地缓存（可能不是最新）」。 */
+  const load = useCallback((): Promise<MomentsInsightsSnapshot> => apiGetMomentsInsights(), [])
+  const { data, loading, error, reload } = useFreshData<MomentsInsightsSnapshot>('moments-insights', load)
   // 数据落地后重载：冷启动时后端同步要跑 2–3 分钟，期间首次请求可能返回空快照，
   // 页面会停在「0 / 暂无数据」而并非真的没有数据（实测该事件在同步期约每 10 秒一次）。
   // 仅在**当前还没有数据**时重载：面板一旦拿到数据就不再重复付费，
   // 也避免那几个「loading 时隐藏内容」的面板每约 10 秒白闪一次。
-  useWechatDataUpdated(() => { if (!data) void load() })
+  useWechatDataUpdated(() => { if (!data) void reload() })
 
   const maxMonthly = data && data.monthly.length > 0 ? Math.max(...data.monthly.map(m => m.count)) : 1
 
@@ -57,7 +43,7 @@ export function MomentsInsightsPanel(): React.JSX.Element {
       {/* 正文独立滚动：页头保持可见（见 kit.module.css 的 .panelBody） */}
       <div className={kitCss.panelBody}>
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !data && <div className={kitCss.emptyInline}>统计中…</div>}
+      {loading && !data && <LoadingState variant="compact" label="统计中…" />}
 
       {data && !loading && (
         <>

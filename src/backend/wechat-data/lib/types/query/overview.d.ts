@@ -30,5 +30,5 @@ export interface OverviewResult {
  * @param decryptedDir - decrypted data root.
  * @returns the overview result.
  */
-export declare function queryOverview(decryptedDir: string): OverviewResult;
+export declare function queryOverview(decryptedDir: string): Promise<OverviewResult>;
 export {};

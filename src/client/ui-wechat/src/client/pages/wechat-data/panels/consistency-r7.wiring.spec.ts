@@ -139,21 +139,15 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
   })
 })
 
-describe('年度报告 · 海报装不下时要真的退回瀑布流', () => {
-  it('按"卡片是否被切"判定（media query 只看视口，判断不了面板高度）', () => {
-    expect(annualTsx, '缺少 compact 状态').toMatch(/const \[compact, setCompact\] = useState\(false\)/)
-    expect(annualTsx, '没有检测卡片是否被切').toMatch(/c\.scrollHeight > c\.clientHeight \+ 8/)
-    expect(annualTsx, '没有用 ResizeObserver 跟随容器变化').toMatch(/new ResizeObserver\(check\)/)
-    expect(annualTsx, 'data-compact 没挂到网格上').toMatch(/data-compact=\{compact \|\| undefined\}/)
+describe('年度报告 · 整页一张网格（2026-09-30 用户要求把下段卡片并进上段）', () => {
+  it('海报的 12 列固定网格与"被切检测"都已移除（整页只有一张密排网格）', () => {
+    expect(annualTsx, '旧的 12 列海报网格又回来了').not.toContain('css.wrap')
+    expect(annualTsx, '被切检测（compact）又回来了').not.toContain('data-compact')
+    expect(annualTsx, '没有用密排网格').toContain('<MasonryGrid>')
   })
 
-  it('样式里有对应的 data-compact 规则，且覆盖"卡片不再裁切"', () => {
-    expect(annualCss).toMatch(/\.wrap\[data-compact\]\s*\{/)
-    expect(annualCss, 'compact 下卡片仍会裁切').toMatch(/\.wrap\[data-compact\] \.card \{[^}]*overflow:\s*visible/)
-    expect(annualCss, 'compact 下滚动容器没有打开').toMatch(/\.scrollBody:has\(\.wrap\[data-compact\]\)\s*\{\s*overflow-y:\s*auto/)
-  })
-
-  it('原来的媒体查询仍然保留（窄窗/矮窗照旧退化）', () => {
-    expect(annualCss).toMatch(/@media \(max-width: 1200px\), \(max-height: 779px\)/)
+  it('样式层面确认密排网格在位（`.wrap` / 被切标记的旧规则留着不删：删它们的风险更大）', () => {
+    expect(annualCss, '看板网格的样式必须在').toContain('.board {')
+    expect(annualCss, '滚动容器必须常开').toMatch(/\.scrollBody \{[^}]*overflow-y: auto/)
   })
 })

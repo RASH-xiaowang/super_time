@@ -76,18 +76,12 @@ export function useMomentsData(input: MomentsDataInput): {
     setError(null)
     // 渲染缓存按“全量/该作者”上下文分开存储，避免刷新后串用上次过滤视图的缓存。
     const cacheKey = 'moments:' + (author || 'all')
-    if (reset) {
-      // 先用上次渲染的列表秒开,后台同步最新分页
-      const cached = readRenderCache<readonly MomentItem[]>(cacheKey)
-      if (cached && cached.length > 0) {
-        setMoments(cached)
-        countRef.current = cached.length
-        setTotal(cached.length)
-        setLoading(false)
-      } else {
-        setLoading(true)
-      }
-    }
+    /* 2026-10-03 用户要求："朋友圈的数据改为每次打开都会直接请求获取，不需要本地缓存了，
+       只有在（后端不可用的）时候才使用本地缓存"。
+       ⚠️ 注意：朋友圈数据来自**本机库**（sns.db），不是网络 —— 所以"无网"不该阻止查库，
+       打开时**无条件直接查**；缓存只在**查询失败**时兜底（见下面的 catch）。
+       于是这里删掉了原先"先用上次渲染的列表秒开"的预填：首屏不再可能是旧数据。 */
+    if (reset) setLoading(true)
     try {
       const opts: { limit: number; offset?: number; author?: string } = { limit: PAGE }
       if (!reset) opts.offset = countRef.current
@@ -105,7 +99,9 @@ export function useMomentsData(input: MomentsDataInput): {
           .catch(() => { setMonthlySnap({ months: [], readError: '月度分布请求失败（已退回按已加载部分统计）' }) })
       }
     } catch (e) {
-      setError((e as Error).message)
+      // 查询失败（后端不可用 / 库被锁 / 真离线）⇒ **回退缓存并明确标注**，而不是只留一行报错。
+      const cached = readRenderCache<readonly MomentItem[]>(cacheKey)
+      if (cached && cached.length > 0) { setMoments(cached); countRef.current = cached.length; setTotal(cached.length); setError('查询失败，以下为本地缓存（可能不是最新）：' + (e as Error).message) } else setError((e as Error).message)
     } finally {
       setLoading(false)
     }

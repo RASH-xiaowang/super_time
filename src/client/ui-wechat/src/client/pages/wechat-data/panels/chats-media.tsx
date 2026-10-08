@@ -7,7 +7,7 @@
  */
 import { apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiOpenPath, apiTranscribeVoiceMessage } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
-import { clickableKey, useDialogFocus } from '../ui/kit.tsx'
+import { clickableKey, ErrorState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
 import { recallImage, rememberImage } from '../image-cache.ts'
 import { CardFoot } from './chats-card-foot.tsx'
@@ -70,15 +70,24 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
   // 媒体查看器是 createPortal 出去的覆盖层，同样需要把焦点收进来并锁在里面。
   useDialogFocus(!!item, '[data-st-dialog="chats-viewer"]')
 
+  /*
+   * Esc 关闭（R7 收编）。
+   *
+   * 此前这里是一段**自己写的** keydown 监听：`if (e.key === 'Escape') onClose()`。
+   * 能关，但**不进 `escStack`** —— 全局其它手写覆盖层都走 kit 的栈（只让最上层响应），
+   * 只有它游离在外。后果：查看器之上再叠一层弹窗时，一次 Esc 会把两层一起关掉。
+   * 现在 Esc 交给 `useEscapeToClose`（自动入栈、退栈、只响应最上层），
+   * 这里只保留查看器**专属**的方向键翻页。
+   */
+  useEscapeToClose(!!item, onClose)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-      else if (e.key === 'ArrowLeft') onIndexChange((index - 1 + images.length) % images.length)
+      if (e.key === 'ArrowLeft') onIndexChange((index - 1 + images.length) % images.length)
       else if (e.key === 'ArrowRight') onIndexChange((index + 1) % images.length)
     }
     window.addEventListener('keydown', onKey)
     return () =>{  window.removeEventListener('keydown', onKey) }
-  }, [onClose, onIndexChange, index, images.length])
+  }, [onIndexChange, index, images.length])
 
   const zoomBy = (f: number): void =>{  setZoom(z => Math.min(Math.max(z * f, 0.25), 8)) }
   const reset = (): void => { setZoom(1); setOff({ x: 0, y: 0 }) }
@@ -110,7 +119,7 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
       </div>
       <div className={cssrows.viewerStage}>
         {loading && !src && !vErr && <div className={cssrows.viewerMsg}>加载中…</div>}
-        {vErr && <div className={cssrows.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）' : vErr}</div>}
+        {vErr && <ErrorState message={vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）' : vErr} />}
         {src && (
           <img
             src={src}

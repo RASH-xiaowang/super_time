@@ -1,6 +1,6 @@
 
 import type { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey } from '../ui/kit.tsx'
+import { Select } from '../ui/kit.tsx'
 /**
  * 设置面板的五张流程卡片：检测账号 / 数据库密钥 / 图片密钥 / 图片解码 / 语音转写
  * （M21 第二十九刀自 Settings.tsx 拆出）。
@@ -250,9 +250,6 @@ export function SettingsImgKeySection({
 
 /** 图片解码 卡片（面板里的第 4 节）。 */
 export interface SettingsImgDecodeSectionProps {
-  cdnEnabled: boolean
-  cdnLocal: boolean
-  cdnMsg: { kind: 'ok' | 'err'; text: string } | null
   decryptImgs: () => Promise<void>
   imgConcurrency: number
   imgDecryptDetail: { errors: Array<{ file: string; error: string }>; skippedDetails: Array<{ file: string; reason: string }> }
@@ -277,17 +274,14 @@ export interface SettingsImgDecodeSectionProps {
   setOrigLimit: React.Dispatch<React.SetStateAction<number>>
   setImgConcurrency: React.Dispatch<React.SetStateAction<number>>
   setImgDetailOpen: React.Dispatch<React.SetStateAction<boolean>>
-  toggleCdn: (enabled: boolean) => Promise<void>
-  toggleCdnLocal: (local: boolean) => Promise<void>
   upgradeImgs: () => Promise<void>
 }
 
 export function SettingsImgDecodeSection({
-  cdnEnabled, cdnLocal, cdnMsg,
   decryptImgs, imgConcurrency, imgDecryptDetail,
   imgDecrypting, imgProgress, imgUpgradeProgress, imgUpgradeResult,
   imgUpgrading, setImgConcurrency,
-  setImgDetailOpen, toggleCdn, toggleCdnLocal, upgradeImgs,
+  setImgDetailOpen, upgradeImgs,
   fetchOriginals, origBusy, origLimit, origPlan, origProgress, origResult, scanOriginals, setOrigLimit,
 }: SettingsImgDecodeSectionProps): React.JSX.Element {
   /** 盘点报告里的「预计下载量」（XML 声明的下界）。 */
@@ -300,26 +294,8 @@ export function SettingsImgDecodeSection({
             <span className={css.cardTitle}>图片解码</span>
             <span className={kitCss.textCaptionTrunc}>批量解密 .dat · 升级已缓存的原图</span>
           </div>
-          <span className={css.cardBadge}>
-            <StateDot state={cdnEnabled ? 'done' : 'warning'} />
-            {cdnEnabled ? '已启用' : '未启用'}
-          </span>
         </header>
         <div className={css.cardBody}>
-          <div className={css.row}>
-            <span className={css.rowName}>自动获取原图（CDN）</span>
-            <Pill active={cdnEnabled}>{cdnEnabled ? '已开启' : '已关闭'}</Pill>
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void toggleCdn(!cdnEnabled) }}>{cdnEnabled ? '关闭' : '开启'}</Button>
-          </div>
-          <div className={css.row}>
-            <span className={css.rowName}>原图解密方式</span>
-            <Pill active={cdnLocal}>{cdnLocal ? '本地解密' : '服务端解密'}</Pill>
-            <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void toggleCdnLocal(!cdnLocal) }}>{cdnLocal ? '切换服务端' : '切换本地'}</Button>
-          </div>
-          <MsgSlot
-            placeholder="点击「开启/关闭」「切换服务端/本地」后，结果实时显示在这里"
-            msg={cdnMsg}
-          />
           <div className={css.row}>
             <span className={css.rowName}>批量解密图片</span>
             <span className={css.rowMeta} title="解密 msg/attach 下所有 .dat 图片到解码缓存，聊天/朋友圈图片即时显示">解密 msg/attach 全部 .dat 到解码缓存</span>
@@ -363,7 +339,7 @@ export function SettingsImgDecodeSection({
           />
           <div className={css.row}>
             <span className={css.rowName}>联网补齐原图</span>
-            <span className={css.rowMeta} title="只取消息里自带的免登录预签名直链（带 tpauthkey 的那一类，个人微信账号常见；企业微信的 wwfile 端点实测需登录态，会被自动排除、不浪费请求）；先「扫描」看能补多少再决定取回。关掉上面的 CDN 开关就一张都不取，也不存在任何后台自动取">先扫描看能补多少，再决定取回</span>
+            <span className={css.rowMeta} title="只取消息里自带的免登录预签名直链（带 tpauthkey 的那一类，个人微信账号常见；企业微信的 wwfile 端点实测需登录态，会被自动排除、不浪费请求）；先「扫描」看能补多少再决定取回。不点「取回」就一张都不取，也不存在任何后台自动取">先扫描看能补多少，再决定取回</span>
             <Input className={css.inputNarrow} value={String(origLimit)} onChange={(e) => { setOrigLimit(Number(e.target.value) || 0) }} title="本次最多取几张（0 = 不限）" />
             <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={origBusy === 'scan' ? <span className={css.spin} /> : undefined} onClick={() => { void scanOriginals() }} disabled={origBusy !== null}>
               {origBusy === 'scan' ? '扫描中…' : '扫描'}
@@ -509,66 +485,53 @@ export function SettingsVoiceSection({
             <span className={modelCss.gridHdTitle}>选择模型</span>
             <span className={kitCss.textCaption}>当前设备：{whisperDevice === 'gpu' ? 'NVIDIA GPU' : 'CPU'}</span>
           </div>
-          <div className={modelCss.modelGrid}>
-            {(whisperStatus?.models ?? WHISPER_MODEL_FALLBACK).map((m) => {
-              const selected = whisperModel === m.id
-              const downloading = whisperDownloading?.model === m.id
-              const pct = downloading && whisperDownloading.total > 0
-                ? Math.round((whisperDownloading.received / whisperDownloading.total) * 100)
-                : 0
-              return (
-                // 外层原先是个 <button>，「下载」动作是它内部的一个 <span onClick> ——
-                // 交互元素嵌在按钮里是**无效 HTML**，且键盘无法触发下载。
-                // 改成 div + clickableKey（选模型）与并列的真 <button>（下载），两个动作各自可达。
-                <div
-                  key={m.id}
-                  className={clsx(modelCss.modelCard, selected && modelCss.modelSelected, downloading && modelCss.modelDownloadingCard)}
-                  {...clickableKey(() => { setWhisperModel(m.id) })}
-                >
-                  <span className={modelCss.modelName}>{m.name}{selected && <span className={modelCss.modelTag}>已选择</span>}</span>
-                  <span className={modelCss.modelBadge}>
-                    {downloading
-                      ? <span className={modelCss.modelStateDownloading}>下载中</span>
-                      : m.installed
-                        ? <span className={modelCss.modelStateInstalled}>✓ 已安装</span>
-                        : <span className={modelCss.modelState}>需下载</span>}
+          {/* 2026-09-30 合并（用户要求精简按钮）：原来是六个模型卡片、各带一个「下载」按钮，
+              截图里就是这样一排 6 个按钮。现在一个下拉 + 一个按钮：已安装与体积都并进选项文案，
+              下载进度显示在按钮下方 —— 信息没丢，按钮从 6 个降到 1 个。 */}
+          {(() => {
+            const models = whisperStatus?.models ?? WHISPER_MODEL_FALLBACK
+            const current = models.find((m) => m.id === whisperModel)
+            const downloadingThis = whisperDownloading?.model === whisperModel
+            const pct = downloadingThis && whisperDownloading.total > 0
+              ? Math.round((whisperDownloading.received / whisperDownloading.total) * 100)
+              : 0
+            return (
+              <div className={modelCss.whisperPick}>
+                <Select
+                  value={whisperModel}
+                  onChange={(v) => { setWhisperModel(v) }}
+                  ariaLabel="选择语音识别模型"
+                  options={models.map((m) => ({
+                    value: m.id,
+                    label: `${m.name} · ${m.sizeLabel}${m.installed ? ' · 已安装' : ''}`,
+                  }))}
+                />
+                {downloadingThis ? (
+                  <span className={modelCss.modelProgress}>
+                    <span className={modelCss.modelProgressTrack}><span className={modelCss.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
+                    <span className={modelCss.modelProgressPct}>{pct}%</span>
                   </span>
-                  <span className={kitCss.textCaption}>{m.sizeLabel}</span>
-                  {downloading ? (
-                    <span className={modelCss.modelProgress}>
-                      <span className={modelCss.modelProgressTrack}><span className={modelCss.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
-                      <span className={modelCss.modelProgressPct}>{pct}%</span>
-                    </span>
-                  ) : m.installed ? (
-                    <span className={clsx(modelCss.modelDownload, modelCss.modelDownloadDone)}>已就绪</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className={modelCss.modelDownload}
-                      onClick={() => { void whisperDownload(m) }}
-                    >
-                      下载
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                ) : current?.installed ? (
+                  <span className={clsx(modelCss.modelDownload, modelCss.modelDownloadDone)}>已就绪</span>
+                ) : (
+                  <button type="button" className={modelCss.modelDownload} onClick={() => { if (current) void whisperDownload(current) }}>
+                    下载
+                  </button>
+                )}
+              </div>
+            )
+          })()}
           <div className={css.row}>
             <span className={css.rowNote}>
               {whisperStatus?.models.some(m => m.installed)
-                ? `已安装 ${whisperStatus.models.filter(m => m.installed).length} 个模型到本机缓存，点击「下载」可继续获取其他模型。`
-                : '模型从官方仓库下载（huggingface.co，失败自动切换 hf-mirror；可用环境变量 DSH_WECHAT_WHISPER_MIRROR 指定镜像）。'}
+                ? `已安装 ${whisperStatus.models.filter(m => m.installed).length} 个模型到本机缓存；模型仅本地推理、不上传语音。`
+                : '模型从 huggingface.co 下载（失败自动切换 hf-mirror；可用 DSH_WECHAT_WHISPER_MIRROR 指定镜像）；仅本地推理、不上传语音。'}
             </span>
           </div>
           <div className={modelCss.whisperThreads}>
             <span className={modelCss.whisperThreadsLabel}>并发线程数</span>
             <Input className={css.inputNarrow} value={String(whisperThreads)} onChange={(e) => { setWhisperThreads(Math.max(0, Number(e.target.value) || 0)) }} placeholder="0" />
             <span className={css.rowMeta}>0 自动，输入正整数</span>
-          </div>
-          <div className={css.row}>
-            <span className={css.rowNote}>{'🔒 模型仅本地推理，不上传语音；语音由内置 SILK 解码器本地转 WAV，转写由 whisper-cli 执行（需 ' +
-              'DSH_WECHAT_WHISPER_BIN 指向引擎且模型已安装）。'}</span>
           </div>
           <div className={modelCss.whisperFooter}>
             <button type="button" className={modelCss.whisperSkip} onClick={() => { skipTranscribe() }}>跳过，查看聊天记录</button>

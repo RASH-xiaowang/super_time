@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { apiGetStorageStats, readRenderCache, writeRenderCache } from '../api.ts'
 import css from './storage.module.css'
 import type { StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, CellPrimary, clickableKey, DataTable, Mono, PanelHeader } from '../ui/kit.tsx'
+import { Card, CellPrimary, clickableKey, DataTable, LinkButton, Mono, PanelHeader } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import { fmtBytes, fmtSharePct } from '../utils/format.ts'
@@ -87,7 +87,7 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
       id: 'session',
       header: '所属会话',
       cell: f => (f.username && onOpenChat
-        ? <button type="button" className={css.linkBtn} onClick={() => { onOpenChat(f.username) }}>{f.sessionName || f.username}</button>
+        ? <LinkButton onClick={() => { onOpenChat(f.username) }}>{f.sessionName || f.username}</LinkButton>
         : (f.sessionName || f.username || '—')),
       sortValue: f => f.sessionName || f.username || '',
     },

@@ -10,7 +10,7 @@
  * JSX 是逐行搬来的，道具名与原作用域同名 ⇒ 搬动本身不改变渲染；改的是**能不能测**。
  */
 import kitCss from '../ui/kit.module.css'
-import { DateRangeField, ProgressBar } from '../ui/kit.tsx'
+import { DateRangeField, LinkButton, ProgressBar } from '../ui/kit.tsx'
 import type { ExpoType, ExpFormat } from './chats-export.tsx'
 import csscards from './chats-cards.module.css'
 import cssrows from './chats-rows.module.css'
@@ -100,10 +100,10 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
             <div className={cssshell.exportField}>
               <div className={cssshell.exportLabelRow}>
                 <span className={kitCss.textMeta}>消息类型</span>
-                <button type="button" className={csscards.exportLinkBtn}
+                <LinkButton
                   onClick={() => { setExpTypes(prev => prev.length > 0 ? [] : EXPO_TYPES.map(c => c.key)) }}>
                   {expTypes.length > 0 ? '取消全选' : '全选'}
-                </button>
+                </LinkButton>
               </div>
               <div className={cssshell.exportChips}>
                 {EXPO_TYPES.map(c => (
@@ -120,7 +120,7 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
           <div className={cssshell.exportSection}>
             <div className={cssshell.exportSectionHead}>
               <span className={csscards.exportSectionTitle}>时间范围</span>
-              <button type="button" className={csscards.exportLinkBtn} onClick={() => { setExpFrom(''); setExpTo('') }}>全部时间</button>
+              <LinkButton onClick={() => { setExpFrom(''); setExpTo('') }}>全部时间</LinkButton>
             </div>
             <div className={cssshell.exportRangeRow}>
               <DateRangeField

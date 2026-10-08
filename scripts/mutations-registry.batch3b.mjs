@@ -391,8 +391,12 @@ export const MUTATIONS_BATCH3B = [
     id: "M269-moments-insights-helper-forgots-close",
     why: "moments-insights 的 withDb 换成不关连接的本地实现 ⇒ 表缺/列缺两条早退各漏一条 sns.db，朋友圈洞察每打开一次就锁住数据根一次",
     file: "src/backend/wechat-data/src/query/moments-insights.ts",
-    from: "import { withDb } from './db-open.ts'",
-    to: "const withDb = <T,>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file, { readOnly: true }); return fn(db) }",
+    // 2026-09-28：该文件的助手由 `withDb` 换成 `withDbAsync`（游标要让出，见文件内注释），
+    // 锚点跟着换成**实际那一行**（现在两个助手都从这行导入）—— **不删条目**
+    // （那条反证依然有效：不关连接就漏句柄）。变异体保持类型合法：
+    // 直接返回 `fn` 的 promise、**不 close**，正是原缺陷的形状。
+    from: "import { withDb, withDbAsync } from './db-open.ts'",
+    to: "const withDb = <T,>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file, { readOnly: true }); return fn(db) }; const withDbAsync = <T,>(file: string, fn: (db: DatabaseSync) => Promise<T>): Promise<T> => { const db = new DatabaseSync(file, { readOnly: true }); return fn(db) as Promise<T> }",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
   {
@@ -511,46 +515,6 @@ export const MUTATIONS_BATCH3B = [
   },
 
   // ── P3-9：地图底图闸门的"新鲜期"（镜像只是副本，过期就不是答案）──
-  {
-    id: "M284-map-gate-trusts-any-mirror",
-    why: "把新鲜期判据摘掉（回到 P3-9 之前的「镜像命中就采信」）⇒ 改写一条 localStorage 就能长开或长关，后端真值永远不再被复核；行为用例里「过期镜像 + 后端说 true」那条必须放行成拦截失败",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts",
-    from: "  if (mirrored !== null && ageMs !== null && ageMs <= FLAG_FRESH_MS) return mirrored",
-    to: "  if (mirrored !== null) return mirrored",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
-  },
-  {
-    id: "M285-map-gate-drops-stale-mirror-on-timeout",
-    why: "拿不到真值时无条件放行（丢掉旧副本）⇒ 后端排队期间用户明明设过「禁止底图」，地图却出网去拉 GeoJSON；兜底方向从「旧副本顶着」翻成「当没设过」",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts",
-    from: "    if (hit === null) return mirrored ?? false",
-    to: "    if (hit === null) return false",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
-  },
-  {
-    id: "M286-map-mirror-writes-no-timestamp",
-    why: "写镜像时不落时间戳 ⇒ age 永远是 null，快路彻底失效（每次拉底图都去排一次 RPC，正是「世界地图一直在加载中」那轮的病），而镜像写了也等于没写",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/map-tiles-flag.ts",
-    from: "    localStorage.setItem(TIME_KEY, String(Date.now()))",
-    to: "    localStorage.setItem(TIME_KEY, '')",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
-  },
-  {
-    id: "M287-map-mirror-age-always-zero",
-    why: "把「有多旧」算成恒 0（伪造永远新鲜）⇒ 过期副本被当后端真值采信，开关改了地图永远不认；这条判据存在是因为 age 是读出来算的，不是存下来的常量",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/map-tiles-flag.ts",
-    from: "    return Math.max(0, Date.now() - at)",
-    to: "    return 0",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
-  },
-  {
-    id: "M288-map-gate-ttl-set-to-never-expire",
-    why: "新鲜期放成一百年 ⇒ 结构还是「先镜像后有界等待」，两条接线守卫都不红，但实质回到 P3-9 之前：所以 TTL 这个**数**也得有判据（60 秒前的副本就不许当答案）",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts",
-    from: "const FLAG_FRESH_MS = 15_000",
-    to: "const FLAG_FRESH_MS = 3_153_600_000",
-    spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts",
-  },
 
   // ── P3-8：零引用导出的处置结果（`p3-8-export-discipline.spec.ts` 的四条判据各配一条）──
   // `to` 一律收成**单行**（两条声明挨着写是合法 TS），免得在 CRLF 文件里插进裸 LF。

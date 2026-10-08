@@ -9,7 +9,7 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
@@ -51,8 +51,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   const [dbKey, setDbKey] = useState('')
   const [imgAes, setImgAes] = useState('')
   const [imgXor, setImgXor] = useState('136')
-  const [cdnEnabled, setCdnEnabled] = useState(cachedCfg?.cdn_enabled ?? true)
-  const [cdnLocal, setCdnLocal] = useState(cachedCfg?.cdn_local_decrypt ?? true)
   // 富提示（kind/details + 关闭按钮）也迁到公共控制器（L20 的最后一处手写版）。
   // 改前是 `setMessage(x); setTimeout(() => setMessage(null), N)` —— 句柄丢了，
   // 「连出两条提示时第一条的定时器把第二条提前清掉」与「卸载后仍写 state」两个已知缺陷都在。
@@ -91,7 +89,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   const [origResult, setOrigResult] = useState<OriginalBatchResult | null>(null)
   /** 本次最多取几张（0 = 不限）。默认 500：全量是几千张、可能几 GB，先取一批是稳妥的默认。 */
   const [origLimit, setOrigLimit] = useState(500)
-  const [cdnMsg, setCdnMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [dbDirMsg, setDbDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [voiceOpMsg, setVoiceOpMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [whisperDirMsg, setWhisperDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -235,8 +232,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setDbKey(c.db_enc_key)
       setImgAes(c.image_aes_key)
       setImgXor(String(c.image_xor_key))
-      setCdnEnabled(c.cdn_enabled)
-      setCdnLocal(c.cdn_local_decrypt)
       setWhisperDevice(c.whisper_device)
       setWhisperModel(c.whisper_model)
       setWhisperThreads(c.whisper_threads)
@@ -475,10 +470,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
           db_enc_key: dbKey,
           image_aes_key: imgAes,
           image_xor_key: Number(imgXor) || 136,
-          // cdn_enabled / cdn_local_decrypt 是**真实生效**的开关（N24）：
-          // 前者拦下发往 CDN 的取图/取视频请求，后者决定远端字节是否本地解密（见 query/cdn-policy.ts）
-          cdn_enabled: cdnEnabled,
-          cdn_local_decrypt: cdnLocal,
           whisper_device: whisperDevice,
           whisper_model: whisperModel,
           whisper_threads: Math.max(0, Math.min(whisperThreads, 64)),
@@ -688,7 +679,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   /**
    * 批量取回原图（免登录直链）。**只有用户点这一下才会联网**，没有任何后台自动调用。
    *
-   * 关掉「自动获取原图（CDN）」或「禁止出网」时后端**一条请求都不发**（回 `blocked` 说明原因），
+   * 已有解密类任务在跑时后端**一条请求都不发**（回 `blocked` 说明原因），
    * 这里如实把那句话显示出来，而不是假装成功。
    */
   const fetchOriginals = async (): Promise<void> => {
@@ -768,16 +759,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     }
   }
 
-  const toggleCdn = async (enabled: boolean): Promise<void> => {
-    try { await apiSetCdnImageEnabled({ enabled }); setCdnEnabled(enabled); setCdnMsg({ kind: 'ok', text: `✓ 已${enabled ? '开启' : '关闭'}自动获取原图` }) }
-    catch (e) { setCdnMsg({ kind: 'err', text: '✗ ' + (e as Error).message }) }
-  }
-
-  const toggleCdnLocal = async (local: boolean): Promise<void> => {
-    try { await apiSetCdnImageLocalDecrypt({ localDecrypt: local }); setCdnLocal(local); setCdnMsg({ kind: 'ok', text: local ? '✓ 原图解密方式：本地解密' : '✓ 原图解密方式：服务端解密' }) }
-    catch (e) { setCdnMsg({ kind: 'err', text: '✗ ' + (e as Error).message }) }
-  }
-
   const keyOk = keysInfo.loaded && keysInfo.keyCount > 0
   const dbFiles = accounts.reduce((sum, a) => sum + (a.db_files ?? 0), 0)
   const current = (a: WechatAccount): boolean => dbDir !== '' && dbDir.toLowerCase() === a.db_dir.toLowerCase()
@@ -786,7 +767,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     detect: accounts.length > 0 || dbDir.trim() !== '' ? 'done' : 'todo',
     dbkey: keyOk || dbKey.trim() !== '' ? 'done' : 'todo',
     imgkey: imgAes.trim() !== '' ? 'done' : 'todo',
-    img: cdnEnabled ? 'done' : 'todo',
+    img: imgAes.trim() !== '' ? 'done' : 'todo',
     voice: whisperStatus?.engine ? 'done' : 'note',
   }
 
@@ -802,7 +783,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       : key === 'imgkey'
         ? (imgAes.trim() ? '已就绪' : '未配置')
         : key === 'img'
-          ? (cdnEnabled ? '已启用' : '未启用')
+          ? (imgAes.trim() ? '可批量解密' : '未配置')
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
   type NavKey = (typeof STEPS)[number]['key']
@@ -854,8 +835,8 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }, [onNavigateOut, goToSection])
 
   return {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe, cdnEnabled,
-    cdnLocal, cdnMsg, cfg, cfgLoading, clear, current,
+    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo, fetchOriginals,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
@@ -865,7 +846,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
     saving, scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
-    toggleCdn, toggleCdnLocal, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
+    upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
     voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
     whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
   }

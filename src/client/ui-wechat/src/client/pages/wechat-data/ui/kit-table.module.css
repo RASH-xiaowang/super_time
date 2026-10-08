@@ -30,7 +30,7 @@
   padding: var(--nm-s-2) var(--nm-s-3);
   text-align: left;
   font-weight: 600;
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--nm-text-2);
@@ -73,7 +73,7 @@
   gap: var(--nm-s-1);
 }
 
-.thArrow { opacity: 0; font-size: var(--nm-fs-xs); }
+.thArrow { opacity: 0; font-size: var(--nm-fs-xs, 11px); }
 .thSortable[data-sorted] .thArrow { opacity: 1; }
 
 .table tbody td {

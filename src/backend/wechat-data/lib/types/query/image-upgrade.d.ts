@@ -32,8 +32,7 @@
  *   · 同字节数不同质量的那一类，见上。
  *   · `.t.` 兜底槽里那份**不会被删**：升级后主槽优先，它退化成纯兜底，留着无害。
  */
-/** 升级结果（类型在 `types-config.ts` 里再导出给 Remote 客户端）。 */
-export interface ImageUpgradeResult {
+/** 升级结果（类型在 `types-config.ts` 里再导出给 Remote 客户端）。 */ export interface ImageUpgradeResult {
     /** 检查过的缓存条目数（按 md5 去重）。 */
     total: number;
     /** 真的被换成更大一份的 md5 数。 */

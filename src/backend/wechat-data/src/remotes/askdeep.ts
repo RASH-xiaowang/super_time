@@ -18,6 +18,7 @@ import { IntentKind, RerankWeights } from '../query/retrieval/types.ts'
 import { ensureSearchIndex } from '../query/search.ts'
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
@@ -61,8 +62,7 @@ export interface createAskDeepRemotesInputs {
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   ctx: () => Context
   askTrace: Map<string, { features: Map<string, RerankWeights>; citations: string[]; question: string; answer: string; intent: IntentKind }>
-  privacyBlocked: (feature: string, detail?: string) => string | null
-  privacyGate: (feature: string, stats: { sessions: number; messages: number }, texts: string[]) => { ok: true; texts: string[] } | { ok: false; error: string }
+  privacyGate: PrivacyGateFn
   embedModelName: (override?: string) => string
   makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined
   makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined
@@ -101,12 +101,6 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       const ctx = rc.ctx()
       /** 端到端耗时基准（提问 → 回答生成结束），写进历史记录供用户回看时判断快慢。 */
       const askStartedAt = Date.now()
-      // 先判「出站拦截」：它比「未配置模型」更该被用户看到（见 privacyBlocked 的注释）
-      const blocked = rc.privacyBlocked('ask_wechat')
-      if (blocked !== null) {
-        rc.op('task', 'ask_wechat', 'skip', '', blocked)
-        throw new Error(blocked)
-      }
       const defaultModel = (ctx as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
       }).agentDefaultModel
@@ -188,11 +182,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         ? '\n对话历史（最近）：\n' + trimmedHistory.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content.slice(0, 300)).join('\n')
         : ''
       const planPrompt = `今天是 ${todayStr}（${weekday}）。\n用户问题：${options.question}\n当前筛选范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
-      const gatePlan = rc.privacyGate('ask_wechat', { sessions: 0, messages: 0 }, [planPrompt])
-      if (!gatePlan.ok) {
-        rc.op('task', 'ask_wechat', 'skip', '', gatePlan.error)
-        throw new Error(gatePlan.error)
-      }
+      const [planPromptGated] = rc.privacyGate('ask_wechat', { sessions: 0, messages: 0 }, [planPrompt])
       let plan: { intent: string; subQueries: string[]; from: string; to: string; person: string }
       try {
         const planText = await runChat(
@@ -202,7 +192,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           + '② 问题里出现相对时间（上周三/昨天/上个月）时，按给定的今天日期换算成绝对日期填 from/to（YYYY-MM-DD，单日则 from=to），'
           + '识别不出就留空字符串；③ 问题点名了某个人就填 person，否则留空字符串。'
           + '只输出一行 JSON：{"intent":"一句话意图","subQueries":["关键词1","关键词2"],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","person":"人名"}',
-          gatePlan.texts[0] ?? planPrompt,
+          planPromptGated ?? planPrompt,
           512,
         )
         plan = parseAskPlan(planText)
@@ -479,18 +469,14 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
   4. **时间写绝对日期**（如 2026-09-05），不要写「上周」「前几天」这类相对表述。
   5. **找不到就直说**：材料不足以回答时，直接说明「聊天记录里没有找到……」，再给 1-2 条改问建议（换关键词、收窄时间或指定会话）。不要用推测填空。
   6. 只引用真正支持结论的那几条来源，不要罗列全部；也不用写「依据本机记录」这类来源说明，界面上已单独显示。${timeGuardRule}`
-      const gateAnswer = rc.privacyGate(
+      const [synthGated] = rc.privacyGate(
         'ask_wechat',
         { sessions: new Set(citations.map(c => c.username)).size, messages: citations.length },
         [synthPrompt],
       )
-      if (!gateAnswer.ok) {
-        rc.op('task', 'ask_wechat', 'skip', '', gateAnswer.error)
-        throw new Error(gateAnswer.error)
-      }
       const answer = await runChat(
         '你是用户微信聊天记录里的问答助手。只用下面给出的检索结果回答，说话自然、口语化，像在微信里跟人转述聊天内容；每句事实后面用 [n] 标注来源；记录里没有的就说没找到，绝不推测或编造。',
-        gateAnswer.texts[0] ?? synthPrompt,
+        synthGated ?? synthPrompt,
         1600,
         // 必须走 this.：makeDeltaEmitter 是实例方法。裸调用会抛
         // 「ReferenceError: makeDeltaEmitter is not defined」—— 它出现在**综合生成那一刻**，
@@ -629,11 +615,6 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
     }): Promise<AskOptimizeResult> {
       const ctx = rc.ctx()
-      const blocked = rc.privacyBlocked('ask_optimize')
-      if (blocked !== null) {
-        rc.op('task', 'ask_optimize', 'skip', '', blocked)
-        throw new Error(blocked)
-      }
       const question = String(options?.question || '').trim()
       if (!question) throw new Error('请先输入问题，再进行优化')
       const defaultModel = (ctx as unknown as {
@@ -652,17 +633,13 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         ? '\n最近对话背景：\n' + history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content.slice(0, 200)).join('\n')
         : ''
       const prompt = `用户原始问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
-      const gate = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])
-      if (!gate.ok) {
-        rc.op('task', 'ask_optimize', 'skip', '', gate.error)
-        throw new Error(gate.error)
-      }
+      const [optimizeGated] = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])
       const assembler = new BlockAssembler()
       const opts: GenerateOptions = {
         provider: sel.provider,
         model: sel.model,
         messages: [createUserMessage({
-          content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
+          content: [{ type: 'text', text: optimizeGated ?? prompt }],
           source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
         })],
         system: '你是微信聊天记录的提问优化器。把用户问题改写得更清晰、更利于全文检索（保留原意，补充隐含的时间/对象等限定，去掉口语口水词），并给出至多 3 条具体的改进建议。只输出一行 JSON：{"optimized":"优化后的问题","suggestions":["建议1","建议2"]}',

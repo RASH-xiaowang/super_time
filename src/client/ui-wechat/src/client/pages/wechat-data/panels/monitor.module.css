@@ -19,7 +19,7 @@
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
   transition: all 0.15s;
@@ -57,7 +57,7 @@
   min-width: 0;
 }
 .heatValue {
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   min-height: 11px;
   font-family: var(--nm-font-mono, monospace);
@@ -85,7 +85,7 @@
   box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 45%, transparent), 0 0 4px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
 }
 .heatLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
@@ -139,7 +139,7 @@
   white-space: nowrap;
 }
 .msgTime {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   white-space: nowrap;
   font-family: var(--nm-font-mono, monospace);

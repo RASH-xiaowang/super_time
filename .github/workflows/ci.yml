@@ -97,6 +97,18 @@ jobs:
       - name: 隐私同意闸门 SSR 冒烟
         run: npm run privacy-gate:smoke
 
+      # 启动页四个内容页 + 授权面板：分组名与 nav-config 真源现算比对（2026-09-30 内容重写配套）。
+      - name: 启动页内容 SSR 冒烟
+        run: npm run onboarding:smoke
+
+      # 词云卡片：撒点态要宽度、SSR 走 flex 回落 —— 只有真渲染一次才看得到（2026-09-30 词云重做配套）。
+      - name: 词云卡片 SSR 冒烟
+        run: npm run wordcloud:smoke
+
+      # 模型探针（测试连接 / 查询余额）+ 左下角余额条：首帧渲染事实（2026-09-30 新功能）。
+      - name: 模型探针 / 余额条 SSR 冒烟
+        run: npm run llm-balance:smoke
+
       - name: 知识图谱后端冒烟
         run: npm run check:knowledge-graph
 

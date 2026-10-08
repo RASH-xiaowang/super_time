@@ -54,9 +54,10 @@ afterEach(async () => {
 })
 
 describe('wechat-data operation-log wiring', () => {
-  it('records a fail row when verifyImageKey runs without a configured key', () => {
+  it('records a fail row when verifyImageKey runs without a configured key', async () => {
     const gw = new WechatDataGateway(fakeCtx())
-    const r = gw.verifyImageKey()
+    // 2026-09-28：`verifyImageKey` 改 async（模板目录 BFS 要让出，实测独占 1603ms）⇒ 跟着 await。
+    const r = await gw.verifyImageKey()
     expect(r.verified).toBe(false)
     const snap = listOperations(decrypted)
     expect(snap.items.length).toBeGreaterThanOrEqual(1)

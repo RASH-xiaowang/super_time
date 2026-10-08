@@ -30,7 +30,7 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
 }
 
 describe('queryAssetInsights', () => {
-  it('aggregates favorites, emoticons and usage', () => {
+  it('aggregates favorites, emoticons and usage', async () => {
     const root = tempRoot()
     const msgTable = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
     const ts = Math.floor(new Date(2026, 8, 1).getTime() / 1000)
@@ -53,7 +53,9 @@ describe('queryAssetInsights', () => {
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?)`).run(2, ts, 47, '<emoji md5="abcdef1234567890"/>')
     })
 
-    const snap = queryAssetInsights(root)
+    // 2026-09-28：改成 async 是为了在「逐张消息分片扫 local_type=47」的游标上加让出点
+    // （实测冷跑 155ms 且一次不让出，排在串行 worker 上会按住后面所有 RPC）。
+    const snap = await queryAssetInsights(root)
     expect(snap.favorites.total).toBe(2)
     expect(snap.favorites.byType.find(t => t.label === '文本')?.count).toBe(2)
     expect(snap.favorites.byYear[0]?.year).toBe(2026)

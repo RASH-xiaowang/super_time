@@ -144,7 +144,7 @@ export interface SourceLine {
 }
 
 /** collectRange result: summary plus optional source lines. */
-type CollectedRangeResult = CollectedSummary & { sources: SourceLine[] }
+export type CollectedRangeResult = CollectedSummary & { sources: SourceLine[] }
 
 const EMPTY_COLLECTED: CollectedSummary = { lines: [], count: 0, sessions: 0, total: 0, types: {}, hourly: [], topSessions: [] }
 
@@ -153,15 +153,26 @@ function tableColumns(db: DatabaseSync, table: string): Set<string> {
   return new Set(rows.map(r => r.name))
 }
 
-/** Shared range collection across sessions (chronological, capped per session). */
-function collectRange(
+/**
+ * Shared range collection across sessions (chronological, capped per session).
+ *
+ * ## 为什么是生成器而不是直接 async
+ *
+ * 它有 **4 个调用点**（`remotes/summaryrec.ts` ×2、`remotes/summary.ts`、
+ * `remotes/tasks.ts`），其中少数在同步上下文。直接改成 async 会把这 4 处一起拖下水，
+ * 而收益只落在网关那几条 `@Remote` 路径上。生成器把状态留在内部：
+ * `collectRange`（同步驱动，调用点零改动）与 `collectRangeAsync`（可让出）共用同一份逻辑。
+ * @yields 每个分片检查点交出一次（由驱动方决定是否让出事件循环）。
+ * @returns 汇总结果 + 可选来源行。
+ */
+function* collectRangeSteps(
   decryptedDir: string,
   start: number,
   end: number,
   cap: number,
   groupUsername?: string,
   collectSources = false,
-): CollectedRangeResult {
+): Generator<void, CollectedRangeResult, void> {
   const lines: string[] = []
   const sources: SourceLine[] = []
   let sessions = 0
@@ -175,6 +186,11 @@ function collectRange(
   // File-first pass: open each shard once, map its Msg_* tables to sessions.
   const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
   for (const shard of messageShardFiles(decryptedDir)) {
+    // 2026-09-28：分片级让出检查点（由驱动方决定让不让）。
+    // 真实 @Remote 探针实测 `generatePeriodSummary` 冷跑 **448ms 且一次都不让出**
+    // （`working/probe-remote.txt`，是当时最长的一个独占项）、`generateDailySummary`
+    // **230ms** —— 两者都走这条 `collectRange`。整段独占期间串行 worker 上别的请求进不来。
+    yield
     let probe: DatabaseSync | null = null
     try { probe = new DatabaseSync(shard, { readOnly: true }) } catch { continue }
     try {
@@ -188,6 +204,7 @@ function collectRange(
     } catch { /* skip */ } finally { probe.close() }
   }
   for (const fi of fileInfos) {
+    yield
     let db: DatabaseSync | null = null
     try { db = new DatabaseSync(fi.path, { readOnly: true }) } catch { continue }
     try {
@@ -249,6 +266,67 @@ function collectRange(
   return { lines, count: lines.length, sessions, total, types: Object.fromEntries(types), hourly, topSessions, sources }
 }
 
+/** 同步驱动：检查点直接跳过（不让出），行为与改造前逐字段等价。 */
+function collectRange(
+  decryptedDir: string,
+  start: number,
+  end: number,
+  cap: number,
+  groupUsername?: string,
+  collectSources = false,
+): CollectedRangeResult {
+  const it = collectRangeSteps(decryptedDir, start, end, cap, groupUsername, collectSources)
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+  }
+}
+
+/**
+ * 每扫过这么多分片就让出一次（检查点粒度 = 一个分片的表枚举或读取）。
+ *
+ * 取 2：原先写 6，实测在**本机这种只有 6 张分片**的数据上只让出 1 次
+ * （`extractTasks` 片段上界仍 220ms）—— 步长必须小于分片数才有意义。
+ * 2 张分片 ≈ 几十毫秒，与仓库其它模块的片段同档（词云 14ms / 通话 22ms）。
+ */
+const COLLECT_YIELD_EVERY_SHARDS = 2
+
+/**
+ * 可让出的 range 收集：给网关 `@Remote` 路径用。
+ *
+ * 结果与 {@link collectRange} **逐字段相同**（同一个生成器），
+ * 区别只在每 {@link COLLECT_YIELD_EVERY_SHARDS} 个分片让出一次事件循环。
+ * @param decryptedDir - decrypted data root.
+ * @param start - 起始秒（含）。
+ * @param end - 结束秒（不含）。
+ * @param cap - 每会话消息上限。
+ * @param groupUsername - 可选的单会话过滤。
+ * @param collectSources - 是否收集来源行。
+ * @param onStep - 每个分片检查点调用一次（返回 Promise 就等它）。
+ * @returns 汇总结果 + 可选来源行。
+ */
+export async function collectRangeAsync(
+  decryptedDir: string,
+  start: number,
+  end: number,
+  cap: number,
+  groupUsername: string | undefined,
+  collectSources: boolean,
+  onStep: () => Promise<void>,
+): Promise<CollectedRangeResult> {
+  const it = collectRangeSteps(decryptedDir, start, end, cap, groupUsername, collectSources)
+  let sinceYield = 0
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+    sinceYield += 1
+    if (sinceYield >= COLLECT_YIELD_EVERY_SHARDS) {
+      sinceYield = 0
+      await onStep()
+    }
+  }
+}
+
 /** Local-date parser used by day/period collection. */
 function toStartSeconds(date: string, plusDays = 0): number {
   const parts = date.split('-').map(n => parseInt(n, 10))
@@ -275,6 +353,58 @@ export function collectDayMessages(
   const end = toStartSeconds(date, 1)
   if (!Number.isFinite(start) || !Number.isFinite(end)) return EMPTY_COLLECTED
   return collectRange(decryptedDir, start, end, cap, groupUsername)
+}
+
+/**
+ * 可让出版的「一天」收集（给 `@Remote` 路径用）。
+ *
+ * 实测 `generateDailySummary` 冷跑 **230ms 且一次都不让出**（`working/probe-remote.txt`），
+ * 成本全在这一步（下面才是模型调用）。结果与 {@link collectDayMessages} 逐字段相同。
+ * @param decryptedDir - decrypted data root.
+ * @param date - YYYY-MM-DD local date.
+ * @param maxPerSession - cap messages per session (default 30).
+ * @param onStep - 每个分片检查点调用一次（传 `yieldToLoop`）。
+ * @returns 汇总结果。
+ */
+export async function collectDayMessagesAsync(
+  decryptedDir: string,
+  date: string,
+  maxPerSession: number | undefined,
+  onStep: () => Promise<void>,
+): Promise<CollectedSummary> {
+  const cap = Math.min(maxPerSession ?? 30, 200)
+  const start = toStartSeconds(date)
+  const end = toStartSeconds(date, 1)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return EMPTY_COLLECTED
+  return collectRangeAsync(decryptedDir, start, end, cap, undefined, false, onStep)
+}
+
+/**
+ * 可让出版的「区间」收集（给 `@Remote` 路径用）。
+ *
+ * 实测 `generatePeriodSummary` 冷跑 **448ms 且一次都不让出**（当时最长的一个独占项）。
+ * 结果与 {@link collectPeriodMessages} 逐字段相同。
+ * @param decryptedDir - decrypted data root.
+ * @param from - first date (YYYY-MM-DD).
+ * @param to - last date (YYYY-MM-DD, inclusive).
+ * @param maxPerSession - cap messages per session (default 30).
+ * @param onStep - 每个分片检查点调用一次（传 `yieldToLoop`）。
+ * @returns 汇总结果 + 来源行。
+ */
+export async function collectPeriodMessagesAsync(
+  decryptedDir: string,
+  from: string,
+  to: string,
+  maxPerSession: number | undefined,
+  onStep: () => Promise<void>,
+): Promise<CollectedRangeResult> {
+  const cap = Math.min(maxPerSession ?? 30, 200)
+  const start = toStartSeconds(from)
+  const end = toStartSeconds(to, 1)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return { ...EMPTY_COLLECTED, sources: [] }
+  }
+  return collectRangeAsync(decryptedDir, start, end, cap, undefined, true, onStep)
 }
 
 /**

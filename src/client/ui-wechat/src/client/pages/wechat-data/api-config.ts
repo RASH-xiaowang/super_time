@@ -1,5 +1,5 @@
 /**
- * `api.ts` 的「配置与接入：头像、打开路径、微信配置与路径、检索配置与反馈、解密密钥、whisper、CDN 开关」部分（M21 拆分）。
+ * `api.ts` 的「配置与接入：头像、打开路径、微信配置与路径、检索配置与反馈、解密密钥、whisper」部分（M21 拆分）。
  *
  * 从原模块原样搬出，**行为逐字节不变**；原文件继续以 `export *` 转发
  * ⇒ 所有既有 import 一行都不用改。
@@ -138,9 +138,8 @@ async function avatarDrawable(url: string | undefined): Promise<string> {
 /**
  * Fetch the avatar for a username.
  *
- * 后端本机没有这张头像时会回一个**远端地址**，而渲染层不许自己去取（M23）：那既不读
- * 「自动获取原图（CDN）」与「禁止出网」两个开关，也不进操作记录。这里就地换成代理拿回的
- * data URL，取不到就如实回「没有头像」。
+ * 后端本机没有这张头像时会回一个**远端地址**，而渲染层不许自己去取（M23）：远端地址不进
+ * 操作记录、也没有缓存。这里就地换成代理拿回的 data URL，取不到就如实回「没有头像」。
  * @param options - Query options: username.
  * @returns AvatarResult（`kind: 'url'` 在这一层就被收敛成 `'data'` 或 `'none'`）。
  */
@@ -157,7 +156,7 @@ export async function apiGetAvatar(options: { username: string; nickname?: strin
  */
 export async function apiGetAvatarsLocal(options: { usernames: string[] }): Promise<Record<string, string>> {
   const map = unwrap(await remote().getAvatarsLocal(options))
-  // 「允许出网」时后端会把远端头像地址一起放进来 —— 那些地址同样不许渲染层自己去取（M23）。
+  // 后端会把本机没有、但微信记录里有地址的远端头像地址一起放进来 —— 那些地址不许渲染层自己去取（M23）。
   // 逐条走代理即可：`apiGetRemoteImageUrl` 内部会攒批（一屏合成一次 RPC）并按 URL 回填。
   // 取不到的**保留键、值留空串**，不删键：三个调用点都是「按用户名取值再判空」
   // （`map[u] ?? null` / `map[username] ?? ''` / `Object.entries(map)` 过滤），
@@ -215,12 +214,15 @@ export {
   apiGetLlmConfig,
   apiSaveLlmConfig,
   apiFetchLlmModels,
+  apiTestLlmConnection,
+  apiGetLlmBalance,
+  formatBalance,
   apiGetLlmProfiles,
   apiActivateLlmProfile,
   apiSaveLlmProfile,
   apiDeleteLlmProfile,
 } from './llm-config.ts'
-export type { WechatLlmConfig, WechatLlmProfile, LlmProfilesSnapshot, LlmModelsResult } from './llm-config.ts'
+export type { WechatLlmConfig, WechatLlmProfile, LlmProfilesSnapshot, LlmModelsResult, LlmConnectionProbe, LlmBalance } from './llm-config.ts'
 // ─────────────────────────────────────────────────────────────
 // RAG 检索层：状态 / 调参 / 向量索引 / 评估 / 反馈闭环
 // ─────────────────────────────────────────────────────────────
@@ -469,22 +471,6 @@ export async function apiGetVoiceTranscript(options: { username: string; localId
  */
 export async function apiTranscribeVoiceMessage(options: { username: string; localId: number }): Promise<VoiceTranscribeOneResult> {
   return unwrap(await remote().transcribeVoiceMessage(options))
-}
-/**
- * Enable or disable CDN image handling.
- * @param options - Mutation options: enabled flag.
- * @returns SimpleResult.
- */
-export async function apiSetCdnImageEnabled(options: { enabled: boolean }): Promise<SimpleResult> {
-  return unwrap(await remote().setCdnImageEnabled(options))
-}
-/**
- * Enable or disable local decryption of CDN images.
- * @param options - Mutation options: localDecrypt flag.
- * @returns SimpleResult.
- */
-export async function apiSetCdnImageLocalDecrypt(options: { localDecrypt: boolean }): Promise<SimpleResult> {
-  return unwrap(await remote().setCdnImageLocalDecrypt(options))
 }
 /**
  * Delete favorite items by ids.

@@ -2,8 +2,14 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getVersions: () => ipcRenderer.invoke('app:versions'),
-  /** 是否验收测试模式（mock 模型）：前端据此显示醒目横幅。 */
+  /** 是否验收测试模式（自动化窗口）。⚠️ 它**不等于**「回答来自 mock 模型」，后者见 runMode。 */
   isTestMode: () => ipcRenderer.invoke('app:test-mode'),
+  /**
+   * 运行模式事实：`{ test, llmMock, dataRoot }`。
+   * 横幅据此区分「自动化窗口」与「真的装了 mock 模型」，并把**数据根**显示出来
+   * （"这次验收到底用的哪份数据"一眼可查）。
+   */
+  runMode: () => ipcRenderer.invoke('app:run-mode'),
   /**
    * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`，两个值都由主进程算好。
    *
@@ -44,6 +50,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLlmConfig: () => ipcRenderer.invoke('wechat:llm-get'),
     saveLlmConfig: (config) => ipcRenderer.invoke('wechat:llm-save', config),
     listLlmModels: (options) => ipcRenderer.invoke('wechat:llm-models', options),
+    /** 连接测试（2026-09-30）：`{baseUrl, apiKey}` → `{ok, value:{ms, models, url}}`。 */
+    testLlmConnection: (options) => ipcRenderer.invoke('wechat:llm-test', options),
+    /** 余额查询（2026-09-30）：`{baseUrl, apiKey}` → `{ok, value:{currency,total,…}}`。 */
+    getLlmBalance: (options) => ipcRenderer.invoke('wechat:llm-balance', options),
     /** 已保存的模型配置集：列出 / 切换 / 新增·更新 / 删除（都走同一条 IPC，用 op 区分）。 */
     getLlmProfiles: () => ipcRenderer.invoke('wechat:llm-profiles', { op: 'list' }),
     activateLlmProfile: (id) => ipcRenderer.invoke('wechat:llm-profiles', { op: 'activate', id }),

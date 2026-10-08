@@ -22,6 +22,7 @@ import { queryPrivacyScan } from './privacy.ts'
 import { grantRoot, writeDenialReason } from './path-policy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
+import { yieldToLoop } from './search-build.ts'
 import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
 import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
 
@@ -388,14 +389,17 @@ export function topOf(arr: unknown, limit = 12): Array<{ username: string; name:
  * @param filename - optional file name (without extension).
  * @returns written file path + filename + message count.
  */
-export function exportAnnualReport(
+export async function exportAnnualReport(
   decryptedDir: string,
   year: number,
   format: string,
   dir?: string,
   filename?: string,
-): { path: string; filename: string; count: number } {
-  const report = queryAnnualReport(decryptedDir, year)
+): Promise<{ path: string; filename: string; count: number }> {
+  // 2026-09-28：改 async。真实 @Remote 探针实测本接口冷跑 **4048ms 且一次都不让出**
+  // （`working/probe-remote.txt`，三个年报接口里最长）。瓶颈不在本函数，而在
+  // `queryAnnualReport` 里那段"整年消息 + 逐条 bigram"的扫描 —— 它现在会让出了。
+  const report = await queryAnnualReport(decryptedDir, year)
   const ext = format === 'html' ? 'html' : format === 'json' ? 'json' : 'md'
   const base = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
   const safeName = (filename && filename.trim()) ? filename.trim().replace(/\.(md|html|json)$/i, '') + '.' + ext : 'wechat_annual_' + String(year) + '.' + ext
@@ -501,8 +505,15 @@ export async function exportMoments(
   const NL = String.fromCharCode(10)
   const items: MomentItem[] = []
   let offset = 0
+  let round = 0
   for (;;) {
     throwIfCancelled(ctrl.signal)
+    // 2026-09-28：逐页让出（放在**循环开头**，否则下面 `break` 会跳过它）。
+    // 真实 @Remote 探针实测 `exportMoments` 冷跑 **273ms 且一次都不让出**
+    // （`working/probe-remote.txt`）—— 成本是这里反复调 `queryMoments` 分页取完整个
+    // 朋友圈（每页 500 条，单页冷算 ~15ms）。本函数已是 async，直接让出。
+    round += 1
+    if (round > 1 && round % 2 === 0) await yieldToLoop()
     const env = queryMoments(decryptedDir, offset, 500, opts?.username)
     items.push(...env.moments)
     offset += env.moments.length
@@ -679,7 +690,8 @@ export async function exportAllSessions(
   opts?: { dir?: string; filename?: string } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number }> {
   const ctrl: StreamControl = { onProgress: opts?.onProgress, signal: opts?.signal }
-  const env = querySessions(decryptedDir)
+  // 2026-09-28：`querySessions` 改 async（逐会话未读时间解析要让出）。本函数已是 async。
+  const env = await querySessions(decryptedDir)
   const sessions = env.sessions.slice(0, 1000)
   const base = (opts?.dir && opts.dir.trim()) ? opts.dir.trim() : join(dirname(decryptedDir), 'exports')
   mkdirSync(base, { recursive: true })

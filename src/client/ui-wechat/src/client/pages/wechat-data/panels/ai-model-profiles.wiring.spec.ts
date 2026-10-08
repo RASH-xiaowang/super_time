@@ -24,6 +24,12 @@ function codeOf(file: string): string {
 }
 
 const card = codeOf('AiModelConfig.tsx')
+/**
+ * 快速切换条本体（2026-09-30 重做：从 `AiModelConfig.tsx` 搬到 `ai-model-profiles.tsx`，
+ * 定位改成对话模型面板里的「快速切换」）。判据跟着代码搬、**强度不放宽**，
+ * 并额外要求主卡片确实渲染了它（搬完没人用也能全绿是这种搬迁的典型漏网）。
+ */
+const profiles = codeOf('ai-model-profiles.tsx')
 const llmApi = codeOf('../llm-config.ts')
 /**
  * M21：`api.ts` 拆成转发桶 + 8 个域模块 —— 这里读它们的**联合**
@@ -32,26 +38,31 @@ const llmApi = codeOf('../llm-config.ts')
 const api = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts'].map((f) => codeOf('../' + f)).join('\n')
 
 describe('已配置模型：切换条接线', () => {
-  it('卡片里有切换条与新增入口', () => {
-    expect(card).toContain('data-llm-profiles')
-    expect(card).toContain('data-add-llm-profile')
-    expect(card).toContain('已配置模型')
+  it('主卡片**确实渲染**了快速切换条（搬完没人用也能全绿，所以要查这一条）', () => {
+    expect(card, 'AiModelConfig 没渲染 ProfilesQuickSwitch').toContain('<ProfilesQuickSwitch')
+  })
+
+  it('切换条里有芯片与新增入口', () => {
+    expect(profiles).toContain('data-llm-profiles')
+    expect(profiles).toContain('data-add-llm-profile')
+    // 重做后这块的标题从「已配置模型」改成「快速切换」（它是对话模型面板里的一段）
+    expect(profiles).toContain('快速切换')
   })
 
   it('点击芯片真的走切换（不是只改草稿）', () => {
-    expect(card).toContain('data-activate-llm-profile={p.id}')
-    expect(card).toMatch(/onClick=\{\(\) => \{ void switchTo\(p\) \}\}/)
-    // 切换必须真写盘：一次 IPC 落到 apiActivateLlmProfile
+    expect(profiles).toContain('data-activate-llm-profile={p.id}')
+    expect(profiles).toMatch(/onClick=\{\(\) => \{ onSwitch\(p\) \}\}/)
+    // 切换必须真写盘：一次 IPC 落到 apiActivateLlmProfile（实现在主卡片里）
     expect(card).toMatch(/await apiActivateLlmProfile\(p\.id\)/)
   })
 
   it('切换后明确告诉用户「立即生效」（不必重启 —— 后端每次请求都重读 llm.json）', () => {
-    expect(card).toContain('下一次提问立即生效')
+    expect(profiles).toContain('下一次提问立即生效')
   })
 
   it('「使用中」的那条芯片是禁用的（点了也没意义，且要防重复写盘）', () => {
-    expect(card).toMatch(/disabled=\{profileBusy \|\| active\}/)
-    expect(card).toMatch(/aria-current=\{active \|\| undefined\}/)
+    expect(profiles).toMatch(/disabled=\{profileBusy \|\| active\}/)
+    expect(profiles).toMatch(/aria-current=\{active \|\| undefined\}/)
   })
 
   it('首次挂载只读一次快照（不可用两次读取拼出「徽标 A、切换条 B」）', () => {
@@ -62,11 +73,11 @@ describe('已配置模型：切换条接线', () => {
 
 describe('已配置模型：芯片上不出现 API Key', () => {
   it('芯片只渲染名称 / 模型名 / 使用状态', () => {
-    const start = card.indexOf('profiles.map(')
-    const end = card.indexOf('{profiles.length === 0', start)
+    const start = profiles.indexOf('profiles.map(')
+    const end = profiles.indexOf('{profiles.length === 0', start)
     expect(start, '找不到芯片渲染块').toBeGreaterThan(-1)
     expect(end, '找不到芯片渲染块的结尾').toBeGreaterThan(start)
-    const chip = card.slice(start, end)
+    const chip = profiles.slice(start, end)
     // Key 会以明文出现在切换条上（被随手看到、被截图）—— 这是不能接受的
     expect(chip, '芯片里不许出现 apiKey').not.toContain('apiKey')
     expect(chip).toContain('data-activate-llm-profile')
@@ -75,11 +86,11 @@ describe('已配置模型：芯片上不出现 API Key', () => {
 })
 
 describe('已配置模型：新增与编辑是两条路径', () => {
-  it('「新增配置」进入草稿态，且可取消', () => {
-    expect(card).toMatch(/onClick=\{startNewProfile\}/)
+  it('「新增配置」进入草稿态，且可取消（动作在卡片里，按钮在切换条里）', () => {
+    expect(card).toMatch(/onStartNew=\{startNewProfile\}/)
     expect(card).toMatch(/setDraftNew\(true\)/)
-    expect(card).toContain('data-cancel-new-profile')
-    expect(card).toMatch(/onClick=\{cancelNewProfile\}/)
+    expect(profiles).toContain('data-cancel-new-profile')
+    expect(card).toMatch(/onCancelNew=\{cancelNewProfile\}/)
   })
 
   it('草稿态保存 → 另存为一条新配置（不覆盖现有配置）', () => {
@@ -99,7 +110,7 @@ describe('已配置模型：新增与编辑是两条路径', () => {
   })
 
   it('删除按钮只在两条以上时出现（只剩一条时后端也会拒绝）', () => {
-    expect(card).toMatch(/\{profiles\.length > 1 && \(/)
+    expect(profiles).toMatch(/\{profiles\.length > 1 && \(/)
   })
 
   it('写盘类动作共用单飞闸（profileBusy）', () => {
@@ -158,27 +169,37 @@ describe('前端访问层：实现搬到了 llm-config.ts 并在 api.ts 转发',
  * 少列一个字段 = 编辑一条已存配置时把它悄悄清成默认值；界面上看不出任何异常，
  * 用户下次打开才发现「精排模型怎么空了」。
  */
-describe('三个角色：分组卡与字段成套', () => {
-  it('三张分组卡都在，且各自说明了自己是干什么的', () => {
+describe('三个角色：三块面板与字段成套', () => {
+  /** 三块面板的字段实现（2026-09-30 重做时拆到 `ai-model-roles.tsx`）。 */
+  const roles = codeOf('ai-model-roles.tsx')
+
+  it('三块面板都在（对话 / 嵌入 / 重排序），且各自说明了自己是干什么的', () => {
+    for (const id of ['id="chat"', 'id="embed"', 'id="rerank"']) {
+      expect(card, `卡片里缺面板 ${id}`).toContain(id)
+    }
+    expect(card).toContain('对话模型')
     expect(card).toContain('嵌入模型')
     expect(card).toContain('重排序模型')
-    // 换嵌入模型的代价必须写在卡上，而不是等用户点保存才弹窗拦
-    expect(card).toContain('需要重建')
-    // 精排「填了即启用」是决策 D3：界面要说清留空会退回本地加权
-    expect(card).toContain('本地的加权排序')
+    // 换嵌入模型的代价必须写在面板上，而不是等用户点保存才弹窗拦
+    expect(card + roles).toContain('重建')
+    // 精排「填了即启用」是决策 D3：界面要说清留空会退回本地排序
+    expect(card + roles).toContain('本地加权排序')
   })
 
   it('七个角色字段接进了表单；两个接口路径**刻意不暴露**但必须被带着走', () => {
     for (const k of ['embeddingModel', 'embeddingApiUrl', 'embeddingApiKey',
-      'rerankModel', 'rerankApiUrl', 'rerankApiKey', 'rerankTimeoutMs']) {
-      expect(card, `表单里没有 ${k} 的输入`).toContain(`setLlmConfig({ ...llmConfig, ${k}:`)
+      'rerankModel', 'rerankApiUrl', 'rerankApiKey']) {
+      expect(roles, `表单里没有 ${k} 的输入`).toContain(`${k}: v }`)
       expect(llmApi, `WechatLlmConfig 里没有 ${k}`).toContain(k)
     }
-    // 路径与 apiPath 同口径：界面上从不暴露（用户不需要知道是 /rerank 还是 /v2/rerank），
+    // 超时是数值输入（不是文本），单独点名 —— 它走的是 Number(...) 那一支
+    expect(roles, '表单里没有 rerankTimeoutMs 的输入').toContain('rerankTimeoutMs: Number(')
+    expect(llmApi, 'WechatLlmConfig 里没有 rerankTimeoutMs').toContain('rerankTimeoutMs')
+    // 路径走"回落 + 缺省"的解析（界面上暴露的是可选的覆盖项，见各自面板），
     // 但必须出现在类型与 configOf 的清单里 —— 少一处，编辑一条已存配置就把它清成默认值。
     for (const k of ['embedPath', 'rerankPath']) {
-      expect(card, `${k} 不该有输入框`).not.toContain(`setLlmConfig({ ...llmConfig, ${k}:`)
       expect(llmApi, `WechatLlmConfig 丢了 ${k}`).toContain(k)
+      expect(roles, `${k} 要有可选覆盖输入`).toContain(`${k}: v }`)
     }
     const from = card.indexOf('function configOf')
     expect(from).toBeGreaterThan(0)
@@ -200,8 +221,8 @@ describe('三个角色：分组卡与字段成套', () => {
   })
 
   it('独立凭据留空 = 回落 chat 那一对，界面上把这条语义写在字段标题里', () => {
-    expect(card).toContain('留空复用上面的 Key')
-    expect(card).toContain('留空复用 API 地址')
+    expect(roles).toContain('留空复用对话模型的 Key')
+    expect(roles).toContain('留空复用对话模型的 API 地址')
     // 回落的**行为**在 `src/backend/tests/llm-embed-model.spec.ts` 里测（那里能真发一次假请求），
     // 本文件不跨目录去读 wechat-host.js —— 靠数 `../..` 层数定位文件的断言，挪一次文件就红。
   })

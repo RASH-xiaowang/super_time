@@ -9,14 +9,19 @@
  *
  * 判据取自 `gateway.ts` 自身，不维护第二份人工名单：
  *   · 按 `@Remote` 装饰器切出每个方法的范围，只在**方法体内**找接缝；
- *   · 接缝 = 隐私闸门 `privacyBlocked|privacyGate`，或嵌入/重排函数的**实际使用**
- *     `makeEmbedFn|makeRerankFn`；
+ *   · 接缝 = 隐私闸门 `privacyGate`（2026-09-30 起只剩脱敏 + 审计，不再拦截），
+ *     或 LLM 工厂的**实际使用** `makeEmbedFn|makeRerankFn|makeChatAsker`
+ *     —— 工厂内部统一过 `privacyGate`，所以「用了工厂」与「直接调闸门」等价；
  *   · `Boolean(this.makeEmbedFn(…))` 只是「配没配向量模型」的能力探测，不发出任何数据，
  *     必须按调用点结构排除，否则 `getKbVectorIndex` 会被冤枉。
  *
  * 用 TS AST 而不是正则：注释与字符串里的同名文本骗不过它。本仓有过前例 ——
  * 正则扫 `privacyBlocked('kb_extract')` 时命中了 `getKnowledgeGraph` 文档注释里的一行，
  * 差点把一个不出网的方法登记进授权档位。
+ *
+ * 2026-09-30（出网开关全移除）：`privacyBlocked` / `privacyBlockedAt` 已不存在，接缝集合
+ * 随之收敛；`extractKbEntities` 之类的调用从「直接过闸」改成「经 `makeChatAsker` 工厂」，
+ * 工厂接缝必须一并认，否则出网判据会静默失效。
  * @vitest-environment node
  */
 import { createRequire } from 'node:module'
@@ -32,20 +37,23 @@ const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
 const requireCjs = createRequire(import.meta.url)
 
 /** 出网但**不是**「把内容交给模型」的方法：拉微信 CDN 的媒体，属数据浏览。
- *  它们由隐私开关（`sns_video_fetch` / `sns_cover_fetch`）单独管，与 license 档位无关。 */
+ *  它们不出现在 `privacyGate` / LLM 工厂这条接缝上：要么由**主机白名单**（M23）与
+ *  授权档位管，要么是「用户点击才发生」的文件下载 —— 应用内已没有任何出网开关
+ *  （`blockOutbound` 于 2026-09-30 整体移除），所以这些方法身上没有应用内闸门可查。 */
 const NON_AI_OUTBOUND: Record<string, string> = {
-  getSnsVideoDataUrl: '从微信 CDN 取回视频字节，不发内容给模型',
-  getSnsVideoCoverDataUrl: '从微信 CDN 取回封面字节，不发内容给模型',
+  getSnsVideoDataUrl: '从微信 CDN 取回视频字节，不发内容给模型（只走消息自带的免登录直链 + 主机白名单）',
+  getSnsVideoCoverDataUrl: '从微信 CDN 取回封面字节，不发内容给模型（同上，主机白名单）',
   getImageOriginal: '从微信 CDN 取回聊天图片原图字节，不发内容给模型（只走消息自带的免登录直链）',
   fetchOriginalImagesBatch: '批量版同一件事：仍只走消息自带的免登录直链，不发内容给模型（数量大，但性质与 getImageOriginal 完全一致）',
   getRemoteImages: '远程图片代理（M23）：按地址从微信 CDN 白名单主机取图并落盘，不发内容给模型',
-  downloadWhisperModel: '从 HuggingFace / hf-mirror 下载语音识别模型**文件**（2026-09-26 起过 blockOutbound 总闸），不发内容给模型',
-  installWhisperEngine: '从 GitHub releases 下载 whisper.cpp 引擎**压缩包**（P0-2 补齐：与模型下载同一个 blockOutbound 总闸），不发内容给模型',
-  downloadLayaModel: '从 HuggingFace 下载本地决策分析模型**文件**（约 1.26 GB，P0-2 补齐总闸），不发内容给模型；分析本身跑在本机 onnxruntime 上',
+  downloadWhisperModel: '从 HuggingFace / hf-mirror 下载语音识别模型**文件**，只在你点击下载时发生，不发内容给模型',
+  installWhisperEngine: '从 GitHub releases 下载 whisper.cpp 引擎**压缩包**，只在你点击下载时发生，不发内容给模型',
+  downloadLayaModel: '从 HuggingFace 下载本地决策分析模型**文件**（约 1.26 GB），只在你点击下载时发生，不发内容给模型；分析本身跑在本机 onnxruntime 上',
 }
 
-const PRIVACY_SEAMS = new Set(['privacyBlocked', 'privacyGate'])
-const EMBED_SEAMS = new Set(['makeEmbedFn', 'makeRerankFn'])
+const PRIVACY_SEAMS = new Set(['privacyGate'])
+/** LLM 工厂入口：工厂内部统一过 `privacyGate`（脱敏 + 审计），所以用了工厂就算出网。 */
+const FACTORY_SEAMS = new Set(['makeEmbedFn', 'makeRerankFn', 'makeChatAsker'])
 
 /** 从 `Boolean(this.makeEmbedFn(…))` 这类能力探测里认出「只是问配没配」。 */
 function isCapabilityProbe(node: ts.CallExpression): boolean {
@@ -75,7 +83,7 @@ function scanImpls(src: string): Map<string, string[]> {
       if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
         const callee = n.expression.name.text
         if (PRIVACY_SEAMS.has(callee)) seams.push(callee)
-        else if (EMBED_SEAMS.has(callee) && !isCapabilityProbe(n)) seams.push(callee)
+        else if (FACTORY_SEAMS.has(callee) && !isCapabilityProbe(n)) seams.push(callee)
       }
       n.forEachChild(walk)
     }
@@ -114,7 +122,7 @@ function scanGateway(src: string, impls: Map<string, string[]>): { methods: Meth
           if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
             const callee = n.expression.name.text
             if (PRIVACY_SEAMS.has(callee)) seams.push(callee)
-            else if (EMBED_SEAMS.has(callee) && !isCapabilityProbe(n)) seams.push(callee)
+            else if (FACTORY_SEAMS.has(callee) && !isCapabilityProbe(n)) seams.push(callee)
           }
           n.forEachChild(walkBody)
         }
@@ -161,9 +169,14 @@ describe('出网方法必须登记 license 功能位', () => {
     ).toEqual([])
   })
 
-  it('白名单不许腐烂：列进去的方法必须仍然带接缝', () => {
+  it('白名单不许腐烂：列进去的方法必须仍是真实的 @Remote 方法', () => {
+    // 2026-09-30 改口径：出网开关全移除后，这 8 个方法身上不再有 `privacyGate` 可查 ——
+    // 它们的出网由**主机白名单**（M23）或「用户点击下载」决定，接缝扫描天生看不见。
+    // 所以这里守的是「名单没有指向一个被删/改名的方法」：方法没了，这条白名单就是
+    // 一份骗人的文档（它仍在替一个不存在的方法声明「这不是 AI 出网」）。
+    const remoteNames = new Set([...gatewaySrc.matchAll(/@Remote\('([A-Za-z0-9_]+)'\)/g)].map((m) => m[1]))
     for (const name of Object.keys(NON_AI_OUTBOUND)) {
-      expect(outboundNames.has(name), `${name} 已不出网，把 NON_AI_OUTBOUND 里这条删掉`).toBe(true)
+      expect(remoteNames.has(name), `${name} 已不是 @Remote 方法，把 NON_AI_OUTBOUND 里这条删掉`).toBe(true)
     }
   })
 

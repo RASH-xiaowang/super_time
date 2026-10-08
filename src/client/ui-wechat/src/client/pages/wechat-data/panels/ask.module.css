@@ -98,7 +98,7 @@
   border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
   color: var(--nm-text-2);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
@@ -117,7 +117,7 @@
    不再一处 SVG、一处文字。 */
 .ctxCaret {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   line-height: 1;
   color: var(--nm-text-3);
   transition: transform 0.15s;
@@ -183,7 +183,7 @@
   outline: none;
 }
 .scopeHost button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scopeHost button > span:last-child { flex-shrink: 0; font-size: 10px; color: var(--nm-text-3); overflow: visible; }
+.scopeHost button > span:last-child { flex-shrink: 0; font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); overflow: visible; }
 
 /* 时间范围展开面板（挂在上下文条下方，不挤输入框） */
 .scopePanel {
@@ -735,7 +735,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .optApply {
   padding: 6px 14px;
   border: 1px solid var(--nm-cyan);
-  border-radius: var(--nm-dense-r);
+  border-radius: var(--nm-r-pill);
   background: var(--nm-cyan-10);
   color: var(--nm-cyan-text);
   font-size: 12px;
@@ -747,7 +747,7 @@ textarea.composerInput:focus-visible { outline: none; }
 .optDismiss {
   padding: 6px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
+  border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;

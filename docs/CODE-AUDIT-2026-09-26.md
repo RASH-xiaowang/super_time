@@ -301,6 +301,20 @@
      产物**的替身（`npm run pack` 进 CI 的一次性 job，或按 `files` 白名单离线算一遍体积），否则这条
      闸门永远是"看着有、实际不跑"。
 
+     **2026-09-28 已做（两个 TODO 都清掉了）**：根因比预想的更硬 —— 不是"该不该排除"，
+     而是 `transformers.node.cjs` 在**模块顶层无保护地** `require("sharp")` 与
+     `require("onnxruntime-common")`，两者都不在 `files` 里 ⇒ **打包版里 laya 直接
+     `Cannot find module`，整个功能起不来**。补进包也不划算（sharp 连带 `@img` 18.6 MB）。
+     处置：把分词器换成 `@huggingface/tokenizers`（**纯 JS、零依赖、1 MB**），
+     等价性逐 token 证过（fixture `tokenTable` **32/32**；端到端 **18/18** 与 Python 全等）。
+     实测 **asar 196.65 MB → 44.92 MB**，落在 64 MiB 上界内。
+     TODO ①：`files` 加三条同形排除 + 补 `onnxruntime-common`，并由 packaged-smoke 对**真实 asar**
+     断言这四处确实不存在；TODO ②：新增 `productionDepClosure()` / `depClosureViolations()`
+     —— 按 node_modules 真实布局解**生产依赖闭包**、对禁用/必需两张名单判定，
+     **不读任何产物**，在单测里就跑（含两条反例自证）。
+     验收：真打包 + 包内容断言全绿 + `tools/laya/verify-packaged-onnx.mjs` 从**打包布局**
+     跑出真实推理（6/6）。细节见 `docs/LAYA-TRIAGE-FEASIBILITY.md` §8.8。
+
 
 
 ## 〇、总体结论

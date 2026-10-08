@@ -48,7 +48,7 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         format: string;
         dir?: string;
         filename?: string;
-    }): ExportResult;
+    }): Promise<ExportResult>;
     exportAllSessions(options?: {
         dir?: string;
         filename?: string;

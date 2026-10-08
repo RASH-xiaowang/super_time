@@ -9,6 +9,16 @@
  */
 export declare function collectImageDatFiles(rawRoot: string): string[];
 /**
+ * {@link collectImageDatFiles} 的**可让出版**：遍历途中定期让出事件循环。
+ *
+ * 与同步版**共用同一个生成器**（`walkDataDatsSteps`），所以目录口径不可能分叉 ——
+ * 这正是把遍历抽出来的原因。
+ * @param rawRoot - 微信账号原始根目录（`msg/attach` 的父目录）。
+ * @param everyDirs - 每遍历多少个目录让出一次（默认 60）。
+ * @returns `.dat` 绝对路径列表（未排序）。
+ */
+export declare function collectImageDatFilesAsync(rawRoot: string, everyDirs?: number): Promise<string[]>;
+/**
  * 把 `.dat` 列表按 md5 归并，组内**按档位排序**（`_h` 原图在前，不认识的最后）。
  *
  * 分组不是省事，是正确性要求：同一个 md5 的多档必须由**同一个 worker** 顺序处理。

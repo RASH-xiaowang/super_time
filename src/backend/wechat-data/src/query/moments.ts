@@ -26,6 +26,13 @@ export interface MomentMedia {
   url: string
   key: string
   md5: string
+  /**
+   * 媒体标签上的 `token`（`<url token="…">`）。
+   *
+   * 为什么必须带着：2026-10-08 真机实测，CDN 地址只有 `?token=…` 仍是 400，
+   * **必须 `?token=…&idx=1`** 且尺寸段为 `/0`、协议为 https 才返回 200（见 `sns-cdn-url.ts`）。
+   */
+  token?: string
   /** Media <id> (cache-key input, together with timelineId). */
   id?: string
   /** Timeline <id> (SnsDataItem/TimelineObject id). */
@@ -262,6 +269,8 @@ export function parseSnsXml(xml: string): {
     const thumb = tagTextFirst(inner, ['thumb', 'Thumb', 'cdnThumbUrl', 'cdnthumburl', 'thumbUrl', 'thumburl', 'coverUrl', 'coverurl'])
     const key = xmlTagAttr(inner, 'enc', 'key') ?? xmlTagAttr(inner, 'thumb', 'key') ?? xmlTagAttr(inner, 'url', 'key') ?? ''
     const md5 = xmlTagAttr(inner, 'url', 'md5') ?? ''
+    // CDN 取图要带：`<url token>` / `<thumb token>`（实测 `token+idx=1` 才 200）
+    const token = xmlTagAttr(inner, 'url', 'token') ?? xmlTagAttr(inner, 'thumb', 'token') ?? ''
     const mediaId = tagTextFirst(inner, ['id', 'Id']) || undefined
     const duration = Number.parseFloat(tagTextFirst(inner, ['videoDuration'])) || 0
     if (url && isVideoUrl(url)) {
@@ -270,7 +279,7 @@ export function parseSnsXml(xml: string): {
       if (timelineId) videoEntry.timelineId = timelineId
       videos.push(videoEntry)
     } else if (url) {
-      const mediaEntry: MomentMedia = { thumb, url, key, md5 }
+      const mediaEntry: MomentMedia = { thumb, url, key, md5, token }
       if (mediaId) mediaEntry.id = mediaId
       if (timelineId) mediaEntry.timelineId = timelineId
       images.push(mediaEntry)

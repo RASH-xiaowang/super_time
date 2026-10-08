@@ -4,4 +4,4 @@ import type { AssetInsightsSnapshot } from '../types.ts';
  * @param decryptedDir - decrypted data root.
  * @returns the asset insights snapshot.
  */
-export declare function queryAssetInsights(decryptedDir: string): AssetInsightsSnapshot;
+export declare function queryAssetInsights(decryptedDir: string): Promise<AssetInsightsSnapshot>;

@@ -21,7 +21,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
-import { readPrivacySettings, writePrivacySettings } from '../src/query/privacy-audit.ts'
 import { kbFilesDbPath } from '../src/query/kb-paths.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 
@@ -179,16 +178,6 @@ describe('buildKbVectorIndex：按库建索引', () => {
     expect((await gw.buildKbVectorIndex({ kbId })).ok).toBe(true)
     expect(gw.getKbVectorIndex({ kbId: other }).status.ready).toBe(true)
     expect(vectorRows(savedKb).every(x => x.model === 'stub-embed-v2')).toBe(true)
-  })
-
-  it('开了「禁止 AI 出网」时一次 embedding 都不发，且说的是拦截', async () => {
-    addFile('a.md', '微信转账限额说明')
-    writePrivacySettings(decrypted, { ...readPrivacySettings(decrypted), blockOutbound: true })
-    const r = await gw.buildKbVectorIndex({ kbId })
-    expect(r.ok).toBe(false)
-    expect(r.error ?? '').toContain('出站拦截')
-    expect(stub.calls).toEqual([])
-    expect(vectorRows(kbId)).toEqual([])
   })
 
   it('关掉「参与语义检索」的文件：正文从未被发出去过', async () => {

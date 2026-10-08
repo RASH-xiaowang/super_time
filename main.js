@@ -1,7 +1,5 @@
 // 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
-// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
-// 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
-// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
+// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见 src/backend/console-safe.js）。
 // SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
 if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
 
@@ -9,6 +7,32 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = r
 const path = require('node:path');
 const fs = require('node:fs');
 const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
+
+/**
+ * 启动自检：**必须先于任何 `app.*` 用法**。
+ *
+ * `ELECTRON_RUN_AS_NODE=1` 时 Electron 退化成纯 Node，`require('electron')` 返回的是
+ * **可执行文件路径字符串**，解构出来的 `app` 是 `undefined` —— 于是崩在下面那句
+ * `app.isPackaged`，报错与真因（环境变量）毫不相干。2026-09-29 实测 `npm run dev`：
+ *
+ *   TypeError: Cannot read properties of undefined (reading 'isPackaged')
+ *       at Object.<anonymous> (main.js:27:9)
+ *
+ * 启动方式已经由 `scripts/launch-app.mjs` 修掉（它统一摘掉那个变量，仓库里三个真机脚本
+ * 与 `SuperTime.cmd` 早就是这么做的）。**这段是兜底**：无论谁用什么姿势把本入口当纯 Node
+ * 跑（含打包产物被误用），都要得到一句能直接照做的诊断，而不是一个指向第 27 行的 TypeError。
+ */
+if (app === undefined || typeof app.isPackaged !== 'boolean') {
+  console.error([
+    '[启动自检] 当前进程不是 Electron 运行时 —— require("electron") 没给出 app 对象。',
+    '  最常见原因：环境里有 ELECTRON_RUN_AS_NODE=1，Electron 会因此退化成纯 node。',
+    '  怎么修：',
+    '    · 用 npm start / npm run dev 启动（它们会剥掉这个环境变量）；',
+    '    · 或手动：npx electron .',
+    '    · PowerShell 临时清掉：$env:ELECTRON_RUN_AS_NODE=$null; npx electron .',
+  ].join('\n'));
+  process.exit(1);
+}
 
 /**
  * fuses 覆盖不到的启动开关。

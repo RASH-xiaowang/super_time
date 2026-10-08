@@ -51,11 +51,13 @@ import { drainKbQueue } from './query/kb-queue.ts'
 import { createSummaryScheduler, type SummaryScheduler } from './gateway-scheduler.ts'
 import { EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
 import { finishStreamJobIn, streamControlFor } from './gateway-jobs.ts'
-import type { PrivacyGateResult } from './gateway-privacy.ts'
 import { embedModelNameOf, globalModelNameOf, kbModelOf } from './gateway-models.ts'
 import type { EmbedFeature, LlmFactoryDeps } from './gateway-llm-factory.ts'
 import { makeChatAskerOf, makeEmbedFnOf, makeRerankFnOf } from './gateway-llm-factory.ts'
-import { DEFAULT_OUTBOUND_DETAIL, outboundBlockedAt, privacyBlockedAt, privacyGateAt } from './gateway-privacy.ts'
+import { privacyGateAt } from './gateway-privacy.ts'
+import { archiveMessages } from './query/revoke-retain.ts'
+import { pumpSnsDecodeCache } from './query/sns-image.ts'
+import { resolveImageKeyPair } from './query/image-key.ts'
 
 /** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export abstract class GatewayCore extends TypertRemoteService {
@@ -208,6 +210,37 @@ export abstract class GatewayCore extends TypertRemoteService {
       //     （它们没法用单个文件的签名表达，见 meta.ts 的说明）。
       // 整棵树被替换的场合（全量解密）仍用 `invalidateWechatMeta()`。
       bumpDataGeneration()
+      /**
+       * 撤回原文归档（2026-09-29，用户选 C：全量归档）——**挂在同步 tick 上，而不是读路径**。
+       *
+       * 为什么：`queryRevoked` 里那份"先归档再出列表"在首次会扫全部历史（19 万行 ≈2.4s），
+       * 压在"打开面板"上太慢。归档本身按**源库签名**整库跳过，空闲时只有几次 stat，
+       * 所以放在这里最合适；且**只在本 tick 真有分片变化时**才做，避免拖慢别的查询。
+       * 失败只记日志，绝不影响同步主流程。
+       */
+      if (synced.length > 0) {
+        try { archiveMessages(decrypted) } catch (e) { console.warn('[revoke-archive] 归档失败:', (e as Error).message) }
+      }
+      /**
+       * **预热解码缓存**（2026-09-29「有的图片加载不出来」的治本一步）。
+       *
+       * 真机自检：解码缓存 **154 张** vs 媒体资源 **175,963 项** —— 因为解密推进
+       * (`drainAttach`) 此前只在"用户点到某张图"时被驱动，空闲时缓存完全不涨；
+       * 未命中的那张要走 12–21s 的重路径，失败就是我们看到的空白。
+       *
+       * 这里把驱动权交给同步节拍（约每 10s 一拍）：**不加 `synced.length > 0` 条件**，
+       * 因为 WeChat 空闲时也需要继续预热。安全性由 pump 自身保证 —— 它复用请求路径
+       * 同一个 150ms 突发闸门与文件数/毫秒双预算，**不会把 worker 拖住、也不会挤掉正在等图的请求**。
+       *
+       * 密钥走 `resolveImageKeyPair(decrypted)`：与设置页/自检面板**同一份被校验过的键**
+       * （配置优先，其次自动密钥且校验归属），绝不在这里自己拼密钥。
+       */
+      try {
+        const pair = resolveImageKeyPair(decrypted)
+        // 每拍最多占用 300ms（约 12 步 / 400+ 张）——占每 10s 节拍的 3%，
+        // 但把 3,262 张的积压从"约 13 分钟"压到"约 1 分钟"级。
+        pumpSnsDecodeCache(rawDbDir(), pair.aesKey, pair.xorKey, { maxMs: 300 })
+      } catch (e) { console.warn('[sns-prewarm] 预热失败:', (e as Error).message) }
       try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
     })
     ctx.effect(() => stopSync, 'wechat-data: realtime sync')
@@ -250,42 +283,30 @@ export abstract class GatewayCore extends TypertRemoteService {
    * Append one operation-log row. Metadata only — never message bodies or
    * image/file contents — so an export stays safe to share. Best-effort: a
    * logging failure never affects the operation it records.
+   *
+   * @param durationMs - 本次操作耗时（H2）。**不传就是不记**（`undefined`），
+   *   与传 `0` 是两回事：`0` 会被 `storedDuration` 当成「不到阈值」丢掉，
+   *   而「没量过」与「量出来很快」在审计表里都落 NULL。绝大多数 `op()` 调用点
+   *   记录的是「开始做某件事」而不是「做完」，本来就没有耗时可言 —— 不要为了
+   *   填满这一列去给每个调用点掐表。
    */
-  protected op(category: OperationCategory, action: string, status: OperationStatus, target = '', detail = ''): void {
-    recordOperation(this._dirs.decrypted, { category, action, target, status, detail })
-  }
-
-    /**
-   * 「出站拦截」当前是否开启 —— 判断本身在 `gateway-privacy.ts#outboundBlockedAt`
-   * （#20 第一个协作者：安全判断从 986 行的装配类里搬出去，才谈得上被单独测）。
-   * @returns 是否禁止出站；读不到设置时按「禁止」处理。
-   */
-  protected outboundBlocked(): boolean {
-    return outboundBlockedAt(this._dirs.decrypted)
-  }
-
-  /**
-   * 「出站拦截」已开启时返回给用户看的说明，否则 null。
-   * @param feature - 功能名，出现在提示文案里。
-   * @param detail - 这条出网在做什么。
-   * @returns 被拦截时的文案，未拦截时 null。
-   */
-  protected privacyBlocked(feature: string, detail = DEFAULT_OUTBOUND_DETAIL): string | null {
-    return privacyBlockedAt(this._dirs.decrypted, feature, detail)
+  protected op(category: OperationCategory, action: string, status: OperationStatus, target = '', detail = '', durationMs?: number): void {
+    recordOperation(this._dirs.decrypted, { category, action, target, status, detail, durationMs })
   }
 
   /**
    * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（实现见 `gateway-privacy.ts`）。
+   * 它只做脱敏与审计 —— 2026-09-30 起不再有任何拦截逻辑。
    * @param feature - 审计里的功能名。
    * @param stats - 本次出站涉及的数据量（会话数、消息数）。
    * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
-   * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
+   * @returns 可以直接发出去的文本。
    */
   protected privacyGate(
     feature: string,
     stats: { sessions: number; messages: number },
     texts: string[],
-  ): PrivacyGateResult {
+  ): string[] {
     return privacyGateAt(this._dirs.decrypted, feature, stats, texts)
   }
 
@@ -385,29 +406,7 @@ export abstract class GatewayCore extends TypertRemoteService {
       llm: this._ctx.llm,
       host: this._ctx,
       kbModel: (kbId, role) => this.kbModel(kbId, role),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
-    }
-  }
-
-/**
-   * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
-   *
-   * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
-   * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
-   * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
-   * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
-   */
-  protected cdnSwitches(): { cdnEnabled: boolean; localDecrypt: boolean } {
-    try {
-      const cfg = getConfig(this._dirs.decrypted)
-      return {
-        cdnEnabled: cfg['cdn_enabled'] !== false,
-        localDecrypt: cfg['cdn_local_decrypt'] !== false,
-      }
-    } catch {
-      // 读不到配置时**不拦**：这两个键的默认值本就是开启，读失败不该变成「静默断功能」
-      return { cdnEnabled: true, localDecrypt: true }
     }
   }
 
@@ -434,7 +433,6 @@ export abstract class GatewayCore extends TypertRemoteService {
       ctx: this._ctx,
       kbIndexJobs: this._kbIndexJobs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
       globalModelName: (role) => this.globalModelName(role),
@@ -448,9 +446,6 @@ export abstract class GatewayCore extends TypertRemoteService {
     return this.slot('media', () => createMediaRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
-      cdnSwitches: () => this.cdnSwitches(),
-      outboundBlocked: () => this.outboundBlocked(),
       rawWechatBase: (decrypted) => rawWechatBase(decrypted),
       // fs 读写都在 query 层那颗里（#20 第五刀下沉的），这里只是把它交给处理器。
       warmDecodedImages,
@@ -523,7 +518,6 @@ export abstract class GatewayCore extends TypertRemoteService {
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
     }))
   }
@@ -564,7 +558,6 @@ export abstract class GatewayCore extends TypertRemoteService {
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       runSummaryTask: (options) => this.runSummaryTask(options),
       selfUsername: () => this.selfUsername(),
@@ -578,7 +571,6 @@ export abstract class GatewayCore extends TypertRemoteService {
     return this.slot('voiceLlm', () => createVoiceLlmRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       ctx: () => this._ctx,
       getWhisperDownload: () => this.whisperDownload,
       setWhisperDownload: (v) => { this.whisperDownload = v },
@@ -594,7 +586,6 @@ export abstract class GatewayCore extends TypertRemoteService {
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
       askTrace: this._askTrace,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       embedModelName: (override) => this.embedModelName(override),
       makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),

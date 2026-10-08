@@ -43,6 +43,10 @@ const LONG_CALL_METHODS = new Set([
   // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
   'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
   'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal',
+  // 批量封面（A1，2026-09-28 性能修复）：单张版早在宽窗口里，批版等于把 N 张的最坏耗时
+  // （每张两次 20s 超时）串在一个窗口里 —— 按 8 并发、一屏 30 篇算，最坏仍有约 4 批 × 40s。
+  // 不进这个名单的话，一屏封面会被 RPC 默认窗口误杀成「调用超时」。
+  'getArticleCovers',
   // 批量取图（P3-12）：一次最多 200 张，每张都可能退化成「读文件 + 解密 + 哈希」——
   // 单张 `getImageDataUrl` 早就在宽窗口里了，批版却是 60 秒的默认档，
   // 于是一次正常的批量取图被 RPC 误杀成「调用超时」，界面看到的是整批失败。
@@ -51,6 +55,15 @@ const LONG_CALL_METHODS = new Set([
   'fetchOriginalImagesBatch',
   // 语音转写：whisper 本地推理
   'transcribeVoiceBatch', 'transcribeVoiceMessage',
+  // laya 本地决策推理（2026-09-28 补登记）。**这条是「模型装上了却用不起来」的直接原因**：
+  // 逐条分析一批最多 12 条，每条一次完整的 ONNX forward，现场日志实测**单次 54,103ms**
+  // （`world-map-data.ts` / `world-map-first-paint.wiring.spec.ts` 两处都引了这个数），PERF-AUDIT 的日志口径是**均 36s / 峰值 110s**。默认 60s 窗口
+  // 只有 1.1 倍余量 ⇒ 稍大的可见窗口就被误杀成「调用超时」，界面看到的是**整批失败**，
+  // 与下面 `getImageDataUrlsBatch` 的 P3-12 是同一个症状：推理其实还在后台跑完。
+  'analyzeMessages', 'analyzeVisibleMessages',
+  // 模型文件 1.26 GB 走流式下载；「接管已有目录」在跨盘时退化成整份拷贝（1.23 GB）。
+  // 两者都远超 60s：不登记的话 RPC 先超时，而下载/拷贝**还在继续**，用户只看到一句失败。
+  'downloadLayaModel', 'adoptLayaModel',
   // 索引与离线评估
   'buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval',
   // LLM 长任务。仓库自身 LLM 超时默认 120 秒（wechat-host.js 的 timeoutMs），

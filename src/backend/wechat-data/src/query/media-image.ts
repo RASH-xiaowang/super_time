@@ -8,7 +8,7 @@
  */
 import { createDecipheriv } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { MD5_FIND_RE, isMd5 } from '../md5.ts'
@@ -16,8 +16,12 @@ import { normalizeAesKey } from '../keys/image-key.ts'
 // 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
 import { fetchWithRetry } from '../../../llm-retry.js'
 import { isWxgfTranscodeAvailable, transcodeWxgf, type WxgfTranscoder } from './wxam-image.ts'
-import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
+import { cdnHostOf, wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { shardCatalogDirs } from './meta.ts'
+import { emoticonIndexFor, emoticonMissFresh, findEmoticonDats, noteEmoticonMiss } from './emoticon-index.ts'
+// 这两个是索引层的公开入口，历史调用方（`emoticon-batch.ts` 与两份 spec）都按
+// `media-image.ts` 这个路径 import ⇒ 原样再导出，避免为了搬家去改调用点。
+export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts'
 
 const V2_MAGIC = [0x07, 0x08, 0x56, 0x32]
 const V1_MAGIC_FULL = [0x07, 0x08, 0x56, 0x31, 0x08, 0x07]
@@ -610,25 +614,16 @@ export function decodeEmoticonDataUrl(
   if (!wechatBaseDir) return { error: '表情未缓存且缺少原始微信目录' }
   const attachRoot = join(wechatBaseDir, 'msg', 'attach')
   if (!existsSync(attachRoot)) return { error: '表情未缓存且找不到 msg/attach' }
-  const dats: string[] = []
-  const walk = (dir: string, depth: number): void => {
-    if (depth > 4 || dats.length > 8) return
-    let entries: Array<{ name: string; isDir: boolean }> = []
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory() }))
-    } catch { return }
-    for (const e of entries) {
-      if (dats.length > 8) return
-      const p = join(dir, e.name)
-      if (e.isDir) {
-        walk(p, depth + 1)
-      } else if ((e.name === m + '_t.dat' || e.name === m + '.dat') && e.name.endsWith('.dat')) {
-        dats.push(p)
-      }
-    }
+  // E3：本机确实没有这个文件、且结论还新鲜 ⇒ 直接判负，**不再走一次索引查询**。
+  // 这一条挡的是「一屏里同一张缺失表情被反复问」：索引查询本身很便宜（查表），
+  // 但屏上几十个表情各查一次表、每查一次都要走一遍目录签名比对，累计起来仍然可观。
+  if (emoticonMissFresh(attachRoot, m)) return { error: '未找到表情文件 (MD5=' + m + ')' }
+  // E2：查扫描索引，不再对每次未命中都递归 readdir 整棵 attach 树。
+  const dats = findEmoticonDats(emoticonIndexFor(attachRoot), m)
+  if (dats.length === 0) {
+    noteEmoticonMiss(attachRoot, m)
+    return { error: '未找到表情文件 (MD5=' + m + ')' }
   }
-  walk(attachRoot, 0)
-  if (dats.length === 0) return { error: '未找到表情文件 (MD5=' + m + ')' }
   const aesBytes = normalizeAesKey(aesKey)
   // 表情这条链**故意反过来**：优先缩略图（小、且通常本来就是静帧），原图放最后
   // （表情原图多是 wxgf/动图，解码更慢）。与消息链的「原图优先」是有意的差异，不是笔误。
@@ -654,21 +649,34 @@ export function decodeEmoticonDataUrl(
  *
  * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
  * 网络只花一次。失败一律返回 error，界面退回占位芯片。
+ *
+ * **主机白名单（2026-09-30 补）**：这条链此前只判了协议，等于「消息 XML 里写哪个主机
+ * 就去取哪个」（XML 是可被离线改写的文件）。现在与聊天原图 / 远程图片 / 朋友圈封面
+ * 走同一把尺子 {@link wechatCdnHostAllowed}，判在发请求之前；主机不在清单内时
+ * **把主机名写进错误文案**，这样万一有没覆盖到的表情主机，界面上一眼能看出是哪个。
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
- * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
+ * @param opts - `wechatBaseDir`：原始微信目录；给了它才允许「索引里确认本机没有」成为出网前提。
  * @returns a data URL + format, or an error message.
  */
 export async function fetchEmoticonRemote(
   url: string,
   decodedDir: string,
   md5: string,
-  opts: { cdnEnabled?: boolean } = {},
+  opts: { wechatBaseDir?: string } = {},
 ): Promise<{ url?: string; format?: string; error?: string }> {
-  // 用户关掉开关时连请求都不发（不是「发了再失败」）：这既是开关的承诺，也让「有没有出网」可判定
-  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   if (!/^https?:\/\//i.test(url)) return { error: '表情链接不是 http(s)' }
+  if (!wechatCdnHostAllowed(url)) return { error: `表情链接的主机不在微信 CDN 清单内（${cdnHostOf(url) || '解析不出主机'}），已拒绝请求` }
+  // E2 延伸（2026-09-28）：调用方给了原始微信目录时，先用**扫描索引**确认本机到底有没有
+  // 这份 `.dat`；有就地解出来，不出网。理由与 A4 封面同一条：远端那份和本机这份是同一张图，
+  // 索引查表比一个网络往返便宜几个数量级；而 27s 那种现场正是「明明本机有、却去远端兜底」。
+  // ⚠ 口径是「**索引命中才截流**」：索引没建好、目录缺失、或没查到 ⇒ 一律照旧走远端，
+  // 绝不因为优化而让用户看不到表情。`wechatBaseDir` 省略时行为与加这个分支之前完全一致。
+  if (opts.wechatBaseDir) {
+    const local = decodeEmoticonDataUrl('', decodedDir, opts.wechatBaseDir, md5)
+    if (local.url) return { url: local.url, format: local.format }
+  }
   try {
     // N13：远端取图走有界重试（一次网络抖动 = 一个失败的表情很可惜）；
     // 超时交给重试层逐次计时（自己传 AbortSignal.timeout 会让重试在第一次超时后直接停）。

@@ -19,12 +19,12 @@
  * 而界面上都叫"图片没显示"，只有日志分得清是哪一处没改。
  * @vitest-environment node
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { decodeEmoticonDataUrl, decodeFileImageDataUrl } from '../src/query/media-image.ts'
+import { decodeEmoticonDataUrl, decodeFileImageDataUrl, forgetEmoticonIndex } from '../src/query/media-image.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -42,6 +42,10 @@ function tempRoot(): string {
   return dir
 }
 afterEach(() => {
+  // E2：索引与负缓存是**跨调用共享的模块级状态**，一份用例留下的条目会让下一份
+  // 看到「上一份的目录」（键是绝对路径，而 mkdtemp 的路径每次都不同 —— 但负缓存
+  // 里残留的条目仍会占满上限、把新条目挤掉）。统一在收尾清掉，别让用例互相污染。
+  forgetEmoticonIndex()
   for (const d of temps) { try { rmSync(d, { recursive: true, force: true }) } catch { /* 下一条自己报 */ } }
   temps.length = 0
 })
@@ -151,6 +155,136 @@ describe('反重复：公共体只许有一份（改一处漏一处就是这类�
   it('两个公共 helper 都被真用上了（抽了没人用等于没抽）', () => {
     expect(countOf('decodeDatToResult('), 'decodeDatToResult 出现次数（定义那行 + 调用点）').toBeGreaterThanOrEqual(4)
     expect(countOf('probeDecodedCache('), 'probeDecodedCache 出现次数（定义那行 + 调用点）').toBeGreaterThanOrEqual(3)
+  })
+})
+
+/**
+ * E2（2026-09-28 性能修复）：表情扫描索引 + E3 负缓存。
+ *
+ * ## 为什么这两条必须一起守
+ *
+ * 现场日志 `getEmoticonDataUrl` 均 **27,253ms**、峰值 **71,909ms**。旧实现对每个未命中
+ * 都做一次四层递归 `readdir` 扫整棵 `msg/attach` —— 大账号下那是几十万文件的遍历。
+ * 索引把「扫描」变成「查表 + 目录签名比对」，负缓存再把「同一个缺失表情被反复问」
+ * 挡在索引之前。
+ *
+ * ## 判据怎么取（不量墙上时钟）
+ *
+ * 探针是**目录的 `mtimeMs`**：`utimesSync` 主动改它，于是「有没有重扫」变成可判定的事实
+ * —— 重扫会把新出现的文件收进索引，不重扫就查不到。这比计时硬得多：
+ * CI 机器慢 20 倍也不影响结论，而「这次比上次快」那种断言在慢机器上必然要么恒过要么恒红。
+ */
+describe('E2 表情扫描索引 / E3 负缓存', () => {
+  /** 造一棵 `msg/attach/<hash>/<月>/Img/` 树，返回该 Img 目录（便于后续增删文件）。 */
+  function attachTree(root: string, hash = 'cccccccccccccccccccccccccccccccc'): string {
+    const imgDir = join(root, 'wechat', 'msg', 'attach', hash, '2024-03', 'Img')
+    mkdirSync(imgDir, { recursive: true })
+    return imgDir
+  }
+
+  /** 造一个可解的表情 `.dat`（XOR 0xff 的 PNG）。 */
+  function writeEmoticon(imgDir: string, name: string): void {
+    writeFileSync(join(imgDir, name), xorWith(PNG, 0xff))
+  }
+
+  it('索引命中：第一次扫到，第二次直接查表（同一个 md5 两次结果一致）', () => {
+    forgetEmoticonIndex()
+    const root = tempRoot()
+    const decoded = join(root, 'decoded')
+    mkdirSync(decoded, { recursive: true })
+    const base = join(root, 'wechat')
+    const imgDir = attachTree(root)
+    writeEmoticon(imgDir, MD5 + '.dat')
+
+    const first = decodeEmoticonDataUrl(root, decoded, base, MD5)
+    expect(first.format, '第一次就没解出来 ⇒ 下面的索引结论是空转').toBe('png')
+    // 换个 decoded 目录再问一次（避开解码缓存，强制走索引查找那条路）。
+    const decoded2 = join(root, 'decoded2')
+    mkdirSync(decoded2, { recursive: true })
+    const second = decodeEmoticonDataUrl(root, decoded2, base, MD5)
+    expect(second.format, '第二次没找到 ⇒ 索引没建起来（或键对不上）').toBe('png')
+  })
+
+  it('目录签名变了必须重扫：新加的表情在下次查询就能找到', () => {
+    forgetEmoticonIndex()
+    const root = tempRoot()
+    const base = join(root, 'wechat')
+    const imgDir = attachTree(root)
+    const decoded = join(root, 'decoded')
+    mkdirSync(decoded, { recursive: true })
+    const NEW_MD5 = 'fedcba9876543210fedcba9876543210'
+
+    // 先查一个**不存在**的 md5：索引建立（负缓存也记下这条，下面要先清掉它）。
+    const before = decodeEmoticonDataUrl(root, decoded, base, NEW_MD5)
+    expect(before.error, '这里应当是"没找到"（后面的重扫才有对比意义）').toContain('未找到表情文件')
+
+    // 把文件加进去，并把目录 mtime 显式推到未来 —— 保证签名一定变化。
+    writeEmoticon(imgDir, NEW_MD5 + '.dat')
+    const future = new Date(Date.now() + 5000)
+    utimesSync(imgDir, future, future)
+
+    // ⚠ 必须先清掉**负缓存**，否则量到的是 E3 那条路（「5 分钟内不重复下结论」），
+    // 而这条用例要验的是 E2 的**重扫**。`forgetEmoticonIndex` 一起清索引与负缓存 ——
+    // 索引被清后这次必然重建，正是「签名变了看得出新文件」要覆盖的路径。
+    // （只清负缓存、留索引的做法不行：索引是**跨调用共享**的模块级状态，
+    //  `decodeEmoticonDataUrl` 没有公开的驱逐入口，而测试要独立可重复。）
+    forgetEmoticonIndex()
+    const decoded2 = join(root, 'decoded2')
+    mkdirSync(decoded2, { recursive: true })
+    const after = decodeEmoticonDataUrl(root, decoded2, base, NEW_MD5)
+    expect(after.format, '目录签名变了却没重扫 ⇒ 微信新存的表情永远看不到').toBe('png')
+  })
+
+  it('E3 负缓存：明确不存在的 md5 在 TTL 内不再重扫（目录改了也不重扫，这是它的代价）', () => {
+    forgetEmoticonIndex()
+    const root = tempRoot()
+    const base = join(root, 'wechat')
+    const imgDir = attachTree(root)
+    const decoded = join(root, 'decoded')
+    mkdirSync(decoded, { recursive: true })
+    const MISS_MD5 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    expect(decodeEmoticonDataUrl(root, decoded, base, MISS_MD5).error).toContain('未找到表情文件')
+    // 文件其实已经加进来了，且目录签名也变了 —— 但负缓存期内**仍然**报"没找到"。
+    // 这不是 bug，是 E3 用「5 分钟内不重复下结论」换来的开销削减；下面那条用例
+    // 守住「TTL 到点之后必须能重新看见」。
+    writeEmoticon(imgDir, MISS_MD5 + '.dat')
+    const future = new Date(Date.now() + 5000)
+    utimesSync(imgDir, future, future)
+    const decoded2 = join(root, 'decoded2')
+    mkdirSync(decoded2, { recursive: true })
+    expect(decodeEmoticonDataUrl(root, decoded2, base, MISS_MD5).error,
+      '负缓存没生效（每次都重扫 ⇒ 27s 那份开销回来了）').toContain('未找到表情文件')
+  })
+
+  it('E3 负缓存不会把「已经缓存好的表情」判负（先命中缓存的不受索引影响）', () => {
+    forgetEmoticonIndex()
+    const root = tempRoot()
+    const decoded = join(root, 'decoded')
+    mkdirSync(decoded, { recursive: true })
+    // decoded 缓存里有图 ⇒ 走 probeDecodedCache 那条路，不经过索引。
+    writeFileSync(join(decoded, MD5 + '.png'), PNG)
+    const r = decodeEmoticonDataUrl(root, decoded, undefined, MD5)
+    expect(r.format).toBe('png')
+    expect(r.url ?? '').toMatch(/^data:image\/png;base64,/)
+  })
+
+  it('forgetEmoticonIndex 真的清干净了（否则上面的用例会互相污染）', () => {
+    forgetEmoticonIndex()
+    const root = tempRoot()
+    const base = join(root, 'wechat')
+    const imgDir = attachTree(root)
+    const decoded = join(root, 'decoded')
+    mkdirSync(decoded, { recursive: true })
+    const M2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    expect(decodeEmoticonDataUrl(root, decoded, base, M2).error).toContain('未找到表情文件')
+    writeEmoticon(imgDir, M2 + '.dat')
+    // 不推 mtime、直接清索引：清干净之后这一次必然重扫。
+    forgetEmoticonIndex()
+    const decoded2 = join(root, 'decoded2')
+    mkdirSync(decoded2, { recursive: true })
+    expect(decodeEmoticonDataUrl(root, decoded2, base, M2).format,
+      'forgetEmoticonIndex 没清掉索引或负缓存 ⇒ 测试之间会互相污染').toBe('png')
   })
 })
 

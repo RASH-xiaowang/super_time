@@ -106,4 +106,16 @@ describe('模型配置集：preload 暴露面', () => {
       expect(preload, `preload 丢了 ${m}`).toContain(m)
     }
   })
+
+  /**
+   * 连接测试 / 余额查询（2026-09-30）：preload 必须把两个方法都暴露出来，且各自打在
+   * **自己的频道**上（打成同一条会让"测试连接"悄悄去查余额 —— 前者只读 /models，
+   * 后者会打厂商的账户接口，混了她两个动作的出网口径就乱了）。
+   */
+  it('测试连接与余额查询各暴露一个方法、各打一条 IPC', () => {
+    expect(preload, 'preload 没暴露 testLlmConnection').toContain('testLlmConnection:')
+    expect(preload, 'preload 没暴露 getLlmBalance').toContain('getLlmBalance:')
+    expect(preload, "测试连接要打在 wechat:llm-test").toContain("invoke('wechat:llm-test'")
+    expect(preload, "余额查询要打在 wechat:llm-balance").toContain("invoke('wechat:llm-balance'")
+  })
 })

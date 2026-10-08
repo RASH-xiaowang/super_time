@@ -19,26 +19,24 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { _electron } from 'playwright'
+// 真实 profile 播种器（2026-09-29 补：此前只写了注释、漏了 import，脚本一跑就
+// `ReferenceError: seedRealProfile is not defined` —— 所以"留白审计"有段时间等于不可用）。
+import { seedRealProfile } from './real-profile.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const OUT = join(ROOT, '.tmp-e2e', 'panels')
-const DATA = join(process.env.APPDATA ?? '', 'super-time-electron', 'wechat-data')
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
 
 if (!existsSync(EXE)) { console.error('[前置] 找不到 electron.exe：', EXE); process.exit(2) }
 mkdirSync(OUT, { recursive: true })
 
+// 真实 profile 的配置（含 llm.json）+ 应用**真正在用**的数据根，见 `real-profile.mjs` 的注释。
 const userData = mkdtempSync(join(tmpdir(), 'st-pa-'))
-mkdirSync(join(userData, 'wechat'), { recursive: true })
-writeFileSync(join(userData, 'wechat', 'config.json'), JSON.stringify({
-  dataRoot: DATA,
-  decryptedDir: join(DATA, 'decrypted'),
-  decodedImagesDir: join(DATA, 'decoded_images'),
-  sourceDir: '', baseDir: '', selfWxid: '', silkBinary: '', resolved: {},
-  wechatSettings: { api_enabled: true, api_port: 5032, cdn_enabled: true, cdn_local_decrypt: false },
-  wechatSettingsMeta: { savedAt: new Date().toISOString(), source: 'panel-audit' },
-}, null, 2) + '\n')
+const seeded = seedRealProfile(userData)
+const DATA = seeded.dataRoot
+console.log(`真实 profile：${seeded.source}（带入 ${seeded.copied.join('、') || '（无额外配置）'}）`)
+console.log(`真实数据根：${DATA}`)
 
 /** 在页面里跑的空白度量（返回内容坐标下的统计）。 */
 const MEASURE = () => {
@@ -147,6 +145,36 @@ try {
   })
   const win = await app.firstWindow()
   win.setDefaultTimeout(45000)
+
+  /**
+   * 主题选择（`--theme light|dark`，默认 dark）。
+   *
+   * 为什么加：这个脚本原先**完全不碰主题**，截图一律是默认（深色）。
+   * 而"浅色主题下颜色一致"这条要求，最后需要**人眼看浅色界面** ——
+   * 没有浅色截图，那一步就只能靠人在应用里手动切主题、手动点 16 个页签，
+   * 成本高到基本不会被做。加一个开关，浅色截图一条命令就有。
+   *
+   * 做法与 `theme-live-audit.mjs` 一致：写 `localStorage` 再 reload，
+   * 并**断言真的切过去了**（否则会拿到"看着像浅色、其实是深色"的图 —— 第 16 轮踩过）。
+   */
+  const themeArg = (() => {
+    const i = process.argv.indexOf('--theme')
+    const v = i === -1 ? 'dark' : String(process.argv[i + 1] ?? 'dark')
+    return v === 'light' ? 'light' : 'dark'
+  })()
+  await win.evaluate((t) => { localStorage.setItem('super-time-wechat-theme', t) }, themeArg)
+  await win.reload()
+  await win.waitForLoadState('domcontentloaded')
+  await sleep(1500)
+  {
+    const applied = String(await win.evaluate(() => document.documentElement.className))
+    const okTheme = applied.includes('theme-light') === (themeArg === 'light')
+    if (!okTheme) {
+      throw new Error(`主题没切过去：请求 ${themeArg}，但 htmlClass="${applied}" ⇒ 拒绝继续产出（否则截图会被误当成该主题的证据）`)
+    }
+    console.log(`主题 = ${themeArg}（已断言 htmlClass="${applied}"）`)
+  }
+  const suffix = themeArg === 'light' ? '.light' : ''
   const errs = []
   // 「Failed to load resource」是资源加载失败的通用文案，由下面的 response 监听带着 URL 单独统计，
   // 这里不再重复计入 console 错误 —— 让 `console×N` 只表示**我们代码的** JS 错误。
@@ -247,7 +275,7 @@ try {
       m.queueMs = queueMs
       m.stillLoading = stillLoading
       const slug = label.replace(/[^\w\u4e00-\u9fa5]+/g, '_')
-      await win.screenshot({ path: join(OUT, `${slug}.png`) })
+      await win.screenshot({ path: join(OUT, `${slug}${suffix}.png`) })
     } catch (e) {
       rows.push({ label, failed: (e.message || String(e)).split('\n')[0].slice(0, 60) })
       continue
@@ -300,7 +328,7 @@ try {
         const m = await win.evaluate(MEASURE)
         m.queueMs = queueMs
         m.stillLoading = stillLoading
-        await win.screenshot({ path: join(OUT, `hidden-${h.tab}.png`) })
+        await win.screenshot({ path: join(OUT, `hidden-${h.tab}${suffix}.png`) })
         rows.push({ label: h.label, hidden: true, ...m, errs: errs.slice(before), assetFails: assetFails.slice(assetBefore) })
       } catch (e) {
         rows.push({ label: h.label, hidden: true, failed: (e.message || String(e)).split('\n')[0].slice(0, 60) })

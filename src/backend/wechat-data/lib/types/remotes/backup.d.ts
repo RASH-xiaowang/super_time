@@ -15,7 +15,7 @@ export declare function createBackupRemotes(rc: createBackupRemotesInputs): {
     previewBackup(options: {
         name: string;
     }): BackupPreviewSnapshot;
-    createBackup(): BackupMutationResult;
+    createBackup(): Promise<BackupMutationResult>;
     deleteBackup(options: {
         name: string;
     }): BackupMutationResult;

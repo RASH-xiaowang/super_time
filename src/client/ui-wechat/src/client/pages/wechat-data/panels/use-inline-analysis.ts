@@ -63,10 +63,55 @@ export interface InlineAnalysisApi {
   done: number
 }
 
-/** 一次请求最多带多少条（与后端 `MAX_ANALYZE_BATCH` 对齐）。 */
-const MAX_BATCH = 12
+/**
+ * 一次请求最多带多少条（与后端 `MAX_ANALYZE_BATCH` 对齐的上限之内）。
+ *
+ * ⚠️ 2026-09-29 由 **12 降到 4**：真机实测（方法与读数记在 `inline-analysis-gate.spec.ts` 顶部）
+ * 一次 `analyzeVisibleMessages` 要 **7.8 秒**，而这段时间里**后端 worker 完全被它占住** ——
+ * 同窗口打一发本该 2–3 ms 的轻调用，实测要等 **3,523 ms / 3,162 ms**。
+ * 用户在日志里看到的 `getSessions 5.3/9.6s`、`getRemoteImages 1.1s × 13`、`getWordCloud 6.9/9.6s`
+ * 全是这样被顶出来的（它们本身是缓存命中或毫秒级查询）。
+ * 批次越大，一次占住的时间越长 ⇒ 调小批次，让 RPC 队列有插空的机会。
+ */
+const MAX_BATCH = 4
 /** 滚动停止多久后才发请求。 */
 const DEBOUNCE_MS = 380
+
+/**
+ * 两批之间**至少**隔这么久（毫秒）。
+ *
+ * 理由同上：推理是同步 ONNX 调用，中途无法让出，只能在批次之间让路。
+ * 这段时间足够排在后面的本地查询/图片代理跑完（它们通常是 ms 级）。
+ */
+const BATCH_GAP_MS = 700
+
+/** 全应用同时只允许**一次**内联分析在飞：多开会话/多开面板时不许并发占满 worker。 */
+let analyzeInFlight = false
+/** 上一批**结束**的时刻（用于批次间隔）。 */
+let lastAnalyzeDoneAt = 0
+
+/**
+ * 让路判定（纯函数，便于单测）：这一批现在该不该推迟、要推多久。
+ *
+ * 抽出来的理由：这是"别占死 worker"的**唯一**判据，混在 effect 里只能靠读源码确认；
+ * 抽成纯函数后可以用真实数字把它钉住（见 `inline-analysis-gate.spec.ts`）。
+ * @param now - 当前时刻（ms）。
+ * @param inFlight - 是否已有分析在飞。
+ * @param lastDoneAt - 上一批结束时刻（ms）；0 表示还没跑过。
+ * @param gapMs - 批次最小间隔。
+ * @returns `defer=false` → 可以立刻发；否则等 `waitMs` 毫秒再试。
+ */
+export function deferInlineAnalysis(
+  now: number,
+  inFlight: boolean,
+  lastDoneAt: number,
+  gapMs: number = BATCH_GAP_MS,
+): { defer: boolean; waitMs: number } {
+  if (inFlight) return { defer: true, waitMs: gapMs }
+  const since = now - lastDoneAt
+  if (since < gapMs) return { defer: true, waitMs: gapMs - since }
+  return { defer: false, waitMs: 0 }
+}
 
 export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisApi {
   const [map, setMap] = useState<Map<number, InlineAnalysisEntry>>(() => new Map())
@@ -105,14 +150,28 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
 
     // 2) 滚动停止后再发（滚动过程中反复清理定时器）
     const myEpoch = epoch.current
-    const timer = window.setTimeout(() => {
+    let timer = 0
+    let retryTimer = 0
+    /**
+     * 真正发请求。**发之前先给 worker 让路**（2026-09-29 加）：
+     *   · 已经有一批在飞 ⇒ 推迟；
+     *   · 距上一批结束不足 {@link BATCH_GAP_MS} ⇒ 推迟到够久。
+     * 推迟而不是丢弃：`map` 是 effect 依赖，重跑时会重新收集目标，所以结果不会丢。
+     */
+    const fire = (): void => {
       if (myEpoch !== epoch.current) return
+      const gate = deferInlineAnalysis(Date.now(), analyzeInFlight, lastAnalyzeDoneAt)
+      if (gate.defer) {
+        retryTimer = window.setTimeout(fire, gate.waitMs)
+        return
+      }
       for (const t of targets) inflight.current.add(t.localId)
       setMap((prev) => {
         const next = new Map(prev)
         for (const t of targets) if (!next.has(t.localId)) next.set(t.localId, { state: 'pending' })
         return next
       })
+      analyzeInFlight = true
       void apiAnalyzeVisibleMessages({ talker, targets })
         .then((res) => {
           if (myEpoch !== epoch.current) return
@@ -141,11 +200,15 @@ export function useInlineAnalysis(option: InlineAnalysisOption): InlineAnalysisA
           })
         })
         .finally(() => {
+          // 闸门必须在**任何**结局下都放掉，否则一次失败会把内联分析永久卡死。
+          analyzeInFlight = false
+          lastAnalyzeDoneAt = Date.now()
           for (const t of targets) inflight.current.delete(t.localId)
         })
-    }, DEBOUNCE_MS)
+    }
+    timer = window.setTimeout(fire, DEBOUNCE_MS)
 
-    return () => { window.clearTimeout(timer) }
+    return () => { window.clearTimeout(timer); window.clearTimeout(retryTimer) }
     // map 进依赖是**有意**的：一批算完 → 重新收集 → 自动接着算下一批
   }, [talker, items, virtualizer, map])
 

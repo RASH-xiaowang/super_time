@@ -317,7 +317,7 @@ getImageTier({ username, localId })
 | 项 | 建议 | 理由 |
 |---|---|---|
 | `VoipEngine.dll` 路径 | **不新增配置项**，一律从 `weixinInstallPath()`+`weixinVersion()` 推导 | 与既有的 `weixinVersion()` 用法一致（`gateway-read.ts:386-389`），少一个会写错的旋钮 |
-| 转码开关 | 新增 `wxgf_transcode: true`（默认开）+ 设置页开关 | 与现有「原图解密方式 / 自动获取原图（CDN）」两个开关同族；给「不想让本应用加载微信 DLL」的用户一条退路 |
+| 转码开关 | 新增 `wxgf_transcode: true`（默认开）+ 设置页开关 | 与当时的两个图片侧开关同族；给「不想让本应用加载微信 DLL」的用户一条退路（那两个开关已于 2026-09-30 整体移除） |
 | 版本白名单 | 可选：记录**验证过的版本**（如 `4.1.15.13`），未验证版本仍尝试但记一条诊断日志 | 微信升级后导出可能变，宁可在日志里留痕，也不要静默失败 |
 | 输出上限 | 复用 `MAX_ORIGINAL_BYTES`（64 MB）语义，转码输出按 `getWXGFInfo` 预估而非固定 52 MB | 固定 52 MB × 并发 = 内存尖峰 |
 

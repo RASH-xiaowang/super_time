@@ -86,6 +86,27 @@ export function Drawer({ open, onClose, title, children, footer, width }: {
   )
 }
 
+/** 有更上层的应用内模态（确认框 `role="alertdialog"`）盖着时，弹窗不该把它上面的交互
+ * 当成"点到外面/按了 Esc"。
+ *
+ * ── 为什么（2026-09-29 修「每次删除备份都会把设置界面关掉」）──────────────
+ * 设置弹窗是 Radix `Dialog`，它默认"**内容区外 pointerdown 就关闭**"。而删除备份时弹出的
+ * 应用内确认框由 `ConfirmProvider` 渲染在**弹窗内容区之外**（互为兄弟），于是：
+ *   设置弹窗 → 点「删除」→ 确认框弹出 → 点确认按钮 ⇒ Radix 判定"点到外面"⇒ `onClose()`
+ * ⇒ 设置界面被关掉（用户看到的就是"删一次关一次"，且不会自己回来）。
+ * Esc 同理：两层都听 keydown，一次 Esc 会把两层一起关掉。
+ *
+ * 判据用 `role="alertdialog"`（`confirm.tsx` 的确认框就是它），不依赖具体组件引用。
+ * @returns 当前是否有更高的模态层在展示。
+ */
+function hasHigherModal (): boolean {
+  try {
+    return typeof document !== 'undefined' && document.querySelector('[role="alertdialog"]') !== null
+  } catch {
+    return false
+  }
+}
+
 /** 居中对话框（Radix Dialog）：确认/表单类弹窗。 */
 export function Dialog({ open, onClose, title, children, footer, className }: {
   open: boolean
@@ -99,7 +120,16 @@ export function Dialog({ open, onClose, title, children, footer, className }: {
     <DialogPrimitive.Root open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={overlayCss.dialogOverlay} />
-        <DialogPrimitive.Content className={clsx(overlayCss.dialog, className)}>
+        <DialogPrimitive.Content
+          className={clsx(overlayCss.dialog, className)}
+          // 点/聚焦落在确认框上时，不算"点到外面"（见 hasHigherModal 的说明）
+          onInteractOutside={(e) => {
+            const t = e.target
+            if (hasHigherModal() || (t instanceof Element && t.closest('[role="alertdialog"]') !== null)) e.preventDefault()
+          }}
+          // 确认框开着时，Esc 归它处理：否则一次 Esc 会把设置弹窗和确认框一起关掉
+          onEscapeKeyDown={(e) => { if (hasHigherModal()) e.preventDefault() }}
+        >
           {title && (
             <div className={overlayCss.drawerHd}>
               <DialogPrimitive.Title className={overlayCss.drawerTitle}>{title}</DialogPrimitive.Title>

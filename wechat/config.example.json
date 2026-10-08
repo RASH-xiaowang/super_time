@@ -15,8 +15,6 @@
     "api_enabled": true,
     "api_token": "",
     "api_port": 5032,
-    "cdn_enabled": true,
-    "cdn_local_decrypt": true,
     "whisper_device": "cpu",
     "whisper_model": "tiny",
     "whisper_threads": 0,

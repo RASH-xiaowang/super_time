@@ -1,5 +1,5 @@
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -7,12 +7,6 @@ export interface MediaRemoteCtx {
         decoded: string;
     };
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
-    privacyBlocked: (feature: string, detail?: string) => string | null;
-    cdnSwitches: () => {
-        cdnEnabled: boolean;
-        localDecrypt: boolean;
-    };
-    outboundBlocked: () => boolean;
     /** 微信原始目录（`rawWechatBase(decrypted)`；本文件与它同属宿主层，按函数传进来）。 */
     rawWechatBase: (decrypted: string) => string;
     /**
@@ -85,11 +79,8 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     }): {
         items: ImageBatchItem[];
     };
-    getSnsImageDataUrl(options: {
-        md5: string;
-        timelineId?: string;
-        mediaId?: string;
-    }): ImageDataUrlResult;
+    /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
+    getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
     getFileImageDataUrl(options: {
         md5: string;
     }): ImageDataUrlResult;
@@ -97,6 +88,29 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         md5: string;
         emojiUrl?: string;
     }): Promise<ImageDataUrlResult>;
+    /**
+     * 批量取表情（E1，2026-09-28 性能修复）。
+     *
+     * 现场日志里 `getEmoticonDataUrl` 13 次、**均 27,253ms、峰值 71,909ms** ——
+     * 两个原因叠在一起：① 前端逐张发 RPC（与封面的 A1 同病）；② 后端每次未命中都
+     * 递归扫整棵 `msg/attach`（E2 已改成查索引）。这里解决 ①。
+     *
+     * ## 为什么顺序是「先本地全过一遍，再对剩下的并发取远端」
+     *
+     * 不能「逐条走完整链」—— 那样每条都要等一次网络往返，N 条就是 N 个往返的时间。
+     * 拆成两趟之后：第一趟纯本地（查索引 + 解码，无网络，很快），把命中的直接定下来；
+     * 第二趟只对剩下的并发出网，并按 `emoticon-batch.ts` 里的并发上限限流。
+     * 算法整体搬在 `query/emoticon-batch.ts`（本函数只留签名 + 一行转发）。
+     *
+     * @param options - `items` 为屏上待取的表情（自动去重、忽略空 md5）。
+     * @returns 逐条结果，`md5` 回信；顺序 = 去重后的入参顺序。
+     */
+    getEmoticonDataUrls(options: {
+        items: Array<{
+            md5: string;
+            emojiUrl?: string;
+        }>;
+    }): Promise<EmoticonDataUrlsResult>;
     getImageOriginal(options: {
         username?: string;
         localId?: number;
@@ -115,12 +129,11 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
      * 计划与执行的计数同源（都是 `scanImageOriginalPlan`），不会出现「报 8000 张、实际取 7000 张」。
      * @returns 覆盖率盘点（见 `OriginalFetchPlan`）；未配置原始目录时全 0。
      */
-    planOriginalFetch(): OriginalFetchPlan;
+    planOriginalFetch(): Promise<OriginalFetchPlan>;
     /**
      * 批量取回原图（免登录直链）：把全库那 16.6% 的一次取完，**可续跑**。
      *
-     * 与单张路径的三条一致：隐私总闸在最前（`privacyBlocked`）、「自动获取原图（CDN）」开关
-     * 关掉时**一条请求都不发**（在 query 层判，返回 `blocked`）、逐条失败不中断整批。
+     * 与单张路径一致：已有解密类任务在跑时不并发（回 `blocked`）、逐条失败不中断整批。
      * 成功的写进 `<decoded>/.originals-index.json` ⇒ 下次点一下接着走，不会重下。
      *
      * **明确不做的**：XML 里只有 `cdnbigimgurl`/`cdnmidimgurl` 的那 83.4% 需要微信登录态凭据
@@ -137,15 +150,14 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
      * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
      *
      * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
-     * 直接向消息 XML 里的 https 地址发请求** —— 既不受「自动获取原图（CDN）」开关管、也不受
-     * 「禁止出网」管、不进操作记录、没有缓存（同一次滚动反复要同一张）。把它收到后端之后，
-     * 那三件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
+     * 直接向消息 XML 里的 https 地址发请求** —— 不进操作记录、没有缓存（同一次滚动反复要同一张）。
+     * 把它收到后端之后那两件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
      *
      * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
      * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
      * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
      * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
-     *   来自本机缓存。关闭出网开关时**一次请求都不发**，但本机缓存照常返回。
+     *   来自本机缓存。
      */
     getRemoteImages(options: {
         urls?: string[];
@@ -185,3 +197,16 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         error?: string;
     }>;
 };
+/** `getSnsImageDataUrl` 的入参：`md5` 等为旧口径，`url`/`token`/`seed` 为 CDN 通路（可选）。 */
+interface SnsImageOptions {
+    md5: string;
+    timelineId?: string;
+    mediaId?: string;
+    /** 库里存的 CDN 地址（`http://…/0`）：给了就走 CDN 通路。 */
+    url?: string;
+    /** 媒体标签上的 `token`：CDN 必需（实测 `token+idx=1` 才 200）。 */
+    token?: string;
+    /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
+    seed?: string;
+}
+export {};

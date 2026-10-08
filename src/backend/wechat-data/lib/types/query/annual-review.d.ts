@@ -1,3 +1,6 @@
+import { type AnnualMoments } from './annual-moments.ts';
+import { type AnnualAssets } from './annual-assets.ts';
+import { type AnnualGroups, type AnnualMoney, type AnnualRevoke } from './annual-extras.ts';
 /** 榜单条目。 */
 export interface AnnualRankRow {
     username: string;
@@ -178,6 +181,11 @@ export interface AnnualReview {
     firstText: string;
     lastAt: string;
     lastText: string;
+    moments: AnnualMoments;
+    assets: AnnualAssets;
+    money: AnnualMoney;
+    revoke: AnnualRevoke;
+    groups: AnnualGroups;
 }
 /** 秒 → 可读时长。 */
 export declare function humanDur(sec: number): string;
@@ -188,4 +196,4 @@ export declare function humanDur(sec: number): string;
  * @param selfUsername - 登录账号 wxid（「我发出的」归属判据）。
  * @returns 年度回顾结果。
  */
-export declare function queryAnnualReview(decryptedDir: string, year: number, selfUsername?: string): AnnualReview;
+export declare function queryAnnualReview(decryptedDir: string, year: number, selfUsername?: string): Promise<AnnualReview>;

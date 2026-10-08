@@ -3,6 +3,6 @@
  * @param decryptedDir - decrypted data root.
  * @returns years with messages, and no count summary (a separate query owns it).
  */
-export declare function queryAnnual(decryptedDir: string): {
+export declare function queryAnnual(decryptedDir: string): Promise<{
     years: number[];
-};
+}>;

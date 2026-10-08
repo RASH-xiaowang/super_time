@@ -235,8 +235,6 @@ export interface WechatConfigPatch {
   api_enabled?: boolean
   api_token?: string
   api_port?: number
-  cdn_enabled?: boolean
-  cdn_local_decrypt?: boolean
   whisper_device?: 'cpu' | 'gpu'
   whisper_model?: string
   whisper_threads?: number
