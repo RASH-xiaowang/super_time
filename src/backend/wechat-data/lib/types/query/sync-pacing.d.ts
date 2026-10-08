@@ -62,6 +62,11 @@ export declare function noteSyncFailure(key: string, sigKey: string, message: st
  * @returns 目标键数组（可能为空）。
  */
 export declare function failingTargets(withinMs?: number): string[];
+/**
+ * 取走并清空「本 tick 成功过的目标键」。
+ * @returns 成功过的目标键数组（可能为空）。
+ */
+export declare function takeSyncSuccesses(): string[];
 /** 目标成功一次 ⇒ 清掉它的失败记录（下次失败从第一档重新计，且立即恢复日志可见性）。 */
 export declare function noteSyncSuccess(key: string): void;
 /** 清空全部退避状态（测试用；生产里不需要）。 */

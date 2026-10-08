@@ -27,7 +27,9 @@ import {
   noteSyncFailure,
   noteSyncSuccess,
   syncFailureBackoffActive,
+  takeSyncSuccesses,
 } from './sync-pacing.ts'
+import { flushSyncSourceState, loadSyncSourceState, noteSyncSourceState } from './sync-state.ts'
 
 const PAGE_SZ = 4096
 const SALT_SZ = 16
@@ -866,6 +868,12 @@ export function startRealtimeSync(
   //（第 48 轮发现首 tick 的 ~374ms 全量解密正好与"窗口 → 导航壳"那 476ms 重叠）。
   if (process.env.SUPERTIME_SYNC_OFF === '1') return () => { /* 未启动 */ }
   const lastState = new Map<string, ShardSig>()
+  /**
+   * 跨进程签名账只在本进程**首 tick** 播种一次（`dec` 是动态 provider，启动时可能还没配好数据根）。
+   * 播种后「源没变」命中下面既有的 `continue`（零工作量）、「只有 WAL 变」命中既有的 `'wal'` 增量
+   * —— 判定逻辑一行没改，实时同步的新鲜度不受影响的只有「启动不必白解一遍」。见 `sync-state.ts`。
+   */
+  let stateSeeded = false
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
   let unavailableWarned = false
@@ -910,6 +918,12 @@ export function startRealtimeSync(
         unavailableWarned = false
         console.log('[wechat-sync] raw db dir available again:', raw)
       }
+      if (!stateSeeded) {
+        stateSeeded = true
+        for (const [key, sig] of loadSyncSourceState(dec)) {
+          lastState.set(key, { main: sig.main, wal: sig.wal })
+        }
+      }
       const cfg = getConfig(dec)
       const keyFormat = typeof cfg['key_format'] === 'string' ? cfg['key_format'] : 'wx_key_v4.1'
       const fallbackKey = typeof cfg['db_enc_key'] === 'string' ? cfg['db_enc_key'] : ''
@@ -926,6 +940,15 @@ export function startRealtimeSync(
       ] as const) {
         synced.push(...await syncPlainDatabase(raw, dec, sub, dbName, label, fallbackKey, keyFormat, lastState))
       }
+      /** 把「本轮真正解成功」的目标签名记进跨进程账本，然后一次落盘。
+       * 只取**成功子集**而不是直接写 `lastState`：后者是乐观记录的（动手前就 `set`、失败那条路还
+       * 保留签名）⇒ 会把没解成功的目标也标成「已解密」，下次启动跳过它 ⇒ 永久旧数据。成功集合从
+       * `noteSyncSuccess` 那个唯一收口点取（见 `sync-pacing.ts`），不靠 8 个调用点自觉。 */
+      for (const key of takeSyncSuccesses()) {
+        const sig = lastState.get(key)
+        if (sig !== undefined) noteSyncSourceState(key, sig)
+      }
+      flushSyncSourceState(dec)
       /**
        * 失败的**成因判读放在这里**，而不是写在单个目标那一行里。
        *

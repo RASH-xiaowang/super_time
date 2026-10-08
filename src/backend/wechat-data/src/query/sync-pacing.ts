@@ -119,9 +119,32 @@ export function failingTargets(withinMs = 2 * 60_000): string[] {
   return out
 }
 
+/**
+ * 本 tick 里成功过的目标键（由 {@link noteSyncSuccess} 累积）。
+ *
+ * 为什么要有这个出口：`lastState` 是**乐观**记录的（`sync.ts` 在动手前就 `set`），
+ * 所以「Map 里有没有某个键」**不能**当「它这次解成功了」用 —— 失败那条路会保留签名
+ * （见 `noteSyncFailure` 的注释）。落盘那份账必须是成功子集，否则会把没解成功的目标
+ * 也标成「已解密」，下次启动就跳过它 ⇒ 永久显示旧数据。
+ * 而四个同步函数里一共有 8 处成功调用点，逐处改签名既啰嗦又容易漏，
+ * 于是把「成功」这件事在**唯一的收口点**上攒成一份、tick 结束时一次取走。
+ */
+const syncSuccesses: string[] = []
+
+/**
+ * 取走并清空「本 tick 成功过的目标键」。
+ * @returns 成功过的目标键数组（可能为空）。
+ */
+export function takeSyncSuccesses(): string[] {
+  const out = syncSuccesses.slice()
+  syncSuccesses.length = 0
+  return out
+}
+
 /** 目标成功一次 ⇒ 清掉它的失败记录（下次失败从第一档重新计，且立即恢复日志可见性）。 */
 export function noteSyncSuccess(key: string): void {
   syncFailures.delete(key)
+  syncSuccesses.push(key)
 }
 
 /** 清空全部退避状态（测试用；生产里不需要）。 */
