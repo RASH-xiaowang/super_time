@@ -131,6 +131,12 @@ npm run check:mutation -- --only M5   # 前缀匹配；--only 省略则跑全表
   ② **PowerShell 5.1 没有 `Join-String`**，`%` 的 `ForEach-Object` 里拼路径会直接解析失败；
   这类活交给 node 脚本更稳。（另：`Get-Content | Measure-Object -Line` 数出来的行数与
   按 `\n` split 的行数**不一致**，别拿它当行数棘轮的判据。）
+  ③ **`Set-Content -Encoding UTF8` 会写 BOM**（5.1 没有 `-Encoding utf8NoBOM`）——
+  拿它写提交信息文件再 `git commit -F`，`git log --format=%s` 的标题就以一个
+  不可见的 `U+FEFF` 开头，看着完全正常，只有把标题首字符取码点才看得见（`f` 应为 102）。
+  改用 `[System.IO.File]::WriteAllText($p, $msg, (New-Object System.Text.UTF8Encoding($false)))`。
+  同理，仓库里的源码与 `.mjs` 登记表现役换行是 **LF**（不是 CRLF）；写多行变异锚点时
+  锚点里的换行也要用 `\n`，否则 `mutation-check.mjs` 会报「锚点命中 0 次」而拒绝执行。
 - **模块级缓存 + spec 共用常量 = 假红**：同一进程里连着跑两轮、而某个"上次做过"的记录是模块级
   Map/计时器时，第二轮会被那道闸门静默吞掉。症状是"该红的没红"，而且方向相反
   （本轮实测：6 秒 full-decrypt 冷却让 4 条用例全部读到空结果，读起来像功能坏了）。
