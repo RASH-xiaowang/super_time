@@ -11,7 +11,7 @@
  * 把它映射进**我们自己的进程**解**我们自己的文件**即可 —— 不碰微信进程、不读它的内存、
  * 不 hook、不注入，与 `docs/PRIVACY.md` 的承诺不冲突。
  *
- * ## DLL 契约（wxhook 反汇编 + 本机实证，见 docs/WXHOOK-ORIGINAL-IMAGE-EMBED.md）
+ * ## DLL 契约（wxhook 反汇编 + 本机实证）
  *
  * - `wxam_dec_wxam2pic_5(inPtr, inLen, outPtr, outSz*, optPtr)` —— **第 5 个参数必须是
  *   指向 ≥0x20 字节结构的有效指针**，传 `NULL` 必然访问违规（公开示例在本版崩掉的原因）

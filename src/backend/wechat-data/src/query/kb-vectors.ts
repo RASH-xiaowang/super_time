@@ -72,7 +72,7 @@ export const KB_VECTOR_SCHEMA_VERSION = '1'
  *   · `schema-mismatch` 表结构升过版 ⇒ 全表都要重建（不只是本库）；
  *   · `no-model` 调用方没给出「当前用哪个模型」⇒ **无法背书溯源**，按不可用处理。
  *     这条存在的原因：以前记账名是写死的 `'default'`，等于没有溯源，
- *     于是「换模型」这件事在库里根本不留痕迹（见 `docs/KB-MODEL-CONFIG.md` §7 F1）。
+ *     于是「换模型」这件事在库里根本不留痕迹。
  */
 export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model'
 
@@ -143,7 +143,7 @@ function writeMeta(db: DatabaseSync, key: string, value: string): void {
  * 打开（并初始化）向量库。
  *
  * `CREATE TABLE IF NOT EXISTS` 每次开库都跑一遍。本库虽然新增不久，但**已经发出去的版本**
- * 里没有 `model` 这一列（行级模型溯源是 `docs/KB-MODEL-CONFIG.md` 的 P0 才加的），
+ * 里没有 `model` 这一列（行级模型溯源是后来才加的），
  * 所以要写「查 `PRAGMA table_info` → 缺才 `ALTER`」的加列分支：SQLite 没有
  * `ADD COLUMN IF NOT EXISTS`，重跑 `ALTER` 直接抛 duplicate column。
  */
@@ -363,7 +363,7 @@ function clampInt(raw: unknown, def: number, lo: number, hi: number): number {
  *   算出来的那些行**：同模型的行仍然有效，删了就是白出网一次；别的库的行更是与本次无关。
  *   唯一仍会清全表的情形是 **schema 版本变更**（列结构/哈希口径变了，每一行都不再合规）。
  *   旧实现是「换模型 = 清全表」，那时的前提是「全库共用一个嵌入模型」；
- *   按库绑定让那个前提失效，处置跟着改（理由见 `docs/KB-MODEL-CONFIG.md` C5）。
+ *   按库绑定让那个前提失效，处置跟着改。
  *
  * @param decryptedDir - 解密数据根。
  * @param kbId - 目标库。
@@ -446,7 +446,7 @@ async function runBuildKbVectorIndex(
     //                        删了就等于把一批本不必发的 embedding 请求再发一遍（白花 token、
     //                        白花一次出网）。
     // 旧实现清的是整张表，那时的前提是「全库共用一个模型」—— 一个模型变了就是全都变了。
-    // 按库绑定之后这个前提没了：甲库换模型不该让乙库白重建一次（见 docs/KB-MODEL-CONFIG.md C5）。
+    // 按库绑定之后这个前提没了：甲库换模型不该让乙库白重建一次。
     const wipeTable = prevVer !== '' && prevVer !== KB_VECTOR_SCHEMA_VERSION
     const wipeKbAll = !wipeTable && opts.force === true
     const wipeKbForeign = !wipeTable && opts.force !== true

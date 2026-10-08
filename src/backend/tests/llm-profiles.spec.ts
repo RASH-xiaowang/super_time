@@ -100,7 +100,7 @@ describe('模型配置集：首次保存与懒迁移', () => {
 })
 
 describe('模型配置集：三个角色（语言 / 嵌入 / 重排序）成套', () => {
-  // 这一组守的是 `docs/KB-MODEL-CONFIG.md` 的 V5：角色字段一旦没进 `LLM_PROFILE_FIELDS`，
+  // 这一组守的是「角色字段一旦没进 `LLM_PROFILE_FIELDS`」那条契约：
   // 切换 profile 就会留下上一条的值 —— 那正是这套功能当初要消灭的「A 家地址 + B 家 Key」，
   // 只是换到了嵌入/精排这两个新角色上，而且更难发现（401 会变成「静默用错模型」）。
   const SILICON = {

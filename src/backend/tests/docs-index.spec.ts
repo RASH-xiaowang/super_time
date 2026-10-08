@@ -220,7 +220,13 @@ describe('文档索引与文档里的引用', () => {
     const top = readdirSync(join(ROOT, 'docs'), { withFileTypes: true })
       .filter((e) => e.isFile() && /\.(md|html)$/.test(e.name))
       .map((e) => `docs/${e.name}`)
-    expect(top.length, '顶层文档数少得太离谱 ⇒ 扫描目标没读到，下面那条"全覆盖"是恒真').toBeGreaterThanOrEqual(20)
+    // 下限从 20 降到 7（2026-10-08 文档精简：docs/ 顶层只保留七份当前有效的文档）。
+    // 这个数的作用是「扫描目标没读到」的反哨兵 —— 它必须 ≤ 真值、且离真值不太远：
+    // 定得比真值高会误报，定得太低（比如 1）又会让「全覆盖」退化成近乎恒真。
+    // 7 = 当前七份文档的条数，是这条哨兵能取的最紧下限（棘轮语义：只许随文档增减调整）。
+    expect(top.length, '顶层文档数少得太离谱 ⇒ 扫描目标没读到，下面那条"全覆盖"是恒真').toBeGreaterThanOrEqual(7)
+    // 反例自证：哨兵本身不是恒真 —— 低于下限就红
+    expect(6).toBeLessThan(7)
     const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
     const at = readme.indexOf('## 文档索引')
     const next = readme.indexOf('\n## ', at + 5)

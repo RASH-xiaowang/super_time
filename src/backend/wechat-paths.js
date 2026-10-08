@@ -268,7 +268,7 @@ function defaultLlmConfig() {
     embeddingApiUrl: '',
     embeddingApiKey: '',
     // 重排序（精排）：把候选文档与问题一起发给模型换相关性分。没有独立开关 ——
-    // 填了 rerankModel 就启用，留空则退回本地的线性加权（见 docs/KB-MODEL-CONFIG.md D3）。
+    // 填了 rerankModel 就启用，留空则退回本地的线性加权（ D3）。
     rerankModel: '',
     rerankPath: '/rerank',
     rerankApiUrl: '',

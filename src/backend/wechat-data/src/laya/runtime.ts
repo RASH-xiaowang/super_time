@@ -6,7 +6,7 @@
  *
  * ## 为什么是 ONNX 而不是 Python
  * 打包版是纯 Node + Electron，没有 Python。实测把 `DecisionModel.forward` 导成 ONNX 后，
- * onnxruntime 与 torch 的 logits 偏差 3.1e-06、端到端答案零偏差（docs/LAYA-TRIAGE-FEASIBILITY.md §2.3）。
+ * onnxruntime 与 torch 的 logits 偏差 3.1e-06、端到端答案零偏差。
  *
  * ## 后处理的来源
  * temperature 缩放 / softmax / argmax **不在 ONNX 图里**（在 `laya/agent.py:325-362`），

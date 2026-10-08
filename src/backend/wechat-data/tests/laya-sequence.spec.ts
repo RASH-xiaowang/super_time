@@ -4,7 +4,7 @@
  * ## 为什么是「逐 token」而不是「看起来对」
  * 这套输入构造是 Python `laya/common.py` 的手工复刻。差一个 token，模型给出的概率完全不同
  * ——PoC 期间已经踩过一次：输入 state 传 str 与传 dict 的序列化不同（`json.dumps` 带空格），
- * 表现成「模型输出偏差 3e-6 但答案差 0.46」的假警报（docs/LAYA-TRIAGE-FEASIBILITY.md §2.3）。
+ * 表现成「模型输出偏差 3e-6 但答案差 0.46」的假警报。
  *
  * ## 怎么在没有模型/没有 Python 的 CI 上守住
  * fixture（`tools/laya/dump-fixtures.py` 生成）里带了一张 **tokenTable**：

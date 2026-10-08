@@ -152,7 +152,7 @@ const SRC_DDL = 'CREATE TABLE IF NOT EXISTS archived_source (file TEXT PRIMARY K
 
 /**
  * 源库签名：**纳秒 + 大小**（与缓存层 `meta.ts` 的 `fileSig` 同口径）。
- * 用纳秒而不是毫秒：同一毫秒内的写入才看得见（见 docs/CACHE-INVALIDATION.md 通道①）。
+ * 用纳秒而不是毫秒：同一毫秒内的写入才看得见。
  * @param p - 文件路径。
  * @returns 签名；读不到返回空串（调用方会退化成"每次都扫"）。
  */

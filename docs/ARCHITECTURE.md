@@ -133,5 +133,6 @@ src/client/**                      前端（ESM + React）
   其余靠源码级接线判据 —— 它能证明"接上了"，不能证明"渲染对了"。
 - 打包态才成立的行为（许可证真签、asar 内容、`app.isPackaged` 闸门）由
   `npm run package:smoke` / `security-guard:smoke:packaged` 覆盖，不在单测里。
-- 性能类事实（N36 的耗时口径、真机打点）见 [`PERF-BASELINE.md`](PERF-BASELINE.md) 与
-  [`RELEASE-PLAN.md`](RELEASE-PLAN.md)，它们依赖具体机器，不做零容忍门禁。
+- 性能类事实（N36 的耗时口径、真机打点）见 [`RELEASE-PLAN.md`](RELEASE-PLAN.md) 的 N36 条目，
+  它依赖具体机器，不做零容忍门禁。（原先那份独立的性能基线报告已随文档精简删除，
+  其中的实测数字与测量口径保留在 git 历史里。）

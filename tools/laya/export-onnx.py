@@ -3,7 +3,7 @@
 
 **为什么需要这一步**：Super Time 打包版是纯 Node + Electron，没有 Python。
 laya 官方只提供 PyTorch checkpoint，所以要在**开发机**上把它导成 ONNX，
-打包版才能用 onnxruntime-node 直接推理。参见 docs/LAYA-TRIAGE-FEASIBILITY.md §2。
+打包版才能用 onnxruntime-node 直接推理。参。
 
 导出范围是 `DecisionModel.forward`（5 张量进 → 2 张量出）：
     input_ids, attention_mask, marker_pos, marker_mask, qtype  →  logits, act_logits

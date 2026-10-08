@@ -4,9 +4,12 @@
  * ── 为什么值得一条守卫 ────────────────────────────────────────────────────
  * 这个仓库的数字曾经四处漂移，而且是**互相加剧**的：
  *   · `docs/API.md` 自动生成（真源），但 `src/client/README.md` 手写 158、
- *     `docs/KB-COMPLETION-PLAN.md` 手写 150、`gateway-core.ts` 注释写 161、
+ *     一份阶段性计划手写 150、`gateway-core.ts` 注释写 161、
  *     `OnboardingShell.tsx` 又写 172 —— 四个数字，没人知道哪个对；
- *   · `docs/KB-MODEL-CONFIG.md` 甚至把"README 那行是过期的 150"当成了当前事实记录下来；
+ *   · 那份模型配置文档甚至把"README 那行是过期的 150"当成了当前事实记录下来；
+ *     （2026-10-08：文档精简后这两份都不在了，下面第 3 条交叉核对随之删掉。
+ *      其余四处 —— 界面可见的 TELEMETRY 卡、前端 README、后端 README、源码注释 ——
+ *      仍然把 `docs/API.md` 钉成唯一真源。）
  *   · 页面结构同理：`WechatDataPanel.tsx` 的头注释写「8 组 / 32 页签」，
  *     而 `nav-config.ts` 里是 5 组 / 37 页签。
  * 这些数字是下游读者的**唯一线索**，所以本守卫的做法是——**不钉死任何数字**，
@@ -27,7 +30,6 @@ const WDP = ['src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-dat
 const SHELL = ['src', 'client', 'ui-app', 'onboarding', 'OnboardingShell.tsx']
 const README = ['src', 'client', 'README.md']
 const API_MD = ['docs', 'API.md']
-const KB_PLAN = ['docs', 'KB-COMPLETION-PLAN.md']
 const BK_README = ['src', 'backend', 'wechat-data', 'README.md']
 
 describe('远端接口计数：docs/API.md 是唯一真源', () => {
@@ -47,10 +49,6 @@ describe('远端接口计数：docs/API.md 是唯一真源', () => {
     // 前端 README 的头行
     const readmeVal = /(\d+) 个 Remote 方法/.exec(read(...README))?.[1]
     expect(readmeVal, `src/client/README.md 的 Remote 计数与 docs/API.md（${nRemote}）不一致`).toBe(String(nRemote))
-
-    // KB 完成计划里的计数契约那一条
-    const kbVal = /Remote \*\*(\d+)\*\*/.exec(read(...KB_PLAN))?.[1]
-    expect(kbVal, `docs/KB-COMPLETION-PLAN.md 的 Remote 计数与 docs/API.md（${nRemote}）不一致`).toBe(String(nRemote))
 
     // 后端 README 的概览句
     const bkVal = /（当前 (\d+) 个）/.exec(read(...BK_README))?.[1]

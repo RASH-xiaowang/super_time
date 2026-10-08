@@ -9,7 +9,8 @@
  * 手工对账只解决那一次；下次再漏登记仍然只能靠人想起来。
  *
  * 所以把对账**变成常驻判据**：
- *   ① 从 `docs/PERF-THEME-LEDGER-2026-09-29.md` 的 20 行表格里抽出每个修复模块；
+ *   ① 下面 {@link REPAIRED_MODULES} 里逐个钉住的修复模块（这份名单原先是从一份
+ *      已删除的性能台账表格里现场抽取的，见文件头「2026-10-08」那一节）；
  *   ② 每个模块必须**要么**直接调 `yieldToLoop()`，**要么**在下面的委派白名单里；
  *   ③ 白名单里的"被委派方"必须自己受守卫（在 P1-2 清单里且真的含 `yieldToLoop`），
  *      否则白名单就是一句空话；
@@ -29,8 +30,40 @@ import { describe, expect, it } from 'vitest'
 // 本文件在 src/backend/wechat-data/tests/ ⇒ 到仓库根是**四级**上溯。
 const ROOT = join(import.meta.dirname, '..', '..', '..', '..')
 const BACKEND_SRC = join(ROOT, 'src', 'backend', 'wechat-data', 'src')
-const LEDGER = join(ROOT, 'docs', 'PERF-THEME-LEDGER-2026-09-29.md')
 const YIELD_SPEC = join(ROOT, 'src', 'backend', 'wechat-data', 'tests', 'query-yield-discipline.spec.ts')
+
+/**
+ * 逐条对过账的「修过性能、必须受让出守卫」的模块（相对 `src/backend/wechat-data/src`）。
+ *
+ * **2026-10-08：这份名单从台账文档内联进本文件。** 原来 ① 是从那份台账的表格里现场抽取的，
+ * 台账随文档精简删除后输入就没了 —— 而判据本身必须留着：它守的是
+ * 「这些模块随时能退回到从头钉到尾的同步形状而无人报警」，与台账无关。
+ * 这里是按原正则抽出来的**同一批 18 个**，未重新挑选（复核命令见文件头）。
+ * 名单现在是本文件的单一真源：又修了一个模块的让出问题就往这里加一行。
+ *
+ * ⚠️ 别把这一步"顺手简化"成扫目录：原来那张表是**逐条人工对账**的结果，
+ * 按目录扫会把没修过的模块也拉进来 —— 那是对账口径的改变，不是等价重构。
+ */
+const REPAIRED_MODULES = [
+  'keys/image-key-resolver.ts',
+  'query/annual-report.ts',
+  'query/annual-review.ts',
+  'query/asset-insights.ts',
+  'query/backup.ts',
+  'query/calls.ts',
+  'query/daily-summary.ts',
+  'query/export-flows.ts',
+  'query/image-original-batch.ts',
+  'query/image-upgrade.ts',
+  'query/messages.ts',
+  'query/moments-insights.ts',
+  'query/moments-monthly.ts',
+  'query/official-assets.ts',
+  'query/overview.ts',
+  'query/sessions.ts',
+  'query/wordcloud.ts',
+  'remotes/tasks.ts',
+] as const
 
 /**
  * 委派让出的白名单：模块本身**连 `yieldToLoop` 这个词都不出现**，纯粹靠调用受守卫的函数让出。
@@ -53,19 +86,9 @@ const DELEGATED: Record<string, { target: string; why: string }> = {
   },
 }
 
-/**
- * 从账本那张 20 行表里抽出修复模块路径。
- * @returns 去重后的相对路径（相对 `src/backend/wechat-data/src`）。
- */
+/** 修复模块名单（去重后的拷贝）。 */
 function ledgerModules(): string[] {
-  const text = readFileSync(LEDGER, 'utf8')
-  const out: string[] = []
-  for (const line of text.split('\n')) {
-    if (!/^\|\s*\d+\s*\|/.test(line)) continue
-    const m = /`((?:query|keys|remotes)\/[a-z0-9-]+\.ts)`/.exec(line)
-    if (m?.[1] !== undefined) out.push(m[1])
-  }
-  return [...new Set(out)]
+  return [...new Set(REPAIRED_MODULES)]
 }
 
 /**

@@ -284,7 +284,7 @@ async function computeOverviewInsights(decryptedDir: string, self = ''): Promise
   for (const sh of shardCatalogDirs(dec, ['message', 'bizchat'])) {
     // P1-2：每个分片要对它的全部 Msg_ 表各跑一次 GROUP BY 扫描（实测机器上 239 张表）。
     // 分片之间让出一次，排在这个查询后面的请求才有插进来的机会 ——
-    // 不透明地"跑完再说"就是「某块一直转圈」的那笔账（docs/PERF-BASELINE.md：
+    // 不透明地"跑完再说"就是「某块一直转圈」的那笔账（：
     // 世界板块自身 13ms，排在 15 秒的词云后面等到 17,008ms）。
     await yieldToLoop()
     const shardKey = shardCacheKey(sh.file, self, dec)

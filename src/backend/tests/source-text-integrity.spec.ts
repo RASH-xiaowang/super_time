@@ -96,7 +96,7 @@ describe('源码保持纯文本（否则文本类守卫会对那个文件静默�
       if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) odd.push(`${rel}: 开头有 BOM`)
       // 判据是**往返一致**：非法字节序列会被解码成 U+FFFD，再编回去就和原字节不同。
       // 注释里本来就写着 U+FFFD 的历史乱码（`light-theme.css`）能往返一致 ⇒ 不在这里判红，
-      // 那是内容问题，已单独记进 docs/CODE-AUDIT-2026-09-26.md 的「本轮新发现」。
+      // 那是内容问题，已单独记进  的「本轮新发现」。
       if (!Buffer.from(raw.toString('utf8'), 'utf8').equals(raw)) odd.push(`${rel}: 不是合法 UTF-8 字节序列`)
     }
     expect(odd, '这些文件的字节不是合法 UTF-8 / 带 BOM：\n  ' + odd.join('\n  ')).toEqual([])

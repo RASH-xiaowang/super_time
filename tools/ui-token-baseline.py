@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# 按"表面"分组（与 docs/UI-REDESIGN-2026-09-28.md 的表一致）
+# 按"表面"分组（与  的表一致）
 SURFACES = [
     ("自绘标题栏 Titlebar", ["src/client/ui-app/titlebar.css"]),
     ("授权 LicenseGate", ["src/client/ui-app/license/license-gate.module.css"]),

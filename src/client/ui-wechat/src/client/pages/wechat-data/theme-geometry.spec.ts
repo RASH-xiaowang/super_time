@@ -1,5 +1,5 @@
 /**
- * 几何守卫：`docs/UI-GEOMETRY-SPEC.md` 的机检。
+ * 几何守卫： 的机检。
  *
  * 三条棘轮 + 三条哨兵，全部只读源码（与 theme-tokens.spec.ts 同款 walk）：
  * ① 圆角字面量白名单门禁（per-file per-value 基线棘轮，只许减不许增）；
@@ -145,7 +145,7 @@ const FILES_MIN = 61
 const BR_DECL_MIN = 500
 const SP_DECL_MIN = 1200
 
-describe('几何规范守卫（docs/UI-GEOMETRY-SPEC.md）', () => {
+describe('几何规范守卫', () => {
   it('哨兵：扫描面没有塌（文件数 / 圆角声明数 / 间距声明数）', () => {
     const r = scan()
     // 三个数掉到线下一律视为「解析坏了在空转」——比放行后再被上线的假绿便宜得多。

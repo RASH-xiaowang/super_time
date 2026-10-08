@@ -6,7 +6,7 @@
 - **平台**：Windows 10/11 **x64**（唯一支持的目标，理由见 [`src/backend/README.md`](src/backend/README.md)）
 - **许可**：MIT（[`LICENSE`](LICENSE)）；随包第三方资产见 [`src/backend/VENDORED-LICENSES.md`](src/backend/VENDORED-LICENSES.md)
 - **隐私**：先读 [`docs/PRIVACY.md`](docs/PRIVACY.md) —— 出网点、内存扫描、如何关闭出网都写在那里
-- **实施与上线状态**：见 [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md)（**当前不具备公开发布条件**，未闭环项在该文档里逐条登记）
+- **实施与上线状态**：见 [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md)（阶段 0–4 的高优先级项已闭环；仍未闭环的调查项在该文档里逐条登记，**别照抄本文档里的旧结论**）
 
 它**不是**微信客户端替代品：不登录、不发送消息、不修改微信的任何数据，也不连接微信服务器
 同步你的聊天记录。它读的是本机已经存在的微信数据文件。
@@ -79,7 +79,6 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 | `npm run check:backend-restart` | 杀掉后端 worker → 自动重建 → 功能恢复（端到端） |
 | `npm run docs:api` / `npm run docs:api:check` | 生成 / 校验 Remote 接口参考（见 [`docs/API.md`](docs/API.md)） |
 | `npm run ui:accept` | 人工验收脚本（需要真实数据与许可证，手动运行） |
-| `npm run coverage:matrix` / `coverage:check` | 刷新 / 校验两份覆盖矩阵（174 接口 · 36 页签；只读仓库，可进 CI） |
 | `npm run theme:live-audit -- --all-tabs` | 真机主题审计**全部 36 个页签**（默认 16 个可见页签） |
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest 上跑上面这套检查，
@@ -120,6 +119,10 @@ docs/                    隐私声明、接口参考、RAG 架构、实施计划
 
 ## 文档索引
 
+`docs/` 下只保留**七份**当前有效的文档。其余阶段性台账（性能逐项验收账、UI 重设计、
+知识库分阶段计划、代码审计报告、覆盖矩阵等）已随文档精简删除，**全部保留在 git 历史里**
+（`git log --diff-filter=D --name-only -- docs/` 可列出，需要时按文件名取回）。
+
 | 文档 | 内容 |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构总览：三个进程、依赖方向、一次调用的完整路径、哪些不变量有机检 |
@@ -127,35 +130,10 @@ docs/                    隐私声明、接口参考、RAG 架构、实施计划
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署与发布：构建、打包、许可证签发、装完之后怎么验 |
 | [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
-| [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway.ts` 的 `@Remote` 自动生成） |
+| [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
-| [`docs/rag/RAG-ARCHITECTURE.md`](docs/rag/RAG-ARCHITECTURE.md) | 检索与问答链路：混合召回、重排权重、上下文压缩、评估与反馈闭环 |
-| [`docs/CODE-AUDIT-2026-09-26.md`](docs/CODE-AUDIT-2026-09-26.md) | 全面代码审计与整改台账（逐条状态记在「先读这里」） |
-| [`docs/KB-RAG-REDESIGN.html`](docs/KB-RAG-REDESIGN.html) | 知识库重设计方案（多库 · 文件解析 · RAG 检索） |
-| [`docs/KB-RAG-PLAN.md`](docs/KB-RAG-PLAN.md) | 上面那份设计的分阶段实施计划（阶段任务表与验收） |
-| [`docs/KB-COMPLETION-PLAN.md`](docs/KB-COMPLETION-PLAN.md) | 知识库收口计划：目标、范围、逐阶段做什么 |
-| [`docs/KB-MULTI-REDESIGN.html`](docs/KB-MULTI-REDESIGN.html) | 多知识库形态设计图（一个入口、多个库、一库一图） |
-| [`docs/KB-MODEL-CONFIG.md`](docs/KB-MODEL-CONFIG.md) | 三类模型（向量 / 重排 / 生成）分别配置的方案与调用场景 |
-| [`docs/KB-EVAL-BASELINE.md`](docs/KB-EVAL-BASELINE.md) | 检索基线报告：夹具集、怎么跑、改动前后要对哪些数字 |
-| [`docs/KB-WEKNORA-GAP.md`](docs/KB-WEKNORA-GAP.md) | 与 WeKnora 的能力差异清单（结论先行 + 按类别归纳） |
-| [`docs/GRAPH-KNOWLEDGE-REDESIGN.html`](docs/GRAPH-KNOWLEDGE-REDESIGN.html) | 知识图谱重设计方案（借鉴社交图谱的布局与分层） |
-| [`docs/LAYA-TRIAGE-FEASIBILITY.md`](docs/LAYA-TRIAGE-FEASIBILITY.md) | laya 决策引擎接入可行性：目标形态对应 + 三重 PoC 实测 |
-| [`docs/WXHOOK-ORIGINAL-IMAGE-EMBED.md`](docs/WXHOOK-ORIGINAL-IMAGE-EMBED.md) | wxhook「获取原图」拆解，以及嵌入本项目的方案与代价 |
-| [`docs/PERF-BASELINE.md`](docs/PERF-BASELINE.md) | 加载性能基线：冷跑实测数据、瓶颈定位与优化方案 |
-| [`docs/PERF-THEME-LEDGER-2026-09-29.md`](docs/PERF-THEME-LEDGER-2026-09-29.md) | 性能与主题修复验收账：21 处逐接口前后实测 · 测量口径与四个陷阱 · 真机深浅主题证据 · 已知缺口 |
-| [`docs/PERF-THEME-COVERAGE-2026-09-29.md`](docs/PERF-THEME-COVERAGE-2026-09-29.md) | **范围 · 目标 · 验证**：174 接口 × 36 页签的优化/修复范围、三级性能目标、真机主题结论与未闭环项 |
-| [`docs/PERF-INTERFACE-MATRIX.md`](docs/PERF-INTERFACE-MATRIX.md) | 逐接口性能矩阵（**生成物**）：174 个方法 × 家族/范围/目标/验证/实测 |
-| [`docs/THEME-COVERAGE-MATRIX.md`](docs/THEME-COVERAGE-MATRIX.md) | 主题覆盖矩阵（**生成物**）：36 个页签 × 10 组件族 × 11 个切换场景 |
-| [`docs/VERIFY-CHECKLIST.md`](docs/VERIFY-CHECKLIST.md) | 验收指南（给人看）：5 分钟逐条确认性能与主题是否成立 · 需人工确认的那一步 · 已知限制 |
-| [`docs/CACHE-INVALIDATION.md`](docs/CACHE-INVALIDATION.md) | 缓存失效的**四条通道**与各自修法（含 `mtime` 在 NTFS 上不可靠这条堵不住的）· 写测试的三条规矩 · 现成的诊断开关 |
-| [`docs/QUERY-PARALLELISM.md`](docs/QUERY-PARALLELISM.md) | 只读查询**多线程并行化**设计（未实施）：真机 CPU/wall 证据 · worker 池形态与五条硬约束 · 分三期验收门槛（<1.3× 就停手） |
-| [`docs/PERF-AUDIT-172-2026-09-28.md`](docs/PERF-AUDIT-172-2026-09-28.md) | 172 接口性能排查报告：现场真实日志（1658 次调用）定级 · 逐接口根因与修复清单 |
-| [`docs/UI-COMPONENT-GUIDE.md`](docs/UI-COMPONENT-GUIDE.md) | UI 组件指南（kit）：`ui/kit.tsx` 每个组件的选型、契约与用法 |
-| [`docs/UI-REDESIGN-2026-09-28.md`](docs/UI-REDESIGN-2026-09-28.md) | 界面重设计方案（UI/UX 设计总监评审）：提案状态（待评审） |
-| [`docs/BUTTON-CONVERGENCE-FEASIBILITY.md`](docs/BUTTON-CONVERGENCE-FEASIBILITY.md) | 按钮视觉收敛 · 可行性勘测报告：实测账目与结论 |
-| [`docs/UI-PANELS-PLAN.md`](docs/UI-PANELS-PLAN.md) | 功能界面完善计划（17 个主导航页签的审计结果与逐轮任务） |
-| [`docs/UI-GEOMETRY-SPEC.md`](docs/UI-GEOMETRY-SPEC.md) | UI 几何规范：圆角 / 间距 / 布局刻度（令牌值口径，2026-09-25 基线） |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
+| [`src/client/README.md`](src/client/README.md) | 数据面板结构、导航注册表真源、测试辅助的落位 |
 | [`wechat/README.md`](wechat/README.md) | 配置模板（`config.example.json` / `llm.example.json`） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |
 

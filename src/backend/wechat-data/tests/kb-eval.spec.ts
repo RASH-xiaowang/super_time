@@ -148,7 +148,7 @@ describe('基线：跑通全部用例并给出两层指标', () => {
   it('8 条用例找到文件、1 条（字面不通的缺口）为 0 —— 并打印完整报告', () => {
     seedFixtures()
     const r = runKbEval(decrypted, { kbId: 1 })
-    // 基线报告要能被人看到：第一次跑出来的数字就是 docs/KB-EVAL-BASELINE.md 的内容。
+    // 基线报告要能被人看到：第一次跑出来的数字就是  的内容。
     console.log('\n===KB-EVAL-START===\n' + formatKbEvalReport('KB 评估集', r) + '\n===KB-EVAL-END===')
 
     expect(r.chunk.cases).toBe(KB_EVAL_CASES.length)

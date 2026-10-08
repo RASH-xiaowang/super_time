@@ -106,7 +106,7 @@ let fileSourcesCache: { sig: string; at: number; map: Map<string, { session: str
 function fileSourcesSig(decryptedDir: string): string {
   try {
     const st = statSync(join(decryptedDir, 'message', 'message_resource.db'), { bigint: true })
-    // 变更计数器：NTFS 对 mtime 懒刷新，插入一行可能**一个数字都不变**（见 docs/CACHE-INVALIDATION.md 通道④）
+    // 变更计数器：NTFS 对 mtime 懒刷新，插入一行可能**一个数字都不变**（所以签名里还带 SQLite 的变更计数器）
     return `${st.mtimeNs}:${st.size}${sqliteChangeCounter(join(decryptedDir, 'message', 'message_resource.db'))}`
   } catch {
     return ''

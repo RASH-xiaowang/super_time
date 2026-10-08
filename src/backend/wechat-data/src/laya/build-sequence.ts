@@ -2,7 +2,7 @@
  * laya 输入构造的 JS 复刻（**逐字对齐 Python 侧 `laya/common.py`**）。
  *
  * 为什么要复刻而不是调 Python：打包版是纯 Node + Electron，没有 Python
- * （见 docs/LAYA-TRIAGE-FEASIBILITY.md §2.4）。Python 侧的
+ * （PoC 实测结论）。Python 侧的
  * `render_options()` / `build_sequence()` / `collate_items()` 是一段**纯字符串与整数运算**，
  * 没有模型逻辑，所以可以精确搬过来。
  *

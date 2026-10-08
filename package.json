@@ -69,13 +69,7 @@
     "css:bundle-diff": "node scripts/css-bundle-diff.mjs",
     "css:clusters": "node scripts/css-cluster-audit.mjs",
     "theme:live-audit": "node scripts/theme-live-audit.mjs",
-    "ui:verify": "node scripts/ui-verify.mjs",
-    "audit:ledger": "node scripts/audit-perf-ledger.mjs",
-    "coverage:matrix": "node scripts/perf-interface-matrix.mjs && node scripts/theme-page-matrix.mjs",
-    "coverage:check": "node scripts/perf-interface-matrix.mjs --check && node scripts/theme-page-matrix.mjs --check",
-    "verify:all": "node scripts/verify-all.mjs",
-    "audit:selftest": "node scripts/audit-selftest.mjs",
-    "ui:interactive-budget": "node scripts/interactive-budget.mjs",
+    "ui:verify": "node scripts/ui-verify.mjs",    "ui:interactive-budget": "node scripts/interactive-budget.mjs",
     "ui:theme-budget": "node scripts/theme-contrast-budget.mjs"
   },
   "keywords": [

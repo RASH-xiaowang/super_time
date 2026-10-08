@@ -7,7 +7,7 @@
  * 声明被压缩），并且已经没有任何旧值残留在产物里。
  *
  * 覆盖的是「值有没有到位」，不是「看起来对不对」；视觉正确性仍需在有数据的
- * 机器上人工确认（见 docs/compose/spec/wechat-message-visual-system.md 的 Verification）。
+ * 机器上人工确认（ 的 Verification）。
  *
  * 用法：node scripts/check-wx-tokens.js
  */

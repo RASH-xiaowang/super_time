@@ -285,7 +285,7 @@ export async function apiGeneratePeriodSummary(options: {
  *
  * 后端两个 Remote（`listLlmProviders` / `listLlmModels`）**保留**：协议面按名字枚举，
  * 删了会动 Remote 计数与 `docs/API.md`，而它们本身无害（不联网、只读本机设置）。
- * 结论登记在 `docs/UI-PANELS-PLAN.md` 的「界面无入口的 Remote」一节。
+ * 结论登记在  的「界面无入口的 Remote」一节。
  */
 
 /**

@@ -619,7 +619,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
   return (
     <div className={kitCss.panelShell}>
       {/* 单栏布局：检索设置侧栏已移除（检索参数固化为内置默认，见
-          docs/rag/RAG-ARCHITECTURE.md §11），这里只剩对话栏。 */}
+          ），这里只剩对话栏。 */}
       <div className={css.askLayout}>
       <div className={css.askPage}>
       <PanelHeader

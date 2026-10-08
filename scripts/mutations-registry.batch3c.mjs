@@ -530,14 +530,6 @@ export const MUTATIONS_BATCH3C = [
     spec: "src/backend/tests/mutation-registry-anchors.spec.ts",
   },
   {
-    id: "M375-ledger-row-loses-its-number",
-    why: "把台账那一行的 `#12` 标记去掉（回到只写「#13 之外的安全项」的旧样子）⇒ 这一行做的事还在、报告那条 P2-6 也还在，但 §七 清单里的序号 12 在台账区里**一个字的提及都不剩**：读的人翻遍那张密密麻麻的表也不会知道它其实早做完了。这正是「25 条对 25 行、靠人眼数」的唯一失效方式，所以把它交给判据去数",
-    file: "docs/CODE-AUDIT-2026-09-26.md",
-    from: "| 第二批 #12（P2-6 路径限根",
-    to: "| 第二批（P2-6 路径限根",
-    spec: "src/backend/tests/audit-ledger-coverage.spec.ts",
-  },
-  {
     id: "M376-audit-readiness-back-to-classname",
     why: "把留白审计的就绪判据改回按类名找（`[class*=ovHero]`）⇒ 这正是 2026-09-27 换霓虹皮肤时真实发生的那件事：指标条的 `.ovHero*` 类被删掉之后，脚本把「没找到」读成「首启空库」并**以 0 退出**，于是留白 / 网格空洞 / 内容裁切三项验收一起静默失效。判据 `overview-hero-hook.wiring.spec.ts` 就是为它写的，这一刀必须红",
     file: "scripts/overview-layout-audit.mjs",

@@ -151,7 +151,7 @@ function llmConfigFromEnv(overrides = {}) {
     // 嵌入端点的独立凭据/地址：留空 ⇒ 复用 chat 那对（同厂商是常态）。
     embeddingApiUrl: overrides.embeddingApiUrl || file.embeddingApiUrl || process.env.SUPERTIME_LLM_EMBED_URL || '',
     embeddingApiKey: overrides.embeddingApiKey || file.embeddingApiKey || process.env.SUPERTIME_LLM_EMBED_KEY || '',
-    // 重排序：填了 rerankModel 就启用（没有独立开关，见 docs/KB-MODEL-CONFIG.md D3）。
+    // 重排序：填了 rerankModel 就启用（没有独立开关， D3）。
     rerankModel: overrides.rerankModel || file.rerankModel || process.env.SUPERTIME_LLM_RERANK_MODEL || '',
     rerankPath: overrides.rerankPath || file.rerankPath || process.env.SUPERTIME_LLM_RERANK_PATH || '/rerank',
     rerankApiUrl: overrides.rerankApiUrl || file.rerankApiUrl || process.env.SUPERTIME_LLM_RERANK_URL || '',
@@ -170,7 +170,7 @@ function llmConfigFromEnv(overrides = {}) {
  * 而 rag-config 那个字段界面配不到、默认空 ⇒ 记进去的恒是字符串 `'default'`。
  * 后果不是难看而是错：向量库判「换没换模型」用的就是这个记录值，恒等于 'default'
  * 意味着**换嵌入模型永远不触发重建**，旧模型的向量被当成新模型的用。
- * 见 `docs/KB-MODEL-CONFIG.md` §7 F1 / C4。
+ *  F1 / C4。
  * @param cfg - {@link llmConfigFromEnv} 的结果。
  * @param override - 调用方显式指定的模型名（可空）。
  * @returns 实际生效的模型名；三者都空时为空串（调用方据此判「未配置」）。

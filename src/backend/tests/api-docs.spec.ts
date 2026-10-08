@@ -78,8 +78,10 @@ describe('H14：Remote 接口参考', () => {
     const N = String(remoteSet.size)
     const docs: Array<{ path: string; note: string }> = [
       { path: join('src', 'client', 'README.md'), note: '前端 README' },
-      { path: join('docs', 'rag', 'RAG-ARCHITECTURE.md'), note: 'RAG 架构文档' },
       { path: join('src', 'backend', 'README.md'), note: '后端 README' },
+      // 2026-10-08：一份 RAG 架构文档随文档精简删除，从清单里移除。
+      // ⚠️ 注意下面那圈循环有 `if (!existsSync(abs)) continue` —— 文件没了它**静默跳过**，
+      // 所以留一条悬空条目等于让这份判据悄悄少看一处，而它自己不会报。
     ]
     for (const { path, note } of docs) {
       const abs = join(ROOT, path)

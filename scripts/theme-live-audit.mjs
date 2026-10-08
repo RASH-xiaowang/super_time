@@ -188,7 +188,7 @@ const PROBE = () => {
       // ⚠️ **渐变/图片底不参与对比度计算**：`opaqueBgOf` 只会走到"最近的不透明颜色"，
       // 而霓虹皮肤（总览）的卡片是 `rgba(0,0,0,0)` + 自己的渐变 —— 于是它会把
       // 白底当成底色，算出 1.10 这种**假阳性**（真机上卡片是深蓝紫，实测见
-      // docs/VERIFY-CHECKLIST.md 第 3 节）。凡是"文字与那个不透明底之间夹着一层
+      //  第 3 节）。凡是"文字与那个不透明底之间夹着一层
       // 渐变/图片"的对，一律标 `gradient: true`，由主进程侧跳过（记 n/a，不做合成）。
       const gradient = gradientBetween(n.parentElement)
       const key = color + '|' + bg + (gradient ? '|g' : '')
