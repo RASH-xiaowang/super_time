@@ -181,8 +181,24 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
   it('前端：写回时把 thumb 标记一起存下去', () => {
     expect(momentsMedia).toMatch(/snsMediaCacheSet\(it\.key, r\.url, r\.thumb === true\)/)
     expect(mediaCache).toMatch(/thumb\?: boolean/)
-    // wantOriginal 为真时缩略图条目必须当未命中
-    expect(mediaCache).toMatch(/wantOriginal && r\.thumb === true/)
+    // wantOriginal 为真时，缩略图**与 v1 旧条目**都必须当未命中。
+    // 只判 thumb 不够：v1 条目根本没有这个字段（真机清点 1186 条里 1093 条是那种）。
+    expect(mediaCache).toMatch(/wantOriginal && \(r\.thumb === true \|\| !isCurrent\(r\)\)/)
+  })
+
+  it('前端：缓存库带版本并在跨版本升级时清库（否则旧条目永远分辨不出好坏）', () => {
+    expect(mediaCache).toMatch(/const MEDIA_DB_VERSION = \d+/)
+    expect(mediaCache).toMatch(/ev\.oldVersion > 0 && ev\.oldVersion < MEDIA_DB_VERSION/)
+    expect(mediaCache).toMatch(/store\.clear\(\)/)
+    // 写回的条目必须带语义版本，否则 isCurrent 判不出来
+    expect(mediaCache).toMatch(/v: MEDIA_ENTRY_V/)
+  })
+
+  it('朋友圈卡片不许拿 CDN 原始地址当 src（那是密文，原理上渲染不出来）', () => {
+    const card = code(read('../../client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx'))
+    // 图片那一路只能喂后端解出来的 data URL
+    expect(card).toMatch(/src=\{dataSrc \?\? ''\}/)
+    expect(card).not.toMatch(/src=\{dataSrc \|\| proxyableSrcAllowHttp/)
   })
 
   it('前端：淘汰按字节而不是条数（4000 条 × 大图 = 配额爆掉，而写入失败是静默的）', () => {

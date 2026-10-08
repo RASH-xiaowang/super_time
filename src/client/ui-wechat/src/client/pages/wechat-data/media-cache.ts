@@ -14,6 +14,19 @@
 const MEDIA_DB_NAME = 'dsh-wechat-media'
 const MEDIA_STORE = 'sns-images'
 /**
+ * 库版本。**改动条目语义时必须 +1**，升级时旧条目会被整体清掉。
+ *
+ * 2026-10-08 从 1 升到 2：v1 的条目里，**92% 是「EOI 距末尾 24 字节」的图**
+ * （真机清点：1186 条里 1093 条如此，合计 331 MB）—— 那是后端**修好结尾判据之前**
+ * 存进去的字节。更麻烦的是它们**没有 `thumb` 字段**，与「原图」无法区分，
+ * 于是 `wantOriginal` 拦不住它们：一格一旦从 v1 缓存里恢复出这样一张图，
+ * `<img>` 解不开 ⇒ 永远显示「图片加载失败」，而错误文案还会指向「本地缓存没找到」。
+ * 这类条目没法靠字段补救，只能整体作废让后端重取。
+ */
+const MEDIA_DB_VERSION = 2
+/** 条目自身的语义版本：读的时候要求 `v >= MEDIA_DB_VERSION`，否则当没有。 */
+const MEDIA_ENTRY_V = 2
+/**
  * 容量上限（字节），默认 512 MB。
  *
  * 2026-10-08 从「条数」改成「字节」：原先按 4000 条淘汰，但朋友圈原图普遍 200–800 KB、
@@ -28,12 +41,18 @@ export function openMediaDb(): Promise<IDBDatabase> {
   if (mediaDb) return mediaDb
   mediaDb = new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') { reject(new Error('indexedDB unavailable')); return }
-    const req = indexedDB.open(MEDIA_DB_NAME, 1)
-    req.onupgradeneeded = () => {
+    const req = indexedDB.open(MEDIA_DB_NAME, MEDIA_DB_VERSION)
+    req.onupgradeneeded = (ev) => {
       const db = req.result
-      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
-        db.createObjectStore(MEDIA_STORE).createIndex('by_at', 'at')
-      }
+      const tx = req.transaction
+      // 类型上 createObjectStore 的返回值是 IDBObjectStore，取已有 store 时是联合类型 ——
+      // 这里显式收窄，因为只有 objectStore 才有 clear()
+      const store: IDBObjectStore = db.objectStoreNames.contains(MEDIA_STORE)
+        ? (tx!.objectStore(MEDIA_STORE) as IDBObjectStore)
+        : (db.createObjectStore(MEDIA_STORE).createIndex('by_at', 'at') as unknown as IDBObjectStore)
+      // 跨版本升级 ⇒ 旧条目一律作废。它们的字段含义已经变了（没有 v/thumb/size），
+      // 留着只能靠猜，猜错就是把一张渲染不了的图永久缓存下来。
+      if (ev.oldVersion > 0 && ev.oldVersion < MEDIA_DB_VERSION) store.clear()
     }
     req.onsuccess = () => { resolve(req.result); void trimMediaCache(req.result) }
     req.onerror = () => { mediaDb = null; reject(req.error ?? new Error('open media db failed')) }
@@ -45,10 +64,17 @@ export function openMediaDb(): Promise<IDBDatabase> {
 interface MediaEntry {
   url: string
   at: number
+  /** 语义版本；旧条目（v1）没有这个字段 ⇒ 读的时候当作过期。 */
+  v?: number
   /** 取这条时后端给的 `thumb`；缺省/false 视为原图。 */
   thumb?: boolean
   /** 该条的字节占用（base64 串长度 ≈ 内存字节数）。旧记录没有这个字段 ⇒ 退化为按 url 长度估算。 */
   size?: number
+}
+
+/** 这条记录是不是当前语义下的（能当原图用）。v1 的条目一律不算 —— 见 {@link MEDIA_ENTRY_V}。 */
+function isCurrent(e: MediaEntry | undefined): boolean {
+  return typeof e?.v === 'number' && e.v >= MEDIA_ENTRY_V
 }
 
 /** 记录占用的字节数。旧记录没有 `size`，按 url 长度估算（base64 字符串的字符数就是它的大小）。 */
@@ -110,7 +136,7 @@ export async function snsMediaCacheGet(key: string, wantOriginal = false): Promi
       req.onsuccess = () => {
         const r = req.result as MediaEntry | undefined
         if (typeof r?.url !== 'string') { resolve(null); return }
-        if (wantOriginal && r.thumb === true) { resolve(null); return }
+        if (wantOriginal && (r.thumb === true || !isCurrent(r))) { resolve(null); return }
         resolve(r.url)
       }
       req.onerror = () => { resolve(null) }
@@ -137,7 +163,7 @@ export async function snsMediaCacheGetMany(keys: readonly string[], wantOriginal
         req.onsuccess = () => {
           const r = req.result as MediaEntry | undefined
           if (typeof r?.url !== 'string') return
-          if (wantOriginal && r.thumb === true) return
+          if (wantOriginal && (r.thumb === true || !isCurrent(r))) return
           out[k] = r.url
         }
       }
@@ -160,7 +186,7 @@ export async function snsMediaCacheSet(key: string, url: string, thumb = false):
     const db = await openMediaDb()
     await new Promise<void>((resolve) => {
       const tx = db.transaction(MEDIA_STORE, 'readwrite')
-      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now(), thumb, size: url.length } satisfies MediaEntry, key)
+      tx.objectStore(MEDIA_STORE).put({ url, at: Date.now(), v: MEDIA_ENTRY_V, thumb, size: url.length } satisfies MediaEntry, key)
       tx.oncomplete = () => { resolve() }
       tx.onerror = () => { resolve() }
     })

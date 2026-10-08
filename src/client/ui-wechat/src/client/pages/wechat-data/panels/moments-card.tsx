@@ -10,6 +10,21 @@
  * 为什么不把这里的 state 一起挪进来：`expandedTextByCard` / `commentCounts` /
  * `videoSrcs` 等都是**按 tid 索引的整列表状态**，卡片只是读写其中一格；挪进来会变成「每张卡一份」,
  * 语义就变了（例如「展开全部」之类的跨卡操作会失效）。
+ *
+ * ## 为什么图片那一路不拿 CDN 地址顶着（2026-10-08）
+ *
+ * 卡片原先是 `src={dataSrc || proxyableSrcAllowHttp(im.thumb, im.url)}`，意思是
+ * 「后端还没回话时先拿 CDN 地址顶着，失败还有 `fallbackSrc` 兜底」。**那条兜底在原理上永远画不出图**：
+ * 朋友圈 CDN 返回的是 WxIsaac64 **密文**（真机实测：响应头恒为 `x-enc: 1`，头四字节 `ce 6c e7 d1`），
+ * 必须经 `sns-keystream.ts` 解密才是一张图片。于是只要 `dataSrc` 还没到（首次进入、懒加载
+ * 还没触发、或取图失败），那一格必然走 `failed` 分支显示「图片加载失败」；而 `snsErrs` 尚未
+ * 记上原因时冒出来的是**「本地缓存未找到」** —— 把用户指向完全错误的方向（真实原因是
+ * 「这条兜底地址根本不是图片」，与本机缓存无关）。
+ *
+ * 正确分工：CDN 的 url/token/seed 只在**后端**用（`mediaKeySpec` 带着它们去取，见
+ * `moments-media.ts` 与 `remotes/media.ts` 的四路排序），界面这一侧只认解好的字节。
+ * 取不到就如实说取不到（`empty` 分支带真实原因），而不是拿一个注定渲染失败的地址去骗一次 `<img>`。
+ * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M407。
  */
 import { Fragment } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -17,7 +32,7 @@ import { clickableKey } from '../ui/kit.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar } from './moments-support.tsx'
-import { proxyableSrc, proxyableSrcAllowHttp } from '../utils/url.ts'
+import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
@@ -143,11 +158,10 @@ export function MomentsCard({
                   data-sns-tid={im.timelineId || undefined}
                   data-sns-mid={im.id || undefined}
                 >
-                  {/* 本机解码优先、CDN 兜底：实测朋友圈的 CDN 地址两个协议都 400（8/8 样本，已失效），
-                      故本机解码（含后台预热）才是正路；`fallbackSrc` 保证 CDN 失败也不塌成空格子。 */}
+                  {/* 只喂**后端解出来的 data URL**；理由与实测见文件头「为什么不用 CDN 地址顶着」。 */}
                   <RemoteImg
-                    src={dataSrc || proxyableSrcAllowHttp(im.thumb, im.url) || ''}
-                    fallbackSrc={dataSrc} empty={<MomentNoSource hint={(key && snsErrs?.[key]) || '本机缓存没有这张图，CDN 也取不到'} detail={key ? ('md5=' + (im.md5 || '无') + ' id=' + String(im.id ?? '无')) : '这条媒体没有 md5/id，无法定位'} />}
+                    src={dataSrc ?? ''}
+                    empty={<MomentNoSource hint={(key && snsErrs?.[key]) || '正在取原图…'} detail={key ? ('md5=' + (im.md5 || '无') + ' id=' + String(im.id ?? '无')) : '这条媒体没有 md5/id，无法定位'} />}
                     alt=""
                     loading="lazy"
                     decoding="async"

@@ -88,7 +88,9 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  259',
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  265',
+  // 2026-10-08：图片那一路不再拿 CDN 原始地址当 src（那是 WxIsaac64 密文，原理上渲染不出来），
+  // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  264',
 ]
 
 interface Fn { file: string; name: string; len: number }

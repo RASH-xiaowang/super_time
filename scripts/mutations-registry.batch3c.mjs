@@ -783,4 +783,29 @@ MUTATIONS_BATCH3C.push(
     to: "if (true) { resolve(); return }",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
+  // ── 2026-10-08 第二次修：缓存里那批渲染不了的图 + 原理上渲染不了的兜底 src ──
+  {
+    id: "M407-sns-card-falls-back-to-encrypted-cdn-url",
+    why: "把朋友圈卡片的 src 改回「后端还没回话时先拿 CDN 地址顶着」⇒ 朋友圈 CDN 返回的是 WxIsaac64 **密文**（响应头恒为 x-enc:1、头四字节 ce 6c e7 d1），必须解密才是图 ⇒ 这条兜底**原理上永远渲染失败**，于是后端没回话的那一段窗口里整片格子显示「图片加载失败」，而错误文案还指向「本地缓存没找到」",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx",
+    from: "                    src={dataSrc ?? ''}",
+    to: "                    src={dataSrc || proxyableSrcAllowHttp(im.thumb, im.url) || ''}",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M408-sns-frontend-cache-legacy-purge-removed",
+    why: "去掉跨版本升级时的清库 ⇒ 修复前存进去的那批条目（真机清点 1186 条里 1093 条、331 MB，且**没有 thumb 字段**，与原图无法区分）继续被当命中恢复；一旦其中一张渲染不了，那一格就永远显示「图片加载失败」，且因为被标成「已取过」而永不重取",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/media-cache.ts",
+    from: "if (ev.oldVersion > 0 && ev.oldVersion < MEDIA_DB_VERSION) store.clear()",
+    to: "if (false) store.clear()",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M409-sns-frontend-cache-entry-version-dropped",
+    why: "写回条目时不带语义版本 ⇒ isCurrent 永远为假 ⇒ 要原图时**每一条缓存都当未命中**，「下次进入秒显」彻底退化成「每次都重取本机/重出网」。症状只是变慢，界面上看不出，所以格外容易被当成「性能一般」而放过",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/media-cache.ts",
+    from: "v: MEDIA_ENTRY_V",
+    to: "v: 0",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
 )
