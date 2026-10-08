@@ -8,6 +8,7 @@
 **放松绑定必须自证还咬得住**：如果我把选择器写得太宽（比如 `qa('button')[0]`），
 用例会变成"点了个什么的都行"的恒真。下面每条变异都针对**行为**，不是针对选择器字符串。
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 ROOT = Path(r"D:/super-time-wechat")
 P = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/panels"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-export-dialog.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 VITEST = "node_modules/vitest/vitest.mjs"
 
 MUTS = [

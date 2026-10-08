@@ -5,6 +5,7 @@
 判「红了没」看 **退出码**（MEMORY：别匹配输出文本；`subprocess.run(列表, shell=True)`
 在 Windows 上参数会错乱 ⇒ 假全绿）。
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +14,7 @@ ROOT = Path(r"D:/super-time-wechat")
 P = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/panels"
 UI = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/ui"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/panels/button-family-c-link.wiring.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 VITEST = "node_modules/vitest/vitest.mjs"
 
 # (说明, 文件, old, new)

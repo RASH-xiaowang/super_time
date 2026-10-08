@@ -30,7 +30,7 @@ from pathlib import Path
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 ROOT = Path(r"D:\super-time-wechat")
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 TS = "src/backend/tsconfig.tests.json"
 SPEC_ARG = "src/backend/tests/backend-rpc.spec.ts"
 

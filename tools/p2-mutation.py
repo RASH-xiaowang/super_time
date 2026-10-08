@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """P2 变异：确认 button-family-a-chip-token.wiring.spec.ts 能咬住真实改动。"""
+import os
 import subprocess, re, hashlib
 from pathlib import Path
 
 ROOT = Path(r"D:/super-time-wechat")
 PANELS = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/panels"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/panels/button-family-a-chip-token.wiring.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 
 
 def run_spec():

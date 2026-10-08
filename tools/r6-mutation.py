@@ -2,11 +2,11 @@
 """R6 变异测试：证明 button-disabled-tone.wiring.spec.ts 能咬住问题。
 判据：退出码（非 0 = 红了）＋ 必须逐字节还原。
 """
+import os
 import subprocess, os
 from pathlib import Path
 
-ROOT = Path(r'D:/super-time-wechat')
-NODE = r'C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-3\node.exe'
+ROOT = Path(r'D:/super-time-wechat')NODE = os.environ.get("SUPERTIME_NODE", "node")
 SPEC = 'src/client/ui-wechat/src/client/pages/wechat-data/panels/button-disabled-tone.wiring.spec.ts'
 PANELS = ROOT / 'src/client/ui-wechat/src/client/pages/wechat-data/panels'
 E = lambda s: s.encode('utf-8')

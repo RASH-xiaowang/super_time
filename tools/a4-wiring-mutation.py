@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 GW = ROOT / "src/backend/wechat-data/src/gateway-read.ts"
 SPEC = "src/backend/wechat-data/tests/article-cover-local-first.spec.ts"
 

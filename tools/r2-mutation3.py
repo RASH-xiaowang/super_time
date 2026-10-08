@@ -12,8 +12,7 @@ import os
 import subprocess
 import sys
 
-ROOT = r'D:\super-time-wechat'
-NODE = r'C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-3\node.exe'
+ROOT = r'D:\super-time-wechat'NODE = os.environ.get("SUPERTIME_NODE", "node")
 VITEST = os.path.join(ROOT, 'node_modules', 'vitest', 'vitest.mjs')
 
 DARK = os.path.join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages',

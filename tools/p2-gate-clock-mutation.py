@@ -14,6 +14,7 @@
 固定命令行字符串 + 看 returncode（不看输出文本）：本机踩过
 `subprocess.run(列表, shell=True)` 在 Windows 上参数错乱的坑，会假全绿。
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from pathlib import Path
 ROOT = Path(r"D:/super-time-wechat")
 SRC = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.gate.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 VITEST = "node_modules/vitest/vitest.mjs"
 
 MUTS = [

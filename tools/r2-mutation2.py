@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """R2 第二轮变异：验证 first-impressions-tokens.spec.ts 能咬住。"""
+import os
 import hashlib, subprocess, sys
 from pathlib import Path
 ROOT = Path("D:/super-time-wechat")
 APP = ROOT/"src/client/ui-app"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/first-impressions-tokens.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 OUT = ROOT/"tools"/"_mut_r2b_out.txt"
 TB = APP/"titlebar.css"
 OB = APP/"onboarding/onboarding.module.css"

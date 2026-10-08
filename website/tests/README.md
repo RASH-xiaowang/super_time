@@ -8,9 +8,9 @@
 ## 运行
 
 ```bash
-cd "C:/Users/Administrator/.workbuddy/binaries/node/workspace"
-NODE_PATH="C:/Users/Administrator/.workbuddy/binaries/node/workspace/node_modules" \
-"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe" \
+cd "."
+NODE_PATH="node_modules" \
+node \
 "D:/super-time-wechat/website/tests/smoke.js"
 echo "EXIT=$?"
 ```
@@ -75,9 +75,9 @@ echo "EXIT=$?"
 1. 抽出 `<script>` 跑语法检查：
    ```bash
    cd "D:/super-time-wechat/website"
-   "C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe" -e \
+   node -e \
      "const fs=require('fs');const h=fs.readFileSync('index.html','utf8');fs.writeFileSync('tests/_extracted.js',h.match(/<script>([\s\S]*?)<\/script>/)[1]);"
-   "C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe" --check tests/_extracted.js
+   node --check tests/_extracted.js
    ```
 2. 重跑本测试，确认退出码 0。
 3. 删除 `tests/_extracted.js`。

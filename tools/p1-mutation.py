@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """P1 变异测试 v2：用「行号定位」代替「全文唯一片段」."""
+import os
 import subprocess, re, hashlib
 from pathlib import Path
 
 ROOT = Path(r"D:/super-time-wechat")
 PANELS = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/panels"
 SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/panels/button-family-e-align.wiring.spec.ts"
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
+NODE = os.environ.get("SUPERTIME_NODE", "node")
 
 
 def run_spec():

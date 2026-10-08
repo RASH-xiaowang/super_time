@@ -4,6 +4,7 @@
 6 个变异，每个：改源码 → 跑 spec → 必须变红（退出码 != 0）→ 逐字节还原。
 Windows shell=True 走 cmd.exe，所以命令行用 cmd 语法。
 """
+import os
 import hashlib
 import subprocess
 import sys
@@ -12,8 +13,7 @@ from pathlib import Path
 ROOT = Path("D:/super-time-wechat")
 THEME = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/scifi-theme.css"
 LIGHT = ROOT / "src/client/ui-wechat/src/client/pages/wechat-data/light-theme.css"
-SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/theme-alpha-ladder.spec.ts"
-NODE = r"C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-3\node.exe"
+SPEC = "src/client/ui-wechat/src/client/pages/wechat-data/theme-alpha-ladder.spec.ts"NODE = os.environ.get("SUPERTIME_NODE", "node")
 OUT = ROOT / "tools" / "_mut_r2_out.txt"
 
 MUTATIONS = [
