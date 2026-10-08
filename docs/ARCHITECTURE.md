@@ -82,16 +82,28 @@ src/client/**                      前端（ESM + React）
 | `<userData>/wechat/` | `config.json`、`llm.json`、`secrets.json`、`logs/` | 宿主层（原子写：同目录 tmp + rename） |
 | `<userData>/wechat-data/decrypted/` | 解密后的 SQLite 分库 | `src/query/decrypt-all.ts` |
 | `.../decoded_images/` | 图片解码缓存（全局槽 + 按用户名槽、缩略带 `.t.`） | `src/query/media-image.ts` |
+| `.../sync-state.json` | 同步签名账：哪个目标的**源**签名已成功解密 | `src/query/sync-state.ts` |
 | `.../wechat_search.db`、`wechat_rag_vectors.db` | 派生索引（可随时从 `contact.db` / 消息重算） | `src/query/search-*.ts`、`retrieval/**` |
 
-三条被机检的纪律：
+四条被机检的纪律：
 
 - **连接生命周期**：只读用 `withDb`、写用 `withWritableDb`、要跨 `await` 用 `withDbAsync`
   （[`../src/backend/wechat-data/src/query/db-open.ts`](../src/backend/wechat-data/src/query/db-open.ts)）。
   判据是"跑完之后整棵树仍可删"（Windows 上句柄没关就是 EBUSY/EPERM），不是数源码里有没有 `close`：
   [`../src/backend/wechat-data/tests/query-db-lifetime.spec.ts`](../src/backend/wechat-data/tests/query-db-lifetime.spec.ts)。
-- **出网闸门在后端**：渲染层不直接向远程主机要任何东西（含头像、原图、封面、地图底图），
-  统一走后端代理（主机白名单 + 开关 + 操作记录 + 本机缓存）。
+- **出网在��端**：渲染层不直接向远程主机要任何东西（含头像、原图、封面、地图底图），
+  统一走后端代理（主机白名单 + 操作记录 + 本机缓存）。
+  ⚠️ 这里**没有"用户可关的开关"** —— 应用内的出网开关已于 2026-09-30 整体移除
+  （`privacyGate` 现在只做「按设置脱敏 + 写一条审计行」两件事）。要彻底断网只能靠系统防火墙。
+  出网点清单见 [`PRIVACY.md`](PRIVACY.md)。
+- **同步签名账跨进程**：`lastState` 是进程内存里的 Map，重启即空 ⇒ 源没变也会被误判成"变了"
+  而整库重解密（`message_1` 一次 ≈ 147 MB / 37456 页）。`sync-state.json` 把它落盘，
+  首 tick 播种，于是冷启动命中既有的"未变就跳过"分支。**判定逻辑一行没改** ——
+  实时同步的新鲜度不受影响的只有"启动不必白解一遍"。
+  判据：落盘只取**成功子集**（`takeSyncSuccesses()`，绝不直接写乐观记录的 `lastState`）；
+  账本读不出来 / 版本不认识 / 条目形状不对 / 产物被删，**一律回到整库重解密** ——
+  少解一遍只是慢几秒，跳过一次是永久显示旧数据。见
+  [`../src/backend/wechat-data/src/query/sync-state.ts`](../src/backend/wechat-data/src/query/sync-state.ts)。
 - **缓存是 SWR**：`cachedBySig` / `cachedFetch` 以"文件签名"为键，过期先回旧值再后台刷新；
   签名必须覆盖**真正被读到的东西**（只签 `sns.db` 而实际还读了 `contact.db` 就是错的键）。
 
@@ -136,3 +148,11 @@ src/client/**                      前端（ESM + React）
 - 性能类事实（N36 的耗时口径、真机打点）见 [`RELEASE-PLAN.md`](RELEASE-PLAN.md) 的 N36 条目，
   它依赖具体机器，不做零容忍门禁。（原先那份独立的性能基线报告已随文档精简删除，
   其中的实测数字与测量口径保留在 git 历史里。）
+- **2026-10-08 文档精简同时丢掉了两层"元检查"，如实记**：
+  ① `audit:selftest`（12 条判据 × 双向负控，验"判据自身可不可信"）—— **没有等价替代**。
+  这一层原本管的是"判据会不会自己坏掉"（例如清单变空 ⇒ 恒真、存在性断言等于没断言），
+  现在只能靠写判据时人工配反例自证；
+  ② `coverage:matrix` / `coverage:check`（174 接口 × 36 页签的性能矩阵与主题覆盖矩阵）
+  及其生成脚本 —— 它们靠已删除的台账文档作为主体，文档没了工具没有意义。
+  受影响的还有一条变异登记（`M375`，守台账行里的序号不许丢），按纪律删条目 +
+  同步下调 `REGISTRY_MIN`（370 → 369）。

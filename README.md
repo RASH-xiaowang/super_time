@@ -89,7 +89,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest
 | 目录 | 内容 |
 |---|---|
 | `<userData>/wechat/` | 运行期状态：`config.json`（路径与非敏感设置镜像）、`llm.json`（模型配置，含 API Key）、`logs/`（诊断日志） |
-| `<userData>/wechat-data/` | 数据根：`decrypted/`（解密后的 SQLite）、`decoded_images/`（图片缓存）、检索/笔记/待办等派生库 |
+| `<userData>/wechat-data/` | 数据根：`decrypted/`（解密后的 SQLite）、`decoded_images/`（图片缓存）、`sync-state.json`（同步签名账）、检索/笔记/待办等派生库 |
 | 数据根下的 `secrets.json` | 微信解密密钥（db/image），原子写 + 仅当前用户可读 |
 
 Windows 上 `<userData>` 为 `%APPDATA%\Super Time`（可用 `SUPERTIME_USER_DATA_DIR` 覆盖，调试用）。
@@ -105,16 +105,19 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
   wechat-data/           后端包（gateway.ts 是 Remote 方法面）
     src/query/           查询层：消息、会话、朋友圈、导出、备份、隐私体检…
     src/query/retrieval/ RAG 检索层（稀疏 + 稠密）
+    src/query/kb/        知识库：文件解析、分块、向量化
     src/keys/            微信解密密钥获取（含 win32 进程内存扫描）
     native/              朋友圈视频解密 WASM（随包分发，许可见 PROVENANCE.md）
     resources/           语音解码器 wx_silk.exe（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
-src/client/ui-app/       前端入口、启动引导、授权界面
+src/client/ui-app/       前端入口、启动引导三站、隐私同意屏、授权界面
 src/client/ui-wechat/    数据面板（panels/ 下 113 个 .tsx 视图）
+src/client/ui-dist/      前端构建产物（**入库**：Electron 直接 loadFile 读它）
 src/license/             授权：指纹、签名校验、许可证解析
-tools/license-studio/    许可签发图形工具
+tools/                   laya 本地推理、许可签发 GUI、视觉审计、变异自证脚本
 scripts/                 构建、打包冒烟、各条 smoke 与校验脚本
-docs/                    隐私声明、接口参考、RAG 架构、实施计划
+website/                 官网单文件（不参与打包）
+docs/                    七份当前有效的文档（见下方索引）
 ```
 
 ## 文档索引
