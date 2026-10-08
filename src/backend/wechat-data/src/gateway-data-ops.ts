@@ -586,10 +586,17 @@ export abstract class GatewayDataOps extends GatewayAskOps {
   }
 
   /**
-   * Resolve one SNS (朋友圈) media md5 to an offline base64 data URL
-   * from the WeChat cache/<month>/Sns/Img V2-encrypted blobs.
-   * @param options - media md5 from the moments XML.
-   * @returns ImageDataUrlResult: base64 data URL or error.
+   * Resolve one SNS (朋友圈) media to a base64 data URL —— **先网后本**。
+   *
+   * 有网（`offline` 非真）：直接向微信 CDN 要 `/0` 那份**原图**，取回即落盘到
+   * `decoded_images/sns-media/`；**不做任何本地判断在前**。只有 CDN 这一趟失败才回落本机。
+   * 无网：全程不发网络请求，依次用「已下载的原图 → `cache/<month>/Sns/Img` → 缩略图」。
+   *
+   * 顺序与理由见 `remotes/media.ts` 的 `snsImageWithCdnFirst`。
+   *
+   * @param options - `md5` 来自朋友圈 XML；`url`/`token`/`seed` 是 CDN 三件套；
+   *   `offline` 由界面按 `navigator.onLine` 判定，缺省按有网处理。
+   * @returns ImageDataUrlResult: base64 data URL（`thumb: true` = 只能给缩略图）或 error。
    */
   @Remote('getSnsImageDataUrl')
   async getSnsImageDataUrl(options: {
@@ -602,6 +609,15 @@ export abstract class GatewayDataOps extends GatewayAskOps {
     token?: string
     /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
     seed?: string
+    /**
+     * 界面侧判定「当前无网」（`navigator.onLine === false`）。
+     *
+     * 为什么由界面传而不在后端自己探网：后端探网要额外发一次请求，
+     * 而那一次请求本身就可能因为「网络不通」而挂住 —— 于是判据与被测对象互相依赖。
+     * 界面已经有 `navigator.onLine`（`remote-img.tsx` 的离线短路也用它），复用同一个信号。
+     * 缺省按「有网」处理：宁可多走一趟网络，也不要在有网时拿旧缓存糊弄。
+     */
+    offline?: boolean
   }): Promise<ImageDataUrlResult> {
   return this.mediaRemotes().getSnsImageDataUrl(options)
   }

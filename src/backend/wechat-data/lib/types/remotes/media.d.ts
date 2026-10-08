@@ -208,5 +208,12 @@ interface SnsImageOptions {
     token?: string;
     /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
     seed?: string;
+    /**
+     * 界面侧判定「当前无网」（`navigator.onLine === false`）。缺省按**有网**处理。
+     *
+     * 为什么缺省是有网而不是无网：判错的方向不一样 —— 误判成有网只是多走一趟网络；
+     * 误判成无网会让用户永远看不到刚上传的新图，而且**没有任何报错**。
+     */
+    offline?: boolean;
 }
 export {};

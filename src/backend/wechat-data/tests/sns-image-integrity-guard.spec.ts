@@ -131,28 +131,55 @@ const mediaRemotes = code(read('src/remotes/media.ts'))
 const mediaCache = code(read('../../client/ui-wechat/src/client/pages/wechat-data/media-cache.ts'))
 const momentsMedia = code(read('../../client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts'))
 
-describe('高清原图：四路的顺序不许被调换', () => {
-  it('落盘原图 → 本机原图 → CDN → 本机缩略图', () => {
-    const iStore = mediaRemotes.indexOf('lookupOriginal(')
-    const iLocalOriginal = mediaRemotes.indexOf('options.mediaId, false)')
-    const iCdn = mediaRemotes.indexOf('fetchSnsCdnImage(')
-    const iLocalThumb = mediaRemotes.indexOf('options.mediaId, true)')
-    for (const [name, i] of [['落盘原图', iStore], ['本机原图', iLocalOriginal], ['CDN', iCdn], ['本机缩略图', iLocalThumb]] as Array<[string, number]>) {
+describe('先网后本：有网只走网络，无网只用本地（顺序不许被调换）', () => {
+  // 用位置而不是切片段：同一文件里有两处 `} else {`（`hasCdn` 那个在前），
+  // 靠字符串切容易切错区间，而切错了断言会变成恒真。
+  const iBranch = mediaRemotes.indexOf('if (!offline) {')
+  const iOfflineElse = iBranch < 0 ? -1 : mediaRemotes.indexOf('} else {', iBranch)
+  const iStore = mediaRemotes.indexOf('lookupOriginal(decoded, options.md5)')
+  const iCdn = mediaRemotes.indexOf('fetchSnsCdnImage(')
+  const iLocalOriginal = mediaRemotes.indexOf('local(false)')
+  const iLocalThumb = mediaRemotes.indexOf('local(true)')
+
+  it('两条分支都在：有网走 CDN，无网走已下载的原图缓存', () => {
+    expect(mediaRemotes).toMatch(/const offline = options\.offline === true/)
+    for (const [name, i] of [['有网分支', iBranch], ['无网分支', iOfflineElse], ['已下载原图缓存', iStore], ['CDN', iCdn]] as Array<[string, number]>) {
       expect(i, name + ' 那一步不见了').toBeGreaterThan(-1)
     }
-    // 顺序即产品语义：落盘原图最前（本机没有也该秒显），缩略图最后
-    expect(iStore).toBeLessThan(iLocalOriginal)
-    expect(iLocalOriginal).toBeLessThan(iCdn)
-    expect(iCdn).toBeLessThan(iLocalThumb)
+    // 结构上：无网那段的 else 之后紧跟的就是查已下载原图 ⇒ 它在 else 里，不在有网分支里
+    expect(iOfflineElse).toBeLessThan(iStore)
   })
 
-  it('本机那两档必须传 allowThumb 显式区分（漏传就退回旧行为：缩略图赢过原图）', () => {
-    // 不许出现「不传 allowThumb」的第三处调用 —— 那等价于 allowThumb=true
-    const calls = [...mediaRemotes.matchAll(/resolveSnsImageDataUrl\([^)]*\)/g)].map((m) => m[0])
-    expect(calls.length).toBe(2)
-    for (const c of calls) {
-      expect(c, '两档都必须显式传 allowThumb').toMatch(/,\s*(true|false)\)$/)
-    }
+  it('有网分支里只有 CDN，不经过任何本地判断', () => {
+    expect(iCdn).toBeGreaterThan(iBranch)
+    expect(iCdn, 'CDN 调用必须落在无网分支之前，也就是有网分支里').toBeLessThan(iOfflineElse)
+    expect(iStore, '已下载原图缓存只能落在无网分支里').toBeGreaterThan(iOfflineElse)
+    expect(iLocalOriginal, '本机原图只能落在两条分支之后（网络失败时回落）').toBeGreaterThan(iOfflineElse)
+  })
+
+  it('无网分支不发任何网络请求', () => {
+    // iCdn 在 iOfflineElse 之前 ⇒ 无网那段里没有第二次 CDN 调用
+    expect(mediaRemotes.indexOf('fetchSnsCdnImage(', iOfflineElse)).toBe(-1)
+  })
+
+  it('本机两档仍必须显式区分 allowThumb（漏传就退回旧行为：缩略图赢过原图）', () => {
+    // local(allowThumb) 是唯一的前端封装；它必须把参数透传下去
+    expect(mediaRemotes).toMatch(/const local = \(allowThumb: boolean\) =>/)
+    expect(mediaRemotes).toMatch(/resolveSnsImageDataUrl\(base, aesKey, xorKey, options\.md5, options\.timelineId, options\.mediaId, allowThumb\)/)
+    const calls = [...mediaRemotes.matchAll(/\blocal\((true|false)\)/g)].map((m) => m[1])
+    expect(calls, '必须恰好两档：先原图、后缩略图').toEqual(['false', 'true'])
+    expect(iLocalOriginal).toBeLessThan(iLocalThumb)
+  })
+
+  it('CDN 取回的原图要写穿落盘缓存（下次无网时才有本地可用）', () => {
+    const after = mediaRemotes.slice(iCdn, iLocalOriginal)
+    expect(after).toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, cdn\.dataUrl\)/)
+  })
+
+  it('本机原图拿到也写穿；缩略图刻意不写穿（否则缩略图会变成永久的「高清」）', () => {
+    const thumbBranch = mediaRemotes.slice(iLocalThumb, iLocalThumb + 700)
+    expect(thumbBranch).not.toMatch(/saveOriginalFromDataUrl\(decoded, options\.md5, localThumb\.url\)/)
+    expect(thumbBranch).toMatch(/thumb: true/)
   })
 })
 
@@ -173,9 +200,16 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
     expect(writes).toBe(3)
   })
 
-  it('前端：进面板恢复与单张查询都要「只要原图」，否则缩略图会永久遮住原图', () => {
-    expect(momentsMedia).toMatch(/snsMediaCacheGet\(it\.key, true\)/)
-    expect(momentsMedia).toMatch(/snsMediaCacheGetMany\(keys, true\)/)
+  it('前端：进面板恢复与单张查询都要遵守「先网后本」', () => {
+    // 有网时不查本地缓存：产品规则是「有网直接取原图，不用经过本地判断」
+    expect(momentsMedia).toMatch(/const cached = offline \? await snsMediaCacheGet\(it\.key, true\) : null/)
+    // 批量恢复整段只在无网时做
+    expect(momentsMedia).toMatch(/useEffect\(\(\) => \{\s*if \(!isOffline\(\)\) return/)
+    // 网络状态由界面读同一个信号（navigator.onLine），不在后端另造一套探网
+    expect(momentsMedia).toMatch(/navigator\.onLine === false/)
+    // 并且把它传给后端，由后端决定走网络还是走本地
+    expect(momentsMedia).toMatch(/opts\.offline = offline/)
+    expect(mediaRemotes).toMatch(/offline\?: boolean/)
   })
 
   it('前端：写回时把 thumb 标记一起存下去', () => {

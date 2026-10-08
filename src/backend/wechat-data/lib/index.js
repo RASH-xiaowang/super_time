@@ -28593,34 +28593,42 @@ async function snsImageWithCdnFirst(rc, options, keys) {
   const token = String(options.token ?? "");
   const seed = String(options.seed ?? "");
   const decoded = dirs.decoded;
-  const tag = "[sns-image] md5=" + options.md5.slice(0, 8);
-  const stored = lookupOriginal(decoded, options.md5);
-  if (stored !== null) {
-    console.error(tag + " \u539F\u56FE\u7F13\u5B58\u547D\u4E2D\uFF08\u957F\u5EA6 " + String(stored.bytes.length) + "\uFF09");
-    return { url: originalAsDataUrl(stored) };
+  const offline = options.offline === true;
+  const tag = "[sns-image] md5=" + options.md5.slice(0, 8) + (offline ? " [\u65E0\u7F51]" : "");
+  const hasCdn = url !== "" && token !== "" && seed !== "";
+  const local = (allowThumb) => resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, allowThumb);
+  if (!offline) {
+    if (hasCdn) {
+      const cdn = await fetchSnsCdnImage(url, token, seed);
+      if (cdn.dataUrl) {
+        saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl);
+        console.error(tag + " CDN \u539F\u56FE\uFF08\u957F\u5EA6 " + String(cdn.dataUrl.length) + "\uFF0C\u5DF2\u843D\u76D8\uFF09");
+        return { url: cdn.dataUrl };
+      }
+      console.error(tag + " CDN \u5931\u8D25\uFF1A" + String(cdn.error));
+    } else {
+      console.error(tag + " \u7F3A CDN \u4E09\u4EF6\u5957\uFF08url/token/seed\uFF09\uFF0C\u53EA\u80FD\u8D70\u672C\u673A");
+    }
+  } else {
+    const stored = lookupOriginal(decoded, options.md5);
+    if (stored !== null) {
+      console.error(tag + " \u5DF2\u4E0B\u8F7D\u7684\u539F\u56FE\uFF08\u957F\u5EA6 " + String(stored.bytes.length) + "\uFF09");
+      return { url: originalAsDataUrl(stored) };
+    }
   }
-  const localOriginal = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, false);
+  const localOriginal = local(false);
   if (localOriginal.url) {
-    console.error(tag + " \u672C\u673A\u539F\u56FE\u547D\u4E2D\uFF08\u957F\u5EA6 " + String(localOriginal.url.length) + "\uFF09");
+    console.error(tag + " \u672C\u673A\u539F\u56FE\uFF08\u957F\u5EA6 " + String(localOriginal.url.length) + "\uFF09");
     saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url);
     return localOriginal;
   }
-  if (url !== "" && token !== "" && seed !== "") {
-    const cdn = await fetchSnsCdnImage(url, token, seed);
-    if (cdn.dataUrl) {
-      console.error(tag + " CDN \u539F\u56FE\u547D\u4E2D\uFF08\u957F\u5EA6 " + String(cdn.dataUrl.length) + "\uFF09");
-      saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl);
-      return { url: cdn.dataUrl };
-    }
-    console.error(tag + " CDN \u5931\u8D25\uFF1A" + String(cdn.error));
-  }
-  const localThumb = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, true);
+  const localThumb = local(true);
   if (localThumb.url) {
     console.error(tag + " \u672C\u673A\u7F29\u7565\u56FE\u515C\u5E95\uFF08\u957F\u5EA6 " + String(localThumb.url.length) + "\uFF09");
     return { url: localThumb.url, thumb: true };
   }
-  console.error(tag + " \u5404\u8DEF\u90FD\u5931\u8D25\uFF1A\u672C\u673A\u539F\u56FE=" + String(localOriginal.error) + " / CDN=" + String(url !== "" && token !== "" && seed !== "" ? "\u89C1\u4E0A" : "\u672A\u914D\u7F6E") + " / \u672C\u673A\u7F29\u7565\u56FE=" + String(localThumb.error));
-  return { error: (localOriginal.error ?? "\u672C\u5730\u89E3\u7801\u5931\u8D25") + "\uFF1BCDN\uFF1A" + (url === "" || token === "" || seed === "" ? "\u7F3A\u5C11 CDN \u4E09\u4EF6\u5957" : "\u53D6\u56FE\u5931\u8D25") };
+  console.error(tag + " \u5404\u8DEF\u90FD\u5931\u8D25\uFF1A\u672C\u673A\u539F\u56FE=" + String(localOriginal.error) + " / CDN=" + (hasCdn ? "\u89C1\u4E0A" : "\u672A\u914D\u7F6E") + " / \u672C\u673A\u7F29\u7565\u56FE=" + String(localThumb.error));
+  return { error: (localOriginal.error ?? "\u672C\u5730\u89E3\u7801\u5931\u8D25") + "\uFF1BCDN\uFF1A" + (hasCdn ? "\u53D6\u56FE\u5931\u8D25" : "\u7F3A\u5C11 CDN \u4E09\u4EF6\u5957") };
 }
 
 // src/backend/wechat-data/src/query/export-history.ts

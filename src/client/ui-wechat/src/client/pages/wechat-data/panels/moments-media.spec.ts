@@ -62,9 +62,21 @@ function mk(over: Partial<MomentItem> & { tid: string }): MomentItem {
   }
 }
 
+/**
+ * 设定「有网 / 无网」。
+ *
+ * 为什么用例必须能切这个：取图口径是**先网后本**（有网直接取 CDN 原图、无网才用本地缓存），
+ * 而这个判据来自 `navigator.onLine`。jsdom 默认 `onLine === true`，所以「无网」那几条
+ * 用例不显式设成 false 就会全部走有网分支 —— 断言会变成恒真。
+ */
+function setOnline(online: boolean): void {
+  Object.defineProperty(window.navigator, 'onLine', { value: online, configurable: true })
+}
+
 beforeEach(() => {
   ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   for (const fn of Object.values(mocks)) fn.mockReset()
+  setOnline(true)
   mocks.snsMediaCacheGet.mockResolvedValue(null)
   mocks.snsMediaCacheGetMany.mockResolvedValue({})
   mocks.snsMediaCacheSet.mockResolvedValue(undefined)
@@ -188,13 +200,29 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
   })
 
-  it('先问 IndexedDB：命中就不许调解密 RPC（且明确要「原图」，缩略图条目当未命中）', async () => {
+  it('有网：不查 IndexedDB，直接走后端（原图由后端从 CDN 取并落盘）', async () => {
+    setOnline(true)
+    mocks.snsMediaCacheGet.mockResolvedValue('data:旧的缩略图')
+    render({ specs: [img('k1')] })
+    await flush()
+    expect(mocks.snsMediaCacheGet, '有网时不许先查本地缓存').not.toHaveBeenCalled()
+    expect(mocks.apiGetSnsImageDataUrl).toHaveBeenCalledTimes(1)
+    // 网络状态要传给后端，由它决定走网络还是走本地
+    const opts = mocks.apiGetSnsImageDataUrl.mock.calls[0]?.[0] as { offline?: boolean } | undefined
+    expect(opts?.offline, '有网时 offline 必须是 false').toBe(false)
+  })
+
+  it('无网：先用 IndexedDB 里已下载的那份，命中就不必再问后端', async () => {
+    setOnline(false)
+    // Once：只让 k1 命中，k2 仍要走后端（离线时后端走「已下载的原图缓存 → 本机」）
     mocks.snsMediaCacheGet.mockResolvedValueOnce('data:from-idb')
     render({ specs: [img('k1'), img('k2')] })
     await flush()
     expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1', true)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k1')).toHaveLength(0)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k2')).toHaveLength(1)
+    const opts = mocks.apiGetSnsImageDataUrl.mock.calls[0]?.[0] as { offline?: boolean } | undefined
+    expect(opts?.offline, '无网时 offline 必须是 true').toBe(true)
     expect(imgs()).toEqual(expect.arrayContaining(['k1', 'k2']))
   })
 
@@ -228,19 +256,31 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:thumb', true)
   })
 
+  it('有网时不走 IDB 批量恢复（否则用户看到的还是上一次那张）', async () => {
+    setOnline(true)
+    const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
+    mocks.snsMediaCacheGetMany.mockResolvedValue({ cached: 'data:cached' })
+    render({ moments: [m] })
+    await flush()
+    expect(mocks.snsMediaCacheGetMany).not.toHaveBeenCalled()
+  })
+
   it('视频键走视频封那个 RPC，而不是图片那个', async () => {
     const v = mk({ tid: 'v1', videos: [{ url: 'u', thumb: 't', key: 'seed1', md5: 'vm', duration: 2 }] })
     render({ moments: [v], specs: [['v:vm', { md5: 'vm', kind: 'video', seed: 'seed1', thumb: 't' }]] })
     await flush()
     expect(mocks.apiGetSnsVideoCoverDataUrl).toHaveBeenCalledTimes(1)
-    expect(mocks.apiGetSnsVideoCoverDataUrl).toHaveBeenCalledWith({ md5: 'vm', key: 'seed1', thumb: 't' })
+    // `offline` 是新加的字段，原有三件（md5/key/thumb）必须逐字不变
+    const vopts = mocks.apiGetSnsVideoCoverDataUrl.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+    expect(vopts).toMatchObject({ md5: 'vm', key: 'seed1', thumb: 't' })
     expect(mocks.apiGetSnsImageDataUrl).not.toHaveBeenCalled()
   })
 
-  it('IDB 批量恢复：进面板先把已解过的捞回来，捞过的键之后不再走单张 RPC', async () => {
+  it('IDB 批量恢复**只在无网时**做（有网时不该先拿旧缓存顶上）', async () => {
     const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
     mocks.snsMediaCacheGetMany.mockResolvedValueOnce({ cached: 'data:cached' })
     // 先只给列表、不给 spec：这就是「卡片还没渲染到那一格」时 IDB 恢复要独立起作用的形状
+    setOnline(false)
     render({ moments: [m] })
     await flush()
     expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'], true)

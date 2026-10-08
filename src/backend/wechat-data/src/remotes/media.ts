@@ -452,19 +452,40 @@ interface SnsImageOptions {
   token?: string
   /** `<enc key>` 解密种子（即 `im.key`）：CDN 必需，否则解不出图。 */
   seed?: string
+  /**
+   * 界面侧判定「当前无网」（`navigator.onLine === false`）。缺省按**有网**处理。
+   *
+   * 为什么缺省是有网而不是无网：判错的方向不一样 —— 误判成有网只是多走一趟网络；
+   * 误判成无网会让用户永远看不到刚上传的新图，而且**没有任何报错**。
+   */
+  offline?: boolean
 }
 
 /**
- * 朋友圈取图：**CDN 优先**（实测 ~200ms），失败回落本机解密。
+ * 朋友圈取图：**有网先走网络、无网只用本地**（2026-10-08 产品规则）。
  *
- * 为什么先 CDN：本机那条在缓存未命中时会走「读文件 + 解密 + 哈希」全量兜底
- * （实测 12–21s，最坏 130s，见 `sns-image.ts` 顶部日志）；而 CDN 通路实测 200、
- * 响应经 `WxIsaac64` 解密后就是 JPEG（见 `sns-cdn-image.ts`）。
- * 三样（url/token/seed）缺一就保持旧行为（纯本机）—— 向后兼容，既有调用点不受影响。
+ * ## 两条分支
  *
- * @param rc - 运行上下文（只用到 `dirs()`）。
- * @param options - 见 `SnsImageOptions`。
- * @returns 图片 data URL；两条路都失败时把原因合并，便于区分「本地没有」与「CDN 失败」。
+ *  · **有网**（`offline` 非真）：直接向微信 CDN 要 `/0` 那份**原图**，取回即落盘到
+ *    `decoded_images/sns-media/`（下次无网时就有本地可用了）。**不做任何本地判断在前** ——
+ *    先查落盘缓存/本机原图的做法会让用户看到一张旧的、甚至缩略的图，而那并不是他要的。
+ *  · **无网**：只用本地，且优先用**下载过的那份**（落盘原图缓存），再退到微信原始目录，
+ *    最后才退到缩略图。全程不发任何网络请求。
+ *
+ * ## 有网时为什么仍保留本地回落
+ *
+ * 「CDN 失败」与「断网」是两件事：出网被防火墙拦、对端 5xx、token 过期都会让 CDN 失败，
+ * 而这时本机原图就在硬盘上。此时给一张本机图，好过一片空白 —— 所以回落只在**网络这一趟
+ * 失败之后**发生，且日志明确记成回落，不会被误读成「正常走本地」。
+ *
+ * ## 顺序上刻意把缩略图放在最后
+ *
+ * 过去 `msg/attach` 里的 `_t/_h/_b` 缩略图排在 CDN **之前**，本机只要有一张缩略图，
+ * CDN 的原图就永远轮不到（「拿不到高清」就是这么来的）。
+ *
+ * @param rc - 运行上下文（只用 `dirs()` 与 `rawWechatBase()`）。
+ * @param options - 见 {@link SnsImageOptions}。
+ * @returns 图片 data URL；两路都失败时把原因合并，便于区分「本地没有」与「CDN 失败」。
  */
 async function snsImageWithCdnFirst(
   rc: { dirs: () => { decrypted: string; decoded: string }; rawWechatBase: (decrypted: string) => string },
@@ -478,49 +499,57 @@ async function snsImageWithCdnFirst(
   const token = String(options.token ?? '')
   const seed = String(options.seed ?? '')
   const decoded = dirs.decoded
+  const offline = options.offline === true
   // 追踪：卡片只显示默认文案时，唯一能取证的地方就是这里（应用日志 app.log）
-  const tag = '[sns-image] md5=' + options.md5.slice(0, 8)
+  const tag = '[sns-image] md5=' + options.md5.slice(0, 8) + (offline ? ' [无网]' : '')
+  const hasCdn = url !== '' && token !== '' && seed !== ''
 
-  // ① 落盘原图缓存 —— 「每次进入自动用高清原图覆盖缩略图」就落在这里。
-  //    它在最前面，因为它一定是原图（写入时只收确认是原图的字节），而且是纯读盘。
-  const stored = lookupOriginal(decoded, options.md5)
-  if (stored !== null) {
-    console.error(tag + ' 原图缓存命中（长度 ' + String(stored.bytes.length) + '）')
-    return { url: originalAsDataUrl(stored) }
+  /** 本机那条：`allowThumb=false` 只要原图，`true` 连缩略图一起收。 */
+  const local = (allowThumb: boolean) =>
+    resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, allowThumb)
+
+  if (!offline) {
+    // ① 有网：直接取 CDN 原图，取回即落盘（下次无网时就有本地可用了）。
+    //
+    // ⚠️ 这里原先紧跟着一句断言「整份 XOR 用我们这份 WxIsaac64 构建做不到，参考项目另有一份
+    // WASM 才能一次生成全量密钥流」。**那句话是错的**，别再照它去换二进制 ——
+    // 2026-10-08 用 `tests/sns-image-tail-probe.manual.spec.ts`（真库/真网/真 WASM）测过：
+    //   1. 两份 WASM **完全同一份**（SHA-1 均为 DCA796BACEC37D8522C7，同为 3696.8 KB）；
+    //   2. 参考项目自己的 keystream CLI 生成 131072/262144/400000 三档都返回**全量**；
+    //   3. 分块生成与一次性生成**逐字节相同**（所以 `sns-keystream.ts` 里那句「分块等价」是对的）；
+    //   4. 整份解密后 **9/9 张**都得到合法 JPEG（头 `ff d8 ff e0`）。
+    // 真正的病因是 `sns-cdn-image.ts` 的**结尾判据过严**：微信 CDN 在 EOI 之后恒定挂一段
+    // 24 字节签名块，旧判据要求「最后两字节必须是 ff d9」，于是把好图全判成失败。
+    if (hasCdn) {
+      const cdn = await fetchSnsCdnImage(url, token, seed)
+      if (cdn.dataUrl) {
+        saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl)
+        console.error(tag + ' CDN 原图（长度 ' + String(cdn.dataUrl.length) + '，已落盘）')
+        return { url: cdn.dataUrl }
+      }
+      console.error(tag + ' CDN 失败：' + String(cdn.error))
+    } else {
+      console.error(tag + ' 缺 CDN 三件套（url/token/seed），只能走本机')
+    }
+  } else {
+    // ② 无网：只用本地，且**优先用下载过的那份**。
+    const stored = lookupOriginal(decoded, options.md5)
+    if (stored !== null) {
+      console.error(tag + ' 已下载的原图（长度 ' + String(stored.bytes.length) + '）')
+      return { url: originalAsDataUrl(stored) }
+    }
   }
 
-  // ② 本机**原图**（Sns/Img + msg/attach 的非缩略图那份）。拿到就写穿落盘缓存。
-  const localOriginal = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, false)
+  // ③ 本机原图（微信原始目录里的那份，落地即写穿落盘缓存）。
+  const localOriginal = local(false)
   if (localOriginal.url) {
-    console.error(tag + ' 本机原图命中（长度 ' + String(localOriginal.url.length) + '）')
+    console.error(tag + ' 本机原图（长度 ' + String(localOriginal.url.length) + '）')
     saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url)
     return localOriginal
   }
 
-  // ③ CDN `/0` —— 也是原图（`snsCdnUrl` 把尺寸段归一到 /0）。拿到同样写穿。
-  //
-  // ⚠️ 这里原先紧跟着一句断言「整份 XOR 用我们这份 WxIsaac64 构建做不到，参考项目另有一份
-  // WASM 才能一次生成全量密钥流」。**那句话是错的**，别再照它去换二进制 ——
-  // 2026-10-08 用 `tests/sns-image-tail-probe.manual.spec.ts`（真库/真网/真 WASM）测过：
-  //   1. 两份 WASM **完全同一份**（SHA-1 均为 DCA796BACEC37D8522C7，同为 3696.8 KB）；
-  //   2. 参考项目自己的 keystream CLI 生成 131072/262144/400000 三档都返回**全量**；
-  //   3. 分块生成与一次性生成**逐字节相同**（所以 `sns-keystream.ts` 里那句「分块等价」是对的）；
-  //   4. 整份解密后 **9/9 张**都得到合法 JPEG（头 `ff d8 ff e0`）。
-  // 真正的病因是 `sns-cdn-image.ts` 的**结尾判据过严**：微信 CDN 在 EOI 之后恒定挂一段
-  // 24 字节签名块，旧判据要求「最后两字节必须是 ff d9」，于是把好图全判成失败。
-  if (url !== '' && token !== '' && seed !== '') {
-    const cdn = await fetchSnsCdnImage(url, token, seed)
-    if (cdn.dataUrl) {
-      console.error(tag + ' CDN 原图命中（长度 ' + String(cdn.dataUrl.length) + '）')
-      saveOriginalFromDataUrl(decoded, options.md5, cdn.dataUrl)
-      return { url: cdn.dataUrl }
-    }
-    console.error(tag + ' CDN 失败：' + String(cdn.error))
-  }
-
-  // ④ 本机**缩略图**兜底 —— 顺序上刻意放在最后。过去它排在 CDN 之前，于是本机只要有
-  //    一张 `_t` 缩略图，CDN 的原图就永远轮不到（「高清」拿不到就是这么来的）。
-  const localThumb = resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, true)
+  // ④ 本机缩略图兜底 —— 顺序上刻意放在最后。
+  const localThumb = local(true)
   if (localThumb.url) {
     console.error(tag + ' 本机缩略图兜底（长度 ' + String(localThumb.url.length) + '）')
     // ⚠️ 刻意**不**写穿：缩略图进了落盘缓存就会变成永久的「高清」，正好毁掉这次的目的。
@@ -529,7 +558,8 @@ async function snsImageWithCdnFirst(
   }
 
   console.error(tag + ' 各路都失败：本机原图=' + String(localOriginal.error)
-    + ' / CDN=' + String(url !== '' && token !== '' && seed !== '' ? '见上' : '未配置')
+    + ' / CDN=' + (hasCdn ? '见上' : '未配置')
     + ' / 本机缩略图=' + String(localThumb.error))
-  return { error: (localOriginal.error ?? '本地解码失败') + '；CDN：' + (url === '' || token === '' || seed === '' ? '缺少 CDN 三件套' : '取图失败') }
+  return { error: (localOriginal.error ?? '本地解码失败')
+    + '；CDN：' + (hasCdn ? '取图失败' : '缺少 CDN 三件套') }
 }

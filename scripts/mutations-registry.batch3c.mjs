@@ -737,10 +737,10 @@ MUTATIONS_BATCH3C.push(
   // ── 2026-10-08 高清原图（自动取原图 + 落盘 + 每次进入覆盖缩略图）M401–M406 ──
   {
     id: "M401-sns-original-lane-downgraded-to-thumb",
-    why: "把「只要原图」那一档悄悄改成 allowThumb=true ⇒ 本机缩略图又赢过 CDN 原图，「高清」功能看起来还在、实际永远拿不到原图。这类回归界面上完全看不出来",
+    why: "把「只要原图」那一档悄悄改成 allowThumb=true ⇒ 本机缩略图又赢过 CDN 原图，「高清」功能看起来还在、实际永远拿不到原图。这类回归界面上完全看不出来。（2026-10-08 改锚点：取图改成先网后本后，本机两档收进 `local(allowThumb)` 闭包，锚点随之从内联调用改为 `local(false)`）",
     file: "src/backend/wechat-data/src/remotes/media.ts",
-    from: "options.md5, options.timelineId, options.mediaId, false)",
-    to: "options.md5, options.timelineId, options.mediaId, true)",
+    from: "  const localOriginal = local(false)",
+    to: "  const localOriginal = local(true)",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
   {
@@ -806,6 +806,31 @@ MUTATIONS_BATCH3C.push(
     file: "src/client/ui-wechat/src/client/pages/wechat-data/media-cache.ts",
     from: "v: MEDIA_ENTRY_V",
     to: "v: 0",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  // ── 2026-10-08 第三次修：取图口径改成「先网后本」（有网只走网络，无网只用本地） M410–M412 ──
+  {
+    id: "M410-sns-online-branch-loses-cdn-first",
+    why: "让已下载的原图缓存压过 CDN（把落盘缓存提到分支判断之前）⇒ 有网时也先返回本地那份，「有网直接取原图」这条产品规则被悄悄改回「本地优先」。界面上看不出区别（都是能显示的原图），只有本该更新的图永远停在旧版本",
+    file: "src/backend/wechat-data/src/remotes/media.ts",
+    from: "  if (!offline) {",
+    to: "  if (false) {",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M411-sns-frontend-ignores-offline-signal",
+    why: "界面不再把网络状态告诉后端（恒传 offline=false）⇒ **断网时也会去出网**，于是每一次取图都要等一个注定失败的请求 + 超时；而 CDN 一失败又回落本地，于是用户感到的是「图片出不来而且很慢」。真实病因（断网）被完全掩盖",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts",
+    from: "          opts.offline = offline",
+    to: "          opts.offline = false",
+    spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
+  },
+  {
+    id: "M412-sns-frontend-restores-idb-when-online",
+    why: "有网时也先从 IndexedDB 恢复（去掉 isOffline 闸门）⇒ 用户看到的还是上一次那张（可能是缩略图、可能是旧的），而网络明明是通的。少这一行就等于把「不用经过本地判断」这条规则作废，且界面完全不报错",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-media.ts",
+    from: "    if (!isOffline()) return\n    const keys = collectMediaKeys(moments)",
+    to: "    const keys = collectMediaKeys(moments)",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
 )

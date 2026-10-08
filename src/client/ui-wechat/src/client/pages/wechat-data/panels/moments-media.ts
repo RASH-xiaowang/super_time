@@ -15,6 +15,19 @@
  * 面板只读它。所以这个 ref 必须在 render 期间就能被卡片写到 —— 把它挪进 `useEffect`
  * 会让观察器永远查不到 spec，表现是「滚动到图片也不解密」。
  *
+ * ## 取图口径：先网后本（2026-10-08 产品规则）
+ *
+ * **有网**时直接向微信 CDN 要 `/0` 那份**原图**显示，取回即由后端落盘；
+ * **只有无网时**才用已下载的本地缓存（先 IndexedDB，再让后端走「已下载原图 → 微信原始目录」）。
+ *
+ * 因此有网时本模块**不做任何本地判断**：不查 IndexedDB 单张、不查 IndexedDB 批量恢复。
+ * 少了这个约束，用户看到的会还是上一次那张（可能是缩略图、可能是旧的），而网络明明是通的 ——
+ * 而且界面上看不出任何异常。
+ *
+ * 网络状态取自 `navigator.onLine`（与 `remote-img.tsx` 的离线短路同一个信号），由
+ * {@link isOffline} 在**取图那一刻**读一次并随 RPC 传给后端。不做成 state：它变了不必
+ * 重排已显示的图，而做成 state 会在断网瞬间把整屏图片重置成「正在取」。
+ *
  * @module moments-media
  */
 import { useEffect, useRef, useState } from 'react'
@@ -190,6 +203,9 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const mediaFetching = useRef(false)
   const mediaObserved = useRef<IntersectionObserver | null>(null)
 
+  /** 当前是否无网。读法与「为什么不做成 state」见文件头「先网后本」。 */
+  const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false
+
   const drainMedia = async (): Promise<void> => {
     if (mediaFetching.current) return
     mediaFetching.current = true
@@ -197,8 +213,9 @@ export function useMomentsMedia(input: MomentsMediaInput): {
       while (mediaQueue.current.length > 0) {
         const batch = mediaQueue.current.splice(0, MEDIA_BATCH)
         const updates: Record<string, string> = {}
+        const offline = isOffline()
         await Promise.all(batch.map(async (it) => {
-          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string } = {
+          const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string; offline?: boolean } = {
     md5: it.md5,
     // 只给图片带 CDN 三件套（视频走另一个 RPC）；有才传 ⇒ 缺省时调用形状逐字不变
     ...(it.kind === 'img' && it.url ? { url: it.url } : {}),
@@ -209,11 +226,11 @@ export function useMomentsMedia(input: MomentsMediaInput): {
           if (it.mediaId) opts.mediaId = it.mediaId
           if (it.seed) opts.key = it.seed
           if (it.thumb) opts.thumb = it.thumb
+          // 先网后本：有网时后端直接去 CDN 要原图并落盘，无网时才用已下载的本地缓存。
+          opts.offline = offline
           try {
-            // `wantOriginal = true`：缓存里若是缩略图就当未命中，重新去后端要原图。
-            // 这是「每次进入自动用高清原图覆盖缩略图」在前端这一半的落点 —— 不这么做的话，
-            // 老版本存下来的缩略图会永久遮住后来才拿得到的高清图。
-            const cached = await snsMediaCacheGet(it.key, true)
+            // 有网时**不查**本地缓存（产品规则：有网直接取原图，先命中旧缓存就等于什么都没改）
+            const cached = offline ? await snsMediaCacheGet(it.key, true) : null
             if (cached) { updates[it.key] = cached; return }
             const r = it.kind === 'video'
               ? await apiGetSnsVideoCoverDataUrl(opts)
@@ -376,13 +393,10 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     for (const el of cells) ob.observe(el)
   }, [groups, renderKey])
 
-  // 进入面板时从 IndexedDB 恢复已解密媒体：命中即秒显，不再并发解密。
-  //
-  // ⚠️ 这里必须传 `wantOriginal = true`：缩略图条目会被过滤掉，于是它**不会**被标进
-  // `snsFetched` ⇒ 视口内的那几张随后仍会走去后端要原图 ⇒ 取到后覆盖写回缓存。
-  // 这正是「每次进入自动用高清原图覆盖缩略图」的完整闭环：恢复时跳过缩略图，
-  // 原图取到后写进同一条记录，下一次进入就直接是高清。
+  // 进面板时从 IndexedDB 恢复已解密媒体：**只在无网时做**（有网时不该先拿旧缓存顶上，
+  // 视口内那几张随后各自去后端要原图，取到后覆盖写回同一条记录）。理由见文件头。
   useEffect(() => {
+    if (!isOffline()) return
     const keys = collectMediaKeys(moments)
       .filter((k) => !snsFetched.current.has(k))
     if (keys.length === 0) return

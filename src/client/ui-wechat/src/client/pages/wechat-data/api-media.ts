@@ -127,10 +127,27 @@ import type { RemoteImageItem } from './api-core.ts'
 
 /**
  * Resolve an image message to a data URL.
- * @param options - Query options: username and message localId.
- * @returns ImageDataUrlResult.
+ *
+ * 取图口径是**先网后本**（2026-10-08 产品规则）：有网时后端直接向微信 CDN 要 `/0` 那份原图，
+ * 取回即落盘；**只有无网时**才用已下载的本地缓存。所以界面必须把网络状态告诉后端 ——
+ * `offline` 缺省按「有网」处理（判错的方向不一样：误判成有网只是多走一趟网络，
+ * 误判成无网会让用户永远看不到新图且没有任何报错）。
+ *
+ * @param options - `md5` 必给；CDN 三件套（`url`/`token`/`seed`）齐全才有网络通路；
+ *   `timelineId`+`mediaId` 让本机那条走 O(1) 的缓存键路径。
+ * @returns ImageDataUrlResult（`thumb: true` 表示这次只能给缩略图）。
  */
-export async function apiGetSnsImageDataUrl(options: { md5: string; timelineId?: string; mediaId?: string }): Promise<ImageDataUrlResult> {
+export async function apiGetSnsImageDataUrl(options: {
+  md5: string
+  timelineId?: string
+  mediaId?: string
+  url?: string
+  token?: string
+  seed?: string
+  key?: string
+  thumb?: string
+  offline?: boolean
+}): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getSnsImageDataUrl(options))
 }
 /**
