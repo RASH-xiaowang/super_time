@@ -62,7 +62,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
   // 灯箱状态 + 缩放/平移/旋转/原图 + 方向键切图，交给 moments-viewer.ts。
   // 位置有约束：必须在 useMomentsMedia 之前（媒体层要按 viewer 决定给哪一张做离线解码）。
   const { viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate,
-    viewOriginal, setViewOriginal, dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex } =
+    dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex } =
     useMomentsViewer()
   // 提示语自动消失（L20）：原手写的 3 处 `setTimeout(…, 6000)` 已由 hook 统一管理。
   // 复制结果与各类失败提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
@@ -122,6 +122,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     scrollRef,
     groups,
     renderKey: momentRenderKey,
+    detailKey: detail?.m.tid ?? '',
   })
 
   // 导出弹窗 + 手动重同步整个交给 moments-export.ts。
@@ -332,8 +333,6 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         snsImgs={snsImgs}
         copyCurrentLink={copyCurrentLink}
         saveCurrentImage={saveCurrentImage}
-        viewOriginal={viewOriginal}
-        setViewOriginal={setViewOriginal}
         viewRotate={viewRotate}
         setViewRotate={setViewRotate}
         viewZoom={viewZoom}
@@ -353,6 +352,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
         setViewer={setViewer}
         setAuthorFilter={setAuthorFilter}
         snsImgs={snsImgs}
+        mediaKeySpec={mediaKeySpec}
         videoSrcs={videoSrcs}
         videoMeta={videoMeta}
         setVideoMeta={setVideoMeta}

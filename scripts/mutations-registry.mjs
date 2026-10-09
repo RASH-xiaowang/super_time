@@ -28,6 +28,7 @@
 import { MUTATIONS_BATCH3 } from './mutations-registry.batch3.mjs'
 import { MUTATIONS_BATCH3B } from './mutations-registry.batch3b.mjs'
 import { MUTATIONS_BATCH3C } from './mutations-registry.batch3c.mjs'
+import { MUTATIONS_BATCH3D } from './mutations-registry.batch3d.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -871,4 +872,4 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D]

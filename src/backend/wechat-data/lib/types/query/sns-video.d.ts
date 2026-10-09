@@ -58,8 +58,20 @@ export declare function loadSnsVideoBytes(args: {
     error?: string;
 }>;
 /**
- * 取回朋友圈视频封面（本机没缓存时的远端兜底），同样按需解密。
- * @param remoteUrl - XML 里的 `<thumb>`。
+ * 取回朋友圈视频封面，同样按需解密。
+ *
+ * ## 为什么不是「一律整份解」（2026-10-09 实测后定的）
+ *
+ * 现场探针 `sns-video-cover-probe.manual.spec.ts` 在真库真网上量了 12 个封面：
+ * **0 个超过 128 KB**，全部密文（头 `4f 44 5a d8`），只解头就拿到 `eoiFromEnd=0` 的完整 JPEG。
+ * 也就是说「只解头」对封面**当下是完全正确的**，改成一律整份解等于让每张封面白付约 3 倍 CPU
+ * 而收益为零。所以这里改成**按大小分流 + 结尾校验兜底**：
+ *
+ *   · 实收 > 128 KB ⇒ 只解头**必然**留下密文尾部 ⇒ 直接整份解；
+ *   · 实收 ≤ 128 KB ⇒ 只解头就是整份解（省 CPU），再用 `coverEndsComplete` 校验结尾，
+ *     万一不完整（历史数据换了加密策略、或将来出现大封面）再回落整份解一次。
+ *
+ * @param remoteUrl - XML 里的 `<thumb>`（地址自带 `token` 与 `idx=1`，不需要再拼）。
  * @param opts - 同 {@link fetchSnsVideoDataUrl}。
  * @returns data URL，或错误说明。
  */

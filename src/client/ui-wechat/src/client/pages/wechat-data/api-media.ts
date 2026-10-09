@@ -393,6 +393,13 @@ export async function apiGetSnsVideoCoverDataUrl(options: {
   thumb?: string
   /** XML 里的 `<enc key>`：CDN 加密流的解密种子。 */
   key?: string
+  /**
+   * 界面判定当前无网时置 true（2026-10-09 加）。
+   *
+   * 为什么要它：封面这路原来压根没有这个开关，本机优先、无网也照样去 CDN
+   * ⇒ 无网时必然白等一个超时窗口。加了它之后与图片那路同一口径（先网后本）。
+   */
+  offline?: boolean
 }): Promise<ImageDataUrlResult> {
   return unwrap(await remote().getSnsVideoCoverDataUrl(options))
 }

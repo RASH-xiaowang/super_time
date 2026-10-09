@@ -72,7 +72,9 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-09-28（E1 性能修复）：334 → 362。增量全部是**新增的 `getEmoticonDataUrls`
   // 批量壳**（签名 + 文档 + 一行转发）—— 算法体已搬到 `query/emoticon-batch.ts`，
   // 所以这里只长了那一层壳。想把它降回去就得把别的域也搬出去，不是靠改这个数字。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  332',
+  // 2026-10-09：332 → 321。视频封面那路（`getSnsVideoCoverDataUrl`）也照同一范式搬去了
+  // 模块级 `snsVideoCoverWithCdnFirst`，方法体退回「签名 + 一行转发」，净减 11 行。
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  321',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsPanel  328',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  314',
   // 2026-09-30：给年报加「资金 / 撤回 / 群聊」三个字段时，先把 noteEmoji 与页脚首尾两条

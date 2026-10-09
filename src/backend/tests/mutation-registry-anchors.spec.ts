@@ -97,7 +97,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
  *   · **M415** 级别标签从 renderer 改掉 ⇒ 分不清一行是渲染层还是主进程写的；
  *   · **M416** 默认档位悄悄放宽成全收 ⇒ 把 2 MB × 3 份轮转冲掉，真正要查的行被挤掉。
  */
-const REGISTRY_MIN = 392
+const REGISTRY_MIN = 408
 
 /**
  * 表里除 `to` 之外的五个字段都必须是非空字符串（缺一个字段，跑手就会报成"锚点失效"这种误导性结论）。
@@ -188,6 +188,7 @@ describe('变异登记表的锚点不许腐烂', () => {
       'scripts/mutations-registry.batch3.mjs',
       'scripts/mutations-registry.batch3b.mjs',
       'scripts/mutations-registry.batch3c.mjs',
+      'scripts/mutations-registry.batch3d.mjs',
     ]
     const FIELD_LINE = /^(\s*)(id|why|file|from|to|spec): "/
     const CLEAN_LINE = /^\s*(?:id|why|file|from|to|spec): "(?:[^"\\]|\\.)*",?$/

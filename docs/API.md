@@ -1373,7 +1373,7 @@ Resolve one SNS (朋友圈) media to a base64 data URL —— **先网后本**�
 ### `getSnsVideoCoverDataUrl`
 
 ```ts
-async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult>
+async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean }): Promise<ImageDataUrlResult>
 ```
 
 Resolve one SNS (朋友圈) video cover.  先本机缓存（明文、离线）；没有缓存再按 XML 里的 `<thumb>` 从微信 CDN 取回， 取回要过隐私闸门，并按 `<enc key>` 解密加密头（封面同样是加密流）。 

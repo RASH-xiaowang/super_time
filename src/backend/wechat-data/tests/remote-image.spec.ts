@@ -254,19 +254,30 @@ describe('M23：白名单判在发请求之前（两处既有的 SNS 取回入�
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join('\n')
 
-  for (const [handler, fetchFn] of [
-    ['getSnsVideoCoverDataUrl', 'fetchSnsCoverDataUrl'],
-    ['getSnsVideoDataUrl', 'fetchSnsVideoDataUrl'],
+  for (const [entry, scope, fetchFn] of [
+    // 2026-10-09：封面那路的算法体搬到了模块级 `snsVideoCoverWithCdnFirst`
+    // （与 `snsImageWithCdnFirst` 同一范式），方法体只剩「签名 + 一行转发」。
+    // 所以这里查的是**真正持有逻辑的那个函数**，另加一条「方法确实转发过去」的接线断言 ——
+    // 否则把 `scope` 改成方法自己、白名单判据留在 helper 里，这条守卫就会变成恒真。
+    ['getSnsVideoCoverDataUrl', 'snsVideoCoverWithCdnFirst', 'fetchSnsCoverDataUrl'],
+    ['getSnsVideoDataUrl', 'getSnsVideoDataUrl', 'fetchSnsVideoDataUrl'],
   ] as const) {
-    it(`${handler} 在白名单判过之后才去取`, () => {
-      const start = src.indexOf(`${handler}(options`)
-      expect(start, `找不到 ${handler} 的处理函数`).toBeGreaterThan(-1)
-      const body = src.slice(start, src.indexOf('\n    },', start))
+    it(`${entry} 在白名单判过之后才去取`, () => {
+      const start = src.indexOf(`${entry}(options`)
+      expect(start, `找不到 ${entry} 的处理函数`).toBeGreaterThan(-1)
+      const method = src.slice(start, src.indexOf('\n    },', start))
+      let body = method
+      if (scope !== entry) {
+        expect(method, `${entry} 必须转发给 ${scope}`).toContain(`return ${scope}(`)
+        const iScope = src.indexOf(`async function ${scope}(`)
+        expect(iScope, `找不到 ${scope}`).toBeGreaterThan(-1)
+        body = src.slice(iScope, src.indexOf('\n}', iScope))
+      }
       const guard = body.indexOf('wechatCdnHostAllowed(')
       const taken = body.indexOf(`${fetchFn}(`)
-      expect(guard, `${handler} 没有判主机白名单`).toBeGreaterThan(-1)
-      expect(taken, `${handler} 里没有取回调用，前提不成立`).toBeGreaterThan(-1)
-      expect(guard, `${handler}：白名单必须判在发请求之前`).toBeLessThan(taken)
+      expect(guard, `${entry} 没有判主机白名单`).toBeGreaterThan(-1)
+      expect(taken, `${entry} 里没有取回调用，前提不成立`).toBeGreaterThan(-1)
+      expect(guard, `${entry}：白名单必须判在发请求之前`).toBeLessThan(taken)
     })
   }
 })

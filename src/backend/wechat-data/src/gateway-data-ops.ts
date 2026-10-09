@@ -808,7 +808,7 @@ export abstract class GatewayDataOps extends GatewayAskOps {
    * @returns ImageDataUrlResult。
    */
   @Remote('getSnsVideoCoverDataUrl')
-  async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult> {
+  async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean }): Promise<ImageDataUrlResult> {
   return this.mediaRemotes().getSnsVideoCoverDataUrl(options)
   }
 

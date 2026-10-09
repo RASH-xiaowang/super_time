@@ -27,7 +27,7 @@ import { join } from 'node:path'
 // 宿主层的 CommonJS 重试封装（无类型声明：这两个按 any 用）
 import { TIMEOUT_ERROR_NAME, fetchWithRetry } from '../../../llm-retry.js'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
-import { decryptSnsHead } from './sns-keystream.ts'
+import { decryptSnsAll, decryptSnsHead, SNS_HEAD_ENCRYPTED_BYTES } from './sns-keystream.ts'
 import { missWithScanNotes, safeReaddir, snsMonthRoots } from './sns-scan.ts'
 import type { ScanNotes } from './sns-scan.ts'
 
@@ -239,8 +239,50 @@ function imageMimeOf(buf: Buffer): 'jpeg' | 'png' | null {
 }
 
 /**
- * 取回朋友圈视频封面（本机没缓存时的远端兜底），同样按需解密。
- * @param remoteUrl - XML 里的 `<thumb>`。
+ * 结尾标记的搜索窗口，与 `sns-cdn-image.ts` 的 `END_SCAN_WINDOW` 同口径。
+ *
+ * 为什么要留一个窗口而不是严格要求「最后两字节就是 EOI」：微信 CDN 在 JPEG 的 EOI 之后
+ * 恒定挂 24 字节签名块（实测朋友圈图片与评论图都是），严格要求末尾会让**每一张**都判失败。
+ */
+const COVER_END_SCAN_WINDOW = 256
+
+/** PNG 的 IEND 块固定是这 8 个字节。 */
+const PNG_IEND = Buffer.from([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])
+
+/**
+ * 这段字节是不是一张**完整**图片（结尾标记落在末尾窗口内）。
+ *
+ * 这条判据是本轮加的：原来 `fetchSnsCoverDataUrl` 只用 `imageMimeOf` 看**头 3 个字节**就放行，
+ * 完全没有结尾校验 ⇒ 一张尾部仍是密文的坏图会被当成好图交给渲染层。
+ * 找不到结尾标记就返回 false —— 那正是「只解了头」的典型形态。
+ */
+function coverEndsComplete(b: Buffer, mime: 'jpeg' | 'png'): boolean {
+  if (b.length === 0) return false
+  if (mime === 'png') {
+    const from = Math.max(0, b.length - COVER_END_SCAN_WINDOW - PNG_IEND.length)
+    return b.subarray(from).includes(PNG_IEND)
+  }
+  for (let i = b.length - 2; i >= Math.max(0, b.length - COVER_END_SCAN_WINDOW); i -= 1) {
+    if (b[i] === 0xff && b[i + 1] === 0xd9) return true
+  }
+  return false
+}
+
+/**
+ * 取回朋友圈视频封面，同样按需解密。
+ *
+ * ## 为什么不是「一律整份解」（2026-10-09 实测后定的）
+ *
+ * 现场探针 `sns-video-cover-probe.manual.spec.ts` 在真库真网上量了 12 个封面：
+ * **0 个超过 128 KB**，全部密文（头 `4f 44 5a d8`），只解头就拿到 `eoiFromEnd=0` 的完整 JPEG。
+ * 也就是说「只解头」对封面**当下是完全正确的**，改成一律整份解等于让每张封面白付约 3 倍 CPU
+ * 而收益为零。所以这里改成**按大小分流 + 结尾校验兜底**：
+ *
+ *   · 实收 > 128 KB ⇒ 只解头**必然**留下密文尾部 ⇒ 直接整份解；
+ *   · 实收 ≤ 128 KB ⇒ 只解头就是整份解（省 CPU），再用 `coverEndsComplete` 校验结尾，
+ *     万一不完整（历史数据换了加密策略、或将来出现大封面）再回落整份解一次。
+ *
+ * @param remoteUrl - XML 里的 `<thumb>`（地址自带 `token` 与 `idx=1`，不需要再拼）。
  * @param opts - 同 {@link fetchSnsVideoDataUrl}。
  * @returns data URL，或错误说明。
  */
@@ -250,18 +292,36 @@ export async function fetchSnsCoverDataUrl(
 ): Promise<{ url?: string; error?: string }> {
   const got = await fetchSnsMediaBytes(remoteUrl, opts)
   if (got.error || !got.bytes) return { error: got.error }
-  let bytes = got.bytes
+  const raw = got.bytes
+  // 响应体已经是图片（未加密）：原样交出去，但仍要过结尾校验 —— 缺了它就是「坏图照样交付」。
+  const plainMime = imageMimeOf(raw)
+  if (plainMime) {
+    if (!coverEndsComplete(raw, plainMime)) return { error: '微信 CDN 返回的图片结尾不完整，已拒绝交付（否则渲染层会拿到一张画不出来的图）' }
+    return { url: `data:image/${plainMime};base64,` + raw.toString('base64') }
+  }
+
+  const seed = (opts.seed || '').trim()
+  if (!seed) return { error: '微信 CDN 返回的是加密流，但该动态没有 <enc key>，无法解密' }
+  const overHeadLine = raw.length > SNS_HEAD_ENCRYPTED_BYTES
+  let bytes: Buffer
+  try {
+    bytes = overHeadLine ? (await decryptSnsAll(raw, seed)).bytes : (await decryptSnsHead(raw, seed)).bytes
+  } catch (e) {
+    return { error: `解密失败：${(e as Error)?.message ?? String(e)}` }
+  }
   let mime = imageMimeOf(bytes)
-  if (!mime) {
-    const seed = (opts.seed || '').trim()
-    if (!seed) return { error: '微信 CDN 返回的是加密流，但该动态没有 <enc key>，无法解密' }
+  if (!mime) return { error: '解密后仍不是图片（<enc key> 可能不匹配）' }
+  if (!coverEndsComplete(bytes, mime)) {
+    if (overHeadLine) return { error: '整份解密后图片结尾仍不完整，已拒绝交付' }
+    // 只解头居然不完整 ⇒ 数据形态与预期不符，退回整份解再判一次。
     try {
-      bytes = (await decryptSnsHead(bytes, seed)).bytes
+      bytes = (await decryptSnsAll(raw, seed)).bytes
     } catch (e) {
-      return { error: `解密失败：${(e as Error)?.message ?? String(e)}` }
+      return { error: `整份解密失败：${(e as Error)?.message ?? String(e)}` }
     }
     mime = imageMimeOf(bytes)
-    if (!mime) return { error: '解密后仍不是图片（<enc key> 可能不匹配）' }
+    if (!mime) return { error: '整份解密后仍不是图片（<enc key> 可能不匹配）' }
+    if (!coverEndsComplete(bytes, mime)) return { error: '整份解密后图片结尾仍不完整，已拒绝交付' }
   }
   return { url: `data:image/${mime};base64,` + bytes.toString('base64') }
 }

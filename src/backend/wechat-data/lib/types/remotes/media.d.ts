@@ -175,6 +175,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         mediaId?: string;
         thumb?: string;
         key?: string;
+        offline?: boolean;
     }): Promise<ImageDataUrlResult>;
     getSnsVideoDataUrl(options: {
         md5?: string;

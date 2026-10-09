@@ -25,6 +25,26 @@
  * `moments-media.ts` 与 `remotes/media.ts` 的四路排序），界面这一侧只认解好的字节。
  * 取不到就如实说取不到（`empty` 分支带真实原因），而不是拿一个注定渲染失败的地址去骗一次 `<img>`。
  * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M407。
+ *
+ * ## 同一条规矩的另外三处（2026-10-09 一并清掉）
+ *
+ * 上面那条兜底在 2026-10-08 只从**图片格**上删掉了，同一个文件里还有三处同形态的，
+ * 以及 `moments-portals.tsx` 里五处，全都因为同一件事而画不出图：交给 `<img src>` 的
+ * 是**密文地址**，而库里这些地址又几乎全是 `http://`（实测 3219 条里只有 9 条 https，
+ * 而 `proxyableSrc` 只收 `https:`/`data:`/`blob:`）⇒ 那些 `|| proxyableSrc(...)` 兜底
+ * 绝大多数时候**恒为空串**，等于「没有来源也假装有来源」；少数命中 https 的则是密文，
+ * 必然走 `failed`。四处分别是：
+ *
+ *   · `coverSrc`（文章封面用的是本动态的**首图**，thumb/url 同样是密文）；
+ *   · 视频封面（实测封面密文头 `4f 44 5a d8`）；
+ *   · 评论图（`img.thumb`/`img.url`，实测**裸地址 5/5 返 HTTP 400**，因为缺 `token`）；
+ *   · 详情浮层里的同三处（见 `moments-portals.tsx` 文件头）。
+ *
+ * 评论图那一处还多一层：它必须带 `url`/`token`/`seed` 去后端才取得到图，所以这里
+ * 把 `mediaKeySpec` 登记补齐（实测 `sns-comment-image-probe.manual.spec.ts`：裸地址
+ * 5/5 返 400、`snsCdnUrl` 补 token 后 5/5 返 200）。批处理那一侧的门也从 `kind === 'img'`
+ * 放宽成 `kind !== 'video'`（`moments-media.ts`）—— 否则评论图又被关在门外，且**不报错**。
+ * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M417–M427。
  */
 import { Fragment } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -32,7 +52,6 @@ import { clickableKey } from '../ui/kit.tsx'
 import { imgKey, replyTarget } from './moments-support.tsx'
 import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar } from './moments-support.tsx'
-import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
@@ -102,6 +121,25 @@ function MomentNoSource({ hint, detail }: { hint: string; detail?: string }): Re
   )
 }
 
+/**
+ * 评论图的取图接线。
+ *
+ * `url`/`token`/`seed` 缺一不可：实测裸 `<url>`（不带 `token`/`idx=1`）5/5 返 HTTP 400、
+ * 0 字节，而补上 token 后 5/5 返 200（`sns-comment-image-probe.manual.spec.ts`）。
+ * 有则传、没有就不传 —— 这样后端在缺件时仍能回落到本机 md5 解密那条老路。
+ */
+function commentImageSpec(img: { md5?: string; url?: string; token?: string; seed?: string; thumb?: string }): MediaKeySpec {
+  return {
+    md5: img.md5 ?? '',
+    kind: 'comment',
+    ...(img.url ? { url: img.url } : {}),
+    ...(img.token ? { token: img.token } : {}),
+    ...(img.seed ? { seed: img.seed } : {}),
+    ...(img.thumb ? { thumb: img.thumb } : {}),
+  }
+}
+
+
 export function MomentsCard({
   m, privacy, snsImgs, snsErrs,
   articleCovers, expandedTextByCard, expandedSocialByCard,
@@ -117,7 +155,7 @@ export function MomentsCard({
 }: MomentsCardProps): React.JSX.Element {
   const cover = m.images[0]
   const isArticle = m.contentType === 3
-  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || proxyableSrc(cover?.thumb, cover?.url)
+  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || ''
   const textExpanded = expandedTextByCard.has(m.tid)
   const socialExpanded = expandedSocialByCard.has(m.tid)
   const commentShown = commentCounts[m.tid] ?? 5
@@ -186,7 +224,7 @@ export function MomentsCard({
           <div className={css.videos}>
             {m.videos.map((v, vi) => {
               const vk = videoCoverKey(v)
-              const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
+  const vCover = vk ? snsImgs[vk] : undefined
               if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
               const src = vk ? videoSrcs[vk] : undefined
               const playing = !!src
@@ -329,11 +367,11 @@ export function MomentsCard({
                       {c.image && (() => {
                         const img = c.image
                         const cdata = (img.md5 && snsImgs[img.md5]) || ''
-                        const cfk = m.tid + ':c' + String(ci)
-                        if (img.md5) mediaKeySpec.current.set(img.md5, { md5: img.md5, kind: 'comment' })
-                        if (cdata || proxyableSrc(img.thumb, img.url)) return (
+                        // 补上 token 后 5/5 返 200。之前这里只登记 md5，后端拿不到地址可取。
+                        if (img.md5) mediaKeySpec.current.set(img.md5, commentImageSpec(img))
+                        if (cdata) return (
                           <RemoteImg
-                            src={cdata || proxyableSrc(img.thumb, img.url)}
+                            src={cdata}
                             alt=""
                             loading="lazy"
                             decoding="async"

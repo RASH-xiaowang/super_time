@@ -4033,6 +4033,10 @@ function parseSnsLikesComments(xml) {
       if (imd) image.md5 = imd;
       const imid = xmlTagText2(ib, "media_id") ?? "";
       if (imid) image.mediaId = imid;
+      const itok = unescapeXml(xmlTagText2(ib, "token") ?? "");
+      if (itok) image.token = itok;
+      const ikey = unescapeXml(xmlTagText2(ib, "key") ?? "");
+      if (ikey) image.seed = ikey;
       if (Object.keys(image).length > 0) comment.image = image;
     }
     comments.push(comment);
@@ -28124,21 +28128,49 @@ function imageMimeOf(buf) {
   if (buf.length >= 8 && buf.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") return "png";
   return null;
 }
+var COVER_END_SCAN_WINDOW = 256;
+var PNG_IEND = Buffer.from([73, 69, 78, 68, 174, 66, 96, 130]);
+function coverEndsComplete(b, mime) {
+  if (b.length === 0) return false;
+  if (mime === "png") {
+    const from = Math.max(0, b.length - COVER_END_SCAN_WINDOW - PNG_IEND.length);
+    return b.subarray(from).includes(PNG_IEND);
+  }
+  for (let i = b.length - 2; i >= Math.max(0, b.length - COVER_END_SCAN_WINDOW); i -= 1) {
+    if (b[i] === 255 && b[i + 1] === 217) return true;
+  }
+  return false;
+}
 async function fetchSnsCoverDataUrl(remoteUrl, opts = {}) {
   const got = await fetchSnsMediaBytes(remoteUrl, opts);
   if (got.error || !got.bytes) return { error: got.error };
-  let bytes = got.bytes;
+  const raw = got.bytes;
+  const plainMime = imageMimeOf(raw);
+  if (plainMime) {
+    if (!coverEndsComplete(raw, plainMime)) return { error: "\u5FAE\u4FE1 CDN \u8FD4\u56DE\u7684\u56FE\u7247\u7ED3\u5C3E\u4E0D\u5B8C\u6574\uFF0C\u5DF2\u62D2\u7EDD\u4EA4\u4ED8\uFF08\u5426\u5219\u6E32\u67D3\u5C42\u4F1A\u62FF\u5230\u4E00\u5F20\u753B\u4E0D\u51FA\u6765\u7684\u56FE\uFF09" };
+    return { url: `data:image/${plainMime};base64,` + raw.toString("base64") };
+  }
+  const seed = (opts.seed || "").trim();
+  if (!seed) return { error: "\u5FAE\u4FE1 CDN \u8FD4\u56DE\u7684\u662F\u52A0\u5BC6\u6D41\uFF0C\u4F46\u8BE5\u52A8\u6001\u6CA1\u6709 <enc key>\uFF0C\u65E0\u6CD5\u89E3\u5BC6" };
+  const overHeadLine = raw.length > SNS_HEAD_ENCRYPTED_BYTES;
+  let bytes;
+  try {
+    bytes = overHeadLine ? (await decryptSnsAll(raw, seed)).bytes : (await decryptSnsHead(raw, seed)).bytes;
+  } catch (e) {
+    return { error: `\u89E3\u5BC6\u5931\u8D25\uFF1A${e?.message ?? String(e)}` };
+  }
   let mime = imageMimeOf(bytes);
-  if (!mime) {
-    const seed = (opts.seed || "").trim();
-    if (!seed) return { error: "\u5FAE\u4FE1 CDN \u8FD4\u56DE\u7684\u662F\u52A0\u5BC6\u6D41\uFF0C\u4F46\u8BE5\u52A8\u6001\u6CA1\u6709 <enc key>\uFF0C\u65E0\u6CD5\u89E3\u5BC6" };
+  if (!mime) return { error: "\u89E3\u5BC6\u540E\u4ECD\u4E0D\u662F\u56FE\u7247\uFF08<enc key> \u53EF\u80FD\u4E0D\u5339\u914D\uFF09" };
+  if (!coverEndsComplete(bytes, mime)) {
+    if (overHeadLine) return { error: "\u6574\u4EFD\u89E3\u5BC6\u540E\u56FE\u7247\u7ED3\u5C3E\u4ECD\u4E0D\u5B8C\u6574\uFF0C\u5DF2\u62D2\u7EDD\u4EA4\u4ED8" };
     try {
-      bytes = (await decryptSnsHead(bytes, seed)).bytes;
+      bytes = (await decryptSnsAll(raw, seed)).bytes;
     } catch (e) {
-      return { error: `\u89E3\u5BC6\u5931\u8D25\uFF1A${e?.message ?? String(e)}` };
+      return { error: `\u6574\u4EFD\u89E3\u5BC6\u5931\u8D25\uFF1A${e?.message ?? String(e)}` };
     }
     mime = imageMimeOf(bytes);
-    if (!mime) return { error: "\u89E3\u5BC6\u540E\u4ECD\u4E0D\u662F\u56FE\u7247\uFF08<enc key> \u53EF\u80FD\u4E0D\u5339\u914D\uFF09" };
+    if (!mime) return { error: "\u6574\u4EFD\u89E3\u5BC6\u540E\u4ECD\u4E0D\u662F\u56FE\u7247\uFF08<enc key> \u53EF\u80FD\u4E0D\u5339\u914D\uFF09" };
+    if (!coverEndsComplete(bytes, mime)) return { error: "\u6574\u4EFD\u89E3\u5BC6\u540E\u56FE\u7247\u7ED3\u5C3E\u4ECD\u4E0D\u5B8C\u6574\uFF0C\u5DF2\u62D2\u7EDD\u4EA4\u4ED8" };
   }
   return { url: `data:image/${mime};base64,` + bytes.toString("base64") };
 }
@@ -28522,16 +28554,7 @@ function createMediaRemotes(rc) {
       });
     },
     async getSnsVideoCoverDataUrl(options) {
-      const base = rawWechatBase2(rc.dirs().decrypted) || void 0;
-      const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId);
-      if (local.url) return local;
-      const remote = typeof options.thumb === "string" ? options.thumb.trim() : "";
-      if (!remote || !/^https?:\/\//i.test(remote)) return local;
-      if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? "\u672C\u673A\u6CA1\u6709\u8BE5\u5C01\u9762"}\uFF1B\u5C01\u9762\u5730\u5740\u7684\u4E3B\u673A\u4E0D\u5728\u5FAE\u4FE1 CDN \u6E05\u5355\u5185\uFF0C\u5DF2\u62D2\u7EDD\u8BF7\u6C42` };
-      const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key });
-      if (fetched.url) return fetched;
-      rc.op("task", "sns_cover_fetch", "fail", "", fetched.error ?? "");
-      return { error: fetched.error };
+      return snsVideoCoverWithCdnFirst(rc, options);
     },
     async getSnsVideoDataUrl(options) {
       const base = rawWechatBase2(rc.dirs().decrypted) || void 0;
@@ -28629,6 +28652,28 @@ async function snsImageWithCdnFirst(rc, options, keys) {
   }
   console.error(tag + " \u5404\u8DEF\u90FD\u5931\u8D25\uFF1A\u672C\u673A\u539F\u56FE=" + String(localOriginal.error) + " / CDN=" + (hasCdn ? "\u89C1\u4E0A" : "\u672A\u914D\u7F6E") + " / \u672C\u673A\u7F29\u7565\u56FE=" + String(localThumb.error));
   return { error: (localOriginal.error ?? "\u672C\u5730\u89E3\u7801\u5931\u8D25") + "\uFF1BCDN\uFF1A" + (hasCdn ? "\u53D6\u56FE\u5931\u8D25" : "\u7F3A\u5C11 CDN \u4E09\u4EF6\u5957") };
+}
+async function snsVideoCoverWithCdnFirst(rc, options) {
+  const base = rc.rawWechatBase(rc.dirs().decrypted) || void 0;
+  const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId);
+  const offline = options.offline === true;
+  const remote = typeof options.thumb === "string" ? options.thumb.trim() : "";
+  const tag = "[sns-cover] md5=" + String(options.md5 ?? "").slice(0, 8) + (offline ? " [\u65E0\u7F51]" : "");
+  if (!offline && remote !== "" && /^https?:\/\//i.test(remote)) {
+    if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? "\u672C\u673A\u6CA1\u6709\u8BE5\u5C01\u9762"}\uFF1B\u5C01\u9762\u5730\u5740\u7684\u4E3B\u673A\u4E0D\u5728\u5FAE\u4FE1 CDN \u6E05\u5355\u5185\uFF0C\u5DF2\u62D2\u7EDD\u8BF7\u6C42` };
+    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key });
+    if (fetched.url) {
+      console.error(tag + " CDN \u5C01\u9762\uFF08\u957F\u5EA6 " + String(fetched.url.length) + "\uFF09");
+      return fetched;
+    }
+    console.error(tag + " CDN \u5C01\u9762\u5931\u8D25\uFF1A" + String(fetched.error ?? ""));
+    rc.op("task", "sns_cover_fetch", "fail", "", fetched.error ?? "");
+  } else if (offline) {
+    console.error(tag + " \u65E0\u7F51\uFF1A\u53EA\u7528\u672C\u673A");
+  } else {
+    console.error(tag + " \u7F3A\u5C01\u9762\u8FDC\u7AEF\u5730\u5740\uFF0C\u53EA\u80FD\u8D70\u672C\u673A");
+  }
+  return local;
 }
 
 // src/backend/wechat-data/src/query/export-history.ts

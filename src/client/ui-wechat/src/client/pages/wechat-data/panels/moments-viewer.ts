@@ -82,8 +82,6 @@ export function useMomentsViewer(): {
   setViewPan: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
   viewRotate: number
   setViewRotate: React.Dispatch<React.SetStateAction<number>>
-  viewOriginal: boolean
-  setViewOriginal: React.Dispatch<React.SetStateAction<boolean>>
   dragRef: React.MutableRefObject<{ sx: number; sy: number; ox: number; oy: number } | null>
   pinchRef: React.MutableRefObject<{ dist: number; zoom: number } | null>
   lightboxWrapRef: React.MutableRefObject<HTMLDivElement | null>
@@ -95,7 +93,6 @@ export function useMomentsViewer(): {
   const [viewZoom, setViewZoom] = useState(1)
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 })
   const [viewRotate, setViewRotate] = useState(0)
-  const [viewOriginal, setViewOriginal] = useState(false)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null)
   const lightboxWrapRef = useRef<HTMLDivElement | null>(null)
@@ -108,7 +105,6 @@ export function useMomentsViewer(): {
     setViewZoom(1)
     setViewPan({ x: 0, y: 0 })
     setViewRotate(0)
-    setViewOriginal(false)
   }, [viewer])
 
   // Keep a ref mirror of the zoom for the native wheel listener (attached once per open).
@@ -146,6 +142,6 @@ export function useMomentsViewer(): {
 
   return {
     viewer, setViewer, viewZoom, setViewZoom, viewPan, setViewPan, viewRotate, setViewRotate,
-    viewOriginal, setViewOriginal, dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex,
+    dragRef, pinchRef, lightboxWrapRef, viewZoomRef, curImg, setViewerIndex,
   }
 }

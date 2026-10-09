@@ -202,7 +202,7 @@ describe('接线：面板只从这一层拿灯箱状态', () => {
 
   it('面板走钩子，且不再自己持有那四个变换量', () => {
     expect(panel).toContain('useMomentsViewer')
-    for (const gone of ['const [viewer, setViewer]', 'const [viewZoom', 'const [viewPan', 'const [viewRotate', 'const [viewOriginal', 'Math.max(0, v.index - 1)']) {
+    for (const gone of ['const [viewer, setViewer]', 'const [viewZoom', 'const [viewPan', 'const [viewRotate', 'Math.max(0, v.index - 1)']) {
       expect(panel, `「${gone}」又回到面板里了`).not.toContain(gone)
       if (!gone.startsWith('Math.')) {
         expect(readFileSync(join(HERE, 'moments-viewer.ts'), 'utf8'), `本层里找不到「${gone}」⇒ 判据的对象是编的`).toContain(gone)

@@ -353,19 +353,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       })
     },
 
-    async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }): Promise<ImageDataUrlResult> {
-      const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
-      if (local.url) return local
-      const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
-      if (!remote || !/^https?:\/\//i.test(remote)) return local
-      // 地址是渲染层/消息 XML 送上来的，发请求前必须过白名单（M23）：
-      // 只判协议等于「谁给后端一个 https 地址，后端就去取谁」。
-      if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
-      const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key })
-      if (fetched.url) return fetched
-      rc.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
-      return { error: fetched.error }
+    async getSnsVideoCoverDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean }): Promise<ImageDataUrlResult> {
+      return snsVideoCoverWithCdnFirst(rc, options)
     },
 
     async getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
@@ -563,3 +552,45 @@ async function snsImageWithCdnFirst(
   return { error: (localOriginal.error ?? '本地解码失败')
     + '；CDN：' + (hasCdn ? '取图失败' : '缺少 CDN 三件套') }
 }
+
+/**
+ * 取一条朋友圈视频的封面。
+ *
+ * 口径与图片那路（{@link snsImageWithCdnFirst}）一致，都是**先网后本**：有网时先去 CDN 取
+ * 原封面，CDN 失败才回落本机那份；无网时只用本机。
+ *
+ * ⚠️ 原来是「本机优先、无网与否都先看本机」，与图片那路 2026-10-08 定的口径相反；而且
+ * 「本机优先」在无网时并不能省掉任何等待 —— 本机没有就还是要去 CDN，而无网时那次请求
+ * 必然超时，等于白等一个超时窗口。
+ *
+ * ⚠️ 封面地址（XML 里的 `<thumb>`）**自带 `token` 与 `idx=1`**，不像图片那样要再拼一次，
+ * 所以这里不做 `snsCdnUrl` 归一，只过白名单（M23：只判协议等于「谁给后端一个地址，后端
+ * 就去取谁」）。
+ */
+async function snsVideoCoverWithCdnFirst(
+  rc: MediaRemoteCtx,
+  options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean },
+): Promise<ImageDataUrlResult> {
+  const base = rc.rawWechatBase(rc.dirs().decrypted) || undefined
+  const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
+  const offline = options.offline === true
+  const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
+  const tag = '[sns-cover] md5=' + String(options.md5 ?? '').slice(0, 8) + (offline ? ' [无网]' : '')
+
+  if (!offline && remote !== '' && /^https?:\/\//i.test(remote)) {
+    if (!wechatCdnHostAllowed(remote)) return { error: `${local.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
+    const fetched = await fetchSnsCoverDataUrl(remote, { version: weixinVersion(), seed: options.key })
+    if (fetched.url) {
+      console.error(tag + ' CDN 封面（长度 ' + String(fetched.url.length) + '）')
+      return fetched
+    }
+    console.error(tag + ' CDN 封面失败：' + String(fetched.error ?? ''))
+    rc.op('task', 'sns_cover_fetch', 'fail', '', fetched.error ?? '')
+  } else if (offline) {
+    console.error(tag + ' 无网：只用本机')
+  } else {
+    console.error(tag + ' 缺封面远端地址，只能走本机')
+  }
+  return local
+}
+

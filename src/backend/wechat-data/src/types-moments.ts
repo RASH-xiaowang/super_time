@@ -14,8 +14,14 @@ export interface MomentCommentItem {
   to_nickname: string
   content: string
   ts: number
-  /** Comment-attached image. */
-  image?: { thumb?: string; url?: string; md5?: string; mediaId?: string }
+  /**
+   * Comment-attached image.
+   *
+   * ⚠️ `token` 与 `seed` 是**取到图的前提**（2026-10-09 加）。实测评论图的裸 `<url>`
+   * （不带 `token`/`idx=1`）5/5 全部 HTTP 400、0 字节；经 `snsCdnUrl` 补上后 5/5 HTTP 200。
+   * 渲染层要把这两个字段转发给后端才拿得到图，只给 `url` 必然落空。
+   */
+  image?: { thumb?: string; url?: string; md5?: string; mediaId?: string; token?: string; seed?: string }
 }
 
 /** One moments (朋友圈) entry (content XML parsed; CDN media URLs unresolved). */

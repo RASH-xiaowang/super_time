@@ -157,6 +157,32 @@ export function pendingCovers(
   return todo
 }
 
+/**
+ * 补观察所有还没取过的 `[data-sns-key]` 格子（已取过的跳过，不重复观察）。
+ *
+ * 现象（2026-10-08 修）：往下滚动时**新出现的朋友圈图片一直不出来**（旧的一屏正常）。
+ * 原因：建 IO 的那个 effect 从未 `.observe()` 任何元素 —— 只有挂载那一刻已在 DOM 里的占位格
+ * 会被观察，滚动进来（列表变长 / 虚拟化重建）的格子永远不入队、也就永远不解码。
+ *
+ * ⚠️ 查询范围是 `document` 而不是滚动容器（2026-10-09 改）：**详情浮层与灯箱都 portal 到
+ * `document.body`**（见 `moments-portals.tsx` 的两处 `createPortal`），只扫容器就永远扫不到
+ * 浮层里的评论图格子，于是没人触发取图、恒显示 [图]。交集判定仍然交给 IO（它的 `root` 仍是
+ * 滚动容器），所以扩大查询范围不会把屏外的格子拉去取图；而 `data-sns-key` 只有朋友圈在用
+ * （全仓仅 `moments-card.tsx` / `moments-portals.tsx`），不会误伤别的面板。
+ *
+ * 调用点还要带 `detailKey` 依赖：浮层里的格子只在**打开浮层那一刻**才进 DOM，而列表本身
+ * （`moments`）并没有变 ⇒ 只依赖 `moments` 的那次补观察扫不到它们。
+ *
+ * 独立成函数而不是内联在 hook 里：hook 紧贴 `function-size-ratchet` 的 250 行线，
+ * 而这段的说明比代码本身长得多。
+ */
+function sweepSnsKeys(ob: IntersectionObserver, fetched: Set<string>): void {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-sns-key]'))) {
+    const key = el.dataset.snsKey || ''
+    if (key !== '' && !fetched.has(key)) ob.observe(el)
+  }
+}
+
 /** `useMomentsMedia` 的输入。 */
 export interface MomentsMediaInput {
   moments: readonly MomentItem[]
@@ -170,6 +196,14 @@ export interface MomentsMediaInput {
    * 当前渲染的分组（虚拟化之后是"视口附近那几组"）。
    */
   groups: readonly unknown[]
+  /**
+   * 详情浮层当前那条动态的 tid（浮层关闭时为空串）。
+   *
+   * 为什么要单独一个信号：详情浮层与灯箱都 portal 到 `document.body`，浮层里的评论图格子
+   * 只在**打开浮层那一刻**才出现在 DOM 里，而列表本身（`moments`）并没有变 ⇒ 只依赖
+   * `moments` 的那次补观察永远扫不到它们，评论图就一直不取图（恒显示 [图]）。
+   */
+  detailKey: string
   /**
    * 渲染窗口的指纹（虚拟化：窗口一动就重新观察一遍新挂载的占位块）。
    * 原先这里传的是"渐进窗口已渲染到第几组"，虚拟化之后渲染的是一个**区间**，
@@ -190,7 +224,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   /** 取图**失败**的原因（key → 后端给的原因）。空对象 = 没有失败。 */
   snsErrs: Record<string, string>
 } {
-  const { moments, viewer, scrollRef, groups, renderKey } = input
+  const { moments, viewer, scrollRef, groups, renderKey, detailKey } = input
   const [snsImgs, setSnsImgs] = useState<Record<string, string>>({})
   /** 已经取过（或已经决定不再取）的键 —— 去重靠它，别改成 state（每次 render 都换身份会让效果重跑）。 */
   const snsFetched = useRef(new Set<string>())
@@ -218,9 +252,13 @@ export function useMomentsMedia(input: MomentsMediaInput): {
           const opts: { md5: string; timelineId?: string; mediaId?: string; key?: string; thumb?: string; url?: string; token?: string; seed?: string; offline?: boolean } = {
     md5: it.md5,
     // 只给图片带 CDN 三件套（视频走另一个 RPC）；有才传 ⇒ 缺省时调用形状逐字不变
-    ...(it.kind === 'img' && it.url ? { url: it.url } : {}),
-    ...(it.kind === 'img' && it.token ? { token: it.token } : {}),
-    ...(it.kind === 'img' && it.seed ? { seed: it.seed } : {}),
+    // ⚠️ 下面三行原来都写的是 `kind === 'img'`，把评论图（`kind === 'comment'`）关在门外：
+// 就算卡片把 url/token/seed 填齐了也传不到后端，评论图于是永远取不到（实测裸地址
+// 5/5 返 HTTP 400，而评论图本机没有对应文件 ⇒ 只能显示 [图]）。
+// 判据因此改成「**不是视频**」而不是「是 img」：以后再加图片种类不会被静默漏掉。
+...(it.kind !== 'video' && it.url ? { url: it.url } : {}),
+    ...(it.kind !== 'video' && it.token ? { token: it.token } : {}),
+    ...(it.kind !== 'video' && it.seed ? { seed: it.seed } : {}),
   }
           if (it.timelineId) opts.timelineId = it.timelineId
           if (it.mediaId) opts.mediaId = it.mediaId
@@ -308,25 +346,12 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     return () => { ob.disconnect(); mediaObserved.current = null }
   }, [])
 
-  /**
-   * 观察新出现的格子（2026-10-08 修）。
-   *
-   * 现象：往下滚动时**新出现的朋友圈图片一直不出来**（旧的一屏正常）。
-   * 原因：上面那个 effect 建好 IO 后**从未 `.observe()` 任何元素** —— 只有挂载那一刻已在 DOM 里的
-   * 占位格会被观察，滚动进来（列表变长/虚拟化重建）的格子永远不入队、也就永远不解码。
-   *
-   * 依赖 `moments`：列表一变就在容器里补观察尚未取到的 `[data-sns-key]`（已取过的跳过，不重复观察）。
-   */
+  /** 观察新出现的格子；为什么必须扫 `document`、为什么还要一个 `detailKey`，见 {@link sweepSnsKeys}。 */
   useEffect(() => {
     const ob = mediaObserved.current
-    const root = scrollRef.current
-    if (!ob || !root) return
-    const nodes = root.querySelectorAll<HTMLElement>('[data-sns-key]')
-    for (const el of Array.from(nodes)) {
-      const key = el.dataset.snsKey || ''
-      if (key !== '' && !snsFetched.current.has(key)) ob.observe(el)
-    }
-  }, [moments])
+    if (!ob || !scrollRef.current) return
+    sweepSnsKeys(ob, snsFetched.current)
+  }, [moments, detailKey])
 
   /**
    * 公众号文章封面兜底：本地 SNS 缓存没有时，抓取文章页 og:image 转 data URL；
