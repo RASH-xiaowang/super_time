@@ -20,9 +20,15 @@ jobs:
     # （整批用例耗时 2658s vs 本机 109s），单元测试一步实测已占 26 分钟；而 4 条重夹具
     # 用例此前是「快速超时」（4×180s）才刚好挤进 30 分钟 —— 它们现在会真的跑完，
     # 30 分钟会把作业整条杀掉（那是比「用例失败」更差的信号）。
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-10-09 加：`check:mutation:diff` 要用 `git diff <base>...HEAD` 算改动文件，
+          # 默认的浅克隆（depth=1）拿不到 base ⇒ 脚本会退化成全量（25~30 分钟），把这条 job 顶爆。
+          # 现在它退化的代价是「多跑一会儿」，但仍然会跑，所以浅克隆在这里是**慢**而不是**错**；
+          # 拉全历史只是让它快。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -78,6 +84,57 @@ jobs:
 
       - name: 前端 shim 与源码一致
         run: npm run check:shim
+
+      # ── 2026-10-09 阶段 2：第一档检查（清单与实测成本见 scripts/ci-tiers.mjs）──────────
+      # 之前这三件都不在门禁里：`lint:db` 是绿的但**新违规没人拦**，`check:deps-provenance`
+      # 0.2 秒却等于没跑，408 条变异自证**完全没进过 CI**。绿而不设门禁等于没检查。
+      - name: 后端源码 lint
+        run: npm run lint:db
+
+      - name: 依赖来源核对
+        run: npm run check:deps-provenance
+
+      # 8 个便宜的性能基准。2026-10-09 实测 19 秒；此前它们只贡献一行 `skipped`，
+      # 因为每个都用 `describe.skipIf(MEASURE_xxx !== '1')` 守着，而 package.json 里
+      # 一个 MEASURE_* script 都没有 —— 于是「有基准」这件事一直是假的。
+      - name: 性能基准（8 个快的）
+        timeout-minutes: 10
+        run: npm run measure:quick
+
+      # 纯 Node 冒烟与真 Electron 冒烟（都是秒级，实测成本写在 scripts/ci-tiers.mjs 里）。
+      - name: 检索冒烟
+        run: npm run rag:smoke
+
+      - name: EPIPE 崩溃冒烟
+        run: npm run epipe:smoke
+
+      - name: 渲染层 console 进诊断日志（真机 e2e）
+        timeout-minutes: 10
+        run: npm run renderer-console:e2e
+
+      - name: UI 冒烟（真机 e2e）
+        timeout-minutes: 10
+        run: npm run ui:e2e-smoke
+
+      - name: 导航壳（真机 e2e）
+        timeout-minutes: 10
+        run: npm run ui:nav-e2e
+
+      - name: 加载态恢复（真机 e2e）
+        timeout-minutes: 10
+        run: npm run ui:loading-e2e
+
+      # 变异自证的**增量**档：只跑这次改动波及的那些。
+      # 口径是「目标文件改了 **或** 它的判据 spec 改了」——只按目标文件筛会漏掉
+      # 「把守卫削弱一点」那类改动（spec 变松了但目标文件没动，于是那条变异不再咬红，
+      # 而登记表与全量单测都还是绿的）。2026-10-09 实测：45 条 vs 53 条。
+      # 基线 ref：push 用 before、PR 用 base.sha；两者在 Actions 里名字不同，收在脚本里
+      # （npm script 在 Windows 的 cmd 里没法拼参数）。拿不到 diff 时脚本退化成全量。
+      - name: 变异自证（增量）
+        timeout-minutes: 25
+        run: npm run check:mutation:diff
+        env:
+          SUPERTIME_MUTATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
 
       # 安全守卫的端到端探针（H10）：在真实渲染进程里尝试 file:/smb:/自定义协议开窗
       # 与外部导航，断言全部被拒。打包态另外由 npm run security-guard:smoke:packaged 覆盖。
@@ -160,3 +217,40 @@ jobs:
       - name: 隐私同意先于授权（真机 e2e，H14）
         timeout-minutes: 12
         run: npm run e2e:h14-consent
+
+
+  # ── 2026-10-09 阶段 2：变异登记表被动时，才起这条全量 job ──────────────────────
+  #
+  # 为什么要单独一条 job：`verify` 的单测已占 26 分钟、上限 45 分钟，而全量 408 条变异
+  # 按每条约 4 秒（vitest 冷启动主导）估是 25~30 分钟 —— 塞进去会整条被杀掉。
+  # 「作业超时」比「用例失败」难查得多，所以宁可多一个**只在需要时才起**的 job。
+  #
+  # 什么时候需要：变异登记表本身（scripts/mutations-registry*.mjs）被改动时。
+  # 那时按文件筛选已经没有意义 —— 筛选的基准就是被改的那个东西
+  # （见 scripts/mutation-scope.mjs）。
+  #
+  # 探针为什么是个脚本：Actions 的 job 级 `if:` 做不了文件匹配，只能先跑一个极快的
+  # 步骤把结论写进 step output。拿不到 diff 时它输出「要跑」——静默跳过是最坏的结果。
+  mutation-full:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 判断这次改动要不要跑全量变异反证
+        id: probe
+        run: node scripts/ci-needs-full-mutation.mjs "${{ github.event.pull_request.base.sha || github.event.before }}"
+
+      - name: 变异自证（全量 408 条）
+        if: steps.probe.outputs.needs_full_mutation == 'true'
+        timeout-minutes: 70
+        run: npm run check:mutation

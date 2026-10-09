@@ -1,0 +1,68 @@
+name: Nightly
+
+# 第二档门禁：太贵、不能每次 push 都跑的那几件（清单与实测成本见 scripts/ci-tiers.mjs）。
+#
+# 为什么要有这条：PR 门禁只跑**增量**变异 + 8 个便宜的基准，于是有两类东西永远没人跑 ——
+#   · 「目标文件与判据 spec 都没动」的那些变异 ⇒ 登记表会慢慢腐烂，而腐烂是不出声的；
+#   · 那 13 分钟的 `export-memory` 基准 ⇒ 只贡献一行 skipped。
+# 这条工作流每天跑一次全量，把这些补上。它**不阻塞** PR（失败只让夜间这一条变红）。
+#
+# 本机实测成本（2026-10-09，windows / Node 24.20.0）：
+#   check:mutation 约 25~30 分钟（408 条，每条约 4 秒，vitest 冷启动主导）
+#   measure:slow   13 分钟（export-memory 一个文件就占 801.5 秒，是九个基准里的 99.9%）
+#   e2e:ledger-reload 38.3 秒 / e2e:backup-progress 6.1 秒
+# 合计约 45 分钟，所以 timeout 给 70 分钟。
+on:
+  schedule:
+    # 每天 03:17（不是整点：整点是所有人的整点，Windows runner 排队更久）
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 变异反证要逐条改文件再还原；它自己也比对了还原后的字节，但拉全历史让
+          # 「这次运行到底动过哪些文件」可查。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与 ci.yml 一致：门禁要在**发版用的那个** Node 上跑，不能用本机的新版
+          #（本机是 24，CI/release 是 22 —— 差异本身就是一种变量）。
+          node-version: '22'
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 同 ci.yml：`node_modules/electron` 没有 postinstall（包的 scripts 字段是空的），
+      # `npm ci` 只装 JS 依赖，不含 `dist/electron.exe` ⇒ 下面两个真机 e2e 会起不来。
+      - name: 准备 Electron 二进制（e2e 需要）
+        run: node node_modules/electron/install.js
+
+      # 变异自证**全量**。这是那条「不设门禁就等于没有」的检查 —— 登记表腐烂是不出声的。
+      - name: 变异自证（全量）
+        timeout-minutes: 45
+        run: npm run check:mutation
+
+      # 那个 13 分钟的基准：实测 801.5 秒，占九个里的 99.9%，只能单独一档。
+      - name: 性能基准（export-memory，慢的那个）
+        timeout-minutes: 20
+        run: npm run measure:slow
+
+      # 真 Electron + 真数据目录的两个 e2e。放进夜间是因为它们要起真进程（38 秒 / 6 秒），
+      # 而收益不如上面两件大 —— 但它们是**唯一**覆盖这两条通路的自动检查。
+      - name: 台账重载 e2e（真机）
+        timeout-minutes: 12
+        run: npm run e2e:ledger-reload
+
+      - name: 备份进度 e2e（真机）
+        timeout-minutes: 12
+        run: npm run e2e:backup-progress

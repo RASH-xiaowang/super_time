@@ -22,7 +22,7 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +63,30 @@ jobs:
       # `npm run build:ui && electron-builder --win nsis --publish always`。
       # publish 配置里的 releaseType 是 release（不是默认的 draft）：
       # draft 发布对 electron-updater **不可见**，会让更新静默失效。
+      # ── 2026-10-09 阶段 2：第三档（打包态）检查，**必须在发布之前** ──────────────
+      #
+      # 为什么插在发布前：下一步就是 `--publish always`，一步到位发布。
+      # 打包态检查放它后面 ⇒ 失败时版本**已经发出去了**，只能再发一个补丁号。
+      # 而打包态恰恰是最容易「源码态绿、打包后坏」的一类（asar、resources 路径
+      # 只在打包态才成立，源码态根本走不到那段代码）。
+      #
+      # `npm run pack` 只做 `electron-builder --dir`（不产安装包），比 `dist` 快，
+      # 够这三个冒烟读 `dist/win-unpacked` 用。
+      - name: 打包态准备（仅 --dir，不出安装包）
+        run: npm run pack
+        timeout-minutes: 30
+
+      # 朋友圈视频那条通路的打包件比对。⚠️ 它**缺打包件时会 exit 0**（脚本自己打印
+      # 「这一条不算通过」但退出码是 0）—— 所以它只在这个「刚 pack 过」的 job 里有意义，
+      # 放进任何一个没有 `npm run pack` 的门禁都是空跑的绿灯。
+      - name: 朋友圈视频 · 打包件字节比对
+        run: npm run package:sns-video:smoke
+        timeout-minutes: 10
+
+      - name: 密钥迁移打包态冒烟（M1）
+        run: npm run m1-secrets:smoke
+        timeout-minutes: 10
+
       - name: 打包并发布到 Releases
         run: npm run dist -- --publish always
         env:

@@ -153,4 +153,40 @@ export const MUTATIONS_BATCH3D = [
     to: "  if (remote !== '' && /^https?:\\/\\//i.test(remote)) {",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
+
+  // ── 2026-10-09（阶段 2）：CI 分档与增量变异 ─────────────────────────────────────
+  // 这几条守的是「分档本身」：分档表一旦与 workflow 脱节，缺口就会静悄悄地回来，
+  // 而「不在门禁里」这件事本身是**看不见**的 —— 没人会因为「CI 里没有它」而去补。
+  {
+    id: "M433-mutation-incremental-drops-spec-clause",
+    why: "增量选取里去掉「spec 改了也要重跑」那一半 ⇒ 最该抓的那类改动正好被漏掉：把守卫改松（目标文件没动，只是 expect 变容易过）时那条变异不再咬红，而登记表与全量单测都还是绿的。实测这一条值 8 条（45 vs 53）。",
+    file: "scripts/mutation-scope.mjs",
+    from: "  const bySpec = mutations.filter((m) => !targetIds.has(m.id) && set.has(norm(m.spec)))",
+    to: "  const bySpec = mutations.filter(() => false)",
+    spec: "src/backend/tests/mutation-scope.spec.ts",
+  },
+  {
+    id: "M434-mutation-incremental-drops-registry-full-run",
+    why: "去掉「登记表本身被动 ⇒ 全量」这一条 ⇒ 筛选基准被改了却还按文件筛：新增或改动某条变异的 from 时它自己不会被验，于是「登记表新增了一条、而那条其实咬不住」能一路合进去。",
+    file: "scripts/mutation-scope.mjs",
+    from: "  if (registryTouched.length > 0) {",
+    to: "  if (false) {",
+    spec: "src/backend/tests/mutation-scope.spec.ts",
+  },
+  {
+    id: "M435-ci-tier-lint-db-dropped",
+    why: "把 `lint:db` 从分档表里改名剔除 ⇒ 它回到「绿但没人拦」的状态，而这正是 2026-10-09 审计点名的缺口之一：eslint 一直在本机跑，新违规却从来没被 CI 挡住过。",
+    file: "scripts/ci-tiers.mjs",
+    from: "  { script: 'lint:db',",
+    to: "  { script: 'lint:db-disabled',",
+    spec: "src/backend/tests/ci-tiers.spec.ts",
+  },
+  {
+    id: "M436-packaged-sns-video-dropped-from-tier3",
+    why: "把 `package:sns-video:smoke` 从第三档剔除 ⇒ 它就不在任何门禁里了。它**缺打包件时 exit 0**（脚本自己打印「这一条不算通过」而退出码是 0），所以只有排在 `npm run pack` 之后的那一档才认它的绿灯；挪走等于彻底没有覆盖，而没人会注意到它曾经绿过。",
+    file: "scripts/ci-tiers.mjs",
+    from: "    script: 'package:sns-video:smoke',",
+    to: "    script: 'package:sns-video:smoke-disabled',",
+    spec: "src/backend/tests/ci-tiers.spec.ts",
+  },
 ]

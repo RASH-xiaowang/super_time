@@ -45,11 +45,11 @@ function run(cmd, args, expectMode) {
   if (!res) {
     console.error(`❌ ${expectMode} 那一遍没有产出结果行（退出码 ${String(r.status)}）\n`
       + `${(r.stdout || '')}\n${r.stderr || ''}`.slice(-1500));
-    process.exit(1);
+    throw new Error('没有拿到可解析的输出') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
   }
   if (res.mode !== expectMode) {
     console.error(`❌ 期望模式 ${expectMode}，实际 ${res.mode}（运行时：${res.runtime}）`);
-    process.exit(1);
+    throw new Error('运行时模式与预期不符') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
   }
   console.log(`   ${expectMode.padEnd(8)} 运行时=${res.runtime}  密钥流 ${res.bytes} 字节  sha256=${res.sha256.slice(0, 16)}…`);
   return res;
@@ -69,6 +69,8 @@ function run(cmd, args, expectMode) {
   });
 
   let failed = 0;
+  /** 跳过资产字节比对（没有打包件）—— 不算通过，但也不算失败。 */
+  let skipped = false;
   try {
     const node = run(process.execPath, [out, '--mode=node'], 'node');
     const electron = run(electronExe, [out, '--mode=electron'], 'electron');
@@ -80,8 +82,15 @@ function run(cmd, args, expectMode) {
     if (!fs.existsSync(path.join(unpackedDir, FILES[0]))) {
       console.log('⏭️  跳过资产字节比对：没有 dist/win-unpacked 下的 app.asar.unpacked 产物（先跑 npm run pack）');
       console.log('    这一条**不算通过** —— 只是本机暂时没有打包件可比。');
-      process.exit(failed);
+      // ⚠️ 这里原来直接 `process.exit(failed)` —— 它在 `try` 内部，会**跳过 finally**，
+      // 于是 esbuild 产出的 `.tmp-packaged-sns-video-check.mjs` 留在
+      // `src/backend/wechat-data/lib/` 下；而 `src/**/*` 会被打进包
+      // （`packaging-content.spec.ts` 正是为这条存在的守卫，实测它会当场变红）。
+      // 改成「记下结论 → 走完 finally → 最后再退」。
+      skipped = true;
     }
+    if (!skipped) {
+
     for (const f of FILES) {
       const a = sha256(path.join(devDir, f));
       const b = sha256(path.join(unpackedDir, f));
@@ -92,6 +101,7 @@ function run(cmd, args, expectMode) {
     console.log(failed === 0
       ? '✅ 打包版加载的正是这份被验过的 WxIsaac64 资产，且它在 Electron 运行时下能实例化并产出与 node 相同的密钥流'
       : '❌ 见上面的不一致');
+    }
   } finally {
     try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
   }

@@ -20,7 +20,14 @@
  *   node scripts/mutation-check.mjs            # 跑全部
  *   node scripts/mutation-check.mjs --list     # 只列清单
  *   node scripts/mutation-check.mjs --only M5  # 只跑一条（可按前缀匹配多条）
+ *   node scripts/mutation-check.mjs --since <git ref>    # 增量：只跑这次改动波及的那些（PR 门禁）
+ *   node scripts/mutation-check.mjs --files a.ts,b.ts     # 增量：手动指定改动文件
+ *   node scripts/mutation-check.mjs --diff                # 增量：基线取 SUPERTIME_MUTATION_BASE（缺省 HEAD~1）
  *   node scripts/mutation-check.mjs --self-test # 自检工具本身（三条判定路径 + 逐字节还原）
+ *
+ * 增量的口径（**目标文件改了，或它的判据 spec 改了**）写在 `scripts/mutation-scope.mjs` 文件头。
+ * 一句话版：只按目标文件筛会漏掉「把守卫削弱一点」那类改动 —— 目标文件没动，但 spec 变松了，
+ * 于是那条变异不再咬红，而登记表与全量单测都还是绿的。取不到 diff 时退化成全量并喊出来。
  *
  * 结果同时打印到 stdout 与写入 `working/mutation-check.txt`（本机 node 的 stdout 重定向不可靠，
  * 需要留档时读那个文件）。
@@ -34,6 +41,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MUTATIONS } from './mutations-registry.mjs'
+import { changedFilesSince, selectForDiff } from './mutation-scope.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const VITEST = join(ROOT, 'node_modules', 'vitest', 'vitest.mjs')
@@ -43,8 +51,74 @@ const BACKUP_DIR = join(ROOT, 'working', 'mutation-backup')
 const argv = process.argv.slice(2)
 const only = argv.includes('--only') ? argv[argv.indexOf('--only') + 1] : undefined
 const listOnly = argv.includes('--list')
+/**
+ * 增量模式（2026-10-09 加）：`--since <git ref>` 或 `--files a,b,c`。
+ *
+ * 为什么要有：全量 408 条一次跑完按小时计，塞不进 PR 门禁（单测已占 26 分钟 / 上限 45），
+ * 而完全不跑就等于「变异自证」这一件套形同虚设。见 `mutation-scope.mjs` 里的口径说明 ——
+ * 关键点是**目标文件改了或它的判据 spec 改了都要重跑**（只按目标文件筛会漏掉「削弱守卫」那类改动，
+ * 2026-10-09 实测 45 条 vs 53 条，多出的 8 条全是那一类）。
+ *
+ * 拿不到 diff 时**退化成全量并喊出来**：静默跳过是最坏的结果 ——
+ * 看起来门禁是绿的，实际什么都没验。
+ */
+const since = argv.includes('--since') ? argv[argv.indexOf('--since') + 1] : undefined
+const filesArg = argv.includes('--files') ? argv[argv.indexOf('--files') + 1] : undefined
+/**
+ * `--diff` 是给 CI 用的便捷形式：基线 ref 从 `SUPERTIME_MUTATION_BASE` 读，缺省 `HEAD~1`。
+ *
+ * 为什么要有这一层而不是让 CI 直接写 `--since ${{ … }}`：Actions 里那个值在
+ * push 与 pull_request 两种事件下名字不同（`before` vs `base.sha`），写成 YAML 会多两行
+ * `if`；而 npm script 没法在 Windows 的 cmd 里拼参数。收在脚本里，两个平台同一句命令。
+ */
+const diffMode = argv.includes('--diff')
+const baseRef = diffMode ? (process.env.SUPERTIME_MUTATION_BASE || 'HEAD~1') : undefined
+const effectiveSince = since ?? baseRef
 
-const chosen = only === undefined ? MUTATIONS : MUTATIONS.filter((m) => m.id.startsWith(only))
+/** 按增量口径选变异；`scopeNote` 用来把「为什么是这些」打进报告里。 */
+function pickByDiff() {
+  let files = []
+  let how = ''
+  if (filesArg !== undefined) {
+    files = filesArg.split(',').map((s) => s.trim()).filter((s) => s !== '')
+    how = '--files 指定的 ' + String(files.length) + ' 个文件'
+  } else {
+    const r = changedFilesSince(effectiveSince, ROOT)
+    if (!r.ok) {
+      process.stdout.write(`[增量] 取 ${effectiveSince}...HEAD 的改动失败：${r.detail}\n[增量] 退化成**全量**（静默跳过是最坏的结果）\n`)
+      return { list: MUTATIONS, note: '增量失败（' + String(effectiveSince) + '）⇒ 全量' }
+    }
+    files = r.files
+    how = String(effectiveSince) + '...HEAD 的 ' + r.detail
+  }
+  const sel = selectForDiff(MUTATIONS, files)
+  if (sel.all) {
+    process.stdout.write(`[增量] ${sel.reason}\n`)
+    return { list: MUTATIONS, note: sel.reason }
+  }
+  if (sel.picked.length === 0) {
+    process.stdout.write(`[增量] ${how}；${sel.reason}；一条都没命中 ⇒ 无事可验（不是失败）\n`)
+    return { list: [], note: sel.reason + '；0 条命中' }
+  }
+  process.stdout.write(`[增量] ${how}；${sel.reason} ⇒ 跑 ${String(sel.picked.length)} / ${String(MUTATIONS.length)} 条\n`)
+  return { list: sel.picked, note: sel.reason }
+}
+
+let chosen
+let scopeNote = '全量'
+if (only !== undefined) {
+  chosen = MUTATIONS.filter((m) => m.id.startsWith(only))
+} else if (effectiveSince !== undefined || filesArg !== undefined) {
+  chosen = pickByDiff().list
+  scopeNote = (effectiveSince ?? ('--files ' + String(filesArg)))
+} else {
+  chosen = MUTATIONS
+}
+if (only === undefined && (effectiveSince !== undefined || filesArg !== undefined) && chosen.length === 0) {
+  // 0 条命中是合法的「无事可验」，不该像 --only 那样退 2
+  process.stdout.write('结论：本次改动没有需要重跑的变异，跳过\n')
+  process.exit(0)
+}
 if (chosen.length === 0) {
   process.stdout.write(`没有匹配 --only ${String(only)} 的变异\n`)
   process.exit(2)
@@ -234,6 +308,9 @@ for (const m of chosen) {
 
 const lines = []
 lines.push(`变异反证：共 ${rows.length} 条，异常 ${bad} 条`)
+// 把范围写进报告：增量跑只看得出「这 N 条绿了」，看不出**没跑的那些**。
+// 没有这一行，CI 日志会让人误以为全表都验过了。
+lines.push(`范围：${scopeNote}（全量登记表 ${MUTATIONS.length} 条，本次跑了 ${rows.length} 条）`)
 lines.push('='.repeat(70))
 for (const r of rows) {
   lines.push(`[${r.verdict}] ${r.id}  逐字节还原=${r.identical === false ? '否' : r.identical === true ? '是' : '未执行'}`)
