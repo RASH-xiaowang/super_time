@@ -27,6 +27,7 @@ export declare function createAskRemotes(rc: createAskRemotesInputs): {
         ok: boolean;
         adaptedWeights?: RerankWeights;
         features?: string[];
+        feedbackTotal?: number;
         message?: string;
     };
     listRetrievalFeedback(options?: {

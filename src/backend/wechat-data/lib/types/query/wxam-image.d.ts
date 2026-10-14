@@ -1,3 +1,4 @@
+export { jpegDimensions } from './jpeg-dimensions.ts';
 /**
  * 原生解码库的最小接口。
  *
@@ -25,18 +26,6 @@ export type WxgfTranscodeResult = {
 /** 转码器签名（调用方可通过参数注入替身）。 */
 export type WxgfTranscoder = (payload: Uint8Array) => WxgfTranscodeResult;
 /**
- * 从 JPEG 字节里读宽高（SOF 段）。
- *
- * 为什么自己解析而不是调 `wxam_dec_getWXGFInfo_5`：那个导出的签名没验证过，
- * 调错会崩进程；而 JPEG 的 SOF 扫描是纯 JS、可单测、失败也只是返回 null。
- * @param bytes - JPEG 字节。
- * @returns 宽高，或数据不是可解析的 JPEG 时为 null。
- */
-export declare function jpegDimensions(bytes: Uint8Array): {
-    width: number;
-    height: number;
-} | null;
-/**
  * 找到微信安装目录下的解码库路径。
  *
  * 安装根来自注册表（`config/detect.ts` 的 `weixinInstallPath`），DLL 在**版本子目录**下。
@@ -50,7 +39,7 @@ export declare function resolveVoipEnginePath(): string;
  * @param native - `undefined` = 用真 DLL（惰性加载）；`null` = 强制不可用；对象 = 注入替身（单测）。
  * @returns 转码器；**永不抛**，失败一律返回 `{ error }`。
  */
-export declare function createWxgfTranscoder(native?: WxgfNative | null): WxgfTranscoder;
+export declare function createWxgfTranscoder(native?: WxgfNative | null, ffmpegFallback?: WxgfTranscoder | null): WxgfTranscoder;
 /** 默认转码器（真 DLL，惰性加载）。 */
 export declare const transcodeWxgf: WxgfTranscoder;
 /**

@@ -265,6 +265,30 @@ export interface AskResult {
             fused: number;
             ranked: number;
         };
+        /**
+         * W3-6.3：**精排（rerank）到底有没有用上**。
+         *
+         * 为什么必须独立成字段：之前它只被拼进 `basis` 的一句文本里，前端想显示
+         * 「精排：本地线性加权」就得去 parse 那句话。而这句话对用户很重要 ——
+         * 「为什么排第一的是它」在两种模型下答案完全不同（LLM 精排 vs 本地加权）。
+         *
+         * `used=false` 时 `note` 说明原因（没配模型 / 模型不可用 / 候选太少…）。
+         */
+        rerank?: {
+            used: boolean;
+            candidates: number;
+            kept: number;
+            model?: string;
+            note?: string;
+        };
+        /**
+         * W2-6.4：**检索索引正在后台更新**，这一轮用的是更新前的索引。
+         *
+         * 为什么单开一个字段而不是塞进 `channels[].note`：那一栏说的是「某个通道召回了几条」，
+         * 而这一条说的是「**这次回答的检索空间本身**不是最新的」。混进去用户会以为某个通道坏了。
+         * `undefined` = 索引是新的，不需要提示。
+         */
+        indexNote?: string;
     };
 }
 /**
@@ -275,7 +299,9 @@ export interface AskResult {
  *   · ok           —— 正常回答（至少引用了一条原文）；
  *   · insufficient —— 没有检索到任何原文，未调用模型；
  *   · withheld     —— 模型内容无法对应到任何原文，已不予采用；
- *   · fail         —— 调用过程出错（未配置模型 / 出站被拦截等）。
+ *   · fail         —— 调用过程出错（模型未配置 / 检索或生成失败等）。
+ *
+ * ⚠ 2026-09-30 起「出站拦截」已随应用内出网开关整体移除，失败原因里不再有它。
  */
 export type AskHistoryStatus = 'ok' | 'insufficient' | 'withheld' | 'fail';
 /**

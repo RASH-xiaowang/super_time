@@ -115,6 +115,8 @@ describe('H14：隐私声明 ↔ 出网点', () => {
       ],
       whisper: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'whisper.ts'), 'utf8'),
       llm: readFileSync(join(ROOT, 'src', 'backend', 'wechat-host.js'), 'utf8'),
+      // ClawBot 绑定通道（2026-10-12 接入）：主机在代码里写死，文档必须逐字列出。
+      ilink: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'clawbot-ilink.ts'), 'utf8'),
     }
     for (const [kind, src] of Object.entries(sources)) {
       const hosts = hostsIn(src)
@@ -240,5 +242,55 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     for (const writer of ['saveNote', 'saveDocEntities', 'setKbModel', 'writeKb', 'deleteNote', 'touchKbEntitiesAt', 'INSERT INTO']) {
       expect(sBody, `suggestKbLinks 里出现了写路径 ${writer}（建议不该改任何数据）`).not.toContain(writer)
     }
+  })
+
+  /**
+   * v13（2026-10-14）：**入站监听面**必须被如实登记。
+   *
+   * 为什么单独立一组判据：前面所有条目守的都是「出网」（本机向外发请求），
+   * 而 v13 首次引入了反方向 —— 本机**监听端口**、局域网里别的设备连进来读数据。
+   * 「我的聊天会不会被这台机器之外的东西看到」这个问题，入站方向的答案更直接，
+   * 所以它必须和出网点一样逐条写清，而且**文档说的默认值必须与代码里的默认值一致**
+   * （RELEASE-PLAN 的教训②：文档最危险的不是缺失而是过期）。
+   */
+  it('文档登记了入站监听面：默认关闭、持令牌、白名单、且写明是明文 HTTP', () => {
+    expect(doc, '第四节少了入站监听那一节（H）').toMatch(/### H\. 入站监听/)
+    // 默认关闭是这一条最重要的性质：翻成默认开启就等于偷偷监听
+    expect(doc, '入站那一节没写明「默认关闭」').toContain('默认关闭')
+    expect(doc, '入站那一节没写明端口').toContain('5032')
+    // 明文 HTTP 是这条链路最大的代价，不许从文档里消失（否则用户会以为它加密）
+    expect(doc, '入站那一节没写清这条链路是明文 HTTP、无 TLS').toMatch(/明文 HTTP/)
+    // 「手机上不能干什么」要点名，否则读者会以为手机与桌面等价
+    for (const withheld of ['API Key', '许可证', '备份', '白名单']) {
+      expect(doc, `入站那一节没点名「${withheld}」不开放远程访问`).toContain(withheld)
+    }
+    // 防火墙这一条要如实说明「应用没有管理员权限、不能替你加规则」
+    expect(doc, '入站那一节没如实说明防火墙规则要用户自己放行').toMatch(/netsh advfirewall/)
+  })
+
+  it('文档说「默认关闭」，代码里的默认值就必须是关（两向都守）', () => {
+    const cfg = readFileSync(
+      join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'config', 'wechat-config.ts'), 'utf8')
+    expect(cfg, '配置默认值里 api_enabled 不是 false —— 文档的「默认关闭」会变成假话')
+      .toContain('api_enabled: false')
+    expect(cfg, 'api_enabled 的默认值被翻回 true 了（入站监听面必须默认关闭）')
+      .not.toContain('api_enabled: true')
+    // 读回配置的口径也要一致：缺省时按「关」处理，而不是按「开」
+    const remotes = readFileSync(
+      join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'remotes', 'config.ts'), 'utf8')
+    expect(remotes, "remotes/config.ts 读 api_enabled 时的缺省值不是 false")
+      .toMatch(/api_enabled'\]\s*\?\?\s*false/)
+  })
+
+  it('同意屏把入站面**单独**列出来，且不混进「共 N 个出网点」的计数', () => {
+    const gate = readFileSync(
+      join(ROOT, 'src', 'client', 'ui-app', 'privacy', 'PrivacyConsentGate.tsx'), 'utf8')
+    expect(gate, '同意屏没有入站面清单（重新同意时用户看不到这一条）').toContain('INBOUND')
+    expect(gate, '入站面清单没有被渲染出来（只定义不用等于没写）').toMatch(/INBOUND\.map/)
+    // 「默认关闭 · 可关」这一档标记必须存在：出网侧自 2026-09-30 起已无开关，
+    // 入站是本屏唯一有真开关的一条，标记混用会让人以为它也关不掉
+    expect(gate).toContain("off: '默认关闭 · 可关'")
+    // 计数那句话不许把入站面算进「出网点」—— 方向相反，混算就是假话
+    expect(gate, '出网点计数被改成了包含入站面的口径').toContain('共 {OUTBOUND.length} 个出网点')
   })
 })

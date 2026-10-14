@@ -136,6 +136,20 @@ export interface DecryptStatus {
     skipped: number;
     /** Current file/database short label. */
     message: string;
+    /**
+     * **失败明细**（W3-2.5）：哪个库 / 哪张图、因为什么没解出来。
+     *
+     * 为什么必须有它：`failed` 只是个计数。用户在「数据健康中心」看到「失败 3」，
+     * 完全无法知道是哪三个、该修什么 —— 而这三条恰恰是**可操作**的
+     * （库被占用？密钥不对？文件缺失？）。计数只能告警，明细才能动手。
+     *
+     * 只保留**最近一次**解密的明细（新一轮开始时清空）：历史明细属于操作日志的事，
+     * 塞进实时快照会让它无限增长。上限 20 条，防异常情况下把快照撑爆。
+     */
+    failures: Array<{
+        db: string;
+        error: string;
+    }>;
 }
 /** One Whisper model catalog entry (installed flag from the models dir). */
 export interface WhisperModelInfo {
@@ -227,6 +241,13 @@ export interface WechatConfigPatch {
     whisper_threads?: number;
     whisper_models_dir?: string;
     whisper_bin?: string;
+    /**
+     * 「密钥已搬到 secrets.json」这条提示的确认位（W2-12.3）。
+     *
+     * 它**不是**密钥字段，所以不走 `SECRET_FIELDS` 那条搬运动作 ——
+     * 留在 config.json 里当普通配置项即可。
+     */
+    secret_migration_notice_ack?: boolean;
 }
 /** Delete result. */
 export interface DeleteFavoriteResult {
@@ -310,6 +331,29 @@ declare module '@deepseek-ai/cordis' {
             phase: string;
             done: number;
             total: number;
+        }): void;
+        /**
+         * 微信 ClawBot 接入会话有新增消息（写入后即发）。
+         *
+         * 载荷是 `{ lastId, delta }` —— **只带位置与数量、不带正文**：事件是幂等提示，
+         * 渲染端收到后调 `listClawbotMessages({ afterId: lastId })` 拉增量并按 id 去重合并
+         * （丢事件也不丢数据，见 types-ops.ts 的 ClawbotMessage 说明）。
+         * @mode emit
+         * @param payload - 最新消息 id 与本批次新增条数。
+         */
+        'clawbot/message'(payload: {
+            lastId: number;
+            delta: number;
+        }): void;
+        /**
+         * ClawBot 绑定状态迁移（申请二维码 / 绑定成功 / 解绑）。
+         * @mode emit
+         * @param payload - 迁移前后状态与被绑定的 wxid（未绑定时为 null）。
+         */
+        'clawbot/binding-changed'(payload: {
+            from: 'unbound' | 'binding' | 'bound' | 'unbound-by-user';
+            to: 'unbound' | 'binding' | 'bound' | 'unbound-by-user';
+            wxid: string | null;
         }): void;
     }
 }

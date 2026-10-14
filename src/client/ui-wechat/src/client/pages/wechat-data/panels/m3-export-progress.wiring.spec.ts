@@ -19,13 +19,21 @@ import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const entry = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'ui-entry.tsx'), 'utf8')
+/**
+ * 事件映射表（2026-10-14 从 ui-entry 的内联 if-else 抽出）：手机浏览器的 SSE 那条路
+ * 与 IPC 共用同一份映射，两边各写一份必然漂。判据因此改查**表 + ui-entry 的接线**。
+ */
+const events = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'wechat-events.ts'), 'utf8')
 const chats = readChatsSource()
 
 describe('M3：导出进度与取消的接线', () => {
   it('渲染层入口把 wechat-export/progress 中继成 DOM 事件', () => {
-    const at = entry.indexOf("'wechat-export/progress'")
-    expect(at, 'ui-entry 不再中继导出进度事件').toBeGreaterThan(-1)
-    expect(entry.slice(at, at + 320), '中继出去的事件名要和面板监听的一致').toContain('dsh-wechat-export-progress')
+    // 表里必须有这一条，且中继出去的名字与面板监听的一致
+    expect(events, '映射表里不再中继导出进度事件')
+      .toMatch(/from:\s*'wechat-export\/progress',\s*to:\s*'dsh-wechat-export-progress'/)
+    // 表在，还得真的接上：ui-entry 必须把它挂到 IPC 的 onEvent 上（否则表是死数据）
+    expect(entry, 'ui-entry 没有把共用的映射表接到 IPC 事件上')
+      .toContain('onEvent(dispatchWechatEvent)')
   })
 
   it('导出入口带 jobId（不带的话后端不知道该推给谁）', () => {

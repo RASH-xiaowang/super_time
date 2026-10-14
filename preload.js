@@ -75,6 +75,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('wechat:event', handler);
     }
   },
+  /**
+   * 局域网远程访问（手机端）—— 只有**桌面端**能配置它。
+   *
+   * 刻意单独一组而不是塞进 `wechat`：这两条不经过后端 worker（配置读写除外），
+   * 而是主进程自己的 HTTP 服务；而且它们**不在**远程方法白名单里 ——
+   * 手机浏览器拿不到这个对象，也就不可能用它改自己的权限。
+   */
+  remoteAccess: {
+    /** 当前状态：是否在监听、实际端口、绑定地址、令牌掩码、候选地址、队列与会话数。 */
+    state: () => ipcRenderer.invoke('remote-access:state'),
+    /**
+     * 按当前配置对齐监听状态（开关/端口/令牌改完之后调）。
+     *
+     * 为什么要显式调：服务内部有 60 秒的兜底复查，但用户在界面上点了开关就应当**立刻**生效，
+     * 等一分钟会被当成「开关坏了」。
+     */
+    apply: () => ipcRenderer.invoke('remote-access:apply'),
+    /**
+     * 生成新令牌并**同时打开**开关；返回 `{ token, state }`。
+     *
+     * 令牌原文只在这一次的返回值里出现（界面用它拼二维码与可复制的链接），
+     * 之后所有状态查询都只给掩码 —— 否则任何能看到这块屏幕的人（投屏、截图、远程协助）
+     * 就等于拿到了完整凭据。
+     */
+    rotate: () => ipcRenderer.invoke('remote-access:rotate'),
+    /** 打开 / 关闭监听。关闭会立刻断开所有在连的手机（令牌保留，下次打开还是同一个）。 */
+    toggle: (enabled) => ipcRenderer.invoke('remote-access:toggle', enabled === true),
+  },
   license: {
     status: () => ipcRenderer.invoke('license:status'),
     exportRequest: () => ipcRenderer.invoke('license:export-request'),
@@ -86,6 +114,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   diag: {
     logInfo: () => ipcRenderer.invoke('diag:log-info'),
     exportLog: () => ipcRenderer.invoke('diag:export-log'),
+    previewLog: () => ipcRenderer.invoke('diag:preview-log'),
+    copyLogPath: () => ipcRenderer.invoke('diag:copy-log-path'),
     revealLog: () => ipcRenderer.invoke('diag:reveal-log'),
   },
   /**
@@ -100,6 +130,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     state: () => ipcRenderer.invoke('update:state'),
     check: (opts) => ipcRenderer.invoke('update:check', opts),
     install: () => ipcRenderer.invoke('update:install'),
+    /**
+     * W2-12.2：跳过某个版本（传空串 = 取消跳过）。
+     * 渲染层只提供「跳哪个版本号」这一个字符串。
+     */
+    skip: (version) => ipcRenderer.invoke('update:skip', version),
+    /** W2-12.2：手动重试下载（不受自动重试的次数上限约束）。 */
+    retry: () => ipcRenderer.invoke('update:retry'),
     onEvent: (listener) => {
       const handler = (_event, payload) => {
         try {

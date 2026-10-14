@@ -275,9 +275,9 @@ export const MUTATIONS_BATCH3C = [
   },
   {
     id: "M343-readme-panel-count-rotted",
-    why: "README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
+    why: "（2026-10-13：ClawBot 多实例新增 `clawbot-instances.tsx` ⇒ 120 → 121；同日 v2 重设计 C1 新增 `clawbot-thread.tsx` ⇒ 121 → 122、C2 新增 `clawbot-rail.tsx` ⇒ 122 → 123；聊天信息 D0 新增 `chats-info-rows.tsx` ⇒ 123 → 124，锚点跟随。2026-10-13 W3-11.7 新增 `health-integrity.tsx` ⇒ 124 → 125；2026-10-14 远程访问新增 `settings-remote-access.tsx` ⇒ 125 → 126，再跟两次。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 113 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 126 个 .tsx 视图）",
     to: "src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },
@@ -589,8 +589,10 @@ MUTATIONS_BATCH3C.push(
     id: "M383-laya-analysis-stops-yielding",
     why: "把 `analyzeVisibleMessages` 逐条之间的让出删掉 ⇒ 一次 36 秒（峰值 110 秒）的 ONNX 推理期间独占事件循环，同进程其它请求（本该 1ms）全被拖成秒级。这正是排队放大器的本体，而功能上看不出任何异常",
     file: "src/backend/wechat-data/src/laya/analysis.ts",
-    from: "    await yieldToLoop()\n    const hit = cached.get(target.localId)",
-    to: "    const hit = cached.get(target.localId)",
+    // 2026-10-09（W3-11.5）：让出后面多了一行 `reportProgress(...)`（进度回调），
+    // 锚点跟着挪 —— 锚点腐烂要改锚点，不许为了让判据变绿把那一行挪走。
+    from: "    await yieldToLoop()\n    reportProgress(target.localId)\n    const hit = cached.get(target.localId)",
+    to: "    await yieldToLoop()\n    const hit = cached.get(target.localId)",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
   {

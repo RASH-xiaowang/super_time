@@ -7,16 +7,49 @@
  * 二百多行，只有表会涨；表再涨到上限时按批次切成 `mutations-registry.<批次>.mjs` 由这里聚合，
  * 不要靠放宽闸门解决。
  *
- * **已经照此切过三次**： 装 M118 起的条目（主表停在 M117）；
- * 2026-09-26 #19 第四刀之后  自己涨到 1073 行又撞闸门，于是 M222 起再切一份
- * ；2026-09-27 #22（四处长列表虚拟化）与 #20（GatewayCore 连着五刀）
+ * **已经照此切过三次**：`mutations-registry.batch3.mjs` 装 M118 起的条目（主表停在 M117，至 M221）；
+ * 2026-09-26 #19 第四刀之后 `batch3` 自己涨到 1073 行又撞闸门，于是 M222 起再切一份
+ * `mutations-registry.batch3b.mjs`；2026-09-27 #22（四处长列表虚拟化）与 #20（GatewayCore 连着五刀）
  * 把它顶到 **1015 行** —— 同一把尺子第三次拦下「登记变异这件事本身」，于是 M310 起再切一份
- * （停在 M344）。**分界点是闸门容量决定的、不是批次决定的** ——
- * M222 / M310 之后仍属报告里的第三批与第四批，批次语义在每条 id 与  里。加新条目：看哪份文件还有余量。
+ * `mutations-registry.batch3c.mjs`（现至 M416）。**分界点是闸门容量决定的、不是批次决定的** ——
+ * M222 / M310 之后仍属报告里的第三批与第四批，批次语义在每条 id 与 `why` 里。加新条目：看哪份文件还有余量。
+ *
+ * 第四份起改按**主题**切：`mutations-registry.batch3d.mjs`（M417 起）是 2026-10-09 那批
+ * 「评论图 / 视频封面 / CDN 密文」的十四条，自成一族、头注要能说清「这一批守的是什么」；
+ * 2026-10-12 的微信 ClawBot 集成（M444 起）沿用同一做法，新开 `mutations-registry.batch3e.mjs`；
+ * 2026-10-13 的 ClawBot **AI 自动回复**（M478 起）再开 `mutations-registry.batch3g.mjs`
+ * （主题=无人值守的模型调用）；同日 M5（来源区分 + 当前实例标记）开 `batch3h.mjs`；
+ * 同日 iLink 绑定通道接入再开 `mutations-registry.batch3f.mjs`（M458 起，主题=出网与生命周期）。
+ * 2026-10-13 的聊天信息抽屉**实时刷新**（M496 起）开 `mutations-registry.batch3j.mjs`
+ * （主题=抽屉开着时的静默重取与落地归属闸）。
+ * 同日的同步 **WAL 实时推送**（M500 起）开 `mutations-registry.batch3k.mjs`
+ * （主题=WAL 写入 → 立刻拍同步节拍：触发接线 / 防抖 / 限频）。
+ * 同日的会话/消息列表实时更新收口（M503 起）开 `mutations-registry.batch3l.mjs`
+ * （主题=会话列表节流降级 + staging 拷贝 EBUSY 重试）。
+ * 同日的微信数据面 **WAL 实时刷新全覆盖**（M508 起）开 `mutations-registry.batch3m.mjs`
+ * （主题=前端消费面全覆盖：直订 / 静默失败保护 / useFreshData opts 稳定性）。
+ * 同日的同步主库**尾部增量解密**（M511 起）开 `mutations-registry.batch3n.mjs`
+ * （主题=检查点只解新增页：quick_check 安全网 / 计划参与判定 / 尾页上限）。
+ * 同日的内联分析**异步转写**（M514 起）开 `mutations-registry.batch3o.mjs`
+ * （主题=whisper 转写不独占 worker：await 接线 / 异步入口形状）。
+ * 同日的主库**页级差分**增量（M518 起）开 `mutations-registry.batch3p.mjs`
+ * （主题=原地重写检查点只解变化页：指纹与签名绑定 / 差分参与判定 / 占比上限）。
+ * 同日的 wxgf 高清原图 **ffmpeg 兜底**（M521 起）开 `mutations-registry.batch3q.mjs`
+ * （主题=DLL 不可用时解全分辨率 JPEG：兜底接线 / 分区长度校验 / NAL 上限）。
+ * 次日的**入站监听面隐私口径**（M524 起）开 `mutations-registry.batch3r.mjs`
+ * （主题=局域网远程访问默认关闭：配置默认值 / 读回缺省值 / 同意屏渲染）。
+ * 同日的局域网远程访问 **HTTP 服务**（M527 起）开 `mutations-registry.batch3s.mjs`
+ * （主题=入站面的静默失效：定长比对 / 空令牌 / 异常即拒 / 白名单 / 并发闸 / SSE 转发与形状）。
+ * 同日的**浏览器态 Remote 与事件中继**（M535 起）开 `mutations-registry.batch3t.mjs`
+ * （主题=手机与桌面必须表现一致：映射表 / 前台补刷新 / 会话失效通知 / 令牌门 / 缺省派发器）。
+ * 同日的远程访问**控制面与设置卡片**（M540 起）开 `mutations-registry.batch3u.mjs`
+ * （主题=用户改这个暴露面的唯一入口：轮换要作废旧会话 / 启用要真开 / 死控件与残留二维码）。
+ * 同日的**手机端外壳**（M544 起）开 `mutations-registry.batch3v.mjs`
+ * （主题=只在窄视口出现的失效：桌面多出底栏 / sheet 不关 / 侧栏搜索条被拆）。
  *
  * ⚠️ 切文件带来的新失败模式：**忘了把新一份聚合进 MUTATIONS，一条错都不报**
  * （2026-09-27 就漏接过一次：表从 344 悄悄掉到 306，全绿）。兜它的是
- * { is a shell keyword 里的 （只许涨的条数下限）——
+ * `src/backend/tests/mutation-registry-anchors.spec.ts` 里的 `REGISTRY_MIN`（只许涨的条数下限）——
  * 每登记一条就把那个数抬上去；掉下来说明有整份表没接进来。
  *
  * ── 加新条目 ──────────────────────────────────────────────────────────────
@@ -29,6 +62,24 @@ import { MUTATIONS_BATCH3 } from './mutations-registry.batch3.mjs'
 import { MUTATIONS_BATCH3B } from './mutations-registry.batch3b.mjs'
 import { MUTATIONS_BATCH3C } from './mutations-registry.batch3c.mjs'
 import { MUTATIONS_BATCH3D } from './mutations-registry.batch3d.mjs'
+import { MUTATIONS_BATCH3E } from './mutations-registry.batch3e.mjs'
+import { MUTATIONS_BATCH3F } from './mutations-registry.batch3f.mjs'
+import { MUTATIONS_BATCH3G } from './mutations-registry.batch3g.mjs'
+import { MUTATIONS_BATCH3H } from './mutations-registry.batch3h.mjs'
+import { MUTATIONS_BATCH3I } from './mutations-registry.batch3i.mjs'
+import { MUTATIONS_BATCH3J } from './mutations-registry.batch3j.mjs'
+import { MUTATIONS_BATCH3K } from './mutations-registry.batch3k.mjs'
+import { MUTATIONS_BATCH3L } from './mutations-registry.batch3l.mjs'
+import { MUTATIONS_BATCH3M } from './mutations-registry.batch3m.mjs'
+import { MUTATIONS_BATCH3N } from './mutations-registry.batch3n.mjs'
+import { MUTATIONS_BATCH3O } from './mutations-registry.batch3o.mjs'
+import { MUTATIONS_BATCH3P } from './mutations-registry.batch3p.mjs'
+import { MUTATIONS_BATCH3Q } from './mutations-registry.batch3q.mjs'
+import { MUTATIONS_BATCH3R } from './mutations-registry.batch3r.mjs'
+import { MUTATIONS_BATCH3S } from './mutations-registry.batch3s.mjs'
+import { MUTATIONS_BATCH3T } from './mutations-registry.batch3t.mjs'
+import { MUTATIONS_BATCH3U } from './mutations-registry.batch3u.mjs'
+import { MUTATIONS_BATCH3V } from './mutations-registry.batch3v.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -175,7 +226,12 @@ const MUTATIONS_BATCH12 = [
     id: 'M18-readme-remote-count-drift',
     why: '把前端 README 的 Remote 计数改回旧的 158 —— docs-consistency 必须发现它和 docs/API.md 不一致',
     file: 'src/client/README.md',
-    from: '172 个 Remote 方法）',
+    // 2026-10-09（W3-11.5，`cancelLayaAnalysis` 是第 174 个 Remote）：锚点跟计数一起走。
+    // 2026-10-11（W2-8.6，`generateAnnualNarrative` 是第 179 个）：再跟一次。
+    // 2026-10-12（ClawBot 集成 +6 → 186；同日「可发可收」+1；同日「媒体可见」+1 → 188）：第五次跟。
+    // 2026-10-13（ClawBot 多实例 +4 → 192）：第六次跟。
+    // 2026-10-13（W3-11.7 损坏库修复链路 +2 → 194）：第七次跟。
+    from: '194 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -183,7 +239,7 @@ const MUTATIONS_BATCH12 = [
     id: 'M19-wdp-tab-count-drift',
     why: '把主容器头注的页签数改回旧的 32 —— 「导航计数以 nav-config 为真源」必须发现',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: '可路由页签共 **37**（其余 20 项',
+    from: '可路由页签共 **38**（其余 20 项',
     to: '可路由页签共 **32**（其余 20 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -247,7 +303,7 @@ const MUTATIONS_BATCH12 = [
     id: 'M30-wordcloud-cache-removed',
     why: 'queryWordCloud 去掉进程内缓存 —— 「全部热词」每次切回总览都要重算一遍全库（实测 3 秒）',
     file: 'src/backend/wechat-data/src/query/wordcloud.ts',
-    from: "  const full = await cachedBySigAsync(\n    `wordcloud:${scope}:${username}:${year ?? 'all'}:${decryptedDir}`,\n    sig,\n    () => computeWordCloud(decryptedDir, scope, username, year),\n    30_000,\n  )",
+    from: "  const full = await cachedBySigAsync(\r\n    `wordcloud:${scope}:${username}:${year ?? 'all'}:${decryptedDir}`,",
     to: '  const full = await computeWordCloud(decryptedDir, scope, username, year)',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wordcloud-perf.wiring.spec.ts',
   },
@@ -753,8 +809,8 @@ const MUTATIONS_BATCH12 = [
     id: "M103-sns-video-caches-miss-on-unreadable-dir",
     why: "把「扫不全也记 miss」放回去：一次临时的目录读不动被永久记成「本机没有这条视频」，重启才恢复",
     file: "src/backend/wechat-data/src/query/sns-video.ts",
-    from: "  if (notes.length === 0) idx.misses.add(wantMd5)",
-    to: "  idx.misses.add(wantMd5)",
+    from: "  if (notes.length === 0) for (const h of open) idx.misses.add(h)",
+    to: "  if (true) for (const h of open) idx.misses.add(h)",
     spec: "src/backend/wechat-data/tests/read-failure-contract.spec.ts",
   },
   {
@@ -872,4 +928,4 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V]

@@ -34,10 +34,14 @@ import '../../ui-wechat/src/client/pages/wechat-data/scifi-theme.css'
 import '../../ui-wechat/src/client/pages/wechat-data/light-theme.css'
 import css from './PrivacyConsentGate.module.css'
 
-/** 出网点的开关性质：决定它拿到哪种标记、以及是否被琥珀色框圈起来。 */
-type SwitchKind = 'none' | 'manual'
+/** 网络面的开关性质：决定它拿到哪种标记、以及是否被琥珀色框圈起来。
+ *  · `none`   —— 没有开关（琥珀色圈出，全页唯一的警示色）
+ *  · `manual` —— 只在你点击时才发生
+ *  · `off`    —— **默认关闭、且有真开关**（2026-10-14 随入站监听首次出现；
+ *                出网侧自 2026-09-30 起已无此档，故它是本屏唯一的青色标记） */
+type SwitchKind = 'none' | 'manual' | 'off'
 
-interface OutboundEntry {
+interface SurfaceEntry {
   /** 左栏标签。 */
   label: string
   /** 中栏说明（一句话讲清「什么时候发、发什么」）。 */
@@ -52,10 +56,22 @@ interface OutboundEntry {
 const KIND_CHIP: Readonly<Record<SwitchKind, string>> = {
   none: '无开关',
   manual: '仅点击时下载',
+  off: '默认关闭 · 可关',
 }
 
 /**
- * 出网点清单（与 `docs/PRIVACY.md` 第四节逐条对应）。
+ * 标记的配色：`none` 用琥珀（全页唯一的警示色，「关不掉」），其余用中性/青色。
+ * `off` 复用既有但一直没被引用的 `.chipToggle`（青色 = 「这一条有真开关」）——
+ * 它正是 2026-09-30 拆掉出网开关后空下来的那一档，语义与配色都对得上。
+ */
+const KIND_CHIP_CLASS: Readonly<Record<SwitchKind, string>> = {
+  none: `${css.chip} ${css.chipNone}`,
+  manual: `${css.chip} ${css.chipManual}`,
+  off: `${css.chip} ${css.chipToggle}`,
+}
+
+/**
+ * 出网点清单（与 `docs/PRIVACY.md` 第四节 A–G 逐条对应）。
  *
  * 口径提醒（2026-09-30）：应用内的出网开关**已全部移除**（原来的「禁止 AI 出网」
  * 「禁止地图底图出网」与「自动获取原图（CDN）」），所以这里不再有 `可关闭` 这一档 ——
@@ -63,7 +79,7 @@ const KIND_CHIP: Readonly<Record<SwitchKind, string>> = {
  * 图片/头像/视频这一类自 M23 起全部由后端代取，界面自己不再向任何远程主机要图
  * （CSP 的 `img-src` 只放行本机来源）。
  */
-const OUTBOUND: ReadonlyArray<OutboundEntry> = [
+const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
   {
     label: 'AI 问答与总结',
     text: '把检索到的聊天片段发给你自己配置的模型接口；「测试连接 / 测试向量 / 测试精排」只发一条固定测试串，「余额查询」（左下角每 5 分钟一次）只带 Key —— 都不发你的内容',
@@ -104,6 +120,23 @@ const OUTBOUND: ReadonlyArray<OutboundEntry> = [
   },
 ]
 
+/**
+ * 入站监听面（与 `docs/PRIVACY.md` 第四节 H 对应）。
+ *
+ * 刻意**与出网点分开列、不并进上面的计数**：方向相反（本机监听、别的设备连进来），
+ * 混在一起会让「共 N 个出网点」这句话变成假话。它是本屏唯一带 `off` 标记的一条 ——
+ * 出网侧自 2026-09-30 起已无任何开关，而入站这一条**默认就是关的、且有真开关**。
+ */
+const INBOUND: ReadonlyArray<SurfaceEntry> = [
+  {
+    label: '局域网远程访问（手机端）',
+    text: '打开「设置 → 远程访问（手机）」后，本机在局域网里监听一个端口（默认 5032），你自己的手机可用浏览器访问同一套界面。访问必须持令牌，且只开放一份方法白名单 —— 模型 API Key、许可证、诊断、更新、备份还原、配置写入与全部原生能力（选目录、窗口控制、截图）都不开放',
+    host: '本机局域网 IPv4:5032（可在设置里改端口 / 关开关）',
+    kind: 'off',
+    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到令牌与你查阅的数据。只在你信任的局域网里打开，用完就关。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则手机连不上。',
+  },
+]
+
 /** 「你的控制」逐条：入口 / 能改什么。 */
 const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   {
@@ -113,6 +146,10 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   {
     label: '模型配置',
     text: '数据配置 → AI 大模型：换模型 / 换服务商，或把 apiUrl 指向你自己的内网或本机模型。',
+  },
+  {
+    label: '远程访问（手机）',
+    text: '设置 → 远程访问（手机）：开关（默认关闭）、二维码与局域网地址、轮换令牌。关掉开关即停止监听，轮换令牌会让已连上的手机失效。',
   },
   {
     label: '重新审阅本声明',
@@ -127,6 +164,21 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
     text: '断网，或在系统防火墙里禁止 Super Time 出站；再把自己的模型端点换成内网 / 本机服务，内容就完全不出你的网络。',
   },
 ]
+
+/** 一条网络面的行：出网与入站共用同一套「标签 / 说明 / 标记」三栏排版。 */
+function SurfaceRow({ e }: { e: SurfaceEntry }): React.JSX.Element {
+  return (
+    <div className={e.kind === 'none' ? `${css.row} ${css.rowNone}` : css.row} data-switch={e.kind}>
+      <span className={css.rowLabel}>{e.label}</span>
+      <span className={css.rowText}>
+        {e.text}
+        {e.host && <span className={css.rowHost}>{e.host}</span>}
+        {e.note && <span className={css.rowNote}>{e.note}</span>}
+      </span>
+      <span className={KIND_CHIP_CLASS[e.kind]}>{KIND_CHIP[e.kind]}</span>
+    </div>
+  )
+}
 
 /**
  * 渲染同意闸门。
@@ -231,25 +283,32 @@ export function PrivacyConsentGate({
               </div>
 
               <div className={css.rows}>
-                {OUTBOUND.map((e) => (
-                  <div key={e.label} className={e.kind === 'none' ? `${css.row} ${css.rowNone}` : css.row} data-switch={e.kind}>
-                    <span className={css.rowLabel}>{e.label}</span>
-                    <span className={css.rowText}>
-                      {e.text}
-                      {e.host && <span className={css.rowHost}>{e.host}</span>}
-                      {e.note && <span className={css.rowNote}>{e.note}</span>}
-                    </span>
-                    <span className={e.kind === 'none' ? `${css.chip} ${css.chipNone}` : `${css.chip} ${css.chipManual}`}>
-                      {KIND_CHIP[e.kind]}
-                    </span>
-                  </div>
-                ))}
+                {OUTBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
               </div>
 
               <p className={css.caveat}>
                 <b>诚实说明</b>：上面 {blocked.length} 条出网点（{blocked.map((e) => e.label).join('、')}）
                 <b>不受任何应用内设置控制</b> —— 应用里已经没有任何出网开关。图片、头像与视频这一类
                 全部由后端代取，界面自己不向任何远程主机要图。要断掉这些请求，只能靠系统防火墙或断网。
+              </p>
+            </section>
+
+            {/* 入站方向单独成节：与出网方向相反（本机监听、别的设备连进来），
+                并进上面那节会让「共 N 个出网点」变成假话。 */}
+            <section className={css.sec}>
+              <div className={css.secHd}>
+                <h2 className={css.secTitle}>会被连进来的地方（入站）</h2>
+              </div>
+              <div className={css.stat}>
+                <span className={css.statChip}>共 {INBOUND.length} 个监听面</span>
+                <span className={css.statChip}>{INBOUND.length} 条默认关闭</span>
+              </div>
+              <div className={css.rows}>
+                {INBOUND.map((e) => <SurfaceRow key={e.label} e={e} />)}
+              </div>
+              <p className={css.keyBox}>
+                与出网点不同，这一条<b>有真开关、而且默认是关的</b>：不打开「设置 → 远程访问（手机）」，
+                本应用一个端口都不监听，别人无法从网络连进来。
               </p>
             </section>
           </div>

@@ -71,6 +71,16 @@ describe('导航守卫：只允许应用自己的页面', () => {
     expect(decideNavigation('http://127.0.0.1:8080/', APP_ROOT)).toBe('deny')
   })
 
+  it('自己的远程访问服务也被阻止（Electron 窗口不该导航到给手机用的那个地址）', () => {
+    // 2026-10-14 加：局域网远程访问（手机端）会在本机起一个 HTTP 服务（默认端口 5032）。
+    // 桌面窗口自己**永远**从 file:// 加载，没有任何理由导航过去；真过去了就等于把桌面端
+    // 降级成一个没有 preload 的浏览器会话（原生能力全丢、令牌门却还在）。
+    // 默认拒绝已经覆盖它，这条只是把意图写明 —— 端口是配置项，将来改了也不用回来补。
+    expect(decideNavigation('http://127.0.0.1:5032/', APP_ROOT)).toBe('deny')
+    expect(decideNavigation('http://192.168.1.23:5032/', APP_ROOT)).toBe('deny')
+    expect(decideNavigation('http://192.168.1.23:5032/?t=some-token', APP_ROOT)).toBe('deny')
+  })
+
   it('应用目录之外的本地文件被阻止', () => {
     expect(decideNavigation('file:///C:/Windows/System32/calc.exe', APP_ROOT)).toBe('deny')
     expect(decideNavigation('file:///D:/super-time-wechat-evil/index.html', APP_ROOT)).toBe('deny')

@@ -4,6 +4,15 @@ export declare const WHISPER_MODELS: ReadonlyArray<Pick<WhisperModelInfo, 'id' |
 /** ggml model file per model id (whisper.cpp official release artifacts). */
 export declare const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]>;
 /**
+ * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
+ *
+ * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值时回落到
+ * `latest`（旧行为，保护已经配好镜像的环境）。
+ * 这里是一个字符串常量而不是编号——— 固定哪一版
+ * 应该是一行改动，而不是到处翻 URL。
+ */
+export declare const WHISPER_ENGINE_TAG: string;
+/**
  * 把一个 URL 流式写进 `dest`，**支持断点续传**：以 `dest` 现有长度为起点发 `Range`。
  *
  * 为什么要续传：模型有 1.5–3.1 GB，一次连接中断就让整份重下；而重试层只管到「响应头」，
@@ -20,7 +29,9 @@ export declare const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]>;
  * @param onProgress - 进度回调（received 含续传已有的部分；total 未知时为 0）。
  * @returns 最终字节数（含续传部分）。
  */
-export declare function streamUrlToFile(url: string, dest: string, timeoutMs: number, onProgress: (received: number, total: number) => void): Promise<number>;
+export declare function streamUrlToFile(url: string, dest: string, timeoutMs: number, onProgress: (received: number, total: number) => void, 
+/** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+signal?: AbortSignal): Promise<number>;
 /**
  * Migrate downloaded models (ggml-*.bin), the engine install (bin/), and any
  * top-level engine files (whisper-cli.exe / whisper.exe + sibling engine DLLs)
@@ -112,7 +123,9 @@ export declare function resolveWhisperModelsDir(configured: string | undefined, 
  * @param onProgress - progress callback (bytes, total).
  * @returns ok + binary path, or an error description.
  */
-export declare function installWhisperEngine(modelsDir: string, onProgress: (received: number, total: number) => void): Promise<{
+export declare function installWhisperEngine(modelsDir: string, onProgress: (received: number, total: number) => void, 
+/** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+signal?: AbortSignal): Promise<{
     ok: boolean;
     path?: string;
     error?: string;
@@ -142,7 +155,9 @@ export declare function extractZip(zipPath: string, destDir: string): Promise<st
  * @param onProgress - per-chunk progress callback (bytes, total bytes).
  * @returns ok + file/bytes, or an error description.
  */
-export declare function whisperDownloadModel(modelId: string, modelsDir: string, onProgress: (received: number, total: number) => void): Promise<{
+export declare function whisperDownloadModel(modelId: string, modelsDir: string, onProgress: (received: number, total: number) => void, 
+/** W3-5.5：取消信号；已取消时抛带 `WHISPER_DOWNLOAD_CANCELED` 的错误。 */
+signal?: AbortSignal): Promise<{
     ok: boolean;
     file?: string;
     bytes?: number;

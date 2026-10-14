@@ -72,12 +72,22 @@ export interface LayaDownloadResult {
     files?: string[];
     bytes?: number;
     error?: string;
+    /** W2-11.5：被用户取消（与「失败」分开 —— 界面据此不弹错误框）。 */
+    canceled?: boolean;
 }
 /**
  * 下载缺失的文件到 `dir`（幂等：已存在且大小过下界的文件直接跳过）。
  * 任一文件失败即中止并返回错误；已下好的部分**保留**，重试时天然续传。
+ *
+ * W2-11.5：`signal` 一路上接 `streamUrlToFile` 的取消（它本来就支持），并在**每个文件
+ * 之间**再查一次 —— 单个文件最大 1.2 GB，只在流内部查会让「点了停止」等到那块下完。
+ * 取消**不删 `.part`**：与失败同一条纪律，下次点击从断点续接（这是「取消可反悔」的前提）。
+ * @param dir - 模型目录。
+ * @param onProgress - 进度回调。
+ * @param signal - 可选的取消令牌。
+ * @returns 结果；被取消时带 `canceled: true`（与「失败」分开，界面据此不报错）。
  */
-export declare function layaDownloadModel(dir: string, onProgress: (received: number, total: number, file: string) => void): Promise<LayaDownloadResult>;
+export declare function layaDownloadModel(dir: string, onProgress: (received: number, total: number, file: string) => void, signal?: AbortSignal): Promise<LayaDownloadResult>;
 /**
  * 把「用户自己下好的模型目录」接管进数据目录（避免重复下 1.26 GB）。
  * 同盘用 rename（瞬时），跨盘退化为拷贝。

@@ -25,6 +25,14 @@ export type RecordItem = Record<string, string | number | boolean | null>;
 export interface RecordsSnapshot {
     items: RecordItem[];
     total: number;
+    /**
+     * **只在读失败时出现**（W3-11.4，与 `NotesSnapshotRead` 同一纪律）。
+     *
+     * 为什么 records 也需要它：`general.db` 不存在时旧实现直接返回空列表 —— 而「本机没有
+     * 资金往来」与「数据还没解密/解密不完整」在界面上长得一模一样（都是「暂无记录」）。
+     * 首启阶段前者是常态、后者是配置问题，用户需要知道自己该去哪儿。
+     */
+    readError?: string;
 }
 /** One aggregated contact row in the funds ledger. */
 export interface LedgerContactRow {
@@ -155,6 +163,11 @@ export interface RevokedItem {
 export interface RevokedSnapshot {
     items: RevokedItem[];
     total: number;
+    /**
+     * **只在读失败时出现**（W3-11.4）。归档库不存在/打不开时返回空列表是不够的 ——
+     * 「没有撤回消息」与「归档库还没建」得分开说（后者随同步 tick 自动补上，前者不会）。
+     */
+    readError?: string;
 }
 /** One custom/static emoticon row. */
 export interface EmoticonItem {

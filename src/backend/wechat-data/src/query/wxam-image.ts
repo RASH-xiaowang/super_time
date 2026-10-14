@@ -35,6 +35,9 @@ import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { weixinInstallPath } from '../config/detect.ts'
+import { jpegDimensions } from './jpeg-dimensions.ts'
+export { jpegDimensions } from './jpeg-dimensions.ts'
+import { transcodeWxgfWithFfmpeg } from './wxgf-ffmpeg.ts'
 
 /** 单次转码输出的字节上限：与远端原图的 `MAX_ORIGINAL_BYTES` 同口径。 */
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024
@@ -74,34 +77,6 @@ function trimToJpegEnd(bytes: Buffer): Buffer | null {
   const eoi = bytes.lastIndexOf(Buffer.from([0xff, 0xd9]))
   if (eoi <= 0) return null
   return bytes.subarray(0, eoi + 2)
-}
-
-/**
- * 从 JPEG 字节里读宽高（SOF 段）。
- *
- * 为什么自己解析而不是调 `wxam_dec_getWXGFInfo_5`：那个导出的签名没验证过，
- * 调错会崩进程；而 JPEG 的 SOF 扫描是纯 JS、可单测、失败也只是返回 null。
- * @param bytes - JPEG 字节。
- * @returns 宽高，或数据不是可解析的 JPEG 时为 null。
- */
-export function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
-  // SOF0/1/2/3/5/6/7/9/10/11/13/14/15 都带尺寸；D8/01/RSTn 是无长度段的标记。
-  const SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf])
-  let i = 2
-  while (i < bytes.length - 9) {
-    if (bytes[i] !== 0xff) { i += 1; continue }
-    const marker = bytes[i + 1] ?? 0
-    if (SOF.has(marker)) {
-      const h = ((bytes[i + 5] ?? 0) << 8) | (bytes[i + 6] ?? 0)
-      const w = ((bytes[i + 7] ?? 0) << 8) | (bytes[i + 8] ?? 0)
-      return w > 0 && h > 0 ? { width: w, height: h } : null
-    }
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) { i += 2; continue }
-    const segLen = ((bytes[i + 2] ?? 0) << 8) | (bytes[i + 3] ?? 0)
-    if (segLen < 2) return null
-    i += 2 + segLen
-  }
-  return null
 }
 
 /**
@@ -211,21 +186,26 @@ function outputCapacity(inputBytes: number): number {
  * @param native - `undefined` = 用真 DLL（惰性加载）；`null` = 强制不可用；对象 = 注入替身（单测）。
  * @returns 转码器；**永不抛**，失败一律返回 `{ error }`。
  */
-export function createWxgfTranscoder(native?: WxgfNative | null): WxgfTranscoder {
+export function createWxgfTranscoder(native?: WxgfNative | null, ffmpegFallback?: WxgfTranscoder | null): WxgfTranscoder {
   return (payload: Uint8Array): WxgfTranscodeResult => {
     const started = Date.now()
     const nat = native === undefined ? loadRealNative() : native
     if (!nat) {
       // 注入 null 是调用方主动禁用，别把上一次探测的全局原因（可能来自别的场景）报出去。
-      return { error: native === null ? '微信解码库不可用（已强制禁用）' : (unavailableReason || '微信解码库不可用') }
+      const dllError = native === null ? '微信解码库不可用（已强制禁用）' : (unavailableReason || '微信解码库不可用')
+      // DLL 不可用（没装微信 / 加载失败 / 被开关关掉）时走 ffmpeg 兜底（2026-10-13，
+      // 移植自 WeChatDataAnalysis）：能解出全分辨率 JPEG，而不是退回缩略图。
+      return runFfmpegFallback(ffmpegFallback, payload, started, dllError)
     }
     if (payload.length < 8) return { error: 'wxgf 数据过小，无法解码' }
     const input = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength)
-    const opt = Buffer.alloc(OPT_STRUCT_BYTES) // 全零即可，但指针必须有效（见文件头）
+    const opt = Buffer.alloc(OPT_STRUCT_BYTES) // 全零 = mode 0；第三次尝试写 mode 3（见下）
     const outSize = Buffer.alloc(4)
     let capacity = outputCapacity(payload.length)
-    // 两次机会：第一次按估算，第二次直接顶到上限。
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // 三次机会：mode 0 按估算缓冲、mode 0 顶到上限、mode 3 顶到上限——
+    // 参考项目实测有 wxgf 变体只有 mode 3 能解（2026-10-13 移植）。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt === 2) opt.writeInt32LE(3, 0)
       const output = Buffer.allocUnsafe(capacity)
       const { ret, size } = nat.run(input, output, outSize, opt)
       if (ret === 0 && size > 0) {
@@ -244,14 +224,41 @@ export function createWxgfTranscoder(native?: WxgfNative | null): WxgfTranscoder
           ms: Date.now() - started,
         }
       }
-      if (attempt === 0) {
+      if (attempt < 2) {
         capacity = MAX_OUTPUT_BYTES
         continue
       }
-      return { error: `wxgf 转码失败（返回 ${String(ret)}，输出 ${String(size)} 字节）` }
+      // DLL 三次都失败：走 ffmpeg 兜底（2026-10-13 移植自 WeChatDataAnalysis）。
+      return runFfmpegFallback(ffmpegFallback, payload, started, `wxgf 转码失败（返回 ${String(ret)}，输出 ${String(size)} 字节）`)
     }
-    return { error: 'wxgf 转码失败' }
+    return runFfmpegFallback(ffmpegFallback, payload, started, 'wxgf 转码失败')
   }
+}
+
+/**
+ * ffmpeg 兜底（DLL 不可用/失败后的第二条链）：`DSH_WECHAT_WXGF_FFMPEG=0` 可整体关闭；
+ * 注入 null 表示调用方主动禁用（单测）。兜底失败时把 DLL 侧的原因一并带上——
+ * 用户看到的是「为什么这条路也走不通」的完整故事。
+ */
+function runFfmpegFallback(
+  ffmpegFallback: WxgfTranscoder | null | undefined,
+  payload: Uint8Array,
+  started: number,
+  dllError: string,
+): WxgfTranscodeResult {
+  if (ffmpegFallback === null) return { error: dllError }
+  if ((process.env.DSH_WECHAT_WXGF_FFMPEG ?? '') === '0') return { error: dllError + '（ffmpeg 兜底已被 DSH_WECHAT_WXGF_FFMPEG=0 关闭）' }
+  const fb = ffmpegFallback ?? defaultFfmpegFallback
+  const r = fb(payload)
+  if ('bytes' in r) return { ...r, ms: Date.now() - started }
+  return { error: dllError + '；ffmpeg 兜底也失败：' + r.error }
+}
+
+/** 默认兜底（真 ffmpeg；惰性定位）。 */
+function defaultFfmpegFallback(payload: Uint8Array): WxgfTranscodeResult {
+  const r = transcodeWxgfWithFfmpeg(payload)
+  if ('bytes' in r) return { ...r, ms: 0 }
+  return { error: r.error }
 }
 
 /** 默认转码器（真 DLL，惰性加载）。 */

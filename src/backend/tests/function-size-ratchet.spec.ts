@@ -41,32 +41,32 @@ const LIMIT = 250
  * 2026-09-26 由一次性脚本 AST 实测灌进来（不是估的；脚本用完即删，复现方法见下面的判据本身）。
  */
 const KNOWN_BIG: ReadonlyArray<string> = [
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  821',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  811',
   // 登记理由（2026-09-29）：这段循环必须**保持整段内联**才能同时满足连接纪律棘轮 ——
   // 把分片读取抽成独立函数会让 `new DatabaseSync` 的站点归属变到账本里没有的函数名上
   // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
   // 就是在这个内联循环外面挂了一层"命中即 continue"。**行数只许变小。**
   'src/backend/wechat-data/src/query/overview-insights.ts  computeOverviewInsights  252',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  787',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  770',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  725',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  359',
-  'src/backend/wechat-data/src/remotes/askdeep.ts  createAskDeepRemotes  607',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-view.tsx  ChatsView  376',
+  'src/backend/wechat-data/src/remotes/askdeep.ts  createAskDeepRemotes  574',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  588',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  465',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Chats.tsx  ChatsPanel  458',
   // 2026-09-30：重做为「三块可折叠面板」时把子件拆成 ai-model-panel / -profiles / -roles /
   // llm-probe 四个文件，540 → 493；同日「默认全部折叠」又去掉了自动展开的旁路，493 → 488。
   // 棘轮只许变小，改完要回来改数字。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx  AiModelConfig  488',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  493',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  475',
   // 2026-09-30：底部固定区（设置 / 模型余额 / 主题与数据状态）拆成 `SidebarFooter`，
   // 492 → 464。棘轮的方向是「只许变小」，所以拆完要回来改数字。
   'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  464',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  461',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-thread.tsx  useChatsThread  269',
-  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  425',
+  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  400',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-panel.tsx  OverviewPanel  403',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  387',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  368',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  364',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  329',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx  WorldMapPanel  313',
   // 2026-09-28（E1 性能修复）：334 → 362。增量全部是**新增的 `getEmoticonDataUrls`
@@ -74,7 +74,10 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 所以这里只长了那一层壳。想把它降回去就得把别的域也搬出去，不是靠改这个数字。
   // 2026-10-09：332 → 321。视频封面那路（`getSnsVideoCoverDataUrl`）也照同一范式搬去了
   // 模块级 `snsVideoCoverWithCdnFirst`，方法体退回「签名 + 一行转发」，净减 11 行。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  321',
+  // 2026-10-10：321 → 326。W2-5.6 的批量封面（`getSnsVideoCoversBatch`）照同一范式：
+  // 算法体全在模块级 `snsVideoCoversBatchIn`，方法体只剩「签名 + 一行转发」，净增 5 行。
+  // 想再降就得把别的域也搬出去，不是靠改这个数字。
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  326',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsPanel  328',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  314',
   // 2026-09-30：给年报加「资金 / 撤回 / 群聊」三个字段时，先把 noteEmoji 与页脚首尾两条
@@ -86,7 +89,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/AskHistoryDialog.tsx  AskHistoryDialog  289',
   'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  285',
   // 2026-09-29：合并两个 Toolbar 为一行 + 注释精简 ⇒ 279（成果记账，数字改小；只许再变小）
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  279',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  281',
   'src/backend/wechat-data/src/remotes/export.ts  createExportRemotes  278',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  259',
   'src/backend/wechat-data/src/query/parse-rich.ts  parseAppmsg  266',

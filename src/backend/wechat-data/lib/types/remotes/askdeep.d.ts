@@ -33,6 +33,13 @@ export interface createAskDeepRemotesInputs {
         source?: string;
         usernameName?: string;
     }, result: AskResult, elapsedMs: number, model: string) => void;
+    /** W3-6.1：取本轮问答的取消信号（gateway 持有槽位）。 */
+    askSignal: (jobId?: string) => {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /** W3-6.1：取消一轮问答；找不到在跑的那一轮时返回 false。 */
+    cancelAskJob: (jobId?: string) => boolean;
 }
 export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
     askWechat(options: {
@@ -61,7 +68,14 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
          * 而不是把别的库的内容也端上来。
          */
         kbId?: number;
+        jobId?: string;
     }): Promise<AskResult>;
+    cancelAsk: (options: {
+        jobId: string;
+    }) => {
+        ok: boolean;
+        message?: string;
+    };
     optimizeAskQuestion(options: {
         question: string;
         username?: string;

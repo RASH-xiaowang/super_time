@@ -2,7 +2,7 @@
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
  * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 14 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 172 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 194 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -21,6 +21,7 @@ import { createKeysDecryptRemotes } from './remotes/keysdec.ts';
 import { createGraphSearchRemotes } from './remotes/graphsearch.ts';
 import { createSummaryRecordRemotes } from './remotes/summaryrec.ts';
 import { createVoiceLlmRemotes } from './remotes/voicellm.ts';
+import { createAnnualNarrRemotes } from './remotes/annual-narr.ts';
 import { createAskDeepRemotes } from './remotes/askdeep.ts';
 import { createKbRemotes } from './remotes/kb.ts';
 import { createMediaRemotes } from './remotes/media.ts';
@@ -88,6 +89,23 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      */
     protected readonly _searchJobs: Map<string, AbortController>;
     /**
+     * 问答的取消槽（W3-6.1）：jobId → 取消控制器。
+     *
+     * 为什么与搜索/导出都分开：三者的生命周期不同 —— 搜索是「一次扫描」、导出是「一个 job」，
+     * 问答是「一轮生成」。共用一个槽会让「取消搜索」顺手掐死正在生成的回答（或反过来），
+     * 那是比不能取消更坏的行为。做法与 {@link searchSignal} 同款：jobId 由渲染层生成
+     * （就是那轮的 streamId），取消走独立的 `cancelAsk` Remote。
+     */
+    protected readonly _askJobs: Map<string, AbortController>;
+    /** W3-11.5：逐条分析的取消槽（与问答分开放，原因见 `layaSignal` 的注释）。 */
+    protected readonly _layaJobs: Map<string, AbortController>;
+    /** W3-11.5：搜索索引构建的取消槽（与搜索分开放，原因见 `searchIndexSignal` 的注释）。 */
+    protected readonly _searchIndexJobs: Map<string, AbortController>;
+    /** W3-5.5：下载的取消槽（与其余几种各占一格）。 */
+    protected readonly _whisperDownloadJobs: Map<string, AbortController>;
+    /** W3-11.5：知识库向量构建的取消槽（与消息域的构建各占一格，互相不会打断）。 */
+    protected readonly _kbIndexCancelJobs: Map<string, AbortController>;
+    /**
      * 反馈去重窗口（N27）：键 → 到期时间。
      *
      * 为什么不是 `inflightXxx: Set` 那种「在飞合并」的闸：`submitAskFeedback` 是**同步** RPC，
@@ -139,6 +157,11 @@ export declare abstract class GatewayCore extends TypertRemoteService {
      * @param error - 失败/取消原因；成功时省略。
      */
     protected finishStreamJob(jobId: string, error?: string): void;
+    /**
+     * 子类钩子：网关构造完成后（`setImmediate` 里）拉起 ClawBot 接收通道
+     * （体在 `gateway-clawbot.ts`；默认实现什么都不做 —— ClawBot 组装在更派生的层）。
+     */
+    protected bootClawbotChannel(): void;
     constructor(ctx: Context);
     /**
      * Append one operation-log row. Metadata only — never message bodies or
@@ -164,6 +187,14 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         sessions: number;
         messages: number;
     }, texts: string[]): string[];
+    /**
+     * 当前数据根是否开启敏感字段脱敏（W3-6.2：embedding 缓存键的命名空间）。
+     *
+     * 与 `privacyGateAt` 读的是**同一个** `readPrivacySettings`，容错口径也相同
+     *（读不到按 false 继续）—— 两边不一致会让缓存跨口径取用，所以这里刻意不另找数据源。
+     * @returns 开启为 true。
+     */
+    protected privacyRedactMode(): boolean;
     /**
        * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
        *
@@ -260,6 +291,8 @@ export declare abstract class GatewayCore extends TypertRemoteService {
     protected graphSearchRemotes(): ReturnType<typeof createGraphSearchRemotes>;
     /** 总结记录（每日/周期总结生成、记录删除、推荐回复） 的处理器（体在 remotes/summaryrec.ts）；这里只组装 ctx 与转发。 */
     protected summaryRecordRemotes(): ReturnType<typeof createSummaryRecordRemotes>;
+    /** AI 年报叙述（W2-8.6：分段取材 + 逐段 LLM + 进度/取消） 的处理器（体在 remotes/annual-narr.ts）。 */
+    protected annualNarrRemotes(): ReturnType<typeof createAnnualNarrRemotes>;
     /** 语音转写与模型清单（whisper 安装/下载/状态、可用模型与提供方） 的处理器（体在 remotes/voicellm.ts）；这里只组装 ctx 与转发。 */
     protected voiceLlmRemotes(): ReturnType<typeof createVoiceLlmRemotes>;
     /** 问答主链路（提问检索生成、问题优化、向量索引重建） 的处理器（体在 remotes/askdeep.ts）；这里只组装 ctx 与转发。 */
@@ -274,6 +307,88 @@ export declare abstract class GatewayCore extends TypertRemoteService {
         signal: AbortSignal;
         done: () => void;
     } | undefined;
+    /**
+     * 取一个问答任务的取消信号（W3-6.1）。语义与 {@link searchSignal} 一致：
+     * 槽位只认「自己这一枚控制器」，先取消再重跑的令牌不会互相删。
+     * @param jobId - 渲染层传来的轮次标识（就是 streamId）；缺省/空白时 undefined（不可取消）。
+     */
+    protected askSignal(jobId?: string): {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /**
+     * 取消一轮问答。返回是否真的找到了在跑的那一轮 —— 找不到（已结束 / jobId 不认识）时
+     * 给调用方一个可读的 false，而不是静默成功（那会让用户以为取消生效了，回答还在继续跑）。
+     * @param jobId - 要取消的轮次标识。
+     */
+    protected cancelAskJob(jobId?: string): boolean;
+    /**
+     * 取一批逐条分析的取消信号（W3-11.5）。语义与 {@link searchSignal} / {@link askSignal} 一致：
+     * 槽位只认「自己这一枚控制器」，先取消再重跑的令牌不会互相删。
+     *
+     * 为什么单独一格而不复用 `_askJobs`：分析批与问答轮次会同时在跑，共用一个 Map 的话
+     * 两个毫不相干的 jobId 会互相顶掉对方的令牌，取消会打到错误的批次上。
+     * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+     */
+    protected layaSignal(jobId?: string): {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /**
+     * 取消一批逐条分析。返回是否真的找到了在跑的那一批 —— 找不到（已算完 / jobId 不认识）
+     * 时给调用方一个可读的 false，而不是静默成功。
+     * @param jobId - 要取消的批次标识。
+     */
+    protected cancelLayaJob(jobId?: string): boolean;
+    /**
+     * 取一次搜索索引构建的取消信号（W3-11.5）。语义与前两个 `xxxSignal` 一致。
+     *
+     * 为什么单独一格：搜索与构建会同时在跑（搜索兜底扫描期间用户就能点「构建索引」），
+     * 共用 `_searchJobs` 的话「停止构建」会打到在跑的搜索上、把搜索打断。
+     * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+     */
+    protected searchIndexSignal(jobId?: string): {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /**
+     * 取消一次搜索索引构建。返回是否真的找到了在跑的那一次。
+     * @param jobId - 要取消的批次标识。
+     */
+    protected cancelSearchIndexJob(jobId?: string): boolean;
+    /**
+     * 取一次知识库向量构建的取消信号（W3-11.5）。语义同前三个 `xxxSignal`。
+     *
+     * 单独一格而不是复用 `_searchIndexJobs`：消息域索引与某个库的向量索引会同时在跑，
+     * 共用一格的话，停掉一个会把另一个也打断。
+     * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+     */
+    protected kbIndexSignal(jobId?: string): {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /**
+     * 取消一次知识库向量构建。返回是否真的找到了在跑的那一次。
+     * @param jobId - 要取消的批次标识。
+     */
+    protected cancelKbIndexJob(jobId?: string): boolean;
+    /**
+     * 取一次模型/引擎下载的取消信号（W3-5.5）。语义与前几个 `xxxSignal` 一致。
+     *
+     * 移植到 download 上的原因：模型 1.5–3.1 GB，一旦开下就是几分钟到十几分钟的等待，
+     * 而用户常常是“点错了模型”或者窗口要关了”——— 那一刻他
+     * 唯一能做的就是等。取消不删局部文件，下次续传仍然有效。
+     * @param jobId - 渲染层生成的下载标识；缺省/空白时 undefined（不可取消）。
+     */
+    protected whisperDownloadSignal(jobId?: string): {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /**
+     * 取消一次下载。返回是否真的找到了在下的那一次。
+     * @param jobId - 要取消的下载标识。
+     */
+    protected cancelWhisperDownloadJob(jobId?: string): boolean;
     /**
      * 记一条导出历史（best-effort）。
      *

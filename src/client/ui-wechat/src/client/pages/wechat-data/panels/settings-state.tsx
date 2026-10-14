@@ -9,7 +9,7 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
@@ -29,6 +29,139 @@ export interface SettingsStateOptions {
 // M21：面板与状态钩子共用的「短时缓存」（同样的查询不该在两侧各打一次）。
 let detectCache: { at: number; accounts: readonly WechatAccount[]; info: { version?: string; install_dir?: string }; total: number } | null = null
 let whisperStatusCache: { at: number; status: WhisperStatus } | null = null
+
+/** 下载进度的形状（`whisperDownloading` 的值类型，模块级复用三处）。 */
+type WhisperProgress = { model: string; file: string; received: number; total: number }
+
+/**
+ * 每 500ms 拉一次后端状态，把下载进度同步到面板（W3-5.5）。
+ *
+ * 为什么模块级：模型与引擎两路的轮询代码一字不差，抽出来才有一处可改的地方；
+ * 也让 hook 的行数预算不被这段与状态无关的样板吃掉。
+ * @param set - `setWhisperDownloading`。
+ * @returns 停掉轮询的函数（调用方在 finally 里调）。
+ */
+/**
+ * 「远程访问（手机）」这一节的导航条目。
+ *
+ * 放在**模块级**而不是 `useSettingsState` 里面：那个 hook 已经在函数行数棘轮上
+ * （只许变小），而这一条是纯静态数据（图标是常量 SVG、文案不依赖任何状态），
+ * 没有理由占 hook 的行数。
+ *
+ * 排在「数据边界与出网」之后：两者是同一类问题（我的数据会不会被这台机器之外的东西读到），
+ * 只是方向相反 —— 前者管**出站**，这一节管**入站**。
+ */
+const NAV_REMOTE = {
+  key: 'remote' as const,
+  group: '智能与隐私',
+  label: '远程访问（手机）',
+  icon: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M11 18.5h2" />
+    </svg>
+  ),
+  value: '局域网链接 · 令牌（默认关闭）',
+}
+
+function pollWhisperDownload(set: (v: WhisperProgress | null) => void, polls: () => PollRegistry): () => void {
+  return polls().start(() => {
+    void apiGetWhisperStatus()
+      .then((s) => { if (s.downloading) set({ model: s.downloading.model, file: s.downloading.file, received: s.downloading.received, total: s.downloading.total }) })
+      .catch(() => { /* 忽略单次轮询失败 */ })
+  }, 500)
+}
+
+/**
+ * 造出「停止下载」的处理器（W3-5.5）。
+ *
+ * 为什么要有这个按钮：模型 1.5–3.1 GB，点错模型就是十几分钟的等待，而这期间
+ * 用户唯一能做的就是等（或强杀进程）。已下载部分保留为 `.part`，下次续传仍有效 ——
+ * 所以取消是无损的，不应该让人不敢点。
+ * @param getJobId - 读当前下载标识（空串 = 没有下载在跑，此时点击是静默的）。
+ * @param setMsg - 面板消息槽。
+ * @returns 可直接绑到按钮上的处理器。
+ */
+function whisperDownloadCanceller(getJobId: () => string, setMsg: (m: { kind: 'ok' | 'err'; text: string } | null) => void): () => Promise<void> {
+  return async () => {
+    const jobId = getJobId()
+    if (!jobId) return
+    try {
+      const r = await apiCancelWhisperDownload({ jobId })
+      setMsg(r.ok
+        ? { kind: 'ok', text: '✓ 已请求停止（当前这一块下完就停，已下载的部分保留，下次可续传）' }
+        : { kind: 'err', text: '✗ ' + (r.message ?? '取消失败') })
+    } catch (e) {
+      setMsg({ kind: 'err', text: '✗ ' + (e as Error).message })
+    }
+  }
+}
+
+/** 取消不是失败：后端用「已取消」措辞回，界面就不该把它画成红色错误（W3-5.5）。 */
+function isCanceled(text: string | undefined): boolean {
+  return (text ?? '').includes('已取消')
+}
+/** 诊断日志预览的形状（W2-12.4）。 */
+export interface DiagPreview {
+  text: string
+  /** 整份报告的真实字符数（可能大于 `text.length`，那是截断造成的）。 */
+  chars: number
+  truncated: boolean
+  files: string[]
+}
+
+/**
+ * 诊断日志的脱敏预览 + 复制路径（W2-12.4）。
+ *
+ * 导出之前先给用户看一眼将要交付的那份文件：`redact` 只保证密钥一类被换掉，
+ * 但「有没有别的敏感内容」（聊天内容、路径、用户名）是**用户自己**才有资格判断的事。
+ *
+ * 模块级 hook：`useSettingsState` 已经八百多行，这一摊（状态 + 三个动作）
+ * 塞进去只会让它更长，而且这一摊与其它设置项没有任何耦合。
+ * @param notify - 本面板唯一的提示入口。
+ * @returns 预览内容与三个动作。
+ */
+function useDiagPreview(notify: (kind: 'ok' | 'err', text: string) => void): {
+  diagPreview: DiagPreview | null
+  previewDiagLog: () => Promise<void>
+  closeDiagPreview: () => void
+  copyDiagLogPath: () => Promise<void>
+} {
+  const [diagPreview, setDiagPreview] = useState<DiagPreview | null>(null)
+  const previewDiagLog = useCallback(async (): Promise<void> => {
+    const r = await apiPreviewDiagLog()
+    if (!r.ok) { notify('err', '读取诊断日志预览失败：' + (r.error ?? '未知原因')); return }
+    setDiagPreview({ text: r.text ?? ' ', chars: r.chars ?? 0, truncated: r.truncated === true, files: r.files ?? [] })
+  }, [notify])
+  const closeDiagPreview = useCallback((): void => { setDiagPreview(null) }, [])
+  const copyDiagLogPath = useCallback(async (): Promise<void> => {
+    const r = await apiCopyDiagLogPath()
+    if (!r.ok) { notify('err', '复制日志路径失败：' + (r.error ?? '未知原因')); return }
+    notify('ok', '日志路径已复制到剪贴板')
+  }, [notify])
+  return { diagPreview, previewDiagLog, closeDiagPreview, copyDiagLogPath }
+}
+
+/**
+ * M1 密钥搬家提示的确认动作（W2-12.3）。**模块级**：它只是「调一次保存接口再重取」，
+ * 不依赖任何 hook 状态 —— 放进 `useSettingsState` 只会让那个八百多行的函数更长。
+ *
+ * 写失败要说话，且**不**在本地先把提示藏起来：用户以为关掉了、刷新一下又回来，
+ * 比不提示更烦。
+ * @param load - 重新取配置的回调（确认位写回成功后才调）。
+ * @param report - 失败时给用户的一句话。
+ * @returns 是否写成功。
+ */
+async function writeSecretMigrationAck(load: () => Promise<void>, report: (text: string) => void): Promise<boolean> {
+  try {
+    const r = await apiSaveWechatConfig({ patch: { secret_migration_notice_ack: true } })
+    if (!r.ok) { report('提示关不掉：' + (r.error ?? '未知原因')); return false }
+    await load()
+    return true
+  } catch (e) {
+    report('提示关不掉：' + (e as Error).message)
+    return false
+  }
+}
 
 export function useSettingsState({ inDialog = false, initialSection, onNavigateOut }: SettingsStateOptions = {}) {
   const cachedCfg = readRenderCache<CachedSettingsConfig>(SETTINGS_CONFIG_CACHE_KEY)
@@ -104,6 +237,10 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     received: number
     total: number
   } | null>(null)
+  /** W3-5.5：本次下载的标识。放 state 不放局部变量（每次渲染都重置，按钮就拿到一个从没往后端取的标识）；
+   * 单调计数放 ref 里。空串 = 没有下载在跑。 */
+  const [whisperJobId, setWhisperJobId] = useState('')
+  const whisperJobSeq = useRef(0)
   const [whisperTranscribing, setWhisperTranscribing] = useState<{ active: boolean; done: number; total: number; failed: number; skipped: number; current: string }>({ active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' })
   /**
    * 左侧导航当前选中项。
@@ -221,7 +358,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     const r = await apiRevealDiagLog()
     if (!r.ok) notify('err', '打开日志目录失败：' + (r.error ?? '未知原因'))
   }, [notify])
-
+  const { diagPreview, previewDiagLog, closeDiagPreview, copyDiagLogPath } = useDiagPreview(notify)
   const load = useCallback(async (): Promise<void> => {
     setCfgLoading(true)
     try {
@@ -341,29 +478,23 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     }
   }
 
+  /** W3-5.5：模型与引擎两路共用的「停止下载」按钮。 */
+  const cancelWhisperDownload = whisperDownloadCanceller(() => whisperJobId, setWhisperDirMsg)
+
   const whisperDownload = async (m: { id: string; name: string }): Promise<void> => {
     if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
     setWhisperDirMsg(null)
     setWhisperDownloading({ model: m.id, file: '', received: 0, total: 0 })
-    const stopPoll = polls().start(() => {
-      void apiGetWhisperStatus()
-        .then((s) => {
-          if (s.downloading) {
-            setWhisperDownloading({
-              model: s.downloading.model,
-              file: s.downloading.file,
-              received: s.downloading.received,
-              total: s.downloading.total,
-            })
-          }
-        })
-        .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 500)
+    // W3-5.5：本次下载的标识（理由见上面那条 state 的注释）。
+    setWhisperJobId(`whisper-${String((whisperJobSeq.current += 1))}`)
+    const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiDownloadWhisperModel({ model: m.id })
+      const r = await apiDownloadWhisperModel({ model: m.id, jobId: whisperJobId })
       if (r.ok) {
         setWhisperDirMsg({ kind: 'ok', text: `✓ 模型 ${m.name} 下载完成${r.bytes ? `（${fmtBytes(r.bytes)}）` : ''}，已就绪` })
         await refreshWhisper()
+      } else if (isCanceled(r.error)) {
+          setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
       } else {
         setWhisperDirMsg({ kind: 'err', text: '✗ 模型下载失败：' + (r.error ?? '未知错误') })
       }
@@ -372,6 +503,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     } finally {
       stopPoll()
       setWhisperDownloading(null)
+      setWhisperJobId('')
     }
   }
 
@@ -431,25 +563,15 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     if (whisperStatus?.engine) return
     setWhisperDirMsg(null)
     setWhisperDownloading({ model: 'engine', file: '', received: 0, total: 0 })
-    const stopPoll = polls().start(() => {
-      void apiGetWhisperStatus()
-        .then((s) => {
-          if (s.downloading) {
-            setWhisperDownloading({
-              model: s.downloading.model,
-              file: s.downloading.file,
-              received: s.downloading.received,
-              total: s.downloading.total,
-            })
-          }
-        })
-        .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 500)
+    setWhisperJobId(`whisper-${String((whisperJobSeq.current += 1))}`)
+    const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiInstallWhisperEngine()
+      const r = await apiInstallWhisperEngine({ jobId: whisperJobId })
       if (r.ok) {
         await refreshWhisper()
         setWhisperDirMsg({ kind: 'ok', text: '✓ whisper.cpp 引擎已就绪，可开始批量转写' })
+      } else if (isCanceled(r.error)) {
+        setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
       } else {
         setWhisperDirMsg({ kind: 'err', text: '✗ 引擎下载失败：' + (r.error ?? '未知错误') })
       }
@@ -458,6 +580,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     } finally {
       stopPoll()
       setWhisperDownloading(null)
+      setWhisperJobId('')
     }
   }
 
@@ -787,9 +910,9 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
   type NavKey = (typeof STEPS)[number]['key']
-    | 'ai' | 'boundary' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
+    | 'ai' | 'boundary' | 'remote' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
   /**
-   * 左导航条目（13 节，分五组）。
+   * 左导航条目（14 节，分五组）。
    *
    * 分组口径是**用户意图**，不是历史沿革：配置向导 5 步是首次配置要走的流程；
    * 「智能与隐私」是 AI 与出网这两项要改行为的地方；「授权与更新」是软件本身的授权与版本；
@@ -811,7 +934,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as 'done' | 'warning' | 'ongoing',
     })),
     { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
-    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
+    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' }, NAV_REMOTE,
     { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
     { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
     { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
@@ -835,7 +958,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }, [onNavigateOut, goToSection])
 
   return {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    accounts, ackSecretMigration: async () => { await writeSecretMigrationAck(load, (t) => setSaveMsg({ kind: 'err', text: t })) }, activeKey, autoGetDb, autoGetImg, batchTranscribe,
     cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo, fetchOriginals,
@@ -844,10 +967,10 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     message, nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,
     pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
-    saving, scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
+    saving, scanOriginals, closeDiagPreview, copyDiagLogPath, diagPreview, previewDiagLog, secretMigration: cfg?.secret_migration ?? null, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
     upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
-    voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
+    cancelWhisperDownload, voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
     whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
   }
 }

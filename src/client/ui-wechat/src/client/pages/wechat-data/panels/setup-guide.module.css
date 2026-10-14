@@ -174,3 +174,11 @@
   transition: color 0.15s ease, background-color 0.15s ease;
 }
 .later:hover { color: var(--nm-text-1); background: var(--nm-bg-hover); }
+
+/* 手机档不渲染这张卡：它的四步（检测账号 / 数据库密钥 / 图片密钥 / 语音引擎）
+   全部是**只能在这台电脑上做**的配置动作，手机上点了「去配置」也做不成任何一步，
+   而它 392px 宽、悬浮在内容之上，在 375px 屏上等于盖掉半屏。
+   与「浏览器态能力降级」同一口径：做不成的动作不该占据屏幕。 */
+@media (max-width: 560px) {
+  .card { display: none; }
+}

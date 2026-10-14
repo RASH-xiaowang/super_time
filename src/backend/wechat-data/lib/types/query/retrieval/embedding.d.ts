@@ -61,6 +61,7 @@ export declare function buildVectorIndex(decryptedDir: string, embed: EmbedFn, o
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     force?: boolean;
+    signal?: AbortSignal;
 }): Promise<VectorBuildResult>;
 declare function loadHashRows(decryptedDir: string): HashRow[];
 /**

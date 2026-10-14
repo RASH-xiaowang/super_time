@@ -18,10 +18,29 @@ import { EnsureIndexResult } from './search-scaffold.ts';
  * 对话（09-17 一天 139 条）。问「今天聊了啥」时当天数据根本不在检索空间里，
  * BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月）—— 这就是
  * 「回复内容不正确 + 消息列表里出现其他日期的消息」的根源。
+ *
+ * ## `background` 是干什么的（W2-6.4）
+ *
+ * **实测数据把两条路分开了**（`index-freshness.measure.spec.ts`，合成 2 万条库 + 单分片）：
+ *
+ * | 新增条数 | 0 | 10 | 100 | 1000 | 5000 |
+ * |---|---|---|---|---|---|
+ * | 增量同步 | 1.2ms | 5.2ms | 5.5ms | 9.3ms | 25.6ms |
+ *
+ * 增量同步**最坏也就 25.6ms**（固定开销约 5ms，其余随新增条数线性），保鲜探测 0.6ms/次。
+ * 把它挪到后台**只会让这一问用旧索引作答** —— 那正是本函数当初要修的 bug。
+ * 所以：**落后 ⇒ 照旧同步等**，这条路上不分流。
+ *
+ * 真正会卡住提问的是**全量构建**（实测 13.5 万条 5.4s，更大的库更久）。它发生在 `!ready` 时，
+ * 而那时索引本来就不可用 —— 不存在「拿旧索引作答」的问题，正是可以放心挪到后台的那一种。
+ * `background: true` 只作用于这一条：不在这一问里等构建，而是开跑并回一句给界面。
  * @param decryptedDir - 已解密数据根。
+ * @param opts - `background`：全量构建是否挪到后台（增量同步不受影响，见上）。
  * @returns 本次动作与耗时（写进操作日志，便于解释「为什么这次提问慢」）。
  */
-export declare function ensureSearchIndex(decryptedDir: string): Promise<EnsureIndexResult>;
+export declare function ensureSearchIndex(decryptedDir: string, opts?: {
+    background?: boolean;
+}): Promise<EnsureIndexResult>;
 /** 增量同步结果。 */
 export interface SyncResult {
     status: 'ok' | 'skipped' | 'error';
@@ -128,13 +147,31 @@ export interface BuildResult {
     message?: string;
 }
 /**
+ * 构建全文检索索引（FTS5）的**观测与取消**挂钩（W3-11.5 铺到第二个入口）。
+ *
+ * `onProgress(done, total, rows)`：`done/total` 是**分片**口径（分片清单一次就拿全，
+ * 所以这个分母是真的总量，不是「到目前为止的总数」那种会一路变大的假进度）；
+ * `rows` 是已入库的行数 —— 让文案能说「第 3/12 个分片 · 已入库 5.2 万条」。
+ *
+ * `signal`：只在**分片之间**检查。理由与逐条分析同源 —— 整个构建在一个事务里，
+ * 拆到分片内部就必须能中途回滚，那不是「检查一下」而是「重写构建流程」。
+ * 好在分片粒度已经够细（实测 12 个分片/20 万行），最坏延迟就是最后一个分片。
+ * 被取消 ⇒ 事务 ROLLBACK ⇒ **旧索引原封不动**（这比「留半份索引」好得多：
+ * 读侧看不出新旧之分，只看 ready 与 rows）。
+ */
+export interface SearchIndexBuildHooks {
+    onProgress?: (done: number, total: number, rows: number) => void;
+    signal?: AbortSignal;
+}
+/**
  * 构建全文检索索引（FTS5）。
  *
  * @param decryptedDir - 已解密数据根。
  * @param force - 为 true 时即使已有同版本索引也重建。
+ * @param hooks - 进度回调与取消信号（见 {@link SearchIndexBuildHooks}）。
  * @returns 构建结果（status/rows/built_at/elapsed_ms 或 message）。
  */
-export declare function buildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult>;
+export declare function buildSearchIndex(decryptedDir: string, force?: boolean, hooks?: SearchIndexBuildHooks): Promise<BuildResult>;
 /**
  * 索引库写闸（同步、不排队）。
  *
@@ -158,7 +195,7 @@ export declare function withIndexWrite<T>(decryptedDir: string, fn: () => T): {
 } | {
     ok: false;
 };
-export declare function runBuildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult>;
+export declare function runBuildSearchIndex(decryptedDir: string, force?: boolean, hooks?: SearchIndexBuildHooks): Promise<BuildResult>;
 /**
  * 让出事件循环。
  *

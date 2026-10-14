@@ -54,7 +54,7 @@ const listOnly = argv.includes('--list')
 /**
  * 增量模式（2026-10-09 加）：`--since <git ref>` 或 `--files a,b,c`。
  *
- * 为什么要有：全量 408 条一次跑完按小时计，塞不进 PR 门禁（单测已占 26 分钟 / 上限 45），
+ * 为什么要有：全量 419 条一次跑完按小时计，塞不进 PR 门禁（单测已占 26 分钟 / 上限 45），
  * 而完全不跑就等于「变异自证」这一件套形同虚设。见 `mutation-scope.mjs` 里的口径说明 ——
  * 关键点是**目标文件改了或它的判据 spec 改了都要重跑**（只按目标文件筛会漏掉「削弱守卫」那类改动，
  * 2026-10-09 实测 45 条 vs 53 条，多出的 8 条全是那一类）。
@@ -136,6 +136,29 @@ function sameBytes(a, b) {
   return true
 }
 
+/**
+ * 带有界重试的写入（2026-10-13 真机踩坑）：Windows 上注入/还原写入会撞上
+ * Defender/索引器对**刚被写过的文件**的瞬时独占（实测 openSync errno UNKNOWN），
+ * 一撞就是「变异文本留在工作树里、逐字节还原根本没执行」——比变异本身更危险。
+ * 重试 5 次 × 300ms 忙等（工具自身不依赖事件循环推进）；打满仍失败才抛错。
+ */
+function writeWithRetry(abs, data) {
+  let lastErr = null
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      writeFileSync(abs, data)
+      return
+    } catch (e) {
+      lastErr = e
+      if (attempt < 5) {
+        const until = Date.now() + 300
+        while (Date.now() < until) { /* 有界忙等 */ }
+      }
+    }
+  }
+  throw lastErr
+}
+
 /** 在文本里定位唯一锚点，返回实际用于匹配的写法（兼容 CRLF 文件）。 */
 function locate(text, from) {
   const hitsLf = text.split(from).length - 1
@@ -205,7 +228,7 @@ function execute(m) {
     // 用**函数**做替换：`String.replace` 的替换串里 `$&` / `$'` / `` $` `` 是特殊序列，
     // 直接传 m.to 会把「带引号的正则」这类锚点展开成别的内容 —— 表现是文件被写坏后报
     // 「语法假咬」，看着像变异没意义，其实是工具自己把内容改了形。
-    writeFileSync(abs, text.replace(needle, () => inject), 'utf8')
+    writeWithRetry(abs, text.replace(needle, () => inject))
     const r = runSpec(m.spec)
     if (r.rc === 0) {
       verdict = '没咬住'
@@ -221,7 +244,7 @@ function execute(m) {
     verdict = '运行异常'
     detail = String(e?.message ?? e)
   } finally {
-    writeFileSync(abs, backup)
+    writeWithRetry(abs, backup)
   }
 
   const identical = sameBytes(backup, readFileSync(abs))

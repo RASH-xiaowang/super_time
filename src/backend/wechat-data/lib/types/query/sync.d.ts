@@ -1,3 +1,4 @@
+export { decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts';
 /**
  * Cached raw-dir entries; refreshed when the directory signature changes.
  *
@@ -11,20 +12,6 @@ export interface DirListing {
     error?: string;
 }
 export declare function fullDecryptFile(dbPath: string, outPath: string, encKey: Buffer): Promise<number>;
-/**
- * Patch a decrypted DB file with valid frames from an encrypted WAL.
- * @param walPath - encrypted WAL file path.
- * @param outPath - decrypted DB file to patch in place.
- * @param encKey - derived 32-byte AES-256 key.
- * @returns the number of frames patched.
- */
-export declare function decryptWalPatch(walPath: string, outPath: string, encKey: Buffer): Promise<number>;
-/** True when at least one WAL frame's salt epoch matches the WAL header,
- * i.e. the frames can be decrypted with the current snapshot key. WeChat
- * rotates the salt on login/checkpoint; when it does, frames carry a different
- * epoch and cannot be patched — the next main-DB rewrite (mtime change)
- * triggers a clean full decrypt instead. */
-export declare function walFramesPatchable(walPath: string): Promise<boolean>;
 /** Per-shard state: raw mtimes of the main db and its wal. */
 /**
  * 源库签名。**用字符串而不是毫秒数**（2026-09-29 第 47 轮对齐缓存层口径）：
@@ -65,12 +52,21 @@ export declare function looksDecrypted(dbPath: string): boolean;
 /**
  * Atomically replace target with a fully-decrypted temp file (async retries).
  *
- * **不要**先 `unlink(target)`（旧实现如此）：那会在「删掉」与「改名」之间留出一个
- * 「目标不存在」的窗口，并发只读查询正好落在里面就是 ENOENT。
- * Windows 实测：rename 覆盖一个**已存在但未被打开**的文件是允许的
- * （MOVEFILE_REPLACE_EXISTING），所以正常路径下不需要删除；而目标被 SQLite 句柄
- * 打开时两种做法都会失败（rename → EPERM，unlink → EBUSY），真正让同步成功的是
- * 这里的重试等待。导出仅为让回归用例直接验证「替换期间目标始终存在」。
+ * 两件必须同时成立的事：
+ *   ① **不要**先 `unlink(target)`（旧实现如此）：那会在「删掉」与「改名」之间留出一个
+ *      「目标不存在」的窗口，并发只读查询正好落在里面就是 ENOENT。
+ *      Windows 实测：rename 覆盖一个**已存在但未被打开**的文件是允许的
+ *      （MOVEFILE_REPLACE_EXISTING），所以正常路径下不需要删除；而目标被 SQLite 句柄
+ *      打开时两种做法都会失败（rename → EPERM，unlink → EBUSY），真正让同步成功的是
+ *      这里的重试等待。
+ *   ② **换代必须连上一代的 `-wal` 一起换掉**（`query/snapshot-sidecars.ts` 的模块头有真机
+ *      实测）：留着它，新主文件会被旧 WAL 的页盖住 ⇒ `database disk image is malformed`，
+ *      而修它的正确动作只在本地（清旁文件）。所以清不掉时**不发布** —— 这一轮不更新，
+ *      好过发一份读不了的快照出去。（「清不掉」这一支单独没有单测钉得住：Windows 上主文件
+ *      与 `-wal` 由**同一个** SQLite 连接持有，造不出「WAL 不可删、主文件仍可 rename」的
+ *      状态 —— 理由写在 `scripts/mutations-registry.batch3i.mjs` 的头注里。）
+ *
+ * 导出仅为让回归用例直接验证「替换期间目标始终存在」与「换代不留旧 WAL」。
  * @param temp - 已解密好的临时文件。
  * @param target - 目标快照文件。
  */
@@ -109,17 +105,26 @@ export declare function deriveEncKeyCached(decryptedDir: string, relKey: string,
  * - mode 'wal': the main snapshot is current and only the WAL grew — patch the
  *   changed frames into a staging copy of the snapshot (st_control's
  *   write-only-page model) and atomically replace.
+ * - tail 参数（2026-10-13）：主库变大且满足尾部增量条件时，只解**新增页**追加到
+ *   快照末尾（+ WAL 帧补丁），quick_check 通过即发布；任何一步不成立都**退回整库重解**
+ *   —— 尾部路径是时延优化，不是新的正确性来源。
  * @param rawMsgDir - raw message dir (encrypted).
  * @param decMsgDir - decrypted message dir.
  * @param file - shard file name (e.g. message_0.db).
  * @param rawKeyHex - fallback 64-hex raw key.
  * @param keyFormat - key format (wx_key_v4.1).
  * @param mode - full or wal-incremental.
+ * @param tail - 尾部增量计划（由调用方按新旧签名算出；mode='full' 时生效）。
+ * @param diffIndexes - 页级差分的差异页下标（原地重写的检查点用；与 tail 互斥）。
  * @returns page counts for reporting.
  */
-export declare function syncMessageShard(rawMsgDir: string, decMsgDir: string, file: string, rawKeyHex: string, keyFormat: string, mode?: 'full' | 'wal'): Promise<{
+export declare function syncMessageShard(rawMsgDir: string, decMsgDir: string, file: string, rawKeyHex: string, keyFormat: string, mode?: 'full' | 'wal', tail?: {
+    offset: number;
+    pages: number;
+}, diffIndexes?: readonly number[]): Promise<{
     fullPages: number;
     walPages: number;
+    via: 'wal' | 'full' | 'tail' | 'diff';
 }>;
 /**
  * Scan raw shards and sync every changed one. The main file changing forces a
@@ -167,14 +172,6 @@ export declare function syncContactDb(rawDbDir: string, decryptedDir: string, la
  */
 export declare function syncPlainDatabase(rawRoot: string, decryptedDir: string, sub: string, dbName: string, label: string, rawKeyHex: string, keyFormat: string, lastState: Map<string, ShardSig>): Promise<string[]>;
 /**
- * Remove stale staging/temp files (`.stage_src`/`.stage_wal`/`.decrypt_tmp`)
- * left by a previously interrupted sync. A killed process can leave a
- * half-written snapshot behind, and a fresh run that reuses it can stall.
- * Real decrypted DB files are never matched.
- * @param root - decrypted snapshot root to sweep.
- */
-export declare function cleanStaleStagingFiles(root: string): Promise<void>;
-/**
  * Real-time sync loop: first run immediately, then poll on an interval.
  * @param rawDbDir - provider of the raw db_storage root (re-read per tick).
  * @param decryptedDir - provider of the decrypted snapshot root.
@@ -182,4 +179,3 @@ export declare function cleanStaleStagingFiles(root: string): Promise<void>;
  * @returns a disposer that stops the loop.
  */
 export declare function startRealtimeSync(rawDbDir: () => string, decryptedDir: () => string, onSync?: (shards: string[]) => void): () => void;
-export {};

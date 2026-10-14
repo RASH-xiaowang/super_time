@@ -62,6 +62,33 @@ export declare function rowOf(m: WechatMessage, username: string): {
 };
 /** txt export body. */
 export declare function formatTxt(msgs: WechatMessage[], username: string): string;
+/**
+ * `formatTxt` 的**流式**版本：逐块产出，拼起来与 `formatTxt(...)` **逐字节相同**。
+ *
+ * ## 为什么需要（W2-8.1）
+ *
+ * `formatTxt` 先把整个会话拼成一个字符串，再交给 `ZipFileWriter.addFile` →
+ * `deflateRawSync` —— 那是**一次同步压缩整块输入**。一个会话最多 5 万条消息，
+ * 拼出来的串有几 MB 到几十 MB，这一次 `deflateRawSync` 能把后端 worker 独占几百毫秒：
+ * 期间所有面板都动不了，而用户只看到「导出中」。
+ *
+ * H8 已经把**收集段**改成了让出版（每 8 页一次），也把 xlsx 的 sheet 改成了
+ * `addStream`；AllSessions 的 txt 是剩下最后一条还走整块同步 deflate 的路径 —— 本条接上同一套。
+ *
+ * ## 两条不许退化的性质
+ *
+ * ① **逐字节相同**：块与块之间补一个 `'\n'`，第一个块不补 —— 拼接结果正好等于
+ *    `lines.join('\n')``。改动导出内容的失败形态是「用户拿到一份不一样的归档」，
+ *    而那不报错、也几乎不会被发现。
+ * ② **块间让出**：`for await` 的续体只是微任务，微任务永远不让定时器与其它请求插进来
+ *    （H8 那一轮实测过同一个坑），所以每块之后显式 `await yieldToEventLoop()`。
+ *
+ * @param msgs - 会话消息（与 `formatTxt` 同一个口径）。
+ * @param username - 会话用户名（用于解析发送者）。
+ * @param ctrl - 可选的进度/取消。
+ * @returns 文本块序列。
+ */
+export declare function formatTxtChunksAsync(msgs: WechatMessage[], username: string, ctrl?: StreamControl): AsyncGenerator<string>;
 /** csv export body. */
 export declare function formatCsv(msgs: WechatMessage[], username: string): string;
 /** html chat-log export body (date dividers + bubbles). */

@@ -177,6 +177,8 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
         key?: string;
         offline?: boolean;
     }): Promise<ImageDataUrlResult>;
+    /** W2-5.6：一批封面。解析走一次列举，CDN 取回走有界并发。 */
+    getSnsVideoCoversBatch(options: SnsVideoCoverBatchOptions): Promise<SnsVideoCoverBatchResult>;
     getSnsVideoDataUrl(options: {
         md5?: string;
         timelineId?: string;
@@ -216,5 +218,40 @@ interface SnsImageOptions {
      * 误判成无网会让用户永远看不到刚上传的新图，而且**没有任何报错**。
      */
     offline?: boolean;
+}
+/**
+ * 取一条朋友圈视频的封面。
+ *
+ * 口径与图片那路（{@link snsImageWithCdnFirst}）一致，都是**先网后本**：有网时先去 CDN 取
+ * 原封面，CDN 失败才回落本机那份；无网时只用本机。
+ *
+ * ⚠️ 原来是「本机优先、无网与否都先看本机」，与图片那路 2026-10-08 定的口径相反；而且
+ * 「本机优先」在无网时并不能省掉任何等待 —— 本机没有就还是要去 CDN，而无网时那次请求
+ * 必然超时，等于白等一个超时窗口。
+ *
+ * ⚠️ 封面地址（XML 里的 `<thumb>`）**自带 `token` 与 `idx=1`**，不像图片那样要再拼一次，
+ * 所以这里不做 `snsCdnUrl` 归一，只过白名单（M23：只判协议等于「谁给后端一个地址，后端
+ * 就去取谁」）。
+ */
+/** 一条封面请求（W2-5.6）。`md5` 是批内与返回对齐用的标识。 */
+export interface SnsVideoCoverBatchItem {
+    md5?: string;
+    timelineId?: string;
+    mediaId?: string;
+    thumb?: string;
+    key?: string;
+}
+/** 批量封面请求。`offline` 整批共用（一条列表里的网络状况是同一个）。 */
+export interface SnsVideoCoverBatchOptions {
+    items: SnsVideoCoverBatchItem[];
+    offline?: boolean;
+}
+/** 批量封面结果：与 `items` **同序**、同长（少一条就对不上号，宁可补一条带 error 的）。 */
+export interface SnsVideoCoverBatchResult {
+    items: Array<{
+        md5: string;
+        url?: string;
+        error?: string;
+    }>;
 }
 export {};

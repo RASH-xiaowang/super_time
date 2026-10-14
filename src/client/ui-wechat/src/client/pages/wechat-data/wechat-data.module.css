@@ -592,3 +592,61 @@
 .settingsDialogBody :global([class*='_cardGrid_']) {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* ============================================================
+ * 手机档（≤560px）：外壳重排
+ *
+ * 断点为什么是 560 而不是复用已有的 720：720 那一档同时被「桌面窗口拖窄」和平板命中，
+ * 用它切手机结构会让桌面上一个 700px 宽的窗口突然长出底部标签栏 —— 桌面窗口随时可拖窄，
+ * 那会看起来像界面坏了。560 与 `ui/use-media-query.ts` 的 PHONE_QUERY 是同一个数，
+ * 两边必须一起改（`mobile-shell.spec.ts` 钉住这件事）。
+ *
+ * 三件事：
+ *   ① 侧栏不再是「左边一列」，而是**塌成顶部一条 48px 的搜索条** —— 刻意不整块隐藏：
+ *      全局搜索框就住在侧栏里（`WechatDataPanel.tsx` 的 `.navSearch`），
+ *      `display:none` 掉侧栏等于手机上再也搜不了。这里用 `> *:not(.navSearch)` 只留搜索，
+ *      品牌位 / 导航条目 / 页脚（主题、设置、余额）全部收掉 —— 导航由底部标签栏接管，
+ *      主题与设置搬进底部栏的「更多」sheet。
+ *   ② `.body` 由横排改竖排，于是「搜索条在上、内容在下」。
+ *   ③ 内容区底部留出底部标签栏的高度（它是 `position: fixed`，不占文档流），
+ *      否则最后一行会被压在栏下面点不到。
+ * ============================================================ */
+@media (max-width: 560px) {
+  .panel {
+    border: none;
+    border-radius: 0;
+  }
+
+  /* 网格背景在手机上是纯开销（一整屏两层 linear-gradient + mask），关掉 */
+  .panel::before { content: none; }
+
+  .body { flex-direction: column; }
+
+  .sidebar,
+  .sidebar[data-open] {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 100%;
+    height: 48px;
+    min-height: 48px;
+    padding: 0 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--nm-border, rgba(0, 240, 255, 0.12));
+    transition: none;
+  }
+
+  /* 只留搜索：其余子块（品牌 / 导航 / 页脚）在手机档一律不渲染 */
+  .sidebar > *:not(.navSearch) { display: none; }
+
+  .sidebar .navSearch {
+    width: 100%;
+    padding: 0;
+  }
+
+  .content {
+    flex: 1;
+    padding: 12px;
+    /* 48px 底部栏 + 手势条安全区；栏本身也带一份 safe-area，这里只补它遮住的那段 */
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  }
+}

@@ -11,6 +11,13 @@ export interface WordCloudWord {
 export interface WordCloudResult {
     words: WordCloudWord[];
     scanned: number;
+    /**
+     * 这次是**被取消**的（`scanned` 只覆盖扫完的那一部分）—— W2-9.4。
+     *
+     * 取消不抛错：用户是自己切换了年份/会话，不该看到一句红色报错。
+     * 界面据此**不写**这份结果（它是半成品），而调用方拿它去比缓存时也据此拒写。
+     */
+    canceled?: boolean;
 }
 /**
  * 计算词云词频（带进程内缓存）。

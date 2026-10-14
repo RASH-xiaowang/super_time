@@ -22,6 +22,7 @@ import { BackupPanel } from './Backup.tsx'
 import { HealthPanel } from './Health.tsx'
 import { HookPanel } from './Hook.tsx'
 import { LicenseSection, UpdateSection } from './settings-sections.tsx'
+import { SettingsRemoteAccess } from './settings-remote-access.tsx'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { SettingsDbKeySection, SettingsDetectSection, SettingsImgDecodeSection, SettingsImgKeySection, SettingsVoiceSection } from './settings-steps.tsx'
 import { useSettingsState } from './settings-state.tsx'
@@ -58,18 +59,90 @@ export interface SettingsPanelProps {
  * Render the wechat-settings panel.
  * @returns the settings element tree.
  */
+/**
+ * M1 密钥搬家的一次性提示条（W2-12.3）。
+ *
+ * 后端只在「`config.json` 里真的还留着有意义的密钥字段」且「用户没点过知道了」时
+ * 才说 `pending`。所以这一条**不是错误提示**，是「有件事正在发生、你该知道」——
+ * 不套 toast 那套（那是短暂反馈，撑不住一条要说清来龙去脉的话）。
+ *
+ * 模块级组件：`SettingsPanel` 已经三百多行，再往里塞十八行 JSX 只会让它更长。
+ * @param props.state - 后端给的迁移状态；`null` 表示后端没这个字段（旧版本），不提示。
+ * @param props.onAck - 「知道了」的回调。
+ * @returns JSX。
+ */
+/**
+ * 诊断日志的脱敏预览面板（W2-12.4）。
+ *
+ * 导出是要把文件**发给别人**的动作，所以用户有权在发出去之前先看一眼：
+ * `redact` 只保证密钥一类被换掉，而「有没有别的敏感内容」（聊天内容、路径、用户名）
+ * 是用户自己才有资格判断的事。
+ *
+ * **截断必须说出来** —— 让用户以为看全了，比不给看更糟。
+ * @param props.data - 后端给的预览；`null` 表示没点「预览…」。
+ * @param props.onClose - 关掉预览。
+ * @returns JSX。
+ */
+function DiagLogPreview(props: {
+  data: { text: string; chars: number; truncated: boolean; files: string[] } | null
+  onClose: () => void
+}): React.JSX.Element | null {
+  const { data, onClose } = props
+  if (data === null) return null
+  return (
+    <div className={css.diagPreview}>
+      <div className={css.diagPreviewHead}>
+        <span>
+          即将导出 {data.files.length} 份轮转日志 · 共 {data.chars} 字符
+          {data.truncated ? `（下面只显示前 ${data.text.length} 字符）` : ''}
+        </span>
+        <button type="button" className={css.diagPreviewClose} onClick={onClose}>关闭</button>
+      </div>
+      <textarea
+        className={css.diagPreviewText}
+        readOnly
+        value={data.text}
+        rows={12}
+        aria-label="诊断日志预览"
+        onFocus={(e) => { e.currentTarget.select() }}
+      />
+    </div>
+  )
+}
+
+function SecretMigrationNotice(props: {
+  state: { pending: boolean; fields: string[] } | null
+  onAck: () => void
+}): React.JSX.Element | null {
+  const { state, onAck } = props
+  if (state?.pending !== true) return null
+  return (
+    <div className={css.secretMigration} role="status">
+      <div className={css.secretMigrationText}>
+        <strong>密钥已改存到 secrets.json</strong>
+        <span>
+          为避免 config.json 里的明文密钥外泄，下次保存配置时会把 
+          {state.fields.join('、')} 搬到 secrets.json 并从 config.json 删除。
+          要手工查看或修改请编辑 secrets.json。
+        </span>
+      </div>
+      <button type="button" className={css.secretMigrationBtn} onClick={onAck}>知道了</button>
+    </div>
+  )
+}
+
 export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    accounts, ackSecretMigration, activeKey, autoGetDb, autoGetImg, batchTranscribe,
     cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
-    detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
+    closeDiagPreview, copyDiagLogPath, detectMsg, detecting, diagInfo, diagPreview, exportDiagLog, goToSection, imgAes,
     imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
-    imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
+    cancelWhisperDownload, imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
     nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath, pickDbDir,
-    pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg, saving,
-    scanOriginals, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit, setImgXor,
+    pickWhisperDir, previewDiagLog, refreshWhisper, revealDiagLog, save, saveMsg, saving,
+    scanOriginals, secretMigration, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit, setImgXor,
     setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
     fetchOriginals, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
     whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel, whisperModelsDir,
@@ -141,7 +214,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           )}
         </div>
       )}
-
+<SecretMigrationNotice state={secretMigration} onAck={ackSecretMigration} />
         <SettingsDetectSection
           accounts={accounts}
           current={current}
@@ -206,6 +279,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
 
         <SettingsVoiceSection
           batchTranscribe={batchTranscribe}
+          cancelWhisperDownload={cancelWhisperDownload}
           installEngine={installEngine}
           nativeTranscribe={nativeTranscribe}
           pickWhisperDir={pickWhisperDir}
@@ -231,10 +305,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
         {/* ── AI 大模型（全应用唯一的模型配置入口） ── */}
         <div data-settings-section="ai"><AiModelConfig /></div>
 
-        {/* ── 数据边界与出网（原外层侧栏的独立页，整页迁入本弹窗） ── */}
-        <div className={css.embedPane} data-settings-section="boundary">
-          <PrivacyTrustPanel embedded />
-        </div>
+        {/* ── 数据边界与出网（**出站**）与远程访问（**入站**）：同一类问题的两个方向 ── */}
+        <div className={css.embedPane} data-settings-section="boundary"><PrivacyTrustPanel embedded /></div>
+        <SettingsRemoteAccess />
 
         {/* ── 隐私体检已迁回主界面：它是只读的数据视图（扫描结果 + 风险 TOP10，命中样本
                还要跳回会话），与「配置 / 维护动作」不同类。见 WechatDataPanel 的 renderTab。 ── */}
@@ -305,7 +378,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               <span className={css.rowMeta} title={diagInfo?.dir ?? ''}>
                 {diagInfo ? `${diagInfo.dir} · ${Math.round(diagInfo.bytes / 1024)} KB` : '读取中…'}
               </span>
-            </div>
+              <button type="button" className={modelCss.whisperSkip} onClick={() => { void previewDiagLog() }}>预览…</button><button type="button" className={modelCss.whisperSkip} onClick={() => { void copyDiagLogPath() }}>复制路径</button></div><DiagLogPreview data={diagPreview} onClose={closeDiagPreview} />
             <div className={css.row}>
               <span className={css.rowName}>启动引导</span>
               <button

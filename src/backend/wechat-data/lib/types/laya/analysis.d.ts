@@ -166,11 +166,11 @@ export declare function isLowConfidenceText(text: string): boolean;
  * 为什么注入而不是自己调：转写需要 whisper 的引擎路径/模型目录/模型 id，那些是配置层的知识
  * （`getConfig` + `resolveWhisperModelsDir` + `whisperEnginePath`），不该由 laya 层去读。
  */
-export type LayaVoiceTranscriber = (localId: number, serverId: string) => {
+export type LayaVoiceTranscriber = (localId: number, serverId: string) => Promise<{
     ok: boolean;
     text?: string;
     error?: string;
-};
+}>;
 export interface LayaVisibleAnalysisInput {
     decryptedDir: string;
     /** 解码目录（读语音转写的磁盘缓存）。 */
@@ -185,6 +185,21 @@ export interface LayaVisibleAnalysisInput {
     transcribe?: LayaVoiceTranscriber;
     /** 关掉缓存（测试用）。 */
     useCache?: boolean;
+    /**
+     * 每分析完一条就回调一次（W3-11.5）。
+     *
+     * 为什么需要它：整批实测**均 36s / 峰值 110s**，而界面上只有一个「本地分析中…」——
+     * 用户分不清「在跑」还是「卡死」，也不敢切走（切走就白算）。有进度之后，等待变成可读的。
+     * `done` 包含命中的缓存条目（那也是"处理完了"），`total` 是本批真正要处理的条数。
+     */
+    onProgress?: (done: number, total: number, currentLocalId: number) => void;
+    /**
+     * 取消信号（W3-11.5）。
+     *
+     * 只在**每条之间**检查（一次 ONNX forward 没法从中间打断，实测单条 0.5–9s），
+     * 所以取消的最坏延迟就是一条 —— 这也是「已算到 5/12 才停」这种口径的由来。
+     */
+    signal?: AbortSignal;
 }
 export interface LayaVisibleAnalysisResult {
     ok: boolean;
@@ -196,13 +211,22 @@ export interface LayaVisibleAnalysisResult {
     };
     modelKey: string;
     items: LayaMessageAnalysis[];
+    /**
+     * **被取消时为 true**（W3-11.5），且 `items` 是**已经算完的那部分**。
+     *
+     * 为什么取消不抛错、而是带部分结果正常返回：整批实测均 36s / 峰值 110s，
+     * 而每条算完就写进 `laya_analysis.db` 了。抛错等于把已经付过款的推理扔掉，
+     * 面板还得显示成一个红色错误 —— 而用户点「停止」本来就不是失败。
+     * 面板据此显示「已停止（已分析 5/12）」，剩下的条目下次滚到时照常补算（它们命中不了缓存而已）。
+     */
+    canceled?: boolean;
 }
 /**
  * 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。
  *
  * 2026-09-28 复核：**曾尝试靠「合批」降低这一批的耗时，实测反而慢了 41.8%**
  * （成本 ≈ 行数 × 序列长度，`session.run` 每次调用的固定开销实测为 0 ⇒ 没有可摊薄的东西，
- * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见 docs/PERF-AUDIT 第七节。
+ * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见已删除的 PERF-AUDIT 报告第七节（原文见 git 历史）。
  */
 export declare const MAX_ANALYZE_BATCH = 12;
 /**

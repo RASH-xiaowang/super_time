@@ -160,6 +160,7 @@ export declare function buildKbVectorIndex(decryptedDir: string, kbId: number, e
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     force?: boolean;
+    signal?: AbortSignal;
 }): Promise<KbVectorBuildResult>;
 /** 块正文摘要（稠密命中没有检索词，所以取块首一段；与稀疏的 `buildSnippet` 不同源）。 */
 declare function excerpt(text: string, max?: number): string;
@@ -198,17 +199,39 @@ export declare function searchKbDense(decryptedDir: string, kbId: number, queryT
  */
 export declare function deleteKbVectorsForFile(decryptedDir: string, fileId: number): number;
 /**
- * 把一个文件的向量改归属到目标库（删库时的 `reassign` 分支）。
+ * 文件换库时，把它的向量行一起搬过去（W2-7.2：**按块 + 按模型**搬，不再无脑全搬）。
  *
  * 不做这一步的后果是**静默**的：向量行还在，但 `kb_id` 指向那个即将消失的库 ⇒
  * 目标库检索不到（被 `WHERE kb_id=?` 挡掉）、源库也没了 ⇒ 这些块在稠密通道里
  * 「凭空消失」，而稀疏通道照样搜得到 —— 表现为「关键词能搜到、换个说法就搜不到」。
+ *
+ * ## 为什么原来那样不够
+ *
+ * 旧实现是一句 `UPDATE kb_vectors SET kb_id = ? WHERE file_id = ?` —— 把**这个文件的所有行**
+ * 都盖上目标库的号。前提是「两个库用的是同一个模型」，而这个前提在按库绑定模型之后就不成立了：
+ * 甲库用 M1、乙库用 M2，把文件从甲搬到乙，乙库就混进了 M1 的行。
+ *
+ * 后果不是「结果不准」——`searchKbDense` 会先看 `kbVectorIndexStatus`，`models` 一多就判
+ * `model-mismatch` 拒答，这条安全网一直都在。真正的代价是：**乙库从此不可用，直到整库重建**，
+ * 而 `wipeKbForeign` 那条重建路径清的是**整张库里这个 kb_id 的行** —— 为了一个搬过来的文件，
+ * 把乙库原有几千行全部重新 embedding 一遍（白花 token、白花一次出网、还占着串行 worker）。
+ *
+ * ## 本条的做法：把作废单位从「整库」细化到「这个文件的那几行」
+ *
+ *   · 目标库还没有任何向量行 ⇒ 全搬（它还没有自己的模型口径，交给下次 build 判，与旧行为一致）；
+ *   · 目标库已有行 ⇒ **只搬模型与目标库一致的那些行**，其余 DELETE。
+ *     被删的正是「在目标空间里没有意义」的那几行，下次 build 会按需重算 —— 重算的范围
+ *     只是这个文件的块，而不是整个库。
+ *
  * @param decryptedDir - 解密数据根。
  * @param fileId - 目标文件 id。
  * @param targetKbId - 新归属。
- * @returns 改动的行数。
+ * @returns 搬过去的行数 + 删掉的外来行数。
  */
-export declare function reassignKbVectors(decryptedDir: string, fileId: number, targetKbId: number): number;
+export declare function reassignKbVectors(decryptedDir: string, fileId: number, targetKbId: number): {
+    moved: number;
+    dropped: number;
+};
 /** 向量库摘要（「数据健康」用）。 */
 export declare function kbVectorIndexSummary(decryptedDir: string, kbId: number): {
     rows: number;

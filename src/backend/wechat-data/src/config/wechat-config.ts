@@ -60,9 +60,15 @@ function readRawConfig(p: string): Record<string, unknown> | null {
   return raw
 }
 
-/** Defaults for a missing config. */
+/** Defaults for a missing config.
+ *
+ * `api_enabled` 默认 **false**（2026-10-14 起，v13）：它是「局域网远程访问（手机端）」的
+ * 总开关，打开就意味着**本机开始监听端口**、同网段设备持令牌即可读到微信数据。
+ * 这类入站暴露面必须**默认关闭、由用户显式打开**，不能靠一个缺省值悄悄生效 ——
+ * 见 `docs/PRIVACY.md` 第四节 H。（`query/settings.ts` 早就是这个口径，此处与它对齐。）
+ */
 function defaultConfig(): Record<string, unknown> {
-  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: true, api_port: 5032, api_token: '' }
+  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: false, api_port: 5032, api_token: '' }
 }
 
 /**
@@ -187,6 +193,38 @@ function readConfigSecretFields(decryptedDir: string): Record<string, unknown> {
     if (secretIsMeaningful(field, raw[field])) out[field] = raw[field]
   }
   return out
+}
+
+/**
+ * 「密钥已从 `config.json` 搬到 `secrets.json`」这条提示的确认位（W2-12.3）。
+ *
+ * 它住在 `config.json` 里（**不是** `secrets.json`）—— 普通配置项，不是密钥，
+ * 留在原地即可，不必跟着搬走。
+ *
+ * 为什么需要它：搬运动作是 `saveConfig` 顺手做的、**静默**的，而 `config.json`
+ * 是用户会手工编辑的文件 —— 搬完之后他去那找密钥会找不着。提示必须只出现一次，
+ * 否则就成了每次开设置都要关一次的噪音。
+ */
+export const SECRET_MIGRATION_ACK_FIELD = 'secret_migration_notice_ack'
+
+/**
+ * M1 密钥迁移是不是还**等着**做。
+ *
+ * 判据两条，都不能省：
+ *   ① `config.json` 里**真的还留着有意义的密钥字段**（走 `readConfigSecretFields`，
+ *     于是 `image_xor_key: 136` 这种内置默认值不算 —— 它搬不搬都一样，
+ *     对它报「已迁移」等于骗人）；
+ *   ② 用户还没点过「知道了」（确认位为真就不再提示）。
+ *
+ * 纯读：不开写、不动文件。
+ * @param decryptedDir - 已解密数据根。
+ * @returns `pending` 是否该提示；`fields` 是还留在 config.json 里的字段名。
+ */
+export function secretMigrationPending(decryptedDir: string): { pending: boolean; fields: string[] } {
+  const raw = readRawConfig(configPath(decryptedDir))
+  const fields = Object.keys(readConfigSecretFields(decryptedDir))
+  const acked = raw !== null && raw[SECRET_MIGRATION_ACK_FIELD] === true
+  return { pending: !acked && fields.length > 0, fields }
 }
 
 /**

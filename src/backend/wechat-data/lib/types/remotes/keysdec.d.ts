@@ -1,4 +1,4 @@
-import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, ImageUpgradeResult, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts';
+import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, DbRepairResult, ImageUpgradeResult, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts';
 export interface createKeysDecryptRemotesInputs {
     rawWechatBase: (decrypted: string) => string;
     dirs: () => {
@@ -15,6 +15,20 @@ export declare function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInp
     }): Promise<AutoImageKeyResult>;
     verifyImageKey(): Promise<VerifyImageKeyResult>;
     decryptAllDatabases(): Promise<DecryptAllResult>;
+    /**
+     * 修复损坏的库（W3-11.7）：体检 → 只重解密损坏的那几个 → 复检。
+     *
+     * 与 `decryptAllDatabases` 的关系：那条是「立即解密」—— **全库**重解（22 个库一律
+     * 重来，分钟级）；本方法是「坏了哪个修哪个」。它存在的理由就是 wechat-host.js
+     * 那条处方（「必要时对该库重新解密」）此前没有对应动作：用户即使知道坏的是哪个，
+     * 也只能整库重解或者干等。实现见 `query/db-repair.ts`。
+     *
+     * 共用同一条忙闲闸门（`decryptState.active`）：两类动作都动同一批文件，
+     * 同时跑只会互相替换快照。进度走 `op = 'databases'`（它确实是数据库解密，
+     * 实时同步与全量解密共用这一个状态枚举，不为它单开一档）。
+     * @returns DbRepairResult：found/repaired/stillCorrupted + 修不了的与原因。
+     */
+    repairCorruptDbs(): Promise<DbRepairResult>;
     decryptAllImages(options: {
         concurrency?: number;
     }): Promise<DecryptImagesResult>;

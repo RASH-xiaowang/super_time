@@ -15,6 +15,7 @@ export declare function queryRecords(decryptedDir: string, kind: string, limit?:
 }): {
     items: RecordItem[];
     total: number;
+    readError?: string;
 };
 /**
  * 撤回消息列表（2026-09-29 起：**优先读我们自己的归档库**，见 `anti-revoke-archive.ts`）。

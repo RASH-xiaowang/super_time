@@ -3,7 +3,7 @@
 // SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
 if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
 
-const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
@@ -81,12 +81,16 @@ const {
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
 const licenseService = require('./src/license/service');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
-const { buildDiagnosticReport, createDiagLog, installConsoleCapture, installRendererConsoleCapture, rendererConsoleLevels } = require('./src/backend/diag-log');
+const { buildDiagnosticPreview, buildDiagnosticReport, createDiagLog, installConsoleCapture, installRendererConsoleCapture, rendererConsoleLevels } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
 const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = require('./src/backend/debug-gates');
 const { createUpdateService } = require('./src/backend/update');
 const { registerMiscIpc } = require('./src/backend/ipc-misc');
 const { registerWechatIpc } = require('./src/backend/ipc-wechat');
+// 局域网远程访问（手机端）：HTTP 服务 + 与 IPC 共用的那道闸门。
+const { createRemoteAccessServer } = require('./src/backend/http-server');
+const { createRemoteAccessControl } = require('./src/backend/http-control');
+const { gatedWechatCall } = require('./src/backend/call-gates');
 const {
   createMainWindow,
   installWebContentsGuards: installWindowGuards,
@@ -196,6 +200,14 @@ let updateService = null;
 let wechatBackend = null;
 /** 后端进程启动时返回的 { info, methods }。 */
 let wechatBoot = null;
+/**
+ * 局域网远程访问（手机端）的 HTTP 服务句柄；未创建或已停止时为 null。
+ *
+ * 它**默认不监听**：`start()` 内部要求 `api_enabled === true` 且令牌非空才会真的绑端口
+ * （理由见 `src/backend/http-server.js` 文件头 —— 老配置里遗留的 `api_enabled: true`
+ * 不该让端口在用户没点过任何新开关时就打开）。
+ */
+let remoteAccess = null;
 /** 监管状态：数据目录、当前句柄、已重启次数、待执行的重启定时器、是否主动停止。 */
 let backendUserDataPath = null;
 /**
@@ -494,6 +506,10 @@ const guardsCtx = { shell, rootDir: __dirname, decideNavigation, decideWindowOpe
 /** 向所有窗口转发后端事件（本体已外提，这里只保留 main.js 内的调用点形状）。 */
 function broadcastWechatEvent(name, args) {
   broadcastToWindows(windowCtx, 'wechat:event', { name, args });
+  // 同一份事件也要发给手机浏览器（SSE）。payload 形状与 `wechat:event` 完全一致，
+  // 所以渲染层那套「事件名 → DOM CustomEvent」的分发逻辑两边共用、一字不改 ——
+  // WAL 实时刷新链（`wechat-data/updated`）在手机上因此与桌面端同样即时。
+  if (remoteAccess) remoteAccess.pushEvent(name, args);
 }
 
 function broadcastUpdateState(state) {
@@ -551,16 +567,63 @@ app.whenReady().then(async () => {
   // 正常情况下日志落在 STATE_DIR/logs，用户报障时把它交出来即可。
   registerMiscIpc({
     ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
-    getMainWindow: () => mainWindow, buildDiagnosticReport, installWebContentsGuards,
+    clipboard, getMainWindow: () => mainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards,
   });
 
   // —— Super Time 后端相关的 IPC ——
   // 处理器全部在这里注册（都在 createWindow() 之前），后端进程本身在
   // createWindow() 之后才启动，理由见那一处注释。
-  registerWechatIpc({
+  // 这份 ctx 同时喂两处：IPC 的 `wechat:call` 与 HTTP 的 `POST /api/wechat/call`。
+  // 两条路都经 `gatedWechatCall(ctx, …)`（call-gates.js），闸门只有一份实现 ——
+  // 分开写的话，最可能的漂法是 HTTP 那份少抄 catch，于是许可校验一抛异常就变成放行。
+  const gateCtx = {
     ipcMain, app, licenseService, debugGates, awaitBackendReady, findModelCatalog, APP_VERSION,
     getWechatBackend: () => wechatBackend, getWechatBoot: () => wechatBoot, getBackendStatus: () => backendStatus,
     BACKEND_CALL_READY_WAIT_MS, loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile,
+  };
+  registerWechatIpc(gateCtx);
+
+  // —— 局域网远程访问（手机端）——
+  // 这里只**创建**，不启动：启动排在后端就绪之后（见 setBackendStatus('ready') 那一处），
+  // 因为数据根要等后端解析出来才知道，而配置与令牌都住在数据根下。
+  // 静态资源服务的就是 Electron 自己 loadFile 的同一份产物（`src/client/ui-dist`），
+  // 所以手机与桌面加载的是同一个构建，不存在「手机版另一套代码」。
+  remoteAccess = createRemoteAccessServer({
+    getDataRoot: () => String(wechatBoot?.info?.root ?? ''),
+    getUiDistDir: () => path.join(__dirname, 'src', 'client', 'ui-dist'),
+    gatedCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+    appVersion: APP_VERSION,
+  });
+  // 界面改完「远程访问」设置后立即生效（不等 60s 的兜底复查）。
+  ipcMain.handle('remote-access:state', () => ({ ok: true, value: remoteAccess.getState() }));
+  ipcMain.handle('remote-access:apply', async () => {
+    try {
+      return { ok: true, value: await remoteAccess.syncWithConfig() };
+    } catch (e) {
+      return { ok: false, error: { message: e?.message ?? String(e) } };
+    }
+  });
+  // 开关与令牌轮换：写配置一律走后端的 saveWechatConfig（它负责原子写、写前备份、
+  // 以及把 api_token 这类密钥字段分流进 secrets.json 并收紧 ACL）。
+  const raControl = createRemoteAccessControl({
+    backendCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+    remoteAccess,
+  });
+  ipcMain.handle('remote-access:rotate', async () => {
+    try {
+      const r = await raControl.rotate();
+      return r.ok ? { ok: true, value: r } : { ok: false, error: { message: r.error } };
+    } catch (e) {
+      return { ok: false, error: { message: e?.message ?? String(e) } };
+    }
+  });
+  ipcMain.handle('remote-access:toggle', async (_e, enabled) => {
+    try {
+      const r = await raControl.setEnabled(enabled === true);
+      return r.ok ? { ok: true, value: r.state } : { ok: false, error: { message: r.error } };
+    } catch (e) {
+      return { ok: false, error: { message: e?.message ?? String(e) } };
+    }
   });
 
   // ── 自动更新（electron-updater + GitHub Releases）──────────────────────
@@ -568,6 +631,8 @@ app.whenReady().then(async () => {
   //   update:state   —— 渲染层挂载时补一次状态（可能已经错过早先的事件，同 wechat:backend-state）
   //   update:check   —— 用户手动触发；自动检查由 scheduleAutoCheck 排在启动 30s 后
   //   update:install —— 重启并安装已下载的更新
+  //   update:skip    —— W2-12.2：跳过某个版本（空串 = 取消跳过）
+  //   update:retry   —— W2-12.2：手动重试下载（**不受**自动重试的次数上限约束）
   //   update:event   —— 主进程 → 渲染层的状态推送（含下载进度）
   // 更新源与安装包同源（build.publish → 打包时写进 resources/app-update.yml），
   // 状态机与各事件的收敛规则见 src/backend/update.js。
@@ -591,6 +656,28 @@ app.whenReady().then(async () => {
   ipcMain.handle('update:install', () => {
     const r = updateService.install();
     return r.ok ? { ok: true } : { ok: false, error: { message: r.error } };
+  });
+  /**
+   * W2-12.2：跳过某个版本 / 手动重试下载。
+   *
+   * 与 `update:check` 同一条纪律：渲染层只传「跳哪个版本号」这一个字符串，
+   * **不参与**任何「要不要出网」的判定。`skipVersion` 传空串就是取消跳过（可反悔）。
+   */
+  ipcMain.handle('update:skip', (_event, version) => {
+    try {
+      const v = typeof version === 'string' ? version : '';
+      return { ok: true, value: updateService.skipVersion(v) };
+    } catch (err) {
+      return { ok: false, error: { message: err?.message || String(err) } };
+    }
+  });
+  ipcMain.handle('update:retry', async () => {
+    try {
+      const next = await updateService.retryDownload();
+      return { ok: true, value: next };
+    } catch (err) {
+      return { ok: false, error: { message: err?.message || String(err) } };
+    }
   });
 
   createWindow();
@@ -688,6 +775,14 @@ app.whenReady().then(async () => {
     console.log('[wechat] Super Time 后端已就绪，Remote 方法数:', wechatBoot.methods.length);
     console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
+    // 远程访问（手机端）在**后端就绪之后**才决定要不要监听：数据根这时才解析出来，
+    // 而 `api_enabled` / `api_port` 与令牌都住在数据根下。默认不监听（见 http-server.js 文件头）。
+    try {
+      const ra = await remoteAccess.syncWithConfig();
+      if (ra.running) console.log('[remote-access] 手机访问地址: http://%s:%d', ra.address, ra.port);
+    } catch (e) {
+      console.warn('[remote-access] 启动失败（不影响桌面端）:', e?.message ?? e);
+    }
   } catch (err) {
     console.error('[wechat] Super Time 后端初始化失败:', err);
     // 初始化失败也交给监管器重试 —— 这是最该自愈的一类失败：
@@ -823,6 +918,9 @@ app.on('before-quit', () => {
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
   backendStopping = true;
   if (backendRestartTimer) { clearTimeout(backendRestartTimer); backendRestartTimer = null; }
+  // 远程访问先停：它是唯一**对外**的入口，退出时应当立刻不再接受连接（而不是等进程销毁
+  // socket）。stop() 是异步的，这里不 await —— 退出路径上不能挂住，端口随进程一起释放。
+  if (remoteAccess) { void remoteAccess.stop(); remoteAccess = null; }
   if (wechatBackend) {
     try {
       wechatBackend.dispose();

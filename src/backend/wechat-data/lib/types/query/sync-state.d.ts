@@ -73,3 +73,22 @@ export declare function noteSyncSourceState(key: string, sig: SyncSourceSig): vo
 export declare function flushSyncSourceState(decryptedDir: string): boolean;
 /** 清空待落盘条目（测试用）。 */
 export declare function forgetPendingSyncSourceState(): void;
+/**
+ * sync tick 内的 stat 分布（W2-2.3 实测，2026-10-11，本机，20 分片夹具）。
+ *
+ * | tick 类型 | 耗时 | statSync | existsSync | readdirSync |
+ * |---|---|---|---|---|
+ * | 冷（lastState 空，要真解 20 个库） | 456ms | 62 | 62 | 1 |
+ * | 热（什么都没变） | 0.4ms | 42 | 22 | 1（首次）/ 0 |
+ *
+ * 两个读数决定了「只探测上次有变化的目录」这件事**不值得做**：
+ *
+ *  ① 热 tick 已经只要 0.4ms（约每分片 2 次 stat：main + wal，正是 `shardSig`）。
+ *     实时同步的间隔是秒级，0.4ms 占比可以忽略；改成「只探测变化目录」最多省 0.3ms，
+ *     却要引入「谁变了」的账本与它的失效判断 —— 那是拿一个新状态机换 0.3ms。
+ *  ② 冷 tick 的 456ms 全在解密（stat 只占其中 62 次）。即便把 stat 全部省掉，
+ *     冷 tick 还是 400ms 以上。所以这一条要优化也不是从 stat 下手。
+ *
+ * 结论：不改探测策略，实测数字留在这里 —— 下一个人不必再量一遍，
+ * 也不会因为「tick 里有几十次 stat」这种看起来难看的数字去动结构。
+ */

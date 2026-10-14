@@ -149,6 +149,25 @@ const LEDGER: LedgerEntry[] = [
       + '逐条口径见 docs/PRIVACY.md 的 A2 节。',
   },
   {
+    site: 'src/backend/wechat-data/src/query/clawbot-ilink.ts#requestJson',
+    control: '主机写死（腾讯 iLink 服务）+ 接收侧只发控制面、发送侧只发你主动写的那条正文',
+    anchor: 'src/backend/wechat-data/src/query/clawbot-ilink.ts', marker: 'ilinkai.weixin.qq.com',
+    why: '微信 ClawBot 绑定通道（2026-10-12 接入）：取码 / 状态轮询 / 消息长轮询 / 发送四条都经这一个函数。'
+      + '接收侧请求体里只有同步游标与渠道版本号；发送侧（`sendTextMessage`）body = 路由字段 + '
+      + '一条文本条目，正文 = 面板输入框原文、由用户逐条触发（没有自动/定时发送）。'
+      + '服务端回传的 `baseurl` 会在 `resolveBaseUrl` 再收敛一层（只许 https 的 weixin.qq.com 域）。'
+      + '逐条口径见 docs/PRIVACY.md 的 G2 节。',
+  },
+  {
+    site: 'src/backend/wechat-data/src/query/clawbot-media.ts#downloadBytes',
+    control: '主机写死（腾讯 iLink CDN）+ 收到附件消息即自动取回（无人值守；正文型 url 先过腾讯系白名单）',
+    anchor: 'src/backend/wechat-data/src/query/clawbot-media.ts', marker: 'novac2c.cdn.weixin.qq.com',
+    why: 'ClawBot 媒体可见（2026-10-12 接入；同日改自动取回）：收到带附件的消息后由队列'
+      + '自动下载 + 解密 + 落 `<数据根>/clawbot-media/`（无人值守；失败在下一次同步 / 启动补扫重试）。'
+      + '加密引用走固定 CDN 基址；图片自带的明文 URL 先过 `wechatCdnHostAllowed` 才发请求。'
+      + '单份上限 32MB；逐条口径见 docs/PRIVACY.md 的 G2 节。',
+  },
+  {
     site: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts#fetchFirstJson',
     control: '公开的行政区划数据（固定镜像源）', anchor: 'ANY', marker: 'WORLD_GEO_URLS',
     why: '不含你的数据；URL 是代码里的常量清单，不由消息内容或用户输入决定。',
@@ -158,6 +177,33 @@ const LEDGER: LedgerEntry[] = [
     control: '渲染层 CSP `connect-src`', anchor: 'src/client/ui-app/index.html',
     marker: "connect-src 'self' data: blob: file:",
     why: '把面板里已有的图转成 data URL 供导出用：`src` 是本机/`data:` 地址。',
+  },
+  // —— 2026-10-14：手机浏览器态的三条 `fetch`。**它们不是出网点** ——
+  // 打的全是同源相对路径（`/api/...`），也就是本机那个局域网远程访问服务；
+  // 一个字节都不会离开这台机器（手机侧看是「发给电脑」，电脑侧看是本地回环/局域网地址）。
+  // 登记在这里是因为台账的口径是「每个 fetch 调用点都要说清它凭什么可以发」，
+  // 而这三条恰恰最需要说清：它们是渲染层里唯一一批**不带主机名**的 fetch，
+  // 将来谁把它改成绝对地址（比如写死某个 IP），这条登记就是提醒要看一眼的地方。
+  {
+    site: 'src/client/ui-app/http-remote.ts#callRemote',
+    control: '同源相对路径 + 会话 Cookie（不是出网点）',
+    anchor: 'src/client/ui-app/http-remote.ts', marker: "credentials: 'same-origin'",
+    why: '浏览器态调后端：`POST /api/wechat/call`，同源相对路径、没有主机名。'
+      + '服务端那一边过的是与桌面 IPC 同一道闸门（`call-gates.js`）+ 方法白名单。',
+  },
+  {
+    site: 'src/client/ui-app/http-remote.ts#authenticate',
+    control: '同源相对路径（不是出网点）',
+    anchor: 'src/client/ui-app/http-remote.ts', marker: "'/api/auth'",
+    why: '令牌换会话：`POST /api/auth`。令牌由桌面端生成、只在这一次请求里出现，'
+      + '随后由 `stripTokenFromUrl` 从地址栏抹掉；比对在服务端用定长比较完成。',
+  },
+  {
+    site: 'src/client/ui-app/http-remote.ts#hasSession',
+    control: '同源相对路径（不是出网点）',
+    anchor: 'src/client/ui-app/http-remote.ts', marker: "'/api/status'",
+    why: '探测当前会话是否有效：`GET /api/status`。令牌门用它决定「直接进」还是「先要令牌」，'
+      + 'SSE 断线时也用它区分「网络抖动」与「会话失效」。不带任何数据。',
   },
 ]
 

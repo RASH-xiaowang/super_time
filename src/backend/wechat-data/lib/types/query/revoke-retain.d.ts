@@ -56,4 +56,5 @@ export interface RetainedRevokeItem {
 export declare function queryRevokedRetained(decryptedDir: string, limit: number, offset: number, q?: string): {
     items: RetainedRevokeItem[];
     total: number;
+    readError?: string;
 };

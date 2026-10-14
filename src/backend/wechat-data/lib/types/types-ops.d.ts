@@ -48,7 +48,7 @@ export interface PrivacyStateSnapshot {
     };
 }
 /** Operation-log category families recorded by the app (metadata only). */
-export type OperationCategory = 'settings' | 'keys' | 'sync' | 'export' | 'delete' | 'backup' | 'edit' | 'task' | 'error';
+export type OperationCategory = 'settings' | 'keys' | 'sync' | 'export' | 'delete' | 'backup' | 'edit' | 'task' | 'error' | 'clawbot';
 /** Outcome of one logged operation. */
 export type OperationStatus = 'ok' | 'fail' | 'skip';
 /** One operation-log entry (metadata only; never carries message bodies). */
@@ -63,7 +63,7 @@ export interface OperationLogEntry {
     /**
      * 这条操作花了多少毫秒（H2，2026-09-28 性能修复）。
      *
-     * 为什么要有它：`docs/PERF-AUDIT-172` 那张「哪个接口最慢」的分布表**是拿临时探针
+     * 为什么要有它：PERF-AUDIT-172 报告（已删除，原文见 git 历史）里那张「哪个接口最慢」的分布表**是拿临时探针
      * 从宿主日志里数出来的** —— 每查一次性能就得重写一个 probe 脚本，而探针只能测
      * 「本机能跑的那些接口」。把耗时落进审计表之后，用户现场的那台机器就是唯一的数据源：
      * 直接按 `duration_ms DESC` 查，不必再让用户跑脚本。
@@ -107,9 +107,223 @@ export interface OperationLogQuery {
 export interface OperationLogSnapshot {
     items: OperationLogEntry[];
     total: number;
+    /**
+     * **只在读失败时出现**（W3-11.4）。审计库打不开时返回空列表会让「没有操作记录」
+     * 与「看不到操作记录」混为一谈 —— 后者才是需要用户知道的那件事。
+     */
+    readError?: string;
 }
 /** Operation-log clear result. */
 export interface OperationLogClearResult {
     ok: boolean;
     removed: number;
+}
+/** 绑定关系状态四态（对齐官方流程；`unbound-by-user` 与从未绑定的 `unbound` 分开）。 */
+export type ClawbotBindingStatus = 'unbound' | 'binding' | 'bound' | 'unbound-by-user';
+/** 绑定行（一对一，故本质上只有一行；用表是为承载二维码中间态并与连接账本体系一致）。 */
+export interface ClawbotBinding {
+    id: number;
+    /** 实例编号（1 起、只增不复用）。多实例之后一 slot 一行绑定。 */
+    slot: number;
+    status: ClawbotBindingStatus;
+    /** 一次性绑定凭证（仅 `binding` 态有意义；绑定成功或过期后清空）。 */
+    qrToken: string | null;
+    /** 二维码过期时间戳（TTL 5 分钟）。 */
+    qrExpiresAt: number | null;
+    /** 绑定后回写；未绑定为 null。 */
+    wxid: string | null;
+    /** 微信昵称。 */
+    userName: string | null;
+    /** 头像（本地路径或 URL）。 */
+    avatar: string | null;
+    boundAt: number | null;
+    unboundAt: number | null;
+    createdAt: number;
+    updatedAt: number;
+}
+/**
+ * iLink 接收通道的运行态（设置卡片 / 环境自检共用）。
+ *
+ * `running` = 常驻长轮询在跑（绑定后启动，解绑/会话过期停止）；
+ * `error` 是最近一次错误的中文说明（`null` = 正常）。
+ */
+export interface ClawbotChannelInfo {
+    running: boolean;
+    error: string | null;
+}
+/** 绑定卡片快照（`getClawbotBinding` / `unbindClawbot` 共用）。 */
+export interface ClawbotBindingSnapshot {
+    binding: ClawbotBinding;
+    /** 接入会话计数（设置卡片展示用）。 */
+    todayMessages: number;
+    totalMessages: number;
+    /** iLink 接收通道状态（**绑定后由后端常驻长轮询**，与窗口是否打开无关）。 */
+    channel: ClawbotChannelInfo;
+    /** **只在读失败时出现**：库打不开 ≠ 没有绑定（读失败不许显示成「未绑定」）。 */
+    readError?: string;
+}
+/**
+ * 单个实例的**行为配置**（多实例，2026-10-13）。
+ *
+ * 与绑定关系**分表存**（`clawbot_instance_config`）：绑定行会被重新绑定覆盖，
+ * 而「自动回复开不开、回复要不要带知识库」是用户偏好，必须活过重新绑定。
+ * 配置的读写只走 `query/clawbot-instance.ts`（配置集中管理，别处不许直接写 SQL）。
+ */
+export interface ClawbotInstanceConfig {
+    slot: number;
+    /** AI 自动回复总开关（收到入站消息时是否自动生成并回发）。 */
+    autoReply: boolean;
+    /** 自动回复时是否启用知识库增强（复用问答管道，把该库的文件块纳入检索）。 */
+    kbEnabled: boolean;
+    /** 知识库作用域（`kbEnabled` 为真且非空才生效；无从「所有库」这种模式）。 */
+    kbId: number | null;
+}
+/**
+ * 实例列表项（设置视图的实例卡）。
+ *
+ * `channel` 由装配层注入（通道注册表在 `remotes/clawbot.ts`，存储层不该知道它）——
+ * 与 `ask` 注入同款：存储只回答「库里的实例长什么样」，运行态由持有者补。
+ */
+export interface ClawbotInstance {
+    slot: number;
+    status: ClawbotBindingStatus;
+    wxid: string | null;
+    userName: string | null;
+    avatar: string | null;
+    boundAt: number | null;
+    unboundAt: number | null;
+    config: ClawbotInstanceConfig;
+    /** 该实例的接入会话条数（今日 / 累计）。 */
+    todayMessages: number;
+    totalMessages: number;
+    /** iLink 接收通道状态（该实例自己的长轮询）。 */
+    channel: ClawbotChannelInfo;
+}
+/** 实例列表快照（`listClawbotInstances`）。 */
+export interface ClawbotInstancesSnapshot {
+    instances: ClawbotInstance[];
+    /** **只在读失败时出现**：库打不开 ≠ 一个实例都没有（读失败不许显示成「空列表」）。 */
+    readError?: string;
+}
+/** `createClawbotInstance` 的返回：新实例编号 + 最新列表。 */
+export interface ClawbotInstanceCreated extends ClawbotInstancesSnapshot {
+    /** 新建实例的编号（界面据此立刻对它发起扫码绑定，不用去猜哪条是新的）。 */
+    slot: number;
+}
+/** `deleteClawbotInstance` 的返回：连带删掉的会话条数 + 最新列表。 */
+export interface ClawbotInstanceDeleted extends ClawbotInstancesSnapshot {
+    /** 连带删掉的接入会话条数（0 = 本来就没有）—— 界面必须如实回报，不许静默丢数据。 */
+    removedMessages: number;
+}
+/**
+ * 二维码绑定进度（`getClawbotBindState` 返回；一次调用 = 一次上游状态轮询）。
+ *
+ * `idle` = 当前没有进行中的扫码会话（从未申请 / 进程重启丢会话 / 已完成）；
+ * `confirmed` 之后绑定已落库、通道已拉起，`binding` 里能看到结果。
+ */
+export interface ClawbotBindStateSnapshot {
+    state: 'idle' | 'wait' | 'scaned' | 'confirmed' | 'expired';
+    binding: ClawbotBindingSnapshot;
+}
+/**
+ * 发送结果（`sendClawbotMessage` 返回）。
+ *
+ * 只有服务端确认成功（`ret=0`）才落库并发事件 —— 失败不写「已发出」的假记录；
+ * `error` 是可直接展示的中文（缺绑定 / 没会话令牌 / 网络错 / 服务端拒绝）。
+ */
+export interface ClawbotSendResult {
+    ok: boolean;
+    /** 成功时 = 落库的会话行 id（事件与续传的定位）；失败为 null。 */
+    id: number | null;
+    /** 失败原因（可读中文；直接展示）。 */
+    error?: string;
+}
+/**
+ * 取媒体结果（`getClawbotMedia` 返回）。
+ *
+ * 图片且未超过内联上限时给 `dataUrl`（界面直接画小图）；其余类型（或图片过大）
+ * 给已解密落盘的 `path`（界面用既有 `openPath` 交给系统打开）。
+ */
+export interface ClawbotMediaResult {
+    ok: boolean;
+    /** image | voice | video | file。 */
+    kind?: string;
+    /** 图片内联展示的 data URL（非图片类或超过内联上限时不给）。 */
+    dataUrl?: string;
+    /** 已解密缓存的本机路径。 */
+    path?: string;
+    name?: string | null;
+    /** 失败原因（可读中文；直接展示）。 */
+    error?: string;
+}
+/** 二维码取码结果（`createClawbotBindQr` 返回；四态抄 WeClaw 实现）。 */
+export interface ClawbotBindQr {
+    /** 一次性凭证。 */
+    token: string;
+    /** 二维码内容（由界面渲染成二维码）。 */
+    payload: string;
+    expiresAt: number;
+    state: 'wait' | 'scaned' | 'confirmed' | 'expired';
+}
+/** 附件的展示元数据（公开：渲染层只知道「有附件 / 类型 / 名字 / 体积」；取数引用与密钥不出渲染层）。 */
+export interface ClawbotMediaInfo {
+    /** image | voice | video | file（与 msgType 同源）。 */
+    kind: string;
+    /** 文件名（仅文件类有；其余为 null）。 */
+    name: string | null;
+    /** 体积提示（字节；未知为 null）。 */
+    size: number | null;
+}
+/** 接入会话消息（无 instance_id —— 单绑定）。 */
+export interface ClawbotMessage {
+    /** 序号续传的唯一事实，永不复用。 */
+    id: number;
+    /** 所属实例编号（列表按实例分；续传位也按实例取）。 */
+    slot: number;
+    ts: number;
+    /** in = 微信→我们；out = 我们→微信。 */
+    direction: 'in' | 'out';
+    /** text | image | voice | file ... */
+    msgType: string | null;
+    /** 正文原文（打码只在展示层做）。 */
+    content: string;
+    createdAt: number;
+    /** 附件展示信息（有附件时非空；正文里仍有 `[图片]`/`[语音]` 等占位说明）。 */
+    media: ClawbotMediaInfo | null;
+}
+/** 接入会话检索条件（关键词必须服务端过滤，见 operation-log 的同款教训）。 */
+export interface ClawbotMessageQuery {
+    /** 实例范围（缺省 1 = 第一个实例；多实例之后列表按实例分）。 */
+    slot?: number;
+    /** ts >= from。 */
+    from?: number;
+    /** ts <= to。 */
+    to?: number;
+    direction?: 'in' | 'out';
+    /** content 上包含匹配（服务端 LIKE + 转义 `%` `_` `\`）。 */
+    q?: string;
+    /** 序号续传：只取 `id > afterId` 的行（按 id 升序返回，供实时增量合并）。 */
+    afterId?: number;
+    limit?: number;
+    offset?: number;
+}
+/** 接入会话页快照。 */
+export interface ClawbotMessageSnapshot {
+    items: ClawbotMessage[];
+    total: number;
+    /** 表内当前最大 id（不受筛选影响），供前端记 `lastId` 续传。 */
+    maxId: number;
+    /** **只在读失败时出现**；库尚未创建（文件不存在）不算读失败，返回空快照即可。 */
+    readError?: string;
+}
+/** 环境自检单项（M-C 精简版：只查 3 项）。 */
+export interface ClawbotEnvCheckItem {
+    key: string;
+    label: string;
+    state: 'ok' | 'warn' | 'error';
+    detail: string;
+}
+/** 环境自检快照。 */
+export interface ClawbotEnvSnapshot {
+    items: ClawbotEnvCheckItem[];
 }

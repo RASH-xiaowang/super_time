@@ -55,11 +55,34 @@ export declare const ATTACH_BUDGET_MS = 25;
  * @param xorKey - XOR 密钥。
  * @returns 本次是否真的推进了一步（未推进 = 闸门内/没目录，供调用方决定是否记日志）。
  */
+/**
+ * W3-2.4：**预热预算的上限**（每拍最多这么多毫秒）。
+ */
+export declare const PREWARM_MAX_MS = 500;
+/**
+ * W3-2.4：**探测预算**——— 先花这么多毫秒把水位读出来。
+ * 不能为 0：那样等于不探测，水位永远是上一拍的陈年数据。
+ */
+export declare const PREWARM_PROBE_MS = 100;
+/**
+ * W3-2.4：按**积压水位**选预热预算（纯函数，便于单测）。
+ *
+ * 三档（阅读重点是**为什么是这三个数**，不是否分档）：
+ *  · backlog = 0 ⇒ 不加时间。空闲时仍然会推一步（探测那一步），但不会无意义地拉满。
+ *  · backlog > 0 ⇒ 给满 500ms。积压存在就说明有人在等（新消息、刚打开的面板），
+ *    而解密一张要 12–21s —— 这里多花 200ms 能少等一佊。
+ *  · 500 上限而不是更大：每拍 10s，500ms = 5%。再大就开始挑战“占用
+ *    共享事件循环」这条约束了（gateway 里还托管着全部查询）。
+ * @param backlog - 当前积压条数（还没解完的）。
+ * @returns 本拍应该花的毫秒数。
+ */
+export declare function prewarmBudgetMs(backlog: number): number;
 export declare function pumpSnsDecodeCache(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, opts?: {
     maxMs?: number;
 }): {
     advanced: boolean;
     steps: number;
+    backlog?: number;
 };
 export declare function snsAttachProgressForTest(wechatBaseDir: string): {
     decoded: number;

@@ -193,4 +193,14 @@ export interface WechatConfigFull {
     /** Persisted whisper-cli engine path (file or its bin dir). */
     whisper_bin: string;
     resolved?: Record<string, string>;
+    /**
+     * M1 密钥迁移提示状态（W2-12.3）：`pending` 为真表示 `config.json` 里还留着密钥字段，
+     * 下一次保存会把它们搬进 `secrets.json`；`fields` 是那些字段名。
+     *
+     * 可选字段：旧版本后端不带它，界面必须容忍「没有这个字段」而不是当成 pending。
+     */
+    secret_migration?: {
+        pending: boolean;
+        fields: string[];
+    };
 }

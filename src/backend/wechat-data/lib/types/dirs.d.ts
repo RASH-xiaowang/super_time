@@ -38,8 +38,12 @@ export declare function resolveSourceDir(env?: Record<string, string | undefined
  * a root that already contains `decrypted` is left untouched. Explicit
  * legacy overrides bypass the root, so nothing is copied in that mode.
  *
- * SQLite 主库的 `-wal` 会随主库一起拷（见 copyFileWithWal）；`walCarried` 就是给调用方
- * 留痕迹用的 —— 「这次拷的是不是最新一代」不能只靠猜。
+ * 源端有活的 `-wal` 时，那个库**不按文件拷**，而是走 SQLite 的 `VACUUM INTO` 取一份
+ * 自洽快照（W2-8.5）—— 「拷主库 + 拷 -wal」两次读之间源端可能正在 checkpoint，
+ * 拷到的是一对**撕裂**的页/帧。`-wal` 那条路只作为 `VACUUM INTO` 失败时的退路。
+ *
+ * 留痕迹用的字段有两个：`vacuumed`（走了自洽快照）与 `walCarried`（走了退路）。
+ * 「这次拷的是不是最新一代」不能只靠猜。
  * @param env - environment mapping.
  * @returns what was copied (or skipped), for observability.
  */
@@ -48,4 +52,5 @@ export declare function bootstrapWechatData(env?: Record<string, string | undefi
     copied: string[];
     skipped: boolean;
     walCarried: string[];
+    vacuumed: string[];
 };

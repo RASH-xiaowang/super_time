@@ -54,11 +54,28 @@ function registrar(src: string): string | null {
   return m ? grp(m, 1, '注册函数名') : null
 }
 
-/** `fn({ … })` 实参对象字面量顶层的键（含缩写键 `app`）；没有调用点则返回 null。 */
+/**
+ * `fn({ … })` 实参对象字面量顶层的键（含缩写键 `app`）；没有调用点则返回 null。
+ *
+ * 也认**共享变量**形式 `fn(gateCtx)`：2026-10-14 起 IPC 与 HTTP（局域网远程访问）
+ * 两条路要过同一道闸门，于是 main.js 把 ctx 提成一个 const 同时喂给两边 ——
+ * 这比两处各写一份内联字面量**更强**（不可能漂），守卫没有理由不认。
+ * 解析方式是顺着变量名找到它的 `const <名> = { … }` 声明，再按同一套括号配对取键。
+ */
 function callKeys(src: string, fn: string): string[] | null {
-  const at = src.indexOf(fn + '({')
-  if (at < 0) return null
-  const start = src.indexOf('{', at)
+  let start = src.indexOf(fn + '({')
+  if (start >= 0) {
+    start = src.indexOf('{', start)
+  } else {
+    const escaped = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = new RegExp(escaped + '\\(\\s*([A-Za-z_$][\\w$]*)\\s*\\)').exec(src)
+    if (!m) return null
+    const varName = grp(m, 1, 'ctx 变量名')
+    const decl = src.indexOf(`const ${varName} = {`)
+    if (decl < 0) return null
+    start = src.indexOf('{', decl)
+  }
+  if (start < 0) return null
   let depth = 0
   let end = -1
   for (let i = start; i < src.length; i += 1) {
@@ -129,9 +146,19 @@ describe('拆分模块的 ctx 接线：两侧事实必须对得上', () => {
     }
   })
 
+  // ipc-wechat.js 把整个 ctx **原样**交给 call-gates.js 的 gatedWechatCall（闸门实现 2026-10-14
+  // 搬过去了，HTTP 那条路也调它）。所以「这个模块真正消费哪些字段」要算上那份实现里的解构，
+  // 否则 licenseService / debugGates 这些会被误报成「main.js 传了但没人用」。
+  // 条件写死在**真的转发了 ctx** 这件事上（AST 剥注释后找 `gatedWechatCall(ctx`），
+  // 不是按文件名硬编码 —— 转发关系没了，这条口径就自动退回原样。
+  const gatesSrc = readFileSync(join(BACKEND, 'call-gates.js'), 'utf8')
+  const forwardsCtx = (src: string): boolean => /gatedWechatCall\(\s*ctx\b/.test(codeOnly(src))
+
   for (const { file, src, registrar: fn } of LOADED) {
     const passed = fn ? callKeys(mainSrc, fn) : null
-    const need = ctxFields(src)
+    const need = forwardsCtx(src)
+      ? [...new Set([...ctxFields(src), ...ctxFields(gatesSrc)])]
+      : ctxFields(src)
 
     it(`${file} → ${fn}：main.js 里有调用点，且解构的每个字段都传了`, () => {
       expect(passed, `main.js 里找不到 ${fn}({…}) 调用点`).not.toBeNull()

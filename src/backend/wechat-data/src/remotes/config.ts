@@ -6,12 +6,12 @@
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
 import { fetchDbKey } from '../keys/service.ts'
-import { generateKeysFile, getConfig, getKeysInfo, saveConfig } from '../query/config.ts'
-import { queryDbHealth } from '../query/db-health.ts'
+import { generateKeysFile, getConfig, getKeysInfo, saveConfig, secretMigrationPending } from '../query/config.ts'
+import { checkDecryptedIntegrity, queryDbHealth } from '../query/db-health.ts'
 import { queryWechatConfig } from '../query/settings.ts'
 import { getDbStatus } from '../query/status.ts'
 import { migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
-import { AutoDbKeyResult, ConfigSnapshot, DbHealthSnapshot, DbStatusSnapshot, DecryptStatus, GenerateKeysResult, KeysInfoResult, OperationCategory, OperationStatus, SimpleResult, WechatConfigFull, WechatConfigPatch } from '../types.ts'
+import { AutoDbKeyResult, ConfigSnapshot, DbHealthSnapshot, DbIntegrityResult, DbStatusSnapshot, DecryptStatus, GenerateKeysResult, KeysInfoResult, OperationCategory, OperationStatus, SimpleResult, WechatConfigFull, WechatConfigPatch } from '../types.ts'
 import { openNativePath } from '@deepseek-ai/dsh-native-command'
 import { openDenialReason } from '../query/path-policy.ts'
 import { join } from 'node:path'
@@ -48,7 +48,8 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         db_enc_key: cellStr(cfg['db_enc_key'] ?? ''),
         image_aes_key: cellStr(cfg['image_aes_key'] ?? ''),
         image_xor_key: Number(cfg['image_xor_key'] ?? 136),
-        api_enabled: Boolean(cfg['api_enabled'] ?? true),
+        // 默认关闭：入站监听面必须显式打开（与 config/wechat-config.ts 的 defaultConfig 同口径）
+        api_enabled: Boolean(cfg['api_enabled'] ?? false),
         api_port: Number(cfg['api_port'] ?? 5032),
         api_token: cellStr(cfg['api_token'] ?? ''),
         whisper_device: cfg['whisper_device'] === 'gpu' ? 'gpu' : 'cpu',
@@ -56,6 +57,8 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         whisper_threads: Number(cfg['whisper_threads'] ?? 0),
         whisper_models_dir: cellStr(cfg['whisper_models_dir'] ?? ''),
         whisper_bin: cellStr(cfg['whisper_bin'] ?? ''),
+        // W2-12.3：告诉界面「密钥搬家」这件事还等着做没有（纯读，不动文件）。
+        secret_migration: secretMigrationPending(rc.dirs().decrypted),
         resolved,
       }
     },
@@ -125,11 +128,26 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
         failed: rc.decryptState.failed,
         skipped: rc.decryptState.skipped,
         message: rc.decryptState.message,
+        // W3-2.5：失败明细随快照一起出去（「失败 N」只说有事发生，明细才说该修什么）。
+        failures: rc.decryptState.failures,
       }
     },
 
     getDbStatus(): DbStatusSnapshot {
       return getDbStatus(rc.dirs().decrypted)
+    },
+
+    /**
+     * 逐库完整性体检（`PRAGMA integrity_check`）—— **按需显式动作**，与
+     * `getDbHealth` 的大小统计分开：后者被「原图链路自检」等面板启动时顺带读取，
+     * 挂上全库扫描会让每次挂载多几秒阻塞。
+     *
+     * 「库文件已损坏」那条处方（wechat-host.js）指的就是这个结果：修不修、
+     * 修哪些，看这里的 `corrupted`。
+     * @returns DbIntegrityResult：checked/corrupted（可重解密修复）/ unreadable（占用等）。
+     */
+    async checkDbIntegrity(): Promise<DbIntegrityResult> {
+      return checkDecryptedIntegrity(rc.dirs().decrypted)
     },
 
     getDbHealth(): DbHealthSnapshot {

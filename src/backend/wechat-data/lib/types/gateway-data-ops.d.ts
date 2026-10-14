@@ -5,7 +5,7 @@
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
 import type { AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, ConfigSnapshot, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, ExportResult, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FilesSnapshot, GenerateKeysResult, ImageDataUrlResult, ImageUpgradeResult, KeysInfoResult, PrivacySnapshot, OriginalBatchResult, OriginalFetchPlan, SimpleResult, VerifyImageKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscribeResult, WechatConfigFull, WechatConfigPatch, WhisperDownloadResult, WhisperStatus, BackupRestoreResult, DbHealthSnapshot, HandoffRemindsSnapshot, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, TaskMutationResult, TasksSnapshot, NotesSnapshot, NoteMutationResult, LayaAnalysisView, LayaDownloadOutcome, LayaStatus, LayaVisibleAnalysisResult } from './types.ts';
-import type { ImageBatchItem } from './remotes/media.ts';
+import type { ImageBatchItem, SnsVideoCoverBatchOptions, SnsVideoCoverBatchResult } from './remotes/media.ts';
 import { GatewayAskOps } from './gateway-ask-ops.ts';
 import { createLayaRemotes } from './remotes/laya.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -199,6 +199,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         format: string;
         dir?: string;
         filename?: string;
+        jobId?: string;
     }): Promise<ExportResult>;
     /**
      * Export ALL sessions as a single txt ZIP archive (账号归档).
@@ -277,6 +278,7 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         recordsKind?: string;
         dest?: string;
         category?: string;
+        jobId?: string;
     }): Promise<ExportResult>;
     /**
      * 读取导出历史（供「导出记录」弹窗）。
@@ -347,7 +349,21 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      */
     downloadWhisperModel(options: {
         model: string;
+        jobId?: string;
     }): Promise<WhisperDownloadResult>;
+    /**
+     * 停止一次正在跑的模型/引擎下载（W3-5.5）。
+     *
+     * 取消只在下**一个 chunk** 生效；已下载的部分保留为 `.part`，下次可续传。
+     * @param options - jobId（即 `downloadWhisperModel` 那次的同一标识）。
+     * @returns ok + 停不上的原因。
+     */
+    cancelWhisperDownload(options: {
+        jobId: string;
+    }): Promise<{
+        ok: boolean;
+        message?: string;
+    }>;
     /**
      * Verify all DBs in db_dir and write all_keys.json.
      * @param options - dbDir, keysFile, encKeyHex and optional keyFormat.
@@ -433,7 +449,9 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * (`<modelsDir>/bin/whisper-cli.exe`), persisting the path as whisper_bin.
      * @returns WhisperDownloadResult: ok + path, or an error.
      */
-    installWhisperEngine(): Promise<WhisperDownloadResult>;
+    installWhisperEngine(options?: {
+        jobId?: string;
+    }): Promise<WhisperDownloadResult>;
     /**
      * Batch-transcribe the most recent voice messages: silk → WAV (bundled
      * wx_silk) → whisper-cli with the selected model → text cached per message.
@@ -458,19 +476,11 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         localId: number;
     }): ImageDataUrlResult;
     /**
-     * Decode a whole batch of message images to base64 data URLs (N16).
+     * Decode a whole batch of message images to base64 data URLs (N16)。
      *
-     * 为什么需要批量入口：`getImageDataUrl` 是**一图一次 RPC**，而每张图内部的路径解析
-     * （`WHERE lower(md5) = ?`）在 `image_hardlink_info_v4` 上是全表扫 —— 实测 20 万行
-     * 17.27ms/次，30 张图各查一次 ≈518ms。这里先用一次 `IN (...)` 把整批 md5 的 .dat 路径
-     * 查出来并预热解码缓存，之后逐张走原有单张入口时命中缓存，不再各扫一次路径表。
-     *
-     * 诚实边界：① 预热阶段整批 md5 一次取完（`resolveImageMd5sBatch`：每个「会话 × 分片」一条
-     * `local_id IN (…)`），但**预热之后每张图仍走一次单张入口**，那一步里 `resolveImageResourceHint`
-     * 还会各查一次分片（`WHERE local_id = ?`）。留着这一份复用，是因为错误语义、`data_index` 兜底
-     * 与 hevc 判定只该有一处实现；代价是每图还剩一次库开合（本机 30 张：合并前 62 次、合并后 33 次，
-     * 数字由 `gateway-image-batch.spec.ts` 的 `[算料]` 打印，理由见 RELEASE-PLAN 的 N36）。
-     * ② 拿不到原始微信目录（`wechatBaseDir` 未知）时批量路径查不出东西，行为与逐张调用完全一致。
+     * 理由与实测数字（20 万行 17.27ms/次、30 张 ≈518ms、以及「预热之后每张仍走一次单张入口」
+     * 那条诚实边界）**写在 `query/media-image.ts` 的 `resolveImageFilePathsByMd5`** 上 ——
+     * 这一层只是协议壳，不重复一份（重复的那份一定会漂）。
      * @param options - `items`: 一批 (username, localId)；超过 {@link IMAGE_BATCH_MAX} 的截断。
      * @returns 与传入顺序一一对应的条目（`url` 或 `error`，语义同单张入口）。
      */
@@ -661,12 +671,8 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
     getPrivacyAuditRows(): PrivacyAuditRow[];
     getPrivacyState(): PrivacyStateSnapshot;
     /**
-     * Resolve one SNS (朋友圈) video cover.
-     *
-     * 先本机缓存（明文、离线）；没有缓存再按 XML 里的 `<thumb>` 从微信 CDN 取回，
-     * 取回要过隐私闸门，并按 `<enc key>` 解密加密头（封面同样是加密流）。
-     *
-     * @param options - XML 里的 md5/缓存键，加上 `<thumb>` 地址与 `<enc key>` 种子。
+     * 一条朋友圈视频封面 → data URL（W2-5.6 的单条入口保留；列表请走 `getSnsVideoCoversBatch`）。
+     * @param options - md5 / timelineId / mediaId / thumb / key / offline。
      * @returns ImageDataUrlResult。
      */
     getSnsVideoCoverDataUrl(options: {
@@ -677,11 +683,13 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
         key?: string;
         offline?: boolean;
     }): Promise<ImageDataUrlResult>;
+    getSnsVideoCoversBatch(options: SnsVideoCoverBatchOptions): Promise<SnsVideoCoverBatchResult>;
     /**
      * Resolve one SNS (朋友圈) video body so it can be played inline.
      *
      * 两级来源：**先本机缓存**（明文，离线、最快），没有缓存再按朋友圈 XML 里的
-     * `<url>` 从微信 CDN 按需取回。取回要过隐私闸门（与 AI 调用同一套「出站拦截」），
+     * `<url>` 从微信 CDN 按需取回。取回要过隐私闸门（与 AI 调用同一套：脱敏与审计，
+     * 见 `gateway-privacy.ts` —— 2026-09-30 起它只做这两件事，不再有拦截），
      * CDN 返回的是客户端加密流，按 `<enc key>` 解密后再**校验容器头与 md5**，
      * 免得把一个放不出来的二进制塞给 <video>。
      *
@@ -752,12 +760,29 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * @returns LayaVisibleAnalysisResult: per-message answers; one bad message only fails its own item.
      */
     analyzeVisibleMessages(options: {
+        /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
         talker: string;
         targets: Array<{
             localId: number;
             sortSeq: number;
         }>;
+        /** W3-11.5：进度标识；带上它才会推送 `laya-analysis/progress`（渲染层按它认领本批）。 */
+        jobId?: string;
     }): Promise<LayaVisibleAnalysisResult>;
+    /**
+     * 停止一批正在跑的逐条本地分析（W3-11.5）。
+     *
+     * 取消只在每条之间生效（一次 ONNX forward 没法从中间打断），所以最坏延迟是最后一条的
+     * 推理时长；已经算完的那些会**连同缓存一起保留**（`canceled:true` + 部分 `items`）。
+     * @param options - jobId（必填，即 `analyzeVisibleMessages` 那批的同一标识）。
+     * @returns ok + 停不上的原因（该批已经算完 / 标识不认识）。
+     */
+    cancelLayaAnalysis(options: {
+        jobId: string;
+    }): Promise<{
+        ok: boolean;
+        message?: string;
+    }>;
     /**
      * Local decision model status: required files (model graph + tokenizer), size, source,
      * active download progress and runtime state (loaded / last inference ms / last error).
@@ -769,7 +794,20 @@ export declare abstract class GatewayDataOps extends GatewayAskOps {
      * Streamed with resume + atomic publish, mirror fallback; idempotent.
      * @returns LayaDownloadOutcome.
      */
-    downloadLayaModel(): Promise<LayaDownloadOutcome>;
+    downloadLayaModel(options?: {
+        jobId?: string;
+    }): Promise<LayaDownloadOutcome>;
+    /**
+     * 取消正在进行的 laya 模型下载（W2-11.5）。
+     * @param options - jobId（与 `downloadLayaModel` 传的是同一个）。
+     * @returns ok，或没有该任务时的说明。
+     */
+    cancelLayaDownload(options: {
+        jobId: string;
+    }): {
+        ok: boolean;
+        message?: string;
+    };
     /**
      * Adopt an already-downloaded model directory (move it into the data dir) so the
      * same 1.26 GB does not have to be fetched twice.

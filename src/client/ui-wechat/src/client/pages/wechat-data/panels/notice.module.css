@@ -141,3 +141,10 @@
 }
 .btn:disabled,
 .btnPrimary:disabled { opacity: 0.5; cursor: default; }
+
+/* 手机档不渲染提醒堆栈：它提醒的两件事（新版本可装 / 许可证临期）的**处理动作**
+   都发生在桌面端（装更新要重启电脑上的安装、导入许可证要设备指纹），
+   手机上只能看不能办，还会盖住内容。桌面端主人会看到它。 */
+@media (max-width: 560px) {
+  .stack { display: none; }
+}

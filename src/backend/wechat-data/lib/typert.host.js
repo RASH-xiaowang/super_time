@@ -1910,6 +1910,66 @@ const _deepseek_ai_dsh_wechat_data_wechatData_searchMessages_result$schema = z.o
   'total': z.number(),
   'indexed': z.boolean(),
 })
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelAsk_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelAsk_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
+// W3-11.5：`cancelLayaAnalysis`（与 cancelAsk 同形：jobId 进，ok+message 出）。
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaAnalysis_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaAnalysis_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
+// W3-11.5：`cancelKbIndexBuild`（与上面三个同形：jobId 进，ok+message 出）。
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelKbIndexBuild_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelKbIndexBuild_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
+
+// W3-5.5：`cancelWhisperDownload`（与前面几个取消口同形：jobId 进，ok+message 出）。
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelWhisperDownload_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelWhisperDownload_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
+
+// W2-11.5：`cancelLayaDownload`（与前面几个取消口同形：jobId 进，ok+message 出）。
+// sourceLocation 留 null：生成器（`@deepseek-ai/dsh-typert-generator`）不在本仓库，
+// 拿不到它那份工作树里的行号；编一个数字比留 null 更坏。
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaDownload_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaDownload_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
+
+// W2-5.6：`getSnsVideoCoversBatch`（items 进、同序同长出）。
+const _deepseek_ai_dsh_wechat_data_wechatData_getSnsVideoCoversBatch_parameter_0$schema = z.object({
+  'items': z.array(z.object({ md5: z.string().optional(), timelineId: z.string().optional(), mediaId: z.string().optional(), thumb: z.string().optional(), key: z.string().optional() })),
+  'offline': z.boolean().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_getSnsVideoCoversBatch_result$schema = z.object({
+  'items': z.array(z.object({ md5: z.string(), url: z.string().optional(), error: z.string().optional() })),
+})
+// W3-11.5：`cancelSearchIndexBuild`（与上面两个同形）。
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelSearchIndexBuild_parameter_0$schema = z.object({
+  'jobId': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_cancelSearchIndexBuild_result$schema = z.object({
+  'ok': z.boolean(),
+  'message': z.string().optional(),
+})
 const _deepseek_ai_dsh_wechat_data_wechatData_searchUnified_parameter_0$schema = z.object({
   'query': z.string(),
   'limit': z.number().optional(),
@@ -2034,6 +2094,152 @@ const _deepseek_ai_dsh_wechat_data_wechatData_verifyImageKey_result$schema = z.o
   'xorKey': z.number().optional(),
   'templatePath': z.string().optional(),
   'error': z.string().optional(),
+})
+
+// ── 微信 ClawBot 集成（2026-10-12，手写）────────────────────────────────────
+// 生成器（@deepseek-ai/dsh-typert-generator）不在本仓库，新方法的 schema 按既有先例手写。
+// 这几条把「未覆盖计数」保持在既有棘轮线以下（加方法就必须同时加 schema，否则
+// wechat-args-guard.spec.ts 的未覆盖数会上涨）。可空字段照生成物惯例写作
+// z.union([z.literal(null), …])；结果形状与 types-ops.ts 逐字段一致。
+const _deepseek_ai_dsh_wechat_data_wechatData_checkClawbotEnv_result$schema = z.object({
+  'items': z.array(z.object({
+  'key': z.string(),
+  'label': z.string(),
+  'state': z.enum(['ok', 'warn', 'error']),
+  'detail': z.string(),
+})),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_createClawbotBindQr_result$schema = z.object({
+  'token': z.string(),
+  'payload': z.string(),
+  'expiresAt': z.number(),
+  'state': z.enum(['wait', 'scaned', 'confirmed', 'expired']),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBinding_result$schema = z.object({
+  'binding': z.object({
+  'id': z.number(),
+  'slot': z.number(),
+  'status': z.enum(['unbound', 'binding', 'bound', 'unbound-by-user']),
+  'qrToken': z.union([z.literal(null), z.string()]),
+  'qrExpiresAt': z.union([z.literal(null), z.number()]),
+  'wxid': z.union([z.literal(null), z.string()]),
+  'userName': z.union([z.literal(null), z.string()]),
+  'avatar': z.union([z.literal(null), z.string()]),
+  'boundAt': z.union([z.literal(null), z.number()]),
+  'unboundAt': z.union([z.literal(null), z.number()]),
+  'createdAt': z.number(),
+  'updatedAt': z.number(),
+}),
+  'todayMessages': z.number(),
+  'totalMessages': z.number(),
+  'channel': z.object({
+  'running': z.boolean(),
+  'error': z.union([z.literal(null), z.string()]),
+}),
+  'readError': z.string().optional(),
+})
+// getClawbotBindState 的 binding 字段与 getClawbotBinding 同一份快照类型；unbindClawbot
+// 的结果也与之同形 —— 三处共用，形状改一处三处同步（比抄三遍更不容易漂）。
+const _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBindState_result$schema = z.object({
+  'state': z.enum(['idle', 'wait', 'scaned', 'confirmed', 'expired']),
+  'binding': _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBinding_result$schema,
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_unbindClawbot_result$schema = _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBinding_result$schema
+const _deepseek_ai_dsh_wechat_data_wechatData_listClawbotMessages_parameter_0$schema = z.object({
+  'slot': z.number().optional(),
+  'from': z.number().optional(),
+  'to': z.number().optional(),
+  'direction': z.enum(['in', 'out']).optional(),
+  'q': z.string().optional(),
+  'afterId': z.number().optional(),
+  'limit': z.number().optional(),
+  'offset': z.number().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_listClawbotMessages_result$schema = z.object({
+  'items': z.array(z.object({
+  'id': z.number(),
+  'ts': z.number(),
+  'direction': z.enum(['in', 'out']),
+  'msgType': z.union([z.literal(null), z.string()]),
+  'content': z.string(),
+  'createdAt': z.number(),
+})),
+  'total': z.number(),
+  'maxId': z.number(),
+  'readError': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_sendClawbotMessage_parameter_0$schema = z.object({
+  'text': z.string(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_sendClawbotMessage_result$schema = z.object({
+  'ok': z.boolean(),
+  'id': z.union([z.literal(null), z.number()]),
+  'error': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_getClawbotMedia_parameter_0$schema = z.object({
+  'id': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_getClawbotMedia_result$schema = z.object({
+  'ok': z.boolean(),
+  'kind': z.string().optional(),
+  'dataUrl': z.string().optional(),
+  'path': z.string().optional(),
+  'name': z.union([z.literal(null), z.string()]).optional(),
+  'error': z.string().optional(),
+})
+
+// ── 多实例（2026-10-13）──────────────────────────────────────────────────────
+// 实例列表项的形状住在 types-ops.ts 的 `ClawbotInstance`（= 绑定行 + 行为配置 + 会话计数 +
+// 通道状态）；列表 / 新建 / 删除三处结果共用同一份展开，改一处三处同步。
+const _deepseek_ai_dsh_wechat_data_wechatData_clawbotInstanceItem$schema = z.object({
+  'slot': z.number(),
+  'status': z.enum(['unbound', 'binding', 'bound', 'unbound-by-user']),
+  'wxid': z.union([z.literal(null), z.string()]),
+  'userName': z.union([z.literal(null), z.string()]),
+  'avatar': z.union([z.literal(null), z.string()]),
+  'boundAt': z.union([z.literal(null), z.number()]),
+  'unboundAt': z.union([z.literal(null), z.number()]),
+  'config': z.object({
+  'slot': z.number(),
+  'autoReply': z.boolean(),
+  'kbEnabled': z.boolean(),
+  'kbId': z.union([z.literal(null), z.number()]),
+}),
+  'todayMessages': z.number(),
+  'totalMessages': z.number(),
+  'channel': z.object({
+  'running': z.boolean(),
+  'error': z.union([z.literal(null), z.string()]),
+}),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_listClawbotInstances_result$schema = z.object({
+  'instances': z.array(_deepseek_ai_dsh_wechat_data_wechatData_clawbotInstanceItem$schema),
+  'readError': z.string().optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_createClawbotInstance_result$schema = z.object({
+  'instances': z.array(_deepseek_ai_dsh_wechat_data_wechatData_clawbotInstanceItem$schema),
+  'readError': z.string().optional(),
+  'slot': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_deleteClawbotInstance_parameter_0$schema = z.object({
+  'slot': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_deleteClawbotInstance_result$schema = z.object({
+  'instances': z.array(_deepseek_ai_dsh_wechat_data_wechatData_clawbotInstanceItem$schema),
+  'readError': z.string().optional(),
+  'removedMessages': z.number(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_setClawbotInstanceConfig_parameter_0$schema = z.object({
+  'slot': z.number(),
+  'autoReply': z.boolean().optional(),
+  'kbEnabled': z.boolean().optional(),
+  'kbId': z.union([z.literal(null), z.number()]).optional(),
+})
+const _deepseek_ai_dsh_wechat_data_wechatData_setClawbotInstanceConfig_result$schema = z.object({
+  'slot': z.number(),
+  'autoReply': z.boolean(),
+  'kbEnabled': z.boolean(),
+  'kbId': z.union([z.literal(null), z.number()]),
 })
 
 export const TYPERT = {
@@ -4337,6 +4543,180 @@ export const TYPERT = {
       sourceLocation: {"file":"packages/host/wechat-data/src/gateway.ts","line":419,"column":3},
     },
     {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelAsk',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelAsk',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelAsk:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelAsk_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelAsk:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelAsk_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-ask-ops.ts","line":392,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaAnalysis',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelLayaAnalysis',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaAnalysis:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaAnalysis_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaAnalysis:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaAnalysis_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-data-ops.ts","line":918,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelSearchIndexBuild',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelSearchIndexBuild',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelSearchIndexBuild:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelSearchIndexBuild_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelSearchIndexBuild:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelSearchIndexBuild_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-ask-ops.ts","line":349,"column":3},
+    },    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelKbIndexBuild',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelKbIndexBuild',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelKbIndexBuild:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelKbIndexBuild_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelKbIndexBuild:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelKbIndexBuild_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-ask-ops.ts","line":361,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelWhisperDownload',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelWhisperDownload',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelWhisperDownload:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelWhisperDownload_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelWhisperDownload:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelWhisperDownload_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-data-ops.ts","line":433,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaDownload',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'cancelLayaDownload',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaDownload:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaDownload_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/cancelLayaDownload:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_cancelLayaDownload_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-data-ops.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/getSnsVideoCoversBatch',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'getSnsVideoCoversBatch',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/getSnsVideoCoversBatch:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_getSnsVideoCoversBatch_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/getSnsVideoCoversBatch:result',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_getSnsVideoCoversBatch_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-data-ops.ts","line":829,"column":3},
+    },
+    {
       id: '@deepseek-ai/dsh-wechat-data#wechatData/searchUnified',
       service: 'wechatData',
       namespace: 'wechatData',
@@ -4540,6 +4920,237 @@ export const TYPERT = {
         schema: _deepseek_ai_dsh_wechat_data_wechatData_verifyImageKey_result$schema,
       },
       sourceLocation: {"file":"packages/host/wechat-data/src/gateway.ts","line":1299,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/checkClawbotEnv',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'checkClawbotEnv',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotEnvSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_checkClawbotEnv_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/createClawbotBindQr',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'createClawbotBindQr',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotBindQr',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_createClawbotBindQr_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/getClawbotBindState',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'getClawbotBindState',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotBindStateSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBindState_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/listClawbotInstances',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'listClawbotInstances',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotInstancesSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_listClawbotInstances_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/createClawbotInstance',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'createClawbotInstance',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotInstanceCreated',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_createClawbotInstance_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/deleteClawbotInstance',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'deleteClawbotInstance',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/deleteClawbotInstance:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_deleteClawbotInstance_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotInstanceDeleted',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_deleteClawbotInstance_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/setClawbotInstanceConfig',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'setClawbotInstanceConfig',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/setClawbotInstanceConfig:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_setClawbotInstanceConfig_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotInstanceConfig',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_setClawbotInstanceConfig_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/getClawbotBinding',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'getClawbotBinding',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotBindingSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_getClawbotBinding_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/listClawbotMessages',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'listClawbotMessages',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/listClawbotMessages:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_listClawbotMessages_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotMessageSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_listClawbotMessages_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/getClawbotMedia',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'getClawbotMedia',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/getClawbotMedia:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_getClawbotMedia_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotMediaResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_getClawbotMedia_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/sendClawbotMessage',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'sendClawbotMessage',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'options',
+          wire: 'options',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/sendClawbotMessage:options',
+            schema: _deepseek_ai_dsh_wechat_data_wechatData_sendClawbotMessage_parameter_0$schema,
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotSendResult',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_sendClawbotMessage_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
+    },
+    {
+      id: '@deepseek-ai/dsh-wechat-data#wechatData/unbindClawbot',
+      service: 'wechatData',
+      namespace: 'wechatData',
+      method: 'unbindClawbot',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#ClawbotBindingSnapshot',
+        schema: _deepseek_ai_dsh_wechat_data_wechatData_unbindClawbot_result$schema,
+      },
+      sourceLocation: {"file":"packages/host/wechat-data/src/gateway-clawbot.ts","line":null,"column":null},
     },
   ],
   model: {

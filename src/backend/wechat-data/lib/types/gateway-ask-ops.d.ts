@@ -11,6 +11,7 @@ import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/mod
 import { type KbEntitySummary } from './query/kb/extract.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
 import type { ReplySuggestResult } from './types.ts';
+import type { AnnualNarrativeResult } from './remotes/annual-narr.ts';
 import type { KnowledgeSnapshotRead } from './query/notes.ts';
 import { GatewayRead } from './gateway-read.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -320,9 +321,24 @@ export declare abstract class GatewayAskOps extends GatewayRead {
     buildKbVectorIndex(options: {
         kbId: number;
         force?: boolean;
+        jobId?: string;
     }): Promise<KbVectorBuildResult & {
         ok: boolean;
         error?: string;
+    }>;
+    /**
+     * 停止本库正在跑的向量构建（W3-11.5）。
+     *
+     * 取消在〔认领下一批〕之前生效；两阶段构建的阶段二在全部批次之后，所以取消 ⇒
+     * 一行都没写 ⇒ 旧索引原样（不是「留半份向量」）。
+     * @param options - jobId（即 `buildKbVectorIndex` 那次的同一标识）。
+     * @returns ok + 停不上的原因（该批已算完 / 标识不认识）。
+     */
+    cancelKbIndexBuild(options: {
+        jobId: string;
+    }): Promise<{
+        ok: boolean;
+        message?: string;
     }>;
     /**
      * Build (or rebuild) the FTS5 message search index.
@@ -331,7 +347,22 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     buildSearchIndex(options?: {
         force?: boolean;
+        jobId?: string;
     }): Promise<SearchBuildResult>;
+    /**
+     * 停止一次正在跑的搜索索引构建（W3-11.5）。
+     *
+     * 取消只在**分片边界**与分片内的让出点生效；被取消的构建会 ROLLBACK，
+     * 所以旧索引原封不动（不是「留半份索引」）。
+     * @param options - jobId（必填，即 `buildSearchIndex` 那次的同一标识）。
+     * @returns ok + 停不上的原因（构建已结束 / 标识不认识）。
+     */
+    cancelSearchIndexBuild(options: {
+        jobId: string;
+    }): Promise<{
+        ok: boolean;
+        message?: string;
+    }>;
     /**
      * Full-text search over text messages (index first, scan fallback).
      *
@@ -378,7 +409,28 @@ export declare abstract class GatewayAskOps extends GatewayRead {
          * 而不是把别的库的内容也端上来。
          */
         kbId?: number;
+        /**
+         * 本轮问答的取消标识（W3-6.1）：与 `streamId` 取同一个值。带上它，
+         * `cancelAsk({ jobId })` 才能找到这一轮的 AbortController；不传 = 不可取消。
+         */
+        jobId?: string;
     }): Promise<AskResult>;
+    /**
+     * 取消一轮正在生成的问答（W3-6.1）。
+     *
+     * 为什么单独一个方法而不是让 `askWechat` 自己超时：生成是流式的、时长不可知
+     * （实测单次十几到几十秒），而用户等不及的点是按秒计的。`AbortSignal` 过不了 IPC
+     * （与导出/搜索同一约束），所以沿用那两处的老办法：渲染层带一个 jobId（就是那轮的
+     * streamId），这里去捅后端的 AbortController。
+     * @param options - jobId（必填）：要取消的轮次标识。
+     * @returns ok=false 时 message 说明为什么没取消掉（通常是那一轮已经结束了）。
+     */
+    cancelAsk(options: {
+        jobId: string;
+    }): {
+        ok: boolean;
+        message?: string;
+    };
     /**
      * 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。
      * 供「微信问答」面板的「优化提问」按钮调用；出站前同样过隐私闸门。
@@ -533,6 +585,15 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         provider?: string;
         model?: string;
     }): Promise<DailySummaryResult>;
+    /**
+     * 生成 AI 年报叙述（W2-8.6）：**分段**取材 → 逐段 LLM → 逐段进度。
+     * @param options - 年份 + 可选的进度任务标识（jobId）。
+     * @returns AnnualNarrativeResult: 各段结果 + 拼接全文 + 是否被段数上限截断。
+     */
+    generateAnnualNarrative(options: {
+        year: number;
+        jobId?: string;
+    }): Promise<AnnualNarrativeResult>;
     /**
      * Restore a message to its original content.
      * @param options - username and localId of the edited message.

@@ -77,18 +77,25 @@ describe('界面开关的接线：可见的控件必须有消费者', () => {
     }
   })
 
-  it('后端默认值仍保留 api_enabled / api_port / api_token（撤下的是界面，不是数据）', () => {
+  it('后端默认值仍保留 api_enabled / api_port / api_token（撤下的是界面，不是数据），且 api_enabled 默认为 false', () => {
     // 删字段要连带重建 bundle/types 并考虑旧配置兼容，本期不做 —— 这条守住「只撤界面」。
     // 注意路径会随后端的层次调整而变：M24 之后配置实现从 `query/config.ts` 下沉到 `config/`
     // （`query/config.ts` 变成转发门面），所以默认值现在住在 `config/wechat-config.ts`。
     // 这里按「默认值所在的那个文件」找，并断言它真的存在 —— 找不到就让用例红着说明去哪了。
+    //
+    // 2026-10-14（v13）：`api_enabled` 的默认值由 true 翻成 **false** —— 它现在是
+    // 「局域网远程访问（手机端）」的总开关，打开即本机开始监听端口。入站暴露面必须
+    // 默认关闭、由用户显式打开（见 `docs/PRIVACY.md` 第四节 H）。这条判据因此从
+    // 「找得到 `api_enabled: true`」改成「找得到 `api_enabled: false`」，并**正反两向**都守：
+    // 翻回 true 会让本用例红（默认就监听 = 隐私声明说谎）。
     const candidates = [
       join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'config', 'wechat-config.ts'),
       join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'config.ts'),
     ]
-    const withDefaults = candidates.filter((p) => existsSync(p) && readFileSync(p, 'utf8').includes('api_enabled: true'))
-    expect(withDefaults.length, '找不到任何一份带默认值的配置文件（M24 之后应在 config/wechat-config.ts）').toBeGreaterThan(0)
+    const withDefaults = candidates.filter((p) => existsSync(p) && readFileSync(p, 'utf8').includes('api_enabled: false'))
+    expect(withDefaults.length, '找不到任何一份「api_enabled 默认关闭」的配置文件（M24 之后应在 config/wechat-config.ts）').toBeGreaterThan(0)
     const src = withDefaults.map((p) => readFileSync(p, 'utf8')).join('\n')
+    expect(src, 'api_enabled 的默认值又被翻回 true 了（入站监听面必须默认关闭）').not.toContain('api_enabled: true')
     for (const key of ['api_enabled', 'api_port', 'api_token']) {
       expect(src, `配置默认值里缺少 ${key}`).toContain(key)
     }

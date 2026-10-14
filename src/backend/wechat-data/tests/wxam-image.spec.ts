@@ -35,6 +35,7 @@ import {
   jpegDimensions,
   resolveVoipEnginePath,
   type WxgfNative,
+  type WxgfTranscoder,
 } from '../src/query/wxam-image.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -197,18 +198,55 @@ describe('wxgf 转码：DLL 契约与边界', () => {
     expect('error' in r && r.error).toContain('FFD9')
   })
 
-  it('⑧ 第一次失败会用更大的缓冲重试一次（扩容是最可能的成功原因）', () => {
+  it('⑧ 前两次失败会顶到上限再试，第三次换 mode 3（2026-10-13 移植自参考项目）', () => {
     const seen: Array<{ outLen: number; opt: Buffer }> = []
     const jpeg = tinyJpeg(32, 16)
-    const t = createWxgfTranscoder(fakeNative(jpeg, { ret: 1, seen }))
+    // 注入 null 关闭 ffmpeg 兜底：本用例只关心 DLL 的尝试节奏
+    const t = createWxgfTranscoder(fakeNative(jpeg, { ret: 1, seen }), null)
     const r = t(wxgfPayload())
     expect('error' in r).toBe(true)
-    expect(seen.length, '应当重试一次（共两次调用）').toBe(2)
+    expect(seen.length, '应当重试两次（共三次调用）').toBe(3)
     expect(at(seen, 1).outLen, '第二次的缓冲必须更大').toBeGreaterThan(at(seen, 0).outLen)
+    expect(at(seen, 2).outLen, '第三次直接顶到上限').toBe(at(seen, 1).outLen)
+    expect(at(seen, 2).opt.readInt32LE(0), '第三次必须换 mode 3（参考项目实测有变体只认它）').toBe(3)
+    expect(at(seen, 0).opt.readInt32LE(0), '前两次保持 mode 0').toBe(0)
+  })
+
+  it('⑭ 只有 mode 3 能解的变体：前两次失败、第三次成功（不再误报失败）', () => {
+    const jpeg = tinyJpeg(32, 16)
+    const modeOnly3: WxgfNative = {
+      label: 'fake-mode3',
+      run(input, output, outSize, opt) {
+        if (opt.readInt32LE(0) !== 3) return { ret: 1, size: 0 }
+        jpeg.copy(output, 0)
+        outSize.writeInt32LE(jpeg.length, 0)
+        return { ret: 0, size: jpeg.length }
+      },
+    }
+    const t = createWxgfTranscoder(modeOnly3, null)
+    const r = t(wxgfPayload())
+    expect('bytes' in r, 'mode 3 能解时不许失败').toBe(true)
+    if ('bytes' in r) {
+      expect([...r.bytes.subarray(-2)]).toEqual([0xff, 0xd9])
+      expect(r.jpegWidth).toBe(32)
+    }
+  })
+
+  it('⑮ DLL 不可用时走 ffmpeg 兜底；兜底也失败时把两段原因串起来', () => {
+    const ok: WxgfTranscoder = (payload) => {
+      const jpeg = tinyJpeg(32, 16)
+      return { bytes: jpeg, jpegWidth: 32, jpegHeight: 16, ms: 1 }
+    }
+    const r1 = createWxgfTranscoder(null, ok)(wxgfPayload())
+    expect('bytes' in r1, 'DLL 不可用时必须落到 ffmpeg 兜底').toBe(true)
+    const bad: WxgfTranscoder = () => ({ error: 'ffmpeg 也没有' })
+    const r2 = createWxgfTranscoder(null, bad)(wxgfPayload())
+    expect('error' in r2 && r2.error, '两段原因都要让用户看见').toContain('微信解码库不可用')
+    expect('error' in r2 && r2.error).toContain('ffmpeg 也没有')
   })
 
   it('⑨ 报告的输出长度超过 64MB 上限时判失败（与远端原图同口径）', () => {
-    const t = createWxgfTranscoder(fakeNative(tinyJpeg(32, 16), { reportSize: 65 * 1024 * 1024 }))
+    const t = createWxgfTranscoder(fakeNative(tinyJpeg(32, 16), { reportSize: 65 * 1024 * 1024 }), null)
     const r = t(wxgfPayload())
     expect('error' in r && r.error).toContain('64MB')
   })

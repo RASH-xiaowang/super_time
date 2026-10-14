@@ -23,6 +23,16 @@ export interface LlmFactoryDeps {
     host: unknown;
     kbModel: (kbId: number, role: KbModelRole) => ResolvedModel;
     privacyGate: PrivacyGateFn;
+    /** 解密数据根（embedding 缓存落盘位置）。每次现取：换数据根时缓存要跟着改道。 */
+    decryptedDir: () => string;
+    /**
+     * 当前是否开启敏感字段脱敏。
+     *
+     * 为什么要有它：embedding 缓存的键必须把脱敏口径算进去（见 `query/embed-cache.ts` 文件头），
+     * 而口径只有闸门内部知道。它读的是**同一个** `readPrivacySettings`；
+     * 工厂读它与闸门读它之间没有 `await`（全同步），所以两边不可能读到不一致的值。
+     */
+    redactMode: () => boolean;
 }
 /** 审计里能分得开的三种 embedding 功能名（数据范围完全不同，不许写死成一个）。 */
 export type EmbedFeature = 'ask_embed' | 'kb_embed' | 'kb_link_suggest';

@@ -79,6 +79,28 @@ export interface PeriodSummaryResult {
         count: number;
     }>;
 }
+/**
+ * AI 年报叙述的一个分段结果（W2-8.6）。
+ */
+export interface AnnualSegmentResult {
+    /** 段名（「2024-03」/「2024-03（第 2 段）」）。 */
+    label: string;
+    /** 本段正文；失败时是失败原因（如实说，不假装成功）。 */
+    text: string;
+    /** 本段是否成功。 */
+    ok: boolean;
+}
+/** AI 年报叙述结果（分段 LLM，W2-8.6）。 */
+export interface AnnualNarrativeResult {
+    ok: boolean;
+    year: number;
+    segments: AnnualSegmentResult[];
+    /** 拼接好的全文。 */
+    text: string;
+    /** 段数是否被 MAX_SEGMENTS 截断。 */
+    truncated: boolean;
+    error?: string;
+}
 /** One extracted/imported WeChat task. */
 export interface WechatTask {
     id: number;

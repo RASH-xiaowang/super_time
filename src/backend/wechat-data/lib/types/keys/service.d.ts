@@ -40,6 +40,31 @@ export declare function normalizeAccountDir(accountDir: string): string;
  */
 export declare function kvcommCacheDir(): string;
 /**
+ * 自动图片密钥该写进哪个**账号槽**（W2-2.2 写入侧）。
+ *
+ * ## 为什么原来那个全局 `'default'` 槽是错的
+ *
+ * 图片密钥是**每账号**的：甲账号的图密钥解乙账号的图不会报错，只会解出一张垃圾图。
+ * 而三类自动取钥路径（kvcomm 派生 / 内存扫描）都把结果写进同一个 `'default'` 槽 ——
+ * 于是一台机器上两个微信账号，**乙跑一次自动取钥就把甲的记录覆盖掉**。
+ * 读取侧的归属校验（`query/image-key.ts` 的 `storedKeyOwnedBySelf`）这时候会正确地
+ * 拒绝这把钥匙，表现就是「甲本来能用的图突然都要重新配钥」—— 不报错，也归因不到
+ * 「乙用过一次」。
+ *
+ * ## 口径
+ *
+ * 能确定归属就写进归属者的槽（`wxid_…`）；确定不了（老账号目录用别名、扫描路径只拿到
+ * 目录名）就**继续写 `'default'`** —— 那条路上归属校验仍然兜着，而为了分槽把记录丢掉
+ * 比不分槽更糟。形状必须真的是 `wxid_…`：拿目录名当槽名会把「别名目录」也算成一个账号。
+ *
+ * @param derivedWxid - kvcomm 路径给出的派生 wxid（可空）。
+ * @param sourceDirName - 内存扫描路径给出的账号目录名（可空）。
+ * @returns 槽名；无法归属时是 `'default'`。
+ */
+export declare function imageKeySlotFor(derivedWxid?: string, sourceDirName?: string): string;
+/** `keys.json` 里自动获取结果所在的全局槽（老库与无归属记录用）。 */
+export declare const DEFAULT_KEY_SLOT = "default";
+/**
  * Recover the image key: kvcomm-cache derivation first (WeChat 4.x on-disk
  * cache, no injection), then the V2-verified process memory scan.
  * @param opts - account dir (wxid folder) and optional pid.

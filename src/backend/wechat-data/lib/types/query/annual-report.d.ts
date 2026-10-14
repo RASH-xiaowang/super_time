@@ -1,3 +1,4 @@
+import { type StreamControl } from './zip.ts';
 /**
  * 年报（带**签名缓存**）。
  *
@@ -15,4 +16,4 @@
  * @param year - 自然年。
  * @returns 年报快照。
  */
-export declare function queryAnnualReport(decryptedDir: string, year: number): Promise<Record<string, unknown>>;
+export declare function queryAnnualReport(decryptedDir: string, year: number, ctrl?: StreamControl): Promise<Record<string, unknown>>;

@@ -17,11 +17,18 @@
  *   activateLlmProfile / deleteLlmProfile（后几个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
 const { humanizeNetworkError, testLlmEndpoint, queryLlmBalance } = require('./llm-balance.js');
+// 「一次后端调用要过哪几道闸」的唯一出处：HTTP 那条路（局域网远程访问）也调它，
+// 两边不许各写一份 —— 最可能的漂法是少抄那个 catch，于是许可校验一抛异常就变成放行。
+const { gatedWechatCall } = require('./call-gates.js');
 
 function registerWechatIpc(ctx) {
-  const { ipcMain, app, licenseService, debugGates, awaitBackendReady, findModelCatalog, APP_VERSION,
-    getWechatBackend, getWechatBoot, getBackendStatus,
-    BACKEND_CALL_READY_WAIT_MS, loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile } = ctx;
+  // 闸门相关的那几个字段（app / licenseService / debugGates / awaitBackendReady /
+  // getWechatBackend / BACKEND_CALL_READY_WAIT_MS / APP_VERSION）**刻意不在这里解构**：
+  // `wechat:call` 已经把整个 ctx 交给 `gatedWechatCall`，那份实现是 IPC 与 HTTP
+  // （局域网远程访问）两条路共用的唯一出处（见 call-gates.js）。
+  // 在这儿再解构一遍只会多出一份「看起来还在用、其实已经搬走」的绑定。
+  const { ipcMain, findModelCatalog, getWechatBoot, getBackendStatus,
+    loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile } = ctx;
   ipcMain.handle('wechat:list-methods', () => {
     if (!getWechatBoot()) return { ok: false, error: { message: 'Super Time 后端未初始化' } };
     return { ok: true, value: getWechatBoot().methods };
@@ -32,58 +39,7 @@ function registerWechatIpc(ctx) {
     return { ok: true, value: getWechatBoot().info };
   });
 
-  ipcMain.handle('wechat:call', async (_event, method, args) => {
-    // 后端还在启动/重启时**等待**，而不是立刻回一句假错误（见 awaitBackendReady）。
-    const ready = await awaitBackendReady(BACKEND_CALL_READY_WAIT_MS);
-    if (!ready || !getWechatBackend()) {
-      return {
-        ok: false,
-        error: {
-          message: getBackendStatus().lastError
-            ? `Super Time 后端暂不可用：${getBackendStatus().lastError}`
-            : 'Super Time 后端仍在启动中，请稍候重试',
-          code: 'BACKEND_NOT_READY',
-          details: { method, state: getBackendStatus().state },
-        },
-      };
-    }
-    // N2：调试闸门豁免。放开的是「授权」这道闸门 —— 验收脚本要用真实后端跑 UI 全链路，
-    // 而它拿不到厂商签发的许可证。条件来自主进程的 `debugGates()`（打包态恒不成立）、
-    // **不**接受渲染层传来的任何参数，且必须放在下面的 `authorizeCall` 之前。
-    // 放在 `try` 之外是刻意的：`getWechatBackend().call` 同步抛错时不该被误报成「许可校验失败」。
-    if (debugGates().skipGates) {
-      console.warn('[debug-gates] 已跳过许可证校验（method=%s）', method);
-      return getWechatBackend().call(method, args);
-    }
-    try {
-      const lic = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
-      const gate = licenseService.authorizeCall(lic, method);
-      if (!gate.ok) {
-        return {
-          ok: false,
-          error: {
-            message: gate.message,
-            code: gate.code,
-            details: { licenseState: lic.state, method, feature: licenseService.METHOD_FEATURE[method] || 'wechat-data' },
-          },
-        };
-      }
-    } catch (e) {
-      // 授权检查**自身**失败时必须拒绝，而不是放行。
-      // 许可 JSON 损坏、readLicenseFile 读盘失败、指纹采集异常等都会落到这里；
-      // 原实现只 warn 一句就继续调用后端，等于「许可闸门一旦出异常就完全失效」。
-      console.error('[license] 授权校验异常，已拒绝本次调用:', e?.message ?? e);
-      return {
-        ok: false,
-        error: {
-          message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
-          code: 'LICENSE_CHECK_FAILED',
-          details: { method },
-        },
-      };
-    }
-    return getWechatBackend().call(method, args);
-  });
+  ipcMain.handle('wechat:call', (_event, method, args) => gatedWechatCall(ctx, method, args));
 
 
   /**

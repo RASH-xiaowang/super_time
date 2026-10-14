@@ -84,6 +84,15 @@ export declare function fetchSnsCoverDataUrl(remoteUrl: string, opts?: {
     error?: string;
 }>;
 /**
+ * 测试接缝：清掉按月索引与结果缓存。
+ *
+ * 导出只为基准脚本（`sns-cover-batch.measure.spec.ts`）能在两次测量之间把进程内缓存清干净 ——
+ * 否则第二次测的是「第一次已经把月索引建好了」的路径，数字会假绿。
+ */
+export declare function snsVideoIndexForTest(): {
+    clear: () => void;
+};
+/**
  * 解析一条朋友圈视频的封面。
  * @param wechatBaseDir - 微信账号根目录（rawWechatBase）。
  * @param md5 - 朋友圈 XML 里 `<url md5>`，即媒体内容 md5。
@@ -93,6 +102,24 @@ export declare function resolveSnsVideoCoverDataUrl(wechatBaseDir: string | unde
     url?: string;
     error?: string;
 };
+/**
+ * 批量解析朋友圈视频封面（W2-5.6）。
+ *
+ * 语义与逐条版**逐条一致**，包括「本机没有」那套注记（哪些月份没扫全）。
+ * 唯一的差别在列举：`snsMonthRoots` 与每个月的内容 md5 索引在一批里只走一遍，
+ * 逐条则每条都要重来一次 —— 那正是本条要省的那一段（数字见 `sns-cover-batch.measure.spec.ts`）。
+ *
+ * 三级兜底（内容 md5 索引 → 聊天缓存里的同名图片/视频 → 聊天缓存的 `_thumb`）
+ * 与逐条版同序；`_thumb` 那一级不能省：只转发过、没在朋友圈播放过的视频，
+ * 朋友圈缓存里没有它，但聊天缓存会留下 `<md5>_thumb.jpg`。
+ * @param wechatBaseDir - 微信账号根目录（rawWechatBase）。
+ * @param md5s - 内容 md5 列表（内部去重、忽略空串）。
+ * @returns 每个请求的 md5 → 结果（命中与未命中都在里面，调用方按条取）。
+ */
+export declare function resolveSnsVideoCoverDataUrls(wechatBaseDir: string | undefined, md5s: readonly string[]): Map<string, {
+    url?: string;
+    error?: string;
+}>;
 /**
  * 解析一条朋友圈视频本体（base64 data URL，供 <video> 内联播放）。
  * @param wechatBaseDir - 微信账号根目录（rawWechatBase）。

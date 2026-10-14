@@ -20,6 +20,21 @@ export interface createLayaRemotesInputs {
     };
     selfUsername: () => string;
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
+    /** W3-11.5：进度事件的出口（ Cordis Context 的 emit）。 */
+    ctx: () => {
+        emit: (name: string, ...args: unknown[]) => void;
+    };
+    /**
+     * W3-11.5：逐条分析的取消槽（由 gateway 的 `_layaJobs` 提供）。
+     *
+     * 槽位为什么归 gateway：与问答取消（`remotes/ask-cancel.ts`）同一条纪律 ——
+     * 「谁持有取消令牌」不允许出现第二个出处。本模块只消费。
+     */
+    layaSignal: (jobId?: string) => {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    cancelLayaJob: (jobId?: string) => boolean;
 }
 export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
     /**
@@ -45,7 +60,21 @@ export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
             localId: number;
             sortSeq: number;
         }>;
+        /** 本批的进度标识（W3-11.5）：带上它才会推送 laya-analysis/progress 事件。 */
+        jobId?: string;
     }): Promise<LayaVisibleAnalysisResult>;
+    /**
+     * 停止一批正在跑的逐条分析（W3-11.5）。
+     *
+     * 找不到在跑的那批时返回 `{ok:false, message}` 而不是静默 true ——
+     * 用户点「停止分析」后必须知道停没停上；停不上的常见原因是那一批已经算完了（点晚了）。
+     */
+    cancelAnalysis(options: {
+        jobId?: string;
+    }): {
+        ok: boolean;
+        message?: string;
+    };
     /** 模型与运行时状态（前端轮询）。 */
     getLayaStatus(): LayaStatus;
     /**
@@ -53,7 +82,23 @@ export declare function createLayaRemotes(rc: createLayaRemotesInputs): {
      *
      * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
      */
-    downloadLayaModel(): Promise<LayaDownloadOutcome>;
+    downloadLayaModel(options?: {
+        jobId?: string;
+    }): Promise<LayaDownloadOutcome>;
+    /**
+     * W2-11.5：取消正在进行的模型下载。
+     *
+     * 与 `cancelAnalysis` 共用同一个槽（`cancelLayaJob`）—— 「谁持有取消令牌」不允许
+     * 出现第二个出处。**不删 `.part`**：下次点击从断点续接。
+     * @param options - jobId。
+     * @returns 是否真的取消到一个在飞的任务。
+     */
+    cancelLayaDownload(options: {
+        jobId?: string;
+    }): {
+        ok: boolean;
+        message?: string;
+    };
     /** 接管一份用户已下好的模型目录（避免重复下载 1.26 GB）。 */
     adoptLayaModel(options: {
         sourceDir: string;
