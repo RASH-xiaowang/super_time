@@ -42,6 +42,16 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # ── Electron 二进制要单独取 ──
+      # 2026-10-16 加：`node_modules/electron` 这个包在本仓库里没有 postinstall
+      # （包的 `scripts` 字段是空的），所以 `npm ci` 只装 JS 包、不落 `dist/electron.exe`。
+      # 而「朋友圈视频 · 打包件字节比对」要跑 `node_modules/electron/dist/electron.exe`
+      # 来验证打包版加载的 wasm 在 Electron 运行时下能实例化 —— 缺了它 spawnSync 直接
+      # ENOENT（status=null），被脚本误报成「超时」（v1.0.8 发布实测踩到）。
+      # ci.yml / nightly.yml 都有这一步，唯独 release.yml 漏了。
+      - name: 准备 Electron 二进制（打包件比对要真 Electron 运行时）
+        run: node node_modules/electron/install.js
+
       # ── 发布门禁：必须在这里自己跑 ──
       # ci.yml 只监听分支（`branches: ['**']` 不匹配 tag），**tag 推送不会触发它**，
       # 所以「CI 绿了再发版」这条链路并不成立 —— 不自己跑就等于没验过就发版。

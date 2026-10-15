@@ -57,9 +57,15 @@ function run(cmd, args, expectMode) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 600000, cwd: path.dirname(cmd), env });
   const res = parseResult(r.stdout);
   if (!res) {
-    const why = r.status === null
-      ? `子进程被超时杀掉（>600s）或信号终止（signal=${String(r.signal)}）`
-      : `退出码 ${String(r.status)}`;
+    // 2026-10-16：把 `r.error` 也报出来。之前只看 `r.status === null` 就写「超时」，
+    // 而 spawnSync 对**不存在的可执行文件**同样返回 status=null（error.code=ENOENT）——
+    // 于是「release.yml 漏了准备 electron.exe」被误报成「Electron 超时」，
+    // 白追了一轮（v1.0.8 发布实测）。现在 ENOENT / EACCES 这类起进程失败会直接点名。
+    const why = r.error !== undefined
+      ? `起进程失败：${String(r.error.code ?? r.error.message ?? r.error)}`
+      : r.status === null
+        ? `子进程被超时杀掉（>600s）或信号终止（signal=${String(r.signal)}）`
+        : `退出码 ${String(r.status)}`;
     console.error(`❌ ${expectMode} 那一遍没有产出结果行（${why}）\n`
       + `${(r.stdout || '')}\n${r.stderr || ''}`.slice(-1500));
     throw new Error('没有拿到可解析的输出') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
