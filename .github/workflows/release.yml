@@ -48,8 +48,21 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
+      # 2026-10-16：改用 `ci-unit-step.mjs` 包装（与 ci.yml 一致），不再直接 `npm test`。
+      # 原因：vitest 在 CI 上偶发「已归因的 RPC 假红」——用例全过（5468 passed）但
+      # worker 报 `Timeout calling "onTaskUpdate"` ⇒ 退出码 1。ci.yml 有这层包装
+      # （按 N36 政策允许一次带记录的重跑），而 release.yml 直接跑 npm test 就会
+      # 把这种假红当成真失败，把整条发布链掐断（v1.0.8 实测：单元测试 5468 passed
+      # 却判 failure，后续打包与发布全被跳过）。
       - name: 单元测试
-        run: npm test
+        shell: pwsh
+        run: |
+          $out = node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs 2>&1 | Out-String
+          Write-Host $out
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "## 单元测试（发布门禁）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # tag 发布只走这条 workflow，而 nightly 可能排在发版之后；发版产物比 PR
       # 门禁更接近用户，不能只靠「合并前绿过」或夜间档的异步证明。
