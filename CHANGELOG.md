@@ -25,6 +25,25 @@
 
 ### 修复
 
+- **仓库补上 `.gitattributes`，把行尾钉死成 LF**（修「本地绿、CI 红」的逐字节门禁）。
+  - **症状**：`release/v1.0.8` 上 CI 连续两次红在「后端 bundle 与源码一致」，
+    而同一命令在本机是绿的 —— 典型的「本地绿、CI 红」。
+  - **成因**：本机与 CI 的 Git 都带 `core.autocrlf=true`（Windows 安装版默认写进
+    `etc/gitconfig`），检出时把文本文件的 LF 换成 CRLF。而本次发版刚把两条门禁从
+    `git diff`（对行尾不敏感）换成**逐字节比对**：`check:backend` 拿 esbuild 重建的
+    `lib/index.js` 与工作树比字节、`check:types` 拿 tsc 重建的 `lib/types/**` 比字节。
+    构建工具产出的恒为 LF，与检出时的行尾无关 ⇒ CRLF 检出下**必然**红。
+    本机之所以绿，是因为工作树里的产物是构建器写的 LF（`autocrlf` 只影响检出/入库）。
+    同一成因还潜伏在 `check:deps-provenance`（sha256 内容指纹对行尾敏感）。
+  - **做法**：不是把门禁放宽成「忽略行尾」，而是把行尾**钉死** —— 生成物与源码同处
+    一棵树、又要逐字节相比，就必须有唯一行尾；选 LF 是因为构建工具默认产 LF。
+    `.gitattributes` 里 `* text=auto eol=lf` 打底，生成物（`lib/**`、`docs/API.md`、
+    `tools/remote-files.json`）与各源码扩展名显式锁 LF，二进制显式 `-text`。
+  - **验证**：在**全新克隆**（模拟 CI 检出）里复现了修复前的红（`w/crlf` ⇒
+    `check:backend`/`check:types`/`check:deps-provenance` 三条全红），补上
+    `.gitattributes` 后同一环境三条全绿（`w/lf`）。索引里所有文本文件本来就是 LF，
+    因此本文件不产生任何内容改动。
+
 - **@Remote 入参形状校验开始试点硬拒**（`deleteTask`）。
   - `wechat-args-guard.js` 的 ① 档（结构/体积）一直硬拒，② 档（生成的 zod schema）过去只记账；
     这样「前端悄悄传错字段类型」会继续进入后端，只能在 `info().argGuard.mismatched` 里事后看到。
