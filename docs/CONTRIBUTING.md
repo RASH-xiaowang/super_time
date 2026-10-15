@@ -157,8 +157,8 @@ refactor(P3-5): 图片解码三兄弟收成两份公共体，两处有意差异�
 
 ## 9. 仓库里绝不能提交的东西
 
-工作区里有**明文密钥**与签发私钥（`.gitignore` 已覆盖：`wechat/config.json`、`wechat/llm.json`、
-`vendor-keys/`、`working/`、`output/`、`dist/`）。因此：
+工作区里有**明文密钥**与签发私钥（`.gitignore` 已覆盖：`wechat/` 下的 `config.json` 与
+`llm.json`（入库的只有对应的 `*.example.json`）、`vendor-keys/`、`working/`、`output/`、`dist/`）。因此：
 
 - **不用 `git add -A` / `git add .`**，按文件名显式 add；
 - 不打包/备份整个工作区；
