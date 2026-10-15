@@ -320,7 +320,10 @@ const MUTATIONS_BATCH12 = [
     id: 'M30-wordcloud-cache-removed',
     why: 'queryWordCloud 去掉进程内缓存 —— 「全部热词」每次切回总览都要重算一遍全库（实测 3 秒）',
     file: 'src/backend/wechat-data/src/query/wordcloud.ts',
-    from: "  const full = await cachedBySigAsync(\r\n    `wordcloud:${scope}:${username}:${year ?? 'all'}:${decryptedDir}`,",
+    // 锚点收成**单行**（2026-10-15）：源码把 `cachedBySigAsync(` 之后的参数拆成了多行，
+    // 旧锚点（两行拼接 + 字面 CRLF）在 LF 检出下命中 0 次。单行锚点既不受行尾影响，
+    // 也不会因为参数换行而腐烂 —— 与 CONTRIBUTING 里「新锚点一律收成单行」同一条纪律。
+    from: '  const full = await cachedBySigAsync(',
     to: '  const full = await computeWordCloud(decryptedDir, scope, username, year)',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/wordcloud-perf.wiring.spec.ts',
   },
