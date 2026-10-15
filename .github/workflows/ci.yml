@@ -88,8 +88,8 @@ jobs:
           # 所以这里把输出同时写进 step summary 与一个文件（失败时上传为 artifact）。
           $out = node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs 2>&1 | Out-String
           Write-Host $out
-          New-Item -ItemType Directory -Force -Path .tmp-e2e | Out-Null
-          $out | Out-File -Encoding utf8 .tmp-e2e/unit-test.log
+          New-Item -ItemType Directory -Force -Path ci-evidence | Out-Null
+          $out | Out-File -Encoding utf8 ci-evidence/unit-test.log
           if ($env:GITHUB_STEP_SUMMARY) {
             "## 单元测试`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
@@ -137,20 +137,22 @@ jobs:
           # 输出同时写进 step summary（PR 页面可见）与一个文件（失败时上传为 artifact）。
           $out = npm run ui:e2e-smoke 2>&1 | Out-String
           Write-Host $out
-          New-Item -ItemType Directory -Force -Path .tmp-e2e | Out-Null
-          $out | Out-File -Encoding utf8 .tmp-e2e/ui-e2e-smoke.log
+          New-Item -ItemType Directory -Force -Path ci-evidence | Out-Null
+          $out | Out-File -Encoding utf8 ci-evidence/ui-e2e-smoke.log
           if ($env:GITHUB_STEP_SUMMARY) {
             "## UI 冒烟（真机 e2e）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # 失败时把现场（日志 + 截图）传上来 —— 没有它，CI 上这条红只能靠猜。
+      # ⚠️ 目录不能叫 `.tmp-*`：`.gitignore` 里有 `.tmp-*`，而 upload-artifact 默认
+      # 会跳过被 gitignore 的文件 ⇒ 传上去是个空 artifact（2026-10-15 实测踩到）。
       - name: 上传现场（仅失败时）
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ci-failure-evidence
-          path: .tmp-e2e/
+          path: ci-evidence/
           if-no-files-found: ignore
           retention-days: 7
 

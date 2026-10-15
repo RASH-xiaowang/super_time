@@ -101,8 +101,8 @@ try {
       bodyText: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
       viewport: { w: window.innerWidth, h: window.innerHeight },
     })).catch(() => null)
-    const shot = join(ROOT, '.tmp-e2e', 'ui-e2e-smoke-fail.png')
-    try { mkdirSync(join(ROOT, '.tmp-e2e'), { recursive: true }); await win.screenshot({ path: shot }) } catch { /* 截图失败不掩盖原错 */ }
+    const shot = join(ROOT, 'ci-evidence', 'ui-e2e-smoke-fail.png')
+    try { mkdirSync(join(ROOT, 'ci-evidence'), { recursive: true }); await win.screenshot({ path: shot }) } catch { /* 截图失败不掩盖原错 */ }
     throw new Error(`等不到「数据总览」导航按钮：${e && e.message ? e.message : String(e)}\n现场快照：${JSON.stringify(snapshot)}\n截图：${shot}`)
   }
   check(true, '跳过三道闸门后进入主界面')
