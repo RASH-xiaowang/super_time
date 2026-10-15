@@ -32,7 +32,7 @@ export interface RuntimeVersions {
  * （`src/backend/tests/version-consistency.spec.ts`）要求它**始终等于** package.json
  * 的版本 —— 那层保证兜底值不会静默漂移。
  */
-export const APP_VERSION = '1.0.7'
+export const APP_VERSION = '1.0.8'
 
 /**
  * 启动页四张阶段背景图（`public/onboarding` → 构建后 `ui-dist/onboarding`）。
