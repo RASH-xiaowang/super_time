@@ -25,6 +25,8 @@ export type WxgfTranscodeResult = {
 };
 /** 转码器签名（调用方可通过参数注入替身）。 */
 export type WxgfTranscoder = (payload: Uint8Array) => WxgfTranscodeResult;
+/** 异步转码器签名：DLL 路径仍同步，ffmpeg 兜底不再占 worker 事件循环。 */
+export type WxgfTranscoderAsync = (payload: Uint8Array) => Promise<WxgfTranscodeResult>;
 /**
  * 找到微信安装目录下的解码库路径。
  *
@@ -40,8 +42,15 @@ export declare function resolveVoipEnginePath(): string;
  * @returns 转码器；**永不抛**，失败一律返回 `{ error }`。
  */
 export declare function createWxgfTranscoder(native?: WxgfNative | null, ffmpegFallback?: WxgfTranscoder | null): WxgfTranscoder;
+/**
+ * 异步版转码器。与同步版同一套 DLL 契约；只有 ffmpeg 兜底是 `spawn` 而非 `spawnSync`。
+ * 生产媒体 RPC 链应优先用 `transcodeWxgfAsync` / `decodeDatBytesAsync`。
+ */
+export declare function createWxgfTranscoderAsync(native?: WxgfNative | null, ffmpegFallback?: WxgfTranscoderAsync | null): WxgfTranscoderAsync;
 /** 默认转码器（真 DLL，惰性加载）。 */
 export declare const transcodeWxgf: WxgfTranscoder;
+/** 生产解码链使用的异步转码器（DLL 失败时 ffmpeg 走子进程）。 */
+export declare const transcodeWxgfAsync: WxgfTranscoderAsync;
 /**
  * 转码能力是否可用（惰性探测并缓存）。
  *

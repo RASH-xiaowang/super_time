@@ -13,7 +13,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createWechatBackend, resultCacheHandles } from '../wechat-host.js'
 
 /** 每次用例前清空，避免用例间互相影响。 */

@@ -52,7 +52,7 @@ function walk(rel = ''): string[] {
 
 const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
 /** 宿主层源码的联合（M21 把 IPC 频道拆进了 src/backend/ipc-*.js：界面文案断言跟到哪份都算数）。 */
-const readHost = (): string => [read('main.js')]
+const readHost = (): string => [read('main.js'), read('src/backend/backend-supervisor.js')]
   .concat(readdirSync(join(ROOT, 'src', 'backend')).filter((f) => /^ipc-[a-z]+\.js$/.test(f)).sort()
     .map((f) => read(join('src', 'backend', f)))).join('\n')
 

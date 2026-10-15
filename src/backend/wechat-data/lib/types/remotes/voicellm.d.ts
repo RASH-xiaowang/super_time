@@ -19,7 +19,7 @@ export interface createVoiceLlmRemotesInputs {
     setWhisperTranscribing: (v: WhisperTranscribing) => void;
 }
 export declare function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs): {
-    transcribeVoiceBatch(options: {
+    transcribeVoiceBatch(options?: {
         limit?: number;
     }): Promise<VoiceTranscribeResult>;
     installWhisperEngine(options?: {

@@ -62,6 +62,7 @@ try {
   win.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 160)) })
   win.on('pageerror', (e) => errs.push('pageerror: ' + String(e.message).slice(0, 160)))
   await win.waitForLoadState('domcontentloaded')
+  await win.setViewportSize({ width: 1920, height: 1080 })
   await win.getByRole('button', { name: '数据总览', exact: true }).waitFor({ state: 'visible' })
   await win.getByRole('button', { name: '数据总览', exact: true }).click()
   for (let i = 0; i < 90; i++) {
@@ -89,6 +90,7 @@ try {
 
   const rep = await win.evaluate(() => {
     const body = document.querySelector('main [class*=panelBody]') || document.querySelector('main')
+    const canvasW = Math.round(body.getBoundingClientRect().width)
     // 就绪判据用**专属属性**而不是类名/文案：2026-09-27 换霓虹皮肤时，旧判据查的是
     // `[class*=ovHero]` —— 那一套类名被删掉之后，本脚本把"没找到"读成"首启空库"并**静默跳过**
     // （退出码还是 0）。真窗口判据的靶子必须是"只有那一块才有"的钩子，改皮不换钩子。
@@ -107,8 +109,13 @@ try {
       const bdRect = bd ? bd.getBoundingClientRect() : null
       const empty = bdRect ? Math.max(0, Math.round(bdRect.bottom - pad - contentBottom)) : 0
       const clipped = [...c.querySelectorAll('*')]
-        .filter((el) => el.scrollHeight > el.clientHeight + 2 && el.clientHeight > 20)
-        .map((el) => `${cls(el)} ${el.clientHeight}<${el.scrollHeight}`)
+        .filter((el) => {
+          const style = getComputedStyle(el)
+          const clipsY = ['hidden', 'clip'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 2
+          const clipsX = ['hidden', 'clip'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 2
+          return el.clientHeight > 20 && (clipsY || clipsX)
+        })
+        .map((el) => `${cls(el)} ${el.clientWidth}x${el.clientHeight}<${el.scrollWidth}x${el.scrollHeight}`)
       return { title: (c.querySelector('h3')?.textContent ?? '').trim(), ...r, empty, clipped: clipped.slice(0, 2) }
     })
     // 网格空洞：按 y 分行，一行卡片宽度和 + 间距若明显小于网格宽度 → 那一行有空列
@@ -123,7 +130,7 @@ try {
       const used = row.reduce((s, c) => s + c.w, 0) + (row.length - 1) * 10
       if (gw && used < gw - 20) holes.push(`y=${y} 只用到 ${used}/${gw}px，空 ${gw - used}px（${row.map((c) => c.title || '?').join(' + ')}）`)
     }
-    return { loaded: true, total: body.scrollHeight, cards, gw, holes }
+    return { loaded: true, total: body.scrollHeight, canvasW, cards, gw, holes }
   })
 
   if (!rep.loaded) {
@@ -133,6 +140,7 @@ try {
   }
 
   console.log(`正文总高: ${rep.total}px（整屏约 802px → ${(rep.total / 802).toFixed(1)} 屏）`)
+  console.log(`1920px 全屏视口下正文画布: ${rep.canvasW}px（上限 1480px）`)
   console.log(`网格宽: ${rep.gw}px\n`)
   console.log('卡片                           y     h   卡内空白   裁切')
   let sumEmpty = 0
@@ -192,6 +200,7 @@ try {
   for (const h of rep.holes) console.log('  ✗ ' + h)
 
   check(sumEmpty < 200, `卡内空白合计 ${sumEmpty}px 偏大（阈值 200px）`)
+  check(rep.canvasW <= 1480, `全屏正文画布超出 1480px：${rep.canvasW}px`)
   check(rep.holes.length === 0, `网格存在空洞：${rep.holes.join(' | ')}`)
   check(rep.cards.every((c) => c.clipped.length === 0), `有内容被裁切：${rep.cards.filter((c) => c.clipped.length).map((c) => `${c.title} ${c.clipped.join(',')}`).join(' | ')}`)
   check(errs.length === 0, `渲染层 console error：${errs.slice(0, 2).join(' | ')}`)

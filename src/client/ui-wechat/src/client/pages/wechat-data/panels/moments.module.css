@@ -123,6 +123,12 @@
 .monthFill:hover { box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 45%, transparent); }
 .monthLabel { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); white-space: nowrap; opacity: 0; transition: opacity 0.15s; }
 .monthCol:hover .monthLabel { opacity: 1; }
+/* 触摸上没有 hover ⇒ 十二个月的柱子永远没有标签（2026-10-14 真数据实测）。
+   常显就得容得下：一列约 29px，11px 的「12月」要 33px ⇒ 收字号并允许列内裁切，
+   9.5px 与本文件其它紧凑标注（starM/rhythmDow 同档）同口径。 */
+@media (hover: none) {
+  .monthLabel { opacity: 1; font-size: 9.5px; overflow: hidden; }
+}
 
 /* 洞察统计 */
 .insight {
@@ -280,6 +286,12 @@
 }
 .textToggle:hover { text-decoration: underline; }
 .textToggle[data-on] { color: var(--nm-text-1); font-weight: 700; text-decoration: underline; }
+/* 手机档：「展开/收起」是嵌在正文行里的 inline-block，M7 那条全局 44px 触摸下限会把
+   它所在的那一行撑高（实测 28×44 挤在 13px 文字里）。让它**独占一行** ——
+   44px 的点击目标保住，正文行高也不被拉花。 */
+@media (max-width: 560px) {
+  .textToggle { display: block; margin-top: 4px; }
+}
 
 /* 点赞数量徽标 + 可展开名字 */
 .likesRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; font-size: 12px; color: var(--nm-text-1); }

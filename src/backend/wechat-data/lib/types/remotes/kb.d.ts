@@ -1,8 +1,7 @@
-import { KbVectorBuildResult, KbVectorIndexStatus } from '../query/kb-vectors.ts';
-import { KbEntitySummary } from '../query/kb/extract.ts';
-import { KbModelRole, KbModelSettings, ResolvedModel } from '../query/kb/model-config.ts';
+import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts';
 import { EmbedFn } from '../query/retrieval/embedding.ts';
 import { KbDeleteAction, KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbListSnapshot, KbMutationResult, KbSearchResult, KbSummaryResult, OperationCategory, OperationStatus } from '../types.ts';
+import { KbExtractResult, KbLinkSuggestResult, KbModelConfigResult, KbModelConfigView, KbVectorBuildWireResult, KbVectorIndexView } from '../types-kb-wire.ts';
 import { Context } from '@deepseek-ai/cordis';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
@@ -96,48 +95,21 @@ export declare function createKbRemotes(rc: KbRemoteCtx): {
     }): Promise<KbSearchResult>;
     getKbModelConfig(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        settings: KbModelSettings;
-        global: Record<KbModelRole, string>;
-        resolved: Record<KbModelRole, ResolvedModel>;
-        entities: KbEntitySummary;
-    };
+    }): KbModelConfigView;
     setKbModelConfig(options: {
         kbId: number;
         chatRef?: string;
         embedRef?: string;
         rerankRef?: string;
-    }): {
-        ok: true;
-        settings: KbModelSettings;
-    } | {
-        ok: false;
-        error: string;
-    };
+    }): KbModelConfigResult;
     getKbVectorIndex(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        model: string;
-        source: "inherit" | "inline";
-        configured: boolean;
-        status: KbVectorIndexStatus;
-        job: {
-            done: number;
-            total: number;
-            startedAt: number;
-            error: string;
-        } | null;
-    };
+    }): KbVectorIndexView;
     buildKbVectorIndex(options: {
         kbId: number;
         force?: boolean;
         jobId?: string;
-    }): Promise<KbVectorBuildResult & {
-        ok: boolean;
-        error?: string;
-    }>;
+    }): Promise<KbVectorBuildWireResult>;
     /**
      * 停止本库正在跑的向量构建（W3-11.5）。
      *
@@ -154,32 +126,11 @@ export declare function createKbRemotes(rc: KbRemoteCtx): {
         kbId: number;
         fileIds?: number[];
         limit?: number;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        files: number;
-        saved: number;
-        failed: Array<{
-            id: number;
-            error: string;
-        }>;
-        model: string;
-    }>;
+    }): Promise<KbExtractResult>;
     suggestKbLinks(options: {
         kbId: number;
         text?: string;
         topK?: number;
         excludeTitle?: string;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        candidates: Array<{
-            label: string;
-            kind: "note" | "entity";
-            score: number;
-        }>;
-        pool: number;
-        model: string;
-        note?: string;
-    }>;
+    }): Promise<KbLinkSuggestResult>;
 };

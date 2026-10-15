@@ -3,7 +3,7 @@
  * decrypted text messages, aggregating per-category counts + samples and
  * TOP contact/group rankings (mirror of wechat/privacy.rs).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'

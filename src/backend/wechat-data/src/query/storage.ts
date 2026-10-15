@@ -5,7 +5,7 @@
  * with protobuf-parsed packed_info names.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'

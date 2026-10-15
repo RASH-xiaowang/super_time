@@ -82,7 +82,7 @@ describe('第七刀两块浮层的接线', () => {
     expect(jsxCall(view, 'ChatsEditedDialog', '已编辑调用点')).toBe('<ChatsEditedDialog {...edited} />')
     expect(view).toContain('calendar: ChatsCalendarDialogProps')
     expect(view).toContain('edited: ChatsEditedDialogProps')
-    expect(panel).toContain('calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, setCalOpen, switchCalMonth }')
+    expect(panel).toContain('calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, refreshCurrentMonth, setCalOpen, switchCalMonth }')
     expect(panel).toContain('edited: { doReset, editedOpen, editing, edits, setEditedOpen }')
     // 旧的逐件写法不许长回来（长回来就是两处真相：袋里一份、弹窗 props 一份）
     expect(view, '日历调用点又退回逐件传参 ⇒ 袋与 props 两份清单要开始漂移了').not.toContain('calOpen={calOpen}')

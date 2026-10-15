@@ -5,18 +5,24 @@
  * 原先散在 `ChatsPanel` 的函数体里（几十个 state 与回调），但输入输出很清楚 —— 抽成钩子后：
  * 面板把输入传进来、把用得到的值解构出去，其余细节（轮询、竞态防护、菜单构造）留在模块里。
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
+ * 2026-10-13：接上 `useGroupInfoLive`（抽屉开着时的静默实时刷新），输入袋相应扩了三条。
  */
 
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useId, useRef, useState } from 'react'
 import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import { filterMembers, memberLimitOf, memberQueryOf, profileAnchor } from './chats-member-view.ts'
+import { useGroupInfoLive } from './chats-info-live.ts'
 
 export interface useChatsGroupInfoInputs {
+  /** 当前会话 talker（= 群信息抽屉的取数范围；实时刷新按它判归属）。 */
+  talkerRef: React.MutableRefObject<string | null>
+  sessionAlive: (epoch: number, talker: string) => boolean
+  sessionEpochRef: React.MutableRefObject<number>
 }
 
 export function useChatsGroupInfo(inputs: useChatsGroupInfoInputs) {
-  const {  } = inputs
+  const { talkerRef, sessionAlive, sessionEpochRef } = inputs
 const [groupInfoOpen, setGroupInfoOpen] = useState(false)
 const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null)
 const [groupInfoLoading, setGroupInfoLoading] = useState(false)
@@ -54,6 +60,9 @@ const memberTotal = groupInfo ? groupInfo.members.length : 0
 const filteredMembers = groupInfo ? filterMembers(groupInfo.members, memberQuery) : []
 const memberLimit = memberLimitOf(memberExpanded)
 const shownMembers = filteredMembers.slice(0, memberLimit)
+
+// 抽屉开着时，宿主数据事件与群信息缓存刷新广播都会静默重取（实时刷新，2026-10-13）。
+useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, setGroupInfo, setGroupInfoErr })
 
   return { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers }
 }

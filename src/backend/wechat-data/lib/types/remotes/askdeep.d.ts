@@ -2,6 +2,7 @@ import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts';
 import { EmbedFn } from '../query/retrieval/embedding.ts';
 import { IntentKind, RerankWeights } from '../query/retrieval/types.ts';
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts';
+import { VectorBuildResult } from '../types-retrieval.ts';
 import type { Context } from '@deepseek-ai/cordis';
 import type { PrivacyGateFn } from '../gateway-privacy.ts';
 export interface createAskDeepRemotesInputs {
@@ -88,12 +89,5 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
     }): Promise<AskOptimizeResult>;
     buildRagVectorIndex(options?: {
         force?: boolean;
-    }): Promise<{
-        ok: boolean;
-        status: string;
-        rows: number;
-        embedded: number;
-        elapsed_ms: number;
-        message?: string;
-    }>;
+    }): Promise<VectorBuildResult>;
 };

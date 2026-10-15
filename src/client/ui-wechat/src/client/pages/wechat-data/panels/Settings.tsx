@@ -13,7 +13,7 @@ import { useTransientNotice } from './hooks.tsx'
 import {
   IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
@@ -23,6 +23,7 @@ import { HealthPanel } from './Health.tsx'
 import { HookPanel } from './Hook.tsx'
 import { LicenseSection, UpdateSection } from './settings-sections.tsx'
 import { SettingsRemoteAccess } from './settings-remote-access.tsx'
+import { SettingsBrowserPanel } from './settings-browser.tsx'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { SettingsDbKeySection, SettingsDetectSection, SettingsImgDecodeSection, SettingsImgKeySection, SettingsVoiceSection } from './settings-steps.tsx'
 import { useSettingsState } from './settings-state.tsx'
@@ -131,7 +132,22 @@ function SecretMigrationNotice(props: {
   )
 }
 
-export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
+/**
+ * 设置面板的**分派器**：桌面端是下面那份完整的 `SettingsDesktopPanel`，浏览器态整面板降级。
+ *
+ * 为什么在根上分派、而不是给每一节套降级卡：「设置」里的 13 节只有 1 节（数据边界与出网）
+ * 在手机上能用，其余 12 节要做的都是这台电脑上的事。逐节套卡会得到一屏内容几乎相同的
+ * 「仅桌面端」，而且挡不住 `useSettingsState` 自己那 19 个远程会直接被拒的调用 ——
+ * 那些调用会在手机上一并转圈、报错。根上分派一次，两件事都解决。
+ * @param p - 见 {@link SettingsPanelProps}。
+ * @returns 桌面端设置面板或手机端设置视图。
+ */
+export function SettingsPanel(p: SettingsPanelProps = {}): React.JSX.Element {
+  if (runtimeCapabilities().isBrowser) return <SettingsBrowserPanel {...p} />
+  return <SettingsDesktopPanel {...p} />
+}
+
+function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const {
     accounts, ackSecretMigration, activeKey, autoGetDb, autoGetImg, batchTranscribe,
     cfg, cfgLoading, clear, current,

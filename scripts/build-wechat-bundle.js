@@ -24,8 +24,14 @@ const esbuild = require('esbuild');
 
 const root = path.resolve(__dirname, '..');
 const pkgRoot = path.join(root, 'src', 'backend', 'wechat-data');
-const entry = path.join(pkgRoot, 'src', 'index.ts');
-const outfile = path.join(pkgRoot, 'lib', 'index.js');
+const pkgSrc = path.join(pkgRoot, 'src');
+const defaultOutdir = path.join(pkgRoot, 'lib');
+const entry = path.join(pkgSrc, 'index.ts');
+const outfile = path.join(defaultOutdir, 'index.js');
+// 宿主层 `llm-http.js` 只需要重试原语，不该为一个 fetchWithRetry 冷加载整个
+// 网关 bundle。这里把同一份 TS 实现再产出一个约 3KB 的独立 ESM 产物。
+const fetchRetryEntry = path.join(pkgSrc, 'net', 'fetch-retry.ts');
+const fetchRetryOutfile = path.join(defaultOutdir, 'net', 'fetch-retry.js');
 
 /**
  * 从 esbuild 的 metafile 里取产物字节数（N3）。
@@ -51,16 +57,27 @@ function outputBytes(metafile, outfile) {
   return fs.statSync(abs).size;
 }
 
-async function main() {
+/**
+ * 把两份后端产物构建到指定目录。默认写回仓库，但一致性门禁会传临时目录，
+ * 这样“检查是否过期”不会先把工作树里的生成文件改掉。
+ *
+ * @param {{ outdir?: string, log?: boolean }} [opts]
+ * @returns {Promise<{ result: import('esbuild').BuildResult, outfile: string, fetchRetryOutfile: string }>}
+ */
+async function buildBundle(opts = {}) {
+  const targetOutdir = opts.outdir || defaultOutdir;
+  const targetOutfile = path.join(targetOutdir, 'index.js');
+  const targetFetchRetryOutfile = path.join(targetOutdir, 'net', 'fetch-retry.js');
   const result = await esbuild.build({
-    entryPoints: [entry],
+    entryPoints: [entry, fetchRetryEntry],
     bundle: true,
     format: 'esm',
     platform: 'node',
     target: 'node22',
     packages: 'external',
-    outfile,
-    logLevel: 'info',
+    outdir: targetOutdir,
+    outbase: pkgSrc,
+    logLevel: opts.log === false ? 'silent' : 'info',
     logLimit: 30,
     // 显式关闭 experimentalDecorators，走 TC39 标准装饰器（@Remote 依赖它）。
     tsconfigRaw: {
@@ -72,9 +89,20 @@ async function main() {
     },
     metafile: true,
   });
+  if (opts.log === false) return { result, outfile: targetOutfile, fetchRetryOutfile: targetFetchRetryOutfile };
   // 源码行数最多的产物，报体积时带上字节数，避免 KB 四舍五入后与 esbuild 的读数对不上时无从核对。
-  const bytes = outputBytes(result.metafile, outfile);
-  console.log(`\n✅ 后端 bundle 已重建: ${path.relative(root, outfile)} (${(bytes / 1024).toFixed(1)} KB / ${bytes} B)`);
+  for (const [label, output] of [
+    ['后端 bundle', targetOutfile],
+    ['宿主 fetch-retry bundle', targetFetchRetryOutfile],
+  ]) {
+    const bytes = outputBytes(result.metafile, output);
+    console.log(`✅ ${label}已重建: ${path.relative(root, output)} (${(bytes / 1024).toFixed(1)} KB / ${bytes} B)`);
+  }
+  return { result, outfile: targetOutfile, fetchRetryOutfile: targetFetchRetryOutfile };
+}
+
+async function main() {
+  await buildBundle();
 }
 
 // 只在直接执行时构建：单测要 require 本模块拿 outputBytes，不能被构建副作用带走。
@@ -85,4 +113,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { outputBytes, outfile, entry };
+module.exports = {
+  buildBundle,
+  outputBytes,
+  outfile,
+  entry,
+  fetchRetryEntry,
+  fetchRetryOutfile,
+};

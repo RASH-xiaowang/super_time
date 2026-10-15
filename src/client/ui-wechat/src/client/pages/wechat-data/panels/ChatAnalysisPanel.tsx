@@ -31,6 +31,21 @@ export interface ChatAnalysisPanelProps {
   entry: InlineAnalysisEntry | undefined
   /** 取消选中。 */
   onClear: () => void
+  /** W3-11.5：本批分析进度（没有批在跑时为 null）—— 让「本地分析中…」变成可读的等待。 */
+  progress?: { done: number; total: number } | null
+  /** W3-11.5：停止当前那批分析（不给就没有停止按钮）。 */
+  onCancel?: () => void | Promise<void>
+  /** W3-11.5：「已停止（算出 N/M）」的收尾回执。 */
+  stopped?: { done: number; total: number } | null
+  /** W3-11.5：停止没停上的原因（空串 / 不给 = 没有问题）。 */
+  stopError?: string
+  /**
+   * W3-11.5 收尾：重试这一条（不给就没有重试按钮）。
+   *
+   * 为什么需要它：逐条失败（语音没转写、取不到这条消息）此前**只能等下一次自动重跑** ——
+   * 而自动重跑要等这条消息重新进入可见窗口，用户盯着「分析失败」干等。
+   */
+  onRetry?: (localId: number) => void
 }
 
 /** 摘要里的一个小指标。 */
@@ -39,7 +54,7 @@ function Stat({ label, value }: { label: string; value: string }): React.JSX.Ele
 }
 
 export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Element {
-  const { targetId, entry, onClear } = props
+  const { targetId, entry, onClear, progress, onCancel, stopped, stopError, onRetry } = props
   const done = entry !== undefined && entry.state === 'done' ? entry : null
 
   // 排序：短的命题（noul/score）在前、choice 在后 —— 单列里也让结论先露头
@@ -55,11 +70,16 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
     <div className={css.sec} aria-label="分析">
       <div className={shell.head}>
         <div className={shell.title}>分析</div>
-        {targetId !== null && (
-          <div className={shell.headActions}>
+        <div className={shell.headActions}>
+          {/* W3-11.5：停止按钮只在**真有批在跑**时出现。取消只在每条之间生效，
+              所以点了之后最多再等一条的推理时长（单条 0.5–9s），文案里写明了这一点。 */}
+          {progress !== null && progress !== undefined && onCancel !== undefined && (
+            <button type="button" className={shell.iconBtn} title="停止分析（最多再等当前这一条算完）" aria-label="停止分析" onClick={() => { void onCancel() }}>■</button>
+          )}
+          {targetId !== null && (
             <button type="button" className={shell.iconBtn} title="取消选中" aria-label="取消选中" onClick={onClear}>×</button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       <div className={shell.body}>
         {targetId === null && (
@@ -75,10 +95,30 @@ export function ChatAnalysisPanel(props: ChatAnalysisPanelProps): React.JSX.Elem
           </div>
         )}
         {entry !== undefined && entry.state === 'pending' && (
-          <div className={css.empty}><div className={css.emptySub}>本地分析中…</div></div>
+          <div className={css.empty}>
+            <div className={css.emptySub}>
+              本地分析中…{progress ? `（${progress.done}/${progress.total}）` : ''}
+            </div>
+          </div>
+        )}
+        {/* W3-11.5：停止不是失败 —— 已算完的那部分留在上面，收尾在这里说清算了多少。 */}
+        {stopped !== null && stopped !== undefined && (
+          <div className={css.empty}><div className={css.emptySub}>已停止（算出 {stopped.done}/{stopped.total} 条，已算的都已存下）</div></div>
+        )}
+        {stopError !== undefined && stopError !== '' && (
+          <div className={css.empty}><div className={css.emptySub}>没能停止：{stopError}</div></div>
         )}
         {entry !== undefined && entry.state === 'error' && (
-          <div className={css.empty}><div className={css.emptySub}>分析失败：{entry.error}</div></div>
+          <div className={css.empty}>
+            <div className={css.emptySub}>分析失败：{entry.error}</div>
+            {/* W3-11.5 收尾：失败必须给出路。原先只能等下一次自动重跑，
+                而那要等这条消息重新滚进可见窗口 —— 用户看着干等。 */}
+            {onRetry !== undefined && targetId !== null && (
+              <button type="button" className={css.emptyAction} onClick={() => { onRetry(targetId) }}>
+                重试这一条
+              </button>
+            )}
+          </div>
         )}
         {done !== null && (
           <>

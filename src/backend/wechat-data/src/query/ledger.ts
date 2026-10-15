@@ -3,7 +3,7 @@
  * amounts and timestamps from message shards by server_id, and derives
  * per-contact totals plus fund anomaly warnings.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
@@ -326,6 +326,11 @@ async function computeLedger(decryptedDir: string, month?: string, selfUsername?
     }
   }
 
+  // W2-9.3 实测记录：**这个 slice 就是「按联系人」的硬上界**。
+  // 面板 `Ledger.tsx` 用 `useProgressiveList(byContact.length, 80)` 渲染，
+  // 而 step=80 > 20 ⇒ 渐进窗口**永远不触发**，最多也就 20 行、约 340 个 DOM 节点。
+  // 所以「记录类长列表虚拟化」这一条在 Ledger 这半边**前提不成立**：
+  // 没有无界增长，就没有虚拟化可省。真要放开这里，得先想清楚「联系人排行要多少行」。
   const byContactRows: LedgerContactRow[] = [...contactAgg.values()]
     .sort((a, b) => b.amount - a.amount || b.count - a.count)
     .slice(0, 20)

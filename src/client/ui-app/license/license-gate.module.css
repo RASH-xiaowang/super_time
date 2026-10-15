@@ -84,6 +84,19 @@
   color: var(--nm-cyan, #00f0ff) !important;
 }
 
+/* W3-11.7：快到期提醒。琥珀色而不是红色 —— 它**不是错误**，
+   证仍然有效、用户还有时间续签；红色会让人以为已经不能用了。 */
+.expiry {
+  margin-top: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-amber, #f5a623);
+  border: 1px solid var(--nm-amber, #f5a623);
+  border-radius: var(--nm-r-sm, 6px);
+  background: color-mix(in srgb, var(--nm-amber, #f5a623) 8%, transparent);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

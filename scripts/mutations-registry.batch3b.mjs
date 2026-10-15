@@ -427,8 +427,8 @@ export const MUTATIONS_BATCH3B = [
     id: "M273-msg-early-return-leaks-other-shards",
     why: "把 msgCreateTimeByServerId 的收尾关连接改成不关（等于回到「轮到哪条关哪条 + 命中就 return」）⇒ 两个分片的会话命中第一条时第二条永久泄漏",
     file: "src/backend/wechat-data/src/query/messages.ts",
-    from: "  } finally {\n    for (const shard of shards) {\n      try { shard.db.close() } catch { /* already closed */ }\n    }\n  }\n}\n\n/** Locate every shard DB containing the talker's Msg table (catalog-backed). */",
-    to: "  } finally {\n    for (const shard of shards) {\n      try { if (false) shard.db.close() } catch { /* already closed */ }\n    }\n  }\n}\n\n/** Locate every shard DB containing the talker's Msg table (catalog-backed). */",
+    from: "  } finally {\n    for (const shard of out) {\n      const db = shard.db\n      try { db.close() } catch { /* already closed */ }\n    }\n  }\n}",
+    to: "  } finally {\n    for (const shard of out) {\n      const db = shard.db\n      try { if (false) db.close() } catch { /* already closed */ }\n    }\n  }\n}",
     spec: "src/backend/wechat-data/tests/query-db-lifetime.spec.ts",
   },
 
@@ -591,7 +591,7 @@ export const MUTATIONS_BATCH3B = [
   {
     id: "M297-atomic-write-directly-to-target",
     why: "把「先写同目录临时文件」改成「直接写目标」⇒ 读者自旋期间会采到被截断的中间尺寸，torn>0 必须红。这条是「原子写」机制存在与否的主判据；它此前只靠复审手测 10 跑，没进登记表",
-    file: "src/backend/wechat-paths.js",
+    file: "src/backend/atomic-json.js",
     from: "  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;",
     to: "  const tmp = target;",
     spec: "src/backend/tests/atomic-json.spec.ts",
@@ -599,7 +599,7 @@ export const MUTATIONS_BATCH3B = [
   {
     id: "M298-tmp-probe-suffix-renamed",
     why: "临时文件的名字从 .tmp- 换成 .swap-（机制一模一样，但探针看不见它）⇒ sawTmp 恒 0 必须红。这条专门证明「写入必须出现同目录临时文件」那句判据是承重的，而不是碰巧一直在响",
-    file: "src/backend/wechat-paths.js",
+    file: "src/backend/atomic-json.js",
     from: "  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;",
     to: "  const tmp = `${target}.swap-${process.pid}-${Date.now()}`;",
     spec: "src/backend/tests/atomic-json.spec.ts",
@@ -607,7 +607,7 @@ export const MUTATIONS_BATCH3B = [
   {
     id: "M299-rename-never-lands-on-target",
     why: "临时文件写了但 rename 落到别处（目标永远停在旧内容）⇒ 自旋一次都采不到完整新内容，撞 deadline 后「一次都没采到完整新内容」那条必须红；它守的是「下面的 torn===0 是不是空转」这件事，不是内容对错",
-    file: 'src/backend/wechat-paths.js',
+    file: 'src/backend/atomic-json.js',
     from: '      fs.renameSync(tmp, target);',
     to: '      fs.renameSync(tmp, tmp + String.fromCharCode(46) + ' + '"parked"' + ');',
     spec: "src/backend/tests/atomic-json.spec.ts",

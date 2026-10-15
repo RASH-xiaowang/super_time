@@ -24,6 +24,13 @@
   flex-shrink: 0;
   min-height: auto;
 }
+.root > [class*='panelHeader'],
+.root > [class*='panelBody'] {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1480px;
+  margin-inline: auto;
+}
 .refresh {
   padding: 6px 16px;
   border: 1px solid var(--nm-border);
@@ -463,8 +470,36 @@
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.ovGroupTitle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 6px 2px -2px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.ovGroupTitle::before {
+  content: '';
+  flex: 0 0 3px;
+  height: 14px;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-cyan);
+}
+.ovGroupTitle::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--nm-border) 82%, transparent);
 }
 .ovSpan12 { grid-column: span 12; }
+.regionSpan { grid-column: span 4; }
 .ovSpan7 { grid-column: span 7; }
 .ovSpan6 { grid-column: span 6; }
 .ovSpan5 {
@@ -626,7 +661,7 @@
    而 `.ovTrend` / `.ovHeat` 两个类当时还没接上 JSX，等于白写。 */
 
 @media (max-width: 1100px) {
-  .ovSpan12, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
+  .ovSpan12, .regionSpan, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -647,6 +682,7 @@
 .root { gap: 12px; }
 .ovGrid {
   gap: 10px;
+  row-gap: 14px;
   /* **不要** align-items: start —— 那会让短卡片自身不拉伸，同行最高的卡片有多高，
      短卡片下面就空多少（实测就是「留白太多」的主因）。默认的 stretch 让同行卡片等高，
      空白改为落在卡片**内部**，再由各卡片自己的弹性内容（如 .ovTall .hourBars 的
@@ -744,21 +780,12 @@
       世界地图上除了一小块高亮，其余全是空白海洋。所以右侧补两栏真实榜单
       （省份 Top 10 / 城市 Top 12，数据与地图同源），把面积换成信息。
    ══════════════════════════════════════════════════════════════════════ */
-.worldBoard {
-  display: grid;
-  /* 地图 : 省份榜 : 城市榜 ≈ 1.26 : 1 : 1。这个比例不是随手写的：
-     实测这张世界地图在 593×270 的容器里只画到约 360×225（ECharts 按自身投影比例 fit 后居中），
-     两侧各留约 115px 空白 —— 把地图格收窄到 ≈500×310，地图正好铺满，空白移交给榜单。 */
-  grid-template-columns: minmax(0, 1.26fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-  min-width: 0;
-}
 .worldMapBox {
   position: relative;
   min-width: 0;
-  /* 高度固定：地图容器撑起整行高度，两栏榜单跟着等高 */
-  height: 310px;
+  width: 100%;
+  height: clamp(220px, 28vw, 310px);
+  max-height: 310px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-md);
   overflow: hidden;
@@ -864,6 +891,54 @@
   height: 150px;
   min-height: 150px;
   max-height: 150px;
+}
+
+/* 组件边界：内容宽度由栅格决定，卡身和可滚动列表各自设上限，避免单项撑大整页。 */
+.ovGrid > .ovCard {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 576px;
+}
+.ovCardBd {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ovCardBd > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.ovCardBd canvas,
+.ovCardBd img,
+.ovCardBd svg,
+.ovCardBd video {
+  max-width: 100%;
+}
+.authors,
+.topList,
+.catList {
+  max-width: 100%;
+  overscroll-behavior: contain;
+}
+.authors { max-height: 240px; overflow-y: auto; align-content: start; }
+.topList { max-height: 224px; overflow-y: auto; }
+.catList { max-height: 300px; overflow-y: auto; }
+.hourBars {
+  flex: 0 1 136px;
+  height: clamp(96px, 10vw, 136px);
+  min-height: 96px;
+  max-height: 136px;
+}
+
+@media (max-width: 1100px) {
+  .ovGrid { row-gap: 12px; }
+  .ovGrid > .ovCard { max-height: 520px; }
 }
 
 /* 窄屏：作者两列在很窄时仍可读，不需要额外改动；网格已由上面的媒体查询统一成单列 */

@@ -3,11 +3,11 @@
  *
  * ## 为什么是「两份显式清单」而不是一份黑名单
  *
- * 后端有 194 个 `@Remote` 方法，且这个数字只会涨。黑名单的问题不是今天漏了哪一条，
+ * 后端有 195 个 `@Remote` 方法，且这个数字只会涨。黑名单的问题不是今天漏了哪一条，
  * 而是**第 195 条出现时会静默获得远程访问权** —— 没人会记得回来改一份「禁止清单」，
  * 而症状是「手机上某个新功能突然能改了桌面端的配置」，这类问题不会被任何测试发现。
  *
- * 所以这里把 194 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
+ * 所以这里把 195 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
  * （拒绝，按族给出理由）。两份清单由 `http-remote-policy.spec.ts` 对着 gateway 源码里
  * 真实解析出的 `@Remote` 注册表校验三件事：
  *   ① 两者**不相交**（同一条方法不能既允许又拒绝）；
@@ -26,6 +26,8 @@
  *   C. **是重活或长任务** —— 整库解密/修复、索引重建、批量取原图、批量转写、引擎与模型
  *      下载。worker 是**单线程**且与桌面端共用，本机已经踩过一次独占事故（同步 whisper
  *      把 `getSessions` 顶到 2202ms）；远程再叠几个 10 分钟档的长调用，桌面界面会被饿死。
+ *      **例外**：单条/面板必需的长任务（年度聚合、单图、单条转写、AI 分析）仍可远程调用，
+ *      但由 `REMOTE_HEAVY_METHODS` 单独记账，并在共享队列里受重活并发/排队预算约束。
  *   D. **会以用户身份对外产生后果，或销毁问责留痕** —— ClawBot 发消息/改绑定（收到令牌的人
  *      就能给用户的联系人发消息）、清空操作日志与隐私审计（那两份是「谁在什么时候把什么
  *      发出去了」的唯一记录）。
@@ -36,6 +38,8 @@
  * @module backend/http-remote-policy
  */
 
+const { LONG_CALL_METHODS } = require('./remote-policy');
+
 /**
  * 允许远程调用的方法，**按面板族分组**（分组本身就是「tab → 所需方法」的审计矩阵）。
  *
@@ -45,11 +49,16 @@
 const REMOTE_SAFE_BY_FAMILY = {
   '会话与消息（聊天会话 / 通话记录）': [
     'getSessions', 'getMessages', 'getNewMessages', 'getContact360', 'getGroupInfo',
-    'getCalls', 'resolveChatHistory', 'getSelfUsername', 'getRevoked',
+    // `getPaymentStatus` 名字像凭据，其实是「按 server_id 查这条转账/红包消息的权威状态」
+    // （`gateway-read.ts` 里它就在 `resolveChatHistory` 旁边，同一份解密库的纯读）。
+    // 2026-10-14 的 M10 审计矩阵把它从 A 类挪出来：留在 A 类的症状是手机上转账/红包卡片
+    // 显示不出状态，而它读的数据 `getRecords` / `getMessages` 早就允许远程读了 —— 挡不住什么。
+    'getCalls', 'resolveChatHistory', 'getSelfUsername', 'getRevoked', 'getPaymentStatus',
     'editChatMessage', 'listEditedMessages', 'resetEditedMessage',
   ],
   '总览与洞察': [
     'getOverview', 'getOverviewInsights', 'getDailyCounts', 'getWordCloud', 'getRegionMap',
+    'getMapGeoJson',
     'getAnnual', 'getAnnualReport', 'getAnnualReview', 'getGroupInsights',
     'getAssetInsights', 'getStorageStats',
   ],
@@ -141,7 +150,6 @@ const LOCAL_ONLY_BY_FAMILY = {
     'clearOperationLog', 'clearPrivacyAudit',
   ],
   'A 跨设备交接：语义未定，先拒（拿不准一律拒）': ['getHandoffReminds', 'syncHandoffTasks'],
-  'A 支付 / 授权状态（与许可证同族）': ['getPaymentStatus'],
 }
 
 /** 把「按族分组」压平成一个 Set；顺手查出族内重复（重复意味着分类时手滑了）。 */
@@ -166,6 +174,19 @@ const LOCAL_ONLY_METHODS = flatten(LOCAL_ONLY_BY_FAMILY)
 const REMOTE_DENIED_CODE = 'METHOD_NOT_ALLOWED_REMOTE'
 
 /**
+ * 允许远程调用、但被 `remote-policy.js` 判为长任务的方法。
+ *
+ * 这些方法**不**因为“重”就直接从白名单拿掉——手机端的面板（年度报告、单图/单条
+ * 转写、AI 分析）确实要用它们；它们被限制的是**并发与排队预算**：`http-queue.js`
+ * 只让一个远程重活运行、少量重活排队，再多的调用立刻回 `REMOTE_BUSY`，而不是让
+ * 一台手机把单线程 worker 的整条队列填满。此集合不是第二份白名单，它只用于
+ * `http-server.js` 的调度入口与一致性判据，`isRemoteSafe` 仍以白名单为准。
+ */
+const REMOTE_HEAVY_METHODS = Object.freeze(new Set(
+  [...REMOTE_SAFE_METHODS].filter((method) => LONG_CALL_METHODS.has(method)),
+));
+
+/**
  * 这个方法能不能从远程通道调。
  *
  * 刻意写成「查白名单」而不是「查黑名单」：未知方法一律 false。
@@ -174,6 +195,14 @@ const REMOTE_DENIED_CODE = 'METHOD_NOT_ALLOWED_REMOTE'
  */
 function isRemoteSafe(method) {
   return typeof method === 'string' && REMOTE_SAFE_METHODS.has(method)
+}
+
+/**
+ * 这个方法是不是「远程允许但需要按重活预算调度」。
+ * 未知方法一律 false；远程拒绝清单里的方法也不会在这里出现。
+ */
+function isRemoteHeavy(method) {
+  return typeof method === 'string' && REMOTE_HEAVY_METHODS.has(method)
 }
 
 /**
@@ -210,7 +239,9 @@ module.exports = {
   LOCAL_ONLY_BY_FAMILY,
   REMOTE_SAFE_METHODS,
   LOCAL_ONLY_METHODS,
+  REMOTE_HEAVY_METHODS,
   REMOTE_DENIED_CODE,
   NATIVE_CAPABILITIES,
   isRemoteSafe,
+  isRemoteHeavy,
 }

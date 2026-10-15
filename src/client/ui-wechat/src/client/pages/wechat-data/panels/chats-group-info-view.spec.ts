@@ -18,7 +18,16 @@ import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 
 const mem = (i: number): GroupMember => ({ username: `wxid_${i}`, name: `成员${i}` } as GroupMember)
 const MEMBERS: GroupMember[] = Array.from({ length: 100 }, (_, i) => mem(i))
-const INFO = { name: '测试群', announcement: '公告正文', members: MEMBERS } as unknown as GroupInfo
+// D1 后视图会读 settings / owner / totalMembers（只读开关行与群主标）—— 夹具给一份合法 GroupInfo。
+const INFO = {
+  name: '测试群',
+  announcement: '公告正文',
+  members: MEMBERS,
+  totalMembers: MEMBERS.length,
+  owner: 'wxid_1',
+  remark: '',
+  settings: { muted: false, pinned: true, savedToContacts: true, showMemberNickname: false },
+} as unknown as GroupInfo
 
 let host: HTMLDivElement
 let root: Root
@@ -49,6 +58,7 @@ function props(over: Partial<ChatsGroupInfoViewProps> = {}): ChatsGroupInfoViewP
     memberSearch: '',
     memberTotal: MEMBERS.length,
     open: true,
+    onExport: vi.fn(),
     setAnnExpanded: sink.setAnnExpanded,
     setGroupInfoOpen: sink.setGroupInfoOpen,
     setMemberExpanded: sink.setMemberExpanded,
@@ -100,7 +110,6 @@ const typeInto = (input: HTMLInputElement | null, next: string): void => {
 const TILE = 'button[class*="memberTile"]'
 const MORE = 'button[class*="memberMore"]'
 /** 名称那一行。`class*=` 是子串匹配，容器 `groupInfoRows` 与堆叠行 `groupInfoRowStack` 都要排掉。 */
-const NAME_ROW = 'div[class*="groupInfoRow"]:not([class*="groupInfoRows"]):not([class*="groupInfoRowStack"])'
 
 beforeEach(() => {
   ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -280,27 +289,50 @@ describe('群公告', () => {
     expect(textOf('[class*="groupInfoRows"]')).not.toContain('群公告')
   })
 
-  it('未展开 ⇒ 带 data-clamp；展开后去掉夹住，按钮文案换「收起」', () => {
+  it('未展开 ⇒ 带 data-clamp；展开后去掉夹住，入口换成「收起」（D1：入口改为行右箭头，语义走 aria-label）', () => {
     show({ annExpanded: false })
     expect(need(q('[class*="groupInfoAnn"]'), '公告').hasAttribute('data-clamp')).toBe(true)
-    expect(textOf('button[class*="groupInfoAnnToggle"]')).toBe('展开')
+    expect(q('button[aria-label="展开群公告"]'), '折叠态该有展开入口').not.toBeNull()
     show({ annExpanded: true })
     expect(q('[class*="groupInfoAnn"]')?.hasAttribute('data-clamp'), '展开着还夹住 ⇒ 按钮是假的').toBe(false)
-    expect(textOf('button[class*="groupInfoAnnToggle"]')).toBe('收起')
+    expect(q('button[aria-label="收起群公告"]'), '展开态该换成收起入口').not.toBeNull()
   })
 
   it('短到不需要展开时不给展开入口（一颗点了没反应的按钮比没有更糟）', () => {
     show({ annCanExpand: false })
-    expect(q('button[class*="groupInfoAnnToggle"]')).toBeNull()
+    expect(q('button[aria-label="展开群公告"]')).toBeNull()
+    expect(q('button[aria-label="收起群公告"]')).toBeNull()
   })
 
   it('群聊名称按「标签左 / 值右」的行列出，值就是群名', () => {
     show()
-    const rows = qa(NAME_ROW)
+    // D0 行语法统一后行类换成 infoRow；用「含群聊名称」过滤出名称那一行（其余行不含金标）。
+    const rows = qa('div[class*="infoRow_"]').filter((el) => (el.textContent ?? '').includes('群聊名称'))
     expect(rows, '选择器没正好框住名称那一行').toHaveLength(1)
     const t = rows[0]?.textContent ?? ''
     expect(t).toContain('群聊名称')
     expect(t).toContain('测试群')
     expect(t.indexOf('群聊名称'), '标签排在值后面 ⇒ 又长成"标签上/值下"的块了').toBeLessThan(t.indexOf('测试群'))
+  })
+})
+
+describe('微信对齐（D1）：无公告时抽屉仍被官方区填满', () => {
+  it('没有公告 ⇒ 四条只读开关行与底部导出槽仍在（空半屏的复发位）', () => {
+    show({ groupInfo: { ...INFO, announcement: '' } as GroupInfo })
+    expect(host.querySelectorAll('[role="switch"]').length, '开关行少了 ⇒ 抽屉又空半屏（D1 复发）').toBe(4)
+    const exp = [...host.querySelectorAll('button')].find((b) => b.textContent === '导出聊天记录')
+    expect(exp, '底部动作位没了（D7）').not.toBeUndefined()
+  })
+
+  it('开关是只读的：aria-disabled 且不是 input（L13 死控件纪律）', () => {
+    show()
+    const sw = need(host.querySelector('[role="switch"]'), '开关')
+    expect(sw.getAttribute('aria-disabled'), '只读开关丢了 aria-disabled ⇒ 假可用').toBe('true')
+    expect(sw.tagName, '开关变成了 input ⇒ 承诺了写回能力').not.toBe('INPUT')
+  })
+
+  it('群主标落在 owner 那颗 tile 上，且只有一颗', () => {
+    show()
+    expect(host.querySelectorAll('[class*="memberBadge"]').length, '群主标不唯一 ⇒ 标错人').toBe(1)
   })
 })

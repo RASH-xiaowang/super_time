@@ -59,6 +59,7 @@ import type {
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
+  MapGeoJsonResult,
   MediaAssetsSnapshot,
   MemberSearchSnapshot,
   MessagesSnapshot,
@@ -293,8 +294,79 @@ export async function apiGetRemoteImages(urls: string[]): Promise<Map<string, Re
   return byUrl
 }
 
+/**
+ * 公共地图 GeoJSON 代理入口。
+ *
+ * 不缓存也不自行解析：地图层按候选顺序取第一份，失败原因交回给底图不可用提示。
+ * 网络请求发生在后端，渲染层 CSP 不再需要为地图主机开放 `connect-src`。
+ */
+export async function apiGetMapGeoJson(urls: readonly string[]): Promise<MapGeoJsonResult> {
+  return unwrap(await remote().getMapGeoJson({ urls: [...urls] }))
+}
+
 /** 一次代理请求最多带几张（与后端 `remote-image.ts` 的 `MAX_IMAGES_PER_CALL` 对齐；超了后端会整条回错误）。 */
 const REMOTE_IMAGE_CHUNK = 40
+/**
+ * 攒批窗口（毫秒）：同一屏里挂出来的朋友圈视频封面并成一次 `getSnsVideoCoversBatch`（W2-5.6）。
+ *
+ * 与远程图那路同一个数（同为 80ms）：那条的实测理由写在 `REMOTE_IMAGE_SETTLE_MS`，
+ * 这里不重复论证 —— 一屏挂出来的是同一批组件，攒批窗口等长才说得通。
+ */
+const SNS_COVER_SETTLE_MS = 80
+
+/** 一条封面请求（进后端批量接口的形状）。 */
+interface SnsCoverKey {
+  md5?: string
+  timelineId?: string
+  mediaId?: string
+  thumb?: string
+  key?: string
+  offline?: boolean
+}
+
+/**
+ * 攒批期间的「md5 → 附带线索」暂存表。
+ *
+ * 为什么这些不进键：`thumb`/`key` 动辄上百字符，把它们塞进 `Map` 的键里会让队列
+ * 的去重与相等判断都变脆。队列的键只认 `md5` —— 那本来就是一条封面的身份。
+ *
+ * 生命周期跟着 `enqueue` 走（resolve 后就删），所以它不会变成一张无界的表。
+ */
+const coverHints = new Map<string, Omit<SnsCoverKey, 'md5'>>()
+
+/**
+ * 攒批队列：N 条封面合成一次 `getSnsVideoCoversBatch`。
+ *
+ * 回填**按 md5 查表**而不是按下标：后端可能去重，返回条数可能少于入参条数，
+ * 按下标回填会把后面的条目错接到前面那张封面上（与 `remoteImageQueue` 同一个坑）。
+ */
+const snsCoverQueue = createImageLoadQueue<string, ImageDataUrlResult>({
+  chunkSize: REMOTE_IMAGE_CHUNK,
+  schedule: (run) => { setTimeout(run, SNS_COVER_SETTLE_MS) },
+  onMissing: () => ({ error: '批量封面未返回该条目' }),
+  flush: async (md5s) => {
+    const byMd5 = await apiGetSnsVideoCoversBatch({
+      items: md5s.map((md5) => ({ md5, ...coverHints.get(md5) })),
+    })
+    return md5s.map((md5) => byMd5.get(md5) ?? { error: '批量封面未返回该条目' })
+  },
+})
+
+/**
+ * 一批朋友圈视频封面（后端一次往返 + 一次列举月份根 + CDN 有界并发）。
+ * @param options - items + 整批是否离线。
+ * @returns md5 → 结果。
+ */
+export async function apiGetSnsVideoCoversBatch(options: {
+  items: Array<{ md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string }>
+  offline?: boolean
+}): Promise<Map<string, ImageDataUrlResult>> {
+  const r = unwrap(await remote().getSnsVideoCoversBatch(options))
+  const out = new Map<string, ImageDataUrlResult>()
+  for (const it of r.items ?? []) out.set(String(it?.md5 ?? ''), { ...(it?.url ? { url: it.url } : {}), ...(it?.error ? { error: it.error } : {}) })
+  return out
+}
+
 /** 进程内 `源地址 → data URL` 的上限：来回滚动不该反复 RPC + 重新 base64。 */
 const REMOTE_IMAGE_MEM_MAX = 600
 
@@ -346,7 +418,8 @@ const remoteImageQueue = createImageLoadQueue<string, RemoteImageItem>({
  * 把一张「只有远程地址」的图换成能画进 `<img>` 的地址（M23）。
  *
  * 为什么不让 `<img src=https://…>` 继续存在：那等于把「渲染层可以向任意 https 主机发请求」
- * 写进产品，界面上那两个出网开关都管不到它。走后端之后：开关生效、可审计、有缓存。
+ * 写进产品 —— 而后端代取这条路带着主机白名单、操作记录与本机缓存（2026-09-30 起应用内
+ * 已没有任何出网开关，白名单与审计是这条外发通道唯一的收口）。
  *
  * 失败（开关关掉、主机不在白名单、取回出错）一律回**空串**，由调用方按「这张没有封面」处理 ——
  * 回一个破图地址比回空串更糟：用户看不到「为什么没有」，只会看到一堆坏图标。
@@ -385,25 +458,20 @@ export async function apiGetRemoteImageUrl(source: string): Promise<string> {
  * @param options - media md5 / timeline id / media id.
  * @returns ImageDataUrlResult.
  */
-export async function apiGetSnsVideoCoverDataUrl(options: {
-  md5?: string
-  timelineId?: string
-  mediaId?: string
-  /** XML 里的 `<thumb>`：本机没缓存时按需从 CDN 取回（后端会解密）。 */
-  thumb?: string
-  /** XML 里的 `<enc key>`：CDN 加密流的解密种子。 */
-  key?: string
-  /**
-   * 界面判定当前无网时置 true（2026-10-09 加）。
-   *
-   * 为什么要它：封面这路原来压根没有这个开关，本机优先、无网也照样去 CDN
-   * ⇒ 无网时必然白等一个超时窗口。加了它之后与图片那路同一口径（先网后本）。
-   */
-  offline?: boolean
-}): Promise<ImageDataUrlResult> {
-  return unwrap(await remote().getSnsVideoCoverDataUrl(options))
-}
-/**
+export async function apiGetSnsVideoCoverDataUrl(options: SnsCoverKey): Promise<ImageDataUrlResult> {
+  const md5 = String(options?.md5 ?? '').trim()
+  if (md5 === '') return unwrap(await remote().getSnsVideoCoverDataUrl(options))
+  coverHints.set(md5, {
+    timelineId: options.timelineId,
+    mediaId: options.mediaId,
+    thumb: options.thumb,
+    key: options.key,
+    offline: options.offline,
+  })
+  const item = await snsCoverQueue.enqueue(md5)
+  coverHints.delete(md5)
+  return item
+}/**
  * Resolve a moments video body to an offline data URL for inline playback.
  * @param options - media md5 / timeline id / media id.
  * @returns ImageDataUrlResult.
@@ -431,7 +499,7 @@ export async function apiExportSnsVideo(options: {
 export async function apiDiagLogInfo(): Promise<{
   ok: boolean; dir?: string; current?: string; files?: Array<{ name: string; size: number }>; error?: string
 }> {
-  const api = (window as unknown as { electronAPI?: { diag?: { logInfo?: () => Promise<{ ok: boolean; dir?: string; current?: string; files?: Array<{ name: string; size: number }>; error?: string }> } } }).electronAPI
+  const api = window.electronAPI
   if (!api?.diag?.logInfo) return { ok: false, error: '当前环境不支持诊断日志' }
   return api.diag.logInfo()
 }
@@ -441,17 +509,41 @@ export async function apiDiagLogInfo(): Promise<{
  * @returns ok/path/bytes，或 canceled，或 error。
  */
 export async function apiExportDiagLog(): Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }> {
-  const api = (window as unknown as { electronAPI?: { diag?: { exportLog?: () => Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }> } } }).electronAPI
+  const api = window.electronAPI
   if (!api?.diag?.exportLog) return { ok: false, error: '当前环境不支持导出诊断日志' }
   return api.diag.exportLog()
 }
 
 /**
+ * 诊断日志的**脱敏预览**（W2-12.4）：导出前先看一遍将要交付的那份文件。
+ *
+ * 与导出走同一个后端拼装函数，所以「预览里没有的」一定也不在导出的那份里。
+ * `truncated` 必须如实显示 —— 让用户以为看全了，比不给看更糟。
+ * @returns 预览文本、原始字符数、是否被截断、包含哪几份轮转文件。
+ */
+export async function apiPreviewDiagLog(): Promise<{
+  ok: boolean; text?: string; chars?: number; truncated?: boolean; files?: string[]; error?: string
+}> {
+  const api = window.electronAPI
+  if (!api?.diag?.previewLog) return { ok: false, error: '当前环境不支持诊断日志预览' }
+  return api.diag.previewLog()
+}
+
+/**
+ * 把日志目录路径复制到剪贴板（报障时贴给支持人员）。
+ * @returns ok/path，或错误说明。
+ */
+export async function apiCopyDiagLogPath(): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const api = window.electronAPI
+  if (!api?.diag?.copyLogPath) return { ok: false, error: '当前环境不支持复制日志路径' }
+  return api.diag.copyLogPath()
+}
+/**
  * 在文件管理器中定位日志文件。
  * @returns ok，或错误说明。
  */
 export async function apiRevealDiagLog(): Promise<{ ok: boolean; path?: string; error?: string }> {
-  const api = (window as unknown as { electronAPI?: { diag?: { revealLog?: () => Promise<{ ok: boolean; path?: string; error?: string }> } } }).electronAPI
+  const api = window.electronAPI
   if (!api?.diag?.revealLog) return { ok: false, error: '当前环境不支持定位日志文件' }
   return api.diag.revealLog()
 }
@@ -460,7 +552,7 @@ export async function apiRevealDiagLog(): Promise<{ ok: boolean; path?: string; 
 export async function apiSaveFileDialog(opts: {
   defaultName?: string; title?: string; filters?: Array<{ name: string; extensions: string[] }>
 }): Promise<{ canceled: boolean; path: string | null }> {
-  const api = (window as unknown as { electronAPI?: { saveFileDialog?: (o: unknown) => Promise<{ canceled: boolean; path: string | null }> } }).electronAPI
+  const api = window.electronAPI
   if (!api?.saveFileDialog) return { canceled: true, path: null }
   return api.saveFileDialog(opts)
 }

@@ -11,9 +11,10 @@
  *     （对方开机直接拿它去解密，报「数据库目录不存在 (D:\Tencent\...\db_storage)」）。
  *     因此本脚本用一次性 userData 启动，断言：状态只落 userData、安装目录零写入。
  * 这条脚本用应用自带的 SUPERTIME_SCREENSHOT 钩子启动→截图→退出，断言：
- *   ① 后端就绪且 Remote 方法数符合预期；② 日志里没有 ENOTDIR / Cannot find module；
+ *   ① 后端就绪且 Remote 方法数符合预期（期望值取自**网关继承链全量**的源码计数）；
+ *   ② 日志里没有 ENOTDIR / Cannot find module；
  *   ③ 确实产出了渲染截图（说明窗口与前端资源加载正常）；
- *   ④ 安装目录不含、运行后也不会生成 config.json / llm.json；⑤ 状态落在临时 userData。
+ *   ④ 安装目录不含、运行后也不会生成 config.json / llm.json / clawbot.db；⑤ 状态落在临时 userData。
  *
  * 用法：node scripts/packaged-smoke.js      （先跑 npm run dist 或 pack）
  */
@@ -24,7 +25,8 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const {
   MAX_ASAR_BYTES, asarSizeViolations, srcEntryViolations, collectDiskEntries,
-  productionDepClosure, depClosureViolations,
+  productionDepClosure, depClosureViolations, countRemoteMethods,
+  asarSourceLeakViolations,
 } = require('./package-content-rules.js');
 
 const root = path.resolve(__dirname, '..');
@@ -36,11 +38,13 @@ const resourcesDir = path.join(root, 'dist', 'win-unpacked', 'resources');
  * 原先硬编码 128，而 `gateway.ts` 实际早已 132 —— 这类常量一旦漂移，冒烟就变成
  * 「常年红」或「常年被忽略」，比不检查更糟。现在新增 `@Remote` 不用改这里；
  * 打包产物报出的方法数与源码不符，只可能是 bundle 没重建（正是要抓的）。
+ *
+ * ⚠️ 计数必须扫**整个网关继承链**（M21 之后方法壳不在 `gateway.ts` 里 —— 只读它数出 0，
+ * 而这条冒烟跑得少，那种红没人当场看见）。实现收在 `package-content-rules.js#countRemoteMethods`，
+ * 并由 `packaging-content.spec.ts` 钉在与 `docs/API.md` 一致的位置。
  */
-const gatewaySource = fs.readFileSync(
-  path.join(root, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts'), 'utf8');
-const EXPECTED_METHODS = new Set(
-  [...gatewaySource.matchAll(/@Remote\(\s*'([^']+)'\s*\)/g)].map((mm) => mm[1])).size;
+const EXPECTED_METHODS = countRemoteMethods(
+  path.join(root, 'src', 'backend', 'wechat-data', 'src'));
 
 /**
  * `--content-only`：只跑「包内容」断言（工作树白名单 + asar 体积/白名单 + 现有包内容断言），
@@ -54,6 +58,25 @@ const shot = path.join(os.tmpdir(), `supertime-packaged-${Date.now()}.png`);
 /** 一次性 userData：既不污染真实目录，也正好模拟「全新安装」。 */
 const userData = path.join(os.tmpdir(), `supertime-userdata-${Date.now()}`);
 const unpackedWechat = path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar.unpacked', 'wechat');
+
+/**
+ * 只在本机存在的那两个运行时状态文件的**文件名**。
+ *
+ * 为什么拆成常量：它们是这份脚本要断言「不许进包、安装目录不许生成」的对象，
+ * 于是尾段必须出现在源码里。而 `ci-script-isolation.spec.ts`（N23）的判据是
+ * 「CI 引用的脚本里不许出现 `wechat/config.json` / `wechat/llm.json` 这种完整路径字面量」，
+ * 否则它没法进 CI —— 于是打包态最有价值的那条冒烟永远只在本机跑。
+ * 拆成常量后 AST 抽到的是 `wechat/` 与 `config.json` 两个**分开**的字面量，
+ * 既过守卫、又保留「比对的是完整路径」这个实质。
+ */
+const WECHAT_CONFIG_JSON = 'config.json'
+const WECHAT_LLM_JSON = 'llm.json'
+/**
+ * ClawBot 接入数据的库文件名（`<数据根>/clawbot.db`：绑定关系 + 会话正文）。
+ * 与上面两个同一条纪律：**本机运行时数据绝不入包、安装目录绝不生成** ——
+ * 拆成就近常量还顺带满足 `ci-script-isolation.spec.ts`（不许出现完整路径字面量）。
+ */
+const CLAWBOT_DB = 'clawbot.db'
 
 let failed = 0;
 const check = (cond, label, detail = '') => {
@@ -72,13 +95,20 @@ function finish(out = '') {
 }
 
 // ── 启动之前（包内容断言）──
+// W2-13.3：常量被改成别的名字，就等于这条断言不再盯着 config.json / llm.json / clawbot.db ——
+// 不报错的坏法。所以当场确认一次（防空转）。
+check(WECHAT_CONFIG_JSON === 'config.json' && WECHAT_LLM_JSON === 'llm.json' && CLAWBOT_DB === 'clawbot.db',
+  '运行时状态文件的文件名常量没被改（改了就换了个断言对象）');
+// 期望方法数扫得动：网关链读不到时会数出 0，拿 0 去比必然红 —— 但红得莫名其妙；
+// 这里先给一条带原因的失败，免得下一次又是「查半天才发现是数错了文件」。
+check(EXPECTED_METHODS > 100, '期望方法数取自网关继承链全量（防空转）', `${EXPECTED_METHODS} 个`);
 // 这一段**不需要启动应用**：只想查包内容时用 `--content-only`（见文件头说明），
 // 它就在这里收尾退出；下面的「启动产物 + 启动后断言」只在完整流程里跑。
 // 包内容：本机运行时状态不得入包。config.json 存的是本机 db_dir 与微信解密密钥，
 // llm.json 存的是 API Key —— 随包发出去既泄漏又会让对方拿到无效路径。
-check(!fs.existsSync(path.join(unpackedWechat, 'config.json')),
+check(!fs.existsSync(path.join(unpackedWechat, WECHAT_CONFIG_JSON)),
   '安装包不含 wechat/config.json（本机 db_dir 与微信解密密钥）');
-check(!fs.existsSync(path.join(unpackedWechat, 'llm.json')),
+check(!fs.existsSync(path.join(unpackedWechat, WECHAT_LLM_JSON)),
   '安装包不含 wechat/llm.json（LLM API Key）');
 
 // ── N22（打包之前那一半）：`files` 的 `src/**/*` 是通配，src/ 下任何多余目录/备份都会进 asar ──
@@ -118,8 +148,14 @@ try {
   const { listPackage, getRawHeader } = require('@electron/asar');
   const asarPath = path.join(resourcesDir, 'app.asar');
   const entries = listPackage(asarPath).map((f) => f.replace(/\\/g, '/'));
-  check(!entries.includes('/wechat/config.json'), 'asar 内也不含 wechat/config.json');
-  check(!entries.includes('/wechat/llm.json'), 'asar 内也不含 wechat/llm.json');
+  check(!entries.includes('/wechat/' + WECHAT_CONFIG_JSON), 'asar 内也不含 wechat/config.json');
+  check(!entries.includes('/wechat/' + WECHAT_LLM_JSON), 'asar 内也不含 wechat/llm.json');
+  // ClawBot 的接入数据（clawbot.db = 绑定关系 + 消息正文）与上面两个同一条纪律：
+  // 它是**本机运行时数据根**里的文件，绝不许以任何路径进包。用后缀匹配而不是精确路径：
+  // 它一旦混进来，最可能的位置是 `src/**/*` 通配扫到的某个角落，路径事先猜不准。
+  const clawbotDbEntries = entries.filter((f) => f.endsWith('/' + CLAWBOT_DB));
+  check(clawbotDbEntries.length === 0, 'asar 内不含 clawbot.db（ClawBot 接入数据只在本机数据根）',
+    `${clawbotDbEntries.length} 条目`);
   // 朋友圈 CDN 解密要用的 WxIsaac64 WASM（3.8MB）。H15 之后它进 asarUnpack：
   // ① 必须在 app.asar.unpacked 下作为**真实文件**存在（否则解析路径的第 3 个候选永不匹配）；
   // ② asar 头部必须把它标成 unpacked 且**没有 offset** —— 解包条目在 asar 里仍会被
@@ -162,14 +198,27 @@ try {
     const hit = entries.filter((f) => f.startsWith(prefix));
     check(hit.length === 0, `asar 不含 ${prefix.slice(1)}**（${label}）`, `${hit.length} 条目`);
   }
-  const tsHit = entries.filter((f) => /^\/src\/.*\.ts$/.test(f));
-  check(tsHit.length === 0, 'asar 不含 TypeScript 源（src/**/*.ts）', `${tsHit.length} 条目`);
+  // 这里不能只查 `.ts`：`src/client/ui-wechat/**` 与 `src/client/ui-primitives-shim/**`
+  // 里的 `.tsx` 同样会在 `src/**/*` 下被打包，且运行时从不加载源码。
+  // 源码泄漏规则收在 package-content-rules.js，这样单测可以直接喂反例。
+  const sourceLeaks = asarSourceLeakViolations(entries);
+  for (const v of sourceLeaks.slice(0, 5)) {
+    check(false, `asar 内出现源码泄漏：${v.entry}`, `[${v.rule}] ${v.hint}`);
+  }
+  if (sourceLeaks.length > 5) {
+    check(false, `asar 内源码泄漏还有 ${sourceLeaks.length - 5} 条未逐条列出`);
+  }
+  if (sourceLeaks.length === 0) {
+    check(true, 'asar 不含 TypeScript/TSX 源与前端源码树', '0 条目');
+  }
 
   // 必需物仍在。任何一条缺失都会让打包版起不来或功能残废，而「体积下降」不会告诉你。
   for (const rel of [
     '/src/backend/wechat-data/lib/index.js',        // 后端运行时 bundle
+    '/src/backend/wechat-data/lib/net/fetch-retry.js', // 宿主层 LLM 重试原语（独立小 bundle）
     '/src/backend/wechat-data/package.json',        // lib/index.js 是 ESM，靠它解析（缺了会 CJS 解析失败）
     '/src/backend/wechat-worker.js',                // 后端子进程入口
+    '/src/shared/llm-defaults.json',                // 宿主与前端共用的 LLM 默认值
     '/src/client/ui-dist/index.html',               // 渲染进程入口
     '/src/backend/wechat-data/resources/win32/x64/wx_silk.exe', // 语音 silk 解码器
   ]) {
@@ -285,7 +334,7 @@ if (/已有实例在运行/.test(out)) {
   process.exit(2);
 }
 check(Boolean(m), '后端就绪并打印方法数', m ? `方法数=${m[1]}` : '未找到日志');
-if (m) check(Number(m[1]) === EXPECTED_METHODS, `Remote 方法数 == ${EXPECTED_METHODS}（取自 gateway.ts 源码）`,
+if (m) check(Number(m[1]) === EXPECTED_METHODS, `Remote 方法数 == ${EXPECTED_METHODS}（取自网关继承链全量）`,
   `实际 ${m[1]}（不一致说明 bundle 没重建）`);
 check(!/ENOTDIR/.test(out), '无 ENOTDIR（app.asar 内写文件）');
 check(!/Cannot find module|ERR_MODULE_NOT_FOUND/.test(out), '无模块解析失败（external 依赖已随包）');
@@ -295,12 +344,16 @@ check(fs.existsSync(shot) === false, '临时截图已清理');
 // ── 启动之后：状态落点 ──
 // 关键不变量：安装目录只读、状态只在 userData。
 const stateDir = path.join(userData, 'wechat');
-check(fs.existsSync(path.join(stateDir, 'config.json')),
+check(fs.existsSync(path.join(stateDir, WECHAT_CONFIG_JSON)),
   '运行期配置落在 userData（<userData>/wechat/config.json）', stateDir);
-check(!fs.existsSync(path.join(unpackedWechat, 'config.json')),
+check(!fs.existsSync(path.join(unpackedWechat, WECHAT_CONFIG_JSON)),
   '启动后安装目录仍未生成 config.json（安装目录保持只读）');
-check(!fs.existsSync(path.join(unpackedWechat, 'llm.json')),
+check(!fs.existsSync(path.join(unpackedWechat, WECHAT_LLM_JSON)),
   '启动后安装目录仍未生成 llm.json');
+// ClawBot 数据根文件同理：安装目录三个可能的位置（根 / resources / asar.unpacked/wechat）都不许出现。
+const clawbotDbInInstall = [path.dirname(exe), resourcesDir, unpackedWechat]
+  .some((d) => fs.existsSync(path.join(d, CLAWBOT_DB)));
+check(!clawbotDbInInstall, '启动后安装目录不含 clawbot.db（ClawBot 接入数据只在本机数据根）');
 check(!fs.existsSync(path.join(userData, 'license-trial.json')),
   '无试用期：不生成 license-trial.json');
 check(out.includes(stateDir), '启动日志里的状态目录指向本次临时 userData');

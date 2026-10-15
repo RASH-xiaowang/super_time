@@ -398,6 +398,7 @@ export interface SettingsVoiceSectionProps {
   setWhisperModelsDir: React.Dispatch<React.SetStateAction<string>>
   setWhisperThreads: React.Dispatch<React.SetStateAction<number>>
   skipTranscribe: () => void
+  cancelWhisperDownload: () => Promise<void>
   voiceOpMsg: { kind: 'ok' | 'err'; text: string } | null
   whisperDevice: 'cpu' | 'gpu'
   whisperDirMsg: { kind: 'ok' | 'err'; text: string } | null
@@ -412,7 +413,7 @@ export interface SettingsVoiceSectionProps {
 }
 
 export function SettingsVoiceSection({
-  batchTranscribe, installEngine, nativeTranscribe,
+  batchTranscribe, cancelWhisperDownload, installEngine, nativeTranscribe,
   pickWhisperDir, refreshWhisper, setWhisperDevice,
   setWhisperModel, setWhisperModelsDir, setWhisperThreads,
   skipTranscribe, voiceOpMsg, whisperDevice,
@@ -491,9 +492,10 @@ export function SettingsVoiceSection({
           {(() => {
             const models = whisperStatus?.models ?? WHISPER_MODEL_FALLBACK
             const current = models.find((m) => m.id === whisperModel)
-            const downloadingThis = whisperDownloading?.model === whisperModel
-            const pct = downloadingThis && whisperDownloading.total > 0
-              ? Math.round((whisperDownloading.received / whisperDownloading.total) * 100)
+            // W3-5.5：进度条对两路都有效（引擎包也是下载）。
+            const downloading = whisperDownloading
+            const pct = downloading !== null && downloading.total > 0
+              ? Math.round((downloading.received / downloading.total) * 100)
               : 0
             return (
               <div className={modelCss.whisperPick}>
@@ -506,10 +508,12 @@ export function SettingsVoiceSection({
                     label: `${m.name} · ${m.sizeLabel}${m.installed ? ' · 已安装' : ''}`,
                   }))}
                 />
-                {downloadingThis ? (
+                {downloading !== null ? (
                   <span className={modelCss.modelProgress}>
                     <span className={modelCss.modelProgressTrack}><span className={modelCss.modelProgressFill} style={{ width: `${Math.max(2, pct)}%` }} /></span>
-                    <span className={modelCss.modelProgressPct}>{pct}%</span>
+                    <span className={modelCss.modelProgressPct}>{downloading.model === 'engine' ? '引擎' : `${pct}%`}</span>
+                    {/* W3-5.5：取消不删已下载的部分，所以它无损，应该常驻。 */}
+                    <button type="button" className={modelCss.modelProgressStop} onClick={() => { void cancelWhisperDownload() }}>停止</button>
                   </span>
                 ) : current?.installed ? (
                   <span className={clsx(modelCss.modelDownload, modelCss.modelDownloadDone)}>已就绪</span>

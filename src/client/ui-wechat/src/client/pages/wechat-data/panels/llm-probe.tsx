@@ -18,6 +18,7 @@ import {
   formatBalance,
   type WechatLlmConfig,
 } from '../api.ts'
+import llmDefaults from '../../../../../../../shared/llm-defaults.json'
 import css from './ai-model.module.css'
 
 /** 端点解析：地址/Key/路径按"留空回落上一套"的规则算（与后端取数时同一套口径）。 */
@@ -26,7 +27,7 @@ function endpointOf(kind: 'chat' | 'embed' | 'rerank', cfg: WechatLlmConfig): { 
     return {
       apiUrl: cfg.embeddingApiUrl?.trim() || cfg.apiUrl,
       apiKey: cfg.embeddingApiKey?.trim() || cfg.apiKey,
-      path: cfg.embedPath?.trim() || '/embeddings',
+      path: cfg.embedPath?.trim() || llmDefaults.embedPath,
       model: cfg.embeddingModel?.trim() || cfg.model,
     }
   }
@@ -34,7 +35,7 @@ function endpointOf(kind: 'chat' | 'embed' | 'rerank', cfg: WechatLlmConfig): { 
     return {
       apiUrl: cfg.rerankApiUrl?.trim() || cfg.apiUrl,
       apiKey: cfg.rerankApiKey?.trim() || cfg.apiKey,
-      path: cfg.rerankPath?.trim() || '/rerank',
+      path: cfg.rerankPath?.trim() || llmDefaults.rerankPath,
       model: cfg.rerankModel?.trim() || '',
     }
   }

@@ -39,7 +39,7 @@ export declare const TRANSCRIBE_CONCURRENCY = 2;
  */
 export declare function asciiPathForWhisper(filePath: string, aliasBase: string): string;
 /**
- * 与 {@link whisperOne} 同语义，但 whisper 走**异步 spawn**（2026-10-13）。
+ * Whisper 走**异步 spawn**（2026-10-13）。
  *
  * 为什么需要：内联分析（`laya/analysis.ts` 的 analyzeVisibleMessages）会给每条语音消息
  * 做转写，而 `spawnSync` 让整个 worker 在 whisper 的 2–4 秒里**完全独占**——用户实测
@@ -48,17 +48,7 @@ export declare function asciiPathForWhisper(filePath: string, aliasBase: string)
  */
 export declare function whisperOneAsync(bin: string, modelPath: string, wavPath: string, outBase: string): Promise<string>;
 /**
- * Transcribe one voice message by (username, local_id) — used by the chat
- * bubble's 语音转文字 button.
- * @returns { ok:true, text } or { ok:false, error }.
- */
-export declare function transcribeOneVoice(decryptedDir: string, decodedDir: string, modelsDir: string, modelId: string, engineBin: string, username: string, localId: number): {
-    ok: boolean;
-    text?: string;
-    error?: string;
-};
-/**
- * 与 {@link transcribeOneVoice} 同语义，但 whisper 走**异步 spawn**——
+ * Whisper 走**异步 spawn**——
  * 内联分析路径专用（`laya/analysis.ts` 会 `await` 它）：转写期间 worker
  * 不再被独占，消息查询/会话列表照常服务（2026-10-13 用户报「新消息同步慢」的根因修复）。
  */

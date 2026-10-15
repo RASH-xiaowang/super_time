@@ -98,6 +98,7 @@ import type {
   VerifyImageKeyResult,
   VerifyKeyResult,
   VideoInfoResult,
+  VoiceDataUrlResult,
   VoiceInfoResult,
   VoiceTranscriptResult,
   VoiceTranscribeOneResult,
@@ -117,7 +118,7 @@ import {
   subscribeSnapshot,
   writeRenderCache,
 } from './cache.ts'
-import { ExportProgressSnapshot, SummaryRecordSnapshotRead, SummaryTaskSnapshotRead, TasksSnapshotRead, VoicePlaybackResult, remote, unwrap } from './api-core.ts'
+import { ExportProgressSnapshot, SummaryRecordSnapshotRead, SummaryTaskSnapshotRead, TasksSnapshotRead, remote, unwrap } from './api-core.ts'
 
 /**
  * 取消一个在跑的导出/备份任务（M3）。
@@ -164,9 +165,9 @@ export async function apiGetVoiceInfo(options: { username: string; localId: numb
 /**
  * Fetch a voice message as an inline-playable wav data URL.
  * @param options - Query options: username and message localId.
- * @returns VoicePlaybackResult.
+ * @returns VoiceDataUrlResult.
  */
-export async function apiGetVoiceDataUrl(options: { username: string; localId: number }): Promise<VoicePlaybackResult> {
+export async function apiGetVoiceDataUrl(options: { username: string; localId: number }): Promise<VoiceDataUrlResult> {
   return unwrap(await remote().getVoiceDataUrl(options))
 }
 /**
@@ -326,6 +327,7 @@ export async function apiExportAnnualReport(options: {
   format: string
   dir?: string
   filename?: string
+  jobId?: string
 }): Promise<ExportResult> {
   return unwrap(await remote().exportAnnualReport(options))
 }
@@ -353,7 +355,7 @@ export async function apiExportMoments(options?: {
   return unwrap(await remote().exportMoments(options))
 }
 
-export async function apiExportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): Promise<ExportResult> {
+export async function apiExportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string; jobId?: string }): Promise<ExportResult> {
   return unwrap(await remote().exportCsv(options))
 }
 

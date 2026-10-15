@@ -1,6 +1,7 @@
 /**
- * **现场验证**（默认跳过；`SNS_LIVE=1` 才跑）：用真库的真实媒体、真 CDN、真 WxIsaac64 WASM
- * 走完整条链，把解出的图落盘到 `working/live-sns-*.jpg`，供人眼确认。
+ * **现场验证**（默认跳过；`SNS_LIVE=1` 且 `SNS_LIVE_DB` 指向真库才跑）：用真库的真实媒体、
+ * 真 CDN、真 WxIsaac64 WASM 走完整条链，把解出的图落盘到
+ * `SNS_LIVE_OUT`（默认 `working/live-sns-*.jpg`），供人眼确认。
  *
  * 这条用例存在的意义：单元判据只能证明"代码形状对"，证明不了"这张图真的能显示"。
  * 之前所有失败都发生在这一步，而它在应用里不可观测。
@@ -16,13 +17,14 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { snsCdnUrl } from '../src/query/sns-cdn-url.ts'
 import { decryptSnsAll } from '../src/query/sns-keystream.ts'
 
-const DB = 'C:/Users/Administrator/AppData/Roaming/super-time-electron/wechat-data/decrypted/sns/sns.db'
-const OUT = 'D:/super-time-wechat/working'
-const LIVE = process.env['SNS_LIVE'] === '1'
+const DB = process.env['SNS_LIVE_DB'] ?? ''
+const OUT = process.env['SNS_LIVE_OUT'] ?? join(process.cwd(), 'working')
+const LIVE = process.env['SNS_LIVE'] === '1' && DB !== ''
 
 interface Pick {
   url: string
@@ -82,7 +84,7 @@ describe.skipIf(!LIVE)('live: 朋友圈 CDN 取图 + 整份解密（真库/真�
       lines.push('#' + String(i) + ' HTTP ' + String(res.status) + ' raw=' + String(raw.length) +
         ' dec=' + String(dec.length) + ' seed=' + (m.encKey !== '' ? 'enc' : 'urlKey') +
         ' jpeg=' + String(isJpeg) + ' tail=' + String(tailOk) + ' head=' + head)
-      if (isJpeg && tailOk) { writeFileSync(OUT + '/live-sns-' + String(i) + '.jpg', dec); ok += 1 }
+      if (isJpeg && tailOk) { writeFileSync(join(OUT, 'live-sns-' + String(i) + '.jpg'), dec); ok += 1 }
     }
     console.log('\n=== 现场结果 ===\n' + lines.join('\n') + '\n完整成图: ' + String(ok) + '/' + String(media.length))
     expect(ok, '没有任何一张解成完整图片（见上面的逐张明细）').toBeGreaterThan(0)

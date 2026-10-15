@@ -5,7 +5,7 @@
  * group_codes (people: contact↔contact by common groups; groups: group↔group
  * by common members), like the source GraphModel.
  */
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

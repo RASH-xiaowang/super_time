@@ -7,7 +7,7 @@
 
 ```bash
 npm ci          # 含 file: 内联依赖，别用 npm install
-npm run dev     # 构建前端 + 后端 bundle 后启动 Electron
+npm run dev     # 构建前端 + 后端 bundle + 类型声明后启动 Electron
 npm test        # 单测（不联网、不依赖真实微信数据）
 ```
 
@@ -23,7 +23,7 @@ npm test        # 单测（不联网、不依赖真实微信数据）
 npm run typecheck          # 5 棵树：后端 / ui-wechat / ui-app / checks / tests
 npm test                   # 全量 vitest
 npm run build:backend      # 改了后端 src 就必须重建 bundle
-npm run build:types        # 改了后端导出就必须重生成 lib/types
+npm run build:types        # 改了后端导出就必须清空并重生成 lib/types
 npm run docs:api:check     # 方法面变了要先跑 npm run docs:api 再检
 npm run check:shim         # 前端 shim 与源码逐字节一致
 npm run lint:db            # 唯一一条 ESLint 闸门：连接的所有权（1.7 秒）
@@ -35,7 +35,7 @@ npm run lint:db            # 唯一一条 ESLint 闸门：连接的所有权（1
 （为什么这么分工、以及按直觉写会误伤哪 32 处推荐写法，都记在 [`../eslint.config.mjs`](../eslint.config.mjs) 的头注里）。
 CI 不另开这一步：`npm test` 里的 `eslint-db-discipline.spec.ts` 会用 ESLint 的 API 把同一份配置跑在真实生产树上。
 
-CI 会重跑同一套并把"重建后 `git diff` 必须为空"当门禁 —— **改后端 `src` 就要把 `lib/`（和 `docs/API.md`）一起提交**，
+CI 会重跑同一套并把"临时目录重建后与当前工作树逐字节一致"当门禁 —— **改后端 `src` 就要把 `lib/`（和 `docs/API.md`）一起提交**，
 否则门禁红。
 
 ## 3. 每个修复要交四件东西
@@ -53,7 +53,7 @@ CI 会重跑同一套并把"重建后 `git diff` 必须为空"当门禁 —— *
 npm run check:mutation -- --only M5   # 前缀匹配；--only 省略则跑全表
 ```
 
-登记表在 [`../scripts/mutations-registry.mjs`](../scripts/mutations-registry.mjs)（按 1000 行闸门切了 batch3 / batch3b / batch3c）。
+登记表在 [`../scripts/mutations-registry.mjs`](../scripts/mutations-registry.mjs)（主表 + 按主题拆分的 `mutations-registry.batch3*.mjs` 多份分片）。
 切一份就要在 `MUTATIONS` 里聚合一份 —— **忘了聚合不报任何错**，只会让那批条目悄悄消失；
 兜它的是 `mutation-registry-anchors.spec.ts` 里那个只许涨的 `REGISTRY_MIN`，所以**每登记一条就把那个数抬上去**。
 写变异条目的四条硬规矩（都被实际踩过）：

@@ -13,7 +13,7 @@
  * 后端一重启就是空的 ⇒ 每个目标的 `prev === undefined` ⇒
  * `syncChangedShards` / `syncSessionDb` / `syncContactDb` / `syncPlainDatabase`
  * 一律把 `mode` 判成 `'full'` ⇒ **每次冷启动都把全树整库重解密一遍**，
- * 哪怕微信侧一个字节都没变、磁盘上的解密产物已经是��新的。
+ * 哪怕微信侧一个字节都没变、磁盘上的解密产物已经是最新的。
  *
  * 代价是实打实的：`sync.ts` 里 `message_1` 一次 ≈ **147 MB / 37456 页**（见该文件第 45 轮的
  * `[sync-trace]` 诊断注释），而 `fullDecryptFile` 每个调度步只处理 64 页
@@ -142,3 +142,22 @@ export function flushSyncSourceState(decryptedDir: string): boolean {
 export function forgetPendingSyncSourceState(): void {
   pending.clear()
 }
+/**
+ * sync tick 内的 stat 分布（W2-2.3 实测，2026-10-11，本机，20 分片夹具）。
+ *
+ * | tick 类型 | 耗时 | statSync | existsSync | readdirSync |
+ * |---|---|---|---|---|
+ * | 冷（lastState 空，要真解 20 个库） | 456ms | 62 | 62 | 1 |
+ * | 热（什么都没变） | 0.4ms | 42 | 22 | 1（首次）/ 0 |
+ *
+ * 两个读数决定了「只探测上次有变化的目录」这件事**不值得做**：
+ *
+ *  ① 热 tick 已经只要 0.4ms（约每分片 2 次 stat：main + wal，正是 `shardSig`）。
+ *     实时同步的间隔是秒级，0.4ms 占比可以忽略；改成「只探测变化目录」最多省 0.3ms，
+ *     却要引入「谁变了」的账本与它的失效判断 —— 那是拿一个新状态机换 0.3ms。
+ *  ② 冷 tick 的 456ms 全在解密（stat 只占其中 62 次）。即便把 stat 全部省掉，
+ *     冷 tick 还是 400ms 以上。所以这一条要优化也不是从 stat 下手。
+ *
+ * 结论：不改探测策略，实测数字留在这里 —— 下一个人不必再量一遍，
+ * 也不会因为「tick 里有几十次 stat」这种看起来难看的数字去动结构。
+ */

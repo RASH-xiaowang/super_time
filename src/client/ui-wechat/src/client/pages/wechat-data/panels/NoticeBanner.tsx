@@ -18,6 +18,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { buildNotices } from './notice.ts'
+import { runtimeCapabilities } from '../api.ts'
 import type { LicenseFacts, Notice, NoticeAction, UpdateFacts } from './notice.ts'
 import css from './notice.module.css'
 
@@ -98,7 +99,9 @@ export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }):
   // 更新：**先订阅再取快照**。反过来的话，两步之间发生的那次状态变化会被永久丢掉
   // （界面就停在旧状态直到下一次变化）—— 与「设置 → 软件更新」卡里同一个坑。
   useEffect(() => {
-    const api = (window as any).electronAPI?.update
+    // 判环境只认能力表；下面的桥只负责真的调用。
+    if (!runtimeCapabilities().update) return
+    const api = window.electronAPI?.update
     if (!api?.state) return
     let pushed = false
     const off = api.onEvent?.((next: UpdateFacts) => { pushed = true; setUpdate(next) })
@@ -115,7 +118,8 @@ export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }):
 
   // 授权：启动时取一次（与门禁同源）。失败就当作「没有该提醒」，不弹错。
   useEffect(() => {
-    const api = (window as any).electronAPI?.license
+    if (!runtimeCapabilities().license) return
+    const api = window.electronAPI?.license
     if (!api?.status) return
     let alive = true
     void (async () => {
@@ -169,14 +173,14 @@ export function NoticeBanner({ onOpenLicense }: { onOpenLicense?: () => void }):
 
   const onAction = useCallback(async (a: NoticeAction): Promise<void> => {
     if (a === 'open-license') { onOpenLicense?.(); return }
-    const el = (window as any).electronAPI
+    const el = window.electronAPI
     setNote(null)
     setBusy(a)
     try {
       if (a === 'install') {
         const r = await el?.update?.install()
         // 成功的话应用马上退出并重装，这里不必再改状态（改了也来不及看见）
-        if (!r?.ok) setNote({ kind: 'err', text: r?.error?.message || r?.error || '安装失败' })
+        if (!r?.ok) setNote({ kind: 'err', text: r?.error?.message || '安装失败' })
       } else {
         const r = await el?.license?.exportRequest()
         if (r?.ok) setNote({ kind: 'ok', text: `${r.path}（交给签发方换发新证）` })

@@ -140,6 +140,8 @@ signal?: AbortSignal): Promise<{
  * 只有拼字符串的这一路需要转义（审计 P3-11）。
  */
 export declare function powershellLiteral(value: string): string;
+/** Zip extraction is a small local operation; still bounded so a broken tool cannot pin the worker. */
+export declare const ZIP_EXTRACT_TIMEOUT_MS = 120000;
 /**
  * 解压 zip 到暂存目录（顶层目录名忽略）。导出只为让"拼出来的那条命令"能被用例钉住。
  * @param zipPath - 待解压的 zip 路径。

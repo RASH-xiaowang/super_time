@@ -11,9 +11,14 @@
  *   diagLog / STATE_DIR / APP_VERSION / debugGates / licenseService / getMainWindow /
  *   buildDiagnosticReport / installWebContentsGuards（后两个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
-function registerMiscIpc(ctx) {
-  const { ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticReport, installWebContentsGuards } = ctx;
-  ipcMain.handle('diag:log-info', () => {
+/** 诊断日志的查询、导出、预览、复制与定位。 */
+function registerDiagnosticIpc(reg, deps) {
+  const {
+    app, dialog, shell, path, fs, clipboard, diagLog, APP_VERSION,
+    buildDiagnosticPreview, buildDiagnosticReport, getMainWindow,
+  } = deps;
+
+  reg.handleIpc('diag:log-info', () => {
     const files = diagLog.files()
       .map((p) => {
         try { return { path: p, name: path.basename(p), size: fs.statSync(p).size } } catch { return null; }
@@ -21,9 +26,9 @@ function registerMiscIpc(ctx) {
       .filter(Boolean);
     return { ok: true, dir: path.dirname(diagLog.path), current: diagLog.path, files };
   });
-  ipcMain.handle('diag:export-log', async () => {
+
+  reg.handleIpc('diag:export-log', async () => {
     try {
-      // 旧 → 新拼接：用户只需要交出一个文件
       const parts = diagLog.files().slice().reverse()
         .filter((p) => { try { return fs.statSync(p).size > 0; } catch { return false; } });
       if (parts.length === 0) return { ok: false, error: '当前没有日志内容可导出' };
@@ -54,7 +59,34 @@ function registerMiscIpc(ctx) {
       return { ok: false, error: err.message };
     }
   });
-  ipcMain.handle('diag:reveal-log', () => {
+
+  reg.handleIpc('diag:preview-log', () => {
+    try {
+      return { ok: true, ...buildDiagnosticPreview(diagLog, {
+        app: APP_VERSION,
+        electron: process.versions.electron,
+        chrome: process.versions.chrome,
+        node: process.versions.node,
+        platform: process.platform,
+        arch: process.arch,
+        packaged: app.isPackaged,
+      }) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  reg.handleIpc('diag:copy-log-path', () => {
+    try {
+      const target = path.dirname(diagLog.path);
+      clipboard.writeText(target);
+      return { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  reg.handleIpc('diag:reveal-log', () => {
     try {
       shell.showItemInFolder(diagLog.path);
       return { ok: true, path: diagLog.path };
@@ -62,40 +94,27 @@ function registerMiscIpc(ctx) {
       return { ok: false, error: err.message };
     }
   });
-  // 守卫必须在建窗**之前**注册，否则主窗口的 webContents 已经建好、错过事件。
-  app.on('web-contents-created', (_event, contents) => installWebContentsGuards(contents));
-  ipcMain.handle('app:versions', () => ({
+}
+
+/** 应用元信息与运行模式。 */
+function registerAppIpc(reg, deps) {
+  const { app, fs, path, STATE_DIR, APP_VERSION, debugGates } = deps;
+
+  reg.handleIpc('app:versions', () => ({
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+    app: app.getVersion(),
     platform: process.platform,
     arch: process.arch
   }));
 
-  ipcMain.handle('app:ping', () => `pong @ ${new Date().toISOString()}`);
+  reg.handleIpc('app:ping', () => `pong @ ${new Date().toISOString()}`);
+  reg.handleIpc('app:test-mode', () => process.env.SUPERTIME_TEST_MODE === '1');
 
-  /**
-   * 是否处于验收/自动化测试模式（`SUPERTIME_TEST_MODE=1`）。
-   *
-   * ⚠️ 2026-09-29 更正：这个开关**只表示"这个窗口是自动化验收起的"**，
-   * 它**不等于**"回答来自 mock 模型" —— 真正替换模型的只有 `npm run ui:accept`
-   * （`scripts/ui-acceptance.mjs` 才会把 `llm.json` 指向本地 mock，并同时设
-   * `SUPERTIME_LLM_MOCK=1`）。此前横幅把两者混为一谈，实机截图里的人看到
-   * "回答来自本地 mock 模型" 就以为整份验收都在用假数据 —— 而大多数真机脚本
-   * （主题审计、面板审计、性能测量）用的是**真实数据根 + 真实配置**。
-   * 想一次拿全，用 {@link app:run-mode}。
-   */
-  ipcMain.handle('app:test-mode', () => process.env.SUPERTIME_TEST_MODE === '1');
-
-  /**
-   * 当前运行模式的**事实**（给界面挂横幅用）：是不是自动化窗口、有没有装 mock 模型、
-   * 以及**数据根到底在哪** —— 后者是"验收有没有用真实数据"最直接的证据。
-   * @returns `{ test, llmMock, dataRoot }`。
-   */
-  ipcMain.handle('app:run-mode', () => {
+  reg.handleIpc('app:run-mode', () => {
     let dataRoot = '';
     try {
-      // 状态目录里的 `wechat/config.json`（main.js 启动时记录路径配置的那一份）。
       const cfg = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'config.json'), 'utf8'));
       dataRoot = String(cfg?.resolved?.dataRoot ?? cfg?.dataRoot ?? '');
     } catch { /* 没写过就留空 */ }
@@ -106,24 +125,20 @@ function registerMiscIpc(ctx) {
     };
   });
 
-  /**
-   * 首启闸门豁免状态（N2）：`{ packaged, skipGates }`。
-   *
-   * 把 `app.isPackaged` **作为事实**回给渲染层 —— 渲染层据此决定要不要跳过
-   * 「启动引导 / 隐私同意 / 授权」三道闸门，而打包态的 `skipGates` 恒为 false：
-   * 环变量伪造不了 `app.isPackaged`，所以「打包版 + 设环变量」进不去主界面。
-   * 未知的 `ipcMain` 调用者只会拿到这两个布尔值，拿不到判定权。
-   */
-  ipcMain.handle('app:debug-gates', () => {
+  reg.handleIpc('app:debug-gates', () => {
     const gates = debugGates();
     if (gates.skipGates) {
       console.warn('[debug-gates] SUPERTIME_SKIP_ONBOARDING=1：跳过启动引导 / 隐私同意 / 授权（仅非打包态生效）');
     }
     return { packaged: gates.packaged, skipGates: gates.skipGates };
   });
+}
 
-  // —— License 授权（混合模式：本地验签为主）——
-  ipcMain.handle('license:status', () => {
+/** 许可证状态、请求导出、导入与移除。 */
+function registerLicenseIpc(reg, deps) {
+  const { app, dialog, fs, getMainWindow, licenseService, APP_VERSION } = deps;
+
+  reg.handleIpc('license:status', () => {
     try {
       return licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
     } catch (err) {
@@ -131,8 +146,7 @@ function registerMiscIpc(ctx) {
     }
   });
 
-
-  ipcMain.handle('license:export-request', async () => {
+  reg.handleIpc('license:export-request', async () => {
     try {
       const req = licenseService.getActivationRequest(app.getPath('userData'), APP_VERSION);
       const result = await dialog.showSaveDialog(getMainWindow(), {
@@ -148,7 +162,7 @@ function registerMiscIpc(ctx) {
     }
   });
 
-  ipcMain.handle('license:import', async () => {
+  reg.handleIpc('license:import', async () => {
     try {
       const picked = await dialog.showOpenDialog(getMainWindow(), {
         title: '导入许可证',
@@ -163,7 +177,7 @@ function registerMiscIpc(ctx) {
     }
   });
 
-  ipcMain.handle('license:import-text', (_e, text) => {
+  reg.handleIpc('license:import-text', (_e, text) => {
     try {
       return licenseService.importLicense(app.getPath('userData'), APP_VERSION, String(text ?? ''));
     } catch (err) {
@@ -171,33 +185,24 @@ function registerMiscIpc(ctx) {
     }
   });
 
-  ipcMain.handle('license:remove', () => {
+  reg.handleIpc('license:remove', () => {
     try {
       return { ok: true, status: licenseService.removeLicense(app.getPath('userData'), APP_VERSION) };
     } catch (err) {
       return { ok: false, error: err.message };
     }
   });
+}
 
+/** 文件与目录选择、保存路径。 */
+function registerDialogIpc(reg, deps) {
+  const { dialog, getMainWindow, path } = deps;
 
-  /**
-   * 文件选择：只负责选路径，读盘与登记由后端做（选中的可能是几十 MB 的文件，
-   * 不适合经 IPC 传字节；也与 `dialog:save-file` 同一个口径）。
-   *
-   * `opts.filters` **由调用方传**，主进程不写死白名单：写死一份就会与后端
-   * `query/kb/types.ts` 的 `ACCEPTED_EXTS` 漂移成两份，症状是「对话框里看不到」
-   * 或者更糟 ——「选得进来但登记被拒」（用户在两个地方各被拒一次，说不清哪边错了）。
-   */
-  ipcMain.handle('dialog:open-file', async (_event, opts) => {
+  reg.handleIpc('dialog:open-file', async (_event, opts) => {
     try {
-      // 调试/自动化用：设了 SUPERTIME_OPEN_PATHS 就跳过原生对话框直接用它
-      // （原生对话框在无头自动化里点不到，否则「添加文件」链路无法被测试覆盖）。
-      // 多个路径用 `path.delimiter` 分隔 —— 与 SUPERTIME_SAVE_PATH 同款约定，
-      // 不用 `,` 是因为 Windows 路径里逗号是合法字符（`我的资料,2019.pdf`）。
       const forced = (process.env.SUPERTIME_OPEN_PATHS || '').trim();
       if (forced) {
-        const files = forced.split(path.delimiter).map(s => s.trim()).filter(Boolean);
-        // 全空串视为「取消」而不是「选了一批空路径」——否则调用方会去登记一堆非法项
+        const files = forced.split(path.delimiter).map((s) => s.trim()).filter(Boolean);
         return files.length ? { canceled: false, files } : { canceled: true, files: [] };
       }
       const result = await dialog.showOpenDialog(getMainWindow(), {
@@ -212,7 +217,7 @@ function registerMiscIpc(ctx) {
     }
   });
 
-  ipcMain.handle('dialog:open-directory', async () => {
+  reg.handleIpc('dialog:open-directory', async () => {
     const result = await dialog.showOpenDialog(getMainWindow(), {
       title: '选择目录',
       properties: ['openDirectory', 'createDirectory']
@@ -221,13 +226,8 @@ function registerMiscIpc(ctx) {
     return { canceled: false, path: result.filePaths[0] ?? null };
   });
 
-  /**
-   * 保存对话框：只负责选路径，真正的写盘由后端做（视频有几十 MB，不适合经 IPC 传字节）。
-   */
-  ipcMain.handle('dialog:save-file', async (_event, opts) => {
+  reg.handleIpc('dialog:save-file', async (_event, opts) => {
     try {
-      // 调试/自动化用：设了 SUPERTIME_SAVE_PATH 就跳过原生对话框直接用它
-      // （原生对话框在无头自动化里点不到，否则「保存」按钮无法被测试覆盖）。
       const forced = (process.env.SUPERTIME_SAVE_PATH || '').trim();
       if (forced) return { canceled: false, path: forced };
       const result = await dialog.showSaveDialog(getMainWindow(), {
@@ -241,36 +241,31 @@ function registerMiscIpc(ctx) {
       return { canceled: true, path: null, error: e?.message ?? String(e) };
     }
   });
+}
 
-  ipcMain.handle('shell:show-item', (_event, filePath) => {
+/** 系统外壳与自绘窗口控制。 */
+function registerShellWindowIpc(reg, deps) {
+  const { getMainWindow, dialog, fs, shell } = deps;
+
+  reg.handleIpc('shell:show-item', (_event, filePath) => {
     if (typeof filePath === 'string' && filePath) {
       shell.showItemInFolder(filePath);
     }
     return true;
   });
 
-  // —— 自绘标题栏窗口控制 ——
-  ipcMain.on('window:minimize', () => {
+  reg.onIpc('window:minimize', () => {
     if (getMainWindow()) getMainWindow().minimize();
   });
-  ipcMain.on('window:close', () => {
+  reg.onIpc('window:close', () => {
     if (getMainWindow()) getMainWindow().close();
   });
-  ipcMain.on('window:fullscreen-toggle', () => {
+  reg.onIpc('window:fullscreen-toggle', () => {
     if (getMainWindow()) getMainWindow().setFullScreen(!getMainWindow().isFullScreen());
   });
-  ipcMain.handle('window:is-fullscreen', () => getMainWindow()?.isFullScreen() ?? false);
+  reg.handleIpc('window:is-fullscreen', () => getMainWindow()?.isFullScreen() ?? false);
 
-  /**
-   * 把渲染进程指定的矩形区域截成 PNG 保存（「导出报告 → 界面截图」）。
-   *
-   * 为什么放在主进程：`webContents.capturePage(rect)` 只有主进程能用；渲染端的
-   * `getBoundingClientRect()` 给的正是 CSS 像素坐标，与 capturePage 的矩形同坐标系，
-   * 因此「所见即所存」——不需要另写一套报告模板。
-   * @param rect - { x, y, width, height }，相对渲染页视口。
-   * @returns { ok, canceled? , path?, message? }
-   */
-  ipcMain.handle('window:capture-panel', async (_event, rect) => {
+  reg.handleIpc('window:capture-panel', async (_event, rect) => {
     try {
       if (!getMainWindow()) return { ok: false, message: '窗口不存在' };
       const x = Math.max(0, Math.round(Number(rect?.x) || 0));
@@ -284,8 +279,6 @@ function registerMiscIpc(ctx) {
       const suggested = typeof rect?.filename === 'string' && rect.filename.trim()
         ? rect.filename.trim()
         : `wechat-report-${stamp}.png`;
-      // 调试/自动化用：设了 SUPERTIME_CAPTURE_PATH 就跳过保存对话框直接落盘
-      // （原生对话框在无头自动化里点不到，否则导出无法被测试覆盖）。
       const forced = process.env.SUPERTIME_CAPTURE_PATH;
       if (forced) {
         fs.writeFileSync(forced, png);
@@ -304,5 +297,24 @@ function registerMiscIpc(ctx) {
     }
   });
 }
+
+function registerMiscIpc(ctx) {
+  const { ipcMain, ipcTrust, app, clipboard, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService, getMainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards } = ctx;
+  const handleIpc = (channel, handler) => ipcMain.handle(channel, ipcTrust.wrap(channel, handler));
+  const onIpc = (channel, listener) => ipcMain.on(channel, ipcTrust.wrapOn(channel, listener));
+  const reg = { handleIpc, onIpc };
+
+  // 守卫必须在建窗之前注册，否则主窗口的 webContents 已经建好、错过事件。
+  app.on('web-contents-created', (_event, contents) => installWebContentsGuards(contents));
+  registerDiagnosticIpc(reg, {
+    app, dialog, shell, path, fs, clipboard, diagLog, APP_VERSION,
+    buildDiagnosticPreview, buildDiagnosticReport, getMainWindow,
+  });
+  registerAppIpc(reg, { app, fs, path, STATE_DIR, APP_VERSION, debugGates });
+  registerLicenseIpc(reg, { app, dialog, fs, getMainWindow, licenseService, APP_VERSION });
+  registerDialogIpc(reg, { dialog, getMainWindow, path });
+  registerShellWindowIpc(reg, { getMainWindow, dialog, fs, shell });
+}
+
 
 module.exports = { registerMiscIpc };

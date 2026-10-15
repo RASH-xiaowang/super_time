@@ -7,7 +7,8 @@
 import { promises as fs } from 'node:fs'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { datTierOf, datTierRank, decodeDatBytes, isThumbTier, type DatTier } from './media-image.ts'
+import { datTierOf, datTierRank, isThumbTier, type DatTier } from './media-image.ts'
+import { decodeDatBytesAsync } from './media-image-async.ts'
 import { yieldToLoop } from './search-build.ts'
 import { MD5_SEGMENT } from '../md5.ts'
 
@@ -135,7 +136,7 @@ export async function decryptAllImageDats(
   concurrency = 8,
   onProgress?: (processed: number, total: number, failed: number, message: string) => void,
 ): Promise<BatchDecryptResult> {
-  const files = collectImageDatFiles(rawRoot)
+  const files = await collectImageDatFilesAsync(rawRoot)
   // 档位排序与按 md5 归并都在 `groupImageDatsByMd5` 里（同一个口径也服务「升级解码缓存」）。
   // 排序的理由：`_h` 原图先落主槽，低档位随后命中 `hasCached` 而跳过 —— 既不会覆盖，
   // 也让 processed 计数照样走满。
@@ -185,7 +186,7 @@ export async function decryptAllImageDats(
         return
       }
       const bytes = await fs.readFile(file)
-      const dec = decodeDatBytes(new Uint8Array(bytes), aes, xorKey)
+      const dec = await decodeDatBytesAsync(new Uint8Array(bytes), aes, xorKey)
       if ('error' in dec) { failed += 1; errors.push({ file: name, error: dec.error }); return }
       if (dec.format === 'hevc') {
         skipped += 1

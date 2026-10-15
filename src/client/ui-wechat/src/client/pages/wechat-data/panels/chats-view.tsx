@@ -14,7 +14,7 @@
  */
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import kitCss from '../ui/kit.module.css'
-import { Dialog, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
+import { Dialog, EmptyMaybeSyncing, ErrorState, LoadingState, SearchInput, Segmented } from '../ui/kit.tsx'
 import { ChatRightPanel } from './ChatRightPanel.tsx'
 import { ChatsHeadActions } from './chats-head-actions.tsx'
 import { SessionAsk } from './SessionAsk.tsx'
@@ -23,6 +23,7 @@ import { ChatView, IconPin, buildMsgMenu, isEnterpriseChat } from './chats-suppo
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import cssshell from './chats-shell.module.css'
 import { ListSentinel, ListSkeleton } from './hooks.tsx'
 import { ChatsContactInfoView } from './chats-contact-info-view.tsx'
@@ -45,6 +46,28 @@ import type { MsgMenuItem } from './chats-support.tsx'
 import type { MessageRenderItem } from '../utils/message-items.ts'
 
 export interface ChatsViewProps {
+  /**
+   * 一次性动作回执（W3-11.1）：编辑/草稿/复制/打开文件的结果，一行会自动消失的小字。
+   *
+   * 为什么是**袋外独立 prop** 而不是塞进 `state` 袋：`chats-state-bag.wiring.spec.ts` 的棘轮
+   * 明确「平铺字段只许变小」，而它的四条分组各对应一个弹窗 props 接口 —— 回执没有弹窗消费方，
+   * 硬塞进任何一组都会让那个接口背上与自己无关的字段。独立 prop 由 typecheck 保证供得上。
+   */
+  notice?: string | null
+  /**
+   * 搜索索引构建的进度（W3-11.5；null = 没在构建）。同样是**袋外独立 prop**：
+   * 棘轮只许平铺字段变小，而这一项的归属既不属于四个弹窗组、也不是「多个读处」的平铺字段
+   * （只有搜索结果区那一处读它）。
+   */
+  indexProgress?: { done: number; total: number; rows: number } | null
+  /** 停止在跑的索引构建（W3-11.5）。不给就没有「停止」按钮。 */
+  onCancelIndexBuild?: () => void | Promise<void>
+  /**
+   * 手机档（≤560）「返回会话列表」。**袋外独立 prop**，理由与上面两条相同：
+   * `state` 袋的平铺字段卡在 96 件的棘轮上（`chats-state-bag.wiring.spec.ts`），
+   * 一件都加不进去；而这一项只有一个消费方（头部那枚返回按钮），也不是任何一袋弹窗的道具。
+   */
+  onBackToList?: () => void
   /**
    * 面板作用域里那批状态/回调，收成一个对象（摊到调用点就是一百多行道具字面量）。
    * 前四件是**按消费方分的组**：类型直接写弹窗自己的 props，加一件道具就必须两处同时供得上，
@@ -154,9 +177,9 @@ export interface ChatsViewProps {
   }
 }
 
-export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
-  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
-
+export function ChatsView({ state, notice, indexProgress, onCancelIndexBuild, onBackToList }: ChatsViewProps): React.JSX.Element {
+  const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText,
+  error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer } = state
   // 推荐回复只对单聊成立（群里「回一句」没有意义）；**分析**则群聊也能用 ——
   // 它读的是当前会话，群聊同样是会话。两块各自判定之后，右栏只要有任一块可见就挂载。
   const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'
@@ -172,7 +195,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
   useImagePreload({ talker: curSession?.username ?? '', items: msgItems, virtualizer: msgVirtualizer })
 
   return (
-    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined}>
+    <div className={cssrows.panel} data-ai-full={(aiOpen && aiFull) || undefined} data-has-session={curSession !== null || undefined}>
       {/* left: session list */}
       <div className={csscards.sidebar}>
         <div className={csscards.search}>
@@ -242,7 +265,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
             <div ref={sessionListRef} className={cssshell.list}>
               {loading && <ListSkeleton rows={10} />}
               {error && <div className={kitCss.error} role="alert">{error}</div>}
-              {!loading && !error && filtered.length === 0 && <div className={kitCss.emptyInline}>{view === 'chats' ? '暂无会话' : '暂无' + (view === 'kefu' ? '客服会话' : '订阅会话')}</div>}
+              {!loading && !error && filtered.length === 0 && <EmptyMaybeSyncing text={view === 'chats' ? '暂无会话' : '暂无' + (view === 'kefu' ? '客服会话' : '订阅会话')} />}
               {!loading && !error && pinnedList.length > 0 && (
                 <div className={cssshell.pinSection}>
                   {!pinnedCollapsed && pinnedList.map(s => renderSession(s))}
@@ -262,9 +285,21 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
             {!msgIndexed && (
               <div className={csscards.searchIndexHint}>
                 <span>消息搜索索引尚未构建（当前为全表扫描）</span>
-                <button type="button" className={csscards.loadMore} onClick={() => { void buildIndex() }} disabled={indexBuilding}>
-                  {indexBuilding ? '构建中…' : '构建索引'}
-                </button>
+                {indexBuilding ? (
+                  // W3-11.5：秒级起步的构建不该只有一个禁用的「构建中…」——
+                  // 说清跑到哪个分片、已入库多少条，并且给一条退路（取消只在分片边界
+                  // 与分片内的让出点生效，旧索引原样保留，所以随时可以停）。
+                  <>
+                    <span className={csscards.searchIndexProgress}>
+                      正在构建{indexProgress && indexProgress.total > 0
+                        ? `（第 ${indexProgress.done}/${indexProgress.total} 个分片 · 已入库 ${indexProgress.rows} 条）`
+                        : '…'}
+                    </span>
+                    <button type="button" className={csscards.loadMore} onClick={() => { void onCancelIndexBuild?.() }}>停止</button>
+                  </>
+                ) : (
+                  <button type="button" className={csscards.loadMore} onClick={() => { void buildIndex() }} {...desktopActionProps()}>{desktopAction() ? '构建索引（仅电脑）' : '构建索引'}</button>
+                )}
               </div>
             )}
             {msgSearchLoading && <LoadingState variant="compact" label="搜索中…" />}
@@ -315,10 +350,10 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                   {isEnterpriseChat(curSession.username) && <span className={csscards.entBadge} title="企业微信">企业微信</span>}
                 </div>
                 <div className={csscards.msgHeaderUser}>{curSession.username}{messages.length > 0 ? ` · 共 ${messages.length} 条` : ''}</div>
-                {exportMsg && <div className={csscards.msgHeaderExport} title={exportMsg}>{exportMsg}</div>}
+                {(exportMsg || notice) && <div className={csscards.msgHeaderExport} role={notice && !exportMsg ? 'status' : undefined} title={exportMsg ?? undefined}>{exportMsg ?? notice}</div>}
               </div>
               <ChatsHeadActions
-                curSession={curSession}
+                curSession={curSession} onBackToList={onBackToList}
                 aiEligible={aiEligible}
                 aiOpen={aiOpen}
                 setAiOpen={setAiOpen}
@@ -341,7 +376,7 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
                 clearAllDrafts={clearAllDrafts}
                 clearDraft={clearDraft}
               />
-              {pollStatus && <span className={csscards.msgHeaderExport} title={pollStatus}>{pollStatus}</span>}
+              {pollStatus && <span className={`${csscards.msgHeaderExport} ${csscards.msgHeaderPoll}`} title={pollStatus}>{pollStatus}</span>}
             </div>
             {/*
               类型统计 chip 行此前在 .msgHeader 内，与标题行/动作行争宽 —— 实测头部因此在
@@ -487,6 +522,11 @@ export function ChatsView({ state }: ChatsViewProps): React.JSX.Element {
           showAnalysis={analysisPaneOpen}
           analysisTargetId={analysisTarget}
           analysisEntry={analysisTarget === null ? undefined : inlineAnalysis.get(analysisTarget)}
+          analysisProgress={inlineAnalysis.progress}
+          analysisStopped={inlineAnalysis.stopped}
+          analysisStopError={inlineAnalysis.stopError}
+          onCancelAnalysis={inlineAnalysis.cancel}
+          onRetryAnalysis={inlineAnalysis.retry}
           onClearAnalysis={() => { setAnalysisTarget(null) }}
         />
       )}

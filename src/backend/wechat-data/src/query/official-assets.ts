@@ -3,12 +3,12 @@
  * messages, article-type (local_type 49) messages and the latest article time.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
-import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { OfficialAssetsSnapshot, OfficialAssetRow } from '../types.ts'
 
@@ -90,7 +90,7 @@ export async function queryOfficialAssets(decryptedDir: string): Promise<Officia
   ].join('|')
   // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 39ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`）。
-  return cachedBySigAsync('official-assets:' + decryptedDir, sig, () => computeOfficialAssets(decryptedDir), 30_000)
+  return cachedBySigAsync('official-assets:' + decryptedDir, sig, () => computeOfficialAssets(decryptedDir), INSIGHTS_TTL_MS)
 }
 
 async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAssetsSnapshot> {

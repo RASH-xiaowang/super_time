@@ -1,0 +1,17 @@
+{
+  "provider": "openai-compat",
+  "model": "",
+  "apiKey": "",
+  "apiUrl": "https://api.openai.com/v1",
+  "apiPath": "/chat/completions",
+  "embeddingModel": "",
+  "embedPath": "/embeddings",
+  "embeddingApiUrl": "",
+  "embeddingApiKey": "",
+  "rerankModel": "",
+  "rerankPath": "/rerank",
+  "rerankApiUrl": "",
+  "rerankApiKey": "",
+  "rerankTimeoutMs": 20000,
+  "timeoutMs": 120000
+}

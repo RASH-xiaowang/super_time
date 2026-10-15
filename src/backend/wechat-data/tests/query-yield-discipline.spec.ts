@@ -33,6 +33,8 @@ import { startTickProbe } from '../../tests/helpers/tick-probe.ts'
 
 import { withDb, withDbAsync } from '../src/query/db-open.ts'
 import { cachedBySigAsync, fileSigOf } from '../src/query/meta.ts'
+import { decryptAllImageDats } from '../src/query/decrypt-images.ts'
+import { resolveSnsVideoCoverDataUrlsAsync, snsVideoIndexForTest } from '../src/query/sns-video.ts'
 import { queryPrivacyScan, PRIVACY_YIELD_EVERY_ROWS } from '../src/query/privacy.ts'
 import { queryStorageStats } from '../src/query/storage.ts'
 import { queryOverviewInsights, SNS_YIELD_EVERY_ROWS } from '../src/query/overview-insights.ts'
@@ -69,7 +71,13 @@ function makeMsgTree(rows: number, shards = ['message_0.db', 'message_1.db']): s
     const db = new DatabaseSync(join(dec, 'message', shard))
     db.exec('CREATE TABLE Msg_wxid_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (create_time INTEGER, local_type INTEGER, real_sender_id INTEGER, message_content TEXT)')
     const ins = db.prepare('INSERT INTO Msg_wxid_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa VALUES (?,?,?,?)')
+    // W2-13.1：开事务。本机实测（台账里有原始数字）—— 同一个 makeMsgTree(2000)，
+    // **不开事务** 4259ms、开事务 12ms，差 355 倍；而查询本体只要 7ms。
+    // 也就是说这条用例 95% 的时间花在「造数据」而不是「跑查询」上：
+    // A 类榜首要从 22.9s 压下来，唯一该动的地方是这里，而不是生产代码或判据。
+    db.exec('BEGIN')
     for (let i = 0; i < rows; i += 1) ins.run(1_700_000_000 + i, 1, 0, '文本')
+    db.exec('COMMIT')
     db.close()
   }
   return dec
@@ -95,7 +103,9 @@ describe('总览分析必须让出事件循环', () => {
     const db = new DatabaseSync(join(sns, 'sns.db'))
     db.exec('CREATE TABLE SnsTimeLine (content TEXT)')
     const ins = db.prepare('INSERT INTO SnsTimeLine VALUES (?)')
+    db.exec('BEGIN')   // W2-13.1：不开事务时 2001 条要两秒以上
     for (let i = 0; i < SNS_YIELD_EVERY_ROWS + 1; i += 1) ins.run('<media>x</media>')
+    db.exec('COMMIT')
     db.close()
     const stop = tickProbe()
     const r = await queryOverviewInsights(dec, 'wxid_a')
@@ -221,7 +231,9 @@ describe('隐私体检也要让出（同一族：60 万行量级的整表扫）'
       const db = new DatabaseSync(join(dec, 'message', `message_${String(i)}.db`))
       db.exec(`CREATE TABLE ${table} (local_id INTEGER, create_time INTEGER, local_type INTEGER, message_content TEXT)`)
       const ins = db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?)`)
+      db.exec('BEGIN')   // W2-13.1：5006 行不开事务时是这一条用例 5.3s 的主要来源
       for (let k = 0; k < rows; k += 1) ins.run(k + 1, 1_700_000_000 + k, 1, '邮箱 a1@ex.com')
+      db.exec('COMMIT')
       db.close()
     })
     return dec
@@ -378,7 +390,9 @@ describe('词云也要让出（2026-09-28 补：上一轮漏登记的模块）',
     const db = new DatabaseSync(join(msgDir, 'message_0.db'))
     db.exec(`CREATE TABLE "${table}" (create_time INTEGER, local_type INTEGER, message_content TEXT)`)
     const ins = db.prepare(`INSERT INTO "${table}" VALUES (?,?,?)`)
+    db.exec('BEGIN')
     for (let i = 0; i < ROWS; i += 1) ins.run(1_700_000_000 + i, 1, long)
+    db.exec('COMMIT')
     db.close()
 
     const stop = tickProbe()
@@ -390,6 +404,46 @@ describe('词云也要让出（2026-09-28 补：上一轮漏登记的模块）',
     // 摘掉 `YIELD_EVERY_CHARS` 会掉到 2（只剩进入前与分片边界）。
     expect(ticks, '长正文没按字符让出 ⇒ 行少但很长的朋友圈仍会独占事件循环（实测 111ms）')
       .toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('批量解码也要让出（attach 树收集不能退回同步驱动器）', () => {
+  it('目录数超过让出档时，收集阶段真的让出过', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'yield-decrypt-'))
+    scratch.push(root)
+    const attach = join(root, 'msg', 'attach')
+    mkdirSync(attach, { recursive: true })
+    for (let i = 0; i < 65; i += 1) {
+      mkdirSync(join(attach, 'd' + String(i).padStart(2, '0')))
+    }
+    const stop = tickProbe()
+    const res = await decryptAllImageDats(root, join(root, 'decoded'), undefined, 0, 1)
+    const ticks = stop()
+    expect(res.total, '夹具没有 .dat，结果应为空批').toBe(0)
+    // 默认每 60 个目录让出一次；65 个目录至少会触发一次（ticks = 让出数 + 1）。
+    expect(ticks, '批量解密的目录收集仍是一次跑完，worker 会被 attach 树钉住').toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('朋友圈视频索引扫描也要让出（整月 md5 冷扫不能钉住 worker）', () => {
+  it('冷扫超过一个文件批次时，探针拿得到 tick', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'yield-sns-video-'))
+    scratch.push(base)
+    const dir = join(base, 'cache', '2026-01', 'Sns', 'Video', 'd0')
+    mkdirSync(dir, { recursive: true })
+    const md5s: string[] = []
+    for (let i = 0; i < 40; i += 1) {
+      const content = `cover-${String(i)}`
+      md5s.push(createHash('md5').update(content).digest('hex'))
+      writeFileSync(join(dir, `f${String(i).padStart(2, '0')}.jpg`), content)
+    }
+    snsVideoIndexForTest().clear()
+    const stop = tickProbe()
+    const got = await resolveSnsVideoCoverDataUrlsAsync(base, [md5s[0] ?? ''])
+    const ticks = stop()
+    expect(got.get(md5s[0] ?? '')?.url, '夹具应当命中第一张封面').toBeDefined()
+    // 每 32 个文件让出一次；40 个文件的冷扫至少一次（ticks = 让出数 + 1）。
+    expect(ticks, '整月索引又变成一口气同步扫描').toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -490,6 +544,9 @@ const P1_2_MODULES = [
   // —— 4s 超时下它被记成 `TIMEOUT`，于是"只有让出次数、没有完整耗时"，谁也没看出它不让出。
   'image-upgrade.ts',
   'decrypt-images.ts',
+  // 2026-10-15：sns-video 的整月 md5 扫描与大视频 base64 原本是同步独占段，
+  // 生产入口改走异步流式版本后也纳入零容忍清单。
+  'sns-video.ts',
 ]
 
 describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
@@ -532,5 +589,66 @@ describe('P1-2 点名的模块必须都有让出点（零容忍）', () => {
     })
     const noCall = stripped.filter((s) => !s.hit).map((s) => s.f.split(/[\\/]/).slice(-2).join('/'))
     expect(noCall, '只剩 import、没有真正的让出调用点 ⇒ 又变回独占事件循环').toEqual([])
+  })
+})
+
+/**
+ * W2-13.1：夹具插入必须包在事务里。
+ *
+ * ## 为什么这条值得一个判据
+ *
+ * 本机串行基线 2026-10-11 量出来：这个文件 **22.9 秒**，是 A 类榜首、超过
+ * `TOP_BUDGET_MS` 的 15 秒预算。逐条计时发现四条最慢的用例（5.4s / 4.6s / 4.5s / 2.7s）
+ * **没有一条慢在查询上**：单独量同一个夹具，建造 4259ms、查询本体 7ms。
+ * 差在夹具的插入循环**没开事务** —— 4000 行自动提交 = 4000 次落盘，而一次事务只要 12ms。
+ *
+ * 包上事务之后整份 spec **0.72 秒**（32 倍），判据一条没改、断言一条没松、
+ * 生产代码一行没动。这个失败方式完全不报错，只会让「某个测试文件越来越慢」悄悄发生，
+ * 所以钉在这里：谁再把 `for (...) ins.run(...)` 写成裸循环，这条会红。
+ *
+ * @vitest-environment node
+ */
+describe('W2-13.1：夹具插入必须在事务里（否则「测试变慢」会不报错地发生）', () => {
+  /** 「这个循环体就是一次插入」的形状：`for (...) ins.run(...)`。 */
+  const BARE_INSERT = /^\s*for\s*\(.*\)\s*\w+\s*\.run\(/
+  /** 剥掉行尾注释（注释里写着这种形状，不能把它自己判红）。 */
+  const codeOf = (l: string): string => l.replace(/\s*\/\/.*$/, '')
+
+  it('本文件里每个插入循环前面都有 BEGIN', () => {
+    const self = readFileSync(new URL(import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    const lines = self.split('\n')
+    const bare: string[] = []
+    for (let i = 0; i < lines.length; i += 1) {
+      const code = codeOf(lines[i] ?? '')
+      if (!BARE_INSERT.test(code)) continue
+      // 往前看 12 行内有没有 db.exec('BEGIN')
+      const ctx = lines.slice(Math.max(0, i - 12), i).join('\n')
+      if (!/exec\('BEGIN'\)/.test(ctx)) bare.push('第 ' + String(i + 1) + ' 行：' + code.trim().slice(0, 60))
+    }
+    expect(bare, '这些插入循环没有包在事务里 ⇒ 每行一次自动提交，夹具会慢两个数量级').toEqual([])
+  })
+
+  it('反面自证：裸插入循环确实会被抓出来（不是恒真）', () => {
+    const bare = [
+      "const db = new DatabaseSync('x')",
+      "const ins = db.prepare('INSERT INTO t VALUES (?)')",
+      'for (let i = 0; i < 100; i += 1) ins.run(i)',
+      'db.close()',
+    ].join('\n')
+    const wrapped = [
+      "const db = new DatabaseSync('x')",
+      "db.exec('BEGIN')",
+      "const ins = db.prepare('INSERT INTO t VALUES (?)')",
+      'for (let i = 0; i < 100; i += 1) ins.run(i)',
+      "db.exec('COMMIT')",
+    ].join('\n')
+    const hasBeginAbove = (src: string): boolean => {
+      const ls = src.split('\n')
+      const i = ls.findIndex(x => BARE_INSERT.test(codeOf(x)))
+      return i >= 0 && /exec\('BEGIN'\)/.test(ls.slice(0, i).join('\n'))
+    }
+    expect(BARE_INSERT.test('for (let i = 0; i < 100; i += 1) ins.run(i)'), '判据的正则没匹配上插入循环').toBe(true)
+    expect(hasBeginAbove(bare), '裸循环没被抓到 ⇒ 上面那条判据是空转的').toBe(false)
+    expect(hasBeginAbove(wrapped), '有事务的代码不该被抓').toBe(true)
   })
 })

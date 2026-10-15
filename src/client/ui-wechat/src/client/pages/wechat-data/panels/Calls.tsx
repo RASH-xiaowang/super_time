@@ -59,7 +59,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
      打开即查最新（**不再预填渲染缓存**），成功写回缓存、失败才回退缓存并在 error 里
      标注"以下为本地缓存（可能不是最新）"（标注由 hook 写在 error 文本里，面板照常显示 error 即可）。 */
   const load = useCallback((): Promise<CallsSnapshot> => apiGetCalls({ topPeers: 12, recentLimit: 30 }), [])
-  const { data: snap, loading, error } = useFreshData<CallsSnapshot>(CACHE_KEY, load)
+  const { data: snap, loading, error } = useFreshData<CallsSnapshot>(CACHE_KEY, load, { liveRefresh: true })
 
   const monthMax = snap ? Math.max(1, ...snap.months.map((m) => m.calls)) : 1
   const hourMax = snap ? Math.max(1, ...snap.byHour) : 1

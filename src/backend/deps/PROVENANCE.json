@@ -8,9 +8,9 @@
       "declared": "file:src/backend/deps/cordis",
       "version": "4.0.2",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "5afa00a3b459954132e80abd578ca767a962bbf76f8d8ae8002750928a1ca1ac",
-      "files": 51,
-      "bytes": 383927,
+      "treeSha256": "5d4387e03ad2bccc8f74dd1f5c23c3acba11391bc7e4dec27e42548a8c5177e9",
+      "files": 50,
+      "bytes": 381112,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的构建产物：src/*.ts 只是参考，运行时加载的是 lib/*.js。改 src/ 不会改到 lib/，也不会报错 —— 升级只能整包 --import。"
     },
@@ -20,9 +20,9 @@
       "declared": "file:src/backend/deps/cosmokit",
       "version": "1.8.3",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "6da675f07b0a5869d8dbcc4ae07434b90a4709c0ec758f8c7ffc15f32ab6a766",
-      "files": 35,
-      "bytes": 85932,
+      "treeSha256": "9a2daa4df45d8d19328413600aff3ee1ebeac9097282efba353c5ad0bf5a54f9",
+      "files": 34,
+      "bytes": 85489,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -32,9 +32,9 @@
       "declared": "file:src/backend/deps/dsh-brand",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "e2f53597e5806f837a1cb39ef206b88b9c476573450ae304f77f5a11b0f6a454",
-      "files": 12,
-      "bytes": 16937,
+      "treeSha256": "d60cefcf0231934209c533dc0915835b7c1e022cdaefc53ac045af7082281c4b",
+      "files": 9,
+      "bytes": 7513,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -51,9 +51,9 @@
       "declared": "file:src/backend/deps/dsh-home-paths",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "64b03d5f8a9a1b5c63626b470b21fd5100f84224c13e54cdbcfc0d2aff7a7623",
-      "files": 12,
-      "bytes": 35314,
+      "treeSha256": "a167a6267b3624a9873f8c1fb00fe031ef113d09ab8cebc9538cabc38425c81c",
+      "files": 9,
+      "bytes": 24015,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -63,9 +63,9 @@
       "declared": "file:src/backend/deps/dsh-invariants",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "eae4a0832d2a06f7b80795c40cc2923ae7ea3542b443ccc40a91cd9430cd7444",
-      "files": 12,
-      "bytes": 64022,
+      "treeSha256": "5504d89f8748a4c549c6a42bf95e007a8f35079b19da6426a5c37502fb2a24f2",
+      "files": 9,
+      "bytes": 41329,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -75,9 +75,9 @@
       "declared": "file:src/backend/deps/dsh-llm",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "47bcfe85b44a71dc3578b2945bef3f0268ed67cf93810d7bd4eb2733d7058f76",
-      "files": 95,
-      "bytes": 732748,
+      "treeSha256": "735cc5546755c148251346baf0978765e1c1eea9b6d7ccc40cf16b2213a80bc0",
+      "files": 92,
+      "bytes": 704628,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -87,9 +87,9 @@
       "declared": "file:src/backend/deps/dsh-native-command",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "6ab57c7890ab7bab2117fde3993f5b2378e1ad6f906a0656d1bfc1b602df89ef",
-      "files": 35,
-      "bytes": 83446,
+      "treeSha256": "575d6eaacf43685ed50930c5c6fe20fd1a55c7034d2cf1d5f7baa40130620746",
+      "files": 32,
+      "bytes": 72763,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -99,9 +99,9 @@
       "declared": "file:src/backend/deps/dsh-timeout",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "18c65293da20c02499ca54c185769f9dff64c5eff8484c76f4dc61bad0a45f13",
-      "files": 12,
-      "bytes": 57254,
+      "treeSha256": "9665650c8622f2855404ee9c0d81361d6004d67bae2722a8a48558f602498323",
+      "files": 9,
+      "bytes": 41453,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -111,9 +111,9 @@
       "declared": "file:src/backend/deps/dsh-typert-protocol",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "facc17fd4ad01eb87cec604b2374c6ce3819912a98c68d995a943d46da8b949b",
-      "files": 23,
-      "bytes": 142895,
+      "treeSha256": "3b22dd941a176bf28cb13f28f210d5a156d0c19330459824ca04d71907235f8d",
+      "files": 20,
+      "bytes": 124580,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -123,9 +123,9 @@
       "declared": "file:src/backend/deps/dsh-util-crypto",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "9a9fdd40ea22b3b062a1ace6eaf75d24b3fca15fb7fcfd1cbd070fb0a920d458",
-      "files": 12,
-      "bytes": 15020,
+      "treeSha256": "451ec5eb42f869523e9daaf8742b94f61e5ce00a51efc2f682aa42d2bc4f4dbb",
+      "files": 9,
+      "bytes": 9509,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -135,9 +135,9 @@
       "declared": "file:src/backend/deps/dsh-util-values",
       "version": "0.1.3-alpha.1",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "36fcc10396f6b0e43241a67db9d4904e8b777e63ce7122443664db6a53312f1f",
-      "files": 11,
-      "bytes": 47577,
+      "treeSha256": "ec41ef47928d317675e6db80d5a2980b65e77fba70b9a12d71e65780bceb5f03",
+      "files": 8,
+      "bytes": 38891,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -146,9 +146,9 @@
       "path": "src/backend/wechat-data",
       "declared": "file:src/backend/wechat-data",
       "version": "0.1.1-rc.2",
-      "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+      "repository": null,
       "upstreamWorkspace": "deepseek-harness",
-      "note": "in-repo 包，但 lib/typert.host.js 与 lib/typert.remote-client.js 是外部 codegen 的产物：里面的 sourceLocation 指向 packages/host/wechat-data/src/gateway.ts，本仓库没有这棵树，也没有任何脚本能重现它。实测后果：172 个 @Remote 方法里只有 114 个有生成的 zod schema（P2-7 记的账），而取消所需的元数据 cancellation:{parameter:\"signal\"} 也只活在这份生成物里 —— 所以「给重读查询加 AbortSignal」必须等生成链回到本仓（CODE-AUDIT-2026-09-26 的 P1-5 / P1-2）。"
+      "note": "in-repo 包，但 lib/typert.host.js 与 lib/typert.remote-client.js 是外部 codegen 的产物：里面的 sourceLocation 指向 packages/host/wechat-data/src/gateway.ts，本仓库没有这棵树，也没有任何脚本能重现它。实测后果（2026-10-12 复算）：180 个 @Remote 方法里只有 121 个有生成的 zod schema（P2-7 记的账，上界由 wechat-args-guard.spec.ts 看着、只许变小），而取消所需的元数据 cancellation:{parameter:\"signal\"} 也只活在这份生成物里 —— 所以「给重读查询加 AbortSignal」必须等生成链回到本仓（CODE-AUDIT-2026-09-26 的 P1-5 / P1-2）。新增方法时按既有先例手写 schema 条目（生成器不在本仓，见 OPTIMIZATION-PLAN 的四、①⑤ 两行）。"
     },
     "@deepseek-ai/schemastery": {
       "kind": "vendored",
@@ -156,9 +156,9 @@
       "declared": "file:src/backend/deps/schemastery",
       "version": "3.18.2",
       "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-      "treeSha256": "3f1f0ff4311790860e7f03c68c0862802be547cb022f64c199328806754c63f6",
-      "files": 12,
-      "bytes": 165559,
+      "treeSha256": "2c71e9e3a95942c28a8bc7f8d6c5096fb02fe63aee654bdc57ec99e4eb326d28",
+      "files": 11,
+      "bytes": 156313,
       "upstreamWorkspace": "deepseek-harness",
       "note": "上游 monorepo（deepseek-harness）的子包；升级时通常与其余 12 个一起 --import。"
     },
@@ -168,9 +168,9 @@
       "declared": "file:src/backend/deps/@koromix/koffi-win32-x64",
       "version": "3.1.1",
       "repository": "https://github.com/Koromix/koffi",
-      "treeSha256": "30cfb54ac660a563cef01fe8de21b88ba7fdd393a979bab5984d07e40a5c1b87",
-      "files": 5,
-      "bytes": 1045696,
+      "treeSha256": "e590cdaceeaac58b68249b958982af7a017c3588c2dc88d6da07daafbdef04fb",
+      "files": 4,
+      "bytes": 1045425,
       "note": "koffi 的平台包（optionalDependencies 里按 win32-x64 指进来），与上一行来自同一份上游发布。"
     },
     "@standard-schema/spec": {
@@ -179,9 +179,9 @@
       "declared": "file:src/backend/deps/@standard-schema/spec",
       "version": "1.1.0",
       "repository": "https://github.com/standard-schema/standard-schema",
-      "treeSha256": "f5f11f4ccb51b8a0041f1e640f87a36ad8be3143788f4a25b178f78b26a3b600",
-      "files": 3,
-      "bytes": 9478
+      "treeSha256": "79960618522eb75e7264b20ac7d319baf8926955a99589fe9508a13b45b92cd5",
+      "files": 2,
+      "bytes": 1927
     },
     "fzstd": {
       "kind": "vendored",
@@ -189,9 +189,9 @@
       "declared": "file:src/backend/deps/fzstd",
       "version": "0.1.1",
       "repository": "git+https://github.com/101arrowz/fzstd.git",
-      "treeSha256": "ca62246d0131a0d29f1ae8917d3dc1f8d365d588d2da4f304380438f98e9da76",
-      "files": 8,
-      "bytes": 64795
+      "treeSha256": "adc3cad4df48907f0183542dfd0e2ac1ea609769b97777730a7b89668ed339bd",
+      "files": 6,
+      "bytes": 61020
     },
     "koffi": {
       "kind": "vendored",
@@ -199,9 +199,9 @@
       "declared": "file:src/backend/deps/koffi",
       "version": "3.1.1",
       "repository": "https://github.com/Koromix/koffi",
-      "treeSha256": "44029382e3ff6ea118101dcc708b3dec58835c8ce222dbd4c439652cd164525b",
-      "files": 81,
-      "bytes": 1784362,
+      "treeSha256": "67082bf70ce2d60de92a92509f4957f4488669929c99915c04f1bafd4187a2ab",
+      "files": 62,
+      "bytes": 1643200,
       "note": "含平台原生二进制（win32-x64）；换平台要重新取，不能只拷 JS。"
     },
     "zod": {
@@ -210,9 +210,9 @@
       "declared": "file:src/backend/deps/zod",
       "version": "4.4.3",
       "repository": "git+https://github.com/colinhacks/zod.git",
-      "treeSha256": "f060250fc5fc47c7404a882f4f35a434c00365337817c0e462f8c34d7888c09b",
-      "files": 718,
-      "bytes": 4557773,
+      "treeSha256": "53cc2feefbdc49f9531fbb82f70480f5f44a4624cd72a2ac93f2fa0dc4a4e8d4",
+      "files": 717,
+      "bytes": 4552191,
       "note": "上游 npm 包原样拷入（index.js / locales / mini / src 都在），不是只取某个子目录。"
     }
   }

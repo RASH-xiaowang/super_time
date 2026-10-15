@@ -6,7 +6,7 @@
  * Persisted in the same <data-root>/wechat_privacy.db as the privacy audit
  * log.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { dirname, join } from 'node:path'
 import type {
   OperationCategory,
@@ -18,7 +18,7 @@ import type {
 } from '../types.ts'
 
 /** Categories accepted from the client; anything else is dropped by the filter. */
-const CATEGORIES: readonly OperationCategory[] = ['settings', 'keys', 'sync', 'export', 'delete', 'backup', 'edit', 'task', 'error']
+const CATEGORIES: readonly OperationCategory[] = ['settings', 'keys', 'sync', 'export', 'delete', 'backup', 'edit', 'task', 'error', 'clawbot']
 const ALLOWED_CATEGORIES = new Set<string>(CATEGORIES)
 /** Valid result statuses. */
 const STATUSES: readonly OperationStatus[] = ['ok', 'fail', 'skip']
@@ -174,8 +174,12 @@ export function listOperations(decryptedDir: string, query: OperationLogQuery = 
     db.close()
     /* v8 ignore next -- COUNT(*) always returns exactly one row, so countRow and its n are defined. */
     return { items: rows.map(toEntry), total: countRow?.n ?? 0 }
-  } catch {
-    return { items: [], total: 0 }
+  } catch (e) {
+    // W3-11.4：审计库打不开时不许返回「空列表」—— 那等于把「看不到操作记录」
+    // 显示成「没有操作记录」（N1 同族：读失败 ≠ 没有数据）。
+    const readError = e instanceof Error ? e.message : String(e)
+    console.warn('[operation-log] 读取失败（与「确无记录」不同）：' + readError)
+    return { items: [], total: 0, readError: '操作日志读取失败：' + readError }
   }
 }
 

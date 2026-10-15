@@ -29,7 +29,7 @@ const flush = async (): Promise<void> => {
 
 let lastState: { override: (n: unknown) => void } | null = null
 
-function Probe({ k, fetcher, opts }: { k: string; fetcher: () => Promise<unknown>; opts?: { shouldCache?: (d: never) => boolean } }): React.JSX.Element {
+function Probe({ k, fetcher, opts, n }: { k: string; fetcher: () => Promise<unknown>; opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }; n?: number }): React.JSX.Element {
   const st = useFreshData(k, fetcher, opts as never)
   lastState = st as never
   return createElement('div', {
@@ -38,14 +38,29 @@ function Probe({ k, fetcher, opts }: { k: string; fetcher: () => Promise<unknown
     'data-stale': String(st.stale),
     'data-err': st.error ?? '',
     'data-v': st.data === null ? '' : JSON.stringify(st.data),
+    'data-n': String(n ?? 0),
   })
 }
 
-function render(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean }): void {
+function render(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }): void {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => { root?.render(createElement(Probe, { k, fetcher, opts })) })
+}
+
+/** 再渲染一次（换 `n`：强制走渲染，模拟父组件无关状态变化）。 */
+function rerender(k: string, fetcher: () => Promise<unknown>, opts?: { shouldCache?: (d: never) => boolean; liveRefresh?: boolean }, n = 1): void {
+  act(() => { root?.render(createElement(Probe, { k, fetcher, opts, n })) })
+}
+
+/** 派发一条 WAL 推送并串行越过 useWechatDataUpdated 的 300ms 合并窗。 */
+async function firePush(): Promise<void> {
+  vi.useFakeTimers()
+  act(() => { window.dispatchEvent(new Event('dsh-wechat-data-updated')) })
+  await act(async () => { vi.advanceTimersByTime(320) })
+  vi.useRealTimers()
+  await flush()
 }
 
 beforeEach(() => {
@@ -122,5 +137,71 @@ describe('useFreshData：打开即查最新、失败才回退缓存', () => {
     await flush()
     expect(attr('data-v')).toBe('{"items":[],"readError":"库被占用"}')
     expect(mocks.writeRenderCache, '读失败的结果不许进缓存').not.toHaveBeenCalled()
+  })
+})
+
+describe('useFreshData：opts 稳定性与 WAL 实时刷新（2026-10-13）', () => {
+  it('内联 opts 对象不引发重查循环（旧实现 8 次 flush 后 fetcher 被调 3,166,897 次）', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ v: 'fresh' })
+    mocks.readRenderCache.mockReturnValue(null)
+    // 照抄 Tasks 的形态：内联 opts（每次渲染都是新对象/新箭头函数）——
+    // 旧实现只在「传了内联 opts」时才循环（不传 opts 时依赖恒 undefined，稳定）。
+    render('L1', fetcher, { shouldCache: (d: never) => Boolean(d) })
+    await flush()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    rerender('L1', fetcher, { shouldCache: (d: never) => Boolean(d) }, 1)
+    await flush()
+    rerender('L1', fetcher, { shouldCache: (d: never) => Boolean(d) }, 2)
+    await flush()
+    expect(fetcher, '无关重渲染不许引发重查').toHaveBeenCalledTimes(1)
+  })
+
+  it('liveRefresh 缺省为关：WAL 推送不触发重查（已自行订阅的面板不会双查）', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ v: 'fresh' })
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L2', fetcher)
+    await flush()
+    await firePush()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('liveRefresh 开：WAL 推送 ⇒ 静默重查——不翻 loading、新值上屏', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockResolvedValueOnce({ v: 'second' })
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L3', fetcher, { liveRefresh: true })
+    await flush()
+    expect(attr('data-v')).toBe('{"v":"first"}')
+    await firePush()
+    expect(fetcher, '推送后必须重查').toHaveBeenCalledTimes(2)
+    expect(attr('data-v'), '新值必须上屏').toBe('{"v":"second"}')
+    expect(attr('data-loading'), '静默重查不许翻 loading（按钮/骨架会闪）').toBe('false')
+  })
+
+  it('liveRefresh 开但静默重查失败 ⇒ 保留旧值、不端出错误（与缓存后台复验同一降级口径）', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ v: 'first' })
+      .mockRejectedValueOnce(new Error('抖动'))
+    mocks.readRenderCache.mockReturnValue(null)
+    render('L4', fetcher, { liveRefresh: true })
+    await flush()
+    await firePush()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(attr('data-v'), '一次失败就把旧值丢了').toBe('{"v":"first"}')
+    expect(attr('data-err'), '静默失败不许端出错误').toBe('')
+    expect(attr('data-stale')).toBe('false')
+  })
+
+  it('liveRefresh 开但还没有数据（首查失败/在途）⇒ 推送走非静默路径（照常回退缓存/报错）', async () => {
+    const fetcher = vi.fn()
+      .mockRejectedValueOnce(new Error('首查失败'))
+      .mockRejectedValueOnce(new Error('又失败'))
+    mocks.readRenderCache.mockReturnValue({ v: 'cached' })
+    render('L5', fetcher, { liveRefresh: true })
+    await flush()
+    expect(attr('data-v'), '首查失败应回退缓存').toBe('{"v":"cached"}')
+    await firePush()
+    expect(attr('data-err'), '无数据时的失败仍要报').toContain('本地缓存')
   })
 })

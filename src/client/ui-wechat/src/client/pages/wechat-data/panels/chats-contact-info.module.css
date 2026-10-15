@@ -1,6 +1,8 @@
 /* 单聊「聊天信息」抽屉（P2-6）——UI-GEOMETRY-SPEC 全令牌样板：
    圆角/间距零字面量；形态复刻已审计的群抽屉（300px 侧栏、48px 行、标签左/值右）。 */
 .drawer {
+  /* 与群抽屉同款的抽屉本地令牌（单 tile 网格用 48px 头像，官方口径）。 */
+  --wx-info-avatar: 48px;
   width: 300px;
   flex-shrink: 0;
   display: flex;
@@ -49,7 +51,13 @@
   overflow-y: auto;
   padding: var(--nm-s-3);
   scrollbar-width: thin;
+  /* 六区骨架：内容区吃剩余高度，底部动作位才能 margin-top:auto 贴底（D7）。 */
+  display: flex;
+  flex-direction: column;
 }
+
+/* 区①–⑤ 的内容包：吃剩余高度，把区⑥ 推到底部。 */
+.zones { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 
 .empty {
   font-size: var(--nm-fs-sm);
@@ -58,104 +66,11 @@
   text-align: center;
 }
 
-.profile {
-  display: flex;
-  align-items: center;
-  gap: var(--nm-s-3);
-  padding: var(--nm-s-2) 0 var(--nm-s-3);
-}
-
-.profileMeta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--nm-dense-g1);
-  min-width: 0;
-}
-
-.profileName {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--nm-text-1);
-  word-break: break-word;
-}
-
-.profileId {
-  font-size: var(--nm-fs-sm);
-  color: var(--nm-text-2);
-  word-break: break-all;
-}
-
-/* 「标签左 / 值右」行（微信聊天信息形态，审计 P1-8；min-height 48 在 ⚠️ 44-56 区间内） */
-.rows {
-  display: flex;
-  flex-direction: column;
-}
-
-.row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--nm-s-3);
-  min-height: 48px;
-  padding: 14px 0;
-  border-top: 1px solid var(--nm-border);
-}
-
-.rowLabel {
-  flex-shrink: 0;
-  font-size: 14px;
-  color: var(--nm-text-2);
-  line-height: 1.4;
-}
-
-.rowValue {
-  min-width: 0;
-  font-size: 14px;
-  color: var(--nm-text-1);
-  line-height: 1.4;
-  text-align: right;
-  word-break: break-word;
-}
-
-/* 共同群列表 */
-.groups {
-  padding: var(--nm-s-2) 0 0;
-  border-top: 1px solid var(--nm-border);
-}
-
-.groupsHd {
-  font-size: var(--nm-fs-sm);
-  color: var(--nm-text-2);
-  padding: var(--nm-s-2) 0;
-}
-
-.groupItem {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--nm-s-2);
-  padding: var(--nm-dense-row-y) 0;
-}
-
-.groupName {
-  min-width: 0;
-  font-size: 14px;
-  color: var(--nm-text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.groupMeta {
-  flex-shrink: 0;
-  font-size: var(--nm-fs-sm);
-  color: var(--nm-text-2);
-  font-variant-numeric: tabular-nums;
-}
-
 /* 导出入口：胶囊次级按钮（联动既有导出对话框） */
 .exportRow {
-  padding: var(--nm-s-3) 0;
+  /* 区⑥ 底部动作位：贴底（内容不足一屏时也被推到底边，官方底部按钮槽）。 */
+  margin-top: auto;
+  padding: var(--nm-s-3) 0 0;
   border-top: 1px solid var(--nm-border);
 }
 

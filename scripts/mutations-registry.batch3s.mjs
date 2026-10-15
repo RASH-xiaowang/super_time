@@ -7,7 +7,7 @@
  * 而界面看起来完全正常）—— 每一种都不报错、不崩、功能照跑，只是**暴露面悄悄变大**或
  * **实时性悄悄失效**。所以这一批的靶子全部选在「静默变坏」的那一行上。
  *
- * 八条各咬一处，都是**单行锚点**：
+ * 九条各咬一处，都是**单行锚点**：
  *   M527 定长比对退回普通比较（令牌可被计时侧信道逐字符猜）；
  *   M528 空令牌允许匹配（「还没启用」变成「谁都进得来」）；
  *   M529 许可校验抛异常时改成放行（2026-09 修过的洞，HTTP 那条路会把它带回来）；
@@ -15,7 +15,8 @@
  *   M531 启动条件少掉「令牌非空」（老配置遗留的 api_enabled:true 会把端口静默打开）；
  *   M532 并发上限抬高（手机能把单线程 worker 占满，桌面端界面被饿死）；
  *   M533 主进程不再把后端事件转发给 SSE（手机上 WAL 实时刷新链断在主进程这一环）；
- *   M534 SSE 的 payload 形状改了（渲染层那套「事件名 → CustomEvent」的分发全部失配）。
+ *   M534 SSE 的 payload 形状改了（渲染层那套「事件名 → CustomEvent」的分发全部失配）；
+ *   M587 Host 头校验短路（域名型 Host 也能拿到静态页与 /api/auth，DNS rebinding 门户重开）。
  *
  * @module mutations-registry/batch3s
  */
@@ -80,8 +81,16 @@ export const MUTATIONS_BATCH3S = [
     id: 'M534-remote-sse-payload-shape-changed',
     why: 'SSE 的 payload 从 `{ name, args }` 改成别的形状 ⇒ 与 IPC 的 `wechat:event` 不再同形，渲染层那套「事件名 → DOM CustomEvent」的分发全部失配（7 个事件一个都收不到），而这正是「手机与桌面共用同一份渲染层」的前提。判据：http-server.spec.ts 的「SSE 事件流：形状必须与 IPC 的 wechat:event 一致」。',
     file: 'src/backend/http-server.js',
-    from: '    for (const res of sseClients) writeSse(res, { name, args });',
-    to: '    for (const res of sseClients) writeSse(res, { event: name, payload: args });',
+    from: '    for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { name, args });',
+    to: '    for (const res of ctx.sseClients) writeSse(ctx.sseClients, res, { event: name, payload: args });',
+    spec: 'src/backend/tests/http-server.spec.ts',
+  },
+  {
+    id: 'M587-remote-host-check-bypassed',
+    why: 'Host 校验被短路 ⇒ attacker.example 这类域名也能拿到静态页面并登录 /api/auth，DNS rebinding 门户重新打开。判据：http-server.spec.ts 的「带别的域名 Host 的静态与 /api/auth 请求都在路由前拒绝」。',
+    file: 'src/backend/http-server.js',
+    from: '    if (!isHostAllowed(req.headers.host, ctx.state.address, ctx.state.port)) {',
+    to: '    if (true) {',
     spec: 'src/backend/tests/http-server.spec.ts',
   },
 ]

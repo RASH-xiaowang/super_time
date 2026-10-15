@@ -5,8 +5,8 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
+import { cdnHostOf, wechatArticleUrlAllowed, wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { boundedSet } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
 
@@ -25,7 +25,7 @@ const coverInFlight = new Map<string, Promise<{ url?: string; error?: string }>>
  * 由调用方注入而不是这里 import：`article-cover.ts` 不认识微信目录/AES 密钥，
  * 而 `moments-media.ts` 两边都有。返回非空字符串表示**本机确实有**（值本身只用于日志）。
  */
-export type LocalCoverProbe = (contentUrl: string) => string | undefined
+export type LocalCoverProbe = (contentUrl: string) => Promise<string | undefined>
 
 /**
  * 封面本地优先（A4）。
@@ -43,10 +43,10 @@ export type LocalCoverProbe = (contentUrl: string) => string | undefined
  * @param key - contentUrl。
  * @returns data URL；没有本机副本时 undefined（调用方继续走网络）。
  */
-function localCoverHit(probe: LocalCoverProbe | undefined, key: string): string | undefined {
+async function localCoverHit(probe: LocalCoverProbe | undefined, key: string): Promise<string | undefined> {
   if (!probe) return undefined
   try {
-    const hit = probe(key)
+    const hit = await probe(key)
     return hit ? hit : undefined
   } catch {
     // 探测本身出问题（目录读不动等）绝不能让封面拿不到 ⇒ 一律退回原路径。
@@ -119,13 +119,21 @@ function sniffImageFormat(data: Uint8Array): string {
  * 重试次数**保持默认的 3 次**（见上面那段"量过，结论是不改"）。
  */
 async function fetchText(url: string, timeoutMs: number): Promise<string> {
-  const res = await fetchWithRetry(fetch, url, { headers: FETCH_HEADERS }, { timeoutMs })
+  // 历史数据里有 http 文章链接：像图片一样先升级成 https，再受同一道域名闸门约束。
+  const target = url.startsWith('http://') ? 'https://' + url.slice('http://'.length) : url
+  if (!wechatArticleUrlAllowed(target)) {
+    throw new Error(`公众号文章页主机不在白名单内：${cdnHostOf(url) || '解析不出主机'}`)
+  }
+  const res = await fetchWithRetry(fetch, target, { headers: FETCH_HEADERS }, { timeoutMs })
   if (!res.ok) throw new Error('HTTP ' + String(res.status))
   return res.text()
 }
 
 /** Fetch image bytes with a timeout; throws on failure. */
 async function fetchBytes(url: string, timeoutMs: number): Promise<Uint8Array> {
+  if (!wechatCdnHostAllowed(url)) {
+    throw new Error(`封面图片主机不在微信 CDN 白名单内：${cdnHostOf(url) || '解析不出主机'}`)
+  }
   const res = await fetchWithRetry(fetch, url, { headers: FETCH_HEADERS }, { timeoutMs })
   if (!res.ok) throw new Error('HTTP ' + String(res.status))
   return new Uint8Array(await res.arrayBuffer())
@@ -138,6 +146,44 @@ function articleCoverUrl(html: string): string | null {
   if (og && og[1]) return og[1]
   const m = html.match(/mmbiz\.qpic\.cn\/[^"'\s>]+/)
   return m ? m[0] : null
+}
+
+/**
+ * 把页面里提出来、形状各异的封面 URL 归一成**可以出网**的 https 地址。
+ *
+ * og:image 正常是绝对地址，但也会见到协议相对（`//mmbiz.qpic.cn/...`）或不带协议
+ * （`mmbiz.qpic.cn/...`）的形状。无论哪种形状，最终都必须同时满足：
+ *   · 协议是 https（历史行为：http 自动升级）；
+ *   · 主机过 {@link wechatCdnHostAllowed}（图片 CDN 清单的唯一出处）。
+ * 任一条件不满足就回 null —— 调用方拒绝发请求，而不是把 HTML 里的任意地址带出门。
+ */
+function coverImageFetchUrl(raw: string, articleUrl: string): string | null {
+  const value = (raw || '').trim()
+  if (value === '') return null
+  let candidate = value
+  if (candidate.startsWith('//')) {
+    candidate = 'https:' + candidate
+  } else if (!/^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+    // 看起来像裸主机名的（含 mmbiz.qpic.cn/... 这种 fallback 形状）直接补 https；
+    // 相对路径则按文章页地址解析，仍受后面的 CDN 白名单约束。
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(candidate)) candidate = 'https://' + candidate
+    else {
+      try {
+        candidate = new URL(candidate, articleUrl).href
+      } catch {
+        return null
+      }
+    }
+  }
+  if (candidate.startsWith('http://')) candidate = 'https://' + candidate.slice('http://'.length)
+  let parsed: URL
+  try {
+    parsed = new URL(candidate)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:') return null
+  return wechatCdnHostAllowed(candidate) ? candidate : null
 }
 
 /** Local cache file for one article cover (md5(contentUrl)). */
@@ -210,6 +256,11 @@ async function resolveOne(
   cacheDir: string | undefined,
   localCover?: LocalCoverProbe,
 ): Promise<{ url?: string; error?: string }> {
+  // 文章地址先过域名闸门：缓存查找、本机探测和任何网络动作都不能先发生。
+  // 消息 XML 是可被离线改写的文件，`contentUrl` 写成站外地址时这里必须一字节都不发。
+  if (!wechatArticleUrlAllowed(key)) {
+    return { error: `文章地址的主机不在微信白名单内（${cdnHostOf(key) || '解析不出主机'}），已拒绝请求` }
+  }
   if (coverCache.has(key)) {
     coverStats.mem += 1
     const cached = coverCache.get(key) ?? ''
@@ -240,7 +291,7 @@ async function resolveOne(
     }
   }
   // A4：本机（朋友圈媒体索引）already 有这张封面 ⇒ 直接用它，不抓 HTML、不抓图。
-  const local = localCoverHit(localCover, key)
+  const local = await localCoverHit(localCover, key)
   if (local) {
     coverStats.local += 1
     boundedSet(coverCache, key, local)
@@ -276,8 +327,14 @@ async function resolveOne(
         boundedSet(coverCache, key, '')
         return { error: '文章中未找到封面图片' }
       }
-      const imgUrl = raw.startsWith('http://') ? 'https://' + raw.slice(7) : raw
-      const bytes = await fetchBytes(imgUrl, 20000)
+      const allowedImgUrl = coverImageFetchUrl(raw, key)
+      if (!allowedImgUrl) {
+        // 站外/非 https 的封面地址不是「这篇文章没有图」，而是**不能替它去取**。
+        // 不写 miss 标记（那是给「页面确实没有 og:image」用的），避免把安全拒绝记成业务事实。
+        boundedSet(coverFailUntil, key, Date.now() + FAIL_TTL_MS)
+        return { error: `文章封面地址的主机不在微信 CDN 清单内（${cdnHostOf(raw) || '解析不出主机'}），已拒绝请求` }
+      }
+      const bytes = await fetchBytes(allowedImgUrl, 20000)
       if (bytes.length < 16) throw new Error('empty image')
       const fmt = sniffImageFormat(bytes)
       const data = 'data:image/' + fmt + ';base64,' + Buffer.from(bytes).toString('base64')

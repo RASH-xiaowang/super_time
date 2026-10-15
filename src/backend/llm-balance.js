@@ -21,6 +21,9 @@
  * @module llm-balance
  */
 
+const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js')
+const { resolveLlmConfig } = require('./llm-config-store.js')
+
 /** 单次请求超时（与 `wechat:llm-models` 保持一致）。 */
 const TIMEOUT_MS = 20_000
 
@@ -34,7 +37,10 @@ const TIMEOUT_MS = 20_000
  */
 function humanizeNetworkError(e, host) {
   const code = (e && e.cause && e.cause.code) || (e && e.code) || ''
-  if (e && e.name === 'AbortError') return `请求超时（${Math.round(TIMEOUT_MS / 1000)} 秒）：${host} 无响应，请检查网络或地址`
+  if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+    const timeoutMs = Number.isFinite(Number(e.timeoutMs)) ? Number(e.timeoutMs) : TIMEOUT_MS
+    return `请求超时（${Math.round(timeoutMs / 1000)} 秒）：${host} 无响应，请检查网络或地址`
+  }
   if (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
     return `连接 ${host} 超时：网络不通或地址有误（国内网络通常无法直连 api.openai.com，可换 DeepSeek / 通义千问等国内厂商）`
   }
@@ -45,9 +51,74 @@ function humanizeNetworkError(e, host) {
   return `${(e && e.message) || String(e)}（${host}）`
 }
 
+/**
+ * 网络层抛出的错 → 带分类的 {@link probeError}。
+ * @param e fetch 抛出的错。
+ * @param host 主机名（写进提示里）。
+ * @returns 带 `probeCode` 的 Error。
+ */
+function networkProbeError(e, host) {
+  const failure = classifyProbeFailure({ errCode: (e && e.cause && e.cause.code) || (e && e.code) || '', errName: (e && e.name) || '' })
+  return probeError(humanizeNetworkError(e, host), failure)
+}
+
 /** 取主机名（写提示用）；地址不合法时退回原文。 */
 function hostOf(baseUrl) {
   try { return new URL(baseUrl).host } catch { return String(baseUrl || '') }
+}
+
+/**
+ * 探针失败的**稳定分类**（W2-12.1）。
+ *
+ * 为什么要分类而不只是出文案：同一个失败在三条链路上（chat / embed / rerank）
+ * 各自的文案并不统一（chat 的 401 说「请检查后重试」，embed 说「检查接口路径」），
+ * 这是**故意**的 —— 文案要贴着那条链路说人话。但「这是哪一类问题」不该有三份答案：
+ * 界面要按类分组、诊断要按类给下一步、文档要按类统计。
+ * 所以本函数只负责**分类**，文案仍各写各的。
+ *
+ * 九类（与 {@link PROBE_FAILURE_CODES} 一一对应）：
+ *   · `dns`          域名解析失败 —— 地址拼写错，换地址能救
+ *   · `timeout`      超时（含主动 abort）—— **可重试**
+ *   · `tls`          证书校验失败 —— 中间设备在解密，或该地址只支持 http
+ *   · `refused`      连接被拒 —— 端口没开 / 被防火墙拦
+ *   · `reset`        连接被重置 —— 被中间设备掐了，**可重试**
+ *   · `unauthorized` 401/403 —— Key 无效或没权限
+ *   · `not-found`    404 —— 路径不对（**最常见的是少了 `/v1`**）或厂商没这个接口
+ *   · `server`       5xx —— 厂商侧故障，**可重试**
+ *   · `unknown`      认不出来 —— 如实归到这里，不硬套某一类
+ */
+const PROBE_FAILURE_CODES = ['dns', 'timeout', 'tls', 'refused', 'reset', 'unauthorized', 'not-found', 'server', 'unknown']
+
+/** 分类成纯函数：网络错误与 HTTP 状态码走同一张表，谁都不许自己另开一套。 */
+function classifyProbeFailure(input) {
+  const it = input || {}
+  const errCode = String(it.errCode || '')
+  const errName = String(it.errName || '')
+  const status = Number(it.status)
+  if (errName === 'AbortError' || errName === 'TimeoutError' || errCode === 'UND_ERR_CONNECT_TIMEOUT' || errCode === 'ETIMEDOUT') return { code: 'timeout', retryable: true }
+  if (errCode === 'ENOTFOUND' || errCode === 'EAI_AGAIN') return { code: 'dns', retryable: false }
+  if (/CERT|SELF_SIGNED|TLS|SSL/i.test(errCode)) return { code: 'tls', retryable: false }
+  if (errCode === 'ECONNREFUSED') return { code: 'refused', retryable: false }
+  if (errCode === 'ECONNRESET') return { code: 'reset', retryable: true }
+  if (status === 401 || status === 403) return { code: 'unauthorized', retryable: false }
+
+  if (status === 404) return { code: 'not-found', retryable: false }
+  if (Number.isFinite(status) && status >= 500) return { code: 'server', retryable: true }
+  return { code: 'unknown', retryable: true }
+}
+
+/**
+ * 造一个**带分类**的探针错误：`message` 照旧（既有断言与界面文案都靠它），
+ * 另外挂上 `probeCode` / `retryable` 供界面分组与诊断用。
+ * @param message 面向用户的中文提示。
+ * @param failure {@link classifyProbeFailure} 的返回值。
+ * @returns 带分类的 Error。
+ */
+function probeError(message, failure) {
+  const err = new Error(message)
+  err.probeCode = failure.code
+  err.retryable = failure.retryable
+  return err
 }
 
 /**
@@ -56,9 +127,7 @@ function hostOf(baseUrl) {
  * @returns 归一化后的地址。
  */
 function normalizeBase(baseUrl) {
-  const base = String(baseUrl || '').trim().replace(/\/+$/, '')
-  if (!/^https?:\/\//i.test(base)) throw new Error('API 地址需以 http:// 或 https:// 开头')
-  return base
+  return parseLlmBaseUrl(baseUrl).base
 }
 
 /**
@@ -134,17 +203,10 @@ function parseBalance(payload) {
 
 /** 带超时与统一错误翻译的 GET。 */
 async function getJson(url, apiKey, host) {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
-    return await fetch(url, {
-      headers: { accept: 'application/json', ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}) },
-      signal: ctrl.signal,
-    })
+    return await llmRequest(url, { apiKey, timeoutMs: TIMEOUT_MS, maxAttempts: 1 })
   } catch (e) {
-    throw new Error(humanizeNetworkError(e, host))
-  } finally {
-    clearTimeout(timer)
+    throw networkProbeError(e, host)
   }
 }
 
@@ -181,7 +243,9 @@ async function testLlmEndpoint(opts) {
     if (!model) {
       throw new Error(`未填写${field}：${kind === 'embed' ? '向量检索会退化为纯本地稀疏通道' : '精排整段会跳过'}，没有可测的端点`)
     }
-    const path = String((opts && opts.path) || '').trim() || (kind === 'embed' ? '/embeddings' : '/rerank')
+    const resolved = resolveLlmConfig({ env: process.env })
+    const path = String((opts && opts.path) || '').trim()
+      || (kind === 'embed' ? resolved.embedPath : resolved.rerankPath)
     const url = base + (path.startsWith('/') ? path : '/' + path)
     const body = kind === 'embed'
       ? { model, input: '连接测试' }
@@ -189,7 +253,7 @@ async function testLlmEndpoint(opts) {
     const t0 = Date.now()
     const res = await postJson(url, apiKey, host, body)
     const ms = Date.now() - t0
-    if (!res.ok) throw new Error(httpError(res, url, apiKey ? 'API Key' : 'API Key 为空'))
+    if (!res.ok) throw httpProbeError(res, url, apiKey ? 'API Key' : 'API Key 为空')
     const data = await res.json().catch(() => null)
     const detail = kind === 'embed' ? embedDetail(data) : rerankDetail(data)
     if (!detail) throw new Error(`${url} 返回里没有可识别的结果（向量应有 data[].embedding，精排应有 results[].relevance_score）`)
@@ -204,10 +268,10 @@ async function testLlmEndpoint(opts) {
   if (!res.ok) {
     const body = (await res.text().catch(() => '')).slice(0, 200)
     if (res.status === 401 || res.status === 403) {
-      throw new Error(`接口返回 ${res.status}：${apiKey ? 'API Key 无效或无权限，请检查后重试' : 'API Key 为空，请先填写你的 API Key'}${body ? '：' + body : ''}`)
+      throw probeError(`接口返回 ${res.status}：${apiKey ? 'API Key 无效或无权限，请检查后重试' : 'API Key 为空，请先填写你的 API Key'}${body ? '：' + body : ''}`, classifyProbeFailure({ status: res.status }))
     }
     const hint = res.status === 404 ? '（该地址可能缺少 /v1 后缀，或厂商不提供 /models 接口）' : ''
-    throw new Error(`接口返回 ${res.status} ${res.statusText || ''}${body ? '：' + body : ''} ${hint}`.trim())
+    throw probeError(`接口返回 ${res.status} ${res.statusText || ''}${body ? '：' + body : ''} ${hint}`.trim(), classifyProbeFailure({ status: res.status }))
   }
   const data = await res.json().catch(() => null)
   const raw = Array.isArray(data && data.data) ? data.data : Array.isArray(data && data.models) ? data.models : []
@@ -236,10 +300,21 @@ function rerankDetail(data) {
 }
 
 /** 非 2xx 的统一错误文案（401/403 点明 Key、404 点明路径）。 */
+/**
+ * 非 2xx 的**抛错**版本（{@link httpError} 的文案 + {@link classifyProbeFailure} 的分类）。
+ * @param res fetch 响应。
+ * @param url 目标地址。
+ * @param keyLabel 凭据的说法（区分「Key 无效」与「Key 为空」）。
+ * @returns 带 `probeCode` 的 Error。
+ */
+function httpProbeError(res, url, keyLabel) {
+  return probeError(httpError(res, url, keyLabel), classifyProbeFailure({ status: res.status }))
+}
+
 function httpError(res, url, keyLabel) {
   const status = res.status
   if (status === 401 || status === 403) return `接口返回 ${status}：${keyLabel} 无效或无权限（${url}）`
-  if (status === 404) return `接口返回 404：路径不对或该厂商没有这个接口（${url}）—— 检查「接口路径」那一栏`
+  if (status === 404) return `接口返回 404：路径不对或该厂商没有这个接口（${url}）—— 检查「接口路径」那一栏（也可能是地址少了 /v1 后缀）`
   return `接口返回 ${status} ${res.statusText || ''}（${url}）`.trim()
 }
 
@@ -252,23 +327,16 @@ function httpError(res, url, keyLabel) {
  * @returns fetch 响应。
  */
 async function postJson(url, apiKey, host, body) {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
-    return await fetch(url, {
+    return await llmRequest(url, {
       method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
+      apiKey,
+      body,
+      timeoutMs: TIMEOUT_MS,
+      maxAttempts: 1,
     })
   } catch (e) {
-    throw new Error(humanizeNetworkError(e, host))
-  } finally {
-    clearTimeout(timer)
+    throw networkProbeError(e, host)
   }
 }
 
@@ -296,7 +364,7 @@ async function queryLlmBalance(baseUrl, apiKey) {
   for (const url of urls) {
     const res = await getJson(url, apiKey, host)
     if (res.status === 401 || res.status === 403) {
-      throw new Error(`接口返回 ${res.status}：API Key 无效或无权限（${url}）`)
+      throw probeError(`接口返回 ${res.status}：API Key 无效或无权限（${url}）`, classifyProbeFailure({ status: res.status }))
     }
     if (!res.ok) {
       const body = (await res.text().catch(() => '')).slice(0, 160)
@@ -313,6 +381,8 @@ async function queryLlmBalance(baseUrl, apiKey) {
 
 module.exports = {
   TIMEOUT_MS,
+  PROBE_FAILURE_CODES,
+  classifyProbeFailure,
   humanizeNetworkError,
   normalizeBase,
   balanceUrlsFor,

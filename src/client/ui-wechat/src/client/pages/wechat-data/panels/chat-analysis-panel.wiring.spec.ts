@@ -6,8 +6,10 @@
  * ① **两块共用一个容器**：分析原本是独立面板（左栏），产品调整为「合并到推荐回复下方」
  *    —— 于是外壳上提到组合层 `ChatRightPanel`，**推荐回复在上、分析在下**。
  *    合并的意义就在于消掉双层边框与两个头部：两个子面板各自都**不许再带外壳**。
- * ② **右栏默认是推荐回复**：`suggestOpen` 初值 true（进会话就能看到候选回复），
- *    而 AI 问答打开时**顶替**整个右栏（两块并排会把 960px 窗口下的消息列挤到不可用）。
+ * ② **右栏默认关**（2026-10-13 反转，用户要求「进入聊天框后推荐回复面板和分析面板默认不显示」）：
+ *    `suggestOpen` / `analysisPaneOpen` 初值 false，换会话也不强行打开；
+ *    头部「推荐回复 / 分析」按钮是唯一入口，AI 问答打开时顶替整个右栏
+ *    （两块并排会把 960px 窗口下的消息列挤到不可用）。
  * ③ **两块各有自己的展开/折叠按钮**（2026-09-26 **反转**）：原先（2026-09-25）移除过
  *    「推荐回复」切换按钮，理由是它成了右栏的常驻内容、留按钮会让同一功能有两个入口。
  *    现在两块都能独立收起 ⇒ 按钮是它们**唯一**的入口，不再是冗余。
@@ -67,10 +69,16 @@ describe('分析面板 / 推荐回复面板', () => {
     expect(dividerAt, '分隔线在分析之前').toBeLessThan(RIGHT.indexOf('<ChatAnalysisPanel'))
   })
 
-  it('② 右栏两块默认都开，AI 问答打开时顶替它', () => {
-    expect(CHATS, '推荐回复常驻：初值必须是 true').toContain('const [suggestOpen, setSuggestOpen] = useState(true)')
-    expect(CHATS, '分析区初值也必须是 true（默认两块都可见，与加按钮之前一致）')
-      .toContain('const [analysisPaneOpen, setAnalysisPaneOpen] = useState(true)')
+  it('② 右栏两块默认都关（2026-10-13 反转）、AI 问答打开时顶替它', () => {
+    // 反转记录：原断言守「初值 true + 换会话重置为 true」。用户要求进入聊天框后两块默认不显示；
+    // 头部「推荐回复 / 分析」按钮是它们唯一的入口（③），可恢复性不再依赖重置，
+    // 且换会话强行打开会覆盖用户自己的选择。
+    expect(CHATS, '推荐回复进会话就展开（用户要求默认不显示）').toContain('const [suggestOpen, setSuggestOpen] = useState(false)')
+    expect(CHATS, '分析区进会话就展开（用户要求默认不显示）')
+      .toContain('const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)')
+    const reset = sliceBetween(CHATS, 'useEffect(() => {\n    setAnalysisTarget(null)', '}, [curSession?.username])', '换会话重置块')
+    expect(reset, '换会话又把推荐回复强行打开（默认关被绕过）').not.toContain('setSuggestOpen(true)')
+    expect(reset, '换会话又把分析区强行打开（默认关被绕过）').not.toContain('setAnalysisPaneOpen(true)')
     // **精确切到挂载条件那一段**：原先用「锚点往后 120 字符」的窗口写法，
     // 会把邻近的无关代码圈进来 —— 本仓为这种写法吃过假阳性的亏。
     const mount = sliceBetween(VIEW, '{curSession !== null && (suggestVisible || analysisPaneOpen)',
@@ -78,8 +86,6 @@ describe('分析面板 / 推荐回复面板', () => {
     expect(mount, 'AI 问答打开时不该同时挂右栏（两块并排会挤爆消息列）').toContain('!(aiOpen && aiEligible && aiTarget)')
     expect(mount, '右栏不该再写死「只有单聊才挂」—— 群聊也要能单独看分析')
       .not.toContain("curSession.type === 'private'")
-    expect(CHATS, '换会话要重置（否则收起后再也没有恢复入口）').toContain('setSuggestOpen(true)')
-    expect(CHATS, '分析区同理，换会话也要重置').toContain('setAnalysisPaneOpen(true)')
   })
 
   it('③ 两块各有自己的展开/折叠按钮，且真的接上了状态', () => {

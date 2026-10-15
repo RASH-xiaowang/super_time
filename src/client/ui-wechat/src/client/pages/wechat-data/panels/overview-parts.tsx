@@ -16,11 +16,22 @@ import {
   apiGetStorageStats,
   apiGetAvatar,
 } from '../api.ts'
-import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, PanelHeader, StatCard } from '../ui/kit.tsx'
-import kitCss from '../ui/kit.module.css'
-import css from './overview.module.css'
-import neon from './overview-neon.module.css'
+import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
+import { Card, LoadingState, PanelHeader, StatCard } from '../ui/kit.tsx'
+import kitCss from '../ui/kit.module.css'
+import css from './overview.module.css'
+import neon from './overview-neon.module.css'
+import { CalendarHeatmapPanel } from './overview-export.ts'
+
+/** 给总览里的日历热力一个独立 Suspense，主面板不必为懒加载多包一层 JSX。 */
+export function CalendarHeatmapGate(props: React.ComponentProps<typeof CalendarHeatmapPanel>): React.JSX.Element {
+  return (
+    <Suspense fallback={<LoadingState variant="compact" label="日历热力资源加载中…" />}>
+      <CalendarHeatmapPanel {...props} />
+    </Suspense>
+  )
+}
 
 /** 朋友圈活跃作者头像：组件挂载（进入可视区）后才请求头像，避免批量预取。 */
 export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): React.JSX.Element {
@@ -39,11 +50,7 @@ export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): Rea
   return <span className={css.authorAvatarFallback}>{(author.name || '?').slice(0, 1)}</span>
 }
 
-export const CACHE_BASE = 'dsh-wechat-overview-base-v1'
-export const CACHE_INSIGHTS = 'dsh-wechat-overview-insights-v1'
-export const CACHE_LEDGER = 'dsh-wechat-overview-ledger-v1'
-export const CACHE_STOR = 'dsh-wechat-overview-storage-v1'
-export const CACHE_TIME = 'dsh-wechat-overview-last-updated-v1'
+export { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
 /** 折起来的卡片标题（设计稿每张卡右上角那个「折叠」）。 */
 export const OV_COLLAPSED_KEY = 'dsh-wechat-ov-collapsed-v1'
 

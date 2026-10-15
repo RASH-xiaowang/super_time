@@ -41,6 +41,10 @@ function ctx(handled: string[], onned: string[]) {
       handle: (ch: string) => { handled.push(ch) },
       on: (ch: string) => { onned.push(ch) },
     },
+    ipcTrust: {
+      wrap: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
+      wrapOn: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
+    },
     app: { getVersion: () => '0.0.0', isPackaged: false, getPath: () => '/tmp', getName: () => 'Super Time', on: () => {} },
     dialog: { showSaveDialog: async () => ({ canceled: true }), showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
     shell: { showItemInFolder: () => {}, openExternal: async () => {} },

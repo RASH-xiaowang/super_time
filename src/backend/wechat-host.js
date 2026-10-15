@@ -15,28 +15,37 @@ const path = require('node:path');
 const os = require('node:os');
 const { statSync } = require('node:fs');
 const wechatPaths = require('./wechat-paths');
-const { fetchWithRetry } = require('./llm-retry');
 const argsGuard = require('./wechat-args-guard');
+const { cancelPlanFor, injectFallbackJobId, jobIdForCall } = require('./wechat-cancel');
+const { createLlmBridge } = require('./llm-bridge');
+
 
 /**
  * 已经用**真实流量**证明过「生成的 schema 与面板实际传来的形状对得上」的方法。
  *
- * 空集起步不是偷懒：`wechat-data/lib/typert.host.js` 里那 114 份 zod schema 从来没被执行过
- * （P2-7），也就是说「它们对不对今天的代码」这件事没有任何证据。拿没有证据的东西去拒绝
- * 真实调用，结果是某个面板当场开始报错，而不是更安全。
- * 所以这里把 zod 判定先当**影子**记账（见 `info().argGuard`），promotion 到硬拒的条件是
- * 那条方法在真实使用中 `mismatched` 里再也没有出现过 —— 加一个名字就要在下面的注释里写明
- * 是哪条证据。结构/体积那一道闸门（`wechat-args-guard.js` 的 ① 档）不受这份名单影响，
- * 它**总是**拒绝。
+ * 空集起步不是偷懒：`wechat-data/lib/typert.host.js` 里生成的 zod schema 长期落后于
+ * `@Remote` 声明，且生成器不在本仓库。具体缺口数不要在这里写死，它会随生成物漂移；
+ * 每次启动的真实读数看 `info().argGuard.covered/total`（当前工作树实测：133 个
+ * invocation 中 89 个带参数 schema，44 个是零参数方法、无需参数 schema，另有 62 个
+ * `@Remote` 方法根本不在 invocation 表）。连续几次
+ * 合法调用只能证明「见过的那一种形状合法」，不能证明 stale schema 覆盖了全部合法形状；
+ * 因此这里**不做自动升级**。只有人工核对过 schema、给出明确证据后，才能把方法名加进
+ * 这份白名单并注明证据。结构/体积那一道闸门（`wechat-args-guard.js` 的 ① 档）
+ * 不受这份名单影响，它**总是**拒绝。
+ *
+ * 2026-10-15 第一个试点：`deleteTask`。
+ * 证据是生成物与声明逐字一致：
+ *   - `src/backend/wechat-data/src/gateway-config-ops.ts:258-260`
+ *     声明 `deleteTask(options: { id: number })`；
+ *   - `src/backend/wechat-data/lib/typert.host.js:258-261`
+ *     生成的参数 schema 同样是 `z.object({ id: z.number() })`。
+ * 多余字段仍按 `checkSchema` 的既有纪律放行，因此这份名单只会拒绝
+ * `id` 缺失或类型错误，不会误伤面板先发来的新字段。
  */
-const ENFORCED_SCHEMA_METHODS = new Set();
+const ENFORCED_SCHEMA_METHODS = new Set([
+  'deleteTask',
+]);
 
-/** 每次重试打一条日志：重试过程不上界面（成功的重试应当无感），但诊断日志里要留痕。 */
-function logRetry(what) {
-  return (info) => {
-    console.warn(`[llm] ${what} 请求失败（${info.reason}），${info.delayMs}ms 后重试（第 ${info.attempt} 次尝试）`);
-  };
-}
 
 /**
  * 「纯读且昂贵」方法的结果缓存（正缓存 + 负缓存）。
@@ -137,343 +146,6 @@ function writeResultCache(key, result) {
   resultCache.set(key, result);
 }
 
-/** 可注入的 LLM 桥接配置（wechat/llm.json 优先，其次环境变量/覆盖参数）。 */
-function llmConfigFromEnv(overrides = {}) {
-  const file = wechatPaths.loadLlmConfig();
-  return {
-    provider: overrides.provider || file.provider || process.env.SUPERTIME_LLM_PROVIDER || 'openai-compat',
-    model: overrides.model || file.model || process.env.SUPERTIME_LLM_MODEL || '',
-    apiKey: overrides.apiKey || file.apiKey || process.env.SUPERTIME_LLM_API_KEY || '',
-    baseUrl: overrides.baseUrl || file.apiUrl || process.env.SUPERTIME_LLM_API_URL || 'https://api.openai.com/v1',
-    apiPath: overrides.apiPath || file.apiPath || process.env.SUPERTIME_LLM_API_PATH || '/chat/completions',
-    embeddingModel: overrides.embeddingModel || file.embeddingModel || process.env.SUPERTIME_LLM_EMBED_MODEL || '',
-    embedPath: overrides.embedPath || file.embedPath || process.env.SUPERTIME_LLM_EMBED_PATH || '/embeddings',
-    // 嵌入端点的独立凭据/地址：留空 ⇒ 复用 chat 那对（同厂商是常态）。
-    embeddingApiUrl: overrides.embeddingApiUrl || file.embeddingApiUrl || process.env.SUPERTIME_LLM_EMBED_URL || '',
-    embeddingApiKey: overrides.embeddingApiKey || file.embeddingApiKey || process.env.SUPERTIME_LLM_EMBED_KEY || '',
-    // 重排序：填了 rerankModel 就启用（没有独立开关， D3）。
-    rerankModel: overrides.rerankModel || file.rerankModel || process.env.SUPERTIME_LLM_RERANK_MODEL || '',
-    rerankPath: overrides.rerankPath || file.rerankPath || process.env.SUPERTIME_LLM_RERANK_PATH || '/rerank',
-    rerankApiUrl: overrides.rerankApiUrl || file.rerankApiUrl || process.env.SUPERTIME_LLM_RERANK_URL || '',
-    rerankApiKey: overrides.rerankApiKey || file.rerankApiKey || process.env.SUPERTIME_LLM_RERANK_KEY || '',
-    rerankTimeoutMs: Number(overrides.rerankTimeoutMs || file.rerankTimeoutMs || process.env.SUPERTIME_LLM_RERANK_TIMEOUT_MS || 20_000),
-    timeoutMs: Number(overrides.timeoutMs || file.timeoutMs || process.env.SUPERTIME_LLM_TIMEOUT_MS || 120_000),
-  };
-}
-
-/**
- * 解析「这次 embedding 实际会用哪个模型名」。
- *
- * 单独抽出来是为了让**发送方与记账方拿到同一个值**。此前 gateway 往向量库里记的是
- * `rag-config.embedding.model || 'default'`，而这里真正发出去的是
- * `opts.model || cfg.embeddingModel || cfg.model` —— 两个字符串来自两条互不相通的链，
- * 而 rag-config 那个字段界面配不到、默认空 ⇒ 记进去的恒是字符串 `'default'`。
- * 后果不是难看而是错：向量库判「换没换模型」用的就是这个记录值，恒等于 'default'
- * 意味着**换嵌入模型永远不触发重建**，旧模型的向量被当成新模型的用。
- *  F1 / C4。
- * @param cfg - {@link llmConfigFromEnv} 的结果。
- * @param override - 调用方显式指定的模型名（可空）。
- * @returns 实际生效的模型名；三者都空时为空串（调用方据此判「未配置」）。
- */
-function resolveEmbedModel(cfg, override = '') {
-  return String(override || cfg.embeddingModel || cfg.model || '');
-}
-
-/** 把 dsh-llm 的 Message 内容块转成 OpenAI 聊天消息。 */
-function toOpenAiMessage(message) {
-  const content = Array.isArray(message.content)
-    ? message.content.map((part) => part.text ?? '').join('')
-    : String(message.content ?? '');
-  return { role: message.role ?? 'user', content };
-}
-
-/**
- * 极简 LLM 桥：未配置时方法抛错（与上游“未配置默认模型”一致）；
- * 配置了 SUPERTIME_LLM_* 时走 OpenAI 兼容的 /chat/completions。
- *
- * stream() 是**真流式**：以 `stream: true` 发请求并按 SSE 逐块 yielding text-delta，
- * 调用方（gateway）因此可以在生成过程中把增量推给界面。
- * 厂商不支持 SSE 时自动退化为整段返回 —— 一次 yield 完整 text。
- */
-function createLlmBridge(configOverrides = {}) {
-  /** 组装一次请求所需的 URL / headers / body。 */
-  function buildRequest(opts, streamMode) {
-    const cfg = llmConfigFromEnv(configOverrides);
-    const configured = Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
-    if (!configured) {
-      throw new Error('LLM 未配置：请在「微信问答 → 模型配置」中填写模型与 API Key');
-    }
-    const messages = [
-      ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
-      ...(opts.messages || []).map(toOpenAiMessage),
-    ];
-    const url = cfg.baseUrl.replace(/\/+$/, '') + (cfg.apiPath.startsWith('/') ? cfg.apiPath : '/' + cfg.apiPath);
-    const headers = { 'content-type': 'application/json', accept: streamMode ? 'text/event-stream' : 'application/json' };
-    if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
-    return {
-      cfg,
-      url,
-      headers,
-      controller,
-      clear: () => clearTimeout(timer),
-      init: {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: opts.model || cfg.model,
-          messages,
-          max_tokens: opts.maxTokens ?? 2048,
-          stream: streamMode,
-        }),
-        signal: controller.signal,
-      },
-    };
-  }
-
-  async function fetchCompletion(opts) {
-    const req = buildRequest(opts, false);
-    try {
-      // 有界重试：网络抖动 / 429 / 5xx 自动重来，401/400 这类立刻失败。
-      // 整体超时仍由 req.init.signal 控制（重试在 signal 中止时立即停止）。
-      const res = await fetchWithRetry(fetch, req.url, req.init, { onRetry: logRetry('chat') });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
-      }
-      const payload = await res.json();
-      return payload?.choices?.[0]?.message?.content ?? '';
-    } finally {
-      req.clear();
-    }
-  }
-
-  async function* stream(opts) {
-    const req = buildRequest(opts, true);
-    let res;
-    try {
-      // 只对**握手**做重试：一旦开始吐 chunk 就不能重来（会重复输出内容）。
-      res = await fetchWithRetry(fetch, req.url, req.init, { onRetry: logRetry('chat(stream)') });
-    } catch (e) {
-      req.clear();
-      throw e;
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      req.clear();
-      throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-    yield { type: 'block-start', index: 0, blockType: 'text' };
-    const contentType = String(res.headers.get('content-type') || '');
-    // 厂商忽略 stream:true 直接返回整段 JSON 时走这里（也覆盖 res.body 为空的情况）
-    if (!res.body || !contentType.includes('event-stream')) {
-      try {
-        const payload = await res.json();
-        const text = payload?.choices?.[0]?.message?.content ?? '';
-        yield { type: 'text-delta', index: 0, text };
-        yield { type: 'block-end', index: 0, block: { type: 'text', text } };
-        yield { type: 'finish', reason: 'stop' };
-      } finally {
-        req.clear();
-      }
-      return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let full = '';
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let nl;
-        // SSE 以空行分隔事件；这里逐行处理 `data:` 负载即可（OpenAI 兼容格式）
-        while ((nl = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === '[DONE]') continue;
-          let delta = '';
-          try {
-            const parsed = JSON.parse(data);
-            delta = parsed?.choices?.[0]?.delta?.content
-              ?? parsed?.choices?.[0]?.message?.content
-              ?? '';
-          } catch {
-            continue;   // 心跳/非 JSON 行忽略
-          }
-          if (!delta) continue;
-          full += delta;
-          yield { type: 'text-delta', index: 0, text: delta };
-        }
-      }
-    } finally {
-      req.clear();
-    }
-    yield { type: 'block-end', index: 0, block: { type: 'text', text: full } };
-    yield { type: 'finish', reason: 'stop' };
-  }
-
-  /**
-   * 向量化（RAG 稠密检索通道）：OpenAI 兼容的 POST {baseUrl}{embedPath}。
-   *
-   * 与 chat 调用共用 llm.json 的 baseUrl/apiKey；模型取 embeddingModel，
-   * 留空则回退到 chat model（部分厂商同一模型名即可向量化）。
-   * 出网点由上层（gateway 的隐私闸门）决定是否允许 —— 本函数只负责发请求。
-   * @param {string[]} texts - 待向量化文本。
-   * @param {{model?: string}} [opts] - 覆盖模型。
-   * @returns {Promise<number[][]>} 每条文本对应的向量。
-   */
-  async function embed(texts, opts = {}) {
-    const cfg = llmConfigFromEnv(configOverrides);
-    const model = resolveEmbedModel(cfg, opts.model);
-    // 端点与 Key 各有一对「嵌入专用值优先、留空回落 chat」：判定必须用**回落之后**的这一对，
-    // 否则「只填了 embeddingApiKey、chat 的 Key 留空」这种配法会被误判成未配置。
-    const baseUrl = cfg.embeddingApiUrl || cfg.baseUrl;
-    const apiKey = cfg.embeddingApiKey || cfg.apiKey;
-    if (!model || (!apiKey && !baseUrl)) {
-      throw new Error('未配置 embedding（请在「数据配置 → AI 大模型」填写向量模型名与端点凭据）');
-    }
-    const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? ''));
-    if (list.length === 0) return [];
-    const url = baseUrl.replace(/\/+$/, '') + (cfg.embedPath.startsWith('/') ? cfg.embedPath : '/' + cfg.embedPath);
-    const headers = { 'content-type': 'application/json', accept: 'application/json' };
-    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
-    try {
-      const res = await fetchWithRetry(fetch, url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model, input: list }),
-        signal: controller.signal,
-      }, { onRetry: logRetry('embedding') });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`embedding HTTP ${res.status}: ${body.slice(0, 300)}`);
-      }
-      const payload = await res.json();
-      const data = Array.isArray(payload?.data) ? payload.data : [];
-      // 按 index 排序保证与输入顺序一致（部分厂商不保证返回顺序）。
-      const sorted = data.slice().sort((a, b) => Number(a?.index ?? 0) - Number(b?.index ?? 0));
-      return sorted.map((d) => (Array.isArray(d?.embedding) ? d.embedding : []));
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  /**
-   * 精排：把「一个查询 + N 条候选文档」发给 rerank 端点，换回每条的相关性分。
-   *
-   * 返回的是**按输入下标索引**的分数数组（调用方自己决定怎么排序/截断），
-   * 而不是排好序的文档 —— 本层只负责打分，排序语义留在检索管道里
-   * （那里还要与时间偏好、去重、配额一起算，模型不知道也不该知道那些）。
-   *
-   * 响应形状做了兼容：Cohere/Jina 的 `{results:[{index,relevance_score}]}`、
-   * OpenAI 风格的 `{results:[{index,score}]}`、以及 `{data:[...]}`。
-   * **缺项按 0 分**而不是抛错：一条没分等于「模型认为它不相关」，
-   * 为不完整响应废掉整轮问答是不成比例的代价。
-   * @param query - 查询文本（已过隐私闸门）。
-   * @param documents - 候选文档文本（顺序即返回数组的下标顺序）。
-   * @param opts - `{ model?, topN? }`。
-   * @returns 与 `documents` 等长的分数数组。
-   */
-  async function rerank(query, documents, opts = {}) {
-    const cfg = llmConfigFromEnv(configOverrides);
-    const model = String(opts.model || cfg.rerankModel || '');
-    // 端点/Key 各有一对「精排专用值优先、留空回落 chat」——与 embed 同一条理由：
-    // 判定必须用回落之后的那一对，否则「只填了 rerankApiKey」的配置会被误判成未配置。
-    const baseUrl = cfg.rerankApiUrl || cfg.baseUrl;
-    const apiKey = cfg.rerankApiKey || cfg.apiKey;
-    if (!model || (!apiKey && !baseUrl)) {
-      throw new Error('未配置 rerank（请在「数据配置 → AI 大模型」填写重排序模型名与端点凭据）');
-    }
-    const docs = (Array.isArray(documents) ? documents : []).map((d) => String(d ?? ''));
-    if (docs.length === 0) return [];
-    const url = baseUrl.replace(/\/+$/, '') + (cfg.rerankPath.startsWith('/') ? cfg.rerankPath : '/' + cfg.rerankPath);
-    const headers = { 'content-type': 'application/json', accept: 'application/json' };
-    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.rerankTimeoutMs);
-    const body = { model, query: String(query ?? ''), documents: docs, return_documents: false };
-    if (Number.isFinite(Number(opts.topN)) && Number(opts.topN) > 0) body.top_n = Number(opts.topN);
-    try {
-      const res = await fetchWithRetry(fetch, url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      }, { onRetry: logRetry('rerank') });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`rerank HTTP ${res.status}: ${text.slice(0, 300)}`);
-      }
-      const payload = await res.json();
-      const rows = Array.isArray(payload?.results) ? payload.results : (Array.isArray(payload?.data) ? payload.data : []);
-      const scores = new Array(docs.length).fill(0);
-      for (const r of rows) {
-        const i = Number(r?.index);
-        if (!Number.isInteger(i) || i < 0 || i >= docs.length) continue;
-        const s = Number(r?.relevance_score ?? r?.score ?? r?.relevance ?? 0);
-        scores[i] = Number.isFinite(s) ? s : 0;
-      }
-      return scores;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  return {
-    get configured() {
-      const cfg = llmConfigFromEnv(configOverrides);
-      return Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
-    },
-    get config() {
-      return llmConfigFromEnv(configOverrides);
-    },
-    stream,
-    embed,
-    /**
-     * 这次 embedding 会用的模型名 —— 与 {@link embed} **同一个解析函数**。
-     * 调用方（gateway 的向量记账、隐私审计、界面状态）拿它记账，就不可能出现
-     * 「记的模型名与实际发的模型名不是一回事」（§7 F1 的成因）。
-     * @param override - 显式指定的模型名（可空）。
-     * @returns 生效模型名；未配置时为空串。
-     */
-    embeddingModelName(override) {
-      return resolveEmbedModel(llmConfigFromEnv(configOverrides), override);
-    },
-    rerank,
-    /**
-     * 这次精排会用的模型名 —— 与 {@link rerank} 同一个取值口径。
-     * 调用方（审计、依据行、库级覆盖解析）拿它记账，就不会出现「记的模型没参与过这次请求」。
-     * @param override - 显式指定的模型名（可空）。
-     * @returns 生效模型名；未配置时为空串。
-     */
-    rerankModelName(override) {
-      const cfg = llmConfigFromEnv(configOverrides);
-      return String(override || cfg.rerankModel || '');
-    },
-    async generate(opts) {
-      return { content: await fetchCompletion(opts) };
-    },
-    listConfigurableProviders() {
-      const cfg = llmConfigFromEnv(configOverrides);
-      const ok = Boolean(cfg.model && (cfg.apiKey || cfg.baseUrl));
-      return ok ? [{ provider: cfg.provider, model: cfg.model }] : [];
-    },
-    async listModels(provider) {
-      const cfg = llmConfigFromEnv(configOverrides);
-      if (!cfg.model) return [];
-      if (provider && provider !== cfg.provider) return [];
-      return [{ id: cfg.model }];
-    },
-  };
-}
-
 /** 最小化 Cordis Context：只实现 WechatDataGateway 运行时需要的面。 */
 function createMiniContext(options = {}) {
   const disposers = [];
@@ -540,47 +212,6 @@ function createMiniContext(options = {}) {
 }
 
 /**
- * 收紧 SQLite 页缓存（主进程内存的主要可回收项）。
- *
- * WeChatDataGateway 在 100+ 处按调用点 `new DatabaseSync(...)` 打开短连接，而
- * node:sqlite 的默认 `cache_size` 是 -2000（每连接 2MB 页缓存）。连接关闭后这
- * 部分原生内存大部分不会归还操作系统，于是主进程 RSS 随查询次数被不断抬升，
- * 一次全页签遍历即可多占数十 MB 且不回落。
- *
- * 这里在加载 bundle 之前替换 node:sqlite 的 DatabaseSync 导出：每个连接建好后
- * 立刻把页缓存压到 256KB。bundle 内部是
- * `import { DatabaseSync } from "node:sqlite"`，其 ESM 外观在首次 import 时
- * 由 CJS 导出生成，因此在 import 之前替换即可被 bundle 取到（已有脚本实测验证：
- * bundle 内新建连接读回 `cache_size = -256`）。
- *
- * 可用 DSH_WECHAT_SQLITE_CACHE_KB 调整；设为 0 或负数则不干预。
- */
-let sqlitePageCachePatched = false;
-function applySqlitePageCacheLimit() {
-  if (sqlitePageCachePatched) return;
-  const kb = Number(process.env.DSH_WECHAT_SQLITE_CACHE_KB ?? 256);
-  if (!Number.isFinite(kb) || kb <= 0) return;
-  try {
-    const sqlite = require('node:sqlite');
-    const Original = sqlite.DatabaseSync;
-    sqlite.DatabaseSync = new Proxy(Original, {
-      construct(target, args) {
-        const db = Reflect.construct(target, args);
-        try {
-          db.exec(`PRAGMA cache_size = -${Math.floor(kb)}`);
-        } catch {
-          /* 个别连接可能不接受该 PRAGMA，忽略即可 */
-        }
-        return db;
-      },
-    });
-    sqlitePageCachePatched = true;
-  } catch (e) {
-    console.warn('[wechat] 收紧 SQLite 页缓存失败:', e?.message ?? e);
-  }
-}
-
-/**
  * 创建「Super Time」后端实例。
  * @param {object} options
  * @param {string} [options.userDataPath] - Electron app.getPath('userData')，
@@ -589,7 +220,8 @@ function applySqlitePageCacheLimit() {
  * @param {object} [options.llmConfig] - SUPERTIME_LLM_* 环境变量之外的显式配置。
  * @returns {{gateway, methodNames, info, call, dispose}}
  */
-async function createWechatBackend(options = {}) {
+/** 把宿主初始化前的环境配置与加载顺序集中起来，返回运行时依赖。 */
+function configureBackendEnvironment(options) {
   const userHome = options.userDataPath || process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
   // 状态目录（config.json / llm.json）必须和主进程解析到同一个：
   // 都以 userData 为根。不显式配置的话本进程会落到默认 ~/.dsh，
@@ -597,40 +229,38 @@ async function createWechatBackend(options = {}) {
   wechatPaths.configure({ userDataPath: userHome });
   // 数据根默认布局：<DSH_HOME>/wechat-data（即应用 userData/wechat-data）。
   if (!process.env.DSH_HOME) process.env.DSH_HOME = userHome;
+  return userHome;
+}
 
-  // 必须在 import bundle 之前收紧页缓存，否则 bundle 已绑定原始导出。
-  applySqlitePageCacheLimit();
-
+/**
+ * 加载后端 bundle、类型协议与影子 schema，再创建 gateway。
+ *
+ * 各观察设施加载失败只降级不阻断业务；typert schema 只负责 ② 档影子校验。
+ */
+async function loadBackendRuntime(options) {
+  const userHome = configureBackendEnvironment(options);
   const mod = await import('./wechat-data/lib/index.js');
+  // 连接策略由后端包自己实现；这里在 gateway 建好前把宿主配置交给它。
+  if (typeof mod.configureSqliteCachePolicy === 'function') {
+    mod.configureSqliteCachePolicy();
+  }
   const protocol = await import('@deepseek-ai/dsh-typert-protocol');
+
   /**
    * H2：慢调用的耗时写进审计表（`wechat_privacy.db#operation_log.duration_ms`）。
-   *
-   * 与上面那行 `console.warn` 的关系不是「二选一」而是「同一件事的两个去处」：
-   * 日志给开发者在现场捞，审计表给**用户在界面上查**（`getOperationLog` 已经存在）。
-   * `docs/PERF-AUDIT-172` 那张「哪个接口最慢」的表本来是拿临时探针数出来的，
-   * 落库之后就不用再让用户跑脚本了 —— 按 `minDurationMs` 一筛就是慢调用榜。
-   *
-   * 失败或加载不到都只降级成「不记账」：观测设施不许把后端拖垮。
+   * 日志给开发者在现场捞，审计表给用户在界面上查；失败或加载不到都只降级成「不记账」。
    */
   const recordSlowCall = typeof mod.recordOperation === 'function' ? mod.recordOperation : null;
   const SLOW_CALL_MS = typeof mod.SLOW_OPERATION_MS === 'number' ? mod.SLOW_OPERATION_MS : 1000;
   /**
-   * **日志**里那条 `慢调用` 的阈值，默认 1000ms（历史口径，见下面原注释）。
-   *
-   * 可被 `SUPERTIME_SLOW_CALL_MS` 覆盖：这是**诊断用的旋钮**，不是产品行为 ——
-   * 把它调到 50ms 就能拿到"每个面板到底调了哪些接口、各花多久"的完整时间线，
-   * 而 1s 阈值只能看见最慢的那几个（`working/measure-real-load.mjs` 的
-   * "逐面板 RPC 时间线"就是靠它）。落审计表的那条阈值仍走 `SLOW_CALL_MS`，不受影响。
+   * `SUPERTIME_SLOW_CALL_MS` 是诊断用的日志阈值，落审计表的阈值仍走 `SLOW_CALL_MS`。
    */
   const slowLogOverride = Number(process.env.SUPERTIME_SLOW_CALL_MS);
   const SLOW_LOG_MS = Number.isFinite(slowLogOverride) && slowLogOverride > 0 ? slowLogOverride : 1000;
+
   /**
    * 生成的 zod schema 表（② 档的影子校验）。
-   *
-   * 加载失败**不许**把后端拖到起不来：影子少一份账只是少一条诊断信息，
-   * 而 ① 档（结构/体积）与它无关、照常拒绝。拿不到表时 `checkSchema` 回 `unloaded`，
-   * `info().argGuard.covered` 会是 0 —— 那本身就是「schema 表没跟上来」的可见信号。
+   * 加载失败不许把后端拖到起不来；`argSchemas` 为 null 时 `checkSchema` 回 `unloaded`。
    */
   let argSchemas = null;
   try {
@@ -640,16 +270,18 @@ async function createWechatBackend(options = {}) {
   } catch (e) {
     console.warn('[wechat] typert schema 表没加载到（形状校验关闭）:', e?.message ?? e);
   }
+
   const context = createMiniContext(options);
   const gateway = new mod.WechatDataGateway(context);
+  return { userHome, protocol, argSchemas, context, gateway, recordSlowCall, SLOW_CALL_MS, SLOW_LOG_MS };
+}
 
-  /**
-   * 「影响解码结果的外部输入」的指纹：数据根下的 `config.json`（`db_dir` 等）与
-   * `secrets.json`（图片 AES/XOR 密钥）。用于结果缓存的键（见 resultCacheKey 的说明）。
-   * 数据根取 `dirname(decrypted)`，与后端 `config/resolve.ts` 的路径口径一致（两种数据根模式都成立）。
-   * （M24 之后路径/配置解析都住在后端的 `config/` 层，`query/config.ts` 只是转发门面。）
-   */
-  const decodeInputSig = () => {
+/**
+ * 「影响解码结果的外部输入」的指纹：数据根下的 `config.json` 与 `secrets.json`。
+ * 手工编辑这两个文件时不需要任何 RPC 通知，靠文件 mtime/size 自失效。
+ */
+function createDecodeInputSig(gateway) {
+  return () => {
     try {
       const root = path.dirname(gateway._dirs.decrypted);
       const sig = (name) => {
@@ -665,12 +297,209 @@ async function createWechatBackend(options = {}) {
       return '';
     }
   };
+}
 
+/** 把 Typert Remote 方法表压成「外部名 → 实现名」的映射。 */
+function buildMethodMap(protocol, gateway) {
   const methodMap = new Map();
   for (const marker of protocol.remoteMethods(gateway)) {
     const name = marker.exportName || marker.method;
     methodMap.set(name, marker.method);
   }
+  return methodMap;
+}
+
+/** 生成后端实例的 info()：路径、方法与入参守卫影子账本。 */
+function createBackendInfo(gateway, context, methodMap, argSchemas) {
+  return () => {
+    const root = path.dirname(gateway._dirs.decrypted);
+    return {
+      root,
+      decrypted: gateway._dirs.decrypted,
+      decoded: gateway._dirs.decoded,
+      selfUsername: gateway._selfUsername,
+      pathConfig: wechatPaths.configPath(),
+      methods: [...methodMap.keys()].sort(),
+      llmConfigured: context.llm?.configured ?? false,
+      /**
+       * 入参守卫的影子账本（P2-7 的 ② 档靠它拿证据）：
+       * `covered/total` 是 schema 覆盖数，`mismatched` 是真实调用中的形状失配，
+       * `largest` 是每条方法的历史最大参数体积。
+       */
+      argGuard: argsGuard.snapshot(argSchemas ? argSchemas.size : 0, methodMap.size, ENFORCED_SCHEMA_METHODS),
+    };
+  };
+}
+
+/** 生成后端实例的 call()：入参双档校验、结果缓存、慢调用审计与配置镜像。 */
+function createBackendCall({
+  gateway,
+  methodMap,
+  argSchemas,
+  decodeInputSig,
+  recordSlowCall,
+  SLOW_LOG_MS,
+}) {
+  return async function call(method, args = [], callHandle = '') {
+    const implName = methodMap.get(method);
+    if (!implName) {
+      return { ok: false, error: { message: `未知的 Super Time 后台方法: ${method}` } };
+    }
+    const fn = gateway[implName];
+    // ① 结构与体积：这一档**总是**拒绝（渲染进程不是可信调用方）。
+    const guard = argsGuard.guardCallArgs(args);
+    if (!guard.ok) {
+      console.warn('[wechat] 入参被拒 %s：%s', method, guard.message);
+      return { ok: false, error: { message: guard.message, code: guard.code, details: { method } } };
+    }
+    const callArgs = injectFallbackJobId(method, guard.value, callHandle);
+    argsGuard.observe(method, guard.bytes);
+    // ② 形状（生成的 zod schema）：默认只记账；只有显式白名单里的方法才硬拒。
+    const verdict = argsGuard.checkSchema(argSchemas, implName, callArgs, ENFORCED_SCHEMA_METHODS);
+    if (verdict.verdict === 'mismatch') {
+      argsGuard.noteSchema(implName, verdict.message ?? 'schema 判定不通过');
+      if (verdict.code) {
+        console.warn('[wechat] 入参形状被拒 %s：%s', method, verdict.message);
+        return { ok: false, error: { message: verdict.message, code: verdict.code, details: { method } } };
+      }
+    } else if (verdict.verdict === 'ok') {
+      argsGuard.noteSchema(implName, null);
+    }
+    const cacheKey = resultCacheKey(method, callArgs, decodeInputSig());
+    if (cacheKey) {
+      const cached = readResultCache(cacheKey);
+      if (cached !== null) return cached;
+    }
+    const startedAt = Date.now();
+    try {
+      const value = await fn.apply(gateway, callArgs);
+      // 慢调用打点：这些方法都在后端进程里同步跑，偏慢的要能看见。
+      const cost = Date.now() - startedAt;
+      if (cost > SLOW_LOG_MS) {
+        console.warn(`[wechat] 慢调用 ${method} 耗时 ${cost}ms`);
+        /**
+         * H2：同一笔慢调用也落进审计表。
+         *
+         * 只记 `status: 'ok'` 的慢调用吗？不 —— 失败的慢调用同样是瓶颈证据，
+         * 所以这里不区分成败，只在 `category` 上用 `error` 把它和成功那批分开。
+         */
+        if (recordSlowCall) {
+          try {
+            recordSlowCall(gateway._dirs.decrypted, {
+              category: 'error',
+              action: 'slow_call',
+              status: 'ok',
+              target: method,
+              detail: `Remote 调用耗时 ${cost}ms`,
+              durationMs: cost,
+            });
+          } catch (e) {
+            console.warn('[wechat] 记慢调用进审计表失败:', e?.message ?? e);
+          }
+        }
+      }
+      // 数据配置保存成功后，把「非密钥」设置镜像到 wechat/config.json。
+      // 密钥类字段由 wechat-paths.js 的 SECRET_SETTING_KEYS 过滤掉。
+      if (method === 'saveWechatConfig' && value && value.ok !== false) {
+        const patch = callArgs[0]?.patch ?? callArgs[0];
+        if (patch && typeof patch === 'object') {
+          try {
+            wechatPaths.recordWechatSettings(patch);
+          } catch (e) {
+            console.warn('[wechat] 记录设置到 wechat/config.json 失败:', e);
+          }
+        }
+        // 保存配置可能改了图片 AES/XOR 密钥，而这里的缓存存的是已解码结果。
+        clearResultCache();
+      }
+      const result = { ok: true, value };
+      if (cacheKey) writeResultCache(cacheKey, result);
+      return result;
+    } catch (err) {
+      const e = err || new Error('未知错误');
+      const result = {
+        ok: false,
+        error: {
+          message: readableCallError(method, e),
+          code: typeof e.code === 'string' ? e.code : undefined,
+          details: e.details ?? undefined,
+        },
+      };
+      // 负缓存：真的解不出来的图不要每次重挂载都再全量扫一遍。
+      if (cacheKey) writeResultCache(cacheKey, result);
+      return result;
+    }
+  };
+}
+
+/** 生成后端实例的取消接口，保留 `this._cancelJob` 的转发关系。 */
+function createBackendCancel(gateway) {
+  return {
+    /**
+     * 主进程 RPC 超时后的尽力取消。
+     *
+     * 显式带 jobId 的方法按原标识打断；调用方没传 jobId 的可取消方法，宿主会在执行时
+     * 注入一个 RPC 序号派生的内部 jobId，超时后再用同一序号找回它。
+     */
+    async cancelCall(method, args = [], callHandle = '') {
+      const plan = cancelPlanFor(method, args);
+      if (!plan.ok && plan.reason === 'no-job-id') {
+        const jobId = jobIdForCall(method, args, callHandle);
+        if (jobId) {
+          return this._cancelJob(plan.method, jobId);
+        }
+      }
+      if (!plan.ok) return plan;
+      const cancelFn = gateway[plan.method];
+      if (typeof cancelFn !== 'function') {
+        return { ok: false, reason: 'cancel-method-missing', method: plan.method, jobId: plan.jobId };
+      }
+      return this._cancelJob(plan.method, plan.jobId, cancelFn);
+    },
+    /**
+     * 调一个取消 Remote，并把成功/失败折叠成宿主取消回执。
+     */
+    async _cancelJob(cancelMethod, jobId, cancelFn) {
+      const fn = cancelFn || gateway[cancelMethod];
+      if (typeof fn !== 'function') {
+        return { ok: false, reason: 'cancel-method-missing', method: cancelMethod, jobId };
+      }
+      try {
+        const result = await fn.call(gateway, { jobId });
+        const ok = Boolean(result && result.ok !== false);
+        const reason = result && (result.message || result.error)
+          ? String(result.message || result.error)
+          : undefined;
+        return {
+          ok,
+          ...(reason ? { reason } : {}),
+          method: cancelMethod,
+          jobId,
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          reason: e?.message ?? String(e),
+          method: cancelMethod,
+          jobId,
+        };
+      }
+    },
+  };
+}
+
+async function createWechatBackend(options = {}) {
+  const {
+    protocol,
+    argSchemas,
+    context,
+    gateway,
+    recordSlowCall,
+    SLOW_LOG_MS,
+  } = await loadBackendRuntime(options);
+  const decodeInputSig = createDecodeInputSig(gateway);
+  const methodMap = buildMethodMap(protocol, gateway);
+  const cancel = createBackendCancel(gateway);
 
   return {
     gateway,
@@ -678,126 +507,16 @@ async function createWechatBackend(options = {}) {
     methodNames() {
       return [...methodMap.keys()].sort();
     },
-    info() {
-      const root = path.dirname(gateway._dirs.decrypted);
-      return {
-        root,
-        decrypted: gateway._dirs.decrypted,
-        decoded: gateway._dirs.decoded,
-        selfUsername: gateway._selfUsername,
-        pathConfig: wechatPaths.configPath(),
-        methods: [...methodMap.keys()].sort(),
-        llmConfigured: context.llm?.configured ?? false,
-        /**
-         * 入参守卫的影子账本（P2-7 的 ② 档靠它拿证据）：
-         * `covered/total` 是「生成的 schema 覆盖了几个 `@Remote` 方法」，
-         * `mismatched` 是「真实调用里哪些方法与自己的 schema 对不上」，
-         * `largest` 是每条方法的历史最大参数体积 —— 收 ① 档上界要看的正是这个。
-         */
-        argGuard: argsGuard.snapshot(argSchemas ? argSchemas.size : 0, methodMap.size),
-      };
-    },
-    async call(method, args = []) {
-      const implName = methodMap.get(method);
-      if (!implName) {
-        return { ok: false, error: { message: `未知的 Super Time 后台方法: ${method}` } };
-      }
-      const fn = gateway[implName];
-      // ① 结构与体积：这一档**总是**拒绝（渲染进程不是可信调用方）。
-      const guard = argsGuard.guardCallArgs(args);
-      if (!guard.ok) {
-        console.warn('[wechat] 入参被拒 %s：%s', method, guard.message);
-        return { ok: false, error: { message: guard.message, code: guard.code, details: { method } } };
-      }
-      const callArgs = guard.value;
-      argsGuard.observe(method, guard.bytes);
-      // ② 形状（生成的 zod schema）：默认只记账，进了 `ENFORCED_SCHEMA_METHODS` 才拒。
-      const verdict = argsGuard.checkSchema(argSchemas, implName, callArgs, ENFORCED_SCHEMA_METHODS);
-      if (verdict.verdict === 'mismatch') {
-        argsGuard.noteSchema(implName, verdict.message ?? 'schema 判定不通过');
-        if (verdict.code) {
-          console.warn('[wechat] 入参形状被拒 %s：%s', method, verdict.message);
-          return { ok: false, error: { message: verdict.message, code: verdict.code, details: { method } } };
-        }
-      } else if (verdict.verdict === 'ok') {
-        argsGuard.noteSchema(implName, null);
-      }
-      const cacheKey = resultCacheKey(method, callArgs, decodeInputSig());
-      if (cacheKey) {
-        const cached = readResultCache(cacheKey);
-        if (cached !== null) return cached;
-      }
-      const startedAt = Date.now();
-      try {
-        const value = await fn.apply(gateway, callArgs);
-        // 慢调用打点：这些方法都在后端进程里同步跑，偏慢的要能看见。
-        const cost = Date.now() - startedAt;
-        if (cost > SLOW_LOG_MS) {
-          console.warn(`[wechat] 慢调用 ${method} 耗时 ${cost}ms`);
-          /**
-           * H2：同一笔慢调用也落进审计表。
-           *
-           * 为什么阈值用 `>` 而不是把 `cost > 1000` 抽成一个常量在上面共用：
-           * 这条 `console.warn` 是**已经上线并被日志复盘过的口径**（PERF-AUDIT 那 1658 条
-           * 就是它打的），改成常量引用会让「日志里的历史数据」和「今天写进库的数据」
-           * 失去可比性。两处都写 1000 是**故意的**，改一处就要同时改另一处并在报告里说明。
-           *
-           * 只记 `status: 'ok'` 的慢调用吗？不 —— 失败的慢调用同样是瓶颈证据
-           * （超时重试就是这一类），所以这里不区分成败，只在 `category` 上用 `error`
-           * 把它和成功那批分开，界面上可以直接筛。
-           */
-          if (recordSlowCall) {
-            try {
-              recordSlowCall(gateway._dirs.decrypted, {
-                category: 'error',
-                action: 'slow_call',
-                status: 'ok',
-                target: method,
-                detail: `Remote 调用耗时 ${cost}ms`,
-                durationMs: cost,
-              });
-            } catch (e) {
-              console.warn('[wechat] 记慢调用进审计表失败:', e?.message ?? e);
-            }
-          }
-        }
-        // 数据配置保存成功后，把「非密钥」设置镜像到 wechat/config.json 供用户查看与手工编辑。
-        // 密钥类字段由 wechat-paths.js 的 SECRET_SETTING_KEYS 过滤掉 —— 它们有单独的、
-        // 受权限保护的 secrets.json（见后端 `config/wechat-config.ts` 的 SECRET_FIELDS；
-        // M24 之后它不再住在 `query/config.ts`）。
-        if (method === 'saveWechatConfig' && value && value.ok !== false) {
-          const patch = callArgs[0]?.patch ?? callArgs[0];
-          if (patch && typeof patch === 'object') {
-            try {
-              wechatPaths.recordWechatSettings(patch);
-            } catch (e) {
-              console.warn('[wechat] 记录设置到 wechat/config.json 失败:', e);
-            }
-          }
-          // 保存配置可能改了图片 AES/XOR 密钥，而这里的缓存存的是**已解码**的结果
-          // （解码结果随密钥而变）。判据不在这里区分「密钥是否真变了」—— 那要知道后端的
-          // 默认值口径（`image_xor_key` 的 136），抄一份只会漂移；保存配置是用户手动、
-          // 低频的操作，整体清空换来的代价只是这一次重新解码。
-          clearResultCache();
-        }
-        const result = { ok: true, value };
-        if (cacheKey) writeResultCache(cacheKey, result);
-        return result;
-      } catch (err) {
-        const e = err || new Error('未知错误');
-        const result = {
-          ok: false,
-          error: {
-            message: readableCallError(method, e),
-            code: typeof e.code === 'string' ? e.code : undefined,
-            details: e.details ?? undefined,
-          },
-        };
-        // 负缓存：真的解不出来的图不要每次重挂载都再全量扫一遍。
-        if (cacheKey) writeResultCache(cacheKey, result);
-        return result;
-      }
-    },
+    info: createBackendInfo(gateway, context, methodMap, argSchemas),
+    call: createBackendCall({
+      gateway,
+      methodMap,
+      argSchemas,
+      decodeInputSig,
+      recordSlowCall,
+      SLOW_LOG_MS,
+    }),
+    ...cancel,
     dispose() {
       try {
         context.dispose();
@@ -808,13 +527,65 @@ async function createWechatBackend(options = {}) {
   };
 }
 
+
+/**
+ * 已知错误的翻译表（N30 的第一条 + W3-11.6 扩到 8 条）。
+ *
+ * 为什么是表而不是一串 if：这类「底层英文 → 去哪做什么」的映射只有一个正确形态 ——
+ * 每来一种新错误就补一行；而**表**让「覆盖了哪些形态」变成可数、可断言的（见
+ * `host-error-message.spec.ts` 的「表不许缩水」那条），if 链则会安静地只剩第一条。
+ *
+ * 三条纪律（与 N30 立项时一致，扩表不破）：
+ *   ① 每条都要说「去哪做什么」，并且**保留原始错误**（可诊断，用户截图也够定位）；
+ *   ② **表外一律原样透传** —— 猜错形态会把真实故障说成「未配置」，比英文原文更有害；
+ *   ③ 每条的正则都要窄：宁可漏（漏了还有原始错误），不可把一个真实故障套上错的处方。
+ *
+ * ⚠ 加条目前先问：这个形态**真的会出现吗**？本表的每一条都对应一类真实可见的首启/运行态
+ * （没配数据源、解密中断、并发读写、只读介质、文件被占用、磁盘满、权限不足），
+ * 不是把 SQLite 文档里的错误码抄一遍。
+ */
+const READABLE_ERRORS = [
+  {
+    re: /unable to open database file|SQLITE_CANTOPEN/i,
+    say: '读不到本机的微信数据：请先在「数据配置」中设置数据目录并完成解密',
+  },
+  {
+    re: /file is not a database|SQLITE_NOTADB|SQLITE_CORRUPT|database disk image is malformed/i,
+    say: '这个库文件已损坏（常见于解密中途被打断）：请到「数据库健康」体检，必要时对该库重新解密',
+  },
+  {
+    re: /database is locked|SQLITE_BUSY/i,
+    say: '有其它任务正在读写这个库（解密 / 建索引 / 导出进行中都会这样）：请等它跑完再试',
+  },
+  {
+    re: /SQLITE_READONLY|attempt to write a readonly database/i,
+    say: '数据目录是只读的（可能位于只读介质或被同步策略锁住）：请把数据根改到可写目录后重试',
+  },
+  {
+    re: /\bEPERM\b|\bEBUSY\b/i,
+    say: '文件正被其它程序占用（Windows 上常见于杀软扫描或资源管理器预览）：请关闭占用它的程序后重试',
+  },
+  {
+    re: /\bENOSPC\b|no space left/i,
+    say: '磁盘空间不足（导出与解密都需要临时空间）：请清理出空间后再试',
+  },
+  {
+    re: /\bEACCES\b|permission denied/i,
+    say: '没有读写权限：请检查数据目录的权限（本应用只以当前用户身份访问，不会提权）',
+  },
+  {
+    re: /\bEMFILE\b|too many open files/i,
+    say: '同时打开的文件太多了：请关闭一些面板或浏览器窗口后重试；若反复出现请重启应用',
+  },
+];
+
 /**
  * 把底层英文错误翻译成用户能照着做的一句话。
  *
  * 为什么得有这一层：面板把 `error.message` 原样渲染进 `role="alert"`（`Chats` / `Contacts`
  * 等皆是），而「还没配置数据目录 / 还没解密」是**每个查询面板都会撞到**的首启状态 ——
  * `node:sqlite` 的原文是 `unable to open database file`，用户既看不懂也不知道下一步做什么。
- * 只在这一处翻译，所有 Remote 方法一起受益。**只翻译这一个已知形态，其余原样透传** ——
+ * 只在这一处翻译，所有 Remote 方法一起受益。**只翻译表内已知的形态，其余原样透传** ——
  * 不猜、不美化，避免把真实故障说成「未配置」。
  *
  * @param {string} method - Remote 方法名（只用于留痕）。
@@ -823,8 +594,8 @@ async function createWechatBackend(options = {}) {
  */
 function readableCallError(method, e) {
   const raw = (e && e.message) || String(e);
-  if (/unable to open database file|SQLITE_CANTOPEN/i.test(raw)) {
-    return '读不到本机的微信数据：请先在「数据配置」中设置数据目录并完成解密（原始错误：' + raw + '）';
+  for (const { re, say } of READABLE_ERRORS) {
+    if (re.test(raw)) return say + '（原始错误：' + raw + '）';
   }
   return raw;
 }
@@ -850,7 +621,6 @@ module.exports = {
   createWechatBackend,
   createLlmBridge,
   createMiniContext,
-  applySqlitePageCacheLimit,
   /** 单测入口（见 resultCacheHandles 的说明）。 */
   resultCacheHandles,
   /** 单测入口：错误文案翻译（见 readableCallError 的说明）。 */

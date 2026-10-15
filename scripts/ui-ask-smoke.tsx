@@ -27,6 +27,7 @@ import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-dat
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
 import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
 import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
+import { setCapabilities } from '../src/client/ui-wechat/src/client/pages/wechat-data/api.ts'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 import { ProgressBar } from '../src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.tsx'
 import { RemoteImg } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/remote-img.tsx'
@@ -475,6 +476,7 @@ check('朋友圈：带 author 过滤时给出「仅看 X」与返回入口', () 
 
 console.log('设置（M21 拆 Settings 前的渲染兜底）')
 check('设置：左导航与右内容都能渲染（不崩）', () => {
+  setCapabilities({ isDesktop: true, isBrowser: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false })
   const html = renderToStaticMarkup(h(SettingsPanel, {}))
   ok(html.includes('设置'), '缺少面板标题')
   for (const t of ['智能与隐私', '高级', 'AI 大模型', '数据边界与出网']) {

@@ -58,7 +58,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import type { KbFileParseState } from '../types.ts'
 import { chunkBlocks } from './kb/chunk.ts'
 import { parseFileByExtAsync } from './kb/parse-async.ts'

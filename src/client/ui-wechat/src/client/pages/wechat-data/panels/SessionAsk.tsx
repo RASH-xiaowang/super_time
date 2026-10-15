@@ -51,7 +51,7 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
 
   // 每个会话一份线程：键即 username。
   // source/scopeUsernameName 只用于**问答历史**：让历史列表能区分「在哪问的」并直接显示会话名。
-  const { turns, asking, streamText, error, ask, reset, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, error, ask, cancel, reset, patchTurn, clearError } = useAskSession({
     scopeUsername: target.username,
     scopeUsernameName: nameOf(target),
     source: 'session',
@@ -179,16 +179,22 @@ export function SessionAsk(props: SessionAskProps): React.JSX.Element {
               )
             ))}
             {asking && (
-              streamText
-                ? (
-                  <div className={css.turnAi}>
-                    <div className={css.aiAnswer} data-streaming>
-                      {streamText}
-                      <span className={css.caret} aria-hidden="true" />
+              <>
+                {streamText
+                  ? (
+                    <div className={css.turnAi}>
+                      <div className={css.aiAnswer} data-streaming>
+                        {streamText}
+                        <span className={css.caret} aria-hidden="true" />
+                      </div>
                     </div>
-                  </div>
-                )
-                : <div className={css.pending}><span className={css.dots} />正在检索本机记录并生成回答…</div>
+                  )
+                  : <div className={css.pending}><span className={css.dots} />正在检索本机记录并生成回答…</div>}
+                {/* W3-6.1：与「微信问答」同一个 hook 的同一条取消路径（后端 Remote cancelAsk）。 */}
+                <button type="button" className={css.stopBtn} onClick={cancel} title="停止本轮回答的生成（已生成的部分会保留）">
+                  ■ 停止生成
+                </button>
+              </>
             )}
           </div>
         )}

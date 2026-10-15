@@ -17,10 +17,11 @@
 import cssrows from './chats-rows.module.css'
 import csscards from './chats-cards.module.css'
 import cssshell from './chats-shell.module.css'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { IconCalendar } from './chats-support.tsx'
 import {
-  IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16, IconTrashOutline16,
-  IconUserOutline16,
+  IconChevronLeftOutline14, IconDownloadOutline16, IconEllipsisOutline16, IconListPenOutline16,
+  IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { EditedMessageRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
@@ -55,6 +56,15 @@ export interface ChatsHeadActionsProps {
   openEdits: () => void
   clearAllDrafts: () => void
   clearDraft: () => void
+  /**
+   * 手机档（≤560）的「返回会话列表」。**不给就不画这枚按钮**。
+   *
+   * 为什么在这里画而不是在渲染树里另起一处：三栏在手机上塌成单栏栈之后，
+   * 「回到列表」是唯一的返回路径，而它要挂在 `.msgHeader` 里 —— 那一格的 JSX 全在
+   * `chats-view.tsx#ChatsView`，那个函数在**函数行数棘轮**台账上（376 行、只许变小），
+   * 加不了行；这一份不在台账上，所以按钮住这里，桌面端由 CSS 藏掉。
+   */
+  onBackToList?: () => void
 }
 
 /**
@@ -67,10 +77,26 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
     curSession, aiEligible, aiOpen, setAiOpen, suggestOpen, setSuggestOpen,
     analysisPaneOpen, setAnalysisPaneOpen, openCalendar, groupInfoOpen, openGroupInfo,
     contactInfoOpen, setContactInfoOpen, moreOpen, setMoreOpen, exporting, editing, edits,
-    setExportOpen, openEdits, clearAllDrafts, clearDraft,
+    setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList,
   } = props
   return (
     <div className={cssshell.msgHeaderActions}>
+              {/*
+                手机档的「返回会话列表」：绝对定位在头部左上角，桌面端 `display: none`
+                （三栏并排，返回不成立）。它排在这一堆按钮**前面**只是为了 DOM 顺序读起来
+                像「先返回、再动作」，实际位置由 CSS 决定。
+              */}
+              {onBackToList && (
+                <button
+                  type="button"
+                  className={cssshell.msgBackBtn}
+                  onClick={onBackToList}
+                  title="返回会话列表"
+                  aria-label="返回会话列表"
+                >
+                  <IconChevronLeftOutline14 size={16} />
+                </button>
+              )}
               {/* AI 问答入口：只对单聊/群聊出现（详见 aiEligible）。 */}
               {aiEligible && (
                 <button
@@ -159,9 +185,9 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                 </button>
                 {moreOpen && (
                   <div className={csscards.msgHeaderMoreMenu} role="menu" aria-label="更多操作">
-                    <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} disabled={exporting}
-                      onClick={() => { setMoreOpen(false); setExportOpen(true) }}>
-                      <IconDownloadOutline16 size={14} />导出消息
+                    <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} disabled={exporting || desktopAction()}
+                      onClick={() => { setMoreOpen(false); setExportOpen(true) }} {...desktopActionProps()}>
+                      <IconDownloadOutline16 size={14} />{desktopAction() ? '导出消息（仅电脑）' : '导出消息'}
                     </button>
                     <button type="button" role="menuitem" className={csscards.msgHeaderMoreItem} disabled={editing}
                       onClick={() => { setMoreOpen(false); void openEdits() }}>

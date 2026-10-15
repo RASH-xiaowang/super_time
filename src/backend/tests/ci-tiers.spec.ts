@@ -13,6 +13,11 @@
  *
  * 第 3 条是这里最要紧的一条，所以单独有断言：腐烂清单里的 script **不许**出现在任何 workflow 里。
  *
+ * ⚠ 反过来也成立：「不接进门禁」只是止血。`ui:longlist-e2e` 在 KNOWN_ROT 里躺了一个多月 ——
+ *   没人跑它，所以没人发现它唯一那条红判据的根因只是夹具每天 10 条、让场景永远不可能发生。
+ *  2026-10-11 修好接进 TIER1 后，`ci-tiers.mjs` 里留了墓碑（`KNOWN_ROT` 之后的注释块），
+ *  免得下一个人照着那条过期结论重新规划一次。
+ *
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
@@ -20,6 +25,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { KNOWN_ROT, LOCAL_ONLY, MEASURED_ON, TIER1, TIER2, TIER3 } from '../../../scripts/ci-tiers.mjs'
+import { MUTATIONS } from '../../../scripts/mutations-registry.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
@@ -67,7 +73,7 @@ describe('分档表本身', () => {
 
   it('这一轮真正补上的那几件，一张表都不许漏（否则「分档」只是个说法）', () => {
     // 2026-10-09 审计的结论：这三件**此前完全不在任何门禁里** ——
-    // `lint:db` 是绿的但新违规没人拦；408 条变异自证一次都没跑过；
+    // `lint:db` 是绿的但新违规没人拦；412 条变异自证一次都没跑过；
     // 9 个性能基准被 `skipIf` 守着、package.json 里又没有 MEASURE_* script，于是从未真跑。
     // 「不在门禁里」不可见，所以这条把结果钉死。
     const all = new Set([...TIER1, ...TIER2, ...TIER3].map((r) => r.script))
@@ -94,6 +100,14 @@ describe('分档表本身', () => {
     const days = (Date.now() - Date.parse(MEASURED_ON)) / 86400000
     expect(Number.isFinite(days), 'MEASURED_ON 不是可解析的日期').toBe(true)
     expect(days, '成本数字是 ' + MEASURED_ON + ' 实测的，已经过去 ' + Math.round(days) + ' 天 ⇒ 重新实测并更新').toBeLessThan(120)
+  })
+
+  it('全量变异条数从登记表现算，不再在各处手抄一个会腐坏的数字', () => {
+    const row = TIER2.find((r) => r.script === 'check:mutation')
+    expect(row, 'TIER2 里没有 check:mutation').toBeTruthy()
+    expect(String(row?.why)).toContain(String(MUTATIONS.length))
+    const tiers = readFileSync(join(ROOT, 'scripts', 'ci-tiers.mjs'), 'utf8')
+    expect(tiers, 'TIER2 的条数必须从 MUTATIONS.length 现算').toContain('${MUTATIONS.length}')
   })
 })
 
@@ -137,6 +151,15 @@ describe('第二档：夜间工作流跑的是全量，而不是增量', () => {
   it('⚠️ 夜间跑的全量变异**不是**增量那个 script（不然第二档就白设了）', () => {
     expect(nightly).toContain('npm run check:mutation')
     expect(nightly).not.toContain('check:mutation:diff')
+  })
+
+  it('tag 发布也要在 publish 之前自己跑全量变异（tag push 不触发 ci.yml，夜间档可能晚于发版）', () => {
+    const iMutation = release.indexOf('npm run check:mutation')
+    const iPublish = release.indexOf('--publish always')
+    expect(iMutation, 'release.yml 没有全量变异自证').toBeGreaterThan(-1)
+    expect(iPublish).toBeGreaterThan(-1)
+    expect(iMutation, '全量变异自证必须排在发布之前').toBeLessThan(iPublish)
+    expect(release, '发版跑增量自证会漏掉「目标与 spec 都没动」的登记表腐坏').not.toContain('check:mutation:diff')
   })
 
   it('夜间 job 要拉全历史并准备 Electron（两个真机 e2e 起的是 node_modules 里那个二进制）', () => {
@@ -200,13 +223,16 @@ describe('KNOWN_ROT：明知坏、不许接进任何一档', () => {
 })
 
 describe('LOCAL_ONLY：只能在本机跑，不许接进 workflow', () => {
-  it('这些 script 依赖本机专属资源 —— 判据由 `ci-script-isolation` 本身执行', () => {
+  it('要么为空、要么每条都是真本机专属（判据由 `ci-script-isolation` 本身执行）', () => {
     // 这里**刻意不去重复**那条守卫的判定（它用 AST 抽字符串字面量，比字符串搜索准，
     // 而且它连测试文件本身一起扫 —— 我第一版把那两个本机专属路径的字面量写进这个 spec，
     // 结果它当场把自己判红了，那才是本轮最讽刺的一次）。
-    // 所以这里只钉一件事：LOCAL_ONLY 非空，且下面每条都不许出现在任何 workflow 里 ——
-    // 真被接进去时，`ci-script-isolation` 会独立地报出「引用了本机专属资源」。
-    expect(LOCAL_ONLY.length).toBeGreaterThan(0)
+    //
+    // W2-13.3 起它**允许为空**：最后一条（`package:smoke`）已毕业进 TIER2 ——
+    // 「只能本机跑」的原因（路径尾段被拆成常量）是可以修的，修完本地清单就该空下来。
+    // 空清单是好事，不是漏登记：真被接进去时，`ci-script-isolation` 会独立报出
+    // 「引用了本机专属资源」，所以这里不需要再用「非空」假装守住它。
+    expect(LOCAL_ONLY.length).toBeGreaterThanOrEqual(0)
   })
 
   for (const r of LOCAL_ONLY) {

@@ -4,7 +4,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 
 export interface PaymentStatus {

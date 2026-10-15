@@ -4,7 +4,7 @@
  * 同一枚表情有**三种**写法（中文名 `[微笑]`、英文名 `[Smile]`、颜文字 `/::)`），
  * 微信在文本消息里存的就是这些字面量，因此三套 key 都要能匹配。
  * 表与图片资源对齐 WeChatDataAnalysis 的 `frontend/lib/wechat-emojis.ts` +
- * `frontend/public/wxemoji/`（149 个 PNG，约 0.9 MB）。
+ * `frontend/public/wxemoji/`（148 个 PNG，约 0.9 MB）。
  *
  * 图片放在 `src/client/ui-app/public/wxemoji/`，由 Vite 原样拷进构建产物。
  */

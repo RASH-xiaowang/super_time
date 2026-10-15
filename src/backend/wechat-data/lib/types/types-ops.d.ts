@@ -167,7 +167,7 @@ export interface ClawbotBindingSnapshot {
  *
  * 与绑定关系**分表存**（`clawbot_instance_config`）：绑定行会被重新绑定覆盖，
  * 而「自动回复开不开、回复要不要带知识库」是用户偏好，必须活过重新绑定。
- * 配置的读写只走 `query/clawbot-instance.ts`（配置集中管理，别处不许直接写 SQL）。
+ * 配置的读写只走 `query/clawbot/clawbot-instance.ts`（配置集中管理，别处不许直接写 SQL）。
  */
 export interface ClawbotInstanceConfig {
     slot: number;

@@ -49,16 +49,17 @@ interface LedgerEntry {
 const LEDGER: LedgerEntry[] = [
   {
     site: 'src/backend/wechat-data/src/query/article-cover.ts#fetchText',
-    control: '无应用内闸门（只取消息里给出的文章地址）',
-    anchor: 'NONE', marker: '',
-    why: '读公众号文章的 og:image 所在的 HTML。地址来自消息 XML；应用内已无开关，'
-      + '域名收敛要另做（现只在 `article-cover.ts` 里把 http 升级为 https）。',
+    control: '腾讯系主机白名单（文章页只允许 mp.weixin.qq.com）',
+    anchor: 'src/backend/wechat-data/src/query/article-cover.ts', marker: 'wechatArticleUrlAllowed(',
+    why: '读公众号文章的 og:image 所在的 HTML。地址来自消息 XML；文章页域名收窄为 '
+      + 'mp.weixin.qq.com，站外地址在发请求之前就拒绝，http 再升级为 https。',
   },
   {
     site: 'src/backend/wechat-data/src/query/article-cover.ts#fetchBytes',
-    control: '无应用内闸门（同上）',
-    anchor: 'NONE', marker: '',
-    why: '同上：真正把封面字节取回来的是这一条，结果落盘缓存后下次不再联网。',
+    control: '腾讯系主机白名单（封面图走 CDN 后缀清单）',
+    anchor: 'src/backend/wechat-data/src/query/article-cover.ts', marker: 'wechatCdnHostAllowed(',
+    why: '真正把封面字节取回来的是这一条：og:image 提取出的地址先归一成 https，'
+      + '再按图片 CDN 白名单判定后才发请求；结果落盘缓存后下次不再联网。',
   },
   {
     site: 'src/backend/wechat-data/src/query/image-original.ts#fetchImageOriginalToCache',
@@ -95,63 +96,18 @@ const LEDGER: LedgerEntry[] = [
     why: 'whisper 模型（HF / hf-mirror）与 laya 模型（约 1.26 GB）共用这条流式下载原语。',
   },
   {
-    site: 'src/backend/wechat-host.js#fetchCompletion',
-    control: '脱敏 + 审计接缝（`privacyGate`）', anchor: 'ANY', marker: 'privacyGate(',
-    why: '对话补全：发的是**内容**，出站前过一次 `privacyGate`（敏感字段打码 + 写审计）。',
+    site: 'src/backend/llm-http.js#llmRequest',
+    control: '内容型调用在 llm-bridge 上游过 privacyGate；探针/余额只发凭据或固定测试串',
+    anchor: 'ANY', marker: 'privacyGate(',
+    why: '所有 LLM 出网请求现在都经这一条统一传输：chat/stream/embed/rerank 的正文与候选文档'
+      + '由各自网关在上游过 privacyGate；模型列表、连接测试与余额查询只发用户自己配置的'
+      + ' base_url、Bearer Key 或固定测试串（不发聊天内容）。地址统一经过 parseLlmBaseUrl'
+      + ' 的 http(s) 校验，且拒绝 URL 凭据与 query/hash；余额无 Key 时调用方直接不发请求。',
   },
   {
-    site: 'src/backend/wechat-host.js#stream',
-    control: '脱敏 + 审计接缝（`privacyGate`）', anchor: 'ANY', marker: 'privacyGate(',
-    why: '流式对话补全：同上一条，只是走 SSE。',
-  },
-  {
-    site: 'src/backend/wechat-host.js#embed',
-    control: '脱敏 + 审计接缝（`privacyGate`，功能名 ask_embed / kb_embed）',
-    anchor: 'ANY', marker: 'makeEmbedFn(',
-    why: '向量化的输入是消息正文或文件正文 ⇒ 审计里必须分得开是哪一类。',
-  },
-  {
-    site: 'src/backend/wechat-host.js#rerank',
-    control: "脱敏 + 审计接缝（privacyGate('ask_rerank')，整批一起过）",
-    anchor: 'ANY', marker: "privacyGate('ask_rerank'",
-    why: '精排把候选文档与查询一起发给重排序模型。',
-  },
-  {
-    site: 'src/backend/ipc-wechat.js#wechat:llm-models',
-    control: '无应用内闸门（只有你点击「获取模型列表」才会发生）', anchor: 'NONE', marker: '',
-    why: '向用户自己填的 base_url 发 GET /models，带 `Bearer <API Key>`；不发聊天内容。'
-      + '2026-09-30 前这里有一次 fail-closed 的出网拦截，随开关一起移除。',
-  },
-  {
-    site: 'src/backend/llm-balance.js#getJson',
-    // 这一处与上面那条不同：它**不只是**点击触发 —— 左下角余额条每 5 分钟也会调一次
-    // （用户要求「余额实时显示」）。台账口径：有真实锚点时 `control` 里**不能**出现
-    // 「无应用内闸门」这个词（那条短语是留给 anchor:'NONE' 的），所以这里写清实际约束。
-    control: '地址须为 http(s)、余额查询须有 API Key（渲染侧没 Key 直接不调用）——没有出网开关，'
-      + '左下角那条是 5 分钟的定时请求',
-    anchor: 'src/backend/llm-balance.js', marker: 'async function getJson(',
-    why: '只向**用户自己配置的** apiUrl 发请求，只带 `Bearer <API Key>`：'
-      + '连接测试打 `{base}/models`，余额查询按厂商惯例打 `{origin}/user/balance`（DeepSeek）'
-      + '或 `{base}/user/info`（SiliconFlow 等）。'
-      + '**不发任何聊天内容**；清空 API Key 后调用方直接不出网（渲染侧 `SidebarBalance` 会自己隐藏）。'
-      + '厂商不提供余额接口时（如 OpenAI）明确报错并显示「余额 —」，不猜数字。'
-      + '逐条口径见 docs/PRIVACY.md 的 A2 节。',
-  },
-  {
-    site: 'src/backend/llm-balance.js#postJson',
-    // 与上面那条同属「模型端点探针」，但这一处发的是 **POST 最小请求**：
-    // 向量与精排没有"只看不花钱"的探测接口，所以各发一条固定测试串。
-    control: '地址须为 http(s)、该端点须填了模型名（渲染侧没模型名按钮就是禁用的）——没有出网开关',
-    anchor: 'src/backend/llm-balance.js', marker: 'async function postJson(',
-    why: '只向**用户自己配置的**向量 / 精排端点发一条**固定测试串**（`连接测试`，约 3 / 6 个 token），'
-      + 'body 里只有 model + 这句测试串：不含聊天内容、不含查询词、不含文件名。'
-      + '带的是对应端点的 `Bearer <Key>`（`embeddingApiKey` / `rerankApiKey`，留空回落 `apiKey`）。'
-      + '逐条口径见 docs/PRIVACY.md 的 A2 节。',
-  },
-  {
-    site: 'src/backend/wechat-data/src/query/clawbot-ilink.ts#requestJson',
+    site: 'src/backend/wechat-data/src/query/clawbot/clawbot-ilink.ts#requestJson',
     control: '主机写死（腾讯 iLink 服务）+ 接收侧只发控制面、发送侧只发你主动写的那条正文',
-    anchor: 'src/backend/wechat-data/src/query/clawbot-ilink.ts', marker: 'ilinkai.weixin.qq.com',
+    anchor: 'src/backend/wechat-data/src/query/clawbot/clawbot-ilink.ts', marker: 'ilinkai.weixin.qq.com',
     why: '微信 ClawBot 绑定通道（2026-10-12 接入）：取码 / 状态轮询 / 消息长轮询 / 发送四条都经这一个函数。'
       + '接收侧请求体里只有同步游标与渠道版本号；发送侧（`sendTextMessage`）body = 路由字段 + '
       + '一条文本条目，正文 = 面板输入框原文、由用户逐条触发（没有自动/定时发送）。'
@@ -159,24 +115,25 @@ const LEDGER: LedgerEntry[] = [
       + '逐条口径见 docs/PRIVACY.md 的 G2 节。',
   },
   {
-    site: 'src/backend/wechat-data/src/query/clawbot-media.ts#downloadBytes',
+    site: 'src/backend/wechat-data/src/query/clawbot/clawbot-media.ts#downloadBytes',
     control: '主机写死（腾讯 iLink CDN）+ 收到附件消息即自动取回（无人值守；正文型 url 先过腾讯系白名单）',
-    anchor: 'src/backend/wechat-data/src/query/clawbot-media.ts', marker: 'novac2c.cdn.weixin.qq.com',
+    anchor: 'src/backend/wechat-data/src/query/clawbot/clawbot-media.ts', marker: 'novac2c.cdn.weixin.qq.com',
     why: 'ClawBot 媒体可见（2026-10-12 接入；同日改自动取回）：收到带附件的消息后由队列'
       + '自动下载 + 解密 + 落 `<数据根>/clawbot-media/`（无人值守；失败在下一次同步 / 启动补扫重试）。'
       + '加密引用走固定 CDN 基址；图片自带的明文 URL 先过 `wechatCdnHostAllowed` 才发请求。'
       + '单份上限 32MB；逐条口径见 docs/PRIVACY.md 的 G2 节。',
   },
   {
-    site: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/world-map-data.ts#fetchFirstJson',
-    control: '公开的行政区划数据（固定镜像源）', anchor: 'ANY', marker: 'WORLD_GEO_URLS',
-    why: '不含你的数据；URL 是代码里的常量清单，不由消息内容或用户输入决定。',
+    site: 'src/backend/wechat-data/src/query/map-geo.ts#fetchMapGeoJson',
+    control: '固定 GeoJSON 主机 + 路径/参数白名单', anchor: 'ANY', marker: 'isAllowedMapGeoUrl',
+    why: '不含你的数据；渲染层只传候选地址，后端按固定主机与路径形状过滤后才发请求。',
   },
   {
     site: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-export.ts#imageToDataUrl',
-    control: '渲染层 CSP `connect-src`', anchor: 'src/client/ui-app/index.html',
-    marker: "connect-src 'self' data: blob: file:",
-    why: '把面板里已有的图转成 data URL 供导出用：`src` 是本机/`data:` 地址。',
+    control: 'http(s) 走后端图片代理（白名单 + 审计 + 缓存）；本函数只直接 fetch blob:/file:',
+    anchor: 'src/client/ui-wechat/src/client/pages/wechat-data/api-media.ts', marker: 'apiGetRemoteImageUrl',
+    why: '把面板里已有的图转成 data URL 供导出用：远程地址交给后端白名单代理，'
+      + '只有 blob:/file: 这类本机地址允许在渲染层直接读取。',
   },
   // —— 2026-10-14：手机浏览器态的三条 `fetch`。**它们不是出网点** ——
   // 打的全是同源相对路径（`/api/...`），也就是本机那个局域网远程访问服务；
@@ -199,11 +156,12 @@ const LEDGER: LedgerEntry[] = [
       + '随后由 `stripTokenFromUrl` 从地址栏抹掉；比对在服务端用定长比较完成。',
   },
   {
-    site: 'src/client/ui-app/http-remote.ts#hasSession',
+    site: 'src/client/ui-app/http-remote.ts#probeSession',
     control: '同源相对路径（不是出网点）',
     anchor: 'src/client/ui-app/http-remote.ts', marker: "'/api/status'",
-    why: '探测当前会话是否有效：`GET /api/status`。令牌门用它决定「直接进」还是「先要令牌」，'
-      + 'SSE 断线时也用它区分「网络抖动」与「会话失效」。不带任何数据。',
+    why: '探测当前会话：`GET /api/status`，回三态 ok / gone / unreachable。令牌门用它决定「直接进」还是'
+      + '「先要令牌」，SSE 断线时用它区分「服务没在跑」与「没权限」—— 把后者当成前者会把用户'
+      + '关进一个此刻走不通的令牌门（2026-10-14 真机反例）。不带任何数据。',
   },
 ]
 
@@ -308,8 +266,7 @@ describe('出网点台账：每个 fetch/http 调用点都必须登记，并写�
     expect(sites.length, '一个出网调用点都没扫到 ⇒ 扫描器坏了，后面的判据都会恒真').toBeGreaterThanOrEqual(15)
     for (const known of [
       'src/backend/wechat-data/src/query/whisper.ts#streamUrlToFile',
-      'src/backend/ipc-wechat.js#wechat:llm-models',
-      'src/backend/wechat-host.js#fetchCompletion',
+      'src/backend/llm-http.js#llmRequest',
     ]) {
       expect(sites, `扫描漏了这个已知出网点：${known}`).toContain(known)
     }

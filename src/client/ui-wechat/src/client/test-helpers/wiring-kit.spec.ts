@@ -17,6 +17,7 @@ import {
   allClassBlocks,
   assertSettledContract,
   atLeast,
+  atRuleBlock,
   classBlock,
   findRoot,
   readStripped,
@@ -132,6 +133,36 @@ describe('allClassBlocks：取同一类的全部声明块', () => {
 
   it('一条都没有时返回空数组（调用方自己断言长度，避免"空集上 some 恒假"的静默失败）', () => {
     expect(allClassBlocks(css, '不存在')).toEqual([])
+  })
+})
+
+describe('atRuleBlock：取一个 at-rule 档的全部内容', () => {
+  const css = [
+    '.a { color: red; }',
+    '@media (max-width: 560px) {',
+    '  .b { display: none; }',
+    '  @supports (height: 100dvh) { .c { height: 100dvh; } }',
+    '}',
+    '.d { color: blue; }',
+    '@media (max-width: 560px) { .e { gap: 0; } }',
+    '',
+  ].join('\n')
+
+  it('嵌套的 at-rule 不会把括号配错（切多了就会圈进后面无关的规则）', () => {
+    const block = atRuleBlock(css, '@supports (height: 100dvh)')
+    expect(block).toContain('height: 100dvh')
+    expect(block, '越过自己的 } 就会把 .d 圈进来').not.toContain('color: blue')
+  })
+
+  it('同一档出现多处时全部拼起来（手机档的规则会随批次散在几个块里）', () => {
+    const block = atRuleBlock(css, '@media (max-width: 560px)')
+    expect(block, '第一处').toContain('display: none')
+    expect(block, '第二处没拼进来 ⇒ 后加的手机规则断言不到（假绿）').toContain('gap: 0')
+    expect(block, '档外的规则被圈进来了').not.toContain('color: blue')
+  })
+
+  it('一处都没有 → 抛（返回空串会让 not.toContain 全绿）', () => {
+    expect(() => atRuleBlock(css, '@media (max-width: 480px)')).toThrow()
   })
 })
 

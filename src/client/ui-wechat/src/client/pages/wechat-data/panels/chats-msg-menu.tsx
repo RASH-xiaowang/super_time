@@ -20,6 +20,19 @@ export interface MsgMenuState {
   y: number
 }
 
+/**
+ * 「在哪儿打开菜单」的最小面：一个屏幕坐标 + 能取消默认行为。
+ *
+ * 为什么要抽出来：菜单有两个入口 —— 桌面端的右键（`React.MouseEvent`）与手机端的长按
+ * （`React.PointerEvent`）。两者都天然满足这个形状，按最小面收就能共用同一个 `openMsgMenu`，
+ * 不必在长按那一侧伪造一个 MouseEvent、也不必让面板那头写两个入口。
+ */
+export interface MsgMenuAnchor {
+  preventDefault(): void
+  clientX: number
+  clientY: number
+}
+
 export interface ChatsMsgMenuProps {
   msgMenu: MsgMenuState | null
   items: MsgMenuItem[]

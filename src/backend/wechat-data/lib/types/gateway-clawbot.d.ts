@@ -40,7 +40,9 @@ export declare abstract class GatewayClawbot extends GatewayDbHealth {
      * @param options.slot - 实例编号（缺省 = 第一个实例）。
      * @returns 绑定卡片快照（含会话计数与通道状态）。
      */
-    getClawbotBinding(): ClawbotBindingSnapshot;
+    getClawbotBinding(options?: {
+        slot?: number;
+    }): ClawbotBindingSnapshot;
     /**
      * 申请绑定二维码（真实调用腾讯 iLink 服务；失败抛可读中文，渲染层按 message 展示）。
      * @param options.slot - 为哪个实例取码（缺省 = 第一个实例）。
@@ -50,7 +52,7 @@ export declare abstract class GatewayClawbot extends GatewayDbHealth {
         slot?: number;
     }): Promise<ClawbotBindQr>;
     /**
-     * 中继一次绑定状态轮询（弹窗打开期间反复调用；单次最长约 40 秒，见 LONG_CALL_METHODS）。
+     * 中继一次绑定状态轮询（弹窗打开期间反复调用；单次最长约 40 秒，见 remote-policy.js）。
      * @param options.slot - 哪个实例的这场扫码会话（缺省 = 第一个实例）。
      * @returns 状态与绑定卡片快照。
      */

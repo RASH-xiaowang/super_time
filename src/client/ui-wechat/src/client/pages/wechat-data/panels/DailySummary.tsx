@@ -5,6 +5,7 @@
  * 每个按钮都提供结果反馈：全局 toast（成功/失败/提示）+ 逐动作 loading 态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useWechatDataUpdated } from './hooks.tsx'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import {
   apiDeleteSummaryRecord,
@@ -59,6 +60,16 @@ interface DailyStats {
   hourly: number[]
   topSessions: Array<{ username: string; count: number }>
   sessions: number
+}
+
+/**
+ * 初载 + WAL 推送静默重取（2026-10-13）。模块级：`DailySummaryPanel` 有 588 行
+ * 只许变小棘轮，这段逻辑放进函数体会把它顶过登记值 —— 按仓库规矩搬成模块级 hook。
+ * @param reload - 任务与记录的重取函数。
+ */
+function useDailySummaryTasks(reload: () => Promise<void>): void {
+  useEffect(() => { void reload() }, [reload])
+  useWechatDataUpdated(() => { void reload() })
 }
 
 /**
@@ -144,7 +155,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
     } catch { /* keep */ }
   }, [])
 
-  useEffect(() => { void loadTasks() }, [loadTasks])
+  useDailySummaryTasks(loadTasks)
 
   // 读一次模型配置（读的是本机 llm.json，很轻）：空态要用它告诉用户"还差哪一步"。
   useEffect(() => {

@@ -80,9 +80,13 @@ describe('开关不许回来（2026-09-30 移除的守卫）', () => {
     expect(existsSync(p), '出网开关的判定模块又回来了').toBe(false)
   })
 
-  it('`gateway-privacy.ts` 的运行期导出只有 `privacyGateAt`', async () => {
+  it('`gateway-privacy.ts` 的运行期导出只有隐私闸与脱敏口径读取（W3-6.2 加了后者）', async () => {
     const mod = await import('../src/gateway-privacy.ts')
-    expect(Object.keys(mod).sort()).toEqual(['privacyGateAt'])
+    // `redactModeAt` 是 W3-6.2 加的：embedding 缓存要在**命中**时判断口径，
+    // 而 `privacyGateAt` 每次都写审计，命中时不该调它。两者读同一份设置，
+    // 所以口径判断必须也住在协作者里（类里不许出现 `readPrivacySettings(`）。
+    // 除了这两个，其余导出仍然是「开关回来了」的信号。
+    expect(Object.keys(mod).sort()).toEqual(['privacyGateAt', 'redactModeAt'])
   })
 
   it('隐私设置的读写处与快照类型里不再有出网开关的字段', async () => {

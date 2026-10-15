@@ -154,6 +154,48 @@ export function allClassBlocks(css: string, name: string): string[] {
 }
 
 /**
+ * 取某个 at-rule 档的**全部内容**（按大括号配对，多处匹配就按出现顺序拼起来）。
+ *
+ * 例：`atRuleBlock(css, '@media (max-width: 560px)')` 回答的是「这一档在这份文件里做了什么」。
+ *
+ * 为什么要拼全部而不是只给第一处：手机档的规则会随批次增加，散在同一份文件的两个
+ * `@media` 块里是完全合法的写法 —— 只读第一处的话，后加的那些断言不到（假绿）。
+ * 拼接之后调用方一律用 `toContain` 断言，不依赖块的边界。
+ *
+ * 与 {@link classBlock} / {@link sliceBetween} 同一条纪律：**找不到就变红**，
+ * 不返回空串（空串会让后续的 `not.toContain` 全部假绿）。
+ *
+ * @param css - CSS 文本（用 {@link readText} 读；注释留不留都不影响括号配对）。
+ * @param header - at-rule 头，逐字匹配，如 `@media (max-width: 560px)`。
+ * @param label - 出错时的用例说明。
+ * @returns 各匹配块的内容（不含最外层大括号），以换行拼接。
+ */
+export function atRuleBlock(css: string, header: string, label = header): string {
+  const out: string[] = []
+  let cursor = 0
+  for (;;) {
+    const at = css.indexOf(header, cursor)
+    if (at < 0) break
+    const open = css.indexOf('{', at)
+    expect(open, `${label}：at-rule 头后面没有 {`).toBeGreaterThan(at)
+    let depth = 0
+    let end = -1
+    for (let i = open; i < css.length; i += 1) {
+      if (css[i] === '{') depth += 1
+      else if (css[i] === '}') {
+        depth -= 1
+        if (depth === 0) { end = i; break }
+      }
+    }
+    expect(end, `${label}：大括号不配对（CSS 本身坏了）`).toBeGreaterThan(open)
+    out.push(css.slice(open + 1, end))
+    cursor = end + 1
+  }
+  expect(out.length, `${label}：源码里一处都没有（断点名改了就同步本用例）`).toBeGreaterThan(0)
+  return out.join('\n')
+}
+
+/**
  * 自 `startDir` 向上找仓库根（同时存在 `main.js` 与 `package.json` 的那一层）。
  *
  * 守卫里要读 `scripts/**` 这类仓库级文件时需要它，而 spec 的所在深度各不相同。

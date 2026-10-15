@@ -123,6 +123,18 @@ export function layaDownloadBases(): string[] {
   return [...new Set(bases)]
 }
 
+/**
+ * 取消了吗。
+ *
+ * 为什么包一层而不是直接写 `signal?.aborted === true`：TS 的控制流收窄会在同一段里
+ * 记住「前面刚判过是 false」，于是长 `await` 之后的那个判断被标成「恒不重叠」（TS2367）——
+ * 而 `aborted` 是活的，一个 1.2 GB 的下载跑完它完全可能已经变了。函数边界天然破掉收窄。
+ * @param signal - 取消令牌。
+ * @returns 已取消时为 true。
+ */
+function isAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true
+}
 /** 下载仓库路径。 */
 export function layaDownloadRepo(): string {
   const repo = (process.env[LAYA_REPO_ENV] ?? '').trim()
@@ -135,15 +147,26 @@ export interface LayaDownloadResult {
   files?: string[]
   bytes?: number
   error?: string
+  /** W2-11.5：被用户取消（与「失败」分开 —— 界面据此不弹错误框）。 */
+  canceled?: boolean
 }
 
 /**
  * 下载缺失的文件到 `dir`（幂等：已存在且大小过下界的文件直接跳过）。
  * 任一文件失败即中止并返回错误；已下好的部分**保留**，重试时天然续传。
+ *
+ * W2-11.5：`signal` 一路上接 `streamUrlToFile` 的取消（它本来就支持），并在**每个文件
+ * 之间**再查一次 —— 单个文件最大 1.2 GB，只在流内部查会让「点了停止」等到那块下完。
+ * 取消**不删 `.part`**：与失败同一条纪律，下次点击从断点续接（这是「取消可反悔」的前提）。
+ * @param dir - 模型目录。
+ * @param onProgress - 进度回调。
+ * @param signal - 可选的取消令牌。
+ * @returns 结果；被取消时带 `canceled: true`（与「失败」分开，界面据此不报错）。
  */
 export async function layaDownloadModel(
   dir: string,
   onProgress: (received: number, total: number, file: string) => void,
+  signal?: AbortSignal,
 ): Promise<LayaDownloadResult> {
   try {
     mkdirSync(dir, { recursive: true })
@@ -156,6 +179,10 @@ export async function layaDownloadModel(
   let total = 0
 
   for (const asset of LAYA_ASSETS) {
+    // 文件之间查一次。**这是冗余防御**（判据钉不住它，如实记在台账里）：真正的
+    // 「点了停止立刻生效」由**流内部**那次检查保证；这一处只在「某个文件刚好在取消到达的
+    // 那一刻下载完成」时起作用 —— 少了它，接下来那块（最大 1.2 GB）会先开个头才被发现。
+    if (isAborted(signal)) return { ok: false, canceled: true, files: done, bytes: total }
     const target = join(dir, asset.rel)
     if (existsSync(target)) {
       try {
@@ -175,13 +202,16 @@ export async function layaDownloadModel(
       const url = `${base}/${repo}/resolve/main/${asset.file}`
       try {
         const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS,
-          (received, t) => onProgress(received, t, asset.rel))
+          (received, t) => onProgress(received, t, asset.rel),
+          signal)
         renameSync(tmp, target)
         total += bytes
         done.push(asset.rel)
         ok = true
         break
       } catch (e) {
+        // 取消与失败分开报：取消是用户自己按的，不该显示成「下载失败」。
+        if (isAborted(signal)) return { ok: false, canceled: true, files: done, bytes: total }
         // 刻意不删 .part：下一个镜像 / 用户下一次点击可以从断点续接
         lastError = `${asset.rel} @ ${base}：${(e as Error).message}`
       }

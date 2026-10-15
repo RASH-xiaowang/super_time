@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  OVERVIEW_CACHE_PREFIX,
   cacheGet,
   cacheSet,
   invalidateAndNotify,
@@ -92,6 +93,12 @@ describe('invalidateAndNotify 的三件事', () => {
     expect(readRenderCache('sessions:x')).toBeNull()
     expect(cacheGet('messages:a'), '清了 sessions 却把 messages 也带走了').not.toBeNull()
     expect(readRenderCache('messages:a')).not.toBeNull()
+  })
+
+  it('总览面板的历史裸键也归同一个失效契约管', () => {
+    localStorage.setItem(OVERVIEW_CACHE_PREFIX + 'base-v1', JSON.stringify({ sessions: 1 }))
+    invalidateAndNotify('')
+    expect(localStorage.getItem(OVERVIEW_CACHE_PREFIX + 'base-v1')).toBeNull()
   })
 
   it('多个前缀取并集（改一条消息要同时作废三个族）', () => {

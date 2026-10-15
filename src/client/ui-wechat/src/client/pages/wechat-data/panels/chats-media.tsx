@@ -452,9 +452,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
     apiGetVideoInfo({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
-        // videoPath 是后端新增字段；types 包在 node_modules 里是旧副本（既有的 48 条类型错误同源），
-        // 这里按运行时读，不为了一个字段去动那份副本。
-        const path = (r as { videoPath?: string }).videoPath
+        const path = r.videoPath
         if (path) setVideoPath(path)
         if (r.coverUrl) setCover(r.coverUrl)
         else setVErr(r.error === 'hevc-unsupported' ? 'wxgf/HEVC 封面（需系统解码）' : (r.error ?? '视频不可用'))

@@ -237,3 +237,83 @@ describe('右键菜单', () => {
     expect(args[2], '种类要按 renderKindOf 现算（这里 type 3 是图片）').toBe('image')
   })
 })
+
+/* ── 长按（触摸端的「右键」）────────────────────────────────────────────────
+   为什么这一族必须有行为用例：触摸上既没有右键也没有 :hover，长按是**唯一**的入口；
+   而它坏掉的样子是「按了没反应」或「滚动时菜单乱弹」—— 桌面端的回归测试一条都碰不到。
+   jsdom 没有 PointerEvent 构造器，所以用普通 Event 再把坐标/pointerType 挂上去
+   （React 只按事件名派发、不校验实例类型；`cancelable: true` 才测得到 preventDefault）。 */
+describe('长按菜单（触摸端的右键）', () => {
+  /** 造一个带坐标与 pointerType 的指针事件。 */
+  const pev = (type: string, over: Record<string, unknown> = {}): Event => {
+    const ev = new Event(type, { bubbles: true, cancelable: true })
+    return Object.assign(ev, { clientX: 20, clientY: 30, pointerType: 'touch', button: 0, ...over })
+  }
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
+
+  it('按住 500ms ⇒ 用按压点的坐标打开菜单（与右键走同一个入口）', () => {
+    const m = msg({ localId: 11, type: 3 })
+    const el = renderRow(asMsg(m))
+    act(() => { el?.dispatchEvent(pev('pointerdown', { clientX: 77, clientY: 88 })) })
+    expect(menu, '还没到阈值就弹 ⇒ 会与滚动手势抢').not.toHaveBeenCalled()
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(menu).toHaveBeenCalledTimes(1)
+    const args = menu.mock.calls[0] as [{ clientX: number, clientY: number }, WechatMessage, string]
+    expect(args[1]).toBe(m)
+    expect(args[2]).toBe('image')
+    expect([args[0].clientX, args[0].clientY], '坐标要落在手指按下的地方（平板/宽屏上菜单就出在那儿）')
+      .toEqual([77, 88])
+  })
+
+  it('没到 500ms 就抬手 ⇒ 不弹（短按是点按，不是长按）', () => {
+    const el = renderRow(asMsg(msg({ localId: 12 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown')) })
+    act(() => { vi.advanceTimersByTime(300) })
+    act(() => { el?.dispatchEvent(pev('pointerup')) })
+    act(() => { vi.advanceTimersByTime(400) })
+    expect(menu).not.toHaveBeenCalled()
+  })
+
+  it('按住后移动超过 10px ⇒ 取消（滚消息列表时不该乱弹菜单）', () => {
+    const el = renderRow(asMsg(msg({ localId: 13 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown', { clientY: 300 })) })
+    act(() => { el?.dispatchEvent(pev('pointermove', { clientY: 260 })) })
+    act(() => { vi.advanceTimersByTime(800) })
+    expect(menu, '滚动被当成长按 ⇒ 手指一滑就弹菜单').not.toHaveBeenCalled()
+  })
+
+  it('鼠标按下不启动长按（桌面端只走右键，不引入第二套手势口径）', () => {
+    const el = renderRow(asMsg(msg({ localId: 14 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown', { pointerType: 'mouse' })) })
+    act(() => { vi.advanceTimersByTime(900) })
+    expect(menu).not.toHaveBeenCalled()
+  })
+
+  it('系统手势打断（pointercancel）⇒ 取消', () => {
+    const el = renderRow(asMsg(msg({ localId: 15 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown')) })
+    act(() => { el?.dispatchEvent(pev('pointercancel')) })
+    act(() => { vi.advanceTimersByTime(900) })
+    expect(menu).not.toHaveBeenCalled()
+  })
+
+  it('长按已触发后的抬手要 preventDefault —— 否则浏览器补发的 mousedown 打在遮罩上，菜单一闪就关', () => {
+    const el = renderRow(asMsg(msg({ localId: 16 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown')) })
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(menu).toHaveBeenCalledTimes(1)
+    const up = pev('pointerup')
+    act(() => { el?.dispatchEvent(up) })
+    expect(up.defaultPrevented, '菜单会被自己那次抬手关掉（触摸上等于「长按没用」）').toBe(true)
+  })
+
+  it('普通点按的抬手**不**能 preventDefault（消息流里点对方那条 = 选中做分析，click 必须留着）', () => {
+    const el = renderRow(asMsg(msg({ localId: 17 })))
+    act(() => { el?.dispatchEvent(pev('pointerdown')) })
+    const up = pev('pointerup')
+    act(() => { el?.dispatchEvent(up) })
+    expect(up.defaultPrevented, '把普通点按也压掉 ⇒ 触摸上选不中消息做分析').toBe(false)
+  })
+})

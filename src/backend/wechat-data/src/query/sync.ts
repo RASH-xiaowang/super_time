@@ -13,14 +13,19 @@
  *   other : [4016B encrypted][16B IV][64B HMAC]
  * Key derivation (wx_key_v4.1): PBKDF2-HMAC-SHA512(rawKey, salt, 256000).
  */
-import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import {
-  closeSync, existsSync, openSync, readFileSync,
-  readdirSync, readSync, statSync,
+  existsSync, readFileSync,
+  readdirSync, statSync,
 } from 'node:fs'
-import { copyFile, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getConfig } from './config.ts'
+import { IV_SZ, PAGE_SZ, RESERVE_SZ, SALT_SZ, SQLITE_HDR, decryptPage, deriveEncKey, readPrefix, reserveByteOf } from './sqlcipher-page.ts'
+import { decryptWalPatch, walFramesPatchable, WAL_FRAME_HEADER_SZ, WAL_HEADER_SZ } from './sqlcipher-wal.ts'
+export { decryptWalPatch, walFramesPatchable } from './sqlcipher-wal.ts'
+import { decryptTailAppend, tailAppendPlan, tailQuickCheckOk } from './sync-tail-patch.ts'
+import { DIFF_MAX_CHANGED_RATIO, diffPageIndexes, pageHashesOf, pageHashesRange, patchChangedPages } from './sync-page-diff.ts'
+import { cleanStaleSnapshotLeftovers, discardSupersededWal, stageCopyRetry, stageOpenRetry } from './snapshot-sidecars.ts'
 import {
   SYNC_INTERVAL_MS,
   failingTargets,
@@ -30,15 +35,8 @@ import {
   takeSyncSuccesses,
 } from './sync-pacing.ts'
 import { flushSyncSourceState, loadSyncSourceState, noteSyncSourceState } from './sync-state.ts'
+import { startSyncWatch } from './sync-watch.ts'
 
-const PAGE_SZ = 4096
-const SALT_SZ = 16
-const IV_SZ = 16
-const RESERVE_SZ = 80
-const PBKDF2_ITERS = 256000
-const SQLITE_HDR = Buffer.from('SQLite format 3\x00')
-const WAL_HEADER_SZ = 32
-const WAL_FRAME_HEADER_SZ = 24
 const FULL_DECRYPT_COOLDOWN_MS = 6_000
 
 /**
@@ -65,48 +63,6 @@ function cachedDirEntries(dir: string): DirListing {
   }
 }
 
-/** Read exactly the first n bytes of a file (readFileSync has no length option). */
-function readPrefix(file: string, n: number): Buffer {
-  const fd = openSync(file, 'r')
-  const buf = Buffer.alloc(n)
-  let filled = 0
-  try {
-    while (filled < n) {
-      const r = readSync(fd, buf, filled, n - filled, null)
-      if (r === 0) break
-      filled += r
-    }
-  } finally {
-    closeSync(fd)
-  }
-  return buf.subarray(0, filled)
-}
-
-/** Derive the per-database AES-256 key (wx_key_v4.1 PBKDF2, else raw). */
-function deriveEncKey(rawKey: Buffer, salt: Buffer, keyFormat?: string): Buffer {
-  if (keyFormat === 'wx_key_v4.1') {
-    return pbkdf2Sync(rawKey, salt, PBKDF2_ITERS, 32, 'sha512')
-  }
-  return rawKey
-}
-
-/**
- * Decrypt one SQLCipher page (pgno is 1-based) into a plain SQLite page.
- * The per-page IV lives at the page tail; page 1 additionally prefixes the
- * decrypted payload with the SQLite header (the salt occupied those 16 bytes
- * on disk), matching st_control's decrypt_page output layout.
- */
-function decryptPage(encKey: Buffer, page: Buffer, pgno: number): Buffer {
-  const iv = page.subarray(PAGE_SZ - RESERVE_SZ, PAGE_SZ - RESERVE_SZ + IV_SZ)
-  const encrypted = pgno === 1 ? page.subarray(SALT_SZ, PAGE_SZ - RESERVE_SZ) : page.subarray(0, PAGE_SZ - RESERVE_SZ)
-  const decipher = createDecipheriv('aes-256-cbc', encKey, iv)
-  decipher.setAutoPadding(false)
-  const dec = Buffer.concat([decipher.update(encrypted), decipher.final()])
-  const out = Buffer.alloc(PAGE_SZ)
-  if (pgno === 1) SQLITE_HDR.copy(out, 0)
-  dec.copy(out, pgno === 1 ? SQLITE_HDR.length : 0)
-  return out
-}
 
 /**
  * Stream-decrypt a whole SQLCipher database to a plain SQLite file.
@@ -124,8 +80,8 @@ function decryptPage(encKey: Buffer, page: Buffer, pgno: number): Buffer {
 const DECRYPT_CHUNK_PAGES = 64
 
 export async function fullDecryptFile(dbPath: string, outPath: string, encKey: Buffer): Promise<number> {
-  const input = await open(dbPath, 'r')
-  const output = await open(outPath, 'w')
+  const input = await stageOpenRetry(dbPath, 'r')
+  const output = await stageOpenRetry(outPath, 'w')
   const rawChunk = Buffer.alloc(PAGE_SZ * DECRYPT_CHUNK_PAGES)
   const decChunk = Buffer.alloc(PAGE_SZ * DECRYPT_CHUNK_PAGES)
   let pgno = 0
@@ -154,65 +110,6 @@ export async function fullDecryptFile(dbPath: string, outPath: string, encKey: B
   return pgno
 }
 
-/**
- * Patch a decrypted DB file with valid frames from an encrypted WAL.
- * @param walPath - encrypted WAL file path.
- * @param outPath - decrypted DB file to patch in place.
- * @param encKey - derived 32-byte AES-256 key.
- * @returns the number of frames patched.
- */
-export async function decryptWalPatch(walPath: string, outPath: string, encKey: Buffer): Promise<number> {
-  if (!existsSync(walPath)) return 0
-  const wal = await readFile(walPath)
-  if (wal.length <= WAL_HEADER_SZ) return 0
-  const frameSize = WAL_FRAME_HEADER_SZ + PAGE_SZ
-  const walSalt1 = wal.readUInt32BE(16)
-  const walSalt2 = wal.readUInt32BE(20)
-  const fh = await open(outPath, 'r+')
-  let patched = 0
-  try {
-    let offset = WAL_HEADER_SZ
-    while (offset + frameSize <= wal.length) {
-      const pgno = wal.readUInt32BE(offset)
-      const frameSalt1 = wal.readUInt32BE(offset + 8)
-      const frameSalt2 = wal.readUInt32BE(offset + 12)
-      if (pgno === 0 || pgno > 1_000_000 || frameSalt1 !== walSalt1 || frameSalt2 !== walSalt2) {
-        offset += frameSize
-        continue
-      }
-      const ep = wal.subarray(offset + WAL_FRAME_HEADER_SZ, offset + WAL_FRAME_HEADER_SZ + PAGE_SZ)
-      const dec = decryptPage(encKey, ep, pgno)
-      await fh.write(dec, 0, PAGE_SZ, (pgno - 1) * PAGE_SZ)
-      patched += 1
-      offset += frameSize
-    }
-  } finally {
-    await fh.close()
-  }
-  return patched
-}
-
-/** True when at least one WAL frame's salt epoch matches the WAL header,
- * i.e. the frames can be decrypted with the current snapshot key. WeChat
- * rotates the salt on login/checkpoint; when it does, frames carry a different
- * epoch and cannot be patched — the next main-DB rewrite (mtime change)
- * triggers a clean full decrypt instead. */
-export async function walFramesPatchable(walPath: string): Promise<boolean> {
-  if (!existsSync(walPath)) return false
-  const wal = await readFile(walPath)
-  if (wal.length <= WAL_HEADER_SZ) return false
-  const frameSize = WAL_FRAME_HEADER_SZ + PAGE_SZ
-  const walSalt1 = wal.readUInt32BE(16)
-  const walSalt2 = wal.readUInt32BE(20)
-  let offset = WAL_HEADER_SZ
-  while (offset + frameSize <= wal.length) {
-    const frameSalt1 = wal.readUInt32BE(offset + 8)
-    const frameSalt2 = wal.readUInt32BE(offset + 12)
-    if (frameSalt1 === walSalt1 && frameSalt2 === walSalt2) return true
-    offset += frameSize
-  }
-  return false
-}
 
 /** Per-shard state: raw mtimes of the main db and its wal. */
 /**
@@ -269,12 +166,21 @@ export function looksDecrypted(dbPath: string): boolean {
 /**
  * Atomically replace target with a fully-decrypted temp file (async retries).
  *
- * **不要**先 `unlink(target)`（旧实现如此）：那会在「删掉」与「改名」之间留出一个
- * 「目标不存在」的窗口，并发只读查询正好落在里面就是 ENOENT。
- * Windows 实测：rename 覆盖一个**已存在但未被打开**的文件是允许的
- * （MOVEFILE_REPLACE_EXISTING），所以正常路径下不需要删除；而目标被 SQLite 句柄
- * 打开时两种做法都会失败（rename → EPERM，unlink → EBUSY），真正让同步成功的是
- * 这里的重试等待。导出仅为让回归用例直接验证「替换期间目标始终存在」。
+ * 两件必须同时成立的事：
+ *   ① **不要**先 `unlink(target)`（旧实现如此）：那会在「删掉」与「改名」之间留出一个
+ *      「目标不存在」的窗口，并发只读查询正好落在里面就是 ENOENT。
+ *      Windows 实测：rename 覆盖一个**已存在但未被打开**的文件是允许的
+ *      （MOVEFILE_REPLACE_EXISTING），所以正常路径下不需要删除；而目标被 SQLite 句柄
+ *      打开时两种做法都会失败（rename → EPERM，unlink → EBUSY），真正让同步成功的是
+ *      这里的重试等待。
+ *   ② **换代必须连上一代的 `-wal` 一起换掉**（`query/snapshot-sidecars.ts` 的模块头有真机
+ *      实测）：留着它，新主文件会被旧 WAL 的页盖住 ⇒ `database disk image is malformed`，
+ *      而修它的正确动作只在本地（清旁文件）。所以清不掉时**不发布** —— 这一轮不更新，
+ *      好过发一份读不了的快照出去。（「清不掉」这一支单独没有单测钉得住：Windows 上主文件
+ *      与 `-wal` 由**同一个** SQLite 连接持有，造不出「WAL 不可删、主文件仍可 rename」的
+ *      状态 —— 理由写在 `scripts/mutations-registry.batch3i.mjs` 的头注里。）
+ *
+ * 导出仅为让回归用例直接验证「替换期间目标始终存在」与「换代不留旧 WAL」。
  * @param temp - 已解密好的临时文件。
  * @param target - 目标快照文件。
  */
@@ -282,15 +188,19 @@ export async function atomicReplace(temp: string, target: string): Promise<void>
   await mkdir(dirname(target), { recursive: true })
   let lastErr: unknown = null
   for (let i = 0; i < 8; i += 1) {
-    try {
-      await rename(temp, target)
-      return
-    } catch (e) {
-      lastErr = e
-      // The snapshot may be briefly held open by a concurrent query; a short
-      // asynchronous pause lets the reader close before retrying.
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120) })
+    if (await discardSupersededWal(target)) {
+      lastErr = new Error(`快照换代被上一代残留的 -wal 挡住（读者正持有 ${target}-wal）`)
+    } else {
+      try {
+        await rename(temp, target)
+        return
+      } catch (e) {
+        lastErr = e
+      }
     }
+    // The snapshot may be briefly held open by a concurrent query; a short
+    // asynchronous pause lets the reader close before retrying.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 120) })
   }
   throw lastErr instanceof Error ? lastErr : new Error('atomicReplace failed')
 }
@@ -429,7 +339,7 @@ function shardSig(msgDir: string, file: string): ShardSig {
 
 /** Copy a raw WAL into staging when it has frames; otherwise drop stale staging. */
 async function stageWal(rawWal: string, stagingWal: string): Promise<void> {
-  if (existsSync(rawWal) && statSync(rawWal).size > WAL_HEADER_SZ) await copyFile(rawWal, stagingWal)
+  if (existsSync(rawWal) && statSync(rawWal).size > WAL_HEADER_SZ) await stageCopyRetry(rawWal, stagingWal)
   else if (existsSync(stagingWal)) await unlink(stagingWal).catch(() => { /* stale staging is best-effort */ })
 }
 
@@ -440,18 +350,25 @@ async function stageWal(rawWal: string, stagingWal: string): Promise<void> {
  * - mode 'wal': the main snapshot is current and only the WAL grew — patch the
  *   changed frames into a staging copy of the snapshot (st_control's
  *   write-only-page model) and atomically replace.
+ * - tail 参数（2026-10-13）：主库变大且满足尾部增量条件时，只解**新增页**追加到
+ *   快照末尾（+ WAL 帧补丁），quick_check 通过即发布；任何一步不成立都**退回整库重解**
+ *   —— 尾部路径是时延优化，不是新的正确性来源。
  * @param rawMsgDir - raw message dir (encrypted).
  * @param decMsgDir - decrypted message dir.
  * @param file - shard file name (e.g. message_0.db).
  * @param rawKeyHex - fallback 64-hex raw key.
  * @param keyFormat - key format (wx_key_v4.1).
  * @param mode - full or wal-incremental.
+ * @param tail - 尾部增量计划（由调用方按新旧签名算出；mode='full' 时生效）。
+ * @param diffIndexes - 页级差分的差异页下标（原地重写的检查点用；与 tail 互斥）。
  * @returns page counts for reporting.
  */
 export async function syncMessageShard(
   rawMsgDir: string, decMsgDir: string, file: string,
   rawKeyHex: string, keyFormat: string, mode: 'full' | 'wal' = 'full',
-): Promise<{ fullPages: number; walPages: number }> {
+  tail?: { offset: number; pages: number },
+  diffIndexes?: readonly number[],
+): Promise<{ fullPages: number; walPages: number; via: 'wal' | 'full' | 'tail' | 'diff' }> {
   const relKey = 'message/' + file
   const rawDb = join(rawMsgDir, file)
   const rawWal = join(rawMsgDir, file + '-wal')
@@ -466,10 +383,10 @@ export async function syncMessageShard(
   if (mode === 'wal') {
     if (!(await walFramesPatchable(rawWal))) {
       console.warn('[wechat-sync]', file, 'wal salt epoch mismatch, keeping snapshot')
-      return { fullPages: 0, walPages: 0 }
+      return { fullPages: 0, walPages: 0, via: 'wal' }
     }
     // Snapshot stays; patch only the WAL's changed frames into a staging copy.
-    await copyFile(target, stagingDb)
+    await stageCopyRetry(target, stagingDb)
     await stageWal(rawWal, stagingWal)
     try {
       const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
@@ -479,7 +396,7 @@ export async function syncMessageShard(
       // frames either, so defer to the next main-DB rewrite instead of
       // re-decrypting the whole snapshot on every WAL touch.
       await atomicReplace(stagingDb, target)
-      return { fullPages: 0, walPages }
+      return { fullPages: 0, walPages, via: 'wal' }
     } finally {
       for (const f of [stagingWal, temp]) {
         try { await unlink(f) } catch { /* ignore */ }
@@ -487,15 +404,45 @@ export async function syncMessageShard(
     }
   }
 
+  // Full mode with an incremental plan (tail append or page diff): patch, quick_check
+  // 校验，任何一步失败都落到下面的整库重解（宁可慢，不可错）。
+  if (tail !== undefined || diffIndexes !== undefined) {
+    const kind = tail !== undefined ? 'tail' : 'page-diff'
+    await stageCopyRetry(target, stagingDb)
+    await stageWal(rawWal, stagingWal)
+    try {
+      const pages = tail !== undefined
+        ? await decryptTailAppend(rawDb, stagingDb, tail.offset, tail.pages, encKey)
+        : await patchChangedPages(rawDb, stagingDb, diffIndexes!, encKey)
+      const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
+      if (!looksDecrypted(stagingDb)) throw new Error(kind + ' patch invalid for ' + file)
+      if (!tailQuickCheckOk(stagingDb)) throw new Error(kind + ' patch quick_check failed for ' + file)
+      await atomicReplace(stagingDb, target)
+      return { fullPages: pages, walPages, via: tail !== undefined ? 'tail' : 'diff' }
+    } catch (e) {
+      console.warn('[wechat-sync]', file, kind + ' patch rejected, falling back to full decrypt:', e instanceof Error ? e.message : e)
+    } finally {
+      for (const f of [stagingDb, stagingWal, temp]) {
+        try { await unlink(f) } catch { /* ignore */ }
+      }
+    }
+  }
+
   // Full mode: fresh decrypt of the main db, then WAL patch, then replace.
-  await copyFile(rawDb, stagingDb)
+  await stageCopyRetry(rawDb, stagingDb)
   await stageWal(rawWal, stagingWal)
   try {
     const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
     const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, temp, encKey) : 0
     if (!looksDecrypted(temp)) throw new Error('decrypt result invalid for ' + file)
+    // 发布前结构自检（2026-10-13，参考 WeChatDataAnalysis 的逐页校验纪律）：
+    // 撕裂读（微信正写着主库时读出的截断/坏副本）只靠文件头查不出来——坏快照一旦
+    // 发出去，所有查询都会读到错数据，比「这一轮慢一点、下一轮重试」糟得多。
+    // 只对**预留字节恰为 80**的库（真实微信库的特征值）验：node:sqlite 夹具是 0、
+    // 合成页夹具是垃圾值——都不是生产形状，跳过（见 reserveByteOf 的注释）。
+    if (reserveByteOf(temp) === 80 && !tailQuickCheckOk(temp)) throw new Error('decrypt result failed quick_check for ' + file)
     await atomicReplace(temp, target)
-    return { fullPages, walPages }
+    return { fullPages, walPages, via: 'full' }
   } finally {
     for (const f of [stagingDb, stagingWal, temp]) {
       try { await unlink(f) } catch { /* ignore */ }
@@ -533,14 +480,41 @@ export async function syncChangedShards(
     if (syncFailureBackoffActive(f)) continue
     lastState.set(f, sig)
     const mode: 'full' | 'wal' = (prev === undefined || prev.main !== sig.main || !existsSync(target)) ? 'full' : 'wal'
+    // 尾部增量计划：主库变大且为整页数时才可行（2026-10-13）。尾部路径**不占**冷却名额——
+    // 它毫秒级；冷却继续只卡真·全量。
+    const tailPlan = (mode === 'full' && prev !== undefined && existsSync(target))
+      ? tailAppendPlan(prev.main, sig.main)
+      : null
     // 诊断（2026-09-29 第 45 轮）：`full` 会整库重解密（message_1 一次 ≈147MB），
     // 而它每 6 秒冷却一过就可能重来一次。这里把**到底哪个条件**触发了 full 打出来，
     // 免得继续靠推断（前两轮已经推错过一次：源库其实在长）。
-    if (mode === 'full' && process.env.SUPERTIME_SYNC_TRACE === '1') {
+    if (mode === 'full' && tailPlan === null && process.env.SUPERTIME_SYNC_TRACE === '1') {
       const why = prev === undefined ? 'prev=undefined(首次)' : prev.main !== sig.main ? 'main变了' : '产物不存在'
       console.log(`[sync-trace] ${f} → full 原因=${why} prev.main=${prev === undefined ? '-' : String(prev.main)} sig.main=${String(sig.main)} 产物存在=${String(existsSync(target))}`)
     }
-    if (mode === 'full' && !fullDecryptDue(f)) {
+    // 页级差分计划（2026-10-13，参考 WeChatDataAnalysis）：原地重写的检查点
+    // （大小不变、mtime 变）走「指纹比对 → 只解变化页」；指纹列表带源签名，
+    // 对不上就退全量。与尾部增量互斥（尾部覆盖追加页，差分覆盖原地重写）。
+    const hashEntry = mode === 'full' && tailPlan === null && prev !== undefined && existsSync(target)
+      ? pageHashCache.get(f)
+      : undefined
+    const prevMain = prev?.main ?? ''
+    let diffIndexes: number[] | undefined
+    let diffHashes: Buffer[] | undefined
+    if (hashEntry !== undefined && hashEntry.sig === prevMain) {
+      const curHashes = await pageHashesOf(join(msgDir, f))
+      const diff = diffPageIndexes(hashEntry.hashes, curHashes)
+      if (diff.length === 0) {
+        // 只有 mtime 变了、页一个没动：签名记账即可，不需要任何解密。
+        pageHashCache.set(f, { sig: sig.main, hashes: curHashes })
+        continue
+      }
+      if (diff.length / Math.max(1, curHashes.length) <= DIFF_MAX_CHANGED_RATIO) {
+        diffIndexes = diff
+        diffHashes = curHashes
+      }
+    }
+    if (mode === 'full' && tailPlan === null && diffIndexes === undefined && !fullDecryptDue(f)) {
       // Rate-limit full re-decrypts: a checkpoint can grow the main DB on every
       // message. Defer (do not record the signature) so it retries after the
       // cooldown; the WAL patch path still applies incremental frames meanwhile.
@@ -548,9 +522,24 @@ export async function syncChangedShards(
       continue
     }
     try {
-      const r = await syncMessageShard(msgDir, decMsgDir, f, fallbackKey, keyFormat, mode)
+      const r = await syncMessageShard(msgDir, decMsgDir, f, fallbackKey, keyFormat, mode, tailPlan ?? undefined, diffIndexes)
       noteSyncSuccess(f)
-      if (mode === 'full' || r.walPages > 0) synced.push(`${f}:${mode}(${r.fullPages}p/w${r.walPages})`)
+      // 指纹簿记账：tail 补尾部新页、diff 直接复用本轮扫描、full 重扫一遍。
+      if (tailPlan !== null) {
+        const entry = pageHashCache.get(f)
+        if (entry !== undefined && entry.sig === prev?.main) {
+          const tailHashes = await pageHashesRange(join(msgDir, f), Math.floor(tailPlan.offset / PAGE_SZ), tailPlan.pages)
+          pageHashCache.set(f, { sig: sig.main, hashes: [...entry.hashes, ...tailHashes] })
+        } else {
+          pageHashCache.set(f, { sig: sig.main, hashes: await pageHashesOf(join(msgDir, f)) })
+        }
+      } else if (diffIndexes !== undefined && diffHashes !== undefined) {
+        pageHashCache.set(f, { sig: sig.main, hashes: diffHashes })
+      } else {
+        pageHashCache.set(f, { sig: sig.main, hashes: await pageHashesOf(join(msgDir, f)) })
+      }
+      const label = r.via
+      if (label === 'full' || r.walPages > 0 || label === 'tail' || label === 'diff') synced.push(`${f}:${label}(${r.fullPages}p/w${r.walPages})`)
     } catch (e) {
       // 保留已记录的签名 + 退避：不再"下一轮立刻重解密整库"（见 noteSyncFailure 的注释）。
       noteSyncFailure(f, sigKeyOf(sig), (e as Error).message)
@@ -615,7 +604,7 @@ export async function syncSessionDb(
         console.warn('[wechat-sync] session.db wal salt epoch mismatch, keeping snapshot')
         return []
       }
-      await copyFile(target, stagingDb)
+      await stageCopyRetry(target, stagingDb)
       await stageWal(rawDb + '-wal', stagingWal)
       try {
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
@@ -628,7 +617,7 @@ export async function syncSessionDb(
         for (const f of [stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
       }
     }
-    await copyFile(rawDb, stagingDb)
+    await stageCopyRetry(rawDb, stagingDb)
     await stageWal(rawDb + '-wal', stagingWal)
     try {
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
@@ -701,7 +690,7 @@ export async function syncContactDb(
         console.warn('[wechat-sync] contact.db wal salt epoch mismatch, keeping snapshot')
         return []
       }
-      await copyFile(target, stagingDb)
+      await stageCopyRetry(target, stagingDb)
       await stageWal(rawDb + '-wal', stagingWal)
       try {
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
@@ -716,7 +705,7 @@ export async function syncContactDb(
         for (const f of [stagingDb, stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
       }
     }
-    await copyFile(rawDb, stagingDb)
+    await stageCopyRetry(rawDb, stagingDb)
     await stageWal(rawDb + '-wal', stagingWal)
     try {
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
@@ -790,7 +779,7 @@ export async function syncPlainDatabase(
         console.warn('[wechat-sync] ' + label + ' wal salt epoch mismatch, keeping snapshot')
         return []
       }
-      await copyFile(target, stagingDb)
+      await stageCopyRetry(target, stagingDb)
       await stageWal(rawDb + '-wal', stagingWal)
       try {
         const walPages = existsSync(stagingWal) ? await decryptWalPatch(stagingWal, stagingDb, encKey) : 0
@@ -803,7 +792,7 @@ export async function syncPlainDatabase(
         for (const f of [stagingWal, temp]) { try { await unlink(f) } catch { /* ignore */ } }
       }
     }
-    await copyFile(rawDb, stagingDb)
+    await stageCopyRetry(rawDb, stagingDb)
     await stageWal(rawDb + '-wal', stagingWal)
     try {
       const fullPages = await fullDecryptFile(stagingDb, temp, encKey)
@@ -821,36 +810,8 @@ export async function syncPlainDatabase(
   }
 }
 
-/**
- * Remove stale staging/temp files (`.stage_src`/`.stage_wal`/`.decrypt_tmp`)
- * left by a previously interrupted sync. A killed process can leave a
- * half-written snapshot behind, and a fresh run that reuses it can stall.
- * Real decrypted DB files are never matched.
- * @param root - decrypted snapshot root to sweep.
- */
-export async function cleanStaleStagingFiles(root: string): Promise<void> {
-  const suffixes = ['.stage_src', '.stage_wal', '.decrypt_tmp']
-  async function walk(dir: string): Promise<void> {
-    try {
-      const entries = await readdir(dir, { withFileTypes: true })
-      for (const entry of entries) {
-        const p = join(dir, entry.name)
-        if (entry.isDirectory()) {
-          await walk(p)
-        } else if (suffixes.some(s => entry.name.endsWith(s))) {
-          try {
-            await unlink(p)
-          } catch {
-            /* best-effort sweep */
-          }
-        }
-      }
-    } catch {
-      return
-    }
-  }
-  await walk(root)
-}
+/** 主库页指纹缓存：`源签名 → 指纹列表`。进程内有效（重启后首次主库变化退回全量并重建）。 */
+const pageHashCache = new Map<string, { sig: string; hashes: Buffer[] }>()
 
 /**
  * Real-time sync loop: first run immediately, then poll on an interval.
@@ -871,7 +832,7 @@ export function startRealtimeSync(
   /**
    * 跨进程签名账只在本进程**首 tick** 播种一次（`dec` 是动态 provider，启动时可能还没配好数据根）。
    * 播种后「源没变」命中下面既有的 `continue`（零工作量）、「只有 WAL 变」命中既有的 `'wal'` 增量
-   * —— 判定逻辑一行没改，实时同步的新鲜度不受影响的只有「启动不必白解一遍」。见 `sync-state.ts`。
+   * —— 判定逻辑一行没改，实时同步的新鲜度不受影响的只有「启动不必白解一遍」。见 `sync-state.ts`（W2-2.3 量的「tick 内 stat 分布」实测表也在那份里 —— 本文件已在行数硬上限上）。
    */
   let stateSeeded = false
   let timer: ReturnType<typeof setInterval> | null = null
@@ -887,7 +848,7 @@ export function startRealtimeSync(
     try {
       if (!cleaned) {
         cleaned = true
-        await cleanStaleStagingFiles(decryptedDir())
+        await cleanStaleSnapshotLeftovers(decryptedDir())
       }
       const raw = rawDbDir()
       const dec = decryptedDir()
@@ -918,6 +879,8 @@ export function startRealtimeSync(
         unavailableWarned = false
         console.log('[wechat-sync] raw db dir available again:', raw)
       }
+      // WAL 实时监听（2026-10-13）：目录变了/报错后都在这里重挂到**当前** raw 根上。
+      syncWatch.refresh(raw)
       if (!stateSeeded) {
         stateSeeded = true
         for (const [key, sig] of loadSyncSourceState(dec)) {
@@ -991,9 +954,21 @@ export function startRealtimeSync(
       running = false
     }
   }
+  /**
+   * WAL 实时监听：微信一写原始库目录（WAL 追加/新建/检查点 rename）就立刻拍一次 tick，
+   * 而不是等下一个 10s 轮询拍（用户要求「WAL 实时推送更新，而不是定时轮询」）。
+   * `SUPERTIME_SYNC_WATCH=0` 关掉监听只留轮询（对比测量/排障用）；轮询本身恒为兜底。
+   */
+  const syncWatch = process.env.SUPERTIME_SYNC_WATCH === '0'
+    ? { refresh: () => { /* 关掉监听 */ }, stop: () => {} }
+    : startSyncWatch({
+      onTrigger: () => { void tick() },
+      onAttached: (dir) => { console.log('[wechat-sync] WAL watcher attached:', dir) },
+    })
   void tick()
   timer = setInterval(() => { void tick() }, SYNC_INTERVAL_MS)
   return () => {
+    syncWatch.stop()
     if (timer !== null) { clearInterval(timer); timer = null }
   }
 }

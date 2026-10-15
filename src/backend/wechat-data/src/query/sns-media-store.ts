@@ -51,6 +51,21 @@ export const SNS_MEDIA_STORE_BUDGET_BYTES = ((): number => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2 * 1024 * 1024 * 1024
 })()
 
+/**
+ * W3-4.3：**条数**上陔。
+ *
+ * 为什么除了字节还要条数：字节上陔在“平均大小”稳定时很有效，但有两类情形它管不到：
+ * 很多小图（表情、缩略图，几十 KB），以及“同一张图被不断重新保存”。
+ * 后者耗尽的是 inode/目录项，而 Windows 上一个目录数万条后列目录
+ * 会明显变慢（本库按 md5 前两位分 shard，但一个 shard 仍然可以很多）。
+ * 20000 条对 2GB 预算来说意味着平均 100KB/张 —— 超过它就说明
+ * 存的东西比“原图”小得多，该回收了。
+ * 环境变量 `SUPERTIME_SNS_MEDIA_STORE_FILES` 可覆盖（与字节那个同构）。
+ */
+export const SNS_MEDIA_STORE_BUDGET_FILES = ((): number => {
+  const raw = Number(process.env['SUPERTIME_SNS_MEDIA_STORE_FILES'] ?? '')
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 20_000
+})()
 /** 认识的原图格式 → 扩展名。顺序即查找顺序，所以把最常见的 jpeg 放最前。 */
 const EXTS: ReadonlyArray<{ ext: string; mime: string }> = [
   { ext: 'jpg', mime: 'image/jpeg' },
@@ -158,7 +173,11 @@ const SWEEP_EVERY_N_WRITES = 64
  *
  * @returns 被删掉的张数。
  */
-export function sweepOriginalStore(decodedDir: string, budgetBytes = SNS_MEDIA_STORE_BUDGET_BYTES): number {
+export function sweepOriginalStore(
+  decodedDir: string,
+  budgetBytes = SNS_MEDIA_STORE_BUDGET_BYTES,
+  budgetFiles = SNS_MEDIA_STORE_BUDGET_FILES,
+): number {
   const root = join(decodedDir, SNS_MEDIA_STORE_SUBDIR)
   if (!existsSync(root)) return 0
   const files: Array<{ p: string; size: number; mtimeMs: number }> = []
@@ -178,11 +197,15 @@ export function sweepOriginalStore(decodedDir: string, budgetBytes = SNS_MEDIA_S
       } catch { /* 扫不到就跳过 */ }
     }
   }
-  if (total <= budgetBytes) return 0
-  files.sort((a, b) => a.mtimeMs - b.mtimeMs)
+  // W3-4.3：字节或条数任一超陔都开始回收。
+  // 注意 dropped 必须在 overBudget 之前声明：闭包里读它，
+  // 写在后面就是 TDZ（第一版就这样，运行时才报 Cannot access）。
   let dropped = 0
+  const overBudget = (): boolean => total > budgetBytes || files.length - dropped > budgetFiles
+  if (!overBudget()) return 0
+  files.sort((a, b) => a.mtimeMs - b.mtimeMs)
   for (const f of files) {
-    if (total <= budgetBytes) break
+    if (!overBudget()) break
     try { unlinkSync(f.p); total -= f.size; dropped += 1 } catch { /* 删不掉就跳过 */ }
   }
   return dropped

@@ -4,14 +4,15 @@
  * one year and computes hero stats, heatmap, monthly, types, phrases, emoji,
  * top contacts/groups, and first/last sentences.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { contactMeta, cachedBySigAsync, shardCatalogSig } from './meta.ts'
+import { ANNUAL_TTL_MS, cachedBySigAsync, contactMeta, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_CHARS, YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { throwIfCancelled, type StreamControl, type StreamProgress } from './zip.ts'
 
 /** Msg_<md5(username)> table name. */
 function msgTableName(username: string): string {
@@ -118,19 +119,22 @@ function personaTags(s: {
  * @param year - 自然年。
  * @returns 年报快照。
  */
-export async function queryAnnualReport(decryptedDir: string, year: number): Promise<Record<string, unknown>> {
+export async function queryAnnualReport(decryptedDir: string, year: number, ctrl?: StreamControl): Promise<Record<string, unknown>> {
   const sig = [String(year), shardCatalogSig(decryptedDir, ['message'])].join('|')
   return cachedBySigAsync('annual-report:' + decryptedDir + ':' + String(year), sig,
-    () => computeAnnualReport(decryptedDir, year), 30_000)
+    // ⚠ 取消是在 loader **内部**抛的 ⇒ `cachedBySigAsync` 什么都不会写；
+    //   半张年报进缓存的话，接下来 60 秒里每次都拿到那份残缺的（与 9.4 词云同一条纪律）。
+    () => computeAnnualReport(decryptedDir, year, ctrl), ANNUAL_TTL_MS)
 }
 
 /**
  * 真正算年报（无缓存）。
  * @param decryptedDir - decrypted data root.
  * @param year - calendar year.
+ * @param ctrl - 可选的进度上报 + 取消令牌（W2-8.2）。取消在 loader 内抛出，缓存不会写。
  * @returns the annual report.
  */
-async function computeAnnualReport(decryptedDir: string, year: number): Promise<Record<string, unknown>> {
+async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: StreamControl): Promise<Record<string, unknown>> {
   const msgDir = join(decryptedDir, 'message')
   if (!existsSync(msgDir)) return { year, total: 0 }
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
@@ -198,6 +202,7 @@ async function computeAnnualReport(decryptedDir: string, year: number): Promise<
           // 后端是串行 worker，整段独占期间**所有面板都动不了**。
           // 这里每行还要 `stripXml` + 逐字符生成 CJK bigram（下面），是纯 CPU 重活。
           const cur = db.prepare('SELECT create_time, local_type, message_content FROM "' + table + '" WHERE create_time >= ? AND create_time < ?').iterate(start, end) as Iterable<Record<string, unknown>>
+          let scannedRows = 0
           let sinceYield = 0
           let charsSinceYield = 0
           for (const r of cur) {
@@ -209,7 +214,12 @@ async function computeAnnualReport(decryptedDir: string, year: number): Promise<
               sinceYield = 0
               charsSinceYield = 0
               await yieldToLoop()
+              // W2-8.2：这段扫描是年报唯一的长耗时（实测整段 4048ms，见上面那段注释），
+              // 进度与取消都挂在这个让出点上 —— 它本来就是「这一大坨 CPU 重活」的边界。
+              throwIfCancelled(ctrl?.signal)
+              ctrl?.onProgress?.({ phase: 'collect', done: scannedRows, total: 0 } satisfies StreamProgress)
             }
+            scannedRows += 1
             const ts = Number(r['create_time'] ?? 0)
             const lt = Number(r['local_type'] ?? 0)
             const content = decodeCell(r['message_content'])

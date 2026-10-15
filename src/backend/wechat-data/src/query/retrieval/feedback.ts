@@ -11,7 +11,7 @@
  *
  * 存储：`<数据根>/wechat_rag_feedback.db`，与向量库同级，随数据目录删除。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../db-open.ts'
 import { existsSync } from 'node:fs'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'

@@ -1,22 +1,14 @@
 /**
- * 网关的模块级支撑（M21 结构刀自 `gateway-core.ts` 拆出）：数据目录解析、长任务控制槽、
- * 隐私库不可读的统一文案与 jobId 规整 —— 都是不依赖实例状态的纯声明。
+ * 网关的模块级支撑（M21 结构刀自 `gateway-core.ts` 拆出）：数据目录解析、长任务控制槽
+ * 与 jobId 规整 —— 都是不依赖实例状态的纯声明。
+ *
+ * ⚠ 这里**曾经**有一个 `privacyStoreUnreadable()`（隐私库读不到时的统一文案，写着
+ * 「已按『出站拦截』处理：已阻止…」）。2026-09-30 出网拦截整体移除后它成了两句叠加的假话：
+ * 既没有「拦截」这回事，也没有调用方（grep 实测 0 处调用）。已删除，不要再加回来 ——
+ * 隐私库读不到时的正确行为见 `gateway-privacy.ts`：按默认设置继续，只因脱敏/审计缺失而降级。
  */
 import { bootstrapWechatData, resolveDecodedDir, resolveDecryptedDir } from './dirs.ts'
 import { getConfig } from './query/config.ts'
-
-
-
-/**
- * 隐私库读不到时的统一文案。
- *
- * 「读不到」必须与「没开拦截」区分开：前者拦下并说明原因，后者放行。
- * 2026-09-20 之前两处 catch 都把异常翻译成「放行」，于是一个显式开了
- * 「出站拦截」的用户，在 `wechat_privacy.db` 损坏/被锁的那一刻就开始静默出网。
- */
-export function privacyStoreUnreadable(feature: string, detail: string): string {
-  return `读到隐私设置失败（wechat_privacy.db 不可读），已按「出站拦截」处理：已阻止「${feature}」${detail}`
-}
 
 /** Resolved data layout (per gateway instance, so tests can stub env). */
 export interface ResolvedDirs {

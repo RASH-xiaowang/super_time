@@ -19,7 +19,7 @@
  *      `notes.ts` 那层物理上看不见文件（它自己的注释就写着 `fileCount` 在这里恒为 0）。
  *      所以「笔记 ↔ 文件」的合并只发生在 gateway 层，不在这里。
  */
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from '../db-open.ts'
 import { cellStr, openStore } from '../kb-files.ts'
 import { ftsPhrase } from '../search.ts'
 

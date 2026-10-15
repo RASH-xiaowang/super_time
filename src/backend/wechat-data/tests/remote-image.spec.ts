@@ -108,6 +108,15 @@ describe('远程图片代理：发不发请求', () => {
     expect(calls.length, '第二次不该再发请求').toBe(1)
   })
 
+  it('磁盘缓存被清理后，内存层仍能命中且不再联网', async () => {
+    const first = await fetchRemoteImage(OK_URL, root, {})
+    expect(first.dataUrl, first.error).toMatch(/^data:image\/png;base64,/)
+    rmSync(cachedFile(OK_URL))
+    const second = await fetchRemoteImage(OK_URL, root, {})
+    expect(second.fromCache).toBe(true)
+    expect(calls).toEqual([OK_URL])
+  })
+
   it('本机缓存优先：同一条地址取回过一次之后不再出网', async () => {
     await fetchRemoteImage(OK_URL, root, {})
     const cached = await fetchRemoteImage(OK_URL, root, {})

@@ -16,10 +16,10 @@
  * (see the 'dsh-wechat-data-updated' DOM event).
  */
 const SNAPSHOT_TTL_MS = 30_000
-const _snapshotCache = new Map<string, { value: unknown; ts: number }>()
+const _snapshotCache = new Map<string, { value: unknown; ts: number; generation: number }>()
 const _snapshotListeners = new Map<string, Set<() => void>>()
 /**
- * 「数据变了」的世代戳（毫秒；0 = 从未失效）。
+ * 「数据变了」的世代编号。0 = 从未失效；每次全局失效加一。
  *
  * P2-4 / 第一批 #4：旧实现收到一次实时同步事件就把**整张表清掉** ——
  * 数据确实都旧了，这个判断没错，错在表达方式：清表 ⇒ 下一次读全部回源，
@@ -30,8 +30,11 @@ const _snapshotListeners = new Map<string, Set<() => void>>()
  * 现在改成**标记为陈旧**：旧值仍然立刻可用（SWR 的 stale），读它的人顺带触发一次后台刷新，
  * 刷新成功才写回 + 通知。为了不靠这个机制无限供旧数，超过 {@link STALE_SERVE_CEILING_MS}
  * 的条目直接丢掉 —— 宁可变冷启动也不画一小时前的数据。
+ *
+ * 用单调递增的整数而不是墙钟做世代：`Date.now()` 在同一毫秒里连续写入会得到相同的值，
+ * 于是「失效后立刻写入的新快照」会被严格大于判断误当成旧快照。整数世代没有这个歧义。
  */
-let staleBeforeMs = 0
+let snapshotGeneration = 0
 /** 陈旧值最多还肯画多久（超过就真的丢掉）。 */
 const STALE_SERVE_CEILING_MS = 5 * 60_000
 
@@ -60,7 +63,7 @@ export function snapshotSet(key: string, value: unknown): void {
     if (oldest.done) break
     _snapshotCache.delete(oldest.value)
   }
-  _snapshotCache.set(key, { value, ts: Date.now() })
+  _snapshotCache.set(key, { value, ts: Date.now(), generation: snapshotGeneration })
 }
 
 /**
@@ -78,7 +81,7 @@ export function cachedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T>
     if (ageMs > STALE_SERVE_CEILING_MS) {
       // 旧到不该再画的值：当作没有（下一次读会真的回源），顺带把它从内存里丢掉
       _snapshotCache.delete(key)
-    } else if (ageMs < SNAPSHOT_TTL_MS && hit.ts > staleBeforeMs) {
+    } else if (ageMs < SNAPSHOT_TTL_MS && hit.generation === snapshotGeneration) {
       // H3：命中路径也过 timedFetch —— 这条**刻意**量的是「取快照」而不是「取数」：
       // 它应当接近 0ms，一旦打印出来就说明主线程被别的东西占着（同步 SQLite / 长任务），
       // 正是 PERF-AUDIT 里「命中也要等」那类现象的判据。少了这一条，命中路径的耗时无从观察。
@@ -130,7 +133,7 @@ export function subscribeSnapshot(key: string, fn: () => void): () => void {
  * 超过 `STALE_SERVE_CEILING_MS` 的条目在读的时候会被丢掉，不会一直画旧数。
  */
 export function invalidateSnapshotCache(): void {
-  staleBeforeMs = Date.now()
+  snapshotGeneration += 1
   const now = Date.now()
   for (const [k, v] of [..._snapshotCache.entries()]) {
     if (now - v.ts > STALE_SERVE_CEILING_MS) _snapshotCache.delete(k)
@@ -236,6 +239,8 @@ export function writeRenderCache(key: string, data: unknown): void {
 
 // ── 本地缓存层：先渲染缓存，后台刷新后再写回，加速资源预加载 ──
 const CACHE_PREFIX = 'dsh-wechat-cache-v1:'
+/** 总览面板沿用裸 localStorage 的旧键族，也归同一个失效契约管。 */
+export const OVERVIEW_CACHE_PREFIX = 'dsh-wechat-overview-'
 const CACHE_TTL_DEFAULT = 60_000
 
 interface CacheEnvelope { at: number; v: unknown }
@@ -272,6 +277,7 @@ export function invalidateWechatCache(prefix: string): void {
       if (!k) continue
       if (k.startsWith(CACHE_PREFIX + prefix)) localStorage.removeItem(k)
       if (k.startsWith(RENDER_CACHE_PREFIX + prefix)) localStorage.removeItem(k)
+      if (k.startsWith(OVERVIEW_CACHE_PREFIX + prefix)) localStorage.removeItem(k)
     }
   } catch { /* quota/security errors are best-effort */ }
 }

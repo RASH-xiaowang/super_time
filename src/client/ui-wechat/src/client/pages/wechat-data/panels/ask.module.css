@@ -566,6 +566,29 @@
   color: var(--nm-text-2);
   padding: 4px 2px;
 }
+/**
+ * 「停止生成」（W3-6.1）。
+ *
+ * 刻意做得不起眼但点得到：它出现在回答还没出来的那段时间里，而那段区域本身只有一行
+ * 「正在分析…」或一段正在写的正文 —— 按钮做成同色系小字按钮，不抢正在生成的回答的注意力，
+ * 但也不需要用户去找。hover 才提亮，因为它是**逃生门**而不是主路径。
+ */
+.stopBtn {
+  align-self: flex-start;
+  margin: 2px 0 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--nm-text-2) 35%, transparent);
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+}
+.stopBtn:hover {
+  color: var(--nm-text-1);
+  border-color: color-mix(in srgb, var(--nm-text-2) 60%, transparent);
+  background: color-mix(in srgb, var(--nm-text-2) 8%, transparent);
+}
 .chatDots {
   width: 8px;
   height: 8px;
@@ -725,6 +748,8 @@ textarea.composerInput:focus-visible { outline: none; }
   background: color-mix(in srgb, var(--nm-purple) 6%, transparent);
   flex-shrink: 0;
   max-height: 40vh;
+  /* 手机键盘顶起时 100vh 不缩（虚拟键盘不算视口缩短），建议条会盖住输入面；dvh 会缩。 */
+  max-height: 40dvh;
   overflow: auto;
   overscroll-behavior: contain;
 }

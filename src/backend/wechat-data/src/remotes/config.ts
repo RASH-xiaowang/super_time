@@ -87,7 +87,7 @@ export function createConfigRemotes(rc: createConfigRemotesInputs) {
       return res
     },
 
-    async openConfig(signal: AbortSignal): Promise<{ ok: boolean; path: string; error?: string }> {
+    async openConfig(signal: AbortSignal = new AbortController().signal): Promise<{ ok: boolean; path: string; error?: string }> {
       const dataRoot = join(rc.dirs().decrypted, '..')
       const p = join(dataRoot, 'config.json')
       // 这个路径是**算出来的**（数据根下的 config.json），不是渲染层给的字符串，

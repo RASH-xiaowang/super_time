@@ -18,8 +18,11 @@
   /* 头像几何：会话列表 / 消息行 / 群成员格子**共用**同一套值。
      微信全站是方角头像，原先 .avatar 写死 50% 再在 .msgRow 里打补丁，
      结果是群成员格子与会话列表仍是圆形（同一屏两套语言）。
-     令牌挂在 .panel 上而不是 .msgBody 上：.avatarStub 在会话列表里用，挂 .msgBody 取不到值。 */
-  --wx-avatar: 34px;
+     令牌挂在 .panel 上而不是 .msgBody 上：.avatarStub 在会话列表里用，挂 .msgBody 取不到值。
+     **2026-10-12：34px → 40px**（微信桌面端官方值）。气泡宽度上界那条扣减
+     （`calc(100% - var(--wx-avatar) - var(--wx-gap))`）引用的是同一枚令牌，所以
+     改这一处两边一起变，不会出现「扣 34 却画 40」那种漂移。 */
+  --wx-avatar: 40px;
   --wx-avatar-radius: 6px;
   /* 未读徽标：微信两套主题同值（不随主题翻色相） */
   --wx-unread: #fa5151;
@@ -68,65 +71,29 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  background: var(--nm-bg-card);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* ── 微信官方是「扁平消息区 + 一条发丝分隔线」，不是卡片 ──────────────
+     原先这里是一张卡（border + 圆角 + 毛玻璃 + 卡片底），整块消息区被框起来、
+     和左侧会话列表颜色还不一样。2026-10-12 按官方口径改成：
+       · 不发圆角、不带四周边框、不糊毛玻璃；
+       · 只留**左边一条发丝线**与会话列表分开（微信桌面端的消息区边界）；
+       · 底色与会话内的聊天底色同一个（令牌在下方，头与消息流共享）。 */
+  border: none;
+  border-left: 1px solid var(--nm-border);
+  border-radius: 0;
+  background: var(--wx-chat-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   overflow: hidden;
   /* 消息列的宽度查询容器：头部按钮/类型条按**本列**宽度收敛，
      而不是按窗口宽度（窄窗口时三列里消息列最窄，才是真正该响应的地方）。 */
   container-type: inline-size;
-}
-@container (max-width: 560px) {
-  .calBtn { padding: 0 8px; gap: 0; }
-}
-/* 顶栏按钮：霓虹幽灵按钮 */
-.calBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  background: var(--nm-bg-input);
-  color: var(--nm-text-2);
-  font-size: 12px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: var(--nm-t-ui);
-  white-space: nowrap;
-}
-.calBtn:hover {
-  background: var(--nm-bg-hover);
-  border-color: var(--nm-border-hover);
-  color: var(--nm-text-1);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-}
-.calBtn[data-active='true'] {
-  background: var(--nm-cyan-10);
-  border-color: var(--nm-cyan);
-  color: var(--nm-cyan);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
-}
-.calBtn:active { background: var(--nm-bg-active); }
-.calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.msgBody {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--wx-row-gap);
-  background: var(--wx-chat-bg);
-  /* ── 微信官方消息区令牌（深色端） ─────────────────────────────
-     几何与色值都取自微信官方客户端：圆角 4px、头像 34px、气泡内边距 6/12、
+  /* ── 微信官方消息区令牌（深色端）──────────────────────────────
+     几何与色值取自微信官方客户端：圆角 4px、**头像 40px**、气泡内边距 6/12、
      正文 14px/1.6；自方 #3EB575 / 对方 #2E2E2E 落在 #191919 底上。
      浅色端的精确值在下面的 :global(.theme-light) 块里覆盖。
+     ⚠️ 令牌挂在 .messages 而不是 .msgBody 上：消息区里的**头部**与**消息流**
+     是兄弟节点，令牌只有挂在共同父级才能两边都取到（否则头部取不到聊天底色，
+     又会裂成两种背景）。
 
      --wx-bubble-maxw 是**刻意偏离微信官方值**的一处：官方是 384px，
      但本项目要在桌面端读大段 AI 生成的文本，384px 会排成一根很高的窄柱。
@@ -135,10 +102,10 @@
      现在封顶只由 .msgCol 单点控制。
 
      **2026-09-26 修「长文本气泡横跨整个消息区」**：旧值是裸 `100%`，两个毛病 ——
-       ① 百分比相对**整行**（.msgRow）解析，而同一行还要放头像（34px）与间隙（10px）
-          ⇒ 「气泡 + 头像」天然超出容器 44px。头像 `.avatar` 是 flex-shrink: 0
+       ① 百分比相对**整行**（.msgRow）解析，而同一行还要放头像与间隙
+          ⇒ 「气泡 + 头像」天然超出容器。头像 `.avatar` 是 `flex-shrink: 0`
           （压不动），于是被挤出去的是头像：实测截图里气泡宽 1082px，
-          头像落在 x1108–1139（容器内容区右边缘 x1137 之外）。
+          头像落在容器内容区右边缘之外。
        ② 没有绝对上限 ⇒ 窗口越宽气泡越宽，1082px 在 14px 字号下约 77 字/行，读不动。
      现在两个约束同时给：绝对阅读宽度 + 「容器宽 − 头像 − 间隙」。
      `min()` 里两条缺一不可 —— 少了绝对宽度就回去当「无限宽」，少了扣减就会溢出。
@@ -193,7 +160,54 @@
   /* 视频号直播角标：官方红 92% */
   --wx-live-badge: rgba(250, 81, 81, 0.92);
 }
-:global(.theme-light) .msgBody {
+@container (max-width: 560px) {
+  .calBtn { padding: 0 8px; gap: 0; }
+}
+/* 顶栏按钮：霓虹幽灵按钮 */
+.calBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-dense-r);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--nm-t-ui);
+  white-space: nowrap;
+}
+.calBtn:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+  color: var(--nm-text-1);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 8%, transparent);
+}
+.calBtn[data-active='true'] {
+  background: var(--nm-cyan-10);
+  border-color: var(--nm-cyan);
+  color: var(--nm-cyan);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+}
+.calBtn:active { background: var(--nm-bg-active); }
+.calBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 消息流本体：滚动 + 行距。聊天底色与微信官方那一整套令牌挂在**父级 .messages** 上 —— 消息区里的头部与消息流是兄弟节点，只有挂在共同父级，两边才取得到同一个底色。 */
+.msgBody {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wx-row-gap);
+  background: var(--wx-chat-bg);
+}
+:global(.theme-light) .messages {
   --wx-chat-bg: #ededed;
   --wx-bubble-self: #95ec69;
   --wx-bubble-other: #ffffff;
@@ -694,22 +708,19 @@
 .memberName {
   max-width: 100%;
   overflow: hidden;
-  /* 两行：4 列布局下格子只有 63px，10.5px 单行时实测 133px 的文字要被吃掉一半以上；
-     12px + 两行能把截断降到可接受（审计 P1-3）。 */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  white-space: normal;
-  word-break: break-word;
+  /* D3（2026-10-13 微信对齐）反转记录：审计 P1-3 当时选「12px + 两行 clamp」缓解 63px 格子的截断；
+     官方成员名是**单行省略**，本稿按用户「向官方布局靠齐」的要求改回单行 —— 截断是官方形态的一部分，
+     全文由 title 与 hover 资料卡兜住。 */
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.3;
   font-size: var(--wx-info-meta);
   color: var(--nm-text-2);
   text-align: center;
 }
 .memberAdd {
-  width: 40px;
-  height: 40px;
+  width: var(--wx-info-avatar, 48px);
+  height: var(--wx-info-avatar, 48px);
   /* 微信的「添加」是方角实线占位，不是虚线圆（虚线读作拖放目标，语义不同） */
   border-radius: var(--wx-avatar-radius, 6px);
   border: 1px solid var(--nm-border);
@@ -934,3 +945,39 @@
    作为 .panel 的第三栏并排；全屏态让消息流让出空间（AI 面板自身在
    session-ask.module.css 里接管 flex:1），会话列表保持可见以便换会话。 */
 .panel[data-ai-full] .messages { display: none; }
+
+
+/* 群主标：叠在 48px 头像下缘的居中小徽标（官方在群主头像下标「群主」）。 */
+.memberBadge {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: fit-content;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--nm-cyan-text, var(--nm-cyan));
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  border-radius: var(--nm-r-xs, 4px);
+}
+.memberTile { position: relative; }
+
+/* ── 手机档（≤560）：三栏 → 单栏栈 ─────────────────────────────────────────
+   为什么是视口 @media 而不是本文件已有的 @container：那个容器就是 `.messages` 自己
+   （container-type: inline-size 挂在它上面），而**容器查询选不到容器本身** ——
+   这里要改的恰恰是 `.panel` / `.messages` 这两级。
+   为什么跨栏开关写成 `[data-has-session]` 而不是 `.panel[data-has-session]`：
+   CSS Modules 按**文件**给类名打 hash，`.sidebar` 住在 chats-cards 那份里 ——
+   在这份里写 `.panel .sidebar` 既选不中（两个 hash），也会被拆分守卫判成「同名类跨份」。
+   纯属性选择器不产生类名，两条都躲开了。
+   栈式做法：没开会话时只有列表（消息流 `display:none` 但仍**挂载** ⇒ 虚拟化、
+   滚动位置、已加载的历史都还在），开了会话就反过来。与桌面端共用同一棵 JSX，
+   没有第二套渲染路径。 */
+@media (max-width: 560px) {
+  .panel { flex-direction: column; gap: 0; padding: 0; }
+  .messages { display: none; flex: 1 1 auto; min-height: 0; border-left: none; }
+  [data-has-session] .messages { display: flex; }
+}

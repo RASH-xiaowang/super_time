@@ -82,12 +82,58 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/**
+ * 顶栏右侧的**工具位**（主题切换），与页面标签分开。
+ *
+ * 为什么分开：主题切换不是「一页」—— 它跟着整个启动页走。混在 `.tabs` 里时它长得和
+ * 内容页标签一模一样（同样的圆角、同样的选中态），用户会以为点了会切走一块内容，
+ * 而且在窄窗口换行时它可能被推到标签中间。分开之后：左侧品牌、中间/右侧是页面与
+ * 两道闸门的标签，最右边是图标按钮。
+ */
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--nm-border, rgba(0, 240, 255, 0.16));
+  align-self: stretch;
+}
+.toolBtn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--nm-t-ui, 0.2s);
+  white-space: nowrap;
+}
+.toolBtn:hover {
+  color: var(--nm-cyan);
+  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+}
+.toolBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
 .tabDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--nm-green);
   box-shadow: 0 0 8px var(--nm-green);
+}
+/* 浅色主题下工具位的分隔线用同族令牌（.tabs 那条已有对应覆盖） */
+:global(.theme-light) .tools {
+  border-left-color: var(--nm-border, rgba(15, 23, 42, 0.12));
 }
 /* ── 内容区 ───────────────────────────────────────────── */
 .body {

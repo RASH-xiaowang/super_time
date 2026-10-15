@@ -10,8 +10,7 @@
  * @vitest-environment node
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { createLlmBridge } from '../wechat-host.js'
+import { createLlmBridge } from '../llm-bridge.js'
 import { at } from './helpers/strict-index.ts'
 
 /** 造一个记录请求体的假 fetch，返回固定的 embedding 响应。 */

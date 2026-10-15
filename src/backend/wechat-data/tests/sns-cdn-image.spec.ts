@@ -14,7 +14,7 @@
  *     测试通过而线上是坏的 —— fixture 必须照抄真机形状。
  *   · 解密结果是**合法 JPEG，但 EOI 之后挂着恒定 24 字节的 CDN 签名块**
  *     （`75 f0 d3 3c 00 00 00 00 …`）。旧判据要求「最后两字节必须是 ff d9」，
- *     于��把真机上 9/9 张好图全判成失败。
+ *     于是把真机上 9/9 张好图全判成失败。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 

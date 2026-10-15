@@ -1,10 +1,10 @@
 /**
- * 「世界板块 · 好友地区」右侧的两张榜单：**省份 Top 10** 与 **城市 Top 12**。
+ * 总览中的两张独立地区榜单：**省份 Top 10** 与 **城市 Top 12**。
  *
  * 为什么要有它：总览里这块原本只有一张世界地图。实测（1440×900、228 位有地区好友）
  * 地图画布 520px 高、两侧还各有一条 240px 宽的头像栏 —— 地图以外的面积几乎全是空的，
  * 而"好友到底在哪些省/市"这个真正有用的信息一个都没露出来。榜单把这块横向空间
- * 换成可读的数据：左省份、右城市，两栏各自带条形对比。
+ * 换成可读的数据：省份与城市分别展示，各自带条形对比。
  *
  * 数据与地图同源（`getRegionMap()` 的 世界 → 国家 → 省 → 市 树），不新增后端方法：
  *  · 省份 = 好友最多的那个国家（通常是「中国」）下的省节点，按人数排序；
@@ -13,11 +13,13 @@
  * 榜单是**只读展示**：地图的钻取交互仍在左边那张地图里，这里点进去没有对应页面，
  * 所以不做成按钮（假的可点性比不可点更糟）。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiGetRegionMap } from '../api.ts'
+import { useWechatDataUpdated } from './hooks.tsx'
 import type { RegionMapSnapshot, RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
 import css from './overview.module.css'
 import regionCss from './overview-region.module.css'
+import { OvSection } from './overview-parts.tsx'
 
 /** 单条榜单行。 */
 interface RankRow {
@@ -54,9 +56,8 @@ function allCities(country: RegionNode): RankRow[] {
   return [...map.values()]
 }
 
-/** 一栏榜单。 */
-function RankColumn({ title, hint, rows, max }: {
-  title: string
+/** 单张榜单。 */
+function RankList({ hint, rows, max }: {
   hint: string
   rows: RankRow[]
   max: number
@@ -64,7 +65,6 @@ function RankColumn({ title, hint, rows, max }: {
   return (
     <div className={regionCss.regionRank}>
       <div className={regionCss.regionRankHd}>
-        <span className={regionCss.regionRankTitle}>{title}</span>
         <span className={regionCss.regionRankHint}>{hint}</span>
       </div>
       <div className={regionCss.regionRows}>
@@ -86,6 +86,10 @@ function RankColumn({ title, hint, rows, max }: {
   )
 }
 
+function RankCard({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
+  return <OvSection span={css.regionSpan} icon="world" title={title}>{children}</OvSection>
+}
+
 /**
  * 好友地区榜单（省份 + 城市）。
  * @returns 两栏榜单；数据未到时显示骨架行。
@@ -94,35 +98,51 @@ export function RegionBoard(): React.JSX.Element {
   const [snap, setSnap] = useState<RegionMapSnapshot | null>(null)
   const [failed, setFailed] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const s = await apiGetRegionMap()
-        if (!cancelled) setSnap(s)
-      } catch {
-        // 地区数据取不到不该影响整块总览：地图仍在，榜单降级为一行说明。
-        if (!cancelled) setFailed(true)
-      }
-    })()
-    return () => { cancelled = true }
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const s = await apiGetRegionMap()
+      setSnap(s)
+      setFailed(false)
+    } catch {
+      // 地区数据取不到不该影响整块总览：地图仍在，榜单降级为一行说明。
+      if (snap === null) setFailed(true)
+    }
   }, [])
 
+  useEffect(() => { void load() }, [load])
+  // WAL 增量推送：新消息改变好友地区分布时静默重取。
+  useWechatDataUpdated(() => { void load() })
+
   if (failed) {
-    return <div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div>
+    return (
+      <>
+        <RankCard title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
+        <RankCard title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>地区数据暂不可用</div></div></RankCard>
+      </>
+    )
   }
   if (!snap) {
     return (
       <>
-        <div className={regionCss.regionRank}><div className={regionCss.regionRankHd}><span className={regionCss.regionRankTitle}>省份 Top 10</span></div><div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
-        <div className={regionCss.regionRank}><div className={regionCss.regionRankHd}><span className={regionCss.regionRankTitle}>城市 Top 12</span></div><div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div></div>
+        {(['省份 Top 10', '城市 Top 12'] as const).map(title => (
+          <RankCard key={title} title={title}>
+            <div className={regionCss.regionRank}>
+              <div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div>
+            </div>
+          </RankCard>
+        ))}
       </>
     )
   }
 
   const country = topCountry(snap.world)
   if (!country) {
-    return <div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div>
+    return (
+      <>
+        <RankCard title="省份 Top 10"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
+        <RankCard title="城市 Top 12"><div className={regionCss.regionRank}><div className={regionCss.regionEmpty}>暂无好友地区信息</div></div></RankCard>
+      </>
+    )
   }
   const prov = topN(country.children.map(c => ({ key: c.key, name: c.name, count: c.count })), 10)
   const city = topN(allCities(country), 12)
@@ -130,8 +150,12 @@ export function RegionBoard(): React.JSX.Element {
 
   return (
     <>
-      <RankColumn title="省份 Top 10" hint={`${country.name} ${country.count} 位 · 占 ${pct}%`} rows={prov.rows} max={prov.max} />
-      <RankColumn title="城市 Top 12" hint={`共 ${city.rows.length >= 12 ? '12+' : city.rows.length} 个城市有好友`} rows={city.rows} max={city.max} />
+      <RankCard title="省份 Top 10">
+        <RankList hint={`${country.name} ${country.count} 位 · 占 ${pct}%`} rows={prov.rows} max={prov.max} />
+      </RankCard>
+      <RankCard title="城市 Top 12">
+        <RankList hint={`共 ${city.rows.length >= 12 ? '12+' : city.rows.length} 个城市有好友`} rows={city.rows} max={city.max} />
+      </RankCard>
     </>
   )
 }

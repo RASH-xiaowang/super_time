@@ -20,11 +20,12 @@
  * @vitest-environment node
  */
 import { createCipheriv, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { fetchDbKey } from '../src/keys/service.ts'
+import { accountKeySlotFor, dbKeySlotFor, fetchDbKey } from '../src/keys/service.ts'
+import { getAccountKeysFromStore, loadAccountKeysStore, upsertAccountKeysInStore } from '../src/keys/key-store.ts'
 import { DECRYPTED_DIR_ENV } from '../src/dirs.ts'
 
 const PAGE_SZ = 4096
@@ -36,13 +37,18 @@ const PBKDF2_ITERS = 256000
 
 const scratch: string[] = []
 const savedEnv = process.env[DECRYPTED_DIR_ENV]
+const SELF_ENV = 'DSH_WECHAT_SELF_WXID'
+const savedSelf = process.env[SELF_ENV]
 afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true })
   if (savedEnv === undefined) delete process.env[DECRYPTED_DIR_ENV]
   else process.env[DECRYPTED_DIR_ENV] = savedEnv
+  if (savedSelf === undefined) delete process.env[SELF_ENV]
+  else process.env[SELF_ENV] = savedSelf
 })
 beforeEach(() => {
   delete process.env[DECRYPTED_DIR_ENV]
+  delete process.env[SELF_ENV]
 })
 
 function tempRoot(tag: string): string {
@@ -148,5 +154,123 @@ describe('fetchDbKey：已存的密钥可用时不许再扫内存', () => {
     expect(r.key).not.toBe(wrong)
     expect(r.key).toBe(key.toString('hex'))
     expect(r.source).toBe('saved_config')
+  })
+})
+
+/**
+ * W2-2.2 的 db_key 侧：数据库密钥同样按账号分槽，否则一台机器两个账号会互相覆盖。
+ * 与图片密钥共用「归属明确才判、没证据放行」的口径；老库仍从全局槽读。
+ */
+describe('W2-2.2：db_key 按账号分槽，且老库继续可读', () => {
+  const SELF = 'wxid_current'
+  const OTHER = 'wxid_previous'
+
+  it('自己槽里的库密钥优先于 all_keys，且能通过真实页 1 校验', async () => {
+    const key = randomBytes(32)
+    const wrong = randomBytes(32).toString('hex')
+    const { decrypted, probe } = makeRoot(key, { configKey: wrong })
+    const root = dirname(decrypted)
+    process.env[SELF_ENV] = SELF
+    process.env[DECRYPTED_DIR_ENV] = decrypted
+    upsertAccountKeysInStore(SELF, {
+      db_key: key.toString('hex'),
+      db_key_source_wxid_dir: SELF,
+    }, root)
+
+    const r = await fetchDbKey({ dbPath: probe })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.key).toBe(key.toString('hex'))
+    expect(r.source).toBe('saved_store')
+  })
+
+  it('全局槽里明确属于别的账号的 db_key 不拿来硬解', async () => {
+    const key = randomBytes(32)
+    const { decrypted, probe } = makeRoot(key, { allKeysKey: key.toString('hex') })
+    const root = dirname(decrypted)
+    process.env[SELF_ENV] = SELF
+    process.env[DECRYPTED_DIR_ENV] = decrypted
+    upsertAccountKeysInStore('default', {
+      // 这把库密钥本身对当前库是**可用的**：只有归属校验会拒绝它。
+      // 若实现是「全局槽来者不拒」，这里就会直接返回它并报 saved_store。
+      db_key: key.toString('hex'),
+      db_key_source_wxid_dir: OTHER,
+    }, root)
+
+    const r = await fetchDbKey({ dbPath: probe })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.key).toBe(key.toString('hex'))
+    // 跳过了别人家的全局槽，落到 all_keys；硬拿别人的密钥是这里要防的病。
+    expect(r.source).toBe('saved_all_keys')
+  })
+
+  it('老库：db_key 只在全局槽且没有归属信息 => 继续可读（升级不要求重新取钥）', async () => {
+    const key = randomBytes(32)
+    const { decrypted, probe } = makeRoot(key)
+    const root = dirname(decrypted)
+    process.env[SELF_ENV] = SELF
+    process.env[DECRYPTED_DIR_ENV] = decrypted
+    upsertAccountKeysInStore('default', { db_key: key.toString('hex') }, root)
+
+    const r = await fetchDbKey({ dbPath: probe })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.key).toBe(key.toString('hex'))
+    expect(r.source).toBe('saved_store')
+  })
+
+  it('自动取到的 db_key 写进当前账号槽，不再覆盖全局槽', async () => {
+    const key = randomBytes(32)
+    const { decrypted, probe } = makeRoot(key, { allKeysKey: key.toString('hex') })
+    const root = dirname(decrypted)
+    process.env[SELF_ENV] = SELF
+    process.env[DECRYPTED_DIR_ENV] = decrypted
+
+    const r = await fetchDbKey({ dbPath: probe })
+    expect(r.ok, r.error).toBe(true)
+    expect(getAccountKeysFromStore(SELF, root).db_key).toBe(key.toString('hex'))
+    expect(loadAccountKeysStore(root)['default']).toBeUndefined()
+  })
+})
+
+/** 写入侧槽名选择：与 imageKeySlotFor 同口径。 */
+describe('W2-2.2：dbKeySlotFor 选槽', () => {
+  it('wxid 形状（含目录后缀）归一化到自己槽', () => {
+    expect(accountKeySlotFor('wxid_alpha000_abcd')).toBe('wxid_alpha000')
+  })
+
+  it('别名目录或空值退回全局槽', () => {
+    expect(accountKeySlotFor('alice_2024')).toBe('default')
+    expect(accountKeySlotFor(undefined)).toBe('default')
+  })
+
+  it('dbKeySlotFor 把当前账号接进选槽（这里用 env 固定，不依赖测试机账号）', () => {
+    process.env[SELF_ENV] = 'wxid_alpha000'
+    expect(dbKeySlotFor('unused-decrypted')).toBe('wxid_alpha000')
+  })
+})
+
+/** 接线判据：service.ts 里 db_key 的 upsert 不能写回固定全局槽。 */
+describe('W2-2.2 接线：db_key 写入点都按账号分槽', () => {
+  const service = readFileSync(new URL('../src/keys/service.ts', import.meta.url), 'utf8')
+
+  function bareDbKeyWrites(src: string): string[] {
+    const noComment = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    const out: string[] = []
+    for (const part of noComment.split('upsertAccountKeysInStore(').slice(1)) {
+      const call = part ?? ''
+      if (!/db_key\b/.test(call)) continue
+      out.push(call.trim().slice(0, 60))
+    }
+    return out
+  }
+
+  it('没有裸写 db_key 到固定槽的调用', () => {
+    const fixed = bareDbKeyWrites(service).filter((call) => call.startsWith("'default'"))
+    expect(fixed, '这些 db_key 写入点还在写固定全局槽 ⇒ 同机多账号会互相覆盖').toEqual([])
+  })
+
+  it('把分槽变量换回默认槽这条判据会红（不是恒真）', () => {
+    const fake = service.replace(/upsertAccountKeysInStore\(slot,/g, "upsertAccountKeysInStore('default',")
+    expect(bareDbKeyWrites(fake).filter((call) => call.startsWith("'default'")).length,
+      '把 slot 换回固定全局槽居然没抓到 ⇒ 这条判据是空转的').toBeGreaterThan(0)
   })
 })

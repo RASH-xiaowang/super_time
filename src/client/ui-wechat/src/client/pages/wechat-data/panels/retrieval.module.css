@@ -1,6 +1,6 @@
 /* 检索漏斗行 + 回答反馈行的样式（挂在每条 AI 回答下方）。
    ⚠️ 历史上这里是「检索设置面板」的样式表；该面板已于 2026-09-17 从界面移除
-   （检索参数固化为内置默认，见 docs/rag/RAG-ARCHITECTURE.md §11）。
+   （检索参数固化为内置默认；原 docs/rag/RAG-ARCHITECTURE.md 已删除，原文见 git 历史）。
    面板专属的类名（wrap / stat 系列 / group / row 系列 / switch / num / text /
    actions / btn 系列 / msg 系列 / report / fbList / fbRow / fbMark / fbQ）
    已一并删除，只保留 Ask 仍在引用的部分。

@@ -20,7 +20,7 @@
  * 与人的直觉（编辑器折叠出来的那个数字）一致。
  * @vitest-environment node
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -32,6 +32,13 @@ const TREES = [
   join(ROOT, 'src', 'client', 'ui-wechat', 'src'),
   join(ROOT, 'src', 'client', 'ui-app', 'src'),
 ]
+/**
+ * 宿主 CommonJS 是**只量不递归**的第四个树：`src/backend/*.js` 直接文件。
+ * 不递归是因为 `src/backend/wechat-data/lib` 是构建产物、`deps` 是 vendored 上游，
+ * 它们的长函数不归本仓改。宿主 God Module 原先完全游离在棘轮之外，2026-10-15 起
+ * 同样只许变小。
+ */
+const HOST_JS_DIR = join(ROOT, 'src', 'backend')
 
 /** 新函数（清单之外的）不许超过的行数。 */
 const LIMIT = 250
@@ -41,7 +48,7 @@ const LIMIT = 250
  * 2026-09-26 由一次性脚本 AST 实测灌进来（不是估的；脚本用完即删，复现方法见下面的判据本身）。
  */
 const KNOWN_BIG: ReadonlyArray<string> = [
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  811',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/settings-state.tsx  useSettingsState  784',
   // 登记理由（2026-09-29）：这段循环必须**保持整段内联**才能同时满足连接纪律棘轮 ——
   // 把分片读取抽成独立函数会让 `new DatabaseSync` 的站点归属变到账本里没有的函数名上
   // （第 24 轮实测被 `query-db-lifetime.spec.ts` 挡下）。分片级增量缓存（真机省约 3/4 的全量重算）
@@ -63,8 +70,10 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx  WechatDataPanel  464',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/ExportHistoryDialog.tsx  ExportHistoryDialog  461',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-thread.tsx  useChatsThread  269',
-  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  400',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-panel.tsx  OverviewPanel  403',
+  // 2026-10-15：KB Remote wire 类型收进 `types-kb-wire.ts`，匿名对象签名换成了
+  // 共享类型引用，函数体 400 → 372。棘轮只许变小，成果需要回到这里记账。
+  'src/backend/wechat-data/src/remotes/kb.ts  createKbRemotes  372',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-panel.tsx  OverviewPanel  390',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  387',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  364',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-panel.tsx  MomentsPanel  329',
@@ -77,8 +86,13 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-10：321 → 326。W2-5.6 的批量封面（`getSnsVideoCoversBatch`）照同一范式：
   // 算法体全在模块级 `snsVideoCoversBatchIn`，方法体只剩「签名 + 一行转发」，净增 5 行。
   // 想再降就得把别的域也搬出去，不是靠改这个数字。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  326',
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsPanel  328',
+  // 2026-10-14：326 → 303。远程图片代理与新增的地图 GeoJSON 代理同样把算法体搬到
+  // 模块级 `remoteImagesWithOp` / `mapGeoJsonWithOp`，方法体退回「签名 + 一行转发」。
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  303',
+  // 2026-10-14（M9）：`SettingsPanel` 改成「桌面/浏览器」分派器（浏览器态整面板降级，见
+  // `settings-browser.tsx`），原来那份三百多行的实现改名 `SettingsDesktopPanel`。
+  // 这是**改名不是变胖**：行数一字未动，仍记 328。想降就得把某几节真搬出去。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsDesktopPanel  328',
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  314',
   // 2026-09-30：给年报加「资金 / 撤回 / 群聊」三个字段时，先把 noteEmoji 与页脚首尾两条
   // 抽成模块级函数腾预算，assemble 308 → 306。棘轮只许变小，拆小了要回来改数字。
@@ -96,6 +110,8 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-08：图片那一路不再拿 CDN 原始地址当 src（那是 WxIsaac64 密文，原理上渲染不出来），
   // 理由从函数体内挪进文件头 ⇒ 265 → 264。棘轮只许变小，拆出来的成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/moments-card.tsx  MomentsCard  264',
+  // 2026-10-15：宿主 CommonJS 的七个巨型函数已全部拆成组合根/小型工厂，
+  // 因此从本棘轮移除原七条登记；若后续再次逼近 250 行，要重新登记并继续拆小。
 ]
 
 interface Fn { file: string; name: string; len: number }
@@ -139,6 +155,16 @@ function allFunctions(): Fn[] {
     }
   }
   for (const t of TREES) walk(t)
+  // 宿主 CJS：只取目录直属的 `.js`，deps 与 wechat-data/lib 的生成物不参与。
+  let hostFiles: Dirent[]
+  try { hostFiles = readdirSync(HOST_JS_DIR, { withFileTypes: true }) } catch { hostFiles = [] }
+  for (const e of hostFiles) {
+    if (!e.isFile() || !e.name.endsWith('.js')) continue
+    const p = join(HOST_JS_DIR, e.name)
+    const code = readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
+    const rel = relative(ROOT, p).replace(/\\/g, '/')
+    for (const f of functionsIn(rel, code)) rows.push(f)
+  }
   return rows
 }
 

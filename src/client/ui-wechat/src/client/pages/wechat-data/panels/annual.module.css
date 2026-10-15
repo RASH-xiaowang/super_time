@@ -289,7 +289,11 @@
 }
 @media (max-width: 900px) {
   .board { grid-template-columns: minmax(0, 1fr); }
-  .board > * { grid-column: 1 / -1 !important; }
+  /* 中和跨度必须与 ≤1400 档**同特异性**（`.board > .card` 是 0,2,0，`.board > *` 只有 0,1,0）：
+     两边都带 !important 时比的是特异性，原先写 `> *` 输给了 `> .card { span 2 }`，
+     于是单列网格里被 span 2/3/6 撑出 6 条隐式列、卡片压到 85px（2026-10-14 真数据实测）。
+     同特异性 + 写在后面 ⇒ 这一档赢。 */
+  .board > .card, .board > .moreCard, .board > .span6, .board > .portrait, .board > .footer { grid-column: 1 / -1 !important; }
 }
 
 /* ── 卡片内部适配（2026-09-30 用户："请好好修复每个卡片里面的组件，请做好适配"）──────────
@@ -320,6 +324,15 @@
   .moreRow { flex-direction: column; align-items: flex-start; gap: 0; }
   .moreRow > span:last-child { text-align: left; }
   .row { flex-wrap: wrap; }
+  /* 卡片头右侧那行补充说明（「全年活跃 206 天 · 最高一天 75 条」）在窄卡里被省略号
+     吃掉一半（2026-10-14 真数据实测 sw 174 / cw 38）：让它独占一行并允许折行。 */
+  .cardHead { flex-wrap: wrap; gap: 2px; }
+  .cardExtra { flex-basis: 100%; text-align: left; white-space: normal; }
+  /* 头像行下面的小字同理：两行封顶，比一行省略号多留住一半信息。 */
+  .sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  /* 「还有这些人」的芯片基础档是 `flex: 1 1 0`（七格平分一行），窄卡里每格只剩 47px、
+     名字被裁到 23px（真数据实测）。手机档改成两格一行：放得下名字与条数。 */
+  .moreCell { flex: 1 1 45%; }
 }
 
 /* ── 「还有这些人」的一排小卡（头像 + 说明列）──────────────────────────────

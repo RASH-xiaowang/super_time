@@ -1,8 +1,8 @@
 /**
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
- * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 14 个域处理器的 ctx 装配。
+ * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 194 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 195 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
@@ -33,7 +33,7 @@ import type { IntentKind, RerankWeights } from './query/retrieval/types.ts';
 import { type SummaryScheduler } from './gateway-scheduler.ts';
 import { ResolvedDirs, StreamJob } from './gateway-support.ts';
 import type { EmbedFeature } from './gateway-llm-factory.ts';
-/** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
+/** 网关的「核」：状态、生命周期、共享私有辅助与 16 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export declare abstract class GatewayCore extends TypertRemoteService {
     /** 由派生的方法面层实现（`@Remote` 入口）；这里的排程必须经实例派发 —— 见 `summary-run-due.spec.ts` 打的桩。 */
     abstract runSummaryTask(options: {

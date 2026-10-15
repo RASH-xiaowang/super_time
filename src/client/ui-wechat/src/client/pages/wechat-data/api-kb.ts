@@ -285,8 +285,18 @@ export async function apiGetKbVectorIndex(kbId: number): Promise<KbVectorIndexVi
  * @param force - 清空本库重算。
  * @returns 构建结果（`ok` 为假时带 `error`）。
  */
-export async function apiBuildKbVectorIndex(kbId: number, force = false): Promise<KbVectorBuildResult> {
-  return unwrap(await remote().buildKbVectorIndex({ kbId, force }))
+export async function apiBuildKbVectorIndex(kbId: number, force = false, jobId?: string): Promise<KbVectorBuildResult> {
+  return unwrap(await remote().buildKbVectorIndex({ kbId, force, jobId }))
+}
+/**
+ * 停止本库正在跑的向量构建（W3-11.5）。
+ *
+ * 取消在〔认领下一批〕之前生效；阶段二在全部批次之后，所以取消 ⇒ 一行未写 ⇒ 旧索引原样。
+ * @param options - jobId（即 `apiBuildKbVectorIndex` 那次的同一标识）。
+ * @returns ok + 停不上的原因（该批已算完 / 标识不认识）。
+ */
+export async function apiCancelKbIndexBuild(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelKbIndexBuild(options))
 }
 
 /**
@@ -366,9 +376,7 @@ export async function apiOpenFileDialog(opts?: {
   title?: string
   filters?: Array<{ name: string; extensions: string[] }>
 }): Promise<{ canceled: boolean; files: string[]; error?: string }> {
-  const api = (window as unknown as {
-    electronAPI?: { openFile?: (o?: unknown) => Promise<{ canceled: boolean; files: string[]; error?: string }> }
-  }).electronAPI
+  const api = window.electronAPI
   if (!api?.openFile) return { canceled: true, files: [], error: '当前环境不支持文件选择' }
   return api.openFile(opts)
 }

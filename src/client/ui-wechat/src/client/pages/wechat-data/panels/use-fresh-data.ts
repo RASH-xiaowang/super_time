@@ -16,16 +16,30 @@
  * 3. **失败回退**：`fetcher` 失败 ⇒ 读缓存兜底，命中则 `stale = true` 且 `error` 里**写明**"本地缓存、可能不是最新"；
  *    未命中则只留 `error`（不假装有数据）。
  *
+ * ## WAL 实时刷新（2026-10-13，`liveRefresh: true` 的面板）
+ *
+ * 订阅 `dsh-wechat-data-updated`（微信 WAL 增量推送）做**静默重查**：已有数据时不翻
+ * `loading`（不闪骨架、不闪按钮文案）、失败**保留旧值不报错**（与缓存后台复验同一降级口径）。
+ * 缺省为关：已各自订阅推送的面板（如 Graph 有带条件的守卫）不该被这里再触发一次双查。
+ *
+ * ## opts 稳定性（2026-10-13 修的真 bug）
+ *
+ * `opts` 经 ref 读取、**不进 `run` 的依赖**：调用方若传内联对象（`Tasks` 的
+ * `{ shouldCache: … }` 就是），旧写法会让 `run` 每次渲染都换身份 ⇒ effect 每次渲染都重跑
+ * ⇒ 无限重查循环（jsdom 探针实测：8 次 flush 后 fetcher 被调 **3,166,897 次**）。
+ * 语义不变：谓词每次执行都读**最新**的 opts。
+ *
  * @module use-fresh-data
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { readRenderCache, writeRenderCache } from '../api.ts'
+import { useWechatDataUpdated } from './hooks.tsx'
 
 /** 取数状态。`stale === true` 时 UI **必须**标注"这是缓存数据"。 */
 export interface FreshDataState<T> {
   /** 最新查询结果；查询失败且缓存命中时是缓存值；都没有则为 null。 */
   data: T | null
-  /** 首次查询 / 重新查询进行中。 */
+  /** 首次查询 / 重新查询进行中（WAL 静默重查**不**翻它）。 */
   loading: boolean
   /** 失败原因（回退缓存时前缀写明"以下为本地缓存（可能不是最新）"）。 */
   error: string | null
@@ -42,21 +56,25 @@ export interface FreshDataState<T> {
   reload: () => Promise<void>
 }
 
+export interface FreshDataOpts<T> {
+  /** 返回 false 时**本次结果不写缓存**（N1：读失败的空列表不该进缓存，见 Tasks）。 */
+  shouldCache?: (data: T) => boolean
+  /** 订阅 WAL 增量推送做静默重查（2026-10-13，见模块头）。 */
+  liveRefresh?: boolean
+}
+
 /**
  * 取最新数据：打开即查，失败才回退缓存。
  *
  * @param key - 渲染缓存键（同一面板不同上下文请用不同 key，例如 `'moments:' + author`）。
  * @param fetcher - 真实查询（`useCallback` 包一层，避免每次渲染都重查）。
- * @param opts - 可选策略。`shouldCache` 返回 false 时**本次结果不写缓存** ——
- *   `Tasks` 需要它：后端在"读不到待办库"时会返回空列表 + `readError`，
- *   把这份空列表写进缓存，下次打开就会先渲染「暂无待办」，而缓存本身看不出
- *   「是读失败」还是「确实没有」（源码里记着这就是 N1 要消除的假象）。
+ * @param opts - 可选策略（见 {@link FreshDataOpts}；经 ref 读取，内联传也不会引发重查循环）。
  * @returns 取数状态与 `reload`。
  */
 export function useFreshData<T>(
   key: string,
   fetcher: () => Promise<T>,
-  opts?: { shouldCache?: (data: T) => boolean },
+  opts?: FreshDataOpts<T>,
 ): FreshDataState<T> {
   /** ① 不预填：初值恒为 null（旧实现是 `useState(() => readRenderCache(key))`）。 */
   const [data, setData] = useState<T | null>(null)
@@ -64,19 +82,30 @@ export function useFreshData<T>(
   const [error, setError] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   const alive = useRef(true)
+  const dataRef = useRef<T | null>(null)
+  dataRef.current = data
+  const optsRef = useRef(opts)
+  optsRef.current = opts
 
-  const run = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
+  /**
+   * @param silent - WAL 推送触发的静默重查：已有数据时不翻 loading、失败保留旧值不报错。
+   */
+  const run = useCallback(async (silent = false): Promise<void> => {
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const fresh = await fetcher()
       if (!alive.current) return
       setData(fresh)
       setStale(false)
       // ② 成功写回（除非调用方声明"这次结果不该缓存"）
-      if (opts?.shouldCache === undefined || opts.shouldCache(fresh)) writeRenderCache(key, fresh)
+      const o = optsRef.current
+      if (o?.shouldCache === undefined || o.shouldCache(fresh)) writeRenderCache(key, fresh)
     } catch (e) {
       if (!alive.current) return
+      if (silent && dataRef.current !== null) return
       const msg = (e as Error).message
       const cached = readRenderCache<T>(key)
       if (cached !== null) {
@@ -88,15 +117,20 @@ export function useFreshData<T>(
         setError(msg)
       }
     } finally {
-      if (alive.current) setLoading(false)
+      if (alive.current && !silent) setLoading(false)
     }
-  }, [key, fetcher, opts])
+  }, [key, fetcher])
 
   useEffect(() => {
     alive.current = true
     void run()
     return () => { alive.current = false }
   }, [run])
+
+  useWechatDataUpdated(() => {
+    if (optsRef.current?.liveRefresh !== true) return
+    void run(true)
+  })
 
   /**
    * **键变化即清空 `data`**（2026-10-03 补）。
@@ -123,5 +157,8 @@ export function useFreshData<T>(
     setError(null)
   }, [])
 
-  return { data, loading, error, stale, reload: run, override }
+  /** 重新查询（非静默）。reload 身份随 `run` 走（`[key, fetcher]`），调用方可以安全放进依赖。 */
+  const reload = useCallback((): Promise<void> => run(false), [run])
+
+  return { data, loading, error, stale, reload, override }
 }

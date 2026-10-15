@@ -4,7 +4,7 @@
  * 由调用方注入而不是这里 import：`article-cover.ts` 不认识微信目录/AES 密钥，
  * 而 `moments-media.ts` 两边都有。返回非空字符串表示**本机确实有**（值本身只用于日志）。
  */
-export type LocalCoverProbe = (contentUrl: string) => string | undefined;
+export type LocalCoverProbe = (contentUrl: string) => Promise<string | undefined>;
 /**
  * Resolve a 公众号 article cover to a base64 data URL（本地缓存优先，再走网络并落盘）。
  * @param contentUrl - mp.weixin.qq.com article URL from the moments XML.

@@ -8,20 +8,56 @@
  * it. A short max-age bounds fingerprint drift on the same file.
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { readdirSync, statSync } from 'node:fs'
 import { sqliteChangeCounter } from './file-sig.ts'
 import { join } from 'node:path'
 
 const MAX_AGE_MS = 5_000
 
+/**
+ * W3-9.2：insights 一族的显式 TTL（30 秒）。
+ *
+ * 为什么要显式写出来：不写第 4 个参数就等于用 {@link MAX_AGE_MS} 的 5 秒，
+ * 而那个默认值是给**交互类**查询定的（列表页翻一下就刷新）。insights 是
+ * 一次要扫几个分片的聚合：5 秒内重复算一遍纯属浪费，用户在两块面板之间来回
+ * 切一次就把省下的又吐回去。写出来还让守卫看得见它（`w3-insights-ttl.spec.ts`）——
+ * 没人看见的默认值，改动时也不会有人来对账。
+ *
+ * 30 秒而不是更长：它仍然受**数据签名**管着（分片/库文件一变立刻重算），
+ * TTL 只是「签名没变时的最短重复间隔」，不是陈旧窗口的上界。
+ */
+export const INSIGHTS_TTL_MS = 30_000
+
+/**
+ * W3-9.2：年度一族的显式 TTL（60 秒）。
+ *
+ * 与 {@link INSIGHTS_TTL_MS} 同族不同档：年报按月/年看，用户不会在几秒内
+ * 反复切回去；而它扫的是**全年**消息，比 insights 更贵。
+ * 同样受数据签名管着（分片一变立刻重算），TTL 只是最短重复间隔。
+ */
+export const ANNUAL_TTL_MS = 60_000
+
 interface Entry {
   at: number
+  /**
+   * 最近一次**被读到**的时刻（W3-3.1：访问计时 LRU）。
+   *
+   * 为什么与 `at`（写入时刻）分开：TTL 按写入算，而淘汰顺序要按**用没用过**算。
+   * 只用 `at` 的话，淘汰退化成 FIFO —— 「用户一直在看的第 201 条」会被
+   * 「写进去就再没人碰过的第 1 条」之后的某一条挤掉，而那一条本来还有用。
+   */
+  hitAt: number
   sig: string
   value: unknown
 }
 
-const entries = new Map<string, Entry>()
+/**
+ * 签名缓存本体。**导出只为门禁与测试能看见命中时刻**（`group-insights-swr.spec.ts` 用它断言
+ * 「命中时 `at` 没被重写」—— 那条断言在外部观察不到缓存，就只能靠读这一份）。
+ * 生产代码一律走 {@link cachedBySig} / {@link cachedBySigAsync}，不要直接动这个 Map。
+ */
+export const entries = new Map<string, Entry>()
 
 /**
  * 按 key 前缀的**按需限界**（N16）。
@@ -35,8 +71,9 @@ const entries = new Map<string, Entry>()
  * 没有天然上限（M11 复审实测负条目 ~740B，命中条目还可能含整份 rich）。
  * 所以只钉这一族，其余照旧。
  *
- * 淘汰语义与 `boundedSet` 一致（FIFO —— Map 的插入序就是写入序；命中只刷新 TTL、
- * 不改变插入序，因此**不是**严格 LRU）：目的是「内存有上界」，不是「命中率最优」。
+ * 淘汰语义（W3-3.1 由 FIFO 改成**访问计时 LRU**）：按 `hitAt`（最近一次被读到）排序，
+ * 最久没用的先走。`hitAt` 在**写入与命中时都会刷新**，所以「用户一直在看的那几条」
+ * 不会排在「写进去就没人碰」的前面。目的既是「内存有上界」，也是命中率不退步。
  * 新增一族只需要在这里加一行。
  */
 export const METADATA_KEY_FAMILY_LIMITS: ReadonlyArray<{ prefix: string; cap: number }> = [
@@ -50,7 +87,11 @@ export const METADATA_KEY_FAMILY_LIMITS: ReadonlyArray<{ prefix: string; cap: nu
 ]
 
 /**
- * 超出该族上限时按 FIFO 淘汰最老的 key。
+ * 超出该族上限时按**访问计时 LRU** 淘汰最久没用的 key（W3-3.1）。
+ *
+ * 与改前的 FIFO 只差一个动作：命中时刷新 `hitAt`。而那一个动作正是
+ * 「用户一直在看的那一条」与「写进去就没再碰过的那一条」的区别 ——
+ * 200 条额度给谁，该由使用情况决定，不该由写入顺序决定。
  * @param key - 刚刚写入的 key。
  */
 function enforceKeyFamilyLimit(key: string): void {
@@ -59,8 +100,11 @@ function enforceKeyFamilyLimit(key: string): void {
     let count = 0
     for (const k of entries.keys()) if (k.startsWith(prefix)) count += 1
     if (count <= cap) return
-    for (const k of entries.keys()) {
-      if (!k.startsWith(prefix)) continue
+    // 同族条目按 hitAt 升序：最久没用的排最前，先删它们。
+    const family = [...entries.entries()]
+      .filter(([k]) => k.startsWith(prefix))
+      .sort((a, b) => a[1].hitAt - b[1].hitAt)
+    for (const [k] of family) {
       entries.delete(k)
       count -= 1
       if (count <= cap) return
@@ -130,11 +174,15 @@ function dirSig(dir: string): string {
 
 function get<T>(key: string, sig: string, loader: () => T, maxAgeMs = MAX_AGE_MS): T {
   const hit = entries.get(key)
-  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) return hit.value as T
-  const value = loader()
-  entries.set(key, { at: Date.now(), sig, value })
+  if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) {
+    // W3-3.1：命中也要刷新 `hitAt` —— 否则淘汰顺序仍等价于 FIFO（只认写入序）。
+    hit.hitAt = Date.now()
+    return hit.value as T
+  }
+  const now = Date.now()
+  entries.set(key, { at: now, hitAt: now, sig, value: loader() })
   enforceKeyFamilyLimit(key)
-  return value
+  return entries.get(key)?.value as T
 }
 
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
@@ -367,10 +415,26 @@ export async function cachedBySigAsync<T>(
   sig: string,
   loader: () => Promise<T>,
   maxAgeMs = MAX_AGE_MS,
+  /**
+   * 要不要把这一次的**结果**写进缓存（W2-9.4）。缺省一律缓存。
+   *
+   * 为什么需要：可取消的计算会返回**算了一半**的结果。把它缓存 30 秒，
+   * 用户就会在接下来的 30 秒里一直看到那份半成品，而且没有任何东西告诉他「这是半的」。
+   * 「不缓存」不是丢数据 —— 下一次请求会重算，而重算时已经没人取消它了。
+   *
+   * 只影响**写回**，不影响在飞去重（同一个 key+sig 的并发调用仍共享同一份计算）。
+   * @param value - 这次算出来的值。
+   * @returns `false` 表示别写进缓存。
+   */
+  shouldCache: (value: T) => boolean = () => true,
 ): Promise<T> {
   const hit = entries.get(key)
   if (hit && hit.sig === sig && hit.at + maxAgeMs > Date.now()) {
     if (process.env.SUPERTIME_CACHE_TRACE === '1') console.log(`[cache-trace] hit  ${key} sig=${sig}`)
+    // W3-3.1：命中也要刷新 `hitAt`。异步路径与同步路径各有一处命中判定，
+    // 只改一处的话「读过的条目」在另一条路上仍会被当成没用过 —— 本族（msg-by-sid）
+    // 走的正是**这一条**，所以漏了它 LRU 就整族失效。
+    hit.hitAt = Date.now()
     return hit.value as T
   }
   if (process.env.SUPERTIME_CACHE_TRACE === '1') console.log(`[cache-trace] miss ${key} sig=${sig}${hit ? `（旧 sig=${hit.sig}）` : '（无旧值）'}`)
@@ -394,8 +458,9 @@ export async function cachedBySigAsync<T>(
   rec.value = (async () => {
     const value = await loader()
     // 只有「仍然是在飞的那一份」才写回：避免被更新的签名算完后又被旧的盖一次。
-    if (inFlight.get(flightKey) === rec) {
-      entries.set(key, { at: Date.now(), sig, value })
+    if (inFlight.get(flightKey) === rec && shouldCache(value)) {
+      const now = Date.now()
+      entries.set(key, { at: now, hitAt: now, sig, value })
       enforceKeyFamilyLimit(key)
     }
     return value

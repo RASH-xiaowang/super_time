@@ -4,8 +4,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
+import { recordPads, useRecordRowVirtualizer, visibleRecordRows } from './records-virtual.ts'
 import { apiExportCsv, apiGetRecords, readRenderCache, writeRenderCache } from '../api.ts'
-import { Badge, Card, DateRangeField, LinkButton, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { Badge, Card, DateRangeField, EmptyMaybeSyncing, LinkButton, PanelHeader, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './records.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
@@ -24,6 +26,22 @@ const KIND_META: Record<Kind, { label: string; desc: string; icon: string }> = {
 const KINDS: ReadonlyArray<Kind> = ['revokes', 'transfers', 'redpackets', 'finder', 'miniprograms', 'friendverifications']
 
 /**
+ * W2-9.3 实测（`longlist-dom-cost.measure.spec.ts`，jsdom 量等价表格行）：
+ *
+ * | 每行 DOM 节点 | 6 列表格 ≈ 13 / 8 列表格 ≈ 17 / 10 列表格 ≈ 21 |
+ * |---|---|
+ * | PAGE | 50（服务端分页，每点一次「加载更多」涨 50 行） |
+ * | 点 20 次「加载更多」 | 加载到 1000 行 ⇒ DOM ≈ **17,005** 个节点 |
+ * | 同样规模虚拟化后（视口 30 行） | ≈ **570** 个节点（省 30×） |
+ *
+ * W2-9.3 收尾：那 30× 已经拿到了。做法是上面认准的「高度撑杆 tr + 真实 tr」：
+ * `<tbody>` 里保留真实 `<tr>`，只在**首尾各插一根空撑杆**（`<tr style={{height}}/>`）——
+ * 这样 `<table>` 的列宽计算、`position: sticky` 的表头、以及 `table-layout` 全部不变，
+ * 不会出现「绝对定位行与表头列对不齐」那种破相。虚拟器本身是 `useVirtualizer`
+ * + `measureElement`（真实行高回灌，与消息流 / 收藏 / 文件 / 朋友圈同一套口径）。
+ */
+
+/**
  * 后端会**故意忽略**的类型词（见 `query/records.ts` 的 `isRecordTypeStopword`）：
  * 它们是「数据源的名字」而不是记录内容，若拿去当关键词会把结果清空。
  *
@@ -40,8 +58,32 @@ const TIME_KINDS: Record<Kind, boolean> = {
   revokes: true, transfers: true, redpackets: false, finder: false, miniprograms: true, friendverifications: true,
 }
 
-interface RecordItem { [key: string]: string | number | boolean | null | undefined }
-interface RecordsEnvelope { items?: RecordItem[]; total?: number }
+/** 一行记录：字段来自未类型化的 DB 行，取值域就那五种（`records-virtual.ts` 也要用它）。 */
+export interface RecordItem { [key: string]: string | number | boolean | null | undefined }
+interface RecordsEnvelope { items?: RecordItem[]; total?: number; readError?: string }
+
+/**
+ * 表格的渲染零件（W2-9.3 从组件里搬出来）。
+ *
+ * 为什么搬：`RecordsPanel` 在函数体棘轮上（只能变小），而虚拟化必须往组件里加东西。
+ * 这些零件本来就是纯的（只依赖 `css` 与行数据），搬出来既让棘轮过得去，也让它们可被单测。
+ * 名字保持与原来一致，六个分支的调用点一行都不用改（`linkTd` 例外：它需要组件里的 `open`）。
+ */
+const head = (cols: string[]): React.JSX.Element => (
+  <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+)
+const td = (children: React.ReactNode, key: string, cls = ''): React.JSX.Element => (<td key={key} className={cls}>{children}</td>)
+const mono = (v: string | number | boolean | null | undefined, key = 'm'): React.JSX.Element => <td key={key} className={css.mono}>{v == null ? '—' : String(v)}</td>
+// 行数据来自未类型化的 DB 行，秒级时间戳可能是 number 也可能是字符串 → 统一数值化。
+// `Number(x) || null` 让 NaN/0/undefined 都走占位符，不会渲染出 Invalid Date。
+const timeTd = (ts: unknown, key = 't'): React.JSX.Element => <td key={key} className={css.muted}>{fmtDateTimeSec(Number(ts) || null)}</td>
+function badge(label: string, tone: string, key = 'b', hint?: string): React.JSX.Element {
+  const cls = css[toneClass(tone)] ?? css.badgeMuted
+  return <td key={key}><span className={`${css.badge} ${cls}`} title={hint}>{label}</span></td>
+}
+function recordLinkTd(open: (u: string, l?: string | number | boolean | null | undefined) => void, username: string | number | boolean | null | undefined, localId?: string | number | boolean | null, key = 's', label?: string | number | boolean | null): React.JSX.Element {
+  return <td key={key}>{username ? <LinkButton onClick={() => { open(String(username), localId) }} title={String(username)}>{shortUser(label || username)}</LinkButton> : <span className={css.muted}>—</span>}</td>
+}
 
 function shortUser(u: string | number | boolean | null | undefined): string {
   const s = String(u ?? '').trim()
@@ -97,6 +139,8 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
     return (KINDS as readonly string[]).includes(remembered ?? '') ? (remembered as Kind) : 'transfers'
   })
   const [items, setItems] = useState<readonly RecordItem[]>([])
+  /** 读失败与「确无记录」分开（W3-11.4，见后端 `RecordsSnapshot.readError`）。 */
+  const [readError, setReadError] = useState('')
   const [total, setTotal] = useState(0)
   const [totals, setTotals] = useState<Partial<Record<Kind, number>>>({})
   const [keyword, setKeyword] = useState('')
@@ -111,6 +155,12 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 4000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice(4000)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** 表格的滚动容器（虚拟器要它算视口；CSS 类是 `.tableScroll`）。 */
+  const tableScrollRef = useRef<HTMLDivElement | null>(null)
+  // 虚拟器 / 视口切片 / 撑杆高度都在 `records-virtual.ts` —— 组件在函数体棘轮上，只能变小。
+  const rowVirtualizer = useRecordRowVirtualizer(items.length, kind, tableScrollRef)
+  const pads = recordPads(rowVirtualizer)
 
   const PAGE = 50
   const notify = (text: string): void => {
@@ -156,6 +206,8 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       }
       const env = await apiGetRecords(opts)
       const list = (env as RecordsEnvelope).items ?? []
+      // W3-11.4：「读不到 general.db」与「确实没有这类记录」分开说。
+      setReadError((env as RecordsEnvelope).readError ?? '')
       setItems(prev => (reset ? list : [...prev, ...list]))
       const t = (env as RecordsEnvelope).total ?? list.length
       setTotal(t)
@@ -216,22 +268,10 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   }
 
   const meta = KIND_META[kind]
-  const td = (children: React.ReactNode, key: string, cls = ''): React.JSX.Element => (<td key={key} className={cls}>{children}</td>)
-  const linkTd = (username: string | number | boolean | null | undefined, localId?: string | number | boolean | null, key = 's', label?: string | number | boolean | null): React.JSX.Element => (
-    <td key={key}>{username ? <LinkButton onClick={() => { open(username, localId) }} title={String(username)}>{shortUser(label || username)}</LinkButton> : <span className={css.muted}>—</span>}</td>
-  )
-  const mono = (v: string | number | boolean | null | undefined, key = 'm'): React.JSX.Element => <td key={key} className={css.mono}>{v == null ? '—' : String(v)}</td>
+  const linkTd = (u: string | number | boolean | null | undefined, localId?: string | number | boolean | null, key = 's', label?: string | number | boolean | null): React.JSX.Element => recordLinkTd(open, u, localId, key, label)
   // 行数据来自未类型化的 DB 行，秒级时间戳可能是 number 也可能是字符串 → 统一数值化。
   // `Number(x) || null` 让 NaN/0/undefined 都走占位符，不会渲染出 Invalid Date。
-  const timeTd = (ts: unknown, key = 't'): React.JSX.Element => <td key={key} className={css.muted}>{fmtDateTimeSec(Number(ts) || null)}</td>
-  const badge = (label: string, tone: string, key = 'b', hint?: string): React.JSX.Element => {
-    const cls = css[toneClass(tone)] ?? css.badgeMuted
-    return <td key={key}><span className={`${css.badge} ${cls}`} title={hint}>{label}</span></td>
-  }
 
-  const head = (cols: string[]): React.JSX.Element => (
-    <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
-  )
 
   const renderTable = (): React.JSX.Element => {
     switch (kind) {
@@ -239,42 +279,42 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         return (
           <table className={css.table}>
             {head(['会话', '消息 ID', '批次 ID', '时间'])}
-            <tbody>{items.map((it, i) => (<tr key={i}>{linkTd(it.session_name, it.msg_local_id, 's', it.session_display)}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, it.msg_local_id, 's', it.session_display)}{mono(it.msg_local_id, 'm')}{mono(it.batch_id, 'b')}{timeTd(it.msg_create_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'transfers':
         return (
           <table className={css.table}>
             {head(['会话', '类型', '收款方', '付款方', '时间'])}
-            <tbody>{items.map((it, i) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（该 1–8 场景映射未经本机数据验证，见 docs/wechat-schema.md §B.31）`)}{td(<span className={css.muted}>{shortUser(it.receiver_display || it.pay_receiver)}</span>, 'r')}{td(<span className={css.muted}>{shortUser(it.payer_display || it.pay_payer)}</span>, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（该 1–8 场景映射未经本机数据验证）`)}{td(<span className={css.muted}>{shortUser(it.receiver_display || it.pay_receiver)}</span>, 'r')}{td(<span className={css.muted}>{shortUser(it.payer_display || it.pay_payer)}</span>, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'redpackets':
         return (
           <table className={css.table}>
             {head(['会话', '发送者', '状态', '类型', '消息 ID'])}
-            <tbody>{items.map((it, i) => { const st = hbStatus(it.hb_status); return (<tr key={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{td(<span className={css.muted}>{shortUser(it.sender_display || it.sender_user_name)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.hb_type) === 0 ? '普通红包' : `类型 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{linkTd(it.session_name, undefined, 's', it.session_display)}{td(<span className={css.muted}>{shortUser(it.sender_display || it.sender_user_name)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.hb_type) === 0 ? '普通红包' : `类型 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'finder':
         return (
           <table className={css.table}>
             {head(['视频号', '直播状态', '回放', '直播 ID'])}
-            <tbody>{items.map((it, i) => { const st = liveStatus(it.live_status); return (<tr key={i}>{td(<span className={css.muted}>{shortUser(it.username_display || it.finder_username)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = liveStatus(it.live_status); return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span className={css.muted}>{shortUser(it.username_display || it.finder_username)}</span>, 'n')}{badge(st.label, st.tone, 'b')}{td(<span className={css.muted}>{Number(it.replay_status) === 1 ? '有回放' : '—'}</span>, 'r')}{mono(it.finder_live_id, 'id')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'miniprograms':
         return (
           <table className={css.table}>
             {head(['名称', '用户名', 'AppID', '更新时间'])}
-            <tbody>{items.map((it, i) => (<tr key={i}>{td(<span>{String(it.nickname ?? '') || '（未命名）'}</span>, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span>{String(it.nickname ?? '') || '（未命名）'}</span>, 'n')}{td(<span className={css.muted}>{shortUser(it.user_name)}</span>, 'u')}{mono(it.app_id, 'a')}{timeTd(it.last_update_time)}</tr>))}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       default:
         return (
           <table className={css.table}>
             {head(['用户', '备注', '验证消息', '类型', '时间'])}
-            <tbody>{items.map((it, i) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i}>{td(<span className={css.muted}>{shortUser(it.user_display || it.user_name_)}</span>, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}</tbody>
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const mine = Number(it.is_sender_) === 1; return (<tr key={i} ref={rowVirtualizer.measureElement} data-index={i}>{td(<span className={css.muted}>{shortUser(it.user_display || it.user_name_)}</span>, 'u')}{td(<span className={css.muted}>{String(it.remark_ ?? '') || '—'}</span>, 'r')}{td(<span className={css.ellipsis}>{String(it.content_ ?? '') || '—'}</span>, 'v')}{badge(mine ? '我发出的' : '收到的', mine ? 'info' : 'muted', 't')}{timeTd(it.timestamp_)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
     }
@@ -325,7 +365,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
               ariaLabel="排序方向"
             />
             <button type="button" className={css.btn} onClick={() => { void load(true) }} disabled={loading}>搜索</button>
-            <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出 CSV'}</button>
+            <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
           </>
         )}
       />
@@ -344,9 +384,13 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       <Card flush className={css.recordsCard}>
         {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
         {loading && items.length === 0 && <ListSkeleton rows={10} />}
-        {!loading && !error && items.length === 0 && <div className={kitCss.emptyInline}>暂无{meta.label}记录</div>}
+        {!loading && !error && items.length === 0 && (
+          readError
+            ? <div className={kitCss.error} role="alert">⚠️ {readError}</div>
+            : <EmptyMaybeSyncing text={`暂无${meta.label}记录`} />
+        )}
         {!loading && !error && items.length > 0 && (
-          <div className={css.tableScroll}>{renderTable()}</div>
+          <div className={css.tableScroll} ref={tableScrollRef}>{renderTable()}</div>
         )}
         {!loading && !error && items.length > 0 && items.length < total && (
           <div className={css.loadMoreWrap}>

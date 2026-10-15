@@ -2,13 +2,13 @@
  * Moments insights for one author (usually self): post/like/comment totals,
  * top likers and commenters, monthly distribution, and "on this day" items.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MomentsGeo, MomentsGeoPoint, MomentsInsightsSnapshot, MomentsInteractorRow, MomentsTopItems } from '../types.ts'
 import { parseSnsLikesComments, parseSnsXml } from './moments.ts'
-import { cachedBySigAsync, contactMeta, fileSigOf } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 
 /**
@@ -218,7 +218,7 @@ export async function queryMomentsInsights(decryptedDir: string, author?: string
   ].join('|')
   // 2026-09-28：同步 `cachedBySig` → async 版。冷算实测 228ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
-  return cachedBySigAsync('moments-insights:' + decryptedDir + ':' + (author ?? ''), sig, () => computeMomentsInsights(decryptedDir, author))
+  return cachedBySigAsync('moments-insights:' + decryptedDir + ':' + (author ?? ''), sig, () => computeMomentsInsights(decryptedDir, author), INSIGHTS_TTL_MS)
 }
 
 async function computeMomentsInsights(decryptedDir: string, author?: string): Promise<MomentsInsightsSnapshot> {

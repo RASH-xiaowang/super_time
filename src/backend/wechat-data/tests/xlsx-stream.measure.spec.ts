@@ -12,6 +12,10 @@
  * 对照是什么：改造前的 `formatXlsx` 会先把所有行变成 `rows` 数组、再 `parts.join('')`
  * 拼出整份 sheet、最后整块 deflate。这里用同样的形状复刻那条路径（行数组 + join + 整块压）
  * 作为「攒内存」参照，而不是去调一个已经删掉的实现。
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'

@@ -829,7 +829,12 @@ describe('只读契约', () => {
     expect(gw.getSearchIndexStatus()).toEqual({ exists: false, rows: 0, built_at: null, ready: false })
     expect(gw.getMoments()).toEqual({ moments: [], total: 0 })
     expect(gw.getMomentsAuthors()).toEqual([])
-    expect(gw.getRecords({ kind: 'transfers' })).toEqual({ items: [], total: 0 })
+    // W3-11.4：general.db 不存在时除「不抛、给空列表」外还必须带 readError ——
+    // 「没有资金往来」与「数据还没解密」在界面上必须是两句话。
+    const recs = gw.getRecords({ kind: 'transfers' })
+    expect(recs.items).toEqual([])
+    expect(recs.total).toBe(0)
+    expect(typeof recs.readError, '缺 general.db 却不出声 ⇒ 面板会显示「暂无记录」').toBe('string')
     expect(gw.getPaymentStatus({ serverId: '1' })).toEqual({ found: false })
     expect(gw.getVoiceTranscript({ username: 'wxid_a', localId: 1 })).toEqual({ error: '未找到语音消息' })
     expect(gw.getSelfUsername()).toEqual({ username: 'wxid_self' })

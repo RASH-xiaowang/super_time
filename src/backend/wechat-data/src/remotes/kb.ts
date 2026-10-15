@@ -2,22 +2,24 @@
 /**
  * 知识库域的 @Remote 处理器（M21 第 38 刀自 `gateway.ts` 搬出）。
  *
- * 为什么这么切：`gateway.ts` 是 172 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
+ * 为什么这么切：`gateway.ts` 是 195 个 `@Remote` 方法的巨型类，而 KB 域是**一口气自洽的一族**
  * （建库 / 文件 / 检索 / 向量索引 / 模型配置）。类里保留 Remote 装饰器与签名 —— 协议层要按名字
  * 枚举 —— 方法体改成一行转发；真正的逻辑搬到这里，依赖由 `ctx` 显式给出（原来靠 `this` 拿）。
  */
 import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, registerKbFile, setKbFileRagFlag, setKbFileSummary } from '../query/kb-files.ts'
 import { drainKbQueue } from '../query/kb-queue.ts'
 import { searchKb as searchKbRows } from '../query/kb-search.ts'
-import { KbVectorBuildResult, KbVectorIndexStatus, buildKbVectorIndex, kbVectorIndexStatus, searchKbDense } from '../query/kb-vectors.ts'
-import { KbEntitySummary, extractFileEntities, kbEntitySummary, readDocEntities } from '../query/kb/extract.ts'
-import { KbModelRole, KbModelSettings, ResolvedModel, kbModelOverrideCounts, kbModelsOnKbDelete, readKbModelSettings, touchKbEntitiesAt, writeKbModelSettings } from '../query/kb/model-config.ts'
+import { kbBuildIndexIn } from './kb.kbindex.ts'
+import { buildKbVectorIndex, kbVectorIndexStatus, searchKbDense } from '../query/kb-vectors.ts'
+import { extractFileEntities, kbEntitySummary, readDocEntities } from '../query/kb/extract.ts'
+import { KbModelRole, ResolvedModel, kbModelOverrideCounts, kbModelsOnKbDelete, readKbModelSettings, touchKbEntitiesAt, writeKbModelSettings } from '../query/kb/model-config.ts'
 import { SUGGEST_POOL_MAX, rankLinkCandidates } from '../query/kb/suggest.ts'
 import { createKb as createKbRow, deleteKb as deleteKbRow, listKbs, listNotes, renameKb as renameKbRow } from '../query/notes.ts'
 import { loadRetrievalConfig } from '../query/retrieval/config.ts'
 import { EmbedFn } from '../query/retrieval/embedding.ts'
-import { fuseKbHits } from '../query/retrieval/kb-channel.ts'
+import { FusedKbHit, fuseKbHits } from '../query/retrieval/kb-channel.ts'
 import { KbDeleteAction, KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbFileRegisterResult, KbListSnapshot, KbMutationResult, KbSearchResult, KbSummaryResult, OperationCategory, OperationStatus } from '../types.ts'
+import { KbExtractResult, KbLinkSuggestResult, KbModelConfigResult, KbModelConfigView, KbVectorBuildWireResult, KbVectorIndexView } from '../types-kb-wire.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, GenerateOptions, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
@@ -27,6 +29,10 @@ export interface KbRemoteCtx {
   dirs: () => { decrypted: string }
   ctx: Context
   kbIndexJobs: Map<number, { done: number; total: number; startedAt: number; error: string }>
+  /** W3-11.5：本库向量构建的取消槽（与消息域的构建各占一格，互相不会打断）。 */
+  kbIndexSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  /** W3-11.5：取消本库向量构建（与上面成对）。 */
+  cancelKbIndexJob: (jobId?: string) => boolean
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   privacyGate: PrivacyGateFn
   makeEmbedFn: (model: string, feature?: 'ask_embed' | 'kb_embed' | 'kb_link_suggest') => EmbedFn | undefined
@@ -45,7 +51,109 @@ export interface KbRemoteCtx {
  * 又不至于让一次摘要吃掉整条上下文。截断是**必须被说出来**的 ——
  * 覆盖了多少字要落库并回给界面（见 `summarizeKbFile`）。
  */
+/**
+ * W3-6.6：实体抽取的并发上限。
+ *
+ * 与 `gateway-scheduler.ts` 的 `DUE_SUMMARY_CONCURRENCY` 同一份模式
+ * （共享 next 下标原子认领 + 单任务失败不连坐）。
+ * 上限小心地写小：每个工作者都是一次 LLM 请求，放开上限会
+ * 把厂商的速率限制撞穻（而且反而更慢）。
+ */
+export const KB_EXTRACT_CONCURRENCY = 3
+
+/**
+ * W3-6.6：有界并发地跑一批文件抽取（从 createKbRemotes 里搪出）。
+ *
+ * 搪家原因与 `askRetrievalCompat` 同族：工厂受函数体椚轮管着（只许变小）。
+ *
+ * 两条口径：
+ *  · **共享 next 下标原子认领**（模式与 `gateway-scheduler.ts` 的
+ *    `DUE_SUMMARY_CONCURRENCY` 完全一致），而不是把批次切成固定分片———
+ *    切片的话，最后一片只剩一个工作者在跑，其余全空闲。
+ *  · **不做任何中断**：单个失败由调用方的 `one()` 接着（那里有
+ *    try/catch，补的正是 `extractFileEntities` 开库抛异常的那个漏洞）。
+ */
+/**
+ * W3-6.6：**一个文件**的实体抽取（从 createKbRemotes 里搪出）。
+ *
+ * 为什么要自己包 try：`extractFileEntities` 里那个
+ * `new DatabaseSync(kbFilesDbPath(...))` 在 try **之外**。库被占用/损坏时它直接抛，
+ * 而这一抛会跟着循环一起退出（真连块）：剩下的文件一个都不跑，
+ * 而 RPC 直接 reject，调用方**连失败汇总都拿不到**。
+ * 接住它：一个文件出问题就记一条 failed，其余继续。
+ */
+async function kbExtractOne(
+  o: {
+    dir: string
+    kbId: number
+    ask: (prompt: string) => Promise<string>
+    model: string
+  },
+  id: number,
+  sink: {
+    onSaved: (n: number) => void
+    onFailed: (error: string) => void
+  },
+): Promise<void> {
+  try {
+    const r = await extractFileEntities(o.dir, o.kbId, id, o.ask, o.model)
+    if (r.ok) sink.onSaved(r.saved ?? 0)
+    else sink.onFailed(r.error ?? '未知原囩')
+  } catch (e) {
+    sink.onFailed((e as Error).message ?? '抽取失败')
+  }
+}
+
+async function runKbExtractBatch(o: {
+  batch: ReadonlyArray<{ id: number }>,
+  extract: (id: number) => Promise<void>,
+  concurrency: number,
+}): Promise<void> {
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next
+      next += 1
+      if (i >= o.batch.length) return
+      const f = o.batch[i]
+      if (f === undefined) continue
+      await o.extract(f.id)
+    }
+  }
+  const n = Math.max(1, Math.min(o.concurrency, o.batch.length))
+  await Promise.all(Array.from({ length: n }, () => worker()))
+}
+
 const SUMMARY_INPUT_CHARS = 8000
+
+/**
+ * 两路都跑成时的结果：融合后的列表 + **两路各自**的命中数（W2-7.4）。
+ *
+ * 口径要说准：`channels[].count` 是**融合前**各路自己的命中数，不是融合后的条数 ——
+ * 融合按 RRF 去重（同一块两路都命中只留一条），所以两路之和 ≥ 总条数；
+ * 拿总数冒充任一路，用户会以为另一路白跑了。
+ *
+ * 稠密跑完但一条都没命中时 `denseCount` 是 0，**照样记 `active: true`** ——
+ * 「跑了、没命中」与「压根没跑」是两件事，界面上也该分开说。
+ *
+ * 模块级：它是纯拼装（不碰 IO、不读配置），放进 `createKbRemotes` 只会让那个
+ * 已经四百多行的函数更长。
+ * @param res - 稀疏那一路的结果（字段是它的基底）。
+ * @param denseCount - 稠密那一路的命中条数。
+ * @param fused - RRF 融合后的有序命中。
+ * @returns 交回界面的结果（不带任何降级说明）。
+ */
+function fusedKbResult(res: KbSearchResult, denseCount: number, fused: readonly FusedKbHit[]): KbSearchResult {
+  return {
+    ...res,
+    hits: fused.map(f => f.hit),
+    stats: {
+      ...res.stats,
+      channels: [...res.stats.channels, { channel: 'dense', count: denseCount, active: true }],
+    },
+    degraded: undefined,
+  }
+}
 
 export function createKbRemotes(rc: KbRemoteCtx) {
   return {
@@ -284,24 +392,14 @@ export function createKbRemotes(rc: KbRemoteCtx) {
           return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索这次没跑成：' + dense.note + '）' } }
         }
         const fused = fuseKbHits(res.hits, dense.hits, { k: cfg.fusion.k })
-        return {
-          ...res,
-          hits: fused.map(f => f.hit),
-          // 两路都跑成了 ⇒ 不再给任何降级说明。
-          degraded: undefined,
-        }
+        // 两路都跑成 ⇒ 交回融合后的列表 + 两路各自的命中数（W2-7.4）。
+        return fusedKbResult(res, dense.hits.length, fused)
       } catch (e) {
         return { ...res, degraded: { reason: 'embed-failed', label: '仅关键词（语义检索失败：' + (e as Error).message + '）' } }
       }
     },
 
-    getKbModelConfig(options: { kbId: number }): {
-      kbId: number
-      settings: KbModelSettings
-      global: Record<KbModelRole, string>
-      resolved: Record<KbModelRole, ResolvedModel>
-      entities: KbEntitySummary
-    } {
+    getKbModelConfig(options: { kbId: number }): KbModelConfigView {
       const kbId = Number(options?.kbId)
       return {
         kbId,
@@ -320,8 +418,7 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       }
     },
 
-    setKbModelConfig(options: { kbId: number; chatRef?: string; embedRef?: string; rerankRef?: string }):
-      { ok: true; settings: KbModelSettings } | { ok: false; error: string } {
+    setKbModelConfig(options: { kbId: number; chatRef?: string; embedRef?: string; rerankRef?: string }): KbModelConfigResult {
       const kbId = Number(options?.kbId)
       const r = writeKbModelSettings(rc.dirs().decrypted, kbId, {
         ...(options?.chatRef === undefined ? {} : { chatRef: options.chatRef }),
@@ -332,14 +429,7 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       return r
     },
 
-    getKbVectorIndex(options: { kbId: number }): {
-      kbId: number
-      model: string
-      source: 'inherit' | 'inline'
-      configured: boolean
-      status: KbVectorIndexStatus
-      job: { done: number; total: number; startedAt: number; error: string } | null
-    } {
+    getKbVectorIndex(options: { kbId: number }): KbVectorIndexView {
       const dir = rc.dirs().decrypted
       const cfg = loadRetrievalConfig(dir)
       const kbId = Number(options?.kbId)
@@ -357,52 +447,25 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       }
     },
 
-    async buildKbVectorIndex(options: { kbId: number; force?: boolean }): Promise<KbVectorBuildResult & { ok: boolean; error?: string }> {
-      const dir = rc.dirs().decrypted
-      const kbId = Number(options?.kbId)
-      if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', status: 'bad-kb', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
-      const cfg = loadRetrievalConfig(dir)
-      // 按库解析：这个按钮建的**就是这个库**的索引，模型名也要跟着这个库的覆盖走。
-      const model = rc.kbModel(kbId, 'embed').model
-      const embed = model === '' ? undefined : rc.makeEmbedFn(model, 'kb_embed')
-      if (!embed) {
-        const msg = '未配置向量模型（在「数据配置 → AI 大模型」里填写向量模型名与端点）'
-        rc.op('task', 'kb_embed', 'fail', `kb=${kbId}`, msg)
-        return { ok: false, error: msg, status: 'no-embedder', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: 0 }
-      }
-      const job = { done: 0, total: 0, startedAt: Date.now(), error: '' }
-      rc.kbIndexJobs.set(kbId, job)
-      try {
-        const built = await buildKbVectorIndex(dir, kbId, embed, {
-          model,
-          batchSize: cfg.embedding.batchSize,
-          concurrency: cfg.embedding.concurrency,
-          maxCharsPerDoc: cfg.embedding.maxCharsPerDoc,
-          maxDocsPerBuild: cfg.embedding.maxDocsPerBuild,
-          force: Boolean(options?.force),
-          onProgress: (done, total) => { job.done = done; job.total = total },
-        })
-        rc.op('task', 'kb_embed', 'ok', `kb=${kbId}`, `${built.status} · ${built.rows} 条（本次 ${built.embedded}）· ${built.elapsed_ms}ms · ${model}`)
-        return { ...built, ok: true }
-      } catch (e) {
-        job.error = (e as Error).message
-        rc.op('task', 'kb_embed', 'fail', `kb=${kbId}`, job.error)
-        return { ok: false, error: job.error, status: 'failed', rows: 0, embedded: 0, embed_calls: 0, elapsed_ms: Date.now() - job.startedAt }
-      } finally {
-        // 进度槽留一小会儿再清：界面轮询间隔内还要能看见「刚跑完」的结果，直接删会让按钮闪回常态。
-        const t = setTimeout(() => { if (rc.kbIndexJobs.get(kbId) === job) rc.kbIndexJobs.delete(kbId) }, 3000)
-        if (typeof t.unref === 'function') t.unref()
-      }
+    async buildKbVectorIndex(options: { kbId: number; force?: boolean; jobId?: string }): Promise<KbVectorBuildWireResult> {
+      return kbBuildIndexIn(rc, options)
     },
 
-    async extractKbEntities(options: { kbId: number; fileIds?: number[]; limit?: number }): Promise<{
-      ok: boolean
-      error?: string
-      files: number
-      saved: number
-      failed: Array<{ id: number; error: string }>
-      model: string
-    }> {
+    /**
+     * 停止本库正在跑的向量构建（W3-11.5）。
+     *
+     * 取消在〔认领下一批〕之前生效；两阶段构建的阶段二在全部批次之后，所以取消 ⇒
+     * 一行都没写 ⇒ 旧索引原样。停不上的原因如实返回（已算完 / 标识不认识）。
+     */
+    cancelKbIndexBuild(options: { jobId?: string }): { ok: boolean; message?: string } {
+      const id = typeof options?.jobId === 'string' ? options.jobId.trim() : ''
+      if (id === '') return { ok: false, message: '缺少任务标识' }
+      return rc.cancelKbIndexJob(id)
+        ? { ok: true }
+        : { ok: false, message: '这次构建已经结束了（或标识不认识），无需停止' }
+    },
+
+    async extractKbEntities(options: { kbId: number; fileIds?: number[]; limit?: number }): Promise<KbExtractResult> {
       const dir = rc.dirs().decrypted
       const kbId = Number(options?.kbId)
       if (!Number.isFinite(kbId) || kbId <= 0) return { ok: false, error: '没有指定知识库', files: 0, saved: 0, failed: [], model: '' }
@@ -422,25 +485,17 @@ export function createKbRemotes(rc: KbRemoteCtx) {
       const batch = wanted.slice(0, cap)
       const failed: Array<{ id: number; error: string }> = []
       let saved = 0
-      for (const f of batch) {
-        const r = await extractFileEntities(dir, kbId, f.id, ask, model)
-        if (r.ok) saved += r.saved ?? 0
-        else failed.push({ id: f.id, error: r.error ?? '未知原因' })
-      }
+      // W3-6.6：有界并发 + 逐文件不连块（动作全在模块级，工厂受椚轮管）。
+      const sink = { onSaved: (n: number) => { saved += n }, onFailed: (error: string) => { failed.push({ id: sinkId, error }) } }
+      let sinkId = 0
+      await runKbExtractBatch({ batch, concurrency: KB_EXTRACT_CONCURRENCY, extract: (id) => { sinkId = id; return kbExtractOne({ dir, kbId, ask, model }, id, sink) } })
       touchKbEntitiesAt(dir, kbId, Date.now())
       rc.op('task', 'kb_extract', failed.length === batch.length && batch.length > 0 ? 'fail' : 'ok',
         `kb=${kbId}`, `${batch.length} 个文件 · 写入 ${saved} 条实体 · ${model}`)
       return { ok: failed.length < batch.length, files: batch.length, saved, failed, model }
     },
 
-    async suggestKbLinks(options: { kbId: number; text?: string; topK?: number; excludeTitle?: string }): Promise<{
-      ok: boolean
-      error?: string
-      candidates: Array<{ label: string; kind: 'note' | 'entity'; score: number }>
-      pool: number
-      model: string
-      note?: string
-    }> {
+    async suggestKbLinks(options: { kbId: number; text?: string; topK?: number; excludeTitle?: string }): Promise<KbLinkSuggestResult> {
       const dir = rc.dirs().decrypted
       const kbId = Number(options?.kbId)
       const text = String(options?.text ?? '')

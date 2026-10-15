@@ -91,3 +91,24 @@
   color: var(--nm-text-3);
   overflow-wrap: anywhere;
 }
+
+/* W3-11.5 收尾：失败态的「重试这一条」。
+   自对齐（align-self）而不是拉满 —— 面板宽 240px 上下，一个铺满整行的按钮
+   会把「分析失败：…」那行短文案压得像标题。 */
+.emptyAction {
+  align-self: flex-start;
+  margin-top: var(--nm-s-2);
+  padding: var(--nm-s-1) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.emptyAction:hover {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}

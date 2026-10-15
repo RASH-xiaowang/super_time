@@ -26,8 +26,8 @@
  *   全空面板**（每个面板只有标题和标签、一个数值都没有），那种状态极易被误读成
  *   "面板卡住"。本工具因此带**断言**：面板文本少于阈值就直接报错退出。
  *
- * 用法：`npm run theme:live-audit`（16 个可见页签）/ `npm run theme:live-audit -- --all-tabs`
- *      （**全部 36 个页签**：16 可见 + 20 隐藏，后者按 hash 路由 + reload 进入）。
+ * 用法：`npm run theme:live-audit`（17 个可见页签）/ `npm run theme:live-audit -- --all-tabs`
+ *      （**全部 37 个页签**：17 可见 + 20 隐藏，后者按 hash 路由 + reload 进入）。
  * 退出码：0 = 两套主题都验完；2 = 前置缺失；3 = 主题没生效或数据根没生效。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -51,10 +51,10 @@ const WANT = [
 /**
  * 是否连**隐藏页签**一起量（`--all-tabs`）。
  *
- * 为什么要覆盖它们：导航里渲染的只有 16 个页签，而 `nav-config.ts` 里另有 20 个
+ * 为什么要覆盖它们：导航里渲染的只有 17 个页签，而 `nav-config.ts` 里另有 20 个
  * `hidden: true` 的**可路由页面**（用户从各面板的「详情 →」或 hash 进入）——
  * `scripts/panel-audit.mjs` 早就在截图那一遍覆盖了它们（`hidden-*.png`），
- * 但**主题一致性这一遍此前只看了 16 个**，于是"每一个用户界面"里的 20 个是盲区。
+ * 但**主题一致性这一遍此前只看了 17 个**，于是"每一个用户界面"里的 20 个是盲区。
  *
  * 驱动方式与 `panel-audit.mjs` 一致：`WechatDataPanel` 只在挂载时读 `location.hash`
  * ⇒ 写 hash 后**必须 reload**。其中 4 个隐藏页签以「设置」弹窗形式打开，此时导航按钮
@@ -143,10 +143,16 @@ const PROBE = () => {
     while (cur && cur !== document.documentElement) {
       const cs = getComputedStyle(cur)
       if (cs.backgroundImage && cs.backgroundImage !== 'none') return true
+      // 媒体元素底下的文字（视频时长角标、播放徽标这类）：真底是画面，合成不了 ⇒ n/a。
+      if (cur.tagName === 'IMG' || cur.tagName === 'VIDEO' || cur.tagName === 'CANVAS') return true
       const m = /rgba?\(([^)]+)\)/.exec(cs.backgroundColor)
       if (m) {
         const p = m[1].split(/[,\s/]+/).filter(Boolean).map(Number)
         if (p.length >= 3 && (p.length < 4 || p[3] >= 1)) return false
+        // 半透明 scrim（rgba 黑底压画面）：实际底色是它合成在媒体/页面之上的结果，
+        // 本审计既定不做合成 ⇒ 记 n/a。2026-10-13 实测：漏掉这一支时走查会把 scrim 当透明
+        // 一路跳到页面白底，白字 scrim 被算成「白字白底 1.00」的假阳性（朋友圈 light）。
+        if (p.length === 4 && p[3] > 0 && p[3] < 1) return true
       }
       cur = cur.parentElement
     }
@@ -331,13 +337,13 @@ try {
   const hiddenMeta = {}
   const hidden = ALL_TABS ? hiddenTabs() : []
   if (ALL_TABS) say(`\n隐藏页签 ${String(hidden.length)} 个将一并量：${hidden.map((h) => `${h.label}(${h.tab})`).join('、')}`)
-  else say('\n（本次不量隐藏页签；加 `--all-tabs` 可覆盖 `nav-config.ts` 里全部 36 个页签）')
+  else say('\n（本次不量隐藏页签；加 `--all-tabs` 可覆盖 `nav-config.ts` 里全部 37 个页签）')
 
   // ── 可选：切页签压力测试（`--stress`） ─────────────────────────────────────
   //
   // 为什么要有它：2026-09-29 实测发现「按顺序连点 12 个页签后，点『朋友圈洞察』要等
   // **60 秒**才出内容」—— 根因不是该面板慢（直连 512ms），而是它的请求排在**串行
-  // worker 的队列尾部**等出来的（详见 docs/PERF-THEME-LEDGER 的「三点五」节）。
+  // worker 的队列尾部**等出来的（原 PERF-THEME-LEDGER 文档的「三点五」节，已删除，原文见 git 历史）。
   // 那次是手工脚本临时跑出来的；这个模式把它变成**每次可量、可对比**的数。
   //
   // 它量的是"**加载态持续多久**"：点进每个页签后立刻切走（模拟"快速浏览"），
@@ -609,7 +615,7 @@ try {
     say('    对**已登记队尾**的面板不计退出码；但**未登记**的慢面板会以退出码 4 报出 ⇒')
     say('    由"串行 worker 队列深度"以外的原因造成的慢，不会被这条放过。架构级修法')
     say('    （取消在途请求 / 多 worker）超出"逐接口优化"范围，且现场日志里没有这个形状。')
-    say('    详见 docs/PERF-THEME-LEDGER 第三节五。')
+    say('    原 PERF-THEME-LEDGER 文档第三节五（已删除，原文见 git 历史）。')
     say('')
     say('注：**"填充比低"不等于"面板空"**。这个比值在"内容高于视口的滚动页"上没有留白含义')
     say('    （本机实测 panelBody 高 2535px vs 视口 770px）。判断内容多少请看"正文长度"列。')

@@ -8,14 +8,14 @@
 
 | 类别 | 来源 | 本目录 |
 |---|---|---|
-| 前端源码（TSX/CSS Modules/地图数据等，88 个文件） | `packages/client/ui-wechat/src/**` | `src/client/ui-wechat/src/**` |
+| 前端源码（TSX/TS/CSS Modules/地图数据等，519 个文件） | `packages/client/ui-wechat/src/**` | `src/client/ui-wechat/src/**` |
 | UI 原语（Button/Input/Pill/StateDot/图标等，仅保留实际用到的子集） | `packages/client/ui-primitives` | `src/client/ui-primitives-shim/` |
 | 构建入口（Electron 挂载壳） | 新增 | `src/client/ui-app/ui-entry.tsx` |
 | 构建模板 | 新增 | `src/client/ui-app/index.html` |
 | Vite 构建配置 | 新增 | `vite.config.js` |
-| 构建产物（提交，供 Electron 运行） | 由 `npm run build:ui` 生成 | `src/client/ui-dist/` |
+| 构建产物（每次启动/打包前生成，不入库） | 由 `npm run build:ui` 生成 | `src/client/ui-dist/` |
 
-## 功能界面（16 个侧栏入口 / 37 个可路由页签，172 个 Remote 方法）
+## 功能界面（16 个侧栏入口 / 37 个可路由页签，195 个 Remote 方法）
 
 > 本节数字与结构于 2026-09-15 按 `panels/nav-config.ts` 实测重写：此前写「12 个侧栏入口 / 34 个页签」，
 > 方法数也早已过期（图谱拆成两个入口后侧栏变 16 项）—— 三项全错，且没有任何东西会发现。
@@ -85,8 +85,8 @@
 `WechatDataPanel.tsx` 的页签状态 + `location.hash` 深度链接、`api.ts` 的
 snapshot 缓存（localStorage + 30s TTL + 实时更新失效）、`panels/hooks.tsx`
 的分页 / 懒加载 / 渐进挂载（`usePagedList` / `useProgressiveList`）。
-注：`@tanstack/react-virtual` 的 `VirtualList` 已于 M14 移除（固定行高与可变高列表形态不匹配），
-长列表当前靠**增量挂载**——DOM 节点数没有硬上界，这是已登记的限制（N18），不要照旧文档去找虚拟列表。
+长列表已按 `@tanstack/react-virtual` 的动态测高模式虚拟化（消息流 / 收藏 / 文件 / 朋友圈），
+DOM 节点数与历史长度解耦、有硬上界；滚动验收台见 `npm run ui:longlist-e2e`（N18 已完成）。
 
 **样式逻辑**：CSS Modules + `scifi-theme.css` NEON MATRIX 主题令牌，
 全部 `.module.css` 与 `*.css` 原样保留，由 Vite 编译。
@@ -129,4 +129,4 @@ Electron 主进程 `main.js` 优先加载 `src/client/ui-dist/index.html`，
 dsh-client-ui-primitives、dsh-wechat-data types 等）集中在
 `package.json` 的 `devDependencies`，仅用于 `build:ui` 编译；
 运行时打包进 `src/client/ui-dist`，不随应用分发 node_modules。
-vite 构建使用 `pnpm-workspace.yaml` 中的版本 override 对齐本机 pnpm store。
+vite 构建直接读本仓源码（`vite.config.js` 的 alias），不依赖 pnpm workspace 的版本 override。

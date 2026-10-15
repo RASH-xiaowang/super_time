@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { decompress } from 'fzstd'
@@ -427,10 +427,17 @@ export function getSearchIndexFreshness(decryptedDir: string): SearchIndexFreshn
 
 /** 提问前的「索引可用且新鲜」保证结果。 */
 export interface EnsureIndexResult {
-  /** 本次实际做了什么：全量构建 / 增量同步 / 无需动作。 */
-  action: 'build' | 'sync' | 'none'
+  /**
+   * 本次实际做了什么：全量构建 / 增量同步 / 无需动作 / **开跑后台构建、本轮不等**。
+   *
+   * `deferred` 只在「索引压根不可用而全量构建挪到了后台」时出现（见 `ensureSearchIndex`
+   * 的注释与那张实测表）。此时 `message` 就是给界面的那句话。
+   */
+  action: 'build' | 'sync' | 'none' | 'deferred'
   rows?: number
   added?: number
+  /** 本次增量前有多少个分片比索引新（0 = 索引是新的）。给界面解释「为什么要同步」。 */
+  staleShards?: number
   elapsed_ms: number
   message?: string
 }

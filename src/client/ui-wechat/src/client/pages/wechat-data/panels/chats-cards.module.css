@@ -102,6 +102,9 @@
 }
 .msgHeader {
   position: relative;
+  /* 微信官方的消息区头部就是**一块和消息流同一个底色**的平板，下面一条发丝线；
+     没有外边框、没有圆角、不糊毛玻璃。底色令牌跟着 .messages 走（见那里的 --wx-chat-bg）。 */
+  background: var(--wx-chat-bg);
   /* 必须高于 .msgBody（后者也是 z-index:1 且在 DOM 里更靠后）：
      同值 + 后者靠后 = 消息流整块盖在头部之上，于是头部「更多」的下拉
      只有第一项露出一点点，其余被消息区吃掉（用户截图）。
@@ -183,6 +186,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/*
+ * 轮询状态（`✓ 时间 · N 条新消息`）：推到头部最右端。
+ *
+ * 头部是 `display:flex` + 默认 `justify-content:flex-start`，动作区收窄后剩余空间
+ * 全留在右侧空白处，状态只贴跟在「更多」后面（不是用户以为的「最右边」）。
+ * `margin-left:auto` 吃掉这段剩余空间即把它压到右缘；换行（窄列）时同样贴在末行右端。
+ * `margin-left` 与上面的 .msgHeaderExport 同为单类选择器 —— 本规则写在后面所以胜出。
+ */
+.msgHeaderPoll { margin-left: auto; }
 /* 类型统计条：从头部移出后的独立条（头部回到单行；窄列下整条收起，见上方 @container） */
 .msgTypeChips {
   display: flex;
@@ -369,6 +381,12 @@
   font-size: 12px;
   color: var(--nm-text-2);
   border-bottom: 1px solid var(--nm-border);
+}
+/* W3-11.5：构建中的那行进度（「第 3/12 个分片 · 已入库 5.2 万条」）。
+   与上面那句提示同级但更弱一档 —— 它是**变化中**的读数，不是要用户去做的事。 */
+.searchIndexProgress {
+  color: var(--nm-text-3);
+  font-variant-numeric: tabular-nums;
 }
 .searchHit {
   display: block;
@@ -676,6 +694,8 @@
   --wx-info-title: 16px;
   --wx-info-text: 14px;
   --wx-info-meta: 12px;
+  /* D1：成员/联系人网格头像尺寸（官方 ⚠️ 48px；消息流头像仍是 --wx-avatar 40px，两者语义不同）。 */
+  --wx-info-avatar: 48px;
   /* 搜索框：微信是**填充式灰底**、无描边。此前用 --nm-bg-input，
      而它在深浅两端的值与抽屉底色完全相同（#0f172a / #ffffff）→ 只剩一根 1px 描边，
      看起来不像输入框（审计 P1-2）。 */
@@ -752,15 +772,7 @@
 }
 .memberEmptyClear:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); color: var(--nm-text-1); }
 .memberEmptyClear:active { background: var(--nm-bg-active); }
-.groupInfoRow {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
-  padding: 13px 0;
-  border-top: 1px solid var(--nm-border);
-}
+
 .groupInfoRowValue {
   min-width: 0;
   font-size: var(--wx-info-text);
@@ -820,6 +832,12 @@
   border-top: 1px solid var(--nm-border);
   padding-top: 10px;
 }
+/* D2：长文本行改「标签一行、值占满下一行」（签名）。 */
+.memberProfileStack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
 /* ══════════════════════════════════════════════════════════════════
    消息右键菜单 —— 微信在消息上右键弹出的同款菜单。
    覆盖层透明、只负责吃掉外部点击与滚动关闭；菜单本体是定宽卡片，
@@ -871,3 +889,62 @@
 }
 .msgCtxItem:hover { background: var(--wx-ctx-hover); }
 .msgCtxItem:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* D0/D1（2026-10-13 微信对齐）：六区骨架的内容包与底部动作位。 */
+.groupZones { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.memberCount {
+  margin: 2px 0 6px;
+  font-size: var(--wx-info-meta, 12px);
+  color: var(--nm-text-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.groupInfoAnnMeta {
+  margin-top: 2px;
+  font-size: var(--wx-info-meta, 12px);
+  color: var(--nm-text-3);
+}
+.groupExport {
+  margin-top: auto;
+  padding-top: var(--nm-s-3, 12px);
+  border-top: 1px solid var(--nm-border);
+}
+.groupExportBtn {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill, 999px);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: var(--wx-info-text, 14px);
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+.groupExportBtn:hover { background: var(--nm-bg-hover); border-color: var(--nm-border-hover); }
+
+/* ── 手机档（≤560）：会话列表占满整栏，开会话后整块让位给消息流 ────────────────
+   `[data-has-session]` 用纯属性选择器的理由写在 chats-rows.module.css 末尾那段
+   （`.panel` 住在那一份里，在这份里写它会拿到另一个 hash ⇒ 选不中）。 */
+@media (max-width: 560px) {
+  .sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border: none; border-radius: 0; }
+  [data-has-session] .sidebar { display: none; }
+  /* 头部让出返回按钮的位置（那枚按钮绝对定位在左上角，样式在 chats-shell）。 */
+  .msgHeader { padding: 8px 10px; min-height: 48px; }
+  /* 长按菜单转底部 sheet。`left` / `top` 是内联 style（桌面端「点哪儿出哪儿」），
+     手机上必须 !important 才压得住；而按坐标出菜单在触摸上还有一笔算不清的账：
+     面板按 34px/项估高度，手机档每项 44px（触摸目标下限）⇒ 估少了，
+     菜单会溢出屏幕底部、最后几项点不到。贴底 + dvh 上界之后这两个问题一起没了
+     （不认 dvh 的老内核会丢掉这一条，落回基础规则里的 100vh 版本）。 */
+  .msgCtxMenu {
+    left: 8px !important;
+    right: 8px;
+    top: auto !important;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    min-width: 0;
+    max-height: calc(100dvh - 16px);
+    border-radius: var(--nm-r-lg);
+  }
+  /* 触摸目标下限 44px（与底部标签栏同口径）；改成 flex 才能把文字垂直居中。 */
+  .msgCtxItem { display: flex; align-items: center; min-height: 44px; }
+}

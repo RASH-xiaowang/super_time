@@ -24,7 +24,7 @@
  *   · `export-memory`：**801.5 秒**（其中一个用例就 572.8 秒），9 个里的 99.9%；
  *   · 其余 8 个合计：**11.3 秒**。
  *
- * 于是分成两档：8 个便宜的进 PR 门禁（11 秒，相对 26 分钟的单测可以忽略），
+ * 于是分成两档：18 个便宜的进 PR 门禁（2026-10-12 复测串行约 27 秒，相对 26 分钟的单测可以忽略），
  * 那个 13 分钟的进夜间档。如果按「重要性」分档而不是按耗时，就会出现两种坏结果之一：
  * 贵的那个把 PR 门禁顶爆，或者把便宜的和它捆在一起导致便宜的也进不了门禁。
  *
@@ -53,8 +53,27 @@ export const MEASURES = [
   { gate: 'MEASURE_N14', file: 'src/backend/wechat-data/tests/vector-status.measure.spec.ts', tier: 'quick' },
   { gate: 'MEASURE_N15', file: 'src/backend/wechat-data/tests/summary-run-due.measure.spec.ts', tier: 'quick' },
   { gate: 'MEASURE_XLSX_STREAM', file: 'src/backend/wechat-data/tests/xlsx-stream.measure.spec.ts', tier: 'quick' },
+  // W1 观测基线（2026-10-09 新增，合成数据，各约 1.5–2s）
+  { gate: 'MEASURE_SNS_MISS', file: 'src/backend/wechat-data/tests/sns-miss-cost.measure.spec.ts', tier: 'quick' },
+  { gate: 'MEASURE_MEDIA_RESOLVE', file: 'src/backend/wechat-data/tests/media-resolve-batch.measure.spec.ts', tier: 'quick' },
+  { gate: 'MEASURE_DECRYPT', file: 'src/backend/wechat-data/tests/decrypt-throughput.measure.spec.ts', tier: 'quick' },
   // 实测 801.5 秒（占九个里的 99.9%），单独一档
   { gate: 'MEASURE_EXPORT_MEMORY', file: 'src/backend/wechat-data/tests/export-memory.measure.spec.ts', tier: 'slow' },
+  // W2-5.6：朋友圈视频封面逐条 vs 批量。回答的是「批量化省在哪一段」——
+  // 月份少时 1.1×（瓶颈在整月扫 md5，已被按月索引摊掉），月份多时 25.7×（瓶颈在逐条重列月份根）。（实测 1.02s）
+  { gate: 'MEASURE_SNS_COVER', file: 'src/backend/wechat-data/tests/sns-cover-batch.measure.spec.ts', tier: 'quick' },
+  // W2-6.4：增量同步的代价随新增条数怎么长（决定「落后时要不要挪到后台」）。（实测 859ms）
+  { gate: 'MEASURE_INDEX_FRESH', file: 'src/backend/wechat-data/tests/index-freshness.measure.spec.ts', tier: 'quick' },
+  // W2-4.4：群洞察冷算 vs 签名命中（16 万条群消息：161.5ms → 0.003ms）。（实测 505ms）
+  { gate: 'MEASURE_GROUP_INSIGHTS', file: 'src/backend/wechat-data/tests/group-insights-cost.measure.spec.ts', tier: 'quick' },
+  // W2-3.5：消息分页的排序成本 —— (sort_seq, local_id) 覆盖索引 8~59×。（实测 448ms）
+  { gate: 'MEASURE_MSG_PAGE', file: 'src/backend/wechat-data/tests/messages-page-cost.measure.spec.ts', tier: 'quick' },
+  // W2-5.3：hardlink.db 开连接 / 重读 dir2id 只占端到端 0.26% ⇒ 长连接复用不成立。（实测 705ms）
+  { gate: 'MEASURE_HARDLINK_OPEN', file: 'src/backend/wechat-data/tests/hardlink-open-cost.measure.spec.ts', tier: 'quick' },
+  // W2-9.3：记录类长列表的 DOM 规模 ⇒ Ledger 半边前提不成立、Records 半边收益 30×。（实测 716ms）
+  { gate: 'MEASURE_LONGLIST', file: 'src/backend/wechat-data/tests/longlist-dom-cost.measure.spec.ts', tier: 'quick' },
+  // W2-10.2：头像逐张 vs 批量（200 个 = 34.18ms vs 6.15ms，5.6×）⇒ 组件侧攒批成立。（实测 261ms）
+  { gate: 'MEASURE_AVATAR_BATCH', file: 'src/backend/wechat-data/tests/avatar-batch-cost.measure.spec.ts', tier: 'quick' },
 ]
 
 const argv = process.argv.slice(2)

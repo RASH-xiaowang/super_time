@@ -6,7 +6,7 @@
  * 2026-09-30：出网拦截（`blockOutbound` / `blockMapTiles`）已随开关一起删除，
  * 这里只剩「敏感字段打码」一个设置位；历史上写过的那两行旧值不再被读取。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { dirname, join } from 'node:path'
 import type { PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot } from '../types.ts'
 

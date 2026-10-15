@@ -28,10 +28,8 @@ import React, { useState } from 'react'
 import { PRIVACY_VERSION } from './consent.ts'
 // 同意屏同样要能看到「有新版本可装」：更新是主进程的事，与走到哪一屏无关。
 // 这一屏没有设置弹窗，故不传 onOpenLicense。
-import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
+import { NoticeBanner } from '@deepseek-ai/dsh-client-ui-wechat/notice'
 // 与启动引导同一套观感：令牌在本屏被独占渲染时也必须存在（主面板此刻还没挂载）。
-import '../../ui-wechat/src/client/pages/wechat-data/scifi-theme.css'
-import '../../ui-wechat/src/client/pages/wechat-data/light-theme.css'
 import css from './PrivacyConsentGate.module.css'
 
 /** 网络面的开关性质：决定它拿到哪种标记、以及是否被琥珀色框圈起来。
@@ -130,10 +128,10 @@ const OUTBOUND: ReadonlyArray<SurfaceEntry> = [
 const INBOUND: ReadonlyArray<SurfaceEntry> = [
   {
     label: '局域网远程访问（手机端）',
-    text: '打开「设置 → 远程访问（手机）」后，本机在局域网里监听一个端口（默认 5032），你自己的手机可用浏览器访问同一套界面。访问必须持令牌，且只开放一份方法白名单 —— 模型 API Key、许可证、诊断、更新、备份还原、配置写入与全部原生能力（选目录、窗口控制、截图）都不开放',
+    text: '打开「设置 → 远程访问（手机）」后，本机在局域网里监听一个端口（默认 5032），你自己的手机可用浏览器访问同一套界面。访问用一次性配对码换取会话，且只开放一份方法白名单 —— 模型 API Key、许可证、诊断、更新、备份还原、配置写入与全部原生能力（选目录、窗口控制、截图）都不开放',
     host: '本机局域网 IPv4:5032（可在设置里改端口 / 关开关）',
     kind: 'off',
-    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到令牌与你查阅的数据。只在你信任的局域网里打开，用完就关。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则手机连不上。',
+    note: '⚠ 这条链路是明文 HTTP、没有 TLS：在公共 Wi-Fi 或被入侵的路由器下，同网段的人能嗅探到配对码与你查阅的数据（长期令牌不出本机）。只在你信任的局域网里打开，用完就关。应用没有管理员权限、不能替你加防火墙入站规则 —— 首次监听时请在 Windows 弹窗里选「允许」，否则手机连不上。',
   },
 ]
 
@@ -149,7 +147,7 @@ const CONTROLS: ReadonlyArray<{ label: string; text: string }> = [
   },
   {
     label: '远程访问（手机）',
-    text: '设置 → 远程访问（手机）：开关（默认关闭）、二维码与局域网地址、轮换令牌。关掉开关即停止监听，轮换令牌会让已连上的手机失效。',
+    text: '设置 → 远程访问（手机）：开关（默认关闭）、二维码与局域网地址、轮换令牌。关掉开关即停止监听，轮换令牌会让已连上的手机与未用配对码一起失效。',
   },
   {
     label: '重新审阅本声明',

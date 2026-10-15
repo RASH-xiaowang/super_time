@@ -13,7 +13,7 @@ import {
   formatBytes, layaAdoptModelDir, layaDownloadModel, layaModelStatus, layaModelsDir, layaTokenizerDir,
 } from '../laya/model-file.ts'
 import { resolveWhisperModelsDir, whisperEnginePath } from '../query/whisper.ts'
-import { transcribeOneVoice } from '../query/voice-transcribe.ts'
+import { transcribeOneVoiceAsync } from '../query/voice-transcribe.ts'
 import { layaRuntimeState, layaUnload } from '../laya/runtime.ts'
 import type { LayaAnalysisView, LayaDownloadOutcome, LayaDownloadProgress, LayaStatus } from '../types-laya.ts'
 import type { OperationCategory, OperationStatus } from '../types.ts'
@@ -34,6 +34,40 @@ export interface createLayaRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   selfUsername: () => string
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
+  /** W3-11.5：进度事件的出口（ Cordis Context 的 emit）。 */
+  ctx: () => { emit: (name: string, ...args: unknown[]) => void }
+  /**
+   * W3-11.5：逐条分析的取消槽（由 gateway 的 `_layaJobs` 提供）。
+   *
+   * 槽位为什么归 gateway：与问答取消（`remotes/ask-cancel.ts`）同一条纪律 ——
+   * 「谁持有取消令牌」不允许出现第二个出处。本模块只消费。
+   */
+  layaSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  cancelLayaJob: (jobId?: string) => boolean
+}
+
+/**
+ * 组装内联分析的语音转写器（2026-10-13 提成模块级：`createLayaRemotes` 有 250 行
+ * 只许变小棘轮，这段配置层知识放函数体会把它顶过登记值）。
+ * 异步实现：whisper 在子进程跑，worker 照常服务消息查询/会话列表（见 voice-transcribe.ts）。
+ * `talker` 即 `WechatSession.username`（会话微信 ID 的正名见 P3-6）。
+ */
+function makeLayaTranscriber(
+  rc: createLayaRemotesInputs,
+  decryptedDir: string,
+  decodedDir: string,
+  modelsDir: string,
+  whisperModel: string,
+  engine: string,
+  /** `talker` 即 `WechatSession.username`（会话微信 ID 的正名，P3-6）。 */
+  talker: string,
+): ((localId: number, serverId: string) => Promise<{ ok: boolean; text?: string; error?: string }>) | undefined {
+  if (engine === '') return undefined
+  return async (localId: number, _serverId: string) => {
+    const t = await transcribeOneVoiceAsync(decryptedDir, decodedDir, modelsDir,
+      whisperModel, engine, talker, localId)
+    return { ok: t.ok, text: t.text, error: t.error }
+  }
 }
 
 export function createLayaRemotes(rc: createLayaRemotesInputs) {
@@ -79,6 +113,8 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
       talker?: string
       targets?: Array<{ localId: number; sortSeq: number }>
+      /** 本批的进度标识（W3-11.5）：带上它才会推送 laya-analysis/progress 事件。 */
+      jobId?: string
     }): Promise<LayaVisibleAnalysisResult> {
       const talker = String(options.talker ?? '').trim()
       const rawTargets = Array.isArray(options.targets) ? options.targets : []
@@ -96,31 +132,69 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       const engine = whisperEnginePath(configBin, modelsDir)
       const whisperModel = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model']
         ? cfg['whisper_model'] : 'medium'
-      const transcribe = engine === ''
-        ? undefined
-        : (localId: number, _serverId: string): { ok: boolean; text?: string; error?: string } => {
-          const t = transcribeOneVoice(rc.dirs().decrypted, rc.dirs().decoded, modelsDir,
-            whisperModel, engine, talker, localId)
-          return { ok: t.ok, text: t.text, error: t.error }
-        }
+            // 异步转写（2026-10-13）：见 voice-transcribe.ts#transcribeOneVoiceAsync 的头注。
+      const transcribe = makeLayaTranscriber(rc, rc.dirs().decrypted, rc.dirs().decoded, modelsDir,
+        whisperModel, engine, talker)
 
-      const r = await runVisibleAnalysis({
-        decryptedDir: rc.dirs().decrypted,
-        decodedDir: rc.dirs().decoded,
-        talker,
-        selfUsername: rc.selfUsername(),
-        targets,
-        modelDir: dir || undefined,
-        transcribe,
-      })
+      // W3-11.5：进度事件（与 wechat-export/progress 同一套路：回调过不了 IPC，只能推）。
+      // 80ms 节流与问答增量同口径：一批最多 12 条，节流后最多十来个事件。
+      const jobId = typeof options.jobId === 'string' ? options.jobId.trim().slice(0, 64) : ''
+      let lastProgressAt = 0
+      const emitProgress = jobId === ''
+        ? undefined
+        : (done: number, total: number, currentLocalId: number): void => {
+            const now = Date.now()
+            if (done < total && now - lastProgressAt < 80) return
+            lastProgressAt = now
+            try {
+              rc.ctx().emit('laya-analysis/progress', { jobId, done, total, currentLocalId })
+            } catch { /* 事件 best-effort，绝不影响推理 */ }
+          }
+
+      // W3-11.5：取消。`finally` 里必须归还槽位 —— 否则同一个 jobId 会被永久占着，
+      // 之后点「停止」只会打到一枚没人等的控制器上（这条是照 `beginAskCancel` 的教训来的）。
+      const ctl = rc.layaSignal(jobId)
+      let r: LayaVisibleAnalysisResult
+      try {
+        r = await runVisibleAnalysis({
+          decryptedDir: rc.dirs().decrypted,
+          decodedDir: rc.dirs().decoded,
+          talker,
+          selfUsername: rc.selfUsername(),
+          targets,
+          modelDir: dir || undefined,
+          transcribe,
+          ...(emitProgress ? { onProgress: emitProgress } : {}),
+          ...(ctl ? { signal: ctl.signal } : {}),
+        })
+      } finally {
+        ctl?.done()
+      }
       const fresh = r.items.filter((i) => i.ok && !i.cached).length
       const voice = r.items.filter((i) => i.ok && i.fromVoice).length
       // 顺带记一笔「这一批推理一共花了多久」：每条的 `inferenceMs` 不含取上下文的时间，
       // 求和正好还原纯推理的墙钟（命中缓存的条目是 0）。性能排查时这条比条数有用。
       const inferMs = r.items.reduce((a, i) => a + (i.inferenceMs || 0), 0)
-      rc.op('task', 'analyze_visible_messages', r.ok ? 'ok' : 'fail', talker,
-        r.ok ? `${r.items.length} 条（新算 ${fresh}，语音 ${voice}，推理合计 ${inferMs}ms）` : (r.error ?? ''))
+      // 被取消记 `skip` 而不是 `fail`：用户主动停止不是失败（`OperationStatus` 里有这一档）。
+      rc.op('task', 'analyze_visible_messages', r.canceled === true ? 'skip' : (r.ok ? 'ok' : 'fail'), talker,
+        r.canceled === true
+          ? `已停止：算出 ${r.items.length}/${targets.length} 条（已落缓存）`
+          : (r.ok ? `${r.items.length} 条（新算 ${fresh}，语音 ${voice}，推理合计 ${inferMs}ms）` : (r.error ?? '')))
       return r
+    },
+
+    /**
+     * 停止一批正在跑的逐条分析（W3-11.5）。
+     *
+     * 找不到在跑的那批时返回 `{ok:false, message}` 而不是静默 true ——
+     * 用户点「停止分析」后必须知道停没停上；停不上的常见原因是那一批已经算完了（点晚了）。
+     */
+    cancelAnalysis(options: { jobId?: string }): { ok: boolean; message?: string } {
+      const id = typeof options?.jobId === 'string' ? options.jobId.trim() : ''
+      if (id === '') return { ok: false, message: '缺少任务标识' }
+      return rc.cancelLayaJob(id)
+        ? { ok: true }
+        : { ok: false, message: '这一批已经算完了（或标识不认识），无需停止' }
     },
 
     /** 模型与运行时状态（前端轮询）。 */
@@ -145,7 +219,7 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
      *
      * 下载源由宿主方托管（`DSH_WECHAT_LAYA_MIRROR` / `DSH_WECHAT_LAYA_REPO` 可覆盖）。
      */
-    async downloadLayaModel(): Promise<LayaDownloadOutcome> {
+    async downloadLayaModel(options?: { jobId?: string }): Promise<LayaDownloadOutcome> {
       if (layaDownload !== null) {
         rc.op('settings', 'download_laya_model', 'fail', '', '已有模型下载任务进行中')
         return { ok: false, error: '已有模型下载任务进行中' }
@@ -158,18 +232,44 @@ export function createLayaRemotes(rc: createLayaRemotesInputs) {
       const dir = existing.dir
       const prog: LayaDownloadProgress = { file: '', received: 0, total: 0 }
       layaDownload = prog
+      /**
+       * W2-11.5：取消令牌与逐条分析共用同一套槽（`gateway-core` 的 `_layaJobs`）。
+       *
+       * 复用而不是另开一个槽：这个下载最长的是 1.2 GB 那块，「点了停止却还要等下完」
+       * 是这条链路上唯一会真的让人等的事。**取不到槽时照常下载** —— 不带 jobId 的老调用方
+       * 行为必须完全不变（与导出那条纪律一致）。
+       */
+      const ctl = rc.layaSignal(options?.jobId)
       try {
         const r = await layaDownloadModel(dir, (received, total, file) => {
           prog.file = file
           prog.received = received
           prog.total = total
-        })
-        rc.op('settings', 'download_laya_model', r.ok ? 'ok' : 'fail', dir,
-          r.error ?? `已下载 ${formatBytes(r.bytes ?? 0)}`)
+        }, ctl?.signal)
+        rc.op('settings', 'download_laya_model',
+          r.canceled === true ? 'skip' : (r.ok ? 'ok' : 'fail'), dir,
+          r.canceled === true ? '用户取消' : (r.error ?? `已下载 ${formatBytes(r.bytes ?? 0)}`))
         return r
       } finally {
+        ctl?.done()
         layaDownload = null
       }
+    },
+
+    /**
+     * W2-11.5：取消正在进行的模型下载。
+     *
+     * 与 `cancelAnalysis` 共用同一个槽（`cancelLayaJob`）—— 「谁持有取消令牌」不允许
+     * 出现第二个出处。**不删 `.part`**：下次点击从断点续接。
+     * @param options - jobId。
+     * @returns 是否真的取消到一个在飞的任务。
+     */
+    cancelLayaDownload(options: { jobId?: string }): { ok: boolean; message?: string } {
+      const id = String(options?.jobId ?? '').trim()
+      if (id === '') return { ok: false, message: '缺少任务标识' }
+      const hit = rc.cancelLayaJob(id)
+      rc.op('settings', 'cancel_laya_download', hit ? 'ok' : 'fail', id, hit ? '已请求取消' : '没有该任务')
+      return hit ? { ok: true } : { ok: false, message: '没有该下载任务（可能已结束）' }
     },
 
     /** 接管一份用户已下好的模型目录（避免重复下载 1.26 GB）。 */

@@ -3,7 +3,7 @@
  * the decrypted message shard and record the original snapshot in
  * <wechat>/message_edits.db so the original can be restored.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'

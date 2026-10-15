@@ -1,8 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
- * **5 组**（概览与问答 / 报告与总结 / 会话与消息 / 联系人与社交 / 内容资产 /
- * 资金 / 洞察与行动 / 隐私与安全 / 维护与设置），侧栏可见 **16** 项 +
- * 底栏独立渲染的 `settings`，可路由页签共 **37**（其余 20 项 `hidden`，
+ * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
+ * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings`，可路由页签共 **38**（其余 20 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -17,42 +16,45 @@
  * 真机几何由 `scripts/nav-shell-e2e.mjs` 按「默认展开 → 点一下收起 → 再展开」的顺序验收。
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, subscribeApiStatus, type ApiStatus } from './api.ts'
+import { apiGetAvatar, apiGetSelfUsername, apiGetSessions, apiSearchUnified, checkApiHealth, getApiStatus, runtimeCapabilities, subscribeApiStatus, type ApiStatus } from './api.ts'
 import type { ChatTarget, ChatView } from './panels/Chats.tsx'
 
-// 面板统一静态导入；客户端插件加载器按单文件 factory 加载，不能分包。
-import { OverviewPanel } from './panels/Overview.tsx'
+// 内容面板按页签懒加载；常驻外壳（提醒、引导、全局搜索、余额）保持静态导入。
+import {
+  AnnualPanel,
+  AskPanel,
+  AssetInsightsPanel,
+  CallsPanel,
+  ChatsPanel,
+  ClawBotPanel,
+  ContactsPanel,
+  DailySummaryPanel,
+  EmoticonsPanel,
+  FavoritesPanel,
+  FilesPanel,
+  GraphPanel,
+  GroupInsightsPanel,
+  KbShell,
+  LedgerPanel,
+  MediaAssetsPanel,
+  MomentsInsightsPanel,
+  MomentsPanel,
+  MonitorPanel,
+  OfficialAssetsPanel,
+  OperationLogPanel,
+  OverviewPanel,
+  PeriodSummaryPanel,
+  PrivacyPanel,
+  RecordsPanel,
+  RevokedPanel,
+  SettingsPanelGate,
+  StoragePanel,
+  TasksPanel,
+} from './panel-loaders.tsx'
 import { NoticeBanner } from './panels/NoticeBanner.tsx'
 import { SetupGuide } from './panels/SetupGuide.tsx'
-import { PrivacyPanel } from './panels/Privacy.tsx'
-import { OperationLogPanel } from './panels/OperationLogPanel.tsx'
-import { AskPanel } from './panels/Ask.tsx'
-import { ChatsPanel } from './panels/Chats.tsx'
-import { ContactsPanel } from './panels/Contacts.tsx'
-import { MomentsPanel } from './panels/MomentsOptimized.tsx'
-import { FavoritesPanel } from './panels/Favorites.tsx'
-import { EmoticonsPanel } from './panels/Emoticons.tsx'
-import { FilesPanel } from './panels/Files.tsx'
-import { RecordsPanel } from './panels/Records.tsx'
-import { LedgerPanel } from './panels/Ledger.tsx'
-import { TasksPanel } from './panels/Tasks.tsx'
-import { GroupInsightsPanel } from './panels/GroupInsights.tsx'
-import { MomentsInsightsPanel } from './panels/MomentsInsights.tsx'
-import { AssetInsightsPanel } from './panels/AssetInsights.tsx'
-import { OfficialAssetsPanel } from './panels/OfficialAssets.tsx'
-import { MediaAssetsPanel } from './panels/MediaAssets.tsx'
-import { StoragePanel } from './panels/Storage.tsx'
-import { CallsPanel } from './panels/Calls.tsx'
-import { RevokedPanel } from './panels/Revoked.tsx'
-import { MonitorPanel } from './panels/Monitor.tsx'
-import { AnnualPanel } from './panels/Annual.tsx'
-import { DailySummaryPanel } from './panels/DailySummary.tsx'
-import { PeriodSummaryPanel } from './panels/PeriodSummary.tsx'
-import { GraphPanel } from './panels/Graph.tsx'
-import { SettingsPanel } from './panels/Settings.tsx'
 import { SidebarBalance } from './panels/SidebarBalance.tsx'
 import { MergedSections } from './panels/MergedSections.tsx'
-import { KbShell } from './panels/KbShell.tsx'
 import { setActiveKb } from './panels/kb-scope.ts'
 import css from './wechat-data.module.css'
 import kitCss from './ui/kit.module.css'
@@ -62,6 +64,8 @@ import { NAV_GROUPS, TAB_LABELS, type WechatTab } from './nav-config.ts'
 import { toggleThemeMode, useThemeMode, type ThemeMode } from './theme.ts'
 import { Dialog, Tooltip } from './ui/kit.tsx'
 import { ConfirmProvider } from './ui/confirm.tsx'
+import { MobileNavHost } from './ui/mobile-nav.tsx'
+import { useReleaseImagesOnTab } from './use-release-images-on-tab.ts'
 import { GlobalSearch } from './panels/global-search.tsx'
 import { SEARCH_QUERY_EVENT, searchQueryFromEvent } from './panels/search-events.ts'
 import gs from './panels/global-search.module.css'
@@ -341,6 +345,7 @@ function renderTab(
       />
     )
     case 'tasks': return <TasksPanel onOpenChat={onOpenChat} />
+    case 'clawbot': return <ClawBotPanel />
     case 'groupinsights':
     case 'monitor': return (
       <MergedSections
@@ -476,8 +481,7 @@ function SidebarFooter({
  * @returns the data panel element tree.
  */
 export function WechatDataPanel(): React.JSX.Element {
-  /** #settings / #privacytrust / #health 深链不再是主内容区的页签，而是直接打开弹窗并落到对应节。
- *  #privacy / #oplog 反过来：它们留在主内容区（只读数据视图），不再开弹窗。 */
+  /** #settings / #privacytrust / #health 深链直接开弹窗落节；#privacy / #oplog 反过来留主内容区（只读视图）不开弹窗。 */
   const initialHash = typeof location !== 'undefined' ? location.hash.replace('#', '') : ''
   const [active, setActiveState] = useState<WechatTab>(() => {
     return (initialHash in TAB_LABELS && !(initialHash in DIALOG_SECTION_OF) ? initialHash : 'overview') as WechatTab
@@ -519,6 +523,7 @@ export function WechatDataPanel(): React.JSX.Element {
   }, [updateNavMore, navOpen])
   const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null)
   const [momentAuthor, setMomentAuthor] = useState<string | null>(null)
+  useReleaseImagesOnTab(active, chatTarget?.username) // W3-10.1：切页签释放看不见的图片槽（语义表见 use-release-images-on-tab.ts）
   /**
    * 打开「数据配置」弹窗。
    *
@@ -729,7 +734,7 @@ export function WechatDataPanel(): React.JSX.Element {
           它只是指路 —— 配置动作仍在设置里那几节完成（点某一步即打开设置并落到该节）。
           设置弹窗打开时传 open=false，免得压在弹窗上。 */}
       <SetupGuide open={!settingsOpen} onOpenStep={(k) => { openSettings(k) }} />
-
+      <MobileNavHost active={active} onSelect={(t) => { setChatTarget(null); setMomentAuthor(null); setActive(t) }} onOpenSettings={() => { openSettings() }} />
       <div className={css.body}>
         <aside className={css.sidebar} data-open={navOpen || undefined}>
           {/* 品牌：头像 + 产品名（原顶栏左侧）。头像沿用原顶栏的品牌位实现
@@ -922,12 +927,12 @@ export function WechatDataPanel(): React.JSX.Element {
         title={(
           <span className={css.settingsDialogTitle}>
             设置
-            <span className={css.settingsDialogDesc}>配置向导 · 智能与隐私 · 授权与更新 · 维护与自检</span>
+            <span className={css.settingsDialogDesc}>{runtimeCapabilities().isBrowser ? '手机这一侧能看的只有数据边界 · 其余各节要在电脑上完成' : '配置向导 · 智能与隐私 · 授权与更新 · 维护与自检'}</span>
           </span>
         )}
       >
         <div className={css.settingsDialogBody}>
-          <SettingsPanel
+          <SettingsPanelGate
             inDialog
             initialSection={settingsSection}
             onNavigateOut={navigateFromDialog}

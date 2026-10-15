@@ -12,6 +12,7 @@ import { copyTextToClipboard } from '../utils/misc.ts'
 import type { useConfirm } from '../ui/confirm.tsx'
 import { apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiGetMessages, apiListEditedMessages, apiResetEditedMessage, readRenderCache, writeRenderCache } from '../api.ts'
 import { messagesMatchTalker } from './msg-scope.ts'
+import { useActionNotice } from './use-action-notice.tsx'
 import type { EditedMessageRecord, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsEditInputs {
@@ -40,6 +41,15 @@ const [editing, setEditing] = useState(false)
 const [editTarget, setEditTarget] = useState<WechatMessage | null>(null)
 const [editText, setEditText] = useState('')
 const [editErr, setEditErr] = useState<string | null>(null)
+/**
+ * 一次性动作反馈（W3-11.1）：清空草稿 / 复制 JSON / 恢复原文的**结果**。
+ *
+ * 为什么不用 `window.alert`：那是阻塞式原生弹窗 —— ① 会把整个窗口钉住，用户不点哪都去不了；
+ * ② 风格与其它面板的反馈不一致；③ 复制成功这种高频动作每点一次弹一次，是噪声。
+ * 与 `editErr` 的分工：`editErr` 是「保存失败」（对话框内的红色常驻），
+ * `editNotice` 是「这次操作成了 / 没成」的一句话结论（会自动消失）。
+ */
+const { notice: editNotice, flash: flashEditNotice } = useActionNotice()
 const [editBusy, setEditBusy] = useState(false)
 const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -139,9 +149,12 @@ const clearDraft = useCallback(async (): Promise<void> => {
   if (!ok) return
   try {
     const r = await apiClearSessionDraft({ username: curSession.username })
-    if (r.ok) reloadSessionsList()
-  } catch { /* keep view */ }
-}, [curSession, reloadSessionsList])
+    if (r.ok) { flashEditNotice('已清空该会话的草稿'); reloadSessionsList() }
+    else flashEditNotice('清空草稿失败：' + (r.error ?? '未知错误'))
+  } catch (e) {
+    flashEditNotice('清空草稿失败：' + (e as Error).message)
+  }
+}, [curSession, flashEditNotice, reloadSessionsList])
 
 const clearAllDrafts = useCallback(async (): Promise<void> => {
   const ok = await confirm({
@@ -152,12 +165,12 @@ const clearAllDrafts = useCallback(async (): Promise<void> => {
   if (!ok) return
   try {
     const r = await apiClearAllSessionDrafts()
-    window.alert(`已清空 ${r.count} 条草稿`)
+    flashEditNotice(`已清空 ${r.count} 条草稿`)
     reloadSessionsList()
   } catch (e) {
-    window.alert('清空失败: ' + (e as Error).message)
+    flashEditNotice('清空失败: ' + (e as Error).message)
   }
-}, [reloadSessionsList])
+}, [flashEditNotice, reloadSessionsList])
 
 const copyMsgJson = useCallback((m: WechatMessage): void => {
   try {
@@ -171,9 +184,9 @@ const copyMsgJson = useCallback((m: WechatMessage): void => {
       sender: m.sender ?? undefined,
       rich: m.rich ?? undefined,
     }, null, 2)
-    void copyTextToClipboard(json).then((ok) => { window.alert(ok ? '消息 JSON 已复制' : '复制失败') })
-  } catch { window.alert('复制失败') }
-}, [])
+    void copyTextToClipboard(json).then((ok) => { flashEditNotice(ok ? '消息 JSON 已复制' : '复制失败，请手动选中后复制') })
+  } catch { flashEditNotice('复制失败，请手动选中后复制') }
+}, [flashEditNotice])
 
 const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
   if (!curSession) return
@@ -187,14 +200,14 @@ const doReset = useCallback(async (rec: EditedMessageRecord): Promise<void> => {
   setEditing(true)
   try {
     const r = await apiResetEditedMessage({ username: rec.sessionId, localId: rec.localId })
-    if (!r.ok) window.alert('恢复失败: ' + (r.error ?? ''))
-    else { await reloadCurrent(); await loadEdits() }
+    if (!r.ok) flashEditNotice('恢复失败: ' + (r.error ?? ''))
+    else { flashEditNotice('已恢复为原始内容'); await reloadCurrent(); await loadEdits() }
   } catch (e) {
-    window.alert('恢复失败: ' + (e as Error).message)
+    flashEditNotice('恢复失败: ' + (e as Error).message)
   } finally {
     setEditing(false)
   }
-}, [curSession, reloadCurrent, loadEdits])
+}, [curSession, flashEditNotice, reloadCurrent, loadEdits])
 
 // ── message search (A7) ──
 const [searchMode, setSearchMode] = useState<'session' | 'message'>('session')
@@ -212,5 +225,5 @@ const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; m: WechatMessage;
  * 右键菜单）也一起收起，避免残留指向上一个会话的内容。
  * @param next - the category to switch to.
  */
-  return { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode }
+  return { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editNotice, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode }
 }

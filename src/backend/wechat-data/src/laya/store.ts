@@ -13,7 +13,7 @@
  *
  * **写失败一律不影响主流程**：缓存是加速手段，读不到就当作未命中、写不进就下次再算。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../query/db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { LayaAnswer } from './runtime.ts'

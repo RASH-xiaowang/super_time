@@ -80,8 +80,9 @@ describe('隐私体检：落地态完整且与后端一致', () => {
   })
 
   it('范围数字来自总览缓存而不是新发一次重查询', () => {
-    expect(panel).toContain('dsh-wechat-overview-base-v1')
-    expect(panel).toContain('dsh-wechat-overview-insights-v1')
+    // Privacy.tsx 现在引用共享键常量；值本身由 overview-cache-keys.ts 的唯一真源维护。
+    expect(panel).toContain('CACHE_BASE')
+    expect(panel).toContain('CACHE_INSIGHTS')
     // 读缓存必须容错：缓存缺失/损坏时要退化成只说范围，不能让面板崩掉
     expect(panel).toMatch(/function readScope\(\)[\s\S]*?catch\s*\{/)
   })

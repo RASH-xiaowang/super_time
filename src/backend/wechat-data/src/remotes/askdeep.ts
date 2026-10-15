@@ -6,6 +6,7 @@
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
 import { formatAskContext, parseAskOptimize, parseAskPlan, parseCitedIndexes, retrieveAskCitations } from '../query/ask.ts'
+import { beginAskCancel, cancelAskIn } from './ask-cancel.ts'
 import { auditGrounding, groundingRepairHint } from '../query/grounding.ts'
 import { buildKbVectorIndex, kbVectorIndexStatus } from '../query/kb-vectors.ts'
 import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts'
@@ -13,10 +14,11 @@ import { loadRetrievalConfig } from '../query/retrieval/config.ts'
 import { EmbedFn, buildVectorIndex, vectorIndexStatus } from '../query/retrieval/embedding.ts'
 import { loadAdaptedWeights } from '../query/retrieval/feedback.ts'
 import { citationDocKey } from '../query/retrieval/kb-channel.ts'
-import { runRetrievalPipeline } from '../query/retrieval/pipeline.ts'
+import { runRetrievalPipeline, type PipelineOutput } from '../query/retrieval/pipeline.ts'
 import { IntentKind, RerankWeights } from '../query/retrieval/types.ts'
 import { ensureSearchIndex } from '../query/search.ts'
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts'
+import { VectorBuildResult } from '../types-retrieval.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -70,8 +72,11 @@ export interface createAskDeepRemotesInputs {
   kbModel: (kbId: number, role: KbModelRole) => ResolvedModel
   askKnownEntities: () => string[]
   saveAskHistory: (options: { question: string; username?: string; from?: string; to?: string; source?: string; usernameName?: string }, result: AskResult, elapsedMs: number, model: string) => void
+  /** W3-6.1：取本轮问答的取消信号（gateway 持有槽位）。 */
+  askSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  /** W3-6.1：取消一轮问答；找不到在跑的那一轮时返回 false。 */
+  cancelAskJob: (jobId?: string) => boolean
 }
-
 export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
   return {
     async askWechat(options: {
@@ -97,10 +102,19 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
        * 而不是把别的库的内容也端上来。
        */
       kbId?: number
+      jobId?: string
     }): Promise<AskResult> {
-      const ctx = rc.ctx()
-      /** 端到端耗时基准（提问 → 回答生成结束），写进历史记录供用户回看时判断快慢。 */
-      const askStartedAt = Date.now()
+      // W3-6.1：取消整块在 remotes/ask-cancel.ts（令牌 / 阶段检查 / 槽位归还 / cancelAsk）。
+      // 没有 jobId（旧客户端）时不可取消，行为与改动前逐字一致。
+      // ⚠ 只能调一次 beginAskCancel：它在槽位表里注册一枚控制器，调两次会让第二枚覆盖第一枚，
+      //   于是 run() 用的是第一枚、throwIfCanceled 读的是第二枚 —— 取消看似生效、槽位却永不归还
+      //   （ask-cancel.spec.ts 第 ⑤ 条「对已结束轮次取消必须返回 false」钉的正是这个）。
+      const askCtl = beginAskCancel(rc, options.jobId)
+      const throwIfCanceled = askCtl.throwIfCanceled
+      return await askCtl.run(async (): Promise<AskResult> => {
+        const ctx = rc.ctx()
+        /** 端到端耗时基准（提问 → 回答生成结束），写进历史记录供用户回看时判断快慢。 */
+        const askStartedAt = Date.now()
       const defaultModel = (ctx as unknown as {
         agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
       }).agentDefaultModel
@@ -153,6 +167,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         let acc = ''
         let emitted = false
         for await (const chunk of llm.stream(opts)) {
+          throwIfCanceled()
           assembler.push(chunk)
           const c = chunk as { type?: string; text?: string }
           if (onDelta && c.type === 'text-delta' && typeof c.text === 'string') {
@@ -202,23 +217,19 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         plan = { intent: '（规划失败，直接检索原问题）', subQueries: options.question.trim() ? [options.question.trim()] : [], from: '', to: '', person: '' }
         rc.op('task', 'ask_wechat', 'fail', 'intent_plan', (e as Error).message)
       }
+      // W3-6.1：规划走 runChat（循环里已查取消），这里只补「规划之后」这个阶段边界。
+      throwIfCanceled()
 
-      // ── 第 2 步：多词召回 → 打分排序 → 展开成对话窗口（chunk 级 RAG 检索）──
-      // 自建 BM25 索引是「相关度排序」的前提：没有它就得退回 LIKE 扫描，
-      // 每个词只能看到按行号倒序的前 20 条（实测 `合同` 全库 4062 条 → 召回率 0.49%）。
-      // 全量构建实测 5.4s / 13.5 万条，因此首次提问时自动建一次。
-      //
-      // **关键（本轮修）**：只有「首次构建」是不够的。「索引存在且版本对」跟「索引里有
-      // 没有今天刚聊的消息」是两件事 —— 微信是持续写入的，而构建完就不再更新，于是索引
-      // 会**永久**停在构建那一刻。实测生产索引 built_at=2026-09-13、库内最新消息 09-11，
-      // 而消息分片里已经有 09-18 的对话（09-17 一天 139 条）：问「今天聊了啥」时当天数据
-      // 根本不在检索空间里，BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月），
-      // 这就是「回复内容不正确 + 消息列表冒出其他日期」的根源。
-      // `ensureSearchIndex` 因此分两种情形：缺失/版本不符 → 全量构建；只是落后 →
-      // 按分片水位线增量补录（代价与新增条数同阶，实测毫秒级）。
+      // W2-6.4：全量构建挪到后台（实测 13.5 万条 5.4s，不该让这一问干等）；
+      // 落后于分片的增量同步**照旧等**（实测最坏 25.6ms，而不等就会用旧索引作答，
+      // 那正是这段代码当初要修的那个 bug）。
+      let indexNote = ''
       try {
-        const ensured = await ensureSearchIndex(rc.dirs().decrypted)
-        if (ensured.action === 'build') {
+        const ensured = await ensureSearchIndex(rc.dirs().decrypted, { background: true })
+        if (ensured.action === 'deferred' && ensured.message !== undefined) {
+          indexNote = ensured.message
+          rc.op('task', 'ask_wechat', 'ok', 'build_index', '检索索引后台构建已开跑 · 本轮用旧索引')
+        } else if (ensured.action === 'build') {
           rc.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引全量构建 · ${ensured.rows ?? 0} 条 · ${ensured.elapsed_ms}ms`)
         } else if (ensured.action === 'sync') {
           rc.op('task', 'ask_wechat', 'ok', 'build_index', `检索索引增量同步 · 新增 ${ensured.added ?? 0} 条 · ${ensured.elapsed_ms}ms`)
@@ -229,6 +240,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         // 索引不可用不阻断提问：退回 LIKE 召回（准确率低但可用）
         rc.op('task', 'ask_wechat', 'fail', 'build_index', (e as Error).message)
       }
+      throwIfCanceled()
       // ── 第 2 步：多阶段检索 ──
       // 顺序：意图路由 → 查询改写 → 混合召回（稀疏 BM25 + 稠密向量 + 结构化）→
       //       RRF 融合去重 → 交叉特征重排 → 上下文压缩。
@@ -252,6 +264,9 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         intent?: string; denseActive?: boolean; elapsedMs?: number
         channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
         funnel?: { recalled: number; fused: number; ranked: number }
+        // W3-6.3精排是否真的用上（独立字段，前端不必再 parse basis 文本）。
+        rerank?: { used: boolean; candidates: number; kept: number; model?: string; note?: string }
+  indexNote?: string
       } = {
         candidates: 0, kept: 0, scope: scopeDescText, recency: false,
         timeHint: '', hintHits: 0, chunks: 0, windowMessages: 0,
@@ -283,7 +298,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       if (retrConfig.enabled) {
         try {
         // 稠密通道是**新增的出网点**：embedding 调用统一过隐私闸门（见 makeEmbedFn），
-        // 未配置 / 被「出站拦截」时抛错，流水线自动降级为纯稀疏，不影响问答可用性。
+        // 未配置向量模型时抛错，流水线自动降级为纯稀疏，不影响问答可用性。
         // 模型名只解析**一次**并复用：`makeEmbedFn` 发出去的是它，向量库记的也是它。
         // （此前两边各算一遍，这边算出 `'default'`、那边发的是 llm.json 的值 —— 见 §7 F1。）
         const embedModel = rc.embedModelName(retrConfig.embedding.model)
@@ -377,21 +392,8 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
         terms = out.terms
         rankedFeatures = out.rankedFeatures
         retrievalId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-        statsCompat = {
-          candidates: out.stats.recalled,
-          kept: out.stats.kept,
-          scope: scopeDescText,
-          recency: out.stats.recency,
-          timeHint: out.stats.timeHint,
-          hintHits: out.stats.hintHits,
-          chunks: out.stats.compressed,
-          windowMessages: out.stats.windowMessages,
-          intent: out.stats.intent,
-          denseActive: out.stats.denseActive,
-          elapsedMs: out.stats.elapsedMs,
-          channels: out.stats.channels.map(c => ({ channel: c.channel, count: c.count, active: c.active, ...(c.note ? { note: c.note } : {}) })),
-          funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked },
-        }
+        // W3-6.3：组装整块搪去模块级函数（工厂受函数体椚轮管，只许变小）。
+        statsCompat = askRetrievalCompat(out, scopeDescText, indexNote)
         rc.op('task', 'ask_wechat', 'ok', 'route',
           `意图 ${out.stats.intent} · 通道[${out.stats.channels.map(c => `${c.channel}:${c.count}${c.active ? '' : '(off)'}`).join(' ')}] · 召回 ${out.stats.recalled} → 融合 ${out.stats.fused} → 重排 ${out.stats.ranked} → 窗口 ${out.stats.compressed} · ${out.stats.elapsedMs}ms`)
         } catch (e) {
@@ -424,6 +426,7 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           retrieval: {
             candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
             recency: statsCompat.recency, chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
+            ...(indexNote === '' ? {} : { indexNote }),
           },
         }
         rc.saveAskHistory(options, emptyResult, Date.now() - askStartedAt, modelLabel)
@@ -593,6 +596,8 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
           candidates: statsCompat.candidates, kept: statsCompat.kept, scope: statsCompat.scope,
           recency: statsCompat.recency, timeHint: statsCompat.timeHint, hintHits: statsCompat.hintHits,
           chunks: statsCompat.chunks, windowMessages: statsCompat.windowMessages,
+          // W2-6.4：索引正在后台建 ⇒ 这一轮的检索空间不是最新的，明说。
+          ...(indexNote === '' ? {} : { indexNote }),
           ...(statsCompat.intent ? { intent: statsCompat.intent } : {}),
           ...(statsCompat.denseActive !== undefined ? { denseActive: statsCompat.denseActive } : {}),
           ...(statsCompat.channels ? { channels: statsCompat.channels } : {}),
@@ -605,7 +610,10 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       // best-effort：存历史失败绝不能把已经生成好的回答变成一次报错。
       rc.saveAskHistory(options, result, Date.now() - askStartedAt, modelLabel)
       return result
+      })
     },
+
+    cancelAsk: (options: { jobId: string }): { ok: boolean; message?: string } => cancelAskIn(rc, options),
 
     async optimizeAskQuestion(options: {
       question: string
@@ -614,46 +622,10 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
       to?: string
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
     }): Promise<AskOptimizeResult> {
-      const ctx = rc.ctx()
-      const question = String(options?.question || '').trim()
-      if (!question) throw new Error('请先输入问题，再进行优化')
-      const defaultModel = (ctx as unknown as {
-        agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
-      }).agentDefaultModel
-      const sel = defaultModel?.currentSelection()
-      if (!sel || !sel.provider || !sel.model) {
-        rc.op('task', 'ask_optimize', 'fail', '', '未配置默认模型（agentDefaultModel）')
-        throw new Error('未配置默认模型（agentDefaultModel），无法优化提问')
-      }
-      const scopeDesc = `会话=${options.username || '全部'}${options.from ? `，起始=${options.from}` : ''}${options.to ? `，截止=${options.to}` : ''}`
-      const history = (Array.isArray(options.history) ? options.history : [])
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .slice(-6)
-      const historyBrief = history.length > 0
-        ? '\n最近对话背景：\n' + history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content.slice(0, 200)).join('\n')
-        : ''
-      const prompt = `用户原始问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
-      const [optimizeGated] = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])
-      const assembler = new BlockAssembler()
-      const opts: GenerateOptions = {
-        provider: sel.provider,
-        model: sel.model,
-        messages: [createUserMessage({
-          content: [{ type: 'text', text: optimizeGated ?? prompt }],
-          source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-        })],
-        system: '你是微信聊天记录的提问优化器。把用户问题改写得更清晰、更利于全文检索（保留原意，补充隐含的时间/对象等限定，去掉口语口水词），并给出至多 3 条具体的改进建议。只输出一行 JSON：{"optimized":"优化后的问题","suggestions":["建议1","建议2"]}',
-        maxTokens: 512,
-      }
-      for await (const chunk of ctx.llm.stream(opts)) assembler.push(chunk)
-      const text = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-      const parsed = parseAskOptimize(text)
-      const optimized = parsed.optimized || text.slice(0, 300)
-      rc.op('task', 'ask_optimize', 'ok', '', optimized.slice(0, 80))
-      return { optimized, suggestions: parsed.suggestions }
+      return optimizeAskQuestionIn(rc, options)
     },
 
-    async buildRagVectorIndex(options?: { force?: boolean }): Promise<{ ok: boolean; status: string; rows: number; embedded: number; elapsed_ms: number; message?: string }> {
+    async buildRagVectorIndex(options?: { force?: boolean }): Promise<VectorBuildResult> {
       const cfg = loadRetrievalConfig(rc.dirs().decrypted)
       const embedModel = rc.embedModelName()
       const embedFn = rc.makeEmbedFn(embedModel)
@@ -678,4 +650,106 @@ export function createAskDeepRemotes(rc: createAskDeepRemotesInputs) {
     },
 
   }
+}
+
+
+/**
+ * 提问优化（W3-6.1 从 createAskDeepRemotes 里搬出）。
+ *
+ * 搬家的原因不是它写得不好，而是 `createAskDeepRemotes` 受函数体棘轮管着（登记 607 行，
+ * 只许变小）—— 而它恰好是整个工厂里最独立的一件：不依赖任何闭包，只用 `rc`。
+ * 与 `remotes/ask-cancel.ts` 同属「给工厂腾地方」的结构刀。
+ */
+/**
+ * 把流水线的统计结果组装成对外 `retrieval` 的形状（W3-6.3 从 createAskDeepRemotes 里搪出）。
+ *
+ * 搪家原因与 `optimizeAskQuestionIn` 同族：工厂受函数体椚轮管着（只许变小）。
+ * 组装本身不依赖任何闭包，抽出来还能被用例直接验（不必造一个完整问答）。
+ *
+ * 两个口径写在这里而不是散在调用点：
+ *  · `rerankInfo` 是**判别联合**：`used:false` 那一支没有 candidates/kept（根本没跑精排，
+ *    没有「候选」可数）。读的时候给 0 —— 否则界面会显示成「候选 undefined → 取 undefined」，
+ *    而 `model`/`note` 两个键也必须按分支取。
+ *  · 通道名称直接向外（UI 按这个字段选标签），不在这里翻译。
+ */
+function askRetrievalCompat(
+  out: PipelineOutput,
+  scopeDescText: string,  indexNote = '',
+
+): {
+  candidates: number; kept: number; scope: string; recency: boolean
+  timeHint: string; hintHits: number; chunks: number; windowMessages: number
+  intent?: string; denseActive?: boolean; elapsedMs?: number
+  channels?: Array<{ channel: string; count: number; active: boolean; note?: string }>
+  funnel?: { recalled: number; fused: number; ranked: number }
+  rerank?: { used: boolean; candidates: number; kept: number; model?: string; note?: string }
+} {
+  return {
+    candidates: out.stats.recalled,
+    kept: out.stats.kept,
+    scope: scopeDescText,
+    recency: out.stats.recency,
+    timeHint: out.stats.timeHint,
+    hintHits: out.stats.hintHits,
+    chunks: out.stats.compressed,
+    windowMessages: out.stats.windowMessages,
+    intent: out.stats.intent,
+    denseActive: out.stats.denseActive,
+    elapsedMs: out.stats.elapsedMs,
+    channels: out.stats.channels.map(c => ({ channel: c.channel, count: c.count, active: c.active, ...(c.note ? { note: c.note } : {}) })),
+    funnel: { recalled: out.stats.recalled, fused: out.stats.fused, ranked: out.stats.ranked },
+    rerank: {
+      used: out.rerankInfo.used,
+      candidates: out.rerankInfo.used ? out.rerankInfo.candidates : 0,
+      kept: out.rerankInfo.used ? out.rerankInfo.kept : 0,
+      ...(out.rerankInfo.used && out.rerankInfo.model ? { model: out.rerankInfo.model } : {}),
+      ...(!out.rerankInfo.used && out.rerankInfo.note ? { note: out.rerankInfo.note } : {}),
+    },
+  }
+}
+
+async function optimizeAskQuestionIn(rc: createAskDeepRemotesInputs, options: {
+question: string
+username?: string
+from?: string
+to?: string
+history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    }): Promise<AskOptimizeResult> {
+const ctx = rc.ctx()
+const question = String(options?.question || '').trim()
+if (!question) throw new Error('请先输入问题，再进行优化')
+const defaultModel = (ctx as unknown as {
+  agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } }
+}).agentDefaultModel
+const sel = defaultModel?.currentSelection()
+if (!sel || !sel.provider || !sel.model) {
+  rc.op('task', 'ask_optimize', 'fail', '', '未配置默认模型（agentDefaultModel）')
+  throw new Error('未配置默认模型（agentDefaultModel），无法优化提问')
+}
+const scopeDesc = `会话=${options.username || '全部'}${options.from ? `，起始=${options.from}` : ''}${options.to ? `，截止=${options.to}` : ''}`
+const history = (Array.isArray(options.history) ? options.history : [])
+  .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+  .slice(-6)
+const historyBrief = history.length > 0
+  ? '\n最近对话背景：\n' + history.map(m => (m.role === 'user' ? '用户：' : '助手：') + m.content.slice(0, 200)).join('\n')
+  : ''
+const prompt = `用户原始问题：${question}\n当前检索范围：${scopeDesc}${historyBrief}\n\n请输出 JSON（不要输出其他内容）。`
+const [optimizeGated] = rc.privacyGate('ask_optimize', { sessions: 0, messages: 0 }, [prompt])
+const assembler = new BlockAssembler()
+const opts: GenerateOptions = {
+  provider: sel.provider,
+  model: sel.model,
+  messages: [createUserMessage({
+    content: [{ type: 'text', text: optimizeGated ?? prompt }],
+    source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
+  })],
+  system: '你是微信聊天记录的提问优化器。把用户问题改写得更清晰、更利于全文检索（保留原意，补充隐含的时间/对象等限定，去掉口语口水词），并给出至多 3 条具体的改进建议。只输出一行 JSON：{"optimized":"优化后的问题","suggestions":["建议1","建议2"]}',
+  maxTokens: 512,
+}
+for await (const chunk of ctx.llm.stream(opts)) assembler.push(chunk)
+const text = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+const parsed = parseAskOptimize(text)
+const optimized = parsed.optimized || text.slice(0, 300)
+rc.op('task', 'ask_optimize', 'ok', '', optimized.slice(0, 80))
+return { optimized, suggestions: parsed.suggestions }
 }

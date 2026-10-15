@@ -1,0 +1,28 @@
+{
+  "generatedBy": "scripts/sync-remote-files.mjs",
+  "gatewayClassFiles": [
+    "gateway-core.ts",
+    "gateway-read.ts",
+    "gateway-ask-ops.ts",
+    "gateway-media-ops.ts",
+    "gateway-export-ops.ts",
+    "gateway-voice-ops.ts",
+    "gateway-config-ops.ts",
+    "gateway-laya-ops.ts",
+    "gateway-db-health.ts",
+    "gateway-clawbot.ts",
+    "gateway.ts"
+  ],
+  "gatewayApiFiles": [
+    "api.ts",
+    "api-core.ts",
+    "api-read.ts",
+    "api-kb.ts",
+    "api-search.ts",
+    "api-media.ts",
+    "api-export-ops.ts",
+    "api-config.ts",
+    "api-status.ts",
+    "api-clawbot.ts"
+  ]
+}

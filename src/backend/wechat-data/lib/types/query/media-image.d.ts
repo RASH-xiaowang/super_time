@@ -1,5 +1,7 @@
-import { type WxgfTranscoder } from './wxam-image.ts';
+import { type WxgfTranscoder, type WxgfTranscodeResult } from './wxam-image.ts';
 export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts';
+/** Msg_<md5(username)> table name for a talker. */
+export declare function msgTableName(username: string): string;
 /**
  * Extract the 32-char hex image MD5 from a packed_info protobuf value.
  * Accepts a raw BLOB, or the st_control comma-separated byte-list TEXT form.
@@ -59,6 +61,25 @@ export declare function detectImageFormat(header: Uint8Array): string;
  * @returns the XOR key byte, or null when no magic matches.
  */
 export declare function detectXorKey(data: Uint8Array): number | null;
+/** `.dat` 解密后的形态：`wxgf` 标记表示还需要转码才能渲染。 */
+export type DecodeDatPayload = {
+    bytes: Uint8Array;
+    format: 'wxgf';
+} | {
+    bytes: Uint8Array;
+    format: string;
+} | {
+    error: string;
+};
+/** Decrypt raw .dat bytes (XOR / V1 / V2) without running a wxgf transcoder. */
+export declare function decodeDatPayload(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number): DecodeDatPayload;
+/** 把转码产物按实际魔数收口；失败降级为 hevc（与改造前行为一致）。 */
+export declare function renderWxgfTranscode(decrypted: Uint8Array, t: WxgfTranscodeResult): {
+    bytes: Uint8Array;
+    format: string;
+} | {
+    error: string;
+};
 /**
  * Decode raw .dat bytes (XOR / V1 / V2).
  * @param data - raw .dat file bytes.
@@ -75,6 +96,27 @@ export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | st
 } | {
     error: string;
 };
+/** Renderable image extensions (decoded cache). */
+export declare const RENDERABLE_EXTS: string[];
+/**
+ * 读一个目录下的解码缓存。**两个槽位**：
+ *   `<md5>.<ext>`   = 本机最好的一份（原图，或 `getImageOriginal` 取回的那一份）
+ *   `<md5>.t.<ext>` = 缩略/中图兜底（`_t.dat` / `_h.dat` 解出来的）
+ *
+ * 分成两个名字是 2026-09-20 修的缺陷：原先只有一个槽位，**谁先解出来谁永久占住**，
+ * 于是缩略图一旦先缓存，用户之后在微信里点开的原图（attach 里多出一个大得多的 .dat）
+ * 就再也读不到 —— 实测 106 条缓存里 35 条本机已有 2 倍以上大的 .dat（31 条大 8 倍以上），
+ * 症状正是「我明明在微信里看过原图，这里还是糊的」。
+ *
+ * @param dir - 缓存目录（全局槽或按用户名的槽）。
+ * @param md5 - 图片 md5（`packed_info_data` 那份）。
+ * @returns 带 data URL 的结果（缩略槽命中时多一个 `thumb: true`），未命中返回 null。
+ */
+export declare function cachedImage(dir: string, md5: string): {
+    url?: string;
+    format?: string;
+    thumb?: boolean;
+} | null;
 /**
  * 清掉一张图的全部解码缓存（两个槽位都删）。
  * @param decodedDir - 解码缓存根。
@@ -83,6 +125,27 @@ export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | st
  * @returns 删掉的条目数。
  */
 export declare function clearDecodedImageCache(decodedDir: string, username: string, md5: string): number;
+/**
+ * 读「已解码缓存」里的一份：按给定扩展名顺序找 `<md5>.<ext>`，读到就转 data URL。
+ *
+ * 为什么抽出来（P3-5）：`decodeFileImageDataUrl` 与 `decodeEmoticonDataUrl` 各自抄了一遍
+ * 「拼路径 → existsSync → readFileSync → toDataUrl → 读失败返回错误串」，只有扩展名表与
+ * 错误前缀不同。抄两遍的实际代价是**失败语义会走样**：一处把读失败当成"未命中就继续找下一张"，
+ * 另一处当成"直接报错" —— 界面上都像"图没显示"，只有日志分得清。
+ * @param dir - decoded 缓存根目录。
+ * @param md5 - 图片/表情 md5（已归一小写）。
+ * @param exts - 扩展名顺序（第一个就是"最好的一份"）。
+ * @param failNote - 读失败时的错误前缀（调用方各自的措辞留在这里，不改口径）。
+ * @returns 命中 `{ hit }`；读失败 `{ error }`；一张都没有 `null`（"未找到"怎么说由调用方定）。
+ */
+export declare function probeDecodedCache(dir: string, md5: string, exts: readonly string[], failNote: string): {
+    hit: {
+        url: string;
+        format: string;
+    };
+} | {
+    error: string;
+} | null;
 /**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
@@ -186,6 +249,14 @@ export declare function datTierOf(path: string): DatTier;
 export declare function datTierRank(path: string): number;
 /** 该档位是否只配进「缩略兜底槽」（`_t` 与更差的 `_b` 都不该占住「本机最好的一份」）。 */
 export declare function isThumbTier(path: string): boolean;
+/**
+ * Write a decoded image into the cache so later lookups hit instantly.
+ * @param thumb - true 表示这是 `_t`/`_h` 解出来的缩略/中图，写进 `<md5>.t.<ext>` 兜底槽，
+ *   不占「本机最好的一份」那个槽（否则原图后到也会被永久遮蔽，见 `cachedImage`）。
+ */
+export declare function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array, thumb?: boolean): void;
+/** Recursively find .dat files whose name starts with the image MD5. */
+export declare function findDatFiles(attachRoot: string, fileMd5: string): string[];
 /**
  * **一次**查询解析多张图的 .dat 路径（N16）。
  *

@@ -294,7 +294,7 @@ export declare abstract class GatewayRead extends GatewayCore {
      */
     openPath(options: {
         path: string;
-    }, signal: AbortSignal): Promise<{
+    }, signal?: AbortSignal): Promise<{
         ok: boolean;
         path: string;
         error?: string;
@@ -316,7 +316,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     transcribeVoiceMessage(options: {
         username: string;
         localId: number;
-    }): VoiceTranscribeOneResult;
+    }): Promise<VoiceTranscribeOneResult>;
     /**
      * Delete favorite items by local_id.
      * @param options - ids of the favorite items to delete.
@@ -325,7 +325,6 @@ export declare abstract class GatewayRead extends GatewayCore {
     deleteFavoriteItems(options: {
         ids: number[];
     }): DeleteFavoriteResult;
-    /**
     /**
      * 年度回顾（看板）：15 张卡片所需的完整年度聚合。
      * 「人物类」指标只算我发出的（real_sender_id 归属），「规模类」算全部消息。

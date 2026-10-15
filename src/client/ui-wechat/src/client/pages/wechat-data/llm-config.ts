@@ -15,6 +15,8 @@
  * `AiModelConfig.tsx` 的说明。
  */
 
+import llmDefaults from '../../../../../../shared/llm-defaults.json'
+
 /** 微信问答模型配置（OpenAI 兼容）。 */
 export interface WechatLlmConfig {
   provider: string
@@ -71,8 +73,8 @@ export interface LlmModelsResult {
 
 /** 读取当前生效的模型配置（走主进程 IPC）。 */
 export async function apiGetLlmConfig(): Promise<WechatLlmConfig> {
-  const api = (window as any)?.electronAPI?.wechat
-  if (!api?.getLlmConfig) return { provider: 'openai-compat', model: '', apiKey: '', apiUrl: 'https://api.openai.com/v1', apiPath: '/chat/completions', embedPath: '/embeddings', embeddingApiUrl: '', embeddingApiKey: '', rerankModel: '', rerankPath: '/rerank', rerankApiUrl: '', rerankApiKey: '', rerankTimeoutMs: 20000, timeoutMs: 120000 }
+  const api = window.electronAPI?.wechat
+  if (!api?.getLlmConfig) return { ...llmDefaults }
   const res = await api.getLlmConfig()
   if (!res?.ok) throw new Error(res?.error?.message || '读取模型配置失败')
   return res.value
@@ -80,7 +82,7 @@ export async function apiGetLlmConfig(): Promise<WechatLlmConfig> {
 
 /** 保存当前生效的模型配置（表单提交；后端会同步更新「使用中的那条」配置）。 */
 export async function apiSaveLlmConfig(config: WechatLlmConfig): Promise<WechatLlmConfig> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.saveLlmConfig) throw new Error('模型配置接口不可用')
   const res = await api.saveLlmConfig(config)
   if (!res?.ok) throw new Error(res?.error?.message || '保存模型配置失败')
@@ -94,7 +96,7 @@ export async function apiSaveLlmConfig(config: WechatLlmConfig): Promise<WechatL
  * 所以这里**永远至少返回一条**（只要那份配置有模型名或 Key）。
  */
 export async function apiGetLlmProfiles(): Promise<LlmProfilesSnapshot> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.getLlmProfiles) throw new Error('模型配置集接口不可用')
   const res = await api.getLlmProfiles()
   if (!res?.ok) throw new Error(res?.error?.message || '读取已保存的模型配置失败')
@@ -107,7 +109,7 @@ export async function apiGetLlmProfiles(): Promise<LlmProfilesSnapshot> {
  * @returns 切换后的完整快照。
  */
 export async function apiActivateLlmProfile(id: string): Promise<LlmProfilesSnapshot> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.activateLlmProfile) throw new Error('模型配置集接口不可用')
   const res = await api.activateLlmProfile(id)
   if (!res?.ok) throw new Error(res?.error?.message || '切换模型配置失败')
@@ -125,7 +127,7 @@ export async function apiSaveLlmProfile(options: {
   config?: WechatLlmConfig
   activate?: boolean
 }): Promise<LlmProfilesSnapshot> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.saveLlmProfile) throw new Error('模型配置集接口不可用')
   const res = await api.saveLlmProfile(options)
   if (!res?.ok) throw new Error(res?.error?.message || '保存模型配置失败')
@@ -134,7 +136,7 @@ export async function apiSaveLlmProfile(options: {
 
 /** 删除一条已保存的配置（只剩一条时后端会拒绝；删到使用中的那条会自动切到最近使用的一条）。 */
 export async function apiDeleteLlmProfile(id: string): Promise<LlmProfilesSnapshot> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.deleteLlmProfile) throw new Error('模型配置集接口不可用')
   const res = await api.deleteLlmProfile(id)
   if (!res?.ok) throw new Error(res?.error?.message || '删除模型配置失败')
@@ -149,7 +151,7 @@ export async function apiDeleteLlmProfile(id: string): Promise<LlmProfilesSnapsh
  * @returns 模型名列表 + 来源标记。
  */
 export async function apiFetchLlmModels(options: { apiUrl: string; apiKey: string }): Promise<LlmModelsResult> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.listLlmModels) throw new Error('模型列表接口不可用')
   const res = await api.listLlmModels({ baseUrl: options.apiUrl, apiKey: options.apiKey })
   if (!res?.ok) throw new Error(res?.error?.message || '获取模型列表失败')
@@ -191,7 +193,7 @@ export async function apiTestLlmConnection(options: {
   path?: string
   model?: string
 }): Promise<LlmConnectionProbe> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.testLlmConnection) throw new Error('连接测试接口不可用')
   const res = await api.testLlmConnection({
     baseUrl: options.apiUrl,
@@ -236,7 +238,7 @@ export interface LlmBalance {
  * @returns 归一化后的余额。
  */
 export async function apiGetLlmBalance(options: { apiUrl: string; apiKey: string }): Promise<LlmBalance> {
-  const api = (window as any)?.electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api?.getLlmBalance) throw new Error('余额查询接口不可用')
   const res = await api.getLlmBalance({ baseUrl: options.apiUrl, apiKey: options.apiKey })
   if (!res?.ok) throw new Error(res?.error?.message || '余额查询失败')

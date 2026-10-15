@@ -14,14 +14,20 @@
  *
  * ## 为什么这里不直接上 zod
  *
- * 生成的 `wechat-data/lib/typert.host.js` 里每个方法都有完整 zod schema，但它们
- * **从来没被执行过**（`.parse`/`.safeParse` 全仓 0 次），也就是说「schema 与今天
- * 真实的调用形状对不对得上」这件事没有任何证据。拿没有证据的东西去拒绝真实流量，
- * 结果不会是「更安全」，会是「某个面板今天开始报错」。所以本模块分两档：
+ * 生成的 `wechat-data/lib/typert.host.js` 里带 schema 的条目**长期落后**于 `@Remote`
+ * 声明，且 invocation 表本身也不完整；即使 `checkSchema` 现在会执行 `safeParse`，
+ * 它得到的仍只是影子账 —— 「schema 与今天真实的调用形状对不对得上」还没有可信证据。
+ * 拿没有证据的东西去拒绝真实流量，结果不会是「更安全」，会是「某个面板今天开始报错」。
+ * 所以本模块分两档：
  *   ① **硬拒**（这里）：结构、类型、深度、体积 —— 只拒「任何 sane 的面板都不会这样」的量级，
  *      上界刻意放宽（见 `ARG_LIMITS` 的注释），避免误伤真实调用；
  *   ② **影子记账**（`observe` / `noteSchema`）：每次调用记下「这个方法实际传了多大、
- *      schema 判不判得过」。有了这份实测账，①的上界才能收紧、②才能升级成硬拒。
+ *      schema 判不判得过」。有了这份实测账，①的上界才能收紧；②**不自动升级成硬拒**，
+ *      只有宿主层的显式白名单（`ENFORCED_SCHEMA_METHODS`）可以打开硬拒。
+ *
+ * 为什么 ② 不能靠「连续通过几次」自动升级：`typert.host.js` 是仓库外的生成器产物，
+ * 长期落后于 `@Remote` 声明。连续三次见过同一种合法形状，并不能证明 stale schema
+ * 覆盖了该方法的全部合法形状；之后出现一个还没见过的合法变体就会被误拒。
  *
  * @remote 参数的实际校验发生在 `wechat-host.js` 的 `call()` 里，那里是本模块唯一的调用方。
  */
@@ -189,22 +195,20 @@ function noteSchema(method, reason) {
  * 影子账本快照（导出给 `info()` 与诊断日志，不参与放行判定）。
  * @param {number} covered - 有 schema 的方法数。
  * @param {number} total - `@Remote` 方法总数。
+ * @param {Set<string>} [enforced] - 宿主层显式打开硬拒的方法集合（这里只读，不在守卫内升级）。
  * @returns {{covered:number, total:number, uncovered:number, enforced:string[], mismatched:string[], largest:Array<{method:string, maxBytes:number}>}}
  */
-function snapshot(covered, total) {
+function snapshot(covered, total, enforced) {
   const mismatched = [...schemaIssues.entries()]
     .filter(([, reason]) => typeof reason === 'string')
     .map(([method]) => method)
     .sort();
-  const enforced = [...schemaIssues.entries()]
-    .filter(([, reason]) => reason === null)
-    .map(([method]) => method)
-    .sort();
+  const enforcedNames = [...(enforced ?? [])].sort();
   const largest = [...ledger.entries()]
     .map(([method, v]) => ({ method, maxBytes: v.maxBytes }))
     .sort((a, b) => b.maxBytes - a.maxBytes)
     .slice(0, 10);
-  return { covered, total, uncovered: Math.max(0, total - covered), enforced, mismatched, largest };
+  return { covered, total, uncovered: Math.max(0, total - covered), enforced: enforcedNames, mismatched, largest };
 }
 
 /**

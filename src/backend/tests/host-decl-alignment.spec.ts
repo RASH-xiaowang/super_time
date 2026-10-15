@@ -1,9 +1,9 @@
 /**
- * N32 第十一步：宿主 JS 的两份**手写** `.d.ts` 必须与实现双向对齐。
+ * N32 第十一步：宿主 JS 的每份**手写** `.d.ts` 必须与实现双向对齐。
  *
  * ## 为什么这条守卫比声明文件本身更重要
  *
- * `wechat-paths.js` / `update.js` 的声明是手写的（沿用 `llm-retry.d.ts` 那条路）。
+ * `wechat-paths.js` / `update.js` 等声明是手写的（沿用 `llm-retry.d.ts` 那条路）。
  * 手写声明的价值全在「它说的是实话」，而它坏掉的方式有两种，且**都不会让 tsc 报错**：
  *
  *   ① **漏一个导出** —— 那个成员在 TS 侧就是不存在。用它的地方会报 TS2305，看着像「用错了」，
@@ -37,8 +37,18 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 /** 一个宿主模块：JS 是实现，d.ts 是声明。 */
 const MODULES = [
-  { name: 'wechat-paths.js', impl: 'wechat-paths.js', decl: 'wechat-paths.d.ts' },
-  { name: 'update.js', impl: 'update.js', decl: 'update.d.ts' },
+  { name: 'wechat-paths.js', impl: 'wechat-paths.js', decl: 'wechat-paths.d.ts', minExports: 4 },
+  { name: 'update.js', impl: 'update.js', decl: 'update.d.ts', minExports: 4 },
+  { name: 'llm-bridge.js', impl: 'llm-bridge.js', decl: 'llm-bridge.d.ts', minExports: 4 },
+  { name: 'llm-http.js', impl: 'llm-http.js', decl: 'llm-http.d.ts', minExports: 4 },
+  { name: 'main-debug-automation.js', impl: 'main-debug-automation.js', decl: 'main-debug-automation.d.ts', minExports: 4 },
+  { name: 'wechat-args-guard.js', impl: 'wechat-args-guard.js', decl: 'wechat-args-guard.d.ts', minExports: 11 },
+  { name: 'atomic-json.js', impl: 'atomic-json.js', decl: 'atomic-json.d.ts', minExports: 4 },
+  // 这个模块目前只公开工厂一个成员；下限单列，避免把「缺一个导出」藏进宽松的最小值。
+  { name: 'llm-config-store.js', impl: 'llm-config-store.js', decl: 'llm-config-store.d.ts', minExports: 1 },
+  { name: 'backend-supervisor.js', impl: 'backend-supervisor.js', decl: 'backend-supervisor.d.ts', minExports: 4 },
+  { name: 'wechat-host.js', impl: 'wechat-host.js', decl: 'wechat-host.d.ts', minExports: 5 },
+  { name: 'http-server.js', impl: 'http-server.js', decl: 'http-server.d.ts', minExports: 10 },
 ] as const
 
 /**
@@ -78,9 +88,9 @@ describe('宿主层手写 .d.ts 与实现对齐（N32 收尾）', () => {
     it(`${m.name} 的导出与 ${m.decl} 的声明双向无差集`, () => {
       const js = jsExports(readFileSync(join(HERE, '..', m.impl), 'utf8'))
       const dts = declValueExports(readFileSync(join(HERE, '..', m.decl), 'utf8'))
-      // 防空转：两边都不许是空的（解析口径一坏就同时变空，差集「为空」就成了恒真）
-      expect(js.length, `从 ${m.name} 一个导出都没解析出来 —— 解析口径失效`).toBeGreaterThan(3)
-      expect(dts.length, `从 ${m.decl} 一个值导出都没解析出来 —— 声明文件的写法变了？`).toBeGreaterThan(3)
+      // 防空转：两边都至少达到各自登记的成员数（解析口径一坏就同时变空，差集「为空」就成了恒真）
+      expect(js.length, `从 ${m.name} 解析出的导出少于 ${m.minExports} 个 —— 解析口径失效`).toBeGreaterThanOrEqual(m.minExports)
+      expect(dts.length, `从 ${m.decl} 解析出的值导出少于 ${m.minExports} 个 —— 声明文件的写法变了？`).toBeGreaterThanOrEqual(m.minExports)
       expect(dts.filter((n) => !js.includes(n)), '声明里有、实现里却没有（发明成员或改了名没同步）').toEqual([])
       expect(js.filter((n) => !dts.includes(n)), '实现导出了、声明里却没有（地图缺一块）').toEqual([])
     })

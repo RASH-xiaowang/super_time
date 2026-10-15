@@ -48,7 +48,7 @@ worker → 主进程（backend-rpc）→  throw 被包成 msg.error.message，�
 | `ARGS_COUNT` | 一次调用参数个数超上界 |
 | `ARGS_DEPTH` | 嵌套超过层数上界 |
 | `ARGS_CYCLE` | 循环引用 |
-| `ARGS_SCHEMA` | 与该方法登记的结构不符（`noteSchema` 的漂移记录，用于发现"前端传的形状悄悄变了"） |
+| `ARGS_SCHEMA` | 与该方法登记的生成 schema 不符；白名单内的方法在执行前硬拒，白名单外只记进 `info().argGuard.mismatched` |
 
 ## 4. 业务载荷里的 `code` 字段（不是错误通道）
 

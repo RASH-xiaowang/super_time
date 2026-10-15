@@ -21,10 +21,11 @@ const SRC = join(PKG, 'src')
 
 /** 委托标记：类里的每个包装都必须转给对应协作者。 */
 const DELEGATES = [
-  'privacyGateAt(',
+  'privacyGateAt(', 'redactModeAt(',
   'embedModelNameOf(', 'globalModelNameOf(', 'kbModelOf(',
   'makeEmbedFnOf(', 'makeChatAskerOf(', 'makeRerankFnOf(',
   'streamControlFor(', 'finishStreamJobIn(', 'summaryScheduler().runDue()',
+  'jobSignalFor(', 'cancelJobIn(',
 ] as const
 
 /**
@@ -40,6 +41,9 @@ const IMPLEMENTATION_MARKS = [
   'keys().next()', 'this._streamJobs.set(', 'delete job.error',
   // 第七刀：摘要调度的三件实现细节（拼时刻、记错误日志、并发上限），只该住在 `gateway-scheduler.ts` 里
   "padStart(2, '0')", 'summary_scheduler_error', 'DUE_SUMMARY_CONCURRENCY',
+  // 第六个协作者：五类可取消任务与下载只借 `jobSignalFor` / `cancelJobIn`，
+  // AbortController 的创建与打断必须待在 gateway-job-signals.ts。
+  'new AbortController()', '.abort()',
 ] as const
 
 /** 不在「域 accessor ↔ 槽键」一一映射里的合法槽键（新增要写理由）。 */
@@ -64,10 +68,11 @@ const FS_TOKENS = [
 
 /** 每个协作者必须导出的入口（按声明文本查；改名会同时撞坏该模块自己的判据）。 */
 const EXPORTS: ReadonlyArray<[string, readonly string[]]> = [
-  ['gateway-privacy.ts', ['privacyGateAt']],
+  ['gateway-privacy.ts', ['privacyGateAt', 'redactModeAt']],
   ['gateway-models.ts', ['embedModelNameOf', 'globalModelNameOf', 'kbModelOf']],
   ['gateway-llm-factory.ts', ['makeEmbedFnOf', 'makeChatAskerOf', 'makeRerankFnOf']],
   ['gateway-jobs.ts', ['streamControlFor', 'finishStreamJobIn']],
+  ['gateway-job-signals.ts', ['jobSignalFor', 'cancelJobIn']],
   ['gateway-scheduler.ts', ['createSummaryScheduler', 'dueSummaryTaskIds']],
   ['query/image-warm.ts', ['warmDecodedImages']],
 ]
@@ -91,7 +96,7 @@ describe('#20 的装配面', () => {
       expect(existsSync(abs), `少了 ${f}`).toBe(true)
       const text = readFileSync(abs, 'utf8')
       for (const n of names) {
-        expect(text, `${f} 里没有 export function ${n} —— 委托给类的那一侧会跟着一起塌`).toContain(`export function ${n}(`)
+        expect(text, `${f} 里没有 export (async )?function ${n} —— 委托给类的那一侧会跟着一起塌`).toMatch(new RegExp(`export (?:async )?function ${n}\\(`))
       }
     }
   })

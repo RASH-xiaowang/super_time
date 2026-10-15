@@ -33,6 +33,7 @@ import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { useKbScope } from './kb-scope.ts'
 import { AskHistoryDialog } from './AskHistoryDialog.tsx'
 import { useAskSession, type AskTurn } from './use-ask.ts'
+import { AskPending } from './ask-pending.tsx'
 import { auditAnswerGrounding, groundingWarning } from './utils/grounding.ts'
 import { citeTarget, type CiteItem } from './cite-target.ts'
 import css from './ask.module.css'
@@ -265,7 +266,11 @@ const CH_LABEL: Record<string, string> = { sparse: '稀疏', dense: '稠密', st
  *
  * 为什么值得占一行：用户判断答案可信度时最想知道「系统听懂了没有 / 检索到没有」。
  * 意图 + 各通道命中数 + 召回→窗口漏斗 + 耗时，四段信息一眼可读；
- * 稠密通道被降级（未配置 embedding / 被出站拦截）时显式告警，避免「以为在用向量检索」。
+ * 稠密通道被降级（未配置向量模型 / 向量索引未就绪 / 该意图本轮不走稠密）时显式告警，
+ * 避免「以为在用向量检索」。
+ *
+ * ⚠ 文案口径：2026-09-30 应用内出网开关整体移除，此前那句「或『出站拦截』已开启」
+ * 已不可能成立（该分支不存在了），留着就是把不存在的机制说给用户听。
  * @param props.retrieval - 后端返回的检索统计。
  * @returns 漏斗行（无统计时不渲染）。
  */
@@ -282,9 +287,31 @@ export function RetrMeta({ retrieval }: { retrieval?: AskResult['retrieval'] }):
       {chans && <span className={rcss.retrChip}>{chans}</span>}
       {f && <span className={rcss.retrChip}>召回 {f.recalled} → 融合 {f.fused} → 重排 {f.ranked} → 窗口 {retrieval.chunks ?? 0}</span>}
       {typeof retrieval.elapsedMs === 'number' && <span className={rcss.retrChip}>{retrieval.elapsedMs}ms</span>}
+      {/* W3-6.3：精排是否真的用上。这是独立字段（后端 retrieval.rerank），
+          不再从 basis 文本里 parse —— 那句话是给人读的，不适合当数据源。 */}
+      {retrieval.rerank && (
+        <span
+          className={`${rcss.retrChip}${retrieval.rerank.used ? '' : ` ${rcss.retrWarn}`}`}
+          title={retrieval.rerank.used
+            ? `由 ${retrieval.rerank.model || '模型'} 精排：候选 ${retrieval.rerank.candidates} → 取 ${retrieval.rerank.kept}`
+            : (retrieval.rerank.note ?? '本次未启用精排，排序由本机加权给出')}
+        >
+          {retrieval.rerank.used
+            ? `精排 ${retrieval.rerank.model || ''} ${retrieval.rerank.candidates}→${retrieval.rerank.kept}`
+            : '精排未启用（本机加权）'}
+        </span>
+      )}
       {retrieval.denseActive === false && (
-        <span className={`${rcss.retrChip} ${rcss.retrWarn}`} title="未配置向量模型、向量索引未就绪，或「出站拦截」已开启 → 本次仅用本机稀疏检索">
+        <span className={`${rcss.retrChip} ${rcss.retrWarn}`} title="未配置向量模型、向量索引未就绪，或本次意图不走稠密通道 → 本次仅用本机稀疏与结构化检索">
           稠密通道未生效（纯稀疏）
+        </span>
+      )}
+      {/* W2-6.4：检索索引正在后台建。这一轮用的还是建之前的索引，
+          所以这不是「某个通道弱」，而是「检索空间本身不是最新的」——
+          所以单开一个 chip 并用告警色调，混进通道说明里会被读成通道坏了。 */}
+      {retrieval.indexNote && (
+        <span className={`${rcss.retrChip} ${rcss.retrWarn}`} title={retrieval.indexNote}>
+          索引更新中
         </span>
       )}
     </div>
@@ -366,7 +393,18 @@ export function AnswerFeedback({ turn, patch }: {
       })
       patch({ feedback: rating, ...(marks ? { marks } : {}) })
       setMarking(false)
-      setNote(r.adaptedWeights ? '已记录 · 检索权重已更新' : (r.message || '已记录'))
+      /**
+       * W3-6.5：把「累计反馈次数」说出来。
+       *
+       * 为什么不是一句机械的「已记录」：用户点完赞踩，最想知道的就是
+       * 「我这么多次点评到底改变了什么」。只说权重已更新，他看不出累计，
+       * 也就无从判断自己的点评到底没没用。
+       * `feedbackTotal` 含刚刚这一条（后端 `all.length`）。
+       */
+      const n = typeof r.feedbackTotal === 'number' ? r.feedbackTotal : null
+      setNote(r.adaptedWeights && n !== null && n > 0
+        ? `已记录 · 排序已按你的 ${n} 次反馈调整`
+        : (r.adaptedWeights ? '已记录 · 检索权重已更新' : (r.message || '已记录')))
     } catch (e) {
       setNote('提交失败：' + (e as Error).message)
     } finally {
@@ -491,7 +529,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
     ? (sessions.find(s => s.username === scopeUsername)?.displayName || scopeUsername)
     : ''
   /** 多轮对话状态（turns/asking/streamText/error）统一由问答 hook 提供。 */
-  const { turns, asking, streamText, error, ask: askSession, reset: resetThread, patchTurn, clearError } = useAskSession({
+  const { turns, asking, streamText, error, ask: askSession, cancel: cancelSession, reset: resetThread, patchTurn, clearError } = useAskSession({
     ...(scopeUsername ? { scopeUsername } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
@@ -807,25 +845,7 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
                   </div>
                 )
               ))}
-              {asking && (
-                streamText
-                  // 流式：已经有增量了就直接展示正在生成的正文（尾部光标表示「还在写」），
-                  // 不再显示「正在分析…」——那句话在这时已经过时了。
-                  ? (
-                    <div className={css.chatAi}>
-                      <div className={css.chatAnswer} data-streaming>
-                        {streamText}
-                        <span className={css.streamCaret} aria-hidden="true" />
-                      </div>
-                    </div>
-                  )
-                  : (
-                    <div className={css.chatPending}>
-                      <span className={css.chatDots} />
-                      正在分析问题意图 → 检索本机记录 → 综合生成回答…
-                    </div>
-                  )
-              )}
+              {asking && <AskPending streamText={streamText} onStop={cancelSession} />}
             </div>
           )}
         </div>

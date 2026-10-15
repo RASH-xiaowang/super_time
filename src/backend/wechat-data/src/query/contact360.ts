@@ -4,7 +4,7 @@
  * shared groups. All reads are defensive against WeChat 4.x schema drift.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Contact360Group, Contact360Snapshot } from '../types.ts'

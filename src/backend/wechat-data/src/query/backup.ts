@@ -4,7 +4,7 @@
  * create writes an AES-256-GCM `.wcb` bundle (scrypt key, HMAC-authenticated
  * header, per-file IVs) that restoreBackup decrypts back to a directory.
  */
-import { closeSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from 'node:crypto'
 import { StreamWriter, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
@@ -19,6 +19,51 @@ const VERSION = 1
 /** Backup root dir: sibling of the decrypted dir. */
 function backupDir(decryptedDir: string): string {
   return join(dirname(decryptedDir), 'backups')
+}
+/** 恢复前要求的**绝对**余量下限：即便明文很小，也要留这么多给系统与后续操作。 */
+const RESTORE_HEADROOM_MIN = 64 * 1024 * 1024
+/** 恢复前要求的**比例**余量：明文越大，留给系统与后续操作的比例余量也越大。 */
+const RESTORE_HEADROOM_RATIO = 0.1
+
+/**
+ * 恢复前的磁盘空间预检（W2-8.4）。
+ *
+ * ## 为什么要有
+ *
+ * 恢复是「读一个 .wcb、解密、把明文整份写出来」，空间需求 = 备份里所有分片的明文字节和。
+ * 原来这件事一次都不查，于是空间不够时的失败形态是：解到第 N 个分片，
+ * `writeFileSync` 抛 ENOSPC —— 用户已经等了（scrypt + 逐块解密都不便宜），
+ * 磁盘上却躺着一个半截的 `.restored` 目录，而且**报错文案只有 errno**，
+ * 没人知道「差多少」。头里本来就记着每个分片的明文字节数，
+ * 所以这件事完全可以在**一个字节都不写**之前说清楚。
+ *
+ * ## 两条不许省的性质
+ *
+ * ① `statfsSync` 自己失败时**放行**。个别文件系统/权限组合下它会 `EPERM`；
+ *    预检的目的是「少踩坑」，不是变成一个新的阻塞点 —— 因为预检失败就把
+ *    恢复功能整个堵死，比不预检更糟。
+ * ② 余量要**大于**明文本身（64MB 与 10% 取大者）。恢复出来的目录不是终点：
+ *    用户下一步通常要拿它当数据根用，系统本身也要空间。
+ *
+ * @param dir - 备份所在目录（恢复出来的目录与它同盘，所以按它算剩余空间）。
+ * @param plainBytes - 这次恢复要落盘的明文总字节数。
+ * @returns ok=false 时带一句可读的 `error`（含需要多少、还剩多少）。
+ */
+function ensureRestoreSpace(dir: string, plainBytes: number): { ok: boolean; error?: string } {
+  const need = plainBytes + Math.max(RESTORE_HEADROOM_MIN, Math.ceil(plainBytes * RESTORE_HEADROOM_RATIO))
+  let free: number
+  try {
+    const st = statfsSync(dir)
+    free = Number(st.bavail) * Number(st.bsize)
+  } catch {
+    return { ok: true }
+  }
+  if (free >= need) return { ok: true }
+  const gb = (n: number): string => (n / 1024 ** 3).toFixed(1)
+  return {
+    ok: false,
+    error: `磁盘空间不足：本次恢复要写入约 ${gb(plainBytes)} GB 明文，连同余量需要约 ${gb(need)} GB，当前只剩 ${gb(free)} GB。未写入任何文件。`,
+  }
 }
 
 function skipName(name: string): boolean {
@@ -332,6 +377,15 @@ export function restoreEncryptedBackup(decryptedDir: string, name: string, passw
     const expect = createHmac('sha256', key).update(headerBuf).digest()
     if (!mac.equals(expect)) return { ok: false, error: '密码错误或文件被篡改' }
     const header = JSON.parse(headerBuf.toString('utf8')) as { files: Array<{ name: string; size: number; iv: string }> }
+    // W2-8.4：预检放在这里，两个位置都不能挪 ——
+    //   ① 必须在**密码校验之后**：否则用户密码打错了却看到「磁盘空间不足」，
+    //      会被引到完全错误的方向上去查；
+    //   ② 必须在**解密写盘之前**：.wcb 头里已经记着每个分片的明文字节数，
+    //      所以不必解密也知道要落多少盘；等解到一半才发现 ENOSPC，
+    //      用户白等一场，磁盘上还留着一个半截目录。
+    const plainBytes = header.files.reduce((n, f) => n + (Number(f.size) || 0), 0)
+    const space = ensureRestoreSpace(dir, plainBytes)
+    if (!space.ok) return { ok: false, error: space.error }
     for (const f of header.files) {
       const iv = Buffer.from(f.iv, 'base64')
       const cipherText = readExactFd(fd, f.size)

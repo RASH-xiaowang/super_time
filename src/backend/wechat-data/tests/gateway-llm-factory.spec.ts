@@ -14,6 +14,9 @@
  * @vitest-environment node
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { LlmFactoryDeps } from '../src/gateway-llm-factory.ts'
 import { EXTRACT_SYSTEM, makeChatAskerOf, makeEmbedFnOf, makeRerankFnOf } from '../src/gateway-llm-factory.ts'
 import type { ResolvedModel } from '../src/query/kb/model-config.ts'
@@ -26,6 +29,15 @@ const calls: { gate: Array<{ feature: string; stats: unknown; texts: string[] }>
 /** 假闸门返回的文本；闸门现在只返回 `string[]`（永不拦截）。 */
 let gateReturn: string[] = []
 
+/**
+ * 每个用例一个空数据根（W3-6.2）。
+ *
+ * 注意那一层 `decrypted/`：`retrievalRoot()` 取的是解密目录的**父目录**，缓存与
+ * `wechat_search.db` 同级。直接拿 mkdtemp 的结果当解密目录，缓存会落到系统临时根目录里
+* 被所有用例共享 —— 那正是本文件最初三个用例集体转红的原因。
+ */
+let cacheDir = join(mkdtempSync(join(tmpdir(), 'llm-factory-')), 'decrypted')
+
 function deps(over: Partial<LlmFactoryDeps> = {}): LlmFactoryDeps {
   return {
     llm: {},
@@ -35,6 +47,8 @@ function deps(over: Partial<LlmFactoryDeps> = {}): LlmFactoryDeps {
       calls.gate.push({ feature, stats, texts })
       return gateReturn
     },
+    decryptedDir: () => cacheDir,
+    redactMode: () => false,
     ...over,
   }
 }
@@ -48,6 +62,9 @@ function sentText(opts: unknown): string {
 beforeEach(() => {
   calls.gate = []
   gateReturn = []
+  // W3-6.2：每个用例换一个空数据根。缓存在进程内按路径缓存句柄，
+  // 换路径等于换缓存 —— 否则「上一个用例发过的同一句话」会让本用例的桥一次都收不到。
+  cacheDir = join(mkdtempSync(join(tmpdir(), 'llm-factory-')), 'decrypted')
 })
 
 describe('makeEmbedFnOf：embedding 走与 chat 同一道闸', () => {
@@ -74,9 +91,12 @@ describe('makeEmbedFnOf：embedding 走与 chat 同一道闸', () => {
 
   it('审计的功能名必须原样带过去（三种数据范围分不开 = 用户只对其中一类给过同意也看不出来）', async () => {
     const embed = vi.fn(async (_texts: string[], _opts?: { model?: string }): Promise<number[][]> => [[0]])
-    gateReturn = ['x']
-    for (const feature of ['ask_embed', 'kb_embed', 'kb_link_suggest'] as const) {
-      await makeEmbedFnOf(deps({ llm: { embed } }), '', feature)!(['x'])
+    // W3-6.2：三段各用**各自的文本**。原来三段发的是同一句 `x`，加上落盘缓存之后
+    // 第二三段会直接命中（同一段文本的向量与功能名无关），闸门就不再被调用 ——
+    // 那测的就不是「功能名原样带过去」了。跨功能的缓存命中单独在 embed-cache.spec.ts 里钉。
+    for (const [i, feature] of (['ask_embed', 'kb_embed', 'kb_link_suggest'] as const).entries()) {
+      gateReturn = ['x' + i]
+      await makeEmbedFnOf(deps({ llm: { embed } }), '', feature)!(['text-' + i])
     }
     expect(calls.gate.map((g) => g.feature)).toEqual(['ask_embed', 'kb_embed', 'kb_link_suggest'])
     expect(calls.gate.every((g) => (g.stats as { messages: number }).messages === 1), '条数没按实际批量记').toBe(true)

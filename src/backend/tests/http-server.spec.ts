@@ -24,6 +24,7 @@
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,13 +33,25 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const require = createRequire(import.meta.url)
-const { createRemoteAccessServer } = require(join(ROOT, 'src', 'backend', 'http-server.js')) as {
+const { createAuthLimiter, createRemoteAccessServer, REQUEST_TIMEOUT_MS, isHostAllowed, lanAddresses } = require(join(ROOT, 'src', 'backend', 'http-server.js')) as {
+  createAuthLimiter: () => {
+    ok: (ip: string) => boolean
+    fail: (ip: string) => void
+    succeed: (ip: string) => void
+    reset: () => void
+  }
   createRemoteAccessServer: (deps: {
     getDataRoot: () => string
     getUiDistDir: () => string
     gatedCall: (method: string, args: unknown[]) => Promise<unknown>
     appVersion: string
     bindHost?: string
+    authLimiter?: {
+      ok: (ip: string) => boolean
+      fail: (ip: string) => void
+      succeed: (ip: string) => void
+      reset: () => void
+    }
     log?: (...a: unknown[]) => void
     warn?: (...a: unknown[]) => void
   }) => {
@@ -48,9 +61,22 @@ const { createRemoteAccessServer } = require(join(ROOT, 'src', 'backend', 'http-
     syncWithConfig: () => Promise<State>
     pushEvent: (name: string, args: unknown[]) => void
     isRunning: () => boolean
+    issuePairingCode: () => string
   }
+  REQUEST_TIMEOUT_MS: number
+  isHostAllowed: (authority: string | undefined, expectedAddress: string, expectedPort: number) => boolean
+  lanAddresses: () => Array<{ address: string, family: string, iface: string }>
 }
-interface State { running: boolean, port: number, address: string, enabled: boolean, hasToken: boolean, tokenMasked: string }
+interface State {
+  running: boolean
+  port: number
+  configuredPort: number
+  address: string
+  enabled: boolean
+  hasToken: boolean
+  tokenMasked: string
+  pairingCodes?: number
+}
 
 const TOKEN = 'spec-token-0123456789abcdef'
 const scratch: string[] = []
@@ -68,7 +94,12 @@ afterEach(async () => {
 })
 
 /** 搭一份「数据根 + 静态目录」的夹具。@returns 建服务所需的 deps 与目录。 */
-function fixture(opts: { enabled?: boolean, token?: string, port?: number } = {}) {
+function fixture(opts: { enabled?: boolean, token?: string, port?: number, authLimiter?: {
+  ok: (ip: string) => boolean
+  fail: (ip: string) => void
+  succeed: (ip: string) => void
+  reset: () => void
+} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ra-spec-'))
   scratch.push(dir)
   const dataRoot = join(dir, 'wechat-data')
@@ -93,6 +124,7 @@ function fixture(opts: { enabled?: boolean, token?: string, port?: number } = {}
     gatedCall: async (method, args) => { calls.push(method); return { ok: true, value: { method, args } } },
     appVersion: 'spec',
     bindHost: '127.0.0.1',
+    authLimiter: opts.authLimiter,
     log: () => undefined,
     warn: () => undefined,
   })
@@ -124,6 +156,29 @@ async function login(base: string, token: string = TOKEN): Promise<string> {
   return setCookie.split(';')[0] ?? ''
 }
 
+/** 手工发 GET，让用例可以控制 Host 头（浏览器 fetch 不允许伪造这一项）。 */
+function rawGet(base: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+  const url = new URL(base)
+  return new Promise((resolve, reject) => {
+    const req = request({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'GET',
+      setHost: false,
+      headers: { Connection: 'close', ...headers },
+    }, (res) => {
+      res.setEncoding('utf8')
+      let body = ''
+      res.on('data', (chunk) => { body += String(chunk) })
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 describe('默认不监听：两个条件都要成立', () => {
   it('api_enabled=true 但**没有令牌** → 不监听（老配置遗留的 true 不能把端口打开）', async () => {
     const f = fixture({ token: '' })
@@ -136,6 +191,14 @@ describe('默认不监听：两个条件都要成立', () => {
     const f = fixture({ enabled: false })
     const st = await f.srv.start()
     expect(st.running).toBe(false)
+  })
+
+  it('停止状态仍返回配置端口，供防火墙指引用（当前监听端口为 0）', () => {
+    const f = fixture({ enabled: false, port: 5471 })
+    const st = f.srv.getState()
+    expect(st.running).toBe(false)
+    expect(st.port).toBe(0)
+    expect(st.configuredPort).toBe(5471)
   })
 
   it('两个条件都成立 → 监听，并报出实际端口与地址', async () => {
@@ -158,6 +221,132 @@ describe('默认不监听：两个条件都要成立', () => {
     writeFileSync(join(f.dataRoot, 'secrets.json'), JSON.stringify({ api_token: TOKEN }))
     const on = await f.srv.syncWithConfig()
     expect(on.running).toBe(true)
+  })
+
+  it('并发 start() 只产生一个监听句柄（第二次入队后吃到「已在跑」的状态）', async () => {
+    const f = fixture()
+    const httpAny = require('node:http') as {
+      createServer: (...args: unknown[]) => unknown
+    }
+    const original = httpAny.createServer
+    let created = 0
+    httpAny.createServer = (...args: unknown[]) => {
+      created += 1
+      return original(...args)
+    }
+    try {
+      const [a, b] = await Promise.all([f.srv.start(), f.srv.start()])
+      expect(a.running, '第一次并发启动应当成功').toBe(true)
+      expect(b.running, '第二次并发启动应当复用第一次的结果').toBe(true)
+      expect(a.port, '两次并发启动不该各绑一个端口').toBe(b.port)
+      expect(created, '没有串行化时两次 start() 会各自 createServer').toBe(1)
+    } finally {
+      httpAny.createServer = original
+    }
+  })
+
+  it('并发 syncWithConfig() 碰到端口变更只重绑一次', async () => {
+    const f = fixture()
+    await up(f)
+    const nextPort = randomPort()
+    writeFileSync(join(f.dataRoot, 'config.json'), JSON.stringify({ api_enabled: true, api_port: nextPort }))
+    const httpAny = require('node:http') as {
+      createServer: (...args: unknown[]) => unknown
+    }
+    const original = httpAny.createServer
+    let created = 0
+    httpAny.createServer = (...args: unknown[]) => {
+      created += 1
+      return original(...args)
+    }
+    try {
+      const [a, b] = await Promise.all([f.srv.syncWithConfig(), f.srv.syncWithConfig()])
+      expect(a.running, '第一次配置同步后应当正在监听').toBe(true)
+      expect(b.running, '第二次配置同步后应当仍然在监听').toBe(true)
+      expect(a.port, '两次并发同步最终必须落在同一个端口').toBe(b.port)
+      expect(created, '没有串行化时 stop→start 会被并发执行两次').toBe(1)
+    } finally {
+      httpAny.createServer = original
+    }
+  })
+})
+
+describe('默认绑定地址：物理网卡优先，虚拟网卡与 APIPA 排后', () => {
+  function addressesOf(networkInterfaces: Record<string, Array<Record<string, unknown>>>): Array<{ iface: string, address: string }> {
+    const os = require('node:os') as { networkInterfaces: () => Record<string, Array<Record<string, unknown>>> }
+    const original = os.networkInterfaces
+    os.networkInterfaces = () => networkInterfaces
+    try {
+      return lanAddresses().map((a) => ({ iface: a.iface, address: a.address }))
+    } finally {
+      os.networkInterfaces = original
+    }
+  }
+
+  it('vEthernet 排在前面时，仍优先选 WLAN', () => {
+    const out = addressesOf({
+      'vEthernet (Default Switch)': [{ address: '172.16.1.10', family: 'IPv4', internal: false, mac: '00:15:5d:00:00:01' }],
+      'WLAN': [{ address: '192.168.1.10', family: 'IPv4', internal: false, mac: 'aa:bb:cc:00:00:01' }],
+    })
+    expect(out[0]?.iface, '默认候选不该落到 Hyper-V 虚拟网卡').toBe('WLAN')
+  })
+
+  it('APIPA 地址不抢正常局域网地址', () => {
+    const out = addressesOf({
+      '以太网 2': [{ address: '169.254.77.1', family: 'IPv4', internal: false, mac: '00:11:22:33:44:01' }],
+      '以太网': [{ address: '192.168.50.20', family: 'IPv4', internal: false, mac: '00:11:22:33:44:02' }],
+    })
+    expect(out[0]?.address).toBe('192.168.50.20')
+    expect(out[1]?.address).toBe('169.254.77.1')
+  })
+
+  it('只有虚拟网卡时仍保留候选（不因排序把可达性判断藏起来）', () => {
+    const out = addressesOf({
+      'VMware Network Adapter': [{ address: '172.20.0.5', family: 'IPv4', internal: false, mac: '00:50:56:00:00:01' }],
+      'vEthernet (WSL)': [{ address: '172.24.0.5', family: 'IPv4', internal: false, mac: '00:15:5d:00:00:02' }],
+    })
+    expect(out).toHaveLength(2)
+    expect(out.map((a) => a.iface)).toContain('VMware Network Adapter')
+    expect(out.map((a) => a.iface)).toContain('vEthernet (WSL)')
+  })
+})
+
+describe('连接资源上限：长任务响应不能超时，慢请求接收必须有硬时限', () => {
+  it('socket 空闲超时保留为 0，但 requestTimeout 有有限值', () => {
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(60_000)
+  })
+})
+
+describe('Host 头校验：挡住 DNS rebinding', () => {
+  it('纯函数只认当前监听 IP；回环额外认 localhost，局域网 IP 不接受别名', () => {
+    expect(isHostAllowed('127.0.0.1:5032', '127.0.0.1', 5032)).toBe(true)
+    expect(isHostAllowed('LOCALHOST:5032', '127.0.0.1', 5032)).toBe(true)
+    expect(isHostAllowed('127.0.0.1', '127.0.0.1', 5032), '省略端口时主机名仍要匹配').toBe(true)
+    expect(isHostAllowed('attacker.example:5032', '127.0.0.1', 5032), '域名别名不能伪装成监听地址').toBe(false)
+    expect(isHostAllowed('127.0.0.1:5033', '127.0.0.1', 5032), '显式端口必须等于实际端口').toBe(false)
+    expect(isHostAllowed('127.0.0.1:abc', '127.0.0.1', 5032)).toBe(false)
+    expect(isHostAllowed(undefined, '127.0.0.1', 5032)).toBe(false)
+    expect(isHostAllowed('localhost:5032', '192.168.1.10', 5032), '局域网地址不接受主机名别名').toBe(false)
+  })
+
+  it('带别的域名 Host 的静态与 /api/auth 请求都在路由前拒绝，不进后端', async () => {
+    const f = fixture()
+    const base = await up(f)
+    for (const path of ['/', '/api/auth']) {
+      const r = await rawGet(base + path, { Host: 'attacker.example' })
+      expect(r.status, `${path} 带错 Host 应当回 421`).toBe(421)
+      expect(JSON.parse(r.body).error?.code).toBe('BAD_HOST')
+    }
+    expect(f.calls, '被 Host 拦下的请求不该碰 gatedCall').toEqual([])
+  })
+
+  it('缺失 Host（HTTP/1.1 不允许的裸请求）在进路由前就被协议层拒绝', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const r = await rawGet(base + '/api/status', {})
+    expect(r.status).toBe(400)
+    expect(f.calls).toEqual([])
   })
 })
 
@@ -246,6 +435,67 @@ describe('鉴权：令牌换会话', () => {
     expect(value.tokenMasked).not.toContain(TOKEN)
   })
 
+  it('新配对码能登录且只许用一次，长期令牌仍可登录', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const code = f.srv.issuePairingCode()
+    expect(typeof code).toBe('string')
+    expect(f.srv.getState().pairingCodes).toBe(1)
+
+    const first = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: code }),
+    })
+    expect(first.status, '新签发的配对码应当能换取会话').toBe(200)
+    expect(f.srv.getState().pairingCodes, '配对码成功消费后应当立即消失').toBe(0)
+
+    const second = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: code }),
+    })
+    expect(second.status, '同一个配对码第二次登录必须失败').toBe(401)
+    expect((await second.json()).error?.code).toBe('BAD_TOKEN')
+
+    const longToken = await fetch(`${base}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN }),
+    })
+    expect(longToken.status, '长期令牌仍然应该能登录').toBe(200)
+  })
+
+  it('登录成功只重置当前 IP 的限速记录（不能清掉其他来源的失败窗口）', async () => {
+    const calls: string[] = []
+    const authLimiter = {
+      ok: () => true,
+      fail: () => { calls.push('fail') },
+      succeed: (ip: string) => { calls.push(`succeed:${ip}`) },
+      reset: () => { calls.push('reset') },
+    }
+    const f = fixture({ authLimiter })
+    const base = await up(f)
+    await login(base)
+    expect(calls, '登录成功路径应当调用 succeed(ip)').toContain('succeed:127.0.0.1')
+    expect(calls, '登录成功路径绝不能调用 reset() —— 那会清掉其他 IP 的失败记录').not.toContain('reset')
+  })
+
+  it('stop() 作废未消费的配对码（停服后旧码不能复活）', async () => {
+    const f = fixture()
+    const base = await up(f)
+    const code = f.srv.issuePairingCode()
+    await f.srv.stop()
+    const st = await f.srv.start()
+    const restartedBase = `http://127.0.0.1:${String(st.port)}`
+    const r = await fetch(`${restartedBase}/api/auth`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: code }),
+    })
+    expect(r.status, '停服前签发、停服后重启用同一码竟然还能登录').toBe(401)
+  })
+
   it('令牌试错超过上限 → 429（挡掉脚本乱撞）', async () => {
     const f = fixture()
     const base = await up(f)
@@ -255,6 +505,21 @@ describe('鉴权：令牌换会话', () => {
       if (r.status === 429) { saw429 = true; break }
     }
     expect(saw429, '连续试错 12 次都没被限速').toBe(true)
+  })
+})
+
+describe('登录限速：成功只清当前 IP，不帮别的 IP 洗白', () => {
+  it('succeed(ip) 只删除该 IP 的失败窗口，其他来源的计数必须保留', () => {
+    const limiter = createAuthLimiter()
+    const attacker = '10.0.0.9'
+    const other = '10.0.0.10'
+    for (let i = 0; i < 8; i += 1) limiter.fail(attacker)
+    for (let i = 0; i < 8; i += 1) limiter.fail(other)
+    expect(limiter.ok(attacker), '同一 IP 失败 8 次后应被限速').toBe(false)
+
+    limiter.succeed(attacker)
+    expect(limiter.ok(attacker), '成功登录后当前 IP 的失败窗口应当清零').toBe(true)
+    expect(limiter.ok(other), '一次成功登录不应清掉其他来源 IP 的失败记录').toBe(false)
   })
 })
 

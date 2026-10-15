@@ -10,6 +10,7 @@ import { Button, Card, ErrorState, LoadingState, PanelHeader } from '../ui/kit.t
 import kitCss from '../ui/kit.module.css'
 import css from './privacy-trust.module.css'
 import { useWechatDataUpdated } from './hooks.tsx'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 
 const LOCAL_FEATURES = [
   '搜索 / 全库统一搜索', '统计与总览', '导出（CSV/HTML/TXT 等）', '关系图谱',
@@ -128,7 +129,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
       <Card title="防护设置">
         {state ? (
           <div className={css.toggles}>
-            <button type="button" className={css.toggle} data-active={state.redactSensitive} onClick={() => { void toggle('redactSensitive', !state.redactSensitive) }}>
+            <button type="button" className={css.toggle} data-active={state.redactSensitive} onClick={() => { void toggle('redactSensitive', !state.redactSensitive) }} {...desktopActionProps()}>
               敏感字段打码（手机号/身份证/银行卡/邮箱/口令） · {state.redactSensitive ? '开' : '关'}
             </button>
           </div>
@@ -178,7 +179,7 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
         )}
         <div className={css.auditActions}>
           <Button variant="pill" onClick={exportAudit} disabled={rows.length === 0}>导出审计 CSV</Button>
-          <Button variant="pill" onClick={() => { void clearAudit() }} disabled={state?.audit.total === 0}>清空审计</Button>
+          <Button variant="pill" onClick={() => { void clearAudit() }} disabled={state?.audit.total === 0} {...desktopActionProps()}>清空审计</Button>
         </div>
       </Card>
 

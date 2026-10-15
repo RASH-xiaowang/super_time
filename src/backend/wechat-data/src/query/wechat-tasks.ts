@@ -8,7 +8,7 @@
  * 第 59 轮做隐私名单时按它把「待办提取」列进了出网功能，实际并不会出网（已改正）。
  * 本模块只负责持久 CRUD。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { TasksSnapshot, TaskMutationResult, WechatTask } from '../types.ts'

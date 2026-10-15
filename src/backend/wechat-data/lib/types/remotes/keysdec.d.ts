@@ -29,7 +29,7 @@ export declare function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInp
      * @returns DbRepairResult：found/repaired/stillCorrupted + 修不了的与原因。
      */
     repairCorruptDbs(): Promise<DbRepairResult>;
-    decryptAllImages(options: {
+    decryptAllImages(options?: {
         concurrency?: number;
     }): Promise<DecryptImagesResult>;
     /**

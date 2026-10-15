@@ -57,6 +57,7 @@ import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
 import { videoCoverKey } from './moments-media.ts'
 import type { MediaKeySpec } from './moments-media.ts'
 import css from './moments.module.css'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 
 /** 图片/视频的离线解码请求描述定义在媒体层（`moments-media.ts`），卡片只是往那张表里登记。 */
@@ -253,7 +254,7 @@ export function MomentsCard({
                         }}
                       />
                       <div className={css.videoActions}>
-                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
+                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }} {...desktopActionProps()}>⭳</button>
                         <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
                         <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
                       </div>

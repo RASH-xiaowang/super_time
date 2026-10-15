@@ -2,7 +2,7 @@
  * Session queries over st_control's decrypted session.db, rewritten from the
  * Rust sessions::get_session_list. Reads ordinary SQLite via node:sqlite.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
 import type { WechatSession } from '../types.ts'
 import { contactMeta, cachedBySigAsync, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'

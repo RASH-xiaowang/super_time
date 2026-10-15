@@ -27,7 +27,7 @@ const read = (...p: string[]): string => readText(join(ROOT, ...p))
 
 const NAV = ['src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'nav-config.ts']
 const WDP = ['src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx']
-const SHELL = ['src', 'client', 'ui-app', 'onboarding', 'OnboardingShell.tsx']
+const SHELL = ['src', 'client', 'ui-app', 'onboarding', 'pages', 'HomePage.tsx']
 const README = ['src', 'client', 'README.md']
 const API_MD = ['docs', 'API.md']
 const BK_README = ['src', 'backend', 'wechat-data', 'README.md']
@@ -44,7 +44,7 @@ describe('远端接口计数：docs/API.md 是唯一真源', () => {
   it('每个手写计数都等于 docs/API.md 的数字', () => {
     // OnboardingShell 的 TELEMETRY 卡（用户可见的契约声明）
     const shellVal = /k: 'REMOTE API', v: '(\d+)'/.exec(readStripped(join(ROOT, ...SHELL)))?.[1]
-    expect(shellVal, `OnboardingShell 的 REMOTE API 计数与 docs/API.md（${nRemote}）不一致`).toBe(String(nRemote))
+    expect(shellVal, `首页 telemetry 的 REMOTE API 计数与 docs/API.md（${nRemote}）不一致`).toBe(String(nRemote))
 
     // 前端 README 的头行
     const readmeVal = /(\d+) 个 Remote 方法/.exec(read(...README))?.[1]

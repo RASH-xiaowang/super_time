@@ -16,7 +16,32 @@
 @container (max-width: 560px) {
   .calBtnLabel { display: none; }
 }
+/*
+ * 头部标题：默认**留在文档流里**（flex: 1 吃掉中间，动作排自然贴右）；消息列够宽（≥960px）时
+ * 才切成微信桌面端那套「标题绝对居中 + 动作靠右」。
+ *
+ * 为什么要这道门槛（2026-10-14 实测）：2026-10-12 那版是**无条件**绝对居中，修好它的死选择器后
+ * 量出来的几何不成立 —— 动作排六个带文字的按钮约 350px，1280px 窗口下消息列只有约 740px，
+ * 居中的标题与动作排**必然重叠约 57px**（标题 z-index 更高、压在按钮上面）。
+ * 门槛的数也是量出来的：动作排 350 + 标题上界 240 ⇒ 列宽 ≥ 2×350 + 240 ≈ 940 才放得下，取 960 留余量；
+ * 查询的容器是 `.messages`（消息列自己），所以门槛量的是真正会重叠的那一列，不是窗口。
+ * 门槛以下回到在流布局（标题左、动作右），一个像素都不重叠 —— 那不是降级，是几何不允许。
+ */
 .msgHeaderInfo { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+@container (min-width: 960px) {
+  .msgHeaderInfo {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    align-items: center;
+    text-align: center;
+    max-width: 240px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .msgHeaderActions { margin-left: auto; }
+}
 /* 动作区必须能收窄：原先 flex-shrink:0 让它在窄窗口把内容顶出消息区，
    被 overflow 裁掉后按钮直接不可达（审计 P0-2）。收窄后内部 flex-wrap 才会生效。 */
 .msgHeaderActions { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; flex-wrap: wrap; }
@@ -113,7 +138,7 @@
   font-weight: 600;
   color: var(--nm-text-1);
 }
-.groupInfoBody { flex: 1; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; }
+.groupInfoBody { flex: 1; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; display: flex; flex-direction: column; }
 .memberGrid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -135,26 +160,35 @@
   padding: 13px 0;
   border-top: 1px solid var(--nm-border);
 }
-.groupInfoRowLabel {
-  flex-shrink: 0;
-  font-size: var(--wx-info-text);
-  color: var(--nm-text-2);
-  line-height: 1.4;
-}
+
 .memberProfileBody {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   padding: 20px 16px 20px;
+}
+/* D2：头像居左 + 昵称居右（官方桌面端成员卡形态）。 */
+.memberProfileHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 .memberProfileName {
   font-size: 14px;
   font-weight: 700;
   color: var(--nm-text-1);
-  text-align: center;
+  text-align: left;
   word-break: break-word;
-  max-width: 100%;
+  min-width: 0;
+}
+/* D2：签名这类长文本的值域占满行宽左对齐（不再挤右列窄槽折三行）。 */
+.memberProfileSig {
+  color: var(--nm-text-2);
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.55;
 }
 .memberProfileMono {
   font-family: var(--nm-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
@@ -189,3 +223,36 @@
   cursor: default;
 }
 .msgMention:hover { background: color-mix(in srgb, var(--wx-mention) 14%, transparent); }
+
+/* ── 手机档（≤560）：头部改成「返回 + 左对齐标题」，动作排整行换到第二行 ──────────
+   桌面端标题在流里吃满中间（见上面 `.msgHeaderInfo`），动作排贴右；375px 上放不下：
+   六个图标按钮约 200px + 标题，一行必然挤爆。
+   所以手机档让标题左对齐、动作排整行换到下面 —— 头部高两行，代价是纵向多 40px，
+   换来的是**一个按钮都不少**（不必为了塞进一行而砍功能）。
+   返回按钮绝对定位在左上角，标题用 padding-left 让位。 */
+.msgBackBtn { display: none; }
+@media (max-width: 560px) {
+  .msgBackBtn {
+    display: inline-flex;
+    position: absolute;
+    left: 8px;
+    top: 10px;
+    z-index: 2;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: var(--nm-dense-r);
+    background: transparent;
+    color: var(--nm-text-1);
+  }
+  .msgBackBtn:active { background: var(--nm-bg-active); }
+  .msgHeaderInfo {
+    align-items: flex-start;
+    text-align: left;
+    padding-left: 32px;
+  }
+  .msgHeaderActions { flex: 1 1 100%; justify-content: flex-start; }
+}

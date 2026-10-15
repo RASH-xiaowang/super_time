@@ -31,13 +31,13 @@ npm ci            # 安装依赖（含 file: 内联依赖）
 npm start         # 构建前端 + 后端 bundle，然后启动应用
 ```
 
-`npm start` 会自动先跑 `build:ui` 与 `build:backend`（`prestart` 钩子），所以不需要手工构建。
+`npm start` 会自动先跑 `build:all`（`prestart` 钩子：backend → types → ui），所以不需要手工构建。
 开发调试用 `npm run dev`（同样会先构建，再启动 Electron）；`npm run dev:only` 只启动、不构建，适合产物已经是最新的时候。
 
 几条容易踩的点：
 
 - `npm ci` 不会下载 Electron 二进制（`node_modules/electron` 没有 postinstall）。若 `node_modules/electron/dist/electron.exe` 不存在，先执行 `node node_modules/electron/install.js`（CI 里也是这样做的）。
-- 仓库根的 `SuperTime.cmd` 只是直接启动**已构建好**的应用，不会先构建：第一次请先跑 `npm start`，或手动执行 `npm run build:ui && npm run build:backend`。
+- 仓库根的 `SuperTime.cmd` 只是直接启动**已构建好**的应用，不会先构建：第一次请先跑 `npm start`，或手动执行 `npm run build:all`。
 - 环境里若带着 `ELECTRON_RUN_AS_NODE=1`，Electron 会退化成纯 Node 并报 `app` 未定义。`npm start` / `npm run dev` / `npm run dev:only` 与 `SuperTime.cmd` 都会摘掉这个变量（见 [`scripts/launch-app.mjs`](scripts/launch-app.mjs)）；直接写 `electron .` 时需要自己摘。
 
 ### 首次启动会依次经过三道闸门
@@ -76,15 +76,16 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 | `npm start` / `npm run dev` / `npm run dev:only` | 构建后启动 / 构建后启动（开发用）/ 只启动、不构建 |
 | `npm test` | 单元测试（vitest；不依赖真实微信数据、不联网） |
 | `npm run typecheck` | 类型检查：后端 + 面板（`ui-wechat`）+ **打包入口那一层**（`ui-app`：壳、启动引导、同意屏、授权面板）。五份串在一条脚本里，见 RELEASE-PLAN N31 |
+| `npm run build:all` | 按依赖顺序一次构建后端 bundle、后端类型声明和前端静态资源 |
 | `npm run build:ui` / `npm run build:backend` / `npm run build:types` | 分别构建前端静态资源、后端 bundle、后端类型声明（`lib/types`） |
 | `npm run lint:db` | 后端源码的 DB 连接所有权纪律（ESLint） |
-| `npm run check:shim` | 前端原语 shim 的源码与安装副本一致性（`build:ui` 已会同步） |
-| `npm run pack` / `npm run dist` | 打包目录版 / 生成 NSIS 安装器（都会前置 `build:ui`） |
+| `npm run check:shim` | 前端原语 shim 的源码与安装副本一致性（仅检查；构建直接 alias 到源码） |
+| `npm run pack` / `npm run dist` | 打包目录版 / 生成 NSIS 安装器（都会前置 `build:all`） |
 | `npm run package:smoke` | 启动**打包产物**跑断言（asar 内容、状态落点、语音解码资产、方法数…） |
 | `npm run ui:loading-e2e` | **真机 e2e**：加载态恢复 |
 | `npm run ui:longlist-e2e` | **真机 e2e**：四张长列表（消息流 / 收藏 / 文件网格 / 朋友圈时间线）的 DOM 上界 / 两端可达 / 悬浮日期头 / **滚动帧数**（约 34 秒，在 PR 门禁里） |
 | `npm run measure:quick` / `npm run measure:slow` | 性能基准（quick 进 PR 门禁，slow 进 nightly）；各条实测数字写在基准自己的文件头 |
-| `npm run check:mutation` / `npm run check:mutation:diff` | 变异自证（全量 419 条 / 只跑这次改动波及的）；登记表在 `scripts/mutations-registry*.mjs` |
+| `npm run check:mutation` / `npm run check:mutation:diff` | 变异自证（全量 / 只跑这次改动波及的）；登记表在 `scripts/mutations-registry*.mjs` |
 | `npm run ci:baseline` / `npm run ci:board-history` | 采**本机串行基线** / 查 CI 榜历史并按 A 类（真活）B 类（停顿）判 N36 验收；两条都手动跑 |
 | `npm run ui:smoke` / `npm run privacy-gate:smoke` | 面板的 SSR 冒烟 / 隐私同意屏的 SSR 断言（未勾选时按钮必须禁用） |
 | `npm run e2e:export-progress` / `npm run e2e:h14-consent` | **真机 e2e**（Playwright 驱动真实 Electron）：导出进度与中止 / 隐私同意先于授权。两条都在 CI 里，都不需要许可证与签发私钥 |
@@ -107,7 +108,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest
 | 档 | 触发 | 内容 |
 |---|---|---|
 | 1（PR 门禁） | 每次 push / PR（`ci.yml` 的 `verify`） | 类型检查与一致性门禁（产物、接口参考、lint、依赖来源）、18 个快基准（约 27 秒）、起真 Electron 的 e2e 与冒烟、**增量**变异自证 |
-| 2（nightly） | 每天 03:17（`nightly.yml`） | **全量**变异自证（419 条）+ 慢基准（`export-memory`，约 13 分钟）+ 两条真机 e2e + **打包冒烟**（`npm run pack` 之后） |
+| 2（nightly） | 每天 03:17（`nightly.yml`） | **全量**变异自证 + 慢基准（`export-memory`，约 13 分钟）+ 两条真机 e2e + **打包冒烟**（`npm run pack` 之后） |
 | 3（发版前） | 打 `v*` tag（`release.yml`） | 发布门禁（类型检查 + `npm test` + tag 与 `package.json` 版本一致）+ 打包态检查，且必须在 `--publish always` **之前** |
 
 `ci.yml` 里还有几条起真 Electron 的检查（如 `security-guard:smoke`、`check:backend-restart`、`e2e:h14-consent`）
@@ -157,9 +158,9 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 126 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 127 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
-src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:ui` 生成后由 `src/**/*` 打进 asar）
+src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
 wechat/                  随包只读资产：语音引擎与预置模型（`wechat/whisper/`）、配置模板（`*.example.json`）
 build/                   应用图标（`icon.ico` 供安装包使用）
@@ -185,11 +186,8 @@ docs/                    九份当前有效的文档（见下方索引）
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 部署与发布：构建、打包、许可证签发、装完之后怎么验 |
 | [`docs/ERROR-CODES.md`](docs/ERROR-CODES.md) | 错误码与错误形状：错误怎么传回来、有哪些机器码、撞上之后该怎么办 |
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
-| [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
+| [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
 | [`docs/RELEASE-PLAN.md`](docs/RELEASE-PLAN.md) | 上线实施计划与逐条状态（含已知缺陷与验收证据） |
-| [`docs/OPTIMIZATION-PLAN.md`](docs/OPTIMIZATION-PLAN.md) | 上线后的持续优化台账：性能/内存/体验/反馈四线，先量后改、每条配判据（含已证伪撤回项） |
-| [`docs/CLAWBOT-THREAD-REDESIGN.html`](docs/CLAWBOT-THREAD-REDESIGN.html) | ClawBot 指挥台 v2 重设计（已落地收口）：实例轨 + 气泡对话流 + 明细第二读法，含被真机实测否证的列隐藏机制退役记录 |
-| [`docs/CHATS-INFO-WECHAT-ALIGN.html`](docs/CHATS-INFO-WECHAT-ALIGN.html) | 聊天信息微信对齐重设计提案（当届，实施中）：单聊/群聊信息抽屉与成员卡的六区骨架、官方行语法、只读开关纪律与 D0–D2 切口 |
 | [`src/backend/README.md`](src/backend/README.md) | 宿主层设计、平台支持、密钥存储与保护 |
 | [`src/backend/wechat-data/README.md`](src/backend/wechat-data/README.md) | 后端包：子目录职责、Remote 方法面的分组、派生库与缓存 |
 | [`src/client/README.md`](src/client/README.md) | 数据面板结构、导航注册表真源、测试辅助的落位 |
@@ -197,7 +195,7 @@ docs/                    九份当前有效的文档（见下方索引）
 | [`wechat/README.md`](wechat/README.md) | 配置说明：配置落在哪、`config.json` / `llm.json` 字段、开发态迁移（模板见 `wechat/*.example.json`） |
 | [`wechat/whisper/README.md`](wechat/whisper/README.md) | 语音转写引擎与模型的目录约定 |
 | [`tools/visual-audit/README.md`](tools/visual-audit/README.md) | 视觉审计脚本的前置条件与用法 |
-| [`website/tests/README.md`](website/tests/README.md) | 官网冒烟（`website/tests/smoke.js`）的用法与最近一次结果 |
+| [`website/tests/smoke.js`](website/tests/smoke.js) | 官网冒烟脚本（jsdom + 自写 CSS 解释器校验布局） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本变更与版本策略 |
 | [`CLEANUP.md`](CLEANUP.md) | 冗余清理记录：每一轮删了什么、为什么删、验证结果 |
 

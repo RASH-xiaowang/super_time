@@ -19,7 +19,7 @@ import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { CardFoot } from './chats-card-foot.tsx'
 import { IconDataOutline16, IconLinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { MpArticle, MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
 /** Authoritative transfer/redpacket status line from general.db. */
 export function PayStatusLine({ serverId }: { serverId: string }): React.JSX.Element | null {
@@ -163,22 +163,9 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
     </div>
   )
 }
-/**
- * 公众号多图文推送的一篇（后端 `rich.mpArticles`）。
- *
- * 客户端这份类型是**本地声明**：`node_modules` 里那份类型副本落后于后端，
- * 它的 `MessageRich` 索引签名还没有 `MpArticle[]`，直接读会过不了 `tsc`。
- * 所以这里只做「从 unknown 里安全取数组」这一件事，字段逐个校验。
- */
-export interface MpArticle {
-  title?: string
-  url?: string
-  cover?: string
-  summary?: string
-}
 /** 安全读后端写的次条数组（字段缺失/类型不对时返回空数组，界面退化成普通链接卡）。 */
 export function mpArticlesOf(rich: MessageRich): MpArticle[] {
-  const raw: unknown = rich.mpArticles
+  const raw = rich.mpArticles
   if (!Array.isArray(raw)) return []
   return raw.filter((a): a is MpArticle => !!a && typeof a === 'object')
 }

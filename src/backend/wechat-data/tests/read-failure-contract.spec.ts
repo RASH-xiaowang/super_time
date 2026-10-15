@@ -29,6 +29,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createTempWorkspace, type TempWorkspace } from '../../tests/helpers/temp-db.ts'
 import { listExportHistory } from '../src/query/export-history.ts'
 import { queryMomentsMonthly } from '../src/query/moments-monthly.ts'
+import { queryRecords } from '../src/query/records.ts'
+import { queryRevokedRetained } from '../src/query/revoke-retain.ts'
+import { listOperations } from '../src/query/operation-log.ts'
 import { missWithScanNotes, snsMonthRoots, type ScanNotes } from '../src/query/sns-scan.ts'
 import { resolveSnsImageDataUrl } from '../src/query/sns-image.ts'
 import { resolveSnsVideoCoverDataUrl } from '../src/query/sns-video.ts'
@@ -141,10 +144,10 @@ describe('媒体目录扫描：「没扫全」不许说成「本机没有」', (
     expect(missWithScanNotes('未找到匹配的本地图片', [])).toBe('未找到匹配的本地图片')
   })
 
-  it('图片解析：cache 读不动时 error 里要能看到原因', () => {
+  it('图片解析：cache 读不动时 error 里要能看到原因', async () => {
     const w = ws('img-scan')
     writeFileSync(join(w.dir, 'cache'), '占位', 'utf8')
-    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32))
+    const r = await resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32))
     expect(r.url).toBeUndefined()
     expect(r.error, '没返回图就必须说清为什么').toBeDefined()
     expect(String(r.error)).toContain('媒体缓存目录没扫全')
@@ -155,18 +158,18 @@ describe('媒体目录扫描：「没扫全」不许说成「本机没有」', (
    * 本机确实没有这张图 vs. 我们查错了（键算不出来 / 索引没扫完 / 兜底没跑）。
    * 混成一句时用户会去翻微信，而病因可能在我们这边。
    */
-  it('图片解析：没给 timelineId/mediaId ⇒ 诊断里要点名「缓存键路径未尝试」', () => {
+  it('图片解析：没给 timelineId/mediaId ⇒ 诊断里要点名「缓存键路径未尝试」', async () => {
     const w = ws('img-routes-nokeys')
-    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32))
+    const r = await resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32))
     expect(r.url).toBeUndefined()
     expect(String(r.error), '要点名哪条路没走').toContain('缓存键路径未尝试')
-    // 走过的路要成列，而���是一句「没有」
+    // 走过的路要成列，而不是一句「没有」
     expect(String(r.error).match(/；/g)?.length ?? 0, '至少列了 2 条路').toBeGreaterThanOrEqual(1)
   })
 
-  it('图片解析：给了 timelineId/mediaId 但文件不在 ⇒ 诊断要说清「未命中」并带上月根目录数', () => {
+  it('图片解析：给了 timelineId/mediaId 但文件不在 ⇒ 诊断要说清「未命中」并带上月根目录数', async () => {
     const w = ws('img-routes-miss')
-    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32), 'tid-1', 'mid-1')
+    const r = await resolveSnsImageDataUrl(w.dir, undefined, 0x00, 'd'.repeat(32), 'tid-1', 'mid-1')
     expect(r.url).toBeUndefined()
     const msg = String(r.error)
     expect(msg).toContain('缓存键路径未命中')
@@ -175,9 +178,9 @@ describe('媒体目录扫描：「没扫全」不许说成「本机没有」', (
     expect(msg).toContain('按 md5 的索引未命中')
   })
 
-  it('图片解析：没有 md5 时，诊断要额外说明「无法按内容匹配」', () => {
+  it('图片解析：没有 md5 时，诊断要额外说明「无法按内容匹配」', async () => {
     const w = ws('img-routes-nomd5')
-    const r = resolveSnsImageDataUrl(w.dir, undefined, 0x00, '', 'tid-1', 'mid-1')
+    const r = await resolveSnsImageDataUrl(w.dir, undefined, 0x00, '', 'tid-1', 'mid-1')
     expect(r.url).toBeUndefined()
     expect(String(r.error)).toContain('无法按内容匹配')
   })
@@ -231,5 +234,63 @@ describe('契约形状（客户端那道类型驱动守卫看得见的部分）'
       /async getMomentsMonthly\([^)]*\): Promise<MomentsMonthlySnapshot>/)
     const api = readFileSync(join(UI, 'api-core.ts'), 'utf8')
     expect(api, '远端接口声明与后端不一致').toMatch(/Promise<RemoteResult<MomentsMonthlySnapshot>>/)
+  })
+})
+
+/**
+ * W3-11.4：三个只读快照补上「读失败不等于没有数据」之后的行为契约。
+ *
+ * 这三个是同一族里最常被误读的三处：general.db 不存在（资金往来库还没生成）、
+ * 撤回归档库没建或缺表、审计库打不开。旧实现在三种情况下都回空列表 ——
+ * 界面显示「暂无记录 / 没有撤回消息 / 暂无操作日志」，而真实原因全在数据侧。
+ */
+describe('W3-11.4：records / 撤回 / 操作日志的读失败契约', () => {
+  it('general.db 不存在给出 readError，而不是「暂无资金往来」', () => {
+    const w = ws('records-general-missing')
+    const snap = queryRecords(w.dir, 'transfers')
+    expect(snap.items).toEqual([])
+    expect(snap.readError, 'general.db 不存在必须给 readError').toContain('数据配置')
+  })
+
+  it('归档库不存在或缺表给出 readError，而不是「没有撤回消息」', () => {
+    const w1 = ws('revoked-archive-missing')
+    const s1 = queryRevokedRetained(w1.dir, 10, 0)
+    expect(s1.items).toEqual([])
+    expect(s1.readError, '归档库没建必须给 readError').toContain('归档')
+    const w2 = ws('revoked-archive-no-table')
+    // 归档库在 <decryptedDir>/.. 下，所以像「导出历史」那样套一层 decrypted，
+    // 否则坏库会落到系统临时目录根上、与并行用例撞同一个文件。
+    const dec2 = join(w2.dir, 'decrypted')
+    mkdirSync(dec2, { recursive: true })
+    const db = w2.db('message-archive.db')
+    db.exec('CREATE TABLE placeholder (x INTEGER)')
+    db.close()
+    const s2 = queryRevokedRetained(dec2, 10, 0)
+    expect(s2.readError, '缺 archived_msg 表同样要给 readError').toContain('archived_msg')
+  })
+
+  /** 与「导出历史」同一形状：数据根里套一层 decrypted，store 落在它的父目录。 */
+  const oplogRoots = (w: TempWorkspace): { dec: string; store: string } => {
+    const dec = join(w.dir, 'decrypted')
+    mkdirSync(dec, { recursive: true })
+    return { dec, store: join(w.dir, 'wechat_privacy.db') }
+  }
+
+  it('审计库损坏给出 readError，而不是「暂无操作日志」', () => {
+    const w = ws('oplog-corrupt')
+    const { dec, store } = oplogRoots(w)
+    writeFileSync(store, Buffer.from('this is not a sqlite database'))
+    const snap = listOperations(dec, { limit: 10, offset: 0 })
+    expect(snap.items).toEqual([])
+    expect(snap.readError, '库读不动必须给 readError').toContain('操作日志读取失败')
+  })
+
+  it('反向哨兵：真的读到了（哪怕一条都没有）时 readError 必须缺席', () => {
+    const w = ws('oplog-empty-ok')
+    const { dec, store } = oplogRoots(w)
+    const snap = listOperations(dec, { limit: 10, offset: 0 })
+    expect(snap.items).toEqual([])
+    expect(snap.readError, '确认读到了就必须让 readError 缺席（否则判据退化成常量）').toBeUndefined()
+    expect(existsSync(store), '自建库没写出来，上面那条「确认空」可能是别的原因').toBe(true)
   })
 })

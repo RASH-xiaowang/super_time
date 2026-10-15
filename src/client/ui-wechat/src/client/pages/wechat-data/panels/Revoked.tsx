@@ -22,6 +22,8 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set())
+  /** 读失败与「确无撤回消息」分开（W3-11.4）。 */
+  const [readError, setReadError] = useState('')
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
 
@@ -34,6 +36,8 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     pageSize: 100,
     fetchPage: async (offset, limit) => {
       const env = await apiGetRevoked({ limit, offset, ...kwOpt })
+      // W3-11.4：「归档库还没建」与「没有撤回消息」分开说。
+      setReadError(env.readError ?? '')
       return { items: env.items, total: env.total }
     },
   })
@@ -125,8 +129,9 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
       />
       <div className={`${css.notice} ${css.rvNoticeText}`}>🛡️ 数据仅来自本机微信数据库的解密副本，不联网、不上传。缓存内容与撤回时间由微信客户端写入。</div>
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
-      {!error && loading && items.length === 0 && <ListSkeleton rows={8} />}
-      {!error && !loading && items.length === 0 && (
+      {readError && <div className={kitCss.error} role="alert">⚠️ {readError}</div>}
+      {!error && !readError && loading && items.length === 0 && <ListSkeleton rows={8} />}
+      {!error && !readError && !loading && items.length === 0 && (
         <div className={css.rvLand}>
           <div className={css.rvLandTitle}>暂无撤回消息记录</div>
           <div className={css.rvLandDesc}>

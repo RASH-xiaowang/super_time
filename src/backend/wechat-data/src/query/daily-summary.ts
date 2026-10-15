@@ -3,7 +3,7 @@
  * then the host gateway sends them to the DSH LLM for a Chinese summary.
  * Collection is pure; the LLM call lives in the gateway (needs ctx.llm).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'

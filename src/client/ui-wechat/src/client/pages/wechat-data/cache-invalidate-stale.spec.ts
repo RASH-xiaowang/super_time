@@ -50,6 +50,15 @@ describe('cachedGet：陈旧可读 + 后台复验', () => {
     expect(calls, '30 秒内第二次读不该回源').toBe(1)
   })
 
+  it('失效后同一毫秒写入的新值也算新鲜（整数世代，不靠 Date.now 分辨先后）', async () => {
+    invalidateSnapshotCache()
+    snapshotSet('contacts:same-ms', { items: [1] })
+    let calls = 0
+    const got = await cachedGet('contacts:same-ms', async () => { calls += 1; return { items: [2] } })
+    expect(got).toEqual({ items: [1] })
+    expect(calls, '新写入的快照被同毫秒墙钟误判成陈旧值').toBe(0)
+  })
+
   it('数据变更后再读：**立刻拿到旧值**，同时后台复验并写回', async () => {
     await cachedGet('ledger:all', async () => ({ sum: 1 }))
     invalidateSnapshotCache()

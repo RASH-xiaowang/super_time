@@ -6,6 +6,8 @@ import { WechatDataGateway } from './gateway.ts'
 
 export type * from './types.ts'
 export { WechatDataGateway } from './gateway.ts'
+export { fetchWithRetry } from './net/fetch-retry.ts'
+export { configureSqliteCachePolicy } from './query/db-open.ts'
 
 /**
  * H2（2026-09-28）：把「慢调用的耗时」落进审计表的能力单独导出给宿主层。

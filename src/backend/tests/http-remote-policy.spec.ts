@@ -3,7 +3,7 @@
  *
  * ## 这份文件守的是什么
  *
- * `http-remote-policy.js` 把后端 194 个 `@Remote` 方法**显式二分**成「允许远程调用」与
+ * `http-remote-policy.js` 把后端 195 个 `@Remote` 方法**显式二分**成「允许远程调用」与
  * 「仅桌面端」。二分本身不难写，难的是**让它一直成立** —— 后端方法只会越来越多，
  * 而新增一条方法时没人会想起回来改这份清单。
  *
@@ -33,9 +33,14 @@ const require = createRequire(import.meta.url)
 const policy = require(join(ROOT, 'src', 'backend', 'http-remote-policy.js')) as {
   REMOTE_SAFE_METHODS: Set<string>
   LOCAL_ONLY_METHODS: Set<string>
+  REMOTE_HEAVY_METHODS: Set<string>
   REMOTE_DENIED_CODE: string
   NATIVE_CAPABILITIES: Record<string, boolean>
   isRemoteSafe: (m: unknown) => boolean
+  isRemoteHeavy: (m: unknown) => boolean
+}
+const longCalls = require(join(ROOT, 'src', 'backend', 'remote-policy.js')) as {
+  LONG_CALL_METHODS: Set<string>
 }
 
 /** 从 gateway 源码里解析出**真实**的 `@Remote` 注册表（不抄清单，抄清单等于自己证明自己）。 */
@@ -82,6 +87,18 @@ describe('远程访问白名单：完整二分 + 逐族排除', () => {
   it('③ 白名单是注册表的子集（死条目会制造假的安全感）', () => {
     const ghosts = [...policy.REMOTE_SAFE_METHODS].filter((m) => !registry.has(m))
     expect(ghosts).toEqual([])
+  })
+
+  it('远程重活台账 = 远程白名单 ∩ 长任务台账（三类清单只在这里取交集）', () => {
+    const expected = [...policy.REMOTE_SAFE_METHODS].filter((m) => longCalls.LONG_CALL_METHODS.has(m)).sort()
+    expect([...policy.REMOTE_HEAVY_METHODS].sort()).toEqual(expected)
+    expect(policy.REMOTE_HEAVY_METHODS.size, '远程白名单里的长任务不该是 0，否则这条预算判据在空转').toBeGreaterThan(20)
+    for (const m of policy.REMOTE_HEAVY_METHODS) {
+      expect(policy.LOCAL_ONLY_METHODS.has(m), `${m} 同时是远程重活和远程拒绝项，分类冲突`).toBe(false)
+      expect(policy.isRemoteHeavy(m)).toBe(true)
+    }
+    expect(policy.isRemoteHeavy('getSessions')).toBe(false)
+    expect(policy.isRemoteHeavy('exportAllSessions')).toBe(false)
   })
 
   it('最不该开放的几类必须被点名拒绝（不是「碰巧没列进来」）', () => {
@@ -136,6 +153,9 @@ describe('远程访问白名单：完整二分 + 逐族排除', () => {
       'getOverview', 'getMoments', 'getGraph', 'getFiles', 'getFavorites', 'getLedger',
       'getRecords', 'getCalls', 'getAnnual', 'getWordCloud', 'searchUnified', 'searchMessages',
       'askWechat', 'getImageDataUrl', 'getAvatar', 'getVoiceDataUrl', 'getDbHealth',
+      // 2026-10-14 M10 审计：转账/红包状态是本地库的纯读（名字里的 payment 指微信账单，不是许可证）。
+      // 它曾被判为 A 类凭据，症状是手机上聊天里的转账/红包卡片读不出状态。
+      'getPaymentStatus',
     ]
     for (const m of mustAllow) {
       expect(registry.has(m), `${m} 已不在注册表里`).toBe(true)

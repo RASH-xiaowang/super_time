@@ -120,6 +120,8 @@
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 2px;
   padding: 8px 6px 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 一张牌 ＝ 定位壳（.plate）+ 光池 + 板面 + 厚度 + 内容。
@@ -133,6 +135,9 @@
   gap: 2px;
   min-width: 0;
   min-height: 146px;
+  width: 100%;
+  max-width: 100%;
+  max-height: 176px;
   /* 左右 20px 是为了躲开六边形的上下斜边（顶带里左边界最多内缩 18%W）：
      12px 的旧内边距会让图标左上角压在斜边上（2026-09-27 真机截图抓到的），
      而 18px 会撞 theme-geometry 的奇数间距闸门（5/7/9/18px 新文件零容忍）。 */
@@ -397,7 +402,7 @@
  * 后果：切到浅色主题时，这一页仍是一块深色皮肤，而里面的文字 / 边框却跟着
  * `--nm-*` 换成了浅色主题的值 —— 深底配浅字，可读性直接失效。
  *
- * 这正是 `docs/UI-REDESIGN-2026-09-28.md` 记的 V1 / V4 / V6（三套视觉语言并行、
+ * 这正是 UI-REDESIGN-2026-09-28（已删除，原文见 git 历史）记的 V1 / V4 / V6（三套视觉语言并行、
  * 裸色集中在少数文件）在总览页上的具体表现。
  *
  * ## ⚠️ 选择器必须写成 `:root[class~='theme-light']`，不能写 `:root.theme-light`
@@ -529,4 +534,13 @@
   .heroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .plateValue { font-size: 18px; }
   .mixSub { display: none; }
+}
+
+/* ── 手机档（≤560）：牌面再收一档到两列 ────────────────────────────────
+   四列时每格约 80px，真实数据里「2,359」「11.97 GB」这类值会被裁掉
+   （2026-10-14 真数据实测：plateValue 的 scrollWidth > clientWidth）。
+   两列后每格约 170px，值与副标都放得下。必须写在 ≤1100 那一档**后面**
+   （同特异性、后写者赢），否则会被它盖回四列。 */
+@media (max-width: 560px) {
+  .heroStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -26,7 +26,7 @@ const { generateAccessToken } = require('./http-auth.js');
 /**
  * @typedef {object} ControlDeps
  * @property {(method: string, args: unknown[]) => Promise<{ ok: boolean, value?: unknown, error?: unknown }>} backendCall - 调后端（走 worker）。
- * @property {{ stop: () => Promise<unknown>, syncWithConfig: () => Promise<unknown>, getState: () => object }} remoteAccess - 服务句柄。
+ * @property {{ stop: () => Promise<unknown>, syncWithConfig: () => Promise<unknown>, getState: () => object, issuePairingCode: () => string }} remoteAccess - 服务句柄。
  */
 
 /**
@@ -71,7 +71,10 @@ function createRemoteAccessControl(deps) {
         await deps.remoteAccess.stop();
       } catch { /* 没在跑就算了 */ }
       const state = await deps.remoteAccess.syncWithConfig();
-      return { ok: true, token, state };
+      // 配对码必须在 stop()/syncWithConfig() 之后签发：停服会先作废内存里的旧码，
+      // 顺序反了会把刚刚发出的这个码一起清掉。
+      const pairingCode = deps.remoteAccess.issuePairingCode();
+      return { ok: true, token, pairingCode, state };
     },
 
     /**

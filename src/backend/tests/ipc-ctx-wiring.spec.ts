@@ -27,7 +27,10 @@ const BACKEND = join(ROOT, 'src', 'backend')
 const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
 
 /** 拆分出来的模块：`src/backend/ipc-*.js`（`ipc-misc.js` / `ipc-wechat.js` / 以后每一刀）。 */
-const MODULES = readdirSync(BACKEND).filter((f) => /^ipc-[a-z-]+\.js$/.test(f)).sort()
+const MODULES = readdirSync(BACKEND)
+  .filter((f) => /^ipc-[a-z-]+\.js$/.test(f))
+  .filter((f) => readFileSync(join(BACKEND, f), 'utf8').includes('function register'))
+  .sort()
 
 /**
  * 只经 **getter** 暴露的量名：`wechatBackend` / `wechatBoot` / `backendStatus` / `mainWindow`。

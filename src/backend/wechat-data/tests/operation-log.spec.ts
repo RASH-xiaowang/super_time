@@ -107,7 +107,12 @@ describe('operation log store', () => {
   it('stays best-effort when the store cannot be opened', () => {
     const bad = brokenRoot()
     expect(() =>{  recordOperation(bad, { category: 'settings', action: 'a', target: '', status: 'ok', detail: '' }) }).not.toThrow()
-    expect(listOperations(bad)).toEqual({ items: [], total: 0 })
+    // W3-11.4：库打不开时除了「不抛、给空列表」，还必须带上 readError ——
+    // 否则界面把「看不到操作记录」显示成「没有操作记录」（read-failure-contract.spec.ts 的同族契约）。
+    const snap = listOperations(bad)
+    expect(snap.items).toEqual([])
+    expect(snap.total).toBe(0)
+    expect(typeof snap.readError, '库读不动却不出声 ⇒ 用户看到的是假空态').toBe('string')
     expect(clearOperationLog(bad)).toEqual({ ok: false, removed: 0 })
   })
 })

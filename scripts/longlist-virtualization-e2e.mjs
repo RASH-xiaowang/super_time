@@ -40,7 +40,13 @@ const MAX_FAV_DOM_NODES = 200
 const MAX_FILE_DOM_NODES = 200
 /** 朋友圈夹具条数与每天几条（摊成 120 天，日期标签行也要跟着窗口走）。 */
 const MOMENT_TOTAL = 1200
-const MOMENTS_PER_DAY = 10
+// W2-10.3：原来这里是 10 —— **每一天正好 11 行（1 标签 + 10 动态），而底部那一屏也正好
+// 挂 11 行**，于是滚到底时窗口的第一行**必然**落在某一天的标签行上。
+// 而 `showFloatingDay = floatingDay !== '' && firstRow?.kind !== 'day'`（moments-timeline.tsx）
+// 在这种形状下必然为 false ⇒ 「滚到底时悬浮日期头补上当前那一天」这条判据**结构上永远
+// 不可能成立**。它是这条 e2e 里唯一一条长期红着的判据，而因为没人跑这个脚本，红了也没人知道。
+// 改成 40：每天 41 行，远大于一屏 ⇒ 底部窗口起点落在**某一天的中间**，场景才真正可达。
+const MOMENTS_PER_DAY = 40
 const MOMENT_USER = 'wxid_moments_owner'
 /** 时间线行的上界（一屏 4~6 张卡片 + overscan 4 ⇒ 十几行；渐进窗口在 1200 条时必然是 1320 行）。 */
 const MAX_MOMENT_DOM_ROWS = 80
@@ -49,6 +55,48 @@ const fileMd5 = (i) => createHash('md5').update('supertime-file-' + i, 'utf8').d
 const USER = 'wxid_n18'
 const SESSION_NAME = 'N18 长列表夹具'
 
+/**
+ * 量一段真实滚动的帧数（W2-3.2）。
+ *
+ * 在页面里起一个 requestAnimationFrame 计数循环，同时用 mouse.wheel 真滚一段；
+ * 滚完把帧数与每帧间隔读回来。用**帧数**而不是平均帧时长下判据：
+ * 帧时长在共享机器上抖动极大，而帧数是「这段时间里到底画了几次」这个事实 ——
+ * 机器慢只会让总时长变长，不会让它少画。
+ *
+ * @param win - 页面。
+ * @param box - 滚动容器。
+ * @param ms - 量多久。
+ * @returns 帧数与最慢一帧。
+ */
+async function measureScrollFps(win, box, ms) {
+  await box.evaluate((el) => { el.scrollTop = Math.round(el.scrollHeight * 0.25) })
+  await win.waitForTimeout(200)
+  // 探针与滚动**并发**起：滚起来之后才开始数，数的是「边滚边挂载新行」那一段。
+  const probe = win.evaluate(async (budget) => {
+    const gaps = []
+    let last = performance.now()
+    let stop = false
+    const loop = () => {
+      const now = performance.now()
+      gaps.push(now - last)
+      last = now
+      if (!stop) requestAnimationFrame(loop)
+    }
+    requestAnimationFrame(loop)
+    await new Promise((r) => setTimeout(r, budget))
+    stop = true
+    return gaps
+  }, ms)
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    await win.mouse.wheel(0, 240).catch(() => {})
+    await win.waitForTimeout(16)
+  }
+  const gaps = await probe
+  const worstMs = gaps.length > 0 ? Math.max(...gaps) : Number.POSITIVE_INFINITY
+  const avgMs = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0
+  return { frames: gaps.length, avgMs, worstMs }
+}
 let _electron
 try {
   ;({ _electron } = await import('playwright'))
@@ -272,6 +320,26 @@ try {
   await win.waitForTimeout(600)
   const lastVisible = await win.locator(`#msg-${TOTAL}`).count()
   check(lastVisible > 0, `滚到底能看到最后一条（#msg-${TOTAL}）`, '')
+  /*
+   * —— 第三处：滚动帧率（N18 明确「未量」的那一条，W2-3.2 补上）——
+   *
+   * 为什么必须量：前面所有断言都只能证明「DOM 数有上界」，而**上界不等于观感**。
+   * 300 个节点里每个都是三层 div + 一张头像，浏览器照样可能掉帧；反之一份很小的 DOM
+   * 也可能因为别的原因（主进程忙、合成层抖）卡。这两件事此前都没有任何判据。
+   *
+   * 量法（为什么用 rAF 帧数而不是帧时长）：帧时长在共享机器上抖动极大，而**帧数**是
+   * 「这段时间里到底画了几次」这个事实本身 —— 机器慢只会让总时长变长，不会让它少画。
+   * 于是判据写成「1200ms 内至少画到 20 帧」，等价于一次下界检查，不是性能门禁。
+   * 拖动用 mouse.wheel 而不是直接设 scrollTop：前者才走真实的输入→滚动→重排链路，
+   * 后者只是把滚动容器挪一下，测不到「边滚边挂载新行」这条真实路径。
+   */
+  const fps = await measureScrollFps(win, box, 1200)
+  check(fps.frames >= 20,
+    `滚动期间真的在画（1200ms 内 ${fps.frames} 帧，下界 20）`,
+    `frames=${fps.frames} 均帧 ${Math.round(fps.avgMs)}ms`)
+  check(fps.worstMs < 500,
+    `单帧没有长停顿（最长 ${Math.round(fps.worstMs)}ms，上界 500ms）`,
+    `worst=${Math.round(fps.worstMs)}ms`)
 
   /*
    * —— 第二处：收藏面板（#22「推广」那半条）——
@@ -439,6 +507,13 @@ try {
   check(momentNodesAtBottom <= MAX_MOMENT_DOM_ROWS,
     `底部时间线 DOM 行有上界（实测 ${momentNodesAtBottom} ≤ ${MAX_MOMENT_DOM_ROWS}，总行数 ${momentRowsTotal}）—— 渐进窗口必然是 ${momentRowsTotal}`, `nodes=${momentNodesAtBottom}`)
   // 底部：那一天的标签行已滚出窗口，此刻必须由悬浮日期头补上"现在在哪一天"
+  // 前提当场断言：底部窗口的第一行**不能**是日期标签行 ——
+  // 那正是 `showFloatingDay` 为 false 的唯一理由，那条判据就会空转。
+  // （夹具曾经每天 10 条，于是每块 11 行 ≈ 一屏 11 行，底部起点**必然**落在标签行上 ——
+  //  这条判据就是被这个巧合废掉的。断言在前，改坏夹具立刻会被看见。）
+  const bottomFirstRow = await win.locator('[data-moment-row]').first().getAttribute('data-moment-row')
+  check(!/^\d{4}-\d{2}-\d{2}$/.test(bottomFirstRow ?? ''),
+    `底部窗口的第一行不是日期标签行（否则下一条判据空转）（首行 ${bottomFirstRow || ''}）`, '')
   const floatAtBottom = await win.evaluate(() => document.querySelector('[data-moment-float-day]')?.dataset.momentFloatDay ?? '')
   // 滚回顶端：窗口要能走回去，并在那里量"顶端第一行是不是那一天的标签行"
   await scrollMoments(true)

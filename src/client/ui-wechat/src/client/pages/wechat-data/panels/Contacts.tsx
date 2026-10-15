@@ -12,7 +12,8 @@ import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Drawer, LinkButton, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { clickableKey, Drawer, EmptyMaybeSyncing, LinkButton, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -247,7 +248,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
               onChange={(v) => { setCat(v) }}
               ariaLabel="联系人分类"
             />
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出 CSV'}</button>
+            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
             {/* 导出记录：入口与「导出」放在一起。
                 原先挂在「设置 → 高级设置」里 —— 那是低频维护分组，而导出是通讯录这一屏
                 的动作；用户在这里点完导出，查看结果/重新导出应当就在同一处。 */}
@@ -257,7 +258,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
               data-open-export-history=""
               onClick={() => { setHistoryOpen(true) }}
               title="查看历史导出：打开文件、复制路径、按原参数重新导出、清理"
-            >导出记录</button>
+            {...desktopActionProps()}>{desktopAction() ? '导出记录（仅电脑）' : '导出记录'}</button>
           </>
         )}
       />
@@ -274,7 +275,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
             列宽下限与 `.list` 逐字对齐，`consistency-r7.wiring.spec.ts` 钉着这个等式。 */}
         {loading && <ListSkeleton rows={12} grid minCol={240} />}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
-        {!loading && !error && grouped.length === 0 && <div className={kitCss.emptyInline}>暂无联系人</div>}
+        {!loading && !error && grouped.length === 0 && <EmptyMaybeSyncing text="暂无联系人" />}
         {!loading && !error && grouped.map(([letter, list]) => (
           <div key={letter} className={css.group} data-letter={letter}>
             {/* `#` 是「没有任何拼音可依」的兜底桶（微信只为加过好友的联系人写拼音首字母，
@@ -361,7 +362,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
       {/* 导出记录弹窗。入口在工具栏「导出记录」按钮 —— 与「导出 CSV」同处，
           用户导完就地能查结果/重新导出/清理，不必再跳设置。
           默认预筛「通讯录」，与本屏上下文一致（可在下拉里改回「全部」）。 */}
-      <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />
+      {/* 手机态**不挂载**（真机量到：弹窗即使关着，挂载时也会打一次 `getExportHistory` —— 分页器不看 `open`，而那不在远程白名单里）。只禁用入口只解决「点不到」，不解决「界面自己发出去」。 */} {!desktopAction() && <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />}
     </div>
   )
 }

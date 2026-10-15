@@ -50,6 +50,11 @@ describe('单聊「聊天信息」的接线', () => {
     expect(around.includes('setExportOpen(true)'), 'onExport 必须打开导出对话框（exportSession 的入口）').toBe(true)
   })
 
+  it('抽屉开着时订阅宿主数据事件并静默重取（否则统计停在打开那一刻）', () => {
+    expect(panel.includes('useWechatDataUpdated(refreshContact360)'), '单聊抽屉必须订阅数据事件').toBe(true)
+    expect(panel.includes('infoRefreshApplies('), '刷新响应落地前必须过归属闸').toBe(true)
+  })
+
   it('组件自带 private-only 守卫：session 是群聊时渲染 null（防线不只在按钮上）', () => {
     expect(panel.includes("session.type === 'group'"), '组件内部必须有 private-only 守卫').toBe(true)
   })

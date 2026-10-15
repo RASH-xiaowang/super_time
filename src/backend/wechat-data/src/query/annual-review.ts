@@ -12,7 +12,7 @@
  *   · **规模类指标算全部消息**（日历热力图 / 最疯的一天 / 作息切片）——两类若混用口径，
  *     就会出现「日均 28 条、但最疯的一天 2,218 条」这种读者无法解释的数字。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { createHash } from 'node:crypto'
 import { contactMeta, shardCatalogDirs } from './meta.ts'

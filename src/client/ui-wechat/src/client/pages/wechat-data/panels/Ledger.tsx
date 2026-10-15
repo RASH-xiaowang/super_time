@@ -3,11 +3,12 @@
  * 异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, Card, CellPrimary, DataTable, LinkButton, Mono, MonthField, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
+import { CACHE_LEDGER } from './overview-cache-keys.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
 
@@ -19,13 +20,13 @@ const DIR_LABEL: Record<'in' | 'out' | 'unknown', string> = {
 
 /**
  * 总览已经把「全部月份」的账本快照算过一次并缓存在 localStorage 里
- * （`dsh-wechat-overview-ledger-v1`，字段与本页完全同构）。
+ * （`CACHE_LEDGER`，字段与本页完全同构）。
  * 用户从总览点进来时直接拿它先渲染 —— 不必再等一次全量统计。
  * 读缓存一律容错：结构不对/损坏就当没有。
  */
 function readOverviewLedger(): LedgerSnapshot | null {
   try {
-    const raw = localStorage.getItem('dsh-wechat-overview-ledger-v1')
+    const raw = localStorage.getItem(CACHE_LEDGER)
     if (!raw) return null
     const v = JSON.parse(raw) as Partial<LedgerSnapshot> | null
     if (!v || typeof v !== 'object') return null
@@ -73,6 +74,8 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
       setLoading(false)
     }
   }, [])
+
+  useWechatDataUpdated(() => { void load(month) })
 
   useEffect(() => { void load(month) }, [month, load])
 

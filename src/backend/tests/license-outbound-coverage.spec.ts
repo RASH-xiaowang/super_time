@@ -74,6 +74,21 @@ function delegationTarget(bodyText: string): string | null {
  * M21 把 gateway 的域方法体搬进 `src/backend/wechat-data/src/remotes/*.ts`，网关上只剩签名 + 转发 ——
  * 不跟这一步的话，出网判据会**静默失效**（搬走的方法一个个都不再被视为出网）。
  */
+/**
+ * 处理器内部再往下委托一层：`async optimizeAskQuestion(…) { return optimizeAskQuestionIn(rc, …) }`
+ * ⇒ 接缝还要跟着被委托的那份模块级函数走。
+ *
+ * 为什么需要：M21 把方法体搬进 `remotes/*.ts` 之后，工厂函数自己受 `function-size-ratchet`
+ * 的棘轮管着（只许变小），于是「再搬一次到模块级函数」是同一把结构刀的延续。不跟这一跳，
+ * 出网判据会把刚搬走的方法静静算成「不出网」—— 那正是本 spec 存在的理由（W3-6.1 实测踩到）。
+ * @param bodyText - 处理器方法体的文本。
+ * @returns 被委托的模块级函数名；不是这种形态时 null。
+ */
+function implDelegationTarget(bodyText: string): string | null {
+  const m = /return\s+([A-Za-z_$][\w$]*In)\s*\(\s*rc\s*,/.exec(bodyText)
+  return m ? grp(m, 1, 'return xxxIn(rc, …) 委托式') : null
+}
+
 function scanImpls(src: string): Map<string, string[]> {
   const sf = ts.createSourceFile('impls.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const impls = new Map<string, string[]>()
@@ -90,11 +105,26 @@ function scanImpls(src: string): Map<string, string[]> {
     walk(root)
     return seams
   }
+  /** 模块级函数的接缝（委托的下一跳）。 */
+  const moduleFns = new Map<string, string[]>()
+  const visitFns = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      moduleFns.set(node.name.text, seamsOf(node.body))
+    }
+    node.forEachChild(visitFns)
+  }
+  visitFns(sf)
   const visit = (node: ts.Node): void => {
     if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
-      impls.set(node.name.text, seamsOf(node))
+      let seams = seamsOf(node)
+      const target = implDelegationTarget(node.getText(sf))
+      if (target) seams = [...seams, ...(moduleFns.get(target) ?? [])]
+      impls.set(node.name.text, seams)
     } else if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)) {
-      impls.set(node.name.text, seamsOf(node.initializer))
+      let seams = seamsOf(node.initializer)
+      const target = implDelegationTarget(node.getText(sf))
+      if (target) seams = [...seams, ...(moduleFns.get(target) ?? [])]
+      impls.set(node.name.text, seams)
     }
     node.forEachChild(visit)
   }

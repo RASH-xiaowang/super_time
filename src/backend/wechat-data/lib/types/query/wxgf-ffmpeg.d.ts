@@ -9,6 +9,7 @@ export interface WxgfFfmpegSpawnResult {
     stderr: Buffer;
 }
 export type WxgfFfmpegSpawn = (exe: string, args: readonly string[], input: Buffer, timeoutMs: number) => WxgfFfmpegSpawnResult;
+export type WxgfFfmpegSpawnAsync = (exe: string, args: readonly string[], input: Buffer, timeoutMs: number) => Promise<WxgfFfmpegSpawnResult>;
 /**
  * 定位 ffmpeg：`DSH_WECHAT_FFMPEG` 环境变量优先，其次 PATH。
  * @returns 绝对路径；找不到返回 ''。
@@ -46,3 +47,18 @@ export declare function transcodeWxgfWithFfmpeg(payload: Uint8Array, deps?: {
 } | {
     error: string;
 };
+/**
+ * {@link transcodeWxgfWithFfmpeg} 的异步入口：ffmpeg 不在 worker 事件循环上阻塞。
+ * 同一载荷的并发调用共享一个在途 Promise；失败同样进内容缓存。
+ */
+export declare function transcodeWxgfWithFfmpegAsync(payload: Uint8Array, deps?: {
+    spawn?: WxgfFfmpegSpawnAsync;
+    findExe?: () => string;
+    useCache?: boolean;
+}): Promise<{
+    bytes: Uint8Array;
+    jpegWidth: number;
+    jpegHeight: number;
+} | {
+    error: string;
+}>;

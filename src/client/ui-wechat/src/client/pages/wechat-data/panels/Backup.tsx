@@ -12,6 +12,7 @@ import { useConfirm } from '../ui/confirm.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { desktopOnlyGate } from '../ui/desktop-only.tsx'
 
 /**
  * Render the backup-manager panel.
@@ -19,6 +20,7 @@ import kitCss from '../ui/kit.module.css'
  * @returns the backup element tree.
  */
 export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
+  const blocked = desktopOnlyGate('backup'); if (blocked !== null) return blocked
   /** 应用内确认框（替代原生 window.confirm —— 系统白框不跟主题）。 */
   const confirm = useConfirm()
   /* 2026-10-03 推广批次 3：items 改用共用 useFreshData —— 打开即查最新（不再预填缓存），

@@ -12,11 +12,13 @@ import {
   CLOUD_TONES,
   boxesDisjoint,
   cloudFontStep,
+  cloudLimitForStage,
   cloudLimitForWidth,
   cloudStageHeight,
   cloudTone,
   estimateTextWidth,
   layoutWordCloud,
+  toCloudWords,
   type CloudTone,
 } from './wordcloud-layout.ts'
 
@@ -63,8 +65,77 @@ describe('字号曲线：长尾数据也要拉得开', () => {
   })
 })
 
-describe('宽度估算：不测 DOM 也能算（SSR / Node 可用）', () => {
-  it('中文比英文宽，且随字号线性变化', () => {
+/**
+ * **卡片同款映射**（`toCloudWords`）：这些断言必须跑在「卡片实际用的那一份映射」上。
+ *
+ * 为什么单独一组：2026-10-12 之前卡片自己写映射，而它把 `cloudFontStep()` 的
+ * **档位下标**当像素值用（`Math.min(cloudFontCap(...), cloudFontStep(...))`，两个量纲取 min
+ * ⇒ 永远是下标），布局再把下标兜到 `CLOUD_FONT_MIN` ⇒ **120 个词全是 9~12px 一样大**。
+ * 上面那几组之所以全绿，是因为它们**自己**写了 `CLOUD_FONT_STEPS[step]` —— 测的是曲线，
+ * 不是卡片。用户看到的是「这个板块的内容太少了」（截图里只有一条扁带上的几个小词）。
+ * 所以这组盯的是三件事：**字号是像素且在阶梯上 / 大小对比够 / 撒点后全在画布内**。
+ */
+describe('卡片同款映射：字号必须是像素，且撒点后全在画布内', () => {
+  /** 60 个词、次数 400→2（与上面「病根」同一形状的长尾）。 */
+  const RAW = Array.from({ length: 60 }, (_, i) => ({
+    text: i % 3 === 0 ? `词${String(i)}号` : `w${String(i)}`,
+    count: Math.max(2, Math.round(400 / (i + 1))),
+  }))
+
+  it('字号是**像素**而不是档位下标（下标当像素用 = 整片词云一样大）', () => {
+    const words = toCloudWords(RAW)
+    expect(words).toHaveLength(RAW.length)
+    const sizes = words.map((w) => w.size)
+    expect(sizes[0], '首词必须落在阶梯顶档').toBe(CLOUD_FONT_STEPS[CLOUD_FONT_STEPS.length - 1])
+    expect(sizes[sizes.length - 1], '尾词必须落在阶梯底档').toBe(CLOUD_FONT_STEPS[0])
+    for (const w of words) {
+      expect(
+        CLOUD_FONT_STEPS,
+        `${w.text} 的字号是 ${String(w.size)}，不在阶梯上 ⇒ 多半是把档位下标当像素传了`,
+      ).toContain(w.size)
+    }
+  })
+
+  it('大小对比 ≥3×（「一坨一样大的小词」正是重做前与本次回归的病）', () => {
+    const sizes = toCloudWords(RAW).map((w) => w.size)
+    const ratio = Math.max(...sizes) / Math.min(...sizes)
+    expect(ratio, `最大/最小只有 ${String(ratio)}×`).toBeGreaterThanOrEqual(3)
+  })
+
+  it('单调不增 + 色阶合法 + 空输入不炸', () => {
+    const words = toCloudWords(RAW)
+    for (let i = 1; i < words.length; i += 1) {
+      expect(words[i]!.size, `第 ${String(i)} 个词反而更大`).toBeLessThanOrEqual(words[i - 1]!.size)
+    }
+    for (const w of words) expect(CLOUD_TONES).toContain(w.tone)
+    expect(toCloudWords([])).toEqual([])
+  })
+
+  /**
+   * 三个真实舞台宽度各撒一次，全部词都必须落在画布内。
+   *
+   * 这一条同时钉住「舞台高度必须与布局高度同源」：词被放到 `y + height > 画布高` 的位置上时，
+   * 只要容器给了正确高度就还看得见；容器矮了（旧代码里舞台没有高度、只剩 48px）就被
+   * `overflow:hidden` 裁掉 —— 那是「上百个词只看见几个」的直接机制。
+   */
+  it('撒点之后全部落在画布内（舞台拿到这个高度就不会被 overflow 裁掉）', () => {
+    for (const width of [700, 1160, 2350]) {
+      const height = cloudStageHeight(width)
+      const picked = RAW.slice(0, cloudLimitForWidth(width))
+      const r = layoutWordCloud(toCloudWords(picked), { width, height })
+      expect(r.placed.length, `${String(width)}px 宽只落位 ${String(r.placed.length)} 个词`).toBeGreaterThan(20)
+      expect(r.dropped / picked.length, `${String(width)}px 宽丢了 ${String(r.dropped)}/${String(picked.length)}`).toBeLessThan(0.5)
+      for (const p of r.placed) {
+        expect(p.x, `${p.text} 越过左边界`).toBeGreaterThanOrEqual(0)
+        expect(p.y, `${p.text} 越过上边界`).toBeGreaterThanOrEqual(0)
+        expect(p.x + p.width, `${p.text} 越过右边界`).toBeLessThanOrEqual(width + 1)
+        expect(p.y + p.height, `${p.text} 越过下边界（舞台高度与布局高度不同源时会看不见）`).toBeLessThanOrEqual(height + 1)
+      }
+    }
+  })
+})
+
+describe('宽度估算：不测 DOM 也能算（SSR / Node 可用）', () => {  it('中文比英文宽，且随字号线性变化', () => {
     expect(estimateTextWidth('中文词', 20)).toBeGreaterThan(estimateTextWidth('abc', 20))
     expect(estimateTextWidth('中文词', 40)).toBeGreaterThan(estimateTextWidth('中文词', 20) * 1.9)
     expect(estimateTextWidth('', 20)).toBe(0)
@@ -219,7 +290,7 @@ describe('画布高度', () => {
   })
 })
 
-describe('词数跟着画布宽度走（固定词数会一边丢词、一边留白）', () => {
+describe('词数跟着画布尺寸走（固定词数会一边丢词、一边留白）', () => {
   it('常见宽度换算出来的词数（与实测吻合：这块画布装得下这么多）', () => {
     expect(cloudLimitForWidth(700)).toBe(72)
     expect(cloudLimitForWidth(900)).toBe(93)
@@ -228,13 +299,42 @@ describe('词数跟着画布宽度走（固定词数会一边丢词、一边留�
     expect(cloudLimitForWidth(2354)).toBe(243) // 全屏
   })
 
-  it('夹在 [60, 400]：再窄也不少到看不出云、再宽也不超过后端上界', () => {
-    expect(cloudLimitForWidth(100)).toBe(60)
+  /**
+   * 夹取范围：上限 400（后端硬上界），下限**只给退化画布兜底**。
+   *
+   * ⚠️ 2026-10-12 由 60 下调到 24。那个 60 是「所有词都 9~12px」的年代定的
+   * （词小 ⇒ 少给几个也铺得满）；字号修对之后，60 在 420×200 上会丢 25/60 ——
+   * 请求数比容量还大等于白请求（丢掉的那部分正是用户看到的「内容少」）。
+   */
+  it('夹在 [24, 400]：再窄也不至于请求超过容量、再宽也不超过后端上界', () => {
+    expect(cloudLimitForWidth(100)).toBe(24)
     expect(cloudLimitForWidth(4000)).toBe(400)
     expect(cloudLimitForWidth(0)).toBe(120) // 还没量到宽度 ⇒ 默认值
     expect(cloudLimitForWidth(-5, 80)).toBe(80) // 量不到时用传入的 fallback
     expect(cloudLimitForWidth(5000, 300)).toBe(400) // 宽度够大时按宽度算，fallback 让位
     expect(cloudLimitForWidth(5000, 9999)).toBe(400) // fallback 也要夹住
+  })
+
+  /**
+   * **面积那一道**（2026-10-12 补）：宽度只看一维，极窄画布上会超订。
+   *
+   * 实测（词长按真实数据取 2/3/4 字混合）：420×200 按宽度要 60 个、只装得下 35；
+   * 520×200 要 60、装 45 —— 丢掉的 20~25 个正是「这个板块的内容太少了」的第二重来源。
+   * 现在 `cloudLimitForStage` 取「宽度换算」与「面积换算（/2300）」的**较小值**，
+   * 而 700px 以上与既有校准值**逐个相同**（下面的断言就是钉这一点）。
+   */
+  it('面积那一道只压极窄画布，宽画布不许被它改动', () => {
+    expect(cloudLimitForStage(420, 200)).toBe(37)
+    expect(cloudLimitForStage(520, 200)).toBe(45)
+    // 700px 起与「只按宽度」逐个一致（校准值不许漂）
+    for (const width of [700, 900, 1160, 1600, 2354]) {
+      const height = cloudStageHeight(width)
+      expect(cloudLimitForStage(width, height), `${String(width)}px 上面积那一道把词数改掉了`)
+        .toBe(cloudLimitForWidth(width))
+    }
+    // 量不到尺寸时仍然只用 fallback（别拿 0 去算面积）
+    expect(cloudLimitForStage(0, 0)).toBe(120)
+    expect(cloudLimitForStage(1160, 0, 60)).toBe(60)
   })
 })
 

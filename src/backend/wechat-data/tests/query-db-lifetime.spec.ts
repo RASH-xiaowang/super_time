@@ -110,22 +110,18 @@ const BATCH4_FIXED = [
 const NO_RAW_OPEN = [
   'query/handoff.ts',
   'query/media-assets.ts',
+  'query/notes.ts',
 ]
 
 /**
  * 已知仍待改造的站点（按文件计）—— 棘轮：**只能变小**。
  * 口径：`new DatabaseSync` 之后 close 只出现在成功路径上（catch / finally 里没有）。
  *
- * 只剩这一处，而且是**有意留着**的：`messages.ts:findShards` 打开一批分片后
- * 把连接装进 `MsgShard[]` 交给调用方（判据认的是 `return db`，认不出 `out.push({ db })`）。
- * 三个取用方逐个核对过：`queryNewMessages` / `queryMessages` 在 `finally` 里全关，
- * `msgCreateTimeByServerId` 原先是「轮到哪条关哪条 + 命中就 return」—— 第五刀实测这就是漏
- * （多分片会话命中第一条时，后面几条连接没人关），已改成"取全部、finally 全关"，
- * 由 M268 钉住。留着这一行 = 逼下一个改这条路径的人重新核对取用方，而不是让清单悄悄变空。
+ * 当前清单已清空：`messages.ts` 已改为经 `withShards` 打开，所有句柄由 helper
+ * 的 `finally` 统一关闭。helper 内的 `db.close()` 必须保留为直接调用，AST 棘轮才能
+ * 识别到关闭动作。
  */
-const KNOWN_UNFIXED: Record<string, number> = {
-  'query/messages.ts': 1,
-}
+const KNOWN_UNFIXED: Record<string, number> = {}
 
 // ---------------------------------------------------------------- 行为层夹具
 
@@ -769,6 +765,14 @@ describe('query 层的连接纪律（棘轮）', () => {
     expect(actual, `新增/变多的泄漏点要修，不要往清单里加。当前实测：\n${detail}`).toEqual(KNOWN_UNFIXED)
   })
 
+  it('待改造清单必须是普通对象字面量（盲化成 Object.create(null) 会让棘轮假装已清空）', () => {
+    expect(Object.getPrototypeOf(KNOWN_UNFIXED)).toBe(Object.prototype)
+    // 单看运行时原型还挡不住 Object.create(Object.prototype) 这类写法，所以同时钉住声明形状。
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+    // 把结尾拆开写，避免守卫字符串与真正声明重复，令变异登记表的唯一锚点失效。
+    expect(self).toContain('const KNOWN_UNFIXED: Record<string, number> = ' + '{}')
+  })
+
   it('审查报告点名的文件与第四批清账的文件都不许回到清单', () => {
     for (const f of [...AUDIT_FIXED, ...BATCH4_FIXED]) {
       expect(KNOWN_UNFIXED[f], `${f} 不该再有待改造站点`).toBeUndefined()
@@ -781,7 +785,7 @@ describe('query 层的连接纪律（棘轮）', () => {
       const src = readFileSync(join(SRC_ROOT, f), 'utf8')
       // 允许带泛型实参的写法（`withDb<PaymentStatus>(...)`）：只认字面 `withDb(` 会把
       // 「显式标注返回值」这种**更好**的写法判成绕过。
-      expect(src, `${f} 必须经 withDb 拿连接`).toMatch(/\bwithDb[<(]/)
+      expect(src, `${f} 必须经 withDb / withWritableDb 拿连接`).toMatch(/\bwith(?:Writable)?Db[<(]/)
       expect(src, `${f} 又出现了裸 new DatabaseSync(`).not.toContain('new DatabaseSync(')
     }
   })

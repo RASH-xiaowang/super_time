@@ -13,6 +13,7 @@ import { useTransientNotice } from './hooks.tsx'
 import { apiOpenPath } from '../api.ts'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { PanelHeader, SearchInput, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { MomentsCard } from './moments-card.tsx'
 import { MomentsSidebar } from './moments-sidebar.tsx'
 import { MomentsDetail, MomentsExportDialog, MomentsImageViewer } from './moments-portals.tsx'
@@ -230,7 +231,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
             <button type="button" className={css.btn} onClick={() => { void load() }} disabled={loading}>刷新</button>
             <button type="button" className={css.btn} data-on={syncing || undefined} onClick={() => { void doSync() }} disabled={syncing}>{syncing ? '同步中…' : '↻ 同步'}</button>
             {lastSync > 0 && <span className={css.syncStatus} title="最近一次手动重同步时间">最近同步 {fmtHourMinuteMs(lastSync)}</span>}
-            <button type="button" className={css.btn} onClick={openExport}>导出</button>
+            <button type="button" className={css.btn} onClick={openExport} {...desktopActionProps()}>{desktopAction() ? '导出（仅电脑）' : '导出'}</button>
           </>
         )}
       />
@@ -320,7 +321,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
       {exportedPath && (
         <div className={css.exportResult}>
           <span className={css.exportResultPath} title={exportedPath}>📄 {exportedPath}</span>
-          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).catch(() => { hold('无法打开文件') }) }}>打开导出文件</button>
+          <button type="button" className={css.btn} onClick={() => { void apiOpenPath(exportedPath).catch(() => { hold('无法打开文件') }) }} {...desktopActionProps()}>打开导出文件</button>
         </div>
       )}
 

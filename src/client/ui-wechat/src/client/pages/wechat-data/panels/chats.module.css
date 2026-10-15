@@ -120,6 +120,12 @@
 .msgRow:not(.msgRowSelf) .msgTimeChip { left: 0; }
 .msgRowSelf .msgTimeChip { right: 0; }
 .msgRow:hover .msgTimeChip { opacity: 1; }
+/* 触摸上没有 hover（2026-10-14 真数据实测：手机上每条消息的精确时间永远看不到）。
+   常显会把气泡压住（这枚芯片是 `bottom: calc(100% + 6px)` 绝对定位的），所以给一个
+   **按下即显**的出口：手指按住那条消息就能看到时间，与长按菜单不冲突。 */
+@media (hover: none) {
+  .msgRow:active .msgTimeChip { opacity: 1; }
+}
 /* 独立时间文本（如监控面板）：不是气泡的一部分，仅作行内小字。 */
 .msgTime {
   font-size: 11px;
@@ -156,8 +162,11 @@
      ② 本元素是列向 flex 子项（父级 align-items: flex-start ⇒ fit-content），
         宽度天然 ≤ 列宽。 */
 }
-/* 微信气泡尖角：12×12 的 45° 方块，压在气泡边沿上（top 12px、外挂 -4px、圆角 2px）。
-   官方四角圆角一致，尖角是独立叠上去的方块，**不**把靠近尖角的那一角收小。 */
+/* 微信气泡尖角：**真三角**，不是旋转方块。
+   原来用 12×12 的方块 rotate(45deg)，画出来的是一枚**菱形**凸在气泡边沿上（上下都鼓），
+   而微信桌面端的尖角是「贴气泡那一条边是直的、尖朝外」的三角形。
+   做法：仍是 12×12 的盒，用 `clip-path` 切成三角形（竖边贴着气泡中心侧），
+   位置沿用原来的 top 12px / 外伸 4px —— 那两个数是官方量的，不动。 */
 .msgRow:not(.msgRowSelf) .msgBubble::before,
 .msgRowSelf .msgBubble::after {
   content: '';
@@ -165,12 +174,12 @@
   top: 12px;
   width: 12px;
   height: 12px;
-  border-radius: 2px;
-  transform: rotate(45deg);
   pointer-events: none;
 }
-.msgRow:not(.msgRowSelf) .msgBubble::before { left: -4px; background: var(--wx-bubble-other); }
-.msgRowSelf .msgBubble::after { right: -4px; background: var(--wx-bubble-self); }
+/* 收到的（左边）：竖边在右（贴气泡中心侧），尖朝左外 */
+.msgRow:not(.msgRowSelf) .msgBubble::before { left: -4px; background: var(--wx-bubble-other); clip-path: polygon(100% 0, 100% 100%, 0 50%); }
+/* 发出的（右边）：竖边在左，尖朝右外 */
+.msgRowSelf .msgBubble::after { right: -4px; background: var(--wx-bubble-self); clip-path: polygon(0 0, 0 100%, 100% 50%); }
 .msgRowSelf .msgBubble {
   background: var(--wx-bubble-self);
   color: var(--wx-on-self);

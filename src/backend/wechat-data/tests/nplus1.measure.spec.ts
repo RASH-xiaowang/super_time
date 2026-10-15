@@ -10,8 +10,22 @@
  *      纯数字未命中还要**再整轮**用 `CAST(server_id AS TEXT)` 扫一遍）；
  *   C. `server_id=?` 到底走不走索引（决定数字优先那条路径是否真有收益）。
  *
+ * 2026-10-11 实跑一遍（`MEASURE_M11=1` + `M11_DATA_DIR=<合成但形状真实的根>`：
+ * 12 个消息分片 × 4000 行、hardlink 40000 行）：
+ *   dir2id 行数 40000；image_hardlink_info_v4 行数 40000
+ *   读整张 dir2id（每张图一次）        中位 10.81ms ⇒ 30 张图 ≈ 324ms
+ *   resolveImageFilePath（含新建连接） 平均 19.28ms/张
+ *   resolveImageResourceHint            0.79ms/次
+ *   索引计划：整型等值走 SEARCH、CAST(server_id AS TEXT) 走 SCAN
+ * 5.2 的前提**成立且是真 N+1**：`resolveImageFilePath` 每张图都要把整张 dir2id
+ * 读一遍（10.81ms），一批 30 张就是 324ms —— 而这件事完全可以一次批量取回。
+ *
  * 运行：
  *   MEASURE_M11=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/nplus1.measure.spec.ts
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { existsSync } from 'node:fs'

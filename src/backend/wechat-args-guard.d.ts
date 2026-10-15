@@ -1,5 +1,5 @@
 /**
- * `wechat-args-guard.js` 的类型面（H11 口径：给宿主层 JS 补声明，而不是在调用处写 `any`）。
+ * `wechat-args-guard.js` 的类型面（H11 口径：给宿主层 JS 补**手写**声明，而不是在调用处写 `any`）。
  *
  * 为什么必须有：这道闸门是 `wechat:call` 唯一的入参关口，它的返回值形状
  * （`{ok:true, value, bytes}` / `{ok:false, code, message}`）**就是**主进程对渲染层的错误契约。
@@ -103,8 +103,16 @@ export function observe(method: string, bytes: number): void
 /** 记一次 zod 影子判定（`null` = 通过）。 */
 export function noteSchema(method: string, reason: string | null): void
 
-/** 影子账本快照（进 `info().argGuard`）。 */
-export function snapshot(covered: number, total: number): {
+/**
+ * 影子账本快照（进 `info().argGuard`）。
+ *
+ * `enforced` 来自宿主层显式传入的白名单；守卫自己**不会**根据通过次数自动升级。
+ */
+export function snapshot(
+  covered: number,
+  total: number,
+  enforced?: ReadonlySet<string>,
+): {
   covered: number
   total: number
   uncovered: number

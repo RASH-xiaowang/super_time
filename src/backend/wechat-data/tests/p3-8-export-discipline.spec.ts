@@ -30,7 +30,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC_ROOT = join(HERE, '..', 'src')
 
 /** 整条删掉的导出：全仓任何文件都不许再导出它们。 */
-const DEAD_FUNCTIONS = ['resolveImageMd5', 'isQueueRunning', 'senderNameMap', 'embedOne'] as const
+const DEAD_FUNCTIONS = [
+  'resolveImageMd5',
+  'isQueueRunning',
+  'senderNameMap',
+  'embedOne',
+  'getKeysInfoSummary',
+] as const
 
 /** 只该在 `keys/types.ts` 里消失的名字（别处的同名是活的，不能拿全仓判）。 */
 const DEAD_IN_KEY_TYPES = ['KEY_SIZE', 'PBKDF2_ITERATIONS', 'PAGE_SIZE', 'SALT_SIZE', 'AES_BLOCK_SIZE'] as const

@@ -9,17 +9,25 @@
  * 自包含：数据获取在组件内部（open && session 变化时拉取，alive 防竞态），
  * 外部只需要 `open / session / onClose / onExport` 四个 props —— chats-view.tsx
  * 已 960 行（M21 上限 1000），接线面必须保持最小。
+ *
+ * 实时刷新（2026-10-13）：抽屉开着时订阅宿主数据事件，**静默**重取 360 统计 ——
+ * 不订阅的话，「消息总数 / 最近联系」停在打开那一刻（与群聊抽屉同族缺陷）。
+ * 落地前过 `infoRefreshApplies`：期间被关掉或切了会话，旧响应一律丢弃。
  */
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { apiGetContact360 } from '../api.ts'
 import type { Contact360Snapshot, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { EmptyState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
-import { ListSkeleton } from './hooks.tsx'
+import { ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
+import { infoRefreshApplies } from './chats-info-live.ts'
 import { Avatar } from './chats-support.tsx'
+import { InfoRow, SectionTitle } from './chats-info-rows.tsx'
 import { fmtDateSec } from '../utils/format.ts'
 import css from './chats-contact-info.module.css'
+import cssrows from './chats-rows.module.css'
+import cssshell from './chats-shell.module.css'
 
 export interface ChatsContactInfoViewProps {
   /** 抽屉是否打开。 */
@@ -67,6 +75,31 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
     return () => { alive = false }
   }, [open, session])
 
+  /*
+   * 数据事件后的静默重取。静默 = 不置 loading、不清已画的数据（清掉会闪骨架屏）；
+   * 失败保留旧值（与缓存后台复验失败同一降级口径）。落地前过 infoRefreshApplies：
+   * 响应到达时抽屉已被关掉、或会话已切走（旧请求属于上一个联系人），一律丢弃。
+   */
+  const openRef = useRef(open)
+  openRef.current = open
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+  const refreshContact360 = useCallback((): void => {
+    if (!openRef.current) return
+    const target = sessionRef.current
+    if (!target || target.type === 'group') return
+    const fetchedFor = target.username
+    void apiGetContact360(fetchedFor)
+      .then((r) => {
+        const cur = sessionRef.current
+        if (!infoRefreshApplies(openRef.current, fetchedFor, cur?.username ?? null)) return
+        setData(r)
+        setErr(null)
+      })
+      .catch(() => { /* 静默：保留旧值，下一次事件再试 */ })
+  }, [])
+  useWechatDataUpdated(refreshContact360)
+
   if (!open || !session || session.type === 'group') return null
 
   return (
@@ -86,57 +119,39 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         {err && <div className={kitCss.error} role="alert">⚠️ {err}</div>}
         {!loading && !err && data && (
           <>
-            <div className={css.profile}>
-              <Avatar name={data.displayName} username={data.username} size={48} />
-              <div className={css.profileMeta}>
-                <span className={css.profileName}>{data.displayName}</span>
-                <span className={css.profileId}>{data.username}</span>
+            <div className={css.zones}>
+              {/* 区① 联系人 tile：与群成员网格同一语法（D5）—— 头像 48 + 名下昵称，取代原 profile 横排块。 */}
+              <div className={cssshell.memberGrid}>
+                <div className={cssrows.memberTile} data-static="true" title={data.displayName}>
+                  <Avatar name={data.displayName} username={data.username} size={48} />
+                  <span className={cssrows.memberName}>{data.displayName}</span>
+                </div>
               </div>
-            </div>
 
-            <div className={css.rows}>
-              <div className={css.row}>
-                <span className={css.rowLabel}>消息总数</span>
-                <span className={css.rowValue}>{data.messages.count.toLocaleString()}</span>
-              </div>
-              <div className={css.row}>
-                <span className={css.rowLabel}>首次联系</span>
-                <span className={css.rowValue}>{fmtDateSec(data.messages.firstTime)}</span>
-              </div>
-              <div className={css.row}>
-                <span className={css.rowLabel}>最近联系</span>
-                <span className={css.rowValue}>{fmtDateSec(data.messages.lastTime)}</span>
-              </div>
-              <div className={css.row}>
-                <span className={css.rowLabel}>朋友圈</span>
-                <span className={css.rowValue}>{data.moments.count.toLocaleString()} 条</span>
-              </div>
-              {data.funds.transfers > 0 && (
-                <div className={css.row}>
-                  <span className={css.rowLabel}>转账往来</span>
-                  <span className={css.rowValue}>{data.funds.transfers} 次</span>
-                </div>
-              )}
-              {data.funds.redpackets > 0 && (
-                <div className={css.row}>
-                  <span className={css.rowLabel}>红包往来</span>
-                  <span className={css.rowValue}>{data.funds.redpackets} 次</span>
-                </div>
+              {/* 区② 资料行（官方行语法；微信号/朋友圈只读，不给箭头） */}
+              <InfoRow first label="微信号" value={data.username} />
+              <InfoRow label="朋友圈" value={`${data.moments.count.toLocaleString()} 条`} />
+
+              {/* 区④ 本机统计：工作台自有数据，独立分组、官方行语法（D6） */}
+              <SectionTitle>本机统计</SectionTitle>
+              <InfoRow first label="消息总数" value={data.messages.count.toLocaleString()} />
+              <InfoRow label="首次联系" value={fmtDateSec(data.messages.firstTime)} />
+              <InfoRow label="最近联系" value={fmtDateSec(data.messages.lastTime)} />
+              {data.funds.transfers > 0 && <InfoRow label="转账往来" value={`${data.funds.transfers} 次`} />}
+              {data.funds.redpackets > 0 && <InfoRow label="红包往来" value={`${data.funds.redpackets} 次`} />}
+
+              {/* 区⑤ 关联：共同的群（无则整块不渲染） */}
+              {data.commonGroups.length > 0 && (
+                <>
+                  <SectionTitle>{`共同的群（${data.commonGroups.length}）`}</SectionTitle>
+                  {data.commonGroups.map((g, i) => (
+                    <InfoRow key={g.username} first={i === 0} label={g.name || g.username} value={`${g.memberCount} 人`} />
+                  ))}
+                </>
               )}
             </div>
 
-            {data.commonGroups.length > 0 && (
-              <div className={css.groups}>
-                <div className={css.groupsHd}>共同的群（{data.commonGroups.length}）</div>
-                {data.commonGroups.map((g) => (
-                  <div key={g.username} className={css.groupItem}>
-                    <span className={css.groupName}>{g.name || g.username}</span>
-                    <span className={css.groupMeta}>{g.memberCount} 人</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
+            {/* 区⑥ 底部动作位：全宽贴底（官方底部按钮槽；D7） */}
             <div className={css.exportRow}>
               <button type="button" className={css.exportAction} onClick={onExport}>
                 导出聊天记录

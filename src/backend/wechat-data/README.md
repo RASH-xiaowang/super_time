@@ -36,10 +36,11 @@
 | 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<数据根>/secrets.json`（与后端 config.json 同级） | 后端 `query/config.ts`（`SECRET_FIELDS`） |
 | 自动获取的密钥（库密钥 + 图片 AES/XOR） | `<数据根>/keys.json` | `keys/key-store.ts` |
 
-`keys.json` 目前**只有一个 `'default'` 槽位**（`keys/service.ts` 的三处写入都用这个字面量），
-不按 wxid 分账 —— 所以同机换过账号时，那里面可能是上一个账号的密钥。解码侧因此加了归属校验：
-记录里写明属于别的账号（`image_key_derived_wxid`，或内存扫描路径记的 `image_key_source_wxid_dir`）
-且与当前账号明确不同时，按「没有密钥」处理，而不是拿错的钥匙解出一张垃圾图（详见 `RELEASE-PLAN.md` N28）。
+`keys.json` 按账号分槽：能确定归属的自动获取结果写 `wxid_…` 槽，确定不了
+（老别名目录、扫描路径只拿到目录名）才继续写 `'default'`（`keys/service.ts` 的
+`dbKeySlotFor` / `imageKeySlotFor`）。读取侧先查当前账号槽、再回退 `default`，并保留
+归属校验：记录明确属于别的账号时按「没有密钥」处理，而不是拿错的钥匙解出一张垃圾图
+（详见 `RELEASE-PLAN.md` N28 / W2-2.2）。
 手工填写并保存的密钥仍走 `secrets.json`，且**优先级高于**这里自动获取的结果。
 | LLM API Key | `<STATE_DIR>/llm.json` | 宿主层 `wechat-paths.js` |
 
@@ -103,7 +104,7 @@
 
 ## Remote 方法
 
-> **完整清单以自动生成的 `docs/API.md` 为准（当前 172 个）** —— 下面只是分组概览，
+> **完整清单以自动生成的 `docs/API.md` 为准（当前 195 个）** —— 下面只是分组概览，
 > 历史上一度在这里手抄全表，结果漏了一大半还不断过期。改接口请跑 `npm run docs:api`，
 > 不要再往这里加方法名。
 
@@ -176,4 +177,4 @@ No KV cache is written or read by this package; the provider adapter owns any ca
 
 ## 参考文档
 
-- [微信数据库字段字典](docs/wechat-db-fields.md)：18 个库 / 60+ 表的字段语义（会话/联系人/消息/转账红包/朋友圈/收藏/头像/硬链接等）。
+- Remote 接口参考见 [`docs/API.md`](../../../docs/API.md)，由 `@Remote` 装饰器自动生成。

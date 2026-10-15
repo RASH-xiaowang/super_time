@@ -19,7 +19,8 @@
  *  ⑤ **底图取数不再问任何开关**（2026-09-30 出网开关全移除）：原先 `fetchFirstJson`
  *     要先问一次「禁止地图底图出网」开关，那是一次同步 RPC，排在后端长任务后面要等
  *     几十秒 ⇒ 底图连"开始拉"都还没轮到。现在开关与 `map-tiles-flag.ts` 本地镜像都删了，
- *     取数口直接 `fetch(url)`；本文件只保留「加载态要能自证在动」（U2 约定）这条判据。
+ *     且渲染层不再直接 `fetch`，改经 `apiGetMapGeoJson` 交给后端固定白名单代理；
+ *     本文件只保留「加载态要能自证在动」（U2 约定）这条判据。
  */
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -127,12 +128,14 @@ describe('④ 中国层 ECharts 起不来 → treemap', () => {
 })
 
 describe('⑤ 取数口不再问开关（出网开关与本地镜像都已删除）', () => {
-  it('底图取数口里没有闸门、也没有本地镜像（fetchFirstJson 直接 fetch）', () => {
+  it('底图取数口里没有闸门、也没有本地镜像（fetchFirstJson 经后端代理）', () => {
     // 2026-09-30：`mapTilesBlocked()` 与 `map-tiles-flag.ts` 整体删除。
-    // 这一条防的是「有人把那个先读镜像、再问后端的排队路径搬回来」。
+    // 这一条防的是「有人把那个先读镜像、再问后端的排队路径搬回来」；
+    // 现在取数从后端 `getMapGeoJson` 走，渲染层文件里不许再有裸 fetch。
     expect(DATA, '取数口里又长回了底图闸门').not.toContain('mapTilesBlocked')
     expect(DATA, '取数口里又长回了本地镜像').not.toContain('readMapTilesFlag')
-    expect(DATA, 'fetchFirstJson 没有直接 fetch 候选地址').toMatch(/async function fetchFirstJson[\s\S]{0,240}await fetch\(url\)/)
+    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,240}await apiGetMapGeoJson\(urls\)/)
+    expect(DATA, '渲染层又直接 fetch 地图地址').not.toMatch(/\bawait fetch\(/)
     expect(MAP, 'WorldMap 又去问隐私开关了').not.toContain('apiGetPrivacyState')
   })
 

@@ -43,7 +43,7 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { decompress } from 'fzstd'
 import { collectImageDatFiles } from './decrypt-images.ts'

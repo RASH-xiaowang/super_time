@@ -8,6 +8,12 @@
  * （实测 rows 少一半、`built_at` 是旧的）。
  *
  * 验收标准（条目原文）：数据根里存在活的 `-wal` 时，bootstrap 的结果与源库一致。
+ *
+ * ⚠ W2-8.5 之后「达成这一致的机制」换了：走 SQLite 的 `VACUUM INTO` 取自洽快照
+ * （「拷主库 + 拷 `-wal`」是两次独立读，中间源端可能在 checkpoint ⇒ 撕裂窗口，
+ * 见 `dirs-wal-tearing.spec.ts`）。所以目标端不再携带 `-wal`，断言跟着改成 `vacuumed`。
+ * **验收标准本身没变**：拷出来的仍然是最新一代。`-wal` 退路（`VACUUM INTO` 失败时）
+ * 由 `dirs-wal-tearing.spec.ts` 钉着。
  * @vitest-environment node
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -145,7 +151,12 @@ describe('N11：bootstrap 必须连带拷 SQLite 主库的 -wal', () => {
     expect(existsSync(dest + '-shm')).toBe(false)
     // 验收：bootstrap 的结果与源库一致
     expect(readIndexSummary(dest)).toEqual(truth)
-    expect(result.walCarried).toContain(dest + '-wal')
+    // W2-8.5 起，源端有活 `-wal` 的库走 `VACUUM INTO` 取自洽快照（撕裂窗口 = 两次独立的
+    // 文件读，见 `dirs-wal-tearing.spec.ts`），于是目标端**不再携带 `-wal`**。
+    // 底下这条 N11 的验收标准没有变：拷出来的仍然是**最新一代**，不是上一代。
+    // `-wal` 退路被钉在 `dirs-wal-tearing.spec.ts` 的「VACUUM INTO 失败」那条里。
+    expect(existsSync(dest + '-wal'), '走了自洽快照却还留着 -wal').toBe(false)
+    expect(result.vacuumed).toContain(dest)
   })
 
   it('源库没有活的 -wal 时不凭空多拷（也不引入 -shm）', () => {
@@ -182,7 +193,7 @@ describe('N11：bootstrap 必须连带拷 SQLite 主库的 -wal', () => {
     const result = bootstrapWechatData({ [SOURCE_DIR_ENV]: source, [DATA_DIR_ENV]: root })
     const destShard = join(root, 'decrypted', 'message', 'message_0.db')
     expect(readIndexSummary(destShard).rows).toBe(liveRows)
-    expect(result.walCarried).toContain(destShard + '-wal')
+    expect(result.vacuumed).toContain(destShard)
   })
 
   it('非 SQLite 文件旁边的 -wal 仍按运行时产物跳过（既有规则不变）', () => {

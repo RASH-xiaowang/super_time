@@ -16,7 +16,8 @@
  * （E2 已改成查索引）。这里解决 ①。
  */
 import { resolveImageKeyPair } from './image-key.ts'
-import { decodeEmoticonDataUrl, fetchEmoticonRemote, noteEmoticonMissBatch } from './media-image.ts'
+import { fetchEmoticonRemote, noteEmoticonMissBatch } from './media-image.ts'
+import { decodeEmoticonDataUrlAsync } from './media-image-async.ts'
 import type { EmoticonDataUrlsResult } from '../types.ts'
 
 /**
@@ -63,7 +64,7 @@ export async function fetchEmoticonDataUrlsBatch(
   let misses = 0
   for (let i = 0; i < dedup.length; i += 1) {
     const d = dedup[i]!
-    const local = decodeEmoticonDataUrl(decryptedDir, decodedDir, base, d.m, aesKey, xorKey)
+    const local = await decodeEmoticonDataUrlAsync(decryptedDir, decodedDir, base, d.m, aesKey, xorKey)
     if (local.url) {
       out[i] = { md5: d.m, dataUrl: local.url, ...(local.format ? { format: local.format } : {}) }
       continue

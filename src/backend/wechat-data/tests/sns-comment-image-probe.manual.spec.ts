@@ -1,5 +1,6 @@
 /**
- * **现场探针**：量朋友圈**评论图**（`<imageinfo>`）的真实形状（默认跳过；`SNS_LIVE=1` 才跑）。
+ * **现场探针**：量朋友圈**评论图**（`<imageinfo>`）的真实形状
+ * （默认跳过；`SNS_LIVE=1` 且 `SNS_LIVE_DB` 指向真库才跑）。
  *
  * ## 为什么要有它（2026-10-09 阶段 1）
  *
@@ -28,9 +29,8 @@ import { decryptSnsAll, SNS_HEAD_ENCRYPTED_BYTES } from '../src/query/sns-keystr
 import { snsCdnUrl } from '../src/query/sns-cdn-url.ts'
 import { weixinVersion } from '../src/query/config.ts'
 
-const DB = process.env['SNS_LIVE_DB']
-  ?? 'C:/Users/Administrator/AppData/Roaming/super-time-electron/wechat-data/decrypted/sns/sns.db'
-const LIVE = process.env['SNS_LIVE'] === '1'
+const DB = process.env['SNS_LIVE_DB'] ?? ''
+const LIVE = process.env['SNS_LIVE'] === '1' && DB !== ''
 /** 探几条：现场跑一次要真网，够看清形态就行。 */
 const LIMIT = Number(process.env['SNS_LIVE_LIMIT'] ?? '5')
 

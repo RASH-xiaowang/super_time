@@ -9,7 +9,8 @@
 
 import clsx from 'clsx'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { apiAddKbFiles, apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbFiles, apiGetKbVectorIndex, apiOpenFileDialog, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, writeRenderCache } from '../api.ts'
+import { apiAddKbFiles, apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbFiles, apiGetKbVectorIndex, apiOpenFileDialog, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, runtimeCapabilities, writeRenderCache } from '../api.ts'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import type { KbFileMeta, KbSearchResult, KbVectorIndexView } from '../types.ts'
 import { KB_ACCEPTED_EXTS } from '../types.ts'
 import { Badge, Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
@@ -17,6 +18,8 @@ import { useConfirm } from '../ui/confirm.tsx'
 import { ListSkeleton, useTransientNotice } from './hooks.tsx'
 import { formatRelative } from './kb-model.ts'
 import { kbCacheKey, useKbScope } from './kb-scope.ts'
+import { useKbIndexBuild } from './kb-index-build.ts'
+import { KbParseQueueLine } from './kb-queue-line.tsx'
 import { KbFileDetailPane, type KbFileReaderState } from './kb-files-detail.tsx'
 import css from './kbfiles.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -29,6 +32,36 @@ import { AddReport, CHUNK_PAGE, FILTERS, PARSE_LOOK, PARSE_POLL_MAX_MS, PARSE_PO
  *   第二次点击不会触发任何 effect（值没变），界面看起来就是「点了没反应」。
  * @returns 文件书架的元素树。
  */
+/**
+ * 结果区标题里的那一段「本次跑了哪些通道」（W2-7.4）。
+ *
+ * 两路都跑成时叫「混合检索」，只有一路时叫「关键词检索」—— 与 `degraded.label` 互斥：
+ * 有降级说明时整句取自后端（那句话有三种触发条件，前端猜一种就会在其余两种下说错）。
+ * @param res - 检索结果。
+ * @returns 通道名。
+ */
+function searchTitleBase(res: KbSearchResult): string {
+  const active = (res.stats.channels ?? []).filter((c) => c.active)
+  return active.length > 1 ? '混合检索' : '关键词检索'
+}
+
+/**
+ * 「关键词命中 x · 语义命中 y」那一行（W2-7.4）。
+ *
+ * 口径：`stats.channels` 里每一项是**该路自己**的命中数（融合前），不是融合后的条数 ——
+ * 融合去重后总数会小于两者之和（同一块两路都命中只留一条），拿总数冒充任一路，
+ * 用户会以为另一路白跑了。
+ * @param res - 检索结果。
+ * @returns 命中数片段；没跑成的那一路不出现（那时它压根不在 `channels` 里）。
+ */
+export function channelCountLine(res: KbSearchResult): string {
+  const label = (c: string): string => (c === `dense` ? `语义命中` : `关键词命中`)
+  return (res.stats.channels ?? [])
+    .filter((c) => c.active)
+    .map((c) => `${label(c.channel)} ${c.count}`)
+    .join(' · ')
+}
+
 export function KbFilesPanel({ focusFileId, focusNonce }: {
   focusFileId?: number | null
   focusNonce?: number
@@ -80,8 +113,6 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    * 混起来就是 N1 那条老毛病（读失败被显示成「确实没有」）。
    */
   const [indexView, setIndexView] = useState<KbVectorIndexView | null>(null)
-  /** 本组件发起的那次建索引是否在途。 */
-  const [indexing, setIndexing] = useState(false)
   /** 建索引失败的原因（出站拦截 / 未配向量模型 / 网络）。 */
   const [indexError, setIndexError] = useState<string | null>(null)
   const [report, setReport] = useState<AddReport | null>(null)
@@ -164,7 +195,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   }, [search])
 
   /**
-   * 结果区标题：`仅关键词（未建向量索引）· 5 条 · 用时 12ms`（设计稿 §8.4 的第 2 行）。
+   * 结果区标题：`仅关键词（未建向量索引）· 关键词命中 5 · 7 条 · 用时 12ms`（设计稿 §8.4 的第 2 行）。
    *
    * 降级文案**整句取自后端** `degraded.label`：界面不复述「为什么只有关键词」——
    * 那句话有三种触发条件（没建向量 / 没有 Key / 断网），
@@ -175,8 +206,8 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
    */
   const searchTitle = useMemo(() => {
     if (search === null || searchStale) return '正在检索正文…'
-    const base = search.degraded?.label ?? '关键词检索'
-    return `${base} · ${search.hits.length} 条 · 用时 ${Math.round(search.stats.elapsedMs)}ms`
+    const base = search.degraded?.label ?? searchTitleBase(search)
+    return `${base}${channelCountLine(search) === '' ? '' : ' · ' + channelCountLine(search)} · ${search.hits.length} 条 · 用时 ${Math.round(search.stats.elapsedMs)}ms`
   }, [search, searchStale])
 
   /**
@@ -270,28 +301,10 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   }, [loadIndex])
 
   /**
-   * 建索引。`force` 时后端会先清空**本库**的向量再重算（别的库一行不动）。
-   *
-   * 出网范围只有本库、且只有 `include_in_rag = 1` 的文件 —— 这两条都在后端 SQL 里，
-   * 界面不需要（也不该）自己再判一遍，但按钮的提示语要说清楚「会发送正文」。
+   * W3-11.5：建索引与停止（整块搬去 kb-index-build.ts：面板主体已超函数体棘轮）。
    */
-  const runIndex = useCallback(async (force: boolean): Promise<void> => {
-    if (indexing) return
-    setIndexing(true)
-    setIndexError(null)
-    try {
-      const r = await apiBuildKbVectorIndex(kbId, force)
-      if (!r.ok) setIndexError(r.error ?? '建索引失败')
-      else flash(r.status === 'up-to-date'
-        ? `索引已是最新（${r.rows} 块，本次未出网）`
-        : `本库向量索引完成：${r.embedded} 块新算 · 共 ${r.rows} 块`)
-    } catch (e) {
-      setIndexError((e as Error).message)
-    } finally {
-      setIndexing(false)
-      void loadIndex()
-    }
-  }, [indexing, kbId, flash, loadIndex])
+  const { indexing, jobId: indexJobId, run: runIndex, cancel: cancelIndex } =
+    useKbIndexBuild(kbId, flash, () => { void loadIndex() })
 
   /**
    * 在飞建索引的轮询。
@@ -460,8 +473,8 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   const reveal = useCallback(async (f: KbFileMeta): Promise<void> => {
     if (!f.srcPath) { hold('这条记录没有原始路径（可能是早期迁移进来的）'); return }
     try {
-      const api = (window as unknown as { electronAPI?: { showInFolder?: (p: string) => Promise<unknown> } }).electronAPI
-      if (!api?.showInFolder) { hold('当前环境不支持「在文件夹中显示」'); return }
+      const api = window.electronAPI
+      if (!runtimeCapabilities().shellOpen || !api?.showInFolder) { hold('「在文件夹中显示」只在电脑上可用'); return }
       await api.showInFolder(f.srcPath)
     } catch (e) {
       hold('定位失败：' + (e as Error).message)
@@ -606,7 +619,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           icon="📄"
           title="还没有登记文件"
           desc="点右上角「添加文件」，把你电脑上的 txt / md / csv / json / html 等文件加进来。文件只被「读取」，不会被修改或删除；解析用的是库内的副本，所以原文件之后改名、移动都不影响。"
-          action={<Button variant="pill" onClick={() => { void addFiles() }} disabled={adding}>添加文件</Button>}
+          action={<Button variant="pill" onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}>{desktopAction() ? '添加文件（仅电脑）' : '添加文件'}</Button>}
         />
       )
 
@@ -628,7 +641,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
               <Button
                 variant="ghost"
                 onClick={() => { void runIndex(false) }}
-                disabled={indexing}
+                disabled={indexing} {...desktopActionProps()}
                 title="把本库参与语义检索的文件正文发给向量模型，建/补齐向量索引（会出网）"
               >
                 {indexing ? '建索引中…' : '语义索引'}
@@ -687,6 +700,9 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           {kbLabel || '这个库'}的文件列表读取失败（不是「还没有文件」）：{readError}
         </div>
       )}
+
+      {/* W3-7.1：解析队列的一行总结（整块搬去 kb-queue-line.tsx）。 */}
+      <KbParseQueueLine files={files} />
 
       {/* 滚动区：回执、检索结果与主从两栏一起滚（与改前「整块面板滚」的行为一致），
           被吸住的只有上面的页头与工具栏。 */}

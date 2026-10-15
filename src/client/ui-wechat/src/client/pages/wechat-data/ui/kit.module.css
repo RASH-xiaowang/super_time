@@ -678,6 +678,23 @@
   font-size: var(--nm-empty-fs);
   padding: 10px 14px;
 }
+/**
+ * 中性提示行（W3-11.1）：一次性操作的结果反馈（导出到哪了、复制成功、已清空 N 条）。
+ *
+ * 为什么 kit 要有这一份：此前这类反馈有两种坏归处 —— 要么塞进 `.error`（成功消息
+ * 显示成红色错误），要么用 `window.alert`（阻塞式原生弹窗，风格与其它面板不一致）。
+ * 与 `.error` 的分工：`.error` 是「这个面板的数据读不到」，`.hint` 是「刚才那次操作成没成」。
+ */
+.hint {
+  border: 1px solid color-mix(in srgb, var(--nm-text-2) 30%, transparent);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-text-2) 6%, transparent);
+  color: var(--nm-text-1);
+  font-size: var(--nm-empty-fs);
+  padding: 10px 14px;
+  margin: var(--nm-s-2) 0;
+  word-break: break-all;
+}
 /* ErrorState 的内部件（R4）。类命名与 `.error*` 同域，故与 `.error` 同份 CSS。 */
 .errorMain { line-height: var(--nm-lh-body); }
 .errorDetail { margin-top: var(--nm-s-2); }

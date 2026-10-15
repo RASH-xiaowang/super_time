@@ -1,5 +1,6 @@
 /**
- * **现场探针**：判定朋友圈 CDN 图片**到底加密了多大一段**（默认跳过；`SNS_LIVE=1` 才跑）。
+ * **现场探针**：判定朋友圈 CDN 图片**到底加密了多大一段**
+ * （默认跳过；`SNS_LIVE=1` 且 `SNS_LIVE_DB` 指向真库才跑）。
  *
  * ## 为什么需要它（2026-10-08 的悬案）
  *
@@ -33,15 +34,15 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { snsCdnUrl } from '../src/query/sns-cdn-url.ts'
 import { fetchSnsCdnImage } from '../src/query/sns-cdn-image.ts'
 import { decryptSnsAll, decryptSnsHead } from '../src/query/sns-keystream.ts'
 
-const DB = process.env['SNS_LIVE_DB']
-  ?? 'C:/Users/Administrator/AppData/Roaming/super-time-electron/wechat-data/decrypted/sns/sns.db'
-const OUT = 'D:/super-time-wechat/working'
-const LIVE = process.env['SNS_LIVE'] === '1'
+const DB = process.env['SNS_LIVE_DB'] ?? ''
+const OUT = process.env['SNS_LIVE_OUT'] ?? join(process.cwd(), 'working')
+const LIVE = process.env['SNS_LIVE'] === '1' && DB !== ''
 /** 最多探几张：现场跑一次要真网，样本够分辨 H1/H2 就行。 */
 const LIMIT = Number(process.env['SNS_LIVE_LIMIT'] ?? '9')
 
@@ -220,9 +221,9 @@ describe.skipIf(!LIVE)('live: 朋友圈 CDN 图片加密范围探针（真库/�
         + '\n      key  ' + (perKey.length > 0 ? perKey.join('  ') : '(无候选)'))
 
       // 把三种结果都落盘，肉眼与解码器都比「eoiFromEnd」这个数字更能说明问题
-      writeFileSync(OUT + '/probe-' + String(i) + '-raw.bin', raw)
-      writeFileSync(OUT + '/probe-' + String(i) + '-head.bin', head)
-      writeFileSync(OUT + '/probe-' + String(i) + '-all.bin', all)
+      writeFileSync(join(OUT, 'probe-' + String(i) + '-raw.bin'), raw)
+      writeFileSync(join(OUT, 'probe-' + String(i) + '-head.bin'), head)
+      writeFileSync(join(OUT, 'probe-' + String(i) + '-all.bin'), all)
     }
 
     const verdict = [

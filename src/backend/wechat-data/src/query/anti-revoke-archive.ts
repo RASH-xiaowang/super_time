@@ -28,7 +28,7 @@
  */
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb, withWritableDb } from './db-open.ts'
 
 /** 归档库路径：数据根下、与 `decoded_images` 同级（不进解密目录，避免被同步覆盖）。 */

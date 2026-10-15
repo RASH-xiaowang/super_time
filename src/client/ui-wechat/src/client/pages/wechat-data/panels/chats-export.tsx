@@ -10,6 +10,7 @@
 import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiCancelExportJob, apiExportSessionMessages, apiResolveChatHistory, pickDirectory } from '../api.ts'
+import { useExportProgressRelay } from './export-progress-relay.ts'
 import type { ChatlogRecord, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 /**
@@ -44,16 +45,23 @@ const [, setAvatarVersion] = useState(0)
    （`wechat-export/progress` → ui-entry 中继成 DOM 事件），所以这里按 jobId 认领。 */
 const [exportProgress, setExportProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
 const exportJobRef = useRef('')
+/**
+ * W2-10.4：推断了就拉（`getExportProgress`）。推是主路，这条只是兜底 ——
+ * 推送静默 2.5 秒以上、且确实有任务在飞时才会发请求，见 `export-progress-relay.ts`。
+ */
+const noteExportPush = useExportProgressRelay(exportJobRef, setExportProgress)
 
 useEffect(() => {
   const onProgress = (e: Event): void => {
     const p = (e as CustomEvent<{ jobId?: string; phase?: string; done?: number; total?: number }>).detail
     if (!p || p.jobId !== exportJobRef.current) return
     setExportProgress({ phase: String(p.phase ?? ''), done: Number(p.done ?? 0), total: Number(p.total ?? 0) })
+    // 推送通了：告诉兜底那条路先歇着（否则它会一直拉到任务结束）。
+    noteExportPush()
   }
   window.addEventListener('dsh-wechat-export-progress', onProgress)
   return () => { window.removeEventListener('dsh-wechat-export-progress', onProgress) }
-}, [])
+}, [noteExportPush])
 
 /** 取消正在跑的导出：只发取消信号，收尾仍由 `exportSession` 的 finally 做（终态由后端记）。 */
 const cancelExport = useCallback((): void => {
@@ -197,10 +205,12 @@ const openNestedChatlog = async (rec: ChatlogRecord): Promise<void> => {
       if (r.found && rich && Array.isArray(rich.records) && rich.records.length > 0) {
         setChatlogStack(prev => [...prev, { title: rich.title || '聊天记录', records: rich.records ?? [] }])
       } else {
-        window.alert('未找到该聊天记录（可能需要微信端完整同步）')
+        // 走 exportMsg（面板头的常驻提示行）而不是 window.alert：阻塞式原生弹窗会把
+        // 整个窗口钉住，而且风格与其它面板的反馈不一致（W3-11.1）。
+        setExportMsg('未找到该聊天记录（可能需要微信端完整同步）')
       }
     } catch (e) {
-      window.alert('解析聊天记录失败: ' + (e as Error).message)
+      setExportMsg('解析聊天记录失败: ' + (e as Error).message)
     } finally {
       setChatlogResolving(false)
     }

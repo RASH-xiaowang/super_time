@@ -6,10 +6,8 @@
  */
 import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
 import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbSearchResult, KbSummaryResult } from './types.ts';
-import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vectors.ts';
-import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts';
-import { type KbEntitySummary } from './query/kb/extract.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
+import type { KbExtractResult, KbLinkSuggestResult, KbModelConfigResult, KbModelConfigView, KbVectorBuildWireResult, KbVectorIndexView, RetrievalConfig, RetrievalConfigPatch, RetrievalEvalResult, RetrievalStatus, VectorBuildResult } from './types.ts';
 import type { ReplySuggestResult } from './types.ts';
 import type { AnnualNarrativeResult } from './remotes/annual-narr.ts';
 import type { KnowledgeSnapshotRead } from './query/notes.ts';
@@ -51,17 +49,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         kbId: number;
         fileIds?: number[];
         limit?: number;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        files: number;
-        saved: number;
-        failed: Array<{
-            id: number;
-            error: string;
-        }>;
-        model: string;
-    }>;
+    }): Promise<KbExtractResult>;
     /**
      * 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。
      *
@@ -79,18 +67,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         text?: string;
         topK?: number;
         excludeTitle?: string;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        candidates: Array<{
-            label: string;
-            kind: 'note' | 'entity';
-            score: number;
-        }>;
-        pool: number;
-        model: string;
-        note?: string;
-    }>;
+    }): Promise<KbLinkSuggestResult>;
     /**
      * Knowledge base list — the scope selector's data source.
      *
@@ -257,13 +234,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     getKbModelConfig(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        settings: KbModelSettings;
-        global: Record<KbModelRole, string>;
-        resolved: Record<KbModelRole, ResolvedModel>;
-        entities: KbEntitySummary;
-    };
+    }): KbModelConfigView;
     /**
      * 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。
      *
@@ -278,13 +249,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         chatRef?: string;
         embedRef?: string;
         rerankRef?: string;
-    }): {
-        ok: true;
-        settings: KbModelSettings;
-    } | {
-        ok: false;
-        error: string;
-    };
+    }): KbModelConfigResult;
     /**
      * 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。
      *
@@ -296,19 +261,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     getKbVectorIndex(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        model: string;
-        source: 'inherit' | 'inline';
-        configured: boolean;
-        status: KbVectorIndexStatus;
-        job: {
-            done: number;
-            total: number;
-            startedAt: number;
-            error: string;
-        } | null;
-    };
+    }): KbVectorIndexView;
     /**
      * 为**某个库**构建 / 增量更新向量索引（面板上那个「语义索引」按钮）。
      *
@@ -322,10 +275,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         kbId: number;
         force?: boolean;
         jobId?: string;
-    }): Promise<KbVectorBuildResult & {
-        ok: boolean;
-        error?: string;
-    }>;
+    }): Promise<KbVectorBuildWireResult>;
     /**
      * 停止本库正在跑的向量构建（W3-11.5）。
      *
@@ -451,26 +401,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
      * @returns 供「数据健康」面板与诊断脚本展示（原「检索设置」面板已于 2026-09-17 下线）。
      */
-    getRetrievalStatus(): {
-        enabled: boolean;
-        config: unknown;
-        vector: {
-            rows: number;
-            dim: number;
-            model: string;
-        };
-        feedback: {
-            total: number;
-            up: number;
-            down: number;
-        };
-        weights: RerankWeights;
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    getRetrievalStatus(): RetrievalStatus;
     /**
      * 保存检索参数（阈值/权重/容量）。
      * **界面已不再暴露该入口**（面板下线，参数固化为产品默认值）——仅供诊断与自动化测试参考使用。
@@ -478,10 +409,10 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * @returns 落盘后的完整配置。
      */
     saveRetrievalConfig(options?: {
-        patch?: unknown;
-    } | unknown): {
+        patch?: RetrievalConfigPatch;
+    } | RetrievalConfigPatch): {
         ok: boolean;
-        config: unknown;
+        config: RetrievalConfig;
     };
     /**
      * 立即构建/增量更新稠密向量索引。
@@ -492,14 +423,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     buildRagVectorIndex(options?: {
         force?: boolean;
-    }): Promise<{
-        ok: boolean;
-        status: string;
-        rows: number;
-        embedded: number;
-        elapsed_ms: number;
-        message?: string;
-    }>;
+    }): Promise<VectorBuildResult>;
     /**
      * 提交问答反馈（目标 5 的闭环入口）。
      *
@@ -523,6 +447,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         ok: boolean;
         adaptedWeights?: RerankWeights;
         features?: string[];
+        feedbackTotal?: number;
         message?: string;
     };
     /**
@@ -549,32 +474,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     evaluateRetrieval(options?: {
         k?: number;
-    }): {
-        report: string;
-        hybrid: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        sparseOnly: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    }): RetrievalEvalResult;
     /**
      * Generate a daily chat summary for one date via DSH LLM.
      * @param options - date (YYYY-MM-DD) to summarize.

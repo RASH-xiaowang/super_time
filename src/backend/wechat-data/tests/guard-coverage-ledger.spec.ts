@@ -61,6 +61,7 @@ const REPAIRED_MODULES = [
   'query/official-assets.ts',
   'query/overview.ts',
   'query/sessions.ts',
+  'query/sns-video.ts',
   'query/wordcloud.ts',
   'remotes/tasks.ts',
 ] as const

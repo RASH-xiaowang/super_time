@@ -16,6 +16,10 @@
  *   ① zip 层：攒内存 vs 逐条目写盘的 RSS 峰值差；
  *   ② 端到端：exportAllSessions 在 150 / 600 / 1000 个会话下的 RSS 峰值（验证不随会话数线性增长）；
  *   ③ 端到端：导出期间事件循环最长阻塞（验收要求「其它查询不被阻塞超过 1 秒」）。
+ *
+ * 档位：slow（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**：本条实测 801.5 秒，占全部基准的 99.9%。
  * @vitest-environment node
  */
 import { mkdtempSync, readFileSync, rmSync, statSync, mkdirSync } from 'node:fs'

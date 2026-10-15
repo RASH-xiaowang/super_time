@@ -93,11 +93,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     apply: () => ipcRenderer.invoke('remote-access:apply'),
     /**
-     * 生成新令牌并**同时打开**开关；返回 `{ token, state }`。
+     * 生成新令牌与短命配对码并**同时打开**开关；返回 `{ token, pairingCode, state }`。
      *
-     * 令牌原文只在这一次的返回值里出现（界面用它拼二维码与可复制的链接），
-     * 之后所有状态查询都只给掩码 —— 否则任何能看到这块屏幕的人（投屏、截图、远程协助）
-     * 就等于拿到了完整凭据。
+     * 两个明文凭据都只在这一次的返回值里出现；`pairingCode` 才进入二维码/地址栏，
+     * `token` 不进入 UI。之后所有状态查询都只给掩码 —— 否则任何能看到这块屏幕的人
+     * （投屏、截图、远程协助）就等于拿到了完整凭据。
      */
     rotate: () => ipcRenderer.invoke('remote-access:rotate'),
     /** 打开 / 关闭监听。关闭会立刻断开所有在连的手机（令牌保留，下次打开还是同一个）。 */

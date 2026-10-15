@@ -55,19 +55,6 @@ function EmoThumb({ md5, cdnUrl, caption }: { md5: string; cdnUrl?: string; capt
 }
 
 /**
- * 取后端新加的 `cdnUrl`（表情真图的下载地址）。
- *
- * 客户端这份类型来自 `node_modules` 里的**旧副本**（还没有该字段），直接读会过不了 `tsc`，
- * 所以在这里按可选字段取一次。等重跑 `npm install` 同步类型副本后，这个函数可以删掉。
- * @param e - the emoticon item.
- * @returns `{ cdnUrl }` when present, else `{}`.
- */
-function cdnUrlOf(e: EmoticonItem): { cdnUrl?: string } {
-  const v = (e as EmoticonItem & { cdnUrl?: unknown }).cdnUrl
-  return typeof v === 'string' && v ? { cdnUrl: v } : {}
-}
-
-/**
  * Render the emoticons panel.
  * @returns the emoticons element tree.
  */
@@ -189,7 +176,7 @@ export function EmoticonsPanel(): React.JSX.Element {
         {!loading && !error && tab !== 'packages' && shownCustom.slice(0, emoCount).map((e: EmoticonItem) => (
           <div key={e.md5} className={css.emoCell} title={`${e.md5}${e.caption ? ` · ${e.caption}` : ''}${typeLabel(e.item_type) ? ` · ${typeLabel(e.item_type)}` : ''}`} {...clickableKey(() => { copyMd5(e.md5) })}>
             {/* 真图放最上面：格子第一眼要看到表情本身，而不是文字 */}
-            <EmoThumb md5={e.md5} caption={e.caption} {...cdnUrlOf(e)} />
+            <EmoThumb md5={e.md5} caption={e.caption} cdnUrl={e.cdnUrl} />
             <span className={css.emoName}>{e.caption || '自定义表情'}</span>
             <span className={css.emoMd5}>MD5 · {e.md5.slice(0, 8)}</span>
             <span className={`${css.emoMd5} ${css.emoMd5Cyan}`}>点击复制 MD5</span>

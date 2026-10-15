@@ -11,27 +11,35 @@
  * 另一种拼接法，用例还可能绿着。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { extractZip, powershellLiteral } from '../src/query/whisper.ts'
 
-const child = vi.hoisted(() => ({ spawnSync: vi.fn(), execFileSync: vi.fn() }))
-vi.mock('node:child_process', () => ({ spawnSync: child.spawnSync, execFileSync: child.execFileSync }))
+const child = vi.hoisted(() => ({ spawn: vi.fn(), execFileSync: vi.fn() }))
+vi.mock('node:child_process', () => ({ spawn: child.spawn, execFileSync: child.execFileSync }))
 
 let dir = ''
 beforeEach(() => {
-  child.spawnSync.mockReset()
+  child.spawn.mockReset()
   child.execFileSync.mockReset()
   dir = mkdtempSync(join(tmpdir(), 'whisper-ps-'))
 })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-const ok = { status: 0, stdout: '', stderr: '' }
-const fail = { status: 1, stdout: '', stderr: 'nope' }
+/** 异步 spawn 的假进程：stdout/stderr 可消费，close 在微任务里回报给定状态。 */
+function childProcess(status: number): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter } {
+  const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter }
+  proc.stdout = new EventEmitter()
+  proc.stderr = new EventEmitter()
+  queueMicrotask(() => proc.emit('close', status))
+  return proc
+}
+
 /** 取出那次 PowerShell 调用的 `-Command` 参数。 */
 function psCommand(): string {
-  const call = child.spawnSync.mock.calls.find((c) => c[0] === 'powershell.exe')
+  const call = child.spawn.mock.calls.find((c) => c[0] === 'powershell.exe')
   expect(call, 'tar 失败后没有走 PowerShell 兜底').toBeTruthy()
   const args = call?.[1] as string[]
   expect(args.slice(0, 2), '兜底命令少了 -NoProfile 之类的固定前缀').toEqual(['-NoProfile', '-Command'])
@@ -91,16 +99,16 @@ describe('powershellLiteral', () => {
 
 describe('extractZip 的 PowerShell 兜底', () => {
   it('tar 成功时根本不叫 PowerShell（只在兜底路径上拼字符串）', async () => {
-    child.spawnSync.mockReturnValue(ok)
+    child.spawn.mockImplementation((cmd: string) => childProcess(cmd === 'tar.exe' ? 0 : 1))
     const staging = await extractZip(join(dir, 'a.zip'), dir)
     expect(staging).toBe(join(dir, '.engine-staging'))
-    expect(child.spawnSync).toHaveBeenCalledTimes(1)
-    expect(child.spawnSync.mock.calls[0]?.[0]).toBe('tar.exe')
+    expect(child.spawn).toHaveBeenCalledTimes(1)
+    expect(child.spawn.mock.calls[0]?.[0]).toBe('tar.exe')
   })
 
   it('两个路径都走字面量：拼法与 `powershellLiteral` 的结果逐字相同', async () => {
     const zip = join(dir, "O'Brien", 'a.zip')
-    child.spawnSync.mockImplementation((cmd: string) => (cmd === 'tar.exe' ? fail : ok))
+    child.spawn.mockImplementation((cmd: string) => childProcess(cmd === 'tar.exe' ? 1 : 0))
     await extractZip(zip, dir)
     const staging = join(dir, '.engine-staging')
     expect(psCommand()).toBe(
@@ -109,7 +117,7 @@ describe('extractZip 的 PowerShell 兜底', () => {
 
   it('用户名里有撇号也不会把命令断开（路径本身不是注入，但它会让原写法崩掉）', async () => {
     const zip = "C:\\Users\\O'Brien\\.dsh\\whisper\\engine.zip"
-    child.spawnSync.mockImplementation((cmd: string) => (cmd === 'tar.exe' ? fail : ok))
+    child.spawn.mockImplementation((cmd: string) => childProcess(cmd === 'tar.exe' ? 1 : 0))
     await extractZip(zip, dir)
     const cmd = psCommand()
     expect(cmd).toContain("'C:\\Users\\O''Brien\\.dsh\\whisper\\engine.zip'")
@@ -118,7 +126,7 @@ describe('extractZip 的 PowerShell 兜底', () => {
 
   it('路径里塞一整条 PowerShell 语句也只当字符串用（P3-11 的正身）', async () => {
     const evil = "C:\\a\\x'; Format-Volume -Confirm:$false; y.zip"
-    child.spawnSync.mockImplementation((cmd: string) => (cmd === 'tar.exe' ? fail : ok))
+    child.spawn.mockImplementation((cmd: string) => childProcess(cmd === 'tar.exe' ? 1 : 0))
     await extractZip(evil, dir)
     const cmd = psCommand()
     expect(quotedOnly(cmd, 'Format-Volume -Confirm:$false'),
@@ -128,7 +136,7 @@ describe('extractZip 的 PowerShell 兜底', () => {
   })
 
   it('tar 与 PowerShell 都不行时退到 unzipper，全失败就说清是哪三条路都断了', async () => {
-    child.spawnSync.mockReturnValue(fail)
+    child.spawn.mockImplementation(() => childProcess(1))
     await expect(extractZip(join(dir, 'does-not-exist.zip'), dir)).rejects.toThrow('tar/PowerShell/unzipper 均不可用')
   })
 })

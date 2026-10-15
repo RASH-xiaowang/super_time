@@ -2,11 +2,11 @@
  * 微信数据总览「战术分析」：基于解密数据库做交互画像/作息浓度/关系浓度/
  * 内容资产/数据健康五块统计，供总览页展示。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { contactMeta, shardCatalogDirs, shardCatalogSig, fileSigOf, cachedBySigAsync } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { withDb, withDbAsync } from './db-open.ts'
 import { yieldToLoop } from './search-build.ts'
 import type { OverviewExtras } from '../types.ts'
@@ -109,7 +109,7 @@ export async function queryOverviewInsights(decryptedDir: string, selfUsername?:
     fileSigOf(join(dec, 'hardlink', 'hardlink.db')),
     fileSigOf(join(dec, 'message', 'message_resource.db')),
   ].join('|')
-  return cachedBySigAsync('overview-insights:' + dec + ':' + self, sig, () => computeOverviewInsights(decryptedDir, self))
+  return cachedBySigAsync('overview-insights:' + dec + ':' + self, sig, () => computeOverviewInsights(decryptedDir, self), INSIGHTS_TTL_MS)
 }
 
 /** 一个分片的**部分聚合**（可加）：分片级增量缓存的单元。 */

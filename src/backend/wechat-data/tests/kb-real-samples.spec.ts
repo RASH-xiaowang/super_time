@@ -6,7 +6,7 @@
  * 夹具永远暴露不了的东西 —— 真实的 CJK 字体编码（要不要走 cmaps）、真实的中文
  * 段落与表格、真实 Office 导出的那点不规范。本支就是那一层。
  *
- * ⚠ 它依赖**仓库外**的样本目录（`C:\Users\Administrator\Documents\test`），
+ * ⚠ 它依赖**仓库外**的样本目录（`KB_REAL_SAMPLES_DIR`），
  * 所以在别的机器上整支 `skip` —— 这是刻意的：把样本提交进仓库既大又涉及用户数据。
  * `describe.skipIf` 让「没有样本」表现为「没跑」，而不是「假装跑过了」。
  *
@@ -26,9 +26,9 @@ import { drainKbQueue, resetQueueGuardForTest } from '../src/query/kb-queue.ts'
 import { searchKb } from '../src/query/kb-search.ts'
 import { isAcceptedExt } from '../src/query/kb/types.ts'
 
-/** 真实样本目录（仓库外；不存在则整支跳过）。 */
-const SAMPLES = 'C:\\Users\\Administrator\\Documents\\test'
-const HAS_SAMPLES = existsSync(SAMPLES)
+/** 真实样本目录（仓库外；未配置或不存在则整支跳过）。 */
+const SAMPLES = process.env['KB_REAL_SAMPLES_DIR'] ?? ''
+const HAS_SAMPLES = SAMPLES !== '' && existsSync(SAMPLES)
 
 /** B 档那三个（必须真正解出正文）。 */
 const B_FILES = ['测试报告.pdf', '项目计划书.docx', '员工名单.xlsx'] as const

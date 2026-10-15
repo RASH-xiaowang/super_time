@@ -46,6 +46,15 @@
  * （主题=用户改这个暴露面的唯一入口：轮换要作废旧会话 / 启用要真开 / 死控件与残留二维码）。
  * 同日的**手机端外壳**（M544 起）开 `mutations-registry.batch3v.mjs`
  * （主题=只在窄视口出现的失效：桌面多出底栏 / sheet 不关 / 侧栏搜索条被拆）。
+ * 同日的**手机端聊天页**（M547 起）开 `mutations-registry.batch3w.mjs`
+ * （主题=窄视口 + 触摸才出现的失效：跨份选择器是死 CSS / 栈式开关丢信号 / 滚动误弹长按菜单 /
+ *   菜单被内联 top 顶出屏幕 / 选择器转义吃掉整条规则 / 返回按钮跑到桌面端）。
+ * 同日的**手机端触摸目标下限**（M559 起）开 `mutations-registry.batch3x.mjs`
+ * （主题=手指点得中：元素级 44px 下限与段条手机档覆盖，实测 498 个可点元素无一低于 40px）。
+ * 同日的**表格手机档 + hover 可达性**（M561 起）开 `mutations-registry.batch3y.mjs`
+ * （主题=窄视口 × 触摸才成立的失效：粘住的首列底色透明 / hover-only reveal 没有出口 / 假出口）。
+ * 2026-10-15 的 **@Remote 入参 schema 硬拒试点**（M588 起）开 `mutations-registry.batch3zc.mjs`
+ * （主题=① 档之外的形状校验开始对方法生效：试点名单被摘掉必须能被判据咬出来）。
  *
  * ⚠️ 切文件带来的新失败模式：**忘了把新一份聚合进 MUTATIONS，一条错都不报**
  * （2026-09-27 就漏接过一次：表从 344 悄悄掉到 306，全绿）。兜它的是
@@ -80,6 +89,13 @@ import { MUTATIONS_BATCH3S } from './mutations-registry.batch3s.mjs'
 import { MUTATIONS_BATCH3T } from './mutations-registry.batch3t.mjs'
 import { MUTATIONS_BATCH3U } from './mutations-registry.batch3u.mjs'
 import { MUTATIONS_BATCH3V } from './mutations-registry.batch3v.mjs'
+import { MUTATIONS_BATCH3W } from './mutations-registry.batch3w.mjs'
+import { MUTATIONS_BATCH3X } from './mutations-registry.batch3x.mjs'
+import { MUTATIONS_BATCH3Y } from './mutations-registry.batch3y.mjs'
+import { MUTATIONS_BATCH3Z } from './mutations-registry.batch3z.mjs'
+import { MUTATIONS_BATCH3ZA } from './mutations-registry.batch3za.mjs'
+import { MUTATIONS_BATCH3ZB } from './mutations-registry.batch3zb.mjs'
+import { MUTATIONS_BATCH3ZC } from './mutations-registry.batch3zc.mjs'
 
 /**
  * 变异清单（第一、二批）。全表在文件末尾的 `MUTATIONS`。
@@ -231,7 +247,8 @@ const MUTATIONS_BATCH12 = [
     // 2026-10-12（ClawBot 集成 +6 → 186；同日「可发可收」+1；同日「媒体可见」+1 → 188）：第五次跟。
     // 2026-10-13（ClawBot 多实例 +4 → 192）：第六次跟。
     // 2026-10-13（W3-11.7 损坏库修复链路 +2 → 194）：第七次跟。
-    from: '194 个 Remote 方法）',
+    // 2026-10-14（地图 GeoJSON 后端代理 +1 → 195）：第八次跟。
+    from: '195 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -641,8 +658,8 @@ const MUTATIONS_BATCH12 = [
     id: "M82-args-guard-not-enforced",
     why: "把 ① 档闸门接到执行之后/直接放行（P2-7 原本的样子）—— 越界参数会一路走到 gateway",
     file: "src/backend/wechat-host.js",
-    from: "      if (!guard.ok) {",
-    to: "      if (false) {",
+    from: "    if (!guard.ok) {",
+    to: "    if (false) {",
     spec: "src/backend/tests/wechat-args-guard.spec.ts",
   },
   {
@@ -809,8 +826,8 @@ const MUTATIONS_BATCH12 = [
     id: "M103-sns-video-caches-miss-on-unreadable-dir",
     why: "把「扫不全也记 miss」放回去：一次临时的目录读不动被永久记成「本机没有这条视频」，重启才恢复",
     file: "src/backend/wechat-data/src/query/sns-video.ts",
-    from: "  if (notes.length === 0) for (const h of open) idx.misses.add(h)",
-    to: "  if (true) for (const h of open) idx.misses.add(h)",
+    from: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (notes.length === 0) for (const h of open) idx.misses.add(h)",
+    to: "    idx.misses.clear() // 树变了，之前的「没有」结论失效\n    harvest(byMd5, open, found)\n  }\n  // P1-1/#9：只有「每个月都扫全了」才配把「没有」缓存下来。\n  // 目录读不动时记进 misses，等于把一次临时的 EACCES 变成「这条视频永远找不到」。\n  if (true) for (const h of open) idx.misses.add(h)",
     spec: "src/backend/wechat-data/tests/read-failure-contract.spec.ts",
   },
   {
@@ -928,4 +945,7 @@ const MUTATIONS_BATCH12 = [
 ]
 
 /** 全表：一、二批在前，第三批由旁边两份文件拼进来（跑手只看这一个名字）。 */
-export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V]
+export const MUTATIONS = [...MUTATIONS_BATCH12, ...MUTATIONS_BATCH3, ...MUTATIONS_BATCH3B, ...MUTATIONS_BATCH3C, ...MUTATIONS_BATCH3D, ...MUTATIONS_BATCH3E, ...MUTATIONS_BATCH3F, ...MUTATIONS_BATCH3G, ...MUTATIONS_BATCH3H, ...MUTATIONS_BATCH3I, ...MUTATIONS_BATCH3J, ...MUTATIONS_BATCH3K, ...MUTATIONS_BATCH3L, ...MUTATIONS_BATCH3M, ...MUTATIONS_BATCH3N, ...MUTATIONS_BATCH3O, ...MUTATIONS_BATCH3P, ...MUTATIONS_BATCH3Q, ...MUTATIONS_BATCH3R, ...MUTATIONS_BATCH3S, ...MUTATIONS_BATCH3T, ...MUTATIONS_BATCH3U, ...MUTATIONS_BATCH3V, ...MUTATIONS_BATCH3W, ...MUTATIONS_BATCH3X, ...MUTATIONS_BATCH3Y, ...MUTATIONS_BATCH3Z, ...MUTATIONS_BATCH3ZA, ...MUTATIONS_BATCH3ZB, ...MUTATIONS_BATCH3ZC]
+
+/** 全量条数唯一来源：门禁文案与预算不要再各自抄一个会腐坏的数字。 */
+export const MUTATION_COUNT = MUTATIONS.length

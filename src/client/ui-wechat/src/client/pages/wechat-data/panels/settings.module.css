@@ -486,3 +486,75 @@
 .root[data-in-dialog] {
   padding: 2px 0 6px;
 }
+/* W2-12.3 · M1 密钥搬家的一次性提示条 */
+.secretMigration {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsh-border, rgba(127, 127, 127, 0.3));
+  border-radius: var(--wx-radius);
+  background: var(--dsh-surface-2, rgba(127, 127, 127, 0.08));
+}
+
+.secretMigrationText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.secretMigrationText span {
+  opacity: 0.85;
+}
+
+.secretMigrationBtn {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 4px 12px;
+  border-radius: var(--wx-radius);
+  border: 1px solid var(--dsh-border, rgba(127, 127, 127, 0.3));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+/* W2-12.4 · 诊断日志脱敏预览 */
+.diagPreview {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsh-border, rgba(127, 127, 127, 0.3));
+  border-radius: var(--wx-radius);
+  background: var(--dsh-surface-2, rgba(127, 127, 127, 0.08));
+}
+
+.diagPreviewHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.diagPreviewClose {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border-radius: var(--wx-radius);
+  border: 1px solid var(--dsh-border, rgba(127, 127, 127, 0.3));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.diagPreviewText {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--nm-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+}

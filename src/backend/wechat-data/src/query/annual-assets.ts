@@ -35,7 +35,7 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { cachedBySigAsync, fileSigOf, shardCatalogDirs, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'

@@ -13,6 +13,10 @@
  *   MEASURE_N8=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/vector-build-read.measure.spec.ts
  *   MEASURE_N8=1 MEASURE_N8_ROWS=200000 MEASURE_N8_CAP=40000 ...（可调规模）
  *
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'

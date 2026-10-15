@@ -30,7 +30,7 @@ export type WechatTab =
   | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'kb' | 'monitor' | 'contacts' | 'moments'
   | 'favorites' | 'emoticons' | 'files' | 'records' | 'ledger' | 'storage' | 'bizchats'
   | 'servicechats' | 'kefu' | 'annual' | 'period' | 'dailysummary' | 'hook' | 'privacy'
-  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles'
+  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles' | 'clawbot'
 
 export interface NavItem {
   tab: WechatTab
@@ -193,6 +193,10 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
   {
     label: '行动与维护',
     items: [
+      // ClawBot 集成：把 Super Time 接入微信（官方一对一绑定；见「设置」页与接入会话）。
+      // 图标按官方手机端「红色龙虾」的意象手绘：双钳（各挖一道钳口）+ 身体 + 尾扇。
+      // 钳口用 evenodd 在同一 path 里挖空（与「盾牌+对勾」同法）；13px 下腿与触须会糊成一团，故不画。
+      { tab: 'clawbot', label: 'ClawBot', icon: filled('<path fill-rule="evenodd" d="M5.2 3.4a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4zM6.2 4.9l1 .7-1 .7zM18.8 3.4a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM17.8 4.9l-1 .7 1 .7z"/><path d="M12 8.4c-2 0-3.6 1.9-3.6 4.4 0 2.5 1.6 4.4 3.6 4.4s3.6-1.9 3.6-4.4c0-2.5-1.6-4.4-3.6-4.4z"/><path d="M12 17.4l2.2 3.4L12 22l-2.2-1.2z"/>') },
       // 待办日程：圆角方块挖空对勾（完成态）
       { tab: 'tasks', label: '待办日程', icon: filled('<path fill-rule="evenodd" d="M4.8 3.4h14.4A2.4 2.4 0 0 1 21.6 5.8v12.4a2.4 2.4 0 0 1-2.4 2.4H4.8a2.4 2.4 0 0 1-2.4-2.4V5.8a2.4 2.4 0 0 1 2.4-2.4zM9.6 16.8l-4.4-4.4-1.5 1.5 5.9 5.9L21 8.4l-1.5-1.5z"/>') },
       // 操作日志：填充圆环 + 两根指针（挖空区里再挖出指针，走 evenodd 的三重交叉）

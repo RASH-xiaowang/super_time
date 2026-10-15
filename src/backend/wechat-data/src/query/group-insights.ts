@@ -5,13 +5,13 @@
  * 4.x chatroom rows; Name2Id resolution can be added later.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import type { GroupInsightsMember, GroupInsightsSnapshot } from '../types.ts'
-import { contactMeta } from './meta.ts'
+import { cachedBySig, contactMeta, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -93,12 +93,51 @@ function senderFromPrefix(text: string): string {
 }
 
 /**
- * Compute offline group insights for one chatroom.
- * @param decryptedDir - decrypted data root.
- * @param username - chatroom username.
- * @returns the insights snapshot.
+ * 群聊洞察的**签名**（W2-4.4）：必须覆盖 {@link computeGroupInsights} 真正读过的每一个文件。
+ *
+ * 这是 M8 判据的字面要求 —— 签名少算一个文件，那次漏改就会变成「数据是旧的但没人重算」，
+ * 而且这种错**不会报错**，只会让用户看到一个停在上次的统计。三处来源逐个对上：
+ *   · `contact.db` —— `contactMeta()` 的显示名、`memberCount()`、`announcement()` 三处都读它；
+ *   · `message/` 下的全部分片 —— 主循环逐个打开它们并按 `Msg_<群>` 表全表游标。
+ *
+ * 为什么用**整个 message 目录**的目录签名而不是「只含有该群表的那些分片」：
+ * 后者要先逐个打开每个分片问一次 `sqlite_master` —— 那正是这里要省掉的那笔开销。
+ * 代价是「某个**别的**群有新消息」也会让本群重算，属于**多算**而不是漏算：
+ * 多算只浪费一次 161ms，漏算会让用户看到过期数据。
+ * @param decryptedDir - 已解密数据根。
+ * @param username - 群 username（不进签名：它已经在缓存键里）。
+ * @returns 签名串。
+ */
+function groupInsightsSig(decryptedDir: string, _username: string): string {
+  return [
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+    shardCatalogSig(decryptedDir, ['message']),
+  ].join('|')
+}
+
+/**
+ * 离线群聊洞察：群总消息数 / 活跃天数 / 成员活跃榜 / 群公告。
+ *
+ * W2-4.4：这层只做「按签名取缓存」，算法体在 {@link computeGroupInsights}。
+ * 实测（合成 8 分片 × 20000 行 = 16 万条群消息，`group-insights-cost.measure.spec.ts`）：
+ * 冷算 **161.5ms**、签名命中 **0.003ms**。成本随分片数线性增长（真实账号 200+ 分片），
+ * 而面板是「打开即查一次」（`useFreshData` 不轮询），所以省下的正是**重复打开**那一档。
+ * @param decryptedDir - 已解密数据根。
+ * @param username - 群 username。
+ * @returns 洞察快照。
  */
 export function queryGroupInsights(decryptedDir: string, username: string): GroupInsightsSnapshot {
+  const key = 'group-insights:' + decryptedDir + ':' + username
+  return cachedBySig(key, groupInsightsSig(decryptedDir, username), () => computeGroupInsights(decryptedDir, username), INSIGHTS_TTL_MS)
+}
+
+/**
+ * 群洞察的算法体（无缓存，供 {@link queryGroupInsights} 的 loader 调用，也可单测直接打）。
+ * @param decryptedDir - 已解密数据根。
+ * @param username - 群 username。
+ * @returns 洞察快照。
+ */
+export function computeGroupInsights(decryptedDir: string, username: string): GroupInsightsSnapshot {
   const names = contactMeta(decryptedDir).names
   const table = 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
   const dir = join(decryptedDir, 'message')

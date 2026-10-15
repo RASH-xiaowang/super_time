@@ -9,6 +9,7 @@ import type { WechatTask } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, Button, Card, EmptyState, LinkButton, LoadingState, PanelHeader, Toolbar } from '../ui/kit.tsx'
 import { useTransientNotice } from './hooks.tsx'
 import css from './tasks.module.css'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 
 function fmtDue(ts?: number): string {
@@ -28,7 +29,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
      `shouldCache` 保证**读失败的结果不进缓存**（N1：把"读不到"的空列表写进缓存，
      下次打开会先渲染「暂无待办」，而缓存看不出是读失败还是确实没有）。 */
   const fetchTasks = useCallback(() => apiListTasks(), [])
-  const { data: taskData, reload } = useFreshData<Awaited<ReturnType<typeof apiListTasks>>>('tasks', fetchTasks, { shouldCache: (d) => !d.readError })
+  const { data: taskData, reload } = useFreshData<Awaited<ReturnType<typeof apiListTasks>>>('tasks', fetchTasks, { shouldCache: (d) => !d.readError, liveRefresh: true })
   const tasks = taskData?.items ?? []
   const readError = taskData?.readError ?? null
   /** 原 `load` 的调用点（新增/提取/同步/删除后重查）全部保留语义：它就是 hook 的 reload。 */
@@ -124,7 +125,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
             <Button variant="pill" onClick={() => { void extract() }} disabled={extracting}>
               {extracting ? '提取中…' : '提取最近 7 天待办'}
             </Button>
-            <Button variant="pill" onClick={() => { void syncHandoff() }} disabled={syncing}>
+            <Button variant="pill" onClick={() => { void syncHandoff() }} disabled={syncing} {...desktopActionProps()}>
               {syncing ? '导入中…' : '导入微信原生提醒'}
             </Button>
           </>

@@ -102,6 +102,8 @@ export interface ChatsCalendarState {
   calYear: number
   jumpToDay: (day: number) => void
   openCalendar: () => Promise<void>
+  /** WAL 推送后的静默重取：不清计数、不翻 loading（清空会让热力格闪空）。 */
+  refreshCurrentMonth: () => Promise<void>
   switchCalMonth: (delta: number) => Promise<void>
 }
 
@@ -158,6 +160,14 @@ export function useChatsCalendar(inputs: ChatsCalendarInputs): ChatsCalendarStat
     await fetchCounts(curSession.username, y, m)
   }, [curSession, calMonth, calYear, fetchCounts])
 
+  const refreshCurrentMonth = useCallback(async (): Promise<void> => {
+    if (!curSession) return
+    try {
+      const r = await apiGetDailyCounts({ username: curSession.username, year: calYear, month: calMonth })
+      setCalCounts(r.counts)
+    } catch { /* 静默：保留旧值，下一次事件再试 */ }
+  }, [curSession, calYear, calMonth])
+
   const jumpToDay = useCallback((day: number): void => {
     const startTs = Math.floor(new Date(calYear, calMonth - 1, day, 0, 0, 0, 0).getTime() / 1000)
     setCalOpen(false)
@@ -179,6 +189,7 @@ export function useChatsCalendar(inputs: ChatsCalendarInputs): ChatsCalendarStat
     calYear,
     jumpToDay,
     openCalendar,
+    refreshCurrentMonth,
     switchCalMonth,
   }
 }

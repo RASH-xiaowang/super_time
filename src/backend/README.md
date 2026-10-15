@@ -42,7 +42,7 @@
 | 运行时依赖 | `cordis`、`cosmokit`、`dsh-typert-protocol`、`dsh-native-command`、`dsh-home-paths`、`dsh-invariants`、`dsh-llm`、`dsh-brand`、`dsh-timeout`、`dsh-util-crypto`、`dsh-util-values`、`schemastery`、`@standard-schema/spec`、`fzstd`、`koffi`、`@koromix/koffi-win32-x64`、`zod` | `src/backend/deps/**` |
 
 后端对外提供的方法清单**以自动生成的 [`docs/API.md`](../../docs/API.md) 为准**：它由
-`npm run docs:api` 从 `src/backend/wechat-data/src/gateway.ts` 的 `@Remote` 装饰器生成，
+`npm run docs:api` 从 `src/backend/wechat-data/src/gateway*.ts` 的 `@Remote` 装饰器生成，
 `npm run docs:api:check`（CI 一步）守着「文档与源码一致」；运行时可用 `wechat:list-methods`
 取当前实际注册的方法。文档里**不再写死方法数量** —— 历史上这里写过的数字已多次漂移。
 
@@ -80,7 +80,9 @@
    `generateDailySummary` 输出降级统计文本。
 5. **路径配置中心**：所有路径配置统一记录在 `<userData>/wechat/config.json`
    （`src/backend/wechat-paths.js` 管理与映射），启动时自动应用并回写实际解析路径，
-   详见 [wechat/README.md](../../wechat/README.md)。写入入口是界面里的**「数据配置」**面板
+   详见 [wechat/README.md](../../wechat/README.md)。LLM 当前配置与 profile 集合在
+   `src/backend/llm-config-store.js`；JSON 原子写与损坏备份在
+   `src/backend/atomic-json.js`。写入入口是界面里的**「数据配置」**面板
    （以及「语音转写」那一节的模型目录 / 引擎路径）；**没有**对应的 npm 脚本 ——
    最早版本文档里写的 `config:wechat`（`show|set|reset`）在当前 `package.json` 里不存在。
 6. **Electron IPC**：`main.js` 在 `app.whenReady` 后创建后端，注册
@@ -95,7 +97,11 @@
 
 ```
 src/backend/
-├── wechat-host.js          # Electron 主进程适配层（Context + LLM 桥 + IPC 调用封装）
+├── wechat-host.js          # Electron 主进程适配层（Context + IPC 调用封装）
+├── wechat-paths.js         # 安装/状态路径 + config.json 微信设置镜像
+├── llm-config-store.js     # LLM 当前配置与 profile 集合
+├── atomic-json.js          # 宿主 JSON 原子写 / 损坏备份
+├── llm-bridge.js           # LLM 桥（配置解析 + chat/embed/rerank 出网）
 ├── deps/                   # vendor 的上游运行时依赖（file: 依赖）
 ├── resources/              # 迁移资源（区域码表 + wx_silk.exe，供 bundle 运行时查找）
 └── wechat-data/

@@ -91,6 +91,12 @@ export declare function fetchSnsCoverDataUrl(remoteUrl: string, opts?: {
  */
 export declare function snsVideoIndexForTest(): {
     clear: () => void;
+    stats: () => {
+        coverEntries: number;
+        videoEntries: number;
+        videoBytes: number;
+        asyncMonthScans: number;
+    };
 };
 /**
  * 解析一条朋友圈视频的封面。
@@ -121,6 +127,20 @@ export declare function resolveSnsVideoCoverDataUrls(wechatBaseDir: string | und
     error?: string;
 }>;
 /**
+ * 生产路径使用的批量封面解析：目录扫描与读盘都让出事件循环。
+ *
+ * 与同步版共享同一份结果缓存与按月索引，所以两条路径命中口径不会分裂。
+ */
+export declare function resolveSnsVideoCoverDataUrlsAsync(wechatBaseDir: string | undefined, md5s: readonly string[]): Promise<Map<string, {
+    url?: string;
+    error?: string;
+}>>;
+/** {@link resolveSnsVideoCoverDataUrl} 的异步生产版。 */
+export declare function resolveSnsVideoCoverDataUrlAsync(wechatBaseDir: string | undefined, md5?: string, _timelineId?: string, _mediaId?: string): Promise<{
+    url?: string;
+    error?: string;
+}>;
+/**
  * 解析一条朋友圈视频本体（base64 data URL，供 <video> 内联播放）。
  * @param wechatBaseDir - 微信账号根目录（rawWechatBase）。
  * @param md5 - 朋友圈 XML 里 `<url md5>`，即媒体内容 md5。
@@ -130,6 +150,11 @@ export declare function resolveSnsVideoDataUrl(wechatBaseDir: string | undefined
     url?: string;
     error?: string;
 };
+/** {@link resolveSnsVideoDataUrl} 的异步生产版：定位、读盘、base64 都让出。 */
+export declare function resolveSnsVideoDataUrlAsync(wechatBaseDir: string | undefined, md5?: string, _timelineId?: string, _mediaId?: string): Promise<{
+    url?: string;
+    error?: string;
+}>;
 /**
  * 在本机缓存里定位某条视频的本体路径（不解码、不 base64）。
  * @param wechatBaseDir - 微信账号根目录。
@@ -140,3 +165,8 @@ export declare function findLocalVideoPath(wechatBaseDir: string | undefined, md
     path?: string;
     error?: string;
 };
+/** {@link findLocalVideoPath} 的异步生产版，索引扫描会分块让出。 */
+export declare function findLocalVideoPathAsync(wechatBaseDir: string | undefined, md5?: string, _timelineId?: string, _mediaId?: string): Promise<{
+    path?: string;
+    error?: string;
+}>;

@@ -17,17 +17,17 @@
  * 对不上 / 分区数超上限 / NAL 超上限 / 像素超上限 / 超时，一律判失败。
  * 结果按**内容 sha256** 做 LRU 缓存（同一份 wxgf 会被反复送进来，不再重复起 ffmpeg）。
  *
- * ## 阻塞说明（如实记）
+ * ## 进程模型
  *
- * 解码链（`decodeDatBytes`）是同步的，而这里用 `spawnSync`——ffmpeg 慢的时候会占住
- * worker 数秒。可以接受的原因：这条链只在 **DLL 不可用** 时才走（微信装着时用不到），
- * 且受 {@link WXGF_FFMPEG_TIMEOUT_MS} 硬上限；DLL 路径本身毫秒级、不受影响。
- * （参考项目是多线程 Python，没有这个问题；我们若要把解码链异步化，那是另一个立项。）
+ * 同步入口（`transcodeWxgfWithFfmpeg`）只留给不跨 RPC 的兼容调用与测试；生产解码链应走
+ * `transcodeWxgfWithFfmpegAsync`：ffmpeg 是 `spawn` 子进程，**不占 worker 事件循环**。
+ * 异步版在每次 ffmpeg 启动前、收到输出块时都复核剩余 deadline，超时立刻 `kill()`；
+ * stdout/stderr 累计上限也是 64MB，避免恶意/损坏码流把内存打满。
  *
  * 环境变量：`DSH_WECHAT_FFMPEG` 直接指定 ffmpeg 路径；`DSH_WECHAT_WXGF_FFMPEG=0` 关闭兜底。
  * @module query/wxgf-ffmpeg
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { jpegDimensions } from './jpeg-dimensions.ts'
@@ -44,14 +44,65 @@ const WXGF_PARTITION_START = Buffer.from([0x00, 0x00, 0x00, 0x01, 0x40, 0x01])
 const CACHE_MAX_ENTRIES = 512
 const CACHE_MAX_BYTES = 16 * 1024 * 1024
 const contentCache = new Map<string, { bytes: Uint8Array } | null>()
+/** 同一份载荷的并发 async 转码去重：多个调用共享一个子进程。 */
+const pendingContent = new Map<string, Promise<{ bytes: Uint8Array } | { error: string }>>()
 
 /** 测试注入点：换掉 ffmpeg 进程调用。 */
 export interface WxgfFfmpegSpawnResult { status: number | null; stdout: Buffer; stderr: Buffer }
 export type WxgfFfmpegSpawn = (exe: string, args: readonly string[], input: Buffer, timeoutMs: number) => WxgfFfmpegSpawnResult
+export type WxgfFfmpegSpawnAsync = (exe: string, args: readonly string[], input: Buffer, timeoutMs: number) => Promise<WxgfFfmpegSpawnResult>
 
 function defaultSpawn(exe: string, args: readonly string[], input: Buffer, timeoutMs: number): WxgfFfmpegSpawnResult {
   const r = spawnSync(exe, [...args], { input, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024 })
   return { status: r.status, stdout: r.stdout ?? Buffer.alloc(0), stderr: r.stderr ?? Buffer.alloc(0) }
+}
+
+async function defaultSpawnAsync(exe: string, args: readonly string[], input: Buffer, timeoutMs: number): Promise<WxgfFfmpegSpawnResult> {
+  return await new Promise<WxgfFfmpegSpawnResult>((resolve) => {
+    const child = spawn(exe, [...args], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let stdoutBytes = 0
+    let stderrBytes = 0
+    let timedOut = false
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const maxBytes = 64 * 1024 * 1024
+    const finish = (result: WxgfFfmpegSpawnResult): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resolve(result)
+    }
+    const collect = (chunks: Buffer[], current: number, chunk: Buffer): number => {
+      const size = Math.min(chunk.length, maxBytes - current)
+      if (size > 0) chunks.push(chunk.subarray(0, size))
+      return current + chunk.length
+    }
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBytes = collect(stdout, stdoutBytes, chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrBytes = collect(stderr, stderrBytes, chunk)
+    })
+    child.once('error', (e) => {
+      finish({ status: null, stdout: Buffer.alloc(0), stderr: Buffer.from((e as Error).message) })
+    })
+    child.once('close', (code, signal) => {
+      if (timedOut) {
+        const timeoutNote = Buffer.from(`ffmpeg 超时（${String(timeoutMs)}ms${signal ? `，signal=${signal}` : ''}）`)
+        finish({ status: null, stdout: Buffer.concat(stdout), stderr: Buffer.concat([...stderr, timeoutNote]) })
+        return
+      }
+      finish({ status: code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+    })
+    timer = setTimeout(() => {
+      timedOut = true
+      child.kill()
+    }, Math.max(1, timeoutMs))
+    child.stdin.on('error', () => { /* EPIPE 交给 close/error 收口 */ })
+    child.stdin.end(input)
+  })
 }
 
 /** PATH 里找可执行文件（Windows 上补 .exe）。 */
@@ -155,6 +206,26 @@ function ffmpegFirstFrame(
   return Buffer.alloc(0)
 }
 
+/** {@link ffmpegFirstFrame} 的异步版：子进程不阻塞 worker，deadline 每次输出也复核。 */
+async function ffmpegFirstFrameAsync(
+  spawnAsync: WxgfFfmpegSpawnAsync, exe: string, stream: Uint8Array,
+  outputArgs: readonly string[], deadlineMs: number, elapsed: () => number,
+): Promise<Buffer> {
+  const timeout = deadlineMs - elapsed()
+  if (timeout <= 0) return Buffer.alloc(0)
+  const r = await spawnAsync(exe, [
+    '-hide_banner', '-loglevel', 'error',
+    '-xerror', '-err_detect', 'explode',
+    '-max_pixels', String(WXGF_FFMPEG_MAX_PIXELS),
+    '-f', 'hevc', '-i', 'pipe:0',
+    '-frames:v', '1',
+    ...outputArgs,
+    'pipe:1',
+  ], Buffer.from(stream.buffer, stream.byteOffset, stream.byteLength), timeout)
+  if (r.status === 0 && r.stdout.length > 0) return r.stdout
+  return Buffer.alloc(0)
+}
+
 /** JPEG 魔数检查。 */
 function isJpeg(bytes: Buffer): boolean {
   return bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8
@@ -219,4 +290,75 @@ export function transcodeWxgfWithFfmpeg(
   if ('error' in result) return result
   const dims = jpegDimensions(result.bytes)
   return { bytes: result.bytes, jpegWidth: dims?.width ?? 0, jpegHeight: dims?.height ?? 0 }
+}
+
+/**
+ * {@link transcodeWxgfWithFfmpeg} 的异步入口：ffmpeg 不在 worker 事件循环上阻塞。
+ * 同一载荷的并发调用共享一个在途 Promise；失败同样进内容缓存。
+ */
+export async function transcodeWxgfWithFfmpegAsync(
+  payload: Uint8Array,
+  deps?: { spawn?: WxgfFfmpegSpawnAsync; findExe?: () => string; useCache?: boolean },
+): Promise<{ bytes: Uint8Array; jpegWidth: number; jpegHeight: number } | { error: string }> {
+  const spawn = deps?.spawn ?? defaultSpawnAsync
+  const useCache = deps?.useCache ?? true
+  const cacheKey = useCache
+    ? createHash('sha256').update(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength)).digest('hex')
+    : ''
+  if (useCache && contentCache.has(cacheKey)) {
+    const hit = contentCache.get(cacheKey)!
+    if (hit === null) return { error: 'wxgf ffmpeg 解码不可用（已缓存失败）' }
+    const dims = jpegDimensions(hit.bytes)
+    return { bytes: hit.bytes, jpegWidth: dims?.width ?? 0, jpegHeight: dims?.height ?? 0 }
+  }
+  if (useCache) {
+    const pending = pendingContent.get(cacheKey)
+    if (pending) return toTranscodeResult(await pending)
+  }
+  const run = async (): Promise<{ bytes: Uint8Array } | { error: string }> => {
+    try {
+      const exe = (deps?.findExe ?? findFfmpegExecutable)()
+      if (!exe) return { error: '未找到 ffmpeg（DSH_WECHAT_FFMPEG 或 PATH）' }
+      const partitions = wxgfHevcPartitions(payload)
+      if (partitions.length === 0) return { error: 'wxgf 没有可解码的单帧分区' }
+      const picture = partitions[partitions.length - 1]!
+      if (hevcPictureCount(picture) !== 1) return { error: 'wxgf 不是单帧图片（多帧动图不支持）' }
+      const started = Date.now()
+      const deadlineMs = WXGF_FFMPEG_TIMEOUT_MS
+      for (const alpha of partitions.slice(0, -1)) {
+        const plane = await ffmpegFirstFrameAsync(spawn, exe, alpha, ['-f', 'rawvideo', '-pix_fmt', 'gray'], deadlineMs, () => Date.now() - started)
+        if (plane.length === 0 || plane.some(b => b !== 0xff)) return { error: 'wxgf 带透明度，单帧 JPEG 表达不了' }
+      }
+      const out = await ffmpegFirstFrameAsync(spawn, exe, picture, ['-f', 'image2pipe', '-codec:v', 'mjpeg', '-q:v', '3'], deadlineMs, () => Date.now() - started)
+      if (!isJpeg(out)) return { error: 'ffmpeg 未产出 JPEG' }
+      return { bytes: new Uint8Array(Buffer.from(out)) }
+    } catch (e) {
+      return { error: (e as Error).message }
+    }
+  }
+  const promise = run()
+  if (useCache) pendingContent.set(cacheKey, promise)
+  const result = await promise
+  if (useCache) pendingContent.delete(cacheKey)
+  if (useCache) storeContent(cacheKey, result)
+  return toTranscodeResult(result)
+}
+
+function toTranscodeResult(result: { bytes: Uint8Array } | { error: string }): { bytes: Uint8Array; jpegWidth: number; jpegHeight: number } | { error: string } {
+  if ('error' in result) return result
+  const dims = jpegDimensions(result.bytes)
+  return { bytes: result.bytes, jpegWidth: dims?.width ?? 0, jpegHeight: dims?.height ?? 0 }
+}
+
+function storeContent(cacheKey: string, result: { bytes: Uint8Array } | { error: string }): void {
+  contentCache.set(cacheKey, 'bytes' in result ? { bytes: result.bytes } : null)
+  let total = 0
+  for (const v of contentCache.values()) total += v === null ? 0 : v.bytes.length
+  while (contentCache.size > CACHE_MAX_ENTRIES || total > CACHE_MAX_BYTES) {
+    const first = contentCache.keys().next()
+    if (first.done) break
+    const dropped = contentCache.get(first.value)
+    contentCache.delete(first.value)
+    if (dropped != null) total -= dropped.bytes.length
+  }
 }

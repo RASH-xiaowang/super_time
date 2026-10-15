@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import type { MomentsMonthlySnapshot } from '../types.ts'
 import { withDbAsync } from './db-open.ts'
 import { parseSnsXml } from './moments.ts'
-import { cachedBySigAsync, contactMeta, fileSigOf } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, INSIGHTS_TTL_MS } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 
 /** 与 `moments-insights.ts` 同一口径的字符级阈值（见那边的取值依据）。 */
@@ -47,7 +47,7 @@ export async function queryMomentsMonthly(decryptedDir: string, author?: string,
     fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
   ].join('|')
   // 2026-09-28：同步 `cachedBySig` → async 版（游标要让出，见 computeMomentsMonthly 内注释）。
-  return cachedBySigAsync('moments-monthly:' + decryptedDir + ':' + (author ?? '') + ':' + (authorName ?? ''), sig, () => computeMomentsMonthly(decryptedDir, author, authorName))
+  return cachedBySigAsync('moments-monthly:' + decryptedDir + ':' + (author ?? '') + ':' + (authorName ?? ''), sig, () => computeMomentsMonthly(decryptedDir, author, authorName), INSIGHTS_TTL_MS)
 }
 
 async function computeMomentsMonthly(decryptedDir: string, author?: string, authorName?: string): Promise<MomentsMonthlySnapshot> {

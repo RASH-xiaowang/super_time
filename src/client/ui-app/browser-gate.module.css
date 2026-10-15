@@ -157,3 +157,16 @@
 @media (prefers-reduced-motion: reduce) {
   .spin { animation: none; }
 }
+
+/* 连不上那个服务时的横幅：贴在顶部，不挡操作（手机上顶部正好是空出来的安全区下方）。 */
+.offline {
+  position: sticky;
+  top: 0;
+  z-index: 70;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--nm-amber, #f59e0b);
+  background: color-mix(in srgb, var(--nm-amber, #f59e0b) 14%, var(--nm-bg-0, #050a18));
+  border-bottom: 1px solid color-mix(in srgb, var(--nm-amber, #f59e0b) 40%, transparent);
+}

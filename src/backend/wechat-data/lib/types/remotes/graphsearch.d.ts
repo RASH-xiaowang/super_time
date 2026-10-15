@@ -1,5 +1,6 @@
 import { KnowledgeSnapshotRead } from '../query/notes.ts';
 import { EditMutationResult, OperationCategory, OperationStatus, SearchBuildResult, SearchSnapshot } from '../types.ts';
+import { RetrievalEvalResult } from '../types-retrieval.ts';
 export interface createGraphSearchRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -52,32 +53,7 @@ export declare function createGraphSearchRemotes(rc: createGraphSearchRemotesInp
     };
     evaluateRetrieval(options?: {
         k?: number;
-    }): {
-        report: string;
-        hybrid: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        sparseOnly: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    }): RetrievalEvalResult;
     resetEditedMessage(options: {
         username: string;
         localId: number;

@@ -21,4 +21,4 @@ export declare const CACHED_IMAGE_EXTS: string[];
 export declare function warmDecodedImages(decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
     username: string;
     localId: number;
-}>, aesKey: string | undefined, xorKey: number): void;
+}>, aesKey: string | undefined, xorKey: number): Promise<void>;

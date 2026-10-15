@@ -24,7 +24,7 @@
  */
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../db-open.ts'
 import { kbModelsDbPath } from '../kb-paths.ts'
 
 /** 三个可分别配置的角色。 */

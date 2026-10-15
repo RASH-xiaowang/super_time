@@ -149,7 +149,9 @@ describe('图标：走填充口径，且不与「知识图谱」撞形', () => {
 describe('路由：kb 与 knowledge 同走一个合并外壳，且没有并进通讯录那一段', () => {
   it('外壳导入了三个面板组件', () => {
     expect(shellSrc).toContain("import { KnowledgeBasePanel } from './KnowledgeBase.tsx'")
-    expect(panelShell).toContain("import { KbShell } from './panels/KbShell.tsx'")
+    expect(panelShell).toContain("import {\n  AnnualPanel,")
+    expect(panelShell).toContain("KbShell,\n")
+    expect(panelShell).toContain("} from './panel-loaders.tsx'")
   })
 
   it("renderTab 里 case 'kb' 与 case 'knowledge' 并列，落进同一个知识库外壳", () => {

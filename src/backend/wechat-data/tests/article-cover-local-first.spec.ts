@@ -71,14 +71,14 @@ describe('A4 localCoverHit：索引命中才截流', () => {
   it('探测命中 ⇒ 一次网络都不发，且用的是**本机那一份**字节', async () => {
     const cacheDir = tempRoot()
     const url = ARTICLE + '?hit'
-    const r = await resolveArticleCoverDataUrl(url, cacheDir, () => dataUrlOf(LOCAL_PNG))
+    const r = await resolveArticleCoverDataUrl(url, cacheDir, async () => dataUrlOf(LOCAL_PNG))
     expect(fetchCalls, '索引命中了还去抓 HTML/封面 ⇒ A4 没生效').toEqual([])
     expect(r.url, '本机那份没被用上').toBe(dataUrlOf(LOCAL_PNG))
   })
 
   it('探测未命中（undefined）⇒ 照旧出网，封面照样拿得到', async () => {
     const cacheDir = tempRoot()
-    const r = await resolveArticleCoverDataUrl(ARTICLE + '?miss', cacheDir, () => undefined)
+    const r = await resolveArticleCoverDataUrl(ARTICLE + '?miss', cacheDir, async () => undefined)
     expect(fetchCalls.length, '没命中就得走原路径（抓 HTML + 抓图）').toBe(2)
     expect(r.url).toBe(dataUrlOf(REMOTE_PNG))
   })
@@ -103,7 +103,7 @@ describe('A4 批量版：探测要真的传下去（漏传就静默失效）', (
     const cacheDir = tempRoot()
     const tag = '?batch' + String(Date.now())
     const urls = [ARTICLE + tag, ARTICLE + tag + '&b', ARTICLE + tag + '&c']
-    const items = await resolveArticleCoversDataUrls(urls, cacheDir, () => dataUrlOf(LOCAL_PNG))
+    const items = await resolveArticleCoversDataUrls(urls, cacheDir, async () => dataUrlOf(LOCAL_PNG))
     expect(items.length, '去重后应当是 3 条（query 不同 ⇒ url 不同）').toBe(3)
     expect(items.every(i => i.dataUrl === dataUrlOf(LOCAL_PNG)), '批量没把探测传下去（优化静默失效）').toBe(true)
     expect(fetchCalls).toEqual([])
@@ -115,7 +115,7 @@ describe('A4 批量版：探测要真的传下去（漏传就静默失效）', (
     const hit = ARTICLE + tag
     const miss = ARTICLE + tag + '&miss'
     const items = await resolveArticleCoversDataUrls([hit, miss], cacheDir,
-      url => (url === hit ? dataUrlOf(LOCAL_PNG) : undefined))
+      async url => (url === hit ? dataUrlOf(LOCAL_PNG) : undefined))
     expect(items.find(i => i.url === hit)?.dataUrl, '命中的那条应当用本机那份').toBe(dataUrlOf(LOCAL_PNG))
     expect(items.find(i => i.url === miss)?.dataUrl, '没命中的那条应当走网络拿到远端那份').toBe(dataUrlOf(REMOTE_PNG))
     // 只有未命中的那条出了网，且是「HTML + 图」两次。
@@ -170,7 +170,7 @@ describe('A4 索引 helper 的自洽性（sns-image.ts 侧）', () => {
   })()
 
   it('helper 复用了 snsResolveByIndex（不能自己再写一套查找逻辑）', () => {
-    expect(src).toContain('export function findSnsMediaDataUrlByIndex')
+    expect(src).toContain('export async function findSnsMediaDataUrlByIndex')
     expect(src).toContain('snsResolveByIndex(')
     expect(src.length, '源码没读到').toBeGreaterThan(4000)
   })
@@ -206,7 +206,7 @@ describe('A4-M5 真索引：md5 算错就会露馅', () => {
     writeFileSync(join(imgDir, 'whatever.dat'), xorWith(SNS_PNG, 0xff))
 
     // 一个必然不存在的 md5：helper 必须交回 undefined（**不能**交回空串或任何真值）。
-    const miss = findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'deadbeefdeadbeefdeadbeefdeadbeef')
+    const miss = await findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'deadbeefdeadbeefdeadbeefdeadbeef')
     expect(miss, '索引里没有的 md5 交回了真值 ⇒ 封面会被当成"本机有"并渲染空内容').toBeUndefined()
   })
 
@@ -218,15 +218,15 @@ describe('A4-M5 真索引：md5 算错就会露馅', () => {
     writeFileSync(join(imgDir, 'whatever.dat'), xorWith(SNS_PNG, 0xff))
 
     // 同一个 helper、同一棵树，两次查询只差 md5 的最后一个字符。
-    const a = findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1')
-    const b = findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2')
+    const a = await findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1')
+    const b = await findSnsMediaDataUrlByIndex(base, undefined, 0xff, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2')
     expect([a, b].filter(v => v !== undefined).length,
       '两个不同的 md5 都命中（或都不命中）⇒ 查询没真的按 md5 比').toBe(0)
   })
 
-  it('helper 真的会去读那棵树（目录不存在时也必须安静地交回 undefined）', () => {
+  it('helper 真的会去读那棵树（目录不存在时也必须安静地交回 undefined）', async () => {
     const root = tempRoot()
     const missing = join(root, 'no-such-base')
-    expect(findSnsMediaDataUrlByIndex(missing, undefined, 0xff, 'cafebabecafebabecafebabecafebabe')).toBeUndefined()
+    await expect(findSnsMediaDataUrlByIndex(missing, undefined, 0xff, 'cafebabecafebabecafebabecafebabe')).resolves.toBeUndefined()
   })
 })

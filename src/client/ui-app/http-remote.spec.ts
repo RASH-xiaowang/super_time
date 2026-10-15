@@ -20,11 +20,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  REMOTE_UNREACHABLE_EVENT,
   SESSION_LOST_EVENT,
   authenticate,
   callRemote,
   createHttpRemote,
   hasSession,
+  probeSession,
   resetSessionLost,
   startHttpEventRelay,
   stripTokenFromUrl,
@@ -39,6 +41,7 @@ class FakeEventSource {
   closed = false
   onmessage: ((e: MessageEvent<string>) => void) | null = null
   onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
   constructor(url: string) {
     this.url = url
     FakeEventSource.instances.push(this)
@@ -46,6 +49,8 @@ class FakeEventSource {
   close(): void { this.closed = true }
   /** 测试用：喂一帧。 */
   emit(data: string): void { this.onmessage?.({ data } as MessageEvent<string>) }
+  /** 测试用：模拟一次（重）连接成功。 */
+  open(): void { this.onopen?.() }
 }
 
 /** 造一个 fetch 替身，记下每次请求。 */
@@ -69,7 +74,8 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 function listenWindow(): Array<{ type: string, detail: unknown }> {
   const seen: Array<{ type: string, detail: unknown }> = []
   const handler = (e: Event): void => { seen.push({ type: e.type, detail: (e as CustomEvent).detail }) }
-  for (const t of [SESSION_LOST_EVENT, 'dsh-wechat-data-updated']) window.addEventListener(t, handler)
+  // 三条各是一种「用户该知道的事」：会话失效 / 连不上 / 补刷新。少听一条会把「没通知」看成「没记到」。
+  for (const t of [SESSION_LOST_EVENT, REMOTE_UNREACHABLE_EVENT, 'dsh-wechat-data-updated']) window.addEventListener(t, handler)
   return seen
 }
 
@@ -195,13 +201,24 @@ describe('令牌门用的几个小工具', () => {
     expect(seen.filter((e) => e.type === SESSION_LOST_EVENT).length, '重新登录后又失效，应当能再通知一次').toBe(2)
   })
 
-  it('hasSession：200 为真、401 为假、抛错为假', async () => {
+  it('probeSession：200=ok、401=gone、网络失败=unreachable（三态，不许把断连说成没权限）', async () => {
+    stubFetch(async () => json(200, { ok: true }))
+    expect(await probeSession()).toBe('ok')
+    stubFetch(async () => json(401, { ok: false }))
+    expect(await probeSession()).toBe('gone')
+    stubFetch(async () => json(500, { ok: false }))
+    expect(await probeSession(), '5xx 是服务在但坏了，不该被当成会话失效').toBe('unreachable')
+    stubFetch(async () => { throw new Error('x') })
+    expect(await probeSession()).toBe('unreachable')
+  })
+
+  it('hasSession：只有明确「没权限」才为假（连不上时不许把用户踢回令牌门）', async () => {
     stubFetch(async () => json(200, { ok: true }))
     expect(await hasSession()).toBe(true)
     stubFetch(async () => json(401, { ok: false }))
     expect(await hasSession()).toBe(false)
     stubFetch(async () => { throw new Error('x') })
-    expect(await hasSession()).toBe(false)
+    expect(await hasSession(), '2026-10-14 真机反例：杀掉服务后旧实现把这句当成「会话失效」').toBe(true)
   })
 
   it('一次性令牌：读出来、然后从地址栏抹掉（不该进历史与 Referer）', () => {
@@ -283,6 +300,58 @@ describe('SSE 事件流', () => {
     // 限频：紧接着再切一次不该再补（快速切来切去不能变成一串重查询）
     document.dispatchEvent(new Event('visibilitychange'))
     expect(got.length, '补刷新没有限频').toBe(1)
+    stop()
+  })
+
+  it('出错而服务只是**连不上**：说「连不上」而不是「请重新扫码」，也不关流', async () => {
+    // 2026-10-14 真机反例（杀掉电脑上的应用）：旧实现把网络层失败当成会话失效，
+    // 于是手机上弹「会话已失效，请重新扫码或输入令牌」并被关进一个此刻走不通的令牌门。
+    const seen = listenWindow()
+    const got: BackendEvent[] = []
+    stubFetch(async () => { throw new Error('ERR_EMPTY_RESPONSE') })
+    const stop = startHttpEventRelay({ dispatch: (e: BackendEvent) => { got.push(e); return null } })
+    const es = FakeEventSource.instances[0]!
+    es.onerror?.()
+    await new Promise((r) => setTimeout(r, 5))
+    const down = seen.filter((e) => e.type === REMOTE_UNREACHABLE_EVENT) as Array<CustomEvent<{ down: boolean }>>
+    expect(down.length, '连不上没被说出来').toBe(1)
+    expect(down[0]!.detail.down).toBe(true)
+    expect(seen.some((e) => e.type === SESSION_LOST_EVENT), '连不上被误判成会话失效').toBe(false)
+    expect(es.closed, '服务只是暂时没在跑，不该关掉自动重连').toBe(false)
+    // 恢复：靠**重连成功**认出来。只靠「出错时退避探测」是不够的 —— 服务端回来后
+    // EventSource 自己会连上、不再 onerror，那条路径就再也不走一遍；而用户也可能根本不再点
+    // （没有新的 HTTP 调用）。真机实测：重启应用后横幅挂了一分多钟。
+    // 所以两条都要：onopen 撤横幅，任何一次 talking 成功也撤（下面各验一次）。
+    stubFetch(async () => json(200, { ok: true, value: [] }))
+    es.open()
+    await new Promise((res) => setTimeout(res, 5))
+    const up = seen.filter((e) => e.type === REMOTE_UNREACHABLE_EVENT) as Array<CustomEvent<{ down: boolean }>>
+    expect(up.length, '服务回来了却没把横幅撤掉').toBe(2)
+    expect(up[1]!.detail.down).toBe(false)
+    expect(seen.some((e) => e.type === 'dsh-wechat-data-updated'), '恢复后没有补刷新').toBe(true)
+    // 第二条恢复路径：一次普通调用成功（用户在页面上点了什么）。
+    // 先等过退避窗口（第一次出错后 probeGap=2s），否则这次 onerror 会被限频挡掉 ——
+    // 那是它该有的行为，但会让本段用例测不到「再断一次」的状态。
+    await new Promise((res) => setTimeout(res, 2100))
+    stubFetch(async () => { throw new Error('down again') })
+    es.onerror?.()
+    await new Promise((res) => setTimeout(res, 5))
+    expect(seen.filter((e) => e.type === REMOTE_UNREACHABLE_EVENT).length, '第二次断连没被说出来').toBe(3)
+    stubFetch(async () => json(200, { ok: true, value: [] }))
+    expect((await callRemote('getSessions', [])).ok).toBe(true)
+    await new Promise((res) => setTimeout(res, 5))
+    const ev = seen.filter((e) => e.type === REMOTE_UNREACHABLE_EVENT)
+    expect(ev.length, '一次成功调用没把「连不上」状态清掉').toBe(4)
+    // 第三条：401 也是「服务活着」的实证 —— 否则令牌门会盖在一条「连不上」横幅上
+    stubFetch(async () => { throw new Error('down') })
+    await new Promise((res) => setTimeout(res, 2100))
+    es.onerror?.()
+    await new Promise((res) => setTimeout(res, 5))
+    stubFetch(async () => json(401, { ok: false }))
+    await (callRemote('getSessions', []))
+    await new Promise((res) => setTimeout(res, 5))
+    expect((seen.filter((e) => e.type === REMOTE_UNREACHABLE_EVENT).length % 2), '401 之后「连不上」应当是清着的').toBe(0)
+    expect(seen.some((e) => e.type === SESSION_LOST_EVENT), '401 没触发令牌门').toBe(true)
     stop()
   })
 

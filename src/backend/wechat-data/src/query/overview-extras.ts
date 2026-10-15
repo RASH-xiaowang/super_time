@@ -3,7 +3,7 @@
  * freshness, computed over the same decrypted shards the overview reads.
  * Cached by file signature so it stays cheap on the live dashboard.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'

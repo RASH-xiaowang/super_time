@@ -1,5 +1,7 @@
 'use strict';
 
+const { LONG_CALL_METHODS } = require('./remote-policy');
+
 /**
  * 后端 worker 的 RPC 通道：请求/响应配平、调用超时、进程死亡时收敛在途请求。
  *
@@ -10,73 +12,22 @@
  * 「进程中途退出」等场景，确定性验证。
  *
  * 协议（与 src/backend/wechat-worker.js 对应）：
- *   主 → worker：{ id, type: 'init' | 'call' | 'dispose', payload }
- *   worker → 主：{ id, value } / { id, error: { message } } / { type: 'event', name, args }
+ *   主 → worker：{ id, type: 'init' | 'call' | 'cancel' | 'dispose', payload }
+ *   worker → 主：{ id, value } / { id, error: { message } } /
+ *     { id, type: 'canceled', value } / { type: 'event', name, args }
  */
 
 /** 普通调用的默认窗口。 */
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 /** 已知分钟级任务的窗口（导出、全量解密、批量转写、建索引、备份恢复）。 */
 const DEFAULT_LONG_CALL_TIMEOUT_MS = 10 * 60_000;
-
 /**
- * 需要更宽窗口的 Remote 方法。
+ * 保留多少条「已超时但尚未看到迟回包/取消回执」的幽灵调用。
  *
- * **这份名单必须始终是 gateway 里真实存在的 @Remote 方法名子集**，
- * 由 src/backend/tests/backend-rpc.spec.ts 直接从 gateway.ts 抽 @Remote 名单来校验。
- * 初版这里写了 `decryptImages` / `generateAnnualReport` 两个**不存在**的名字
- * （真名是 `decryptAllImages` / `getAnnualReport`），于是那些方法拿不到宽窗口；
- * 而写错方法名不会报任何错，只会静默退化 —— 那个测试就是为此加的。
+ * 幽灵调用没有回包上限：永不回包的调试注入就是故意不回来。用有界 Map 防长跑诊断
+ * 把内存吃满，太老的条目仍会计入累计 `orphanCompletions` 之外的超时统计。
  */
-const LONG_CALL_METHODS = new Set([
-  // 导出：大量写盘 + 压缩
-  'exportSessionMessages', 'exportCsv', 'exportAnnualReport', 'exportAllSessions', 'exportMoments', 'exportSnsVideo',
-  // 备份与恢复：整库拷贝
-  'createBackup', 'createEncryptedBackup', 'restoreBackup', 'previewBackup', 'deleteBackup',
-  // 解密：全量读 + 写
-  'decryptAllDatabases', 'decryptAllImages', 'autoGetDbKey', 'autoGetImageKey',
-  // 升级解码缓存：扫 msg/attach（数万文件）+ 逐条重解已缓存的图，量级与批量解密同档
-  'upgradeDecodedImages',
-  // 媒体取数：命中不了缓存时会退化成对整个 cache/<月>/Sns 乃至 msg/attach 做
-  // 全量「读文件 + 解密 + 哈希」，实测单次 12–21 秒（getSnsImageDataUrl 那句注释
-  // 就是它）。60 秒只有约 3 倍余量，冷启动/大库上不够稳；这类方法本身有负缓存，
-  // 放宽代价是「真卡住时晚一点报错」，比误杀划算。
-  'getSnsImageDataUrl', 'getSnsVideoCoverDataUrl', 'getSnsVideoDataUrl',
-  'getArticleCover', 'getImageDataUrl', 'getFileImageDataUrl', 'getEmoticonDataUrl', 'getImageOriginal',
-  // 批量封面（A1，2026-09-28 性能修复）：单张版早在宽窗口里，批版等于把 N 张的最坏耗时
-  // （每张两次 20s 超时）串在一个窗口里 —— 按 8 并发、一屏 30 篇算，最坏仍有约 4 批 × 40s。
-  // 不进这个名单的话，一屏封面会被 RPC 默认窗口误杀成「调用超时」。
-  'getArticleCovers',
-  // 批量取图（P3-12）：一次最多 200 张，每张都可能退化成「读文件 + 解密 + 哈希」——
-  // 单张 `getImageDataUrl` 早就在宽窗口里了，批版却是 60 秒的默认档，
-  // 于是一次正常的批量取图被 RPC 误杀成「调用超时」，界面看到的是整批失败。
-  'getImageDataUrlsBatch',
-  // 批量取原图：一次要下几千张（全库 16.6% 带免登录直链），逐张 15s 超时 + 4 并发也远超 60s
-  'fetchOriginalImagesBatch',
-  // 语音转写：whisper 本地推理
-  'transcribeVoiceBatch', 'transcribeVoiceMessage',
-  // laya 本地决策推理（2026-09-28 补登记）。**这条是「模型装上了却用不起来」的直接原因**：
-  // 逐条分析一批最多 12 条，每条一次完整的 ONNX forward，现场日志实测**单次 54,103ms**
-  // （`world-map-data.ts` / `world-map-first-paint.wiring.spec.ts` 两处都引了这个数），PERF-AUDIT 的日志口径是**均 36s / 峰值 110s**。默认 60s 窗口
-  // 只有 1.1 倍余量 ⇒ 稍大的可见窗口就被误杀成「调用超时」，界面看到的是**整批失败**，
-  // 与下面 `getImageDataUrlsBatch` 的 P3-12 是同一个症状：推理其实还在后台跑完。
-  'analyzeMessages', 'analyzeVisibleMessages',
-  // 模型文件 1.26 GB 走流式下载；「接管已有目录」在跨盘时退化成整份拷贝（1.23 GB）。
-  // 两者都远超 60s：不登记的话 RPC 先超时，而下载/拷贝**还在继续**，用户只看到一句失败。
-  'downloadLayaModel', 'adoptLayaModel',
-  // 索引与离线评估
-  'buildSearchIndex', 'buildRagVectorIndex', 'buildKbVectorIndex', 'evaluateRetrieval',
-  // LLM 长任务。仓库自身 LLM 超时默认 120 秒（wechat-host.js 的 timeoutMs），
-  // RPC 窗口必须明显宽于它，否则「模型还在流式输出」就先被判成调用超时。
-  'askWechat', 'optimizeAskQuestion', 'runSummaryTask', 'generateDailySummary', 'generatePeriodSummary',
-  'summarizeKbFile',
-  // 实体抽取是一轮**最多 20 个文件**的串行 LLM 调用（每个文件一次），20 × 十几秒就能
-  // 越过默认窗口；链接建议是一次 embedding 批量（最多 80 条短标题），慢的时候同样会超。
-  'extractKbEntities', 'suggestKbLinks',
-  // 年度报告/回顾：跨全年聚合，且可能触发 LLM
-  'getAnnual', 'getAnnualReport', 'getAnnualReview',
-  'syncHandoffTasks', 'extractTasks',
-]);
+const ORPHAN_TRACK_MAX = 256;
 
 /**
  * 某个方法的超时窗口。
@@ -113,9 +64,36 @@ function createWorkerChannel(child, options = {}) {
 
   /** @type {Map<number, {resolve: Function, reject: Function, timer: any}>} */
   const pending = new Map();
+  /** @type {Map<number, {method: string, timedOutAt: number}>} */
+  const orphaned = new Map();
   let seq = 0;
   let deadReason = null;
   let exited = false;
+  let timedOut = 0;
+  let orphanCompletions = 0;
+  let cancelsSent = 0;
+  let cancelsAcknowledged = 0;
+
+  /** 把一条超时调用登记成「主进程已放弃、worker 可能仍在跑」的幽灵。 */
+  const rememberOrphan = (id, method) => {
+    if (orphaned.has(id)) orphaned.delete(id);
+    orphaned.set(id, { method: String(method ?? ''), timedOutAt: Date.now() });
+    timedOut += 1;
+    if (orphaned.size > ORPHAN_TRACK_MAX) {
+      const oldest = orphaned.keys().next();
+      if (!oldest.done) orphaned.delete(oldest.value);
+    }
+  };
+
+  /** 尽力把取消消息发进 worker；worker 拒绝/回包失败都不影响主进程已经放弃的事实。 */
+  const sendCancel = (id, payload) => {
+    try {
+      child.postMessage({ id, type: 'cancel', payload });
+      cancelsSent += 1;
+    } catch (e) {
+      logger.warn('[backend-rpc] 发送取消消息失败（worker 可能已退出）:', e?.message ?? e);
+    }
+  };
 
   /** 进程死亡：在途请求全部 reject，并清掉各自的定时器（否则会留下悬空回调）。 */
   const failAll = (reason) => {
@@ -125,6 +103,7 @@ function createWorkerChannel(child, options = {}) {
       reject(new Error(reason));
     }
     pending.clear();
+    orphaned.clear();
   };
 
   child.on('message', (msg) => {
@@ -137,13 +116,30 @@ function createWorkerChannel(child, options = {}) {
       }
       return;
     }
+    if (msg.type === 'canceled') {
+      // 取消回执只在「真正被打断」时才算收敛；`ok:false`（没有 jobId / 已经跑完）仍要
+      // 保留幽灵记录，等迟到的正常回包把 `orphanCompletions` 加上去。
+      if (orphaned.has(msg.id) && msg.value?.ok === true) {
+        orphaned.delete(msg.id);
+        cancelsAcknowledged += 1;
+      }
+      return;
+    }
     const p = pending.get(msg.id);
     // 认领不到就丢弃：超时后我们已经把这条摘掉了，迟到的回包不能再 settle 一次。
-    if (!p) return;
-    pending.delete(msg.id);
-    clearTimeout(p.timer);
-    if (msg.error) p.reject(new Error(msg.error.message));
-    else p.resolve(msg.value);
+    if (p) {
+      pending.delete(msg.id);
+      clearTimeout(p.timer);
+      if (msg.error) p.reject(new Error(msg.error.message));
+      else p.resolve(msg.value);
+      return;
+    }
+    if (orphaned.has(msg.id)) {
+      const ghost = orphaned.get(msg.id);
+      orphaned.delete(msg.id);
+      orphanCompletions += 1;
+      logger.warn(`[backend-rpc] 超时调用已返回（主进程已放弃）：${ghost?.method || msg.id}`);
+    }
   });
 
   child.on('exit', (code) => {
@@ -171,6 +167,8 @@ function createWorkerChannel(child, options = {}) {
       const what = type === 'call' ? payload?.method : type;
       const budget = describeBudget(timeoutMs);
       logger.warn(`[wechat] 调用超时（${budget}未返回）：${what}`);
+      rememberOrphan(id, type === 'call' ? payload?.method : type);
+      if (type === 'call') sendCancel(id, payload);
       reject(new Error(`调用超时（${budget}未返回）：${what}`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
@@ -198,6 +196,27 @@ function createWorkerChannel(child, options = {}) {
     get deadReason() { return deadReason; },
     /** 在途请求数（诊断用；超时后应回落）。 */
     get pendingCount() { return pending.size; },
+    /**
+     * RPC 超时与幽灵工作账本。
+     *
+     * `timedOut` 是「主进程不再等」的次数；`orphanCompletions` 是其中确实晚到回包的次数；
+     * `cancelsAcknowledged` 是 worker 成功认领取消的次数。三者分开看才能回答「超时到底是
+     * 被停掉了、跑完了、还是仍挂着」。
+     */
+    stats() {
+      return {
+        pending: pending.size,
+        timedOut,
+        orphanCompletions,
+        cancelsSent,
+        cancelsAcknowledged,
+        dead: deadReason !== null,
+        orphanedCalls: [...orphaned.values()].map((value) => ({
+          method: value.method,
+          timedOutAt: value.timedOutAt,
+        })),
+      };
+    },
   };
 }
 
@@ -208,4 +227,5 @@ module.exports = {
   LONG_CALL_METHODS,
   DEFAULT_CALL_TIMEOUT_MS,
   DEFAULT_LONG_CALL_TIMEOUT_MS,
+  ORPHAN_TRACK_MAX,
 };

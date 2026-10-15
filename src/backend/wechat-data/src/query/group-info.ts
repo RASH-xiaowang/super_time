@@ -3,7 +3,7 @@
  * chatroom name/remark, announcement (chat_room_info_detail), own alias and
  * member grid (chatroom_member joined to contact for names/avatars).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { join } from 'node:path'
 import type { GroupInfo, GroupInfoSnapshot, GroupMember } from '../types.ts'

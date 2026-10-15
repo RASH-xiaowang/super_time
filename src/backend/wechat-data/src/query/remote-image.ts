@@ -27,7 +27,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { detectImageFormat } from './media-image.ts'
 import { yieldToLoop } from './search-build.ts'

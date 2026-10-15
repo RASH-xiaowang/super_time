@@ -18,6 +18,7 @@ import { ChatsCalendarDialog } from './chats-calendar-dialog.tsx'
 
 const sink = {
   jumpToDay: vi.fn((_day: number): void => { void _day }),
+  refreshCurrentMonth: vi.fn((): Promise<void> => Promise.resolve()),
   setCalOpen: vi.fn((_open: boolean): void => { void _open }),
   switchCalMonth: vi.fn((_delta: number): Promise<void> => Promise.resolve()),
 }
@@ -42,6 +43,7 @@ function props(over: Partial<ChatsCalendarDialogProps> = {}): ChatsCalendarDialo
     calTotal: 12,
     calYear: 2026,
     jumpToDay: sink.jumpToDay,
+    refreshCurrentMonth: sink.refreshCurrentMonth,
     setCalOpen: sink.setCalOpen,
     switchCalMonth: sink.switchCalMonth,
     ...over,

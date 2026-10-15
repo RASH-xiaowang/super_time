@@ -5,7 +5,7 @@
  * modules/moments.rs parse_sns_xml. Author names resolve via contact.db.
  */
 import { fmtRelativeDaySec } from '../format.ts'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'

@@ -25,12 +25,13 @@ async function templateScanYield(): Promise<void> {
 }
 import { fetchImageKey, normalizeAccountDir } from '../keys/service.ts'
 import { getConfig } from '../query/config.ts'
+import { repairCorruptDbs } from '../query/db-repair.ts'
 import { decryptAllDbs } from '../query/decrypt-all.ts'
 import { decryptAllImageDats } from '../query/decrypt-images.ts'
 import { upgradeDecodedImageCache } from '../query/image-upgrade.ts'
 import { resolveImageKeyPair } from '../query/image-key.ts'
 import { invalidateWechatMeta } from '../query/meta.ts'
-import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, ImageUpgradeResult, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts'
+import { AutoImageKeyResult, DecryptAllResult, DecryptImagesResult, DecryptStatus, DbRepairResult, ImageUpgradeResult, OperationCategory, OperationStatus, VerifyImageKeyResult } from '../types.ts'
 import { existsSync } from 'node:fs'
 
 export interface createKeysDecryptRemotesInputs {
@@ -105,6 +106,7 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
       rc.decryptState.failed = 0
       rc.decryptState.skipped = 0
       rc.decryptState.message = ''
+      rc.decryptState.failures = []
       try {
         const r = await decryptAllDbs(rawDbDir, rc.dirs().decrypted, (done, total, failed, message) => {
           rc.decryptState.done = done
@@ -115,6 +117,10 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
         // 全部解密库被原子替换：进程内元数据/统计缓存必须整体失效。
         invalidateWechatMeta()
         rc.op('sync', 'decrypt_databases', r.ok ? 'ok' : 'fail', '', r.error ?? `成功 ${r.okCount}/${r.total}${r.failed.length > 0 ? `，失败 ${r.failed.length}` : ''}`)
+        // W3-2.5：把失败明细留在快照里 —— 「失败 N」只是个计数，面板要说清是哪几个、
+        // 因为什么，用户才有的可修。放在这里而不是 finally：finally 里 r 还没诞生
+        // （抛错路径更没有），那一路的明细由调用方拿到的 error 负责。
+        rc.decryptState.failures = r.failed.slice(0, 20)
         return r
       } finally {
         rc.decryptState.active = false
@@ -122,12 +128,58 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
       }
     },
 
-    async decryptAllImages(options: { concurrency?: number }): Promise<DecryptImagesResult> {
+    /**
+     * 修复损坏的库（W3-11.7）：体检 → 只重解密损坏的那几个 → 复检。
+     *
+     * 与 `decryptAllDatabases` 的关系：那条是「立即解密」—— **全库**重解（22 个库一律
+     * 重来，分钟级）；本方法是「坏了哪个修哪个」。它存在的理由就是 wechat-host.js
+     * 那条处方（「必要时对该库重新解密」）此前没有对应动作：用户即使知道坏的是哪个，
+     * 也只能整库重解或者干等。实现见 `query/db-repair.ts`。
+     *
+     * 共用同一条忙闲闸门（`decryptState.active`）：两类动作都动同一批文件，
+     * 同时跑只会互相替换快照。进度走 `op = 'databases'`（它确实是数据库解密，
+     * 实时同步与全量解密共用这一个状态枚举，不为它单开一档）。
+     * @returns DbRepairResult：found/repaired/stillCorrupted + 修不了的与原因。
+     */
+    async repairCorruptDbs(): Promise<DbRepairResult> {
+      if (rc.decryptState.active) { rc.op('sync', 'repair_corrupt_dbs', 'fail', '', '已有解密任务进行中'); return { ok: false, checked: 0, found: 0, repaired: 0, stillCorrupted: [], failed: [], unrepairable: [], unreadable: [], uncheckable: [], error: '已有解密任务进行中' } }
+      const cfg = getConfig(rc.dirs().decrypted)
+      const rawDbDir = typeof cfg['db_dir'] === 'string' ? cfg['db_dir'] : ''
+      rc.decryptState.op = 'databases'
+      rc.decryptState.active = true
+      rc.decryptState.done = 0
+      rc.decryptState.total = 0
+      rc.decryptState.failed = 0
+      rc.decryptState.skipped = 0
+      rc.decryptState.message = ''
+      rc.decryptState.failures = []
+      try {
+        const r = await repairCorruptDbs(rawDbDir, rc.dirs().decrypted, (done, total, message) => {
+          rc.decryptState.done = done
+          rc.decryptState.total = total
+          rc.decryptState.message = message
+        })
+        // 修复会原子替换损坏的快照：进程内元数据/统计缓存必须整体失效（与全量解密同口径）。
+        invalidateWechatMeta()
+        const summary = r.found === 0
+          ? '没有发现损坏的库'
+          : `发现 ${r.found} 个损坏，修复 ${r.repaired} 个` + (r.stillCorrupted.length > 0 ? `，仍坏 ${r.stillCorrupted.length} 个` : '')
+        rc.op('sync', 'repair_corrupt_dbs', r.ok ? 'ok' : 'fail', '', r.error ?? summary)
+        // W3-2.5 同款：失败明细进快照，「重试解密」按钮与健康面板都读它。
+        rc.decryptState.failures = r.failed.slice(0, 20)
+        return r
+      } finally {
+        rc.decryptState.active = false
+        rc.decryptState.message = ''
+      }
+    },
+
+    async decryptAllImages(options?: { concurrency?: number }): Promise<DecryptImagesResult> {
       if (rc.decryptState.active) { rc.op('sync', 'decrypt_images', 'fail', '', '已有解密任务进行中'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '已有解密任务进行中' } }
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
       const rawRoot = rawWechatBase(rc.dirs().decrypted)
       if (!rawRoot) { rc.op('sync', 'decrypt_images', 'fail', '', '未配置数据库目录，无法定位图片数据'); return { ok: false, total: 0, okCount: 0, failed: 0, skipped: 0, errors: [], error: '未配置数据库目录，无法定位图片数据' } }
-      const concurrency = Math.floor(options.concurrency ?? 8) || 8
+      const concurrency = Math.floor(options?.concurrency ?? 8) || 8
       rc.decryptState.op = 'images'
       rc.decryptState.active = true
       rc.decryptState.done = 0
@@ -135,6 +187,7 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
       rc.decryptState.failed = 0
       rc.decryptState.skipped = 0
       rc.decryptState.message = ''
+      rc.decryptState.failures = []
       try {
         const result = await decryptAllImageDats(rawRoot, rc.dirs().decoded, aesKey, xorKey, concurrency,
           (processed, total, failed, message) => {
@@ -176,6 +229,7 @@ export function createKeysDecryptRemotes(rc: createKeysDecryptRemotesInputs) {
       rc.decryptState.failed = 0
       rc.decryptState.skipped = 0
       rc.decryptState.message = ''
+      rc.decryptState.failures = []
       try {
         const result = await upgradeDecodedImageCache(rawRoot, rc.dirs().decoded, aesKey, xorKey,
           (processed, total, failed, message) => {

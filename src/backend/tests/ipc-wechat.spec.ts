@@ -37,8 +37,15 @@ type BackendStub = { call: (method: string, args?: unknown) => Promise<unknown> 
 
 function makeCtx(backend: BackendStub = null) {
   const handled = new Map<string, (...a: unknown[]) => unknown>()
+  const scheduled: Array<{ channel?: string, method?: string }> = []
   const ctx = {
     ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { handled.set(ch, fn) } },
+    // Existing behavior tests exercise the registrar and handler logic, not the
+    // Electron window boundary. The real guard has its own spec below.
+    ipcTrust: {
+      wrap: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
+      wrapOn: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
+    },
     app: { getVersion: () => '0.0.0', getPath: () => '/tmp' },
     licenseService: { status: () => ({ state: 'ok' }), verify: async () => ({ ok: true }), METHOD_FEATURE: {} },
     debugGates: () => ({ packaged: false, skipGates: true }),
@@ -51,6 +58,12 @@ function makeCtx(backend: BackendStub = null) {
     getWechatBackend: () => backend,
     getWechatBoot: () => null,
     getBackendStatus: () => ({ state: 'running', restarts: 0, lastError: null }),
+    scheduleWechatCall: (task: () => unknown, meta?: { channel?: string, method?: string }) => {
+      scheduled.push(meta ?? {})
+      return task()
+    },
+    getCallQueueStats: () => ({ active: 0, queued: 0, rejected: 0 }),
+    getRpcStats: () => ({ pending: 0, timedOut: 1, orphanCompletions: 0 }),
     BACKEND_CALL_READY_WAIT_MS: 20_000,
     loadLlmConfig: () => ({ ok: true, value: { provider: 'stub', model: 'stub-model' } }),
     saveLlmConfig: () => ({ ok: true }),
@@ -59,7 +72,7 @@ function makeCtx(backend: BackendStub = null) {
     activateLlmProfile: () => ({ ok: true }),
     deleteLlmProfile: () => ({ ok: true }),
   }
-  return { ctx, handled }
+  return { ctx, handled, scheduled }
 }
 
 /** 记账用的假后端：证明 `wechat:llm-models` 不再读任何隐私开关。 */
@@ -118,6 +131,24 @@ describe('ipc-wechat：频道都要注册上，且 handler 体内引用的东西
     expect(info, 'wechat:info 返回了 undefined').toBeTruthy()
     const llm = await handled.get('wechat:llm-get')?.({}, undefined)
     expect(llm, 'wechat:llm-get 返回了 undefined').toBeTruthy()
+    const backendState = await handled.get('wechat:backend-state')?.({}, undefined) as
+      { ok: boolean, value: { callQueue: { active: number, queued: number }, rpc: { timedOut: number } } }
+    expect(backendState.value.callQueue).toMatchObject({ active: 0, queued: 0 })
+    expect(backendState.value.rpc).toMatchObject({ timedOut: 1 })
+  })
+
+  it('wechat:call 走共享调度器，并把 desktop/method 交给诊断记账', async () => {
+    const probe = backendProbe()
+    const { ctx, handled, scheduled } = makeCtx(probe.stub)
+    registerWechatIpc(ctx)
+    const fn = handled.get('wechat:call')
+    expect(fn, 'wechat:call 没注册').toBeTruthy()
+    const r = await (fn as (e: unknown, method: string, args: unknown[]) => Promise<unknown>)(
+      {}, 'getSessions', [],
+    )
+    expect(r).toEqual({ ok: true, value: { redactSensitive: false } })
+    expect(probe.called).toEqual(['getSessions'])
+    expect(scheduled).toEqual([{ channel: 'desktop', method: 'getSessions' }])
   })
 })
 

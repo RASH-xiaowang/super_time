@@ -144,22 +144,24 @@ export function ListSkeleton({ rows = 8, grid = false, minCol = 120 }: { rows?: 
  * 始终拿到最新闭包。相比固定轮询，能按需、即时刷新。
  * @param handler - 数据落地后的刷新回调。
  */
-export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wechat-data-updated'): void {
+export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wechat-data-updated', debounceMs = 300): void {
   const ref = useRef(handler)
   ref.current = handler
   useEffect(() => {
     let timer: number | undefined
     const on = (): void => {
       // 高频同步事件合并为一次刷新，避免连续重载导致界面卡顿。
+      // 合并窗可调（2026-10-13）：后端推送已自带 1.5s 限频，会话列表这类「第一眼就要变」
+      // 的界面用更小的窗换更快的响应。
       if (timer !== undefined) window.clearTimeout(timer)
-      timer = window.setTimeout(() => { timer = undefined; ref.current() }, 300)
+      timer = window.setTimeout(() => { timer = undefined; ref.current() }, debounceMs)
     }
     window.addEventListener(eventName, on)
     return () => {
       if (timer !== undefined) window.clearTimeout(timer)
       window.removeEventListener(eventName, on)
     }
-  }, [eventName])
+  }, [eventName, debounceMs])
 }
 
 /**
@@ -295,6 +297,10 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
 export function usePagedList<T>(options: {
   pageSize: number
   fetchPage: (offset: number, limit: number) => Promise<{ items: readonly T[]; total: number }>
+  /** 数据事件驱动的后台刷新最小间隔（缺省 30s）。需要更实时的小列表（如会话列表）传更小值。 */
+  refreshMinIntervalMs?: number
+  /** 推送合并窗（缺省 300ms）。后端推送已自带限频，需要最快响应的小列表传更小值。 */
+  refreshDebounceMs?: number
 }): {
   items: readonly T[]
   total: number
@@ -306,7 +312,7 @@ export function usePagedList<T>(options: {
   reset: () => void
   refresh: () => void
 } {
-  const { pageSize } = options
+  const { pageSize, refreshDebounceMs, refreshMinIntervalMs } = options
   const fetchPageRef = useRef(options.fetchPage)
   fetchPageRef.current = options.fetchPage
   const [items, setItems] = useState<readonly T[]>([])
@@ -449,7 +455,7 @@ export function usePagedList<T>(options: {
       now: Date.now(),
       lastStartedAt: lastRefreshAtRef.current,
       hidden: typeof document !== 'undefined' && document.hidden === true,
-      minIntervalMs: REFRESH_MIN_INTERVAL_MS,
+      minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS,
     })
     if (gate.go) { refresh(); return }
     if (gate.waitMs <= 0 || trailingRef.current !== undefined) return
@@ -457,7 +463,7 @@ export function usePagedList<T>(options: {
       trailingRef.current = undefined
       refresh()
     }, gate.waitMs)
-  }, [refresh])
+  }, [refresh, refreshMinIntervalMs])
 
   // 窗口从后台切回前台时补一次：期间攒下的变更在这里落地（而不是每 10 秒打一轮）。
   useEffect(() => {
@@ -473,7 +479,7 @@ export function usePagedList<T>(options: {
 
   useWechatDataUpdated(() => {
     maybeBackgroundRefresh()
-  })
+  }, 'dsh-wechat-data-updated', refreshDebounceMs ?? 300)
 
   return {
     items,

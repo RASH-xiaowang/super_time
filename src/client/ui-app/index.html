@@ -3,16 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- connect-src 于 2026-09-29 按用户要求放宽为 `https:` 通配：渲染层（fetch/XHR）可访问任意 https 主机。
-       历史上这里曾显式列出 world 地图 GeoJSON（jsdelivr / unpkg）+ 省/市/区县 GeoJSON（geo.datav.aliyun.com），
-       漏掉 aliyun 会打断省/市/区县地图的取数（评审实测的回归）—— 放宽为 `https:` 后这些主机自然也在放行范围内。
-       LLM 与 embedding 的 HTTP 调用都发生在后端 worker（Node 侧），不受页面 CSP 约束。
-       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。
-       img-src 仍收紧成**只有本机来源**（M23）：消息里记录的远程图片/头像地址一律交给后端 query/remote-image.ts
-       代取成 data URL，并受腾讯系主机白名单约束，操作记录里也留得下（应用内已无出网开关，2026-09-30）。
-       本次改动属材料性变更，已同步提升 PRIVACY_VERSION 与 docs/PRIVACY.md。 -->
+  <!-- 空 icon 声明：浏览器（只有浏览器，含手机）会默认去要 `/favicon.ico`，而 ui-dist 里没有这个文件
+       ⇒ 每次进应用都留一条 404 在控制台里。桌面端从 file:// 加载，本来就不发这个请求，所以这条
+       对 Electron 是惰性的。写 `data:,` 而不是删掉请求：这是标准做法，且不需要新增任何文件产物。 -->
+  <link rel="icon" href="data:," />
+  <!-- connect-src 只放行本机来源。远程图片、头像与地图数据都经后端白名单代理，
+       由 query/remote-image.ts / query/map-geo.ts 取回 data URL 或 JSON；渲染层不直接 fetch 任意 https。
+       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https:" />
+    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file:" />
   <title>Super Time</title>
 </head>
 <body>

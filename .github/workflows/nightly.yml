@@ -2,13 +2,13 @@ name: Nightly
 
 # 第二档门禁：太贵、不能每次 push 都跑的那几件（清单与实测成本见 scripts/ci-tiers.mjs）。
 #
-# 为什么要有这条：PR 门禁只跑**增量**变异 + 8 个便宜的基准，于是有两类东西永远没人跑 ——
+# 为什么要有这条：PR 门禁只跑**增量**变异 + 18 个便宜的基准，于是有两类东西永远没人跑 ——
 #   · 「目标文件与判据 spec 都没动」的那些变异 ⇒ 登记表会慢慢腐烂，而腐烂是不出声的；
 #   · 那 13 分钟的 `export-memory` 基准 ⇒ 只贡献一行 skipped。
 # 这条工作流每天跑一次全量，把这些补上。它**不阻塞** PR（失败只让夜间这一条变红）。
 #
 # 本机实测成本（2026-10-09，windows / Node 24.20.0）：
-#   check:mutation 约 25~30 分钟（408 条，每条约 4 秒，vitest 冷启动主导）
+#   check:mutation 约 25~30 分钟（每条约 4 秒，vitest 冷启动主导）
 #   measure:slow   13 分钟（export-memory 一个文件就占 801.5 秒，是九个基准里的 99.9%）
 #   e2e:ledger-reload 38.3 秒 / e2e:backup-progress 6.1 秒
 # 合计约 45 分钟，所以 timeout 给 70 分钟。
@@ -66,3 +66,19 @@ jobs:
       - name: 备份进度 e2e（真机）
         timeout-minutes: 12
         run: npm run e2e:backup-progress
+
+      # 打包态冒烟（W2-13.3）。此前它只在**本机**跑：`ci-script-isolation.spec.ts`（N23）
+      # 禁 CI 引用的脚本出现本机专有资产的完整路径字面量，而这份脚本要断言的正是
+      # 「wechat/config.json（本机 db_dir + 微信解密密钥）与 wechat/llm.json（API Key）
+      #  不许进包」。解法是把路径尾段拆成常量（见 scripts/packaged-smoke.js 的注释）。
+      #
+      # 为什么必须在 `pack` 之后：它既要读 app.asar 内容，也要启动打包后的应用看运行时状态。
+      # 为什么只能放夜间：本机没跑过打包成本（electron-builder 全量打包要好几分钟），
+      # 凭猜塞进 PR 门禁会直接把 CI 顶爆。第一次跑完请把下面的分钟数换成实测值。
+      - name: 打包产物（electron-builder --dir）
+        timeout-minutes: 35
+        run: npm run pack
+
+      - name: 打包态冒烟（W2-13.3）
+        timeout-minutes: 25
+        run: npm run package:smoke

@@ -16,7 +16,7 @@
  * 一条串行循环会让几个号互相饿死，而且「这一批消息属于哪个号」根本无从分辨 ——
  * 游标（`sync_buf`）、落库（`clawbot_message.slot`）、事件与附件队列全部按实例分开。
  * 扫码会话同理按 slot 分开（用户可能同时给两个号取码）。
- * 实例与配置的**存储语义**在 `query/clawbot-instance.ts`（配置的唯一入口）；本文件只管通道、事件与转发。
+ * 实例与配置的**存储语义**在 `query/clawbot/clawbot-instance.ts`（配置的唯一入口）；本文件只管通道、事件与转发。
  * 工厂里的两个**内部方法**（不加 `@Remote`、不进 `docs/API.md`）：`bindClawbotWechat`
  * （扫码确认后回写身份 + 凭证并拉起通道）与 `ensureClawbotChannel`（启动钩子）；
  * 重量级主体都提成了**模块级函数**：`sendClawbotText`（发送）、`mediaFor`（取媒体）、
@@ -46,18 +46,18 @@
  *
  * ## 出网纪律
  *
- * 本文件**不直接出网**：全部网络调用经 `query/clawbot-ilink.ts`（唯一接缝，
+ * 本文件**不直接出网**：全部网络调用经 `query/clawbot/clawbot-ilink.ts`（唯一接缝，
  * `clawbot-outbound.spec.ts` 逐文件扫描）。请求体只含控制面信息（凭证/游标）与
  * **用户主动发送的正文**（`sendClawbotMessage`，逐条触发）。
  *
  * @module remotes/clawbot
  */
 import type { ClawbotBindQr, ClawbotBindStateSnapshot, ClawbotBindingSnapshot, ClawbotBindingStatus, ClawbotEnvSnapshot, ClawbotInstanceConfig, ClawbotInstanceCreated, ClawbotInstanceDeleted, ClawbotInstancesSnapshot, ClawbotMediaResult, ClawbotMessageQuery, ClawbotMessageSnapshot, ClawbotSendResult, OperationCategory, OperationStatus } from '../types.ts';
-import type { BindingCredentials } from '../query/clawbot-binding.ts';
-import { type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot-auto-reply.ts';
-import { ensureClawbotMedia } from '../query/clawbot-media.ts';
-import type { WeixinMessage } from '../query/clawbot-ilink.ts';
-import { getUpdates as ilinkGetUpdates, pollBindStatus as ilinkPollBindStatus, requestBindQr as ilinkRequestBindQr, sendTextMessage as ilinkSendTextMessage } from '../query/clawbot-ilink.ts';
+import type { BindingCredentials } from '../query/clawbot/clawbot-binding.ts';
+import { type ClawbotAskFn, type ReplyableMessage } from '../query/clawbot/clawbot-auto-reply.ts';
+import { ensureClawbotMedia } from '../query/clawbot/clawbot-media.ts';
+import type { WeixinMessage } from '../query/clawbot/clawbot-ilink.ts';
+import { getUpdates as ilinkGetUpdates, pollBindStatus as ilinkPollBindStatus, requestBindQr as ilinkRequestBindQr, sendTextMessage as ilinkSendTextMessage } from '../query/clawbot/clawbot-ilink.ts';
 /** `clawbot/binding-changed` 的参数（不含任何会话内容）。 */
 export interface ClawbotBindingChangedArgs {
     from: ClawbotBindingStatus;
@@ -124,10 +124,10 @@ export interface createClawbotRemotesInputs {
     ask?: ClawbotAskFn;
 }
 /**
- * 自动回复的 ask 能力（**家**在 `query/clawbot-auto-reply.ts` —— query 层不许反过来依赖 remotes）；
+ * 自动回复的 ask 能力（**家**在 `query/clawbot/clawbot-auto-reply.ts` —— query 层不许反过来依赖 remotes）；
  * 这里 re-export 保持既有导入路径不变。
  */
-export type { ClawbotAskFn } from '../query/clawbot-auto-reply.ts';
+export type { ClawbotAskFn } from '../query/clawbot/clawbot-auto-reply.ts';
 /** 媒体取数的注入点（测试注入假实现 ⇒ 零出网）。 */
 export interface ClawbotMediaDeps {
     ensure: typeof ensureClawbotMedia;
@@ -162,7 +162,7 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
     /**
      * 新建一个实例（初始 `unbound`，等扫码绑定）。
      *
-     * slot 由存储层按「绑定行自增 id」分配（**只增不复用**，见 `query/clawbot-instance.ts`）。
+     * slot 由存储层按「绑定行自增 id」分配（**只增不复用**，见 `query/clawbot/clawbot-instance.ts`）。
      * @returns 新实例编号 + 最新列表（界面据此立刻对它取码，不用去猜哪条是新的）。
      */
     createClawbotInstance(): ClawbotInstanceCreated;
@@ -236,7 +236,7 @@ export declare function createClawbotRemotes(rc: createClawbotRemotesInputs): {
      * 取某条消息的附件（**只在用户点开时发生**）：按需下载 + 解密 + 落盘缓存。
      *
      * 按消息 id 取（id 全局唯一），所以**不需要 slot**。缓存命中不再联网；
-     * 主机白名单与体积上限都在 `query/clawbot-media.ts` 里判。
+     * 主机白名单与体积上限都在 `query/clawbot/clawbot-media.ts` 里判。
      * @param options.id - 会话行 id。
      * @returns 取数结果（见 {@link ClawbotMediaResult}）。
      */

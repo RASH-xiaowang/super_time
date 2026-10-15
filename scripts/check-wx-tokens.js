@@ -61,7 +61,7 @@ const MUST_HAVE = [
   '--wx-card-title: #f5f5f5',
   // ── 几何：圆角 4px / 头像 34px / 行间距 16px ──
   '--wx-radius: 4px',
-  '--wx-avatar: 34px',
+  '--wx-avatar: 40px',
   '--wx-avatar-radius: 6px',
   '--wx-gap: 10px',
   '--wx-row-gap: 16px',
@@ -97,6 +97,8 @@ const MUST_HAVE = [
   // ── 右键菜单令牌（深浅各一份） ──
   '--wx-ctx-bg: #242424',
   '--wx-ctx-bg: #ffffff',
+  // ── 聊天信息抽屉：成员/联系人网格头像 48px（D3，官方 ⚠️ 值） ──
+  '--wx-info-avatar: 48px',
 ]
 
 /** 必须**消失**的旧实现：自造渐变、被删的收角令牌、border 三角尖角、旧气泡几何。 */

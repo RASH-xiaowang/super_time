@@ -12,6 +12,7 @@
  *    差一位，换算在 `deriveCalendar` 里做，这里只按它铺格子）。
  */
 import kitCss from '../ui/kit.module.css'
+import { useWechatDataUpdated } from './hooks.tsx'
 import { LoadingState } from '../ui/kit.tsx'
 import { IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { DailyCounts } from './chats-calendar.ts'
@@ -33,6 +34,8 @@ export interface ChatsCalendarDialogProps {
   calTotal: number
   calYear: number
   jumpToDay: (day: number) => void
+  /** WAL 推送后的静默同月重取（见 chats-calendar.ts）。 */
+  refreshCurrentMonth: () => Promise<void>
   setCalOpen: (open: boolean) => void
   switchCalMonth: (delta: number) => Promise<void>
 }
@@ -41,8 +44,10 @@ export interface ChatsCalendarDialogProps {
 export function ChatsCalendarDialog(props: ChatsCalendarDialogProps): React.JSX.Element | null {
   const {
     calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth,
-    calOpen, calTop, calTotal, calYear, jumpToDay, setCalOpen, switchCalMonth,
+    calOpen, calTop, calTotal, calYear, jumpToDay, refreshCurrentMonth, setCalOpen, switchCalMonth,
   } = props
+  // WAL 增量推送：开着时静默重取当月计数（无感：不清格、不翻 loading）。
+  useWechatDataUpdated(() => { if (calOpen) void refreshCurrentMonth() })
   if (!calOpen) return null
   return (
     <div className={csscards.calOverlay} data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">

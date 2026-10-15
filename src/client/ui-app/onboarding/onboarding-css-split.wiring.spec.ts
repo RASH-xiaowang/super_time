@@ -22,10 +22,28 @@ const LIMIT = 1000
 const PARTS = ['onboarding.module.css', 'onboarding-stages.module.css']
 const parts = PARTS.map((name) => ({ name, css: readFileSync(join(HERE, name), 'utf8') }))
 /**
- * 现在还在用这套样式的文件。`Reveal.tsx` 曾经在这里 —— 2026-09-25 它退化成纯容器之后就不引
- * CSS Modules 了，于是"每个消费者都至少 import 一份"那条把它拦下来（守卫咬得对：注册表过期了）。
+ * 现在还在用这套样式的文件。
+ *
+ * 2026-10-12 起**从目录推导**而不是手写名单：拆屏（四个内容页 + 舞台零件各自成文件）之后
+ * 消费者从 1 个变成 6 个，而手写名单的教训已经有过一次 —— `Reveal.tsx` 曾经在这里挂着，
+ * 它退化成纯容器不再 import CSS 之后，是「每个消费者都至少 import 一份」那条把它拦下来的
+ * （守卫咬得对：注册表过期了）。所以这里扫 `onboarding/` 下所有 import 这两份样式的源码，
+ * 名单自己长出来；往目录里再加一个消费者时，它**自动**进这三条不变量的覆盖范围。
+ *
+ * ⚠️ `.spec.` 文件要排除：本文件自己的文本里就有 `css.thisClassDoesNotExistAnywhere`
+ * （那条合成用例），不排除的话守卫会把它自己当成一个引用悬空的消费者。
  */
-const CONSUMERS = ['OnboardingShell.tsx']
+const HERE_FILES = readdirSync(HERE, { withFileTypes: true })
+  .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !e.name.includes('.spec.'))
+  .map((e) => e.name)
+  .concat(readdirSync(join(HERE, 'pages'), { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !e.name.includes('.spec.'))
+    .map((e) => 'pages/' + e.name))
+  .sort()
+const CONSUMERS = HERE_FILES.filter((name) => {
+  const text = readFileSync(join(HERE, name), 'utf8')
+  return aliasImports(text).some((a) => PARTS.includes(a.file))
+})
 const consumers = CONSUMERS.map((name) => {
   const text = readFileSync(join(HERE, name), 'utf8')
   return {
@@ -54,6 +72,9 @@ describe('onboarding 那套 CSS 拆成两份之后的三条不变量', () => {
   })
 
   it('名单里每个消费者都真的 import 了至少一份（别名表不是空的）', () => {
+    // 扫出来的消费者至少要有几个：拆屏之前是 1 个（只有壳），拆屏之后四页 + 舞台零件 + 壳。
+    // 少于 5 个说明推导逻辑坏了（比如 pages/ 目录没扫到），那时上面几条会是恒真的。
+    expect(consumers.length, `只扫到 ${String(consumers.length)} 个消费者 —— 目录推导大概坏了`).toBeGreaterThanOrEqual(5)
     for (const c of consumers) expect(c.aliases.length, `${c.file} 一个 onboarding 样式都没 import`).toBeGreaterThan(0)
   })
 

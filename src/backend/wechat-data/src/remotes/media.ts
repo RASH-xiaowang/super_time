@@ -20,15 +20,17 @@ import { lookupOriginal, originalAsDataUrl, saveOriginal } from '../query/sns-me
 import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
-import { clearDecodedImageCache, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageResourceHint } from '../query/media-image.ts'
+import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint } from '../query/media-image.ts'
+import { decodeEmoticonDataUrlAsync, decodeFileImageDataUrlAsync, decodeImageDataUrlAsync } from '../query/media-image-async.ts'
 import { fetchEmoticonDataUrlsBatch } from '../query/emoticon-batch.ts'
 import { resolveVideoInfo } from '../query/media-video.ts'
 import { resolveVoiceInfo } from '../query/media-voice.ts'
+import { fetchMapGeoJson } from '../query/map-geo.ts'
 import { resolveSnsImageDataUrl } from '../query/sns-image.ts'
 import { fetchSnsCdnImage } from '../query/sns-cdn-image.ts'
-import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrl, resolveSnsVideoDataUrl } from '../query/sns-video.ts'
+import { fetchSnsCoverDataUrl, fetchSnsVideoDataUrl, loadSnsVideoBytes, resolveSnsVideoCoverDataUrlsAsync, resolveSnsVideoCoverDataUrlAsync, resolveSnsVideoDataUrlAsync } from '../query/sns-video.ts'
 import { resolveVoiceDataUrl } from '../query/voice.ts'
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts'
 import { writeFileSync } from 'node:fs'
 
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
@@ -46,7 +48,7 @@ export interface MediaRemoteCtx {
    */
   decryptState: DecryptStatus
   warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string,
-    items: ReadonlyArray<{ username: string; localId: number }>, aesKey: string | undefined, xorKey: number) => void
+    items: ReadonlyArray<{ username: string; localId: number }>, aesKey: string | undefined, xorKey: number) => Promise<void>
 }
 
 /** 一次批量取图最多几张（IPC 载荷与单次解码耗时的折中；超出的条目按单张语义回错误）。 */
@@ -100,8 +102,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return resolveVoiceInfo(rc.dirs().decrypted, options.username, options.localId)
     },
 
-    getVoiceDataUrl(options: { username: string; localId: number }): VoiceDataUrlResult {
-      return resolveVoiceDataUrl(rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId)
+    async getVoiceDataUrl(options: { username: string; localId: number }): Promise<VoiceDataUrlResult> {
+      return await resolveVoiceDataUrl(rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId)
     },
 
     getVideoInfo(options: { username: string; localId: number }): VideoInfoResult {
@@ -121,25 +123,25 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       })
     },
 
-    getImageDataUrl(options: { username: string; localId: number }): ImageDataUrlResult {
+    async getImageDataUrl(options: { username: string; localId: number }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return decodeImageDataUrl(rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId, base, aesKey, xorKey)
+      return await decodeImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, options.username, options.localId, base, aesKey, xorKey)
     },
 
-    getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): { items: ImageBatchItem[] } {
+    async getImageDataUrlsBatch(options: { items: Array<{ username: string; localId: number }> }): Promise<{ items: ImageBatchItem[] }> {
       const decrypted = rc.dirs().decrypted
       const decoded = rc.dirs().decoded
       const base = rawWechatBase(decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(decrypted)
       const items = (Array.isArray(options?.items) ? options.items : []).slice(0, IMAGE_BATCH_MAX)
-      if (base) rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
+      if (base) await rc.warmDecodedImages(decrypted, decoded, base, items, aesKey, xorKey)
       return {
-        items: items.map((it) => ({
+        items: await Promise.all(items.map(async (it) => ({
           username: it.username,
           localId: it.localId,
-          ...decodeImageDataUrl(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey),
-        })),
+          ...(await decodeImageDataUrlAsync(decrypted, decoded, it.username, it.localId, base, aesKey, xorKey)),
+        }))),
       }
     },
 
@@ -149,16 +151,16 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return snsImageWithCdnFirst(rc, options, pair)
     },
 
-    getFileImageDataUrl(options: { md5: string }): ImageDataUrlResult {
+    async getFileImageDataUrl(options: { md5: string }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      return decodeFileImageDataUrl(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
+      return await decodeFileImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
     },
 
     async getEmoticonDataUrl(options: { md5: string; emojiUrl?: string }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
       const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-      const local = decodeEmoticonDataUrl(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
+      const local = await decodeEmoticonDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, base, options.md5, aesKey, xorKey)
       if (local.url) return local
       if (!options.emojiUrl) return local
       const remote = await fetchEmoticonRemote(options.emojiUrl, rc.dirs().decoded, options.md5.toLowerCase(),
@@ -209,19 +211,19 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
        * 否则用户会看到「取不到原图」而实际本机就有。
        * @returns 重解到非缩略图时的 format；否则 null（此时缓存条目会在下次读图时自动重建）。
        */
-      const localFallback = (): { format?: string } | null => {
+      const localFallback = async (): Promise<{ format?: string } | null> => {
         const hint = resolveImageResourceHint(rc.dirs().decrypted, talker, localId)
         if (!hint.md5) return null
         clearDecodedImageCache(rc.dirs().decoded, talker, hint.md5)
         const { aesKey, xorKey } = resolveImageKeyPair(rc.dirs().decrypted)
-        const redone = decodeImageDataUrl(rc.dirs().decrypted, rc.dirs().decoded, talker, localId,
+        const redone = await decodeImageDataUrlAsync(rc.dirs().decrypted, rc.dirs().decoded, talker, localId,
           rawWechatBase(rc.dirs().decrypted) || undefined, aesKey, xorKey)
         if (redone.url && !redone.thumb) return { format: redone.format }
         return null
       }
       const link = resolveImageOriginalLink(rc.dirs().decrypted, talker, localId)
       if (link === null) {
-        const local = localFallback()
+        const local = await localFallback()
         if (local !== null) {
           rc.op('task', 'image_original_fetch', 'ok', talker, '本机重解到更大的那一份（' + (local.format ?? '?') + '）')
           return { ok: true, format: local.format, note: '本机已重解到更大的那一份，这次没有联网' }
@@ -232,7 +234,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       if (r.bytes === undefined) {
         // 取回失败里最常见的一种是**直链过期**（预签名 URL 有有效期）—— 那时本机很可能
         // 已经有了更大的那一份（用户点开过），所以先试本机，再如实回报两条原因。
-        const local = localFallback()
+        const local = await localFallback()
         if (local !== null) {
           rc.op('task', 'image_original_fetch', 'ok', talker, '直链失效，改用本机那份（' + (local.format ?? '?') + '）')
           return { ok: true, format: local.format, note: '直链已失效（' + (r.error ?? '取回失败') + '），已改用本机那份，这次没有联网' }
@@ -277,7 +279,7 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
      * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4）。
      * @returns 计数/字节/耗时/逐条失败原因；`blocked` 非空表示一张都没发请求。
      */
-    async fetchOriginalImagesBatch(options: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult> {
+    async fetchOriginalImagesBatch(options?: { limit?: number; concurrency?: number }): Promise<OriginalBatchResult> {
       const decrypted = rc.dirs().decrypted
       const decoded = rc.dirs().decoded
       if (rc.decryptState.active) return emptyOriginalBatchResult('已有解密任务进行中')
@@ -292,8 +294,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       rc.decryptState.message = ''
       try {
         const r = await runOriginalImagesBatch(decrypted, rawRoot, decoded, {
-          ...(options.limit !== undefined ? { limit: options.limit } : {}),
-          ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+          ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+          ...(options?.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
           onProgress: (done, total, fetched, failed, message) => {
             rc.decryptState.done = done
             rc.decryptState.total = total
@@ -312,37 +314,14 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       }
     },
 
-    /**
-     * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
-     *
-     * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
-     * 直接向消息 XML 里的 https 地址发请求** —— 不进操作记录、没有缓存（同一次滚动反复要同一张）。
-     * 把它收到后端之后那两件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
-     *
-     * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
-     * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
-     * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
-     * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
-     *   来自本机缓存。
-     */
+    // 算法体在模块级 `remoteImagesWithOp`；这里只保留签名 + 一行转发。
     async getRemoteImages(options: { urls?: string[] }): Promise<{ items: RemoteImageResult[] }> {
-      const urls = Array.isArray(options?.urls) ? options.urls.slice(0, REMOTE_URLS_RPC_MAX) : []
-      if (urls.length === 0) return { items: [] }
-      const items = await fetchRemoteImages(urls, rc.dirs().decoded)
-      const net = items.filter((it) => !it.fromCache)
-      const failed = net.filter((it) => !it.dataUrl)
-      // 只在这次真的发过请求时记一条（缓存命中不该刷满操作记录）
-      if (net.length > 0) {
-        rc.op(
-          'task', 'remote_image_fetch', failed.length === 0 ? 'ok' : 'fail',
-          `${String(net.length)} 张`,
-          failed.length === 0
-            ? `从微信 CDN 取回并缓存 ${String(net.length)} 张（其余为本机缓存命中）`
-            : `取回 ${String(net.length - failed.length)} 张，失败 ${String(failed.length)} 张：${String(failed[0]?.error ?? failed[0]?.url ?? '')}`,
-        )
-      }
-      return { items }
+      return remoteImagesWithOp(rc, Array.isArray(options?.urls) ? options.urls : [])
     },
+
+    // 算法体在模块级 `mapGeoJsonWithOp`；这里只保留签名 + 一行转发。
+    getMapGeoJson: (options: { urls?: string[] } = {}) =>
+      mapGeoJsonWithOp(rc, Array.isArray(options?.urls) ? options.urls : []),
 
     getMessageFile(options: { fileName: string; size?: number; createTime?: number }): ImageDataUrlResult {
       // size/createTime 来自消息本体（appmsg `<totallen>` 与 create_time），
@@ -357,9 +336,14 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
       return snsVideoCoverWithCdnFirst(rc, options)
     },
 
+    /** W2-5.6：一批封面。解析走一次列举，CDN 取回走有界并发。 */
+    async getSnsVideoCoversBatch(options: SnsVideoCoverBatchOptions): Promise<SnsVideoCoverBatchResult> {
+      return snsVideoCoversBatchIn(rc, options)
+    },
+
     async getSnsVideoDataUrl(options: { md5?: string; timelineId?: string; mediaId?: string; url?: string; key?: string }): Promise<ImageDataUrlResult> {
       const base = rawWechatBase(rc.dirs().decrypted) || undefined
-      const local = resolveSnsVideoDataUrl(base, options.md5, options.timelineId, options.mediaId)
+      const local = await resolveSnsVideoDataUrlAsync(base, options.md5, options.timelineId, options.mediaId)
       if (local.url) return local
       const remote = typeof options.url === 'string' ? options.url.trim() : ''
       if (!remote || !/^https?:\/\//i.test(remote)) return local
@@ -404,6 +388,64 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
     },
 
   }
+}
+
+
+/**
+ * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
+ *
+ * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
+ * 直接向消息 XML 里的 https 地址发请求** —— 不进操作记录、没有缓存（同一次滚动反复要同一张）。
+ * 把它收到后端之后那两件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
+ *
+ * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
+ * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
+ * @param rc - 媒体域上下文。
+ * @param urls - 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
+ * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
+ *   来自本机缓存。
+ */
+async function remoteImagesWithOp(
+  rc: MediaRemoteCtx,
+  urls: string[],
+): Promise<{ items: RemoteImageResult[] }> {
+  const capped = urls.slice(0, REMOTE_URLS_RPC_MAX)
+  if (capped.length === 0) return { items: [] }
+  const items = await fetchRemoteImages(capped, rc.dirs().decoded)
+  const net = items.filter((it) => !it.fromCache)
+  const failed = net.filter((it) => !it.dataUrl)
+  // 只在这次真的发过请求时记一条（缓存命中不该刷满操作记录）
+  if (net.length > 0) {
+    rc.op(
+      'task', 'remote_image_fetch', failed.length === 0 ? 'ok' : 'fail',
+      `${String(net.length)} 张`,
+      failed.length === 0
+        ? `从微信 CDN 取回并缓存 ${String(net.length)} 张（其余为本机缓存命中）`
+        : `取回 ${String(net.length - failed.length)} 张，失败 ${String(failed.length)} 张：${String(failed[0]?.error ?? failed[0]?.url ?? '')}`,
+    )
+  }
+  return { items }
+}
+
+/**
+ * 公共地图 GeoJSON 代理：渲染层不再直接出网，改由这里固定白名单取回。
+ *
+ * `urls` 只是候选顺序；真正能发出请求的地址由 `query/map-geo.ts` 再次校验。
+ * 只含公开行政区划数据，不含任何用户消息、联系人或账号信息。
+ * @param rc - 媒体域上下文（用于把取回结果写进操作记录）。
+ * @param urls - 候选 GeoJSON 地址。
+ * @returns 第一份可用的 GeoJSON，或首条可展示的失败原因。
+ */
+async function mapGeoJsonWithOp(rc: MediaRemoteCtx, urls: string[]): Promise<MapGeoJsonResult> {
+  const result = await fetchMapGeoJson(urls)
+  rc.op(
+    'task',
+    'map_geo_fetch',
+    result.ok ? 'ok' : 'fail',
+    result.ok ? '公开行政区划 GeoJSON' : '',
+    result.ok ? '' : result.error,
+  )
+  return result
 }
 
 
@@ -494,7 +536,7 @@ async function snsImageWithCdnFirst(
   const hasCdn = url !== '' && token !== '' && seed !== ''
 
   /** 本机那条：`allowThumb=false` 只要原图，`true` 连缩略图一起收。 */
-  const local = (allowThumb: boolean) =>
+  const local = async (allowThumb: boolean) =>
     resolveSnsImageDataUrl(base, aesKey, xorKey, options.md5, options.timelineId, options.mediaId, allowThumb)
 
   if (!offline) {
@@ -530,7 +572,7 @@ async function snsImageWithCdnFirst(
   }
 
   // ③ 本机原图（微信原始目录里的那份，落地即写穿落盘缓存）。
-  const localOriginal = local(false)
+  const localOriginal = await local(false)
   if (localOriginal.url) {
     console.error(tag + ' 本机原图（长度 ' + String(localOriginal.url.length) + '）')
     saveOriginalFromDataUrl(decoded, options.md5, localOriginal.url)
@@ -538,7 +580,7 @@ async function snsImageWithCdnFirst(
   }
 
   // ④ 本机缩略图兜底 —— 顺序上刻意放在最后。
-  const localThumb = local(true)
+  const localThumb = await local(true)
   if (localThumb.url) {
     console.error(tag + ' 本机缩略图兜底（长度 ' + String(localThumb.url.length) + '）')
     // ⚠️ 刻意**不**写穿：缩略图进了落盘缓存就会变成永久的「高清」，正好毁掉这次的目的。
@@ -567,12 +609,105 @@ async function snsImageWithCdnFirst(
  * 所以这里不做 `snsCdnUrl` 归一，只过白名单（M23：只判协议等于「谁给后端一个地址，后端
  * 就去取谁」）。
  */
+/** 一条封面请求（W2-5.6）。`md5` 是批内与返回对齐用的标识。 */
+export interface SnsVideoCoverBatchItem {
+  md5?: string
+  timelineId?: string
+  mediaId?: string
+  thumb?: string
+  key?: string
+}
+
+/** 批量封面请求。`offline` 整批共用（一条列表里的网络状况是同一个）。 */
+export interface SnsVideoCoverBatchOptions {
+  items: SnsVideoCoverBatchItem[]
+  offline?: boolean
+}
+
+/** 批量封面结果：与 `items` **同序**、同长（少一条就对不上号，宁可补一条带 error 的）。 */
+export interface SnsVideoCoverBatchResult {
+  items: Array<{ md5: string; url?: string; error?: string }>
+}
+
+/**
+ * CDN 取回的并发上限。
+ *
+ * 取 4 的理由与 KB 抽取那条同源：这些是**网络**往返（200ms+）不是 CPU 活，
+ * 串行会把一屏 20 条封面拉成 4 秒以上；再往上就逼近厂商速率限制，得不偿失。
+ */
+const SNS_COVER_FETCH_CONCURRENCY = 4
+
+/**
+ * 一批朋友圈视频封面（W2-5.6）。
+ *
+ * 实测（合成数据，`sns-cover-batch.measure.spec.ts`）：**批量化不改变单条解析的成本**，
+ * 瓶颈在整月扫 md5，而那本来就由按月索引摊掉了。真正的差别是两条：
+ *   ① `snsMonthRoots` 的列举 —— 逐条每条重列一遍 `cache/` 并 stat 每个月份，
+ *      实测 240 个月时逐条 1978ms vs 批量 77ms（**25.7×**）；12 个月时只有 1.1×
+ *      （月少、文件多时瓶颈换成了扫描，列举本来就便宜）。
+ *   ② CDN 取回的并发 —— 逐条是串行的，一批里只发一条。
+ * @param rc - 媒体域上下文。
+ * @param options - 一批请求 + 是否离线。
+ * @returns 与 `items` 同序同长的结果。
+ */
+async function snsVideoCoversBatchIn(rc: MediaRemoteCtx, options: SnsVideoCoverBatchOptions): Promise<SnsVideoCoverBatchResult> {
+  const items = Array.isArray(options?.items) ? options.items.slice(0, 200) : []
+  if (items.length === 0) return { items: [] }
+  const base = rc.rawWechatBase(rc.dirs().decrypted) || undefined
+  // 解析一次：一整批只列举一次月份根（这正是 25.7× 的来源）。
+  const md5s = items.map((it) => String(it?.md5 ?? '').trim().toLowerCase())
+  const local = await resolveSnsVideoCoverDataUrlsAsync(base, md5s)
+  const offline = options.offline === true
+
+  // 2) 本机没有的才去 CDN；白名单判在**发请求之前**（M23），离线一律不去。
+  const needCdn: number[] = []
+  const out = items.map((it, i) => {
+    const md5 = md5s[i] ?? ''
+    const hit = local.get(md5)
+    const remote = String(it?.thumb ?? '').trim()
+    if (hit?.url) return { md5, url: hit.url }
+    if (offline || remote === '' || !/^https?:\/\//i.test(remote)) {
+      const why = offline ? '无网：只用本机' : (hit?.error ?? '缺封面远端地址，只能走本机')
+      if (!offline && remote !== '' && !wechatCdnHostAllowed(remote)) {
+        return { md5, error: `${hit?.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
+      }
+      return { md5, error: typeof hit?.error === 'string' ? hit.error : why }
+    }
+    if (!wechatCdnHostAllowed(remote)) {
+      return { md5, error: `${hit?.error ?? '本机没有该封面'}；封面地址的主机不在微信 CDN 清单内，已拒绝请求` }
+    }
+    needCdn.push(i)
+    return { md5, error: hit?.error ?? '' }
+  })
+
+  // 3) 有界并发取回：worker 原子认领下一条。
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next
+      next += 1
+      if (i >= needCdn.length) return
+      const it = items[i]
+      const fetched = await fetchSnsCoverDataUrl(String(it?.thumb ?? '').trim(), { version: weixinVersion(), seed: it?.key })
+      if (fetched.url) {
+        out[i] = { md5: md5s[i] ?? '', url: fetched.url }
+        continue
+      }
+      // CDN 没取到：退回本机那条的说明（哪怕它本来就是空串也不要凭空报错）。
+      const keep = out[i]
+      out[i] = { md5: keep?.md5 ?? '', error: fetched.error ?? keep?.error ?? '封面取回失败' }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SNS_COVER_FETCH_CONCURRENCY, Math.max(needCdn.length, 1)) }, () => worker()))
+  return { items: out }
+}
+
 async function snsVideoCoverWithCdnFirst(
   rc: MediaRemoteCtx,
   options: { md5?: string; timelineId?: string; mediaId?: string; thumb?: string; key?: string; offline?: boolean },
 ): Promise<ImageDataUrlResult> {
   const base = rc.rawWechatBase(rc.dirs().decrypted) || undefined
-  const local = resolveSnsVideoCoverDataUrl(base, options.md5, options.timelineId, options.mediaId)
+  const local = await resolveSnsVideoCoverDataUrlAsync(base, options.md5, options.timelineId, options.mediaId)
   const offline = options.offline === true
   const remote = typeof options.thumb === 'string' ? options.thumb.trim() : ''
   const tag = '[sns-cover] md5=' + String(options.md5 ?? '').slice(0, 8) + (offline ? ' [无网]' : '')
@@ -593,4 +728,3 @@ async function snsVideoCoverWithCdnFirst(
   }
   return local
 }
-

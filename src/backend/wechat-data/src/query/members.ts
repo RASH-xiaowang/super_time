@@ -7,7 +7,7 @@
  * 所以它的写必须走 `search.ts` 导出的那把索引库写闸（`withIndexWrite`）——
  * 否则构建在飞时写事务会被拒、然后被吞掉、静默退化成 LIKE。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { searchIndexPath, withIndexWrite } from './search.ts'
@@ -150,7 +150,7 @@ function buildContactFts(db: DatabaseSync, decryptedDir: string): 'ready' | 'una
  * @param decryptedDir - 已解密数据根（用于定位 contact.db）。
  * @returns contact_fts 的可用状态。
  */
-function ensureContactFts(db: DatabaseSync, decryptedDir: string): ContactFtsState {
+export function ensureContactFts(db: DatabaseSync, decryptedDir: string): ContactFtsState {
   if (contactFtsReady(db)) return 'ready'
   const gated = withIndexWrite(decryptedDir, () => buildContactFts(db, decryptedDir))
   if (!gated.ok) return 'busy'

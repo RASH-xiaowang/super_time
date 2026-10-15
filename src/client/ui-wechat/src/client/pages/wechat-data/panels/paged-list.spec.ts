@@ -123,6 +123,15 @@ describe('L7 接线守卫：usePagedList 必须用 computeHasMore', () => {
     expect(line?.[0] ?? '').toMatch(/\brefreshPagesFor\b/)
   })
 
+  it('刷新节流间隔可被面板覆盖：会话列表 3s，其余面板保持 30s 全局默认（2026-10-13 会话列表不实时的一半根因）', () => {
+    expect(hooksCode, '面板传的节流间隔必须真的进闸门（否则传了等于没传）').toContain('minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS')
+    expect(hooksCode, '面板传的合并窗必须真的进订阅（否则传了等于没传）').toContain('refreshDebounceMs ?? 300')
+    const chats = readFileSync(join(HERE, 'Chats.tsx'), 'utf8')
+    expect(chats.length, 'Chats.tsx 没读到').toBeGreaterThan(5000)
+    expect(chats, '会话列表没有把自己的节流降到 3s（30s 节流下它最坏滞后 30 秒）').toContain('refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS')
+    expect(chats, '会话列表必须用 50ms 合并窗（推送一来就刷，风暴靠短窗吸收）').toContain('refreshDebounceMs: 50')
+  })
+
   it('后台刷新走的是节流 + 不可行即跳过（P2-8 的接线那半）', () => {
     expect(hooksCode).toContain('refreshPagesFor(want, pageSize)')
     expect(hooksCode).toContain('if (!plan.feasible)')

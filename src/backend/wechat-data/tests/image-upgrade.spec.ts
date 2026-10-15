@@ -297,6 +297,8 @@ describe('接线不变量（行为测试够不到的那几条）', () => {
     const batchCode = src('query/decrypt-images.ts')
     expect(upgradeCode.includes('collectImageDatFiles'), '升级要复用批量解密的遍历入口').toBe(true)
     expect(batchCode.includes('function walkDataDats'), '遍历实现留在批量解密里').toBe(true)
+    expect(batchCode.includes('await collectImageDatFilesAsync(rawRoot)'),
+      '批量解密必须走可让出的遍历驱动器（整棵 attach 树不该钉住 worker）').toBe(true)
     expect(upgradeCode.includes('walkDataDats'), '升级不该自己再递归一遍 attach').toBe(false)
     expect(upgradeCode.includes("'attach'"), '升级模块里不该出现第二份 msg/attach 路径拼接').toBe(false)
   })

@@ -30,7 +30,7 @@
  *   差别只在表名、语料 SQL 与作用域键。纯数学部分已抽到 `query/vector-math.ts`
  *   （只有一份实现，两侧共享同一组单测），本文件只写「知识库特有的那一层」。
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from './db-open.ts';
 import type { KbHit } from '../types.ts';
 export { KB_VECTORS_DB, kbVectorsDbPath } from './kb-paths.ts';
 import { type EmbedFn, type HashRow } from './vector-math.ts';

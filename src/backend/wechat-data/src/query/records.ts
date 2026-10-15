@@ -3,7 +3,7 @@
  * rewritten from st_control general_records/lists.rs. The revoked cache lives
  * in message shards (handlers/data/revoked.rs mirror).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -135,9 +135,13 @@ export function queryRecords(
   offset?: number,
   q?: string,
   opts?: { from?: number; to?: number; direction?: 'asc' | 'desc' },
-): { items: RecordItem[]; total: number } {
+): { items: RecordItem[]; total: number; readError?: string } {
   const gdb = join(decryptedDir, 'general', 'general.db')
-  if (!existsSync(gdb)) return { items: [], total: 0 }
+  if (!existsSync(gdb)) {
+    // W3-11.4：general.db 不存在几乎总是「还没解密到这个库」（微信按需下载资源），
+    // 不是「本机没有资金往来」。返回空列表 + readError，让面板把这两件事分开说。
+    return { items: [], total: 0, readError: '还没有资金往来数据（general.db 不存在）：请先在「数据配置」完成解密，或在微信里打开过转账/红包页面让该库生成' }
+  }
   const db = new DatabaseSync(gdb, { readOnly: true })
   try {
     const cap = Math.min(limit ?? 50, 500)

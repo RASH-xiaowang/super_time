@@ -5,10 +5,10 @@
  * 这些原先都是 Chats.tsx 里的顶层函数/组件（不吃面板状态，只吃道具）—— 整段原样搬出，
  * 面板按需 import。依赖由脚本从「这块里真实用到的面板 import」生成。
  */
-import { apiGetAvatar, apiGetMessageFile } from '../api.ts'
+import { apiGetAvatar, apiGetMessageFile, apiGetAvatarBatched } from '../api.ts'
 import { avatarColors, fmtDateTimeSec } from '../utils/format.ts'
 import { MessageRenderItem } from '../utils/message-items.ts'
-import { cacheBounded } from '../utils/misc.ts'
+import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import { MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -30,6 +30,34 @@ export function unreadTitle(n: number, since?: number): string {
   const ago = days >= 1 ? `${days} 天前` : hours >= 1 ? `${hours} 小时前` : mins >= 1 ? `${mins} 分钟前` : '刚刚'
   return `${base} · 最早一条 ${ago}（${fmtDateTimeSec(since)}）`
 }
+/**
+ * 消息菜单的两个动作（W3-11.1 从 Chats.tsx 下沉）：复制文本 / 打开文件。
+ *
+ * 为什么下沉：`ChatsPanel` 受 `function-size-ratchet.spec.ts` 的棘轮管着（登记 465 行，
+ * 一行都不许多），而这两个动作原本各带一段 JSDoc + 失败分支。它们不依赖组件状态
+ * （只拿一个 `flash` 回执写入），放模块里最合适。
+ */
+
+/** 复制一段文本，结果走一行回执（成功/失败都说，失败给手动补救）。 */
+export function copyTextWithNotice(text: string, flash: (t: string) => void): void {
+  void copyTextToClipboard(text).then((ok) => { flash(ok ? '文本已复制' : '复制失败，请手动选中后复制') })
+}
+
+/**
+ * 右键菜单「打开文件」：把消息自带的体积/时间透传给后端，
+ * 否则同名文件会在别的会话里随便挑一份。
+ * @param fileName - 文件名。
+ * @param m - 该消息（取 fileSize 与 createTime 作为归属线索）。
+ * @param flash - 回执写入。
+ */
+export function openMessageFileWithNotice(fileName: string, m: WechatMessage, flash: (t: string) => void): void {
+  const bytes = Number(m.rich?.fileSize)
+  const opts: { size?: number; createTime?: number } = {}
+  if (Number.isFinite(bytes) && bytes > 0) opts.size = bytes
+  if (m.createTime) opts.createTime = m.createTime
+  void downloadMessageFile(fileName, opts).then((err) => { if (err) flash('打开失败：' + err) })
+}
+
 export function IconCalendar(): React.JSX.Element {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -188,7 +216,10 @@ export function Avatar({ name, username, size }: { name: string; username: strin
   useEffect(() => {
     let cancelled = false
     if (!key || cached !== undefined) return
-    apiGetAvatar({ username: key })
+    // W2-10.2：走攒批队列 —— 一屏 N 个 Avatar 合成一次 `getAvatarsLocal`，而不是 N 次
+    // `getAvatar`（实测 200 个头像 5.6×，且少 199 次 IPC 往返）。未命中的那几条由队列
+    // 内部退回单张 —— 那里还有一级「按昵称找联系人」的回落，批量接口没有这一级。
+    apiGetAvatarBatched({ username: key })
       .then((r) => {
         const value = r.kind === 'data' ? (r.data ?? null) : null
         cacheBounded(avatarCache, key, value, AVATAR_CACHE_MAX)
@@ -347,6 +378,14 @@ export function sessionInView(s: WechatSession, view: ChatView): boolean {
 }
 export const POLL_VISIBLE_MS = 1000
 export const POLL_HIDDEN_MS = 5000
+/**
+ * 会话列表是「新消息进来第一眼就要变」的界面：它没有轮询兜底，完全靠
+ * `dsh-wechat-data-updated` 推送驱动（WAL 实时触发，活跃聊天时约每 1.5–7s 一次）。
+ * 口径（2026-10-13 用户要求「updated 一出来就立刻刷」）：**节流闸归零**——每次推送
+ * 都立即刷新（一次只是一页 `getSessions`，120 条），风暴由 50ms 合并窗吸收；
+ * 后端推送本身已带 1.5s 限频，所以最坏也只是每 1.5s 一次刷新，负载无压力。
+ */
+export const SESSIONS_REFRESH_MIN_INTERVAL_MS = 0
 /**
  * 取渲染项代表的 local_id（日期分隔项没有，返回 -1）。
  * @param item - `buildMessageItems` 的产物。

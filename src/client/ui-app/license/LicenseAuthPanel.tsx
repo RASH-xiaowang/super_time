@@ -8,6 +8,7 @@
 import React, { useCallback, useState } from 'react'
 import gateCss from './license-gate.module.css'
 import type { LicenseStatus } from './LicenseGate.tsx'
+import { licenseExpiryWarning } from './license-expiry.ts'
 
 /** 本应用没有试用期：只有有效正式证才可用。 */
 export function isLicenseUsable(st: LicenseStatus | null | undefined): boolean {
@@ -66,7 +67,7 @@ export function LicenseAuthPanel({
   const title = STATE_TITLE[status?.state ?? 'error'] || '需要授权'
 
   const onImportFile = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importFile) {
       setMsg({ kind: 'err', text: '授权 API 不可用' })
       return
@@ -89,7 +90,7 @@ export function LicenseAuthPanel({
   }, [onStatusChange])
 
   const onImportPaste = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importText) return
     if (!paste.trim()) {
       setMsg({ kind: 'err', text: '请先粘贴许可证 JSON' })
@@ -114,7 +115,7 @@ export function LicenseAuthPanel({
   }, [paste, onStatusChange])
 
   const onExportReq = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.exportRequest) return
     setBusy('export')
     setMsg(null)
@@ -132,6 +133,10 @@ export function LicenseAuthPanel({
   const expires = status?.payload?.expiresAt
     ? new Date(status.payload.expiresAt).toLocaleString('zh-CN')
     : status?.state === 'licensed' ? '永久' : '—'
+
+  // W3-11.7：快到期的那句提醒（纯函数判据见 license-expiry.guard.spec.ts）。
+  // 注意**只**看 payload.expiresAt、不把过期那一档算进来（已过期由标题说）。
+  const expiry = licenseExpiryWarning(status?.payload?.expiresAt ?? null)
 
   const wrap = compact ? gateCss.embed : gateCss.card
 
@@ -171,6 +176,15 @@ export function LicenseAuthPanel({
           </div>
         ) : null}
       </dl>
+
+      {/* W3-11.7：快到期时**在面板里出声**。
+          只挂在这一处是有意的：它是「授权」这件事回执的一部分，用户此刻正在看授权；
+          过期那一档由上面标题（「许可证已过期」）说，这里不再重复报一遍。 */}
+      {expiry !== null && (
+        <div className={gateCss.expiry} role="status">
+          ⏳ {expiry.text}
+        </div>
+      )}
 
       <div className={gateCss.actions}>
         <button

@@ -21,7 +21,7 @@
  *   而是把「为什么只有关键词」如实回报给界面（设计稿 §6.3：降级必须被看见）。
  *   等 T4 接上稠密通道，只需往 `channels` 里加一员，形状不动。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import type { KbHit, KbSearchResult, KbSearchStats } from '../types.ts'
 import { openStore } from './kb-files.ts'
 import { ftsPhrase } from './search.ts'

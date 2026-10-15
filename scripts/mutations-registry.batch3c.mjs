@@ -275,9 +275,9 @@ export const MUTATIONS_BATCH3C = [
   },
   {
     id: "M343-readme-panel-count-rotted",
-    why: "（2026-10-13：ClawBot 多实例新增 `clawbot-instances.tsx` ⇒ 120 → 121；同日 v2 重设计 C1 新增 `clawbot-thread.tsx` ⇒ 121 → 122、C2 新增 `clawbot-rail.tsx` ⇒ 122 → 123；聊天信息 D0 新增 `chats-info-rows.tsx` ⇒ 123 → 124，锚点跟随。2026-10-13 W3-11.7 新增 `health-integrity.tsx` ⇒ 124 → 125；2026-10-14 远程访问新增 `settings-remote-access.tsx` ⇒ 125 → 126，再跟两次。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
+    why: "（2026-10-13：ClawBot 多实例新增 `clawbot-instances.tsx` ⇒ 120 → 121；同日 v2 重设计 C1 新增 `clawbot-thread.tsx` ⇒ 121 → 122、C2 新增 `clawbot-rail.tsx` ⇒ 122 → 123；聊天信息 D0 新增 `chats-info-rows.tsx` ⇒ 123 → 124，锚点跟随。2026-10-13 W3-11.7 新增 `health-integrity.tsx` ⇒ 124 → 125；2026-10-14 远程访问新增 `settings-remote-access.tsx` ⇒ 125 → 126；同日 M9 新增 `settings-browser.tsx` ⇒ 127，锚点跟随。）README 里那句「panels/ 下 N 个 .tsx 视图」退回旧数字 ⇒ 文档里的数字与仓库脱钩。报告 P3-19 举的正是这一例（写\"约 40 个\"、实测 94）：这类句子不是错一次，是每次拆件都对不上，所以数字要么不写、写了就得被实测钉住",
     file: "README.md",
-    from: "src/client/ui-wechat/    数据面板（panels/ 下 126 个 .tsx 视图）",
+    from: "src/client/ui-wechat/    数据面板（panels/ 下 127 个 .tsx 视图）",
     to: "src/client/ui-wechat/    数据面板（panels/ 下 90 个 .tsx 视图）",
     spec: "src/backend/tests/docs-index.spec.ts",
   },
@@ -592,7 +592,7 @@ MUTATIONS_BATCH3C.push(
     // 2026-10-09（W3-11.5）：让出后面多了一行 `reportProgress(...)`（进度回调），
     // 锚点跟着挪 —— 锚点腐烂要改锚点，不许为了让判据变绿把那一行挪走。
     from: "    await yieldToLoop()\n    reportProgress(target.localId)\n    const hit = cached.get(target.localId)",
-    to: "    await yieldToLoop()\n    const hit = cached.get(target.localId)",
+    to: "    reportProgress(target.localId)\n    const hit = cached.get(target.localId)",
     spec: "src/backend/wechat-data/tests/query-yield-discipline.spec.ts",
   },
   {
@@ -739,10 +739,10 @@ MUTATIONS_BATCH3C.push(
   // ── 2026-10-08 高清原图（自动取原图 + 落盘 + 每次进入覆盖缩略图）M401–M406 ──
   {
     id: "M401-sns-original-lane-downgraded-to-thumb",
-    why: "把「只要原图」那一档悄悄改成 allowThumb=true ⇒ 本机缩略图又赢过 CDN 原图，「高清」功能看起来还在、实际永远拿不到原图。这类回归界面上完全看不出来。（2026-10-08 改锚点：取图改成先网后本后，本机两档收进 `local(allowThumb)` 闭包，锚点随之从内联调用改为 `local(false)`）",
+    why: "把「只要原图」那一档悄悄改成 allowThumb=true ⇒ 本机缩略图又赢过 CDN 原图，「高清」功能看起来还在、实际永远拿不到原图。这类回归界面上完全看不出来。（2026-10-08 改锚点：取图改成先网后本后，本机两档收进 `local(allowThumb)` 闭包，锚点随之从内联调用改为 `local(false)`；2026-10-15 异步化解码后闭包与调用点都带 await）",
     file: "src/backend/wechat-data/src/remotes/media.ts",
-    from: "  const localOriginal = local(false)",
-    to: "  const localOriginal = local(true)",
+    from: "  const localOriginal = await local(false)",
+    to: "  const localOriginal = await local(true)",
     spec: "src/backend/wechat-data/tests/sns-image-integrity-guard.spec.ts",
   },
   {
@@ -867,5 +867,14 @@ MUTATIONS_BATCH3C.push(
     from: "const DEFAULT_RENDERER_LEVELS = ['warn', 'error']",
     to: "const DEFAULT_RENDERER_LEVELS = ['verbose', 'info', 'warn', 'error']",
     spec: "src/backend/tests/renderer-console-capture-guard.spec.ts",
+  },
+  // ── 2026-10-14 发布闭环：tag push 也必须自证全量变异（M579）──
+  {
+    id: "M579-release-drops-full-mutation",
+    why: "把 release.yml 的全量变异自证改成一个无害命令 ⇒ tag 发布会重新绕开 ci.yml 的 mutation 门禁，而单元测试、类型检查与打包态检查都还是绿的。tag push 不触发 ci.yml，所以这道缺口只能由发布自己的工作流判据拦住",
+    file: ".github/workflows/release.yml",
+    from: "        run: npm run check:mutation",
+    to: "        run: echo mutation-skipped",
+    spec: "src/backend/tests/ci-tiers.spec.ts",
   },
 )

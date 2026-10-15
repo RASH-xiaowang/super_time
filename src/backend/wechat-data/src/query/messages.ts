@@ -20,12 +20,13 @@
  * are decoded here so text/rich parsing sees the real content.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
 import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
 import { cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
+import { ensureSortIndexIfMissing } from './message-sort-index.ts'
 import { yieldToLoop } from './search-build.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
@@ -300,11 +301,10 @@ interface MsgShard {
 export function msgCreateTimeByServerId(decryptedDir: string, talker: string, serverId: string): number | null {
   if (!talker || !serverId || serverId === '0') return null
   const table = msgTableName(talker)
-  // `findShards` 一次把**所有**含该表的分片都打开。原先的写法是「轮到哪条关哪条，命中就 return」
+  // `withShards` 一次把**所有**含该表的分片都打开。原先的写法是「轮到哪条关哪条，命中就 return」
   // ⇒ 后面那些还没轮到的连接留在进程里（Windows 上从此删不掉解密目录），
   // 而多分片的会话恰恰是消息最多的那些。改成"先取全部、finally 里全关"。
-  const shards = findShards(decryptedDir, table)
-  try {
+  return withShards(decryptedDir, table, (shards) => {
     for (const shard of shards) {
       try {
         const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
@@ -315,27 +315,40 @@ export function msgCreateTimeByServerId(decryptedDir: string, talker: string, se
       }
     }
     return null
-  } finally {
-    for (const shard of shards) {
-      try { shard.db.close() } catch { /* already closed */ }
-    }
-  }
+  })
 }
 
-/** Locate every shard DB containing the talker's Msg table (catalog-backed). */
-function findShards(decryptedDir: string, table: string): MsgShard[] {
+/**
+ * 打开一批消息分片，把连接交给回调使用，并在回调返回/抛错后无条件关闭。
+ *
+ * 打开失败的分片直接跳过；句柄所有权不跨出这个 helper，调用点不用再各写一遍
+ * `finally` 循环关闭。
+ */
+function withShards<T>(decryptedDir: string, table: string, fn: (shards: MsgShard[]) => T): T {
   const out: MsgShard[] = []
-  for (const shard of shardCatalog(decryptedDir)) {
-    const meta = shard.tables.get(table)
-    if (!meta) continue
-    try {
-      const db = new DatabaseSync(shard.file, { readOnly: true })
-      out.push({ db, file: shard.file, cols: meta.cols, name2id: meta.name2id })
-    } catch {
-      // try next shard
+  try {
+    for (const shard of shardCatalog(decryptedDir)) {
+      const meta = shard.tables.get(table)
+      if (!meta) continue
+      // W2-3.5：补 (sort_seq, local_id) 覆盖索引。
+      // **必须在开只读连接之前**：Windows 上库被打开时再建索引会 EBUSY，
+      // 而后台补索引恰好会被紧接着的只读连接顶掉 —— 于是每次都建不成，
+      // 页面照旧慢，而且没有任何错误会冒到用户面前。
+      ensureSortIndexIfMissing(shard.file)
+      try {
+        const db = new DatabaseSync(shard.file, { readOnly: true })
+        out.push({ db, file: shard.file, cols: meta.cols, name2id: meta.name2id })
+      } catch {
+        // try next shard
+      }
+    }
+    return fn(out)
+  } finally {
+    for (const shard of out) {
+      const db = shard.db
+      try { db.close() } catch { /* already closed */ }
     }
   }
-  return out
 }
 
 /**
@@ -536,9 +549,8 @@ export function queryNewMessages(
   selfUsername?: string,
 ): MessagesSnapshot {
   const table = msgTableName(talker)
-  const shards = findShards(decryptedDir, table)
-  if (shards.length === 0) return { messages: [], total: 0 }
-  try {
+  return withShards(decryptedDir, table, (shards) => {
+    if (shards.length === 0) return { messages: [], total: 0 }
     const cap = Math.min(limit ?? 200, 1000)
     const merged: RawMsgRow[] = []
     for (const shard of shards) {
@@ -552,11 +564,7 @@ export function queryNewMessages(
     const out: MessagesSnapshot = { messages, total: messages.length }
     if (selfUsername && selfUsername.length > 0) out.selfWxid = selfUsername
     return out
-  } finally {
-    for (const shard of shards) {
-      try { shard.db.close() } catch { /* already closed */ }
-    }
-  }
+  })
 }
 
 interface MessageStats {
@@ -632,9 +640,8 @@ export function queryMessages(
   cursorLocalId?: number,
 ): MessagesSnapshot {
   const table = msgTableName(talker)
-  const shards = findShards(decryptedDir, table)
-  if (shards.length === 0) return { messages: [], total: 0 }
-  try {
+  return withShards(decryptedDir, table, (shards) => {
+    if (shards.length === 0) return { messages: [], total: 0 }
     const pageSize = Math.min(limit ?? 100, 1000)
     // Read one extra row per shard to detect hasMore, like st_control.
     const limitPerShard = pageSize + 1
@@ -663,11 +670,7 @@ export function queryMessages(
     return hasMore
       ? { ...base, hasMore, cursor: nextCursor, cursorLocalId: nextCursorLocalId }
       : { ...base, hasMore: false }
-  } finally {
-    for (const shard of shards) {
-      try { shard.db.close() } catch { /* already closed */ }
-    }
-  }
+  })
 }
 
 /**

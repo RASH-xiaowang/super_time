@@ -4,7 +4,7 @@
  * joined to contact.db display names, so the read-only file grid can show where a
  * media asset came from instead of only a hash name.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { MD5_FIND_RE, isMd5Loose } from '../md5.ts'

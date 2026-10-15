@@ -7,7 +7,7 @@
  * @module search-build
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { dirname, join, basename } from 'node:path'
 import type { SearchHit } from '../types.ts'
@@ -26,12 +26,44 @@ import { fmtDateTimeSec } from '../format.ts'
  * 对话（09-17 一天 139 条）。问「今天聊了啥」时当天数据根本不在检索空间里，
  * BM25 只能召回正文恰好写着「今天」的旧消息（同年 2/3/7 月）—— 这就是
  * 「回复内容不正确 + 消息列表里出现其他日期的消息」的根源。
+ *
+ * ## `background` 是干什么的（W2-6.4）
+ *
+ * **实测数据把两条路分开了**（`index-freshness.measure.spec.ts`，合成 2 万条库 + 单分片）：
+ *
+ * | 新增条数 | 0 | 10 | 100 | 1000 | 5000 |
+ * |---|---|---|---|---|---|
+ * | 增量同步 | 1.2ms | 5.2ms | 5.5ms | 9.3ms | 25.6ms |
+ *
+ * 增量同步**最坏也就 25.6ms**（固定开销约 5ms，其余随新增条数线性），保鲜探测 0.6ms/次。
+ * 把它挪到后台**只会让这一问用旧索引作答** —— 那正是本函数当初要修的 bug。
+ * 所以：**落后 ⇒ 照旧同步等**，这条路上不分流。
+ *
+ * 真正会卡住提问的是**全量构建**（实测 13.5 万条 5.4s，更大的库更久）。它发生在 `!ready` 时，
+ * 而那时索引本来就不可用 —— 不存在「拿旧索引作答」的问题，正是可以放心挪到后台的那一种。
+ * `background: true` 只作用于这一条：不在这一问里等构建，而是开跑并回一句给界面。
  * @param decryptedDir - 已解密数据根。
+ * @param opts - `background`：全量构建是否挪到后台（增量同步不受影响，见上）。
  * @returns 本次动作与耗时（写进操作日志，便于解释「为什么这次提问慢」）。
  */
-export async function ensureSearchIndex(decryptedDir: string): Promise<EnsureIndexResult> {
+export async function ensureSearchIndex(
+  decryptedDir: string,
+  opts: { background?: boolean } = {},
+): Promise<EnsureIndexResult> {
   const st = getSearchIndexStatus(decryptedDir)
   if (!st.ready) {
+    if (opts.background === true) {
+      // 不 await：`buildSearchIndex` 自带按索引路径键控的单飞闸与结果缓存，
+      // 所以连着问十次也只会构建一次，而每一次都能拿到同一个 promise。
+      // catch 吃掉异常：失败会由索引自身体现出来（下次仍是 `ready=false` 并重来），
+      // 而这一问已经用旧索引答完了，没有任何地方会把这个异常抛回给谁。
+      void buildSearchIndex(decryptedDir, false).catch(() => { /* 下一轮提问会看到它仍未就绪 */ })
+      return {
+        action: 'deferred',
+        elapsed_ms: 0,
+        message: '检索索引正在后台建立，这一轮用的是建立之前的索引，历史消息可能搜不到',
+      }
+    }
     const built = await buildSearchIndex(decryptedDir, false)
     return {
       action: 'build',
@@ -40,12 +72,14 @@ export async function ensureSearchIndex(decryptedDir: string): Promise<EnsureInd
       ...(built.message ? { message: built.message } : {}),
     }
   }
-  if (!getSearchIndexFreshness(decryptedDir).stale) return { action: 'none', elapsed_ms: 0 }
+  const fresh = getSearchIndexFreshness(decryptedDir)
+  if (!fresh.stale) return { action: 'none', elapsed_ms: 0 }
   const synced = await syncSearchIndex(decryptedDir)
   return {
     action: synced.status === 'ok' ? 'sync' : 'none',
     added: synced.added,
     elapsed_ms: synced.elapsed_ms,
+    staleShards: fresh.staleShards,
     ...(synced.message ? { message: synced.message } : {}),
   }
 }
@@ -312,19 +346,41 @@ export interface BuildResult {
 }
 
 /**
+ * 构建全文检索索引（FTS5）的**观测与取消**挂钩（W3-11.5 铺到第二个入口）。
+ *
+ * `onProgress(done, total, rows)`：`done/total` 是**分片**口径（分片清单一次就拿全，
+ * 所以这个分母是真的总量，不是「到目前为止的总数」那种会一路变大的假进度）；
+ * `rows` 是已入库的行数 —— 让文案能说「第 3/12 个分片 · 已入库 5.2 万条」。
+ *
+ * `signal`：只在**分片之间**检查。理由与逐条分析同源 —— 整个构建在一个事务里，
+ * 拆到分片内部就必须能中途回滚，那不是「检查一下」而是「重写构建流程」。
+ * 好在分片粒度已经够细（实测 12 个分片/20 万行），最坏延迟就是最后一个分片。
+ * 被取消 ⇒ 事务 ROLLBACK ⇒ **旧索引原封不动**（这比「留半份索引」好得多：
+ * 读侧看不出新旧之分，只看 ready 与 rows）。
+ */
+export interface SearchIndexBuildHooks {
+  onProgress?: (done: number, total: number, rows: number) => void
+  signal?: AbortSignal
+}
+
+/** 被取消时从构建里抛出的哨兵（不是错误：调用方要把它显示成「已停止」）。 */
+const INDEX_BUILD_CANCELED = 'SEARCH_INDEX_BUILD_CANCELED'
+
+/**
  * 构建全文检索索引（FTS5）。
  *
  * @param decryptedDir - 已解密数据根。
  * @param force - 为 true 时即使已有同版本索引也重建。
+ * @param hooks - 进度回调与取消信号（见 {@link SearchIndexBuildHooks}）。
  * @returns 构建结果（status/rows/built_at/elapsed_ms 或 message）。
  */
-export function buildSearchIndex(decryptedDir: string, force?: boolean): Promise<BuildResult> {
+export function buildSearchIndex(decryptedDir: string, force?: boolean, hooks?: SearchIndexBuildHooks): Promise<BuildResult> {
   const key = searchIndexPath(decryptedDir)
   const slot = inflightIndexBuilds.get(key)
   if (slot && (slot.force || !force)) return slot.promise
   // 走到这里：没有在飞构建，或本次要求 force 而在飞的是非 force 构建（后者要排队重建）。
   const base: Promise<unknown> = slot ? slot.promise.catch(() => undefined) : Promise.resolve()
-  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force))
+  const promise = base.then(() => runBuildSearchIndex(decryptedDir, force, hooks))
   const entry = { promise, force: Boolean(force) }
   inflightIndexBuilds.set(key, entry)
   // 用双参 then 而非 finally：派生的 promise 恒为 fulfilled，不会产生未处理的拒绝。
@@ -360,8 +416,12 @@ export function withIndexWrite<T>(decryptedDir: string, fn: () => T): { ok: true
 export async function runBuildSearchIndex(
   decryptedDir: string,
   force?: boolean,
+  hooks?: SearchIndexBuildHooks,
 ): Promise<BuildResult> {
   const p = searchIndexPath(decryptedDir)
+  // W3-11.5：`started` 提到 try 之外 —— 取消分支也要用它算 elapsed（取消不是失败，
+  // 但用户仍然想知道「跑了多久才被我停掉的」）。
+  const started = Date.now()
   const db = new DatabaseSync(p)
   // WAL：让**读者**在重建窗口内不被写事务挡住。delete/journal 模式下写事务一旦溢出页缓存
   // 就持 EXCLUSIVE 到 COMMIT，整段窗口读者被拒（实测溢出点约 1.75MB）；WAL 下 74–155 次
@@ -402,7 +462,6 @@ export async function runBuildSearchIndex(
     if (!force && existing > 0 && ver?.value === INDEX_SCHEMA_VERSION) {
       return { status: 'exists', rows: existing, message: '索引已存在，使用 force=true 可重建' }
     }
-    const started = Date.now()
     const names = loadDisplayNames(decryptedDir)
     const usernames = loadSessionUsernames(decryptedDir)
     const shards = messageShardFiles(decryptedDir)
@@ -432,6 +491,26 @@ export async function runBuildSearchIndex(
     // 必须按**读过的全部行**推进（包括没有可读文本、被跳过的图片/系统消息），
     // 否则那些行会在每次增量同步里被反复重读。
     const shardWm = new Map<string, number>()
+    // W3-11.5：进度与取消都挂在**分片**这一层。
+    // `rowsSinceYield` 已经是「距上次让出的行数」，用它顺带报进度即可，不另加计数器
+    // （每次让出都是 setImmediate，顺手多传一个数字的代价可忽略）。
+    const shardCount = shards.length
+    /**
+     * 已**写入**的行数（进度口径）。
+     *
+     * 不用收尾时那个 `total`：它在整段构建里恒为 0（只在 COMMIT 前那次 COUNT 才有值），
+     * 于是分片内部的进度读数会一路显示「已入库 0 条」—— 一个永远不动的数字比没有更糟。
+     */
+    let inserted = 0
+    const reportProgress = hooks?.onProgress
+    if (reportProgress) reportProgress(0, shardCount, 0)
+    const throwIfCanceled = (): void => {
+      if (hooks?.signal?.aborted === true) throw Object.assign(new Error('已停止构建搜索索引'), { code: INDEX_BUILD_CANCELED })
+    }
+    // 事务一开就是「DROP + 全量重建」，所以进事务前先查一次 ——
+    // 已经被取消的构建不该先把旧索引的表 DROP 掉再回滚（那期间读者会短暂读到空表）。
+    throwIfCanceled()
+    let shardsDone = 0
     // 被跳过的分片（读取侧错误）。这不是「忽略」：既写进结果 message，也打 stderr，
     // 否则一个缺行的索引对外与完整索引无法区分（读侧见 ready:true → 永不重建）。
     let skippedCount = 0
@@ -449,13 +528,16 @@ export async function runBuildSearchIndex(
       for (const [text, tokens, who, username, createTime, sortSeq, localId] of batch) {
         const r = insMeta.run(text, username, createTime, sortSeq, localId)
         insFts.run(Number(r.lastInsertRowid), tokens, who)
+        inserted += 1
       }
       batch = []
       batchChars = 0
     }
     for (const shard of shards) {
+      // 分片边界：取消只查这里（见 SearchIndexBuildHooks 的注释）。
+      throwIfCanceled()
       let sdb: DatabaseSync | null = null
-      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch (e) { recordSkip(shard, e); continue }
+      try { sdb = new DatabaseSync(shard, { readOnly: true }) } catch (e) { recordSkip(shard, e); shardsDone += 1; continue }
       // 一次问出「这个分片装了哪些会话表」，再按表读。旧布局是 `for username { for shard { 开这个分片 } }`，
       // 于是**开合数 = 会话数 × 分片数**（真实库上是几百到几千次 open/close，每次都为了问一句「你有没有我的表」），
       // 而这件事分片自己就知道 —— 增量同步 `runSyncSearchIndex` 早就是下面这个形状了，两边对齐。
@@ -465,6 +547,7 @@ export async function runBuildSearchIndex(
       } catch (e) {
         recordSkip(shard, e)
         sdb.close()
+        shardsDone += 1
         continue
       }
       try {
@@ -524,6 +607,13 @@ export async function runBuildSearchIndex(
                 rowsSinceYield = 0
                 charsSinceYield = 0
                 await yieldToLoop()
+                if (reportProgress) reportProgress(shardsDone, shardCount, inserted)
+                // 让出点也是分片内的**取消检查点**：让出是本文件唯一天然的「事件循环边界」，
+                // 放在这里就等于每 YIELD_EVERY_ROWS 行能响应一次取消，
+                // 而不必等整个分片读完（单个分片可能就有十万行）。
+                // 顺序是「先报进度后查取消」：渲染层就是靠这个回调发取消请求的，
+                // 反过来（先查后报）会让取消整整晚一个让出周期才生效。
+                throwIfCanceled()
               }
             }
           if (batch.length >= 500) flush()
@@ -531,6 +621,9 @@ export async function runBuildSearchIndex(
       } finally {
         sdb.close()
       }
+      // 分片跑完（含被跳过的）：进度按**分片**推进。
+      shardsDone += 1
+      if (reportProgress) reportProgress(shardsDone, shardCount, inserted)
     }
     flush()
     flush()
@@ -556,6 +649,11 @@ export async function runBuildSearchIndex(
     return result
   } catch (e) {
     try { db.exec('ROLLBACK') } catch { /* no active tx */ }
+    // 取消**不是失败**：回滚已经保住旧索引，界面该显示「已停止」而不是红色错误。
+    // 不这么区分的话，用户会以为索引坏了，下一次搜索又退化成全表扫描。
+    if ((e as { code?: string }).code === INDEX_BUILD_CANCELED) {
+      return { status: 'cancelled', rows: 0, elapsed_ms: Date.now() - started, message: '已停止构建，旧索引保持原样' }
+    }
     throw new Error('构建搜索索引失败: ' + (e as Error).message)
   } finally {
     db.close()

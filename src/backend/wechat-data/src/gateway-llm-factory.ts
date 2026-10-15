@@ -13,6 +13,7 @@
  *   ③ 失败一律抛出而不是吞掉 —— 由调用方决定降级成什么，并在界面上说清为什么。
  */
 import type { PrivacyGateFn } from './gateway-privacy.ts'
+import { embedCacheKey, lookupEmbedCache, storeEmbedCache } from './query/embed-cache.ts'
 import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
 import type { EmbedFn } from './query/retrieval/embedding.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -26,6 +27,16 @@ export interface LlmFactoryDeps {
   host: unknown
   kbModel: (kbId: number, role: KbModelRole) => ResolvedModel
   privacyGate: PrivacyGateFn
+  /** 解密数据根（embedding 缓存落盘位置）。每次现取：换数据根时缓存要跟着改道。 */
+  decryptedDir: () => string
+  /**
+   * 当前是否开启敏感字段脱敏。
+   *
+   * 为什么要有它：embedding 缓存的键必须把脱敏口径算进去（见 `query/embed-cache.ts` 文件头），
+   * 而口径只有闸门内部知道。它读的是**同一个** `readPrivacySettings`；
+   * 工厂读它与闸门读它之间没有 `await`（全同步），所以两边不可能读到不一致的值。
+   */
+  redactMode: () => boolean
 }
 
 /** 审计里能分得开的三种 embedding 功能名（数据范围完全不同，不许写死成一个）。 */
@@ -57,9 +68,22 @@ type HostCtx = { agentDefaultModel?: { currentSelection?: () => { provider?: str
 export function makeEmbedFnOf(deps: LlmFactoryDeps, model: string, feature: EmbedFeature = 'ask_embed'): EmbedFn | undefined {
   const bridge = deps.llm as EmbedBridge
   if (typeof bridge?.embed !== 'function') return undefined
+  const opt = model ? { model } : undefined
   return async (texts: string[]): Promise<number[][]> => {
+    const dir = deps.decryptedDir()
+    // W3-6.2：键里的命名空间就是脱敏口径 —— `r` 与 `p` 的条目物理上不互通，
+    // 所以「关脱敏时算的向量」永远不可能在「开脱敏」时被取出来用。
+    const ns = deps.redactMode() ? 'r' : 'p'
+    const keys = texts.map((t) => embedCacheKey(ns, model, t))
+    const hit = lookupEmbedCache(dir, keys)
+    // 命中 ⇒ 这一批没有任何字节离开本机 ⇒ 不过闸、不写审计（写了就是把没发生过的事记成发生过）。
+    if (hit) return hit
     const gated = deps.privacyGate(feature, { sessions: 0, messages: texts.length }, texts)
-    return bridge.embed!(gated, model ? { model } : undefined)
+    const vecs = await bridge.embed!(gated, opt)
+    // 键与查找时是**同一个**（按原文算），值却是脱敏后的向量。下一次同原文 + 同口径会
+    // 重新得到同一份 `gated`，向量自然相等；而口径一变命名空间就变，绝不会跨口径取用。
+    storeEmbedCache(dir, keys, vecs)
+    return vecs
   }
 }
 

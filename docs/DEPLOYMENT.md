@@ -15,20 +15,22 @@
 ## 2. 构建
 
 ```bash
+npm run build:all       # 按依赖顺序一次构建全部三份产物（推荐）
 npm run build:ui        # vite 打前端，入口是 src/client/ui-app/ui-entry.tsx → ui-dist/
 npm run build:backend   # esbuild 打后端 → src/backend/wechat-data/lib/index.js
-npm run build:types     # tsc 生成 lib/types/**.d.ts（前端只从这里取后端类型）
-npm run docs:api        # 由 gateway.ts 的 @Remote 生成 docs/API.md
+npm run build:types     # 清空后重建 lib/types/**.d.ts（前端只从这里取后端类型）
+npm run docs:api        # 由 gateway*.ts 的 @Remote 生成 docs/API.md
 ```
 
-`lib/index.js` 与 `lib/types/**` 是**入库产物**（不是构建缓存）：CI 会重建并要求 `git diff` 为空。
+`lib/index.js` 与 `lib/types/**` 是**入库产物**（不是构建缓存）：CI 会在临时目录重建并逐字节比对，
+不要求工作树本身是干净的。
 所以改后端 `src` 的那次提交必须把 `lib/`（方法面变了还要 `docs/API.md`）一起提上去。
 
 ## 3. 打包
 
 ```bash
 npm run pack   # 目录版（dist/win-unpacked/），调试装配用
-npm run dist   # NSIS 安装器（前置 build:ui）
+npm run dist   # NSIS 安装器（前置 build:all）
 ```
 
 `package.json` 里 `build` 段的三条要点：

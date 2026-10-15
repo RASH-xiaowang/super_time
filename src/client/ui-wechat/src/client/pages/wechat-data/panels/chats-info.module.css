@@ -1,0 +1,63 @@
+/* 聊天信息「官方行语法」样式（D0，2026-10-13 微信对齐）。
+   独立成份：chats-rows 已近 M21 的 1000 行上限；行语法/只读开关自成一族（chats-info-rows.tsx 消费）。
+   官方列表行：标签左 12 / 值右 14 / 行高 44–56 / 1px 分隔。圆角与开关全走令牌
+   （theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。 */
+/* ── 聊天信息行语法（D0，2026-10-13 微信对齐）─────────────────────
+   官方列表行：标签左 12 / 值右 14 / 行高 44–56 / 1px 分隔。两抽屉共用（chats-info-rows.tsx）。
+   圆角/开关全走令牌（theme-geometry 对字面量圆角与 999px/50% 有全局棘轮）。 */
+.infoRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-3, 12px);
+  min-height: 48px;
+  padding: 6px 0;
+  border-top: 1px solid var(--wx-card-divider, var(--nm-border));
+}
+.infoRowFirst { border-top: none; }
+.infoLabel { flex-shrink: 0; font-size: var(--wx-info-meta, 12px); color: var(--nm-text-2); }
+.infoValueWrap { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.infoValue {
+  min-width: 0;
+  font-size: var(--wx-info-text, 14px);
+  color: var(--nm-text-1);
+  text-align: right;
+  word-break: break-word;
+}
+.infoChevron { font-size: var(--wx-info-text, 14px); color: var(--nm-text-3); }
+.infoChevronBtn {
+  border: none;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--nm-text-3);
+  border-radius: var(--nm-r-xs, 4px);
+}
+.infoChevronBtn:hover { background: var(--nm-bg-hover); color: var(--nm-text-1); }
+/* 工作台自有数据的分组小标题：与官方行语法区分语义（不冒充官方行）。 */
+.infoSection {
+  margin-top: var(--nm-s-3, 12px);
+  padding: var(--nm-s-2, 8px) 0 2px;
+  font-size: var(--wx-info-meta, 12px);
+  color: var(--nm-text-3);
+}
+/* 只读开关（L13 死控件纪律）：视觉是官方 switch，交互刻意关闭（span + aria-disabled）。 */
+.infoSwitch {
+  position: relative;
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  border-radius: var(--nm-r-pill, 999px);
+  background: var(--nm-bg-hover, #222222);
+}
+.infoSwitch[data-on='true'] { background: color-mix(in srgb, var(--nm-success) 55%, transparent); }
+.infoSwitchKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--nm-r-pill, 999px);
+  background: var(--nm-text-3);
+}
+.infoSwitch[data-on='true'] .infoSwitchKnob { left: 14px; background: var(--nm-bg-card, #ffffff); }

@@ -39,10 +39,10 @@ describe('面板：三类端点各走各的接口（向量 / 精排的地址·Ke
   it('端点解析：地址/Key 留空回落上一套，路径各有缺省（与后端取数同口径）', () => {
     expect(panel).toContain('cfg.embeddingApiUrl?.trim() || cfg.apiUrl')
     expect(panel).toContain('cfg.embeddingApiKey?.trim() || cfg.apiKey')
-    expect(panel).toContain("cfg.embedPath?.trim() || '/embeddings'")
+    expect(panel).toContain('cfg.embedPath?.trim() || llmDefaults.embedPath')
     expect(panel).toContain('cfg.rerankApiUrl?.trim() || cfg.apiUrl')
     expect(panel).toContain('cfg.rerankApiKey?.trim() || cfg.apiKey')
-    expect(panel).toContain("cfg.rerankPath?.trim() || '/rerank'")
+    expect(panel).toContain('cfg.rerankPath?.trim() || llmDefaults.rerankPath')
     expect(panel, '向量模型留空要回落到 chat model').toContain('cfg.embeddingModel?.trim() || cfg.model')
   })
 

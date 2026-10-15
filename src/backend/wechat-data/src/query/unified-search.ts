@@ -7,7 +7,7 @@
  * 句柄由 `withDb` 的 finally 关掉（P0-1：原先 catch 拿不到 try 内的 `const db`，
  * 一次查询抛错就永久泄漏一个 SQLite 句柄）。
  */
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type {

@@ -3,7 +3,7 @@
  *
  * ## 为什么这条守卫值得单独立
  *
- * `docs/PERF-AUDIT-172` 要回答「哪个接口慢」，而它当时拿到的前端数据只有一半：
+ * PERF-AUDIT-172 报告（已删除，原文见 git 历史）要回答「哪个接口慢」，而它当时拿到的前端数据只有一半：
  * `timedFetch` 只被 `cachedFetch` 的两处分支调用，`cachedGet` 那条**热门快照通道**
  * 一次都没经过它。后果不是「少几条日志」而是**判据缺一半** —— 面板切回来时走的正是
  * `cachedGet` 快照命中，而这条路「命中也要等多久」在旧写法里根本量不到，
@@ -25,11 +25,16 @@
  * 把命中路径拖慢，再看它是否被记下来。
  * @vitest-environment jsdom
  */
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TIMED_FETCH_THRESHOLD_MS, cachedFetch, cachedGet, invalidateSnapshotCache } from './cache.ts'
 
-const LOG = 'D:/super-time-wechat/working/_h3-coverage.txt'
+const LOG = process.env['SUPERTIME_CACHE_TIMING_LOG']
+  ?? join(tmpdir(), 'supertime-cache-timing-coverage.txt')
+// 默认落在系统临时目录；设 SUPERTIME_CACHE_TIMING_LOG 可指定便于人工检查的位置。
+mkdirSync(dirname(LOG), { recursive: true })
 writeFileSync(LOG, '')
 /** 把探针数据落盘：vitest 的 console 输出经本机管道会丢（见 cache-timing 的教训）。 */
 const say = (s: string): void => { appendFileSync(LOG, s + '\n') }
@@ -146,26 +151,10 @@ describe('H3：埋点覆盖四条取数路径', () => {
    * 「第二次读比第一次多 500ms」，这样命中路径自己就会越过阈值。
    * 这条同时证明了两件事：命中路径**在计时**，且**用了这个计时结果**。
    *
-   * ## ⚠️ 已知的间歇性失败（2026-09-28 定性，**未修**）
-   *
-   * 本用例实测**零负载下单跑也会红**（12 次里 2 次）。已用本 spec 自己的探针日志定位到
-   * **确切原因，不是计时注入的问题**：
-   *
-   *   失败时日志是 `slowhit keys = ["[wxdata] covget:slowhit:bg 600ms"]`
-   *   —— 出现的是 `:bg`（后台复验）键，说明 `cachedGet` 走的是
-   *   `cache.ts:87` 那条**陈旧**分支，而**不是** `:85` 的新鲜命中分支。
-   *   两条分支都过 `timedFetch`，但只有后者会产出 `:hit` 键，所以断言必红。
-   *
-   * 陈旧与否由 `cache.ts:81` 的**墙钟**判定：
-   *   `ageMs = Date.now() - hit.ts`，需同时满足 `ageMs < SNAPSHOT_TTL_MS`（30s）
-   *   且 `hit.ts > staleBeforeMs`。两次 `cachedGet` 之间只要有任何一次
-   *   `invalidateSnapshotCache()`（它把 `staleBeforeMs` 推到现在，见 `:133`）
-   *   或新鲜度窗口变化，分支就翻转。
-   *
-   * **为什么没修**：要让这条判据不依赖墙钟，得能注入"现在"（改 `cache.ts` 的
-   * `Date.now()` 调用点）——那是**产品代码的改动**，只为测量方便而改产品语义，
-   * 与本仓库"埋点是纯观测"的既定取舍相悖（见下面 `H3：埋点是纯观测，不许改语义` 那组）。
-   * 所以这里如实记录，留待决定：要么给 `cache.ts` 注入时钟，要么把这条判据改成结构性断言。
+   * 这条用例此前因墙钟精度间歇性红：`beforeEach` 的 `invalidateSnapshotCache()`
+   * 与首次 `snapshotSet` 落在同一毫秒时，旧实现的 `hit.ts > staleBeforeMs`
+   * 会把刚写的新值误判成陈旧值。现在 `cache.ts` 用单调递增的整数世代区分，
+   * 分支不再依赖同一毫秒里的先后顺序。
    */
   it('命中路径能报出「命中也要等」的慢（性能打桩，双向咬）', async () => {
     await cachedGet('covget:slowhit', async () => ({ total: 1 }))
@@ -210,18 +199,13 @@ describe('H3：埋点是纯观测，不许改语义', () => {
   /**
    * 命中路径不回源 —— 但**必须区分两种命中**，别把 SWR 的复验当成 bug。
    *
-   * 本文件的 `beforeEach` 会 `invalidateSnapshotCache()`（给全局打一个「数据变了」的
-   * 世代戳），于是**任何**在本文件里写进去的快照，第二次读都落在「陈旧命中」那一支：
-   * 它先回旧值（这是对的），**同时**在后台调 fetcher 复验（这也是对的，SWR 的 R）。
-   * 所以「命中 ⇒ fetcher 一次都不许被调」在这份夹具下是个**假命题** ——
-   * 实测（2026-09-28）它是 `calls=1`，且单跑同样如此，说明与用例顺序无关。
-   *
    * 真正要钉的语义拆成两条：
    *  · 陈旧命中：**返回值必须是旧的**（界面先画旧值，不许等新数据）—— 关键的用户可见行为；
    *  · 新鲜命中：fetcher 一次都不许被调 —— 用一个**不被 before 作废**的键来验。
    */
   it('陈旧命中：先回旧值，且只起一次后台复验（重复读不打两次后端）', async () => {
     await cachedGet('covget:stale1', async () => ({ total: 1 }))
+    invalidateSnapshotCache()
     let calls = 0
     const f = async (): Promise<{ total: number }> => { calls += 1; return { total: 2 } }
     const v = await cachedGet('covget:stale1', f)

@@ -56,4 +56,6 @@ export interface LayaDownloadOutcome {
   files?: string[]
   bytes?: number
   error?: string
+  /** W2-11.5：被用户取消（与「失败」分开 —— 界面据此不弹错误框）。 */
+  canceled?: boolean
 }

@@ -25,7 +25,7 @@
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { dirname, join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb, withWritableDb } from './db-open.ts'
 import { decodeBlobText } from './messages.ts'
 
@@ -406,12 +406,14 @@ export function queryRevokedRetained (
   limit: number,
   offset: number,
   q?: string,
-): { items: RetainedRevokeItem[]; total: number } {
+): { items: RetainedRevokeItem[]; total: number; readError?: string } {
   const p = messageArchivePath(decryptedDir)
-  if (!existsSync(p)) return { items: [], total: 0 }
+  // W3-11.4：归档库不存在 ≠ 没有撤回消息。归档由同步 tick 自动补，
+  // 所以这里给出 readError（界面据此说「还没归档」，而不是「你没有撤回消息」）。
+  if (!existsSync(p)) return { items: [], total: 0, readError: '撤回消息归档库还没建立（后台同步会自动补上）；若长时间为空，请检查「数据配置」是否完成解密' }
   return withDb(p, (db) => {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='archived_msg'").get()
-    if (has === undefined) return { items: [], total: 0 }
+    if (has === undefined) return { items: [], total: 0, readError: '归档库缺少 archived_msg 表（可能解密不完整）：重新解密该库后即可' }
     const kw = (q ?? '').trim().toLowerCase()
     const tips = db.prepare(
       'SELECT talker, row_key AS k, create_time AS ct, content FROM archived_msg WHERE local_type = 10000 AND content LIKE ? ORDER BY create_time DESC, row_key DESC',

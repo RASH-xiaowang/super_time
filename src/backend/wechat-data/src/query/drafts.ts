@@ -3,7 +3,7 @@
  * clear_session_draft / clear_all_session_drafts. Writes to the decrypted
  * session.db copy only (the WeChat source is untouched).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 

@@ -38,8 +38,14 @@ const STATUS_META: Record<AskHistoryStatus, { label: string; tone: 'green' | 'am
   fail: { label: '失败', tone: 'red', hint: '这次问答没能完成' },
 }
 
-/** 入口来源的中文名。未知来源原样显示（后端可能先于前端新增来源）。 */
-const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: '会话内问答' }
+/**
+ * 入口来源的中文名。未知来源原样显示（后端可能先于前端新增来源）。
+ *
+ * `auto` = ClawBot 的 **AI 自动回复**（2026-10-13）。它是这里唯一一条
+ * 「**用户没问、模型答了**」的记录：不标出来，用户会把它当成自己问过的，
+ * 排查「为什么自动回了这么一句」也就没了依据。
+ */
+const SRC_LABEL: Record<string, string> = { ask: '微信问答', session: '会话内问答', auto: '自动回复' }
 
 const STATUS_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部' },
@@ -52,6 +58,7 @@ const SRC_TABS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: '全部来源' },
   { value: 'ask', label: '微信问答' },
   { value: 'session', label: '会话内' },
+  { value: 'auto', label: '自动回复' },
 ]
 
 /** 「清空全部」要求逐字确认的记录条数门槛：低于它只做普通二次确认。 */

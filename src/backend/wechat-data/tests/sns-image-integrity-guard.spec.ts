@@ -189,7 +189,7 @@ describe('先网后本：有网只走网络，无网只用本地（顺序不许�
 
   it('本机两档仍必须显式区分 allowThumb（漏传就退回旧行为：缩略图赢过原图）', () => {
     // local(allowThumb) 是唯一的前端封装；它必须把参数透传下去
-    expect(mediaRemotes).toMatch(/const local = \(allowThumb: boolean\) =>/)
+    expect(mediaRemotes).toMatch(/const local = async \(allowThumb: boolean\) =>/)
     expect(mediaRemotes).toMatch(/resolveSnsImageDataUrl\(base, aesKey, xorKey, options\.md5, options\.timelineId, options\.mediaId, allowThumb\)/)
     const calls = [...mediaRemotes.matchAll(/\blocal\((true|false)\)/g)].map((m) => m[1])
     expect(calls, '必须恰好两档：先原图、后缩略图').toEqual(['false', 'true'])

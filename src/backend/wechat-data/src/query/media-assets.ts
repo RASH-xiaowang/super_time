@@ -2,7 +2,7 @@
  * Media assets inventory over hardlink.db: per-category file/size stats and
  * duplicate md5 detection across image/file/video hardlink tables.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

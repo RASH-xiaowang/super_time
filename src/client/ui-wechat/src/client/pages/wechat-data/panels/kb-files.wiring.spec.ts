@@ -5,7 +5,7 @@
  * 导航项、分段条、路由分支、IPC 钩子都渲染/执行不起来。而这一屏的退化方式
  * **界面照样能打开**，只是入口、契约或某条分支坏了。按危害从高到低：
  *
- *   ① `kbfiles` 忘了标 `hidden` —— 侧栏会多出一个「文件」入口（入口数 16 → 17），
+ *   ① `kbfiles` 忘了标 `hidden` —— 侧栏会多出一个「文件」入口（入口数 17 → 18），
  *      而段条里也有「文件」，同一个视图有了两条路；
  *   ② `kbfiles` 被从 `WechatTab` 或 `NAV_GROUPS` 里删掉 —— `TAB_LABELS` 是**由后者构建**的，
  *      删了它 `#kbfiles` 就静默落回「数据总览」（`WechatDataPanel` 用
@@ -117,10 +117,10 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
     expect(item('kbfiles')?.hidden, 'kbfiles 必须标 hidden，否则侧栏会多出一个「文件」入口').toBe(true)
     const visible = ALL.filter(it => !it.hidden).map(it => it.tab)
     expect(visible, 'kbfiles 不该出现在侧栏可见项里').not.toContain('kbfiles')
-    // 侧栏入口数仍应是 16（口径 = 未标 hidden 且非 settings）。
-    // 精确钉住而不是 `<= 17`：范围断言正是这个数字上次能长期漂着的原因。
+    // 侧栏入口数仍应是 17（口径 = 未标 hidden 且非 settings；2026-10-12 起含 ClawBot）。
+    // 精确钉住而不是 `<= 18`：范围断言正是这个数字上次能长期漂着的原因。
     const renderedInGroups = NAV_GROUPS.flatMap(g => g.items).filter(it => !it.hidden && it.tab !== 'settings')
-    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(16)
+    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(17)
   })
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
@@ -143,7 +143,9 @@ describe('路由：kbfiles 与 kb / knowledge 同走一个知识库外壳', () =
     // 2026-09-19 三栏重排：三个分段与它们的面板从 `WechatDataPanel` 搬进 `KbShell.tsx`。
     // 这条断言跟着下移 —— 要防的退化没变：少一个 import / 少一个分段 = 深链落空。
     expect(kbShellSrc).toContain("import { KbFilesPanel } from './KbFiles.tsx'")
-    expect(panelShell).toContain("import { KbShell } from './panels/KbShell.tsx'")
+    expect(panelShell).toContain("import {\n  AnnualPanel,")
+    expect(panelShell).toContain("KbShell,\n")
+    expect(panelShell).toContain("} from './panel-loaders.tsx'")
   })
 
   it("renderTab 里三个 case 并列，落进同一个知识库外壳", () => {
@@ -468,10 +470,23 @@ describe('正文检索：一个搜索框同时做文件名过滤与正文检索�
     expect(apiSrc).toContain('export async function apiSearchKb(')
   })
 
-  it('前端类型与后端 types.ts **逐字段**一致（漂了会静默拿到 undefined）', () => {
-    expect(clientTypesSrc).toContain("export type KbChannelName = 'sparse' | 'dense' | 'structured'")
+  it('前端只转发共享契约；生成类型与后端 types.ts **逐字段**一致', () => {
+    // H11/H12 后前端不再复制一份镜像：共享契约由 lib/types 生成，本地文件只做转发。
+    // 仍保留「本地没长回镜像」的守卫，并把逐字段对齐移到生成产物 vs 后端源码。
+    expect(clientTypesSrc).toContain("from '@deepseek-ai/dsh-wechat-data/types'")
+    for (const name of ['KbChannelName', 'KbHit', 'KbSearchStats', 'KbSearchResult']) {
+      expect(clientTypesSrc, `前端本地类型没有转发 ${name}`).toContain(`${name},`)
+    }
+    expect(clientTypesSrc, '前端又长回了 KbHit 镜像声明').not.toMatch(/export interface KbHit/)
+
+    const generatedTypesSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'lib', 'types', 'types-kb.d.ts'), 'utf8')
+    const generatedFieldNames = (src: string, name: string): string[] => {
+      const body = new RegExp(`export interface ${name} \\{[\\s\\S]*?\\n\\}`).exec(src)
+      expect(body, `生成类型里找不到 interface ${name}`).toBeTruthy()
+      return (body?.[0]?.match(/^ {4}([A-Za-z_]\w*)\??:/gm) ?? []).map(s => s.trim().replace(/\??:$/, ''))
+    }
     for (const name of ['KbHit', 'KbSearchStats', 'KbSearchResult']) {
-      expect(fieldNames(clientTypesSrc, name), `前端 ${name} 与后端漂了`).toEqual(fieldNames(backendTypesSrc, name))
+      expect(generatedFieldNames(generatedTypesSrc, name), `生成类型 ${name} 与后端漂了`).toEqual(fieldNames(backendTypesSrc, name))
     }
   })
 })
@@ -504,7 +519,7 @@ describe('前端白名单与后端 ACCEPTED_EXTS 不许漂', () => {
 
 describe('`dialog:open-file` 钩子：自动化能覆盖到「添加文件」这条链路', () => {
   it('主进程注册了对话框，并留了 SUPERTIME_OPEN_PATHS 钩子', () => {
-    expect(mainSrc).toContain("ipcMain.handle('dialog:open-file'")
+    expect(mainSrc).toContain("handleIpc('dialog:open-file'")
     expect(mainSrc).toContain('SUPERTIME_OPEN_PATHS')
     // 多个路径用 path.delimiter 分隔（Windows 路径里逗号是合法字符）
     expect(mainSrc).toMatch(/forced\.split\(path\.delimiter\)/)
@@ -567,7 +582,7 @@ describe('2026-09-19 三栏重排：吸顶骨架与「定位原文件」', () =>
     expect(panelCode).toMatch(/<Button variant="pill"[\s\S]{0,80}?在资源管理器中定位</)
     // 不为了这个按钮新开 IPC：`shell:show-item` 早就在 preload / main 两侧挂好了。
     expect(preloadSrc).toContain("ipcRenderer.invoke('shell:show-item'")
-    expect(mainSrc).toContain("ipcMain.handle('shell:show-item'")
+    expect(mainSrc).toContain("handleIpc('shell:show-item'")
     // 反向：后端没有 reparse 方法（只有 get/add/delete/setRag/search 五个），
     // 所以这里不许出现一个点了没反应的「重新解析」。
     expect(panelCode).not.toContain('重新解析')
@@ -683,12 +698,15 @@ describe('语义索引：入口、状态与四种「只有关键词」', () => {
     expect(panelCode).toContain('apiGetKbVectorIndex')
     expect(panelCode).toContain('apiBuildKbVectorIndex')
     expect(apiSrc).toContain('getKbVectorIndex({ kbId })')
-    expect(apiSrc).toContain('buildKbVectorIndex({ kbId, force })')
+    // W3-11.5：加了可选的 jobId（取消用），形状上仍是「透传 kwargs」。
+    expect(apiSrc).toMatch(/buildKbVectorIndex\(\{ kbId, force(, jobId)? \}\)/)
   })
 
   it('按钮写明会出网，且只锁自己（不顺手禁用删除/刷新）', () => {
     expect(panelCode).toMatch(/title="[^"]*建\/补齐向量索引（会出网）"/)
-    expect(panelCode).toMatch(/disabled=\{indexing\}\s*\n\s*title=/)
+    // 手机态这一颗是禁用的（`buildKbVectorIndex` / `cancelKbIndexBuild` 都不在远程白名单里），
+    // 所以降级属性组紧跟在 disabled 之后 —— 顺序有判据兜着（capabilities.wiring ⑥：写反了会被覆盖掉）。
+    expect(panelCode).toMatch(/disabled=\{indexing\} \{\.\.\.desktopActionProps\(\)\}\s*\n\s*title=/)
     expect(panelCode).toMatch(/\{indexing \? '建索引中…' : '语义索引'\}/)
   })
 

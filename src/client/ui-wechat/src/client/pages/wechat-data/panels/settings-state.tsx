@@ -19,6 +19,9 @@ import { IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline
 import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+/** SSR 下退化成 useEffect，客户端仍保留首帧落位的 layout 时序。 */
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
+
 /** 面板的入参（与 SettingsPanelProps 同形，这里单列以免与面板互相 import）。 */
 export interface SettingsStateOptions {
   inDialog?: boolean
@@ -61,6 +64,35 @@ const NAV_REMOTE = {
     </svg>
   ),
   value: '局域网链接 · 令牌（默认关闭）',
+}
+
+type SettingsNavKey = (typeof STEPS)[number]['key']
+  | 'ai' | 'boundary' | 'remote' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
+type SettingsNavItem = { key: SettingsNavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }
+
+function createSettingsNavItems(
+  stepStates: Record<(typeof STEPS)[number]['key'], StepState>,
+  stepValueOf: (key: (typeof STEPS)[number]['key']) => string,
+): SettingsNavItem[] {
+  return [
+    ...STEPS.map((s) => ({
+      key: s.key,
+      group: '配置向导',
+      label: s.label,
+      icon: STEP_ICONS[s.key],
+      value: stepValueOf(s.key),
+      dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as SettingsNavItem['dot'],
+    })),
+    { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
+    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
+    NAV_REMOTE,
+    { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
+    { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
+    { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
+    { key: 'health', group: '维护与自检', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
+    { key: 'hook', group: '维护与自检', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
+    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
+  ]
 }
 
 function pollWhisperDownload(set: (v: WhisperProgress | null) => void, polls: () => PollRegistry): () => void {
@@ -237,9 +269,9 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     received: number
     total: number
   } | null>(null)
-  /** W3-5.5：本次下载的标识。放 state 不放局部变量（每次渲染都重置，按钮就拿到一个从没往后端取的标识）；
-   * 单调计数放 ref 里。空串 = 没有下载在跑。 */
-  const [whisperJobId, setWhisperJobId] = useState('')
+  /** W3-5.5：本次下载的标识。按钮读取与 API 调用都必须拿到同一个值，
+   * 因此不放进渲染 state：`setState` 的提交是异步的，闭包里读到的是旧值。 */
+  const whisperJobId = useRef('')
   const whisperJobSeq = useRef(0)
   const [whisperTranscribing, setWhisperTranscribing] = useState<{ active: boolean; done: number; total: number; failed: number; skipped: number; current: string }>({ active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' })
   /**
@@ -318,7 +350,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   // 所以内容继续沉降的这段时间里补正两次。用户一旦自己滚过，就再也不动他 —— 补正把他
   // 拽回原处比落点偏几像素糟糕得多。
   const userScrolled = useRef(false)
-  useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (!initialSection) return
     const land = (): void => { if (!userScrolled.current) scrollToSection(initialSection, false) }
     land()
@@ -479,17 +511,17 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }
 
   /** W3-5.5：模型与引擎两路共用的「停止下载」按钮。 */
-  const cancelWhisperDownload = whisperDownloadCanceller(() => whisperJobId, setWhisperDirMsg)
+  const cancelWhisperDownload = whisperDownloadCanceller(() => whisperJobId.current, setWhisperDirMsg)
 
   const whisperDownload = async (m: { id: string; name: string }): Promise<void> => {
-    if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
+    if (whisperDownloading || whisperJobId.current) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
     setWhisperDirMsg(null)
+    const jobId = `whisper-${String((whisperJobSeq.current += 1))}`
+    whisperJobId.current = jobId
     setWhisperDownloading({ model: m.id, file: '', received: 0, total: 0 })
-    // W3-5.5：本次下载的标识（理由见上面那条 state 的注释）。
-    setWhisperJobId(`whisper-${String((whisperJobSeq.current += 1))}`)
     const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiDownloadWhisperModel({ model: m.id, jobId: whisperJobId })
+      const r = await apiDownloadWhisperModel({ model: m.id, jobId })
       if (r.ok) {
         setWhisperDirMsg({ kind: 'ok', text: `✓ 模型 ${m.name} 下载完成${r.bytes ? `（${fmtBytes(r.bytes)}）` : ''}，已就绪` })
         await refreshWhisper()
@@ -502,8 +534,8 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setWhisperDirMsg({ kind: 'err', text: '✗ 模型下载失败：' + (e as Error).message })
     } finally {
       stopPoll()
+      whisperJobId.current = ''
       setWhisperDownloading(null)
-      setWhisperJobId('')
     }
   }
 
@@ -559,14 +591,15 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }
 
   const installEngine = async (): Promise<void> => {
-    if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有下载任务进行中' }); return }
+    if (whisperDownloading || whisperJobId.current) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有下载任务进行中' }); return }
     if (whisperStatus?.engine) return
     setWhisperDirMsg(null)
+    const jobId = `whisper-${String((whisperJobSeq.current += 1))}`
+    whisperJobId.current = jobId
     setWhisperDownloading({ model: 'engine', file: '', received: 0, total: 0 })
-    setWhisperJobId(`whisper-${String((whisperJobSeq.current += 1))}`)
     const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiInstallWhisperEngine({ jobId: whisperJobId })
+      const r = await apiInstallWhisperEngine({ jobId })
       if (r.ok) {
         await refreshWhisper()
         setWhisperDirMsg({ kind: 'ok', text: '✓ whisper.cpp 引擎已就绪，可开始批量转写' })
@@ -579,8 +612,8 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setWhisperDirMsg({ kind: 'err', text: '✗ 引擎下载失败：' + (e as Error).message })
     } finally {
       stopPoll()
+      whisperJobId.current = ''
       setWhisperDownloading(null)
-      setWhisperJobId('')
     }
   }
 
@@ -754,6 +787,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setDbProgress((prev) => ({ ...prev, active: false }))
       setDecrypting(false)
     }
   }
@@ -780,6 +814,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setImgProgress((prev) => ({ ...prev, active: false }))
       setImgDecrypting(false)
     }
   }
@@ -835,6 +870,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setOrigProgress((prev) => ({ ...prev, active: false }))
       setOrigBusy(null)
     }
   }
@@ -878,6 +914,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setImgUpgradeProgress((prev) => ({ ...prev, active: false }))
       setImgUpgrading(false)
     }
   }
@@ -909,39 +946,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
           ? (imgAes.trim() ? '可批量解密' : '未配置')
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
-  type NavKey = (typeof STEPS)[number]['key']
-    | 'ai' | 'boundary' | 'remote' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
-  /**
-   * 左导航条目（14 节，分五组）。
-   *
-   * 分组口径是**用户意图**，不是历史沿革：配置向导 5 步是首次配置要走的流程；
-   * 「智能与隐私」是 AI 与出网这两项要改行为的地方；「授权与更新」是软件本身的授权与版本；
-   * 「维护与自检」是数据侧的备份与体检动作；「高级」放低频开关。
-   *
-   * 原先的「授权与维护」是一个 6 项的杂物组（授权 / 更新 / 备份 / 健康 / 自检 / 日志混在一起），
-   * 找东西得逐条读；拆成「授权与更新」+「维护与自检」后看组名就够了。
-   *
-   * 另有两节 2026-09 迁回主界面（不在本列表里）：隐私体检与操作日志 ——
-   * 它们是只读数据视图（扫描结果、风险 TOP10、审计长表），不是配置也不是维护动作。
-   */
-  const navItems: Array<{ key: NavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }> = [
-    ...STEPS.map((s) => ({
-      key: s.key as NavKey,
-      group: '配置向导',
-      label: s.label,
-      icon: STEP_ICONS[s.key],
-      value: stepValueOf(s.key),
-      dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as 'done' | 'warning' | 'ongoing',
-    })),
-    { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
-    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' }, NAV_REMOTE,
-    { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
-    { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
-    { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
-    { key: 'health', group: '维护与自检', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
-    { key: 'hook', group: '维护与自检', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
-    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
-  ]
+  const navItems = createSettingsNavItems(stepStates, stepValueOf)
 
   /**
    * 弹窗内各面板的跳转：能落在本弹窗某节的就切节（不关弹窗），

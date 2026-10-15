@@ -527,6 +527,94 @@ describe('D 跨库级联：向量在另一个文件里，删/迁都必须跟到�
   })
 })
 
+/**
+ * W2-7.2：**增量**向量索引的作废单位从「整库」细化到「这个文件的那几行」。
+ *
+ * ## 这条在守什么
+ *
+ * 老实现是一句 `UPDATE kb_vectors SET kb_id=? WHERE file_id=?` —— 把这个文件的**所有**行
+ * 都盖上目标库的号，隐含前提是「两个库用的是同一个模型」。按库绑定模型之后这个前提没了：
+ * 甲库用 M1、乙库用 M2，把文件从甲搬到乙，乙库就混进了 M1 的行。
+ *
+ * 安全网一直都在（`searchKbDense` 先看状态，`models` 一多就判 `model-mismatch` 拒答），
+ * 所以不是「结果不准」。真正的代价是：**乙库从此不可用，直到整库重建**，而重建路径
+ * `wipeKbForeign` 清的是乙库**全部**的行 —— 为了一个搬过来的文件，把几千行重新
+ * embedding 一遍（白花 token、白花一次出网、还占着串行 worker）。
+ *
+ * 本条把作废单位改成「这个文件里不属于目标模型的那几行」：同模型的全搬（不重算），
+ * 外来行删掉（下次 build 只重算这个文件）。
+ */
+describe('W2-7.2：换库搬迁按「块 + 模型」搬，不连带整库重建', () => {
+  it('同模型搬迁：行全搬过去，一行都不删（不白花 embedding）', async () => {
+    const id = register('微信说明.md', WECHAT_DOC, 1)
+    const { fn, calls } = makeEmbed()
+    await buildBumped(decrypted, 1, fn, BUILD)
+    // 乙库：同一个模型，另建一份
+    const idB = register('玄武纪要.md', XUANWU_DOC, 2)
+    await buildBumped(decrypted, 2, fn, BUILD)
+    expect(idB).toBeGreaterThan(id)
+    const beforeCalls = calls.length
+
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    expect(rep.movedFiles).toBe(1)
+
+    const rows = vectorRows()
+    expect(rows.length, '同模型搬迁不该删行').toBe(2)
+    // 搬过来的那行现在挂在乙库名下（乙库自己那一行本来就在乙库）
+    const moved = rows.find(r => r.file_id === id)
+    expect(moved?.kb_id, '搬过来的那行没换成乙库的 kb_id').toBe(2)
+    expect(rows.filter(r => r.kb_id === 1).length, '甲库已经不存在了，不该有行挂在它名下').toBe(0)
+    expect(rows.filter(r => r.model === MODEL).length, '模型列被改坏了').toBe(2)
+    // 乙库应当仍然是就绪的（models 只有一个）
+    expect(kbVectorIndexStatus(decrypted, 2, MODEL).ready, '同模型搬迁把乙库弄成不可用了').toBe(true)
+    expect(calls.length, '同模型搬迁又发了一次 embedding').toBe(beforeCalls)
+  })
+
+  it('跨模型搬迁：外来行被删、乙库自己的行留下、乙库仍然就绪', async () => {
+    register('微信说明.md', WECHAT_DOC, 1)
+    const m1 = makeEmbed(32)
+    await buildBumped(decrypted, 1, m1.fn, { ...BUILD, model: 'm1' })
+    // 乙库用**另一个模型**建
+    register('玄武纪要.md', XUANWU_DOC, 2)
+    const m2 = makeEmbed(32)
+    await buildBumped(decrypted, 2, m2.fn, { ...BUILD, model: 'm2' })
+    expect(vectorRows(2).every(r => r.model === 'm2'), '前提：乙库原来只有 m2 的行').toBe(true)
+
+    const before = callsTotal(m2)
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    expect(rep.movedFiles).toBe(1)
+
+    const rows = vectorRows()
+    expect(rows.length, '外来行没被删 ⇒ 乙库会判 model-mismatch 直到整库重建').toBe(1)
+    expect(rows[0]?.kb_id, '乙库自己的行被误伤').toBe(2)
+    expect(rows[0]?.model).toBe('m2')
+    // 关键后果：乙库**不会**因此变成不可用（否则又要整库重建）
+    expect(kbVectorIndexStatus(decrypted, 2, 'm2').ready, '跨模型搬迁把乙库拖成 model-mismatch').toBe(true)
+    // 而且下一次 build 只为搬过来的那个文件补 embedding，不重算乙库原有内容
+    const built = await buildBumped(decrypted, 2, m2.fn, { ...BUILD, model: 'm2' })
+    expect(built.embedded, '重建范围应当是「搬过来的那个文件」，不是整个乙库').toBe(1)
+    expect(callsTotal(m2) - before, '多算了一遍乙库原有内容').toBe(1)
+  })
+
+  it('目标库还没有向量：全搬（旧行为保留，交给下次 build 判）', async () => {
+    register('微信说明.md', WECHAT_DOC, 1)
+    const { fn } = makeEmbed()
+    await buildBumped(decrypted, 1, fn, BUILD)
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    const rows = vectorRows(2)
+    expect(rows.length, '目标库没有自己的模型口径时不该丢行').toBe(1)
+    expect(rows[0]?.model).toBe(MODEL)
+  })
+})
+
+/** 到目前为止这个 embed 桩一共被送出去多少条文本。 */
+function callsTotal(embed: { calls: string[] }): number {
+  return embed.calls.length
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // E. kb 通道：稀疏 + 稠密混合（C2），以及降级说明的如实性
 // ─────────────────────────────────────────────────────────────────────────────

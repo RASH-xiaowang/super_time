@@ -133,6 +133,23 @@
   /* 面板收窄时文案换行，而不是把面板顶宽（inline-flex 的自动最小尺寸会这么做）。 */
   min-width: 0; flex-wrap: wrap;
 }
+/* 「停止生成」（W3-6.1）：逃生门而非主路径。内外间距一律偶数 —— theme-geometry 的奇数
+   间距预算是全局双保险（归宿表见 UI-GEOMETRY-SPEC.md §3），本文件原本 5 处已在上限。 */
+.stopBtn {
+  align-self: flex-start;
+  margin: 4px 0 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--nm-text-3);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--nm-text-3) 35%, transparent);
+  border-radius: var(--nm-r-sm);
+  cursor: pointer;
+}
+.stopBtn:hover {
+  color: var(--nm-text-1);
+  border-color: color-mix(in srgb, var(--nm-text-3) 60%, transparent);
+}
 .dots {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--nm-cyan);

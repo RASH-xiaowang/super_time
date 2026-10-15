@@ -7,13 +7,23 @@
  * —— 再并进来只剩 9 行余量，等于给下一位留雷。方向不变（fs 写离开 core、落在 query 层），
  * 位置换成同层的这颗叶子；它只依赖 `media-image.ts` 的三个出口。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { normalizeAesKey } from '../keys/image-key.ts'
-import { decodeDatBytes, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './media-image.ts'
+import { resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './media-image.ts'
+import { decodeDatBytesAsync } from './media-image-async.ts'
 
 /** 预热与单张入口共用的缓存扩展名（命中其中任意一个就不重写）。 */
 export const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /**
  * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
@@ -33,14 +43,14 @@ export const CACHED_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 't
  * @param aesKey - V2 AES key。
  * @param xorKey - XOR key 字节。
  */
-export function warmDecodedImages(
+export async function warmDecodedImages(
   decryptedDir: string,
   decodedDir: string,
   baseDir: string,
   items: ReadonlyArray<{ username: string; localId: number }>,
   aesKey: string | undefined,
   xorKey: number,
-): void {
+): Promise<void> {
   try {
     // md5 也批量查（每个 (username, 分片) 一次 IN）—— 见 `resolveImageMd5sBatch` 的注释：
     // 原本只有下面的路径查询合并了，md5 仍是每张开一次库，在慢机器上等于没省。
@@ -59,13 +69,19 @@ export function warmDecodedImages(
       if (!src) continue
       const it = items[i]!
       const outDir = join(decodedDir, it.username)
-      const cached = CACHED_IMAGE_EXTS.some(ext => existsSync(join(decodedDir, md5 + '.' + ext)) || existsSync(join(outDir, md5 + '.' + ext)))
+      let cached = false
+      for (const ext of CACHED_IMAGE_EXTS) {
+        if (await pathExists(join(decodedDir, md5 + '.' + ext)) || await pathExists(join(outDir, md5 + '.' + ext))) {
+          cached = true
+          break
+        }
+      }
       if (cached) continue
       try {
-        const dec = decodeDatBytes(new Uint8Array(readFileSync(src)), aesBytes, xorKey)
+        const dec = await decodeDatBytesAsync(new Uint8Array(await readFile(src)), aesBytes, xorKey)
         if ('error' in dec || dec.format === 'hevc') continue
-        mkdirSync(outDir, { recursive: true })
-        writeFileSync(join(outDir, md5 + '.' + dec.format), Buffer.from(dec.bytes))
+        await mkdir(outDir, { recursive: true })
+        await writeFile(join(outDir, md5 + '.' + dec.format), Buffer.from(dec.bytes))
       } catch { /* 单张解码失败：回退到单张入口的原路径 */ }
     }
   } catch { /* 预热是优化，失败不影响正确性 */ }

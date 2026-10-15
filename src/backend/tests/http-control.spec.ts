@@ -36,10 +36,11 @@ interface Deps {
     stop: () => Promise<unknown>
     syncWithConfig: () => Promise<unknown>
     getState: () => object
+    issuePairingCode: () => string
   }
 }
 interface Control {
-  rotate: () => Promise<{ ok: boolean, token?: string, state?: unknown, error?: string }>
+  rotate: () => Promise<{ ok: boolean, token?: string, pairingCode?: string, state?: unknown, error?: string }>
   setEnabled: (enabled: boolean) => Promise<{ ok: boolean, state?: unknown, error?: string }>
   state: () => unknown
 }
@@ -61,21 +62,24 @@ function fake(opts: { saveOk?: boolean, saveThrows?: boolean } = {}) {
       stop: async () => { log.push('stop'); return {} },
       syncWithConfig: async () => { log.push('sync'); return { running: true, port: 5032 } },
       getState: () => ({ running: false }),
+      issuePairingCode: () => { log.push('issue'); return 'spec-pairing-code' },
     },
   }
   return { deps, log, patches: () => patches }
 }
 
 describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
-  it('按「存配置 → 停服务 → 对齐」的顺序走，并把令牌原文只回给调用方一次', async () => {
+  it('按「存配置 → 停服务 → 对齐 → 签发配对码」的顺序走，并把明文凭据只回给调用方一次', async () => {
     const f = fake()
     const r = await createRemoteAccessControl(f.deps).rotate()
     expect(r.ok).toBe(true)
-    expect(f.log).toEqual(['call:saveWechatConfig', 'stop', 'sync'])
+    expect(f.log).toEqual(['call:saveWechatConfig', 'stop', 'sync', 'issue'])
     // 配置写入必须走后端（原子写 + 备份 + 密钥分流进 secrets.json 全在那一份实现里）
     expect(f.patches()).toEqual([{ api_token: r.token, api_enabled: true }])
     expect(typeof r.token).toBe('string')
     expect((r.token ?? '').length).toBeGreaterThanOrEqual(32)
+    expect(r.pairingCode).toBe('spec-pairing-code')
+    expect(r.state).toEqual({ running: true, port: 5032 })
   })
 
   it('每次轮换的令牌都不同（否则「轮换」只是重放同一个凭据）', async () => {
@@ -85,6 +89,8 @@ describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
     expect(a.token).toBeTruthy()
     expect(b.token).toBeTruthy()
     expect(a.token, '两次轮换拿到了同一个令牌').not.toBe(b.token)
+    expect(a.pairingCode).toBe('spec-pairing-code')
+    expect(b.pairingCode).toBe('spec-pairing-code')
   })
 
   it('必须先 stop 再 sync：只 sync 的话服务在「已经在跑」时不会重启，旧会话就还活着', async () => {
@@ -92,6 +98,8 @@ describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
     await createRemoteAccessControl(f.deps).rotate()
     expect(f.log.indexOf('stop'), '轮换没有停服务 ⇒ 旧令牌换来的会话在 TTL 内仍然有效')
       .toBeLessThan(f.log.indexOf('sync'))
+    expect(f.log.indexOf('sync'), '配对码签发送到了停服之前，会被 stop() 当场作废')
+      .toBeLessThan(f.log.indexOf('issue'))
   })
 
   it('配置写失败时不动服务、不返回令牌（半开状态最危险：用户以为开了，其实没开）', async () => {
@@ -100,6 +108,7 @@ describe('rotate：生成令牌 + 打开开关 + 作废旧会话', () => {
     expect(r.ok).toBe(false)
     expect(r.error).toContain('写配置失败')
     expect(r.token, '写失败还把令牌返回去了（界面上会出现一个扫了没用的二维码）').toBeUndefined()
+    expect(r.pairingCode, '写失败不应该签发配对码').toBeUndefined()
     expect(f.log, '写失败却仍然停了服务/重绑').toEqual(['call:saveWechatConfig'])
   })
 

@@ -58,12 +58,18 @@ function deriveEncKey(rawKey: Buffer, salt: Buffer, keyFormat: string): Buffer {
  * @param rawDbDir - raw WeChat db_storage dir (from config db_dir).
  * @param decryptedDir - decrypted snapshot root (target mirrors db_storage).
  * @param onProgress - per-database progress callback (done/total/failed/message).
+ * @param onlyRel - **只解密这些 rel 路径**（`message/message_0.db` 这种键，与
+ *   {@link checkDecryptedIntegrity} 出来的 `file` 同构）。修复链路用它实现
+ *   「损坏哪个解哪个」：不传 = 全量解密（`立即解密` 原行为，逐字节不变）；
+ *   传了 = 别的库连读都不读，`total` 计数也随过滤后的集合走 —— 修复进度条
+ *   说的是「要修的这几个」，不是「全部 22 个库」。
  * @returns ok + success/failure counts (per-db failures never abort the run).
  */
 export async function decryptAllDbs(
   rawDbDir: string,
   decryptedDir: string,
   onProgress?: (done: number, total: number, failed: number, message: string) => void,
+  onlyRel?: readonly string[],
 ): Promise<{ ok: boolean; total: number; okCount: number; failed: Array<{ db: string; error: string }>; error?: string }> {
   if (!rawDbDir || !existsSync(rawDbDir)) {
     return {
@@ -92,10 +98,14 @@ export async function decryptAllDbs(
   // `total(ms)=4077/4175 秒、让出 0`，而 4.08e9/4.18e9 ≈ **2³²**，
   // 是 **32 位溢出**的读数，不是真实耗时（整轮墙钟上限才 180s）。
   const dbs = scanDbFiles(rawDbDir)
+  // 修复模式：只解损坏的那几个（键是 rel 路径，与 checkDecryptedIntegrity 的输出同构）。
+  // 过滤放在扫描之后而不是重新实现一遍遍历 —— 「解哪些文件」只许有一个遍历实现。
+  const wanted = onlyRel === undefined ? null : new Set(onlyRel)
+  const scope = wanted === null ? dbs : dbs.filter((db) => wanted.has(relative(rawDbDir, db).replace(/\\/g, '/')))
   const failed: Array<{ db: string; error: string }> = []
   let okCount = 0
   let done = 0
-  for (const db of dbs) {
+  for (const db of scope) {
     const rel = relative(rawDbDir, db).replace(/\\/g, '/')
     const target = join(decryptedDir, rel)
     const staged = target + '.decrypt_tmp'
@@ -121,8 +131,8 @@ export async function decryptAllDbs(
       failed.push({ db: rel, error: (e as Error).message })
     }
     done += 1
-    onProgress?.(done, dbs.length, failed.length, rel)
+    onProgress?.(done, scope.length, failed.length, rel)
     await new Promise<void>((resolve) => { setImmediate(resolve) })
   }
-  return { ok: failed.length === 0, total: dbs.length, okCount, failed }
+  return { ok: failed.length === 0, total: scope.length, okCount, failed }
 }

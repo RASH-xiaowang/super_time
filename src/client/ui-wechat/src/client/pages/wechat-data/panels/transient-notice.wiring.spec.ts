@@ -117,8 +117,13 @@ describe('L20 接线守卫（源码级；面板运行期行为未在浏览器验
     const files = readdirSync(HERE).filter(f => f.endsWith('.tsx')).sort()
     // 防空转：目录里确实扫到了面板（不然这条断言恒真）
     expect(files.length).toBeGreaterThan(20)
-    /** 允许仍持有 notice 槽位的例外：hooks.tsx 是公共实现本身。 */
-    const allowed = new Set(['hooks.tsx'])
+    /**
+     * 允许仍持有 notice 槽位的例外：**公共实现本身**。
+     * `hooks.tsx` 是 `useTransientNotice` 的住处；`use-action-notice.tsx` 是 W3-11.1 新增的
+     * 一次性回执 hook（`useActionNotice` + `ActionNoticeLine`），同样是实现而不是面板 ——
+     * 它必须自己管那个 state，否则「面板不许再写 setNotice/裸定时器」这条就没有落脚点。
+     */
+    const allowed = new Set(['hooks.tsx', 'use-action-notice.tsx'])
     const scanned = files.filter(f => !allowed.has(f))
     expect(scanned.length).toBeGreaterThan(20)
     expect(scanned.filter(f => readCode(f).includes('setNotice'))).toEqual([])

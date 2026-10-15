@@ -18,18 +18,18 @@ function uiEntryHtml(ctx) {
 }
 
 /**
- * 向所有窗口广播一个通道（`wechat:event` / `update:event` 共用）。
+ * 向可信主窗口发送一个通道（`wechat:event` / `update:event` 共用）。
  *
  * 主进程是唯一的事实来源，渲染层只是投影；进度类事件在 `update.js` 里已按 1% 阶梯节流，
  * 这里不再二次过滤。
  */
 function broadcastToWindows(ctx, channel, payload) {
-  for (const win of ctx.BrowserWindow.getAllWindows()) {
-    try {
-      win.webContents.send(channel, payload);
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
+  const win = ctx.getMainWindow();
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.send(channel, payload);
+  } catch {
+    /* 窗口可能刚销毁，忽略 */
   }
 }
 
@@ -37,10 +37,12 @@ function broadcastToWindows(ctx, channel, payload) {
  * 开主窗口。**返回**窗口对象，`mainWindow` 这个模块状态仍由 `main.js` 持有 ——
  * 单实例锁的「二次启动只唤起已有窗口」那段要在外层读到它。
  * @param {object} ctx - 见文件头；需要 `app` / `BrowserWindow` / `screen` / `fs` / `path` / `rootDir` / `env`。
+ *   可选 `entryHtml`：由 main.js 预先解析好的入口，IPC 信任 URL 必须和它同源同值。
  * @returns {Electron.BrowserWindow} 建好的窗口（尚未 show，等 `ready-to-show`）。
  */
 function createMainWindow(ctx) {
   const { app, BrowserWindow, screen, fs, path, rootDir, env } = ctx;
+  const entryHtml = ctx.entryHtml || uiEntryHtml(ctx);
   /**
    * 窗口图标。**打包态这个路径不存在**（`build/` 是 electron-builder 的 buildResources，
    * 不在 `files` 白名单里），于是 `icon` 为 undefined，Windows 会退回用 exe 内嵌的图标 ——
@@ -99,7 +101,7 @@ function createMainWindow(ctx) {
 
   // 调试：SUPERTIME_SKELETON=1 时加载 ?skeleton=1，Overview 强制展示骨架屏。
   const loadQuery = env.SUPERTIME_SKELETON === '1' ? { query: { skeleton: '1' } } : undefined;
-  win.loadFile(uiEntryHtml(ctx), loadQuery);
+  win.loadFile(entryHtml, loadQuery);
 
   // DevTools 按需开启：实测打开 DevTools 会额外拉起一个 renderer 进程并常驻
   // 约 200MB（独立窗口 + 自己的 V8 堆），因此不再默认打开。

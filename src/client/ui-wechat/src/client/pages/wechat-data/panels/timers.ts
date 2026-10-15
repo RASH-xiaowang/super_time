@@ -126,12 +126,26 @@ export function createNoticeController<T>(options: {
   const durationMs = options.durationMs ?? DEFAULT_NOTICE_MS
   const timer = createRestartableTimer({ run: () => { options.apply(null) }, delayMs: durationMs, ...(options.timer ? { timer: options.timer } : {}) })
   let disposed = false
+  /**
+   * 当前正显示着的那条（W3-11.9：toast 去重）。
+   *
+   * 为什么需要它：`flash` 每次都 `apply(value)`，于是**连着点两次同样的按钮**会把
+   * 同一条提示重新写一遍 —— 界面上看起来「闪了两下」，而且前一个倒计时被重置，
+   * 用户以为第二次点了什么新东西（「已复制」这种短提示最明显）。
+   * 判据是 **Object.is**：字符串/数字按值去重；对象每次都是新引用，天然不误伤
+   * （各面板的富提示是 `{kind,text}` 字面量，内容相同时也该重报 —— 那往往意味着
+   *  用户又真的做了一次操作）。
+   */
+  let shown: T | null = null
   return {
     flash(value: T, ms?: number): void {
       // 卸载后写 state 是最容易漏的一种：定时器被取消了，但事件回调（点击 / 异步返回）
       // 仍可能带着旧闭包进来。
       if (disposed) return
+      // 重复的同值提示只续时、不重写：避免「闪两下」与倒计时被无意义重置。
+      if (shown !== null && Object.is(shown, value)) { timer.restart(ms); return }
       options.apply(value)
+      shown = value
       timer.restart(ms)
     },
     hold(value: T): void {
@@ -140,11 +154,13 @@ export function createNoticeController<T>(options: {
       // （这正是改前手写版最典型的缺陷之一）。
       timer.cancel()
       options.apply(value)
+      shown = value
     },
     clear(): void {
       if (disposed) return
       timer.cancel()
       options.apply(null)
+      shown = null
     },
     dispose(): void {
       disposed = true

@@ -33,6 +33,7 @@ const settings = read(HERE, 'Settings.tsx')
 const state = read(HERE, 'settings-state.tsx')
 const preload = read(join(ROOT, 'preload.js'))
 const main = read(join(ROOT, 'main.js'))
+const remoteIpc = read(join(ROOT, 'src', 'backend', 'ipc-remote-access.js'))
 
 /** 收集真实的调用表达式名（`a.b(…)` → `a.b`，`f(…)` → `f`）。注释与字符串里的都不算。 */
 function callNames(src: string, file = 'x.tsx'): string[] {
@@ -89,7 +90,7 @@ describe('复用而不是另造：二维码走 clawbot-qr', () => {
   })
 })
 
-describe('令牌口径：明文只显示一次，常驻界面的是掩码', () => {
+describe('凭据口径：明文只显示一次，常驻界面的是掩码', () => {
   it('事实表里显示的是掩码字段，不是令牌原文', () => {
     expect(card, '事实表里没有显示令牌掩码').toContain('state.tokenMasked')
     // 令牌原文只允许来自 rotate() 的返回值（一次性），不许从状态查询里取
@@ -101,6 +102,12 @@ describe('令牌口径：明文只显示一次，常驻界面的是掩码', () =
     expect(card).toContain('只在这次生成后显示')
     expect(card, '没有提示「再看一次要轮换令牌」—— 用户会以为界面坏了')
       .toContain('轮换令牌')
+  })
+
+  it('二维码只拿配对码建设，rotate 返回的长期令牌不能塞进 UI', () => {
+    expect(card, '二维码没有使用配对码字段').toContain('r.value.pairingCode')
+    expect(card, '长期令牌字段出现在了界面路径里').not.toContain('r.value.token')
+    expect(card, '复制按钮没有使用配对码字段').toContain('qr.pairingCode')
   })
 
   it('关掉开关时作废二维码（服务都不监听了，留一个能扫的码只会让人以为还开着）', () => {
@@ -122,11 +129,12 @@ describe('桥接：三个动作都接上了，且浏览器态整块不渲染', (
     }
   })
 
-  it('main.js 注册了这四条，并且控制面走的是 createRemoteAccessControl', () => {
+  it('IPC 模块注册了这四条，并且控制面走的是 createRemoteAccessControl', () => {
     for (const ch of ['remote-access:state', 'remote-access:apply', 'remote-access:rotate', 'remote-access:toggle']) {
-      expect(main, `main.js 没有注册 ${ch}`).toContain(`'${ch}'`)
+      expect(remoteIpc, `ipc-remote-access.js 没有注册 ${ch}`).toContain(`'${ch}'`)
     }
-    expect(main, 'main.js 没有用控制面模块（轮换/开关的逻辑不该写在 main.js 里）')
+    expect(main, 'main.js 没有把远程访问控制通道交给 IPC 模块').toContain('registerRemoteAccessIpc')
+    expect(remoteIpc, 'IPC 模块没有用控制面模块（轮换/开关的逻辑不该写在 main.js 里）')
       .toContain('createRemoteAccessControl')
     // 写配置必须经后端（原子写 + 备份 + 密钥分流进 secrets.json 都在那一份实现里）
     const control = read(join(ROOT, 'src', 'backend', 'http-control.js'))
@@ -138,11 +146,18 @@ describe('桥接：三个动作都接上了，且浏览器态整块不渲染', (
     expect(card, '没有桥时卡片仍然渲染（会出一屏点了没反应的按钮）')
       .toMatch(/if \(!api\) return <React\.Fragment \/>/)
   })
+
+  it('SSR 下读取宿主桥不能直接碰 window（设置页离屏渲染会立刻崩）', () => {
+    expect(card, 'bridge() 缺少无 window 环境的提前返回（SSR 会抛 ReferenceError）')
+      .toContain("if (typeof window === 'undefined') return null")
+  })
 })
 
 describe('如实告知：防火墙与明文 HTTP 这两条不能从界面上消失', () => {
   it('写了「防火墙弹窗点了取消就连不上」与手动放行命令', () => {
     expect(card).toContain('netsh advfirewall firewall add rule')
+    expect(card).toContain('state?.configuredPort ?? 5032')
+    expect(card).toContain('state?.running && state.port > 0 ? state.port')
     expect(card, '没有说清「同一个 Wi-Fi」这个前提').toContain('同一个 Wi-Fi')
   })
 

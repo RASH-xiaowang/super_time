@@ -90,6 +90,11 @@ describe('parseFavParts：资源条目', () => {
     expect(parseFavParts(item('datatype="2" dataid="AABBCC"', ''))[0]?.md5).toBe('aabbcc')
   })
 
+  it('dataitem 文本字段的 CDATA 外壳也要剥掉（与 parseFavXml 同一条口径）', () => {
+    const [part] = parseFavParts(item('datatype="2"', '<fullmd5><![CDATA[AABB]]></fullmd5>'))
+    expect(part?.md5).toBe('aabb')
+  })
+
   it('链接优先 stream_weburl，其次 url，并把 &amp; 还原', () => {
     const a = parseFavParts(item('datatype="5"', '<stream_weburl>https://x/a?u=1&amp;v=2</stream_weburl><url>https://ignored</url>'))
     expect(a[0]).toMatchObject({ kind: 'link', url: 'https://x/a?u=1&v=2' })

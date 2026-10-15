@@ -1,4 +1,15 @@
 import type { DbKeyResult, ImageKeyResult } from './types.ts';
+/** `keys.json` 里自动获取结果所在的全局槽（老库与无归属记录用）。 */
+export declare const DEFAULT_KEY_SLOT = "default";
+/**
+ * 自动数据库密钥该写进哪个账号槽（W2-2.2 的 db_key 侧）。
+ *
+ * 与图片密钥同因：db_key 也是每账号的，写全局槽会让后一个账号覆盖前一个。能确定当前
+ * 账号就写自己的槽，确定不了（老别名目录、没有 config/all_keys）就继续写 `default`。
+ * @param decrypted - 解密数据根，用于解析当前账号。
+ * @returns 槽名；无法归属时是 `'default'`。
+ */
+export declare function dbKeySlotFor(decrypted: string): string;
 /**
  * Find the running WeChat main-process pid via tasklist.
  * @returns the first matching pid, or null.
@@ -61,9 +72,9 @@ export declare function kvcommCacheDir(): string;
  * @param sourceDirName - 内存扫描路径给出的账号目录名（可空）。
  * @returns 槽名；无法归属时是 `'default'`。
  */
+/** 把一个候选账号名归一化成槽名；不是 wxid 形状就退回全局槽。 */
+export declare function accountKeySlotFor(candidate?: string): string;
 export declare function imageKeySlotFor(derivedWxid?: string, sourceDirName?: string): string;
-/** `keys.json` 里自动获取结果所在的全局槽（老库与无归属记录用）。 */
-export declare const DEFAULT_KEY_SLOT = "default";
 /**
  * Recover the image key: kvcomm-cache derivation first (WeChat 4.x on-disk
  * cache, no injection), then the V2-verified process memory scan.
@@ -74,12 +85,3 @@ export declare function fetchImageKey(opts?: {
     accountDir?: string;
     pid?: number;
 }): Promise<ImageKeyResult>;
-/**
- * Get stored key info (db key presence + image key presence).
- * @returns a summary of the default slot's stored keys.
- */
-export declare function getKeysInfoSummary(): {
-    hasDbKey: boolean;
-    hasImageKey: boolean;
-    updatedAt?: string;
-};

@@ -14,12 +14,31 @@ import { CAT_LABEL, fileDisplayName, fileKey, fileSource } from './files-naming.
 import { gridRowCount, gridRowRange } from './files-grid.ts'
 import { rememberThumb } from '../utils/thumb-cache.ts'
 import { apiExportCsv, apiGetFileImageDataUrl, apiGetFiles, apiGetMediaAssets } from '../api.ts'
+import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { FileItem } from '@deepseek-ai/dsh-wechat-data/types'
 import type { MediaAssetDuplicate } from '@deepseek-ai/dsh-wechat-data/types'
 import { Dialog, Drawer, EmptyMaybeSyncing, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes, fmtDateTimeSec, fmtMonthDaySec } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+
+/**
+ * 文件面板的「导出」动作（W3-11.1）。
+ *
+ * 抽成模块函数而不是留在组件里：结果经 `useActionNotice` 的一行回执给出（不再是阻塞式
+ * `window.alert`），而这panel的函数体受 `function-size-ratchet.spec.ts` 的棘轮管着 ——
+ * 长一点点的组件函数都过不去，动作本身又没有组件状态可依赖，放模块里最合适。
+ * @param flash - 回执写入（由 `useActionNotice()` 给出）。
+ */
+async function exportFilesCsv(flash: (text: string) => void): Promise<void> {
+  try {
+    const r = await apiExportCsv({ kind: 'files' })
+    flash(`已导出 ${r.count} 个文件 → ${r.path}`)
+  } catch (e) {
+    flash('导出失败: ' + (e as Error).message)
+  }
+}
 
 /** 格位最小宽度，与 `.fileGrid` 的 `minmax(200px, 1fr)` 保持一致（改一处不改另一处就会列数算错）。 */
 const FILE_MIN_COL_PX = 200
@@ -200,14 +219,9 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
       .sort((a, b) => b.items.length * b.total - a.items.length * a.total)
   }, [visible])
 
-  const doExport = async (): Promise<void> => {
-    try {
-      const r = await apiExportCsv({ kind: 'files' })
-      window.alert(`已导出 ${r.count} 个文件 → ${r.path}`)
-    } catch (e) {
-      window.alert('导出失败: ' + (e as Error).message)
-    }
-  }
+  const { notice: exportNotice, flash: flashExport } = useActionNotice()
+
+  const doExport = (): void => { void exportFilesCsv(flashExport) }
 
   return (
     <div className={css.panel}>
@@ -222,11 +236,12 @@ export function FilesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: numb
         actions={(
           <>
             <button type="button" className={css.catBtn} onClick={refresh}>刷新</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }}>导出</button>
+            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} {...desktopActionProps()}>{desktopAction() ? '导出（仅电脑）' : '导出'}</button>
             <button type="button" className={css.catBtn} data-active={dupOpen || undefined} onClick={() => { setDupOpen(v => !v) }}>查找重复 ({dupTotal > 0 ? dupTotal : dupGroups.length})</button>
           </>
         )}
       />
+      <ActionNoticeLine notice={exportNotice} />
       <Toolbar
         left={(
           <SearchInput value={search} onChange={(v) => { setSearch(v) }} placeholder="搜索文件名 / MD5" ariaLabel="搜索文件" />

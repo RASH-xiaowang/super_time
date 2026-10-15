@@ -212,6 +212,34 @@ describe('wxgf 转码：DLL 契约与边界', () => {
     expect(at(seen, 0).opt.readInt32LE(0), '前两次保持 mode 0').toBe(0)
   })
 
+  it('⑧b 原生报告长度超过当前缓冲时先扩容重试，不截断出坏 JPEG', () => {
+    const seen: number[] = []
+    const jpeg = tinyJpeg(32, 16)
+    const overflowThenFits: WxgfNative = {
+      label: 'fake-overflow-retry',
+      run(input, output, outSize) {
+        seen.push(output.length)
+        if (output.length < 64 * 1024 * 1024) {
+          const reported = 5 * 1024 * 1024
+          outSize.writeInt32LE(reported, 0)
+          return { ret: 0, size: reported }
+        }
+        jpeg.copy(output, 0)
+        outSize.writeInt32LE(jpeg.length, 0)
+        return { ret: 0, size: jpeg.length }
+      },
+    }
+    const t = createWxgfTranscoder(overflowThenFits, null)
+    const r = t(wxgfPayload())
+    expect('bytes' in r, '报告溢出但 64MB 缓冲能装下时必须重试成功').toBe(true)
+    expect(seen.length, '第二次就应命中上限缓冲，不再走 mode 3').toBe(2)
+    expect(at(seen, 0)).toBeLessThan(at(seen, 1))
+    expect(at(seen, 1)).toBe(64 * 1024 * 1024)
+    if ('bytes' in r) {
+      expect([...r.bytes.subarray(-2)]).toEqual([0xff, 0xd9])
+    }
+  })
+
   it('⑭ 只有 mode 3 能解的变体：前两次失败、第三次成功（不再误报失败）', () => {
     const jpeg = tinyJpeg(32, 16)
     const modeOnly3: WxgfNative = {

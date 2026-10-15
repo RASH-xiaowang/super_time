@@ -1,5 +1,5 @@
 import type { RemoteImageResult } from '../query/remote-image.ts';
-import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
+import { AvatarResult, DecryptStatus, EmoticonsSnapshot, EmoticonDataUrlsResult, FilesSnapshot, ImageDataUrlResult, MapGeoJsonResult, OperationCategory, OperationStatus, OriginalBatchResult, OriginalFetchPlan, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult } from '../types.ts';
 /** 处理器需要的宿主能力（由 `WechatDataGateway` 组装；getter 形式保证读到最新目录）。 */
 export interface MediaRemoteCtx {
     dirs: () => {
@@ -20,7 +20,7 @@ export interface MediaRemoteCtx {
     warmDecodedImages: (decryptedDir: string, decodedDir: string, baseDir: string, items: ReadonlyArray<{
         username: string;
         localId: number;
-    }>, aesKey: string | undefined, xorKey: number) => void;
+    }>, aesKey: string | undefined, xorKey: number) => Promise<void>;
 }
 /** 批量取图的返回条目（`url`/`error` 与单张入口同义）。 */
 export interface ImageBatchItem {
@@ -55,7 +55,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     getVoiceDataUrl(options: {
         username: string;
         localId: number;
-    }): VoiceDataUrlResult;
+    }): Promise<VoiceDataUrlResult>;
     getVideoInfo(options: {
         username: string;
         localId: number;
@@ -70,20 +70,20 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     getImageDataUrl(options: {
         username: string;
         localId: number;
-    }): ImageDataUrlResult;
+    }): Promise<ImageDataUrlResult>;
     getImageDataUrlsBatch(options: {
         items: Array<{
             username: string;
             localId: number;
         }>;
-    }): {
+    }): Promise<{
         items: ImageBatchItem[];
-    };
+    }>;
     /** 密钥只在 `resolveImageKeyPair` 一处判定；CDN/本机两条路见 `snsImageWithCdnFirst`。 */
     getSnsImageDataUrl(options: SnsImageOptions): Promise<ImageDataUrlResult>;
     getFileImageDataUrl(options: {
         md5: string;
-    }): ImageDataUrlResult;
+    }): Promise<ImageDataUrlResult>;
     getEmoticonDataUrl(options: {
         md5: string;
         emojiUrl?: string;
@@ -142,28 +142,18 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
      * @param options - `limit`（0/不传 = 本次不限）、`concurrency`（默认 4）。
      * @returns 计数/字节/耗时/逐条失败原因；`blocked` 非空表示一张都没发请求。
      */
-    fetchOriginalImagesBatch(options: {
+    fetchOriginalImagesBatch(options?: {
         limit?: number;
         concurrency?: number;
     }): Promise<OriginalBatchResult>;
-    /**
-     * 远程图片代理（M23）：渲染层要看一张只存在于微信 CDN 上的图时，改由后端取回 + 落盘缓存。
-     *
-     * 为什么这一条值得单独存在：卡片缩略图 / 朋友圈远程图 / 视频号封面这些地址今天**由渲染层
-     * 直接向消息 XML 里的 https 地址发请求** —— 不进操作记录、没有缓存（同一次滚动反复要同一张）。
-     * 把它收到后端之后那两件事才成立，而 CSP `img-src` 里的 `https:` 通配也才可能拿掉。
-     *
-     * 只代取**腾讯系主机**（判据与原因见 `query/cdn-hosts.ts`）：站外图床会被拒，界面上表现为
-     * 没有封面而不是破图。这条口径同时写进隐私声明，别让它成为只在代码里的隐藏规则。
-     * @param options - `urls`: 一批图片地址（去重后最多 40 张，超出的条目回错误让调用方分批）。
-     * @returns `{items}`：每条带原请求的 `url`、可画的 `dataUrl`（或 `error`）、以及这次是否
-     *   来自本机缓存。
-     */
     getRemoteImages(options: {
         urls?: string[];
     }): Promise<{
         items: RemoteImageResult[];
     }>;
+    getMapGeoJson: (options?: {
+        urls?: string[];
+    }) => Promise<MapGeoJsonResult>;
     getMessageFile(options: {
         fileName: string;
         size?: number;

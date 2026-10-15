@@ -18,7 +18,7 @@
  *    （64 位），查询时先按汉明距离粗筛出 candidatePool 条，再对幸存者做精确余弦。
  *    SimHash 由固定种子随机超平面生成，索引与查询两侧一致，无需额外依赖。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../db-open.ts'
 import { withDb } from '../db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -265,7 +265,7 @@ const inflightVectorBuilds = new Map<string, { promise: Promise<VectorBuildResul
 export function buildVectorIndex(
   decryptedDir: string,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<VectorBuildResult> {
   const key = vectorDbPath(decryptedDir)
   const slot = inflightVectorBuilds.get(key)
@@ -300,7 +300,7 @@ export function buildVectorIndex(
 async function runBuildVectorIndex(
   decryptedDir: string,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<VectorBuildResult> {
   const started = Date.now()
   const src = searchIndexPath(decryptedDir)
@@ -420,6 +420,8 @@ async function runBuildVectorIndex(
     const batchSize = Math.min(Math.max(Number.isFinite(rawB) ? Math.floor(rawB) : 1, 1), 256)
     let next = 0
     let failure: unknown = null
+    /** W3-11.5：被取消（用户点了「停止」）。此时一行都没写 ⇒ 旧索引原样。 */
+    let canceled = false
     /**
      * 阶段一算出来的向量：**截断文本 → 向量字节与 SimHash**。
      *
@@ -434,6 +436,10 @@ async function runBuildVectorIndex(
     const worker = async (): Promise<void> => {
       for (;;) {
         if (failure) return
+        // W3-11.5：取消——在**认领下一批之前**查。
+        // 好处是「一行都没写」这一既有契约天然成立（阶段二在全部批次之后），
+        // 所以取消之后旧索引原样保留，不需要额外回滚。
+        if (opts.signal?.aborted === true) { canceled = true; return }
         const start = next
         next += batchSize
         if (start >= texts.length) return
@@ -474,6 +480,10 @@ async function runBuildVectorIndex(
     await Promise.all(Array.from({ length: concurrency }, () => worker()))
     // 阶段一失败：一行都没写（事务还没开），旧索引原样保留
     if (failure) throw failure
+    // W3-11.5：取消**不是失败**：阶段二压根没开，旧索引一行未动。
+    if (canceled) {
+      return { status: 'cancelled', rows: done.size, embedded: 0, embed_calls: embedCalls, elapsed_ms: Date.now() - started, message: '已停止构建，旧索引保持原样' }
+    }
 
     // 阶段二是同步段，先让出一次，避免紧接在最后一批网络请求之后立刻长时间占住事件循环
     await yieldToLoop()

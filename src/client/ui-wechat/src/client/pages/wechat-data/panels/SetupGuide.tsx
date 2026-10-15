@@ -15,7 +15,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { apiDetectWechatAccounts, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus } from '../api.ts'
+import { apiDetectWechatAccounts, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, runtimeCapabilities } from '../api.ts'
 import {
   SETUP_OPTIONAL_STEP,
   SETUP_STEPS,
@@ -146,6 +146,11 @@ export function SetupGuide({
   open: boolean
   onOpenStep: (key: string) => void
 }): React.JSX.Element | null {
+  // 浏览器态直接不渲染：这张卡的全部作用是「指路到设置里的配置向导」，而那一整块在手机上
+  // 不存在（见 settings-browser.tsx）；留着一个指向空处的浮卡，比没有更让人困惑。
+  // 放在所有 hook 之前是安全的 —— 环境在一个进程生命周期内不会从浏览器变成桌面，
+  // 而下面那几个取数调用在手机上**全部**会被远程白名单拒掉。
+  if (runtimeCapabilities().isBrowser) return null
   const [facts, setFacts] = useState<SetupFacts>(() => emptyFacts())
   const [state, setState] = useState<GuideState>(() => readGuideState())
   /** 取过一次数才敢判定「已完成」，否则首帧的空事实会把已配好的机器误判成未配置。 */

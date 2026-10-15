@@ -109,14 +109,19 @@ describe('H14：隐私声明 ↔ 出网点', () => {
   it('文档列出的每一类出网主机都能在代码里找到', () => {
     const sources = {
       map: [
-        readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'world-map-data.ts'), 'utf8'),
+        readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'map-geo.ts'), 'utf8'),
         readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'ChinaMap.tsx'), 'utf8'),
         readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels', 'province-map-data.ts'), 'utf8'),
       ],
       whisper: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'whisper.ts'), 'utf8'),
-      llm: readFileSync(join(ROOT, 'src', 'backend', 'wechat-host.js'), 'utf8'),
+      llm: [
+        readFileSync(join(ROOT, 'src', 'backend', 'llm-bridge.js'), 'utf8'),
+        // LLM 默认值单源化后，默认出网主机只住在 shared/llm-defaults.json；
+        // 不能为了这条扫描把字面地址抄回桥接层。
+        readFileSync(join(ROOT, 'src', 'shared', 'llm-defaults.json'), 'utf8'),
+      ],
       // ClawBot 绑定通道（2026-10-12 接入）：主机在代码里写死，文档必须逐字列出。
-      ilink: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'clawbot-ilink.ts'), 'utf8'),
+      ilink: readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'clawbot', 'clawbot-ilink.ts'), 'utf8'),
     }
     for (const [kind, src] of Object.entries(sources)) {
       const hosts = hostsIn(src)
@@ -245,15 +250,16 @@ describe('H14：隐私声明 ↔ 出网点', () => {
   })
 
   /**
-   * v13（2026-10-14）：**入站监听面**必须被如实登记。
+   * v13/v14（2026-10-14/15）：**入站监听面**及其访问控制必须被如实登记。
    *
    * 为什么单独立一组判据：前面所有条目守的都是「出网」（本机向外发请求），
-   * 而 v13 首次引入了反方向 —— 本机**监听端口**、局域网里别的设备连进来读数据。
+   * 而 v13 首次引入了反方向 —— 本机**监听端口**、局域网里别的设备连进来读数据；
+   * v14 把登录凭据从长期令牌改为一次性配对码。
    * 「我的聊天会不会被这台机器之外的东西看到」这个问题，入站方向的答案更直接，
    * 所以它必须和出网点一样逐条写清，而且**文档说的默认值必须与代码里的默认值一致**
    * （RELEASE-PLAN 的教训②：文档最危险的不是缺失而是过期）。
    */
-  it('文档登记了入站监听面：默认关闭、持令牌、白名单、且写明是明文 HTTP', () => {
+  it('文档登记了入站监听面：默认关闭、持配对码、白名单、且写明是明文 HTTP', () => {
     expect(doc, '第四节少了入站监听那一节（H）').toMatch(/### H\. 入站监听/)
     // 默认关闭是这一条最重要的性质：翻成默认开启就等于偷偷监听
     expect(doc, '入站那一节没写明「默认关闭」').toContain('默认关闭')
@@ -266,6 +272,13 @@ describe('H14：隐私声明 ↔ 出网点', () => {
     }
     // 防火墙这一条要如实说明「应用没有管理员权限、不能替你加规则」
     expect(doc, '入站那一节没如实说明防火墙规则要用户自己放行').toMatch(/netsh advfirewall/)
+  })
+
+  it('文档如实描述 v14 的一次性配对码：长期 token 不再进 QR/URL/UI', () => {
+    for (const expected of ['一次性配对码', '5 分钟', '最多 5 次试错', '?t=<配对码>', '不进二维码']) {
+      expect(doc, `第四节 H 没有写明「${expected}」`).toContain(expected)
+    }
+    expect(doc, '长期 api_token 仍被描述为会进入二维码/地址栏').not.toContain('?t=<令牌>')
   })
 
   it('文档说「默认关闭」，代码里的默认值就必须是关（两向都守）', () => {

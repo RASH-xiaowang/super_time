@@ -2,7 +2,7 @@
  * Overview (数据总览) aggregate stats over st_control's decrypted DBs.
  * Mirrors the Rust get_wechat_data_overview: one-screen asset summary.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogSig } from './meta.ts'

@@ -103,8 +103,12 @@ describe('图片密钥的单一解析点', () => {
     const impl = strip(readFileSync(join(SRC, 'query', 'image-key.ts'), 'utf8'))
     expect(impl.includes("getAccountKeysFromStore("), 'keys.json 回退必须真的存在（这条链路的全部意义）').toBe(true)
     expect(impl.includes('resolveSelfUsername('), '回退必须校验密钥属于当前账号').toBe(true)
-    // 反向守卫：取用库存密钥之前必须先过归属判定（放行只允许发生在「证据不足」那条分支上）
-    expect(impl.includes('!storedKeyOwnedBySelf(stored, decrypted)'),
-      '库存密钥必须在归属判定之后才被取用').toBe(true)
+    // 反向守卫：取用库存密钥之前必须先过归属判定（放行只允许发生在「证据不足」那条分支上）。
+    // 2026-10-11（W2-2.2）改成多槽查找：判定从「一次性 !storedKeyOwnedBySelf(stored, …)」变成
+    // 循环里 `|| !storedKeyOwnedBySelf(cand, …)` 后**跳过这一槽**。形状变了、语义没变
+    // （仍然「不属于我就当没有」），所以这里按**结构**判，而不是按某个变量名判 ——
+    // 谁把归属判定从取用路径上挪走或删掉，这条立刻红。
+    expect(impl.includes('storedKeyOwnedBySelf('), '库存密钥必须在归属判定之后才被取用').toBe(true)
+    expect(/if\s*\([^)]*storedKeyOwnedBySelf\(/.test(impl), '归属判定的结果必须进入取用条件（不是算完就扔）').toBe(true)
   })
 })

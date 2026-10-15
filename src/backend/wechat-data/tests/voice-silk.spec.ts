@@ -11,16 +11,20 @@
  * 错误信息取自 `res.error`，也证明执行确实走到了写临时文件之后那一步（否则下面那条
  * 「已清理」就是空转）。
  *
- * **未覆盖**：`spawnSync` 的 120s 上界。要验它得有一个会挂起的假解码器，单测里等 120 秒
- * 不现实（这个上界是兜「坏输入把后端 10 分钟调用窗口用光」，不是精度要求）。
+ * 解码器已经迁移到异步 `spawn`。这里额外覆盖：120s 上界（用可注入短超时验证）、
+ * 并发临时文件名不再因「长度取模」碰撞。
  *
  * @vitest-environment node
  */
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { silkToWav } from '../src/query/voice.ts'
+
+const child = vi.hoisted(() => ({ spawn: vi.fn() }))
+vi.mock('node:child_process', () => ({ spawn: child.spawn }))
 
 const scratch: string[] = []
 afterEach(() => {
@@ -32,6 +36,7 @@ const PIN = 'DSH_WECHAT_SILK_BIN'
 let saved: string | undefined
 beforeEach(() => {
   saved = process.env[PIN]
+  child.spawn.mockReset()
 })
 afterEach(() => {
   if (saved === undefined) delete process.env[PIN]
@@ -49,24 +54,74 @@ function pinMissingExe(): void {
   process.env[PIN] = join(newDir(), 'missing', 'wx_silk.exe')
 }
 
+/** 每个用例一个可控的假子进程。 */
+function fakeChild(kind: 'error' | 'success' | 'timeout'): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: ReturnType<typeof vi.fn> } {
+  const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: ReturnType<typeof vi.fn> }
+  proc.stdout = new EventEmitter()
+  proc.stderr = new EventEmitter()
+  proc.kill = vi.fn()
+  if (kind === 'error') {
+    queueMicrotask(() => proc.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })))
+  } else if (kind === 'success') {
+    queueMicrotask(() => {
+      const wavPath = child.spawn.mock.calls.at(-1)?.[1]?.[2]
+      if (typeof wavPath !== 'string') {
+        proc.emit('error', new Error('测试桩拿不到 wav 路径'))
+        return
+      }
+      writeFileSync(wavPath, 'WAVDATA')
+      proc.emit('close', 0)
+    })
+  }
+  return proc
+}
+
 describe('silkToWav：起不来时报真实病因，且不留临时文件', () => {
-  it('解码器不存在时错误信息带 ENOENT，而不是「解码器退出码 null」', () => {
+  it('解码器不存在时错误信息带 ENOENT，而不是「解码器退出码 null」', async () => {
     pinMissingExe()
-    const res = silkToWav(Buffer.from('not a silk stream'), join(newDir(), 'voice.wav'))
+    child.spawn.mockImplementation(() => fakeChild('error'))
+    const res = await silkToWav(Buffer.from('not a silk stream'), join(newDir(), 'voice.wav'))
     expect(res.ok).toBe(false)
     expect(String(res.error).toLowerCase()).toContain('enoent')
     // 防回退：只报退出码会把「缺二进制」和「音频坏了」混成同一条日志
     expect(String(res.error)).not.toContain('退出码')
   })
 
-  it('临时 .silk 用完即删（原先会在缓存目录里积压）', () => {
+  it('临时 .silk 用完即删（原先会在缓存目录里积压）', async () => {
     pinMissingExe()
+    child.spawn.mockImplementation(() => fakeChild('error'))
     const dir = newDir()
-    const res = silkToWav(Buffer.alloc(64, 1), join(dir, 'voice.wav'))
+    const res = await silkToWav(Buffer.alloc(64, 1), join(dir, 'voice.wav'))
     expect(res.ok).toBe(false)
-    // 这条是防空转的见证：只有真的走到了 spawnSync 才会拿到 ENOENT，
-    // 而 writeFileSync 排在 spawnSync 之前 ⇒ 临时文件确实被创建过。
+    // 这条是防空转的见证：只有真的走到了 spawn 才会拿到 ENOENT，
+    // 而 writeFile 排在 spawn 之前 ⇒ 临时文件确实被创建过。
     expect(String(res.error).toLowerCase()).toContain('enoent')
     expect(readdirSync(dir).filter((f) => f.endsWith('.silk'))).toEqual([])
+  })
+
+  it('超时上界生效：挂起的解码器会被 kill 并返回可读错误', async () => {
+    pinMissingExe()
+    const proc = fakeChild('timeout')
+    child.spawn.mockImplementation(() => proc)
+    const res = await silkToWav(Buffer.alloc(64, 1), join(newDir(), 'voice.wav'), { timeoutMs: 10 })
+    expect(res.ok).toBe(false)
+    expect(String(res.error)).toContain('超时')
+    expect(proc.kill).toHaveBeenCalledTimes(1)
+  })
+
+  it('同进程并发同长度语音不再共用临时文件名', async () => {
+    pinMissingExe()
+    const tempPaths: string[] = []
+    child.spawn.mockImplementation((_bin: string, args: string[]) => {
+      if (typeof args[1] === 'string') tempPaths.push(args[1])
+      return fakeChild('success')
+    })
+    const wav = join(newDir(), 'same.wav')
+    const results = await Promise.all([
+      silkToWav(Buffer.alloc(64, 1), wav),
+      silkToWav(Buffer.alloc(64, 2), wav),
+    ])
+    expect(results.every((r) => r.ok)).toBe(true)
+    expect(new Set(tempPaths).size).toBe(2)
   })
 })

@@ -319,3 +319,16 @@ export interface VideoInfoResult {
     videoPath?: string;
     error?: string;
 }
+/**
+ * Backend-proxied public map GeoJSON result.
+ *
+ * `data` 是未经业务建模的 GeoJSON：渲染层只把它交给 ECharts，后端只负责
+ * 白名单 + 取回 + 首 JSON 解析。用 union 而不是可选字段，成功与失败不会同时存在。
+ */
+export type MapGeoJsonResult = {
+    ok: true;
+    data: unknown;
+} | {
+    ok: false;
+    error: string;
+};

@@ -30,6 +30,11 @@ export interface DataColumn<T> {
   sortValue?: (row: T) => string | number | undefined
   align?: 'left' | 'center' | 'right'
   className?: string
+  /**
+   * 列宽（px）。table-layout: fixed 下经 colgroup 兑现；**不传 = 弹性列**，
+   * 与其余未指定列平分剩余宽度（clawbot B1：正文列靠它吃掉全部余量）。
+   */
+  width?: number
 }
 
 /**
@@ -41,9 +46,11 @@ export interface DataColumn<T> {
  * @param loading - 显示骨架行。
  * @param emptyTitle - 空态标题。
  * @param onRowClick - 行点击回调（有值时整行可点）。
+ * @param scroll - 本包装是否自建滚动（默认 true = 既有 62vh 行为；false = 调用方自当滚动容器）。
+ * @param minWidth - 表格最小宽度 px（默认 640 = .table 的 CSS 值；0 = 不设下限）。
  * @returns 表格元素。
  */
-export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, skeletonRows = 8 }: {
+export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTitle = '暂无数据', emptyDesc, onRowClick, skeletonRows = 8, scroll = true, minWidth = 640 }: {
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
   getRowId: (row: T, index: number) => string
@@ -52,8 +59,21 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   emptyDesc?: string
   onRowClick?: (row: T) => void
   skeletonRows?: number
+  /**
+   * 本包装是否自建滚动（默认 true = 既有行为：.tableWrap 带 62vh 上限）。
+   * 传 false = 调用方自己当唯一滚动容器（clawbot B0：面板内只准一个滚动容器，
+   * 嵌套滚动会双滚动条 + 滚动手感断裂），包装退成静态。
+   */
+  scroll?: boolean
+  /** 表格最小宽度（px，默认 640 = .table 的 CSS 值；传 0 = 不设下限）。 */
+  minWidth?: number
 }): React.JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([])
+  /** scroll=false 时包装不滚；minWidth 与 CSS 默认值不同时才写行内样式（其余面板零影响）。 */
+  const wrapClass = scroll ? tableCss.tableWrap : tableCss.tableWrapStatic
+  const tableStyle = minWidth !== 640 ? { minWidth: `${minWidth}px` } : undefined
+  /** 有任一列显式宽度时才渲染 colgroup（table-layout: fixed 只认 col/首行，类名不兑现宽度）。 */
+  const hasWidths = columns.some((c) => c.width !== undefined)
   const colDefs = useMemo<Array<ColumnDef<T>>>(
     () => columns.map((col): ColumnDef<T> => {
       const base: ColumnDef<T> = {
@@ -89,8 +109,13 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
   })
   if (loading && rows.length === 0) {
     return (
-      <div className={tableCss.tableWrap}>
-        <table className={tableCss.table} aria-busy="true">
+      <div className={wrapClass}>
+        <table className={tableCss.table} style={tableStyle} aria-busy="true">
+          {hasWidths && (
+            <colgroup>
+              {columns.map((col) => <col key={col.id} style={col.width !== undefined ? { width: `${col.width}px` } : undefined} />)}
+            </colgroup>
+          )}
           <thead>
             <tr>{columns.map(col => <th key={col.id}>{col.header}</th>)}</tr>
           </thead>
@@ -111,8 +136,13 @@ export function DataTable<T>({ columns, rows, getRowId, loading = false, emptyTi
     return <EmptyState title={emptyTitle} desc={emptyDesc} />
   }
   return (
-    <div className={tableCss.tableWrap}>
-      <table className={tableCss.table}>
+    <div className={wrapClass}>
+      <table className={tableCss.table} style={tableStyle}>
+        {hasWidths && (
+          <colgroup>
+            {columns.map((col) => <col key={col.id} style={col.width !== undefined ? { width: `${col.width}px` } : undefined} />)}
+          </colgroup>
+        )}
         <thead>
           {table.getHeaderGroups().map(hg => (
             <tr key={hg.id}>

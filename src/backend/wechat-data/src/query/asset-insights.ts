@@ -2,12 +2,12 @@
  * Favorites + emoticon asset insights: favorite counts by type/year, custom
  * and store emoticon counts, and top-used emoticon md5s from message shards.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
-import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
 import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { AssetInsightsSnapshot } from '../types.ts'
 import { favTypeLabel } from './favorites.ts'
@@ -131,7 +131,7 @@ export async function queryAssetInsights(decryptedDir: string): Promise<AssetIns
   ].join('|')
   // 2026-09-28：由同步 `cachedBySig` 换成 async 版 —— 冷算实测 155ms 且**一次都不让出**
   // （真实数据 `working/probe-stall.txt`，是当时"整段独占"清单里最长的一个）。
-  return cachedBySigAsync('asset-insights:' + decryptedDir, sig, () => computeAssetInsights(decryptedDir), 30_000)
+  return cachedBySigAsync('asset-insights:' + decryptedDir, sig, () => computeAssetInsights(decryptedDir), INSIGHTS_TTL_MS)
 }
 
 async function computeAssetInsights(decryptedDir: string): Promise<AssetInsightsSnapshot> {

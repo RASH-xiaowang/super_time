@@ -15,6 +15,10 @@
  * 夹具说明：本机真实向量库是**空的**，所以合成 N 行。为什么 `vec` 只放 16 字节而不按真实的 3KB：
  * `COUNT(*)` 走 `idx_vectors_doc` 覆盖索引（不回表），成本由**行数**决定、与 blob 大小几乎无关
  * （本轮同时测了「显式 COUNT」与「覆盖索引」两档，见输出）。
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'

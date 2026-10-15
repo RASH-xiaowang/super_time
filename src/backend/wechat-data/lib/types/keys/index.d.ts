@@ -10,5 +10,5 @@ export { Isaac64 } from './isaac64.ts';
 export { scanImageKeyOnce, iterMemoryAesCandidates, findVerifiedAesKeyInChunk, type ProcessMemoryKeyMatch } from './image-key-memory-scan.ts';
 export { cleanWxid, deriveImageKeys, verifyAesKey, detectImageFormat, inferXorKeyFromV2Tails, scanV2Templates, scanV2TemplatesAsync, scanV2TemplatesSteps, trustedXorForVerifiedAesKey, resolveLocalImageKey, type DerivedImageKeys, type ImageKeyResolution, type TemplateScanResult, type V2Template, } from './image-key-resolver.ts';
 export { loadAccountKeysStore, getAccountKeysFromStore, upsertAccountKeysInStore, removeAccountKeysFromStore, keyStorePath, } from './key-store.ts';
-export { findWechatPid, scanDllInternalKey, fetchDbKey, fetchImageKey, getKeysInfoSummary, } from './service.ts';
+export { findWechatPid, scanDllInternalKey, fetchDbKey, fetchImageKey, } from './service.ts';
 export type { DbKeyResult, ImageKeyResult, KeyStore, StoredAccountKeys } from './types.ts';

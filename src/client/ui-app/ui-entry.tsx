@@ -12,9 +12,8 @@ import './titlebar.css'
 import './scrollbars.css'
 // 手机浏览器的视口口径（dvh / 安全区 / 可选中文字）。桌面端不受影响，理由见该文件头注。
 import './mobile-viewport.css'
-import { setDirectoryPicker, setWechatRemote } from '../ui-wechat/src/client/pages/wechat-data/api.ts'
-import { WechatDataPanel } from '../ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx'
-import { getOpen, openWechat, subscribeOpen } from '../ui-wechat/src/client/wechat-state.ts'
+import { getOpen, openWechat, setCapabilities, setDirectoryPicker, setWechatRemote, subscribeOpen, WechatDataPanel } from '@deepseek-ai/dsh-client-ui-wechat/host'
+import type { ElectronApi, WechatRemote } from '@deepseek-ai/dsh-client-ui-wechat/host'
 import { OnboardingShell } from './onboarding/OnboardingShell.tsx'
 import { loadOnboardingState, resetOnboarding } from './onboarding/store.ts'
 import { shouldSkipGates } from './debug-gates.ts'
@@ -47,31 +46,37 @@ import { BrowserSession } from './browser-gate.tsx'
  * （失败方向是「少几个原生按钮」，而不是「去调一个不存在的桥然后抛」）。
  */
 function installRemote(): void {
+  /**
+   * 能力表注入给渲染层（M9）：面板只读这一份，不再各自 `window.electronAPI?.xxx` 探桥。
+   * 判环境的口径仍然只有 `capabilities.ts` 那一处 —— 这里只是把它递过包界。
+   */
+  setCapabilities(capabilities)
   if (capabilities.isDesktop) {
+    const electronAPI = window.electronAPI!
     /** 前端 Remote：一个 Proxy，把 api.ts 中的每个方法调用转成 Electron IPC。 */
-    const remoteProxy = new Proxy({} as Record<string, (...args: unknown[]) => unknown>, {
+    const remoteProxy = new Proxy({} as WechatRemote, {
       get(_target, prop) {
         if (prop === '$on') return () => () => undefined
         const name = String(prop)
-        return (...args: unknown[]) => (window as any).electronAPI.wechat.call(name, args)
+        return (...args: unknown[]) => electronAPI.wechat.call(name, args)
       },
     })
-    setWechatRemote(remoteProxy as any)
+    setWechatRemote(remoteProxy)
 
     /** 目录选择器：走主进程原生对话框。 */
     setDirectoryPicker(async () => {
-      const r = await (window as any).electronAPI.pickDirectory()
+      const r = await electronAPI.pickDirectory()
       return r?.path ?? null
     })
 
     /** 将后端实时更新事件转发为 api.ts / 面板监听的 DOM 事件（映射表见 wechat-events.ts）。 */
-    ;(window as any).electronAPI.wechat.onEvent(dispatchWechatEvent)
+    electronAPI.wechat.onEvent(dispatchWechatEvent)
     return
   }
 
   // 浏览器态：HTTP Remote。SSE 事件流**不在这里起** —— 由 BrowserSession 在令牌门
   // 放行之后启动（未授权时它只会不停收到 401，既没用也刷噪声）。
-  setWechatRemote(createHttpRemote() as any)
+  setWechatRemote(createHttpRemote())
   // 手机上没有「本机目录」可选（数据在电脑上）。返回 null 而不是抛：
   // 依赖它的控件由 capabilities.dirPicker=false 隐藏（见 settings 面板），
   // 万一还有漏网的调用点，它拿到的也只是一次「用户取消」。
@@ -85,7 +90,7 @@ installRemote()
 
 /** 自绘标题栏：拖拽区域 + 最小化/全屏/关闭。 */
 function initTitlebar(): void {
-  const api = (window as any).electronAPI?.windowControls
+  const api = window.electronAPI?.windowControls
   if (!api) return
   const byId = (id: string) => document.getElementById(id)
   byId('tb-min')?.addEventListener('click', () => api.minimize())
@@ -121,7 +126,7 @@ initTitlebar()
  */
 void (async (): Promise<void> => {
   try {
-    const api = (window as any).electronAPI
+    const api = window.electronAPI
     const mode = await (api?.runMode?.() ?? api?.isTestMode?.())
     // 兼容两种形状：新接口给对象，老接口给布尔。
     const isTest = typeof mode === 'object' && mode !== null ? mode.test === true : mode === true
@@ -162,7 +167,7 @@ void (async (): Promise<void> => {
  * 可能先于订阅就报出状态 —— 那些事件会丢失，只靠事件会漏掉「首启就失败」的情况。
  */
 void (async (): Promise<void> => {
-  const api = (window as any).electronAPI?.wechat
+  const api = window.electronAPI?.wechat
   if (!api) return
   const BANNER_ID = 'backend-status-banner'
 
@@ -235,7 +240,7 @@ function WechatApp(): React.JSX.Element {
 
   useEffect(() => {
     let alive = true
-    const api = (window as any).electronAPI
+    const api: ElectronApi | undefined = window.electronAPI
     const pending = api?.debugGates?.()
     if (!pending || typeof pending.then !== 'function') {
       setGates({ packaged: true }) // 拿不到事实 ⇒ 不放行（guard 期望 packaged===false）
@@ -263,7 +268,7 @@ function WechatApp(): React.JSX.Element {
   const gatesBypassed = skipGates || bypassLocalGates
 
   useEffect(() => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.status) {
       setLicReady(true)
       return
@@ -308,7 +313,7 @@ function WechatApp(): React.JSX.Element {
     // 没反应」，得重开应用才进得去。
     // 这里先乐观放行（onboardingDone / openWechat 立即置位），再补一次状态；万一这次取不到，
     // 第二层的 LicenseGate 自己还会再查一次，不会因此把未授权的界面放进系统。
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     void Promise.resolve(api?.status?.())
       .then((s: LicenseStatus | undefined) => { if (s) setLic(s) })
       .catch(() => { /* 拿不到就交给 LicenseGate 那一层兜底 */ })
@@ -326,7 +331,7 @@ function WechatApp(): React.JSX.Element {
   }, [recordConsent])
   const handleConsentRejected = useCallback(() => {
     // 不同意就不放行：关掉窗口（自绘标题栏的关闭路径由 preload 的 windowControls 提供）。
-    const api = (window as any).electronAPI?.windowControls
+    const api = window.electronAPI?.windowControls
     if (api?.close) api.close()
   }, [])
   // 主界面「数据配置 → 高级设置 → 重新查看启动页」

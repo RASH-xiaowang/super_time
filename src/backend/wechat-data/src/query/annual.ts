@@ -3,10 +3,10 @@
  * message shards (a session's last_timestamp is recent even when a chat has
  * older messages), so every year with messages shows up as a selectable report.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { cachedBySigAsync, shardCatalogSig } from './meta.ts'
+import { ANNUAL_TTL_MS, cachedBySigAsync, shardCatalogSig } from './meta.ts'
 import { yieldToLoop } from './search-build.ts'
 
 /** 每扫过这么多张 Msg_ 表就让出一次（本机最大分片 169 张表，146MB）。 */
@@ -20,7 +20,7 @@ const YIELD_EVERY_TABLES = 12
 export async function queryAnnual(decryptedDir: string): Promise<{ years: number[] }> {
   // 2026-09-28：同步 `cachedBySig` → async 版；冷算实测 **117ms 且一次都不让出**
   // （真实数据 `working/probe-stall.txt`）。见 `computeAnnual` 的说明。
-  return cachedBySigAsync('annual:' + decryptedDir, shardCatalogSig(decryptedDir, ['message']), () => computeAnnual(decryptedDir), 30_000)
+  return cachedBySigAsync('annual:' + decryptedDir, shardCatalogSig(decryptedDir, ['message']), () => computeAnnual(decryptedDir), ANNUAL_TTL_MS)
 }
 
 /**

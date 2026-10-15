@@ -14,7 +14,7 @@ export declare function createConfigRemotes(rc: createConfigRemotesInputs): {
     saveWechatConfig(options: {
         patch: WechatConfigPatch;
     }): SimpleResult;
-    openConfig(signal: AbortSignal): Promise<{
+    openConfig(signal?: AbortSignal): Promise<{
         ok: boolean;
         path: string;
         error?: string;

@@ -13,7 +13,7 @@
  *
  * 守得住什么、守不住什么（如实标注）：
  *   · 守得住：任何 `keys/**` → `query/**` 的静态依赖（含 `export ... from` 与动态 import 字面量）、
- *     `config/**` 反向依赖上层、跨层「向上」依赖、`base/**`（纯叶子层）依赖包内任何模块、
+ *     `config/**` 反向依赖上层、跨层「向上」依赖、`base/**` 依赖它之上的任何层、
  *     以及扫描集合失效；
  *   · **守不住**：运行期拼出来的路径（`import(name)`）、`createRequire` 间接加载、
  *     以及通过 tsconfig `paths` 别名绕开相对路径的写法（本包没有别名，故未处理）。
@@ -30,20 +30,21 @@ import { describe, expect, it } from 'vitest'
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
 /**
- * 分层：`base` 是最底的纯叶子（不 import 包内任何东西），`config` 次之，`keys` 再次，`query` 最高；
+ * 分层：`base` 是最底的基础工具层，`config` 次之，`keys` 再次，`query` 最高；
  * 其余顶层文件是装配/宿主胶水。
  */
 type Layer = 'base' | 'config' | 'keys' | 'query' | 'glue'
 
 /**
- * 顶层「纯叶子」文件：路径解析、打包路径、格式化。
+ * 顶层「基础工具」文件：路径解析、打包路径、格式化、SQLite 连接策略。
  *
  * 它们原来只是被写进两份白名单（`dirs.ts`/`asar-path.ts`），理由是注释里那句「都不 import 包内
  * 任何模块」—— 可是**那个属性没有任何用例守着**，所以把新文件加进白名单就等于悄悄开了个洞。
- * 现在它们自成一层的下界，并由下面那条「base 不许依赖包内任何模块」硬守：
+ * 现在它们自成一层的下界；base 内部可以有少量工具依赖（例如 `dirs.ts` → `sqlite-connection.ts`），
+ * 但下面那条硬守「base 不得依赖 base 之上的任何层」：
  * 往 `BASE_LEAVES` 里加一个反向依赖上层的文件，红的是那条用例，而不是方向守卫失明。
  */
-const BASE_LEAVES = new Set(['dirs.ts', 'asar-path.ts', 'format.ts', 'md5.ts'])
+const BASE_LEAVES = new Set(['dirs.ts', 'asar-path.ts', 'format.ts', 'md5.ts', 'sqlite-connection.ts'])
 
 /**
  * 只允许这些「层 → 层」的依赖方向（同层内部依赖天然允许）。
@@ -71,8 +72,11 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  * `types.ts` 不当作叶子：它反过来 `export type ... from './query/contacts.ts'`，是**有意**的类型
  * 聚合再导出（query → types.ts → query 这条纯类型环 M24 之前就存在，也不在本次范围内）。这里
  * 如实放行，而不是假装它不存在 —— 守卫只承诺「不会退回 keys ↔ query 的双向依赖」。
+ *
+ * `net/fetch-retry.ts` 是网络重试原语（**唯一实现源**）：query 的出网点与宿主层都引用它，
+ * 但模块本身不 import 包内任何东西，因此不会把上层依赖反向带进 query。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'net/fetch-retry.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {
@@ -208,11 +212,11 @@ describe('M24 · 分层依赖方向', () => {
     expect(show(bad), '共享配置层被上层反向依赖后，双向依赖会立刻回来').toEqual([])
   })
 
-  it('base 层是硬下界：叶子文件不 import 包内任何模块', () => {
+  it('base 层是硬下界：基础工具不得依赖 base 之上的任何层', () => {
     // 「白名单只放真正的叶子」这句话此前只写在注释里，没有用例守 —— 于是往白名单加一个
     // 反向依赖上层的文件，方向守卫不会有任何反应。现在它是一层，加了就必须兑现。
-    const bad = EDGES.filter((e) => e.fromLayer === 'base')
-    expect(show(bad), 'base 层一旦依赖上层，它就不再是叶子，放行它等于给方向守卫开洞').toEqual([])
+    const bad = EDGES.filter((e) => e.fromLayer === 'base' && e.toLayer !== 'base')
+    expect(show(bad), 'base 层依赖了上层，等于给方向守卫开洞').toEqual([])
   })
 
   it('全图只允许向下：跨层边要么是 ALLOWED，要么落在胶水层白名单里', () => {

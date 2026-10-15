@@ -7,8 +7,9 @@
  * 本用例把两档分别钉住 ——
  *   ① 结构/体积（`guardCallArgs`）：任何调用都必须过，越界就拒，且** gateway 一次都不许被叫到**
  *      （判据用「把实现换成计数器」来量，不靠读日志）；
- *   ② 形状（生成的 zod schema）：默认影子，只有进了 `ENFORCED_SCHEMA_METHODS` 才拒 ——
- *      这一条也钉住，因为「影子」如果其实是「没人调用」，②就永远不会升级成硬拒。
+ *   ② 形状（生成的 zod schema）：默认影子，只由宿主层显式白名单硬拒 ——
+ *      这一条也钉住「白名单之外绝不自动升级」，因为 stale schema 会在一个尚未见过的
+ *      合法变体上误伤真实面板。
  *
  * 顺带钉住 schema 表**真的被加载并接上了**（`info().argGuard.covered > 0`）：
  * 那 114 份 schema 在仓库里躺了很久，一次都没被执行过，接缝本身就是要守的东西。
@@ -22,7 +23,6 @@ import {
   ARG_LIMITS, buildSchemaMap, checkSchema, guardCallArgs, inspect, issueText,
   noteSchema, observe, onlyExtraKeys, resetLedger, snapshot,
 } from '../wechat-args-guard.js'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createWechatBackend } from '../wechat-host.js'
 
 const scratch: string[] = []
@@ -35,7 +35,16 @@ afterEach(() => {
 /** 宿主层返回的是无类型的 CJS 对象，这里只声明用例真正碰到的那一小块。 */
 interface HostBackend {
   call: (m: string, a: unknown) => Promise<{ ok: boolean, error?: { code?: string, message?: string } }>
-  info: () => { argGuard?: { covered: number, total: number, uncovered: number, largest: Array<{ method: string, maxBytes: number }> } }
+  info: () => {
+    argGuard?: {
+      covered: number
+      total: number
+      uncovered: number
+      enforced: string[]
+      mismatched: string[]
+      largest: Array<{ method: string, maxBytes: number }>
+    }
+  }
   gateway: Record<string, unknown>
 }
 
@@ -192,10 +201,51 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
     expect(host).toContain("require('./wechat-args-guard')")
     expect(host.indexOf('guardCallArgs(args)'), '闸门根本没被调用', ).toBeGreaterThan(host.indexOf('const fn = gateway[implName]'))
     expect(host.indexOf('guardCallArgs(args)'), '闸门排在执行之后等于没设').toBeLessThan(host.indexOf('fn.apply(gateway, callArgs)'))
-    expect(host, 'callArgs 必须是守卫归一化后的那个数组，否则缓存键与执行用的是两份数据')
-      .toMatch(/const callArgs = guard\.value/)
+    expect(host, 'callArgs 必须只由守卫归一化结果 + fallback jobId 注入构成，否则缓存键与执行用的是两份数据')
+      .toMatch(/const callArgs = injectFallbackJobId\(method, guard\.value, callHandle\)/)
+    expect(host).toContain('ENFORCED_SCHEMA_METHODS = new Set([')
+    expect(host).toContain("  'deleteTask',")
     expect(host).toContain('checkSchema(argSchemas, implName, callArgs, ENFORCED_SCHEMA_METHODS)')
-    expect(host, '影子账本没进 info() 的话，②档升级永远没有依据').toContain('argsGuard.snapshot(')
+    expect(host).toContain('argsGuard.snapshot(argSchemas ? argSchemas.size : 0, methodMap.size, ENFORCED_SCHEMA_METHODS)')
+    expect(host, '守卫自己不得再保留自动升级状态').not.toContain('schemaPasses')
+    expect(host, '宿主层不得调用守卫内部的自动升级接口').not.toContain('argsGuard.enforcedSchemas()')
+    expect(host, '影子账本没进 info() 的话，②档的诊断依据就会丢失').toContain('argsGuard.snapshot(')
+  })
+
+  it('真后端里白名单外的 addTask 仍只做影子记账，坏形状仍会到达 gateway', async () => {
+    const { backend, calls } = await hostWithProbe('addTask')
+    const valid = [{ title: 'task' }]
+    for (let i = 0; i < 5; i += 1) {
+      const result = await backend.call('addTask', valid)
+      expect(result.ok, `第 ${String(i + 1)} 次合法调用被拒 ⇒ 影子阶段不能误伤`).toBe(true)
+    }
+
+    const bad = await backend.call('addTask', [{ title: 1 }])
+    expect(bad.ok, '影子档不得在自动升级后误拒合法面板形状').toBe(true)
+    expect(calls(), '白名单为空时，形状 mismatch 不能阻止 gateway 执行').toBe(6)
+
+    const ag = (await backend.info()).argGuard
+    expect(ag?.enforced).toEqual(['deleteTask'])
+    expect(ag?.enforced, 'addTask 不得因为见过合法调用就自动升级').not.toContain('addTask')
+    expect(ag?.mismatched).toContain('addTask')
+  })
+
+  it('真后端里 deleteTask 试点：合法形状执行，类型/必填错配在进 gateway 前被拒', async () => {
+    const { backend, calls } = await hostWithProbe('deleteTask')
+
+    expect((await backend.call('deleteTask', [{ id: 1 }])).ok).toBe(true)
+    expect(calls(), '合法形状被试点名单误伤').toBe(1)
+
+    for (const bad of [{ id: '1' }, {}]) {
+      const result = await backend.call('deleteTask', [bad])
+      expect(result.ok).toBe(false)
+      expect(result.error?.code).toBe('ARGS_SCHEMA')
+    }
+    expect(calls(), '坏形状到达 gateway ⇒ 试点名单没接上').toBe(1)
+
+    const ag = (await backend.info()).argGuard
+    expect(ag?.enforced).toEqual(['deleteTask'])
+    expect(ag?.mismatched).toContain('deleteTask')
   })
 
   it('真后端把影子账本暴露在 info().argGuard 里，覆盖数来自真加载的表（不是硬编码）', async () => {
@@ -214,13 +264,47 @@ describe('② 形状：生成的 zod schema 必须真的接上（默认影子，
      * **只能变小**：`typert.host.js` 是随包签进来的生成物，它落后于今天的 `@Remote` 多少个
      * 方法，就是「schema 从未被执行过」（P2-7）与「生成物无溯源」（P1-5）交汇的那笔账。
      * 新加一个 `@Remote` 方法而没跟着生成 schema ⇒ 这里红，而不是安静地多一个不受校验的入口。
+     *
+     * W2-8.6 把 58 抬到 59，理由与边界写在这里（下一个人不必重新查）：
+     *   · 新增的 `@Remote('generateAnnualNarrative')` 的 schema 没能跟着生成 ——
+     *     `typert.host.js` 的生成器（`@deepseek-ai/dsh-typert-generator`）**不在这个仓库里**，
+     *     也没有任何 npm script 调它；它读的输入路径是 `packages/host/wechat-data/src/gateway.ts`，
+     *     那是生成器自己的工作树布局，本仓库对应的是拆分后的 `gateway-*.ts`。
+     *   · 因此这个数字**不是**「该修没修」，而是「本仓库无法自动修」。取值范围是
+     *     58 ≤ 未覆盖 ≤ 59；再涨（>59）说明又有新方法没被记进来，仍然会红。
+     *   · 遗留证据：文件里 `exportCsv` 的参数 schema 还停在 `{kind, recordsKind}`，
+     *     而 W2-8.2 已经给它加了 `dest` / `category` / `jobId` —— 同一个漂移。
+     *
+     * 2026-10-13 把 59 抬到 **61**（同一条成因又落在一对新方法上，边界与核对方式写在这里）：
+     *   · 新方法：`@Remote('checkDbIntegrity')` 与 `@Remote('repairCorruptDbs')`
+     *     （`gateway-db-health.ts`，「损坏库修复链路」W3-11.7）。
+     * 2026-10-14 把 61 抬到 **62**（地图 GeoJSON 后端代理新增 `@Remote('getMapGeoJson')`）：
+     *   · 核对方式（可重跑）：`lib/typert.host.js` 的 133 份 schema 里这三个名字**都不在**
+     *     ⇒ 未覆盖 = 195 − 133 = **62**，一分不多一分不少。
+     *   · 为什么不是「修好它」：生成器不在本仓（见上一条）。而这三个方法**不是新开的口子** ——
+     *     它们与另外 133 个方法走**同一个** `guardCallArgs` 闸门（①档结构/体积照常拦），
+     *     ②档（形状）对它们只是「影子」，进 `ENFORCED_SCHEMA_METHODS` 之前不拒任何调用。
+     *   · 取值范围是 62 ≤ 未覆盖 ≤ 62；再涨（>62）说明又有新方法没被记进来，仍然会红。
      */
     expect(ag!.uncovered, '未覆盖数变大了 ⇒ 新加的 @Remote 方法没有跟着生成 schema（②档对它永久失明）')
-      .toBeLessThanOrEqual(58)
+      .toBeLessThanOrEqual(62)
   })
 })
 
 describe('影子账本自己（收上界与升级 ② 档都靠它）', () => {
+  it('通过/失败只记账，硬拒名单必须由调用方显式传入，连续通过不会自动升级', () => {
+    for (let i = 0; i < 20; i += 1) noteSchema('autoPromoted', null)
+    expect(snapshot(0, 0).enforced, '只凭通过次数就升级 ⇒ stale schema 会误拒未见过的合法变体').toEqual([])
+
+    noteSchema('blockedMethod', 'title: expected string')
+    for (let i = 0; i < 20; i += 1) noteSchema('blockedMethod', null)
+    expect(snapshot(0, 0).enforced).toEqual([])
+    expect(snapshot(0, 0).mismatched).toEqual(['blockedMethod'])
+
+    const allowlist = new Set(['curatedMethod'])
+    expect(snapshot(0, 0, allowlist).enforced).toEqual(['curatedMethod'])
+  })
+
   it('每条方法留住历史最大体积，快照给出前 10 名；schema 通过/失败分开记', () => {
     observe('queryMessages', 120)
     observe('queryMessages', 5_000)
@@ -231,7 +315,7 @@ describe('影子账本自己（收上界与升级 ② 档都靠它）', () => {
     expect(snap.largest[0]?.method).toBe('queryMessages')
     expect(snap.largest[0]?.maxBytes).toBe(5_000)
     expect(snap.mismatched).toEqual(['getContacts'])
-    expect(snap.enforced, '没失败过的方法才是将来可以进名单的候选').toEqual(['queryMessages'])
+    expect(snap.enforced, '没有显式白名单时，快照不得宣称任何方法已硬拒').toEqual([])
     expect(snap.uncovered).toBe(7)
   })
 

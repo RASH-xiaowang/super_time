@@ -7,7 +7,7 @@
  * @module kb-files-store
  */
 import { fmtBytes } from '../format.ts';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from './db-open.ts';
 import type { KbFileMeta, KbFileParseState } from '../types.ts';
 export { kbBlobsDir, kbFilesDbPath } from './kb-paths.ts';
 /**

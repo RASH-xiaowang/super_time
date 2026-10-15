@@ -79,11 +79,11 @@ export declare const PREWARM_PROBE_MS = 100;
 export declare function prewarmBudgetMs(backlog: number): number;
 export declare function pumpSnsDecodeCache(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, opts?: {
     maxMs?: number;
-}): {
+}): Promise<{
     advanced: boolean;
     steps: number;
     backlog?: number;
-};
+}>;
 export declare function snsAttachProgressForTest(wechatBaseDir: string): {
     decoded: number;
     pending: number;
@@ -110,7 +110,7 @@ export declare function snsAttachProgressForTest(wechatBaseDir: string): {
  * 解不开）**不算命中** —— 否则「本机有一份坏文件」会被当成「本机有图」，把封面永久钉在坏数据上。
  * @returns 命中且能解开的 data URL；否则 `undefined`（调用方一律照旧出网）。
  */
-export declare function findSnsMediaDataUrlByIndex(wechatBaseDir: string, aesKey: string | undefined, xorKey: number, md5: string): string | undefined;
+export declare function findSnsMediaDataUrlByIndex(wechatBaseDir: string, aesKey: string | undefined, xorKey: number, md5: string): Promise<string | undefined>;
 /**
  * 本进程里是否已经建过**任何**朋友圈媒体索引（A4 的成本闸门）。
  *
@@ -121,7 +121,7 @@ export declare function findSnsMediaDataUrlByIndex(wechatBaseDir: string, aesKey
  * @returns 任一账号下已建过索引时为真。
  */
 export declare function hasSnsMediaIndexEntries(): boolean;
-export declare function resolveSnsImageDataUrl(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, md5: string, timelineId?: string, mediaId?: string, allowThumb?: boolean): {
+export declare function resolveSnsImageDataUrl(wechatBaseDir: string | undefined, aesKey: string | undefined, xorKey: number, md5: string, timelineId?: string, mediaId?: string, allowThumb?: boolean): Promise<{
     url?: string;
     error?: string;
-};
+}>;

@@ -134,6 +134,32 @@
   border: 1px solid var(--nm-border);
 }
 
+/* W3-7.1: parse queue one-liner. */
+.queueLine {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g2);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--nm-text-2);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-text-1) 5%, transparent);
+  border: 1px solid var(--nm-border);
+}
+
+.queueLine details summary {
+  color: var(--nm-text-1);
+  cursor: pointer;
+}
+
+.queueLine ul {
+  margin: var(--nm-dense-g2) 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g1);
+}
+
 /* 一次「添加文件」的逐项回执块。部分成功是常态，所以失败项要逐条列出来，
    而不是压成一句「添加失败」——那样用户会把没问题的文件也重选一遍。 */
 .report {

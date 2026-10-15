@@ -255,7 +255,12 @@ describe('间隙与卡内留白：走全站刻度，板块之间要接上', () =
     expect(styleCode, '缺少 1400px 退列').toMatch(/@media \(max-width: 1400px\)/)
     expect(styleCode, '缺少 900px 单列').toMatch(/@media \(max-width: 900px\)/)
     expect(styleCode, '退列后要等比例改跨度').toMatch(/\.board > \.card, \.board > \.moreCard \{ grid-column: span 2 !important; \}/)
-    expect(styleCode, '窄屏要退成整页单列').toMatch(/\.board > \* \{ grid-column: 1 \/ -1 !important; \}/)
+    expect(styleCode, '窄屏要退成整页单列').toMatch(/\.board \{[^}]*grid-template-columns: minmax\(0, 1fr\)/)
+    // 中和跨度必须与 ≤1400 档**同特异性**（`.board > .card` 是 0,2,0）：两边都带 !important 时
+    // 比的是特异性，原先的 `.board > *`（0,1,0）输掉后单列网格里被 span 撑出隐式列
+    // （2026-10-14 真数据实测：卡片压到 85px、卡内格 0 宽）。这条断言钉的是**意图**不是旧字面量。
+    expect(styleCode, '单列档的跨度中和特异性不够 ⇒ 会被 ≤1400 档的 span 盖掉')
+      .toMatch(/\.board > \.card, \.board > \.moreCard, \.board > \.span6, \.board > \.portrait, \.board > \.footer \{ grid-column: 1 \/ -1 !important; \}/)
     // 反例：不许用 JS 测宽来改布局（那正是第 3 版翻车的原因）
     const js = read(HERE, 'annual-masonry.tsx')
     expect(js).not.toContain('ResizeObserver')
@@ -314,8 +319,8 @@ describe('间隙与卡内留白：走全站刻度，板块之间要接上', () =
 })
 
 describe('客户端形状：与后端接口对齐', () => {  it('AnnualReviewShape 有五个新字段与对应形状', () => {
-    for (const line of ['moments: AnnualMoments', 'assets: AnnualAssets', 'money: AnnualMoney', 'revoke: AnnualRevoke', 'groups: AnnualGroups',
-      'export interface AnnualMoments', 'export interface AnnualAssets', 'export interface AnnualMoney',
+    expect(shape, '客户端主形状必须转发共享 AnnualReview，而不是再镜像一份').toContain('export type AnnualReviewShape = AnnualReview')
+    for (const line of ['export interface AnnualMoments', 'export interface AnnualAssets', 'export interface AnnualMoney',
       'export interface AnnualRevoke', 'export interface AnnualGroups']) {
       expect(shape, `api-status.ts 缺 ${line}`).toContain(line)
     }
@@ -372,5 +377,4 @@ describe('规格统一：头像 / 字号令牌', () => {
     expect(styleCode).toMatch(/var\(--nm-dense-fs\)/)
   })
 })
-
 

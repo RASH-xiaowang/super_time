@@ -4,7 +4,7 @@
  * svr_id fallback). Node cannot decode silk without ffmpeg/a WASM decoder,
  * so decodable=false and the frontend shows a duration + degrade hint.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'

@@ -7,9 +7,9 @@
  * 两类口径在看板上分别标注，避免「日均 28 条却有一天 2,218 条」这种无法解释的数字。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import type { AnnualReviewShape } from '../api.ts'
-import { ListSkeleton } from './hooks.tsx'
+import { ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
 import { annualReviewCacheKey, normalizeReview, type NormalizedReview } from './annual-normalize.ts'
 import { AVATAR_SIZE, Avatar, dur, fmt } from './annual-common.tsx'
 import { MasonryGrid } from './annual-masonry.tsx'
@@ -429,6 +429,9 @@ function HighlightsCard({ r, av }: { r: AnnualReviewShape; av: Map<string, strin
  * Render the annual review dashboard.
  * @returns the annual panel element tree.
  */
+/** WAL 实时刷新的最小间隔：年报是逐条扫一年消息的重查询（无 api 层缓存），无感 ≠ 每秒重算。 */
+const ANNUAL_LIVE_MIN_INTERVAL_MS = 60_000
+
 export function AnnualPanel(): React.JSX.Element {
   const [years, setYears] = useState<readonly number[]>([])
   const [year, setYear] = useState<number | null>(null)
@@ -481,6 +484,17 @@ export function AnnualPanel(): React.JSX.Element {
   }, [])
 
   useEffect(() => { if (year !== null) void load(year) }, [year, load])
+
+  // WAL 增量推送：新消息落地后静默重取本年度（缓存先上屏，不闪骨架）。
+  // 年报要逐条扫一年消息（重查询且**无 api 层缓存**），推送每秒都可能来 ⇒ 面板级 60s 节流。
+  const lastLiveRefreshRef = useRef(0)
+  useWechatDataUpdated(() => {
+    if (year === null) return
+    const now = Date.now()
+    if (now - lastLiveRefreshRef.current < ANNUAL_LIVE_MIN_INTERVAL_MS) return
+    lastLiveRefreshRef.current = now
+    void load(year)
+  })
 
   // 头像批量拉取（一次 Remote，避免每张卡片各拉一遍）
   useEffect(() => {
@@ -542,8 +556,8 @@ export function AnnualPanel(): React.JSX.Element {
                 {years.map(y => <option key={y} value={y}>{y} 年</option>)}
               </select>
             )}
-            <button type="button" className={css.toolBtn} onClick={() => { void doExport() }} disabled={exporting || year === null} title="把年度回顾导出为 HTML 文件">
-              {exporting ? '导出中…' : '导出报告'}
+            <button type="button" className={css.toolBtn} onClick={() => { void doExport() }} disabled={exporting || year === null || !runtimeCapabilities().capturePanel} title="把年度回顾截成 PNG —— 截的是这台电脑上的这块屏">
+              {exporting ? '导出中…' : runtimeCapabilities().capturePanel ? '导出报告' : '导出报告（仅电脑）'}
             </button>
           </div>
         )}

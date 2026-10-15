@@ -21,11 +21,28 @@ import { DatabaseSync } from 'node:sqlite'
 import { GW_DIR, gatewayClassSource, gatewaySource } from '../../tests/gateway-source.ts'
 import { at, grp } from '../../tests/helpers/strict-index.ts'
 import { WechatDataGateway } from '../src/gateway.ts'
+import { formatTxt, formatTxtChunksAsync } from '../src/query/export-format.ts'
+import type { WechatMessage } from '../src/types.ts'
 
 const USER = 'wxid_m3job'
 const TOTAL = 2000
 /** 收集阶段每页 100 条 ⇒ 全量导出应有 TOTAL/100 次上报。 */
 const PAGES = TOTAL / 100
+
+/** 造几条假消息（供流式/整块格式对比，不需要真库）。 */
+function makeSampleMessages(n: number): WechatMessage[] {
+  const out: WechatMessage[] = []
+  for (let i = 0; i < n; i += 1) {
+    out.push({
+      localId: i + 1,
+      localType: 1,
+      createTime: 1704067200 + i,
+      messageContent: '<msg><content>第 ' + String(i + 1) + ' 条</content></msg>',
+      isSender: i % 3 === 0 ? 1 : 0,
+    } as unknown as WechatMessage)
+  }
+  return out
+}
 
 let root = ''
 let decrypted = ''
@@ -162,7 +179,14 @@ describe('M3：单会话导出的进度与取消', () => {
       for (const m of block.matchAll(/remote\(\)\.([A-Za-z0-9_]+)\(/g)) senders.add(grp(m, 1, 'jobId 接口名'))
     }
     expect([...senders].sort(), '客户端一个 jobId 接口都没抓到 ⇒ 抓取口径失效').toEqual(
-      ['createEncryptedBackup', 'exportAllSessions', 'exportMoments', 'exportSessionMessages'])
+      [
+        'createEncryptedBackup',
+        'exportAllSessions',
+        'exportAnnualReport',
+        'exportCsv',
+        'exportMoments',
+        'exportSessionMessages',
+      ])
 
     const remoteFiles = readdirSync(join(GW_DIR, 'remotes')).filter((f) => f.endsWith('.ts'))
     const shell = gatewayClassSource()
@@ -265,4 +289,82 @@ describe('H8：单会话导出不独占后端事件循环', () => {
     // 收集段就是一次独占（真机 4 万条实测 2573ms），必然超过这里的允许值。
     expect(max, `收集段独占事件循环 ${Math.round(max)}ms（空闲抖动 ${Math.round(idleMax)}ms，允许 ${Math.round(allowed)}ms）⇒ 收集段必须每 8 页让出一次`).toBeLessThan(allowed)
   }, 120_000)
+
+  it('W2-8.1：AllSessions 的 txt 走流式（addStream），不再整块同步 deflate', async () => {
+    // 这条盯的是 H8 留言里那句「夹具加大到 16 万行时**带让出与不带让出都会红**，
+    // 红在结尾那次整条目压缩」。AllSessions 的 txt 正是那处：formatTxt 把整个会话
+    // 拼成一个串，再 addFile → deflateRawSync 一次压完。一个会话最多 5 万条，
+    // 拼出来的串有几 MB 到几十 MB —— 那一次同步压缩独占几百毫秒。
+    //
+    // 判据为什么用**事件条数**而不是时长：`addFile` 一次进度事件都不发（它走 packEntry），
+    // `addStream` 每块发一条 `compress`。所以「有没有 compress 事件、有几条」直接把两条路
+    // 分开，且不随机器快慢漂 —— 时长阈值在 4 万条的小夹具上量过一次：addFile 也能过。
+    fixtureTotal = 40_000
+    for (const d of disposers) d()
+    disposers = []
+    root = await mkdtemp(join(tmpdir(), 'dsh-wechat-81-'))
+    decrypted = join(root, 'decrypted')
+    makeFixture(decrypted, fixtureTotal)
+    vi.stubEnv('DSH_WECHAT_DECRYPTED_DIR', decrypted)
+    const gw = new WechatDataGateway(fakeCtx())
+
+    const outDir = join(root, 'out')
+    mkdirSync(outDir, { recursive: true })
+    onEvent = null
+    const delays: number[] = []
+    let last = performance.now()
+    // 每 20ms 采访一次心跳，用于第二重判据（最长停顿）。
+    const timer = setInterval(() => {
+      const now = performance.now()
+      delays.push(now - last)
+      last = now
+    }, 20)
+    const r = await gw.exportAllSessions({ dir: outDir, filename: 'all.zip', jobId: 'job-81' })
+    clearInterval(timer)
+    expect(r.count, '夹具没按预期收满（下面的判据都没有意义）').toBe(fixtureTotal)
+
+    // 主判据：这一趟必须有 compress 进度事件，而且不止一条。
+    const compress = events.filter(e => e.phase === 'compress')
+    expect(compress.length,
+      '一个 compress 事件都没有 ⇒ txt 仍走 addFile 的整块同步 deflate（它一次事件都不发）').toBeGreaterThan(2)
+    // 4 万条 / 每块 200 条 ⇒ 约 200 块。给一个宽下界，挡住「只切了两块」那种假流式。
+    expect(compress.length, `只切了 ${String(compress.length)} 块 ⇒ 块太大，仍然接近整块压缩`).toBeGreaterThan(20)
+
+    // 第二重：全程最长一次停顿。放得比 H8 收集段那条（1200）宽一档 ——
+    // 这一段本来就含 disk write，而且它只是兜底，真正的判据是上面那两条。
+    const worst = delays.length ? Math.max(...delays) : 0
+    expect(worst, `导出全程最长一次停顿 ${Math.round(worst)}ms`).toBeLessThan(1500)
+    expect(delays.length, '一条心跳都没抓到 ⇒ 探针本身没跑，用例失去意义').toBeGreaterThan(2)
+  }, 180_000)
+
+  it('W2-8.1：流式 txt 与旧的 formatTxt 逐字节相同', async () => {
+    // 导出内容不许因为「改成了流式」而变。这个失败形态不报错，
+    // 用户只会拿到一份和以前不一样的归档 —— 所以必须逐字节钉住。
+    const msgs = makeSampleMessages(60)
+    const legacy = formatTxt(msgs, USER)
+    const chunks: string[] = []
+    for await (const c of formatTxtChunksAsync(msgs, USER)) chunks.push(c)
+    expect(chunks.join(''), '流式分块与整块格式不一致').toBe(legacy)
+    // 分块必须真的发生：只产一块就等于没流式（判据不许空转）
+    expect(chunks.length, '200 条一块，60 条也应当至少 2 块（头 + 正文）').toBeGreaterThan(1)
+  })
+
+  it('W2-8.1：流式 txt 逐块让出，且块间可取消', async () => {
+    const msgs = makeSampleMessages(2000)
+    const ac = new AbortController()
+    let yielded = 0
+    // 前 3 块之后取消：之后一块都不该再产出
+    const seen: string[] = []
+    await expect((async () => {
+      for await (const c of formatTxtChunksAsync(msgs, USER, { signal: ac.signal })) {
+        seen.push(c)
+        yielded += 1
+        if (yielded === 3) ac.abort()
+      }
+    })()).rejects.toThrow()
+
+    expect(seen.length, `取消后还产出了 ${String(seen.length)} 块 ⇒ 取消只发生在块边界`).toBe(3)
+    const rest = msgs.slice(2000)
+    expect(rest.length).toBe(0)
+  })
 })

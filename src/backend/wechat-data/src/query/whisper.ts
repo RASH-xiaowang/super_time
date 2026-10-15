@@ -6,17 +6,17 @@
  * module reports what is configured and available so the settings panel can
  * offer a real model/device/threads configuration.
  */
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
   copyFileSync, cpSync, createWriteStream, existsSync, linkSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
 import type { WhisperModelInfo } from '../types.ts'
 import { resolveWechatDataRoot } from '../dirs.ts'
+import { yieldToLoop } from './search-build.ts'
 import { unpackedAware } from '../asar-path.ts'
 import { isInsideRoot, writeDenialReason } from './path-policy.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
@@ -41,6 +41,18 @@ export const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]> = [
   ['turbo', 'ggml-large-v3-turbo.bin'],
 ]
 
+/**
+ * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
+ *
+ * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值时回落到
+ * `latest`（旧行为，保护已经配好镜像的环境）。
+ * 这里是一个字符串常量而不是编号——— 固定哪一版
+ * 应该是一行改动，而不是到处翻 URL。
+ */
+export const WHISPER_ENGINE_TAG = ((): string => {
+  const pinned = (process.env.DSH_WECHAT_WHISPER_ENGINE_TAG ?? '').trim()
+  return pinned === '' ? 'latest' : pinned
+})()
 /** Base order: env pin first, then the cached reachable one, then official/mirror. */
 function whisperDownloadBases(): string[] {
   const pinned = process.env.DSH_WECHAT_WHISPER_MIRROR
@@ -91,6 +103,8 @@ export async function streamUrlToFile(
   dest: string,
   timeoutMs: number,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+  signal?: AbortSignal,
 ): Promise<number> {
   let have = 0
   try { have = statSync(dest).size } catch { have = 0 }
@@ -131,6 +145,22 @@ export async function streamUrlToFile(
       stream.write(value)
       received += value.byteLength
       onProgress(received, total)
+      /**
+       * 每块都让出一次（W3 批次 1.1）。
+       *
+       * 为什么必须让出：模型 1.23GB，`reader.read()` 的分块来得又快又密 ——
+       * 整段循环一个 `await` 都不放的话，微任务队列会被这块循环占满，
+       * 同进程本该毫秒级的请求（面板列表、图片代理）全被顶住。
+       * 这里的代价可以忽略：真正的瓶颈是网络，一次 `setImmediate`
+       * 相对一个 4MB 块的下载时间是可以不要钱的。
+       */
+      await yieldToLoop()
+      // W3-5.5：取消检查点。放在让出之后才有意义——先检查再让出的话，
+      // 一次建连后的 chunk 读取会把顺序颠倒（先检查再让出 = 取消多等一个 chunk）。
+      // 局部文件**不删**：下次续传仍然可用。
+      if (signal?.aborted === true) {
+        throw Object.assign(new Error('已取消下载'), { code: 'WHISPER_DOWNLOAD_CANCELED' })
+      }
     }
     await new Promise<void>((resolve, reject) => {
       stream.end(() => { resolve() })
@@ -519,6 +549,8 @@ export function resolveWhisperModelsDir(configured: string | undefined, decrypte
 export async function installWhisperEngine(
   modelsDir: string,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; path?: string; error?: string }> {
   const binDir = join(modelsDir, 'bin')
   const target = join(binDir, 'whisper-cli.exe')
@@ -528,10 +560,19 @@ export async function installWhisperEngine(
   if (refusal) return { ok: false, error: refusal }
   mkdirSync(binDir, { recursive: true })
 
+  // W3-5.5：引擎包改成**固定 tag** 而不是 `releases/latest`。
+  //
+  // 为什么要固定：`latest` 是一个会自己漂移的目标——— 上游一发新版，
+  // 同一个 URL 下载到的就是另一份。后果两个：
+  //   · 无法复现（今天下的和下周下的可能不一样）；
+  //   · **断点续传失效**：半个 zip 还在硬盘上，但它不再是
+  //     新包的前缀（下面那段注释说的就是这个）。
+  // 固定 tag 之后，“重下一次”和“续传上一次”才是同一件事情。
+  // env 仍然能覆盖（内网镜像 / 打包时托管）。
   const urls = [
     process.env.DSH_WECHAT_WHISPER_ENGINE_URL?.trim().replace(/\/$/, ''),
-    'https://github.com/ggml-org/whisper.cpp/releases/latest/download/whisper-bin-x64.zip',
-    'https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-bin-x64.zip',
+    `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_ENGINE_TAG}/whisper-bin-x64.zip`,
+    `https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_ENGINE_TAG}/whisper-bin-x64.zip`,
   ].filter((u): u is string => Boolean(u))
 
   let lastError = '引擎下载失败'
@@ -556,6 +597,12 @@ export async function installWhisperEngine(
         stream.write(value)
         received += value.byteLength
         onProgress(received, total)
+        // W3-5.5：取消检查点。引擎包只有 ~20MB，比模型短很多，
+        // 但同样可能卡在一个不给力的链路上，所以同一个取消键对两路都生效。
+        // 已写的部分不删：下次重下时正确的是整份重下（见上面「不做续传」的理由）。
+        if (signal?.aborted === true) {
+          throw Object.assign(new Error('已取消下载'), { code: 'WHISPER_DOWNLOAD_CANCELED' })
+        }
       }
       await new Promise<void>((resolve, reject) => {
         stream.end(() => { resolve() })
@@ -603,6 +650,38 @@ export function powershellLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
+/** Zip extraction is a small local operation; still bounded so a broken tool cannot pin the worker. */
+export const ZIP_EXTRACT_TIMEOUT_MS = 120_000
+
+/** Run one extraction command asynchronously, collecting output and enforcing a hard deadline. */
+async function runExtractProcess(
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const child = spawn(command, [...args], { windowsHide: true })
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.on('data', (chunk) => { stdout += String(chunk) })
+  child.stderr?.on('data', (chunk) => { stderr += String(chunk) })
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const finish = (status: number | null): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    }
+    timer = setTimeout(() => {
+      try { child.kill() } catch { /* process may already be gone */ }
+      finish(null)
+    }, timeoutMs)
+    child.once('error', () => finish(null))
+    child.once('close', (code) => finish(code))
+  })
+}
+
 /**
  * 解压 zip 到暂存目录（顶层目录名忽略）。导出只为让"拼出来的那条命令"能被用例钉住。
  * @param zipPath - 待解压的 zip 路径。
@@ -613,10 +692,14 @@ export async function extractZip(zipPath: string, destDir: string): Promise<stri
   const staging = join(destDir, '.engine-staging')
   try { rmSync(staging, { recursive: true, force: true }) } catch { /* best effort */ }
   mkdirSync(staging, { recursive: true })
-  const tar = spawnSync('tar.exe', ['-xf', zipPath, '-C', staging], { windowsHide: true })
+  const tar = await runExtractProcess('tar.exe', ['-xf', zipPath, '-C', staging], ZIP_EXTRACT_TIMEOUT_MS)
   if (tar.status === 0) return staging
   // Fallback: PowerShell Expand-Archive.
-  const ps = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath ${powershellLiteral(zipPath)} -DestinationPath ${powershellLiteral(staging)} -Force`], { windowsHide: true })
+  const ps = await runExtractProcess(
+    'powershell.exe',
+    ['-NoProfile', '-Command', `Expand-Archive -LiteralPath ${powershellLiteral(zipPath)} -DestinationPath ${powershellLiteral(staging)} -Force`],
+    ZIP_EXTRACT_TIMEOUT_MS,
+  )
   if (ps.status === 0) return staging
   // 最终兜底：纯 JS unzipper（不依赖系统 tar/PowerShell）。
   try {
@@ -663,6 +746,8 @@ export async function whisperDownloadModel(
   modelId: string,
   modelsDir: string,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号；已取消时抛带 `WHISPER_DOWNLOAD_CANCELED` 的错误。 */
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; file?: string; bytes?: number; error?: string }> {
   const entry = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)
   if (!entry) return { ok: false, error: '未知模型: ' + modelId }
@@ -679,11 +764,15 @@ export async function whisperDownloadModel(
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`
     const tmp = join(modelsDir, file + '.part')
     try {
-      const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress)
+      const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress, signal)
       renameSync(tmp, finalPath)
       reachableBase = base
       return { ok: true, file, bytes }
     } catch (e) {
+      // W3-5.5：取消不属于任何一个镜像——— 立即往外抛，
+      // 否则会接着尝试剩下两个镜像（用户點了取消却看见下载继续跑）。
+      const err = e as { code?: string }
+      if (err?.code === 'WHISPER_DOWNLOAD_CANCELED') throw e
       lastError = `${base} ${(e as Error).message}`
       // 刻意**不删** .part（旧实现在这里 unlink）：留着它，下一个镜像 / 用户下一次点击
       // 才能从断点接着下（1.5–3.1 GB 重下代价太大）。安全性由 206/200 判别、416 丢弃、

@@ -23,7 +23,7 @@
  * `parse.ts` 的 `parseVoipKind` 注释里。
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { join } from 'node:path'
 import { contactMeta, shardCatalog, shardCatalogSig, cachedBySigAsync, fileSigOf } from './meta.ts'

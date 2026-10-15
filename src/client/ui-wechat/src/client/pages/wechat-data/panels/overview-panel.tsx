@@ -17,17 +17,17 @@ import {
   apiGetAvatar,
 } from '../api.ts'
 import { LazyMount, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
-import { CalendarHeatmap } from './CalendarHeatmap.tsx'
 import { WordCloudCard } from './WordCloudCard.tsx'
 import { RegionBoard } from './RegionBoard.tsx'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { ErrorState, LoadingState, PanelHeader } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
 import neon from './overview-neon.module.css'
 import { fmtBytes, fmtClockMs } from '../utils/format.ts'
 import { WorldMapPanel, buildOverviewReport, deltaArrow, downloadText, exportElementImage } from './overview-export.ts'
-import { AuthorAvatar, CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, MSG_BUCKETS, OvSection, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
+import { AuthorAvatar, CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME, CalendarHeatmapGate, MSG_BUCKETS, OvSection, SkeletonOverview, readCache, writeCache } from './overview-parts.tsx'
 import { NeonBackdrop, NeonHero } from './overview-neon.tsx'
 
 /**
@@ -111,7 +111,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   const go = (tab: string): void => { onNavigate?.(tab) }
   const openChat = (username: string): void => { onOpenChat?.(username) }
   const openMoments = (username: string): void => { onOpenMoments?.(username) }
-  const topBase = (ins?.relations.top[0]?.count ?? 1) || 1
+  const topBase = Math.max(1, ...(ins?.relations.top ?? []).map(x => x.count))
   const extras = ins?.extras
 
   const exportAll = async (): Promise<void> => {
@@ -178,8 +178,8 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         )}
         actions={(
           <>
-            <button type="button" className={css.refresh} onClick={() => { void exportAll() }} disabled={exporting}>
-              {exporting ? '归档中…' : '导出全部会话 ZIP'}
+            <button type="button" className={css.refresh} onClick={() => { void exportAll() }} disabled={exporting} {...desktopActionProps()}>
+              {exporting ? '归档中…' : desktopAction() ? '导出全部会话 ZIP（仅电脑）' : '导出全部会话 ZIP'}
             </button>
             <button type="button" className={css.refresh} onClick={() => { void load() }} disabled={loading || refreshing}>
               {(loading || refreshing)
@@ -220,28 +220,9 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
           <NeonHero data={data} ins={ins} onGo={go} />
 
           <div className={css.ovGrid}>
-            <OvSection span={css.ovSpan12} icon="world" title="世界板块 · 好友地区">
-              {/* 地图 + 省份/城市两栏榜单。此前这里只有地图：实测画布 520px 高、两侧另有两列
-                  240px 的头像栏，但 228 位好友几乎都在同一个国家 —— 除了一小块紫色，
-                  整块卡片都是空的。榜单把这半张卡片的面积换成真实数据（同源树，不新增查询）。 */}
-              <div className={css.worldBoard}>
-                <div className={css.worldMapBox + ' ' + neon.worldMapBox}>
-                  <LazyMount placeholder={<div className={kitCss.emptyInline}>地图进入可视区后加载…</div>}>
-                    <Suspense fallback={<LoadingState variant="compact" label="地图资源加载中…" />}>
-                      <WorldMapPanel />
-                    </Suspense>
-                  </LazyMount>
-                </div>
-                <RegionBoard />
-              </div>
-            </OvSection>
-
-            <OvSection span={css.ovSpan12} icon="content" title="全局热词">
-              <WordCloudCard scope="global" limit={60} />
-            </OvSection>
-
             {extras && (
               <>
+                <h2 className={css.ovGroupTitle}>近期趋势</h2>
                 <OvSection span={css.ovSpan4} className={css.ovTrend} icon="trend" title="轨道趋势">
                   <div className={css.trendGrid}>
                     <div className={css.trendCell}><span className={css.metricValue}>{extras.trends.messages7.toLocaleString()}</span><span className={kitCss.textCaption}>近 7 天消息</span><span className={deltaArrow(extras.trends.messages7Delta).cls}>{deltaArrow(extras.trends.messages7Delta).text}</span></div>
@@ -253,64 +234,27 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                 </OvSection>
                 {extras.heatmap.length > 0 && (
                   <OvSection span={css.ovSpan8} className={css.ovHeat} icon="heat" title="消息热度 · 近 90 天">
-                    <CalendarHeatmap data={extras.heatmap} />
+                    <CalendarHeatmapGate data={extras.heatmap} />
                   </OvSection>
                 )}
               </>
             )}
 
-            <OvSection span={css.ovSpan6} icon="storage" title={`存储构成 Top ${data.storage.categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { go('storage') }}>详情 →</button>}>
-              {data.storage.categories.length === 0
-                ? <div className={kitCss.emptyInline}>暂无媒体资源记录</div>
-                : <div className={css.catList}>{[...data.storage.categories]
-                    // 按体积降序：条形是按 size 画的，后端给的顺序按条数排，
-                    // 不重排就会出现"第一行不是最长条"的别扭观感。
-                    .sort((a, b) => b.size - a.size)
-                    .map(c => (
-                    <div key={c.label} className={css.cat}>
-                      <div className={css.catRow}><span className={css.catLabel}>{c.label}</span><span className={css.catMeta}>{c.count.toLocaleString()} 项 · {fmtBytes(c.size)}</span></div>
-                      <div className={css.bar + ' ' + neon.barTrack}><div className={css.barFill + ' ' + neon.barFill} style={{ width: `${(c.size / Math.max(1, data.storage.categories[0]?.size ?? 1)) * 100}%` }} /></div>
-                    </div>
-                  ))}</div>}
-            </OvSection>
-
-            {/* 行内配对按**内容体量**而不是主题：6 栅格卡片共 8 张，自然高度分别是
-                约 300(存储构成 7 条) / 270(撤回与风险) / 130(存储清理) / 130(资金) /
-                464(交互画像) / 464(关系浓度) / 377(内容构成) / 377(数据健康)。
-                按 300+270、130+130 配对，行内两张卡高度几乎相等，不会再靠拉伸去填，
-                格子也不会被拉成"空盒子"。 */}
-            {/* 撤回痕迹 + 风险提示合并为一张 6 栅格卡片：原先「风险与隐私提示」是 5 栅格底栏里
-                只有一行文字的小卡（实测内容 20px、卡高 85px，几乎全是内边距）。 */}
-            <OvSection span={css.ovSpan6} icon="revoke" title="撤回消息痕迹 · 风险提示" action={<button type="button" className={css.panelGo} onClick={() => { go('revoked') }}>详情 →</button>}>
-              <div className={css.revoke}>
-                <span className={css.revokeValue}>{data.revoked.toLocaleString()}</span>
-                <span className={kitCss.textMeta}>条被撤回消息的元数据痕迹（发送者/时间/类型可查）</span>
-                <p className={css.revokeNote}>微信 4.x 防撤回机制在本地保留的删除缓存，可用于回顾"谁撤回了什么"。</p>
-              </div>
-              <div className={css.metricGrid + ' ' + neon.gridCells}>
-                <div className={css.metric}><span className={css.metricValue}>{data.revoked.toLocaleString()}</span><span className={kitCss.textCaption}>撤回消息（可回溯）</span></div>
-                <div className={css.metric}><span className={css.metricValue}>{warnCount}</span><span className={kitCss.textCaption}>转账/红包异常</span></div>
-              </div>
-              <p className={css.revokeNote}>建议定期运行 <button type="button" className={css.panelGo} onClick={() => { go('privacytrust') }}>隐私体检</button>：扫描敏感信息、资金往来与文件存储占用。</p>
-            </OvSection>
-
-            <OvSection span={css.ovSpan6} icon="storage" title="存储清理建议" action={<button type="button" className={css.panelGo} onClick={() => { go('storage') }}>详情 →</button>}>
-              <div className={css.metricGrid + ' ' + neon.gridCells}>
-                <div className={css.metric}><span className={css.metricValue}>{fmtBytes(stor?.total_size ?? 0)}</span><span className={kitCss.textCaption}>媒体占用</span></div>
-                <div className={css.metric}><span className={css.metricValue}>{(stor?.total_count ?? 0).toLocaleString()}</span><span className={kitCss.textCaption}>媒体项</span></div>
-                <div className={css.metric}><span className={css.metricValue}>{largeFiles.length}</span><span className={kitCss.textCaption}>超大文件</span></div>
+            <h2 className={css.ovGroupTitle}>好友分布</h2>
+            <OvSection span={css.regionSpan} icon="world" title="世界">
+              <div className={css.worldMapBox + ' ' + neon.worldMapBox}>
+                <LazyMount placeholder={<div className={kitCss.emptyInline}>地图进入可视区后加载…</div>}>
+                  <Suspense fallback={<LoadingState variant="compact" label="地图资源加载中…" />}>
+                    <WorldMapPanel />
+                  </Suspense>
+                </LazyMount>
               </div>
             </OvSection>
+            <RegionBoard />
 
-            <OvSection span={css.ovSpan6} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { go('ledger') }}>详情 →</button>}>
-              {ls ? (
-                <div className={css.metricGrid + ' ' + neon.gridCells} data-st-ledger-money="1">
-                  <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
-                  <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>支出</span></div>
-                  <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>
-                  <div className={css.metric}><span className={css.metricValue}>{ls.redpacketsSent + ls.redpacketsReceived}</span><span className={kitCss.textCaption}>红包收/发</span></div>
-                </div>
-              ) : <div className={kitCss.emptyInline}>暂无资金记录</div>}
+            <h2 className={css.ovGroupTitle}>关系与内容</h2>
+            <OvSection span={css.ovSpan12} icon="content" title="全局热词">
+              <WordCloudCard scope="global" limit={60} />
             </OvSection>
 
             {ins && (
@@ -344,7 +288,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                         <button key={t.username} type="button" className={css.topRow} onClick={() => { openChat(t.username) }} title={`与「${t.name}」的对话`}>
                           <span className={css.topRank}>{i + 1}</span>
                           <span className={css.topName}>{t.name}</span>
-                          <div className={css.topTrack}><div className={css.topFill + ' ' + neon.topFill} style={{ width: `${(t.count / Math.max(1, ins.relations.top[0]?.count ?? 1)) * 100}%` }} /></div>
+                          <div className={css.topTrack}><div className={css.topFill + ' ' + neon.topFill} style={{ width: `${(t.count / Math.max(1, ...ins.relations.top.map(x => x.count))) * 100}%` }} /></div>
                           <span className={css.topCount}>{t.count} 条</span>
                         </button>
                       ))}
@@ -369,16 +313,13 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
               )}
             </OvSection>
 
-            {/* 末行：内容构成与资产 + 数据健康，各占 6 栅格。
-                原先是一个 5 栅格的纵向列（内容构成 + 风险提示 + 数据健康），
-                12 栅格里空着 7 栅格 —— 实测那一整块是 770×814px 的空白，是本面板最大的一处空档。
-                现在两卡各 6 栅格并排，高度也接近（内容构成约 420px、数据健康约 400px）。 */}
+            <h2 className={css.ovGroupTitle}>数据与资产</h2>
             {ins && (
               <OvSection span={css.ovSpan6} icon="content" title="内容构成与资产">
                 <div className={css.catList}>
                   {MSG_BUCKETS.map((x) => {
                     const n = ins.messages[x.key]
-                    const max = Math.max(1, ins.messages.text)
+                    const max = Math.max(1, ...MSG_BUCKETS.map(b => ins.messages[b.key] ?? 0))
                     return <div key={x.label} className={css.cat}><div className={css.catRow}><span className={css.catLabel}>{x.label}</span><span className={css.catMeta}>{n.toLocaleString()} 条</span></div><div className={css.bar + ' ' + neon.barTrack}><div className={css.barFill + ' ' + neon.barFill} style={{ width: `${(n / max) * 100}%` }} /></div></div>
                   })}
                 </div>
@@ -406,6 +347,52 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
                 </div>
               </OvSection>
             )}
+
+            {/* 行内配对保留内容体量相近的卡片，避免短卡被高卡拉伸后出现大块空白。 */}
+            <OvSection span={css.ovSpan6} icon="storage" title={`存储构成 Top ${data.storage.categories.length}`} action={<button type="button" className={css.panelGo} onClick={() => { go('storage') }}>详情 →</button>}>
+              {data.storage.categories.length === 0
+                ? <div className={kitCss.emptyInline}>暂无媒体资源记录</div>
+                : <div className={css.catList}>{[...data.storage.categories]
+                    .sort((a, b) => b.size - a.size)
+                    .map(c => (
+                    <div key={c.label} className={css.cat}>
+                      <div className={css.catRow}><span className={css.catLabel}>{c.label}</span><span className={css.catMeta}>{c.count.toLocaleString()} 项 · {fmtBytes(c.size)}</span></div>
+                      <div className={css.bar + ' ' + neon.barTrack}><div className={css.barFill + ' ' + neon.barFill} style={{ width: `${(c.size / Math.max(1, ...data.storage.categories.map(x => x.size))) * 100}%` }} /></div>
+                    </div>
+                  ))}</div>}
+            </OvSection>
+
+            <OvSection span={css.ovSpan6} icon="revoke" title="撤回消息痕迹 · 风险提示" action={<button type="button" className={css.panelGo} onClick={() => { go('revoked') }}>详情 →</button>}>
+              <div className={css.revoke}>
+                <span className={css.revokeValue}>{data.revoked.toLocaleString()}</span>
+                <span className={kitCss.textMeta}>条被撤回消息的元数据痕迹（发送者/时间/类型可查）</span>
+                <p className={css.revokeNote}>微信 4.x 防撤回机制在本地保留的删除缓存，可用于回顾"谁撤回了什么"。</p>
+              </div>
+              <div className={css.metricGrid + ' ' + neon.gridCells}>
+                <div className={css.metric}><span className={css.metricValue}>{data.revoked.toLocaleString()}</span><span className={kitCss.textCaption}>撤回消息（可回溯）</span></div>
+                <div className={css.metric}><span className={css.metricValue}>{warnCount}</span><span className={kitCss.textCaption}>转账/红包异常</span></div>
+              </div>
+              <p className={css.revokeNote}>建议定期运行 <button type="button" className={css.panelGo} onClick={() => { go('privacytrust') }}>隐私体检</button>：扫描敏感信息、资金往来与文件存储占用。</p>
+            </OvSection>
+
+            <OvSection span={css.ovSpan6} icon="storage" title="存储清理建议" action={<button type="button" className={css.panelGo} onClick={() => { go('storage') }}>详情 →</button>}>
+              <div className={css.metricGrid + ' ' + neon.gridCells}>
+                <div className={css.metric}><span className={css.metricValue}>{fmtBytes(stor?.total_size ?? 0)}</span><span className={kitCss.textCaption}>媒体占用</span></div>
+                <div className={css.metric}><span className={css.metricValue}>{(stor?.total_count ?? 0).toLocaleString()}</span><span className={kitCss.textCaption}>媒体项</span></div>
+                <div className={css.metric}><span className={css.metricValue}>{largeFiles.length}</span><span className={kitCss.textCaption}>超大文件</span></div>
+              </div>
+            </OvSection>
+
+            <OvSection span={css.ovSpan6} icon="ledger" title={`资金快照${ledger?.month ? ` · ${ledger.month}` : ''}`} action={<button type="button" className={css.panelGo} onClick={() => { go('ledger') }}>详情 →</button>}>
+              {ls ? (
+                <div className={css.metricGrid + ' ' + neon.gridCells} data-st-ledger-money="1">
+                  <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountIn.toFixed(2)}</span><span className={kitCss.textCaption}>收入</span></div>
+                  <div className={css.metric}><span className={css.metricValue}>¥{ls.totalAmountOut.toFixed(2)}</span><span className={kitCss.textCaption}>支出</span></div>
+                  <div className={css.metric}><span className={css.metricValue}>{ls.transfers.toLocaleString()}</span><span className={kitCss.textCaption}>转账次数</span></div>
+                  <div className={css.metric}><span className={css.metricValue}>{ls.redpacketsSent + ls.redpacketsReceived}</span><span className={kitCss.textCaption}>红包收/发</span></div>
+                </div>
+              ) : <div className={kitCss.emptyInline}>暂无资金记录</div>}
+            </OvSection>
             {ins && (
               <OvSection span={css.ovSpan6} icon="health" title="数据健康">
                 <div className={css.healthGrid + ' ' + neon.gridCells}>

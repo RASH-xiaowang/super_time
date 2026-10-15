@@ -15,8 +15,8 @@
  * ── 钉住的四件事 ────────────────────────────────────────────────────────
  *  ① 世界层渲染 `GeoEchartsMap`（2D），且空节点兜底、失败回退、国名解析都在；
  *  ② 仓库里**没有任何 3D 渲染残留**：倾斜 / 地形 / 镜头飞行 / 等距投影 的文件与符号全没了；
- *  ③ 底图仍只从 `world-map-data.ts#fetchFirstJson` 拿（2026-09-30 起那里**直接 fetch**，
- *     不再判任何出网闸门 —— 底图开关已随「移除全部出网开关」删除）；
+ *  ③ 底图仍只从 `world-map-data.ts#fetchFirstJson` 拿（2026-09-30 起那里不再判
+ *     任何出网闸门；现在渲染层改经 `apiGetMapGeoJson` 走后端固定白名单代理）；
  *  ④ 中国 / 省 / 市三层没被误伤，仍走同一个 `GeoEchartsMap`。
  */
 import { existsSync, readdirSync } from 'node:fs'
@@ -84,10 +84,11 @@ describe('世界层：2D 平面渲染器接得对', () => {
     expect(hits, `发现 3D 残留（用户要求移除全部 3D 效果）：\n  ${hits.join('\n  ')}`).toEqual([])
   })
 
-  it('底图只从取数口拿，且那里直接 fetch（不再判任何闸门）', () => {
+  it('底图只从取数口拿，且经后端代理（不再判任何闸门、不再裸 fetch）', () => {
     expect(DATA, 'fetchFirstJson 不在原来的文件里了？').toContain('export async function fetchFirstJson')
-    // 2026-09-30：mapTilesBlocked() 随底图开关一起删除 ⇒ fetchFirstJson 体内只剩直接 fetch。
-    expect(DATA, 'fetchFirstJson 没有直接 fetch 候选地址').toMatch(/async function fetchFirstJson[\s\S]{0,240}await fetch\(url\)/)
+    // 2026-09-30：mapTilesBlocked() 随底图开关一起删除；随后渲染层裸 fetch 也收口到后端。
+    expect(DATA, 'fetchFirstJson 没有经后端代理取数').toMatch(/async function fetchFirstJson[\s\S]{0,240}await apiGetMapGeoJson\(urls\)/)
+    expect(DATA, '渲染层又直接 fetch 地图地址').not.toMatch(/\bawait fetch\(/)
     expect(DATA, 'mapTilesBlocked 已删除，fetchFirstJson 里不该再有闸门').not.toContain('mapTilesBlocked')
   })
 

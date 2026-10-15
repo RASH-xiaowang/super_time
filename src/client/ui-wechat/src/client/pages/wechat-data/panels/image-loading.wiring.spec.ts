@@ -83,7 +83,7 @@ describe('图片加载流程', () => {
   it('⑧ 缓存按字节计容量、单条过大不入（一张原图不该挤掉整屏缩略图）', () => {
     expect(CACHE, '要有总量上限').toMatch(/export const MAX_BYTES = \d+/)
     expect(CACHE, '要有单条上限').toMatch(/export const MAX_ENTRY_BYTES = \d+/)
-    expect(CACHE, '超限要从最久未用开始淘汰').toContain('while (bytes > maxBytes')
+    expect(CACHE, '超限要从最久未用开始淘汰（字节或条数任一超陔）').toContain('while ((bytes > maxBytes || store.size > maxEntries)')
     expect(CACHE, '空 url 不入缓存').toContain("if (value.url === '') return")
   })
 })

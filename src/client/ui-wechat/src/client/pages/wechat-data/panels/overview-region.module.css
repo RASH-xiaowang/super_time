@@ -1,17 +1,11 @@
-/* 总览 · 地区分布榜（M21 第十六刀拆分自 overview.module.css）。
-   榜单（省份 / 城市）的等高两栏与行内条形 —— 只有 RegionBoard.tsx 用这批类。
-   规则逐字未改：只是换了文件，类名经 CSS Modules 处理，引用侧同时改前缀。 */
-/* 榜单（省份 / 城市）：等高两栏、行内条形对比 */
+/* 总览 · 地区分布榜：省份与城市独立卡片中的行内条形对比。 */
 .regionRank {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  height: 310px;
-  padding: 8px 10px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-md);
-  background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
+  height: clamp(220px, 28vw, 310px);
+  max-height: 310px;
 }
 .regionRankHd {
   display: flex;
@@ -21,7 +15,6 @@
   flex-shrink: 0;
   font-size: 11px;
 }
-.regionRankTitle { font-weight: 700; color: var(--nm-text-1); }
 .regionRankHint { color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .regionRows {
   display: flex;

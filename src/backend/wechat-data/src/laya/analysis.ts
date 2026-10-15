@@ -288,7 +288,7 @@ export function isLowConfidenceText(text: string): boolean {
 export type LayaVoiceTranscriber = (
   localId: number,
   serverId: string,
-) => { ok: boolean; text?: string; error?: string }
+) => Promise<{ ok: boolean; text?: string; error?: string }>
 
 export interface LayaVisibleAnalysisInput {
   decryptedDir: string
@@ -304,6 +304,21 @@ export interface LayaVisibleAnalysisInput {
   transcribe?: LayaVoiceTranscriber
   /** 关掉缓存（测试用）。 */
   useCache?: boolean
+  /**
+   * 每分析完一条就回调一次（W3-11.5）。
+   *
+   * 为什么需要它：整批实测**均 36s / 峰值 110s**，而界面上只有一个「本地分析中…」——
+   * 用户分不清「在跑」还是「卡死」，也不敢切走（切走就白算）。有进度之后，等待变成可读的。
+   * `done` 包含命中的缓存条目（那也是"处理完了"），`total` 是本批真正要处理的条数。
+   */
+  onProgress?: (done: number, total: number, currentLocalId: number) => void
+  /**
+   * 取消信号（W3-11.5）。
+   *
+   * 只在**每条之间**检查（一次 ONNX forward 没法从中间打断，实测单条 0.5–9s），
+   * 所以取消的最坏延迟就是一条 —— 这也是「已算到 5/12 才停」这种口径的由来。
+   */
+  signal?: AbortSignal
 }
 
 export interface LayaVisibleAnalysisResult {
@@ -313,6 +328,15 @@ export interface LayaVisibleAnalysisResult {
   model: { dir: string; bytes: number }
   modelKey: string
   items: LayaMessageAnalysis[]
+  /**
+   * **被取消时为 true**（W3-11.5），且 `items` 是**已经算完的那部分**。
+   *
+   * 为什么取消不抛错、而是带部分结果正常返回：整批实测均 36s / 峰值 110s，
+   * 而每条算完就写进 `laya_analysis.db` 了。抛错等于把已经付过款的推理扔掉，
+   * 面板还得显示成一个红色错误 —— 而用户点「停止」本来就不是失败。
+   * 面板据此显示「已停止（已分析 5/12）」，剩下的条目下次滚到时照常补算（它们命中不了缓存而已）。
+   */
+  canceled?: boolean
 }
 
 /**
@@ -320,7 +344,7 @@ export interface LayaVisibleAnalysisResult {
  *
  * 2026-09-28 复核：**曾尝试靠「合批」降低这一批的耗时，实测反而慢了 41.8%**
  * （成本 ≈ 行数 × 序列长度，`session.run` 每次调用的固定开销实测为 0 ⇒ 没有可摊薄的东西，
- * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见 docs/PERF-AUDIT 第七节。
+ * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见已删除的 PERF-AUDIT 报告第七节（原文见 git 历史）。
  */
 export const MAX_ANALYZE_BATCH = 12
 
@@ -387,8 +411,25 @@ export async function analyzeVisibleMessages(
   const items: LayaMessageAnalysis[] = []
   const toWrite: Array<{ localId: number; sourceText: string; fromVoice: boolean; answers: LayaAnswer[] }> = []
   const limit = Math.max(2, Math.min(Math.trunc(input.contextLimit ?? DEFAULT_CONTEXT), MAX_CONTEXT))
+  /** W3-11.5：进度回调。在**每条开跑之前**报（而不是跑完之后）——
+   *  这样 `done` 的语义是「已推进到第几条」，与面板里逐条的 pending/done 状态天然对齐；
+   *  放在每条之后也行，但那要求在每个 `continue` 分支上都补一次调用（8 处），
+   *  漏一处的后果是进度停在半路 —— 那种形状正是本批在修的那类问题。 */
+  let progressDone = 0
+  const reportProgress = (localId: number): void => {
+    progressDone += 1
+    input.onProgress?.(progressDone, targets.length, localId)
+  }
+  /** W3-11.5：被取消（用户按了「停止分析」）。此时 `items` 是已算完的那部分。 */
+  let canceled = false
 
   for (const target of targets) {
+    // W3-11.5：取消检查放在**让出之后、报进度之前** —— 被取消的那一条**没有开始算**，
+    // 所以既不该算进进度（否则面板显示 6/12 而实际只算了 5 条），也不该进 items。
+    if (input.signal?.aborted === true) {
+      canceled = true
+      break
+    }
     // B2（2026-09-28 性能修复）：每条之间让出事件循环。这一整批在日志里是 **均 36s / 峰值 110s**
     // ——`layaAnalyze` 内部是一次完整的 ONNX forward（同步），而本模块此前**不在** `yieldToLoop`
     // 覆盖的 8 个模块内 ⇒ 整个推理期间独占事件循环，同进程的其它请求（本该 1ms）全被拖住
@@ -396,6 +437,7 @@ export async function analyzeVisibleMessages(
     // 但把「独占」变成「交替」，是这件事里成本最低、感知最强的一步。
     // 注意：命中的缓存条目走的是 `continue`，不会到这里 —— 只有真的要开算的才让出。
     await yieldToLoop()
+    reportProgress(target.localId)
     const hit = cached.get(target.localId)
     if (hit) {
       items.push({
@@ -432,7 +474,8 @@ export async function analyzeVisibleMessages(
       if (cachedText !== '') {
         text = cachedText
       } else if (input.transcribe) {
-        const r = input.transcribe(target.localId, svrId)
+        // 异步转写（2026-10-13）：whisper 在子进程跑，worker 照常服务消息查询/会话列表。
+        const r = await input.transcribe(target.localId, svrId)
         text = r.ok ? String(r.text ?? '').trim() : ''
         if (text === '') {
           items.push({
@@ -481,6 +524,8 @@ export async function analyzeVisibleMessages(
   }
 
   if (useCache && toWrite.length > 0) {
+    // W3-11.5：被取消时**照样落盘** —— 已经算完的那些正是取消要保住的成果。
+    // 少了这一步，「停止」等于把 36 秒的推理全部作废，用户会立刻再点一次。
     writeAnalysisCache(input.decryptedDir, talker, modelKey, toWrite)
   }
 
@@ -491,5 +536,8 @@ export async function analyzeVisibleMessages(
     // 逐条打「信息不足」标注：**只标成功条目**（失败条目没有判断可言，标它只会让人以为
     // 失败也是「信息不足」造成的）。判据与实测依据见 `isLowConfidenceText`。
     items: items.map((it) => (it.ok ? { ...it, lowConfidence: isLowConfidenceText(it.sourceText) } : it)),
+    // canceled 只在真被取消时给（`undefined` 而不是 `false`：调用方的
+    // `'canceled' in r` 才是可靠判据，`false` 会让人误以为存在两种语义）。
+    ...(canceled ? { canceled: true } : {}),
   }
 }

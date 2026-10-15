@@ -33,11 +33,11 @@
  * `msg/attach` 下的文件名 0% 命中（4.x 它不是文件身份），只有前者 100% 命中。
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { resolveImageResourceHint } from './media-image.ts'
 import { shardCatalogDirs } from './meta.ts'

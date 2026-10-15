@@ -37,6 +37,8 @@ import type {
   ContactsSnapshot,
   DailySummaryResult,
   DbHealthSnapshot,
+  DbIntegrityResult,
+  DbRepairResult,
   DbStatusSnapshot,
   DecryptAllResult,
   DecryptImagesResult,
@@ -50,6 +52,7 @@ import type {
   EmoticonsSnapshot,
   ExportResult,
   FavoritesSnapshot,
+  FeedbackRecord as RetrievalFeedbackItem,
   FilesSnapshot,
   GenerateKeysResult,
   CallsSnapshot,
@@ -79,7 +82,12 @@ import type {
   PrivacyAuditRow,
   PrivacySnapshot,
   PrivacyStateSnapshot,
+  RerankWeights,
   RecordsSnapshot,
+  RetrievalConfig,
+  RetrievalConfigPatch,
+  RetrievalEvalResult,
+  RetrievalStatus,
   RevokedSnapshot,
   SearchBuildResult,
   SearchIndexStatus,
@@ -102,6 +110,7 @@ import type {
   VoiceTranscriptResult,
   VoiceTranscribeOneResult,
   VoiceTranscribeResult,
+  VectorBuildResult,
   WechatConfigFull,
   WechatConfigPatch,
   WhisperDownloadResult,
@@ -117,8 +126,18 @@ import {
   subscribeSnapshot,
   writeRenderCache,
 } from './cache.ts'
+import { createImageLoadQueue } from './image-batch.ts'
 import { remote, unwrap } from './api-core.ts'
 import { apiGetRemoteImageUrl } from './api-media.ts'
+
+export type {
+  RetrievalConfig as RetrievalConfigShape,
+  RetrievalConfigPatch,
+  RetrievalEvalResult,
+  RetrievalStatus,
+  VectorBuildResult,
+  RetrievalFeedbackItem,
+}
 
 /** 本机地址（能直接画）；与 `panels/remote-img.tsx` 的 `localImageSrc` 同一判据。 */
 const LOCAL_DRAWABLE = /^(data:|blob:|file:)/i
@@ -169,6 +188,52 @@ export async function apiGetAvatarsLocal(options: { usernames: string[] }): Prom
   remoteKeys.forEach((k, i) => { out[k] = settled[i] ?? '' })
   return { ...map, ...out }
 }
+
+/**
+ * 头像攒批队列（W2-10.2）。
+ *
+ * 与图片（W1-2 `imageLoadQueue`）、表情（E1 `emoticonQueue`）同一个 `createImageLoadQueue`：
+ * 一屏挂 N 个 `<Avatar>`、每个组件各自取图 ⇒ 攒到同一 tick 整批发出去。
+ *
+ * 实测（`avatar-batch-cost.measure.spec.ts`，200 个头像全部命中 `head_image.db`）：
+ * 逐张 200 次 **34.18ms**（0.171ms/个）vs 批量 1 次 **6.15ms** ⇒ **5.6×**，
+ * 省下 28ms 与 **199 次 IPC 往返**（这个基准直接调 query 函数，量不到往返开销，
+ * 所以真实收益比 5.6× 更大）。
+ *
+ * **没有新 Remote**：批量入口 M23 的 `getAvatarsLocal` 早就有了，计划里「需新批量 Remote」
+ * 这一句对头像已经不成立；表情那条更早（E1）就批完了。
+ */
+const avatarQueue = createImageLoadQueue<{ username: string; nickname?: string }, AvatarResult>({
+  chunkSize: 200,
+  onMissing: (k) => ({ kind: 'none' }),
+  flush: async (keys) => {
+    const map = await apiGetAvatarsLocal({ usernames: keys.map((k) => k.username) })
+    // 批量没给的那几条（本地没有，且 contact 表里也没有 https 地址）**退回单张**：
+    // 单张那条路还多一级「按昵称再找一次联系人」的回落（`resolveAvatar` 独有），
+    // 批量接口没有这一级。直接丢弃会少一批头像 —— 宁可多几次往返，也不能少图。
+    return Promise.all(keys.map(async (k) => {
+      const hit = map[k.username]
+      if (typeof hit === 'string' && hit !== '') return { kind: 'data', data: hit }
+      return apiGetAvatar(k)
+    }))
+  },
+})
+
+/**
+ * 取一个头像（W2-10.2 攒批版）。**签名与语义与 {@link apiGetAvatar} 完全一致**，
+ * 调用方一行都不用改 —— 只是同一 tick 里的多次调用会合成一次批量 RPC。
+ *
+ * 为什么不直接换成 `apiGetAvatarsLocal`：单张那条路还多一级「按昵称找联系人」的回落
+ *（`resolveAvatar` 独有），批量接口没有。所以这里是「批量优先 + 未命中退回单张」，
+ * 而不是二选一。
+ * @param options - username 与可选昵称。
+ * @returns AvatarResult。
+ */
+export async function apiGetAvatarBatched(options: { username: string; nickname?: string }): Promise<AvatarResult> {
+  const u = (options?.username ?? '').trim()
+  if (u === '') return { kind: 'none' }
+  return avatarQueue.enqueue(options.nickname === undefined ? { username: u } : { username: u, nickname: options.nickname })
+}
 /**
  * Fetch the full WeChat config (including keys-related settings).
  * @returns WechatConfigFull.
@@ -184,16 +249,16 @@ export async function apiGetWechatConfigFull(): Promise<WechatConfigFull> {
 
 /** Open the owned WeChat config.json (e.g. for manual edit). @returns the opened path. */
 /** Open an owned path (dir/file) with the system default. @returns the opened path. */
-export async function apiOpenPath(path: string): Promise<{ ok: boolean; path: string }> {
+export async function apiOpenPath(path: string): Promise<{ ok: boolean; path: string; error?: string }> {
   return unwrap(await remote().openPath({ path }))
 }
-export async function apiOpenConfig(): Promise<{ ok: boolean; path: string }> {
+export async function apiOpenConfig(): Promise<{ ok: boolean; path: string; error?: string }> {
   return unwrap(await remote().openConfig())
 }
 /** 路径配置中心 wechat/config.json 的绝对路径（用于“点击打开”）。 */
 export async function apiGetWechatPathConfig(): Promise<string> {
   try {
-    const api = (window as any)?.electronAPI?.wechat
+    const api = window.electronAPI?.wechat
     if (!api?.info) return ''
     const res = await api.info()
     return res?.ok ? (res.value?.pathConfig ?? '') : ''
@@ -227,62 +292,8 @@ export type { WechatLlmConfig, WechatLlmProfile, LlmProfilesSnapshot, LlmModelsR
 // RAG 检索层：状态 / 调参 / 向量索引 / 评估 / 反馈闭环
 // ─────────────────────────────────────────────────────────────
 
-/** 检索配置（与后端 RetrievalConfig 对齐；只声明前端面板用到的字段）。 */
-export interface RetrievalConfigShape {
-  enabled: boolean
-  embedding: { enabled: boolean; model: string; batchSize: number; maxDocsPerBuild: number; maxCharsPerDoc: number }
-  channels: {
-    sparse: { enabled: boolean; topK: number }
-    dense: { enabled: boolean; topK: number; minSimilarity: number; candidatePool: number }
-    structured: { enabled: boolean; topK: number }
-  }
-  fusion: { k: number; keep: number }
-  rerank: { weights: Record<string, number>; minScore: number }
-  compress: { maxChars: number; maxChunks: number; linesPerChunk: number; dedupThreshold: number }
-  intent: { llmAssist: boolean }
-  feedback: { enabled: boolean; learningRate: number; maxRecords: number }
-}
-
-/** 检索层综合状态。 */
-export interface RetrievalStatus {
-  enabled: boolean
-  config: RetrievalConfigShape
-  vector: { rows: number; dim: number; model: string }
-  feedback: { total: number; up: number; down: number }
-  weights: Record<string, number>
-  intentAccuracy: { correct: number; total: number; accuracy: number }
-}
-
-/** 向量索引构建结果。 */
-export interface VectorBuildResult {
-  ok: boolean
-  status: string
-  rows: number
-  embedded: number
-  elapsed_ms: number
-  message?: string
-}
-
-/** 一条历史反馈。 */
-export interface RetrievalFeedbackItem {
-  id: string
-  question: string
-  answer: string
-  rating: 'up' | 'down'
-  citedUseful: number[]
-  citedUseless: number[]
-  intent: string
-  features: string[]
-  createdAt: number
-}
-
-/** 评估报告（合成评测集 + 混合/稀疏消融）。 */
-export interface RetrievalEvalResult {
-  report: string
-  hybrid: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
-  sparseOnly: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
-  intentAccuracy: { correct: number; total: number; accuracy: number }
-}
+// 检索层 wire 类型不再在客户端重复定义：见文件顶部从
+// `@deepseek-ai/dsh-wechat-data/types` 的转发。这里保留旧名字作为兼容别名。
 
 /**
  * 检索层的诊断/运维接口镜像（配置 + 向量库 + 反馈 + 权重 + 意图自评）。
@@ -298,7 +309,7 @@ export async function apiGetRetrievalStatus(): Promise<RetrievalStatus> {
 }
 
 /** 保存检索配置（只传要改的字段）。界面已不再暴露该入口，仅供诊断/测试使用。 */
-export async function apiSaveRetrievalConfig(patch: unknown): Promise<void> {
+export async function apiSaveRetrievalConfig(patch: RetrievalConfigPatch): Promise<void> {
   unwrap(await remote().saveRetrievalConfig({ patch }))
 }
 
@@ -315,7 +326,7 @@ export async function apiSubmitAskFeedback(options: {
   useless?: number[]
   question?: string
   answer?: string
-}): Promise<{ ok: boolean; adaptedWeights?: Record<string, number>; features?: string[]; message?: string }> {
+}): Promise<{ ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; feedbackTotal?: number; message?: string }> {
   return unwrap(await remote().submitAskFeedback(options))
 }
 
@@ -325,7 +336,7 @@ export async function apiListRetrievalFeedback(limit = 50): Promise<{ items: Ret
 }
 
 /** 丢弃反馈带来的权重偏移，回默认值。 */
-export async function apiResetRetrievalWeights(): Promise<{ ok: boolean; weights: Record<string, number> }> {
+export async function apiResetRetrievalWeights(): Promise<{ ok: boolean; weights: RerankWeights }> {
   return unwrap(await remote().resetRetrievalWeights())
 }
 
@@ -403,6 +414,24 @@ export async function apiDecryptAllDatabases(): Promise<DecryptAllResult> {
   return unwrap(await remote().decryptAllDatabases())
 }
 /**
+ * Per-database integrity checkup (PRAGMA integrity_check). Explicit action
+ * (the health panel's re-check / repair flow), not part of the cached
+ * health snapshot — the latter is read by the hook self-check on mount.
+ * @returns DbIntegrityResult: checked/corrupted (repairable) / unreadable (busy etc) /
+ *   uncheckable (本机缺模块或分词器，体检不适用 —— 与损坏无关).
+ */
+export async function apiCheckDbIntegrity(): Promise<DbIntegrityResult> {
+  return unwrap(await remote().checkDbIntegrity())
+}
+/**
+ * Repair corrupted decrypted DBs: check integrity, re-decrypt only the
+ * corrupted ones from the local raw db_storage, then re-check.
+ * @returns DbRepairResult: found/repaired/stillCorrupted + unrepairable reasons.
+ */
+export async function apiRepairCorruptDbs(): Promise<DbRepairResult> {
+  return unwrap(await remote().repairCorruptDbs())
+}
+/**
  * Batch-decode every md5-prefixed .dat image into the decoded-images cache.
  * @param options - optional worker concurrency.
  * @returns DecryptImagesResult: total/ok/failed/skipped counts.
@@ -438,15 +467,26 @@ export async function apiGetWhisperStatus(): Promise<WhisperStatus> {
  * @param options - model id to download.
  * @returns WhisperDownloadResult: ok + file/bytes, or an error.
  */
-export async function apiDownloadWhisperModel(options: { model: string }): Promise<WhisperDownloadResult> {
+export async function apiDownloadWhisperModel(options: { model: string; jobId?: string }): Promise<WhisperDownloadResult> {
   return unwrap(await remote().downloadWhisperModel(options))
+}
+/**
+ * 停止一次正在跑的模型/引擎下载（W3-5.5）。
+ *
+ * 取消只在下**下一个 chunk** 生效；模型已下载的部分保留为 `.part`（下次可续传），
+ * 引擎包本来就是整份重下。
+ * @param options - jobId（即 `apiDownloadWhisperModel` / `apiInstallWhisperEngine` 那次的同一标识）。
+ * @returns ok + 停不上的原因（下载已结束 / 标识不认识）。
+ */
+export async function apiCancelWhisperDownload(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelWhisperDownload(options))
 }
 /**
  * Download + install the whisper.cpp CLI engine into the models dir.
  * @returns WhisperDownloadResult: ok + path, or an error.
  */
-export async function apiInstallWhisperEngine(): Promise<WhisperDownloadResult> {
-  return unwrap(await remote().installWhisperEngine())
+export async function apiInstallWhisperEngine(options?: { jobId?: string }): Promise<WhisperDownloadResult> {
+  return unwrap(await remote().installWhisperEngine(options))
 }
 /**
  * Batch-transcribe the most recent voice messages (silk → whisper-cli).

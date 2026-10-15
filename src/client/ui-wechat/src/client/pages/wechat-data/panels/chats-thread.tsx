@@ -16,6 +16,7 @@ import { ChatView } from './chats-support.tsx'
 import { messagesMatchTalker } from './msg-scope.ts'
 import { useChatsPolling } from './chats-polling.ts'
 import { makeMsgRow } from './chats-msg-row.tsx'
+import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
 import type { GroupInfo, GroupMember, MessageRich, MessageRenderKind as RenderKind, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 
 export interface useChatsThreadInputs {
@@ -47,7 +48,7 @@ export interface useChatsThreadInputs {
   msgEndRef: React.RefObject<HTMLDivElement>
   msgLoading: boolean
   msgScrollRef: React.MutableRefObject<HTMLDivElement | null>
-  openMsgMenu: (ev: React.MouseEvent, m: WechatMessage, kind: RenderKind) => void
+  openMsgMenu: (ev: MsgMenuAnchor, m: WechatMessage, kind: RenderKind) => void
   openViewer: (m: WechatMessage) => void
   selfWxid: string
   sessionEpochRef: React.MutableRefObject<number>

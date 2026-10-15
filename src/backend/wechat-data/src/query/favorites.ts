@@ -3,7 +3,7 @@
  * Parses content XML (favitem type/desc/dataitem) into title/desc/url and
  * resolves sources via contact names, mirroring st_control modules/favorites.rs.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withWritableDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

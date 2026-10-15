@@ -125,6 +125,11 @@
   border-color: color-mix(in srgb, var(--nm-purple) 30%, transparent);
   color: var(--nm-purple-text);
 }
+/* 自动回复：与「用户自己问的」两种来源都不撞色（蓝 = 系统行为）。 */
+.srcTag[data-src='auto'] {
+  border-color: color-mix(in srgb, var(--nm-info) 34%, transparent);
+  color: var(--nm-info-text);
+}
 
 .scopeTag { color: var(--nm-text-3); }
 

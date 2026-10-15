@@ -7,15 +7,18 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { decideNavigation, decideWindowOpen, isInsidePath, isSafeExternalUrl } from '../navigation-policy.js'
 import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const APP_ROOT = 'D:\\super-time-wechat'
+const APP_ROOT = resolve(ROOT)
+
+/** 把应用目录下的相对路径转成规范化的 file: URL（测试不依赖仓库所在盘符）。 */
+const fileUrl = (...parts: string[]): string => pathToFileURL(resolve(join(APP_ROOT, ...parts))).href
 
 describe('shell.openExternal 白名单：只放行 http(s)', () => {
   it('http / https 交给系统浏览器', () => {
@@ -58,12 +61,12 @@ describe('shell.openExternal 白名单：只放行 http(s)', () => {
 })
 
 describe('导航守卫：只允许应用自己的页面', () => {
-  const appDoc = APP_ROOT + '\\src\\client\\ui-dist\\index.html'
+  const appDoc = join(APP_ROOT, 'src', 'client', 'ui-dist', 'index.html')
 
   it('应用目录内的 file: 页面放行（含带查询串的自身）', () => {
-    expect(decideNavigation('file:///D:/super-time-wechat/src/client/ui-dist/index.html', APP_ROOT)).toBe('allow')
-    expect(decideNavigation('file:///D:/super-time-wechat/src/client/ui-dist/index.html?skeleton=1', APP_ROOT)).toBe('allow')
-    expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'client', 'ui-dist', 'index.html'), APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'client', 'ui-dist', 'index.html') + '?skeleton=1', APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'index.html'), APP_ROOT)).toBe('allow')
   })
 
   it('外部地址被阻止（window.location = 外部站点）', () => {
@@ -83,14 +86,14 @@ describe('导航守卫：只允许应用自己的页面', () => {
 
   it('应用目录之外的本地文件被阻止', () => {
     expect(decideNavigation('file:///C:/Windows/System32/calc.exe', APP_ROOT)).toBe('deny')
-    expect(decideNavigation('file:///D:/super-time-wechat-evil/index.html', APP_ROOT)).toBe('deny')
-    expect(decideNavigation('file:///D:/super-time-wechat/../../secrets.txt', APP_ROOT)).toBe('deny')
+    expect(decideNavigation(fileUrl('..', 'super-time-wechat-evil', 'index.html'), APP_ROOT)).toBe('deny')
+    expect(decideNavigation(fileUrl('..', '..', 'secrets.txt'), APP_ROOT)).toBe('deny')
   })
 
   it('空 root 必须默认拒绝（fail-open 边界）', () => {
     // 评审实测：`path.relative('', x)` 得到相对路径、不以 '..' 开头，会把任意文件判成
     // 「在应用目录内」；root=undefined 更会抛 TypeError。这里把不变量钉住。
-    expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', '')).toBe('deny')
+    expect(decideNavigation(fileUrl('src', 'index.html'), '')).toBe('deny')
     expect(decideNavigation('file:///C:/Windows/win.ini', '')).toBe('deny')
     // 第二个参数是可选的（`reason?: string`）：没给理由也必须拒绝，而不是抛
     expect(decideNavigation('file:///C:/Windows/win.ini', undefined)).toBe('deny')
@@ -109,10 +112,10 @@ describe('导航守卫：只允许应用自己的页面', () => {
 describe('路径包含判定', () => {
   it('同目录与子路径算在内，前缀相似的兄弟目录不算', () => {
     expect(isInsidePath(APP_ROOT, APP_ROOT)).toBe(true)
-    expect(isInsidePath(APP_ROOT, APP_ROOT + '\\src\\a.ts')).toBe(true)
+    expect(isInsidePath(APP_ROOT, join(APP_ROOT, 'src', 'a.ts'))).toBe(true)
     // 关键边界：`super-time-wechat-evil` 不能因为「前缀相同」被放行
-    expect(isInsidePath(APP_ROOT, 'D:\\super-time-wechat-evil\\x')).toBe(false)
-    expect(isInsidePath(APP_ROOT, 'D:\\other\\x')).toBe(false)
+    expect(isInsidePath(APP_ROOT, resolve(APP_ROOT, '..', 'super-time-wechat-evil', 'x'))).toBe(false)
+    expect(isInsidePath(APP_ROOT, resolve(APP_ROOT, '..', 'other', 'x'))).toBe(false)
   })
 })
 

@@ -29,6 +29,23 @@
  */
 export declare const WECHAT_CDN_HOST_SUFFIXES: readonly string[];
 /**
+ * 允许由后端直接抓取的公众号文章页主机。
+ *
+ * 比图片 CDN 白名单更窄：文章页不是「拿一份媒体字节」，而是抓取可被离线改写文件里的
+ * `<contentUrl>` 所指的整页 HTML。这个地址只能落在微信自己的文章域名上，不能是消息里
+ * 顺手写进来的任意站外页（否则就成了一条代理任意 HTTPS 的通道）。
+ */
+export declare const WECHAT_ARTICLE_HOSTS: readonly string[];
+/**
+ * 这个 URL 是不是**公众号文章页**（严格子域匹配 + 仅 http/https）。
+ *
+ * 与 {@link wechatCdnHostAllowed} 分开：图片 CDN 那套后缀清单是给媒体字节用的，
+ * 文章页需要单独收窄。`file:`、`blob:` 等形状即使主机看起来像微信域名也一律拒。
+ * @param url - 待判定的绝对 URL（通常来自消息 XML 的 `<contentUrl>`）。
+ * @returns false 表示解析失败、协议不是 http(s)、带凭据或主机不在文章清单内。
+ */
+export declare function wechatArticleUrlAllowed(url: string): boolean;
+/**
  * 这个 URL 的主机是否在白名单内（严格后缀匹配）。
  * @param url - 待判定的绝对 URL（通常来自消息 XML 或数据库字段）。
  * @returns false 表示解析失败、无主机、带凭据或主机不在清单内 —— 调用方必须**在发请求之前**拦下。

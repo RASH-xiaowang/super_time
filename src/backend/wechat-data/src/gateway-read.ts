@@ -35,8 +35,8 @@ import { createHash } from 'node:crypto'
 import { queryOverviewInsights } from './query/overview-insights.ts'
 import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
 import { WHISPER_DOWNLOAD_FILES, installWhisperEngine, migrateWhisperEngineDir, migrateWhisperModels, resolveWhisperModelsDir, whisperDownloadModel, whisperEnginePath, whisperHasCuda, whisperModelsStatus } from './query/whisper.ts'
-import { cachedTranscript, transcribeOneVoice, transcribeVoiceBatch } from './query/voice-transcribe.ts'
-import { resolveVoiceDataUrl, svrIdByChatLocal } from './query/voice.ts'
+import { cachedTranscript, transcribeOneVoiceAsync, transcribeVoiceBatch } from './query/voice-transcribe.ts'
+import { svrIdByChatLocal } from './query/voice.ts'
 import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from './query/ask-history.ts'
 import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
 import { adaptWeights, attributeFeatures, feedbackStats, listFeedback, loadAdaptedWeights, recordFeedback, saveAdaptedWeights } from './query/retrieval/feedback.ts'
@@ -56,7 +56,8 @@ import { queryAnnualReview, type AnnualReview } from './query/annual-review.ts'
 import { editChatMessage as editMsg, listEditedMessages as listEdits, resetEditedMessage as resetEdit } from './query/edit.ts'
 import { clearAllSessionDrafts as clearAllDrafts, clearSessionDraft as clearDraft } from './query/drafts.ts'
 import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
-import { normalizeJobId, rawWechatBase } from './gateway-support.ts'
+import { rawWechatBase } from './gateway-support.ts'
+import { cancelJobIn } from './gateway-job-signals.ts'
 import { GatewayCore } from './gateway-core.ts'
 
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -241,11 +242,7 @@ export abstract class GatewayRead extends GatewayCore {
    */
   @Remote('cancelSearch')
   cancelSearch(options?: { jobId?: string }): { ok: boolean } {
-    const id = normalizeJobId(options?.jobId)
-    const ctrl = id === '' ? undefined : this._searchJobs.get(id)
-    if (!ctrl) return { ok: false }
-    ctrl.abort()
-    return { ok: true }
+    return { ok: cancelJobIn(this._searchJobs, options?.jobId) }
   }
 
   /**
@@ -430,7 +427,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns 打开结果与被拒理由。
    */
   @Remote('openPath')
-  async openPath(options: { path: string }, signal: AbortSignal): Promise<{ ok: boolean; path: string; error?: string }> {
+  async openPath(options: { path: string }, signal: AbortSignal = new AbortController().signal): Promise<{ ok: boolean; path: string; error?: string }> {
     const p = options.path
     const dataRoot = join(this._dirs.decrypted, '..')
     const denial = openDenialReason(p, dataRoot)
@@ -462,7 +459,7 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns VoiceTranscribeOneResult: ok + text, or an error.
    */
   @Remote('transcribeVoiceMessage')
-  transcribeVoiceMessage(options: { username: string; localId: number }): VoiceTranscribeOneResult {
+  async transcribeVoiceMessage(options: { username: string; localId: number }): Promise<VoiceTranscribeOneResult> {
     if (this.whisperTranscribing.active) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '已有转写任务进行中'); return { ok: false, error: '已有转写任务进行中' } }
     const cfg = getConfig(this._dirs.decrypted)
     const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, this._dirs.decrypted)
@@ -470,7 +467,7 @@ export abstract class GatewayRead extends GatewayCore {
     const engine = whisperEnginePath(configBin, modelsDir)
     if (!engine) { this.op('task', 'transcribe_voice_message', 'fail', options.username, '未检测到 whisper.cpp 引擎'); return { ok: false, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」）' } }
     const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
-    const r = transcribeOneVoice(this._dirs.decrypted, this._dirs.decoded, modelsDir, modelId, engine, options.username, options.localId)
+    const r = await transcribeOneVoiceAsync(this._dirs.decrypted, this._dirs.decoded, modelsDir, modelId, engine, options.username, options.localId)
     this.op('task', 'transcribe_voice_message', r.ok ? 'ok' : 'fail', options.username, r.error ?? '转写成功')
     return r
   }
@@ -487,7 +484,6 @@ export abstract class GatewayRead extends GatewayCore {
     return r
   }
 
-  /**
   /**
    * 年度回顾（看板）：15 张卡片所需的完整年度聚合。
    * 「人物类」指标只算我发出的（real_sender_id 归属），「规模类」算全部消息。

@@ -21,7 +21,25 @@
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-10-15
+
 ### 修复
+
+- **@Remote 入参形状校验开始试点硬拒**（`deleteTask`）。
+  - `wechat-args-guard.js` 的 ① 档（结构/体积）一直硬拒，② 档（生成的 zod schema）过去只记账；
+    这样「前端悄悄传错字段类型」会继续进入后端，只能在 `info().argGuard.mismatched` 里事后看到。
+  - 现在 `ENFORCED_SCHEMA_METHODS` 登记 `deleteTask` 后，`id` 缺失或类型错误会在执行 gateway 前
+    直接返回 `ARGS_SCHEMA`；多余字段仍按既有纪律放行，避免误伤面板先发来的新字段。
+  - 证据：`gateway-config-ops.ts:258-260` 与 `lib/typert.host.js:258-261` 的 schema 逐字一致。
+  - 验证：`wechat-args-guard.spec.ts` 真后端判据、接线判据，变异 M588 咬红。
+
+- **局域网远程访问补上 Host 头校验**（DNS rebinding 防线，入站暴露面加固）。
+  - 服务只绑定一个具体局域网 IPv4，但原先任何 `Host` 头都能拿到静态页面并访问 `/api/auth`；
+    恶意网页可借「域名解析到本机 IP」再以该域名为源向这个端口发同源请求。
+  - 现在请求主机名必须等于当前监听 IP（回环额外接受 `localhost`），域名形状的 Host 会在
+    任何路由之前收到 `421 BAD_HOST`；显式端口与监听端口不一致同样拒绝。
+  - 验证：`http-server.spec.ts` 3 条行为判据、`http-server.wiring.spec.ts` 1 条接线判据，
+    变异 M587 咬红；相关测试 63/63 通过。
 
 - **渲染层的告警终于能进诊断日志**（可观测性缺口，排查朋友圈问题时实测发现）。
   - **症状**：修复前 `app.log` 里 `moments-media` / `renderer` / `取图失败` 各 **0 行** ——

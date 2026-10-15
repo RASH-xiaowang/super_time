@@ -42,7 +42,10 @@ describe('导出记录：入口在通讯录', () => {
     expect(contacts).toMatch(/setHistoryOpen\(true\)/)
     // 开关状态存在，且弹窗受它控制
     expect(contacts).toMatch(/useState\(false\)/)
-    expect(contacts).toMatch(/<ExportHistoryDialog[^>]*open=\{historyOpen\}/)
+    // 开关状态存在，且弹窗受它控制。
+    // M9 真机实测：手机态必须**整个不挂载**，只把 `open` 按住不够 —— 弹窗里的分页器不看 `open`，
+    // 挂载时就打了一次 `getExportHistory`（不在远程白名单里）。八个接口全被拒的弹窗也不该能被打开。
+    expect(contacts).toMatch(/\{!desktopAction\(\) && <ExportHistoryDialog[^>]*open=\{historyOpen\}/)
     expect(contacts).toMatch(/onClose=\{\(\) => \{ setHistoryOpen\(false\) \}\}/)
   })
 

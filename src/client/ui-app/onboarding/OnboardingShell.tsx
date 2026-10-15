@@ -7,9 +7,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // 启动页可能先于 WechatDataPanel 挂载，主题令牌需在此加载
-import '../../ui-wechat/src/client/pages/wechat-data/scifi-theme.css'
-import '../../ui-wechat/src/client/pages/wechat-data/light-theme.css'
-import { getThemeMode, toggleThemeMode } from '../../ui-wechat/src/client/pages/wechat-data/theme.ts'
+import { getThemeMode, toggleThemeMode } from '@deepseek-ai/dsh-client-ui-wechat/theme'
 import {
   ONBOARDING_PAGES,
   allPagesVisited,
@@ -21,397 +19,34 @@ import {
   type OnboardingState,
 } from './store.ts'
 import { ParticleField } from './particles.tsx'
-import { Reveal } from './Reveal.tsx'
 import { LicenseAuthPanel, isLicenseUsable } from '../license/LicenseAuthPanel.tsx'
 import type { LicenseStatus } from '../license/LicenseGate.tsx'
 // 隐私同意是启动页的第五站（H14）：直接复用主界面那一屏，文案与守卫都是同一份，
 // 不另写一个「精简版同意提示」（两份声明会漂，而这是给用户看的法律性文本）。
 import { PrivacyConsentGate } from '../privacy/PrivacyConsentGate.tsx'
-// 启动页（含最后一站「授权验证」）也要能看到「有新版本可装 / 许可证即将到期」——
+// 启动页（含最后一站「授权验证」也要能看到「有新版本可装 / 许可证即将到期」——
 // 更新与到期是主进程的事，与「有没有进主界面」无关。这一屏没有设置弹窗，故不传 onOpenLicense。
-import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
+import { NoticeBanner } from '@deepseek-ai/dsh-client-ui-wechat/notice'
 import css from './onboarding.module.css'
 import cssstages from './onboarding-stages.module.css'
-import { FAQ, FEATURE_GROUPS, FIRST_RUN_STEPS, HELP_STEPS, NOTICES, QUESTION_CARDS } from './onboarding-content.tsx'
+// 2026-10-12 拆屏：四个内容页与舞台零件各归各的文件，本文件只留状态机与外壳。
+// 四页仍然从这里**转出导出** —— `scripts/onboarding-ssr.tsx` 按这个路径导入它们，
+// 拆分因此不改变那份冒烟的用法（也别改：它是这些页面唯一的渲染级判据）。
+import { BrandMark, HudCorner, ProgressRing, StageHead } from './stage-chrome.tsx'
+import { AboutPage } from './pages/AboutPage.tsx'
+import { FeaturesPage } from './pages/FeaturesPage.tsx'
+import { HelpPage } from './pages/HelpPage.tsx'
+import { HomePage } from './pages/HomePage.tsx'
+import { CONSENT_STAGE, LICENSE_STAGE, STAGE_BGS, type RuntimeVersions } from './runtime.ts'
 
-const APP_VERSION = '1.0.7'
+export { AboutPage, FeaturesPage, HelpPage, HomePage }
+export type { RuntimeVersions }
 
-/** 启动页四张阶段背景图（public/onboarding → 构建后 ui-dist/onboarding）。 */
-const STAGE_BGS = [
-  'onboarding/bg-stage-0.png',
-  'onboarding/bg-stage-1.png',
-  'onboarding/bg-stage-2.png',
-  'onboarding/bg-stage-3.png',
-] as const
-
-/**
- * 启动页阶段 = 4 个介绍页 + 两道闸门（隐私同意 → 授权验证）。
- *
- * 两站都不是 `OnboardingPageId`：它们不记录「已浏览」（visited 只统计内容页），
- * 却是流程的收尾，也是进入系统的唯一入口。
- */
-const LICENSE_STAGE = 'license' as const
-/**
- * 隐私同意这一站插在「介绍页」与「授权」之间（H14，2026-09-23 决定）。
- * 先序是有意的：**没有取得同意，就不该先向用户要许可证** —— 授权是商业闸门，
- * 而同意是合规前提，后者不能被前者挡在后面。
- * 反过来排还造成一个可观察的缺陷：机器上没有效许可证时，应用一直停在启动页，
- * 用户永远看不到同意屏（2026-09-23 全新 userData 实测：第一屏 0 个 checkbox）。
- */
-const CONSENT_STAGE = 'consent' as const
+/** 启动页的阶段：4 个内容页 + 两道闸门（常量见 `./runtime.ts`）。 */
 type OnboardingStage = OnboardingPageId | typeof CONSENT_STAGE | typeof LICENSE_STAGE
 
-function BrandMark({ size = 22 }: { size?: number }): React.JSX.Element {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M9.5 3.5C4.8 3.5 1 6.8 1 10.9c0 2.3 1.2 4.4 3.2 5.8L3 20l3.7-1.6c.9.3 1.8.4 2.8.4 4.7 0 8.5-3.3 8.5-7.9S14.2 3.5 9.5 3.5Z" fill="currentColor" opacity=".18" />
-      <path d="M9.5 3.5C4.8 3.5 1 6.8 1 10.9c0 2.3 1.2 4.4 3.2 5.8L3 20l3.7-1.6c.9.3 1.8.4 2.8.4 4.7 0 8.5-3.3 8.5-7.9S14.2 3.5 9.5 3.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <circle cx="6.2" cy="10.8" r="1" fill="currentColor" />
-      <circle cx="9.7" cy="10.8" r="1" fill="currentColor" />
-      <circle cx="13.2" cy="10.8" r="1" fill="currentColor" />
-    </svg>
-  )
-}
-
-/** HUD 角落装饰框（左上形态，其余用 CSS 镜像）。 */
-function HudCorner(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 56 56" fill="none" aria-hidden="true">
-      <path d="M4 20V8a4 4 0 0 1 4-4h12" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M4 28h8M20 4v8" stroke="currentColor" strokeWidth="1" opacity=".55" />
-      <circle cx="4" cy="20" r="1.6" fill="currentColor" />
-      <circle cx="20" cy="4" r="1.6" fill="currentColor" />
-    </svg>
-  )
-}
-
-/** 底栏环形进度：已浏览页数 / 总页数。 */
-function ProgressRing({ value, total }: { value: number; total: number }): React.JSX.Element {
-  const r = 16
-  const c = 2 * Math.PI * r
-  const pct = total <= 0 ? 0 : Math.min(1, value / total)
-  const offset = c * (1 - pct)
-  return (
-    <div className={cssstages.progressRing} aria-hidden="true">
-      <svg viewBox="0 0 40 40">
-        <defs>
-          <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#00f0ff" />
-            <stop offset="100%" stopColor="#a855f7" />
-          </linearGradient>
-        </defs>
-        <circle className={cssstages.ringTrack} cx="20" cy="20" r={r} />
-        <circle
-          className={cssstages.ringValue}
-          cx="20"
-          cy="20"
-          r={r}
-          strokeDasharray={c}
-          strokeDashoffset={offset}
-        />
-      </svg>
-      <span className={cssstages.ringLabel}>{value}/{total}</span>
-    </div>
-  )
-}
-
-/** 统一舞台页头：阶段序号 + 标题 + 导语，建立阅读层次。 */
-function StageHead({
-  index,
-  title,
-  lead,
-  align = 'left',
-}: {
-  index: string
-  title: string
-  lead: string
-  align?: 'left' | 'center'
-}): React.JSX.Element {
-  return (
-    <header className={`${cssstages.stageHead}${align === 'center' ? ` ${cssstages.stageHeadCenter}` : ''}`}>
-      <Reveal>
-        <div className={cssstages.stageMeta}>
-          <span className={css.stageIndex}>{index}</span>
-          <span className={cssstages.stageRule} aria-hidden="true" />
-          <span className={cssstages.stageTag}>SUPER TIME BOOT</span>
-        </div>
-        <h2 className={cssstages.stageTitle}>{title}</h2>
-      </Reveal>
-      <Reveal>
-        <p className={cssstages.stageLead}>{lead}</p>
-      </Reveal>
-    </header>
-  )
-}
-
-/**
- * 四个内容页从 2026-09-30 起**具名导出**：`scripts/onboarding-ssr.tsx` 用 react-dom/server
- * 逐页渲染一次并断言内容（本环境没有 DOM 测试环境，SSR 是唯一能拿到「渲染出来长什么样」的手段）。
- * 导出它们不会改变 `OnboardingShell` 的行为：壳仍然只按 `page` 渲染其中一个。
- */
-export function HomePage({ onExplore }: { onExplore: () => void }): React.JSX.Element {
-  return (
-    <div className={css.page}>
-      <div className={cssstages.homeLayout}>
-        <section className={cssstages.homePrimary}>
-          <Reveal>
-            <div className={cssstages.heroKicker}>
-              <span className={css.kickerDot} aria-hidden="true" />
-              LOCAL · WECHAT · INTELLIGENCE
-            </div>
-            <h1 className={cssstages.heroTitle}>
-              把本机微信数据<br />
-              <span className={cssstages.heroTitleAccent}>变成可检索、可问答的知识库</span>
-            </h1>
-          </Reveal>
-          <Reveal>
-            <p className={cssstages.heroLead}>
-              解密、检索、统计与导出全部在这台机器上完成；只有你主动配置并调用 AI 时，
-              检索到的片段才会发给你自己填的模型接口。下面先说怎么开始，再说它常被用来回答什么。
-            </p>
-          </Reveal>
-
-          <Reveal>
-            <div className={css.sectionTitle}>
-              <span>三步开始</span>
-              <span className={cssstages.sectionSub}>第一次打开按这个顺序走</span>
-            </div>
-          </Reveal>
-          <div className={cssstages.valueList}>
-            {FIRST_RUN_STEPS.map((v, i) => (
-              <Reveal key={v.title}>
-                <div className={css.valueItem}>
-                  <span className={css.valueIndex}>{String(i + 1).padStart(2, '0')}</span>
-                  <span className={cssstages.valueIcon}>{v.icon}</span>
-                  <div>
-                    <div className={css.valueTitle}>{v.title}</div>
-                    <div className={cssstages.valueDesc}>{v.desc}</div>
-                  </div>
-                </div>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-
-        <aside className={cssstages.homeRail} aria-label="系统概览">
-          <div className={cssstages.railLabel}>TELEMETRY</div>
-          {[
-            { k: 'MODULES', v: '16', h: '侧栏入口 · 37 个可路由页签' },
-            // 这个数字是用户可见的契约声明，必须与 gateway.ts 的 @Remote 数量一致。
-            // 它曾长期停在 114 而无人发现 —— 现在由
-            // src/backend/tests/api-docs.spec.ts 守着，改了方法面就会在这里转红。
-            { k: 'REMOTE API', v: '172', h: '查询 / 导出 / 审计 / 总结 / 本地决策' },
-            { k: 'RUNTIME', v: 'LOCAL', h: 'utilityProcess 独立后端 · 本机 SQLite' },
-          ].map((s, i) => (
-            <Reveal key={s.k}>
-              <div className={cssstages.railStat}>
-                <div className={cssstages.railKey}>{s.k}</div>
-                <div className={cssstages.railVal}>{s.v}</div>
-                <div className={cssstages.railHint}>{s.h}</div>
-              </div>
-            </Reveal>
-          ))}
-        </aside>
-      </div>
-
-      <section className={cssstages.moduleSection}>
-        <Reveal>
-          <div className={css.sectionTitle}>
-            <span>它常被用来回答这些问题</span>
-            <span className={cssstages.sectionSub}>点开看每个功能落在侧栏哪一组</span>
-          </div>
-        </Reveal>
-        <div className={cssstages.moduleStrip}>
-          {QUESTION_CARDS.map((m, i) => (
-            <Reveal key={m.id} className={cssstages.moduleCell}>
-              <button type="button" className={css.moduleCard} onClick={onExplore}>
-                <span className={cssstages.moduleIdx}>{String(i + 1).padStart(2, '0')}</span>
-                <span className={css.moduleIcon}>{m.icon}</span>
-                <span className={css.moduleName}>{m.name}</span>
-                <span className={cssstages.moduleDesc}>{m.desc}</span>
-              </button>
-            </Reveal>
-          ))}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-export function FeaturesPage(): React.JSX.Element {
-  return (
-    <div className={css.page}>
-      <StageHead
-        index="02"
-        title="功能引导"
-        lead="按主界面侧栏的分组逐条对齐。标「（分段）」的是同一个入口内用顶部分段条切换的视图 —— 侧栏只占一个条目，不必找第二个入口。"
-      />
-      <div className={css.featureList}>
-        {FEATURE_GROUPS.map((g, i) => (
-          <Reveal key={g.name}>
-            <article className={css.featureRow}>
-              <div className={css.featureNo}>{String(i + 1).padStart(2, '0')}</div>
-              <div>
-                <div className={cssstages.featureHead}>
-                  <span className={cssstages.featureBadge}>{g.icon}</span>
-                  <h3 className={cssstages.featureName}>{g.name}</h3>
-                </div>
-                <p className={cssstages.featureDesc}>{g.desc}</p>
-                <div className={cssstages.chipRow}>
-                  {g.items.map((it) => (
-                    <span key={it} className={cssstages.chip}>{it}</span>
-                  ))}
-                </div>
-              </div>
-            </article>
-          </Reveal>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-export function HelpPage(): React.JSX.Element {
-  return (
-    <div className={css.page}>
-      <StageHead
-        index="03"
-        title="使用说明"
-        lead="四步走完就能用起来。每一步都写明「做完应看到什么」，对不上时去「操作日志 / 隐私体检」找原因。"
-      />
-      <div className={cssstages.helpLayout}>
-        <ol className={css.stepList}>
-          {HELP_STEPS.map((s, i) => (
-            <Reveal key={s.title}>
-              <li className={css.step}>
-                <div className={css.stepNum} aria-hidden="true">{String(i + 1).padStart(2, '0')}</div>
-                <div>
-                  <div className={cssstages.stepTitle}>{s.title}</div>
-                  <div className={cssstages.stepBody}>{s.body}</div>
-                  <div className={cssstages.stepDone}>{s.done}</div>
-                </div>
-              </li>
-            </Reveal>
-          ))}
-        </ol>
-        <div className={cssstages.noticeCol}>
-          <Reveal>
-            <div className={css.sectionTitle}><span>常见问题</span></div>
-          </Reveal>
-          {FAQ.map((f) => (
-            <Reveal key={f.title}>
-              <div className={cssstages.notice}>
-                <div className={cssstages.noticeTitle}>{f.title}</div>
-                <div className={cssstages.noticeBody}>{f.body}</div>
-              </div>
-            </Reveal>
-          ))}
-          <Reveal>
-            <div className={css.sectionTitle}><span>注意事项</span></div>
-          </Reveal>
-          {NOTICES.map((n) => (
-            <Reveal key={n.title}>
-              <div className={cssstages.notice}>
-                <div className={cssstages.noticeTitle}>{n.title}</div>
-                <div className={cssstages.noticeBody}>{n.body}</div>
-              </div>
-            </Reveal>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export function AboutPage({ versions }: {
-  versions: { electron?: string; chrome?: string; node?: string } | null
-}): React.JSX.Element {
-  return (
-    <div className={css.page}>
-      <StageHead
-        index="04"
-        title="关于 Super Time"
-        lead="它是什么、数据放在哪、怎么彻底删掉，以及出问题时该发什么给我们。"
-      />
-      <div className={cssstages.aboutLayout}>
-        <Reveal>
-          <section className={cssstages.aboutBlock}>
-            <h3 className={cssstages.aboutTitle}>它是什么</h3>
-            <p className={cssstages.aboutText}>
-              面向个人的本地微信数据分析桌面应用：Electron 桌面壳 + React 前端 + 独立
-              utilityProcess 后端（本机 SQLite）。你机器上的解密库只被它只读使用，
-              解析、检索、统计、导出都在本机完成；AI 问答与总结把检索到的片段发给你
-              <b>自己配置</b>的模型接口。
-            </p>
-            <dl className={cssstages.metaList}>
-              <div className={css.metaRow}><dt>应用版本</dt><dd>{APP_VERSION}</dd></div>
-              <div className={css.metaRow}><dt>Electron</dt><dd>{versions?.electron ?? '—'}</dd></div>
-              <div className={css.metaRow}><dt>Chromium</dt><dd>{versions?.chrome ?? '—'}</dd></div>
-              <div className={css.metaRow}><dt>Node</dt><dd>{versions?.node ?? '—'}</dd></div>
-              <div className={css.metaRow}><dt>产品名</dt><dd>Super Time</dd></div>
-            </dl>
-          </section>
-        </Reveal>
-        <Reveal>
-          <section className={cssstages.aboutBlock}>
-            <h3 className={cssstages.aboutTitle}>数据在哪 · 怎么删 · 怎么断网</h3>
-            <ul className={cssstages.contactList}>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>本机位置</span>
-                <span className={cssstages.contactDesc}>
-                  %APPDATA%\Super Time 下的 wechat（密钥与配置）与 wechat-data（解密库、图片缓存与索引）；
-                  数据根可在设置里改。
-                </span>
-              </li>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>彻底删除</span>
-                <span className={cssstages.contactDesc}>删掉上面两个目录即可；卸载程序不会自动删。</span>
-              </li>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>断网使用</span>
-                <span className={cssstages.contactDesc}>
-                  应用内已没有任何出网开关：断网或在系统防火墙里禁止本应用出站，即可让所有请求都不发生。
-                </span>
-              </li>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>出网点清单</span>
-                <span className={cssstages.contactDesc}>
-                  「隐私同意」页逐条列出目的地与发什么，仓库里对应 docs/PRIVACY.md。
-                </span>
-              </li>
-            </ul>
-          </section>
-        </Reveal>
-        <Reveal>
-          <section className={cssstages.aboutBlock}>
-            <h3 className={cssstages.aboutTitle}>出问题时</h3>
-            <p className={cssstages.aboutText}>
-              提交问题或建议时请勿附带密钥或完整聊天内容。
-            </p>
-            <ul className={cssstages.contactList}>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>带上诊断</span>
-                <span className={cssstages.contactDesc}>导出「操作日志」，连同复现步骤一并提交</span>
-              </li>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>在线文档</span>
-                <span className={cssstages.contactDesc}>仓库 README 与 docs/compose/spec</span>
-              </li>
-              <li className={css.contactItem}>
-                <span className={cssstages.contactTitle}>隐私承诺</span>
-                <span className={cssstages.contactDesc}>不上传聊天数据；AI 只在你配置的接口处理</span>
-              </li>
-            </ul>
-          </section>
-        </Reveal>
-      </div>
-    </div>
-  )
-}
-
 export interface OnboardingShellProps {
-  /** 完成或跳过后进入主界面。 */
-  onComplete: () => void
+  /** 完成或跳过后进入主界面。 */  onComplete: () => void
   /**
    * 还没取得隐私同意时为 true：此时「隐私同意」排在「授权验证」**之前**，且没同意不算完成。
    *
@@ -443,7 +78,7 @@ export function OnboardingShell({
   const [page, setPage] = useState<OnboardingStage>(() => (
     !state.completed ? 'home' : consentGate ? CONSENT_STAGE : LICENSE_STAGE
   ))
-  const [versions, setVersions] = useState<{ electron?: string; chrome?: string; node?: string } | null>(null)
+  const [versions, setVersions] = useState<RuntimeVersions | null>(null)
   const [theme, setTheme] = useState(() => getThemeMode())
   const [lic, setLic] = useState<LicenseStatus | null>(null)
   const [licLoading, setLicLoading] = useState(true)
@@ -505,7 +140,7 @@ export function OnboardingShell({
   // 每次进入启动页都检测 License（含过期/无效强制授权）
   useEffect(() => {
     let cancelled = false
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.status) {
       setLic({ state: 'error', licensed: false, reason: 'license_api_missing' })
       setLicLoading(false)
@@ -526,9 +161,9 @@ export function OnboardingShell({
   }, [])
 
   useEffect(() => {
-    const api = (window as any).electronAPI
+    const api = window.electronAPI
     if (!api?.getVersions) return
-    void api.getVersions().then((v: { electron?: string; chrome?: string; node?: string }) => {
+    void api.getVersions().then((v: RuntimeVersions) => {
       if (v) setVersions(v)
     }).catch(() => { /* 版本信息非关键 */ })
   }, [])
@@ -680,13 +315,16 @@ export function OnboardingShell({
           两张一样的卡（点掉一张还剩一张，看起来像「关闭」坏了）。 */}
       {!onConsentStage ? <NoticeBanner /> : null}
 
-      {/* 多张背景图：随滚轮切页交叉淡入 */}
+      {/* 多张背景图：随滚轮切页交叉淡入。
+          只给**当前与相邻那一张**设背景：交叉淡入同时需要「进来的」和「出去的」两张，
+          其余三张在进入范围之前不下 —— 虽然 WebP 之后总共才 0.59MB，但每张 1536×1024
+          解码成位图要 ~6MB 内存，四张一起下就是首启动 25MB 的常驻内存。 */}
       <div className={cssstages.bgStack} aria-hidden="true">
         {STAGE_BGS.map((src, i) => (
           <div
             key={src}
             className={`${css.bgImage}${bgIndex === i ? ` ${css.bgImageOn}` : ''}`}
-            style={{ backgroundImage: `url(${src})` }}
+            style={Math.abs(i - bgIndex) <= 1 ? { backgroundImage: `url(${src})` } : undefined}
           />
         ))}
       </div>
@@ -756,15 +394,22 @@ export function OnboardingShell({
             {licenseOk && !onLicenseStage ? <span className={cssstages.tabDot} aria-hidden="true" /> : null}
             授权验证
           </button>
-          <button
-            type="button"
-            className={`${css.tab}`}
-            onClick={toggleTheme}
-            title={theme === 'light' ? '切换到深色' : '切换到浅色'}
-            aria-label="切换主题"
-          >
-            {theme === 'light' ? '🌙 深色' : '☀️ 浅色'}
-          </button>
+          {/*
+            工具位（主题切换）与页面标签**分开渲染**：它不是一页，跟着整个启动页走。
+            混在标签里时它长得和内容页标签一样，用户会以为点了会切走一块内容。
+          */}
+          <span className={cssstages.tools}>
+            <button
+              type="button"
+              className={cssstages.toolBtn}
+              onClick={toggleTheme}
+              title={theme === 'light' ? '切换到深色' : '切换到浅色'}
+              aria-label="切换主题"
+            >
+              <span aria-hidden="true">{theme === 'light' ? '🌙' : '☀️'}</span>
+              {theme === 'light' ? '深色' : '浅色'}
+            </button>
+          </span>
         </nav>
       </header>
       <div className={css.neonRule} aria-hidden="true" />
@@ -789,7 +434,7 @@ export function OnboardingShell({
           </div>
         ) : (
           <>
-            {page === 'home' && <HomePage onExplore={() => goPage('features')} />}
+            {page === 'home' && <HomePage onExplore={() => goPage('features')} versions={versions} />}
             {page === 'features' && <FeaturesPage />}
             {page === 'help' && <HelpPage />}
             {page === 'about' && <AboutPage versions={versions} />}

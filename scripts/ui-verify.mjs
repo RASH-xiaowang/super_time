@@ -4,7 +4,7 @@
  * ## 为什么要有这个入口
  *
  * 「每一个用户界面」这条要求此前散在三个命令里，各有各的输出文件与退出码语义：
- *   · `npm run theme:live-audit`            —— 深浅主题一致性（16 个页签 computed style）
+ *   · `npm run theme:live-audit`            —— 深浅主题一致性（17 个页签 computed style）
  *   · `npm run theme:live-audit -- --stress` —— 连点页签压力（门槛 3s，退出码 4）
  *   · `npm run ui:panel-audit`              —— 面板截图 + 留白表 + JS 错误
  * 分别记得跑哪一个、结果对不对，靠人；所以这里收成一个入口并**聚合退出码**。
@@ -16,7 +16,7 @@
  * 把它并进来会让"界面验收"带上破坏性副作用，所以刻意分开。
  *
  * **不含像素级视觉判断** —— 截图在本环境不可信（同一时刻截图显示骨架屏而 DOM 探针报
- * `nm-skel=0`，见 `docs/PERF-THEME-LEDGER` 陷阱①）。本入口产出截图供**人眼**复核，
+ * `nm-skel=0`，见已删除的 PERF-THEME-LEDGER 陷阱①，原文见 git 历史）。本入口产出截图供**人眼**复核，
  * 但不把"看起来对不对"自动化。
  *
  * ## 前置
@@ -64,7 +64,7 @@ function electronCount () {
  */
 const STEPS = [
   {
-    name: '主题一致性（深/浅 computed style，16 个页签）',
+    name: '主题一致性（深/浅 computed style，17 个页签）',
     args: ['scripts/theme-live-audit.mjs'],
     report: '.tmp-e2e/theme-live-audit.txt',
   },

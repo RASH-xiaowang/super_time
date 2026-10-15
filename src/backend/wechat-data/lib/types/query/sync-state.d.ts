@@ -13,7 +13,7 @@
  * 后端一重启就是空的 ⇒ 每个目标的 `prev === undefined` ⇒
  * `syncChangedShards` / `syncSessionDb` / `syncContactDb` / `syncPlainDatabase`
  * 一律把 `mode` 判成 `'full'` ⇒ **每次冷启动都把全树整库重解密一遍**，
- * 哪怕微信侧一个字节都没变、磁盘上的解密产物已经是��新的。
+ * 哪怕微信侧一个字节都没变、磁盘上的解密产物已经是最新的。
  *
  * 代价是实打实的：`sync.ts` 里 `message_1` 一次 ≈ **147 MB / 37456 页**（见该文件第 45 轮的
  * `[sync-trace]` 诊断注释），而 `fullDecryptFile` 每个调度步只处理 64 页

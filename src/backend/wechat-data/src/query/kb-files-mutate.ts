@@ -7,7 +7,7 @@
  * @module kb-files-mutate
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import type {
   KbFileChunkPage,
   KbFileListSnapshot,

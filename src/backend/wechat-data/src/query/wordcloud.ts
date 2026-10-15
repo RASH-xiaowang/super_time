@@ -11,7 +11,7 @@
  * 三种 scope：global（全部消息，可带年份）/ chat（单会话）/ moments（朋友圈帖子正文）。
  * 本地计算、零出网、不落库（按数据指纹缓存 30 秒；词频统计的热路径在 `word-match.ts`）。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -35,6 +35,13 @@ export interface WordCloudWord {
 export interface WordCloudResult {
   words: WordCloudWord[]
   scanned: number
+  /**
+   * 这次是**被取消**的（`scanned` 只覆盖扫完的那一部分）—— W2-9.4。
+   *
+   * 取消不抛错：用户是自己切换了年份/会话，不该看到一句红色报错。
+   * 界面据此**不写**这份结果（它是半成品），而调用方拿它去比缓存时也据此拒写。
+   */
+  canceled?: boolean
 }
 
 /** Msg_<md5(username)> table name（与 annual-report 同式）。 */
@@ -93,9 +100,9 @@ function mergeCounts (into: Map<string, number>, from: Map<string, number>): voi
 }
 
 /** 消息扫描（file-first，一次开一个分片；scope='chat' 时只扫目标表）。 */
-async function scanMessages(decryptedDir: string, opts: { username?: string; year?: number }, counts: Map<string, number>, matcher: EntityMatcher): Promise<number> {
+async function scanMessages(decryptedDir: string, opts: { username?: string; year?: number }, counts: Map<string, number>, matcher: EntityMatcher, isCancelled: () => boolean = () => false): Promise<{ scanned: number; canceled: boolean }> {
   const msgDir = join(decryptedDir, 'message')
-  if (!existsSync(msgDir)) return 0
+  if (!existsSync(msgDir)) return { scanned: 0, canceled: false }
   const start = opts.year ? Math.floor(new Date(opts.year, 0, 1).getTime() / 1000) : 0
   const end = opts.year ? Math.floor(new Date(opts.year + 1, 0, 1).getTime() / 1000) : Number.MAX_SAFE_INTEGER
   const wanted = opts.username ? msgTableName(opts.username) : null
@@ -108,6 +115,10 @@ async function scanMessages(decryptedDir: string, opts: { username?: string; yea
   /** 与生产同一套口径：`local_type` 两种写法（是否有 2^32 前缀位）都算纯文本。 */
   const TEXT_TYPE_SQL = 'local_type IN (1, 4294967297)'
   for (const file of files) {
+    // W2-9.4：**分片边界**是取消的第一个检查点（另一个是下面的让出边界）。
+    // 为什么不是每行都查一次 `isCancelled()`：那是一次闭包调用，摊到每一行上
+    // 并不便宜，而一张会话表实测常有十万量级的行。
+    if (isCancelled()) return { scanned, canceled: true }
     const path = join(msgDir, file)
     // 分片签名命中 ⇒ 直接复用上次词频。
     //
@@ -161,6 +172,9 @@ async function scanMessages(decryptedDir: string, opts: { username?: string; yea
               sinceYieldRows = 0
               sinceYieldChars = 0
               await yieldToLoop()
+              // W2-9.4：让出点就是第二个检查点 —— 分片**内部**也能停，
+              // 不必等整张会话表（十万行）扫完才认得出「这次已经不要了」。
+              if (isCancelled()) return { scanned, canceled: true }
             }
           }
         } catch { /* skip table */ }
@@ -177,25 +191,26 @@ async function scanMessages(decryptedDir: string, opts: { username?: string; yea
     // 分片级让出：一次 global 要开 300+ 个库，库与库之间必须交还控制权。
     await yieldToLoop()
   }
-  return scanned
+  return { scanned, canceled: false }
 }
 
 /** 朋友圈 db 的候选路径（与 {@link scanMoments} 同一份清单，缓存签名要用）。 */
 const MOMENTS_DB_PATHS = ['sns/db_sns/sns.db', 'sns/sns.db'] as const
 
 /** 朋友圈扫描：sns.db 的 SnsTimeLine.content（帖子正文，剥 XML 后计词）。 */
-async function scanMoments(decryptedDir: string, counts: Map<string, number>, matcher: EntityMatcher): Promise<number> {
+async function scanMoments(decryptedDir: string, counts: Map<string, number>, matcher: EntityMatcher, isCancelled: () => boolean = () => false): Promise<{ scanned: number; canceled: boolean }> {
+  let scanned = 0
   for (const rel of MOMENTS_DB_PATHS) {
+    if (isCancelled()) return { scanned, canceled: true }
     const p = join(decryptedDir, ...rel.split('/'))
     if (!existsSync(p)) continue
     let db: DatabaseSync | null = null
     try { db = new DatabaseSync(p, { readOnly: true }) } catch { continue }
     try {
-      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() === undefined) return 0
+      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() === undefined) return { scanned, canceled: false }
       const cols = new Set((db.prepare('PRAGMA table_info(SnsTimeLine)').all() as Array<{ name: string }>).map(r => r.name))
       const contentCol = cols.has('content') ? 'content' : (cols.has('Content') ? 'Content' : null)
-      if (!contentCol) return 0
-      let scanned = 0
+      if (!contentCol) return { scanned, canceled: false }
       let sinceYieldRows = 0
       let sinceYieldChars = 0
       for (const r of db.prepare(`SELECT ${contentCol} AS c FROM SnsTimeLine`).iterate() as Iterable<{ c: unknown }>) {
@@ -215,28 +230,39 @@ async function scanMoments(decryptedDir: string, counts: Map<string, number>, ma
           sinceYieldRows = 0
           sinceYieldChars = 0
           await yieldToLoop()
+          // W2-9.4：让出点就是检查点 —— 单个 sns.db 也能中途停，不必等它整张扫完。
+          if (isCancelled()) return { scanned, canceled: true }
         }
       }
-      return scanned
+      return { scanned, canceled: false }
     } finally { db.close() }
   }
-  return 0
+  return { scanned, canceled: false }
 }
 
 /** 缓存里保留的词数上界（大到远超前端的 limit，小到不会把内存撑起来）。 */
 const MAX_CACHED_WORDS = 2000
 
 /** 真正算一遍（不缓存）。`words` 是**全量排序后的前 MAX_CACHED_WORDS**，由调用方按 limit 切片。 */
-async function computeWordCloud(decryptedDir: string, scope: 'global' | 'chat' | 'moments', username: string, year: number | undefined): Promise<WordCloudResult> {
+async function computeWordCloud(decryptedDir: string, scope: 'global' | 'chat' | 'moments', username: string, year: number | undefined, isCancelled: () => boolean = () => false): Promise<WordCloudResult> {
   const counts = new Map<string, number>()
   // 实体名表本身要开 contact 库读全部昵称（几百到几千条），让出一次再进主扫描。
   await yieldToLoop()
   const matcher = buildEntityMatcher(entityNamesOf(decryptedDir))
   let scanned = 0
+  let canceled = false
+  //
+  // W2-9.4：取消**不抛错**，返回已经算完的那一部分 —— 与本仓其它取消通道同一口径
+  //（「停止生成」「取消 whisper 下载」都是这么做的）。抛错的话前端只能当成失败提示，
+  // 而用户明明是自己切换了年份/会话，不该看到一句红色报错。
   if (scope === 'moments') {
-    scanned = await scanMoments(decryptedDir, counts, matcher)
+    const r = await scanMoments(decryptedDir, counts, matcher, isCancelled)
+    scanned = r.scanned
+    canceled = r.canceled
   } else {
-    scanned = await scanMessages(decryptedDir, { username: username || undefined, year }, counts, matcher)
+    const r = await scanMessages(decryptedDir, { username: username || undefined, year }, counts, matcher, isCancelled)
+    scanned = r.scanned
+    canceled = r.canceled
   }
   // 碎片剪枝（2026-09-30）：词表原来混着「级别最高 → 别最」这类二元切片，用户看到的是
   // 「念不出来的词条」。判据与边界写在 `word-match.ts` 的 `pruneFragmentWords` 上。
@@ -248,8 +274,24 @@ async function computeWordCloud(decryptedDir: string, scope: 'global' | 'chat' |
     .map(([text, count]) => ({ text, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, MAX_CACHED_WORDS)
-  return { words, scanned }
+  return { words, scanned, canceled }
 }
+
+/**
+ * 同一 `scope` 下「在飞的那一次」的票号（W2-9.4）。
+ *
+ * ## 为什么按 scope 分桶、而不是全局一张
+ *
+ * 用户拖年份滑块 / 快速切会话时，新请求会连着发好几次全局统计 —— 实测一次冷算
+ * `global` 约 2 秒（源码里那句「最大单点 1921ms」），于是旧的那几次白烧到结束。
+ * 后来者把前一个作废，是这类「用户已经不需要了」的算力唯一能省的地方。
+ *
+ * 但**不同 scope 不互相作废**：总览页的全库热词与会话/朋友圈的小词云常同屏出现，
+ * 让小的取消大的会让大的一直算不完。分桶之后，只有「同类里的后来者」才作废前一个。
+ */
+const WORDCLOUD_TICKETS = new Map<string, number>()
+
+let wordcloudTicketSeq = 0
 
 /**
  * 计算词云词频（带进程内缓存）。
@@ -287,11 +329,21 @@ export async function queryWordCloud(decryptedDir: string, options?: WordCloudOp
   const sig = scope === 'moments'
     ? MOMENTS_DB_PATHS.map((rel) => rel + ':' + fileSigOf(join(decryptedDir, ...rel.split('/')))).join('|')
     : shardCatalogSig(decryptedDir, ['message'])
+  const ticket = (wordcloudTicketSeq += 1)
+  WORDCLOUD_TICKETS.set(scope, ticket)
+  const isCancelled = (): boolean => {
+    const now = WORDCLOUD_TICKETS.get(scope)
+    return now !== ticket
+  }
   const full = await cachedBySigAsync(
     `wordcloud:${scope}:${username}:${year ?? 'all'}:${decryptedDir}`,
     sig,
-    () => computeWordCloud(decryptedDir, scope, username, year),
+    () => computeWordCloud(decryptedDir, scope, username, year, isCancelled),
     30_000,
+    // 半成品**不写缓存**：写进去就是 30 秒内一直返回那份扫了一半的词表，
+    // 而且界面上没有任何东西告诉用户「这是半的」。不写不是丢数据 ——
+    // 下一次请求会重算，而那时已经没人取消它了。
+    (v) => v.canceled !== true,
   )
-  return { words: full.words.slice(0, limit), scanned: full.scanned }
+  return { words: full.words.slice(0, limit), scanned: full.scanned, canceled: full.canceled === true }
 }

@@ -18,7 +18,8 @@
  *
  * @module query/db-open
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../sqlite-connection.ts'
+export { configureSqliteCachePolicy, DatabaseSync } from '../sqlite-connection.ts'
 
 /**
  * 以只读方式打开一个库，跑完 `fn` 后无条件关闭。

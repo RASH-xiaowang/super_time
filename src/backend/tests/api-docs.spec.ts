@@ -1,5 +1,5 @@
 /**
- * H14：Remote 接口参考必须与 `gateway.ts` 一致。
+ * H14：Remote 接口参考必须与 `gateway*.ts` 的方法面一致。
  *
  * 背景：这份文档以前是手写的，于是「方法数三方打架」—— 源码 132、RAG 文档 126、
  * 后端 README 114、启动页也写 114。现在文档由 `scripts/gen-api-docs.js` 从
@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { gatewayClassSource } from './gateway-source.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-// M21 结构刀：一个类拆成 5 个文件（核 + 三层方法面壳 + 叶子）=> 读「组成这个类的文件」
+// M21 结构刀：一个类拆成多个文件（核 + 各层方法面壳 + 叶子）=> 读「组成这个类的文件」
 const gateway = gatewayClassSource()
 const docPath = join(ROOT, 'docs', 'API.md')
 
@@ -61,10 +61,12 @@ describe('H14：Remote 接口参考', () => {
   it('启动页上用户可见的方法数与源码一致', () => {
     // 启动页 rail 上写着「REMOTE API 132」这类数字，属于用户可见的契约声明。
     // 它以前是 114（严重过期），而且没有任何东西会发现 —— 这条就是那个「东西」。
-    const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'OnboardingShell.tsx'), 'utf8')
+    // 2026-10-12 拆屏后，首页 rail 住在 `onboarding/pages/HomePage.tsx`
+  // （壳只剩状态机，telemetry 跟着首页走）。
+  const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'pages', 'HomePage.tsx'), 'utf8')
     const m = /k:\s*'REMOTE API'\s*,\s*v:\s*'(\d+)'/.exec(shell)
     expect(m, '启动页里找不到 REMOTE API 的计数（若已改版请同步本用例）').toBeTruthy()
-    expect(m![1], '启动页的 Remote 方法数已过期：改成 gateway.ts 里的实际值').toBe(String(remoteSet.size))
+    expect(m![1], '启动页的 Remote 方法数已过期：改成 gateway*.ts 里的实际值').toBe(String(remoteSet.size))
   })
 
   /**
@@ -79,6 +81,7 @@ describe('H14：Remote 接口参考', () => {
     const docs: Array<{ path: string; note: string }> = [
       { path: join('src', 'client', 'README.md'), note: '前端 README' },
       { path: join('src', 'backend', 'README.md'), note: '后端 README' },
+      { path: join('website', 'index.html'), note: '官网首页' },
       // 2026-10-08：一份 RAG 架构文档随文档精简删除，从清单里移除。
       // ⚠️ 注意下面那圈循环有 `if (!existsSync(abs)) continue` —— 文件没了它**静默跳过**，
       // 所以留一条悬空条目等于让这份判据悄悄少看一处，而它自己不会报。

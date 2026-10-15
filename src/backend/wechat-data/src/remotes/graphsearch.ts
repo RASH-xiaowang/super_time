@@ -14,12 +14,23 @@ import { runSyntheticEval, syntheticIntentAccuracy } from '../query/retrieval/ev
 import { formatEvalReport } from '../query/retrieval/eval.ts'
 import { buildSearchIndex, searchIndexMessagesCancellable } from '../query/search.ts'
 import { EditMutationResult, OperationCategory, OperationStatus, SearchBuildResult, SearchSnapshot } from '../types.ts'
+import { RetrievalEvalResult } from '../types-retrieval.ts'
 
 export interface createGraphSearchRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
   op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void
   searchJobs: Map<string, AbortController>
   searchSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  /** W3-11.5：进度事件的出口（与 laya 分析同一套路）。 */
+  ctx: () => { emit: (name: string, ...args: unknown[]) => void }
+  /**
+   * W3-11.5：索引构建的取消槽。
+   *
+   * **不复用 `searchJobs`**：搜索与构建会同时在跑，共用一个 Map 的话两个毫不相干的
+   * jobId 会互相顶掉对方的令牌，「停止构建」会打到正在跑的搜索上。
+   */
+  searchIndexSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  cancelSearchIndexJob: (jobId?: string) => boolean
 }
 
 export function createGraphSearchRemotes(rc: createGraphSearchRemotesInputs) {
@@ -57,23 +68,51 @@ export function createGraphSearchRemotes(rc: createGraphSearchRemotesInputs) {
       }
     },
 
-    async buildSearchIndex(options?: { force?: boolean }): Promise<SearchBuildResult> {
+    async buildSearchIndex(options?: { force?: boolean; jobId?: string }): Promise<SearchBuildResult> {
+      // W3-11.5：进度事件 + 取消槽（与逐条分析同一套件：回调过不了 IPC，只能推事件）。
+      const jobId = typeof options?.jobId === 'string' ? options.jobId.trim().slice(0, 64) : ''
+      let lastProgressAt = 0
+      const emitProgress = jobId === ''
+        ? undefined
+        : (done: number, total: number, rows: number): void => {
+            const now = Date.now()
+            if (done < total && now - lastProgressAt < 120) return
+            lastProgressAt = now
+            try {
+              rc.ctx().emit('search-index/progress', { jobId, done, total, rows })
+            } catch { /* 事件 best-effort */ }
+          }
+      const ctl = rc.searchIndexSignal(jobId)
       try {
-        const r = await buildSearchIndex(rc.dirs().decrypted, options?.force)
+        const r = await buildSearchIndex(rc.dirs().decrypted, options?.force, {
+          ...(emitProgress ? { onProgress: emitProgress } : {}),
+          ...(ctl ? { signal: ctl.signal } : {}),
+        })
+        // 被取消记 skip 而不是 fail：旧索引原封不动，索引没坏（口径同逐条分析的取消）。
         rc.op('sync', 'build_search_index', r.status === 'ok' ? 'ok' : 'skip', '', r.message ?? `rows=${r.rows ?? 0}`)
         return r
       } catch (e) {
         rc.op('sync', 'build_search_index', 'fail', '', (e as Error).message)
         throw e
+      } finally {
+        ctl?.done()
       }
     },
 
-    evaluateRetrieval(options?: { k?: number }): {
-      report: string
-      hybrid: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
-      sparseOnly: { precision: number; recall: number; mrr: number; ndcg: number; map: number; cases: number; hits: number }
-      intentAccuracy: { correct: number; total: number; accuracy: number }
-    } {
+    /**
+     * 停止一次正在跑的搜索索引构建（W3-11.5）。
+     *
+     * 取消只在分片边界（以及分片内每次让出）生效，且会 ROLLBACK ⇒ 旧索引原封不动。
+     */
+    cancelSearchIndexBuild(options: { jobId?: string }): { ok: boolean; message?: string } {
+      const id = typeof options?.jobId === 'string' ? options.jobId.trim() : ''
+      if (id === '') return { ok: false, message: '缺少任务标识' }
+      return rc.cancelSearchIndexJob(id)
+        ? { ok: true }
+        : { ok: false, message: '这次构建已经结束了（或标识不认识），无需停止' }
+    },
+
+    evaluateRetrieval(options?: { k?: number }): RetrievalEvalResult {
       const k = options?.k ?? 10
       const hybrid = runSyntheticEval({ k })
       const sparseOnly = runSyntheticEval({ k, denseEnabled: false, structuredEnabled: false })

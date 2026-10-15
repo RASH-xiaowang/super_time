@@ -33,10 +33,11 @@
  *   · `.t.` 兜底槽里那份**不会被删**：升级后主槽优先，它退化成纯兜底，留着无害。
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { collectImageDatFiles, collectImageDatFilesAsync, groupImageDatsByMd5 } from './decrypt-images.ts'
-import { decodeDatBytes } from './media-image.ts'
+import { decodeDatBytesAsync } from './media-image-async.ts'
 import { REMOTE_IMAGE_CACHE_DIRNAME } from './remote-image.ts'
 import { yieldToLoop } from './search-build.ts'
 import { MD5_SEGMENT } from '../md5.ts'
@@ -51,6 +52,15 @@ const CACHE_EXTS = 'jpg|jpeg|png|gif|webp|bmp|tif'
  * `decodeImageDataUrl` 在转码能力不可用时会因它直接早退 —— 所以要能找到它并在升级成功时清掉。
  */
 const CACHE_FILE_RE = new RegExp('^(' + MD5_SEGMENT + ')(\\.t)?\\.(' + CACHE_EXTS + '|hevc)$', 'i')
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** 一个 md5 在解码缓存里的现状。 */
 interface CachedEntry {
@@ -214,7 +224,7 @@ export async function upgradeDecodedImageCache(
     let lastError = ''
     for (const file of candidates) {
       try {
-        const dec = decodeDatBytes(new Uint8Array(readFileSync(file)), aes, xorKey)
+        const dec = await decodeDatBytesAsync(new Uint8Array(await readFile(file)), aes, xorKey)
         if ('error' in dec) { lastError = '解码失败：' + dec.error; continue }
         if (dec.format === 'hevc') {
           lastError = 'wxgf 原图：转码不可用或转码失败（装上微信解码库后重试）'
@@ -242,13 +252,13 @@ export async function upgradeDecodedImageCache(
       let wrote = 0
       for (const dir of entry.dirs) {
         try {
-          writeFileSync(join(dir, md5 + '.' + ext), Buffer.from(best.bytes))
+          await writeFile(join(dir, md5 + '.' + ext), Buffer.from(best.bytes))
           wrote += 1
           // 顺手清掉同目录的 `.hevc` 占位：它会让「解码库装好了」的那次重解被短接
           // （`media-image.ts` 的早退判据），留着就是一颗埋在缓存里的钉子。
           try {
             const hevc = join(dir, md5 + '.hevc')
-            if (existsSync(hevc)) rmSync(hevc)
+            if (await pathExists(hevc)) await rm(hevc)
           } catch { /* 删不掉不影响这张图已经升级 */ }
         } catch (e) {
           errors.push({ file: md5, error: '写入失败：' + (e as Error).message })

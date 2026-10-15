@@ -343,6 +343,44 @@ describe('runLayout（不碰 localStorage 与 Worker）', () => {
     expect(result.engine).toBe('main')
     expect(result.positions.size).toBe(200)
   })
+
+  /**
+   * W2-7.3：主线程冷算**没有悬崖**（阈值定档用的那一条量测）。
+   *
+   * 量测背景（2026-10-11，本机 node 环境实测，图 = 每节点连到后面 4 个的环形稠密图）：
+   *
+   * | 节点 | 冷算 | 每节点 |
+   * |---|---|---|
+   * | 50  | 8ms  | 0.169ms |
+   * | 100 | 28ms | 0.276ms |
+   * | 200 | 45ms | 0.226ms |
+   * | 300 | 40ms | 0.134ms |
+   * | 400 | 55ms | 0.139ms |
+   * | 600 | 93ms | 0.154ms |
+   * | 800 | 100ms| 0.125ms |
+   *
+   * 结论是**没有悬崖**：每节点成本随节点数不升反降（迭代分档在起作用），800 节点也只 100ms。
+   * 所以「300+ 节点切增量」这个计划前提不成立 —— 该切的时候早就切了（`WORKER_NODE_THRESHOLD`）。
+   * 但源码注释里「200 以下只占几毫秒」那句是错的（实测 45ms），已改成本表。
+   *
+   * 这里的上界故意放到实测值的 **30 倍**：它是「别变成 O(n²) 大病」的哨兵，不是性能门禁 ——
+   * 写成贴着实测值的那种会在 CI 共享 runner 上假红。
+   */
+  it('800 节点冷算仍在「不卡」的量级（没有悬崖，也不是 O(n²) 大病）', async () => {
+    const dense = (count: number): BuiltGraph => {
+      const nodes = Array.from({ length: count }, (_, i) => node('d' + String(i)))
+      const edges: GEdge[] = []
+      for (let i = 0; i < count; i += 1) {
+        for (let d = 1; d <= 4; d += 1) edges.push(edge('d' + String(i), 'd' + String((i + d) % count), 1 + (i % 3)))
+      }
+      return { nodes, edges, communityCount: 0, kindCounts: {} }
+    }
+    const t0 = performance.now()
+    const r = await runLayout({ graph: dense(800), settings: { ...s(), nodeGap: 1.5 }, fresh: true })
+    const ms = performance.now() - t0
+    expect(r.positions.size, '坐标没覆盖全部节点').toBe(800)
+    expect(ms, `800 节点冷算 ${Math.round(ms)}ms（实测 ~100ms，上界 3000ms）⇒ 布局复杂度退化了`).toBeLessThan(3000)
+  }, 120_000)
 })
 
 /**

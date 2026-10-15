@@ -10,6 +10,7 @@ import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
 import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { Dialog, EmptyState, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
@@ -206,7 +207,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         actions={(
           <>
             <button type="button" className={css.catBtn} data-active={selectMode || undefined} onClick={() => { setSelectMode(v => !v); setSelected(new Set()) }}>{selectMode ? '退出批量' : '批量'}</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出'}</button>
+            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出（仅电脑）' : '导出'}</button>
             {selectMode && <button type="button" className={css.catBtn} data-active="true" onClick={() => { void doDelete() }} disabled={selected.size === 0}>删除所选 ({selected.size})</button>}
           </>
         )}

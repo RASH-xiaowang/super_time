@@ -7,7 +7,7 @@
  * 所以它的写必须走 `search.ts` 导出的那把索引库写闸（`withIndexWrite`）——
  * 否则构建在飞时写事务会被拒、然后被吞掉、静默退化成 LIKE。
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from './db-open.ts';
 import type { MemberSearchSnapshot } from '../types.ts';
 /**
  * contact_fts 的可用状态。

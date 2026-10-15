@@ -7,8 +7,12 @@
  * is needed on the client. URLs are tried in order at runtime; when none is
  * reachable the world layer says so explicitly —— 2026-09-26 地理 SVG 已按用户要求移除，
  * 不再有离线底图可回退（这句原来写的是 “falls back to the offline SVG map”）。
+ *
+ * 网络请求已收口到后端 `getMapGeoJson`：本文件只保留候选地址、名称匹配与首份选择，
+ * 不再直接 `fetch`。
  */
 import type { RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
+import { apiGetMapGeoJson } from '../api-media.ts'
 
 /** World GeoJSON fetch candidates, pinned to an immutable version. */
 export const WORLD_GEO_URLS = [
@@ -100,20 +104,13 @@ export function worldUnmatchedChildren(children: readonly RegionNode[], features
 
 /**
  * Fetch the first GeoJSON candidate that answers with a 2xx response.
+ * 实际出网由后端代理完成；这里只负责把失败原因转成可捕获异常。
  * @param urls - candidate URLs in preference order.
  * @returns the parsed JSON body.
  * @throws when every candidate fails (network, non-2xx or parse error).
  */
 export async function fetchFirstJson(urls: readonly string[]): Promise<unknown> {
-  let lastError: Error | null = null
-  for (const url of urls) {
-    try {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`geo http ${res.status}`)
-      return await res.json()
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e))
-    }
-  }
-  throw lastError ?? new Error('no geo source')
+  const result = await apiGetMapGeoJson(urls)
+  if (!result.ok) throw new Error(result.error)
+  return result.data
 }

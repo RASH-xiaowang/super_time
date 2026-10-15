@@ -1,5 +1,5 @@
 /**
- * 设置 → 远程访问（手机）：开关、局域网地址、二维码、令牌轮换。
+ * 设置 → 远程访问（手机）：开关、局域网地址、二维码、凭据轮换。
  *
  * ## 这一节为什么必须存在
  *
@@ -8,12 +8,12 @@
  * 而 N24 那条教训正好相反：界面上有开关但代码没有消费者会误导用户，
  * 代码有行为但界面没有开关同样糟糕（用户不知道自己开着什么）。
  *
- * ## 令牌只显示一次，这是刻意的
+ * ## 明文凭据只显示一次，这是刻意的
  *
  * 二维码与可复制的链接**只在「启用 / 轮换」刚成功的那一刻**出现，之后界面上只剩掩码
- * （`abcd…wxyz`）。理由：如果随时能调出明文令牌，那么任何能看到这块屏幕的场合
+ * （`abcd…wxyz`）。理由：如果随时能调出明文凭据，那么任何能看到这块屏幕的场合
  * （投屏、截图、远程协助、肩窥）都等于交出完整凭据 —— 而凭据换来的是**全部聊天记录**。
- * 想再看一次二维码，就轮换一次令牌（旧的立刻失效，已连上的手机要重新扫）。
+ * 想再看一次二维码，就轮换一次（旧令牌与旧配对码立即失效，已连上的手机要重新扫）。
  * 这不是缺陷，是把「泄漏窗口」压到最小。
  *
  * ## 文件名口径
@@ -29,58 +29,50 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { encodeQr, qrSvgPath } from './clawbot-qr.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
 import css from './settings-remote-access.module.css'
-
-/** `remote-access:state` / `rotate` / `toggle` 的返回形状（主进程 `http-server.js` 给）。 */
-interface RemoteAccessState {
-  running: boolean
-  port: number
-  address: string
-  addresses: string[]
-  enabled: boolean
-  hasToken: boolean
-  tokenMasked: string
-  sessions?: number
-}
+import { desktopOnlyGate } from '../ui/desktop-only.tsx'
+import type { RemoteAccessRotation, RemoteAccessState } from '../../../contracts.ts'
 
 /** 宿主桥（只有桌面端有；浏览器态这一节整块不渲染）。 */
 function bridge(): {
   state: () => Promise<{ ok: boolean, value?: RemoteAccessState }>
-  rotate: () => Promise<{ ok: boolean, value?: { token: string, state: RemoteAccessState }, error?: { message?: string } }>
+  rotate: () => Promise<{ ok: boolean, value?: RemoteAccessRotation, error?: { message?: string } }>
   toggle: (enabled: boolean) => Promise<{ ok: boolean, value?: RemoteAccessState, error?: { message?: string } }>
 } | null {
-  const api = (window as unknown as { electronAPI?: { remoteAccess?: unknown } }).electronAPI?.remoteAccess
+  if (typeof window === 'undefined') return null
+  const api = window.electronAPI?.remoteAccess
   return (api as never) ?? null
 }
 
-/** 二维码只在「刚生成令牌」时出现，用完即弃（不落任何状态存储）。 */
+/** 二维码只在「刚生成配对码」时出现，用完即弃（不落任何状态存储）。 */
 interface OneTimeQr {
   url: string
-  token: string
+  pairingCode: string
   path: { viewBox: string, d: string } | null
   error: string
 }
 
 /**
- * 把地址 + 端口 + 令牌拼成手机要打开的链接，并顺手把二维码画出来。
+ * 把地址 + 端口 + 配对码拼成手机要打开的链接，并顺手把二维码画出来。
  *
  * 二维码画不出来不是致命错误（还可以手输链接），所以失败只记一句原因。
  * @param address - 绑定到的局域网 IPv4。
  * @param port - 实际端口（可能被顺移过，所以用状态里的实际值而不是配置值）。
- * @param token - 刚生成的令牌原文。
+ * @param pairingCode - 刚生成的短命配对码。
  */
-function buildQr(address: string, port: number, token: string): OneTimeQr {
-  const url = `http://${address}:${String(port)}/?t=${token}`
+function buildQr(address: string, port: number, pairingCode: string): OneTimeQr {
+  const url = `http://${address}:${String(port)}/?t=${pairingCode}`
   try {
-    return { url, token, path: qrSvgPath(encodeQr(url)), error: '' }
+    return { url, pairingCode, path: qrSvgPath(encodeQr(url)), error: '' }
   } catch (e) {
     // clawbot-qr 的容量上限是 230 字节（版本 9 / EC-L）；这个 URL 约 60–70 字节，
     // 正常不会超。真超了说明地址或端口出了怪值，此时仍给出手输链接。
-    return { url, token, path: null, error: e instanceof Error ? e.message : String(e) }
+    return { url, pairingCode, path: null, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
 /** 设置 → 远程访问（手机）。 */
 export function SettingsRemoteAccess(): React.JSX.Element {
+  const blocked = desktopOnlyGate('remote'); if (blocked !== null) return blocked
   const api = bridge()
   const [state, setState] = useState<RemoteAccessState | null>(null)
   const [qr, setQr] = useState<OneTimeQr | null>(null)
@@ -100,7 +92,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  /** 启用并生成令牌（第一次用时走这条：没有令牌，服务端是不会开始监听的）。 */
+  /** 启用并生成凭据（第一次用时走这条：没有长期令牌，服务端是不会开始监听的）。 */
   const rotate = useCallback(async (): Promise<void> => {
     if (!api || busy) return
     setBusy(true)
@@ -108,13 +100,13 @@ export function SettingsRemoteAccess(): React.JSX.Element {
     try {
       const r = await api.rotate()
       if (!r.ok || !r.value) {
-        setError(r.error?.message ?? '生成令牌失败')
+        setError(r.error?.message ?? '生成访问凭据失败')
         return
       }
       const st = r.value.state
       setState(st)
-      setQr(st.running ? buildQr(st.address, st.port, r.value.token) : null)
-      if (!st.running) setError('令牌已生成，但服务没有起来（端口被占？看看下面的地址列表）')
+      setQr(st.running ? buildQr(st.address, st.port, r.value.pairingCode) : null)
+      if (!st.running) setError('访问凭据已生成，但服务没有起来（端口被占？看看下面的地址列表）')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -122,7 +114,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
     }
   }, [api, busy])
 
-  /** 开关：关掉立刻断开所有在连的手机；打开时若还没有令牌则必须先生成。 */
+  /** 开关：关掉立刻断开所有在连的手机；打开时若还没有长期令牌则必须先生成。 */
   const toggle = useCallback(async (next: boolean): Promise<void> => {
     if (!api || busy) return
     if (next && !(state?.hasToken ?? false)) { await rotate(); return }
@@ -132,7 +124,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
       const r = await api.toggle(next)
       if (!r.ok || !r.value) { setError(r.error?.message ?? '操作失败'); return }
       setState(r.value)
-      // 关掉就作废二维码：链接里那个令牌虽然还在配置里，但服务已经不听端口了，
+      // 关掉就作废二维码：配对码已被 stop() 清掉，服务也不再听端口，
       // 留着一个「看起来还能扫」的码只会让人以为还开着。
       if (!next) setQr(null)
     } catch (e) {
@@ -160,6 +152,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
   const running = state?.running ?? false
   const url = running && state ? `http://${state.address}:${String(state.port)}/` : ''
+  const firewallPort = state?.running && state.port > 0 ? state.port : (state?.configuredPort ?? 5032)
 
   return (
     <section className={css.card} data-settings-section="remote">
@@ -179,7 +172,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
       <p className={css.lede}>
         打开后本机在局域网里起一个 HTTP 服务，<b>你自己的手机</b>可以用浏览器访问同一套界面。
-        <b>默认关闭</b>；打开后同一 Wi-Fi 下的设备<b>持令牌</b>即可读到微信数据，
+        <b>默认关闭</b>；打开后同一 Wi-Fi 下的设备<b>持配对码</b>即可读到微信数据，
         且只开放一份方法白名单（模型 API Key、许可证、诊断、备份还原、配置写入一律不开放）。
       </p>
 
@@ -187,7 +180,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
         <span className={css.dot} aria-hidden="true" />
         {running
           ? `正在监听 http://${state?.address ?? ''}:${String(state?.port ?? '')}`
-          : (state?.enabled ? '已打开但没有监听（缺令牌，或端口不可用）' : '未监听（任何设备都连不进来）')}
+          : (state?.enabled ? '已打开但没有监听（缺长期令牌，或端口不可用）' : '未监听（任何设备都连不进来）')}
       </div>
 
       {error !== '' && <p className={css.err} role="alert">{error}</p>}
@@ -204,19 +197,19 @@ export function SettingsRemoteAccess(): React.JSX.Element {
               : <div className={css.err}>二维码生成失败：{qr.error}</div>}
           </div>
           <div className={css.qrSide}>
-            <p className={css.qrHint}>用手机相机扫这个码即可打开（令牌已附在链接里，不用手输）。</p>
+            <p className={css.qrHint}>用手机相机扫这个码即可打开（配对码已附在链接里，不用手输）。</p>
             <code className={css.url}>{qr.url}</code>
             <div className={css.btnRow}>
               <button type="button" className={css.btn} onClick={() => { void copy(qr.url, 'link') }}>
                 {copied === 'link' ? '✓ 已复制' : '复制链接'}
               </button>
-              <button type="button" className={css.btn} onClick={() => { void copy(qr.token, 'token') }}>
-                {copied === 'token' ? '✓ 已复制' : '复制令牌'}
+              <button type="button" className={css.btn} onClick={() => { void copy(qr.pairingCode, 'token') }}>
+                {copied === 'token' ? '✓ 已复制' : '复制配对码'}
               </button>
             </div>
             <p className={css.once}>
-              令牌与二维码<b>只在这次生成后显示</b>；关掉这一节就只剩掩码。
-              想再看一次请点「轮换令牌」（旧令牌与已连上的手机会立即失效）。
+              配对码与二维码<b>只在这次生成后显示</b>；关掉这一节就只剩掩码。
+              想再看一次请点「轮换令牌」（旧令牌、旧配对码与已连上的手机会立即失效）。
             </p>
           </div>
         </div>
@@ -224,7 +217,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
       <dl className={css.facts}>
         <div className={css.fact}>
-          <dt>访问令牌</dt>
+          <dt>长期令牌</dt>
           <dd>{state?.hasToken ? (state.tokenMasked || '（已生成）') : '尚未生成'}</dd>
         </div>
         <div className={css.fact}>
@@ -254,7 +247,7 @@ export function SettingsRemoteAccess(): React.JSX.Element {
 
       <div className={css.btnRow}>
         <button type="button" className={css.btn} disabled={busy} onClick={() => { void rotate() }}>
-          {busy ? '处理中…' : (state?.hasToken ? '轮换令牌' : '启用并生成令牌')}
+          {busy ? '处理中…' : (state?.hasToken ? '轮换令牌' : '启用并生成访问凭据')}
         </button>
         <button type="button" className={css.btnGhost} disabled={busy} onClick={() => { void refresh() }}>
           刷新状态
@@ -266,15 +259,15 @@ export function SettingsRemoteAccess(): React.JSX.Element {
         <ol className={css.warnList}>
           <li>手机与电脑在<b>同一个 Wi-Fi</b>（手机用流量、或连了访客网络都不行）；</li>
           <li>Windows 防火墙：首次监听时会弹「是否允许访问」，<b>当时点了「取消」就连不上</b>。
-              手动放行（管理员身份运行）：
-              <code className={css.code}>netsh advfirewall firewall add rule name=&quot;Super Time 远程访问&quot; dir=in action=allow protocol=TCP localport={String(state?.port ?? 5032)}</code>
+              手动放行（管理员身份运行；正在监听时用实际端口，未监听时用配置端口）：
+              <code className={css.code}>netsh advfirewall firewall add rule name=&quot;Super Time 远程访问&quot; dir=in action=allow protocol=TCP localport={String(firewallPort)}</code>
           </li>
           <li>上面「局域网地址」列了多个时，服务绑的是<b>第一个</b>；如果那个地址是虚拟网卡
               （VMware / Hyper-V / WSL），手机会连不上 —— 断开虚拟网卡后点「刷新状态」重绑。</li>
         </ol>
         <p className={css.warnNote}>
           ⚠ 这条链路是<b>明文 HTTP、没有 TLS</b>：在公共 Wi-Fi 或被入侵的路由器下，同网段的人
-          能嗅探到令牌与你查阅的内容。<b>只在你信任的局域网里打开，用完就关。</b>
+          能嗅探到配对码与你查阅的内容。<b>只在你信任的局域网里打开，用完就关。</b>
           逐条口径见 <code className={css.code}>docs/PRIVACY.md</code> 第四节 H。
         </p>
       </div>

@@ -20,22 +20,12 @@
  * @module ui-app/capabilities
  */
 
-/** 宿主注入的桥（preload 暴露的形状；这里只关心用到的那几个字段是否存在）。 */
-interface ElectronBridge {
-  wechat?: { call?: unknown, onEvent?: unknown }
-  pickDirectory?: unknown
-  windowControls?: unknown
-  capturePanel?: unknown
-  license?: unknown
-  diag?: unknown
-  update?: unknown
-  shell?: unknown
-}
+import type { ElectronApi } from '@deepseek-ai/dsh-client-ui-wechat/host'
 
 /** 读一次桥（模块加载时就定型：环境不会在运行中从 Electron 变成浏览器）。 */
-function bridge(): ElectronBridge | null {
+function bridge(): ElectronApi | null {
   if (typeof window === 'undefined') return null
-  const b = (window as unknown as { electronAPI?: ElectronBridge }).electronAPI
+  const b = window.electronAPI
   return b && typeof b === 'object' ? b : null
 }
 
@@ -65,9 +55,9 @@ export const capabilities = Object.freeze({
   /** 原生目录选择对话框。手机上没有「本机目录」这个概念（数据在电脑上）。 */
   dirPicker: isDesktop && typeof b?.pickDirectory === 'function',
   /** 面板截图（`window:capture-panel`）。 */
-  capturePanel: isDesktop && b?.capturePanel !== undefined,
+  capturePanel: isDesktop && typeof b?.capturePanel === 'function',
   /** 在资源管理器中显示（`shell:show-item`）。 */
-  shellOpen: isDesktop && b?.shell !== undefined,
+  shellOpen: isDesktop && typeof b?.showInFolder === 'function',
   /**
    * 许可证界面。
    *
@@ -75,11 +65,11 @@ export const capabilities = Object.freeze({
    * （`call-gates.js` 的 `authorizeCall`），手机侧再查一次既查不到也没意义 ——
    * 查到的是「手机这台设备没有许可证」，那会把一个已经授权过的会话挡在门外。
    */
-  license: isDesktop && b?.license !== undefined,
+  license: isDesktop && typeof b?.license?.status === 'function',
   /** 诊断面板（`diag:*`）：导出的是本机日志与配置，远程端不该拿。 */
-  diag: isDesktop && b?.diag !== undefined,
+  diag: isDesktop && typeof b?.diag?.logInfo === 'function',
   /** 检查更新（`update:*`）：更新的是电脑上那个安装，手机点了没用。 */
-  update: isDesktop && b?.update !== undefined,
+  update: isDesktop && typeof b?.update?.state === 'function',
 })
 
 /**
@@ -89,7 +79,7 @@ export const capabilities = Object.freeze({
  *   · 手机浏览器里 `localStorage` 是空的，三道闸门会依次要求「看 4 页引导 → 同意隐私声明
  *     → 导入许可证」，而这台设备上**一件都做不成**（引导讲的是本机数据根与密钥、
  *     许可证绑的是电脑的设备指纹）；
- *   · 真正的授权已经发生过了 —— 桌面端主人生成了令牌并把它交给手机（令牌门），
+ *   · 真正的授权已经发生过了 —— 桌面端主人生成了配对码并把它交给手机（令牌门），
  *     而每次调用还要过服务端那道 `authorizeCall`；
  *   · 隐私声明的重新同意是**桌面端**的义务（`PRIVACY_VERSION` 存在桌面端的 localStorage 里），
  *     手机端看到的那份声明由桌面端已经同意过。

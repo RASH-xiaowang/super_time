@@ -11,6 +11,7 @@ import { Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import { fmtBytes } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
+import { desktopOnlyGate } from '../ui/desktop-only.tsx'
 
 /**
  * Render the original-image capability self-check panel.
@@ -22,6 +23,7 @@ export function HookPanel({ onNavigate, embedded = false }: {
   onNavigate?: (tab: string) => void
   embedded?: boolean
 } = {}): React.JSX.Element {
+  const blocked = desktopOnlyGate('hook'); if (blocked !== null) return blocked
   /* 2026-10-03 推广批次 3：cfg 改用共用 useFreshData —— 打开即查最新（不再预填缓存），
      成功写回缓存；失败才回退缓存并由 hook 在 error 里标注「以下为本地缓存（可能不是最新）」。 */
   const fetchCfg = useCallback(() => apiGetWechatConfig(), [])

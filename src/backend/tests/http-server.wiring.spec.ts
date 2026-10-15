@@ -26,7 +26,9 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const MAIN = join(ROOT, 'main.js')
+const SUPERVISOR = join(ROOT, 'src', 'backend', 'backend-supervisor.js')
 const IPC = join(ROOT, 'src', 'backend', 'ipc-wechat.js')
+const REMOTE_IPC = join(ROOT, 'src', 'backend', 'ipc-remote-access.js')
 const GATES = join(ROOT, 'src', 'backend', 'call-gates.js')
 const SERVER = join(ROOT, 'src', 'backend', 'http-server.js')
 
@@ -106,6 +108,15 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
   const mainSf = parse(MAIN)
   const mainCalls = callNames(mainSf)
   const mainSrc = readFileSync(MAIN, 'utf8')
+  // 启动顺序跨 main.js 与 backend-supervisor.js：ready 快照在监管器里，监听启动在组合根里。
+  const startupSf = ts.createSourceFile(
+    'startup.js',
+    `${readFileSync(SUPERVISOR, 'utf8')}\n${mainSrc}`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  )
+  const remoteIpcSrc = readFileSync(REMOTE_IPC, 'utf8')
 
   it('哨兵：main.js 读到了，且这些模块真的存在', () => {
     expect(mainSrc.length).toBeGreaterThan(10000)
@@ -123,6 +134,23 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
     expect(wired, 'gatedCall 没有接到 gatedWechatCall 上').toContain('gatedWechatCall(gateCtx')
   })
 
+  it('桌面 IPC 与 HTTP 共用同一个 backendCallQueue，远程停服只排空 remote 通道', () => {
+    expect(mainCalls, 'main.js 没有创建共享调用闸').toContain('createCallQueue')
+    expect(mainSrc).toContain('const backendCallQueue = createCallQueue()')
+
+    const gateCtxStart = mainSrc.indexOf('const gateCtx = {')
+    const gateCtxEnd = mainSrc.indexOf('registerWechatIpc(gateCtx)')
+    const gateCtx = mainSrc.slice(gateCtxStart, gateCtxEnd)
+    expect(gateCtx, 'IPC 没有把调用排进共享闸').toContain('backendCallQueue.run(task, meta)')
+
+    const createCall = mainSrc.slice(mainSrc.indexOf('createRemoteAccessServer({'))
+    const wired = createCall.slice(0, createCall.indexOf('})'))
+    expect(wired, 'HTTP 服务没有注入同一把共享闸').toContain('callQueue: backendCallQueue')
+
+    const serverSrc = readFileSync(SERVER, 'utf8')
+    expect(serverSrc, '远程停服可能连带拒绝桌面排队项').toContain("queue.drain('远程访问服务已停止', 'remote')")
+  })
+
   it('服务的是 Electron 自己 loadFile 的**同一份**产物（手机与桌面不是两套代码）', () => {
     const at = mainSrc.indexOf('createRemoteAccessServer({')
     const block = mainSrc.slice(at, mainSrc.indexOf('})', at))
@@ -130,6 +158,13 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
     // 与 main-window.js 的 uiEntryHtml 指向同一目录，这里钉的是「同一个字符串形状」
     const mw = readFileSync(join(ROOT, 'src', 'backend', 'main-window.js'), 'utf8')
     expect(mw, 'main-window.js 里的产物目录口径变了，接线判据要跟着改').toContain('ui-dist')
+  })
+
+  it('长响应保留 socket 超时豁免，但接收请求有独立硬时限（防慢 body 占连接）', () => {
+    const serverSrc = readFileSync(SERVER, 'utf8')
+    expect(serverSrc, '长任务响应必须保留无 socket 空闲超时').toContain('srv.timeout = 0')
+    expect(serverSrc, 'requestTimeout 不能跟着关掉，否则慢 body 可以无限占住连接')
+      .toContain('srv.requestTimeout = REQUEST_TIMEOUT_MS')
   })
 
   it('后端事件同时转发给 SSE 客户端（少了这一条，手机上所有面板都不会实时刷新）', () => {
@@ -141,12 +176,11 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
   })
 
   it('后端就绪之后才按配置启动监听', () => {
-    // main.js 里有两处 setBackendStatus('ready')（重启监管器一处、初始化收尾一处），
-    // 这里要的是「存在一处 ready 排在启动监听之前」—— 启动监听读的是数据根下的配置，
-    // 而数据根要等后端 init 完才解析得出来，排早了就读不到、永远不监听。
-    const readyAt = firstCallAt(mainSf, 'setBackendStatus', 'ready')
-    const syncAt = firstCallAt(mainSf, 'syncWithConfig')
-    expect(readyAt, 'main.js 里没有 setBackendStatus("ready") 这一处').toBeGreaterThan(-1)
+    // ready 快照现在由监管器的 setStatus 广播；组合根必须在其后调用 syncWithConfig。
+    // 启动监听读的是数据根下的配置，而数据根要等后端 init 完才解析得出来，排早了就读不到。
+    const readyAt = firstCallAt(startupSf, 'setStatus', 'ready')
+    const syncAt = firstCallAt(startupSf, 'syncWithConfig')
+    expect(readyAt, '启动链里没有 setStatus("ready") 这一处').toBeGreaterThan(-1)
     expect(syncAt, 'main.js 没有调用 syncWithConfig —— 服务永远不会启动').toBeGreaterThan(-1)
     expect(syncAt, '监听排在了后端就绪之前（那时数据根还没解析出来，配置读不到）')
       .toBeGreaterThan(readyAt)
@@ -160,8 +194,9 @@ describe('主进程接线：服务真的被创建、启动、转发事件、停�
   })
 
   it('界面改完设置能立即生效（不等 60 秒兜底复查）', () => {
-    expect(mainSrc, '没有 remote-access:apply 这个 IPC，界面改完只能等定时器').toContain("'remote-access:apply'")
-    expect(mainSrc).toContain("'remote-access:state'")
+    expect(remoteIpcSrc, 'IPC 模块没有 remote-access:apply，界面改完只能等定时器').toContain("'remote-access:apply'")
+    expect(remoteIpcSrc).toContain("'remote-access:state'")
+    expect(mainSrc, 'main.js 没有把远程访问控制通道交给 IPC 模块').toContain('registerRemoteAccessIpc({')
   })
 })
 
@@ -227,16 +262,46 @@ describe('闸门只有一份实现：IPC 与 HTTP 共用 call-gates', () => {
     expect(apiAt).toBeLessThan(guardAt)
   })
 
+  it('HTTP 侧：Host 校验排在所有路由之前（坏 Host 连静态页面都拿不到）', () => {
+    const sf = parse(SERVER)
+    const body = bodyOf(sf, 'onRequest')
+    const hostAt = body.indexOf('isHostAllowed(req.headers.host')
+    const routeAt = body.indexOf('new URL(req.url')
+    expect(hostAt, 'onRequest 里没有 Host 校验').toBeGreaterThan(-1)
+    expect(routeAt, 'onRequest 里找不到路径解析').toBeGreaterThan(-1)
+    expect(hostAt, 'Host 校验排在路由之后 —— DNS rebinding 仍能拿到静态页面').toBeLessThan(routeAt)
+  })
+
   it('启动条件要求**令牌非空**（老配置遗留的 api_enabled:true 不能把端口打开）', () => {
     const sf = parse(SERVER)
-    const body = bodyOf(sf, 'start')
-    expect(body, '找不到 start 的实现').not.toBe('')
+    const body = bodyOf(sf, 'startNow')
+    expect(body, '找不到 startNow 的实现').not.toBe('')
     expect(body, '启动条件里没有「令牌非空」这一半 —— N24 之前那批用户的端口会被静默打开')
       .toMatch(/cfg\.enabled\s*\|\|\s*cfg\.token === ''|!cfg\.enabled \|\| cfg\.token === ''/)
     // 同一口径也要体现在 syncWithConfig（界面开关走的是它）
-    const sync = bodyOf(sf, 'syncWithConfig')
-    expect(sync, '找不到 syncWithConfig 的实现').not.toBe('')
-    expect(sync, 'syncWithConfig 的「该不该跑」没把令牌算进去')
+    const sync = bodyOf(sf, 'syncWithConfigNow')
+    expect(sync, '找不到 syncWithConfigNow 的实现').not.toBe('')
+    expect(sync, 'syncWithConfigNow 的「该不该跑」没把令牌算进去')
       .toMatch(/cfg\.enabled && cfg\.token !== ''/)
+  })
+
+  it('启停与配置同步全部经过同一个串行队列（定时器与设置页并发时只能有一个监听句柄）', () => {
+    const src = readFileSync(SERVER, 'utf8')
+    expect(src, '生命周期任务必须有串行队列').toContain('function enqueueLifecycle(')
+    for (const name of ['startNow', 'stopNow', 'refreshBindingNow', 'syncWithConfigNow']) {
+      expect(src, `${name} 是只应被队列入队调用的内部实现`).toContain(`async function ${name}(`)
+    }
+    expect(src, 'stop() 必须经串行队列').toMatch(/function stop\(\)\s*\{\s*return enqueueLifecycle/)
+    expect(src, 'syncWithConfig() 必须经串行队列').toMatch(/function syncWithConfig\(\)\s*\{\s*return enqueueLifecycle/)
+  })
+
+  it('服务句柄暴露配对码签发能力，且停服会作废内存里的配对码', () => {
+    const src = readFileSync(SERVER, 'utf8')
+    expect(src, '控制面拿不到 issuePairingCode，轮换后无法签发新配对码')
+      .toContain('issuePairingCode: () => pairings.issue()')
+    const stop = bodyOf(parse(SERVER), 'stopNow')
+    expect(stop, '找不到 stopNow 的实现').not.toBe('')
+    expect(stop, '停服没有清掉会话表').toContain('sessions.revokeAll()')
+    expect(stop, '停服没有清掉配对码表 —— 旧二维码在重开服务后仍能登录').toContain('pairings.revokeAll()')
   })
 })

@@ -18,6 +18,6 @@ export {
   removeAccountKeysFromStore, keyStorePath,
 } from './key-store.ts'
 export {
-  findWechatPid, scanDllInternalKey, fetchDbKey, fetchImageKey, getKeysInfoSummary,
+  findWechatPid, scanDllInternalKey, fetchDbKey, fetchImageKey,
 } from './service.ts'
 export type { DbKeyResult, ImageKeyResult, KeyStore, StoredAccountKeys } from './types.ts'

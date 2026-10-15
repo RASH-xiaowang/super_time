@@ -6,8 +6,10 @@
  * 全部连接经 `withDb` 打开（P0-1）：本文件原先同时存在「finally 关」和「catch 不关」两种写法，
  * 后者在 `prepare` 抛错时泄漏句柄。
  */
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { onDiskPath } from '../asar-path.ts'
@@ -89,7 +91,7 @@ export function svrIdByChatLocal(decryptedDir: string, username: string, localId
  *
  * The bundled candidate must go through `onDiskPath` (N19): in a packaged
  * build the walk from `import.meta.url` lands inside app.asar, where
- * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
+ * `existsSync` says the exe is there but `spawn` cannot run it (ENOENT).
  * Returning `''` instead of an unrunnable path keeps the caller's error
  * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
  *
@@ -128,26 +130,65 @@ function existingParent(dir: string): string {
   return parent === dir ? dir : parent
 }
 
+/** Upper bound for one wx_silk decode. Bad input must not consume the whole call window. */
+export const SILK_DECODE_TIMEOUT_MS = 120_000
+
+/** Run one decoder process without ever blocking the worker's event loop. */
+function runSilkDecoder(
+  bin: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }> {
+  const child = spawn(bin, [...args], { windowsHide: true })
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.on('data', (chunk) => { stdout += String(chunk) })
+  child.stderr?.on('data', (chunk) => { stderr += String(chunk) })
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const finish = (status: number | null, error?: Error): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resolve({ status, stdout, stderr, error })
+    }
+    timer = setTimeout(() => {
+      try { child.kill() } catch { /* process may already be gone */ }
+      finish(null, new Error(`silk 解码超时（${String(timeoutMs)}ms）`))
+    }, timeoutMs)
+    child.once('error', (error) => finish(null, error))
+    child.once('close', (code) => finish(code))
+  })
+}
+
+/** Collision-free temp name: length alone collided for concurrent equal-length messages. */
+function silkTempPath(wavPath: string): string {
+  return join(
+    dirname(wavPath),
+    `.wx_silk_${process.pid}_${Date.now().toString(36)}_${randomBytes(6).toString('hex')}.silk`,
+  )
+}
+
 /**
  * Decode silk bytes to a WAV file via wx_silk (16 kHz mono, whisper-ready).
  * @param silk - raw voice_data bytes (leading 0x02 tolerated).
  * @param wavPath - output WAV path (parent dir created).
+ * @param options.timeoutMs - decoder process bound (defaults to {@link SILK_DECODE_TIMEOUT_MS}).
  * @returns ok, or an error description.
  */
-export function silkToWav(silk: Buffer, wavPath: string): { ok: boolean; error?: string } {
+export async function silkToWav(
+  silk: Buffer,
+  wavPath: string,
+  options: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; error?: string }> {
   const bin = silkDecoderBin()
   if (!bin) return { ok: false, error: '未找到 wx_silk 解码器（DSH_WECHAT_SILK_BIN 或打包资源缺失）' }
-  const tempDir = dirname(wavPath)
-  const silkPath = join(tempDir, `.wx_silk_${process.pid}_${silk.length % 100000}.silk`)
+  const silkPath = silkTempPath(wavPath)
   try {
-    mkdirSync(tempDir, { recursive: true })
-    writeFileSync(silkPath, silk)
-    const res = spawnSync(bin, ['16000', silkPath, wavPath], {
-      encoding: 'utf8',
-      windowsHide: true,
-      // 解码一条语音是毫秒级；给个上界，免得个别坏输入把后端的调用窗口（10 分钟）用光。
-      timeout: 120_000,
-    })
+    await mkdir(dirname(wavPath), { recursive: true })
+    await writeFile(silkPath, silk)
+    const res = await runSilkDecoder(bin, ['16000', silkPath, wavPath], options.timeoutMs ?? SILK_DECODE_TIMEOUT_MS)
     if (res.status === 0 && existsSync(wavPath)) return { ok: true }
     // `res.error` 单独看：exe 起不来（ENOENT/EACCES）与「解码器明确报错」是两回事，
     // 只报「退出码 null」会让「缺二进制」和「音频损坏」看起来一模一样（复审实测）。
@@ -157,7 +198,7 @@ export function silkToWav(silk: Buffer, wavPath: string): { ok: boolean; error?:
     return { ok: false, error: (e as Error).message }
   } finally {
     // 临时 silk 必须清掉：原先从不删除，本机 cached voices 目录实测已积了十余个残留。
-    try { rmSync(silkPath, { force: true }) } catch { /* 清理尽力而为 */ }
+    try { await rm(silkPath, { force: true }) } catch { /* 清理尽力而为 */ }
   }
 }
 
@@ -181,23 +222,23 @@ const WAV_HEADER_BYTES = 44
  * @param localId - message local id.
  * @returns url (base64 wav) + durationSec, or an error description.
  */
-export function resolveVoiceDataUrl(
+export async function resolveVoiceDataUrl(
   decryptedDir: string,
   decodedDir: string,
   username: string,
   localId: number,
-): { url?: string; durationSec?: number; error?: string } {
+): Promise<{ url?: string; durationSec?: number; error?: string }> {
   const svrId = svrIdByChatLocal(decryptedDir, username, localId)
   if (!svrId) return { error: '未找到语音消息' }
   const wavPath = join(decodedDir, 'voices', svrId + '.wav')
   if (!existsSync(wavPath)) {
     const data = voiceDataBySvr(decryptedDir, svrId)
     if (!data) return { error: '未找到语音数据' }
-    const decoded = silkToWav(data, wavPath)
+    const decoded = await silkToWav(data, wavPath)
     if (!decoded.ok) return { error: decoded.error ?? 'silk 解码失败' }
   }
   try {
-    const bytes = readFileSync(wavPath)
+    const bytes = await readFile(wavPath)
     if (bytes.length <= WAV_HEADER_BYTES) return { error: '语音数据为空' }
     return {
       url: 'data:audio/wav;base64,' + bytes.toString('base64'),

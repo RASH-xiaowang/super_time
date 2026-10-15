@@ -25,11 +25,10 @@
  * @module ui-app/wechat-events
  */
 
+import type { BackendEvent } from '@deepseek-ai/dsh-client-ui-wechat/contracts'
+
 /** 后端推来的事件形状（IPC 的 `wechat:event` 与 SSE 的 data 帧**完全同形**）。 */
-export interface BackendEvent {
-  name: string
-  args?: unknown[]
-}
+export type { BackendEvent }
 
 /**
  * 映射表：后端事件名 → DOM 事件名。

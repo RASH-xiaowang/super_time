@@ -234,7 +234,7 @@ export async function apiGetMomentsMonthly(options?: { author?: string; authorNa
  * @param options - scope / username / year / limit（默认 60）。
  * @returns Top-N 词频与扫描条数。
  */
-export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<{ words: Array<{ text: string; count: number }>; scanned: number }> {
+export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<{ words: Array<{ text: string; count: number }>; scanned: number; canceled?: boolean }> {
   return unwrap(await remote().getWordCloud(options))
 }
 
@@ -261,8 +261,21 @@ export async function apiAnalyzeMessages(options: { talker: string; contextLimit
  * @param options - talker + targets (localId + sortSeq), up to a dozen per call.
  * @returns Per-message answers; failures are per item, not for the whole batch.
  */
-export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }> }): Promise<LayaVisibleAnalysisResult> {
+export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string }): Promise<LayaVisibleAnalysisResult> {
   return unwrap(await remote().analyzeVisibleMessages(options))
+}
+
+/**
+ * Stop a batch of per-message local analysis that is still running (W3-11.5).
+ *
+ * Cancelling only takes effect **between** items (one ONNX forward cannot be interrupted),
+ * so worst case is one item's inference latency; whatever already finished is kept on disk,
+ * so a stop never throws away paid-for work.
+ * @param options - jobId, the same identifier that batch was started with.
+ * @returns ok, plus why it did not stop anything (batch already finished / unknown id).
+ */
+export async function apiCancelLayaAnalysis(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelLayaAnalysis(options))
 }
 
 /**
@@ -276,10 +289,20 @@ export async function apiGetLayaStatus(): Promise<LayaStatus> {
 
 /**
  * Download the decision model assets (~1.26 GB) into the data dir.
- * @returns LayaDownloadOutcome.
+ * @param options - 可选的 jobId（W2-11.5：有它才能取消）。
+ * @returns LayaDownloadOutcome；被取消时 `canceled: true`。
  */
-export async function apiDownloadLayaModel(): Promise<LayaDownloadOutcome> {
-  return unwrap(await remote().downloadLayaModel())
+export async function apiDownloadLayaModel(options?: { jobId?: string }): Promise<LayaDownloadOutcome> {
+  return unwrap(await remote().downloadLayaModel(options))
+}
+
+/**
+ * 取消正在进行的 laya 模型下载（W2-11.5）。
+ * @param options - 与 `apiDownloadLayaModel` 同一个 jobId。
+ * @returns ok，或没有该任务时的说明。
+ */
+export async function apiCancelLayaDownload(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelLayaDownload(options))
 }
 
 /**

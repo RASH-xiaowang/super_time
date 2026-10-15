@@ -41,7 +41,8 @@ import { HANG_ENV, SKIP_GATES_ENV, resolveDebugGates, resolveHangMethods } from 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 // M21 第二十刀：misc IPC 频道搬去了 `src/backend/ipc-misc.js` ⇒ 读取面改**联合**
 // （断言一条没改；app:debug-gates / dialog:open-file 这些字符串搬到哪份都算数）。
-const mainSrc = [join(ROOT, 'main.js')]
+// H7 的 fork 与挂起注入现在住在 backend-supervisor.js；组合根 main.js 仍负责注入 deps。
+const mainSrc = [join(ROOT, 'main.js'), join(ROOT, 'src', 'backend', 'backend-supervisor.js')]
   .concat(readdirSync(join(ROOT, 'src', 'backend')).filter((f) => /^ipc-[a-z]+\.js$/.test(f))
     .map((f) => join(ROOT, 'src', 'backend', f)))
   .map((f) => readFileSync(f, 'utf8')).join('\n')
@@ -156,7 +157,7 @@ describe('N2：接线守卫（主进程 / preload / 渲染层 / 验收脚本）'
   it('豁免状态经 IPC 回给渲染层，且返回值含 packaged 与 skipGates 两个事实', () => {
     expect(preloadSrc).toContain("ipcRenderer.invoke('app:debug-gates')")
     expect(preloadSrc).toMatch(/debugGates:\s*\(\)\s*=>/)
-    const at = mainSrc.indexOf("ipcMain.handle('app:debug-gates'")
+    const at = mainSrc.indexOf("handleIpc('app:debug-gates'")
     expect(at, 'main.js 里没有注册 app:debug-gates').toBeGreaterThan(0)
     const snippet = mainSrc.slice(at, at + 900)
     expect(snippet).toContain('return { packaged: gates.packaged, skipGates: gates.skipGates }')
@@ -169,7 +170,7 @@ describe('N2：接线守卫（主进程 / preload / 渲染层 / 验收脚本）'
     // 两边各写一份必然漂）。所以这条判据现在看**共用的那份实现**：
     //   ① `wechat:call` 仍然注册着，且委托给 gatedWechatCall（没有绕开闸门自己写一份）；
     //   ② 顺序不变量落在 gatedWechatCall 里 —— 豁免分支必须在 authorizeCall 之前。
-    const at = ipcSrc.indexOf("ipcMain.handle('wechat:call'")
+    const at = ipcSrc.indexOf("handleIpc('wechat:call'")
     expect(at, 'ipc-wechat.js 里没有注册 wechat:call').toBeGreaterThan(0)
     const handler = ipcSrc.slice(at, at + 400)
     expect(handler, 'wechat:call 不再委托给共用的闸门实现（是绕开了还是自己又写了一份？）')
@@ -278,9 +279,15 @@ describe('H7：永不回包注入的判定与接线（打包态恒不生效）',
     const calls = callExpressions('main.js', mainSrc).filter((c) => c.callee === 'resolveHangMethods')
     expect(calls.length, 'main.js 里找不到 resolveHangMethods(...) 的真实调用点').toBeGreaterThan(0)
     for (const c of calls) {
-      expect(c.args.join(','), 'isPackaged 的取值必须来自 Electron 的 app.isPackaged')
-        .toContain('isPackaged: app.isPackaged')
+      // 监管器用注入进来的 isPackaged；注入点仍必须在组合根直接读 Electron 的 app.isPackaged。
+      expect(c.args.join(','), '监管器的名单判定必须使用注入的 isPackaged 与 env')
+        .toContain('isPackaged')
     }
+    const supervisorWiring = callExpressions('main.js', mainSrc)
+      .filter((c) => c.callee === 'createBackendSupervisor')
+    expect(supervisorWiring.length, '组合根没有创建后端监管器').toBeGreaterThan(0)
+    expect(supervisorWiring[0]!.args.join(','), 'isPackaged 的取值必须来自 Electron 的 app.isPackaged')
+      .toContain('isPackaged: app.isPackaged')
     // fork 必须收到 env；打包态走 delete 分支（不是「不设置」—— 否则会继承到父进程的同名变量）
     const fork = callExpressions('main.js', mainSrc).filter((c) => c.callee === 'utilityProcess.fork')
     expect(fork.length, '找不到 utilityProcess.fork 调用点（用例前提不成立）').toBe(1)

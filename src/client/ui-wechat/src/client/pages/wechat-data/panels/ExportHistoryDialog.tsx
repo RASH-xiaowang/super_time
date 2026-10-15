@@ -16,18 +16,7 @@ import { copyTextToClipboard } from '../utils/misc.ts'
 import clsx from 'clsx'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { ListSentinel, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
-import {
-  apiDeleteExportHistory,
-  apiExportAllSessions,
-  apiExportAnnualReport,
-  apiExportCsv,
-  apiExportMoments,
-  apiExportSessionMessages,
-  apiGetExportHistory,
-  apiOpenPath,
-  apiPruneExportHistory,
-  apiSaveFileDialog,
-} from '../api.ts'
+import { apiDeleteExportHistory, apiExportAllSessions, apiExportAnnualReport, apiExportCsv, apiExportMoments, apiExportSessionMessages, apiGetExportHistory, apiOpenPath, apiPruneExportHistory, apiSaveFileDialog, runtimeCapabilities } from '../api.ts'
 import type { ExportHistoryEntry, ExportHistoryQuery, ExportStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, DataTable, Dialog, SearchInput, Segmented, Select } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
@@ -209,8 +198,8 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const revealFile = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
     if (!r.existsNow) { hold('文件已不在原位置（可能被移动或删除）'); return }
     try {
-      const api = (window as unknown as { electronAPI?: { showInFolder?: (p: string) => Promise<unknown> } }).electronAPI
-      if (!api?.showInFolder) { hold('当前环境不支持「在文件夹中显示」'); return }
+      const api = window.electronAPI
+      if (!runtimeCapabilities().shellOpen || !api?.showInFolder) { hold('「在文件夹中显示」只在电脑上可用'); return }
       await api.showInFolder(r.path)
     } catch (e) {
       hold('定位失败：' + (e as Error).message)

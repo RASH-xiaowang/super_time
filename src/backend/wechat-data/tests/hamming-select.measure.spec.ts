@@ -14,6 +14,10 @@
  * 运行：
  *   MEASURE_HAMMING=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/hamming-select.measure.spec.ts
  *   MEASURE_HAMMING=1 MEASURE_HAMMING_ROWS=200000 ...（可改规模）
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'

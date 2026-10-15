@@ -36,6 +36,16 @@ export interface ChatRightPanelProps {
   analysisEntry: InlineAnalysisEntry | undefined
   /** 分析区：取消选中。 */
   onClearAnalysis: () => void
+  /** W3-11.5：本批分析进度（null = 没有批在跑）。 */
+  analysisProgress?: { done: number; total: number } | null
+  /** W3-11.5：停止当前那批分析。 */
+  onCancelAnalysis?: () => void | Promise<void>
+  /** W3-11.5：「已停止（算出 N/M）」的收尾回执。 */
+  analysisStopped?: { done: number; total: number } | null
+  /** W3-11.5：停止没停上的原因。 */
+  analysisStopError?: string
+  /** W3-11.5 收尾：重试某一条失败的分析。 */
+  onRetryAnalysis?: (localId: number) => void
 }
 
 /**
@@ -44,7 +54,7 @@ export interface ChatRightPanelProps {
  * @returns panel element tree.
  */
 export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
-  const { target, onClose, showSuggest, showAnalysis, analysisTargetId, analysisEntry, onClearAnalysis } = props
+  const { target, onClose, showSuggest, showAnalysis, analysisTargetId, analysisEntry, onClearAnalysis, analysisProgress, onCancelAnalysis, analysisStopped, analysisStopError, onRetryAnalysis } = props
 
   // 标题跟着**实际显示的内容**走：只开了分析还写「推荐回复」，会让人以为上区被吃掉了。
   const title = showSuggest && showAnalysis ? '推荐回复与分析' : showSuggest ? '推荐回复' : '分析'
@@ -77,6 +87,11 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
           targetId={analysisTargetId}
           entry={analysisEntry}
           onClear={onClearAnalysis}
+          progress={analysisProgress}
+          onCancel={onCancelAnalysis}
+          stopped={analysisStopped}
+          stopError={analysisStopError}
+          onRetry={onRetryAnalysis}
         />
       )}
     </div>

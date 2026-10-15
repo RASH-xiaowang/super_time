@@ -32,7 +32,11 @@ const require = createRequire(import.meta.url)
 interface AuthModule {
   SESSION_TTL_MS: number
   SESSION_COOKIE: string
+  PAIRING_TTL_MS: number
+  PAIRING_MAX_ATTEMPTS: number
+  PAIRING_MAX_PENDING: number
   generateAccessToken: () => string
+  generatePairingCode: () => string
   safeEquals: (provided: unknown, expected: unknown) => boolean
   maskToken: (token: string) => string
   parseCookies: (header: string | undefined) => Record<string, string>
@@ -43,6 +47,17 @@ interface AuthModule {
     revokeAll: () => void
     count: () => number
     expireCookie: () => string
+  }
+  createPairingStore: (opts?: {
+    ttlMs?: number
+    maxAttempts?: number
+    maxPending?: number
+    now?: () => number
+  }) => {
+    issue: () => string
+    verify: (provided: unknown) => { ok: boolean, attemptsLeft: number }
+    revokeAll: () => void
+    count: () => number
   }
 }
 
@@ -200,5 +215,69 @@ describe('会话表：有效期、作废、只在内存', () => {
     expect(store.count()).toBe(50)
     t += 1001
     expect(store.count(), '过期会话没被清掉').toBe(0)
+  })
+})
+
+describe('配对码：短命、唯一、一次性、可限次、只在内存', () => {
+  it('生成的配对码是 base64url、短于长期令牌、且每次不同', () => {
+    const seen = new Set<string>()
+    for (let i = 0; i < 200; i += 1) {
+      const code = auth.generatePairingCode()
+      expect(code).toMatch(/^[A-Za-z0-9_-]+$/)
+      expect(code.length, '二维码里的短命凭据不该与长期令牌一样长').toBeLessThan(32)
+      seen.add(code)
+    }
+    expect(seen.size, '200 次生成出现了重复').toBe(200)
+  })
+
+  it('配对码只许成功消费一次，且默认寿命是 5 分钟', () => {
+    expect(auth.PAIRING_TTL_MS).toBe(5 * 60 * 1000)
+    const store = auth.createPairingStore()
+    const code = store.issue()
+    expect(store.verify(code)).toEqual({ ok: true, attemptsLeft: 0 })
+    expect(store.verify(code), '同一个配对码第二次登录必须失败').toEqual({ ok: false, attemptsLeft: 0 })
+    expect(store.count()).toBe(0)
+  })
+
+  it('过期即失效（注入时钟，不等真的 5 分钟）', () => {
+    let t = 10_000
+    const store = auth.createPairingStore({ ttlMs: 60_000, now: () => t })
+    const code = store.issue()
+    t += 60_001
+    expect(store.verify(code).ok, '过期的配对码仍能登录').toBe(false)
+  })
+
+  it('未知码与空/非字符串一律拒绝，且错误猜测会真实消耗剩余次数', () => {
+    const store = auth.createPairingStore({ maxAttempts: 5 })
+    const code = store.issue()
+    expect(store.verify('not-the-code'), '第一次错误猜测应当消耗一个预算')
+      .toEqual({ ok: false, attemptsLeft: 4 })
+    expect(store.verify('').ok).toBe(false)
+    expect(store.verify(undefined).ok).toBe(false)
+    expect(store.verify('bad-2')).toEqual({ ok: false, attemptsLeft: 3 })
+    expect(store.verify('bad-3')).toEqual({ ok: false, attemptsLeft: 2 })
+    expect(store.verify('bad-4')).toEqual({ ok: false, attemptsLeft: 1 })
+    const exhausted = store.verify('final-bad-guess')
+    expect(exhausted, '试错预算耗尽后应作废这个码').toEqual({ ok: false, attemptsLeft: 0 })
+    expect(store.verify(code), '预算耗尽的配对码还能登录').toEqual({ ok: false, attemptsLeft: 0 })
+  })
+
+  it('pending 上限：超过上限淘汰最旧，新码仍可用', () => {
+    const store = auth.createPairingStore({ maxPending: 3, maxAttempts: 20 })
+    const codes = Array.from({ length: 5 }, () => store.issue())
+    expect(store.count()).toBe(3)
+    expect(store.verify(codes[0]!).ok, '最旧的配对码应被淘汰').toBe(false)
+    expect(store.verify(codes[4]!).ok, '最新配对码应仍可用').toBe(true)
+  })
+
+  it('revokeAll 作废全部配对码（停服/轮换后旧码必须死）', () => {
+    const store = auth.createPairingStore()
+    const a = store.issue()
+    const b = store.issue()
+    expect(store.count()).toBe(2)
+    store.revokeAll()
+    expect(store.count()).toBe(0)
+    expect(store.verify(a).ok).toBe(false)
+    expect(store.verify(b).ok).toBe(false)
   })
 })

@@ -19,3 +19,17 @@ export * from './types-analytics.ts'
 export * from './types-calls.ts'
 export * from './types-config.ts'
 export * from './types-laya.ts'
+export * from './types-retrieval.ts'
+export * from './types-kb-wire.ts'
+
+/**
+ * 这些类型原先只住在实现模块里，前端不得不再镜像一份（`types.ts` 里的「待 H11/H12
+ * 落地」旧账）。现在把它们收进共享契约，前端可以只 `export type` 转发，不再逐字段
+ * 复制。`build:types` 会同步生成到 `lib/types`。
+ */
+export type { KbModelRole, ModelRef, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts'
+export type { KbEntitySummary } from './query/kb/extract.ts'
+export type { KbVectorIndexStatus, KbVectorBuildResult } from './query/kb-vectors.ts'
+export type { AnnualReview } from './query/annual-review.ts'
+export type { RetrievalConfig } from './query/retrieval/config.ts'
+export type { ChannelName, FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'

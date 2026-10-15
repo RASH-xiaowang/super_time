@@ -3,13 +3,14 @@
  *
  * ## 三段式，而不是「每个请求都带令牌」
  *
- * 令牌（长期凭据）只在**换取会话**那一刻出现一次：手机扫二维码得到
- * `http://<ip>:<port>/?t=<令牌>`，页面把它 POST 给 `/api/auth`，服务端比对通过后
+ * 扫码拿到的是**短命、成功后立即作废的配对码**，长期 `api_token` 不再进二维码与地址栏。
+ * 手机打开 `http://<ip>:<port>/?t=<配对码>`，页面把它 POST 给 `/api/auth`，服务端比对通过后
  * 下发一个会话 Cookie，随后页面用 `history.replaceState` 把地址里的 `?t=` 抹掉。
  * 之后的每个请求只带 Cookie。
  *
- * 为什么不每个请求都带令牌：令牌会因此出现在**每一次**请求的 URL 或 header 里 ——
- * URL 会进代理日志、进浏览器历史、进 `Referer`。让它只出现一次，暴露面就小一个量级。
+ * 为什么不每个请求都带配对码 / 令牌：凭据会因此出现在**每一次**请求的 URL 或 header 里 ——
+ * URL 会进代理日志、进浏览器历史、进 `Referer`。让配对码只出现一次且短时有效，
+ * 即使它被截屏或嗅探，可重放窗口也从「直到用户轮换」缩到几分钟。
  *
  * 为什么用 Cookie 而不是 `Authorization` header：事件通道走的是 `EventSource`（SSE），
  * 而 **`EventSource` 不能自定义 header**（浏览器 API 的限制，不是我们的选择）。
@@ -45,6 +46,23 @@ const TOKEN_BYTES = 24;
 /** 生成一个新令牌（base64url，无 `+/=`，可以直接放进 URL 与二维码）。 */
 function generateAccessToken() {
   return crypto.randomBytes(TOKEN_BYTES).toString('base64url');
+}
+
+/** 配对码字节数：16 字节 → base64url 22 字符，短命凭据不需要与长期令牌同长。 */
+const PAIRING_CODE_BYTES = 16;
+
+/** 配对码有效期：5 分钟。用户从屏幕/二维码取码到手机发请求，不该让窗口无限期存在。 */
+const PAIRING_TTL_MS = 5 * 60 * 1000;
+
+/** 一个配对码最多允许的试错次数：容忍手输笔误，又不给无限穷举窗口。 */
+const PAIRING_MAX_ATTEMPTS = 5;
+
+/** 同时保留的未消费配对码上限：旧码被淘汰，内存不会被反复轮换撑大。 */
+const PAIRING_MAX_PENDING = 8;
+
+/** 生成一个新配对码。 */
+function generatePairingCode() {
+  return crypto.randomBytes(PAIRING_CODE_BYTES).toString('base64url');
 }
 
 /** 生成一个会话 id（与令牌同强度；它只存在于内存与 Cookie 里）。 */
@@ -199,13 +217,110 @@ function createSessionStore(opts = {}) {
   };
 }
 
+/**
+ * 短命配对码表。
+ *
+ * 配对码**刻意不落盘**：它只在「桌面端刚生成二维码」到「手机第一次登录」之间存在。
+ * 成功消费即删除，应用/远程服务停止也全部作废。长期 `api_token` 留在 `secrets.json`
+ * 只用于满足「远程访问确实启用过」的硬条件，不再由二维码或界面透出。
+ *
+ * 用 `safeEquals` 逐个比对而不是按 key 直接查：挂起的码很少，遍历既保持比对口径与
+ * 长期令牌一致，也避免 Map 查表给错误长度/不存在码额外计时差异。
+ *
+ * 错误猜测无法区分“冲着哪个码来的”，因此一次非空错误输入会**同时**消耗所有挂起码
+ * 的剩余次数；某个码的次数耗尽即被删除。这样 `maxAttempts` 是真实可执行的预算，
+ * 而不是一个永远不减少的摆设。
+ * @param {object} [opts]
+ * @param {number} [opts.ttlMs] - 配对码寿命。
+ * @param {number} [opts.maxAttempts] - 每个未消费码可承受的错误猜测次数。
+ * @param {number} [opts.maxPending] - 未消费码上限。
+ * @param {() => number} [opts.now] - 时钟（测试注入用）。
+ */
+function createPairingStore(opts = {}) {
+  const ttlMs = typeof opts.ttlMs === 'number' && opts.ttlMs > 0 ? opts.ttlMs : PAIRING_TTL_MS;
+  const maxAttempts = Number.isInteger(opts.maxAttempts) && opts.maxAttempts > 0
+    ? opts.maxAttempts
+    : PAIRING_MAX_ATTEMPTS;
+  const maxPending = Number.isInteger(opts.maxPending) && opts.maxPending > 0
+    ? opts.maxPending
+    : PAIRING_MAX_PENDING;
+  const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+  /** @type {Map<string, { expiresAt: number, attemptsLeft: number }>} */
+  const entries = new Map();
+
+  function sweep() {
+    const t = now();
+    for (const [code, entry] of entries) {
+      if (entry.expiresAt <= t) entries.delete(code);
+    }
+  }
+
+  return {
+    /** 发一个新配对码。 */
+    issue() {
+      sweep();
+      const code = generatePairingCode();
+      entries.set(code, { expiresAt: now() + ttlMs, attemptsLeft: maxAttempts });
+      while (entries.size > maxPending) {
+        const oldest = entries.keys().next();
+        if (oldest.done) break;
+        entries.delete(oldest.value);
+      }
+      return code;
+    },
+    /**
+     * 校验并消费一个配对码。
+     * @param {unknown} provided - 浏览器提交的值。
+     * @returns `{ ok: true }` 表示成功并已作废；否则 `{ ok: false, attemptsLeft }`。
+     */
+    verify(provided) {
+      sweep();
+      if (typeof provided !== 'string' || provided === '') return { ok: false, attemptsLeft: 0 };
+      let hit = null;
+      for (const [code, entry] of entries) {
+        if (safeEquals(provided, code)) hit = { code, entry };
+      }
+      if (!hit) {
+        // 一次错误输入同时消耗所有挂起码：不这样做的话，maxAttempts 只会在“猜中后”
+        // 被检查一次，而猜中本来就立即消费，预算形同虚设。
+        let lowest = maxAttempts;
+        for (const [code, entry] of entries) {
+          entry.attemptsLeft -= 1;
+          if (entry.attemptsLeft <= 0) {
+            entries.delete(code);
+            continue;
+          }
+          if (entry.attemptsLeft < lowest) lowest = entry.attemptsLeft;
+        }
+        return { ok: false, attemptsLeft: entries.size === 0 ? 0 : lowest };
+      }
+      entries.delete(hit.code);
+      return { ok: true, attemptsLeft: 0 };
+    },
+    /** 全部作废（停服、轮换、关闭开关时）。 */
+    revokeAll() {
+      entries.clear();
+    },
+    /** 当前未消费码数（诊断用）。 */
+    count() {
+      sweep();
+      return entries.size;
+    },
+  };
+}
+
 module.exports = {
   SESSION_TTL_MS,
   SESSION_COOKIE,
+  PAIRING_TTL_MS,
+  PAIRING_MAX_ATTEMPTS,
+  PAIRING_MAX_PENDING,
   generateAccessToken,
+  generatePairingCode,
   safeEquals,
   maskToken,
   parseCookies,
   sessionCookie,
   createSessionStore,
+  createPairingStore,
 };

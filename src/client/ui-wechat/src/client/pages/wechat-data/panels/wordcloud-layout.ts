@@ -78,20 +78,52 @@ export const DEFAULT_CLOUD_LIMIT = 120
  * 是「这块画布装得下的词数」：700→72、900→93、1160→120、1600→165。
  */
 export const PX_PER_WORD = 9.7
-/** 词数的硬上下界：下限 60（词太少看不出是一团云）、上限 400（`queryWordCloud` 的硬上界）。 */
-export const CLOUD_LIMIT_MIN = 60
+/**
+ * 每个词大约占多大**面积**（px²）：宽度换算在**极窄画布**上会超订，用面积再兜一道。
+ *
+ * 为什么需要第二条（2026-10-12 实测，词长按真实数据取 2/3/4 字混合）：
+ * 字号修对之后（见 `toCloudWords`），词的面积比以前大得多，而「宽度 / 9.7」只看一维 ——
+ * 420×200 那块按宽度要 60 个，实测只装得下 35（丢 25 个）；520×200 要 60、装 45。
+ * 逐档量出来的「面积 / 词数」在真实几何上稳定在 ~2,100~2,500（420→2,400、520→2,311、700→2,221、
+ * 900→2,040、1160→2,077、1600→2,100），取区间上沿的 **2300** 作换算常数：
+ * 这样 700px 以上**逐个与既有校准值完全一致**（700→72、900→93、1160→120、1600→165、2350→242），
+ * 只有极窄画布被压下来（420：60 → 37、520：60 → 45）。
+ */
+export const PX_PER_WORD_AREA = 2300
+/**
+ * 词数的硬上下界：上限 400（`queryWordCloud` 的硬上界）；下限**只给退化画布兜底**。
+ *
+ * ⚠️ 2026-10-12 由 60 下调到 24：那个 60 是「所有词都 9~12px」的年代定的
+ * （词小 ⇒ 少给几个也铺得满）。字号修对之后 60 在 420×200 上会丢 25/60 —— 上限比容量还大
+ * 等于白请求。实测容量：420×200 → 35、520×200 → 45，正常几何（≥520px 宽）都由公式决定，
+ * 这个下限只在极窄窗口上生效。
+ */
+export const CLOUD_LIMIT_MIN = 24
 export const CLOUD_LIMIT_MAX = 400
 
 /**
- * 画布宽度 → 要多少个词。
+ * 画布尺寸 → 要多少个词：**宽度换算与面积换算取小**。
  * @param width - 画布宽度（px）；`<= 0` 表示还没量到（SSR / 首帧），这时用 `fallback`。
- * @param fallback - 量不到宽度时的词数（默认 {@link DEFAULT_CLOUD_LIMIT}）。
- * @returns 夹在 [60, 200] 内的词数。
+ * @param height - 画布高度（px）；`<= 0` 同样退回 `fallback`。
+ * @param fallback - 量不到尺寸时的词数（默认 {@link DEFAULT_CLOUD_LIMIT}）。
+ * @returns 夹在 [24, 400] 内的词数。
+ */
+export function cloudLimitForStage(width: number, height: number, fallback?: number): number {
+  const base = Math.min(Math.max(1, fallback ?? DEFAULT_CLOUD_LIMIT), CLOUD_LIMIT_MAX)
+  if (!(width > 0) || !(height > 0)) return base
+  const byWidth = width / PX_PER_WORD
+  const byArea = (width * height) / PX_PER_WORD_AREA
+  return Math.min(Math.max(CLOUD_LIMIT_MIN, Math.round(Math.min(byWidth, byArea))), CLOUD_LIMIT_MAX)
+}
+
+/**
+ * 只有宽度时的换算（画布高度按 {@link cloudStageHeight} 推）。
+ * @param width - 画布宽度（px）。
+ * @param fallback - 量不到宽度时的词数。
+ * @returns 夹在 [24, 400] 内的词数。
  */
 export function cloudLimitForWidth(width: number, fallback?: number): number {
-  const base = Math.min(Math.max(1, fallback ?? DEFAULT_CLOUD_LIMIT), CLOUD_LIMIT_MAX)
-  if (!(width > 0)) return base
-  return Math.min(Math.max(CLOUD_LIMIT_MIN, Math.round(width / PX_PER_WORD)), CLOUD_LIMIT_MAX)
+  return cloudLimitForStage(width, cloudStageHeight(width), fallback)
 }
 
 /** 六阶霓虹配色（类名对应 `wordcloud-card.module.css`）。 */
@@ -211,6 +243,43 @@ export function cloudTone(step: number, index: number): CloudTone {
   if (index % 4 !== 3) return base
   const at = CLOUD_TONES.indexOf(base)
   return CLOUD_TONES[(at + 1) % CLOUD_TONES.length] ?? base
+}
+
+/**
+ * 词表 → 布局入参（**把档位下标换成像素字号** + 配色阶）。卡片与判据共用这一份。
+ *
+ * ## 为什么必须过 `CLOUD_FONT_STEPS`
+ *
+ * `cloudFontStep()` 返回的是**档位下标**（0..7），而 `size` 这个字段在布局与渲染两侧
+ * 都按**像素**用。把裸下标传下去的话，`layoutWordCloud` 里的 `scaledSize()` 会
+ * `Math.max(CLOUD_FONT_MIN, …)` 把它兜到 9~12px —— **整片词云变成一堆一样大的小字**，
+ * 界面上看着就是「只有几个词 / 内容太少了」。
+ *
+ * 2026-10-12 之前 `WordCloudCard` 里写的是
+ * `size: Math.min(cloudFontCap(...), cloudFontStep(...))` —— 两个量纲不同的数取 min，
+ * 结果永远是下标。那条曲线因此**只在 `wordcloud-layout.spec.ts` 的注入用例里被验证过**
+ * （那份用例自己写了 `CLOUD_FONT_STEPS[step]`），卡片自己那一路一条判据都没有。
+ * 搬成纯函数就是为了让「卡片实际用的映射」进得了判据 —— `wordcloud-layout.spec.ts`
+ * 的「卡片同款映射」一组直接对着它断言字号阶梯。
+ * @param picked - 已按次数降序、且已按画布宽度切好的词表。
+ * @returns 带像素字号与色阶的布局入参（空输入返回空数组）。
+ */
+export function toCloudWords(
+  picked: ReadonlyArray<{ text: string; count: number }>,
+): Array<CloudWordInput & { tone: CloudTone }> {
+  if (picked.length === 0) return []
+  const max = picked[0]!.count
+  const min = picked[picked.length - 1]!.count
+  const span = Math.max(1, max - min)
+  return picked.map((w, i) => {
+    const step = cloudFontStep(i, picked.length, w.count, min, span)
+    return {
+      text: w.text,
+      count: w.count,
+      size: CLOUD_FONT_STEPS[step] ?? CLOUD_FONT_STEPS[0]!,
+      tone: cloudTone(step, i),
+    }
+  })
 }
 
 /** 两个盒子是否相交（含间距）。 */

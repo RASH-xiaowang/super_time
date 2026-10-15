@@ -8,6 +8,10 @@
  *
  * 虚拟化后每项要单独套一层定位容器，而**行内结构必须保持原样**
  * （`id="msg-<localId>"`、头像身份键、悬停时间戳这些都被守卫与深链依赖）。
+ *
+ * 2026-10-14（M5 手机端）：这一行还多了一条**只在触摸上成立**的规则 —— 长按打开消息菜单。
+ * 桌面上是右键 + 悬停，触摸两样都没有；实现与它的三个坑（计时器为什么在模块级、
+ * 位移阈值、pointerup 上的 preventDefault）都写在下面 `LONG_PRESS_MS` 那一段。
  */
 import { fmtMsgClockSec } from '../utils/format.ts'
 import { renderKindOf } from '../utils/message-items.ts'
@@ -15,6 +19,7 @@ import type { MessageRenderItem } from '../utils/message-items.ts'
 import { MessageBody } from './chats-cards.tsx'
 import { MessageImageGroup } from './chats-media.tsx'
 import { Avatar } from './chats-support.tsx'
+import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
 import type { MessageRenderKind, MessageRich, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
@@ -23,13 +28,40 @@ export interface MsgRowDeps {
   curSession: WechatSession | null
   editedIds: ReadonlySet<number>
   openChatlog: (rich: MessageRich) => void
-  openMsgMenu: (ev: React.MouseEvent, m: WechatMessage, kind: MessageRenderKind) => void
+  openMsgMenu: (ev: MsgMenuAnchor, m: WechatMessage, kind: MessageRenderKind) => void
   openViewer: (m: WechatMessage) => void
   selfWxid: string
 }
 
 /** 系统提示（含撤回）/ 拍一拍 / 无内容：居中行，没有头像与气泡。 */
 const CENTERED_KINDS: readonly string[] = ['system', 'revoke', 'pat', 'empty']
+
+/* ── 长按打开消息菜单（触摸端的「右键」）──────────────────────────────────────
+   为什么状态放在**模块级**而不是 `makeMsgRow` 的闭包里：那个工厂每次渲染都重建一份
+   （见上面的头注），按压中途来一次重渲染（WAL 推送就会）闭包就换了，旧计时器再也
+   取消不掉 —— 症状是「手指还在滑，菜单自己弹出来」。同一时刻只可能有一次按压，
+   一份模块级状态够用，而且它不持有 React 状态、不会引起渲染。
+   为什么不用 hook：`renderMsgItem` 是**普通函数**（被虚拟化列表逐项调用），不是组件，
+   在它里面调 hook 直接违反 hook 规则。 */
+/** 长按阈值：500ms 与微信/系统长按同量级（太短会与滚动手势抢，太长像没反应）。 */
+const LONG_PRESS_MS = 500
+/** 超过这个位移就认定是滚动而不是长按（触摸滚动会一路发 pointermove）。 */
+const LONG_PRESS_SLOP_PX = 10
+/* 还有一条不写在标签里的口径：长按**已触发**时要在 pointerup 上 preventDefault ——
+   浏览器随后会补发一串兼容鼠标事件，那个 mousedown 正打在刚出现的遮罩上
+   （`.msgCtxOverlay` 的 onMouseDown 就是关菜单），症状是「菜单一闪就没了」。
+   只在 pressFired 时压：普通点按的 click 必须留着（消息流里点对方那条消息 = 选中做分析）。 */
+
+let pressTimer: ReturnType<typeof setTimeout> | null = null
+let pressX = 0
+let pressY = 0
+/** 长按是否已经触发过：pointerup 时靠它决定要不要 preventDefault（见下面的注释）。 */
+let pressFired = false
+
+/** 取消还没到点的长按（滚动、系统手势、手指移出都走这里）。 */
+function cancelLongPress(): void {
+  if (pressTimer !== null) { clearTimeout(pressTimer); pressTimer = null }
+}
 
 /**
  * 造出面板要的那个 `renderMsgItem`。
@@ -74,8 +106,24 @@ export function makeMsgRow(deps: MsgRowDeps): (item: MessageRenderItem) => React
         id={`msg-${head.localId}`}
         className={`${css.msgRow} ${isSelf ? css.msgRowSelf : ''}`}
         onContextMenu={(ev) => { openMsgMenu(ev, head, kind) }}
+        onPointerDown={(ev) => {
+          if (ev.pointerType === 'mouse') return
+          pressX = ev.clientX; pressY = ev.clientY; pressFired = false
+          cancelLongPress()
+          pressTimer = setTimeout(() => {
+            pressTimer = null; pressFired = true
+            openMsgMenu({ preventDefault() { /* 长按没有默认行为要取消 */ }, clientX: pressX, clientY: pressY }, head, kind)
+          }, LONG_PRESS_MS)
+        }}
+        onPointerMove={(ev) => {
+          if (pressTimer !== null && Math.hypot(ev.clientX - pressX, ev.clientY - pressY) > LONG_PRESS_SLOP_PX) cancelLongPress()
+        }}
+        onPointerUp={(ev) => { if (pressFired) { pressFired = false; ev.preventDefault() } else cancelLongPress() }}
+        onPointerCancel={() => { pressFired = false; cancelLongPress() }}
+        onPointerLeave={() => { cancelLongPress() }}
       >
-        <Avatar name={avName} username={avUsername} size={34} />
+        {/* 头像尺寸与 --wx-avatar 令牌同源（微信桌面端官方值 40px），别在两处各写一个数 */}
+        <Avatar name={avName} username={avUsername} size={40} />
         <div className={css.msgCol}>
           {/* 悬停才出现的完整时间戳（微信行为）；已编辑折进同一枚气泡提示里 */}
           <span className={css.msgTimeChip}>

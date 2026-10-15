@@ -23,10 +23,28 @@ const require = createRequire(import.meta.url)
 const queueMod = require(join(ROOT, 'src', 'backend', 'http-queue.js')) as {
   REMOTE_CALL_CONCURRENCY: number
   REMOTE_QUEUE_MAX: number
-  createCallQueue: (opts?: { concurrency?: number, maxQueued?: number }) => {
-    run: (task: () => unknown) => Promise<unknown>
-    drain: (reason?: string) => number
-    stats: () => { active: number, queued: number, rejected: number, concurrency: number, maxQueued: number }
+  HEAVY_QUEUE_MAX: number
+  createCallQueue: (opts?: { concurrency?: number, maxQueued?: number, maxQueuedHeavy?: number, now?: () => number }) => {
+    run: (task: () => unknown, meta?: { channel?: string, method?: string, priority?: number }) => Promise<unknown>
+    drain: (reason?: string, channel?: string) => number
+    stats: () => {
+      active: number
+      queued: number
+      rejected: number
+      concurrency: number
+      maxQueued: number
+      maxQueuedHeavy?: number
+      queuedHeavy?: number
+      completed: number
+      failed: number
+      channels: Record<string, { rejected: number, completed: number, failed: number, active: number, queued: number }>
+      activeCalls: Array<{ channel: string, method: string, waitMs: number, elapsedMs: number }>
+      queuedCalls: Array<{ channel: string, method: string, waitMs: number }>
+      activeHeavy?: number
+      heavyLimit?: number
+      wait: { count: number, totalMs: number, maxMs: number, p50Ms: number, p95Ms: number }
+      execution: { count: number, totalMs: number, maxMs: number, p50Ms: number, p95Ms: number }
+    }
   }
 }
 
@@ -109,6 +127,32 @@ describe('并发闸：上限、计数归还、排队与拒绝', () => {
     expect(await Promise.all([queued1, queued2])).toEqual(['q1', 'q2'])
   })
 
+  it('队列满时交互请求可以挤出低优先级排队项，取消动作不会被低优先级任务堵死', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1, maxQueued: 2 })
+    const gate = deferred()
+    const order: string[] = []
+    const running = q.run(async () => { await gate.promise; order.push('running') })
+    const low1 = q.run(async () => { order.push('low1') }, { method: 'exportAllSessions' })
+    const low2 = q.run(async () => { order.push('low2') }, { method: 'exportAllSessions' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const control = q.run(async () => { order.push('control') }, { method: 'getSessions', priority: 0 })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const holder: { err?: Error & { code?: string } } = {}
+    await low2.catch((e: Error & { code?: string }) => { holder.err = e })
+    expect(holder.err?.code, '被挤出的低优先级任务必须明确拿到 REMOTE_BUSY').toBe('REMOTE_BUSY')
+    expect(q.stats().queued).toBe(2)
+    expect(q.stats().queuedCalls.map((item) => item.method)).toEqual(['getSessions', 'exportAllSessions'])
+
+    gate.resolve()
+    await running
+    await Promise.all([control, low1])
+    expect(order, '交互请求应先于仍在队列里的低优先级任务执行').toEqual(['running', 'control', 'low1'])
+  })
+
   it('drain 清掉排队中的请求并给出原因，已在跑的不动', async () => {
     const q = queueMod.createCallQueue({ concurrency: 1 })
     const gate = deferred()
@@ -139,6 +183,69 @@ describe('并发闸：上限、计数归还、排队与拒绝', () => {
     expect(order).toEqual(['first', 'a', 'b', 'c', 'd'])
   })
 
+  it('重活最多只占一个并发名额，另一个名额留给普通/交互调用', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 2 })
+    const heavyA = deferred()
+    const heavyB = deferred()
+    const fast = deferred()
+    const started: string[] = []
+    const runs = [
+      q.run(async () => { started.push('heavy-a'); await heavyA.promise }, { method: 'exportAllSessions', priority: 2 }),
+      q.run(async () => { started.push('heavy-b'); await heavyB.promise }, { method: 'fetchOriginalImagesBatch', priority: 2 }),
+      q.run(async () => { started.push('fast'); await fast.promise }, { method: 'getSessions', priority: 0 }),
+    ]
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(started).toEqual(['heavy-a', 'fast'])
+    expect(q.stats()).toMatchObject({ active: 2, activeHeavy: 1, queued: 1, heavyLimit: 1 })
+    expect(q.stats().queuedCalls[0]?.method).toBe('fetchOriginalImagesBatch')
+
+    heavyA.resolve()
+    fast.resolve()
+    await Promise.all([runs[0], runs[2]])
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(started).toEqual(['heavy-a', 'fast', 'heavy-b'])
+    heavyB.resolve()
+    await runs[1]
+    expect(q.stats().activeHeavy).toBe(0)
+  })
+
+  it('重活排队有独立上界：不能把整条队列都用 10 分钟任务填满', async () => {
+    expect(queueMod.HEAVY_QUEUE_MAX).toBe(4)
+    const q = queueMod.createCallQueue({ concurrency: 1, maxQueued: 32, maxQueuedHeavy: 2 })
+    const gate = deferred()
+    const running = q.run(() => gate.promise, { method: 'exportAllSessions' })
+    const queuedHeavy = [
+      q.run(async () => 'heavy-1', { method: 'askWechat' }),
+      q.run(async () => 'heavy-2', { method: 'getAnnual' }),
+    ]
+    await Promise.resolve()
+    await Promise.resolve()
+    const holder: { err?: Error & { code?: string } } = {}
+    await q.run(async () => 'overflow', { method: 'generateDailySummary' })
+      .catch((e: Error & { code?: string }) => { holder.err = e })
+    expect(holder.err?.code).toBe('REMOTE_BUSY')
+    expect(q.stats().queuedHeavy).toBe(2)
+    expect(q.stats().maxQueuedHeavy).toBe(2)
+    gate.resolve()
+    await running
+    expect(await Promise.all(queuedHeavy)).toEqual(['heavy-1', 'heavy-2'])
+  })
+
+  it('同优先级仍保持 FIFO（优先级只重排不同档，不改写同档先后）', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1 })
+    const gate = deferred()
+    const order: string[] = []
+    const running = q.run(async () => { await gate.promise; order.push('first') }, { method: 'getSessions', priority: 0 })
+    const rest = ['a', 'b'].map((k) => q.run(async () => { order.push(k) }, { method: 'getContacts', priority: 0 }))
+    await Promise.resolve()
+    gate.resolve()
+    await running
+    await Promise.all(rest)
+    expect(order).toEqual(['first', 'a', 'b'])
+  })
+
   it('非法的 concurrency / maxQueued 退回缺省值（配置错了不该变成 0 并发或直接不收）', () => {
     expect(queueMod.createCallQueue({ concurrency: 0 }).stats().concurrency).toBe(queueMod.REMOTE_CALL_CONCURRENCY)
     expect(queueMod.createCallQueue({ concurrency: -3 }).stats().concurrency).toBe(queueMod.REMOTE_CALL_CONCURRENCY)
@@ -146,5 +253,67 @@ describe('并发闸：上限、计数归还、排队与拒绝', () => {
     expect(queueMod.createCallQueue({ maxQueued: -1 }).stats().maxQueued).toBe(queueMod.REMOTE_QUEUE_MAX)
     // maxQueued = 0 是合法的（一个都不排）
     expect(queueMod.createCallQueue({ maxQueued: 0 }).stats().maxQueued).toBe(0)
+  })
+})
+
+describe('共享通道：桌面与远程同闸，停掉远程服务不能误伤桌面排队项', () => {
+  it('meta 进入当前/排队快照，drain 只清指定通道', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1 })
+    const gate = deferred()
+    const remoteRunning = q.run(() => gate.promise, { channel: 'remote', method: 'getSessions' })
+    const remoteQueued = q.run(async () => 'remote-next', { channel: 'remote', method: 'getMessages' })
+    const desktopQueued = q.run(async () => 'desktop-next', { channel: 'desktop', method: 'getOverview' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(q.stats().activeCalls[0]).toMatchObject({ channel: 'remote', method: 'getSessions' })
+    expect(q.stats().queuedCalls).toEqual([
+      expect.objectContaining({ channel: 'remote', method: 'getMessages' }),
+      expect.objectContaining({ channel: 'desktop', method: 'getOverview' }),
+    ])
+    expect(q.stats().channels.remote).toMatchObject({ active: 1, queued: 1 })
+    expect(q.stats().channels.desktop).toMatchObject({ active: 0, queued: 1 })
+
+    expect(q.drain('远程服务关闭', 'remote')).toBe(1)
+    expect(q.stats().channels.remote?.queued).toBe(0)
+    expect(q.stats().channels.desktop?.queued).toBe(1)
+
+    const holder: { err?: Error & { code?: string } } = {}
+    await remoteQueued.catch((e: Error & { code?: string }) => { holder.err = e })
+    expect(holder.err?.code).toBe('REMOTE_GONE')
+    gate.resolve()
+    await remoteRunning
+    expect(await desktopQueued).toBe('desktop-next')
+  })
+
+  it('用注入时钟记录排队与执行时延，而不是把统计绑在墙上时钟上', async () => {
+    let clock = 0
+    const q = queueMod.createCallQueue({ concurrency: 1, now: () => clock })
+    const gate = deferred()
+    const first = q.run(() => gate.promise, { channel: 'remote', method: 'slow' })
+    const second = q.run(async () => 'fast', { channel: 'desktop', method: 'fast' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    clock += 120
+    expect(q.stats().queuedCalls[0]?.waitMs).toBe(120)
+    gate.resolve()
+    await first
+    await second
+
+    const stats = q.stats()
+    expect(stats.completed).toBe(2)
+    expect(stats.wait.count).toBe(2)
+    expect(stats.wait.maxMs).toBe(120)
+    expect(stats.wait.p95Ms).toBe(120)
+    expect(stats.channels.desktop).toMatchObject({ completed: 1, failed: 0 })
+  })
+
+  it('失败按通道记账，供诊断端点区分桌面与手机的问题来源', async () => {
+    const q = queueMod.createCallQueue({ concurrency: 1 })
+    await expect(q.run(() => { throw new Error('boom') }, { channel: 'remote', method: 'bad' }))
+      .rejects.toThrow('boom')
+    expect(q.stats().failed).toBe(1)
+    expect(q.stats().channels.remote).toMatchObject({ failed: 1, completed: 0 })
   })
 })

@@ -4,6 +4,13 @@
 `D:\deepseek-harness`（DeepSeek Harness 仓库），用于让「Super Time」后端在
 Super Time 中脱离 pnpm workspace 直接运行：
 
+> **完整清单以 [`deps/PROVENANCE.json`](deps/PROVENANCE.json) 为准**（版本 + 整棵目录的内容 sha256 +
+> 文件数，由 `npm run check:deps-provenance` 复算比对，`deps-provenance.spec.ts` 同一份逻辑守住）。
+> 本表是给人看的一页摘要。里面还有两个 `kind: "in-repo"` 的条目 ——
+> `@deepseek-ai/dsh-client-ui-primitives`（指向 [`../client/ui-primitives-shim`](../client/ui-primitives-shim)）
+> 与 `@deepseek-ai/dsh-wechat-data`（就是本目录的 [`wechat-data`](wechat-data)）：
+> 它们是**这个仓库自己的包**、以 `file:` 依赖安装，不是 vendor 进来的第三方副本，因此不在下表里。
+
 | 包 | 版本 | 来源目录 | 许可证 |
 |---|---|---|---|
 | @deepseek-ai/cordis | 4.0.2 | vendor/cordis | MIT |

@@ -7,7 +7,7 @@
  * @module search-query
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { withDb } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'

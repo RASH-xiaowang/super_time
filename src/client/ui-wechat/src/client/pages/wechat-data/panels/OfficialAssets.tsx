@@ -26,7 +26,7 @@ function fmtTs(ts?: number | null): string {
 export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: string) => void } = {}): React.JSX.Element {
   /* 2026-10-03 推广批次 1：改用共用 useFreshData（打开即查最新、失败才回退缓存并标注）。 */
   const load = useCallback((): Promise<OfficialAssetsSnapshot> => apiGetOfficialAssets(), [])
-  const { data, loading, error } = useFreshData<OfficialAssetsSnapshot>('official-assets', load)
+  const { data, loading, error } = useFreshData<OfficialAssetsSnapshot>('official-assets', load, { liveRefresh: true })
 
   const { count: rowCount, sentinelRef } = useProgressiveList(data?.rows.length ?? 0, 100)
 
