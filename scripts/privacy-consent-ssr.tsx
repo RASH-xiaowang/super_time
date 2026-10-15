@@ -65,7 +65,14 @@ check('出网点开关口径与文档一致（应用内已无任何出网开关�
   //
   // 注意不能用「按 data-switch 切块、再看块里含哪个标签」来配：下面的诚实说明里也点了
   // 那些标签名，会被算进最后一块。改成按**渲染顺序**对齐（顺序不一致就直接判错位）。
-  const kinds = html.split('data-switch="').slice(1).map((c) => c.slice(0, c.indexOf('"')))
+  //
+  // 2026-10-15：手机端（M0–M4）新增了**入站监听面**（`kind: 'off'`，局域网远程访问）。
+  // 它刻意与出网点分开列、**不并进「共 N 个出网点」**（方向相反：本机监听、别的设备连进来）。
+  // 所以这里必须只数**出网侧**的两种档位（none / manual），把 off 排除掉 ——
+  // 否则这条断言会把入站那条算进来，报「应为 6 个，实际 7 个」。
+  const kinds = html.split('data-switch="').slice(1)
+    .map((c) => c.slice(0, c.indexOf('"')))
+    .filter((k) => k === 'none' || k === 'manual')
   const ORDER = ['AI 问答与总结', 'AI embedding', '头像图片', '远程图片 / 视频 / 公众号封面', '地图底图', '语音模型下载']
   const at = ORDER.map((l) => html.indexOf(`>${l}<`))
   ok(at.every((i) => i > 0), `有出网点标签没渲染出来：${ORDER.filter((_, i) => (at[i] ?? -1) < 0).join('、')}`)
