@@ -40,10 +40,17 @@ function parseResult(stdout) {
 }
 
 function run(cmd, args, expectMode) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 180000, cwd: path.dirname(cmd) });
+  // 2026-10-16：超时从 180s 提到 600s。CI runner（共享 2 核 + 实时扫描）比本机慢约 24 倍，
+  // Electron 冷启动 + 加载 wasm 在 CI 上会超过 3 分钟 ⇒ spawnSync 把子进程杀掉，
+  // `status` 变成 null、stdout 为空，报出来只有一句「没有产出结果行（退出码 null）」，
+  // 看不出是超时还是崩溃（v1.0.8 首次发布实测踩到）。10 分钟给足余量，本机仍是秒级。
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 600000, cwd: path.dirname(cmd) });
   const res = parseResult(r.stdout);
   if (!res) {
-    console.error(`❌ ${expectMode} 那一遍没有产出结果行（退出码 ${String(r.status)}）\n`
+    const why = r.status === null
+      ? `子进程被超时杀掉（>600s）或信号终止（signal=${String(r.signal)}）`
+      : `退出码 ${String(r.status)}`;
+    console.error(`❌ ${expectMode} 那一遍没有产出结果行（${why}）\n`
       + `${(r.stdout || '')}\n${r.stderr || ''}`.slice(-1500));
     throw new Error('没有拿到可解析的输出') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
   }
