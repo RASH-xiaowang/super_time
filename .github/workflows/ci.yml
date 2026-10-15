@@ -120,15 +120,27 @@ jobs:
         timeout-minutes: 10
         shell: pwsh
         run: |
-          # 2026-10-15：这一步在 CI 上稳定红（6~8 秒即失败），而本机与 D 盘克隆都绿。
+          # 2026-10-15：这一步在 CI 上稳定红（7 秒即失败），而本机与 D 盘克隆都绿。
           # 失败信息只有一句 Playwright 超时，看不到**当时界面长什么样** —— 所以这里把
-          # 输出同时写进 step summary（PR 页面可见），失败时能直接读到现场快照。
+          # 输出同时写进 step summary（PR 页面可见）与一个文件（失败时上传为 artifact）。
           $out = npm run ui:e2e-smoke 2>&1 | Out-String
           Write-Host $out
+          New-Item -ItemType Directory -Force -Path .tmp-e2e | Out-Null
+          $out | Out-File -Encoding utf8 .tmp-e2e/ui-e2e-smoke.log
           if ($env:GITHUB_STEP_SUMMARY) {
             "## UI 冒烟（真机 e2e）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 失败时把现场（日志 + 截图）传上来 —— 没有它，CI 上这条红只能靠猜。
+      - name: 上传 UI 冒烟现场（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-e2e-smoke-failure
+          path: .tmp-e2e/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: 导航壳（真机 e2e）
         timeout-minutes: 10
