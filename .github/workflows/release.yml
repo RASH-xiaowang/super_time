@@ -56,6 +56,13 @@ jobs:
       # 却判 failure，后续打包与发布全被跳过）。
       - name: 单元测试
         shell: pwsh
+        env:
+          # 2026-10-16：发布链把「已归因的假红」重跑上限提到 3（PR 门禁仍是默认 1）。
+          # 理由：tag 推送不会自动重跑整条工作流，而这类假红是环境停顿（分段墙钟已证明
+          # 不在测试代码里），CI 上连续两次撞上并不罕见（v1.0.8 实测：两次都是
+          # 5468 passed + onTaskUpdate 超时 + 退出码 1）。判据没放宽 —— 每次重跑前仍要过
+          # classifyRun 三条，出现真失败立刻红。
+          SUPERTIME_UNIT_MAX_RETRIES: '3'
         run: |
           $out = node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs 2>&1 | Out-String
           Write-Host $out
