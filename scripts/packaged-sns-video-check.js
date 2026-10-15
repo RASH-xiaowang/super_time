@@ -44,7 +44,17 @@ function run(cmd, args, expectMode) {
   // Electron 冷启动 + 加载 wasm 在 CI 上会超过 3 分钟 ⇒ spawnSync 把子进程杀掉，
   // `status` 变成 null、stdout 为空，报出来只有一句「没有产出结果行（退出码 null）」，
   // 看不出是超时还是崩溃（v1.0.8 首次发布实测踩到）。10 分钟给足余量，本机仍是秒级。
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 600000, cwd: path.dirname(cmd) });
+  //
+  // 2026-10-16 二次修复：electron 那一遍必须带 `ELECTRON_RUN_AS_NODE=1`。
+  // 不带它时 Electron 以**完整应用模式**启动（初始化 GUI/GPU 事件循环），CI runner
+  // 没有显示环境 ⇒ 卡死到超时（实测 >600s 无任何输出）；本机有桌面所以能跑通，
+  // 于是又是一条「本机绿、CI 红」。`ELECTRON_RUN_AS_NODE=1` 让它以纯 Node 模式跑脚本，
+  // 跳过 GUI 初始化，而 `process.versions.electron` **仍然存在**（实测 44.3.0），
+  // 所以 packaged-sns-video-check.ts 里「必须在 Electron 运行时下跑」的断言依然成立。
+  const env = expectMode === 'electron'
+    ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    : process.env;
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 600000, cwd: path.dirname(cmd), env });
   const res = parseResult(r.stdout);
   if (!res) {
     const why = r.status === null
