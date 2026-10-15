@@ -27,6 +27,13 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-10-16 加：`npm test` 里的 `mutation-scope.spec.ts` 会跑
+          # `git diff --name-only HEAD~1...HEAD` 来验证「增量选取与登记表对得上」，
+          # 而默认的浅克隆（depth=1）没有 `HEAD~1` ⇒ 该用例必红（v1.0.8 首次发布实测：
+          # 单元测试 1 failed / 5467 passed，后续打包与发布步骤全被跳过）。
+          # 与 ci.yml / nightly.yml 保持一致：拉全历史。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
