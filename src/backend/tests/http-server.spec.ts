@@ -29,7 +29,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
-import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -134,35 +133,29 @@ function fixture(opts: { enabled?: boolean, token?: string, port?: number, authL
 }
 
 /**
- * 取一个**当前确实空闲**的高位端口。
+ * 取一个**本进程内不重复**的高位端口。
  *
- * 2026-10-15 改：原来是 `20000 + Math.random() * 30000`（纯随机猜）。它在 CI 上偶发红 ——
- * `up()` 里 `srv.start()` 返回 `running: false`，报出来的是「夹具默认应当能启动」，
- * 而真因是随机端口恰好落在被占用的区间、且服务自身的 11 次顺移（`PORT_ATTEMPTS`）
- * 也全被占满。随机猜端口是**结构性**的 flake 源：它把「端口可用」这件事交给运气，
- * 而 CI runner 上同时跑着别的进程（Actions agent、其他 job 的残留监听）。
+ * 2026-10-15 改（两轮）：
+ *   ① 原来是 `20000 + Math.random() * 30000`（纯随机猜）。它在 CI 上偶发红 ——
+ *      `up()` 里 `srv.start()` 返回 `running: false`，报出来的是「夹具默认应当能启动」，
+ *      而真因是随机端口恰好落在被占用的区间、且服务自身的 11 次顺移（`PORT_ATTEMPTS`）
+ *      也全被占满。随机猜端口是**结构性**的 flake 源。
+ *   ② 第一版改成 `spawnSync` 起子进程去 `listen(0)` 探空闲端口 —— 那在 CI 上更糟：
+ *      本文件有 ~30 个 `fixture()`，每个都同步起一个 Node 子进程，在共享 runner 上
+ *      每次几百毫秒，累计把单测步拖到 30 分钟（实测 1799 秒）并触发 vitest 的
+ *      `onTaskUpdate` 超时。**同步阻塞的子进程调用不能放进测试夹具**。
  *
- * 现在改成让操作系统分配：`listen(0)` 拿到一个内核保证空闲的端口，读出来立刻关掉，
- * 再把这个号交给被测服务。中间那一小段窗口理论上仍可能被别人抢走，但服务自身还有
- * 11 次顺移兜底 —— 两者叠加后，这条路径不再依赖随机数。
+ * 现在改成**进程内递增**：从一个高位基址开始，每次 +1。同一进程内的用例因此拿到
+ * 互不相同的端口（不会自己撞自己），而「被别的进程占用」由服务自身的 11 次顺移兜底。
+ * 零子进程、零随机、零阻塞。
  *
- * 为什么不用 `server.listen(0)` 直接跑：被测服务要的是**配置里的固定端口**
- * （`api_port`），它自己会去 bind 那个号；这里只能先探一个空闲号出来。
- *
- * 实现细节：`listen(0)` 的 `listening` 事件是异步的，而本函数是同步签名（调用点
- * 在 `fixture()` 里同步写配置）。所以这里用 `spawnSync` 起一个**子进程**去探 ——
- * 子进程里可以等回调，把端口号打到 stdout 再退出。比忙等可靠，也比把一堆调用点
- * 改成 async 小。
+ * 基址取 30000 而不是 20000：Windows 的动态端口范围默认是 49152–65535，
+ * 30000 起既避开常见服务端口，也离动态段有足够距离。
  */
+let nextPortSeed = 30000
 function randomPort(): number {
-  const probe = spawnSync(process.execPath, ['-e', [
-    "const s = require('node:net').createServer()",
-    "s.listen(0, '127.0.0.1', () => { process.stdout.write(String(s.address().port)); s.close() })",
-  ].join('\n')], { encoding: 'utf8' })
-  const port = Number((probe.stdout || '').trim())
-  if (Number.isFinite(port) && port > 0) return port
-  // 兜底：探不到就退回随机（服务自身仍有 11 次顺移）。
-  return 20000 + Math.floor(Math.random() * 30000)
+  nextPortSeed += 1
+  return nextPortSeed
 }
 
 /** 启动并返回 base URL。 */
