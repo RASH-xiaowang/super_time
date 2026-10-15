@@ -155,7 +155,12 @@ try {
 
   check(consoleErrors.length === 0, '渲染层无 console error / pageerror', consoleErrors.slice(0, 3).join(' | '))
 } catch (e) {
-  check(false, '端到端流程未能跑完', (e && e.message ? e.message : String(e)).split('\n')[0])
+  // 2026-10-15：CI 上这一步稳定红，而 GitHub 的注解只显示「Process completed with exit code 1」——
+  // 把完整错误（含上面那段现场快照）**原样打到 stdout**，注解里才看得到。
+  const detail = e && e.message ? e.message : String(e)
+  console.error('[ui-e2e-smoke] 端到端流程未能跑完：')
+  console.error(detail)
+  check(false, '端到端流程未能跑完', detail.split('\n')[0])
 } finally {
   if (app) { try { await app.close() } catch { /* ignore */ } }
   try { rmSync(probeUserData, { recursive: true, force: true }) } catch { /* ignore */ }
