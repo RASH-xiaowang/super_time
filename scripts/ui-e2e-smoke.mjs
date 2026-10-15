@@ -160,6 +160,11 @@ try {
   const detail = e && e.message ? e.message : String(e)
   console.error('[ui-e2e-smoke] 端到端流程未能跑完：')
   console.error(detail)
+  // GitHub Actions 的 `::error::` 会把消息直接显示在 PR 的注解里（无需登录看日志）。
+  // 多行要转义成 `%0A`，否则只有第一行进注解。
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.error(`::error::UI 冒烟失败：${detail.replace(/\r?\n/g, '%0A').slice(0, 4000)}`)
+  }
   check(false, '端到端流程未能跑完', detail.split('\n')[0])
 } finally {
   if (app) { try { await app.close() } catch { /* ignore */ } }
