@@ -118,7 +118,17 @@ jobs:
 
       - name: UI 冒烟（真机 e2e）
         timeout-minutes: 10
-        run: npm run ui:e2e-smoke
+        shell: pwsh
+        run: |
+          # 2026-10-15：这一步在 CI 上稳定红（6~8 秒即失败），而本机与 D 盘克隆都绿。
+          # 失败信息只有一句 Playwright 超时，看不到**当时界面长什么样** —— 所以这里把
+          # 输出同时写进 step summary（PR 页面可见），失败时能直接读到现场快照。
+          $out = npm run ui:e2e-smoke 2>&1 | Out-String
+          Write-Host $out
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "## UI 冒烟（真机 e2e）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 导航壳（真机 e2e）
         timeout-minutes: 10
