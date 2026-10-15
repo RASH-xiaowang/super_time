@@ -24,7 +24,7 @@
  */
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -84,9 +84,27 @@ try {
   check(layout.w > 0 && layout.h > 0, '有真实布局引擎（body 有尺寸）', JSON.stringify(layout))
   check(await win.evaluate(() => typeof window.electronAPI === 'object' && window.electronAPI !== null), 'preload 桥已注入')
 
-  // 主界面挂载：跳过闸门后左侧导航的第一项就是可点的稳定锚点
+  // 主界面挂载：跳过闸门后左侧导航的第一项就是可点的稳定锚点。
+  //
+  // 2026-10-15 加固：CI 上这一步曾以「端到端流程未能跑完 / locator.waitFor: Timeout」红过，
+  // 而本机与 D 盘克隆都稳定绿 —— 报错里只有一句 Playwright 的超时，看不出**当时界面长什么样**。
+  // 所以这里在等不到锚点时补一份现场快照（URL / 可见按钮名 / body 文本前 200 字 / 截图），
+  // 让下一次红能直接读出「是没进主界面、还是进了但按钮名变了、还是窗口太小被裁掉」。
   const overviewNav = win.getByRole('button', { name: '数据总览', exact: true })
-  await overviewNav.waitFor({ state: 'visible' })
+  try {
+    await overviewNav.waitFor({ state: 'visible' })
+  } catch (e) {
+    const snapshot = await win.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      buttons: Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 40),
+      bodyText: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+    })).catch(() => null)
+    const shot = join(ROOT, '.tmp-e2e', 'ui-e2e-smoke-fail.png')
+    try { mkdirSync(join(ROOT, '.tmp-e2e'), { recursive: true }); await win.screenshot({ path: shot }) } catch { /* 截图失败不掩盖原错 */ }
+    throw new Error(`等不到「数据总览」导航按钮：${e && e.message ? e.message : String(e)}\n现场快照：${JSON.stringify(snapshot)}\n截图：${shot}`)
+  }
   check(true, '跳过三道闸门后进入主界面')
 
   // 真调一次 Remote：这条路径正是被 `debugGates().skipGates` 豁免掉许可校验的那一段。
