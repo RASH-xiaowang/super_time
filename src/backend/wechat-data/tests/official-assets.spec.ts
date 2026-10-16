@@ -30,7 +30,7 @@ function makeDb(path: string, create: (db: DatabaseSync) => void): void {
 }
 
 describe('queryOfficialAssets', () => {
-  it('counts gh_* messages and articles', () => {
+  it('counts gh_* messages and articles', async () => {
     const root = tempRoot()
     const gh = 'gh_abc'
     const ghTable = 'Msg_' + createHash('md5').update(gh, 'utf8').digest('hex')
@@ -49,7 +49,8 @@ describe('queryOfficialAssets', () => {
       db.prepare(`INSERT INTO "${wxidTable}" VALUES (?, ?, ?)`).run(1, ts, 1)
     })
 
-    const snap = queryOfficialAssets(root)
+    // 2026-09-28：`queryOfficialAssets` 改 async（逐张消息分片数条数要让出）⇒ 跟着 await。
+    const snap = await queryOfficialAssets(root)
     expect(snap.rows).toHaveLength(1)
     expect(snap.rows[0]?.username).toBe(gh)
     expect(snap.rows[0]?.messages).toBe(2)

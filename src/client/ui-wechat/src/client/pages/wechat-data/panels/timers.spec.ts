@@ -191,4 +191,35 @@ describe('L20 createNoticeController：提示自动消失', () => {
     clock.advance(DEFAULT_NOTICE_MS)
     expect(applied.slice(-1)).toEqual([null])
   })
+
+  it('W3-11.9：连着 flash 同一条只续时、不重写（不然界面「闪两下」）', () => {
+    const { c, applied, clock } = controller()
+    c.flash('已复制')
+    c.flash('已复制')
+    c.flash('已复制')
+    expect(applied, '同一条不许被写三遍').toEqual(['已复制'])
+    // 续时仍然有效：第三次之后还要再过一个完整时长才消失。
+    clock.advance(1500)
+    expect(applied).toEqual(['已复制'])
+    clock.advance(1500)
+    expect(applied).toEqual(['已复制', null])
+  })
+
+  it('W3-11.9：不同值不受去重影响（新的一条必须立刻替掉旧的）', () => {
+    const { c, applied } = controller()
+    c.flash('已复制')
+    c.flash('已删除 2 条')
+    expect(applied).toEqual(['已复制', '已删除 2 条'])
+  })
+
+  it('W3-11.9：对象值不按内容去重（每次都是新引用 = 一次新操作）', () => {
+    type Rich = { kind: string; text: string }
+    const applied: Array<Rich | null> = []
+    const clock = fakeClock()
+    const c = createNoticeController<Rich>({ apply: v => { applied.push(v) }, timer: clock })
+    const mk = (): Rich => ({ kind: 'ok', text: '已保存' })
+    c.flash(mk())
+    c.flash(mk())
+    expect(applied.length, '富提示两次内容相同也该各报一次').toBe(2)
+  })
 })

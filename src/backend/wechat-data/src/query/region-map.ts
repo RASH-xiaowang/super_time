@@ -8,7 +8,7 @@
  * nested into synthetic 「省份未填」 / 「城市未填」 buckets so the world treemap
  * always drills to a friends list at the city level.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
 import type { RegionMapSnapshot, RegionNode } from '../types.ts'
 import { parseContactExtra, regionLabel } from './region.ts'

@@ -11,7 +11,7 @@
  * @vitest-environment node
  */
 import { readFileSync, existsSync } from 'node:fs'
-import { readChatsSource } from './chats-source.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -60,5 +60,29 @@ describe('N18：消息流虚拟化的接线', () => {
     expect(src).toContain('MAX_DOM_NODES')
     expect(src).toContain('DOM 节点数有硬上界')
     expect(src).toContain('加载更多不跳位')
+  })
+
+  it('那三张长列表各自的接线守卫不许被删（收藏 / 文件网格 / 朋友圈时间线）', () => {
+    // 这份只钉消息流。剩下三张各自的判据是独立文件 —— 删掉任何一个都不会有任何东西变红，
+    // 而「拆掉虚拟化」正是那种不报错的坏法。
+    for (const f of ['favorites-virtual.wiring.spec.ts', 'files-virtual.wiring.spec.ts', 'moments-virtual.wiring.spec.ts']) {
+      expect(existsSync(join(HERE, f)), f + ' 不在册了 ⇒ 那张列表的虚拟化没人管').toBe(true)
+    }
+  })
+
+  it('真窗口验收台**有人跑**（没人跑的话，它红着也没人知道）', () => {
+    // W2-10.3 的由来：这个脚本此前**不在任何 workflow 里**。于是它自己那条
+    // 「滚到底时悬浮日期头补上当前那一天」长期红着也没人发现 —— 夹具每天 10 条，
+    // 每块 11 行 ≈ 一屏 11 行，底部窗口起点必然落在日期标签行上，那条判据结构上不可能成立。
+    // 接进 CI 的第一次运行就抓到了。这条判据就是防它再退回去。
+    const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+    expect(ci, 'ci.yml 里没有 ui:longlist-e2e ⇒ 这份 e2e 的结论保护不了任何东西').toContain('npm run ui:longlist-e2e')
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }
+    expect(pkg.scripts?.['ui:longlist-e2e'], 'npm script 名对不上，workflow 会直接失败').toContain('longlist-virtualization-e2e.mjs')
+  })
+
+  it('底部悬浮日期头那条判据带了「前提当场断言」（夹具一改就可能又空转）', () => {
+    const src = readFileSync(harnessPath, 'utf8')
+    expect(src, '少了前提断言 ⇒ 哪天夹具又凑巧对齐，那条判据会静默变成永假').toContain('底部窗口的第一行不是日期标签行')
   })
 })

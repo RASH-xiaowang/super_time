@@ -7,4 +7,4 @@ import type { CallsSnapshot } from '../types.ts';
  * @param recentLimit - how many recent records to return (default 50).
  * @returns the calls snapshot.
  */
-export declare function queryCalls(decryptedDir: string, selfUsername?: string, topPeers?: number, recentLimit?: number): CallsSnapshot;
+export declare function queryCalls(decryptedDir: string, selfUsername?: string, topPeers?: number, recentLimit?: number): Promise<CallsSnapshot>;

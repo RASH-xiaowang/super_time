@@ -114,7 +114,31 @@ const hooksCode = hooksSrc.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map(l
 describe('L7 接线守卫：usePagedList 必须用 computeHasMore', () => {
   it('hasMore 由纯逻辑模块算出（面板的「加载更多」都依赖这一条）', () => {
     expect(hooksCode).toContain('computeHasMore({ loaded: items.length, total, lastPageCount: lastCount, pageSize })')
-    expect(hooksCode).toContain("import { computeHasMore } from './paged-list.ts'")
+    // 按「那一行 import 里有没有这个名字」判，不钉整条 import 的字面量 ——
+    // P2-8 往同一行加了 refreshGate / refreshPagesFor，钉死原文只会造成假红。
+    const line = /import \{[^}]*\} from '\.\/paged-list\.ts'/.exec(hooksCode)
+    expect(line, 'hooks.tsx 不再从 paged-list.ts 引入任何东西').not.toBeNull()
+    expect(line?.[0] ?? '').toMatch(/\bcomputeHasMore\b/)
+    expect(line?.[0] ?? '').toMatch(/\brefreshGate\b/)
+    expect(line?.[0] ?? '').toMatch(/\brefreshPagesFor\b/)
+  })
+
+  it('刷新节流间隔可被面板覆盖：会话列表 3s，其余面板保持 30s 全局默认（2026-10-13 会话列表不实时的一半根因）', () => {
+    expect(hooksCode, '面板传的节流间隔必须真的进闸门（否则传了等于没传）').toContain('minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS')
+    expect(hooksCode, '面板传的合并窗必须真的进订阅（否则传了等于没传）').toContain('refreshDebounceMs ?? 300')
+    const chats = readFileSync(join(HERE, 'Chats.tsx'), 'utf8')
+    expect(chats.length, 'Chats.tsx 没读到').toBeGreaterThan(5000)
+    expect(chats, '会话列表没有把自己的节流降到 3s（30s 节流下它最坏滞后 30 秒）').toContain('refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS')
+    expect(chats, '会话列表必须用 50ms 合并窗（推送一来就刷，风暴靠短窗吸收）').toContain('refreshDebounceMs: 50')
+  })
+
+  it('后台刷新走的是节流 + 不可行即跳过（P2-8 的接线那半）', () => {
+    expect(hooksCode).toContain('refreshPagesFor(want, pageSize)')
+    expect(hooksCode).toContain('if (!plan.feasible)')
+    expect(hooksCode).toContain('refreshGate({')
+    expect(hooksCode, '旧的每 10 秒无条件 refresh() 回来了 ⇒ 长列表又会每轮打十几个请求')
+      .not.toMatch(/useWechatDataUpdated\(\(\) => \{\s*refresh\(\)\s*\}\)/)
+    expect(hooksCode).not.toContain('MAX_REFRESH_PAGES')
   })
 
   it('旧判据（把 total 当必要条件）必须已经不在', () => {

@@ -9,7 +9,7 @@
  *      等于让第二次点击什么都不做。
  */
 import { readFileSync } from 'node:fs'
-import { readChatsSource } from './chats-source.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'

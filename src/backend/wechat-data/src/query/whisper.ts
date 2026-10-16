@@ -6,18 +6,19 @@
  * module reports what is configured and available so the settings panel can
  * offer a real model/device/threads configuration.
  */
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
   copyFileSync, cpSync, createWriteStream, existsSync, linkSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
 import type { WhisperModelInfo } from '../types.ts'
 import { resolveWechatDataRoot } from '../dirs.ts'
+import { yieldToLoop } from './search-build.ts'
 import { unpackedAware } from '../asar-path.ts'
+import { isInsideRoot, writeDenialReason } from './path-policy.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
 
 /** Whisper model catalog (id/name/size labels). */
@@ -40,6 +41,18 @@ export const WHISPER_DOWNLOAD_FILES: ReadonlyArray<[string, string]> = [
   ['turbo', 'ggml-large-v3-turbo.bin'],
 ]
 
+/**
+ * W3-5.5：引擎包的**固定发布 tag**（不用 `latest`）。
+ *
+ * 环境变量 `DSH_WECHAT_WHISPER_ENGINE_TAG` 可覆盖；空值时回落到
+ * `latest`（旧行为，保护已经配好镜像的环境）。
+ * 这里是一个字符串常量而不是编号——— 固定哪一版
+ * 应该是一行改动，而不是到处翻 URL。
+ */
+export const WHISPER_ENGINE_TAG = ((): string => {
+  const pinned = (process.env.DSH_WECHAT_WHISPER_ENGINE_TAG ?? '').trim()
+  return pinned === '' ? 'latest' : pinned
+})()
 /** Base order: env pin first, then the cached reachable one, then official/mirror. */
 function whisperDownloadBases(): string[] {
   const pinned = process.env.DSH_WECHAT_WHISPER_MIRROR
@@ -85,11 +98,13 @@ const DOWNLOAD_MAX_ATTEMPTS = 2
  * @param onProgress - 进度回调（received 含续传已有的部分；total 未知时为 0）。
  * @returns 最终字节数（含续传部分）。
  */
-async function streamUrlToFile(
+export async function streamUrlToFile(
   url: string,
   dest: string,
   timeoutMs: number,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+  signal?: AbortSignal,
 ): Promise<number> {
   let have = 0
   try { have = statSync(dest).size } catch { have = 0 }
@@ -130,6 +145,22 @@ async function streamUrlToFile(
       stream.write(value)
       received += value.byteLength
       onProgress(received, total)
+      /**
+       * 每块都让出一次（W3 批次 1.1）。
+       *
+       * 为什么必须让出：模型 1.23GB，`reader.read()` 的分块来得又快又密 ——
+       * 整段循环一个 `await` 都不放的话，微任务队列会被这块循环占满，
+       * 同进程本该毫秒级的请求（面板列表、图片代理）全被顶住。
+       * 这里的代价可以忽略：真正的瓶颈是网络，一次 `setImmediate`
+       * 相对一个 4MB 块的下载时间是可以不要钱的。
+       */
+      await yieldToLoop()
+      // W3-5.5：取消检查点。放在让出之后才有意义——先检查再让出的话，
+      // 一次建连后的 chunk 读取会把顺序颠倒（先检查再让出 = 取消多等一个 chunk）。
+      // 局部文件**不删**：下次续传仍然可用。
+      if (signal?.aborted === true) {
+        throw Object.assign(new Error('已取消下载'), { code: 'WHISPER_DOWNLOAD_CANCELED' })
+      }
     }
     await new Promise<void>((resolve, reject) => {
       stream.end(() => { resolve() })
@@ -212,6 +243,9 @@ export function migrateWhisperModels(fromDir: string, toDir: string): { ok: bool
   if (!fromDir || !toDir) return { ok: false, moved: 0, error: '目录为空' }
   if (fromDir.toLowerCase() === toDir.toLowerCase()) return { ok: true, moved: 0 }
   if (!existsSync(fromDir)) return { ok: true, moved: 0 }
+  // 迁移的目的就是「从只读/旧位置搬到可写位置」，所以目标侧这道闸永远不该放行只读目录
+  const refusal = whisperWriteRefusal(toDir)
+  if (refusal) return { ok: false, moved: 0, error: refusal }
   try {
     mkdirSync(toDir, { recursive: true })
     let moved = 0
@@ -248,6 +282,9 @@ export function migrateWhisperModels(fromDir: string, toDir: string): { ok: bool
  */
 export function migrateWhisperEngineDir(binPath: string, fromDir: string, toDir: string): string {
   if (!binPath || !fromDir || !toDir) return ''
+  // 目标不可写 ⇒ 什么都不搬，返回 ''（调用方按「引擎在外部、原样保留」处理同一个值）：
+  // `saveWechatConfig` 里这两步是顺序调用的，第二步不看第一步的结果，所以闸门必须自己问一遍
+  if (whisperWriteRefusal(toDir)) return ''
   const from = fromDir.replace(/[\\/]+$/, '')
   const norm = binPath.replace(/[\\/]+$/, '')
   const f = from.toLowerCase().replaceAll('\\', '/')
@@ -392,6 +429,29 @@ export function bundledWhisperAssetsDir(): string {
   return unpackedAware(resolve(here, '..', '..', '..', '..', 'wechat', 'whisper'))
 }
 
+/**
+ * 「这个目录能不能当**可写**的模型目录」（P2-6 那把尺子在 whisper 上的分册）。返回 null = 可以写。
+ *
+ * 为什么要单独一格：{@link defaultWhisperModelsDir} 在数据根下那个可写目录还没建好
+ * （或镜像失败）时**会退回随包资产目录**。退回本身是对的 —— 读预置的 tiny 模型不需要写权限；
+ * 错的是把这份「只读兜底」再交给写入侧：`installWhisperEngine` / `whisperDownloadModel`
+ * 原本直接 `mkdirSync` + 落文件，装到 Program Files 时报的是 EACCES/ENOENT 这类看不懂的错，
+ * 开发态那个目录就是仓库里的 `src/wechat/whisper` —— 一次模型下载能往仓库写进 1.5 GB。
+ * 所以三个写入入口（引擎安装、模型下载、旧目录迁移）一律先问这一格，理由说人话。
+ * @param modelsDir - 准备写入的目录。
+ * @param bundled - 随包资产目录（默认取真实那份；单测给一个临时目录当替身）。
+ * @returns 拒绝理由，或 null。
+ */
+export function whisperWriteRefusal(modelsDir: string, bundled: string = bundledWhisperAssetsDir()): string | null {
+  const raw = String(modelsDir ?? '').trim()
+  if (raw === '') return '没有给出模型目录'
+  const abs = resolve(raw)
+  if (isInsideRoot(abs, bundled)) {
+    return '模型目录落在随包分发的只读位置（装到 Program Files 时写不进去）：请先在设置里指定一个可写的目录'
+  }
+  return writeDenialReason(abs, resolveWechatDataRoot() ?? abs)
+}
+
 /** 已做过资产镜像的目录（同进程内只做一次）。 */
 const seededWhisperDirs = new Set<string>()
 
@@ -414,7 +474,8 @@ function mirrorWhisperItem(src: string, dst: string): void {
  */
 function seedBundledWhisper(modelsDir: string): void {
   const bundled = bundledWhisperAssetsDir()
-  if (!bundled || bundled === modelsDir) return
+  // 镜像的目标必须是可写目录，且不能落在随包目录里面（原来只比了「相等」）
+  if (!bundled || whisperWriteRefusal(modelsDir, bundled)) return
   let names: string[] = []
   try { names = readdirSync(bundled) } catch { return }
   const items = names.filter(n => n === 'bin' || n.toLowerCase().endsWith('.bin'))
@@ -488,16 +549,30 @@ export function resolveWhisperModelsDir(configured: string | undefined, decrypte
 export async function installWhisperEngine(
   modelsDir: string,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号（每个 chunk 检查一次）。 */
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; path?: string; error?: string }> {
   const binDir = join(modelsDir, 'bin')
   const target = join(binDir, 'whisper-cli.exe')
   if (existsSync(target)) return { ok: true, path: target }
+  // 预置引擎在只读目录里仍然能用（上面那条快路径），但「再下一份」必须落到可写位置
+  const refusal = whisperWriteRefusal(modelsDir)
+  if (refusal) return { ok: false, error: refusal }
   mkdirSync(binDir, { recursive: true })
 
+  // W3-5.5：引擎包改成**固定 tag** 而不是 `releases/latest`。
+  //
+  // 为什么要固定：`latest` 是一个会自己漂移的目标——— 上游一发新版，
+  // 同一个 URL 下载到的就是另一份。后果两个：
+  //   · 无法复现（今天下的和下周下的可能不一样）；
+  //   · **断点续传失效**：半个 zip 还在硬盘上，但它不再是
+  //     新包的前缀（下面那段注释说的就是这个）。
+  // 固定 tag 之后，“重下一次”和“续传上一次”才是同一件事情。
+  // env 仍然能覆盖（内网镜像 / 打包时托管）。
   const urls = [
     process.env.DSH_WECHAT_WHISPER_ENGINE_URL?.trim().replace(/\/$/, ''),
-    'https://github.com/ggml-org/whisper.cpp/releases/latest/download/whisper-bin-x64.zip',
-    'https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-bin-x64.zip',
+    `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_ENGINE_TAG}/whisper-bin-x64.zip`,
+    `https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_ENGINE_TAG}/whisper-bin-x64.zip`,
   ].filter((u): u is string => Boolean(u))
 
   let lastError = '引擎下载失败'
@@ -522,6 +597,12 @@ export async function installWhisperEngine(
         stream.write(value)
         received += value.byteLength
         onProgress(received, total)
+        // W3-5.5：取消检查点。引擎包只有 ~20MB，比模型短很多，
+        // 但同样可能卡在一个不给力的链路上，所以同一个取消键对两路都生效。
+        // 已写的部分不删：下次重下时正确的是整份重下（见上面「不做续传」的理由）。
+        if (signal?.aborted === true) {
+          throw Object.assign(new Error('已取消下载'), { code: 'WHISPER_DOWNLOAD_CANCELED' })
+        }
       }
       await new Promise<void>((resolve, reject) => {
         stream.end(() => { resolve() })
@@ -556,15 +637,69 @@ export async function installWhisperEngine(
   return { ok: false, error: lastError + '（可设置 DSH_WECHAT_WHISPER_ENGINE_URL 指向可达镜像，或 DSH_WECHAT_WHISPER_BIN 指向已安装的 whisper-cli.exe）' }
 }
 
-/** Extract a zip into a staging dir; top folder name is ignored. */
-async function extractZip(zipPath: string, destDir: string): Promise<string> {
+/**
+ * PowerShell 的单引号字面量：唯一规则是把内部的 `'` 翻倍（口径与 vendored
+ * `dsh-native-command` 里的同名 helper 一致）。
+ *
+ * 为什么需要它：`-Command` 拿到的是**一整段脚本文本**，不是 argv —— 路径里一个撇号
+ * （真实用户名就有，如 `C:\Users\O'Brien\…`）就会提前终结那个字面量，后面的内容变成
+ * **要执行的代码**。`tar.exe` 那一路走的是参数数组，不过 shell，所以没有这个问题；
+ * 只有拼字符串的这一路需要转义（审计 P3-11）。
+ */
+export function powershellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+/** Zip extraction is a small local operation; still bounded so a broken tool cannot pin the worker. */
+export const ZIP_EXTRACT_TIMEOUT_MS = 120_000
+
+/** Run one extraction command asynchronously, collecting output and enforcing a hard deadline. */
+async function runExtractProcess(
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const child = spawn(command, [...args], { windowsHide: true })
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.on('data', (chunk) => { stdout += String(chunk) })
+  child.stderr?.on('data', (chunk) => { stderr += String(chunk) })
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const finish = (status: number | null): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    }
+    timer = setTimeout(() => {
+      try { child.kill() } catch { /* process may already be gone */ }
+      finish(null)
+    }, timeoutMs)
+    child.once('error', () => finish(null))
+    child.once('close', (code) => finish(code))
+  })
+}
+
+/**
+ * 解压 zip 到暂存目录（顶层目录名忽略）。导出只为让"拼出来的那条命令"能被用例钉住。
+ * @param zipPath - 待解压的 zip 路径。
+ * @param destDir - 目标根目录。
+ * @returns 暂存目录（真正的内容在其下一层）。
+ */
+export async function extractZip(zipPath: string, destDir: string): Promise<string> {
   const staging = join(destDir, '.engine-staging')
   try { rmSync(staging, { recursive: true, force: true }) } catch { /* best effort */ }
   mkdirSync(staging, { recursive: true })
-  const tar = spawnSync('tar.exe', ['-xf', zipPath, '-C', staging], { windowsHide: true })
+  const tar = await runExtractProcess('tar.exe', ['-xf', zipPath, '-C', staging], ZIP_EXTRACT_TIMEOUT_MS)
   if (tar.status === 0) return staging
   // Fallback: PowerShell Expand-Archive.
-  const ps = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${staging}' -Force`], { windowsHide: true })
+  const ps = await runExtractProcess(
+    'powershell.exe',
+    ['-NoProfile', '-Command', `Expand-Archive -LiteralPath ${powershellLiteral(zipPath)} -DestinationPath ${powershellLiteral(staging)} -Force`],
+    ZIP_EXTRACT_TIMEOUT_MS,
+  )
   if (ps.status === 0) return staging
   // 最终兜底：纯 JS unzipper（不依赖系统 tar/PowerShell）。
   try {
@@ -611,24 +746,33 @@ export async function whisperDownloadModel(
   modelId: string,
   modelsDir: string,
   onProgress: (received: number, total: number) => void,
+  /** W3-5.5：取消信号；已取消时抛带 `WHISPER_DOWNLOAD_CANCELED` 的错误。 */
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; file?: string; bytes?: number; error?: string }> {
   const entry = WHISPER_DOWNLOAD_FILES.find(([id]) => id === modelId)
   if (!entry) return { ok: false, error: '未知模型: ' + modelId }
   const file = entry[1]
-  mkdirSync(modelsDir, { recursive: true })
   const finalPath = join(modelsDir, file)
   if (existsSync(finalPath)) return { ok: true, file, bytes: 0 }
+  // 「已经下过」是一条读，落在只读目录也算命中；只有真要落盘时才需要可写
+  const refusal = whisperWriteRefusal(modelsDir)
+  if (refusal) return { ok: false, error: refusal }
+  mkdirSync(modelsDir, { recursive: true })
 
   let lastError = '下载失败'
   for (const base of whisperDownloadBases()) {
     const url = `${base}/ggerganov/whisper.cpp/resolve/main/${file}`
     const tmp = join(modelsDir, file + '.part')
     try {
-      const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress)
+      const bytes = await streamUrlToFile(url, tmp, DOWNLOAD_CONNECT_TIMEOUT_MS, onProgress, signal)
       renameSync(tmp, finalPath)
       reachableBase = base
       return { ok: true, file, bytes }
     } catch (e) {
+      // W3-5.5：取消不属于任何一个镜像——— 立即往外抛，
+      // 否则会接着尝试剩下两个镜像（用户點了取消却看见下载继续跑）。
+      const err = e as { code?: string }
+      if (err?.code === 'WHISPER_DOWNLOAD_CANCELED') throw e
       lastError = `${base} ${(e as Error).message}`
       // 刻意**不删** .part（旧实现在这里 unlink）：留着它，下一个镜像 / 用户下一次点击
       // 才能从断点接着下（1.5–3.1 GB 重下代价太大）。安全性由 206/200 判别、416 丢弃、

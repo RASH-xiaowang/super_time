@@ -4,6 +4,7 @@
  * （getEmoticons），无 HTTP 依赖。
  */
 import { useEffect, useMemo, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
 import { apiGetEmoticonDataUrl, apiGetEmoticons } from '../api.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
@@ -51,19 +52,6 @@ function EmoThumb({ md5, cdnUrl, caption }: { md5: string; cdnUrl?: string; capt
     return <img className={css.emoImg} src={src} alt={caption || '表情'} loading="lazy" decoding="async" />
   }
   return <span className={css.emoPh} title={err ?? '表情加载中…'}>{err ? '🙁' : '😀'}</span>
-}
-
-/**
- * 取后端新加的 `cdnUrl`（表情真图的下载地址）。
- *
- * 客户端这份类型来自 `node_modules` 里的**旧副本**（还没有该字段），直接读会过不了 `tsc`，
- * 所以在这里按可选字段取一次。等重跑 `npm install` 同步类型副本后，这个函数可以删掉。
- * @param e - the emoticon item.
- * @returns `{ cdnUrl }` when present, else `{}`.
- */
-function cdnUrlOf(e: EmoticonItem): { cdnUrl?: string } {
-  const v = (e as EmoticonItem & { cdnUrl?: unknown }).cdnUrl
-  return typeof v === 'string' && v ? { cdnUrl: v } : {}
 }
 
 /**
@@ -126,7 +114,7 @@ export function EmoticonsPanel(): React.JSX.Element {
     setError(pager.error)
   }, [searching, pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() })
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, undefined, undefined, pager.items.length)
 
   const notify = (text: string): void => {
     flash(text)
@@ -150,7 +138,7 @@ export function EmoticonsPanel(): React.JSX.Element {
   const { count: pkgCount, sentinelRef: pkgSentinel } = useProgressiveList(tab === 'packages' ? filteredPackages.length : 0, 150)
 
   const copyMd5 = (md5: string): void => {
-    void navigator.clipboard.writeText(md5).then(() =>{  notify('已复制 MD5: ' + md5.slice(0, 8) + '…') }).catch(() =>{  notify('复制失败') })
+    void copyTextToClipboard(md5).then((ok) => { notify(ok ? '已复制 MD5: ' + md5.slice(0, 8) + '…' : '复制失败') })
   }
 
   return (
@@ -188,7 +176,7 @@ export function EmoticonsPanel(): React.JSX.Element {
         {!loading && !error && tab !== 'packages' && shownCustom.slice(0, emoCount).map((e: EmoticonItem) => (
           <div key={e.md5} className={css.emoCell} title={`${e.md5}${e.caption ? ` · ${e.caption}` : ''}${typeLabel(e.item_type) ? ` · ${typeLabel(e.item_type)}` : ''}`} {...clickableKey(() => { copyMd5(e.md5) })}>
             {/* 真图放最上面：格子第一眼要看到表情本身，而不是文字 */}
-            <EmoThumb md5={e.md5} caption={e.caption} {...cdnUrlOf(e)} />
+            <EmoThumb md5={e.md5} caption={e.caption} cdnUrl={e.cdnUrl} />
             <span className={css.emoName}>{e.caption || '自定义表情'}</span>
             <span className={css.emoMd5}>MD5 · {e.md5.slice(0, 8)}</span>
             <span className={`${css.emoMd5} ${css.emoMd5Cyan}`}>点击复制 MD5</span>
@@ -197,7 +185,12 @@ export function EmoticonsPanel(): React.JSX.Element {
         {!loading && !error && tab !== 'packages' && shownCustom.length > emoCount && <ListSentinel refFn={emoSentinel} />}
         {!loading && !error && tab !== 'packages' && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
         {!loading && !error && tab === 'packages' && filteredPackages.length === 0 && (
-          <EmptyMaybeSyncing text={q ? '未找到相关表情包' : '暂无表情包'} />
+          <EmptyMaybeSyncing
+            text={q ? '未找到相关表情包' : '暂无表情包'}
+            note={q
+              ? '换个关键词再试；表情包按名称与 MD5 匹配。'
+              : '表情包来自微信「表情商店」的本地缓存：没下载/收藏过表情包，或刚启动后台仍在同步（首次约 1–2 分钟）时都会是空的。'}
+          />
         )}
         {!loading && !error && tab === 'packages' && filteredPackages.slice(0, pkgCount).map(p => (
           <div key={p.name} className={css.fileCell} title={p.name}>

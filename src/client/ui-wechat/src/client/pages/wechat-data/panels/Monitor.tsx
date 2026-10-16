@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {ListSkeleton, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetDailyCounts, apiGetMessages, apiGetSessions, readRenderCache, writeRenderCache } from '../api.ts'
 import type { WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Card, ErrorState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './monitor.module.css'
 import { fmtDateTimeSec } from '../utils/format.ts'
@@ -164,7 +164,7 @@ export function MonitorPanel({ onOpenChat }: { onOpenChat?: (username: string, l
         {groups.length === 0 && <span className={css.note}>暂无群聊会话</span>}
         {groups.length > 0 && !selected && <span className={css.note}>点击上方群聊查看监控</span>}
       </div>
-      {error && <div className={css.note}>⚠️ {error}</div>}
+      {error && <ErrorState message={`⚠️ ${error}`} />}
       <div className={kitCss.cardGrid}>
         <Card title={`${selGroup ? selGroup.displayName : '群'} · 近 ${String(HEAT_DAYS)} 天消息热力`}>
           <div className={css.heatWrap}>

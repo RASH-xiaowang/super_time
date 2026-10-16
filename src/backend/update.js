@@ -49,6 +49,24 @@ const DEFAULT_AUTO_CHECK_DELAY_MS = 30 * 1000;
 const MAX_RELEASE_NOTES_CHARS = 2000;
 
 /**
+ * 下载失败后的**自动重试**次数（W2-12.2）。
+ *
+ * 下载失败在现网几乎都是网络抖动，而 electron-updater 自己不会重下（`autoDownload`
+ * 只管「有新版就去拉」，不管拉失败）。失败后界面上只剩一条错误，用户要么自己点重试、
+ * 要么以为这个版本装不上 —— 于是「新版发布了但绝大多数人留在旧版」。
+ * 3 次足够覆盖抖动；再多就说明不是抖动（墙、代理、磁盘满），重试只是拖延发现。
+ */
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+/**
+ * 每次重试前的退避（毫秒），按下标 `attempt - 1` 取；越界取最后一项。
+ *
+ * 递增而不是固定间隔：首次失败很可能只是一次丢包，10 秒足够；连着失败说明情况更实在，
+ * 间隔拉长免得把带宽与 provider 都反复打扰。
+ */
+const DOWNLOAD_RETRY_BACKOFF_MS = [10 * 1000, 30 * 1000, 60 * 1000];
+
+/**
  * 下载进度的推送阶梯（百分点）。
  *
  * `download-progress` 每秒可触发几十次；逐条转发会把 IPC 打满，而界面上 0.3% 的
@@ -79,6 +97,14 @@ function blankUpdateState(currentVersion) {
     reason: null,
     checkedAt: null,
     manual: false,
+    /** W2-12.2：用户点名「这个版本先不装」。非空时同名版本不再往外抛 `available`。 */
+    skippedVersion: null,
+    /** W2-12.2：本轮下载已经试到第几次（1 = 首次）。 */
+    attempt: 0,
+    /** W2-12.2：失败后会不会自动重试（到上限就false，界面据此把按钮放到前台）。 */
+    willRetry: false,
+    /** W2-12.2：下次自动重试的时间（ISO）；没有就是空。 */
+    nextRetryAt: null,
   };
 }
 
@@ -143,9 +169,37 @@ function applyUpdateEvent(state, event) {
       return { ...state, phase: 'unsupported', reason: e.reason || 'unknown', progress: null, error: null };
 
     case 'checking':
-      return { ...state, phase: 'checking', manual: e.manual === true, progress: null, error: null, reason: null, checkedAt: at };
+      return {
+        ...state,
+        phase: 'checking',
+        manual: e.manual === true,
+        progress: null,
+        error: null,
+        reason: null,
+        checkedAt: at,
+        // 新一轮：重试计数归零，否则上一次的 3 次尝试会把这一轮直接判成「到顶了」。
+        attempt: 0,
+        willRetry: false,
+        nextRetryAt: null,
+      };
 
     case 'available':
+      // 用户跳过这个版本：不往外抛 `available`，界面上不该再弹这张卡。
+      // 注意**不**清空 version —— 界面要说「已跳过 v1.2.3」，得知道跳的是哪个。
+      if (version && state.skippedVersion === version) {
+        return {
+          ...state,
+          phase: 'skipped',
+          version,
+          releaseName: typeof info.releaseName === 'string' && info.releaseName ? info.releaseName : null,
+          releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+          releaseDate: typeof info.releaseDate === 'string' && info.releaseDate ? info.releaseDate : null,
+          progress: null,
+          error: null,
+          reason: null,
+          checkedAt: at,
+        };
+      }
       return {
         ...state,
         phase: 'available',
@@ -186,11 +240,79 @@ function applyUpdateEvent(state, event) {
         releaseNotes: normalizeReleaseNotes(info.releaseNotes) || state.releaseNotes,
         progress: { percent: 100, transferred: null, total: null, bytesPerSecond: null },
         error: null,
+        // 下载完了：重试那套计数全部收起来，别让「再失败一次」从 3 继续往上数。
+        willRetry: false,
+        nextRetryAt: null,
         checkedAt: at,
       };
 
-    case 'error':
-      return { ...state, phase: 'error', error: describeUpdateError(e.error), progress: null, checkedAt: at };
+    /**
+     * W2-12.2：**下载中**失败才自动重试。
+     *
+     * 分界之所以是 `downloading` 而不是「任何错误」：检查阶段失败（读不到 latest.yml、
+     * 404、DNS）重试同样的 `checkForUpdates` 也大概率同样失败，而且会把「 Releases 里
+     * 根本没有这个版本」这种**要人去处理**的事拖成三次静默重试。下载失败反过来 ——
+     * 大文件拉到一半断一次是常态，重下就是正解。
+     */
+    case 'error': {
+      const msg = describeUpdateError(e.error);
+      const wasDownloading = state.phase === 'downloading';
+      const attempt = (state.attempt || 0) + 1;
+      if (wasDownloading && attempt < MAX_DOWNLOAD_ATTEMPTS) {
+        const backoff = DOWNLOAD_RETRY_BACKOFF_MS[Math.min(attempt - 1, DOWNLOAD_RETRY_BACKOFF_MS.length - 1)];
+        return {
+          ...state,
+          phase: 'retrying',
+          attempt,
+          willRetry: true,
+          nextRetryAt: new Date(Date.parse(at) + backoff).toISOString(),
+          // 错误仍然要说出来：重试中 ≠ 没出错，界面得显示「第 2 次下载失败，30 秒后重试」。
+          error: msg,
+          progress: null,
+          checkedAt: at,
+        };
+      }
+      return {
+        ...state,
+        phase: 'error',
+        error: msg,
+        attempt,
+        willRetry: false,
+        nextRetryAt: null,
+        progress: null,
+        checkedAt: at,
+      };
+    }
+
+    /** W2-12.2：用户点名「这个版本先不装」。传空串 = 取消跳过。 */
+    case 'skip': {
+      const v = typeof e.version === 'string' && e.version.trim() ? e.version.trim() : null;
+      if (!v) {
+        return {
+          ...state,
+          skippedVersion: null,
+          error: null,
+          reason: null,
+          willRetry: false,
+          nextRetryAt: null,
+          progress: null,
+          checkedAt: at,
+        };
+      }
+      return {
+        ...state,
+        phase: 'skipped',
+        skippedVersion: v,
+        // 版本号留着：界面要说「已跳过 v1.2.3」，而且同名版本再来时还得认得它。
+        version: v,
+        progress: null,
+        error: null,
+        reason: null,
+        willRetry: false,
+        nextRetryAt: null,
+        checkedAt: at,
+      };
+    }
 
     default:
       return state;
@@ -280,9 +402,46 @@ function createUpdateService(opts = {}) {
   let lastEmittedPercent = -1;
   /** 已注册的监听器，dispose 时逐个摘掉（测试里会反复建服务）。 */
   const wired = [];
+  /** W2-12.2：下载失败后的自动重试计时器。 */
+  let retryTimer = null;
+
+  /** 清掉自动重试计时器（手动重试 / dispose / 下载成功都要清）。 */
+  const clearRetryTimer = () => {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  /**
+   * 按当前状态安排（或取消）一次自动重试。
+   *
+   * 放在 `commit` 之后的唯一调用点上，所以「什么情况下会重试」只有一份口径：
+   * 状态说会重试才排，状态说不会就清。用 `nextRetryAt` 而不是直接读退避表算时间 ——
+   * 那样「何时重试」就有两个真相（表在 applyUpdateEvent 里、相减在服务里）。
+   * @param {ReturnType<typeof blankUpdateState>} next 刚落定的状态。
+   */
+  const scheduleRetryIfNeeded = (next) => {
+    clearRetryTimer();
+    if (disposed) return;
+    if (!next || next.willRetry !== true || !next.nextRetryAt) return;
+    const delay = Math.max(0, Date.parse(next.nextRetryAt) - Date.now());
+    // 到点不自动重试的情况：没得可试的（不支持 / autoUpdater 缺失）。
+    if (!autoUpdater || !isSupported()) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (disposed) return;
+      log('warn', ['下载更新失败，自动重试（第 ' + String(next.attempt) + ' 次后）']);
+      Promise.resolve(service.retryDownload()).catch((err) => {
+        log('warn', ['自动重试下载失败', err]);
+      });
+    }, delay);
+    if (typeof retryTimer.unref === 'function') retryTimer.unref();
+  };
 
   const commit = (event) => {
     state = applyUpdateEvent(state, event);
+    scheduleRetryIfNeeded(state);
     try {
       onState(state);
     } catch (err) {
@@ -297,6 +456,8 @@ function createUpdateService(opts = {}) {
   const commitProgress = (progress) => {
     const prevPhase = state.phase;
     state = applyUpdateEvent(state, { type: 'progress', progress });
+    // 又开始动起来：上一轮失败排下的重试就作废了（不然会多重启一次下载）。
+    if (prevPhase === 'retrying' || prevPhase === 'error') clearRetryTimer();
     const pct = Math.floor((state.progress && state.progress.percent) || 0);
     if (prevPhase !== state.phase || pct !== lastEmittedPercent) {
       lastEmittedPercent = pct;
@@ -398,6 +559,42 @@ function createUpdateService(opts = {}) {
       return { ok: true };
     },
 
+    /**
+     * 跳过这个版本（W2-12.2）。
+     *
+     * 为什么非得有：不跳过的话，用户只有两个选择 —— 立刻装，或者每次启动都被同一张卡
+     * 反复问。后者比没有更新提示更糟：它训练用户忽略更新卡片，于是真的重要版本也被忽略。
+     * 跳过是**可反悔**的：换个新版本号出现时照样会提示，跳的只是这一个。
+     * @param {string} version 要跳过的版本号（空串 = 取消跳过）。
+     * @returns {object} 新状态。
+     */
+    skipVersion(version) {
+      const v = typeof version === 'string' && version.trim() ? version.trim() : '';
+      clearRetryTimer();
+      return commit({ type: 'skip', version: v || null, at: new Date().toISOString() });
+    },
+
+    /**
+     * 重试下载（W2-12.2）。
+     *
+     * 手动重试**不受** `MAX_DOWNLOAD_ATTEMPTS` 限制：那个上界是给自动重试设的
+     * （防的是无人值守时反复打扰），用户自己按下的按钮不该被它挡着。
+     * @returns {Promise<object>} 新状态。
+     */
+    async retryDownload() {
+      if (!isSupported()) return commit({ type: 'unsupported', reason: unsupportedReason() });
+      clearRetryTimer();
+      // 计数归零重来：这是用户明确的一次新尝试，接着上次的 3 次数没有意义。
+      state = { ...state, attempt: 0, willRetry: false, nextRetryAt: null };
+      commit({ type: 'checking', manual: state.manual === true });
+      try {
+        await autoUpdater.checkForUpdates();
+      } catch (err) {
+        if (state.phase !== 'error' && state.phase !== 'retrying') commit({ type: 'error', error: err });
+      }
+      return state;
+    },
+
     /** 启动后延迟自动检查一次（只排一次；`unref` 以免拖住进程退出）。 */
     scheduleAutoCheck() {
       if (disposed || timer) return;
@@ -418,6 +615,7 @@ function createUpdateService(opts = {}) {
 
     dispose() {
       disposed = true;
+      clearRetryTimer();
       if (timer) {
         clearTimeout(timer);
         timer = null;
@@ -439,6 +637,8 @@ function createUpdateService(opts = {}) {
 module.exports = {
   DEFAULT_AUTO_CHECK_DELAY_MS,
   DISABLE_UPDATE_CHECK_ENV,
+  DOWNLOAD_RETRY_BACKOFF_MS,
+  MAX_DOWNLOAD_ATTEMPTS,
   MAX_RELEASE_NOTES_CHARS,
   PROGRESS_STEP_PERCENT,
   applyUpdateEvent,

@@ -8,11 +8,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyMount, ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { apiExportCsv, apiGetAvatar, apiGetContact360, apiGetContacts, apiSaveFileDialog } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { cacheBounded } from '../utils/misc.ts'
+import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { avatarColors } from '../utils/format.ts'
 import { localImageSrc } from './remote-img.tsx'
 import type { Contact360Snapshot, WechatContact as ContactRow } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Drawer, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { clickableKey, Drawer, EmptyMaybeSyncing, LinkButton, SearchInput, Segmented, Toolbar } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import { ExportHistoryDialog } from './ExportHistoryDialog.tsx'
 import css from './contacts.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -143,7 +144,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
     setError(pager.error)
   }, [searching, pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current, pager.items.length)
 
   // 数据落地后安静刷新（有渲染缓存时不闪整页），使新联系/群名及时可见。
   // 用 `pager.refresh()`（非破坏性，会按**已加载条数**重取）而不是 `reset()`：
@@ -213,10 +214,10 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
   }
 
   const copyUsername = async (c: ContactRow): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(c.username)
-      notify('已复制用户名 ' + c.username)
-    } catch { notify('复制失败') }
+    // 走共享助手：异步 API 被拒（窗口失焦、权限被挡）时它还会试 `execCommand` 那条退路，
+    // 而 `ok===false` 才真的是「没复制上」—— 直接 catch `writeText` 会把退路丢掉。
+    const ok = await copyTextToClipboard(c.username)
+    notify(ok ? '已复制用户名 ' + c.username : '复制失败')
   }
 
   const sendMessage = (c: ContactRow): void => {
@@ -247,7 +248,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
               onChange={(v) => { setCat(v) }}
               ariaLabel="联系人分类"
             />
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出 CSV'}</button>
+            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
             {/* 导出记录：入口与「导出」放在一起。
                 原先挂在「设置 → 高级设置」里 —— 那是低频维护分组，而导出是通讯录这一屏
                 的动作；用户在这里点完导出，查看结果/重新导出应当就在同一处。 */}
@@ -257,7 +258,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
               data-open-export-history=""
               onClick={() => { setHistoryOpen(true) }}
               title="查看历史导出：打开文件、复制路径、按原参数重新导出、清理"
-            >导出记录</button>
+            {...desktopActionProps()}>{desktopAction() ? '导出记录（仅电脑）' : '导出记录'}</button>
           </>
         )}
       />
@@ -268,9 +269,13 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
         ))}
       </div>
       <div className={css.scroll} ref={scrollRef}>
-        {loading && <ListSkeleton rows={12} />}
+        {/* 骨架必须与真实栅格同形（U3）：真实内容是 `.list` 的多列网格
+            （`repeat(auto-fill, minmax(240px, 1fr))`，实测排 3–5 列），
+            而单列行模式会让骨架先铺一列、数据到了再散成多列 —— 看起来像"布局跳了一下"。
+            列宽下限与 `.list` 逐字对齐，`consistency-r7.wiring.spec.ts` 钉着这个等式。 */}
+        {loading && <ListSkeleton rows={12} grid minCol={240} />}
         {error && <div className={kitCss.error} role="alert">{error}</div>}
-        {!loading && !error && grouped.length === 0 && <div className={kitCss.emptyInline}>暂无联系人</div>}
+        {!loading && !error && grouped.length === 0 && <EmptyMaybeSyncing text="暂无联系人" />}
         {!loading && !error && grouped.map(([letter, list]) => (
           <div key={letter} className={css.group} data-letter={letter}>
             {/* `#` 是「没有任何拼音可依」的兜底桶（微信只为加过好友的联系人写拼音首字母，
@@ -309,7 +314,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
             {profile.groupName && (
               <div className={css.profileRow}>
                 <span>所在群</span>
-                <button type="button" className={css.linkBtn} onClick={() => { setProfile(null); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</button>
+                <LinkButton onClick={() => { setProfile(null); onOpenChat?.(profile.groupUsername ?? '') }}>{profile.groupName}</LinkButton>
               </div>
             )}
             {profile360Loading && <div className={css.profileRow}><span>画像</span><span>统计中…</span></div>}
@@ -357,7 +362,7 @@ export function ContactsPanel({ onNavigate, onOpenChat, onOpenMoments, seedQuery
       {/* 导出记录弹窗。入口在工具栏「导出记录」按钮 —— 与「导出 CSV」同处，
           用户导完就地能查结果/重新导出/清理，不必再跳设置。
           默认预筛「通讯录」，与本屏上下文一致（可在下拉里改回「全部」）。 */}
-      <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />
+      {/* 手机态**不挂载**（真机量到：弹窗即使关着，挂载时也会打一次 `getExportHistory` —— 分页器不看 `open`，而那不在远程白名单里）。只禁用入口只解决「点不到」，不解决「界面自己发出去」。 */} {!desktopAction() && <ExportHistoryDialog open={historyOpen} onClose={() => { setHistoryOpen(false) }} initialKind="contacts" />}
     </div>
   )
 }

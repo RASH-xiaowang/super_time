@@ -29,6 +29,14 @@ export type RecordItem = Record<string, string | number | boolean | null>
 export interface RecordsSnapshot {
   items: RecordItem[]
   total: number
+  /**
+   * **只在读失败时出现**（W3-11.4，与 `NotesSnapshotRead` 同一纪律）。
+   *
+   * 为什么 records 也需要它：`general.db` 不存在时旧实现直接返回空列表 —— 而「本机没有
+   * 资金往来」与「数据还没解密/解密不完整」在界面上长得一模一样（都是「暂无记录」）。
+   * 首启阶段前者是常态、后者是配置问题，用户需要知道自己该去哪儿。
+   */
+  readError?: string
 }
 
 /** One aggregated contact row in the funds ledger. */
@@ -104,6 +112,15 @@ export interface UnifiedSearchRecord {
 
 /** Unified search snapshot over several local data domains. */
 export interface UnifiedSearchSnapshot {
+  /**
+   * 某个域**读失败**（库打不开 / 损坏 / 缺表）时的说明。
+   *
+   * P1-1：这条链此前把「读失败」和「确实没有结果」压成同一个形状（catch 里 return []），
+   * 用户看到的是「未找到相关结果」，而真实原因是数据根损坏。本仓已有 `readError` 这个
+   * 约定（知识库/媒体那几条快照都在用，且 `read-error-visibility.spec.ts` 会从类型反查
+   * 「面板有没有真的读它」），所以这里跟着同一个约定，不再发明第二种形状。
+   */
+  readError?: string
   query: string
   messages: SearchHit[]
   contacts: UnifiedSearchContact[]
@@ -154,6 +171,11 @@ export interface RevokedItem {
 export interface RevokedSnapshot {
   items: RevokedItem[]
   total: number
+  /**
+   * **只在读失败时出现**（W3-11.4）。归档库不存在/打不开时返回空列表是不够的 ——
+   * 「没有撤回消息」与「归档库还没建」得分开说（后者随同步 tick 自动补上，前者不会）。
+   */
+  readError?: string
 }
 
 /** One custom/static emoticon row. */

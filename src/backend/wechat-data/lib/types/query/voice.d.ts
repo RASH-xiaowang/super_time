@@ -18,7 +18,7 @@ export declare function svrIdByChatLocal(decryptedDir: string, username: string,
  *
  * The bundled candidate must go through `onDiskPath` (N19): in a packaged
  * build the walk from `import.meta.url` lands inside app.asar, where
- * `existsSync` says the exe is there but `spawnSync` cannot run it (ENOENT).
+ * `existsSync` says the exe is there but `spawn` cannot run it (ENOENT).
  * Returning `''` instead of an unrunnable path keeps the caller's error
  * message honest ("打包资源缺失") when `asarUnpack` is not covering it.
  *
@@ -33,16 +33,21 @@ export declare function svrIdByChatLocal(decryptedDir: string, username: string,
  * @returns A runnable on-disk exe path, or `''` when there is none.
  */
 export declare function silkDecoderBin(startDir?: string): string;
+/** Upper bound for one wx_silk decode. Bad input must not consume the whole call window. */
+export declare const SILK_DECODE_TIMEOUT_MS = 120000;
 /**
  * Decode silk bytes to a WAV file via wx_silk (16 kHz mono, whisper-ready).
  * @param silk - raw voice_data bytes (leading 0x02 tolerated).
  * @param wavPath - output WAV path (parent dir created).
+ * @param options.timeoutMs - decoder process bound (defaults to {@link SILK_DECODE_TIMEOUT_MS}).
  * @returns ok, or an error description.
  */
-export declare function silkToWav(silk: Buffer, wavPath: string): {
+export declare function silkToWav(silk: Buffer, wavPath: string, options?: {
+    timeoutMs?: number;
+}): Promise<{
     ok: boolean;
     error?: string;
-};
+}>;
 /**
  * 一条语音消息 → 可就地播放的 wav data URL。
  *
@@ -59,8 +64,8 @@ export declare function silkToWav(silk: Buffer, wavPath: string): {
  * @param localId - message local id.
  * @returns url (base64 wav) + durationSec, or an error description.
  */
-export declare function resolveVoiceDataUrl(decryptedDir: string, decodedDir: string, username: string, localId: number): {
+export declare function resolveVoiceDataUrl(decryptedDir: string, decodedDir: string, username: string, localId: number): Promise<{
     url?: string;
     durationSec?: number;
     error?: string;
-};
+}>;

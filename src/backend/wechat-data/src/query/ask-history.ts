@@ -19,7 +19,7 @@
  *
  * 写入一律 **best-effort**：记录失败绝不能影响问答本身（与 `recordOperation` 同口径）。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { dirname, join } from 'node:path'
 import type {
   AskCitation,

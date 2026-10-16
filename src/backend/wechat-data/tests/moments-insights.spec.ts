@@ -33,7 +33,7 @@ function postXml(ts: number): string {
 }
 
 describe('queryMomentsInsights', () => {
-  it('counts likes/comments and returns today items', () => {
+  it('counts likes/comments and returns today items', async () => {
     const root = tempRoot()
     const now = new Date()
     const todayTs = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTime() / 1000)
@@ -44,7 +44,9 @@ describe('queryMomentsInsights', () => {
       db.prepare('INSERT INTO SnsTimeLine VALUES (?, ?, ?)').run(2, 'wxid_a', postXml(oldTs))
     })
 
-    const snap = queryMomentsInsights(root, 'wxid_a')
+    // 2026-09-28：改成 async 是为了在整张 SnsTimeLine 的游标上加让出点
+    // （实测冷跑 228ms 且一次不让出，排在串行 worker 上会堵住后面所有 RPC）。
+    const snap = await queryMomentsInsights(root, 'wxid_a')
     expect(snap.posts).toBe(2)
     expect(snap.likes).toBe(2)
     expect(snap.comments).toBe(2)

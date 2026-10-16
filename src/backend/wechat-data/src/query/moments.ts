@@ -4,10 +4,12 @@
  * XML is parsed into text/media/location/link fields mirroring the Rust
  * modules/moments.rs parse_sns_xml. Author names resolve via contact.db.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { fmtRelativeDaySec } from '../format.ts'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
+import { stripCdata } from './parse-xml.ts'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
 function cellString(v: unknown): string {
@@ -24,6 +26,13 @@ export interface MomentMedia {
   url: string
   key: string
   md5: string
+  /**
+   * 媒体标签上的 `token`（`<url token="…">`）。
+   *
+   * 为什么必须带着：2026-10-08 真机实测，CDN 地址只有 `?token=…` 仍是 400，
+   * **必须 `?token=…&idx=1`** 且尺寸段为 `/0`、协议为 https 才返回 200（见 `sns-cdn-url.ts`）。
+   */
+  token?: string
   /** Media <id> (cache-key input, together with timelineId). */
   id?: string
   /** Timeline <id> (SnsDataItem/TimelineObject id). */
@@ -57,12 +66,23 @@ export interface MomentComment {
   to_nickname: string
   content: string
   ts: number
-  /** Comment-attached image (imagelist first image). */
+  /**
+   * Comment-attached image (`<imageinfo>` 里的第一张)。
+   *
+   * ⚠️ `token` 与 `seed` 是**取到图的前提**，不是可选装饰（2026-10-09 修）：
+   * 实测评论图的裸 `<url>`（不带 `token`/`idx=1`）**5/5 全部 HTTP 400、0 字节**，
+   * 而经 `snsCdnUrl` 补上 `?token=…&idx=1` 后 **5/5 HTTP 200**（`x-enc=1`，密文）。
+   * 之前这里只解析 `url`/`thumb`/`md5`/`media_id`，渲染层拿裸地址去要图必然落空。
+   */
   image?: {
     thumb?: string
     url?: string
     md5?: string
     mediaId?: string
+    /** `<token>`：CDN 校验标签。实测缺它就是 400。 */
+    token?: string
+    /** `<key>`：WxIsaac64 解密种子。缺它拿到的是密文。 */
+    seed?: string
   }
 }
 
@@ -70,6 +90,7 @@ export interface MomentComment {
 export interface MomentEntry {
   tid: string
   username: string
+  /** **显示名**（备注 → 昵称 → ID 逐级回退），不是发帖人的微信 ID —— 别拿它去 join 会话（P3-6 实测澄清）。 */
   author: string
   text: string
   ts: number
@@ -110,7 +131,14 @@ function unescapeXml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'")
 }
 
-/** Extract text between <tag ...> and </tag>, tolerating attributes on the open tag. */
+/**
+ * Extract text between <tag ...> and </tag>, tolerating attributes on the open tag.
+ *
+ * 必须过 `stripCdata`：微信的 SnsTimeLine content 里正文/昵称/链接标题都是
+ * `<contentDesc><![CDATA[…]]></contentDesc>` 这种写法（与消息 XML 同一个生产者），
+ * 不剥就会把 `<![CDATA[…]]>` 整串当正文显示到卡片上。
+ * 共享原语 `parse-xml.ts#xmlTagText` 一直有剥，这份本地版本是漏的那一处。
+ */
 function xmlTagText(xml: string, tag: string): string | null {
   const openExact = '<' + tag + '>'
   const openAttr = '<' + tag + ' '
@@ -119,7 +147,7 @@ function xmlTagText(xml: string, tag: string): string | null {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
-  return xml.slice(contentStart, close)
+  return stripCdata(xml.slice(contentStart, close))
 }
 
 /** Extract an attribute value from a tag open (first occurrence). */
@@ -252,6 +280,8 @@ export function parseSnsXml(xml: string): {
     const thumb = tagTextFirst(inner, ['thumb', 'Thumb', 'cdnThumbUrl', 'cdnthumburl', 'thumbUrl', 'thumburl', 'coverUrl', 'coverurl'])
     const key = xmlTagAttr(inner, 'enc', 'key') ?? xmlTagAttr(inner, 'thumb', 'key') ?? xmlTagAttr(inner, 'url', 'key') ?? ''
     const md5 = xmlTagAttr(inner, 'url', 'md5') ?? ''
+    // CDN 取图要带：`<url token>` / `<thumb token>`（实测 `token+idx=1` 才 200）
+    const token = xmlTagAttr(inner, 'url', 'token') ?? xmlTagAttr(inner, 'thumb', 'token') ?? ''
     const mediaId = tagTextFirst(inner, ['id', 'Id']) || undefined
     const duration = Number.parseFloat(tagTextFirst(inner, ['videoDuration'])) || 0
     if (url && isVideoUrl(url)) {
@@ -260,7 +290,7 @@ export function parseSnsXml(xml: string): {
       if (timelineId) videoEntry.timelineId = timelineId
       videos.push(videoEntry)
     } else if (url) {
-      const mediaEntry: MomentMedia = { thumb, url, key, md5 }
+      const mediaEntry: MomentMedia = { thumb, url, key, md5, token }
       if (mediaId) mediaEntry.id = mediaId
       if (timelineId) mediaEntry.timelineId = timelineId
       images.push(mediaEntry)
@@ -375,25 +405,19 @@ export function parseSnsLikesComments(xml: string): { likes: MomentLike[]; comme
       if (imd) image.md5 = imd
       const imid = xmlTagText(ib, 'media_id') ?? ''
       if (imid) image.mediaId = imid
+      // token 与 key 缺一不可（实测：缺 token 返 400，缺 key 拿到的是密文）。
+      // 注意 XML 里查询串的 `&` 是实体，必须先反转义，否则 `token` 里会带 `&amp;`。
+      const itok = unescapeXml(xmlTagText(ib, 'token') ?? '')
+      if (itok) image.token = itok
+      const ikey = unescapeXml(xmlTagText(ib, 'key') ?? '')
+      if (ikey) image.seed = ikey
       if (Object.keys(image).length > 0) comment.image = image
     }
     comments.push(comment)
   }
   return { likes, comments }
 }
-/** Format a unix timestamp as a moments time label (relative days). */
-function fmtTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const now = new Date()
-  const startOfDay = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
-  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000)
-  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  if (dayDiff <= 0) return `今天 ${hhmm}`
-  if (dayDiff === 1) return `昨天 ${hhmm}`
-  if (dayDiff < 365) return `${dayDiff}天前`
-  return `${Math.floor(dayDiff / 30)}个月前`
-}
+
 
 /**
  * Read moments page (XML parsed; likes/comments resolved from SnsMessage_tmp3).
@@ -407,6 +431,7 @@ export function queryMoments(
   decryptedDir: string,
   offset?: number,
   limit?: number,
+  /** 按发帖人过滤，传的是会话微信 ID —— 正名见 `WechatSession.username`（P3-6）。 */
   authorUsername?: string,
   selfUsername?: string,
 ): { moments: MomentEntry[]; total: number } {
@@ -439,7 +464,7 @@ export function queryMoments(
         author,
         text: parsed.text,
         ts: parsed.createTime,
-        time: fmtTime(parsed.createTime),
+        time: fmtRelativeDaySec(parsed.createTime),
         media_count: parsed.mediaCount,
         media_desc: parsed.mediaDesc,
         images: parsed.images,

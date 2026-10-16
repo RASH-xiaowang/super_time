@@ -37,6 +37,13 @@ export declare function normalizeMsgType(localType: number): number;
  */
 export declare function msgTypeLabel(localType: number): string;
 /**
+ * Decode a DB cell (TEXT or BLOB) to UTF-8 text, handling zstd + GBK.
+ *
+ * 2026-09-29 导出：撤回原文归档（`revoke-retain.ts`）也要用它 —— 微信的 `message_content`
+ * 对**文本**也可能存成 zstd 压缩块（magic `28 B5 2F FD`），不先解码就会存进一堆乱码字节。
+ */
+export declare function decodeBlobText(v: unknown): string;
+/**
  * Strip XML/二进制噪声，得到一句可读的正文预览。
  *
  * 旧实现是「删掉所有 `<...>` 再截断」，这在**标签未闭合或属性特别多**时会翻车：
@@ -94,7 +101,9 @@ export declare function msgCreateTimeByServerId(decryptedDir: string, talker: st
  * @param selfUsername - logged-in account wxid (see {@link queryMessages}).
  * @returns the newer messages (empty when nothing arrived).
  */
-export declare function queryNewMessages(decryptedDir: string, talker: string, after: number, limit?: number, selfUsername?: string): MessagesSnapshot;
+export declare function queryNewMessages(decryptedDir: string, 
+/** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+talker: string, after: number, limit?: number, selfUsername?: string): MessagesSnapshot;
 /**
  * Read one talker's messages (keyset pagination across all shards).
  * @param decryptedDir - decrypted data root.
@@ -107,7 +116,9 @@ export declare function queryNewMessages(decryptedDir: string, talker: string, a
  *   用于消除 sort_seq 重复导致的分页丢消息；不传则退回只按 sort_seq 分页。
  * @returns the messages snapshot.
  */
-export declare function queryMessages(decryptedDir: string, talker: string, limit?: number, cursor?: number, selfUsername?: string, cursorLocalId?: number): MessagesSnapshot;
+export declare function queryMessages(decryptedDir: string, 
+/** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+talker: string, limit?: number, cursor?: number, selfUsername?: string, cursorLocalId?: number): MessagesSnapshot;
 /**
  * Resolve one message by its server_id (merged chat-log nested pointers).
  * Scans every message shard / Msg table; only type-49 appmsg cards are
@@ -127,7 +138,7 @@ export declare function queryMessages(decryptedDir: string, talker: string, limi
  * @param serverId - server_id as string (may exceed 2^53).
  * @returns found flag plus the parsed message (when found).
  */
-export declare function queryMessageByServerId(decryptedDir: string, serverId: string): {
+export declare function queryMessageByServerId(decryptedDir: string, serverId: string): Promise<{
     found: boolean;
     message?: WechatMessage;
-};
+}>;

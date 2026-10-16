@@ -3,18 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- connect-src 不再用 `https:` 通配，改为显式列出渲染进程真实会取的外网主机：
-       world 地图 GeoJSON（jsdelivr / unpkg）+ 省/市/区县 GeoJSON（geo.datav.aliyun.com）。
-       漏掉 aliyun 会把省/市/区县地图的取数打断（评审实测的回归）。
-       LLM 与 embedding 的 HTTP 调用都发生在后端 worker（Node 侧），不受页面 CSP 约束。
-       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余
-       （file:// 文档下 'self' 已含整个 file: scheme），留着的代价是显式，不影响。
-       img-src 已收紧成**只有本机来源**（M23）：消息里记录的远程图片/头像地址一律交给后端
-       `query/remote-image.ts` 代取成 data URL，于是「自动获取原图（CDN）」与「禁止出网」
-       两个开关真的管得到每一张图，操作记录里也留得下。**把 `https:` 加回这里，就等于把
-       那句「关掉开关就不再为图片出网」作废** —— 渲染层的 `<img>` 会重新能向任意主机发请求。 -->
+  <!-- 空 icon 声明：浏览器（只有浏览器，含手机）会默认去要 `/favicon.ico`，而 ui-dist 里没有这个文件
+       ⇒ 每次进应用都留一条 404 在控制台里。桌面端从 file:// 加载，本来就不发这个请求，所以这条
+       对 Electron 是惰性的。写 `data:,` 而不是删掉请求：这是标准做法，且不需要新增任何文件产物。 -->
+  <link rel="icon" href="data:," />
+  <!-- connect-src 只放行本机来源。远程图片、头像与地图数据都经后端白名单代理，
+       由 query/remote-image.ts / query/map-geo.ts 取回 data URL 或 JSON；渲染层不直接 fetch 任意 https。
+       `data:` 是必需的（只写 'self' 时 fetch(data:) 会被拦）；`file:` 其实冗余（file:// 文档下 'self' 已含整个 file: scheme）。 -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file: https://cdn.jsdelivr.net https://unpkg.com https://geo.datav.aliyun.com" />
+    content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; connect-src 'self' data: blob: file:" />
   <title>Super Time</title>
 </head>
 <body>

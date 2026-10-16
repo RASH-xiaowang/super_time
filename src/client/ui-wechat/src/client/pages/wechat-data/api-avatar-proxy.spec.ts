@@ -5,7 +5,7 @@
  * 为什么钉在这一层而不是逐个面板：`getAvatar` 会回 `{ kind: 'url' }`（本机没有这张头像时），
  * 而它有 **7 个**调用点（联系人、朋友圈大小头像、聊天侧栏、总览、设置、面板头、群成员栏）。
  * 只要有一个点留着 `kind === 'url'` 分支，那条 `<img src=https://…>` 就还在渲染层直连：
- * 「自动获取原图（CDN）」与「禁止出网」两个开关管不到它、操作记录里没有它、也没有缓存 ——
+ * 主机白名单（M23）够不到它、操作记录里没有它、也没有缓存 ——
  * 而 CSP 的 `https:` 通配没拿掉之前**连违规都不会报**。所以这一层是唯一的收口处，
  * 判据是「假远程面被叫了几次、每次带什么、这一层最终交出什么地址」。
  */
@@ -81,11 +81,11 @@ describe('M23：头像的远程地址在 api 层就换成本机可画地址', ()
     expect(calls.proxyBatches[0]).toEqual([remote])
   })
 
-  it('代理取不到（开关关掉 / 主机不在清单 / CDN 失败）就如实回 none，而不是把远程地址交出去', async () => {
+  it('代理取不到（主机不在白名单 / CDN 失败 / 授权档位不足）就如实回 none，而不是把远程地址交出去', async () => {
     const remote = url()
     const calls = stub({
       avatar: { kind: 'url', url: remote },
-      resolve: (u) => ({ url: u, error: '「自动获取原图（CDN）」已关闭' }),
+      resolve: (u) => ({ url: u, error: '头像地址的主机不在微信 CDN 白名单内，已拒绝请求' }),
     })
     const r = await apiGetAvatar({ username: 'wxid_b' })
     expect(r.kind).toBe('none')

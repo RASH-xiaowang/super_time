@@ -2,12 +2,13 @@
 'use strict';
 
 /**
- * 从 `gateway.ts` 的 `@Remote` 装饰器生成 `docs/API.md`（H14）。
+ * 从 `gateway*.ts` 各网关壳里的 `@Remote` 装饰器生成 `docs/API.md`（H14）。
  *
- * 为什么生成而不是手写：这份文档此前**三方打架** —— `gateway.ts` 实际 132 个方法、
+ * 为什么生成而不是手写：这份文档此前**三方打架** —— 网关实际 132 个方法、
  * RAG 文档写 126、后端 README 写 114、启动页写 114。任何手工维护的方法清单都会漂，
  * 而「接口参考说有多少个方法」是外部读者判断契约规模的第一眼信息。
- * 现在唯一来源是源码里的装饰器，`--check` 模式让 CI 拒绝过期文档。
+ * 现在唯一来源是源码里的装饰器（M21 后分布在多个网关壳里，不再只有一个 `gateway.ts`），
+ * `--check` 模式让 CI 拒绝过期文档。
  *
  * 用法：
  *   node scripts/gen-api-docs.js           # 写入 docs/API.md
@@ -20,13 +21,13 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const GW_DIR = path.join(root, 'src', 'backend', 'wechat-data', 'src');
 /**
- * M21 结构刀之后，一个类住在多个文件里（`gateway-core.ts` + 三层方法面壳 + `gateway.ts` 叶子）。
+ * M21 结构刀之后，一个类住在多个文件里（`gateway-core.ts` + 各层方法面壳 + `gateway.ts` 叶子）。
  * 因此按目录扫 `gateway*.ts` —— 以后再拆一层也不用回来改这里。
- * （另一处需要同步口径的是 `src/backend/tests/gateway-source.ts` 里的类文件清单。）
  */
-const GATEWAY_FILES = fs.readdirSync(GW_DIR).filter((f) => /^gateway[a-z-]*\.ts$/.test(f)).sort()
-  .map((f) => path.join(GW_DIR, f));
-const GATEWAY = path.join(GW_DIR, 'gateway.ts');
+const REMOTE_FILES = JSON.parse(
+  fs.readFileSync(path.join(root, 'tools', 'remote-files.json'), 'utf8'),
+);
+const GATEWAY_FILES = REMOTE_FILES.gatewayClassFiles.map((f) => path.join(GW_DIR, f));
 const OUT = path.join(root, 'docs', 'API.md');
 
 /** 装饰器形如 `@Remote('getSessions')`（允许参数两侧有空白）。 */
@@ -89,11 +90,12 @@ function readSignature(lines, startIndex) {
 }
 
 /**
- * 从 gateway.ts 源码里按出现顺序抽出全部 Remote 方法。
- * @param src - gateway.ts 全文。
- * @returns `{ name, doc, signature }` 列表。
+ * 从一个网关壳源码里按出现顺序抽出全部 Remote 方法。
+ * @param src - 该网关壳的全文。
+ * @param source - 该网关壳相对仓库根的文件名，写进"没有 JSDoc"的指引里。
+ * @returns `{ name, doc, signature, source }` 列表。
  */
-function extractMethods(src) {
+function extractMethods(src, source) {
   const lines = src.split(/\r?\n/);
   const methods = [];
   for (let i = 0; i < lines.length; i += 1) {
@@ -103,6 +105,7 @@ function extractMethods(src) {
       name: m[1],
       doc: readDocAbove(lines, i),
       signature: readSignature(lines, i + 1),
+      source,
     });
   }
   return methods;
@@ -145,16 +148,16 @@ function render(methods) {
   const out = [];
   out.push('# Remote 接口参考');
   out.push('');
-  out.push('> ⚙️ 本文件由 `npm run docs:api` 从 `src/backend/wechat-data/src/gateway.ts` 的');
+  out.push('> ⚙️ 本文件由 `npm run docs:api` 从 `src/backend/wechat-data/src/gateway*.ts` 各网关壳里的');
   out.push('> `@Remote(\'name\')` 装饰器**自动生成**，请勿手工编辑；改了 gateway 请重跑生成命令。');
   out.push('> CI 的 `npm run docs:api:check` 会在文档与源码不一致时失败。');
   out.push('');
   out.push(`当前共 **${methods.length}** 个 Remote 方法。`);
   out.push('');
-  out.push('渲染进程通过这些方法与后端通信（`gateway.ts` 是唯一分发点）：');
+  out.push('渲染进程通过这些方法与后端通信（方法面分布在 `src/backend/wechat-data/src/gateway*.ts` 的多个网关壳里）：');
   out.push('渲染层 → `preload.js` 的 `window.electronAPI.wechat.call(name, args)` → 主进程授权闸门 →');
   out.push('后端 worker → `gateway` 的同名方法。前端手写镜像 `WechatRemote`');
-  out.push('（`src/client/ui-wechat/src/client/pages/wechat-data/api.ts`）必须与之一一对应，');
+  out.push('（`src/client/ui-wechat/src/client/pages/wechat-data/api-core.ts`）必须与之一一对应，');
   out.push('由 `src/backend/wechat-data/tests/remote-contract.spec.ts` 守住。');
   out.push('');
   if (dupes.length > 0) {
@@ -193,7 +196,7 @@ function render(methods) {
     if (tags.length > 0) out.push('');
     if (prose.length === 0 && tags.length === 0) {
       // 不为「源码里就没有说明」编内容：写明白，读者才知道该去读源码
-      out.push('_（源码中未附说明 —— 请直接阅读 `gateway.ts` 中该方法）_');
+      out.push(`_（源码中未附说明 —— 请直接阅读 \`${m.source}\` 中该方法）_`);
       out.push('');
     }
   }
@@ -202,7 +205,10 @@ function render(methods) {
 
 function main() {
   const check = process.argv.includes('--check');
-  const methods = GATEWAY_FILES.flatMap((f) => extractMethods(fs.readFileSync(f, 'utf8')));
+  const methods = GATEWAY_FILES.flatMap((f) => extractMethods(
+    fs.readFileSync(f, 'utf8'),
+    path.relative(root, f).split(path.sep).join('/'),
+  ));
   if (methods.length === 0) {
     console.error('❌ 没有从网关类文件里抽到任何 @Remote 方法 —— 解析失效，请检查装饰器写法');
     process.exit(1);
@@ -218,7 +224,7 @@ function main() {
       process.exit(1);
     }
     if (current.replace(/\r\n/g, '\n') !== content) {
-      console.error('❌ docs/API.md 与 gateway.ts 的 @Remote 集合不一致：请运行 npm run docs:api 后提交');
+      console.error('❌ docs/API.md 与 gateway*.ts 的 @Remote 集合不一致：请运行 npm run docs:api 后提交');
       process.exit(1);
     }
     console.log(`ok: docs/API.md 与源码一致（${methods.length} 个方法）`);

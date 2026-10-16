@@ -60,6 +60,12 @@ describe('N31：打包入口那一层要在类型检查范围内', () => {
       'src/client/ui-app/ui-entry.tsx',
       'src/client/ui-app/onboarding/OnboardingShell.tsx',
       'src/client/ui-app/onboarding/onboarding-content.tsx',
+      'src/client/ui-app/onboarding/runtime.ts',
+      'src/client/ui-app/onboarding/stage-chrome.tsx',
+      'src/client/ui-app/onboarding/pages/HomePage.tsx',
+      'src/client/ui-app/onboarding/pages/FeaturesPage.tsx',
+      'src/client/ui-app/onboarding/pages/HelpPage.tsx',
+      'src/client/ui-app/onboarding/pages/AboutPage.tsx',
       'src/client/ui-app/privacy/PrivacyConsentGate.tsx',
       'src/client/ui-app/privacy/consent.ts',
       'src/client/ui-app/license/LicenseGate.tsx',
@@ -67,10 +73,16 @@ describe('N31：打包入口那一层要在类型检查范围内', () => {
     ]) {
       expect(files.some((f) => f.endsWith(want)), `program 里没有 ${want}`).toBe(true)
     }
-    // 反面确认判据有鉴别力：本包对宿主插槽的注册点故意不在任何项目里
-    // （它 import 的 @deepseek-ai/dsh-client-ui-* 本仓库没有 vendored，见 ui-wechat 那份的 exclude 注释）
-    expect(files.some((f) => f.endsWith('src/client/index.tsx')),
-      '连 src/client/index.tsx 都被拉进来了 —— include 收得太宽').toBe(false)
+  })
+
+  it('上游宿主插槽注册点已删除，ui-wechat 不再用 exclude 掩盖不可解析导入', () => {
+    const deadEntry = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'index.tsx')
+    expect(existsSync(deadEntry),
+      'src/client/ui-wechat/src/client/index.tsx 是已删除的上游注册点，不应重新出现').toBe(false)
+
+    const cfg = readJson(CLIENT_CFG) as { exclude?: unknown }
+    expect(cfg.exclude ?? [],
+      'ui-wechat 的全部 src 都应参与类型检查，不能靠 exclude 把不可解析的上游导入藏起来').toEqual([])
   })
 
   it('两个项目不互相覆盖（否则同一批文件被检查两遍，而 N31 的说法也不再成立）', () => {

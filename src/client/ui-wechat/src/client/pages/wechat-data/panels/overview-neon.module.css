@@ -1,0 +1,546 @@
+/* ============================================================
+ * 「微信数据总览」霓虹仪表盘皮肤（2026-09-27）
+ *
+ * ## 为什么单开一份 CSS 而不是接着写 overview.module.css
+ *
+ * 那份已经 970 行，而 `m21-file-size-ratchet.spec.ts` 的单文件闸门是 1000 行 ——
+ * 往里加样式会当场撞门（这条闸门正是为"别把新东西塞进文件末尾"准备的）。
+ * 所以视觉层单独成文件，**骨架与令牌仍归 overview.module.css**：
+ * 栅格列数、间距、卡片内边距这些被 `layout-tokens.spec.ts` 双向核对的值一个都没动，
+ * 这里只改"长什么样"，不改"排在哪、多宽、多高"。
+ *
+ * ## 这一层做了什么
+ *
+ * 1. 背景：极光（两团缓慢漂移的径向光）+ 等距网格 + 粒子画布（见 overview-neon.tsx）；
+ * 2. 指标条：8 张**等距 3D 霓虹牌**（六边形切角面 + 厚度 + 底部光池 + 渐变数字）；
+ * 3. 卡片：玻璃拟态（半透明底 + 背景模糊 + 发丝高光边 + 柔和外投影 + 顶部霓虹线）；
+ * 4. 条形与格子：青色→品红的渐变填充 + 光晕，格子改成玻璃内嵌。
+ *
+ * ## 三条自我约束
+ *
+ * · 所有动画都在 `prefers-reduced-motion: reduce` 下关掉（含粒子画布的降级，见 tsx）；
+ * · 不用 `position: fixed`（面板是滚动容器，fixed 会盖住面板头与侧边栏）；
+ * · 不引入任何新的查询/数据 —— 这一层只吃既有 props。
+ */
+
+/* ── ① 背景层 ─────────────────────────────────────────────── */
+
+/* `isolation: isolate` 让负 z-index 的背景层落在**本面板自己的背景之上、内容之下**：
+   没有它，负 z-index 的子元素会跑到 `.root` 的背景后面（等于看不见）。 */
+.root.root {
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse 90% 42% at 50% -6%, color-mix(in srgb, var(--nm-cyan) 7%, transparent), transparent 68%),
+    radial-gradient(ellipse 70% 40% at 8% 12%, color-mix(in srgb, var(--nm-purple) 6%, transparent), transparent 70%),
+    linear-gradient(180deg, #05070f 0%, #060912 45%, #04060d 100%);
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* 极光：两团模糊光斑反向漂移，给暗底一点"活的"环境光。 */
+.auroraCyan,
+.auroraMagenta {
+  position: absolute;
+  width: 58vw;
+  height: 58vw;
+  max-width: 900px;
+  max-height: 900px;
+  filter: blur(72px);
+  opacity: 0.82;
+  will-change: transform;
+}
+.auroraCyan {
+  top: -22vw;
+  left: -12vw;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--nm-cyan) 42%, transparent), transparent 62%);
+  animation: ovAuroraA 26s ease-in-out infinite alternate;
+}
+.auroraMagenta {
+  top: 14vh;
+  right: -18vw;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--nm-purple) 40%, transparent), transparent 62%);
+  animation: ovAuroraB 32s ease-in-out infinite alternate;
+}
+@keyframes ovAuroraA {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(6vw, 4vh, 0) scale(1.14); }
+}
+@keyframes ovAuroraB {
+  from { transform: translate3d(0, 0, 0) scale(1.08); }
+  to { transform: translate3d(-5vw, -3vh, 0) scale(1); }
+}
+
+/* 等距网格：两组 60° 斜线，四周用遮罩淡出（不做成"贴满屏幕的方格纸"）。 */
+.isoGrid {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1150px;
+  opacity: 0.66;
+  background-image:
+    repeating-linear-gradient(60deg, rgba(120, 200, 255, 0.07) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(-60deg, rgba(190, 130, 255, 0.07) 0 1px, transparent 1px 46px);
+  mask-image: radial-gradient(ellipse 84% 66% at 50% 24%, #000 14%, transparent 86%);
+}
+
+/* 粒子画布：尺寸由 JS 按元素盒子写死（`width/height` 属性），这里只管铺满。 */
+.particles {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 940px;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── ② 指标条：等距 3D 霓虹牌 ─────────────────────────────── */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--nm-r-lg);
+  /* 玻璃底：半透明 + 模糊 + 发丝高光边 + 柔和外投影 */
+  background: linear-gradient(150deg, rgba(24, 40, 76, 0.74), rgba(12, 19, 42, 0.64));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 16%, transparent);
+  box-shadow:
+    0 24px 48px -28px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 32px -18px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  overflow: hidden;
+}
+.heroStats {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 2px;
+  padding: 8px 6px 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 一张牌 ＝ 定位壳（.plate）+ 光池 + 板面 + 厚度 + 内容。
+   板面与厚度都是 `clip-path` 切出来的六边形：不动布局，也就不参与留白审计的那套几何。 */
+.plate {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 146px;
+  width: 100%;
+  max-width: 100%;
+  max-height: 176px;
+  /* 左右 20px 是为了躲开六边形的上下斜边（顶带里左边界最多内缩 18%W）：
+     12px 的旧内边距会让图标左上角压在斜边上（2026-09-27 真机截图抓到的），
+     而 18px 会撞 theme-geometry 的奇数间距闸门（5/7/9/18px 新文件零容忍）。 */
+  padding: 16px 20px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease;
+  /* 外发光只能靠 drop-shadow：板面是 clip-path 切的，box-shadow 会被一起裁掉 */
+  filter: drop-shadow(0 8px 16px rgba(70, 180, 255, 0.22));
+}
+.plate:hover { transform: translateY(-3px); filter: brightness(1.14) drop-shadow(0 10px 20px rgba(110, 200, 255, 0.34)); }
+.plate:active { transform: translateY(-1px); }
+.plate:focus-visible { outline: 2px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent); outline-offset: 2px; border-radius: var(--nm-r-md); }
+
+/* 光池：牌底下一团被压扁的彩色辉光（"悬浮"感的来源）。 */
+.plateGlow {
+  position: absolute;
+  left: 11%;
+  right: 11%;
+  bottom: 0;
+  height: 34px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--nm-cyan) 55%, transparent), transparent 70%);
+  filter: blur(12px);
+  opacity: 0.95;
+  transition: opacity 0.18s ease;
+}
+.plate:hover .plateGlow { opacity: 0.95; }
+.plate[data-tone='purple'] .plateGlow { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--nm-purple) 58%, transparent), transparent 70%); }
+.plate[data-tone='blue'] .plateGlow { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--nm-info) 55%, transparent), transparent 70%); }
+.plate[data-tone='green'] .plateGlow { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--nm-success) 55%, transparent), transparent 70%); }
+
+/* 厚度：把板面往下错开 4px 的同一形状，暗一档 —— 等距的"侧面"。 */
+.plateDepth {
+  position: absolute;
+  inset: 12px 6px 6px;
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
+  transform: translateY(6px);
+  background: linear-gradient(160deg, rgba(8, 14, 30, 0.95), rgba(4, 8, 18, 0.95));
+  opacity: 0.9;
+}
+/* 板面：一层渐变当"边"，内嵌 1.4px 的玻璃面 —— `clip-path` 下没法用 border，只能这么叠。 */
+.plateFace {
+  position: absolute;
+  inset: 12px 6px 6px;
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--nm-cyan) 96%, transparent), color-mix(in srgb, var(--nm-purple) 92%, transparent) 60%, color-mix(in srgb, var(--nm-purple) 62%, transparent));
+}
+.plateFace::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  clip-path: polygon(18% 0, 82% 0, 100% 20%, 100% 80%, 82% 100%, 18% 100%, 0 80%, 0 20%);
+  background:
+    radial-gradient(130% 78% at 16% 4%, rgba(255, 255, 255, 0.18), transparent 56%),
+    linear-gradient(158deg, color-mix(in srgb, var(--nm-cyan) 30%, transparent), color-mix(in srgb, var(--nm-purple) 34%, transparent) 58%, transparent),
+    linear-gradient(160deg, rgba(20, 34, 66, 0.86), rgba(10, 16, 36, 0.9) 58%, rgba(20, 14, 48, 0.88));
+}
+.plate[data-tone='purple'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-purple) 85%, transparent), color-mix(in srgb, var(--nm-cyan) 70%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 40%, transparent)); }
+.plate[data-tone='blue'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-info) 85%, transparent), color-mix(in srgb, var(--nm-purple) 68%, transparent) 62%, color-mix(in srgb, var(--nm-purple) 38%, transparent)); }
+.plate[data-tone='green'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-success) 85%, transparent), color-mix(in srgb, var(--nm-cyan) 68%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 38%, transparent)); }
+
+/* 牌面内容：竖排（图标 → 数字 → 标签），字号跟设计稿的层级走。 */
+.plateBody {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  width: 100%;
+}
+.plateIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  border-radius: var(--nm-r-sm);
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
+  box-shadow: 0 0 12px -4px color-mix(in srgb, var(--nm-cyan) 70%, transparent);
+}
+.plate[data-tone='purple'] .plateIcon { color: var(--nm-purple-text, var(--nm-purple)); background: color-mix(in srgb, var(--nm-purple) 16%, transparent); border-color: color-mix(in srgb, var(--nm-purple) 32%, transparent); box-shadow: 0 0 12px -4px color-mix(in srgb, var(--nm-purple) 75%, transparent); }
+.plate[data-tone='blue'] .plateIcon { color: var(--nm-info-text, var(--nm-info)); background: color-mix(in srgb, var(--nm-info) 16%, transparent); border-color: color-mix(in srgb, var(--nm-info) 32%, transparent); box-shadow: 0 0 12px -4px color-mix(in srgb, var(--nm-info) 75%, transparent); }
+.plate[data-tone='green'] .plateIcon { color: var(--nm-success-text, var(--nm-success)); background: color-mix(in srgb, var(--nm-success) 16%, transparent); border-color: color-mix(in srgb, var(--nm-success) 32%, transparent); box-shadow: 0 0 12px -4px color-mix(in srgb, var(--nm-success) 75%, transparent); }
+
+.plateValue {
+  font-family: var(--nm-font-mono, monospace);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 渐变文字：`-webkit-text-fill-color` 在 Chromium 里稳；万一不支持，`color` 仍兜底。 */
+  color: #eaf6ff;
+  background: linear-gradient(96deg, #d8f4ff 0%, #8ad8ff 38%, #d59bff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.plate[data-tone='purple'] .plateValue { background: linear-gradient(96deg, #f0dcff 0%, #c79dff 45%, #7fd6ff 100%); -webkit-background-clip: text; background-clip: text; }
+.plateLabel {
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plateSub { font-style: normal; opacity: 0.72; }
+
+/* 收发构成条：接在牌面下方的一条细玻璃带（保住原有信息，不占额外高度）。 */
+.mixBar.mixBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 5%, transparent), transparent 42%);
+  font-size: 12px;
+  min-width: 0;
+}
+.mixIcon { font-size: 14px; line-height: 1; }
+.mixTitle { color: var(--nm-text-1); }
+.mixTitle b { color: var(--nm-cyan); font-family: var(--nm-font-mono, monospace); }
+.mixSub { margin-left: auto; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── ③ 卡片：玻璃拟态 ─────────────────────────────────────── */
+
+.card.card {
+  /* 覆盖 `.ovCard` 的实心底：半透明 + 模糊 + 发丝边 + 双层投影，并在顶部压一条霓虹线。 */
+  background: linear-gradient(158deg, rgba(30, 47, 88, 0.6), rgba(13, 20, 42, 0.55));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 13%, transparent);
+  box-shadow:
+    0 20px 44px -30px rgba(0, 0, 0, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px) saturate(1.1);
+  position: relative;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nm-cyan) 55%, transparent) 22%, color-mix(in srgb, var(--nm-purple) 55%, transparent) 78%, transparent);
+  opacity: 1;
+}
+.cardHd.cardHd { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
+
+/* 「折叠 —」：设计稿每张卡右上角那一枚。
+   它排在 `action`（「详情 →」）之后，字号更小、颜色更淡 —— 视觉上不跟"详情"抢。 */
+.cardToggle {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 18%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
+  color: var(--nm-text-2);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.cardToggle:hover {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.cardToggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent); outline-offset: 2px; }
+
+/* 折起来的卡片：只留卡头，卡头下沿那条分隔线也就没必要了。
+   ⚠️ 这一条**必须自己写一遍**，而且不能用 `:global`（本仓 `overview-layout.spec.ts` 明令禁止：
+   `:global()` 只会发出裸类名 / 裸选择器，跨模块那点事只能用「本地类 + 属性或子串选择器」）：
+   `hidden` 属性靠 UA 样式表的 `display: none` 生效，
+   而 `.ovCardBd` 自己写着 `display: flex`（作者样式压过 UA 样式）—— 不显式压回去，
+   折起来的卡片会**看上去没折**（内容还在），而 DOM 上 `hidden` 是真的（判据反而全绿）。
+   本仓踩过同一族的坑：`display` 这类"UA 与作者都声明"的属性，属性选择器必须自己写一遍。 */
+.cardBd[hidden] { display: none; }
+
+/* 板面上的英文副标（设计稿里牌面写的是英文，这里保留中文主标、英文做副标） */
+.plateEn {
+  font-size: var(--nm-fs-xs, 11px);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--nm-text-3) 88%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cardIcon.cardIcon {
+  color: #d9f3ff;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--nm-cyan) 30%, transparent), color-mix(in srgb, var(--nm-purple) 28%, transparent));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  box-shadow: 0 0 14px -6px color-mix(in srgb, var(--nm-cyan) 85%, transparent);
+}
+.cardTitle.cardTitle { letter-spacing: 0.01em; }
+
+/* ── ④ 条形 / 格子 / 图表 ─────────────────────────────────── */
+
+/* 横向长条（存储构成 / 内容构成 / Top 榜）：底槽压暗、填充加亮并带尾光。 */
+.barTrack.barTrack {
+  background: color-mix(in srgb, #0a1424 78%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 9%, transparent);
+}
+.barFill.barFill {
+  background: linear-gradient(90deg, #3ad6ff 0%, #7aa8ff 46%, #d072ff 100%);
+  box-shadow: 0 0 12px -1px color-mix(in srgb, var(--nm-cyan) 65%, transparent);
+}
+/* Top 榜的长条：末端加一颗"到点"的光点（设计稿里每条末尾都有）。 */
+.topFill.topFill { background: linear-gradient(90deg, #35d2ff 0%, #8f9dff 52%, #e07bff 100%); box-shadow: 0 0 10px -1px color-mix(in srgb, var(--nm-purple) 70%, transparent); }
+
+/* 24 小时柱：等距柱体（左侧暗面 + 正面渐变），热柱更亮更亮一点。 */
+.hourFill.hourFill {
+  border-radius: var(--nm-r-sm) var(--nm-r-sm) var(--nm-r-xs) var(--nm-r-xs);
+  background: linear-gradient(180deg, #b9e9ff 0%, #4fc9ff 32%, #6f7dff 68%, #b45cff 100%);
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
+}
+.hourFill.hourFill[data-hot] {
+  background: linear-gradient(180deg, #fff2ff 0%, #ff9fe6 26%, #c069ff 62%, #6f6bff 100%);
+  box-shadow: 0 0 18px -2px color-mix(in srgb, var(--nm-purple) 85%, transparent);
+}
+
+/* 指标格：玻璃内嵌 + 悬停点亮。
+   选择器用 `> div` 而不是类名 —— 格子自己的类名在 `overview.module.css`（另一份模块，
+   哈希后无法从这边引用），而这个容器下的直接子元素就是那些格子（metric / healthItem / assetItem）。
+   改结构时这条要跟着看：判别依据是"直接子元素"，不是"某个类"。 */
+.gridCells > div {
+  background: linear-gradient(160deg, rgba(31, 47, 86, 0.6), rgba(12, 19, 40, 0.55));
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.gridCells > div:hover {
+  border-color: color-mix(in srgb, var(--nm-cyan) 34%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 20px -10px color-mix(in srgb, var(--nm-cyan) 90%, transparent);
+}
+
+/* 世界地图卡：给画布一圈外发光，让它从背景里"浮"出来。 */
+.worldMapBox.worldMapBox {
+  border-radius: var(--nm-r-md);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 14%, transparent),
+    0 0 42px -22px color-mix(in srgb, var(--nm-cyan) 95%, transparent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 浅色主题覆盖（2026-09-28 首版 / 2026-09-29 修好选择器）
+ *
+ * ## 为什么必须在这里单独写一段
+ *
+ * 本文件是这一族里**唯一整份用裸色**的皮肤（深海军蓝玻璃 + 白字 + 霓虹渐变文字），
+ * 而 `light-theme.css` 的覆盖层选择器是 `:root.theme-light`（权重 0,1,1），
+ * 打不过这里的 `.root.root` / `.hero` / `.card.card` 等**类选择器**。
+ * 后果：切到浅色主题时，这一页仍是一块深色皮肤，而里面的文字 / 边框却跟着
+ * `--nm-*` 换成了浅色主题的值 —— 深底配浅字，可读性直接失效。
+ *
+ * 这正是 UI-REDESIGN-2026-09-28（已删除，原文见 git 历史）记的 V1 / V4 / V6（三套视觉语言并行、
+ * 裸色集中在少数文件）在总览页上的具体表现。
+ *
+ * ## ⚠️ 选择器必须写成 `:root[class~='theme-light']`，不能写 `:root.theme-light`
+ *
+ * 本文件是 **CSS Modules**：裸写的 `theme-light` 会被当成**本地类名**一并哈希 ——
+ * 构建产物里变成 `:root._theme-light_18lio_395 ._card_18lio_272…`，
+ * 而 `<html>` 上的类名是原样的 `theme-light` ⇒ 选择器**永不匹配**，
+ * **整段覆盖全是死规则**。2026-09-29 的报障就是这样来的：
+ * 「浅色模式下数据总览界面的背景颜色不对」—— 卡片 / 指标条 / 牌面在浅色下仍是深海军蓝。
+ *
+ * 这里用**属性子串/词匹配选择器**而不是 `:global(.theme-light)`：后者在本目录已被
+ * `overview-layout.spec.ts` 明令禁止（`:global(.局部类名)` 只会发出裸类名，
+ * 用来跨模块覆盖别人的哈希类名永远匹配不到）—— `theme-light` 虽然是真全局类，
+ * 但同一个总览家族里已有属性选择器这套写法（`[class*='stage']` 等），保持一致。
+ * 属性选择器的**字符串值不参与 CSS Modules 哈希**，所以能命中 `<html class="theme-light">`；
+ * 权重 (0,1,0)+(0,1,0)+(0,2,0) = (0,4,0)，照样压过原声明。
+ * 常驻判据：`light-theme-coverage.wiring.spec.ts` 第 6/8 条（含反例自证）。
+ *
+ * ## 口径
+ *
+ * 保留「等距立体牌 + 渐变数字」这套**形态**（那是本皮肤的身份），只把底与字换掉：
+ *   · 深海军蓝玻璃 → 白色 / 浅石板玻璃；外投影由纯黑改为中性蓝灰（浅底上纯黑很脏）；
+ *   · 发丝高光 `rgba(255,255,255,α)` → 更实的白（浅底上白描边本来就不显眼，不改成深色以免变"边框"）；
+ *   · 霓虹渐变文字（浅青 / 浅紫）→ 深青 / 深紫，保证浅底可读。
+ * ══════════════════════════════════════════════════════════════════════ */
+:root[class~='theme-light'] .root.root {
+  background:
+    radial-gradient(ellipse 90% 42% at 50% -6%, color-mix(in srgb, var(--nm-cyan) 10%, transparent), transparent 68%),
+    radial-gradient(ellipse 70% 40% at 8% 12%, color-mix(in srgb, var(--nm-purple) 8%, transparent), transparent 70%),
+    linear-gradient(180deg, #eef2f7 0%, #e9eef6 45%, #e6ecf5 100%);
+}
+
+/* 等距网格：深底上是"发光刻线"，浅底上改用淡青/淡紫刻线，层次感等价。 */
+:root[class~='theme-light'] .isoGrid {
+  background:
+    repeating-linear-gradient(60deg, rgba(8, 145, 178, 0.10) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(-60deg, rgba(124, 58, 237, 0.09) 0 1px, transparent 1px 46px);
+}
+
+/* 指标条外壳：深玻璃 → 白玻璃。 */
+:root[class~='theme-light'] .hero {
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 250, 0.86));
+  box-shadow:
+    0 24px 48px -30px rgba(15, 23, 42, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 0 32px -20px color-mix(in srgb, var(--nm-cyan) 55%, transparent);
+}
+
+/* 牌面 / 高光层 / 投影 */
+:root[class~='theme-light'] .plateFace { background: linear-gradient(160deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 252, 0.98)); }
+/**
+ * 牌面内嵌的"玻璃面"（`.plateFace::after`）**必须单独覆盖**。
+ *
+ * 深色端它是一层深玻璃（`linear-gradient(160deg, rgba(20,34,66,.86), …)`），
+ * 而 `.plateFace` 自己的白底被它**整个盖住** —— 只改 `.plateFace` 不改 `::after`，
+ * 浅色下这排牌子依然是一块深海军蓝（2026-09-29 报障的第二层原因；
+ * 只量 `.plateFace` 的 computed style 会以为"已经跟主题走了"）。
+ */
+:root[class~='theme-light'] .plateFace::after {
+  background:
+    radial-gradient(140% 80% at 16% 4%, rgba(255, 255, 255, 0.95), transparent 58%),
+    linear-gradient(158deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 12%, transparent) 58%, transparent),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(246, 249, 253, 0.94) 58%, rgba(244, 240, 253, 0.94));
+}
+/* 牌面色调：深色端是饱和色玻璃，浅色端换成同色系的**淡**玻璃（保住"每个指标一个色"的识别度）。 */
+:root[class~='theme-light'] .plate[data-tone='purple'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-purple) 22%, transparent), color-mix(in srgb, var(--nm-cyan) 12%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 6%, transparent)); }
+:root[class~='theme-light'] .plate[data-tone='blue'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-info) 22%, transparent), color-mix(in srgb, var(--nm-purple) 12%, transparent) 62%, color-mix(in srgb, var(--nm-purple) 6%, transparent)); }
+:root[class~='theme-light'] .plate[data-tone='green'] .plateFace { background: linear-gradient(160deg, color-mix(in srgb, var(--nm-success) 22%, transparent), color-mix(in srgb, var(--nm-cyan) 12%, transparent) 62%, color-mix(in srgb, var(--nm-cyan) 6%, transparent)); }
+:root[class~='theme-light'] .plateDepth {
+  background:
+    radial-gradient(130% 78% at 16% 4%, rgba(255, 255, 255, 0.95), transparent 58%),
+    linear-gradient(160deg, rgba(236, 242, 250, 0.96), rgba(255, 255, 255, 0.94) 58%, rgba(238, 233, 250, 0.94));
+}
+:root[class~='theme-light'] .plate { filter: drop-shadow(0 8px 16px rgba(37, 99, 235, 0.16)); }
+:root[class~='theme-light'] .plate:hover { filter: brightness(1.03) drop-shadow(0 10px 20px rgba(37, 99, 235, 0.24)); }
+
+/* 霓虹渐变数字：保留渐变形态，两端压暗到浅底可读。
+ *
+ * ⚠️ `background-clip: text` **必须跟着一起重写**：`background` 是简写，
+ * 它会把所有 background 子属性重置为初始值 —— 包括 `background-clip: border-box`。
+ * 于是渐变铺满整个盒子，而 `-webkit-text-fill-color: transparent` 仍从深色规则生效
+ * ⇒ **数字彻底看不见，只剩一条渐变条**（2026-09-29 报障的第一层原因）。
+ * （深色规则里那两行 `-webkit-background-clip/background-clip: text` 是被这条简写顶掉的，
+ * 不是"没写"。） */
+:root[class~='theme-light'] .plateValue {
+  color: #0f2a44;
+  background: linear-gradient(96deg, #075985 0%, #0e7490 38%, #6d28d9 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+:root[class~='theme-light'] .plate[data-tone='purple'] .plateValue {
+  background: linear-gradient(96deg, #6d28d9 0%, #7c3aed 45%, #0e7490 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 玻璃卡片 / 条形槽 / 格子 / 热力柱：同一族的"深玻璃 → 白玻璃"。 */
+:root[class~='theme-light'] .card.card {
+  background: linear-gradient(158deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 252, 0.84));
+  box-shadow:
+    0 20px 44px -32px rgba(15, 23, 42, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[class~='theme-light'] .barTrack.barTrack { background: color-mix(in srgb, #e2e8f0 92%, transparent); }
+:root[class~='theme-light'] .gridCells > div {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.9), rgba(240, 245, 251, 0.84));
+}
+:root[class~='theme-light'] .gridCells > div:hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9); }
+:root[class~='theme-light'] .hourFill.hourFill {
+  background: linear-gradient(180deg, #0e7490 0%, #2563eb 45%, #6d28d9 100%);
+}
+
+/* ── ⑤ 降级 ───────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .auroraCyan,
+  .auroraMagenta { animation: none; }
+  .plate,
+  .plateGlow { transition: none; }
+  .gridCells > div { transition: none; }
+  .gridCells > div:hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+  .plate:hover { transform: none; }
+}
+
+/* 紧档（≤1100px）：牌面从 8 列变 4 列，形状与内容不变。 */
+@media (max-width: 1100px) {
+  .heroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .plateValue { font-size: 18px; }
+  .mixSub { display: none; }
+}
+
+/* ── 手机档（≤560）：牌面再收一档到两列 ────────────────────────────────
+   四列时每格约 80px，真实数据里「2,359」「11.97 GB」这类值会被裁掉
+   （2026-10-14 真数据实测：plateValue 的 scrollWidth > clientWidth）。
+   两列后每格约 170px，值与副标都放得下。必须写在 ≤1100 那一档**后面**
+   （同特异性、后写者赢），否则会被它盖回四列。 */
+@media (max-width: 560px) {
+  .heroStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

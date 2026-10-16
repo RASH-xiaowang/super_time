@@ -42,7 +42,7 @@
 | 运行时依赖 | `cordis`、`cosmokit`、`dsh-typert-protocol`、`dsh-native-command`、`dsh-home-paths`、`dsh-invariants`、`dsh-llm`、`dsh-brand`、`dsh-timeout`、`dsh-util-crypto`、`dsh-util-values`、`schemastery`、`@standard-schema/spec`、`fzstd`、`koffi`、`@koromix/koffi-win32-x64`、`zod` | `src/backend/deps/**` |
 
 后端对外提供的方法清单**以自动生成的 [`docs/API.md`](../../docs/API.md) 为准**：它由
-`npm run docs:api` 从 `src/backend/wechat-data/src/gateway.ts` 的 `@Remote` 装饰器生成，
+`npm run docs:api` 从 `src/backend/wechat-data/src/gateway*.ts` 的 `@Remote` 装饰器生成，
 `npm run docs:api:check`（CI 一步）守着「文档与源码一致」；运行时可用 `wechat:list-methods`
 取当前实际注册的方法。文档里**不再写死方法数量** —— 历史上这里写过的数字已多次漂移。
 
@@ -50,7 +50,14 @@
 
 1. **依赖不依赖 pnpm workspace**：上游的 `@deepseek-ai/*` peer 依赖被按原样「vendor」
    到 `src/backend/deps/`，并通过 `package.json` 的 `file:` 依赖在 `npm install` 时
-   安装到 `node_modules`。
+   安装到 `node_modules`。**每一份是谁的哪一版**记在
+   [`deps/PROVENANCE.json`](deps/PROVENANCE.json)（版本 + 整棵目录的内容 sha256 + 文件数 +
+   人手维护的 `upstream`/`upstreamCommit`/`importedAt`/`note`）：
+   `npm run check:deps-provenance` 复算比对（CI 里由 `npm test` 的
+   `deps-provenance.spec.ts` 同一份逻辑守住），`--write`（`npm run deps-provenance:write`）
+   刷新、`--import <包名> <上游目录>`（`npm run deps-provenance:import -- ...`）拷入上游新份。
+   vendor 的包 `src/*.ts` 与 `lib/*.js` 并存，**运行期加载的是 `lib/`** —— 只改 `src/` 不报错
+   也不生效，这道表就是把那种静默漂移变成可复算的事实（`in-repo` 的两个包不指纹，见文件头注释）。
 2. **Cordis Context 最小化**：新增 `src/backend/wechat-host.js`，实现
    `reflect.provide` / `effect` / `emit` / `settings` / `llm` 等网关
    `WechatDataGateway` 实际使用到的 Context 面；不加载完整 Cordis 插件系统。
@@ -73,7 +80,9 @@
    `generateDailySummary` 输出降级统计文本。
 5. **路径配置中心**：所有路径配置统一记录在 `<userData>/wechat/config.json`
    （`src/backend/wechat-paths.js` 管理与映射），启动时自动应用并回写实际解析路径，
-   详见 [wechat/README.md](../../wechat/README.md)。写入入口是界面里的**「数据配置」**面板
+   详见 [wechat/README.md](../../wechat/README.md)。LLM 当前配置与 profile 集合在
+   `src/backend/llm-config-store.js`；JSON 原子写与损坏备份在
+   `src/backend/atomic-json.js`。写入入口是界面里的**「数据配置」**面板
    （以及「语音转写」那一节的模型目录 / 引擎路径）；**没有**对应的 npm 脚本 ——
    最早版本文档里写的 `config:wechat`（`show|set|reset`）在当前 `package.json` 里不存在。
 6. **Electron IPC**：`main.js` 在 `app.whenReady` 后创建后端，注册
@@ -88,7 +97,11 @@
 
 ```
 src/backend/
-├── wechat-host.js          # Electron 主进程适配层（Context + LLM 桥 + IPC 调用封装）
+├── wechat-host.js          # Electron 主进程适配层（Context + IPC 调用封装）
+├── wechat-paths.js         # 安装/状态路径 + config.json 微信设置镜像
+├── llm-config-store.js     # LLM 当前配置与 profile 集合
+├── atomic-json.js          # 宿主 JSON 原子写 / 损坏备份
+├── llm-bridge.js           # LLM 桥（配置解析 + chat/embed/rerank 出网）
 ├── deps/                   # vendor 的上游运行时依赖（file: 依赖）
 ├── resources/              # 迁移资源（区域码表 + wx_silk.exe，供 bundle 运行时查找）
 └── wechat-data/
@@ -120,13 +133,18 @@ npm test               # 后端包 + 宿主层 + 前端纯逻辑的全部单测�
 
 ## 许可证与签发私钥（L12）
 
-- **签发私钥 `vendor-keys/license-private.pem` 只应存在于「签发机」**：物理隔离到一台专门的
-  机器上，那台机器上有一份仓库检出、`vendor-keys/` 只在那里生成与保存。它已被 `.gitignore`
-  忽略、也不在 `package.json` 的 `files` 白名单与 `asarUnpack` 里（实测 asar 条目里
-  `vendor-keys` 命中数为 0），所以它既不会入库也不会随包分发。
+- **签发私钥不住在仓库里**（P3-10，2026-09-27）：默认位置是**用户目录**下的
+  `~/.supertime/license-private.pem`，要放别处用 `SUPERTIME_LICENSE_PRIVATE_KEY` 或 `--key <path>` 显式指路。
+  位置解析只有一处（`scripts/license-key-path.js`），**指向仓库内的路径一律拒、不给"退回工作树那一份"的退路**。
+  为什么不止步于 gitignore：`vendor-keys/` 一直被忽略、也不在 `build.files`/`asarUnpack` 里，
+  「不入库不随包分发」这层是关着的；但私钥躺在仓库目录里时，`git add -f` 一次、把工作树整个备份走
+  （网盘 / 移动盘 / CI 缓存归档）或直接把目录发给别人，签名能力就跟着出去了 —— 拿着它能给任意设备签发许可证。
+  现在这件事有机检：`src/backend/tests/license-key-location.spec.ts`（规则、三个消费者、
+  以及"工作树里不存在任何私钥 pem"，各带反例自证）。
 - **开发机不需要它**。依赖它的只有签发侧工具：`npm run license-keygen`（生成密钥对）、
   `npm run license-issue`（用私钥签许可证）、`npm run license-studio`（签发 GUI）——
-  它们都从工作树的 `vendor-keys/` 读私钥，因此只能在签发机上跑。
+  它们都经 `scripts/license-key-path.js` 读仓库外的私钥，因此只能在**存着私钥的那台机器**上跑
+  （签发机；换机先备份私钥）。公钥 `vendor-keys/license-public.pem` 仍留在仓库侧，公钥不是秘密。
   **没有任何 CI 步骤与冒烟脚本依赖它**（`check:backend-restart` 曾读它，已改为不需要许可证；
   `src/backend/tests/ci-script-isolation.spec.ts` 守着这条不变量）。
 - 仓库里只带**公钥**（`src/license/public-key.js`，随包分发，用于本地验签），

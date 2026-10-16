@@ -130,8 +130,19 @@ export async function apiGetSearchIndexStatus(): Promise<SearchIndexStatus> {
  * @param options - Query options: force rebuild even when up to date.
  * @returns SearchBuildResult.
  */
-export async function apiBuildSearchIndex(options?: { force?: boolean }): Promise<SearchBuildResult> {
+export async function apiBuildSearchIndex(options?: { force?: boolean; jobId?: string }): Promise<SearchBuildResult> {
   return unwrap(await remote().buildSearchIndex(options))
+}
+/**
+ * Stop a search index build that is still running (W3-11.5).
+ *
+ * Cancelling only takes effect at shard boundaries (and at each internal yield); the build
+ * rolls back, so the previous index stays exactly as it was — not "half a new index".
+ * @param options - jobId, the same identifier that build was started with.
+ * @returns ok, plus why it did not stop anything (already finished / unknown id).
+ */
+export async function apiCancelSearchIndexBuild(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelSearchIndexBuild(options))
 }
 /**
  * Search messages by query text.
@@ -151,6 +162,16 @@ export async function apiSearchMessages(options: { query: string; limit?: number
  */
 export async function apiCancelSearch(options: { jobId: string }): Promise<{ ok: boolean }> {
   return unwrap(await remote().cancelSearch(options))
+}
+/**
+ * 取消一轮正在生成的问答（W3-6.1）。与 `apiCancelSearch` 同一条接缝：渲染层持有 jobId
+ * （就是那轮的 streamId），后端按它找 AbortController。
+ * @param options - jobId：要取消的轮次标识。
+ * @returns ok=false 时带 message（通常是那一轮已经结束了，无需取消）—— 原样抛给调用方，
+ *   由它决定要不要说给用户听（use-ask 选择不说：空取消不是故障）。
+ */
+export async function apiCancelAsk(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelAsk(options))
 }
 /**
  * Run the unified local search across several data domains.
@@ -184,11 +205,13 @@ export async function apiAskWechat(options: {
   /** 流式标识：带上它，后端会在生成过程中推送 wechat-ask/delta 增量事件
    *  （渲染端监听 dsh-wechat-ask-delta）。不传则退化为一次性返回。 */
   streamId?: string
-  /** 入口来源（'ask'/'session'）与会话显示名：写进问答历史，供列表区分与直显。 */
+  /** 入口来源（'ask' / 'session' / 'auto'，后者 = ClawBot 自动回复）与会话显示名：写进问答历史，供列表区分与直显。 */
   source?: string
   usernameName?: string
   /** 当前知识库 id（见 Remote 接口上的说明）：知识库文件块参与本轮检索。 */
   kbId?: number
+  /** 取消标识（W3-6.1）：与 streamId 同值。带上它，「停止生成」才有地方使力。 */
+  jobId?: string
 }): Promise<AskResult> {
   return unwrap(await remote().askWechat(options))
 }

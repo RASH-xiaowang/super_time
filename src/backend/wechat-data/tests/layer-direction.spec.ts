@@ -13,7 +13,8 @@
  *
  * 守得住什么、守不住什么（如实标注）：
  *   · 守得住：任何 `keys/**` → `query/**` 的静态依赖（含 `export ... from` 与动态 import 字面量）、
- *     `config/**` 反向依赖上层、跨层「向上」依赖、以及扫描集合失效；
+ *     `config/**` 反向依赖上层、跨层「向上」依赖、`base/**` 依赖它之上的任何层、
+ *     以及扫描集合失效；
  *   · **守不住**：运行期拼出来的路径（`import(name)`）、`createRequire` 间接加载、
  *     以及通过 tsconfig `paths` 别名绕开相对路径的写法（本包没有别名，故未处理）。
  * @vitest-environment node
@@ -28,27 +29,42 @@ import { describe, expect, it } from 'vitest'
 /** 后端插件源码根：扫描对象与判据都以它为基准。 */
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
-/** 分层：`config` 最底，`keys` 次之，`query` 最高；其余顶层文件是装配/宿主胶水。 */
-type Layer = 'config' | 'keys' | 'query' | 'glue'
+/**
+ * 分层：`base` 是最底的基础工具层，`config` 次之，`keys` 再次，`query` 最高；
+ * 其余顶层文件是装配/宿主胶水。
+ */
+type Layer = 'base' | 'config' | 'keys' | 'query' | 'glue'
+
+/**
+ * 顶层「基础工具」文件：路径解析、打包路径、格式化、SQLite 连接策略。
+ *
+ * 它们原来只是被写进两份白名单（`dirs.ts`/`asar-path.ts`），理由是注释里那句「都不 import 包内
+ * 任何模块」—— 可是**那个属性没有任何用例守着**，所以把新文件加进白名单就等于悄悄开了个洞。
+ * 现在它们自成一层的下界；base 内部可以有少量工具依赖（例如 `dirs.ts` → `sqlite-connection.ts`），
+ * 但下面那条硬守「base 不得依赖 base 之上的任何层」：
+ * 往 `BASE_LEAVES` 里加一个反向依赖上层的文件，红的是那条用例，而不是方向守卫失明。
+ */
+const BASE_LEAVES = new Set(['dirs.ts', 'asar-path.ts', 'format.ts', 'md5.ts', 'sqlite-connection.ts'])
 
 /**
  * 只允许这些「层 → 层」的依赖方向（同层内部依赖天然允许）。
- * `glue`（gateway/index/types/dirs…）是插件装配层，可以引用任何层，所以对它不设上界。
+ * `glue`（gateway/index/types…）是插件装配层，可以引用任何层，所以对它不设上界。
  */
 const ALLOWED: Record<Layer, readonly Layer[]> = {
-  config: [],
-  keys: ['config'],
-  query: ['config', 'keys'],
-  glue: ['config', 'keys', 'query', 'glue'],
+  base: [],
+  config: ['base'],
+  keys: ['config', 'base'],
+  query: ['config', 'keys', 'base'],
+  glue: ['base', 'config', 'keys', 'query', 'glue'],
 }
 
 /**
- * `keys/**` 允许引用的胶水层叶子模块。
+ * `keys/**` 允许引用的胶水层文件。
  *
- * 为什么只放这几个：`dirs.ts`（数据根解析）与 `asar-path.ts`（打包路径）都不 import 包内任何
- * 模块，是真正的叶子；把它们列成白名单，比「keys 可以随便引用 glue」更能守住方向。
+ * 空集：曾经放行的是 `dirs.ts`/`asar-path.ts`，它们现在是 `base` 层（受硬判据约束），
+ * 于是「keys 不能碰胶水层」这条不再有例外。新增例外=红，先想清楚方向再改这里。
  */
-const KEYS_GLUE_ALLOW = new Set(['dirs.ts', 'asar-path.ts'])
+const KEYS_GLUE_ALLOW = new Set<string>([])
 
 /**
  * `query/**` 允许引用的胶水层文件。
@@ -56,8 +72,11 @@ const KEYS_GLUE_ALLOW = new Set(['dirs.ts', 'asar-path.ts'])
  * `types.ts` 不当作叶子：它反过来 `export type ... from './query/contacts.ts'`，是**有意**的类型
  * 聚合再导出（query → types.ts → query 这条纯类型环 M24 之前就存在，也不在本次范围内）。这里
  * 如实放行，而不是假装它不存在 —— 守卫只承诺「不会退回 keys ↔ query 的双向依赖」。
+ *
+ * `net/fetch-retry.ts` 是网络重试原语（**唯一实现源**）：query 的出网点与宿主层都引用它，
+ * 但模块本身不 import 包内任何东西，因此不会把上层依赖反向带进 query。
  */
-const QUERY_GLUE_ALLOW = new Set(['dirs.ts', 'asar-path.ts', 'types.ts'])
+const QUERY_GLUE_ALLOW = new Set(['types.ts', 'net/fetch-retry.ts'])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {
@@ -82,6 +101,7 @@ function listTs(dir: string, base = dir): string[] {
 
 /** 由源码相对路径判断所属层。 */
 function layerOf(rel: string): Layer {
+  if (!rel.includes('/')) return BASE_LEAVES.has(rel) ? 'base' : 'glue'
   const head = rel.split('/')[0]
   return head === 'config' || head === 'keys' || head === 'query' ? head : 'glue'
 }
@@ -156,6 +176,11 @@ describe('M24 · 分层依赖方向', () => {
     expect(byLayer('config').length).toBeGreaterThanOrEqual(4)
     expect(byLayer('keys').length).toBeGreaterThanOrEqual(10)
     expect(byLayer('query').length).toBeGreaterThanOrEqual(80)
+    // base 层的两条防空转：登记的叶子必须都还在（搬走就要来改这里），且真的有人依赖它
+    expect([...byLayer('base')].sort(), 'base 层登记的叶子与实到文件不一致 ⇒ 有文件搬走/改名了，这份层要跟着改')
+      .toEqual([...BASE_LEAVES].sort())
+    expect(show(EDGES.filter((e) => e.toLayer === 'base')).length, '没有任何边指向 base ⇒ 放行它是空转')
+      .toBeGreaterThan(0)
     // 非空转的关键一条：如果 keys 一条 config 依赖都没有，下面的规则就成了「恒真」。
     expect(show(EDGES.filter((e) => e.fromLayer === 'keys' && e.toLayer === 'config')).length)
       .toBeGreaterThanOrEqual(1)
@@ -185,6 +210,13 @@ describe('M24 · 分层依赖方向', () => {
   it('config/** 是真正的底层：不依赖 keys/query/胶水层', () => {
     const bad = EDGES.filter((e) => e.fromLayer === 'config' && (e.toLayer === 'keys' || e.toLayer === 'query' || e.toLayer === 'glue'))
     expect(show(bad), '共享配置层被上层反向依赖后，双向依赖会立刻回来').toEqual([])
+  })
+
+  it('base 层是硬下界：基础工具不得依赖 base 之上的任何层', () => {
+    // 「白名单只放真正的叶子」这句话此前只写在注释里，没有用例守 —— 于是往白名单加一个
+    // 反向依赖上层的文件，方向守卫不会有任何反应。现在它是一层，加了就必须兑现。
+    const bad = EDGES.filter((e) => e.fromLayer === 'base' && e.toLayer !== 'base')
+    expect(show(bad), 'base 层依赖了上层，等于给方向守卫开洞').toEqual([])
   })
 
   it('全图只允许向下：跨层边要么是 ALLOWED，要么落在胶水层白名单里', () => {

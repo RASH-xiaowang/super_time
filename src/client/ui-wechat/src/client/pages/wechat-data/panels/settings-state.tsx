@@ -9,14 +9,18 @@
  * 为什么用钩子而不是「状态容器组件」：这些状态要跨「左导航 / 各卡片 / 底部保存条」共享，
  * 拆组件就得把几十个状态提成道具；钩子只是换个文件放，状态仍然只有一份。
 */
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDiagLogInfo, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiCancelWhisperDownload, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiCopyDiagLogPath, apiDiagLogInfo, apiPreviewDiagLog, apiDownloadWhisperModel, apiExportDiagLog, apiGenerateKeysFile, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWechatPathConfig, apiGetWhisperStatus, apiInstallWhisperEngine, apiRevealDiagLog, apiSaveWechatConfig, apiFetchOriginalImagesBatch, apiPlanOriginalFetch, apiTranscribeVoiceBatch, apiUpgradeDecodedImages, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { forgetAllImages } from '../image-cache.ts'
 import { fmtBytes } from '../utils/format.ts'
 import { useTransientNotice } from './hooks.tsx'
 import { PollRegistry, createPollRegistry } from './poll-registry.ts'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
+import { ImageUpgradeResult, OriginalBatchResult, OriginalFetchPlan, WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+/** SSR 下退化成 useEffect，客户端仍保留首帧落位的 layout 时序。 */
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 /** 面板的入参（与 SettingsPanelProps 同形，这里单列以免与面板互相 import）。 */
 export interface SettingsStateOptions {
@@ -28,6 +32,168 @@ export interface SettingsStateOptions {
 // M21：面板与状态钩子共用的「短时缓存」（同样的查询不该在两侧各打一次）。
 let detectCache: { at: number; accounts: readonly WechatAccount[]; info: { version?: string; install_dir?: string }; total: number } | null = null
 let whisperStatusCache: { at: number; status: WhisperStatus } | null = null
+
+/** 下载进度的形状（`whisperDownloading` 的值类型，模块级复用三处）。 */
+type WhisperProgress = { model: string; file: string; received: number; total: number }
+
+/**
+ * 每 500ms 拉一次后端状态，把下载进度同步到面板（W3-5.5）。
+ *
+ * 为什么模块级：模型与引擎两路的轮询代码一字不差，抽出来才有一处可改的地方；
+ * 也让 hook 的行数预算不被这段与状态无关的样板吃掉。
+ * @param set - `setWhisperDownloading`。
+ * @returns 停掉轮询的函数（调用方在 finally 里调）。
+ */
+/**
+ * 「远程访问（手机）」这一节的导航条目。
+ *
+ * 放在**模块级**而不是 `useSettingsState` 里面：那个 hook 已经在函数行数棘轮上
+ * （只许变小），而这一条是纯静态数据（图标是常量 SVG、文案不依赖任何状态），
+ * 没有理由占 hook 的行数。
+ *
+ * 排在「数据边界与出网」之后：两者是同一类问题（我的数据会不会被这台机器之外的东西读到），
+ * 只是方向相反 —— 前者管**出站**，这一节管**入站**。
+ */
+const NAV_REMOTE = {
+  key: 'remote' as const,
+  group: '智能与隐私',
+  label: '远程访问（手机）',
+  icon: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M11 18.5h2" />
+    </svg>
+  ),
+  value: '局域网链接 · 令牌（默认关闭）',
+}
+
+type SettingsNavKey = (typeof STEPS)[number]['key']
+  | 'ai' | 'boundary' | 'remote' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
+type SettingsNavItem = { key: SettingsNavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }
+
+function createSettingsNavItems(
+  stepStates: Record<(typeof STEPS)[number]['key'], StepState>,
+  stepValueOf: (key: (typeof STEPS)[number]['key']) => string,
+): SettingsNavItem[] {
+  return [
+    ...STEPS.map((s) => ({
+      key: s.key,
+      group: '配置向导',
+      label: s.label,
+      icon: STEP_ICONS[s.key],
+      value: stepValueOf(s.key),
+      dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as SettingsNavItem['dot'],
+    })),
+    { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
+    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
+    NAV_REMOTE,
+    { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
+    { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
+    { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
+    { key: 'health', group: '维护与自检', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
+    { key: 'hook', group: '维护与自检', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
+    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
+  ]
+}
+
+function pollWhisperDownload(set: (v: WhisperProgress | null) => void, polls: () => PollRegistry): () => void {
+  return polls().start(() => {
+    void apiGetWhisperStatus()
+      .then((s) => { if (s.downloading) set({ model: s.downloading.model, file: s.downloading.file, received: s.downloading.received, total: s.downloading.total }) })
+      .catch(() => { /* 忽略单次轮询失败 */ })
+  }, 500)
+}
+
+/**
+ * 造出「停止下载」的处理器（W3-5.5）。
+ *
+ * 为什么要有这个按钮：模型 1.5–3.1 GB，点错模型就是十几分钟的等待，而这期间
+ * 用户唯一能做的就是等（或强杀进程）。已下载部分保留为 `.part`，下次续传仍有效 ——
+ * 所以取消是无损的，不应该让人不敢点。
+ * @param getJobId - 读当前下载标识（空串 = 没有下载在跑，此时点击是静默的）。
+ * @param setMsg - 面板消息槽。
+ * @returns 可直接绑到按钮上的处理器。
+ */
+function whisperDownloadCanceller(getJobId: () => string, setMsg: (m: { kind: 'ok' | 'err'; text: string } | null) => void): () => Promise<void> {
+  return async () => {
+    const jobId = getJobId()
+    if (!jobId) return
+    try {
+      const r = await apiCancelWhisperDownload({ jobId })
+      setMsg(r.ok
+        ? { kind: 'ok', text: '✓ 已请求停止（当前这一块下完就停，已下载的部分保留，下次可续传）' }
+        : { kind: 'err', text: '✗ ' + (r.message ?? '取消失败') })
+    } catch (e) {
+      setMsg({ kind: 'err', text: '✗ ' + (e as Error).message })
+    }
+  }
+}
+
+/** 取消不是失败：后端用「已取消」措辞回，界面就不该把它画成红色错误（W3-5.5）。 */
+function isCanceled(text: string | undefined): boolean {
+  return (text ?? '').includes('已取消')
+}
+/** 诊断日志预览的形状（W2-12.4）。 */
+export interface DiagPreview {
+  text: string
+  /** 整份报告的真实字符数（可能大于 `text.length`，那是截断造成的）。 */
+  chars: number
+  truncated: boolean
+  files: string[]
+}
+
+/**
+ * 诊断日志的脱敏预览 + 复制路径（W2-12.4）。
+ *
+ * 导出之前先给用户看一眼将要交付的那份文件：`redact` 只保证密钥一类被换掉，
+ * 但「有没有别的敏感内容」（聊天内容、路径、用户名）是**用户自己**才有资格判断的事。
+ *
+ * 模块级 hook：`useSettingsState` 已经八百多行，这一摊（状态 + 三个动作）
+ * 塞进去只会让它更长，而且这一摊与其它设置项没有任何耦合。
+ * @param notify - 本面板唯一的提示入口。
+ * @returns 预览内容与三个动作。
+ */
+function useDiagPreview(notify: (kind: 'ok' | 'err', text: string) => void): {
+  diagPreview: DiagPreview | null
+  previewDiagLog: () => Promise<void>
+  closeDiagPreview: () => void
+  copyDiagLogPath: () => Promise<void>
+} {
+  const [diagPreview, setDiagPreview] = useState<DiagPreview | null>(null)
+  const previewDiagLog = useCallback(async (): Promise<void> => {
+    const r = await apiPreviewDiagLog()
+    if (!r.ok) { notify('err', '读取诊断日志预览失败：' + (r.error ?? '未知原因')); return }
+    setDiagPreview({ text: r.text ?? ' ', chars: r.chars ?? 0, truncated: r.truncated === true, files: r.files ?? [] })
+  }, [notify])
+  const closeDiagPreview = useCallback((): void => { setDiagPreview(null) }, [])
+  const copyDiagLogPath = useCallback(async (): Promise<void> => {
+    const r = await apiCopyDiagLogPath()
+    if (!r.ok) { notify('err', '复制日志路径失败：' + (r.error ?? '未知原因')); return }
+    notify('ok', '日志路径已复制到剪贴板')
+  }, [notify])
+  return { diagPreview, previewDiagLog, closeDiagPreview, copyDiagLogPath }
+}
+
+/**
+ * M1 密钥搬家提示的确认动作（W2-12.3）。**模块级**：它只是「调一次保存接口再重取」，
+ * 不依赖任何 hook 状态 —— 放进 `useSettingsState` 只会让那个八百多行的函数更长。
+ *
+ * 写失败要说话，且**不**在本地先把提示藏起来：用户以为关掉了、刷新一下又回来，
+ * 比不提示更烦。
+ * @param load - 重新取配置的回调（确认位写回成功后才调）。
+ * @param report - 失败时给用户的一句话。
+ * @returns 是否写成功。
+ */
+async function writeSecretMigrationAck(load: () => Promise<void>, report: (text: string) => void): Promise<boolean> {
+  try {
+    const r = await apiSaveWechatConfig({ patch: { secret_migration_notice_ack: true } })
+    if (!r.ok) { report('提示关不掉：' + (r.error ?? '未知原因')); return false }
+    await load()
+    return true
+  } catch (e) {
+    report('提示关不掉：' + (e as Error).message)
+    return false
+  }
+}
 
 export function useSettingsState({ inDialog = false, initialSection, onNavigateOut }: SettingsStateOptions = {}) {
   const cachedCfg = readRenderCache<CachedSettingsConfig>(SETTINGS_CONFIG_CACHE_KEY)
@@ -50,8 +216,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   const [dbKey, setDbKey] = useState('')
   const [imgAes, setImgAes] = useState('')
   const [imgXor, setImgXor] = useState('136')
-  const [cdnEnabled, setCdnEnabled] = useState(cachedCfg?.cdn_enabled ?? true)
-  const [cdnLocal, setCdnLocal] = useState(cachedCfg?.cdn_local_decrypt ?? true)
   // 富提示（kind/details + 关闭按钮）也迁到公共控制器（L20 的最后一处手写版）。
   // 改前是 `setMessage(x); setTimeout(() => setMessage(null), N)` —— 句柄丢了，
   // 「连出两条提示时第一条的定时器把第二条提前清掉」与「卸载后仍写 state」两个已知缺陷都在。
@@ -70,7 +234,26 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   const [imgDetailOpen, setImgDetailOpen] = useState(false)
   const [imgDecryptDetail, setImgDecryptDetail] = useState<{ errors: Array<{ file: string; error: string }>; skippedDetails: Array<{ file: string; reason: string }> }>({ errors: [], skippedDetails: [] })
   const [imgConcurrency, setImgConcurrency] = useState(8)
-  const [cdnMsg, setCdnMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [imgUpgrading, setImgUpgrading] = useState(false)
+  const [imgUpgradeProgress, setImgUpgradeProgress] = useState<{ active: boolean; done: number; total: number; message: string }>({ active: false, done: 0, total: 0, message: '' })
+  const [imgUpgradeResult, setImgUpgradeResult] = useState<ImageUpgradeResult | null>(null)
+  /**
+   * 详情弹窗的标题。解密与升级共用同一个弹窗（`imgDecryptDetail` 的形状本来就一样），
+   * 但「跳过原因」在两条路径上说的不是一件事 —— 标题必须跟着变，否则用户会以为自己点错了。
+   */
+  const [imgDetailTitle, setImgDetailTitle] = useState('图片解密详情')
+  /**
+   * 「联网补齐原图」的四个状态。
+   *
+   * `origPlan` 是**先扫描再取回**的那份盘点：用户问得出「为什么这张没有原图」，而答案分三类
+   * （本机已有 / 可联网取 / 只有微信登录态才拿得到）。不给这个数，界面上只能给一句「取不到」。
+   */
+  const [origPlan, setOrigPlan] = useState<OriginalFetchPlan | null>(null)
+  const [origBusy, setOrigBusy] = useState<'scan' | 'fetch' | null>(null)
+  const [origProgress, setOrigProgress] = useState<{ active: boolean; done: number; total: number; failed: number; message: string }>({ active: false, done: 0, total: 0, failed: 0, message: '' })
+  const [origResult, setOrigResult] = useState<OriginalBatchResult | null>(null)
+  /** 本次最多取几张（0 = 不限）。默认 500：全量是几千张、可能几 GB，先取一批是稳妥的默认。 */
+  const [origLimit, setOrigLimit] = useState(500)
   const [dbDirMsg, setDbDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [voiceOpMsg, setVoiceOpMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [whisperDirMsg, setWhisperDirMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -86,6 +269,10 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     received: number
     total: number
   } | null>(null)
+  /** W3-5.5：本次下载的标识。按钮读取与 API 调用都必须拿到同一个值，
+   * 因此不放进渲染 state：`setState` 的提交是异步的，闭包里读到的是旧值。 */
+  const whisperJobId = useRef('')
+  const whisperJobSeq = useRef(0)
   const [whisperTranscribing, setWhisperTranscribing] = useState<{ active: boolean; done: number; total: number; failed: number; skipped: number; current: string }>({ active: false, done: 0, total: 0, failed: 0, skipped: 0, current: '' })
   /**
    * 左侧导航当前选中项。
@@ -163,7 +350,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   // 所以内容继续沉降的这段时间里补正两次。用户一旦自己滚过，就再也不动他 —— 补正把他
   // 拽回原处比落点偏几像素糟糕得多。
   const userScrolled = useRef(false)
-  useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (!initialSection) return
     const land = (): void => { if (!userScrolled.current) scrollToSection(initialSection, false) }
     land()
@@ -203,7 +390,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     const r = await apiRevealDiagLog()
     if (!r.ok) notify('err', '打开日志目录失败：' + (r.error ?? '未知原因'))
   }, [notify])
-
+  const { diagPreview, previewDiagLog, closeDiagPreview, copyDiagLogPath } = useDiagPreview(notify)
   const load = useCallback(async (): Promise<void> => {
     setCfgLoading(true)
     try {
@@ -214,8 +401,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setDbKey(c.db_enc_key)
       setImgAes(c.image_aes_key)
       setImgXor(String(c.image_xor_key))
-      setCdnEnabled(c.cdn_enabled)
-      setCdnLocal(c.cdn_local_decrypt)
       setWhisperDevice(c.whisper_device)
       setWhisperModel(c.whisper_model)
       setWhisperThreads(c.whisper_threads)
@@ -325,29 +510,23 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     }
   }
 
+  /** W3-5.5：模型与引擎两路共用的「停止下载」按钮。 */
+  const cancelWhisperDownload = whisperDownloadCanceller(() => whisperJobId.current, setWhisperDirMsg)
+
   const whisperDownload = async (m: { id: string; name: string }): Promise<void> => {
-    if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
+    if (whisperDownloading || whisperJobId.current) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有模型下载任务进行中' }); return }
     setWhisperDirMsg(null)
+    const jobId = `whisper-${String((whisperJobSeq.current += 1))}`
+    whisperJobId.current = jobId
     setWhisperDownloading({ model: m.id, file: '', received: 0, total: 0 })
-    const stopPoll = polls().start(() => {
-      void apiGetWhisperStatus()
-        .then((s) => {
-          if (s.downloading) {
-            setWhisperDownloading({
-              model: s.downloading.model,
-              file: s.downloading.file,
-              received: s.downloading.received,
-              total: s.downloading.total,
-            })
-          }
-        })
-        .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 500)
+    const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiDownloadWhisperModel({ model: m.id })
+      const r = await apiDownloadWhisperModel({ model: m.id, jobId })
       if (r.ok) {
         setWhisperDirMsg({ kind: 'ok', text: `✓ 模型 ${m.name} 下载完成${r.bytes ? `（${fmtBytes(r.bytes)}）` : ''}，已就绪` })
         await refreshWhisper()
+      } else if (isCanceled(r.error)) {
+          setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
       } else {
         setWhisperDirMsg({ kind: 'err', text: '✗ 模型下载失败：' + (r.error ?? '未知错误') })
       }
@@ -355,6 +534,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setWhisperDirMsg({ kind: 'err', text: '✗ 模型下载失败：' + (e as Error).message })
     } finally {
       stopPoll()
+      whisperJobId.current = ''
       setWhisperDownloading(null)
     }
   }
@@ -411,29 +591,20 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }
 
   const installEngine = async (): Promise<void> => {
-    if (whisperDownloading) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有下载任务进行中' }); return }
+    if (whisperDownloading || whisperJobId.current) { setWhisperDirMsg({ kind: 'err', text: '✗ 已有下载任务进行中' }); return }
     if (whisperStatus?.engine) return
     setWhisperDirMsg(null)
+    const jobId = `whisper-${String((whisperJobSeq.current += 1))}`
+    whisperJobId.current = jobId
     setWhisperDownloading({ model: 'engine', file: '', received: 0, total: 0 })
-    const stopPoll = polls().start(() => {
-      void apiGetWhisperStatus()
-        .then((s) => {
-          if (s.downloading) {
-            setWhisperDownloading({
-              model: s.downloading.model,
-              file: s.downloading.file,
-              received: s.downloading.received,
-              total: s.downloading.total,
-            })
-          }
-        })
-        .catch(() => { /* 忽略单次轮询失败 */ })
-    }, 500)
+    const stopPoll = pollWhisperDownload(setWhisperDownloading, polls)
     try {
-      const r = await apiInstallWhisperEngine()
+      const r = await apiInstallWhisperEngine({ jobId })
       if (r.ok) {
         await refreshWhisper()
         setWhisperDirMsg({ kind: 'ok', text: '✓ whisper.cpp 引擎已就绪，可开始批量转写' })
+      } else if (isCanceled(r.error)) {
+        setWhisperDirMsg({ kind: 'ok', text: '✓ ' + r.error })
       } else {
         setWhisperDirMsg({ kind: 'err', text: '✗ 引擎下载失败：' + (r.error ?? '未知错误') })
       }
@@ -441,6 +612,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       setWhisperDirMsg({ kind: 'err', text: '✗ 引擎下载失败：' + (e as Error).message })
     } finally {
       stopPoll()
+      whisperJobId.current = ''
       setWhisperDownloading(null)
     }
   }
@@ -454,10 +626,6 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
           db_enc_key: dbKey,
           image_aes_key: imgAes,
           image_xor_key: Number(imgXor) || 136,
-          // cdn_enabled / cdn_local_decrypt 是**真实生效**的开关（N24）：
-          // 前者拦下发往 CDN 的取图/取视频请求，后者决定远端字节是否本地解密（见 query/cdn-policy.ts）
-          cdn_enabled: cdnEnabled,
-          cdn_local_decrypt: cdnLocal,
           whisper_device: whisperDevice,
           whisper_model: whisperModel,
           whisper_threads: Math.max(0, Math.min(whisperThreads, 64)),
@@ -619,6 +787,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setDbProgress((prev) => ({ ...prev, active: false }))
       setDecrypting(false)
     }
   }
@@ -632,6 +801,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     try {
       const concurrency = Number.isFinite(imgConcurrency) && imgConcurrency >= 1 && imgConcurrency <= 32 ? imgConcurrency : 8
       const r = await apiDecryptAllImages({ concurrency })
+      setImgDetailTitle('图片解密详情')
       setImgDecryptDetail({ errors: r.errors ?? [], skippedDetails: r.skippedDetails ?? [] })
       const failedItems = r.errors.map(f => `${f.file} — ${f.error}`)
       if (r.ok) {
@@ -644,18 +814,109 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       notify('err', (e as Error).message)
     } finally {
       stop()
+      setImgProgress((prev) => ({ ...prev, active: false }))
       setImgDecrypting(false)
     }
   }
 
-  const toggleCdn = async (enabled: boolean): Promise<void> => {
-    try { await apiSetCdnImageEnabled({ enabled }); setCdnEnabled(enabled); setCdnMsg({ kind: 'ok', text: `✓ 已${enabled ? '开启' : '关闭'}自动获取原图` }) }
-    catch (e) { setCdnMsg({ kind: 'err', text: '✗ ' + (e as Error).message }) }
+  /**
+   * 扫描「还有多少张原图能靠免登录直链补回来」——**纯本机扫描，不联网**（约 1.3 秒）。
+   */
+  const scanOriginals = async (): Promise<void> => {
+    setOrigBusy('scan')
+    setOrigResult(null)
+    try {
+      setOrigPlan(await apiPlanOriginalFetch())
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      setOrigBusy(null)
+    }
   }
 
-  const toggleCdnLocal = async (local: boolean): Promise<void> => {
-    try { await apiSetCdnImageLocalDecrypt({ localDecrypt: local }); setCdnLocal(local); setCdnMsg({ kind: 'ok', text: local ? '✓ 原图解密方式：本地解密' : '✓ 原图解密方式：服务端解密' }) }
-    catch (e) { setCdnMsg({ kind: 'err', text: '✗ ' + (e as Error).message }) }
+  /**
+   * 批量取回原图（免登录直链）。**只有用户点这一下才会联网**，没有任何后台自动调用。
+   *
+   * 已有解密类任务在跑时后端**一条请求都不发**（回 `blocked` 说明原因），
+   * 这里如实把那句话显示出来，而不是假装成功。
+   */
+  const fetchOriginals = async (): Promise<void> => {
+    setOrigBusy('fetch')
+    setOrigResult(null)
+    setOrigProgress({ active: true, done: 0, total: 0, failed: 0, message: '正在扫描全库…' })
+    const stop = pollDecrypt((s) => {
+      setOrigProgress({ active: s.active, done: s.done, total: s.total, failed: s.failed, message: s.message })
+    })
+    try {
+      const r = await apiFetchOriginalImagesBatch({ limit: origLimit })
+      setOrigResult(r)
+      const mb = (r.bytes / 1024 / 1024).toFixed(1)
+      const failedItems = r.errors.map(e => `${e.username || e.md5} — ${e.error}`)
+      if (r.blocked !== undefined) {
+        notify('err', r.blocked)
+      } else {
+        notify(r.failed === 0 ? 'ok' : 'err',
+          `已取回 ${r.fetched}/${r.attempted} 张（${mb} MB）`
+          + (r.remaining > 0 ? `，还剩 ${r.remaining} 张候选，再点一次继续` : '')
+          + (r.failed > 0 ? `，失败 ${r.failed}` : ''), failedItems)
+      }
+      // 取回的原图落进的是解码缓存的主槽，而内存里那份 LRU 很可能还是旧缩略图（跨面板不失效）
+      // —— 不清的话用户切回会话看到的仍是糊的，「取回成功」看起来像没发生。
+      if (r.fetched > 0) forgetAllImages()
+      // 重新盘一次：报告里的「可补 / 已取回」必须跟着变，否则第二次点会看到一个过期数字。
+      try { setOrigPlan(await apiPlanOriginalFetch()) } catch { /* 报告刷新失败不影响已取回的图 */ }
+      setOrigProgress({ active: false, done: r.attempted, total: r.attempted, failed: r.failed, message: '' })
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      stop()
+      setOrigProgress((prev) => ({ ...prev, active: false }))
+      setOrigBusy(null)
+    }
+  }
+
+  /**
+   * 升级老解码缓存：把**已经解出来**的图，按本机现存最好的一档重解一遍（不联网）。
+   *
+   * 为什么单列一个动作而不是并进「批量解密」：批量解密只处理**还没有缓存**的图
+   * （`hasCached` 命中就跳过），而这里要处理的恰恰是**已经有缓存、但那份不是最好的**——
+   * 用户「明明在微信里看过原图、这里还是糊的」就是这一批。两者同走后端的忙闲闸门，
+   * 同时点会被后端拒掉（前端由此各自持一个进度块，不会串台）。
+   */
+  const upgradeImgs = async (): Promise<void> => {
+    setImgUpgrading(true)
+    setImgUpgradeResult(null)
+    setImgUpgradeProgress({ active: true, done: 0, total: 0, message: '正在扫描解码缓存…' })
+    const stop = pollDecrypt((s) => {
+      setImgUpgradeProgress({ active: s.active, done: s.done, total: s.total, message: s.message })
+    })
+    try {
+      const r = await apiUpgradeDecodedImages()
+      setImgUpgradeResult(r)
+      setImgDetailTitle('原图升级详情')
+      setImgDecryptDetail({ errors: r.errors ?? [], skippedDetails: r.skippedDetails ?? [] })
+      const failedItems = r.errors.map(f => `${f.file} — ${f.error}`)
+      if (r.error) {
+        notify('err', r.error, failedItems)
+      } else if (r.upgraded === 0) {
+        // 「一张都没升级」有两种完全不同的原因，必须分开说：本来就够好（不用管）与
+        // 本机没有更大的源（只能回微信里点开原图）。合成一句「完成」会让人以为工具坏了。
+        notify('ok', `检查 ${r.total} 张：无需升级 ${r.unchanged}，本机无源 ${r.noSource}${r.failed > 0 ? `，失败 ${r.failed}` : ''}`, failedItems)
+      } else {
+        notify('ok', `已升级 ${r.upgraded} 张为原图（检查 ${r.total}：无需升级 ${r.unchanged}，本机无源 ${r.noSource}，失败 ${r.failed}）`, failedItems)
+      }
+      // 真的换了图才清内存缓存：`MessageImage` 首帧走的是全应用共用那一份内存 LRU，
+      // 它跨面板切换**不会失效** —— 不清的话用户看到的首帧仍是那张旧的缩略图，
+      // 「升级成功」就表现为「什么都没发生」。一张都没升级时不清，免得白跑一屏取图。
+      if (r.upgraded > 0) forgetAllImages()
+      setImgUpgradeProgress({ active: false, done: r.total, total: r.total, message: '' })
+    } catch (e) {
+      notify('err', (e as Error).message)
+    } finally {
+      stop()
+      setImgUpgradeProgress((prev) => ({ ...prev, active: false }))
+      setImgUpgrading(false)
+    }
   }
 
   const keyOk = keysInfo.loaded && keysInfo.keyCount > 0
@@ -666,7 +927,7 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
     detect: accounts.length > 0 || dbDir.trim() !== '' ? 'done' : 'todo',
     dbkey: keyOk || dbKey.trim() !== '' ? 'done' : 'todo',
     imgkey: imgAes.trim() !== '' ? 'done' : 'todo',
-    img: cdnEnabled ? 'done' : 'todo',
+    img: imgAes.trim() !== '' ? 'done' : 'todo',
     voice: whisperStatus?.engine ? 'done' : 'note',
   }
 
@@ -682,42 +943,10 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
       : key === 'imgkey'
         ? (imgAes.trim() ? '已就绪' : '未配置')
         : key === 'img'
-          ? (cdnEnabled ? '已启用' : '未启用')
+          ? (imgAes.trim() ? '可批量解密' : '未配置')
           : (whisperStatus?.engine ? '引擎就绪' : '待配置')
 
-  type NavKey = (typeof STEPS)[number]['key']
-    | 'ai' | 'boundary' | 'license' | 'update' | 'backup' | 'health' | 'hook' | 'advanced'
-  /**
-   * 左导航条目（13 节，分五组）。
-   *
-   * 分组口径是**用户意图**，不是历史沿革：配置向导 5 步是首次配置要走的流程；
-   * 「智能与隐私」是 AI 与出网这两项要改行为的地方；「授权与更新」是软件本身的授权与版本；
-   * 「维护与自检」是数据侧的备份与体检动作；「高级」放低频开关。
-   *
-   * 原先的「授权与维护」是一个 6 项的杂物组（授权 / 更新 / 备份 / 健康 / 自检 / 日志混在一起），
-   * 找东西得逐条读；拆成「授权与更新」+「维护与自检」后看组名就够了。
-   *
-   * 另有两节 2026-09 迁回主界面（不在本列表里）：隐私体检与操作日志 ——
-   * 它们是只读数据视图（扫描结果、风险 TOP10、审计长表），不是配置也不是维护动作。
-   */
-  const navItems: Array<{ key: NavKey; group: string; label: string; icon: React.ReactNode; value: string; dot?: 'done' | 'warning' | 'ongoing' }> = [
-    ...STEPS.map((s) => ({
-      key: s.key as NavKey,
-      group: '配置向导',
-      label: s.label,
-      icon: STEP_ICONS[s.key],
-      value: stepValueOf(s.key),
-      dot: (stepStates[s.key] === 'done' ? 'done' : stepStates[s.key] === 'note' ? 'warning' : 'ongoing') as 'done' | 'warning' | 'ongoing',
-    })),
-    { key: 'ai', group: '智能与隐私', label: 'AI 大模型', icon: <IconSparkle16 size={14} />, value: '问答模型与向量模型' },
-    { key: 'boundary', group: '智能与隐私', label: '数据边界与出网', icon: STEP_ICONS.boundary, value: '本地/出网边界 · 审计' },
-    { key: 'license', group: '授权与更新', label: '软件授权', icon: <IconPersonalizationOutline16 size={14} />, value: '许可证状态' },
-    { key: 'update', group: '授权与更新', label: '软件更新', icon: <IconRefreshOutline14 size={14} />, value: '自动更新 · 手动检查' },
-    { key: 'backup', group: '维护与自检', label: '备份恢复', icon: STEP_ICONS.backup, value: '本地快照 · 创建/恢复' },
-    { key: 'health', group: '维护与自检', label: '数据库健康', icon: STEP_ICONS.health, value: '占用与完整性检查' },
-    { key: 'hook', group: '维护与自检', label: '原图链路自检', icon: STEP_ICONS.hook, value: '本地解码自检' },
-    { key: 'advanced', group: '高级', label: '高级设置', icon: <IconSettingsOutline14 size={14} />, value: '输出目录 · 启动引导' },
-  ]
+  const navItems = createSettingsNavItems(stepStates, stepValueOf)
 
   /**
    * 弹窗内各面板的跳转：能落在本弹窗某节的就切节（不关弹窗），
@@ -734,19 +963,19 @@ export function useSettingsState({ inDialog = false, initialSection, onNavigateO
   }, [onNavigateOut, goToSection])
 
   return {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe, cdnEnabled,
-    cdnLocal, cdnMsg, cfg, cfgLoading, clear, current,
+    accounts, ackSecretMigration: async () => { await writeSecretMigrationAck(load, (t) => setSaveMsg({ kind: 'err', text: t })) }, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
-    dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
+    dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo, fetchOriginals,
     detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
-    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgGetting, imgOpMsg,
-    imgProgress, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
-    message, nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath,
+    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
+    imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
+    message, nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath,
     pickDbDir, pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg,
-    saving, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen,
+    saving, scanOriginals, closeDiagPreview, copyDiagLogPath, diagPreview, previewDiagLog, secretMigration: cfg?.secret_migration ?? null, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit,
     setImgXor, setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
-    toggleCdn, toggleCdnLocal, useAccount, userScrolled, verifyDb, verifyImg,
-    voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
+    upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg,
+    cancelWhisperDownload, voiceOpMsg, whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel,
     whisperModelsDir, whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
   }
 }

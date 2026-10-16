@@ -1,5 +1,5 @@
 {
-  "//": "N32 第一步：把 CI 会跑的**门禁脚本**接进类型检查（scripts/*.ts(x) 与 vitest.config.ts）。这些脚本本身就是门禁 —— 它们自己的参数形状、被改名后的 API、noUncheckedIndexedAccess 下的下标取值，过去只有跑到运行时才暴露，而门禁「跑通了但断言恒真」比没有门禁更危险。客户端基座 + paths + css-modules 声明与 ui-wechat 那份对齐，否则 import 进来的面板会报一堆与真实构建无关的假错。",
+  "//": "N32 第一步：把 CI 会跑的**门禁脚本**接进类型检查（scripts/*.ts(x) 与 vitest.config.ts）。这些脚本本身就是门禁 —— 它们自己的参数形状、被改名后的 API、noUncheckedIndexedAccess 下的下标取值，过去只有跑到运行时才暴露，而门禁「跑通了但断言恒真」比没有门禁更危险。客户端基座 + paths + css-modules 声明与 ui-wechat 那份对齐，否则 import 进来的面板会报一堆与真实构建无关的假错。宿主层 src/backend/*.d.ts 也收在这里：手写声明至少过语法与导入解析，导出名对齐另由 host-decl-alignment.spec.ts 守。",
   "extends": "./tsconfig.base.client.json",
   "compilerOptions": {
     "noImplicitAny": true,
@@ -10,6 +10,10 @@
     "types": ["node", "@deepseek-ai/cordis"],
     "paths": {
       "@deepseek-ai/dsh-wechat-data/types": ["./src/backend/wechat-data/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/contracts": ["./src/client/ui-wechat/src/client/contracts.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/host": ["./src/client/ui-wechat/src/client/public/host.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/notice": ["./src/client/ui-wechat/src/client/public/notice.tsx"],
+      "@deepseek-ai/dsh-client-ui-wechat/theme": ["./src/client/ui-wechat/src/client/public/theme.ts"],
       "@deepseek-ai/dsh-client-ui-primitives": ["./src/client/ui-primitives-shim/src/index.ts"]
     }
   },
@@ -17,6 +21,9 @@
     "scripts/**/*.ts",
     "scripts/**/*.tsx",
     "vitest.config.ts",
+    "src/backend/*.d.ts",
+    "src/client/ui-app/electron-api.d.ts",
+    "src/client/ui-wechat/src/client/electron-api.ts",
     "src/client/ui-wechat/src/css-modules.d.ts",
     "src/client/ui-primitives-shim/src/css-modules.d.ts"
   ]

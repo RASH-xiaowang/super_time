@@ -18,7 +18,6 @@ import {
   excerptOf,
   filterByTag,
   flattenWiki,
-  formatDate,
   formatRelative,
   indexByTitle,
   linkRefs,
@@ -224,12 +223,7 @@ describe('linkRefs：详情页的链接清单', () => {
   })
 })
 
-describe('formatDate / formatRelative：时间显示', () => {
-  it('formatDate 用本地时区的 YYYY-MM-DD 且补零', () => {
-    // 用本地构造的 Date，避免断言依赖运行机器的时区
-    expect(formatDate(new Date(2026, 8, 7, 12, 0, 0).getTime())).toBe('2026-09-07')
-  })
-
+describe('formatRelative：时间显示（日期那一档改用唯一出处的 fmtDateMs）', () => {
   it('相对时间的档位边界', () => {
     const now = new Date(2026, 8, 17, 12, 0, 0).getTime()
     const t = (msAgo: number): string => formatRelative(now - msAgo, now)
@@ -245,7 +239,7 @@ describe('formatDate / formatRelative：时间显示', () => {
 
   it('超过 30 天直接给日期（「97 天前」不如具体日期有用）', () => {
     const now = new Date(2026, 8, 17, 12, 0, 0).getTime()
-    expect(formatRelative(now - 30 * 86400_000, now)).toBe(formatDate(now - 30 * 86400_000))
+    expect(formatRelative(now - 30 * 86400_000, now)).toBe('2026-08-18')
   })
 
   it('未来时间（时钟回拨）不显示成负数', () => {

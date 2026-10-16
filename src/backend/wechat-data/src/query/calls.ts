@@ -23,10 +23,11 @@
  * `parse.ts` 的 `parseVoipKind` 注释里。
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { join } from 'node:path'
-import { contactMeta, shardCatalog, shardCatalogSig, cachedBySig, fileSigOf } from './meta.ts'
+import { contactMeta, shardCatalog, shardCatalogSig, cachedBySigAsync, fileSigOf } from './meta.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 import type { CallRecord, CallPeer, CallMonthRow, CallsSnapshot } from '../types.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -99,7 +100,7 @@ interface RawCall {
 }
 
 /** Scan every message shard for type-50 rows and decode the voip XML. */
-function scanCalls(decryptedDir: string, selfUsername: string): RawCall[] {
+async function scanCalls(decryptedDir: string, selfUsername: string): Promise<RawCall[]> {
   const byMd5 = md5Index(decryptedDir)
   const self = (selfUsername ?? '').trim()
   const out: RawCall[] = []
@@ -112,14 +113,18 @@ function scanCalls(decryptedDir: string, selfUsername: string): RawCall[] {
       for (const table of tables) {
         const meta = shard.tables.get(table)
         if (!meta || !meta.cols.has('message_content')) continue
-        let rows: Array<Record<string, unknown>>
+        // 2026-09-28：`.all()` → 游标 + 行级让出。
+        // 本机真实数据实测 `queryCalls` 冷跑 **87ms 且一次都不让出**
+        // （`working/probe-stall.txt`），是"整段独占"清单里剩下的最长一个：
+        // 它要逐张消息分片把 type-50 的行捞出来，并对每行做 XML 解析（`tagText`）。
+        let rows: Iterable<Record<string, unknown>>
         try {
           rows = db.prepare(
             `SELECT local_id AS l, create_time AS t, real_sender_id AS s, message_content AS c FROM "${table}" WHERE (local_type & 4294967295) = 50`,
-          ).all() as Array<Record<string, unknown>>
+          ).iterate() as Iterable<Record<string, unknown>>
         } catch { continue }
-        if (rows.length === 0) continue
         const talker = byMd5.get(table.slice(4)) ?? ''
+        let sinceYield = 0
         for (const r of rows) {
           const xml = decodeContent(r['c'])
           if (!xml) continue
@@ -141,11 +146,15 @@ function scanCalls(decryptedDir: string, selfUsername: string): RawCall[] {
             outgoing,
             ...(Number.isFinite(roomType) ? { roomType } : {}),
           })
+          sinceYield += 1
+          if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
         }
       }
     } finally {
       db.close()
     }
+    // 分片级让出：一张分片可以有十几万行，逐表之间也要交还控制权。
+    await yieldToLoop()
   }
   return out
 }
@@ -252,14 +261,16 @@ function buildSnapshot(raw: RawCall[], names: Map<string, string>, topPeers: num
  * @param recentLimit - how many recent records to return (default 50).
  * @returns the calls snapshot.
  */
-export function queryCalls(decryptedDir: string, selfUsername?: string, topPeers = 20, recentLimit = 50): CallsSnapshot {
+export async function queryCalls(decryptedDir: string, selfUsername?: string, topPeers = 20, recentLimit = 50): Promise<CallsSnapshot> {
   const self = selfUsername ?? ''
   // 通话快照里的对端昵称来自 contact.db，所以它也必须进签名：原先只签分片 + self，
   // 靠「事件后整表清空」兜住（M8 去掉那层兜底后必须补上真正读了的东西）。
   const sig = shardCatalogSig(decryptedDir, ['message']) + '|' + self + '|' + fileSigOf(join(decryptedDir, 'contact', 'contact.db'))
   const names = contactMeta(decryptedDir).names
-  return cachedBySig('calls:' + decryptedDir, sig, () => {
-    const raw = scanCalls(decryptedDir, self)
+  // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 87ms 且**一次都不让出**
+  // （真实数据 `working/probe-stall.txt`），换 async 才能在里面按档 `yieldToLoop()`。
+  return cachedBySigAsync('calls:' + decryptedDir, sig, async () => {
+    const raw = await scanCalls(decryptedDir, self)
     return buildSnapshot(raw, names, topPeers, recentLimit)
   }, 60_000)
 }

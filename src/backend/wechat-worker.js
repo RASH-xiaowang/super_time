@@ -19,8 +19,9 @@
  *
  * ## 协议
  *
- * 主进程 → 本进程：{ id, type: 'init' | 'call' | 'dispose', payload }
- * 本进程 → 主进程：{ id, value } / { id, error } / { type: 'event', name, args }
+ * 主进程 → 本进程：{ id, type: 'init' | 'call' | 'cancel' | 'dispose', payload }
+ * 本进程 → 主进程：{ id, value } / { id, error } /
+ *   { id, type: 'canceled', value } / { type: 'event', name, args }
  */
 
 // 本进程的 stdout 继承自主进程（同一根管道）：父进程/终端先退出时日志会 EPIPE，
@@ -28,13 +29,24 @@
 require('./console-safe').install();
 
 const { createWechatBackend } = require('./wechat-host');
+const { createMemSentinel } = require('./worker-mem-sentinel');
 
 // 后端进程启动留痕（主进程会把这一行转进 <STATE_DIR>/logs/app.log）。
 // 为什么值得常驻一条：后端是独立进程 —— 它静默没起来、或起来又立刻死了，
 // 界面上只表现成「功能不可用」；有一条带 pid 的启动行才好判断。
 console.log('[wechat-worker] 后端进程已启动 pid=' + process.pid + ' node=' + process.versions.node);
 
+// W3-1.2：内存哨兵。每 60 秒一行 rss/heap/external 进诊断日志，连续 3 次超过
+// 1.2GB 才 mem-warn —— **只告警，不重启**（重启会打断用户正在等的导出/解密，
+// 而涨的原因可能只是一次性的全量年报）。逻辑与判据见 worker-mem-sentinel.js
+// 与 tests/worker-mem-sentinel.spec.ts。起不来就算了：观测设施不该拖垮后端。
+try {
+  createMemSentinel({ log: (level, args) => console.log(String(args[0])) }).start();
+} catch { /* 哨兵起不来不影响后端本身 */ }
+
 let backend = null;
+/** RPC id -> 正在执行的方法与参数；取消消息只有认领到这里才算真正打向当前那次调用。 */
+const activeCalls = new Map();
 
 /**
  * H7 验收的「永不回包」注入名单（`SUPERTIME_DEBUG_HANG_METHODS`）。
@@ -76,12 +88,42 @@ async function handle(msg) {
           console.warn('[wechat-worker] 注入「永不回包」: ' + String(payload?.method));
           return;
         }
-        post({ id, value: await backend.call(payload?.method, payload?.args) });
+        const entry = { method: payload?.method, args: payload?.args };
+        activeCalls.set(id, entry);
+        try {
+          post({ id, value: await backend.call(entry.method, entry.args, String(id)) });
+        } finally {
+          // 无论正常、抛错还是被取消，都不能让旧 id 的取消消息再打到之后的同 jobId 新调用。
+          activeCalls.delete(id);
+        }
+        return;
+      }
+      case 'cancel': {
+        const entry = activeCalls.get(id);
+        if (!entry) {
+          post({ id, type: 'canceled', value: { ok: false, reason: 'call-completed' } });
+          return;
+        }
+        if (!backend || typeof backend.cancelCall !== 'function') {
+          post({ id, type: 'canceled', value: { ok: false, reason: 'cancel-unavailable' } });
+          return;
+        }
+        try {
+          const value = await backend.cancelCall(entry.method, entry.args, String(id));
+          post({ id, type: 'canceled', value: value || { ok: false, reason: 'cancel-unavailable' } });
+        } catch (e) {
+          post({
+            id,
+            type: 'canceled',
+            value: { ok: false, reason: e?.message ?? String(e) },
+          });
+        }
         return;
       }
       case 'dispose': {
         backend?.dispose();
         backend = null;
+        activeCalls.clear();
         post({ id, value: { ok: true } });
         return;
       }

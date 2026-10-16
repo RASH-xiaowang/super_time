@@ -12,8 +12,9 @@ import css from './world-map.module.css'
 interface FriendAvatarRailProps {
   /** Which side of the map this rail is rendered on. */
   side: 'left' | 'right'
-  /** Friends to render (already split by caller). */
-  friends: RegionFriend[]
+  /** Friends to render (already split by caller). 只读遍历，不收窄成可变数组
+   * ——`MapStage`/`TreemapStage` 传进来的是父层的 `readonly RegionFriend[]`。 */
+  friends: readonly RegionFriend[]
   /** Local avatar URLs keyed by username (empty when offline/unresolvable). */
   avatars: Record<string, string>
   /** HTML id of the map container, for an accessible relationship. */

@@ -17,8 +17,9 @@ import { MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageLoca
 import { TransferArrowGlyph, TransferCheckGlyph, decodeEntities, downloadMessageFile, fileStyle, liveStatusText, openLink, quoteTypeLabel, transferStateKey, transferStatusLabel } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
+import { CardFoot } from './chats-card-foot.tsx'
 import { IconDataOutline16, IconLinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
+import { MpArticle, MessageRich, PaymentStatus, MessageRenderKind as RenderKind, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import { useEffect, useState } from 'react'
 /** Authoritative transfer/redpacket status line from general.db. */
 export function PayStatusLine({ serverId }: { serverId: string }): React.JSX.Element | null {
@@ -78,17 +79,6 @@ export function OpenFileCard({ title, size, createTime }: { title: string; size:
       <CardFoot label="微信电脑版" />
     </div>
   )
-}
-/**
- * 卡片底部的**类型条**（微信原生卡片底部那一行「微信转账 / 微信红包 / 聊天记录」）。
- *
- * 有了它，同一张卡片在不同位置（气泡内 / 合并转发弹窗内）都能被一眼认出来源；
- * 也因此**不再**把类型名塞进标题 —— 那会让标题被截断。
- * @param props.label - 类型名。
- * @returns the footer element.
- */
-export function CardFoot({ label }: { label: string }): React.JSX.Element {
-  return <span className={css.msgCardFoot}>{label}</span>
 }
 /**
  * 通用「带标签的小卡」：群公告 / 笔记 / 卡片 / 商品 / 表情 / 版本不支持。
@@ -173,22 +163,9 @@ export function MediaCoverCard({ cover, badge, title, from, desc, onOpen, varian
     </div>
   )
 }
-/**
- * 公众号多图文推送的一篇（后端 `rich.mpArticles`）。
- *
- * 客户端这份类型是**本地声明**：`node_modules` 里那份类型副本落后于后端，
- * 它的 `MessageRich` 索引签名还没有 `MpArticle[]`，直接读会过不了 `tsc`。
- * 所以这里只做「从 unknown 里安全取数组」这一件事，字段逐个校验。
- */
-export interface MpArticle {
-  title?: string
-  url?: string
-  cover?: string
-  summary?: string
-}
 /** 安全读后端写的次条数组（字段缺失/类型不对时返回空数组，界面退化成普通链接卡）。 */
 export function mpArticlesOf(rich: MessageRich): MpArticle[] {
-  const raw: unknown = rich.mpArticles
+  const raw = rich.mpArticles
   if (!Array.isArray(raw)) return []
   return raw.filter((a): a is MpArticle => !!a && typeof a === 'object')
 }
@@ -439,7 +416,10 @@ export function RichCard({ rich, fallback, self = false, onOpenChatlog, serverId
       // 引用：desc = 被引用的原文（媒体/卡片已折成 `[图片]`/`[转账]`），referName = 被引用方昵称。
       //
       // 官方形态（用户参考图 + 几何核对）：**被引用内容不套在气泡里**，而是气泡下方
-      // 独立的一行灰字 `发送者: <类型图标> 摘要`，无底色、单行省略。
+      // 独立的一行灰字 `发送者: <类型图标> 摘要`，无底色、**最多两行、超出省略**
+      // （2026-09-25 二次实测改正：先前写的是「单行省略」，但参考图里那条引用行
+      //   高 58px = 两行；而单行 + nowrap 在宽窗口下会把行撑到 1694px）。
+      //   宽度上界走 --wx-quote-maxw（640px），不能跟气泡的 100%。
       // 判据：参考图里那条引用行宽 138px，而同一条绿色气泡只有 40px ——
       // 引用行比气泡还宽，它不可能是气泡的子元素。
       const quoted = desc || ''
@@ -680,5 +660,44 @@ export function MessageBody({ m, selfName, onOpenImage, onOpenChatlog }: {
     const url = urlMatch ? urlMatch[0].replace(/[。，；、！？）)】…]+$/, '') : ''
     return <LinkCard rich={{ type: 'link', title: text }} title={text || '链接'} desc="" url={url} />
   }
-  return <div className={css.msgBubble}><span className={kitCss.textMeta}>{text || `[类型 ${m.type}]`}</span></div>
+  return (
+    <div className={css.msgBubble}>
+      <span className={kitCss.textMeta}>{describeFallbackText(text, m.type)}</span>
+    </div>
+  )
+}
+
+/**
+ * 兜底预览文案：**任何情况下都不把原始 XML 铺给用户**（2026-09-29 修"各种类型消息预览坏了"）。
+ *
+ * 为什么需要：上面的分派已覆盖 text / image / voice / video / location / contactCard /
+ * voip / emoji / link，以及"有 `rich` 的卡片型"。剩下两类会落到最后那行兜底：
+ *   ① 未识别的 `kind`；
+ *   ② 旧渲染缓存里 **`rich` 缺失**的卡片（`<appmsg>` 之类）。
+ * 这两类的 `text` 往往就是**整段 `<msg>…</msg>` XML** ⇒ 原先直接把尖括号渲染出来，
+ * 于是同一屏里文本消息好好的、旁边那条卡片消息却是一堆标记。
+ *
+ * 做法：按 XML 根标签映射成中文标签；认不出退回"类型 N"；非 XML 则清控制字符并限长。
+ * **只改展示**，不碰解析与数据。
+ * @param text - 兜底可用的文本（可能是 XML 片段）。
+ * @param type - 消息数值类型（认不出标签时用来提示）。
+ * @returns 一行可读文案。
+ */
+function describeFallbackText (text: string, type: number): string {
+  const raw = (text ?? '').trim()
+  if (raw === '') return `[类型 ${String(type)}]`
+  if (raw.startsWith('<')) {
+    const flat = raw.replace(/\s+/g, ' ')
+    const byTag: ReadonlyArray<readonly [RegExp, string]> = [
+      [/<img\b/i, '图片'], [/<emoji\b/i, '表情'], [/<voicemsg\b/i, '语音'], [/<videomsg\b/i, '视频'],
+      [/<location\b/i, '位置'], [/<transfer\b/i, '转账'], [/<wcpayinfo\b/i, '微信支付'],
+      [/<redpacket|<hongbao/i, '红包'], [/<music\b/i, '音乐'], [/<chathistory|<recorditem/i, '聊天记录'],
+      [/finderusernamecard|<findernamecard/i, '视频号'], [/<card\b|<wcscard/i, '名片'],
+      [/<refermsg\b/i, '引用（卡片）'], [/<appmsg\b/i, '链接 / 文件'], [/<sysmsg\b/i, '系统消息'],
+    ]
+    for (const [re, label] of byTag) if (re.test(flat)) return `[${label}]（原文为 XML，已折叠）`
+    return `[${type > 0 ? '类型 ' + String(type) : '未知内容'}]（原文为 XML，已折叠）`
+  }
+  const clean = raw.replace(/[\u0000-\u0008\u000b-\u001f]/g, '').replace(/\s+/g, ' ').trim()
+  return clean.length > 200 ? clean.slice(0, 200) + '…' : clean
 }

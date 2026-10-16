@@ -78,48 +78,17 @@ try {
   const apiText = sidebar.locator('span[data-status] > span').last()
   const dropdown = win.locator('[role="listbox"][aria-label="搜索结果"]')
 
-  // ── ① 默认收起态 ─────────────────────────────────────────────
-  await win.screenshot({ path: join(OUT, '01-collapsed.png') })
-  const wCollapsed = await sideW()
-  note('收起态导航宽', `${wCollapsed}px`)
-  check(wCollapsed >= 54 && wCollapsed <= 62, '默认是 58px 收起轨', `${wCollapsed}px`)
-  check(!(await vis(input)), '收起态：搜索框整块不显示（不是露半截）')
-  check(!(await vis(brandName)), '收起态：品牌文字不显示，只留徽标')
-  check(!(await vis(apiText)), '收起态：状态文案不显示，只留状态点')
-  check(await vis(themeBtn), '收起态：主题按钮仍可见（图标按钮）')
-  check(await vis(apiTag), '收起态：状态标签容器仍在（只剩圆点）')
-
-  // 收起态徽标是否在 42px 窄轨里居中
-  const logo = sidebar.locator('span[title], div[title]').first()
-  const logoBox = (await box(logo)) ?? (await box(sidebar.locator('> div').first()))
-  const sbBox = await box(sidebar)
-  if (logoBox && sbBox) {
-    const leftGap = logoBox.x - sbBox.x
-    const rightGap = (sbBox.x + sbBox.width) - (logoBox.x + logoBox.width)
-    note('徽标左右留白', `${Math.round(leftGap)} / ${Math.round(rightGap)}`)
-    check(Math.abs(leftGap - rightGap) <= 2.5, '收起态徽标在窄轨里居中', `${Math.round(leftGap)} vs ${Math.round(rightGap)}`)
-  }
-
-  // 收起态底部两个控件应当等宽对齐（窄轨里上下叠放，宽度不一致会看起来歪）
-  const themeCollapsed = await box(themeBtn)
-  const tagCollapsed = await box(apiTag)
-  if (themeCollapsed && tagCollapsed) {
-    note('收起态底部宽度', `主题 ${Math.round(themeCollapsed.width)} / 状态 ${Math.round(tagCollapsed.width)}`)
-    check(Math.abs(themeCollapsed.width - tagCollapsed.width) <= 1, '收起态：主题按钮与状态标签等宽对齐',
-      `${Math.round(themeCollapsed.width)} vs ${Math.round(tagCollapsed.width)}`)
-  }
-
-  // ── ② 展开态 ────────────────────────────────────────────────
-  await win.getByRole('button', { name: '展开导航', exact: true }).click()
-  await sleep(500) // 宽度过渡 200ms，留余量
-  await win.screenshot({ path: join(OUT, '02-expanded.png') })
-  await sidebar.screenshot({ path: join(OUT, '02b-sidebar-expanded.png') })
+  // ── ① 默认展开态 ─────────────────────────────────────────────
+  // 2026-09-30 用户要求「主界面的导航栏默认为展开」：默认态从 58px 窄轨换成 176px。
+  // 这一段与下面的 ② 因此对调了顺序（原来先验收起态、再点「展开导航」）。
+  await win.screenshot({ path: join(OUT, '01-expanded.png') })
+  await sidebar.screenshot({ path: join(OUT, '01b-sidebar-expanded.png') })
   const wOpen = await sideW()
-  note('展开态导航宽', `${wOpen}px`)
-  check(wOpen >= 170 && wOpen <= 182, '展开态是 176px', `${wOpen}px`)
-  check(await vis(input), '展开态：搜索框显示')
-  check(await vis(brandName), '展开态：品牌文字显示')
-  check(await vis(apiText), '展开态：状态文案显示')
+  note('默认（展开）导航宽', `${wOpen}px`)
+  check(wOpen >= 170 && wOpen <= 182, '默认是 176px 展开态', `${wOpen}px`)
+  check(await vis(input), '默认展开：搜索框显示')
+  check(await vis(brandName), '默认展开：品牌文字显示')
+  check(await vis(apiText), '默认展开：状态文案显示')
   const apiTextValue = await apiText.textContent().catch(() => null)
   note('状态文案', JSON.stringify(apiTextValue))
   check(['数据就绪', '数据不可用', '检测中…'].includes((apiTextValue ?? '').trim()), '状态文案是预期的三选一', String(apiTextValue))
@@ -156,6 +125,45 @@ try {
   const inputBox = await box(input)
   note('搜索输入区宽', inputBox ? `${Math.round(inputBox.width)}px` : 'n/a')
   check((inputBox?.width ?? 0) >= 80, '搜索输入区仍有可用宽度（≥80px）', `${Math.round(inputBox?.width ?? 0)}px`)
+
+  // ── ② 收起态（点一下开关就能收起来）────────────────────────────
+  await win.getByRole('button', { name: '收起导航', exact: true }).click()
+  await sleep(500) // 宽度过渡 200ms，留余量
+  await win.screenshot({ path: join(OUT, '02-collapsed.png') })
+  const wCollapsed = await sideW()
+  note('收起态导航宽', `${wCollapsed}px`)
+  check(wCollapsed >= 54 && wCollapsed <= 62, '点一下收起成 58px 窄轨', `${wCollapsed}px`)
+  check(!(await vis(input)), '收起态：搜索框整块不显示（不是露半截）')
+  check(!(await vis(brandName)), '收起态：品牌文字不显示，只留徽标')
+  check(!(await vis(apiText)), '收起态：状态文案不显示，只留状态点')
+  check(await vis(themeBtn), '收起态：主题按钮仍可见（图标按钮）')
+  check(await vis(apiTag), '收起态：状态标签容器仍在（只剩圆点）')
+
+  // 收起态徽标是否在 42px 窄轨里居中
+  const logo = sidebar.locator('span[title], div[title]').first()
+  const logoBox = (await box(logo)) ?? (await box(sidebar.locator('> div').first()))
+  const sbBox = await box(sidebar)
+  if (logoBox && sbBox) {
+    const leftGap = logoBox.x - sbBox.x
+    const rightGap = (sbBox.x + sbBox.width) - (logoBox.x + logoBox.width)
+    note('徽标左右留白', `${Math.round(leftGap)} / ${Math.round(rightGap)}`)
+    check(Math.abs(leftGap - rightGap) <= 2.5, '收起态徽标在窄轨里居中', `${Math.round(leftGap)} vs ${Math.round(rightGap)}`)
+  }
+
+  // 收起态底部两个控件应当等宽对齐（窄轨里上下叠放，宽度不一致会看起来歪）
+  const themeCollapsed = await box(themeBtn)
+  const tagCollapsed = await box(apiTag)
+  if (themeCollapsed && tagCollapsed) {
+    note('收起态底部宽度', `主题 ${Math.round(themeCollapsed.width)} / 状态 ${Math.round(tagCollapsed.width)}`)
+    check(Math.abs(themeCollapsed.width - tagCollapsed.width) <= 1, '收起态：主题按钮与状态标签等宽对齐',
+      `${Math.round(themeCollapsed.width)} vs ${Math.round(tagCollapsed.width)}`)
+  }
+
+  // ── ②b 再展开（下面 ③ 的搜索下拉要在展开态测）──────────────────
+  await win.getByRole('button', { name: '展开导航', exact: true }).click()
+  await sleep(500)
+  check((await sideW()) >= 170, '再点一次「展开导航」回到 176px', `${await sideW()}px`)
+  check(await vis(input), '再展开后搜索框回来')
 
   // ── ③ 搜索下拉（Portal 定位）─────────────────────────────────
   await input.click()

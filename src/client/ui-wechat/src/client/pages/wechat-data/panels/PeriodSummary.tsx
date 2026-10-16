@@ -3,6 +3,7 @@
  * 总结的数据收集与 DSH LLM 生成链路，支持复制结果。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import { apiGeneratePeriodSummary, apiGetLlmConfig } from '../api.ts'
 import type { PeriodSummaryResult } from '@deepseek-ai/dsh-wechat-data/types'
 import { Button, DateRangeField, PanelHeader } from '../ui/kit.tsx'
@@ -55,12 +56,9 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
 
   const copyResult = useCallback(async (): Promise<void> => {
     if (!result) return
-    try {
-      await navigator.clipboard.writeText(result.summary)
-      flash('已复制总结')
-    } catch {
-      hold('复制失败')
-    }
+    const ok = await copyTextToClipboard(result.summary)
+    if (ok) flash('已复制总结')
+    else hold('复制失败')
   }, [result])
 
   const rangeText = useMemo(() => describeRange(from, to, '未选择日期'), [from, to])

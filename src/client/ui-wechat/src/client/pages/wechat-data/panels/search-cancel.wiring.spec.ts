@@ -8,7 +8,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
-import { readChatsSource } from './chats-source.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -27,7 +27,7 @@ const backendSpecSrc = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 
 
 describe('N9：搜索可中断的客户端接线', () => {
   it('契约与封装都在：WechatRemote.cancelSearch + apiCancelSearch + searchMessages 收 jobId', () => {
-    expect(apiSrc).toContain('cancelSearch(options: { jobId: string }): Promise<RemoteResult<{ ok: boolean }>>')
+    expect(apiSrc).toContain('cancelSearch(options?: { jobId?: string }): Promise<RemoteResult<{ ok: boolean }>>')
     expect(apiSrc).toContain('export async function apiCancelSearch(options: { jobId: string })')
     expect(apiSrc).toContain('remote().cancelSearch(options)')
     expect(apiSrc).toMatch(/searchMessages\(options: \{[^}]*jobId\?: string[^}]*\}\)/)

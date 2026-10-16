@@ -7,7 +7,8 @@
  *      「下载成功、界面还是缩略图」，谁都不会报错。
  *   ② **域名白名单**必须是「等于或以 `.后缀` 结尾」，且拦在发请求**之前**：
  *      消息 XML 是可被离线改写的文件，直链又是完整带凭据参数的 URL。
- *   ③ 两个开关（隐私「禁止出网」、界面「自动获取原图（CDN）」）都必须**一次请求都不发**。
+ *   ③ 主机白名单判在发请求**之前**（消息 XML 是可被离线改写的文件，直链又是完整带凭据参数的 URL）。
+ *      2026-09-30：出网开关（隐私「禁止出网」/ 界面「自动获取原图（CDN）」）已整体删除，这里不再有开关判据。
  *
  * 每个用例都用**自己独立的临时目录**：早先版本图省事用了 `scratch[0] ?? '.'`，
  * 结果在某次变异跑（开关判据被摘掉、真的走到落盘那一步）时把 png 写进了**仓库根目录**，
@@ -109,20 +110,10 @@ describe('fetchImageOriginalToCache', () => {
       arrayBuffer: async () => bytes.slice().buffer,
     }) as unknown as Response
 
-  it('关掉「自动获取原图（CDN）」时一次请求都不发、也不写盘', async () => {
-    const calls = stubFetch(async () => okResponse(PNG))
-    const decoded = join(tmpDir('cdn-off'), 'decoded')
-    const r = await fetchImageOriginalToCache(LINK, decoded, { cdnEnabled: false })
-    expect(calls()).toBe(0)
-    expect(r.bytes).toBeUndefined()
-    expect(r.error).toContain('自动获取原图')
-    expect(() => readFileSync(join(decoded, IMG_MD5 + '.png'))).toThrow()
-  })
-
   it('成功后落进 decoded 根目录（那正是取图路径第一站读的槽位）', async () => {
     const calls = stubFetch(async () => okResponse(PNG))
     const decoded = join(tmpDir('dl'), 'decoded')
-    const r = await fetchImageOriginalToCache(LINK, decoded, {})
+    const r = await fetchImageOriginalToCache(LINK, decoded)
     expect(calls()).toBe(1)
     expect(r.format).toBe('png')
     expect(r.bytes).toBe(12)
@@ -132,7 +123,7 @@ describe('fetchImageOriginalToCache', () => {
   it('白名单外主机即便被直接调用也拒绝发请求', async () => {
     const calls = stubFetch(async () => okResponse(PNG))
     const decoded = join(tmpDir('deny'), 'decoded')
-    const r = await fetchImageOriginalToCache({ ...LINK, url: 'https://attacker.example.org/x' }, decoded, {})
+    const r = await fetchImageOriginalToCache({ ...LINK, url: 'https://attacker.example.org/x' }, decoded)
     expect(calls()).toBe(0)
     expect(r.error).toContain('允许清单')
   })
@@ -140,7 +131,7 @@ describe('fetchImageOriginalToCache', () => {
   it('回来的不是图片时不落盘（免得把 HTML 错误页缓存成图）', async () => {
     stubFetch(async () => okResponse(new Uint8Array([0x3c, 0x68, 0x74, 0x6d, 0x6c, 0x3e, 1, 2, 3, 4, 5, 6])))
     const decoded = join(tmpDir('badbytes'), 'decoded')
-    const r = await fetchImageOriginalToCache(LINK, decoded, {})
+    const r = await fetchImageOriginalToCache(LINK, decoded)
     expect(r.bytes).toBeUndefined()
     expect(r.error).toContain('不是可识别的图片格式')
     expect(() => readFileSync(join(decoded, IMG_MD5 + '.png'))).toThrow()
@@ -194,18 +185,20 @@ describe('接线守卫', () => {
     const at = mi.indexOf('function writeDecodedCache')
     expect(at, '找不到 writeDecodedCache —— 改名时请同步本用例').toBeGreaterThan(-1)
     expect(mi.slice(at, mi.indexOf('\n}', at)).includes("thumb ? '.t.' : '.'"), '写入端必须按 thumb 分槽').toBe(true)
-    expect((mi.match(/writeDecodedCache\([^)]*, thumb\)/g) ?? []).length, '两处 .dat 分支都要把 thumb 传下去').toBe(2)
+    // P3-5 之后 thumb 是就地算的（`isThumbTier(f)` 直接当参数传），不再是先存进 `thumb` 变量
+    // 再传 —— 守的事实没变：**两处 .dat 分支都要把 thumb 传下去**（写盘分槽 + 出图结果标缩略），
+    // 所以判据跟着换形状，但一条都没放宽。
+    expect((mi.match(/writeDecodedCache\([^)]*isThumbTier\(/g) ?? []).length, '两处 .dat 分支都要把 thumb 传给写入端').toBe(2)
+    expect((mi.match(/\.\.\.\(isThumbTier\(r\.file\) \? \{ thumb: true \} : \{\}\)/g) ?? []).length, '两处 .dat 分支都要把 thumb 标进出图结果').toBe(2)
   })
 
-  it('getImageOriginal 过两道闸：隐私出网闸门 + CDN 开关', () => {
+  it('getImageOriginal 取回结果要进操作记录（出网拦截闸门已随开关一起删除）', () => {
     // M21：方法体搬到 remotes/media.ts（@Remote 处只剩转发）⇒ 取实现那段
     const implAt = gateway.lastIndexOf('getImageOriginal(')
     const at = implAt >= 0 && gateway.slice(implAt).includes('rc.') ? implAt : gateway.indexOf("@Remote('getImageOriginal')")
     expect(at, '找不到 getImageOriginal —— 改名时请同步本用例').toBeGreaterThan(-1)
     const endImpl = gateway.slice(at).indexOf('\n    },')
     const body = endImpl > 0 ? gateway.slice(at, at + endImpl) : gateway.slice(at, gateway.indexOf("@Remote('", at + 1))
-    expect(body.includes("privacyBlocked('image_original_fetch'"), '必须过「禁止出网」总闸').toBe(true)
-    expect(/(?:this|rc)\.cdnSwitches\(\)/.test(body), '必须把「自动获取原图（CDN）」开关传进去').toBe(true)
     expect(body.includes("op('task', 'image_original_fetch'"), '取回结果要进操作记录').toBe(true)
   })
 

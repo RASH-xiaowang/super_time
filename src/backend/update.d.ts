@@ -64,6 +64,19 @@ export const DISABLE_UPDATE_CHECK_ENV: "SUPERTIME_DISABLE_UPDATE_CHECK";
 /** Release 说明的展示上限：GitHub Release 的 body 可以很长，整段过 IPC 没有意义。 */
 export const MAX_RELEASE_NOTES_CHARS: 2000;
 /**
+ * 下载失败后的**自动重试**次数（W2-12.2）。
+ *
+ * 3 次足够覆盖抖动；再多就说明不是抖动（墙、代理、磁盘满），重试只是拖延发现。
+ */
+export const MAX_DOWNLOAD_ATTEMPTS: 3;
+/**
+ * 每次重试前的退避（毫秒），按下标 `attempt - 1` 取；越界取最后一项。
+ *
+ * 递增而不是固定间隔：首次失败很可能只是一次丢包，10 秒足够；连着失败说明情况更实在，
+ * 间隔拉长免得把带宽与 provider 都反复打扰。
+ */
+export const DOWNLOAD_RETRY_BACKOFF_MS: number[];
+/**
  * 下载进度的推送阶梯（百分点）。
  *
  * `download-progress` 每秒可触发几十次；逐条转发会把 IPC 打满，而界面上 0.3% 的
@@ -95,6 +108,8 @@ export interface UpdaterEvent {
   reason?: string
   manual?: boolean
   at?: string
+  /** W2-12.2：`type: 'skip'` 用的版本号（空串 = 取消跳过）。 */
+  version?: string
 }
 
 /** 下载进度（electron-updater 的形态）。 */
@@ -128,6 +143,14 @@ export function blankUpdateState(currentVersion?: string): {
     reason: any;
     checkedAt: any;
     manual: boolean;
+    /** W2-12.2：用户点名「这个版本先不装」的版本号；非空时同名版本不再抛 `available`。 */
+    skippedVersion: string | null;
+    /** W2-12.2：本轮下载已经试到第几次（1 = 首次）。 */
+    attempt: number;
+    /** W2-12.2：失败后会不会自动重试（到上限就 false，界面据此把按钮放到前台）。 */
+    willRetry: boolean;
+    /** W2-12.2：下次自动重试的时间（ISO）；没有就是 null。 */
+    nextRetryAt: string | null;
 };
 /**
  * 建一个更新服务。
@@ -151,11 +174,21 @@ export function blankUpdateState(currentVersion?: string): {
  * }} 更新服务。
  */
 export function createUpdateService(opts?: UpdateServiceOptions): {
-    getState: () => object;
+    getState: () => any;
     isSupported: () => boolean;
     check: (o?: {
         manual?: boolean;
     }) => Promise<object>;
+    /**
+     * W2-12.2：跳过这个版本（空串 = 取消跳过）。
+     * @param version 要跳过的版本号。
+     */
+    skipVersion: (version: string) => any;
+    /**
+     * W2-12.2：手动重试下载。**不受** `MAX_DOWNLOAD_ATTEMPTS` 限制 ——
+     * 那个上界是给自动重试设的，用户自己按下的按钮不该被它挡着。
+     */
+    retryDownload: () => Promise<object>;
     install: () => {
         ok: boolean;
         error?: string;

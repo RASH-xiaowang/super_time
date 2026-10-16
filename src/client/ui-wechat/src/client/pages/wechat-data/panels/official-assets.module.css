@@ -3,7 +3,7 @@
 
 .table {
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   overflow: hidden;
 }

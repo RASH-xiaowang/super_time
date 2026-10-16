@@ -61,7 +61,30 @@ if (kind !== 'retryable-fake-red') {
   process.exit(first.exitCode)
 }
 
-process.stderr.write('[单测步] 判定为「已归因的 vitest RPC 假红」⇒ 按 N36 政策自动重跑一次（仅此一次）\n')
-const second = run(CMD)
-record(fakeRedRecord(first, second))
-process.exit(second.exitCode)
+/**
+ * 重跑次数上限。N36 政策原文是「**一次**带记录的重跑」，所以默认 1。
+ *
+ * 2026-10-16：发布链（`release.yml`）把它提到 3 —— 因为 tag 推送**不会**自动重跑整条
+ * 工作流（不像 PR 门禁可以点 re-run），而这类假红是**环境停顿**（分段墙钟已证明不在
+ * 测试代码里），CI 上连续两次撞上并不罕见（v1.0.8 发布实测：两次运行都是
+ * `5468 passed` + `Timeout calling "onTaskUpdate"` + 退出码 1）。
+ * 判据本身没放宽：每一次重跑前都仍要过 `classifyRun` 的三条（退出码非 0 + 有征兆 +
+ * **无失败用例**），任何一次出现真失败就立刻红。所以这不是「重试到绿」——
+ * 它只是把「环境停顿」的容忍次数按场景调大，而「真失败」一次都不放过。
+ */
+const MAX_RETRIES = Number(process.env.SUPERTIME_UNIT_MAX_RETRIES ?? '1')
+
+process.stderr.write(`[单测步] 判定为「已归因的 vitest RPC 假红」⇒ 按 N36 政策自动重跑（上限 ${String(MAX_RETRIES)} 次）\n`)
+let last = first
+for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+  process.stderr.write(`[单测步] 第 ${String(attempt)} 次重跑…\n`)
+  last = run(CMD)
+  if (last.exitCode === 0) break
+  // 重跑若出现真失败（不再是「已归因的假红」），立刻停 —— 不许拿重跑掩盖真红。
+  if (classifyRun(last) !== 'retryable-fake-red') {
+    process.stderr.write('[单测步] 重跑出现**真失败**（不再是已归因的假红）⇒ 立即停止重跑\n')
+    break
+  }
+}
+record(fakeRedRecord(first, last))
+process.exit(last.exitCode)

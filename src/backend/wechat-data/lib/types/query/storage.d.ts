@@ -25,11 +25,11 @@ export interface LargeFile {
  * @param wechatBaseDir - raw WeChat install root (msg/file 原文件名还原).
  * @returns the storage snapshot.
  */
-export declare function queryStorageStats(decryptedDir: string, wechatBaseDir?: string): {
+export declare function queryStorageStats(decryptedDir: string, wechatBaseDir?: string): Promise<{
     total_size: number;
     total_count: number;
     categories: StorageCategory[];
     chats: StorageRank[];
     senders: StorageRank[];
     large_files: LargeFile[];
-};
+}>;

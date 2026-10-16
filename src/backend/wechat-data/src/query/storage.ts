@@ -5,11 +5,12 @@
  * with protobuf-parsed packed_info names.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
-import { cachedBySig, contactMeta, fileSigOf, shardCatalogDirs } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs } from './meta.ts'
+import { yieldToLoop } from './search-build.ts'
 import { classifyPacked, classifyType, parsePackedName } from './resource-classify.ts'
 
 /** Storage category aggregate (label + count + size). */
@@ -96,7 +97,7 @@ function fileNamesSig(root: string): string {
 }
 
 /** 扫描 msg/file 各月份子目录，建立 size -> 原文件名 映射（还原大文件真实文件名）。 */
-function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, string> {
+async function loadFileNamesBySize(wechatBaseDir: string | undefined): Promise<Map<number, string>> {
   if (!wechatBaseDir) return new Map<number, string>()
   const root = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(root)) return new Map<number, string>()
@@ -107,11 +108,14 @@ function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, str
   // TTL 保持 10s（不是这里的默认 30s）：目录签名看不到「同名文件原地改 size」这类
   // 子目录内部变更（NTFS 下目录的 mtime/size 不会因此变化），而改动前那次「事件后清空」
   // 给的实效上界就是 ~10s（同步活跃期事件间隔）。别把上界放宽。
-  return cachedBySig('storage-file-names:' + root, fileNamesSig(root), () => {
+  return cachedBySigAsync('storage-file-names:' + root, fileNamesSig(root), async () => {
     const map = new Map<number, string>()
     try {
       for (const e of readdirSync(root, { withFileTypes: true })) {
         if (!e.isDirectory()) continue
+        // P1-2：`msg/file/<月份>/` 是微信收到的原始文件，月份目录之间各让一次
+        // （整树要 stat 上万个文件，是这一页最重的一段）。
+        await yieldToLoop()
         const sub = join(root, e.name)
         for (const f of readdirSync(sub, { withFileTypes: true })) {
           if (f.isDirectory()) continue
@@ -133,17 +137,43 @@ function loadFileNamesBySize(wechatBaseDir: string | undefined): Map<number, str
  * @param wechatBaseDir - raw WeChat install root (msg/file 原文件名还原).
  * @returns the storage snapshot.
  */
-export function queryStorageStats(
+export async function queryStorageStats(
   decryptedDir: string,
   wechatBaseDir?: string,
-): {
+): Promise<{
   total_size: number
   total_count: number
   categories: StorageCategory[]
   chats: StorageRank[]
   senders: StorageRank[]
   large_files: LargeFile[]
-} {
+}> {
+  const path = join(decryptedDir, 'message', 'message_resource.db')
+  // 整体签名缓存（F1，2026-09-28 性能修复）：此前只有 `loadFileNamesBySize` 的文件名扫描有缓存，
+  // 而下面三段重查询每次都要跑 —— `GROUP BY type` 全表聚合 + 两个
+  // `JOIN … GROUP BY … ORDER BY SUM(size) LIMIT 50` 排行 + `ORDER BY size DESC LIMIT 100`
+  // 大文件表（后者逐条 `resolveFileTitle` 会开分片库）。实测冷跑 92~106ms 且**冷热同值**
+  // ⇒ 无缓存。签名覆盖三处变更来源：resource 库本身、`msg/file` 目录树（文件名还原）、
+  // contacts 库（`contactMeta` 的昵称）。
+  const sig = [
+    fileSigOf(path),
+    fileNamesSig(wechatBaseDir ? join(wechatBaseDir, 'msg', 'file') : ''),
+  ].join('|')
+  return cachedBySigAsync('storage-stats:' + decryptedDir, sig, () => computeStorageStats(decryptedDir, wechatBaseDir))
+}
+
+/** `queryStorageStats` 的实际计算体（签名缓存包一层；为了装配/测试可直接单测它）。 */
+async function computeStorageStats(
+  decryptedDir: string,
+  wechatBaseDir?: string,
+): Promise<{
+  total_size: number
+  total_count: number
+  categories: StorageCategory[]
+  chats: StorageRank[]
+  senders: StorageRank[]
+  large_files: LargeFile[]
+}> {
   const path = join(decryptedDir, 'message', 'message_resource.db')
   if (!existsSync(path)) return { total_size: 0, total_count: 0, categories: [], chats: [], senders: [], large_files: [] }
   const db = new DatabaseSync(path, { readOnly: true })
@@ -194,8 +224,12 @@ export function queryStorageStats(
       JOIN MessageResourceInfo i ON d.message_id = i.message_id
       LEFT JOIN ChatName2Id c ON c.rowid = i.chat_id
       ORDER BY d.size DESC LIMIT 100`).all() as Array<{ s: number; ty: number; di: string; p?: Uint8Array | null; ct: number; u: string; svr: string }>
-    const sizeToName = loadFileNamesBySize(wechatBaseDir)
-    const large_files: LargeFile[] = bigRows.map((r) => {
+    const sizeToName = await loadFileNamesBySize(wechatBaseDir)
+    const large_files: LargeFile[] = []
+    for (const r of bigRows) {
+      // P1-2：每条大文件都可能触发 `resolveFileTitle`，而它会**逐个消息分片**开库去找那条消息
+      // （最多 100 条 × 全部分片）—— 这一段是本页最贵的，逐条让出。
+      await yieldToLoop()
       const packedName = parsePackedName(r.p ?? null)
       const cat = classifyType(r.ty, packedName)
       let name = packedName || sizeToName.get(r.s) || resolveFileTitle(decryptedDir, r.u, r.svr) || ''
@@ -204,8 +238,8 @@ export function queryStorageStats(
         else if (r.di && r.di !== '0') name = r.di + '.dat'
         else name = '(未知文件名)'
       }
-      return { name, username: r.u, sessionName: names.get(r.u) ?? '', create_time: r.ct, size: r.s }
-    })
+      large_files.push({ name, username: r.u, sessionName: names.get(r.u) ?? '', create_time: r.ct, size: r.s })
+    }
 
     return { total_size: agg.s, total_count: agg.n, categories, chats, senders, large_files }
   } finally {

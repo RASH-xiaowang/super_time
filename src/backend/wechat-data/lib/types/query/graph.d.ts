@@ -21,4 +21,16 @@ export declare function remarkClassKey(remark: string | undefined | null): strin
  * @param selfUsername - logged-in account wxid (excluded from persons).
  * @returns nodes + summary (edges derived client-side from group_codes).
  */
-export declare function queryGraph(decryptedDir: string, selfUsername?: string): GraphSnapshot;
+/**
+ * 关系图谱快照（节点 + 群/班级元数据）。
+ *
+ * 后端加签名缓存（P1-3 的第②半）：`cachedBySig` 的键由「会话库 + 通讯录库 + 消息分片目录」
+ * 三处签名拼成，**没变就是 0ms**；实时同步写过这些文件后签名自然变化 ⇒ 不需要显式失效，
+ * 也不会像「整体清空缓存」那样把没变的条目一起丢掉（M8 那场风暴）。
+ * 前端 `apiGetGraph` 那层 30s 的 `cachedGet` 管的是「同一会话里切回来」，
+ * 这一层管的是「换了进程 / 超了 30 秒 / 首次打开」—— 那正是原先必须完整等 866ms 的三种情形。
+ * @param decryptedDir - decrypted data root.
+ * @param selfUsername - 当前账号（用于把自己从人物节点里剔除）。
+ * @returns 图谱快照。
+ */
+export declare function queryGraph(decryptedDir: string, selfUsername?: string): Promise<GraphSnapshot>;

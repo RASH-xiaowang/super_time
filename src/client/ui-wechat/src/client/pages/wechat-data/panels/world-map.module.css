@@ -2,10 +2,6 @@
 
 /* 两个径向渐变的 stop（第 94 轮从 WorldMap.tsx 的行内样式搬来）。
    颜色用主题令牌 ⇒ 浅色主题下同样跟随；透明度用 stop-opacity。 */
-.wmGradLand0 { stop-color: var(--nm-cyan); stop-opacity: 0.2; }
-.wmGradLand1 { stop-color: var(--nm-cyan); stop-opacity: 0.05; }
-.wmGradGlow0 { stop-color: var(--nm-cyan); stop-opacity: 0.18; }
-.wmGradGlow1 { stop-color: var(--nm-cyan); stop-opacity: 0; }
 
 .wrap {
   display: flex;
@@ -37,7 +33,7 @@
   color: var(--nm-text-2);
   font-size: 12px;
   padding: 3px 4px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   cursor: pointer;
   /* WCAG 2.2 SC 2.5.8：原 22px 高，补 1px 到 24px 达标（该面包屑是行内文字链，
      仅加 padding，不改变文字位置）。 */
@@ -47,16 +43,6 @@
 .crumb:hover { color: var(--nm-cyan); background: color-mix(in srgb, var(--nm-cyan) 8%, transparent); }
 .crumbSeg { display: inline-flex; align-items: center; gap: 2px; }
 .crumbSep { color: var(--nm-text-2); opacity: 0.6; }
-.back {
-  border: 1px solid var(--nm-border);
-  background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
-  color: var(--nm-text-2);
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.back:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
 .backOverlay {
   position: absolute;
   top: 10px;
@@ -66,31 +52,39 @@
   background: var(--nm-bg-input);
   color: var(--nm-text-2);
   font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 8px;
+  padding: 4px 10px;
+  border-radius: var(--nm-dense-r);
   cursor: pointer;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
 .backOverlay:hover { color: var(--nm-cyan); border-color: var(--nm-border-hover); }
-.viewCtrls { display: inline-flex; align-items: center; gap: 6px; }
 .meta { color: var(--nm-text-2); font-size: 11px; margin-left: auto; }
 
-.error {
-  font-size: 12px;
-  color: var(--nm-danger);
-  padding: 20px;
-  text-align: center;
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 20%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
-}
 .loading {
   padding: 32px;
   text-align: center;
   color: var(--nm-text-2);
   font-size: 12px;
 }
+
+/* 加载态里的手动重试（超时文案让用户「点重试」，就得真有这个按钮）。
+   视觉与 kit 的次级按钮同口径，不引新令牌。 */
+.retry {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 4px 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.retry:hover { border-color: var(--nm-border-hover); }
+.retry:focus-visible { outline: 2px solid var(--nm-brand); outline-offset: 2px; }
 
 .stage {
   display: flex;
@@ -107,7 +101,7 @@
   max-height: 520px;
   min-width: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   overflow: hidden;
 }
@@ -127,179 +121,60 @@
   max-height: 520px;
   min-width: 0;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   background: var(--nm-bg-input);
 }
-@media (max-width: 900px) {
-  .china3d { width: 100%; height: 360px; max-height: 360px; }
-}
 
-.map {
-  position: relative;
-  flex: 1 1 auto;
+/* 等距立体世界地图（2026-09-27）：画布自己画"板子 + 柱体"，所以这里**不加边框**
+   （外框交给面板那层的 .worldMapBox：它已经有内圈发丝线与外发光）。
+   高度与 .china3d 对齐，换渲染器不动版面。 */
+.isoCanvas {
+  display: block;
   width: 100%;
   height: 520px;
   max-height: 520px;
-  min-width: 0;
-  border: 1px solid var(--nm-border);
-  border-radius: 12px;
-  overflow: hidden;
+  border-radius: var(--nm-r-md);
   cursor: grab;
-  background:
-    radial-gradient(120% 120% at 28% 22%, color-mix(in srgb, var(--nm-cyan) 14%, transparent), rgba(0, 0, 0, 0) 52%),
-    radial-gradient(100% 140% at 50% 100%, color-mix(in srgb, var(--nm-purple) 12%, transparent), rgba(0, 0, 0, 0) 60%),
-    var(--nm-bg-input);
-  box-shadow:
-    inset 0 0 40px rgba(0, 0, 0, 0.55),
-    inset 0 -18px 40px color-mix(in srgb, var(--nm-purple) 10%, transparent),
-    0 0 22px color-mix(in srgb, var(--nm-cyan) 8%, transparent);}
-.map:active { cursor: grabbing; }
-
-.mapSvg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
+  background: radial-gradient(ellipse 70% 60% at 50% 40%, color-mix(in srgb, var(--nm-cyan) 6%, transparent), transparent 72%);
 }
-.grat { stroke: color-mix(in srgb, var(--nm-cyan) 10%, transparent); stroke-width: 1; }
-.land {
-  stroke: color-mix(in srgb, var(--nm-cyan) 18%, transparent);
-  stroke-width: 1;
-  filter: drop-shadow(0 1px 3px color-mix(in srgb, var(--nm-cyan) 10%, transparent));
-}
-.mapGlow { pointer-events: none; }
-
-.mapMarker {
+.isoCanvas:active { cursor: grabbing; }
+/* 悬停提示：跟着光标走的小卡（国家 + 好友数 + 前三个城市） */
+.isoTip {
   position: absolute;
-  transform: translate(-50%, -50%);
+  z-index: 2;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  z-index: 5;
-}
-.mapDot {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.55), var(--dot-color, color-mix(in srgb, var(--nm-cyan) 70%, transparent)) 58%);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 35%, transparent), inset -2px -3px 6px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s, box-shadow 0.15s;
-  corner-shape: round;
-}
-.mapMarker:hover .mapDot {
-  transform: scale(1.18);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--nm-cyan) 60%, transparent);
-}
-.mapRipple {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--nm-cyan) 70%, transparent);
-  animation: map-ripple 2.4s ease-out infinite;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-bg-card) 88%, transparent);
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px);
   pointer-events: none;
-  corner-shape: round;
+  font-size: 11.5px;
+  color: var(--nm-text-1);
+  white-space: nowrap;
 }
+.isoTip span { color: var(--nm-text-2); }
+.isoTip em { font-style: normal; color: var(--nm-text-3); }
+@media (max-width: 900px) {
+  .china3d { width: 100%; height: 360px; max-height: 360px; }
+  .isoCanvas { width: 100%; height: 360px; max-height: 360px; }
+}
+
+
+
 @keyframes map-ripple {
   0% { transform: scale(1); opacity: 0.9; }
   100% { transform: scale(2.6); opacity: 0; }
 }
-.mapCount {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translate(-50%, -130%);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 1px 6px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.mapName {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translate(-50%, 2px);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 1px 6px;
-  white-space: nowrap;
-  pointer-events: none;
-}
 
-.mapTip {
-  position: absolute;
-  z-index: 10;
-  pointer-events: none;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border-hover);
-  border-radius: 10px;
-  padding: 8px 10px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-  min-width: 140px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-.mapTipHd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--nm-text-1);
-  margin-bottom: 6px;
-}
-.mapTipHd span { font-size: 11px; color: var(--nm-cyan); font-weight: 600; }
-.mapTipBody { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--nm-text-2); }
 /* 悬浮提示里的一行：地区名 + 数量。
    此前 WorldMap.tsx 引用了 css.mapTipRow，但本模块没有该类 —— undefined 的
    className 让"名称 数量"挤成一句纯文本。这里用两端对齐，数量右对齐更易读。 */
-.mapTipRow { display: flex; justify-content: space-between; gap: 8px; }
-.mapTipHint { margin-top: 6px; font-size: 10.5px; color: var(--nm-text-2); opacity: 0.8; }
 
-.mapLegend {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--nm-text-2);
-  background: var(--nm-bg-input);
-  border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 5px 8px;
-}
-.legendTitle { color: var(--nm-text-1); font-weight: 600; }
-.legendSwatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-  corner-shape: round;
-}
-.legendBar {
-  width: 56px;
-  height: 6px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-}
-.legendHint { color: var(--nm-text-2); opacity: 0.8; margin-left: 4px; }
 
 .mapHint {
   position: absolute;
@@ -311,8 +186,8 @@
   color: var(--nm-text-2);
   background: var(--nm-bg-input);
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
-  padding: 5px 8px;
+  border-radius: var(--nm-dense-r);
+  padding: 4px 8px;
   pointer-events: none;
 }
 
@@ -346,7 +221,7 @@
   gap: 2px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 14%, transparent);
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   color: var(--nm-text-1);
   cursor: pointer;
@@ -377,7 +252,7 @@
   max-width: 100%;
 }
 .cellCount {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   font-variant-numeric: tabular-nums;
   font-family: var(--nm-font-mono, monospace);
@@ -388,7 +263,7 @@
   flex: 0 0 228px;
   max-width: 228px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -425,7 +300,7 @@
   gap: 8px;
   padding: 8px 6px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -440,7 +315,7 @@
 }
 .avatarRailLeft .friendLabel,
 .avatarRailRight .friendLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
 }
 .avatarItem {
   display: flex;
@@ -497,7 +372,7 @@
   color: var(--nm-cyan);
 }
 .friendLabel {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   line-height: 1.3;
   color: var(--nm-text-1);
   text-align: center;

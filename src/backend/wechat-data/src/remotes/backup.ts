@@ -28,9 +28,10 @@ export function createBackupRemotes(rc: createBackupRemotesInputs) {
       return previewBackupEntry(rc.dirs().decrypted, options.name)
     },
 
-    createBackup(): BackupMutationResult {
+    async createBackup(): Promise<BackupMutationResult> {
       try {
-        const e = createBackupEntry(rc.dirs().decrypted)
+        // 2026-09-28：`createBackup` 改 async（逐子目录 `cpSync` 要让出，实测独占 206ms）。
+        const e = await createBackupEntry(rc.dirs().decrypted)
         rc.op('backup', 'create_backup', 'ok', e.name)
         return { ok: true, name: e.name }
       } catch (err) {

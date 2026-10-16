@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AnswerFeedback, CiteList, RetrMeta, splitMarks, type AskTurn } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx'
 import { auditAnswerGrounding, groundingWarning } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/utils/grounding.ts'
 import { SessionAsk } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/SessionAsk.tsx'
-import { ReplySuggest } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/ReplySuggest.tsx'
+import { ChatRightPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/ChatRightPanel.tsx'
 import { AiModelConfig } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/AiModelConfig.tsx'
 import { NoticeList } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
 import { buildNotices } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/notice.ts'
@@ -27,6 +27,7 @@ import { AnnualPanel } from '../src/client/ui-wechat/src/client/pages/wechat-dat
 import { GraphPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx'
 import { MomentsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Moments.tsx'
 import { SettingsPanel } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx'
+import { setCapabilities } from '../src/client/ui-wechat/src/client/pages/wechat-data/api.ts'
 import { emptyFacts, type SetupFacts } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/setup-guide.ts'
 import { ProgressBar } from '../src/client/ui-wechat/src/client/pages/wechat-data/ui/kit.tsx'
 import { RemoteImg } from '../src/client/ui-wechat/src/client/pages/wechat-data/panels/remote-img.tsx'
@@ -245,24 +246,57 @@ check('全屏态带 data-full（消息流让位）', () => {
   ok(html.includes('data-full'), '全屏应带 data-full')
 })
 
-console.log('ReplySuggest（单聊「推荐回复」面板）')
+console.log('ChatRightPanel（右栏：上推荐回复 / 下分析）')
 check('首帧只说「正在生成」，且下拉不许是空白', () => {
   // SSR 渲染的就是挂载那一帧（effect 不跑），所以这里能真实复现「首帧到底说了什么」。
   // 两条判别式都做过变异验证：`loading` 初值改回 false → 第三条变红；把 `Select` 的 value
   // 改回 `String(kbId)`（Radix 在选中项未挂载时渲染空白，连 placeholder 都不给）→ 第四条变红。
   // 库名本身**不在这里断言**：Radix 要把选中项渲染过一次才拿得到文字，静态渲染测不到真实浏览器
   // 挂载后的那一帧 —— 拿 SSR 的空白当「用户看到的空白」是个假结论。
-  const html = renderToStaticMarkup(h(ReplySuggest, {
+  // 2026-09-25 二次调整：推荐回复与「分析」合并进组合层 `ChatRightPanel`
+  //（面板标题与关闭按钮随之移到组合层），所以这里渲染组合层 ——
+  // 顺带多钉两条：下半区必须有区块标题、未选中时给的是提示而不是一块空白。
+  const html = renderToStaticMarkup(h(ChatRightPanel, {
     target: { username: 'wxid_a', displayName: '李四' },
     onClose: () => {},
+    // 2026-09-26：两块各自可折叠（消息头部按钮排里那两个图标按钮），
+    // 所以组合层多了两个可见性开关。这个调用点渲染的是「两块都开」的默认形态。
+    showSuggest: true,
+    showAnalysis: true,
+    analysisTargetId: null,
+    analysisEntry: undefined,
+    onClearAnalysis: () => {},
   }))
-  ok(html.includes('推荐回复'), '缺少面板标题')
+  // 用元素内容（`>…<`）而不是裸词匹配：关闭按钮的 aria-label 里也有「推荐回复」，
+  // 裸词匹配下把标题整块删掉照样绿 —— 变异测试抓过这类假阳性。
+  // 两块都开时标题是合并文案（只开一块时会跟着变，见下一个 check）。
+  ok(html.includes('>推荐回复与分析<'), '缺少面板标题')
   ok(html.includes('正在按这段对话生成候选'), '首帧应显示「正在生成」')
   ok(!html.includes('这个会话还没有可用的对话内容'), '首帧还没有任何数据，那句「没有可用对话」在当时必然是假话')
   ok(html.includes('李四'), '「依据」一行应显示当前会话名')
   ok((html.match(/role="combobox"/g) || []).length === 1, `面板里应有且只有一个知识库下拉，实际 ${String((html.match(/role="combobox"/g) || []).length)} 个`)
   ok(html.includes('读取知识库…'), '库列表还没到位时，触发器要说明在读，而不是留一块空白')
   ok(!html.includes('请选择…'), '触发器不该停在共享组件那句通用的「请选择…」上')
+  // 合并后新钉的两条：两块同容器、下半区未选中时也不许是空白
+  ok(html.includes('>分析<'), '下半区缺少「分析」区块标题')
+  ok(html.includes('点选一条消息'), '未选中消息时分析区要给出提示，而不是一块空白')
+})
+
+check('只开分析时：标题跟着内容走，且推荐回复块真的不渲染', () => {
+  const html = renderToStaticMarkup(h(ChatRightPanel, {
+    target: { username: 'wxid_a', displayName: '李四' },
+    onClose: () => {},
+    showSuggest: false,
+    showAnalysis: true,
+    analysisTargetId: null,
+    analysisEntry: undefined,
+    onClearAnalysis: () => {},
+  }))
+  // 标题还写「推荐回复」会让人以为上半区被吃掉了 —— 它必须跟着实际内容走。
+  ok(html.includes('>分析<'), '只开分析时标题应是「分析」')
+  // 「折叠」必须是**真的不渲染**，否则 DOM 里还在，那块照样在背后取数/跑 effect。
+  ok(!html.includes('推荐回复'), '推荐回复块没被真正折叠（DOM 里还在）')
+  ok(html.includes('点选一条消息'), '分析区仍要给出提示')
 })
 
 console.log('AiModelConfig（数据配置里的 AI 大模型卡片）')
@@ -365,24 +399,26 @@ console.log('SetupGuideCard（首次进入系统的配置向导卡）')
 const guideHtml = (facts: Partial<SetupFacts>) =>
   renderToStaticMarkup(h(SetupGuideCard, { facts: { ...emptyFacts(), ...facts }, onOpenStep: () => {}, onLater: () => {} }))
 
-check('全未配置：四项都在、四项都有「去配置」、进度 0/4', () => {
+check('全未配置：三项都在、三项都有「去配置」、进度 0/3', () => {
   const html = guideHtml({})
   ok(html.includes('首次配置向导'), '缺少标题')
-  ok(html.includes('已完成 0/4'), `进度不对：${html.slice(0, 120)}`)
-  for (const t of ['检测账号', '数据库密钥', '图片密钥', '图片解码']) ok(html.includes(t), `缺少步骤：${t}`)
-  ok((html.match(/去配置/g) ?? []).length === 5, '四个必做 + 一个可选，都该有「去配置」')
+  ok(html.includes('已完成 0/3'), `进度不对：${html.slice(0, 120)}`)
+  for (const t of ['检测账号', '数据库密钥', '图片密钥']) ok(html.includes(t), `缺少步骤：${t}`)
+  // 原第四步「图片解码」判的是已删除的 CDN 开关，随「移除全部出网开关」一起从向导里去掉。
+  ok(!html.includes('图片解码'), '「图片解码」步骤不该再出现（它判的开关已删）')
+  ok((html.match(/去配置/g) ?? []).length === 4, '三个必做 + 一个可选，都该有「去配置」')
 })
 
-check('配好两项：进度 2/4，已完成的项不再给「去配置」', () => {
+check('配好两项：进度 2/3，已完成的项不再给「去配置」', () => {
   const html = guideHtml({ accounts: 2, keysLoaded: true, keyCount: 22 })
-  ok(html.includes('已完成 2/4'), `进度不对：${html.slice(0, 120)}`)
+  ok(html.includes('已完成 2/3'), `进度不对：${html.slice(0, 120)}`)
   ok((html.match(/data-done="true"/g) ?? []).length === 2, '应有两项标为已完成')
-  ok((html.match(/去配置/g) ?? []).length === 3, '剩下两项必做 + 可选一项')
+  ok((html.match(/去配置/g) ?? []).length === 2, '剩下一项必做 + 可选一项')
 })
 
 check('语音转写是可选：没就绪不影响「完成」的计数口径', () => {
-  const html = guideHtml({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', cdnEnabled: true, voiceReady: false })
-  ok(html.includes('已完成 4/4'), '四项必做齐了就该是 4/4（语音不计入）')
+  const html = guideHtml({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', voiceReady: false })
+  ok(html.includes('已完成 3/3'), '三项必做齐了就该是 3/3（语音不计入）')
   ok(html.includes('语音转文字（可选）'), '可选行仍在，标为可选')
   ok(!html.includes('data-step="voice" data-done'), '语音没就绪时不该显示为已完成')
 })
@@ -440,6 +476,7 @@ check('朋友圈：带 author 过滤时给出「仅看 X」与返回入口', () 
 
 console.log('设置（M21 拆 Settings 前的渲染兜底）')
 check('设置：左导航与右内容都能渲染（不崩）', () => {
+  setCapabilities({ isDesktop: true, isBrowser: false, dirPicker: false, capturePanel: false, shellOpen: false, license: false, diag: false, update: false })
   const html = renderToStaticMarkup(h(SettingsPanel, {}))
   ok(html.includes('设置'), '缺少面板标题')
   for (const t of ['智能与隐私', '高级', 'AI 大模型', '数据边界与出网']) {

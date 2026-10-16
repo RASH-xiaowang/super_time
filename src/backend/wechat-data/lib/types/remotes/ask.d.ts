@@ -1,5 +1,6 @@
 import { FeedbackRecord, IntentKind, RerankWeights } from '../query/retrieval/types.ts';
 import { AskHistoryQuery, AskHistorySnapshot, OperationCategory, OperationStatus } from '../types.ts';
+import { RetrievalConfig, RetrievalConfigPatch, RetrievalStatus } from '../types-retrieval.ts';
 export interface createAskRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -27,6 +28,7 @@ export declare function createAskRemotes(rc: createAskRemotesInputs): {
         ok: boolean;
         adaptedWeights?: RerankWeights;
         features?: string[];
+        feedbackTotal?: number;
         message?: string;
     };
     listRetrievalFeedback(options?: {
@@ -40,30 +42,11 @@ export declare function createAskRemotes(rc: createAskRemotesInputs): {
         };
     };
     getAskHistory(options?: AskHistoryQuery): AskHistorySnapshot;
-    getRetrievalStatus(): {
-        enabled: boolean;
-        config: unknown;
-        vector: {
-            rows: number;
-            dim: number;
-            model: string;
-        };
-        feedback: {
-            total: number;
-            up: number;
-            down: number;
-        };
-        weights: RerankWeights;
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    getRetrievalStatus(): RetrievalStatus;
     saveRetrievalConfig(options?: {
-        patch?: unknown;
-    } | unknown): {
+        patch?: RetrievalConfigPatch;
+    } | RetrievalConfigPatch): {
         ok: boolean;
-        config: unknown;
+        config: RetrievalConfig;
     };
 };

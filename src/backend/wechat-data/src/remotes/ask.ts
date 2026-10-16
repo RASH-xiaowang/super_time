@@ -13,6 +13,7 @@ import { syntheticIntentAccuracy } from '../query/retrieval/eval-dataset.ts'
 import { adaptWeights, attributeFeatures, feedbackStats, listFeedback, loadAdaptedWeights, recordFeedback, saveAdaptedWeights } from '../query/retrieval/feedback.ts'
 import { FeedbackRecord, IntentKind, RerankWeights } from '../query/retrieval/types.ts'
 import { AskHistoryQuery, AskHistorySnapshot, OperationCategory, OperationStatus } from '../types.ts'
+import { RetrievalConfig, RetrievalConfigPatch, RetrievalStatus } from '../types-retrieval.ts'
 
 export interface createAskRemotesInputs {
   dirs: () => { decrypted: string; decoded: string }
@@ -43,7 +44,7 @@ export function createAskRemotes(rc: createAskRemotesInputs) {
       useless?: number[]
       question?: string
       answer?: string
-    }): { ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; message?: string } {
+    }): { ok: boolean; adaptedWeights?: RerankWeights; features?: string[]; feedbackTotal?: number; message?: string } {
       const cfg = loadRetrievalConfig(rc.dirs().decrypted)
       if (!cfg.feedback.enabled) return { ok: false, message: '反馈闭环已在检索配置里关闭' }
       // N27：同一轮反馈的重复提交在这里挡掉。放在副作用之前 —— 挡晚了（比如在 recordFeedback
@@ -96,7 +97,15 @@ export function createAskRemotes(rc: createAskRemotesInputs) {
       const adapted = adaptWeights(cfg.rerank.weights, all, cfg.feedback.learningRate)
       saveAdaptedWeights(rc.dirs().decrypted, adapted)
       rc.op('task', 'ask_feedback', 'ok', options.rating, `features=${features.join(',')} total=${all.length}`)
-      return { ok: true, adaptedWeights: adapted, features }
+      /**
+       * W3-6.5：回出**累计反馈次数**。
+       *
+       * 为什么要它：返回只说权重已更新，用户看不出「这么多次点评到底
+       * 改变了什么」——— 他们得知道自己的点评是否真的在累计。
+       * `all.length` 就是那个数（刚写进去的这一条也在内），
+       * 不需要额外读库。
+       */
+      return { ok: true, adaptedWeights: adapted, features, feedbackTotal: all.length }
     },
 
     listRetrievalFeedback(options?: { limit?: number }): {
@@ -113,14 +122,7 @@ export function createAskRemotes(rc: createAskRemotesInputs) {
       return listAskHistory(rc.dirs().decrypted, options ?? {})
     },
 
-    getRetrievalStatus(): {
-      enabled: boolean
-      config: unknown
-      vector: { rows: number; dim: number; model: string }
-      feedback: { total: number; up: number; down: number }
-      weights: RerankWeights
-      intentAccuracy: { correct: number; total: number; accuracy: number }
-    } {
+    getRetrievalStatus(): RetrievalStatus {
       const cfg = loadRetrievalConfig(rc.dirs().decrypted)
       const adapted = loadAdaptedWeights(rc.dirs().decrypted)
       return {
@@ -133,9 +135,9 @@ export function createAskRemotes(rc: createAskRemotesInputs) {
       }
     },
 
-    saveRetrievalConfig(options?: { patch?: unknown } | unknown): { ok: boolean; config: unknown } {
+    saveRetrievalConfig(options?: { patch?: RetrievalConfigPatch } | RetrievalConfigPatch): { ok: boolean; config: RetrievalConfig } {
       const patch = (options && typeof options === 'object' && 'patch' in (options as Record<string, unknown>))
-        ? (options as { patch?: unknown }).patch
+        ? (options as { patch?: RetrievalConfigPatch }).patch
         : options
       const saved = saveRetrievalConfigFile(rc.dirs().decrypted, patch)
       rc.op('settings', 'save_retrieval_config', 'ok', '', JSON.stringify(patch ?? {}).slice(0, 200))

@@ -54,7 +54,7 @@ const MIN_SCANNED = 400
 
 /** 生成物 / 随包资产：不计入行数口径（每条给出理由）。 */
 const EXCLUDED = [
-  ['src/backend/wechat-data/lib/', 'esbuild/tsc 生成物（CI 有「重建后 git diff 为空」门禁）'],
+  ['src/backend/wechat-data/lib/', 'esbuild/tsc 生成物（CI 有 check:backend/check:types 产物一致性门禁）'],
   ['src/backend/wechat-data/native/', '随包 WASM 与其胶水 JS（第三方产物）'],
   ['src/backend/deps/', '内联第三方依赖（file: 依赖）'],
   ['src/client/ui-dist/', 'vite 构建产物'],

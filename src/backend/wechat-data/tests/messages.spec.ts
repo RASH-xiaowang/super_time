@@ -69,7 +69,7 @@ describe('queryMessages / queryNewMessages', () => {
     expect(delta.messages[7]?.localId).toBe(105)
   })
 
-  it('locates a payment message by 64-bit and text server ids', () => {
+  it('locates a payment message by 64-bit and text server ids', async () => {
     const root = tempRoot()
     const talker = 'wxid_pay'
     const table = 'Msg_' + createHash('md5').update(talker, 'utf8').digest('hex')
@@ -82,19 +82,19 @@ describe('queryMessages / queryNewMessages', () => {
       db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`).run(1, 1, 49, 0, 1700000001, 1, XML, 9007199254740993n)
       db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?,?)`).run(2, 2, 49, 0, 1700000002, 1, XML, 'pay-1002')
     })
-    const big = queryMessageByServerId(root, '9007199254740993')
+    const big = await queryMessageByServerId(root, '9007199254740993')
     expect(big.found).toBe(true)
     expect(big.message?.localId).toBe(1)
     expect(big.message?.rich?.type).toBe('transfer')
-    const text = queryMessageByServerId(root, 'pay-1002')
+    const text = await queryMessageByServerId(root, 'pay-1002')
     expect(text.found).toBe(true)
     expect(text.message?.localId).toBe(2)
-    expect(queryMessageByServerId(root, '99999').found).toBe(false)
+    expect((await queryMessageByServerId(root, '99999')).found).toBe(false)
   })
 })
 
 describe('M11：按 server_id 查询带签名缓存', () => {
-  it('同一 id 重复查询命中缓存（返回同一个对象），分片一变就失效', () => {
+  it('同一 id 重复查询命中缓存（返回同一个对象），分片一变就失效', async () => {
     // 为什么值得缓存：本机实测「命中」1.8ms，而**未命中** 80ms（两轮扫描 × 304 张 Msg 表）。
     // 调用方是用户点开合并聊天记录这种**用户触发**动作，负结果缓存直接消掉
     // 「点了没找到 → 同步完再点」的重复代价。
@@ -108,24 +108,27 @@ describe('M11：按 server_id 查询带签名缓存', () => {
       db.prepare(`INSERT INTO "${table}" VALUES (?,?,?,?,?,?,?)`).run(1, 1, 49, 1700000001, 1, XML, 'cache-1')
     })
 
-    const a = queryMessageByServerId(root, 'cache-1')
+    // 2026-09-28：`queryMessageByServerId` 改 async（逐分片扫描要让出，实测独占 84ms）。
+    // ⚠️ `toBe` 必须比**解析出来的对象**：每次调用返回的都是新 Promise，
+    // 直接比 Promise 会恒不相等 ⇒ 这条"命中缓存返回同一对象"的判据会退化成恒假。
+    const a = await queryMessageByServerId(root, 'cache-1')
     expect(a.found).toBe(true)
-    const b = queryMessageByServerId(root, 'cache-1')
-    expect(b).toBe(a) // 命中缓存：同一个对象（`cachedBySig` 的行为）
+    const b = await queryMessageByServerId(root, 'cache-1')
+    expect(b).toBe(a) // 命中缓存：同一个对象（`cachedBySigAsync` 的行为）
 
     // 负结果同样被缓存
-    const miss1 = queryMessageByServerId(root, 'nope-1')
+    const miss1 = await queryMessageByServerId(root, 'nope-1')
     expect(miss1.found).toBe(false)
-    expect(queryMessageByServerId(root, 'nope-1')).toBe(miss1)
+    expect(await queryMessageByServerId(root, 'nope-1')).toBe(miss1)
 
     // 分片被替换（同步的原子替换只改 mtime/size）⇒ 签名变化 ⇒ 缓存失效
     const t = new Date(Date.now() + 5000)
     utimesSync(shard, t, t)
-    expect(queryMessageByServerId(root, 'cache-1')).not.toBe(a)
-    expect(queryMessageByServerId(root, 'nope-1')).not.toBe(miss1)
+    expect(await queryMessageByServerId(root, 'cache-1')).not.toBe(a)
+    expect(await queryMessageByServerId(root, 'nope-1')).not.toBe(miss1)
   })
 
-  it('缓存不会跨数据根串味（key 里带 decryptedDir）', () => {
+  it('缓存不会跨数据根串味（key 里带 decryptedDir）', async () => {
     const r1 = tempRoot()
     const r2 = tempRoot()
     const talker = 'wxid_two'
@@ -139,7 +142,7 @@ describe('M11：按 server_id 查询带签名缓存', () => {
     makeDb(join(r2, 'message', 'message_0.db'), (db) => {
       db.exec(`CREATE TABLE "${table}" (local_id INTEGER, sort_seq INTEGER, local_type INTEGER, create_time INTEGER, real_sender_id INTEGER, message_content TEXT, server_id TEXT)`)
     })
-    expect(queryMessageByServerId(r1, 'dup-1').found).toBe(true)
-    expect(queryMessageByServerId(r2, 'dup-1').found).toBe(false)
+    expect((await queryMessageByServerId(r1, 'dup-1')).found).toBe(true)
+    expect((await queryMessageByServerId(r2, 'dup-1')).found).toBe(false)
   })
 })

@@ -12,27 +12,18 @@
  *   ② 「重新导出」会先弹保存对话框让用户选路径，**不覆盖原文件**。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import clsx from 'clsx'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { ListSentinel, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
-import {
-  apiDeleteExportHistory,
-  apiExportAllSessions,
-  apiExportAnnualReport,
-  apiExportCsv,
-  apiExportMoments,
-  apiExportSessionMessages,
-  apiGetExportHistory,
-  apiOpenPath,
-  apiPruneExportHistory,
-  apiSaveFileDialog,
-} from '../api.ts'
+import { apiDeleteExportHistory, apiExportAllSessions, apiExportAnnualReport, apiExportCsv, apiExportMoments, apiExportSessionMessages, apiGetExportHistory, apiOpenPath, apiPruneExportHistory, apiSaveFileDialog, runtimeCapabilities } from '../api.ts'
 import type { ExportHistoryEntry, ExportHistoryQuery, ExportStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, DataTable, Dialog, SearchInput, Segmented, Select } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import css from './export-history.module.css'
 import kitCss from '../ui/kit.module.css'
+import { fmtBytes, fmtLocaleMs } from '../utils/format.ts'
 
 /** 导出种类 → 中文名。未知种类原样显示（后端可能先于前端新增种类）。 */
 const KIND_LABEL: Record<string, string> = {
@@ -64,19 +55,8 @@ const SORT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'name:asc', label: '文件名 A→Z' },
 ]
 
-function fmtTime(ts: number): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
-}
-
-/** 字节数 → 人类可读。null 表示目录型导出或文件已不存在。 */
-function fmtSize(n: number | null): string {
-  if (n === null) return '—'
-  if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB'
-  return (n / 1073741824).toFixed(2) + ' GB'
-}
+/** 字节数 → 人类可读（口径统一到 `fmtBytes`）。null 表示目录型导出或文件已不存在。 */
+const fmtSize = (n: number | null): string => (n === null ? '—' : fmtBytes(n))
 
 // 返回 `string | undefined`：CSS Modules 的按键取值在类型上就是可选的，而唯一调用点把它交给
 // `clsx(...)` —— clsx 与 React 的 className 本来就接受 undefined。
@@ -115,6 +95,8 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set())
   const [busy, setBusy] = useState(false)
+  /** 后端读不动记录库时带回来的原因（P1-1/#9）：空列表与「读不到」是两件事。 */
+  const [readError, setReadError] = useState('')
   const { notice, flash, hold } = useTransientNotice(4000)
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
@@ -152,6 +134,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
     fetchPage: async (offset, limit) => {
       const snap = await apiGetExportHistory(buildQuery(offset, limit))
       // 聚合计数每次都用**当前筛选**的结果刷新（后端按未分页的命中集合算）
+      setReadError(snap.readError ?? '')
       setCounts({
         total: snap.total,
         bytes: snap.totalBytes,
@@ -171,7 +154,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, kind, status, sortKey])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '400px 0px')
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '400px 0px', undefined, pager.items.length)
 
   /** 只看失效记录：这是**客户端**筛选（文件在不在磁盘上只有本地知道），
    *  所以只在已加载的页里过滤，并在界面上说明「仅当前已加载」。 */
@@ -215,8 +198,8 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   const revealFile = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
     if (!r.existsNow) { hold('文件已不在原位置（可能被移动或删除）'); return }
     try {
-      const api = (window as unknown as { electronAPI?: { showInFolder?: (p: string) => Promise<unknown> } }).electronAPI
-      if (!api?.showInFolder) { hold('当前环境不支持「在文件夹中显示」'); return }
+      const api = window.electronAPI
+      if (!runtimeCapabilities().shellOpen || !api?.showInFolder) { hold('「在文件夹中显示」只在电脑上可用'); return }
       await api.showInFolder(r.path)
     } catch (e) {
       hold('定位失败：' + (e as Error).message)
@@ -224,12 +207,9 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
   }, [hold])
 
   const copyPath = useCallback(async (r: ExportHistoryEntry): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(r.path)
-      flash('已复制路径')
-    } catch {
-      hold('复制失败')
-    }
+    const ok = await copyTextToClipboard(r.path)
+    if (ok) flash('已复制路径')
+    else hold('复制失败')
   }, [flash, hold])
 
   /**
@@ -389,7 +369,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'time',
       header: '时间',
       className: css.tdTime,
-      cell: r => <span className={css.tdTime}>{fmtTime(r.ts)}</span>,
+      cell: r => <span className={css.tdTime}>{fmtLocaleMs(r.ts)}</span>,
       sortValue: r => r.ts,
     },
     {
@@ -419,7 +399,9 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'size',
       header: '大小',
       align: 'right',
-      className: css.tdNum,
+      // 两列共用 `.tdNum` 的排版，但列宽各不相同 ⇒ 各自再挂一个专属类，
+      // 供 `[class*='tdSize']` / `[class*='tdRows']` 定位到 `<th>`。
+      className: clsx(css.tdNum, css.tdSize),
       cell: r => <span className={css.tdNum}>{fmtSize(r.sizeBytes)}</span>,
       sortValue: r => r.sizeBytes ?? -1,
     },
@@ -427,7 +409,7 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
       id: 'rows',
       header: '条数',
       align: 'right',
-      className: css.tdNum,
+      className: clsx(css.tdNum, css.tdRows),
       cell: r => <span className={css.tdNum}>{r.rows > 0 ? r.rows.toLocaleString() : '—'}</span>,
       sortValue: r => r.rows,
     },
@@ -546,10 +528,12 @@ export function ExportHistoryDialog({ open, onClose, initialKind = '' }: {
           getRowId={r => String(r.id)}
           loading={pager.loading}
           skeletonRows={6}
-          emptyTitle={pager.loading ? '正在读取…' : (onlyMissing ? '没有失效记录' : '还没有导出记录')}
-          emptyDesc={onlyMissing
-            ? '所有记录的导出文件都还在原位置。'
-            : '在通讯录、聊天、朋友圈等面板点「导出」后，这里会出现记录，可打开文件、复制路径或按原参数重新导出。'}
+          emptyTitle={pager.loading ? '正在读取…' : readError !== '' ? '导出记录读不出来' : (onlyMissing ? '没有失效记录' : '还没有导出记录')}
+          emptyDesc={readError !== ''
+            ? readError + '—— 记录并没有丢，是这一页没读到；修好数据根之后重新打开本窗口即可。'
+            : onlyMissing
+              ? '所有记录的导出文件都还在原位置。'
+              : '在通讯录、聊天、朋友圈等面板点「导出」后，这里会出现记录，可打开文件、复制路径或按原参数重新导出。'}
         />
         {!pager.loading && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>

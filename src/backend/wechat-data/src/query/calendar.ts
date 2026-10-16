@@ -3,9 +3,9 @@
  * st_control handlers/session/search.rs get_chat_daily_counts.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { withDb } from './db-open.ts'
 
 /** Msg_<md5(username)> table name for a talker. */
 function msgTableName(username: string): string {
@@ -40,21 +40,23 @@ export function getDailyCounts(
   ).sort()
   const table = msgTableName(username)
   for (const f of files) {
-    let db: DatabaseSync | null = null
-    try { db = new DatabaseSync(join(msgDir, f), { readOnly: true }) } catch { continue }
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
-    if (!has) { db.close(); continue }
+    // 整个「开库 → 存在性检查 → 计数」都必须在 `withDb` 的作用域里：
+    // 旧写法把存在性检查写在 try 之外，于是**一个截断/没解密的半写分片**（报
+    // `file is not a database`）会一路上抛 —— 日历面板整个月拿不到数，而不是跳过那一个分片；
+    // 同时那条句柄没人关（Windows 上等于把解密目录钉住，实时同步再也替换不掉）。
     try {
-      const sql = "SELECT strftime('%d', create_time, 'unixepoch', 'localtime') AS d, COUNT(*) AS c FROM \"" + table + '" WHERE create_time >= ? AND create_time < ? GROUP BY d'
-      const rows = db.prepare(sql).all(startTs, endTs) as Array<{ d: string; c: number }>
-      for (const r of rows) {
-        const day = Number(r.d)
-        if (Number.isFinite(day)) counts[String(day)] = (counts[String(day)] ?? 0) + r.c
-      }
+      withDb(join(msgDir, f), (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+        if (!has) return
+        const sql = "SELECT strftime('%d', create_time, 'unixepoch', 'localtime') AS d, COUNT(*) AS c FROM \"" + table + '" WHERE create_time >= ? AND create_time < ? GROUP BY d'
+        const rows = db.prepare(sql).all(startTs, endTs) as Array<{ d: string; c: number }>
+        for (const r of rows) {
+          const day = Number(r.d)
+          if (Number.isFinite(day)) counts[String(day)] = (counts[String(day)] ?? 0) + r.c
+        }
+      })
     } catch {
-      // skip unreadable shard
-    } finally {
-      db.close()
+      // skip unreadable shard —— 其余分片照常计数
     }
   }
   return { counts, year, month }

@@ -5,7 +5,7 @@
  * decodable cover thumbnail from decoded_images; playback degrades to a
  * placeholder when no cover/file is available.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'

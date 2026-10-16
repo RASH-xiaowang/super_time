@@ -18,9 +18,15 @@ async function renderVersions() {
     ['Node.js', v.node],
     ['平台 / 架构', `${v.platform} / ${v.arch}`]
   ];
-  versionsEl.innerHTML = rows
-    .map(([label, value]) => `<li><span>${label}</span><strong>${value}</strong></li>`)
-    .join('');
+  versionsEl.replaceChildren(...rows.map(([label, value]) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    const strong = document.createElement('strong');
+    span.textContent = label;
+    strong.textContent = value;
+    li.append(span, strong);
+    return li;
+  }));
 }
 
 function setResult(text) {
@@ -46,9 +52,12 @@ async function initWechatBackend() {
     `LLM 桥接：${llmConfigured ? '已配置' : '未配置（AI 问答/总结降级）'}`
   ].join('　|　');
 
-  wechatMethodEl.innerHTML = methods
-    .map((m) => `<option value="${m}">${m}</option>`)
-    .join('');
+  wechatMethodEl.replaceChildren(...methods.map((m) => {
+    const option = document.createElement('option');
+    option.value = m;
+    option.textContent = m;
+    return option;
+  }));
   wechatMethodEl.disabled = false;
   wechatCallBtn.disabled = false;
   setWechatResult(`已加载 ${methods.length} 个 Remote 方法，可调用 getDbStatus / getSessions / getContacts 等。`);

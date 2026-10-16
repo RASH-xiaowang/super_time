@@ -19,12 +19,19 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
     ta.style.opacity = '0'
     document.body.appendChild(ta)
     ta.select()
-    // Legacy fallback for browsers without the async Clipboard API.
-    // execCommand('copy') is the only clipboard fallback where the async API is
-    // missing; deprecated but deliberately retained.
-    /* oxlint-disable-next-line typescript/no-deprecated */
-    const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
+    let ok = false
+    try {
+      // Legacy fallback for browsers without the async Clipboard API.
+      // execCommand('copy') is the only clipboard fallback where the async API is
+      // missing; deprecated but deliberately retained.
+      /* oxlint-disable-next-line typescript/no-deprecated */
+      ok = document.execCommand('copy')
+    } finally {
+      // 摘节点必须放在 finally：原先 `execCommand` 一抛（受限上下文里真会抛），
+      // 外层 catch 只回 false，那个隐藏 textarea 就永久留在 body 上 ——
+      // 每失败一次留一个，而它带着 `ta.select()` 抢过的焦点。
+      document.body.removeChild(ta)
+    }
     return ok
   } catch {
     return false

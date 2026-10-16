@@ -96,7 +96,7 @@ describe('queryGraph：备注班级名册', () => {
         { username: 'wxid_g', remark: '表弟_陈忠凯' },
       ])
 
-      const snap = queryGraph(ws.dir, 'wxid_self')
+      const snap = await queryGraph(ws.dir, 'wxid_self')
       const byId = new Map(snap.nodes.map(n => [n.id, n]))
 
       expect(byId.get('wxid_a')?.remark_group).toBe('宜州一中404')
@@ -133,7 +133,7 @@ describe('queryGraph：备注班级名册', () => {
         { username: '111@chatroom', memberIndexes: [1, 3] },
       )
 
-      const snap = queryGraph(ws.dir, 'wxid_self')
+      const snap = await queryGraph(ws.dir, 'wxid_self')
       const byId = new Map(snap.nodes.map(n => [n.id, n]))
       expect(byId.get('wxid_a')?.remark_group).toBe('宜州一中404')
       expect(byId.get('wxid_a')?.group_codes).toEqual(['111@chatroom'])
@@ -149,7 +149,7 @@ describe('queryGraph：备注班级名册', () => {
       const contacts = Array.from({ length: 12 }, (_, i) => ({ username: `wxid_m${String(i).padStart(2, '0')}`, remark: '' }))
       seed(ws, contacts, { username: '222@chatroom', memberIndexes: contacts.map((_, i) => i + 1) })
 
-      const snap = queryGraph(ws.dir, 'wxid_self')
+      const snap = await queryGraph(ws.dir, 'wxid_self')
       const room = snap.nodes.find(n => n.id === '222@chatroom')
       expect(room?.shared_count).toBe(12)
       // 旧上限 8 会把这里砍成 8 —— 「群与群之间看不到共同成员」的直接来源

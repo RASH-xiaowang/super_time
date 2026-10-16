@@ -1,0 +1,92 @@
+/* 单聊「聊天信息」抽屉（P2-6）——UI-GEOMETRY-SPEC 全令牌样板：
+   圆角/间距零字面量；形态复刻已审计的群抽屉（300px 侧栏、48px 行、标签左/值右）。 */
+.drawer {
+  /* 与群抽屉同款的抽屉本地令牌（单 tile 网格用 48px 头像，官方口径）。 */
+  --wx-info-avatar: 48px;
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 上下 8px 配 32px 关闭按钮命中区，总高 48px（与群抽屉同款） */
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border-bottom: 1px solid var(--nm-border);
+  color: var(--nm-text-1);
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--nm-text-2);
+  border-radius: var(--nm-dense-r);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--nm-bg-hover);
+  color: var(--nm-text-1);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--nm-s-3);
+  scrollbar-width: thin;
+  /* 六区骨架：内容区吃剩余高度，底部动作位才能 margin-top:auto 贴底（D7）。 */
+  display: flex;
+  flex-direction: column;
+}
+
+/* 区①–⑤ 的内容包：吃剩余高度，把区⑥ 推到底部。 */
+.zones { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.empty {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  padding: var(--nm-s-3) 0;
+  text-align: center;
+}
+
+/* 导出入口：胶囊次级按钮（联动既有导出对话框） */
+.exportRow {
+  /* 区⑥ 底部动作位：贴底（内容不足一屏时也被推到底边，官方底部按钮槽）。 */
+  margin-top: auto;
+  padding: var(--nm-s-3) 0 0;
+  border-top: 1px solid var(--nm-border);
+}
+
+.exportAction {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-bg-card);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-sm);
+  cursor: pointer;
+  transition: var(--nm-t-ui);
+}
+
+.exportAction:hover {
+  background: var(--nm-bg-hover);
+  border-color: var(--nm-border-hover);
+}

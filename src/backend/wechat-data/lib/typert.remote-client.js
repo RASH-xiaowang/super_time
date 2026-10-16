@@ -1346,7 +1346,6 @@ const _deepseek_ai_dsh_wechat_data_wechatData_getPrivacyScan_result$schema = z.o
 })
 const _deepseek_ai_dsh_wechat_data_wechatData_getPrivacyState_result$schema = z.object({
   'redactSensitive': z.boolean(),
-  'blockOutbound': z.boolean(),
   'audit': z.object({
   'total': z.number(),
   'byFeature': z.array(z.object({
@@ -1538,8 +1537,6 @@ const _deepseek_ai_dsh_wechat_data_wechatData_getWechatConfigFull_result$schema 
   'api_enabled': z.boolean(),
   'api_port': z.number(),
   'api_token': z.string(),
-  'cdn_enabled': z.boolean(),
-  'cdn_local_decrypt': z.boolean(),
   'whisper_device': z.union([z.literal("cpu"), z.literal("gpu")]),
   'whisper_model': z.string(),
   'whisper_threads': z.number(),
@@ -1841,8 +1838,6 @@ const _deepseek_ai_dsh_wechat_data_wechatData_saveWechatConfig_parameter_0$schem
   'api_enabled': z.boolean().optional(),
   'api_token': z.string().optional(),
   'api_port': z.number().optional(),
-  'cdn_enabled': z.boolean().optional(),
-  'cdn_local_decrypt': z.boolean().optional(),
   'whisper_device': z.union([z.literal("cpu"), z.literal("gpu")]).optional(),
   'whisper_model': z.string().optional(),
   'whisper_threads': z.number().optional(),
@@ -1930,27 +1925,11 @@ const _deepseek_ai_dsh_wechat_data_wechatData_searchUnified_result$schema = z.ob
   'session': z.string(),
 })),
 })
-const _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageEnabled_parameter_0$schema = z.object({
-  'enabled': z.boolean(),
-})
-const _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageEnabled_result$schema = z.object({
-  'ok': z.boolean(),
-  'error': z.string().optional(),
-})
-const _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageLocalDecrypt_parameter_0$schema = z.object({
-  'localDecrypt': z.boolean(),
-})
-const _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageLocalDecrypt_result$schema = z.object({
-  'ok': z.boolean(),
-  'error': z.string().optional(),
-})
 const _deepseek_ai_dsh_wechat_data_wechatData_setPrivacyState_parameter_0$schema = z.object({
   'redactSensitive': z.boolean().optional(),
-  'blockOutbound': z.boolean().optional(),
 })
 const _deepseek_ai_dsh_wechat_data_wechatData_setPrivacyState_result$schema = z.object({
   'redactSensitive': z.boolean(),
-  'blockOutbound': z.boolean(),
   'audit': z.object({
   'total': z.number(),
   'byFeature': z.array(z.object({
@@ -4303,56 +4282,6 @@ export const TYPERT_REMOTE = {
         schema: _deepseek_ai_dsh_wechat_data_wechatData_searchUnified_result$schema,
       },
       sourceLocation: {"file":"packages/host/wechat-data/src/gateway.ts","line":1830,"column":3},
-    },
-    {
-      id: '@deepseek-ai/dsh-wechat-data#wechatData/setCdnImageEnabled',
-      service: 'wechatData',
-      namespace: 'wechatData',
-      method: 'setCdnImageEnabled',
-      invocation: { kind: 'direct' },
-      parameters: [
-        {
-          name: 'options',
-          wire: 'options',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/setCdnImageEnabled:options',
-            schema: _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageEnabled_parameter_0$schema,
-          },
-        },
-      ],
-      result: {
-        mode: 'strict',
-        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#SimpleResult',
-        schema: _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageEnabled_result$schema,
-      },
-      sourceLocation: {"file":"packages/host/wechat-data/src/gateway.ts","line":1529,"column":3},
-    },
-    {
-      id: '@deepseek-ai/dsh-wechat-data#wechatData/setCdnImageLocalDecrypt',
-      service: 'wechatData',
-      namespace: 'wechatData',
-      method: 'setCdnImageLocalDecrypt',
-      invocation: { kind: 'direct' },
-      parameters: [
-        {
-          name: 'options',
-          wire: 'options',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: '@deepseek-ai/dsh-wechat-data#wechatData/setCdnImageLocalDecrypt:options',
-            schema: _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageLocalDecrypt_parameter_0$schema,
-          },
-        },
-      ],
-      result: {
-        mode: 'strict',
-        typeSymbol: '@deepseek-ai/dsh-wechat-data/types#SimpleResult',
-        schema: _deepseek_ai_dsh_wechat_data_wechatData_setCdnImageLocalDecrypt_result$schema,
-      },
-      sourceLocation: {"file":"packages/host/wechat-data/src/gateway.ts","line":1541,"column":3},
     },
     {
       id: '@deepseek-ai/dsh-wechat-data#wechatData/setPrivacyState',

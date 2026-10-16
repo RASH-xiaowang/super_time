@@ -217,8 +217,7 @@ export async function apiDeleteKbFile(kbId: number, id: number): Promise<KbFileM
  * 切换一个文件是否参与向量化（出网）。
  *
  * 关掉之后该文件**完全不出网**，但仍留在关键词索引里可被搜到 —— 这正是
- * 「库里有合同，但我还想搜到它」的实现方式。全局「禁止 AI 出网」仍是同一道闸门，
- * 一起拦下。
+ * 「库里有合同，但我还想搜到它」的实现方式。
  * @param kbId - 知识库 id（守卫）。
  * @param id - 文件行 id。
  * @param includeInRag - 是否参与。
@@ -233,7 +232,7 @@ export async function apiSetKbFileRag(kbId: number, id: number, includeInRag: bo
 /**
  * 用模型给某个知识库文件生成摘要。**这是一条出网调用**（发的是那份文件的前若干字正文）。
  *
- * 后端会按顺序过三道闸：「禁止 AI 出网」→ 该文件的「参与语义检索（会出网）」→ 敏感字段
+ * 后端会按顺序过两道闸：该文件的「参与语义检索（会出网）」→ 敏感字段
  * 打码 + 审计。任何一道拦下都返回 `{ ok: false, error }`，不会静默降级。
  *
  * 成功后**必须清本库的文件列表缓存**：摘要写进了 `kb_files` 行，而列表是渲染缓存的 ——
@@ -286,8 +285,18 @@ export async function apiGetKbVectorIndex(kbId: number): Promise<KbVectorIndexVi
  * @param force - 清空本库重算。
  * @returns 构建结果（`ok` 为假时带 `error`）。
  */
-export async function apiBuildKbVectorIndex(kbId: number, force = false): Promise<KbVectorBuildResult> {
-  return unwrap(await remote().buildKbVectorIndex({ kbId, force }))
+export async function apiBuildKbVectorIndex(kbId: number, force = false, jobId?: string): Promise<KbVectorBuildResult> {
+  return unwrap(await remote().buildKbVectorIndex({ kbId, force, jobId }))
+}
+/**
+ * 停止本库正在跑的向量构建（W3-11.5）。
+ *
+ * 取消在〔认领下一批〕之前生效；阶段二在全部批次之后，所以取消 ⇒ 一行未写 ⇒ 旧索引原样。
+ * @param options - jobId（即 `apiBuildKbVectorIndex` 那次的同一标识）。
+ * @returns ok + 停不上的原因（该批已算完 / 标识不认识）。
+ */
+export async function apiCancelKbIndexBuild(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelKbIndexBuild(options))
 }
 
 /**
@@ -367,9 +376,7 @@ export async function apiOpenFileDialog(opts?: {
   title?: string
   filters?: Array<{ name: string; extensions: string[] }>
 }): Promise<{ canceled: boolean; files: string[]; error?: string }> {
-  const api = (window as unknown as {
-    electronAPI?: { openFile?: (o?: unknown) => Promise<{ canceled: boolean; files: string[]; error?: string }> }
-  }).electronAPI
+  const api = window.electronAPI
   if (!api?.openFile) return { canceled: true, files: [], error: '当前环境不支持文件选择' }
   return api.openFile(opts)
 }

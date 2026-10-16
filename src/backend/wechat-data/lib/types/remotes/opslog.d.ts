@@ -14,7 +14,6 @@ export declare function createOpsLogRemotes(rc: createOpsLogRemotesInputs): {
     getPrivacyState(): PrivacyStateSnapshot;
     setPrivacyState(options: {
         redactSensitive?: boolean;
-        blockOutbound?: boolean;
     }): PrivacyStateSnapshot;
-    getPrivacyScan(): PrivacySnapshot;
+    getPrivacyScan(): Promise<PrivacySnapshot>;
 };

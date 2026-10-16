@@ -21,14 +21,29 @@
 import { join } from 'node:path'
 import { getConfig, resolveSelfUsername } from './config.ts'
 import { getAccountKeysFromStore } from '../keys/key-store.ts'
+import { DEFAULT_KEY_SLOT } from '../keys/service.ts'
 import { cleanWxid } from '../keys/image-key-resolver.ts'
 import type { StoredAccountKeys } from '../keys/types.ts'
 
 /** 图片 XOR 字节的内置默认值：与 `defaultConfig()` 同源，解码点不要再各写一份。 */
 const DEFAULT_IMAGE_XOR_KEY = 136
 
-/** `keys.json` 里自动获取结果所在的槽位（`keys/service.ts` 写入时用的是同一个字面量）。 */
-const AUTO_KEY_SLOT = 'default'
+/**
+ * 自动图片密钥的取槽顺序（W2-2.2 读取侧）。
+ *
+ * 新写入按**归属账号**分槽（`keys/service.ts` 的 `imageKeySlotFor`），所以先看自己那个槽；
+ * 老库与「归属判不出来」的记录仍然在全局 `'default'` 槽里，必须继续读 —— 否则升级后
+ * 用户本来能用的图密钥突然全要重新配钥。归属校验（`storedKeyOwnedBySelf`）照旧适用。
+ * @param decrypted - 解密数据根（用来解析当前账号）。
+ * @returns 按优先级排的槽名列表（去重）。
+ */
+function autoKeySlots(decrypted: string): string[] {
+  const out: string[] = []
+  const self = cleanWxid(resolveSelfUsername(decrypted))
+  if (self) out.push(self)
+  if (!out.includes(DEFAULT_KEY_SLOT)) out.push(DEFAULT_KEY_SLOT)
+  return out
+}
 
 /** 形状上是否像一个 wxid（`wxid_` 前缀且后面还有内容）；别名目录名一律不算。 */
 function isWxidLike(value: string): boolean {
@@ -62,9 +77,17 @@ export function resolveImageKeyPair(decrypted: string): { aesKey: string | undef
   const fromConfig = typeof cfg['image_aes_key'] === 'string' ? cfg['image_aes_key'].trim() : ''
   if (fromConfig !== '') return { aesKey: fromConfig, xorKey }
 
-  const stored = getAccountKeysFromStore(AUTO_KEY_SLOT, join(decrypted, '..'))
+  // 先自己那个槽，再全局槽（老库）。取到即用，不再往后找。
+  let stored: StoredAccountKeys = {}
+  for (const slot of autoKeySlots(decrypted)) {
+    const cand = getAccountKeysFromStore(slot, join(decrypted, '..'))
+    const key = typeof cand.image_aes_key === 'string' ? cand.image_aes_key.trim() : ''
+    if (key === '' || !storedKeyOwnedBySelf(cand, decrypted)) continue
+    stored = cand
+    break
+  }
   const fromStore = typeof stored.image_aes_key === 'string' ? stored.image_aes_key.trim() : ''
-  if (fromStore === '' || !storedKeyOwnedBySelf(stored, decrypted)) return { aesKey: undefined, xorKey }
+  if (fromStore === '') return { aesKey: undefined, xorKey }
 
   // 自动密钥是配对着派生的（kvcomm 的 code 同时决定 AES 与 XOR），所以用它自带的 XOR 字节
   const storedXor = Number(stored.image_xor_key)

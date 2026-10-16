@@ -4,18 +4,20 @@
  * 数据全部来自 `getCalls`（后端 `query/calls.ts`）：它扫描每个 message 分片里
  * `local_type = 50` 的行，把 zstd 压着的 `<voipmsg>` XML 解出来。
  *
- * 三条实测口径（详见 docs/wechat-schema.md §B.16）：
+ * 三条实测口径（真机 schema 勘查所得，原文就抄在下面，不再指向那份没入库的勘查笔记）：
  *  - **时长**只能从 `<msg>` 文本里解析（「通话时长 00:21」），XML 的 `<duration>` 恒为 0；
  *  - **接通**= 有本机时长 **或** 「已在其它设备接听」（后者没有时长）；
  *  - **方向**由 `real_sender_id` 经分片 `Name2Id` 解析：等于自己的 wxid 即呼出。
  * 语音/视频刻意不分类：`room_type` 的语义在本机数据里判不了，界面不据此下结论。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { apiGetCalls, readRenderCache, writeRenderCache } from '../api.ts'
+import { useCallback } from 'react'
+import { useFreshData } from './use-fresh-data.ts'
+import { apiGetCalls } from '../api.ts'
 import type { CallsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Button, Card, EmptyState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Button, Card, EmptyState, LoadingState, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './calls.module.css'
+import { fmtLocaleSec } from '../utils/format.ts'
 
 /** Cache key for the render cache (survives panel remounts). */
 const CACHE_KEY = 'calls'
@@ -47,41 +49,17 @@ function fmtMonth(month: string): string {
   return m ? `${m[1]} 年 ${Number(m[2])} 月` : month
 }
 
-function fmtTime(sec: number): string {
-  if (!sec) return '—'
-  return new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false })
-}
-
 /**
  * Render the calls panel.
  * @param props - optional chat navigation callback.
  * @returns the calls element tree.
  */
 export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, localId?: number) => void } = {}): React.JSX.Element {
-  const [snap, setSnap] = useState<CallsSnapshot | null>(() => readRenderCache<CallsSnapshot>(CACHE_KEY))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      const v = await apiGetCalls({ topPeers: 20, recentLimit: 60 })
-      setSnap(v)
-      writeRenderCache(CACHE_KEY, v)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  // 快照扫描一遍全部分片（实测 ~60ms，但仍先展示渲染缓存，避免切页签时白屏）。
-  useEffect(() => {
-    const cached = readRenderCache<CallsSnapshot>(CACHE_KEY)
-    if (cached) setSnap(cached)
-    void load()
-  }, [load])
+  /* 2026-10-03 推广批次 1：改用共用 `useFreshData` ——
+     打开即查最新（**不再预填渲染缓存**），成功写回缓存、失败才回退缓存并在 error 里
+     标注"以下为本地缓存（可能不是最新）"（标注由 hook 写在 error 文本里，面板照常显示 error 即可）。 */
+  const load = useCallback((): Promise<CallsSnapshot> => apiGetCalls({ topPeers: 12, recentLimit: 30 }), [])
+  const { data: snap, loading, error } = useFreshData<CallsSnapshot>(CACHE_KEY, load, { liveRefresh: true })
 
   const monthMax = snap ? Math.max(1, ...snap.months.map((m) => m.calls)) : 1
   const hourMax = snap ? Math.max(1, ...snap.byHour) : 1
@@ -92,7 +70,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       <PanelHeader
         title="通话记录"
         desc={snap
-          ? `${snap.total} 通 · 覆盖 ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)} · 快照 ${fmtTime(snap.updatedAt)}`
+          ? `${snap.total} 通 · 覆盖 ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)} · 快照 ${fmtLocaleSec(snap.updatedAt)}`
           : '语音/视频通话统计（来自消息库 type-50 的 voip XML）'}
         actions={(
           <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>
@@ -104,7 +82,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       {/* 正文独立滚动：页头（含「刷新」按钮）保持可见（见 kit.module.css 的 .panelBody） */}
       <div className={kitCss.panelBody}>
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !snap && <div className={kitCss.emptyInline}>正在扫描消息库…</div>}
+      {loading && !snap && <LoadingState variant="compact" label="正在扫描消息库…" />}
 
       {snap && snap.total === 0 && (
         <EmptyState icon="📞" title="没有通话记录" desc="本机消息库里没有 type-50 的通话消息。" />
@@ -120,35 +98,6 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
             <StatCard icon="🏆" value={fmtClock(snap.longestSec)} label="最长通话" tone="amber" hint={snap.longestPeer || ''} />
             <StatCard icon="📵" value={snap.ackElsewhere} label="其它设备接听" hint="接通但没有本机时长" />
           </StatGrid>
-
-          <Card title="通话对象排行" extra={<span className={kitCss.textCaption}>按通话次数；同一人未接通也计入</span>}>
-            {snap.peers.length === 0 ? (
-              <div className={kitCss.emptyInline}>暂无通话对象</div>
-            ) : (
-              <div className={css.rankList}>
-                {snap.peers.map((p, i) => (
-                  <button
-                    key={p.username}
-                    type="button"
-                    className={css.rankRow}
-                    onClick={onOpenChat ? () => { onOpenChat(p.username) } : undefined}
-                    title={onOpenChat ? `打开与 ${p.name} 的聊天` : p.username}
-                  >
-                    <span className={css.rankNo} data-top={i < 3 ? '1' : '0'}>{i + 1}</span>
-                    <span className={css.rankName} title={p.username}>{p.name}</span>
-                    <span className={css.rankBarWrap}>
-                      <span className={css.rankBar} style={{ width: `${Math.max(3, Math.round((p.calls / peerMax) * 100))}%` }} />
-                    </span>
-                    <span className={css.rankNums}>
-                      <span className={css.rankCalls}>{p.calls} 通</span>
-                      <span className={css.rankDur}>{fmtDuration(p.durationSec)}</span>
-                      {p.calls - p.connected > 0 && <span className={css.rankMissed}>未接 {p.calls - p.connected}</span>}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </Card>
 
           <div className={kitCss.cardGrid}>
             <Card title="逐月通话" extra={<span className={kitCss.textCaption}>{snap.months.length} 个月</span>}>
@@ -187,6 +136,35 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
           </div>
 
           <div className={kitCss.cardGrid}>
+            <Card title="通话对象排行" extra={<span className={kitCss.textCaption}>按通话次数；同一人未接通也计入</span>}>
+              {snap.peers.length === 0 ? (
+                <div className={kitCss.emptyInline}>暂无通话对象</div>
+              ) : (
+                <div className={css.rankList}>
+                  {snap.peers.map((p, i) => (
+                    <button
+                      key={p.username}
+                      type="button"
+                      className={css.rankRow}
+                      onClick={onOpenChat ? () => { onOpenChat(p.username) } : undefined}
+                      title={onOpenChat ? `打开与 ${p.name} 的聊天` : p.username}
+                    >
+                      <span className={css.rankNo} data-top={i < 3 ? '1' : '0'}>{i + 1}</span>
+                      <span className={css.rankName} title={p.username}>{p.name}</span>
+                      <span className={css.rankBarWrap}>
+                        <span className={css.rankBar} style={{ width: `${Math.max(3, Math.round((p.calls / peerMax) * 100))}%` }} />
+                      </span>
+                      <span className={css.rankNums}>
+                        <span className={css.rankCalls}>{p.calls} 通</span>
+                        <span className={css.rankDur}>{fmtDuration(p.durationSec)}</span>
+                        {p.calls - p.connected > 0 && <span className={css.rankMissed}>未接 {p.calls - p.connected}</span>}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Card>
+
             <Card title="未接通原因" extra={<span className={kitCss.textCaption}>{snap.missed} 通未接通</span>}>
               {snap.unanswered.length === 0 ? (
                 <div className={kitCss.emptyInline}>全部接通</div>
@@ -201,31 +179,31 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
                 </div>
               )}
             </Card>
-
-            <Card title="最近通话" extra={<span className={kitCss.textCaption}>{snap.recent.length} 条</span>}>
-              {snap.recent.length === 0 ? (
-                <div className={kitCss.emptyInline}>暂无记录</div>
-              ) : (
-                <div className={css.recentList}>
-                  {snap.recent.map((r) => (
-                    <button
-                      key={`${r.username}-${r.localId}`}
-                      type="button"
-                      className={css.recentRow}
-                      data-state={r.connected ? 'done' : 'missed'}
-                      onClick={onOpenChat ? () => { onOpenChat(r.username, r.localId) } : undefined}
-                      title={onOpenChat ? '在聊天记录中定位这条通话' : r.username}
-                    >
-                      <span className={css.recentDir} data-out={r.outgoing ? '1' : '0'}>{r.outgoing ? '呼出' : '呼入'}</span>
-                      <span className={css.recentName}>{r.name}</span>
-                      <span className={css.recentStatus}>{r.status}</span>
-                      <span className={css.recentTime}>{fmtTime(r.createTime)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Card>
           </div>
+
+          <Card title="最近通话" extra={<span className={kitCss.textCaption}>{snap.recent.length} 条</span>}>
+            {snap.recent.length === 0 ? (
+              <div className={kitCss.emptyInline}>暂无记录</div>
+            ) : (
+              <div className={css.recentList}>
+                {snap.recent.map((r) => (
+                  <button
+                    key={`${r.username}-${r.localId}`}
+                    type="button"
+                    className={css.recentRow}
+                    data-state={r.connected ? 'done' : 'missed'}
+                    onClick={onOpenChat ? () => { onOpenChat(r.username, r.localId) } : undefined}
+                    title={onOpenChat ? '在聊天记录中定位这条通话' : r.username}
+                  >
+                    <span className={css.recentDir} data-out={r.outgoing ? '1' : '0'}>{r.outgoing ? '呼出' : '呼入'}</span>
+                    <span className={css.recentName}>{r.name}</span>
+                    <span className={css.recentStatus}>{r.status}</span>
+                    <span className={css.recentTime}>{fmtLocaleSec(r.createTime)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
 
           <div className={kitCss.emptyInline}>
             口径说明：时长取自通话气泡里的「通话时长 MM:SS」文本（XML 的 duration 字段恒为 0）；

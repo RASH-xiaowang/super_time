@@ -69,7 +69,7 @@
     radial-gradient(120% 120% at 25% 20%, color-mix(in srgb, var(--nm-cyan) 18%, transparent), transparent 60%),
     linear-gradient(145deg, color-mix(in srgb, var(--nm-cyan) 8%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   /* 已配置微信账号时这里换成账号头像，按外框圆角裁掉溢出像素 */
   overflow: hidden;
@@ -92,7 +92,7 @@
   white-space: nowrap;
 }
 .navBrandSub {
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-3);
   line-height: 1.2;
   white-space: nowrap;
@@ -100,7 +100,7 @@
 /* 展开态：与 .navItem 同一套左对齐节奏（图标在左、文字在右） */
 .sidebar[data-open] .navBrand {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
   padding: 2px 6px 8px;
 }
 .sidebar[data-open] .navBrandText {
@@ -143,8 +143,8 @@
    宽度对齐成与主题按钮相同的 30px：两者在窄轨里上下叠放，等宽才是一条竖线。 */
 .apiTagText { display: none; }
 .sidebar[data-open] .apiTagText { display: inline; }
-.navFooterRow .apiTag { padding: 5px; width: 30px; justify-content: center; }
-.sidebar[data-open] .navFooterRow .apiTag { padding: 5px 12px; width: auto; }
+.navFooterRow .apiTag { padding: 4px; width: 30px; justify-content: center; }
+.sidebar[data-open] .navFooterRow .apiTag { padding: 4px 12px; width: auto; }
 
 /* 品牌位显示当前微信账号头像时使用：铺满外框（现为导航栏的 .navBrandLogo，30×30）。
    圆角不在这里写 —— 由父级 .navBrandLogo 的 border-radius + overflow: hidden 统一裁切，
@@ -160,12 +160,12 @@
 /* 通用小徽标（其它面板在用，非顶栏专属） */
 .badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   color: var(--nm-cyan);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 28%, transparent);
-  border-radius: 999px;
-  padding: 2px 9px;
+  border-radius: var(--nm-r-pill);
+  padding: 2px 8px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
@@ -210,10 +210,10 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 11px;
-  padding: 5px 12px;
-  border-radius: 999px;
+  padding: 4px 12px;
+  border-radius: var(--nm-r-pill);
   font-family: var(--nm-font-mono, monospace);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   color: var(--nm-text-2);
@@ -302,7 +302,7 @@
   margin-bottom: 6px;
   padding: 8px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12.5px;
@@ -312,7 +312,7 @@
 }
 .sidebar[data-open] .navToggle {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
 }
 .navToggle:hover {
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
@@ -415,7 +415,7 @@
   gap: 2px;
 }
 .navGroupLabel {
-  font-size: 9.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.14em;
   color: var(--nm-text-2);
@@ -445,7 +445,7 @@
   gap: 0;
   padding: 8px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12.5px;
@@ -459,7 +459,7 @@
 /* 展开态：回到左对齐 + 图标与文字间距 */
 .sidebar[data-open] .navItem {
   justify-content: flex-start;
-  gap: 9px;
+  gap: 8px;
 }
 .navItem:hover {
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
@@ -591,4 +591,62 @@
    主界面（数据总览 / 朋友圈洞察 / 存储分析 …）那 13 处两列布局不受影响：那里卡片窄、两列是刻意的。 */
 .settingsDialogBody :global([class*='_cardGrid_']) {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* ============================================================
+ * 手机档（≤560px）：外壳重排
+ *
+ * 断点为什么是 560 而不是复用已有的 720：720 那一档同时被「桌面窗口拖窄」和平板命中，
+ * 用它切手机结构会让桌面上一个 700px 宽的窗口突然长出底部标签栏 —— 桌面窗口随时可拖窄，
+ * 那会看起来像界面坏了。560 与 `ui/use-media-query.ts` 的 PHONE_QUERY 是同一个数，
+ * 两边必须一起改（`mobile-shell.spec.ts` 钉住这件事）。
+ *
+ * 三件事：
+ *   ① 侧栏不再是「左边一列」，而是**塌成顶部一条 48px 的搜索条** —— 刻意不整块隐藏：
+ *      全局搜索框就住在侧栏里（`WechatDataPanel.tsx` 的 `.navSearch`），
+ *      `display:none` 掉侧栏等于手机上再也搜不了。这里用 `> *:not(.navSearch)` 只留搜索，
+ *      品牌位 / 导航条目 / 页脚（主题、设置、余额）全部收掉 —— 导航由底部标签栏接管，
+ *      主题与设置搬进底部栏的「更多」sheet。
+ *   ② `.body` 由横排改竖排，于是「搜索条在上、内容在下」。
+ *   ③ 内容区底部留出底部标签栏的高度（它是 `position: fixed`，不占文档流），
+ *      否则最后一行会被压在栏下面点不到。
+ * ============================================================ */
+@media (max-width: 560px) {
+  .panel {
+    border: none;
+    border-radius: 0;
+  }
+
+  /* 网格背景在手机上是纯开销（一整屏两层 linear-gradient + mask），关掉 */
+  .panel::before { content: none; }
+
+  .body { flex-direction: column; }
+
+  .sidebar,
+  .sidebar[data-open] {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 100%;
+    height: 48px;
+    min-height: 48px;
+    padding: 0 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--nm-border, rgba(0, 240, 255, 0.12));
+    transition: none;
+  }
+
+  /* 只留搜索：其余子块（品牌 / 导航 / 页脚）在手机档一律不渲染 */
+  .sidebar > *:not(.navSearch) { display: none; }
+
+  .sidebar .navSearch {
+    width: 100%;
+    padding: 0;
+  }
+
+  .content {
+    flex: 1;
+    padding: 12px;
+    /* 48px 底部栏 + 手势条安全区；栏本身也带一份 safe-area，这里只补它遮住的那段 */
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  }
 }

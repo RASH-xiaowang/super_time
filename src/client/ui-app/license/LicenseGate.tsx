@@ -7,21 +7,10 @@ import React, { useCallback, useEffect, useState } from 'react'
 import css from './license-gate.module.css'
 // 授权解锁页也要能看到「有新版本可装」：更新是主进程的事，与有没有进主界面无关。
 // 这一屏没有设置弹窗，所以不传 onOpenLicense（「去软件授权」会自动摘掉）。
-import { NoticeBanner } from '../../ui-wechat/src/client/pages/wechat-data/panels/NoticeBanner.tsx'
+import { NoticeBanner } from '@deepseek-ai/dsh-client-ui-wechat/notice'
+import type { LicenseStatus } from '@deepseek-ai/dsh-client-ui-wechat/contracts'
 
-export type LicenseStatus = {
-  state: string
-  licensed: boolean
-  code?: string
-  reason?: string
-  payload?: {
-    edition?: string
-    expiresAt?: string | null
-    features?: string[]
-    issuedTo?: { name?: string; company?: string }
-  } | null
-  device?: { fingerprintShort?: string; hostname?: string }
-}
+export type { LicenseStatus }
 
 const STATE_TITLE: Record<string, string> = {
   licensed: '已授权',
@@ -48,7 +37,7 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
   const [msg, setMsg] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.status) {
       setStatus({ state: 'error', licensed: false, reason: 'license_api_missing' })
       setLoading(false)
@@ -83,7 +72,7 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
   }
 
   const onImport = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importFile) return
     setBusy('import')
     setMsg(null)
@@ -102,7 +91,7 @@ export function LicenseGate({ children }: LicenseGateProps): React.JSX.Element {
   }
 
   const onExportReq = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.exportRequest) return
     setBusy('export')
     setMsg(null)

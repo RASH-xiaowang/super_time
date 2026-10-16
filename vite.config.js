@@ -4,6 +4,7 @@ import path from 'node:path'
 
 /** shim 源码目录（M17）：构建直接读这里，绕开 node_modules 里那份 npm 拷贝。 */
 const SHIM_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'src/client/ui-primitives-shim/src')
+const UI_WECHAT_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'src/client/ui-wechat/src/client')
 
 /**
  * Super Time —— 前端构建配置
@@ -15,8 +16,8 @@ export default defineConfig({
   root: 'src/client/ui-app',
   base: './',
   esbuild: {
-    // ui-app 目录没有自己的 tsconfig，若不显式指定，部分 .tsx 会退回
-    // classic（React.createElement），在未 `import React` 时运行时崩溃。
+    // 显式钉住 automatic JSX：不依赖 esbuild 从项目布局猜测，避免 TSX 退回
+    // classic（React.createElement）后在未显式 `import React` 的模块上运行时崩溃。
     jsx: 'automatic',
     jsxImportSource: 'react',
   },
@@ -25,7 +26,11 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'chrome120',
     reportCompressedSize: false,
-    chunkSizeWarningLimit: 6000,
+    // 2026-10-14 面板改为按 tab 懒加载后，主包约 421 KB、首屏可及的最大业务包
+    // 约 185 KB（Chats）。总览里的日历热力再拆一刀，echarts 的 canvas renderer
+    // 独立成约 451 KB 的按需块，不再替可选图表付进总览首屏。
+    // 6000 KB 的旧阈值会把“重新长回单体”完全藏住；550 KB 保留合理余量并让回归立刻可见。
+    chunkSizeWarningLimit: 550,
   },
   resolve: {
     // M17：shim 包直接解析到**源码目录**，不走 node_modules 里那份 `file:` 拷贝。
@@ -36,6 +41,10 @@ export default defineConfig({
     alias: [
       { find: /^@deepseek-ai\/dsh-client-ui-primitives$/, replacement: path.join(SHIM_SRC, 'index.ts') },
       { find: /^@deepseek-ai\/dsh-client-ui-primitives\/src\/(.*)$/, replacement: path.join(SHIM_SRC, '$1') },
+      { find: /^@deepseek-ai\/dsh-client-ui-wechat\/contracts$/, replacement: path.join(UI_WECHAT_SRC, 'contracts.ts') },
+      { find: /^@deepseek-ai\/dsh-client-ui-wechat\/host$/, replacement: path.join(UI_WECHAT_SRC, 'public', 'host.ts') },
+      { find: /^@deepseek-ai\/dsh-client-ui-wechat\/notice$/, replacement: path.join(UI_WECHAT_SRC, 'public', 'notice.tsx') },
+      { find: /^@deepseek-ai\/dsh-client-ui-wechat\/theme$/, replacement: path.join(UI_WECHAT_SRC, 'public', 'theme.ts') },
     ],
     // 与上游一致的扩展名优先级（源码 import 显式带 .ts/.tsx，保持兼容）
     extensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],

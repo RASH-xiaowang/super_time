@@ -7,14 +7,19 @@
  * @module overview-export
  */
 
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { lazy } from 'react'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
 import { fmtBytes, fmtClockMs } from '../utils/format.ts'
+import { apiGetRemoteImageUrl } from '../api-media.ts'
 
 // 地图面板与 GeoJSON/ECharts 较重：进入可视区附近时才按需加载对应代码块。
 export const WorldMapPanel = lazy(() => import('./WorldMap.tsx').then(m => ({ default: m.WorldMapPanel })))
+
+// 日历热力同样会带进 echarts 的 core/charts/components/renderers。它只在有热力数据时渲染，
+// 单独懒加载后总览首屏不必替这份可选图表付 echarts 的下载与解析成本。
+export const CalendarHeatmapPanel = lazy(() => import('./CalendarHeatmap.tsx').then(m => ({ default: m.CalendarHeatmap })))
 
 /** Format a signed delta with an arrow. */
 export function deltaArrow(n: number): { text: string; cls: string | undefined } {
@@ -66,9 +71,18 @@ export async function imageToDataUrl(img: HTMLImageElement): Promise<string | nu
         if (url.length > 100) return url
       }
     } catch {
-      // Cross-origin without CORS: fall through to fetch below.
+      // Cross-origin without CORS: fall through to the scheme-specific paths below.
     }
   }
+  // Remote sources go through the backend image proxy: it is the only renderer-side path
+  // with a Tencent host allow-list, request audit and local cache.
+  if (/^https?:/i.test(src)) {
+    const proxied = await apiGetRemoteImageUrl(src)
+    return proxied === '' ? null : proxied
+  }
+  // Blob/file objects are local. Keeping this fetch avoids losing already-created object URLs
+  // when the image is not fully loaded at export time.
+  if (!/^(blob:|file:)/i.test(src)) return null
   try {
     const res = await fetch(src)
     if (!res.ok) return null

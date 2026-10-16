@@ -20,9 +20,15 @@ jobs:
     # （整批用例耗时 2658s vs 本机 109s），单元测试一步实测已占 26 分钟；而 4 条重夹具
     # 用例此前是「快速超时」（4×180s）才刚好挤进 30 分钟 —— 它们现在会真的跑完，
     # 30 分钟会把作业整条杀掉（那是比「用例失败」更差的信号）。
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-10-09 加：`check:mutation:diff` 要用 `git diff <base>...HEAD` 算改动文件，
+          # 默认的浅克隆（depth=1）拿不到 base ⇒ 脚本会退化成全量（25~30 分钟），把这条 job 顶爆。
+          # 现在它退化的代价是「多跑一会儿」，但仍然会跑，所以浅克隆在这里是**慢**而不是**错**；
+          # 拉全历史只是让它快。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -48,17 +54,13 @@ jobs:
       #    改了 src/**/*.ts 忘记重建就会静默跑旧代码（wechat-host.js 直接 import 它）。
       #    门禁 = 重建后产物必须与提交的逐字节一致。
       - name: 后端 bundle 与源码一致
-        run: |
-          node scripts/build-wechat-bundle.js
-          git diff --exit-code -- src/backend/wechat-data/lib/index.js
+        run: npm run check:backend
         shell: pwsh
 
       # ── 声明产物一致性（H12）：lib/types/**/*.d.ts 是前端取类型的唯一来源，
       #    同样会出现「改了 src 忘记重生成」的静默漂移。
       - name: 后端类型声明与源码一致
-        run: |
-          npm run build:types
-          git diff --exit-code -- src/backend/wechat-data/lib/types
+        run: npm run check:types
         shell: pwsh
 
       # ── 接口参考一致性（H14）：docs/API.md 由 gateway.ts 的 @Remote 自动生成，
@@ -66,18 +68,132 @@ jobs:
       - name: 接口参考与源码一致
         run: npm run docs:api:check
 
+      # 前端 WechatRemote 镜像与后端 @Remote 参数/返回类型逐方法比对（不只比方法名）。
+      # tools/audit-remote-types.mjs 动态扫 gateway*.ts，不存在空转窗口。
+      - name: Remote 类型镜像比对
+        run: npm run audit:remote-types
+
+      - name: Remote 文件清单一致性
+        run: npm run check:remote-files
+
       # 单元测试：跑的是 `npm test`，但走一层包装 —— 只有「已归因的 vitest RPC 假红」
       # （用例全过 + 退出码非 0 + 日志里有 `Timeout calling "onTaskUpdate"`）才允许自动重跑一次，
       # 且必须把第一次的榜首文件与秒数写进 step summary（PR 页面可见）。
       # 政策与三条判据见 docs/RELEASE-PLAN.md 的 N36 与 src/backend/tests/helpers/ci-unit-retry.ts。
       - name: 单元测试
-        run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs
+        shell: pwsh
+        env:
+          # 2026-10-16：重跑上限从默认 1 提到 3。理由与 release.yml 同源 ——
+          # 这类假红是环境停顿（分段墙钟已证明不在测试代码里），CI 上连续两次撞上
+          # 并不罕见（v1.0.8 发布实测：push 触发的 CI 因「两次都是假红」而红，
+          # 而同一提交的 PR 触发 CI 全绿）。判据没放宽 —— 每次重跑前仍要过
+          # classifyRun 三条（退出码非 0 + 有征兆 + 无失败用例），出现真失败立刻红。
+          SUPERTIME_UNIT_MAX_RETRIES: '3'
+        run: |
+          # 2026-10-15：这一步在 CI 上偶发红（916s 失败 / 917s 成功，同一提交两次跑结果不同），
+          # 而本机与 D 盘克隆（含 CI=1 串行模式）都稳定绿。失败信息要登录才看得到 ——
+          # 所以这里把输出同时写进 step summary 与一个文件（失败时上传为 artifact）。
+          $out = node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs 2>&1 | Out-String
+          Write-Host $out
+          New-Item -ItemType Directory -Force -Path ci-evidence | Out-Null
+          $out | Out-File -Encoding utf8 ci-evidence/unit-test.log
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "## 单元测试`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 前端构建
         run: npm run build:ui
 
       - name: 前端 shim 与源码一致
         run: npm run check:shim
+
+      # ── 2026-10-09 阶段 2：第一档检查（清单与实测成本见 scripts/ci-tiers.mjs）──────────
+      # 之前这三件都不在门禁里：`lint:db` 是绿的但**新违规没人拦**，`check:deps-provenance`
+      # 0.2 秒却等于没跑，当时全量变异自证**完全没进过 CI**。绿而不设门禁等于没检查。
+      - name: 后端源码 lint
+        run: npm run lint:db
+
+      - name: 依赖来源核对
+        run: npm run check:deps-provenance
+
+      # 18 个便宜的性能基准。2026-10-12 实测约 27 秒；此前它们只贡献一行 `skipped`，
+      # 因为每个都用 `describe.skipIf(MEASURE_xxx !== '1')` 守着，而 package.json 里
+      # 一个 MEASURE_* script 都没有 —— 于是「有基准」这件事一直是假的。
+      - name: 性能基准（18 个快的）
+        timeout-minutes: 10
+        run: npm run measure:quick
+
+      # 纯 Node 冒烟与真 Electron 冒烟（都是秒级，实测成本写在 scripts/ci-tiers.mjs 里）。
+      - name: 检索冒烟
+        run: npm run rag:smoke
+
+      - name: EPIPE 崩溃冒烟
+        run: npm run epipe:smoke
+
+      - name: 渲染层 console 进诊断日志（真机 e2e）
+        timeout-minutes: 10
+        run: npm run renderer-console:e2e
+
+      - name: UI 冒烟（真机 e2e）
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # 2026-10-15：这一步在 CI 上稳定红（7 秒即失败），而本机与 D 盘克隆都绿。
+          # 失败信息只有一句 Playwright 超时，看不到**当时界面长什么样** —— 所以这里把
+          # 输出同时写进 step summary（PR 页面可见）与一个文件（失败时上传为 artifact）。
+          $out = npm run ui:e2e-smoke 2>&1 | Out-String
+          Write-Host $out
+          New-Item -ItemType Directory -Force -Path ci-evidence | Out-Null
+          $out | Out-File -Encoding utf8 ci-evidence/ui-e2e-smoke.log
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "## UI 冒烟（真机 e2e）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 失败时把现场（日志 + 截图）传上来 —— 没有它，CI 上这条红只能靠猜。
+      # ⚠️ 目录不能叫 `.tmp-*`：`.gitignore` 里有 `.tmp-*`，而 upload-artifact 默认
+      # 会跳过被 gitignore 的文件 ⇒ 传上去是个空 artifact（2026-10-15 实测踩到）。
+      - name: 上传现场（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-evidence
+          path: ci-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 导航壳（真机 e2e）
+        timeout-minutes: 10
+        run: npm run ui:nav-e2e
+
+      - name: 加载态恢复（真机 e2e）
+        timeout-minutes: 10
+        run: npm run ui:loading-e2e
+
+      # 长列表虚拟化（真机 e2e，#22/N18）。
+      # 为什么接进 PR 门禁：它量的是**行为**（DOM 节点数的硬上界、首尾可达、加载更多不跳位、
+      # 悬浮日期头），源码级接线守卫证明不了这些；而这份脚本此前**谁都没跑**
+      # （`npm test` 里只有接线判据），于是它自己那条「滚到底悬浮日期头」长期红着也没人知道 ——
+      # 第一次接进来就抓到：夹具每天 10 条 ⇒ 每块 11 行 ≈ 一屏 11 行，底部窗口起点必然落在
+      # 日期标签行上，那条判据结构上不可能成立（已把夹具改成每天 40 条，并给它加了
+      # 「前提当场断言」，免得再退化成空转）。
+      # 本机实测（2026-10-11，windows / Node 24.20.0，已 build:ui）**34.0 秒**，27 项全绿。
+      - name: 长列表虚拟化（真机 e2e）
+        timeout-minutes: 15
+        run: npm run ui:longlist-e2e
+
+      # 变异自证的**增量**档：只跑这次改动波及的那些。
+      # 口径是「目标文件改了 **或** 它的判据 spec 改了」——只按目标文件筛会漏掉
+      # 「把守卫削弱一点」那类改动（spec 变松了但目标文件没动，于是那条变异不再咬红，
+      # 而登记表与全量单测都还是绿的）。2026-10-09 实测：45 条 vs 53 条。
+      # 基线 ref：push 用 before、PR 用 base.sha；两者在 Actions 里名字不同，收在脚本里
+      # （npm script 在 Windows 的 cmd 里没法拼参数）。拿不到 diff 时脚本退化成全量。
+      - name: 变异自证（增量）
+        timeout-minutes: 25
+        run: npm run check:mutation:diff
+        env:
+          SUPERTIME_MUTATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
 
       # 安全守卫的端到端探针（H10）：在真实渲染进程里尝试 file:/smb:/自定义协议开窗
       # 与外部导航，断言全部被拒。打包态另外由 npm run security-guard:smoke:packaged 覆盖。
@@ -96,6 +212,18 @@ jobs:
       # 隐私同意闸门（H14）：未勾选时按钮必须是禁用态 —— SSR 渲染事实，不是读代码。
       - name: 隐私同意闸门 SSR 冒烟
         run: npm run privacy-gate:smoke
+
+      # 启动页四个内容页 + 授权面板：分组名与 nav-config 真源现算比对（2026-09-30 内容重写配套）。
+      - name: 启动页内容 SSR 冒烟
+        run: npm run onboarding:smoke
+
+      # 词云卡片：撒点态要宽度、SSR 走 flex 回落 —— 只有真渲染一次才看得到（2026-09-30 词云重做配套）。
+      - name: 词云卡片 SSR 冒烟
+        run: npm run wordcloud:smoke
+
+      # 模型探针（测试连接 / 查询余额）+ 左下角余额条：首帧渲染事实（2026-09-30 新功能）。
+      - name: 模型探针 / 余额条 SSR 冒烟
+        run: npm run llm-balance:smoke
 
       - name: 知识图谱后端冒烟
         run: npm run check:knowledge-graph
@@ -148,3 +276,40 @@ jobs:
       - name: 隐私同意先于授权（真机 e2e，H14）
         timeout-minutes: 12
         run: npm run e2e:h14-consent
+
+
+  # ── 2026-10-09 阶段 2：变异登记表被动时，才起这条全量 job ──────────────────────
+  #
+  # 为什么要单独一条 job：`verify` 的单测已占 26 分钟、上限 45 分钟，而全量变异
+  # 按每条约 4 秒（vitest 冷启动主导）估是 25~30 分钟 —— 塞进去会整条被杀掉。
+  # 「作业超时」比「用例失败」难查得多，所以宁可多一个**只在需要时才起**的 job。
+  #
+  # 什么时候需要：变异登记表本身（scripts/mutations-registry*.mjs）被改动时。
+  # 那时按文件筛选已经没有意义 —— 筛选的基准就是被改的那个东西
+  # （见 scripts/mutation-scope.mjs）。
+  #
+  # 探针为什么是个脚本：Actions 的 job 级 `if:` 做不了文件匹配，只能先跑一个极快的
+  # 步骤把结论写进 step output。拿不到 diff 时它输出「要跑」——静默跳过是最坏的结果。
+  mutation-full:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 判断这次改动要不要跑全量变异反证
+        id: probe
+        run: node scripts/ci-needs-full-mutation.mjs "${{ github.event.pull_request.base.sha || github.event.before }}"
+
+      - name: 变异自证（全量）
+        if: steps.probe.outputs.needs_full_mutation == 'true'
+        timeout-minutes: 70
+        run: npm run check:mutation

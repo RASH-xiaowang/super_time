@@ -37,7 +37,7 @@ export declare function createTasksRemotes(rc: createTasksRemotesInputs): {
     }): TaskMutationResult;
     extractTasks(options?: {
         days?: number;
-    }): TaskMutationResult;
+    }): Promise<TaskMutationResult>;
     syncHandoffTasks(): TaskMutationResult;
     getHandoffReminds(): HandoffRemindsSnapshot;
 };

@@ -1,5 +1,6 @@
 /**
- * 日期区间纯逻辑：预设区间、本地日期格式化、区间归一化。
+ * 日期区间纯逻辑：预设区间、区间归一化。（`Date` → `YYYY-MM-DD` 那份在 `./format.ts`，
+ * 与聊天资料页/知识库共用同一个唯一出处 —— 同一段 padStart 拼接原先在这里也有第二份。）
  *
  * 为什么抽出来：此前 8 个面板各写一套 `type="date"` 与各自的区间处理（周期总结里甚至
  * 同时存着 `localToday`/`addDays`/`fmt` 三个近重复的 helper），预设只在周期总结有。
@@ -8,6 +9,8 @@
  * 全部走**本地时区**：`new Date().toISOString().slice(0, 10)` 取的是 UTC 日期，
  * 在 UTC+8 的夜里会算成昨天 —— 用户看到的「今天」必须是本机日历上的今天。
  */
+
+import { fmtLocalDate } from './format.ts'
 
 /** ISO 日期字符串（`YYYY-MM-DD`）。 */
 export type ISODate = string
@@ -29,22 +32,16 @@ export interface RangePreset {
   resolve: (now: Date) => { from: ISODate; to: ISODate }
 }
 
-/** 本地日期 → `YYYY-MM-DD`。 */
-export function formatLocalDate(d: Date): ISODate {
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
 /** 本机日历上的今天。 */
 export function todayISO(): ISODate {
-  return formatLocalDate(new Date())
+  return fmtLocalDate(new Date())
 }
 
 /** 在某个本地日期上偏移 n 天（`base` 为空时基于今天）。 */
 export function addDaysISO(base: ISODate | '', n: number): ISODate {
   const d = base ? parseISODate(base) : new Date()
   d.setDate(d.getDate() + n)
-  return formatLocalDate(d)
+  return fmtLocalDate(d)
 }
 
 /**
@@ -66,12 +63,12 @@ export function isValidISODate(iso: string): iso is ISODate {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false
   const d = parseISODate(iso)
   if (Number.isNaN(d.getTime())) return false
-  return formatLocalDate(d) === iso
+  return fmtLocalDate(d) === iso
 }
 
 /** 全部预设（顺序即展示顺序：从最常用到最宽）。 */
 export const RANGE_PRESETS: readonly RangePreset[] = [
-  { key: 'today', label: '今天', resolve: (now) => ({ from: formatLocalDate(now), to: formatLocalDate(now) }) },
+  { key: 'today', label: '今天', resolve: (now) => ({ from: fmtLocalDate(now), to: fmtLocalDate(now) }) },
   // 周一起算：与「周期总结」改前的口径一致（`(getDay() + 6) % 7` 把周日算到上一周末尾）
   {
     key: 'week', label: '本周',
@@ -80,25 +77,25 @@ export const RANGE_PRESETS: readonly RangePreset[] = [
       monday.setDate(now.getDate() - ((now.getDay() + 6) % 7))
       const sunday = new Date(monday)
       sunday.setDate(monday.getDate() + 6)
-      return { from: formatLocalDate(monday), to: formatLocalDate(sunday) }
+      return { from: fmtLocalDate(monday), to: fmtLocalDate(sunday) }
     },
   },
   {
     key: 'month', label: '本月',
     resolve: (now) => ({
-      from: formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 1)),
-      to: formatLocalDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+      from: fmtLocalDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+      to: fmtLocalDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
     }),
   },
   {
     key: 'last-month', label: '上月',
     resolve: (now) => ({
-      from: formatLocalDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-      to: formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 0)),
+      from: fmtLocalDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      to: fmtLocalDate(new Date(now.getFullYear(), now.getMonth(), 0)),
     }),
   },
-  { key: 'last-7', label: '近7天', resolve: (now) => ({ from: addDaysISO(formatLocalDate(now), -6), to: formatLocalDate(now) }) },
-  { key: 'last-30', label: '近30天', resolve: (now) => ({ from: addDaysISO(formatLocalDate(now), -29), to: formatLocalDate(now) }) },
+  { key: 'last-7', label: '近7天', resolve: (now) => ({ from: addDaysISO(fmtLocalDate(now), -6), to: fmtLocalDate(now) }) },
+  { key: 'last-30', label: '近30天', resolve: (now) => ({ from: addDaysISO(fmtLocalDate(now), -29), to: fmtLocalDate(now) }) },
 ]
 
 /**
@@ -109,7 +106,7 @@ export const RANGE_PRESETS: readonly RangePreset[] = [
  */
 export function resolveRangePreset(key: RangePresetKey, now: Date = new Date()): { from: ISODate; to: ISODate } {
   const found = RANGE_PRESETS.find(p => p.key === key)
-  if (!found) return { from: formatLocalDate(now), to: formatLocalDate(now) }
+  if (!found) return { from: fmtLocalDate(now), to: fmtLocalDate(now) }
   return found.resolve(now)
 }
 

@@ -1,0 +1,463 @@
+/* ClawBot 集成面板 —— 样式（全部走 --nm-* 主题令牌，深浅主题自动跟随）。
+ * 视觉语言对齐设计稿（design/clawbot-a-*.html）：玻璃卡片 + 状态点 + 紧凑键值行。 */
+
+.root {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-dense-g3, 6px);
+  font-family: var(--nm-font-sans, inherit);
+  min-height: 0;
+  /* B0：填满内容区，剩余高度交给 flex 分配 —— 面板内只准一个滚动容器；
+     高度不再靠视口单位猜（窗口缩放 / DPI 变化自动跟随）。 */
+  height: 100%;
+  overflow-y: auto;
+  /* B0：断点基准 = 面板自身宽度（面板宽 = 窗宽 − 侧栏 58|176 − 32，
+     按窗口宽度设断点会在侧栏开合时误判；@container 规则已由 B1 落地（列分档显隐）。 */
+  container-type: inline-size;
+}
+
+/*
+ * B0：不滚的块不许被 flex 压缩。kit .panelShell 的同款纪律 —— 默认 flex-shrink:1
+ * 会先把子项压进容器，而 Card 自带 overflow:hidden，内容被静默吞掉（无滚动条、无报错）。
+ * :not(.tableCard) 排除表格卡：它是唯一吃剩余高度的弹性区（其内 .msgList 独占滚动）。
+ */
+.root > *:not(.shell) { flex-shrink: 0; }
+
+/*
+ * ── 两栏定式（C2，2026-10-13）：实例轨 | 工作区 ─────────────────
+ * shell 吃掉 root 的剩余高度；工作区在会话态不滚（滚动归 .msgList）、在设置态整列滚
+ * （设置是低频长内容，且让实例轨在设置态也保持常驻可见）。
+ * N 档（≤800）不收左栏：750px 再切 168px 只剩 ~540px 给对话，太窄 —— 轨退化为顶部横向实例条。
+ */
+.shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--nm-dense-g3, 6px);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@container (min-width: 801px) { .shell { grid-template-columns: 168px minmax(0, 1fr); } }
+@container (min-width: 1201px) { .shell { grid-template-columns: 208px minmax(0, 1fr); } }
+.workChat { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.workChat > *:not(.tableCard) { flex-shrink: 0; }
+.workSettings { min-height: 0; overflow-y: auto; }
+
+/* 实例轨：一个微信号一行；当前行高亮边 + 「当前」标（继承实例卡的诚实纪律，升级为常驻导航）。 */
+.rail {
+  display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px);
+  min-height: 0; min-width: 0;
+  padding: var(--nm-s-2, 8px);
+  background: var(--nm-bg-2, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md, 10px);
+  overflow-y: auto;
+}
+@container (max-width: 800px) {
+  .rail { flex-direction: row; align-items: stretch; overflow-y: visible; overflow-x: auto; }
+  .railList { display: flex; flex-direction: row; gap: var(--nm-dense-g3, 6px); }
+  .railRow { flex: 0 0 auto; }
+  .railAdd { flex: 0 0 auto; }
+}
+.railList { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); min-width: 0; flex: 1 1 auto; min-height: 0; }
+.railRow {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  text-align: left;
+  background: var(--nm-bg-1, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm, 6px);
+  cursor: pointer;
+}
+.railRow[data-current] { border-color: color-mix(in srgb, var(--nm-cyan) 42%, transparent); }
+.railRowHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.railName {
+  font-size: 12px; font-weight: 600; color: var(--nm-text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.railMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); white-space: nowrap; }
+.railBind { flex: 0 0 auto; }
+.railAdd {
+  padding: 4px 8px;
+  font-size: 12px; font-family: inherit;
+  color: var(--nm-text-2);
+  background: none;
+  border: 1px dashed var(--nm-border);
+  border-radius: var(--nm-r-sm, 6px);
+  cursor: pointer;
+}
+.hdIcon { color: var(--nm-cyan); font-size: 14px; }
+
+/* B2：指挥条常驻绑定态 pill（两个视图都看得见四态，修 P7）。
+   四态文字配色复用设置卡的 st* 类；「检测中… / 状态未知」走 stUnknown（muted）——
+   快照不可信时不拿 binding 的四态冒充事实（与后端 read-failure-contract 同款纪律）。 */
+.statusPill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.stUnknown { color: var(--nm-text-3); }
+
+/* ── 通用卡片内段 ─────────────────────────────────────────── */
+.card { margin: 0; }
+.mono { font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
+.muted { color: var(--nm-text-3); font-size: 12px; }
+
+.noticeOk {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  font-size: 12px;
+  color: var(--nm-success);
+  background: color-mix(in srgb, var(--nm-success) 8%, transparent);
+}
+.noticeErr {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  font-size: 12px;
+  color: var(--nm-danger);
+  background: color-mix(in srgb, var(--nm-danger) 8%, transparent);
+}
+
+/* ── 绑定卡片 ────────────────────────────────────────────── */
+.bindRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.bindAvatar {
+  width: 42px; height: 42px; flex: 0 0 42px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  border-radius: var(--nm-r-md, 10px);
+  border: 1px solid var(--nm-border);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+.bindGrow { flex: 1; min-width: 0; }
+.bindTitle { font-size: 14px; font-weight: 500; color: var(--nm-text-1); }
+.bindDesc { font-size: 12px; color: var(--nm-text-3); margin-top: 1px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bindStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.stUnbound { color: var(--nm-cyan); }
+.stBinding { color: var(--nm-amber, #f59e0b); }
+.stBound { color: var(--nm-success); }
+.stUnboundByUser { color: var(--nm-danger); }
+
+.kvGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+  margin-top: 12px;
+}
+
+/*
+ * C3（R3 反转，2026-10-13）：设置视图单列通栏。上一稿的 W/XW 双列（绑定卡 | 自检卡 + FAQ 通栏）
+ * 退役 —— 实例轨吃掉左栏宽度后双列的动机（两张矮卡并排填空）不存在，且绑定卡与自检已合并成
+ * 一张卡（右列四成空白与 kvGrid 孤儿格随之消失，P6）。
+ */
+.settingsCol { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); }
+.envHead {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--nm-border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.dangerZone {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--nm-border);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+/* 行为卡：switch + 标题 + 说明（P4：会替你发消息的开关，视觉重量要配得上后果）。 */
+.autoRow { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+.autoRow input { accent-color: var(--nm-accent, currentColor); margin-top: 2px; }
+.autoText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.autoTitle { font-size: 12px; font-weight: 600; color: var(--nm-text-1); }
+.autoDesc { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); line-height: 1.7; }
+.kvItem {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--nm-border);
+  font-size: 12px;
+}
+.kvKey { color: var(--nm-text-3); }
+.kvVal { color: var(--nm-text-1); font-family: var(--nm-font-mono, ui-monospace, monospace); }
+
+/* C3：N 档键值行改键上值下 —— 单列时 space-between 会把键值对横跨 750px 拉散（P5）。 */
+@container (max-width: 800px) {
+  .kvItem { flex-direction: column; gap: 2px; }
+}
+
+/* ── 环境自检 ────────────────────────────────────────────── */
+.chk {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--nm-border);
+  font-size: 12px;
+}
+.chk:last-child { border-bottom: 0; }
+.tickOk, .tickBad {
+  width: 15px; height: 15px; flex: 0 0 15px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--nm-r-pill, 999px);
+  font-size: 10px;
+}
+.tickOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 15%, transparent); }
+.tickBad { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 15%, transparent); }
+.chkLabel { color: var(--nm-text-1); }
+.chkDetail { margin-left: auto; color: var(--nm-text-3); font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: var(--nm-fs-xs, 11px); }
+
+/* ── FAQ ─────────────────────────────────────────────────── */
+.faq { border-bottom: 1px dashed var(--nm-border); }
+.faq:last-child { border-bottom: 0; }
+.faqQ {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0;
+  font-size: 12px; color: var(--nm-text-1);
+  cursor: pointer; list-style: none;
+}
+.faqQ::-webkit-details-marker { display: none; }
+.faqQ::before {
+  content: "?";
+  width: 15px; height: 15px; flex: 0 0 15px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--nm-r-pill, 999px);
+  font-size: 10px;
+  color: var(--nm-cyan);
+  background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
+}
+.faqA { padding: 0 0 10px 23px; font-size: 12px; color: var(--nm-text-2); line-height: 1.75; }
+
+/* ── 筛选条（B1：工具卡与页脚卡合并成一条）───────────────── */
+.filterRow { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; }
+.filterLeft { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; min-width: 0; }
+.filterRight { display: flex; align-items: center; gap: var(--nm-dense-g3, 6px); flex-wrap: wrap; margin-left: auto; }
+.stats { font-size: var(--nm-dense-fs, 12px); color: var(--nm-text-3); white-space: nowrap; }
+.live { color: var(--nm-success); white-space: nowrap; }
+
+/* ── 发送坞（B1：发送器从表格上方下沉为底部 dock；C3：实例标签 + 提示换行）── */
+.composerCol { display: flex; flex-direction: column; gap: 4px; }
+.composerRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dockAction { flex: 0 0 auto; }
+/* P9：发送归属标签 —— 多实例下不说清「以哪个号发」，用户会把消息发到别的号上。 */
+.dockSlot {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-2);
+  background: var(--nm-bg-2, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-xs, 4px);
+  white-space: nowrap;
+}
+.composerInput {
+  flex: 1 1 260px;
+  min-width: 200px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--nm-text-1);
+  background: var(--nm-bg-card);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm, 6px);
+}
+.composerInput::placeholder { color: var(--nm-text-3); }
+.composerInput:focus { border-color: var(--nm-cyan); outline: none; }
+.composerInput:disabled { opacity: 0.55; }
+.searchFlex { flex: 1 1 200px; min-width: 160px; }
+.tableCard { display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1 1 auto; }
+/*
+ * P10（2026-10-13 真机实测抓到，C1 之前就存在）：kit Card 会在 children 外再包一层 body div
+ * （flush 态 = .cardBdFlush），它插在 .tableCard 与 .msgList 之间 —— body 是 block、高度随内容，
+ * 于是 .msgList 的 flex 收缩无从谈起：实测 body/msgList 高 1839px 被 .tableCard 的
+ * overflow:hidden 裁成 183px，**裁掉的部分任何地方都没有滚动条（内容不可达）**。
+ * 让 body 透传成 flex 列容器，高度链才通到 .msgList（唯一滚动容器）。
+ * 选择器只认 .tableCard 的直接 div 子（无 title/footer 时 body 是唯一的直接 div）。
+ */
+.tableCard > div { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+/* B0：消息列表是面板内唯一的滚动容器（旧写法用视口单位猜高度，已退役）。 */
+.msgList { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/*
+ * ── 对话流（C1，2026-10-13）──────────────────────────────────
+ * 气泡是「对话」读法的载体：入站左 / 出站右，方向靠左右与描边色，不靠 Badge。
+ * 比例护栏 G7：max-width 按面板档（86 / 72 / 64%，容器查询）+ min-width 120px ——
+ * 长文在气泡里换行（overflow-wrap 在 .bubbleText），不再存在「列被压塌」这回事（P0）。
+ * 圆角/间距全走令牌与偶数阶梯（theme-geometry 对新值零容忍）。
+ */
+.thread { display: flex; flex-direction: column; gap: var(--nm-dense-g3, 6px); padding: var(--nm-s-2, 8px) 0; }
+.daySep {
+  align-self: center;
+  padding: 1px 10px;
+  font-size: var(--nm-fs-xs, 11px);
+  color: var(--nm-text-3);
+  background: var(--nm-bg-2, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-pill, 999px);
+}
+.bubbleRow { display: flex; min-width: 0; }
+.bubbleRowOut { justify-content: flex-end; }
+.bubble {
+  box-sizing: border-box;
+  max-width: 86%;
+  min-width: 120px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px;
+  background: var(--nm-bg-2, transparent);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md, 10px);
+}
+.bubbleOut {
+  background: color-mix(in srgb, var(--nm-cyan) 7%, transparent);
+  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+}
+@container (min-width: 801px) { .bubble { max-width: 72%; } }
+@container (min-width: 1201px) { .bubble { max-width: 64%; } }
+.bubbleText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-1);
+}
+.bubbleMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); font-variant-numeric: tabular-nums; }
+/* 新消息浮标：sticky 贴在滚动容器底边，点它才跳（不打断阅读）；滚到底自动清零。 */
+.newFloat {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  padding: 4px 12px;
+  font-size: var(--nm-fs-xs, 11px);
+  font-family: inherit;
+  color: var(--nm-cyan, currentColor);
+  background: var(--nm-bg-2, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 45%, transparent);
+  border-radius: var(--nm-r-pill, 999px);
+  cursor: pointer;
+}
+
+/*
+ * C0（2026-10-13）反转记录：原 B1 在这里用两条 @container 把 .colType / .colChars
+ * 单元格 display:none「隐藏列」。真机实测否证了该机制 —— 960×640（面板 750px，N 档）下
+ * 正文列 clientWidth 52 / scrollWidth 7962、表格右半整块空白：display:none 挂在**单元格**上
+ * 不会移除 <colgroup> 的 <col> 宽度，table-layout: fixed 照样为被隐藏的列留位。
+ * 机制整体退役（docs/CLAWBOT-REDESIGN.html §5.3 的假设被 CLAWBOT-THREAD-REDESIGN.html §2 P0 否证）：
+ * 明细表格不再分档藏列。横滚安全网不需要新包装 —— .msgList 的 overflow: auto 本就横纵同容器，
+ * 配合 kit .table 的 min-width: 640px，面板比 640 窄时整表在 msgList 内横滚、不藏列；
+ * 另加一层 overflow-x 包装反而会把表头 sticky 的最近滚动口抢走（吸顶失效），故不加。
+ * 「窄面板下正文要舒展」交给 C1 的对话流。
+ * 本块只保留 kvGrid 的 N 档退化（那是设置视图的规则，与列隐藏无关）。
+ */
+@container (max-width: 800px) {
+  .kvGrid { grid-template-columns: minmax(0, 1fr); }
+}
+.tdTime { white-space: nowrap; font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
+.tdDir { white-space: nowrap; }
+.tdType { white-space: nowrap; }
+.tdChars { white-space: nowrap; text-align: right; }
+
+
+/* ── 正文内容（附件与文本的展示形态）──────────────────────── */
+.textBody {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  color: var(--nm-text-1);
+}
+.contentStack { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mediaRow { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.mediaName {
+  flex: 0 1 auto;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+}
+.mediaMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-3); }
+/* 缩图：固定 84px 高（行高稳定），圆角描边，悬停高亮，点击放大。 */
+.thumbBtn { padding: 0; border: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: var(--nm-r-sm, 6px); }
+.thumbImg {
+  display: block;
+  height: 84px;
+  max-width: 168px;
+  object-fit: cover;
+  border-radius: var(--nm-r-sm, 6px);
+  border: 1px solid var(--nm-border);
+  transition: border-color 0.15s ease;
+}
+.thumbBtn:hover .thumbImg { border-color: var(--nm-cyan); }
+/* 取回中 / 等待 / 失败：与缩图同尺寸的占位框 —— 列表不因状态切换跳高。 */
+.thumbBox, .thumbBoxRetry {
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--nm-fs-xs, 11px);
+  font-family: inherit;
+  color: var(--nm-text-3);
+  border: 1px dashed var(--nm-border);
+  border-radius: var(--nm-r-sm, 6px);
+  background: none;
+}
+.thumbBoxRetry {
+  color: var(--nm-amber, #f59e0b);
+  border-color: color-mix(in srgb, var(--nm-amber, #f59e0b) 40%, transparent);
+  cursor: pointer;
+}
+.mediaErr { color: var(--nm-amber, #f59e0b); cursor: help; }
+.mediaZoomDialog { max-width: min(86vw, 900px); }
+.mediaZoom { display: block; max-width: 100%; max-height: 72vh; margin: 0 auto; border-radius: var(--nm-r-sm, 6px); }
+
+/* ── 扫码绑定弹窗 ────────────────────────────────────────── */
+.qrDialog { text-align: center; }
+.qrSub { margin: 0 0 10px; font-size: 12px; color: var(--nm-text-3); line-height: 1.7; }
+/* 二维码纸面固定白底深墨（二维码靠对比度，不跟随深浅主题）。 */
+.qrPaper {
+  width: 188px; height: 188px;
+  margin: 0 auto 8px;
+  padding: 10px;
+  background: #ffffff;
+  border-radius: var(--nm-r-md, 10px);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nm-cyan) 20%, transparent);
+}
+.qrSvg { width: 100%; height: 100%; display: block; }
+.qrSvg path { fill: #0b1220; }
+.qrTimer { font-family: var(--nm-font-mono, ui-monospace, monospace); font-size: 12px; color: var(--nm-cyan); }
+.qrTimer[data-state="scaned"] { color: var(--nm-success); }
+.qrTimer[data-state="expired"] { color: var(--nm-amber, #f59e0b); }
+.qrSteps { display: flex; gap: 6px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.qrStep {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: var(--nm-r-pill, 999px);
+  border: 1px solid var(--nm-border);
+  color: var(--nm-text-3);
+}
+.qrStepOn {
+  color: var(--nm-cyan);
+  border-color: color-mix(in srgb, var(--nm-cyan) 35%, transparent);
+  background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
+}
+.qrActions { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+.qrDone { padding: 26px 0 16px; font-size: 14px; color: var(--nm-success); }
+.qrHint { margin-top: 12px; font-size: 11px; color: var(--nm-text-3); line-height: 1.7; text-align: left; }
+
+/* ── 实例共用件（轨与设置卡共用；原实例卡其余类随 C3 拆解退役）────────────── */
+.instCurrent {
+  font-size: var(--nm-fs-xs, 11px); padding: 1px 6px; flex-shrink: 0;
+  border-radius: var(--nm-r-xs, 4px);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan) 32%, transparent);
+  color: var(--nm-cyan-text);
+}
+.instSelect {
+  font-size: 12px; padding: 4px 6px; border-radius: var(--nm-r-xs, 4px);
+  background: var(--nm-bg-1); color: var(--nm-text-1);
+  border: 1px solid var(--nm-border); max-width: 220px;
+}
+.instWarn { font-size: var(--nm-fs-xs, 11px); color: var(--nm-warn, var(--nm-text-3)); }
+.instReadError {
+  font-size: 12px; color: var(--nm-danger, var(--nm-text-1));
+  padding: 8px 10px; border-radius: var(--nm-r-sm, 6px);
+  background: var(--nm-bg-2); border: 1px solid var(--nm-border);
+}

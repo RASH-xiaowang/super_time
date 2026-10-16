@@ -7,10 +7,10 @@
  */
 import { pbkdf2Sync } from 'node:crypto'
 import {
-  closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
+  closeSync, existsSync, mkdirSync, openSync, readSync, unlinkSync,
 } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
-import { fullDecryptFile } from './sync.ts'
+import { atomicReplace, fullDecryptFile, looksDecrypted } from './sync.ts'
 import { getConfig, scanDbFiles } from './config.ts'
 
 const PBKDF2_ITERS = 256000
@@ -58,12 +58,18 @@ function deriveEncKey(rawKey: Buffer, salt: Buffer, keyFormat: string): Buffer {
  * @param rawDbDir - raw WeChat db_storage dir (from config db_dir).
  * @param decryptedDir - decrypted snapshot root (target mirrors db_storage).
  * @param onProgress - per-database progress callback (done/total/failed/message).
+ * @param onlyRel - **只解密这些 rel 路径**（`message/message_0.db` 这种键，与
+ *   {@link checkDecryptedIntegrity} 出来的 `file` 同构）。修复链路用它实现
+ *   「损坏哪个解哪个」：不传 = 全量解密（`立即解密` 原行为，逐字节不变）；
+ *   传了 = 别的库连读都不读，`total` 计数也随过滤后的集合走 —— 修复进度条
+ *   说的是「要修的这几个」，不是「全部 22 个库」。
  * @returns ok + success/failure counts (per-db failures never abort the run).
  */
 export async function decryptAllDbs(
   rawDbDir: string,
   decryptedDir: string,
   onProgress?: (done: number, total: number, failed: number, message: string) => void,
+  onlyRel?: readonly string[],
 ): Promise<{ ok: boolean; total: number; okCount: number; failed: Array<{ db: string; error: string }>; error?: string }> {
   if (!rawDbDir || !existsSync(rawDbDir)) {
     return {
@@ -84,11 +90,22 @@ export async function decryptAllDbs(
     return { ok: false, total: 0, okCount: 0, failed: [], error: '数据库密钥不是合法的 64 位 hex' }
   }
 
+  // ⚠️ 这里**故意没有**加 `yieldToLoop`，虽然 `scanDbFiles`（`detect.ts:165`）是同步递归遍历。
+  // 第 73 轮核实过：本机 `db_dir` 未配置 ⇒ 函数在上面第 68 行就提前 return 了，
+  // 加在遍历前后的两行**根本执行不到**，改与不改完全一样（探针里 `decryptAllDatabases`
+  // 的「让出」前后都是 0）。**没有证据支持的改动不留。**
+  // 真要判断这里是否需要让出，前提是先把探针那一行的读数修好 —— 它现在报
+  // `total(ms)=4077/4175 秒、让出 0`，而 4.08e9/4.18e9 ≈ **2³²**，
+  // 是 **32 位溢出**的读数，不是真实耗时（整轮墙钟上限才 180s）。
   const dbs = scanDbFiles(rawDbDir)
+  // 修复模式：只解损坏的那几个（键是 rel 路径，与 checkDecryptedIntegrity 的输出同构）。
+  // 过滤放在扫描之后而不是重新实现一遍遍历 —— 「解哪些文件」只许有一个遍历实现。
+  const wanted = onlyRel === undefined ? null : new Set(onlyRel)
+  const scope = wanted === null ? dbs : dbs.filter((db) => wanted.has(relative(rawDbDir, db).replace(/\\/g, '/')))
   const failed: Array<{ db: string; error: string }> = []
   let okCount = 0
   let done = 0
-  for (const db of dbs) {
+  for (const db of scope) {
     const rel = relative(rawDbDir, db).replace(/\\/g, '/')
     const target = join(decryptedDir, rel)
     const staged = target + '.decrypt_tmp'
@@ -100,18 +117,22 @@ export async function decryptAllDbs(
       if (keyHex.length !== 64) throw new Error('db_enc_key 缺失')
       const encKey = deriveEncKey(Buffer.from(keyHex, 'hex'), salt, keyFormat)
       await fullDecryptFile(db, staged, encKey)
-      const head = readPrefix(staged, 15)
-      if (!head.equals(SQLITE_HDR.subarray(0, 15))) throw new Error('解密结果校验失败（密钥不匹配？）')
-      try { unlinkSync(target) } catch { /* not yet present */ }
-      renameSync(staged, target)
+      // 判据与实时同步共用同一个主人 `sync.ts#looksDecrypted`：`decryptPage` 给页 1 无条件
+      // 贴上魔数，所以「比对魔数」等于没比，必须看头部里不能被合成的字段（页大小）。
+      if (!looksDecrypted(staged)) throw new Error('解密结果校验失败（密钥不匹配？）')
+      // 发布走 `sync.ts` 的 `atomicReplace`，**不要**改回「先 unlink 再 rename」：
+      // 那会在「删掉」与「改名」之间留出一个「目标不存在」的窗口，并发只读查询正好落在
+      // 里面就是 ENOENT；而 Windows 上目标被 SQLite 打开时 unlink 直接 EBUSY，整库解密被记成失败。
+      // 这条不变量在 `sync.ts#atomicReplace` 里有同名注释，实时同步与全量解密必须是同一份实现。
+      await atomicReplace(staged, target)
       okCount += 1
     } catch (e) {
       try { unlinkSync(staged) } catch { /* best effort cleanup */ }
       failed.push({ db: rel, error: (e as Error).message })
     }
     done += 1
-    onProgress?.(done, dbs.length, failed.length, rel)
+    onProgress?.(done, scope.length, failed.length, rel)
     await new Promise<void>((resolve) => { setImmediate(resolve) })
   }
-  return { ok: failed.length === 0, total: dbs.length, okCount, failed }
+  return { ok: failed.length === 0, total: scope.length, okCount, failed }
 }

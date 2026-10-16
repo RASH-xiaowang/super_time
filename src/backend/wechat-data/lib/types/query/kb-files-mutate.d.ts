@@ -6,7 +6,7 @@
  *
  * @module kb-files-mutate
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from './db-open.ts';
 import type { KbFileMeta, KbFileMutationResult, KbFilesDeleteReport } from '../types.ts';
 import { CascadeContext } from './kb-files-register.ts';
 /** 按 `KB_FILE_DELETE_ORDER` 逐条执行级联。 */

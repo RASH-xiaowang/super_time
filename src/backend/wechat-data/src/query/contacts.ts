@@ -4,7 +4,7 @@
  * enterprise/member/system/deleted), pinyin initials, group owner + member
  * counts, member's owning group, and category stats.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { cachedBySig, fileSigOf, isServiceBizType } from './meta.ts'
 import { join } from 'node:path'
 import type { WechatContact } from '../types.ts'

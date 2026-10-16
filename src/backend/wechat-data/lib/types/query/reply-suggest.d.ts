@@ -15,7 +15,9 @@ export interface ReplyContext {
  * @param limit - 取最近多少条（默认 20）。
  * @returns 上下文；该会话没有可用文本时 `count` 为 0。
  */
-export declare function collectReplyContext(decryptedDir: string, talker: string, selfUsername?: string, limit?: number): ReplyContext;
+export declare function collectReplyContext(decryptedDir: string, 
+/** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+talker: string, selfUsername?: string, limit?: number): ReplyContext;
 /**
  * 取当前选中知识库里与 `query` 相关的片段（用于让推荐回复「有据可依」）。
  * @param decryptedDir - 解密数据根。
@@ -41,6 +43,12 @@ export declare function collectReplyKbSnippets(decryptedDir: string, kbId: numbe
  * @returns 提示词全文。
  */
 export declare function buildReplyPrompt(lines: readonly string[], snippets: readonly string[], want: number): string;
+/** 一条消息用于拼提示词的文本：优先展示文本，其次落回原始字段；过长截断。 */
+export declare function messageText(m: {
+    displayText?: string;
+    strContent?: string;
+    msgContent?: string;
+}): string;
 /**
  * 把模型输出解析成候选回复列表。
  *

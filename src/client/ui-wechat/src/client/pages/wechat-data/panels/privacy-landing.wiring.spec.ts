@@ -67,13 +67,22 @@ describe('隐私体检：落地态完整且与后端一致', () => {
   })
 
   it('落地态与扫描中共用一个结构（扫描时不能又退回成一句话）', () => {
-    expect(panel).toContain('<PrivacyLanding scanning={loading} />')
+    // R4：加了 elapsed prop（扫描进度条的秒数）—— 断言放宽为「带 scanning 属性即可」，
+    // 不放松的是「扫描中仍走 PrivacyLanding、不退回一行字」这条实质要求。
+    expect(panel).toMatch(/<PrivacyLanding\s+scanning=\{loading\}/)
     expect(panel).toMatch(/scanning \? '正在扫描…' : '会扫描什么'/)
   })
 
+  it('扫描中有进度条 + 已等待秒数（R4：全库扫描 >1s，不能只有一行字）', () => {
+    expect(panel).toMatch(/[^A-Za-z0-9_$.]ProgressBar\b/)
+    expect(panel).toMatch(/[^A-Za-z0-9_$.]useElapsedSeconds\(/)
+    expect(panel).toContain('data-st-scan-progress')
+  })
+
   it('范围数字来自总览缓存而不是新发一次重查询', () => {
-    expect(panel).toContain('dsh-wechat-overview-base-v1')
-    expect(panel).toContain('dsh-wechat-overview-insights-v1')
+    // Privacy.tsx 现在引用共享键常量；值本身由 overview-cache-keys.ts 的唯一真源维护。
+    expect(panel).toContain('CACHE_BASE')
+    expect(panel).toContain('CACHE_INSIGHTS')
     // 读缓存必须容错：缓存缺失/损坏时要退化成只说范围，不能让面板崩掉
     expect(panel).toMatch(/function readScope\(\)[\s\S]*?catch\s*\{/)
   })

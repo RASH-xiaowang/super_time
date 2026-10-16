@@ -57,9 +57,21 @@ jobs:
       - uses: actions/configure-pages@v5
 
       # 上传的是 website/ 的**内容**（index.html 落在站点根），不是 website 这一层目录。
+      #
+      # ⚠️ 不能直接 `path: website`：那会把 `website/tests/`（`smoke.js` 冒烟脚本，
+      # 内含本机绝对路径 `D:/super-time-wechat/...`）一并发布到公网站点，
+      # 于是 `https://<user>.github.io/<repo>/tests/smoke.js` 可被任何人下载。
+      # 这里先把要发布的文件挑进一个干净目录，再上传它 —— 站点根仍是 index.html。
+      - name: 准备发布目录（排除 tests/ 等非站点文件）
+        shell: bash
+        run: |
+          mkdir -p _site
+          # 只发布站点真正需要的静态资源；tests/ 是开发期冒烟脚本，不属于站点。
+          rsync -a --exclude 'tests/' website/ _site/
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: _site
 
       - id: deployment
         uses: actions/deploy-pages@v4

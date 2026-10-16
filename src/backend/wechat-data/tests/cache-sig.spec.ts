@@ -43,7 +43,7 @@ function bumpMtime(path: string): void {
 }
 
 describe('会话列表的签名覆盖（M8）', () => {
-  it('消息分片变了 → 会话快照必须重算，不能返回旧对象', () => {
+  it('消息分片变了 → 会话快照必须重算，不能返回旧对象', async () => {
     const root = tempRoot()
     // 会话行带上 unread_first_msg_srv_id：真实微信 4.x 都有这一列，它会触发按 server_id
     // 回查消息分片（msgCreateTimeByServerId → shardCatalog），所以分片是这份快照的真实输入。
@@ -54,13 +54,16 @@ describe('会话列表的签名覆盖（M8）', () => {
     const shard = join(root, 'message', 'message_0.db')
     makeDb(shard, (db) => { db.exec('CREATE TABLE Msg_a (server_id TEXT, create_time INTEGER)') })
 
-    const first = querySessions(root)
-    expect(querySessions(root)).toBe(first) // 无变更：命中同一对象
+    // 2026-09-28：`querySessions` 改 async 之后，`toBe` 必须比**解析出来的对象**
+    // 而不是 Promise —— 每次调用都会返回一个新的 Promise，直接比 Promise 会恒不相等，
+    // 这条断言就退化成恒真（`not.toBe`）或恒假（`toBe`），失去意义。
+    const first = await querySessions(root)
+    expect(await querySessions(root), '无变更：命中同一对象').toBe(first)
 
     // 同步写了一个分片（原子替换只改 mtime/size，内容不变 —— 这里只改 mtime）
     bumpMtime(shard)
 
-    expect(querySessions(root)).not.toBe(first)
+    expect(await querySessions(root)).not.toBe(first)
   })
 })
 

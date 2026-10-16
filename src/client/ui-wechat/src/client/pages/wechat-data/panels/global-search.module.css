@@ -9,7 +9,7 @@
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-input);
   color: var(--nm-text-2);
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -65,7 +65,7 @@
   overflow: auto;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 15%, transparent);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: rgba(8, 14, 32, 0.94);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -76,7 +76,7 @@
    经 `globalSearchCss` 导出给调用方复用（避免两处样式漂移）。 */
 .group {
   padding: 6px 8px 3px;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -90,7 +90,7 @@
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;

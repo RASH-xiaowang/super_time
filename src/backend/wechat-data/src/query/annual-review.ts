@@ -12,10 +12,14 @@
  *   · **规模类指标算全部消息**（日历热力图 / 最疯的一天 / 作息切片）——两类若混用口径，
  *     就会出现「日均 28 条、但最疯的一天 2,218 条」这种读者无法解释的数字。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { createHash } from 'node:crypto'
 import { contactMeta, shardCatalogDirs } from './meta.ts'
+import { queryAnnualMoments, type AnnualMoments } from './annual-moments.ts'
+import { queryAnnualAssets, type AnnualAssets } from './annual-assets.ts'
+import { createAnnualExtras, type AnnualGroups, type AnnualMoney, type AnnualRevoke } from './annual-extras.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 /** 会话内「新一次对话」的间隔阈值（秒）：超过视为新一轮，用于「谁先开口」。 */
@@ -199,6 +203,18 @@ export interface AnnualReview {
   emoji: AnnualEmoji
   highlights: AnnualHighlight[]
   firstAt: string; firstText: string; lastAt: string; lastText: string
+  /* ── ⑯ 起：第二段「更多」长页（2026-09-30 用户要求加内容；版式从一屏海报改成长页）──
+     这几块**不属于**聊天正文那一遍扫描：朋友圈是另一个库（sns.db）、收藏/文件只做总量盘点，
+     所以由各自的模块单独查，在这里汇总。`available=false` 表示"这个库没读到"，
+     界面必须据此显示"未读取到"，**不许拿 0 当真实值**。 */
+  moments: AnnualMoments
+  assets: AnnualAssets
+  /* ⑱~⑳：资金 / 撤回 / 群聊 —— 这三块**不需要新扫描**：它们读的就是上面那遍聊天正文
+     （转账红包是消息、撤回是 sysmsg、群聊就是 username 以 @chatroom 结尾的会话），
+     所以挂在同一次遍历上按行累加（`annual-extras.ts` 的纯函数累加器）。 */
+  money: AnnualMoney
+  revoke: AnnualRevoke
+  groups: AnnualGroups
 }
 
 /* ────────────── 小工具 ────────────── */
@@ -213,8 +229,28 @@ function ymd(ts: number): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
-function ymdCn(ts: number): string {
-  const d = new Date(ts * 1000)
+/**
+ * 记录一条消息里的表情：逐字符计数 + 出现在哪些天 + 星期×时段热力。
+ *
+ * 为什么抽成函数：`assemble` 有函数行数棘轮（只许变小）。2026-09-30 给它加
+ * 「年度资金 / 撤回 / 群聊」三块累加器时，先把这段自包含的逻辑搬出来腾出预算 ——
+ * 行为逐字不变（同一个正则、同一个热力下标），只是换了个位置。
+ * @returns 这条消息里识别到的表情数组（调用方若还需要可自行使用）。
+ */
+function noteEmoji(
+  text: string, dk: string, dow: number, hour: number,
+  count: Map<string, number>, days: Set<string>, heat: number[],
+): string[] {
+  const emo = text.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/gu) ?? []
+  for (const e of emo) count.set(e, (count.get(e) ?? 0) + 1)
+  if (emo.length > 0) {
+    days.add(dk)
+    heat[dow * 24 + hour] = (heat[dow * 24 + hour] ?? 0) + emo.length
+  }
+  return emo
+}
+
+function ymdCn(ts: number): string {  const d = new Date(ts * 1000)
   return `${d.getMonth() + 1}月${d.getDate()}日`
 }
 function median(list: number[]): number {
@@ -334,7 +370,7 @@ function isPersonChat(u: string): boolean {
  * @param selfUsername - 登录账号 wxid（「我发出的」归属判据）。
  * @returns 年度回顾结果。
  */
-export function queryAnnualReview(decryptedDir: string, year: number, selfUsername = ''): AnnualReview {
+export async function queryAnnualReview(decryptedDir: string, year: number, selfUsername = ''): Promise<AnnualReview> {
   const self = (selfUsername ?? '').trim()
   const names = contactMeta(decryptedDir).names
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
@@ -380,6 +416,8 @@ export function queryAnnualReview(decryptedDir: string, year: number, selfUserna
   let lastTs = 0
   let lastText = ''
   const chats = new Map<string, ChatAgg>()
+  /** 年度资金 / 撤回 / 群聊的累加器（纯函数；结果在扫描结束后 `done()` 取出）。 */
+  const extras = createAnnualExtras()
   const dayChat = new Map<string, Map<string, number>>()
   const dayBounds = new Map<string, { first: number; firstText: string; last: number; lastText: string }>()
   const chatEarliest = new Map<string, number>()
@@ -408,12 +446,20 @@ export function queryAnnualReview(decryptedDir: string, year: number, selfUserna
           if (minRow?.m) chatEarliest.set(username, minRow.m)
           const hasSender = meta.cols.has('real_sender_id')
           const cols = 'create_time, local_type, message_content' + (hasSender ? ', real_sender_id' : '')
-          const rows = db.prepare(
+          // 2026-09-28：`.all()` → 游标 + 行级让出。真实 @Remote 探针实测
+          // `getAnnualReview` 冷跑 **2150ms 且一次都不让出**（`working/probe-remote.txt`）。
+          // 与 `annual-report.ts` 同一病：整年消息逐条 CPU 重活（bigram/emoji/heat），
+          // 整段独占期间串行 worker 上别的请求一个都进不来。
+          const cur = db.prepare(
             'SELECT ' + cols + ' FROM "' + table + '" WHERE create_time >= ? AND create_time < ? ORDER BY create_time ASC',
-          ).all(start, end) as Array<Record<string, unknown>>
+          ).iterate(start, end) as Iterable<Record<string, unknown>>
           const chat = chatOf(chats, username)
           const isRoom = username.endsWith('@chatroom')
-          for (const r of rows) {
+          let sinceYield = 0
+          for (const r of cur) {
+            // 让出检查放最前面：下面有 `continue`（ts 为空那条），放末尾会被跳过。
+            sinceYield += 1
+            if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
             const ts = Number(r['create_time'] ?? 0)
             if (!ts) continue
             const lt = normType(Number(r['local_type'] ?? 0))
@@ -447,6 +493,15 @@ export function queryAnnualReview(decryptedDir: string, year: number, selfUserna
 
             const body0 = isRoom ? splitSender(raw).body : raw
             const text = readableText(body0)
+            // 年度资金 / 撤回 / 群聊：同一次遍历里按行累加（纯函数模块，不碰 DB、不额外扫描）。
+            // ⚠️ 传的是 **`body0`（群前缀已剥的原始正文）而不是 `text`**：`text` 是
+            // `readableText()` 的输出，**XML 标签已被剥掉**，而资金/撤回恰好看的是
+            // `<appmsg>` / `<sysmsg type="revokemsg">` 这些标签 —— 传 `text` 会让年度资金恒为 0
+            // （纯函数的 30 条用例全绿也救不了接口上的数）。群前缀 `wxid_x: ` 不影响标签解析。
+            extras.onRow(
+              { type: lt, ts, text: body0, sender: mine ? '我' : (names.get(username) ?? username), mine },
+              { username, name: names.get(username) ?? username, isGroup: isRoom },
+            )
             // 当日首尾
             const b = dayBounds.get(dk)
             if (!b) dayBounds.set(dk, { first: ts, firstText: text, last: ts, lastText: text })
@@ -474,12 +529,7 @@ export function queryAnnualReview(decryptedDir: string, year: number, selfUserna
                 if (text.length >= PHRASE_MIN && text.length <= PHRASE_MAX) {
                   phraseCount.set(text, (phraseCount.get(text) ?? 0) + 1)
                 }
-                const emo = text.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/gu) ?? []
-                for (const e of emo) emojiCount.set(e, (emojiCount.get(e) ?? 0) + 1)
-                if (emo.length > 0) {
-                  emojiDays.add(dk)
-                  emojiHeat[dow * 24 + hour] = (emojiHeat[dow * 24 + hour] ?? 0) + emo.length
-                }
+                noteEmoji(text, dk, dow, hour, emojiCount, emojiDays, emojiHeat)
               } else recvChars += text.length
             } else if (lt === 3) {
               if (mine) mediaSent += 1
@@ -517,13 +567,24 @@ export function queryAnnualReview(decryptedDir: string, year: number, selfUserna
     } finally { db.close() }
   }
 
-  return assemble({
+  const review = assemble({
     year, sent, totalAll, sentDays, allDays, perDayAll, heat, hourAll, workdayCount, weekendCount,
     monthly, mineChars, recvChars, phraseCount, emojiCount, emojiDays, emojiHeat,
     threwStickers, stickerHashes, mediaSent, videoSent, voiceMsgSent, voiceSentCount, voiceSentSec,
     voiceRecvCount, voiceRecvSec, callSec, callCount, callConnected, longestVoiceSec, longestVoiceFrom,
     firstTs, firstText, lastTs, lastText, chats, dayChat, dayBounds, chatEarliest, names,
+    extras: extras.done(),
   })
+
+  // ⑯/⑰：朋友圈与收藏/文件走各自的库，**并行**查（都不碰上面那遍聊天扫描；
+  // 两个模块自身都会把"库不存在/表缺失"降级成 `available:false` 而不是抛错）。
+  const [moments, assets] = await Promise.all([
+    queryAnnualMoments(decryptedDir, year),
+    queryAnnualAssets(decryptedDir, selfUsername),
+  ])
+
+  // ⑱~⑳ 的资金 / 撤回 / 群聊已在 `assemble` 里由行累加器铺平。
+  return { ...review, moments, assets }
 }
 
 /* ────────────── 扫描后组装 ────────────── */
@@ -569,10 +630,33 @@ interface Bucket {
   dayBounds: Map<string, { first: number; firstText: string; last: number; lastText: string }>
   chatEarliest: Map<string, number>
   names: Map<string, string>
+  /** 行累加器（资金 / 撤回 / 群聊）在扫描结束后取出的结果。 */
+  extras: { money: AnnualMoney; revoke: AnnualRevoke; groups: AnnualGroups }
 }
 
 /** 扫描期累加桶 → 完整看板结果。 */
-function assemble(b: Bucket): AnnualReview {
+/**
+ * 页脚那两句：全年第一条与最后一条（时间 + 摘要）。
+ *
+ * 从 `assemble` 里抽出来是**为了行数棘轮**（那个函数只许变小）：2026-09-30 给它加
+ * 资金 / 撤回 / 群聊三个字段时，先把这段自包含逻辑搬出来腾预算。行为不变。
+ */
+function firstLast(b: Bucket): { firstAt: string; firstText: string; lastAt: string; lastText: string } {
+  return {
+    firstAt: Number.isFinite(b.firstTs) ? `${ymdCn(b.firstTs)} ${clock(b.firstTs)}` : '',
+    firstText: b.firstText,
+    lastAt: b.lastTs ? `${ymdCn(b.lastTs)} ${clock(b.lastTs)}` : '',
+    lastText: b.lastText,
+  }
+}
+
+/**
+ * 把扫描桶组装成完整年报。
+ *
+ * 返回类型刻意排除了朋友圈 / 收藏（来自**另外的库**）：这个函数算不出它们，就不该假装自己有。
+ * 资金 / 撤回 / 群聊是同一遍扫描里按行累加出来的，直接铺平进结果。
+ */
+function assemble(b: Bucket): Omit<AnnualReview, 'moments' | 'assets'> {
   const { year, names, chats } = b
   const nameOf = (u: string): string => names.get(u) ?? u
 
@@ -874,10 +958,8 @@ function assemble(b: Bucket): AnnualReview {
     ranking,
     emoji,
     highlights,
-    firstAt: Number.isFinite(b.firstTs) ? `${ymdCn(b.firstTs)} ${clock(b.firstTs)}` : '',
-    firstText: b.firstText,
-    lastAt: b.lastTs ? `${ymdCn(b.lastTs)} ${clock(b.lastTs)}` : '',
-    lastText: b.lastText,
+    ...firstLast(b),
+    money: b.extras.money, revoke: b.extras.revoke, groups: b.extras.groups,
   }
 }
 

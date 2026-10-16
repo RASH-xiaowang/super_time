@@ -6,7 +6,7 @@
  *
  * @module kb-files-register
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from './db-open.ts';
 import type { KbFileChunkPage, KbFileListSnapshot, KbFileRecoveryReport, KbFileRegisterInput, KbFileRegisterResult } from '../types.ts';
 import { KbFileDeleteStep } from './kb-files-store.ts';
 /**

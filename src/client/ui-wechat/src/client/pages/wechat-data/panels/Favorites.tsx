@@ -4,180 +4,39 @@
  * 保证不显示原始 XML / undefined。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useProgressiveList, useTransientNotice } from './hooks.tsx'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ListSentinel, ListSkeleton, useLazySentinel, usePagedList, useTransientNotice } from './hooks.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { apiDeleteFavoriteItems, apiExportCsv, apiGetFavorites, apiGetSnsImageDataUrl } from '../api.ts'
-import type { FavItemPart, FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
-import { clickableKey, Dialog, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
-import { fmtBytes, fmtDateTimeSec } from '../utils/format.ts'
+import type { FavorItem } from '@deepseek-ai/dsh-wechat-data/types'
+import { Dialog, EmptyState, PanelHeader, SearchInput, Segmented, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
+import { fmtBytes } from '../utils/format.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './list-panel.module.css'
+import { favTypeLabel, parseFavItem } from './favorites-parse.ts'
+import { FavCard } from './favorites-card.tsx'
+import { rememberThumb } from '../utils/thumb-cache.ts'
 
-/** 收藏类型 → 中文标签（微信 fav type）。 */
-function favTypeLabel(type: number): string {
-  switch (type) {
-    case 1: return '文本'
-    case 2: return '图片'
-    case 3: return '语音'
-    case 4: return '视频'
-    case 5: return '链接'
-    case 6: return '位置'
-    case 7: return '音乐'
-    case 8: return '文件'
-    case 14: return '聊天记录'
-    case 16: return '商品'
-    case 18: return '笔记'
-    case 19: return '小程序'
-    case 20: return '视频号'
-    default: return '其他'
-  }
-}
+/** 卡片高度的初值（真实高度由 `measureElement` 回灌）：摘要最多三行，88 是"标题 + 一行摘要 + 落款"的量级。 */
+const FAV_CARD_ESTIMATE_PX = 88
 
-/** Unescape XML/HTML entities (keep newlines). */
-function decodeFavText(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#x0A;/gi, '\n')
-    .replace(/&#10;/g, '\n')
-}
+/*
+ * 虚拟化（#22 推广：把消息流那一套搬到第二处长列表）—— 两处口径记在这里，函数里只留一行注释。
+ *
+ * **为什么原来那套不够**：`useProgressiveList` 是"渐进窗口"，首屏 120 条、滚到底再增，**只增不减**。
+ * 把五千条收藏滚一遍，DOM 里就留下五千张卡片（每张三层 div 加一段文本），内存与重排成本都跟着
+ * 历史长度走。虚拟化之后只挂载视口 + `overscan`，节点数与长度解耦 —— 消息流那侧实测：
+ * 一万条从 9,700 个节点降到几十个（`scripts/longlist-virtualization-e2e.mjs` 量的）。
+ *
+ * **缩略图为什么改成"挂载即解码"**：原来是给整段列表挂 IntersectionObserver、观察 `data-media-key`。
+ * 虚拟化之后行会不断挂载/卸载，观察器每帧都要重挂一遍元素，反而更贵、也更容易漏；而"这一行挂上了"
+ * 本来就等价于"它接近视口"。淘汰那半边收在 `../utils/thumb-cache.ts#rememberThumb` 里（写值、记顺序、
+ * 淘汰时连"已请求过"的标记一起清 —— 少清一半就是「滚远再滚回来，图永远是个占位」那种不报错的坏法）。
+ * 解码回调要跨异步读最新状态，所以缓存与顺序用 ref 兜着、`useCallback(…, [])` 保持稳定，
+ * 不然每次渲染都会重新发起一轮请求。
+ */
 
-/** Extract text between <tag ...> and </tag> (first occurrence). */
-function xmlTagText(xml: string, tag: string): string | null {
-  const openExact = '<' + tag + '>'
-  const openAttr = '<' + tag + ' '
-  const start = xml.indexOf(openExact) >= 0 ? xml.indexOf(openExact) : xml.indexOf(openAttr)
-  if (start < 0) return null
-  const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
-  const close = xml.indexOf('</' + tag + '>', contentStart)
-  if (close < 0) return null
-  return xml.slice(contentStart, close)
-}
-
-/** Extract an attribute value from a tag open (first occurrence). */
-function xmlTagAttr(xml: string, tag: string, attr: string): string | null {
-  const openExact = '<' + tag + '>'
-  const openAttr = '<' + tag + ' '
-  const start = xml.indexOf(openExact) >= 0 ? xml.indexOf(openExact) : xml.indexOf(openAttr)
-  if (start < 0) return null
-  const tagStr = xml.slice(start, xml.indexOf('>', start))
-  const search = attr + '="'
-  const a = tagStr.indexOf(search)
-  if (a < 0) return null
-  const v = a + search.length
-  const e = tagStr.indexOf('"', v)
-  if (e < 0) return null
-  return tagStr.slice(v, e)
-}
-
-/** 客户端兜底解析收藏 XML 的标题/描述/来源。 */
-function parseFavXml(content: string): { title: string; desc: string; fromUsr: string; srcName: string } {
-  if (!content || !content.includes('<')) return { title: '', desc: content || '', fromUsr: '', srcName: '' }
-  const title = (content.match(/<title>([^<]*)<\/title>/) || [])[1] || ''
-  const raw = (content.match(/<desc>([\s\S]*?)<\/desc>/) || [])[1] || ''
-  const fromUsr = (content.match(/<fromusr>([^<]*)<\/fromusr>/) || [])[1] || ''
-  const srcName = (content.match(/<datasrcname>([^<]*)<\/datasrcname>/) || [])[1] || ''
-  return { title, desc: decodeFavText(raw), fromUsr, srcName }
-}
-
-/** 客户端兜底解析 `<datalist><dataitem>` 资源条目。 */
-function parseFavParts(content: string): FavItemPart[] {
-  if (!content || !content.includes('<dataitem')) return []
-  const out: FavItemPart[] = []
-  let pos = 0
-  for (;;) {
-    const start = content.indexOf('<dataitem', pos)
-    if (start < 0) break
-    const end = content.indexOf('</dataitem>', start)
-    const body = end >= 0 ? content.slice(start, end) : content.slice(start)
-    const datatype = Number.parseInt(xmlTagAttr(body, 'dataitem', 'datatype') ?? '0', 10) || 0
-    const dataid = (xmlTagAttr(body, 'dataitem', 'dataid') ?? '').trim().toLowerCase()
-    const fullmd5 = (xmlTagText(body, 'fullmd5') ?? '').trim().toLowerCase()
-    const thumbmd5 = (xmlTagText(body, 'thumbfullmd5') ?? '').trim().toLowerCase()
-    const text = decodeFavText(xmlTagText(body, 'datadesc') ?? '') || decodeFavText(xmlTagText(body, 'datatitle') ?? '')
-    const sourceName = xmlTagText(body, 'datasrcname') ?? ''
-    const sourceTime = xmlTagText(body, 'datasrctime') ?? ''
-    const base = (): FavItemPart => {
-      const p: FavItemPart = { kind: 'text' }
-      if (sourceName) p.sourceName = sourceName
-      if (sourceTime) p.sourceTime = sourceTime
-      return p
-    }
-    if (datatype === 1) {
-      if (text) { const p = base(); p.text = text; out.push(p) }
-    } else if (datatype === 2) {
-      const p = base()
-      p.kind = 'image'
-      const m = thumbmd5 || fullmd5 || dataid
-      if (m) p.md5 = m
-      if (text) p.text = text
-      out.push(p)
-    } else if (datatype === 3) {
-      const p = base()
-      p.kind = 'voice'
-      const m = fullmd5 || dataid
-      if (m) p.md5 = m
-      out.push(p)
-    } else if (datatype === 4) {
-      const p = base()
-      p.kind = 'video'
-      const m = fullmd5 || dataid
-      if (m) p.md5 = m
-      const dur = Number.parseFloat(xmlTagText(body, 'duration') ?? '0')
-      if (dur > 0) p.duration = dur
-      out.push(p)
-    } else if (datatype === 5 || datatype === 19 || datatype === 36) {
-      const p = base()
-      p.kind = 'link'
-      if (text) p.text = text
-      const u = (xmlTagText(body, 'stream_weburl') ?? xmlTagText(body, 'url') ?? '').replace(/&amp;/g, '&')
-      if (u) p.url = u
-      out.push(p)
-    } else if (datatype === 8) {
-      const p = base()
-      p.kind = 'file'
-      const n = xmlTagText(body, 'datatitle') ?? ''
-      if (n) p.name = n
-      const e = xmlTagText(body, 'datafmt') ?? ''
-      if (e) p.ext = e
-      const sz = Number.parseInt(xmlTagText(body, 'fullsize') ?? '0', 10)
-      if (sz > 0) p.size = sz
-      out.push(p)
-    }
-    pos = end >= 0 ? end + 10 : content.length
-  }
-  return out
-}
-
-/** 规范化一条收藏：后端字段优先，缺失时客户端兜底解析。 */
-function parseFavItem(f: FavorItem): {
-  title: string
-  desc: string
-  url: string
-  source: string
-  time: string
-  typeLabel: string
-  items: FavItemPart[]
-} {
-  const info = parseFavXml(f.content)
-  const typeLabel = f.typeLabel || favTypeLabel(f.type)
-  const items = f.items ?? parseFavParts(f.content)
-  const source = f.source || f.chatName || info.srcName || info.fromUsr || f.fromUsr || ''
-  // 占位符传空串：这里与 `f.time ||` 配合，空值必须仍是空串而不是 '—'。
-  const time = f.time || fmtDateTimeSec(f.updateTime, '')
-  return {
-    title: f.title || info.title || typeLabel,
-    desc: f.desc || info.desc || '',
-    url: f.url || '',
-    source,
-    time,
-    typeLabel,
-    items,
-  }
-}
 
 
 /**
@@ -201,6 +60,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
   const [detail, setDetail] = useState<FavorItem | null>(null)
   const [favImgs, setFavImgs] = useState<Record<string, string>>({})
   const favImgFetched = useRef(new Set<string>())
+  const favThumbOrder = useRef<string[]>([])
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   // 类型仍在本端筛（后端没有该参数）；关键字已由服务端过滤，这里不再重复做一遍 ——
@@ -210,7 +70,14 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
     return items.filter((f) => String(f.type) === type)
   }, [items, type])
 
-  const { count: favCount, sentinelRef: favSentinel } = useProgressiveList(filtered.length, 120)
+  /** 虚拟化消息流（口径与理由见文件头的注释块）；行高由 `measureElement` 动态回灌。 */
+  const favVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => FAV_CARD_ESTIMATE_PX,
+    overscan: 6,
+    getItemKey: (i) => filtered[i]?.localId ?? i,
+  })
 
   const notify = (text: string): void => {
     flash(text)
@@ -249,42 +116,29 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
     setError(pager.error)
   }, [pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => scrollRef.current, pager.items.length)
 
-  // 收藏内图片离线解析（懒加载）：仅当卡片接近视口时才解码对应媒体，避免一次性
-  // 解码大量收藏图片导致卡顿；已取到的用 favImgs 缓存，不会重复请求。
+  /** 缓存的当前快照（异步回调要读最新值，见文件头注释）；渲染用的是 `favImgs` 那份 state。 */
+  const favThumbsRef = useRef<Record<string, string>>({})
   const decodeFavImg = useCallback((md5: string): void => {
     if (!md5 || favImgFetched.current.has(md5)) return
     favImgFetched.current.add(md5)
     void apiGetSnsImageDataUrl({ md5 })
-      .then((r) => { if (r.url) setFavImgs(prev => ({ ...prev, [md5]: r.url as string })) })
-      .catch(() => { /* keep placeholder */ })
+      .then((r) => {
+        const url = r.url as string | undefined
+        if (!url) return
+        const next = rememberThumb(
+          { thumbs: favThumbsRef.current, order: favThumbOrder.current, fetched: favImgFetched.current },
+          md5,
+          url,
+        )
+        favThumbsRef.current = next.thumbs
+        favThumbOrder.current = next.order
+        favImgFetched.current = next.fetched
+        setFavImgs(next.thumbs)
+      })
+      .catch(() => { /* 解码失败保留占位图标 */ })
   }, [])
-
-  useEffect(() => {
-    const root = scrollRef.current
-    if (!root || filtered.length === 0) return
-    const md5ByKey = new Map<string, string>()
-    for (const f of filtered.slice(0, favCount)) {
-      const it = parseFavItem(f).items.find(p => p.kind === 'image' && p.md5)
-      if (it?.md5) md5ByKey.set(String(f.localId), it.md5)
-    }
-    if (typeof IntersectionObserver === 'undefined') {
-      // 无 IO 支持时兜底解码当前渲染卡片，保证图片可见。
-      for (const md5 of md5ByKey.values()) decodeFavImg(md5)
-      return
-    }
-    const ob = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue
-        const key = (e.target as HTMLElement).dataset.mediaKey || ''
-        const md5 = md5ByKey.get(key)
-        if (md5) decodeFavImg(md5)
-      }
-    }, { root, rootMargin: '500px 0px' })
-    root.querySelectorAll<HTMLElement>('[data-media-key]').forEach((el) => { ob.observe(el) })
-    return () => { ob.disconnect() }
-  }, [filtered, favCount, decodeFavImg])
 
   // 打开收藏详情时按需解码该条目的图片（点 3c：详情查看时才读取）。
   useEffect(() => {
@@ -353,7 +207,7 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
         actions={(
           <>
             <button type="button" className={css.catBtn} data-active={selectMode || undefined} onClick={() => { setSelectMode(v => !v); setSelected(new Set()) }}>{selectMode ? '退出批量' : '批量'}</button>
-            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting}>{exporting ? '导出中…' : '导出'}</button>
+            <button type="button" className={css.catBtn} onClick={() => { void doExport() }} disabled={exporting} {...desktopActionProps()}>{exporting ? '导出中…' : desktopAction() ? '导出（仅电脑）' : '导出'}</button>
             {selectMode && <button type="button" className={css.catBtn} data-active="true" onClick={() => { void doDelete() }} disabled={selected.size === 0}>删除所选 ({selected.size})</button>}
           </>
         )}
@@ -375,39 +229,43 @@ export function FavoritesPanel({ seedQuery }: { seedQuery?: { q: string; nonce: 
       <div className={css.scroll} ref={scrollRef}>
         {loading && <ListSkeleton rows={8} />}
         {error && <div className={kitCss.error} role="alert">⚠️ 收藏数据接口尚未就绪（{error}）</div>}
-        {!loading && !error && filtered.length === 0 && <div className={css.empty}>{search || type !== 'all' ? '无匹配收藏' : '暂无收藏'}</div>}
-        {!loading && !error && filtered.slice(0, favCount).map((f) => {
-          const info = parseFavItem(f)
-          const preview = info.items.length > 0 ? info.items.filter(p => p.kind === 'text').map(p => p.text || '').join('\n') : info.desc
-          const cardImg = info.items.find(it => it.kind === 'image' && it.md5)
-          const imgPart = info.items.find(it => it.kind === 'image' && it.md5 && favImgs[it.md5])
-          return (
-            <div
-              key={f.localId}
-              className={css.favCard}
-              data-media-key={cardImg?.md5 ? String(f.localId) : undefined}
-              {...clickableKey(() => { if (selectMode) toggleSelect(f.localId); else setDetail(f) })}
-              // 卡片在「批量选择」模式下其实是复选框语义，不能一律声明成按钮；
-              // 后写的属性覆盖 clickableKey 的默认值，键盘与读屏两边都准确。
-              role={selectMode ? 'checkbox' : 'button'}
-              aria-checked={selectMode ? selected.has(f.localId) : undefined}
-              aria-label={info.title}
-            >
-              {selectMode && (
-                <span className={kitCss.batchCheck} data-checked={selected.has(f.localId) || undefined}>
-                  {selected.has(f.localId) ? '✓' : ''}
-                </span>
-              )}
-              <div className={css.favCardBody}>
-                <div className={css.favCardTitle}>{info.title}</div>
-                {preview && <div className={css.favCardDesc}>{preview}</div>}
-                <div className={kitCss.textCaption}>{info.typeLabel + (info.source ? ' · ' + info.source : '') + ' · ' + info.time}</div>
-              </div>
-              {imgPart && <img className={css.favCardThumb} src={favImgs[imgPart.md5 ?? '']} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-            </div>
-          )
-        })}
-        {!loading && !error && filtered.length > favCount && <ListSentinel refFn={favSentinel} />}
+        {!loading && !error && filtered.length === 0 && (
+          <div className={css.empty}>
+            <EmptyState
+              icon="⭐"
+              title={search || type !== 'all' ? '没有匹配的收藏' : '暂无收藏'}
+              desc={search || type !== 'all'
+                ? '换个关键词，或把类型筛选切回「全部」再试。'
+                : '这里读的是微信本机的收藏夹；在微信里收藏过的图文会自动出现在这里。若刚启动，后台可能仍在同步。'}
+            />
+          </div>
+        )}
+        {/* 外层按总高度撑开滚动条，卡片按偏移绝对定位；「加载更多」哨兵排在这段之后，滚到底照样触发分页 */}
+        {!loading && !error && filtered.length > 0 && (
+          <div style={{ height: favVirtualizer.getTotalSize(), position: 'relative' }}>
+            {favVirtualizer.getVirtualItems().map((vi) => {
+              const f = filtered[vi.index]
+              if (!f) return null
+              return (
+                <div
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={favVirtualizer.measureElement}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
+                >
+                  <FavCard
+                    f={f}
+                    selectMode={selectMode}
+                    checked={selected.has(f.localId)}
+                    thumbs={favImgs}
+                    onMounted={decodeFavImg}
+                    onActivate={(item) => { if (selectMode) toggleSelect(item.localId); else setDetail(item) }}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        )}
         {!loading && !error && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </div>
       <Dialog open={detail !== null} onClose={() => { setDetail(null) }} title={detail ? parseFavItem(detail).title : '收藏详情'}>

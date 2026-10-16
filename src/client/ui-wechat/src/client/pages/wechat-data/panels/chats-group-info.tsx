@@ -5,16 +5,24 @@
  * 原先散在 `ChatsPanel` 的函数体里（几十个 state 与回调），但输入输出很清楚 —— 抽成钩子后：
  * 面板把输入传进来、把用得到的值解构出去，其余细节（轮询、竞态防护、菜单构造）留在模块里。
  * 钩子在面板的**第一条组内声明处**调用 ⇒ 与原来的声明顺序等价。
+ * 2026-10-13：接上 `useGroupInfoLive`（抽屉开着时的静默实时刷新），输入袋相应扩了三条。
  */
 
+import type { ChatlogFrame } from './chats-chatlog.ts'
 import { useId, useRef, useState } from 'react'
-import type { ChatlogRecord, GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GroupInfo, GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
+import { filterMembers, memberLimitOf, memberQueryOf, profileAnchor } from './chats-member-view.ts'
+import { useGroupInfoLive } from './chats-info-live.ts'
 
 export interface useChatsGroupInfoInputs {
+  /** 当前会话 talker（= 群信息抽屉的取数范围；实时刷新按它判归属）。 */
+  talkerRef: React.MutableRefObject<string | null>
+  sessionAlive: (epoch: number, talker: string) => boolean
+  sessionEpochRef: React.MutableRefObject<number>
 }
 
 export function useChatsGroupInfo(inputs: useChatsGroupInfoInputs) {
-  const {  } = inputs
+  const { talkerRef, sessionAlive, sessionEpochRef } = inputs
 const [groupInfoOpen, setGroupInfoOpen] = useState(false)
 const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null)
 const [groupInfoLoading, setGroupInfoLoading] = useState(false)
@@ -30,17 +38,14 @@ const [annExpanded, setAnnExpanded] = useState(false)
 const groupInfoTitleId = useId()
 const [profileMember, setProfileMember] = useState<GroupMember | null>(null)
 const [profilePos, setProfilePos] = useState<{ left: number; top: number } | null>(null)
-const [chatlogStack, setChatlogStack] = useState<Array<{ title: string; records: ChatlogRecord[] }>>([])
+const [chatlogStack, setChatlogStack] = useState<ChatlogFrame[]>([])
 const profileHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 const showMemberProfile = (m: GroupMember, el: HTMLElement): void => {
   if (profileHideTimer.current) clearTimeout(profileHideTimer.current)
   setProfileMember(m)
   const rect = el.getBoundingClientRect()
-  const width = 232
-  const left = rect.left - width - 10 >= 8 ? rect.left - width - 10 : rect.right + 10
-  const top = Math.max(8, Math.min(rect.top, window.innerHeight - 170))
-  setProfilePos({ left, top })
+  setProfilePos(profileAnchor({ left: rect.left, right: rect.right, top: rect.top }, window.innerHeight))
 }
 
 const hideMemberProfile = (): void => {
@@ -50,16 +55,14 @@ const hideMemberProfile = (): void => {
     setProfilePos(null)
   }, 150)
 }
-const memberQuery = memberSearch.trim().toLowerCase()
+const memberQuery = memberQueryOf(memberSearch)
 const memberTotal = groupInfo ? groupInfo.members.length : 0
-const filteredMembers = ((): GroupMember[] => {
-  if (!groupInfo) return []
-  if (!memberQuery) return groupInfo.members
-  return groupInfo.members.filter((m) =>
-    m.name.toLowerCase().includes(memberQuery) || m.username.toLowerCase().includes(memberQuery))
-})()
-const memberLimit = memberExpanded ? 200 : 24
+const filteredMembers = groupInfo ? filterMembers(groupInfo.members, memberQuery) : []
+const memberLimit = memberLimitOf(memberExpanded)
 const shownMembers = filteredMembers.slice(0, memberLimit)
+
+// 抽屉开着时，宿主数据事件与群信息缓存刷新广播都会静默重取（实时刷新，2026-10-13）。
+useGroupInfoLive({ open: groupInfoOpen, talkerRef, sessionAlive, sessionEpochRef, setGroupInfo, setGroupInfoErr })
 
   return { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers }
 }

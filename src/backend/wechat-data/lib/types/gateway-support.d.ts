@@ -1,11 +1,3 @@
-/**
- * 隐私库读不到时的统一文案。
- *
- * 「读不到」必须与「没开拦截」区分开：前者拦下并说明原因，后者放行。
- * 2026-09-20 之前两处 catch 都把异常翻译成「放行」，于是一个显式开了
- * 「出站拦截」的用户，在 `wechat_privacy.db` 损坏/被锁的那一刻就开始静默出网。
- */
-export declare function privacyStoreUnreadable(feature: string, detail: string): string;
 /** Resolved data layout (per gateway instance, so tests can stub env). */
 export interface ResolvedDirs {
     /** Decrypted SQLite libraries the queries read. */
@@ -52,7 +44,6 @@ export declare const EXPORT_PROGRESS_EVENT = "wechat-export/progress";
  * 解码缓存的扩展名候选（与 `media-image.ts` 的 `RENDERABLE_EXTS` 同集合）。
  * 只用来判「这张图已经有解码产物了吗」——有就别再解一遍。
  */
-export declare const CACHED_IMAGE_EXTS: string[];
 /**
  * 规整渲染层传来的 jobId：只当**不透明标识**用（不落盘、不回显），所以限长截断即可。
  * @param jobId - 原始值（可能缺省/非字符串）。

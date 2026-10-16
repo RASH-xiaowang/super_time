@@ -23,6 +23,10 @@ wechat/llm.json
 .tmp-*
 *.orig
 *.tsbuildinfo
+# Python 字节码：tools/ 下有 13 个变异脚本，跑一次 `python -m py_compile` 或
+# 任何一次 import 就会生成 `__pycache__/`。2026-10-08 实测踩到（收口链自查时冒出来）。
+__pycache__/
+*.py[cod]
 # 导出/写盘的原子落地临时文件（正常会被 rename 或删除，异常中断时才会残留）
 *.partial-*
 

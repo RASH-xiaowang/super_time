@@ -359,6 +359,50 @@ describe('令牌登记清单：静态重算 + 双向比对', () => {
     // 反过来：浅色的每一项都要能在深色里找到同名覆盖，否则 initial-value（取深色值）会失真
     expect([...lightTokens.keys()].filter(n => !darkTokens.has(n))).toEqual([])
   })
+
+  /**
+   * var() 引用图里不许有环。
+   *
+   * 为什么单开一条：`subst()` 自带 `seen` 防环，所以**成环时它只是「解不动」**，
+   * 值会原样留着含 `var()`，然后被 `isColorValue` 判非颜色、从登记清单里排除 ——
+   * **全绿通过，一声不吭**。R3 就踩了这个：`--nm-bg-1` 与 `--dsw-alias-bg-layer-1`
+   * 互指（两边都写「优先取对面」），15 个环，而当时所有主题守卫都是绿的。
+   *
+   * 环的后果不是报错，是**该令牌彻底失效**（guaranteed-invalid）⇒ 用到它的地方
+   * 背景变透明 / 文字变继承色。必须显式钉住。
+   */
+  it('var() 引用图无环（成环的令牌会 guaranteed-invalid，且不会报错）', () => {
+    const VAR = /var\(\s*(--[A-Za-z0-9_-]+)/g
+    const refsOf = (v: string): string[] => {
+      const out: string[] = []
+      let m: RegExpExecArray | null
+      VAR.lastIndex = 0
+      while ((m = VAR.exec(v)) !== null) if (m[1]) out.push(m[1])
+      return out
+    }
+    const cycles: string[] = []
+    for (const start of darkTokens.keys()) {
+      const path: string[] = []
+      let cur = start
+      for (let guard = 0; guard < 40; guard++) {
+        const val = darkTokens.get(cur)
+        if (val === undefined) break
+        const next = refsOf(val)
+        // 只跟「单引用链」：多引用是复合值（`1px solid var(--x)`），不构成链式环
+        if (next.length !== 1) break
+        cur = next[0] as string
+        if (path.includes(cur)) { cycles.push([...path.slice(path.indexOf(cur)), cur].join(' -> ')); break }
+        path.push(cur)
+      }
+    }
+    expect(cycles, `检测到 var() 环（会让令牌整条失效）：\n${[...new Set(cycles)].join('\n')}`).toEqual([])
+  })
+
+  it('没有 `var(--x, var(--x))` 自引用 fallback（主引用失效即 guaranteed-invalid）', () => {
+    const SELF = /var\(\s*(--[A-Za-z0-9_-]+)\s*,\s*var\(\s*\1\s*[,)]/
+    const bad = [...darkTokens.entries()].filter(([, v]) => SELF.test(v)).map(([n]) => n)
+    expect(bad, `自引用 fallback：${bad.join(', ')}`).toEqual([])
+  })
 })
 
 describe('不许把 View Transitions 那套再加回来（静默退化成「没有过渡」）', () => {

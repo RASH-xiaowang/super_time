@@ -35,6 +35,48 @@ const CSV_KIND_LABEL: Record<string, string> = {
   privacy: '隐私扫描',
 }
 
+/**
+ * 两条入口（W2-8.2 补上取消三件套）：`exportAnnualReport` 与 `exportCsv`。
+ *
+ * 它们原先是 M3 那轮唯二漏掉的两条 —— 而恰好是最该有的两条：年报实测整段 4048ms
+ * （`annual-report.ts` 里那句注释，全部导出入口里最长的一个），用户点完之后既看不到
+ * 进度也停不下来；CSV 的 contacts/favorites/records 是几万行起步，逐行拼表就是全部耗时。
+ *
+ * 两条入口里的 `normalizeJobId(options?.jobId)` 是就地调用而不是提成局部变量 ——
+ * 它是幂等的纯函数，两条路径各归一化一次即可，而 `createExportRemotes` 已在函数体棘轮上。
+ */
+/**
+ * 流式导出的一次调用（jobId → 进度 + 取消令牌，跑完清在飞槽）。W2-8.2。
+ *
+ * 为什么抽出来：两条入口的形状完全一样（normalize jobId → 传 streamControl →
+ * finish），各自写一遍就把 `createExportRemotes` 顶出棘轮。清在飞槽这一步不能省：
+ * 少了它，同一个 jobId 的下一次调用会撞上「上一个还在跑」。
+ * @param rc - 导出 Remote 的上下文。
+ * @param jobId - 进度任务标识（空串表示「不是流式任务」，此时 streamControl 为空对象）。
+ * @param run - 真正的导出调用，参数是那一份 StreamControl。
+ * @returns 导出结果。
+ */
+async function withStreamJob<T>(rc: ExportRemoteCtx, jobId: string, run: (ctrl: StreamControl) => Promise<T>): Promise<T> {
+  try {
+    return await run(rc.streamControl(jobId))
+  } finally {
+    rc.finishStreamJob(jobId)
+  }
+}
+
+/**
+ * 流式导出失败路径的记账（W2-8.2）。清在飞槽 + 记操作日志，两条入口各调一次。
+ * @param rc - 导出 Remote 的上下文。
+ * @param jobId - 进度任务标识。
+ * @param action - 记进操作日志的动作名。
+ * @param key - 操作日志的定位字段（年份 / 导出类型）。
+ * @param message - 失败原因。
+ */
+function failStreamJob(rc: ExportRemoteCtx, jobId: string, action: string, key: string, message: string): void {
+  rc.finishStreamJob(jobId, message)
+  rc.op('export', action, 'fail', key, message)
+}
+
 export function createExportRemotes(rc: ExportRemoteCtx) {
   const normalizeJobId = rc.normalizeJobId
   return {
@@ -96,9 +138,9 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       }
     },
 
-    exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string }): ExportResult {
+    async exportAnnualReport(options: { year: number; format: string; dir?: string; filename?: string; jobId?: string }): Promise<ExportResult> {
       try {
-        const r = exportAnnualReport(rc.dirs().decrypted, options.year, options.format, options.dir, options.filename)
+        const r = await withStreamJob(rc, normalizeJobId(options?.jobId), (ctrl) => exportAnnualReport(rc.dirs().decrypted, options.year, options.format, options.dir, options.filename, ctrl))
         rc.op('export', 'export_annual_report', 'ok', String(options.year), `共 ${r.count} 条`)
         rc.recordExport({
           kind: 'annual',
@@ -111,7 +153,7 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        rc.op('export', 'export_annual_report', 'fail', String(options.year), (e as Error).message)
+        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_annual_report', String(options.year), (e as Error).message)
         rc.recordExport({
           kind: 'annual',
           label: `年度报告 · ${options.year} 年`,
@@ -262,10 +304,10 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
       }
     },
 
-    exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string }): ExportResult {
+    async exportCsv(options: { kind: string; recordsKind?: string; dest?: string; category?: string; jobId?: string }): Promise<ExportResult> {
       const label = CSV_KIND_LABEL[options.kind] ?? options.kind
       try {
-        const r = exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category)
+        const r = await withStreamJob(rc, normalizeJobId(options?.jobId), (ctrl) => exportCsv(rc.dirs().decrypted, options.kind, options.recordsKind, options.dest, options.category, ctrl))
         rc.op('export', 'export_csv', 'ok', options.kind, `共 ${r.count} 行`)
         rc.recordExport({
           kind: options.kind,
@@ -278,7 +320,7 @@ export function createExportRemotes(rc: ExportRemoteCtx) {
         })
         return r
       } catch (e) {
-        rc.op('export', 'export_csv', 'fail', options.kind, (e as Error).message)
+        failStreamJob(rc, normalizeJobId(options?.jobId), 'export_csv', options.kind, (e as Error).message)
         rc.recordExport({
           kind: options.kind,
           label,

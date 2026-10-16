@@ -14,8 +14,8 @@
  *   ① 纯函数：事件 → 状态的收敛（含进度钳位、说明截断、错误翻译）；
  *   ② 服务行为：注入假 autoUpdater（EventEmitter），断言「什么时候才真的出网」、
  *      「重复点击会不会并发下载」、「没下载完能不能装」；
- *   ③ 接线：main.js / preload.js / package.json / 设置面板里那几行**真的存在**，
- *      且取值来自该来的地方（AST 只认真实调用点，注释掉不算 —— M12/N19/N20 反复栽的坑）。
+ *   ③ 接线：main.js / ipc-update.js / preload.js / package.json / 设置面板里那几行
+ *      **真的存在**，且取值来自该来的地方（AST 只认真实调用点，注释掉不算）。
  *
  * ## 守得住什么、守不住什么（如实标注）
  *
@@ -39,6 +39,7 @@ import {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
+const ipcUpdateSrc = readFileSync(join(ROOT, 'src', 'backend', 'ipc-update.js'), 'utf8')
 const preloadSrc = readFileSync(join(ROOT, 'preload.js'), 'utf8')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as any
 const settingsDir = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'panels')
@@ -335,6 +336,171 @@ describe('服务行为：安装闸门', () => {
   })
 })
 
+describe('W2-12.2：下载失败自动重试', () => {
+  it('下载中失败 ⇒ 进入 retrying，带上第几次与下次时间，且版本/说明不丢', () => {
+    const downloading = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'progress', progress: { percent: 42 } })
+    const s = applyUpdateEvent(downloading, { type: 'error', error: 'socket hang up', at: '2026-03-01T00:00:00.000Z' })
+    expect(s.phase).toBe('retrying')
+    expect(s.attempt).toBe(1)
+    expect(s.willRetry).toBe(true)
+    // 首次退避 10s
+    expect(s.nextRetryAt).toBe('2026-03-01T00:00:10.000Z')
+    // 错误照说：重试中 ≠ 没出错
+    expect(s.error).toContain('网络不可达')
+    // 卡片上的版本与说明必须留着，否则「重试中」那一格是空的
+    expect(s.version).toBeNull() // 本夹具没有 version，但 progress 之后仍应保留字段
+    expect(s.progress).toBeNull()
+  })
+
+  it('重试到位还在失败 ⇒ 第 3 次之后落到 error，不再自动重试', () => {
+    let s = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'available', info: { version: '1.2.0' } })
+    // 依次 3 次「下载中失败」
+    const at = ['2026-03-01T00:00:00.000Z', '2026-03-01T00:01:00.000Z', '2026-03-01T00:02:00.000Z']
+    const phases: string[] = []
+    for (let i = 0; i < 3; i += 1) {
+      s = applyUpdateEvent(s, { type: 'progress', progress: { percent: 10 * (i + 1) } })
+      s = applyUpdateEvent(s, { type: 'error', error: 'socket hang up', at: at[i] })
+      phases.push(s.phase)
+    }
+    expect(phases).toEqual(['retrying', 'retrying', 'error'])
+    expect(s.attempt).toBe(3)
+    expect(s.willRetry, '到上限还标着会重试 ⇒ 界面按钮永远不出现').toBe(false)
+    expect(s.nextRetryAt).toBeNull()
+  })
+
+  it('检查阶段失败不自动重试（「Releases 里没有这个版本」该由人处理）', () => {
+    const checking = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'checking' })
+    const s = applyUpdateEvent(checking, { type: 'error', error: 'HttpError: 404' })
+    expect(s.phase).toBe('error')
+    expect(s.willRetry).toBe(false)
+    expect(s.nextRetryAt).toBeNull()
+    expect(s.error).toContain('404')
+  })
+
+  it('下载成功后，重试那套计数全部收起来', () => {
+    let s = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'progress', progress: { percent: 42 } })
+    s = applyUpdateEvent(s, { type: 'error', error: 'socket hang up', at: '2026-03-01T00:00:00.000Z' })
+    expect(s.willRetry).toBe(true)
+    s = applyUpdateEvent(s, { type: 'progress', progress: { percent: 90 } })
+    s = applyUpdateEvent(s, { type: 'downloaded', info: { version: '1.2.0' } })
+    expect(s.phase).toBe('downloaded')
+    expect(s.willRetry).toBe(false)
+    expect(s.nextRetryAt).toBeNull()
+  })
+
+  it('新一轮检查把重试计数归零（否则上一轮的 3 次会让这一轮直接判到顶）', () => {
+    let s = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'progress', progress: { percent: 42 } })
+    s = applyUpdateEvent(s, { type: 'error', error: 'x', at: '2026-03-01T00:00:00.000Z' })
+    s = applyUpdateEvent(s, { type: 'error', error: 'y', at: '2026-03-01T00:01:00.000Z' })
+    expect(s.attempt).toBe(2)
+    const again = applyUpdateEvent(s, { type: 'checking' })
+    expect(again.attempt, '新一轮还带着上一轮的计数').toBe(0)
+    expect(again.willRetry).toBe(false)
+    expect(again.nextRetryAt).toBeNull()
+  })
+
+  it('服务层：retrying 之后按退避自动再 check 一次；手动重试不受次数限制', async () => {
+    vi.useFakeTimers()
+    const up = fakeUpdater()
+    const { svc, broadcasts } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    up.emit('download-progress', { percent: 10 })
+    up.emit('error', new Error('socket hang up'))
+    expect(svc.getState().phase).toBe('retrying')
+    const checksAfterFirst = up.checks
+
+    // 到点自动重试（退避 10s）
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(up.checks, '退避到了却没有自动重试').toBe(checksAfterFirst + 1)
+
+    // 手动重试：即使 attempt 已经用过也放行
+    await svc.retryDownload()
+    expect(up.checks).toBe(checksAfterFirst + 2)
+    expect(svc.getState().attempt, '手动重试应当重新计数').toBe(0)
+    expect(broadcasts.length).toBeGreaterThan(0)
+  })
+
+  it('服务层：dispose 之后不再自动重试', async () => {
+    vi.useFakeTimers()
+    const up = fakeUpdater()
+    const { svc } = serviceFor(up)
+    up.emit('download-progress', { percent: 10 })
+    up.emit('error', new Error('socket hang up'))
+    expect(svc.getState().phase).toBe('retrying')
+    svc.dispose()
+    const before = up.checks
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(up.checks, 'dispose 之后还在跑重试计时器').toBe(before)
+  })
+})
+
+describe('W2-12.2：跳过版本', () => {
+  it('skipVersion 之后，同一个版本再来不再抛 available', () => {
+    const skipped = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'skip', version: '1.2.0' })
+    expect(skipped.phase).toBe('skipped')
+    expect(skipped.skippedVersion).toBe('1.2.0')
+    const again = applyUpdateEvent(skipped, { type: 'available', info: { version: '1.2.0', releaseNotes: '新内容' } })
+    expect(again.phase, '跳过之后又被弹出来了 ⇒ 这个按钮等于没有').toBe('skipped')
+    // 界面上要说「已跳过 v1.2.3」，所以版本号必须留着
+    expect(again.version).toBe('1.2.0')
+  })
+
+  it('换一个新版本号照样会提示（跳过只是这一个版本，不是关掉更新）', () => {
+    const skipped = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'skip', version: '1.2.0' })
+    const newer = applyUpdateEvent(skipped, { type: 'available', info: { version: '1.3.0' } })
+    expect(newer.phase).toBe('available')
+    expect(newer.version).toBe('1.3.0')
+  })
+
+  it('空版本号的 skip 是取消跳过，不是把状态改坏', () => {
+    const skipped = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'skip', version: '1.2.0' })
+    const cleared = applyUpdateEvent(skipped, { type: 'skip', version: '' })
+    expect(cleared.skippedVersion).toBeNull()
+    const again = applyUpdateEvent(cleared, { type: 'available', info: { version: '1.2.0' } })
+    expect(again.phase).toBe('available')
+  })
+
+  it('服务层：skipVersion 落到状态并停掉重试', async () => {
+    const up = fakeUpdater()
+    const { svc } = serviceFor(up)
+    up.emit('update-available', { version: '1.2.0' })
+    const s = svc.skipVersion('1.2.0')
+    expect(s.phase).toBe('skipped')
+    expect(s.skippedVersion).toBe('1.2.0')
+  })
+})
+
+describe('W2-12.2：变更摘要进界面', () => {
+  it('releaseNotes 归一化后进状态，两种 provider 形状都收', () => {
+    const str = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'available', info: { version: '1.2.0', releaseNotes: '修了三个 bug' } })
+    expect(str.releaseNotes).toBe('修了三个 bug')
+    const arr = applyUpdateEvent(blankUpdateState('1.0.0'), {
+      type: 'available', info: { version: '1.2.0', releaseNotes: [{ version: '1.2.0', note: '第二条' }, { version: '1.1.0', note: '第一条' }] },
+    })
+    expect(arr.releaseNotes).toContain('v1.2.0')
+    expect(arr.releaseNotes).toContain('第二条')
+  })
+
+  it('超长说明被截断并留下省略号（不给个截断标记等于偷偷改内容）', () => {
+    const long = 'x'.repeat(5000)
+    const s = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'available', info: { version: '1.2.0', releaseNotes: long } })
+    expect(s.releaseNotes.length).toBeLessThan(5000)
+    expect(s.releaseNotes.endsWith('…')).toBe(true)
+  })
+
+  it('下载完成时若新事件没带说明，沿用 available 时那份（别在最后一刻丢内容）', () => {
+    const avail = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'available', info: { version: '1.2.0', releaseNotes: '摘要' } })
+    const s = applyUpdateEvent(avail, { type: 'downloaded', info: { version: '1.2.0' } })
+    expect(s.releaseNotes).toBe('摘要')
+  })
+
+  it('up-to-date 必须抹掉说明（否则界面上留着上一个版本的摘要）', () => {
+    const avail = applyUpdateEvent(blankUpdateState('1.0.0'), { type: 'available', info: { version: '1.2.0', releaseNotes: '摘要' } })
+    const s = applyUpdateEvent(avail, { type: 'not-available', info: { version: '1.0.0' } })
+    expect(s.releaseNotes).toBeNull()
+  })
+})
+
 describe('接线守卫：真实存在、且取值来自该来的地方', () => {
   it('main.js 懒加载 electron-updater 且加载失败不致命', () => {
     const calls = callExpressions('main.js', mainSrc)
@@ -350,15 +516,18 @@ describe('接线守卫：真实存在、且取值来自该来的地方', () => {
     expect(mainSrc.slice(at, at + 400)).toContain('catch')
   })
 
-  it('三个 update: 通道都注册了，且 check 的 manual 由渲染层传、可信性由主进程决定', () => {
-    for (const ch of ['update:state', 'update:check', 'update:install']) {
-      expect(mainSrc, `main.js 里没有注册 ${ch}`).toContain(`ipcMain.handle('${ch}'`)
+  it('五个 update: 通道都注册了，且 check 的 manual 由渲染层传、可信性由主进程决定', () => {
+    for (const ch of ['update:state', 'update:check', 'update:install', 'update:skip', 'update:retry']) {
+      expect(ipcUpdateSrc, `ipc-update.js 里没有注册 ${ch}`).toContain(`handleIpc('${ch}'`)
     }
-    const at = mainSrc.indexOf("ipcMain.handle('update:check'")
-    const handler = mainSrc.slice(at, at + 700)
+    expect(ipcUpdateSrc, 'ipc-update.js 的注册 helper 没有把通道交给来源守卫')
+      .toContain('ipcMain.handle(channel, ipcTrust.wrap(channel, handler))')
+    const at = ipcUpdateSrc.indexOf("handleIpc('update:check'")
+    const handler = ipcUpdateSrc.slice(at, at + 700)
     expect(handler, 'update:check 必须把 manual 传给服务').toContain('manual')
     // 渲染层不得把「要不要出网」的判定塞进来
     expect(handler).not.toContain('isPackaged')
+    expect(mainSrc, 'main.js 没有把更新控制通道交给 IPC 模块').toContain('registerUpdateIpc({')
   })
 
   it('更新状态在建窗后安排自检，并在退出前 dispose', () => {
@@ -371,9 +540,9 @@ describe('接线守卫：真实存在、且取值来自该来的地方', () => {
     expect(mainSrc.slice(quit), 'before-quit 里没有 dispose 更新服务').toContain('updateService.dispose()')
   })
 
-  it('preload 暴露 update 命名空间（含 state / check / install / onEvent）', () => {
+  it('preload 暴露 update 命名空间（含 state / check / install / skip / retry / onEvent）', () => {
     expect(preloadSrc).toMatch(/update:\s*\{/)
-    for (const m of ["invoke('update:state')", "invoke('update:check'", "invoke('update:install')", "'update:event'"]) {
+    for (const m of ["invoke('update:state')", "invoke('update:check'", "invoke('update:install')", "invoke('update:skip'", "invoke('update:retry'", "'update:event'"]) {
       expect(preloadSrc, `preload 里找不到 ${m}`).toContain(m)
     }
     // onEvent 必须返回退订函数，否则设置面板反复开关会累积监听器
@@ -411,5 +580,26 @@ describe('接线守卫：真实存在、且取值来自该来的地方', () => {
     // 区块里的按钮必须真的调 electronAPI.update
     expect(settingsSrc).toContain('electronAPI?.update')
     expect(settingsSrc).toContain('api.check({ manual: true })')
+  })
+
+  /**
+   * W2-12.2 收尾：三件事都要在**界面上**真的能看到 / 点到。
+   *
+   * 后端状态机先做完（重试 / 跳过 / 摘要归一化），但界面上没有这三样的话，
+   * 用户拿到的仍然只有「一条错误」——所以这一条钉的是「界面接线」，不是状态机。
+   */
+  it('W2-12.2：变更摘要 / 跳过版本 / 重试下载三样都在界面上', () => {
+    // ① 变更摘要：releaseNotes 必须被渲染出来（不是只存进 state）
+    expect(settingsSrc, '更新说明没有渲染到界面上').toContain('{st.releaseNotes}')
+    // ② 跳过 / 取消跳过：调 update:skip，且传空串能取消（可反悔）
+    expect(settingsSrc, '界面上没有跳过版本的按钮').toContain('api.skip(v)')
+    expect(settingsSrc, '取消跳过没走同一条通道（传空串）').toContain("phase === 'skipped' ? '' : String(st?.version ?? '')")
+    // ③ 手动重试：走 update:retry（不是 update:check —— 前者把重试计数归零）
+    expect(settingsSrc, '界面上没有重试下载').toContain('api.retry()')
+    // 两个新阶段都要有可读文案，否则阶段一进去标题就是空的
+    expect(settingsSrc).toContain("retrying: { label: '")
+    expect(settingsSrc).toContain("skipped: { label: '")
+    // 重试等待期要说「还有多久」，而不是只丢一句失败
+    expect(settingsSrc, '重试等待期没有倒计时').toContain('retryCountdown(')
   })
 })

@@ -1,23 +1,23 @@
 /**
  * GatewayCore —— `WechatDataGateway` 的「核」：运行时状态、构造与实时同步接线、跨域共享的
- * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 14 个域处理器的 ctx 装配。
+ * 私有辅助（隐私闸 / 操作日志 / 流控槽 / 模型选择…），以及 16 个域处理器的 ctx 装配。
  *
- * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 161 个 `@Remote` 方法**必须留在同一个类**
+ * 为什么拆成继承链（M21 结构刀）：`gateway.ts` 里 195 个 `@Remote` 方法**必须留在同一个类**
  * ——协议层按「最派生原型的自有描述子」枚举方法面（见 `tests/remote-inheritance.spec.ts`），
  * 所以方法壳可以放在任何一层的基类里、而对外接口一字不变；把「核」先分出去，
  * 方法面才能继续按域往下拆。
  */
 
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import { bootstrapWechatData, resolveDecodedDir, resolveDecryptedDir } from './dirs.ts'
 import type { Context } from '@deepseek-ai/cordis'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, AutoDbKeyResult, AutoImageKeyResult, AvatarResult, BackupMutationResult, BackupPreviewSnapshot, BackupSnapshot, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ConfigSnapshot, ContactsSnapshot, DailySummaryResult, DbStatusSnapshot, DecryptAllResult, DecryptImagesResult, DecryptStatus, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, EmoticonsSnapshot, ExportResult, ExportStatus, ExportHistoryDeleteResult, ExportHistoryQuery, ExportHistorySnapshot, ExportHistoryPruneOptions, FavoritesSnapshot, FilesSnapshot, GenerateKeysResult, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, KeysInfoResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, PrivacySnapshot, RecordsSnapshot, RevokedSnapshot, SearchBuildResult, SearchIndexStatus, SearchSnapshot, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecord, SummaryRecordSnapshot, SummaryTask, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, VerifyImageKeyResult, VerifyKeyResult, VideoInfoResult, VoiceDataUrlResult, VoiceInfoResult, VoiceTranscriptResult, VoiceTranscribeOneResult, VoiceTranscribeResult, WechatAccount, WechatConfigFull, WechatConfigPatch, WhisperDownloadProgress, WhisperDownloadResult, WhisperStatus, WhisperTranscribing, AssetInsightsSnapshot, BackupRestoreResult, Contact360Snapshot, DbHealthSnapshot, GroupInsightsSnapshot, HandoffRemindsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, OperationCategory, OperationLogClearResult, OperationLogQuery, OperationLogSnapshot, OperationStatus, PeriodSummaryResult, PrivacyAuditClearResult, PrivacyAuditRow, PrivacyStateSnapshot, RegionMapSnapshot, TaskMutationResult, TasksSnapshot, UnifiedSearchSnapshot, KnowledgeSnapshot, NotesSnapshot, NoteMutationResult, KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult } from './types.ts'
+import type { AskResult, DecryptStatus, ExportStatus, SummaryTaskRunResult, WhisperDownloadProgress, WhisperTranscribing, OperationCategory, OperationStatus } from './types.ts'
 import { resolveSelfUsername } from './query/config.ts'
+import { warmDecodedImages } from './query/image-warm.ts'
 import { startRealtimeSync } from './query/sync.ts'
 import { createTasksRemotes } from './remotes/tasks.ts'
 import { createOpsLogRemotes } from './remotes/opslog.ts'
+import { createWordcloudRemotes } from './remotes/wordcloud.ts'
 import { createBackupRemotes } from './remotes/backup.ts'
 import { createConfigRemotes } from './remotes/config.ts'
 import { createSummaryRemotes } from './remotes/summary.ts'
@@ -26,40 +26,43 @@ import { createKeysDecryptRemotes } from './remotes/keysdec.ts'
 import { createGraphSearchRemotes } from './remotes/graphsearch.ts'
 import { createSummaryRecordRemotes } from './remotes/summaryrec.ts'
 import { createVoiceLlmRemotes } from './remotes/voicellm.ts'
+import { createAnnualNarrRemotes } from './remotes/annual-narr.ts'
 import { createAskDeepRemotes } from './remotes/askdeep.ts'
 import { createKbRemotes } from './remotes/kb.ts'
 import { createMediaRemotes } from './remotes/media.ts'
 import { createExportRemotes } from './remotes/export.ts'
-import { buildSearchIndex, ensureSearchIndex, getSearchIndexStatus, knownEntityNames, searchIndexMessages, searchIndexMessagesCancellable } from './query/search.ts'
-import { clearDecodedImageCache, decodeDatBytes, decodeEmoticonDataUrl, decodeFileImageDataUrl, decodeImageDataUrl, fetchEmoticonRemote, resolveImageFilePathsByMd5, resolveImageMd5sBatch } from './query/media-image.ts'
+import { knownEntityNames } from './query/search.ts'
 import type { StreamControl } from './query/zip.ts'
-import { detectWechatAccounts, generateKeysFile, getConfig, getKeysInfo, saveConfig, verifyDatabaseKey, weixinInstallPath, weixinVersion } from './query/config.ts'
-import { deleteExportHistory, listExportHistory, pruneExportHistory, recordExport } from './query/export-history.ts'
-import { clearAskHistory, deleteAskHistory, listAskHistory, recordAsk } from './query/ask-history.ts'
-import { loadRetrievalConfig, saveRetrievalConfig as saveRetrievalConfigFile, defaultRetrievalConfig } from './query/retrieval/config.ts'
-import { buildVectorIndex, vectorIndexStatus, vectorIndexSummary, type EmbedFn } from './query/retrieval/embedding.ts'
+import { getConfig } from './query/config.ts'
+import { recordExport } from './query/export-history.ts'
+import { recordAsk } from './query/ask-history.ts'
+import { type EmbedFn } from './query/retrieval/embedding.ts'
 import {
   kbModelOverrideCounts,
   kbModelsOnKbDelete,
-  readKbModelSettings,
-  resolveModelRef,
   touchKbEntitiesAt,
   writeKbModelSettings,
 } from './query/kb/model-config.ts'
-import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts'
-import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieval/types.ts'
-import { clearOperationLog, listOperations, recordOperation } from './query/operation-log.ts'
-import { clearPrivacyAudit, getPrivacyStateSnapshot, listPrivacyAudit, readPrivacySettings, recordPrivacyAudit, redactSensitiveText, writePrivacySettings } from './query/privacy-audit.ts'
-import { deleteTask, insertTask, listTasks as listWechatTasks, setTaskStatus } from './query/wechat-tasks.ts'
-import { bumpDataGeneration, boundedSet, invalidateWechatMeta } from './query/meta.ts'
-import { countKbFilesByKb, deleteKbFile as deleteKbFileRow, getKbFile, kbFilesOnKbDelete, listKbFileChunks, listKbFiles, recoverInterrupted, registerKbFile, setKbFileRagFlag, setKbFileSummary } from './query/kb-files.ts'
+import type { KbModelRole, ResolvedModel } from './query/kb/model-config.ts'
+import type { IntentKind, RerankWeights } from './query/retrieval/types.ts'
+import { recordOperation } from './query/operation-log.ts'
+import { bumpDataGeneration, invalidateWechatMeta } from './query/meta.ts'
+import { recoverInterrupted } from './query/kb-files.ts'
 import { drainKbQueue } from './query/kb-queue.ts'
-import { deleteSummaryRecord as delRec, deleteSummaryTask as delTask, listSummaryRecords as listRecs, listSummaryTasks as listTasks, saveSummaryRecord as saveRec, saveSummaryTask as saveTask, toggleSummaryTask as toggleTask, updateSummaryTaskRunState } from './query/summary-tasks.ts'
-import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { CACHED_IMAGE_EXTS, EXPORT_PROGRESS_EVENT, ResolvedDirs, STREAM_JOB_CAP, StreamJob, normalizeJobId, privacyStoreUnreadable, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import { createSummaryScheduler, type SummaryScheduler } from './gateway-scheduler.ts'
+import { EXPORT_PROGRESS_EVENT, ResolvedDirs, StreamJob, normalizeJobId, rawWechatBase, resolveDirs } from './gateway-support.ts'
+import { finishStreamJobIn, streamControlFor } from './gateway-jobs.ts'
+import { cancelJobIn, jobSignalFor } from './gateway-job-signals.ts'
+import { embedModelNameOf, globalModelNameOf, kbModelOf } from './gateway-models.ts'
+import type { EmbedFeature, LlmFactoryDeps } from './gateway-llm-factory.ts'
+import { makeChatAskerOf, makeEmbedFnOf, makeRerankFnOf } from './gateway-llm-factory.ts'
+import { privacyGateAt, redactModeAt } from './gateway-privacy.ts'
+import { archiveMessages } from './query/revoke-retain.ts'
+import { PREWARM_PROBE_MS, prewarmBudgetMs, pumpSnsDecodeCache } from './query/sns-image.ts'
+import { prewarmAfterInit, prewarmIsNotable } from './query/startup-prewarm.ts'
+import { resolveImageKeyPair } from './query/image-key.ts'
 
-/** 网关的「核」：状态、生命周期、共享私有辅助与 13 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
+/** 网关的「核」：状态、生命周期、共享私有辅助与 16 个域处理器的 ctx 装配（M21 自 gateway.ts 拆出）。 */
 export abstract class GatewayCore extends TypertRemoteService {
   /** 由派生的方法面层实现（`@Remote` 入口）；这里的排程必须经实例派发 —— 见 `summary-run-due.spec.ts` 打的桩。 */
   abstract runSummaryTask(options: { id: number }): Promise<SummaryTaskRunResult>
@@ -79,7 +82,19 @@ export abstract class GatewayCore extends TypertRemoteService {
    */
   protected _selfUsername = ''
   protected _selfUsernameKey = ''
-  protected _schedBusy = false
+  /**
+   * 摘要任务的定时器调度（#20 第七刀拆出去的协作者）。
+   *
+   * 走 `slot()` 装配：构造期间 `setInterval` 那一颗就已经会调它，而 `_dirs` 是构造里
+   * 晚一步才赋的 —— 装配放进惰性槽里，第一次真正用到时才读 `_dirs`。
+   */
+  protected summaryScheduler(): SummaryScheduler {
+    return this.slot('summaryScheduler', () => createSummaryScheduler({
+      decryptedDir: () => this._dirs.decrypted,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      runTask: (options) => this.runSummaryTask(options),
+    }))
+  }
   /**
    * 最近若干轮问答的检索特征画像（retrievalId → 特征/引用映射）。
    * 用户提交反馈时用它把「哪条引用有用」翻译成「哪个特征该加权」。
@@ -94,7 +109,7 @@ export abstract class GatewayCore extends TypertRemoteService {
   }>()
   /** Live decrypt progress (polled by the settings panel). */
   protected readonly decryptState: DecryptStatus = {
-    op: null, active: false, done: 0, total: 0, failed: 0, skipped: 0, message: '',
+    op: null, active: false, done: 0, total: 0, failed: 0, skipped: 0, message: '', failures: [],
   }
   /** Active whisper model download (polled by the settings panel). */
   protected whisperDownload: WhisperDownloadProgress | null = null
@@ -109,6 +124,23 @@ export abstract class GatewayCore extends TypertRemoteService {
    * 槽位会在搜索收尾时删掉（见 {@link searchSignal}），所以这里不需要上限。
    */
   protected readonly _searchJobs = new Map<string, AbortController>()
+  /**
+   * 问答的取消槽（W3-6.1）：jobId → 取消控制器。
+   *
+   * 为什么与搜索/导出都分开：三者的生命周期不同 —— 搜索是「一次扫描」、导出是「一个 job」，
+   * 问答是「一轮生成」。共用一个槽会让「取消搜索」顺手掐死正在生成的回答（或反过来），
+   * 那是比不能取消更坏的行为。做法与 {@link searchSignal} 同款：jobId 由渲染层生成
+   * （就是那轮的 streamId），取消走独立的 `cancelAsk` Remote。
+   */
+  protected readonly _askJobs = new Map<string, AbortController>()
+  /** W3-11.5：逐条分析的取消槽（与问答分开放，原因见 `layaSignal` 的注释）。 */
+  protected readonly _layaJobs = new Map<string, AbortController>()
+  /** W3-11.5：搜索索引构建的取消槽（与搜索分开放，原因见 `searchIndexSignal` 的注释）。 */
+  protected readonly _searchIndexJobs = new Map<string, AbortController>()
+  /** W3-5.5：下载的取消槽（与其余几种各占一格）。 */
+  protected readonly _whisperDownloadJobs = new Map<string, AbortController>()
+  /** W3-11.5：知识库向量构建的取消槽（与消息域的构建各占一格，互相不会打断）。 */
+  protected readonly _kbIndexCancelJobs = new Map<string, AbortController>()
   /**
    * 反馈去重窗口（N27）：键 → 到期时间。
    *
@@ -157,36 +189,14 @@ export abstract class GatewayCore extends TypertRemoteService {
   }
 
   /**
-   * 取（或新建）一个长任务的控制槽，并包成 query 层要的 {@link StreamControl}（M3）。
-   *
-   * 每次调用都换一个**新的** AbortController：同一个 jobId 被复用（先取消、再重跑）时，
-   * 复用一个已 abort 的令牌会让新一轮导出刚起步就抛「已取消」。
-   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消，
-   *   旧调用方的行为完全不变）。
+   * 取（或新建）一个长任务的控制槽 —— 槽位管理在 `gateway-jobs.ts#streamControlFor`
+   * （#20 第四个协作者：令牌复用 / 终态残留 / 上限淘汰这三条规则只有单独测才钉得住）。
+   * 那张槽表仍由本类持有，并原样交给 remotes（避免出现第二个"进度视图"）。
+   * @param jobId - 渲染层生成的标识；缺省/空白时返回空控制（＝无进度、不可取消）。
    * @returns 含 `signal` 与 `onProgress` 的控制对象，可直接透传给 query 层。
    */
   protected streamControl(jobId?: string): StreamControl {
-    const id = normalizeJobId(jobId)
-    if (!id) return {}
-    if (!this._streamJobs.has(id) && this._streamJobs.size >= STREAM_JOB_CAP) {
-      const first = this._streamJobs.keys().next()
-      if (!first.done && first.value !== undefined) this._streamJobs.delete(first.value)
-    }
-    const job: StreamJob = this._streamJobs.get(id) ?? { ctrl: new AbortController(), progress: null, finished: false }
-    job.ctrl = new AbortController()
-    job.progress = null
-    job.finished = false
-    delete job.error
-    this._streamJobs.set(id, job)
-    const ctx = this._ctx
-    return {
-      signal: job.ctrl.signal,
-      onProgress: (p) => {
-        job.progress = { phase: p.phase, done: p.done, total: p.total }
-        // 事件尽力而为：进度推不出去不该让导出失败（与 wechat-ask/delta 同策略）。
-        try { ctx.emit(EXPORT_PROGRESS_EVENT, { jobId: id, phase: p.phase, done: p.done, total: p.total }) } catch { /* ignore */ }
-      },
-    }
+    return streamControlFor(this._streamJobs, (detail) => { this._ctx.emit(EXPORT_PROGRESS_EVENT, detail) }, jobId)
   }
 
   /**
@@ -195,11 +205,14 @@ export abstract class GatewayCore extends TypertRemoteService {
    * @param error - 失败/取消原因；成功时省略。
    */
   protected finishStreamJob(jobId: string, error?: string): void {
-    const job = this._streamJobs.get(jobId)
-    if (!job) return
-    job.finished = true
-    if (error) job.error = error
+    finishStreamJobIn(this._streamJobs, jobId, error)
   }
+
+  /**
+   * 子类钩子：网关构造完成后（`setImmediate` 里）拉起 ClawBot 接收通道
+   * （体在 `gateway-clawbot.ts`；默认实现什么都不做 —— ClawBot 组装在更派生的层）。
+   */
+  protected bootClawbotChannel(): void { /* 默认无 */ }
 
   constructor(ctx: Context) {
     super(ctx, 'wechatData')
@@ -223,6 +236,38 @@ export abstract class GatewayCore extends TypertRemoteService {
       //     （它们没法用单个文件的签名表达，见 meta.ts 的说明）。
       // 整棵树被替换的场合（全量解密）仍用 `invalidateWechatMeta()`。
       bumpDataGeneration()
+      /**
+       * 撤回原文归档（2026-09-29，用户选 C：全量归档）——**挂在同步 tick 上，而不是读路径**。
+       *
+       * 为什么：`queryRevoked` 里那份"先归档再出列表"在首次会扫全部历史（19 万行 ≈2.4s），
+       * 压在"打开面板"上太慢。归档本身按**源库签名**整库跳过，空闲时只有几次 stat，
+       * 所以放在这里最合适；且**只在本 tick 真有分片变化时**才做，避免拖慢别的查询。
+       * 失败只记日志，绝不影响同步主流程。
+       */
+      if (synced.length > 0) {
+        try { archiveMessages(decrypted) } catch (e) { console.warn('[revoke-archive] 归档失败:', (e as Error).message) }
+      }
+      /**
+       * **预热解码缓存**（2026-09-29「有的图片加载不出来」的治本一步）。
+       *
+       * 真机自检：解码缓存 **154 张** vs 媒体资源 **175,963 项** —— 因为解密推进
+       * (`drainAttach`) 此前只在"用户点到某张图"时被驱动，空闲时缓存完全不涨；
+       * 未命中的那张要走 12–21s 的重路径，失败就是我们看到的空白。
+       *
+       * 这里把驱动权交给同步节拍（约每 10s 一拍）：**不加 `synced.length > 0` 条件**，
+       * 因为 WeChat 空闲时也需要继续预热。安全性由 pump 自身保证 —— 它复用请求路径
+       * 同一个 150ms 突发闸门与文件数/毫秒双预算，**不会把 worker 拖住、也不会挤掉正在等图的请求**。
+       *
+       * 密钥走 `resolveImageKeyPair(decrypted)`：与设置页/自检面板**同一份被校验过的键**
+       * （配置优先，其次自动密钥且校验归属），绝不在这里自己拼密钥。
+       */
+      try {
+        const pair = resolveImageKeyPair(decrypted)
+        // 每拍最多占用 300ms（约 12 步 / 400+ 张）——占每 10s 节拍的 3%，
+        // 但把 3,262 张的积压从"约 13 分钟"压到"约 1 分钟"级。
+        void pumpSnsDecodeCache(rawDbDir(), pair.aesKey, pair.xorKey, { maxMs: 300 })
+          .catch((e) => console.warn('[sns-prewarm] 预热失败:', (e as Error).message))
+      } catch (e) { console.warn('[sns-prewarm] 预热失败:', (e as Error).message) }
       try { ctx.emit('wechat-data/updated', synced) } catch { /* event best-effort */ }
     })
     ctx.effect(() => stopSync, 'wechat-data: realtime sync')
@@ -251,6 +296,32 @@ export abstract class GatewayCore extends TypertRemoteService {
      * 解不完不会丢：每轮都把进度写进 `parse_state`（用户看得见），真被中断了，
      * 下一次启动的崩溃恢复会把它们捡回来。
      */
+    /**
+     * W3-1.3 / W3-3.4：启动后的**低优先级预热**。
+     *
+     * 两件事从前都是「第一次用到时当场算」：分片目录（逐张分片开库、
+     * 枚举 Msg_* 表）与成员搜索的 FTS 表。后者体验差得具体：用户点「搜索人」时
+     * 才发现没建，那一次搜索就要等整份 contact.db 灌进去。
+     *
+     * 三条约束：
+     *  · **不阻塞启动**：`setImmediate` 排到当前 tick 之后 + `void`（不 await）。
+     *    窗口出现的路径上不该绑着一次可能几百毫秒的预热。
+     *  · **不抢写闸**：contact_fts 真要建表时跟搜索路径跟同一个
+     *    `withIndexWrite`；拿不到就本次跳过（busy）。
+     *  · **失败只留痕**：预热是优化，不是功能。
+     */
+    setImmediate(() => {
+      try {
+        const r = prewarmAfterInit(this._dirs.decrypted)
+        if (prewarmIsNotable(r)) {
+          const bits = ['[prewarm] 分片 ' + String(r.shards) + ' 张', 'contact_fts=' + r.fts]
+          if (r.ftsError !== '') bits.push('FTS 失败：' + r.ftsError)
+          console.log(bits.join(' · '))
+        }
+      } catch (e) {
+        console.warn('[prewarm] 预热失败:', (e as Error).message)
+      }
+    })
     void drainKbQueue(this._dirs.decrypted).then((r) => {
       if (r.processed > 0) {
         console.log('[kb-queue] 启动清扫：处理 ' + r.processed + ' 个文件（就绪 ' + r.ready
@@ -259,98 +330,65 @@ export abstract class GatewayCore extends TypertRemoteService {
     }).catch((e: unknown) => {
       console.warn('[kb-queue] 启动清扫异常：' + (e instanceof Error ? e.message : String(e)))
     })
+    /**
+     * ClawBot 接收通道：绑定后随网关常驻（收消息是宿主职责，不该等用户打开面板）。
+     *
+     * 放进 `setImmediate` 的理由与上面的预热同款 —— 启动路径不该为了「读一次绑定库、
+     * 起一条长轮询」多等一下；晚一拍也确保继承链上的组装槽已就绪。
+     * 未绑定/无凭证时钩子内部直接返回，**不会有任何出网**。
+     */
+    setImmediate(() => {
+      try {
+        this.bootClawbotChannel()
+      } catch (e) {
+        console.warn('[clawbot] 通道启动失败：' + (e instanceof Error ? e.message : String(e)))
+      }
+    })
   }
 
   /**
    * Append one operation-log row. Metadata only — never message bodies or
    * image/file contents — so an export stays safe to share. Best-effort: a
    * logging failure never affects the operation it records.
+   *
+   * @param durationMs - 本次操作耗时（H2）。**不传就是不记**（`undefined`），
+   *   与传 `0` 是两回事：`0` 会被 `storedDuration` 当成「不到阈值」丢掉，
+   *   而「没量过」与「量出来很快」在审计表里都落 NULL。绝大多数 `op()` 调用点
+   *   记录的是「开始做某件事」而不是「做完」，本来就没有耗时可言 —— 不要为了
+   *   填满这一列去给每个调用点掐表。
    */
-  protected op(category: OperationCategory, action: string, status: OperationStatus, target = '', detail = ''): void {
-    recordOperation(this._dirs.decrypted, { category, action, target, status, detail })
+  protected op(category: OperationCategory, action: string, status: OperationStatus, target = '', detail = '', durationMs?: number): void {
+    recordOperation(this._dirs.decrypted, { category, action, target, status, detail, durationMs })
   }
 
   /**
-   * 「出站拦截」是否已开启；开启时返回给用户看的说明，否则 null。
-   *
-   * 为什么要单独有这个提前检查：出站调用点前面还有「未配置默认模型」这类**早退分支**，
-   * 不开拦截时它是对的；但用户先把「禁止 AI 出网」打开、再点每日总结时，
-   * 早退分支会先返回「AI 不可用（未配置默认模型）」，把隐私拦截真实生效这件事盖掉
-   * （第 59 轮实测：开关明明写着「开」，总结里却完全不提拦截）。所以拦截要在**最前面**判。
-   * @param feature - 功能名，出现在提示文案里。
-   * @returns 提示文案，或 null。
-   */
-  /**
-   * 「出站拦截」当前是否开启。
-   *
-   * 与 `privacyBlocked` 的分工：那个是 LLM 出站点用的（要返回给用户看的文案），
-   * 这里只回答一个是非问题 —— 批量头像会给远端 URL 兜底，而拉那张图属于出站，
-   * 开关打开时就不该下发这类 URL。读不到设置时按「未开启」处理，与其它读取点一致。
-   * @returns 是否禁止出站。
-   */
-  protected outboundBlocked(): boolean {
-    try {
-      return readPrivacySettings(this._dirs.decrypted).blockOutbound
-    } catch {
-      // 读不到就按「禁止出站」处理。这是权限判断，失败方向只能是**拦下**：
-      // 用户开了「出站拦截」而库损坏/被锁的那一刻，静默放行是最糟的结果。
-      // 与 `privacyBlocked` 的文案分支同一取向（那边会告诉用户为什么被拦）。
-      return true
-    }
-  }
-
-  protected privacyBlocked(feature: string, detail = '把数据发送给模型'): string | null {
-    let blocked: boolean
-    try {
-      blocked = readPrivacySettings(this._dirs.decrypted).blockOutbound
-    } catch {
-      return privacyStoreUnreadable(feature, detail)
-    }
-    return blocked ? `隐私设置已开启「出站拦截」，已阻止「${feature}」${detail}` : null
-  }
-
-  /**
-   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（第 59 轮）。
-   *
-   * 背景：`readPrivacySettings` / `recordPrivacyAudit` 这两个能力原本**谁都没调用** ——
-   * 「出站拦截」「敏感字段脱敏」两个开关只写进 sqlite 就没人读，`privacy_audit` 表
-   * 实测 0 行（运行期 bundle 里连 INSERT 都没有）。把闸门收敛成一个私有方法，四处
-   * 出站调用（问答／每日总结／群总结任务／周期总结）统一走它，避免「以后加了新 AI
-   * 功能又忘了过隐私」这类漏网。
-   *
-   * @param feature - 审计里的功能名（ask_wechat / daily_summary / summary_task / period_summary）。
-   * @param stats - 本次出站涉及的数据量（会话数、消息数），写进审计。
+   * 隐私闸门：**所有**出站 LLM 调用都必须先过这里（实现见 `gateway-privacy.ts`）。
+   * 它只做脱敏与审计 —— 2026-09-30 起不再有任何拦截逻辑。
+   * @param feature - 审计里的功能名。
+   * @param stats - 本次出站涉及的数据量（会话数、消息数）。
    * @param texts - 即将发出去的文本；开启脱敏时返回脱敏后的副本。
-   * @returns 允许出站时 `{ ok: true, texts }`；被拦截时 `{ ok: false, error }`。
+   * @returns 可以直接发出去的文本。
    */
   protected privacyGate(
     feature: string,
     stats: { sessions: number; messages: number },
     texts: string[],
-  ): { ok: true; texts: string[] } | { ok: false; error: string } {
-    const blocked = this.privacyBlocked(feature)
-    if (blocked !== null) return { ok: false, error: blocked }
-    let settings: { redactSensitive: boolean; blockOutbound: boolean }
-    try {
-      settings = readPrivacySettings(this._dirs.decrypted)
-    } catch {
-      // 竞态兜底：`privacyBlocked` 那次读成功了、这一次失败（库刚被锁上或删掉）。
-      // 方向同上 —— 判断不了就拦下，不能带着「默认不脱敏」把原文发出去。
-      return { ok: false, error: privacyStoreUnreadable(feature, '把数据发送给模型') }
-    }
-    const out = settings.redactSensitive ? texts.map(redactSensitiveText) : texts
-    const chars = out.reduce((a, t) => a + t.length, 0)
-    // 审计是 best-effort：recordPrivacyAudit 内部已是 try/catch，失败不影响功能本身
-    recordPrivacyAudit(this._dirs.decrypted, feature, chars, stats.sessions, stats.messages)
-    return { ok: true, texts: out }
+  ): string[] {
+    return privacyGateAt(this._dirs.decrypted, feature, stats, texts)
   }
 
   /**
-   * Session list (search/filter/limit).
-   * @param options - Filter options: keyword fuzzy search, limit max rows.
-   * @returns SessionsSnapshot: sessions list (items + total).
+   * 当前数据根是否开启敏感字段脱敏（W3-6.2：embedding 缓存键的命名空间）。
+   *
+   * 与 `privacyGateAt` 读的是**同一个** `readPrivacySettings`，容错口径也相同
+   *（读不到按 false 继续）—— 两边不一致会让缓存跨口径取用，所以这里刻意不另找数据源。
+   * @returns 开启为 true。
    */
-  /**
+  protected privacyRedactMode(): boolean {
+    return redactModeAt(this._dirs.decrypted)
+  }
+
+/**
    * 问答用的已知实体名（点名识别）：联系人备注/昵称 + 会话标题，按数据目录缓存。
    *
    * 为什么问答需要它：规划器（LLM）是**尽力而为**的 —— 它偶尔会把问题里明确点到的人
@@ -373,189 +411,113 @@ export abstract class GatewayCore extends TypertRemoteService {
     return names
   }
 
-  /**
-   * 构造「过隐私闸门」的 embedding 函数。
-   *
-   * 所有 embedding 调用都必须先过与 chat 出站同一道闸门：开启「出站拦截」时抛错
-   * （流水线自动降级为纯稀疏），开启「敏感字段脱敏」时发送脱敏后的文本，并写审计。
-   *
-   * ⚠ `feature` 为什么是**参数**而不是写死 `ask_embed`：审计表按功能名分列，而这几处
-   * embedding 的**数据范围完全不同** —— 消息侧（`ask_embed`）只发检索到的聊天片段，
-   * 知识库侧（`kb_embed`）发的是用户选进知识库的**文件正文**，链接建议（`kb_link_suggest`）
-   * 发的是**用户正在写的笔记正文**加本库候选标题。写死同一个名字，
-   * 「我到底把哪一类东西发出去了」在审计里就分不开 —— 而用户完全可能只对其中一类给过同意。
-   * @param model - 向量模型名（空则回退 chat model）。
-   * @param feature - 审计里的功能名（`ask_embed` 聊天片段 / `kb_embed` 知识库文件正文 /
-   *   `kb_link_suggest` 笔记正文与候选标题）。
-   * @returns embedding 函数；底层 LLM 桥未提供 embed 时返回 undefined。
+    /**
+   * 构造「过隐私闸门」的 embedding 函数 —— 工厂在 `gateway-llm-factory.ts`
+   * （#20 第三个协作者，文件头写着那三条出站纪律）。
+   * @param model - 向量模型名（空则不带 model 选项）。
+   * @param feature - 审计里的功能名（三种数据范围必须分得开）。
+   * @returns embedding 函数；桥未提供 embed 时 undefined。
    */
-  protected makeEmbedFn(model: string, feature: 'ask_embed' | 'kb_embed' | 'kb_link_suggest' = 'ask_embed'): EmbedFn | undefined {
-    const llmAny = this._ctx.llm as unknown as { embed?: (texts: string[], opts?: { model?: string }) => Promise<number[][]> }
-    if (typeof llmAny?.embed !== 'function') return undefined
-    return async (texts: string[]): Promise<number[][]> => {
-      const gate = this.privacyGate(feature, { sessions: 0, messages: texts.length }, texts)
-      if (!gate.ok) throw new Error(gate.error)
-      return llmAny.embed!(gate.texts, model ? { model } : undefined)
-    }
+  protected makeEmbedFn(model: string, feature: EmbedFeature = 'ask_embed'): EmbedFn | undefined {
+    return makeEmbedFnOf(this.llmFactoryDeps(), model, feature)
   }
 
   /**
-   * 「这次 embedding 实际用的模型名」—— 由 LLM 桥回答，与它自己发请求时用的是**同一个解析**。
-   *
-   * 为什么不在这里自己拼一遍优先级：那等于第二次实现宿主侧的 `override || embeddingModel || model`
-   * 规则，而两处规则一旦漂移，向量库里记的模型名就成了一个没人用得上的字符串 ——
-   * 「换没换嵌入模型」的判定恰恰读的就是它（`§7 F1`：此前这边记 `'default'`、那边发 llm.json 的值，
-   * 于是换模型永远不触发重建，旧向量被当成新模型的用）。所以记账名**必须**由发送方给出。
-   * 桥未提供该方法时（测试桩）退回 override 本身。
+   * 「这次 embedding 实际用的模型名」—— 解析在 `gateway-models.ts#embedModelNameOf`
+   * （#20 第二个协作者）。记账名必须由发送方给出，见那份模块里 §7 F1 那段。
    * @param override - 显式指定的模型名（可空）。
    * @returns 生效模型名；未配置时为空串。
    */
   protected embedModelName(override = ''): string {
-    const llmAny = this._ctx.llm as unknown as { embeddingModelName?: (o?: string) => string }
-    if (typeof llmAny?.embeddingModelName !== 'function') return override
-    return String(llmAny.embeddingModelName(override) ?? '')
+    return embedModelNameOf(this._ctx.llm, override)
   }
 
   /**
-   * 某个角色的**全局**生效模型名（还没叠库级覆盖）。
-   *
-   * 三个角色都从宿主桥取值：桥是唯一知道「实际会发出去什么」的地方，
-   * 网关自己再拼一遍优先级就会重新制造 §7 F1 那种两条链各算一次的局面。
+   * 某个角色的**全局**生效模型名（还没叠库级覆盖）；实现见 `gateway-models.ts`。
    * @param role - 语言 / 嵌入 / 重排序。
    * @returns 模型名；空串 = 这个角色没配。
    */
   protected globalModelName(role: KbModelRole): string {
-    if (role === 'embed') return this.embedModelName(loadRetrievalConfig(this._dirs.decrypted).embedding.model)
-    const llmAny = this._ctx.llm as unknown as { rerankModelName?: () => string; config?: { model?: string; rerankModel?: string } }
-    if (role === 'rerank') {
-      if (typeof llmAny?.rerankModelName === 'function') return String(llmAny.rerankModelName() ?? '')
-      return String(llmAny?.config?.rerankModel ?? '')
-    }
-    const sel = (this._ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { model?: string } }
-    }).agentDefaultModel?.currentSelection?.()
-    return String(sel?.model ?? llmAny?.config?.model ?? '')
+    return globalModelNameOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, role)
   }
 
   /**
-   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）。
-   *
-   * 每次调用都重读设置：`llm.json` 那条链就是「改完下一次生效、不必重启」的语义，
-   * 这里缓存住就会让库级覆盖比全局配置更难改。一次 SQLite 主键查是微秒级，不心疼。
+   * 某个库、某个角色**实际该用的**模型名（库级覆盖叠在全局之上）；实现见 `gateway-models.ts`。
    * @param kbId - 知识库 id（非法时等价于「没有库级覆盖」）。
    * @param role - 哪个角色。
    * @returns 解析结果（含来源，界面与审计都要用它说话）。
    */
   protected kbModel(kbId: number, role: KbModelRole): ResolvedModel {
-    const s = readKbModelSettings(this._dirs.decrypted, kbId)
-    const ref = role === 'chat' ? s.chatRef : role === 'embed' ? s.embedRef : s.rerankRef
-    return resolveModelRef(ref, this.globalModelName(role))
+    return kbModelOf({ bridge: this._ctx.llm, host: this._ctx, decryptedDir: this._dirs.decrypted }, kbId, role)
   }
 
-  /**
-   * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）。
-   *
-   * 与 `summarizeKbFile` 同一套纪律：`privacyGate` 过闸 + `BlockAssembler` 收流 +
-   * 失败抛出。为什么不复用摘要那条路径：那些地方各自要拼自己的 prompt 与 system，
-   * 抽出来只共享「过闸 → 发 → 收文本」这三步，比造一个带一堆选项的大泛型函数诚实。
+    /**
+   * 造一个「提示词 → 模型文本」的一次性调用（实体抽取、链接建议这类结构化小任务用）；
+   * 实现见 `gateway-llm-factory.ts#makeChatAskerOf`。
    * @param kbId - 当前库（取语言模型的库级覆盖）。
    * @param feature - 审计里登记的功能名。
    * @returns 调用函数；桥不支持流式时 undefined（调用方据此报「模型通道不可用」）。
    */
   protected makeChatAsker(kbId: number, feature: string): ((prompt: string) => Promise<string>) | undefined {
-    const ctx = this._ctx
-    const llmAny = ctx.llm as unknown as { stream?: (o: unknown) => AsyncIterable<unknown> }
-    if (typeof llmAny?.stream !== 'function') return undefined
-    const model = this.kbModel(kbId, 'chat').model
-    const sel = (ctx as unknown as {
-      agentDefaultModel?: { currentSelection(): { provider: string; model: string } }
-    }).agentDefaultModel?.currentSelection()
-    const provider = String(sel?.provider ?? '')
-    return async (prompt: string): Promise<string> => {
-      const blocked = this.privacyBlocked(feature)
-      if (blocked !== null) throw new Error(blocked)
-      const gate = this.privacyGate(feature, { sessions: 0, messages: 0 }, [prompt])
-      if (!gate.ok) throw new Error(gate.error)
-      const assembler = new BlockAssembler()
-      const opts: GenerateOptions = {
-        provider,
-        model,
-        messages: [createUserMessage({
-          content: [{ type: 'text', text: gate.texts[0] ?? prompt }],
-          source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
-        })],
-        system: '你是一名严格的信息抽取器。只输出要求的行格式，不解释、不寒暄、不补全文档里没有的名字。',
-        maxTokens: 500,
-      }
-      for await (const c of ctx.llm.stream(opts)) assembler.push(c)
-      return assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
-    }
+    return makeChatAskerOf(this.llmFactoryDeps(), kbId, feature)
   }
 
-  /**
-   * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）。
-   *
-   * 三条纪律，少一条都是实质性的漏洞：
-   *   ① `privacyBlocked` 判在**任何出网之前**（早于「没配模型」那类早退 —— 顺序错了
-   *      用户看到的会是「AI 不可用」，把「拦截生效了」这件事盖掉）；
-   *   ② `privacyGate` 必须一次过 `[query, ...documents]`。rerank 的入参天然是一批文档，
-   *      只 gate 查询词等于把 N 条正文**裸发出去**，而审计表还会记成「已脱敏」；
-   *   ③ 失败一律抛出而不是吞掉：调用方（pipeline）负责退回本地加权，并在 `rerankInfo`
-   *      里说清这次为什么没精排。
-   * 功能名叫 `ask_rerank` 而不是 `kb_rerank`：这一阶段跑在整个问答检索管道上，
-   * 候选既可能来自聊天记录也可能来自知识库文件 —— 按知识库命名会让审计里那一列
-   * 看起来只与文件有关，而它实际覆盖的是全部候选。
+    /**
+   * 构造「过隐私闸门」的模型精排函数（问答检索的候选重排）；
+   * 实现见 `gateway-llm-factory.ts#makeRerankFnOf`（含「整批过一次闸」那条纪律）。
    * @param kbId - 当前库（用于取库级覆盖；0 = 没有库上下文）。
-   * @returns 精排函数；没配模型或桥不支持时返回 undefined（管道据此跳过这一段）。
+   * @returns 精排函数；没配模型或桥不支持时 undefined（管道据此跳过这一段）。
    */
   protected makeRerankFn(kbId: number): ((query: string, documents: string[]) => Promise<number[]>) | undefined {
-    const llmAny = this._ctx.llm as unknown as {
-      rerank?: (q: string, docs: string[], o?: { model?: string }) => Promise<number[]>
-    }
-    if (typeof llmAny?.rerank !== 'function') return undefined
-    const model = this.kbModel(kbId, 'rerank').model
-    if (model === '') return undefined
-    return async (query: string, documents: string[]): Promise<number[]> => {
-      const blocked = this.privacyBlocked('ask_rerank')
-      if (blocked !== null) throw new Error(blocked)
-      const gate = this.privacyGate('ask_rerank', { sessions: 0, messages: documents.length }, [query, ...documents])
-      if (!gate.ok) throw new Error(gate.error)
-      const [q, ...rest] = gate.texts
-      return llmAny.rerank!(q ?? query, rest, { model })
+    return makeRerankFnOf(this.llmFactoryDeps(), kbId)
+  }
+
+    /**
+   * 三个 LLM 工厂共用的依赖袋。
+   *
+   * 每次调用现凑：`_dirs.decrypted` 会在换数据根时变，缓存这份对象就会让隐私闸
+   * 指向**上一个**数据根的库（读到旧设置 = 用旧同意范围发新数据）。
+   * @returns 桥、宿主上下文与两个前置协作者的入口。
+   */
+  private llmFactoryDeps(): LlmFactoryDeps {
+    return {
+      llm: this._ctx.llm,
+      host: this._ctx,
+      kbModel: (kbId, role) => this.kbModel(kbId, role),
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+      // W3-6.2：embedding 缓存要落在当前数据根（换根时自动改道），
+      // 键的命名空间取当前脱敏口径（理由见 LlmFactoryDeps 的注释）。
+      decryptedDir: () => this._dirs.decrypted,
+      redactMode: () => this.privacyRedactMode(),
     }
   }
 
   /**
-   * 读取「自动获取原图（CDN）」与「原图解密方式」两个开关（N24）。
-   *
-   * 这两个键在界面上可见（设置 → 图片解码），此前**没有任何消费者** —— 关掉后取图路径照旧
-   * 出网，用户看到的是「开关说是关的、行为却不是」。所有远端取媒体（表情 / 公众号封面 /
-   * 朋友圈视频与封面）都在这里统一取值再传进 query 层，保证「关掉 = 不发请求」。
-   * @returns cdnEnabled=false 时 query 层会在发请求前返回；localDecrypt=false 表示服务端解密。
+   * 装配槽：同一个域的处理器**只装配一次**（`WechatDataGateway` 的壳每次调用都转发到同一份对象，
+   * 那份"壳转给的就是这件"的判据见 `gateway-read-shell.spec.ts` 里的 spy 用例）。
+   * #20 第六刀之前这里是十五个「下划线字段 + `??=`」各写一遍 —— 报告 §P2-2 第 1 条要 core 只保留
+   * `_ctx` / `_dirs` 与装配，于是把"复用装配产物"这一件事收成一处，实例状态一次少十五格。
    */
-  protected cdnSwitches(): { cdnEnabled: boolean; localDecrypt: boolean } {
-    try {
-      const cfg = getConfig(this._dirs.decrypted)
-      return {
-        cdnEnabled: cfg['cdn_enabled'] !== false,
-        localDecrypt: cfg['cdn_local_decrypt'] !== false,
-      }
-    } catch {
-      // 读不到配置时**不拦**：这两个键的默认值本就是开启，读失败不该变成「静默断功能」
-      return { cdnEnabled: true, localDecrypt: true }
-    }
-  }
+  private readonly _remoteSlots = new Map<string, unknown>()
 
-  protected _kbRemotes?: ReturnType<typeof createKbRemotes>
+  /** 取（或第一次装配）某个键对应的处理器。 */
+  protected slot<T>(key: string, build: () => T): T {
+    if (this._remoteSlots.has(key)) return this._remoteSlots.get(key) as T
+    const made = build()
+    this._remoteSlots.set(key, made)
+    return made
+  }
 
   /** KB 域的处理器（体在 remotes/kb.ts）；这里只组装 ctx 与转发。 */
   protected kbRemotes(): ReturnType<typeof createKbRemotes> {
-    return (this._kbRemotes ??= createKbRemotes({
+    return this.slot('kb', () => createKbRemotes({
       dirs: () => this._dirs,
       ctx: this._ctx,
       kbIndexJobs: this._kbIndexJobs,
+      // W3-11.5：本库向量构建的取消槽。
+      kbIndexSignal: (jobId) => this.kbIndexSignal(jobId),
+      cancelKbIndexJob: (jobId) => this.cancelKbIndexJob(jobId),
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
       globalModelName: (role) => this.globalModelName(role),
@@ -564,26 +526,23 @@ export abstract class GatewayCore extends TypertRemoteService {
     }))
   }
 
-  protected _mediaRemotes?: ReturnType<typeof createMediaRemotes>
-
   /** 媒体域的处理器（体在 remotes/media.ts）；这里只组装 ctx 与转发。 */
   protected mediaRemotes(): ReturnType<typeof createMediaRemotes> {
-    return (this._mediaRemotes ??= createMediaRemotes({
+    return this.slot('media', () => createMediaRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
-      cdnSwitches: () => this.cdnSwitches(),
-      outboundBlocked: () => this.outboundBlocked(),
       rawWechatBase: (decrypted) => rawWechatBase(decrypted),
-      warmDecodedImages: (decryptedDir, decodedDir, baseDir, items, aesKey, xorKey) => this.warmDecodedImages(decryptedDir, decodedDir, baseDir, items, aesKey, xorKey),
+      // fs 读写都在 query 层那颗里（#20 第五刀下沉的），这里只是把它交给处理器。
+      warmDecodedImages,
+      // 「批量取原图」是长任务，要写解密状态机的进度的**同一个对象**（同一时刻只允许一个
+      // 解密类任务：批量取原图与批量解密/升级共用 `active` 这道忙闲闸门）。
+      decryptState: this.decryptState,
     }))
   }
 
-  protected _exportRemotes?: ReturnType<typeof createExportRemotes>
-
   /** 导出域的处理器（体在 remotes/export.ts）；这里只组装 ctx 与转发。 */
   protected exportRemotes(): ReturnType<typeof createExportRemotes> {
-    return (this._exportRemotes ??= createExportRemotes({
+    return this.slot('export', () => createExportRemotes({
       dirs: () => this._dirs,
       ctx: () => this._ctx,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
@@ -595,31 +554,32 @@ export abstract class GatewayCore extends TypertRemoteService {
     }))
   }
 
-  protected _tasksRemotes?: ReturnType<typeof createTasksRemotes>
-
   /** 任务与笔记（待办 / 笔记 / 交接提醒） 的处理器（体在 remotes/tasks.ts）；这里只组装 ctx 与转发。 */
   protected tasksRemotes(): ReturnType<typeof createTasksRemotes> {
-    return (this._tasksRemotes ??= createTasksRemotes({
+    return this.slot('tasks', () => createTasksRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
     }))
   }
-
-  protected _opsLogRemotes?: ReturnType<typeof createOpsLogRemotes>
 
   /** 操作日志与隐私审计（含隐私开关读数） 的处理器（体在 remotes/opslog.ts）；这里只组装 ctx 与转发。 */
   protected opsLogRemotes(): ReturnType<typeof createOpsLogRemotes> {
-    return (this._opsLogRemotes ??= createOpsLogRemotes({
+    return this.slot('opsLog', () => createOpsLogRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
     }))
   }
 
-  protected _backupRemotes?: ReturnType<typeof createBackupRemotes>
+  /** 词云词频（界面优化阶段 4） 的处理器（体在 remotes/wordcloud.ts）；这里只组装 ctx 与转发。 */
+  protected wordcloudRemotes(): ReturnType<typeof createWordcloudRemotes> {
+    return this.slot('wordcloud', () => createWordcloudRemotes({
+      dirs: () => this._dirs,
+    }))
+  }
 
   /** 备份与恢复（含加密备份） 的处理器（体在 remotes/backup.ts）；这里只组装 ctx 与转发。 */
   protected backupRemotes(): ReturnType<typeof createBackupRemotes> {
-    return (this._backupRemotes ??= createBackupRemotes({
+    return this.slot('backup', () => createBackupRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       streamControl: (jobId) => this.streamControl(jobId),
@@ -628,35 +588,28 @@ export abstract class GatewayCore extends TypertRemoteService {
     }))
   }
 
-  protected _configRemotes?: ReturnType<typeof createConfigRemotes>
-
   /** 数据配置与密钥状态（含解密/数据库状态） 的处理器（体在 remotes/config.ts）；这里只组装 ctx 与转发。 */
   protected configRemotes(): ReturnType<typeof createConfigRemotes> {
-    return (this._configRemotes ??= createConfigRemotes({
+    return this.slot('config', () => createConfigRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       decryptState: this.decryptState,
     }))
   }
 
-  protected _summaryRemotes?: ReturnType<typeof createSummaryRemotes>
-
   /** 总结任务（每日/周期总结的排程与运行） 的处理器（体在 remotes/summary.ts）；这里只组装 ctx 与转发。 */
   protected summaryRemotes(): ReturnType<typeof createSummaryRemotes> {
-    return (this._summaryRemotes ??= createSummaryRemotes({
+    return this.slot('summary', () => createSummaryRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
     }))
   }
 
-  protected _askRemotes?: ReturnType<typeof createAskRemotes>
-
   /** 问答反馈与检索配置（画像表 / 反馈表 / 配置） 的处理器（体在 remotes/ask.ts）；这里只组装 ctx 与转发。 */
   protected askRemotes(): ReturnType<typeof createAskRemotes> {
-    return (this._askRemotes ??= createAskRemotes({
+    return this.slot('ask', () => createAskRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       askFeedbackSeen: this._askFeedbackSeen,
@@ -664,11 +617,9 @@ export abstract class GatewayCore extends TypertRemoteService {
     }))
   }
 
-  protected _keysDecryptRemotes?: ReturnType<typeof createKeysDecryptRemotes>
-
   /** 密钥获取与全库/全图解密（图片密钥自动获取、验证、解密状态） 的处理器（体在 remotes/keysdec.ts）；这里只组装 ctx 与转发。 */
   protected keysDecryptRemotes(): ReturnType<typeof createKeysDecryptRemotes> {
-    return (this._keysDecryptRemotes ??= createKeysDecryptRemotes({
+    return this.slot('keysDecrypt', () => createKeysDecryptRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       decryptState: this.decryptState,
@@ -676,40 +627,50 @@ export abstract class GatewayCore extends TypertRemoteService {
     }))
   }
 
-  protected _graphSearchRemotes?: ReturnType<typeof createGraphSearchRemotes>
-
   /** 知识图谱、消息检索与索引（含编辑历史复位） 的处理器（体在 remotes/graphsearch.ts）；这里只组装 ctx 与转发。 */
   protected graphSearchRemotes(): ReturnType<typeof createGraphSearchRemotes> {
-    return (this._graphSearchRemotes ??= createGraphSearchRemotes({
+    return this.slot('graphSearch', () => createGraphSearchRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       searchJobs: this._searchJobs,
       searchSignal: (jobId) => this.searchSignal(jobId),
+      // W3-11.5：索引构建的进度事件出口与取消槽。
+      ctx: () => this._ctx,
+      searchIndexSignal: (jobId) => this.searchIndexSignal(jobId),
+      cancelSearchIndexJob: (jobId) => this.cancelSearchIndexJob(jobId),
     }))
   }
-
-  protected _summaryRecordRemotes?: ReturnType<typeof createSummaryRecordRemotes>
 
   /** 总结记录（每日/周期总结生成、记录删除、推荐回复） 的处理器（体在 remotes/summaryrec.ts）；这里只组装 ctx 与转发。 */
   protected summaryRecordRemotes(): ReturnType<typeof createSummaryRecordRemotes> {
-    return (this._summaryRecordRemotes ??= createSummaryRecordRemotes({
+    return this.slot('summaryRecord', () => createSummaryRecordRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       runSummaryTask: (options) => this.runSummaryTask(options),
       selfUsername: () => this.selfUsername(),
-      getSchedBusy: () => this._schedBusy,
-      setSchedBusy: (v) => { this._schedBusy = v },
+      getSchedBusy: () => this.summaryScheduler().busy(),
+      setSchedBusy: (v) => { this.summaryScheduler().setBusy(v) },
     }))
   }
 
-  protected _voiceLlmRemotes?: ReturnType<typeof createVoiceLlmRemotes>
+  /** AI 年报叙述（W2-8.6：分段取材 + 逐段 LLM + 进度/取消） 的处理器（体在 remotes/annual-narr.ts）。 */
+  protected annualNarrRemotes(): ReturnType<typeof createAnnualNarrRemotes> {
+    return this.slot('annualNarr', () => createAnnualNarrRemotes({
+      dirs: () => this._dirs,
+      op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
+      streamControl: (jobId) => this.streamControl(jobId),
+      finishStreamJob: (jobId, error) => this.finishStreamJob(jobId, error),
+      normalizeJobId: (jobId) => normalizeJobId(jobId),
+      ctx: () => this._ctx,
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+    }))
+  }
 
   /** 语音转写与模型清单（whisper 安装/下载/状态、可用模型与提供方） 的处理器（体在 remotes/voicellm.ts）；这里只组装 ctx 与转发。 */
   protected voiceLlmRemotes(): ReturnType<typeof createVoiceLlmRemotes> {
-    return (this._voiceLlmRemotes ??= createVoiceLlmRemotes({
+    return this.slot('voiceLlm', () => createVoiceLlmRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
@@ -717,19 +678,19 @@ export abstract class GatewayCore extends TypertRemoteService {
       setWhisperDownload: (v) => { this.whisperDownload = v },
       getWhisperTranscribing: () => this.whisperTranscribing,
       setWhisperTranscribing: (v) => { this.whisperTranscribing = v },
+      // W3-5.5：下载取消槽。
+      whisperDownloadSignal: (jobId) => this.whisperDownloadSignal(jobId),
+      cancelWhisperDownloadJob: (jobId) => this.cancelWhisperDownloadJob(jobId),
     }))
   }
 
-  protected _askDeepRemotes?: ReturnType<typeof createAskDeepRemotes>
-
   /** 问答主链路（提问检索生成、问题优化、向量索引重建） 的处理器（体在 remotes/askdeep.ts）；这里只组装 ctx 与转发。 */
   protected askDeepRemotes(): ReturnType<typeof createAskDeepRemotes> {
-    return (this._askDeepRemotes ??= createAskDeepRemotes({
+    return this.slot('askDeep', () => createAskDeepRemotes({
       dirs: () => this._dirs,
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       ctx: () => this._ctx,
       askTrace: this._askTrace,
-      privacyBlocked: (feature, detail) => this.privacyBlocked(feature, detail),
       privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
       embedModelName: (override) => this.embedModelName(override),
       makeEmbedFn: (model, feature) => this.makeEmbedFn(model, feature),
@@ -738,6 +699,10 @@ export abstract class GatewayCore extends TypertRemoteService {
       kbModel: (kbId, role) => this.kbModel(kbId, role),
       askKnownEntities: () => this.askKnownEntities(),
       saveAskHistory: (options, result, elapsedMs, model) => this.saveAskHistory(options, result, elapsedMs, model),
+      // W3-6.1：可取消的一轮生成。信号与取消把手都由 gateway 持有（与搜索同一套打法），
+      // remotes 只消费 —— 否则「谁持有令牌」会出现第二个出处。
+      askSignal: (jobId) => this.askSignal(jobId),
+      cancelAskJob: (jobId) => this.cancelAskJob(jobId),
     }))
   }
 
@@ -748,14 +713,104 @@ export abstract class GatewayCore extends TypertRemoteService {
    *   的新令牌一起删掉。
    */
   protected searchSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
-    const id = normalizeJobId(jobId)
-    if (id === '') return undefined
-    const ctrl = new AbortController()
-    this._searchJobs.set(id, ctrl)
-    return {
-      signal: ctrl.signal,
-      done: () => { if (this._searchJobs.get(id) === ctrl) this._searchJobs.delete(id) },
-    }
+    return jobSignalFor(this._searchJobs, jobId)
+  }
+
+  /**
+   * 取一个问答任务的取消信号（W3-6.1）。语义与 {@link searchSignal} 一致：
+   * 槽位只认「自己这一枚控制器」，先取消再重跑的令牌不会互相删。
+   * @param jobId - 渲染层传来的轮次标识（就是 streamId）；缺省/空白时 undefined（不可取消）。
+   */
+  protected askSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    return jobSignalFor(this._askJobs, jobId)
+  }
+
+  /**
+   * 取消一轮问答。返回是否真的找到了在跑的那一轮 —— 找不到（已结束 / jobId 不认识）时
+   * 给调用方一个可读的 false，而不是静默成功（那会让用户以为取消生效了，回答还在继续跑）。
+   * @param jobId - 要取消的轮次标识。
+   */
+  protected cancelAskJob(jobId?: string): boolean {
+    return cancelJobIn(this._askJobs, jobId)
+  }
+
+  /**
+   * 取一批逐条分析的取消信号（W3-11.5）。语义与 {@link searchSignal} / {@link askSignal} 一致：
+   * 槽位只认「自己这一枚控制器」，先取消再重跑的令牌不会互相删。
+   *
+   * 为什么单独一格而不复用 `_askJobs`：分析批与问答轮次会同时在跑，共用一个 Map 的话
+   * 两个毫不相干的 jobId 会互相顶掉对方的令牌，取消会打到错误的批次上。
+   * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+   */
+  protected layaSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    return jobSignalFor(this._layaJobs, jobId)
+  }
+
+  /**
+   * 取消一批逐条分析。返回是否真的找到了在跑的那一批 —— 找不到（已算完 / jobId 不认识）
+   * 时给调用方一个可读的 false，而不是静默成功。
+   * @param jobId - 要取消的批次标识。
+   */
+  protected cancelLayaJob(jobId?: string): boolean {
+    return cancelJobIn(this._layaJobs, jobId)
+  }
+
+  /**
+   * 取一次搜索索引构建的取消信号（W3-11.5）。语义与前两个 `xxxSignal` 一致。
+   *
+   * 为什么单独一格：搜索与构建会同时在跑（搜索兜底扫描期间用户就能点「构建索引」），
+   * 共用 `_searchJobs` 的话「停止构建」会打到在跑的搜索上、把搜索打断。
+   * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+   */
+  protected searchIndexSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    return jobSignalFor(this._searchIndexJobs, jobId)
+  }
+
+  /**
+   * 取消一次搜索索引构建。返回是否真的找到了在跑的那一次。
+   * @param jobId - 要取消的批次标识。
+   */
+  protected cancelSearchIndexJob(jobId?: string): boolean {
+    return cancelJobIn(this._searchIndexJobs, jobId)
+  }
+
+  /**
+   * 取一次知识库向量构建的取消信号（W3-11.5）。语义同前三个 `xxxSignal`。
+   *
+   * 单独一格而不是复用 `_searchIndexJobs`：消息域索引与某个库的向量索引会同时在跑，
+   * 共用一格的话，停掉一个会把另一个也打断。
+   * @param jobId - 渲染层生成的批次标识；缺省/空白时 undefined（不可取消）。
+   */
+  protected kbIndexSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    return jobSignalFor(this._kbIndexCancelJobs, jobId)
+  }
+
+  /**
+   * 取消一次知识库向量构建。返回是否真的找到了在跑的那一次。
+   * @param jobId - 要取消的批次标识。
+   */
+  protected cancelKbIndexJob(jobId?: string): boolean {
+    return cancelJobIn(this._kbIndexCancelJobs, jobId)
+  }
+
+  /**
+   * 取一次模型/引擎下载的取消信号（W3-5.5）。语义与前几个 `xxxSignal` 一致。
+   *
+   * 移植到 download 上的原因：模型 1.5–3.1 GB，一旦开下就是几分钟到十几分钟的等待，
+   * 而用户常常是“点错了模型”或者窗口要关了”——— 那一刻他
+   * 唯一能做的就是等。取消不删局部文件，下次续传仍然有效。
+   * @param jobId - 渲染层生成的下载标识；缺省/空白时 undefined（不可取消）。
+   */
+  protected whisperDownloadSignal(jobId?: string): { signal: AbortSignal; done: () => void } | undefined {
+    return jobSignalFor(this._whisperDownloadJobs, jobId)
+  }
+
+  /**
+   * 取消一次下载。返回是否真的找到了在下的那一次。
+   * @param jobId - 要取消的下载标识。
+   */
+  protected cancelWhisperDownloadJob(jobId?: string): boolean {
+    return cancelJobIn(this._whisperDownloadJobs, jobId)
   }
 
   /**
@@ -850,128 +905,9 @@ export abstract class GatewayCore extends TypertRemoteService {
     }
   }
 
-  /**
-   * Run a summary task: collect the group previous-day messages + LLM summary + record.
-   * @param options - id of the task to run.
-   * @returns SummaryTaskRunResult: ok + summary + message count, or error.
-   */
-  /**
-   * 同一分钟到期的摘要任务并发上限（N15）。
-   *
-   * 为什么是 2：受「同一分钟到期」约束，这一批通常只有 1~2 项，上限本身只是「别一次把一堆
-   * LLM 请求打出去」的保险。不做成配置项：加一个没人会改的旋钮只是多一处待验证的输入面
-   * （`embedding.concurrency` 那套夹取是因为它来自可手改的 `rag-config.json`）。
-   */
-  protected static readonly DUE_SUMMARY_CONCURRENCY = 2
-
   /** Run any enabled daily-summary task whose schedule time matches the current minute. */
   protected async maybeRunDueTasks(): Promise<void> {
-    if (this._schedBusy) return
-    this._schedBusy = true
-    try {
-      const now = new Date()
-      const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-      const tasks = listTasks(this._dirs.decrypted).items
-      const due: number[] = []
-      for (const t of tasks) {
-        if (!t.enabled) continue
-        const sched = (t.scheduleTime || '08:00').slice(0, 5)
-        // 「一分钟内没跑过」：`Number(t.lastRunAt)` 对从未跑过的任务是 NaN，`NaN > 60000` 恒 false
-        // ⇒ 新任务永远等不到第一次调度（last_run_at 只在跑过一次之后才被写）。缺值按 0 处理。
-        const lastRun = Number(t.lastRunAt ?? 0)
-        if (sched === hhmm && now.getTime() - lastRun > 60_000) due.push(t.id)
-      }
-      /**
-       * 有界并发 + 失败不连坐（N15，worker 池形态照搬 M10）。
-       *
-       * 改前是 `for (const t of tasks) await this.runSummaryTask(...)`：N 次**串行**的完整流式
-       * 往返，而且前一个任务失败会中断后面所有任务 —— 那正是「失败半写」在摘要任务上的形态：
-       * 同一分钟到期的一批只落地一部分，且没有任何地方会补跑剩下的。
-       * 现在 worker 原子认领下一个到期任务；单个任务抛错只记下原因，不影响其它任务跑完，
-       * 全部结束后再把首个错误抛给外层 catch（保留原来的 summary_scheduler_error 日志）。
-       *
-       * 并发本身不会引入写冲突：这批唯一的共享资源是 `daily_summary.db`，而 node:sqlite 是同步 API、
-       * `saveSummaryRecord` / `updateSummaryTaskRunState` 都是**单语句 autocommit** —— 从加锁到提交
-       * 不让出事件循环，两次调用在 JS 层不可能交错（实测 500 次交叉单语句写 0 次 SQLITE_BUSY；
-       * 只有把事务开着跨 await 才会撞锁，那是 N10 的病）。
-       */
-      let next = 0
-      let failure: unknown = null
-      const worker = async (): Promise<void> => {
-        for (;;) {
-          const i = next
-          next += 1
-          // `due` 是稠密的 number 数组 ⇒ 「取不到」与「下标越界」是同一件事，正好就是「没有到期任务了」。
-          const id = i >= due.length ? undefined : due[i]
-          if (id === undefined) return
-          try {
-            await this.runSummaryTask({ id })
-          } catch (e) {
-            failure = failure ?? e
-          }
-        }
-      }
-      await Promise.all(
-        Array.from({ length: Math.min(GatewayCore.DUE_SUMMARY_CONCURRENCY, due.length) }, () => worker()),
-      )
-      if (failure) throw failure
-    } catch (e) {
-      this.op('error', 'summary_scheduler_error', 'fail', '', (e as Error).message)
-    } finally { this._schedBusy = false }
+    await this.summaryScheduler().runDue()
   }
 
-  /**
-   * 批量预热「按用户」解码缓存（N16 的接线点，见 `getImageDataUrlsBatch`）。
-   *
-   * 为什么是「预热」而不是「在这里返回结果」：解码产物与单张入口共用同一份缓存目录/命名
-   * （`<decoded>/<username>/<md5>.<ext>`），写进去之后单张入口命中缓存、不再查路径表 ——
-   * 于是错误语义、`data_index` 兜底、hevc 判定这些**全部沿用单张入口**，不必在这里复制一份
-   * 解码逻辑（`media-image.ts` 不在本轮写集内，也没有导出「按已知路径解码」的入口）。
-   *
-   * 全程 best-effort：任何一处失败都只是「那张图回退到原来的逐张路径」，不影响其余张；
-   * 命中已有缓存的文件不重写。
-   * @param decryptedDir - 解密库目录（hardlink.db 所在）。
-   * @param decodedDir - 解码缓存根。
-   * @param baseDir - 微信原始目录（候选路径的根）。
-   * @param items - 待预热的 (username, localId) 列表。
-   * @param aesKey - V2 AES key。
-   * @param xorKey - XOR key 字节。
-   */
-  protected warmDecodedImages(
-    decryptedDir: string,
-    decodedDir: string,
-    baseDir: string,
-    items: ReadonlyArray<{ username: string; localId: number }>,
-    aesKey: string | undefined,
-    xorKey: number,
-  ): void {
-    try {
-      // md5 也批量查（每个 (username, 分片) 一次 IN）—— 见 `resolveImageMd5sBatch` 的注释：
-      // 原本只有下面的路径查询合并了，md5 仍是每张开一次库，在慢机器上等于没省。
-      const md5ByItem = resolveImageMd5sBatch(decryptedDir, items)
-      const wanted = md5ByItem.filter(m => m.length === 32)
-      if (wanted.length === 0) return
-      // 唯一一次「按 md5 找 .dat」的查询（N16 的收益点：N 张图从 N 次全表扫降到 1 次 IN）。
-      const paths = resolveImageFilePathsByMd5(decryptedDir, baseDir, wanted)
-      if (paths.size === 0) return
-      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : null
-      for (let i = 0; i < items.length; i += 1) {
-        const md5 = md5ByItem[i] ?? ''
-        // 批量结果是按小写键存的（`resolveImageFilePathsByMd5` 会归一化），这里也归一化，
-        // 免得「消息里存的是大写 md5」那一条悄悄退回逐张查询。
-        const src = md5 ? paths.get(md5.toLowerCase()) : undefined
-        if (!src) continue
-        const it = items[i]!
-        const outDir = join(decodedDir, it.username)
-        const cached = CACHED_IMAGE_EXTS.some(ext => existsSync(join(decodedDir, md5 + '.' + ext)) || existsSync(join(outDir, md5 + '.' + ext)))
-        if (cached) continue
-        try {
-          const dec = decodeDatBytes(new Uint8Array(readFileSync(src)), aesBytes, xorKey)
-          if ('error' in dec || dec.format === 'hevc') continue
-          mkdirSync(outDir, { recursive: true })
-          writeFileSync(join(outDir, md5 + '.' + dec.format), Buffer.from(dec.bytes))
-        } catch { /* 单张解码失败：回退到单张入口的原路径 */ }
-      }
-    } catch { /* 预热是优化，失败不影响正确性 */ }
-  }
 }

@@ -2,11 +2,12 @@
  * 公众号内容资产面板 — gh_* 账号的消息/文章规模与最近文章时间，支持跳转
  * 会话查看原文。全部本机离线统计。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { ListSentinel, useProgressiveList } from './hooks.tsx'
-import { apiGetOfficialAssets, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiGetOfficialAssets } from '../api.ts'
+import { useFreshData } from './use-fresh-data.ts'
 import type { OfficialAssetsSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, CellPrimary, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
+import { Card, CellPrimary, LoadingState, Mono, PanelHeader, StatCard, StatGrid } from '../ui/kit.tsx'
 import css from './official-assets.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -23,25 +24,9 @@ function fmtTs(ts?: number | null): string {
  * @returns the official assets element tree.
  */
 export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: string) => void } = {}): React.JSX.Element {
-  const [data, setData] = useState<OfficialAssetsSnapshot | null>(() => readRenderCache<OfficialAssetsSnapshot>('official-assets'))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    try {
-      const fresh = await apiGetOfficialAssets()
-      setData(fresh)
-      writeRenderCache('official-assets', fresh)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+  /* 2026-10-03 推广批次 1：改用共用 useFreshData（打开即查最新、失败才回退缓存并标注）。 */
+  const load = useCallback((): Promise<OfficialAssetsSnapshot> => apiGetOfficialAssets(), [])
+  const { data, loading, error } = useFreshData<OfficialAssetsSnapshot>('official-assets', load, { liveRefresh: true })
 
   const { count: rowCount, sentinelRef } = useProgressiveList(data?.rows.length ?? 0, 100)
 
@@ -50,7 +35,7 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
       <PanelHeader title="公众号内容资产" desc="gh_* 账号消息/文章规模 · 最近文章 · 本地离线" />
 
       {error && <div className={kitCss.error} role="alert">{error}</div>}
-      {loading && !data && <div className={kitCss.emptyInline}>统计中…</div>}
+      {loading && !data && <LoadingState variant="compact" label="统计中…" />}
 
       {data && !loading && (
         <>

@@ -1,0 +1,114 @@
+/* 「分析」区块自有的一点样式（右栏合并面板的**下半块**，2026-09-25 从左栏搬来）。
+ *
+ * 外壳（.panel / .head / .title / .iconBtn / .body）与滚动区**复用** session-ask.module.css ——
+ * 与「推荐回复」「AI 问答」是同一处视觉语言，不另造一套；无边框滚动条也在那边统一声明。
+ * 这里只放区块自己的容器与内容排布。
+ */
+
+/* 区块容器：吃掉合并面板里上半块（推荐回复）之后剩下的高度，自己内部滚动。
+   必须 `min-height: 0` —— 否则 flex 子项的默认 `min-height: auto` 会撑到内容高，
+   把滚动条顶到面板外面去（面板本身的 overflow 是 hidden，那部分内容就看不见了）。 */
+.sec {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-s-1) var(--nm-s-3);
+  font-size: 12px;
+  color: var(--nm-text-3);
+  line-height: 1.6;
+}
+
+/* 与逐条分析卡同一款「本地分析」徽章（小圆点 + 文字） */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+  flex: none;
+  color: var(--nm-text-3);
+}
+
+.badge::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nm-r-pill);
+  background: var(--nm-cyan);
+}
+
+.stat {
+  font-size: 12px;
+  color: var(--nm-text-3);
+}
+
+.stat b {
+  color: var(--nm-text-1);
+  font-weight: 600;
+}
+
+/* 被分析的原文（语音则是转写文本）—— 让用户确认「看的是哪条」 */
+.source {
+  margin-top: var(--nm-s-2);
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border-radius: var(--nm-r-sm);
+  background: color-mix(in srgb, var(--nm-text-1) 5%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-2);
+  overflow-wrap: anywhere;
+}
+
+.blocks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  margin-top: var(--nm-s-2);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  padding-top: var(--nm-s-4);
+}
+
+.emptyTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+
+.emptySub {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-3);
+  overflow-wrap: anywhere;
+}
+
+/* W3-11.5 收尾：失败态的「重试这一条」。
+   自对齐（align-self）而不是拉满 —— 面板宽 240px 上下，一个铺满整行的按钮
+   会把「分析失败：…」那行短文案压得像标题。 */
+.emptyAction {
+  align-self: flex-start;
+  margin-top: var(--nm-s-2);
+  padding: var(--nm-s-1) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: transparent;
+  color: var(--nm-text-1);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.emptyAction:hover {
+  border-color: var(--nm-border-hover);
+  background: var(--nm-bg-hover);
+}

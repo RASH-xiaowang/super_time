@@ -24,7 +24,7 @@
  */
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -84,25 +84,62 @@ try {
   check(layout.w > 0 && layout.h > 0, '有真实布局引擎（body 有尺寸）', JSON.stringify(layout))
   check(await win.evaluate(() => typeof window.electronAPI === 'object' && window.electronAPI !== null), 'preload 桥已注入')
 
-  // 主界面挂载：跳过闸门后左侧导航的第一项就是可点的稳定锚点
+  // 主界面挂载：跳过闸门后左侧导航的第一项就是可点的稳定锚点。
+  //
+  // 2026-10-15 加固：CI 上这一步曾以「端到端流程未能跑完 / locator.waitFor: Timeout」红过，
+  // 而本机与 D 盘克隆都稳定绿 —— 报错里只有一句 Playwright 的超时，看不出**当时界面长什么样**。
+  // 所以这里在等不到锚点时补一份现场快照（URL / 可见按钮名 / body 文本前 200 字 / 截图），
+  // 让下一次红能直接读出「是没进主界面、还是进了但按钮名变了、还是窗口太小被裁掉」。
   const overviewNav = win.getByRole('button', { name: '数据总览', exact: true })
-  await overviewNav.waitFor({ state: 'visible' })
+  try {
+    await overviewNav.waitFor({ state: 'visible' })
+  } catch (e) {
+    const snapshot = await win.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      buttons: Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 40),
+      bodyText: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+    })).catch(() => null)
+    const shot = join(ROOT, 'ci-evidence', 'ui-e2e-smoke-fail.png')
+    try { mkdirSync(join(ROOT, 'ci-evidence'), { recursive: true }); await win.screenshot({ path: shot }) } catch { /* 截图失败不掩盖原错 */ }
+    throw new Error(`等不到「数据总览」导航按钮：${e && e.message ? e.message : String(e)}\n现场快照：${JSON.stringify(snapshot)}\n截图：${shot}`)
+  }
   check(true, '跳过三道闸门后进入主界面')
 
   // 真调一次 Remote：这条路径正是被 `debugGates().skipGates` 豁免掉许可校验的那一段。
   // 之所以用 `listMethods` / `info` 而不是读 `Object.keys(electronAPI.wechat)`：桥面是固定的
   // 8 个成员，Remote 方法在**后端**有上百个，数桥上的键会得出一个误导性的小数字。
   // 两个调用都返回 `{ ok, value }` 信封（`main.js` 的 `wechat:call` 统一包装）。
+  //
+  // 2026-10-16 加固：`wechat:list-methods` 在 `getWechatBoot()` 还是 null 时返回
+  // `{ ok: false, error: '后端未初始化' }`（见 src/backend/ipc-wechat.js）。而 `boot` 只在
+  // worker `init()` 成功后才赋值 —— CI runner（共享 2 核 + 实时扫描）比本机慢约 24 倍，
+  // 界面挂载（前端）远早于后端就绪，于是这里会拿到 `-1 个方法` 而**本机永远绿**。
+  // 这不是「后端坏了」，是「问得太早」：轮询到 `ok: true` 再断言，把竞态从判据里去掉。
   const remote = await win.evaluate(async () => {
-    const methods = await window.electronAPI.wechat.listMethods()
-    const info = await window.electronAPI.wechat.info()
-    const names = methods?.value ?? methods
-    return {
-      methodCount: Array.isArray(names) ? names.length : -1,
-      infoOk: info?.ok === true,
+    const deadline = Date.now() + 60000
+    let methodCount = -1
+    let infoOk = false
+    let lastError = ''
+    for (;;) {
+      const methods = await window.electronAPI.wechat.listMethods()
+      const names = methods?.value ?? methods
+      if (Array.isArray(names) && names.length > 0) {
+        methodCount = names.length
+        const info = await window.electronAPI.wechat.info()
+        infoOk = info?.ok === true
+        if (infoOk) break
+      } else {
+        lastError = methods?.error?.message ?? 'listMethods 未返回数组'
+      }
+      if (Date.now() > deadline) break
+      await new Promise((r) => { setTimeout(r, 250) })
     }
+    return { methodCount, infoOk, lastError }
   })
-  check(remote.methodCount > 0, '后端 Remote 方法面可用，且许可校验被豁免（无需签真许可证）', `${remote.methodCount} 个方法`)
+  check(remote.methodCount > 0, '后端 Remote 方法面可用，且许可校验被豁免（无需签真许可证）',
+    remote.methodCount > 0 ? `${remote.methodCount} 个方法` : `等待后端就绪超时：${remote.lastError}`)
   check(remote.infoOk, '真实 Remote 调用返回 ok（走完整 IPC → 后端）')
 
   // ── ② 一件此前「无浏览器环境 ⇒ 未验证」的行为 ──────────────
@@ -137,7 +174,17 @@ try {
 
   check(consoleErrors.length === 0, '渲染层无 console error / pageerror', consoleErrors.slice(0, 3).join(' | '))
 } catch (e) {
-  check(false, '端到端流程未能跑完', (e && e.message ? e.message : String(e)).split('\n')[0])
+  // 2026-10-15：CI 上这一步稳定红，而 GitHub 的注解只显示「Process completed with exit code 1」——
+  // 把完整错误（含上面那段现场快照）**原样打到 stdout**，注解里才看得到。
+  const detail = e && e.message ? e.message : String(e)
+  console.error('[ui-e2e-smoke] 端到端流程未能跑完：')
+  console.error(detail)
+  // GitHub Actions 的 `::error::` 会把消息直接显示在 PR 的注解里（无需登录看日志）。
+  // 多行要转义成 `%0A`，否则只有第一行进注解。
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.error(`::error::UI 冒烟失败：${detail.replace(/\r?\n/g, '%0A').slice(0, 4000)}`)
+  }
+  check(false, '端到端流程未能跑完', detail.split('\n')[0])
 } finally {
   if (app) { try { await app.close() } catch { /* ignore */ } }
   try { rmSync(probeUserData, { recursive: true, force: true }) } catch { /* ignore */ }

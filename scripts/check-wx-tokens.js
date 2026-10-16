@@ -7,7 +7,7 @@
  * 声明被压缩），并且已经没有任何旧值残留在产物里。
  *
  * 覆盖的是「值有没有到位」，不是「看起来对不对」；视觉正确性仍需在有数据的
- * 机器上人工确认（见 docs/compose/spec/wechat-message-visual-system.md 的 Verification）。
+ * 机器上人工确认（ 的 Verification）。
  *
  * 用法：node scripts/check-wx-tokens.js
  */
@@ -16,7 +16,21 @@ const path = require('node:path')
 
 const DIST = path.join(__dirname, '..', 'src', 'client', 'ui-dist', 'assets')
 
-/** 读取 ui-dist 里体积最大的那份 CSS（主样式表；WorldMap 是异步分块）。 */
+/**
+ * 读取 ui-dist 里**全部** CSS 分块，拼成一份来断言。
+ *
+ * 2026-10-15 改：原来是「只读体积最大的那一份」。M21 把 CSS 按簇拆成多份之后，
+ * 微信消息视觉体系的令牌搬到了 `Chats-*.css`（86 KB），而体积最大的那份
+ * `index-*.css`（137 KB）里**一个 `--wx-` 都没有** —— 于是这条门禁在 CI 上
+ * 稳定报「缺少 47 项预期值」，而源码与产物其实都是对的。
+ *
+ * 为什么不是「改成读 Chats-*.css」：那只是把同一个错误换个文件名 —— 下一次拆簇
+ * 又会漂。令牌散落在哪一份是**构建的产物**，不是契约；契约是「这些值必须出现在
+ * 产物里」。所以这里扫全部，并保留「哪一份命中了」的信息用于报错定位。
+ *
+ * 为什么仍然要报文件名：全扫之后「找不到」的报错会失去定位线索，所以把每份的
+ * 文件名与体积一起打出来，出问题时能一眼看出是不是某一份没被构建出来。
+ */
 function readBuiltCss() {
   if (!fs.existsSync(DIST)) {
     console.error(`找不到构建产物目录：${DIST}\n请先运行 npm run build:ui`)
@@ -30,8 +44,14 @@ function readBuiltCss() {
     console.error('ui-dist/assets 下没有 CSS，请先运行 npm run build:ui')
     process.exit(2)
   }
-  const main = files.reduce((a, b) => (fs.statSync(a).size >= fs.statSync(b).size ? a : b))
-  return { css: fs.readFileSync(main, 'utf8'), file: main }
+  // 按体积降序：报错时先看大的那几份（令牌通常在主样式表或最大的分块里）。
+  files.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)
+  const parts = files.map((f) => ({ file: f, css: fs.readFileSync(f, 'utf8') }))
+  return {
+    css: parts.map((p) => p.css).join('\n'),
+    file: parts[0].file,
+    files: parts.map((p) => `${path.basename(p.file)}（${(p.css.length / 1024).toFixed(0)} KB）`),
+  }
 }
 
 /** 必须出现的片段：新令牌定义与关键几何/色值。 */
@@ -61,14 +81,16 @@ const MUST_HAVE = [
   '--wx-card-title: #f5f5f5',
   // ── 几何：圆角 4px / 头像 34px / 行间距 16px ──
   '--wx-radius: 4px',
-  '--wx-avatar: 34px',
+  '--wx-avatar: 40px',
   '--wx-avatar-radius: 6px',
   '--wx-gap: 10px',
   '--wx-row-gap: 16px',
-  // 气泡最大宽：**刻意偏离**微信官方的 384px —— 桌面端要读大段文本，改成与时间分隔行同宽。
-  // 顺带说明原值的问题：384px 还会被 .msgBubble 上另一层 `72%` 压到 276px
-  // （那层的百分比相对**已封顶的** .msgCol 解析），属复合封顶，已一并修掉。
-  '--wx-bubble-maxw: 100%',
+  // 阅读宽度：文本气泡与引用摘要共用（曾经各写一个字面量，改的时候必漏一处）。
+  '--wx-read-maxw: 640px',
+  // 气泡最大宽：**刻意偏离**微信官方的 384px（桌面端要读大段 AI 文本），但必须有上界，
+  // 且必须扣掉同行占位的头像与间隙 —— 旧值裸 `100%` 相对整行解析，实测长文本气泡
+  // 1082px、头像被挤出容器（2026-09-26 用户截图）。calc 里的空格是语法必需，压缩器不会去掉。
+  'calc(100% - var(--wx-avatar) - var(--wx-gap))',
   // ── 文本气泡：内边距 6/12、行高 1.6 ──
   'padding:6px 12px',
   'line-height:1.6',
@@ -95,6 +117,8 @@ const MUST_HAVE = [
   // ── 右键菜单令牌（深浅各一份） ──
   '--wx-ctx-bg: #242424',
   '--wx-ctx-bg: #ffffff',
+  // ── 聊天信息抽屉：成员/联系人网格头像 48px（D3，官方 ⚠️ 值） ──
+  '--wx-info-avatar: 48px',
 ]
 
 /** 必须**消失**的旧实现：自造渐变、被删的收角令牌、border 三角尖角、旧气泡几何。 */
@@ -112,6 +136,8 @@ const MUST_NOT_HAVE = [
   'border-width:5px 0 5px 6px',
   // 旧的消息流最大宽
   'max-width:min(520px,68%)',
+  // 旧的气泡宽度上界：裸 100%（不扣头像与间隙、也没有绝对上限）—— 2026-09-26 修掉
+  '--wx-bubble-maxw: 100%',
 ]
 
 /**
@@ -144,8 +170,9 @@ function chatCssSources() {
 }
 
 function main() {
-  const { css, file } = readBuiltCss()
-  console.log(`检查产物：${path.relative(path.join(__dirname, '..'), file)}（${(css.length / 1024).toFixed(0)} KB）`)
+  const { css, files } = readBuiltCss()
+  console.log(`检查产物：${String(files.length)} 份 CSS 分块（合计 ${(css.length / 1024).toFixed(0)} KB）`)
+  for (const f of files) console.log(`    ${f}`)
 
   const missing = MUST_HAVE.filter((s) => !css.includes(s))
   const leftover = MUST_NOT_HAVE.filter((s) => css.includes(s))

@@ -24,10 +24,11 @@
  * 而单文件里「把这批笔记移进另一个库」是一条 UPDATE，可以放在一个事务里。
  * 代价是单库不能单独备份/删除 —— 那个需求应当做成「导出」（只读），不是拆文件。
  */
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { KbDeleteAction, KbListSnapshot, KbMeta, KbMutationResult, KnowledgeNote, KnowledgeSnapshot, NoteMutationResult, NotesSnapshot } from '../types.ts'
+import { withWritableDb } from './db-open.ts'
 
 /**
  * 默认知识库的 id。**只在这里定义一处。**
@@ -82,7 +83,13 @@ function columnNames(db: DatabaseSync, table: string): string[] {
   return rows.map(r => cellStr(r['name']))
 }
 
-function openStore(decryptedDir: string): DatabaseSync {
+/**
+ * 在一条由 `withWritableDb` 保证关闭的连接里跑笔记库操作。
+ *
+ * 与旧 `openStore` 的区别：调用点不再拿到裸句柄，也**不需要记得 close**；
+ * 回调里早退、抛错、迁移失败都会在 finally 里关连接。
+ */
+function withNotesStore<T>(decryptedDir: string, fn: (db: DatabaseSync) => T): T {
   const file = dbPath(decryptedDir)
   // 笔记是「与解密数据无关」的本地资产：用户可能在还没解密任何库时就先写笔记，
   // 那时数据根目录还不存在，SQLite 会直接报 unable to open database file。
@@ -98,9 +105,10 @@ function openStore(decryptedDir: string): DatabaseSync {
   } catch (e) {
     console.warn('[notes] 数据根目录创建失败，继续尝试打开库：' + errorText(e))
   }
-  const db = new DatabaseSync(file)
-  migrate(db)
-  return db
+  return withWritableDb(file, (db) => {
+    migrate(db)
+    return fn(db)
+  })
 }
 
 /**
@@ -351,30 +359,30 @@ export interface KbListSnapshotRead extends KbListSnapshot {
  */
 export function listKbs(decryptedDir: string): KbListSnapshotRead {
   try {
-    const db = openStore(decryptedDir)
-    const rows = db.prepare('SELECT id, name, created_at, updated_at FROM kbs ORDER BY id ASC').all() as Array<Record<string, unknown>>
-    // 一次 GROUP BY 拿全，别在循环里对每个库各查一次
-    const counts = db.prepare('SELECT kb_id, COUNT(*) AS n FROM notes GROUP BY kb_id').all() as Array<Record<string, unknown>>
-    db.close()
-    const byKb = new Map<number, number>()
-    for (const c of counts) byKb.set(Number(c['kb_id'] ?? 0), Number(c['n'] ?? 0))
-    const items: KbMeta[] = rows.map((r) => {
-      const id = Number(r['id'] ?? 0)
-      return {
-        id,
-        name: cellStr(r['name'] ?? ''),
-        noteCount: byKb.get(id) ?? 0,
-        // 恒为 0：文件库是**另一个** db 文件，这一层看不到它（见函数头注）。
-        // 真值由 gateway.getKbs 用 countKbFilesByKb() 覆盖。
-        fileCount: 0,
-        // 同上：模型设置住在 wechat_kb_models.db，由 gateway.getKbs 合流覆盖。
-        // 这里给 0 而不是省略，是为了让「笔记层看不到别的库文件」这件事在类型上留痕。
-        modelOverrides: 0,
-        createdAt: Number(r['created_at'] ?? 0),
-        updatedAt: Number(r['updated_at'] ?? 0),
-      }
+    return withNotesStore(decryptedDir, (db) => {
+      const rows = db.prepare('SELECT id, name, created_at, updated_at FROM kbs ORDER BY id ASC').all() as Array<Record<string, unknown>>
+      // 一次 GROUP BY 拿全，别在循环里对每个库各查一次
+      const counts = db.prepare('SELECT kb_id, COUNT(*) AS n FROM notes GROUP BY kb_id').all() as Array<Record<string, unknown>>
+      const byKb = new Map<number, number>()
+      for (const c of counts) byKb.set(Number(c['kb_id'] ?? 0), Number(c['n'] ?? 0))
+      const items: KbMeta[] = rows.map((r) => {
+        const id = Number(r['id'] ?? 0)
+        return {
+          id,
+          name: cellStr(r['name'] ?? ''),
+          noteCount: byKb.get(id) ?? 0,
+          // 恒为 0：文件库是**另一个** db 文件，这一层看不到它（见函数头注）。
+          // 真值由 gateway.getKbs 用 countKbFilesByKb() 覆盖。
+          fileCount: 0,
+          // 同上：模型设置住在 wechat_kb_models.db，由 gateway.getKbs 合流覆盖。
+          // 这里给 0 而不是省略，是为了让「笔记层看不到别的库文件」这件事在类型上留痕。
+          modelOverrides: 0,
+          createdAt: Number(r['created_at'] ?? 0),
+          updatedAt: Number(r['updated_at'] ?? 0),
+        }
+      })
+      return { items, total: items.length }
     })
-    return { items, total: items.length }
   } catch (e) {
     const readError = errorText(e)
     console.warn('[notes] 知识库列表读取失败：' + dbPath(decryptedDir) + ': ' + readError)
@@ -391,15 +399,14 @@ export function createKb(decryptedDir: string, name: string): KbMutationResult {
   const v = validateKbName(name)
   if ('error' in v) return { ok: false, error: v.error }
   try {
-    const db = openStore(decryptedDir)
-    if (findKbIdByNameKey(db, normalizeTitle(v.name)) !== undefined) {
-      db.close()
-      return { ok: false, error: `已存在同名知识库「${v.name}」` }
-    }
-    const ts = Date.now()
-    const r = db.prepare('INSERT INTO kbs(name, created_at, updated_at) VALUES (?, ?, ?)').run(v.name, ts, ts)
-    db.close()
-    return { ok: true, id: Number(r.lastInsertRowid) }
+    return withNotesStore(decryptedDir, (db) => {
+      if (findKbIdByNameKey(db, normalizeTitle(v.name)) !== undefined) {
+        return { ok: false, error: `已存在同名知识库「${v.name}」` }
+      }
+      const ts = Date.now()
+      const r = db.prepare('INSERT INTO kbs(name, created_at, updated_at) VALUES (?, ?, ?)').run(v.name, ts, ts)
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    })
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
@@ -420,18 +427,16 @@ export function renameKb(decryptedDir: string, id: number, name: string): KbMuta
   const v = validateKbName(name)
   if ('error' in v) return { ok: false, error: v.error }
   try {
-    const db = openStore(decryptedDir)
-    if (!kbExists(db, kbId)) {
-      db.close()
-      return { ok: false, error: '知识库不存在' }
-    }
-    if (findKbIdByNameKey(db, normalizeTitle(v.name), kbId) !== undefined) {
-      db.close()
-      return { ok: false, error: `已存在同名知识库「${v.name}」` }
-    }
-    db.prepare('UPDATE kbs SET name = ?, updated_at = ? WHERE id = ?').run(v.name, Date.now(), kbId)
-    db.close()
-    return { ok: true, id: kbId }
+    return withNotesStore(decryptedDir, (db) => {
+      if (!kbExists(db, kbId)) {
+        return { ok: false, error: '知识库不存在' }
+      }
+      if (findKbIdByNameKey(db, normalizeTitle(v.name), kbId) !== undefined) {
+        return { ok: false, error: `已存在同名知识库「${v.name}」` }
+      }
+      db.prepare('UPDATE kbs SET name = ?, updated_at = ? WHERE id = ?').run(v.name, Date.now(), kbId)
+      return { ok: true, id: kbId }
+    })
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
@@ -457,42 +462,38 @@ export function deleteKb(decryptedDir: string, id: number, action: KbDeleteActio
     return { ok: false, error: '删除方式未指定（需明确「移到别的库」还是「一并删除」）' }
   }
   try {
-    const db = openStore(decryptedDir)
-    if (!kbExists(db, kbId)) {
-      db.close()
-      return { ok: false, error: '知识库不存在' }
-    }
-    if (action.kind === 'reassign') {
-      const target = normalizeKbId(action.targetKbId)
-      if (target === undefined) { db.close(); return { ok: false, error: '目标知识库标识无效' } }
-      if (target === kbId) { db.close(); return { ok: false, error: '不能把笔记移到正在删除的库' } }
-      if (!kbExists(db, target)) { db.close(); return { ok: false, error: '目标知识库不存在' } }
-      const clashes = conflictingTitles(db, kbId, target)
-      if (clashes.length > 0) {
-        db.close()
-        const head = clashes.slice(0, 3).join('、')
-        const more = clashes.length > 3 ? ` 等 ${clashes.length} 条` : ''
-        return { ok: false, error: `目标库已有同名条目：${head}${more}。请先改名，或改用「一并删除」` }
+    return withNotesStore(decryptedDir, (db) => {
+      if (!kbExists(db, kbId)) {
+        return { ok: false, error: '知识库不存在' }
       }
-      let moved = 0
-      inTransaction(db, () => {
-        moved = Number(db.prepare('UPDATE notes SET kb_id = ? WHERE kb_id = ?').run(target, kbId).changes)
-        db.prepare('DELETE FROM kbs WHERE id = ?').run(kbId)
-      })
-      db.close()
-      return { ok: true, id: kbId, movedNotes: moved }
-    }
-    if (action.kind === 'purge') {
-      let removed = 0
-      inTransaction(db, () => {
-        removed = Number(db.prepare('DELETE FROM notes WHERE kb_id = ?').run(kbId).changes)
-        db.prepare('DELETE FROM kbs WHERE id = ?').run(kbId)
-      })
-      db.close()
-      return { ok: true, id: kbId, removedNotes: removed }
-    }
-    db.close()
-    return { ok: false, error: '删除方式无法识别' }
+      if (action.kind === 'reassign') {
+        const target = normalizeKbId(action.targetKbId)
+        if (target === undefined) return { ok: false, error: '目标知识库标识无效' }
+        if (target === kbId) return { ok: false, error: '不能把笔记移到正在删除的库' }
+        if (!kbExists(db, target)) return { ok: false, error: '目标知识库不存在' }
+        const clashes = conflictingTitles(db, kbId, target)
+        if (clashes.length > 0) {
+          const head = clashes.slice(0, 3).join('、')
+          const more = clashes.length > 3 ? ` 等 ${clashes.length} 条` : ''
+          return { ok: false, error: `目标库已有同名条目：${head}${more}。请先改名，或改用「一并删除」` }
+        }
+        let moved = 0
+        inTransaction(db, () => {
+          moved = Number(db.prepare('UPDATE notes SET kb_id = ? WHERE kb_id = ?').run(target, kbId).changes)
+          db.prepare('DELETE FROM kbs WHERE id = ?').run(kbId)
+        })
+        return { ok: true, id: kbId, movedNotes: moved }
+      }
+      if (action.kind === 'purge') {
+        let removed = 0
+        inTransaction(db, () => {
+          removed = Number(db.prepare('DELETE FROM notes WHERE kb_id = ?').run(kbId).changes)
+          db.prepare('DELETE FROM kbs WHERE id = ?').run(kbId)
+        })
+        return { ok: true, id: kbId, removedNotes: removed }
+      }
+      return { ok: false, error: '删除方式无法识别' }
+    })
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
@@ -509,27 +510,26 @@ export function listNotes(decryptedDir: string, kbId: number, options?: { query?
   const id = normalizeKbId(kbId)
   if (id === undefined) return { items: [], total: 0, readError: '知识库标识无效（kbId 必须是正整数）' }
   try {
-    const db = openStore(decryptedDir)
-    // 库不存在与库是空的必须分开说：界面上的「知识库还是空的」会让用户去写笔记，
-    // 而真正要做的其实是「重新选一个库」。
-    if (!kbExists(db, id)) {
-      db.close()
-      return { items: [], total: 0, readError: '知识库不存在（可能已被删除），请重新选择' }
-    }
-    const limit = Math.min(Math.max(Math.trunc(options?.limit ?? 500), 1), 2000)
-    const q = (options?.query ?? '').trim()
-    let rows: Array<Record<string, unknown>>
-    if (q) {
-      const like = '%' + q + '%'
-      rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? AND (title LIKE ? OR body LIKE ? OR tags LIKE ?) ORDER BY updated_at DESC, id DESC LIMIT ?').all(id, like, like, like, limit) as Array<Record<string, unknown>>
-    } else {
-      rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?').all(id, limit) as Array<Record<string, unknown>>
-    }
-    const items = rows.map(rowToNote)
-    // total 必须是**本库**的总数：改前是 `COUNT(*)`，多库之后会显示成「12 / 37」这种跨库数。
-    const totalRow = db.prepare('SELECT COUNT(*) AS n FROM notes WHERE kb_id = ?').get(id) as { n?: number } | undefined
-    db.close()
-    return { items, total: Number(totalRow?.n ?? items.length) }
+    return withNotesStore(decryptedDir, (db) => {
+      // 库不存在与库是空的必须分开说：界面上的「知识库还是空的」会让用户去写笔记，
+      // 而真正要做的其实是「重新选一个库」。
+      if (!kbExists(db, id)) {
+        return { items: [], total: 0, readError: '知识库不存在（可能已被删除），请重新选择' }
+      }
+      const limit = Math.min(Math.max(Math.trunc(options?.limit ?? 500), 1), 2000)
+      const q = (options?.query ?? '').trim()
+      let rows: Array<Record<string, unknown>>
+      if (q) {
+        const like = '%' + q + '%'
+        rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? AND (title LIKE ? OR body LIKE ? OR tags LIKE ?) ORDER BY updated_at DESC, id DESC LIMIT ?').all(id, like, like, like, limit) as Array<Record<string, unknown>>
+      } else {
+        rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?').all(id, limit) as Array<Record<string, unknown>>
+      }
+      const items = rows.map(rowToNote)
+      // total 必须是**本库**的总数：改前是 `COUNT(*)`，多库之后会显示成「12 / 37」这种跨库数。
+      const totalRow = db.prepare('SELECT COUNT(*) AS n FROM notes WHERE kb_id = ?').get(id) as { n?: number } | undefined
+      return { items, total: Number(totalRow?.n ?? items.length) }
+    })
   } catch (e) {
     // 库不可读时仍返回空列表而不是抛错（面板不该整块崩掉），但要留痕 + 带上 readError：
     // 改前这里的空列表与「确实没有笔记」在界面上完全一样。
@@ -568,47 +568,44 @@ export function saveNote(
   const sourceKind = input.sourceKind === 'ask' ? 'ask' : 'manual'
   const noteId = input.id === undefined ? undefined : Math.trunc(Number(input.id))
   try {
-    const db = openStore(decryptedDir)
-    if (!kbExists(db, id)) {
-      db.close()
-      return { ok: false, error: '知识库不存在（可能已被删除），请重新选择' }
-    }
-    const dupId = findIdByTitleKey(db, id, normalizeTitle(title))
-    if (dupId !== undefined && dupId !== noteId) {
-      db.close()
-      return { ok: false, error: `已存在同名笔记「${title}」` }
-    }
-    const ts = Date.now()
-    if (noteId !== undefined && Number.isFinite(noteId)) {
-      // 更新走「未提供即保持原值」的合并语义。
-      // 否则前端只改个标题就会把没传的 source_kind 打回 'manual' ——
-      // 一条「问答沉淀」的笔记会静默降级，笔记详情里的「跳回来源聊天」入口随之消失。
-      //
-      // `AND kb_id = ?` 是防串库的最后一道：拿着甲库的 id 在乙库里改，
-      // 会静默改掉甲库那篇（id 是全局自增的）。加上它之后这种情况返回「笔记不存在」。
-      const raw = db.prepare('SELECT * FROM notes WHERE id = ? AND kb_id = ?').get(noteId, id) as Record<string, unknown> | undefined
-      if (raw === undefined) { db.close(); return { ok: false, error: '笔记不存在' } }
-      const prev = rowToNote(raw)
-      const r = db.prepare('UPDATE notes SET title = ?, body = ?, tags = ?, source_kind = ?, source_username = ?, source_question = ?, updated_at = ? WHERE id = ? AND kb_id = ?')
-        .run(
-          title,
-          input.body === undefined ? prev.body : body,
-          input.tags === undefined ? prev.tags.join(',') : tags.join(','),
-          input.sourceKind === undefined ? prev.sourceKind : sourceKind,
-          input.sourceUsername === undefined ? (prev.sourceUsername ?? '') : String(input.sourceUsername),
-          input.sourceQuestion === undefined ? (prev.sourceQuestion ?? '') : String(input.sourceQuestion),
-          ts,
-          noteId,
-          id,
-        )
-      db.close()
-      if (r.changes === 0) return { ok: false, error: '笔记不存在' }
-      return { ok: true, id: noteId }
-    }
-    const r = db.prepare('INSERT INTO notes(kb_id, title, body, tags, source_kind, source_username, source_question, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, title, body, tags.join(','), sourceKind, input.sourceUsername ?? '', input.sourceQuestion ?? '', ts, ts)
-    db.close()
-    return { ok: true, id: Number(r.lastInsertRowid) }
+    return withNotesStore(decryptedDir, (db) => {
+      if (!kbExists(db, id)) {
+        return { ok: false, error: '知识库不存在（可能已被删除），请重新选择' }
+      }
+      const dupId = findIdByTitleKey(db, id, normalizeTitle(title))
+      if (dupId !== undefined && dupId !== noteId) {
+        return { ok: false, error: `已存在同名笔记「${title}」` }
+      }
+      const ts = Date.now()
+      if (noteId !== undefined && Number.isFinite(noteId)) {
+        // 更新走「未提供即保持原值」的合并语义。
+        // 否则前端只改个标题就会把没传的 source_kind 打回 'manual' ——
+        // 一条「问答沉淀」的笔记会静默降级，笔记详情里的「跳回来源聊天」入口随之消失。
+        //
+        // `AND kb_id = ?` 是防串库的最后一道：拿着甲库的 id 在乙库里改，
+        // 会静默改掉甲库那篇（id 是全局自增的）。加上它之后这种情况返回「笔记不存在」。
+        const raw = db.prepare('SELECT * FROM notes WHERE id = ? AND kb_id = ?').get(noteId, id) as Record<string, unknown> | undefined
+        if (raw === undefined) return { ok: false, error: '笔记不存在' }
+        const prev = rowToNote(raw)
+        const r = db.prepare('UPDATE notes SET title = ?, body = ?, tags = ?, source_kind = ?, source_username = ?, source_question = ?, updated_at = ? WHERE id = ? AND kb_id = ?')
+          .run(
+            title,
+            input.body === undefined ? prev.body : body,
+            input.tags === undefined ? prev.tags.join(',') : tags.join(','),
+            input.sourceKind === undefined ? prev.sourceKind : sourceKind,
+            input.sourceUsername === undefined ? (prev.sourceUsername ?? '') : String(input.sourceUsername),
+            input.sourceQuestion === undefined ? (prev.sourceQuestion ?? '') : String(input.sourceQuestion),
+            ts,
+            noteId,
+            id,
+          )
+        if (r.changes === 0) return { ok: false, error: '笔记不存在' }
+        return { ok: true, id: noteId }
+      }
+      const r = db.prepare('INSERT INTO notes(kb_id, title, body, tags, source_kind, source_username, source_question, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, title, body, tags.join(','), sourceKind, input.sourceUsername ?? '', input.sourceQuestion ?? '', ts, ts)
+      return { ok: true, id: Number(r.lastInsertRowid) }
+    })
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
@@ -628,11 +625,11 @@ export function deleteNote(decryptedDir: string, kbId: number, id: number): Note
   const noteId = Math.trunc(Number(id))
   if (!Number.isFinite(noteId) || noteId <= 0) return { ok: false, error: '笔记标识无效' }
   try {
-    const db = openStore(decryptedDir)
-    // `AND kb_id = ?`：删掉别的库的同 id 笔记是最坏的一种串库（数据直接没了）。
-    const r = db.prepare('DELETE FROM notes WHERE id = ? AND kb_id = ?').run(noteId, kb)
-    db.close()
-    return { ok: r.changes > 0, id: noteId }
+    return withNotesStore(decryptedDir, (db) => {
+      // `AND kb_id = ?`：删掉别的库的同 id 笔记是最坏的一种串库（数据直接没了）。
+      const r = db.prepare('DELETE FROM notes WHERE id = ? AND kb_id = ?').run(noteId, kb)
+      return { ok: r.changes > 0, id: noteId }
+    })
   } catch (e) {
     return { ok: false, error: errorText(e) }
   }
@@ -673,13 +670,17 @@ export function buildKnowledgeGraph(decryptedDir: string, kbId: number, names: M
   if (id === undefined) return { ...empty, readError: '知识库标识无效（kbId 必须是正整数）' }
   let rows: Array<Record<string, unknown>>
   try {
-    const db = openStore(decryptedDir)
-    if (!kbExists(db, id)) {
-      db.close()
+    const read = withNotesStore(decryptedDir, (db) => {
+      if (!kbExists(db, id)) {
+        return { exists: false as const, rows: [] as Array<Record<string, unknown>> }
+      }
+      const found = db.prepare('SELECT * FROM notes WHERE kb_id = ? ORDER BY updated_at DESC, id DESC').all(id) as Array<Record<string, unknown>>
+      return { exists: true as const, rows: found }
+    })
+    if (!read.exists) {
       return { ...empty, readError: '知识库不存在（可能已被删除），请重新选择' }
     }
-    rows = db.prepare('SELECT * FROM notes WHERE kb_id = ? ORDER BY updated_at DESC, id DESC').all(id) as Array<Record<string, unknown>>
-    db.close()
+    rows = read.rows
   } catch (e) {
     // 「知识库为空」与「笔记库读不到」必须可区分：后者整张图都是空的，用户会以为是数据丢了。
     const readError = errorText(e)

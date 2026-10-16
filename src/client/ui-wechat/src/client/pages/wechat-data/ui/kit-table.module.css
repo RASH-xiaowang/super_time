@@ -23,6 +23,17 @@
   table-layout: fixed;
 }
 
+/*
+ * 静态包装：调用方自己当滚动容器时用（clawbot B0 —— 面板内只准一个滚动容器）。
+ * 与 .tableWrap 的差别只有「不滚」：overflow 与 max-height 都交还给外层，
+ * 表头 sticky 随之改相对外层的滚动容器生效。
+ */
+.tableWrapStatic {
+  width: 100%;
+  overflow: visible;
+  max-height: none;
+}
+
 .table thead th {
   position: sticky;
   top: 0;
@@ -30,7 +41,7 @@
   padding: var(--nm-s-2) var(--nm-s-3);
   text-align: left;
   font-weight: 600;
-  font-size: var(--nm-fs-xs);
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--nm-text-2);
@@ -64,7 +75,7 @@
 .thBtn:focus-visible {
   outline: 2px solid var(--nm-cyan);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
 }
 
 .thInner {
@@ -73,7 +84,7 @@
   gap: var(--nm-s-1);
 }
 
-.thArrow { opacity: 0; font-size: var(--nm-fs-xs); }
+.thArrow { opacity: 0; font-size: var(--nm-fs-xs, 11px); }
 .thSortable[data-sorted] .thArrow { opacity: 1; }
 
 .table tbody td {
@@ -96,3 +107,29 @@
 /* 整行可点时聚焦环朝内画，避免被表格容器裁掉 */
 .rowClickable:focus-visible { outline: 2px solid var(--nm-cyan); outline-offset: -2px; }
 .skelTdLine { display: inline-block; width: 60%; height: 12px; }
+
+/* ── 手机档（≤560）：首列钉住 ─────────────────────────────────────────────
+   表格有 640px 的最小宽度（第 89 轮定的：窄窗口下每列才都可达、弹性列不会被压成 32px），
+   而手机上滚动容器只有 349px（2026-10-14 真数据实测：资金往来 / 操作日志）⇒ 横滚 291px
+   之后不知道这一行是谁的。把首列钉在左边。
+   底色必须**不透明**：td/th 原本全透明，斑马纹与表头都是半透明叠色（实测
+   `--nm-table-row-stripe` = rgba(255,255,255,.015)、`--nm-table-header-bg` = rgba(0,240,255,.04)），
+   直接贴上去会让内容从粘住的列底下穿出来。所以：卡片底色 `--nm-bg-card`（实测 #0f172a 与卡片同色）
+   打底，再把原本那层半透明叠色用渐变原样叠回去 —— 粘住的列与其余格子才同色。 */
+@media (max-width: 560px) {
+  .table thead th:first-child,
+  .table tbody td:first-child {
+    position: sticky;
+    left: 0;
+    background-color: var(--nm-bg-card, #0f172a);
+    box-shadow: 1px 0 0 var(--nm-border);
+  }
+  .table thead th:first-child {
+    z-index: 3;
+    background-image: linear-gradient(var(--nm-table-header-bg), var(--nm-table-header-bg));
+  }
+  .table tbody td:first-child { z-index: 2; }
+  .table tbody tr:nth-child(even) td:first-child {
+    background-image: linear-gradient(var(--nm-table-row-stripe), var(--nm-table-row-stripe));
+  }
+}

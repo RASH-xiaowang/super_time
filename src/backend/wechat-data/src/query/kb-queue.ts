@@ -43,8 +43,9 @@
  *
  * 后果严重得不成比例：`runJob` 里这一步失败 = 「**已经解析成功**的正文被整份丢掉，
  * 该行判 `failed`」，用户得先把它从库里移掉、再重新添加才能恢复。真机实测这一格
- * 真的会走到（`working/cdp-kb-files-b.json` 里 `季度报告.pdf` 的
- * `parse_error = 'database is locked'`，而它同一轮的 `中文地层报告.pdf` 是 `ready`）。
+ * 真的会走到（实测那一轮里，同一批两个文件：`中文地层报告.pdf` 是 `ready`，而
+ * `季度报告.pdf` 的 `parse_error = 'database is locked'` —— 快照是当时从真机库里导出来的，
+ * 导出的那份临时文件已删，所以这里只留下结论与判据位置，不留一个没人能核对的文件名）。
  *
  * 所以每个写库步骤都包一层 `withBusyRetry` —— **只重试写，不重跑解析**：解析是
  * 几百毫秒到几秒的那一半，而争用窗口只有毫秒级。
@@ -57,7 +58,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import type { KbFileParseState } from '../types.ts'
 import { chunkBlocks } from './kb/chunk.ts'
 import { parseFileByExtAsync } from './kb/parse-async.ts'
@@ -158,11 +159,6 @@ const drains = new Map<string, { rerun: boolean }>()
 /** 仅供用例清掉「正在跑」的进程内记忆。 */
 export function resetQueueGuardForTest(): void {
   drains.clear()
-}
-
-/** 该数据根当下是否有执行器在跑（诊断与用例用）。 */
-export function isQueueRunning(decryptedDir: string): boolean {
-  return drains.has(kbFilesDbPath(decryptedDir))
 }
 
 /**

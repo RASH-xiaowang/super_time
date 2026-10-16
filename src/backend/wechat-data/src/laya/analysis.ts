@@ -1,0 +1,543 @@
+/**
+ * 「消息决策分析」的上下文收集（**数据层 + 一次本地推理调用**）。
+ *
+ * 分工与 `query/reply-suggest.ts` 对称：
+ *   · `query/reply-suggest.ts` 取上下文喂给 **LLM**（生成回复句子，走出网闸门）；
+ *   · 这里取上下文喂给 **laya**（判断意图/情绪/紧张度，**纯本地、不出网**）。
+ *
+ * 两者互补：laya 最擅长的「现在该做什么」里就有「先搜索历史聊天记录」这一项——
+ * 那正是本应用自带的 FTS 搜索能力。
+ */
+import { layaAnalyze, type LayaAnswer } from './runtime.ts'
+import { layaModelStatus } from './model-file.ts'
+import { defaultChatQuestions, type LayaQuestions } from './presets.ts'
+import { layaModelKey, readAnalysisCache, writeAnalysisCache, type CachedAnalysis } from './store.ts'
+import { queryMessages } from '../query/messages.ts'
+import { messageText } from '../query/reply-suggest.ts'
+import { yieldToLoop } from '../query/search-build.ts'
+import { cachedTranscript } from '../query/voice-transcribe.ts'
+
+/** 默认取多少条作为上下文（laya 的 max_len 是 1024 token，20 条中文对话通常在预算内）。 */
+const DEFAULT_CONTEXT = 20
+/** 上限：再多也不会更准，只会挤掉模型头的选项预算。 */
+const MAX_CONTEXT = 60
+
+/** 对话里的一轮。 */
+export interface LayaTurn {
+  /** 是否本人发送。 */
+  self: boolean
+  text: string
+}
+
+/** 一段可直接喂给模型的对话上下文。 */
+export interface LayaDialogue {
+  /** `我：…` / `对方：…` 逐行拼接（模型按这个格式读）。 */
+  dialogue: string
+  /** 被分析的那句（最近一条**对方**消息）。 */
+  latestPeer: string
+  /** 截断后保留的轮次。 */
+  turns: LayaTurn[]
+}
+
+/**
+ * 构造对话上下文。
+ *
+ * **关键：截断到「最近一条对方消息」为止**——命题里说的「最后一句话」必须指向对方，
+ * 否则对方之后我发的消息会让模型去分析我自己说的话，语义整个跑偏。
+ *
+ * @returns 该会话没有对方文本消息时，`dialogue` 与 `latestPeer` 均为空串。
+ */
+export function buildDialogueState(
+  decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+  talker: string,
+  selfUsername?: string,
+  limit = DEFAULT_CONTEXT,
+): LayaDialogue {
+  const cap = Math.max(1, Math.min(Math.trunc(limit) || DEFAULT_CONTEXT, MAX_CONTEXT))
+  // queryMessages 已按时间正序返回；第 5 参是 selfUsername（用于标注「我」）。
+  const snapshot = queryMessages(decryptedDir, talker, cap, undefined, selfUsername)
+  const turns: LayaTurn[] = []
+  for (const m of snapshot.messages) {
+    const text = messageText(m)
+    if (text === '') continue
+    turns.push({ self: m.isSender === 1, text })
+  }
+  let lastPeer = -1
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const t = turns[i]
+    if (t !== undefined && !t.self) { lastPeer = i; break }
+  }
+  if (lastPeer < 0) return { dialogue: '', latestPeer: '', turns: [] }
+  const kept = turns.slice(0, lastPeer + 1)
+  return {
+    dialogue: budgetDialogue(kept.map((t) => `${t.self ? '我' : '对方'}：${t.text}`)),
+    latestPeer: kept[kept.length - 1]?.text ?? '',
+    turns: kept,
+  }
+}
+
+/**
+ * 对话上下文的**字数预算**（2026-09-29 实测后加）。
+ *
+ * ## 为什么用字数而不是"条数"
+ *
+ * 真机上量到的延迟曲线（`layaAnalyze` 单次，模型自报 `inferenceMs` 与之相差 <10ms）：
+ *
+ * | 上下文字数 | 单次推理 |
+ * |---|---|
+ * | 120 | 1,610 ms |
+ * | 240 | 2,428 ms |
+ * | 480 | 4,598 ms |
+ * | 720 | 7,228 ms |
+ *
+ * ⇒ **≈10 ms/字，基本线性**。而 `DEFAULT_CONTEXT` 是 **20 条**消息 —— 一条 60 字的会话
+ * 就是 1,200 字上下文 ≈ 12 s/条，用户在日志里看到的 `analyzeVisibleMessages 7–24s`
+ * 就是这么来的。按"条数"限根本框不住：条数一样，长短消息能差 10 倍。
+ *
+ * 240 字 ≈ 2.4 s/条：既留住"最近几轮对话"这个判断意图真正需要的信息，又把单条延迟
+ * 压到原来的 1/4 左右。这是**明确的取舍**（更少的背景 ⇒ 更快的响应），改这个常量
+ * 就等于在速度与上下文之间挪一档。
+ */
+export const MAX_CONTEXT_CHARS = 240
+
+/**
+ * 按字数预算裁剪对话：**从最旧的整行开始丢**，保留尾部。
+ *
+ * 为什么丢头不丢尾：命题问的是「最后一句话」（语义焦点在尾部，见 {@link buildDialogueState}
+ * 关于"截断到最近一条对方消息"的说明），前文只是背景；从头部裁不会改变"最后一句话"是谁说的。
+ * 最后一行（正在分析的那条消息本身）**永远保留**，即便它自己就超预算。
+ * @param lines - 已按时间正序排好的对话行（形如 `对方：…` / `我：…`）。
+ * @param budget - 字数预算（含换行）。
+ * @returns 裁剪后的对话文本（单行超预算时仍返回该行）。
+ */
+export function budgetDialogue(lines: readonly string[], budget: number = MAX_CONTEXT_CHARS): string {
+  if (lines.length === 0) return ''
+  let total = 0
+  let start = lines.length
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const cost = (lines[i] ?? '').length + 1
+    if (i < lines.length - 1 && total + cost > budget) break
+    total += cost
+    start = i
+  }
+  return lines.slice(start).join('\n')
+}
+
+/** 一次分析请求。 */
+export interface LayaAnalysisInput {  decryptedDir: string
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+  talker: string
+  selfUsername?: string
+  /** 上下文条数（默认 20，上限 60）。 */
+  contextLimit?: number
+  /** 显式模型目录（默认走 `DSH_WECHAT_LAYA_DIR` / 数据目录）。 */
+  modelDir?: string
+  /** 自定义命题组（默认 `defaultChatQuestions()`）。 */
+  questions?: LayaQuestions
+}
+
+/** 一次分析结果。 */
+export interface LayaAnalysisResult {
+  ok: boolean
+  /** 失败原因（模型未就绪 / 会话无可分析内容 / 推理异常）。 */
+  error?: string
+  /** 被分析的那句。 */
+  latestPeer: string
+  /** 实际使用的上下文条数。 */
+  contextLines: number
+  /** 交给模型的对话文本（便于对照与排查）。 */
+  dialogue: string
+  /** 逐命题的答案（按命题组定义顺序）。 */
+  answers: LayaAnswer[]
+  /** 是否使用了模型（false 表示走了降级路径，答案由规则给出）。 */
+  usedModel: boolean
+  /** 降级说明（`usedModel=false` 时非空，如实写明原因）。 */
+  note: string
+  inferenceMs: number
+  tokens: number
+  model: { dir: string; bytes: number }
+}
+
+/**
+ * 分析一个会话：取上下文 → 本地推理 → 返回可展示的答案。
+ *
+ * **不抛异常**：模型缺失/加载失败/推理异常都折叠成 `{ ok:false }` 或降级结果，
+ * 由调用方决定怎么呈现（这是本功能的正常路径，不是异常路径）。
+ */
+export async function analyzeSession(input: LayaAnalysisInput): Promise<LayaAnalysisResult> {
+  const talker = String(input.talker ?? '').trim()
+  const empty: LayaAnalysisResult = {
+    ok: false, latestPeer: '', contextLines: 0, dialogue: '', answers: [],
+    usedModel: false, note: '', inferenceMs: 0, tokens: 0, model: { dir: '', bytes: 0 },
+  }
+  if (talker === '') return { ...empty, error: '缺少会话' }
+
+  const ctx = buildDialogueState(input.decryptedDir, talker, input.selfUsername, input.contextLimit)
+  if (ctx.dialogue === '') {
+    return { ...empty, error: '这个会话还没有可分析的对方消息' }
+  }
+
+  const status = layaModelStatus(input.modelDir, input.decryptedDir)
+  const questions = input.questions ?? defaultChatQuestions()
+
+  if (!status.installed) {
+    // 降级：模型没就绪时**不编造判断**，如实说明并给出可执行的下一步。
+    return {
+      ok: false,
+      // 只给一句概括：明细（缺哪个文件、期望目录）由 UI 从 `status.missing` 渲染成清单，
+      // 这里再拼一遍会在卡片上出现两段一模一样的缺失列表。
+      error: '本地决策模型未就绪',
+      latestPeer: ctx.latestPeer,
+      contextLines: ctx.turns.length,
+      dialogue: ctx.dialogue,
+      answers: [],
+      usedModel: false,
+      note: `模型目录：${status.dir}`,
+      inferenceMs: 0,
+      tokens: 0,
+      model: { dir: status.dir, bytes: status.bytes },
+    }
+  }
+
+  const r = await layaAnalyze({
+    state: { dialogue: ctx.dialogue },
+    questions,
+    modelDir: input.modelDir,
+    decryptedDir: input.decryptedDir,
+  })
+
+  return {
+    ok: r.ok,
+    error: r.error,
+    latestPeer: ctx.latestPeer,
+    contextLines: ctx.turns.length,
+    dialogue: ctx.dialogue,
+    answers: r.answers,
+    usedModel: r.ok,
+    note: r.ok ? '' : '推理失败，未产出判断',
+    inferenceMs: r.inferenceMs,
+    tokens: r.tokens,
+    model: r.model,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 逐条分析：消息流里每条（对方）消息下方的分析
+// ---------------------------------------------------------------------------
+
+/** 逐条分析的目标：一条消息的定位信息（前端从消息对象里直接拿得到）。 */
+export interface LayaTargetRef {
+  /** 会话内唯一 id（自增，会话范围作用域）。 */
+  localId: number
+  /** 毫秒稳定序键 —— 也是消息分页的游标键。 */
+  sortSeq: number
+}
+
+/** 一条消息的分析结果。 */
+export interface LayaMessageAnalysis {
+  localId: number
+  ok: boolean
+  /** 单条失败原因（模型未就绪是**会话级**错误，不在这里）。 */
+  error?: string
+  /** 被分析的文本（语音则是转写后的文本）。 */
+  sourceText: string
+  /** 文本是否来自语音转写。 */
+  fromVoice: boolean
+  answers: LayaAnswer[]
+  /** 本次推理耗时（命中缓存时为 0）。 */
+  inferenceMs: number
+  /** 是否命中缓存（未重新推理）。 */
+  cached: boolean
+  /**
+   * 「信息不足」标注：源文本短到判断主要来自上下文（判据见 {@link isLowConfidenceText}）。
+   * 只在 `ok:true` 的条目上设置；未设置按 false 处理（失败条目没有判断可言，标它反而误导）。
+   */
+  lowConfidence?: boolean
+}
+
+/** 「信息不足」的字数阈值（按剥掉空白与标点后计数）。 */
+export const LOW_CONFIDENCE_MAX_CHARS = 6
+
+/**
+ * 这条消息的文本是否短到「判断主要来自上下文」。
+ *
+ * 为什么要有它：本机实测（2026-09-26）「啥」「好，」这类极短消息上，同一模型对同一条消息的
+ * 选项分布接近均匀（Top1 常年在 40–60% 徘徊），也就是说那一栏的答案**随机性很大**。
+ * 这不是模型坏了 —— 三个字符确实承载不了多少意图。与其把它藏起来，不如在界面上如实标注
+ * 「信息不足，仅供参考」，让用户知道该看的是上下文而不是这句话本身。
+ *
+ * 判据：**只剥空白、不剥标点**，按字符数算。
+ *   · 剥空白是必须的：`' ok '` 与 `'ok'` 应当同样处理；
+ *   · 不剥标点是因为「剥了再数」会让 `???`、`！！！` 这类**纯标点消息**变成 0 字 ——
+ *     而它们恰恰是「没有词汇内容、只能靠上下文猜」的典型，正该被标注；
+ *     阈值本身是 6，所以 `好，` 与 `好` 无论剥不剥都算短。
+ * @param text - 被分析的文本（语音则是转写后的文本）。
+ * @returns true 表示该标注「信息不足」；空文本/纯空白返回 false（那是「没文本」不是「文本短」）。
+ */
+export function isLowConfidenceText(text: string): boolean {
+  const core = String(text ?? '').replace(/\s+/g, '')
+  return core.length > 0 && core.length <= LOW_CONFIDENCE_MAX_CHARS
+}
+
+/**
+ * 语音转写器 —— 由调用方注入。
+ * 为什么注入而不是自己调：转写需要 whisper 的引擎路径/模型目录/模型 id，那些是配置层的知识
+ * （`getConfig` + `resolveWhisperModelsDir` + `whisperEnginePath`），不该由 laya 层去读。
+ */
+export type LayaVoiceTranscriber = (
+  localId: number,
+  serverId: string,
+) => Promise<{ ok: boolean; text?: string; error?: string }>
+
+export interface LayaVisibleAnalysisInput {
+  decryptedDir: string
+  /** 解码目录（读语音转写的磁盘缓存）。 */
+  decodedDir: string
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+  talker: string
+  selfUsername?: string
+  targets: readonly LayaTargetRef[]
+  contextLimit?: number
+  modelDir?: string
+  /** 缺省时不转写语音：那条消息会以「语音未转写」失败，而不是静默跳过。 */
+  transcribe?: LayaVoiceTranscriber
+  /** 关掉缓存（测试用）。 */
+  useCache?: boolean
+  /**
+   * 每分析完一条就回调一次（W3-11.5）。
+   *
+   * 为什么需要它：整批实测**均 36s / 峰值 110s**，而界面上只有一个「本地分析中…」——
+   * 用户分不清「在跑」还是「卡死」，也不敢切走（切走就白算）。有进度之后，等待变成可读的。
+   * `done` 包含命中的缓存条目（那也是"处理完了"），`total` 是本批真正要处理的条数。
+   */
+  onProgress?: (done: number, total: number, currentLocalId: number) => void
+  /**
+   * 取消信号（W3-11.5）。
+   *
+   * 只在**每条之间**检查（一次 ONNX forward 没法从中间打断，实测单条 0.5–9s），
+   * 所以取消的最坏延迟就是一条 —— 这也是「已算到 5/12 才停」这种口径的由来。
+   */
+  signal?: AbortSignal
+}
+
+export interface LayaVisibleAnalysisResult {
+  ok: boolean
+  /** 会话级错误（模型未就绪 / 缺会话）——单条问题在 `items[].error`。 */
+  error?: string
+  model: { dir: string; bytes: number }
+  modelKey: string
+  items: LayaMessageAnalysis[]
+  /**
+   * **被取消时为 true**（W3-11.5），且 `items` 是**已经算完的那部分**。
+   *
+   * 为什么取消不抛错、而是带部分结果正常返回：整批实测均 36s / 峰值 110s，
+   * 而每条算完就写进 `laya_analysis.db` 了。抛错等于把已经付过款的推理扔掉，
+   * 面板还得显示成一个红色错误 —— 而用户点「停止」本来就不是失败。
+   * 面板据此显示「已停止（已分析 5/12）」，剩下的条目下次滚到时照常补算（它们命中不了缓存而已）。
+   */
+  canceled?: boolean
+}
+
+/**
+ * 单次最多分析多少条：一次请求里跑十几条 × 0.5 s 已经接近请求超时，前端据此分批。
+ *
+ * 2026-09-28 复核：**曾尝试靠「合批」降低这一批的耗时，实测反而慢了 41.8%**
+ * （成本 ≈ 行数 × 序列长度，`session.run` 每次调用的固定开销实测为 0 ⇒ 没有可摊薄的东西，
+ * pad 到批内最长只会白算）。所以上限仍按「逐条推理」的墙钟定，见已删除的 PERF-AUDIT 报告第七节（原文见 git 历史）。
+ */
+export const MAX_ANALYZE_BATCH = 12
+
+/**
+ * 取「目标消息 + 它之前的 `limit - 1` 条」。
+ *
+ * 两个坑都在这里：
+ *  1. 游标语义是 `sort_seq < cursor`（**不含等于**），所以传 `sortSeq + 1` 才能把目标自己圈进来；
+ *  2. `sort_seq` 存在重复（本机实测 14 张 Msg_ 表有重复值），所以不能假设「一圈就是一条」——
+ *     结果里可能有同一毫秒的其它消息，必须按 `localId` **定位目标并截断**，
+ *     否则会把目标之后发出的消息当成上下文（那等于让模型看未来）。
+ */
+function collectUpToTarget(
+  decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
+  talker: string,
+  target: LayaTargetRef,
+  limit: number,
+  selfUsername?: string,
+): { messages: readonly { localId: number; type?: number; isSender: number; displayText?: string; strContent?: string; msgContent?: string; renderType?: string; serverId?: string }[]; found: boolean } {
+  // 多取 8 条：同行（同 sort_seq）的消息数量不可预知，截断后再收敛到 limit。
+  const snap = queryMessages(decryptedDir, talker, limit + 8, target.sortSeq + 1, selfUsername)
+  const idx = snap.messages.findIndex((m) => m.localId === target.localId)
+  if (idx < 0) {
+    // 目标不在这一页（极旧的会话 / 已被清理）：退回「最近 limit 条」，并在结果里标 found=false。
+    return { messages: snap.messages.slice(-limit), found: false }
+  }
+  const start = Math.max(0, idx + 1 - limit)
+  return { messages: snap.messages.slice(start, idx + 1), found: true }
+}
+
+/**
+ * 逐条分析一批消息（消息流可见窗口驱动）。
+ *
+ * 每条独立：取「该消息及之前」的上下文 → （语音先转写）→ 本地推理 → 结果落缓存。
+ * **单条失败不拖垮整批**（`items[].ok=false` 带原因），只有模型未就绪这类会话级问题才整体 `ok=false`。
+ */
+export async function analyzeVisibleMessages(
+  input: LayaVisibleAnalysisInput,
+): Promise<LayaVisibleAnalysisResult> {
+  const talker = String(input.talker ?? '').trim()
+  const empty: LayaVisibleAnalysisResult = {
+    ok: false, model: { dir: '', bytes: 0 }, modelKey: '', items: [],
+  }
+  if (talker === '') return { ...empty, error: '缺少会话' }
+  if (input.targets.length === 0) return { ...empty, error: '没有要分析的消息' }
+
+  const status = layaModelStatus(input.modelDir, input.decryptedDir)
+  if (!status.installed) {
+    return {
+      ...empty,
+      error: '本地决策模型未就绪',
+      model: { dir: status.dir, bytes: status.bytes },
+    }
+  }
+  const modelKey = layaModelKey(status.path)
+  const targets = input.targets.slice(0, MAX_ANALYZE_BATCH)
+  const useCache = input.useCache !== false
+
+  const cached = useCache
+    ? readAnalysisCache(input.decryptedDir, talker, modelKey, targets.map((t) => t.localId))
+    : new Map<number, CachedAnalysis>()
+
+  const items: LayaMessageAnalysis[] = []
+  const toWrite: Array<{ localId: number; sourceText: string; fromVoice: boolean; answers: LayaAnswer[] }> = []
+  const limit = Math.max(2, Math.min(Math.trunc(input.contextLimit ?? DEFAULT_CONTEXT), MAX_CONTEXT))
+  /** W3-11.5：进度回调。在**每条开跑之前**报（而不是跑完之后）——
+   *  这样 `done` 的语义是「已推进到第几条」，与面板里逐条的 pending/done 状态天然对齐；
+   *  放在每条之后也行，但那要求在每个 `continue` 分支上都补一次调用（8 处），
+   *  漏一处的后果是进度停在半路 —— 那种形状正是本批在修的那类问题。 */
+  let progressDone = 0
+  const reportProgress = (localId: number): void => {
+    progressDone += 1
+    input.onProgress?.(progressDone, targets.length, localId)
+  }
+  /** W3-11.5：被取消（用户按了「停止分析」）。此时 `items` 是已算完的那部分。 */
+  let canceled = false
+
+  for (const target of targets) {
+    // W3-11.5：取消检查放在**让出之后、报进度之前** —— 被取消的那一条**没有开始算**，
+    // 所以既不该算进进度（否则面板显示 6/12 而实际只算了 5 条），也不该进 items。
+    if (input.signal?.aborted === true) {
+      canceled = true
+      break
+    }
+    // B2（2026-09-28 性能修复）：每条之间让出事件循环。这一整批在日志里是 **均 36s / 峰值 110s**
+    // ——`layaAnalyze` 内部是一次完整的 ONNX forward（同步），而本模块此前**不在** `yieldToLoop`
+    // 覆盖的 8 个模块内 ⇒ 整个推理期间独占事件循环，同进程的其它请求（本该 1ms）全被拖住
+    // （旧文档实测：世界板块自身 13ms 被排在长任务后面等到 17,008ms）。让出不改推理成本，
+    // 但把「独占」变成「交替」，是这件事里成本最低、感知最强的一步。
+    // 注意：命中的缓存条目走的是 `continue`，不会到这里 —— 只有真的要开算的才让出。
+    await yieldToLoop()
+    reportProgress(target.localId)
+    const hit = cached.get(target.localId)
+    if (hit) {
+      items.push({
+        localId: target.localId, ok: true, sourceText: hit.sourceText, fromVoice: hit.fromVoice,
+        answers: hit.answers, inferenceMs: 0, cached: true,
+      })
+      continue
+    }
+
+    const picked = collectUpToTarget(input.decryptedDir, talker, target, limit, input.selfUsername)
+    const msgs = picked.messages
+    if (msgs.length === 0) {
+      items.push({ localId: target.localId, ok: false, error: '取不到这条消息', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    const targetMsg = msgs[msgs.length - 1]
+    if (targetMsg === undefined) {
+      items.push({ localId: target.localId, ok: false, error: '取不到这条消息', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+    if (targetMsg.isSender === 1) {
+      items.push({ localId: target.localId, ok: false, error: '自己发的消息不做分析', sourceText: '', fromVoice: false, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    // 语音：先转写再分析（转写有自己的磁盘缓存，不重算）
+    let fromVoice = false
+    let text = messageText(targetMsg)
+    if (targetMsg.renderType === 'voice' || targetMsg.type === 34) {
+      fromVoice = true
+      const svrId = String(targetMsg.serverId ?? '')
+      const cachedText = svrId === '' ? '' : cachedTranscript(input.decodedDir, svrId)
+      if (cachedText !== '') {
+        text = cachedText
+      } else if (input.transcribe) {
+        // 异步转写（2026-10-13）：whisper 在子进程跑，worker 照常服务消息查询/会话列表。
+        const r = await input.transcribe(target.localId, svrId)
+        text = r.ok ? String(r.text ?? '').trim() : ''
+        if (text === '') {
+          items.push({
+            localId: target.localId, ok: false, fromVoice: true,
+            error: r.ok ? '语音转写结果为空' : (r.error ?? '语音转写失败'),
+            sourceText: '', answers: [], inferenceMs: 0, cached: false,
+          })
+          continue
+        }
+      } else {
+        items.push({ localId: target.localId, ok: false, fromVoice: true, error: '未配置语音转写', sourceText: '', answers: [], inferenceMs: 0, cached: false })
+        continue
+      }
+    }
+
+    // 拼对话：双方消息都进（判断意图要看到「我」说了什么）；历史里的语音用**已有缓存**补文本，
+    // 但不为它们触发转写（那会把一次请求变成 N 次 whisper 调用）。
+    const lines: string[] = []
+    for (let i = 0; i < msgs.length; i += 1) {
+      const m = msgs[i]
+      if (m === undefined) continue
+      let t = i === msgs.length - 1 ? text : messageText(m)
+      if (t === '' && (m.renderType === 'voice' || m.type === 34)) {
+        const svr = String(m.serverId ?? '')
+        t = svr === '' ? '' : cachedTranscript(input.decodedDir, svr)
+      }
+      if (t === '') continue
+      lines.push(`${m.isSender === 1 ? '我' : '对方'}：${t}`)
+    }
+    const dialogue = budgetDialogue(lines)
+    if (dialogue === '') {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: '这条消息没有可分析的文本', sourceText: text, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+
+    const r = await layaAnalyze({ state: { dialogue }, modelDir: input.modelDir, decryptedDir: input.decryptedDir })
+    if (!r.ok) {
+      items.push({ localId: target.localId, ok: false, fromVoice, error: r.error ?? '推理失败', sourceText: text, answers: [], inferenceMs: 0, cached: false })
+      continue
+    }
+    items.push({
+      localId: target.localId, ok: true, sourceText: text, fromVoice,
+      answers: r.answers, inferenceMs: r.inferenceMs, cached: false,
+    })
+    toWrite.push({ localId: target.localId, sourceText: text, fromVoice, answers: r.answers })
+  }
+
+  if (useCache && toWrite.length > 0) {
+    // W3-11.5：被取消时**照样落盘** —— 已经算完的那些正是取消要保住的成果。
+    // 少了这一步，「停止」等于把 36 秒的推理全部作废，用户会立刻再点一次。
+    writeAnalysisCache(input.decryptedDir, talker, modelKey, toWrite)
+  }
+
+  return {
+    ok: true,
+    model: { dir: status.dir, bytes: status.bytes },
+    modelKey,
+    // 逐条打「信息不足」标注：**只标成功条目**（失败条目没有判断可言，标它只会让人以为
+    // 失败也是「信息不足」造成的）。判据与实测依据见 `isLowConfidenceText`。
+    items: items.map((it) => (it.ok ? { ...it, lowConfidence: isLowConfidenceText(it.sourceText) } : it)),
+    // canceled 只在真被取消时给（`undefined` 而不是 `false`：调用方的
+    // `'canceled' in r` 才是可靠判据，`false` 会让人误以为存在两种语义）。
+    ...(canceled ? { canceled: true } : {}),
+  }
+}

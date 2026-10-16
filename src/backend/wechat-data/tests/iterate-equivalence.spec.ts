@@ -60,7 +60,7 @@ function seedMessages(dec: string, rows: Array<{ text: string; type?: number; ts
 }
 
 describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）', () => {
-  it('逐行计数正确：命中数 / 涉及会话数 / 联系人排名', () => {
+  it('逐行计数正确：命中数 / 涉及会话数 / 联系人排名', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [
       { text: '手机 13800138000' },
@@ -72,7 +72,7 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
       { text: '这是 local_type=47 的行，不该被扫', type: 47 },
     ], [USER, 'wxid_b'])
 
-    const r = queryPrivacyScan(dec)
+    const r = await queryPrivacyScan(dec)
     const byKey = new Map(r.categories.map((c) => [c.key, c.count]))
     expect(byKey.get('phone'), '三行手机号 → 3 次（同一行两个号码只算一次）').toBe(3)
     expect(byKey.get('email')).toBe(1)
@@ -83,7 +83,7 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
     expect(r.top_contacts[0]).toMatchObject({ username: USER, count: 4 })
   })
 
-  it('rowBudget 真正成为**读取**上界（改前是「先物化全表再 break」）', () => {
+  it('rowBudget 真正成为**读取**上界（改前是「先物化全表再 break」）', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [
       { text: '手机 13800138000' },
@@ -91,14 +91,14 @@ describe('N8：queryPrivacyScan 的游标读取（行为等价 + 预算语义）
       { text: '手机 13700137000' },
     ])
     // 步进语义：scanned 先自增再判断，所以 budget=1 → 一行都不处理
-    expect(queryPrivacyScan(dec, 1).total_hits).toBe(0)
-    expect(queryPrivacyScan(dec, 2).total_hits).toBe(1)
-    expect(queryPrivacyScan(dec, 100).total_hits).toBe(3)
+    expect((await queryPrivacyScan(dec, 1)).total_hits).toBe(0)
+    expect((await queryPrivacyScan(dec, 2)).total_hits).toBe(1)
+    expect((await queryPrivacyScan(dec, 100)).total_hits).toBe(3)
   })
 })
 
 describe('N8：queryOverviewInsights 的朋友圈统计（游标读取的行为等价）', () => {
-  it('媒体/视频/点赞/评论计数与逐行解析结果一致', () => {
+  it('媒体/视频/点赞/评论计数与逐行解析结果一致', async () => {
     const dec = makeDecrypted()
     seedMessages(dec, [])
     const sdb = new DatabaseSync(join(dec, 'sns', 'db_sns', 'sns.db'))
@@ -109,7 +109,7 @@ describe('N8：queryOverviewInsights 的朋友圈统计（游标读取的行为�
     ins.run('wxid_c', '<media >x</media ><LocalExtraInfo><type>1</type><user_comment>a</user_comment><user_comment>b</user_comment></LocalExtraInfo>')
     sdb.close()
 
-    const r = queryOverviewInsights(dec)
+    const r = await queryOverviewInsights(dec)
     expect(r.moments.total, '三行都要被读到').toBe(3)
     expect(r.moments.images, '第 1 行 1 张 + 第 3 行 1 张').toBe(2)
     expect(r.moments.videos).toBe(1)

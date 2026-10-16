@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import kitCss from '../ui/kit.module.css'
-import { computeHasMore } from './paged-list.ts'
+import { REFRESH_MIN_INTERVAL_MS, computeHasMore, refreshGate, refreshPagesFor } from './paged-list.ts'
 import { collectPageRange } from './load-page-range.ts'
 import { DEFAULT_NOTICE_MS, createNoticeController, type NoticeController } from './timers.ts'
 
@@ -74,23 +74,46 @@ export function ListSentinel({ refFn }: { refFn: (el: HTMLDivElement | null) => 
 /**
  * 分页哨兵：滚动到可视区附近时回调一次（用于「加载更多」而非仅渐进 DOM 渲染）。
  * 传入的 onVisible 保存在 ref 中，避免每次渲染重建观察器。
+ *
+ * `watch` 是这一族**停滞**问题的补丁：IntersectionObserver 只在"状态变了"的那一刻给回调。
+ * 哨兵一直待在视口里（内容比视口矮，或上一次回调正好撞上"这一页还在加载中"被丢掉）时，
+ * 不会有第二次回调，于是翻页永远停在当前页 —— 实测在 600 条附件、格子墙视口 625px 高的机器上，
+ * 翻到第 2 页就再也不动，界面上看不到任何错误，也只有把列表滚到底才发现"下面还有几百条没出来"。
+ * 数据每追加一批就用 `watch` 重新问一次"哨兵还在里面吗"，把"该加载但没被通知"这条路补上。
+ * @param onVisible - 哨兵进入视口时调用一次（调用方自己带 `hasMore && !loadingMore` 的闸）。
+ * @param rootMargin - 提前量，默认 600px。
+ * @param root - 滚动容器（不传就是视口）。
+ * @param watch - 变了就重查一次的值，通常传**已加载条数**。
+ * @returns 给哨兵元素用的 ref 回调。
  */
-export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px', root?: () => Element | null): (el: HTMLDivElement | null) => void {
+export function useLazySentinel(onVisible: () => void, rootMargin = '600px 0px', root?: () => Element | null, watch?: unknown): (el: HTMLDivElement | null) => void {
   const cbRef = useRef(onVisible)
   cbRef.current = onVisible
   const rootRef = useRef(root)
   rootRef.current = root
   const ioRef = useRef<IntersectionObserver | null>(null)
-  return useCallback((el: HTMLDivElement | null) => {
+  /** 哨兵此刻在不在视口里（IO 只在变化时报，所以自己记住最后一次的状态）。 */
+  const hitRef = useRef(false)
+  /** 第一次跑 `watch` 那个 effect 要跳过（挂载时 IO 已经报过一遍了）。 */
+  const firstWatchRef = useRef(true)
+  const attach = useCallback((el: HTMLDivElement | null) => {
     if (ioRef.current) { ioRef.current.disconnect(); ioRef.current = null }
     if (!el || typeof IntersectionObserver === 'undefined') return
     const rootEl = rootRef.current?.() ?? null
     const ob = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) cbRef.current()
+      const hit = !!entries[0]?.isIntersecting
+      hitRef.current = hit
+      if (hit) cbRef.current()
     }, { root: rootEl, rootMargin })
     ob.observe(el)
     ioRef.current = ob
   }, [rootMargin])
+  useEffect(() => {
+    // 挂载那一轮不补查：IO 在 `observe()` 时本来就会报一次初始状态，再 call 一遍就是白敲。
+    if (firstWatchRef.current) { firstWatchRef.current = false; return }
+    if (hitRef.current) cbRef.current()
+  }, [watch])
+  return attach
 }
 
 /**
@@ -121,22 +144,24 @@ export function ListSkeleton({ rows = 8, grid = false, minCol = 120 }: { rows?: 
  * 始终拿到最新闭包。相比固定轮询，能按需、即时刷新。
  * @param handler - 数据落地后的刷新回调。
  */
-export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wechat-data-updated'): void {
+export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wechat-data-updated', debounceMs = 300): void {
   const ref = useRef(handler)
   ref.current = handler
   useEffect(() => {
     let timer: number | undefined
     const on = (): void => {
       // 高频同步事件合并为一次刷新，避免连续重载导致界面卡顿。
+      // 合并窗可调（2026-10-13）：后端推送已自带 1.5s 限频，会话列表这类「第一眼就要变」
+      // 的界面用更小的窗换更快的响应。
       if (timer !== undefined) window.clearTimeout(timer)
-      timer = window.setTimeout(() => { timer = undefined; ref.current() }, 300)
+      timer = window.setTimeout(() => { timer = undefined; ref.current() }, debounceMs)
     }
     window.addEventListener(eventName, on)
     return () => {
       if (timer !== undefined) window.clearTimeout(timer)
       window.removeEventListener(eventName, on)
     }
-  }, [eventName])
+  }, [eventName, debounceMs])
 }
 
 /**
@@ -166,6 +191,39 @@ export function useWechatDataUpdated(handler: () => void, eventName = 'dsh-wecha
  * @param durationMs - 默认存活时长；只在挂载时取一次，逐次微调请用 `flash(value, ms)`。
  * @returns `notice` 当前提示；`flash` 写入并自动消失；`hold` 写入且常驻；`clear` 立即清空。
  */
+/**
+ * 慢查询的「走了几秒」计时器。
+ *
+ * ── 为什么每个慢面板都需要它 ──────────────────────────────────────────────
+ * 后端是**同步 SQLite**，单次查询会排在别的重查询后面 —— 资金账本在「数据总览」的
+ * 全量统计（扫 21 万条消息）跑完前可能要等十几秒。只给一行「正在统计…」，
+ * 用户无从区分"在跑"还是"卡死"（R3 实测：802px 的内容区里留了 608px 连续空白）。
+ * 有了秒数，等待就有了可读的进度感，而且不需要后端配合。
+ *
+ * ── 语义 ─────────────────────────────────────────────────────────────────
+ * `active` 转 true 时清零并开始每秒 +1；转 false 时停表并**保留**最后一次读数
+ * （面板紧接着就渲染数据了，"闪回 0s"没有意义）；再次转 true 会重新清零。
+ *
+ * ⚠️ 传进来的 `active` 应当是**首屏加载**（`loading && data === null`），
+ * 不要直接传 `loading` —— 有渲染缓存时的后台静默刷新会白闪一次走秒。
+ * @param active - 是否处于首屏加载。
+ * @returns 已用整秒数。
+ */
+export function useElapsedSeconds(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    if (!active) return
+    const t0 = Date.now()
+    setElapsed(0)
+    timerRef.current = setInterval(() => { setElapsed(Math.round((Date.now() - t0) / 1000)) }, 1000)
+    return () => {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+    }
+  }, [active])
+  return elapsed
+}
+
 export function useTransientNotice<T = string>(durationMs: number = DEFAULT_NOTICE_MS): {
   notice: T | null
   flash: (value: T, ms?: number) => void
@@ -227,15 +285,22 @@ export function LazyMount({ children, rootMargin = '600px 0px', placeholder = nu
  * 调用方每次渲染传新函数也不会触发重复加载。
  */
 /**
- * `refresh()` 单轮最多发多少个请求（每个上限 `pageSize`）。
- * 16 × 200 = 3200 条，足够覆盖真实账号的通讯录量级（实测全量约 2150）；
- * 设上界是为了让「后台刷新」绝不退化成无界拉取。
+ * `refresh()` 的上界与节流口径都在 `paged-list.ts`（纯逻辑才可测）：
+ *   · {@link refreshPagesFor} —— 一轮最多 `REFRESH_MAX_PAGES` 页；**装不下就整轮跳过**，
+ *     绝不发前 N 页然后把列表截短（截短会塌高度、把用户弹回顶部 —— 那正是 `refresh`
+ *     存在的理由被推翻）；
+ *   · {@link refreshGate} —— 两轮之间至少隔 `REFRESH_MIN_INTERVAL_MS`，期间到达的
+ *     事件合并成一次尾部刷新（合并 ≠ 丢弃），页面不可见时一个请求都不发。
+ * 旧写法是「每约 10 秒、最多 16 个重读请求全部压进后端那一条队列」。
  */
-const MAX_REFRESH_PAGES = 16
 
 export function usePagedList<T>(options: {
   pageSize: number
   fetchPage: (offset: number, limit: number) => Promise<{ items: readonly T[]; total: number }>
+  /** 数据事件驱动的后台刷新最小间隔（缺省 30s）。需要更实时的小列表（如会话列表）传更小值。 */
+  refreshMinIntervalMs?: number
+  /** 推送合并窗（缺省 300ms）。后端推送已自带限频，需要最快响应的小列表传更小值。 */
+  refreshDebounceMs?: number
 }): {
   items: readonly T[]
   total: number
@@ -247,7 +312,7 @@ export function usePagedList<T>(options: {
   reset: () => void
   refresh: () => void
 } {
-  const { pageSize } = options
+  const { pageSize, refreshDebounceMs, refreshMinIntervalMs } = options
   const fetchPageRef = useRef(options.fetchPage)
   fetchPageRef.current = options.fetchPage
   const [items, setItems] = useState<readonly T[]>([])
@@ -324,6 +389,13 @@ export function usePagedList<T>(options: {
   const refresh = useCallback((): void => {
     const want = offsetRef.current
     if (want <= 0) { void load(false, true, true); return }
+    const plan = refreshPagesFor(want, pageSize)
+    if (!plan.feasible) {
+      // 已加载的条数超出一轮的上界：这一轮**不刷**。发前 N 页会把列表缩到 N 页，
+      // 用户看到的不是「数据旧了一点」而是「列表被截断 + 被弹回顶部」。
+      return
+    }
+    lastRefreshAtRef.current = Date.now()
     const seq = ++seqRef.current
     busyRef.current = true
     void (async () => {
@@ -331,7 +403,7 @@ export function usePagedList<T>(options: {
         const r = await collectPageRange<T>({
           want,
           pageSize,
-          maxPages: MAX_REFRESH_PAGES,
+          maxPages: plan.pages,
           fetchPage: (offset, limit) => fetchPageRef.current(offset, limit),
           // 返回 false = 这一轮已作废（期间发生了切换分类/搜索），丢弃已收集内容。
           onPage: (info) => {
@@ -368,9 +440,46 @@ export function usePagedList<T>(options: {
   // 而 `reset()` 会**同步清空 items** ⇒ 列表被骨架屏替换 ⇒ 容器高度塌陷 ⇒
   // 浏览器把 scrollTop 钳到 0 —— 用户往下翻之后会被反复**弹回顶部**。
   // `refresh()` 保留当前列表并按已加载条数重取，滚动位置不受影响。
+  /** 上一轮真正开始的时刻 / 已排队的尾部刷新。 */
+  const lastRefreshAtRef = useRef(0)
+  const trailingRef = useRef<number | undefined>(undefined)
+
+  /**
+   * 事件驱动的后台刷新：先过节流门，不可见就不发，被合并掉的那一次排成**尾部刷新**。
+   *
+   * 「丢弃」与「合并」的差别是要害：只丢掉事件的话，面板会一直停在旧数据上
+   * （再也没有人触发刷新）—— 那不是省请求，那是把省请求换成了看不见的过期。
+   */
+  const maybeBackgroundRefresh = useCallback((): void => {
+    const gate = refreshGate({
+      now: Date.now(),
+      lastStartedAt: lastRefreshAtRef.current,
+      hidden: typeof document !== 'undefined' && document.hidden === true,
+      minIntervalMs: refreshMinIntervalMs ?? REFRESH_MIN_INTERVAL_MS,
+    })
+    if (gate.go) { refresh(); return }
+    if (gate.waitMs <= 0 || trailingRef.current !== undefined) return
+    trailingRef.current = window.setTimeout(() => {
+      trailingRef.current = undefined
+      refresh()
+    }, gate.waitMs)
+  }, [refresh, refreshMinIntervalMs])
+
+  // 窗口从后台切回前台时补一次：期间攒下的变更在这里落地（而不是每 10 秒打一轮）。
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const onVisible = (): void => { if (document.hidden !== true) refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { document.removeEventListener('visibilitychange', onVisible) }
+  }, [refresh])
+
+  useEffect(() => () => {
+    if (trailingRef.current !== undefined) window.clearTimeout(trailingRef.current)
+  }, [])
+
   useWechatDataUpdated(() => {
-    refresh()
-  })
+    maybeBackgroundRefresh()
+  }, 'dsh-wechat-data-updated', refreshDebounceMs ?? 300)
 
   return {
     items,

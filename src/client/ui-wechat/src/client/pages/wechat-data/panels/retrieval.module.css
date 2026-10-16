@@ -1,6 +1,6 @@
 /* 检索漏斗行 + 回答反馈行的样式（挂在每条 AI 回答下方）。
    ⚠️ 历史上这里是「检索设置面板」的样式表；该面板已于 2026-09-17 从界面移除
-   （检索参数固化为内置默认，见 docs/rag/RAG-ARCHITECTURE.md §11）。
+   （检索参数固化为内置默认；原 docs/rag/RAG-ARCHITECTURE.md 已删除，原文见 git 历史）。
    面板专属的类名（wrap / stat 系列 / group / row 系列 / switch / num / text /
    actions / btn 系列 / msg 系列 / report / fbList / fbRow / fbMark / fbQ）
    已一并删除，只保留 Ask 仍在引用的部分。
@@ -12,14 +12,14 @@
 /* ───────── 回答反馈行（挂在每条 AI 回答下方）───────── */
 .fbBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fbBtn {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 24px; padding: 0 9px; font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 8px; font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-3); background: transparent;
-  border: 0.5px solid var(--nm-border); border-radius: 999px; cursor: pointer;
+  border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-pill); cursor: pointer;
   transition: var(--nm-t-ui);
 }
 .fbBtn:hover:enabled { color: var(--nm-text-1); border-color: var(--nm-border-hover); background: var(--nm-bg-hover); }
-.fbBtn:disabled { opacity: 0.45; cursor: default; }
+.fbBtn:disabled { opacity: 0.5; cursor: default; }
 .fbBtn[data-on] { color: var(--nm-cyan); border-color: color-mix(in srgb, var(--nm-cyan) 45%, transparent); background: color-mix(in srgb, var(--nm-cyan) 10%, transparent); }
 .fbBtn[data-on="down"] { color: var(--nm-danger); border-color: color-mix(in srgb, var(--nm-danger) 45%, transparent); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
 .fbDone { font-size: 11px; color: var(--nm-success); }
@@ -29,7 +29,7 @@
 .markPanel {
   display: flex; flex-direction: column; gap: 6px;
   margin-top: 2px; padding: 8px 10px;
-  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: 8px;
+  background: var(--nm-bg-0); border: 0.5px solid var(--nm-border); border-radius: var(--nm-dense-r);
 }
 .markGrid { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
 .markRow { display: flex; align-items: center; gap: 8px; }
@@ -38,9 +38,9 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .markToggle {
-  flex: 0 0 auto; height: 20px; padding: 0 7px; font-size: 11px;
+  flex: 0 0 auto; height: 20px; padding: 0 8px; font-size: 11px;
   color: var(--nm-text-3); background: transparent;
-  border: 0.5px solid var(--nm-border); border-radius: 5px; cursor: pointer;
+  border: 0.5px solid var(--nm-border); border-radius: var(--nm-r-sm); cursor: pointer;
 }
 .markToggle[data-on="useful"] { color: var(--nm-success); border-color: color-mix(in srgb, var(--nm-success) 50%, transparent); background: color-mix(in srgb, var(--nm-success) 10%, transparent); }
 .markToggle[data-on="useless"] { color: var(--nm-danger); border-color: color-mix(in srgb, var(--nm-danger) 50%, transparent); background: color-mix(in srgb, var(--nm-danger) 10%, transparent); }
@@ -51,7 +51,7 @@
   font-size: 11px; color: var(--nm-text-3);
 }
 .retrChip {
-  padding: 1px 6px; border-radius: 4px;
+  padding: 1px 6px; border-radius: var(--nm-r-xs);
   background: color-mix(in srgb, var(--nm-text-1) 6%, transparent);
   font-variant-numeric: tabular-nums;
 }

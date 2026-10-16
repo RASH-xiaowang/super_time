@@ -27,7 +27,7 @@ const { registerMiscIpc } = require(join(HERE, '..', 'ipc-misc.js'))
 /** 该模块负责的频道（与拆分前 main.js 里的注册一一对应）。 */
 const HANDLE = [
   'diag:log-info', 'diag:export-log', 'diag:reveal-log',
-  'app:versions', 'app:ping', 'app:test-mode', 'app:debug-gates',
+  'app:versions', 'app:ping', 'app:test-mode', 'app:run-mode', 'app:debug-gates',
   'license:status', 'license:export-request', 'license:import', 'license:import-text', 'license:remove',
   'dialog:open-file', 'dialog:open-directory', 'dialog:save-file',
   'shell:show-item',
@@ -40,6 +40,10 @@ function ctx(handled: string[], onned: string[]) {
     ipcMain: {
       handle: (ch: string) => { handled.push(ch) },
       on: (ch: string) => { onned.push(ch) },
+    },
+    ipcTrust: {
+      wrap: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
+      wrapOn: (_ch: string, fn: (...a: unknown[]) => unknown) => fn,
     },
     app: { getVersion: () => '0.0.0', isPackaged: false, getPath: () => '/tmp', getName: () => 'Super Time', on: () => {} },
     dialog: { showSaveDialog: async () => ({ canceled: true }), showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },

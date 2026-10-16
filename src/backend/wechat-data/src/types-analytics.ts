@@ -36,6 +36,67 @@ export interface DbHealthStore {
   size: number
 }
 
+/**
+ * 一个库在「完整性体检」里的结论条目（`checkDecryptedIntegrity`）。
+ *
+ * `file` 一律是**相对解密根**的路径（`message/message_0.db`）—— 与
+ * `decryptAllDbs` 的 rel 键同构，修复链路直接把这里出来的路径喂给它。
+ */
+export interface DbIntegrityIssue {
+  file: string
+  error: string
+}
+
+/**
+ * 逐库完整性体检结果（`PRAGMA integrity_check`）。
+ *
+ * 三类分开报，因为**下一步动作完全不同**：
+ *   · `corrupted` —— 确实损坏（或一打开就是 NOTADB、或旁边躺着上一代残留的 `-wal`）
+ *     ⇒ 点「修复」：先在本地清掉残留旁文件，仍坏的才从原始库重新解密；
+ *   · `unreadable` —— 这一刻压根没体检成（被占用 / 权限 / 路径没了）⇒ **不是损坏**，
+ *     把它算进 corrupted 会驱动一次注定失败的重解密，还把「修好了」说成真的；
+ *   · `uncheckable` —— **这个库本机体检不了**：它含虚拟表，而那张表用的模块/分词器
+ *     （微信自带的 `MMFtsTokenizer` 这类）编在微信里、不在本机 SQLite 里，
+ *     `PRAGMA integrity_check` 要实例化它 ⇒ 必然 SQLITE_ERROR（面板上就是
+ *     `SQL logic error`）。**不是损坏、也不是占用**，退出微信也没用（2026-10-13 真机：
+ *     三个 `*_fts.db` 被旧文案说成「多半被微信独占」，用户照着做只会白等）。
+ */
+export interface DbIntegrityResult {
+  /** 体检了几个库（含 corrupted / unreadable / uncheckable）。 */
+  checked: number
+  corrupted: DbIntegrityIssue[]
+  unreadable: DbIntegrityIssue[]
+  uncheckable: DbIntegrityIssue[]
+}
+
+/**
+ * 损坏库修复结果（`repairCorruptDbs`：体检 → 本地清残留 → 只重解密仍坏的那几个 → 复检）。
+ *
+ * `found` / `repaired` / `stillCorrupted` 三个计数回答同一个问题：「修之前坏的几个，
+ * 现在好了几个」—— 只报「成功 N 个」不说「原来坏几个、还剩几个坏」，用户就无法判断
+ * 该不该再点一次修复。
+ */
+export interface DbRepairResult {
+  ok: boolean
+  /** 修复前那次体检覆盖的库数。 */
+  checked: number
+  /** 修复前发现几个损坏。 */
+  found: number
+  /** 修复后恢复的几个（含**只清本地残留旁文件**就恢复的）。 */
+  repaired: number
+  /** 修了仍坏的（重解密跑完复检不过）。 */
+  stillCorrupted: DbIntegrityIssue[]
+  /** 重新解密这一步就失败的文件（密钥 / 占用 / 权限）。 */
+  failed: Array<{ db: string; error: string }>
+  /** 原始 db_storage 里找不到对应文件、修不了的。 */
+  unrepairable: Array<{ file: string; reason: string }>
+  /** 复检时没能体检的文件（占用 / 权限）。 */
+  unreadable: DbIntegrityIssue[]
+  /** 复检时本机体检不了的文件（缺模块/分词器，见 {@link DbIntegrityResult}）。 */
+  uncheckable: DbIntegrityIssue[]
+  error?: string
+}
+
 /** Data health snapshot: decrypted DB walk + plugin stores + index status. */
 export interface DbHealthSnapshot {
   dbFiles: number

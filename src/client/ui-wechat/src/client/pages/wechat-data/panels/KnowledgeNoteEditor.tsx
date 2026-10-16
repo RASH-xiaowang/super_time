@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiSaveNote, apiSuggestKbLinks } from '../api.ts'
 import type { KbLinkSuggestResult } from '../types.ts'
-import { Button, Dialog, Select } from '../ui/kit.tsx'
+import { Button, Dialog, ErrorState, Select } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
 import css from './note-editor.module.css'
 
@@ -300,7 +300,7 @@ export function KnowledgeNoteEditor(props: {
           ? <>将建立 {links.length} 条链接：{links.join('、')}（目标笔记不存在时会先记为「待补笔记」，之后再补）</>
           : '还没有 [[链接]]。链接是知识图谱里唯一的边来源。'}
       </div>
-      {error && <div className={css.error} role="alert">⚠️ {error}</div>}
+      {error && <ErrorState message={`⚠️ ${error}`} />}
     </Dialog>
   )
 }

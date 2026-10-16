@@ -58,20 +58,21 @@ function seedRoot(root: string, revoked: number): void {
 }
 
 describe('queryOverview', () => {
-  it('sums revoked counts across all message shards', () => {
+  it('sums revoked counts across all message shards', async () => {
     const root = tempRoot()
     seedRoot(root, 3)
-    const snap = queryOverview(root)
+    // 2026-09-28：`queryOverview` 改 async（逐张分片找反撤回表要让出）⇒ 跟着 await。
+    const snap = await queryOverview(root)
     expect(snap.revoked).toBe(3)
     expect(snap.sessions).toBe(2)
     expect(snap.contacts).toBe(2)
     expect(snap.moments).toBe(1)
   })
 
-  it('recomputes the aggregate after a shard is rewritten', () => {
+  it('recomputes the aggregate after a shard is rewritten', async () => {
     const root = tempRoot()
     seedRoot(root, 3)
-    expect(queryOverview(root).revoked).toBe(3)
+    expect((await queryOverview(root)).revoked).toBe(3)
     // 重写 message_1.db：指纹变化，下一次查询必须重新聚合而不是吃旧缓存。
     rmSync(join(root, 'message', 'message_1.db'))
     makeDb(join(root, 'message', 'message_1.db'), (db) => {
@@ -79,14 +80,14 @@ describe('queryOverview', () => {
       const ins = db.prepare('INSERT INTO _weflow_anti_revoke_deleted_cache (data) VALUES (?)')
       for (let i = 0; i < 5; i += 1) ins.run('y' + String(i))
     })
-    expect(queryOverview(root).revoked).toBe(5)
+    expect((await queryOverview(root)).revoked).toBe(5)
   })
 
-  it('invalidateWechatMeta drops the aggregate cache', () => {
+  it('invalidateWechatMeta drops the aggregate cache', async () => {
     const root = tempRoot()
     seedRoot(root, 2)
-    expect(queryOverview(root).revoked).toBe(2)
+    expect((await queryOverview(root)).revoked).toBe(2)
     invalidateWechatMeta()
-    expect(queryOverview(root).revoked).toBe(2)
+    expect((await queryOverview(root)).revoked).toBe(2)
   })
 })

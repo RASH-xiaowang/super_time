@@ -7,9 +7,10 @@
  */
 import { apiGetEmoticonDataUrl, apiGetImageDataUrl, apiGetImageOriginal, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiOpenPath, apiTranscribeVoiceMessage } from '../api.ts'
 import kitCss from '../ui/kit.module.css'
-import { clickableKey, useDialogFocus } from '../ui/kit.tsx'
+import { clickableKey, ErrorState, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { RemoteImg } from './remote-img.tsx'
-import { CardFoot } from './chats-cards.tsx'
+import { recallImage, rememberImage } from '../image-cache.ts'
+import { CardFoot } from './chats-card-foot.tsx'
 import { IconCallMissedOutline, IconCallOutline, IconImage, IconMinus } from './chats-support.tsx'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
@@ -69,15 +70,24 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
   // 媒体查看器是 createPortal 出去的覆盖层，同样需要把焦点收进来并锁在里面。
   useDialogFocus(!!item, '[data-st-dialog="chats-viewer"]')
 
+  /*
+   * Esc 关闭（R7 收编）。
+   *
+   * 此前这里是一段**自己写的** keydown 监听：`if (e.key === 'Escape') onClose()`。
+   * 能关，但**不进 `escStack`** —— 全局其它手写覆盖层都走 kit 的栈（只让最上层响应），
+   * 只有它游离在外。后果：查看器之上再叠一层弹窗时，一次 Esc 会把两层一起关掉。
+   * 现在 Esc 交给 `useEscapeToClose`（自动入栈、退栈、只响应最上层），
+   * 这里只保留查看器**专属**的方向键翻页。
+   */
+  useEscapeToClose(!!item, onClose)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-      else if (e.key === 'ArrowLeft') onIndexChange((index - 1 + images.length) % images.length)
+      if (e.key === 'ArrowLeft') onIndexChange((index - 1 + images.length) % images.length)
       else if (e.key === 'ArrowRight') onIndexChange((index + 1) % images.length)
     }
     window.addEventListener('keydown', onKey)
     return () =>{  window.removeEventListener('keydown', onKey) }
-  }, [onClose, onIndexChange, index, images.length])
+  }, [onIndexChange, index, images.length])
 
   const zoomBy = (f: number): void =>{  setZoom(z => Math.min(Math.max(z * f, 0.25), 8)) }
   const reset = (): void => { setZoom(1); setOff({ x: 0, y: 0 }) }
@@ -109,7 +119,7 @@ export function ImageViewer({ images, index, onClose, onIndexChange }: {
       </div>
       <div className={cssrows.viewerStage}>
         {loading && !src && !vErr && <div className={cssrows.viewerMsg}>加载中…</div>}
-        {vErr && <div className={cssrows.viewerMsg}>{vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图（需系统 HEVC 解码）' : vErr}</div>}
+        {vErr && <ErrorState message={vErr === 'hevc-unsupported' ? '🖼️ wxgf 原图未转码：本机未找到微信解码库（VoipEngine.dll）' : vErr} />}
         {src && (
           <img
             src={src}
@@ -442,9 +452,7 @@ export function MessageVideo({ m, selfName }: { m: WechatMessage; selfName: stri
     apiGetVideoInfo({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
-        // videoPath 是后端新增字段；types 包在 node_modules 里是旧副本（既有的 48 条类型错误同源），
-        // 这里按运行时读，不为了一个字段去动那份副本。
-        const path = (r as { videoPath?: string }).videoPath
+        const path = r.videoPath
         if (path) setVideoPath(path)
         if (r.coverUrl) setCover(r.coverUrl)
         else setVErr(r.error === 'hevc-unsupported' ? 'wxgf/HEVC 封面（需系统解码）' : (r.error ?? '视频不可用'))
@@ -567,30 +575,62 @@ export function MessageCall({ m }: { m: WechatMessage }): React.JSX.Element {
  * 另一类 `cdnbigimgurl` 需要微信登录态，本应用不做。而「这条属于哪一种」只有查过 XML
  * 才知道，所以按钮常在、取不到时把**具体原因**显示出来，而不是一句「失败」。
  */
+/** 骨架显示多久之后才补一句文字提示（毫秒）。正常网络远够，弱网也不至于一直无声。 */
+const SLOW_MS = 2500
+
 export function MessageImage({ m, selfName, onOpen }: {
   m: WechatMessage
   selfName: string
   onOpen?: (m: WechatMessage) => void
 }): React.JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
+  // **首帧就查缓存**（lazy 初值）：命中时同步拿到地址，这一帧直接是图片、不闪占位 ——
+  // 滚出视口再滚回来、切走再切回来，走的都是这条路。换消息（虚拟行复用节点）时惰性初值
+  // 不会重算，由下面 effect 里那次同样的查表纠正。
+  const [src, setSrc] = useState<string | null>(() => recallImage(selfName, m.localId)?.url ?? null)
   const [imgErr, setImgErr] = useState<string | null>(null)
-  const [isThumb, setIsThumb] = useState(false)
+  const [isThumb, setIsThumb] = useState(() => recallImage(selfName, m.localId)?.thumb ?? false)
   const [nonce, setNonce] = useState(0)
   const [fetching, setFetching] = useState(false)
   const [origNote, setOrigNote] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  /** 慢：只有超过阈值才露面。正常网络下它一直是 false ⇒ 界面上一个字的占位都没有。 */
+  const [slow, setSlow] = useState(false)
   useEffect(() => {
     let cancelled = false
+    // 命中内存缓存：一个请求都不发（nonce 变化 = 用户点了「取原图」，那一次必须重取）
+    const hit = recallImage(selfName, m.localId)
+    if (hit !== undefined && nonce === 0) {
+      setSrc(hit.url)
+      setIsThumb(hit.thumb)
+      setImgErr(null)
+      setLoaded(false)
+      return () => { cancelled = true }
+    }
     setSrc(null)
     setImgErr(null)
+    setLoaded(false)
     apiGetImageDataUrl({ username: selfName, localId: m.localId })
       .then((r) => {
         if (cancelled) return
-        if (r.url) { setSrc(r.url); setIsThumb(r.thumb === true) }
-        else setImgErr(r.error ?? '图片不可用')
+        if (r.url) {
+          const thumb = r.thumb === true
+          setSrc(r.url)
+          setIsThumb(thumb)
+          // 写进缓存：**这次之后**再遇到同一条（滚回来、切会话回来）就不用再取一次。
+          // 只写成功结果 —— 失败不写，免得「这次没取到」被记成「已知没图」。
+          rememberImage(selfName, m.localId, { url: r.url, thumb })
+        } else setImgErr(r.error ?? '图片不可用')
       })
       .catch((e: unknown) => { if (!cancelled) setImgErr((e as Error).message) })
     return () => { cancelled = true }
   }, [selfName, m.localId, nonce])
+
+  /** 超过 {@link SLOW_MS} 还没拿到图 → 说一句；拿到或出错就撤掉那句。 */
+  useEffect(() => {
+    if (src !== null || imgErr !== null) { setSlow(false); return }
+    const t = window.setTimeout(() => { setSlow(true) }, SLOW_MS)
+    return () => { window.clearTimeout(t) }
+  }, [src, imgErr, nonce])
 
   /** 取回的原图会落进后端解码路径优先读的那个缓存槽，所以成功后只需重跑一次取图。 */
   const getOriginal = async (): Promise<void> => {
@@ -620,12 +660,28 @@ export function MessageImage({ m, selfName, onOpen }: {
     )
   }
   if (!src) {
-    return <div className={`${css.msgBubble} ${css.msgBubbleTight}`}><span className={kitCss.textMeta}><IconImage /> 图片加载中…</span></div>
+    // 骨架（呼吸动画）而不是「图标 + 图片加载中…」：后者在图片密集的会话里整屏都是那句话，
+    // 而且每张图都要闪一次。骨架表达同一件事（还在取），但不占阅读注意力；
+    // 只有真的慢（弱网）才补一句，正常网络下**一个字的文字都没有**。
+    return (
+      <div className={`${css.msgBubble} ${css.msgBubbleTight}`}>
+        <div className={css.msgImageSkeleton} aria-hidden="true" />
+        {slow && <span className={kitCss.textMeta}>加载较慢…</span>}
+      </div>
+    )
   }
   return (
     <>
       <div className={`${css.msgBubble} ${css.msgBubbleZoom}`} {...clickableKey(() => { if (onOpen) onOpen(m) }, { label: '查看大图' })}>
-        <img src={src} alt="图片" className={css.msgImage} loading="lazy" />
+        <img
+          src={src}
+          alt="图片"
+          className={css.msgImage}
+          loading="lazy"
+          decoding="async"
+          data-loaded={loaded ? '1' : undefined}
+          onLoad={() => { setLoaded(true) }}
+        />
       </div>
       <div className={cssrows.msgFileHint}>
         {isThumb && <span className={kitCss.textMeta}>本机只有缩略图 </span>}

@@ -5,6 +5,8 @@
  * 每个按钮都提供结果反馈：全局 toast（成功/失败/提示）+ 逐动作 loading 态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useWechatDataUpdated } from './hooks.tsx'
+import { copyTextToClipboard } from '../utils/misc.ts'
 import {
   apiDeleteSummaryRecord,
   apiDeleteSummaryTask,
@@ -21,7 +23,7 @@ import {
   writeRenderCache,
 } from '../api.ts'
 import type { SummaryRecord, SummaryTask, SummaryTaskInput } from '@deepseek-ai/dsh-wechat-data/types'
-import { Badge, DateField, PanelHeader, TimeField, useEscapeToClose, useDialogFocus } from '../ui/kit.tsx'
+import { Badge, DateField, ErrorState, PanelHeader, TimeField, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './daily-summary.module.css'
 import { fmtLocaleMs } from '../utils/format.ts'
@@ -58,6 +60,16 @@ interface DailyStats {
   hourly: number[]
   topSessions: Array<{ username: string; count: number }>
   sessions: number
+}
+
+/**
+ * 初载 + WAL 推送静默重取（2026-10-13）。模块级：`DailySummaryPanel` 有 588 行
+ * 只许变小棘轮，这段逻辑放进函数体会把它顶过登记值 —— 按仓库规矩搬成模块级 hook。
+ * @param reload - 任务与记录的重取函数。
+ */
+function useDailySummaryTasks(reload: () => Promise<void>): void {
+  useEffect(() => { void reload() }, [reload])
+  useWechatDataUpdated(() => { void reload() })
 }
 
 /**
@@ -118,7 +130,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
   }, [])
   const copyResult = useCallback((): void => {
     if (!result) { notify('info', '暂无可复制的总结内容'); return }
-    void navigator.clipboard.writeText(result).then(() =>{  notify('ok', '已复制总结到剪贴板') }).catch(() =>{  notify('err', '复制失败') })
+    void copyTextToClipboard(result).then((ok) => { notify(ok ? 'ok' : 'err', ok ? '已复制总结到剪贴板' : '复制失败') })
   }, [result, notify])
 
   const loadTasks = useCallback(async (): Promise<void> => {
@@ -143,7 +155,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
     } catch { /* keep */ }
   }, [])
 
-  useEffect(() => { void loadTasks() }, [loadTasks])
+  useDailySummaryTasks(loadTasks)
 
   // 读一次模型配置（读的是本机 llm.json，很轻）：空态要用它告诉用户"还差哪一步"。
   useEffect(() => {
@@ -276,10 +288,8 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
 
   const copyRecord = async (r: SummaryRecord): Promise<void> => {
     await withBusy(`copy:${r.id}`, async () => {
-      try {
-        await navigator.clipboard.writeText(r.summary || '')
-        notify('ok', '已复制总结到剪贴板')
-      } catch { notify('err', '复制失败') }
+      const ok = await copyTextToClipboard(r.summary || '')
+      notify(ok ? 'ok' : 'err', ok ? '已复制总结到剪贴板' : '复制失败')
     })
   }
 
@@ -337,7 +347,7 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
           </>
         )}
       />
-      {error && <div className={css.errBanner}>⚠️ {error}</div>}
+      {error && <ErrorState message={`⚠️ ${error}`} />}
       {toasts.length > 0 && (
         <div className={css.toasts}>
           {toasts.map(t => (

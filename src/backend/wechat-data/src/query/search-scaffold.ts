@@ -8,14 +8,15 @@
  */
 
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from './db-open.ts'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { decompress } from 'fzstd'
 import type { SearchHit } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
-import { ensureSearchIndex, listMessagesInRange } from './search-build.ts'
-import { formatFullTime, senderLabel, splitGroupPrefix } from './search-query.ts'
+import { withDb } from './db-open.ts'
+import { senderLabel, splitGroupPrefix } from './search-display.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /**
  * WeChat full-text message search index (FTS5), rewritten from st_control
@@ -145,11 +146,11 @@ export function indexReady(decryptedDir: string): boolean {
   const p = searchIndexPath(decryptedDir)
   if (!existsSync(p)) return false
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const rows = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
-    const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value?: string } | undefined
-    db.close()
-    return rows > 0 && ver?.value === INDEX_SCHEMA_VERSION
+    return withDb(p, (db) => {
+      const rows = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
+      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value?: string } | undefined
+      return rows > 0 && ver?.value === INDEX_SCHEMA_VERSION
+    })
   } catch {
     return false
   }
@@ -171,10 +172,10 @@ export function countIndexMatches(decryptedDir: string, term: string): number {
   const phrase = ftsPhrase(term)
   if (!phrase) return 0
   try {
-    const db = new DatabaseSync(searchIndexPath(decryptedDir), { readOnly: true })
-    const row = db.prepare('SELECT COUNT(*) AS c FROM message_fts WHERE message_fts MATCH ?').get(phrase) as { c: number }
-    db.close()
-    return Number(row?.c ?? 0)
+    return withDb(searchIndexPath(decryptedDir), (db) => {
+      const row = db.prepare('SELECT COUNT(*) AS c FROM message_fts WHERE message_fts MATCH ?').get(phrase) as { c: number }
+      return Number(row?.c ?? 0)
+    })
   } catch {
     return -1
   }
@@ -210,35 +211,35 @@ export function searchIndexBatch(
   if (parts.length === 0) return { hits: [], ranked: false }
   const match = parts.join(' OR ')
   try {
-    const db = new DatabaseSync(searchIndexPath(decryptedDir), { readOnly: true })
-    const sql = 'SELECT m.text, m.username, m.create_time, m.local_id, bm25(message_fts) AS score'
-      + ' FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid'
-      + ' WHERE message_fts MATCH ?'
-      + (opts?.username ? ' AND m.username = ?' : '')
-      + ' ORDER BY rank LIMIT ?'
-    const args: Array<string | number> = opts?.username ? [match, opts.username, limit] : [match, limit]
-    const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
-    db.close()
-    const names = loadDisplayNames(decryptedDir)
-    const hits = rows.map((r) => {
-      const text = decodeCell(r['text'])
-      const username = decodeCell(r['username'])
-      const createTime = Number(r['create_time'] ?? 0)
-      const { sender, body: display } = splitGroupPrefix(text, username)
-      return {
-        text,
-        username,
-        create_time: createTime,
-        local_id: Number(r['local_id'] ?? 0),
-        name: names.get(username) ?? username,
-        time: formatFullTime(createTime),
-        snippet: display.slice(0, 120),
-        sender: senderLabel(sender, names),
-        // bm25() 越小越相关，取负号变成「越大越相关」
-        score: -Number(r['score'] ?? 0),
-      }
+    return withDb(searchIndexPath(decryptedDir), (db) => {
+      const sql = 'SELECT m.text, m.username, m.create_time, m.local_id, bm25(message_fts) AS score'
+        + ' FROM message_fts JOIN message_meta m ON m.rowid = message_fts.rowid'
+        + ' WHERE message_fts MATCH ?'
+        + (opts?.username ? ' AND m.username = ?' : '')
+        + ' ORDER BY rank LIMIT ?'
+      const args: Array<string | number> = opts?.username ? [match, opts.username, limit] : [match, limit]
+      const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>
+      const names = loadDisplayNames(decryptedDir)
+      const hits = rows.map((r) => {
+        const text = decodeCell(r['text'])
+        const username = decodeCell(r['username'])
+        const createTime = Number(r['create_time'] ?? 0)
+        const { sender, body: display } = splitGroupPrefix(text, username)
+        return {
+          text,
+          username,
+          create_time: createTime,
+          local_id: Number(r['local_id'] ?? 0),
+          name: names.get(username) ?? username,
+          time: fmtDateTimeSec(createTime),
+          snippet: display.slice(0, 120),
+          sender: senderLabel(sender, names),
+          // bm25() 越小越相关，取负号变成「越大越相关」
+          score: -Number(r['score'] ?? 0),
+        }
+      })
+      return { hits, ranked: true }
     })
-    return { hits, ranked: true }
   } catch {
     return { hits: [], ranked: false }
   }
@@ -293,17 +294,17 @@ export function loadSessionUsernames(decryptedDir: string): string[] {
   if (!existsSync(dbPath)) return []
   const out: string[] = []
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-    const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-      for (const r of rows) {
-        const u = decodeCell(r['username']).trim()
-        if (u) out.push(u)
+    withDb(dbPath, (db) => {
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
+        for (const r of rows) {
+          const u = decodeCell(r['username']).trim()
+          if (u) out.push(u)
+        }
       }
-    }
-    db.close()
+    })
   } catch {
     // session.db unavailable
   }
@@ -317,17 +318,17 @@ export function loadDisplayNames(decryptedDir: string): Map<string, string> {
   const sessionDb = join(decryptedDir, 'session', 'session.db')
   if (existsSync(sessionDb)) {
     try {
-      const db = new DatabaseSync(sessionDb, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionNoContactInfoTable'").get() !== undefined
-      if (has) {
-        const rows = db.prepare('SELECT username, session_title FROM SessionNoContactInfoTable').all() as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const u = decodeCell(r['username'])
-          const t = decodeCell(r['session_title']).trim()
-          if (u && t && !names.has(u)) names.set(u, t)
+      withDb(sessionDb, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionNoContactInfoTable'").get() !== undefined
+        if (has) {
+          const rows = db.prepare('SELECT username, session_title FROM SessionNoContactInfoTable').all() as Array<Record<string, unknown>>
+          for (const r of rows) {
+            const u = decodeCell(r['username'])
+            const t = decodeCell(r['session_title']).trim()
+            if (u && t && !names.has(u)) names.set(u, t)
+          }
         }
-      }
-      db.close()
+      })
     } catch {
       // session.db unavailable
     }
@@ -366,12 +367,12 @@ export function getSearchIndexStatus(decryptedDir: string): { exists: boolean; r
   const p = searchIndexPath(decryptedDir)
   if (!existsSync(p)) return { exists: false, rows: 0, built_at: null, ready: false }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const rows = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
-    const built = db.prepare("SELECT value FROM meta WHERE key='built_at'").get() as { value?: string } | undefined
-    const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value?: string } | undefined
-    db.close()
-    return { exists: true, rows, built_at: built?.value ?? null, ready: rows > 0 && ver?.value === INDEX_SCHEMA_VERSION }
+    return withDb(p, (db) => {
+      const rows = (db.prepare('SELECT COUNT(*) AS c FROM message_meta').get() as { c: number }).c
+      const built = db.prepare("SELECT value FROM meta WHERE key='built_at'").get() as { value?: string } | undefined
+      const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value?: string } | undefined
+      return { exists: true, rows, built_at: built?.value ?? null, ready: rows > 0 && ver?.value === INDEX_SCHEMA_VERSION }
+    })
   } catch {
     return { exists: true, rows: 0, built_at: null, ready: false }
   }
@@ -405,12 +406,12 @@ export function getSearchIndexFreshness(decryptedDir: string): SearchIndexFreshn
   const p = searchIndexPath(decryptedDir)
   if (existsSync(p)) {
     try {
-      const db = new DatabaseSync(p, { readOnly: true })
-      const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(REFRESHED_KEY) as { value?: string } | undefined
-      refreshedMs = Number(r?.value ?? 0) || 0
-      const m = (db.prepare('SELECT MAX(create_time) AS m FROM message_meta').get() as { m: number | null }).m
-      latestIndexedTime = Number(m ?? 0)
-      db.close()
+      withDb(p, (db) => {
+        const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(REFRESHED_KEY) as { value?: string } | undefined
+        refreshedMs = Number(r?.value ?? 0) || 0
+        const m = (db.prepare('SELECT MAX(create_time) AS m FROM message_meta').get() as { m: number | null }).m
+        latestIndexedTime = Number(m ?? 0)
+      })
     } catch { /* 读不到就当成「从未刷新」→ 交给 ensureSearchIndex 处理 */ }
   }
   let staleShards = 0
@@ -426,10 +427,17 @@ export function getSearchIndexFreshness(decryptedDir: string): SearchIndexFreshn
 
 /** 提问前的「索引可用且新鲜」保证结果。 */
 export interface EnsureIndexResult {
-  /** 本次实际做了什么：全量构建 / 增量同步 / 无需动作。 */
-  action: 'build' | 'sync' | 'none'
+  /**
+   * 本次实际做了什么：全量构建 / 增量同步 / 无需动作 / **开跑后台构建、本轮不等**。
+   *
+   * `deferred` 只在「索引压根不可用而全量构建挪到了后台」时出现（见 `ensureSearchIndex`
+   * 的注释与那张实测表）。此时 `message` 就是给界面的那句话。
+   */
+  action: 'build' | 'sync' | 'none' | 'deferred'
   rows?: number
   added?: number
+  /** 本次增量前有多少个分片比索引新（0 = 索引是新的）。给界面解释「为什么要同步」。 */
+  staleShards?: number
   elapsed_ms: number
   message?: string
 }

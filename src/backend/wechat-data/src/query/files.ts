@@ -4,9 +4,11 @@
  * joined to contact.db display names, so the read-only file grid can show where a
  * media asset came from instead of only a hash name.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
+import { MD5_FIND_RE, isMd5Loose } from '../md5.ts'
+import { sqliteChangeCounter } from './file-sig.ts'
 import { createHash } from 'node:crypto'
 import { contactMeta } from './meta.ts'
 
@@ -61,7 +63,7 @@ function packedBytes(v: unknown): Uint8Array {
 /** Extract a 32-char lowercase hex file key from packed_info. */
 function fileKeyFromPacked(packed: unknown): string | null {
   const latin = Buffer.from(packedBytes(packed)).toString('latin1')
-  const m = /[0-9a-f]{32}/.exec(latin)
+  const m = MD5_FIND_RE.exec(latin)
   return m ? m[0] : null
 }
 
@@ -103,8 +105,9 @@ let fileSourcesCache: { sig: string; at: number; map: Map<string, { session: str
 
 function fileSourcesSig(decryptedDir: string): string {
   try {
-    const st = statSync(join(decryptedDir, 'message', 'message_resource.db'))
-    return `${st.mtimeMs}:${st.size}`
+    const st = statSync(join(decryptedDir, 'message', 'message_resource.db'), { bigint: true })
+    // 变更计数器：NTFS 对 mtime 懒刷新，插入一行可能**一个数字都不变**（所以签名里还带 SQLite 的变更计数器）
+    return `${st.mtimeNs}:${st.size}${sqliteChangeCounter(join(decryptedDir, 'message', 'message_resource.db'))}`
   } catch {
     return ''
   }
@@ -138,8 +141,8 @@ let dirSourceCache: { sig: string; at: number; month: Map<number, string>; talke
 function dirSourceCached(decryptedDir: string): { month: Map<number, string>; talker: Map<number, string> } {
   let sig = ''
   try {
-    const st = statSync(join(decryptedDir, 'hardlink', 'hardlink.db'))
-    sig = `${st.mtimeMs}:${st.size}`
+    const st = statSync(join(decryptedDir, 'hardlink', 'hardlink.db'), { bigint: true })
+    sig = `${st.mtimeNs}:${st.size}${sqliteChangeCounter(join(decryptedDir, 'hardlink', 'hardlink.db'))}`
   } catch { /* sig 为空时每次都重算 */ }
   if (dirSourceCache && sig !== '' && dirSourceCache.sig === sig && Date.now() - dirSourceCache.at < DIR_SOURCE_TTL_MS) {
     return dirSourceCache
@@ -162,7 +165,7 @@ function dirSourceCached(decryptedDir: string): { month: Map<number, string>; ta
         const v = cellStr(r.username)
         if (!rid || !v) continue
         if (/^\d{4}-\d{2}$/.test(v)) { month.set(rid, v); continue }
-        if (/^[0-9a-f]{32}$/i.test(v)) {
+        if (isMd5Loose(v)) {
           // 与既有 sessionName 口径一致：没有显示名时退回 username 本身
           const name = md5ToName.get(v.toLowerCase())
           if (name) talker.set(rid, name)

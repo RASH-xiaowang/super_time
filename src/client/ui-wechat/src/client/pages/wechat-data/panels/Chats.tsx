@@ -12,33 +12,38 @@ import { SessionAsk } from './SessionAsk.tsx'
 import { ReplySuggest } from './ReplySuggest.tsx'
 import { clickableKey, DateRangeField, Dialog, SearchInput, Segmented, useDialogFocus, useEscapeToClose } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
-import { apiBuildSearchIndex, apiCancelSearch, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetDailyCounts, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiBuildSearchIndex, apiCancelSearch, apiClearAllSessionDrafts, apiClearSessionDraft, apiEditChatMessage, apiExportSessionMessages, apiGetAvatar, apiGetAvatarsLocal, apiGetEmoticonDataUrl, apiGetGroupInfo, apiGetImageDataUrl, apiGetImageOriginal, apiGetMessageFile, apiGetMessages, apiGetNewMessages, apiGetPaymentStatus, apiGetSearchIndexStatus, apiGetSessions, apiGetVideoInfo, apiGetVoiceDataUrl, apiGetVoiceInfo, apiGetVoiceTranscript, apiListEditedMessages, apiOpenPath, apiResetEditedMessage, apiResolveChatHistory, apiSearchMessages, apiTranscribeVoiceMessage, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
 import type { ChatlogRecord, EditedMessageRecord, GroupInfo, GroupMember, MessageRenderKind as RenderKind, MessageRich, PaymentStatus, SearchHit, WechatMessage, WechatSession } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseOutline16,
   IconDataOutline16, IconDownloadOutline16, IconEllipsisOutline16,
-  IconFullscreenOutline16, IconLinkOutline14, IconListPenOutline16,
+  IconFullscreenOutline16, IconLinkOutline14,
   IconPlayOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconUserOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RainWindow } from './rain-window.tsx'
 import { ChatsView } from './chats-view.tsx'
+import type { MsgMenuAnchor } from './chats-msg-menu.tsx'
 import { useChatsThread } from './chats-thread.tsx'
 import { useChatsMsgSearch } from './chats-msg-search.tsx'
 import { useChatsGroupInfo } from './chats-group-info.tsx'
 import { useChatsEdit } from './chats-edit.tsx'
+import { useChatsCalendar } from './chats-calendar.ts'
 import { useChatsExport } from './chats-export.tsx'
 // 类型与值要分开转发：`ChatView`/`ViewerImage` 是 type，Rollup 找不到运行期导出会直接构建失败
 export type { ChatView } from './chats-support.tsx'
 export { isEnterpriseChat } from './chats-support.tsx'
+import { SESSIONS_REFRESH_MIN_INTERVAL_MS } from './chats-support.tsx'
 export type { ViewerImage } from './chats-media.tsx'
 import type { ChatView } from './chats-support.tsx'
-import { AVATAR_CACHE_MAX, Avatar, FILE_STYLE, IconCalendar, IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, IconPin, MsgMenuAction, MsgMenuItem, POLL_HIDDEN_MS, POLL_VISIBLE_MS, TransferArrowGlyph, TransferCheckGlyph, avatarCache, buildMsgMenu, decodeEntities, downloadMessageFile, estimateMsgItemHeight, fileStyle, isEnterpriseChat, isKefuSession, itemLocalId, liveStatusText, msgItemKey, openLink, quoteTypeLabel, sessionInView, transferStateKey, transferStatusLabel, unreadTitle } from './chats-support.tsx'
+import { AVATAR_CACHE_MAX, Avatar, FILE_STYLE, IconCalendar, IconCallMissedOutline, IconCallOutline, IconImage, IconMinus, IconPin, MsgMenuAction, MsgMenuItem, POLL_HIDDEN_MS, POLL_VISIBLE_MS, TransferArrowGlyph, TransferCheckGlyph, avatarCache, buildMsgMenu, copyTextWithNotice, decodeEntities, estimateMsgItemHeight, fileStyle, isEnterpriseChat, isKefuSession, itemLocalId, liveStatusText, msgItemKey, openLink, openMessageFileWithNotice, quoteTypeLabel, sessionInView, transferStateKey, transferStatusLabel, unreadTitle } from './chats-support.tsx'
 import { IconQuoteCard, IconVideoCallOutline, IconVoiceWaves, ImageViewer, MessageCall, MessageContact, MessageEmoticon, MessageImage, MessageImageGroup, MessageLocation, MessageSystem, MessageThumb, MessageVideo, MessageVoice, ViewerImage, currentVoiceAudio, fmtCallDuration, quoteKindIcon, voiceWidth } from './chats-media.tsx'
-import { CARD_KINDS, CardFoot, LabeledCard, LinkCard, MediaCoverCard, MessageBody, MpArticle, MpNewsCard, OpenFileCard, PayStatusLine, RichCard, mpArticlesOf } from './chats-cards.tsx'
-import { cacheBounded } from '../utils/misc.ts'
+import { CARD_KINDS, LabeledCard, LinkCard, MediaCoverCard, MessageBody, MpNewsCard, OpenFileCard, PayStatusLine, RichCard, mpArticlesOf } from './chats-cards.tsx'
+import { CardFoot } from './chats-card-foot.tsx'
+import { cacheBounded, copyTextToClipboard } from '../utils/misc.ts'
 import { MessageText } from '../utils/message-text.tsx'
 import { buildMessageItems, renderKindOf, type MessageRenderItem } from '../utils/message-items.ts'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useActionNotice } from './use-action-notice.tsx'
 import { proxyableSrc } from '../utils/url.ts'
 import kitCss from '../ui/kit.module.css'
 import css from './chats.module.css'
@@ -130,6 +135,8 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const [error, setError] = useState<string | null>(null)
 
   const [curSession, setCurSession] = useState<WechatSession | null>(null)
+  /** 单聊「聊天信息」抽屉（P2-6）：与 groupInfoOpen 对称的 private-only 状态。 */
+  const [contactInfoOpen, setContactInfoOpen] = useState(false)
   const [messages, setMessages] = useState<readonly WechatMessage[]>([])
   const [msgLoading, setMsgLoading] = useState(false)
   const [msgError, setMsgError] = useState<string | null>(null)
@@ -170,8 +177,22 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   const messagesTalkerRef = useRef<string | null>(null)
   /** ── 会话级 AI 面板（「新对话」）──
    *  入口在聊天头部；面板作为第三栏并排。读取范围**恒为当前会话**，线程按会话隔离。 */
-  /** 推荐回复面板（单聊）。与 AI 问答面板互斥：两者都是消息流右侧的第三栏。 */
+  /**
+   * 推荐回复面板（单聊）：**固定占右侧那一栏**（2026-09-25 起不再与 AI 问答互斥切换 ——
+   * 它成了右栏的默认内容，AI 问答打开时才临时顶替它）。
+   * 初值 false（2026-10-13 用户要求「进入聊天框后推荐回复面板和分析面板默认不显示」）：
+   * 进会话右栏不出现，由头部「推荐回复」按钮按需打开；开/关的选择在换会话时保留
+   * （头部按钮是唯一入口且一直在，不再需要靠重置保证可恢复）。
+   */
   const [suggestOpen, setSuggestOpen] = useState(false)
+  /**
+   * 右栏「分析」区块的展开/折叠（2026-09-26）。与推荐回复**各自独立**：
+   * 单聊可以只要分析、不要推荐回复（反之亦然）。
+   * 初值 false（2026-10-13 同上）：进会话不显示，由头部「分析」按钮按需打开。
+   */
+  const [analysisPaneOpen, setAnalysisPaneOpen] = useState(false)
+  /** 右栏「分析」区块在看哪条消息（localId）；`null` = 还没点选。 */
+  const [analysisTarget, setAnalysisTarget] = useState<number | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiFull, setAiFull] = useState(false)
   const [pollStatus, setPollStatus] = useState<string>('')
@@ -197,9 +218,9 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   )
 
   /**
-   * 开始一个会话：令牌自增（作废所有在途请求）并声明 `messages` 将归属该 talker。
-   * @param talker - 会话 username。
-   * @returns 本次令牌，供后续 `sessionAlive` 校验。
+   * 关闭当前会话并把归属令牌作废。用于切换分类视图（公众号/服务号/客服）：那三个类目互斥，
+   * 列表换类目后右侧绝不能留着上一类目的会话 —— 否则会在「客服」视图里看到某个公众号的聊天，
+   * 就是「别人的信息出现在这个界面」。依赖会话的浮层由调用方 `changeView` 一并收起。
    */
   const closeCurrentSession = useCallback((): void => {
     sessionEpochRef.current += 1
@@ -245,7 +266,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   ]
 
   const sessionsPager = usePagedList<WechatSession>({
-    pageSize: 120,
+    pageSize: 120, refreshMinIntervalMs: SESSIONS_REFRESH_MIN_INTERVAL_MS, refreshDebounceMs: 50,
     fetchPage: async (offset, limit) => {
       const env = await apiGetSessions({ limit, offset })
       return { items: env.sessions, total: env.total }
@@ -264,7 +285,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [sessionsPager.refresh])
 
   /** Clear the current session's draft (only the local decrypted copy). */
-  const { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
+  const { clearAllDrafts, clearDraft, closeEdit, copyMsgJson, doReset, editAreaRef, editBusy, editErr, editNotice, editTarget, editText, editedIds, editedOpen, editing, edits, loadEdits, msgMenu, onEditFn, openEdits, saveEdit, searchMode, sessionListRef, setEditText, setEditedOpen, setMsgMenu, setSearchMode } = useChatsEdit({ confirm, curSession, reloadSessionsList, selfWxid, sessionAlive, sessionEpochRef, setCursor, setCursorLocalId, setHasMore, setMessages, setSelfWxid, setTypeStats, setWatermarkFrom })
   const cancelActiveSearch = useCallback((): void => {
     const jobId = activeSearchJobRef.current
     activeSearchJobRef.current = null
@@ -273,82 +294,14 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
   }, [])
 
   // ── group chat info panel (群聊信息) ──
-  const { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers } = useChatsGroupInfo({  })
+  const { annExpanded, chatlogStack, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hideMemberProfile, memberExpanded, memberLimit, memberQuery, memberSearch, memberTotal, profileMember, profilePos, setAnnExpanded, setChatlogStack, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers } = useChatsGroupInfo({ talkerRef: messagesTalkerRef, sessionAlive, sessionEpochRef })
   const [annCanExpand, setAnnCanExpand] = useState(false)
   const annRef = useRef<HTMLDivElement | null>(null)
   const [chatlogResolving, setChatlogResolving] = useState(false)
   const { EXPO_FORMATS, batchExporting, batchMode, batchMsg, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportBatch, exportMsg, exportOpen, exportProgress, exportSession, exporting, openNestedChatlog, pickingDir, selected, setAvatarVersion, setBatchMode, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen, setSelected, togglePinned, toggleSelect } = useChatsExport({ EXPO_TYPES, chatlogResolving, curSession, setChatlogResolving, setChatlogStack, setPinnedCollapsed })
-  const { activeSearchJobRef, buildIndex, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen } = useChatsMsgSearch({ cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen })
+  const { activeSearchJobRef, buildIndex, cancelIndexBuild, indexProgress, calOpen, checkIndexStatus, indexBuilding, msgHits, msgIndexed, msgSearchError, msgSearchLoading, msgSearched, onSearchInput, setCalOpen } = useChatsMsgSearch({ cancelActiveSearch, chatlogStack, editedOpen, exportOpen, setChatlogStack, setEditedOpen, setExportOpen })
   const chatlogOpen = chatlogStack.at(-1) ?? null
-  const [calYear, setCalYear] = useState(new Date().getFullYear())
-  const [calMonth, setCalMonth] = useState(new Date().getMonth() + 1)
-  const [calCounts, setCalCounts] = useState<Record<string, number>>({})
-  const [calLoading, setCalLoading] = useState(false)
-
-  const calTotal = useMemo(() => Object.values(calCounts).reduce((a, b) => a + b, 0), [calCounts])
-  const calActiveDays = useMemo(() => Object.values(calCounts).filter(n => n > 0).length, [calCounts])
-  const calAvg = useMemo(() => (calActiveDays > 0 ? Math.round(calTotal / calActiveDays) : 0), [calTotal, calActiveDays])
-  const calTop = useMemo(() => {
-    let best = 0
-    let bestDay = 0
-    for (const [k, v] of Object.entries(calCounts)) {
-      const d = Number(k)
-      if (Number.isFinite(d) && v > best) { best = v; bestDay = d }
-    }
-    return best > 0 ? { day: bestDay, count: best } : null
-  }, [calCounts])
-  const calFirstDow = useMemo(() => {
-    const dow = new Date(calYear, calMonth - 1, 1).getDay()
-    return dow === 0 ? 6 : dow - 1
-  }, [calYear, calMonth])
-  const calDays = useMemo(() => new Date(calYear, calMonth, 0).getDate(), [calYear, calMonth])
-  const calHeat = (cnt: number): string => {
-    if (cnt <= 0) return 'transparent'
-    const alpha = Math.min(0.15 + cnt / 200, 0.85)
-    return 'rgba(34, 211, 238, ' + alpha.toFixed(3) + ')'
-  }
-
-  const openCalendar = useCallback(async (): Promise<void> => {
-    if (!curSession) return
-    setCalOpen(true)
-    setCalLoading(true)
-    setCalCounts({})
-    try {
-      const r = await apiGetDailyCounts({ username: curSession.username, year: calYear, month: calMonth })
-      setCalCounts(r.counts)
-    } catch (e) {
-      setMsgError((e as Error).message)
-    } finally {
-      setCalLoading(false)
-    }
-  }, [curSession, calYear, calMonth])
-
-  const switchCalMonth = useCallback(async (delta: number): Promise<void> => {
-    let m = calMonth + delta
-    let y = calYear
-    if (m < 1) { m = 12; y -= 1 }
-    if (m > 12) { m = 1; y += 1 }
-    setCalMonth(m)
-    setCalYear(y)
-    if (!curSession) return
-    setCalLoading(true)
-    setCalCounts({})
-    try {
-      const r = await apiGetDailyCounts({ username: curSession.username, year: y, month: m })
-      setCalCounts(r.counts)
-    } catch (e) {
-      setMsgError((e as Error).message)
-    } finally {
-      setCalLoading(false)
-    }
-  }, [curSession, calMonth, calYear])
-
-  const jumpToDay = useCallback((day: number): void => {
-    const startTs = Math.floor(new Date(calYear, calMonth - 1, day, 0, 0, 0, 0).getTime() / 1000)
-    setCalOpen(false)
-    if (curSession) void openSessionAndLocate(curSession.username, undefined, startTs)
-  }, [calYear, calMonth, curSession, calOpen])
-
+  
   const sessionSearch = searchMode === 'session' ? search : ''
   const sessionSearching = sessionSearch.trim() !== ''
   // 普通会话列表：分页逐页加载；会话搜索时一次性拉满 500 条（用户主动操作），保证搜索结果完整。
@@ -377,7 +330,7 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setError(sessionsPager.error)
   }, [sessionSearching, sessionsPager.items, sessionsPager.loading, sessionsPager.error])
 
-  const sessionsLoadMoreRef = useLazySentinel(() => { if (sessionsPager.hasMore && !sessionsPager.loadingMore) sessionsPager.loadMore() }, '600px 0px', () => sessionListRef.current)
+  const sessionsLoadMoreRef = useLazySentinel(() => { if (sessionsPager.hasMore && !sessionsPager.loadingMore) sessionsPager.loadMore() }, '600px 0px', () => sessionListRef.current, sessionsPager.items.length)
 
   // 搜索索引状态只在用户切到「消息搜索」时检查，进入页签不再触发。
   useEffect(() => { if (searchMode === 'message') void checkIndexStatus() }, [searchMode, checkIndexStatus])
@@ -476,45 +429,30 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
     setTimeout(() => { document.getElementById('msg-' + String(localId))?.scrollIntoView({ block: 'center' }) }, 80)
   }, [msgItems, msgVirtualizer])
   /**
-   * 渲染一个「消息渲染项」（日期分隔 / 系统行 / 普通气泡 / 图片组）。
-   *
-   * 从原来的内联循环里抽出来：虚拟化后每项要单独套一层定位容器，
-   * 而**行内结构必须保持原样**（`id="msg-<localId>"`、头像身份键、悬停时间戳这些
-   * 都被守卫与深链依赖）。
-   * @param item - `buildMessageItems` 的产物。
-   * @returns 行元素（日期分隔没有 id）。
+   * 当前 `messages` 是否确实属于正在显示的会话：`curSession` 与 `messages` 是两份 state，
+   * 中间必然有一段不一致的窗口 —— 归属不符时一律不渲染消息列表（显示骨架），
+   * 从根上杜绝「把上一个人的消息画在这个会话的标题下面」。
    */
   const messagesMatchSession = curSession !== null && messagesTalkerRef.current === curSession.username
 
-  /** Incremental poll: fetch messages newer than the watermark and append. */
-  const copyMsgText = useCallback((t: string): void => {
-    void navigator.clipboard.writeText(t).then(() => { window.alert('文本已复制') }).catch(() => { window.alert('复制失败') })
-  }, [])
+  const { notice: actionNotice, flash: flashActionNotice } = useActionNotice()
 
-  /**
-   * 右键菜单「打开文件」：同样要把消息自带的体积/时间透传给后端，
-   * 否则同名文件会在别的会话里随便挑一份。
-   * @param fileName - 文件名。
-   * @param m - 该消息（取 fileSize 与 createTime 作为归属线索）。
-   */
+  const copyMsgText = useCallback((t: string): void => { copyTextWithNotice(t, flashActionNotice) }, [flashActionNotice])
+
   const openFileFromMenu = useCallback((fileName: string, m: WechatMessage): void => {
-    const bytes = Number(m.rich?.fileSize)
-    const opts: { size?: number; createTime?: number } = {}
-    if (Number.isFinite(bytes) && bytes > 0) opts.size = bytes
-    if (m.createTime) opts.createTime = m.createTime
-    void downloadMessageFile(fileName, opts).then((err) => { if (err) window.alert('打开失败：' + err) })
-  }, [])
+    openMessageFileWithNotice(fileName, m, flashActionNotice)
+  }, [flashActionNotice])
 
   /**
-   * 在光标处打开消息菜单。
-   *
+   * 在光标处打开消息菜单：桌面端右键、手机端长按（两个入口共用，见 MsgMenuAnchor）。
    * 坐标夹进视口（留 8px 余量）。高度按条目数估算：估大了只是留白，估小了最后一条
    * 会被挤出视口，所以按 34px/条 + 16px 走，菜单本体另有 max-height + overflow 兜底。
-   * @param ev - the contextmenu event.
+   * ≤560 那档坐标不算数：菜单是贴底 sheet（44px 触摸目标会让上面 34px/条的估算偏小）。
+   * @param ev - 右键或长按事件（只取坐标与 preventDefault）。
    * @param m - the target message.
    * @param kind - its render kind.
    */
-  const openMsgMenu = useCallback((ev: React.MouseEvent, m: WechatMessage, kind: RenderKind): void => {
+  const openMsgMenu = useCallback((ev: MsgMenuAnchor, m: WechatMessage, kind: RenderKind): void => {
     ev.preventDefault()
     const estH = buildMsgMenu(m, kind).length * 34 + 16
     const x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 184))
@@ -524,6 +462,10 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   /** 菜单项分发：把「声明式条目」落到具体的面板动作上。 */
   const { changeView, loadMore, openChatlog, openGroupInfo, openSession, openSessionAndLocate, renderMsgItem } = useChatsThread({ annExpanded, annRef, closeCurrentSession, curSession, cursor, cursorLocalId, editedIds, groupInfo, groupInfoOpen, hasMore, inFlightRef, initialTarget, initialView, locateMessage, messages, messagesTalkerRef, moreOpen, msgEndRef, msgLoading, msgScrollRef, openMsgMenu, openViewer, selfWxid, sessionAlive, sessionEpochRef, sessions, setAnnCanExpand, setAnnExpanded, setChatlogStack, setCurSession, setCursor, setCursorLocalId, setGroupInfo, setGroupInfoErr, setGroupInfoLoading, setGroupInfoOpen, setHasMore, setMemberExpanded, setMemberSearch, setMessages, setMoreOpen, setMsgError, setMsgLoading, setMsgMenu, setPollStatus, setProfileMember, setSelfWxid, setTypeStats, setView, setWatermarkFrom, view, watermarkRef })
+const {
+    calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calTop, calTotal, calYear,
+    jumpToDay, openCalendar, refreshCurrentMonth, switchCalMonth,
+  } = useChatsCalendar({ curSession, openSessionAndLocate, setCalOpen, setMsgError })
   const runMenuAction = useCallback((item: MsgMenuItem, m: WechatMessage): void => {
     switch (item.action) {
       case 'copyText': copyMsgText(item.arg ?? ''); break
@@ -618,37 +560,25 @@ export function ChatsPanel({ initialView = 'chats', initialTarget }: { initialVi
 
   // 群成员搜索：命中集合、展示上限、「查看更多」的文案都从同一份过滤结果算，
   // 否则会出现「搜出 24 个却写 256 人」这种数字自相矛盾（审计 P1-4）。
+  // 换会话时只清「分析」的选中（localId 只在会话内唯一，留着会把上个会话的分析显示过来）。
+  // 两块右栏的开/关**不**再随换会话重置（2026-10-13 反转）：默认关、头部按钮是唯一入口，
+  // 用户的选择应当跟着人走，而不是每换一个会话就被强行打开一次。
+  useEffect(() => {
+    setAnalysisTarget(null)
+  }, [curSession?.username])
+
   const viewState: React.ComponentProps<typeof ChatsView>['state'] = {
-    EXPO_FORMATS, EXPO_TYPES, aiEligible, aiFull, aiOpen, aiTarget,
-    annCanExpand, annExpanded, annRef, batchExporting, batchMode, batchMsg,
-    buildIndex, calActiveDays, calAvg, calCounts, calDays, calFirstDow,
-    calHeat, calLoading, calMonth, calOpen, calTop, calTotal,
-    calYear, changeView, chatlogOpen, chatlogResolving, chatlogStack, chooseExportDir,
-    clearAllDrafts, clearDraft, closeEdit, curSession, doReset, editAreaRef,
-    editBusy, editErr, editTarget, editText, editedOpen, editing,
-    edits, error, expCount, expDir, expFilename, expFormat,
-    expFrom, expTo, expTypes, expZip, exportBatch, exportMsg,
-    cancelExport, exportOpen, exportProgress, exportSession, exporting, filtered, filteredMembers, groupInfo,
-    groupInfoErr, groupInfoLoading, groupInfoOpen, groupInfoTitleId, hasMore, hideMemberProfile,
-    indexBuilding, jumpToDay, loadMore, loading, memberExpanded, memberLimit,
-    memberQuery, memberSearch, memberTotal, messages, messagesMatchSession, moreOpen,
-    msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading,
-    msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer,
-    normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog,
-    openSession, openSessionAndLocate, pickingDir, pinnedCollapsed, pinnedList, pollStatus,
-    profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit,
-    search, searchMode, selected, sessCount, sessSentinel, sessionListRef,
-    sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnnExpanded,
-    setBatchMode, setCalOpen, setChatlogStack, setEditText, setEditedOpen, setExpCount,
-    setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip,
-    setExportOpen, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setMoreOpen, setMsgMenu,
-    setProfileMember, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer,
-    showMemberProfile, shownMembers, stats, suggestOpen, switchCalMonth, togglePinned,
-    typeStats, view, viewer,
+    calendar: { calActiveDays, calAvg, calCounts, calDays, calFirstDow, calHeat, calLoading, calMonth, calOpen, calTop, calTotal, calYear, jumpToDay, refreshCurrentMonth, setCalOpen, switchCalMonth },
+    edited: { doReset, editedOpen, editing, edits, setEditedOpen },
+    exportDialog: { EXPO_FORMATS, EXPO_TYPES, cancelExport, chooseExportDir, expCount, expDir, expFilename, expFormat, expFrom, expTo, expTypes, expZip, exportOpen, exportProgress, exportSession, exporting, pickingDir, setExpCount, setExpFilename, setExpFormat, setExpFrom, setExpTo, setExpTypes, setExpZip, setExportOpen },
+    groupInfo: { annCanExpand, annExpanded, annRef, filteredMembers, groupInfo, groupInfoErr, groupInfoLoading, groupInfoTitleId, hideMemberProfile, memberExpanded, memberQuery, memberSearch, memberTotal, onExport: () => setExportOpen(true), setAnnExpanded, setGroupInfoOpen, setMemberExpanded, setMemberSearch, setProfileMember, showMemberProfile, shownMembers },
+    aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchExporting, batchMode, batchMsg, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, closeEdit, contactInfoOpen, curSession, editAreaRef, editBusy, editErr, editTarget, editText, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, renderMsgItem, renderSession, runMenuAction, saveEdit, search, searchMode, selected, sessCount, sessSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setEditText, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setSuggestOpen, setViewer, stats, suggestOpen, togglePinned, typeStats, view, viewer,
   }
 
+  // 编辑/草稿与复制/打开文件共用一条回执（同一时刻不会同时做两件事；都有值时编辑优先）。
+  const headerNotice = editNotice ?? actionNotice
+
   return (
-    <ChatsView state={viewState} />
+    <ChatsView state={viewState} notice={headerNotice} indexProgress={indexProgress} onCancelIndexBuild={cancelIndexBuild} onBackToList={closeCurrentSession} />
   )
 }
-

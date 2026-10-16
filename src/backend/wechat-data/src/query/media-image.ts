@@ -7,14 +7,20 @@
  * wxgf/HEVC images are reported as hevc-unsupported (needs a system decoder).
  */
 import { createDecipheriv } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from './db-open.ts'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-// 宿主层的 CommonJS 重试封装（无类型声明：这里的 `fetchWithRetry` 按 any 用）
-import { fetchWithRetry } from '../../../llm-retry.js'
-import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
+import { MD5_FIND_RE, isMd5 } from '../md5.ts'
+import { normalizeAesKey } from '../keys/image-key.ts'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
+import { isWxgfTranscodeAvailable, transcodeWxgf, type WxgfTranscoder, type WxgfTranscodeResult } from './wxam-image.ts'
+import { cdnHostOf, wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { shardCatalogDirs } from './meta.ts'
+import { emoticonIndexFor, emoticonMissFresh, findEmoticonDats, noteEmoticonMiss } from './emoticon-index.ts'
+// 这两个是索引层的公开入口，历史调用方（`emoticon-batch.ts` 与两份 spec）都按
+// `media-image.ts` 这个路径 import ⇒ 原样再导出，避免为了搬家去改调用点。
+export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts'
 
 const V2_MAGIC = [0x07, 0x08, 0x56, 0x32]
 const V1_MAGIC_FULL = [0x07, 0x08, 0x56, 0x31, 0x08, 0x07]
@@ -29,7 +35,7 @@ const IMAGE_MAGIC: Array<[string, number[]]> = [
 ]
 
 /** Msg_<md5(username)> table name for a talker. */
-function msgTableName(username: string): string {
+export function msgTableName(username: string): string {
   return 'Msg_' + createHash('md5').update(username, 'utf8').digest('hex')
 }
 
@@ -55,7 +61,7 @@ export function extractMd5FromPacked(value: unknown): string | null {
       bytes = commaBytesToBytes(value)
     } else {
       // plain text (rare): try hex string or raw ascii
-      const m = value.match(/[0-9a-f]{32}/)
+      const m = value.match(MD5_FIND_RE)
       return m ? m[0] : null
     }
   }
@@ -66,14 +72,14 @@ export function extractMd5FromPacked(value: unknown): string | null {
   for (let i = 0; i + marker.length + 32 <= buf.length; i += 1) {
     if (marker.every((b, j) => buf[i + j] === b)) {
       const s = String.fromCharCode(...buf.slice(i + marker.length, i + marker.length + 32))
-      if (/^[0-9a-f]{32}$/.test(s)) return s
+      if (isMd5(s)) return s
     }
   }
   // generic: 0x22 0x20 then 32 hex (protobuf field 4, length 32)
   for (let i = 0; i + 34 <= buf.length; i += 1) {
     if (buf[i] === 0x22 && buf[i + 1] === 32) {
       const s = String.fromCharCode(...buf.slice(i + 2, i + 34))
-      if (/^[0-9a-f]{32}$/.test(s)) return s
+      if (isMd5(s)) return s
     }
   }
   // last resort: any 32 consecutive ascii hex digits
@@ -239,17 +245,6 @@ function dataIndexOf(v: unknown): string {
 }
 
 /**
- * Resolve the image MD5 for (username, local_id).
- * @param decryptedDir - decrypted data root.
- * @param username - conversation username.
- * @param localId - message local id.
- * @returns the 32-char hex image MD5, or null when not found.
- */
-export function resolveImageMd5(decryptedDir: string, username: string, localId: number): string | null {
-  return resolveImageResourceHint(decryptedDir, username, localId).md5
-}
-
-/**
  * Detect an image format from a decrypted header.
  * @param header - leading bytes of the (decrypted) image.
  * @returns the format name ('png' / 'jpg' / 'gif' / ...), or 'bin' when unknown.
@@ -309,26 +304,26 @@ function alignedAesBlockSize(aesSize: number): number {
   return aesSize % 16 === 0 ? aesSize + 16 : aesSize + (16 - (aesSize % 16))
 }
 
-/**
- * Decode raw .dat bytes (XOR / V1 / V2).
- * @param data - raw .dat file bytes.
- * @param aesKey - V2 AES key (raw bytes), optional.
- * @param xorKey - XOR key byte for the XOR tail.
- * @returns decrypted bytes + format, or an error description.
- */
-export function decodeDatBytes(
+/** `.dat` 解密后的形态：`wxgf` 标记表示还需要转码才能渲染。 */
+export type DecodeDatPayload =
+  | { bytes: Uint8Array; format: 'wxgf' }
+  | { bytes: Uint8Array; format: string }
+  | { error: string }
+
+/** Decrypt raw .dat bytes (XOR / V1 / V2) without running a wxgf transcoder. */
+export function decodeDatPayload(
   data: Uint8Array,
   aesKey: Uint8Array | string | null,
   xorKey: number,
-): { bytes: Uint8Array; format: string } | { error: string } {
+): DecodeDatPayload {
   if (data.length < 6) return { error: '文件太小' }
   const sig = Array.from(data.slice(0, 6))
   const isV2 = sig.every((b, i) => b === V2_MAGIC_FULL[i])
   const isV1 = sig.every((b, i) => b === V1_MAGIC_FULL[i])
   let decrypted: Uint8Array
   if (isV2 || isV1) {
-    const rawKey = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : aesKey
-    const key: Uint8Array | null = isV1 ? V1_AES_KEY : (rawKey instanceof Uint8Array ? rawKey : null)
+    const rawKey = normalizeAesKey(aesKey)
+    const key: Uint8Array | null = isV1 ? V1_AES_KEY : rawKey
     if (!key) return { error: 'V2 格式需要 AES key' }
     if (key.length < 16) return { error: 'AES key 长度不足 16 字节' }
     if (data.length < 15) return { error: 'V2 文件头不完整' }
@@ -353,14 +348,48 @@ export function decodeDatBytes(
     if (key === null) return { error: '无法检测 XOR key' }
     decrypted = data.map(b => b ^ key)
   }
-  // wxgf -> HEVC container (needs system decoder)
+  // wxgf（微信自研封装）先原样交给调用方，由同步/异步解码入口各自转码。
+  // 本机实测 5,109 张图解出来是 wxgf（主体档 4,748 + `_h` 原图档 361），原先一律报 hevc。
   if (decrypted.length >= 4 && decrypted[0] === 0x77 && decrypted[1] === 0x78 && decrypted[2] === 0x67 && decrypted[3] === 0x66) {
-    return { bytes: decrypted, format: 'hevc' }
+    return { bytes: decrypted, format: 'wxgf' }
   }
   const hdr = decrypted.length > 16 ? decrypted.slice(0, 16) : decrypted
   const fmt = detectImageFormat(hdr)
   if (fmt === 'bin') return { error: '解密后无法识别图片格式 (可能是密钥错误)' }
   return { bytes: decrypted, format: fmt }
+}
+
+/** 把转码产物按实际魔数收口；失败降级为 hevc（与改造前行为一致）。 */
+export function renderWxgfTranscode(
+  decrypted: Uint8Array,
+  t: WxgfTranscodeResult,
+): { bytes: Uint8Array; format: string } | { error: string } {
+  if ('bytes' in t) {
+    // 转码产物按**实际魔数**认格式（不硬编码 jpg）：DLL 换版本给出别的容器也不会被写成 .jpg。
+    const outFmt = detectImageFormat(t.bytes.length > 16 ? t.bytes.subarray(0, 16) : t.bytes)
+    if (outFmt !== 'bin') return { bytes: t.bytes, format: outFmt }
+  }
+  // 转码不可用或失败：维持改造前的降级（如实报 hevc，由界面说明「需系统解码」）。
+  return { bytes: decrypted, format: 'hevc' }
+}
+
+/**
+ * Decode raw .dat bytes (XOR / V1 / V2).
+ * @param data - raw .dat file bytes.
+ * @param aesKey - V2 AES key (raw bytes), optional.
+ * @param xorKey - XOR key byte for the XOR tail.
+ * @param opts - `wxgf` 覆盖 wxgf 转码器（单测注入替身用；默认调微信安装目录的解码库）。
+ * @returns decrypted bytes + format, or an error description.
+ */
+export function decodeDatBytes(
+  data: Uint8Array,
+  aesKey: Uint8Array | string | null,
+  xorKey: number,
+  opts: { wxgf?: WxgfTranscoder } = {},
+): { bytes: Uint8Array; format: string } | { error: string } {
+  const payload = decodeDatPayload(data, aesKey, xorKey)
+  if ('error' in payload || payload.format !== 'wxgf') return payload
+  return renderWxgfTranscode(payload.bytes, (opts.wxgf ?? transcodeWxgf)(payload.bytes))
 }
 
 /** Decode bytes to a base64 data URL for a renderable format. */
@@ -370,7 +399,7 @@ function toDataUrl(format: string, bytes: Uint8Array): string {
 }
 
 /** Renderable image extensions (decoded cache). */
-const RENDERABLE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
+export const RENDERABLE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
 
 /**
  * 读一个目录下的解码缓存。**两个槽位**：
@@ -386,7 +415,7 @@ const RENDERABLE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif']
  * @param md5 - 图片 md5（`packed_info_data` 那份）。
  * @returns 带 data URL 的结果（缩略槽命中时多一个 `thumb: true`），未命中返回 null。
  */
-function cachedImage(dir: string, md5: string): { url?: string; format?: string; thumb?: boolean } | null {
+export function cachedImage(dir: string, md5: string): { url?: string; format?: string; thumb?: boolean } | null {
   for (const thumb of [false, true]) {
     for (const ext of RENDERABLE_EXTS) {
       const p = join(dir, md5 + (thumb ? '.t.' : '.') + ext)
@@ -428,6 +457,70 @@ export function clearDecodedImageCache(decodedDir: string, username: string, md5
 }
 
 /**
+ * 读「已解码缓存」里的一份：按给定扩展名顺序找 `<md5>.<ext>`，读到就转 data URL。
+ *
+ * 为什么抽出来（P3-5）：`decodeFileImageDataUrl` 与 `decodeEmoticonDataUrl` 各自抄了一遍
+ * 「拼路径 → existsSync → readFileSync → toDataUrl → 读失败返回错误串」，只有扩展名表与
+ * 错误前缀不同。抄两遍的实际代价是**失败语义会走样**：一处把读失败当成"未命中就继续找下一张"，
+ * 另一处当成"直接报错" —— 界面上都像"图没显示"，只有日志分得清。
+ * @param dir - decoded 缓存根目录。
+ * @param md5 - 图片/表情 md5（已归一小写）。
+ * @param exts - 扩展名顺序（第一个就是"最好的一份"）。
+ * @param failNote - 读失败时的错误前缀（调用方各自的措辞留在这里，不改口径）。
+ * @returns 命中 `{ hit }`；读失败 `{ error }`；一张都没有 `null`（"未找到"怎么说由调用方定）。
+ */
+export function probeDecodedCache(
+  dir: string, md5: string, exts: readonly string[], failNote: string,
+): { hit: { url: string; format: string } } | { error: string } | null {
+  for (const ext of exts) {
+    const p = join(dir, md5 + '.' + ext)
+    if (!existsSync(p)) continue
+    try {
+      const bytes = readFileSync(p)
+      const format = ext === 'jpeg' ? 'jpg' : ext
+      return { hit: { url: toDataUrl(format, new Uint8Array(bytes)), format } }
+    } catch (e) {
+      return { error: failNote + ': ' + (e as Error).message }
+    }
+  }
+  return null
+}
+
+/**
+ * 依次解码候选 `.dat`，第一个能解成浏览器可渲染格式的就收工。
+ *
+ * 与上面同理（P3-5 的另一半）：消息图与表情图两条链都是
+ * 「readFileSync → decodeDatBytes → 跳过 error / hevc → 写缓存（尽力而为）→ toDataUrl」，
+ * 而**有意**的差异只有两处，都留在调用方：
+ *   · 排序方向 —— 消息链原图优先（`datTierRank`），表情链缩略优先（`THUMB_FIRST`）；
+ *   · 缓存写法 —— 消息链走 `writeDecodedCache`（分全局槽与按用户名槽），表情链直接写 `<md5>.<ext>`。
+ * @param files - 已排好顺序的候选路径。
+ * @param aesBytes - 归一后的 V2 AES key（可为 null，判法交给 `decodeDatBytes`）。
+ * @param xorKey - XOR key 字节。
+ * @param onDecoded - 解码成功后的缓存写入；它抛错不影响本次返回（缓存是 best-effort）。
+ * @returns 命中的 data URL / 格式 / 来自哪个文件（调用方据此再判 `thumb`）；全都没解出来时 `null`。
+ */
+function decodeDatToResult(
+  files: readonly string[], aesBytes: Uint8Array | null, xorKey: number,
+  onDecoded: (file: string, dec: { format: string; bytes: Uint8Array }) => void,
+): { url: string; format: string; file: string } | null {
+  for (const f of files) {
+    try {
+      const bytes = readFileSync(f)
+      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey)
+      if ('error' in dec) continue
+      // hevc（wxgf 的转码产物）这一份解不出可渲染格式：换下一个候选，而不是当场失败
+      if (dec.format === 'hevc') continue
+      try {
+        onDecoded(f, dec)
+      } catch { /* cache best-effort */ }
+      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, file: f }
+    } catch { /* try next candidate */ }
+  }
+  return null
+}
+
+/**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
  * @param decodedDir - decoded image cache root (data/wechat/decoded_images).
@@ -455,8 +548,10 @@ export function decodeImageDataUrl(
   if (md5) {
     const hit = cachedImage(decodedDir, md5) ?? cachedImage(join(decodedDir, username), md5)
     if (hit) return hit
+    // 上一版把 wxgf 解出的字节写成 `.hevc` 占位；现在有转码能力就该回到 .dat 路径重解一次
+    // （否则老缓存会把这张图永久钉在「需系统解码」上）。
     const hevc = join(decodedDir, username, md5 + '.hevc')
-    if (existsSync(hevc)) return { error: 'hevc-unsupported' }
+    if (existsSync(hevc) && !isWxgfTranscodeAvailable()) return { error: 'hevc-unsupported' }
   }
   // 2. raw .dat decode (requires the raw WeChat base dir)
   if (wechatBaseDir && md5) {
@@ -466,22 +561,13 @@ export function decodeImageDataUrl(
       // The original is often wxgf/HEVC in wechat 4.x; prefer a renderable
       // candidate (thumbnail _t / _h), falling back to the original only when
       // it decodes to a browser-renderable format.
-      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
-      const ordered = [...dats].sort((a, b) => scoreDatPath(a) - scoreDatPath(b))
-      for (const f of ordered) {
-        try {
-          const bytes = readFileSync(f)
-          const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
-          if ('error' in dec) continue
-          if (dec.format === 'hevc') continue
-          // `_t`/`_h` 解出来的是缩略/中图：必须写进 `.t.` 那个兜底槽，不能占住「最好的一份」
-          const thumb = scoreDatPath(f) > 0
-          try {
-            writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, thumb)
-          } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
-        } catch { /* try next candidate */ }
-      }
+      const aesBytes = normalizeAesKey(aesKey)
+      const ordered = [...dats].sort((a, b) => datTierRank(a) - datTierRank(b))
+      const r = decodeDatToResult(ordered, aesBytes, xorKey ?? 0xff, (f, dec) => {
+        // 只有 `_t`（与更差的 `_b`）进兜底槽；`_h` 是原图，就该占住「最好的一份」。
+        writeDecodedCache(decodedDir, username, md5, dec.format, dec.bytes, isThumbTier(f))
+      })
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
       return { error: 'hevc-unsupported' }
     }
   }
@@ -489,18 +575,10 @@ export function decodeImageDataUrl(
   if (wechatBaseDir) {
     const hd = resolveImageFilePath(decryptedDir, wechatBaseDir, md5 ?? '', hint.dataIndex)
     if (hd) {
-      const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
-      try {
-        const bytes = readFileSync(hd)
-        const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey ?? 0xff)
-        if (!('error' in dec) && dec.format !== 'hevc') {
-          const thumb = scoreDatPath(hd) > 0
-          try {
-            writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, thumb)
-          } catch { /* cache best-effort */ }
-          return { url: toDataUrl(dec.format, dec.bytes), format: dec.format, ...(thumb ? { thumb: true } : {}) }
-        }
-      } catch { /* unreadable dat fall through */ }
+      const r = decodeDatToResult([hd], normalizeAesKey(aesKey), xorKey ?? 0xff, (f, dec) => {
+        writeDecodedCache(decodedDir, username, md5 || 'data-' + hint.dataIndex, dec.format, dec.bytes, isThumbTier(f))
+      })
+      if (r) return { url: r.url, format: r.format, ...(isThumbTier(r.file) ? { thumb: true } : {}) }
     }
   }
   return { error: md5 ? '找不到 .dat 文件 (MD5=' + md5 + ')' : '无法定位图片文件 (data_index=' + hint.dataIndex + ')' }
@@ -520,18 +598,10 @@ export function decodeFileImageDataUrl(
   xorKey = 0xff,
 ): { url?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: '缺少图片 MD5' }
-  for (const ext of ['jpg']) {
-    const p = join(decodedDir, m + '.' + ext)
-    if (existsSync(p)) {
-      try {
-        const bytes = readFileSync(p)
-        return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)) }
-      } catch (e) {
-        return { error: '读取已解码图片失败: ' + (e as Error).message }
-      }
-    }
-  }
+  if (!isMd5(m)) return { error: '缺少图片 MD5' }
+  const probed = probeDecodedCache(decodedDir, m, ['jpg'], '读取已解码图片失败')
+  if (probed && 'error' in probed) return { error: probed.error }
+  if (probed) return { url: probed.hit.url }
   return { error: '未找到已解密图片（decoded_images/' + m + '.jpg 不存在）' }
 }
 
@@ -560,55 +630,32 @@ export function decodeEmoticonDataUrl(
   xorKey = 0xff,
 ): { url?: string; format?: string; error?: string } {
   const m = (md5 ?? '').trim().toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(m)) return { error: '缺少表情 MD5' }
-  for (const ext of RENDERABLE_EXTS) {
-    const p = join(decodedDir, m + '.' + ext)
-    if (existsSync(p)) {
-      try {
-        const bytes = readFileSync(p)
-        return { url: toDataUrl(ext === 'jpeg' ? 'jpg' : ext, new Uint8Array(bytes)), format: ext === 'jpeg' ? 'jpg' : ext }
-      } catch (e) {
-        return { error: '读取已解码表情失败: ' + (e as Error).message }
-      }
-    }
-  }
+  if (!isMd5(m)) return { error: '缺少表情 MD5' }
+  const probed = probeDecodedCache(decodedDir, m, RENDERABLE_EXTS, '读取已解码表情失败')
+  if (probed && 'error' in probed) return { error: probed.error }
+  if (probed) return { url: probed.hit.url, format: probed.hit.format }
   if (!wechatBaseDir) return { error: '表情未缓存且缺少原始微信目录' }
   const attachRoot = join(wechatBaseDir, 'msg', 'attach')
   if (!existsSync(attachRoot)) return { error: '表情未缓存且找不到 msg/attach' }
-  const dats: string[] = []
-  const walk = (dir: string, depth: number): void => {
-    if (depth > 4 || dats.length > 8) return
-    let entries: Array<{ name: string; isDir: boolean }> = []
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory() }))
-    } catch { return }
-    for (const e of entries) {
-      if (dats.length > 8) return
-      const p = join(dir, e.name)
-      if (e.isDir) {
-        walk(p, depth + 1)
-      } else if ((e.name === m + '_t.dat' || e.name === m + '.dat') && e.name.endsWith('.dat')) {
-        dats.push(p)
-      }
-    }
+  // E3：本机确实没有这个文件、且结论还新鲜 ⇒ 直接判负，**不再走一次索引查询**。
+  // 这一条挡的是「一屏里同一张缺失表情被反复问」：索引查询本身很便宜（查表），
+  // 但屏上几十个表情各查一次表、每查一次都要走一遍目录签名比对，累计起来仍然可观。
+  if (emoticonMissFresh(attachRoot, m)) return { error: '未找到表情文件 (MD5=' + m + ')' }
+  // E2：查扫描索引，不再对每次未命中都递归 readdir 整棵 attach 树。
+  const dats = findEmoticonDats(emoticonIndexFor(attachRoot), m)
+  if (dats.length === 0) {
+    noteEmoticonMiss(attachRoot, m)
+    return { error: '未找到表情文件 (MD5=' + m + ')' }
   }
-  walk(attachRoot, 0)
-  if (dats.length === 0) return { error: '未找到表情文件 (MD5=' + m + ')' }
-  const aesBytes = typeof aesKey === 'string' && aesKey.length > 0 ? Buffer.from(aesKey, 'ascii') : (aesKey ?? null)
-  // Prefer thumbnails (_t) — smaller and usually already a still frame; original may be HEVC.
-  const ordered = [...dats].sort((a, b) => scoreDatPath(a) - scoreDatPath(b))
-  for (const f of ordered) {
-    try {
-      const bytes = readFileSync(f)
-      const dec = decodeDatBytes(new Uint8Array(bytes), aesBytes, xorKey)
-      if ('error' in dec) continue
-      if (dec.format === 'hevc') continue
-      try {
-        writeFileSync(join(decodedDir, m + '.' + dec.format), Buffer.from(dec.bytes))
-      } catch { /* cache best-effort */ }
-      return { url: toDataUrl(dec.format, dec.bytes), format: dec.format }
-    } catch { /* try next */ }
-  }
+  const aesBytes = normalizeAesKey(aesKey)
+  // 表情这条链**故意反过来**：优先缩略图（小、且通常本来就是静帧），原图放最后
+  // （表情原图多是 wxgf/动图，解码更慢）。与消息链的「原图优先」是有意的差异，不是笔误。
+  const THUMB_FIRST: Record<DatTier, number> = { thumb: 0, other: 1, chat: 2, original: 3 }
+  const ordered = [...dats].sort((a, b) => THUMB_FIRST[datTierOf(a)] - THUMB_FIRST[datTierOf(b)])
+  const r = decodeDatToResult(ordered, aesBytes, xorKey, (f, dec) => {
+    writeFileSync(join(decodedDir, m + '.' + dec.format), Buffer.from(dec.bytes))
+  })
+  if (r) return { url: r.url, format: r.format }
   return { error: '表情文件无法解码为浏览器可渲染格式' }
 }
 
@@ -617,28 +664,33 @@ export function decodeEmoticonDataUrl(
  *
  * 为什么需要：微信把表情图放在 `business/emoticon/*` 与 `cache/<月>/Emoticon/*`，
  * 那些文件是**加密**的（16 字节对齐；单字节 XOR、配置里的 image_aes_key、
- * 消息里的 aeskey 都试过解不开，见 `output/probe-sticker-crypt*.mjs`）。
+ * 消息里的 aeskey 都试过解不开 —— 为这件事写过一批一次性解密探针，脚本用完即删，
+ * 所以这里只留结论，不指一个已经不在的探针文件）。
  * 而消息 XML 里的 `cdnurl` 提供的是**未加密**的那一份：实测
- * （`output/probe-sticker-cdn2.mjs`）去掉 `&amp;` 转义后 6/6 返回 200 与明文
+ * （同一批一次性探针）去掉 `&amp;` 转义后 6/6 返回 200 与明文
  * GIF/PNG/JPEG，体积与消息里的 `len` 逐字节一致。
  *
  * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
  * 网络只花一次。失败一律返回 error，界面退回占位芯片。
+ *
+ * **主机白名单（2026-09-30 补）**：这条链此前只判了协议，等于「消息 XML 里写哪个主机
+ * 就去取哪个」（XML 是可被离线改写的文件）。现在与聊天原图 / 远程图片 / 朋友圈封面
+ * 走同一把尺子 {@link wechatCdnHostAllowed}，判在发请求之前；主机不在清单内时
+ * **把主机名写进错误文案**，这样万一有没覆盖到的表情主机，界面上一眼能看出是哪个。
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
- * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
+ * @param opts - `wechatBaseDir`：原始微信目录；给了它才允许「索引里确认本机没有」成为出网前提。
  * @returns a data URL + format, or an error message.
  */
 export async function fetchEmoticonRemote(
   url: string,
   decodedDir: string,
   md5: string,
-  opts: { cdnEnabled?: boolean } = {},
+  opts: { wechatBaseDir?: string } = {},
 ): Promise<{ url?: string; format?: string; error?: string }> {
-  // 用户关掉开关时连请求都不发（不是「发了再失败」）：这既是开关的承诺，也让「有没有出网」可判定
-  if (!cdnFetchAllowed(opts)) return { error: CDN_DISABLED_MESSAGE }
   if (!/^https?:\/\//i.test(url)) return { error: '表情链接不是 http(s)' }
+  if (!wechatCdnHostAllowed(url)) return { error: `表情链接的主机不在微信 CDN 清单内（${cdnHostOf(url) || '解析不出主机'}），已拒绝请求` }
   try {
     // N13：远端取图走有界重试（一次网络抖动 = 一个失败的表情很可惜）；
     // 超时交给重试层逐次计时（自己传 AbortSignal.timeout 会让重试在第一次超时后直接停）。
@@ -657,11 +709,44 @@ export async function fetchEmoticonRemote(
   }
 }
 
-/** Prefer originals over thumbnails: 0 = .dat, 1 = _h.dat, 2 = _t.dat. */
-function scoreDatPath(p: string): number {
-  if (p.endsWith('_t.dat')) return 2
-  if (p.endsWith('_h.dat')) return 1
-  return 0
+/**
+ * 一份 `.dat` 属于哪一档。
+ *
+ * 微信为同一张图最多存四份（本机 `msg/attach` 实测）：`<md5>_h.dat` 高清原图、
+ * `<md5>.dat` 聊天显示版、`<md5>_t.dat` 缩略图，另有 `<md5>_b.dat` 气泡图
+ * （气泡图在 `msg/<日期>/Message/<md5>/Bubble/` 下，本模块的候选路径取不到它，
+ * 但**一旦有人加了那条候选路径**，它必须排在最后 —— 所以这里显式给它 `other`，
+ * 而不是像旧实现那样「不认识就当最好的」）。
+ *
+ * **`_h` 优于 `.dat`** 是本机量出来的结论：971 个 `_h` 里 491 个同时有主体档，
+ * 抽样 28/28 都是 `_h ≥ 主体`（典型 2.95MB vs 54KB）；`_h` 只有「点开过大图」才会有。
+ * ⚠ 这条排序与 wxgf 转码是**同一条链**：`_h` 里 37%（361/971）是 wxgf，
+ * 没有转码能力时把它排到最前等于用解不开的高清挡住能渲染的聊天版。
+ */
+export type DatTier = 'original' | 'chat' | 'thumb' | 'other'
+
+/**
+ * 判一份 `.dat` 的档位。
+ * @param path - `.dat` 文件路径（只看文件名后缀）。
+ * @returns 档位：`original` = `_h`、`chat` = 主体、`thumb` = `_t`、`other` = 不认识（最低）。
+ */
+export function datTierOf(path: string): DatTier {
+  const p = path.toLowerCase()
+  if (p.endsWith('_t.dat')) return 'thumb'
+  if (p.endsWith('_h.dat')) return 'original'
+  return /_[a-z]\.dat$/.test(p) ? 'other' : 'chat'
+}
+
+/** 档位优先级（0 = 最优），供 `sort` 与读取决策共用。 */
+export function datTierRank(path: string): number {
+  const tier = datTierOf(path)
+  return tier === 'original' ? 0 : tier === 'chat' ? 1 : tier === 'thumb' ? 2 : 3
+}
+
+/** 该档位是否只配进「缩略兜底槽」（`_t` 与更差的 `_b` 都不该占住「本机最好的一份」）。 */
+export function isThumbTier(path: string): boolean {
+  const tier = datTierOf(path)
+  return tier === 'thumb' || tier === 'other'
 }
 
 /**
@@ -669,14 +754,14 @@ function scoreDatPath(p: string): number {
  * @param thumb - true 表示这是 `_t`/`_h` 解出来的缩略/中图，写进 `<md5>.t.<ext>` 兜底槽，
  *   不占「本机最好的一份」那个槽（否则原图后到也会被永久遮蔽，见 `cachedImage`）。
  */
-function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array, thumb = false): void {
+export function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array, thumb = false): void {
   const dir = join(decodedDir, username)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, md5 + (thumb ? '.t.' : '.') + format), Buffer.from(bytes))
 }
 
 /** Recursively find .dat files whose name starts with the image MD5. */
-function findDatFiles(attachRoot: string, fileMd5: string): string[] {
+export function findDatFiles(attachRoot: string, fileMd5: string): string[] {
   const out: string[] = []
   const walk = (dir: string): void => {
     if (!existsSync(dir)) return
@@ -704,8 +789,27 @@ function cellText(v: unknown): string {
   return ''
 }
 
-/** Read dir2id (rowid → directory name) from the decrypted hardlink.db. */
-function readDir2id(db: DatabaseSync): Map<number, string> {
+/**
+ * `dir2id`（rowid → 目录名）。
+ *
+ * W2-5.3 实测过「把它缓存成内存 Map / 复用长连接」值多少（`hardlink-open-cost.measure.spec.ts`，
+ * 合成 20 万行 / dir2id 89 行 / 30 张样本）：
+ *
+ * | 段 | 耗时 | 占端到端 |
+ * |---|---|---|
+ * | 开 + 关一条只读连接 | 0.034ms | 0.1% |
+ * | 一次连接里重读 dir2id | 0.049ms | 0.1% |
+ * | 端到端一次批量解析 | 32.39ms | 100% |
+ *
+ * 也就是说：这条路上能省的两段加起来只值 **0.26%**，而端到端的 99.9% 是那条 `IN (...)` 全表扫
+ * （W1-2 已把它从 30 次单查合成 1 次）。而**常驻**连接会直接违反
+ * `query-db-lifetime.spec.ts` 那条纪律（Windows 上只要有连接开着，数据根就再也删不掉/换不掉）。
+ *
+ * 所以**这里刻意保持每次开、每次关**：省 0.1% 换一个数据根换不掉，不划算。
+ * 下一个人若要动这一段，请先跑那个基准，别凭直觉。
+ * @param db - 已打开的只读连接。
+ * @returns rowid → 目录名。
+ */function readDir2id(db: DatabaseSync): Map<number, string> {
   const map = new Map<number, string>()
   const rows = db.prepare('SELECT rowid, username FROM dir2id').all() as Array<{ rowid: number; username: unknown }>
   for (const r of rows) map.set(r.rowid, cellText(r.username).trim())

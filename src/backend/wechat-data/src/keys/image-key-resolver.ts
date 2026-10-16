@@ -7,6 +7,7 @@
 import { createDecipheriv, createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { normalizeAesKey } from './image-key.ts'
 
 /** V2 image magic. */
 export const V2_MAGIC = Buffer.from([0x07, 0x08, 0x56, 0x32, 0x08, 0x07])
@@ -108,13 +109,13 @@ export function deriveImageKeys(code: number, wxid: string): DerivedImageKeys {
 
 /** Decrypt one AES-ECB block. */
 function decryptAesBlock(aesKey: string | Buffer, ciphertext: Buffer): Buffer | null {
-  let keyBytes: Buffer
+  let keyBytes: Buffer | null
   try {
-    keyBytes = typeof aesKey === 'string' ? Buffer.from(aesKey, 'ascii') : Buffer.from(aesKey)
+    keyBytes = normalizeAesKey(aesKey)
   } catch {
     return null
   }
-  if (keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null
+  if (keyBytes === null || keyBytes.length < AES_BLOCK_SIZE || ciphertext.length !== AES_BLOCK_SIZE) return null
   try {
     const decipher = createDecipheriv('aes-128-ecb', keyBytes.subarray(0, AES_BLOCK_SIZE), null)
     decipher.setAutoPadding(false)
@@ -252,13 +253,29 @@ function offerRecentTemplates(dir: string, capacity: number): V2Template[] {
 }
 
 /**
- * Scan for recent V2 thumbnail templates under an account dir.
- * @param accountDir - WeChat account data dir (wxid_* folder).
- * @param limit - max templates to return.
- * @param maxFallbackDirs - cap for the fallback BFS.
- * @returns the template scan result.
+ * 扫描的**可让出**实现（生成器）：在每个目录检查点 `yield`，由驱动方决定要不要交还控制权。
+ *
+ * ## 为什么做成生成器而不是直接 async
+ *
+ * 本函数有 4 个调用点（`keys/service.ts`、`keys/image-key-memory-scan.ts`、
+ * `remotes/keysdec.ts` ×2），其中两个是同步上下文。直接改成 async 会把这 4 处
+ * 一起拖下水（跨 5 个模块），而收益只落在网关那两条 `@Remote` 路径上。
+ * 生成器把"算到哪"的状态留在内部：同步驱动原样保持同步（调用点零改动），
+ * 异步驱动才能在每个检查点让出。
+ *
+ * ## 为什么需要让出
+ *
+ * 真实 `@Remote` 层探针（`working/probe-remote.txt`）实测 `verifyImageKey`
+ * 冷跑 **1603ms 且一次都不让出** —— 后端是串行 worker，这 1.6 秒里
+ * **所有面板都动不了**。成本就在这里：最多 500 个目录的 BFS，每个目录一次
+ * `readdir` + `stat` 排序，全部同步。
+ * @param accountDir - WeChat 账号数据目录（wxid_*）。
+ * @param limit - 最多返回多少张模板。
+ * @param maxFallbackDirs - 兜底 BFS 的目录上限。
+ * @yields 每个目录检查点交出一次（调用方可选择让出事件循环再 `next()`）。
+ * @returns 模板扫描结果。
  */
-export function scanV2Templates(accountDir: string, limit = 32, maxFallbackDirs = 500): TemplateScanResult {
+export function* scanV2TemplatesSteps(accountDir: string, limit = 32, maxFallbackDirs = 500): Generator<void, TemplateScanResult, void> {
   if (limit <= 0) return { templates: [], inferredXorKey: null, usedFallback: false, filesScanned: 0, xorSupport: 0 }
   const discoveryCapacity = Math.max(limit * 4, 64)
 
@@ -271,15 +288,18 @@ export function scanV2Templates(accountDir: string, limit = 32, maxFallbackDirs 
   for (const attachDir of attachDirs) {
     if (visited >= MAX_PREFERRED_DIRS) break
     visited += 1
+    yield
     const monthDirs = listChildDirs(attachDir).filter(d => MONTH_DIR_RE.test(d.split(/[\\/]/).pop() ?? ''))
     monthDirs.sort((a, b) => b.localeCompare(a))
     for (const monthDir of monthDirs) {
       if (visited >= MAX_PREFERRED_DIRS) break
       visited += 1
+      yield
       for (const imgDir of listChildDirs(monthDir)) {
         if ((imgDir.split(/[\\/]/).pop() ?? '').toLowerCase() !== 'img') continue
         if (visited >= MAX_PREFERRED_DIRS) break
         visited += 1
+        yield
         preferred.push(...offerRecentTemplates(imgDir, discoveryCapacity))
       }
     }
@@ -300,6 +320,7 @@ export function scanV2Templates(accountDir: string, limit = 32, maxFallbackDirs 
       const directory = queue[queueIndex]
       if (directory === undefined) break
       queueIndex += 1
+      yield
       fallback.push(...offerRecentTemplates(directory, discoveryCapacity))
       const children = listChildDirs(directory)
       children.sort((a, b) => a.localeCompare(b))
@@ -317,6 +338,50 @@ export function scanV2Templates(accountDir: string, limit = 32, maxFallbackDirs 
 
   const { xor, support } = inferXorWithSupport(templates.map(t => t.tailBytes))
   return { templates, inferredXorKey: xor, usedFallback, filesScanned, xorSupport: support }
+}
+
+/**
+ * 扫描 V2 缩略图模板（**同步版**，行为与改造前逐字节等价）。
+ * @param accountDir - WeChat account data dir (wxid_* folder).
+ * @param limit - max templates to return.
+ * @param maxFallbackDirs - cap for the fallback BFS.
+ * @returns the template scan result.
+ */
+export function scanV2Templates(accountDir: string, limit = 32, maxFallbackDirs = 500): TemplateScanResult {
+  const it = scanV2TemplatesSteps(accountDir, limit, maxFallbackDirs)
+  // 同步驱动：检查点直接跳过（不让出），直到生成器交回结果。
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+  }
+}
+
+/**
+ * 扫描 V2 缩略图模板（**可让出版**）：给网关的 `@Remote` 路径用。
+ *
+ * 与 {@link scanV2Templates} 结果**逐字段相同**（同一个生成器的产物），
+ * 区别只在每个检查点之间交给调用方一次机会去让出事件循环。
+ *
+ * 让出的"怎么让"故意留给调用方（`onStep`）：`keys/` 这一层不该依赖 `query/search-build.ts`
+ * 的 `yieldToLoop`（那是查询层的让出原语）。网关侧传进来的就是 `yieldToLoop`。
+ * @param accountDir - WeChat account data dir.
+ * @param onStep - 每个目录检查点调用一次；返回 Promise 就等它（用于让出）。
+ * @param limit - max templates to return.
+ * @param maxFallbackDirs - cap for the fallback BFS.
+ * @returns the template scan result.
+ */
+export async function scanV2TemplatesAsync(
+  accountDir: string,
+  onStep: () => Promise<void>,
+  limit = 32,
+  maxFallbackDirs = 500,
+): Promise<TemplateScanResult> {
+  const it = scanV2TemplatesSteps(accountDir, limit, maxFallbackDirs)
+  for (;;) {
+    const step = it.next()
+    if (step.done === true) return step.value
+    await onStep()
+  }
 }
 
 /**

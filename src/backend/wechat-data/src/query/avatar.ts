@@ -3,8 +3,8 @@
  * Priority: head_image.db image_buffer (data URL) -> contact small/big_head_url.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync } from 'node:fs'
+import { withDb } from './db-open.ts'
 import { join } from 'node:path'
 
 /** Sniff an image format from magic bytes. */
@@ -29,16 +29,16 @@ function avatarFromHeadImageDb(decryptedDir: string, username: string): string |
   const dbPath = join(decryptedDir, 'head_image', 'head_image.db')
   if (!existsSync(dbPath)) return null
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
-    if (!has) { db.close(); return null }
-    const row = db.prepare('SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1').get(username) as { b?: unknown } | undefined
-    db.close()
-    if (!row) return null
-    const buf = row.b instanceof Uint8Array ? row.b : null
-    if (!buf || buf.length < 16) return null
-    const fmt = sniffImageFormat(buf)
-    return 'data:image/' + fmt + ';base64,' + Buffer.from(buf).toString('base64')
+    return withDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
+      if (!has) return null
+      const row = db.prepare('SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1').get(username) as { b?: unknown } | undefined
+      if (!row) return null
+      const buf = row.b instanceof Uint8Array ? row.b : null
+      if (!buf || buf.length < 16) return null
+      const fmt = sniffImageFormat(buf)
+      return 'data:image/' + fmt + ';base64,' + Buffer.from(buf).toString('base64')
+    })
   } catch {
     return null
   }
@@ -49,17 +49,17 @@ function avatarUrlFromContact(decryptedDir: string, username: string): string | 
   const dbPath = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(dbPath)) return null
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (!has) { db.close(); return null }
-    const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
-    if (!cols.includes('username')) { db.close(); return null }
-    const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
-    const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
-    const row = db.prepare('SELECT COALESCE(NULLIF(' + small + ", ''), " + big + ') AS u FROM contact WHERE username = ? LIMIT 1').get(username) as { u?: unknown } | undefined
-    db.close()
-    const url = row?.u ? cellStr(row.u) : ''
-    return url ? url : null
+    return withDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (!has) return null
+      const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
+      if (!cols.includes('username')) return null
+      const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
+      const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
+      const row = db.prepare('SELECT COALESCE(NULLIF(' + small + ", ''), " + big + ') AS u FROM contact WHERE username = ? LIMIT 1').get(username) as { u?: unknown } | undefined
+      const url = row?.u ? cellStr(row.u) : ''
+      return url ? url : null
+    })
   } catch {
     return null
   }
@@ -88,23 +88,23 @@ function contactByNickname(decryptedDir: string, nickname: string): { username: 
   const dbPath = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(dbPath)) return null
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (!has) { db.close(); return null }
-    const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
-    if (!cols.includes('username') || !cols.includes('nick_name')) { db.close(); return null }
-    const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
-    const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
-    const md = cols.includes('head_img_md5') ? 'head_img_md5' : 'NULL'
-    const sql =
-      `SELECT username, COALESCE(NULLIF(${small}, ''), ${big}) AS u, ${md} AS m ` +
-      `FROM contact WHERE nick_name = ? AND COALESCE(NULLIF(${small}, ''), ${big}) != '' LIMIT 1`
-    const row = db.prepare(sql).get(nickname) as { u?: unknown; m?: unknown; username?: unknown } | undefined
-    db.close()
-    if (!row) return null
-    const username = cellStr(row.username)
-    const url = cellStr(row.u)
-    return username && url ? { username, url, md5: cellStr(row.m) } : null
+    return withDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (!has) return null
+      const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
+      if (!cols.includes('username') || !cols.includes('nick_name')) return null
+      const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
+      const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
+      const md = cols.includes('head_img_md5') ? 'head_img_md5' : 'NULL'
+      const sql =
+        `SELECT username, COALESCE(NULLIF(${small}, ''), ${big}) AS u, ${md} AS m ` +
+        `FROM contact WHERE nick_name = ? AND COALESCE(NULLIF(${small}, ''), ${big}) != '' LIMIT 1`
+      const row = db.prepare(sql).get(nickname) as { u?: unknown; m?: unknown; username?: unknown } | undefined
+      if (!row) return null
+      const username = cellStr(row.username)
+      const url = cellStr(row.u)
+      return username && url ? { username, url, md5: cellStr(row.m) } : null
+    })
   } catch {
     return null
   }
@@ -176,22 +176,20 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
   const dbPath = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(dbPath)) return out
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (has) {
+    withDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (!has) return
       const cols = (db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name)
-      if (cols.includes('username')) {
-        const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
-        const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
-        const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`)
-        for (const username of usernames) {
-          const row = stmt.get(username) as { u?: unknown } | undefined
-          const url = row?.u ? cellStr(row.u) : ''
-          if (url) out.set(username, url)
-        }
+      if (!cols.includes('username')) return
+      const small = cols.includes('small_head_url') ? 'small_head_url' : 'NULL'
+      const big = cols.includes('big_head_url') ? 'big_head_url' : 'NULL'
+      const stmt = db.prepare(`SELECT COALESCE(NULLIF(${small}, ''), ${big}) AS u FROM contact WHERE username = ? LIMIT 1`)
+      for (const username of usernames) {
+        const row = stmt.get(username) as { u?: unknown } | undefined
+        const url = row?.u ? cellStr(row.u) : ''
+        if (url) out.set(username, url)
       }
-    }
-    db.close()
+    })
   } catch { /* best effort */ }
   return out
 }
@@ -202,7 +200,7 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
  * 三级取值来源(优先级从高到低):
  *   ① `head_image.db` 的 image_buffer → data URL(纯本地,不联网)
  *   ② `temp/head_image` 缓存文件(文件名 = md5(头像 URL))→ data URL(同上)
- *   ③ contact 表的 **https** URL(仅 `allowRemote` 时返回)
+ *   ③ contact 表的 **https** URL
  *
  * 为什么必须有后两级:图谱面板一次要 250 个头像,而 `head_image.db` 只覆盖本机收过的
  * 那些 —— 真机实测「好友图」上 240 个节点只命中 131 个,另外 109 个只能画成
@@ -211,29 +209,27 @@ function contactAvatarUrlMap(decryptedDir: string, usernames: string[]): Map<str
  *
  * 第 ③ 级交出的只是**地址**，取回动作在渲染层的 api 层完成（M23）：`apiGetAvatarsLocal` 把
  * 非本机的那几条交给后端 `query/remote-image.ts` 代取成 data URL，界面拿到的只剩能直接画的地址。
- * 于是「自动获取原图（CDN）」与「禁止出网」真的管得到头像 —— 这一类此前由 `<img>` 直连，
- * 两个开关都拦不到它。图谱把它画进 canvas 再导出 PNG 时拿到的已是 data URL，
+ * 图谱把它画进 canvas 再导出 PNG 时拿到的已是 data URL，
  * 不存在跨域污染（远程地址时代要靠 `crossOrigin='anonymous'` 才不会让 `toDataURL()` 抛 SecurityError）。
  *
  * @param decryptedDir - 解密数据根目录。
  * @param usernames - 需要头像的用户名。
- * @param opts - `wechatBaseDir`(找 temp 缓存)与 `allowRemote`(是否放行远端 URL;
- *   调用方在用户开了「出站拦截」时传 false)。
+ * @param opts - `wechatBaseDir`（找 temp 缓存）。
  * @returns username → data URL 或 https URL（远程那一级由渲染层再换成 data URL）；未命中的不出现在结果中。
  */
 export function resolveAvatarsLocal(
   decryptedDir: string,
   usernames: string[],
-  opts: { wechatBaseDir?: string | undefined; allowRemote?: boolean } = {},
+  opts: { wechatBaseDir?: string | undefined } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
   if (usernames.length === 0) return out
   const dbPath = join(decryptedDir, 'head_image', 'head_image.db')
   if (existsSync(dbPath)) {
     try {
-      const db = new DatabaseSync(dbPath, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
-      if (has) {
+      withDb(dbPath, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='head_image'").get() !== undefined
+        if (!has) return
         const stmt = db.prepare('SELECT image_buffer AS b FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1')
         for (const username of usernames) {
           const row = stmt.get(username) as { b?: unknown } | undefined
@@ -243,8 +239,7 @@ export function resolveAvatarsLocal(
           const fmt = sniffImageFormat(buf)
           out[username] = 'data:image/' + fmt + ';base64,' + Buffer.from(buf).toString('base64')
         }
-      }
-      db.close()
+      })
     } catch { /* best effort */ }
   }
   const rest = usernames.filter(u => !(u in out))
@@ -252,10 +247,8 @@ export function resolveAvatarsLocal(
   for (const [username, url] of contactAvatarUrlMap(decryptedDir, rest)) {
     const temp = avatarFromTempHeadFile(opts.wechatBaseDir, url)
     if (temp) { out[username] = temp; continue }
-    if (opts.allowRemote) {
-      const remote = remoteAvatarUrl(url)
-      if (remote) out[username] = remote
-    }
+    const remote = remoteAvatarUrl(url)
+    if (remote) out[username] = remote
   }
   return out
 }

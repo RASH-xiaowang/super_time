@@ -8,7 +8,7 @@
 .actionBtn {
   padding: 6px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   color: var(--nm-text-1);
   font-size: 12px;

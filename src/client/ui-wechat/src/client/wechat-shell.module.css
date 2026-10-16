@@ -1,7 +1,7 @@
-/* Super Time「外壳」的两处宿主集成样式（第 95 轮）：
+/* Super Time「外壳」的宿主集成样式（第 95 轮）：
    侧栏底部的开关按钮（WechatTrigger）与中栏内容容器（WechatContent）。
-   这两个组件在 `client/index.tsx` 里，属于本客户端包对宿主插槽的注册点，
-   原来把这几条样式写成行内 style；搬进 CSS 模块后与其余面板同一套规范。 */
+   这两个组件原属于上游客户端包对宿主插槽的注册点；注册入口已随迁移移除，
+   样式保留为宿主外壳未来的集成占位。 */
 
 .triggerIcon { font-size: 16px; }
 .triggerLabel { font-size: 12px; }

@@ -5,14 +5,13 @@
  * 为什么需要这个脚本
  * ------------------
  * `package.json` 用 `"@deepseek-ai/dsh-client-ui-primitives": "file:src/client/ui-primitives-shim"`
- * 声明这个 shim，但 npm 把它装成了**真实目录拷贝**（不是符号链接）。Vite 解析的是
- * `node_modules/@deepseek-ai/dsh-client-ui-primitives/src/*`，所以**直接改源码目录不会生效**。
+ * 声明这个 shim，但 npm 把它装成了**真实目录拷贝**（不是符号链接）。Vite 与 tsc 已通过
+ * alias/paths 直接读源码，构建和类型检查都不再依赖这份拷贝；本脚本只给仍直接解析
+ * node_modules 的消费者保留一个可检查、可修复的一致性入口。
  *
- * 这个坑是静默的：tsc 不报错、vite 不报错、页面不报错，只是改动完全没进包。
- * 实测（第 34 轮）曾经如此丢掉：`Button` 的 `:focus-visible` 焦点环、`.iconOnly`、
- * `.danger`、统一后的 `:disabled opacity .5`、以及本轮新增的 `.pill` 变体 ——
- * 产物 CSS 里 `_danger_` / `_iconOnly_` 命中数都是 0，而源码里全都在。
- * 因此 `build:ui` 会在 vite 之前调用本脚本，让「改源码」重新成为唯一正确做法。
+ * 历史教训仍有效：副本漂移是静默的，曾因此丢掉 `Button` 的焦点环、`.iconOnly`、
+ * `.danger`、统一后的 `:disabled opacity .5` 等改动。现在 `build:ui` 不再调用本脚本，
+ * 发版前用 `check:shim` 校验副本；它只是诊断，不是构建前提。
  *
  * 安全守卫（`--check` 与写入模式都执行）
  * -------------------------------------
@@ -23,7 +22,7 @@
  *
  * 用法
  * ----
- *   node scripts/sync-ui-shim.js           # 同步（写入）
+ *   node scripts/sync-ui-shim.js           # 同步（写入；构建不再自动调用）
  *   node scripts/sync-ui-shim.js --check   # 只校验是否一致，不一致则退出码 1
  */
 
@@ -149,7 +148,7 @@ function main() {
     for (const r of changed) console.error('  · 内容不同: ' + r)
     for (const r of added) console.error('  · 副本缺失: ' + r)
     for (const r of extra) console.error('  · 副本多余: ' + r)
-    console.error('  运行 `node scripts/sync-ui-shim.js` 或 `npm run build:ui` 修复。')
+    console.error('  运行 `node scripts/sync-ui-shim.js` 修复。')
     process.exit(1)
   }
 

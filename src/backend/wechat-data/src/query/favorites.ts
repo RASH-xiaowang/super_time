@@ -3,10 +3,13 @@
  * Parses content XML (favitem type/desc/dataitem) into title/desc/url and
  * resolves sources via contact names, mirroring st_control modules/favorites.rs.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
+import { withWritableDb } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { contactMeta } from './meta.ts'
+import { stripCdata } from './parse-xml.ts'
+import { fmtDateTimeSec } from '../format.ts'
 
 /** Coerce a DB cell to a string (null -> '', else String()). */
 function cellStr(v: unknown): string {
@@ -33,7 +36,12 @@ function decodeFavText(s: string): string {
     .replace(/&#9;/g, '\t')
 }
 
-/** Extract text between <tag ...> and </tag> (first occurrence). */
+/**
+ * Extract text between <tag ...> and </tag> (first occurrence).
+ *
+ * 与 `moments.ts` 同一条规则：收藏 content 里的 title/desc/url 也是 CDATA 包的，
+ * 不剥就把 `<![CDATA[…]]>` 显示到卡片上（共享原语 parse-xml.ts 一直有剥，本地副本是漏的那几处）。
+ */
 function xmlTagText(xml: string, tag: string): string | null {
   const openExact = '<' + tag + '>'
   const openAttr = '<' + tag + ' '
@@ -42,7 +50,7 @@ function xmlTagText(xml: string, tag: string): string | null {
   const contentStart = xml.startsWith(openExact, start) ? start + openExact.length : (xml.indexOf('>', start) + 1)
   const close = xml.indexOf('</' + tag + '>', contentStart)
   if (close < 0) return null
-  return xml.slice(contentStart, close)
+  return stripCdata(xml.slice(contentStart, close))
 }
 
 /** Extract an attribute value from a tag open (first occurrence). */
@@ -241,14 +249,6 @@ function parseFavParts(xml: string): FavRawPart[] {
   return out
 }
 
-/** Format a unix timestamp as `YYYY-MM-DD HH:mm`. */
-function fmtDateTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 interface FavorItem {
   localId: number
   type: number
@@ -321,7 +321,7 @@ export function queryFavorites(
         desc: parsed.desc,
         url: parsed.url,
         updateTime,
-        time: fmtDateTime(updateTime),
+        time: fmtDateTimeSec(updateTime),
         content: xml,
         fromUsr,
         chatName,
@@ -346,14 +346,14 @@ export function deleteFavoriteItems(decryptedDir: string, ids: number[]): { ok: 
   const dbPath = join(decryptedDir, 'favorite', 'favorite.db')
   if (!existsSync(dbPath)) return { ok: false, deleted: 0, error: '收藏库不存在' }
   try {
-    const db = new DatabaseSync(dbPath)
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== undefined
-    if (!has) { db.close(); return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' } }
-    const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')
-    let deleted = 0
-    for (const id of ids) { deleted += Number(stmt.run(id).changes) }
-    db.close()
-    return { ok: true, deleted }
+    return withWritableDb(dbPath, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fav_db_item'").get() !== undefined
+      if (!has) return { ok: false, deleted: 0, error: 'fav_db_item 表不存在' }
+      const stmt = db.prepare('DELETE FROM fav_db_item WHERE local_id = ?')
+      let deleted = 0
+      for (const id of ids) { deleted += Number(stmt.run(id).changes) }
+      return { ok: true, deleted }
+    })
   } catch (e) {
     return { ok: false, deleted: 0, error: (e as Error).message }
   }

@@ -27,6 +27,7 @@ import { canMoveInstead, deleteDialogLead, deleteReceipt, purgeButtonLabel } fro
 import { DEFAULT_KB_ID, useKbScope } from './kb-scope.ts'
 import { KbModelDialog } from './KbModelDialog.tsx'
 import css from './kb-rail.module.css'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 
 /**
  * 删掉 `goneId` 之后该停在哪个库。
@@ -274,7 +275,7 @@ export function KbRail(): React.JSX.Element {
         className={css.modelChip}
         data-custom={(active?.modelOverrides ?? 0) > 0 ? '1' : undefined}
         onClick={() => { setModelOpen(true) }}
-        title="本库用哪个语言 / 嵌入 / 重排序模型"
+        title="本库用哪个语言 / 嵌入 / 重排序模型" {...desktopActionProps()}
       >
         <span className={css.modelIcon} aria-hidden="true">🧠</span>
         <span className={css.modelText}>

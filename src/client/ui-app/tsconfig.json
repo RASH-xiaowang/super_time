@@ -12,6 +12,10 @@
     "noEmit": true,
     "paths": {
       "@deepseek-ai/dsh-wechat-data/types": ["../../backend/wechat-data/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/contracts": ["../ui-wechat/src/client/contracts.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/host": ["../ui-wechat/src/client/public/host.ts"],
+      "@deepseek-ai/dsh-client-ui-wechat/notice": ["../ui-wechat/src/client/public/notice.tsx"],
+      "@deepseek-ai/dsh-client-ui-wechat/theme": ["../ui-wechat/src/client/public/theme.ts"],
       "@deepseek-ai/dsh-client-ui-primitives": ["../ui-primitives-shim/src/index.ts"]
     }
   },

@@ -13,7 +13,6 @@ import type { StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryMessages } from './messages.ts'
 import { writeZipAtomic } from './export-io.ts'
-import { exportCsv } from './export-flows.ts'
 
 /** Format a unix timestamp as YYYY-MM-DD HH:MM. */
 export function fmtFull(ts: number): string {
@@ -31,20 +30,60 @@ export function fmtFull(ts: number): string {
  * @param ctrl - 取消令牌（每页检查一次）。
  */
 function* messagePages(decryptedDir: string, username: string, target: number, ctrl?: StreamControl): Generator<WechatMessage[]> {
-  const MAX_PAGES = 600
+  /**
+   * 每页条数。**从 100 提到 1000**（2026-09-29 第 78 轮，实测）。
+   *
+   * 为什么这是"整账号导出 11 秒"的主要成本：导出一个会话要把它**整段**收下来
+   * （`target = 50000`），而每页只要 100 条 ⇒ 一个 3.9 万条的群要翻 **389 页**，
+   * 每页都是一次完整的 `queryMessages`（打开分片、算签名、构造环境）。
+   *
+   * **A/B 实测**（`working/probe-page-size2.ts`，3 个大会话、共 42812 条）：
+   *   每页 100  → **2346 ms / 429 页**
+   *   每页 1000 → **871 ms / 44 页**   ⇒ **2.7×**
+   * 且**内容完全一致**（按 `localId + sortSeq` 去重后两边都是 42812 条、0 重复）。
+   *
+   * ⚠️ 注意量的是"页数减少"带来的收益，**不是**单页读得更多：
+   * 底层单次最多吐 1000 条（传 2000 实际拿到 1000），所以有效上限就是 1000。
+   */
+  const PAGE_SIZE = 1000
+  /**
+   * 每页内部**再切块**上报进度/检查取消。
+   *
+   * 为什么必须有（**改页大小当场踩到的回归**）：原先"一页 = 一次 `reportProgress` + 一次
+   * `throwIfCancelled`"，而页大小 100 → 1000 之后，同一个会话的**回调次数掉了 10 倍**。
+   * `export-progress-job.spec.ts` 立刻红了两条：
+   *   · 「按 jobId 推出递增进度」实测事件数 **2（要求 ≥20）**；
+   *   · 「导出中途取消」**不再 reject**（一页就跑完了，取消来不及生效）。
+   * ⇒ 光放大页大小会**牺牲进度与取消的粒度**，那是用户能感知的（点取消要等一整页）。
+   * 所以在页内按 `PROGRESS_CHUNK` 再报一次，把粒度补回来；调用次数仍然只有原来的 1/10。
+   */
+  const PROGRESS_CHUNK = 100
   let cursor: number | undefined
   let cursorLocalId: number | undefined
   let collected = 0
   let pages = 0
-  while (collected < target && pages < MAX_PAGES) {
-    // 分页收集是最长的同步循环之一（最多 500 轮），取消要在这里能生效。
+  const maxPages = Math.ceil(target / PAGE_SIZE) * 2 + 10
+  while (collected < target && pages < maxPages) {
+    // 分页收集是最长的同步循环之一，取消要在这里能生效。
     throwIfCancelled(ctrl?.signal)
     // 传复合游标，避免 sort_seq 重复处分页丢消息（导出必须一条不漏）。
-    const env = queryMessages(decryptedDir, username, 100, cursor, undefined, cursorLocalId)
+    const env = queryMessages(decryptedDir, username, PAGE_SIZE, cursor, undefined, cursorLocalId)
     if (env.messages.length === 0) break
-    collected += env.messages.length
     pages += 1
-    yield env.messages
+    // 页内分块上报：既保持"总调用次数少"，又不让进度/取消的粒度变粗。
+    for (let off = 0; off < env.messages.length; off += PROGRESS_CHUNK) {
+      const chunk = env.messages.slice(off, off + PROGRESS_CHUNK)
+      collected += chunk.length
+      yield chunk
+      // ⚠️ 必须在这里再看一次取消：一页有 1000 条、要分 10 块 yield，**每块都会触发一次
+      // `reportProgress`**。而取消是在"页边界"检查的 ⇒ 用户在这 10 块之间按取消时，
+      // 后面几块会继续 yield、继续报进度（那几块反正会被丢掉，纯属白干）。
+      // 实测回归：`export-stream.spec.ts` 的「收集阶段可取消」fixture 只有 250 条，
+      // 一次 abort 之后仍被回调了 3 次（`p.done` 100→200→250），断言 `cancels === 1` 就红了。
+      // 这里提前跳出，语义回到"取消后不再有产出"。
+      throwIfCancelled(ctrl?.signal)
+      if (collected >= target) break
+    }
     if (!env.hasMore) break
     cursor = env.cursor
     cursorLocalId = env.cursorLocalId
@@ -106,6 +145,7 @@ export async function collectMessagesAsync(decryptedDir: string, username: strin
     sinceYield += 1
     if (sinceYield >= COLLECT_YIELD_EVERY_PAGES) {
       sinceYield = 0
+      throwIfCancelled(ctrl?.signal)
       await yieldToEventLoop()
     }
   }
@@ -170,6 +210,67 @@ export function formatTxt(msgs: WechatMessage[], username: string): string {
     lines.push('')
   }
   return lines.join('\n')
+}
+
+/**
+ * 每个输出块覆盖多少条消息（W2-8.1）。
+ *
+ * 200 条 × 3 行 ≈ 4~12KB 一块：既远小于「一整个会话」（5 万条时是几 MB 到几十 MB），
+ * 又足够大到不会让块数本身成为开销。
+ */
+const TXT_CHUNK_MSGS = 200
+
+/**
+ * `formatTxt` 的**流式**版本：逐块产出，拼起来与 `formatTxt(...)` **逐字节相同**。
+ *
+ * ## 为什么需要（W2-8.1）
+ *
+ * `formatTxt` 先把整个会话拼成一个字符串，再交给 `ZipFileWriter.addFile` →
+ * `deflateRawSync` —— 那是**一次同步压缩整块输入**。一个会话最多 5 万条消息，
+ * 拼出来的串有几 MB 到几十 MB，这一次 `deflateRawSync` 能把后端 worker 独占几百毫秒：
+ * 期间所有面板都动不了，而用户只看到「导出中」。
+ *
+ * H8 已经把**收集段**改成了让出版（每 8 页一次），也把 xlsx 的 sheet 改成了
+ * `addStream`；AllSessions 的 txt 是剩下最后一条还走整块同步 deflate 的路径 —— 本条接上同一套。
+ *
+ * ## 两条不许退化的性质
+ *
+ * ① **逐字节相同**：块与块之间补一个 `'\n'`，第一个块不补 —— 拼接结果正好等于
+ *    `lines.join('\n')``。改动导出内容的失败形态是「用户拿到一份不一样的归档」，
+ *    而那不报错、也几乎不会被发现。
+ * ② **块间让出**：`for await` 的续体只是微任务，微任务永远不让定时器与其它请求插进来
+ *    （H8 那一轮实测过同一个坑），所以每块之后显式 `await yieldToEventLoop()`。
+ *
+ * @param msgs - 会话消息（与 `formatTxt` 同一个口径）。
+ * @param username - 会话用户名（用于解析发送者）。
+ * @param ctrl - 可选的进度/取消。
+ * @returns 文本块序列。
+ */
+export async function* formatTxtChunksAsync(
+  msgs: WechatMessage[],
+  username: string,
+  ctrl?: StreamControl,
+): AsyncGenerator<string> {
+  let first = true
+  /** 把一组行拼成一块；块间补的那个换行正是逐字节兼容的关键。 */
+  const put = (lines: string[]): string => (first ? ((first = false), '') : '\n') + lines.join('\n')
+  yield put([`消息导出 (${msgs.length})`, '='.repeat(48), ''])
+  let buf: string[] = []
+  let since = 0
+  for (const m of msgs) {
+    const r = rowOf(m, username)
+    buf.push(r.time + ' ' + r.sender, r.typeLabel + ': ' + r.text, '')
+    since += 1
+    if (since >= TXT_CHUNK_MSGS) {
+      since = 0
+      yield put(buf)
+      buf = []
+      throwIfCancelled(ctrl?.signal)
+      await yieldToEventLoop()
+    }
+  }
+  if (buf.length > 0) yield put(buf)
+  void ctrl
 }
 
 /** csv export body. */
@@ -384,6 +485,7 @@ export async function* xlsxSheetChunksAsync(
     sinceYield += 1
     if (sinceYield >= WRITE_YIELD_EVERY_ROWS) {
       sinceYield = 0
+      throwIfCancelled(ctrl?.signal)
       await yieldToEventLoop()
     }
   }

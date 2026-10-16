@@ -1,9 +1,13 @@
 /**
- * 单聊的「推荐回复」面板：按当前会话上下文（+ 当前选中的知识库）生成候选回复。
+ * 单聊的「推荐回复」区块：按当前会话上下文（+ 当前选中的知识库）生成候选回复。
  *
- * 与会话级 AI 面板（`SessionAsk.tsx`）是**姊妹面板**：同一处视觉语言（共用
- * `session-ask.module.css` 的面板外壳与建议卡样式）、同一处挂载位置（消息流右侧第三栏）、
- * 同一个原则 —— **读取范围恒为当前会话**，不跨会话取别处的聊天。
+ * 2026-09-25 起它**不再是独立面板**：外壳（边框 / 头部 / 关闭按钮）交给 `ChatRightPanel`，
+ * 本文件只渲染区块内容 —— 右栏现在是「上：推荐回复 / 下：分析」共用一个容器。
+ * 为什么要抽外壳：两边各带一份 `.panel` 拼在一起，会得到双层边框 + 两个头部。
+ *
+ * 与会话级 AI 面板（`SessionAsk.tsx`）仍是姊妹件：同一处视觉语言（共用
+ * `session-ask.module.css` 的外壳与建议卡样式）、同一个原则 —— **读取范围恒为当前会话**，
+ * 不跨会话取别处的聊天。
  *
  * 与问答的区别：这里是**一次生成、一次呈现**（不做多轮、不流式），产出物是「可以照着发
  * 的句子」。本应用只读、没有发送微信消息的代码路径，所以唯一的动作是**复制**。
@@ -11,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiSuggestReplies } from '../api.ts'
 import { copyTextToClipboard } from '../utils/misc.ts'
-import { Select } from '../ui/kit.tsx'
+import { ErrorState, Select } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
 import css from './session-ask.module.css'
 
@@ -25,17 +29,15 @@ export interface ReplyTarget {
 export interface ReplySuggestProps {
   /** 目标会话（读取范围就是它）。 */
   target: ReplyTarget
-  /** 关闭面板。 */
-  onClose: () => void
 }
 
 /**
- * Render the per-session「推荐回复」panel.
+ * Render the per-session「推荐回复」block (no outer panel shell of its own).
  * @param props - see `ReplySuggestProps`.
- * @returns panel element tree.
+ * @returns block element tree.
  */
 export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
-  const { target, onClose } = props
+  const { target } = props
   const { kbId: scopeKbId, kbs, readError: kbListError, loading: kbListLoading } = useKbScope()
   /**
    * 知识库选择：默认**跟随应用当前选中的库**，用户在本面板里改过之后就以本地选择为准。
@@ -133,24 +135,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   }
 
   return (
-    <div className={css.panel} aria-label="推荐回复">
-      <div className={css.head}>
-        <div className={css.title}>推荐回复</div>
-        <div className={css.headActions}>
-          <button type="button" className={css.iconBtn} title="换一批" aria-label="换一批"
-            disabled={loading} onClick={() => { load() }}>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 4v5h-5" />
-            </svg>
-          </button>
-          <button type="button" className={css.iconBtn} title="关闭推荐回复" aria-label="关闭推荐回复" onClick={onClose}>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
+    <>
       {/* 依据（只读）：说清这次到底看了什么 —— 别笼统写「已参考」 */}
       <div className={css.scopeRow}>
         <span className={css.scopeLabel}>依据</span>
@@ -158,6 +143,14 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
           {target.displayName || target.username}{basis ? ` · ${String(basis.messages)} 条对话` : ''}
           {basis && basis.kb > 0 ? ` · 知识库「${kbName}」${String(basis.kb)} 段` : ''}
         </span>
+        {/* 「换一批」放在这一行尾部：它是内容级动作（重取候选），而头部已归组合层
+            `ChatRightPanel`（那里只留面板级的「关闭」），两类动作不该混在一处。 */}
+        <button type="button" className={css.iconBtn} title="换一批" aria-label="换一批"
+          disabled={loading} onClick={() => { load() }}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 4v5h-5" />
+          </svg>
+        </button>
       </div>
 
       {/* 知识库选择（本面板内生效，不动应用全局作用域） */}
@@ -175,13 +168,13 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
       <div className={css.body}>
         {loading && <div className={css.introSub}>正在按这段对话生成候选…</div>}
         {!loading && error !== null && (
-          // 与姊妹面板 `SessionAsk` 同一套错误呈现（.error + role="alert"）：
-          // 读失败 ≠ 没有条目，所以失败要显式说，而不是落到下面那句「还没有可用的对话内容」。
-          <div className={css.error} role="alert">
-            {error}
-            <br />
-            <span className={css.scopeLabel}>（被隐私设置拦下时，去「数据边界与出网」里关掉「禁止 AI 出网」）</span>
-          </div>
+          // R4：改用 kit 的 ErrorState。原先手写 `css.error` 指向 `session-ask.module.css`，
+          // 而 R4 收编时删掉了那份 `.error` 定义 ⇒ 这里会变成悬空类名（样式静默失效）。
+          // `u14-empty-state.wiring.spec.ts` 的悬空类名守卫当场抓到，才有了这次修正。
+          <ErrorState
+            message={error}
+            detail="模型不可用或密钥未配置时，去「数据配置 → AI 大模型」检查"
+          />
         )}
         {!loading && error === null && replies.length > 0 && (
           <>
@@ -197,7 +190,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
               ))}
             </div>
             {copyFailed && (
-              <div className={css.error} role="alert">复制失败：剪贴板没有被写入，请手动选中文字后复制</div>
+              <ErrorState message="复制失败：剪贴板没有被写入，请手动选中文字后复制" />
             )}
             <div className={css.introSub}>
               {basis?.degraded ? `${basis.degraded}。` : ''}
@@ -209,6 +202,6 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
           <div className={css.introSub}>这个会话还没有可用的对话内容。</div>
         )}
       </div>
-    </div>
+    </>
   )
 }

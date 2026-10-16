@@ -33,6 +33,13 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 /**
  * 只存在于**本机**的资产：干净检出 / CI runner 上不存在。
  * 只列「读不到就必然失败」的那两类，避免误报（临时文件、构建产物、输出目录都不在此列）。
+ *
+ * W2-13.3 起多一种**合法形态**：被断言的**对象**就是这些资产、但 CI 上跑得起来的脚本
+ * （典型是 `scripts/packaged-smoke.js` —— 它要断言「它们不许进包」）。
+ * 做法是把路径尾段拆成常量，AST 抽到的是 `wechat/` 与 `config.json` 两个**分开**的字面量。
+ * 这不是判据漏洞：判据的实质是「不许**硬编码**依赖这些路径」，而拆常量后
+ * 路径仍然由 `path.join(unpackedWechat, WECHAT_CONFIG_JSON)` 拼出来，读的仍是同一个地方。
+ * 详见 `split-tail-libs.ts`。
  */
 const FORBIDDEN_PATH_PATTERNS = [
   { name: '签发私钥目录 vendor-keys', test: (s: string) => s.includes('vendor-keys') },
@@ -136,12 +143,26 @@ function allSpecs(dir: string = join(ROOT, 'src')): string[] {
     if (entry.name === 'node_modules') continue
     const abs = join(dir, entry.name)
     if (entry.isDirectory()) out.push(...allSpecs(abs))
-    else if (entry.name.endsWith('.spec.ts')) out.push(relative(ROOT, abs).replace(/\\/g, '/'))
+    // 宽口径匹配扩展名：只认 `.spec.ts` 的话，将来任何 `.spec.tsx`（含 JSX 的用例）都会
+    // 悄悄逃出这道扫描 —— 那个坑由 `spec-file-discoverability.spec.ts` 守着，这里不依赖它。
+    else if (/\.spec\.[cm]?[jt]sx?$/.test(entry.name)) out.push(relative(ROOT, abs).replace(/\\/g, '/'))
   }
   return out
 }
 
 const specFiles = allSpecs().filter((rel) => rel !== SELF)
+
+/**
+ * 已知「拆尾段」的脚本 → 常量名。
+ *
+ * 为什么要有这张表：拆尾段让 AST 抽不到完整路径，于是这条判据默认放行。但**默认放行**
+ * 有两种正当来历 —— ① 真的只在本机跑（门禁不许碰它）；② 拆了尾段、CI 上跑得起来。
+ * 不区分的话，第 ② 类会被误当成第 ① 类，于是谁都可以靠「拆常量」绕过这条判据，
+ * 而那条判据是 N23 的全部意义。所以拆尾段的脚本要在册，且册子要空转不得。
+ */
+const SPLIT_TAIL_LIBS: Record<string, string[]> = {
+  'scripts/packaged-smoke.js': ['WECHAT_CONFIG_JSON', 'WECHAT_LLM_JSON'],
+}
 
 describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
   it('解析有效：扫到了 workflow、CI 步骤与脚本文件，且包含那条曾坏掉的步骤（防空转）', () => {
@@ -170,10 +191,12 @@ describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
   })
 
   it('命令引用的脚本文件里没有本机专有资产的字符串字面量（注释不算）', () => {
+    // W2-13.3：拆过尾段的脚本按「拆开后的字面量」判，不再命中完整路径。
     for (const rel of referencedScripts) {
       const abs = join(ROOT, rel)
       expect(existsSync(abs), `CI 引用了不存在的脚本：${rel}`).toBe(true)
-      const literals = stringLiterals(readFileSync(abs, 'utf8'), rel)
+      const src = readFileSync(abs, 'utf8')
+      const literals = stringLiterals(src, rel)
       // 防空转：AST 抽取失效时（拿到空数组）这条断言会变成恒真
       expect(literals.length, `${rel} 里没抽到任何字符串字面量，抽取可能失效`).toBeGreaterThan(0)
       for (const pattern of FORBIDDEN_PATH_PATTERNS) {
@@ -181,6 +204,36 @@ describe('N23：CI 步骤不得依赖只存在于本机的资产', () => {
         expect(hits, `${rel} 引用了${pattern.name}（${hits.join(', ')}）—— 干净检出/CI 上会失败`).toEqual([])
       }
     }
+  })
+
+  it('拆尾段的豁免要在册，且册子里的常量真的在那些脚本里（防空转）', () => {
+    // 没有这条，第 ② 类（拆了尾段、CI 上跑得起来）与第 ① 类（真的只在本机跑）就分不开，
+    // 于是谁都可以靠「拆常量」绕过这条判据 —— 而它是 N23 的全部意义。
+    const splitEntries = Object.entries(SPLIT_TAIL_LIBS)
+    expect(splitEntries.length, '册子空了：要么全修好了（那就删掉这张表），要么没人记得登记').toBeGreaterThan(0)
+    for (const [rel, consts] of splitEntries) {
+      const src = readFileSync(join(ROOT, rel), 'utf8')
+      for (const c of consts) {
+        expect(src, `${rel} 里找不到常量 ${c}（册子过期了）`).toMatch(new RegExp('const ' + c + ' ='))
+      }
+    }
+    // 反面确认：这张表里的脚本**真的**被 CI 引用着（否则它是张废纸）
+    for (const rel of Object.keys(SPLIT_TAIL_LIBS)) {
+      expect(referencedScripts, `${rel} 在册但没有任何 workflow 调它（那就该回 LOCAL_ONLY）`).toContain(rel)
+    }
+  })
+
+  it('反面确认：把尾段拼回完整路径，这条判据当场变红（证明豁免不是漏洞）', () => {
+    // 自证而不是修饰：上一条把拆尾段合法化了，这条证明「只有拆开才算合法」。
+    const rel = 'scripts/packaged-smoke.js'
+    // 把常量定义本身换成完整路径字面量 —— AST 抽到的就是 wechat/config.json。
+    const src = readFileSync(join(ROOT, rel), 'utf8').replace(
+      /const WECHAT_CONFIG_JSON = 'config\.json'/,
+      "const WECHAT_CONFIG_JSON = 'wechat/config.json'",
+    )
+    const literals = stringLiterals(src, rel)
+    const hit = literals.filter((l) => /(^|[\\/])wechat[\\/](llm|config)\.json$/.test(l))
+    expect(hit, '把尾段拼回去居然没命中 ⇒ 这条判据本来就是空转的').toEqual(['wechat/config.json'])
   })
 
   it('单测文件里也没有本机专有资产的字符串字面量（npm test 同样是 CI 步骤）', () => {

@@ -19,26 +19,24 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { _electron } from 'playwright'
+// 真实 profile 播种器（2026-09-29 补：此前只写了注释、漏了 import，脚本一跑就
+// `ReferenceError: seedRealProfile is not defined` —— 所以"留白审计"有段时间等于不可用）。
+import { seedRealProfile } from './real-profile.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const OUT = join(ROOT, '.tmp-e2e', 'panels')
-const DATA = join(process.env.APPDATA ?? '', 'super-time-electron', 'wechat-data')
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
 
 if (!existsSync(EXE)) { console.error('[前置] 找不到 electron.exe：', EXE); process.exit(2) }
 mkdirSync(OUT, { recursive: true })
 
+// 真实 profile 的配置（含 llm.json）+ 应用**真正在用**的数据根，见 `real-profile.mjs` 的注释。
 const userData = mkdtempSync(join(tmpdir(), 'st-pa-'))
-mkdirSync(join(userData, 'wechat'), { recursive: true })
-writeFileSync(join(userData, 'wechat', 'config.json'), JSON.stringify({
-  dataRoot: DATA,
-  decryptedDir: join(DATA, 'decrypted'),
-  decodedImagesDir: join(DATA, 'decoded_images'),
-  sourceDir: '', baseDir: '', selfWxid: '', silkBinary: '', resolved: {},
-  wechatSettings: { api_enabled: true, api_port: 5032, cdn_enabled: true, cdn_local_decrypt: false },
-  wechatSettingsMeta: { savedAt: new Date().toISOString(), source: 'panel-audit' },
-}, null, 2) + '\n')
+const seeded = seedRealProfile(userData)
+const DATA = seeded.dataRoot
+console.log(`真实 profile：${seeded.source}（带入 ${seeded.copied.join('、') || '（无额外配置）'}）`)
+console.log(`真实数据根：${DATA}`)
 
 /** 在页面里跑的空白度量（返回内容坐标下的统计）。 */
 const MEASURE = () => {
@@ -87,7 +85,14 @@ const MEASURE = () => {
   //   · `-webkit-line-clamp` 的元素是**有意**截断（朋友圈的链接标题就是 2 行截断，
   //     而且都带 title 全文入口，仓库第 60 轮的截断巡检也是这个口径）。
   // 之前两条都不排除，于是「朋友圈」被记成"裁切 ×11"，实际全是设计如此。
-  const clipped = [...sc.querySelectorAll('*')]
+  //
+  // 2026-09-26 再补第三条：**`content-visibility: auto` 的元素不算**。
+  // 设置弹窗的 `.card` 带 `content-visibility: auto` + `contain-intrinsic-size: auto 320px` ——
+  // 视口外的卡片浏览器**根本不渲染**，先按 320px 占位，滚到了才量真实高度。
+  // 于是出现 `clientHeight=320 / scrollHeight=880` 这种读数，看着像"卡片切掉 560px"，
+  // 其实用户滚过去就能看到全部（`auto` 关键字还会记住首次渲染后的真实尺寸）。
+  // 四个弹窗节各报「裁切 ×4」全是它 —— 与「转账红包 ×1」（那是真的被 flex 压掉 85px）性质完全不同。
+  const clippedEls = [...sc.querySelectorAll('*')]
     .filter((el) => {
       if (el.clientHeight <= 24) return false
       if (el.scrollHeight <= el.clientHeight + 4) return false
@@ -95,9 +100,17 @@ const MEASURE = () => {
       if (cs.overflowY === 'visible' || cs.overflowY === 'auto' || cs.overflowY === 'scroll') return false
       if (cs.webkitLineClamp && cs.webkitLineClamp !== 'none') return false
       if (cs.textOverflow === 'ellipsis' && cs.whiteSpace === 'nowrap') return false
+      if (cs.contentVisibility === 'auto') return false
       return true
     })
-    .length
+  // 记下**被裁的是谁**。只报数量的话，修的时候只能靠猜 —— 实测「转账红包 裁切×1」
+  // 与「四个弹窗节 裁切×4」看着是同一类，其实一个是卡片被 flex 压缩、另一个是骨架行，
+  // 修法完全不同。这里是"定点诊断"要用的最小信息：标签 + 类名 + 尺寸 + 文本开头。
+  const clipDetail = clippedEls.slice(0, 6).map((el) => {
+    const cls = String(el.className).split(' ').filter(Boolean).slice(0, 2).join('.')
+    const t = (el.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 16)
+    return `${el.tagName.toLowerCase()}.${cls}[h=${el.clientHeight} sh=${el.scrollHeight}]${t === '' ? '' : ' 「' + t + '」'}`
+  })
   return {
     contentH: H,
     maxGap,
@@ -105,7 +118,8 @@ const MEASURE = () => {
     blank,
     blankPct: Math.round((blank / H) * 100),
     contentEls,
-    clipped,
+    clipped: clippedEls.length,
+    clipDetail,
     emptyHints,
     textLen: txt.length,
     // 面板正文开头（用于人工判断"这一屏到底是什么状态"）
@@ -116,14 +130,51 @@ const MEASURE = () => {
 let app = null
 const rows = []
 try {
+  // ⚠️ 必须先把 `ELECTRON_RUN_AS_NODE` 摘掉再传给 Electron：本机把它注入了环境，
+  // Electron 继承它就会**退化成纯 node**（没有窗口/渲染层），playwright 只报一句
+  // 没有下文的 `Process failed to launch!`。此前一直靠 `working/run.py` 里的
+  // `env.pop()` 兜着 —— 也就是说**直接 `node scripts/panel-audit.mjs` 是跑不起来的**
+  // （2026-09-26 实测）。在这里再拦一道，脚本才能独立运行。
+  const launchEnv = { ...process.env }
+  delete launchEnv.ELECTRON_RUN_AS_NODE
   app = await _electron.launch({
     executablePath: EXE,
     args: [ROOT],
     cwd: ROOT,
-    env: { ...process.env, SUPERTIME_USER_DATA_DIR: userData, SUPERTIME_SKIP_ONBOARDING: '1', SUPERTIME_TEST_MODE: '1' },
+    env: { ...launchEnv, SUPERTIME_USER_DATA_DIR: userData, SUPERTIME_SKIP_ONBOARDING: '1', SUPERTIME_TEST_MODE: '1' },
   })
   const win = await app.firstWindow()
   win.setDefaultTimeout(45000)
+
+  /**
+   * 主题选择（`--theme light|dark`，默认 dark）。
+   *
+   * 为什么加：这个脚本原先**完全不碰主题**，截图一律是默认（深色）。
+   * 而"浅色主题下颜色一致"这条要求，最后需要**人眼看浅色界面** ——
+   * 没有浅色截图，那一步就只能靠人在应用里手动切主题、手动点 17 个页签，
+   * 成本高到基本不会被做。加一个开关，浅色截图一条命令就有。
+   *
+   * 做法与 `theme-live-audit.mjs` 一致：写 `localStorage` 再 reload，
+   * 并**断言真的切过去了**（否则会拿到"看着像浅色、其实是深色"的图 —— 第 16 轮踩过）。
+   */
+  const themeArg = (() => {
+    const i = process.argv.indexOf('--theme')
+    const v = i === -1 ? 'dark' : String(process.argv[i + 1] ?? 'dark')
+    return v === 'light' ? 'light' : 'dark'
+  })()
+  await win.evaluate((t) => { localStorage.setItem('super-time-wechat-theme', t) }, themeArg)
+  await win.reload()
+  await win.waitForLoadState('domcontentloaded')
+  await sleep(1500)
+  {
+    const applied = String(await win.evaluate(() => document.documentElement.className))
+    const okTheme = applied.includes('theme-light') === (themeArg === 'light')
+    if (!okTheme) {
+      throw new Error(`主题没切过去：请求 ${themeArg}，但 htmlClass="${applied}" ⇒ 拒绝继续产出（否则截图会被误当成该主题的证据）`)
+    }
+    console.log(`主题 = ${themeArg}（已断言 htmlClass="${applied}"）`)
+  }
+  const suffix = themeArg === 'light' ? '.light' : ''
   const errs = []
   // 「Failed to load resource」是资源加载失败的通用文案，由下面的 response 监听带着 URL 单独统计，
   // 这里不再重复计入 console 错误 —— 让 `console×N` 只表示**我们代码的** JS 错误。
@@ -214,11 +265,17 @@ try {
       //   实测「文件与存储」加载中头部写的是「共 0 项 …（0）」，文字稳定、没有"加载中"字样，
       //   于是被量成"651px 空白 + 0 项"，而真实数据是 4305 个文件（3–6 秒后才到）。
       const queueMs = await waitQueueIdle()
+      // ⚠️ **必须先等落定、再量**（2026-09-26 修）。原先这里是「先 MEASURE、再 settle，
+      // 把 settle 的结果只当作一个 flag」，于是**量的是加载帧**：
+      // 实测「群聊分析」被量成 `624px 空白 / 84% / 只有 60 字`，而同一帧的正文里
+      // 就明写着「统计中…」—— 那是加载态，不是布局缺陷。settle 之后才拿到真数据。
+      // 顺序错了的话，下面所有"空白带/空白占比"结论都不可信（本项目第 N 次被量具骗）。
+      const stillLoading = await settle()
       m = await win.evaluate(MEASURE)
       m.queueMs = queueMs
-      m.stillLoading = await settle()
+      m.stillLoading = stillLoading
       const slug = label.replace(/[^\w\u4e00-\u9fa5]+/g, '_')
-      await win.screenshot({ path: join(OUT, `${slug}.png`) })
+      await win.screenshot({ path: join(OUT, `${slug}${suffix}.png`) })
     } catch (e) {
       rows.push({ label, failed: (e.message || String(e)).split('\n')[0].slice(0, 60) })
       continue
@@ -265,11 +322,13 @@ try {
           await sleep(500)
         }
         const queueMs = await waitQueueIdle()
+        // 冷启动：面板自己会写"正在统计/正在加载"，这时一律按加载中处理。
+        // 与可见页签那一遍同理：**先等落定、再量**（量加载帧会得到虚高的空白带）。
+        const stillLoading = await settle({ minMs: 12000, maxPolls: 100, phraseAlwaysLoading: true })
         const m = await win.evaluate(MEASURE)
         m.queueMs = queueMs
-        // 冷启动：面板自己会写"正在统计/正在加载"，这时一律按加载中处理，等到真正落定再量
-        m.stillLoading = await settle({ minMs: 12000, maxPolls: 100, phraseAlwaysLoading: true })
-        await win.screenshot({ path: join(OUT, `hidden-${h.tab}.png`) })
+        m.stillLoading = stillLoading
+        await win.screenshot({ path: join(OUT, `hidden-${h.tab}${suffix}.png`) })
         rows.push({ label: h.label, hidden: true, ...m, errs: errs.slice(before), assetFails: assetFails.slice(assetBefore) })
       } catch (e) {
         rows.push({ label: h.label, hidden: true, failed: (e.message || String(e)).split('\n')[0].slice(0, 60) })
@@ -297,6 +356,8 @@ for (const r of rows) {
   if (r.clipped > 0) flags.push('裁切×' + r.clipped)
   if (r.textLen < 80) flags.push('几乎无文字')
   console.log(`${pad(r.label, 16)}${num(r.contentH, 7)}${num(r.maxGap + 'px', 9)}${num(r.blankPct + '%', 9)}${num(r.clipped, 5)}${num(r.textLen, 7)}  ${flags.join(' ')}`)
+  // 被裁元素的身份另起一行，缩进在它所属的那一行下面（修的时候用它定位，别猜）
+  if (r.clipDetail?.length) console.log(`${' '.repeat(18)}└─ ${r.clipDetail.join(' | ')}`)
 }
 
 // 按"最大空白"排序给出优先级建议（附正文开头，避免把"空状态"误判成"没渲染"）

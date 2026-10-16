@@ -35,35 +35,31 @@ describe('单步判定（口径对齐 Settings 的 stepStates）', () => {
     expect(stepDone('imgkey', facts())).toBe(false)
     expect(stepDone('imgkey', facts({ imgAes: '00112233' }))).toBe(true)
   })
-
-  it('图片解码：以 CDN 开关为准', () => {
-    expect(stepDone('img', facts())).toBe(false)
-    expect(stepDone('img', facts({ cdnEnabled: true }))).toBe(true)
-  })
 })
 
 describe('整体进度', () => {
-  it('全未完成 → 0/4', () => {
-    expect(setupProgress(facts())).toEqual({ done: 0, total: 4, complete: false })
+  it('全未完成 → 0/3', () => {
+    expect(setupProgress(facts())).toEqual({ done: 0, total: 3, complete: false })
   })
 
   it('部分完成按实际计数', () => {
     const p = setupProgress(facts({ accounts: 2, keysLoaded: true, keyCount: 22 }))
-    expect(p).toEqual({ done: 2, total: 4, complete: false })
+    expect(p).toEqual({ done: 2, total: 3, complete: false })
   })
 
-  it('四项齐了才算完成', () => {
-    const p = setupProgress(facts({ accounts: 1, keysLoaded: true, keyCount: 22, imgAes: 'a', cdnEnabled: true }))
-    expect(p).toEqual({ done: 4, total: 4, complete: true })
+  it('三项齐了才算完成', () => {
+    const p = setupProgress(facts({ accounts: 1, keysLoaded: true, keyCount: 22, imgAes: 'a' }))
+    expect(p).toEqual({ done: 3, total: 3, complete: true })
   })
 
   it('语音引擎未就绪不影响「完成」（它是可选项）', () => {
-    const p = setupProgress(facts({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', cdnEnabled: true, voiceReady: false }))
+    const p = setupProgress(facts({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', voiceReady: false }))
     expect(p.complete).toBe(true)
   })
 
-  it('步骤定义就是这四项，顺序与设置里的配置向导一致', () => {
-    expect(SETUP_STEPS.map((s) => s.key)).toEqual(['detect', 'dbkey', 'imgkey', 'img'])
+  it('步骤定义就是这三项，顺序与设置里的配置向导一致', () => {
+    // 2026-09-30：原来的第四步「图片解码」判的是已删除的 CDN 开关，随开关一起移除。
+    expect(SETUP_STEPS.map((s) => s.key)).toEqual(['detect', 'dbkey', 'imgkey'])
   })
 })
 
@@ -72,10 +68,9 @@ describe('继续配置的落点', () => {
     expect(firstPendingStep(facts())).toBe('detect')
     expect(firstPendingStep(facts({ accounts: 1 }))).toBe('dbkey')
     expect(firstPendingStep(facts({ accounts: 1, keysLoaded: true, keyCount: 3 }))).toBe('imgkey')
-    expect(firstPendingStep(facts({ accounts: 1, keysLoaded: true, keyCount: 3, imgAes: 'a' }))).toBe('img')
   })
 
   it('全部完成时回落第一步（不会返回 undefined）', () => {
-    expect(firstPendingStep(facts({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a', cdnEnabled: true }))).toBe('detect')
+    expect(firstPendingStep(facts({ accounts: 1, keysLoaded: true, keyCount: 1, imgAes: 'a' }))).toBe('detect')
   })
 })

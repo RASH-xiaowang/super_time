@@ -11,10 +11,10 @@
  * display:block + margin-top:1px」；第 35 轮的文字工具类收敛因此跳过了它（同名多定义
  * 迁移会丢声明）。本轮把两条合并成一条纯排版规则，字号/颜色交给 .textMeta —— 计算样式不变。 */
 .statLabel { display: block; margin-top: 1px; }
-.notice { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
+.notice { margin: 8px 0 0; padding: 6px 10px; border-radius: var(--nm-r-sm); font-size: 12px; }
 .noticeOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 8%, transparent); }
 .noticeErr { color: var(--nm-danger); background: color-mix(in srgb, var(--nm-danger) 8%, transparent); }
-.st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+.st { display: inline-block; padding: 1px 8px; border-radius: var(--nm-r-pill); font-size: 11px; font-weight: 600;
   corner-shape: round;
 }
 .stOk { color: var(--nm-success); background: color-mix(in srgb, var(--nm-success) 10%, transparent); }
@@ -57,7 +57,7 @@
   min-height: 88px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   min-width: 0;
 }
@@ -68,7 +68,7 @@
   font-family: var(--nm-font-mono, monospace);
 }
 .statHint {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   opacity: 0.75;
 }

@@ -10,29 +10,36 @@
  * 所以这些口径不是"实现细节"，而是结论可信度的前提，必须锁住。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { findRoot, readText } from '../../../test-helpers/wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-
-function findRoot(start: string): string {
-  let d = start
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(d, 'main.js')) && existsSync(join(d, 'package.json'))) return d
-    d = dirname(d)
-  }
-  throw new Error('找不到仓库根')
-}
+const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)
-const audit = readFileSync(join(ROOT, 'scripts', 'panel-audit.mjs'), 'utf8')
+const audit = readText(join(ROOT, 'scripts', 'panel-audit.mjs'))
 
 describe('审计工具：落定判定', () => {
   it('必须同时要求：文字稳定 3 次 + 无加载措辞 + 无骨架 + 最短等待', () => {
     expect(audit).toMatch(/stable >= 3/)
     expect(audit).toMatch(/Date\.now\(\) - t0 > minMs/)
     expect(audit, '缺少骨架检测').toMatch(/\.nm-skel/)
+  })
+
+  it('**必须先等落定、再量化**（两个循环都要）—— 反过来的话量到的是加载帧', () => {
+    // 2026-09-26 实录：原先两处都是「先 MEASURE、再 settle，settle 只当 flag」，
+    // 于是「群聊分析」被量成 `624px 空白 / 84% / 60 字` —— 而同一帧的正文里就写着
+    // 「统计中…」。等落定之后那 84% 根本不是空白。量具顺序错了，后面所有空白结论都不可信。
+    const starts: number[] = []
+    let at = audit.indexOf('const queueMs = await waitQueueIdle()')
+    while (at >= 0) { starts.push(at); at = audit.indexOf('const queueMs = await waitQueueIdle()', at + 1) }
+    expect(starts.length, '找不到「先等队列排空」这一步，口径可能改了写法').toBeGreaterThanOrEqual(2)
+    for (const start of starts) {
+      const settleAt = audit.indexOf('await settle(', start)
+      const measureAt = audit.indexOf('evaluate(MEASURE)', start)
+      expect(settleAt, '这一段没有落定判定').toBeGreaterThan(-1)
+      expect(measureAt, '这一段没有量化').toBeGreaterThan(-1)
+      expect(settleAt, '必须先等落定再量化（否则量到的是加载帧）').toBeLessThan(measureAt)
+    }
   })
 
   it('加载措辞只在内容很少时才算加载态（否则说明文字里的"统计中"会让人空等）', () => {
@@ -61,6 +68,21 @@ describe('审计工具：裁切与错误分类', () => {
     expect(audit).toMatch(/cs\.overflowY === 'auto' \|\| cs\.overflowY === 'scroll'/)
     expect(audit).toMatch(/cs\.webkitLineClamp && cs\.webkitLineClamp !== 'none'/)
     expect(audit).toMatch(/cs\.textOverflow === 'ellipsis' && cs\.whiteSpace === 'nowrap'/)
+  })
+
+  it('裁切还要排除 `content-visibility: auto`（那是"还没渲染"的占位，不是被裁）', () => {
+    // 设置弹窗的 `.card` 带 `content-visibility: auto` + `contain-intrinsic-size: auto 320px`：
+    // 视口外的卡片浏览器不渲染，先按 320px 占位 ⇒ 读出 `clientHeight=320 / scrollHeight=880`，
+    // 看着像"切掉 560px"。四个弹窗节各报「裁切 ×4」全是它。
+    expect(audit, '没有排除 content-visibility: auto').toMatch(/cs\.contentVisibility === 'auto'/)
+  })
+
+  it('裁切必须报出**被裁的是谁**（只报数量就只能靠猜，而两类裁切的修法完全不同）', () => {
+    expect(audit, '没有记录被裁元素的身份').toMatch(/clipDetail/)
+    expect(audit, 'clipDetail 没进结果对象').toMatch(/clipDetail,\s*\n/)
+    expect(audit, '结果表没把身份打出来').toMatch(/r\.clipDetail\?\.length/)
+    // 身份里至少要能看出标签、类名与尺寸差
+    expect(audit).toMatch(/h=\$\{el\.clientHeight\} sh=\$\{el\.scrollHeight\}/)
   })
 
   it('外部资源失败与 JS 错误分开：console×N 只表示我们代码的错误', () => {

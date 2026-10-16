@@ -13,24 +13,14 @@
  *     把一个**加载态**记成了布局缺陷。量错的工具比不量更危险，所以这里一并锁住。
  * @vitest-environment node
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { assertSettledContract, findRoot, readText } from '../../../test-helpers/wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-
-function findRoot(start: string): string {
-  let d = start
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(d, 'main.js')) && existsSync(join(d, 'package.json'))) return d
-    d = dirname(d)
-  }
-  throw new Error('找不到仓库根')
-}
+const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)
-const files = readFileSync(join(HERE, 'Files.tsx'), 'utf8')
-const audit = readFileSync(join(ROOT, 'scripts', 'panel-audit.mjs'), 'utf8')
+const files = readText(join(HERE, 'Files.tsx'))
+const audit = readText(join(ROOT, 'scripts', 'panel-audit.mjs'))
 
 describe('文件与存储：加载期不许把计数写成 0', () => {
   it('首屏加载且尚无数据时，页头说的是"正在统计"而不是"共 0 项"', () => {
@@ -46,9 +36,9 @@ describe('文件与存储：加载期不许把计数写成 0', () => {
   it('加载中必须有骨架，且骨架的列宽与真实 fileGrid 一致（否则数据到了会"跳一下"）', () => {
     expect(files).toContain('{loading && <ListSkeleton rows={10} grid minCol={200} />}')
     // 真实网格是 minmax(200px)，骨架必须用同一个下限
-    const listCss = readFileSync(join(HERE, 'list-panel.module.css'), 'utf8')
+    const listCss = readText(join(HERE, 'list-panel.module.css'))
     expect(listCss).toMatch(/\.fileGrid\s*\{\s*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px/)
-    expect(readFileSync(join(HERE, 'hooks.tsx'), 'utf8'), 'ListSkeleton 不支持自定义列宽').toMatch(/ListSkeleton\(\{ rows = 8, grid = false, minCol = 120 \}/)
+    expect(readText(join(HERE, 'hooks.tsx')), 'ListSkeleton 不支持自定义列宽').toMatch(/ListSkeleton\(\{ rows = 8, grid = false, minCol = 120 \}/)
     // 只有真加载完、且确实没有文件时，才允许出现空状态（且要能自证"为什么是 0"）
     expect(files).toMatch(/!loading && !error && visible\.length === 0 && \(/)
     expect(files).toMatch(/<EmptyMaybeSyncing[\s\S]{0,400}note="文件索引来自本机解密库的 hardlink 记录/)
@@ -57,12 +47,8 @@ describe('文件与存储：加载期不许把计数写成 0', () => {
 
 describe('审计工具：不能把加载态当成落定', () => {
   it('落定判定必须同时看：文字稳定 + 无加载措辞 + 无骨架元素 + 最短等待', () => {
-    expect(audit, '缺少骨架检测').toMatch(/skel\s*[:=]/)
-    // 骨架要真的参与落定判定：骨架在 → 视为仍在加载
-    expect(audit, '骨架没有参与落定判定').toMatch(/loading = st\.loading \|\| st\.skel > 0/)
-    expect(audit, '落定没有看加载态').toMatch(/settled = st\.len === prevLen && !loading/)
-    expect(audit, '缺少最短等待（首屏空面板会骗过纯稳定性判定）').toMatch(/Date\.now\(\) - t0 > minMs/)
-    expect(audit, '稳定性要求至少 3 次').toMatch(/stable >= 3/)
+    // 五条契约收在 wiring-kit 的 assertSettledContract 里（其余面板的加载态守卫共用同一份）。
+    assertSettledContract(audit)
   })
 
   it('每行结果带上面板正文开头，便于人眼复核"这一屏到底是什么状态"', () => {

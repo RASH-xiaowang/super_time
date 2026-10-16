@@ -2,9 +2,9 @@
  * Super Time 官网 · 冒烟测试 + 响应式契约验证
  *
  * 运行：
- *   cd "C:/Users/Administrator/.workbuddy/binaries/node/workspace" && \
- *   NODE_PATH="C:/Users/Administrator/.workbuddy/binaries/node/workspace/node_modules" \
- *   "C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-3/node.exe" \
+ *   cd "." && \
+ *   NODE_PATH="node_modules" \
+ *   node \
  *   "D:/super-time-wechat/website/tests/smoke.js"
  * 退出码 0 = 全绿；明细见 tests/smoke.log
  *

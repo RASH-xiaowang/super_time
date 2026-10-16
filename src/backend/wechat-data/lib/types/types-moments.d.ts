@@ -14,12 +14,20 @@ export interface MomentCommentItem {
     to_nickname: string;
     content: string;
     ts: number;
-    /** Comment-attached image. */
+    /**
+     * Comment-attached image.
+     *
+     * ⚠️ `token` 与 `seed` 是**取到图的前提**（2026-10-09 加）。实测评论图的裸 `<url>`
+     * （不带 `token`/`idx=1`）5/5 全部 HTTP 400、0 字节；经 `snsCdnUrl` 补上后 5/5 HTTP 200。
+     * 渲染层要把这两个字段转发给后端才拿得到图，只给 `url` 必然落空。
+     */
     image?: {
         thumb?: string;
         url?: string;
         md5?: string;
         mediaId?: string;
+        token?: string;
+        seed?: string;
     };
 }
 /** One moments (朋友圈) entry (content XML parsed; CDN media URLs unresolved). */
@@ -37,6 +45,7 @@ export interface MomentItem {
         url: string;
         key: string;
         md5: string;
+        token?: string;
         id?: string;
         timelineId?: string;
     }>;
@@ -45,6 +54,7 @@ export interface MomentItem {
         thumb: string;
         key: string;
         md5: string;
+        token?: string;
         duration: number;
         id?: string;
         timelineId?: string;
@@ -109,6 +119,8 @@ export interface FavorItem {
 }
 /** One resource file entry. */
 export interface FileItem {
+    /** 媒体标签上的 `token`：CDN 取图必需（实测 `token+idx=1` 才 200）。 */
+    token?: string;
     md5: string;
     fileName: string;
     fileSize: number;
@@ -132,6 +144,18 @@ export interface MomentsSnapshot {
 export interface MomentsMonthlyRow {
     month: string;
     count: number;
+}
+/**
+ * 全量月度分布的返回值（P1-1/#9 后端读失败契约）。
+ *
+ * 原先这里直接回 `MomentsMonthlyRow[]`：sns.db 打不开 / 表读不动 与「一条朋友圈都没有」
+ * 压成同一个空数组，界面上就是「没有月度分布」，而真实原因是快照损坏（查都查不到）。
+ * 现在只有**确认读到过**才回空 `months`；读失败时 `months` 为空 **且** `readError` 非空。
+ */
+export interface MomentsMonthlySnapshot {
+    months: MomentsMonthlyRow[];
+    /** 非空 = 这次没读到（`months` 因此是空的），不是「没有动态」。 */
+    readError?: string;
 }
 /** Favorites snapshot. */
 export interface FavoritesSnapshot {

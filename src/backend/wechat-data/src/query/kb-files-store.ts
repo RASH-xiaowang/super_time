@@ -7,7 +7,8 @@
  * @module kb-files-store
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import { fmtBytes } from '../format.ts'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type {
@@ -272,11 +273,9 @@ export function asParseState(s: string): KbFileParseState {
   return all.includes(s) ? (s as KbFileParseState) : 'queued'
 }
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  return (n / 1024 / 1024).toFixed(1) + ' MB'
-}
+// P3-2：这里原来是第三份字节格式化（封顶 MB ⇒ 一份 1.5GB 的目录显示成 15360.0 MB）。
+// 实现搬进 `src/format.ts`，本文件只保留旧名字对外导出（调用方一行都不用改）。
+export const formatBytes = fmtBytes
 
 /** blob 副本的文件名：`<sha256>.<ext>`；无扩展名时只有指纹。 */
 export function blobFileName(sha256: string, ext: string): string {

@@ -24,10 +24,17 @@
   flex-shrink: 0;
   min-height: auto;
 }
+.root > [class*='panelHeader'],
+.root > [class*='panelBody'] {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1480px;
+  margin-inline: auto;
+}
 .refresh {
   padding: 6px 16px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   font-size: 12px;
   cursor: pointer;
@@ -41,15 +48,8 @@
   box-shadow: 0 0 12px color-mix(in srgb, var(--nm-cyan) 12%, transparent);
 }
 .refresh:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
-.error {
-  font-size: 12px;
-  color: var(--nm-danger);
-  padding: 24px;
-  text-align: center;
-  border: 1px solid color-mix(in srgb, var(--nm-danger) 20%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--nm-danger) 6%, transparent);
-}
+/* R4 删除：本份的 `.error` —— 唯二调用点已收编（错误提示 → kit 的 ErrorState；
+   `notice` 提示 → kit 的 .emptyInline，它本就不是错误语义）。全仓零引用后删除。 */
 /* 第 97 轮删除：旧「快捷入口」区块的遗留类（`.quickGrid` / `.quickCard` / `.quickCard:hover` /
    `.quickBody` / `.quickTitle` / `.quickArrow`）—— 该区块已被 `.ovHero*` 取代，全仓零引用、
    也没有动态拼类名；`.quickIcon` 仍被骨架屏使用，保留。 */
@@ -84,14 +84,14 @@
 .catMeta { color: var(--nm-text-2); font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 .bar {
   height: 8px;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   overflow: hidden;
   margin-top: 4px;
 }
 .barFill {
   height: 100%;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
   transition: width 0.4s;
   box-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 30%, transparent);
@@ -117,7 +117,7 @@
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   color: var(--nm-text-1);
   cursor: pointer;
@@ -143,7 +143,7 @@
   padding: 10px 12px;
   background: color-mix(in srgb, var(--nm-cyan) 5%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 8%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
 }
 .metricValue {
   font-size: 20px;
@@ -164,14 +164,14 @@
   transition: height 0.3s;
 }
 .hourFill[data-hot] { background: linear-gradient(180deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 10px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
-.hourLabel { font-size: 9.5px; color: var(--nm-text-2); }
+.hourLabel { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
 
 .topList { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .topRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .topRank { width: 18px; font-weight: 800; color: var(--nm-cyan); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
 .topName { width: 130px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
-.topTrack { flex: 1; height: 6px; border-radius: 4px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); overflow: hidden; }
-.topFill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
+.topTrack { flex: 1; height: 6px; border-radius: var(--nm-r-xs); background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); overflow: hidden; }
+.topFill { height: 100%; border-radius: var(--nm-r-xs); background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
 .topCount { width: 72px; text-align: right; color: var(--nm-text-2); flex-shrink: 0; font-variant-numeric: tabular-nums; font-family: var(--nm-font-mono, monospace); }
 
 /* ── 响应式 ── */
@@ -196,7 +196,7 @@
   gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
 }
 .deltaUp { color: var(--nm-success); font-size: 11px; font-weight: 700; }
@@ -221,7 +221,7 @@
   width: 100%;
   padding: 4px 6px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   cursor: pointer;
   color: inherit;
@@ -230,7 +230,7 @@
 .topRow:hover { background: color-mix(in srgb, var(--nm-cyan) 7%, transparent); }
 .author {
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
   padding: 6px 8px;
 }
@@ -269,7 +269,7 @@
   right: 0;
   height: 2px;
   z-index: 5;
-  border-radius: 2px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, transparent, var(--nm-cyan), var(--nm-purple), transparent);
   animation: ov-scan 1.4s ease-in-out infinite;
 }
@@ -283,12 +283,12 @@
    原先写作 .updating .card / .panel / .pod —— 这三个类来自已被取代的旧卡片设计，
    在 Overview.tsx 中零使用（实测全文件没有 css.card/css.panel/css.pod），
    因此刷新时动画永远不生效，用户得不到任何反馈。现改为真实存活的三个承载块：
-   .ovCard（OvSection 卡片）、.metric（英雄区指标）、.ovHeroStat（英雄区指标卡）。
-   第 97 轮：第三项原为 `.quickCard` —— 快捷入口区块被 `.ovHeroStat` 取代后它又成了死选择器
-   （刷新动画在英雄区失效，同一个缺陷被迁移重新引入一次），此处重新对准当前类名。 */
+   `.ovCard`（OvSection 卡片）、`.metric`（指标格）。
+   第 98 轮：原先还列了 `.ovHeroStat` —— 指标条换成霓虹牌之后它也成了死选择器，
+   于是刷新动画在首屏那一块又失效一次（**同一个缺陷第三次被"换皮"引进**：改视觉时
+   忘了同步这份"存活类名"清单）。现在只留真活着的两个，并在下方补了一条判据性的注释。 */
 .updating .ovCard,
-.updating .metric,
-.updating .ovHeroStat {
+.updating .metric {
   animation: ov-update 1.8s ease-in-out infinite;
 }
 @keyframes ov-update {
@@ -297,8 +297,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .updating .ovCard,
-  .updating .metric,
-  .updating .ovHeroStat { animation: none; }
+  .updating .metric { animation: none; }
 }
 
 /* ── 导出下拉 ── */
@@ -312,7 +311,7 @@
   min-width: 150px;
   padding: 6px;
   border: 1px solid var(--nm-border-hover);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -326,7 +325,7 @@
   width: 100%;
   padding: 8px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
@@ -385,7 +384,7 @@
 .skLine {
   display: block;
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   background-color: var(--nm-bg-hover);
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 25%, color-mix(in srgb, var(--nm-cyan) 12%, transparent) 37%, color-mix(in srgb, var(--nm-cyan) 3%, transparent) 63%);
   background-size: 200% 100%;
@@ -397,14 +396,14 @@
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   overflow: hidden;
 }
 .skeletonMap {
   height: 220px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   position: relative;
   overflow: hidden;
@@ -425,14 +424,14 @@
 .heatmapSkeleton i {
   display: block;
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: var(--nm-r-xs);
   background: var(--nm-bg-hover);
   animation: ov-pulse-block 2s ease-in-out infinite;
 }
 .skBarFill {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--nm-cyan) 10%, transparent), color-mix(in srgb, var(--nm-purple) 16%, transparent), color-mix(in srgb, var(--nm-cyan) 10%, transparent));
   background-size: 200% 100%;
   animation: ov-shimmer 1.4s ease-in-out infinite;
@@ -463,102 +462,44 @@
 }
 
 /* 新版总览：统一大小卡片式 dashboard */
-/* ── 资产指标条（核心指标 + 消息构成合并为一块面板） ──
- * 设计目标：把原先 2×4 大统计卡（约 204px）+ 独立收发条（约 40px）压缩到 ~95px，
- * 让「世界板块 · 好友地区」在首屏完整可见。
- * 结构：一行 8 格指标（格间 1px 分隔线）+ 底部收发构成条；
- * data-tone 沿用 kit.statCard 的色调约定（cyan 为默认、不上色，
- * 只有 purple / blue / green 给图标块与数值上色）。 */
-.ovHero {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  border-radius: 14px;
-  overflow: hidden;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
-}
-.ovHeroStats {
-  display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-}
-.ovHeroStat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px 14px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.ovHeroStat + .ovHeroStat { border-left: 1px solid var(--nm-border); }
-.ovHeroStat:hover { background: color-mix(in srgb, var(--nm-cyan) 5%, transparent); }
-.ovHeroIcon {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  border-radius: 10px;
-  background: var(--nm-cyan-10);
-}
-.ovHeroStat[data-tone='purple'] .ovHeroIcon { background: var(--nm-purple-20); }
-.ovHeroStat[data-tone='blue'] .ovHeroIcon { background: var(--nm-info-15); }
-.ovHeroStat[data-tone='green'] .ovHeroIcon { background: var(--nm-success-15); }
-.ovHeroText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ovHeroValue {
-  font-size: 18px;
-  font-weight: 800;
-  font-family: var(--nm-font-mono, monospace);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-.ovHeroStat[data-tone='purple'] .ovHeroValue { color: var(--nm-purple-text, var(--nm-purple)); }
-.ovHeroStat[data-tone='blue'] .ovHeroValue { color: var(--nm-info-text, var(--nm-info)); }
-.ovHeroStat[data-tone='green'] .ovHeroValue { color: var(--nm-success-text, var(--nm-success)); }
-.ovHeroLabel {
-  font-size: 10.5px;
-  color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ovHeroSub { font-style: normal; opacity: 0.75; }
-/* 底部消息收发条：左为总量与收发方向（加粗数字沿用旧 mailMix 的青色口径），
- * 右为类型分布（右对齐，窄窗口下先省略号截断它、保住左侧主信息）。 */
-.ovHeroMix {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--nm-border);
-  font-size: 12px;
-  min-width: 0;
-}
-.ovHeroMixIcon { font-size: 14px; line-height: 1; }
-.ovHeroMixTitle { color: var(--nm-text-1); white-space: nowrap; }
-.ovHeroMixTitle b { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--nm-cyan); }
-.ovHeroMixSub {
-  margin-left: auto;
-  color: var(--nm-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* 第 98 轮删除：「资产指标条」整套 `.ovHero*`（约 90 行）—— 那条指标条已由
+   `overview-neon.module.css` 的等距霓虹牌（`.hero* / .plate*`）接管，全仓零引用。
+   删它不只是洁癖：这份文件贴着 1000 行硬闸门（只剩 30 行余量），留两套指标条样式
+   只会让下一个人不知道该改哪一套。 */
 .ovGrid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.ovGroupTitle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 6px 2px -2px;
+  color: var(--nm-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.ovGroupTitle::before {
+  content: '';
+  flex: 0 0 3px;
+  height: 14px;
+  border-radius: var(--nm-r-xs);
+  background: var(--nm-cyan);
+}
+.ovGroupTitle::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--nm-border) 82%, transparent);
 }
 .ovSpan12 { grid-column: span 12; }
+.regionSpan { grid-column: span 4; }
 .ovSpan7 { grid-column: span 7; }
 .ovSpan6 { grid-column: span 6; }
 .ovSpan5 {
@@ -575,7 +516,7 @@
   min-width: 0;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   overflow: hidden;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
@@ -593,7 +534,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 22%, transparent);
@@ -641,9 +582,9 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
@@ -662,7 +603,7 @@
 }
 .assetHint {
   flex-basis: 100%;
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   opacity: 0.8;
 }
@@ -680,7 +621,7 @@
   min-height: 76px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
@@ -720,11 +661,7 @@
    而 `.ovTrend` / `.ovHeat` 两个类当时还没接上 JSX，等于白写。 */
 
 @media (max-width: 1100px) {
-  .ovHeroStats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  /* 4 列模式下重画分隔线：每行第 1 格无左线，第 2 行整体加上边线 */
-  .ovHeroStat:nth-child(4n+1) { border-left: none; }
-  .ovHeroStat:nth-child(n+5) { border-top: 1px solid var(--nm-border); }
-  .ovSpan12, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
+  .ovSpan12, .regionSpan, .ovSpan8, .ovSpan7, .ovSpan6, .ovSpan5, .ovSpan4 { grid-column: span 12; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -745,6 +682,7 @@
 .root { gap: 12px; }
 .ovGrid {
   gap: 10px;
+  row-gap: 14px;
   /* **不要** align-items: start —— 那会让短卡片自身不拉伸，同行最高的卡片有多高，
      短卡片下面就空多少（实测就是「留白太多」的主因）。默认的 stretch 让同行卡片等高，
      空白改为落在卡片**内部**，再由各卡片自己的弹性内容（如 .ovTall .hourBars 的
@@ -753,22 +691,19 @@
 .ovSpan5 { gap: 10px; }
 
 /* 卡片：头部/正文内边距与图标收小 */
-.ovCard { border-radius: 12px; }
-.ovCardHd { gap: 8px; padding: 9px 12px; }
+.ovCard { border-radius: var(--nm-r-lg); }
+.ovCardHd { gap: 8px; padding: 8px 12px; }
 .ovCardBd { padding: 10px 12px; gap: 8px; }
 .ovTitle { font-size: 12.5px; }
-.ovIcon { width: 24px; height: 24px; border-radius: 7px; }
+.ovIcon { width: 24px; height: 24px; border-radius: var(--nm-dense-r); }
 
 /* 固定高度里的空白：交给内容决定（原 420px + 下面的 hourBars 220px 合计把这一格
    撑到约 700px，而内容只有约 250px —— 那一格下面全是空的） */
 .ovTall { min-height: 0; }
 .ovTall .hourBars { min-height: 96px; }
 
-/* 资产指标条：8 格指标收紧（一屏纵览里这一条占的是首屏黄金位置） */
-.ovHeroIcon { width: 26px; height: 26px; border-radius: 9px; font-size: 14px; }
-.ovHeroValue { font-size: 17px; }
-.ovHeroLabel { font-size: 10px; }
-.ovHeroMix { padding: 6px 12px; gap: 8px; }
+/* 第 98 轮：紧档下的「指标条收紧」四条（.ovHeroIcon/.ovHeroValue/.ovHeroLabel/.ovHeroMix）
+   随霓虹牌一起删 —— 牌面的紧档规则现在写在 overview-neon.module.css 自己的媒体查询里。 */
 
 /* 朋友圈活跃作者：单列 → 两列（10 条从 10 行压到 5 行） */
 /* 朋友圈活跃作者：占满整行宽度（卡片 span 12），所以列数要跟着宽度走。
@@ -778,7 +713,7 @@
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 6px 10px;
 }
-.author { padding: 6px 9px; font-size: 11.5px; }
+.author { padding: 6px 8px; font-size: 11.5px; }
 /* 头像尺寸已在上面 .authorAvatar / .authorAvatarFallback 的原始规则里改为 26px
    （在这里再覆盖一份实测不生效：CSS Modules 会把同类名的声明合并，反而看不出哪份在赢） */
 
@@ -792,7 +727,7 @@
 /* 指标网格：118px 时宽卡片会把 4 格摊得很稀；提到 150px 让每格更饱满、行数更少 */
 .metricGrid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
 /* 关系浓度 Top 8：让行均分卡片高度，而不是把 8 行堆在顶部、下面留一片白 */
-.topList { gap: 5px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
+.topList { gap: 4px; margin-top: 4px; flex: 1 1 auto; justify-content: space-evenly; }
 .assetGrid { gap: 6px; }
 .healthGrid { gap: 8px; }
 .hourBars { min-height: 78px; margin-top: 4px; }
@@ -822,7 +757,7 @@
 /* 趋势格按 5 项一行所需的最小高度收紧 */
 .ovSpan4 .trendCell {
   min-height: 78px;
-  padding: 7px;
+  padding: 8px;
 }
 .ovSpan4 .trendCell > span:first-child,
 .ovSpan4 .metricValue { font-size: 16px; }
@@ -845,23 +780,14 @@
       世界地图上除了一小块高亮，其余全是空白海洋。所以右侧补两栏真实榜单
       （省份 Top 10 / 城市 Top 12，数据与地图同源），把面积换成信息。
    ══════════════════════════════════════════════════════════════════════ */
-.worldBoard {
-  display: grid;
-  /* 地图 : 省份榜 : 城市榜 ≈ 1.26 : 1 : 1。这个比例不是随手写的：
-     实测这张世界地图在 593×270 的容器里只画到约 360×225（ECharts 按自身投影比例 fit 后居中），
-     两侧各留约 115px 空白 —— 把地图格收窄到 ≈500×310，地图正好铺满，空白移交给榜单。 */
-  grid-template-columns: minmax(0, 1.26fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-  min-width: 0;
-}
 .worldMapBox {
   position: relative;
   min-width: 0;
-  /* 高度固定：地图容器撑起整行高度，两栏榜单跟着等高 */
-  height: 310px;
+  width: 100%;
+  height: clamp(220px, 28vw, 310px);
+  max-height: 310px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
 }
@@ -905,7 +831,7 @@
   height: auto;
   max-height: none;
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   white-space: nowrap;
 }
 /* 两侧头像栏：各 240px 宽、内容是一列读不清的名字，与"地区分布"无关 —— 去掉 */
@@ -965,6 +891,54 @@
   height: 150px;
   min-height: 150px;
   max-height: 150px;
+}
+
+/* 组件边界：内容宽度由栅格决定，卡身和可滚动列表各自设上限，避免单项撑大整页。 */
+.ovGrid > .ovCard {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 576px;
+}
+.ovCardBd {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ovCardBd > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.ovCardBd canvas,
+.ovCardBd img,
+.ovCardBd svg,
+.ovCardBd video {
+  max-width: 100%;
+}
+.authors,
+.topList,
+.catList {
+  max-width: 100%;
+  overscroll-behavior: contain;
+}
+.authors { max-height: 240px; overflow-y: auto; align-content: start; }
+.topList { max-height: 224px; overflow-y: auto; }
+.catList { max-height: 300px; overflow-y: auto; }
+.hourBars {
+  flex: 0 1 136px;
+  height: clamp(96px, 10vw, 136px);
+  min-height: 96px;
+  max-height: 136px;
+}
+
+@media (max-width: 1100px) {
+  .ovGrid { row-gap: 12px; }
+  .ovGrid > .ovCard { max-height: 520px; }
 }
 
 /* 窄屏：作者两列在很窄时仍可读，不需要额外改动；网格已由上面的媒体查询统一成单列 */

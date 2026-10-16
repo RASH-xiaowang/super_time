@@ -85,8 +85,8 @@ describe('M23：渲染层的远程图片走后端代理', () => {
     expect(batches.length, '第二次不该再打后端').toBe(before)
   })
 
-  it('取不到就回空串（开关关掉 / 主机不在白名单 / 整批失败），且不会被缓存成"永久没有"', async () => {
-    const { batches } = stubRemote((urls) => urls.map((url) => ({ url, error: '已关闭「自动获取原图（CDN）」' })))
+  it('取不到就回空串（主机不在白名单 / CDN 失败 / 整批失败），且不会被缓存成"永久没有"', async () => {
+    const { batches } = stubRemote((urls) => urls.map((url) => ({ url, error: '主机不在微信 CDN 白名单内，已拒绝请求' })))
     expect(await apiGetRemoteImageUrl('https://p.qpic.cn/err')).toBe('')
     // 失败不留缓存位：再问一次要重新发（后端自己有 60s 冷却，那边才是节流的地方）
     expect(await apiGetRemoteImageUrl('https://p.qpic.cn/err')).toBe('')

@@ -3,11 +3,11 @@
  *
  * M7 的有界重试只覆盖 LLM/embedding（验收范围如此），于是公众号封面、远端表情、朋友圈
  * 视频/封面、whisper 引擎/模型下载这四处仍然是「一次网络抖动 = 整件事失败」，
- * 用户只能自己再点一次。本用例打桩 **全局 fetch**（与 `cdn-switch.spec.ts` 同款手法），
- * 断言的是**行为**：真的重发了几次、不可重试的状态码一次就放弃、退避按 `Retry-After`。
+ * 用户只能自己再点一次。本用例打桩 **全局 fetch**，断言的是**行为**：
+ * 真的重发了几次、不可重试的状态码一次就放弃、退避按 `Retry-After`。
  *
- * 另一组断言是 N24 的回归：开关判定必须仍在**发请求之前** —— 关掉开关时哪怕 fetch
- * 永远失败（真出网会重试两轮），调用次数也必须是 0。
+ * 2026-09-30：出网开关（`cdn_enabled` / `cdn-policy.ts`）已整体删除，
+ * N24 那组「开关关掉 ⇒ 0 次请求」的回归判据随之删掉。
  *
  * @vitest-environment node
  */
@@ -16,7 +16,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CDN_DISABLED_MESSAGE } from '../src/query/cdn-policy.ts'
 import { resolveArticleCoverDataUrl } from '../src/query/article-cover.ts'
 import { fetchEmoticonRemote } from '../src/query/media-image.ts'
 import { fetchSnsVideoDataUrl } from '../src/query/sns-video.ts'
@@ -99,7 +98,7 @@ describe('N13：远端表情取图（media-image）', () => {
   it('503 后重试到成功：拿回 data URL 并落进 decoded 缓存', async () => {
     const dir = tmp('n13-emo-')
     const calls = scriptedFetch([{ status: 503 }, { bytes: PNG }])
-    const r = await fetchEmoticonRemote('https://cdn.example/n13-e.gif', dir, 'a'.repeat(32))
+    const r = await fetchEmoticonRemote('https://mmbiz.qpic.cn/n13-e.gif', dir, 'a'.repeat(32))
     expect(calls.length).toBe(2)
     expect(r.url?.startsWith('data:image/png;base64,')).toBe(true)
     expect(existsSync(join(dir, 'a'.repeat(32) + '.png'))).toBe(true)
@@ -107,7 +106,7 @@ describe('N13：远端表情取图（media-image）', () => {
 
   it('404 一次就放弃（表情链过期属于永久失败）', async () => {
     const calls = scriptedFetch([{ status: 404 }, { bytes: PNG }])
-    const r = await fetchEmoticonRemote('https://cdn.example/n13-miss.gif', tmp('n13-emo404-'), 'b'.repeat(32))
+    const r = await fetchEmoticonRemote('https://mmbiz.qpic.cn/n13-miss.gif', tmp('n13-emo404-'), 'b'.repeat(32))
     expect(calls.length).toBe(1)
     expect(r.error).toContain('404')
   })
@@ -153,32 +152,6 @@ describe('N13：whisper 下载（whisper）', () => {
     expect(readFileSync(join(modelsDir, fileName)).toString()).toBe(payload.toString())
     // 半成品不能留在正式名上（.part 是唯一的中间态）
     expect(existsSync(join(modelsDir, fileName + '.part'))).toBe(false)
-  })
-})
-
-describe('N24 回归：开关判定仍在发请求之前（重试包装不能绕过它）', () => {
-  const neverFetch = (): void => {
-    vi.stubGlobal('fetch', () => {
-      throw new Error('不该出网：开关已关闭')
-    })
-  }
-
-  it('公众号封面：cdnEnabled=false → 0 次请求', async () => {
-    neverFetch()
-    const r = await resolveArticleCoverDataUrl('https://mp.weixin.qq.com/s/n24-before-' + String(Date.now()), tmp('n24-b-'), { cdnEnabled: false })
-    expect(r.error).toBe(CDN_DISABLED_MESSAGE)
-  })
-
-  it('远端表情：cdnEnabled=false → 0 次请求', async () => {
-    neverFetch()
-    const r = await fetchEmoticonRemote('https://cdn.example/n24-b.gif', tmp('n24-b2-'), 'c'.repeat(32), { cdnEnabled: false })
-    expect(r.error).toBe(CDN_DISABLED_MESSAGE)
-  })
-
-  it('朋友圈视频：cdnEnabled=false → 0 次请求', async () => {
-    neverFetch()
-    const r = await fetchSnsVideoDataUrl('https://cdn.example/n24-b.mp4', undefined, { cdnEnabled: false })
-    expect(r.error).toBe(CDN_DISABLED_MESSAGE)
   })
 })
 

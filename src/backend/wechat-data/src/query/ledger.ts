@@ -3,13 +3,14 @@
  * amounts and timestamps from message shards by server_id, and derives
  * per-contact totals plus fund anomaly warnings.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import type { LedgerContactRow, LedgerSnapshot, LedgerWarning } from '../types.ts'
 import { parseMessageContent } from './parse.ts'
-import { contactMeta, shardCatalogDirs } from './meta.ts'
+import { cachedBySigAsync, contactMeta, fileSigOf, shardCatalogDirs, shardCatalogSig } from './meta.ts'
+import { yieldToLoop } from './search-build.ts'
 
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
 
@@ -31,10 +32,10 @@ function decodeCell(v: unknown): string {
 
 
 /** Resolve server ids to raw message rows (amount via XML, create_time). */
-function resolveMessagesByServerIds(
+async function resolveMessagesByServerIds(
   decryptedDir: string,
   serverIds: string[],
-): Map<string, { createTime: number; content: string }> {
+): Promise<Map<string, { createTime: number; content: string }>> {
   const out = new Map<string, { createTime: number; content: string }>()
   if (serverIds.length === 0) return out
   const pending = [...new Set(serverIds)].filter(Boolean)
@@ -47,9 +48,12 @@ function resolveMessagesByServerIds(
     }
   }
   const shards = shardCatalogDirs(decryptedDir, ['message'])
-  const scan = (serverExpr: string, params: Array<string | bigint>): void => {
+  const scan = async (serverExpr: string, params: Array<string | bigint>): Promise<void> => {
     const placeholders = params.map(() => '?').join(',')
     for (const shard of shards) {
+      // P1-2：这两趟扫描是「账本打开就卡住别的面板」的正主 —— 每个 id 批次都要把**所有分片**
+      // 各开一遍库（Pass 1 整型等值 + Pass 2 文本 CAST 兜底）。分片之间必须让出。
+      await yieldToLoop()
       let db: DatabaseSync
       // readBigInts: 64 位 server_id 以 BigInt 原样读回，避免 double 精度损失。
       try { db = new DatabaseSync(shard.file, { readOnly: true, readBigInts: true }) } catch { continue }
@@ -84,14 +88,14 @@ function resolveMessagesByServerIds(
   const numericIds = [...numeric.values()]
   if (numericIds.length > 0) {
     for (let i = 0; i < numericIds.length; i += 400) {
-      scan('server_id', numericIds.slice(i, i + 400))
+      await scan('server_id', numericIds.slice(i, i + 400))
     }
   }
   // Pass 2: text CAST fallback for ids still missing (text-stored or non-numeric).
   const leftover = pending.filter(id => !out.has(id))
   if (leftover.length > 0) {
     for (let i = 0; i < leftover.length; i += 400) {
-      scan('CAST(server_id AS TEXT)', leftover.slice(i, i + 400))
+      await scan('CAST(server_id AS TEXT)', leftover.slice(i, i + 400))
     }
   }
   return out
@@ -146,12 +150,35 @@ interface RedpacketRow {
 
 /**
  * Compute the funds ledger snapshot.
+ *
+ * G（2026-09-28 性能修复）：实测 `queryLedger` 无缓存时 **125ms**，而它每次被
+ * 「账本面板重渲染 / 切月 / 切回来」都整跑一遍 —— 但它的输入只有三样东西：
+ * 会话库、通讯录库、消息分片目录，全都可以用文件签名判断「变没变」。
+ * 所以按签名缓存（`cachedBySigAsync`，与 `queryGraph` 同一个入口）。
+ *
+ * 签名含 `month` 与 `selfUsername`：两者都是查询参数，混用会让「切月后拿到上月数据」
+ * 这种错静默发生。等价的单张缓存示例见 `contacts.ts`（把参数编进 key）。
  * @param decryptedDir - decrypted data root.
  * @param month - optional YYYY-MM filter.
  * @param selfUsername - logged-in account wxid (direction labels).
  * @returns the ledger snapshot.
  */
-export function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): LedgerSnapshot {
+export async function queryLedger(decryptedDir: string, month?: string, selfUsername?: string): Promise<LedgerSnapshot> {
+  const sig = shardCatalogSig(decryptedDir, ['message'])
+    + '|contact:' + fileSigOf(join(decryptedDir, 'contact', 'contact.db'))
+    + '|general:' + fileSigOf(join(decryptedDir, 'general', 'general.db'))
+    + '|month:' + String(month ?? '')
+    + '|self:' + String(selfUsername ?? '')
+  return cachedBySigAsync('ledger:' + decryptedDir, sig, () => computeLedger(decryptedDir, month, selfUsername))
+}
+
+/**
+ * `queryLedger` 的实际计算体（签名缓存包一层；为了装配/测试可直接单测它）。
+ * @param decryptedDir - decrypted data root.
+ * @param month - optional YYYY-MM filter.
+ * @param selfUsername - logged-in account wxid (direction labels).
+ */
+async function computeLedger(decryptedDir: string, month?: string, selfUsername?: string): Promise<LedgerSnapshot> {
   const names = contactMeta(decryptedDir).names
   const self = (selfUsername ?? '').trim()
   const { from, to } = monthRange(month)
@@ -222,7 +249,7 @@ export function queryLedger(decryptedDir: string, month?: string, selfUsername?:
   }
 
   // Resolve amounts + times for all referenced server ids in one shard pass.
-  const resolved = resolveMessagesByServerIds(decryptedDir, [...serverIds])
+  const resolved = await resolveMessagesByServerIds(decryptedDir, [...serverIds])
   const byMsg = new Map<string, { amount: number; time: number }>()
   for (const [sid, info] of resolved) {
     const pay = paymentFromContent(info.content)
@@ -299,6 +326,11 @@ export function queryLedger(decryptedDir: string, month?: string, selfUsername?:
     }
   }
 
+  // W2-9.3 实测记录：**这个 slice 就是「按联系人」的硬上界**。
+  // 面板 `Ledger.tsx` 用 `useProgressiveList(byContact.length, 80)` 渲染，
+  // 而 step=80 > 20 ⇒ 渐进窗口**永远不触发**，最多也就 20 行、约 340 个 DOM 节点。
+  // 所以「记录类长列表虚拟化」这一条在 Ledger 这半边**前提不成立**：
+  // 没有无界增长，就没有虚拟化可省。真要放开这里，得先想清楚「联系人排行要多少行」。
   const byContactRows: LedgerContactRow[] = [...contactAgg.values()]
     .sort((a, b) => b.amount - a.amount || b.count - a.count)
     .slice(0, 20)

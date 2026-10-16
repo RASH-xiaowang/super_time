@@ -9,20 +9,21 @@
 
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled } from './zip.ts'
-import type { StreamControl } from './zip.ts'
+import { ZipFileWriter, zipFiles, partialPath, reportProgress, throwIfCancelled, type StreamControl } from './zip.ts'
 import type { MomentItem, WechatMessage } from '../types.ts'
 import { queryContacts } from './contacts.ts'
 import { queryFavorites } from './favorites.ts'
 import { queryRecords } from './records.ts'
 import { queryMoments } from './moments.ts'
 import { resolveSnsImageDataUrl } from './sns-image.ts'
-import { resolveSnsVideoDataUrl } from './sns-video.ts'
+import { resolveSnsVideoDataUrlAsync } from './sns-video.ts'
 import { queryPrivacyScan } from './privacy.ts'
+import { grantRoot, writeDenialReason } from './path-policy.ts'
 import { queryAnnualReport } from './annual-report.ts'
 import { querySessions } from './sessions.ts'
+import { yieldToLoop } from './search-build.ts'
 import { MAX_MOMENT_MEDIA, dataUrlToBuffer, exportMediaCtx, writeFileAtomicSync, writeZipAtomic } from './export-io.ts'
-import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
+import { buildCsv, collectMessages, collectMessagesAsync, csvCell, formatCsv, formatHtml, formatJson, formatMarkdown, formatSql, formatTxt, formatTxtChunksAsync, formatXlsx, htmlEscape, messageRows, writeXlsxStream } from './export-format.ts'
 
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>> {
@@ -140,8 +141,12 @@ export function planSessionExport(
         : format === 'md' ? 'md'
           : format === 'sql' ? 'sql'
             : format === 'json' ? 'json' : 'txt'
-  const exportDir = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
+  const chosenDir = (dir && dir.trim()) ? dir.trim() : ''
+  const exportDir = chosenDir || join(dirname(decryptedDir), 'exports')
   mkdirSync(exportDir, { recursive: true })
+  // P2-6：用户用原生对话框挑过这个目录 ⇒ 授予它（之后「在资源管理器里显示」才打得开）。
+  // 导出目录本身不白名单化：它本来就是「用户选的」，白名单会把唯一合法的用法打死。
+  if (chosenDir) grantRoot(chosenDir)
   const sanitized = username.replace(/@chatroom$/, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_').slice(0, 24)
   const autoBase = sanitized + '_' + now + '_' + ((count ?? 0) === 0 ? 'all' : String(count))
   const userBase = filename && filename.trim() ? sanitizeBasename(filename.trim()) : ''
@@ -149,7 +154,10 @@ export function planSessionExport(
   const outExt = zip ? 'zip' : ext
   const innerName = (base.toLowerCase().endsWith('.' + ext) ? base : base + '.' + ext)
   const filenameOut = (base.toLowerCase().endsWith('.' + outExt) ? base : base + '.' + outExt)
-  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath: join(exportDir, filenameOut), now }
+  const outPath = join(exportDir, filenameOut)
+  const denial = writeDenialReason(outPath, decryptedDir)
+  if (denial !== null) throw new Error(denial)
+  return { msgs, format, isXlsx, ext, innerName, filenameOut, outPath, now }
 }
 
 /** 非 xlsx 格式的文本主体（同步/流式入口共用）。 */
@@ -268,13 +276,23 @@ export async function exportSessionMessagesStreamed(
  * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export function exportCsv(
+
+export async function exportCsv(
   decryptedDir: string,
   kind: string,
   recordsKind?: string,
   dest?: string,
   category?: string,
-): { path: string; filename: string; count: number } {
+  ctrl?: StreamControl,
+): Promise<{ path: string; filename: string; count: number }> {
+  // W2-8.2：取消与进度（与 exportAllSessions / exportMoments 同一套 StreamControl）。
+  //
+  // 为什么检查点放两处：**拼行循环**里（每行一次，这里才是耗时所在），
+  // 以及**写盘之前**（一次）—— 后者保证「取消」不会留下半张 CSV。
+  // 写盘本身是 `writeFileAtomicSync`（temp + rename），本来就不会有半张文件；
+  // 写前检查是为了让「取消」如实反映成「什么都没写」，而不是写完了才说取消。
+  throwIfCancelled(ctrl?.signal)
+  ctrl?.onProgress?.({ phase: 'collect', done: 0, total: 0 })
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/[-:]/g, '')
   const stamp = now.slice(0, 8) + '_' + now.slice(9)
   let header: string[] = []
@@ -288,6 +306,9 @@ export function exportCsv(
     header = ['显示名', '备注', '昵称', '微信号', '别名', '类型', '首字母', '全拼', '群成员数', '群主', '所在群']
     const env = queryContacts(decryptedDir, category ? { category } : undefined)
     for (const c of env.contacts) {
+      // 取消检查点：每行一次。CSV 的行数可以是几万（收藏上限 5000、记录 5000、
+      // 联系人可能上万），这是这条路径唯一耗时的地方。
+      throwIfCancelled(ctrl?.signal)
       rows.push([
         c.displayName ?? '',
         c.remark ?? '',
@@ -306,24 +327,34 @@ export function exportCsv(
     header = ['localId', '类型', '更新时间', '内容', '来源']
     const env = queryFavorites(decryptedDir, 5000)
     for (const f of env.favorites) {
+      // 取消检查点：每行一次。CSV 的行数可以是几万（收藏上限 5000、记录 5000、
+      // 联系人可能上万），这是这条路径唯一耗时的地方。
+      throwIfCancelled(ctrl?.signal)
       rows.push([String(f.localId), String(f.type), String(f.updateTime), f.content, f.fromUsr])
     }
   } else if (kind === 'records') {
     header = ['字段']
     const env = queryRecords(decryptedDir, recordsKind ?? 'revokes', 5000)
     for (const it of env.items) {
+      // 取消检查点：每行一次。CSV 的行数可以是几万（收藏上限 5000、记录 5000、
+      // 联系人可能上万），这是这条路径唯一耗时的地方。
+      throwIfCancelled(ctrl?.signal)
       rows.push(Object.values(it).map(v => String(v)))
     }
   } else if (kind === 'moments') {
     header = ['tid', '用户名', '作者', '时间', '内容', '媒体']
     const env = queryMoments(decryptedDir, 0, 5000)
     for (const m of env.moments) {
+      // 取消检查点：每行一次。CSV 的行数可以是几万（收藏上限 5000、记录 5000、
+      // 联系人可能上万），这是这条路径唯一耗时的地方。
+      throwIfCancelled(ctrl?.signal)
       rows.push([m.tid, m.username, m.author, m.time, m.text, m.media_desc])
     }
   } else if (kind === 'privacy') {
     header = ['类别', '会话', '联系人', '时间', '片段']
-    const env = queryPrivacyScan(decryptedDir)
+    const env = await queryPrivacyScan(decryptedDir)
     for (const c of env.categories) {
+      throwIfCancelled(ctrl?.signal)
       for (const s of c.samples) {
         rows.push([c.label, s.username, s.name, s.time, s.snippet])
       }
@@ -334,9 +365,18 @@ export function exportCsv(
   // 目标路径：用户选定优先；否则回退到数据根下的 exports/（保持旧行为可用）。
   const chosen = typeof dest === 'string' && dest.trim() !== '' ? dest.trim() : ''
   const filepath = chosen || join(join(dirname(decryptedDir), 'exports'), kind + '_' + stamp + '.csv')
+  // 拼完行、准备写盘：**这里**再查一次取消 —— 上面已经查过每行了，
+  // 这一道是为了让「取消 ⇒ 一个字节都没落盘」这件事成立。
+  throwIfCancelled(ctrl?.signal)
+  ctrl?.onProgress?.({ phase: 'write', done: 0, total: 1 })
+  const csvDenial = writeDenialReason(filepath, decryptedDir)
+  if (csvDenial !== null) throw new Error(csvDenial)
+  if (chosen) grantRoot(dirname(filepath))
   mkdirSync(dirname(filepath), { recursive: true })
   // buildCsv 会带 UTF-8 BOM（Excel 认 UTF-8 的唯一可靠信号，见其说明）。
   writeFileAtomicSync(filepath, buildCsv(header, rows))
+  ctrl?.onProgress?.({ phase: 'write', done: 1, total: 1 })
+  ctrl?.onProgress?.({ phase: 'collect', done: rows.length, total: rows.length })
   return { path: filepath, filename: basename(filepath), count: rows.length }
 }
 
@@ -377,14 +417,26 @@ export function topOf(arr: unknown, limit = 12): Array<{ username: string; name:
  * @param filename - optional file name (without extension).
  * @returns written file path + filename + message count.
  */
-export function exportAnnualReport(
+export async function exportAnnualReport(
   decryptedDir: string,
   year: number,
   format: string,
   dir?: string,
   filename?: string,
-): { path: string; filename: string; count: number } {
-  const report = queryAnnualReport(decryptedDir, year)
+  ctrl?: StreamControl,
+): Promise<{ path: string; filename: string; count: number }> {
+  // W2-8.2：取消与进度。年报这段扫描实测整段 4048ms（源码里那句注释），
+  // 是全部导出入口里最长的一个，却一直没有任何进度与取消 —— 用户只能干等。
+  // 进度口径要诚实：扫描阶段总量未知（`total: 0`，界面显示「不定量进度」而不是 0%），
+  // 写盘阶段才是定量的 0/1 → 1/1。
+  ctrl?.onProgress?.({ phase: 'collect', done: 0, total: 0 })
+  // 2026-09-28：改 async。真实 @Remote 探针实测本接口冷跑 **4048ms 且一次都不让出**
+  // （`working/probe-remote.txt`，三个年报接口里最长）。瓶颈不在本函数，而在
+  // `queryAnnualReport` 里那段"整年消息 + 逐条 bigram"的扫描 —— 它现在会让出了。
+  const report = await queryAnnualReport(decryptedDir, year, ctrl)
+  // 扫描刚回来：**立刻**查一次取消。下面拼内容与写盘都是纯 CPU / 纯 IO，
+  // 用户在这几毫秒里点「停止」，就应当一个文件都不留下。
+  throwIfCancelled(ctrl?.signal)
   const ext = format === 'html' ? 'html' : format === 'json' ? 'json' : 'md'
   const base = (dir && dir.trim()) ? dir.trim() : join(dirname(decryptedDir), 'exports')
   const safeName = (filename && filename.trim()) ? filename.trim().replace(/\.(md|html|json)$/i, '') + '.' + ext : 'wechat_annual_' + String(year) + '.' + ext
@@ -456,8 +508,11 @@ export function exportAnnualReport(
     md.push('末句: ' + last)
     content = md.join('\n')
   }
+  throwIfCancelled(ctrl?.signal)
+  ctrl?.onProgress?.({ phase: 'write', done: 0, total: 1 })
   const path = join(base, safeName)
   writeFileAtomicSync(path, content)
+  ctrl?.onProgress?.({ phase: 'write', done: 1, total: 1 })
   return { path, filename: safeName, count: total }
 }
 /**
@@ -490,8 +545,15 @@ export async function exportMoments(
   const NL = String.fromCharCode(10)
   const items: MomentItem[] = []
   let offset = 0
+  let round = 0
   for (;;) {
     throwIfCancelled(ctrl.signal)
+    // 2026-09-28：逐页让出（放在**循环开头**，否则下面 `break` 会跳过它）。
+    // 真实 @Remote 探针实测 `exportMoments` 冷跑 **273ms 且一次都不让出**
+    // （`working/probe-remote.txt`）—— 成本是这里反复调 `queryMoments` 分页取完整个
+    // 朋友圈（每页 500 条，单页冷算 ~15ms）。本函数已是 async，直接让出。
+    round += 1
+    if (round > 1 && round % 2 === 0) await yieldToLoop()
     const env = queryMoments(decryptedDir, offset, 500, opts?.username)
     items.push(...env.moments)
     offset += env.moments.length
@@ -562,7 +624,7 @@ export async function exportMoments(
         throwIfCancelled(ctrl.signal)
         for (const im of m.images) {
           if (mediaCount >= MAX_MOMENT_MEDIA) break
-          const r = im.md5 ? resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
+          const r = im.md5 ? await resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id) : { error: '' }
           if (r.url) {
             const buf = dataUrlToBuffer(r.url)
             if (buf) { await zip.addFile('media/images/img_' + String(idx++) + '.jpg', buf); mediaCount += 1 }
@@ -571,7 +633,7 @@ export async function exportMoments(
         if (mediaCount >= MAX_MOMENT_MEDIA) break
         for (const v of m.videos) {
           if (mediaCount >= MAX_MOMENT_MEDIA) break
-          const r = resolveSnsVideoDataUrl(mediaCtx.base, v.md5, v.timelineId, v.id)
+          const r = await resolveSnsVideoDataUrlAsync(mediaCtx.base, v.md5, v.timelineId, v.id)
           if (r.url) {
             const buf = dataUrlToBuffer(r.url)
             if (buf) { await zip.addFile('media/videos/vid_' + String(idx++) + '.mp4', buf); mediaCount += 1 }
@@ -606,14 +668,14 @@ export async function exportMoments(
       if (m.text) parts.push('<div class="content">' + htmlEscape(m.text) + '</div>')
       if (m.images.length > 0) {
         const single = m.images.length === 1 ? ' single' : ''
-        const imgs = m.images.map((im) => {
+        const imgs = (await Promise.all(m.images.map(async (im) => {
           let src = im.url || im.thumb || ''
           if (mediaCtx && im.md5) {
-            const r = resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id)
+            const r = await resolveSnsImageDataUrl(mediaCtx.base, mediaCtx.aesKey, mediaCtx.xorKey, im.md5, im.timelineId, im.id)
             if (r.url) src = r.url
           }
           return '<img src="' + htmlEscape(src) + '" loading="lazy" />'
-        }).join('')
+        }))).join('')
         parts.push('<div class="grid' + single + '">' + imgs + '</div>')
       }
       if (m.videos.length > 0) {
@@ -653,8 +715,18 @@ export async function exportMoments(
     }
     content = lines.join(NL)
   }
+  // W2-8.3：写盘那一段原先**一个进度事件都不发** —— collect 与 media 两段都报完了，
+  // 进度条停在最后一个百分比然后就再也不动了，用户分不清「在写盘」与「卡住了」。
+  // 顺带在写前补一次取消检查：拼内容那几秒是纯 CPU，此时点「停止」应当一个文件都不留。
+  throwIfCancelled(ctrl.signal)
+  reportProgress(ctrl, 'write', 0, 1)
+  // 进度事件本身就是用户按下「停止」的那一刻（界面收到它才去 abort），
+  // 所以发完必须**再查一次** —— 只在发之前查的话，按钮永远慢半拍，
+  // 「停止」看起来像没反应。
+  throwIfCancelled(ctrl.signal)
   const path = join(base, name)
   writeFileAtomicSync(path, content)
+  reportProgress(ctrl, 'write', 1, 1)
   return { path, filename: name, count: filtered.length }
 }
 /**
@@ -668,7 +740,8 @@ export async function exportAllSessions(
   opts?: { dir?: string; filename?: string } & StreamControl,
 ): Promise<{ path: string; filename: string; count: number }> {
   const ctrl: StreamControl = { onProgress: opts?.onProgress, signal: opts?.signal }
-  const env = querySessions(decryptedDir)
+  // 2026-09-28：`querySessions` 改 async（逐会话未读时间解析要让出）。本函数已是 async。
+  const env = await querySessions(decryptedDir)
   const sessions = env.sessions.slice(0, 1000)
   const base = (opts?.dir && opts.dir.trim()) ? opts.dir.trim() : join(dirname(decryptedDir), 'exports')
   mkdirSync(base, { recursive: true })
@@ -698,7 +771,11 @@ export async function exportAllSessions(
       if (msgs.length === 0) {
         await zip.addFile(name, '（无消息）\n')
       } else {
-        await zip.addFile(name, formatTxt(msgs, s.username))
+        // W2-8.1：走流式（addStream），不再 addFile 整块同步 deflate。
+        // 一个会话最多 5 万条，拼出来的串有几 MB 到几十 MB ——
+        // 那一次 `deflateRawSync` 能把后端 worker 独占几百毫秒，所有面板一起卡住。
+        // 输出与旧的 `formatTxt` 逐字节相同（判据：export-progress-job.spec.ts 的 H8 段）。
+        await zip.addStream(name, formatTxtChunksAsync(msgs, s.username, ctrl), ctrl)
         total += msgs.length
       }
       reportProgress(ctrl, 'sessions', i + 1, sessions.length)

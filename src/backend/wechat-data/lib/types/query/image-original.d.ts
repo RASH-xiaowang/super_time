@@ -19,9 +19,7 @@ export interface ImageOriginalLink {
 export declare function resolveImageOriginalLink(decryptedDir: string, username: string, localId: number): ImageOriginalLink | null;
 /** 取回并落盘一张原图。**不把字节回传给调用方** —— 原图可达十几 MB，base64 走一遍 RPC
  * 既慢又占内存；落盘后由 `getImageDataUrl` 从缓存槽读，界面只需要知道成功与否。 */
-export declare function fetchImageOriginalToCache(link: ImageOriginalLink, decodedDir: string, opts?: {
-    cdnEnabled?: boolean;
-}): Promise<{
+export declare function fetchImageOriginalToCache(link: ImageOriginalLink, decodedDir: string): Promise<{
     format?: string;
     bytes?: number;
     error?: string;

@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPollRegistry } from './poll-registry.ts'
-import { readSettingsSource } from './settings-source.ts'
+import { readSettingsSource } from '../../../test-helpers/settings-source.ts'
 
 afterEach(() => { vi.useRealTimers() })
 
@@ -99,8 +99,11 @@ describe('M15 接线：Settings 的轮询必须登记 + 卸载清理', () => {
     expect(code).not.toContain('clearInterval(')
   })
 
-  it('四处轮询都走 polls().start', () => {
-    expect((code.match(/polls\(\)\.start\(/g) || []).length).toBe(4)
+  it('轮询全部经 polls().start 登记（W3-5.5 后由 4 处收成 3 处）', () => {
+    // 计数从 4 变 3 不是漏了一处：模型与引擎那两段轮询代码一字不差，
+    // 抽成了模块级的 `pollWhisperDownload`，两处调用点各算一次登记 + 抽出来的那次 = 3。
+    // 真正的牙齿是上面那条「文件里没有裸 setInterval」：少一处登记它照样会红。
+    expect((code.match(/polls\(\)\.start\(/g) || []).length).toBe(3)
   })
 
   it('挂了卸载清理（useEffect 的返回值里 stopAll）', () => {

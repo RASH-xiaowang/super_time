@@ -30,7 +30,7 @@
  *   差别只在表名、语料 SQL 与作用域键。纯数学部分已抽到 `query/vector-math.ts`
  *   （只有一份实现，两侧共享同一组单测），本文件只写「知识库特有的那一层」。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import type { KbHit } from '../types.ts'
 // 路径真源在 `kb-paths.ts`：由它提供 `kbFilesDbPath`（读语料）与本模块自己的库路径，
@@ -72,7 +72,7 @@ export const KB_VECTOR_SCHEMA_VERSION = '1'
  *   · `schema-mismatch` 表结构升过版 ⇒ 全表都要重建（不只是本库）；
  *   · `no-model` 调用方没给出「当前用哪个模型」⇒ **无法背书溯源**，按不可用处理。
  *     这条存在的原因：以前记账名是写死的 `'default'`，等于没有溯源，
- *     于是「换模型」这件事在库里根本不留痕迹（见 `docs/KB-MODEL-CONFIG.md` §7 F1）。
+ *     于是「换模型」这件事在库里根本不留痕迹。
  */
 export type KbVectorStaleReason = '' | 'no-index' | 'model-mismatch' | 'schema-mismatch' | 'no-dim' | 'no-model'
 
@@ -143,7 +143,7 @@ function writeMeta(db: DatabaseSync, key: string, value: string): void {
  * 打开（并初始化）向量库。
  *
  * `CREATE TABLE IF NOT EXISTS` 每次开库都跑一遍。本库虽然新增不久，但**已经发出去的版本**
- * 里没有 `model` 这一列（行级模型溯源是 `docs/KB-MODEL-CONFIG.md` 的 P0 才加的），
+ * 里没有 `model` 这一列（行级模型溯源是后来才加的），
  * 所以要写「查 `PRAGMA table_info` → 缺才 `ALTER`」的加列分支：SQLite 没有
  * `ADD COLUMN IF NOT EXISTS`，重跑 `ALTER` 直接抛 duplicate column。
  */
@@ -363,7 +363,7 @@ function clampInt(raw: unknown, def: number, lo: number, hi: number): number {
  *   算出来的那些行**：同模型的行仍然有效，删了就是白出网一次；别的库的行更是与本次无关。
  *   唯一仍会清全表的情形是 **schema 版本变更**（列结构/哈希口径变了，每一行都不再合规）。
  *   旧实现是「换模型 = 清全表」，那时的前提是「全库共用一个嵌入模型」；
- *   按库绑定让那个前提失效，处置跟着改（理由见 `docs/KB-MODEL-CONFIG.md` C5）。
+ *   按库绑定让那个前提失效，处置跟着改。
  *
  * @param decryptedDir - 解密数据根。
  * @param kbId - 目标库。
@@ -375,7 +375,7 @@ export function buildKbVectorIndex(
   decryptedDir: string,
   kbId: number,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<KbVectorBuildResult> {
   const kb = Math.trunc(Number(kbId))
   if (!Number.isFinite(kb) || kb <= 0) {
@@ -416,7 +416,7 @@ async function runBuildKbVectorIndex(
   decryptedDir: string,
   kbId: number,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<KbVectorBuildResult> {
   const started = Date.now()
   const src = kbFilesDbPath(decryptedDir)
@@ -446,7 +446,7 @@ async function runBuildKbVectorIndex(
     //                        删了就等于把一批本不必发的 embedding 请求再发一遍（白花 token、
     //                        白花一次出网）。
     // 旧实现清的是整张表，那时的前提是「全库共用一个模型」—— 一个模型变了就是全都变了。
-    // 按库绑定之后这个前提没了：甲库换模型不该让乙库白重建一次（见 docs/KB-MODEL-CONFIG.md C5）。
+    // 按库绑定之后这个前提没了：甲库换模型不该让乙库白重建一次。
     const wipeTable = prevVer !== '' && prevVer !== KB_VECTOR_SCHEMA_VERSION
     const wipeKbAll = !wipeTable && opts.force === true
     const wipeKbForeign = !wipeTable && opts.force !== true
@@ -522,6 +522,8 @@ async function runBuildKbVectorIndex(
     const concurrency = clampInt(opts.concurrency, 1, 1, 16)
     let next = 0
     let failure: unknown = null
+    /** W3-11.5：被取消（用户点了「停止」）。此时一行都没写。 */
+    let canceled = false
     /**
      * 阶段一算出来的向量：**截断文本 → 向量字节与 SimHash**。
      * 先攒起来、阶段二再一次性写（写事务里不含 await，见 N10）。
@@ -530,6 +532,9 @@ async function runBuildKbVectorIndex(
     const worker = async (): Promise<void> => {
       for (;;) {
         if (failure) return
+        // W3-11.5：取消——在**认领下一批之前**查。与消息域同一形状：
+        // 阶段二在全部批次之后，所以取消 ⇒ 一行未写 ⇒ 旧索引原样。
+        if (opts.signal?.aborted === true) { canceled = true; return }
         const start = next
         next += batchSize
         if (start >= texts.length) return
@@ -566,6 +571,10 @@ async function runBuildKbVectorIndex(
     }
 
     await Promise.all(Array.from({ length: concurrency }, () => worker()))
+    // W3-11.5：取消不是失败 —— 阶段二没开，旧索引一行未动。
+    if (canceled) {
+      return { status: 'cancelled', rows: kbRows, embedded: 0, embed_calls: embedCalls, elapsed_ms: Date.now() - started, message: '已停止构建，旧索引保持原样' }
+    }
     // 阶段一失败：一行都没写（事务还没开），旧索引原样保留
     if (failure) throw failure
 
@@ -772,34 +781,77 @@ export function deleteKbVectorsForFile(decryptedDir: string, fileId: number): nu
 }
 
 /**
- * 把一个文件的向量改归属到目标库（删库时的 `reassign` 分支）。
+ * 文件换库时，把它的向量行一起搬过去（W2-7.2：**按块 + 按模型**搬，不再无脑全搬）。
  *
  * 不做这一步的后果是**静默**的：向量行还在，但 `kb_id` 指向那个即将消失的库 ⇒
  * 目标库检索不到（被 `WHERE kb_id=?` 挡掉）、源库也没了 ⇒ 这些块在稠密通道里
  * 「凭空消失」，而稀疏通道照样搜得到 —— 表现为「关键词能搜到、换个说法就搜不到」。
+ *
+ * ## 为什么原来那样不够
+ *
+ * 旧实现是一句 `UPDATE kb_vectors SET kb_id = ? WHERE file_id = ?` —— 把**这个文件的所有行**
+ * 都盖上目标库的号。前提是「两个库用的是同一个模型」，而这个前提在按库绑定模型之后就不成立了：
+ * 甲库用 M1、乙库用 M2，把文件从甲搬到乙，乙库就混进了 M1 的行。
+ *
+ * 后果不是「结果不准」——`searchKbDense` 会先看 `kbVectorIndexStatus`，`models` 一多就判
+ * `model-mismatch` 拒答，这条安全网一直都在。真正的代价是：**乙库从此不可用，直到整库重建**，
+ * 而 `wipeKbForeign` 那条重建路径清的是**整张库里这个 kb_id 的行** —— 为了一个搬过来的文件，
+ * 把乙库原有几千行全部重新 embedding 一遍（白花 token、白花一次出网、还占着串行 worker）。
+ *
+ * ## 本条的做法：把作废单位从「整库」细化到「这个文件的那几行」
+ *
+ *   · 目标库还没有任何向量行 ⇒ 全搬（它还没有自己的模型口径，交给下次 build 判，与旧行为一致）；
+ *   · 目标库已有行 ⇒ **只搬模型与目标库一致的那些行**，其余 DELETE。
+ *     被删的正是「在目标空间里没有意义」的那几行，下次 build 会按需重算 —— 重算的范围
+ *     只是这个文件的块，而不是整个库。
+ *
  * @param decryptedDir - 解密数据根。
  * @param fileId - 目标文件 id。
  * @param targetKbId - 新归属。
- * @returns 改动的行数。
+ * @returns 搬过去的行数 + 删掉的外来行数。
  */
-export function reassignKbVectors(decryptedDir: string, fileId: number, targetKbId: number): number {
+export function reassignKbVectors(
+  decryptedDir: string,
+  fileId: number,
+  targetKbId: number,
+): { moved: number; dropped: number } {
   const id = Math.trunc(Number(fileId))
   const kb = Math.trunc(Number(targetKbId))
-  if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(kb) || kb <= 0) return 0
+  if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(kb) || kb <= 0) return { moved: 0, dropped: 0 }
   const p = kbVectorsDbPath(decryptedDir)
-  if (!existsSync(p)) return 0
+  if (!existsSync(p)) return { moved: 0, dropped: 0 }
   try {
     const db = new DatabaseSync(p)
     try {
-      if (!hasTable(db)) return 0
-      const res = db.prepare('UPDATE ' + KB_VECTORS_TABLE + ' SET kb_id = ? WHERE file_id = ?').run(kb, id)
-      return Number(res.changes ?? 0)
+      if (!hasTable(db)) return { moved: 0, dropped: 0 }
+      // 目标库自己的模型口径：只认它已有的那一个（多个 = 它自己本来就杂乱，那种情况
+      // 由 build 的 wipeKbForeign 收拾，这里不多做）。
+      const targetModels = (db.prepare(
+        'SELECT DISTINCT model FROM ' + KB_VECTORS_TABLE + ' WHERE kb_id = ?',
+      ).all(kb) as Array<{ model?: string }>).map(r => String(r.model ?? ''))
+      const upd = db.prepare('UPDATE ' + KB_VECTORS_TABLE + ' SET kb_id = ? WHERE file_id = ? AND model = ?')
+      const del = db.prepare('DELETE FROM ' + KB_VECTORS_TABLE + ' WHERE file_id = ? AND model <> ?')
+      if (targetModels.length === 0) {
+        const res = db.prepare('UPDATE ' + KB_VECTORS_TABLE + ' SET kb_id = ? WHERE file_id = ?').run(kb, id)
+        return { moved: Number(res.changes ?? 0), dropped: 0 }
+      }
+      let moved = 0
+      let dropped = 0
+      for (const m of targetModels) {
+        moved += Number(upd.run(kb, id, m).changes ?? 0)
+      }
+      if (targetModels.length === 1) {
+        // 单一模型才有「其余都是外来行」这个明确口径；多个时不动，交给 build。
+        const only = targetModels[0] ?? ''
+        dropped = Number(del.run(id, only).changes ?? 0)
+      }
+      return { moved, dropped }
     } finally {
       db.close()
     }
   } catch (e) {
     console.warn('[kb-vectors] 迁移文件向量失败（下次建库会自己收敛）：' + p + ': ' + errorText(e))
-    return 0
+    return { moved: 0, dropped: 0 }
   }
 }
 

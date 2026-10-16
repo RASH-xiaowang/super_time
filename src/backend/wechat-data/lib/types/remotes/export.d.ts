@@ -48,7 +48,8 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         format: string;
         dir?: string;
         filename?: string;
-    }): ExportResult;
+        jobId?: string;
+    }): Promise<ExportResult>;
     exportAllSessions(options?: {
         dir?: string;
         filename?: string;
@@ -91,7 +92,8 @@ export declare function createExportRemotes(rc: ExportRemoteCtx): {
         recordsKind?: string;
         dest?: string;
         category?: string;
-    }): ExportResult;
+        jobId?: string;
+    }): Promise<ExportResult>;
     getExportHistory(options?: ExportHistoryQuery): ExportHistorySnapshot;
     deleteExportHistory(options: {
         ids: number[];

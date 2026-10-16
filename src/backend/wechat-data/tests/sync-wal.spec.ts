@@ -4,11 +4,13 @@
  * @vitest-environment node
  */
 import { createCipheriv, randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { atomicReplace, decryptWalPatch, walFramesPatchable } from '../src/query/sync.ts'
+import { makeSupersededWal, plantPoisonedPair, verdictOf } from './superseded-wal-fixture.ts'
 
 const PAGE_SZ = 4096
 const RESERVE_SZ = 80
@@ -191,5 +193,67 @@ describe('M4：快照替换期间目标必须始终存在', () => {
     expect(missing).toBe(0)
     expect(readFileSync(target, 'utf8')).toBe('NEW')
     expect(existsSync(temp)).toBe(false)
+  })
+})
+
+/**
+ * 2026-10-13 真机故障的回归：`decrypted/message/message_0.db` 报
+ * `database disk image is malformed`，而**主文件一个字节都没坏** —— 坏的是它旁边那份
+ * 上一代的 `-wal`（795 帧 / 3.2MB）。这里用真 `node:sqlite` 造同形现场：
+ * 「另一代的主文件 + 上一代那份只覆盖部分页的 WAL」。
+ */
+describe('快照换代必须丢掉上一代的 -wal', () => {
+  it('同一份 WAL 叠在**另一代**主文件上 ⇒ malformed；换代之后读得回来', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'superseded-wal-'))
+    scratch.push(dir)
+    const { staleMain, wal } = makeSupersededWal(dir)
+    expect(readFileSync(wal).length).toBeGreaterThan(WAL_HEADER_SZ + WAL_FRAME_HEADER_SZ + PAGE_SZ)
+    // 对照组：这份 WAL 对它**自己那一代**是好的 —— 故障不在 WAL 本身，在「配错了主文件」。
+    copyFileSync(staleMain, join(dir, 'control.db'))
+    copyFileSync(wal, join(dir, 'control.db-wal'))
+    expect(verdictOf(join(dir, 'control.db'))).toBe('ok')
+
+    // 现场：目标主文件是另一代 + 上一代的 WAL 还躺在旁边。
+    const target = plantPoisonedPair(dir, 'message_0.db', wal)
+    expect(verdictOf(target)).not.toBe('ok')
+
+    // 换代（`atomicReplace` = 唯一发布口）：上一代的 WAL 必须一起消失 ⇒ 读得回来。
+    const next = join(dir, 'next.db')
+    copyFileSync(target, next)
+    await atomicReplace(next, target)
+    expect(existsSync(target + '-wal')).toBe(false)
+    expect(verdictOf(target)).toBe('ok')
+  })
+
+  /**
+   * 读者（本应用自己的只读连接）正持有快照时，`atomicReplace` 必须**整体失败**：
+   * 目标一个字节不动、`-wal` 也不许被顺手删掉（删了就等于把读者那一代的 WAL 提前作废）；
+   * 放开之后照常发布，并把上一代的 `-wal` 清掉。
+   *
+   * ⚠️ **这条用例证明不了什么**（写在用例里，免得下一个人以为它守着「清不掉就不发布」）：
+   * Windows 上主文件与 `-wal` 是**同一个** SQLite 连接持有的，而只读连接照样 EPERM 挡住
+   * rename（实测）⇒ 这里抛错的原因可能是「`-wal` 清不掉」，也可能只是「rename 被挡住」，
+   * 两者在这套夹具里分不开。要让「清不掉」单独可观测，得造出「`-wal` 不可删、主文件仍可
+   * rename」的状态，本仓的单测造不出来（见 `mutations-registry.batch3i.mjs` 的同名说明）。
+   */
+  it('读者占着快照 ⇒ 整体拒绝（目标不动）；放开后照常发布并清掉上一代的 WAL', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'superseded-wal-busy-'))
+    scratch.push(dir)
+    const target = plantPoisonedPair(dir, 'message_0.db', makeSupersededWal(dir).wal)
+    const before = readFileSync(target)
+
+    const holder = new DatabaseSync(target, { readOnly: true })
+    holder.prepare('SELECT count(*) FROM sqlite_master').get() // 把主文件与 -wal/-shm 一起握在手里
+    const next = join(dir, 'next.db')
+    copyFileSync(target, next)
+
+    await expect(atomicReplace(next, target)).rejects.toThrow()
+    expect(readFileSync(target).equals(before)).toBe(true) // 目标没被动过
+    expect(existsSync(target + '-wal')).toBe(true) // 读者的那一代旁文件也还在
+
+    holder.close()
+    await atomicReplace(next, target)
+    expect(existsSync(target + '-wal')).toBe(false)
+    expect(readFileSync(target).equals(before)).toBe(true)
   })
 })

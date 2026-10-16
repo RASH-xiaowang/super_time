@@ -9,8 +9,8 @@
  *    再基于它建向量索引，天然串行复用。
  *
  * 2) **隐私边界**：稠密需要把文本发给 embedding 接口 —— 这是**在原有基础上新增的出网点**，
- *    因此调用方（gateway）必须让它与 chat 出站一样过隐私闸门。本模块自身不做网络决策，
- *    只接收注入的 `EmbedFn`，是否允许出网由上层配置决定。
+ *    因此调用方（gateway）必须让它与 chat 出站一样过隐私闸门（脱敏 + 审计）。本模块自身不做网络决策，
+ *    只接收注入的 `EmbedFn`；应用内已没有任何出网开关（2026-09-30 起全部移除）。
  *
  * 3) **向量库位置**：`<数据根>/wechat_rag_vectors.db`，与稀疏索引同级，随数据目录一起迁移/删除。
  *
@@ -18,7 +18,8 @@
  *    （64 位），查询时先按汉明距离粗筛出 candidatePool 条，再对幸存者做精确余弦。
  *    SimHash 由固定种子随机超平面生成，索引与查询两侧一致，无需额外依赖。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../db-open.ts'
+import { withDb } from '../db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RetrievedDoc } from './types.ts'
@@ -264,7 +265,7 @@ const inflightVectorBuilds = new Map<string, { promise: Promise<VectorBuildResul
 export function buildVectorIndex(
   decryptedDir: string,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<VectorBuildResult> {
   const key = vectorDbPath(decryptedDir)
   const slot = inflightVectorBuilds.get(key)
@@ -299,7 +300,7 @@ export function buildVectorIndex(
 async function runBuildVectorIndex(
   decryptedDir: string,
   embed: EmbedFn,
-  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean },
+  opts: { model: string; batchSize: number; maxCharsPerDoc: number; maxDocsPerBuild: number; concurrency?: number; onProgress?: (done: number, total: number) => void; force?: boolean; signal?: AbortSignal },
 ): Promise<VectorBuildResult> {
   const started = Date.now()
   const src = searchIndexPath(decryptedDir)
@@ -419,6 +420,8 @@ async function runBuildVectorIndex(
     const batchSize = Math.min(Math.max(Number.isFinite(rawB) ? Math.floor(rawB) : 1, 1), 256)
     let next = 0
     let failure: unknown = null
+    /** W3-11.5：被取消（用户点了「停止」）。此时一行都没写 ⇒ 旧索引原样。 */
+    let canceled = false
     /**
      * 阶段一算出来的向量：**截断文本 → 向量字节与 SimHash**。
      *
@@ -433,6 +436,10 @@ async function runBuildVectorIndex(
     const worker = async (): Promise<void> => {
       for (;;) {
         if (failure) return
+        // W3-11.5：取消——在**认领下一批之前**查。
+        // 好处是「一行都没写」这一既有契约天然成立（阶段二在全部批次之后），
+        // 所以取消之后旧索引原样保留，不需要额外回滚。
+        if (opts.signal?.aborted === true) { canceled = true; return }
         const start = next
         next += batchSize
         if (start >= texts.length) return
@@ -473,6 +480,10 @@ async function runBuildVectorIndex(
     await Promise.all(Array.from({ length: concurrency }, () => worker()))
     // 阶段一失败：一行都没写（事务还没开），旧索引原样保留
     if (failure) throw failure
+    // W3-11.5：取消**不是失败**：阶段二压根没开，旧索引一行未动。
+    if (canceled) {
+      return { status: 'cancelled', rows: done.size, embedded: 0, embed_calls: embedCalls, elapsed_ms: Date.now() - started, message: '已停止构建，旧索引保持原样' }
+    }
 
     // 阶段二是同步段，先让出一次，避免紧接在最后一批网络请求之后立刻长时间占住事件循环
     await yieldToLoop()
@@ -525,22 +536,22 @@ function loadHashRows(decryptedDir: string): HashRow[] {
   const sig = String(statSig(p))
   const hit = HASH_CACHE.get(p)
   if (hit && hit.sig === sig) return hit.rows
-  const db = new DatabaseSync(p, { readOnly: true })
-  /**
-   * 这里**有意**一次性取回（N8 评估后的保留项）：它要的产物就是这个数组本身
-   * —— 粗筛表按 (距离, 原顺序) 做计数选择，需要随机访问全部行，不是「边读边丢」的扫描。
-   * 代价被两点约束住：① 按文件指纹缓存（`HASH_CACHE`，只在进程内首次/重建后付一次，
-   * 实测加载 ≈250ms）；② 它只为稠密通道服务，且稠密通道本身可关闭。
-   * 真要把它压下去得改成 mmap/分块，属结构性改动，不在本轮范围。
-   */
-  const rows = (db.prepare('SELECT fts_rowid, hash_lo, hash_hi, username FROM vectors').all() as Array<Record<string, unknown>>)
-    .map(r => ({
-      rowid: Number(r['fts_rowid']),
-      lo: Number(r['hash_lo']) >>> 0,
-      hi: Number(r['hash_hi']) >>> 0,
-      username: String(r['username'] ?? ''),
-    }))
-  db.close()
+  const rows = withDb(p, (db) => {
+    /**
+     * 这里**有意**一次性取回（N8 评估后的保留项）：它要的产物就是这个数组本身
+     * —— 粗筛表按 (距离, 原顺序) 做计数选择，需要随机访问全部行，不是「边读边丢」的扫描。
+     * 代价被两点约束住：① 按文件指纹缓存（`HASH_CACHE`，只在进程内首次/重建后付一次，
+     * 实测加载 ≈250ms）；② 它只为稠密通道服务，且稠密通道本身可关闭。
+     * 真要把它压下去得改成 mmap/分块，属结构性改动，不在本轮范围。
+     */
+    return (db.prepare('SELECT fts_rowid, hash_lo, hash_hi, username FROM vectors').all() as Array<Record<string, unknown>>)
+      .map(r => ({
+        rowid: Number(r['fts_rowid']),
+        lo: Number(r['hash_lo']) >>> 0,
+        hi: Number(r['hash_hi']) >>> 0,
+        username: String(r['username'] ?? ''),
+      }))
+  })
   HASH_CACHE.set(p, { sig, rows })
   return rows
 }
@@ -607,17 +618,22 @@ export async function searchDense(
   return { docs: top.map(x => x.doc), scores: top.map(x => x.score) }
 }
 
-/** 计算一条查询文本的向量（供测试与消融实验复用）。 */
-export async function embedOne(text: string, embed: EmbedFn): Promise<Float32Array> {
-  const v = await embed([text])
-  return l2normalize(v[0] ?? [])
-}
-
 /** 向量库摘要（前端「数据健康」用）。 */
 export function vectorIndexSummary(decryptedDir: string): { rows: number; dim: number; model: string } {
   const s = vectorIndexStatus(decryptedDir)
   return { rows: s.rows, dim: s.dim, model: s.model }
 }
 
-/** 便于测试：导出内部哈希工具。 */
-export const __internals = { simhash, popcount32, getPlanes, l2normalize, docKeyOf, selectByHamming, MAX_HAMMING }
+/**
+ * 测试接缝：**只**放"真实入口拿不到"的东西。
+ *
+ * `loadHashRows` 是 SimHash 粗筛表的读取 —— 它唯一的公开入口是稠密通道那一条，
+ * 而那条要先跑 embedding（联网或本地模型），单测量不到它；偏偏**那条连接的生命周期**
+ * 必须可测（`query-db-lifetime.spec.ts`：Windows 上没关的句柄 = 数据根再也换不掉）。
+ *
+ * 原先这里还挂着 `simhash` / `popcount32` / `getPlanes` / `l2normalize` /
+ * `selectByHamming` / `MAX_HAMMING` —— 那些的出处其实是 `query/vector-math.ts`，
+ * 已经各自 named export（P3-17：测试与门禁脚本改直连 vector-math，
+ * 别再绕这层接缝 —— 接缝一旦变成"拿纯函数的后门"，改名与重构的信号就会绕过真正的 API）。
+ */
+export const __internals = { loadHashRows }

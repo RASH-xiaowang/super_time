@@ -63,7 +63,7 @@ import type {
   MemberSearchSnapshot,
   MessagesSnapshot,
   MomentsInsightsSnapshot,
-  MomentsMonthlyRow,
+  MomentsMonthlyRow, MomentsMonthlySnapshot,
   MomentsSnapshot,
   OfficialAssetsSnapshot,
   OverviewInsights,
@@ -105,12 +105,16 @@ import type {
   WechatConfigPatch,
   WhisperDownloadResult,
   WhisperStatus,
+  LayaAnalysisView,
+  LayaDownloadOutcome,
+  LayaStatus,
+  LayaVisibleAnalysisResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   cachedFetch,
   cachedGet,
   invalidateSnapshotCache,
-  invalidateWechatCache,
+  invalidateAndNotify,
   readRenderCache,
   snapshotDelete,
   subscribeSnapshot,
@@ -221,8 +225,101 @@ export async function apiGetMomentsInsights(options?: { author?: string }): Prom
  *   (`authorName`) filter (all when omitted).
  * @returns monthly rows sorted ascending by month.
  */
-export async function apiGetMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<MomentsMonthlyRow[]> {
+export async function apiGetMomentsMonthly(options?: { author?: string; authorName?: string }): Promise<MomentsMonthlySnapshot> {
   return unwrap(await remote().getMomentsMonthly(options))
+}
+/**
+ * 词云词频（界面优化阶段 4）：scope=global（可带年份）/ chat（单会话）/ moments（朋友圈正文）。
+ * 本地 bigram 计数 + 实体保护 + 双重停用过滤；每次现算，不落库。
+ * @param options - scope / username / year / limit（默认 60）。
+ * @returns Top-N 词频与扫描条数。
+ */
+export async function apiGetWordCloud(options?: { scope?: 'global' | 'chat' | 'moments'; username?: string; year?: number; limit?: number }): Promise<{ words: Array<{ text: string; count: number }>; scanned: number; canceled?: boolean }> {
+  return unwrap(await remote().getWordCloud(options))
+}
+
+/**
+ * Analyze one conversation with the local decision model (laya · onnxruntime).
+ *
+ * Runs entirely on this machine: no network call, no LLM, not routed through the
+ * outbound privacy gate. A missing model is a normal outcome, not an exception —
+ * inspect `ok` / `error` / `note`.
+ * @param options - 会话 username 与可选上下文条数（默认 20，上限 60）。
+ * @returns 逐命题的判断（概率分布 / 分值）。
+ */
+export async function apiAnalyzeMessages(options: { talker: string; contextLimit?: number }): Promise<LayaAnalysisView> {
+  return unwrap(await remote().analyzeMessages(options))
+}
+
+/**
+ * Per-message local analysis for the **visible window** of a conversation.
+ *
+ * Each message is analyzed against the conversation up to that point (both sides are in the
+ * context). Voice messages are transcribed first — transcript cache is shared with the voice
+ * panel, so an already-transcribed clip costs nothing. Results are cached on disk, so scrolling
+ * back over the same messages is instant.
+ * @param options - talker + targets (localId + sortSeq), up to a dozen per call.
+ * @returns Per-message answers; failures are per item, not for the whole batch.
+ */
+export async function apiAnalyzeVisibleMessages(options: { talker: string; targets: Array<{ localId: number; sortSeq: number }>; jobId?: string }): Promise<LayaVisibleAnalysisResult> {
+  return unwrap(await remote().analyzeVisibleMessages(options))
+}
+
+/**
+ * Stop a batch of per-message local analysis that is still running (W3-11.5).
+ *
+ * Cancelling only takes effect **between** items (one ONNX forward cannot be interrupted),
+ * so worst case is one item's inference latency; whatever already finished is kept on disk,
+ * so a stop never throws away paid-for work.
+ * @param options - jobId, the same identifier that batch was started with.
+ * @returns ok, plus why it did not stop anything (batch already finished / unknown id).
+ */
+export async function apiCancelLayaAnalysis(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelLayaAnalysis(options))
+}
+
+/**
+ * Local decision model status: required files, size, source dir, download progress
+ * and runtime state (loaded / last inference ms / last error).
+ * @returns LayaStatus.
+ */
+export async function apiGetLayaStatus(): Promise<LayaStatus> {
+  return unwrap(await remote().getLayaStatus())
+}
+
+/**
+ * Download the decision model assets (~1.26 GB) into the data dir.
+ * @param options - 可选的 jobId（W2-11.5：有它才能取消）。
+ * @returns LayaDownloadOutcome；被取消时 `canceled: true`。
+ */
+export async function apiDownloadLayaModel(options?: { jobId?: string }): Promise<LayaDownloadOutcome> {
+  return unwrap(await remote().downloadLayaModel(options))
+}
+
+/**
+ * 取消正在进行的 laya 模型下载（W2-11.5）。
+ * @param options - 与 `apiDownloadLayaModel` 同一个 jobId。
+ * @returns ok，或没有该任务时的说明。
+ */
+export async function apiCancelLayaDownload(options: { jobId: string }): Promise<{ ok: boolean; message?: string }> {
+  return unwrap(await remote().cancelLayaDownload(options))
+}
+
+/**
+ * Adopt an already-downloaded model directory (move into the data dir).
+ * @param options - sourceDir.
+ * @returns LayaStatus.
+ */
+export async function apiAdoptLayaModel(options: { sourceDir: string }): Promise<LayaStatus> {
+  return unwrap(await remote().adoptLayaModel(options))
+}
+
+/**
+ * Unload the model and release its resident memory.
+ * @returns { ok }.
+ */
+export async function apiUnloadLaya(): Promise<{ ok: boolean }> {
+  return unwrap(await remote().unloadLaya())
 }
 /**
  * Fetch the favorites list.
@@ -286,7 +383,10 @@ export async function apiGetRecords(options: { kind: string; limit?: number; off
  * @returns LedgerSnapshot.
  */
 export async function apiGetLedger(options?: { month?: string }): Promise<LedgerSnapshot> {
-  return unwrap(await remote().getLedger(options))
+  // 账本是一条**跨全年聚合**的重查询（本机几百毫秒），而总览面板把它挂在数据事件上 ——
+  // 实时同步活跃期约每 10 秒一次。以前这里是 api 层唯一一个**完全没有缓存**的重读，
+  // 于是每次事件都整条重算（P2-4 记的那笔账）。`cachedGet` 的键按月分：切月份不互相污染。
+  return cachedGet('ledger:' + (options?.month ?? 'all'), async () => unwrap(await remote().getLedger(options)))
 }
 /**
  * Fetch the call (type 50) inventory snapshot.
@@ -344,9 +444,9 @@ export async function apiGetPrivacyState(): Promise<PrivacyStateSnapshot> {
  * @param options - partial settings patch.
  * @returns the updated privacy state snapshot.
  */
-export async function apiSetPrivacyState(options: { redactSensitive?: boolean; blockOutbound?: boolean }): Promise<PrivacyStateSnapshot> {
+export async function apiSetPrivacyState(options: { redactSensitive?: boolean }): Promise<PrivacyStateSnapshot> {
   const r = await remote().setPrivacyState(options)
-  invalidateWechatCache('privacy')
+  invalidateAndNotify('privacy')
   return unwrap(r)
 }
 /**

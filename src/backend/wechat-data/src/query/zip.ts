@@ -25,7 +25,7 @@ import { once } from 'node:events'
 import { Readable } from 'node:stream'
 import { finished } from 'node:stream/promises'
 import { pipeline } from 'node:stream/promises'
-import { createDeflateRaw, deflateRawSync } from 'node:zlib'
+import { createDeflateRaw, deflateRaw, deflateRawSync } from 'node:zlib'
 
 /** STORE：不压缩。 */
 const METHOD_STORE = 0
@@ -169,6 +169,27 @@ function u32(v: number): Buffer {
 /** STORE(0) / DEFLATE(8) 的选择：压缩不比原文短就用 STORE（与旧实现同判据）。 */
 function packEntry(raw: Buffer): { data: Buffer; method: number } {
   const deflated = deflateRawSync(raw)
+  return deflated.length >= raw.length ? { data: raw, method: METHOD_STORE } : { data: deflated, method: METHOD_DEFLATE }
+}
+
+/**
+ * `packEntry` 的异步版：`ZipFileWriter.addFile` 用它在 libuv 线程池里做 deflate，
+ * 不让一个几 MB 到几十 MB 的条目把后端事件循环同步钉住（与 `addStream` 同一条纪律）。
+ *
+ * `deflateRaw` 与 `deflateRawSync` 对同一份输入、同一套默认参数产出的字节相同，
+ * 因此 `addFile` 与 `zipFiles` 仍能保持「逐字节等价」的既有判据。
+ */
+function deflateRawAsync(raw: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    deflateRaw(raw, (err, out) => {
+      if (err) reject(err)
+      else resolve(out)
+    })
+  })
+}
+
+async function packEntryAsync(raw: Buffer): Promise<{ data: Buffer; method: number }> {
+  const deflated = await deflateRawAsync(raw)
   return deflated.length >= raw.length ? { data: raw, method: METHOD_STORE } : { data: deflated, method: METHOD_DEFLATE }
 }
 
@@ -419,8 +440,11 @@ export class ZipFileWriter {
     if (this.names.has(safeName)) return false
     this.names.add(safeName)
     const raw = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
-    const { data: packed, method } = packEntry(raw)
+    // 压缩交给线程池的同时，主线程算 CRC：既让事件循环有空接别的请求，也让这两段
+    // CPU 工作重叠，不必等 deflate 完成才开始逐字节查表。
+    const packedPromise = packEntryAsync(raw)
     const crc = crc32(raw)
+    const { data: packed, method } = await packedPromise
     const nameBuf = Buffer.from(safeName, 'utf8')
     const entryOffset = this.offset
     await this.write(Buffer.concat([

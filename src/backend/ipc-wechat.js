@@ -1,83 +1,56 @@
 /**
  * 主进程 IPC：微信数据后端（M21 第二十一刀自 main.js 的 whenReady 回调里拆出）。
  *
- * 8 个频道：`wechat:list-methods` / `wechat:info` / `wechat:call` / `wechat:backend-state` /
- * `wechat:llm-get` / `wechat:llm-save` / `wechat:llm-profiles` / `wechat:llm-models`。
+ * 10 个频道：`wechat:list-methods` / `wechat:info` / `wechat:call` / `wechat:backend-state` /
+ * `wechat:llm-get` / `wechat:llm-save` / `wechat:llm-profiles` / `wechat:llm-models` /
+ * `wechat:llm-test` / `wechat:llm-balance`。
+ * 后两个（2026-09-30 加）是「连接测试 / 余额查询」：地址推导与解析在 `llm-balance.js`
+ * （纯函数、可单测），本文件只做 IPC 包装 —— 与 `llm-models` 同一条接缝，
+ * 渲染页跨域会被 CORS 拦，主进程的 Node fetch 不受限。
  *
  * **原样搬出**：注册时机与闭包语义不变，只是把原来靠模块作用域拿到的东西改成从 `ctx` 传进来。
  * 三个**运行期会变**的量走 getter 而不是快照 —— `wechatBackend`（后端会重启）、`wechatBoot`
  * （启动 Promise）、`backendStatus`（状态机会推进）：读快照会拿到过期的对象/状态。
  * @param {object} ctx - 由 main.js 组装：ipcMain / app / licenseService / debugGates /
  *   awaitBackendReady / findModelCatalog / APP_VERSION / getWechatBackend / getWechatBoot / getBackendStatus /
- *   BACKEND_CALL_READY_WAIT_MS / loadLlmConfig / saveLlmConfig / loadLlmStore / upsertLlmProfile /
- *   activateLlmProfile / deleteLlmProfile（后几个原来直接靠模块作用域，靠标识符审计才抓出来）。
+ *   BACKEND_CALL_READY_WAIT_MS / scheduleWechatCall / getCallQueueStats / loadLlmConfig /
+ *   saveLlmConfig / loadLlmStore / upsertLlmProfile / activateLlmProfile / deleteLlmProfile
+ *   （后几个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
+const { humanizeNetworkError, testLlmEndpoint, queryLlmBalance } = require('./llm-balance.js');
+const { parseLlmBaseUrl, llmRequest } = require('./llm-http.js');
+// 「一次后端调用要过哪几道闸」的唯一出处：HTTP 那条路（局域网远程访问）也调它，
+// 两边不许各写一份 —— 最可能的漂法是少抄那个 catch，于是许可校验一抛异常就变成放行。
+const { gatedWechatCall } = require('./call-gates.js');
+
 function registerWechatIpc(ctx) {
-  const { ipcMain, app, licenseService, debugGates, awaitBackendReady, findModelCatalog, APP_VERSION,
-    getWechatBackend, getWechatBoot, getBackendStatus,
-    BACKEND_CALL_READY_WAIT_MS, loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile } = ctx;
-  ipcMain.handle('wechat:list-methods', () => {
+  // 闸门相关的那几个字段（app / licenseService / debugGates / awaitBackendReady /
+  // getWechatBackend / BACKEND_CALL_READY_WAIT_MS / APP_VERSION）**刻意不在这里解构**：
+  // `wechat:call` 已经把整个 ctx 交给 `gatedWechatCall`，那份实现是 IPC 与 HTTP
+  // （局域网远程访问）两条路共用的唯一出处（见 call-gates.js）。
+  // 在这儿再解构一遍只会多出一份「看起来还在用、其实已经搬走」的绑定。
+  const { ipcMain, ipcTrust, findModelCatalog, getWechatBoot, getBackendStatus,
+    scheduleWechatCall, getCallQueueStats, getRpcStats,
+    loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile } = ctx;
+  const handleIpc = (channel, handler) => ipcMain.handle(channel, ipcTrust.wrap(channel, handler));
+
+  handleIpc('wechat:list-methods', () => {
     if (!getWechatBoot()) return { ok: false, error: { message: 'Super Time 后端未初始化' } };
     return { ok: true, value: getWechatBoot().methods };
   });
 
-  ipcMain.handle('wechat:info', () => {
+  handleIpc('wechat:info', () => {
     if (!getWechatBoot()) return { ok: false, error: { message: 'Super Time 后端未初始化' } };
     return { ok: true, value: getWechatBoot().info };
   });
 
-  ipcMain.handle('wechat:call', async (_event, method, args) => {
-    // 后端还在启动/重启时**等待**，而不是立刻回一句假错误（见 awaitBackendReady）。
-    const ready = await awaitBackendReady(BACKEND_CALL_READY_WAIT_MS);
-    if (!ready || !getWechatBackend()) {
-      return {
-        ok: false,
-        error: {
-          message: getBackendStatus().lastError
-            ? `Super Time 后端暂不可用：${getBackendStatus().lastError}`
-            : 'Super Time 后端仍在启动中，请稍候重试',
-          code: 'BACKEND_NOT_READY',
-          details: { method, state: getBackendStatus().state },
-        },
-      };
-    }
-    // N2：调试闸门豁免。放开的是「授权」这道闸门 —— 验收脚本要用真实后端跑 UI 全链路，
-    // 而它拿不到厂商签发的许可证。条件来自主进程的 `debugGates()`（打包态恒不成立）、
-    // **不**接受渲染层传来的任何参数，且必须放在下面的 `authorizeCall` 之前。
-    // 放在 `try` 之外是刻意的：`getWechatBackend().call` 同步抛错时不该被误报成「许可校验失败」。
-    if (debugGates().skipGates) {
-      console.warn('[debug-gates] 已跳过许可证校验（method=%s）', method);
-      return getWechatBackend().call(method, args);
-    }
-    try {
-      const lic = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
-      const gate = licenseService.authorizeCall(lic, method);
-      if (!gate.ok) {
-        return {
-          ok: false,
-          error: {
-            message: gate.message,
-            code: gate.code,
-            details: { licenseState: lic.state, method, feature: licenseService.METHOD_FEATURE[method] || 'wechat-data' },
-          },
-        };
-      }
-    } catch (e) {
-      // 授权检查**自身**失败时必须拒绝，而不是放行。
-      // 许可 JSON 损坏、readLicenseFile 读盘失败、指纹采集异常等都会落到这里；
-      // 原实现只 warn 一句就继续调用后端，等于「许可闸门一旦出异常就完全失效」。
-      console.error('[license] 授权校验异常，已拒绝本次调用:', e?.message ?? e);
-      return {
-        ok: false,
-        error: {
-          message: `许可校验失败，已拒绝本次调用：${e?.message ?? String(e)}`,
-          code: 'LICENSE_CHECK_FAILED',
-          details: { method },
-        },
-      };
-    }
-    return getWechatBackend().call(method, args);
-  });
+  // 桌面与手机共用同一个单线程 worker，所以这里也进同一把调用闸。测试 ctx 不传
+  // scheduleWechatCall 时退回直接调用，保持各 IPC 判据的轻量夹具可用。
+  const scheduleCall = scheduleWechatCall || ((task) => task());
+  handleIpc('wechat:call', (_event, method, args) => scheduleCall(
+    () => gatedWechatCall(ctx, method, args),
+    { channel: 'desktop', method: String(method ?? '') },
+  ));
 
 
   /**
@@ -87,17 +60,24 @@ function registerWechatIpc(ctx) {
    * 后端可能先于订阅就报出 down/ready/failed —— 那些事件会丢失。
    * 界面挂载后用这个接口补一次状态，才能保证「该提示的一定提示到」。
    */
-  ipcMain.handle('wechat:backend-state', () => ({ ok: true, value: { ...getBackendStatus() } }));
+  handleIpc('wechat:backend-state', () => ({
+    ok: true,
+    value: {
+      ...getBackendStatus(),
+      callQueue: typeof getCallQueueStats === 'function' ? getCallQueueStats() : undefined,
+      rpc: typeof getRpcStats === 'function' ? getRpcStats() : undefined,
+    },
+  }));
 
   // —— 微信问答模型配置（wechat/llm.json） ——
-  ipcMain.handle('wechat:llm-get', () => {
+  handleIpc('wechat:llm-get', () => {
     try {
       return { ok: true, value: loadLlmConfig() };
     } catch (e) {
       return { ok: false, error: { message: e.message } };
     }
   });
-  ipcMain.handle('wechat:llm-save', (_event, cfg) => {
+  handleIpc('wechat:llm-save', (_event, cfg) => {
     try {
       return { ok: true, value: saveLlmConfig(cfg || {}) };
     } catch (e) {
@@ -114,7 +94,7 @@ function registerWechatIpc(ctx) {
    *
    * op：list / activate / save / delete（未识别的 op 明确报错，不静默当 list）。
    */
-  ipcMain.handle('wechat:llm-profiles', (_event, opts = {}) => {
+  handleIpc('wechat:llm-profiles', (_event, opts = {}) => {
     try {
       const op = String((opts && opts.op) || 'list');
       if (op === 'list') return { ok: true, value: loadLlmStore() };
@@ -128,55 +108,36 @@ function registerWechatIpc(ctx) {
   });
   // —— 通过 base_url 拉取官方模型列表（OpenAI 兼容 GET {base_url}/models）。
   //     放在主进程执行：file:// 渲染页跨域 fetch 会被 CORS 拦，Node fetch 不受限。 ——
-  ipcMain.handle('wechat:llm-models', async (_event, opts = {}) => {
+  handleIpc('wechat:llm-models', async (_event, opts = {}) => {
     const baseUrl = String(opts.baseUrl || '').trim();
     const apiKey = String(opts.apiKey || '');
-    /** 把 undici 的底层错误码翻译成用户能照做的中文提示。
-     *  原始错误（如 "fetch failed"/UND_ERR_CONNECT_TIMEOUT）对用户毫无信息量。 */
-    const humanizeNetworkError = (e, host) => {
-      const code = e?.cause?.code || e?.code || '';
-      if (e?.name === 'AbortError') return `请求超时（30 秒）：${host} 无响应，请检查网络或地址`;
-      if (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
-        return `连接 ${host} 超时：网络不通或地址有误（国内网络通常无法直连 api.openai.com，可换 DeepSeek / 通义千问等国内厂商）`;
-      }
-      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return `域名解析失败（${host}）：请检查 API 地址拼写`;
-      if (code === 'ECONNREFUSED') return `连接被拒绝（${host}）：端口未开放或已被防火墙拦截`;
-      if (code === 'ECONNRESET') return `连接被重置（${host}）：可能被网络中间设备中断，请重试或换厂商`;
-      if (/CERT|SELF_SIGNED|TLS|SSL/i.test(String(code))) return `TLS 证书校验失败（${host}）：${code}`;
-      return `${e?.message || String(e)}（${host}）`;
-    };
     try {
-      if (!/^https?:\/\//i.test(baseUrl)) {
-        throw new Error('API 地址需以 http:// 或 https:// 开头');
-      }
-      let host = baseUrl;
-      try { host = new URL(baseUrl).host } catch { /* 保底用原文 */ }
-      const url = baseUrl.replace(/\/+$/, '') + '/models';
+      const parsed = parseLlmBaseUrl(baseUrl);
+      const host = parsed.host;
+      const url = parsed.base + '/models';
       /** 未填 Key 时的兜底：命中内置清单则返回清单而非报错。
        *  填了 Key 的失败不发生回退 —— 用户已有凭据，真错误更有价值。 */
       const catalogFallback = (note) => {
         if (apiKey) return null;
-        const hit = findModelCatalog(baseUrl);
+        const hit = findModelCatalog(parsed.base);
         if (!hit) return null;
         return { ok: true, value: { models: hit.models, source: 'catalog', vendor: hit.vendor, note } };
       };
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30_000);
+      /**
+       * 出网拦截已于 2026-09-30 随开关一起移除：这个频道照常请求模型列表。
+       * 它仍会带上用户填的 API Key（`Authorization: Bearer`），destination 也是用户自己配的地址。
+       */
       let res;
       try {
-        res = await fetch(url, {
-          headers: {
-            accept: 'application/json',
-            ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}),
-          },
-          signal: ctrl.signal,
+        res = await llmRequest(url, {
+          apiKey,
+          timeoutMs: 30_000,
+          maxAttempts: 1,
         });
       } catch (e) {
         const fb = catalogFallback('当前网络无法直连该地址，已改用内置清单');
         if (fb) return fb;
         throw new Error(humanizeNetworkError(e, host));
-      } finally {
-        clearTimeout(timer);
       }
       if (!res.ok) {
         const body = (await res.text().catch(() => '')).slice(0, 200);
@@ -200,6 +161,35 @@ function registerWechatIpc(ctx) {
         .map((m) => (typeof m === 'string' ? m : m?.id))
         .filter((id) => typeof id === 'string' && id))];
       return { ok: true, value: { models, source: 'live' } };
+    } catch (e) {
+      return { ok: false, error: { message: e?.message || String(e) } };
+    }
+  });
+  // —— 连接测试（2026-09-30）：按端点类型各测各的 —— `kind: 'chat' | 'embed' | 'rerank'`。
+  //     主模型 / 向量 / 精排是三套地址·Key·路径，只测 /models 覆盖不到后两者（实测就有
+  //     「主模型 DeepSeek、向量与精排指向 SiliconFlow」这种组合）。 ——
+  handleIpc('wechat:llm-test', async (_event, opts = {}) => {
+    try {
+      const probe = {
+        baseUrl: String(opts.baseUrl || '').trim(),
+        apiKey: String(opts.apiKey || ''),
+        kind: opts.kind,
+        model: opts.model,
+      };
+      // 端点路径用**赋值**而不是对象字面量键：`path` 同时是宿主 ctx 的字段名，
+      // 写成字面量键会被 `ipc-ctx-wiring.spec.ts` 的「不许裸用 ctx 名字」判据当成裸标识符
+      // （那条判据按标识符扫，分不清对象键与变量）。契约本身仍是 `path`。
+      if (opts.path) probe.path = opts.path;
+      return { ok: true, value: await testLlmEndpoint(probe) };
+    } catch (e) {
+      return { ok: false, error: { message: e?.message || String(e) } };
+    }
+  });
+  // —— 余额查询（2026-09-30）：按厂商惯例探 `/user/balance`（DeepSeek）或 `/user/info`。
+  //     主界面左下角会按 5 分钟定时刷新它（新出网点，已写进 docs/PRIVACY.md 与同意屏）。 ——
+  handleIpc('wechat:llm-balance', async (_event, opts = {}) => {
+    try {
+      return { ok: true, value: await queryLlmBalance(String(opts.baseUrl || '').trim(), String(opts.apiKey || '')) };
     } catch (e) {
       return { ok: false, error: { message: e?.message || String(e) } };
     }

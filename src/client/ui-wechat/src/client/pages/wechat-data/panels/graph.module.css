@@ -12,12 +12,12 @@
   box-sizing: border-box;
 }
 .chip {
-  padding: 5px 12px;
+  padding: 4px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: transparent;
   color: var(--nm-text-2);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   cursor: pointer;
   transition: all 0.15s;
   corner-shape: round;
@@ -31,7 +31,7 @@
   width: 170px;
   padding: 6px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: rgba(128, 138, 156, 0.08);
   color: var(--nm-text-1);
   font-size: 12px;
@@ -55,7 +55,7 @@
   gap: 2px;
   padding: 6px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-glass);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -66,9 +66,9 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
@@ -76,7 +76,7 @@
   text-align: left;
 }
 .searchHit:hover { background: rgba(22, 163, 235, 0.12); }
-.searchHitId { color: rgba(140, 150, 170, 0.7); font-size: 10.5px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.searchHitId { color: rgba(140, 150, 170, 0.7); font-size: var(--nm-fs-xs, 11px); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .searchEmpty { padding: 8px 10px; color: var(--nm-text-2); font-size: 12px; }
 
 /* ── 主体 ── */
@@ -86,7 +86,7 @@
   min-width: 0;
   position: relative;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   overflow: hidden;
   background: var(--nm-bg-0);
   display: flex;
@@ -182,7 +182,7 @@
   gap: 12px;
   padding: 6px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-glass);
   font-size: 11px;
   color: var(--nm-text-2);
@@ -202,15 +202,15 @@
 .legendDotNote { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-purple);
   corner-shape: round;
 }
-.legendLine { width: 18px; height: 2px; border-radius: 2px; background: rgba(125, 135, 155, 0.6); }
-.legendLineBlue { width: 18px; height: 2px; border-radius: 2px; background: rgba(22, 140, 220, 0.6); }
+.legendLine { width: 18px; height: 2px; border-radius: var(--nm-r-xs); background: rgba(125, 135, 155, 0.6); }
+.legendLineBlue { width: 18px; height: 2px; border-radius: var(--nm-r-xs); background: rgba(22, 140, 220, 0.6); }
 /* 金虚线 = 同备注编号（与画布的 edgeClass 虚线同义，图例本身也画成虚线） */
-.legendLineGold { width: 18px; height: 2px; border-radius: 2px;
+.legendLineGold { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
   background: repeating-linear-gradient(90deg, rgba(214, 148, 24, 0.9) 0 4px, transparent 4px 7px);
 }
 /* 蓝虚线 = 首字相同（与画布的 edgeInitial 同义）。
    与「蓝实线 = 与我亲密度」同色系，靠**虚线**区分 —— 图例的措辞也必须写出「实线/虚线」。 */
-.legendLineBlueDash { width: 18px; height: 2px; border-radius: 2px;
+.legendLineBlueDash { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
   background: repeating-linear-gradient(90deg, rgba(30, 150, 230, 0.95) 0 4px, transparent 4px 7px);
 }
 .legendBar { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgba(55, 66, 82, 0.7);
@@ -229,7 +229,7 @@
 .legendDotEntity { width: 8px; height: 8px; border-radius: 50%; background: var(--nm-amber);
   corner-shape: round;
 }
-.legendLineAmberDash { width: 18px; height: 2px; border-radius: 2px;
+.legendLineAmberDash { width: 18px; height: 2px; border-radius: var(--nm-r-xs);
   background: repeating-linear-gradient(90deg, var(--nm-amber) 0 4px, transparent 4px 7px);
 }
 
@@ -243,7 +243,7 @@
   gap: 14px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-glass);
   box-sizing: border-box;
   backdrop-filter: blur(8px);
@@ -268,7 +268,7 @@
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: rgba(22, 163, 235, 0.05);
 }
 .detailHd { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -281,12 +281,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-1);
   background: rgba(128, 138, 156, 0.12);
   border: none;
-  border-radius: 999px;
-  padding: 3px 9px;
+  border-radius: var(--nm-r-pill);
+  padding: 3px 8px;
   cursor: pointer;
   corner-shape: round;
 }
@@ -301,9 +301,9 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
+  padding: 8px 8px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: transparent;
   color: var(--nm-text-1);
   font-size: 12px;
@@ -320,7 +320,7 @@
 .seg {
   display: flex;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 3px;
   gap: 2px;
   background: rgba(128, 138, 156, 0.06);
@@ -329,9 +329,9 @@
 .segBtn {
   flex: 1;
   border: none;
-  border-radius: 999px;
-  padding: 5px 6px;
-  font-size: 12px;
+  border-radius: var(--nm-r-pill);
+  padding: 4px 6px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-2);
   background: transparent;
   cursor: pointer;
@@ -366,7 +366,7 @@
   /* WCAG 2.2 SC 2.5.8：实测该开关行仅 20px 高，补到 24px 达标（宽度本就有 216px）。 */
   min-height: 24px;
 }
-.ctlTrack { width: 30px; height: 16px; border-radius: 999px; background: rgba(128, 138, 156, 0.25); position: relative; transition: background 0.15s;
+.ctlTrack { width: 30px; height: 16px; border-radius: var(--nm-r-pill); background: rgba(128, 138, 156, 0.25); position: relative; transition: background 0.15s;
   corner-shape: round;
 }
 .ctlToggle[data-on] .ctlTrack { background: var(--nm-cyan); }
@@ -377,7 +377,7 @@
 .animBtn {
   padding: 8px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: linear-gradient(135deg, rgba(22, 163, 235, 0.25), color-mix(in srgb, var(--nm-purple) 22%, transparent));
   color: var(--nm-text-1);
   font-size: 13px;
@@ -395,7 +395,7 @@
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: rgba(128, 138, 156, 0.06);
   color: var(--nm-text-1);
   font-size: 11px;
@@ -426,9 +426,9 @@
 .detailName { font-size: 13px; font-weight: 700; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detailBtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .miniBtn {
-  padding: 5px 9px;
+  padding: 4px 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: rgba(128, 138, 156, 0.08);
   color: var(--nm-text-1);
   font-size: 11px;
@@ -445,10 +445,10 @@
   margin-left: auto;
   padding: 2px 8px;
   border: 1px solid var(--nm-cyan);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: rgba(22, 163, 235, 0.10);
   color: var(--nm-cyan);
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   cursor: pointer;
   corner-shape: round;
 }
@@ -462,7 +462,7 @@
   width: 148px;
   height: 96px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-glass);
   cursor: crosshair;
   z-index: 5;
@@ -485,7 +485,7 @@
   gap: 3px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   background: var(--nm-bg-card);
   min-width: 0;
 }
@@ -548,7 +548,7 @@
     flex-wrap: wrap;
     gap: 6px 10px;
     padding: 6px 10px;
-    border-radius: 12px;
+    border-radius: var(--nm-r-md);
   }
   /*
    * 小地图只改**位置**，不改尺寸 —— 尺寸写在这里是死代码：
@@ -597,7 +597,7 @@
 .noteMetric {
   flex: none;
   color: var(--nm-text-2);
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-family: var(--nm-font-mono, monospace);
 }
 .noteEdit,
@@ -606,7 +606,7 @@
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--nm-r-sm);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 11px;

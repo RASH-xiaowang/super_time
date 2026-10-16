@@ -1,0 +1,109 @@
+/**
+ * 「仅桌面端」降级卡的样式（M9）。
+ *
+ * 这张卡只在手机浏览器里出现，所以直接按手机排：满宽、正文行高放宽、左右让开安全区。
+ * 三条仓库硬口径照旧 —— 圆角只用令牌或 0；间距避开 5/7/9/18px；`nm` 令牌一律带兜底
+ * （见 mobile-nav.module.css 同一段注释）。
+ *
+ * 刻意不做的一件事：不给它加「去电脑上打开」的按钮或复制链接。远程端本来就不该知道
+ * 电脑的内网地址（那是 `remote` 那一节才能读到的信息），这里只给一句人话指路。
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
+  border-radius: var(--nm-r-lg, 16px);
+  background: var(--nm-bg-1, rgba(255, 255, 255, 0.03));
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: var(--nm-r-md, 10px);
+  background: color-mix(in srgb, var(--nm-cyan, #00f0ff) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nm-cyan, #00f0ff) 30%, transparent);
+}
+
+.title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--nm-text-1, #e2e8f0);
+}
+
+.why {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--nm-text-2, #94a3b8);
+}
+
+.where {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--nm-text-2, #94a3b8);
+  background: var(--nm-bg-0, rgba(5, 10, 24, 0.55));
+  border-left: 2px solid color-mix(in srgb, var(--nm-cyan, #00f0ff) 45%, transparent);
+  border-radius: var(--nm-r-sm, 8px);
+}
+
+/* ── 清单形态（一张卡列多节）────────────────────── */
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.listItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
+}
+
+.listItem:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.listLabel {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--nm-text-1, #e2e8f0);
+}
+
+.listWhy {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--nm-text-3, #64748b);
+}
+
+/* 窄屏（≤360 这一档手机）把标题让到图标下面，避免「· 仅桌面端」被挤成两行半 */
+@media (max-width: 360px) {
+  .head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}

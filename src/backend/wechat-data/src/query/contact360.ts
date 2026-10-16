@@ -4,11 +4,12 @@
  * shared groups. All reads are defensive against WeChat 4.x schema drift.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Contact360Group, Contact360Snapshot } from '../types.ts'
 import { contactMeta, shardCatalog } from './meta.ts'
+import { withDb } from './db-open.ts'
 
 /** Stringify a DB cell. */
 function cellString(v: unknown): string {
@@ -64,15 +65,16 @@ function momentsCount(decryptedDir: string, username: string): number {
   for (const p of [join(decryptedDir, 'sns', 'db_sns', 'sns.db'), join(decryptedDir, 'sns', 'sns.db')]) {
     if (!existsSync(p)) continue
     try {
-      const db = new DatabaseSync(p, { readOnly: true })
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
-      if (!has) { db.close(); continue }
-      const cols = tableColumns(db, 'SnsTimeLine')
-      const uname = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
-      if (!uname) { db.close(); continue }
-      const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username) as { n: number } | undefined
-      db.close()
-      return row?.n ?? 0
+      const got = withDb(p, (db) => {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SnsTimeLine'").get() !== undefined
+        if (!has) return null
+        const cols = tableColumns(db, 'SnsTimeLine')
+        const uname = cols.has('user_name') ? 'user_name' : cols.has('userName') ? 'userName' : ''
+        if (!uname) return null
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM SnsTimeLine WHERE ${uname} = ?`).get(username) as { n: number } | undefined
+        return row?.n ?? 0
+      })
+      if (got !== null) return got
     } catch { /* try next path */ }
   }
   return 0
@@ -83,25 +85,25 @@ function fundsCount(decryptedDir: string, username: string): { transfers: number
   const p = join(decryptedDir, 'general', 'general.db')
   if (!existsSync(p)) return { transfers: 0, redpackets: 0 }
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    let transfers = 0
-    let redpackets = 0
-    try {
-      const cols = tableColumns(db, 'transferTable')
-      if (cols.has('session_name')) {
-        const row = db.prepare('SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?').get(username) as { n: number } | undefined
-        transfers = row?.n ?? 0
-      }
-    } catch { /* transfer table unavailable */ }
-    try {
-      const cols = tableColumns(db, 'redEnvelopeTable')
-      if (cols.has('session_name')) {
-        const row = db.prepare('SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?').get(username) as { n: number } | undefined
-        redpackets = row?.n ?? 0
-      }
-    } catch { /* red envelope table unavailable */ }
-    db.close()
-    return { transfers, redpackets }
+    return withDb(p, (db) => {
+      let transfers = 0
+      let redpackets = 0
+      try {
+        const cols = tableColumns(db, 'transferTable')
+        if (cols.has('session_name')) {
+          const row = db.prepare('SELECT COUNT(*) AS n FROM transferTable WHERE session_name = ?').get(username) as { n: number } | undefined
+          transfers = row?.n ?? 0
+        }
+      } catch { /* transfer table unavailable */ }
+      try {
+        const cols = tableColumns(db, 'redEnvelopeTable')
+        if (cols.has('session_name')) {
+          const row = db.prepare('SELECT COUNT(*) AS n FROM redEnvelopeTable WHERE session_name = ?').get(username) as { n: number } | undefined
+          redpackets = row?.n ?? 0
+        }
+      } catch { /* red envelope table unavailable */ }
+      return { transfers, redpackets }
+    })
   } catch {
     return { transfers: 0, redpackets: 0 }
   }
@@ -112,39 +114,39 @@ function commonGroups(decryptedDir: string, username: string): Contact360Group[]
   const p = join(decryptedDir, 'contact', 'contact.db')
   if (!existsSync(p)) return []
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
-    if (!has) { db.close(); return [] }
-    const cols = tableColumns(db, 'contact')
-    const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-    if (!userCol) { db.close(); return [] }
-    const contactNames = contactMeta(decryptedDir).names
-    const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
-    if (!me) { db.close(); return [] }
-    const meId = me.id
-    if (meId === undefined) { db.close(); return [] }
-    const memberId = meId
-    const rooms: Contact360Group[] = []
-    try {
-      const cmCols = tableColumns(db, 'chatroom_member')
-      if (cmCols.has('room_id') && cmCols.has('member_id')) {
-        const rows = db.prepare('SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id').all(memberId) as Array<{ room_id: number; n: number }>
-        const crCols = tableColumns(db, 'chat_room')
-        const crUser = crCols.has('username') ? 'username' : crCols.has('UserName') ? 'UserName' : ''
-        if (crUser) {
-          for (const r of rows) {
-            const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id) as { u?: unknown } | undefined
-            if (!room) continue
-            const ru = cellString(room.u)
-            if (!ru) continue
-            rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n })
-            if (rooms.length >= 10) break
+    return withDb(p, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact'").get() !== undefined
+      if (!has) return []
+      const cols = tableColumns(db, 'contact')
+      const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
+      if (!userCol) return []
+      const contactNames = contactMeta(decryptedDir).names
+      const me = db.prepare(`SELECT id FROM contact WHERE ${userCol} = ?`).get(username) as { id?: number } | undefined
+      if (!me) return []
+      const meId = me.id
+      if (meId === undefined) return []
+      const memberId = meId
+      const rooms: Contact360Group[] = []
+      try {
+        const cmCols = tableColumns(db, 'chatroom_member')
+        if (cmCols.has('room_id') && cmCols.has('member_id')) {
+          const rows = db.prepare('SELECT room_id, COUNT(*) AS n FROM chatroom_member WHERE member_id = ? GROUP BY room_id').all(memberId) as Array<{ room_id: number; n: number }>
+          const crCols = tableColumns(db, 'chat_room')
+          const crUser = crCols.has('username') ? 'username' : crCols.has('UserName') ? 'UserName' : ''
+          if (crUser) {
+            for (const r of rows) {
+              const room = db.prepare(`SELECT ${crUser} AS u FROM chat_room WHERE id = ?`).get(r.room_id) as { u?: unknown } | undefined
+              if (!room) continue
+              const ru = cellString(room.u)
+              if (!ru) continue
+              rooms.push({ username: ru, name: contactNames.get(ru) ?? ru, memberCount: r.n })
+              if (rooms.length >= 10) break
+            }
           }
         }
-      }
-    } catch { /* group tables unavailable */ }
-    db.close()
-    return rooms
+      } catch { /* group tables unavailable */ }
+      return rooms
+    })
   } catch {
     return []
   }

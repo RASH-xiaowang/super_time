@@ -6,7 +6,16 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { boundedSet } from './meta.ts'
 
-const fileCache = new Map<string, string>()
+/**
+ * 解析结果缓存。`url === ''` 是「这一次没找到」的**负缓存条目**。
+ *
+ * 负缓存必须有保质期：用户点了「本地未找到」之后做的正是去微信里打开/下载那个文件，
+ * 而旧实现把空串**永久**钉在缓存里（没有 TTL、也没有 mtime/大小指纹）——
+ * 文件已经下载好了，这条消息却永远显示「本地未找到」，直到重启应用。
+ * 60 秒这条线与 `article-cover.ts` 的负缓存同口径（同样是「瞬时失败」而不是「没有这个东西」）。
+ */
+const fileCache = new Map<string, { url: string, at: number }>()
+const NEGATIVE_TTL_MS = 60_000
 
 const FILE_MIME: Record<string, string> = {
   pdf: 'application/pdf',
@@ -71,15 +80,16 @@ export function resolveMessageFileDataUrl(
   if (!name) return { error: '缺少文件名' }
   const month = monthDirOf(opts.createTime)
   const size = Number.isFinite(opts.size) && (opts.size ?? 0) > 0 ? Math.trunc(opts.size as number) : 0
-  // 缓存键带上线索：同名文件在不同会话/不同月份是不同请求，不能共用一条结果。
-  const cacheKey = `${name.toLowerCase()}|${size}|${month}`
-  if (fileCache.has(cacheKey)) {
-    const cached = fileCache.get(cacheKey) ?? ''
-    return cached ? { url: cached } : { error: '本地未找到该文件' }
+  // 缓存键要带上**当前账号的根目录**：换账号 / 改 `wechat_base_dir` 之后，同名同大小同月
+  // 的文件是另一个目录里的另一份字节 —— 少了这一维，会把上一个账号的文件内容发回界面。
+  const cacheKey = `${wechatBaseDir.toLowerCase()}|${name.toLowerCase()}|${String(size)}|${month}`
+  const hit = fileCache.get(cacheKey)
+  if (hit !== undefined && (hit.url !== '' || Date.now() - hit.at < NEGATIVE_TTL_MS)) {
+    return hit.url ? { url: hit.url } : { error: '本地未找到该文件' }
   }
   const fileRoot = join(wechatBaseDir, 'msg', 'file')
   if (!existsSync(fileRoot)) {
-    boundedSet(fileCache, cacheKey, '')
+    boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
     return { error: 'msg/file 目录不存在，文件尚未下载' }
   }
   try {
@@ -102,7 +112,7 @@ export function resolveMessageFileDataUrl(
     let hits = monthDirs.length > 0 ? scan(monthDirs) : []
     if (hits.length === 0) hits = scan(allDirs)
     if (hits.length === 0) {
-      boundedSet(fileCache, cacheKey, '')
+      boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
       return { error: '本地未找到该文件（需在微信中先打开/下载）' }
     }
     // 体积精确相等优先；多条同大小同名时退化为「取最新」。
@@ -111,10 +121,10 @@ export function resolveMessageFileDataUrl(
     const best = pool.reduce((a, b) => (b.mtime > a.mtime ? b : a), pool[0] as { path: string; mtime: number; size: number })
     const bytes = readFileSync(best.path)
     const url = 'data:' + mimeOf(name) + ';base64,' + bytes.toString('base64')
-    boundedSet(fileCache, cacheKey, url)
+    boundedSet(fileCache, cacheKey, { url, at: Date.now() })
     return { url }
   } catch (e) {
-    boundedSet(fileCache, cacheKey, '')
+    boundedSet(fileCache, cacheKey, { url: '', at: Date.now() })
     return { error: (e as Error).message }
   }
 }

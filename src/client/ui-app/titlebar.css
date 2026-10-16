@@ -44,10 +44,10 @@ body {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 7px;
-  color: var(--dsw-alias-brand-primary, #00f0ff);
-  background: rgba(0, 240, 255, 0.08);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--nm-r-sm, 6px);
+  color: var(--dsw-alias-brand-primary, var(--nm-brand, #00f0ff));
+  background: var(--nm-cyan-8, rgba(0, 240, 255, 0.08));
+  border: 1px solid var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
 }
 
 .tb-title {
@@ -80,7 +80,7 @@ body {
 }
 
 .tb-btn:hover {
-  background: rgba(127, 127, 127, 0.16);
+  background: var(--nm-hover-neutral, rgba(127, 127, 127, 0.16));
 }
 
 /* 全屏按钮：默认是「进入全屏」的四角外扩图标，进入后换成内收图标 */
@@ -88,6 +88,8 @@ body {
 .tb-btn[data-on] .tb-ico-enter { display: none; }
 .tb-btn[data-on] .tb-ico-exit { display: block; }
 
+/* 关闭键 hover 用 Windows 原生红（#e81123）—— 这是平台语义色，不随主题变，
+ * 所以刻意保留字面量，不走 --nm-* 令牌。 */
 .tb-btn.tb-close:hover {
   background: #e81123;
   color: #fff;

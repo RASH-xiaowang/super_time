@@ -57,7 +57,10 @@ const MIGRATED: ReadonlyArray<{ file: string; hook: string; render: string; flas
   { file: 'Health.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
   { file: 'Ledger.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
   { file: 'Moments.tsx', hook: 'useTransientNotice(6000)', render: 'hint', flash: 3, hold: 9 },
-  { file: 'Overview.tsx', hook: 'useTransientNotice(6000)', render: 'error', flash: 2, hold: 3 },
+  // R4：notice 的渲染类从本面板的 `css.error` 改成 kit 的 `kitCss.emptyInline`
+  // （notice 是「提示/说明」语义，此前用错误样式渲染是遗留错配）。
+  // 注：`render` 现在是**完整的类引用表达式**（含 `css.` / `kitCss.` 前缀）。
+  { file: 'Overview.tsx', hook: 'useTransientNotice(6000)', render: 'kitCss.emptyInline', flash: 2, hold: 3 },
   { file: 'PeriodSummary.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 1 },
   { file: 'Records.tsx', hook: 'useTransientNotice(4000)', render: 'notice', flash: 1, hold: 0 },
   { file: 'Tasks.tsx', hook: 'useTransientNotice()', render: 'notice', flash: 1, hold: 0 },
@@ -88,7 +91,8 @@ describe('L20 接线守卫（源码级；面板运行期行为未在浏览器验
       it('防空转：提示语真的还在渲染，且调用点存在（不是把功能删掉换绿）', () => {
         // 该 div 上允许再挂属性（KbRail 的删库回执是 `role="status"`，探针靠它抓回执）：
         // 钉住 className 与 children 就够，精确到整串会把 role 判成违规。
-        expect(code).toMatch(new RegExp(`\\{notice && <div className=\\{css\\.${m.render}\\}[^>]*>\\{notice\\}</div>\\}`))
+        const renderRef = m.render.includes('.') ? m.render : `css.${m.render}`
+        expect(code).toMatch(new RegExp(`\\{notice && <div className=\\{${renderRef.replace('.', '\\.')}\\}[^>]*>\\{notice\\}</div>\\}`))
         expect((code.match(/flash\(/g) ?? []).length).toBeGreaterThanOrEqual(m.flash)
         expect((code.match(/hold\(/g) ?? []).length).toBeGreaterThanOrEqual(m.hold)
       })
@@ -113,8 +117,13 @@ describe('L20 接线守卫（源码级；面板运行期行为未在浏览器验
     const files = readdirSync(HERE).filter(f => f.endsWith('.tsx')).sort()
     // 防空转：目录里确实扫到了面板（不然这条断言恒真）
     expect(files.length).toBeGreaterThan(20)
-    /** 允许仍持有 notice 槽位的例外：hooks.tsx 是公共实现本身。 */
-    const allowed = new Set(['hooks.tsx'])
+    /**
+     * 允许仍持有 notice 槽位的例外：**公共实现本身**。
+     * `hooks.tsx` 是 `useTransientNotice` 的住处；`use-action-notice.tsx` 是 W3-11.1 新增的
+     * 一次性回执 hook（`useActionNotice` + `ActionNoticeLine`），同样是实现而不是面板 ——
+     * 它必须自己管那个 state，否则「面板不许再写 setNotice/裸定时器」这条就没有落脚点。
+     */
+    const allowed = new Set(['hooks.tsx', 'use-action-notice.tsx'])
     const scanned = files.filter(f => !allowed.has(f))
     expect(scanned.length).toBeGreaterThan(20)
     expect(scanned.filter(f => readCode(f).includes('setNotice'))).toEqual([])

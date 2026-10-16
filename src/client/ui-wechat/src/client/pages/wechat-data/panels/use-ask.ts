@@ -8,7 +8,7 @@
  * 上下文；「微信问答」页签用默认键，行为与重构前完全一致。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiAskWechat } from '../api.ts'
+import { apiAskWechat, apiCancelAsk, remote } from '../api.ts'
 import { createAskGate, type AskGate } from './ask-gate.ts'
 import { getActiveKbId } from './kb-scope.ts'
 import type { AskResult } from '@deepseek-ai/dsh-wechat-data/types'
@@ -35,6 +35,8 @@ export interface AskTurn {
   feedback?: 'up' | 'down'
   /** 用户逐条标注：引用序号（1 基）→ 有用 / 没用。 */
   marks?: Record<number, 'useful' | 'useless'>
+  /** 这一轮被用户主动停止（不是错误，也不该显示成错误）。 */
+  stopped?: boolean
 }
 
 /** hook 选项。 */
@@ -73,6 +75,8 @@ export interface UseAskSessionResult {
   streamText: string
   error: string | null
   ask: (question: string) => Promise<void>
+  /** 停止当前这一轮的生成（W3-6.1）。幂等，没有在跑的轮次时点它也只是空取消。 */
+  cancel: () => void
   /** 清空当前线程。 */
   reset: () => void
   /** 就地更新某一轮（标注引用 / 记录已反馈）。 */
@@ -148,6 +152,8 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
       const r = await apiAskWechat({
         question: q,
         streamId,
+        // 取消标识与流式标识同源：一轮一个 id，两处都用它（W3-6.1）。
+        jobId: streamId,
         ...(su ? { username: su } : {}),
         ...(f ? { from: f } : {}),
         ...(t2 ? { to: t2 } : {}),
@@ -170,7 +176,16 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
         retrievalId: r.retrievalId,
       }])
     } catch (e) {
-      setError((e as Error).message)
+      // W3-6.1：用户主动停止**不是错误**。把它显示成红色错误会让「停止生成」这个功能
+      // 看起来像把问答弄坏了；这里是把它记成一次正常的收尾（stopped），
+      // 与「模型没配上」那类真失败分开。
+      const code = (e as { code?: string } | null)?.code
+      if (code === 'ASK_CANCELED') {
+        setError(null)
+        setTurnList(k, prev => [...prev, { role: 'assistant', text: '（已停止生成）', stopped: true }])
+      } else {
+        setError((e as Error).message)
+      }
     } finally {
       // 只有「当前轮」才能释放闸门并清状态。**防御性不变量**：当前接线下这个 false 分支不可达
       // （复审穷举 5 轮共 1920 种交错，0 次出现），保留是因为它是 `finish` 返回 boolean 的意义所在、
@@ -185,6 +200,22 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
 
   const reset = useCallback((): void => { setTurnList(key, () => []) }, [key, setTurnList])
 
+  /**
+   * 停止当前这一轮的生成（W3-6.1）。
+   *
+   * 幂等且永远可点：闸门释放后再点也只是一次「找不到那一轮」的空取消（后端会如实说
+   * 它已经结束了），不会抛错。没有在跑的轮次时按钮本就不该出现（由 asking 决定）。
+   */
+  const cancel = useCallback((): void => {
+    const id = streamIdRef.current
+    if (!id) return
+    void (async (): Promise<void> => {
+      try {
+        await apiCancelAsk({ jobId: id })
+      } catch { /* 取消失败不抛给用户：这一轮自己会跑完，界面照常显示结果 */ }
+    })()
+  }, [])
+
   const patchTurn = useCallback((index: number, patch: Partial<AskTurn>): void => {
     setTurnList(key, prev => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
   }, [key, setTurnList])
@@ -197,6 +228,7 @@ export function useAskSession(options: UseAskSessionOptions = {}): UseAskSession
     streamText,
     error,
     ask,
+    cancel,
     reset,
     patchTurn,
     clearError,

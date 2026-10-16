@@ -15,7 +15,7 @@
  * 排序在 SQL 侧完成，所以 LIMIT/OFFSET 分页仍然正确；不在顺序表里的表情排在最后，
  * 并保持内置行序，保证结果**确定**（原来的查询没有 ORDER BY，顺序其实是不确定的）。
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { cachedBySig, fileSigOf } from './meta.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

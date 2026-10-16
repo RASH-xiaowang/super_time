@@ -11,6 +11,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { gatewayClassSource } from './gateway-source.ts'// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { callTimeoutFor, createWorkerChannel, LONG_CALL_METHODS } from '../backend-rpc.js'
+// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
+import { HEAVY_CALL_LEDGER } from '../remote-policy.js'
 
 /** 最小的 utilityProcess 替身：能收能发能被杀。 */
 class FakeChild extends EventEmitter {
@@ -29,6 +31,8 @@ class FakeChild extends EventEmitter {
   reply(id: number, value: unknown): void { this.emit('message', { id, value }) }
   /** 回包（error 形式）。 */
   replyError(id: number, message: string): void { this.emit('message', { id, error: { message } }) }
+  /** 取消回执（type:'canceled'）。 */
+  cancelAck(id: number, value: unknown): void { this.emit('message', { id, type: 'canceled', value }) }
   /** 进程退出。 */
   exit(code = 1): void { this.emit('exit', code) }
 }
@@ -46,6 +50,8 @@ function makeChannel(timeoutMs = 30, extra: Record<string, unknown> = {}) {
   return { child, channel }
 }
 
+const heavyLedger = HEAVY_CALL_LEDGER as ReadonlyArray<{ why: string; methods: readonly string[] }>
+
 describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
   // 直接从源码抽 @Remote 名单。写错方法名不会报任何错、只会让该方法静默退回 60s 窗口，
   // 而 60s 对导出/解密/LLM 这类任务明显不够 —— 必须由测试挡住。
@@ -61,6 +67,24 @@ describe('LONG_CALL_METHODS 与 gateway 的一致性', () => {
   it('长任务名单里每个名字都是真实存在的 @Remote 方法', () => {
     const bogus = [...LONG_CALL_METHODS].filter((m) => !remoteNames.has(m))
     expect(bogus).toEqual([])
+  })
+
+  it('【反向】台账必须与 LONG_CALL_METHODS 完全相等 —— 漏登记一个重方法不会有任何其它报错', () => {
+    const ledger = heavyLedger.flatMap((g) => [...g.methods])
+    // 下限只是「防止台账被清空后这条断言变成空转」；真正的判据是下面两个差集。
+    expect(ledger.length, '台账被清空了？').toBeGreaterThanOrEqual(45)
+    expect(new Set(ledger).size, '台账里有重复条目').toBe(ledger.length)
+
+    const missing = ledger.filter((m) => !LONG_CALL_METHODS.has(m)).sort()
+    expect(missing, '这些重方法会静默退回 60s 窗口，线上被 RPC 误杀成「调用超时」').toEqual([])
+
+    const unclassified = [...LONG_CALL_METHODS].filter((m) => !ledger.includes(m)).sort()
+    expect(unclassified, '新增的长任务没有写进台账分类（说明它为什么算重活）').toEqual([])
+  })
+
+  it('【反向】台账点名的方法都必须是真实存在的 @Remote（防点名打错字变成空转）', () => {
+    const ledger = heavyLedger.flatMap((g) => [...g.methods])
+    expect(ledger.filter((m) => !remoteNames.has(m))).toEqual([])
   })
 
   it('LLM 长任务拿到宽窗口，普通查询拿到默认窗口', () => {
@@ -136,6 +160,54 @@ describe('createWorkerChannel · 超时', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(settled).toEqual(['rejected'])
     expect(channel.pendingCount).toBe(0)
+    expect(channel.stats().orphanCompletions).toBe(1)
+  })
+
+  it('超时后把原 method/args 交给 worker 的 cancel 消息（尽力中止带 jobId 的活）', async () => {
+    const { child, channel } = makeChannel(20)
+    const args = [{ jobId: 'job-7', other: 1 }]
+    await channel.call('exportAllSessions', args).catch(() => undefined)
+    const cancel = child.posted.find((m) => m.type === 'cancel')
+    expect(cancel).toBeTruthy()
+    expect(cancel).toMatchObject({
+      type: 'cancel',
+      payload: { method: 'exportAllSessions', args },
+    })
+    expect(channel.stats().cancelsSent).toBe(1)
+    expect(channel.stats().timedOut).toBe(1)
+  })
+
+  it('取消回执 ok 才算收敛，迟到回包不再计幽灵完成', async () => {
+    const { child, channel } = makeChannel(20)
+    await channel.call('searchMessages', [{ jobId: 'search-1' }]).catch(() => undefined)
+    child.cancelAck(child.posted[0]!.id, { ok: true, method: 'cancelSearch', jobId: 'search-1' })
+    child.reply(child.posted[0]!.id, { cancelled: true })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(channel.stats().cancelsAcknowledged).toBe(1)
+    expect(channel.stats().orphanCompletions).toBe(0)
+    expect(channel.stats().orphanedCalls).toEqual([])
+  })
+
+  it('取消回执 ok:false 仍保留幽灵账，等迟到回包记成孤儿完成', async () => {
+    const { child, channel } = makeChannel(20)
+    await channel.call('getSessions', []).catch(() => undefined)
+    child.cancelAck(child.posted[0]!.id, { ok: false, reason: 'no-job-id' })
+    child.reply(child.posted[0]!.id, 'too-late')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(channel.stats().cancelsAcknowledged).toBe(0)
+    expect(channel.stats().orphanCompletions).toBe(1)
+    expect(channel.stats().orphanedCalls).toEqual([])
+  })
+
+  it('worker 在超时后已退出时，取消发送失败也不影响超时收敛', async () => {
+    const { child, channel } = makeChannel(20)
+    const p = channel.call('slow', []).catch((e: Error) => e)
+    child.throwOnPost = true
+    const err = await p
+    expect(err).toBeInstanceOf(Error)
+    expect(err!.message).toContain('调用超时')
+    expect(channel.pendingCount).toBe(0)
+    expect(channel.stats().cancelsSent).toBe(0)
   })
 
   it('长任务方法用更宽的窗口（callTimeoutFor）', () => {

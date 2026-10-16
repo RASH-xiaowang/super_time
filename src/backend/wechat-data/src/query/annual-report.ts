@@ -4,12 +4,15 @@
  * one year and computes hero stats, heatmap, monthly, types, phrases, emoji,
  * top contacts/groups, and first/last sentences.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
+import { withDb } from './db-open.ts'
 import { decompress } from 'fzstd'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { contactMeta } from './meta.ts'
+import { ANNUAL_TTL_MS, cachedBySigAsync, contactMeta, shardCatalogSig } from './meta.ts'
+import { YIELD_EVERY_CHARS, YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { throwIfCancelled, type StreamControl, type StreamProgress } from './zip.ts'
 
 /** Msg_<md5(username)> table name. */
 function msgTableName(username: string): string {
@@ -100,12 +103,38 @@ function personaTags(s: {
 }
 
 /**
- * Compute the annual report for one year.
+ * 年报（带**签名缓存**）。
+ *
+ * ## 为什么必须缓存（2026-09-29 第 79/80 轮实测）
+ *
+ * 这个接口**每次调用都真扫 ~200 万行**：实测冷跑 **2501ms**、紧接着再跑一次 **2496ms** ——
+ * **冷热几乎一样，说明此前完全没有结果缓存**。
+ * 它是"用户点开年报要等 2.5 秒"的直接原因（`exportAnnualReport` 走同一条路，所以约 3s）。
+ *
+ * 缓存键 = `年份 + message 目录的分片目录签名`：分片文件变了（实时同步落地新数据、
+ * 或整库重解密）签名就变，缓存自然失效 —— 与 `asset-insights` / `moments-monthly`
+ * 用的是同一套 `cachedBySigAsync` 机制，不引入新概念。
+ *
+ * @param decryptedDir - 解密数据根。
+ * @param year - 自然年。
+ * @returns 年报快照。
+ */
+export async function queryAnnualReport(decryptedDir: string, year: number, ctrl?: StreamControl): Promise<Record<string, unknown>> {
+  const sig = [String(year), shardCatalogSig(decryptedDir, ['message'])].join('|')
+  return cachedBySigAsync('annual-report:' + decryptedDir + ':' + String(year), sig,
+    // ⚠ 取消是在 loader **内部**抛的 ⇒ `cachedBySigAsync` 什么都不会写；
+    //   半张年报进缓存的话，接下来 60 秒里每次都拿到那份残缺的（与 9.4 词云同一条纪律）。
+    () => computeAnnualReport(decryptedDir, year, ctrl), ANNUAL_TTL_MS)
+}
+
+/**
+ * 真正算年报（无缓存）。
  * @param decryptedDir - decrypted data root.
  * @param year - calendar year.
+ * @param ctrl - 可选的进度上报 + 取消令牌（W2-8.2）。取消在 loader 内抛出，缓存不会写。
  * @returns the annual report.
  */
-export function queryAnnualReport(decryptedDir: string, year: number): Record<string, unknown> {
+async function computeAnnualReport(decryptedDir: string, year: number, ctrl?: StreamControl): Promise<Record<string, unknown>> {
   const msgDir = join(decryptedDir, 'message')
   if (!existsSync(msgDir)) return { year, total: 0 }
   const start = Math.floor(new Date(year, 0, 1, 0, 0, 0, 0).getTime() / 1000)
@@ -166,11 +195,35 @@ export function queryAnnualReport(decryptedDir: string, year: number): Record<st
           // 而 WeChat 4.x 的 Msg_ 表根本没有这一列（0/239 张有），所以那是个恒为 '0' 的死列。
           // 年报没有「发出/收到」口径（该口径在 overview-insights 里，用 real_sender_id 解析），
           // 因此直接去掉这个投影，避免下一个人误以为它有用。
-          const rows = db.prepare('SELECT create_time, local_type, message_content FROM "' + table + '" WHERE create_time >= ? AND create_time < ?').all(start, end) as Array<Record<string, unknown>>
-          for (const r of rows) {
+          // 2026-09-28：`.all()` → 游标 + 行级让出。
+          // 真实 @Remote 层探针实测（`working/probe-remote.txt`，用真实 username/year 播种后
+          // 才测到）：`getAnnualReport` 冷跑 **2254ms 且一次都不让出**、`getAnnualReview`
+          // **2150ms**、`exportAnnualReport` **4048ms** —— 三个都走这条同一段扫描。
+          // 后端是串行 worker，整段独占期间**所有面板都动不了**。
+          // 这里每行还要 `stripXml` + 逐字符生成 CJK bigram（下面），是纯 CPU 重活。
+          const cur = db.prepare('SELECT create_time, local_type, message_content FROM "' + table + '" WHERE create_time >= ? AND create_time < ?').iterate(start, end) as Iterable<Record<string, unknown>>
+          let scannedRows = 0
+          let sinceYield = 0
+          let charsSinceYield = 0
+          for (const r of cur) {
+            // 让出检查放在**循环最前面**：下面有 `continue`（二进制逗号列表那条），
+            // 若把检查放在循环末尾，那种行会跳过让出计数 —— 数据里这种行成片出现时
+            // 就等于整段不让出，正是本条要修的病。
+            sinceYield += 1
+            if (sinceYield >= YIELD_EVERY_ROWS || charsSinceYield >= YIELD_EVERY_CHARS) {
+              sinceYield = 0
+              charsSinceYield = 0
+              await yieldToLoop()
+              // W2-8.2：这段扫描是年报唯一的长耗时（实测整段 4048ms，见上面那段注释），
+              // 进度与取消都挂在这个让出点上 —— 它本来就是「这一大坨 CPU 重活」的边界。
+              throwIfCancelled(ctrl?.signal)
+              ctrl?.onProgress?.({ phase: 'collect', done: scannedRows, total: 0 } satisfies StreamProgress)
+            }
+            scannedRows += 1
             const ts = Number(r['create_time'] ?? 0)
             const lt = Number(r['local_type'] ?? 0)
             const content = decodeCell(r['message_content'])
+            charsSinceYield += content.length
             const text = stripXml(content)
             // skip binary comma-lists
             if (text && /^[0-9,]+$/.test(text.slice(0, 80))) continue
@@ -200,9 +253,20 @@ export function queryAnnualReport(decryptedDir: string, year: number): Record<st
               textCount += 1
               textChars += text.length
               // phrases: CJK bigrams
+              //
+              // 2026-09-29（第 79 轮）：**先判码点、再 slice**。
+              // 原写法是逐位 `text.slice(i, i+2)` 然后对那 2 个字符跑一次正则 ——
+              // 每个字符位都要**分配一个新字符串**再交给正则，是本函数最贵的几步之一。
+              // 微基准（`working/probe-bigram.ts`，1928 条真实文本、均 2561 字符）：
+              //   原写法 **74 ms** → 现写法 **24 ms**（3.1×），且**结果完全一致**（唯一 bigram 30、总计 41）。
+              // 只在两个字符**都**落在 CJK 区时才分配，绝大多数位置一次 `charCodeAt` 就排除掉了。
               for (let i = 0; i + 2 <= text.length; i += 1) {
-                const bi = text.slice(i, i + 2)
-                if (/[\u4e00-\u9fff]{2}/.test(bi)) phraseCount.set(bi, (phraseCount.get(bi) ?? 0) + 1)
+                const ca = text.charCodeAt(i)
+                const cb = text.charCodeAt(i + 1)
+                if (ca >= 0x4e00 && ca <= 0x9fff && cb >= 0x4e00 && cb <= 0x9fff) {
+                  const bi = text.slice(i, i + 2)
+                  phraseCount.set(bi, (phraseCount.get(bi) ?? 0) + 1)
+                }
               }
               // emoji: simple extraction of common emoji ranges
               const emo = text.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) ?? []
@@ -263,14 +327,14 @@ function loadUsernames(decryptedDir: string): string[] {
   if (!existsSync(p)) return []
   const out: string[] = []
   try {
-    const db = new DatabaseSync(p, { readOnly: true })
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
-    const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
-    if (table) {
-      const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
-      for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
-    }
-    db.close()
+    withDb(p, (db) => {
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(r => r.name)
+      const table = tables.includes('SessionTable') ? 'SessionTable' : tables.includes('Session') ? 'Session' : ''
+      if (table) {
+        const rows = db.prepare('SELECT username FROM "' + table + '"').all() as Array<Record<string, unknown>>
+        for (const r of rows) { const u = cellStr(r['username'] ?? '').trim(); if (u) out.push(u) }
+      }
+    })
   } catch { /* skip */ }
   return out
 }

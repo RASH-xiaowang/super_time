@@ -3,16 +3,15 @@
  *
  * 这是一条出网调用，所以这里守的重点不是「摘要写得好不好」（那没法测），而是
  * **什么情况下绝不能发出去**，以及**发出去的东西是否如实报告了覆盖范围**：
- *   ① 「禁止 AI 出网」必须在**任何模型调用之前**判 —— 早于「未配置模型」那类早退。
- *      这条顺序是有实测前例的（第 59 轮）：先判模型会让用户看到「AI 不可用」，
- *      把「拦截真的生效了」这件事盖掉。单看一条早退测不出顺序，故另有一条
- *      「两个条件同时踩住」的用例（见下方「既开了…又没配模型」）。
- *   ② 关掉「参与语义检索（会出网）」的文件必须被拒绝，且**一次请求都不发**。
+ *   ① 关掉「参与语义检索（会出网）」的文件必须被拒绝，且**一次请求都不发**。
  *      那个开关的语义就是「这份文件永不出网」，为它生成摘要等于推翻用户的决定。
- *   ③ 只喂前若干字时，`coveredChars` 必须如实小于 `totalChars` —— 界面靠它标出
+ *   ② 只喂前若干字时，`coveredChars` 必须如实小于 `totalChars` —— 界面靠它标出
  *      「这只是前 N 字的摘要」。少了这个标注，局部概括就会顶着「摘要」的名字
  *      被当成整份文件的结论。
- *   ④ 迁移：已经发出去的库里 `kb_files` 没有那四列，加列必须幂等且不破坏既有行。
+ *   ③ 迁移：已经发出去的库里 `kb_files` 没有那四列，加列必须幂等且不破坏既有行。
+ *
+ * 2026-09-30：隐私「禁止 AI 出网」总闸已随开关一起删除，
+ * 「被拦截 / 隐私库读不到 ⇒ fail-closed」那几条判据不再存在。
  *
  * LLM 用桩（与 `summary-run-due.spec.ts` 同一技术）：不联网，`calls` 里存着
  * 每一次真实发出去的 prompt —— 断言「没发出去」就是断言 `calls.length === 0`。
@@ -25,7 +24,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WechatDataGateway } from '../src/gateway.ts'
-import { readPrivacySettings, writePrivacySettings } from '../src/query/privacy-audit.ts'
 import { openStore } from '../src/query/kb-files.ts'
 import { kbFilesDbPath } from '../src/query/kb-paths.ts'
 
@@ -124,18 +122,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('summarizeKbFile：出网闸门', () => {
-  it('开了「禁止 AI 出网」时一次请求都不发，且说的是拦截而不是别的', async () => {
-    const id = addFile('a.md', '# 标题\n内容一\n内容二')
-    writePrivacySettings(decrypted, { ...readPrivacySettings(decrypted), blockOutbound: true })
-    const r = await gw.summarizeKbFile({ kbId, id })
-    expect(r.ok).toBe(false)
-    expect(r.error ?? '').toContain('出站拦截')
-    // 这条是重点：拦截必须在模型调用**之前**
-    expect(llm.calls).toEqual([])
-    expect(rowOf(id).summary).toBe('')
-  })
-
+describe('summarizeKbFile：出网意愿与审计', () => {
   it('关掉「参与语义检索（会出网）」的文件被拒绝，且不发请求', async () => {
     const id = addFile('private.md', '# 合同\n金额 100 万')
     const off = gw.setKbFileRag({ kbId, id, includeInRag: false })
@@ -154,16 +141,14 @@ describe('summarizeKbFile：出网闸门', () => {
     expect(r.error ?? '').toContain('未配置默认模型')
   })
 
-  // 上面两条各测一个早退，但测不出**先后**：两个条件同时踩住才钉得住顺序。
-  it('既开了出站拦截、又没配模型时，说的是拦截而不是「模型不可用」', async () => {
+  it('既没配模型、文件也关掉了语义检索时，说的是文件那条理由', async () => {
     const id = addFile('order.md', '# 标题\n正文')
-    writePrivacySettings(decrypted, { ...readPrivacySettings(decrypted), blockOutbound: true })
+    gw.setKbFileRag({ kbId, id, includeInRag: false })
     const noModel = stubLlm()
     gw = new WechatDataGateway(fakeCtx(noModel, false))
     const r = await gw.summarizeKbFile({ kbId, id })
     expect(r.ok).toBe(false)
-    expect(r.error ?? '').toContain('出站拦截')
-    expect(r.error ?? '').not.toContain('未配置默认模型')
+    expect(r.error ?? '').toContain('不得离开本机')
     expect(noModel.calls).toEqual([])
   })
 
@@ -173,23 +158,6 @@ describe('summarizeKbFile：出网闸门', () => {
     expect(r.ok).toBe(true)
     const snap = gw.getPrivacyState()
     expect(snap.audit.byFeature.some(x => x.feature === 'kb_file_summary')).toBe(true)
-  })
-
-  // 与第一条配成一对：那条是「用户开了拦截」，这条是「**读不到**用户开没开」。
-  // 旧行为是 catch → 当作没开，于是一个显式开了出站拦截的用户，在 wechat_privacy.db
-  // 损坏/被锁的那一刻就开始静默出网 —— 权限判断的失败方向反了。
-  it('隐私库读不到时按「拦截出站」处理（fail-closed），一次请求都不发', async () => {
-    const id = addFile('unreadable.md', '# 标题\n正文')
-    // 把库路径换成同名**目录**：openStore 必失败，且不依赖文件锁、权限这类环境差异。
-    const privacyDb = join(root, 'wechat_privacy.db')
-    rmSync(privacyDb, { recursive: true, force: true })
-    mkdirSync(privacyDb)
-    const r = await gw.summarizeKbFile({ kbId, id })
-    expect(r.ok).toBe(false)
-    // 文案要能区分「用户开的拦截」与「读不到」——否则排查时看不出是设置生效还是库坏了。
-    expect(r.error ?? '').toContain('出站拦截')
-    expect(r.error ?? '').toContain('不可读')
-    expect(llm.calls).toEqual([])
   })
 })
 

@@ -7,15 +7,18 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { decideNavigation, decideWindowOpen, isInsidePath, isSafeExternalUrl } from '../navigation-policy.js'
 import { grp } from './helpers/strict-index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const APP_ROOT = 'D:\\super-time-wechat'
+const APP_ROOT = resolve(ROOT)
+
+/** 把应用目录下的相对路径转成规范化的 file: URL（测试不依赖仓库所在盘符）。 */
+const fileUrl = (...parts: string[]): string => pathToFileURL(resolve(join(APP_ROOT, ...parts))).href
 
 describe('shell.openExternal 白名单：只放行 http(s)', () => {
   it('http / https 交给系统浏览器', () => {
@@ -58,12 +61,12 @@ describe('shell.openExternal 白名单：只放行 http(s)', () => {
 })
 
 describe('导航守卫：只允许应用自己的页面', () => {
-  const appDoc = APP_ROOT + '\\src\\client\\ui-dist\\index.html'
+  const appDoc = join(APP_ROOT, 'src', 'client', 'ui-dist', 'index.html')
 
   it('应用目录内的 file: 页面放行（含带查询串的自身）', () => {
-    expect(decideNavigation('file:///D:/super-time-wechat/src/client/ui-dist/index.html', APP_ROOT)).toBe('allow')
-    expect(decideNavigation('file:///D:/super-time-wechat/src/client/ui-dist/index.html?skeleton=1', APP_ROOT)).toBe('allow')
-    expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'client', 'ui-dist', 'index.html'), APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'client', 'ui-dist', 'index.html') + '?skeleton=1', APP_ROOT)).toBe('allow')
+    expect(decideNavigation(fileUrl('src', 'index.html'), APP_ROOT)).toBe('allow')
   })
 
   it('外部地址被阻止（window.location = 外部站点）', () => {
@@ -71,16 +74,26 @@ describe('导航守卫：只允许应用自己的页面', () => {
     expect(decideNavigation('http://127.0.0.1:8080/', APP_ROOT)).toBe('deny')
   })
 
+  it('自己的远程访问服务也被阻止（Electron 窗口不该导航到给手机用的那个地址）', () => {
+    // 2026-10-14 加：局域网远程访问（手机端）会在本机起一个 HTTP 服务（默认端口 5032）。
+    // 桌面窗口自己**永远**从 file:// 加载，没有任何理由导航过去；真过去了就等于把桌面端
+    // 降级成一个没有 preload 的浏览器会话（原生能力全丢、令牌门却还在）。
+    // 默认拒绝已经覆盖它，这条只是把意图写明 —— 端口是配置项，将来改了也不用回来补。
+    expect(decideNavigation('http://127.0.0.1:5032/', APP_ROOT)).toBe('deny')
+    expect(decideNavigation('http://192.168.1.23:5032/', APP_ROOT)).toBe('deny')
+    expect(decideNavigation('http://192.168.1.23:5032/?t=some-token', APP_ROOT)).toBe('deny')
+  })
+
   it('应用目录之外的本地文件被阻止', () => {
     expect(decideNavigation('file:///C:/Windows/System32/calc.exe', APP_ROOT)).toBe('deny')
-    expect(decideNavigation('file:///D:/super-time-wechat-evil/index.html', APP_ROOT)).toBe('deny')
-    expect(decideNavigation('file:///D:/super-time-wechat/../../secrets.txt', APP_ROOT)).toBe('deny')
+    expect(decideNavigation(fileUrl('..', 'super-time-wechat-evil', 'index.html'), APP_ROOT)).toBe('deny')
+    expect(decideNavigation(fileUrl('..', '..', 'secrets.txt'), APP_ROOT)).toBe('deny')
   })
 
   it('空 root 必须默认拒绝（fail-open 边界）', () => {
     // 评审实测：`path.relative('', x)` 得到相对路径、不以 '..' 开头，会把任意文件判成
     // 「在应用目录内」；root=undefined 更会抛 TypeError。这里把不变量钉住。
-    expect(decideNavigation('file:///D:/super-time-wechat/src/index.html', '')).toBe('deny')
+    expect(decideNavigation(fileUrl('src', 'index.html'), '')).toBe('deny')
     expect(decideNavigation('file:///C:/Windows/win.ini', '')).toBe('deny')
     // 第二个参数是可选的（`reason?: string`）：没给理由也必须拒绝，而不是抛
     expect(decideNavigation('file:///C:/Windows/win.ini', undefined)).toBe('deny')
@@ -99,10 +112,10 @@ describe('导航守卫：只允许应用自己的页面', () => {
 describe('路径包含判定', () => {
   it('同目录与子路径算在内，前缀相似的兄弟目录不算', () => {
     expect(isInsidePath(APP_ROOT, APP_ROOT)).toBe(true)
-    expect(isInsidePath(APP_ROOT, APP_ROOT + '\\src\\a.ts')).toBe(true)
+    expect(isInsidePath(APP_ROOT, join(APP_ROOT, 'src', 'a.ts'))).toBe(true)
     // 关键边界：`super-time-wechat-evil` 不能因为「前缀相同」被放行
-    expect(isInsidePath(APP_ROOT, 'D:\\super-time-wechat-evil\\x')).toBe(false)
-    expect(isInsidePath(APP_ROOT, 'D:\\other\\x')).toBe(false)
+    expect(isInsidePath(APP_ROOT, resolve(APP_ROOT, '..', 'super-time-wechat-evil', 'x'))).toBe(false)
+    expect(isInsidePath(APP_ROOT, resolve(APP_ROOT, '..', 'other', 'x'))).toBe(false)
   })
 })
 
@@ -115,7 +128,13 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
    * 每个都走同一个 `decideNavigation`/`preventDefault`、以及**新出现的导航类事件必须进清单**。
    */
   const mainSrc = readFileSync(join(ROOT, 'main.js'), 'utf8')
-  const guards = mainSrc.slice(mainSrc.indexOf('function installWebContentsGuards'))
+  // P0-4：守卫本体搬进了 `src/backend/main-window.js`。这里读**两份合起来的那一份**，
+  // 并且另钉一条「main.js 真的把它接上了」—— 搬家的风险从来不是判据写错，而是没人调用。
+  const windowSrc = readFileSync(join(ROOT, 'src', 'backend', 'main-window.js'), 'utf8')
+  const hostSrc = mainSrc + '\n' + windowSrc
+  const guards = windowSrc.slice(windowSrc.indexOf('function installWebContentsGuards'))
+  expect(windowSrc.indexOf('function installWebContentsGuards'), 'main-window.js 里找不到守卫本体').toBeGreaterThan(-1)
+  expect(guards.length, '守卫本体短到不可能还挂着五个入口').toBeGreaterThan(800)
   const ATTACHED = ['setWindowOpenHandler', 'will-navigate', 'will-redirect', 'will-frame-navigate', 'will-attach-webview']
 
   for (const ev of ATTACHED) {
@@ -136,12 +155,28 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
     }
   })
 
-  it('防空转：main.js 里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
-    const seen = [...mainSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => grp(m, 1, '导航事件清单'))
+  it('防空转：宿主里出现的导航类事件都在清单内（加了新事件就得同步本用例）', () => {
+    const seen = [...hostSrc.matchAll(/contents\.on\('(will-[a-z-]+)'/g)].map((m) => grp(m, 1, '导航事件清单'))
     const unexpected = seen.filter((e) => !ATTACHED.includes(e))
     expect(unexpected, `未挂守卫的导航事件：${unexpected.join(', ')}`).toEqual([])
     for (const ev of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {
-      expect(seen, `main.js 不再监听 ${ev} —— 守卫被删了？`).toContain(ev)
+      expect(seen, `宿主不再监听 ${ev} —— 守卫被删了？`).toContain(ev)
     }
+  })
+
+  it('守卫的接线链完整：main.js → ipc-misc.js → main-window.js（搬家后最怕的是没人调用）', () => {
+    const miscSrc = readFileSync(join(ROOT, 'src', 'backend', 'ipc-misc.js'), 'utf8')
+    // ① main.js 拿到模块里的实现，并带着共享计数器包一层
+    expect(mainSrc).toContain("require('./src/backend/main-window')")
+    expect(mainSrc).toContain('installWindowGuards(contents, guardsCtx)')
+    expect(mainSrc).toContain('counters: securityCounters')
+    // ② 统一装在 `web-contents-created` 上（只给主窗口挂一遍会漏掉预览窗/DevTools）
+    const at = miscSrc.indexOf("app.on('web-contents-created'")
+    expect(at, 'ipc-misc.js 不再用 web-contents-created 统一装守卫').toBeGreaterThan(-1)
+    expect(miscSrc.slice(at, at + 200)).toContain('installWebContentsGuards(contents)')
+    // ③ main.js 把这个入口交给 ipc-misc
+    expect(miscSrc).toContain('installWebContentsGuards')
+    expect(mainSrc.slice(mainSrc.indexOf('registerMiscIpc'), mainSrc.indexOf('registerMiscIpc') + 1500))
+      .toContain('installWebContentsGuards')
   })
 })

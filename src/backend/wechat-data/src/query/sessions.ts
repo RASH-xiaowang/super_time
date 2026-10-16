@@ -2,11 +2,20 @@
  * Session queries over st_control's decrypted session.db, rewritten from the
  * Rust sessions::get_session_list. Reads ordinary SQLite via node:sqlite.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { join } from 'node:path'
 import type { WechatSession } from '../types.ts'
-import { contactMeta, cachedBySig, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'
+import { contactMeta, cachedBySigAsync, fileSigOf, isServiceBizType, shardCatalogSig } from './meta.ts'
 import { msgCreateTimeByServerId } from './messages.ts'
+import { yieldToLoop } from './search-build.ts'
+
+/**
+ * 每解析这么多条「未读最早时间」就让出一次。
+ *
+ * 取 8：单次解析实测约 1.4ms（真实数据 `working/diag-sessions.ts`），8 次≈11ms
+ * —— 与其它模块的片段量级对齐（词云 13ms、通话 22ms、资产 39ms）。
+ */
+const YIELD_EVERY_UNREAD_LOOKUPS = 8
 
 /** Read SessionTable column names (wechat 4.x may add/remove columns). */
 function tableColumns(db: DatabaseSync, table: string): Set<string> {
@@ -54,12 +63,12 @@ function isKefuLike(u: string): boolean {
  * @param limit - max rows.
  * @returns the session snapshot.
  */
-export function querySessions(
+export async function querySessions(
   decryptedDir: string,
   keyword?: string,
   limit?: number,
   offset?: number,
-): { sessions: WechatSession[]; total: number } {
+): Promise<{ sessions: WechatSession[]; total: number }> {
   const key = `sessions:${decryptedDir}:${keyword ?? ''}:${limit ?? ''}:${offset ?? ''}`
   const sig = [
     fileSigOf(join(decryptedDir, 'session', 'session.db')),
@@ -69,15 +78,17 @@ export function querySessions(
     // 兜底后必须补上真正读了的东西（shardCatalogSig 内部走按文件粒度的缓存，代价很小）。
     shardCatalogSig(decryptedDir, ['message']),
   ].join('|')
-  return cachedBySig(key, sig, () => computeSessions(decryptedDir, keyword, limit, offset))
+  // 2026-09-28：同步 `cachedBySig` → async 版 —— 冷算实测 78ms 且**一次都不让出**
+  // （真实数据 `working/probe-stall.txt`）。见 `computeSessions` 里让出点的注释。
+  return cachedBySigAsync(key, sig, () => computeSessions(decryptedDir, keyword, limit, offset))
 }
 
-function computeSessions(
+async function computeSessions(
   decryptedDir: string,
   keyword?: string,
   limit?: number,
   offset: number = 0,
-): { sessions: WechatSession[]; total: number } {
+): Promise<{ sessions: WechatSession[]; total: number }> {
   const dbPath = join(decryptedDir, 'session', 'session.db')
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
@@ -165,6 +176,7 @@ function computeSessions(
      * 解析不到就留空（2 个 srv_id=0 的合成会话必然为空），界面不显示这一行即可。
      */
     let budget = 80
+    let sinceYield = 0
     for (const s of page) {
       if (budget <= 0) break
       if ((s.unreadCount ?? 0) <= 0 || s.username === 'brandsessionholder') continue
@@ -173,6 +185,13 @@ function computeSessions(
       budget -= 1
       const since = msgCreateTimeByServerId(decryptedDir, s.username, sid)
       if (since !== null) s.unreadSince = since
+      // 2026-09-28：让出点。实测口径（`working/diag-sessions.ts`，真实数据）：
+      // `SessionTable` 全表读取只要 **1ms**（290 行），而这一圈 **41 次**查找要 **59ms**
+      // —— `querySessions(200)` 的 78ms 几乎全在这里。每次查找都要按 catalog 打开分片，
+      // 41 次连做就是几十毫秒的**不间断同步执行**（`working/probe-stall.txt` 里它是
+      // 仅剩两个"让出 0"的接口之一）。原文注释只量了"约 7ms"，那是单次热缓存的数。
+      sinceYield += 1
+      if (sinceYield >= YIELD_EVERY_UNREAD_LOOKUPS) { sinceYield = 0; await yieldToLoop() }
     }
     return { sessions: page, total }
   } finally {

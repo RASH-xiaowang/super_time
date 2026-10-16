@@ -84,6 +84,25 @@ export interface BuiltGraph {
   edges: GEdge[]
   /** 社区数量(0=未分组全部) */
   communityCount: number
+  /** 各类节点的个数（一次遍历数完，见 countByKind）—— 缺某种就是没出现过，不是 0。 */
+  kindCounts: GraphKindCounts
+}
+
+/** 每种节点各多少个（缺某种就是 `undefined`，调用点自己按 0 处理）。 */
+export type GraphKindCounts = Partial<Record<GNode['kind'], number>>
+
+/**
+ * 一次遍历数出各类节点的个数（审计 P3-14）。
+ *
+ * 统计条原先在**每次渲染**里跑 7 遍 `nodes.filter(...).length` —— 每遍都新建一个数组，
+ * 而渲染由选中、面板开合、悬停这些与计数无关的动作触发。节点上限是几百到上千的量，
+ * 于是"动一下鼠标就分配七份临时数组"。收成一次 `for` 之后口径也只有一份：
+ * 「笔记数」这种数字在两处显示时必须同源，散着的 filter 串正是它们悄悄分叉的地方。
+ */
+export function countByKind(nodes: readonly Pick<GNode, 'kind'>[]): GraphKindCounts {
+  const out: Record<string, number> = {}
+  for (const n of nodes) out[n.kind] = (out[n.kind] ?? 0) + 1
+  return out
 }
 
 /** 实体类别 → 中文。详情与气泡里要说「模型推断的人名」，而不是裸的 `person`。 */
@@ -360,7 +379,7 @@ export function buildGraph(env: {
   }>
   edges: Array<{ source: string; target: string; weight: number }>
 } | null, s: GraphSettings): BuiltGraph {
-  if (!env) return { nodes: [], edges: [], communityCount: 0 }
+  if (!env) return { nodes: [], edges: [], communityCount: 0, kindCounts: {} }
   const selfNode = env.nodes.find(n => n.kind === 'self' && n.id === 'self')
   const rawNodes = env.nodes.filter((n) => {
     if (s.mode === 'people') {
@@ -656,7 +675,7 @@ export function buildGraph(env: {
   //   推断层 ≤ edgeDensityCap(n) − 观测层
   //   ⇒ 模型边总数 ≤ edgeDensityCap(n) ≤ 绘制层 edgeBudget 的下限
   //   ⇒ **模型里的边一条都不会被绘制层裁掉**。
-  return { nodes, edges: [...observed, ...inferred], communityCount }
+  return { nodes, edges: [...observed, ...inferred], communityCount, kindCounts: countByKind(nodes) }
 }
 
 /** 节点邻居集合(悬停高亮用)。 */
@@ -689,7 +708,7 @@ export function localGraph(graph: BuiltGraph, focusId: string, depth: number): B
   const nodes = graph.nodes.filter(n => seen.has(n.id))
   const ids = new Set(nodes.map(n => n.id))
   const edges = graph.edges.filter(e => ids.has(e.source) && ids.has(e.target))
-  return { nodes, edges, communityCount: graph.communityCount }
+  return { nodes, edges, communityCount: graph.communityCount, kindCounts: countByKind(nodes) }
 }
 
 /** 圈子概览:按成员数降序分组(self 不参与、community < 0 排除)。 */
@@ -781,7 +800,7 @@ export function buildKnowledgeNetwork(
   knowledge: KnowledgeSnapshot | null,
   s: GraphSettings,
 ): BuiltGraph {
-  if (!knowledge) return { nodes: [], edges: [], communityCount: 0 }
+  if (!knowledge) return { nodes: [], edges: [], communityCount: 0, kindCounts: {} }
 
   const noteNodes: GNode[] = knowledge.notes.map(n => {
     const links = n.outLinks + n.backLinks
@@ -913,5 +932,5 @@ export function buildKnowledgeNetwork(
   // 社区检测只喂笔记节点：stub 是缺口而非圈子成员，而文档节点是**资料**不是**圈子**，
   // 把「一份 PDF」分进某个圈子同样会产生误导 —— 让它保持中性灰。
   const communityCount = detectCommunities(keptNotes, keptEdges)
-  return { nodes: allNodes, edges: keptEdges, communityCount }
+  return { nodes: allNodes, edges: keptEdges, communityCount, kindCounts: countByKind(allNodes) }
 }

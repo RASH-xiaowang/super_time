@@ -13,7 +13,7 @@ import { useTransientNotice } from './hooks.tsx'
 import {
   IconGlobeOutline14, IconPersonalizationOutline16, IconRefreshOutline14, IconSettingsOutline14, IconSparkle16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiSetCdnImageEnabled, apiSetCdnImageLocalDecrypt, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, writeRenderCache } from '../api.ts'
+import { apiAutoGetDbKey, apiAutoGetImageKey, apiDecryptAllDatabases, apiDecryptAllImages, apiDetectWechatAccounts, apiDownloadWhisperModel, apiGenerateKeysFile, apiGetAvatar, apiDiagLogInfo, apiExportDiagLog, apiGetWechatPathConfig, apiOpenPath, apiRevealDiagLog, apiGetDecryptStatus, apiGetWechatConfigFull, apiGetWechatKeysInfo, apiGetWhisperStatus, apiInstallWhisperEngine, apiSaveWechatConfig, apiTranscribeVoiceBatch, apiVerifyDatabaseKey, apiVerifyImageKey, pickDirectory, readRenderCache, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import type { WechatAccount, WechatConfigFull, WhisperStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey, Dialog, PanelHeader } from '../ui/kit.tsx'
 import { AiModelConfig } from './AiModelConfig.tsx'
@@ -22,6 +22,8 @@ import { BackupPanel } from './Backup.tsx'
 import { HealthPanel } from './Health.tsx'
 import { HookPanel } from './Hook.tsx'
 import { LicenseSection, UpdateSection } from './settings-sections.tsx'
+import { SettingsRemoteAccess } from './settings-remote-access.tsx'
+import { SettingsBrowserPanel } from './settings-browser.tsx'
 import { CachedSettingsConfig, cacheableConfig, Notice, runWhenIdle, SETTINGS_CONFIG_CACHE_KEY, SETTINGS_SCAN_TTL_MS, SETTINGS_SECRET_FIELDS, StepState, STEP_ICONS, STEPS } from './settings-common.tsx'
 import { SettingsDbKeySection, SettingsDetectSection, SettingsImgDecodeSection, SettingsImgKeySection, SettingsVoiceSection } from './settings-steps.tsx'
 import { useSettingsState } from './settings-state.tsx'
@@ -58,20 +60,107 @@ export interface SettingsPanelProps {
  * Render the wechat-settings panel.
  * @returns the settings element tree.
  */
-export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
+/**
+ * M1 密钥搬家的一次性提示条（W2-12.3）。
+ *
+ * 后端只在「`config.json` 里真的还留着有意义的密钥字段」且「用户没点过知道了」时
+ * 才说 `pending`。所以这一条**不是错误提示**，是「有件事正在发生、你该知道」——
+ * 不套 toast 那套（那是短暂反馈，撑不住一条要说清来龙去脉的话）。
+ *
+ * 模块级组件：`SettingsPanel` 已经三百多行，再往里塞十八行 JSX 只会让它更长。
+ * @param props.state - 后端给的迁移状态；`null` 表示后端没这个字段（旧版本），不提示。
+ * @param props.onAck - 「知道了」的回调。
+ * @returns JSX。
+ */
+/**
+ * 诊断日志的脱敏预览面板（W2-12.4）。
+ *
+ * 导出是要把文件**发给别人**的动作，所以用户有权在发出去之前先看一眼：
+ * `redact` 只保证密钥一类被换掉，而「有没有别的敏感内容」（聊天内容、路径、用户名）
+ * 是用户自己才有资格判断的事。
+ *
+ * **截断必须说出来** —— 让用户以为看全了，比不给看更糟。
+ * @param props.data - 后端给的预览；`null` 表示没点「预览…」。
+ * @param props.onClose - 关掉预览。
+ * @returns JSX。
+ */
+function DiagLogPreview(props: {
+  data: { text: string; chars: number; truncated: boolean; files: string[] } | null
+  onClose: () => void
+}): React.JSX.Element | null {
+  const { data, onClose } = props
+  if (data === null) return null
+  return (
+    <div className={css.diagPreview}>
+      <div className={css.diagPreviewHead}>
+        <span>
+          即将导出 {data.files.length} 份轮转日志 · 共 {data.chars} 字符
+          {data.truncated ? `（下面只显示前 ${data.text.length} 字符）` : ''}
+        </span>
+        <button type="button" className={css.diagPreviewClose} onClick={onClose}>关闭</button>
+      </div>
+      <textarea
+        className={css.diagPreviewText}
+        readOnly
+        value={data.text}
+        rows={12}
+        aria-label="诊断日志预览"
+        onFocus={(e) => { e.currentTarget.select() }}
+      />
+    </div>
+  )
+}
+
+function SecretMigrationNotice(props: {
+  state: { pending: boolean; fields: string[] } | null
+  onAck: () => void
+}): React.JSX.Element | null {
+  const { state, onAck } = props
+  if (state?.pending !== true) return null
+  return (
+    <div className={css.secretMigration} role="status">
+      <div className={css.secretMigrationText}>
+        <strong>密钥已改存到 secrets.json</strong>
+        <span>
+          为避免 config.json 里的明文密钥外泄，下次保存配置时会把 
+          {state.fields.join('、')} 搬到 secrets.json 并从 config.json 删除。
+          要手工查看或修改请编辑 secrets.json。
+        </span>
+      </div>
+      <button type="button" className={css.secretMigrationBtn} onClick={onAck}>知道了</button>
+    </div>
+  )
+}
+
+/**
+ * 设置面板的**分派器**：桌面端是下面那份完整的 `SettingsDesktopPanel`，浏览器态整面板降级。
+ *
+ * 为什么在根上分派、而不是给每一节套降级卡：「设置」里的 13 节只有 1 节（数据边界与出网）
+ * 在手机上能用，其余 12 节要做的都是这台电脑上的事。逐节套卡会得到一屏内容几乎相同的
+ * 「仅桌面端」，而且挡不住 `useSettingsState` 自己那 19 个远程会直接被拒的调用 ——
+ * 那些调用会在手机上一并转圈、报错。根上分派一次，两件事都解决。
+ * @param p - 见 {@link SettingsPanelProps}。
+ * @returns 桌面端设置面板或手机端设置视图。
+ */
+export function SettingsPanel(p: SettingsPanelProps = {}): React.JSX.Element {
+  if (runtimeCapabilities().isBrowser) return <SettingsBrowserPanel {...p} />
+  return <SettingsDesktopPanel {...p} />
+}
+
+function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut }: SettingsPanelProps = {}): React.JSX.Element {
   const {
-    accounts, activeKey, autoGetDb, autoGetImg, batchTranscribe, cdnEnabled,
-    cdnLocal, cdnMsg, cfg, cfgLoading, clear, current,
+    accounts, ackSecretMigration, activeKey, autoGetDb, autoGetImg, batchTranscribe,
+    cfg, cfgLoading, clear, current,
     dbDir, dbDirMsg, dbFiles, dbGetting, dbKey, dbOpMsg,
     dbProgress, decryptAll, decryptImgs, decrypting, detect, detectInfo,
-    detectMsg, detecting, diagInfo, exportDiagLog, goToSection, imgAes,
-    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgGetting, imgOpMsg,
-    imgProgress, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
-    nativeTranscribe, navItems, onPaneScroll, paneRef, pathConfigPath, pickDbDir,
-    pickWhisperDir, refreshWhisper, revealDiagLog, save, saveMsg, saving,
-    setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setImgXor,
-    setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe, toggleCdn,
-    toggleCdnLocal, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
+    closeDiagPreview, copyDiagLogPath, detectMsg, detecting, diagInfo, diagPreview, exportDiagLog, goToSection, imgAes,
+    imgConcurrency, imgDecryptDetail, imgDecrypting, imgDetailOpen, imgDetailTitle, imgGetting, imgOpMsg,
+    cancelWhisperDownload, imgProgress, imgUpgradeProgress, imgUpgradeResult, imgUpgrading, imgXor, innerNavigate, installEngine, keyOk, keysInfo,
+    nativeTranscribe, navItems, onPaneScroll, origBusy, origLimit, origPlan, origProgress, origResult, paneRef, pathConfigPath, pickDbDir,
+    pickWhisperDir, previewDiagLog, refreshWhisper, revealDiagLog, save, saveMsg, saving,
+    scanOriginals, secretMigration, setDbDir, setDbKey, setImgAes, setImgConcurrency, setImgDetailOpen, setOrigLimit, setImgXor,
+    setWhisperDevice, setWhisperModel, setWhisperModelsDir, setWhisperThreads, skipTranscribe,
+    fetchOriginals, upgradeImgs, useAccount, userScrolled, verifyDb, verifyImg, voiceOpMsg,
     whisperDevice, whisperDirMsg, whisperDownload, whisperDownloading, whisperModel, whisperModelsDir,
     whisperStatus, whisperStatusLoading, whisperThreads, whisperTranscribing,
     message,
@@ -90,7 +179,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
         />
       )}
-      {/* 左导航 + 右内容：15 节全部堆叠在右侧同一个滚动区里连续滚动（滚到一节末尾自然接
+      {/* 左导航 + 右内容：13 节全部堆叠在右侧同一个滚动区里连续滚动（滚到一节末尾自然接
           下一节），左导航是**目录** —— 点击滚到该节，高亮跟着滚动位置走。
           这替换掉了早期「右侧一次只显示一节、切节回到顶部」的做法：那时滚到一节底部就停住，
           想继续看下一节只能回左栏再点一次。 */}
@@ -141,7 +230,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
           )}
         </div>
       )}
-
+<SecretMigrationNotice state={secretMigration} onAck={ackSecretMigration} />
         <SettingsDetectSection
           accounts={accounts}
           current={current}
@@ -183,22 +272,30 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
         />
 
         <SettingsImgDecodeSection
-          cdnEnabled={cdnEnabled}
-          cdnLocal={cdnLocal}
-          cdnMsg={cdnMsg}
           decryptImgs={decryptImgs}
           imgConcurrency={imgConcurrency}
           imgDecryptDetail={imgDecryptDetail}
           imgDecrypting={imgDecrypting}
           imgProgress={imgProgress}
+          imgUpgradeProgress={imgUpgradeProgress}
+          imgUpgradeResult={imgUpgradeResult}
+          imgUpgrading={imgUpgrading}
+          fetchOriginals={fetchOriginals}
+          origBusy={origBusy}
+          origLimit={origLimit}
+          origPlan={origPlan}
+          origProgress={origProgress}
+          origResult={origResult}
+          scanOriginals={scanOriginals}
+          setOrigLimit={setOrigLimit}
           setImgConcurrency={setImgConcurrency}
           setImgDetailOpen={setImgDetailOpen}
-          toggleCdn={toggleCdn}
-          toggleCdnLocal={toggleCdnLocal}
+          upgradeImgs={upgradeImgs}
         />
 
         <SettingsVoiceSection
           batchTranscribe={batchTranscribe}
+          cancelWhisperDownload={cancelWhisperDownload}
           installEngine={installEngine}
           nativeTranscribe={nativeTranscribe}
           pickWhisperDir={pickWhisperDir}
@@ -224,10 +321,9 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
         {/* ── AI 大模型（全应用唯一的模型配置入口） ── */}
         <div data-settings-section="ai"><AiModelConfig /></div>
 
-        {/* ── 数据边界与出网（原外层侧栏的独立页，整页迁入本弹窗） ── */}
-        <div className={css.embedPane} data-settings-section="boundary">
-          <PrivacyTrustPanel embedded />
-        </div>
+        {/* ── 数据边界与出网（**出站**）与远程访问（**入站**）：同一类问题的两个方向 ── */}
+        <div className={css.embedPane} data-settings-section="boundary"><PrivacyTrustPanel embedded /></div>
+        <SettingsRemoteAccess />
 
         {/* ── 隐私体检已迁回主界面：它是只读的数据视图（扫描结果 + 风险 TOP10，命中样本
                还要跳回会话），与「配置 / 维护动作」不同类。见 WechatDataPanel 的 renderTab。 ── */}
@@ -245,7 +341,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
 
         {/* ── 数据库健康 / 原图链路自检（原外层「数据健康」的两个分段） ── */}
         <div className={css.embedPane} data-settings-section="health">
-          <HealthPanel embedded onNavigate={innerNavigate} />
+          <HealthPanel embedded />
         </div>
         <div className={css.embedPane} data-settings-section="hook">
           <HookPanel embedded onNavigate={innerNavigate} />
@@ -298,7 +394,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
               <span className={css.rowMeta} title={diagInfo?.dir ?? ''}>
                 {diagInfo ? `${diagInfo.dir} · ${Math.round(diagInfo.bytes / 1024)} KB` : '读取中…'}
               </span>
-            </div>
+              <button type="button" className={modelCss.whisperSkip} onClick={() => { void previewDiagLog() }}>预览…</button><button type="button" className={modelCss.whisperSkip} onClick={() => { void copyDiagLogPath() }}>复制路径</button></div><DiagLogPreview data={diagPreview} onClose={closeDiagPreview} />
             <div className={css.row}>
               <span className={css.rowName}>启动引导</span>
               <button
@@ -340,7 +436,7 @@ export function SettingsPanel({ inDialog = false, initialSection, onNavigateOut 
       <Dialog
         open={imgDetailOpen}
         onClose={() => { setImgDetailOpen(false) }}
-        title="图片解密详情"
+        title={imgDetailTitle}
         footer={(
           <Button size="sm" variant="outline" onClick={() => { setImgDetailOpen(false) }}>关闭</Button>
         )}

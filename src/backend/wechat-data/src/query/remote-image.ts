@@ -6,12 +6,10 @@
  * `index.html` 的 CSP 目前写作 `img-src 'self' data: blob: https: file:` —— 那个 `https:` 通配
  * 意味着**渲染层可以向任意 https 主机发起图片请求**。这些地址全部来自消息 XML / 数据库字段
  * （链接卡、公众号、朋友圈、视频号……的 `thumburl` / `coverurl`），所以「渲染层自己出网」这件事
- * 今天既不读「自动获取原图（CDN）」开关、也不写操作记录、更没有缓存 —— 同一张图每次滚动都会
- * 再要一次，而用户在界面上把开关关掉也拦不住它。
+ * 既不写操作记录、也没有缓存 —— 同一张图每次滚动都会再要一次，且不受主机白名单约束。
  *
- * 走到后端之后就三件事：**开关真的生效**（{@link cdnFetchAllowed}）、**留得下审计**（调用方写
- * 操作记录）、**存得下盘**（`<decoded>/remote-images/<md5>.<ext>`，第二次渲染不再联网）。
- * 这也是把 CSP 里那个 `https:` 通配拿掉的前提。
+ * 走到后端之后就三件事：**留得下审计**（调用方写操作记录）、**存得下盘**
+ * （`<decoded>/remote-images/<md5>.<ext>`，第二次渲染不再联网）、**白名单外一律拒**。
  *
  * ## 只认腾讯系主机
  *
@@ -27,22 +25,37 @@
  * 按 md5 占槽位）。本模块只服务「手上只有一个 https 地址」这一种需求，也就是渲染层直连的那一批。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fetchWithRetry } from '../../../llm-retry.js'
+import { fetchWithRetry } from '../net/fetch-retry.ts'
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
-import { CDN_DISABLED_MESSAGE, cdnFetchAllowed } from './cdn-policy.ts'
 import { detectImageFormat } from './media-image.ts'
+import { yieldToLoop } from './search-build.ts'
 
 /** 单张上限：卡片缩略图与朋友圈图都在几十~几百 KB 量级，超过就是异常响应，宁可失败。 */
 const MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024
-/** 一次批量最多几张：一屏的卡片缩略图用不完，超出的按错误回（调用方分批再取）。 */
-const MAX_IMAGES_PER_CALL = 40
-/** 同时在途的请求数：CDN 对突发并发会回 400，而一次滚动要几十张是常态。 */
-const FETCH_CONCURRENCY = 6
+/**
+ * 一次批量最多几张（C2，2026-09-28 性能修复：40 → 20）。
+ *
+ * 现场日志 `getRemoteImages` 127 次 / 均 14s / 峰值 86.5s，与「最坏 40 张 ÷ 6 并发 × 12s 超时 ≈ 80s」
+ * 吻合 —— 单次请求要背 40 张的**最坏超时**，任何一张慢就把整批拖到分钟级。降到 20 后最坏值砍半，
+ * 而调用方（`drainMedia` 的 `MEDIA_BATCH = 8`）本来就在分批，单次 20 张仍有 2 批余量。
+ */
+export const MAX_IMAGES_PER_CALL = 20
+/**
+ * 同时在途的请求数（C2：6 → 10）。
+ * 6 是为了避开 CDN 对突发并发回 400 而定的；但一屏几十张时 6 并发太窄。
+ * 10 仍远低于「一次性全发」（后者才是 400 的诱因），是并发与友好度之间的折中。
+ */
+export const FETCH_CONCURRENCY = 10
 /** 失败只冷却这么久（与 `article-cover.ts` 同一口径：永久负缓存会把瞬时故障变成永久坏图）。 */
 const FAIL_COOLDOWN_MS = 60_000
-const FETCH_TIMEOUT_MS = 12_000
+/**
+ * 单张超时（C2：12s → 8s）。
+ * 缩略图/朋友圈图都是几十~几百 KB，正常 CDN 往返远在 1s 内；12s 只是把「对端挂着不回」的
+ * 代价放大。8s 已足够覆盖慢速网络，同时把整批最坏值再压一档。
+ */
+const FETCH_TIMEOUT_MS = 8_000
 /** 缓存子目录名（导出给清理与测试用口径）。 */
 export const REMOTE_IMAGE_CACHE_DIRNAME = 'remote-images'
 
@@ -73,26 +86,106 @@ export interface RemoteImageResult {
 /** 瞬时故障的冷却表（进程内，键 = trim 后的 URL）。 */
 const failUntil = new Map<string, number>()
 
+/**
+ * 已解码结果的内存层（C4，2026-09-28 性能修复）。
+ *
+ * 此前只有落盘缓存：命中也要 `readFileSync` + `toString('base64')` 重建一次 —— 40 张图一屏
+ * 就是 40 次读盘 + 40 次 base64（图越大越贵）。这一层把「同一批 URL 在短时间内被重复问」
+ * （虚拟化反复挂载/卸载、切回面板）直接短路成 Map 查找。
+ *
+ * 容量用 `MAX_MEM_ENTRIES` 封顶而不是无限增长：data URL 是原图字节的 ~1.33 倍，
+ * 内存里攒多了会显著抬高常驻。超限时按**插入序**丢最早的一批（Map 保序，够用且零成本，
+ * 不必引入真 LRU 的双向链表）。
+ */
+const MAX_MEM_ENTRIES = 300
+const memCache = new Map<string, string>()
+
+function memGet(url: string): string | undefined {
+  const v = memCache.get(url)
+  if (v === undefined) return undefined
+  // 触碰即刷新（简易 LRU 语义）：删了再塞回，把这项挪到队尾。
+  memCache.delete(url)
+  memCache.set(url, v)
+  return v
+}
+
+function memSet(url: string, dataUrl: string): void {
+  memCache.set(url, dataUrl)
+  while (memCache.size > MAX_MEM_ENTRIES) {
+    const oldest = memCache.keys().next()
+    if (oldest.done === true) break
+    memCache.delete(oldest.value)
+  }
+}
+
 function cacheKey(url: string): string {
   return createHash('md5').update(url, 'utf8').digest('hex')
 }
 
-/** 读缓存：扩展名要试四个（写入时按嗅到的格式定），命中即返回 data URL。 */
-function readCache(url: string, decodedDir: string): string | null {
-  const dir = join(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME)
-  const key = cacheKey(url)
-  for (const fmt of ['png', 'jpg', 'gif', 'webp']) {
-    const file = join(dir, `${key}.${fmt}`)
-    if (!existsSync(file)) continue
-    try {
-      return `data:${RENDERABLE_MIME[fmt] ?? 'image/png'};base64,${readFileSync(file).toString('base64')}`
-    } catch {
-      // 半截文件（上次写到一半被打断）：当作没有，下次重新取。tmp + rename 之后理论上不该出现，
-      // 但目录可能被用户手动清过或被别的进程写过，这里不为此抛。
-      return null
-    }
+/**
+ * 读缓存：先内存、再落盘。
+ *
+ * C1（2026-09-28 性能修复）：扩展名解析从「对每张图逐个试 4 个扩展名（4 次 `existsSync`）」
+ * 改成「每个目录**一次** `readdirSync` 建 `md5 → 扩展名` 索引」。原口径 40 张 = 160 次 stat，
+ * 全是同步调用 ⇒ 在事件循环上原地卡住（这也是 `remote-image.ts` 属于「排队放大器」的一半原因）。
+ * 索引按目录做进程内缓存（`cacheIndex`），目录 mtime 变了才重建 —— 目录只在写缓存时变更，
+ * 而写缓存只走本模块的 tmp+rename 路径。
+ * @param url - 原始地址（trim 前）。
+ * @param decodedDir - 解码缓存根。
+ * @param index - 该目录的 `md5 → 扩展名` 索引（没有缓存目录时为空 Map）。
+ */
+function readCache(url: string, decodedDir: string, index: ReadonlyMap<string, string>): string | null {
+  const hit = memGet(url)
+  if (hit !== undefined) return hit
+  const suffix = index.get(cacheKey(url))
+  if (suffix === undefined) return null
+  const file = join(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME, `${cacheKey(url)}.${suffix}`)
+  try {
+    const dataUrl = `data:${RENDERABLE_MIME[suffix] ?? 'image/png'};base64,${readFileSync(file).toString('base64')}`
+    memSet(url, dataUrl)
+    return dataUrl
+  } catch {
+    // 半截文件（上次写到一半被打断）：当作没有，下次重新取。tmp + rename 之后理论上不该出现，
+    // 但目录可能被用户手动清过或被别的进程写过，这里不为此抛。
+    return null
   }
-  return null
+}
+
+/** 目录索引缓存：dir → { sig, map }。sig 走目录 mtime+size（写缓存才会变）。 */
+const cacheIndex = new Map<string, { sig: string; map: Map<string, string> }>()
+
+/**
+ * 建（或复用）某个缓存目录的 `md5 → 扩展名` 索引。
+ *
+ * 一次 `readdirSync` 换掉原来的 4×N 次 `existsSync`。索引里只放本模块写得进去的四种后缀
+ * （`CACHE_SUFFIXES`），文件名不合法（少了 `.` 或后缀不在白名单）直接跳过。
+ * @param decodedDir - 解码缓存根。
+ * @returns 索引（目录不存在时为空 Map，且**不缓存空结果**，以免目录晚建后一直读不到）。
+ */
+function loadCacheIndex(decodedDir: string): Map<string, string> {
+  const dir = join(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME)
+  let sig = ''
+  try {
+    const st = statSync(dir)
+    sig = `${String(st.mtimeMs)}:${String(st.size)}`
+  } catch {
+    // 目录还没建（首次取图前）：返回空索引，别把空结果写进缓存。
+    return new Map<string, string>()
+  }
+  const cached = cacheIndex.get(dir)
+  if (cached !== undefined && cached.sig === sig) return cached.map
+  const map = new Map<string, string>()
+  try {
+    for (const name of readdirSync(dir)) {
+      const dot = name.lastIndexOf('.')
+      if (dot <= 0) continue
+      const suffix = name.slice(dot + 1).toLowerCase()
+      if (!CACHE_SUFFIXES.has(suffix)) continue
+      map.set(name.slice(0, dot), suffix)
+    }
+  } catch { /* 读不到就当空目录 */ }
+  cacheIndex.set(dir, { sig, map })
+  return map
 }
 
 function cooledDown(url: string): boolean {
@@ -102,24 +195,23 @@ function cooledDown(url: string): boolean {
 
 /**
  * 取一张远程图片（缓存优先，未命中才出网）。
- * @param rawUrl - 消息里的图片地址；只有 https 且主机在微信 CDN 清单内才会被请求。
+ * @param rawUrl - 消息里的图片地址；http(s) 且主机在微信 CDN 清单内才会被请求。
  * @param decodedDir - 解码缓存根（`<数据根>/decoded_images`）。
- * @param opts - `cdnEnabled` 来自界面上的「自动获取原图（CDN）」开关。
+ * @param opts - `cacheIndex`：可选的缓存索引快照（缺省时本函数自己建）。
  */
 export async function fetchRemoteImage(
   rawUrl: string,
   decodedDir: string,
-  opts: { cdnEnabled?: boolean } = {},
+  opts: { cacheIndex?: ReadonlyMap<string, string> } = {},
 ): Promise<RemoteImageResult> {
   const url = String(rawUrl ?? '').trim()
   if (url === '') return { url, error: '图片地址为空' }
-  // 缓存优先：关掉开关之后本机已有的图照常显示（与 `cdn-switch.spec.ts` 钉住的口径一致）
-  const hit = readCache(url, decodedDir)
+  // 缓存优先：本机已有的图直接返回，不联网
+  const hit = readCache(url, decodedDir, opts.cacheIndex ?? loadCacheIndex(decodedDir))
   if (hit !== null) return { url, dataUrl: hit, fromCache: true }
   // 协议单独判一次：`wechatCdnHostAllowed` 只看主机，`file://x/qpic.cn/...` 这种形状它会给过
-  if (!/^https:\/\//i.test(url)) return { url, error: '图片地址不是 https' }
+  if (!/^https?:\/\//i.test(url)) return { url, error: '图片地址不是 http(s)' }
   if (!wechatCdnHostAllowed(url)) return { url, error: '图片主机不在微信 CDN 清单内，已拒绝请求' }
-  if (!cdnFetchAllowed(opts)) return { url, error: CDN_DISABLED_MESSAGE }
   if (cooledDown(url)) return { url, error: '这张图刚才取失败过，稍后会自动重试' }
   try {
     const res = await fetchWithRetry(fetch, url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, { timeoutMs: FETCH_TIMEOUT_MS })
@@ -136,6 +228,7 @@ export async function fetchRemoteImage(
     const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`
     const suffix = fmt === 'jpeg' ? 'jpg' : fmt
     if (!CACHE_SUFFIXES.has(suffix)) return { url, dataUrl, fromCache: false }
+    const index = opts.cacheIndex
     try {
       const dir = join(decodedDir, REMOTE_IMAGE_CACHE_DIRNAME)
       mkdirSync(dir, { recursive: true })
@@ -144,9 +237,13 @@ export async function fetchRemoteImage(
       const tmp = `${file}.tmp-${String(process.pid)}`
       writeFileSync(tmp, Buffer.from(bytes))
       renameSync(tmp, file)
+      // 索引是「每目录一次 readdir」的快照，新写入的这一项要跟上，否则同一次调用里
+      // 后续的 readCache 会看不到刚落的盘（写盘成功但索引旧 ⇒ 缓存形同没有）。
+      if (index !== undefined && index instanceof Map) index.set(cacheKey(url), suffix)
     } catch {
       // 字节已经拿到了：写缓存失败不该让这张图消失，本次照样回 data URL（下次再试）
     }
+    memSet(url, dataUrl)
     return { url, dataUrl, fromCache: false }
   } catch (e) {
     failUntil.set(url, Date.now() + FAIL_COOLDOWN_MS)
@@ -158,12 +255,10 @@ export async function fetchRemoteImage(
  * 批量取图（一屏卡片或朋友圈一次问完，避免每张一个 RPC）。
  * @param urls - 待取地址；去重后最多 {@link MAX_IMAGES_PER_CALL} 张，超出的直接回错误。
  * @param decodedDir - 解码缓存根。
- * @param opts - CDN 开关。
  */
 export async function fetchRemoteImages(
   urls: readonly string[],
   decodedDir: string,
-  opts: { cdnEnabled?: boolean } = {},
 ): Promise<RemoteImageResult[]> {
   const wanted: string[] = []
   const seen = new Set<string>()
@@ -177,10 +272,15 @@ export async function fetchRemoteImages(
   const overflow: RemoteImageResult[] = wanted.slice(MAX_IMAGES_PER_CALL)
     .map((url) => ({ url, error: `单次最多 ${String(MAX_IMAGES_PER_CALL)} 张，其余请分批再取` }))
   const out: RemoteImageResult[] = []
+  // C1：整批共用**一次**目录索引（原来每张各自试 4 个扩展名 ⇒ 40 张 160 次同步 stat）。
+  const index = loadCacheIndex(decodedDir)
   // 分批而不是 allSettled 全发：CDN 对突发并发回 400（`sns-video.ts` 为此专门带微信 UA）
   for (let i = 0; i < taken.length; i += FETCH_CONCURRENCY) {
+    // C3（2026-09-28 性能修复）：批次之间让出事件循环。`readFileSync`/`statSync` 是同步的，
+    // 而这一整个请求在日志里出现过 86.5s —— 不让出就等于把本进程的其它请求一起钉死。
+    if (i > 0) await yieldToLoop()
     const batch = taken.slice(i, i + FETCH_CONCURRENCY)
-    out.push(...await Promise.all(batch.map((u) => fetchRemoteImage(u, decodedDir, opts))))
+    out.push(...await Promise.all(batch.map((u) => fetchRemoteImage(u, decodedDir, { cacheIndex: index }))))
   }
   return [...out, ...overflow]
 }

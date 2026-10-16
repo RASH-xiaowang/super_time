@@ -4,7 +4,8 @@
  * svr_id fallback). Node cannot decode silk without ffmpeg/a WASM decoder,
  * so decodable=false and the frontend shows a duration + degrade hint.
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -65,27 +66,27 @@ export function resolveVoiceInfo(
     return { available: false, decodable: false, error: '语音库不存在 (media_0.db)' }
   }
   try {
-    const db = new DatabaseSync(mediaDb, { readOnly: true })
-    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='VoiceInfo'").get() !== undefined
-    if (!has) { db.close(); return { available: false, decodable: false, error: 'VoiceInfo 表不存在' } }
-    // 1. Name2Id direct (chat_name_id, local_id)
-    let row: { svr_id?: string; len?: number } | undefined
-    const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(username) as { rowid: number } | undefined
-    if (chat) {
-      row = db.prepare('SELECT CAST(svr_id AS TEXT) AS svr_id, length(voice_data) AS len FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chat.rowid, localId)
-    }
-    let svrId = row?.svr_id
-    // 2. svr_id fallback
-    if (!row) {
-      const sid = messageServerId(decryptedDir, username, localId)
-      if (sid !== null) {
-        row = db.prepare('SELECT CAST(svr_id AS TEXT) AS svr_id, length(voice_data) AS len FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1').get(sid)
-        svrId = sid
+    return withDb(mediaDb, (db) => {
+      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='VoiceInfo'").get() !== undefined
+      if (!has) return { available: false, decodable: false, error: 'VoiceInfo 表不存在' }
+      // 1. Name2Id direct (chat_name_id, local_id)
+      let row: { svr_id?: string; len?: number } | undefined
+      const chat = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(username) as { rowid: number } | undefined
+      if (chat) {
+        row = db.prepare('SELECT CAST(svr_id AS TEXT) AS svr_id, length(voice_data) AS len FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ? LIMIT 1').get(chat.rowid, localId)
       }
-    }
-    db.close()
-    if (!row) return { available: false, decodable: false, error: '未找到语音数据' }
-    return { available: true, svrId: row.svr_id ?? svrId ?? '0', length: row.len ?? 0, decodable: false, error: 'silk 解码需要 ffmpeg/WASM（当前不可用）' }
+      let svrId = row?.svr_id
+      // 2. svr_id fallback
+      if (!row) {
+        const sid = messageServerId(decryptedDir, username, localId)
+        if (sid !== null) {
+          row = db.prepare('SELECT CAST(svr_id AS TEXT) AS svr_id, length(voice_data) AS len FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1').get(sid)
+          svrId = sid
+        }
+      }
+      if (!row) return { available: false, decodable: false, error: '未找到语音数据' }
+      return { available: true, svrId: row.svr_id ?? svrId ?? '0', length: row.len ?? 0, decodable: false, error: 'silk 解码需要 ffmpeg/WASM（当前不可用）' }
+    })
   } catch (e) {
     return { available: false, decodable: false, error: (e as Error).message }
   }

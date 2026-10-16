@@ -26,6 +26,8 @@ function codeOf(...parts: string[]): string {
 }
 
 const paths = codeOf('src', 'backend', 'wechat-paths.js')
+// 2026-10-15：存储实现迁入 llm-config-store.js；wechat-paths.js 保留兼容导出。
+const llmStore = codeOf('src', 'backend', 'llm-config-store.js')
 // M21：wechat:* 频道搬去了 src/backend/ipc-wechat.js ⇒ 读「main.js + 全部 ipc-*.js」的联合
 const main = [codeOf('main.js'), readdirSync(join(ROOT, 'src', 'backend'))
   .filter((f) => /^ipc-[a-z]+\.js$/.test(f)).sort()
@@ -40,15 +42,15 @@ describe('模型配置集：存储层导出', () => {
   })
 
   it('写完盘一律把「当前生效值」摊平到顶层（旧版本读同一份文件也不会坏）', () => {
-    const at = paths.indexOf('function persistLlmStore(')
+    const at = llmStore.indexOf('function persistLlmStore(')
     expect(at).toBeGreaterThan(-1)
-    const body = paths.slice(at, at + 600)
+    const body = llmStore.slice(at, at + 600)
     expect(body).toContain('writeLlmFile({ ...flat, profiles: store.profiles, activeProfileId: store.activeProfileId })')
   })
 
   it('「至少保留一条」是存储层的规则，不靠界面自觉', () => {
-    const at = paths.indexOf('function deleteLlmProfile(')
-    expect(paths.slice(at, at + 900)).toMatch(/至少保留一条/)
+    const at = llmStore.indexOf('function deleteLlmProfile(')
+    expect(llmStore.slice(at, at + 900)).toMatch(/至少保留一条/)
   })
 })
 
@@ -63,8 +65,8 @@ describe('模型配置集：主进程接线', () => {
   })
 
   it('注册了 wechat:llm-profiles 通道，四个 op 都接上', () => {
-    expect(main).toContain("ipcMain.handle('wechat:llm-profiles'")
-    const at = main.indexOf("ipcMain.handle('wechat:llm-profiles'")
+    expect(main).toContain("handleIpc('wechat:llm-profiles'")
+    const at = main.indexOf("handleIpc('wechat:llm-profiles'")
     const body = main.slice(at, at + 1400)
     expect(body).toMatch(/op === 'list'[\s\S]{0,80}?loadLlmStore\(\)/)
     expect(body).toMatch(/op === 'activate'[\s\S]{0,80}?activateLlmProfile\(/)
@@ -75,14 +77,14 @@ describe('模型配置集：主进程接线', () => {
   })
 
   it('切换是轻动作：activate 分支不碰「保存整个表单」那条路径', () => {
-    const at = main.indexOf("ipcMain.handle('wechat:llm-profiles'")
+    const at = main.indexOf("handleIpc('wechat:llm-profiles'")
     const body = main.slice(at, at + 1400)
     expect(body).not.toContain('saveLlmConfig')
   })
 
   it('旧的 wechat:llm-save / wechat:llm-get 仍在（向后兼容）', () => {
-    expect(main).toContain("ipcMain.handle('wechat:llm-get'")
-    expect(main).toContain("ipcMain.handle('wechat:llm-save'")
+    expect(main).toContain("handleIpc('wechat:llm-get'")
+    expect(main).toContain("handleIpc('wechat:llm-save'")
   })
 })
 
@@ -105,5 +107,17 @@ describe('模型配置集：preload 暴露面', () => {
     for (const m of ['getLlmConfig:', 'saveLlmConfig:', 'listLlmModels:']) {
       expect(preload, `preload 丢了 ${m}`).toContain(m)
     }
+  })
+
+  /**
+   * 连接测试 / 余额查询（2026-09-30）：preload 必须把两个方法都暴露出来，且各自打在
+   * **自己的频道**上（打成同一条会让"测试连接"悄悄去查余额 —— 前者只读 /models，
+   * 后者会打厂商的账户接口，混了她两个动作的出网口径就乱了）。
+   */
+  it('测试连接与余额查询各暴露一个方法、各打一条 IPC', () => {
+    expect(preload, 'preload 没暴露 testLlmConnection').toContain('testLlmConnection:')
+    expect(preload, 'preload 没暴露 getLlmBalance').toContain('getLlmBalance:')
+    expect(preload, "测试连接要打在 wechat:llm-test").toContain("invoke('wechat:llm-test'")
+    expect(preload, "余额查询要打在 wechat:llm-balance").toContain("invoke('wechat:llm-balance'")
   })
 })

@@ -14,7 +14,7 @@ import { fuseResults, dedupeFused } from '../src/backend/wechat-data/src/query/r
 import { rerankDocs } from '../src/backend/wechat-data/src/query/retrieval/rank.ts'
 import { mrr, ndcgAtK, precisionAtK } from '../src/backend/wechat-data/src/query/retrieval/eval.ts'
 import { runSyntheticEval, syntheticIntentAccuracy } from '../src/backend/wechat-data/src/query/retrieval/eval-dataset.ts'
-import { __internals } from '../src/backend/wechat-data/src/query/retrieval/embedding.ts'
+import { getPlanes, hammingDistance, l2normalize, simhash } from '../src/backend/wechat-data/src/query/vector-math.ts'
 import type { ChannelResult, FusedDoc, RetrievedDoc } from '../src/backend/wechat-data/src/query/retrieval/types.ts'
 
 let passed = 0
@@ -109,16 +109,16 @@ check('NDCG 完美排序为 1', () => assert.ok(Math.abs(ndcgAtK(['a', 'b'], ['a
 
 console.log('向量哈希')
 check('SimHash 确定性且相似向量更近', () => {
-  const planes = __internals.getPlanes(8)
-  const a = __internals.l2normalize([1, 1, 1, 1, 0, 0, 0, 0])
-  const b = __internals.l2normalize([1, 1, 1, 0.9, 0, 0, 0, 0])
-  const c = __internals.l2normalize([0, 0, 0, 0, 1, 1, 1, 1])
-  const ha = __internals.simhash(a, planes)
-  const hb = __internals.simhash(b, planes)
-  const hc = __internals.simhash(c, planes)
-  assert.deepEqual(__internals.simhash(a, planes), ha)
+  const planes = getPlanes(8)
+  const a = l2normalize([1, 1, 1, 1, 0, 0, 0, 0])
+  const b = l2normalize([1, 1, 1, 0.9, 0, 0, 0, 0])
+  const c = l2normalize([0, 0, 0, 0, 1, 1, 1, 1])
+  const ha = simhash(a, planes)
+  const hb = simhash(b, planes)
+  const hc = simhash(c, planes)
+  assert.deepEqual(simhash(a, planes), ha)
   const d = (x: { lo: number; hi: number }, y: { lo: number; hi: number }): number =>
-    __internals.popcount32((x.lo ^ y.lo) >>> 0) + __internals.popcount32((x.hi ^ y.hi) >>> 0)
+    hammingDistance(x, y)
   assert.ok(d(ha, hb) < d(ha, hc))
 })
 

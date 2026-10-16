@@ -19,14 +19,14 @@
  * 退出码：0 = 通过或跳过；1 = 有断言不成立；2 = 前置缺失。
  */
 import { join } from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { _electron } from 'playwright'
+import { seedRealProfile } from './real-profile.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 const OUT = join(ROOT, '.tmp-e2e')
-const DATA = join(process.env.APPDATA ?? '', 'super-time-electron', 'wechat-data')
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
 
 if (!existsSync(EXE)) {
@@ -36,20 +36,15 @@ if (!existsSync(EXE)) {
 mkdirSync(OUT, { recursive: true })
 
 /**
- * 单独起一个 profile：用户的正式实例此刻可能正开着（单实例锁按 userData 区分），
- * 而 state 里的 config.json 显式写明 dataRoot/decryptedDir 指向真实解密库，
- * 这样既不打扰用户实例，又能读到真实数据。不写 db_dir/密钥 → 不会触发重新解密。
+ * 单独起一个 profile：用户的正式实例此刻可能正开着（单实例锁按 userData 区分）。
+ * 配置从**真实 profile** 带过来（含 llm.json），数据根问应用自己写在
+ * `resolved.dataRoot` 里的那个 —— 见 `real-profile.mjs` 的注释（"量的是同一个盘子"）。
  */
 const userData = mkdtempSync(join(tmpdir(), 'st-ova-'))
-mkdirSync(join(userData, 'wechat'), { recursive: true })
-writeFileSync(join(userData, 'wechat', 'config.json'), JSON.stringify({
-  dataRoot: DATA,
-  decryptedDir: join(DATA, 'decrypted'),
-  decodedImagesDir: join(DATA, 'decoded_images'),
-  sourceDir: '', baseDir: '', selfWxid: '', silkBinary: '', resolved: {},
-  wechatSettings: { api_enabled: true, api_port: 5032, cdn_enabled: true, cdn_local_decrypt: false },
-  wechatSettingsMeta: { savedAt: new Date().toISOString(), source: 'overview-audit' },
-}, null, 2) + '\n')
+const seeded = seedRealProfile(userData)
+const DATA = seeded.dataRoot
+console.log(`真实 profile：${seeded.source}（带入 ${seeded.copied.join('、') || '（无额外配置）'}）`)
+console.log(`真实数据根：${DATA}`)
 
 let app = null
 const fails = []
@@ -67,6 +62,7 @@ try {
   win.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 160)) })
   win.on('pageerror', (e) => errs.push('pageerror: ' + String(e.message).slice(0, 160)))
   await win.waitForLoadState('domcontentloaded')
+  await win.setViewportSize({ width: 1920, height: 1080 })
   await win.getByRole('button', { name: '数据总览', exact: true }).waitFor({ state: 'visible' })
   await win.getByRole('button', { name: '数据总览', exact: true }).click()
   for (let i = 0; i < 90; i++) {
@@ -94,7 +90,11 @@ try {
 
   const rep = await win.evaluate(() => {
     const body = document.querySelector('main [class*=panelBody]') || document.querySelector('main')
-    const loaded = !!body.querySelector('[class*=ovHero]')
+    const canvasW = Math.round(body.getBoundingClientRect().width)
+    // 就绪判据用**专属属性**而不是类名/文案：2026-09-27 换霓虹皮肤时，旧判据查的是
+    // `[class*=ovHero]` —— 那一套类名被删掉之后，本脚本把"没找到"读成"首启空库"并**静默跳过**
+    // （退出码还是 0）。真窗口判据的靶子必须是"只有那一块才有"的钩子，改皮不换钩子。
+    const loaded = !!body.querySelector('[data-st-ov-hero]')
     if (!loaded) return { loaded: false }
     const cls = (el) => Array.from(el.classList).join(' ').slice(0, 50)
     const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } }
@@ -109,8 +109,13 @@ try {
       const bdRect = bd ? bd.getBoundingClientRect() : null
       const empty = bdRect ? Math.max(0, Math.round(bdRect.bottom - pad - contentBottom)) : 0
       const clipped = [...c.querySelectorAll('*')]
-        .filter((el) => el.scrollHeight > el.clientHeight + 2 && el.clientHeight > 20)
-        .map((el) => `${cls(el)} ${el.clientHeight}<${el.scrollHeight}`)
+        .filter((el) => {
+          const style = getComputedStyle(el)
+          const clipsY = ['hidden', 'clip'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 2
+          const clipsX = ['hidden', 'clip'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 2
+          return el.clientHeight > 20 && (clipsY || clipsX)
+        })
+        .map((el) => `${cls(el)} ${el.clientWidth}x${el.clientHeight}<${el.scrollWidth}x${el.scrollHeight}`)
       return { title: (c.querySelector('h3')?.textContent ?? '').trim(), ...r, empty, clipped: clipped.slice(0, 2) }
     })
     // 网格空洞：按 y 分行，一行卡片宽度和 + 间距若明显小于网格宽度 → 那一行有空列
@@ -125,7 +130,7 @@ try {
       const used = row.reduce((s, c) => s + c.w, 0) + (row.length - 1) * 10
       if (gw && used < gw - 20) holes.push(`y=${y} 只用到 ${used}/${gw}px，空 ${gw - used}px（${row.map((c) => c.title || '?').join(' + ')}）`)
     }
-    return { loaded: true, total: body.scrollHeight, cards, gw, holes }
+    return { loaded: true, total: body.scrollHeight, canvasW, cards, gw, holes }
   })
 
   if (!rep.loaded) {
@@ -135,6 +140,7 @@ try {
   }
 
   console.log(`正文总高: ${rep.total}px（整屏约 802px → ${(rep.total / 802).toFixed(1)} 屏）`)
+  console.log(`1920px 全屏视口下正文画布: ${rep.canvasW}px（上限 1480px）`)
   console.log(`网格宽: ${rep.gw}px\n`)
   console.log('卡片                           y     h   卡内空白   裁切')
   let sumEmpty = 0
@@ -142,11 +148,59 @@ try {
     sumEmpty += c.empty
     console.log(`${c.title.padEnd(26)} ${String(c.y).padStart(5)} ${String(c.h).padStart(5)} ${String(c.empty).padStart(8)}   ${c.clipped.join(' | ')}`)
   }
+  // 等距指标牌：内容必须落在**板面（六边形）**的安全区里，且 8 张一模一样高。
+  //
+  // 为什么量的是"板面"而不是"按钮盒子"：第一版拿 `plateBody` 比 button 的 rect，它**永远通过** ——
+  // button 是 flex 容器，内容多高它就多高（`min-height` 只是下限）。而真正的坏法是内容压到
+  // **板面**上：板面是 `clip-path` 切出来的六边形（`inset: 12px 6px 6px` + 上下各 18% 高的斜带），
+  // 内容比它的"中间带"高时，字就压在斜边上；而"裁切"那一条也抓不到（牌子不是滚动容器）。
+  // 2026-09-27 就是这么做过去的：实测把牌子改矮到 92px，判据照样全绿 —— 于是改成按板面几何判。
+  const plate = await win.evaluate(() => {
+    const hero = document.querySelector('[data-st-ov-hero]')
+    if (!hero) return { n: 0, out: [], hs: [], margins: [] }
+    const plates = [...hero.querySelectorAll('button')]
+    const out = []
+    const margins = []
+    for (const b of plates) {
+      const faceEl = b.querySelector('[class*=plateFace]')
+      const name = (b.getAttribute('title') ?? '').replace('查看', '')
+      if (!faceEl) { out.push(`${name} 找不到板面元素`); continue }
+      const f = faceEl.getBoundingClientRect()
+      const body = b.querySelector('[class*=plateBody]') || b
+      const c = body.getBoundingClientRect()
+      // ① 内容整体要在板面的锚框内（留 4px 余量）
+      const margin = Math.round(Math.min(c.left - f.left, f.right - c.right, c.top - f.top, f.bottom - c.bottom))
+      margins.push(`${name} ${margin}px`)
+      if (margin < 4) { out.push(`${name} 内容越出板面锚框（最小余量 ${margin}px）`); continue }
+      // ② 斜带：板面上下各 18% 高度是**线性收窄**的（最窄处平边只占 18%–82%）。
+      //    判据按斜边的真实方程算：在离顶 t 的位置，平边起点 = 18% × (1 − t/cap) × 面宽。
+      //    （第一版拿"最窄处"当常数比，太严：内容刚进斜带一点点就被判红，那是判据错不是设计错。）
+      const capH = f.height * 0.18
+      const flat = (edge) => f.left + f.width * 0.18 * (1 - Math.min(1, Math.max(0, edge / capH)))
+      if (c.top < f.top + capH) {
+        const flatL = flat(c.top - f.top)
+        if (c.left < flatL) out.push(`${name} 顶行压在上斜带里（内容 left ${Math.round(c.left)} < 该高度平边 ${Math.round(flatL)}）`)
+      }
+      if (c.bottom > f.bottom - capH) {
+        const flatL = flat(f.bottom - c.bottom)
+        if (c.left < flatL) out.push(`${name} 末行压在下斜带里（内容 left ${Math.round(c.left)} < 该高度平边 ${Math.round(flatL)}）`)
+      }
+    }
+    return { n: plates.length, out, hs: plates.map((b) => Math.round(b.getBoundingClientRect().height)), margins }
+  })
+  check(plate.n === 8, `指标牌数量应为 8，实测 ${plate.n}`)
+  check(plate.out.length === 0, `指标牌内容越出板面安全区：${plate.out.join(' | ')}`)
+  if (plate.hs.length > 0) {
+    check(Math.max(...plate.hs) - Math.min(...plate.hs) <= 2, `8 张指标牌高度不齐：${plate.hs.join('/')}`)
+    console.log(`指标牌：${plate.hs.length} 张，高 ${plate.hs.join('/')}；内容距板面最小余量：${plate.margins.join(' / ')}`)
+  }
+
   console.log(`\n卡内空白合计: ${sumEmpty}px`)
   console.log(`网格空洞: ${rep.holes.length === 0 ? '无' : ''}`)
   for (const h of rep.holes) console.log('  ✗ ' + h)
 
   check(sumEmpty < 200, `卡内空白合计 ${sumEmpty}px 偏大（阈值 200px）`)
+  check(rep.canvasW <= 1480, `全屏正文画布超出 1480px：${rep.canvasW}px`)
   check(rep.holes.length === 0, `网格存在空洞：${rep.holes.join(' | ')}`)
   check(rep.cards.every((c) => c.clipped.length === 0), `有内容被裁切：${rep.cards.filter((c) => c.clipped.length).map((c) => `${c.title} ${c.clipped.join(',')}`).join(' | ')}`)
   check(errs.length === 0, `渲染层 console error：${errs.slice(0, 2).join(' | ')}`)

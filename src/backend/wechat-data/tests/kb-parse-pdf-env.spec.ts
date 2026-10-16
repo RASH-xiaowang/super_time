@@ -28,7 +28,7 @@
  * ── 这条守卫咬什么 ────────────────────────────────────────────────────────
  * 它在**测试进程里伪装出真机环境**（`process.type = 'utility'` + `process.versions.electron`），
  * 然后要求 `parsePdf` 仍然把中文 CID PDF 解析出汉字来。把 `parse-pdf.ts` 里那段伪装窗口
- * 拿掉，本文件立刻转红（真机上是「每份 PDF 都解析失败」，见 `working/cdp-kb-files-b.json`）。
+ * 拿掉，本文件立刻转红（真机上实测过一轮：同一份库里每份 PDF 都判解析失败，报的都是 database is locked）。
  * @vitest-environment node
  */
 import { afterAll, describe, expect, it } from 'vitest'

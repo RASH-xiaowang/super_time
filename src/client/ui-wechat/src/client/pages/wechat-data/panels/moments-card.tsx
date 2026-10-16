@@ -10,25 +10,64 @@
  * 为什么不把这里的 state 一起挪进来：`expandedTextByCard` / `commentCounts` /
  * `videoSrcs` 等都是**按 tid 索引的整列表状态**，卡片只是读写其中一格；挪进来会变成「每张卡一份」,
  * 语义就变了（例如「展开全部」之类的跨卡操作会失效）。
+ *
+ * ## 为什么图片那一路不拿 CDN 地址顶着（2026-10-08）
+ *
+ * 卡片原先是 `src={dataSrc || proxyableSrcAllowHttp(im.thumb, im.url)}`，意思是
+ * 「后端还没回话时先拿 CDN 地址顶着，失败还有 `fallbackSrc` 兜底」。**那条兜底在原理上永远画不出图**：
+ * 朋友圈 CDN 返回的是 WxIsaac64 **密文**（真机实测：响应头恒为 `x-enc: 1`，头四字节 `ce 6c e7 d1`），
+ * 必须经 `sns-keystream.ts` 解密才是一张图片。于是只要 `dataSrc` 还没到（首次进入、懒加载
+ * 还没触发、或取图失败），那一格必然走 `failed` 分支显示「图片加载失败」；而 `snsErrs` 尚未
+ * 记上原因时冒出来的是**「本地缓存未找到」** —— 把用户指向完全错误的方向（真实原因是
+ * 「这条兜底地址根本不是图片」，与本机缓存无关）。
+ *
+ * 正确分工：CDN 的 url/token/seed 只在**后端**用（`mediaKeySpec` 带着它们去取，见
+ * `moments-media.ts` 与 `remotes/media.ts` 的四路排序），界面这一侧只认解好的字节。
+ * 取不到就如实说取不到（`empty` 分支带真实原因），而不是拿一个注定渲染失败的地址去骗一次 `<img>`。
+ * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M407。
+ *
+ * ## 同一条规矩的另外三处（2026-10-09 一并清掉）
+ *
+ * 上面那条兜底在 2026-10-08 只从**图片格**上删掉了，同一个文件里还有三处同形态的，
+ * 以及 `moments-portals.tsx` 里五处，全都因为同一件事而画不出图：交给 `<img src>` 的
+ * 是**密文地址**，而库里这些地址又几乎全是 `http://`（实测 3219 条里只有 9 条 https，
+ * 而 `proxyableSrc` 只收 `https:`/`data:`/`blob:`）⇒ 那些 `|| proxyableSrc(...)` 兜底
+ * 绝大多数时候**恒为空串**，等于「没有来源也假装有来源」；少数命中 https 的则是密文，
+ * 必然走 `failed`。四处分别是：
+ *
+ *   · `coverSrc`（文章封面用的是本动态的**首图**，thumb/url 同样是密文）；
+ *   · 视频封面（实测封面密文头 `4f 44 5a d8`）；
+ *   · 评论图（`img.thumb`/`img.url`，实测**裸地址 5/5 返 HTTP 400**，因为缺 `token`）；
+ *   · 详情浮层里的同三处（见 `moments-portals.tsx` 文件头）。
+ *
+ * 评论图那一处还多一层：它必须带 `url`/`token`/`seed` 去后端才取得到图，所以这里
+ * 把 `mediaKeySpec` 登记补齐（实测 `sns-comment-image-probe.manual.spec.ts`：裸地址
+ * 5/5 返 400、`snsCdnUrl` 补 token 后 5/5 返 200）。批处理那一侧的门也从 `kind === 'img'`
+ * 放宽成 `kind !== 'video'`（`moments-media.ts`）—— 否则评论图又被关在门外，且**不报错**。
+ * 接线由 `sns-image-integrity-guard.spec.ts` 钉住，变异登记 M417–M427。
  */
 import { Fragment } from 'react'
 import type { MomentItem } from '@deepseek-ai/dsh-wechat-data/types'
 import { clickableKey } from '../ui/kit.tsx'
-import { fmtCommentTime, imgKey, replyTarget } from './moments-support.tsx'
+import { imgKey, replyTarget } from './moments-support.tsx'
+import { fmtCommentTimeSec } from '../utils/format.ts'
 import { MomentsAvatar } from './moments-support.tsx'
-import { proxyableSrc } from '../utils/url.ts'
 import { RemoteImg, localImageSrc } from './remote-img.tsx'
 import type { SnsVideoRef, ViewerState } from './moments-portals.tsx'
+import { videoCoverKey } from './moments-media.ts'
+import type { MediaKeySpec } from './moments-media.ts'
 import css from './moments.module.css'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 import kitCss from '../ui/kit.module.css'
 
-/** 图片/视频的离线解码请求描述（与面板里 `mediaKeySpec` 的 Map 值同构）。 */
-export interface MediaKeySpec { md5: string; timelineId?: string; mediaId?: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }
+/** 图片/视频的离线解码请求描述定义在媒体层（`moments-media.ts`），卡片只是往那张表里登记。 */
 
 export interface MomentsCardProps {
   m: MomentItem
   privacy: boolean
   snsImgs: Record<string, string>
+  /** 取图失败的原因（key → 后端原因）；缺省时退回原来的固定文案。 */
+  snsErrs?: Record<string, string>
   articleCovers: Record<string, string>
   expandedTextByCard: Set<string>
   expandedSocialByCard: Set<string>
@@ -57,8 +96,53 @@ export interface MomentsCardProps {
   closeVideo: (vk: string) => void
 }
 
+/**
+ * 「这一格没有可显示的图」的占位。
+ *
+ * 为什么单独做：微信库里存的媒体地址**大量是 `http://`**（实测朋友圈 1,125 张里 1,104 张），
+ * 而代理只取 https（按设计丢弃 http），这时 `src` 会是空串；若本机也没解出这张图，
+ * RemoteImg 就停在 `empty` 并返回 null ⇒ 用户看到一个**没有任何文字的空框**，无从判断。
+ * 这里把原因写出来。定义在组件外，避免卡片函数变长（函数行数棘轮只许变小）。
+ *
+ * 2026-10-08 用户选定 **C：两条都试** —— `src` 先给本机解密结果（`dataSrc`，命中即显示、不需联网），没有才试 CDN（http 已放行，4 秒超时）；`fallbackSrc` 仍是本机解密结果。
+ * 为什么不接 `token`：已实测 9 种用法（原样 / `?token` / `?token&key` / thumb / https / 匿名参数 / 路径段 / Referer+UA / Cookie）**全部 HTTP 400**（用**最新**动态测的），接上不改变结果。因此当地址是 http（代理按设计只取 https）或代理取不到时，这一格会显示上面的说明，而**不会**用本机解密结果顶替。
+ */
+function MomentNoSource({ hint, detail }: { hint: string; detail?: string }): React.JSX.Element {
+  return (
+    <div className={css.imgFallback}>
+      <div className={css.imgFallbackContent}>
+        <span className={css.imgFallbackIcon}>🖼</span>
+        <span className={css.imgFallbackText}>本机没有这张图</span>
+        <span className={css.imgFallbackHint} title={detail}>
+          {hint}
+          {detail ? '（' + detail + '）' : ''}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 评论图的取图接线。
+ *
+ * `url`/`token`/`seed` 缺一不可：实测裸 `<url>`（不带 `token`/`idx=1`）5/5 返 HTTP 400、
+ * 0 字节，而补上 token 后 5/5 返 200（`sns-comment-image-probe.manual.spec.ts`）。
+ * 有则传、没有就不传 —— 这样后端在缺件时仍能回落到本机 md5 解密那条老路。
+ */
+function commentImageSpec(img: { md5?: string; url?: string; token?: string; seed?: string; thumb?: string }): MediaKeySpec {
+  return {
+    md5: img.md5 ?? '',
+    kind: 'comment',
+    ...(img.url ? { url: img.url } : {}),
+    ...(img.token ? { token: img.token } : {}),
+    ...(img.seed ? { seed: img.seed } : {}),
+    ...(img.thumb ? { thumb: img.thumb } : {}),
+  }
+}
+
+
 export function MomentsCard({
-  m, privacy, snsImgs,
+  m, privacy, snsImgs, snsErrs,
   articleCovers, expandedTextByCard, expandedSocialByCard,
   commentCounts, commentSortByCard, onlyMineComments,
   selfUsername,
@@ -72,7 +156,7 @@ export function MomentsCard({
 }: MomentsCardProps): React.JSX.Element {
   const cover = m.images[0]
   const isArticle = m.contentType === 3
-  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || proxyableSrc(cover?.thumb, cover?.url)
+  const coverSrc = (cover && imgKey(cover) && snsImgs[imgKey(cover)]) || (m.link_url && articleCovers[m.link_url]) || ''
   const textExpanded = expandedTextByCard.has(m.tid)
   const socialExpanded = expandedSocialByCard.has(m.tid)
   const commentShown = commentCounts[m.tid] ?? 5
@@ -102,7 +186,7 @@ export function MomentsCard({
               const key = imgKey(im)
               const dataSrc = key ? snsImgs[key] : undefined
               const fk = m.tid + ':' + String(ii)
-              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img' })
+              if (key) mediaKeySpec.current.set(key, { md5: im.md5 || '', timelineId: im.timelineId, mediaId: im.id, kind: 'img', url: im.url, token: im.token, seed: im.key })
               return (
                 <div key={fk}
                   className={css.imgWrap}
@@ -113,11 +197,10 @@ export function MomentsCard({
                   data-sns-tid={im.timelineId || undefined}
                   data-sns-mid={im.id || undefined}
                 >
-                  {/* 本机解码结果优先；没有才把 CDN 地址交给后端代理（M23）。
-                      「加载中」与「加载失败」仍然分开画 —— .imgWrap 是固定尺寸的格子，
-                      塌成空白会让人以为这条动态没有图。 */}
+                  {/* 只喂**后端解出来的 data URL**；理由与实测见文件头「为什么不用 CDN 地址顶着」。 */}
                   <RemoteImg
-                    src={dataSrc || proxyableSrc(im.thumb, im.url)}
+                    src={dataSrc ?? ''}
+                    empty={<MomentNoSource hint={(key && snsErrs?.[key]) || '正在取原图…'} detail={key ? ('md5=' + (im.md5 || '无') + ' id=' + String(im.id ?? '无')) : '这条媒体没有 md5/id，无法定位'} />}
                     alt=""
                     loading="lazy"
                     decoding="async"
@@ -128,7 +211,7 @@ export function MomentsCard({
                         <div className={css.imgFallbackContent}>
                           <span className={css.imgFallbackIcon}>🖼</span>
                           <span className={css.imgFallbackText}>图片加载失败</span>
-                          <span className={css.imgFallbackHint}>本地缓存未找到</span>
+                          <span className={css.imgFallbackHint}>{(key && snsErrs?.[key]) || '本地缓存未找到'}</span>
                         </div>
                       </div>
                     )}
@@ -141,8 +224,8 @@ export function MomentsCard({
         {m.videos.length > 0 && (
           <div className={css.videos}>
             {m.videos.map((v, vi) => {
-              const vk = v.md5 ? 'v:' + v.md5 : (v.timelineId && v.id ? 'v:' + v.timelineId + ':' + v.id : '')
-              const vCover = (vk ? snsImgs[vk] : undefined) || proxyableSrc(v.thumb)
+              const vk = videoCoverKey(v)
+  const vCover = vk ? snsImgs[vk] : undefined
               if (vk) mediaKeySpec.current.set(vk, { md5: v.md5 || '', timelineId: v.timelineId, mediaId: v.id, kind: 'video', seed: v.key, thumb: v.thumb })
               const src = vk ? videoSrcs[vk] : undefined
               const playing = !!src
@@ -171,7 +254,7 @@ export function MomentsCard({
                         }}
                       />
                       <div className={css.videoActions}>
-                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }}>⭳</button>
+                        <button type="button" className={css.videoActBtn} title="保存视频" onClick={(e) => { e.stopPropagation(); saveVideo(v) }} {...desktopActionProps()}>⭳</button>
                         <button type="button" className={css.videoActBtn} title="全屏" onClick={(e) => { e.stopPropagation(); fullscreenVideo(e.currentTarget.parentElement?.parentElement ?? null) }}>⛶</button>
                         <button type="button" className={css.videoActBtn} title="收起" onClick={(e) => { e.stopPropagation(); if (vk) closeVideo(vk) }}>✕</button>
                       </div>
@@ -285,11 +368,11 @@ export function MomentsCard({
                       {c.image && (() => {
                         const img = c.image
                         const cdata = (img.md5 && snsImgs[img.md5]) || ''
-                        const cfk = m.tid + ':c' + String(ci)
-                        if (img.md5) mediaKeySpec.current.set(img.md5, { md5: img.md5, kind: 'comment' })
-                        if (cdata || proxyableSrc(img.thumb, img.url)) return (
+                        // 补上 token 后 5/5 返 200。之前这里只登记 md5，后端拿不到地址可取。
+                        if (img.md5) mediaKeySpec.current.set(img.md5, commentImageSpec(img))
+                        if (cdata) return (
                           <RemoteImg
-                            src={cdata || proxyableSrc(img.thumb, img.url)}
+                            src={cdata}
                             alt=""
                             loading="lazy"
                             decoding="async"
@@ -301,7 +384,7 @@ export function MomentsCard({
                         // 连地址都没有：留一个 [图] 记号（评论里确实存在只剩文字的图片评论）
                         return <span className={css.commentImgFallback}>[图]</span>
                       })()}
-                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTime(c.ts)}</span>}
+                      {c.ts > 0 && <span className={css.commentTime}>{fmtCommentTimeSec(c.ts)}</span>}
                     </div>
                   )
                 })}

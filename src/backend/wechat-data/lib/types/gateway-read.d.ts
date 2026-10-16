@@ -4,8 +4,9 @@
  * 这一层只有 `@Remote` 壳（装饰器 + 签名 + 一行转发）；装饰器标记会落到**最派生原型**上，
  * 因此协议层枚举到的方法面与拆分前逐名相同（守卫：`gateway-remote-surface.spec.ts`）。
  */
-import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, SimpleResult, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlyRow, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
+import type { AccountsSnapshot, AnnualReport, AnnualSnapshot, AskHistoryClearResult, AskHistoryDeleteResult, CalendarSnapshot, CallsSnapshot, ChatHistoryResolveResult, ContactsSnapshot, DeleteFavoriteResult, DraftClearResult, DraftsClearResult, EditMutationResult, EditedListSnapshot, FavoritesSnapshot, GraphSnapshot, GroupInfoSnapshot, ImageDataUrlResult, ArticleCoversResult, MemberSearchSnapshot, MessagesSnapshot, MomentsSnapshot, OverviewInsights, OverviewSnapshot, PaymentStatus, RecordsSnapshot, RevokedSnapshot, SearchIndexStatus, SessionsSnapshot, StorageSnapshot, SummaryRecordSnapshot, VerifyKeyResult, VoiceTranscriptResult, VoiceTranscribeOneResult, AssetInsightsSnapshot, Contact360Snapshot, GroupInsightsSnapshot, LedgerSnapshot, MediaAssetsSnapshot, MomentsInsightsSnapshot, MomentsMonthlySnapshot, OfficialAssetsSnapshot, RegionMapSnapshot, UnifiedSearchSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
+import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
 import { type AnnualReview } from './query/annual-review.ts';
 import { GatewayCore } from './gateway-core.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -14,7 +15,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         keyword?: string;
         limit?: number;
         offset?: number;
-    }): SessionsSnapshot;
+    }): Promise<SessionsSnapshot>;
     /**
      * Contact book.
      * @param options - Optional page size + offset for incremental loading, plus a
@@ -32,8 +33,8 @@ export declare abstract class GatewayRead extends GatewayCore {
      * One-screen data overview.
      * @returns OverviewSnapshot: aggregate counts for the overview screen.
      */
-    getOverviewInsights(): OverviewInsights;
-    getOverview(): OverviewSnapshot;
+    getOverviewInsights(): Promise<OverviewInsights>;
+    getOverview(): Promise<OverviewSnapshot>;
     /**
      * Friend-region map (世界板块地图): world → country → province → city → friends.
      * @returns RegionMapSnapshot.
@@ -58,8 +59,9 @@ export declare abstract class GatewayRead extends GatewayCore {
      * @param options - search term, optional limit and room scope.
      * @returns MemberSearchSnapshot: matching members (items + total + source).
      * 保留理由：界面暂无入口（全局搜索走 searchUnified），保留给宿主/后续的群成员选择器。
-     *   第 96 轮补上了群内路径漏掉的 `quan_pin`/`alias`（此前「按备注全拼在群里搜人」永远搜不到），
-     *   由 `scripts/check-members-search.js` 对着真实库把关。
+     *   第 96 轮补上了群内路径漏掉的 `quan_pin`/`alias`（此前「按备注全拼在群里搜人」永远搜不到）；
+     *   第 97 轮才发现 FTS 那条路径同样漏着（`contact_fts` 只有 `name` 可检索），且它才是默认路径。
+     *   把关：`wechat-data/tests/members-search-columns.spec.ts`。
      */
     searchMembers(options: {
         q: string;
@@ -80,17 +82,17 @@ export declare abstract class GatewayRead extends GatewayCore {
      * Storage stats.
      * @returns StorageSnapshot: per-category storage usage stats.
      */
-    getStorageStats(): StorageSnapshot;
+    getStorageStats(): Promise<StorageSnapshot>;
     /**
      * Annual years.
      * @returns AnnualSnapshot: available yearly overview data.
      */
-    getAnnual(): AnnualSnapshot;
+    getAnnual(): Promise<AnnualSnapshot>;
     /**
      * Relationship graph.
      * @returns GraphSnapshot: chat relationship graph data.
      */
-    getGraph(): GraphSnapshot;
+    getGraph(): Promise<GraphSnapshot>;
     /**
      * Moments page.
      * @param options - Pagination (offset/limit) and optional author filter.
@@ -186,7 +188,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     }): PaymentStatus;
     resolveChatHistory(options: {
         serverId: string;
-    }): ChatHistoryResolveResult;
+    }): Promise<ChatHistoryResolveResult>;
     /**
      * Per-day message counts for one month (chat calendar heatmap).
      * @param options - username, year and month to aggregate.
@@ -278,12 +280,24 @@ export declare abstract class GatewayRead extends GatewayCore {
      * @returns VerifyImageKeyResult: verified flag + xor/template evidence.
      */
     /** Open the owned WeChat config.json (e.g. for manual edit). @returns the opened path. */
-    /** Open an owned path (config/output dir/file) with the system default. @returns the opened path. */
+    /**
+     * Open an owned path (config/output dir/file) with the system default.
+     *
+     * P2-6：这条路在 vendored 依赖里最终走到 `powershell.exe … Invoke-Item`，
+     * 而对 `.exe` 那就是**直接执行** —— 渲染层被控时就成了 RCE 原语。
+     * 现在只允许打开数据根之内、或应用确实往里写过产出的目录（导出对话框选过的位置），
+     * 且可执行/脚本扩展名一律拒。被拒不等于静默失败：理由要回给界面，
+     * 否则用户看到的又是「点了没反应」（P1-1 那一族的反面）。
+     * @param options - 要打开的路径。
+     * @param signal - 调用取消信号。
+     * @returns 打开结果与被拒理由。
+     */
     openPath(options: {
         path: string;
-    }, signal: AbortSignal): Promise<{
+    }, signal?: AbortSignal): Promise<{
         ok: boolean;
         path: string;
+        error?: string;
     }>;
     /**
      * Cached transcript for one voice message (if already transcribed).
@@ -302,23 +316,7 @@ export declare abstract class GatewayRead extends GatewayCore {
     transcribeVoiceMessage(options: {
         username: string;
         localId: number;
-    }): VoiceTranscribeOneResult;
-    /**
-     * Set CDN auto-fetch flag.
-     * @param options - enabled: whether CDN auto-fetch is on.
-     * @returns SimpleResult: ok, or error on failure.
-     */
-    setCdnImageEnabled(options: {
-        enabled: boolean;
-    }): SimpleResult;
-    /**
-     * Set CDN local/service decrypt flag.
-     * @param options - localDecrypt: whether decryption runs locally.
-     * @returns SimpleResult: ok, or error on failure.
-     */
-    setCdnImageLocalDecrypt(options: {
-        localDecrypt: boolean;
-    }): SimpleResult;
+    }): Promise<VoiceTranscribeOneResult>;
     /**
      * Delete favorite items by local_id.
      * @param options - ids of the favorite items to delete.
@@ -328,7 +326,6 @@ export declare abstract class GatewayRead extends GatewayCore {
         ids: number[];
     }): DeleteFavoriteResult;
     /**
-    /**
      * 年度回顾（看板）：15 张卡片所需的完整年度聚合。
      * 「人物类」指标只算我发出的（real_sender_id 归属），「规模类」算全部消息。
      * @param options - year to compute the report for.
@@ -336,41 +333,57 @@ export declare abstract class GatewayRead extends GatewayCore {
      */
     getAnnualReview(options: {
         year: number;
-    }): AnnualReview;
+    }): Promise<AnnualReview>;
     getAnnualReport(options: {
         year: number;
-    }): AnnualReport;
+    }): Promise<AnnualReport>;
     /**
      * Resolve a 公众号 article cover (og:image) to a base64 data URL.
+     *
+     * A4（2026-09-28）：先用朋友圈媒体索引确认本机有没有这张图 —— **索引命中才截流**，
+     * 没命中一律照旧出网（见 `article-cover.ts` 的 `LocalCoverProbe`）。
      * @param options - mp.weixin.qq.com article URL.
      * @returns ImageDataUrlResult: base64 data URL or error.
      */
     getArticleCover(options: {
         contentUrl: string;
     }): Promise<ImageDataUrlResult>;
-    getAssetInsights(): AssetInsightsSnapshot;
+    /**
+     * 批量解析公众号文章封面（A1，2026-09-28 性能修复）。
+     *
+     * 现场日志里 `getArticleCover` 是最频繁的慢调用（1221 次 / 均 1.9s），根因是前端逐张发 RPC。
+     * 这个批量壳把一屏的封面收成一个 RPC，后端按 `COVER_CONCURRENCY` 分批并发。
+     * A4 之后本机已有封面的那些**连网络都不出**（同一个探测函数）。
+     * @param options - `urls` 为一屏待解析的文章链接（自动去重、忽略空串）。
+     * @returns 逐条结果（键 = 请求的 url），顺序与去重后的入参一致。
+     */
+    getArticleCovers(options: {
+        urls: readonly string[];
+    }): Promise<ArticleCoversResult>;
+    getAssetInsights(): Promise<AssetInsightsSnapshot>;
     getContact360(options: {
         username: string;
     }): Contact360Snapshot;
     getCalls(options?: {
         topPeers?: number;
         recentLimit?: number;
-    }): CallsSnapshot;
+    }): Promise<CallsSnapshot>;
     getGroupInsights(options: {
         username: string;
     }): GroupInsightsSnapshot;
     getLedger(options?: {
         month?: string;
-    }): LedgerSnapshot;
+    }): Promise<LedgerSnapshot>;
     getMediaAssets(): MediaAssetsSnapshot;
+    getWordCloud(options?: WordCloudOptions): Promise<WordCloudResult>;
     getMomentsInsights(options?: {
         author?: string;
-    }): MomentsInsightsSnapshot;
+    }): Promise<MomentsInsightsSnapshot>;
     getMomentsMonthly(options?: {
         author?: string;
         authorName?: string;
-    }): MomentsMonthlyRow[];
-    getOfficialAssets(): OfficialAssetsSnapshot;
+    }): Promise<MomentsMonthlySnapshot>;
+    getOfficialAssets(): Promise<OfficialAssetsSnapshot>;
     searchUnified(options: {
         query: string;
         limit?: number;

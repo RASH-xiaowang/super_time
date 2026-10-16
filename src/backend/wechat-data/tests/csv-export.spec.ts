@@ -58,18 +58,18 @@ function makeContactDb(): [string, string] {
 const BOM = '\uFEFF'
 
 describe('CSV 导出：编码（BOM）', () => {
-  it('contacts 导出的文件**以 UTF-8 BOM 开头**（否则 Excel 按 GBK 解码就是乱码）', () => {
+  it('contacts 导出的文件**以 UTF-8 BOM 开头**（否则 Excel 按 GBK 解码就是乱码）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'contacts.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     const buf = readFileSync(dest)
     expect([...buf.subarray(0, 3)]).toEqual([0xEF, 0xBB, 0xBF])
   })
 
-  it('去掉 BOM 后内容是合法 UTF-8，中文可读且与源数据一致', () => {
+  it('去掉 BOM 后内容是合法 UTF-8，中文可读且与源数据一致', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'contacts.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     const text = readFileSync(dest, 'utf8')
     expect(text.startsWith(BOM)).toBe(true)
     const body = text.slice(1)
@@ -80,36 +80,36 @@ describe('CSV 导出：编码（BOM）', () => {
     expect(asGbk).not.toContain('北部湾大学_莫明海')
   })
 
-  it('会话消息 CSV（formatCsv 路径）同样带 BOM —— 两个出口不能只有一个修好', () => {
+  it('会话消息 CSV（formatCsv 路径）同样带 BOM —— 两个出口不能只有一个修好', async () => {
     // formatCsv 是私有的，但它与 exportCsv 共用 buildCsv；这里通过 exportCsv 的
     // 其它 kind 间接确认 buildCsv 一定加 BOM（同一函数）。
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'privacy.csv')
-    exportCsv(root, 'privacy', undefined, dest)
+    await exportCsv(root, 'privacy', undefined, dest)
     expect(readFileSync(dest, 'utf8').startsWith(BOM)).toBe(true)
   })
 })
 
 describe('CSV 导出：目标路径', () => {
-  it('给了 dest 就写到那个路径（用户选的路径必须被尊重）', () => {
+  it('给了 dest 就写到那个路径（用户选的路径必须被尊重）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), '我选的.csv')
-    const r = exportCsv(root, 'contacts', undefined, dest)
+    const r = await exportCsv(root, 'contacts', undefined, dest)
     expect(r.path).toBe(dest)
     expect(existsSync(dest)).toBe(true)
     expect(r.filename).toBe('我选的.csv')
   })
 
-  it('dest 的父目录不存在时会被创建（用户可能选了新目录）', () => {
+  it('dest 的父目录不存在时会被创建（用户可能选了新目录）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), '新目录', '深一层', 'c.csv')
-    const r = exportCsv(root, 'contacts', undefined, dest)
+    const r = await exportCsv(root, 'contacts', undefined, dest)
     expect(existsSync(r.path)).toBe(true)
   })
 
-  it('没给 dest 时回退到 <数据根>/exports/（旧调用方仍可用）', () => {
+  it('没给 dest 时回退到 <数据根>/exports/（旧调用方仍可用）', async () => {
     const [root, dataRoot] = makeContactDb()
-    const r = exportCsv(root, 'contacts')
+    const r = await exportCsv(root, 'contacts')
     // 口径与 export.ts 其它出口一致：数据根 = dirname(decryptedDir)，导出落到它下面的 exports/
     expect(dirname(r.path).endsWith('exports')).toBe(true)
     expect(dirname(dirname(r.path))).toBe(dataRoot)
@@ -117,27 +117,27 @@ describe('CSV 导出：目标路径', () => {
     expect(readdirSync(dirname(r.path)).length).toBe(1)
   })
 
-  it('给 dest 时**不再**往新的 exports/ 里写（不产生用户看不见的副本）', () => {
+  it('给 dest 时**不再**往新的 exports/ 里写（不产生用户看不见的副本）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     expect(existsSync(join(dataRoot, 'exports'))).toBe(false)
   })
 
-  it('dest 为空白字符串时按「未给」处理，不写成空路径', () => {
+  it('dest 为空白字符串时按「未给」处理，不写成空路径', async () => {
     const [root, dataRoot] = makeContactDb()
     for (const dest of ['', '   ', undefined]) {
-      const r = exportCsv(root, 'contacts', undefined, dest)
+      const r = await exportCsv(root, 'contacts', undefined, dest)
       expect(r.path).toContain('exports')
     }
   })
 })
 
 describe('CSV 导出：内容', () => {
-  it('表头是可读中文且列数与每行一致', () => {
+  it('表头是可读中文且列数与每行一致', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     const lines = readFileSync(dest, 'utf8').slice(1).trim().split('\r\n')
     const cols = (s: string): number => (s.match(/","/g)?.length ?? 0) + 1
     const n = cols(lines[0]!)
@@ -147,42 +147,42 @@ describe('CSV 导出：内容', () => {
     for (const l of lines) expect(cols(l)).toBe(n)
   })
 
-  it('显示名取「备注 > 昵称 > 用户名」，与界面卡片一致', () => {
+  it('显示名取「备注 > 昵称 > 用户名」，与界面卡片一致', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     const text = readFileSync(dest, 'utf8')
     expect(text).toContain('北部湾大学_莫明海') // 有备注 → 用备注
     expect(text).toContain('阿莫')             // 昵称仍单列保留
   })
 
-  it('逗号 / 双引号被正确转义（不会把一行拆成多列）', () => {
+  it('逗号 / 双引号被正确转义（不会把一行拆成多列）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    exportCsv(root, 'contacts', undefined, dest)
+    await exportCsv(root, 'contacts', undefined, dest)
     const text = readFileSync(dest, 'utf8')
     // 单元格内的 " 变成 ""，整体被引号包裹
     expect(text).toContain('"张三, ""大"" 张"')
   })
 
-  it('行数为数据行（不含表头）', () => {
+  it('行数为数据行（不含表头）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    const r = exportCsv(root, 'contacts', undefined, dest)
+    const r = await exportCsv(root, 'contacts', undefined, dest)
     expect(r.count).toBe(3)
   })
 
-  it('category=friend 时只导出好友（与界面页签口径一致）', () => {
+  it('category=friend 时只导出好友（与界面页签口径一致）', async () => {
     const [root, dataRoot] = makeContactDb()
     const dest = join(tempDir('wx-dest-'), 'c.csv')
-    const r = exportCsv(root, 'contacts', undefined, dest, 'friend')
+    const r = await exportCsv(root, 'contacts', undefined, dest, 'friend')
     expect(r.count).toBe(2)
     const text = readFileSync(dest, 'utf8')
     expect(text).not.toContain('工作群')
   })
 
-  it('未知 kind 仍然抛错（不静默产出空文件）', () => {
+  it('未知 kind 仍然抛错（不静默产出空文件）', async () => {
     const [root, dataRoot] = makeContactDb()
-    expect(() => exportCsv(root, 'files')).toThrow(/未知导出类型/)
+    await expect(exportCsv(root, 'files')).rejects.toThrow(/未知导出类型/)
   })
 })

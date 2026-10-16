@@ -11,27 +11,10 @@ import { useConfirm } from '../ui/confirm.tsx'
 import { ProgressBar } from '../ui/kit.tsx'
 import { fmtBytes } from '../utils/format.ts'
 import { css } from './settings-css.ts'
+import { desktopOnlyGate } from '../ui/desktop-only.tsx'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useCallback, useEffect, useRef, useState } from 'react'
-
-/** 许可证状态（主进程 license:status 返回）。 */
-type LicenseStatus = {
-  state: string
-  licensed: boolean
-  reason?: string
-  code?: string
-  payload?: {
-    licenseId?: string
-    edition?: string
-    issuedTo?: { name?: string; company?: string; email?: string }
-    expiresAt?: string | null
-    features?: string[]
-    seats?: number
-  } | null
-  device?: { fingerprintShort?: string; hostname?: string }
-  daysToExpiry?: number | null
-  licensePath?: string
-}
+import type { LicenseStatus, UpdatePhase, UpdateState } from '../../../contracts.ts'
 
 const LICENSE_STATE_LABEL: Record<string, string> = {
   licensed: '已授权',
@@ -46,6 +29,7 @@ const LICENSE_STATE_LABEL: Record<string, string> = {
  * 软件授权区块：状态 / 导出激活请求 / 导入许可证 / 解除绑定。
  */
 export function LicenseSection(): React.JSX.Element {
+  const blocked = desktopOnlyGate('license'); if (blocked !== null) return blocked
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
   const [st, setSt] = useState<LicenseStatus | null>(null)
@@ -53,7 +37,7 @@ export function LicenseSection(): React.JSX.Element {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const refresh = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.status) {
       setSt({ state: 'error', licensed: false, reason: 'license_api_missing' })
       return
@@ -69,7 +53,7 @@ export function LicenseSection(): React.JSX.Element {
   useEffect(() => { void refresh() }, [refresh])
 
   const onExportRequest = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.exportRequest) return
     setBusy('export')
     setMsg(null)
@@ -86,7 +70,7 @@ export function LicenseSection(): React.JSX.Element {
   }
 
   const onImport = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importFile) return
     setBusy('import')
     setMsg(null)
@@ -112,7 +96,7 @@ export function LicenseSection(): React.JSX.Element {
       confirmText: '解除绑定',
     })
     if (!ok) return
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.remove) return
     setBusy('remove')
     setMsg(null)
@@ -223,25 +207,6 @@ export function LicenseSection(): React.JSX.Element {
   )
 }
 
-/** 主进程 `update:state` / `update:event` 的形状（事实来源见 src/backend/update.js）。 */
-type UpdatePhase =
-  | 'idle' | 'unsupported' | 'checking' | 'available'
-  | 'downloading' | 'downloaded' | 'up-to-date' | 'error'
-
-type UpdateState = {
-  phase: UpdatePhase
-  currentVersion: string | null
-  version: string | null
-  releaseName: string | null
-  releaseNotes: string | null
-  releaseDate: string | null
-  progress: { percent: number; transferred: number | null; total: number | null; bytesPerSecond: number | null } | null
-  error: string | null
-  reason: 'dev' | 'disabled' | 'unavailable' | 'unknown' | null
-  checkedAt: string | null
-  manual: boolean
-}
-
 const UPDATE_PHASE_META: Record<UpdatePhase, { label: string; dot: 'done' | 'warning' | 'ongoing' | 'error' }> = {
   idle: { label: '尚未检查', dot: 'ongoing' },
   unsupported: { label: '当前不支持', dot: 'warning' },
@@ -250,7 +215,9 @@ const UPDATE_PHASE_META: Record<UpdatePhase, { label: string; dot: 'done' | 'war
   downloading: { label: '正在下载…', dot: 'ongoing' },
   downloaded: { label: '已下载，待安装', dot: 'done' },
   'up-to-date': { label: '已是最新版本', dot: 'done' },
-  error: { label: '检查失败', dot: 'error' },
+  error: { label: '下载失败', dot: 'error' },
+  retrying: { label: '下载失败，稍后自动重试', dot: 'warning' },
+  skipped: { label: '已跳过该版本', dot: 'warning' },
 }
 
 /** 不支持自动更新的原因文案；键与 update.js 的 unsupportedReason() 一一对应。 */
@@ -259,6 +226,23 @@ const UPDATE_UNSUPPORTED_LABEL: Record<string, string> = {
   disabled: '本次运行已禁用自动检查（环境变量 SUPERTIME_DISABLE_UPDATE_CHECK=1）。',
   unavailable: '更新组件未加载（安装包可能不完整），建议重新安装应用。',
   unknown: '当前环境不支持自动更新。',
+}
+
+/**
+ * 下次自动重试还有多久（W2-12.2）。
+ *
+ * 为什么放在模块级：`UpdateSection` 在函数体棘轮上（只能变小），多一个纯函数在这里
+ * 既不占它的行数，也让「秒/分」的取整口径可以被单独钉住。
+ * 时钟不可信时（`nextRetryAt` 解析不出来、或者已经过去了）返回「即将」而不是负数。
+ * @param iso - `nextRetryAt`。
+ * @returns 人类可读的时长。
+ */
+export function retryCountdown(iso: string): string {
+  const ms = Date.parse(iso) - Date.now()
+  if (!Number.isFinite(ms) || ms <= 1000) return '即将'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return String(s) + ' 秒'
+  return String(Math.ceil(s / 60)) + ' 分钟'
 }
 
 /**
@@ -271,6 +255,7 @@ const UPDATE_UNSUPPORTED_LABEL: Record<string, string> = {
  * 自动检查由主进程排在启动 30s 后，这里的按钮是手动那一路（`manual: true`）。
  */
 export function UpdateSection(): React.JSX.Element {
+  const blocked = desktopOnlyGate('update'); if (blocked !== null) return blocked
   const [st, setSt] = useState<UpdateState | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -278,7 +263,7 @@ export function UpdateSection(): React.JSX.Element {
   const pushedRef = useRef(false)
 
   useEffect(() => {
-    const api = (window as any).electronAPI?.update
+    const api = window.electronAPI?.update
     if (!api?.state) return
     const off = api.onEvent?.((next: UpdateState) => {
       pushedRef.current = true
@@ -296,7 +281,7 @@ export function UpdateSection(): React.JSX.Element {
   }, [])
 
   const onCheck = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.update
+    const api = window.electronAPI?.update
     if (!api?.check) return
     setBusy(true)
     setMsg(null)
@@ -311,15 +296,61 @@ export function UpdateSection(): React.JSX.Element {
     }
   }
 
+  /**
+   * W2-12.2：手动重试下载。
+   *
+   * 与 `onCheck` 的唯一区别是它调 `update:retry` —— 后端那条路会把重试计数**归零**，
+   * 而 `onCheck` 走的是新的一轮检查。对用户来说是同一件事（再试一次拉这个版本），
+   * 对后端来说「继续这一轮」与「另起一轮」是两回事，所以两个通道都留着。
+   */
+  const onRetry = async (): Promise<void> => {
+    const api = window.electronAPI?.update
+    if (!api?.retry) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await api.retry()
+      if (r?.ok) setSt(r.value as UpdateState)
+      else setMsg({ kind: 'err', text: r?.error?.message || '重试失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * W2-12.2：跳过 / 取消跳过当前版本。
+   *
+   * 传 `''` 表示取消跳过（后端把 `skippedVersion` 清空）—— 这个动作**必须可反悔**，
+   * 否则用户点错一次就再也收不到这个版本的提示，而界面上没有任何补救入口。
+   */
+  const onSkip = async (): Promise<void> => {
+    const api = window.electronAPI?.update
+    if (!api?.skip) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const v = phase === 'skipped' ? '' : String(st?.version ?? '')
+      const r = await api.skip(v)
+      if (r?.ok) setSt(r.value as UpdateState)
+      else setMsg({ kind: 'err', text: r?.error?.message || '操作失败' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onInstall = async (): Promise<void> => {
-    const api = (window as any).electronAPI?.update
+    const api = window.electronAPI?.update
     if (!api?.install) return
     setBusy(true)
     setMsg(null)
     try {
       const r = await api.install()
       // 成功的话应用马上就要退出并重装，这里不必再改状态（改了也来不及看见）。
-      if (!r?.ok) setMsg({ kind: 'err', text: r?.error?.message || r?.error || '安装失败' })
+      if (!r?.ok) setMsg({ kind: 'err', text: r?.error?.message || '安装失败' })
     } catch (err) {
       setMsg({ kind: 'err', text: (err as Error).message })
     } finally {
@@ -386,6 +417,26 @@ export function UpdateSection(): React.JSX.Element {
           </div>
         ) : null}
 
+        {/* W2-12.2：自动重试的等待期也要说清楚 —— 否则用户看到「下载失败」只会以为要重头来。 */}
+        {phase === 'retrying' ? (
+          <div className={css.row} style={{ display: 'block' }}>
+            <span className={css.rowNote}>
+              第 {(st?.attempt ?? 1)} 次下载失败，稍后自动重试
+              {st?.nextRetryAt ? `（约 ${retryCountdown(st.nextRetryAt)} 后）` : ''}
+              {st?.error ? `：${st.error}` : ''}
+            </span>
+          </div>
+        ) : null}
+
+        {/* W2-12.2：跳过的版本要说出来，且给「取消跳过」的出口（这个动作是可反悔的）。 */}
+        {phase === 'skipped' ? (
+          <div className={css.row}>
+            <span className={css.rowNote}>
+              已跳过 v{st?.skippedVersion ?? st?.version ?? '—'}。换到更新的版本号出现时仍会提示。
+            </span>
+          </div>
+        ) : null}
+
         {unsupported ? (
           <div className={css.row}>
             <span className={css.rowNote}>
@@ -405,6 +456,23 @@ export function UpdateSection(): React.JSX.Element {
           {phase === 'downloaded' ? (
             <Button variant="primary" disabled={busy} onClick={() => { void onInstall() }}>
               重启并安装
+            </Button>
+          ) : null}
+          {/* W2-12.2：手动重试（不受自动重试的次数上限约束 —— 用户自己按的按钮不该被拦住）。 */}
+          {phase === 'error' || phase === 'retrying' ? (
+            <Button variant="primary" disabled={busy} onClick={() => { void onRetry() }}>
+              重试下载
+            </Button>
+          ) : null}
+          {/* W2-12.2：跳过 / 取消跳过。只在「有具体版本可跳」时出现。 */}
+          {st?.version && phase !== 'downloaded' ? (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              title="这个版本不再提示；出现更新的版本号时仍会提示"
+              onClick={() => { void onSkip() }}
+            >
+              {phase === 'skipped' ? '取消跳过' : `跳过 v${st.version}`}
             </Button>
           ) : null}
         </div>

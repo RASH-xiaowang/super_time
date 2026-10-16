@@ -10,8 +10,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { MAX_DELAY_MS, TIMEOUT_ERROR_NAME, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../llm-retry.js'
-import type { RetryInfo } from '../llm-retry.js'
+import { MAX_DELAY_MS, TIMEOUT_ERROR_NAME, backoffDelayMs, fetchWithRetry, isRetryableStatus, parseRetryAfterMs } from '../wechat-data/src/net/fetch-retry.ts'
+import type { RetryInfo } from '../wechat-data/src/net/fetch-retry.ts'
 
 /** 造一个「按脚本返回」的假 fetch；脚本项可以是 Response 形状或要抛的异常。 */
 function scriptedFetch(script: Array<Response | Error>) {
@@ -257,7 +257,7 @@ describe('接线：出网请求都走 fetchWithRetry', () => {
    * 「加了个新出网点忘了包重试」照样全绿 —— 而类型和单测都看不出这种遗漏。
    */
   const RETRY_WIRED_FILES = [
-    '../wechat-host.js', // LLM chat / embedding（M7）
+    '../llm-http.js', // 所有 LLM 出网统一走这一个 fetchWithRetry 调用点
     '../wechat-data/src/query/article-cover.ts', // 公众号封面 ×2（N13）
     '../wechat-data/src/query/media-image.ts', // 远端表情取图（N13）
     '../wechat-data/src/query/remote-image.ts', // 远程图片代理（M23）

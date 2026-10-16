@@ -47,7 +47,13 @@ export declare function l2normalize(v: number[]): Float32Array;
 export declare function vecToBlob(v: Float32Array): Uint8Array;
 /** BLOB 字节 → Float32Array（复制，避免引用底层 buffer 被复用）。 */
 export declare function blobToVec(b: Uint8Array, dim: number): Float32Array;
-/** 文件 mtime+size 指纹（缓存失效依据；向量库两处缓存都用它）。 */
+/**
+ * 文件指纹 = **mtimeNs + size**（缓存失效依据；向量库两处缓存都用它）。
+ *
+ * ⚠️ 2026-09-29 由 `mtimeMs` 改为 `mtimeNs`：毫秒精度下，"同库同模型同文档重建"出来的文件
+ * 大小完全一样、mtime 又可能落在同一毫秒 ⇒ 指纹看起来没变 ⇒ 缓存继续用旧粗筛表/旧状态。
+ * 实测 `statSync(..., {bigint:true})` 与普通 `statSync` 开销无差别（2 万次：8.35µs vs 8.30µs）。
+ */
 export declare function statSig(p: string): string;
 /**
  * 按汉明距离取前 `pool` 个候选（两套向量库共用的粗筛）。

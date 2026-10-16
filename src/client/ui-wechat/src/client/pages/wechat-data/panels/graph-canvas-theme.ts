@@ -9,7 +9,6 @@
 
 import { DEFAULT_GRAPH_SETTINGS, communityColor, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import { edgeBudget } from './graph-budget.ts'
-import { bubbleText } from './graph-canvas-render.ts'
 
 /** 相机：`(cam.x, cam.y)` 是画布正中对应的世界坐标，`cam.k` 是缩放。 */
 export interface Camera {

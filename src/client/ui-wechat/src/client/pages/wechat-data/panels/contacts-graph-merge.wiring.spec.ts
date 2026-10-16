@@ -93,7 +93,8 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     //  它仍留在 NAV_GROUPS 里只为提供图标）。
     // 精确钉住而不是写 `>= 15`：README 那个数字就是靠模糊口径长期停在错误值上。
     const inGroups = visible.filter(t => t !== 'settings')
-    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(16)
+    // 2026-10-12：ClawBot 集成新增一个可见入口（16 → 17）。
+    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(17)
     expect(visible, '「设置」仍应作为底部入口留在 NAV_GROUPS 里（图标来源）').toContain('settings')
   })
 
@@ -115,7 +116,8 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     expect(item('knowledge')?.hidden, 'knowledge 应标 hidden：已并入知识库').toBe(true)
     expect(item('knowledge')?.label).toBe('知识图谱')
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'knowledge'))
-    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('联系人与社交')
+    // 2026-09-30 IA 合并：知识库/文件/知识图谱随「概览 · 问答 · 总结」组（用户要求移出社交组）
+    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('概览 · 问答 · 总结')
     expect(mergedBranch(), "knowledge 被并进了通讯录分段").not.toContain("case 'knowledge'")
   })
 })
@@ -261,7 +263,8 @@ describe('用户可见的计数声明不再静默漂移（这次迁移会改到�
     // （它只收 `src/client/ui-wechat/src/**`）里，也不被任何用例 import —— 于是这个数字
     // 一直没人守。实测它在本轮之前是 17、而真值 17（巧合对齐）；2026-09-15 那次重写时
     // README 写 16 而真值已是 17，漂了一整版无人发现。本用例就是那个「人」。
-    const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'OnboardingShell.tsx'), 'utf8')
+    // 2026-10-12 拆屏后，首页 rail（含 MODULES 计数）住在 onboarding/pages/HomePage.tsx
+  const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-app', 'onboarding', 'pages', 'HomePage.tsx'), 'utf8')
     const m = /k:\s*'MODULES'\s*,\s*v:\s*'(\d+)'/.exec(shell)
     expect(m, '启动页里找不到 MODULES 的计数（若已改版请同步本用例）').toBeTruthy()
     expect(
@@ -270,12 +273,13 @@ describe('用户可见的计数声明不再静默漂移（这次迁移会改到�
     ).toBe(String(renderedInGroups.length))
   })
 
-  it('历次导航变更的净效果是 16（钉住这个数字，不用范围）', () => {
+  it('历次导航变更的净效果是 17（钉住这个数字，不用范围）', () => {
     // 口径沿革：并入社交图谱前 17（含独立可见的 graph）
     // → 2026-09-17 并入后 16 → 新增「知识库」(kb) 后 17
-    // → 2026-09-18 知识图谱并入知识库（knowledge 转 hidden）后 **16**。
+    // → 2026-09-18 知识图谱并入知识库（knowledge 转 hidden）后 16
+    // → 2026-10-12 新增「ClawBot」后 **17**。
     // 写成精确值而不是范围 —— 范围断言正是这个数字上次能长期漂着的原因。
-    expect(renderedInGroups.length).toBe(16)
+    expect(renderedInGroups.length).toBe(17)
     for (const t of ['graph', 'knowledge'] as const) {
       expect(renderedInGroups, `${t} 不该再出现在侧栏分组里`).not.toContain(t)
       // 但两者必须仍是**合法 tab** —— 这是深链与段条第二段的前提

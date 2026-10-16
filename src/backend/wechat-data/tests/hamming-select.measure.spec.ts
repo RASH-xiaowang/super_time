@@ -14,10 +14,14 @@
  * 运行：
  *   MEASURE_HAMMING=1 node node_modules/vitest/vitest.mjs run src/backend/wechat-data/tests/hamming-select.measure.spec.ts
  *   MEASURE_HAMMING=1 MEASURE_HAMMING_ROWS=200000 ...（可改规模）
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { __internals } from '../src/query/retrieval/embedding.ts'
+import { popcount32, selectByHamming } from '../src/query/vector-math.ts'
 import { at } from '../../tests/helpers/strict-index.ts'
 
 interface Row { rowid: number; lo: number; hi: number; username: string }
@@ -43,7 +47,7 @@ function makeRows(n: number, seed: number): Row[] {
 /** 改动前的算法（全量 map+sort+slice），作为对照。 */
 function reference(rows: readonly Row[], qh: { lo: number; hi: number }, pool: number): Row[] {
   return rows
-    .map((r) => ({ r, d: __internals.popcount32((r.lo ^ qh.lo) >>> 0) + __internals.popcount32((r.hi ^ qh.hi) >>> 0) }))
+    .map((r) => ({ r, d: popcount32((r.lo ^ qh.lo) >>> 0) + popcount32((r.hi ^ qh.hi) >>> 0) }))
     .sort((a, b) => a.d - b.d)
     .slice(0, pool)
     .map((x) => x.r)
@@ -70,11 +74,11 @@ describe.skipIf(process.env.MEASURE_HAMMING !== '1')('M9 稠密粗筛实测', ()
 
     // 先确认选出来的序列逐项相同（否则计时没有意义）
     const want = reference(rows, qh, POOL).map((r) => r.rowid)
-    const got = __internals.selectByHamming(rows, qh, POOL).map((r) => r.rowid)
+    const got = selectByHamming(rows, qh, POOL).map((r) => r.rowid)
     expect(got).toEqual(want)
 
     const ref = timeIt(() => reference(rows, qh, POOL), RUNS)
-    const sel = timeIt(() => __internals.selectByHamming(rows, qh, POOL), RUNS)
+    const sel = timeIt(() => selectByHamming(rows, qh, POOL), RUNS)
 
     const fmt = (x: { median: number; all: number[] }): string =>
       `中位 ${x.median.toFixed(1)}ms（${x.all.map((v) => v.toFixed(1)).join(' / ')}）`

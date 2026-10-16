@@ -9,6 +9,7 @@
 
 import type {
   AccountsSnapshot,
+  AnnualReview,
   AnnualReport,
   AnnualSnapshot,
   AssetInsightsSnapshot,
@@ -108,6 +109,8 @@ import type {
 } from '@deepseek-ai/dsh-wechat-data/types'
 import { remote, unwrap } from './api-core.ts'
 
+export type AnnualReviewShape = AnnualReview
+
 /**
  * Fetch the annual report for a year.
  * @param options - Query options: the report year.
@@ -119,8 +122,9 @@ export async function apiGetAnnualReport(options: { year: number }): Promise<Ann
 
 // ─────────────────────────────────────────────────────────────
 // 年度回顾（看板）：15 张卡片所需的完整年度聚合
-// 形状与后端 query/annual-review.ts 的 AnnualReview 对齐。
-// 前端在此独立声明（不依赖 lib/types 里那份上游生成的 .d.ts，它没有这个名字）。
+// 完整结果形状现在直接转发共享包里的 `AnnualReview`；上面的 `AnnualReviewShape`
+// 是给既有面板 import 保留的兼容别名。子卡片类型仍保留在前端，因为它们在
+// `normalizeReview` / 卡片组件里承担前端展示语义。
 // ─────────────────────────────────────────────────────────────
 
 /** 榜单条目。 */
@@ -178,27 +182,57 @@ export interface AnnualEmoji {
 /** 「还有这些人」。`username` 用于点头像/跳会话（后端 annual-review.ts 一直在发，这里漏了）。 */
 export interface AnnualHighlight { label: string; name: string; username: string; value: string }
 
-/** 年度回顾完整结果。 */
-export interface AnnualReviewShape {
-  year: number
-  sent: number; sentTo: number; sentDailyAvg: number; activeDaysMine: number
-  longestStreak: number; newFriends: number; mediaSent: number
-  longestSpanFrom: string; longestSpanTo: string
-  calendar: Array<{ d: string; n: number }>; activeDaysAll: number; maxDayAll: number
-  busiest: AnnualBusiestDay | null
-  buddy: AnnualBuddy | null
-  monthlyStar: AnnualMonthlyStar[]
-  starName: string; starUsername: string; starMonths: number; hottestMonth: number; hottestMonthCount: number
-  night: AnnualNight
-  rhythm: AnnualRhythm
-  words: AnnualWords
-  catchphrase: AnnualCatchphrase
-  reply: AnnualReply
-  opener: AnnualOpener
-  ranking: AnnualRankRow[]
-  emoji: AnnualEmoji
-  highlights: AnnualHighlight[]
-  firstAt: string; firstText: string; lastAt: string; lastText: string
+/**
+ * 朋友圈年度（形状与后端 `query/annual-moments.ts` 的 `AnnualMoments` 对齐）。
+ *
+ * `available` 是**必需**的：朋友圈是另一个库（sns.db），读不到时不能显示成 0 ——
+ * 那会被读成"今年一条没发"。界面据此显示"未读取到"。
+ */
+export interface AnnualMoments {
+  count: number
+  topPost: { at: string; likes: number; comments: number; excerpt: string } | null
+  topMonth: { month: number; count: number } | null
+  lateNight: number
+  available: boolean
+}
+
+/**
+ * 收藏与文件的**总量盘点**（形状与后端 `query/annual-assets.ts` 的 `AnnualAssets` 对齐）。
+ *
+ * 这两个数**不随年份变化**：收藏表没有时间列、文件也不按年切 —— 所以界面标题写"总量盘点"，
+ * 不写成年度数字（写了就是编）。
+ */
+export interface AnnualAssets {
+  favorites: number
+  files: number
+  bytes: number
+  sentFiles: number
+  available: boolean
+}
+
+/** 年度资金（形状与后端 `query/annual-extras.ts` 的 `AnnualMoney` 对齐）。 */
+export interface AnnualMoney {
+  count: number
+  total: number
+  topAmount: number
+  topPeerName: string
+  byPeer: Array<{ username: string; name: string; amount: number; count: number }>
+}
+
+/** 年度撤回（形状与后端 `AnnualRevoke` 对齐）。 */
+export interface AnnualRevoke {
+  count: number
+  topPeerName: string
+  /** 24 个时段桶（0..23 点）。 */
+  byHour: number[]
+}
+
+/** 群聊年度（形状与后端 `AnnualGroups` 对齐）。 */
+export interface AnnualGroups {
+  messages: number
+  /** 群聊占全年全部消息的比例（0..1）。 */
+  share: number
+  top: Array<{ username: string; name: string; count: number }>
 }
 
 /**

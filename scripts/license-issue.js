@@ -13,12 +13,17 @@
  *     --out ./out/license.json
  *
  *   node scripts/license-issue.js --from-request ./activation-request.json --name "张三" --days 365 --out ./out/license.json
+ *
+ * 私钥位置：默认 ~/.supertime/license-private.pem，可用 --key <path> 或环境变量
+ * SUPERTIME_LICENSE_PRIVATE_KEY 显式指路；**指向仓库内的路径会被直接拒**（P3-10，
+ * 见 scripts/license-key-path.js）。
  */
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { signPayload } = require('../src/license/crypto')
 const { PRODUCT_ID, KNOWN_FEATURES } = require('../src/license/schema')
+const { resolvePrivateKeyPath, describeKeyFailure, ENV_KEY } = require('./license-key-path')
 
 function arg(name, def = null) {
   const i = process.argv.indexOf(`--${name}`)
@@ -26,13 +31,24 @@ function arg(name, def = null) {
   return def
 }
 
+/**
+ * 读签发私钥。位置由 `scripts/license-key-path.js` 定（P3-10：私钥不住在仓库里，
+ * 也不许"退回工作树那一份"），这里只负责读与报错。
+ * `--key` 与 `SUPERTIME_LICENSE_PRIVATE_KEY` 等价（前者优先，方便一次性指路）。
+ */
 function loadPrivatePem() {
-  const p = path.join(__dirname, '..', 'vendor-keys', 'license-private.pem')
-  if (!fs.existsSync(p)) {
-    console.error('缺少 vendor-keys/license-private.pem，请先运行 node scripts/license-keygen.js')
+  const cliKey = arg('key')
+  const where = resolvePrivateKeyPath(cliKey ? { env: { ...process.env, [ENV_KEY]: cliKey } } : {})
+  if (!where.ok) {
+    console.error(describeKeyFailure(where))
     process.exit(1)
   }
-  return fs.readFileSync(p, 'utf8')
+  if (!fs.existsSync(where.path)) {
+    console.error(`缺少签发私钥：${where.path}（来源：${where.source}）\n`
+      + '先在签发机上生成：node scripts/license-keygen.js；已有别处的私钥就显式指路：--key <path>')
+    process.exit(1)
+  }
+  return fs.readFileSync(where.path, 'utf8')
 }
 
 function main() {

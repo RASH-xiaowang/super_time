@@ -10,13 +10,14 @@ import { apiClearOperationLog, apiGetOperationLog } from '../api.ts'
 import type { OperationCategory, OperationLogEntry, OperationLogQuery, OperationStatus } from '@deepseek-ai/dsh-wechat-data/types'
 import { Badge, Card, DataTable, DateRangeField, PanelHeader, SearchInput, Segmented, Select, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
+import { desktopActionProps } from '../ui/desktop-only.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import css from './oplog.module.css'
 import kitCss from '../ui/kit.module.css'
 
 const OP_CATEGORY_LABEL: Record<OperationCategory, string> = {
   settings: '设置', keys: '密钥', sync: '解密/同步', export: '导出', delete: '删除',
-  backup: '备份', edit: '编辑', task: '任务', error: '异常',
+  backup: '备份', edit: '编辑', task: '任务', error: '异常', clawbot: 'ClawBot',
 }
 const OP_STATUS_LABEL: Record<OperationStatus, string> = { ok: '成功', fail: '失败', skip: '跳过' }
 const STATUS_FILTERS: ReadonlyArray<{ value: '' | OperationStatus; label: string }> = [
@@ -67,6 +68,8 @@ export function OperationLogPanel(): React.JSX.Element {
   const [opCat, setOpCat] = useState('')
   const [opStatus, setOpStatus] = useState<'' | OperationStatus>('')
   const [opSearch, setOpSearch] = useState('')
+  /** 读失败与「确无记录」分开（W3-11.4）。 */
+  const [opReadError, setOpReadError] = useState('')
   const opScrollRef = useRef<HTMLDivElement | null>(null)
 
   // 关键词现在由**服务端**过滤（后端原本只有时间 / 分类 / 状态三个条件）。
@@ -89,6 +92,8 @@ export function OperationLogPanel(): React.JSX.Element {
     pageSize: 100,
     fetchPage: async (offset, limit) => {
       const snap = await apiGetOperationLog(buildQuery(offset, limit))
+      // W3-11.4：「审计库打不开」与「没有操作记录」分开说。
+      setOpReadError(snap.readError ?? '')
       return { items: snap.items, total: snap.total }
     },
   })
@@ -105,7 +110,7 @@ export function OperationLogPanel(): React.JSX.Element {
     if (pager.error) setOpMsg({ kind: 'err', text: '✗ 读取操作日志失败：' + pager.error })
   }, [pager.items, pager.total, pager.loading, pager.error])
 
-  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => opScrollRef.current)
+  const loadMoreRef = useLazySentinel(() => { if (pager.hasMore && !pager.loadingMore) pager.loadMore() }, '600px 0px', () => opScrollRef.current, pager.items.length)
 
   const refresh = useCallback((): void => {
     setOpMsg(null)
@@ -273,19 +278,20 @@ export function OperationLogPanel(): React.JSX.Element {
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} icon={opLoading ? <span className={css.spin} /> : undefined} onClick={refresh} disabled={opLoading}>{opLoading ? '加载中…' : '刷新'}</Button>
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpTxt} disabled={rows.length === 0}>导出 TXT</Button>
           <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={exportOpCsv} disabled={rows.length === 0}>导出 CSV</Button>
-          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void clearOpLog() }} disabled={opLoading || opTotal === 0}>清空</Button>
+          <Button size="sm" variant="outline" className={clsx(css.btnFx, css.btnFixedSm)} onClick={() => { void clearOpLog() }} disabled={opLoading || opTotal === 0} {...desktopActionProps()}>清空</Button>
         </div>
       </Card>
 
       {opMsg && <div className={clsx(css.notice, opMsg.kind === 'ok' ? css.noticeOk : css.noticeErr)}>{opMsg.text}</div>}
 
       <Card className={css.tableCard} flush>
+        {opReadError && <div className={kitCss.error} role="alert">⚠️ {opReadError}</div>}
         <DataTable
           columns={opCols}
           rows={rows}
           getRowId={r => String(r.id)}
           loading={opLoading && rows.length === 0}
-          emptyTitle={opLoading ? '加载中…' : '暂无操作日志，点击「刷新」后分页显示'}
+          emptyTitle={opLoading ? '加载中…' : opReadError ? '操作日志读不出来' : '暂无操作日志，点击「刷新」后分页显示'}
         />
         {pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
       </Card>

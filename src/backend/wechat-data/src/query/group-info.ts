@@ -3,7 +3,8 @@
  * chatroom name/remark, announcement (chat_room_info_detail), own alias and
  * member grid (chatroom_member joined to contact for names/avatars).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
+import { withDb } from './db-open.ts'
 import { join } from 'node:path'
 import type { GroupInfo, GroupInfoSnapshot, GroupMember } from '../types.ts'
 import { buildRegion, cellText, parseContactExtra, readVarint } from './region.ts'
@@ -96,16 +97,16 @@ function openimNames(decryptedDir: string): Map<string, string> {
   if (_openimNames && _openimNames.dir === decryptedDir) return _openimNames.map
   const map = new Map<string, string>()
   try {
-    const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
-    try {
-      const rows = db.prepare('SELECT wording_id AS id, wording AS w FROM openim_wording').all() as Array<{ id: unknown; w: unknown }>
-      for (const r of rows) {
-        const id = cellText(r.id).trim()
-        const w = cellText(r.w).trim()
-        if (id && w) map.set(id, w)
-      }
-    } catch { /* table absent */ }
-    db.close()
+    withDb(join(decryptedDir, 'contact', 'contact.db'), (db) => {
+      try {
+        const rows = db.prepare('SELECT wording_id AS id, wording AS w FROM openim_wording').all() as Array<{ id: unknown; w: unknown }>
+        for (const r of rows) {
+          const id = cellText(r.id).trim()
+          const w = cellText(r.w).trim()
+          if (id && w) map.set(id, w)
+        }
+      } catch { /* table absent */ }
+    })
   } catch { /* contact db unavailable */ }
   _openimNames = { dir: decryptedDir, map }
   return map
@@ -177,11 +178,14 @@ export function queryGroupInfo(
     const flag = Number(row['flag'] ?? 0)
 
     const cr = db.prepare('SELECT owner FROM chat_room WHERE username=?').get(username) as { owner?: unknown } | undefined
-    const info = db.prepare('SELECT announcement_, announcement_editor_, announcement_publish_time_ FROM chat_room_info_detail WHERE username_=?').get(username) as {
-      announcement_?: unknown
-      announcement_editor_?: unknown
-      announcement_publish_time_?: unknown
-    } | undefined
+    // 公告表是**可选**的（老快照里没有 `chat_room_info_detail`）：缺表就当没有公告，
+    // 不许让整条 `getGroupInfo` 抛出 `no such table` —— 群资料面板会直接报错，
+    // 而群名、成员这些它本来拿得到的东西也一起看不到了。
+    let info: { announcement_?: unknown; announcement_editor_?: unknown; announcement_publish_time_?: unknown } | undefined
+    try {
+      info = db.prepare('SELECT announcement_, announcement_editor_, announcement_publish_time_ FROM chat_room_info_detail WHERE username_=?').get(username) as
+        { announcement_?: unknown; announcement_editor_?: unknown; announcement_publish_time_?: unknown } | undefined
+    } catch { info = undefined }
 
     const members: GroupMember[] = []
     let totalMembers = 0

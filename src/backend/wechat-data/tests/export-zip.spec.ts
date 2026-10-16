@@ -88,6 +88,20 @@ describe('ZipFileWriter 与 zipFiles 逐字节等价', () => {
     expect(memory.readUInt16LE(8)).toBe(8)
   })
 
+  it('addFile 的大条目走异步 deflate，压缩期间不独占事件循环', async () => {
+    const dir = tempDir('zip-async-deflate-')
+    const p = join(dir, 'async.zip')
+    const w = await ZipFileWriter.create(p)
+    let ticks = 0
+    const timer = setInterval(() => { ticks += 1 }, 1)
+    // 16MB 的高可压缩输入足以让同步 deflate 超过一个 1ms tick；
+    // 异步路径把压缩交给 zlib 线程池，期间定时器必须能继续跑。
+    await w.addFile('big.txt', Buffer.alloc(16 * 1024 * 1024, 0x61))
+    clearInterval(timer)
+    expect(ticks).toBeGreaterThan(0)
+    await w.abort()
+  })
+
   it('产出的归档结构自洽：本地头在开头、EOCD 在末尾、条目数正确', async () => {
     const entries = sampleEntries()
     const buf = await viaWriter(entries)

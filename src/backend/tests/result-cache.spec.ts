@@ -13,7 +13,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
 import { createWechatBackend, resultCacheHandles } from '../wechat-host.js'
 
 /** 每次用例前清空，避免用例间互相影响。 */
@@ -159,7 +158,21 @@ describe('真值级接线：解码输入指纹真的来自那两份文件（复�
     writeFileSync(cfgFile, '{}', 'utf8')
     writeFileSync(secFile, '{}', 'utf8')
 
+    /**
+     * `DSH_HOME` 必须在本用例内**清掉**（2026-09-28）。
+     *
+     * 为什么：`wechat-host.js:593` 的取值顺序是
+     * `options.userDataPath || process.env.DSH_HOME || ~/.dsh` ——
+     * 也就是说**环境里已有的 `DSH_HOME` 会把本用例传进去的临时目录顶掉**，
+     * 后端于是去解析开发机真实的数据根（`~/.dsh-beta/wechat-data`），
+     * 而本用例写的 config/secrets 在临时目录里 ⇒ 指纹恒为 `-|-`、
+     * 改文件永远不失效 ⇒ 「改了 secrets.json 必须重新解码」必然失败。
+     *
+     * 这条在 CI 上是绿的（runner 没有 `DSH_HOME`），只在**设了该变量的开发机**上红 ——
+     * 那种"换台机器就变脸"的判据比没有判据更坏，所以这里显式把环境钉成"未设置"。
+     */
     const prevHome = process.env.DSH_HOME
+    delete process.env.DSH_HOME
     const backend = await createWechatBackend({ userDataPath: ud })
     try {
       let calls = 0

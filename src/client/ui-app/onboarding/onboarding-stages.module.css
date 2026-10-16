@@ -17,26 +17,26 @@
   text-shadow: none;
 }
 :global(.theme-light) .railVal {
-  color: #0e7490;
+  color: var(--nm-cyan, #0e7490);
   text-shadow: none;
 }
 :global(.theme-light) .heroTitleAccent {
-  background: linear-gradient(92deg, #0e7490 0%, #0284c7 45%, #7c3aed 100%);
+  background: linear-gradient(92deg, var(--nm-cyan, #0e7490) 0%, var(--nm-blue, #0284c7) 45%, var(--nm-purple, #7c3aed) 100%);
   -webkit-background-clip: text;
   background-clip: text;
 }
 :global(.theme-light) .chip {
   color: var(--nm-text-3);
-  border-bottom-color: rgba(8, 145, 178, 0.2);
+  border-bottom-color: var(--nm-cyan-20, rgba(8, 145, 178, 0.2));
 }
 :global(.theme-light) .heroKicker {
-  color: #0e7490;
+  color: var(--nm-cyan, #0e7490);
 }
 :global(.theme-light) .progressRing {
   filter: none;
 }
 :global(.theme-light) .ringLabel {
-  color: #0e7490;
+  color: var(--nm-cyan, #0e7490);
 }
 :global(.theme-light) .brandName {
   text-shadow: none;
@@ -66,10 +66,10 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--nm-text-1);
-  text-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+  text-shadow: 0 0 12px var(--nm-cyan-25, rgba(0, 240, 255, 0.25));
 }
 .brandSub {
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-cyan);
   letter-spacing: 0.22em;
   text-transform: uppercase;
@@ -82,12 +82,58 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/**
+ * 顶栏右侧的**工具位**（主题切换），与页面标签分开。
+ *
+ * 为什么分开：主题切换不是「一页」—— 它跟着整个启动页走。混在 `.tabs` 里时它长得和
+ * 内容页标签一模一样（同样的圆角、同样的选中态），用户会以为点了会切走一块内容，
+ * 而且在窄窗口换行时它可能被推到标签中间。分开之后：左侧品牌、中间/右侧是页面与
+ * 两道闸门的标签，最右边是图标按钮。
+ */
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--nm-border, rgba(0, 240, 255, 0.16));
+  align-self: stretch;
+}
+.toolBtn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--nm-r-sm, 6px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--nm-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--nm-t-ui, 0.2s);
+  white-space: nowrap;
+}
+.toolBtn:hover {
+  color: var(--nm-cyan);
+  border-color: var(--nm-cyan-20, rgba(0, 240, 255, 0.2));
+  background: var(--nm-cyan-6, rgba(0, 240, 255, 0.06));
+}
+.toolBtn:focus-visible {
+  outline: 2px solid var(--nm-cyan);
+  outline-offset: 2px;
+}
 .tabDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--nm-green);
   box-shadow: 0 0 8px var(--nm-green);
+}
+/* 浅色主题下工具位的分隔线用同族令牌（.tabs 那条已有对应覆盖） */
+:global(.theme-light) .tools {
+  border-left-color: var(--nm-border, rgba(15, 23, 42, 0.12));
 }
 /* ── 内容区 ───────────────────────────────────────────── */
 .body {
@@ -98,7 +144,7 @@
   position: relative;
   z-index: 3;
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 240, 255, 0.25) transparent;
+  scrollbar-color: var(--nm-cyan-25, rgba(0, 240, 255, 0.25)) transparent;
 }
 /* ── 舞台页头（02–04） ───────────────────────────────── */
 .stageHead {
@@ -119,11 +165,11 @@
 .stageRule {
   width: 48px;
   height: 1px;
-  background: linear-gradient(90deg, var(--nm-cyan), rgba(168, 85, 247, 0.5), transparent);
+  background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple-50, rgba(168, 85, 247, 0.5)), transparent);
 }
 .stageTag {
   font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.2em;
   color: var(--nm-text-3);
 }
@@ -134,7 +180,7 @@
   letter-spacing: 0.01em;
   line-height: 1.2;
   color: var(--nm-text-1);
-  text-shadow: 0 2px 24px rgba(5, 10, 24, 0.55);
+  text-shadow: 0 2px 24px var(--nm-veil-55, rgba(5, 10, 24, 0.55));
 }
 .stageLead {
   margin: 0;
@@ -151,7 +197,7 @@
   align-items: start;
   margin-bottom: 40px;
 }
-@media (max-width: 960px) {
+@media (max-width: 900px) {
   .homeLayout {
     grid-template-columns: 1fr;
     gap: 28px;
@@ -172,17 +218,17 @@
   margin-bottom: 16px;
 }
 .heroTitle {
-  margin: 0 0 18px;
+  margin: 0 0 16px;
   font-size: clamp(30px, 4.2vw, 44px);
   font-weight: 800;
   line-height: 1.18;
   letter-spacing: -0.02em;
   color: var(--nm-text-1);
   max-width: 11em;
-  text-shadow: 0 2px 28px rgba(5, 10, 24, 0.5);
+  text-shadow: 0 2px 28px var(--nm-scrim-50, rgba(5, 10, 24, 0.5));
 }
 .heroTitleAccent {
-  background: linear-gradient(92deg, var(--nm-cyan) 0%, #38bdf8 42%, var(--nm-purple) 100%);
+  background: linear-gradient(92deg, var(--nm-cyan) 0%, var(--nm-sky, #38bdf8) 42%, var(--nm-purple) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -205,7 +251,7 @@
   height: 18px;
   margin-top: 3px;
   color: var(--nm-cyan);
-  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.45));
+  filter: drop-shadow(0 0 6px var(--nm-cyan-45, rgba(0, 240, 255, 0.45)));
 }
 .valueDesc {
   font-size: 12.5px;
@@ -217,25 +263,25 @@
   position: sticky;
   top: 12px;
   padding: 8px 0 0 20px;
-  border-left: 1px solid rgba(0, 240, 255, 0.14);
+  border-left: 1px solid var(--nm-cyan-14, rgba(0, 240, 255, 0.14));
   display: flex;
   flex-direction: column;
   gap: 26px;
 }
-@media (max-width: 960px) {
+@media (max-width: 900px) {
   .homeRail {
     position: static;
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 18px 32px;
+    gap: 16px 32px;
     border-left: none;
-    border-top: 1px solid rgba(0, 240, 255, 0.14);
-    padding: 18px 0 0;
+    border-top: 1px solid var(--nm-cyan-14, rgba(0, 240, 255, 0.14));
+    padding: 16px 0 0;
   }
 }
 .railLabel {
   font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.24em;
   color: var(--nm-text-3);
   margin-bottom: -10px;
@@ -245,7 +291,7 @@
 }
 .railKey {
   font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   letter-spacing: 0.16em;
   color: var(--nm-text-3);
   margin-bottom: 6px;
@@ -256,7 +302,7 @@
   font-weight: 700;
   line-height: 1.05;
   color: var(--nm-cyan);
-  text-shadow: 0 0 22px rgba(0, 240, 255, 0.4);
+  text-shadow: 0 0 22px var(--nm-cyan-40, rgba(0, 240, 255, 0.4));
 }
 .railHint {
   margin-top: 6px;
@@ -295,7 +341,7 @@
 }
 .moduleIdx {
   font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-3);
   letter-spacing: 0.1em;
 }
@@ -315,7 +361,7 @@
   width: 18px;
   height: 18px;
   color: var(--nm-cyan);
-  filter: drop-shadow(0 0 5px rgba(0, 240, 255, 0.4));
+  filter: drop-shadow(0 0 5px var(--nm-cyan-40, rgba(0, 240, 255, 0.4)));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -344,7 +390,7 @@
   font-size: 11px;
   color: var(--nm-text-3);
   padding-bottom: 2px;
-  border-bottom: 1px solid rgba(0, 240, 255, 0.16);
+  border-bottom: 1px solid var(--nm-cyan-16, rgba(0, 240, 255, 0.16));
 }
 /* ── 使用说明 ─────────────────────────────────────────── */
 .helpLayout {
@@ -367,6 +413,15 @@
   line-height: 1.75;
   color: var(--nm-text-2);
 }
+/* 「做完应看到什么」：使用说明每一步的验收线，弱化但可辨（不是正文的一部分）。 */
+.stepDone {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--nm-cyan-20, rgba(8, 145, 178, 0.2));
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-3);
+}
 .noticeCol {
   display: flex;
   flex-direction: column;
@@ -375,7 +430,7 @@
 }
 .notice {
   padding: 12px 0 12px 14px;
-  border-left: 1px solid rgba(245, 158, 11, 0.45);
+  border-left: 1px solid var(--nm-amber-45, rgba(245, 158, 11, 0.45));
 }
 .noticeTitle {
   font-size: 12.5px;
@@ -396,7 +451,7 @@
   gap: 40px 56px;
   align-items: start;
 }
-@media (max-width: 800px) {
+@media (max-width: 900px) {
   .aboutLayout { grid-template-columns: 1fr; }
 }
 .aboutBlock {
@@ -449,7 +504,7 @@
   height: 40px;
   flex-shrink: 0;
   position: relative;
-  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.35));
+  filter: drop-shadow(0 0 6px var(--nm-cyan-35, rgba(0, 240, 255, 0.35)));
 }
 .progressRing svg {
   width: 100%;
@@ -458,7 +513,7 @@
 }
 .ringTrack {
   fill: none;
-  stroke: rgba(0, 240, 255, 0.12);
+  stroke: var(--nm-cyan-12, rgba(0, 240, 255, 0.12));
   stroke-width: 3;
 }
 .ringValue {
@@ -467,7 +522,7 @@
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.45s var(--nm-ease, ease);
-  filter: drop-shadow(0 0 4px rgba(0, 240, 255, 0.6));
+  filter: drop-shadow(0 0 4px var(--nm-cyan-60, rgba(0, 240, 255, 0.6)));
 }
 .ringLabel {
   position: absolute;
@@ -475,7 +530,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 700;
   color: var(--nm-cyan);
   font-family: var(--nm-font-mono, monospace);
@@ -508,16 +563,4 @@
 @media (max-height: 700px) {
   .body { padding: 16px 24px 10px; }
   .heroTitle { font-size: 26px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .reveal,
-  .animSlideL,
-  .animSlideR,
-  .animSlideU,
-  .animFade,
-  .animScale {
-    transition: none !important;
-    opacity: 1 !important;
-    transform: none !important;
-  }
 }

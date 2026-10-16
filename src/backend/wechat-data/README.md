@@ -36,10 +36,11 @@
 | 微信库解密密钥、图片 AES/XOR 密钥、HTTP API 令牌 | `<数据根>/secrets.json`（与后端 config.json 同级） | 后端 `query/config.ts`（`SECRET_FIELDS`） |
 | 自动获取的密钥（库密钥 + 图片 AES/XOR） | `<数据根>/keys.json` | `keys/key-store.ts` |
 
-`keys.json` 目前**只有一个 `'default'` 槽位**（`keys/service.ts` 的三处写入都用这个字面量），
-不按 wxid 分账 —— 所以同机换过账号时，那里面可能是上一个账号的密钥。解码侧因此加了归属校验：
-记录里写明属于别的账号（`image_key_derived_wxid`，或内存扫描路径记的 `image_key_source_wxid_dir`）
-且与当前账号明确不同时，按「没有密钥」处理，而不是拿错的钥匙解出一张垃圾图（详见 `RELEASE-PLAN.md` N28）。
+`keys.json` 按账号分槽：能确定归属的自动获取结果写 `wxid_…` 槽，确定不了
+（老别名目录、扫描路径只拿到目录名）才继续写 `'default'`（`keys/service.ts` 的
+`dbKeySlotFor` / `imageKeySlotFor`）。读取侧先查当前账号槽、再回退 `default`，并保留
+归属校验：记录明确属于别的账号时按「没有密钥」处理，而不是拿错的钥匙解出一张垃圾图
+（详见 `RELEASE-PLAN.md` N28 / W2-2.2）。
 手工填写并保存的密钥仍走 `secrets.json`，且**优先级高于**这里自动获取的结果。
 | LLM API Key | `<STATE_DIR>/llm.json` | 宿主层 `wechat-paths.js` |
 
@@ -101,7 +102,12 @@
 - `DSH_WECHAT_DECRYPTED_DIR` / `DSH_WECHAT_DECODED_DIR` — 旧版显式固定路径（设置后绕过数据根，不再自举）
 - `DSH_WECHAT_BASE_DIR` — 原始微信目录（可选，`.dat` 回退用）
 
-## Remote 方法（gateway.ts）
+## Remote 方法
+
+> **完整清单以自动生成的 `docs/API.md` 为准（当前 195 个）** —— 下面只是分组概览，
+> 历史上一度在这里手抄全表，结果漏了一大半还不断过期。改接口请跑 `npm run docs:api`，
+> 不要再往这里加方法名。
+
 
 | 分组 | 方法 |
 |---|---|
@@ -118,27 +124,28 @@
 
 ## 前端
 
-浏览器端在 `packages/client/ui-pages/src/client/pages/wechat-data/`：
+浏览器端在 `src/client/ui-wechat/src/client/pages/wechat-data/`：
 
 - `api.ts` — Remote 客户端（`setWechatRemote` 注入，无 HTTP 依赖）
-- `WechatDataPanel.tsx` — 32 页签主容器
+- `WechatDataPanel.tsx` — 37 页签主容器（`nav-config.ts` 是导航真源）
 - `panels/` — 各面板 + 图片查看器/日历/搜索
 - `utils/format.ts` — 迁移的格式化/图标工具
 
 ## 构建
 
 ```sh
-npx tsc -b packages/host/wechat-data/tsconfig.json   # 类型检查
-npx tsdown --env.DSH_BUILD_FACE host                 # 构建 lib + typert 生成
-pnpm --filter @deepseek-ai/dsh-client-ui-pages run bundle
-pnpm --filter @deepseek-ai/dsh-api-remotes run bundle
+npm run build:backend   # esbuild 打包 → src/backend/wechat-data/lib/index.js（入仓）
+npm run build:types     # 生成 lib/types/**（入仓，与源必须同步）
+npm run build:ui        # 前端产物
 ```
+
+> 上面三条都是**仓库根**的 npm scripts；旧的 `packages/*` pnpm workspace 路径已废弃。
 
 ## 降级项
 
 - 语音 silk→wav：Node 无 ffmpeg/WASM 解码器 → 返回时长 + 降级提示
-- 视频/HEVC（wxgf）：需系统解码器 → 封面或占位
-- 高清原图（wxgf/HEVC）：未缓存源时以缩略图 `_t/_h` 兜底；监控为本地轮询仪表盘（8 秒刷新，无进程注入）
+- 视频/HEVC（wxgf）：需系统解码器 → 封面或占位（**图片**的 wxgf 已可解，见下一条）
+- 高清原图（wxgf）：**已实现**——调微信安装目录的解码库（`VoipEngine.dll`，`query/wxam-image.ts`）转成 JPEG，解码库缺失/转码失败时退回 `_t` 缩略图。仍然**无进程注入、无 Hook**（DLL 加载进本进程，不碰微信进程）。
 - 备份：目录快照 / AES-256 加密 `.wcb`（本包实现加密与恢复）
 
 
@@ -162,11 +169,12 @@ No KV cache is written or read by this package; the provider adapter owns any ca
 
 - **数据同步与解密**：本包通过 `sync.ts` 在本地监视原始分片并解密（SQLCipher 4，PBKDF2-HMAC-SHA512 + AES-256），注入自有数据根，不依赖 st_control 进程。
 - **语音/视频降级**：silk→wav 与 HEVC 需系统解码器，Node 侧返回时长/封面或占位。
+- **图片 wxgf 转码**：`VoipEngine.dll` 的 `wxam_dec_wxam2pic_5`（第 5 参必须传全零的 ≥0x20 字节结构，传 NULL 会崩进程；输出截断到最后一个 `FF D9`）。开关 `DSH_WECHAT_WXGF=0`、路径覆盖 `DSH_WECHAT_VOIP_ENGINE`。
 - **朋友圈媒体**：图片走 `cache/<月>/Sns/Img` 本地 V2 解密（密钥优先 config.json，回退 keys.json 自动获取结果）；视频展示本地 `Sns/Video` 封面（`msg/video` 缩略图兜底），视频本体暂不播放。
-- **监控与原图**：监控为本地轮询仪表盘；原图走本地缓存与解码，未缓存的高清源以缩略图兜底；无进程注入/无 Hook。
+- **监控与原图**：监控为本地轮询仪表盘；原图走本地缓存与解码（wxgf 可转码），解码库不可用时以缩略图兜底；无进程注入/无 Hook。
 - **备份**：目录快照与 AES-256 加密 `.wcb` 均为本包实现；`.wcb` 为自包含格式，非外部加密 ZIP。
 
 
 ## 参考文档
 
-- [微信数据库字段字典](docs/wechat-db-fields.md)：18 个库 / 60+ 表的字段语义（会话/联系人/消息/转账红包/朋友圈/收藏/头像/硬链接等）。
+- Remote 接口参考见 [`docs/API.md`](../../../docs/API.md)，由 `@Remote` 装饰器自动生成。

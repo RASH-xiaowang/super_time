@@ -3,14 +3,19 @@
  * decrypted text messages, aggregating per-category counts + samples and
  * TOP contact/group rankings (mirror of wechat/privacy.rs).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { cachedBySigAsync, fileSigOf, shardCatalogSig } from './meta.ts'
+import { withDb, withDbAsync } from './db-open.ts'
+import { yieldToLoop } from './search-build.ts'
 
 interface PrivacyCategory { key: string; label: string; count: number; icon: string; samples: PrivacySample[] }
 interface PrivacySample { username: string; name: string; local_id: number; ts: number; time: string; snippet: string }
 interface PrivacyRank { username: string; name: string; count: number }
+/** 隐私体检快照（`queryPrivacyScan` 的返回形状）。 */
+interface PrivacyScanResult { categories: PrivacyCategory[]; total_hits: number; involved_sessions: number; top_contacts: PrivacyRank[]; top_groups: PrivacyRank[] }
 
 const CATEGORIES: ReadonlyArray<{ key: string; label: string; icon: string; re: RegExp; insensitive: boolean }> = [
   { key: 'phone', label: '手机号', icon: '📱', re: /1[3-9]\d{9}/g, insensitive: false },
@@ -20,6 +25,17 @@ const CATEGORIES: ReadonlyArray<{ key: string; label: string; icon: string; re: 
   { key: 'password', label: '密码口令', icon: '🔑', re: /(?:密码|口令|pwd|password|passwd)\s*[=:：]\s*[A-Za-z0-9@#$%^&*!_.-]{4,32}/g, insensitive: true },
   { key: 'address', label: '地址信息', icon: '📍', re: /(?:住在|地址|住址|小区|门牌号|大厦|宿舍)[^\n，。！？]{2,60}/g, insensitive: false },
 ]
+
+/**
+ * 每个类别**预先编译好**的正则（P1-4）。
+ *
+ * 原先写在扫描的内层循环里：`spec.insensitive ? new RegExp(spec.re.source, 'gi') : spec.re`
+ * —— 那是「每一行 × 每一个不敏感类别」都重编译一遍同样的东西。`rowBudget` 是 60 万行，
+ * email / password 两类都在里面 ⇒ 最坏情况几十万次编译，而它量出来的代价就是
+ * 「隐私体检开一次要等约 1 秒」（本机 1020ms 冷 / 1000ms 热 —— 热还这么慢，因为后端没缓存）。
+ * 共享实例的 `lastIndex` 在每次使用前显式归零（扫描是单线程的，不存在交叉）。
+ */
+const SCAN_RES: ReadonlyArray<RegExp> = CATEGORIES.map(c => (c.insensitive ? new RegExp(c.re.source, 'gi') : c.re))
 
 /** Build a snippet centered on the first match (source make_snippet). */
 function makeSnippet(text: string, matched: string): string {
@@ -51,19 +67,19 @@ function cellStr(v: unknown): string {
 function loadSessionUsernames(decryptedDir: string): string[] {
   const out: string[] = []
   try {
-    const db = new DatabaseSync(join(decryptedDir, 'session', 'session.db'), { readOnly: true })
+    withDb(join(decryptedDir, 'session', 'session.db'), (db) => {
     const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='SessionTable'").get() !== undefined
-    if (!has) { db.close(); return out }
+    if (!has) return
     const cols = new Set((db.prepare('PRAGMA table_info(SessionTable)').all() as Array<{ name: string }>).map(r => r.name))
     const userCol = cols.has('username') ? 'username' : cols.has('UserName') ? 'UserName' : ''
-    if (!userCol) { db.close(); return out }
+    if (!userCol) return
     // 会话量级（N8 评估）：随会话数增长，不随消息数
     const rows = db.prepare(`SELECT ${userCol} AS u FROM SessionTable`).all() as Array<{ u?: unknown }>
     for (const r of rows) {
       const u = cellStr(r.u ?? '')
       if (u) out.push(u)
     }
-    db.close()
+    })
   } catch { /* session db unavailable */ }
   return out
 }
@@ -72,9 +88,9 @@ function loadSessionUsernames(decryptedDir: string): string[] {
 function loadDisplayNames(decryptedDir: string): Map<string, string> {
   const map = new Map<string, string>()
   try {
-    const db = new DatabaseSync(join(decryptedDir, 'contact', 'contact.db'), { readOnly: true })
+    withDb(join(decryptedDir, 'contact', 'contact.db'), (db) => {
     const cols = new Set((db.prepare('PRAGMA table_info(contact)').all() as Array<{ name: string }>).map(r => r.name))
-    if (!cols.has('username')) { db.close(); return map }
+    if (!cols.has('username')) return
     const remark = cols.has('remark') ? 'remark' : cols.has('Remark') ? 'Remark' : 'NULL'
     const nick = cols.has('nick_name') ? 'nick_name' : cols.has('NickName') ? 'NickName' : 'nickName'
     // 联系人量级（N8 评估）：随联系人数增长（本机 2143 行），不随消息数
@@ -84,7 +100,7 @@ function loadDisplayNames(decryptedDir: string): Map<string, string> {
       const n = cellStr(r['n'] ?? '').trim()
       if (u && n) map.set(u, n)
     }
-    db.close()
+    })
   } catch { /* contact db unavailable */ }
   return map
 }
@@ -104,13 +120,25 @@ function decodeCell(v: unknown): string {
  * @param rowBudget - max scanned rows (default 600000, source budget).
  * @returns categories with samples + rankings.
  */
-export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
-  categories: PrivacyCategory[]
-  total_hits: number
-  involved_sessions: number
-  top_contacts: PrivacyRank[]
-  top_groups: PrivacyRank[]
-} {
+export async function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): Promise<PrivacyScanResult> {
+  // 签名 = 消息分片目录 + 会话库 + 通讯录库（`rowBudget` 进键，不同预算不互相污染）。
+  // 这一层是「热跑也要 1 秒」的直接解药：扫描本身是 60 万行的量级，
+  // 界面每次打开隐私体检都重跑一遍毫无意义 —— 数据没变就拿同一份结果。
+  const sig = [
+    shardCatalogSig(decryptedDir, ['message']),
+    fileSigOf(join(decryptedDir, 'session', 'session.db')),
+    fileSigOf(join(decryptedDir, 'contact', 'contact.db')),
+  ].join('|')
+  return cachedBySigAsync('privacy-scan:' + decryptedDir + '|' + String(rowBudget), sig, () => computePrivacyScan(decryptedDir, rowBudget))
+}
+
+/**
+ * 隐私扫描每多少行让出一次（P1-2）。
+ * 导出给守卫用例**按这个数造数据**：判据量的是「让出次数」，不能依赖墙上时钟。
+ */
+export const PRIVACY_YIELD_EVERY_ROWS = 5000
+
+async function computePrivacyScan(decryptedDir: string, rowBudget: number): Promise<PrivacyScanResult> {
   const msgDir = join(decryptedDir, 'message')
   const categories: PrivacyCategory[] = CATEGORIES.map(c => ({ key: c.key, label: c.label, count: 0, icon: c.icon, samples: [] }))
   const hitsByKey = new Map<string, PrivacySample[]>()
@@ -128,25 +156,28 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
     for (const username of targetUsernames) tableToUser.set('Msg_' + createHash('md5').update(username, 'utf8').digest('hex'), username)
     const fileInfos: Array<{ path: string; tables: Array<[string, string]> }> = []
     for (const file of shards) {
-      let probe: DatabaseSync | null = null
-      try { probe = new DatabaseSync(join(msgDir, file), { readOnly: true }) } catch { continue }
+      // P1-2：探测阶段每个分片开一次库，也要在分片之间让出（实测机器上 80+ 个分片）。
+      await yieldToLoop()
       try {
-        const names = (probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all() as Array<{ name: string }>).map(r => r.name)
-        const tables: Array<[string, string]> = []
-        for (const n of names) {
-          const u = tableToUser.get(n)
-          if (u) tables.push([n, u])
-        }
-        if (tables.length > 0) fileInfos.push({ path: join(msgDir, file), tables })
-      } catch { /* skip */ } finally { probe.close() }
+        withDb(join(msgDir, file), (probe) => {
+          const names = (probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all() as Array<{ name: string }>).map(r => r.name)
+          const tables: Array<[string, string]> = []
+          for (const n of names) {
+            const u = tableToUser.get(n)
+            if (u) tables.push([n, u])
+          }
+          if (tables.length > 0) fileInfos.push({ path: join(msgDir, file), tables })
+        })
+      } catch { /* 这个分片开不了 / 读不了：跳过 */ }
     }
     for (const fi of fileInfos) {
       if (scanned >= rowBudget) break
-      let db: DatabaseSync | null = null
-      try { db = new DatabaseSync(fi.path, { readOnly: true }) } catch { continue }
       try {
+        await withDbAsync(fi.path, async (db) => {
         for (const [tableName, username] of fi.tables) {
           if (scanned >= rowBudget) break
+          // 每张 Msg_ 表一次游标扫描 —— 表之间先让一次（几百张表 ⇒ 几百次让出）。
+          await yieldToLoop()
           try {
             const cols = new Set((db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map(r => r.name))
             if (!cols.has('local_id') || !cols.has('create_time') || !cols.has('message_content')) continue
@@ -157,6 +188,8 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
             const sql = `SELECT local_id, create_time, message_content FROM ${tableName} WHERE ${typeCol}=1`
             for (const r of db.prepare(sql).iterate() as Iterable<{ local_id?: number; create_time?: number; message_content?: unknown }>) {
               scanned += 1
+              // 行级让出：单张大表（几十万人聊天的一年记录）光靠表边界是不够的。
+              if (scanned % PRIVACY_YIELD_EVERY_ROWS === 0) await yieldToLoop()
               if (scanned >= rowBudget) break
               const text = decodeCell(r.message_content)
               if (!text || text.startsWith('<')) continue
@@ -168,7 +201,8 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
                 if (cat === undefined) continue
                 const spec = CATEGORIES[ci]
                 if (!spec) continue
-                const re = spec.insensitive ? new RegExp(spec.re.source, 'gi') : spec.re
+                const re = SCAN_RES[ci]
+                if (!re) continue
                 re.lastIndex = 0
                 const m = re.exec(text)
                 if (!m) continue
@@ -193,7 +227,8 @@ export function queryPrivacyScan(decryptedDir: string, rowBudget = 600000): {
             involved += 1
           } catch { /* next table */ }
         }
-      } finally { db.close() }
+        })
+      } catch { /* 整个分片开不了：跳过（与旧写的 `catch { continue }` 同口径） */ }
     }
   }
   for (const c of categories) c.samples = hitsByKey.get(c.key) ?? []

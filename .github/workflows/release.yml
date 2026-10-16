@@ -22,9 +22,18 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 60
+    # tag push 不会触发 ci.yml，因此全量变异自证必须在发布链路里自己跑一遍。
+    # 单元测试、全量变异、打包态检查串行后耗时明显高于旧上限，给足 Windows runner 余量。
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 2026-10-16 加：`npm test` 里的 `mutation-scope.spec.ts` 会跑
+          # `git diff --name-only HEAD~1...HEAD` 来验证「增量选取与登记表对得上」，
+          # 而默认的浅克隆（depth=1）没有 `HEAD~1` ⇒ 该用例必红（v1.0.8 首次发布实测：
+          # 单元测试 1 failed / 5467 passed，后续打包与发布步骤全被跳过）。
+          # 与 ci.yml / nightly.yml 保持一致：拉全历史。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -33,14 +42,75 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # ── Electron 二进制要单独取 ──
+      # 2026-10-16 加：`node_modules/electron` 这个包在本仓库里没有 postinstall
+      # （包的 `scripts` 字段是空的），所以 `npm ci` 只装 JS 包、不落 `dist/electron.exe`。
+      # 而「朋友圈视频 · 打包件字节比对」要跑 `node_modules/electron/dist/electron.exe`
+      # 来验证打包版加载的 wasm 在 Electron 运行时下能实例化 —— 缺了它 spawnSync 直接
+      # ENOENT（status=null），被脚本误报成「超时」（v1.0.8 发布实测踩到）。
+      # ci.yml / nightly.yml 都有这一步，唯独 release.yml 漏了。
+      - name: 准备 Electron 二进制（打包件比对要真 Electron 运行时）
+        run: node node_modules/electron/install.js
+
       # ── 发布门禁：必须在这里自己跑 ──
       # ci.yml 只监听分支（`branches: ['**']` 不匹配 tag），**tag 推送不会触发它**，
       # 所以「CI 绿了再发版」这条链路并不成立 —— 不自己跑就等于没验过就发版。
       - name: 类型检查
         run: npm run typecheck
 
+      # 2026-10-16：改用 `ci-unit-step.mjs` 包装（与 ci.yml 一致），不再直接 `npm test`。
+      # 原因：vitest 在 CI 上偶发「已归因的 RPC 假红」——用例全过（5468 passed）但
+      # worker 报 `Timeout calling "onTaskUpdate"` ⇒ 退出码 1。ci.yml 有这层包装
+      # （按 N36 政策允许一次带记录的重跑），而 release.yml 直接跑 npm test 就会
+      # 把这种假红当成真失败，把整条发布链掐断（v1.0.8 实测：单元测试 5468 passed
+      # 却判 failure，后续打包与发布全被跳过）。
       - name: 单元测试
-        run: npm test
+        shell: pwsh
+        env:
+          # 2026-10-16：发布链把「已归因的假红」重跑上限提到 3（PR 门禁仍是默认 1）。
+          # 理由：tag 推送不会自动重跑整条工作流，而这类假红是环境停顿（分段墙钟已证明
+          # 不在测试代码里），CI 上连续两次撞上并不罕见（v1.0.8 实测：两次都是
+          # 5468 passed + onTaskUpdate 超时 + 退出码 1）。判据没放宽 —— 每次重跑前仍要过
+          # classifyRun 三条，出现真失败立刻红。
+          SUPERTIME_UNIT_MAX_RETRIES: '3'
+        run: |
+          $out = node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ci-unit-step.mjs 2>&1 | Out-String
+          Write-Host $out
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "## 单元测试（发布门禁）`n`n``````n$out`n``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # tag 发布只走这条 workflow，而 nightly 可能排在发版之后；发版产物比 PR
+      # 门禁更接近用户，不能只靠「合并前绿过」或夜间档的异步证明。
+      - name: 变异自证（全量）
+        timeout-minutes: 60
+        run: npm run check:mutation
+
+      # 与 PR 门禁同级的便宜静态检查：发版前不能比合并前更宽松。
+      - name: 接口参考与源码一致
+        run: npm run docs:api:check
+
+      - name: 后端源码 lint
+        run: npm run lint:db
+
+      - name: 依赖来源核对
+        run: npm run check:deps-provenance
+
+      # tag push 不触发 ci.yml，所以这里不能只依赖「合并前绿过」。
+      # pack/dist 虽然会重建入库产物，但不能靠打包时“顺手修好”蒙混过：
+      # 发布前先要求重建后 git diff 为空，避免发布包与 tag 源码不一致。
+      - name: 后端 bundle 与源码一致
+        run: npm run check:backend
+        shell: pwsh
+
+      - name: 后端类型声明与源码一致
+        run: npm run check:types
+        shell: pwsh
+
+      - name: 性能基准（18 个快的）
+        timeout-minutes: 10
+        run: npm run measure:quick
 
       # ── 版本一致性门禁 ──
       # 最容易犯、也最难发现的错：tag 写 v1.2.0 而 package.json 还是 1.0.0。
@@ -58,11 +128,47 @@ jobs:
           }
           Write-Host "版本一致：$tag"
 
-      # `npm run dist` = 先 build:ui 再 electron-builder --win nsis。
+      # `npm run dist` = 先 build:all 再 electron-builder --win nsis。
       # `-- --publish always` 把参数追加到脚本末尾，最终是
-      # `npm run build:ui && electron-builder --win nsis --publish always`。
+      # `npm run build:all && electron-builder --win nsis --publish always`。
       # publish 配置里的 releaseType 是 release（不是默认的 draft）：
       # draft 发布对 electron-updater **不可见**，会让更新静默失效。
+      # ── 2026-10-09 阶段 2：第三档（打包态）检查，**必须在发布之前** ──────────────
+      #
+      # 为什么插在发布前：下一步就是 `--publish always`，一步到位发布。
+      # 打包态检查放它后面 ⇒ 失败时版本**已经发出去了**，只能再发一个补丁号。
+      # 而打包态恰恰是最容易「源码态绿、打包后坏」的一类（asar、resources 路径
+      # 只在打包态才成立，源码态根本走不到那段代码）。
+      #
+      # `npm run pack` 只做 `electron-builder --dir`（不产安装包），比 `dist` 快，
+      # 够这三个冒烟读 `dist/win-unpacked` 用。
+      - name: 打包态准备（仅 --dir，不出安装包）
+        run: npm run pack
+        timeout-minutes: 30
+
+      # 朋友圈视频那条通路的打包件比对。⚠️ 它**缺打包件时会 exit 0**（脚本自己打印
+      # 「这一条不算通过」但退出码是 0）—— 所以它只在这个「刚 pack 过」的 job 里有意义，
+      # 放进任何一个没有 `npm run pack` 的门禁都是空跑的绿灯。
+      - name: 朋友圈视频 · 打包件字节比对
+        run: npm run package:sns-video:smoke
+        timeout-minutes: 10
+
+      - name: 密钥迁移打包态冒烟（M1）
+        run: npm run m1-secrets:smoke
+        timeout-minutes: 10
+
+      # 这些打包态检查此前只存在于 nightly：发版产物比合并门禁更接近用户，不能漏。
+      - name: 打包态冒烟（内容 / 体积 / 依赖闭包 / 方法数）
+        run: npm run package:smoke
+        timeout-minutes: 25
+
+      - name: 打包态安全守卫（开窗 / 导航被拒）
+        run: npm run security-guard:smoke:packaged
+        timeout-minutes: 10
+
+      - name: 前端 shim 与源码一致
+        run: npm run check:shim
+
       - name: 打包并发布到 Releases
         run: npm run dist -- --publish always
         env:

@@ -29,11 +29,11 @@
 }
 
 .catBtn {
-  padding: 5px 12px;
+  padding: 4px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-card);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
@@ -64,7 +64,7 @@
 
 .indexLetter {
   pointer-events: auto; width: 18px; height: 15px; border: none; background: transparent;
-  color: var(--nm-text-2); font-size: 10.5px; line-height: 1; cursor: pointer; border-radius: 4px;
+  color: var(--nm-text-2); font-size: var(--nm-fs-xs, 11px); line-height: 1; cursor: pointer; border-radius: var(--nm-r-xs);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   transition: all 0.15s;
@@ -102,7 +102,7 @@
 .letterHd::before {
   content: ''; display: inline-block; width: 3px; height: 10px;
   margin-right: 6px; vertical-align: middle;
-  border-radius: 2px;
+  border-radius: var(--nm-r-xs);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
 }
 
@@ -133,7 +133,7 @@
      因此整屏卡片的长宽是同一个值，不会出现「有的高有的矮」。 */
   height: 46px;
   min-width: 0;
-  display: flex; align-items: center; gap: 9px; padding: 0 8px;
+  display: flex; align-items: center; gap: 8px; padding: 0 8px;
   border-radius: var(--nm-r-sm);
   cursor: pointer;
   border: 1px solid transparent;
@@ -166,7 +166,7 @@
 }
 
 .contactMeta {
-  font-size: 10.5px; color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
   font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -178,7 +178,7 @@
   padding: 6px 12px; font-size: 12px; color: var(--nm-success);
   background: color-mix(in srgb, var(--nm-success) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-success) 20%, transparent);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
 }
 
 .profileHd { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -214,7 +214,7 @@
 .commonGroups { display: flex; flex-wrap: wrap; gap: 6px; }
 .groupChip {
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 2px 10px;
   font-size: 11px;
   color: var(--nm-text-1);
@@ -227,12 +227,6 @@
 
 .profileActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
-.linkBtn {
-  background: none; border: none; padding: 0; color: var(--nm-cyan); cursor: pointer;
-  font-size: 12px; font-weight: 600; text-align: left; word-break: break-all;
-  transition: all 0.15s;
-}
-.linkBtn:hover { text-decoration: underline; color: var(--nm-purple); text-shadow: 0 0 8px color-mix(in srgb, var(--nm-cyan) 35%, transparent); }
 
 .avatarImg {  display: block; object-fit: cover;
   border-radius: var(--nm-r-md);

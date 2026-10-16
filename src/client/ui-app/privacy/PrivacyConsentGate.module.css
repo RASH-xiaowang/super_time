@@ -30,7 +30,7 @@
   max-width: 1200px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
 /* ── 左右两栏，小节按序流下 ───────────────────────────────
@@ -50,7 +50,7 @@
   min-width: 0;
 }
 /* 窗口不够宽时退回单列，读起来才不至于两栏都挤 */
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -82,7 +82,7 @@
   color: var(--nm-cyan, #00f0ff);
   background: var(--nm-cyan-10, rgba(0, 240, 255, 0.1));
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
-  border-radius: 5px;
+  border-radius: var(--nm-r-sm, 6px);
   padding: 1px 6px;
 }
 
@@ -90,7 +90,7 @@
 .verdict {
   position: relative;
   padding: 16px 20px 16px 22px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg, 14px);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);
   background: linear-gradient(
     135deg,
@@ -105,12 +105,12 @@
   top: 12px;
   bottom: 12px;
   width: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs, 4px);
   background: var(--nm-cyan, #00f0ff);
 }
 .verdictTag {
   display: block;
-  margin-bottom: 9px;
+  margin-bottom: 8px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -122,7 +122,7 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 .verdictList li {
   position: relative;
@@ -141,8 +141,8 @@
 
 /* ── 编号分节 ───────────────────────────────────────────── */
 .sec {
-  padding: 16px 18px;
-  border-radius: 12px;
+  padding: 16px 20px;
+  border-radius: var(--nm-r-lg, 14px);
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: var(--nm-bg-card, #0f172a);
   /* 出网点的行布局按**卡片自身宽度**适配（见文末 @container），
@@ -164,13 +164,13 @@
   line-height: 1.8;
   color: var(--nm-text-2, #94a3b8);
 }
-.p + .p { margin-top: 7px; }
+.p + .p { margin-top: 8px; }
 
 /* 关键句：本节的「圈起来」落点 */
 .keyBox {
   margin: 11px 0 0;
   padding: 11px 14px;
-  border-radius: 9px;
+  border-radius: var(--nm-r-md, 10px);
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.75;
@@ -180,11 +180,11 @@
 }
 
 /* 保证条款：逐条独立成格，便于数清「做了/没做」 */
-.pills { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 .pill {
   font-size: 12.5px;
   font-weight: 600;
-  padding: 5px 11px;
+  padding: 4px 11px;
   border-radius: 999px;
   color: var(--nm-text-1, #e2e8f0);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 26%, transparent);
@@ -204,7 +204,7 @@
   color: var(--nm-text-2, #94a3b8);
 }
 .statChip {
-  padding: 3px 9px;
+  padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: color-mix(in srgb, var(--nm-text-3) 8%, transparent);
@@ -222,7 +222,7 @@
   gap: 12px;
   align-items: start;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md, 10px);
   border: 1px solid var(--nm-border, rgba(0, 240, 255, 0.1));
   background: var(--nm-bg-hover, rgba(0, 240, 255, 0.06));
 }
@@ -284,7 +284,7 @@
   top: 9px;
   bottom: 9px;
   width: 3px;
-  border-radius: 3px;
+  border-radius: var(--nm-r-xs, 4px);
   background: var(--nm-amber, #f59e0b);
 }
 .rowNone .rowLabel { color: var(--nm-amber, #f59e0b); }
@@ -298,7 +298,7 @@
 .caveat {
   margin: 12px 0 0;
   padding: 11px 14px;
-  border-radius: 9px;
+  border-radius: var(--nm-r-md, 10px);
   font-size: 12.5px;
   line-height: 1.75;
   color: var(--nm-text-2, #94a3b8);
@@ -313,7 +313,7 @@
   gap: 12px;
   align-items: flex-start;
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg, 14px);
   cursor: pointer;
   border: 1px solid var(--nm-border-hover, rgba(0, 240, 255, 0.25));
   background: var(--nm-bg-card, #0f172a);
@@ -337,10 +337,98 @@
   color: var(--nm-text-1, #e2e8f0);
 }
 
+/* 同意区**在文档流内**（2026-09-30 用户要求：「这块不要弄成悬浮式的」）。
+ *
+ * 它的上一版是 `position: sticky; bottom: 0` 的吸底条（2026-09-29 重设计 A 第一步，理由是
+ * 「界面很长，勾选与两个按钮必须始终可见」）。悬浮条压在正文上有两个副作用：滚到中段时
+ * 它盖住最后一行内容、且**看起来像一层面板浮在页面之上**而不是文档的一部分。现在它跟着
+ * 文档流排在两栏之后作为最后一段出现：`.shell` 底部本来就有 56px 内边距，滚到底即可
+ * 勾选并点按钮；`OnboardingShell` 底栏也会提示「请阅读后勾选，再点「同意并继续」」。
+ *
+ * 保留一条 `border-top` 作分隔（它现在是排版元素，不再是遮挡层的边界）。 */
+.consentBar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--nm-border, rgba(255, 255, 255, 0.12));
+}
+/* ── 出网点「表格化」+ 小结提权（2026-09-29 重设计 A 第二步）────────────────────
+ *
+ * 目标：让用户一眼看清「什么会出去 / 去哪 / 能不能关」。
+ *
+ * 为什么用 `[data-switch]` 作为作用域：本界面左右两栏都用 `.row`（左栏的「你的控制」也是），
+ * 直接改 `.row` 会连带左栏；而出网行都带 `data-switch` 属性 ⇒ 用它精确勾住这一节，
+ * **零 JSX 改动**（也就不影响复用同一界面的 `privacy-consent-ssr.tsx`）。
+ */
+/* ⚠️ 这里原先我加过一条 `.rows > [data-switch] { grid-template-columns: minmax(88px,132px) … }`，
+   想"表格化"出网点。**2026-09-29 撤掉**：`.row` 本来就是 `170px minmax(0,1fr) auto`，
+   而 `.sec` 文末还有 `@container` 按**卡片自身宽度**自适应（窄栏自动折行、拉宽恢复三栏）。
+   我那条固定窄列覆盖了它 ⇒ 右栏标题被断成"远程图片 / 视频 / 公众 号封面"。
+   结论：**既有布局已经是对的，不该覆盖**——需要调宽度时改 `.row` 的列定义或那段 @container。 */
+
+/* 小结提权：这是整个界面里决策价值最高的一行，之前是四枚小字 chip，太容易被略过 */
+.stat {
+  margin-bottom: 10px;
+}
+
+/* （2026-09-29 曾在此加过 `<details>` 折叠节的 ▸/▾ 指示与 `::marker` 清除规则。
+   用户要求**移除折叠、内容全部展开**后，这些规则已无用，一并删除，避免留下"看着像折叠、
+   其实没有折叠"的误导性样式。内容现在由 `<section>` 常显。） */
+
+.statChip,
+.statChipWarn {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
+/* ═══ 全新布局（2026-09-29）：决策优先的单列流 ═══════════════════════════════════
+ *
+ * 为什么要重排：原两栏下，折叠后的左栏只到约 640px、右栏到约 1100px ⇒ 左下角一大片空白；
+ * 而"你要决策的内容"（出网点清单）与"我们怎么做"的说明并列，视觉权重相当，抓不到重点。
+ *
+ * 做法（**零 JSX 改动** ⇒ 不影响复用同一界面的 `privacy-consent-ssr.tsx`）：
+ *   · `.col { display: contents }` 消掉两栏，所有卡片成为 `.grid` 的直接子项；
+ *   · `.grid` 改成单列；
+ *   · 用 `order` 重排成：① 一句话结论 → ② 出网点清单 → ③ 三节折叠说明。
+ *
+ * 收益：出网点拿到**整行宽度**（`.row` 原本的 170px 标签列终于有地方用，不再断行），
+ * 且不再存在两栏高度不平衡 ⇒ 左下空白消失。
+ */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.col {
+  display: contents;
+}
+
+.verdict {
+  order: 1;
+}
+
+/* 「会出网的地方」那一节：小结行（.stat）是它独有的特征 */
+.sec:has(.stat) {
+  order: 2;
+}
+
+/* 三节说明（现已全部常显）排到决策内容之后。
+   注意：这里必须用 `.sec`（不是 previous 的 `details.sec`）—— 展开后它们是 `<section>`，
+   若沿用 `details.sec` 选择器，这三节会因"没有 order"而排到 `.verdict`（order:1）**前面**。 */
+.sec {
+  order: 3;
+}
+
 .actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
+
 .btn {
-  padding: 10px 18px;
-  border-radius: 10px;
+  padding: 10px 20px;
+  border-radius: var(--nm-r-md, 10px);
   font-family: inherit;
   font-size: 13px;
   cursor: pointer;

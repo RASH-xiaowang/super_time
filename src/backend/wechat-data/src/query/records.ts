@@ -3,11 +3,14 @@
  * rewritten from st_control general_records/lists.rs. The revoked cache lives
  * in message shards (handlers/data/revoked.rs mirror).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
+import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RecordItem } from '../types.ts'
 import { contactMeta } from './meta.ts'
+import { archiveRevokeCache, readArchivedRevoke } from './anti-revoke-archive.ts'
+import { archiveMessages, queryRevokedRetained } from './revoke-retain.ts'
 
 /** Stringify an SQLite cell (TEXT/NUMBER/BLOB) to a string. */
 function cellString(v: unknown): string {
@@ -64,21 +67,27 @@ function timeRangeSql(timeCol: string, from: number, to: number): string {
   return parts.length > 0 ? parts.join(' AND') : ''
 }
 
-/** Locate the revoke cache table across message shards. */
-function findRevokeTable(decryptedDir: string): { db: DatabaseSync | null; table: string } {
+/**
+ * Locate the revoke cache table across message shards.
+ * 交出的是**位置**（文件 + 表名）而不是连接：原先 `if (hit) return { db, ... }` 之外
+ * 还有 `catch { /* next *\/ }` —— 分片能打开但探测查询抛错时（损坏 / SQLITE_BUSY），
+ * 那条连接没人关就跳去下一片，正是 P0-1 那一类漏法。
+ */
+function findRevokeTable(decryptedDir: string): { file: string; table: string } {
   const msgDir = join(decryptedDir, 'message')
-  if (!existsSync(msgDir)) return { db: null, table: '' }
+  if (!existsSync(msgDir)) return { file: '', table: '' }
   for (const file of readdirSync(msgDir)) {
     if (!file.endsWith('.db') || file.includes('_shm') || file.includes('_wal')) continue
+    const p = join(msgDir, file)
     try {
-      const db = new DatabaseSync(join(msgDir, file), { readOnly: true })
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => String(r.name))
-      const hit = tables.find(t => t.includes('_weflow_anti_revoke_deleted_cache'))
-      if (hit) return { db, table: hit }
-      db.close()
+      const table = withDb(p, (db) => {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => String(r.name))
+        return tables.find(t => t.includes('_weflow_anti_revoke_deleted_cache')) ?? ''
+      })
+      if (table) return { file: p, table }
     } catch { /* next */ }
   }
-  return { db: null, table: '' }
+  return { file: '', table: '' }
 }
 
 /** 为记录追加「人类可读」展示字段（显示名）。 */
@@ -126,9 +135,13 @@ export function queryRecords(
   offset?: number,
   q?: string,
   opts?: { from?: number; to?: number; direction?: 'asc' | 'desc' },
-): { items: RecordItem[]; total: number } {
+): { items: RecordItem[]; total: number; readError?: string } {
   const gdb = join(decryptedDir, 'general', 'general.db')
-  if (!existsSync(gdb)) return { items: [], total: 0 }
+  if (!existsSync(gdb)) {
+    // W3-11.4：general.db 不存在几乎总是「还没解密到这个库」（微信按需下载资源），
+    // 不是「本机没有资金往来」。返回空列表 + readError，让面板把这两件事分开说。
+    return { items: [], total: 0, readError: '还没有资金往来数据（general.db 不存在）：请先在「数据配置」完成解密，或在微信里打开过转账/红包页面让该库生成' }
+  }
   const db = new DatabaseSync(gdb, { readOnly: true })
   try {
     const cap = Math.min(limit ?? 50, 500)
@@ -193,8 +206,12 @@ export function queryRecords(
       const b = base.trim()
       const t = time.trim()
       if (!b) return t ? ' WHERE ' + t : ''
-      if (!t) return b
+      // 这里以前是 `if (!t) return b`：`b` 是被 trim 过的，**开头那个空格就是被 trim 掉的**，
+      // 于是拼出来的 SQL 是 `FROM transferTableWHERE (…)` —— prepare 语法错误，
+      // 上层把它当「没有结果」，用户看到的是「搜关键词就清空」（不带关键词反而正常）。
+      // 两个分支现在都保证以 ` WHERE ` 开头。
       const inner = b.replace(/^WHERE\s+/i, '')
+      if (!t) return ' WHERE ' + inner
       return ' WHERE (' + inner + ') AND ' + t
     }
     const timeSql = (timeCol: string): string => timeRangeSql(timeCol, from, to)
@@ -268,10 +285,31 @@ function parseRevokeContent(raw: string | null | undefined, fallbackSender: stri
 }
 
 /**
- * Query revoked messages from the anti-revoke cache (source shape:
- * sender / type_label / content / create_time, time-descending).
+ * 把一行撤回记录映射成展示项。
+ *
+ * 插件直读与**我们的归档库**共用这一套解析（形状相同），避免两处各自解释格式；
+ * 原文的"发送者/内容"仍交给 `parseRevokeContent`（首行发送者 + 其余为正文）。
+ * @param r - 形状与插件缓存一致的一行。
+ * @returns 列表项（sender / type_label / content / create_time）。
+ */
+function mapRevokeRow (r: { lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }): { sender: string; type_label: string; content: string; create_time: number } {
+  const t = r.lt ?? 0
+  const realId = r.rid ?? 0
+  const fallback = realId > 0 ? `发送者#${realId}` : '未知发送者'
+  const { sender, content } = parseRevokeContent(cellString(r.mc), fallback)
+  return { sender, type_label: revokeTypeLabel(t), content, create_time: r.ct ?? 0 }
+}
+
+/**
+ * 撤回消息列表（2026-09-29 起：**优先读我们自己的归档库**，见 `anti-revoke-archive.ts`）。
+ *
+ * 数据来源两处，形状一致（sender / type_label / content / create_time，按时间倒序）：
+ *   ① 我们的归档库 `<数据根>/anti-revoke-archive.db` —— 只增不改，原文永久保留；
+ *   ② 第三方反撤回插件的缓存表 `*_weflow_anti_revoke_deleted_cache` —— 仅作来源与降级直读。
  * @param decryptedDir - decrypted data root.
  * @param limit - max rows (default 200, capped 500).
+ * @param offset - 偏移。
+ * @param q - 关键词（匹配原文 / 发送者 id）。
  * @returns the revoked snapshot.
  */
 export function queryRevoked(
@@ -281,11 +319,35 @@ export function queryRevoked(
   /** 关键词：匹配撤回内容 / 发送者 id。放在服务端，避免只搜到已加载那一页。 */
   q?: string,
 ): { items: Array<{ sender: string; type_label: string; content: string; create_time: number }>; total: number } {
-  const { db, table } = findRevokeTable(decryptedDir)
-  if (db === null || !table) return { items: [], total: 0 }
+  const cap = Math.min(limit ?? 200, 500)
+  /**
+   * ① **先归档、再从我们自己的库出列表**（2026-09-29 用户选 C：全量归档）。
+   *
+   * 真机实测：微信库里只有 `"某某" 撤回了一条消息` 这种系统消息（3,233 条），
+   * **提示不含原文也不含 msgid**，撤回后原文那行已不在库 ⇒ 事后读库永远拿不到原文。
+   * 所以唯一可行的顺序是"先把内容存进我们自己的库（只增不改），再按'同会话里紧挨在提示之前'
+   * 配对原文"——见 `revoke-retain.ts`。归档是幂等的，重复调用只补新行。
+   */
   try {
-    const cap = Math.min(limit ?? 200, 500)
-    const cols = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(r => r.name))
+    archiveMessages(decryptedDir)
+    const retained = queryRevokedRetained(decryptedDir, cap, offset, q)
+    if (retained.items.length > 0) return { items: retained.items, total: retained.total }
+  } catch { /* 归档/识别失败 → 退回下面的第三方插件路径，绝不让列表整体挂掉 */ }
+  const loc = findRevokeTable(decryptedDir)
+  /** 把插件缓存里的记录**幂等归档**到我们自己的库：原文只增不改，插件清缓存也不丢（见该模块注释）。 */
+  if (loc.table) {
+    try { archiveRevokeCache(decryptedDir, loc.file, loc.table) } catch { /* 归档失败不影响出列表 */ }
+    try {
+      // 归档成功 ⇒ 从**我们自己的库**出列表（原文永久保留，不再依赖插件那张表还在不在）。
+      const archived = readArchivedRevoke(decryptedDir, cap, offset, q)
+      if (archived.rows.length > 0) {
+        return { items: archived.rows.map((r) => mapRevokeRow(r)), total: archived.total }
+      }
+    } catch { /* 归档库读不了就退回直读插件缓存 */ }
+  }
+  if (!loc.table) return { items: [], total: 0 }
+  return withDb(loc.file, (db) => {
+    const cols = new Set((db.prepare(`PRAGMA table_info(${loc.table})`).all() as Array<{ name: string }>).map(r => r.name))
     const sel = (cand: string, dft: string): string => (cols.has(cand) ? cand : dft)
     const kw = (q ?? '').trim()
     const like = '%' + kw.replace(/[\\%_]/g, (m) => '\\' + m) + '%'
@@ -293,17 +355,9 @@ export function queryRevoked(
       ? ` WHERE (${sel('message_content', "''")} LIKE ? ESCAPE '\\' OR CAST(${sel('real_sender_id', '0')} AS TEXT) LIKE ? ESCAPE '\\')`
       : ''
     const kwParams: string[] = kw ? [like, like] : []
-    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${table}${whereSql} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(...kwParams, cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
-    const items = rows.map((r) => {
-      const t = r.lt ?? 0
-      const realId = r.rid ?? 0
-      const fallback = realId > 0 ? `发送者#${realId}` : '未知发送者'
-      const { sender, content } = parseRevokeContent(cellString(r.mc), fallback)
-      return { sender, type_label: revokeTypeLabel(t), content, create_time: r.ct ?? 0 }
-    })
-    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}${whereSql}`).get(...kwParams) as { n: number } | undefined)?.n ?? items.length
+    const rows = db.prepare(`SELECT ${sel('local_type', '0')} AS lt, ${sel('real_sender_id', '0')} AS rid, ${sel('create_time', '0')} AS ct, ${sel('message_content', "''")} AS mc FROM ${loc.table}${whereSql} ORDER BY create_time DESC LIMIT ? OFFSET ?`).all(...kwParams, cap, offset) as Array<{ lt?: number; rid?: number; ct?: number; mc?: string | Uint8Array | null }>
+    const items = rows.map((r) => mapRevokeRow(r))
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM ${loc.table}${whereSql}`).get(...kwParams) as { n: number } | undefined)?.n ?? items.length
     return { items, total }
-  } finally {
-    db.close()
-  }
+  })
 }

@@ -1,6 +1,6 @@
 /* Data health — NEON MATRIX 科技风（与总览共用令牌）。 */
 
-.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: 10px; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.notice { font-size: 12px; color: var(--nm-cyan); padding: 8px 12px; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -12,3 +12,15 @@
 .storeSize { color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); flex: 0 0 auto; }
 .lines { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .line { font-size: 12px; color: var(--nm-text-2); word-break: break-all; }
+
+/* W3-2.5：失败明细里的「因为什么」。与库名分开着色 —— 用户先看是哪个库，
+   再看为什么；同一色会糊成一句读不出来的长文本。 */
+.failWhy { color: var(--nm-text-3); }
+
+/* W3-2.5：失败明细底下的下一步。加密而不是放大：它是建议，不是错误本体。 */
+.failHint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nm-text-3);
+}

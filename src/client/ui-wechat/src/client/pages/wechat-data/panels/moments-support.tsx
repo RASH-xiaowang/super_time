@@ -1,5 +1,5 @@
 /**
- * `Moments.tsx` 的「类型/常量/纯助手：头像与图片/视频/封面缓存上限、媒体筛选项表、时间格式化、回复目标、按日期分组，以及两个头像组件」部分（M21 拆分）。
+ * `Moments.tsx` 的「类型/常量/纯助手：头像与图片/视频/封面缓存上限、媒体筛选项表、回复目标、按日期分组，以及两个头像组件」部分（M21 拆分）。
  *
  * 从原模块原样搬出，**行为逐字节不变**；原文件继续以 `export *` 转发
  * ⇒ 所有既有 import 一行都不用改。
@@ -28,6 +28,20 @@ export const ARTICLE_COVER_CACHE_MAX = 100
 
 /** Media-type filter id + user-facing label kept in lockstep with the UI chips. */
 export type MediaFilter = 'all' | 'image' | 'video' | 'link' | 'location' | 'text'
+/**
+ * 提示语出口（`useTransientNotice` 那三条动作的形状）。
+ *
+ * 为什么不写 `Pick<ReturnType<typeof useTransientNotice>, …>`：那是个**泛型函数**，
+ * `ReturnType` 会把类型参数按 `unknown` 实例化，于是面板里 `T = string` 的 `flash`
+ * 反而塞不进来（实测报「`(value: string, ms?) => void` 不能赋给 `(value: unknown, ms?) => void`」）。
+ * 钩子只需要「能把字符串播出去」这一件事，所以按需要声明，不跟着泛型跑。
+ */
+export interface MomentsNoticeSink {
+  flash: (value: string, ms?: number) => void
+  hold: (value: string) => void
+  clear: () => void
+}
+
 export const MEDIA_LABELS: Record<MediaFilter, string> = {
   all: '全部',
   image: '图片',
@@ -50,26 +64,6 @@ export function imgKey(im: { md5?: string; timelineId?: string; id?: string }): 
  * 开启远端头像后一次进入通讯录就产生 16 条 http 的 CSP 违规。
  * 全项目只保留那一份实现，这里直接 import 使用（22 处调用点不变）。
  */
-
-/** Compact relative label for a comment timestamp (tz-safe wall clock). */
-export function fmtCommentTime(ts: number): string {
-  if (!ts) return ''
-  const diff = Date.now() - ts * 1000
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  if (diff < 172800000) return '昨天'
-  const d = new Date(ts * 1000)
-  return `${d.getMonth() + 1}-${d.getDate()}`
-}
-
-/** Format a timestamp as HH:MM for the sync status label. */
-export function fmtSyncTime(ts: number): string {
-  if (!ts) return ''
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}`
-}
 
 /** Find the original comment a reply targets within the same card (best effort). */
 export function replyTarget(m: MomentItem, c: MomentItem['comments'][number]): MomentItem['comments'][number] | undefined {

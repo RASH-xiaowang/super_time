@@ -8,24 +8,16 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { gatewayClassSource } from '../../tests/gateway-source.ts'
+import { API_DIR, API_FILES, gatewayClassSource } from '../../tests/gateway-source.ts'
 import { grp } from '../../tests/helpers/strict-index.ts'
-const HERE = dirname(fileURLToPath(import.meta.url))
-const ROOT = join(HERE, '..', '..', '..', '..')
-
-const GATEWAY = join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'gateway.ts')
-const API = join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'api.ts')
 
 /**
  * M21：`api.ts` 拆成转发桶 + 8 个域模块（`WechatRemote` 现在住 `api-core.ts`）——
- * 这里读它们的**联合**再抠接口成员，断言（前后端方法名对齐）一条没改。
- * 目录取上面那条路径的 dirname，模块名只是加在同一个目录里。
+ * 这里读 `API_FILES`（由 manifest 推导）的**联合**再抠接口成员，断言（前后端方法名对齐）一条没改。
  */
-const API_FILES = ['api.ts', 'api-core.ts', 'api-read.ts', 'api-kb.ts', 'api-search.ts', 'api-media.ts', 'api-export-ops.ts', 'api-config.ts', 'api-status.ts']
-const API_SRC = API_FILES.map((f2) => readFileSync(join(dirname(API), f2), 'utf8')).join('\n')
+const API_SRC = API_FILES.map((f) => readFileSync(join(API_DIR, f), 'utf8')).join('\n')
 
 /** 后端所有 `@Remote('name')` 装饰器里的名字。 */
 function remoteNames(rawSource: string): string[] {

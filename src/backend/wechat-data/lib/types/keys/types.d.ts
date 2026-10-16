@@ -1,17 +1,13 @@
 /**
- * Shared key-recovery constants and result types for the WeChat key modules
+ * Shared key-recovery result types for the WeChat key modules
  * (migrated from WeChatDataAnalysis key_v4 / image_key_* / key_store).
+ *
+ * 这里原来还有一组「共享常量」（KEY_SIZE / PBKDF2_ITERATIONS / PAGE_SIZE / SALT_SIZE /
+ * AES_BLOCK_SIZE）—— 实测**没有任何模块引用过它们**（P3-8）：真正在用的那份数值各自定义在
+ * `db-key-v4.ts` / `db-key-verify.ts` / `image-key-resolver.ts` 里。留着等于"同一个数字有
+ * 两处出处而只有一处承重"，改的人只会改到自己用的那一份。已删除；
+ * 要收口成一处应当连同那三份一起改（那是密钥路径上的实质改动，另刀做）。
  */
-/** 32-byte database key length. */
-export declare const KEY_SIZE = 32;
-/** V4 SQLCipher PBKDF2 iteration count (wx_key_v4.1). */
-export declare const PBKDF2_ITERATIONS = 256000;
-/** First page size verified against. */
-export declare const PAGE_SIZE = 4096;
-/** SQLCipher salt size. */
-export declare const SALT_SIZE = 16;
-/** AES block size. */
-export declare const AES_BLOCK_SIZE = 16;
 /** A recovered database key result. */
 export interface DbKeyResult {
     /** Whether a key was found. */

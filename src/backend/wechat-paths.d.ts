@@ -166,6 +166,8 @@ export function loadWechatSettings(): WechatSettings;
  * @returns {Record<string, unknown>} 非空的密钥字段。
  */
 export function mirroredSecretValues(): Record<string, unknown>;
+/** 当前 LLM 默认配置（来自 src/shared/llm-defaults.json）。 */
+export function defaultLlmConfig(): LlmConfig;
 /** 读取 LLM 配置（缺失时返回默认值）。 */
 export function loadLlmConfig(): {
     provider: string;
@@ -215,7 +217,7 @@ export function loadLlmStore(): LlmStore;
 /**
  * 切换使用中的模型配置。
  *
- * 成套切换是这里的核心不变量（见 `LLM_PROFILE_FIELDS` 的说明）；因为 wechat-host 每次请求
+ * 成套切换是这里的核心不变量（见 `LLM_PROFILE_FIELDS` 的说明）；因为 llm-bridge.js 每次请求
  * 都重读 llm.json（`llmConfigFromEnv`），切换后**下一次提问立即生效，不需要重启应用**。
  * @param {string} id - 目标 profile id。
  * @returns {{config: object, profiles: Array<object>, activeProfileId: string}}

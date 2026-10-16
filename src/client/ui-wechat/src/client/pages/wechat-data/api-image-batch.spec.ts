@@ -22,6 +22,7 @@ import {
   apiGetExportProgress,
   apiGetImageDataUrl,
   apiGetImageDataUrlsBatch,
+  apiGetSnsVideoCoverDataUrl,
   apiListTasks,
   setWechatRemote,
   type WechatRemote,
@@ -165,5 +166,91 @@ describe('N1：readError 透传到前端', () => {
     stubRemote({ listTasks: async () => ({ ok: true as const, value: { items: [] as never[], total: 0 } }) })
     const r = await apiListTasks()
     expect(r.readError).toBeUndefined()
+  })
+})
+
+/**
+ * W2-5.6：朋友圈视频封面并入图片批处理通道（接线验收）。
+ *
+ * 与上面 N16 那组同一个测法 —— 数调用次数：改前 N 条封面 = N 次 RPC，
+ * 现在同一攒批窗口里挂出来的封面合成一次 `getSnsVideoCoversBatch`。
+ * 这里证明的是「api 层真的合并了」；面板里封面的实际渲染没有浏览器验证（仓库没有组件测试环境）。
+ */
+describe('W2-5.6：视频封面走批量入口（合并窗口在 api 层）', () => {
+  /** 造一个只实现封面两个入口的假远程面。 */
+  function stubCoverRemote(): { batches: Array<{ items: Array<{ md5?: string; thumb?: string }> }>; singles: Array<Record<string, unknown>>; calls: string[] } {
+    const batches: Array<{ items: Array<{ md5?: string; thumb?: string }> }> = []
+    const singles: Array<Record<string, unknown>> = []
+    const calls: string[] = []
+    setWechatRemote({
+      getSnsVideoCoversBatch: async ({ items }: { items: Array<{ md5?: string; thumb?: string }> }) => {
+        calls.push('batch')
+        batches.push({ items })
+        return { ok: true as const, value: { items: items.map(it => ({ md5: String(it.md5 ?? ''), url: 'data:image/jpeg;base64,' + String(it.md5 ?? '') })) } }
+      },
+      getSnsVideoCoverDataUrl: async (options: Record<string, unknown>) => {
+        calls.push('single')
+        singles.push(options)
+        return { ok: true as const, value: { url: 'data:image/jpeg;base64,single' } }
+      },
+    } as unknown as WechatRemote)
+    return { batches, singles, calls }
+  }
+
+  it('同一攒批窗口的 3 条封面 → 1 次批量 RPC、0 次单条 RPC', async () => {
+    const stub = stubCoverRemote()
+    const [a, b, c] = await Promise.all([
+      apiGetSnsVideoCoverDataUrl({ md5: 'm1' }),
+      apiGetSnsVideoCoverDataUrl({ md5: 'm2' }),
+      apiGetSnsVideoCoverDataUrl({ md5: 'm3' }),
+    ])
+    expect(stub.calls).toEqual(['batch'])
+    expect(stub.singles.length).toBe(0)
+    expect(stub.batches.length).toBe(1)
+    expect(stub.batches[0]?.items.map(i => i.md5)).toEqual(['m1', 'm2', 'm3'])
+    // 结果必须**按 md5** 回填：按下标在后端去重时会错位，把别人的封面接到这张卡上。
+    expect(a.url).toContain('m1')
+    expect(b.url).toContain('m2')
+    expect(c.url).toContain('m3')
+  })
+
+  it('后端少回一条时，缺的那条得到带说明的失败（不是静默 undefined）', async () => {
+    setWechatRemote({
+      getSnsVideoCoversBatch: async () => ({ ok: true as const, value: { items: [{ md5: 'm1', url: 'data:image/jpeg;base64,m1' }] } }),
+      getSnsVideoCoverDataUrl: async () => ({ ok: true as const, value: {} }),
+    } as unknown as WechatRemote)
+    const [a, b] = await Promise.all([
+      apiGetSnsVideoCoverDataUrl({ md5: 'm1' }),
+      apiGetSnsVideoCoverDataUrl({ md5: 'm2' }),
+    ])
+    expect(a.url).toContain('m1')
+    expect(b.error, '缺的那条必须说清为什么').toBeTruthy()
+    expect(b.url, '缺的那条不能给一个空地址冒充成功').toBeUndefined()
+  })
+
+  it('thumb/key 随条目带过去（攒批键只认 md5，线索靠暂存表）', async () => {
+    const stub = stubCoverRemote()
+    await Promise.all([apiGetSnsVideoCoverDataUrl({ md5: 'k1', thumb: 'https://wx.qq.com/t/1', key: 'K1', offline: true })])
+    expect(stub.batches[0]?.items[0]).toMatchObject({ md5: 'k1', thumb: 'https://wx.qq.com/t/1', key: 'K1', offline: true })
+  })
+
+  it('没有 md5 时退回单条入口（不拿空键去攒批）', async () => {
+    const stub = stubCoverRemote()
+    await apiGetSnsVideoCoverDataUrl({})
+    expect(stub.calls).toEqual(['single'])
+    expect(stub.batches.length).toBe(0)
+  })
+
+  it('批量 RPC 整块失败 → 每条各自 reject（不静默变成「没有封面」）', async () => {
+    setWechatRemote({
+      getSnsVideoCoversBatch: async () => { throw new Error('后端批量封面失败') },
+      getSnsVideoCoverDataUrl: async () => ({ ok: true as const, value: {} }),
+    } as unknown as WechatRemote)
+    const rs = await Promise.allSettled([
+      apiGetSnsVideoCoverDataUrl({ md5: 'f1' }),
+      apiGetSnsVideoCoverDataUrl({ md5: 'f2' }),
+    ])
+    expect(rs.map(r => r.status)).toEqual(['rejected', 'rejected'])
+    expect(String((rs[0] as PromiseRejectedResult).reason)).toContain('后端批量封面失败')
   })
 })

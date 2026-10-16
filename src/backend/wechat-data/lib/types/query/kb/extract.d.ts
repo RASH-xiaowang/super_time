@@ -20,7 +20,7 @@
  *   这样「模型建议过但用户没采纳」的东西不会出现在图上，
  *   撤销一个建议 = 删那几个字，不需要「回滚一次模型写入」。
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '../db-open.ts';
 /** 实体表的表名（守卫用例按名字断言）。 */
 export declare const KB_ENTITIES_TABLE = "kb_doc_entities";
 /** 允许的实体类别。模型给出别的值一律归到 `topic`（而不是照收）。 */

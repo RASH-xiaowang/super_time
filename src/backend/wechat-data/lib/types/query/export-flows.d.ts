@@ -6,7 +6,7 @@
  *
  * @module export-flows
  */
-import type { StreamControl } from './zip.ts';
+import { type StreamControl } from './zip.ts';
 import type { WechatMessage } from '../types.ts';
 /** Collect merged chat-log media metadata for the ZIP manifest. */
 export declare function collectChatlogMedia(msgs: WechatMessage[]): Array<Record<string, unknown>>;
@@ -99,11 +99,11 @@ export declare function exportSessionMessagesStreamed(decryptedDir: string, opti
  * @param category - kind=contacts 时只导出该分类（与界面页签口径一致）。
  * @returns the written file path, filename and row count.
  */
-export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string, dest?: string, category?: string): {
+export declare function exportCsv(decryptedDir: string, kind: string, recordsKind?: string, dest?: string, category?: string, ctrl?: StreamControl): Promise<{
     path: string;
     filename: string;
     count: number;
-};
+}>;
 /** 安全字符串化。 */
 export declare function strOf(v: unknown): string;
 /** 百分比字符串。 */
@@ -123,11 +123,11 @@ export declare function topOf(arr: unknown, limit?: number): Array<{
  * @param filename - optional file name (without extension).
  * @returns written file path + filename + message count.
  */
-export declare function exportAnnualReport(decryptedDir: string, year: number, format: string, dir?: string, filename?: string): {
+export declare function exportAnnualReport(decryptedDir: string, year: number, format: string, dir?: string, filename?: string, ctrl?: StreamControl): Promise<{
     path: string;
     filename: string;
     count: number;
-};
+}>;
 /**
  * Export moments (朋友圈) as txt / html / json / csv with optional
  * author + time-range filters.

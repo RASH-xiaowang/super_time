@@ -12,8 +12,7 @@
  * @vitest-environment node
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-// @ts-expect-error —— 宿主层是 CommonJS，无类型声明
-import { createLlmBridge } from '../wechat-host.js'
+import { createLlmBridge } from '../llm-bridge.js'
 import { at as strictAt } from './helpers/strict-index.ts'
 
 /** 一次被捕获的请求。 */

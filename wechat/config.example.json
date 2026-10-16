@@ -1,5 +1,5 @@
 {
-  "_comment": "模板：复制为 wechat/config.json 后填入本机路径与密钥（也可由应用内「设置 → 数据配置」写入）。该文件已被 .gitignore 忽略，绝不要提交——它含微信库路径与解密密钥。",
+  "_comment": "模板：复制为 wechat/config.json 后按本机情况填写（也可由应用内「设置 → 数据配置」写入）。该文件已被 .gitignore 忽略，绝不要提交。三个要点：① 密钥不在这里填 —— 保存后会自动搬进数据根下的 secrets.json；② 派生路径（whisper_models_dir 等）与顶层路径字段在开发态迁移时不会被带走，路径请走应用内「数据配置」；③ 本文件只是迁移期模板，运行态的真源是 <userData>/wechat/config.json。",
   "dataRoot": "",
   "decryptedDir": "",
   "decodedImagesDir": "",
@@ -8,18 +8,8 @@
   "selfWxid": "",
   "silkBinary": "",
   "wechatSettings": {
-    "db_dir": "",
-    "db_enc_key": "",
-    "image_aes_key": "",
-    "image_xor_key": 0,
-    "api_enabled": true,
-    "api_token": "",
-    "api_port": 5032,
-    "cdn_enabled": true,
-    "cdn_local_decrypt": true,
     "whisper_device": "cpu",
-    "whisper_model": "tiny",
-    "whisper_threads": 0,
-    "whisper_models_dir": ""
+    "whisper_model": "medium",
+    "whisper_threads": 0
   }
 }

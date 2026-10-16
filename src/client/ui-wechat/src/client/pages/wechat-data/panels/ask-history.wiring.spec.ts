@@ -28,6 +28,7 @@ function codeOf(file: string): string {
 
 const ask = codeOf('Ask.tsx')
 const dialog = codeOf('AskHistoryDialog.tsx')
+const dialogCss = codeOf('ask-history.module.css')
 
 describe('问答历史：入口挂在「微信问答」面板头', () => {
   it('弹窗组件存在且被 Ask.tsx import', () => {
@@ -94,5 +95,19 @@ describe('问答历史：三条行为契约', () => {
     expect(dialog).toMatch(/const ok = await confirm\(/)
     // 危险动作单独一行（避免用户筛着筛着顺手点掉全库历史）
     expect(dialog).toContain('data-clear-ask-history')
+  })
+})
+
+describe('问答历史：自动回复（auto）这个来源认得出来', () => {
+  it('来源页签与中文标签都有 auto', () => {
+    // 标签缺了 ⇒ 列表里只显示一个裸的 `auto`（用户不知道那是什么）；
+    // 页签缺了 ⇒ 自动回复的记录只能混在「微信问答」里一起看。
+    expect(dialog, 'SRC_LABEL 没认 auto').toMatch(/auto:\s*'自动回复'/)
+    expect(dialog, 'SRC_TABS 没有 auto 项').toMatch(/value:\s*'auto',\s*label:\s*'自动回复'/)
+  })
+
+  it('auto 有独立配色（与 ask / session 不撞色）', () => {
+    expect(dialogCss, 'auto 没有独立配色 ⇒ 三种来源在列表里长得一样')
+      .toContain(".srcTag[data-src='auto']")
   })
 })

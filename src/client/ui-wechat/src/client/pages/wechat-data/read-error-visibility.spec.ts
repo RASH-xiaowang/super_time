@@ -11,11 +11,21 @@
  *   ② api 层（`api-*.ts`）里哪些导出函数的返回类型是它们（面板调的是这层的包装）；
  *   ③ 调用这些方法的面板文件必须自己提到 `readError`。
  * 新接一个带 `readError` 的快照却忘了显示 ⇒ 这里会红。
+ *
+ * 2026-09-26（P1-1 顺带）修了判据自己的两个错：
+ *   · ② 原本是 `export async function (\\w+)\\s*\\([\\s\\S]*?\\)\\s*:\\s*Promise<(\\w+)>`。
+ *     返回类型写成内联对象（`Promise<{ ok: boolean }>`)时那一段匹配不上，`[\\s\\S]*?` 就会
+ *     **继续吃下一个函数**直到撞上能匹配的签名 —— 于是 `apiSearchUnified` 的返回类型被记到
+ *     `apiCancelSearch` 头上（§八 明写「跨花括号禁 `[\\s\\S]*?`」，这条就是它自己的反例）。
+ *     现在按 TypeScript AST 逐个函数读返回类型注释。
+ *   · ③ 原来只扫 `panels/*.tsx`，而全局搜索的结果面板住在上一层的 `WechatDataPanel.tsx`
+ *     ⇒ 「调用方存在」会因为找错目录而假红。面板根目录那层一起纳入。
  * @vitest-environment node
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -38,20 +48,54 @@ function typesWithReadError(): string[] {
   return [...out].sort()
 }
 
-/** ② api 层里**返回这些类型**的导出函数（面板调的是这层的包装，不是 `remote.*`）。 */
-function apiWrappersReturning(names: string[]): Array<{ fn: string; type: string }> {
-  const hits: Array<{ fn: string; type: string }> = []
+/**
+ * ② api 层里**返回这些类型**的导出函数（面板调的是这层的包装，不是 `remote.*`）。
+ * 只认 `Promise<简单标识符>`；`Promise<{…}>` / `Promise<A | B>` 没有可查的 `readError`，不参与。
+ */
+function apiWrappersReturning(names: string[]): Array<{ fn: string; type: string; file: string }> {
+  const hits: Array<{ fn: string; type: string; file: string }> = []
   for (const f of readdirSync(HERE).filter((x) => /^api(-[a-z-]+)?\.ts$/.test(x))) {
-    for (const m of read(join(HERE, f)).matchAll(/export async function (\w+)\s*\([\s\S]*?\)\s*:\s*Promise<(\w+)>/g)) {
-      if (m[1] && m[2] && names.includes(m[2])) hits.push({ fn: m[1], type: m[2] })
+    const sf = ts.createSourceFile(f, read(join(HERE, f)), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const seen = new Set<ts.Node>()
+    const walk = (node: ts.Node): void => {
+      // 去重：本仓踩过「同一子树走两遍 ⇒ 计数翻倍」
+      if (seen.has(node)) return
+      seen.add(node)
+      if (ts.isFunctionDeclaration(node) && node.name && node.type
+        && (node.modifiers ?? []).some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+        const ret = node.type
+        if (ts.isTypeReferenceNode(ret) && ret.typeName.getText(sf) === 'Promise') {
+          const arg = (ret.typeArguments ?? [])[0]
+          if (arg && ts.isTypeReferenceNode(arg)) {
+            const typeName = arg.typeName.getText(sf).split('.').pop() ?? ''
+            if (names.includes(typeName)) hits.push({ fn: node.name.getText(sf), type: typeName, file: f })
+          }
+        }
+      }
+      ts.forEachChild(node, walk)
     }
+    walk(sf)
   }
   return hits.sort((a, b) => a.fn.localeCompare(b.fn))
 }
 
-/** ③ 面板文件（排除用例本身）。 */
-function panelFiles(): string[] {
-  return readdirSync(PANELS).filter((f) => f.endsWith('.tsx') && !f.includes('.spec.')).sort()
+/**
+ * ③ 要守的界面文件：`panels/*`（`.ts` 与 `.tsx` 都算）+ 面板根目录那层的 `.tsx` 组件。
+ *
+ * `panels/` 为什么也要收 `.ts`：#18 把取数搬进了 `moments-data.ts` 这类钩子模块，
+ * 只扫 `.tsx` 的话「谁调了这个接口」直接查无此人（实测红过一次）。
+ * 根目录那层为什么**不**收 `.ts`：那里住的是 `api-*.ts` 传输层，
+ * 函数定义行 `export async function apiGetMomentsMonthly(` 会被「调用」的正则认成调用点，
+ * 于是判据开始投诉「声明处没读 readError」——那是另一件事（②已经在管类型口径了）。
+ */
+function uiFiles(): string[] {
+  const inPanels = readdirSync(PANELS)
+    .filter((f) => /\.(ts|tsx)$/.test(f) && !f.includes('.spec.') && !f.endsWith('.d.ts'))
+    .map(f => join(PANELS, f))
+  const atRoot = readdirSync(HERE)
+    .filter((f) => f.endsWith('.tsx') && !f.includes('.spec.'))
+    .map(f => join(HERE, f))
+  return [...inPanels, ...atRoot].sort()
 }
 
 describe('N1：带 readError 的快照必须在面板里被区分显示', () => {
@@ -63,14 +107,34 @@ describe('N1：带 readError 的快照必须在面板里被区分显示', () => 
     expect(wrappers.length, 'api 层没有返回这些类型的函数 —— ② 的解析口径需要更新').toBeGreaterThan(0)
   })
 
+  it('放宽到 panels 里的 .ts 这一格真的被走到（否则 #18 之后判据只守着半个界面层）', () => {
+    const all = uiFiles()
+    const tsCallers = all.filter((p) => p.endsWith('.ts')
+      && wrappers.some((w) => new RegExp(`(?<![\\w$.])${w.fn}\\s*\\(`).test(read(p))))
+    console.log(`[算料|readError] 界面文件 ${String(all.length)} 个，其中调过快照接口的钩子模块 ${String(tsCallers.length)} 个`)
+    expect(tsCallers.length, 'panels 里的 .ts 一个调用方都没扫到 ⇒ 这次放宽没起作用').toBeGreaterThan(0)
+  })
+
+  it('② 不再跨函数串味（回归哨兵）', () => {
+    const fns = wrappers.map((w) => w.fn)
+    // `apiCancelSearch(): Promise<{ ok: boolean }>` —— 老正则会把下一个函数的返回类型记到它头上
+    expect(fns, 'apiCancelSearch 的返回类型是内联对象，不该进名单').not.toContain('apiCancelSearch')
+    for (const w of wrappers) {
+      expect(types, `${w.fn}() 被记成 ${w.type}，但它不在带 readError 的类型清单里`).toContain(w.type)
+    }
+    // 反过来：真该在的那条必须在（否则说明 AST 口径又读不到东西了）
+    expect(fns, 'apiSearchUnified 返回 UnifiedSearchSnapshot，②却漏了').toContain('apiSearchUnified')
+  })
+
   for (const { fn, type } of wrappers) {
     it(`${fn}()（${type}）的调用方面板读了 readError`, () => {
       // 面板是从 api 层**具名导入后裸调**（`apiGetKbFiles(...)`），不是 `remote.getKbFiles(...)`
-      const callers = panelFiles()
-        .filter((f) => new RegExp(`(?<![\\w$.])${fn}\\s*\\(`).test(read(join(PANELS, f))))
-      expect(callers.length, `没有任何面板调用 ${fn}()；要么判据该更新，要么接口已死`).toBeGreaterThan(0)
-      const blind = callers.filter((f) => !read(join(PANELS, f)).includes('readError'))
-      expect(blind, `这些面板调了 ${fn}() 却没读 readError（读失败会被显示成空数据）：${blind.join(', ')}`).toEqual([])
+      const callers = uiFiles().filter((p) => new RegExp(`(?<![\\w$.])${fn}\\s*\\(`).test(read(p)))
+      expect(callers.length, `没有任何界面文件调用 ${fn}()；要么判据该更新，要么接口已死`).toBeGreaterThan(0)
+      // 口径：**谁调谁就得读**。分层之后 `moments-data.ts` 自己就在失败分支里写 `readError`，
+      // 所以这一条不需要为钩子开例外（开过，实测那一支是死代码，删了）。
+      const blind = callers.filter((p) => !read(p).includes('readError'))
+      expect(blind, `这些界面调了 ${fn}() 却没读 readError（读失败会被显示成空数据）：${blind.map((p) => p.replace(/\\/g, '/')).join(', ')}`).toEqual([])
     })
   }
 })

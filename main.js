@@ -1,14 +1,39 @@
 // 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
-// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
-// 必须最先执行：终端/父进程退出后 stdout 管道会关闭，之后任何 console.log 都会
-// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见模块注释）。
+// 触发 EPIPE 并被 Node 当未捕获异常抛出，主进程弹出致命框（详见 src/backend/console-safe.js）。
 // SUPERTIME_NO_CONSOLE_GUARD=1 仅供 scripts/epipe-smoke.js 做负对照用。
 if (process.env.SUPERTIME_NO_CONSOLE_GUARD !== '1') require('./src/backend/console-safe').install();
 
-const { app, BrowserWindow, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, dialog, screen, shell, utilityProcess } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
 const { decideNavigation, decideWindowOpen } = require('./src/backend/navigation-policy');
+
+/**
+ * 启动自检：**必须先于任何 `app.*` 用法**。
+ *
+ * `ELECTRON_RUN_AS_NODE=1` 时 Electron 退化成纯 Node，`require('electron')` 返回的是
+ * **可执行文件路径字符串**，解构出来的 `app` 是 `undefined` —— 于是崩在下面那句
+ * `app.isPackaged`，报错与真因（环境变量）毫不相干。2026-09-29 实测 `npm run dev`：
+ *
+ *   TypeError: Cannot read properties of undefined (reading 'isPackaged')
+ *       at Object.<anonymous> (main.js:27:9)
+ *
+ * 启动方式已经由 `scripts/launch-app.mjs` 修掉（它统一摘掉那个变量，仓库里三个真机脚本
+ * 与 `SuperTime.cmd` 早就是这么做的）。**这段是兜底**：无论谁用什么姿势把本入口当纯 Node
+ * 跑（含打包产物被误用），都要得到一句能直接照做的诊断，而不是一个指向第 27 行的 TypeError。
+ */
+if (app === undefined || typeof app.isPackaged !== 'boolean') {
+  console.error([
+    '[启动自检] 当前进程不是 Electron 运行时 —— require("electron") 没给出 app 对象。',
+    '  最常见原因：环境里有 ELECTRON_RUN_AS_NODE=1，Electron 会因此退化成纯 node。',
+    '  怎么修：',
+    '    · 用 npm start / npm run dev 启动（它们会剥掉这个环境变量）；',
+    '    · 或手动：npx electron .',
+    '    · PowerShell 临时清掉：$env:ELECTRON_RUN_AS_NODE=$null; npx electron .',
+  ].join('\n'));
+  process.exit(1);
+}
 
 /**
  * fuses 覆盖不到的启动开关。
@@ -33,13 +58,13 @@ if (app.isPackaged) {
   }
 }
 
-/** 交给系统浏览器打开的次数（仅供安全探针断言；正常流程里是「用户点了外链」的计数）。 */
-let openExternalAttempts = 0;
 /**
- * 探针用：**真的被创建出来**的弹窗数（`did-create-window` 只在真建窗时触发）。
- * 判安全不能看 `window.open` 的返回值 —— deny 时 Chromium 也可能回一个指向空窗的 WindowProxy。
+ * 安全探针的两个计数。P0-4 起由 `src/backend/main-window.js` 里的守卫递增 ——
+ * 传下去的是**同一个对象**（值语义会丢掉递增，探针就恒为 0 了）。
+ * 判「有没有被绕过」不能看 `window.open` 的返回值：deny 时 Chromium 也可能回一个
+ * 指向空窗的 WindowProxy，所以弹窗只能数 `did-create-window`。
  */
-let popupWindowsCreated = 0;
+const securityCounters = { openExternalAttempts: 0, popupWindowsCreated: 0 };
 const {
   configure: configureWechatPaths,
   applyConfig,
@@ -57,12 +82,30 @@ const {
 const { findByBaseUrl: findModelCatalog } = require('./src/backend/llm-model-catalog');
 const licenseService = require('./src/license/service');
 const { createWorkerChannel } = require('./src/backend/backend-rpc');
-const { buildDiagnosticReport, createDiagLog, installConsoleCapture } = require('./src/backend/diag-log');
+const {
+  createBackendSupervisor,
+  BACKEND_CALL_READY_WAIT_MS,
+} = require('./src/backend/backend-supervisor');
+const { buildDiagnosticPreview, buildDiagnosticReport, createDiagLog, installConsoleCapture, installRendererConsoleCapture, rendererConsoleLevels } = require('./src/backend/diag-log');
 const { restrictWechatState } = require('./src/backend/secure-fs');
 const { resolveDebugGates, resolveHangMethods, HANG_ENV: DEBUG_HANG_ENV } = require('./src/backend/debug-gates');
 const { createUpdateService } = require('./src/backend/update');
 const { registerMiscIpc } = require('./src/backend/ipc-misc');
 const { registerWechatIpc } = require('./src/backend/ipc-wechat');
+const { registerRemoteAccessIpc } = require('./src/backend/ipc-remote-access');
+const { registerUpdateIpc } = require('./src/backend/ipc-update');
+const { createIpcTrust } = require('./src/backend/ipc-trust');
+// 局域网远程访问（手机端）：HTTP 服务 + 与 IPC 共用的那道闸门。
+const { createRemoteAccessServer } = require('./src/backend/http-server');
+const { createCallQueue } = require('./src/backend/http-queue');
+const { gatedWechatCall } = require('./src/backend/call-gates');
+const {
+  uiEntryHtml,
+  createMainWindow,
+  installWebContentsGuards: installWindowGuards,
+  broadcastToWindows,
+} = require('./src/backend/main-window');
+const { installScreenshotAutomation } = require('./src/backend/main-debug-automation');
 
 /**
  * 首启闸门豁免状态（N2）。
@@ -163,27 +206,14 @@ let mainWindow = null;
  * 三个 `update:*` 处理器都注册在它建好**之后**，所以这里不需要额外的空值兜底。
  */
 let updateService = null;
-/** 当前后端句柄；进程已死或尚未 init 完成时为 null。 */
-let wechatBackend = null;
-/** 后端进程启动时返回的 { info, methods }。 */
-let wechatBoot = null;
-/** 监管状态：数据目录、当前句柄、已重启次数、待执行的重启定时器、是否主动停止。 */
-let backendUserDataPath = null;
 /**
- * 最近一次拉起的句柄（无论 init 是否完成）。
+ * 局域网远程访问（手机端）的 HTTP 服务句柄；未创建或已停止时为 null。
  *
- * 与 `wechatBackend` 的区别很关键：`wechatBackend` 只在 init 成功后才有值，
- * 而退出回调必须能判断「退出的到底是不是当前这个进程」——否则一个已被取代的
- * 陈旧句柄迟到地报 exit，就会把健康的新句柄置空、还多排一次重启。
+ * 它**默认不监听**：`start()` 内部要求 `api_enabled === true` 且令牌非空才会真的绑端口
+ * （理由见 `src/backend/http-server.js` 文件头 —— 老配置里遗留的 `api_enabled: true`
+ * 不该让端口在用户没点过任何新开关时就打开）。
  */
-let backendCurrentHandle = null;
-let backendRestartCount = 0;
-/** 待执行的重启定时器；非空表示已有一次重启在路上，避免同一故障排两次。 */
-let backendRestartTimer = null;
-/** 面向界面的后端状态快照（渲染端可能错过事件，需要能主动查）。 */
-let backendStatus = { state: 'starting', restarts: 0, lastError: null };
-/** 主动停止（应用退出 / 显式 dispose）后不再自动重启。 */
-let backendStopping = false;
+let remoteAccess = null;
 
 // ── 调用超时 ─────────────────────────────────────────────────────────
 // 实际逻辑在 src/backend/backend-rpc.js（那里可被单测覆盖）；这里只决定窗口大小。
@@ -199,296 +229,46 @@ const LONG_CALL_TIMEOUT_MS = Number(process.env.SUPERTIME_LONG_CALL_TIMEOUT_MS) 
   ? Number(process.env.SUPERTIME_LONG_CALL_TIMEOUT_MS)
   : undefined;
 
-/**
- * 拉起一个「Super Time」后端进程，并建立带超时的 RPC 通道。
- *
- * 所有 Remote 方法都是同步 node:sqlite，个别方法单次就要 12–21 秒
- * （getSnsImageDataUrl 会全量解密扫描 Sns/Img 与 msg/attach）。跑在主进程里会
- * 卡死窗口消息泵 —— 实测单次阻塞 45.6 秒，Windows 直接判定「应用未响应」。
- * 放进 utilityProcess 后主进程只转发 IPC，重活不再影响窗口响应。
- *
- * 请求/响应配平、超时、死亡收敛都在 backend-rpc 里 —— 抽出去是为了能被单测覆盖：
- * 留在主进程时这些分支只有手工 taskkill 才能观察。
- *
- * @param userDataPath - 传给后端的应用数据目录。
- * @param onExit - 进程退出回调，交给监管器决定是否重建（init 期间也会触发）。
- */
-function spawnBackendProcess(userDataPath, onExit) {
-  // stdio: 'pipe'（原来是 'inherit'）。原因：后端是**独立进程**，它那些
-  // `[wechat-sync]` / `[config]` / 重试日志都写在自己的 stdout/stderr 上；
-  // 'inherit' 时这些字节进的是主进程的那条管道，而 GUI 态那条管道是断的、
-  // console-safe 会静默 —— 于是「打不开」这类最可能来自后端的报障，我们手上什么都没留下。
-  // 这里把两条流转进文件日志，同时转写一份到本进程的标准流（保持开发态可见性）。
-  // RPC 不受影响：它与后端之间走 process.parentPort，与 stdio 无关。
-  // H7 验收：「永不回包」注入名单（非打包态专用）。打包态下 `resolveHangMethods` 恒返回空表，
-  // 并且这里**显式删掉**该变量而不是「不设置」—— worker 就不再可能继承到一个卡死的注入名单。
-  const hangMethods = resolveHangMethods({ isPackaged: app.isPackaged, env: process.env });
-  const workerEnv = { ...process.env };
-  if (hangMethods.length > 0) workerEnv[DEBUG_HANG_ENV] = hangMethods.join(',');
-  else delete workerEnv[DEBUG_HANG_ENV];
-  const child = utilityProcess.fork(
-    path.join(__dirname, 'src', 'backend', 'wechat-worker.js'),
-    [],
-    { serviceName: 'super-time-wechat-backend', stdio: 'pipe', env: workerEnv }
-  );
-  for (const [stream, level, target] of [
-    [child.stdout, 'backend', process.stdout],
-    [child.stderr, 'backend!', process.stderr],
-  ]) {
-    if (!stream || typeof stream.on !== 'function') continue;
-    stream.on('data', (chunk) => {
-      for (const line of String(chunk).split(/\r?\n/)) {
-        if (line.trim() === '') continue;
-        diagLog.write(level, [line]);
-        // 直接写进程流而不是 console：console 已经被接管，会重复落进文件一遍。
-        try { target.write(line + '\n'); } catch { /* 管道坏了就只留文件那份 */ }
-      }
-    });
-  }
-  return createWorkerChannel(child, {
-    userDataPath,
-    onEvent: (name, args) => { if (process.env.SUPERTIME_RELAY_LOG === '1') console.log('[relay:in]', name); broadcastWechatEvent(name, args); },
-    onExit,
-    ...(CALL_TIMEOUT_MS === undefined ? {} : { callTimeoutMs: CALL_TIMEOUT_MS }),
-    ...(LONG_CALL_TIMEOUT_MS === undefined ? {} : { longTimeoutMs: LONG_CALL_TIMEOUT_MS }),
-  });
-}
+/** 建窗口与装守卫需要的上下文（本体在 `src/backend/main-window.js`，行为逐字未改）。 */
+const windowCtx = { app, BrowserWindow, screen, fs, path, rootDir: __dirname, env: process.env, getMainWindow: () => mainWindow };
+const guardsCtx = { shell, rootDir: __dirname, decideNavigation, decideWindowOpen, counters: securityCounters };
 
-// ── 后端监管：有界退避重启 ───────────────────────────────────────────
-// 原实现的后果（本会话实测复现）：后端进程一旦退出，之后所有调用都固定 reject
-// 「Super Time 后端进程已退出」，功能整体失效、只能重启应用 —— 而进程退出本身可能只是
-// 一次偶发（例如同步查询撞上数据变更）。这里补上有界重启。
-const BACKEND_RESTART_MAX = 3;
-const RESTART_BACKOFF_MS = [500, 1500, 4500];
-/**
- * 调用等待后端就绪的上限。
- *
- * 要比「退避 + init」最长情况更宽（最坏 0.5+1.5+4.5s 退避 + 每次 init 若干秒），
- * 又要短到用户可接受 —— 所以就绪等待给 20 秒；后端已判定 failed 时立刻返回，不空等。
- */
-const BACKEND_CALL_READY_WAIT_MS = 20_000;
-
-/** 更新状态快照并广播，渲染端可同时靠事件与主动查询拿到它。 */
-function setBackendStatus(state, lastError = null) {
-  backendStatus = { state, restarts: backendRestartCount, lastError };
-  broadcastWechatEvent('wechat-backend/status', [backendStatus]);
-}
-
-/**
- * 等后端就绪。
- *
- * 为什么需要它：后端启动被移到建窗之后（为了首帧与可视提示），于是窗口一挂载就
- * 可能发请求，此时后端还在 fork / import 783KB bundle / 解析数据根的路上。
- * 若不等待而是立刻回「后端未初始化」，首屏就会把一句**假的**错误显示给用户，
- * 而渲染端分不清「还没好」与「坏了」、不会重试（各面板只在
- * wechat-data/updated 时重载，没订阅的面板就一直错着）。
- * 因此在主进程侧把这些调用挂住，等到就绪或判定为失败为止。
- *
- * @param timeoutMs - 最长等待；超时按「未就绪」返回，不无限挂。
- * @returns 是否等到就绪。
- */
-function awaitBackendReady(timeoutMs) {
-  if (backendStatus.state === 'ready' && wechatBackend) return Promise.resolve(true);
-  if (backendStatus.state === 'failed' || backendStopping) return Promise.resolve(false);
-  const startedAt = Date.now();
-  return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      const done = (backendStatus.state === 'ready' && wechatBackend)
-        ? true
-        : (backendStatus.state === 'failed' || backendStopping || Date.now() - startedAt > timeoutMs)
-          ? false
-          : null;
-      if (done === null) return;
-      clearInterval(timer);
-      if (done) console.log(`[wechat] 有调用等待后端就绪 ${Date.now() - startedAt}ms 后返回`);
-      resolve(done);
-    }, 100);
-    if (timer.unref) timer.unref();
-  });
-}
-
-/** 启动后端并完成 init，成功后写入 wechatBackend / wechatBoot。 */
-async function startWechatBackend(userDataPath) {
-  const handle = spawnBackendProcess(userDataPath, (code) => {
-    // 只认「当前句柄」的退出：陈旧句柄的迟到 exit 不能动健康的新句柄，也不能再排一次重启。
-    if (backendStopping || handle !== backendCurrentHandle) return;
-    wechatBackend = null;
-    wechatBoot = null;
-    setBackendStatus('down', `后端进程已退出 (code=${code})`);
-    scheduleBackendRestart(`进程退出 (code=${code})`);
-  });
-  backendCurrentHandle = handle;
-  try {
-    const boot = await handle.init();
-    wechatBackend = handle;
-    wechatBoot = boot;
-    return handle;
-  } catch (e) {
-    // init 失败或超时：**必须杀掉刚拉起的子进程**。否则会漏一个仍在跑解密/同步的进程，
-    // 而且下一次 start 直接覆盖句柄后它就彻底无人认领（既不退出也不再被监管）。
-    if (handle === backendCurrentHandle) {
-      try { handle.dispose(); } catch { /* 已退出 */ }
-    }
-    throw e;
-  }
-}
-
-/**
- * 把「已保存的微信设置」回灌到后端（首次启动与每次重启后都要做）。
- *
- * **镜像里的密钥要并进同一次 patch**：这次保存返回前，`wechat-host.js` 会调
- * `recordWechatSettings(patch)` 把整份 `config.json.wechatSettings` **重写成**「已过滤密钥」的
- * 干净版（是替换不是合并）。只在镜像里出现过的密钥（后端 config.json 里没有对应值 →
- * `saveConfig` 的 `carried` 也捞不到）若不在这次 patch 里，就会被无声丢掉；并进来之后，
- * 后端把它们写进 `secrets.json`、回写镜像时又顺手把副本过滤掉 —— 迁移与「去掉多余副本」
- * 一步完成（所以不需要再单独写一个「清理镜像」的步骤）。
- */
-async function applySavedWechatSettings() {
-  const savedSettings = { ...loadWechatSettings(), ...mirroredSecretValues() };
-  if (Object.keys(savedSettings).length === 0) return;
-  const r = await wechatBackend.call('saveWechatConfig', [{ patch: savedSettings }]);
-  if (!r.ok || r.value?.ok === false) {
-    console.warn('[wechat] 应用 wechat/config.json 设置失败:', r.error || r.value?.error);
-  }
-}
-
-/**
- * M1 启动期收尾：① 按后端解析出的**真实**数据根收紧权限；② 把还留在后端 `config.json` 里的
- * 旧密钥搬进 `secrets.json`。
- *
- * 为什么放在后端就绪之后：数据根可以由配置指向任意位置（`dataRoot` / legacy
- * `DSH_WECHAT_DECRYPTED_DIR`），启动早期拿不到真实值 —— 早先按 `<userData>/wechat-data`
- * 硬编码收紧，用户改了数据根就等于没有保护。
- *
- * 不用再「清理宿主镜像」：`applySavedWechatSettings` 那次保存返回时，`wechat-host.js` 已经
- * 把镜像重写成过滤掉密钥的干净版了（详见该函数的说明）。
- */
-async function migrateSecretsAndTightenAcl() {
-  const dataRoot = String(wechatBoot?.info?.root ?? '').trim();
-  const backendConfigFile = dataRoot ? path.join(dataRoot, 'config.json') : '';
-  const r = restrictWechatState({ stateDir: STATE_DIR, ...(dataRoot ? { dataRoot } : {}) });
-  if (!r.ok) console.warn('[security] 密钥目录权限收紧未完全成功：' + r.failures.join('; '));
-
-  // 启动期迁移：旧 config.json 里还有非空密钥就让后端走一次**空 patch 保存**
-  // （saveConfig 会把它们搬进 secrets.json 并从 config.json 删掉；空 patch 不动其它字段）。
-  try {
-    if (!backendConfigFile || !fs.existsSync(backendConfigFile)) return;
-    const raw = JSON.parse(fs.readFileSync(backendConfigFile, 'utf8'));
-    const legacy = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']
-      .some((k) => (typeof raw?.[k] === 'string' ? raw[k] !== '' : raw?.[k] !== undefined));
-    if (!legacy) return;
-    const res = await wechatBackend.call('saveWechatConfig', [{ patch: {} }]);
-    if (res.ok && res.value?.ok !== false) {
-      console.log('[security] 已把旧 config.json 里的密钥迁移到 secrets.json');
-    } else {
-      console.warn('[security] 密钥迁移失败（下次保存会再试）:', res.error || res.value?.error);
-    }
-  } catch (e) {
-    console.warn('[security] 密钥迁移失败（下次保存会再试）:', e);
-  }
-}
-
-/**
- * 安排一次重启；超过上限则明确告知用户，不再无限重试。
- * @param reason - 最近一次失败原因，写进面向用户的提示与日志。
- */
-function scheduleBackendRestart(reason) {
-  if (backendStopping) return;
-  // 同一故障可能同时走两条路径（退出回调 + init 失败的 catch），若各排一个定时器，
-  // 就会在「后端已恢复」之后 4.5 秒再拉一个进程覆盖健康句柄，或在健康时误报
-  // 「后端不可用」；而且有效重试次数会少于声明的 3 次。用单定时器挡住。
-  if (backendRestartTimer) {
-    console.warn(`[wechat] 已有重启计划在路上，忽略重复触发（原因：${reason}）`);
-    return;
-  }
-  if (backendRestartCount >= BACKEND_RESTART_MAX) {
-    const msg = `Super Time 后端连续 ${BACKEND_RESTART_MAX} 次重启失败，相关功能不可用。`
-      + `请重启应用；若持续失败请检查 wechat/config.json 与数据目录。最近原因：${reason}`;
-    console.error('[wechat]', msg);
-    setBackendStatus('failed', msg);
-    // 刻意**不用** dialog.showErrorBox：它是阻塞式模态，无人点击时会卡住主进程，
-    // 连 app.quit() 都到不了（实测验证脚本因此挂死 5 分钟）。失败信息改由渲染端
-    // 的状态横幅承载 —— 它常驻显示、可自动消失、也不挡任何东西。
-    return;
-  }
-  const attempt = backendRestartCount;
-  backendRestartCount += 1;
-  setBackendStatus('restarting', reason);
-  const delay = RESTART_BACKOFF_MS[attempt] ?? RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
-  console.warn(`[wechat] 后端将在 ${delay}ms 后第 ${backendRestartCount}/${BACKEND_RESTART_MAX} 次重启（原因：${reason}）`);
-  backendRestartTimer = setTimeout(() => {
-    backendRestartTimer = null;
-    if (backendStopping) return;
-    void (async () => {
-      try {
-        await startWechatBackend(backendUserDataPath);
-      } catch (e) {
-        // 走到这里才是「本次重启真的失败」。startWechatBackend 内部已经 dispose 了
-        // 刚拉起的句柄，所以不会留下孤儿进程。
-        const why = `重启后 init 失败：${e?.message ?? e}`;
-        setBackendStatus('down', why);
-        scheduleBackendRestart(why);
-        return;
-      }
-      // 新进程是干净的，必须回灌已保存设置，否则密钥/路径全空。
-      // 但**回灌失败不等于重启失败**：后端已经起来了。原先把它放在同一个 try 里，
-      // 一旦 saveWechatConfig 超时（重启后 worker 立刻跑 2–3 分钟 realtime sync，
-      // 单线程会被占住，60 秒窗口完全可能被吃满），就会走到「重启失败」分支 ——
-      // 不 dispose 这个已经健康的句柄，而下一轮 start 又把 backendCurrentHandle
-      // 覆盖掉，于是它彻底失管（还在解密/同步，退出事件还被身份校验主动忽略）。
-      // 与首启路径保持一致：只 warn。
-      try {
-        await applySavedWechatSettings();
-      } catch (e) {
-        console.warn('[wechat] 重启后回灌设置失败（后端仍可用，不影响本次恢复）:', e?.message ?? e);
-      }
-      // 重启成功后也要跑一次 M1 收尾：`scheduleBackendRestart` 的路径不经过首启那段代码，
-      // 如果首启的 init 失败、这次重启才成功，自定义数据根会一直不被收紧、旧密钥也不会迁移
-      // （默认根有启动早期的预收紧兜住，自定义根没有）。与首启一致：失败只 warn。
-      try {
-        await migrateSecretsAndTightenAcl();
-      } catch (e) {
-        console.warn('[security] 重启后的密钥加固收尾失败:', e?.message ?? e);
-      }
-      backendRestartCount = 0;
-      setBackendStatus('ready');
-      console.log('[wechat] 后端已恢复，Remote 方法数:', wechatBoot?.methods?.length ?? 0);
-    })();
-  }, delay);
-  if (backendRestartTimer.unref) backendRestartTimer.unref();
-}
-
-/** Super Time 前端构建产物（npm run build:ui 生成）；缺失时回退到演示页。 */
-function uiEntryHtml() {
-  const built = path.join(__dirname, 'src', 'client', 'ui-dist', 'index.html');
-  if (fs.existsSync(built)) return built;
-  return path.join(__dirname, 'src', 'index.html');
-}
-
+/** 向所有窗口转发后端事件（本体已外提，这里只保留 main.js 内的调用点形状）。 */
 function broadcastWechatEvent(name, args) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      win.webContents.send('wechat:event', { name, args });
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
-  }
+  broadcastToWindows(windowCtx, 'wechat:event', { name, args });
+  // 同一份事件也要发给手机浏览器（SSE）。payload 形状与 `wechat:event` 完全一致，
+  // 所以渲染层那套「事件名 → DOM CustomEvent」的分发逻辑两边共用、一字不改 ——
+  // WAL 实时刷新链（`wechat-data/updated`）在手机上因此与桌面端同样即时。
+  if (remoteAccess) remoteAccess.pushEvent(name, args);
 }
 
 /**
- * 更新状态广播（`update:event`）。
- *
- * 与 `wechat:event` 同一套做法：主进程是唯一的事实来源，渲染层只是投影。
- * 进度类事件在 update.js 里已按 1% 阶梯节流，这里不再二次过滤。
+ * 后端生命周期监管器：拉起 / init / 状态 / 有界重启 / 设置回灌 / 密钥迁移。
+ * main.js 只保留“事件往哪发”与“什么时机开始/停止”两个编排点。
  */
+const backendSupervisor = createBackendSupervisor({
+  isPackaged: app.isPackaged,
+  env: process.env,
+  utilityProcess,
+  diagLog,
+  resolveHangMethods,
+  DEBUG_HANG_ENV,
+  createWorkerChannel,
+  onEvent: broadcastWechatEvent,
+  loadWechatSettings,
+  mirroredSecretValues,
+  restrictWechatState,
+  stateDir: STATE_DIR,
+  fs,
+  path,
+  applyConfig,
+  recordResolved,
+  callTimeoutMs: CALL_TIMEOUT_MS,
+  longTimeoutMs: LONG_CALL_TIMEOUT_MS,
+});
+
 function broadcastUpdateState(state) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      win.webContents.send('update:event', state);
-    } catch {
-      /* 窗口可能已销毁，忽略 */
-    }
-  }
+  broadcastToWindows(windowCtx, 'update:event', state);
 }
 
 /**
@@ -523,202 +303,86 @@ function createUpdateServiceSafe() {
 }
 
 function createWindow() {
-  /**
-   * 窗口图标。**打包态这个路径不存在**（`build/` 是 electron-builder 的 buildResources，
-   * 不在 `files` 白名单里），于是 `icon` 为 undefined，Windows 会退回用 exe 内嵌的图标 ——
-   * 而那个图标就是同一份 `build/icon.ico`（`win.icon` 会在打包时烘进 exe；实测取出两者
-   * 的 32×32 帧是同一张图）。即 dev 与打包态的窗口/任务栏图标一致，**不存在「打包版没图标」**。
-   *
-   * 所以别把 `build/` 加进 `files`：那会白带一份 83KB，并把图标改成走
-   * `nativeImage.createFromPath` 读 asar 内的 .ico（打包态未验证的路径），收益为零。
-   * 相关取证见 docs/RELEASE-PLAN.md 的 M19。
-   */
-  const appIcon = path.join(__dirname, 'build', 'icon.ico');
-  // 启动尺寸取固定基准 1440×900，再按主屏工作区收敛：写死一个较大的尺寸时
-  // （历史上是 1664×1066），1366×768 或 1080p@125% 的机器上窗口会比屏幕还大
-  // （审计 P0-2）。窗口本身始终可缩放，下限取实测能容下
-  // 「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
-  const MIN_W = 960;
-  const MIN_H = 640;
-  const BASE_W = 1440;
-  const BASE_H = 900;
-  const work = screen.getPrimaryDisplay().workAreaSize;
-  const initialWidth = Math.max(MIN_W, Math.min(BASE_W, work.width));
-  const initialHeight = Math.max(MIN_H, Math.min(BASE_H, work.height));
-  mainWindow = new BrowserWindow({
-    width: initialWidth,
-    height: initialHeight,
-    minWidth: MIN_W,
-    minHeight: MIN_H,
-    useContentSize: true,
-    resizable: true,
-    // 标题栏是自绘的（frame:false），最大化/全屏都由自绘按钮触发，所以这里要放开，
-    // 否则那两个按钮点了没反应。
-    maximizable: true,
-    fullscreenable: true,
-    show: false,
-    frame: false,
-    backgroundColor: '#0f172a',
-    title: 'Super Time',
-    icon: fs.existsSync(appIcon) ? appIcon : undefined,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // sandbox: true —— 渲染进程只经 preload 暴露的 contextBridge 说话，
-      // 而 preload.js 只 require('electron')（沙箱下允许），因此可以直接开。
-      // 开着的意义：渲染进程即使是 XSS 也在 OS 级沙箱里，拿不到 Node 原语。
-      // 回归由 scripts/packaged-smoke.js 兜（它会真的启动打包产物断言后端就绪+出图）。
-      sandbox: true,
-      spellcheck: false,
-      backgroundThrottling: true
-    }
-  });
-
-  // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）
-  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', true));
-  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('window:fullscreen-changed', false));
-
-  // 调试：SUPERTIME_SKELETON=1 时加载 ?skeleton=1，Overview 强制展示骨架屏。
-  const loadQuery = process.env.SUPERTIME_SKELETON === '1' ? { query: { skeleton: '1' } } : undefined;
-  mainWindow.loadFile(uiEntryHtml(), loadQuery);
-
-  // DevTools 按需开启：实测打开 DevTools 会额外拉起一个 renderer 进程并常驻
-  // 约 200MB（独立窗口 + 自己的 V8 堆），因此不再默认打开。
-  // 需要调试时设 SUPERTIME_DEVTOOLS=1。
-  if (!app.isPackaged && process.env.SUPERTIME_DEVTOOLS === '1') {
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
-  }
-
-  // 渲染进程日志转发（默认关闭，用 SUPERTIME_RENDERER_LOG=1 打开）。
-  //
-  // 之前是无条件转发，而「朋友圈」面板会为大量被 CSP 拦下的 http 图片各打一条
-  // console 消息，一次访问就是成百上千行 —— 每条都要跨 IPC 到主进程再写 stdout，
-  // 在 stdout 未被及时消费时会堆在 Node 的写缓冲里。这里改成按需开启，
-  // 并对单条消息截断、对总量设上限。
-  if (process.env.SUPERTIME_RENDERER_LOG === '1') {
-    const MAX_RELAYED = 500;
-    let relayed = 0;
-    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-      if (relayed >= MAX_RELAYED) return;
-      relayed += 1;
-      if (relayed === MAX_RELAYED) {
-        console.log(`[renderer] 已达转发上限 ${MAX_RELAYED} 行，后续渲染进程日志不再转发`);
-      }
-      console.log(`[renderer:${level}]`, String(message).slice(0, 500), `(${sourceId}:${line})`);
-    });
-  }
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[render-process-gone]', JSON.stringify(details));
-  });
-  mainWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
-    console.error('[did-fail-load]', code, desc, url);
-  });
-
-  // 事件循环阻塞诊断（SUPERTIME_ELD=1）。主进程里所有 Remote 方法都用同步的
-  // node:sqlite，一旦某个查询跑得久，窗口消息泵就被卡住 —— 这正是
-  // 「应用未响应」的来源。这里按 5 秒窗口统计事件循环延迟的最大值。
-  if (process.env.SUPERTIME_ELD === '1') {
-    const { monitorEventLoopDelay } = require('node:perf_hooks');
-    const histogram = monitorEventLoopDelay({ resolution: 20 });
-    histogram.enable();
-    const timer = setInterval(() => {
-      const max = histogram.max / 1e6;
-      const p99 = histogram.percentile(99) / 1e6;
-      if (max > 200) {
-        console.log(`[eld] 主进程事件循环阻塞 ${max.toFixed(0)}ms (p99=${p99.toFixed(0)}ms) @ ${new Date().toISOString()}`);
-      }
-      histogram.reset();
-    }, 5000);
-    if (timer.unref) timer.unref();
-  }
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
+  mainWindow = createMainWindow(windowCtx);
 }
 
-/**
- * 给每个 webContents 装导航 / 开窗守卫。
- *
- * 渲染的是**聊天与朋友圈内容**，即不可信输入 —— 所以这里默认拒绝：
- *   · 新窗口一律不开（`action:'deny'`），只有 http(s) 才交给系统浏览器
- *     （`file:` 能直接拉起本地可执行文件，`smb:`/UNC 会带着凭据外连）；
- *   · 页面导航只允许应用自己的 `file:` 页面（本应用是单页，正常不会导航）；
- *   · 不允许挂 `<webview>`（本应用不用它）。
- * 用 `app.on('web-contents-created')` 统一安装，而不是只在主窗口上挂一遍 ——
- * 否则将来任何新建的 webContents（预览窗、开发者工具）都绕过了守卫。
- * 判定逻辑在 `src/backend/navigation-policy.js`，有单测覆盖（含默认拒绝）。
- * @param {Electron.WebContents} contents - 新建的 webContents。
- */
 function installWebContentsGuards(contents) {
-  contents.setWindowOpenHandler(({ url }) => {
-    if (decideWindowOpen(url) === 'external') {
-      openExternalAttempts += 1;
-      // 系统没有对应处理程序时 openExternal 会 reject —— 不接住就是未处理拒绝。
-      shell.openExternal(url).catch((e) => {
-        console.warn('[security] 交给系统打开失败：' + String(e && e.message ? e.message : e));
-      });
-    } else {
-      console.warn('[security] 已拒绝打开外部链接：' + String(url));
-    }
-    return { action: 'deny' };
-  });
-  // 判定「有没有真开出窗口」的唯一可靠依据：`did-create-window` 只在窗口真的建出来时触发。
-  contents.on('did-create-window', () => { popupWindowsCreated += 1; });
-  contents.on('will-navigate', (event, url) => {
-    if (decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止页面导航：' + String(url));
-  });
-  // will-redirect 是**独立事件**：主框架的 HTTP 重定向只走它（实测 will-navigate 拦下
-  // 第一步后它就不会触发，所以当前只是「单点依赖」—— 一旦 decideNavigation 放宽，
-  // 重定向立刻成为绕过路径）。判定函数是现成的，这里补上零成本。
-  contents.on('will-redirect', (event, url) => {
-    if (decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止重定向：' + String(url));
-  });
-  contents.on('will-attach-webview', (event) => {
-    event.preventDefault();
-    console.warn('[security] 已阻止挂载 webview');
-  });
-  // will-frame-navigate 与 will-navigate 不是一对：它还覆盖**子框架**的导航。
-  // 本应用不渲染任何 iframe（源码里 0 处 <iframe>），所以这条正常永远不该放行；
-  // 但一旦有人将来加了 iframe，缺了这条守卫就等于给「子框架里加载任意外部页」开门。
-  contents.on('will-frame-navigate', (event, details) => {
-    const url = typeof details === 'string' ? details : (details && details.url);
-    if (typeof url === 'string' && decideNavigation(url, __dirname) === 'allow') return;
-    event.preventDefault();
-    console.warn('[security] 已阻止框架导航：' + String(url));
-  });
+  installWindowGuards(contents, guardsCtx);
+  // 渲染层 console → 诊断日志（2026-10-08 补）。修复前渲染层的 warn/error 一行都进不了
+  // app.log，用户机器上「卡片只显示默认文案」这类问题取不到任何证据。
+  // 默认只收 warn/error（渲染层 info/log 量太大，会把轮转冲掉）；要更全就设
+  // SUPERTIME_RENDERER_LOG_LEVELS=verbose,info,warn,error。
+  installRendererConsoleCapture(contents, diagLog, rendererConsoleLevels());
 }
 
 app.whenReady().then(async () => {
   // 未获单实例锁的重复实例不做任何初始化（app.quit 已在上面调用）。
   if (!singleInstanceLock) return;
+  // 入口路径只解析一次：IPC 信任与窗口 loadFile 必须用同一份路径。
+  // 若两处各自再调 uiEntryHtml，构建产物恰好出现/消失时会出现「信任旧入口、
+  // 却加载回退入口」的竞态。
+  const appEntryHtml = uiEntryHtml(windowCtx);
+  windowCtx.entryHtml = appEntryHtml;
+  // 所有特权 IPC 共用同一份来源守卫：只接受当前主窗口的主 frame，
+  // 且 frame URL 必须是应用自己的入口 HTML。
+  const ipcTrust = createIpcTrust({
+    getMainWindow: () => mainWindow,
+    entryUrl: pathToFileURL(appEntryHtml).href,
+  });
   // 诊断日志（M6）：界面上的「导出诊断日志」走这三个。
   // 正常情况下日志落在 STATE_DIR/logs，用户报障时把它交出来即可。
   registerMiscIpc({
-    ipcMain, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
-    getMainWindow: () => mainWindow, buildDiagnosticReport, installWebContentsGuards,
+    ipcMain, ipcTrust, app, dialog, shell, path, fs, diagLog, STATE_DIR, APP_VERSION, debugGates, licenseService,
+    clipboard, getMainWindow: () => mainWindow, buildDiagnosticPreview, buildDiagnosticReport, installWebContentsGuards,
   });
 
   // —— Super Time 后端相关的 IPC ——
   // 处理器全部在这里注册（都在 createWindow() 之前），后端进程本身在
   // createWindow() 之后才启动，理由见那一处注释。
-  registerWechatIpc({
-    ipcMain, app, licenseService, debugGates, awaitBackendReady, findModelCatalog, APP_VERSION,
-    getWechatBackend: () => wechatBackend, getWechatBoot: () => wechatBoot, getBackendStatus: () => backendStatus,
+  // 这份 ctx 同时喂两处：IPC 的 `wechat:call` 与 HTTP 的 `POST /api/wechat/call`。
+  // 两条路都经 `gatedWechatCall(ctx, …)`（call-gates.js），闸门只有一份实现 ——
+  // 分开写的话，最可能的漂法是 HTTP 那份少抄 catch，于是许可校验一抛异常就变成放行。
+  // 两个传输层也都把「过闸后的调用」放进同一把并发闸：worker 是单线程，桌面端若绕过
+  // 队列继续无限压请求，远程端的 32 条排队上限就会被桌面请求随意绕过。
+  const backendCallQueue = createCallQueue();
+  const gateCtx = {
+    ipcMain, ipcTrust, app, licenseService, debugGates,
+    awaitBackendReady: (timeoutMs) => backendSupervisor.waitUntilReady(timeoutMs),
+    findModelCatalog, APP_VERSION,
+    getWechatBackend: () => backendSupervisor.backend,
+    getWechatBoot: () => backendSupervisor.boot,
+    getBackendStatus: () => backendSupervisor.status,
+    scheduleWechatCall: (task, meta) => backendCallQueue.run(task, meta),
+    getCallQueueStats: () => backendCallQueue.stats(),
+    getRpcStats: () => (backendSupervisor.backend && typeof backendSupervisor.backend.stats === 'function'
+      ? backendSupervisor.backend.stats()
+      : undefined),
     BACKEND_CALL_READY_WAIT_MS, loadLlmConfig, saveLlmConfig, loadLlmStore, upsertLlmProfile, activateLlmProfile, deleteLlmProfile,
+  };
+  registerWechatIpc(gateCtx);
+
+  // —— 局域网远程访问（手机端）——
+  // 这里只**创建**，不启动：启动排在后端就绪之后（见 setBackendStatus('ready') 那一处），
+  // 因为数据根要等后端解析出来才知道，而配置与令牌都住在数据根下。
+  // 静态资源服务的就是 Electron 自己 loadFile 的同一份产物（`src/client/ui-dist`），
+  // 所以手机与桌面加载的是同一个构建，不存在「手机版另一套代码」。
+  remoteAccess = createRemoteAccessServer({
+    getDataRoot: () => String(backendSupervisor.boot?.info?.root ?? ''),
+    getUiDistDir: () => path.join(__dirname, 'src', 'client', 'ui-dist'),
+    gatedCall: (method, args) => gatedWechatCall(gateCtx, method, args),
+    callQueue: backendCallQueue,
+    appVersion: APP_VERSION,
+    ...(process.env.SUPERTIME_REMOTE_ACCESS_LOOPBACK_TEST === '1' ? { bindHost: '127.0.0.1' } : {}),
+  });
+  registerRemoteAccessIpc({
+    ipcMain,
+    ipcTrust,
+    remoteAccess,
+    backendCall: (method, args) => gatedWechatCall(gateCtx, method, args),
   });
 
   // ── 自动更新（electron-updater + GitHub Releases）──────────────────────
-  // 三个通道 + 一条广播：
-  //   update:state   —— 渲染层挂载时补一次状态（可能已经错过早先的事件，同 wechat:backend-state）
-  //   update:check   —— 用户手动触发；自动检查由 scheduleAutoCheck 排在启动 30s 后
-  //   update:install —— 重启并安装已下载的更新
-  //   update:event   —— 主进程 → 渲染层的状态推送（含下载进度）
+  // 五条控制通道已收敛到 ipc-update.js；update:event 仍由本文件的广播函数发出。
   // 更新源与安装包同源（build.publish → 打包时写进 resources/app-update.yml），
   // 状态机与各事件的收敛规则见 src/backend/update.js。
   updateService = createUpdateServiceSafe();
@@ -727,21 +391,7 @@ app.whenReady().then(async () => {
   // package:smoke / 诊断日志导出都会带上这一行。
   console.log('[update] 更新服务已就绪 supported=%s current=%s',
     updateService.isSupported(), APP_VERSION);
-  ipcMain.handle('update:state', () => ({ ok: true, value: updateService.getState() }));
-  ipcMain.handle('update:check', async (_event, opts) => {
-    try {
-      // 只收 `manual` 这一个布尔：渲染层决定不了「要不要真的出网」—— 那只由主进程的
-      // 打包态判定与环境变量决定（见 update.js 的 isSupported）。
-      const next = await updateService.check({ manual: !!(opts && opts.manual === true) });
-      return { ok: true, value: next };
-    } catch (err) {
-      return { ok: false, error: { message: err?.message || String(err) } };
-    }
-  });
-  ipcMain.handle('update:install', () => {
-    const r = updateService.install();
-    return r.ok ? { ok: true } : { ok: false, error: { message: r.error } };
-  });
+  registerUpdateIpc({ ipcMain, ipcTrust, updateService });
 
   createWindow();
 
@@ -789,12 +439,12 @@ app.whenReady().then(async () => {
         // 而「是否真的开出了窗口」只有 did-create-window 说得上话。
         for (const u of ['file:///C:/Windows/System32/calc.exe', 'smb://attacker/share', 'ms-msdt:/id']) {
           const opened = await evaluate(`window.open(${JSON.stringify(u)}) === null ? 'null' : 'window'`);
-          probe.opened.push({ url: u, result: opened, windowsAfter: popupWindowsCreated });
+          probe.opened.push({ url: u, result: opened, windowsAfter: securityCounters.popupWindowsCreated });
         }
         // ③ 外部导航
         probe.navAttempt = await evaluate("(() => { window.location.href = 'https://example.com/'; return 'attempted' })()");
-        probe.openExternalAttempts = openExternalAttempts;
-        probe.popupWindows = popupWindowsCreated;
+        probe.openExternalAttempts = securityCounters.openExternalAttempts;
+        probe.popupWindows = securityCounters.popupWindowsCreated;
         probe.urlAfter = mainWindow.webContents.getURL();
         probe.navigated = probe.urlAfter !== probe.urlBefore;
         console.log('[security-probe] ' + JSON.stringify(probe));
@@ -808,43 +458,20 @@ app.whenReady().then(async () => {
   // 首帧被整段推迟）。
   // 放到这里还有个实际原因：状态横幅由渲染端承载，而渲染端要等窗口建好才能收到事件，
   // 也要等它挂载后主动查 backendState 才能补救「首启就失败」时错过的事件。
-  try {
-    // 先读取 wechat/config.json 里的路径配置并映射到 DSH_WECHAT_* 环境变量
-    // （必须在 fork 之前，子进程直接继承 process.env）。
-    applyConfig();
-    backendUserDataPath = app.getPath('userData');
-    await startWechatBackend(backendUserDataPath);
-    // 启动后将实际解析到的路径记录回 wechat/config.json。
-    try {
-      recordResolved(wechatBoot.info);
-    } catch (e) {
-      console.warn('[wechat] 记录路径配置失败:', e);
-    }
-    // 若 wechat/config.json 中已有保存过的微信设置，启动时回写后端
-    // （密钥类字段会被一并交给后端写进 secrets.json，而不是回放成镜像副本）。
-    try {
-      await applySavedWechatSettings();
-    } catch (e) {
-      console.warn('[wechat] 应用 wechat/config.json 设置失败:', e);
-    }
-    // M1 启动期收尾：按**真实**数据根收紧权限 + 把旧 config.json 里的密钥迁走。
-    try {
-      await migrateSecretsAndTightenAcl();
-    } catch (e) {
-      console.warn('[security] 密钥加固收尾失败:', e);
-    }
-    backendRestartCount = 0;
-    setBackendStatus('ready');
-    console.log('[wechat] Super Time 后端已就绪，Remote 方法数:', wechatBoot.methods.length);
+  // 启动编排已抽到 backend-supervisor.js：这里只按“窗口已建好”的时机发起，
+  // 并保留远程访问的启动点（它依赖后端解析出的数据根）。
+  const bootResult = await backendSupervisor.bootstrap(app.getPath('userData'));
+  if (bootResult.ok) {
     console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
-  } catch (err) {
-    console.error('[wechat] Super Time 后端初始化失败:', err);
-    // 初始化失败也交给监管器重试 —— 这是最该自愈的一类失败：
-    // 首次启动时数据可能正在解密、数据根尚未就绪，等一会儿再拉一次往往就成功。
-    // 不用阻塞式对话框，失败信息走渲染端横幅（见 setBackendStatus 的说明）。
-    setBackendStatus('down', `初始化失败：${err?.message ?? err}`);
-    scheduleBackendRestart(`初始化失败：${err?.message ?? err}`);
+    // 远程访问（手机端）在**后端就绪之后**才决定要不要监听：数据根这时才解析出来，
+    // 而 `api_enabled` / `api_port` 与令牌都住在数据根下。默认不监听（见 http-server.js 文件头）。
+    try {
+      const ra = await remoteAccess.syncWithConfig();
+      if (ra.running) console.log('[remote-access] 手机访问地址: http://%s:%d', ra.address, ra.port);
+    } catch (e) {
+      console.warn('[remote-access] 启动失败（不影响桌面端）:', e?.message ?? e);
+    }
   }
 
   // 自动更新（延迟 30s，见 update.js）：刻意放在后端 try/catch **之外** —— 更新能不能
@@ -852,114 +479,9 @@ app.whenReady().then(async () => {
   // 排在建窗与后端之后是为了不与启动期抢带宽/事件循环。
   updateService.scheduleAutoCheck();
 
-  // 调试用：SUPERTIME_SCREENSHOT=path 时加载完成后截图并退出；
-  // SUPERTIME_THEME=light|dark 可在截图前强制主题。
-  if (process.env.SUPERTIME_SCREENSHOT) {
-    setTimeout(async () => {
-      try {
-        if (process.env.SUPERTIME_THEME === 'light' || process.env.SUPERTIME_THEME === 'dark') {
-          await mainWindow.webContents.executeJavaScript(`(() => {
-            const wantLight = ${JSON.stringify(process.env.SUPERTIME_THEME)} === 'light';
-            const isLight = document.documentElement.classList.contains('theme-light');
-            if (isLight !== wantLight) {
-              const btn = document.querySelector('[data-theme-toggle]');
-              btn?.click();
-            }
-            window.scrollTo(0, 0);
-            return true;
-          })()`);
-          await new Promise((resolve) => setTimeout(resolve, 400));
-        }
-        if (process.env.SUPERTIME_TAB) {
-          await mainWindow.webContents.executeJavaScript(`(() => {
-            const label = ${JSON.stringify(process.env.SUPERTIME_TAB)};
-            const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === label);
-            btn?.click();
-            return true;
-          })()`);
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-        // 调试用：SUPERTIME_CLICK='标签A|标签B' 依次点击匹配的按钮
-        // （精确匹配优先，其次前缀匹配），用于截图验证需要多步交互的界面
-        // ——SUPERTIME_TAB 只能点一次、且必须整串相等，开不出「先切页签、再展开面板」这类状态。
-        if (process.env.SUPERTIME_CLICK) {
-          const labels = process.env.SUPERTIME_CLICK.split('|').map((s) => s.trim()).filter(Boolean);
-          for (const label of labels) {
-            const clicked = await mainWindow.webContents.executeJavaScript(`(() => {
-              const want = ${JSON.stringify(label)};
-              const btns = Array.from(document.querySelectorAll('button'));
-              const hit = btns.find(b => (b.textContent || '').trim() === want)
-                || btns.find(b => (b.textContent || '').trim().startsWith(want));
-              if (!hit) return false;
-              hit.click();
-              return true;
-            })()`);
-            console.log('[click]', label, clicked ? 'ok' : '按钮未找到');
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-        }
-        if (process.env.SUPERTIME_MAP_DEBUG === '1') {
-          const mapInfo = await mainWindow.webContents.executeJavaScript(`(() => {
-            const s = Array.from(document.querySelectorAll('section')).find(x => (x.textContent || '').includes('世界板块'));
-            if (!s) return { found: false };
-            const cs = getComputedStyle(s);
-            const p = s.parentElement;
-            const pc = p ? getComputedStyle(p) : null;
-            return {
-              found: true,
-              text: s.textContent?.slice(0, 80),
-              h: s.getBoundingClientRect().height,
-              display: cs.display,
-              flex: cs.flex,
-              minH: cs.minHeight,
-              overflow: cs.overflow,
-              parentClass: p?.className,
-              parentH: p?.getBoundingClientRect().height,
-              parentDisplay: pc?.display,
-              parentOverflow: pc?.overflow,
-              parentMinH: pc?.minHeight,
-              bodyH: s.children[1]?.getBoundingClientRect().height,
-              bodyTextH: s.children[1]?.textContent?.length,
-              canvasCount: s.querySelectorAll('canvas').length,
-              hasEcharts: !!s.querySelector('.map, [class*="map"]'),
-            };
-          })()`);
-          console.log('[map debug]', JSON.stringify(mapInfo));
-        }
-        const scrollTarget = Number(process.env.SUPERTIME_SCROLL);
-        if (process.env.SUPERTIME_SCROLL === '1' || scrollTarget > 0) {
-          const info = await mainWindow.webContents.executeJavaScript(`(() => {
-            const c = document.querySelector('[class*="content"]');
-            const p = c?.closest('[class*="panel"]');
-            const scrollables = Array.from(document.querySelectorAll('*')).filter(el => el.scrollHeight > el.clientHeight + 10);
-            return {
-              innerHeight: window.innerHeight,
-              rootH: document.getElementById('root')?.getBoundingClientRect().height,
-              panelH: p?.getBoundingClientRect().height,
-              contentClientH: c?.clientHeight,
-              contentScrollH: c?.scrollHeight,
-              contentOverflow: c ? getComputedStyle(c).overflow : null,
-              scrollables: scrollables.slice(0, 5).map(el => ({ cls: el.className, client: el.clientHeight, scroll: el.scrollHeight })),
-            };
-          })()`);
-          console.log('[scroll debug]', JSON.stringify(info));
-          await mainWindow.webContents.executeJavaScript(`(() => {
-            const candidates = Array.from(document.querySelectorAll('*')).filter(el => el.scrollHeight > el.clientHeight + 10);
-            const target = candidates.slice().sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || candidates[candidates.length - 1];
-            if (target) target.scrollTop = ${scrollTarget || 520};
-            return candidates.length;
-          })()`);
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
-        const image = await mainWindow.webContents.capturePage();
-        fs.writeFileSync(process.env.SUPERTIME_SCREENSHOT, image.toPNG());
-        console.log('[screenshot] saved', process.env.SUPERTIME_SCREENSHOT);
-      } catch (e) {
-        console.error('[screenshot] failed', e);
-      }
-      app.quit();
-    }, 9000);
-  }
+  // 截图/主题/页签/点击/地图/滚动等调试自动化已抽到
+  // src/backend/main-debug-automation.js；这里只保留启动末尾的挂载点。
+  installScreenshotAutomation({ getWindow: () => mainWindow, app });
 
   // 安全守卫的端到端探针已挪到 createWindow() 之后（见那处注释）：
   // did-finish-load 会在后端 init 的 await 期间触发，注册晚了就永远等不到。
@@ -971,15 +493,10 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
-  backendStopping = true;
-  if (backendRestartTimer) { clearTimeout(backendRestartTimer); backendRestartTimer = null; }
-  if (wechatBackend) {
-    try {
-      wechatBackend.dispose();
-    } catch {
-      /* 退出时尽力释放 */
-    }
-  }
+  backendSupervisor.stop();
+  // 远程访问先停：它是唯一**对外**的入口，退出时应当立刻不再接受连接（而不是等进程销毁
+  // socket）。stop() 是异步的，这里不 await —— 退出路径上不能挂住，端口随进程一起释放。
+  if (remoteAccess) { void remoteAccess.stop(); remoteAccess = null; }
   // 更新服务收尾。两条路都会经过这里：
   //   · 用户点「重启并安装」→ quitAndInstall 内部调 app.quit() → 本回调；
   //   · 自动更新已下载 → autoInstallOnAppQuit 在退出时拉起安装包。

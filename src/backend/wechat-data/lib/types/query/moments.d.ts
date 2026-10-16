@@ -4,6 +4,13 @@ export interface MomentMedia {
     url: string;
     key: string;
     md5: string;
+    /**
+     * 媒体标签上的 `token`（`<url token="…">`）。
+     *
+     * 为什么必须带着：2026-10-08 真机实测，CDN 地址只有 `?token=…` 仍是 400，
+     * **必须 `?token=…&idx=1`** 且尺寸段为 `/0`、协议为 https 才返回 200（见 `sns-cdn-url.ts`）。
+     */
+    token?: string;
     /** Media <id> (cache-key input, together with timelineId). */
     id?: string;
     /** Timeline <id> (SnsDataItem/TimelineObject id). */
@@ -34,18 +41,30 @@ export interface MomentComment {
     to_nickname: string;
     content: string;
     ts: number;
-    /** Comment-attached image (imagelist first image). */
+    /**
+     * Comment-attached image (`<imageinfo>` 里的第一张)。
+     *
+     * ⚠️ `token` 与 `seed` 是**取到图的前提**，不是可选装饰（2026-10-09 修）：
+     * 实测评论图的裸 `<url>`（不带 `token`/`idx=1`）**5/5 全部 HTTP 400、0 字节**，
+     * 而经 `snsCdnUrl` 补上 `?token=…&idx=1` 后 **5/5 HTTP 200**（`x-enc=1`，密文）。
+     * 之前这里只解析 `url`/`thumb`/`md5`/`media_id`，渲染层拿裸地址去要图必然落空。
+     */
     image?: {
         thumb?: string;
         url?: string;
         md5?: string;
         mediaId?: string;
+        /** `<token>`：CDN 校验标签。实测缺它就是 400。 */
+        token?: string;
+        /** `<key>`：WxIsaac64 解密种子。缺它拿到的是密文。 */
+        seed?: string;
     };
 }
 /** One moments entry (mirror Rust MomentEntry, without CDN-dependent fields). */
 export interface MomentEntry {
     tid: string;
     username: string;
+    /** **显示名**（备注 → 昵称 → ID 逐级回退），不是发帖人的微信 ID —— 别拿它去 join 会话（P3-6 实测澄清）。 */
     author: string;
     text: string;
     ts: number;
@@ -120,7 +139,9 @@ export declare function parseSnsLikesComments(xml: string): {
  * @param authorUsername - optional author filter.
  * @returns the moments snapshot.
  */
-export declare function queryMoments(decryptedDir: string, offset?: number, limit?: number, authorUsername?: string, selfUsername?: string): {
+export declare function queryMoments(decryptedDir: string, offset?: number, limit?: number, 
+/** 按发帖人过滤，传的是会话微信 ID —— 正名见 `WechatSession.username`（P3-6）。 */
+authorUsername?: string, selfUsername?: string): {
     moments: MomentEntry[];
     total: number;
 };

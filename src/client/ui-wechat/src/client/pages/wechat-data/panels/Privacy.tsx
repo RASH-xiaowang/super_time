@@ -5,8 +5,12 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { apiExportCsv, apiGetPrivacyScan, readRenderCache, writeRenderCache } from '../api.ts'
+import { ActionNoticeLine, useActionNotice } from './use-action-notice.tsx'
 import type { PrivacySnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, clickableKey, PanelHeader } from '../ui/kit.tsx'
+import { Card, clickableKey, EmptyState, PanelHeader, ProgressBar } from '../ui/kit.tsx'
+import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
+import { useElapsedSeconds } from './hooks.tsx'
+import { CACHE_BASE, CACHE_INSIGHTS } from './overview-cache-keys.ts'
 import css from './list-panel.module.css'
 import kitCss from '../ui/kit.module.css'
 
@@ -30,8 +34,8 @@ const PRIVACY_ITEMS: ReadonlyArray<{ key: string; label: string; icon: string; d
  */
 function readScope(): { sessions: number | null; messages: number | null } {
   try {
-    const base = JSON.parse(localStorage.getItem('dsh-wechat-overview-base-v1') ?? 'null') as { sessions?: number } | null
-    const ins = JSON.parse(localStorage.getItem('dsh-wechat-overview-insights-v1') ?? 'null') as { messages?: { total?: number } } | null
+    const base = JSON.parse(localStorage.getItem(CACHE_BASE) ?? 'null') as { sessions?: number } | null
+    const ins = JSON.parse(localStorage.getItem(CACHE_INSIGHTS) ?? 'null') as { messages?: { total?: number } } | null
     return {
       sessions: typeof base?.sessions === 'number' ? base.sessions : null,
       messages: typeof ins?.messages?.total === 'number' ? ins.messages.total : null,
@@ -50,13 +54,22 @@ function readScope(): { sessions: number | null; messages: number | null } {
  *   ① 会扫描什么（范围，带真实规模数字）  ② 结果能做什么
  *   ③ 六个体检项（各自在找什么）          ④ 隐私边界（全程本机）
  */
-function PrivacyLanding({ scanning }: { scanning: boolean }): React.JSX.Element {
+function PrivacyLanding({ scanning, elapsed = 0 }: { scanning: boolean; elapsed?: number }): React.JSX.Element {
   const { sessions, messages } = readScope()
   const scope = sessions !== null || messages !== null
     ? `本机解密库的全部消息${sessions !== null ? ` · ${sessions.toLocaleString()} 个会话` : ''}${messages !== null ? ` · ${messages.toLocaleString()} 条消息` : ''}`
     : '本机解密库的全部消息'
   return (
     <div className={css.pvLand}>
+      {/* 扫描进度（R4）：全库敏感信息扫描实测 >1s（冷启更久），此前只有「正在扫描…」四个字，
+          用户无从判断是在跑还是卡死。后端不报总量 ⇒ 用 indeterminate 短条 + 已等待秒数，
+          这是最诚实的表达（不编造百分比）。 */}
+      {scanning && (
+        <div className={css.pvProgress} data-st-scan-progress="1">
+          <ProgressBar value={0} indeterminate />
+          <span className={css.pvProgressText} role="status">正在扫描全库敏感信息…（已等待 {elapsed}s）</span>
+        </div>
+      )}
       <div className={css.pvLandGrid}>
         <div className={css.pvLandCard}>
           <h4 className={css.pvLandTitle}>{scanning ? '正在扫描…' : '会扫描什么'}</h4>
@@ -117,9 +130,11 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
 }): React.JSX.Element {
   const [data, setData] = useState<PrivacySnapshot | null>(() => readRenderCache<PrivacySnapshot>('privacy-scan'))
   const [loading, setLoading] = useState(false)
+  const scanElapsed = useElapsedSeconds(loading)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [showMore, setShowMore] = useState<ReadonlySet<string>>(new Set())
+  const { notice: exportNotice, flash: flashExport } = useActionNotice()
 
   const scan = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -165,9 +180,9 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
   const exportCsv = async (): Promise<void> => {
     try {
       const r = await apiExportCsv({ kind: 'privacy' })
-      window.alert(`已导出风险清单 ${r.count} 条 → ${r.path}`)
+      flashExport(`已导出风险清单 ${r.count} 条 → ${r.path}`)
     } catch (e) {
-      window.alert('导出失败: ' + (e as Error).message)
+      flashExport('导出失败: ' + (e as Error).message)
     }
   }
 
@@ -184,14 +199,17 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
             <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
               {loading ? '扫描中…' : data ? '重新扫描' : '开始扫描'}
             </button>
-            {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }}>导出报告</button>}
+            {data && <button type="button" className={css.catBtn} onClick={() => { void exportCsv() }} {...desktopActionProps()}>{desktopAction() ? '导出报告（仅电脑）' : '导出报告'}</button>}
           </>
         )}
       />
       {error && <div className={kitCss.error} role="alert">⚠️ {error}</div>}
+      {/* 导出回执（W3-11.1）：与 `error`（扫描没跑成）分开——一个是「这次导出成没成」，
+          一个是「这个面板的整体扫描读不到」。混在一行会把导出失败说成扫描失败。 */}
+      <ActionNoticeLine notice={exportNotice} />
       {/* 落地态与扫描中共用同一套结构：扫描期间把范围/体检项留着，
           用户知道"在扫什么、还要等什么"，而不是盯着一个词加满屏空白。 */}
-      {!error && !data && <PrivacyLanding scanning={loading} />}
+      {!error && !data && <PrivacyLanding scanning={loading} elapsed={scanElapsed} />}
       {!error && data && (
         <div className={css.scroll}>
           {data.categories.map((c) => {
@@ -253,7 +271,15 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
               ))}
             </Card>
           )}
-          {totalHits === 0 && <div className={css.empty}>无命中 · 本地消息中未发现敏感信息</div>}
+          {totalHits === 0 && (
+            <div className={css.empty}>
+              <EmptyState
+                icon="✅"
+                title="没有命中"
+                desc="按上面 6 类规则在本地消息里逐条比对，没有发现敏感信息。这个结论只覆盖本机已解密的消息库，不代表对外发送过什么。"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

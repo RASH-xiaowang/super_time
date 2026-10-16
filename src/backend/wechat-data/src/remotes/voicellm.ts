@@ -18,12 +18,15 @@ export interface createVoiceLlmRemotesInputs {
   getWhisperDownload: () => WhisperDownloadProgress | null
   setWhisperDownload: (v: WhisperDownloadProgress | null) => void
   getWhisperTranscribing: () => WhisperTranscribing
+  /** W3-5.5：下载的取消槽（由 gateway 持有）。 */
+  whisperDownloadSignal: (jobId?: string) => { signal: AbortSignal; done: () => void } | undefined
+  cancelWhisperDownloadJob: (jobId?: string) => boolean
   setWhisperTranscribing: (v: WhisperTranscribing) => void
 }
 
 export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
   return {
-    async transcribeVoiceBatch(options: { limit?: number }): Promise<VoiceTranscribeResult> {
+    async transcribeVoiceBatch(options?: { limit?: number }): Promise<VoiceTranscribeResult> {
       if (rc.getWhisperTranscribing().active) { rc.op('task', 'transcribe_voice_batch', 'fail', '', '已有转写任务进行中'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine: '', error: '已有转写任务进行中' } }
       const cfg = getConfig(rc.dirs().decrypted)
       const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)
@@ -31,7 +34,7 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
       const engine = whisperEnginePath(configBin, modelsDir)
       if (!engine) { rc.op('task', 'transcribe_voice_batch', 'fail', '', '未检测到 whisper.cpp 引擎'); return { ok: false, total: 0, done: 0, failed: 0, skipped: 0, errors: [], engine, error: '未检测到 whisper.cpp 引擎（可在第 5 步点击「下载引擎」，或设 DSH_WECHAT_WHISPER_BIN）' } }
       const modelId = typeof cfg['whisper_model'] === 'string' && cfg['whisper_model'] ? cfg['whisper_model'] : 'medium'
-      const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 50), 200))
+      const limit = Math.max(1, Math.min(Math.floor(options?.limit ?? 50), 200))
       const tr: WhisperTranscribing = { active: true, done: 0, total: 0, failed: 0, skipped: 0, current: '' }
       rc.setWhisperTranscribing(tr)
       try {
@@ -58,7 +61,7 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
       }
     },
 
-    async installWhisperEngine(): Promise<WhisperDownloadResult> {
+    async installWhisperEngine(options?: { jobId?: string }): Promise<WhisperDownloadResult> {
       if (rc.getWhisperDownload() !== null) { rc.op('settings', 'install_whisper_engine', 'fail', '', '已有下载任务进行中'); return { ok: false, error: '已有下载任务进行中' } }
       const cfg = getConfig(rc.dirs().decrypted)
       const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)
@@ -67,8 +70,12 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
       if (existing) { rc.op('settings', 'install_whisper_engine', 'skip', '', '引擎已存在'); return { ok: true, file: 'whisper-cli.exe', bytes: 0 } }
       const prog: WhisperDownloadProgress = { model: 'engine', file: 'whisper-bin-x64.zip', received: 0, total: 0 }
       rc.setWhisperDownload(prog)
+      /** W3-5.5：与模型下载共用同一个取消槽（两路互斥：同一时刻只允许一个下载）。 */
+      const ctl = rc.whisperDownloadSignal(options?.jobId)
       try {
-        const result = await installWhisperEngine(modelsDir, (received, total) => { prog.received = received; prog.total = total })
+        const result = ctl === undefined
+          ? await installWhisperEngine(modelsDir, (received, total) => { prog.received = received; prog.total = total })
+          : await installWhisperEngine(modelsDir, (received, total) => { prog.received = received; prog.total = total }, ctl.signal)
         if (result.ok && result.path) {
           saveConfig(rc.dirs().decrypted, { whisper_bin: result.path })
         }
@@ -76,25 +83,57 @@ export function createVoiceLlmRemotes(rc: createVoiceLlmRemotesInputs) {
         if (result.error) out.error = result.error
         rc.op('settings', 'install_whisper_engine', out.ok ? 'ok' : 'fail', '', out.error ?? '引擎已安装')
         return out
+      } catch (e) {
+        const code = (e as { code?: string })?.code
+        if (code === 'WHISPER_DOWNLOAD_CANCELED') {
+          rc.op('settings', 'install_whisper_engine', 'skip', '', '用户取消')
+          return { ok: false, error: '下载已取消（引擎包不做续传，下次从头下）' }
+        }
+        throw e
       } finally {
+        ctl?.done()
         rc.setWhisperDownload(null)
       }
     },
 
-    async downloadWhisperModel(options: { model: string }): Promise<WhisperDownloadResult> {
+    async downloadWhisperModel(options: { model: string; jobId?: string }): Promise<WhisperDownloadResult> {
       if (rc.getWhisperDownload() !== null) { rc.op('settings', 'download_whisper_model', 'fail', options.model, '已有模型下载任务进行中'); return { ok: false, error: '已有模型下载任务进行中' } }
       const cfg = getConfig(rc.dirs().decrypted)
       const modelsDir = resolveWhisperModelsDir(cfg['whisper_models_dir'] as string | undefined, rc.dirs().decrypted)
       const prog: WhisperDownloadProgress = { model: options.model, file: '', received: 0, total: 0 }
       rc.setWhisperDownload(prog)
+      /** W3-5.5：本次下载的取消槽（没有 jobId 就不可取消，行为与改动前一致）。 */
+      const ctl = rc.whisperDownloadSignal(options?.jobId)
       try {
-        const result = await whisperDownloadModel(options.model, modelsDir, (received, total) => { prog.received = received; prog.total = total })
+        const result = ctl === undefined
+          ? await whisperDownloadModel(options.model, modelsDir,
+            (received, total) => { prog.received = received; prog.total = total })
+          : await whisperDownloadModel(options.model, modelsDir,
+            (received, total) => { prog.received = received; prog.total = total }, ctl.signal)
         prog.file = WHISPER_DOWNLOAD_FILES.find(([id]) => id === options.model)?.[1] ?? options.model
         rc.op('settings', 'download_whisper_model', result.ok ? 'ok' : 'fail', options.model, result.error ?? `bytes=${result.bytes ?? 0}`)
         return result
+      } catch (e) {
+        // W3-5.5：取消不是失败——— 局部文件还在，下次续传仍然有效。
+        const code = (e as { code?: string })?.code
+        if (code === 'WHISPER_DOWNLOAD_CANCELED') {
+          rc.op('settings', 'download_whisper_model', 'skip', options.model, '用户取消（断点已保留）')
+          return { ok: false, error: '下载已取消（已下载的部分会保留，下次可续传）' }
+        }
+        throw e
       } finally {
+        ctl?.done()
         rc.setWhisperDownload(null)
       }
+    },
+
+    /** W3-5.5：取消一次正在跑的下载。 */
+    cancelWhisperDownload(options: { jobId?: string }): { ok: boolean; message?: string } {
+      const id = typeof options?.jobId === 'string' ? options.jobId.trim() : ''
+      if (id === '') return { ok: false, message: '缺少任务标识' }
+      return rc.cancelWhisperDownloadJob(id)
+        ? { ok: true }
+        : { ok: false, message: '这次下载已经结束了（或标识不认识），无需取消' }
     },
 
     getWhisperStatus(): WhisperStatus {

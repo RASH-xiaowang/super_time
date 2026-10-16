@@ -26,7 +26,8 @@
  * 会静默落后一代）。Legacy env overrides `DSH_WECHAT_DECRYPTED_DIR` /
  * `DSH_WECHAT_DECODED_DIR` bypass the root entirely (explicit user pinning).
  */
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readSync, readdirSync, statSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { DatabaseSync } from './sqlite-connection.ts'
 import { join, resolve } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
@@ -75,30 +76,36 @@ function isSqliteDatabase(path: string): boolean {
 }
 
 /**
- * 拷贝一个文件；若它是真的 SQLite 主库，连它的 `-wal` 一起拷（顺序：主库先，`-wal` 后）。
+ * 拷一个 SQLite 库：优先 `VACUUM INTO`（自洽单文件），退路是「主库 + `-wal`」两次读。
  *
- * 为什么必须连 `-wal` 一起拷：WAL 模式下新提交的数据可能**整代都还在 `-wal` 里**（主库只在
- * checkpoint 时才被回填）。H9 已在构建 COMMIT 后尽力 `PRAGMA wal_checkpoint(TRUNCATE)`，但
- * **有并发读者（游标未读完）时它拿不到锁**（实测返回 `{busy:1, checkpointed:0}` 且不抛错），
- * 所以「只拷主库」在源端应用/读者还在跑时必然静默拷出**上一代**索引（实测 rows 少一半、
- * built_at 是旧的）。
+ * ## 为什么要 `VACUUM INTO`（W2-8.5）
  *
- * 为什么不拷 `-shm`：它是 WAL 索引（可重建的临时结构），SQLite 明确要求**不可**连同库文件
- * 一起搬 —— 陈旧/异机的 `-shm` 会让读者按错误的 WAL 视图去读。目标端第一次打开时会自己
- * 按 `-wal` 重建它。
+ * N11 已经把「只拷主库会静默落后一代」这件事修掉了 —— 办法是把 `-wal` 一起带过去。
+ * 但那是**两次独立的文件读**，中间源端还在跑：checkpoint 期间 SQLite 是**直接把页写进
+ * 主库文件**的，于是拷贝到的主库可能停在「回填了一半」的那一代，而 `-wal` 又已经被
+ * 回填过的帧留在里面 —— 两半拼起来不是任何一代，SQLite 会报 malformed 或读出脏页。
+ * 这就是撕裂窗口：它不需要任何 bug，只需要源端还在写。
  *
- * 为什么先看文件头：`-wal` 只有**真的** SQLite 主库才有语义。非库文件旁边的同名文件不是
- * SQLite 状态，照旧按运行时产物跳过（`dirs.spec.ts` 有一条断言钉着这个行为）。
+ * `VACUUM INTO` 是 SQLite 官方的「一致性单文件快照」入口（在线备份 API 的 SQL 形态）：
+ * 它在一个读事务里把库整份重写到一个**新**文件，写出来的必然自洽、天然没有 `-wal`。
+ * 撕裂窗口不是被「缩小」了，是从根上不存在了。
  *
- * 为什么主库在前、`-wal` 在后：回放 WAL 只会把库**向前**推进。若两次拷贝之间源端又把 WAL
- * 重置/截断了，我们拷到的 `-wal` 盐值已失效 → SQLite 按校验和直接忽略它，退化成「主库那份
- * 自洽（略旧）的快照」；反过来先拷 `-wal` 再拷主库，则可能出现「用旧 WAL 帧覆盖主库里更新
- * 的页」的降级回放。
+ * ## 退路（不能省）
+ *
+ * `VACUUM INTO` 会失败：文件头是 SQLite 但内容坏了、目录只读导致 `-shm` 建不出来、
+ * 目标路径已存在等等。这时必须**退回**「主库 + `-wal`」—— 宁可有一对可能撕裂的页，
+ * 也不能让 bootstrap 直接失败把用户挡在门外。
+ *
  * @param src - 源文件路径。
- * @param dest - 目标文件路径。
- * @returns 连带拷了 `-wal` 时返回 true。
+ * @param dest - 目标文件路径（`VACUUM INTO` 要求它尚不存在）。
+ * @param vacuumed - 收集「走了 `VACUUM INTO`」的目标路径，给调用方留痕迹。
+ * @returns 连带拷了 `-wal` 时返回 true（走了退路）。
  */
-function copyFileWithWal(src: string, dest: string): boolean {
+function copyFileWithWal(src: string, dest: string, vacuumed: string[]): boolean {
+  if (isSqliteDatabase(src) && existsSync(src + '-wal') && vacuumInto(src, dest)) {
+    vacuumed.push(dest)
+    return false
+  }
   cpSync(src, dest, { recursive: false })
   if (!isSqliteDatabase(src)) return false
   const walSrc = src + '-wal'
@@ -107,26 +114,57 @@ function copyFileWithWal(src: string, dest: string): boolean {
   return true
 }
 
+/** 把路径转成 SQL 字符串字面量（单引号按 SQL 规则写两遍）。 */
+function sqlString(p: string): string {
+  return "'" + p.split("'").join("''") + "'"
+}
+
+/**
+ * 用 `VACUUM INTO` 给源库取一份自洽快照（W2-8.5）。
+ *
+ * 只读打开：源目录不该被 bootstrap 改动。只读打开不了（`-shm` 建不出来等）就交回退路，
+ * 不去用读写打开 —— 那会在源目录里留下 `-shm`/`-wal` 副作用。
+ *
+ * @param src - 源库路径。
+ * @param dest - 目标路径（必须尚不存在，`VACUUM INTO` 不肯覆盖）。
+ * @returns 成功时 true。
+ */
+function vacuumInto(src: string, dest: string): boolean {
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(src, { readOnly: true })
+    db.exec('VACUUM INTO ' + sqlString(dest))
+    db.close()
+    return true
+  } catch {
+    // 失败时可能已经写了一半：必须清掉，否则退路里的 cpSync 会撞上「目标已存在」。
+    if (db !== undefined) { try { db.close() } catch { /* 已经关过了 */ } }
+    try { rmSync(dest, { force: true }) } catch { /* 清不掉就让退路自己报错 */ }
+    return false
+  }
+}
+
 /**
  * Recursively copy a directory/file, carrying SQLite `-wal` sidecars with their main database
  * and skipping `-shm` runtime files.
  * @param src - source path.
  * @param dest - destination path.
  * @param walCarried - collects destination paths of the `-wal` sidecars that were carried over.
+ * @param vacuumed - collects destination paths that came from a `VACUUM INTO` snapshot.
  */
-function copyTree(src: string, dest: string, walCarried: string[]): void {
+function copyTree(src: string, dest: string, walCarried: string[], vacuumed: string[]): void {
   const st = statSync(src)
   if (!st.isDirectory()) {
     const name = src.split(/[\\/]/).pop() ?? ''
     // `-wal`/`-shm` 不单独拷：`-wal` 只作为所属主库的副产物拷（见 copyFileWithWal）。
     if (isRuntimeArtifact(name)) return
-    if (copyFileWithWal(src, dest)) walCarried.push(dest + '-wal')
+    if (copyFileWithWal(src, dest, vacuumed)) walCarried.push(dest + '-wal')
     return
   }
   mkdirSync(dest, { recursive: true })
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     if (isRuntimeArtifact(entry.name)) continue
-    copyTree(join(src, entry.name), join(dest, entry.name), walCarried)
+    copyTree(join(src, entry.name), join(dest, entry.name), walCarried, vacuumed)
   }
 }
 
@@ -180,32 +218,37 @@ export function resolveSourceDir(env: Record<string, string | undefined> = proce
  * a root that already contains `decrypted` is left untouched. Explicit
  * legacy overrides bypass the root, so nothing is copied in that mode.
  *
- * SQLite 主库的 `-wal` 会随主库一起拷（见 copyFileWithWal）；`walCarried` 就是给调用方
- * 留痕迹用的 —— 「这次拷的是不是最新一代」不能只靠猜。
+ * 源端有活的 `-wal` 时，那个库**不按文件拷**，而是走 SQLite 的 `VACUUM INTO` 取一份
+ * 自洽快照（W2-8.5）—— 「拷主库 + 拷 -wal」两次读之间源端可能正在 checkpoint，
+ * 拷到的是一对**撕裂**的页/帧。`-wal` 那条路只作为 `VACUUM INTO` 失败时的退路。
+ *
+ * 留痕迹用的字段有两个：`vacuumed`（走了自洽快照）与 `walCarried`（走了退路）。
+ * 「这次拷的是不是最新一代」不能只靠猜。
  * @param env - environment mapping.
  * @returns what was copied (or skipped), for observability.
  */
 export function bootstrapWechatData(
   env: Record<string, string | undefined> = process.env,
-): { root: string; copied: string[]; skipped: boolean; walCarried: string[] } {
+): { root: string; copied: string[]; skipped: boolean; walCarried: string[]; vacuumed: string[] } {
   const root = resolveWechatDataRoot(env)
   if (env[DECRYPTED_DIR_ENV] !== undefined && env[DECRYPTED_DIR_ENV].trim().length > 0) {
-    return { root, copied: [], skipped: true, walCarried: [] }
+    return { root, copied: [], skipped: true, walCarried: [], vacuumed: [] }
   }
   const decrypted = join(root, 'decrypted')
-  if (existsSync(decrypted)) return { root, copied: [], skipped: true, walCarried: [] }
+  if (existsSync(decrypted)) return { root, copied: [], skipped: true, walCarried: [], vacuumed: [] }
   const source = resolveSourceDir(env)
   if (source === null || !existsSync(source)) {
-    return { root, copied: [], skipped: true, walCarried: [] }
+    return { root, copied: [], skipped: true, walCarried: [], vacuumed: [] }
   }
   const copied: string[] = []
   const walCarried: string[] = []
+  const vacuumed: string[] = []
   for (const item of BOOTSTRAP_ITEMS) {
     const src = join(source, item)
     const dest = join(root, item)
     if (!existsSync(src)) continue
-    copyTree(src, dest, walCarried)
+    copyTree(src, dest, walCarried, vacuumed)
     copied.push(item)
   }
-  return { root, copied, skipped: false, walCarried }
+  return { root, copied, skipped: false, walCarried, vacuumed }
 }

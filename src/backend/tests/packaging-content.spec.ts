@@ -27,10 +27,18 @@ const rules = requireCjs('../../../scripts/package-content-rules.js') as {
   MIN_ASAR_BYTES: number
   ALLOWED_SRC_DIR_PREFIXES: string[]
   ALLOWED_SRC_FILES: string[]
+  ASAR_FORBIDDEN_SRC_PREFIXES: string[]
+  ASAR_FORBIDDEN_SRC_SUFFIX_RE: RegExp
   normalizeEntry: (p: string) => string
   srcEntryViolations: (e: string[]) => Array<{ entry: string; rule: string; hint: string }>
+  asarSourceLeakViolations: (e: string[]) => Array<{ entry: string; rule: string; hint: string }>
   asarSizeViolations: (bytes: unknown) => Array<{ rule: string; detail: string }>
   collectDiskEntries: (dir: string, prefix: string) => string[]
+  FORBIDDEN_IN_DEPS: Array<{ name: string; why: string }>
+  REQUIRED_IN_DEPS: Array<{ name: string; why: string }>
+  productionDepClosure: (rootDir: string, rootPkg: unknown) => { names: Set<string>; missing: string[] }
+  depClosureViolations: (names: Set<string>) => Array<{ rule: string; name: string; hint: string }>
+  countRemoteMethods: (srcDir: string) => number
 }
 
 const repoRoot = resolve(import.meta.dirname ?? __dirname, '..', '..', '..')
@@ -96,6 +104,53 @@ describe('打包内容规则（N22）', () => {
     ])).toEqual([])
   })
 
+  it('asar 源码泄漏规则能识别 TS/TSX 与前端源码树，但放过 ui-dist 和 lib 产物', () => {
+    const leaks = [
+      '/src/client/ui-wechat/package.json',
+      '/src/client/ui-wechat/src/client/index.tsx',
+      '/src/client/ui-primitives-shim/src/Button.tsx',
+      '/src/client/ui-app/index.html',
+      '/src/backend/deps/koffi/package.json',
+      '/src/backend/wechat-data/src/gateway.ts',
+    ]
+    const bad = rules.asarSourceLeakViolations(leaks)
+    expect(bad.map((v) => v.entry)).toEqual([
+      'src/client/ui-wechat/package.json',
+      'src/client/ui-wechat/src/client/index.tsx',
+      'src/client/ui-primitives-shim/src/Button.tsx',
+      'src/client/ui-app/index.html',
+      'src/backend/deps/koffi/package.json',
+      'src/backend/wechat-data/src/gateway.ts',
+    ])
+    expect(bad.map((v) => v.rule)).toEqual([
+      'asar-source-tree', 'asar-source-tree', 'asar-source-tree',
+      'asar-source-tree', 'asar-source-tree', 'asar-typescript-source',
+    ])
+    expect(rules.asarSourceLeakViolations([
+      'src/client/ui-dist/index.html',
+      'src/client/ui-dist/assets/app.js',
+      'src/backend/wechat-data/lib/index.js',
+      'src/shared/llm-defaults.json',
+    ])).toEqual([])
+  })
+
+  it('package.json 的 files 显式排除前端源码树与 TSX（不依赖 asar 才暴露）', () => {
+    const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
+      build?: { files?: string[] }
+    }
+    const files = pkg.build?.files ?? []
+    for (const pattern of [
+      '!src/**/*.ts',
+      '!src/**/*.tsx',
+      '!src/client/ui-app/**',
+      '!src/client/ui-wechat/**',
+      '!src/client/ui-primitives-shim/**',
+      '!src/backend/deps/**',
+    ]) {
+      expect(files, `package.json#build.files 缺少 ${pattern}`).toContain(pattern)
+    }
+  })
+
   it('白名单清单本身自洽：都在 src/ 下、前缀带斜杠、非空', () => {
     expect(rules.ALLOWED_SRC_DIR_PREFIXES.length).toBeGreaterThan(3)
     expect(rules.ALLOWED_SRC_FILES.length).toBeGreaterThan(0)
@@ -132,6 +187,7 @@ describe('打包内容规则（N22）', () => {
     const entries = (listPackage(asarPath) as string[])
     const violations = rules.srcEntryViolations(entries)
     expect(violations, JSON.stringify(violations.slice(0, 5))).toEqual([])
+    expect(rules.asarSourceLeakViolations(entries), '本机 asar 仍含前端/TS 源码泄漏').toEqual([])
     const bytes = readFileSync(asarPath).length
     expect(rules.asarSizeViolations(bytes)).toEqual([])
   })
@@ -139,8 +195,82 @@ describe('打包内容规则（N22）', () => {
   it('规则确实被 packaged-smoke 调用（接线断言：规则再对，没接线也白搭）', () => {
     const src = readFileSync(join(repoRoot, 'scripts', 'packaged-smoke.js'), 'utf8')
     // 注释不算：要求是**调用**形式（名字后紧跟左括号），注释掉调用点会让这两条转红。
-    for (const fn of ['srcEntryViolations(', 'asarSizeViolations(', 'collectDiskEntries(']) {
+    for (const fn of [
+      'srcEntryViolations(',
+      'asarSourceLeakViolations(',
+      'asarSizeViolations(',
+      'collectDiskEntries(',
+      'countRemoteMethods(',
+    ]) {
       expect(src.includes(fn), `packaged-smoke.js 里没有调用 ${fn}`).toBe(true)
+    }
+  })
+
+  it('打包冒烟的「期望方法数」取网关继承链全量，且与 docs/API.md 的数字一致', () => {
+    // 起因：M21 把方法壳拆进基类后，冒烟只读空的 `gateway.ts` ⇒ 期望值数成 **0**，
+    // 比对必然红，而它只在 nightly/发版跑，没人当场发现。计数收进规则模块（本用例的两半就是它的双保险）：
+    //   ① 扫得动（>100，防空转）；② 与 docs/API.md 同源一致（两边都从源码数，不该漂）。
+    const n = rules.countRemoteMethods(join(repoRoot, 'src', 'backend', 'wechat-data', 'src'))
+    expect(n, '网关链读不到 @Remote ⇒ 冒烟会拿 0 去比').toBeGreaterThan(100)
+    const api = readFileSync(join(repoRoot, 'docs', 'API.md'), 'utf8')
+    const docN = Number(/当前共 \*\*(\d+)\*\* 个 Remote 方法/.exec(api)?.[1])
+    expect(n, '期望方法数与 docs/API.md 漂了（两处都对着源码数，不该不一致）').toBe(docN)
+  })
+})
+
+
+describe('生产依赖闭包（审计 §P2-6 ⑰ 的 TODO ②：不需要先打包的闸门）', () => {
+  // 背景：electron-builder 会把**生产依赖树**自动带进包 —— `files` 白名单管得住 `src/**`，
+  // 管不住「某个依赖顺路带进来一个 135 MB 的兄弟包」。实测 asar 曾涨到 196.65 MB，其中
+  // `onnxruntime-web/dist` 135.15 MB 与 `@img/sharp-win32-x64` 18.50 MB 都是
+  // `@huggingface/transformers` 的传递依赖，而**没有一条正向规则列出过它们**。
+  // 原来的体积断言只在本地存在 `dist/win-unpacked/.../app.asar` 时才跑 ⇒ 长年不执行。
+  const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as unknown
+
+  it('仓库现状：禁用包一个都没有，必需包一个都不缺', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    // 防空转：前缀/解析写错会让闭包只剩几个包，那样下面两条断言都恒真。
+    expect(names.size, '闭包太小 ⇒ 扫描没生效').toBeGreaterThan(30)
+    expect(rules.depClosureViolations(names)).toEqual([])
+  })
+
+  it('反例自证①：闭包里出现 onnxruntime-web 必须报 dep-forbidden', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    const bad = new Set(names)
+    bad.add('onnxruntime-web')
+    const v = rules.depClosureViolations(bad)
+    expect(v.map((x) => x.name)).toContain('onnxruntime-web')
+    expect(v.find((x) => x.name === 'onnxruntime-web')?.rule).toBe('dep-forbidden')
+  })
+
+  it('反例自证②：必需包（onnxruntime-common）缺了必须报 dep-required', () => {
+    const { names } = rules.productionDepClosure(repoRoot, rootPkg)
+    const bad = new Set(names)
+    bad.delete('onnxruntime-common')
+    const v = rules.depClosureViolations(bad)
+    expect(v.map((x) => x.name)).toContain('onnxruntime-common')
+    expect(v.some((x) => x.rule === 'dep-required')).toBe(true)
+  })
+
+  it('闭包跟着**传递依赖**走，且能吃下嵌套 node_modules（这正是抓 135MB 的机制）', () => {
+    const root = join(scratch, 'closure')
+    const mk = (rel: string, pkg: unknown) => {
+      mkdirSync(join(root, rel), { recursive: true })
+      writeFileSync(join(root, rel, 'package.json'), JSON.stringify(pkg), 'utf8')
+    }
+    mk('', { name: 'root' })
+    mk('node_modules/a', { name: 'a', dependencies: { b: '1' } })
+    // b 只存在于 a 自己的 node_modules 下（嵌套而非提升）—— 解析必须能下沉找到
+    mk('node_modules/a/node_modules/b', { name: 'b' })
+    const got = rules.productionDepClosure(root, { dependencies: { a: '1' } })
+    expect([...got.names].sort()).toEqual(['a', 'b'])
+  })
+
+  it('禁用/必需两张名单都不是空的，且每条都写明了理由（否则就是无声的名单）', () => {
+    expect(rules.FORBIDDEN_IN_DEPS.length).toBeGreaterThanOrEqual(3)
+    expect(rules.REQUIRED_IN_DEPS.length).toBeGreaterThanOrEqual(8)
+    for (const e of [...rules.FORBIDDEN_IN_DEPS, ...rules.REQUIRED_IN_DEPS]) {
+      expect(e.why.length, `${e.name} 的理由太短（形同没写）`).toBeGreaterThanOrEqual(5)
     }
   })
 })

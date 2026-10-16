@@ -20,3 +20,19 @@ export function proxyableSrc(...urls: Array<string | undefined>): string {
   for (const u of urls) if (u && /^(https:|data:|blob:)/i.test(u)) return u
   return ''
 }
+
+/**
+ * 同上，但**也接受 `http:`**（2026-10-04 用户要求朋友圈图片全部走 CDN）。
+ *
+ * 为什么单独一个函数而不是改上面那个：头像等路径的既有契约是「http 远端地址不返回」
+ * （见 `avatar-local.spec.ts`），那条契约由渲染层把关、避免白跑一趟会被拒的 RPC；
+ * 朋友圈现在明确要 http，就只让朋友圈用这个变体。后端同样已放宽到 http(s)，
+ * 且主机仍受微信 CDN 白名单约束。
+ *
+ * @param urls - 候选地址，按优先级排列。
+ * @returns 第一个 http(s)/data/blob 地址；都没有则空串。
+ */
+export function proxyableSrcAllowHttp(...urls: Array<string | undefined>): string {
+  for (const u of urls) if (u && /^(https?:|data:|blob:)/i.test(u)) return u
+  return ''
+}

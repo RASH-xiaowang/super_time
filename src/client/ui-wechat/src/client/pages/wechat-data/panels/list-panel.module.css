@@ -22,11 +22,11 @@
 /* ── 头部 ── */
 .hd { display: flex; align-items: baseline; gap: 8px; }
 .catBtn {
-  padding: 5px 13px;
+  padding: 4px 13px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 3%, transparent);
-  font-size: 12px;
+  font-size: var(--nm-fs-sm);
   color: var(--nm-text-1);
   cursor: pointer;
   transition: all 0.15s;
@@ -48,7 +48,7 @@
   min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -59,7 +59,7 @@
   min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -79,11 +79,11 @@
 .fileGrid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 
 /* ── 列表行 ── */
-.row { display: flex; gap: 10px; padding: 8px; border-radius: 10px; transition: background 0.15s; }
+.row { display: flex; gap: 10px; padding: 8px; border-radius: var(--nm-r-md); transition: background 0.15s; }
 .row:hover { background: var(--nm-bg-hover); }
 .rowIcon {
   width: 36px; height: 36px;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: linear-gradient(135deg, color-mix(in srgb, var(--nm-cyan) 16%, transparent), color-mix(in srgb, var(--nm-purple) 10%, transparent));
   color: var(--nm-cyan);
   display: flex; align-items: center; justify-content: center;
@@ -96,7 +96,7 @@
 .emoCell {
   display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   position: relative;
   cursor: pointer;
   background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
@@ -111,7 +111,7 @@
 .emoPh { font-size: 30px; }
 /* 表情格里的真图：固定 72px 见方、只做 contain（动图自己会动，别加 transition） */
 .emoImg { width: 72px; height: 72px; object-fit: contain; display: block; }
-.emoMd5 { font-size: 10.5px; color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
+.emoMd5 { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
 /* 第 94 轮：点击复制提示的强调色（原来写在 Emoticons.tsx 的行内 style 里）。 */
 .emoMd5Cyan { color: var(--nm-cyan); }
 .emoName { font-size: 11px; font-weight: 600; color: var(--nm-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
@@ -119,11 +119,33 @@
 .fileCell {
   display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-md);
   cursor: pointer;
   background: color-mix(in srgb, var(--nm-cyan) 2%, transparent);
   transition: all 0.15s;
 }
+/* 备份条目：**横向排布**（2026-09-29 用户截图指出："修复这个，文本内容横向排布"）。
+ *
+ * 原先备份条目直接复用共享的 `.fileCell` —— 那是"卡片格"形态
+ * （`flex-direction: column; align-items: center`），适合表情网格那种"一格一个图标"；
+ * 但备份条目里是"名称 + 一长串元信息 + 预览/恢复/删除"三类内容，
+ * 竖排居中会让每行各自居中、按钮还竖着叠起来（正是截图里的样子）。
+ *
+ * 这里**不动共享类**（表情网格等仍保持竖排居中），只给备份这一处加 `.bkCell` 覆盖成一行：
+ * 名称 · 元信息（吃掉剩余宽度）· 按钮组贴右端；窄窗下允许换行而不是撑破。
+ */
+.bkCell {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px 12px;
+  text-align: left;
+}
+.bkCell > .fileName { flex: 0 1 auto; font-size: var(--nm-fs-sm); font-weight: 600; }
+/* 元信息吃掉中间剩余宽度 ⇒ 后面的按钮自然被推到右端 */
+.bkCell > .fileMeta { flex: 1 1 320px; min-width: 0; margin-left: 0; margin-right: 0; }
+
 .fileCell:hover {
   background: color-mix(in srgb, var(--nm-cyan) 6%, transparent);
   border-color: var(--nm-border-hover);
@@ -146,10 +168,10 @@
 .kvVal { color: var(--nm-text-1); word-break: break-all; }
 .kvMono { font-family: var(--nm-font-mono, monospace); font-variant-numeric: tabular-nums; }
 .fileIcon { font-size: 30px; }
-.fileThumb { width: 100%; height: 110px; object-fit: cover; border-radius: 10px; background: var(--nm-bg-hover); }
+.fileThumb { width: 100%; height: 110px; object-fit: cover; border-radius: var(--nm-r-md); background: var(--nm-bg-hover); }
 
 /* ── 隐私体检（第 92 轮：11 处行内样式搬到这里） ───────────────── */
-.pvCatRow { flex-direction: column; align-items: stretch; border: 1px solid var(--nm-border); border-radius: 10px; margin-bottom: 8px; padding: 10px; }
+.pvCatRow { flex-direction: column; align-items: stretch; border: 1px solid var(--nm-border); border-radius: var(--nm-r-md); margin-bottom: 8px; padding: 10px; }
 .pvCatHd { display: flex; align-items: center; gap: 8px; }
 .pvCatLabel { flex: 1; }
 .pvSamples { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -170,7 +192,7 @@
 .rvTypeBadge { color: var(--nm-cyan); border: 1px solid var(--nm-cyan); }
 .rvTimePush { margin-left: auto; }
 .rvBodyPad { padding: 4px 4px 6px 38px; }
-.rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: 8px; background: var(--nm-bg-hover); }
+.rvBody { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: var(--nm-dense-r); background: var(--nm-bg-hover); }
 .rvFootNote { margin-top: 4px; }
 
 /* 新版图片灯箱预览 */
@@ -193,7 +215,7 @@
   flex-direction: column;
   background: var(--nm-bg-card);
   border: 1px solid var(--nm-border);
-  border-radius: 16px;
+  border-radius: var(--nm-r-lg);
   overflow: hidden;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
 }
@@ -220,7 +242,7 @@
 .lightboxBadge {
   flex-shrink: 0;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 40%, transparent);
   color: var(--nm-cyan);
   font-size: 11px;
@@ -234,7 +256,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 16px;
@@ -262,7 +284,7 @@
   width: auto;
   height: auto;
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   transition: transform 0.05s linear;
   user-select: none;
 }
@@ -290,7 +312,7 @@
   height: 26px;
   padding: 0 8px;
   border: 1px solid var(--nm-border);
-  border-radius: 8px;
+  border-radius: var(--nm-dense-r);
   background: transparent;
   color: var(--nm-text-2);
   font-size: 12px;
@@ -344,7 +366,7 @@
   white-space: nowrap;
 }
 .fileName { font-size: 11px; color: var(--nm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.fileMeta { font-size: 10.5px; color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
+.fileMeta { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); margin-left: auto; margin-right: 8px; flex-shrink: 0; font-family: var(--ds-font-family-code); }
 .empty { padding: var(--nm-empty-pad); text-align: center; color: var(--nm-text-2); font-size: var(--nm-empty-fs); grid-column: 1 / -1; }
 
 /* ── 隐私体检：落地态 / 扫描中（U1）────────────────────────────────────
@@ -358,6 +380,22 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+/* 扫描进度（R4）：全库敏感信息扫描实测 >1s（冷启更久），加一条不确定进度条 + 已等待秒数。
+   后端不报总量 ⇒ 用 indeterminate（不编百分比）。 */
+.pvProgress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+}
+.pvProgressText {
+  font-size: var(--nm-fs-sm);
+  color: var(--nm-text-2);
+  font-variant-numeric: tabular-nums;
+}
 .pvLandGrid {
   display: grid;
   /* 380px 下限：1316px 内容宽下正好 3 列（4 列需要 1520px），三张卡并排铺满一行 */
@@ -370,7 +408,7 @@
   gap: 6px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   min-width: 0;
 }
@@ -392,8 +430,15 @@
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   grid-auto-rows: minmax(58px, auto);
   gap: 8px;
-  flex: 1 1 auto;
-  align-content: space-evenly;
+  /* 重新设计（2026-09-29 用户："这个界面也重新设计"，此前审计量到最大空白 163px、占比 69%）：
+   *
+   * 原来这里是 `flex: 1 1 auto` + `align-content: space-evenly` —— 意思是"吃掉面板剩余高度，
+   * 再把行均匀摊开"。可 6 张检测器卡两行总共只有约 124px 高，却被摊在 600+px 的高度里，
+   * 于是两道约 110–120px 的巨空档就出现在卡片行之间（截图里那两片空白正是它）。
+   *
+   * 现在不再吸收剩余高度、行距按 `gap` 走 ⇒ 卡片紧贴排列，空出来的空间只在面板底部集中一块。 */
+  flex: 0 0 auto;
+  align-content: start;
 }
 .pvItem {
   display: flex;
@@ -401,7 +446,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
@@ -414,9 +459,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 8px 12px;
   border: 1px solid color-mix(in srgb, var(--nm-success) 22%, transparent);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-success) 7%, transparent);
   font-size: 11.5px;
   line-height: 1.5;
@@ -432,7 +477,7 @@
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 20%, transparent);
-  border-radius: 6px;
+  border-radius: var(--nm-r-sm);
   padding: 3px 8px;
   flex-shrink: 0;
 }
@@ -442,15 +487,15 @@
   font-size: 12px;
   color: var(--nm-text-2);
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   border: 1px solid var(--nm-border);
 }
 .cite {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-text-2);
   background: var(--nm-bg-hover);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 2px 8px;
   cursor: default;
   corner-shape: round;
@@ -466,7 +511,7 @@
    而卡片是 `overflow: hidden` ⇒ 右侧若干列直接看不见（实测 1180px 越界 19~85px）。
    `minmax(0, 1fr)` 允许收缩到 0，格子随宽度等比变小，数据不再丢。 */
 .heatGrid { display: grid; grid-template-columns: 20px repeat(24, minmax(0, 1fr)); gap: 2px; }
-.heatCell { aspect-ratio: 1; border-radius: 2px; transition: opacity 0.15s; }
+.heatCell { aspect-ratio: 1; border-radius: var(--nm-r-xs); transition: opacity 0.15s; }
 .heatCell:hover { opacity: 0.7; }
 .monthlyBar { display: flex; align-items: flex-end; gap: 4px; height: 72px; padding-top: 6px; }
 .monthCol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
@@ -478,17 +523,17 @@
 }
 .barRow { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
 .barLabel { width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--nm-text-1); }
-.barTrack { flex: 1; height: 8px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); border-radius: 4px; overflow: hidden; }
-.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 4px; box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
+.barTrack { flex: 1; height: 8px; background: color-mix(in srgb, var(--nm-cyan) 6%, transparent); border-radius: var(--nm-r-xs); overflow: hidden; }
+.barFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-xs); box-shadow: 0 0 6px color-mix(in srgb, var(--nm-cyan) 25%, transparent); }
 .reportGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .statChips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .statChip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 12px;
+  padding: 4px 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: var(--nm-bg-hover);
   font-size: 12px;
   color: var(--nm-text-1);
@@ -544,8 +589,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
-  border-radius: 12px;
+  padding: 8px 12px;
+  border-radius: var(--nm-r-md);
   border: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
   flex: none;
@@ -557,7 +602,7 @@
 .tagChip {
   display: inline-flex;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   background: color-mix(in srgb, var(--nm-cyan) 8%, transparent);
   color: var(--nm-cyan);
   font-size: 11px;
@@ -576,7 +621,7 @@
   display: flex;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   cursor: pointer;
   align-items: flex-start;
   transition: background 0.15s;
@@ -585,22 +630,22 @@
 .favCardBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .favCardTitle { font-size: 14px; font-weight: 700; color: var(--nm-text-1); word-break: break-word; }
 .favCardDesc { font-size: 12px; color: var(--nm-text-2); line-height: 1.6; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.favCardThumb { width: 68px; height: 68px; border-radius: 10px; object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
+.favCardThumb { width: 68px; height: 68px; border-radius: var(--nm-r-md); object-fit: cover; flex-shrink: 0; background: var(--nm-bg-hover); border: 1px solid var(--nm-border); }
 .favDetail { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
 .favPart { border-bottom: 1px solid color-mix(in srgb, var(--nm-cyan) 6%, transparent); padding-bottom: 12px; }
 .favPart:last-child { border-bottom: none; padding-bottom: 0; }
 .favPartMeta { font-size: 11px; color: var(--nm-text-2); margin-bottom: 5px; }
 .favPartText { font-size: 13px; color: var(--nm-text-1); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
-.favPartImg { max-width: 100%; max-height: 420px; border-radius: 10px; display: block; background: var(--nm-bg-hover); }
+.favPartImg { max-width: 100%; max-height: 420px; border-radius: var(--nm-r-md); display: block; background: var(--nm-bg-hover); }
 @keyframes dshSpin { to { transform: rotate(360deg); } }
 @keyframes dshToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .backupInput {
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   color: var(--nm-text-1);
   font-size: 12px;
-  padding: 7px 10px;
+  padding: 8px 10px;
   outline: none;
   flex: 1;
 }
@@ -620,13 +665,13 @@
   gap: 4px;
   padding: 12px;
   border: 1px solid var(--nm-border);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   background: color-mix(in srgb, var(--nm-cyan) 4%, transparent);
   min-width: 0;
 }
 .hookFlowIcon { font-size: 16px; }
 .hookFlowTitle { font-size: 12px; color: var(--nm-text-1); }
-.hookFlowSub { font-size: 10.5px; color: var(--nm-text-2); }
+.hookFlowSub { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); }
 .hookFlowArrow { align-self: center; color: var(--nm-cyan); font-size: 14px; }
 .hookGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .hookStat {
@@ -636,7 +681,7 @@
   min-height: 96px;
   padding: 12px 14px;
   border: 1px solid var(--nm-border);
-  border-radius: 12px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   min-width: 0;
 }
@@ -660,7 +705,7 @@
 .hookStat[data-tone='amber'] .hookStatValue { color: var(--nm-warning-text); }
 .hookStat[data-tone='purple'] .hookStatValue { color: var(--nm-purple-text); }
 .hookStat[data-tone='blue'] .hookStatValue { color: var(--nm-info-text); }
-.hookStatHint { font-size: 10.5px; color: var(--nm-text-2); opacity: 0.75; }
+.hookStatHint { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); opacity: 0.75; }
 .hookActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .hookEntryList { display: flex; flex-direction: column; gap: 6px; }
 .hookEntryItem { font-size: 12px; color: var(--nm-text-2); line-height: 1.7; }
@@ -677,15 +722,15 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 16px 18px;
+  padding: 16px 20px;
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   max-width: 760px;
 }
 .rvLandTitle { font-size: 13px; font-weight: 700; color: var(--nm-text-1); }
 .rvLandDesc { font-size: 12px; line-height: 1.6; color: var(--nm-text-2); }
-.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.rvLandList { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .rvLandList li { font-size: 11.5px; line-height: 1.6; color: var(--nm-text-2); }
 .rvLandList b { color: var(--nm-text-1); font-weight: 600; }
 .rvLandActions { display: flex; gap: 8px; flex-wrap: wrap; }

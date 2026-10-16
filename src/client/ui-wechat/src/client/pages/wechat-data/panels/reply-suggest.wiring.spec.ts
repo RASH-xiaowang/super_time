@@ -1,5 +1,9 @@
 /**
- * 「推荐回复」的接线守卫：按钮只在单聊、面板挂在消息流右侧、读取范围只给当前会话。
+ * 「推荐回复」的接线守卫：入口只在单聊、面板挂在消息流右侧、读取范围只给当前会话。
+ *
+ * 2026-09-25 二次调整：推荐回复不再独占一栏 —— 它与「分析」合并进 `ChatRightPanel`
+ * （上推荐回复 / 下分析）。本文件里两条「挂载点」断言随之指向组合层，其余（只对单聊、
+ * 必须有入口、读取范围、知识库下拉、复制走共享助手）语义未变。
  *
  * 起因：这是 2026-09-20 新增的单聊功能（头部按钮 → 第三栏面板 → 3 条候选回复）。
  * 它有三处「接线错了也不报错、但语义就变了」的地方，各钉一条：
@@ -10,7 +14,7 @@
  * @vitest-environment node
  */
 import { readFileSync } from 'node:fs'
-import { readChatsSource } from './chats-source.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -25,21 +29,35 @@ const panel = readFileSync(join(HERE, 'ReplySuggest.tsx'), 'utf8')
 const data = readFileSync(join(ROOT, 'src', 'backend', 'wechat-data', 'src', 'query', 'reply-suggest.ts'), 'utf8')
 
 describe('推荐回复的接线', () => {
-  it('头部按钮只在单聊出现，且文案与入口一致', () => {
-    const at = chats.indexOf('推荐回复：按这段对话')
-    expect(at, '找不到推荐回复按钮的 title —— 改名后请同步本用例').toBeGreaterThan(-1)
-    // 按钮所在的那个条件表达式里必须限定 private
-    const around = chats.slice(Math.max(0, at - 400), at)
-    expect(around.includes("curSession.type === 'private'"), '推荐回复按钮应当只对单聊出现').toBe(true)
+  it('入口是「右栏常驻面板」而不是「头部按钮」（2026-09-25 改），且仍只对单聊出现', () => {
+    // 为什么改：推荐回复从「点头部按钮切出来的第三栏」改成了**右栏的默认内容**
+    // （产品要求「左分析、右推荐回复」两个面板并排），按钮随之移除 ——
+    // 否则同一功能会有两个入口（一个按钮 + 一个已经常驻的面板）。
+    // 守卫的语义没变：**只对单聊出现**（群聊里「回一句」不成立）+ **必须有一个入口**。
+    expect(chats.includes('推荐回复：按这段对话'), '头部按钮已随需求移除，不该再加回来').toBe(false)
+    // 2026-09-25 二次调整：推荐回复与「分析」合并成一块面板（组合层 `ChatRightPanel`），
+    // 挂载点因而从 `<ReplySuggest>` 变成组合层 —— 本条断言的**语义没变**：
+    // 只对单聊出现 + 有一个由状态控制的常驻入口。
+    const at = chats.indexOf('<ChatRightPanel')
+    expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
+    const around = chats.slice(Math.max(0, at - 420), at)
+    // 2026-09-26：右栏挂载条件从「只有单聊」改成「两块各自判定」—— 群聊不给推荐回复
+    // （「回一句」不成立），但仍可**单独打开分析**（分析读当前会话，群聊同样是会话）。
+    // 所以「只对单聊」这条不变量从**挂载条件**移到了 `suggestVisible` 的**定义处**，
+    // 语义没变：本用例仍然钉着它，只是锚点跟着代码搬了家。
+    expect(around.includes('suggestVisible'), '右栏挂载由 suggestVisible 参与决定').toBe(true)
+    expect(chats.includes("const suggestVisible = suggestOpen && curSession !== null && curSession.type === 'private'"),
+      '推荐回复仍只对单聊出现（「回一句」在群里不成立）').toBe(true)
   })
 
   it('面板挂在消息流右侧（第三栏），且把当前会话传进去', () => {
-    const at = chats.indexOf('<ReplySuggest')
-    expect(at, '找不到 ReplySuggest 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
+    const at = chats.indexOf('<ChatRightPanel')
+    expect(at, '找不到 ChatRightPanel 的挂载点 —— 改名后请同步本用例').toBeGreaterThan(-1)
     // 条件在标签**之前**（JSX 的 `{cond && (<Comp .../>)}`），所以两边都要看。
-    const around = chats.slice(Math.max(0, at - 300), at + 220)
+    const around = chats.slice(Math.max(0, at - 300), at + 400)
     expect(around.includes('target={curSession}'), '面板必须拿到当前会话（否则读取范围会退化成「没有范围」）').toBe(true)
-    expect(around.includes("curSession.type === 'private'"), '面板同样只该对单聊挂载').toBe(true)
+    // 「只对单聊」不再写在挂载条件里（群聊要能单独看分析）⇒ 改钉组合层的渲染条件。
+    expect(around.includes('showSuggest={suggestVisible}'), '推荐回复块仍只对单聊渲染').toBe(true)
   })
 
   it('数据层按 talker 取上下文（跨会话隔离靠它）', () => {

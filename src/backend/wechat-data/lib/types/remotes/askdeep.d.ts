@@ -2,7 +2,9 @@ import { KbModelRole, ResolvedModel } from '../query/kb/model-config.ts';
 import { EmbedFn } from '../query/retrieval/embedding.ts';
 import { IntentKind, RerankWeights } from '../query/retrieval/types.ts';
 import { AskOptimizeResult, AskResult, OperationCategory, OperationStatus } from '../types.ts';
+import { VectorBuildResult } from '../types-retrieval.ts';
 import type { Context } from '@deepseek-ai/cordis';
+import type { PrivacyGateFn } from '../gateway-privacy.ts';
 export interface createAskDeepRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -17,17 +19,7 @@ export interface createAskDeepRemotesInputs {
         answer: string;
         intent: IntentKind;
     }>;
-    privacyBlocked: (feature: string, detail?: string) => string | null;
-    privacyGate: (feature: string, stats: {
-        sessions: number;
-        messages: number;
-    }, texts: string[]) => {
-        ok: true;
-        texts: string[];
-    } | {
-        ok: false;
-        error: string;
-    };
+    privacyGate: PrivacyGateFn;
     embedModelName: (override?: string) => string;
     makeEmbedFn: (model: string, feature?: "ask_embed" | "kb_embed" | "kb_link_suggest") => EmbedFn | undefined;
     makeRerankFn: (kbId: number) => ((query: string, documents: string[]) => Promise<number[]>) | undefined;
@@ -42,6 +34,13 @@ export interface createAskDeepRemotesInputs {
         source?: string;
         usernameName?: string;
     }, result: AskResult, elapsedMs: number, model: string) => void;
+    /** W3-6.1：取本轮问答的取消信号（gateway 持有槽位）。 */
+    askSignal: (jobId?: string) => {
+        signal: AbortSignal;
+        done: () => void;
+    } | undefined;
+    /** W3-6.1：取消一轮问答；找不到在跑的那一轮时返回 false。 */
+    cancelAskJob: (jobId?: string) => boolean;
 }
 export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
     askWechat(options: {
@@ -70,7 +69,14 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
          * 而不是把别的库的内容也端上来。
          */
         kbId?: number;
+        jobId?: string;
     }): Promise<AskResult>;
+    cancelAsk: (options: {
+        jobId: string;
+    }) => {
+        ok: boolean;
+        message?: string;
+    };
     optimizeAskQuestion(options: {
         question: string;
         username?: string;
@@ -83,12 +89,5 @@ export declare function createAskDeepRemotes(rc: createAskDeepRemotesInputs): {
     }): Promise<AskOptimizeResult>;
     buildRagVectorIndex(options?: {
         force?: boolean;
-    }): Promise<{
-        ok: boolean;
-        status: string;
-        rows: number;
-        embedded: number;
-        elapsed_ms: number;
-        message?: string;
-    }>;
+    }): Promise<VectorBuildResult>;
 };

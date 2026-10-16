@@ -19,7 +19,7 @@
 }
 
 .tabTrigger {
-  padding: 5px 14px;
+  padding: 4px 14px;
   font-size: var(--nm-fs-md);
   color: var(--nm-text-2);
   background: transparent;
@@ -213,4 +213,61 @@
 .drawerClose:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--nm-bg-card), 0 0 0 4px var(--nm-border-active);
+}
+
+/* ============================================================
+ * 手机档（≤560px）：右侧抽屉与居中弹窗一律转成**全屏底部 sheet**
+ *
+ * 为什么要转：560px 宽的右侧抽屉在 375px 屏上等于「盖满还差一点」—— 既看不到背后的上下文，
+ * 又留着一条点不到内容的缝；居中弹窗则会被手机键盘顶出屏幕。底部 sheet 是移动端的标准答案：
+ * 从下方升起、顶部露出一条遮罩（点它即关）、高度受键盘影响小。
+ *
+ * `!important` 在这里是必需的，不是偷懒：`Drawer` 的宽度是**内联 style**
+ * （`kit-overlay.tsx` 的 `style={{ width: Math.min(width, 560) }}`），
+ * 内联样式优先级高于任何选择器，媒体查询不加 `!important` 就压不住它。
+ *
+ * 圆角只用单值令牌：`theme-geometry.spec.ts` 的复合角白名单是**封闭清单**
+ * （聊天气泡尾巴那几类已交付形态），新代码写 `var(--nm-r-lg,14px) var(...) 0 0` 这种
+ * 带空格的令牌组合会被判成非法字面量。底部两角贴着屏幕底边，本来也看不见。
+ * ============================================================ */
+@media (max-width: 560px) {
+  /* 分段条是 8 组合并视图（通讯录/朋友圈/文件与存储…）的**主导航**，基础档刻意停在
+     24px（WCAG 2.5.8 AA，`merged-compact.wiring.spec.ts` 钉着，不许动）；
+     手机档抬到 44px（WCAG 2.5.5 AAA / Apple HIG）—— 元素级的全局规则被这里的类特异性盖住，
+     所以必须在**这一份**里覆盖，且只能写在媒体查询内（桌面保持 24px 不变）。 */
+  .segItem { min-height: 44px; }
+
+  .drawer {
+    top: auto !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 88dvh;
+    max-height: 88dvh;
+    border-left: none;
+    border-top: 1px solid var(--nm-border, rgba(0, 240, 255, 0.14));
+    border-radius: var(--nm-r-lg, 14px);
+  }
+
+  .dialog {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 88dvh;
+    transform: none;
+    border-radius: var(--nm-r-lg, 14px);
+    /* 手势条那一段留白，免得底部按钮压在系统手势区里点不到 */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* 抽屉与弹窗的内容区在手机上要能惯性滚动 */
+  .drawerBd {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
 }

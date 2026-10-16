@@ -60,9 +60,15 @@ function readRawConfig(p: string): Record<string, unknown> | null {
   return raw
 }
 
-/** Defaults for a missing config. */
+/** Defaults for a missing config.
+ *
+ * `api_enabled` 默认 **false**（2026-10-14 起，v13）：它是「局域网远程访问（手机端）」的
+ * 总开关，打开就意味着**本机开始监听端口**、同网段设备持令牌即可读到微信数据。
+ * 这类入站暴露面必须**默认关闭、由用户显式打开**，不能靠一个缺省值悄悄生效 ——
+ * 见 `docs/PRIVACY.md` 第四节 H。（`query/settings.ts` 早就是这个口径，此处与它对齐。）
+ */
 function defaultConfig(): Record<string, unknown> {
-  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: true, api_port: 5032, api_token: '', cdn_enabled: true, cdn_local_decrypt: true }
+  return { db_dir: '', keys_file: null, decrypted_dir: null, decoded_image_dir: null, wechat_process: 'Weixin.exe', image_aes_key: '', image_xor_key: 136, key_format: 'wx_key_v4.1', db_enc_key: '', api_enabled: false, api_port: 5032, api_token: '' }
 }
 
 /**
@@ -190,6 +196,38 @@ function readConfigSecretFields(decryptedDir: string): Record<string, unknown> {
 }
 
 /**
+ * 「密钥已从 `config.json` 搬到 `secrets.json`」这条提示的确认位（W2-12.3）。
+ *
+ * 它住在 `config.json` 里（**不是** `secrets.json`）—— 普通配置项，不是密钥，
+ * 留在原地即可，不必跟着搬走。
+ *
+ * 为什么需要它：搬运动作是 `saveConfig` 顺手做的、**静默**的，而 `config.json`
+ * 是用户会手工编辑的文件 —— 搬完之后他去那找密钥会找不着。提示必须只出现一次，
+ * 否则就成了每次开设置都要关一次的噪音。
+ */
+export const SECRET_MIGRATION_ACK_FIELD = 'secret_migration_notice_ack'
+
+/**
+ * M1 密钥迁移是不是还**等着**做。
+ *
+ * 判据两条，都不能省：
+ *   ① `config.json` 里**真的还留着有意义的密钥字段**（走 `readConfigSecretFields`，
+ *     于是 `image_xor_key: 136` 这种内置默认值不算 —— 它搬不搬都一样，
+ *     对它报「已迁移」等于骗人）；
+ *   ② 用户还没点过「知道了」（确认位为真就不再提示）。
+ *
+ * 纯读：不开写、不动文件。
+ * @param decryptedDir - 已解密数据根。
+ * @returns `pending` 是否该提示；`fields` 是还留在 config.json 里的字段名。
+ */
+export function secretMigrationPending(decryptedDir: string): { pending: boolean; fields: string[] } {
+  const raw = readRawConfig(configPath(decryptedDir))
+  const fields = Object.keys(readConfigSecretFields(decryptedDir))
+  const acked = raw !== null && raw[SECRET_MIGRATION_ACK_FIELD] === true
+  return { pending: !acked && fields.length > 0, fields }
+}
+
+/**
  * Read the full WeChat config (merged with defaults).
  * @param decryptedDir - decrypted data root (used to locate config.json).
  * @returns the merged config (defaults + file values + resolved paths).
@@ -290,8 +328,32 @@ export function saveConfig(decryptedDir: string, patch: Record<string, unknown>)
     // Image key change => previously decoded .dat images are stale (garbled),
     // so drop the decoded_images cache for a clean re-decode on demand.
     const keyStr = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '')
-    const aesChanged = keyStr(current['image_aes_key']) !== keyStr(imgBefore['image_aes_key'])
-    const xorChanged = keyStr(current['image_xor_key']) !== keyStr(imgBefore['image_xor_key'])
+    /**
+     * ⚠️ 比的是「**将要落盘的**密钥」与「保存前**生效的**密钥」，**不能**用 `current`。
+     *
+     * 2026-09-29 实测（这是"落盘缓存活不过一次运行"的根因）：
+     * 上面第 280 行的 `delete current[field]` 已经把所有密钥字段从 `current` 上抹掉了
+     * （config.json 恒不留密钥，这是有意的），而这里原先读的正是 `current[field]`
+     * ⇒ 左边恒为空串、右边是真密钥 ⇒ `aesChanged`/`xorChanged` **每次保存都为真**
+     * ⇒ `clearDecodedImages` 把整个 `decoded_images` 递归删掉。
+     * 而应用**每次启动都会保存一次配置**（记录 db_dir 等），于是：
+     * 文章封面、远程图片、已解码图片的落盘缓存**每次开应用都被清空**，
+     * 每次会话都要重新抓/重新解码 —— 真机证据：`[key-compare] aesChanged=true((空) vs 16位/e…)`
+     * 且 `patchKeys` 里根本没有密钥字段。
+     *
+     * 现在用 `nextSecrets`（即将写入 secrets.json 的值）与 `imgBefore`（保存前的合并视图）比较：
+     * 普通设置保存 ⇒ 两边相同 ⇒ 不清缓存；用户真的换了密钥 ⇒ 才清。
+     */
+    const aesChanged = keyStr(nextSecrets['image_aes_key']) !== keyStr(imgBefore['image_aes_key'])
+    const xorChanged = keyStr(nextSecrets['image_xor_key']) !== keyStr(imgBefore['image_xor_key'])
+    if (process.env.SUPERTIME_COVER_TRACE === '1') {
+      // 打点只打长度与首字符，不泄露密钥内容。
+      const masked = (v: unknown): string => {
+        const s = keyStr(v)
+        return s === '' ? '(空)' : `${String(s.length)}位/${s.slice(0, 1)}…`
+      }
+      console.warn(`[key-compare] aesChanged=${String(aesChanged)}(${masked(nextSecrets['image_aes_key'])} vs ${masked(imgBefore['image_aes_key'])}) xorChanged=${String(xorChanged)}(${masked(nextSecrets['image_xor_key'])} vs ${masked(imgBefore['image_xor_key'])}) patchKeys=${Object.keys(patch).join(',')}`)
+    }
     if (aesChanged || xorChanged) clearDecodedImages(join(decryptedDir, '..', 'decoded_images'))
     return { ok: true }
   } catch (e) {
@@ -303,6 +365,12 @@ export function saveConfig(decryptedDir: string, patch: Record<string, unknown>)
 function clearDecodedImages(dir: string): void {
   try {
     if (!existsSync(dir)) return
+    // 诊断：谁在清空？这是"每次开应用都要重抓一遍封面/重解一遍图"的嫌疑点，
+    // 调用栈能一句话说清是谁触发的（`SUPERTIME_COVER_TRACE=1` 时打）。
+    if (process.env.SUPERTIME_COVER_TRACE === '1') {
+      const frames = (new Error().stack ?? '').split('\n').slice(1, 5).map((s) => s.trim()).join(' | ')
+      console.warn(`[clear-decoded] 清空 ${dir}（调用栈：${frames}）`)
+    }
     for (const name of readdirSync(dir)) {
       try { rmSync(join(dir, name), { recursive: true, force: true }) } catch { /* best effort */ }
     }

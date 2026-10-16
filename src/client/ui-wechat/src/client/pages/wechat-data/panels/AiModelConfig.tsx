@@ -32,6 +32,10 @@ import {
   type WechatLlmConfig,
   type WechatLlmProfile,
 } from '../api.ts'
+import { LlmBalanceButton, LlmProbeButton } from './llm-probe.tsx'
+import { AiModelPanel } from './ai-model-panel.tsx'
+import { ProfilesQuickSwitch } from './ai-model-profiles.tsx'
+import { EmbedPanelBody, RerankPanelBody } from './ai-model-roles.tsx'
 import { Select } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import css from './ai-model.module.css'
@@ -131,32 +135,16 @@ function configOf(p: WechatLlmProfile): WechatLlmConfig {
   return picked
 }
 
-/** 一个「标题 + 文本框」字段。三个角色的卡片共用，避免把同一段 JSX 抄三遍。 */
-function RoleInput({ label, value, placeholder, onInput }: {
-  label: string
-  value: string
-  placeholder?: string
-  onInput: (v: string) => void
-}): React.JSX.Element {
-  return (
-    <label className={css.modelField}>
-      <span className={setCss.rowName}>{label}</span>
-      <input className={css.modelInput} value={value} placeholder={placeholder} onChange={e => { onInput(e.target.value) }} />
-    </label>
-  )
-}
-
-/** 「上次使用」的相对时间：比一串时间戳更易读，也避免让人以为那是配置时间。 */
-function usedText(ts: number): string {
-  if (!ts) return '从未使用'
-  const days = Math.floor((Date.now() - ts) / 86_400_000)
-  if (days <= 0) return '今天用过'
-  if (days === 1) return '昨天用过'
-  return `${days} 天前用过`
-}
+/** 「上次使用」的相对时间已随快速切换条搬到 `ai-model-profiles.tsx`。 */
 
 /**
  * Render the AI model configuration card.
+ *
+ * 2026-09-30 重做（用户要求「把对话模型 / 嵌入模型 / 重排序模型清晰划分为独立板块，
+ * 并给每个模型面板加可折叠/展开的按钮图标」）：三块各是一个 `AiModelPanel`（真折叠、
+ * 键盘可达），「已配置模型」变成对话模型面板里的**快速切换**条，三块各自带自己的测试按钮。
+ * 子件全部拆到 `ai-model-panel.tsx` / `ai-model-profiles.tsx` / `ai-model-roles.tsx` /
+ * `llm-probe.tsx` —— 既让结构一眼可读，也让本组件的行数棘轮（≤540）能守住。
  * @returns the card element tree.
  */
 export function AiModelConfig(): React.JSX.Element {
@@ -187,14 +175,29 @@ export function AiModelConfig(): React.JSX.Element {
    * 覆盖掉当前这家的配置与 Key。
    */
   const [draftNew, setDraftNew] = useState(false)
+  /**
+   * 三块面板的展开态（2026-09-30 重做；同日按用户要求改成**默认全部折叠**）。
+   *
+   * 为什么默认全折叠：这张卡里三块加起来有十几个字段，全展开时"三块独立"在视觉上等于一堵墙；
+   * 折叠后一眼看到的是**三行标题 + 各自的状态**（`deepseek-chat · api.deepseek.com` /
+   * `跟随对话模型` / `未启用（本地排序）`）—— 想改哪块点哪块。
+   * 这里**不做"配了哪块就自动展开哪块"**：用户明确要求默认折叠，自动展开会让这条失效。
+   */
+  const [panelOpen, setPanelOpen] = useState<Record<'chat' | 'embed' | 'rerank', boolean>>({ chat: false, embed: false, rerank: false })
+  const togglePanel = useCallback((id: 'chat' | 'embed' | 'rerank'): void => {
+    setPanelOpen((prev) => ({ ...prev, [id]: !prev[id] }))
+  }, [])
+  /** 局部更新草稿（只改传进来的字段，不动别的）。 */
+  const patchCfg = useCallback((patch: Partial<WechatLlmConfig>): void => {
+    setLlmConfig((prev) => (prev ? { ...prev, ...patch } : prev))
+  }, [])
+
   const confirm = useConfirm()
   /** 切换配置时保留刚写下的成功提示（见下方回填模型列表的那个 effect）。 */
   const keepMsgRef = useRef(false)
 
   /** 当前模型对应的 API 主机名（标题栏提示用）。 */
-  const apiHost = (() => {
-    try { return new URL(llmConfig?.apiUrl ?? '').host } catch { return '' }
-  })()
+  const apiHost = hostOfUrl(llmConfig?.apiUrl)
 
   /**
    * 首次挂载读一次快照（当前配置 + 配置集，一次读取保证两者一致。
@@ -454,68 +457,29 @@ export function AiModelConfig(): React.JSX.Element {
           <div className={setCss.row}><span className={setCss.rowMeta}>读取配置中…</span></div>
         ) : (
           <>
-            {/* ① 已配置模型：点击即切换。
-                只显示名称与模型名，**绝不显示 API Key**（切换条是要被随手看的东西）。 */}
-            <div className={css.profileBlock} data-llm-profiles="">
-              <div className={css.profileHead}>
-                <span className={css.profileTitle}>已配置模型</span>
-                <span className={css.profileHint}>
-                  {profiles.length > 1 ? '点击即切换，下一次提问立即生效' : '再配一家就会有第二颗芯片，可随时切回来'}
-                </span>
-                <span className={css.profileSpacer} />
-                {draftNew ? (
-                  <button type="button" className={css.profileAdd} data-cancel-new-profile="" disabled={profileBusy} onClick={cancelNewProfile}>
-                    取消新增
-                  </button>
-                ) : (
-                  <button type="button" className={css.profileAdd} data-add-llm-profile="" disabled={profileBusy || !llmConfig} onClick={startNewProfile}
-                    title="以当前配置为起点新建一份配置；不会覆盖现有配置">
-                    ＋ 新增配置
-                  </button>
-                )}
-              </div>
-              <div className={css.profileList}>
-                {profiles.map((p) => {
-                  const active = p.id === activeProfileId
-                  return (
-                    <div key={p.id} className={css.profileChip} data-active={active || undefined}>
-                      <button
-                        type="button"
-                        className={css.profilePick}
-                        data-activate-llm-profile={p.id}
-                        onClick={() => { void switchTo(p) }}
-                        disabled={profileBusy || active}
-                        aria-current={active || undefined}
-                        title={active
-                          ? `当前使用中：${p.provider} / ${p.model}`
-                          : `切换到「${p.label}」（${p.provider} / ${p.model}）`}
-                      >
-                        <span className={css.profileDot} aria-hidden="true" />
-                        <span className={css.profileLabel}>{p.label}</span>
-                        <span className={css.profileModel}>{p.model || '（缺模型名）'}</span>
-                        <span className={css.profileState}>{active ? '使用中' : usedText(p.usedAt)}</span>
-                      </button>
-                      {profiles.length > 1 && (
-                        <button
-                          type="button"
-                          className={css.profileDel}
-                          data-delete-llm-profile={p.id}
-                          disabled={profileBusy}
-                          onClick={() => { void removeProfile(p) }}
-                          title={`删除配置「${p.label}」（会一起删掉存在里面的 API Key）`}
-                          aria-label={`删除配置 ${p.label}`}
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-                {profiles.length === 0 && (
-                  <span className={css.profileEmpty}>还没有保存过配置：填好下方表单并保存，就会出现第一颗芯片</span>
-                )}
-              </div>
-            </div>
+            {/* ① 对话模型（含「快速切换」与它自己的测试按钮）── 三块里的第一块。 */}
+            <AiModelPanel
+              id="chat"
+              title="对话模型"
+              subtitle="微信问答、总结与推荐回复都走它"
+              status={llmSavedModel
+                ? { text: `${llmSavedModel}${apiHost ? ` · ${apiHost}` : ''}`, tone: 'ok' }
+                : { text: '未配置', tone: 'idle' }}
+              open={panelOpen.chat}
+              onToggle={() => { togglePanel('chat') }}
+            >
+            {/* ①-a 已配置模型快速切换：点击即切换，只显示名称与模型名，**绝不显示 API Key**。 */}
+            <ProfilesQuickSwitch
+              profiles={profiles}
+              activeProfileId={activeProfileId}
+              profileBusy={profileBusy}
+              draftNew={draftNew}
+              cfg={llmConfig}
+              onSwitch={(p) => { void switchTo(p) }}
+              onRemove={(p) => { void removeProfile(p) }}
+              onStartNew={startNewProfile}
+              onCancelNew={cancelNewProfile}
+            />
 
             <div className={css.modelGrid}>
               <div className={css.modelField}>
@@ -606,72 +570,8 @@ export function AiModelConfig(): React.JSX.Element {
                 <span className={setCss.rowName}>API 地址（base_url，OpenAI 兼容）</span>
                 <input className={css.modelInput} value={llmConfig.apiUrl} onChange={(e) => { setLlmConfig({ ...llmConfig, apiUrl: e.target.value }) }} placeholder="https://api.openai.com/v1" />
               </label>
-              {/* ── 嵌入模型 ─────────────────────────────────────────────
-                  地址与 Key 留空 ⇒ 复用上面语言模型那一对（同厂商是常态）；
-                  自建向量服务与云端对话服务并存时才需要分开填。 */}
-            </div>
-            <div className={css.roleHead}>
-              <span className={css.roleTitle}>嵌入模型</span>
-              <span className={css.roleNote}>知识库与问答的语义索引用它。换了这个模型，各库的向量需要重建（会再次出网）。</span>
-            </div>
-            <div className={css.modelGrid}>
-              <RoleInput
-                label="向量模型（留空复用上面的对话模型）"
-                value={llmConfig.embeddingModel ?? ''}
-                placeholder="如 text-embedding-3-small / bge-m3"
-                onInput={v => { setLlmConfig({ ...llmConfig, embeddingModel: v }) }}
-              />
-              <RoleInput
-                label="向量端点（留空复用 API 地址）"
-                value={llmConfig.embeddingApiUrl ?? ''}
-                placeholder="https://embeddings.internal/v1"
-                onInput={v => { setLlmConfig({ ...llmConfig, embeddingApiUrl: v }) }}
-              />
-              <RoleInput
-                label="向量 API Key（留空复用上面的 Key）"
-                value={llmConfig.embeddingApiKey ?? ''}
-                placeholder="sk-..."
-                onInput={v => { setLlmConfig({ ...llmConfig, embeddingApiKey: v }) }}
-              />
-            </div>
-
-            {/* ── 重排序模型 ─────────────────────────────────────────────
-                  **没有独立开关**：填了模型名就启用（决策 D3）。
-                  剩下的关闸是全局「禁止 AI 出网」与逐文件的「参与语义检索」。 */}
-            <div className={css.roleHead}>
-              <span className={css.roleTitle}>重排序模型</span>
-              <span className={css.roleNote}>把召回的候选按与问题的相关性精排。留空则沿用本地的加权排序，行为与现在完全一致。</span>
-            </div>
-            <div className={css.modelGrid}>
-              <RoleInput
-                label="重排序模型（填了就启用）"
-                value={llmConfig.rerankModel ?? ''}
-                placeholder="如 bge-reranker-v2 / cohere-rerank-3"
-                onInput={v => { setLlmConfig({ ...llmConfig, rerankModel: v }) }}
-              />
-              <RoleInput
-                label="重排序端点（留空复用 API 地址）"
-                value={llmConfig.rerankApiUrl ?? ''}
-                placeholder="https://rerank.internal/v1"
-                onInput={v => { setLlmConfig({ ...llmConfig, rerankApiUrl: v }) }}
-              />
-              <RoleInput
-                label="重排序 API Key（留空复用上面的 Key）"
-                value={llmConfig.rerankApiKey ?? ''}
-                placeholder="sk-..."
-                onInput={v => { setLlmConfig({ ...llmConfig, rerankApiKey: v }) }}
-              />
-              <label className={css.modelField}>
-                <span className={setCss.rowName}>重排序超时（毫秒）</span>
-                <input
-                  className={css.modelInput}
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  value={llmConfig.rerankTimeoutMs ?? 20000}
-                  onChange={(e) => { setLlmConfig({ ...llmConfig, rerankTimeoutMs: Number(e.target.value) || 20000 }) }}
-                />
-              </label>
+              {/* 对话模型自己的探针 + 取清单/保存。另两块面板里各有自己的那条测试。 */}
+              <LlmProbeButton kind="chat" cfg={llmConfig} label="测试连接" />
             </div>
             {/* 操作区：获取（次要/描边）在左，保存（主要/高亮）在右，等宽两列；
                 状态消息整行独立展示（此前 inline 跟在按钮后面，长文案挤压排版）。 */}
@@ -686,6 +586,42 @@ export function AiModelConfig(): React.JSX.Element {
             {llmMsg && (
               <div className={`${css.modelMsg} ${llmMsg.kind === 'ok' ? css.msgOk : css.msgErr}`} role="status">{llmMsg.text}</div>
             )}
+            </AiModelPanel>
+
+            {/* ② 嵌入模型：知识库与问答的语义索引。地址/Key/路径留空回落对话模型那套。 */}
+            <AiModelPanel
+              id="embed"
+              title="嵌入模型"
+              subtitle="知识库与问答的语义索引用它；换模型后各库向量需重建"
+              status={llmConfig.embeddingModel
+                ? { text: llmConfig.embeddingModel, tone: 'ok' }
+                : { text: '跟随对话模型', tone: 'idle' }}
+              open={panelOpen.embed}
+              onToggle={() => { togglePanel('embed') }}
+            >
+              <EmbedPanelBody cfg={llmConfig} onPatch={patchCfg} />
+            </AiModelPanel>
+
+            {/* ③ 重排序模型：**没有独立开关** —— 填了模型名就启用，留空则整段跳过。 */}
+            <AiModelPanel
+              id="rerank"
+              title="重排序模型"
+              subtitle="把召回的候选按相关性精排；留空则用本地加权排序"
+              status={llmConfig.rerankModel
+                ? { text: llmConfig.rerankModel, tone: 'ok' }
+                : { text: '未启用（本地排序）', tone: 'idle' }}
+              open={panelOpen.rerank}
+              onToggle={() => { togglePanel('rerank') }}
+            >
+              <RerankPanelBody cfg={llmConfig} onPatch={patchCfg} />
+            </AiModelPanel>
+
+            {/* 余额是**账户级**信息（同一把 Key 下的额度），不属于上面任何一块，
+                所以单独一行；主界面左下角还有一条每 5 分钟刷新的常显。 */}
+            <div className={css.balanceRow}>
+              <LlmBalanceButton cfg={llmConfig} />
+            </div>
+
             <div className={setCss.row}>
               <span className={setCss.rowNote}>
                 当前模型：{llmSavedModel || '未配置'}{apiHost ? ` · ${apiHost}` : ''}
@@ -702,3 +638,13 @@ export function AiModelConfig(): React.JSX.Element {
 
 /** 供测试引用：模板清单。 */
 export const __templates = LLM_TEMPLATES
+
+/**
+ * 取 URL 的主机名（标题栏与探针结果文案里点明"连的是谁"）。
+ * 提到模块级是为了让组件体少 4 行 —— 那个组件有行数棘轮（只能变小）。
+ * @param url - API 地址（可为空/非法）。
+ * @returns 主机名；解析失败返回空串。
+ */
+function hostOfUrl(url: string | undefined): string {
+  try { return new URL(url ?? '').host } catch { return '' }
+}

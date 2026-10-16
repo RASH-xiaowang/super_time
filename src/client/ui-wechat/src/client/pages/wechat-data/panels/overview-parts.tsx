@@ -17,9 +17,21 @@ import {
   apiGetAvatar,
 } from '../api.ts'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { Card, PanelHeader, StatCard } from '../ui/kit.tsx'
+import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
+import { Card, LoadingState, PanelHeader, StatCard } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './overview.module.css'
+import neon from './overview-neon.module.css'
+import { CalendarHeatmapPanel } from './overview-export.ts'
+
+/** 给总览里的日历热力一个独立 Suspense，主面板不必为懒加载多包一层 JSX。 */
+export function CalendarHeatmapGate(props: React.ComponentProps<typeof CalendarHeatmapPanel>): React.JSX.Element {
+  return (
+    <Suspense fallback={<LoadingState variant="compact" label="日历热力资源加载中…" />}>
+      <CalendarHeatmapPanel {...props} />
+    </Suspense>
+  )
+}
 
 /** 朋友圈活跃作者头像：组件挂载（进入可视区）后才请求头像，避免批量预取。 */
 export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): React.JSX.Element {
@@ -38,11 +50,15 @@ export function AuthorAvatar({ author }: { author: OverviewMomentsAuthor }): Rea
   return <span className={css.authorAvatarFallback}>{(author.name || '?').slice(0, 1)}</span>
 }
 
-export const CACHE_BASE = 'dsh-wechat-overview-base-v1'
-export const CACHE_INSIGHTS = 'dsh-wechat-overview-insights-v1'
-export const CACHE_LEDGER = 'dsh-wechat-overview-ledger-v1'
-export const CACHE_STOR = 'dsh-wechat-overview-storage-v1'
-export const CACHE_TIME = 'dsh-wechat-overview-last-updated-v1'
+export { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
+/** 折起来的卡片标题（设计稿每张卡右上角那个「折叠」）。 */
+export const OV_COLLAPSED_KEY = 'dsh-wechat-ov-collapsed-v1'
+
+/** 已折叠的卡片标题集合。读不出来就当全展开 —— 宁可多显示，也不要因为一条坏记录把内容藏起来。 */
+export function readCollapsed(): Set<string> {
+  const raw = readCache(OV_COLLAPSED_KEY)
+  return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+}
 
 export function readCache(key: string): unknown {
   try {
@@ -62,15 +78,15 @@ export function writeCache(key: string, value: unknown): void {
 }
 
 /** Cards with icon, value, label, and target tab. */
-export const CARDS: ReadonlyArray<{ key: string; label: string; icon: string; tab: string }> = [
-  { key: 'sessions', label: '会话', icon: '💬', tab: 'chats' },
-  { key: 'groups', label: '群聊', icon: '👥', tab: 'contacts' },
-  { key: 'contacts', label: '好友', icon: '👤', tab: 'contacts' },
-  { key: 'official', label: '公众号/服务号', icon: '📢', tab: 'bizchats' },
-  { key: 'moments', label: '朋友圈', icon: '🖼️', tab: 'moments' },
-  { key: 'favorites', label: '收藏', icon: '⭐', tab: 'favorites' },
-  { key: 'emoticons', label: '自定义表情', icon: '😀', tab: 'emoticons' },
-  { key: 'storage', label: '媒体占用', icon: '💾', tab: 'storage' },
+export const CARDS: ReadonlyArray<{ key: string; label: string; en: string; icon: string; tab: string }> = [
+  { key: 'sessions', label: '会话', en: 'WeChat Msg', icon: '💬', tab: 'chats' },
+  { key: 'groups', label: '群聊', en: 'Group Chat', icon: '👥', tab: 'contacts' },
+  { key: 'contacts', label: '好友', en: 'Contacts', icon: '👤', tab: 'contacts' },
+  { key: 'official', label: '公众号/服务号', en: 'Official', icon: '📢', tab: 'bizchats' },
+  { key: 'moments', label: '朋友圈', en: 'Moments', icon: '🖼️', tab: 'moments' },
+  { key: 'favorites', label: '收藏', en: 'Favorites', icon: '⭐', tab: 'favorites' },
+  { key: 'emoticons', label: '自定义表情', en: 'Emoticons', icon: '😀', tab: 'emoticons' },
+  { key: 'storage', label: '媒体占用', en: 'Storage', icon: '💾', tab: 'storage' },
 ]
 
 /** 消息类型分布（战术三）的展示顺序。 */
@@ -317,15 +333,39 @@ export function OvSection({ icon, title, action, children, span, className }: {
   span?: string
   className?: string
 }): React.JSX.Element {
+  // 「折叠」按**标题**记进 localStorage：同一张卡在刷新/切页签之后仍是用户放下的样子。
+  // 记标题而不是下标 —— 下标会随卡片增删整体漂移，把"折起来的资产"读到"数据健康"上。
+  const key = String(title)
+  const [collapsed, setCollapsed] = useState<boolean>(() => readCollapsed().has(key))
+  const toggle = (): void => {
+    setCollapsed((prev) => {
+      const next = !prev
+      const set = readCollapsed()
+      if (next) set.add(key)
+      else set.delete(key)
+      writeCache(OV_COLLAPSED_KEY, [...set])
+      return next
+    })
+  }
   return (
     // 用 filter+join 而不是模板串：模板串会把 undefined 拼成一个字面量 "undefined" 类名。
-    <section className={[css.ovCard, span, className].filter(Boolean).join(' ')}>
-      <header className={css.ovCardHd}>
-        <span className={css.ovIcon}><OvIcon name={icon} /></span>
-        <h3 className={css.ovTitle}>{title}</h3>
+    // `neon.card*` 是 2026-09-27 的玻璃拟态皮肤（另一份 CSS 模块，骨架仍由 css.ovCard* 决定）。
+    <section className={[css.ovCard, neon.card, span, className].filter(Boolean).join(' ')}>
+      <header className={css.ovCardHd + ' ' + neon.cardHd}>
+        <span className={css.ovIcon + ' ' + neon.cardIcon}><OvIcon name={icon} /></span>
+        <h3 className={css.ovTitle + ' ' + neon.cardTitle}>{title}</h3>
         {action && <div className={css.ovAction}>{action}</div>}
+        <button
+          type="button"
+          className={neon.cardToggle}
+          aria-expanded={!collapsed}
+          onClick={toggle}
+          title={collapsed ? `展开「${key}」` : `折叠「${key}」`}
+        >
+          {collapsed ? '展开 +' : '折叠 —'}
+        </button>
       </header>
-      <div className={css.ovCardBd}>{children}</div>
+      <div className={css.ovCardBd + ' ' + neon.cardBd} hidden={collapsed}>{children}</div>
     </section>
   )
 }

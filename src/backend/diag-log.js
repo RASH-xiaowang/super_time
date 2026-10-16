@@ -126,12 +126,52 @@ function createDiagLog(opts = {}) {
    * @param {string} level - 级别（error/warn/info…）。
    * @param {unknown[]} args - 内容。
    */
+  /**
+   * W3-1.4：**按天**轮转的判断。
+   *
+   * 为什么除了“按大小”还要“按天”：大小触发只保证文件不超上界，
+   * 但一份“写了少就过夜”的 app.log 会一直紧贴着新事件写———
+   * 排查时得在同一份文件里翻过多天，而转出去的那份又往往还没写满。
+   * 新的一天开一份，“今天发生了什么”才自成一篇。
+   *
+   * 口径：当前文件里的**第一行**时间戳（写入时自带）。读它而不是记在内存里：
+   * 进程重启之后内存状态没了，而“这份文件属于哪一天”是件与重启无关的事实。
+   */
+  const dayOf = (t) => t.toISOString().slice(0, 10); // YYYY-MM-DD（UTC，不受本机时区影响）
+  const currentFileDay = () => {
+    let fd = null;
+    try {
+      // 只读开头 64 字节：时间戳在行首，不必把整份 log 读进内存。
+      fd = fs.openSync(fileAt(0), 'r');
+      const buf = Buffer.alloc(64);
+      const n = fs.readSync(fd, buf, 0, 64, 0);
+      const m = /^\[(\d{4}-\d{2}-\d{2})T/.exec(buf.toString('utf8', 0, n));
+      return m ? m[1] : null;
+    } catch {
+      return null; // 没文件 / 读不了：当成“没有归属”，不轮转
+    } finally {
+      if (fd !== null) { try { fs.closeSync(fd); } catch { /* 别人关了就失效，无所谓 */ } }
+    }
+  };
+
+  /**
+   * 写之前先判断两个触发器：超大小、跳天。
+   * 返回是否发生过轮转（日志与测试都要用）。
+   * 顺序有意：超大小优先——— 同一行既超大小又跳天时，
+   * 不该转两次（第二次会把才写的那行也转走）。
+   */
+  const rotateIfNeeded = (bytes) => {
+    if (currentSize() + bytes > maxBytes) { rotate(); return true; }
+    // 跳天：文件非空 + 第一行属于另一天。空文件无需转。
+    if (currentSize() > 0 && dayOf(now()) !== currentFileDay()) { rotate(); return true; }
+    return false;
+  };
   const write = (level, args) => {
     if (broken || typeof dir !== 'string' || dir === '') return;
     try {
       const line = `[${now().toISOString()}] [${level}] ${format(args)}\n`;
       const bytes = Buffer.byteLength(line, 'utf8');
-      if (currentSize() + bytes > maxBytes) rotate();
+      rotateIfNeeded(bytes);
       fs.mkdirSync(dir, { recursive: true });
       fs.appendFileSync(fileAt(0), line, 'utf8');
       size = Math.max(currentSize(), 0) + bytes;
@@ -170,6 +210,84 @@ function installConsoleCapture(log, levels = ['log', 'info', 'warn', 'error']) {
 }
 
 /**
+ * Electron 的 `console-message` 级别 → 我们的级别名。
+ *
+ * Electron 给的是数字（0=verbose / 1=info / 2=warn / 3=error），而 `createDiagLog`
+ * 的 `level` 是字符串标签 —— 两者对不上就只能在字符串里凑齐，那正是日志难 grep 的原因。
+ */
+const RENDERER_LEVELS = { 0: 'verbose', 1: 'info', 2: 'warn', 3: 'error' };
+
+/** 默认只收 warn 与 error。 */
+const DEFAULT_RENDERER_LEVELS = ['warn', 'error'];
+
+/**
+ * 把**渲染层**的 console 转发进诊断日志。
+ *
+ * ## 为什么必须有（2026-10-08 排查朋友圈问题时实测）
+ *
+ * 修复前 `app.log` 里 `moments-media` / `renderer` / `取图失败` 各 **0 行** ——
+ * 渲染层的 `console.warn/error` 根本不进诊断日志。于是「卡片只显示默认文案」这类问题
+ * **在用户机器上取不到任何证据**，只能靠「零 RPC + failed 分支」这类间接现象反推；
+ * 那次排查因此连续判错了三次（以为是跑旧代码、以为是键为空、以为是尾块导致渲染失败）。
+ *
+ * ## 为什么默认只收 warn/error
+ *
+ * 渲染层的 `console.log` 在正常使用时量很大，全收会把 2 MB × 3 份的轮转迅速冲掉，
+ * 真正需要的那几行反而被挤掉 —— 那等于用「有日志」换掉了「日志有用」。
+ * 需要更全时可设 `SUPERTIME_RENDERER_LOG_LEVELS=verbose,info,warn,error`。
+ *
+ * ## 为什么脱敏交给 `write`
+ *
+ * 这里只负责**转发**，不自己拼字符串：`createDiagLog` 的 `format` 已经过 `redact`
+ * （API key / sk- / Bearer / 长 hex 串），在这里另拼一条就等于开一个绕过脱敏的口子。
+ *
+ * @param {object} contents - Electron 的 `webContents`（只需 `on`/`off`）。
+ * @param {ReturnType<typeof createDiagLog>} log - 日志器。
+ * @param {string[]} [levels] - 要转发的级别名；缺省 `['warn','error']`。
+ * @returns {() => void} 还原函数（测试与热重载用）。
+ */
+function installRendererConsoleCapture(contents, log, levels = DEFAULT_RENDERER_LEVELS) {
+  if (!contents || typeof contents.on !== 'function') return () => {};
+  const wanted = new Set(levels);
+  const onMessage = (_event, level, message, line, sourceId) => {
+    const name = RENDERER_LEVELS[level] ?? 'info';
+    if (!wanted.has(name)) return;
+    const text = typeof message === 'string' ? message : String(message ?? '');
+    if (text === '') return;
+    try {
+      log.write('renderer', [
+        `[${name}]`,
+        // 带上来源文件与行号：渲染层的报错没有栈，缺了它就不知道该去哪个文件看
+        `[${String(sourceId ?? '?')}:${String(line ?? 0)}]`,
+        text,
+      ]);
+    } catch {
+      // 日志不可写不该影响应用本身（与 createDiagLog 内部「broken 后停掉自己」一致）
+    }
+  };
+  contents.on('console-message', onMessage);
+  return () => {
+    if (typeof contents.off === 'function') contents.off('console-message', onMessage);
+  };
+}
+
+/**
+ * 从环境变量读要转发的渲染层级别。
+ *
+ * 做成函数而不是模块常量：`main.js` 在 `app.whenReady()` 之前就 require 这个模块，
+ * 那时 `process.env` 虽然可读，但把「可被环境变量改」这件事藏在模块加载期会让
+ * 单元测试无法在两次运行之间切换档位。
+ * @param {Record<string, string | undefined>} [env] - 环境映射。
+ * @returns {string[]} 级别名列表；未设置时为 `['warn','error']`。
+ */
+function rendererConsoleLevels(env = process.env) {
+  const raw = String(env.SUPERTIME_RENDERER_LOG_LEVELS ?? '').trim();
+  if (raw === '') return DEFAULT_RENDERER_LEVELS.slice();
+  const list = raw.split(',').map((s) => s.trim()).filter((s) => s !== '');
+  return list.length > 0 ? list : DEFAULT_RENDERER_LEVELS.slice();
+}
+
+/**
  * 把各份轮转日志（**旧 → 新**）+ 环境信息拼成一份可直接交付给支持人员的文本。
  *
  * 抽成函数是为了可测：拼装顺序错了（新旧颠倒）人工翻日志会非常费劲，
@@ -192,11 +310,53 @@ function buildDiagnosticReport(log, env = {}) {
   return parts.join('\n');
 }
 
+/** 预览最多给多少字符（够看出「脱敏之后长什么样」，又不至于把整份 6MB 拉进渲染进程）。 */
+const PREVIEW_MAX_CHARS = 8000;
+
+/**
+ * 导出前的**脱敏预览**（W2-12.4）。
+ *
+ * ## 为什么要有这一段
+ *
+ * 诊断日志是**要发给别人**的文件。用户有充分理由在发出去之前先看一眼「里面到底有什么」，
+ * 尤其是：日志里可能有聊天内容、路径、用户名。`redact` 只保证密钥一类的东西被换掉，
+ * 但「有没有别的敏感内容」是**用户自己**才有资格判断的事 ——
+ * 让他在分享前能确认，比替他假设要靠得住。
+ *
+ * ## 三条边界
+ *
+ * ① 预览与导出**用同一个 `buildDiagnosticReport`**，不做第二套拼装 ——
+ *    否则「预览里没有的那行」会被误当成「导出里也没有」，而这正是最不能出错的地方。
+ * ② **截断要说出来**（`truncated: true` + 原字符数）：让用户以为看全了，比不给看更糟。
+ * ③ 预览走 IPC 回渲染进程，日志因此**多出一份内存副本**。所以限量 8000 字符，
+ *    不做「先全读再截」以外的任何事。
+ *
+ * @param {ReturnType<typeof createDiagLog>} log - 日志器。
+ * @param {Record<string, unknown>} [env] - 环境信息（与导出那份同源）。
+ * @param {{ maxChars?: number }} [opts] - 预览上限。
+ * @returns {{ text: string, chars: number, truncated: boolean, files: string[] }} 预览。
+ */
+function buildDiagnosticPreview(log, env = {}, opts = {}) {
+  const maxChars = Number(opts.maxChars) > 0 ? Number(opts.maxChars) : PREVIEW_MAX_CHARS;
+  const report = buildDiagnosticReport(log, env);
+  const truncated = report.length > maxChars;
+  return {
+    text: truncated ? report.slice(0, maxChars) : report,
+    chars: report.length,
+    truncated,
+    files: log.files().map((p) => path.basename(p)),
+  };
+}
 module.exports = {
   DEFAULT_MAX_BYTES,
+  PREVIEW_MAX_CHARS,
   DEFAULT_MAX_FILES,
+  RENDERER_LEVELS,
   buildDiagnosticReport,
+  buildDiagnosticPreview,
   createDiagLog,
   installConsoleCapture,
+  installRendererConsoleCapture,
   redact,
+  rendererConsoleLevels,
 };

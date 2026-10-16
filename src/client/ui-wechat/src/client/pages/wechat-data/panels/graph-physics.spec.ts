@@ -28,7 +28,7 @@ function edge(source: string, target: string, weight = 1): GEdge {
   return { source, target, weight, dist: 100, kind: 'common', bidirectional: true }
 }
 function graphOf(nodes: GNode[], edges: GEdge[]): BuiltGraph {
-  return { nodes, edges, communityCount: 0 }
+  return { nodes, edges, communityCount: 0, kindCounts: {} }
 }
 const radiiOf = (g: BuiltGraph, r = 10): Map<string, number> => new Map(g.nodes.map(n => [n.id, r]))
 

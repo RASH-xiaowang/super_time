@@ -22,18 +22,18 @@
   color: var(--nm-text-2);
   opacity: 0.85;
   text-align: center;
-  padding: 0 18px;
+  padding: 0 16px;
   line-height: 18px;
   border: 1px dashed var(--nm-border-hover);
-  border-radius: 10px;
+  border-radius: var(--nm-r-md);
   margin-bottom: 6px;
 }
 .acct {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
-  border-radius: 10px;
+  padding: 8px 10px;
+  border-radius: var(--nm-r-md);
   border: 1px solid var(--nm-border);
   background: var(--nm-bg-card);
   transition: all 0.15s;
@@ -68,12 +68,12 @@
   white-space: nowrap;
 }
 .acctBadge {
-  font-size: 10.5px;
+  font-size: var(--nm-fs-xs, 11px);
   font-weight: 600;
   color: var(--nm-on-accent);
   background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple));
-  border-radius: 999px;
-  padding: 1px 7px;
+  border-radius: var(--nm-r-pill);
+  padding: 1px 8px;
   flex-shrink: 0;
   corner-shape: round;
 }

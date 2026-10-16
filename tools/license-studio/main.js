@@ -2,7 +2,7 @@
  * Super Time License Studio — 厂商本地发证工具（Electron）
  *
  * 功能：
- * 1. 管理/生成 Ed25519 密钥对（私钥仅本机 vendor-keys）
+ * 1. 管理/生成 Ed25519 密钥对（私钥仅本机，而且**不在仓库里**：默认 ~/.supertime/，见 P3-10）
  * 2. 导入客户「激活请求」JSON 或手填设备指纹
  * 3. 按授权策略签发 license.json
  * 4. 校验已签发许可证（用当前公钥）
@@ -21,11 +21,23 @@ const { generateKeyPair, signPayload, verifyPayload } = require(path.join(ROOT, 
 const { PRODUCT_ID, KNOWN_FEATURES, validatePayload } = require(path.join(ROOT, 'src', 'license', 'schema'))
 
 const VENDOR_DIR = path.join(ROOT, 'vendor-keys')
-const PRIV_PATH = path.join(VENDOR_DIR, 'license-private.pem')
 const PUB_PATH = path.join(VENDOR_DIR, 'license-public.pem')
 const CLIENT_PUB = path.join(ROOT, 'src', 'license', 'public-key.js')
+const { resolvePrivateKeyPath, describeKeyFailure } = require(path.join(ROOT, 'scripts', 'license-key-path'))
 
 let win = null
+
+/**
+ * 私钥位置（P3-10）。和两个命令行厂商工具共用同一份解析：默认 `~/.supertime/`，
+ * 环境变量可指路，**指向仓库内一律拒** —— 所以这里不能"退回工作树那一份"。
+ * @returns 仓库外的绝对路径。
+ * @throws 解析被拒时抛错（消息里带原因与出路，UI 直接显示）。
+ */
+function privateKeyPath() {
+  const where = resolvePrivateKeyPath()
+  if (!where.ok) throw new Error(describeKeyFailure(where))
+  return where.path
+}
 
 function ensureVendorDir() {
   fs.mkdirSync(VENDOR_DIR, { recursive: true })
@@ -33,7 +45,14 @@ function ensureVendorDir() {
 
 function readKeys() {
   ensureVendorDir()
-  const hasPrivate = fs.existsSync(PRIV_PATH)
+  let privPath = ''
+  let privError = ''
+  try {
+    privPath = privateKeyPath()
+  } catch (e) {
+    privError = (e && e.message) || String(e)
+  }
+  const hasPrivate = privPath !== '' && fs.existsSync(privPath)
   const hasPublic = fs.existsSync(PUB_PATH)
   const publicKeyPem = hasPublic ? fs.readFileSync(PUB_PATH, 'utf8') : ''
   let clientPublicKeyPem = ''
@@ -44,7 +63,7 @@ function readKeys() {
     clientPublicKeyPem = ''
   }
   const derivedFromPrivate = hasPrivate
-    ? crypto.createPublicKey(crypto.createPrivateKey(fs.readFileSync(PRIV_PATH, 'utf8')))
+    ? crypto.createPublicKey(crypto.createPrivateKey(fs.readFileSync(privPath, 'utf8')))
         .export({ type: 'spki', format: 'pem' }).toString()
     : ''
   const matchClient = !!(publicKeyPem && clientPublicKeyPem && publicKeyPem.trim() === clientPublicKeyPem.trim())
@@ -52,7 +71,8 @@ function readKeys() {
   return {
     hasPrivate,
     hasPublic,
-    privatePath: PRIV_PATH,
+    privatePath: privPath,
+    privateError: privError,
     publicPath: PUB_PATH,
     clientPublicPath: CLIENT_PUB,
     publicKeyPem,
@@ -63,10 +83,12 @@ function readKeys() {
 }
 
 function loadPrivate() {
-  if (!fs.existsSync(PRIV_PATH)) {
-    throw new Error('缺少私钥：请先「生成密钥对」或放入 vendor-keys/license-private.pem')
+  const p = privateKeyPath()
+  if (!fs.existsSync(p)) {
+    throw new Error(`缺少私钥：${p}\n请先「生成密钥对」（私钥写在仓库之外，默认 ~/.supertime/），`
+      + '或用环境变量 SUPERTIME_LICENSE_PRIVATE_KEY 指向已有私钥')
   }
-  return fs.readFileSync(PRIV_PATH, 'utf8')
+  return fs.readFileSync(p, 'utf8')
 }
 
 function createWindow() {
@@ -97,17 +119,19 @@ function registerIpc() {
       defaultId: 1,
       cancelId: 1,
       title: '生成新密钥对',
-      message: '将生成新的 Ed25519 密钥对并覆盖 vendor-keys/，同时同步客户端公钥。',
+      message: '将生成新的 Ed25519 密钥对：私钥写到仓库之外（默认 ~/.supertime/），公钥同步到 vendor-keys 与客户端。',
       detail: '旧私钥签发的许可证将全部失效。生成后需重启 Super Time 主程序。',
     })
     if (response !== 0) return { ok: false, canceled: true }
     ensureVendorDir()
+    const privTarget = privateKeyPath()
+    fs.mkdirSync(path.dirname(privTarget), { recursive: true })
     const keys = generateKeyPair()
-    fs.writeFileSync(PRIV_PATH, keys.privateKeyPem, { mode: 0o600 })
+    fs.writeFileSync(privTarget, keys.privateKeyPem, { mode: 0o600 })
     fs.writeFileSync(PUB_PATH, keys.publicKeyPem)
     const js = `/**
  * 客户端内嵌公钥（Ed25519 SPK PEM）。
- * 必须与 vendor-keys/license-private.pem 同源。
+ * 必须与仓库外的签发私钥（默认 ~/.supertime/license-private.pem）同源。
  */
 const PUBLIC_KEY_PEM = ${JSON.stringify(keys.publicKeyPem)}
 
@@ -123,7 +147,7 @@ module.exports = { PUBLIC_KEY_PEM }
       const pem = fs.readFileSync(PUB_PATH, 'utf8')
       const js = `/**
  * 客户端内嵌公钥（Ed25519 SPK PEM）。
- * 必须与 vendor-keys/license-private.pem 同源。
+ * 必须与仓库外的签发私钥（默认 ~/.supertime/license-private.pem）同源。
  */
 const PUBLIC_KEY_PEM = ${JSON.stringify(pem)}
 

@@ -1,3 +1,7 @@
+import { type WxgfTranscoder, type WxgfTranscodeResult } from './wxam-image.ts';
+export { forgetEmoticonIndex, noteEmoticonMissBatch } from './emoticon-index.ts';
+/** Msg_<md5(username)> table name for a talker. */
+export declare function msgTableName(username: string): string;
 /**
  * Extract the 32-char hex image MD5 from a packed_info protobuf value.
  * Accepts a raw BLOB, or the st_control comma-separated byte-list TEXT form.
@@ -46,14 +50,6 @@ export declare function resolveImageMd5sBatch(decryptedDir: string, items: Reado
     localId: number;
 }>): string[];
 /**
- * Resolve the image MD5 for (username, local_id).
- * @param decryptedDir - decrypted data root.
- * @param username - conversation username.
- * @param localId - message local id.
- * @returns the 32-char hex image MD5, or null when not found.
- */
-export declare function resolveImageMd5(decryptedDir: string, username: string, localId: number): string | null;
-/**
  * Detect an image format from a decrypted header.
  * @param header - leading bytes of the (decrypted) image.
  * @returns the format name ('png' / 'jpg' / 'gif' / ...), or 'bin' when unknown.
@@ -65,19 +61,62 @@ export declare function detectImageFormat(header: Uint8Array): string;
  * @returns the XOR key byte, or null when no magic matches.
  */
 export declare function detectXorKey(data: Uint8Array): number | null;
-/**
- * Decode raw .dat bytes (XOR / V1 / V2).
- * @param data - raw .dat file bytes.
- * @param aesKey - V2 AES key (raw bytes), optional.
- * @param xorKey - XOR key byte for the XOR tail.
- * @returns decrypted bytes + format, or an error description.
- */
-export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number): {
+/** `.dat` 解密后的形态：`wxgf` 标记表示还需要转码才能渲染。 */
+export type DecodeDatPayload = {
+    bytes: Uint8Array;
+    format: 'wxgf';
+} | {
     bytes: Uint8Array;
     format: string;
 } | {
     error: string;
 };
+/** Decrypt raw .dat bytes (XOR / V1 / V2) without running a wxgf transcoder. */
+export declare function decodeDatPayload(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number): DecodeDatPayload;
+/** 把转码产物按实际魔数收口；失败降级为 hevc（与改造前行为一致）。 */
+export declare function renderWxgfTranscode(decrypted: Uint8Array, t: WxgfTranscodeResult): {
+    bytes: Uint8Array;
+    format: string;
+} | {
+    error: string;
+};
+/**
+ * Decode raw .dat bytes (XOR / V1 / V2).
+ * @param data - raw .dat file bytes.
+ * @param aesKey - V2 AES key (raw bytes), optional.
+ * @param xorKey - XOR key byte for the XOR tail.
+ * @param opts - `wxgf` 覆盖 wxgf 转码器（单测注入替身用；默认调微信安装目录的解码库）。
+ * @returns decrypted bytes + format, or an error description.
+ */
+export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number, opts?: {
+    wxgf?: WxgfTranscoder;
+}): {
+    bytes: Uint8Array;
+    format: string;
+} | {
+    error: string;
+};
+/** Renderable image extensions (decoded cache). */
+export declare const RENDERABLE_EXTS: string[];
+/**
+ * 读一个目录下的解码缓存。**两个槽位**：
+ *   `<md5>.<ext>`   = 本机最好的一份（原图，或 `getImageOriginal` 取回的那一份）
+ *   `<md5>.t.<ext>` = 缩略/中图兜底（`_t.dat` / `_h.dat` 解出来的）
+ *
+ * 分成两个名字是 2026-09-20 修的缺陷：原先只有一个槽位，**谁先解出来谁永久占住**，
+ * 于是缩略图一旦先缓存，用户之后在微信里点开的原图（attach 里多出一个大得多的 .dat）
+ * 就再也读不到 —— 实测 106 条缓存里 35 条本机已有 2 倍以上大的 .dat（31 条大 8 倍以上），
+ * 症状正是「我明明在微信里看过原图，这里还是糊的」。
+ *
+ * @param dir - 缓存目录（全局槽或按用户名的槽）。
+ * @param md5 - 图片 md5（`packed_info_data` 那份）。
+ * @returns 带 data URL 的结果（缩略槽命中时多一个 `thumb: true`），未命中返回 null。
+ */
+export declare function cachedImage(dir: string, md5: string): {
+    url?: string;
+    format?: string;
+    thumb?: boolean;
+} | null;
 /**
  * 清掉一张图的全部解码缓存（两个槽位都删）。
  * @param decodedDir - 解码缓存根。
@@ -86,6 +125,27 @@ export declare function decodeDatBytes(data: Uint8Array, aesKey: Uint8Array | st
  * @returns 删掉的条目数。
  */
 export declare function clearDecodedImageCache(decodedDir: string, username: string, md5: string): number;
+/**
+ * 读「已解码缓存」里的一份：按给定扩展名顺序找 `<md5>.<ext>`，读到就转 data URL。
+ *
+ * 为什么抽出来（P3-5）：`decodeFileImageDataUrl` 与 `decodeEmoticonDataUrl` 各自抄了一遍
+ * 「拼路径 → existsSync → readFileSync → toDataUrl → 读失败返回错误串」，只有扩展名表与
+ * 错误前缀不同。抄两遍的实际代价是**失败语义会走样**：一处把读失败当成"未命中就继续找下一张"，
+ * 另一处当成"直接报错" —— 界面上都像"图没显示"，只有日志分得清。
+ * @param dir - decoded 缓存根目录。
+ * @param md5 - 图片/表情 md5（已归一小写）。
+ * @param exts - 扩展名顺序（第一个就是"最好的一份"）。
+ * @param failNote - 读失败时的错误前缀（调用方各自的措辞留在这里，不改口径）。
+ * @returns 命中 `{ hit }`；读失败 `{ error }`；一张都没有 `null`（"未找到"怎么说由调用方定）。
+ */
+export declare function probeDecodedCache(dir: string, md5: string, exts: readonly string[], failNote: string): {
+    hit: {
+        url: string;
+        format: string;
+    };
+} | {
+    error: string;
+} | null;
 /**
  * Resolve and decode a message image to a base64 data URL.
  * @param decryptedDir - decrypted data root.
@@ -138,26 +198,65 @@ export declare function decodeEmoticonDataUrl(decryptedDir: string, decodedDir: 
  *
  * 为什么需要：微信把表情图放在 `business/emoticon/*` 与 `cache/<月>/Emoticon/*`，
  * 那些文件是**加密**的（16 字节对齐；单字节 XOR、配置里的 image_aes_key、
- * 消息里的 aeskey 都试过解不开，见 `output/probe-sticker-crypt*.mjs`）。
+ * 消息里的 aeskey 都试过解不开 —— 为这件事写过一批一次性解密探针，脚本用完即删，
+ * 所以这里只留结论，不指一个已经不在的探针文件）。
  * 而消息 XML 里的 `cdnurl` 提供的是**未加密**的那一份：实测
- * （`output/probe-sticker-cdn2.mjs`）去掉 `&amp;` 转义后 6/6 返回 200 与明文
+ * （同一批一次性探针）去掉 `&amp;` 转义后 6/6 返回 200 与明文
  * GIF/PNG/JPEG，体积与消息里的 `len` 逐字节一致。
  *
  * 取到后按 `<decoded>/<md5>.<ext>` 落盘，于是**下次（含离线）就走本地解码路径**，
  * 网络只花一次。失败一律返回 error，界面退回占位芯片。
+ *
+ * **主机白名单（2026-09-30 补）**：这条链此前只判了协议，等于「消息 XML 里写哪个主机
+ * 就去取哪个」（XML 是可被离线改写的文件）。现在与聊天原图 / 远程图片 / 朋友圈封面
+ * 走同一把尺子 {@link wechatCdnHostAllowed}，判在发请求之前；主机不在清单内时
+ * **把主机名写进错误文案**，这样万一有没覆盖到的表情主机，界面上一眼能看出是哪个。
  * @param url - the sticker CDN url from the message XML (`<emoji cdnurl>`).
  * @param decodedDir - decoded cache dir.
  * @param md5 - sticker md5 (used as the cache file name).
- * @param opts - `cdnEnabled`：关闭「自动获取原图（CDN）」时**不发起请求**（N24）。
+ * @param opts - `wechatBaseDir`：原始微信目录；给了它才允许「索引里确认本机没有」成为出网前提。
  * @returns a data URL + format, or an error message.
  */
 export declare function fetchEmoticonRemote(url: string, decodedDir: string, md5: string, opts?: {
-    cdnEnabled?: boolean;
+    wechatBaseDir?: string;
 }): Promise<{
     url?: string;
     format?: string;
     error?: string;
 }>;
+/**
+ * 一份 `.dat` 属于哪一档。
+ *
+ * 微信为同一张图最多存四份（本机 `msg/attach` 实测）：`<md5>_h.dat` 高清原图、
+ * `<md5>.dat` 聊天显示版、`<md5>_t.dat` 缩略图，另有 `<md5>_b.dat` 气泡图
+ * （气泡图在 `msg/<日期>/Message/<md5>/Bubble/` 下，本模块的候选路径取不到它，
+ * 但**一旦有人加了那条候选路径**，它必须排在最后 —— 所以这里显式给它 `other`，
+ * 而不是像旧实现那样「不认识就当最好的」）。
+ *
+ * **`_h` 优于 `.dat`** 是本机量出来的结论：971 个 `_h` 里 491 个同时有主体档，
+ * 抽样 28/28 都是 `_h ≥ 主体`（典型 2.95MB vs 54KB）；`_h` 只有「点开过大图」才会有。
+ * ⚠ 这条排序与 wxgf 转码是**同一条链**：`_h` 里 37%（361/971）是 wxgf，
+ * 没有转码能力时把它排到最前等于用解不开的高清挡住能渲染的聊天版。
+ */
+export type DatTier = 'original' | 'chat' | 'thumb' | 'other';
+/**
+ * 判一份 `.dat` 的档位。
+ * @param path - `.dat` 文件路径（只看文件名后缀）。
+ * @returns 档位：`original` = `_h`、`chat` = 主体、`thumb` = `_t`、`other` = 不认识（最低）。
+ */
+export declare function datTierOf(path: string): DatTier;
+/** 档位优先级（0 = 最优），供 `sort` 与读取决策共用。 */
+export declare function datTierRank(path: string): number;
+/** 该档位是否只配进「缩略兜底槽」（`_t` 与更差的 `_b` 都不该占住「本机最好的一份」）。 */
+export declare function isThumbTier(path: string): boolean;
+/**
+ * Write a decoded image into the cache so later lookups hit instantly.
+ * @param thumb - true 表示这是 `_t`/`_h` 解出来的缩略/中图，写进 `<md5>.t.<ext>` 兜底槽，
+ *   不占「本机最好的一份」那个槽（否则原图后到也会被永久遮蔽，见 `cachedImage`）。
+ */
+export declare function writeDecodedCache(decodedDir: string, username: string, md5: string, format: string, bytes: Uint8Array, thumb?: boolean): void;
+/** Recursively find .dat files whose name starts with the image MD5. */
+export declare function findDatFiles(attachRoot: string, fileMd5: string): string[];
 /**
  * **一次**查询解析多张图的 .dat 路径（N16）。
  *

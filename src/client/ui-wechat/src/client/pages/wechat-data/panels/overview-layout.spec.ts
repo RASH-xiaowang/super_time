@@ -56,14 +56,46 @@ describe('总览布局：卡片分组不留空洞', () => {
     expect(twelve).toBeGreaterThanOrEqual(2)
   })
 
-  it('世界板块卡片内含地图与地区榜单（地图单独占 12 栅格时右侧全是空白）', () => {
+  it('好友地区拆为世界地图、省份榜与城市榜三张独立卡片', () => {
     expect(tsxCode).toContain('<RegionBoard />')
-    expect(tsxCode).toContain('css.worldBoard')
     expect(tsxCode).toContain('css.worldMapBox')
+    expect(tsxCode).toContain('title="世界"')
+    expect(tsxCode).toContain('css.regionSpan')
     expect(board).toContain('apiGetRegionMap')
-    // 榜单渲染省份与城市两栏
-    expect(board).toContain('省份 Top 10')
-    expect(board).toContain('城市 Top 12')
+    expect(board).toContain('<RankCard title="省份 Top 10">')
+    expect(board).toContain('<RankCard title="城市 Top 12">')
+    expect(cssCode).toContain('.regionSpan')
+  })
+
+  it('总览按趋势、好友、社交内容与数据资产分组', () => {
+    const groups = ['近期趋势', '好友分布', '关系与内容', '数据与资产']
+    let previous = -1
+    for (const group of groups) {
+      const position = tsxCode.indexOf(`>${group}</h2>`)
+      expect(position, `缺少分组「${group}」或分组顺序不对`).toBeGreaterThan(previous)
+      previous = position
+    }
+    expect(cssCode).toContain('.ovGroupTitle')
+  })
+
+  it('总览卡片与长组件有宽高边界，列表间距不会撑开整页', () => {
+    expect(cssCode).toMatch(/\.ovGrid > \.ovCard\s*\{[^}]*max-width:\s*100%[^}]*max-height:\s*576px/s)
+    expect(cssCode).toMatch(/\.ovCardBd\s*\{[^}]*max-width:\s*100%[^}]*overflow-y:\s*auto/s)
+    expect(cssCode).toMatch(/\.authors\s*\{[^}]*max-height:\s*240px[^}]*overflow-y:\s*auto/s)
+    expect(cssCode).toMatch(/\.topList\s*\{[^}]*max-height:\s*224px[^}]*overflow-y:\s*auto/s)
+    expect(cssCode).toMatch(/\.catList\s*\{\s*max-height:\s*300px\s*;\s*overflow-y:\s*auto\s*;/)
+    expect(cssCode).toContain('row-gap: 14px')
+    expect(cssCode).toContain('max-height: 176px')
+  })
+
+  it('全屏时页头与正文共用居中的最大画布宽度', () => {
+    expect(cssCode).toMatch(/\.root > \[class\*='panelHeader'\],\s*\.root > \[class\*='panelBody'\]\s*\{[^}]*width:\s*100%[^}]*max-width:\s*1480px[^}]*margin-inline:\s*auto/s)
+  })
+
+  it('日历热力按需加载（echarts 不进总览首屏）', () => {
+    expect(tsxCode).toContain("export const CalendarHeatmapPanel = lazy(() => import('./CalendarHeatmap.tsx')")
+    expect(tsxCode).toContain('<CalendarHeatmapGate data={extras.heatmap} />')
+    expect(tsxCode, '总览面板又把 CalendarHeatmap 改成静态 import 了').not.toMatch(/import\s+\{\s*CalendarHeatmap\s*\}\s+from\s+'\.\/CalendarHeatmap\.tsx'/)
   })
 })
 
@@ -81,7 +113,7 @@ describe('总览样式：跨模块覆盖必须能命中', () => {
   })
 
   it('JSX 上写了的布局类，样式里必须有对应规则；反之亦然（防止规则变死）', () => {
-    for (const cls of ['ovTrend', 'ovHeat', 'worldBoard', 'worldMapBox']) {
+    for (const cls of ['ovTrend', 'ovHeat', 'regionSpan', 'worldMapBox']) {
       expect(tsxCode, `JSX 未使用 css.${cls}，对应样式规则会是死的`).toContain(`css.${cls}`)
       expect(cssCode, `样式缺少 .${cls} 规则`).toContain(`.${cls}`)
     }

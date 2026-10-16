@@ -15,12 +15,18 @@ export declare function queryRecords(decryptedDir: string, kind: string, limit?:
 }): {
     items: RecordItem[];
     total: number;
+    readError?: string;
 };
 /**
- * Query revoked messages from the anti-revoke cache (source shape:
- * sender / type_label / content / create_time, time-descending).
+ * 撤回消息列表（2026-09-29 起：**优先读我们自己的归档库**，见 `anti-revoke-archive.ts`）。
+ *
+ * 数据来源两处，形状一致（sender / type_label / content / create_time，按时间倒序）：
+ *   ① 我们的归档库 `<数据根>/anti-revoke-archive.db` —— 只增不改，原文永久保留；
+ *   ② 第三方反撤回插件的缓存表 `*_weflow_anti_revoke_deleted_cache` —— 仅作来源与降级直读。
  * @param decryptedDir - decrypted data root.
  * @param limit - max rows (default 200, capped 500).
+ * @param offset - 偏移。
+ * @param q - 关键词（匹配原文 / 发送者 id）。
  * @returns the revoked snapshot.
  */
 export declare function queryRevoked(decryptedDir: string, limit?: number, offset?: number, 

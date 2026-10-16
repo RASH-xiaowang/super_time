@@ -1,0 +1,68 @@
+/**
+ * 手机浏览器的视口口径（全局，只影响窄视口与支持 dvh 的内核）。
+ *
+ * ## 为什么单独一个文件，而不是改 titlebar.css
+ *
+ * `titlebar.css` 是 `first-impressions-tokens.spec.ts` 钉住断点档位的**五个门面文件**之一
+ * （只许 ≤1100 / ≤900 / ≤720 / 默认这四档）。手机档（≤560）加在那里就得改守卫的白名单 ——
+ * 那是一次「为了让新功能过而放宽判据」的改动，能不做就不做。
+ * 新开一个文件，门面文件的档位口径原样不动。
+ *
+ * ## 三条各解决什么
+ *
+ *   ① **`100dvh` 取代 `100%`**：手机浏览器的地址栏会随滚动收起/展开，`100%`（= 大视口高度）
+ *      比实际可见区域高一截，于是页面底部永远有一块被地址栏盖住、滚不到也点不着。
+ *      `dvh` 是「动态视口高度」，跟着地址栏走。包在 `@supports` 里：不认 dvh 的老内核
+ *      继续用 titlebar.css 那份 `height: 100%`，Electron 桌面上 dvh 恒等于窗口高度，
+ *      **观感与改动前完全一致**。
+ *   ② **安全区内边距**：刘海与手势条会吃掉四边若干像素；横屏时缺口在左右，竖屏在上下。
+ *      底部那一格由底部标签栏自己负责（它有 `padding-bottom: env(safe-area-inset-bottom)`），
+ *      所以这里**不**给 body 加下内边距 —— 加了会与标签栏重复，页面底部多出一条空白。
+ *   ③ **`user-select: text`**：`titlebar.css` 在 body 上关了文本选择（桌面端自绘标题栏的
+ *      那套口径，防止拖拽窗口时选中一片文字）。手机上这条会变成「聊天记录长按选不了、
+ *      复制不了」—— 而在手机上看聊天，复制正文是高频动作，所以窄视口下要放回来。
+ *
+ * 顺带一条移动端必需的：`-webkit-text-size-adjust: 100%`。iOS Safari 在横竖屏切换时会
+ * 自作主张放大「看起来像正文」的文字，把按 375px 排好的版面顶歪。
+ *
+ *   ④ **触摸目标下限 44px**（WCAG 2.5.5 / Apple HIG）。2026-10-14 在 375px × 真实数据上量出来：
+ *      合并视图的段条 24px（它是通讯录/朋友圈/文件与存储等 8 组页面的**主导航**）、
+ *      通讯录与文件页的分类按钮 26px、朋友圈作者芯片 26px、日期预设芯片 24px、搜索框 32px、
+ *      朋友圈正文里的「展开」20px —— 手指点不准，而且触摸上没有 `:hover` 可以补救。
+ *      用**元素选择器**而不是类名：CSS Modules 按文件打 hash，这些类分散在五份 module.css 里，
+ *      在全局文件写类名会静默不生效（M5 刚为这件事写过一条守卫）。复选/单选框不抬 ——
+ *      它们靠点 label 用，抬到 44px 会把行撑破。
+ */
+
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
+@media (max-width: 560px) {
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* 手机上「整个页面跟着橡皮筋回弹」很难受：滚动应该发生在面板内部，
+       而不是 body 上（body 本来就 overflow:hidden，这里再明确一次触底行为）。 */
+    overscroll-behavior: none;
+  }
+
+  /* ④ 触摸目标下限 44px（理由见文件头）。 */
+  button,
+  [role="button"],
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  summary {
+    min-height: 44px;
+  }
+}

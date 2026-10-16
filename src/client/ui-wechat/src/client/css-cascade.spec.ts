@@ -383,3 +383,37 @@ describe('真文件：只做结构性防空转（簇的行数这一轮要动，�
     expect(sawGlobal, '这些文件里本来就该有 :global 的类名，一个都没有的话这条判据就是空的').toBeGreaterThan(0)
   })
 })
+
+describe('单字母声明的棘轮（审计 P3-15）', () => {
+  const BASELINE = 52
+  /**
+   * 这份实现是"CSS 层叠的尺子"，读它的人要在脑子里跑解析 —— `a`/`b`/`r`/`l` 这种名字
+   * 让每一次阅读都得多解一遍"这个字母在这儿是什么"。2026-09-26 把报告点名的密集处
+   * （`lineOf` / `startLine` / `walk` / `makeFind` / `commentLines` / `normDecl` / 簇分桶）
+   * 换成语义名，剩下的按本仓惯例不一次扫干净，但**不许再涨** ⇒ 留一个实测数字当闸门。
+   * 计数先剥注释：本仓已多次踩到"注释里的代码字样被当代码"。
+   */
+  const SINGLE_LETTER_PATTERNS = [
+    /\b(?:let|const)\s+([a-z])\b/g,
+    /\(([a-z]):\s*[A-Za-z<>|[\] ]+[,)]/g,
+    /\(\(([a-z])\)\s*=>/g,
+    /for \(const \[([a-z]),\s*([a-z])\]/g,
+  ] as const
+
+  const singleLetterDecls = (code: string): string[] => {
+    const out: string[] = []
+    for (const re of SINGLE_LETTER_PATTERNS) for (const m of code.matchAll(re)) out.push(m[1] ?? m[2] ?? '?')
+    return out
+  }
+
+  it(`实现里的单字母声明不超过 ${String(BASELINE)} 处（只许变小）`, () => {
+    const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'css-cascade.ts'), 'utf8')
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    const found = singleLetterDecls(code)
+    expect(found.length > 0, '一个都没量到 ⇒ 正则失效，这条是恒真').toBe(true)
+    expect(
+      found.length,
+      `单字母声明从登记的 ${String(BASELINE)} 处涨到 ${String(found.length)} 处：${found.join(' ')} —— 新写的循环与参数请起名`,
+    ).toBeLessThanOrEqual(BASELINE)
+  })
+})

@@ -1,5 +1,6 @@
 import { OperationCategory, OperationStatus, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot } from '../types.ts';
 import type { Context } from '@deepseek-ai/cordis';
+import type { PrivacyGateFn } from '../gateway-privacy.ts';
 export interface createSummaryRemotesInputs {
     dirs: () => {
         decrypted: string;
@@ -7,17 +8,7 @@ export interface createSummaryRemotesInputs {
     };
     op: (category: OperationCategory, action: string, status: OperationStatus, target?: string, detail?: string) => void;
     ctx: () => Context;
-    privacyBlocked: (feature: string, detail?: string) => string | null;
-    privacyGate: (feature: string, stats: {
-        sessions: number;
-        messages: number;
-    }, texts: string[]) => {
-        ok: true;
-        texts: string[];
-    } | {
-        ok: false;
-        error: string;
-    };
+    privacyGate: PrivacyGateFn;
 }
 export declare function createSummaryRemotes(rc: createSummaryRemotesInputs): {
     listSummaryTasks(): SummaryTaskSnapshot;

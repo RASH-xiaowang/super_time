@@ -7,19 +7,54 @@
  * DSH-owned key store.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { extractXorKeysFromDll } from './dll-key-scan.ts'
 import { recoverDbKeyV4 } from './db-key-v4.ts'
+import { verifyDatabaseKey } from './db-key-verify.ts'
 import { scanImageKeyOnce } from './image-key-memory-scan.ts'
 import { resolveLocalImageKey, scanV2Templates, trustedXorForVerifiedAesKey } from './image-key-resolver.ts'
 import { getAccountKeysFromStore, upsertAccountKeysInStore } from './key-store.ts'
+import { cleanWxid } from './image-key-resolver.ts'
 import type { DbKeyResult, ImageKeyResult } from './types.ts'
 import { detectWechatAccounts } from '../config/detect.ts'
+import { getConfig, resolveSelfUsername } from '../config/index.ts'
 import { resolveDecryptedDir } from '../dirs.ts'
 
 /** WeChat main executable names. */
 const WECHAT_EXECUTABLE_NAMES = ['weixin.exe', 'wechat.exe']
+
+/** `keys.json` 里自动获取结果所在的全局槽（老库与无归属记录用）。 */
+export const DEFAULT_KEY_SLOT = 'default'
+
+/** 形状上是否像一个 wxid（`wxid_` 前缀且后面还有内容）；别名目录名一律不算。 */
+function isWxidLike(value: string): boolean {
+  return /^wxid_.+/.test(value)
+}
+
+/**
+ * 自动数据库密钥该写进哪个账号槽（W2-2.2 的 db_key 侧）。
+ *
+ * 与图片密钥同因：db_key 也是每账号的，写全局槽会让后一个账号覆盖前一个。能确定当前
+ * 账号就写自己的槽，确定不了（老别名目录、没有 config/all_keys）就继续写 `default`。
+ * @param decrypted - 解密数据根，用于解析当前账号。
+ * @returns 槽名；无法归属时是 `'default'`。
+ */
+export function dbKeySlotFor(decrypted: string): string {
+  return accountKeySlotFor(resolveSelfUsername(decrypted))
+}
+
+/** db_key 库存归属校验：与图片密钥同口径，没证据放行、有明确证据且不同才拒绝。 */
+function storedDbKeyOwnedBySelf(
+  stored: { db_key_source_wxid_dir?: unknown } | null,
+  decrypted: string,
+): boolean {
+  const owner = cleanWxid(typeof stored?.db_key_source_wxid_dir === 'string' ? stored.db_key_source_wxid_dir : '')
+  if (!isWxidLike(owner)) return true
+  const self = cleanWxid(resolveSelfUsername(decrypted))
+  if (!isWxidLike(self)) return true
+  return owner === self
+}
 
 /** Default WeChat install paths to probe for Weixin.dll. */
 function defaultWeixinDllCandidates(): string[] {
@@ -104,24 +139,109 @@ function pickProbeDb(decrypted: string, explicit?: string): string | null {
 }
 
 /**
+ * 试**已经知道**的密钥是否仍然可用。
+ *
+ * ## 为什么必须有这一步（2026-09-29 真机实测）
+ *
+ * `fetchDbKey` 原先**无条件**走 33 秒的进程内存扫描。而密钥经常根本没变 ——
+ * 本机实测：`all_keys.json` 里 10 个库写着同一把 `valid: true` 的密钥、实时同步正用它解库，
+ * 点一次「一键获取数据库密钥」却仍然扫 33 秒，并且**可能失败**：界面回一句
+ * `✗ 候选密钥均未通过 SQLCipher 校验`，用户会以为密钥坏了，而同一时刻
+ * `[wechat-sync] updated: … full(…)` 正在刷 —— 同步其实一切正常。
+ *
+ * `fetchImageKey` 早就有这类"先用已经知道的"快路径（kvcomm 缓存优先于内存扫描），
+ * 数据库密钥这一侧此前缺了这一步。
+ *
+ * ## 候选来源与顺序
+ *
+ * ① 配置里的 `db_enc_key`（用户显式填过/存过的那把）→ ② 密钥库（自动获取成功时写进去的那把）
+ * → ③ `all_keys.json` 里逐库的密钥。逐个拿去**真校验页 1**，第一个通过的即返回 ——
+ * 顺序只影响 `source` 的措辞，不影响正确性。
+ * @param probe - 用于校验的加密库路径。
+ * @param decrypted - 解密库根（`all_keys.json` 在它的上一级）。
+ * @returns 命中的密钥与来源；都不过校验时返回 null（调用方继续走内存扫描）。
+ */
+function findSavedDbKey (probe: string, decrypted: string): { key: string; source: string } | null {
+  const candidates: Array<{ key: string; source: string }> = []
+  const dataRoot = dirname(decrypted)
+  try {
+    const cfgKey = getConfig(decrypted)['db_enc_key']
+    if (typeof cfgKey === 'string' && cfgKey.length > 0) candidates.push({ key: cfgKey, source: 'saved_config' })
+  } catch { /* 配置读不到就换下一个来源 */ }
+  // 先自己那个槽，再全局槽（老库）。全局槽里的记录若是别的账号，按没有候选处理。
+  const slots = new Set<string>([dbKeySlotFor(decrypted), DEFAULT_KEY_SLOT])
+  for (const slot of slots) {
+    try {
+      const stored = getAccountKeysFromStore(slot, dataRoot) as {
+        db_key?: unknown
+        db_key_source_wxid_dir?: unknown
+      } | null
+      if (
+        typeof stored?.db_key === 'string' &&
+        stored.db_key.length > 0 &&
+        storedDbKeyOwnedBySelf(stored, decrypted)
+      ) {
+        candidates.push({ key: stored.db_key, source: 'saved_store' })
+      }
+    } catch { /* 同一个数据根读不到时换下一个来源 */ }
+  }
+  try {
+    const raw = JSON.parse(readFileSync(join(decrypted, '..', 'all_keys.json'), 'utf8')) as Record<string, unknown>
+    for (const [rel, v] of Object.entries(raw)) {
+      if (rel.startsWith('_')) continue // `_key_format` / `_db_dir` 之类的元数据
+      const k = (v as { key?: unknown } | null)?.key
+      if (typeof k === 'string' && k.length > 0) candidates.push({ key: k, source: 'saved_all_keys' })
+    }
+  } catch { /* 没有这个文件是正常状态（还没生成过密钥映射） */ }
+
+  const seen = new Set<string>()
+  for (const c of candidates) {
+    const hex = c.key.trim().toLowerCase()
+    if (hex.length !== 64 || seen.has(hex)) continue
+    seen.add(hex)
+    if (verifyDatabaseKey(probe, hex).valid) return { key: hex, source: c.source }
+  }
+  return null
+}
+
+/**
  * Recover the V4 database key for the running WeChat process.
+ *
+ * 顺序很重要：**先试已经知道的密钥，再扫内存**（见 `findSavedDbKey` 的注释）。
+ * 这也顺带修好了"微信没开时无法确认密钥"的老形状 —— 只要已存的密钥能通过页 1 校验，
+ * 微信开没开都不影响这一步。
  * @param opts - optional db probe path and install dir.
  * @returns the recovered key result.
  */
 export async function fetchDbKey(opts: { dbPath?: string; wechatInstallDir?: string } = {}): Promise<DbKeyResult> {
+  const decrypted = resolveDecryptedDir()
+  const dataRoot = dirname(decrypted)
+  const probe = pickProbeDb(decrypted, opts.dbPath)
+  if (probe === null) return { ok: false, error: '找不到可用于校验的 V4 加密数据库' }
+
+  const saved = findSavedDbKey(probe, decrypted)
+  if (saved !== null) {
+    const slot = dbKeySlotFor(decrypted)
+    upsertAccountKeysInStore(slot, {
+      db_key: saved.key,
+      db_key_source_db_storage_path: dirname(probe),
+      db_key_source_wxid_dir: slot,
+    }, dataRoot)
+    return { ok: true, key: saved.key, source: saved.source }
+  }
+
   const pid = findWechatPid()
   if (pid === null) return { ok: false, error: '未检测到运行中的微信进程（Weixin.exe/WeChat.exe）' }
-
-  const probe = pickProbeDb(resolveDecryptedDir(), opts.dbPath)
-  if (probe === null) return { ok: false, error: '找不到可用于校验的 V4 加密数据库' }
 
   const internal = scanDllInternalKey(opts.wechatInstallDir)
   const result = await recoverDbKeyV4(pid, probe, internal)
   if (result.ok && result.key) {
-    upsertAccountKeysInStore('default', {
+    const slot = dbKeySlotFor(decrypted)
+    upsertAccountKeysInStore(slot, {
       db_key: result.key,
       db_key_source_db_storage_path: dirname(probe),
-    })
+      db_key_source_wxid_dir: slot,
+    }, dataRoot)
   }
   return result
 }
@@ -148,6 +268,43 @@ export function normalizeAccountDir(accountDir: string): string {
 export function kvcommCacheDir(): string {
   const appData = process.env.APPDATA
   return appData ? join(appData, 'Tencent', 'xwechat', 'net', 'kvcomm') : ''
+}
+
+/**
+ * 自动图片密钥该写进哪个**账号槽**（W2-2.2 写入侧）。
+ *
+ * ## 为什么原来那个全局 `'default'` 槽是错的
+ *
+ * 图片密钥是**每账号**的：甲账号的图密钥解乙账号的图不会报错，只会解出一张垃圾图。
+ * 而三类自动取钥路径（kvcomm 派生 / 内存扫描）都把结果写进同一个 `'default'` 槽 ——
+ * 于是一台机器上两个微信账号，**乙跑一次自动取钥就把甲的记录覆盖掉**。
+ * 读取侧的归属校验（`query/image-key.ts` 的 `storedKeyOwnedBySelf`）这时候会正确地
+ * 拒绝这把钥匙，表现就是「甲本来能用的图突然都要重新配钥」—— 不报错，也归因不到
+ * 「乙用过一次」。
+ *
+ * ## 口径
+ *
+ * 能确定归属就写进归属者的槽（`wxid_…`）；确定不了（老账号目录用别名、扫描路径只拿到
+ * 目录名）就**继续写 `'default'`** —— 那条路上归属校验仍然兜着，而为了分槽把记录丢掉
+ * 比不分槽更糟。形状必须真的是 `wxid_…`：拿目录名当槽名会把「别名目录」也算成一个账号。
+ *
+ * @param derivedWxid - kvcomm 路径给出的派生 wxid（可空）。
+ * @param sourceDirName - 内存扫描路径给出的账号目录名（可空）。
+ * @returns 槽名；无法归属时是 `'default'`。
+ */
+/** 把一个候选账号名归一化成槽名；不是 wxid 形状就退回全局槽。 */
+export function accountKeySlotFor(candidate?: string): string {
+  const cleaned = cleanWxid(candidate)
+  return isWxidLike(cleaned) ? cleaned : DEFAULT_KEY_SLOT
+}
+
+export function imageKeySlotFor(derivedWxid?: string, sourceDirName?: string): string {
+  const pick = [derivedWxid, sourceDirName]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .find((v) => /^wxid_.+/.test(v))
+  // `cleanWxid` 与读取侧同一套归一化：两侧对「什么是同一个 wxid」的口径必须一致，
+  // 否则写进去的槽读取侧算不出来，密钥就静静躺在库里没人读。
+  return accountKeySlotFor(pick)
 }
 
 /**
@@ -180,7 +337,9 @@ export async function fetchImageKey(opts: { accountDir?: string; pid?: number } 
         code: resolution.code,
         templatePath: resolution.templatePath,
       }
-      upsertAccountKeysInStore('default', {
+      // W2-2.2：写进**归属者的槽**，不再是全局 'default'。一台机器上多个微信账号时，
+      // 后者会把前者的图密钥覆盖掉，而读取侧的归属校验只能把它变成「请重新配钥」。
+      upsertAccountKeysInStore(imageKeySlotFor(resolution.wxid), {
         image_aes_key: resolution.aesKey,
         image_xor_key: String(resolution.xorKey),
         image_key_verified: true,
@@ -208,7 +367,8 @@ export async function fetchImageKey(opts: { accountDir?: string; pid?: number } 
     verified: true,
     templatePath: match.templatePath,
   }
-  upsertAccountKeysInStore('default', {
+  // W2-2.2：内存扫描只知道目录名，够不够当槽名由 imageKeySlotFor 判（别名目录不算）。
+  upsertAccountKeysInStore(imageKeySlotFor(undefined, basename(accountDir)), {
     image_aes_key: match.aesKey,
     image_xor_key: String(xorKey),
     image_key_verified: true,
@@ -217,19 +377,5 @@ export async function fetchImageKey(opts: { accountDir?: string; pid?: number } 
     // 解码侧才能判断「这把钥匙是不是当前账号的」（见 query/image-key.ts 的归属校验）。
     image_key_source_wxid_dir: basename(accountDir),
   })
-  return result
-}
-
-/**
- * Get stored key info (db key presence + image key presence).
- * @returns a summary of the default slot's stored keys.
- */
-export function getKeysInfoSummary(): { hasDbKey: boolean; hasImageKey: boolean; updatedAt?: string } {
-  const stored = getAccountKeysFromStore('default')
-  const result: { hasDbKey: boolean; hasImageKey: boolean; updatedAt?: string } = {
-    hasDbKey: Boolean(stored.db_key),
-    hasImageKey: Boolean(stored.image_aes_key && stored.image_key_verified),
-  }
-  if (stored.updated_at) result.updatedAt = stored.updated_at
   return result
 }

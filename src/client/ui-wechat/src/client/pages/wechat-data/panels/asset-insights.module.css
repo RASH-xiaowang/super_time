@@ -9,8 +9,8 @@
 .yearList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
 .yearRow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .yearLabel { width: 76px; color: var(--nm-text-2); flex-shrink: 0; font-family: var(--nm-font-mono, monospace); }
-.yearTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: 6px; overflow: hidden; }
-.yearFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: 6px; }
+.yearTrack { flex: 1; height: 10px; background: var(--nm-bg-hover); border-radius: var(--nm-r-sm); overflow: hidden; }
+.yearFill { height: 100%; background: linear-gradient(90deg, var(--nm-cyan), var(--nm-purple)); border-radius: var(--nm-r-sm); }
 .yearCount { width: 40px; text-align: right; color: var(--nm-text-2); font-family: var(--nm-font-mono, monospace); }
 
 .emojiList { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }

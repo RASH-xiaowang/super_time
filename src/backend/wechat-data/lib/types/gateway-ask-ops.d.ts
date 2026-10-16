@@ -6,11 +6,10 @@
  */
 import type { AskHistoryQuery, AskHistorySnapshot, AskOptimizeResult, AskResult, DailySummaryResult, EditMutationResult, SearchBuildResult, SearchSnapshot, SummaryTaskInput, SummaryTaskMutationResult, SummaryTaskRunResult, SummaryTaskSnapshot, PeriodSummaryResult, KbDeleteAction, KbListSnapshot, KbMutationResult } from './types.ts';
 import type { KbFileAddResult, KbFileChunkPage, KbFileListSnapshot, KbFileMutationResult, KbSearchResult, KbSummaryResult } from './types.ts';
-import type { KbVectorBuildResult, KbVectorIndexStatus } from './query/kb-vectors.ts';
-import type { KbModelRole, KbModelSettings, ResolvedModel } from './query/kb/model-config.ts';
-import { type KbEntitySummary } from './query/kb/extract.ts';
 import type { FeedbackRecord, RerankWeights } from './query/retrieval/types.ts';
+import type { KbExtractResult, KbLinkSuggestResult, KbModelConfigResult, KbModelConfigView, KbVectorBuildWireResult, KbVectorIndexView, RetrievalConfig, RetrievalConfigPatch, RetrievalEvalResult, RetrievalStatus, VectorBuildResult } from './types.ts';
 import type { ReplySuggestResult } from './types.ts';
+import type { AnnualNarrativeResult } from './remotes/annual-narr.ts';
 import type { KnowledgeSnapshotRead } from './query/notes.ts';
 import { GatewayRead } from './gateway-read.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -39,11 +38,10 @@ export declare abstract class GatewayAskOps extends GatewayRead {
     /**
      * 让模型读一遍本库的文件，抽出实体（推断层）。
      *
-     * 三条纪律：
-     *   ① `privacyBlocked('kb_extract')` 判在任何模型调用之前；
-     *   ② 只处理 `include_in_rag = 1` 的文件 —— 关掉出网开关的文件连一次抽取都不该被发出去
+     * 两条纪律：
+     *   ① 只处理 `include_in_rag = 1` 的文件 —— 关掉那个开关的文件连一次抽取都不该被发出去
      *      （条件在 SQL 里，见 `extract.ts` 的 `readDigestForExtract`）；
-     *   ③ 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
+     *   ② 按文件、不按 chunk，且**整批替换**上一次结果（重跑不是追加）。
      * @param options - `kbId`；`fileIds` 限定范围（默认整库）；`limit` 单次最多几个文件。
      * @returns 逐文件结果 + 汇总（失败的逐个带原因，不因一个失败就整批失败）。
      */
@@ -51,26 +49,14 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         kbId: number;
         fileIds?: number[];
         limit?: number;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        files: number;
-        saved: number;
-        failed: Array<{
-            id: number;
-            error: string;
-        }>;
-        model: string;
-    }>;
+    }): Promise<KbExtractResult>;
     /**
      * 笔记编辑器里的「模型建议的链接」—— 返回候选，**不写任何东西**。
      *
-     * 三条纪律（V6 的全部内容）：
-     *   ① `privacyBlocked('kb_link_suggest')` 判在所有早退之前 —— 「没配嵌入模型」不能
-     *      盖掉「用户明确说过不要出网」，否则审计里看不到那次被拦下的尝试；
-     *   ② 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
+     * 两条纪律（V6 的全部内容）：
+     *   ① 出去的是**正文 + 候选标题**，所以 gate 的 texts 必须一次带上两边
      *      （`makeEmbedFn` 内部对整批文本过一次闸，漏一半就等于漏的那半没脱敏）；
-     *   ③ 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
+     *   ② 本方法**没有任何写路径**：连一行正文都不碰。边只在用户点芯片之后由
      *      `parseWikiLinks` 从正文里派生 —— 模型判断错的代价因此是「没人点」，
      *      而不是「图谱里多了一条用户没写过的边」。
      * @param options - `kbId`、正在编辑的 `text`、可选 `topK` 与自身标题 `excludeTitle`。
@@ -81,18 +67,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         text?: string;
         topK?: number;
         excludeTitle?: string;
-    }): Promise<{
-        ok: boolean;
-        error?: string;
-        candidates: Array<{
-            label: string;
-            kind: 'note' | 'entity';
-            score: number;
-        }>;
-        pool: number;
-        model: string;
-        note?: string;
-    }>;
+    }): Promise<KbLinkSuggestResult>;
     /**
      * Knowledge base list — the scope selector's data source.
      *
@@ -202,7 +177,6 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      *
      * 关掉之后该文件**完全不出网**，但仍然留在 FTS 索引里可被关键词搜到 ——
      * 这正是「库里有合同，但我还想搜到它」的实现方式（设计稿 §9.2）。
-     * 全局「禁止 AI 出网」仍然是同一道闸门，一起拦下。
      * @param options - `kbId`、文件 id、是否参与。
      * @returns KbFileMutationResult.
      */
@@ -215,12 +189,9 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * 用模型给某个知识库文件生成摘要。**这是一条出网调用**，与问答同一套闸门。
      *
      * 顺序是硬性的（照 `optimizeAskQuestion` 的口径，理由写在它头上）：
-     *   ① `privacyBlocked` 判在**最前面**，早于「未配置模型」那类早退 ——
-     *      否则用户开了「禁止 AI 出网」又没配模型时，看到的是「未配置模型」，
-     *      把「拦截真的生效了」这件事盖掉了。
-     *   ② `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
+     *   ① `include_in_rag = 0` 直接拒绝：那个开关的语义是「这份文件永不出网」，
      *      给它做摘要等于推翻用户已经做过的决定，不是「再确认一下」能补的。
-     *   ③ 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
+     *   ② 发出去之前过一次 `privacyGate`（脱敏 + 审计）。
      *
      * ⚠ 只喂得下前若干字：一份文件最多两万块、约一千万字，一次请求装不进去。
      *   所以按 `SUMMARY_INPUT_CHARS` 截断，并把**实际覆盖的字符数**一起返回并落库 ——
@@ -263,13 +234,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     getKbModelConfig(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        settings: KbModelSettings;
-        global: Record<KbModelRole, string>;
-        resolved: Record<KbModelRole, ResolvedModel>;
-        entities: KbEntitySummary;
-    };
+    }): KbModelConfigView;
     /**
      * 写某个知识库的模型覆盖（只改传进来的那几项；传空串 = 取消覆盖、回到继承）。
      *
@@ -284,13 +249,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         chatRef?: string;
         embedRef?: string;
         rerankRef?: string;
-    }): {
-        ok: true;
-        settings: KbModelSettings;
-    } | {
-        ok: false;
-        error: string;
-    };
+    }): KbModelConfigResult;
     /**
      * 某个知识库的**向量索引状态**（面板的「语义索引」按钮与状态 chip 读这个）。
      *
@@ -302,35 +261,34 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     getKbVectorIndex(options: {
         kbId: number;
-    }): {
-        kbId: number;
-        model: string;
-        source: 'inherit' | 'inline';
-        configured: boolean;
-        status: KbVectorIndexStatus;
-        job: {
-            done: number;
-            total: number;
-            startedAt: number;
-            error: string;
-        } | null;
-    };
+    }): KbVectorIndexView;
     /**
      * 为**某个库**构建 / 增量更新向量索引（面板上那个「语义索引」按钮）。
      *
-     * 三条纪律：
-     *   ① 出站拦截判在**任何 embedding 之前**（`privacyBlocked` 先于「未配置模型」那类早退）；
-     *   ② 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
-     *   ③ 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
+     * 两条纪律：
+     *   ① 只建本库 —— 出网范围必须与用户此刻的意图一致，一次建全库会把别的库的正文也发出去；
+     *   ② 语料只取 `include_in_rag = 1` 的文件，且写在 SQL 里（见 `kb-vectors.ts` 头注）。
      * @param options - `kbId`；`force` 时清空本库重算。
      * @returns 构建结果（`ok` 为假时带 `error`）。
      */
     buildKbVectorIndex(options: {
         kbId: number;
         force?: boolean;
-    }): Promise<KbVectorBuildResult & {
+        jobId?: string;
+    }): Promise<KbVectorBuildWireResult>;
+    /**
+     * 停止本库正在跑的向量构建（W3-11.5）。
+     *
+     * 取消在〔认领下一批〕之前生效；两阶段构建的阶段二在全部批次之后，所以取消 ⇒
+     * 一行都没写 ⇒ 旧索引原样（不是「留半份向量」）。
+     * @param options - jobId（即 `buildKbVectorIndex` 那次的同一标识）。
+     * @returns ok + 停不上的原因（该批已算完 / 标识不认识）。
+     */
+    cancelKbIndexBuild(options: {
+        jobId: string;
+    }): Promise<{
         ok: boolean;
-        error?: string;
+        message?: string;
     }>;
     /**
      * Build (or rebuild) the FTS5 message search index.
@@ -339,7 +297,22 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     buildSearchIndex(options?: {
         force?: boolean;
+        jobId?: string;
     }): Promise<SearchBuildResult>;
+    /**
+     * 停止一次正在跑的搜索索引构建（W3-11.5）。
+     *
+     * 取消只在**分片边界**与分片内的让出点生效；被取消的构建会 ROLLBACK，
+     * 所以旧索引原封不动（不是「留半份索引」）。
+     * @param options - jobId（必填，即 `buildSearchIndex` 那次的同一标识）。
+     * @returns ok + 停不上的原因（构建已结束 / 标识不认识）。
+     */
+    cancelSearchIndexBuild(options: {
+        jobId: string;
+    }): Promise<{
+        ok: boolean;
+        message?: string;
+    }>;
     /**
      * Full-text search over text messages (index first, scan fallback).
      *
@@ -386,7 +359,28 @@ export declare abstract class GatewayAskOps extends GatewayRead {
          * 而不是把别的库的内容也端上来。
          */
         kbId?: number;
+        /**
+         * 本轮问答的取消标识（W3-6.1）：与 `streamId` 取同一个值。带上它，
+         * `cancelAsk({ jobId })` 才能找到这一轮的 AbortController；不传 = 不可取消。
+         */
+        jobId?: string;
     }): Promise<AskResult>;
+    /**
+     * 取消一轮正在生成的问答（W3-6.1）。
+     *
+     * 为什么单独一个方法而不是让 `askWechat` 自己超时：生成是流式的、时长不可知
+     * （实测单次十几到几十秒），而用户等不及的点是按秒计的。`AbortSignal` 过不了 IPC
+     * （与导出/搜索同一约束），所以沿用那两处的老办法：渲染层带一个 jobId（就是那轮的
+     * streamId），这里去捅后端的 AbortController。
+     * @param options - jobId（必填）：要取消的轮次标识。
+     * @returns ok=false 时 message 说明为什么没取消掉（通常是那一轮已经结束了）。
+     */
+    cancelAsk(options: {
+        jobId: string;
+    }): {
+        ok: boolean;
+        message?: string;
+    };
     /**
      * 提问优化：把用户问题改写为更利于本机检索的形式，并给出改进建议。
      * 供「微信问答」面板的「优化提问」按钮调用；出站前同样过隐私闸门。
@@ -407,26 +401,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * RAG 检索层状态：配置 + 向量库 + 反馈统计 + 当前调参权重 + 意图分类自评。
      * @returns 供「数据健康」面板与诊断脚本展示（原「检索设置」面板已于 2026-09-17 下线）。
      */
-    getRetrievalStatus(): {
-        enabled: boolean;
-        config: unknown;
-        vector: {
-            rows: number;
-            dim: number;
-            model: string;
-        };
-        feedback: {
-            total: number;
-            up: number;
-            down: number;
-        };
-        weights: RerankWeights;
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    getRetrievalStatus(): RetrievalStatus;
     /**
      * 保存检索参数（阈值/权重/容量）。
      * **界面已不再暴露该入口**（面板下线，参数固化为产品默认值）——仅供诊断与自动化测试参考使用。
@@ -434,10 +409,10 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * @returns 落盘后的完整配置。
      */
     saveRetrievalConfig(options?: {
-        patch?: unknown;
-    } | unknown): {
+        patch?: RetrievalConfigPatch;
+    } | RetrievalConfigPatch): {
         ok: boolean;
-        config: unknown;
+        config: RetrievalConfig;
     };
     /**
      * 立即构建/增量更新稠密向量索引。
@@ -448,14 +423,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     buildRagVectorIndex(options?: {
         force?: boolean;
-    }): Promise<{
-        ok: boolean;
-        status: string;
-        rows: number;
-        embedded: number;
-        elapsed_ms: number;
-        message?: string;
-    }>;
+    }): Promise<VectorBuildResult>;
     /**
      * 提交问答反馈（目标 5 的闭环入口）。
      *
@@ -479,6 +447,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         ok: boolean;
         adaptedWeights?: RerankWeights;
         features?: string[];
+        feedbackTotal?: number;
         message?: string;
     };
     /**
@@ -505,32 +474,7 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      */
     evaluateRetrieval(options?: {
         k?: number;
-    }): {
-        report: string;
-        hybrid: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        sparseOnly: {
-            precision: number;
-            recall: number;
-            mrr: number;
-            ndcg: number;
-            map: number;
-            cases: number;
-            hits: number;
-        };
-        intentAccuracy: {
-            correct: number;
-            total: number;
-            accuracy: number;
-        };
-    };
+    }): RetrievalEvalResult;
     /**
      * Generate a daily chat summary for one date via DSH LLM.
      * @param options - date (YYYY-MM-DD) to summarize.
@@ -541,6 +485,15 @@ export declare abstract class GatewayAskOps extends GatewayRead {
         provider?: string;
         model?: string;
     }): Promise<DailySummaryResult>;
+    /**
+     * 生成 AI 年报叙述（W2-8.6）：**分段**取材 → 逐段 LLM → 逐段进度。
+     * @param options - 年份 + 可选的进度任务标识（jobId）。
+     * @returns AnnualNarrativeResult: 各段结果 + 拼接全文 + 是否被段数上限截断。
+     */
+    generateAnnualNarrative(options: {
+        year: number;
+        jobId?: string;
+    }): Promise<AnnualNarrativeResult>;
     /**
      * Restore a message to its original content.
      * @param options - username and localId of the edited message.
@@ -610,10 +563,9 @@ export declare abstract class GatewayAskOps extends GatewayRead {
      * 显式选了库时才取。会话级功能不该把别处的聊天悄悄端上来 —— 这正是「单聊里冒出别人
      * 消息」那类报障的教训。
      *
-     * 出站顺序与当日总结一致：**拦截优先于「模型不可用」**，否则用户开了「禁止 AI 出网」
-     * 却只看到一句「模型不可用」，会以为是配置问题而不是隐私设置生效。
+     * 出站顺序与当日总结一致：模型不可用时如实说明原因。
      * @param options - `username` 会话；`kbId` 当前选中的库（可缺省）；`count` 想要几条（默认 3，上限 5）。
-     * @returns 候选回复；被拦下或模型不可用时 `ok=false` 且 `error` 说明原因。
+     * @returns 候选回复；模型不可用时 `ok=false` 且 `error` 说明原因。
      */
     suggestReplies(options: {
         username?: string;

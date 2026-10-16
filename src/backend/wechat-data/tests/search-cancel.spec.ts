@@ -149,8 +149,7 @@ describe('N9：搜索可中断的后端接线', () => {
     const at = gatewaySrc.indexOf("@Remote('cancelSearch')")
     expect(at, 'gateway 里找不到 cancelSearch').toBeGreaterThan(0)
     const body = gatewaySrc.slice(at, at + 500)
-    expect(body).toContain('this._searchJobs.get(id)')
-    expect(body).toContain('ctrl.abort()')
+    expect(body).toContain('cancelJobIn(this._searchJobs, options?.jobId)')
   })
 
   it('协作驱动三件套仍在：取消检查 ×2 + 事件循环让出', () => {

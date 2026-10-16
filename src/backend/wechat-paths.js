@@ -1,61 +1,26 @@
 'use strict';
 
 /**
- * Super Time 路径配置中心
+ * Super Time 宿主路径与微信设置配置中心。
  *
- * ## 目录职责（2026-09-13 重构）
+ * 本模块只负责三件事：
+ *   1. 安装资产目录与运行期状态目录；
+ *   2. `config.json` 里的路径与微信设置镜像；
+ *   3. 保持旧有导入面，把 LLM 配置与原子 JSON 工具转发给各自模块。
  *
- *   ASSETS_DIR  安装目录里的**只读**资产：`<安装位置>/resources/app.asar.unpacked/wechat/`
- *               随包分发，只有 whisper 引擎/模型与 README。运行时**绝不写入**。
- *   STATE_DIR   运行期**可写**状态：`<userData>/wechat/`
- *               `config.json`（路径配置 + 微信设置镜像）与 `llm.json`（问答模型配置）。
- *
- * 为什么要拆开：旧实现把状态写在 ASSETS_DIR 里（当时为修 `ENOTDIR` 才把 asar 重定向到
- * `app.asar.unpacked`），后果是
- *   - **跨机泄漏本机绝对路径**：整个安装目录被拷到另一台电脑时，`config.json` 里的
- *     `db_dir` / 微信解密密钥会被带过去，那边开机直接拿它去解密，报「数据库目录不存在
- *     (D:\Tencent\...\wxid_xxx\db_storage)」——用户看到的就是这条；
- *   - 装到 `Program Files` 时没有写权限；
- *   - 升级/卸载会连带丢掉用户配置。
- * 现在 STATE 只落在 userData，安装目录保持只读。
- *
- * ## 开发态迁移
- *
- * 开发态（非 asar）首次启动会把项目 `wechat/` 下的老配置搬进 STATE_DIR；
- * 此后**只读写 STATE_DIR**，项目里那两个文件不再被使用。打包态**不做任何迁移**
- * —— 那正是跨机泄漏的入口。
- *
- * 迁移**不是原样复制**（N6）：`config.json` 只搬「非路径、非凭据」的设置镜像，
- * 数据源（`wechatSettings.db_dir`）与密钥一律不搬。原样复制会把真实原始库路径与
- * `db_enc_key` 一起带进新状态目录，后端随即用它们把真实微信库**全量解密**到新的
- * `decrypted_dir` —— 实测把 `SUPERTIME_USER_DATA_DIR` 指向空临时目录启动后，
- * 该目录凭空出现约 282MB 真实解密数据。后果有三层：① 任何「干净环境」测试其实
- * 都跑在真实数据上，隔离是假的；② 用户更换/清空状态目录时，应用会在**没有征得同意**
- * 的情况下把他 GB 级微信数据解密到新位置；③ 叠加 H1（配置曾入库）后，拿到仓库的人
- * 就能完成解密。迁移剔除的字段会打进日志，不做静默处理。
- * `llm.json` 仍照旧迁移：那是用户自己的模型配置，与数据源无关。
- *
- * ## 字段
- *
- *   {
- *     "dataRoot":         "",   // 数据根（默认 <userData>/wechat-data）
- *     "decryptedDir":     "",   // 解密库目录（默认 <dataRoot>/decrypted）
- *     "decodedImagesDir": "",   // 解码图片缓存（默认 <dataRoot>/decoded_images）
- *     "sourceDir":        "",   // 一次性导入源目录
- *     "baseDir":          "",   // 原始微信账号根目录（.dat 回退用）
- *     "selfWxid":         "",   // 当前微信账号 wxid
- *     "silkBinary":       "",   // wx_silk 解码器路径
- *     "wechatSettings":   {},   // 「数据配置」保存的微信设置镜像
- *     "wechatSettingsMeta": {}, // 最近一次保存的来源与时间
- *     "resolved":         {}    // 启动时自动记录的实际解析路径（勿手改）
- *   }
- *
- * 非空字段会映射为后端的 DSH_WECHAT_* 环境变量；为空则沿用默认行为。
+ * LLM 当前配置 / profile 集合在 `llm-config-store.js`；
+ * JSON 原子写与损坏备份在 `atomic-json.js`。
  */
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const {
+  writeFileAtomic,
+  warnCorruptOnce,
+  preserveIfUnparseable,
+} = require('./atomic-json');
+const { createLlmConfigStore } = require('./llm-config-store');
 
 /**
  * 安装目录根（只读资产所在）。
@@ -84,6 +49,14 @@ const PACKAGED = INSTALL_ROOT.includes('app.asar');
 
 /** 运行期可写状态目录；`configure()` 会把它指向 `<userData>/wechat`。 */
 let stateDir = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'wechat');
+
+/**
+ * LLM 仓库只注入一个路径读取器，不让它反向依赖本模块的内部状态。
+ * `configure()` 改的是 `stateDir` 变量，路径读取器在调用时实时取值。
+ */
+const llmConfigStore = createLlmConfigStore({
+  getConfigPath: () => path.join(stateDir, 'llm.json'),
+});
 
 /** 用户可配置的路径字段 → 后端环境变量。 */
 const FIELD_TO_ENV = {
@@ -122,7 +95,6 @@ const DERIVED_SETTING_KEYS = new Set([
  * `query/config.ts` 现在只是转发门面）。
  */
 const SECRET_SETTING_KEYS = new Set(['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token']);
-
 
 /** 已迁移过的 `<stateDir>\0<legacyDir>` 组合，避免重复迁移（且允许不同状态目录各迁一次）。 */
 const migratedCombos = new Set();
@@ -226,7 +198,6 @@ function configure(options = {}) {
   return stateDir;
 }
 
-
 /** 运行期状态目录。 */
 function stateDirPath() {
   return stateDir;
@@ -250,437 +221,6 @@ function configPath() {
 /** LLM 配置文件路径（微信问答模型配置）。 */
 function llmConfigPath() {
   return path.join(stateDir, 'llm.json');
-}
-
-function defaultLlmConfig() {
-  return {
-    provider: 'openai-compat',
-    model: '',
-    apiKey: '',
-    apiUrl: 'https://api.openai.com/v1',
-    apiPath: '/chat/completions',
-    // RAG 稠密检索用的向量接口。留空时回退到 chat model 同名调用；
-    // 厂商若不提供 /embeddings，稠密通道会自动降级（稀疏通道照常工作）。
-    embeddingModel: '',
-    embedPath: '/embeddings',
-    // 嵌入端点的独立凭据/地址：留空 ⇒ 复用上面的 apiUrl/apiKey（同厂商是常态）。
-    // 之所以允许分开填：自建向量服务与云端对话服务并存时，两边根本不是同一个 host。
-    embeddingApiUrl: '',
-    embeddingApiKey: '',
-    // 重排序（精排）：把候选文档与问题一起发给模型换相关性分。没有独立开关 ——
-    // 填了 rerankModel 就启用，留空则退回本地的线性加权（见 docs/KB-MODEL-CONFIG.md D3）。
-    rerankModel: '',
-    rerankPath: '/rerank',
-    rerankApiUrl: '',
-    rerankApiKey: '',
-    // 精排是「每次提问都跑」的热路径，超时比对话短得多：宁可这一轮不精排，
-    // 也不能让一个慢的 rerank 端点把整次提问拖到 120 秒。
-    rerankTimeoutMs: 20000,
-    timeoutMs: 120000,
-  };
-}
-
-/** 读取 LLM 配置（缺失时返回默认值）。 */
-function loadLlmConfig() {
-  const base = defaultLlmConfig();
-  try {
-    const raw = JSON.parse(fs.readFileSync(llmConfigPath(), 'utf8'));
-    for (const k of Object.keys(base)) {
-      if (raw[k] !== undefined) base[k] = raw[k];
-    }
-  } catch (e) {
-    // 首次运行（ENOENT）或文件损坏：用默认值，但损坏要留下可读痕迹（同指纹只报一次）
-    warnCorruptOnce(llmConfigPath(), e);
-  }
-  return base;
-}
-
-/**
- * 原子写：先写同目录临时文件，再 rename 覆盖目标。
- *
- * 为什么不直接 writeFileSync：写一半被杀进程 / 磁盘满，目标文件会变成**截断的 JSON**。
- * 而 config.json 里既有数据根路径、也有微信设置镜像（历史上还放过解密密钥），
- * 读到截断内容会静默回落默认值 —— 用户看到的现象是「配置莫名其妙丢了」，
- * 而且**下一次保存就把残缺内容覆盖掉**，原始字节再也找不回来。
- * rename 在同一卷上是原子的：要么是旧文件，要么是完整的新文件。
- * @param {string} target - 目标文件绝对路径。
- * @param {string} text - 要写入的文本。
- */
-function writeFileAtomic(target, text) {
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, text, 'utf8');
-  // rename 覆盖目标时，Windows 上**任何**持有目标的句柄都会让它 EPERM —— 不只是 SQLite：
-  // 实测连密集 statSync 的瞬态句柄、杀软扫描、备份工具都算（M4 的结论）。
-  // 一次瞬态占用不该让「保存配置」失败，所以做有界重试（最多 5 次 × 20ms）。
-  let lastErr = null;
-  for (let i = 0; i < 5; i += 1) {
-    try {
-      fs.renameSync(tmp, target);
-      return;
-    } catch (e) {
-      lastErr = e;
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); } catch { /* 不支持就不等 */ }
-    }
-  }
-  try { fs.rmSync(tmp, { force: true }); } catch { /* 清理失败不掩盖原错误 */ }
-  throw lastErr;
-}
-
-/**
- * 覆盖前先保住「解析不了的原文件」。
- *
- * 存在的意义：文件损坏时 `loadConfig` 只能回落到默认值，随后任何一次保存都会把
- * 默认值+补丁写回去 —— 残缺文件被无声覆盖。这里先把它改名留存（`.corrupt-<时间戳>`）
- * 并告警，用户/支持人员才有东西可查。
- * @param {string} target - 目标文件绝对路径。
- */
-/** 已告警过的「损坏配置」指纹（路径+大小+修改时间），避免每次读配置都刷同一条。 */
-const warnedCorrupt = new Set();
-
-/**
- * 告警一次（同指纹只报一次）。
- * @param {string} file - 配置文件路径。
- * @param {Error} err - 解析/读取错误。
- */
-function warnCorruptOnce(file, err) {
-  if (err && err.code === 'ENOENT') return; // 首次运行，不告警
-  let sig = file;
-  try {
-    const st = fs.statSync(file);
-    sig = `${file}:${st.size}:${st.mtimeMs}`;
-  } catch { /* 拿不到 stat 就用路径本身 */ }
-  if (warnedCorrupt.has(sig)) return;
-  warnedCorrupt.add(sig);
-  console.warn(`[config] ${path.basename(file)} 读取/解析失败，本次使用默认值：${err && err.message ? err.message : err}（原文件保留，下次保存前会先备份）`);
-}
-/** 损坏备份的保留份数：超过就删最旧（备份里含完整密钥，不能让磁盘随损坏次数线性增长）。 */
-const MAX_CORRUPT_BACKUPS = 3;
-/** 备份文件名用的单调计数（同一毫秒内多次备份不能撞名）。 */
-let corruptSeq = 0;
-
-/**
- * 只保留最近 `MAX_CORRUPT_BACKUPS` 份损坏备份。
- * @param {string} target - 原文件绝对路径。
- */
-function pruneCorruptBackups(target) {
-  try {
-    const dir = path.dirname(target);
-    const prefix = path.basename(target) + '.corrupt-';
-    const all = fs.readdirSync(dir)
-      .filter((f) => f.startsWith(prefix))
-      .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t);
-    for (const { f } of all.slice(MAX_CORRUPT_BACKUPS)) {
-      try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* 删不掉就留着 */ }
-    }
-  } catch { /* 列目录失败不影响主流程 */ }
-}
-
-function preserveIfUnparseable(target) {
-  let text;
-  try {
-    text = fs.readFileSync(target, 'utf8');
-  } catch {
-    return; // 不存在（首次运行）或读不到：无需处理
-  }
-  try {
-    JSON.parse(text);
-    return; // 能解析：正常覆盖
-  } catch {
-    // 后缀带 pid + 单调计数：只用 Date.now() 时同一毫秒内的多次备份会**静默互相覆盖**
-    // （评审实测：3 次损坏只留下 1 份，最早的损坏内容丢了）。
-    corruptSeq += 1;
-    const backup = `${target}.corrupt-${Date.now()}-${process.pid}-${corruptSeq}`;
-    try {
-      fs.renameSync(target, backup);
-      console.warn(`[config] ${path.basename(target)} 内容不是合法 JSON，已备份为 ${path.basename(backup)} 后重写`);
-      pruneCorruptBackups(target);
-    } catch (e) {
-      console.warn(`[config] ${path.basename(target)} 损坏且无法备份：${e && e.message ? e.message : e}`);
-    }
-  }
-}
-
-/** 写入 llm.json（原子写 + 内容损坏时先备份）。 */
-function writeLlmFile(payload) {
-  const target = llmConfigPath();
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  preserveIfUnparseable(target);
-  writeFileAtomic(target, JSON.stringify(payload, null, 2) + '\n');
-}
-
-/**
- * 一条模型配置里「成套」的字段。
- *
- * 为什么必须成套：这些字段描述的是**同一家厂商的同一次连接**。只换其中几项会拼出
- * 「A 家的地址 + B 家的 Key」这种组合 —— 下一次提问必然 401，而用户从界面上看不出问题在哪
- * （历史上「套用厂商模板只改供应商/模型/地址、Key 保留旧值」就是这个毛病）。
- */
-const LLM_PROFILE_FIELDS = [
-  'provider', 'model', 'apiKey', 'apiUrl', 'apiPath', 'timeoutMs',
-  'embeddingModel', 'embedPath', 'embeddingApiUrl', 'embeddingApiKey',
-  'rerankModel', 'rerankPath', 'rerankApiUrl', 'rerankApiKey', 'rerankTimeoutMs',
-];
-
-/**
- * 取一份配置里**确实存在**的成套字段（profile 的载荷）。
- *
- * 缺失的字段**不填 ''** —— 填了会在 `{...默认值, ...载荷}` 的合并里把默认值盖掉，
- * 于是一条手工写出的半截配置会带着空的接口路径（`apiPath: ''`）进内存，
- * 而所有读者都假定它有值。缺失就交给默认值补。
- */
-function pickLlmProfileFields(src) {
-  const out = {};
-  for (const k of LLM_PROFILE_FIELDS) {
-    if (!src || src[k] === undefined || src[k] === null) continue;
-    out[k] = src[k];
-  }
-  // 两个超时都是数值：手工写坏的（'12s' / 负数 / 0）按默认，不能让下游拿到 NaN。
-  for (const key of ['timeoutMs', 'rerankTimeoutMs']) {
-    if (out[key] === undefined) continue
-    const ms = Number(out[key]);
-    out[key] = Number.isFinite(ms) && ms > 0 ? ms : defaultLlmConfig()[key];
-  }
-  return out;
-}
-
-/** 收敛一条 profile：补缺省字段、id/label 可读、usedAt 数值化。 */
-function normalizeLlmProfile(raw, fallbackId) {
-  if (!raw || typeof raw !== 'object') return null;
-  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : String(fallbackId || '');
-  if (!id) return null;
-  const base = defaultLlmConfig();
-  const cfg = { ...pickLlmProfileFields(raw) };
-  // 成套字段：缺就是缺，**不继承全局默认的 apiUrl**（否则「缺地址与 Key」的闸门形同虚设）。
-  if (typeof cfg.provider !== 'string' || !cfg.provider) cfg.provider = 'openai-compat';
-  if (typeof cfg.model !== 'string') cfg.model = '';
-  if (typeof cfg.apiKey !== 'string') cfg.apiKey = '';
-  if (typeof cfg.apiUrl !== 'string') cfg.apiUrl = '';
-  if (typeof cfg.embeddingModel !== 'string') cfg.embeddingModel = '';
-  // 嵌入/精排的独立凭据与地址：留空是**有意的**（= 复用 chat 那对），所以只收敛类型不改默认。
-  for (const key of ['embeddingApiUrl', 'embeddingApiKey', 'rerankModel', 'rerankApiUrl', 'rerankApiKey']) {
-    if (typeof cfg[key] !== 'string') cfg[key] = '';
-  }
-  // 协议旋钮：界面上从不暴露，缺失（或空串）就按默认 —— 与读取端一致
-  // （`llmConfigFromEnv` 用 `file.apiPath || '/chat/completions'`）。
-  if (typeof cfg.apiPath !== 'string' || !cfg.apiPath) cfg.apiPath = base.apiPath;
-  if (typeof cfg.embedPath !== 'string' || !cfg.embedPath) cfg.embedPath = base.embedPath;
-  if (typeof cfg.rerankPath !== 'string' || !cfg.rerankPath) cfg.rerankPath = base.rerankPath;
-  const ms = Number(cfg.timeoutMs);
-  cfg.timeoutMs = Number.isFinite(ms) && ms > 0 ? ms : base.timeoutMs;
-  const rms = Number(cfg.rerankTimeoutMs);
-  cfg.rerankTimeoutMs = Number.isFinite(rms) && rms > 0 ? rms : base.rerankTimeoutMs;
-  const label = typeof raw.label === 'string' && raw.label.trim()
-    ? raw.label.trim().slice(0, 40)
-    : (cfg.model ? `${cfg.provider} · ${cfg.model}` : cfg.provider);
-  return { id, label, usedAt: Number.isFinite(Number(raw.usedAt)) ? Number(raw.usedAt) : 0, ...pickLlmProfileFields(cfg) };
-}
-
-/** 自动派生的 label（用于判断用户有没有自己改过名字）。 */
-function autoLlmLabel(p) {
-  return p.model ? `${p.provider} · ${p.model}` : p.provider;
-}
-
-/** 下一个 profile id：单调递增，删掉中间某条也不复用编号。 */
-function nextLlmProfileId(profiles) {
-  let max = 0;
-  for (const p of profiles || []) {
-    const m = /^p(\d+)$/.exec(String(p && p.id ? p.id : ''));
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return 'p' + (max + 1);
-}
-
-/** 读 llm.json 原文；缺失或损坏时返回 {}（损坏由 warnCorruptOnce 报一次）。 */
-function readLlmRaw() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(llmConfigPath(), 'utf8'));
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch (e) {
-    warnCorruptOnce(llmConfigPath(), e);
-    return {};
-  }
-}
-
-/**
- * 读「当前生效配置 + 已保存的模型配置」。
- *
- * 顶层扁平字段**仍是当前生效值的权威**：`loadLlmConfig`（每次请求都会调）与旧版本读取
- * 都只认它，所以升级、回退都不会坏。`profiles` / `activeProfileId` 是新增的配置集。
- *
- * 懒迁移：老文件只有扁平字段、没有任何 profiles 时，按它生成一条 profile 并认作使用中。
- * 不做这一步的话，界面会出现「徽标说已配置、切换条却空着」的自相矛盾 ——
- * 这个文件里已经因为同类矛盾修过一次（配置模板下拉的回填）。
- * @returns {{config: object, profiles: Array<object>, activeProfileId: string}}
- */
-function loadLlmStore() {
-  const base = defaultLlmConfig();
-  const raw = readLlmRaw();
-  const config = { ...base };
-  for (const k of Object.keys(base)) if (raw[k] !== undefined) config[k] = raw[k];
-  let profiles = [];
-  if (Array.isArray(raw.profiles)) {
-    const seen = new Set();
-    profiles = raw.profiles
-      .map((p, i) => normalizeLlmProfile(p, 'p' + (i + 1)))
-      .filter((p) => {
-        if (!p) return false;
-        // 手工编辑过的文件可能写出两条同 id：留着会让「切换」指向不确定的那条。
-        if (seen.has(p.id)) return false;
-        seen.add(p.id);
-        return true;
-      });
-  }
-  let activeProfileId = typeof raw.activeProfileId === 'string' ? raw.activeProfileId : '';
-  if (profiles.length === 0 && (config.model || config.apiKey)) {
-    const migrated = normalizeLlmProfile(pickLlmProfileFields(config), 'p1');
-    if (migrated) {
-      profiles = [migrated];
-      activeProfileId = migrated.id;
-    }
-  }
-  if (!profiles.some((p) => p.id === activeProfileId)) activeProfileId = profiles.length > 0 ? profiles[0].id : '';
-  return { config, profiles, activeProfileId };
-}
-
-/** 落盘：顶层扁平字段（当前生效值）+ profiles + activeProfileId。 */
-function persistLlmStore(store) {
-  const base = defaultLlmConfig();
-  const flat = {};
-  for (const k of Object.keys(base)) flat[k] = store.config && store.config[k] !== undefined ? store.config[k] : base[k];
-  writeLlmFile({ ...flat, profiles: store.profiles, activeProfileId: store.activeProfileId });
-}
-
-/**
- * 保存「当前配置」表单。
- *
- * 顶层扁平字段照旧写入（老路径不变）；同时**更新使用中的那条 profile** ——
- * 否则「改了表单再保存」之后切换条上显示的还是旧值，点它反而会把刚做的改动顶掉。
- * 没有任何 profile 时**不自动创建**：新增走显式的 `upsertLlmProfile`，
- * 免得用户只是改了个字段就凭空多出一条配置。
- * @param {object} cfg - 扁平配置（字段名与 llm.json 顶层一致）。
- * @returns {object} 落盘后的扁平配置。
- */
-function saveLlmConfig(cfg) {
-  const base = defaultLlmConfig();
-  const merged = { ...base };
-  const src = cfg && typeof cfg === 'object' ? cfg : {};
-  for (const k of Object.keys(base)) if (src[k] !== undefined) merged[k] = src[k];
-  // 两个超时是数值，**落盘前**就收敛干净。不能指望读取端那句 `Number(x || 默认)`：
-  // 它对 0 有效、对 -5 无效，而 `setTimeout(-5)` 会让请求在发出的同一刻被 abort ——
-  // 界面上只看到「模型调用失败」，查不到是自己写进去的坏值。
-  for (const k of ['timeoutMs', 'rerankTimeoutMs']) {
-    const ms = Number(merged[k]);
-    merged[k] = Number.isFinite(ms) && ms > 0 ? ms : base[k];
-  }
-  const store = loadLlmStore();
-  let { profiles, activeProfileId } = store;
-  let at = profiles.findIndex((p) => p.id === activeProfileId);
-  if (at < 0) {
-    // 还没有任何 profile：把这次保存的配置补建成第一条。
-    // 与懒迁移同一口径 —— 顶层那份「当前生效配置」本来就该对应一条可切换的 profile；
-    // 不补的话磁盘上会留下 profiles: [] + activeProfileId: ''，而界面靠懒迁移显示着一颗芯片，
-    // 两边对不上（下次切换/删除就只能靠再迁移一次来兜）。
-    const created = normalizeLlmProfile(
-      { ...pickLlmProfileFields(merged), usedAt: Date.now() },
-      nextLlmProfileId(profiles),
-    );
-    if (created && (created.model || created.apiKey)) {
-      profiles = [...profiles, created];
-      activeProfileId = created.id;
-      at = profiles.length - 1;
-    }
-  }
-  if (at >= 0) {
-    const prev = profiles[at];
-    // 名字是用户自己起的就保留；还是自动派生的就跟着新内容重新派生。
-    const keepLabel = prev.label && prev.label !== autoLlmLabel(prev) ? prev.label : '';
-    const updated = normalizeLlmProfile(
-      { ...pickLlmProfileFields(merged), id: prev.id, label: keepLabel, usedAt: Date.now() },
-      prev.id,
-    );
-    if (updated) {
-      profiles = profiles.slice();
-      profiles[at] = updated;
-    }
-  }
-  persistLlmStore({ config: merged, profiles, activeProfileId });
-  return merged;
-}
-
-/**
- * 切换使用中的模型配置。
- *
- * 成套切换是这里的核心不变量（见 `LLM_PROFILE_FIELDS` 的说明）；因为 wechat-host 每次请求
- * 都重读 llm.json（`llmConfigFromEnv`），切换后**下一次提问立即生效，不需要重启应用**。
- * @param {string} id - 目标 profile id。
- * @returns {{config: object, profiles: Array<object>, activeProfileId: string}}
- */
-function activateLlmProfile(id) {
-  const store = loadLlmStore();
-  const want = String(id || '');
-  const hit = store.profiles.find((p) => p.id === want);
-  if (!hit) throw new Error('这条模型配置已不存在，请刷新后重试');
-  if (!hit.model) throw new Error('这条配置没有模型名，无法切换为使用中（请先补全并保存）');
-  if (!hit.apiKey && !hit.apiUrl) throw new Error('这条配置缺少 API 地址与 API Key，无法切换为使用中');
-  hit.usedAt = Date.now();
-  const config = { ...store.config, ...pickLlmProfileFields(hit) };
-  persistLlmStore({ config, profiles: store.profiles, activeProfileId: hit.id });
-  return { config, profiles: store.profiles, activeProfileId: hit.id };
-}
-
-/**
- * 新增 / 更新一条模型配置。
- * @param {object} options - { id?: string, label?: string, config?: object, activate?: boolean }
- *   缺 `id` 为新增；`activate` 默认为 true（新增出来就是想用它）。
- * @returns {{config: object, profiles: Array<object>, activeProfileId: string}}
- */
-function upsertLlmProfile(options = {}) {
-  const store = loadLlmStore();
-  const src = options.config && typeof options.config === 'object' ? options.config : store.config;
-  const id = typeof options.id === 'string' && options.id.trim() ? options.id.trim() : nextLlmProfileId(store.profiles);
-  const existing = store.profiles.find((p) => p.id === id);
-  const label = typeof options.label === 'string' && options.label.trim()
-    ? options.label.trim().slice(0, 40)
-    : (existing ? existing.label : '');
-  const profile = normalizeLlmProfile({ ...pickLlmProfileFields(src), id, label, usedAt: Date.now() }, id);
-  if (!profile) throw new Error('保存模型配置失败：内容无法解析');
-  if (!profile.model) throw new Error('保存模型配置失败：模型名不能为空');
-  if (!profile.apiKey && !profile.apiUrl) throw new Error('保存模型配置失败：请至少填写 API 地址');
-  const profiles = [...store.profiles.filter((p) => p.id !== id), profile];
-  const activate = options.activate !== false;
-  const activeProfileId = activate ? id : (store.activeProfileId || id);
-  const config = activate ? { ...store.config, ...pickLlmProfileFields(profile) } : store.config;
-  persistLlmStore({ config, profiles, activeProfileId });
-  return { config, profiles, activeProfileId };
-}
-
-/**
- * 删除一条模型配置。
- *
- * 两条硬规则：① 至少保留一条 —— 删空之后切换条与「已配置」徽标必然互相矛盾；
- * ② 删掉的正是使用中的那条时，自动切到最近使用的一条，否则顶层「当前生效值」会指向
- * 一个已不存在的配置。
- * @param {string} id - 目标 profile id（不存在时原样返回，不报错）。
- * @returns {{config: object, profiles: Array<object>, activeProfileId: string}}
- */
-function deleteLlmProfile(id) {
-  const store = loadLlmStore();
-  const want = String(id || '');
-  if (!store.profiles.some((p) => p.id === want)) {
-    return { config: store.config, profiles: store.profiles, activeProfileId: store.activeProfileId };
-  }
-  if (store.profiles.length <= 1) throw new Error('至少保留一条模型配置；不用的话请改成别的厂商');
-  const profiles = store.profiles.filter((p) => p.id !== want);
-  let activeProfileId = store.activeProfileId;
-  let config = store.config;
-  if (activeProfileId === want) {
-    const next = profiles.slice().sort((a, b) => (b.usedAt || 0) - (a.usedAt || 0))[0];
-    activeProfileId = next.id;
-    config = { ...store.config, ...pickLlmProfileFields(next) };
-  }
-  persistLlmStore({ config, profiles, activeProfileId });
-  return { config, profiles, activeProfileId };
 }
 
 /** 空配置默认值。 */
@@ -813,8 +353,7 @@ function loadWechatSettings() {
  * config.json 里没有对应值 → `saveConfig` 的 `carried` 也捞不到）会在那一步被无声丢掉。
  * 所以调用方（`main.js` 的 `applySavedWechatSettings`）必须把它们**并进同一次回灌 patch**：
  * 后端会把它们写进 `secrets.json`，而回写镜像时会顺手把副本过滤掉 —— 迁移与去副本一步完成，
- * 也就不需要再单独「清理镜像」了（原先那个 `pruneMirroredSecrets` 因此删掉：正常顺序下它
- * 永远是空转，留着只会让人以为它在干活）。
+ * 也就不需要再单独「清理镜像」了。
  *
  * 这里不做「值是否等于默认值」的判断：后端 `saveConfig` 的 `secretIsMeaningful` 才是唯一
  * 口径（宿主层再抄一份默认值只会漂移）。空串这里就滤掉，省一次无意义的 RPC 字段。
@@ -834,6 +373,17 @@ function mirroredSecretValues() {
   return out;
 }
 
+const {
+  defaultLlmConfig,
+  loadLlmConfig,
+  saveLlmConfig,
+  loadLlmStore,
+  activateLlmProfile,
+  upsertLlmProfile,
+  deleteLlmProfile,
+  LLM_PROFILE_FIELDS,
+} = llmConfigStore;
+
 module.exports = {
   configure,
   stateDirPath,
@@ -848,6 +398,7 @@ module.exports = {
   recordWechatSettings,
   loadWechatSettings,
   mirroredSecretValues,
+  defaultLlmConfig,
   loadLlmConfig,
   saveLlmConfig,
   loadLlmStore,
@@ -858,7 +409,7 @@ module.exports = {
   FIELD_TO_ENV,
   DERIVED_SETTING_KEYS,
   SECRET_SETTING_KEYS,
-  // 导出给单测：这两个是纯路径函数，不依赖 stateDir 初始化
+  // 导出给单测：这两个是纯文件函数，不依赖 stateDir 初始化
   writeFileAtomic,
   preserveIfUnparseable,
   // 导出给单测（N6）：迁移的剔除规则必须能被独立验证

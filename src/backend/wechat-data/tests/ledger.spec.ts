@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
+import { startTickProbe } from '../../tests/helpers/tick-probe.ts'
 import { queryLedger } from '../src/query/ledger.ts'
 
 const scratch: string[] = []
@@ -35,7 +36,7 @@ const TRANSFER_XML = '<msg><appmsg><type>2000</type><wcpayinfo><paysubtype>3</pa
 const REDPACKET_XML = '<msg><appmsg><type>2001</type><wcpayinfo><feedesc>￥8.88</feedesc></wcpayinfo></appmsg></msg>'
 
 describe('queryLedger', () => {
-  it('aggregates transfer and red-packet amounts with direction and contact names', () => {
+  it('aggregates transfer and red-packet amounts with direction and contact names', async () => {
     const root = tempRoot()
     const ts = Math.floor(new Date(2026, 8, 1, 12).getTime() / 1000)
     const msgTable = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
@@ -55,7 +56,7 @@ describe('queryLedger', () => {
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(2, ts, 49, REDPACKET_XML, 1002)
     })
 
-    const snap = queryLedger(root, '2026-09', 'wxid_b')
+    const snap = await queryLedger(root, '2026-09', 'wxid_b')
     expect(snap.summary.transfers).toBe(1)
     expect(snap.summary.transferOut).toBe(1)
     expect(snap.summary.transferAmountOut).toBe(10)
@@ -66,7 +67,7 @@ describe('queryLedger', () => {
     expect(snap.redpacket.receivedAmount).toBeCloseTo(8.88)
   })
 
-  it('resolves text/64-bit/non-numeric server ids via indexed pass and CAST fallback', () => {
+  it('resolves text/64-bit/non-numeric server ids via indexed pass and CAST fallback', async () => {
     const root = tempRoot()
     const ts = Math.floor(new Date(2026, 8, 1, 12).getTime() / 1000)
     const msgTable = 'Msg_' + createHash('md5').update('wxid_a', 'utf8').digest('hex')
@@ -91,7 +92,14 @@ describe('queryLedger', () => {
       db.prepare(`INSERT INTO "${msgTable}" VALUES (?, ?, ?, ?, ?)`).run(3, ts, 49, TRANSFER_XML, 'ts-1003')
     })
 
-    const snap = queryLedger(root, '2026-09', 'me')
+    // P1-2 让出判据（探针口径见 helpers/tick-probe.ts：ticks == 让出次数 + 1）。
+    // 这份夹具是一个分片 + 两趟扫描（整型等值 + 文本 CAST 兜底）⇒ 让出 2 次，下界 3。
+    const stopProbe = startTickProbe()
+    const snap = await queryLedger(root, '2026-09', 'me')
+    const ticks = stopProbe()
+    console.log(`[算料|yield] 账本 1 分片 × 2 趟扫描：探针 ticks=${String(ticks)}`)
+    expect(ticks, '解析器每扫一个分片都要让出一次；一处都不让 = 打开账本就卡住别的面板')
+      .toBeGreaterThanOrEqual(3)
     expect(snap.summary.transfers).toBe(3)
     expect(snap.summary.transferOut).toBe(2)
     expect(snap.summary.transferIn).toBe(1)

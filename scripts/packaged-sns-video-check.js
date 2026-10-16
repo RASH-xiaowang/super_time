@@ -40,16 +40,39 @@ function parseResult(stdout) {
 }
 
 function run(cmd, args, expectMode) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 180000, cwd: path.dirname(cmd) });
+  // 2026-10-16：超时从 180s 提到 600s。CI runner（共享 2 核 + 实时扫描）比本机慢约 24 倍，
+  // Electron 冷启动 + 加载 wasm 在 CI 上会超过 3 分钟 ⇒ spawnSync 把子进程杀掉，
+  // `status` 变成 null、stdout 为空，报出来只有一句「没有产出结果行（退出码 null）」，
+  // 看不出是超时还是崩溃（v1.0.8 首次发布实测踩到）。10 分钟给足余量，本机仍是秒级。
+  //
+  // 2026-10-16 二次修复：electron 那一遍必须带 `ELECTRON_RUN_AS_NODE=1`。
+  // 不带它时 Electron 以**完整应用模式**启动（初始化 GUI/GPU 事件循环），CI runner
+  // 没有显示环境 ⇒ 卡死到超时（实测 >600s 无任何输出）；本机有桌面所以能跑通，
+  // 于是又是一条「本机绿、CI 红」。`ELECTRON_RUN_AS_NODE=1` 让它以纯 Node 模式跑脚本，
+  // 跳过 GUI 初始化，而 `process.versions.electron` **仍然存在**（实测 44.3.0），
+  // 所以 packaged-sns-video-check.ts 里「必须在 Electron 运行时下跑」的断言依然成立。
+  const env = expectMode === 'electron'
+    ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    : process.env;
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 600000, cwd: path.dirname(cmd), env });
   const res = parseResult(r.stdout);
   if (!res) {
-    console.error(`❌ ${expectMode} 那一遍没有产出结果行（退出码 ${String(r.status)}）\n`
+    // 2026-10-16：把 `r.error` 也报出来。之前只看 `r.status === null` 就写「超时」，
+    // 而 spawnSync 对**不存在的可执行文件**同样返回 status=null（error.code=ENOENT）——
+    // 于是「release.yml 漏了准备 electron.exe」被误报成「Electron 超时」，
+    // 白追了一轮（v1.0.8 发布实测）。现在 ENOENT / EACCES 这类起进程失败会直接点名。
+    const why = r.error !== undefined
+      ? `起进程失败：${String(r.error.code ?? r.error.message ?? r.error)}`
+      : r.status === null
+        ? `子进程被超时杀掉（>600s）或信号终止（signal=${String(r.signal)}）`
+        : `退出码 ${String(r.status)}`;
+    console.error(`❌ ${expectMode} 那一遍没有产出结果行（${why}）\n`
       + `${(r.stdout || '')}\n${r.stderr || ''}`.slice(-1500));
-    process.exit(1);
+    throw new Error('没有拿到可解析的输出') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
   }
   if (res.mode !== expectMode) {
     console.error(`❌ 期望模式 ${expectMode}，实际 ${res.mode}（运行时：${res.runtime}）`);
-    process.exit(1);
+    throw new Error('运行时模式与预期不符') // ⚠️ 原来在这里 exit 会**跳过 finally**，esbuild 的临时文件就留在 src/ 下了
   }
   console.log(`   ${expectMode.padEnd(8)} 运行时=${res.runtime}  密钥流 ${res.bytes} 字节  sha256=${res.sha256.slice(0, 16)}…`);
   return res;
@@ -69,6 +92,8 @@ function run(cmd, args, expectMode) {
   });
 
   let failed = 0;
+  /** 跳过资产字节比对（没有打包件）—— 不算通过，但也不算失败。 */
+  let skipped = false;
   try {
     const node = run(process.execPath, [out, '--mode=node'], 'node');
     const electron = run(electronExe, [out, '--mode=electron'], 'electron');
@@ -80,8 +105,15 @@ function run(cmd, args, expectMode) {
     if (!fs.existsSync(path.join(unpackedDir, FILES[0]))) {
       console.log('⏭️  跳过资产字节比对：没有 dist/win-unpacked 下的 app.asar.unpacked 产物（先跑 npm run pack）');
       console.log('    这一条**不算通过** —— 只是本机暂时没有打包件可比。');
-      process.exit(failed);
+      // ⚠️ 这里原来直接 `process.exit(failed)` —— 它在 `try` 内部，会**跳过 finally**，
+      // 于是 esbuild 产出的 `.tmp-packaged-sns-video-check.mjs` 留在
+      // `src/backend/wechat-data/lib/` 下；而 `src/**/*` 会被打进包
+      // （`packaging-content.spec.ts` 正是为这条存在的守卫，实测它会当场变红）。
+      // 改成「记下结论 → 走完 finally → 最后再退」。
+      skipped = true;
     }
+    if (!skipped) {
+
     for (const f of FILES) {
       const a = sha256(path.join(devDir, f));
       const b = sha256(path.join(unpackedDir, f));
@@ -92,6 +124,7 @@ function run(cmd, args, expectMode) {
     console.log(failed === 0
       ? '✅ 打包版加载的正是这份被验过的 WxIsaac64 资产，且它在 Electron 运行时下能实例化并产出与 node 相同的密钥流'
       : '❌ 见上面的不一致');
+    }
   } finally {
     try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
   }

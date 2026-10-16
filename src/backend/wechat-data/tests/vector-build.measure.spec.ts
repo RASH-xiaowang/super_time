@@ -14,6 +14,10 @@
  *   · 旧实现的墙钟 = 请求数 × 单次延迟（它严格串行，所以可以直接建模）；
  *   · 新实现的墙钟 = 实测（去重 + 有界并发一起生效）。
  * 这样两个数都来自同一次运行、同一个桩，可比。
+ *
+ * 档位：quick（登记在 `scripts/run-measures.mjs`；本行由 measures-registry 逐条核对，
+ *   改了 runner 里的 tier 而不同步这里 ⇒ 红）。
+ *   选档依据是**实测耗时**，不是「哪个更重要」：本条实测秒级（远低于单测时长，可进 PR 门禁）。
  * @vitest-environment node
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'

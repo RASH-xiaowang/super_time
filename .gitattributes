@@ -1,0 +1,75 @@
+# 换行符纪律：入库一律 LF，检出**不要**做 CRLF 转换。
+#
+# 为什么必须有这个文件（2026-10-15 实测）：
+#   本机与 CI 的 Git 都带 `core.autocrlf=true`（Windows 安装版默认写进 `etc/gitconfig`），
+#   于是检出时把所有文本文件的 LF 换成 CRLF。而仓库里有两条**逐字节比对**的门禁：
+#     · `npm run check:backend` —— esbuild 重建 `lib/index.js` 后与工作树比字节；
+#     · `npm run check:types`   —— tsc 重建 `lib/types/**` 后与工作树比字节。
+#   构建工具（esbuild / tsc）产出的恒为 LF，与检出时的行尾无关 ——
+#   所以只要检出被转成 CRLF，这两条在 CI 上**必然**红，而在本机
+#   （工作树里的产物是构建器写的 LF）却是绿的。这正是「本地绿、CI 红」的完整成因。
+#   同样的道理适用于 `npm run check:deps-provenance` 的内容指纹（sha256 对行尾敏感）。
+#
+# 结论：不是把门禁放宽成「忽略行尾」，而是把行尾**钉死**。
+# 生成物与源码同处一棵树、又要逐字节相比，就必须有一个唯一的行尾；选 LF 的理由是
+# 构建工具默认产 LF（改它反而要为每次构建加转换）、且 LF 是跨平台协作的通行选择。
+#
+# 注意：`core.autocrlf=true` 会让 `git add` 把工作树里的 CRLF 归一成 LF 入库，
+#   所以本文件生效后，**索引里已经是 LF 的文件一律不会产生改动**；
+#   若某个文件此前是「索引 CRLF」，重启检出后工作树会变成 LF（内容变更需提交）。
+
+# 默认：文本文件入库 LF、检出 LF（= 不做任何转换）；二进制由 git 自行判定。
+* text=auto eol=lf
+
+# ── 生成物（逐字节门禁的比对对象）必须显式锁 LF ──────────────────────────
+# 即便将来有人把上面的默认改成别的，这几条也保证比对对象稳定。
+src/backend/wechat-data/lib/**        text eol=lf
+docs/API.md                           text eol=lf
+tools/remote-files.json               text eol=lf
+
+# ── 源码 ────────────────────────────────────────────────────────────────
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.cts   text eol=lf
+*.mts   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.cjs   text eol=lf
+*.mjs   text eol=lf
+*.css   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.html  text eol=lf
+
+# ── Windows 脚本：cmd.exe 对 LF 的容错好，但仍显式声明为文本 + LF ─────────
+# （保持与仓库现状一致：这两份文件在索引里本来就是 LF。）
+*.cmd   text eol=lf
+*.bat   text eol=crlf
+
+# ── 明确是二进制：禁止任何转换（`-text` 让 git 不做 diff/归一）──────────
+*.png   -text
+*.jpg   -text
+*.jpeg  -text
+*.gif   -text
+*.webp  -text
+*.ico   -text
+*.exe   -text
+*.dll   -text
+*.lib   -text
+*.node  -text
+*.wasm  -text
+*.bin   -text
+*.onnx  -text
+*.cc    -text
+*.hh    -text
+*.h     -text
+*.s     -text
+*.inc   -text
+*.asm   -text
+*.def   -text
+
+# 锁文件与构建缓存
+package-lock.json  text eol=lf -diff
+*.map              text eol=lf

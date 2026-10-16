@@ -4,7 +4,7 @@
    改前是纵向四行（预设 / 起止 / 按钮 / 当前区间），一屏最上面那块白占了约 110px。 */
 .formCard {
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -38,7 +38,7 @@
 
 .resultCard {
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -63,7 +63,7 @@
 .typesText { font-size: var(--nm-dense-fs-sm); color: var(--nm-text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topChip {
   border: 1px solid var(--nm-border);
-  border-radius: 999px;
+  border-radius: var(--nm-r-pill);
   padding: 1px 8px;
   font-size: var(--nm-dense-fs-sm);
   color: var(--nm-text-1);
@@ -93,7 +93,7 @@
   gap: var(--nm-dense-g3);
   padding: var(--nm-dense-g5) var(--nm-dense-pad-x);
   border: 1px solid var(--nm-border);
-  border-radius: 14px;
+  border-radius: var(--nm-r-lg);
   background: var(--nm-bg-card);
   min-width: 0;
 }
@@ -108,7 +108,7 @@
   height: 15px;
   margin-right: var(--nm-dense-g2);
   border-radius: 50%;
-  font-size: 10px;
+  font-size: var(--nm-fs-xs, 11px);
   color: var(--nm-cyan);
   background: color-mix(in srgb, var(--nm-cyan) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--nm-cyan) 30%, transparent);

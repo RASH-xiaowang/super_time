@@ -20,12 +20,14 @@
  * are decoded here so text/rich parsing sees the real content.
  */
 import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { statSync } from 'node:fs'
 import { decompress } from 'fzstd'
 import type { MessagesSnapshot, MessageTypeStat, WechatMessage } from '../types.ts'
 import { classifyRender, parseAtUsernames, parseMessageContent, RENDER_LABEL, richPlaceholder } from './parse.ts'
-import { cachedBySig, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
+import { cachedBySigAsync, contactMeta, shardCatalog, shardCatalogSig } from './meta.ts'
+import { ensureSortIndexIfMissing } from './message-sort-index.ts'
+import { yieldToLoop } from './search-build.ts'
 
 /** zstd magic bytes (WCDB compressed blobs). */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xB5, 0x2F, 0xFD])
@@ -104,8 +106,13 @@ function tryDecompress(data: Buffer): Buffer | null {
   return null
 }
 
-/** Decode a DB cell (TEXT or BLOB) to UTF-8 text, handling zstd + GBK. */
-function decodeBlobText(v: unknown): string {
+/**
+ * Decode a DB cell (TEXT or BLOB) to UTF-8 text, handling zstd + GBK.
+ *
+ * 2026-09-29 导出：撤回原文归档（`revoke-retain.ts`）也要用它 —— 微信的 `message_content`
+ * 对**文本**也可能存成 zstd 压缩块（magic `28 B5 2F FD`），不先解码就会存进一堆乱码字节。
+ */
+export function decodeBlobText(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (typeof v === 'string') return v
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || typeof v === 'symbol') return String(v)
@@ -294,34 +301,54 @@ interface MsgShard {
 export function msgCreateTimeByServerId(decryptedDir: string, talker: string, serverId: string): number | null {
   if (!talker || !serverId || serverId === '0') return null
   const table = msgTableName(talker)
-  for (const shard of findShards(decryptedDir, table)) {
-    try {
-      const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
-      const n = Number(row?.ct ?? 0)
-      if (n > 0) return n
-    } catch {
-      // 该分片读失败就试下一个
-    } finally {
-      shard.db.close()
+  // `withShards` 一次把**所有**含该表的分片都打开。原先的写法是「轮到哪条关哪条，命中就 return」
+  // ⇒ 后面那些还没轮到的连接留在进程里（Windows 上从此删不掉解密目录），
+  // 而多分片的会话恰恰是消息最多的那些。改成"先取全部、finally 里全关"。
+  return withShards(decryptedDir, table, (shards) => {
+    for (const shard of shards) {
+      try {
+        const row = shard.db.prepare(`SELECT CAST(create_time AS TEXT) AS ct FROM "${table}" WHERE CAST(server_id AS TEXT) = ?`).get(serverId) as { ct?: unknown } | undefined
+        const n = Number(row?.ct ?? 0)
+        if (n > 0) return n
+      } catch {
+        // 该分片读失败就试下一个
+      }
     }
-  }
-  return null
+    return null
+  })
 }
 
-/** Locate every shard DB containing the talker's Msg table (catalog-backed). */
-function findShards(decryptedDir: string, table: string): MsgShard[] {
+/**
+ * 打开一批消息分片，把连接交给回调使用，并在回调返回/抛错后无条件关闭。
+ *
+ * 打开失败的分片直接跳过；句柄所有权不跨出这个 helper，调用点不用再各写一遍
+ * `finally` 循环关闭。
+ */
+function withShards<T>(decryptedDir: string, table: string, fn: (shards: MsgShard[]) => T): T {
   const out: MsgShard[] = []
-  for (const shard of shardCatalog(decryptedDir)) {
-    const meta = shard.tables.get(table)
-    if (!meta) continue
-    try {
-      const db = new DatabaseSync(shard.file, { readOnly: true })
-      out.push({ db, file: shard.file, cols: meta.cols, name2id: meta.name2id })
-    } catch {
-      // try next shard
+  try {
+    for (const shard of shardCatalog(decryptedDir)) {
+      const meta = shard.tables.get(table)
+      if (!meta) continue
+      // W2-3.5：补 (sort_seq, local_id) 覆盖索引。
+      // **必须在开只读连接之前**：Windows 上库被打开时再建索引会 EBUSY，
+      // 而后台补索引恰好会被紧接着的只读连接顶掉 —— 于是每次都建不成，
+      // 页面照旧慢，而且没有任何错误会冒到用户面前。
+      ensureSortIndexIfMissing(shard.file)
+      try {
+        const db = new DatabaseSync(shard.file, { readOnly: true })
+        out.push({ db, file: shard.file, cols: meta.cols, name2id: meta.name2id })
+      } catch {
+        // try next shard
+      }
+    }
+    return fn(out)
+  } finally {
+    for (const shard of out) {
+      const db = shard.db
+      try { db.close() } catch { /* already closed */ }
     }
   }
-  return out
 }
 
 /**
@@ -515,15 +542,15 @@ function toWechatMessages(
  */
 export function queryNewMessages(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   after: number,
   limit?: number,
   selfUsername?: string,
 ): MessagesSnapshot {
   const table = msgTableName(talker)
-  const shards = findShards(decryptedDir, table)
-  if (shards.length === 0) return { messages: [], total: 0 }
-  try {
+  return withShards(decryptedDir, table, (shards) => {
+    if (shards.length === 0) return { messages: [], total: 0 }
     const cap = Math.min(limit ?? 200, 1000)
     const merged: RawMsgRow[] = []
     for (const shard of shards) {
@@ -537,11 +564,7 @@ export function queryNewMessages(
     const out: MessagesSnapshot = { messages, total: messages.length }
     if (selfUsername && selfUsername.length > 0) out.selfWxid = selfUsername
     return out
-  } finally {
-    for (const shard of shards) {
-      try { shard.db.close() } catch { /* already closed */ }
-    }
-  }
+  })
 }
 
 interface MessageStats {
@@ -609,6 +632,7 @@ function messageStats(decryptedDir: string, table: string, shards: MsgShard[]): 
  */
 export function queryMessages(
   decryptedDir: string,
+  /** 会话微信 ID —— 同一个概念的正名见 `WechatSession.username`（P3-6：问答链沿用库里更早的列名）。 */
   talker: string,
   limit?: number,
   cursor?: number,
@@ -616,9 +640,8 @@ export function queryMessages(
   cursorLocalId?: number,
 ): MessagesSnapshot {
   const table = msgTableName(talker)
-  const shards = findShards(decryptedDir, table)
-  if (shards.length === 0) return { messages: [], total: 0 }
-  try {
+  return withShards(decryptedDir, table, (shards) => {
+    if (shards.length === 0) return { messages: [], total: 0 }
     const pageSize = Math.min(limit ?? 100, 1000)
     // Read one extra row per shard to detect hasMore, like st_control.
     const limitPerShard = pageSize + 1
@@ -647,11 +670,7 @@ export function queryMessages(
     return hasMore
       ? { ...base, hasMore, cursor: nextCursor, cursorLocalId: nextCursorLocalId }
       : { ...base, hasMore: false }
-  } finally {
-    for (const shard of shards) {
-      try { shard.db.close() } catch { /* already closed */ }
-    }
-  }
+  })
 }
 
 /**
@@ -673,12 +692,16 @@ export function queryMessages(
  * @param serverId - server_id as string (may exceed 2^53).
  * @returns found flag plus the parsed message (when found).
  */
-export function queryMessageByServerId(
+export async function queryMessageByServerId(
   decryptedDir: string,
   serverId: string,
-): { found: boolean; message?: WechatMessage } {
+): Promise<{ found: boolean; message?: WechatMessage }> {
   const sig = shardCatalogSig(decryptedDir, ['message'])
-  return cachedBySig('msg-by-sid:' + decryptedDir + ':' + serverId, sig, () =>
+  // 2026-09-28：同步 `cachedBySig` → async 版 —— 真实 @Remote 探针实测
+  // `resolveChatHistory` 冷跑 **84ms 且一次都不让出**（`working/probe-remote.txt`，
+  // 是当时最后一个独占项）。整段要做两次「全分片 × 全表」的等值查找，
+  // 每次都要开库，串行 worker 上别的请求进不来。
+  return cachedBySigAsync('msg-by-sid:' + decryptedDir + ':' + serverId, sig, () =>
     queryMessageByServerIdUncached(decryptedDir, serverId))
 }
 
@@ -688,10 +711,10 @@ export function queryMessageByServerId(
  * @param serverId - server_id as string.
  * @returns found flag plus the parsed message (when found).
  */
-function queryMessageByServerIdUncached(
+async function queryMessageByServerIdUncached(
   decryptedDir: string,
   serverId: string,
-): { found: boolean; message?: WechatMessage } {
+): Promise<{ found: boolean; message?: WechatMessage }> {
   const sid = serverId
   // 纯数字 server_id 先走整型等值命中索引，未命中再回退 CAST 文本（兼容
   // 文本存储/非数字 id），避免 askWechat/resolveChatHistory 每表全量 CAST 扫描。
@@ -699,8 +722,12 @@ function queryMessageByServerIdUncached(
   if (/^\d+$/.test(sid)) {
     try { numeric = BigInt(sid) } catch { /* keep text path */ }
   }
-  const tryLookup = (predicate: string, param: string | bigint): { found: boolean; message?: WechatMessage } => {
+  const tryLookup = async (predicate: string, param: string | bigint): Promise<{ found: boolean; message?: WechatMessage }> => {
     for (const shard of shardCatalog(decryptedDir)) {
+      // 2026-09-28：**分片级让出**。真实 @Remote 探针实测 `resolveChatHistory` 冷跑
+      // **84ms 且一次都不让出**（`working/probe-remote.txt`，当时最后一个独占项）。
+      // 放在开库之前：让出的是"上一张分片已经干完的活"。
+      await yieldToLoop()
       let db: DatabaseSync
       // readBigInts: 64 位 server_id 原样读回，避免 double 精度损失。
       try { db = new DatabaseSync(shard.file, { readOnly: true, readBigInts: true }) } catch { continue }
@@ -747,8 +774,8 @@ function queryMessageByServerIdUncached(
     return { found: false }
   }
   if (numeric !== null) {
-    const hit = tryLookup('server_id', numeric)
+    const hit = await tryLookup('server_id', numeric)
     if (hit.found) return hit
   }
-  return tryLookup('CAST(server_id AS TEXT)', sid)
+  return await tryLookup('CAST(server_id AS TEXT)', sid)
 }

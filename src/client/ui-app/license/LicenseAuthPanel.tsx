@@ -1,9 +1,14 @@
 /**
  * 启动页 / 门禁共用的授权面板：状态展示 + 导入许可证 / 粘贴 JSON / 导出激活请求。
+ *
+ * 2026-09-30 内容重排：把「三步走」提到按钮之前（原来只在最底下写一句流程，
+ * 而按钮在上 —— 第一次来的人得先读完底部才知道该点哪个），并在最后补三条常见问题。
+ * 按钮文案与动作一字未动（用户与真机 e2e 都按这些名字找它）。
  */
 import React, { useCallback, useState } from 'react'
 import gateCss from './license-gate.module.css'
 import type { LicenseStatus } from './LicenseGate.tsx'
+import { licenseExpiryWarning } from './license-expiry.ts'
 
 /** 本应用没有试用期：只有有效正式证才可用。 */
 export function isLicenseUsable(st: LicenseStatus | null | undefined): boolean {
@@ -18,6 +23,29 @@ const STATE_TITLE: Record<string, string> = {
   invalid: '许可证无效',
   error: '授权状态异常',
 }
+
+/** 授权三步（面板顶部逐条说明；文字只解释动作，不改任何行为）。 */
+const FLOW: ReadonlyArray<string> = [
+  '手里有厂商签发的 license.json：直接在第 3 步导入。',
+  '只有本机的激活请求：先点「导出激活请求」拿到文件，交给签发方换回许可证。',
+  '导入：点「选择 license.json 导入」，或把许可证 JSON 粘进下面的框里校验导入；成功后点「进入系统」。',
+]
+
+/** 常见问题：三种最可能卡住的授权问题，答案都指向面板上已有的按钮。 */
+const FAQ: ReadonlyArray<{ q: string; a: string }> = [
+  {
+    q: '提示「设备不匹配」？',
+    a: '许可证与本机指纹绑定：换机器、重装系统或大改硬件后需要重新签发 —— 导出激活请求交给签发方即可。',
+  },
+  {
+    q: '提示「已过期」？',
+    a: '找签发方续签；拿到新许可证后在这里重新导入即可，旧文件不用手动删。',
+  },
+  {
+    q: '导入时报无效 / 选错文件？',
+    a: '直接重新选择或粘贴正确的许可证就行；校验失败不会改动本机已有授权。',
+  },
+]
 
 export interface LicenseAuthPanelProps {
   status: LicenseStatus | null
@@ -39,7 +67,7 @@ export function LicenseAuthPanel({
   const title = STATE_TITLE[status?.state ?? 'error'] || '需要授权'
 
   const onImportFile = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importFile) {
       setMsg({ kind: 'err', text: '授权 API 不可用' })
       return
@@ -62,7 +90,7 @@ export function LicenseAuthPanel({
   }, [onStatusChange])
 
   const onImportPaste = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.importText) return
     if (!paste.trim()) {
       setMsg({ kind: 'err', text: '请先粘贴许可证 JSON' })
@@ -87,7 +115,7 @@ export function LicenseAuthPanel({
   }, [paste, onStatusChange])
 
   const onExportReq = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
+    const api = window.electronAPI?.license
     if (!api?.exportRequest) return
     setBusy('export')
     setMsg(null)
@@ -106,6 +134,10 @@ export function LicenseAuthPanel({
     ? new Date(status.payload.expiresAt).toLocaleString('zh-CN')
     : status?.state === 'licensed' ? '永久' : '—'
 
+  // W3-11.7：快到期的那句提醒（纯函数判据见 license-expiry.guard.spec.ts）。
+  // 注意**只**看 payload.expiresAt、不把过期那一档算进来（已过期由标题说）。
+  const expiry = licenseExpiryWarning(status?.payload?.expiresAt ?? null)
+
   const wrap = compact ? gateCss.embed : gateCss.card
 
   return (
@@ -114,11 +146,20 @@ export function LicenseAuthPanel({
       <h2 className={compact ? gateCss.embedTitle : gateCss.title}>{title}</h2>
       <p className={gateCss.lead}>
         {usable
-          ? '授权有效，可进入系统主界面。'
+          ? '授权有效，可以直接进入系统主界面。'
           : status?.state === 'unlicensed'
-            ? '尚未导入许可证。请导入厂商签发的许可证，或导出激活请求后由厂商换发。授权成功前无法进入主界面。'
-            : '检测到授权无效或已过期。请导入厂商签发的许可证，或导出激活请求后由厂商换发。授权成功前无法进入主界面。'}
+            ? '还没有导入许可证。按下面三步拿到并导入厂商签发的许可证；授权成功前无法进入主界面。'
+            : '当前的授权无效或已过期。按下面三步重新签发并导入；授权成功前无法进入主界面。'}
       </p>
+
+      <ol className={gateCss.flow}>
+        {FLOW.map((text, i) => (
+          <li key={text} className={gateCss.flowItem}>
+            <span className={gateCss.flowNo} aria-hidden="true">{String(i + 1)}</span>
+            <span>{text}</span>
+          </li>
+        ))}
+      </ol>
 
       <dl className={gateCss.meta}>
         <div><dt>状态</dt><dd>{status?.state ?? '—'}</dd></div>
@@ -135,6 +176,15 @@ export function LicenseAuthPanel({
           </div>
         ) : null}
       </dl>
+
+      {/* W3-11.7：快到期时**在面板里出声**。
+          只挂在这一处是有意的：它是「授权」这件事回执的一部分，用户此刻正在看授权；
+          过期那一档由上面标题（「许可证已过期」）说，这里不再重复报一遍。 */}
+      {expiry !== null && (
+        <div className={gateCss.expiry} role="status">
+          ⏳ {expiry.text}
+        </div>
+      )}
 
       <div className={gateCss.actions}>
         <button
@@ -181,8 +231,17 @@ export function LicenseAuthPanel({
         </p>
       ) : null}
 
+      <div className={gateCss.faqList}>
+        {FAQ.map((f) => (
+          <div key={f.q}>
+            <div className={gateCss.faqTitle}>{f.q}</div>
+            <div className={gateCss.faqBody}>{f.a}</div>
+          </div>
+        ))}
+      </div>
+
       <p className={gateCss.hint}>
-        流程：导出激活请求 → 厂商 License Studio 签发 → 导入 → 点击「进入系统」。
+        授权成功前无法进入主界面；已授权用户可在启动页直接点「进入系统」跳过本页。
       </p>
     </div>
   )

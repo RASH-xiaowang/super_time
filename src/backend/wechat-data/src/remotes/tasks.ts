@@ -5,7 +5,8 @@
  * 机制：类里保留 @Remote 装饰器与签名（协议层按名字枚举），方法体一行转发；
  * 处理器体在这里，依赖由 `rc` 显式给出。
  */
-import { collectPeriodMessages } from '../query/daily-summary.ts'
+import { collectPeriodMessagesAsync } from '../query/daily-summary.ts'
+import { yieldToLoop } from '../query/search-build.ts'
 import { importHandoffTasks, listHandoffReminds } from '../query/handoff.ts'
 import { deleteNote as deleteNoteRow, listNotes, saveNote as saveNoteRow } from '../query/notes.ts'
 import { listSummaryTasks as listTasks } from '../query/summary-tasks.ts'
@@ -67,11 +68,20 @@ export function createTasksRemotes(rc: createTasksRemotesInputs) {
       return r
     },
 
-    extractTasks(options?: { days?: number }): TaskMutationResult {
+    async extractTasks(options?: { days?: number }): Promise<TaskMutationResult> {
       const days = options?.days ?? 7
       const to = new Date()
       const from = new Date(to.getTime() - days * 86400000)
-      const { lines } = collectPeriodMessages(rc.dirs().decrypted, from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), 50)
+      // 2026-09-28：改用可让出版收集 —— 真实 @Remote 探针实测本方法冷跑 **372ms 且一次
+      // 都不让出**（`working/probe-remote.txt`，当时最长的一个独占项）。默认 7 天区间
+      // 要逐张分片枚举 `Msg_*` 再读行，成本全在这一步。
+      const { lines } = await collectPeriodMessagesAsync(
+        rc.dirs().decrypted,
+        from.toISOString().slice(0, 10),
+        to.toISOString().slice(0, 10),
+        50,
+        yieldToLoop,
+      )
       const re = /(记得|待办|要做|提醒|别忘了|稍后|待处理|deadline)/i
       let added = 0
       for (const line of lines) {

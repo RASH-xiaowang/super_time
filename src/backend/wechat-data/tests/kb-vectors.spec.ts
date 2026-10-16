@@ -11,7 +11,7 @@
  *   让「字面有重叠」⟺「余弦更高」，于是「用改写过的短查询去命中长正文」这种
  *   **稠密通道唯一的价值**可以被断言 —— 而它在随机哈希下根本测不出来。
  *   代价是它一点也不「语义」（同义不同字不相似），所以 H5 的语义质量仍然待
- *   真端点就绪后验（见 docs/KB-EVAL-BASELINE.md），这里只钉管线正确性。
+ *   真端点就绪后验，这里只钉管线正确性。
  *
  * ── 覆盖率口径 ─────────────────────────────────────────────────────────
  *   A 建库与检索闭环；B 计划点名的四项验收（`include_in_rag=0` 不进表 ·
@@ -23,7 +23,7 @@
  * @vitest-environment node
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -120,6 +120,25 @@ function makeEmbed(dim = 32): { fn: (texts: string[]) => Promise<number[][]>; ca
 
 const BUILD = { model: 'stub', batchSize: 8, maxCharsPerDoc: 400, maxDocsPerBuild: 500 }
 
+/**
+ * 建库 + **把索引文件 mtime 往前推**（2026-09-29）。
+ *
+ * 为什么必须推：本仓所有缓存的指纹都是 `statSig` = **mtime + size**，而同库、同模型、同一批
+ * 文档重建出来的 SQLite 文件**大小完全一样**，mtime 又可能落在同一毫秒 ⇒ 指纹根本没变
+ * ⇒ 缓存按设计返回旧值 ⇒ 「重建后必须失效」这类断言**偶发**失败（实测：本文件里先后两处以同一
+ * 机理各失败一次）。推 mtime 让「文件确实被换过」在签名上可见 —— 这也是真实重建必然带来的效果。
+ *
+ * ⚠️ 只在 build 之后推、不改内容：两次读之间没有 build 的**缓存命中断言**不受影响。
+ */
+let bumpTick = 0
+async function buildBumped (...args: Parameters<typeof buildKbVectorIndex>): Promise<Awaited<ReturnType<typeof buildKbVectorIndex>>> {
+  const r = await buildKbVectorIndex(...args)
+  bumpTick += 1
+  const later = new Date(Date.now() + bumpTick * 1000)
+  utimesSync(kbVectorsDbPath(decrypted), later, later)
+  return r
+}
+
 /** 建库用的模型名：状态查询要带上同一个名字，否则判出来的是「调用方没给模型名」。 */
 const MODEL = 'stub'
 
@@ -157,7 +176,7 @@ describe('A 建库与检索闭环', () => {
     const { fn, calls } = makeEmbed()
 
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).ready, '还没建库就不该是就绪').toBe(false)
-    const built = await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    const built = await buildBumped(decrypted, 1, fn, BUILD)
     expect(built.status).toBe('ok')
     expect(built.rows).toBe(2)
     expect(built.embed_calls).toBe(1)
@@ -186,7 +205,7 @@ describe('A 建库与检索闭环', () => {
     register('微信说明.md', WECHAT_DOC)
     register('玄武纪要.md', XUANWU_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
 
     // 阈值取 0.9：只有字面高度重叠的才留下（字符直方图的余弦对无关文本远低于此）
     const r = await searchKbDense(decrypted, 1, WECHAT_DOC, fn, { topK: 5, minSimilarity: 0.9, candidatePool: 50, model: MODEL })
@@ -216,7 +235,7 @@ describe('B 验收四项', () => {
     const ok = register('玄武纪要.md', XUANWU_DOC)
     const { fn, calls } = makeEmbed()
 
-    const built = await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    const built = await buildBumped(decrypted, 1, fn, BUILD)
     expect(built.status).toBe('ok')
     // 只有允许参与的那个文件被送去 embedding —— 这是用户「这份不许出网」的显式表态
     expect(calls).toEqual([XUANWU_DOC])
@@ -246,7 +265,7 @@ describe('B 验收四项', () => {
   it('② 关掉 RAG 开关之后，该文件的向量被清掉（否则开关只挡得住建库、挡不住存量）', async () => {
     const id = register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     expect(vectorRows(1).length).toBe(1)
 
     const r = setKbFileRagFlag(decrypted, 1, id, false)
@@ -258,8 +277,8 @@ describe('B 验收四项', () => {
     const a = register('微信说明.md', WECHAT_DOC, 1)
     const b = register('玄武纪要.md', XUANWU_DOC, 2)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
-    await buildKbVectorIndex(decrypted, 2, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 2, fn, BUILD)
 
     const query = '采购预算比价'
     // 先证明这句查询在**乙库**里确实搜得到 —— 否则「甲库搜不到」只是空集，测不出隔离
@@ -279,7 +298,7 @@ describe('B 验收四项', () => {
   it('④ 维度不符：元数据缺维度 ⇒ 未就绪；查询维度不同 ⇒ 空结果 + 说明（不算出无意义的余弦）', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed(32)
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
 
     // (a) 查询向量维度与库不一致（换过模型但没重建）
     const wrong = makeEmbed(8)
@@ -303,7 +322,7 @@ describe('B 验收四项', () => {
   it('⑤ schema_version 不符 ⇒ 未就绪（结构变更后必须重建，不能拿旧表硬用）', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     const db = new DatabaseSync(kbVectorsDbPath(decrypted))
     try {
       db.prepare("UPDATE meta SET value = '0' WHERE key = 'schema_version'").run()
@@ -317,7 +336,7 @@ describe('B 验收四项', () => {
   it('⑥ 指纹缓存命中不重算：第二次检索不再加载粗筛表；重建之后缓存必须失效', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     __internals.hashCache.clear()
 
     const first = __internals.loadKbHashRows(decrypted, 1)
@@ -332,9 +351,20 @@ describe('B 验收四项', () => {
     expect(probe.hashLoads).toBe(1)
 
     // 重建之后：文件指纹变了 ⇒ 必须重新加载（否则永远拿旧粗筛表的行号去取新向量）
-    await buildKbVectorIndex(decrypted, 1, fn, { ...BUILD, force: true })
+    await buildBumped(decrypted, 1, fn, { ...BUILD, force: true })
+    /**
+     * ⚠️ **必须显式推 mtime**（2026-09-29 查清：这条用例此前是**偶发**的）。
+     *
+     * 缓存的指纹是 `statSig`（**mtime + size**）。同一个库、同一个模型、同一批文档重建出来的
+     * SQLite 文件**大小完全一样**，而 mtime 只到毫秒 —— 重建与上一次 stat 落在同一毫秒里时，
+     * 指纹**根本没变**，缓存按设计返回旧数组。这不是"缓存没失效"，而是
+     * **"mtime+size 这个口径看不见这次重建"**（全仓签名缓存共有的设计取舍）。
+     * 守卫要守的是"**指纹变了 ⇒ 必须重载**"，所以这里把 mtime 推一下，让前提成立。
+     */
+    const later = new Date(Date.now() + 3000)
+    utimesSync(kbVectorsDbPath(decrypted), later, later)
     const third = __internals.loadKbHashRows(decrypted, 1)
-    expect(third, '重建后仍在用旧粗筛表').not.toBe(first)
+    expect(third, '重建后（指纹已变）仍在用旧粗筛表').not.toBe(first)
     expect(probe.hashLoads).toBe(2)
   })
 })
@@ -345,15 +375,15 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
     register('微信说明.md', WECHAT_DOC, 1)
     register('玄武纪要.md', XUANWU_DOC, 2)
     const first = makeEmbed(32)
-    await buildKbVectorIndex(decrypted, 1, first.fn, BUILD)
-    await buildKbVectorIndex(decrypted, 2, first.fn, BUILD)
+    await buildBumped(decrypted, 1, first.fn, BUILD)
+    await buildBumped(decrypted, 2, first.fn, BUILD)
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).dim).toBe(32)
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).models).toEqual(['stub'])
     const kb2Before = vectorRows(2)
 
     // 甲库换模型（维度也变了）：增量游标不能兜住这种情况 —— 旧向量的语义与维度都不兼容
     const second = makeEmbed(16)
-    const rebuilt = await buildKbVectorIndex(decrypted, 1, second.fn, { ...BUILD, model: 'stub-v2' })
+    const rebuilt = await buildBumped(decrypted, 1, second.fn, { ...BUILD, model: 'stub-v2' })
     expect(rebuilt.status).toBe('ok')
     // 旧行被清掉、新行重新算过（不是「增量跳过」）
     expect(rebuilt.embedded).toBe(1)
@@ -367,7 +397,7 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
 
     // **乙库一行都不该动**：它绑的还是 stub，甲库换模型与它无关。
     // （旧实现是 `DELETE FROM kb_vectors` 清全表，理由是「全库共用一个模型」；
-    //  按库绑定之后那个前提没了 —— 见 docs/KB-MODEL-CONFIG.md C5。）
+    //  按库绑定之后那个前提没了 ——  C5。）
     expect(vectorRows(2)).toEqual(kb2Before)
     expect(kbVectorIndexStatus(decrypted, 2, MODEL).ready).toBe(true)
     // 拿旧模型名去问甲库 ⇒ 判的是「模型不符」，而不是「就绪」（F1 的复发判据）
@@ -406,7 +436,7 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
 
     // 建一次：迁移补列 + 那行无溯源的旧行被清掉、按当前模型重算
     const first = makeEmbed(32)
-    const built = await buildKbVectorIndex(decrypted, 1, first.fn, BUILD)
+    const built = await buildBumped(decrypted, 1, first.fn, BUILD)
     expect(built.status).toBe('ok')
     const after = kbVectorIndexStatus(decrypted, 1, MODEL)
     expect(after.ready).toBe(true)
@@ -419,7 +449,7 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
     // 而界面上看不出任何异常。让它显式不可用，比让它静默错要便宜得多。
     register('微信说明.md', WECHAT_DOC)
     const first = makeEmbed(32)
-    await buildKbVectorIndex(decrypted, 1, first.fn, BUILD)
+    await buildBumped(decrypted, 1, first.fn, BUILD)
     expect(kbVectorIndexStatus(decrypted, 1, MODEL).ready).toBe(true)
 
     const blind = kbVectorIndexStatus(decrypted, 1)
@@ -433,9 +463,9 @@ describe('C 换 embedding 模型 ⇒ 必须能重建（WeKnora 06-models 的硬�
 
   it('同模型二次建库走增量：up-to-date，不重复出网', async () => {    register('微信说明.md', WECHAT_DOC)
     const first = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, first.fn, BUILD)
+    await buildBumped(decrypted, 1, first.fn, BUILD)
     const second = makeEmbed()
-    const again = await buildKbVectorIndex(decrypted, 1, second.fn, BUILD)
+    const again = await buildBumped(decrypted, 1, second.fn, BUILD)
     expect(again.status).toBe('up-to-date')
     expect(again.embedded).toBe(0)
     expect(second.calls, '增量构建不该再出网').toEqual([])
@@ -446,7 +476,7 @@ describe('D 跨库级联：向量在另一个文件里，删/迁都必须跟到�
   it('删文件：向量行真被删掉（不是「表不存在所以跳过」的空步骤）', async () => {
     const id = register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     expect(vectorRows(1).length).toBe(1)
 
     const r = deleteKbFile(decrypted, 1, id)
@@ -459,8 +489,8 @@ describe('D 跨库级联：向量在另一个文件里，删/迁都必须跟到�
     register('微信说明.md', WECHAT_DOC, 1)
     register('玄武纪要.md', XUANWU_DOC, 2)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
-    await buildKbVectorIndex(decrypted, 2, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 2, fn, BUILD)
     expect(vectorRows().length).toBe(2)
 
     const rep = kbFilesOnKbDelete(decrypted, 1)
@@ -473,7 +503,7 @@ describe('D 跨库级联：向量在另一个文件里，删/迁都必须跟到�
   it('删库（reassign）：向量归属跟着改 —— 否则「关键词搜得到、换个说法就搜不到」', async () => {
     register('微信说明.md', WECHAT_DOC, 1)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
 
     const rep = kbFilesOnKbDelete(decrypted, 1, 2)
     expect(rep.ok).toBe(true)
@@ -496,6 +526,94 @@ describe('D 跨库级联：向量在另一个文件里，删/迁都必须跟到�
     expect(existsSync(kbVectorsDbPath(decrypted)), '删文件把向量库建出来了').toBe(false)
   })
 })
+
+/**
+ * W2-7.2：**增量**向量索引的作废单位从「整库」细化到「这个文件的那几行」。
+ *
+ * ## 这条在守什么
+ *
+ * 老实现是一句 `UPDATE kb_vectors SET kb_id=? WHERE file_id=?` —— 把这个文件的**所有**行
+ * 都盖上目标库的号，隐含前提是「两个库用的是同一个模型」。按库绑定模型之后这个前提没了：
+ * 甲库用 M1、乙库用 M2，把文件从甲搬到乙，乙库就混进了 M1 的行。
+ *
+ * 安全网一直都在（`searchKbDense` 先看状态，`models` 一多就判 `model-mismatch` 拒答），
+ * 所以不是「结果不准」。真正的代价是：**乙库从此不可用，直到整库重建**，而重建路径
+ * `wipeKbForeign` 清的是乙库**全部**的行 —— 为了一个搬过来的文件，把几千行重新
+ * embedding 一遍（白花 token、白花一次出网、还占着串行 worker）。
+ *
+ * 本条把作废单位改成「这个文件里不属于目标模型的那几行」：同模型的全搬（不重算），
+ * 外来行删掉（下次 build 只重算这个文件）。
+ */
+describe('W2-7.2：换库搬迁按「块 + 模型」搬，不连带整库重建', () => {
+  it('同模型搬迁：行全搬过去，一行都不删（不白花 embedding）', async () => {
+    const id = register('微信说明.md', WECHAT_DOC, 1)
+    const { fn, calls } = makeEmbed()
+    await buildBumped(decrypted, 1, fn, BUILD)
+    // 乙库：同一个模型，另建一份
+    const idB = register('玄武纪要.md', XUANWU_DOC, 2)
+    await buildBumped(decrypted, 2, fn, BUILD)
+    expect(idB).toBeGreaterThan(id)
+    const beforeCalls = calls.length
+
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    expect(rep.movedFiles).toBe(1)
+
+    const rows = vectorRows()
+    expect(rows.length, '同模型搬迁不该删行').toBe(2)
+    // 搬过来的那行现在挂在乙库名下（乙库自己那一行本来就在乙库）
+    const moved = rows.find(r => r.file_id === id)
+    expect(moved?.kb_id, '搬过来的那行没换成乙库的 kb_id').toBe(2)
+    expect(rows.filter(r => r.kb_id === 1).length, '甲库已经不存在了，不该有行挂在它名下').toBe(0)
+    expect(rows.filter(r => r.model === MODEL).length, '模型列被改坏了').toBe(2)
+    // 乙库应当仍然是就绪的（models 只有一个）
+    expect(kbVectorIndexStatus(decrypted, 2, MODEL).ready, '同模型搬迁把乙库弄成不可用了').toBe(true)
+    expect(calls.length, '同模型搬迁又发了一次 embedding').toBe(beforeCalls)
+  })
+
+  it('跨模型搬迁：外来行被删、乙库自己的行留下、乙库仍然就绪', async () => {
+    register('微信说明.md', WECHAT_DOC, 1)
+    const m1 = makeEmbed(32)
+    await buildBumped(decrypted, 1, m1.fn, { ...BUILD, model: 'm1' })
+    // 乙库用**另一个模型**建
+    register('玄武纪要.md', XUANWU_DOC, 2)
+    const m2 = makeEmbed(32)
+    await buildBumped(decrypted, 2, m2.fn, { ...BUILD, model: 'm2' })
+    expect(vectorRows(2).every(r => r.model === 'm2'), '前提：乙库原来只有 m2 的行').toBe(true)
+
+    const before = callsTotal(m2)
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    expect(rep.movedFiles).toBe(1)
+
+    const rows = vectorRows()
+    expect(rows.length, '外来行没被删 ⇒ 乙库会判 model-mismatch 直到整库重建').toBe(1)
+    expect(rows[0]?.kb_id, '乙库自己的行被误伤').toBe(2)
+    expect(rows[0]?.model).toBe('m2')
+    // 关键后果：乙库**不会**因此变成不可用（否则又要整库重建）
+    expect(kbVectorIndexStatus(decrypted, 2, 'm2').ready, '跨模型搬迁把乙库拖成 model-mismatch').toBe(true)
+    // 而且下一次 build 只为搬过来的那个文件补 embedding，不重算乙库原有内容
+    const built = await buildBumped(decrypted, 2, m2.fn, { ...BUILD, model: 'm2' })
+    expect(built.embedded, '重建范围应当是「搬过来的那个文件」，不是整个乙库').toBe(1)
+    expect(callsTotal(m2) - before, '多算了一遍乙库原有内容').toBe(1)
+  })
+
+  it('目标库还没有向量：全搬（旧行为保留，交给下次 build 判）', async () => {
+    register('微信说明.md', WECHAT_DOC, 1)
+    const { fn } = makeEmbed()
+    await buildBumped(decrypted, 1, fn, BUILD)
+    const rep = kbFilesOnKbDelete(decrypted, 1, 2)
+    expect(rep.ok).toBe(true)
+    const rows = vectorRows(2)
+    expect(rows.length, '目标库没有自己的模型口径时不该丢行').toBe(1)
+    expect(rows[0]?.model).toBe(MODEL)
+  })
+})
+
+/** 到目前为止这个 embed 桩一共被送出去多少条文本。 */
+function callsTotal(embed: { calls: string[] }): number {
+  return embed.calls.length
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // E. kb 通道：稀疏 + 稠密混合（C2），以及降级说明的如实性
@@ -539,7 +657,7 @@ describe('E kb 通道：稀疏 + 稠密混合', () => {
   it('混合检索：关键词逐字搜不到、换个说法能搜到 —— 这正是稠密通道的价值', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn, calls } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
 
     // 「限额多少」不是正文的子串：FTS5 侧被编成 "限额 额多 多少" 连续短语 ⇒ 必然 0 命中。
     // 先钉住这一步，稠密那条路才是**唯一**的召回来源（而不是「稀疏也中了，看不出稠密有用」）。
@@ -587,7 +705,7 @@ describe('E kb 通道：稀疏 + 稠密混合', () => {
   it('关掉稠密开关：一次 embedding 都不发起，且说明不谎报「未建向量索引」', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn, calls } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     const afterBuild = calls.length
 
     const r = await kbChannel(decrypted, 1, '转账限额', 10, {
@@ -613,7 +731,7 @@ describe('E kb 通道：稀疏 + 稠密混合', () => {
   it('配置层关掉稠密：kb 通道退回纯关键词，一次 embedding 都不发起', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn, calls } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
     const afterBuild = calls.length
 
     // 走**真的流水线**（而不是直接调 kbChannel）：这条钉的是 pipeline 那道**配置闸**
@@ -642,7 +760,7 @@ describe('E kb 通道：稀疏 + 稠密混合', () => {
   it('断网 / 无 Key：embedding 抛错时关键词那一路照常可用，说明如实（H7）', async () => {
     register('微信说明.md', WECHAT_DOC)
     const { fn } = makeEmbed()
-    await buildKbVectorIndex(decrypted, 1, fn, BUILD)
+    await buildBumped(decrypted, 1, fn, BUILD)
 
     // 断网的真实样子：DNS 挂掉 / 出站被拦 / 没配 Key 时**调用本身**抛错。
     const offline = async (): Promise<number[][]> => {

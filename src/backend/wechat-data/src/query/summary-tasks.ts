@@ -3,7 +3,7 @@
  * Persists scheduled summary tasks + generated records in <wechat>/daily_summary.db.
  * The LLM generation itself lives in the gateway (needs ctx.llm).
  */
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './db-open.ts'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { SummaryTaskInput } from '../types.ts'

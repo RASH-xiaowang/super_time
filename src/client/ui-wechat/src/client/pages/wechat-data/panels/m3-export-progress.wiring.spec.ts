@@ -15,17 +15,25 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { readChatsSource } from './chats-source.ts'
+import { readChatsSource } from '../../../test-helpers/chats-source.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const entry = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'ui-entry.tsx'), 'utf8')
+/**
+ * 事件映射表（2026-10-14 从 ui-entry 的内联 if-else 抽出）：手机浏览器的 SSE 那条路
+ * 与 IPC 共用同一份映射，两边各写一份必然漂。判据因此改查**表 + ui-entry 的接线**。
+ */
+const events = readFileSync(join(HERE, '..', '..', '..', '..', '..', '..', 'ui-app', 'wechat-events.ts'), 'utf8')
 const chats = readChatsSource()
 
 describe('M3：导出进度与取消的接线', () => {
   it('渲染层入口把 wechat-export/progress 中继成 DOM 事件', () => {
-    const at = entry.indexOf("'wechat-export/progress'")
-    expect(at, 'ui-entry 不再中继导出进度事件').toBeGreaterThan(-1)
-    expect(entry.slice(at, at + 320), '中继出去的事件名要和面板监听的一致').toContain('dsh-wechat-export-progress')
+    // 表里必须有这一条，且中继出去的名字与面板监听的一致
+    expect(events, '映射表里不再中继导出进度事件')
+      .toMatch(/from:\s*'wechat-export\/progress',\s*to:\s*'dsh-wechat-export-progress'/)
+    // 表在，还得真的接上：ui-entry 必须把它挂到 IPC 的 onEvent 上（否则表是死数据）
+    expect(entry, 'ui-entry 没有把共用的映射表接到 IPC 事件上')
+      .toContain('onEvent(dispatchWechatEvent)')
   })
 
   it('导出入口带 jobId（不带的话后端不知道该推给谁）', () => {
@@ -58,8 +66,15 @@ describe('M3：导出进度与取消的接线', () => {
     expect(at, '导出对话框里没有进度条分支').toBeGreaterThan(-1)
     const blk = chats.slice(at, at + 500)
     expect(blk).toContain('<ProgressBar value=')
-    expect(blk).toMatch(/exportProgress\.total > 0/)
-    expect(blk).toContain('exportProgress.done / exportProgress.total')
+    expect(blk).toMatch(/exportProgress\.total <= 0/)
+    // 比值算式住在哪一行不重要（#19 第四刀把它收进了 `pctOf`），重要的是它仍是
+    // 「同一个进度的 done / total」并且封顶 100 —— 换成常量或假动画都不会有编译错误。
+    const pctAt = chats.indexOf('function pctOf')
+    expect(pctAt, '进度百分比的算法整个不见了').toBeGreaterThan(-1)
+    const body = chats.slice(pctAt, pctAt + 300)
+    expect(body).toContain('progress.total > 0')
+    expect(body).toContain('progress.done / progress.total')
+    expect(body).toContain('Math.min(100,')
   })
 
   /**
@@ -68,8 +83,9 @@ describe('M3：导出进度与取消的接线', () => {
    * 一根钉在 0 的空条在用户眼里就是卡死。两侧口径都要钉住。
    */
   it('总量未知时走不定量态，而不是钉在 0%', () => {
-    const view = readFileSync(join(HERE, 'chats-view.tsx'), 'utf8')
-    expect(view).toContain('indeterminate={exportProgress.total <= 0}')
+    // 读联合而不是 `chats-view.tsx`：这一段 JSX 已被 #19 第四刀搬进 `chats-export-dialog.tsx`，
+    // 按文件名死读会让这条守卫静默失去靶子（`chats-source.ts` 的注释记着这个坑）。
+    expect(chats).toContain('indeterminate={exportProgress.total <= 0}')
     const backup = readFileSync(join(HERE, 'Backup.tsx'), 'utf8')
     expect(backup).toContain('indeterminate={encProgress.total <= 0}')
     const fields = readFileSync(join(HERE, '..', 'ui', 'kit-fields.tsx'), 'utf8')

@@ -11,40 +11,89 @@
  *     20–30% 文字切掉。改成按"卡片是否真被切"判定，并复用同一套瀑布流规则。
  * @vitest-environment node
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { atLeast, findRoot, readText } from '../../../test-helpers/wiring-kit.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-
-function findRoot(start: string): string {
-  let d = start
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(d, 'main.js')) && existsSync(join(d, 'package.json'))) return d
-    d = dirname(d)
-  }
-  throw new Error('找不到仓库根')
-}
+const HERE = import.meta.dirname
 const ROOT = findRoot(HERE)
-const read = (f: string): string => readFileSync(join(HERE, f), 'utf8')
+const read = (f: string): string => readText(join(HERE, f))
 const annualCss = read('annual.module.css')
 const annualTsx = read('Annual.tsx')
+
+/**
+ * 从 `<PanelHeader` 的起点找出这个 JSX 元素自己的结尾（自闭合的 `/>`）。
+ *
+ * 为什么不能直接找「下一个 `/>`」：`title={<>…<span/>…</>}` 这种写法里，
+ * **嵌套元素也有自己的 `/>`**，直接找会切在它那里 —— 于是 `desc=` 落在切片之外，
+ * 一个明明有 desc 的面板会被报成"缺失"（第一版就是这么误报 4 个文件的）。
+ *
+ * 规则：以 `{` / `}` 的配对深度为界，**深度为 0 处的 `/>`** 才是本元素的结尾
+ * （属性值里的嵌套 JSX 一律包在 `{…}` 里）。找不到就返回 -1，调用方会因此变红 ——
+ * 宁可炸，也不要静默切一小段导致误判。
+ * @param src - 源文件文本。
+ * @param start - `<PanelHeader` 的起始下标。
+ * @returns 结尾 `/>` 里那个 `/` 的下标；找不到返回 -1。
+ */
+function jsxElementEnd(src: string, start: number): number {
+  let depth = 0
+  for (let i = start; i < src.length; i++) {
+    const c = src.charAt(i)
+    if (c === '{') depth++
+    else if (c === '}') depth--
+    else if (c === '/' && src.charAt(i + 1) === '>' && depth === 0) return i
+  }
+  return -1
+}
 
 describe('U12 · 页头口径：有 PanelHeader 就要有 desc', () => {
   it('每个用 PanelHeader 的面板都传了 desc（或显式展开 header 属性）', () => {
     const files = readdirSync(HERE).filter((f) => f.endsWith('.tsx'))
+    atLeast(files.length, 25, 'panels 下的 tsx 文件数')
     const missing: string[] = []
+    let heads = 0
     for (const f of files) {
       const src = read(f)
       let i = src.indexOf('<PanelHeader')
       while (i >= 0) {
-        const seg = src.slice(i, i + 500)
-        if (!seg.includes('desc=') && !seg.includes('{...')) missing.push(f)
-        i = src.indexOf('<PanelHeader', i + 1)
+        const slash = jsxElementEnd(src, i)
+        expect(slash, `${f}: 找不到 PanelHeader 元素的结尾 —— 写法变了，本用例的扫描规则要跟着改`).toBeGreaterThan(i)
+        const seg = src.slice(i, slash)
+        if (!/\bdesc=/.test(seg) && !seg.includes('{...')) missing.push(f)
+        heads++
+        i = src.indexOf('<PanelHeader', slash)
       }
     }
+    atLeast(heads, 25, '扫到的 <PanelHeader 用法数（低于下限说明扫描失效，这条守卫是空的）')
     expect(missing, `这些面板的页头缺少 desc：${missing.join(', ')}`).toEqual([])
+  })
+})
+
+describe('U3 · 骨架与真实栅格同形（列宽下限必须逐字对齐）', () => {
+  /**
+   * 骨架的列宽下限与真实网格不一致时，数据到了会"跳一下"：
+   * 骨架按 120px 排 10 列、真实是 minmax(200px) 排 6 列。这一条用一张表把两处绑起来 ——
+   * 加新面板时照着加一行即可，不用再各写一条断言。
+   */
+  const PAIRS: ReadonlyArray<{ panel: string, tsx: string, css: string, cls: string, minCol: number }> = [
+    { panel: '文件与存储', tsx: 'Files.tsx', css: 'list-panel.module.css', cls: 'fileGrid', minCol: 200 },
+    { panel: '通讯录', tsx: 'Contacts.tsx', css: 'contacts.module.css', cls: 'list', minCol: 240 },
+  ]
+
+  for (const { panel, tsx, css, cls, minCol } of PAIRS) {
+    it(`${panel}：骨架用网格模式，且 minCol 等于 .${cls} 的 minmax 下限`, () => {
+      expect(read(tsx), `${panel} 的骨架还在用单列行模式`).toContain(`<ListSkeleton rows={`)
+      expect(read(tsx), '骨架没有开网格模式').toMatch(new RegExp(`<ListSkeleton rows=\\{\\d+\\} grid minCol=\\{${minCol}\\} />`))
+      expect(read(css), `.${cls} 的列宽下限改了就要同步会话骨架的 minCol`).toMatch(new RegExp(`\\.${cls}\\s*\\{[^}]*minmax\\(${minCol}px`))
+    })
+  }
+
+  it('收藏与表情**不该**跟着改成网格（它的真实布局就是单列卡片）', () => {
+    // 写下来免得后人"顺手统一"：`.favCard` 是 `display: flex` 的单列卡片行，
+    // 在 `.scroll` 里竖着排。给它套网格骨架反而是错的。
+    expect(read('list-panel.module.css'), '.favCard 是单列卡片行').toMatch(/\.favCard\s*\{[^}]*display:\s*flex/)
+    expect(read('Favorites.tsx'), '收藏的骨架应保持行模式').toMatch(/<ListSkeleton rows=\{8\} \/>/)
   })
 })
 
@@ -68,27 +117,37 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
   })
 
   it('这两处的设置跳转都要真的接上（renderTab 里传进去）', () => {
-    const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx'), 'utf8')
+    const shell = readText(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'client', 'pages', 'wechat-data', 'WechatDataPanel.tsx'))
     expect(shell).toContain('<RevokedPanel onOpenSettings={onOpenSettings} />')
     expect(shell).toContain('<PeriodSummaryPanel onOpenSettings={onOpenSettings} />')
   })
+
+  it('群聊公告：空态要说明"为什么可能为空"（公告本来就不是每个群都有）', () => {
+    const src = read('GroupInsights.tsx')
+    expect(src).toContain('暂无群公告')
+    // 只写「暂无群公告」会让人以为是数据丢了 —— 实测本机 53 个群里只有 8 个有公告
+    expect(src, '没有说明覆盖率').toContain('六分之一')
+    expect(src, '没有给出另一种可能（入群前的公告未同步）').toContain('入群之前')
+    // ⚠️ JSX 文本里不能出现 markdown 强调符，否则会原样渲染成星号
+    expect(src, 'JSX 文案里混进了 markdown 星号').not.toContain('**六分之一**')
+  })
+
+  it('表情包：空态要给出归因，而不是只写「暂无表情包」', () => {
+    const src = read('Emoticons.tsx')
+    expect(src, '没有说明数据来自哪里').toContain('表情商店')
+    expect(src, '没有区分"筛选无匹配"与"确实没有"').toMatch(/q\s*\?\s*'换个关键词/)
+  })
 })
 
-describe('年度报告 · 海报装不下时要真的退回瀑布流', () => {
-  it('按"卡片是否被切"判定（media query 只看视口，判断不了面板高度）', () => {
-    expect(annualTsx, '缺少 compact 状态').toMatch(/const \[compact, setCompact\] = useState\(false\)/)
-    expect(annualTsx, '没有检测卡片是否被切').toMatch(/c\.scrollHeight > c\.clientHeight \+ 8/)
-    expect(annualTsx, '没有用 ResizeObserver 跟随容器变化').toMatch(/new ResizeObserver\(check\)/)
-    expect(annualTsx, 'data-compact 没挂到网格上').toMatch(/data-compact=\{compact \|\| undefined\}/)
+describe('年度报告 · 整页一张网格（2026-09-30 用户要求把下段卡片并进上段）', () => {
+  it('海报的 12 列固定网格与"被切检测"都已移除（整页只有一张密排网格）', () => {
+    expect(annualTsx, '旧的 12 列海报网格又回来了').not.toContain('css.wrap')
+    expect(annualTsx, '被切检测（compact）又回来了').not.toContain('data-compact')
+    expect(annualTsx, '没有用密排网格').toContain('<MasonryGrid>')
   })
 
-  it('样式里有对应的 data-compact 规则，且覆盖"卡片不再裁切"', () => {
-    expect(annualCss).toMatch(/\.wrap\[data-compact\]\s*\{/)
-    expect(annualCss, 'compact 下卡片仍会裁切').toMatch(/\.wrap\[data-compact\] \.card \{[^}]*overflow:\s*visible/)
-    expect(annualCss, 'compact 下滚动容器没有打开').toMatch(/\.scrollBody:has\(\.wrap\[data-compact\]\)\s*\{\s*overflow-y:\s*auto/)
-  })
-
-  it('原来的媒体查询仍然保留（窄窗/矮窗照旧退化）', () => {
-    expect(annualCss).toMatch(/@media \(max-width: 1200px\), \(max-height: 779px\)/)
+  it('样式层面确认密排网格在位（`.wrap` / 被切标记的旧规则留着不删：删它们的风险更大）', () => {
+    expect(annualCss, '看板网格的样式必须在').toContain('.board {')
+    expect(annualCss, '滚动容器必须常开').toMatch(/\.scrollBody \{[^}]*overflow-y: auto/)
   })
 })
