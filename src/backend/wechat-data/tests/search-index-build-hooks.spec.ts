@@ -19,9 +19,17 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSearchIndex, getSearchIndexStatus } from '../src/query/search.ts'
 import { createTempWorkspace, type TempWorkspace } from '../../tests/helpers/temp-db.ts'
+
+/**
+ * 本文件是「重夹具」文件：造 2500 行的单分片 + 建真 FTS 索引。
+ * 2026-10-16：CI 上「分片内部也能停」那条用例跑了 190407ms，越过 vitest 默认的
+ * 180s 超时（本机 2.8s，慢约 68 倍）—— 与 `search-cursor.spec.ts` 同源。
+ * 这里单独抬到 420s（作业级预算见 ci.yml）。
+ */
+vi.setConfig({ testTimeout: 420_000, hookTimeout: 420_000 })
 
 const workspaces: TempWorkspace[] = []
 afterEach(async () => {
