@@ -82,6 +82,13 @@ jobs:
       # 政策与三条判据见 docs/RELEASE-PLAN.md 的 N36 与 src/backend/tests/helpers/ci-unit-retry.ts。
       - name: 单元测试
         shell: pwsh
+        env:
+          # 2026-10-16：重跑上限从默认 1 提到 3。理由与 release.yml 同源 ——
+          # 这类假红是环境停顿（分段墙钟已证明不在测试代码里），CI 上连续两次撞上
+          # 并不罕见（v1.0.8 发布实测：push 触发的 CI 因「两次都是假红」而红，
+          # 而同一提交的 PR 触发 CI 全绿）。判据没放宽 —— 每次重跑前仍要过
+          # classifyRun 三条（退出码非 0 + 有征兆 + 无失败用例），出现真失败立刻红。
+          SUPERTIME_UNIT_MAX_RETRIES: '3'
         run: |
           # 2026-10-15：这一步在 CI 上偶发红（916s 失败 / 917s 成功，同一提交两次跑结果不同），
           # 而本机与 D 盘克隆（含 CI=1 串行模式）都稳定绿。失败信息要登录才看得到 ——
