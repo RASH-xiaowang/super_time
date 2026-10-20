@@ -36,8 +36,8 @@ export const MUTATIONS_BATCH3U = [
     id: 'M584-pairing-code-reusable-after-success',
     why: '配对码登录成功后仍留在内存表里 ⇒ 被截图/嗅探过的同一张二维码可以反复换会话，而「一次性配对码」的全部价值就是压缩可重放窗口。判据：http-auth.spec.ts 的「配对码只许成功消费一次」。',
     file: 'src/backend/http-auth.js',
-    from: '      entries.delete(hit.code);\n      return {',
-    to: '      return { ok: true, attemptsLeft: 0 };',
+    from: '      entries.delete(hit.code);\n',
+    to: '      /* 已消费的码不再删除 */\n',
     spec: 'src/backend/tests/http-auth.spec.ts',
   },
   {

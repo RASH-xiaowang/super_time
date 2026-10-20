@@ -138,7 +138,7 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
 
   it('表情包：空态要给出归因，而不是只写「暂无表情包」', () => {
     const src = read('Emoticons.tsx')
-    expect(src, '没有说明数据来自哪里').toContain('表情商店')
+    expect(src, '没有说明数据来自哪里').toContain('表情包来自微信「表情商店」的本地缓存')
     expect(src, '没有区分"筛选无匹配"与"确实没有"').toMatch(/q\s*\?\s*'换个关键词/)
   })
 })

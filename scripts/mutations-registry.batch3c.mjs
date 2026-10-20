@@ -547,9 +547,9 @@ export const MUTATIONS_BATCH3C = [
   },
   {
     id: "M378-collapse-css-rule-dropped",
-    why: "删掉 `.cardBd[hidden] { display: none; }` 那一条 ⇒ `hidden` 属性还在、DOM 判据全绿，但 `.ovCardBd` 自己声明的 `display: flex`（作者样式）压过 UA 的 `[hidden]` 规则 ⇒ **折起来的卡片看上去没折**。这条只有「样式那半」的源码断言抓得到，是这一族里最容易漏的一刀",
-    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-neon.module.css",
-    from: ".cardBd[hidden] { display: none; }\n",
+    why: "删掉 `.ovSectionBd[hidden] { display: none; }` 那一条 ⇒ hidden 属性还在、DOM 判据全绿，但作者样式会压过 UA 的 [hidden] 规则 ⇒ **折起来的卡片看上去没折**。",
+    file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview.module.css",
+    from: ".ovSectionBd[hidden] { display: none; }\n",
     to: "",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/overview-section-collapse.spec.ts",
   },
@@ -571,10 +571,10 @@ export const MUTATIONS_BATCH3C = [
   },
   {
     id: "M381-world-map-offline-no-fallback",
-    why: "把世界层的失败回退（onFallback）删掉 ⇒ 底图拉不到时（未联网 / 用户开了「禁止地图底图出网」）那块**一片空白**，而不是给出说明；数据、闸门、其余层都还在，所以没人会当场发现。这条与必须给明确说明、不留空白那条口径是同一件事的两面。⚠️ 2026-10-16：世界地图那段 JSX 搬进了 `WorldEchartsStage`，锚点跟着改。",
+    why: "把世界层的失败回退（WorldEchartsStage 的 onFallback）换掉 ⇒ 底图拉不到时（未联网 / 用户开了「禁止地图底图出网」）那块**一片空白**，而不是给出说明；数据、闸门、其余层都还在，所以没人会当场发现。⚠️ 2026-10-16：世界地图那段 JSX 搬进了 `WorldEchartsStage`，锚点跟着改。",
     file: "src/client/ui-wechat/src/client/pages/wechat-data/panels/WorldMap.tsx",
-    from: "        onFallback={onFallback}",
-    to: "        onFallback={() => { /* 删掉 */ }}",
+    from: "          onFallback={fallbackWorldEcharts}",
+    to: "          onFallback={() => { /* 删掉 */ }}",
     spec: "src/client/ui-wechat/src/client/pages/wechat-data/panels/world-2d.wiring.spec.ts",
   },
 ]

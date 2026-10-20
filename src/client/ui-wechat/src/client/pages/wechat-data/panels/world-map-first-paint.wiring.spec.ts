@@ -77,6 +77,7 @@ describe('② 世界层：ECharts 不等数据', () => {
     expect(MAP, '又退回「等数据才画」了').toMatch(/return ready && \(onWorldMap \|\| \(!chinaMode && !provinceMode && !cityMode\)\)/)
     expect(MAP, '调用点没接上纯函数').toContain('shouldShowWorldEcharts(worldEchartsReady, onWorldMap, chinaMode, provinceMode, cityMode)')
     expect(MAP.includes('worldEchartsReady && map !== null'), '不该再要求 map').toBe(false)
+    expect(MAP.includes('&& map !== null'), '又退回「等数据才画世界层」了').toBe(false)
   })
 
   it('ECharts 分支不带 map 前置，且 node 有空节点兜底', () => {
